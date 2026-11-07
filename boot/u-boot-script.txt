@@ -16,8 +16,13 @@ else
 fi
 base 0
 setenv handoff_status READY
-if test "${t210b01}" != "1" -o "${sku}" != "3"; then
-    setenv handoff_status WRONG_BOARD
+if test "${t210b01}" != "1"; then
+    setenv handoff_status WRONG_BOARD_T210B01
+else
+    # V2 port, step 1: this stop prints the boot's own sku value on the vidconsole
+    # (REFUSED: DEBUG_SKU_x) with no serial console needed. Commit the value from
+    # the OLED build's gate ("!= 3") back once it is known.
+    setenv handoff_status DEBUG_SKU_${sku}
 fi
 
 # The U-Boot build the exporter and the two cache helpers below were written for.

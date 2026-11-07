@@ -23,8 +23,8 @@ DRAM_SIZE = 4 << 30
 TIMEBASE_HZ = 19_200_000
 GICD_BASE, GICD_SIZE = 0x50041000, 0x1000
 GICC_BASE, GICC_SIZE = 0x50042000, 0x100
-MODEL = 'Nintendo Switch (OLED model)'
-COMPATIBLE = ('nvidia,fric', 'nintendo,aula', 'nintendo,nx', 'nvidia,tegra210b01')
+MODEL = 'Nintendo Switch (V2 model)'
+COMPATIBLE = ('nvidia,fric', 'nintendo,canto', 'nintendo,nx', 'nvidia,tegra210b01')
 ROOT_VOLUME_UUID = '04769D26-2CA0-4825-B443-E2E5F88300F2'
 ROOT_MATCHING = (
     '<dict><key>IOProviderClass</key><string>IOMedia</string>'
