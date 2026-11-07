@@ -9,7 +9,7 @@
   <h3 align="center">ios-on-switch-lmao</h3>
 
   <p align="center">
-    iPadOS natively on a Nintendo Switch OLED.
+    iPadOS natively on a Nintendo Switch V2.
     <br />
     <a href="https://ios-on-switch-lmao.brunostjohn.com"><strong>Read the docs »</strong></a>
     <br />
@@ -41,8 +41,10 @@
 > **Read this before you do anything.**
 >
 > - There is no warranty. If you break your console, that's your fault.
-> - This port runs on the Nintendo Switch OLED and nothing else, and there are no plans to support any other Switch
->   model.
+> - This port runs on the Nintendo Switch V2 and nothing else, and there are no plans to support any other Switch
+>   model. A modchip install is required to reach hekate; that part is not covered here.
+> - This is the V2 port of [brunostjohn's OLED build](https://github.com/brunostjohn/ios-on-switch-lmao): the board
+>   gate, DTB and ADT differ, everything else is shared.
 > - There is no support with running this, for installing it, or for anything else. Issues are disabled.
 > - Don't send me Twitter DMs or emails asking for help.
 > - PRs are accepted, but straight slop won't be merged. im not reading allat.
@@ -50,7 +52,7 @@
 
 <br />
 
-<img src="docs/assets/switch-ios.jpg" alt="A Switch OLED showing the iPadOS Home Screen" width="720">
+<img src="docs/assets/switch-ios.jpg" alt="A Switch showing the iPadOS Home Screen" width="720">
 
 iPadOS running directly on the Switch. The kernel is Apple's XNU, built from the source published by Apple, with drivers
 for the Switch's hardware. Everything else is generated from the iPadOS IPSW downloaded during the installation process.
@@ -63,8 +65,8 @@ The docs list [what works and what doesn't](https://ios-on-switch-lmao.brunostjo
 
 ## Getting started
 
-You need a Switch OLED that already boots hekate, a microSD card, and a Mac with
-[Bazelisk](https://github.com/bazelbuild/bazelisk) installed. The
+You need a Switch V2 that already boots hekate (which means a modchip install already done), a microSD card, and a Mac
+with [Bazelisk](https://github.com/bazelbuild/bazelisk) installed. The
 [installation guide](https://ios-on-switch-lmao.brunostjohn.com/installation) will explain how to sort out everything
 else.
 
