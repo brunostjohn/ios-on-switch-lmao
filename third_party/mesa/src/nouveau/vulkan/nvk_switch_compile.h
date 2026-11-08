@@ -20,6 +20,8 @@
 extern "C" {
 #endif
 
+struct switch_nvk_split;
+
 struct switch_nvk_stage_info {
    const uint32_t *spirv;
    size_t spirv_bytes;
@@ -57,6 +59,10 @@ struct switch_nvk_stage {
    bool early_fragment_tests;
    bool writes_depth;
    bool post_depth_coverage;
+   /* A fragment stage's split for the raw path (nvk_switch_split.h), NULL
+    * where it has none; owned with code and data
+    */
+   const struct switch_nvk_split *split;
    void *owner; /* holds code and data until switch_nvk_stage_finish */
 };
 

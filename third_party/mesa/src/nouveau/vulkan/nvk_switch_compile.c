@@ -38,6 +38,7 @@ switch_nvk_stage_of(const struct nvk_shader *shader,
    for (uint32_t c = 0; c < out->cbuf_count; c++)
       out->cbuf_types[c] = switch_nvk_cbuf_code(&shader->cbuf_map.cbufs[c]);
    out->num_gprs = shader->info.num_gprs;
+   out->split = shader->switch_split;
    if (shader->info.stage == MESA_SHADER_FRAGMENT) {
       out->early_fragment_tests = shader->info.fs.early_fragment_tests;
       out->writes_depth = shader->info.fs.writes_depth;
