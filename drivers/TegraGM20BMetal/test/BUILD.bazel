@@ -304,6 +304,7 @@ host_test(
         "//drivers/TegraGM20BMetal:raw/runtime/raw_completed.cpp",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_compute.cpp",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_gpu.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_split.cpp",
     ],
 )
 

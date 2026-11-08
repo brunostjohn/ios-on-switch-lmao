@@ -739,6 +739,9 @@ Pipeline *Device::pipeline(uint64_t keyHash, PackForm form, bool caTransform)
         return nullptr;
     }
     build(pl, pp, vs, fs, pack_.section<uint32_t>(PackBlob) + pp.blob, pack_.string(pp.keyString), caTransform);
+    if (const PackSplit *split = pack_.split(pp.fs))
+        buildSplit(pl, pp, *split, vs, pack_.section<uint32_t>(PackBlob) + pp.blob, pack_.string(pp.keyString),
+                   caTransform);
     return &pl;
 }
 
@@ -2751,6 +2754,9 @@ CommandBuffer *Device::begin()
     p.m(INVALIDATE_SHADER_CACHES_NO_WFI, kInvalidateData);
     checkRoom(p, "a submission prologue");
     cb.segment(start, p.at);
+    cb.prologueDwords_ = uint32_t(p.at - start);
+    cb.splits_.clear();
+    cb.buffersWritten_ = false;
     return &cb;
 }
 
@@ -2910,6 +2916,7 @@ BlitEncoder *CommandBuffer::blit()
 bool CommandBuffer::commit(uint32_t &seqno)
 {
     Device &d = *dev_;
+    launchPrologues();
     if (d.overflowing_) {
         os_log_error(os_log_create("com.brunostjohn.switch.TegraGM20BMetal", "raw"),
                      "raw: a command buffer larger than its ring, with no memory for a larger one: not submitted");
@@ -3389,6 +3396,8 @@ bool RenderEncoder::prepare(Pipeline *pl, uint32_t primitive, int32_t first, uin
     const bool empty = vp_[2] == 0 || vp_[3] == 0;
     axis(vp_[0], empty ? 0 : vp_[2], areaW_, sc_[0], sc_[0] + sc_[2], x);
     axis(vp_[1], empty ? 0 : vp_[3], areaH_, sc_[1], sc_[1] + sc_[3], y);
+    if (pl->split)
+        pl = splitTwin(pl, primitive, first, indexed ? drawIndexCount_ : count, {x[0], y[0], x[1], y[1]});
     if (!whole_) {
         if (x[1] > x[0] && y[1] > y[0]) {
             const std::array<uint32_t, 4> r = {x[0], y[0], x[1], y[1]};
@@ -3465,6 +3474,7 @@ bool RenderEncoder::prepare(Pipeline *pl, uint32_t primitive, int32_t first, uin
         }
         if (e.kind == EntryUbo) {
             const Bound &b = bufs_[e.stage][e.slot];
+            cb_->buffersWritten_ |= bufferStorage(e);
             BufferDescriptor desc;
             if (!bufferDescriptor(e, b.va, b.size, desc)) {
                 *why = bufferStorage(e) ? "a storage buffer bound at an offset that is not a multiple of 16, with no "
@@ -3649,6 +3659,8 @@ bool RenderEncoder::prepare(Pipeline *pl, uint32_t primitive, int32_t first, uin
     }
     if (pl->setSlot[0] || pl->setSlot[1] || pl->uboCount)
         p.inc(CB_SELECTOR_A, {kRootBytes, uint32_t(d.root_.va >> 32), uint32_t(d.root_.va)});
+    if (pl->splitOf)
+        launchSplit(p, *pl, set);
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
     countRules(*pl);
 #endif
@@ -4322,6 +4334,7 @@ void BlitEncoder::room(uint32_t words)
 
 void BlitEncoder::copyBytes(uint64_t src, uint64_t dst, uint64_t bytes)
 {
+    cb_->buffersWritten_ = true;
     for (uint64_t done = 0; done < bytes;) {
         room();
         const uint32_t n = uint32_t(std::min<uint64_t>(bytes - done, 1u << 17));
@@ -4338,6 +4351,7 @@ void BlitEncoder::copyBytes(uint64_t src, uint64_t dst, uint64_t bytes)
 
 void BlitEncoder::fillBytes(uint64_t dst, uint64_t bytes, uint8_t value)
 {
+    cb_->buffersWritten_ = true;
     // SET_REMAP_COMPONENTS: DST_X..W CONST_A (4), COMPONENT_SIZE ONE (0) or FOUR (3) bytes, one source and destination
     // component; LAUNCH_DMA: PIPELINED, FLUSH, pitch both sides, REMAP
     constexpr uint32_t kConstA = 0x4444, kRemap = 1u << 10, kMaxDim = 1u << 15;
@@ -4381,6 +4395,7 @@ void BlitEncoder::fillBytes(uint64_t dst, uint64_t bytes, uint8_t value)
 void BlitEncoder::copyRect(uint64_t src, uint32_t srcPitch, uint64_t dst, uint32_t dstPitch, uint32_t width,
                            uint32_t lines, uint32_t bpp)
 {
+    cb_->buffersWritten_ = true;
     if (!width || !lines || !bpp)
         return;
     room();
@@ -4397,6 +4412,7 @@ void BlitEncoder::copyTexels(const Texture &src, uint32_t sx, uint32_t sy, uint3
 void BlitEncoder::copyBufferTexels(uint64_t va, uint32_t pitch, const Texture &t, uint32_t x, uint32_t y, uint32_t z,
                                    uint32_t w, uint32_t h, bool toTexture, uint8_t aspect)
 {
+    cb_->buffersWritten_ |= !toTexture;
     room(48);
     const CopySide rows{va, pitch}, texels = sideOf(t, x, y, z);
     const CopySide &from = toTexture ? rows : texels, &to = toTexture ? texels : rows;

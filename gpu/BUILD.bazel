@@ -153,6 +153,7 @@ metal_plugin(
     bridge = ":bridge_ios",
     cc_srcs = [
         GM20B_METAL + ":raw/runtime/raw_gpu.cpp",
+        GM20B_METAL + ":raw/runtime/raw_split.cpp",
         GM20B_METAL + ":raw/runtime/raw_alias.cpp",
         GM20B_METAL + ":raw/runtime/raw_arena.cpp",
         GM20B_METAL + ":raw/fx/fx_mip.cpp",

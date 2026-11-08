@@ -196,6 +196,7 @@ void ComputeEncoder::setSampler(uint32_t slot, const Sampler *s)
 
 bool ComputeEncoder::dispatch(const uint32_t groups[3], const uint32_t threads[3], const char **why)
 {
+    cb_.buffersWritten_ = true;
     if (!state_) {
         *why = "a dispatch without a kernel";
         return false;
