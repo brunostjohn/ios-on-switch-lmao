@@ -109,13 +109,22 @@ void switch_nvk_split_serialize(struct blob *blob,
 struct switch_nvk_split *switch_nvk_split_deserialize(struct blob_reader *blob);
 
 /* The host's proof that `split` computes what `fs` does: both folded to
- * constants by NIR's constant folder for `samples` pixels (macOS only,
- * SWITCH_NVK_SPLIT_PROOF=<samples>). One line on stderr.
+ * constants by NIR's constant folder for `samples` pixels, at the split and
+ * after NAK's NIR passes (macOS only, SWITCH_NVK_SPLIT_PROOF=<samples>). One
+ * line on stderr.
  */
+struct switch_nvk_split_proof {
+   unsigned samples;
+   uint64_t whole_id;
+   const struct nak_compiler *nak;
+   nir_variable_mode robust2_modes;
+   const struct nak_fs_key *fs_key;
+};
+
 void switch_nvk_split_prove(const nir_shader *fs,
                             const struct nvk_cbuf_map *map,
                             const struct switch_nvk_split_nir *split,
-                            unsigned samples, uint64_t whole_id);
+                            const struct switch_nvk_split_proof *proof);
 
 #ifdef __cplusplus
 }

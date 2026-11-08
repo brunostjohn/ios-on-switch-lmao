@@ -6,7 +6,10 @@
  * each sample pixel the whole fragment program is folded to its outputs; the
  * prologue is folded for the same draw, its frontier writes kept, and the split
  * fragment program folded reading them. The outputs (each store_output
- * component and each discard) must be the same bits.
+ * component and each discard) must be the same bits, at the split and again
+ * after nak_postprocess_nir: its late algebraic passes rewrite inexact float
+ * operations, and a rewrite that spans the frontier in the whole program
+ * cannot happen in the split one.
  *
  * Sample 0's uniform words are the probe's tags (pack/probe.mm: 0xA0000000
  * with the buffer and the word); the others draw words at random, floats in
@@ -26,6 +29,8 @@
 #include "nvk_cmd_buffer.h"
 #include "nvk_shader.h"
 #include "nvk_switch_split_fold.h"
+
+#include "nak.h"
 
 #include "util/simple_mtx.h"
 
@@ -338,10 +343,50 @@ report(void)
            totals.states, totals.identical, totals.differ, totals.inconclusive);
 }
 
+struct forms {
+   const nir_shader *whole, *prologue, *fs;
+};
+
+/* NULL where every sample's outputs are the same bits, else why not (`why`
+ * where they differ) and the sample in `at`
+ */
+static const char *
+prove_forms(const struct forms *f, struct model *m, struct outputs *whole,
+            struct outputs *part, unsigned samples, char *why, size_t n,
+            unsigned *at)
+{
+   for (unsigned s = 0; s < samples; s++) {
+      *at = s;
+      m->sample = s;
+      m->prologue = false;
+      fold_outputs(f->whole, m, whole);
+      memset(m->frontier, 0, sizeof(m->frontier));
+      m->prologue = true;
+      fold_outputs(f->prologue, m, part);
+      m->prologue = false;
+      if (part->why)
+         return part->why;
+      fold_outputs(f->fs, m, part);
+      const char *failed = compare(whole, part, why, n);
+      if (failed)
+         return failed;
+   }
+   return NULL;
+}
+
+static nir_shader *
+postprocessed(const nir_shader *s, const struct nak_compiler *nak,
+              nir_variable_mode robust2_modes, const struct nak_fs_key *fs_key)
+{
+   nir_shader *copy = nir_shader_clone(NULL, s);
+   nak_postprocess_nir(copy, nak, robust2_modes, fs_key, false);
+   return copy;
+}
+
 void
 switch_nvk_split_prove(const nir_shader *fs, const struct nvk_cbuf_map *map,
                        const struct switch_nvk_split_nir *split,
-                       unsigned samples, uint64_t whole_id)
+                       const struct switch_nvk_split_proof *proof)
 {
    struct model *m = calloc(1, sizeof(*m));
    struct outputs *whole = calloc(1, sizeof(*whole));
@@ -356,22 +401,25 @@ switch_nvk_split_prove(const nir_shader *fs, const struct nvk_cbuf_map *map,
    m->fs = fs;
    m->layout = &split->layout;
 
-   const char *failed = NULL;
    char why[160];
-   unsigned s = 0;
-   for (; s < samples && failed == NULL; s++) {
-      m->sample = s;
-      m->prologue = false;
-      fold_outputs(fs, m, whole);
-      memset(m->frontier, 0, sizeof(m->frontier));
-      m->prologue = true;
-      fold_outputs(split->prologue, m, part);
-      m->prologue = false;
-      failed = part->why ? part->why : NULL;
-      if (failed == NULL) {
-         fold_outputs(split->fs, m, part);
-         failed = compare(whole, part, why, sizeof(why));
-      }
+   unsigned at = 0;
+   const struct forms split_point = {fs, split->prologue, split->fs};
+   const char *failed = prove_forms(&split_point, m, whole, part,
+                                    proof->samples, why, sizeof(why), &at);
+   const char *stage = "at the split";
+   if (failed == NULL) {
+      const struct forms nak = {
+         postprocessed(fs, proof->nak, proof->robust2_modes, proof->fs_key),
+         postprocessed(split->prologue, proof->nak, 0, NULL),
+         postprocessed(split->fs, proof->nak, proof->robust2_modes,
+                       proof->fs_key),
+      };
+      failed = prove_forms(&nak, m, whole, part, proof->samples, why,
+                           sizeof(why), &at);
+      stage = "after NAK's NIR passes";
+      ralloc_free((nir_shader *)nak.whole);
+      ralloc_free((nir_shader *)nak.prologue);
+      ralloc_free((nir_shader *)nak.fs);
    }
 
    const bool differs = failed != NULL && failed == why;
@@ -390,14 +438,16 @@ switch_nvk_split_prove(const nir_shader *fs, const struct nvk_cbuf_map *map,
    fprintf(stderr,
            "switch split proof %016llx: %u values in %u bytes, %u "
            "instructions moved: ",
-           (unsigned long long)whole_id, split->layout.frontier_values,
+           (unsigned long long)proof->whole_id, split->layout.frontier_values,
            split->layout.frontier_bytes, split->layout.prologue_instrs);
    if (failed == NULL)
-      fprintf(stderr, "%u outputs bit-identical in %u samples\n", whole->count,
-              samples);
+      fprintf(stderr,
+              "%u outputs bit-identical in %u samples, at the split and after "
+              "NAK's NIR passes\n",
+              whole->count, proof->samples);
    else
-      fprintf(stderr, "%s at sample %u: %s\n", differs ? "DIFFER" : "not folded",
-              s - 1, failed);
+      fprintf(stderr, "%s %s at sample %u: %s\n",
+              differs ? "DIFFER" : "not folded", stage, at, failed);
    simple_mtx_unlock(&totals.lock);
    free(m);
    free(whole);
@@ -409,7 +459,7 @@ switch_nvk_split_prove(const nir_shader *fs, const struct nvk_cbuf_map *map,
 void
 switch_nvk_split_prove(const nir_shader *fs, const struct nvk_cbuf_map *map,
                        const struct switch_nvk_split_nir *split,
-                       unsigned samples, uint64_t whole_id)
+                       const struct switch_nvk_split_proof *proof)
 {
 }
 

@@ -108,6 +108,17 @@ load_bytes(const struct switch_fold_model *m, bool global, uint64_t space,
    return v;
 }
 
+/* NAK's global access (nak_nir_lower_load_store): an address, a uniform
+ * address and a signed BASE from source `addr`
+ */
+static uint64_t
+nv_address(nir_intrinsic_instr *intrin, unsigned addr)
+{
+   return nir_src_as_uint(intrin->src[addr]) +
+          nir_src_as_uint(intrin->src[addr + 1]) +
+          (int64_t)nir_intrinsic_base(intrin);
+}
+
 static bool
 fold_memory(nir_builder *b, nir_intrinsic_instr *intrin,
             const struct switch_fold_model *m, bool *ok)
@@ -126,6 +137,15 @@ fold_memory(nir_builder *b, nir_intrinsic_instr *intrin,
       global = true;
       at = nir_src_as_uint(intrin->src[0]);
       break;
+   case nir_intrinsic_load_global_nv:
+      global = true;
+      at = nv_address(intrin, 0);
+      if (!nir_src_as_bool(intrin->src[2])) {
+         const uint64_t zero[NIR_MAX_VEC_COMPONENTS] = {0};
+         replace(b, &intrin->def, zero);
+         return true;
+      }
+      break;
    default:
       return false;
    }
@@ -143,9 +163,12 @@ store_global(nir_intrinsic_instr *store, const struct switch_fold_model *m,
              bool *ok)
 {
    nir_def *value = store->src[0].ssa;
-   const uint64_t at = nir_src_as_uint(store->src[1]);
+   const bool nv = store->intrinsic == nir_intrinsic_store_global_nv;
+   const uint64_t at = nv ? nv_address(store, 1) : nir_src_as_uint(store->src[1]);
    const unsigned bytes = MAX2(value->bit_size / 8, 1);
-   u_foreach_bit(c, nir_intrinsic_write_mask(store)) {
+   const unsigned mask =
+      nv ? BITFIELD_MASK(value->num_components) : nir_intrinsic_write_mask(store);
+   u_foreach_bit(c, mask) {
       const uint64_t v = nir_src_comp_as_uint(store->src[0], c);
       for (unsigned i = 0; i < bytes; i++)
          *ok &= m->write(m->ctx, at + c * bytes + i, v >> (8 * i));
@@ -162,6 +185,7 @@ fold_value(nir_builder *b, nir_intrinsic_instr *intrin,
 {
    switch (intrin->intrinsic) {
    case nir_intrinsic_store_global:
+   case nir_intrinsic_store_global_nv:
       store_global(intrin, m, ok);
       return true;
    case nir_intrinsic_load_workgroup_id:
@@ -264,6 +288,7 @@ is_leaf(nir_instr *instr)
    case nir_intrinsic_ldc_nv:
    case nir_intrinsic_load_global:
    case nir_intrinsic_load_global_constant:
+   case nir_intrinsic_load_global_nv:
    case nir_intrinsic_load_workgroup_id:
    case nir_intrinsic_load_local_invocation_id:
       return false;

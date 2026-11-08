@@ -152,9 +152,15 @@ switch_nvk_split_compile(struct nvk_device *dev, const nir_shader *fs,
    if (!switch_nvk_split_nir(fs, map, &nir))
       return NULL;
 
-   const unsigned samples = proof_samples();
-   if (samples > 0)
-      switch_nvk_split_prove(fs, map, &nir, samples, whole_id);
+   const struct switch_nvk_split_proof proof = {
+      .samples = proof_samples(),
+      .whole_id = whole_id,
+      .nak = nvk_device_physical(dev)->nak,
+      .robust2_modes = robust2_modes,
+      .fs_key = fs_key,
+   };
+   if (proof.samples > 0)
+      switch_nvk_split_prove(fs, map, &nir, &proof);
 
    struct switch_nvk_split *split = calloc(1, sizeof(*split));
    bool ok = split != NULL;
