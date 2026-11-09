@@ -22,6 +22,10 @@
 extern "C" {
 #endif
 
+/* raw/runtime/raw_direct.cpp copies these structs field for field (the
+ * plugin has no Vulkan headers): a field added here goes into its copies too,
+ * which switch_nvk_compile_abi's sizes hold them to
+ */
 struct switch_nvk_stage_info {
    const uint32_t *spirv;
    size_t spirv_bytes;

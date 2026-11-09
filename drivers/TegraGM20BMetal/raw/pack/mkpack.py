@@ -36,7 +36,6 @@ import kernels
 import layouts
 import packfile
 import probelog
-import splits
 
 
 def owned_ranges() -> tuple[list[tuple[int, int]], tuple[int, int]]:
@@ -598,7 +597,8 @@ def main() -> None:
         f'{len(probes)} records probed, {len(simple)} taken ({sum(1 for p in simple if p["form"])} of them barrier '
         f'forms of storage-form states), {len(skipped)} set aside'
     )
-    report.append(f'{len(varying)} per-pipeline registers: ' + ' '.join(f'{m:x}' for m in varying))
+    names = ' '.join(f'{m:x}' for m in varying)
+    report.append(f'{len(varying)} per-pipeline registers: {names}')
     report.append(f'{len(baseline)} baseline registers over post-init')
     heap, prog_index, prog_recs = lay_out_programs(simple, programs, report)
     # pipelines
@@ -612,17 +612,10 @@ def main() -> None:
     # the runtime binary-searches the pipelines in place (raw_pack.cpp Pack::find): no process keeps an index of its own
     pipes.sort(key=packfile.key_hash)
     computes = compute_kernels(dirs, constexpr_tsc, programs, (heap, prog_index, prog_recs), report)
-    split = splits.lay_out(
-        list(dict.fromkeys(prog_recs[rec['fs']]['id'] for rec in pipes)),
-        splits.load(dirs),
-        programs,
-        (heap, prog_index, prog_recs),
-        report,
-    )
     # init template with relocations (submissions 1-3 as NVK recorded them)
     init_recs = [(sc, m, d, RELOC_CODE.get(RELOC.get((sc, m)), 0)) for sc, m, d in init]
     report.append(f'init template: {len(init_recs)} methods, {sum(1 for x in init_recs if x[3])} relocated')
-    pack = packfile.Pack(pipes, prog_recs, constexpr_tsc, baseline, init_recs, heap, computes, split)
+    pack = packfile.Pack(pipes, prog_recs, constexpr_tsc, baseline, init_recs, heap, computes)
     data, blob = packfile.pack_bytes(pack)
     with open(os.path.join(out_dir, 'pack.bin'), 'wb') as pack_bin:
         pack_bin.write(data)
@@ -630,7 +623,7 @@ def main() -> None:
     packfile.write_layouts(os.path.join(out_dir, 'layouts.txt'), pack)
     report.append(
         f'pack.bin {len(data) // 1024} KiB: {len(pipes)} pipelines, {len(computes)} kernels, '
-        f'{len(prog_recs)} programs, {len(split)} splits, '
+        f'{len(prog_recs)} programs, '
         f'{len(constexpr_tsc)} constexpr samplers, {len(blob)} blob dwords, {len(baseline)} baseline regs'
     )
     faults = account(report, skipped, len(simple), len(pipes))

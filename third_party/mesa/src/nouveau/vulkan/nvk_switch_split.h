@@ -29,8 +29,6 @@
 extern "C" {
 #endif
 
-struct blob;
-struct blob_reader;
 struct nvk_cbuf_map;
 struct nvk_device;
 
@@ -103,18 +101,11 @@ switch_nvk_split_compile(struct nvk_device *dev, const nir_shader *fs,
                          uint64_t whole_id);
 void switch_nvk_split_free(struct switch_nvk_split *split);
 
-/* Whether the fragment stage NVK compiles on this thread is split: always on
- * the host twin, which makes the raw pack; on the device only where
+/* Whether the fragment stage NVK compiles on this thread is split: only where
  * switch_nvk_compile_stage asks (switch_nvk_stage_info.split), never for
  * metal2vulkan's own pipelines, which never run a split
  */
-bool switch_nvk_split_wanted(void);
 extern _Thread_local bool switch_nvk_split_current;
-
-void switch_nvk_split_serialize(struct blob *blob,
-                                const struct switch_nvk_split *split);
-/* NULL where the blob holds none; blob->overrun where it is broken */
-struct switch_nvk_split *switch_nvk_split_deserialize(struct blob_reader *blob);
 
 /* The host's proof that `split` computes what `fs` does: both folded to
  * constants by NIR's constant folder for `samples` pixels, at the split and

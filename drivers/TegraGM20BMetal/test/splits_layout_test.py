@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """splits.py lays out each split's per-pixel program with its whole program's constant buffer types.
 
-Two wholes whose per-pixel parts compile to the same bytes share one programs.bin record, whose types are the first
-compile's. A uniform buffer's type holds its set-0 offset: a twin bound by another whole's types reads another buffer.
+Two wholes whose per-pixel parts compile to the same bytes share one program id, and the pack keeps one program per
+id. A uniform buffer's type holds its set-0 offset: a twin bound by another whole's types reads another buffer.
 """
 
 import os
@@ -31,7 +31,6 @@ def split(fs: str) -> dict:
         'frontier_cbuf': 3,
         'prologue_cbufs': 2,
         'ubo_cbufs': [2],
-        'stats': (10, 0, 8, 0, 3, 0),
     }
 
 

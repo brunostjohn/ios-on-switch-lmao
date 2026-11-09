@@ -15,7 +15,6 @@
 #include "nvk_switch_capture.h"
 
 #include "nak.h"
-#include "util/blob.h"
 #include "util/u_math.h"
 
 #include <stdlib.h>
@@ -26,7 +25,6 @@
 
 #define SWITCH_SPLIT_CBUF_PARAMS 4
 #define SWITCH_SPLIT_CBUF_FRONTIER 6
-#define SWITCH_SPLIT_MAGIC 0x5053564eu /* "NVSP" */
 
 /* The GPU time a split draw adds whatever its size, in GPU cycles: its
  * prologue's launch and the compute segment's drain, which a command buffer
@@ -40,16 +38,6 @@
 #define SWITCH_SPLIT_PIXELS_PER_CYCLE 256
 
 _Thread_local bool switch_nvk_split_current;
-
-bool
-switch_nvk_split_wanted(void)
-{
-#if defined(__APPLE__) && TARGET_OS_OSX
-   return true;
-#else
-   return switch_nvk_split_current;
-#endif
-}
 
 /* The host twin's proof (nvk_switch_split_proof.c): none on the device */
 static unsigned
@@ -222,93 +210,4 @@ switch_nvk_program_id(const struct nak_shader_info *info, const void *code,
    uint64_t id = fnv(0xcbf29ce484222325ull, info->hdr, 80);
    id = fnv(id, code, code_bytes);
    return fnv(id, data, data_bytes);
-}
-
-static void
-write_program(struct blob *blob, const struct switch_nvk_program *p)
-{
-   blob_write_bytes(blob, &p->info, sizeof(p->info));
-   blob_write_uint32(blob, p->cbuf_count);
-   blob_write_bytes(blob, p->cbuf_types, sizeof(p->cbuf_types));
-   blob_write_uint32(blob, p->code_bytes);
-   blob_write_bytes(blob, p->code, p->code_bytes);
-   blob_write_uint32(blob, p->data_bytes);
-   blob_write_bytes(blob, p->data, p->data_bytes);
-}
-
-static bool
-read_program(struct blob_reader *blob, struct switch_nvk_program *p)
-{
-   blob_copy_bytes(blob, &p->info, sizeof(p->info));
-   p->cbuf_count = blob_read_uint32(blob);
-   blob_copy_bytes(blob, p->cbuf_types, sizeof(p->cbuf_types));
-   p->code_bytes = blob_read_uint32(blob);
-   const void *code = blob_read_bytes(blob, p->code_bytes);
-   p->data_bytes = blob_read_uint32(blob);
-   const void *data = blob_read_bytes(blob, p->data_bytes);
-   if (blob->overrun || p->cbuf_count > ARRAY_SIZE(p->cbuf_types))
-      return false;
-   p->code = malloc(MAX2(p->code_bytes, 1));
-   p->data = p->data_bytes ? malloc(p->data_bytes) : NULL;
-   if (p->code == NULL || (p->data_bytes && p->data == NULL))
-      return false;
-   memcpy(p->code, code, p->code_bytes);
-   if (p->data_bytes)
-      memcpy(p->data, data, p->data_bytes);
-   return true;
-}
-
-/* After the shader's own fields: a word, the magic where a split follows
- * (raw/pack/nvkshader.py reads it), then the layout as 8 words (the last the
- * threshold) and ubo_cbuf, the QMD, the fragment program and the prologue.
- */
-void
-switch_nvk_split_serialize(struct blob *blob,
-                           const struct switch_nvk_split *split)
-{
-   blob_write_uint32(blob, split ? SWITCH_SPLIT_MAGIC : 0);
-   if (split == NULL)
-      return;
-   const struct switch_nvk_split_layout *l = &split->layout;
-   const uint32_t layout[8] = {
-      l->frontier_bytes,   l->frontier_cbuf,   l->prologue_cbufs,
-      l->shader_data_cbuf, l->frontier_values, l->prologue_instrs,
-      l->ubo_count,        split->threshold_pixels,
-   };
-   blob_write_bytes(blob, layout, sizeof(layout));
-   blob_write_bytes(blob, l->ubo_cbuf, sizeof(l->ubo_cbuf));
-   blob_write_bytes(blob, split->qmd, sizeof(split->qmd));
-   write_program(blob, &split->fs);
-   write_program(blob, &split->prologue);
-}
-
-struct switch_nvk_split *
-switch_nvk_split_deserialize(struct blob_reader *blob)
-{
-   if (blob_read_uint32(blob) != SWITCH_SPLIT_MAGIC)
-      return NULL;
-   struct switch_nvk_split *split = calloc(1, sizeof(*split));
-   if (split == NULL) {
-      blob->overrun = true;
-      return NULL;
-   }
-   uint32_t layout[8];
-   blob_copy_bytes(blob, layout, sizeof(layout));
-   struct switch_nvk_split_layout *l = &split->layout;
-   l->frontier_bytes = layout[0];
-   l->frontier_cbuf = layout[1];
-   l->prologue_cbufs = layout[2];
-   l->shader_data_cbuf = layout[3];
-   l->frontier_values = layout[4];
-   l->prologue_instrs = layout[5];
-   l->ubo_count = MIN2(layout[6], SWITCH_SPLIT_MAX_UBOS);
-   split->threshold_pixels = layout[7];
-   blob_copy_bytes(blob, l->ubo_cbuf, sizeof(l->ubo_cbuf));
-   blob_copy_bytes(blob, split->qmd, sizeof(split->qmd));
-   if (!read_program(blob, &split->fs) || !read_program(blob, &split->prologue)) {
-      blob->overrun = true;
-      switch_nvk_split_free(split);
-      return NULL;
-   }
-   return split;
 }

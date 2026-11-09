@@ -594,7 +594,7 @@ nvk_compile_nir(struct nvk_device *dev, nir_shader *nir,
       robust2_modes |= nir_var_mem_ssbo;
 
    nir_shader *split_src = NULL;
-   if (nir->info.stage == MESA_SHADER_FRAGMENT && switch_nvk_split_wanted())
+   if (nir->info.stage == MESA_SHADER_FRAGMENT && switch_nvk_split_current)
       split_src = nir_shader_clone(NULL, nir);
 
    shader->nak = nak_compile_shader(nir, dump_asm, pdev->nak,
@@ -1485,7 +1485,6 @@ nvk_deserialize_shader(struct vk_device *vk_dev,
    const char *nir_str = blob_read_string(blob);
    shader->asm_str = (asm_str && asm_str[0]) ? strdup(asm_str) : NULL;
    shader->nir_str = (nir_str && nir_str[0]) ? ralloc_strdup(NULL, nir_str) : NULL;
-   shader->switch_split = switch_nvk_split_deserialize(blob);
 
    if (blob->overrun) {
       nvk_shader_destroy(&dev->vk, &shader->vk, pAllocator);
@@ -1536,7 +1535,6 @@ nvk_shader_serialize(struct vk_device *vk_dev,
 
    blob_write_string(blob, shader->asm_str ? shader->asm_str : "");
    blob_write_string(blob, shader->nir_str ? shader->nir_str : "");
-   switch_nvk_split_serialize(blob, shader->switch_split);
 
    return !blob->out_of_memory;
 }
