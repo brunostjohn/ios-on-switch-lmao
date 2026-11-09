@@ -51,6 +51,8 @@ void traceSurfaceImage(RMTexture *t, const char *what, uint32_t seed)
 - (void)dealloc
 {
     _twin = nil;
+    if (_heap && !_raw.arena)
+        _heap->_used -= _heapBytes;
     if (_rawOk && _surface && _raw.converted())
         surfaceConverted(_surface, false);
     if (_rawOk)
@@ -144,7 +146,7 @@ void traceSurfaceImage(RMTexture *t, const char *what, uint32_t seed)
 
 - (NSUInteger)heapOffset
 {
-    return 0;  // a heap's textures are allocations of their own (RMHeap)
+    return _raw.arena && _raw.span.valid() ? NSUInteger(_raw.span.offset) : 0;
 }
 
 // Answered here, not by the twin (a residency set's allocatedSize sums its allocations'): the memory this texture owns. A view and
@@ -283,6 +285,8 @@ void traceSurfaceImage(RMTexture *t, const char *what, uint32_t seed)
 
 - (MTLPurgeableState)setPurgeableState:(MTLPurgeableState)state
 {
+    if (_heap)
+        return [(id<MTLHeap>)_heap setPurgeableState:MTLPurgeableStateKeepCurrent];
     const MTLPurgeableState old = _purgeable ? _purgeable : MTLPurgeableStateNonVolatile;
     if (state != MTLPurgeableStateKeepCurrent)
         _purgeable = state == MTLPurgeableStateEmpty ? MTLPurgeableStateVolatile : state;
@@ -290,16 +294,24 @@ void traceSurfaceImage(RMTexture *t, const char *what, uint32_t seed)
 }
 
 - (void)makeAliasable
-{}
+{
+    if (!_heap || _aliasable)
+        return;
+    _aliasable = true;
+    if (_raw.arena)
+        gRM->raw->arenaRelease(_raw);
+    _heap->_used -= _heapBytes;
+    _heapBytes = 0;
+}
 
 - (BOOL)isAliasable
 {
-    return NO;
+    return _aliasable;
 }
 
 - (id<MTLHeap>)heap
 {
-    return nil;
+    return (id<MTLHeap>)_heap;
 }
 
 // CPU writes into the texture's own pages (level 0, slice 0, a 2D texture), cleaned to memory at once: a later command buffer's

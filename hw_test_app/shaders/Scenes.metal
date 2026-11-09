@@ -141,3 +141,18 @@ constant uint linked_variant [[function_constant(1)]];
 {
     return linked_variant == 2 ? color.zyxw : color;
 }
+
+/// Corners and coordinates through device pointers: storage buffers, which a caller may bind at any offset its element
+/// alignment allows (RenderBox's at 8 past a multiple of 16).
+vertex TexturedVertex device_textured_vertex(uint vid [[vertex_id]], device const float2 *corners [[buffer(0)]],
+                                             device const float *uvs [[buffer(1)]])
+{
+    return TexturedVertex{float4(corners[vid], 0.5, 1), float2(uvs[2 * vid], uvs[2 * vid + 1])};
+}
+
+/// The bound sampler's reading, whatever its coordinates.
+fragment float4 sampled_fragment(TexturedVertex in [[stage_in]], texture2d<float> texture [[texture(0)]],
+                                 sampler bound [[sampler(0)]])
+{
+    return texture.sample(bound, in.uv, level(0));
+}

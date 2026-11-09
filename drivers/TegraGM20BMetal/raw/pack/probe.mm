@@ -26,6 +26,7 @@
 #include "NativeBridgeMetalFrontend.h"
 #include "TwoPlaneStandIn.h"
 #include "bridge/NativeMetalObjects.h"
+#include "probe_bind.h"
 #include "probe_states.h"
 using namespace probe;
 extern "C" void mock_iokit_report(void);
@@ -570,8 +571,8 @@ int main(int argc, char **argv)
             // PROBE_BYTES (default 256): the tagged payloads' length; 16 and 4096 tell a uniform from a storage buffer (NVK rounds
             // a uniform buffer's range up to 256) and the function's proven window on each slot (m2v binds at most that)
             static const uint32_t bytes = getenv("PROBE_BYTES") ? atoi(getenv("PROBE_BYTES")) : 256;
-            // PROBE_BIND_OFFSET: each slot's payload in a buffer of its own at an offset of its own below 256, 4 x (1 + slot +
-            // 31 x (stage - 1)): the push word of a uniform slot's SlotBindOffset residual holds that offset (mkpack.py)
+            // PROBE_BIND_OFFSET: each slot's payload in a buffer of its own at an offset of its own below 256 (probe_bind.h),
+            // which names each buffer slot's SlotBindOffset residual push word (mkpack.py)
             static const bool bindOffset = getenv("PROBE_BIND_OFFSET") != nullptr;
             static std::vector<id<MTLBuffer>> payloads;
             if (bindOffset && payloads.empty())
@@ -585,7 +586,7 @@ int main(int argc, char **argv)
                     for (uint32_t k = 2; k < tag.size(); k++)
                         tag[k] = 0xA0000000u | stage << 20 | slot << 16 | k;
                     if (bindOffset) {
-                        const NSUInteger at = 4 * (1 + slot + 31 * (stage - 1));
+                        const NSUInteger at = raw::probeBindOffset(stage, slot);
                         id<MTLBuffer> b = payloads[(stage - 1) * gSlots + slot];
                         memcpy((uint8_t *)b.contents + at, tag.data(), bytes);
                         if (stage == 1)

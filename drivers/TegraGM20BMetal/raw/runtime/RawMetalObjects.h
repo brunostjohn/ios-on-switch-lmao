@@ -62,10 +62,14 @@ static inline id twinPublish(id object, __strong id &slot, id made)
 @end
 
 // ---- resources ----
+// A heap of the device (RawMetalHeap.mm): an arena its resources are placed in, or with none (a size or storage mode no arena
+// takes) every resource made as the device makes it, counted against its size
 @interface RMHeap : RMObject {
 @public
     MTLHeapDescriptor *_descriptor;
-    std::atomic<uint64_t> _used;
+    std::atomic<uint64_t> _used;  // what its resources made outside its arena hold
+    uint32_t _arena;              // its arena + 1; 0: none
+    std::atomic<int> _purgeable;  // the MTLPurgeableState asked last (0: never asked)
 }
 @end
 
@@ -76,6 +80,8 @@ static inline id twinPublish(id object, __strong id &slot, id made)
     std::atomic<bool> _gpuDirty;  // the GPU wrote it since the CPU last read it
     void (^_deallocator)(void *, NSUInteger);
     RMHeap *_heap;
+    uint64_t _heapBytes;  // what it counts against its heap outside the arena
+    bool _aliasable;
     MTLPurgeableState _purgeable;
 }
 @end
@@ -118,6 +124,9 @@ typedef NS_ENUM(uint8_t, RMTextureKind) {
     std::atomic<bool> _gpuDirty;
     MTLPurgeableState _purgeable;
     uint8_t _pred;  // why the raw path does not keep it (RMPred; 0: it does)
+    RMHeap *_heap;
+    uint64_t _heapBytes;  // as RMBuffer's
+    bool _aliasable;
 }
 @end
 

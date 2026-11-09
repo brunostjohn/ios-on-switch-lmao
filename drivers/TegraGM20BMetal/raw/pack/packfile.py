@@ -53,10 +53,9 @@ def entry_bytes(entries: list[dict]) -> bytearray:
 
 def buffer_kind(e: dict) -> int:
     """Give a buffer entry's samplerKind byte (raw_pack.h bufferStorage, bufferResidualWord)."""
-    if e.get('ssbo'):
-        return 1
     residual = e.get('residual')
-    return 0 if residual is None else ((residual - 0x700) // 4 + 1) << 2
+    word = 0 if residual is None else ((residual - 0x700) // 4 + 1) << 2
+    return word | (1 if e.get('ssbo') else 0)
 
 
 def push_bytes(push: list[tuple[int, int]]) -> bytes:

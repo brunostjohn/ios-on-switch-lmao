@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """What the raw pack generator keeps of a probe.
 
-A texture3d argument is an entry with no slot, a state holds up to 32 set-0 entries, and the buffer m2v binds of its own
-beside an 8-bit sRGB target is named as such.
+A texture3d argument is an entry with no slot, a state holds up to 32 set-0 entries, the buffer m2v binds of its own
+beside an 8-bit sRGB target is named as such, and a storage buffer's SlotBindOffset residual word is named by its code
+(raw/pack/probe_bind.h, the runtime's raw_residual_test).
 """
 
 import os
@@ -40,6 +41,28 @@ class RecordsTest(unittest.TestCase):
         self.assertTrue(layouts.srgb_target(key))
         self.assertTrue(layouts.pointer_problem(key, 176, 0).startswith("a buffer of m2v's own at 176"))
         self.assertFalse(layouts.srgb_target('samples=1 topo=0 ds=0/0 c0=80:15:0:1:0:0:1:0:0  | v f'))
+
+    def test_probe_offsets_are_probe_binds(self):
+        self.assertEqual(mkpack.bind_offset('v', 1), 24)
+        self.assertEqual(mkpack.storage_code('v', 1), 8)
+        self.assertEqual(mkpack.bind_offset('f', 0), 193)
+        self.assertEqual(mkpack.bind_offset('f', 30), 233)
+        offsets = {mkpack.bind_offset(st, slot) for st in 'vf' for slot in range(31)}
+        self.assertEqual(len(offsets), 62)
+
+    def test_a_storage_buffer_takes_its_codes_word(self):
+        index = (0, 7)
+        sizes = {(0, 7, 16): (16, 4096), (0, 7, 32): (256, 4096), (0, 7, 48): (16, 4096)}
+        words = {mkpack.storage_code('v', 1): 0x704, mkpack.bind_offset('v', 2): 0x708}
+        storage = mkpack.buffer_entry((16, 'ubo', 'v', 1, 0), index, sizes, words, set())
+        uniform = mkpack.buffer_entry((32, 'ubo', 'v', 2, 0), index, sizes, words, set())
+        self.assertEqual((storage['ssbo'], storage['residual']), (True, 0x704))
+        self.assertEqual((uniform['ssbo'], uniform['residual']), (False, 0x708))
+        self.assertEqual(packfile.buffer_kind(storage), 1 | 2 << 2)
+        self.assertEqual(packfile.buffer_kind(uniform), 3 << 2)
+        shared = mkpack.buffer_entry((16, 'ubo', 'v', 1, 0), index, sizes, words, {mkpack.storage_code('v', 1)})
+        self.assertIsNone(shared['residual'])
+        self.assertEqual(packfile.buffer_kind(shared), 1)
 
 
 if __name__ == '__main__':

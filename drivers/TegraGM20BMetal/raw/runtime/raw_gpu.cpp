@@ -9,6 +9,7 @@
 #include "raw_follow.h"
 #include "raw_gpu.h"
 #include "raw_owned.h"
+#include "raw_residual.h"
 #include "raw_samples.h"
 #include "raw_slm.h"
 #include "raw_srgb_table.h"
@@ -1130,7 +1131,7 @@ static bool linearTarget(const Texture &t)
     return !((t.va | t.pitch) & 127);
 }
 
-static bool shape(uint32_t width, uint32_t height, uint32_t format, Texture &t)
+bool shape(uint32_t width, uint32_t height, uint32_t format, Texture &t)
 {
     const FormatInfo *f = formatInfo(format);
     if (!f || !width || !height || width > 16384 || height > 16384)
@@ -1521,8 +1522,6 @@ bool Device::createMemoryless(uint32_t width, uint32_t height, uint32_t format, 
 
 // ---- block-linear memory (raw/fx mip chains: kind 0xFE; zeta: kZetaPteKind), made on demand ----
 
-constexpr uint64_t kBlAlign = 16384;  // NVK's image alignment here (r12-cafx niloracle), a multiple of NIL's
-
 bool Device::tiledAlloc(std::vector<Chunk> &chunks, uint32_t kind, uint64_t bytes, uint64_t align, Span &s)
 {
     align = std::max(align, kBlAlign);
@@ -1860,7 +1859,7 @@ void Device::destroyBuffer(Buffer &b)
     std::lock_guard<std::mutex> l(lock_);
     if (b.import)
         release(b.import);
-    freeSpan(b.span, b.wc ? Memory::Wc : Memory::Pool, b.lease);
+    freeSpan(b.span, b.arena ? Memory::Arena : b.wc ? Memory::Wc : Memory::Pool, b.lease);
     b = {};
 }
 
@@ -1929,6 +1928,7 @@ void samplerHeader(const SamplerDesc &d, uint32_t w[8])
     setField(w + 1, 5, 4, d.minFilter ? (aniso ? 3 : 2) : 1);                 // MIN_ANISO / MIN_LINEAR / MIN_POINT
     setField(w + 1, 7, 6, d.mipFilter == 2 ? 3 : 2);                          // MIP_LINEAR / MIP_POINT
     setField(w + 1, 9, 9, 1);  // CUBEMAP_INTERFACE_FILTERING AUTO_SPAN_SEAM
+    w[1] |= samplerCoordinateBits(d);
     // TRILIN_OPT from the descriptor's maxAnisotropy as Vulkan's (vk_to_9097_trilin_opt: 1 when anisotropy is off)
     const float va = aniso ? float(aniso) : 1.0f;
     setField(w + 1, 30, 26, va >= 12 ? 0 : va >= 4 ? 6 : va >= 2 ? 4 : 0);
@@ -3199,52 +3199,26 @@ bool RenderEncoder::prepare(Pipeline *pl, uint32_t primitive, int32_t first, uin
             continue;
         }
         if (e.kind == EntryUbo) {
-            // m2v's descriptor range (bind/instantiate.rs descriptor_range): the function's window, clamped to the bytes padded to
-            // 16; NVK then rounds a uniform buffer's range up to the 256-byte cbuf alignment (nvk_ubo_descriptor)
             const Bound &b = bufs_[e.stage][e.slot];
-            const bool storage = bufferStorage(e);
-            const uint32_t window = (uint32_t(e.sampler) | uint32_t(e.pad) << 8) * 16;
-            // a uniform range is at most 64 KiB (NVK_MAX_CBUF_SIZE); a storage buffer's is the bound bytes, read through its
-            // global address
-            uint32_t range = (b.size + 15) & ~15u;
-            if (!storage)
-                range = std::min(range, 0x10000u);
-            if (window && window < range)
-                range = window;
-            // m2v's storage descriptor starts at the bind offset rounded down to 16 (its residual a push word no record names)
-            if (storage && (b.va & 15)) {
-                *why = "a storage buffer bound at an offset that is not a multiple of 16";
-                cb_->refusal = {RefUboOffset, uint32_t(e.stage) << 8 | e.slot, uint32_t(b.va & 15),
+            BufferDescriptor desc;
+            if (!bufferDescriptor(e, b.va, b.size, desc)) {
+                *why = bufferStorage(e) ? "a storage buffer bound at an offset that is not a multiple of 16, with no "
+                                          "residual push word"
+                                        : "a uniform buffer bound at an offset that is not a multiple of 256, with no "
+                                          "residual push word";
+                cb_->refusal = {RefUboOffset, uint32_t(e.stage) << 8 | e.slot, desc.residual,
                                 uint32_t(std::min<uint64_t>(b.offset, ~0u))};
                 return false;
             }
-            // A uniform buffer at an offset that is not a multiple of NVK's 256-byte alignment: its descriptor starts at the
-            // offset rounded down, from there to the window's end in the padded allocation, and the function reads the rest
-            // of the offset, m2v's SlotBindOffset residual, from its push word
-            const uint32_t residual = storage ? 0 : uint32_t(b.va & 255);
-            const uint64_t base = b.va - residual;
-            if (residual) {
-                const int word = bufferResidualWord(e);
-                if (word < 0) {
-                    *why =
-                        "a uniform buffer bound at an offset that is not a multiple of 256, with no residual push word";
-                    cb_->refusal = {RefUboOffset, uint32_t(e.stage) << 8 | e.slot, residual,
-                                    uint32_t(std::min<uint64_t>(b.offset, ~0u))};
-                    return false;
-                }
-                const uint64_t end = (b.va + b.size + 15) & ~15ull,
-                               hi = window ? std::min<uint64_t>((b.va + window + 15) & ~15ull, end) : end;
-                range = uint32_t(std::min<uint64_t>(hi - base, 0x10000u));
-                residuals[word] = residual;
-                residualMask |= 1u << word;
+            if (desc.word >= 0) {
+                residuals[desc.word] = desc.residual;
+                residualMask |= 1u << desc.word;
             }
-            if (!storage)
-                range = (range + 255) & ~255u;
             if (b.buffer && !b.buffer->wc)
-                cb_->clean(b.buffer->cpu + b.offset, std::min<uint64_t>(range - residual, b.size));
-            at[0] = uint32_t(base);
-            at[1] = uint32_t(base >> 32);
-            at[2] = b.va ? range : 0;
+                cb_->clean(b.buffer->cpu + b.offset, std::min<uint64_t>(desc.range - desc.residual, b.size));
+            at[0] = uint32_t(desc.base);
+            at[1] = uint32_t(desc.base >> 32);
+            at[2] = b.va ? desc.range : 0;
             at[3] = 0;
             continue;
         }

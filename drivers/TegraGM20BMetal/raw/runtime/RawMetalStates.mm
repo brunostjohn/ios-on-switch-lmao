@@ -490,14 +490,6 @@ static NSArray *twinFunctions(NSArray *functions, NSError **error)
                                        nil);
 }
 
-- (id<MTLHeap>)newHeapWithDescriptor:(MTLHeapDescriptor *)d
-{
-    RMHeap *h = [RMHeap new];
-    h->_device = self;
-    h->_descriptor = [d copy];
-    return (id<MTLHeap>)h;
-}
-
 - (id)newResourceGroupFromResources:(const id __unsafe_unretained *)resources count:(NSUInteger)count
 {
     (void)resources;

@@ -50,6 +50,8 @@ TESTS: dict[str, bool] = {
             'gpu.sm53_probe',
             'gpu.xr_blend',
             'gpu.draw.linked_function',
+            'gpu.raw.storage_offset',
+            'gpu.raw.pixel_sampler',
             'metal.device',
             'metal.compute',
             'metal.render.color',
@@ -136,6 +138,7 @@ BY_IOS: dict[str, dict[str, bool]] = {
     '27': {
         'gpu.ca.glass': False,
         'metal4.device': False,
+        'metal.archive.framework': False,
         'ui.glass': False,
         'display.pocket_strip': False,
         'pacing.glass_over': False,

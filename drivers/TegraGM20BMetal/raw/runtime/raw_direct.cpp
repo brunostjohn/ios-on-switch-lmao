@@ -2,6 +2,7 @@
 // See raw_direct.h. What the probe's capture reads of NVK's commands (raw_record.cpp) is read here from what made them: m2v's plan
 // of each probe draw and NVK's own rules for the layout and the descriptors.
 #include "raw_direct.h"
+#include "raw_residual.h"
 
 #include <algorithm>
 #include <cstdio>
@@ -281,11 +282,14 @@ std::map<uint32_t, uint32_t> boundSizes(const DirectNvk &nvk, void *device, cons
 // raw_record.cpp residualWords: the root push words the bind-offset draw writes where draw 0 left 0, by their value's low byte
 std::map<uint32_t, uint32_t> residualWords(const NmbDirectDraw &plain, const NmbDirectDraw &bound)
 {
-    std::map<uint32_t, uint32_t> out;
-    for (uint32_t i = 0; i < 32; i++)
-        if ((bound.pushMask >> i & 1) && bound.push[i] && !((plain.pushMask >> i & 1) && plain.push[i]))
-            out[bound.push[i] & 0xff] = kRootPush + 4 * i;
-    return out;
+    std::map<uint32_t, uint32_t> was, now;
+    for (uint32_t i = 0; i < 32; i++) {
+        if (plain.pushMask >> i & 1)
+            was[kRootPush + 4 * i] = plain.push[i];
+        if (bound.pushMask >> i & 1)
+            now[kRootPush + 4 * i] = bound.push[i];
+    }
+    return residualWordsByValue(was, now);
 }
 
 // raw_emit's registers over the pack's baseline and context. One the hardware does not read keeps what pack states leave there
