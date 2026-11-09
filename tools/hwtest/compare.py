@@ -2,7 +2,7 @@
 
 from dataclasses import dataclass, field
 
-from tools.hwtest import metrics
+from tools.hwtest import metrics, posters
 from tools.hwtest.reports import Report
 
 SHOWN = 10
@@ -138,6 +138,9 @@ def health_lines(latest: Report, previous: Report | None) -> list[str]:
         lines.append('apps: ' + counts.format(**apps))
     if boot is not None:
         lines.append(f'boot to SpringBoard {boot:g} s' + (f" (last run's boot {was:g} s)" if was is not None else ''))
+    poster = posters.summary_line(health.get('lock_poster'))
+    if poster:
+        lines.append(poster)
     return lines
 
 

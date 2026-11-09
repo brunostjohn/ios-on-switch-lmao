@@ -5,6 +5,7 @@
 """
 
 from tools.devicerun.hwtest import HWTEST
+from tools.devicerun.lockscreen import LOCKSCREEN
 from tools.devicerun.morning import MORNING
 from tools.devicerun.rules import REPORT, TIMELINE, Check
 from tools.devicerun.stutter import STUTTER
@@ -521,6 +522,7 @@ GROUPS: dict[str, list[Check]] = {
     ],
     'gpu-morning': MORNING,
     'hwtest': HWTEST,
+    'lockscreen': LOCKSCREEN,
     'stutter': STUTTER,
 }
 

@@ -19,7 +19,7 @@ from pathlib import Path
 if __package__ in (None, ''):
     sys.path.insert(0, str(Path(os.path.abspath(__file__)).parents[2]))
 from tools.common import paths
-from tools.hwtest import compare, fetch, fromlog
+from tools.hwtest import compare, fetch, fromlog, posters
 from tools.hwtest.reports import Report, history
 
 SUMMARY = 'hwtest-summary.txt'
@@ -46,7 +46,13 @@ def newest_per_key(reports: list[Report]) -> list[Report]:
 
 
 def after_pull(data: Path, switch_folder: Path, out: Path, log: Callable[..., None]) -> None:
-    """Fetch the card's reports into the history and `out`, and log the summary of the newest new run of each app."""
+    """Fetch the card's reports into the history and `out`, and log the summary of the newest new run of each app.
+
+    The lock-screen poster's newest landscape render is read on every pull, HW Test run or not (posters.py).
+    """
+    poster = posters.summary_line(posters.observe(data, out))
+    if poster:
+        log('hwtest:', poster)
     archive = out / 'boot.logarchive'
     changed = {path.name for path in fetch.fetch(data, switch_folder, history_dir(), out, archive)}
     if not changed:

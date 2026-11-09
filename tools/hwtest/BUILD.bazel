@@ -18,6 +18,7 @@ py_library(
         "health.py",
         "hwtest.py",
         "metrics.py",
+        "posters.py",
         "reports.py",
     ],
     imports = ["../.."],
@@ -42,4 +43,5 @@ py_binary(
     "fetch_test",
     "fromlog_test",
     "metrics_test",
+    "posters_test",
 ]]
