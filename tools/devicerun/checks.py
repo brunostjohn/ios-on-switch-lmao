@@ -6,6 +6,7 @@
 
 from tools.devicerun.apps import APPS
 from tools.devicerun.audio import AUDIO
+from tools.devicerun.dispatch import DISPATCH
 from tools.devicerun.hwtest import HWTEST
 from tools.devicerun.lockscreen import LOCKSCREEN
 from tools.devicerun.morning import MORNING
@@ -813,6 +814,7 @@ GROUPS: dict[str, list[Check]] = {
         ),
     ],
     'audio': AUDIO,
+    'dispatch': DISPATCH,
     'gpu-morning': MORNING,
     'hwtest': HWTEST,
     'lockscreen': LOCKSCREEN,
