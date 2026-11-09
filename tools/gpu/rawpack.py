@@ -11,8 +11,10 @@ One action per step (gpu/seed/tools.bzl seed_tools builds, gpu/seed/defs.bzl see
         the corpus lines the probe makes (raw/pack/probe.mm: Core Animation's render states, without lib=), so an edit
         to any other line leaves the run's input as it was; with the render states Apple's archives declare for the
         device (precompile/archives/<build>.tsv) whose functions are one framework's default.metallib
-    rawpack.py split --generator <rawpack.py> --qc default.metallib --corpus <file> --out <bucket corpus>...
-        the states of each of the generator's buckets
+    rawpack.py split --generator <rawpack.py> --qc default.metallib --corpus <file> [--ca-names <file>]
+                     --out <bucket corpus>...
+        the states of each of the generator's buckets, with the Core Animation states a device's logs named
+        (precompile/ca-names/<build>.txt)
     rawpack.py probe --generator <rawpack.py> --raw <dir> --nvk <twin dylib> --qc default.metallib
                      --lines <bucket corpus> --out <dir named bucket<i>>
         one bucket's states made directly through the shader tools (raw/ holds directpack, the probes, the mock and
@@ -113,6 +115,7 @@ def build(args: argparse.Namespace, generator: list[str], env: dict[str, str], r
 
 def split(args: argparse.Namespace, generator: list[str], env: dict[str, str], work: Path) -> None:
     arguments = ['--split', '--qc', Path(args.qc).resolve(), '--corpus', Path(args.corpus).resolve(), '--out', work]
+    arguments += ['--ca-names', Path(args.ca_names).resolve()] if args.ca_names else []
     print(generate(generator, arguments, env, 'the split into buckets').rstrip())
     made = sorted((work / 'work').glob('bucket*'), key=lambda d: int(d.name.removeprefix('bucket')))
     if len(made) != len(args.out):
@@ -178,6 +181,7 @@ def main() -> None:
         for name in names:
             p.add_argument('--' + name, required=True)
     steps.choices['split'].add_argument('--out', nargs='+', required=True)
+    steps.choices['split'].add_argument('--ca-names')
     steps.choices['link'].add_argument('buckets', nargs='+')
     args = parser.parse_args()
     if args.step == 'corpus':

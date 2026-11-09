@@ -62,7 +62,9 @@ class Coverage(unittest.TestCase):
                 self.assertEqual(set(fed), packable_elsewhere, 'the generator feeds what the runtime looks up')
                 pack = {rawpack.state_key(line) for line in fed}
                 tables = HERE / f'raw/pack/ca/qc-{kind}.json'
-                for _tier, lines in rawpack.ca_states(tables, HERE / 'precompile/corpus.log'):
+                names = HERE / f'precompile/ca-names/{kind}.txt'
+                named = names.read_text().split() if names.exists() else []
+                for _tier, lines in rawpack.ca_states(tables, HERE / 'precompile/corpus.log', named):
                     pack |= {rawpack.state_key(line) for line in lines}
                 left: dict[str, int] = {}
                 for what, owner, family, line in rows:
