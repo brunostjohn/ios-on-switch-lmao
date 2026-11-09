@@ -129,25 +129,34 @@
 
 @end
 
-// A depth/stencil attachment the raw path renders (raw::DepthStencilAttachment): one zeta texture (raw_zeta.h) as its aspects (a
-// stencil attachment of the same texture where its format has stencil, else none), whole (level, slice and depth plane 0, no
-// resolve), a clear depth that is a number (metal2vulkan refuses a NaN); a memoryless one cleared or not loaded and not stored,
-// a stored one loaded and stored as asked
+// The pass's depth/stencil texture: its depth attachment's, else its stencil attachment's
+static id<MTLTexture> zetaAttachment(MTLRenderPassDescriptor *pass)
+{
+    return pass.depthAttachment.texture ?: pass.stencilAttachment.texture;
+}
+
+// A depth/stencil attachment the raw path renders (raw::DepthStencilAttachment): one zeta texture (raw_zeta.h) as each aspect its
+// format has and no other (Stencil8 a stencil attachment alone), whole (level, slice and depth plane 0, no resolve), a clear
+// depth that is a number (metal2vulkan refuses a NaN); a memoryless one cleared or not loaded and not stored, a stored one
+// loaded and stored as asked
 static bool rawDepthStencil(MTLRenderPassDescriptor *pass)
 {
     MTLRenderPassDepthAttachmentDescriptor *d = pass.depthAttachment;
     MTLRenderPassStencilAttachmentDescriptor *s = pass.stencilAttachment;
-    RMTexture *t = (RMTexture *)d.texture;
-    if (!t || ![(id)t isKindOfClass:[RMTexture class]] || !t->_rawOk || !t->_raw.zeta || std::isnan(d.clearDepth))
+    RMTexture *t = (RMTexture *)zetaAttachment(pass);
+    if (!t || ![(id)t isKindOfClass:[RMTexture class]] || !t->_rawOk || !t->_raw.zeta)
         return false;
-    const bool stencil = raw::zetaHasStencil(t->_raw.format);
-    if ((RMTexture *)s.texture != (stencil ? t : nil))
+    const bool depth = raw::zetaHasDepth(t->_raw.format), stencil = raw::zetaHasStencil(t->_raw.format);
+    if ((RMTexture *)d.texture != (depth ? t : nil) || (RMTexture *)s.texture != (stencil ? t : nil) ||
+        (depth && std::isnan(d.clearDepth)))
         return false;
-    for (MTLRenderPassAttachmentDescriptor *a : stencil ? @[ d, s ] : @[ d ])
-        if (a.level || a.slice || a.depthPlane || a.resolveTexture ||
-            (t->_raw.memoryless && (a.storeAction != MTLStoreActionDontCare ||
-                                    (a.loadAction != MTLLoadActionClear && a.loadAction != MTLLoadActionDontCare))) ||
-            (a.storeAction != MTLStoreActionDontCare && a.storeAction != MTLStoreActionStore))
+    MTLRenderPassAttachmentDescriptor *aspects[2] = {depth ? d : nil, stencil ? s : nil};
+    for (MTLRenderPassAttachmentDescriptor *a : aspects)
+        if (a &&
+            (a.level || a.slice || a.depthPlane || a.resolveTexture ||
+             (t->_raw.memoryless && (a.storeAction != MTLStoreActionDontCare ||
+                                     (a.loadAction != MTLLoadActionClear && a.loadAction != MTLLoadActionDontCare))) ||
+             (a.storeAction != MTLStoreActionDontCare && a.storeAction != MTLStoreActionStore)))
             return false;
     return true;
 }
@@ -239,7 +248,7 @@ static bool rawResolve(MTLRenderPassColorAttachmentDescriptor *a, RMTexture *fro
             e->_samples = x->_raw.samples;
         }
     }
-    facts.depth = pass.depthAttachment.texture;
+    facts.depth = zetaAttachment(pass);
     facts.depthLoad = pass.depthAttachment.loadAction;
     facts.stencilLoad = pass.stencilAttachment.loadAction;
     facts.clearDepth = pass.depthAttachment.clearDepth;
@@ -250,7 +259,7 @@ static bool rawResolve(MTLRenderPassColorAttachmentDescriptor *a, RMTexture *fro
         [self retain:pass.depthAttachment.texture];
         [self retain:pass.stencilAttachment.texture];
         if (rawDepthStencil(pass))
-            e->_zeta = ((RMTexture *)pass.depthAttachment.texture)->_raw.format;
+            e->_zeta = ((RMTexture *)facts.depth)->_raw.format;
         else {
             [self takeReason:WhyPass why:@"a depth/stencil attachment the raw path does not take"];
             hit(self, PredPassDepthStencil, pass.depthAttachment.texture.pixelFormat,

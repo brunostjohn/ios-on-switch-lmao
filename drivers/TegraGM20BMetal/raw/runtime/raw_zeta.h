@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
-// The raw path's depth/stencil: Metal's Depth16Unorm (250), Depth32Float (252) and Depth32Float_Stencil8 (260), one sample or
-// several, as the zeta target NVK makes of m2v's VK_FORMAT_D16_UNORM, _D32_SFLOAT and _D32_SFLOAT_S8_UINT image, and
-// MTLDepthStencilState as the registers NVK leaves for m2v's Vulkan form of it.
+// The raw path's depth/stencil: Metal's Depth16Unorm (250), Depth32Float (252), Stencil8 (253) and Depth32Float_Stencil8 (260),
+// one sample or several, as the zeta target NVK makes of m2v's VK_FORMAT_D16_UNORM, _D32_SFLOAT, _S8_UINT and
+// _D32_SFLOAT_S8_UINT image, and MTLDepthStencilState as the registers NVK leaves for m2v's Vulkan form of it.
 //
 //  - Layout: NIL's FermiZS tiling of a one-level 2D image (several samples: its sample grid, fx::msLayout). Its GOBs are 64 B x
 //    8 rows like a colour image's, so the block height, row stride and size are fx::mipChainLayout's at one level; the GOB
@@ -24,20 +24,21 @@ struct Texture;
 
 constexpr uint32_t kZetaFormat = 260;  // MTLPixelFormatDepth32Float_Stencil8
 
-// A depth/stencil format the raw path renders: its MTLPixelFormat, SET_ZT_FORMAT, texel bytes, PTE kind (gm107 dev_mmu.h),
-// whether it has stencil, and the texture header word 0 NVK samples its depth through (nil_formats.csv's row of the image's
-// format, which NVK's depth-aspect view keeps: R the depth, 0 0 1)
+// A depth/stencil format the raw path renders: its MTLPixelFormat, SET_ZT_FORMAT, texel bytes, PTE kind (gp100 dev_mmu.h,
+// gm200_mmu_kind's on the GM20B), its aspects, and the texture header word 0 NVK samples it through (nil_formats.csv's row of
+// the image's format, which NVK's depth-aspect view keeps: R the depth, or Stencil8's stencil, 0 0 1)
 struct ZetaFormat {
     uint32_t metal, zt, bpp, kind;
-    bool stencil;
+    bool depth, stencil;
     uint32_t tic0;
 };
 
-constexpr uint32_t kZetaFormats = 3;
+constexpr uint32_t kZetaFormats = 4;
 constexpr ZetaFormat kZetaFormatInfo[kZetaFormats] = {
-    {250, 0x13, 2, 0x01, false, 0x7012493a},  // Depth16Unorm: Z16, UNORM
-    {252, 0x0a, 4, 0x7b, false, 0x7017ffaf},  // Depth32Float: ZF32, FLOAT
-    {260, 0x19, 8, 0xc3, true, 0x7017f3b0},   // Depth32Float_Stencil8: ZF32_X24S8, FLOAT depth, UINT stencil
+    {250, 0x13, 2, 0x01, true, false, 0x7012493a},  // Depth16Unorm: Z16, UNORM
+    {252, 0x0a, 4, 0x7b, true, false, 0x7017ffaf},  // Depth32Float: ZF32, FLOAT
+    {253, 0x17, 1, 0x2a, false, true, 0x6014921d},  // Stencil8: S8, sampled as R8 UINT
+    {260, 0x19, 8, 0xc3, true, true, 0x7017f3b0},   // Depth32Float_Stencil8: ZF32_X24S8, FLOAT depth, UINT stencil
 };
 
 // its index in kZetaFormatInfo, kZetaFormats for none
@@ -47,6 +48,12 @@ inline uint32_t zetaFormatIndex(uint32_t metal)
     while (i < kZetaFormats && kZetaFormatInfo[i].metal != metal)
         i++;
     return i;
+}
+
+inline bool zetaHasDepth(uint32_t metal)
+{
+    const uint32_t i = zetaFormatIndex(metal);
+    return i < kZetaFormats && kZetaFormatInfo[i].depth;
 }
 
 inline bool zetaHasStencil(uint32_t metal)

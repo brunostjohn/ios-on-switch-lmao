@@ -317,9 +317,10 @@ struct Pipeline {
     uint8_t samples = 1;  // its key's rasterSampleCount: a pass of attachments of that many samples draws it
     // SET_HYBRID_ANTI_ALIAS_CONTROL's passes: more than one where it shades per sample, whose sample masks differ (raw_samples.h)
     uint8_t samplePasses = 1;
-    uint8_t readBits = 0;      // colors its draws read as they were: blended into, or written through a partial mask
-    uint8_t fetchBits = 0;     // colors it reads by framebuffer fetch
-    uint32_t depthFormat = 0;  // its key's depth and stencil attachment format (ds=<format>/<format>; 0: none)
+    uint8_t readBits = 0;   // colors its draws read as they were: blended into, or written through a partial mask
+    uint8_t fetchBits = 0;  // colors it reads by framebuffer fetch
+    uint32_t depthFormat =
+        0;  // its key's depth attachment format, else its stencil one (ds=<format>/<format>; 0: none)
     // push words setting back the registers outside the pack's varying ones its methods set (a state the runtime made:
     // raw_record.h extras), to their value in every pack state: emitted before the next state's methods
     std::vector<uint32_t> restore;
@@ -350,7 +351,7 @@ struct ColorAttachment {
     float clear[4] = {};
 };
 
-// The pass's Depth32Float_Stencil8 attachment, its depth and stencil aspects one texture (memoryless: neither loaded nor stored)
+// The pass's depth/stencil attachment: one zeta texture as each aspect its format has (memoryless: neither loaded nor stored)
 struct DepthStencilAttachment {
     Texture *texture = nullptr;
     bool clearDepth = false, clearStencil = false;  // the aspect's load is Clear (else DontCare)

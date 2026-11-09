@@ -764,8 +764,11 @@ void Device::build(Pipeline &pl, const PackPipeline &pp, const PlacedProgram &vs
         pl.positionOffset = uint16_t(offset);
     }
     pl.caTransform = caTransform;
-    if (const char *ds = strstr(keyString, "ds="))
-        sscanf(ds, "ds=%u", &pl.depthFormat);
+    if (const char *ds = strstr(keyString, "ds=")) {
+        uint32_t depth = 0, stencil = 0;
+        sscanf(ds, "ds=%u/%u", &depth, &stencil);
+        pl.depthFormat = depth ? depth : stencil;
+    }
     if (const char *n = strstr(keyString, "samples="))
         pl.samples = uint8_t(std::max(1, atoi(n + 8)));
     // SPH word 0 bit 15 KILLS_PIXELS, bit 608 OMAP_SAMPLE_MASK (cla097sph.h); SET_DEPTH_TEST, SET_STENCIL_TEST and
@@ -3228,7 +3231,7 @@ bool RenderEncoder::prepare(Pipeline *pl, uint32_t primitive, int32_t first, uin
     }
     if (dsDirty_) {
         emitDepthStencil(p,
-                         depthStencilRegs(ds_, stencilRef_[0], stencilRef_[1], zeta != nullptr,
+                         depthStencilRegs(ds_, stencilRef_[0], stencilRef_[1], zeta && zetaHasDepth(zeta->format),
                                           zeta && zetaHasStencil(zeta->format)),
                          cb_->ds_);
         dsDirty_ = false;
@@ -3920,8 +3923,9 @@ void RenderEncoder::end()
     const DepthStencilAttachment &zs = pass_.depthStencil;
     zetaTargetWords(p, zs.texture);
     // NVK clears depth and stencil with the first color the pass clears over its render area, else on their own
-    uint32_t zsBits =
-        zs.texture ? zetaClearBits(zs.clearDepth, zs.clearStencil && zetaHasStencil(zs.texture->format)) : 0;
+    uint32_t zsBits = zs.texture ? zetaClearBits(zs.clearDepth && zetaHasDepth(zs.texture->format),
+                                                 zs.clearStencil && zetaHasStencil(zs.texture->format))
+                                 : 0;
     zetaClearValues(p, zsBits & 1, zs.depth, zsBits & 2, zs.stencil);
     if (zsBits & 1)
         d.countZbc(*zs.texture, areaW_ >= zs.texture->width && areaH_ >= zs.texture->height, zbcBootDepth(zs.depth));

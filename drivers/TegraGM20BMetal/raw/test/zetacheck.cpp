@@ -62,11 +62,9 @@ int main(int argc, char **argv)
         Region region;
     };
 
-    const Case cases[] = {{260, 64, 64, {0, 0, 64, 64}},
-                          {260, 37, 5, {3, 2, 30, 3}},
-                          {260, 70, 33, {9, 17, 53, 16}},
-                          {252, 64, 64, {0, 0, 64, 64}},
-                          {252, 37, 5, {3, 2, 30, 3}}};
+    const Case cases[] = {{260, 64, 64, {0, 0, 64, 64}}, {260, 37, 5, {3, 2, 30, 3}}, {260, 70, 33, {9, 17, 53, 16}},
+                          {252, 64, 64, {0, 0, 64, 64}}, {252, 37, 5, {3, 2, 30, 3}}, {253, 64, 64, {0, 0, 64, 64}},
+                          {253, 70, 33, {9, 17, 53, 16}}};
     for (const Case &c : cases) {
         raw::Texture t;
         char what[96];
@@ -128,8 +126,9 @@ int main(int argc, char **argv)
             const bool out1 = run([&](raw::BlitEncoder *e) {
                 e->copyBufferTexels(out.va, pitch, t, r.x, r.y, 0, r.w, r.h, false, aspect);
             });
-            expect(out1 && !memcmp(out.cpu, want.data(), want.size()),
-                   aspect == raw::kAspectStencil ? "out: the stencil bytes" : "out: the depth words");
+            expect(out1 && !memcmp(out.cpu, want.data(), want.size()), aspect == raw::kAspectStencil || c.format == 253
+                                                                           ? "out: the stencil bytes"
+                                                                           : "out: the depth words");
 
             for (uint32_t i = 0; i < uint64_t(pitch) * r.h; i++)
                 in.cpu[i] = pattern(i + 77777 * (aspect + 1));
@@ -153,7 +152,8 @@ int main(int argc, char **argv)
                             differ += texelByte(t, x, y, b) != texels[y][x * t.bpp + b];
             char check[96];
             std::snprintf(check, sizeof check, "in: %s, every other byte kept (%zu differ)",
-                          aspect == raw::kAspectStencil ? "the stencil bytes" : "the depth words", differ);
+                          aspect == raw::kAspectStencil || c.format == 253 ? "the stencil bytes" : "the depth words",
+                          differ);
             expect(in1 && !differ, check);
             dev.destroyBuffer(out);
             dev.destroyBuffer(in);

@@ -59,9 +59,8 @@ class RawZetaTicTest(unittest.TestCase):
         tex = defines(CLASSES / 'clb197tex.h') | defines(CLASSES / 'cl9097tex.h')
         threed = defines(CLASSES / 'clb197.h')
         rows = nil_rows()
-        table = re.findall(
-            r'\{(\d+), (0x[0-9a-f]+), \d+, 0x[0-9a-f]+, (?:true|false), (0x[0-9a-f]+)\}', ZETA.read_text()
-        )
+        row_pattern = r'\{(\d+), (0x[0-9a-f]+), \d+, 0x[0-9a-f]+, (?:true|false), (?:true|false), (0x[0-9a-f]+)\}'
+        table = re.findall(row_pattern, ZETA.read_text())
         self.assertTrue(table)
         for metal, zt, word in table:
             row = rows[PIPE[int(metal)]]
