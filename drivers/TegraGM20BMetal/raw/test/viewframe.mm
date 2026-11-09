@@ -28,6 +28,9 @@ struct Slot {
 struct Case {
     const char *kernel;
     std::vector<Slot> slots;
+    // its textures an MTLHeap's, as MPS's intermediate images are, on the facade: m2v reads a heap's textures through its
+    // heap variant, whose set 0 holds none, so the nvk run makes them outside one (NVK's set of the kernel's own slots)
+    bool heap = false;
 };
 
 constexpr MTLTextureUsage kRead = MTLTextureUsageShaderRead, kWrite = MTLTextureUsageShaderWrite;
@@ -37,6 +40,9 @@ const Case kCases[] = {
      {{MTLPixelFormatRGBA16Float, kRead}, {MTLPixelFormatRGBA16Float, kWrite}, {MTLPixelFormatR16Float, kWrite}}},
     {"view_bgra_write", {{MTLPixelFormatBGRA8Unorm, kWrite}}},
     {"view_half_read_write", {{MTLPixelFormatRGBA16Float, kRead | kWrite}}},
+    {"view_half_write",
+     {{MTLPixelFormatRGBA16Float, kRead}, {MTLPixelFormatRGBA16Float, kWrite}, {MTLPixelFormatR16Float, kWrite}},
+     true},
     // controls: a format m2v writes as itself, and the half texture read alone
     {"view_bgra_write", {{MTLPixelFormatRGBA8Unorm, kWrite}}},
     {"read_float_texture", {{MTLPixelFormatRGBA16Float, kRead}}},
@@ -93,15 +99,34 @@ int main(int argc, char **argv)
             id<MTLComputeCommandEncoder> enc = [cb computeCommandEncoder];
             [enc setComputePipelineState:ps];
             [enc setBuffer:out offset:0 atIndex:0];
-            for (NSUInteger s = 0; s < c.slots.size(); s++) {
-                const Slot &slot = c.slots[s];
+            NSMutableArray<MTLTextureDescriptor *> *descriptors = [NSMutableArray array];
+            NSUInteger heapBytes = 0;
+            for (const Slot &slot : c.slots) {
                 MTLTextureDescriptor *d = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:slot.format
                                                                                              width:kWidth
                                                                                             height:kHeight
                                                                                          mipmapped:NO];
                 d.usage = slot.usage;
                 d.storageMode = MTLStorageModePrivate;
-                [enc setTexture:[dev newTextureWithDescriptor:d] atIndex:s];
+                const MTLSizeAndAlign size = [dev heapTextureSizeAndAlignWithDescriptor:d];
+                heapBytes += (size.size + size.align - 1) / size.align * size.align + size.align;
+                [descriptors addObject:d];
+            }
+            id<MTLHeap> heap = nil;
+            if (c.heap && facade) {
+                MTLHeapDescriptor *h = [MTLHeapDescriptor new];
+                h.size = heapBytes;
+                h.storageMode = MTLStorageModePrivate;
+                heap = [dev newHeapWithDescriptor:h];
+            }
+            for (NSUInteger s = 0; s < descriptors.count; s++) {
+                id<MTLTexture> t = heap ? [heap newTextureWithDescriptor:descriptors[s]]
+                                        : [dev newTextureWithDescriptor:descriptors[s]];
+                if (!t) {
+                    fprintf(stderr, "NO TEXTURE %s slot %lu\n", c.kernel, (unsigned long)s);
+                    return 1;
+                }
+                [enc setTexture:t atIndex:s];
             }
             [enc dispatchThreadgroups:MTLSizeMake(kWidth / 8, kHeight / 8, 1)
                 threadsPerThreadgroup:MTLSizeMake(8, 8, 1)];
@@ -110,7 +135,8 @@ int main(int argc, char **argv)
             [cb waitUntilCompleted];
             const bool ok =
                 cb.status == MTLCommandBufferStatusCompleted && (!facade || [path(cb) isEqualToString:@"raw"]);
-            printf("%s %s %u: %s\n", ok ? "OK  " : "FAIL", c.kernel, uint32_t(c.slots[0].format), path(cb).UTF8String);
+            printf("%s %s %u%s: %s\n", ok ? "OK  " : "FAIL", c.kernel, uint32_t(c.slots[0].format),
+                   c.heap ? " heap" : "", path(cb).UTF8String);
             failed += !ok;
         }
         if (facade) {
