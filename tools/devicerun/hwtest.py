@@ -67,6 +67,7 @@ TESTS: dict[str, bool] = {
             'metal.mps.blur',
             'metal.mps.matmul',
             'metal.runtime_compile',
+            'metal.library.core_image',
             'metal.benchmark',
         ],
         False,
