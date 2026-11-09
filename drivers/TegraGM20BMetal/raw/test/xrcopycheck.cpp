@@ -96,8 +96,11 @@ int main(int argc, char **argv)
         raw::CommandBuffer *cb = dev.begin();
         uint32_t seq = 0;
         if (raw::BlitEncoder *e = cb ? cb->blit() : nullptr) {
+            e->access(&up, &t);
             e->copyBufferTexels(up.va, kUpPitch, t, kX, kY, 0, kRw, kRh, true);
+            e->access(&t, &wide);
             e->copyBufferTexels(wide.va, kW * 8, t, 0, 0, 0, kW, kH, false);
+            e->access(&t, &tight);
             e->copyBufferTexels(tight.va, kW * 4, t, 0, 0, 0, kW, kH, false);
             e->end();
         }

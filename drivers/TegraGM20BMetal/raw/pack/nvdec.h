@@ -148,6 +148,18 @@ private:
     void method(uint32_t subc, uint32_t mthd, uint32_t data, bool fromMme);
     void runMacro();
     void copyEngine(uint32_t launch);
+
+    // The copy engine's stores not yet in memory: a PIPELINED launch starts before the launches before it have landed, so they
+    // land only at a NON_PIPELINED launch, a method to another engine or the submission's end, and every read before sees
+    // memory as it was (the hardware's widest overlap)
+    struct CopyStore {
+        uint64_t at;
+        std::vector<uint8_t> bytes, written;  // written: the bytes a remap writes (empty: all)
+    };
+
+    std::vector<CopyStore> copyStores_;
+    void landCopies();
+    void storeCopy(uint64_t at, const uint8_t *bytes, uint64_t n);
     void draw(const char *kind, uint32_t a, uint32_t b);
     void computeMethod(uint32_t mthd, uint32_t data);
     void dispatch(uint64_t qmd);

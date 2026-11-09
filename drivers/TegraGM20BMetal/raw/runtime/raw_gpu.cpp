@@ -4232,6 +4232,31 @@ void BlitEncoder::convertPlanar(const Texture &t)
     p_.m(CE_LAUNCH_DMA, kLaunchPitch | 1u << 10, SUBC_COPY);
 }
 
+void BlitEncoder::access(const void *read, const void *write)
+{
+    auto in = [](const void *const *names, uint8_t n, const void *name) {
+        return name && std::find(names, names + n, name) != names + n;
+    };
+    if (in(written_, writes_, read) || in(written_, writes_, write) || in(read_, reads_, write) ||
+        reads_ == kAccesses || writes_ == kAccesses) {
+        barrier();
+        reads_ = writes_ = 0;
+    }
+    if (read && !in(read_, reads_, read))
+        read_[reads_++] = read;
+    if (write && !in(written_, writes_, write))
+        written_[writes_++] = write;
+}
+
+void BlitEncoder::barrier()
+{
+    room(8);
+    p_.m(WAIT_FOR_IDLE, 0);
+    p_.inc(CE_LINE_LENGTH_IN, {0, 0}, SUBC_COPY);
+    constexpr uint32_t kNonPipelined = 2, kFlush = 1u << 2, kPitchToPitch = 1u << 7 | 1u << 8, kRemap = 1u << 10;
+    p_.m(CE_LAUNCH_DMA, kNonPipelined | kFlush | kPitchToPitch | kRemap, SUBC_COPY);
+}
+
 void BlitEncoder::generate(Texture &t)
 {
     Texture::Chain *c = t.chain;
