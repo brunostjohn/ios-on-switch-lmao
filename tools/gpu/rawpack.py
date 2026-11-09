@@ -18,8 +18,8 @@ One action per step (gpu/seed/tools.bzl seed_tools builds, gpu/seed/defs.bzl see
         (precompile/ca-names/<build>.txt)
     rawpack.py probe --generator <rawpack.py> --raw <dir> --nvk <twin dylib> --qc default.metallib
                      --lines <bucket corpus> --out <dir named bucket<i>>
-        one bucket's states made directly through the shader tools (raw/ holds directpack, the probes, the mock and
-        own.metallib; the NVK twin), with bucket 0's warm-up draw and the bucket's kernels probed over the mock GM20B
+        one bucket's states and kernels made directly through the shader tools (raw/ holds directpack, the probe, the
+        mock and own.metallib; the NVK twin), with bucket 0's warm-up draw over the mock GM20B
     rawpack.py link --generator <rawpack.py> --out <dir> <bucket dir>...
         the pack made from the buckets' records, unstamped: <out>/pack.bin and report.txt
     rawpack.py stamp --generator <rawpack.py> --pack <pack.bin> --manifest <MANIFEST.json> --out <dir>
@@ -45,7 +45,7 @@ LIBRARY = re.compile(r' lib=\S+')
 # A function a state links (" | <vl|vp|fl|fp> <function> lib=<library> ..."), which any library may hold
 LINKED_LIBRARY = re.compile(r'( \| [vf][lp] \S+) lib=\S+')
 # What the link reads of a bucket (directlink.py)
-KEPT = ('records.bin', 'warm.out', 'warm.log', 'programs.bin', 'compute.out', 'compute.log')
+KEPT = ('records.bin', 'warm.out', 'warm.log')
 FRAMEWORK_LIBRARY = re.compile(r' lib=/System/Library/(?:Private)?Frameworks/(\w+)\.framework/default\.metallib')
 STAGE_LIBRARY = re.compile(r' \| [vf] \S+( lib=\S+)')
 
@@ -68,7 +68,7 @@ def framework_line(line: str) -> bool:
 
 
 def probe_lines(corpus: str) -> list[str]:
-    """Return the corpus lines probe.mm and probecompute.mm make, as they read them (a D line keeps its libraries)."""
+    """Return the corpus lines directpack.mm and probe.mm make, as they read them (a D line keeps its libraries)."""
     return [
         line if framework_line(line) or line.startswith('D ') else LIBRARY.sub('', line)
         for line in corpus.split('\n')

@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: MIT
 // A corpus D line (the frontend journal's compute dispatch: a compute state and the threadgroup shape, memory, textures and
 // samplers it was dispatched with) as the pack generator reads it: its function made from its library, its state's descriptor,
-// its textures made as tagged as the probe made them, and its raw_compute_key.h key. The kernel probe (probecompute.mm), the
-// generator's direct records (directpack.mm) and the host check (raw/test/kernelcheck.mm) read lines alike.
+// its textures, each (16 + slot) x (8 + slot), and its raw_compute_key.h key. The generator's direct records (directpack.mm) and
+// the host check (raw/test/kernelcheck.mm) read lines alike.
 // Libraries: lib=<path> under PROBE_LIB_ROOT (the crawl's root), lib=data:<SHA-256> as <PROBE_DATA_LIBS>/<SHA-256>.metallib.
 #pragma once
 #import <Foundation/Foundation.h>

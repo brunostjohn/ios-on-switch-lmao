@@ -9,6 +9,10 @@
 // bytes), then for a made state its PackPipeline (raw_pack.h; vs 0, fs 1, no blob), its key string, its registers (u32 count,
 // method and value pairs: raw_emit's), its vertex and fragment programs (header + code, shader data, constant buffer types:
 // each a u32 length and bytes) and its constexpr sampler headers (u32 count, eight words each), which its entries number from 0.
+// Then per compute dispatch shape (the corpus's D lines, as the kernel probe read them: kernel_shapes.h): "DKRN", the outcome,
+// its raw_compute_key.h key and the reason, then for a made kernel its PackKernel (raw_direct_compute.h; program 0), its code,
+// shader data and constant buffer types, and its sampler headers, which its sampler entries number from 0 (slot 0x80 | n).
+// PROBE_DATA_LIBS names the directory of the corpus's data: libraries.
 #import <Foundation/Foundation.h>
 #import <Metal/Metal.h>
 #include <cstdio>
@@ -16,6 +20,7 @@
 #include "NativeBridgeMetalFrontend.h"
 #include "TwoPlaneStandIn.h"
 #include "bridge/NativeMetalObjects.h"
+#include "direct_kernels.h"
 #include "direct_states.h"
 
 namespace {
@@ -50,14 +55,20 @@ struct Writer {
     }
 };
 
-void record(Writer &w, const std::string &key, raw::Compiler::Outcome outcome, const std::string &why,
-            const raw::RuntimeRecord &rec, const std::map<uint32_t, uint32_t> &registers)
+// The record's head; false: no more follows (it was not made)
+bool head(Writer &w, const char *tag, const std::string &key, raw::Compiler::Outcome outcome, const std::string &why)
 {
-    fwrite("DREC", 1, 4, w.f);
+    fwrite(tag, 1, 4, w.f);
     w.u32(outcome == raw::Compiler::Outcome::Made ? 0 : outcome == raw::Compiler::Outcome::Refused ? 1 : 2);
     w.text(key);
     w.text(why);
-    if (outcome != raw::Compiler::Outcome::Made)
+    return outcome == raw::Compiler::Outcome::Made;
+}
+
+void record(Writer &w, const std::string &key, raw::Compiler::Outcome outcome, const std::string &why,
+            const raw::RuntimeRecord &rec, const std::map<uint32_t, uint32_t> &registers)
+{
+    if (!head(w, "DREC", key, outcome, why))
         return;
     w.bytes(&rec.pipeline, sizeof rec.pipeline);
     w.text(rec.keyString);
@@ -72,6 +83,18 @@ void record(Writer &w, const std::string &key, raw::Compiler::Outcome outcome, c
         w.list(p.data);
         w.list(p.cbufTypes);
     }
+    w.list(rec.samplers);
+}
+
+void kernel(Writer &w, const std::string &key, raw::Compiler::Outcome outcome, const std::string &why,
+            const raw::ComputeRecord &rec)
+{
+    if (!head(w, "DKRN", key, outcome, why))
+        return;
+    w.bytes(&rec.kernel, sizeof rec.kernel);
+    w.list(rec.code);
+    w.list(rec.data);
+    w.bytes(rec.cbufType, rec.cbufs);
     w.list(rec.samplers);
 }
 
@@ -123,8 +146,22 @@ int main(int argc, char **argv)
                               : outcome == raw::Compiler::Outcome::Refused ? refused
                                                                            : failed)++;
                          });
+        uint32_t kernels[3] = {};
+        probe::eachKernel(
+            dev, text,
+            [&](const probe::Kernel &k) {
+                std::unique_ptr<raw::KernelDispatch> ask;
+                probe::dispatchOf(k.shape, k.shape.threads, k.textures, ask);
+                raw::ComputeRecord rec;
+                std::string why;
+                const raw::Compiler::Outcome outcome = direct.kernel(k.descriptor, ask->dispatch(), k.key, rec, why);
+                kernel(w, k.key, outcome, why, rec);
+                kernels[uint32_t(outcome)]++;
+            },
+            [](const std::string &, const std::string &) {});
         fclose(w.f);
-        fprintf(stderr, "directpack: %u states made, %u refused, %u failed\n", made, refused, failed);
+        fprintf(stderr, "directpack: %u states made, %u refused, %u failed; %u kernels made, %u refused, %u failed\n",
+                made, refused, failed, kernels[0], kernels[1], kernels[2]);
         return 0;
     }
 }

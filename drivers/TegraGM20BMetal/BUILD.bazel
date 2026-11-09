@@ -49,7 +49,7 @@ filegroup(
     ) + [
         "raw/runtime/raw_owned.h",  # the methods the raw path owns (pack/mkpack.py reads them)
         "raw/runtime/raw_srgb_table.h",  # the colour table pack/layouts.py recognises
-        # the compute probe's key of a kernel (pack/probecompute.mm)
+        # a kernel's key (pack/kernel_shapes.h)
         "raw/runtime/raw_compute_key.h",
         "raw/runtime/raw_metallib.cpp",
         "raw/runtime/raw_metallib.h",

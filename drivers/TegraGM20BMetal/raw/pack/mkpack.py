@@ -32,7 +32,6 @@ import struct
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-import kernels
 import layouts
 import packfile
 import probelog
@@ -581,19 +580,6 @@ def with_unnamed_ubos(rec: dict, p: dict, programs: dict[str, dict]) -> dict:
     return rec
 
 
-def compute_kernels(
-    dirs: list[str], constexpr_tsc: list[list[int]], programs: dict[str, dict], laid: tuple, report: list[str]
-) -> list[dict]:
-    """Give the buckets' compute kernels (kernels.py), their programs appended to the heap image `laid` holds."""
-    loaded, skipped = kernels.load(dirs, constexpr_tsc)
-    computes = [k for k in loaded if k['prog'] in programs]
-    skipped += [(k['key'], 'a program programs.bin lacks') for k in loaded if k['prog'] not in programs]
-    kernels.lay_out(computes, programs, *laid)
-    report.append(f'{len(computes)} compute kernels, {len(skipped)} dispatch shapes left out')
-    report += [f'  skipped kernel {key}: {why}' for key, why in skipped]
-    return computes
-
-
 def main() -> None:
     prog_path, out_dir = sys.argv[1], sys.argv[2]
     dirs = [x for d in sys.argv[3:] for x in (d, os.path.join(d, 'barrier')) if os.path.isdir(x)]
@@ -641,7 +627,7 @@ def main() -> None:
         pipes.append(rec)
     # the runtime binary-searches the pipelines in place (raw_pack.cpp Pack::find): no process keeps an index of its own
     pipes.sort(key=packfile.key_hash)
-    computes = compute_kernels(dirs, constexpr_tsc, programs, (heap, prog_index, prog_recs), report)
+    computes: list[dict] = []
     # init template with relocations (submissions 1-3 as NVK recorded them)
     init_recs = [(sc, m, d, RELOC_CODE.get(RELOC.get((sc, m)), 0)) for sc, m, d in init]
     report.append(f'init template: {len(init_recs)} methods, {sum(1 for x in init_recs if x[3])} relocated')
