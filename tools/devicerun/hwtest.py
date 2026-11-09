@@ -30,6 +30,7 @@ TESTS: dict[str, bool] = {
             'gpu.blur_chain_nan',
             'gpu.ca.draw_then_copy',
             'gpu.ca.hot_states',
+            'gpu.ca.generic_texture3d',
             'gpu.upload.glyph_atlas',
             'gpu.upload.replace_region',
             'gpu.upload.blit_buffer',
@@ -132,6 +133,7 @@ TESTS: dict[str, bool] = {
     'input.controllers': False,
     'gpu.texture.kinds': False,
     'system.union_readdir': False,
+    'system.widgets_render': False,
 }
 
 # The tests only one iOS version's app runs (hw_test_app/app<version>), by that version.

@@ -39,7 +39,7 @@ public enum Registry {
     static let cpuAndSystem: [any HWTest] = [
         CPUSingleTest(), CPUMultiTest(), A64XSelfTest(), CryptoKitTest(), CommonCryptoTest(), KeychainTest(),
         LocalAuthenticationTest(), IdentityTest(), PowerStateTest(), MemoryTest(), UnionDirectoryTest(), CPUClockTest(),
-        CPUSustainedTest(),
+        CPUSustainedTest(), WidgetsRenderTest(),
     ]
 
     static let compositor: [any HWTest] = UISceneTests.all + PacingTests.all

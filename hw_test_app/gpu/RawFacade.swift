@@ -28,6 +28,13 @@ public enum RawFacade {
         return counters.mapValues(\.intValue)
     }
 
+    /// The bytes the facade's raw device holds now (empty off the facade): "pool" (its pool, block-linear and depth
+    /// chunks), "wc" (write-combined chunks) and "heap" (the shader heap's bound parts).
+    public static func memory(of device: MTLDevice) -> [String: Int] {
+        guard let memory = ask(device, "switchRawMemory") as? [String: NSNumber] else { return [:] }
+        return memory.mapValues(\.intValue)
+    }
+
     /// "raw", "m2v:<reason>:<predicate>" or "split:..." on the facade, "device" anywhere else.
     public static func path(of buffer: MTLCommandBuffer) -> String {
         ask(buffer, "switchRawPath") as? String ?? "device"
