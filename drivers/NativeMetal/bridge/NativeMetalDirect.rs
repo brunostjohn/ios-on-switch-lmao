@@ -15,7 +15,8 @@ use metal2vulkan::cache::VariantKey;
 use metal2vulkan::device::{DeviceDescription, VkExtension, VkFeature};
 use metal2vulkan::error::Retry;
 use metal2vulkan::metal::{
-    PixelFormat, SamplerAddressMode, SamplerMinMagFilter, SamplerMipFilter, TextureType, TextureUsage,
+    PixelFormat, SamplerAddressMode, SamplerBorderColor, SamplerMinMagFilter, SamplerMipFilter, TextureType,
+    TextureUsage,
 };
 use metal2vulkan::pipeline::{
     PipelineLayout, RenderPipeline, RenderPipelineDescriptor, SlotClass, SlotInterface, SlotRef, Stage,
@@ -86,6 +87,79 @@ pub struct NmbDirectDraw {
     pub vertex_slot: u32,
     pub vertex_stride: u32,
     pub variant: *const c_char,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct NmbDirectCubicSampler {
+    pub slot: u32,
+    pub s_address: u32,
+    pub t_address: u32,
+    pub r_address: u32,
+    pub border_color: u32,
+    pub normalized: bool,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct NmbDirectTextureFormat {
+    pub slot: u32,
+    pub format: u64,
+}
+
+#[repr(C)]
+pub struct NmbDirectBinds {
+    pub cubic: *const NmbDirectCubicSampler,
+    pub cubic_count: u32,
+    pub textures: *const NmbDirectTextureFormat,
+    pub texture_count: u32,
+}
+
+/// What the probe binds besides its tagged textures and samplers: cubic sampler states, and other textures' formats, by slot
+#[derive(Default)]
+struct Binds {
+    cubic: Vec<(u32, SamplerDescriptor)>,
+    textures: Vec<(u32, PixelFormat)>,
+}
+
+impl Binds {
+    /// # Safety
+    /// `binds` is null or valid, its arrays of their counts
+    unsafe fn of(binds: *const NmbDirectBinds) -> Result<Binds, String> {
+        let mut out = Binds::default();
+        // SAFETY: the caller's contract.
+        let Some(b) = (unsafe { binds.as_ref() }) else {
+            return Ok(out);
+        };
+        let cubic: &[NmbDirectCubicSampler] = if b.cubic.is_null() {
+            &[]
+        } else {
+            // SAFETY: `cubic_count` records at `cubic`.
+            unsafe { std::slice::from_raw_parts(b.cubic, b.cubic_count as usize) }
+        };
+        for c in cubic {
+            let mut d = SamplerDescriptor::new();
+            d.min_filter = SamplerMinMagFilter::Cubic;
+            d.mag_filter = SamplerMinMagFilter::Cubic;
+            d.s_address_mode = raw::<SamplerAddressMode>(c.s_address.into(), "address mode")?;
+            d.t_address_mode = raw::<SamplerAddressMode>(c.t_address.into(), "address mode")?;
+            d.r_address_mode = raw::<SamplerAddressMode>(c.r_address.into(), "address mode")?;
+            d.border_color = raw::<SamplerBorderColor>(c.border_color.into(), "border color")?;
+            d.normalized_coordinates = c.normalized;
+            out.cubic.push((c.slot, d));
+        }
+        let textures: &[NmbDirectTextureFormat] = if b.textures.is_null() {
+            &[]
+        } else {
+            // SAFETY: `texture_count` records at `textures`.
+            unsafe { std::slice::from_raw_parts(b.textures, b.texture_count as usize) }
+        };
+        for t in textures {
+            out.textures
+                .push((t.slot, raw::<PixelFormat>(t.format, "texture format")?));
+        }
+        Ok(out)
+    }
 }
 
 #[repr(C)]
@@ -201,8 +275,8 @@ fn volume_slots(pipeline: &RenderPipeline) -> Vec<u32> {
 
 /// The bind state of probe.mm's draw `run`: every buffer slot of both stages bound (inline bytes, or the bound run's
 /// buffers at each slot's own offset), 16 textures of `format` and `samples` (3D at `volumes`) and 16 samplers at the
-/// fragment stage
-fn probe_state(run: usize, format: PixelFormat, samples: u32, volumes: &[u32]) -> BindState {
+/// fragment stage, `binds`' in their places
+fn probe_state(run: usize, format: PixelFormat, samples: u32, volumes: &[u32], binds: &Binds) -> BindState {
     let mut state = BindState::default();
     for stage in [Stage::Vertex, Stage::Fragment] {
         let mut table = StageTable::default();
@@ -226,7 +300,8 @@ fn probe_state(run: usize, format: PixelFormat, samples: u32, volumes: &[u32]) -
         }
         if stage == Stage::Fragment {
             for t in 0..PROBE_TAGGED {
-                let mut facts = TextureFacts::new(TextureType::Type2D, format);
+                let own = binds.textures.iter().find(|(slot, _)| *slot == t).map(|(_, f)| *f);
+                let mut facts = TextureFacts::new(TextureType::Type2D, own.unwrap_or(format));
                 if volumes.contains(&t) {
                     facts.texture_type = TextureType::Type3D;
                 } else if samples > 1 {
@@ -241,7 +316,10 @@ fn probe_state(run: usize, format: PixelFormat, samples: u32, volumes: &[u32]) -
                         resource_id: None,
                     },
                 );
-                table.samplers.insert(t, BoundSampler::new(probe_sampler(t)));
+                let cubic = binds.cubic.iter().find(|(slot, _)| *slot == t).map(|(_, d)| *d);
+                table
+                    .samplers
+                    .insert(t, BoundSampler::new(cubic.unwrap_or_else(|| probe_sampler(t))));
             }
         }
         state.stages.insert(stage, table);
@@ -531,10 +609,10 @@ fn draw_of(
 }
 
 /// `texture_format`, `texture_samples`: the probe's tagged textures' MTLPixelFormat (0: BGRA8Unorm) and sample count, as
-/// probe.mm binds them for the state.
+/// probe.mm binds them for the state; `binds` (null: none): what it binds besides.
 ///
 /// # Safety
-/// `descriptor` is a valid record; `each` is valid for `ctx` for the call's length.
+/// `descriptor` is a valid record; `binds` is null or valid; `each` is valid for `ctx` for the call's length.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn nmb_render_pipeline_direct(
     device: *mut NmbDevice,
@@ -542,10 +620,13 @@ pub unsafe extern "C" fn nmb_render_pipeline_direct(
     barrier: bool,
     texture_format: u64,
     texture_samples: u32,
+    binds: *const NmbDirectBinds,
     each: unsafe extern "C" fn(state: *const NmbDirectState, ctx: *mut c_void) -> bool,
     ctx: *mut c_void,
 ) -> bool {
     guard(false, || {
+        // SAFETY: the caller's contract.
+        let binds = unsafe { Binds::of(binds) }?;
         let nmb = get(device)?;
         let runtime = nmb.device();
         let descriptor = render_descriptor(descriptor)?;
@@ -567,7 +648,7 @@ pub unsafe extern "C" fn nmb_render_pipeline_direct(
                 compile,
                 &descriptor,
                 &mut variants,
-                &probe_state(run, format, texture_samples.max(1), &volumes),
+                &probe_state(run, format, texture_samples.max(1), &volumes, &binds),
                 &budget,
             )?);
         }

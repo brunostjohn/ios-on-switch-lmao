@@ -74,12 +74,33 @@ typedef struct NmbDirectState {
         [4];  // probe.mm's: 256, 16 and 4096 inline bytes per slot, and 256 bytes in buffers at each slot's own offset
 } NmbDirectState;
 
+// A fragment sampler slot the probe binds a cubic sampler state at (MTLSamplerMinMagFilterCubic, no mip filter): its address
+// modes and border colour (MTLSamplerAddressMode, MTLSamplerBorderColor) and coordinates
+typedef struct NmbDirectCubicSampler {
+    uint32_t slot, sAddress, tAddress, rAddress, borderColor;
+    bool normalized;
+} NmbDirectCubicSampler;
+
+// A fragment texture slot the probe binds a texture of another MTLPixelFormat at
+typedef struct NmbDirectTextureFormat {
+    uint32_t slot;
+    uint64_t format;
+} NmbDirectTextureFormat;
+
+// What the probe binds beyond its tagged textures and samplers (the raw path's cubic variants: raw/runtime/raw_cubic.h)
+typedef struct NmbDirectBinds {
+    const NmbDirectCubicSampler *cubic;
+    uint32_t cubicCount;
+    const NmbDirectTextureFormat *textures;
+    uint32_t textureCount;
+} NmbDirectBinds;
+
 // `descriptor`'s state (its stages' linked functions included) as the translator makes it for the probe's draws, handed to
 // `each` (valid during the call). `barrier`: compiled as on a device without the pixel interlock; `textureFormat` and
-// `textureSamples`: the MTLPixelFormat and sample count of the probe's textures (0: BGRA8Unorm, 1). False with
-// nmb_last_error: refused, or `each`'s false
+// `textureSamples`: the MTLPixelFormat and sample count of the probe's textures (0: BGRA8Unorm, 1); `binds` (null: none):
+// what the probe binds besides. False with nmb_last_error: refused, or `each`'s false
 bool nmb_render_pipeline_direct(NmbDevice *device, const NmbRenderPipelineDescriptor *descriptor, bool barrier,
-                                uint64_t textureFormat, uint32_t textureSamples,
+                                uint64_t textureFormat, uint32_t textureSamples, const NmbDirectBinds *binds,
                                 bool (*each)(const NmbDirectState *state, void *ctx), void *ctx);
 
 // A texture a kernel's dispatch binds at `slot`, as its MTLTextureDescriptor answers

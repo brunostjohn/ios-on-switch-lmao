@@ -86,7 +86,7 @@ TEST(RawLinkedSource, TheDescriptorsCAndRustFormsAgree)
 TEST(RawLinkedSource, TheRawRecordIsTheLinkedFunctionsToo)
 {
     const std::string states = SourceText("../raw/runtime/RawMetalStates.mm");
-    const std::string twin = Body(states, "static MTLRenderPipelineDescriptor *twinDescriptor(");
+    const std::string twin = Body(states, "MTLRenderPipelineDescriptor *twinDescriptor(");
     EXPECT_THAT(twin, HasSubstr("t.vertexLinkedFunctions = twinLinked(d.vertexLinkedFunctions);"));
     EXPECT_THAT(twin, HasSubstr("t.fragmentLinkedFunctions = twinLinked(d.fragmentLinkedFunctions);"));
     EXPECT_THAT(Body(states, "- (RMPipeline *)pipelineFor:"), HasSubstr("raw_metal_linked_packable(d)"));

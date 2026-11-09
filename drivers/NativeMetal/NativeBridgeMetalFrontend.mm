@@ -5466,7 +5466,7 @@ static bool linkedHandles(NSArray *functions, std::vector<NmbFunction *> &out)
 }
 
 extern "C" bool native_bridge_metal_render_direct(id descriptor, bool barrier, NSUInteger textureFormat,
-                                                  NSUInteger textureSamples,
+                                                  NSUInteger textureSamples, const struct NmbDirectBinds *binds,
                                                   bool (*each)(const struct NmbDirectState *, void *), void *ctx,
                                                   const char **why)
 {
@@ -5477,7 +5477,7 @@ extern "C" bool native_bridge_metal_render_direct(id descriptor, bool barrier, N
         *why = gDevice ? "a function of another device" : "no device";
         return false;
     }
-    if (nmb_render_pipeline_direct(gDevice, &p, barrier, textureFormat, uint32_t(textureSamples), each, ctx))
+    if (nmb_render_pipeline_direct(gDevice, &p, barrier, textureFormat, uint32_t(textureSamples), binds, each, ctx))
         return true;
     *why = nmb_last_error();
     return false;

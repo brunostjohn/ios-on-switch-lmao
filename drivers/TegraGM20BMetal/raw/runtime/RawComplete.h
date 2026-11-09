@@ -13,6 +13,7 @@
 #include <mutex>
 #include <string>
 #include "raw_compiler.h"
+#include "raw_cubic.h"
 #include "raw_metallib.h"
 
 struct NmbDirectDispatch;
@@ -38,6 +39,8 @@ public:
         // its functions are not a framework's default library's: no pack names the key, so the record is kept under the
         // key and both functions' AIR (two apps' alike-named functions are not one state)
         bool own = false;
+        // its cubic variant's binds (raw_cubic.h), whose name the key ends with; empty: the state itself
+        CubicBinds cubic;
     };
 
     // The state's pipeline handed to `ready` once made (on the compile queue; at once if it was before), or null once the raw

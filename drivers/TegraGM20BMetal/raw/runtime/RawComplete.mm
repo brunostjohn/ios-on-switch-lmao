@@ -169,7 +169,9 @@ Compiler::Outcome Completion::make(const CacheKey &k, RuntimeRecord &record, std
         }
         a = it->second;
     }
-    const Compiler::Outcome outcome = direct().make(a.descriptor, a.key, record, why);
+    ProbeTextures textures;
+    textures.cubic = a.cubic;
+    const Compiler::Outcome outcome = direct().make(a.descriptor, a.key, record, why, textures);
     if (outcome != Compiler::Outcome::Made)
         once([NSString stringWithFormat:@"a state the pack lacks %s: %s | %.600s",
                                         outcome == Compiler::Outcome::Refused ? "is refused" : "was not made",

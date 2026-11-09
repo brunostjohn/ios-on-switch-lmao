@@ -5,11 +5,12 @@
 #include <cstring>
 #include "NativeBridgeMetalFrontend.h"
 #include "raw_direct_compute.h"
+#include "bridge/NativeMetalDirect.h"
 #include "raw_pack.h"
 
 // Weak, so the host benchmark links without the frontend
 extern "C" bool native_bridge_metal_render_direct(id descriptor, bool barrier, NSUInteger textureFormat,
-                                                  NSUInteger textureSamples,
+                                                  NSUInteger textureSamples, const struct NmbDirectBinds *binds,
                                                   bool (*each)(const struct NmbDirectState *, void *), void *ctx,
                                                   const char **why) __attribute__((weak_import));
 extern "C" bool native_bridge_metal_compute_direct(id descriptor, const struct NmbDirectDispatch *dispatch,
@@ -68,9 +69,16 @@ Compiler::Outcome Direct::form(MTLRenderPipelineDescriptor *descriptor, bool bar
                                std::string &why, std::map<uint32_t, uint32_t> *registers)
 {
     Asked a = {nvk_, rules_, key, attributes, out, registers, {}};
+    std::vector<NmbDirectCubicSampler> cubic;
+    std::vector<NmbDirectTextureFormat> formats;
+    for (const CubicBinds::Sampler &c : textures.cubic.samplers)
+        cubic.push_back({c.slot, c.s, c.t, c.r, c.border, c.normalized});
+    for (const CubicBinds::Texture &t : textures.cubic.textures)
+        formats.push_back({t.slot, t.format});
+    const NmbDirectBinds binds = {cubic.data(), uint32_t(cubic.size()), formats.data(), uint32_t(formats.size())};
     const char *refused = nullptr;
-    if (!native_bridge_metal_render_direct(descriptor, barrier, textures.format, textures.samples, made, &a,
-                                           &refused)) {
+    if (!native_bridge_metal_render_direct(descriptor, barrier, textures.format, textures.samples,
+                                           textures.cubic.empty() ? nullptr : &binds, made, &a, &refused)) {
         why = std::string("m2v refused its translation: ") + (refused ? refused : "");
         return refused && !strncmp(refused, "retry: ", 7) ? Compiler::Outcome::Failed : Compiler::Outcome::Refused;
     }
