@@ -146,6 +146,7 @@ class Rules(unittest.TestCase):
     def test_wifi_boot18_never_transmits(self):
         got = self.wifi(list(devicerun.read_ndjson(str(TEST / 'wifi_boot18.ndjson'))))
         self.assertEqual(got['wifi.joined'].verdict, PASS)
+        self.assertEqual(got['wifi.en0-up'].verdict, FAIL)
         self.assertEqual(got['wifi.en0-output'].verdict, FAIL)
         self.assertIn('max(batches) 0', got['wifi.en0-output'].observed)
         self.assertEqual(got['wifi.tx-frames'].verdict, FAIL)
@@ -168,7 +169,9 @@ class Rules(unittest.TestCase):
                     message = message.replace(was, now)
             records.append({**record, 'eventMessage': message})
         records.append({**records[-1], 'processImagePath': '/usr/libexec/configd', 'eventMessage': 'DHCP en0: BOUND'})
+        records.insert(0, {**records[0], 'eventMessage': 'SwitchWLAN: en0 up, its output thread started'})
         got = self.wifi(records)
+        self.assertEqual(got['wifi.en0-up'].verdict, PASS)
         self.assertEqual(got['wifi.en0-output'].verdict, PASS)
         self.assertEqual(got['wifi.tx-frames'].verdict, PASS)
         self.assertEqual(got['wifi.dhcp-bound'].verdict, PASS)

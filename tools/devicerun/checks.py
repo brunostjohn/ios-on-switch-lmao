@@ -795,6 +795,16 @@ GROUPS: dict[str, list[Check]] = {
             show=('code', 'bytes'),
             source='drivers/SwitchWLAN/SwitchWLANApple80211.cpp post_event',
         ),
+        # Absent with wifi.en0-output failing: IFF_UP never reached IO80211Controller::enable.
+        Check(
+            'wifi.en0-up',
+            'r133-wifitx',
+            'SwitchWLAN: en0 up, its output thread started',
+            'count >= 1',
+            process=KERNEL,
+            needs='wifi.joined',
+            source='drivers/SwitchWLAN/SwitchWLANNet.cpp enable',
+        ),
         Check(
             'wifi.en0-output',
             'r133-wifitx',

@@ -206,7 +206,10 @@ TEST_F(NetTest, BringingEn0UpStartsTheFamilysHaltedOutputThread)
     gInterface.output.push_back(packet(frame(0, 342)));
     EXPECT_EQ(familyStart(gInterface), kIOReturnSuccess);
     EXPECT_TRUE(gSent.empty());
+    gLog.clear();
     EXPECT_EQ(swlan::net::enable(&gInterface), kIOReturnSuccess);
+    ASSERT_EQ(gLog.size(), 1u);
+    EXPECT_NE(gLog[0].find("output thread started"), std::string::npos) << gLog[0];
     EXPECT_FALSE(gInterface.outputHalted);
     EXPECT_EQ(gInterface.ifp.starts, 1u);
     EXPECT_EQ(familyStart(gInterface), kIOReturnNoFrames);

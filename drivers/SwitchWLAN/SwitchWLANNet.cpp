@@ -224,8 +224,11 @@ void swlan::net::attached(IOEthernetController *controller, IOEthernetInterface 
 IOReturn swlan::net::enable(IOEthernetInterface *interface)
 {
     const IOReturn r = interface->startOutputThread();
-    if (r != kIOReturnSuccess)
+    if (r == kIOReturnSuccess) {
+        IOLog("SwitchWLAN: en0 up, its output thread started\n");
+    } else {
         IOLog("SwitchWLAN: en0's output thread did not start (%#x)\n", r);
+    }
     return r;
 }
 
