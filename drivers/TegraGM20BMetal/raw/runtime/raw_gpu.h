@@ -1197,6 +1197,9 @@ private:
 
     std::map<std::string, CompletedProgram> completedPrograms_;  // by program id and constant buffer types
     bool placeCompleted(const CapturedProgram &p, PlacedProgram &out);
+    // The constexprTsc_ index of sampler header `words`: the pack's own, one a runtime record placed, or placed now (under
+    // lock_); false: no room
+    bool constexprSampler(const std::array<uint32_t, 8> &words, uint32_t &index);
     bool takeTsc(uint32_t &tsc);
     const Pipeline *extrasLive_ = nullptr;  // the state whose extras (Pipeline::restore) the channel holds
     CommandBuffer cb_;

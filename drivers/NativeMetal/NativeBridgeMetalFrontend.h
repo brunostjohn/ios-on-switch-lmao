@@ -63,6 +63,15 @@ struct NmbDirectState;
 bool native_bridge_metal_render_direct(id descriptor, bool barrier, NSUInteger textureFormat, NSUInteger textureSamples,
                                        bool (*each)(const struct NmbDirectState *, void *), void *ctx,
                                        const char **why);
+// The same of a compute state at one dispatch shape (NmbDirectDispatch)
+struct NmbDirectDispatch;
+struct NmbDirectKernel;
+bool native_bridge_metal_compute_direct(id descriptor, const struct NmbDirectDispatch *dispatch,
+                                        bool (*each)(const struct NmbDirectKernel *, void *), void *ctx,
+                                        const char **why);
+// A dispatch of compute `state` (this device's) the raw GM20B path ran instead, journaled as its own dispatches are (a D line)
+void native_bridge_metal_journal_dispatch(id state, MTLSize grid, MTLSize group, bool threads, const char *memory,
+                                          const char *textures, const char *samplers);
 // A symbol of the NVK this device opened (null: none)
 void *native_bridge_metal_nvk_symbol(const char *name);
 

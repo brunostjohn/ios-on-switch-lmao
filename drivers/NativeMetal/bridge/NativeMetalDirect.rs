@@ -8,8 +8,8 @@ use crate::objects::{NmbDevice, NmbRenderPipelineDescriptor, e, get, guard, raw,
 use ash::vk as avk;
 use metal2vulkan::Budget;
 use metal2vulkan::bind::{
-    BindState, BindingPlan, BoundBuffer, BoundSampler, BoundTexture, DrawCall, DrawCommands, ImageSource,
-    NeutralResource, SamplerDescriptor, SamplerSource, StageTable, TextureFacts, WriteSource,
+    BindState, BindingPlan, BoundBuffer, BoundSampler, BoundTexture, DescriptorRange, DrawCall, DrawCommands,
+    ImageSource, NeutralResource, SamplerDescriptor, SamplerSource, StageTable, TextureFacts, WriteSource,
 };
 use metal2vulkan::cache::VariantKey;
 use metal2vulkan::device::{DeviceDescription, VkExtension, VkFeature};
@@ -17,7 +17,9 @@ use metal2vulkan::error::Retry;
 use metal2vulkan::metal::{
     PixelFormat, SamplerAddressMode, SamplerMinMagFilter, SamplerMipFilter, TextureType, TextureUsage,
 };
-use metal2vulkan::pipeline::{RenderPipeline, RenderPipelineDescriptor, SlotClass, SlotInterface, SlotRef, Stage};
+use metal2vulkan::pipeline::{
+    PipelineLayout, RenderPipeline, RenderPipelineDescriptor, SlotClass, SlotInterface, SlotRef, Stage,
+};
 use std::ffi::{CString, c_char, c_void};
 use std::sync::{Arc, Mutex};
 
@@ -100,7 +102,7 @@ pub struct NmbDirectState {
 
 /// A translation's failure as the caller's text; one the same request may get past (its deadline, the host's memory) starts
 /// "retry: ", which the caller does not keep as the state's refusal
-fn compile_error(what: &'static str) -> impl FnOnce(metal2vulkan::error::Error) -> String {
+pub(crate) fn compile_error(what: &'static str) -> impl FnOnce(metal2vulkan::error::Error) -> String {
     move |error| match error.retry() {
         Retry::Later => format!("retry: {what}: {error:?}"),
         _ => format!("{what}: {error:?}"),
@@ -254,7 +256,7 @@ const PROBE_DRAW: DrawCall = DrawCall::Primitives {
     base_instance: 0,
 };
 
-fn slot_parts(slot: &SlotRef) -> (u32, u32) {
+pub(crate) fn slot_parts(slot: &SlotRef) -> (u32, u32) {
     (stage_number(slot.stage), slot.index)
 }
 
@@ -265,7 +267,7 @@ fn neutral_view(neutral: &NeutralResource) -> i32 {
     }
 }
 
-fn write_of(w: &metal2vulkan::bind::DescriptorWrite, commands: &DrawCommands) -> NmbDirectWrite {
+pub(crate) fn write_of(w: &metal2vulkan::bind::DescriptorWrite, ranges: &[DescriptorRange]) -> NmbDirectWrite {
     let mut out = NmbDirectWrite {
         set: w.set,
         binding: w.binding,
@@ -291,8 +293,7 @@ fn write_of(w: &metal2vulkan::bind::DescriptorWrite, commands: &DrawCommands) ->
                 NmbDirectSource::Bytes
             };
             (out.stage, out.slot) = slot_parts(slot);
-            out.range = commands
-                .descriptor_ranges
+            out.range = ranges
                 .iter()
                 .find(|r| r.set == w.set && r.binding == w.binding)
                 .map_or(0, |r| r.range.range);
@@ -343,22 +344,22 @@ fn write_of(w: &metal2vulkan::bind::DescriptorWrite, commands: &DrawCommands) ->
 }
 
 /// A variant's Vulkan layout on the runtime's device, as the runtime makes it (pipeline/objects.rs create_set_layout)
-struct Layout<'d> {
+pub(crate) struct Layout<'d> {
     device: &'d ash::Device,
     samplers: Vec<avk::Sampler>,
     sets: Vec<avk::DescriptorSetLayout>,
-    pipeline: avk::PipelineLayout,
+    pub(crate) pipeline: avk::PipelineLayout,
 }
 
 impl<'d> Layout<'d> {
-    fn new(device: &'d ash::Device, pipeline: &RenderPipeline) -> Result<Layout<'d>, String> {
+    pub(crate) fn new(device: &'d ash::Device, layout: &PipelineLayout) -> Result<Layout<'d>, String> {
         let mut made = Layout {
             device,
             samplers: Vec::new(),
             sets: Vec::new(),
             pipeline: avk::PipelineLayout::null(),
         };
-        for set in &pipeline.layout.sets {
+        for set in &layout.sets {
             let mut immutable: Vec<Vec<avk::Sampler>> = Vec::with_capacity(set.bindings.len());
             for binding in &set.bindings {
                 let Some(desc) = binding.immutable_sampler else {
@@ -402,8 +403,7 @@ impl<'d> Layout<'d> {
             made.sets
                 .push(unsafe { device.create_descriptor_set_layout(&info, None) }.map_err(e("set layout"))?);
         }
-        let push: Vec<avk::PushConstantRange> = pipeline
-            .layout
+        let push: Vec<avk::PushConstantRange> = layout
             .push_constants
             .iter()
             .map(|range| {
@@ -421,7 +421,7 @@ impl<'d> Layout<'d> {
         Ok(made)
     }
 
-    fn set0(&self) -> u64 {
+    pub(crate) fn set0(&self) -> u64 {
         self.sets.first().map_or(0, |s| avk::Handle::as_raw(*s))
     }
 }
@@ -575,7 +575,7 @@ pub unsafe extern "C" fn nmb_render_pipeline_direct(
         let handles = unsafe { runtime.raw() };
         let layouts = variants
             .iter()
-            .map(|(_, pipeline)| Layout::new(handles.device, pipeline))
+            .map(|(_, pipeline)| Layout::new(handles.device, &pipeline.layout))
             .collect::<Result<Vec<_>, String>>()?;
         let writes: Vec<Vec<NmbDirectWrite>> = runs
             .iter()
@@ -584,7 +584,7 @@ pub unsafe extern "C" fn nmb_render_pipeline_direct(
                     .descriptors
                     .iter()
                     .take(MAX_WRITES)
-                    .map(|w| write_of(w, &run.commands))
+                    .map(|w| write_of(w, &run.commands.descriptor_ranges))
                     .collect()
             })
             .collect();

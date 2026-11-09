@@ -4,13 +4,34 @@
 // whose fragment function reads its color attachments under the pixel interlock gets its barrier form.
 #pragma once
 #import <Metal/Metal.h>
+#include <map>
 #include <string>
+#include <vector>
+#include "bridge/NativeMetalDirect.h"
 #include "raw_compiler.h"
+#include "raw_compute_record.h"
 #include "raw_direct.h"
 
 namespace raw {
 
 class Pack;
+
+// A dispatch's shape and what it binds besides its buffers, as the direct compile of its kernel takes them
+class KernelDispatch {
+public:
+    KernelDispatch(const uint32_t threads[3], const std::map<uint32_t, uint32_t> &memory);
+    KernelDispatch(const KernelDispatch &) = delete;
+    KernelDispatch &operator=(const KernelDispatch &) = delete;
+
+    void texture(uint32_t slot, MTLTextureDescriptor *d);
+    void sampler(uint32_t slot, MTLSamplerDescriptor *d);
+    const NmbDirectDispatch &dispatch();
+
+private:
+    NmbDirectDispatch dispatch_ = {};
+    std::vector<NmbDirectBoundTexture> textures_;
+    std::vector<NmbDirectBoundSampler> samplers_;
+};
 
 // The textures a state is planned for, as the probe binds them (pack/probe.mm: BGRA8 but for the raw path's own states that
 // read codes, and the multisampled ones its resolves read)
@@ -30,6 +51,10 @@ public:
     Compiler::Outcome make(MTLRenderPipelineDescriptor *descriptor, const std::string &key, RuntimeRecord &out,
                            std::string &why, ProbeTextures textures = {},
                            std::map<uint32_t, uint32_t> *registers = nullptr);
+    // The record of `descriptor`'s kernel at a dispatch of `dispatch`'s shape and bindings, whose compute key is `key`
+    // (raw_direct_compute.h)
+    Compiler::Outcome kernel(MTLComputePipelineDescriptor *descriptor, const NmbDirectDispatch &dispatch,
+                             const std::string &key, ComputeRecord &out, std::string &why);
 
 private:
     PackRules rules_;

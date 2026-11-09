@@ -6,12 +6,23 @@
 #include "NativeBridgeMetalFrontend.h"
 #include "RawDirect.h"
 #include "RawMetalInternal.h"
+#include "raw_compute.h"
 #include "raw_gpu.h"
 
 namespace raw {
 namespace {
 
 constexpr uint64_t kCacheCap = 8u << 20;
+
+// A compute key (raw_compute_key.h) with its function constants moved last: a log line cut short keeps its shape and bindings
+std::string constantsLast(const std::string &key)
+{
+    const size_t constants = key.find(" | "), shape = key.find(" | max=");
+    if (constants == std::string::npos || shape == std::string::npos || shape < constants)
+        return key;
+    return key.substr(0, constants) + key.substr(shape) + " | constants" +
+           key.substr(constants + 2, shape - constants - 2);
+}
 
 }  // namespace
 
@@ -158,15 +169,69 @@ Compiler::Outcome Completion::make(const CacheKey &k, RuntimeRecord &record, std
         }
         a = it->second;
     }
-    std::call_once(directMade_, [this] {
-        direct_ = std::make_unique<Direct>(device_.pack());
-    });
-    const Compiler::Outcome outcome = direct_->make(a.descriptor, a.key, record, why);
+    const Compiler::Outcome outcome = direct().make(a.descriptor, a.key, record, why);
     if (outcome != Compiler::Outcome::Made)
         once([NSString stringWithFormat:@"a state the pack lacks %s: %s | %.600s",
                                         outcome == Compiler::Outcome::Refused ? "is refused" : "was not made",
                                         why.c_str(), a.key.c_str()]);
     return outcome;
+}
+
+Direct &Completion::direct()
+{
+    std::call_once(directMade_, [this] {
+        direct_ = std::make_unique<Direct>(device_.pack());
+    });
+    return *direct_;
+}
+
+const ComputeState *Completion::kernel(MTLComputePipelineDescriptor *descriptor, const NmbDirectDispatch &dispatch,
+                                       const std::string &key)
+{
+    CacheKey k;
+    k.stack = stack_;
+    k.key = "kernel | " + key;
+    std::lock_guard<std::mutex> hold(kernelLock_);
+    Kernel &made = kernels_[k.name()];
+    if (made.state || made.refused || made.failures >= Compiler::kRetries)
+        return made.state;
+    auto record = std::make_unique<ComputeRecord>();
+    std::string why;
+    Compiler::Outcome outcome = Compiler::Outcome::Failed;
+    switch (cache_.loadKernel(k, *record, why)) {
+    case RecordCache::Found::Record:
+        outcome = Compiler::Outcome::Made;
+        break;
+    case RecordCache::Found::Refusal:
+        outcome = Compiler::Outcome::Refused;
+        break;
+    case RecordCache::Found::None: {
+        const uint64_t began = nowUs();
+        outcome = direct().kernel(descriptor, dispatch, key, *record, why);
+        if (outcome != Compiler::Outcome::Failed)
+            cache_.storeKernel(k, outcome == Compiler::Outcome::Made ? record.get() : nullptr, why);
+        if (outcome == Compiler::Outcome::Made)
+            once([NSString
+                stringWithFormat:@"a kernel the pack lacks, made at its first dispatch of %u,%u,%u threads in "
+                                 @"%llu us: %s %s",
+                                 dispatch.threads[0], dispatch.threads[1], dispatch.threads[2],
+                                 (unsigned long long)(nowUs() - began),
+                                 descriptor.computeFunction.name.UTF8String ?: "-", constantsLast(key).c_str()]);
+        break;
+    }
+    }
+    if (outcome == Compiler::Outcome::Made && (made.state = placeCompute(device_, *record)))
+        made.record = std::move(record);
+    else if (outcome == Compiler::Outcome::Made)
+        why = "no room for its program or samplers";
+    made.refused = outcome == Compiler::Outcome::Refused;
+    made.failures += !made.state && !made.refused;
+    if (!made.state)
+        once([NSString stringWithFormat:@"a kernel the pack lacks %s at %u,%u,%u threads: %s | %s %s",
+                                        made.refused ? "is refused" : "was not made", dispatch.threads[0],
+                                        dispatch.threads[1], dispatch.threads[2], why.c_str(),
+                                        descriptor.computeFunction.name.UTF8String ?: "-", constantsLast(key).c_str()]);
+    return made.state;
 }
 
 Compiler::Stats Completion::stats() const

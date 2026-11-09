@@ -166,7 +166,7 @@ def ca_states(tables_path: Path, corpus: Path) -> list[tuple[str, list[str]]]:
 
 
 # The raw runtime's sources directpack.mm makes its records with (RawDirect.mm beside them)
-DIRECT_RUNTIME = ('raw_direct', 'raw_record_parts', 'raw_emit', 'raw_pack')
+DIRECT_RUNTIME = ('raw_direct', 'raw_direct_compute', 'raw_record_parts', 'raw_emit', 'raw_pack')
 
 
 def build(work: Path, bridge: Path, metal_abi: Path) -> None:
