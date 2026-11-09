@@ -151,7 +151,8 @@ py_test(
     ],
 )
 
-# overlay.py's bundle entries (an .ipa's app staged whole, every Mach-O in it trusted) on a fabricated .ipa.
+# overlay.py's bundle entries (an .ipa's app staged whole, every Mach-O in it trusted) on a fabricated .ipa, and the
+# Supplemental cryptex path's launchd-plists-only rule, on the real manifest too.
 py_test(
     name = "overlay_test",
     size = "small",
@@ -159,6 +160,7 @@ py_test(
         "overlay.py",
         "overlay_test.py",
     ],
+    data = ["//overlay:manifest.json"],
     imports = ["."],
     deps = [
         ":boot_config",

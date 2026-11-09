@@ -38,7 +38,11 @@
     "when they change, so LaunchServices registers them the way it registers an OS update's system apps",
     "(tools/deploy/system_apps.py).",
     "Debug iOS 27 packages show iOS 27's com.apple.coreanimation logging profile with CADebug's info lines persisted, so the",
-    "pulled log holds the render server's detach results (drivers/NativeMobileDisplay/logging)."
+    "pulled log holds the render server's detach results (drivers/NativeMobileDisplay/logging).",
+    "iOS 27's launchd bootstraps /System/Cryptexes/Supplemental/System/Library/LaunchDaemons when the commpage",
+    "byte it checks is set, which the 27 kernel does (commpage.c). That path is a symlink to",
+    "/private/preboot/Cryptexes/Supplemental, which the 27 kernel creates as this union's point: our daemons' plists go",
+    "there, and overlay.py refuses anything else under it."
   ],
   "files": [
     {
@@ -72,6 +76,13 @@
       "source": "build/switch-joycon/joyconpaird",
       "trust": true,
       "boot-arg": "switch-no-bt"
+    },
+    {
+      "path": "/private/preboot/Cryptexes/Supplemental/System/Library/LaunchDaemons/com.brunostjohn.switch.joyconpaird.plist",
+      "source": "drivers/SwitchJoyCon/helper/com.brunostjohn.switch.joyconpaird.plist",
+      "union": "/private/preboot/Cryptexes/Supplemental",
+      "boot-arg": "switch-no-bt",
+      "kind": "24B119"
     },
     {
       "path": "/System/Library/VideoDecoders/HEVCH8.videodecoder",
