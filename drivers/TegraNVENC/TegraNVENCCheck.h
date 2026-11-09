@@ -154,9 +154,10 @@ static inline const char *tegra_nvenc_check(const TegraNVENCSubmit *s, const uin
     if (md->bdirect_mode || md->bskip_enable || md->ssim_rdo || md->calc_ssim)
         return "mode decision";
 
-    // References: every list-0 entry a P picture may use names a slot with both planes relocated and big enough. An
-    // unused entry is -2, as NVIDIA's T210 driver writes it (the firmware keeps an entry's low 5 bits as its DPB index,
-    // H.264 app 0x8951: -2 is 30, no slot this checker admits).
+    // References: every list-0 entry a P picture may use names a slot with both planes relocated. An unused entry is
+    // -2, as NVIDIA's T210 driver writes it (the firmware keeps an entry's low 5 bits as its DPB index, H.264 app
+    // 0x8951: -2 is 30, no slot this checker admits). Every relocated slot is bounded, used or not: the app hands all
+    // 16 to the engine on every picture (0x80a1).
     const uint32_t refs = pc->pic_type == 0 ? pps->num_ref_idx_l0_active_minus1 + 1u : 0u;
     if (refs && slice->num_ref_idx_active_override_flag &&
         slice->num_ref_idx_l0_active_minus1 != pps->num_ref_idx_l0_active_minus1)
@@ -172,6 +173,12 @@ static inline const char *tegra_nvenc_check(const TegraNVENCSubmit *s, const uin
         const int slot = (signed char)pc->l0[i];  // NOLINT(bugprone-signed-char-misuse): signed, -2 is unused
         if (slot < 0 || slot >= REFS || !r.refLuma[slot] ||
             (!r.refChroma[slot] && !p->refpic_cfg.chroma_top_frm_offset))
+            return "reference slot";
+    }
+    for (uint32_t slot = 0; slot < REFS; slot++) {
+        if (!r.refLuma[slot] && !r.refChroma[slot])
+            continue;
+        if (!r.refLuma[slot])
             return "reference slot";
         const uint64_t chroma = r.refChroma[slot] ? r.refChroma[slot] : r.refLuma[slot];
         why = tegra_nvenc_check_surface(&p->refpic_cfg, width, height, r.refLuma[slot], chroma, true);

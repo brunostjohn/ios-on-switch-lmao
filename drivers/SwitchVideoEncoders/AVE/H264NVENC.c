@@ -575,8 +575,10 @@ void h264enc_fill_submit(const H264EncConfig *c, const H264EncLayout *l, const H
 #define RELOC(m, handle, offset) e[n++] = (TegraNVENCEntry){(uint16_t)(m), TEGRA_NVENC_ENTRY_RELOC, (handle), (offset)}
     VALUE(NVC5B7_SET_APPLICATION_ID, NVC5B7_SET_APPLICATION_ID_ID_NVENC_H264);
     // NVIDIA's T210 driver's stream (switch-frame-tap m79-runE): FORCE_OUTPIC with the GP timer, the ME predictor
-    // pair every picture, the reference's chroma at its config offset (no chroma methods in that reading), no
-    // colocated data (B pictures only); every address method it leaves unset the kernel writes 0.
+    // pair and reference slot 0 (the other reconstruction) in every job captured, the reference's chroma at its config
+    // offset (no chroma methods in that reading), no colocated data (B pictures only); every address method it leaves
+    // unset the kernel writes 0. Slot 0 goes in IDRs too: the app hands all 16 reference slots to the engine on every
+    // picture (H.264 app 0x80a1), and an IDR without it would hand it 0 or the address a previous job left there.
     VALUE(NVC5B7_SET_CONTROL_PARAMS,
           NVC5B7_SET_CONTROL_PARAMS_CODEC_TYPE_H264 | (1u << 8) /* FORCE_OUTPIC */ | (1u << 12) /* GPTIMER_ON */);
     VALUE(NVC5B7_SET_PICTURE_INDEX, p->picture_index);
@@ -587,11 +589,9 @@ void h264enc_fill_submit(const H264EncConfig *c, const H264EncLayout *l, const H
         RELOC(NVC5B7_SET_OUT_REF_PIC_CHROMA, h->recon, refChroma);
     RELOC(NVC5B7_SET_IN_MEPRED_DATA, h->mepred[p->picture_index & 1], 0);
     RELOC(NVC5B7_SET_OUT_MEPRED_DATA, h->mepred[~p->picture_index & 1], 0);
-    if (pPicture) {
-        RELOC(NVC5B7_SET_IN_REF_PIC0_LUMA, h->ref, 0);
-        if (method)
-            RELOC(NVC5B7_SET_IN_REF_PIC0_CHROMA, h->ref, refChroma);
-    }
+    RELOC(NVC5B7_SET_IN_REF_PIC0_LUMA, h->ref, 0);
+    if (method)
+        RELOC(NVC5B7_SET_IN_REF_PIC0_CHROMA, h->ref, refChroma);
     RELOC(NVC5B7_SET_OUT_BITSTREAM, h->bitstream, 0);
     RELOC(NVC5B7_SET_OUT_ENC_STATUS, h->aux, 0);
     RELOC(NVC5B7_SET_IOHISTORY, h->aux, l->history_offset);
