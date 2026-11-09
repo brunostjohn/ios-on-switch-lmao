@@ -317,7 +317,8 @@ hwtest_app(
     name = "SwitchHWTest27",
     bundle_id = "com.brunostjohn.switch.hwtest",
     bundle_name = "SwitchHWTest",
-    entitlements = "SwitchHWTest.entitlements",
+    # SwitchHWTest's, plus a read of com.apple.CoreBrightness for display.true_tone_default.
+    entitlements = "SwitchHWTest27.entitlements",
     infoplist = "Info.plist",
     minimum_os_version = "27.0",
     deps = [":app27_lib"],
@@ -329,7 +330,7 @@ genrule(
     name = "arm64e_plists",
     srcs = [
         "Info.plist",
-        "SwitchHWTest.entitlements",
+        "SwitchHWTest27.entitlements",
     ],
     outs = [
         "arm64e/Info.plist",
@@ -337,7 +338,7 @@ genrule(
     ],
     cmd = " && ".join([
         "sed 's|<string>HW Test</string>|<string>HW Test arm64e</string>|' $(execpath Info.plist) > $(execpath arm64e/Info.plist)",
-        "sed 's|com.brunostjohn.switch.hwtest<|com.brunostjohn.switch.hwtest27e<|' $(execpath SwitchHWTest.entitlements) > $(execpath arm64e/SwitchHWTest27e.entitlements)",
+        "sed 's|com.brunostjohn.switch.hwtest<|com.brunostjohn.switch.hwtest27e<|' $(execpath SwitchHWTest27.entitlements) > $(execpath arm64e/SwitchHWTest27e.entitlements)",
     ]),
 )
 
