@@ -81,6 +81,21 @@ void directVariants(const char *pack, id<MTLLibrary> library)
     expect(own.programs[1].image != bgra.programs[1].image, "the cubic variant's fragment program is not the state's");
     expect(own.programs[0].image == bgra.programs[0].image, "its vertex program is the state's");
     expect(bgra.programs[1].image != half.programs[1].image, "the cubic variant depends on the texture format");
+    for (const auto &[textures, whole] : {std::pair{cubicBgra, &bgra}, std::pair{cubicHalf, &half}}) {
+        raw::RuntimeRecord split;
+        std::string why;
+        const bool madeSplit = direct.make(d, kKey + textures.cubic.key(), split, why, textures, nullptr, true) ==
+                               raw::Compiler::Outcome::Made;
+        expect(madeSplit && split.splitTried, "the cubic variant is compiled with its split requested");
+        if (!madeSplit)
+            continue;
+        for (int stage = 0; stage < 2; stage++) {
+            const raw::CapturedProgram &a = whole->programs[stage], &b = split.programs[stage];
+            expect(a.image == b.image && a.data == b.data && a.cbufTypes == b.cbufTypes,
+                   stage ? "split compilation preserves the cubic fragment program"
+                         : "split compilation preserves the cubic vertex program");
+        }
+    }
 }
 
 void facade(id<MTLDevice> m2v, const char *pack, const char *cacheDir, NSString *metallib)

@@ -17,10 +17,16 @@
 
 #include <vulkan/vulkan_core.h>
 
+#include "nvk_switch_split.h"
+
 #ifdef __cplusplus
 extern "C" {
 #endif
 
+/* raw/runtime/raw_direct_nvk.h copies these structs field for field (the
+ * plugin has no Vulkan headers): a field added here goes into its copies too,
+ * which switch_nvk_compile_abi's sizes hold them to
+ */
 struct switch_nvk_stage_info {
    const uint32_t *spirv;
    size_t spirv_bytes;
@@ -39,6 +45,11 @@ struct switch_nvk_stage_info {
    const void *stage_pnext;
    /* The fragment library's multisample state */
    bool sample_shading;
+   /* A fragment stage's split for the raw path too (nvk_switch_split.h): it
+    * compiles the stage about twice over, which the device does off the
+    * state's creation
+    */
+   bool split;
    /* The colour attachments of a 16-bit float format (bit j: attachment j),
     * whose float outputs the fragment program rounds to nearest even
     * (nvk_switch_round.h)
@@ -58,6 +69,10 @@ struct switch_nvk_stage {
    bool early_fragment_tests;
    bool writes_depth;
    bool post_depth_coverage;
+   /* A fragment stage's split for the raw path (nvk_switch_split.h), NULL
+    * where it has none; owned with code and data
+    */
+   const struct switch_nvk_split *split;
    void *owner; /* holds code and data until switch_nvk_stage_finish */
 };
 
@@ -65,6 +80,26 @@ VkResult switch_nvk_compile_stage(VkDevice device,
                                   const struct switch_nvk_stage_info *info,
                                   struct switch_nvk_stage *out);
 void switch_nvk_stage_finish(VkDevice device, struct switch_nvk_stage *stage);
+
+/* A stage's split as the raw path records one: its per-pixel program and its
+ * prologue as stages (the prologue's header zeros, as programs.bin holds a
+ * kernel's; neither owns anything), its layout, QMD and threshold
+ */
+struct switch_nvk_split_parts {
+   struct switch_nvk_stage fs;
+   struct switch_nvk_stage prologue;
+   struct switch_nvk_split_layout layout;
+   uint32_t qmd[64];
+   uint32_t threshold_pixels;
+};
+
+void switch_nvk_split_parts(const struct switch_nvk_split *split,
+                            struct switch_nvk_split_parts *out);
+
+/* sizeof switch_nvk_stage_info, switch_nvk_stage and switch_nvk_split_parts:
+ * the plugin's copies of them are checked against these
+ */
+void switch_nvk_compile_abi(uint32_t sizes[3]);
 
 /* Where a descriptor set layout's binding lives in a set's descriptor buffer */
 struct switch_nvk_set_binding {

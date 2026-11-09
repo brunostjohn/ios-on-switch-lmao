@@ -15,8 +15,29 @@
 namespace raw {
 namespace {
 
+// nvk_switch_split.h switch_nvk_split_layout, nvk_switch_compile.h switch_nvk_split_parts
+struct NvkSplitLayout {
+    uint32_t frontierBytes;
+    uint8_t frontierCbuf, prologueCbufs, shaderDataCbuf, uboCount;
+    uint8_t uboCbuf[6];
+    uint32_t frontierValues, prologueInstrs;
+};
+
+struct NvkSplitParts {
+    NvkStage fs, prologue;
+    NvkSplitLayout layout;
+    uint32_t qmd[64];
+    uint32_t thresholdPixels;
+};
+
+using SplitParts = void (*)(const void *split, NvkSplitParts *);
+using CompileAbi = void (*)(uint32_t sizes[3]);
+
 // VK_PIPELINE_CREATE_2_LIBRARY_BIT_KHR: m2v's states are made of pipeline libraries
 constexpr uint64_t kLibraryBit = 0x800;
+constexpr uint32_t kFragmentBit = 0x10;  // VK_SHADER_STAGE_FRAGMENT_BIT
+// pack/splits.py lay_out's limits: the constant buffers a split per-pixel program binds, and a QMD's
+constexpr uint32_t kSplitProgramCbufs = 11, kQmdCbufs = 8;
 constexpr uint32_t kRootPush = 0x700;
 constexpr int32_t kViewType3D = 2;  // VK_IMAGE_VIEW_TYPE_3D
 constexpr uint32_t kTagged = 16;    // probe.mm's fragment textures and samplers
@@ -76,8 +97,9 @@ public:
                 nvk::stageFinish(nvk_, device_, s);
     }
 
-    // Refused: a state the raw path does not draw from a record; Failed: NVK could not compile a stage
-    Compiler::Outcome compile(const NmbDirectState &state, uint32_t halfTargets, std::string &why)
+    // Refused: a state the raw path does not draw from a record; Failed: NVK could not compile a stage. `split`: the fragment
+    // stage's split too (split())
+    Compiler::Outcome compile(const NmbDirectState &state, uint32_t halfTargets, bool split, std::string &why)
     {
         if (state.stageCount != 2) {
             why = std::to_string(state.stageCount) + " stages";
@@ -101,6 +123,7 @@ public:
                                        nullptr,
                                        s.subgroupSize ? &subgroup : nullptr,
                                        state.sampleShading,
+                                       split && s.stage == kFragmentBit,
                                        halfTargets};
             const int32_t result = nvk::compileStage(nvk_, device_, info, made_[k]);
             if (result != 0) {
@@ -120,6 +143,11 @@ public:
     EmitProgram emit(int k) const
     {
         return {made_[k].header, made_[k].numGprs, made_[k].earlyFragmentTests};
+    }
+
+    const void *split(int k) const
+    {
+        return made_[k].split;
     }
 
 private:
@@ -257,6 +285,30 @@ bool emitted(const std::string &key, const Stages &stages, const std::vector<uin
     return true;
 }
 
+// The fragment program's split as a record holds it (NVK made none where it saves nothing)
+void splitInto(const DirectNvk &nvk, const void *split, RuntimeRecord &out)
+{
+    if (!split)
+        return;
+    NvkSplitParts parts;
+    reinterpret_cast<SplitParts>(nvk.splitParts)(split, &parts);
+    const NvkSplitLayout &l = parts.layout;
+    if (parts.fs.cbufCount > kSplitProgramCbufs || l.prologueCbufs > kQmdCbufs || l.uboCount > sizeof l.uboCbuf)
+        return;
+    PackSplit &r = out.splitRecord;
+    r.thresholdPixels = parts.thresholdPixels;
+    r.frontierBytes = uint16_t(l.frontierBytes);
+    r.frontierCbuf = l.frontierCbuf;
+    r.uboCount = l.uboCount;
+    r.shaderDataCbuf = l.shaderDataCbuf;
+    r.prologueCbufs = l.prologueCbufs;
+    memcpy(r.uboCbuf, l.uboCbuf, l.uboCount);
+    memcpy(r.qmd, parts.qmd, sizeof r.qmd);
+    out.splitPrograms[0] = programOf(parts.fs);
+    out.splitPrograms[1] = programOf(parts.prologue);
+    out.split = true;
+}
+
 }  // namespace
 
 DirectNvk DirectNvk::find(void *(*symbol)(const char *name))
@@ -271,13 +323,21 @@ DirectNvk DirectNvk::find(void *(*symbol)(const char *name))
     nvk.samplerHeader = symbol("switch_nvk_sampler_header");
     nvk.computeQmd = symbol("switch_nvk_compute_qmd");
     nvk.viewHeaderWord0 = symbol("switch_nvk_view_header_word0");
+
+    nvk.splitParts = symbol("switch_nvk_split_parts");
+    if (const auto abi = reinterpret_cast<CompileAbi>(symbol("switch_nvk_compile_abi"))) {
+        uint32_t sizes[3] = {};
+        abi(sizes);
+        nvk.abiMatches =
+            sizes[0] == sizeof(NvkStageInfo) && sizes[1] == sizeof(NvkStage) && sizes[2] == sizeof(NvkSplitParts);
+    }
     return nvk;
 }
 
 bool DirectNvk::complete() const
 {
     return compileStage && stageFinish && setLayoutBinding && setLayoutSize && immutableSamplerHeader &&
-           bufferDescriptorSize;
+           bufferDescriptorSize && splitParts && abiMatches;
 }
 
 bool DirectNvk::kernelComplete() const
@@ -287,7 +347,7 @@ bool DirectNvk::kernelComplete() const
 
 Compiler::Outcome directRecord(const NmbDirectState &state, const DirectNvk &nvk, const PackRules &rules,
                                const std::string &key, const std::vector<uint32_t> &attributes, RuntimeRecord &out,
-                               std::string &why, std::map<uint32_t, uint32_t> *registers)
+                               std::string &why, std::map<uint32_t, uint32_t> *registers, bool split)
 {
     out = {};
     void *device = handle(state.device);
@@ -301,7 +361,7 @@ Compiler::Outcome directRecord(const NmbDirectState &state, const DirectNvk &nvk
         return Compiler::Outcome::Refused;
     }
     Stages stages(nvk, device);
-    if (const Compiler::Outcome compiled = stages.compile(state, halfFloatTargets(key), why);
+    if (const Compiler::Outcome compiled = stages.compile(state, halfFloatTargets(key), split, why);
         compiled != Compiler::Outcome::Made)
         return compiled;
     RecordParts parts;
@@ -326,6 +386,9 @@ Compiler::Outcome directRecord(const NmbDirectState &state, const DirectNvk &nvk
         return Compiler::Outcome::Refused;
     if (registers)
         *registers = parts.regs;
+    out.splitTried = split;
+    if (split)
+        splitInto(nvk, stages.split(1), out);
     return Compiler::Outcome::Made;
 }
 

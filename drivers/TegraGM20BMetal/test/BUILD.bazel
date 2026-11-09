@@ -25,6 +25,8 @@
 #                     SET_ZT_FORMAT and texture header word 0, and each compressed format's word 0, rebuilt from NIL's
 #                     row of NVK's format by NIL's generator rules
 #   mkpack_owned_test raw/pack/mkpack.py: no blob or baseline register is one the raw path owns
+#   splits_layout_test  raw/pack/splits.py: a split is packed only where its per-pixel program binds its uniform
+#                     buffers as its whole program does
 #   raw_tiled_cache_test  raw/runtime/raw_tiled_cache.h: with the kernel's tiled-cache bit, deko3d's configuration then the
 #                     enable at context init and one flush per pass and per command buffer; nothing without it
 #   raw_comp_test     raw/runtime/raw_comp.h: the compressible kinds the raw path binds are the kernel kind table's (nouveau
@@ -162,9 +164,11 @@ host_test(
         "//drivers/NativeMetal:NativeBridgeMetalFrontend.mm",
         "//drivers/NativeMetal:bridge/NativeMetalObjects.h",
         "//drivers/NativeMetal:bridge/NativeMetalObjects.rs",
+        "//drivers/TegraGM20BMetal:raw/pack/probe_states.h",
         "//drivers/TegraGM20BMetal:raw/runtime/RawComplete.mm",
         "//drivers/TegraGM20BMetal:raw/runtime/RawMetalLibrary.mm",
         "//drivers/TegraGM20BMetal:raw/runtime/RawMetalStates.mm",
+        "//drivers/TegraGM20BMetal:raw/runtime/RawPipelineKey.h",
     ],
 )
 
@@ -251,6 +255,13 @@ py_test(
 )
 
 py_test(
+    name = "splits_layout_test",
+    srcs = ["splits_layout_test.py"],
+    data = ["//drivers/TegraGM20BMetal:raw/runtime/raw_owned.h"],
+    deps = ["//drivers/TegraGM20BMetal:raw_pack"],
+)
+
+py_test(
     name = "rawpack_split_test",
     srcs = ["rawpack_split_test.py"],
     deps = ["//drivers/TegraGM20BMetal:raw_pack"],
@@ -304,6 +315,7 @@ host_test(
         "//drivers/TegraGM20BMetal:raw/runtime/raw_completed.cpp",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_compute.cpp",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_gpu.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_split.cpp",
     ],
 )
 
@@ -377,6 +389,21 @@ host_test(
         "//drivers/TegraGM20BMetal:raw/pack/probe_bind.h",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_pack.h",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_residual.h",
+    ],
+    cxx_std = "c++17",
+)
+
+host_test(
+    name = "raw_key_test",
+    srcs = [
+        "raw_key_test.cpp",
+        "//drivers/TegraGM20BMetal:raw/pack/probe_bind.h",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_owned.h",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_pack.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_pack.h",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_record.h",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_record_parts.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_record_parts.h",
     ],
     cxx_std = "c++17",
 )

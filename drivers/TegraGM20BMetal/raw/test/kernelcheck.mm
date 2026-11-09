@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: MIT
 // kernelcheck: the direct compile of every compute dispatch shape of a corpus (runtime/raw_direct_compute.h), its kernel records
-// against the pack's. Each kernel the pack holds must come out byte for byte the same (kernel_compare.h); each shape the kernel
-// probe set aside (pack/kernels.py) is listed with the direct compile's reason (REFUSED lines), or as made (DIFFERS).
-// usage: kernelcheck <nvk dylib> <cache dir> <corpus.log> <pack.bin> (PROBE_LIB_ROOT, PROBE_DATA_LIBS as probecompute.mm's)
+// against the pack's. Each kernel the pack holds must come out byte for byte the same (kernel_compare.h); each shape the pack
+// set aside is listed with the direct compile's reason (REFUSED lines), or as made (DIFFERS).
+// usage: kernelcheck <nvk dylib> <cache dir> <corpus.log> <pack.bin> (PROBE_LIB_ROOT, PROBE_DATA_LIBS as directpack.mm's)
 //   KERNELCHECK_SHAPES=1: each kernel's program made at its threadgroup shape, at another of the same threads and at twice
 //   (or half) as many, and whether the shape reaches the program (SHAPE lines and a count of each answer)
 #import <Foundation/Foundation.h>

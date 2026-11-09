@@ -28,6 +28,7 @@ struct Asked {
     const std::vector<uint32_t> &attributes;
     RuntimeRecord &out;
     std::map<uint32_t, uint32_t> *registers;
+    bool split;
     std::string why;
     Compiler::Outcome outcome = Compiler::Outcome::Failed;
 };
@@ -35,7 +36,7 @@ struct Asked {
 bool made(const NmbDirectState *state, void *ctx)
 {
     Asked &a = *static_cast<Asked *>(ctx);
-    a.outcome = directRecord(*state, a.nvk, a.rules, a.key, a.attributes, a.out, a.why, a.registers);
+    a.outcome = directRecord(*state, a.nvk, a.rules, a.key, a.attributes, a.out, a.why, a.registers, a.split);
     return true;
 }
 
@@ -66,9 +67,9 @@ Direct::Direct(PackRules rules)
 
 Compiler::Outcome Direct::form(MTLRenderPipelineDescriptor *descriptor, bool barrier, ProbeTextures textures,
                                const std::string &key, const std::vector<uint32_t> &attributes, RuntimeRecord &out,
-                               std::string &why, std::map<uint32_t, uint32_t> *registers)
+                               std::string &why, std::map<uint32_t, uint32_t> *registers, bool split)
 {
-    Asked a = {nvk_, rules_, key, attributes, out, registers, {}};
+    Asked a = {nvk_, rules_, key, attributes, out, registers, split, {}};
     std::vector<NmbDirectCubicSampler> cubic;
     std::vector<NmbDirectTextureFormat> formats;
     for (const CubicBinds::Sampler &c : textures.cubic.samplers)
@@ -87,20 +88,22 @@ Compiler::Outcome Direct::form(MTLRenderPipelineDescriptor *descriptor, bool bar
 }
 
 Compiler::Outcome Direct::make(MTLRenderPipelineDescriptor *descriptor, const std::string &key, RuntimeRecord &out,
-                               std::string &why, ProbeTextures textures, std::map<uint32_t, uint32_t> *registers)
+                               std::string &why, ProbeTextures textures, std::map<uint32_t, uint32_t> *registers,
+                               bool split)
 {
     if (!native_bridge_metal_render_direct || !nvk_.complete()) {
-        why = "the frontend or NVK has no direct compile";
+        why = nvk_.compileStage && !nvk_.abiMatches ? "NVK's switch_nvk_compile structs are not raw_direct.cpp's"
+                                                    : "the frontend or NVK has no direct compile";
         return Compiler::Outcome::Failed;
     }
     std::vector<uint32_t> attributes;
     for (MTLVertexAttribute *a in descriptor.vertexFunction.vertexAttributes)
         if (a.isActive)
             attributes.push_back(uint32_t(a.attributeIndex));
-    Compiler::Outcome outcome = form(descriptor, false, textures, key, attributes, out, why, registers);
+    Compiler::Outcome outcome = form(descriptor, false, textures, key, attributes, out, why, registers, split);
     if (outcome != Compiler::Outcome::Refused || why.rfind("storage form", 0) != 0)
         return outcome;
-    outcome = form(descriptor, true, textures, key, attributes, out, why, registers);
+    outcome = form(descriptor, true, textures, key, attributes, out, why, registers, split);
     if (outcome == Compiler::Outcome::Made)
         out.pipeline.flags |= PipelineBarrierForm;
     return outcome;

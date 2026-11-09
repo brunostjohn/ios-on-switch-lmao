@@ -20,6 +20,7 @@
 #include "nvk_shader.h"
 #include "nvk_switch_capture.h"
 #include "nvk_switch_round.h"
+#include "nvk_switch_split.h"
 
 #include "vk_graphics_state.h"
 #include "vk_pipeline.h"
@@ -40,6 +41,7 @@ switch_nvk_stage_of(const struct nvk_shader *shader,
    for (uint32_t c = 0; c < out->cbuf_count; c++)
       out->cbuf_types[c] = switch_nvk_cbuf_code(&shader->cbuf_map.cbufs[c]);
    out->num_gprs = shader->info.num_gprs;
+   out->split = shader->switch_split;
    if (shader->info.stage == MESA_SHADER_FRAGMENT) {
       out->early_fragment_tests = shader->info.fs.early_fragment_tests;
       out->writes_depth = shader->info.fs.writes_depth;
@@ -85,6 +87,7 @@ switch_nvk_compile_stage(VkDevice _device,
 
    switch_nvk_half_targets_current = info->half_targets;
    struct vk_shader *shader = NULL;
+   switch_nvk_split_current = info->split;
    VkResult result =
       vk_pipeline_compile_library_stage(&dev->vk, info->pipeline_flags,
                                         info->pipeline_pnext, &stage,
@@ -92,6 +95,7 @@ switch_nvk_compile_stage(VkDevice _device,
                                         info->stage == VK_SHADER_STAGE_COMPUTE_BIT ?
                                         NULL : &state, &shader);
    switch_nvk_half_targets_current = 0;
+   switch_nvk_split_current = false;
    if (result != VK_SUCCESS)
       return result;
 
@@ -107,6 +111,42 @@ switch_nvk_stage_finish(VkDevice _device, struct switch_nvk_stage *stage)
    if (stage->owner != NULL)
       vk_shader_destroy(&dev->vk, stage->owner, &dev->vk.alloc);
    stage->owner = NULL;
+}
+
+static void
+split_program(const struct switch_nvk_program *p, struct switch_nvk_stage *out)
+{
+   out->code = p->code;
+   out->code_bytes = p->code_bytes;
+   out->data = p->data;
+   out->data_bytes = p->data_bytes;
+   out->cbuf_count = MIN2(p->cbuf_count, 16);
+   memcpy(out->cbuf_types, p->cbuf_types, sizeof(out->cbuf_types));
+   out->num_gprs = p->info.num_gprs;
+}
+
+SWITCH_EXPORT void
+switch_nvk_split_parts(const struct switch_nvk_split *split,
+                       struct switch_nvk_split_parts *out)
+{
+   memset(out, 0, sizeof(*out));
+   split_program(&split->fs, &out->fs);
+   memcpy(out->fs.header, split->fs.info.hdr, sizeof(out->fs.header));
+   out->fs.early_fragment_tests = split->fs.info.fs.early_fragment_tests;
+   out->fs.writes_depth = split->fs.info.fs.writes_depth;
+   out->fs.post_depth_coverage = split->fs.info.fs.post_depth_coverage;
+   split_program(&split->prologue, &out->prologue);
+   out->layout = split->layout;
+   memcpy(out->qmd, split->qmd, sizeof(out->qmd));
+   out->threshold_pixels = split->threshold_pixels;
+}
+
+SWITCH_EXPORT void
+switch_nvk_compile_abi(uint32_t sizes[3])
+{
+   sizes[0] = sizeof(struct switch_nvk_stage_info);
+   sizes[1] = sizeof(struct switch_nvk_stage);
+   sizes[2] = sizeof(struct switch_nvk_split_parts);
 }
 
 SWITCH_EXPORT bool

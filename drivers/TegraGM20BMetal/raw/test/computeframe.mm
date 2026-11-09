@@ -39,7 +39,7 @@ std::vector<uint32_t> tag(uint32_t slot)
     return t;
 }
 
-// Texture slot t: (16 + t) x (8 + t) RGBA8 texels of a pattern; sampler slot s: max LOD clamp 1 + s / 2 (probecompute.mm's tags)
+// Texture slot t: (16 + t) x (8 + t) RGBA8 texels of a pattern; sampler slot s: max LOD clamp 1 + s / 2
 uint32_t texel(uint32_t t, uint32_t x, uint32_t y)
 {
     return 0x01000000u * t ^ x * 0x00010307u ^ y * 0x00070103u;

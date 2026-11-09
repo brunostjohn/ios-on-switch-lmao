@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
-// See raw_direct_compute.h. What pack/kernels.py reads of nvdec's K lines is read here from what made them: m2v's plans of the
-// three dispatches and NVK's own rules for the QMD, the layout and the descriptors.
+// See raw_direct_compute.h. A kernel's record from m2v's plans of three dispatches (inline bytes, buffers elsewhere, buffers off 16)
+// and NVK's own rules for the QMD, the layout and the descriptors.
 #include "raw_direct_compute.h"
 
 #include <algorithm>
@@ -49,7 +49,7 @@ std::map<uint32_t, uint32_t> pushWords(uint32_t mask, const uint32_t (&words)[32
     return out;
 }
 
-// pack/kernels.py template: what each dispatch sets cleared, its program offset, grid and constant buffer addresses
+// What each dispatch sets cleared: its program offset, grid and constant buffer addresses (raw_compute.cpp)
 void clearDispatchWords(uint32_t (&q)[64])
 {
     q[8] = q[12] = q[13] = 0;
@@ -155,8 +155,8 @@ private:
     }
 };
 
-// pack/kernels.py attach_residuals: each buffer entry's root push word the bind-offset dispatch set to its slot's residual
-// (probeComputeCode), where no other buffer slot of the kernel shares the code and no other word holds it
+// Each buffer entry's root push word the bind-offset dispatch set to its slot's residual (probeComputeCode), where no other
+// buffer slot of the kernel shares the code and no other word holds it
 void attachResiduals(const NmbDirectKernel &k, std::vector<PackKernelEntry> &entries)
 {
     if (!k.boundSame)
@@ -189,6 +189,7 @@ Compiler::Outcome compile(const NmbDirectKernel &k, const DirectNvk &nvk, Compil
                                nullptr,
                                k.stage.subgroupSize ? &subgroup : nullptr,
                                false,
+                               false,
                                0};
     if (k.stage.stage != kComputeStage) {
         why = "a stage of VkShaderStageFlags " + std::to_string(k.stage.stage);
@@ -205,7 +206,7 @@ Compiler::Outcome compile(const NmbDirectKernel &k, const DirectNvk &nvk, Compil
     return Compiler::Outcome::Made;
 }
 
-// What sends a kernel's dispatch to no record: pack/kernels.py's set-asides
+// What sends a kernel's dispatch to no record
 bool recordable(const NmbDirectKernel &k, std::string &why)
 {
     if (k.pushHoles)

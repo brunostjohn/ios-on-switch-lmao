@@ -19,6 +19,7 @@ struct NvkStageInfo {
     const void *pipelinePnext;
     const void *stagePnext;
     bool sampleShading;
+    bool split;
     uint32_t halfTargets;
 };
 
@@ -32,6 +33,7 @@ struct NvkStage {
     uint32_t cbufCount;
     uint8_t numGprs;
     bool earlyFragmentTests, writesDepth, postDepthCoverage;
+    const void *split;
     void *owner;
 };
 

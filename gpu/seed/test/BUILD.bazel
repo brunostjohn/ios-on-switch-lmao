@@ -13,8 +13,6 @@ RAW = [
     "rawpack.py",
     "directlink.py",
     "mkpack.py",
-    "mkprograms.py",
-    "nvkshader.py",
     "probelog.py",
     "layouts.py",
     "packfile.py",
