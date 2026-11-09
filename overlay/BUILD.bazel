@@ -13,6 +13,7 @@ filegroup(
     srcs = [
         "//drivers/NativeMobileDisplay:overlay_files",
         "//drivers/SwitchAudio:overlay_files",
+        "//drivers/SwitchCapture:overlay_files",
         "//drivers/SwitchJoyCon:overlay_files",
     ],
 )

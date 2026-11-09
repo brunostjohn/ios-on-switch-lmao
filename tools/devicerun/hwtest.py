@@ -155,6 +155,7 @@ BY_IOS: dict[str, dict[str, bool]] = {
         'display.true_tone_default': False,
         'pacing.glass_over': False,
         'pacing.glass_under': False,
+        'system.no_camera': False,
         'video.frame_processor': False,
     },
 }

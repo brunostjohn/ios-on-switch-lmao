@@ -42,7 +42,11 @@
     "iOS 27's launchd bootstraps /System/Cryptexes/Supplemental/System/Library/LaunchDaemons when the commpage",
     "byte it checks is set, which the 27 kernel does (commpage.c). That path is a symlink to",
     "/private/preboot/Cryptexes/Supplemental, which the 27 kernel creates as this union's point: our daemons' plists go",
-    "there, and overlay.py refuses anything else under it."
+    "there, and overlay.py refuses anything else under it.",
+    "iOS 27's camera description of J181 (CMCapture.framework/J181/AVCaptureSession.plist, which CMCapture finds by",
+    "MobileGestalt's HWModelDescriptionForCamera) lists its cameras and the video effects cameracaptured compiles",
+    "shaders for at every launch (FigCapturePreloadShaders). The Switch has none, so its J181 description is empty:",
+    "no capture device and no effect. The union cannot hide the sealed file, so it shows the empty one over it."
   ],
   "files": [
     {
@@ -231,6 +235,11 @@
       "path": "/System/Library/Preferences/Logging/Subsystems/com.apple.coreanimation.plist",
       "source": "drivers/NativeMobileDisplay/logging/com.apple.coreanimation.plist",
       "debug": true,
+      "kind": "24B119"
+    },
+    {
+      "path": "/System/Library/PrivateFrameworks/CMCapture.framework/J181/AVCaptureSession.plist",
+      "source": "drivers/SwitchCapture/J181/AVCaptureSession.plist",
       "kind": "24B119"
     }
   ]
