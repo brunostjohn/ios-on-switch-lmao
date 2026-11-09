@@ -9,6 +9,11 @@ from tools.frames import frames
 
 # .ips bug_type: 309 a crash, 210 a panic, 298 a jetsam event (OSAnalytics' header field).
 CRASH, PANIC, JETSAM = '309', '210', '298'
+# Processes whose crashes a fix promised to end: (row, owner, process).
+WATCHED = (
+    ('crash.locationd', 'r122-crashsys', 'locationd'),
+    ('crash.spotlightknowledged', 'r122-crashsys', 'spotlightknowledged.updater'),
+)
 INTERVAL_MS = 1000 / 60
 
 
@@ -100,6 +105,9 @@ def crash_rows(directory: str | None) -> list[Result]:
     for name, bug_type in (('crash.crashes', CRASH), ('crash.panics', PANIC)):
         verdict = FAIL if kinds.get(bug_type) else PASS
         rows.append(row(name, owner, 'count == 0', verdict, listed(bug_type)))
+    crashes = kinds.get(CRASH, Counter())
+    for name, watcher, process in WATCHED:
+        rows.append(row(name, watcher, 'count == 0', FAIL if crashes[process] else PASS, f'{crashes[process]}'))
     rows.append(row('crash.jetsam', owner, 'report', INFO, listed(JETSAM)))
     other = {k: v for k, v in kinds.items() if k not in {CRASH, PANIC, JETSAM}}
     observed = '; '.join(f'type {k}: {sum(v.values())}' for k, v in sorted(other.items())) or 'none'

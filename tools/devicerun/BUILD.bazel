@@ -15,6 +15,7 @@ py_library(
         "hwtest.py",
         "lockscreen.py",
         "morning.py",
+        "protection.py",
         "raw_stats.py",
         "reports.py",
         "rules.py",
@@ -68,6 +69,14 @@ py_test(
     name = "lockscreen_test",
     size = "small",
     srcs = ["lockscreen_test.py"],
+    deps = [":lib"],
+)
+
+# protection.py's checks over boot 15's content-protection lines and a kernel that labels.
+py_test(
+    name = "protection_test",
+    size = "small",
+    srcs = ["protection_test.py"],
     deps = [":lib"],
 )
 
