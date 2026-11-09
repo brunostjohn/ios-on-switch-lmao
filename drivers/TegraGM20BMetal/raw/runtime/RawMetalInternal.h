@@ -232,7 +232,8 @@ void useBuffer(raw::CommandBuffer *rc, RMBuffer *b, bool write);
 void encodeBlit(RMCommandBuffer *cb, const Cmd &c, raw::CommandBuffer *rc, raw::BlitEncoder *be,
                 std::set<RMTexture *> &fresh, std::set<RMTexture *> &standInFresh);
 
-// RawMetalTextureCpu.mm
+// RawMetalTextureCpu.mm: `bytes` from `from` cleaned to memory (or cleaned and invalidated), then a DSB
+void cacheLines(const uint8_t *from, uint64_t bytes, bool invalidate);
 void cpuTiled(RMTexture *t, MTLRegion r, uint8_t *bytes, NSUInteger row, bool write);
 void cpuLevel(RMTexture *t, MTLRegion r, NSUInteger level, uint8_t *bytes, NSUInteger row, bool write);
 void cpuVolume(RMTexture *t, MTLRegion r, uint8_t *bytes, NSUInteger row, NSUInteger image, bool write);

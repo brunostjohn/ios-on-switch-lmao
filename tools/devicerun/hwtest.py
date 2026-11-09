@@ -105,6 +105,7 @@ TESTS: dict[str, bool] = {
     'ui.blur': False,
     'ui.list': False,
     'ui.renderbox': False,
+    'ui.compressed_image': False,
     'pacing.metal_layer': False,
     'pacing.text': False,
     'pacing.blur_over': False,
