@@ -107,6 +107,10 @@ void traceSurfaceImage(RMTexture *t, const char *what, uint32_t seed)
                                                                                         levels:_viewLevels
                                                                                         slices:_viewSlices]
                              : [(id<MTLTexture>)[_parent rmTwin] newTextureViewWithPixelFormat:_descriptor.pixelFormat];
+            if (made && !identitySwizzle(_descriptor.swizzle))  // m2v's texture makes no swizzled view
+                SWITCH_REFUSE_DETAIL("raw", "tex.swizzle", _descriptor.pixelFormat,
+                                     "a swizzled view of format %lu: m2v's work samples it unswizzled",
+                                     (unsigned long)_descriptor.pixelFormat);
             break;
         case RMTextureMemoryless:
             made = [m2v newTextureWithDescriptor:_descriptor];
