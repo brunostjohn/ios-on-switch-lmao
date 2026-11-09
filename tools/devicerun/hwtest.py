@@ -138,6 +138,7 @@ TESTS: dict[str, bool] = {
     'gpu.raw_share': False,
     'input.controllers': False,
     'input.joycon': False,
+    'input.rail': False,
     'gpu.texture.kinds': False,
     'system.union_readdir': False,
     'system.widgets_render': False,
