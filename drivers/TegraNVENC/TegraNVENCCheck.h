@@ -61,12 +61,12 @@ static inline const char *tegra_nvenc_check(const TegraNVENCSubmit *s, const uin
         return "GP timer limit";
     const uint32_t width = p->input_cfg.frame_width_minus1 + 1u;
     const uint32_t height = p->input_cfg.frame_height_minus1 + 1u;
+    // Whole macroblocks: the app fetches input_cfg's size rounded down and encodes outputpic_cfg's rounded up, so any
+    // other height leaves the engine waiting for a macroblock row it never fetches (nvidia/SOURCE).
     if (width < TEGRA_NVENC_MIN_DIMENSION || width > TEGRA_NVENC_MAX_DIMENSION || height < TEGRA_NVENC_MIN_DIMENSION ||
-        height > TEGRA_NVENC_MAX_DIMENSION)
+        height > TEGRA_NVENC_MAX_DIMENSION || width % 16 || height % 16)
         return "dimensions";
-    const uint32_t wmbs = (width + 15) / 16;
-    const uint32_t hmbs = (height + 15) / 16;
-    const uint32_t mbs = wmbs * hmbs;
+    const uint32_t mbs = (width / 16) * (height / 16);
     if (mbs > TEGRA_NVENC_MAX_MBS)
         return "too many macroblocks";
     why = tegra_nvenc_check_surface(&p->input_cfg, width, height, r.cur, r.curChroma, false);

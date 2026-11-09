@@ -345,11 +345,15 @@ void h264enc_slice_header(const H264EncConfig *c, const H264EncPicture *p, H264B
     h264bits_se(b, 0);                    // slice_beta_offset_div2
 }
 
+// Every surface is the coded size, as NVIDIA's T210 driver gives it (1920x1088 for 1080p; the SPS crops). NVENC 5.0's
+// H.264 app sizes the input fetch from input_cfg rounding down (app 0x85d6-0x861b, I/O 0xe88) and the macroblock
+// pipeline from outputpic_cfg rounding up (0x818c, I/O 0x1808 and 0x191c): a height of 1080 fetches 67 macroblock rows
+// for a picture of 68, and the engine stalls on the missing row (TegraNVENC/nvidia/SOURCE).
 static void surfaceConfig(const H264EncConfig *c, const H264EncSurface *s, nvenc_h264_surface_cfg_s *cfg, bool input)
 {
     memset(cfg, 0, sizeof(*cfg));
-    cfg->frame_width_minus1 = (unsigned short)(c->width - 1);
-    cfg->frame_height_minus1 = (unsigned short)(c->height - 1);
+    cfg->frame_width_minus1 = (unsigned short)(h264enc_width_mbs(c) * 16 - 1);
+    cfg->frame_height_minus1 = (unsigned short)(h264enc_height_mbs(c) * 16 - 1);
     cfg->sfc_pitch = cfg->sfc_pitch_chroma = (unsigned short)s->pitch;
     cfg->chroma_top_frm_offset = c->chroma_mode == TEGRA_NVENC_CHROMA_OFFSET ? s->chroma_offset / 256 : 0;
     if (!input) {

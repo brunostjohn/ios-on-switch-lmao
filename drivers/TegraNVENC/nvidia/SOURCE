@@ -26,3 +26,12 @@ encoder interrupt (IRQSTAT bit 13, I[0x1870] bit 1) and records errors in DMEM 0
 bit 0 0xe2640060, I[0x1ac4] bits 0-2 0xe2640200) without ending anything. fn 0x48b9 then spins at 0x4916-0x491b while
 DMEM 0x2e4 < DMEM 0x354, with no timeout and no error check. DMEM 0x354 is the slice control's num_mb (0x38df),
 clamped to the macroblocks left in the picture (0x38f7-0x390e) and given to the engine as I[0x191c] (0x39f5).
+
+Picture size (tools/falcon flow_test): the app sizes the input fetch from input_cfg, (frame_*_minus1 + 1) >> 4
+macroblocks, rounded down, into I[0xe88] (0x85d6-0x861b), and the picture from outputpic_cfg, (frame_*_minus1 + 16)
+>> 4, rounded up, into DMEM 0x32c/0x32e, I[0x1808] (0x818c-0x81c3) and the slice target I[0x191c] (0x34d0). NVIDIA's
+driver gives every surface the coded size (its 1920x1080 H.265 setup has frame_height_minus1 1087, SOURCE-H265), and
+so does H264NVENC.c; the checker refuses any other. With 1080 the fetch stops a row short of the 68 macroblock rows the
+engine encodes: the one slice never ends, the GP timer error lands with 0 of 8160 macroblocks counted (the ISR counts
+when a slice ends, I[0x1870] bit 1 with the slice's bits in I[0x1ac4], 0xf6b-0xf8b) and the app spins at 0x4916 until
+the kernel's job bound.
