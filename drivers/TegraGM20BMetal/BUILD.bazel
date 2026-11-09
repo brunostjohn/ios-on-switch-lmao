@@ -54,6 +54,7 @@ filegroup(
         "raw/runtime/raw_metallib.cpp",
         "raw/runtime/raw_metallib.h",
         "raw/runtime/raw_pack.h",
+        "raw/runtime/RawPipelineKey.h",  # the runtime's key of a state, which probe_states.h files records under
     ],
 )
 

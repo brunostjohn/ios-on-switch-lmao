@@ -17,6 +17,7 @@
 // usage: probecompute <nvk dylib> <cache dir> <corpus.log>
 #import <Foundation/Foundation.h>
 #import <Metal/Metal.h>
+#include <algorithm>
 #include <map>
 #include <sstream>
 #include <string>
@@ -24,6 +25,7 @@
 #include "NativeBridgeMetalFrontend.h"
 #include "bridge/NativeMetalObjects.h"
 #include "../runtime/raw_compute_key.h"
+#import "../runtime/RawPipelineKey.h"
 #include "probe_bind.h"
 
 extern "C" void pushcount_report(const char *what);
@@ -236,6 +238,7 @@ MTLFunctionConstantValues *constantValues(const std::string &text)
         std::vector<uint8_t> bytes;
         for (size_t i = b + 1; i + 1 < c.size(); i += 2)
             bytes.push_back(uint8_t(strtoul(c.substr(i, 2).c_str(), nullptr, 16)));
+        bytes.resize(std::max<size_t>(bytes.size(), 64));  // Metal reads the type's size, whatever the text held
         if (c[0] == '#')
             [values setConstantValue:bytes.data() type:type atIndex:strtoul(c.c_str() + 1, nullptr, 10)];
         else
@@ -346,10 +349,10 @@ int main(int argc, char **argv)
                 refused++;
                 continue;
             }
-            const std::string key =
-                raw::computeKey(air[s.function], s.constants, s.maxThreads, s.multipleOfWidth, s.threads,
-                                s.threadgroupMemory, raw::computeTextures(s.textures.data(), s.textures.size()),
-                                raw::computeSamplers(s.samplers.data(), s.samplers.size()));
+            const std::string key = raw::computeKey(air[s.function], raw::constantsText(constantValues(s.constants)),
+                                                    s.maxThreads, s.multipleOfWidth, s.threads, s.threadgroupMemory,
+                                                    raw::computeTextures(s.textures.data(), s.textures.size()),
+                                                    raw::computeSamplers(s.samplers.data(), s.samplers.size()));
             if (seen[key])
                 continue;
             seen[key] = true;

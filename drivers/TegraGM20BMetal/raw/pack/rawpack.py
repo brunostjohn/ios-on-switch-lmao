@@ -315,7 +315,10 @@ def split_buckets(corpus: Path, work: Path, count: int) -> list[Path]:
 
 
 def state_key(line: str) -> str:
-    """Give an R line's state key as probe.mm prints it: every descriptor field but the label, then its functions.
+    """Give an R line's state key as its text names it: every descriptor field but the label, then its functions.
+
+    The pack files a state under the key the runtime computes of the descriptor made of the line (probe_states.h,
+    runtime/RawPipelineKey.h), which is this for a line written as the device journals it.
 
     No lib= field is in it; the functions the state links follow its stages (probe_states.h linkedFunction); a line
     whose first library is another framework's default.metallib than QuartzCore's ends with " | l <framework>"
