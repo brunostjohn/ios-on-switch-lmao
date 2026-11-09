@@ -41,7 +41,7 @@ TEST(ArmCpuTmr, TheWakeFiresAtTheGovernorsWakeTime)
     const uint64_t clkM = clkMHz(armcpu::tmr::kUsecConfig19M2);
     for (const uint64_t deadline : {SWITCH_IDLE_C7_RESIDENCY, 5 * kMs, 100 * kMs, 27'000 * kMs}) {
         const uint64_t now = 77 * kMs;
-        const uint64_t wakeAt = switch_idle_c7_wake_at(now + deadline);
+        const uint64_t wakeAt = switch_idle_c7_wake_at(now + deadline, SWITCH_IDLE_C7_WAKE_LATENCY);
         const uint64_t ticks = switch_idle_timer_ticks(now, wakeAt, armcpu::tmr::kTicksMax);
         const uint32_t ptv = armcpu::tmr::ptv(ticks);
         EXPECT_TRUE(ptv & armcpu::tmr::kPtvEnable);
