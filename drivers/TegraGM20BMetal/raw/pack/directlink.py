@@ -94,7 +94,9 @@ def program_id(program: dict) -> str:
     One code can read its uniform buffers at other set-0 offsets in another state (its constant buffer types): each is
     a program of its own, so neither state binds the other's.
     """
-    return f'{packfile.fnv(program["image"] + program["data"] + bytes(program["cbufs"])):x}'
+    return (
+        f'{packfile.fnv(program["image"] + program["data"] + bytes(program["cbufs"]) + program.get("identity", b"")):x}'
+    )
 
 
 def entries_of(pipeline: bytes, count: int, samplers: list[list[int]], constexpr_tsc: list[list[int]]) -> list[dict]:
@@ -180,21 +182,24 @@ def gather(buckets: list[str], context: dict[int, int]) -> tuple[list[dict], lis
             seen.add((form, rec['key']))
             if rec['outcome']:
                 refused.append(rec)
-                continue
-            n = mkpack.targets(rec['key'])
-            regs = dict(context)
-            regs.update(rec['regs'])
-            for method, program in zip(PROGRAM_OFFSETS, rec['programs'], strict=True):
-                regs[method] = int(program_id(program), 16) & 0xFFFFFFFF
-            regs = {m: 0 if mkpack.disabled_stream(m, v) else v for m, v in regs.items() if not mkpack.foreign(m, n)}
-            ids = [program_id(program) for program in rec['programs']]
-            rec['probe'] = {
-                'index': len(states),
-                'key': rec['key'],
-                'form': form,
-                'records': [{'regs': regs, 'prog': {1: (ids[0],), 5: (ids[1],)}}],
-            }
-            states.append(rec)
+            else:
+                rec['form'] = form
+                states.append(rec)
+    split_identities(states)
+    for index, rec in enumerate(states):
+        n = mkpack.targets(rec['key'])
+        regs = dict(context)
+        regs.update(rec['regs'])
+        for method, program in zip(PROGRAM_OFFSETS, rec['programs'], strict=True):
+            regs[method] = int(program_id(program), 16) & 0xFFFFFFFF
+        regs = {m: 0 if mkpack.disabled_stream(m, v) else v for m, v in regs.items() if not mkpack.foreign(m, n)}
+        ids = [program_id(program) for program in rec['programs']]
+        rec['probe'] = {
+            'index': index,
+            'key': rec['key'],
+            'form': rec['form'],
+            'records': [{'regs': regs, 'prog': {1: (ids[0],), 5: (ids[1],)}}],
+        }
     return states, refused
 
 
@@ -211,6 +216,25 @@ def compute_kernels(buckets: list[str], constexpr_tsc: list[list[int]], laid: tu
     report.append(f'{len(computes)} compute kernels, {len(skipped)} dispatch shapes left out')
     report += [f'  skipped kernel {key}: {why}' for key, why in skipped]
     return computes
+
+
+def split_identities(states: list[dict]) -> None:
+    """Keep distinct splits of identical whole programs addressable, with one shared whole-program heap slot."""
+    variants: dict[str, set[bytes]] = {}
+    identities = []
+    for rec in states:
+        whole = program_id(rec['programs'][1])
+        split = rec.get('split')
+        identity = (
+            split['record'] + b''.join(bytes.fromhex(program_id(p).zfill(16)) for p in split['programs'])
+            if split
+            else b''
+        )
+        variants.setdefault(whole, set()).add(identity)
+        identities.append((whole, identity))
+    for rec, (whole, identity) in zip(states, identities, strict=True):
+        if len(variants[whole]) > 1:
+            rec['programs'][1] = dict(rec['programs'][1], identity=identity, storage_id=whole)
 
 
 def split_programs(states: list[dict], programs: dict[str, dict]) -> dict[str, dict]:

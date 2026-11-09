@@ -24,6 +24,24 @@ def handle(tex: tuple | None) -> dict:
 
 
 class RecordsTest(unittest.TestCase):
+    def test_only_known_own_shader_pairs_use_alias_keys(self):
+        own = 'samples=1 topo=0 ds=0/0 c0=80:15:0:1:0:0:1:0:0 | v resolve_vert  | f resolve_bgra8_frag'
+        self.assertEqual(packfile.key_hash({'key': own}), packfile.fnv(b'raw.resolve.resolve_bgra8_frag'))
+        for key in (
+            own + ' | l RenderBox',
+            own + ' | air 1234',
+            own + ' | cubic 1',
+            own.replace('resolve_bgra8_frag', 'resolve_sample_fragment #0:36:01'),
+            own.replace('resolve_vert', 'plane__vertex'),
+        ):
+            with self.subTest(key=key):
+                self.assertEqual(packfile.key_hash({'key': key}), packfile.fnv(key.encode()))
+        a = own.replace('resolve_vert', 'plane__vertex').replace(
+            'resolve_bgra8_frag', 'resolve_sample_fragment #0:36:01'
+        )
+        b = a.replace('#0:36:01', '#0:36:02')
+        self.assertNotEqual(packfile.key_hash({'key': a}), packfile.key_hash({'key': b}))
+
     def test_a_texture3d_argument_is_an_entry_with_no_slot(self):
         problems: list[str] = []
         ent = mkpack.handle_entry((228, 'handle', ('tex3d', 'R102'), None, 0), {}, [], problems)

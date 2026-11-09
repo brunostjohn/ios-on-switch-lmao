@@ -10,6 +10,7 @@ import sys
 import unittest
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'raw', 'pack'))
+import directlink
 import packfile
 import splits
 
@@ -53,6 +54,40 @@ class LayOutTest(unittest.TestCase):
 
     def test_a_frontier_not_after_the_wholes_buffers_is_left_out(self) -> None:
         self.assertEqual(self.lay_out({'a': split('fa', frontier_cbuf=2)}), [])
+
+
+class SplitIdentityTest(unittest.TestCase):
+    def test_distinct_splits_share_whole_storage_and_keep_their_own_records(self):
+        states = []
+        for fill in (3, 4):
+            split_record = packfile.PACK_SPLIT.pack(40, 0, 0, 0, 16, 3, 1, 0, 2, bytes([2]) + bytes(7), *([0] * 64))
+            states.append(
+                {
+                    'programs': [program(1, [ROOT]), program(2, [ROOT, SET, ubo(48)])],
+                    'split': {
+                        'record': split_record,
+                        'programs': [program(fill, [ROOT, SET, ubo(48), FRONTIER]), program(fill + 2, [4, ubo(48)])],
+                    },
+                }
+            )
+        states.append({'programs': [program(1, [ROOT]), program(2, [ROOT, SET, ubo(48)])]})
+        directlink.split_identities(states)
+        ids = [directlink.program_id(s['programs'][1]) for s in states]
+        self.assertEqual(len(set(ids)), 3)
+        programs = {directlink.program_id(p): p for s in states for p in s['programs']}
+        found = directlink.split_programs(states, programs)
+        laid = (bytearray(), {}, [])
+        for pid in ids:
+            packfile.place_graphics(pid, programs, *laid)
+        whole_bytes = len(laid[0])
+        self.assertEqual(whole_bytes, 256)
+        self.assertEqual({p['heap_offset'] for p in laid[2]}, {0})
+        packed = splits.lay_out(ids, found, programs, laid, [])
+        self.assertEqual([s['whole'] for s in packed], [0, 1])
+        for state, split in zip(states[:2], packed, strict=True):
+            self.assertEqual(laid[2][split['fs']]['id'], directlink.program_id(state['split']['programs'][0]))
+            self.assertEqual(laid[2][split['prologue']]['id'], directlink.program_id(state['split']['programs'][1]))
+        self.assertNotIn(ids[2], found)
 
 
 if __name__ == '__main__':

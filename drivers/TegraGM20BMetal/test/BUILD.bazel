@@ -257,6 +257,7 @@ py_test(
 py_test(
     name = "splits_layout_test",
     srcs = ["splits_layout_test.py"],
+    data = ["//drivers/TegraGM20BMetal:raw/runtime/raw_owned.h"],
     deps = ["//drivers/TegraGM20BMetal:raw_pack"],
 )
 
@@ -388,6 +389,21 @@ host_test(
         "//drivers/TegraGM20BMetal:raw/pack/probe_bind.h",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_pack.h",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_residual.h",
+    ],
+    cxx_std = "c++17",
+)
+
+host_test(
+    name = "raw_key_test",
+    srcs = [
+        "raw_key_test.cpp",
+        "//drivers/TegraGM20BMetal:raw/pack/probe_bind.h",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_owned.h",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_pack.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_pack.h",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_record.h",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_record_parts.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_record_parts.h",
     ],
     cxx_std = "c++17",
 )

@@ -1,5 +1,4 @@
 import json
-import re
 import struct
 from dataclasses import dataclass, field
 
@@ -74,8 +73,23 @@ def push_bytes(push: list[tuple[int, int]]) -> bytes:
 def key_hash(rec: dict) -> int:
     # the raw path's own states (probe.mm PROBE_OWN_LIB) by the name the runtime asks for (raw_gpu.cpp ycbcrPipeline and
     # standInPipeline, runtime/raw_xr.h xrConversion, runtime/raw_samples.h resolveState)
-    own = re.search(r'\| f ((ycbcr|xr|two_plane|resolve)_\w+)', rec['key'])
-    return fnv(f'raw.{own.group(2)}.{own.group(1)}'.encode() if own else rec['key'].encode())
+    parts = rec['key'].split(' | ')
+    pair = f'{parts[1].rstrip()} | {parts[2]}' if len(parts) == 3 else ''
+    for family, vertex, fragments in (
+        ('ycbcr', 'ycbcr_vert', ('converted_frag', 'srgb_frag', 'codes_frag', 'codes10_frag')),
+        ('xr', 'xr_vert', ('bgr10_frag', 'bgra10_frag', 'planes_frag')),
+        ('two_plane', 'two_plane_cover', ('load', 'store')),
+        (
+            'resolve',
+            'resolve_vert',
+            ('rgba8_frag', 'rgba8_srgb_frag', 'bgra8_frag', 'bgra8_srgb_frag', 'rg11b10f_frag', 'rgba16f_frag'),
+        ),
+    ):
+        for fragment in fragments:
+            name = f'{family}_{fragment}'
+            if pair == f'v {vertex} | f {name}':
+                return fnv(f'raw.{family}.{name}'.encode())
+    return fnv(rec['key'].encode())
 
 
 def pipeline_bytes(rec: dict, key_offset: int, blob_off: int) -> bytes:
@@ -139,6 +153,12 @@ def place_graphics(
     if pid in prog_index:
         return
     pr = programs[pid]
+    storage_id = pr.get('storage_id', pid)
+    shared = next((p for p in prog_recs if p.get('storage_id') == storage_id), None)
+    if shared:
+        prog_index[pid] = len(prog_recs)
+        prog_recs.append(dict(shared, id=pid))
+        return
     off = len(heap)
     slot = bytearray(0x80 - 0x50) + pr['image'][:80]
     slot += pr['image'][80:]
@@ -150,6 +170,7 @@ def place_graphics(
     prog_recs.append(
         {
             'id': pid,
+            'storage_id': storage_id,
             'name': program_name(pr),
             'heap_offset': off,
             'program': off + 0x30,

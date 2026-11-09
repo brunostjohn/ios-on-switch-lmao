@@ -50,6 +50,7 @@ Completion::Completion(Device &device, const char *cacheDir, uint64_t stack)
 
 Completion::~Completion()
 {
+    compiler_->drain();
     dispatch_sync(splitQueue_, ^{
                   });
     compiler_.reset();
