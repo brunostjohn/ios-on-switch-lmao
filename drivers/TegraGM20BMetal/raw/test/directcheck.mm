@@ -14,7 +14,7 @@
 #include <chrono>
 #include <cstdio>
 #include <set>
-#include "../pack/probe_states.h"
+#include "../pack/direct_states.h"
 #include "../runtime/RawDirect.h"
 #include "NativeBridgeMetalFrontend.h"
 #include "TwoPlaneStandIn.h"
@@ -26,22 +26,6 @@ namespace {
 void missing(const char *cls, const char *sel)
 {
     fprintf(stderr, "MISSING -[%s %s]\n", cls, sel);
-}
-
-// probe.mm's tagged textures of the raw path's own states that read codes (pack/xr.metal), the two-plane stand-in or, for
-// its own resolves alone (pack/resolve.metal), multisampled colours
-raw::ProbeTextures texturesOf(const std::string &line, bool ours)
-{
-    if (ours && line.find("| v resolve_vert | f resolve_") != std::string::npos)
-        return {MTLPixelFormatBGRA8Unorm, 4};
-    const std::pair<const char *, raw::ProbeTextures> sets[] = {{"f xr_bgr10_frag", {MTLPixelFormatR32Uint, 1}},
-                                                                {"f xr_bgra10_frag", {MTLPixelFormatRGBA16Uint, 1}},
-                                                                {"f xr_planes_frag", {MTLPixelFormatRG32Uint, 1}},
-                                                                {"f two_plane_store", {MTLPixelFormatRGBA16Float, 1}}};
-    for (const auto &[fragment, textures] : sets)
-        if (line.find(std::string("| ") + fragment) != std::string::npos)
-            return textures;
-    return {};
 }
 
 }  // namespace
@@ -83,56 +67,44 @@ int main(int argc, char **argv)
         FILE *met = getenv("DIRECTCHECK_MET") ? fopen(getenv("DIRECTCHECK_MET"), "a") : nullptr;
         uint32_t states = 0, same = 0, barriers = 0, refused = 0, bad = 0;
         double ms = 0;
-        std::set<std::string> seen;
         std::map<std::string, uint32_t> differences, reasons;
-        for (const std::string &marked : probe::corpusLines(text, own != nil)) {
-            probe::State s;
-            const bool ours = marked.rfind("@O ", 0) == 0, framework = marked.rfind("@L ", 0) == 0;
-            const size_t pathEnd = framework ? marked.find(' ', 3) : 0;
-            const std::string line = ours ? marked.substr(3) : framework ? marked.substr(pathEnd + 1) : marked;
-            id<MTLLibrary> library = !ours ? qc : line.find("| f two_plane_") != std::string::npos ? standIn : own;
-            if (framework && !(library = probe::frameworkLibrary(dev, marked.substr(3, pathEnd - 3))))
-                continue;
-            if (!probe::parseState(library, line, s))
-                continue;
-            if (framework)
-                s.key += " | l " + probe::frameworkName(marked.substr(3, pathEnd - 3));
-            while (!s.key.empty() && s.key.back() == ' ')
-                s.key.pop_back();
-            if (!seen.insert(s.key).second)
-                continue;
-            states++;
-            const raw::ProbeTextures textures = texturesOf(line, ours);
-            const raw::PackPipeline *pp = pack.find(raw::packKeyHash(s.key));
-            const bool barrier = pp && (pp->flags & raw::PipelineBarrierForm);
-            raw::RuntimeRecord rec;
-            std::string why;
-            const auto began = std::chrono::steady_clock::now();
-            const raw::Compiler::Outcome outcome = direct.make(s.d, s.key, rec, why, textures);
-            ms += std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - began).count();
-            std::string verdict;
-            if (outcome == raw::Compiler::Outcome::Failed) {
-                verdict = " failed (" + why + ")";
-            } else if (pp) {
-                verdict = outcome == raw::Compiler::Outcome::Made ? recordcompare::differences(pack, *pp, rec)
-                                                                  : " refused (" + why + ")";
-                (barrier ? barriers : same) += verdict.empty();
-                if (met && verdict.empty())
-                    fprintf(met, "%016llx %u\n", (unsigned long long)pp->keyHash, pp->flags & raw::PipelineBarrierForm);
-            } else {
-                verdict = outcome == raw::Compiler::Outcome::Made ? " made, and the pack set it aside" : "";
-                refused += verdict.empty();
-                if (verdict.empty()) {
-                    reasons[why.substr(0, 90)]++;
-                    printf("REFUSED (%s): %s\n", why.c_str(), s.key.substr(0, 160).c_str());
+        probe::eachState(
+            dev, qc, own, standIn, probe::corpusLines(text, own != nil),
+            [&](const std::string &line, bool ours, probe::State &s) {
+                states++;
+                const raw::ProbeTextures textures = probe::probeTextures(line, ours);
+                const raw::PackPipeline *pp = pack.find(raw::packKeyHash(s.key));
+                const bool barrier = pp && (pp->flags & raw::PipelineBarrierForm);
+                raw::RuntimeRecord rec;
+                std::string why;
+                const auto began = std::chrono::steady_clock::now();
+                const raw::Compiler::Outcome outcome = direct.make(s.d, s.key, rec, why, textures);
+                ms += std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - began).count();
+                std::string verdict;
+                if (outcome == raw::Compiler::Outcome::Failed) {
+                    verdict = " failed (" + why + ")";
+                } else if (pp) {
+                    verdict = outcome == raw::Compiler::Outcome::Made ? recordcompare::differences(pack, *pp, rec)
+                                                                      : " refused (" + why + ")";
+                    (barrier ? barriers : same) += verdict.empty();
+                    if (met && verdict.empty())
+                        fprintf(met, "%016llx %u\n", (unsigned long long)pp->keyHash,
+                                pp->flags & raw::PipelineBarrierForm);
+                } else {
+                    verdict = outcome == raw::Compiler::Outcome::Made ? " made, and the pack set it aside" : "";
+                    refused += verdict.empty();
+                    if (verdict.empty()) {
+                        reasons[why.substr(0, 90)]++;
+                        printf("REFUSED (%s): %s\n", why.c_str(), s.key.substr(0, 160).c_str());
+                    }
                 }
-            }
-            if (!verdict.empty()) {
-                bad++;
-                differences[verdict.substr(0, verdict.find('['))]++;
-                printf("DIFFERS%s%s: %s\n", barrier ? " (barrier)" : "", verdict.c_str(), s.key.substr(0, 160).c_str());
-            }
-        }
+                if (!verdict.empty()) {
+                    bad++;
+                    differences[verdict.substr(0, verdict.find('['))]++;
+                    printf("DIFFERS%s%s: %s\n", barrier ? " (barrier)" : "", verdict.c_str(),
+                           s.key.substr(0, 160).c_str());
+                }
+            });
         if (met)
             fclose(met);
         for (const auto &[what, n] : differences)
