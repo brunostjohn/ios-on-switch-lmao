@@ -32,6 +32,8 @@ struct ComputeState {
     uint8_t cbufType[8] = {};
     uint32_t program = 0;  // QMD PROGRAM_OFFSET: from the program region (the heap's start)
     uint64_t data = 0;     // its shader data's address, 0: none
+    PackKernel placed =
+        {};  // a runtime record's, its samplers numbered among the device's (placeCompute): rec points here
 };
 
 // The pack's kernel of key `keyHash` (computeKeyHash), its program placed at its first use; null: not in the pack, or no

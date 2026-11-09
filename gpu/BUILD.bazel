@@ -169,6 +169,7 @@ metal_plugin(
         GM20B_METAL + ":raw/runtime/raw_direct_compute.cpp",
         GM20B_METAL + ":raw/runtime/raw_emit.cpp",
         GM20B_METAL + ":raw/runtime/raw_cache.cpp",
+        GM20B_METAL + ":raw/runtime/raw_kernel_cache.cpp",
         GM20B_METAL + ":raw/runtime/raw_compiler.cpp",
         GM20B_METAL + ":raw/runtime/raw_metallib.cpp",
         GM20B_METAL + ":raw/runtime/raw_completed.cpp",

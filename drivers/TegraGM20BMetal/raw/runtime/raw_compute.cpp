@@ -94,21 +94,33 @@ const ComputeState *placeCompute(Device &dev, const ComputeRecord &r)
     memcpy(slot.data(), r.code.data(), r.code.size());
     if (!r.data.empty())
         memcpy(slot.data() + dataAt, r.data.data(), r.data.size());
+    ComputeState c;
+    c.placed = r.kernel;
     uint64_t at = 0;
     {
         std::lock_guard<std::mutex> l(dev.lock_);
+        for (uint32_t i = 0; i < c.placed.entries; i++) {
+            PackKernelEntry &e = c.placed.entry[i];
+            uint32_t index = 0;
+            if (e.kind != KernelSampler || !(e.slot & kConstexprSampler))
+                continue;
+            if ((e.slot & ~kConstexprSampler) >= r.samplers.size() ||
+                !dev.constexprSampler(r.samplers[e.slot & ~kConstexprSampler], index) || index >= kConstexprSampler)
+                return nullptr;
+            e.slot = uint8_t(kConstexprSampler | index);
+        }
         if (!dev.heapPlace(slot.data(), uint32_t(slot.size()), at) || !dev.slmNeed(slmPerWarpOfQmd(r.kernel.qmd))) {
             dev.stats.heapFull++;
             return nullptr;
         }
     }
     dev.stats.programsPlaced++;
-    ComputeState c;
-    c.rec = &r.kernel;
     memcpy(c.cbufType, r.cbufType, sizeof c.cbufType);
     c.program = uint32_t(at);
     c.data = r.data.empty() ? 0 : dev.heap_.va + at + dataAt;
-    return &gStates.emplace(std::make_pair(&dev, key), c).first->second;
+    ComputeState &placed = gStates.emplace(std::make_pair(&dev, key), c).first->second;
+    placed.rec = &placed.placed;
+    return &placed;
 }
 
 ComputeEncoder::ComputeEncoder(CommandBuffer &cb, Device &dev) : cb_(cb), dev_(dev)

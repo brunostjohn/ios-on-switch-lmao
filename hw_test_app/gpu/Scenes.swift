@@ -18,5 +18,6 @@ public enum Scenes {
         TraceIdScene(),
         KernelOffsetScene(),
         MemorylessBurstScene(),
+        KernelDirectScene(),
     ]
 }

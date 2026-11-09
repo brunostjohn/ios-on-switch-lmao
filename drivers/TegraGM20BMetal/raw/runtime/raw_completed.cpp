@@ -35,6 +35,27 @@ bool Device::placeCompleted(const CapturedProgram &p, PlacedProgram &out)
     return true;
 }
 
+bool Device::constexprSampler(const std::array<uint32_t, 8> &words, uint32_t &index)
+{
+    const uint32_t *pack = pack_.section<uint32_t>(PackSamplers);
+    for (uint32_t i = 0; i < pack_.header()->samplers; i++)
+        if (!memcmp(pack + 8 * i, words.data(), sizeof words)) {
+            index = i;
+            return true;
+        }
+    auto known = completedSamplers_.find(words);
+    if (known == completedSamplers_.end()) {
+        uint32_t tsc = 0;
+        if (constexprCount_ == kConstexprSamplers || !takeTsc(tsc))
+            return false;
+        memcpy(tsc_.cpu + 32 * tsc, words.data(), 32);
+        constexprTsc_[constexprCount_] = tsc;
+        known = completedSamplers_.emplace(words, uint8_t(constexprCount_++)).first;
+    }
+    index = known->second;
+    return true;
+}
+
 Pipeline *Device::addRecord(const RuntimeRecord &r, bool caTransform, std::string &why)
 {
     std::lock_guard<std::mutex> l(lock_);
@@ -62,19 +83,12 @@ Pipeline *Device::addRecord(const RuntimeRecord &r, bool caTransform, std::strin
         PackEntry &e = c.record.entry[k];
         if (e.kind == EntryUbo || e.samplerKind != SamplerConstexpr || e.sampler < packSamplers)
             continue;
-        const std::array<uint32_t, 8> &words = r.samplers.at(e.sampler - packSamplers);
-        auto known = completedSamplers_.find(words);
-        if (known == completedSamplers_.end()) {
-            uint32_t tsc = 0;
-            if (constexprCount_ == kConstexprSamplers || !takeTsc(tsc)) {
-                why = "no room for its sampler headers";
-                return nullptr;
-            }
-            memcpy(tsc_.cpu + 32 * tsc, words.data(), 32);
-            constexprTsc_[constexprCount_] = tsc;
-            known = completedSamplers_.emplace(words, uint8_t(constexprCount_++)).first;
+        uint32_t index = 0;
+        if (!constexprSampler(r.samplers.at(e.sampler - packSamplers), index)) {
+            why = "no room for its sampler headers";
+            return nullptr;
         }
-        e.sampler = known->second;
+        e.sampler = uint8_t(index);
     }
     Completed &stored = completedStore_.emplace_back(std::move(c));
     build(stored.pipeline, stored.record, vs, fs, stored.blob.data(), stored.keyString.c_str(), caTransform);

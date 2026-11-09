@@ -29,9 +29,9 @@ raw::Compiler::Outcome make(raw::Direct &direct, const probe::Kernel &k, const u
     memcpy(shape.threads, threads, sizeof shape.threads);
     key = k.key.substr(0, k.key.find(" | tg=")) + " | tg=" + std::to_string(threads[0]) + "," +
           std::to_string(threads[1]) + "," + std::to_string(threads[2]) + k.key.substr(k.key.find(" | tgmem="));
-    probe::KernelDispatch kd;
+    std::unique_ptr<raw::KernelDispatch> kd;
     probe::dispatchOf(shape, threads, k.textures, kd);
-    return direct.kernel(k.descriptor, kd.dispatch, key, rec, why);
+    return direct.kernel(k.descriptor, kd->dispatch(), key, rec, why);
 }
 
 // The same threads in another shape (x and y swapped, or twice as wide and half as tall), and twice as many (half where twice
@@ -96,9 +96,9 @@ void checkPack(raw::Direct &direct, const raw::Pack &pack, const probe::Kernel &
 {
     raw::ComputeRecord rec;
     std::string why;
-    probe::KernelDispatch kd;
+    std::unique_ptr<raw::KernelDispatch> kd;
     probe::dispatchOf(k.shape, k.shape.threads, k.textures, kd);
-    const raw::Compiler::Outcome outcome = direct.kernel(k.descriptor, kd.dispatch, k.key, rec, why);
+    const raw::Compiler::Outcome outcome = direct.kernel(k.descriptor, kd->dispatch(), k.key, rec, why);
     const raw::PackKernel *pk = pack.findKernel(raw::computeKeyHash(k.key));
     n.kernels++;
     std::string verdict;

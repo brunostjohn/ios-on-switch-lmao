@@ -63,7 +63,7 @@ inline bool parseSamplers(const std::string &text, std::vector<raw::BoundSampler
     return true;
 }
 
-inline id<MTLSamplerState> sampler(id<MTLDevice> dev, const raw::BoundSampler &b)
+inline MTLSamplerDescriptor *samplerDescriptor(const raw::BoundSampler &b)
 {
     MTLSamplerDescriptor *d = [MTLSamplerDescriptor new];
     d.minFilter = MTLSamplerMinMagFilter(b.minFilter);
@@ -79,7 +79,12 @@ inline id<MTLSamplerState> sampler(id<MTLDevice> dev, const raw::BoundSampler &b
     d.borderColor = MTLSamplerBorderColor(b.border);
     d.normalizedCoordinates = b.normalized;
     d.lodAverage = b.lodAverage;
-    return [dev newSamplerStateWithDescriptor:d];
+    return d;
+}
+
+inline id<MTLSamplerState> sampler(id<MTLDevice> dev, const raw::BoundSampler &b)
+{
+    return [dev newSamplerStateWithDescriptor:samplerDescriptor(b)];
 }
 
 // tex=<slot>:<pixelFormat>:<textureType>:<levels>:<arrayLength>:<swizzle>,... (raw_compute_key.h computeTextures)

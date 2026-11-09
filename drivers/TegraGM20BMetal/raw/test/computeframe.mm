@@ -132,6 +132,9 @@ int runNvk(char **argv)
         fprintf(stderr, "NO FACADE %s\n", why.UTF8String);
         return 1;
     }
+    // FRAME_COMPLETE=<dir>|memory: a kernel the pack lacks is made at its first dispatch (RawComplete.h), kept in <dir>
+    if (const char *complete = getenv("FRAME_COMPLETE"))
+        raw_metal_complete_states(strcmp(complete, "memory") ? complete : nullptr);
 #endif
     NSError *e = nil;
     id<MTLLibrary> lib = [dev newLibraryWithURL:[NSURL fileURLWithPath:@(argv[4])] error:&e];

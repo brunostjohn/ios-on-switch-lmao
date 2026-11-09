@@ -1,8 +1,9 @@
 // SPDX-License-Identifier: MIT
-// The raw device's completion of the states its pack lacks (RawMetal.mm), of any library's functions: each asked once per
-// process and per build. A state is looked up in the record cache under the process's shader cache directory when it is created
-// (made()), else made directly (RawDirect.h: m2v's translation and NVK's stage compile, no pipeline or capture), its record kept,
-// and handed to the raw device; for a state it refuses, m2v draws it.
+// The raw device's completion of the states and kernels its pack lacks (RawMetal.mm), of any library's functions: each asked
+// once per process and per build. A state is looked up in the record cache under the process's shader cache directory when it is
+// created (made()), else made directly (RawDirect.h: m2v's translation and NVK's stage compile, no pipeline or capture), its
+// record kept, and handed to the raw device; for a state it refuses, m2v draws it. A kernel the same, at the first dispatch of
+// its key (raw_compute_key.h: its threadgroup shape and bindings are the dispatch's).
 #pragma once
 #import <Metal/Metal.h>
 #include <dispatch/dispatch.h>
@@ -14,10 +15,14 @@
 #include "raw_compiler.h"
 #include "raw_metallib.h"
 
+struct NmbDirectDispatch;
+
 namespace raw {
 
 class Device;
 class Direct;
+struct ComputeRecord;
+struct ComputeState;
 struct Pipeline;
 
 class Completion {
@@ -43,9 +48,22 @@ public:
     // not run (*retry: ask() may make it later)
     Pipeline *makeNow(Ask a, bool *retry);
 
+    // The kernel of compute key `key` (raw_compute_key.h) for `descriptor` (over m2v's functions) at `dispatch`, placed:
+    // this process's, the disk's, or made now on the caller's thread, the dispatch that first needs it. Null: refused (named
+    // once in the raw log), its compile failed past its retries, or no room for it
+    const ComputeState *kernel(MTLComputePipelineDescriptor *descriptor, const NmbDirectDispatch &dispatch,
+                               const std::string &key);
+
     Compiler::Stats stats() const;
 
 private:
+    struct Kernel {
+        std::unique_ptr<ComputeRecord> record;  // placeCompute names its state by the record's address: kept for good
+        const ComputeState *state = nullptr;
+        bool refused = false;
+        uint32_t failures = 0;
+    };
+
     Device &device_;
     RecordCache cache_;
     std::unique_ptr<Compiler> compiler_;
@@ -55,6 +73,10 @@ private:
     dispatch_queue_t queue_;
     std::mutex lock_;
     std::map<uint64_t, Ask> asked_;  // by CacheKey::name, what make() makes
+    std::mutex kernelLock_;          // one kernel made at a time: a second dispatch of it waits for the first's
+    std::map<uint64_t, Kernel> kernels_;
+
+    Direct &direct();
 
     bool keyOf(Ask &a, CacheKey &k);
     Compiler::Outcome make(const CacheKey &k, RuntimeRecord &record, std::string &why);

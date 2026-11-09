@@ -102,6 +102,37 @@ Compiler::Outcome Direct::make(MTLRenderPipelineDescriptor *descriptor, const st
 
 namespace raw {
 
+KernelDispatch::KernelDispatch(const uint32_t threads[3], const std::map<uint32_t, uint32_t> &memory)
+{
+    memcpy(dispatch_.threads, threads, sizeof dispatch_.threads);
+    for (const auto &[index, length] : memory)
+        if (index < 31)
+            dispatch_.memory[index] = length;
+}
+
+void KernelDispatch::texture(uint32_t slot, MTLTextureDescriptor *d)
+{
+    textures_.push_back(
+        {slot, d.pixelFormat, d.textureType, d.usage, d.mipmapLevelCount, d.arrayLength, d.sampleCount});
+}
+
+void KernelDispatch::sampler(uint32_t slot, MTLSamplerDescriptor *d)
+{
+    samplers_.push_back(
+        {slot,
+         {d.minFilter, d.magFilter, d.mipFilter, d.sAddressMode, d.tAddressMode, d.rAddressMode, d.borderColor,
+          d.normalizedCoordinates, d.maxAnisotropy, d.compareFunction, d.lodAverage, d.lodMinClamp, d.lodMaxClamp}});
+}
+
+const NmbDirectDispatch &KernelDispatch::dispatch()
+{
+    dispatch_.textures = textures_.data();
+    dispatch_.textureCount = uint32_t(textures_.size());
+    dispatch_.samplers = samplers_.data();
+    dispatch_.samplerCount = uint32_t(samplers_.size());
+    return dispatch_;
+}
+
 Compiler::Outcome Direct::kernel(MTLComputePipelineDescriptor *descriptor, const NmbDirectDispatch &dispatch,
                                  const std::string &key, ComputeRecord &out, std::string &why)
 {

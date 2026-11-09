@@ -2086,6 +2086,19 @@ static NSData *functionBitcode(NBFunction *function)
 }
 
 @end
+
+extern "C" void native_bridge_metal_journal_dispatch(id state, MTLSize grid, MTLSize group, bool threads,
+                                                     const char *memory, const char *textures, const char *samplers)
+{
+    if (journalOn() && [state isKindOfClass:[NBComputePipeline class]])
+        [(NBComputePipeline *)state journalDispatch:grid
+                                              group:group
+                                            threads:threads
+                                             memory:memory
+                                           textures:textures
+                                           samplers:samplers];
+}
+
 @interface NBRenderPipeline : NBObject
 @property (nonatomic) NmbRenderPipeline *handle;
 @property (nonatomic) std::shared_ptr<nbasync::Making> making;  // being made on a worker (AsyncPipelines.h)

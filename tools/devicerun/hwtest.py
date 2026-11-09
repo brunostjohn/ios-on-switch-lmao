@@ -56,6 +56,7 @@ TESTS: dict[str, bool] = {
             'gpu.raw.trace_ids',
             'gpu.raw.kernel_offset',
             'gpu.raw.memoryless_burst',
+            'gpu.raw.kernel_direct',
             'metal.device',
             'metal.compute',
             'metal.render.color',
