@@ -148,6 +148,7 @@ TESTS: dict[str, bool] = {
     'gpu.texture.kinds': False,
     'system.union_readdir': False,
     'system.overlay_apps': False,
+    'system.overlay_app_records': False,
     'system.widgets_render': False,
 }
 

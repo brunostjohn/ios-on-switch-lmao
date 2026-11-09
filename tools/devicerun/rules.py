@@ -39,7 +39,8 @@ class Check:
     not running is NO-DATA, not PASS). `applies` ('<check> <field>=<value>') limits the check to logs where that check
     matched with that field (an iOS 27 app's test where the suite line says ios=27): in any other log it is N/A, never
     PASS. `against` names a check whose `key` values this one's are looked up in.
-    `boot` limits the check to one of the morning's boot labels (A, B tiled cache, K kprof).
+    `boot` limits the check to one of the morning's boot labels (A, B tiled cache, K kprof). `unless` names a check
+    whose lines excuse this one's in the same boot.
     """
 
     name: str
@@ -59,6 +60,7 @@ class Check:
     source: str = ''
     note: str = ''
     boot: str = ''
+    unless: str = ''
 
     def literals(self) -> tuple[str, ...]:
         return (self.contains,) if isinstance(self.contains, str) else self.contains
@@ -241,6 +243,9 @@ def applicable(applies: str, by_name: dict[str, list[dict]]) -> bool:
 def evaluate(check: Check, matches: list[dict], minutes: float, by_name: dict[str, list[dict]]) -> Result:
     """Return the check's verdict over the events it matched."""
     matches = filtered(check, matches)
+    if check.unless:
+        excused = {fields['boot'] for fields in by_name.get(check.unless, [])}
+        matches = [fields for fields in matches if fields['boot'] not in excused]
     if check.needs and not by_name.get(check.needs):
         return Result(check, NO_DATA, f'no {check.needs} line', matches)
     if check.applies and not applicable(check.applies, by_name):
