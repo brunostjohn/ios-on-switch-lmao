@@ -50,12 +50,14 @@ LOCKSCREEN = [
         'lockscreen.hero-fits-time',
         OWNER,
         'currentTallest: ',
-        'max(tallest/upper) <= 1',
+        REPORT,
         process='MercuryPosterExtension',
         regex=r'currentTallest: (?P<tallest>[\d.]+), upper: (?P<upper>[\d.]+), lower: (?P<lower>[\d.]+)',
+        show=('tallest', 'upper'),
         source='MercuryPosterExtension (Celosia, an error line)',
-        note='Celosia sizes its flower below a time this tall (fraction of the canvas); past upper the floating '
-        'petals cover the time. Boot 15: portrait 0.6/0.616, landscape 0.6/0.440',
+        note="Celosia logs it when its own time allowance (0.6 of the canvas, its gallery title style's "
+        'preferredTimeMaxY in both orientations) is past what its flower fits at this aspect (16:9 landscape: '
+        '0.44). The time SpringBoard draws is compact (lockscreen.adaptive-time) and ends above that',
     ),
     Check(
         'lockscreen.adaptive-time',

@@ -57,7 +57,7 @@ def results(*records: dict) -> dict:
 
 
 class Lockscreen(unittest.TestCase):
-    def test_boot_15_fails_every_lock_screen_check(self):
+    def test_boot_15_fails_the_lock_screen_checks(self):
         got = results(
             record('MercuryPosterExtension', MERCURY_M2V, REFUSAL),
             record('PosterBoard', WATCHDOG),
@@ -73,7 +73,8 @@ class Lockscreen(unittest.TestCase):
         self.assertEqual(got['lockscreen.display-abort'].verdict, FAIL)
         self.assertIn('2 lines', got['lockscreen.display-abort'].observed)
         self.assertIn('waiting for the m2v', got['lockscreen.display-abort'].observed)
-        self.assertEqual(got['lockscreen.hero-fits-time'].verdict, FAIL)
+        self.assertEqual(got['lockscreen.hero-fits-time'].verdict, INFO)
+        self.assertIn('0.439949', got['lockscreen.hero-fits-time'].observed)
 
     def test_a_clean_lock_screen_passes(self):
         got = results(
@@ -83,7 +84,7 @@ class Lockscreen(unittest.TestCase):
         self.assertEqual(got['lockscreen.m2v'].verdict, PASS)
         self.assertEqual(got['lockscreen.scene-watchdog'].verdict, PASS)
         self.assertEqual(got['lockscreen.display-abort'].verdict, PASS)
-        self.assertEqual(got['lockscreen.hero-fits-time'].verdict, PASS)
+        self.assertEqual(got['lockscreen.hero-fits-time'].verdict, INFO)
 
     def test_no_celosia_line_is_no_data(self):
         self.assertEqual(results()['lockscreen.hero-fits-time'].verdict, NO_DATA)
