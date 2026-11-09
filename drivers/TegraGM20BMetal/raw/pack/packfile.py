@@ -5,8 +5,8 @@ from dataclasses import dataclass
 
 MAGIC = b'GM20BPK1'
 # 2: the header's stack key (rawpack.py --stack) after the section table; 3: barrier-form records; 4: programs' shader
-# data and constant buffer types; 6: compute kernels (runtime/raw_pack.h PackKernel)
-VERSION = 7
+# data and constant buffer types; 6: compute kernels (runtime/raw_pack.h PackKernel); 8: a texture3d entry's Metal index
+VERSION = 8
 SECTIONS = 9  # runtime/raw_pack.h PackSectionCount
 KERNEL_ENTRIES = 16  # PackKernel.entry's length
 PROGRAM_CBUFS = 11  # PackProgram.cbufType's length (runtime/raw_pack.h)

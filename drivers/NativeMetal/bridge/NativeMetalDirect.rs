@@ -17,7 +17,7 @@ use metal2vulkan::error::Retry;
 use metal2vulkan::metal::{
     PixelFormat, SamplerAddressMode, SamplerMinMagFilter, SamplerMipFilter, TextureType, TextureUsage,
 };
-use metal2vulkan::pipeline::{RenderPipeline, RenderPipelineDescriptor, SlotRef, Stage};
+use metal2vulkan::pipeline::{RenderPipeline, RenderPipelineDescriptor, SlotClass, SlotInterface, SlotRef, Stage};
 use std::ffi::{CString, c_char, c_void};
 use std::sync::{Arc, Mutex};
 
@@ -180,9 +180,27 @@ fn probe_bind_offset(stage: u32, slot: u32) -> u64 {
     }
 }
 
+/// The fragment texture slots the probe binds whose arguments the state's functions declare `texture3d` (Core Animation's
+/// colour cubes): a 3D texture bound there gives each its own write, at its own Metal index
+fn volume_slots(pipeline: &RenderPipeline) -> Vec<u32> {
+    pipeline
+        .interface
+        .slots
+        .iter()
+        .filter(|(slot, interface)| {
+            slot.stage == Stage::Fragment
+                && slot.class == SlotClass::Texture
+                && slot.index < PROBE_TAGGED
+                && matches!(interface, SlotInterface::Texture(t) if t.texture_type == TextureType::Type3D)
+        })
+        .map(|(slot, _)| slot.index)
+        .collect()
+}
+
 /// The bind state of probe.mm's draw `run`: every buffer slot of both stages bound (inline bytes, or the bound run's
-/// buffers at each slot's own offset), 16 textures of `format` and `samples` and 16 samplers at the fragment stage
-fn probe_state(run: usize, format: PixelFormat, samples: u32) -> BindState {
+/// buffers at each slot's own offset), 16 textures of `format` and `samples` (3D at `volumes`) and 16 samplers at the
+/// fragment stage
+fn probe_state(run: usize, format: PixelFormat, samples: u32, volumes: &[u32]) -> BindState {
     let mut state = BindState::default();
     for stage in [Stage::Vertex, Stage::Fragment] {
         let mut table = StageTable::default();
@@ -207,7 +225,9 @@ fn probe_state(run: usize, format: PixelFormat, samples: u32) -> BindState {
         if stage == Stage::Fragment {
             for t in 0..PROBE_TAGGED {
                 let mut facts = TextureFacts::new(TextureType::Type2D, format);
-                if samples > 1 {
+                if volumes.contains(&t) {
+                    facts.texture_type = TextureType::Type3D;
+                } else if samples > 1 {
                     facts.texture_type = TextureType::Type2DMultisample;
                     facts.sample_count = samples;
                     facts.usage |= TextureUsage::RENDER_TARGET;
@@ -539,6 +559,7 @@ pub unsafe extern "C" fn nmb_render_pipeline_direct(
         let base = compile
             .compile_render_pipeline(&descriptor, &budget)
             .map_err(compile_error("compile"))?;
+        let volumes = volume_slots(&base);
         let mut variants = vec![(VariantKey::new(), base)];
         let mut runs = Vec::with_capacity(RUN_BYTES.len());
         for run in 0..RUN_BYTES.len() {
@@ -546,7 +567,7 @@ pub unsafe extern "C" fn nmb_render_pipeline_direct(
                 compile,
                 &descriptor,
                 &mut variants,
-                &probe_state(run, format, texture_samples.max(1)),
+                &probe_state(run, format, texture_samples.max(1), &volumes),
                 &budget,
             )?);
         }

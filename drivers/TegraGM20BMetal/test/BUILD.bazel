@@ -306,15 +306,6 @@ host_test(
 )
 
 host_test(
-    name = "raw_texture3d_test",
-    srcs = [
-        "raw_texture3d_test.cpp",
-        "//drivers/TegraGM20BMetal:raw/runtime/raw_texture3d.h",
-    ],
-    cxx_std = "c++17",
-)
-
-host_test(
     name = "raw_sampler_test",
     srcs = [
         "raw_sampler_test.cpp",

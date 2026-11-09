@@ -34,7 +34,7 @@ struct LayoutEntry {
     uint8_t stage = 0, slot = 0;  // a buffer's
     Tex tex = Tex::None;
     Smp smp = Smp::None;
-    uint8_t texSlot = 0, smpSlot = 0;  // a texture3d's kNoSlot where its Metal index is unknown
+    uint8_t texSlot = 0, smpSlot = 0;  // the probe's texture3d: kNoSlot (its Metal index is unknown)
     bool headerKnown = false;          // a constexpr sampler's header
     std::array<uint32_t, 8> header = {};
 };

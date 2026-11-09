@@ -232,14 +232,10 @@ bool layout(const DirectNvk &nvk, void *device, const NmbDirectDraw &d, std::vec
             if (attachment) {
                 e.tex = Tex::Fetch;
                 e.texSlot = uint8_t(w.slot);
-            } else if (w.viewType == kViewType3D) {
-                // m2v binds its own 3D view where the probe's 2D texture meets a texture3d argument; the pack holds no
-                // Metal index for one (raw_pack.h EntryTexture3d)
-                e.tex = Tex::Texture3D;
-                e.texSlot = kNoSlot;
             } else if ((w.source == NmbDirectTexture || w.source == NmbDirectCombined) && w.stage == 2 &&
                        w.slot < kTagged) {
-                e.tex = Tex::Slot;
+                // the direct compile binds a 3D texture at each texture3d argument (NativeMetalDirect.rs volume_slots)
+                e.tex = w.viewType == kViewType3D ? Tex::Texture3D : Tex::Slot;
                 e.texSlot = uint8_t(w.slot);
             } else {
                 e.tex = Tex::Unknown;

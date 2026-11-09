@@ -2,17 +2,17 @@ import Foundation
 import HWTestCore
 import Metal
 
-/// Boot 15's first key press: Core Animation drew its generic state (the uber shader, whose two colour cubes are
-/// texture3d arguments) with a 1-texel BGRA8 texture bound at fragment index 12, which none of its 2D entries names.
-/// The raw facade sent the command buffer to m2v, whose pipelines for the keyboard took 18-20 s to make while the
-/// render thread waited for it to be scheduled. Each case draws the generic state into a 256x256 BGRA8 target (its
-/// second colour memoryless) after binding what that case leaves at indices 12 and 13; on the raw facade path_<case>=
-/// must be "raw" (wait_ms_<case>= is the command buffer's commit to completion), but for two distinct cubes, which the
-/// facade cannot tell apart and sends to m2v. hash_<case>= is the target's bytes, to compare between the raw facade's
+/// Core Animation's generic state (the uber shader) declares color_cube0, color_cube1 and lut_tex as texture3d
+/// arguments at fragment indices 12, 13 and 14. Boot 15's first key press drew it with a 1-texel BGRA8 texture at index
+/// 12; the raw facade sent the command buffer to m2v, whose pipelines for the keyboard took 18-20 s to make while the
+/// render thread waited for it to be scheduled. Each case draws the state into a 256x256 BGRA8 target (its second
+/// colour memoryless) after binding what that case leaves at indices 12-14: nothing, a 2D texture, one cube, one cube
+/// at all three, three distinct cubes. On the raw facade path_<case>= must be "raw" for every case (wait_ms_<case>= is
+/// the command buffer's commit to completion); hash_<case>= is the target's bytes, to compare between the raw facade's
 /// and the m2v device's runs. iOS 17's QuartzCore has no such state, so the scene draws nothing there.
 struct CAGenericStateScene: GPUScene {
     let id = "gpu.ca.generic_texture3d"
-    let name = "Core Animation's generic state beside 2D and 3D textures it does not name"
+    let name = "Core Animation's generic state with its colour cubes bound, unbound and mistyped"
 
     static let line = PipelineLine(
         "R ok=1 label=com.apple.coreanimation.PBGRAXm_A2Xghfc samples=1 topo=0 ds=0/0 c0=80:15:0:1:0:0:1:0:0 "
@@ -45,14 +45,14 @@ struct CAGenericStateScene: GPUScene {
         let target = try gpu.texture(.bgra8Unorm, Self.size, Self.size)
         let scratch = try gpu.texture(.rgba16Float, Self.size, Self.size, usage: [.renderTarget], storage: .memoryless)
         let leftover = try gpu.texture(.bgra8Unorm, 1, 16, usage: [.shaderRead])
-        let cube = try volume(gpu), other = try volume(gpu)
-        let cases: [(String, MTLTexture?, MTLTexture?, Bool)] = [
-            ("nothing", nil, nil, true), ("leftover_2d", leftover, nil, true), ("one_cube", cube, nil, true),
-            ("same_cube", cube, cube, true), ("distinct_cubes", cube, other, false),
+        let cube = try volume(gpu), other = try volume(gpu), lut = try volume(gpu)
+        let cases: [(String, [MTLTexture?])] = [
+            ("nothing", [nil, nil, nil]), ("leftover_2d", [leftover, nil, nil]), ("one_cube", [cube, nil, nil]),
+            ("same_cube", [cube, cube, cube]), ("distinct_cubes", [cube, other, lut]),
         ]
         let raw = kind == "raw"
         let zeros = [UInt8](repeating: 0, count: 256)
-        for (label, at12, at13, onRaw) in cases {
+        for (label, cubes) in cases {
             let draw = { (commands: MTLCommandBuffer) in
                 let pass = MTLRenderPassDescriptor()
                 pass.colorAttachments[0].texture = target
@@ -68,14 +68,13 @@ struct CAGenericStateScene: GPUScene {
                     source: nil)
                 for slot in 4..<8 { encoder.setVertexBytes(zeros, length: zeros.count, index: slot) }
                 for slot in 4..<16 { encoder.setFragmentBytes(zeros, length: zeros.count, index: slot) }
-                encoder.setFragmentTexture(at12, index: 12)
-                encoder.setFragmentTexture(at13, index: 13)
+                encoder.setFragmentTextures(cubes, range: 12..<15)
                 encoder.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4)
                 encoder.endEncoding()
             }
             var timing = try await gpu.run(tolerateError: true, draw)
             var runs = 1
-            while raw && onRaw && timing.path.hasPrefix("m2v:state") && runs < Self.warmups {
+            while raw && timing.path.hasPrefix("m2v:state") && runs < Self.warmups {
                 try await Task.sleep(nanoseconds: 50_000_000)
                 timing = try await gpu.run(tolerateError: true, draw)
                 runs += 1
@@ -88,7 +87,7 @@ struct CAGenericStateScene: GPUScene {
             }
             guard raw else { continue }
             result.expect(!timing.path.hasPrefix("error:"), "\(label): \(timing.path)")
-            if onRaw { result.expect(timing.path == "raw", "\(label) drawn on \(timing.path)") }
+            result.expect(timing.path == "raw", "\(label) drawn on \(timing.path)")
         }
         return result
     }
