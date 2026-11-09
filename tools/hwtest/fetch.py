@@ -11,7 +11,7 @@ import shutil
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
-from tools.hwtest import bootlog, health
+from tools.hwtest import bootlog, health, posters
 from tools.hwtest.reports import Report, is_report, sidecar_of
 
 BUNDLES = ('com.brunostjohn.switch.hwtest', 'com.brunostjohn.switch.hwtest27e')
@@ -58,6 +58,7 @@ def sidecar(report: Report, data: Path, switch_folder: Path, archive: Path | Non
             'panics': [] if report.finished else health.panics(switch_folder, started - timedelta(minutes=1)),
             'pair_records': health.pairing(data),
             'apps': health.apps(data),
+            'lock_poster': posters.observe(data),
         },
         'pulled': datetime.now(UTC).isoformat(timespec='seconds'),
     }
