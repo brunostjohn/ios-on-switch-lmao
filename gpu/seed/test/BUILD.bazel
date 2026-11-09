@@ -11,6 +11,7 @@ lint_files()
 
 RAW = [
     "rawpack.py",
+    "directlink.py",
     "mkpack.py",
     "mkprograms.py",
     "nvkshader.py",

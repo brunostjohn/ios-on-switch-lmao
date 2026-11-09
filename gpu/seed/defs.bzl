@@ -278,13 +278,13 @@ metal_seed = rule(
     },
 )
 
-# rawpack.py's BUCKETS: the split writes this many bucket corpora, each probed by its own action.
+# rawpack.py's BUCKETS: the split writes this many bucket corpora, each made by its own action.
 _RAW_BUCKETS = 16
 
 # The generator's modules each step runs (rawpack.py imports or runs them by path, beside it).
 _RAW_SPLIT = ["rawpack.py", "ca/caset.py", "ca/caspec.py", "ca/caspec27.py"]
-_RAW_PROBE = ["rawpack.py", "mkprograms.py", "nvkshader.py", "probelog.py"]
-_RAW_LINK = ["rawpack.py", "mkpack.py", "kernels.py", "layouts.py", "packfile.py", "probelog.py"]
+_RAW_PROBE = ["rawpack.py", "mkprograms.py", "nvkshader.py"]
+_RAW_LINK = ["rawpack.py", "directlink.py", "mkpack.py", "kernels.py", "layouts.py", "packfile.py", "probelog.py"]
 
 def _generator_files(ctx, names):
     here = ctx.file.generator.dirname + "/"
@@ -344,7 +344,7 @@ def _seed_raw_pack_impl(ctx):
             inputs = depset([bucket_corpus] + probe_inputs),
             outputs = [bucket],
             mnemonic = "MetalRawProbe",
-            progress_message = "Probing the raw pack's bucket {} of {}".format(i + 1, _RAW_BUCKETS),
+            progress_message = "Making the raw pack's bucket {} of {} directly".format(i + 1, _RAW_BUCKETS),
             execution_requirements = _DARWIN,
         )
         buckets.append(bucket)
@@ -387,7 +387,7 @@ def _seed_raw_pack_impl(ctx):
 
 seed_raw_pack = rule(
     implementation = _seed_raw_pack_impl,
-    doc = "The raw GM20B path's pipeline pack: Core Animation's corpus states probed per bucket over the mock GM20B, linked, stamped.",
+    doc = "The raw GM20B path's pipeline pack: Core Animation's corpus states made directly per bucket, linked, stamped.",
     attrs = _IPSW | {
         "tools": attr.label(mandatory = True),
         "crawl": attr.label(mandatory = True, providers = [CrawlInfo]),

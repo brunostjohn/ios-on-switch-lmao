@@ -57,6 +57,25 @@ filegroup(
     ],
 )
 
+# The raw runtime's sources the pack generator's directpack.mm makes records with (raw/pack/rawpack.py DIRECT_RUNTIME)
+filegroup(
+    name = "raw_direct_sources",
+    srcs = [
+        "raw/runtime/RawDirect.h",
+        "raw/runtime/RawDirect.mm",
+        "raw/runtime/raw_cache.h",
+        "raw/runtime/raw_compiler.h",
+        "raw/runtime/raw_direct.cpp",
+        "raw/runtime/raw_direct.h",
+        "raw/runtime/raw_emit.cpp",
+        "raw/runtime/raw_emit.h",
+        "raw/runtime/raw_pack.cpp",
+        "raw/runtime/raw_record.h",
+        "raw/runtime/raw_record_parts.cpp",
+        "raw/runtime/raw_record_parts.h",
+    ],
+)
+
 filegroup(
     name = "raw_stack_sources",
     srcs = glob(["raw/**/*.%s" % suffix for suffix in ("h", "c", "cpp", "mm", "py", "metal")]),
