@@ -7,6 +7,6 @@ enum Tests27 {
     static let all: [any HWTest] = [
         GPUSceneTest(scene: CAGlassScene()), Metal4Test(), BinaryArchiveTest(), UIGlassTest(), PocketStripTest(),
         GlassPacing.over,
-        GlassPacing.under, FrameProcessorTest(),
+        GlassPacing.under, NoCameraTest(), FrameProcessorTest(),
     ]
 }

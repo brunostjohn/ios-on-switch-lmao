@@ -47,6 +47,24 @@ GROUPS: dict[str, list[Check]] = {
             note='per label; pass --start/--end around 10 idle minutes',
         ),
         Check('launchd.throttled', 'r32-cpuhog', 'throttled by', REPORT, process=LAUNCHD, show=('job',)),
+        Check(
+            'launchd.cameracaptured-jetsam',
+            'r119-rawgaps',
+            'JETSAM_REASON_MEMORY_PERPROCESSLIMIT',
+            process=LAUNCHD,
+            subsystem='com.apple.cameracaptured',
+            note='boot 15: killed and started again every ~20 s',
+        ),
+    ],
+    'camera': [
+        Check(
+            'camera.gpu-work',
+            'r119-rawgaps',
+            'TegraGM20BMetal: cameracaptured',
+            process='cameracaptured',
+            subsystem=GPU_METAL_SUBSYSTEM,
+            note='no camera, so no effect shaders to compile (boot 15: 160 pipelines a launch)',
+        ),
     ],
     'mobilegestalt': [
         Check(

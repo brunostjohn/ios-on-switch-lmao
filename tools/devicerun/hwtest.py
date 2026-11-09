@@ -146,6 +146,7 @@ BY_IOS: dict[str, dict[str, bool]] = {
         'display.pocket_strip': False,
         'pacing.glass_over': False,
         'pacing.glass_under': False,
+        'system.no_camera': False,
         'video.frame_processor': False,
     },
 }
