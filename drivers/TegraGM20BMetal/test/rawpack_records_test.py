@@ -68,7 +68,7 @@ class RecordsTest(unittest.TestCase):
 
 
 def record(key: str, entries: list[tuple[int, int, int, int]], samplers: list[list[int]], outcome: int = 0) -> dict:
-    """A DKRN record as directlink.py loads it: its PackKernel (region 4, set 0x40, push word 2), program and samplers."""
+    """Make a DKRN record with region 4, set 0x40 and push word 2."""
     qmd = [0] * 64
     qmd[20] = 0x7
     words = [0] * 32

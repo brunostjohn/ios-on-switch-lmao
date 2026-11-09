@@ -1,6 +1,6 @@
-"""The compute kernels directpack.mm made directly (records.bin's DKRN records: runtime/raw_direct_compute.h), for directlink.py.
+"""The compute kernels directpack.mm made directly, for directlink.py.
 
-A kernel's record is its PackKernel with its program index 0, its program (code, shader data, constant buffer types) and its
+A DKRN record holds its PackKernel with program index 0, its program (code, shader data, constant buffer types) and
 sampler headers, which its sampler entries name as CONSTEXPR | n. The pack numbers those headers among its constexpr
 samplers, and a buffer entry's window keeps its residual word + 1 in its top byte (runtime/raw_pack.h).
 """
@@ -17,10 +17,9 @@ ENTRIES = 16
 KERNEL_BYTES = HEAD.size + 64 * 4 + 8 + 32 * 4 + ENTRIES * ENTRY.size
 
 
-def entry(
-    off: int, kind: int, slot: int, window: int, headers: list[list[int]], constexpr_tsc: list[list[int]]
-) -> dict:
+def entry(fields: tuple[int, int, int, int], headers: list[list[int]], constexpr_tsc: list[list[int]]) -> dict:
     """Give a record's set-0 entry as packfile.py takes it, its sampler numbered among the pack's."""
+    off, kind, slot, window = fields
     if kind == SAMPLER:
         header = headers[slot & (CONSTEXPR - 1)]
         if header not in constexpr_tsc:
@@ -46,7 +45,7 @@ def kernel(rec: dict, constexpr_tsc: list[list[int]]) -> dict:
     set_bytes, _pad, mask = struct.unpack_from('<HHI', k, HEAD.size + 256)
     words = struct.unpack_from('<32I', k, HEAD.size + 264)
     at = HEAD.size + 264 + 128
-    entries = [entry(*ENTRY.unpack_from(k, at + ENTRY.size * i), rec['samplers'], constexpr_tsc) for i in range(count)]
+    entries = [entry(ENTRY.unpack_from(k, at + ENTRY.size * i), rec['samplers'], constexpr_tsc) for i in range(count)]
     return {
         'key': rec['key'],
         'region': region,
