@@ -128,3 +128,72 @@ struct PixelSamplerScene: GPUScene {
         return result
     }
 }
+
+/// Core Animation's luma sum kernel (iOS 27's QuartzCore compute_sum_luma, at the 8-wide shape its pack record holds)
+/// writing its result at an offset off 16 bytes, as backboardd binds its destination on boot 15 (raw sent each such
+/// command buffer's compute to m2v). The same dispatch into an aligned destination is the reference: the shifted one's
+/// bytes are the aligned one's moved by the offset, and nothing around them changes; on the raw facade both run on raw.
+/// Where QuartzCore has no such kernel (iOS 17) it notes why and checks nothing.
+struct KernelOffsetScene: GPUScene {
+    let id = "gpu.raw.kernel_offset"
+    let name = "A Core Animation kernel's buffer bound at an offset that is not a multiple of 16"
+
+    static let offset = 4
+    static let threads = 8
+    static let sentinel: UInt8 = 0xA5
+
+    func run(_ gpu: GPU) async throws -> SceneResult {
+        var result = SceneResult()
+        guard let library = try? gpu.device.makeLibrary(URL: CAState.library),
+            let function = library.makeFunction(name: "compute_sum_luma")
+        else {
+            result.notes.append("no compute_sum_luma in QuartzCore here")
+            return result
+        }
+        let pipeline = try await gpu.device.makeComputePipelineState(function: function)
+        // tex_origin, tex_bounds (ushort2 each), iterations, thread_group_count (uint), pxl_per_sample, level (uchar)
+        var uniforms = [UInt8](repeating: 0, count: 256)
+        let words: [UInt32] = [0, 64 | 64 << 16, 1, UInt32(Self.threads)]
+        words.withUnsafeBytes { uniforms.replaceSubrange(0..<16, with: $0) }
+        uniforms[16] = 1
+        let sums = (0..<Self.threads * 4).map { Float($0 % 7) * 0.125 + 0.0625 }
+        let uniformBuffer = try gpu.buffer(uniforms)
+        let sumBuffer = try gpu.buffer(sums)
+        // the texture Core Animation leaves bound at slot 0, which the pack's key names
+        let texture = try gpu.texture(.bgra8Unorm, 64, 64, usage: [.shaderRead])
+        var outputs: [[UInt8]] = []
+        var paths: [String] = []
+        for offset in [0, Self.offset] {
+            let destination = try gpu.buffer([UInt8](repeating: Self.sentinel, count: 64))
+            let timing = try await gpu.run { commands in
+                let encoder = commands.makeComputeCommandEncoder()!
+                encoder.setComputePipelineState(pipeline)
+                encoder.setBuffer(uniformBuffer, offset: 0, index: 0)
+                encoder.setBuffer(sumBuffer, offset: 0, index: 1)
+                encoder.setBuffer(destination, offset: offset, index: 2)
+                encoder.setTexture(texture, index: 0)
+                encoder.setThreadgroupMemoryLength(16 * Self.threads, index: 0)
+                encoder.dispatchThreadgroups(
+                    MTLSize(width: 1, height: 1, depth: 1),
+                    threadsPerThreadgroup: MTLSize(width: Self.threads, height: 1, depth: 1))
+                encoder.endEncoding()
+            }
+            paths.append(timing.path)
+            let bytes = destination.contents().assumingMemoryBound(to: UInt8.self)
+            outputs.append(Array(UnsafeBufferPointer(start: bytes, count: 64)))
+        }
+        result.metrics.set("paths", paths.joined(separator: ","))
+        let (aligned, shifted) = (outputs[0], outputs[1])
+        let written = aligned.firstIndex { $0 != Self.sentinel } != nil
+        result.expect(written, "the aligned dispatch wrote nothing")
+        result.expect(
+            Array(shifted[Self.offset..<64]) == Array(aligned[0..<(64 - Self.offset)]),
+            "the shifted result differs from the aligned one moved by \(Self.offset) bytes")
+        result.expect(
+            shifted[0..<Self.offset].allSatisfy { $0 == Self.sentinel }, "bytes before the bind offset were written")
+        if RawFacade.kind(of: gpu.device) == "raw" {
+            result.expect(paths == ["raw", "raw"], "the aligned and shifted dispatches took \(paths), not raw")
+        }
+        return result
+    }
+}

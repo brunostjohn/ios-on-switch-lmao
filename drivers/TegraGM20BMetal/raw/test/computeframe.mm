@@ -75,6 +75,22 @@ void blitFirst(id<MTLDevice> dev, id<MTLCommandBuffer> cb)
     [blit endEncoding];
 }
 
+// FRAME_OFF16=<slot>:<offset>: that slot's tagged bytes from a zeroed buffer at an offset off 16 bytes (Core Animation's
+// luma sums), so the descriptor starts below the tag and the residual is the slot's SlotBindOffset push word
+bool off16(uint32_t &slot, uint32_t &offset)
+{
+    const char *text = getenv("FRAME_OFF16");
+    return text && sscanf(text, "%u:%u", &slot, &offset) == 2 && slot < kSlots;
+}
+
+// FRAME_TEXTURES=<n>: textures (and samplers, unless FRAME_NO_SAMPLERS) bound at slots 0..n-1 only, as a kernel's caller binds
+// them (the facade looks its kernel up by what is bound)
+uint32_t boundTextures()
+{
+    const char *n = getenv("FRAME_TEXTURES");
+    return n ? std::min(uint32_t(atoi(n)), kTextures) : kTextures;
+}
+
 uint32_t bigBuffer()
 {
     const char *bytes = getenv("FRAME_BIG_BUFFER");
@@ -138,10 +154,16 @@ int runNvk(char **argv)
         fillBig(static_cast<uint8_t *>(b.contents), big);
         [enc setBuffer:b offset:0 atIndex:kBigSlot];
     }
+    if (uint32_t slot, offset; off16(slot, offset)) {
+        id<MTLBuffer> b = [dev newBufferWithLength:offset + kTagBytes options:MTLResourceStorageModeShared];
+        memset(b.contents, 0, offset);
+        memcpy(static_cast<uint8_t *>(b.contents) + offset, tag(slot).data(), kTagBytes);
+        [enc setBuffer:b offset:offset atIndex:slot];
+    }
     if (const char *length = getenv("FRAME_THREADGROUP_MEMORY"))
         [enc setThreadgroupMemoryLength:strtoul(length, nullptr, 0) atIndex:0];
     [dev newSamplerStateWithDescriptor:[MTLSamplerDescriptor new]];
-    for (uint32_t t = 0; t < kTextures; t++) {
+    for (uint32_t t = 0; t < boundTextures(); t++) {
         const char *format = getenv("FRAME_TEXTURE_FORMAT");
         MTLTextureDescriptor *d = [MTLTextureDescriptor
             texture2DDescriptorWithPixelFormat:format ? MTLPixelFormat(atoi(format)) : MTLPixelFormatRGBA8Unorm
@@ -156,6 +178,8 @@ int runNvk(char **argv)
                withBytes:texels(t).data()
              bytesPerRow:4 * (16 + t)];
         [enc setTexture:x atIndex:t];
+        if (getenv("FRAME_NO_SAMPLERS"))
+            continue;
         MTLSamplerDescriptor *sd = [MTLSamplerDescriptor new];
         sd.lodMaxClamp = 1 + t / 2.0f;
         [enc setSamplerState:[dev newSamplerStateWithDescriptor:sd] atIndex:t];
@@ -299,10 +323,20 @@ int runRaw(char **argv)
         fillBig(big.cpu, bytes);
         enc.setBuffer(kBigSlot, &big, 0);
     }
+    raw::Buffer shifted;
+    if (uint32_t slot, offset; off16(slot, offset)) {
+        if (!dev.createBuffer(offset + kTagBytes, shifted))
+            return 1;
+        memset(shifted.cpu, 0, offset);
+        memcpy(shifted.cpu + offset, tag(slot).data(), kTagBytes);
+        enc.setBuffer(slot, &shifted, offset);
+    }
     std::vector<raw::Texture> textures(kTextures);
     std::vector<raw::Sampler> samplers(kTextures);
     for (uint32_t t = 0; t < kTextures; t++) {
-        if (!dev.createTexture(16 + t, 8 + t, kRgba8Unorm, textures[t], false, getenv("FRAME_TILED") != nullptr))
+        const char *format = getenv("FRAME_TEXTURE_FORMAT");
+        if (!dev.createTexture(16 + t, 8 + t, format ? uint32_t(atoi(format)) : kRgba8Unorm, textures[t], false,
+                               getenv("FRAME_TILED") != nullptr))
             return 1;
         if (textures[t].cpu && !textures[t].blockLinear) {
             const std::vector<uint32_t> v = texels(t);

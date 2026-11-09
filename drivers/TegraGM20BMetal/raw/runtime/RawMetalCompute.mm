@@ -118,10 +118,10 @@ id rmComputeState(id device, id twin, id<MTLFunction> function, MTLComputePipeli
     return _type;
 }
 
-- (void)refuse:(uint64_t)a why:(NSString *)why
+- (void)refuse:(RMPred)pred value:(uint64_t)a why:(NSString *)why
 {
     [_cb takeReason:WhyCompute why:why];
-    hit(_cb, PredCompute, a);
+    hit(_cb, pred, a);
 }
 
 - (void)setComputePipelineState:(id<MTLComputePipelineState>)state
@@ -140,7 +140,7 @@ id rmComputeState(id device, id twin, id<MTLFunction> function, MTLComputePipeli
 - (void)setBuffer:(id<MTLBuffer>)buffer offset:(NSUInteger)offset atIndex:(NSUInteger)index
 {
     if (buffer && ![(id)buffer isKindOfClass:[RMBuffer class]])
-        [self refuse:index why:@"a kernel's buffer not made by this device"];
+        [self refuse:PredCompute value:index why:@"a kernel's buffer not made by this device"];
     if (index < 31) {
         _buffers[index] = [(id)buffer isKindOfClass:[RMBuffer class]] ? (RMBuffer *)buffer : nil;
         _offsets[index] = offset;
@@ -171,7 +171,7 @@ id rmComputeState(id device, id twin, id<MTLFunction> function, MTLComputePipeli
     if (index < 31)
         _textures[index] = t;
     if (texture && !t)
-        [self refuse:index why:@"a kernel's texture not made by this device"];
+        [self refuse:PredCompute value:index why:@"a kernel's texture not made by this device"];
     setBinding(_cb, OpKernelTexture, 3, index, texture, 0);
 }
 
@@ -184,7 +184,7 @@ id rmComputeState(id device, id twin, id<MTLFunction> function, MTLComputePipeli
 - (void)setSamplerState:(id<MTLSamplerState>)sampler atIndex:(NSUInteger)index
 {
     if (sampler && ![(id)sampler isKindOfClass:[RMSampler class]])
-        [self refuse:index why:@"a kernel's sampler not made by this device"];
+        [self refuse:PredCompute value:index why:@"a kernel's sampler not made by this device"];
     if (index < 16)
         _samplers[index] = [(id)sampler isKindOfClass:[RMSampler class]] ? (RMSampler *)sampler : nil;
     setBinding(_cb, OpKernelSampler, 3, index, sampler, 0);
@@ -299,10 +299,12 @@ static bool plainTexture(RMTexture *t)
                                                 textures:[self texturesText]
                                                 samplers:[self samplersText]]
                                         : nullptr;
+    bool refused = false;
     for (int i = 0; perThread && i < 3; i++) {
         if (!t[i] || groups[i] % t[i]) {
             k = nullptr;
-            [self refuse:groups[i] why:@"dispatchThreads: of a grid with an edge threadgroup"];
+            refused = true;
+            [self refuse:PredComputeEdge value:groups[i] why:@"dispatchThreads: of a grid with an edge threadgroup"];
             break;
         }
         groups[i] /= t[i];
@@ -315,26 +317,35 @@ static bool plainTexture(RMTexture *t)
     for (uint32_t e = 0; k && e < k->rec->entries; e++) {
         const raw::PackKernelEntry &x = k->rec->entry[e];
         if (x.kind == raw::KernelTexture && x.slot < 31 && _textures[x.slot] && !plainTexture(_textures[x.slot])) {
-            [self refuse:x.slot why:@"a kernel's texture the raw path samples through an image of its own"];
+            [self refuse:PredComputeImage
+                   value:x.slot
+                     why:@"a kernel's texture the raw path samples through an image of its own"];
             k = nullptr;
+            refused = true;
         }
         // m2v binds its own view of another format there (a half texture's raw bits), which the raw path does not make
         const raw::FormatInfo *f = x.kind == raw::KernelTexture && x.slot < 31 && _textures[x.slot]
                                        ? raw::formatInfo(_textures[x.slot]->_raw.format)
                                        : nullptr;
         if (f && x.window && f->tic0 != x.window) {
-            [self refuse:x.slot why:@"a kernel m2v binds a view of another format at a texture slot"];
+            [self refuse:PredComputeView
+                   value:x.slot
+                     why:@"a kernel m2v binds a view of another format at a texture slot"];
             k = nullptr;
+            refused = true;
         }
-        // m2v's descriptor starts at the bind offset rounded down to 16, the rest a push word no record names
-        if (x.kind == raw::KernelBuffer && x.slot < 31 && _buffers[x.slot] &&
+        // m2v's descriptor starts at the bind offset rounded down to 16, the rest in a push word the record names
+        if (x.kind == raw::KernelBuffer && raw::kernelResidualWord(x) < 0 && x.slot < 31 && _buffers[x.slot] &&
             ((_buffers[x.slot]->_raw.va + _offsets[x.slot]) & 15)) {
-            [self refuse:x.slot why:@"a kernel's buffer bound at an offset that is not a multiple of 16"];
+            [self refuse:PredComputeOff16
+                   value:x.slot
+                     why:@"a kernel's buffer bound at an offset that is not a multiple of 16"];
             k = nullptr;
+            refused = true;
         }
     }
-    if (!k || groups[0] > 0x7fffffff || groups[1] > 0xffff || groups[2] > 0xffff) {
-        [self refuse:groups[0] why:@"a dispatch the raw path has no kernel for"];
+    if (!refused && (!k || groups[0] > 0x7fffffff || groups[1] > 0xffff || groups[2] > 0xffff)) {
+        [self refuse:PredComputeKernel value:groups[0] why:@"a dispatch the raw path has no kernel for"];
         k = nullptr;
     }
     // extras: Metal's grid (threadgroups, or threads for dispatchThreads:), then the threadgroups the raw path dispatches

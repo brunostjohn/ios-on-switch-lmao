@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 // raw/runtime/raw_residual.h and raw/pack/probe_bind.h: a buffer bound off m2v's descriptor base alignment draws on raw with its
-// SlotBindOffset residual in the push word the probe's bind-offset run names, a storage buffer's as a uniform one's.
+// SlotBindOffset residual in the push word the probe's bind-offset run names, a storage buffer's as a uniform one's, and a
+// kernel's buffer dispatches with it in the word probecompute.mm's bind-offset dispatch names.
 #include "../raw/pack/probe_bind.h"
 #include "../raw/runtime/raw_residual.h"
 
@@ -101,6 +102,54 @@ TEST(RawResidual, WordsAreNamedByTheirValueOnce)
     EXPECT_EQ(words.at(raw::probeStorageCode(1, 1)), 0x704u);
     EXPECT_FALSE(words.count(9)) << "set before the run";
     EXPECT_FALSE(words.count(1)) << "two words share it";
+}
+
+raw::PackKernelEntry kernelBuffer(int word, uint32_t windowBytes = 0)
+{
+    raw::PackKernelEntry e = {};
+    e.kind = raw::KernelBuffer;
+    e.window = windowBytes | uint32_t(word + 1) << 24;
+    return e;
+}
+
+TEST(RawResidual, KernelCodesAreDistinctStorageResiduals)
+{
+    std::set<uint32_t> codes;
+    for (uint32_t slot = 0; slot < 15; slot++)
+        EXPECT_TRUE(codes.insert(raw::probeComputeCode(slot)).second) << slot;
+    for (uint32_t slot = 0; slot < 31; slot++) {
+        EXPECT_GT(raw::probeComputeCode(slot), 0u);
+        EXPECT_LT(raw::probeComputeCode(slot), 16u);
+    }
+}
+
+// boot 15's backboardd: Core Animation's luma kernels write their sums at offsets off 16 (compute a=0, slot 0)
+TEST(RawResidual, KernelBufferOffSixteenTakesItsWord)
+{
+    const uint64_t va = 0x200000000ull + 0x1004;
+    raw::BufferDescriptor d;
+    ASSERT_TRUE(raw::bufferDescriptor(kernelBuffer(6), va, 0x40, d));
+    EXPECT_EQ(raw::kernelResidualWord(kernelBuffer(6)), 6);
+    EXPECT_EQ(raw::kernelBufferWindow(kernelBuffer(6, 0x30)), 0x30u);
+    EXPECT_EQ(d.base, va - 4);
+    EXPECT_EQ(d.residual, 4u);
+    EXPECT_EQ(d.word, 6);
+    EXPECT_EQ(d.range, 0x50u);
+    EXPECT_FALSE(raw::bufferDescriptor(kernelBuffer(-1), va, 0x40, d));
+}
+
+TEST(RawResidual, KernelBufferWindowAndAlignedOffsets)
+{
+    raw::BufferDescriptor d;
+    ASSERT_TRUE(raw::bufferDescriptor(kernelBuffer(-1, 0x20), 0x200000100ull, 0x1000, d));
+    EXPECT_EQ(d.word, -1);
+    EXPECT_EQ(d.base, 0x200000100ull);
+    EXPECT_EQ(d.range, 0x20u) << "the function's window, as before residual words";
+    ASSERT_TRUE(raw::bufferDescriptor(kernelBuffer(-1), 0x200000100ull, 0x34, d));
+    EXPECT_EQ(d.range, 0x40u) << "a storage range is the bytes padded to 16, never a cbuf's 256";
+    ASSERT_TRUE(raw::bufferDescriptor(kernelBuffer(2, 0x20), 0x200000108ull, 0x1000, d));
+    EXPECT_EQ(d.base, 0x200000100ull);
+    EXPECT_EQ(d.range, 0x30u) << "from the aligned base to where the window ends";
 }
 
 }  // namespace

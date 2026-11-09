@@ -61,7 +61,7 @@ xcrun clang++ "${FLAGS[@]}" -I "$TREE/drivers/TegraGM20B" "$HERE/zetacheck.cpp" 
 xcrun clang++ "${FLAGS[@]}" -I "$TREE/drivers/TegraGM20B" "$HERE/faultcheck.cpp" "$RAW/runtime/raw_gpu.cpp" "$RAW/fx/fx_mip.cpp" "$RAW/fx/fx_image.cpp" \
     "$RAW/runtime/raw_kernel.cpp" "$RAW/runtime/raw_alias.cpp" "$RAW/runtime/raw_arena.cpp" "$RAW/runtime/raw_pack.cpp" "$RAW/runtime/raw_ycbcr.cpp" "$RAW/runtime/raw_zeta.cpp" "$RAW/runtime/raw_comp.cpp" "${LIBS[@]}" -o "$OUT/faultcheck"
 # racecheck: what the completion queue adds to the device while the submit thread draws (build it with -fsanitize=thread)
-xcrun clang++ "${FLAGS[@]}" -I "$TREE/drivers/TegraGM20B" "$HERE/racecheck.cpp" "$RAW/runtime/raw_gpu.cpp" "$RAW/fx/fx_mip.cpp" "$RAW/fx/fx_image.cpp" \
+xcrun clang++ "${FLAGS[@]}" -I "$TREE/drivers/TegraGM20B" -I "$TREE/drivers/NativeMetal" "$HERE/racecheck.cpp" "$RAW/runtime/raw_gpu.cpp" "$RAW/fx/fx_mip.cpp" "$RAW/fx/fx_image.cpp" \
     "$RAW/runtime/raw_kernel.cpp" "$RAW/runtime/raw_alias.cpp" "$RAW/runtime/raw_arena.cpp" "$RAW/runtime/raw_pack.cpp" "$RAW/runtime/raw_ycbcr.cpp" "$RAW/runtime/raw_zeta.cpp" "$RAW/runtime/raw_comp.cpp" \
     "$RAW/runtime/raw_completed.cpp" "$RAW/runtime/raw_compute.cpp" "${COMPLETION[@]}" "${LIBS[@]}" -o "$OUT/racecheck"
 # footprint: what the raw device costs a process (its BOs and malloc heap) at open and at its first state, texture and command buffer
@@ -98,14 +98,18 @@ xcrun clang++ "${OBJC[@]}" -Wall -Wextra -x objective-c++ "$HERE/computeframe.mm
     -x c++ "$RAW/runtime/raw_compute.cpp" "$RAW/runtime/raw_gpu.cpp" "$RAW/fx/fx_mip.cpp" "$RAW/fx/fx_image.cpp" "$RAW/runtime/raw_kernel.cpp" "$RAW/runtime/raw_alias.cpp" "$RAW/runtime/raw_arena.cpp" \
     "$RAW/runtime/raw_pack.cpp" "$RAW/runtime/raw_ycbcr.cpp" "$RAW/runtime/raw_zeta.cpp" "$RAW/runtime/raw_comp.cpp" -x none "$BRIDGE" "${LIBS[@]}" \
     -o "$OUT/computeframe" 2>&1 | grep -v "duplicate libraries" || true
-echo "built $OUT/nvkframe $OUT/rawframe $OUT/facadeframe $OUT/arenacheck $OUT/heapframe $OUT/poolcheck $OUT/killcheck $OUT/xrcopycheck $OUT/zetacheck $OUT/faultcheck $OUT/footprint $OUT/heapcheck $OUT/datacheck $OUT/recordcheck $OUT/emitcheck $OUT/vertexcheck $OUT/cachecheck $OUT/directcheck $OUT/linkcheck $OUT/computeframe"
+# computefacade: computeframe's nvk mode through the raw facade (FRAME_PACK=<pack.bin>), as the render server dispatches
+xcrun clang++ "${OBJC[@]}" -Wall -Wextra -DRAW_FACADE -x objective-c++ "$HERE/computeframe.mm" "${FACADE[@]}" "$FRONT/NativeBridgeMetalFrontend.mm" \
+    -x c++ "$RAW/runtime/raw_gpu.cpp" "$RAW/fx/fx_mip.cpp" "$RAW/fx/fx_image.cpp" "$RAW/runtime/raw_kernel.cpp" "$RAW/runtime/raw_alias.cpp" "$RAW/runtime/raw_arena.cpp" "$RAW/runtime/raw_pack.cpp" "$RAW/runtime/raw_ycbcr.cpp" "$RAW/runtime/raw_zeta.cpp" "$RAW/runtime/raw_comp.cpp" "$RAW/runtime/raw_completed.cpp" "$RAW/runtime/raw_compute.cpp" "${COMPLETION[@]}" "$TREE/kits/SwitchRefusal/SwitchRefusal.c" -x none "$BRIDGE" "${LIBS[@]}" \
+    -o "$OUT/computefacade" 2>&1 | grep -v "duplicate libraries" || true
+echo "built $OUT/nvkframe $OUT/rawframe $OUT/facadeframe $OUT/arenacheck $OUT/heapframe $OUT/poolcheck $OUT/killcheck $OUT/xrcopycheck $OUT/zetacheck $OUT/faultcheck $OUT/footprint $OUT/heapcheck $OUT/datacheck $OUT/recordcheck $OUT/emitcheck $OUT/vertexcheck $OUT/cachecheck $OUT/directcheck $OUT/linkcheck $OUT/computeframe $OUT/computefacade"
 xcrun clang++ "${OBJC[@]}" -Wall -Wextra -x objective-c++ "$HERE/blitframe.mm" "${FACADE[@]}" "$FRONT/NativeBridgeMetalFrontend.mm" \
     -x c++ "$RAW/runtime/raw_gpu.cpp" "$RAW/fx/fx_mip.cpp" "$RAW/fx/fx_image.cpp" "$RAW/runtime/raw_kernel.cpp" "$RAW/runtime/raw_alias.cpp" "$RAW/runtime/raw_arena.cpp" "$RAW/runtime/raw_pack.cpp" "$RAW/runtime/raw_ycbcr.cpp" "$RAW/runtime/raw_zeta.cpp" "$RAW/runtime/raw_comp.cpp" "$RAW/runtime/raw_completed.cpp" "$RAW/runtime/raw_compute.cpp" "${COMPLETION[@]}" "$TREE/kits/SwitchRefusal/SwitchRefusal.c" -x none "$BRIDGE" "${LIBS[@]}" \
     -o "$OUT/blitframe" 2>&1 | grep -v "duplicate libraries" || true
 echo "built $OUT/blitframe"
 # zetaframe: a stored Depth32Float_Stencil8 render target through the facade, its passes and aspect blits on raw
 xcrun clang++ "${OBJC[@]}" -Wall -Wextra -x objective-c++ "$HERE/zetaframe.mm" "${FACADE[@]}" "$FRONT/NativeBridgeMetalFrontend.mm" \
-    -x c++ "$RAW/runtime/raw_gpu.cpp" "$RAW/fx/fx_mip.cpp" "$RAW/fx/fx_image.cpp" "$RAW/runtime/raw_kernel.cpp" "$RAW/runtime/raw_alias.cpp" "$RAW/runtime/raw_pack.cpp" "$RAW/runtime/raw_ycbcr.cpp" "$RAW/runtime/raw_zeta.cpp" "$RAW/runtime/raw_comp.cpp" "$RAW/runtime/raw_completed.cpp" "$RAW/runtime/raw_compute.cpp" "${COMPLETION[@]}" "$TREE/kits/SwitchRefusal/SwitchRefusal.c" -x none "$BRIDGE" "${LIBS[@]}" \
+    -x c++ "$RAW/runtime/raw_gpu.cpp" "$RAW/fx/fx_mip.cpp" "$RAW/fx/fx_image.cpp" "$RAW/runtime/raw_kernel.cpp" "$RAW/runtime/raw_alias.cpp" "$RAW/runtime/raw_arena.cpp" "$RAW/runtime/raw_pack.cpp" "$RAW/runtime/raw_ycbcr.cpp" "$RAW/runtime/raw_zeta.cpp" "$RAW/runtime/raw_comp.cpp" "$RAW/runtime/raw_completed.cpp" "$RAW/runtime/raw_compute.cpp" "${COMPLETION[@]}" "$TREE/kits/SwitchRefusal/SwitchRefusal.c" -x none "$BRIDGE" "${LIBS[@]}" \
     -o "$OUT/zetaframe" 2>&1 | grep -v "duplicate libraries" || true
 echo "built $OUT/zetaframe"
 xcrun clang++ "${OBJC[@]}" -Wall -Wextra -x objective-c++ "$HERE/orderframe.mm" "${FACADE[@]}" "$FRONT/NativeBridgeMetalFrontend.mm" \

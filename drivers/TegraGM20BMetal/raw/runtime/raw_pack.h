@@ -158,8 +158,22 @@ struct PackKernelEntry {
     uint16_t offset;
     uint8_t kind;  // PackKernelEntryKind
     uint8_t slot;
-    uint32_t window;  // buffers: 0 the whole buffer; textures: the header's word 0 m2v bound (format, swizzle)
+    // buffers: kernelBufferWindow, kernelResidualWord; textures: the header's word 0 m2v bound (format, swizzle)
+    uint32_t window;
 };
+
+// A buffer entry's window in bytes, 0 the whole buffer
+inline uint32_t kernelBufferWindow(const PackKernelEntry &e)
+{
+    return e.window & 0xFFFFFF;
+}
+
+// A buffer entry's root push word (0x700 + 4 x word) that holds m2v's SlotBindOffset residual for its slot, -1 where the
+// record names none (its kernel then takes only offsets on 16 bytes: raw_residual.h)
+inline int kernelResidualWord(const PackKernelEntry &e)
+{
+    return int(e.window >> 24) - 1;
+}
 
 struct PackKernel {
     uint64_t keyHash;
