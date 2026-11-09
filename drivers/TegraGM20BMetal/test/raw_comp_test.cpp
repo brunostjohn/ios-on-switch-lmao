@@ -162,4 +162,78 @@ TEST(RawComp, AReadyBufferAnswersItsWant)
     EXPECT_FALSE(q.asked({0x20000, 0xe9}, 0));
 }
 
+TEST(RawComp, ClassesAreQuarterStepsOfWholeLines)
+{
+    EXPECT_EQ(raw::compClassBytes(1), raw::kCompGranule);
+    EXPECT_EQ(raw::compClassBytes(3 * raw::kCompGranule), 3 * raw::kCompGranule);
+    EXPECT_EQ(raw::compClassBytes(7296u << 10), 8u << 20);  // 720x1280 RGBA16F: 57 lines, class 64
+    EXPECT_EQ(raw::compClassBytes(33 * raw::kCompGranule), 40 * raw::kCompGranule);
+    EXPECT_EQ(raw::compClassBytes(21376u << 10), 24u << 20);  // 167 lines, class 192
+    for (uint64_t lines = 1; lines < 4096; lines++) {
+        const uint64_t c = raw::compClassBytes(lines * raw::kCompGranule) / raw::kCompGranule;
+        ASSERT_GE(c, lines);
+        ASSERT_LT(c - lines, std::max<uint64_t>(lines / 4, 1)) << lines;
+    }
+}
+
+TEST(RawComp, BackingsOfATagAndKindShareTheLargestMemory)
+{
+    raw::CompQueue q;
+    q.mems.push_back(std::make_unique<raw::CompMem>(raw::CompMem{{}, 0xe9, 9, 0}));
+    q.mems.back()->bo.bytes = 2 << 20;
+    q.mems.push_back(std::make_unique<raw::CompMem>(raw::CompMem{{}, 0xe9, 9, 0}));
+    q.mems.back()->bo.bytes = 8 << 20;
+    q.mems.push_back(std::make_unique<raw::CompMem>(raw::CompMem{{}, 0xe9, 10, 0}));
+    q.mems.back()->bo.bytes = 16 << 20;
+    q.mems.push_back(std::make_unique<raw::CompMem>(raw::CompMem{{}, 0xce, 0, 0}));
+    q.mems.back()->bo.bytes = 32 << 20;
+    EXPECT_EQ(q.largest(9, 0xe9), q.mems[1].get());
+    EXPECT_EQ(q.largest(10, 0xe9), q.mems[2].get());  // another attachment of the same pass: never the same memory
+    EXPECT_EQ(q.largest(0, 0xce), q.mems[3].get());
+    EXPECT_EQ(q.largest(9, 0xdb), nullptr);
+}
+
+TEST(RawComp, AMadeBufferServesEveryNeedItHolds)
+{
+    raw::CompQueue q;
+    for (uint64_t mib : {8, 4, 16}) {
+        raw::CompBo b;
+        b.bo.bytes = mib << 20;
+        b.kind = 0xe9;
+        q.ready.push_back(b);
+    }
+    EXPECT_EQ(q.fit(3 << 20, 0xe9)->bo.bytes, 4u << 20);  // the smallest that holds it
+    EXPECT_EQ(q.fit(5 << 20, 0xe9)->bo.bytes, 8u << 20);
+    EXPECT_EQ(q.fit(17 << 20, 0xe9), q.ready.end());
+    EXPECT_EQ(q.fit(1 << 20, 0xdb), q.ready.end());
+    EXPECT_TRUE(q.asked({12 << 20, 0xe9}, 0));  // 16 MiB holds it: no second buffer
+    EXPECT_FALSE(q.asked({24 << 20, 0xe9}, 0));
+    q.wanted.push_back({32 << 20, 0xe9});
+    EXPECT_TRUE(q.asked({24 << 20, 0xe9}, 0));  // a larger ask in flight covers it
+    EXPECT_FALSE(q.asked({24 << 20, 0xce}, 0));
+}
+
+TEST(RawComp, StaleByCommitsOrTimeAndNeverInTheOpenCommandBuffer)
+{
+    constexpr uint64_t s = 1'000'000'000;
+    // asked for in command buffer 100 (closed count 120), committed at 5 s; on compressed memory unless said
+    EXPECT_FALSE(raw::backingStale(700, 100, 720, 120, 6 * s, 5 * s, false, true));
+    EXPECT_TRUE(raw::backingStale(701, 100, 721, 120, 6 * s, 5 * s, false, true));  // 600 command buffers since
+    EXPECT_FALSE(
+        raw::backingStale(101, 100, 121, 120, 15 * s + 1, 5 * s, false, false));         // plain: the commit rule alone
+    EXPECT_TRUE(raw::backingStale(101, 100, 121, 120, 15 * s + 1, 5 * s, false, true));  // 10 s with nothing committed
+    EXPECT_TRUE(raw::backingStale(101, 100, 121, 120, 5 * s, 5 * s, true, false));       // retired: at once
+    EXPECT_FALSE(raw::backingStale(101, 100, 121, 121, 60 * s, 5 * s, true, true));  // asked for since the last close
+    EXPECT_FALSE(raw::backingStale(100, 100, 121, 121, 60 * s, 5 * s, false, true));
+    EXPECT_FALSE(raw::readyStale(100, 100, 10 * s, 1 * s));
+    EXPECT_TRUE(raw::readyStale(100, 100, 11 * s + 1, 1 * s));  // made for a shape gone before it arrived
+    EXPECT_TRUE(raw::readyStale(701, 100, 2 * s, 1 * s));
+}
+
+TEST(RawComp, SizeClassesTakeAnyGranule)
+{
+    EXPECT_EQ(raw::sizeClassBytes(1, 4096), 4096u);
+    EXPECT_EQ(raw::sizeClassBytes(9 * 65536, 65536), 10u * 65536);
+    EXPECT_EQ(raw::sizeClassBytes(7296u << 10, raw::kCompGranule), raw::compClassBytes(7296u << 10));
+}
 }  // namespace

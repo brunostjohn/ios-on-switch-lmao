@@ -86,6 +86,35 @@ uint32_t Device::compKind(const Texture &m, uint32_t tag, bool blockLinear) cons
                        kMemorylessTag);
 }
 
+void Device::compAsk(const CompWant &w)
+{
+    if (comp_.asked(w, commitCount_))
+        return;
+    comp_.wanted.push_back(w);
+    if (!compThread_.joinable())
+        compThread_ = std::thread([this] {
+            pthread_set_qos_class_self_np(QOS_CLASS_USER_INTERACTIVE, 0);
+            pthread_setname_np("com.brunostjohn.switch.raw.comp");
+            followers().join();  // it binds under lock_, which the committer's render thread waits for
+            std::unique_lock<std::mutex> l(lock_);
+            const auto asked = [&] {
+                return stopping_ || !comp_.wanted.empty();
+            };
+            for (;;) {
+                // what a process that commits nothing stopped using goes when it turns stale, not at its next commit
+                if (const uint64_t at = compDeadline())
+                    compWake_.wait_until(l, std::chrono::steady_clock::time_point(std::chrono::nanoseconds(at)), asked);
+                else
+                    compWake_.wait(l, asked);
+                if (stopping_)
+                    return;
+                compMake(l);
+                trimBackings();
+            }
+        });
+    compWake_.notify_one();
+}
+
 Device::Backing *Device::compBacking(const Texture &m, uint32_t tag, uint32_t kind)
 {
     Texture t;
@@ -93,36 +122,19 @@ Device::Backing *Device::compBacking(const Texture &m, uint32_t tag, uint32_t ki
     uint64_t bytes = 0;
     if (!backingLayout(m, t, c, bytes))
         return nullptr;
-    const CompWant want{compBytes(bytes), kind};
-    auto ready = [&] {
-        return std::find_if(comp_.ready.begin(), comp_.ready.end(), [&](const CompBo &b) {
-            return b.bo.bytes == want.bytes && b.kind == want.kind;
-        });
-    };
-    auto it = ready();
-    if (it == comp_.ready.end()) {
-        if (!comp_.asked(want, commitCount_)) {
-            comp_.wanted.push_back(want);
-            if (!compThread_.joinable())
-                compThread_ = std::thread([this] {
-                    pthread_set_qos_class_self_np(QOS_CLASS_USER_INTERACTIVE, 0);
-                    pthread_setname_np("com.brunostjohn.switch.raw.comp");
-                    followers().join();  // it binds under lock_, which the committer's render thread waits for
-                    std::unique_lock<std::mutex> l(lock_);
-                    for (;;) {
-                        compWake_.wait(l, [&] {
-                            return stopping_ || !comp_.wanted.empty();
-                        });
-                        if (stopping_)
-                            return;
-                        compMake(l);
-                    }
-                });
-            compWake_.notify_one();
+    const uint64_t need = compBytes(bytes);
+    CompMem *mem = comp_.largest(tag, kind);
+    if (!mem || mem->bo.bytes < need) {
+        auto it = comp_.fit(need, kind);
+        if (it == comp_.ready.end()) {
+            compAsk({compClassBytes(need), kind});
+            return nullptr;
         }
-        return nullptr;
+        comp_.mems.push_back(std::make_unique<CompMem>(CompMem{it->bo, kind, tag, 0}));
+        mem = comp_.mems.back().get();
+        comp_.ready.erase(it);
     }
-    t.va = it->bo.va;
+    t.va = mem->bo.va;
     t.comptags = true;
     if (!m.zeta) {
         const FormatInfo *f = formatInfo(m.format);
@@ -135,14 +147,14 @@ Device::Backing *Device::compBacking(const Texture &m, uint32_t tag, uint32_t ki
     auto *b = new Backing;
     b->texture = t;
     b->tag = tag;
-    b->comp = it->bo;
-    comp_.ready.erase(it);
-    stats.compBackings++;
-    stats.compBytes += b->comp.bytes;
+    b->comp = mem;
+    b->usedNs = compClock();
+    mem->views++;
+    stats.compViews++;
     if (!comp_.loggedOn) {
         comp_.loggedOn = true;
         os_log(compLog(), "raw: compression on: first backing %ux%u format %u kind 0x%x (%llu KiB)", t.width, t.height,
-               t.format, kind, (unsigned long long)(b->comp.bytes >> 10));
+               t.format, kind, (unsigned long long)(mem->bo.bytes >> 10));
     }
     return b;
 }
@@ -162,7 +174,10 @@ void Device::compMake(std::unique_lock<std::mutex> &l)
         comp_.wanted.erase(std::find(comp_.wanted.begin(), comp_.wanted.end(), w));
         if (made && (kr = k_.bindCompressed(bo, w.kind)) == KERN_SUCCESS) {
             comp_.made(w);
-            comp_.ready.push_back({bo, w.kind, commitCount_});
+            comp_.ready.push_back({bo, w.kind, commitCount_, compClock()});
+            stats.compMade++;
+            stats.compHeld++;
+            stats.compHeldBytes += bo.bytes;
             os_log_debug(compLog(), "raw: compressed memory %llu KiB kind 0x%x made in %lld us",
                          (unsigned long long)(w.bytes >> 10), w.kind, (long long)us);
             continue;
@@ -197,14 +212,42 @@ void Device::compFree(Backing &b)
         memset(tic_.cpu + 32 * b.texture.tic, 0, 32);
         freeTic_.push_back(b.texture.tic);
     }
-    k_.free(b.comp);
+    stats.compViews--;
+    CompMem *mem = b.comp;
+    b.comp = nullptr;
+    if (--mem->views)
+        return;
+    stats.compHeld--;
+    stats.compHeldBytes -= mem->bo.bytes;
+    k_.free(mem->bo);
+    comp_.mems.erase(std::find_if(comp_.mems.begin(), comp_.mems.end(), [&](const std::unique_ptr<CompMem> &m) {
+        return m.get() == mem;
+    }));
     comp_.freed(commitCount_);
 }
 
-void Device::compTrim()
+uint64_t Device::compDeadline() const
+{
+    uint64_t at = 0;
+    const auto due = [&](uint64_t ns) {
+        at = at ? std::min(at, ns) : ns;
+    };
+    for (const Backing *b : backings_)
+        if (b->retired)
+            due(b->usedNs);  // once its last use completed
+        else if (b->comp)
+            due(b->usedNs + kCompIdleNs);
+    for (const CompBo &r : comp_.ready)
+        due(r.readyNs + kCompIdleNs);
+    return at ? std::max(at, compClock() + kCompRecheckNs) : 0;
+}
+
+void Device::compTrim(uint64_t now)
 {
     for (auto it = comp_.ready.begin(); it != comp_.ready.end();) {
-        if (commitCount_ - it->madeAt > 600) {
+        if (readyStale(commitCount_, it->madeAt, now, it->readyNs)) {
+            stats.compHeld--;
+            stats.compHeldBytes -= it->bo.bytes;
             k_.free(it->bo);
             it = comp_.ready.erase(it);
             comp_.freed(commitCount_);

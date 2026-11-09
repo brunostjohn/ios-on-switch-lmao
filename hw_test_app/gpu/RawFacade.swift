@@ -35,6 +35,13 @@ public enum RawFacade {
         return memory.mapValues(\.intValue)
     }
 
+    /// The facade's compressed memory (empty off the facade): "held", "held_bytes" and "views" now, "made" and "refused"
+    /// since the device opened.
+    public static func compression(of device: MTLDevice) -> [String: Int] {
+        guard let compression = ask(device, "switchRawCompression") as? [String: NSNumber] else { return [:] }
+        return compression.mapValues(\.intValue)
+    }
+
     /// "raw", "m2v:<reason>:<predicate>" or "split:..." on the facade, "device" anywhere else.
     public static func path(of buffer: MTLCommandBuffer) -> String {
         ask(buffer, "switchRawPath") as? String ?? "device"

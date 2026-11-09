@@ -73,6 +73,20 @@ static const char *zetaMemoryRefusal(int asked)
     };
 }
 
+// hw_test_app's gpu.compression_churn: the raw device's compressed memory (raw_comp.h). held, held_bytes and views are now;
+// made and refused count since the device opened.
+- (NSDictionary<NSString *, NSNumber *> *)switchRawCompression
+{
+    const auto &s = gRM->raw->stats;
+    return @{
+        @"held" : @(s.compHeld.load()),
+        @"held_bytes" : @(s.compHeldBytes.load()),
+        @"views" : @(s.compViews.load()),
+        @"made" : @(s.compMade.load()),
+        @"refused" : @(s.compFailed.load())
+    };
+}
+
 // The m2v device this one wraps (the one TEGRA_RAW_METAL=0 gives the process): hw_test_app draws each scene on both
 - (id<MTLDevice>)switchM2VDevice
 {
