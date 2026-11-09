@@ -127,6 +127,7 @@ TESTS: dict[str, bool] = {
     'system.memory': False,
     'cpu.clock': False,
     'cpu.sustained': False,
+    'cpu.sched': False,
     'net.wifi_link': False,
     'gpu.latency': False,
     'gpu.raw_share': False,
