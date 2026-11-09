@@ -317,6 +317,9 @@ struct Sampler {
     uint32_t mapped[4] = {};
 };
 
+struct SplitState;
+struct SplitSource;
+
 struct Pipeline {
     const PackPipeline *rec = nullptr;
     std::vector<uint32_t> methods;         // the state's registers as ready push words (program offsets relocated)
@@ -356,6 +359,28 @@ struct Pipeline {
     // push words setting back the registers outside the pack's varying ones its methods set (a state the runtime made:
     // raw_record.h extras), to their value in every pack state: emitted before the next state's methods
     std::vector<uint32_t> restore;
+    // where its fragment program is split (raw_split.cpp): what its twin is made of, and the twin, made at the first draw that
+    // takes it (both read without the device's lock); on that twin, its split
+    const SplitSource *splitSource = nullptr;
+    SplitState *split = nullptr;
+    const SplitState *splitOf = nullptr;
+};
+
+// A state's fragment program split (raw_pack.h PackSplit): the twin that draws of rec.thresholdPixels pixels or more take, and
+// the prologue placed in the heap
+struct SplitState {
+    PackSplit rec = {};
+    Pipeline pipeline;
+    uint32_t prologue = 0;  // QMD PROGRAM_OFFSET
+    uint64_t prologueData = 0;
+    uint32_t prologueDataBytes = 0;
+};
+
+// A split draw's prologue: the constant buffers its launch binds (PackSplit)
+struct SplitLaunch {
+    const SplitState *split = nullptr;
+    uint64_t cbuf[8] = {};
+    uint32_t cbufBytes[8] = {};
 };
 
 // A program in the heap: its record, its SET_PIPELINE_PROGRAM value, its shader data's GPU address (0: none) and its header
@@ -364,6 +389,23 @@ struct PlacedProgram {
     uint32_t program = 0;
     uint64_t data = 0;
     const uint8_t *header = nullptr;  // its shader header, as the CPU holds it
+};
+
+// What a state's split twin is made of: the pack's split (its programs by index) or a runtime record's programs, and the
+// state's own inputs to Device::build
+struct SplitSource {
+    PackSplit rec = {};
+    bool packed = false;
+    // a runtime record's programs as heap slots: the per-pixel one laid out as the pack lays one (its PackProgram at heap
+    // offset 0), the prologue's code with its shader data at prologueDataAt
+    std::vector<uint8_t> fsSlot, prologueSlot;
+    PackProgram fsInfo = {};
+    uint32_t prologueDataAt = 0, prologueDataBytes = 0;
+    const PackPipeline *pp = nullptr;
+    const uint32_t *blob = nullptr;
+    const char *keyString = nullptr;
+    PlacedProgram vs;
+    bool caTransform = false;
 };
 
 struct RuntimeRecord;
@@ -506,6 +548,10 @@ private:
     // the first vertex a draw of vertices starts at, or the base vertex an indexed one adds to each index
     bool prepare(Pipeline *pl, uint32_t primitive, int32_t first, uint32_t vFirst, uint32_t vCount,
                  uint32_t baseInstance, bool indexed, const char **why);
+    // `pl`'s split twin where the draw is large enough for it to save time and its prologue can read what the draw binds
+    Pipeline *splitTwin(Pipeline *pl, uint32_t primitive, int32_t first, uint32_t count, const PixelBox &limit) const;
+    // the twin's draw: its frontier bound and its prologue's launch recorded (`set`: the draw's set 0)
+    void launchSplit(Push &p, const Pipeline &twin, const uint32_t *set);
     uint32_t scissor_[2] = {}, viewport_[8] = {};
     bool scissorDirty_ = true, viewportDirty_ = true;
     DepthStencilDesc ds_;
@@ -684,7 +730,13 @@ private:
     // the prologue's INVALIDATE_SHADER_CACHES_NO_WFI data word, which commit gives the INSTRUCTION bit when programs were placed
     // in the heap since the last submission that invalidated the instruction cache
     uint32_t *shaderInvalidate_ = nullptr;
+    uint32_t prologueDwords_ = 0;
+    // the split draws' prologues (RenderEncoder::launchSplit), launched in one compute segment after the submission prologue
+    std::vector<SplitLaunch> splits_;
+    // GPU work encoded before may have written a buffer: a prologue, run ahead of it, reads only what the CPU wrote
+    bool buffersWritten_ = false;
     void segment(uint32_t *from, uint32_t *to);
+    void launchPrologues();
 };
 
 class Device {
@@ -728,6 +780,8 @@ public:
     // A state the runtime made a record of (raw_record.h), drawn from then on as the pack's are; null: its programs find no room
     // in the heap or its samplers none in the header pool (`why`)
     Pipeline *addRecord(const RuntimeRecord &r, bool caTransform, std::string &why);
+    // A runtime record's split made after its state (RuntimeRecord::split): its draws may take it from then on
+    void addSplit(const RuntimeRecord &r);
 
     // Resources (thread safe). All textures are 2D, one level, one sample, pitch-linear.
     // pool memory, rows 256-byte aligned; `wc`: write-combined GPU-pool memory (a texture the CPU writes with replaceRegion:
@@ -1045,6 +1099,7 @@ public:
             zbcMisses{0};
         // compute launches encoded (raw_compute.h)
         std::atomic<uint64_t> dispatches{0};
+        std::atomic<uint64_t> splitPrologues{0};  // split draws' prologue launches (raw_split.cpp)
     } stats;
 
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
@@ -1169,6 +1224,13 @@ private:
     bool heapPlace(const uint8_t *bytes, uint32_t size, uint64_t &offset);
     void build(Pipeline &pl, const PackPipeline &pp, const PlacedProgram &vs, const PlacedProgram &fs,
                const uint32_t *blob, const char *keyString, bool caTransform);
+    // lock_ held: `pl`'s split offered, its twin made when a draw first takes it (makeSplit)
+    void offerSplit(Pipeline &pl, SplitSource &&source);
+    SplitState *makeSplit(Pipeline &pl);
+    bool placeSplitPrograms(const SplitSource &source, PlacedProgram &fs, uint32_t &prologue, uint64_t &prologueData,
+                            uint32_t &prologueDataBytes);
+    std::deque<SplitSource> splitSources_;
+    std::deque<SplitState> splitStates_;
     // The constexpr samplers' header indices, the pack's then the runtime records' (addRecord, under lock_). A slot is written
     // once, before the state that names it is published, and never moves: a draw reads it without lock_.
     static constexpr uint32_t kConstexprSamplers = 256;  // PackEntry::sampler is a byte
@@ -1200,6 +1262,8 @@ private:
     // The constexprTsc_ index of sampler header `words`: the pack's own, one a runtime record placed, or placed now (under
     // lock_); false: no room
     bool constexprSampler(const std::array<uint32_t, 8> &words, uint32_t &index);
+
+    void offerCompletedSplit(Completed &c, const RuntimeRecord &r, const PlacedProgram &vs, bool caTransform);
     bool takeTsc(uint32_t &tsc);
     const Pipeline *extrasLive_ = nullptr;  // the state whose extras (Pipeline::restore) the channel holds
     CommandBuffer cb_;

@@ -16,6 +16,7 @@
 namespace raw {
 namespace {
 
+constexpr uint8_t kSplitTried = 1, kSplit = 2;
 constexpr uint64_t kSizeLimit = 1u << 24;  // an entry larger than any record could be: a broken file
 constexpr time_t kStaleTemporarySeconds = 60;
 
@@ -183,6 +184,12 @@ std::string encodeEntry(const CacheKey &k, const RuntimeRecord *record, const st
         w.list(record->extras);
         w.list(record->restore);
         w.list(record->samplers);
+        w.value(uint8_t((record->splitTried ? kSplitTried : 0) | (record->split ? kSplit : 0)));
+        if (record->split) {
+            w.value(record->splitRecord);
+            writeProgram(w, record->splitPrograms[0]);
+            writeProgram(w, record->splitPrograms[1]);
+        }
     } else {
         w.text(refusal);
     }
@@ -211,6 +218,14 @@ RecordCache::Found decodeEntry(const std::string &bytes, const CacheKey &k, Runt
     rec.extras = r.list<std::pair<uint32_t, uint32_t>>();
     rec.restore = r.list<std::pair<uint32_t, uint32_t>>();
     rec.samplers = r.list<std::array<uint32_t, 8>>();
+    const uint8_t split = r.value<uint8_t>();
+    rec.splitTried = split & kSplitTried;
+    rec.split = split & kSplit;
+    if (rec.split) {
+        rec.splitRecord = r.value<PackSplit>();
+        rec.splitPrograms[0] = readProgram(r);
+        rec.splitPrograms[1] = readProgram(r);
+    }
     if (!r.ok() || r.at() != bytes.size() - 8)
         return RecordCache::Found::None;
     record = std::move(rec);

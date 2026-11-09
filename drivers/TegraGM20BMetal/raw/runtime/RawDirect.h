@@ -47,10 +47,10 @@ public:
     explicit Direct(PackRules rules);
 
     // The record of the state `descriptor` (of m2v's functions) describes, whose pack key is `key`; `registers`: as
-    // directRecord's
+    // directRecord's; `split`: with its fragment program's split (directRecord)
     Compiler::Outcome make(MTLRenderPipelineDescriptor *descriptor, const std::string &key, RuntimeRecord &out,
                            std::string &why, ProbeTextures textures = {},
-                           std::map<uint32_t, uint32_t> *registers = nullptr);
+                           std::map<uint32_t, uint32_t> *registers = nullptr, bool split = false);
     // The record of `descriptor`'s kernel at a dispatch of `dispatch`'s shape and bindings, whose compute key is `key`
     // (raw_direct_compute.h)
     Compiler::Outcome kernel(MTLComputePipelineDescriptor *descriptor, const NmbDirectDispatch &dispatch,
@@ -62,7 +62,7 @@ private:
 
     Compiler::Outcome form(MTLRenderPipelineDescriptor *descriptor, bool barrier, ProbeTextures textures,
                            const std::string &key, const std::vector<uint32_t> &attributes, RuntimeRecord &out,
-                           std::string &why, std::map<uint32_t, uint32_t> *registers);
+                           std::string &why, std::map<uint32_t, uint32_t> *registers, bool split);
 };
 
 }  // namespace raw

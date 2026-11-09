@@ -6,8 +6,8 @@ warm-up draw's registers (one probe draw: the context init and what NVK writes a
 state's own are laid as the probe saw them. mkpack.py's split_registers then tells the per-pipeline registers from the
 baseline, and the programs, constexpr samplers and records are laid out as mkpack.py lays out the probe's.
 
-usage: directlink.py <out dir> <bucket dir>... (rawpack.py's buckets: records.bin, its states' and kernels' records; bucket
-0's warm.out and warm.log)
+usage: directlink.py <out dir> <bucket dir>...
+(rawpack.py's buckets: records.bin holds states and kernels; bucket 0 holds warm.out and warm.log)
 writes <out dir>/pack.bin, pack.json, layouts.txt, programs.bin (every render program, for nvdec) and report.txt
 """
 
@@ -20,6 +20,7 @@ import kernels
 import mkpack
 import packfile
 import probelog
+import splits
 
 PIPELINE = struct.Struct('<QIHHIIBBBBHHI')
 # SET_PIPELINE_PROGRAM(vertex B, pixel): where each program sits in the shader heap, which the probe saw differ by state
@@ -46,6 +47,10 @@ class Reader:
 
     def done(self) -> bool:
         return self.at >= len(self.data)
+
+
+def program(r: Reader) -> dict:
+    return {'image': r.blob(), 'data': r.blob(), 'cbufs': list(r.blob())}
 
 
 def headers(blob: bytes) -> list[list[int]]:
@@ -75,8 +80,10 @@ def load_records(path: str) -> tuple[list[dict], list[dict]]:
             rec['key_string'] = r.blob().decode()
             words = struct.unpack(f'<{len(b) // 4}I', b) if (b := r.blob()) else ()
             rec['regs'] = dict(zip(words[0::2], words[1::2], strict=True))
-            rec['programs'] = [{'image': r.blob(), 'data': r.blob(), 'cbufs': list(r.blob())} for _ in range(2)]
+            rec['programs'] = [program(r) for _ in range(2)]
             rec['samplers'] = headers(r.blob())
+            if r.u32():
+                rec['split'] = {'record': r.blob(), 'programs': [program(r) for _ in range(2)]}
         states.append(rec)
     return states, kernel_recs
 
@@ -206,6 +213,19 @@ def compute_kernels(buckets: list[str], constexpr_tsc: list[list[int]], laid: tu
     return computes
 
 
+def split_programs(states: list[dict], programs: dict[str, dict]) -> dict[str, dict]:
+    """Give the states' splits by their whole program's id; their per-pixel programs and prologues join `programs`."""
+    found = {}
+    for rec in states:
+        if 'split' not in rec:
+            continue
+        fs, prologue = rec['split']['programs']
+        ids = [program_id(p) for p in (fs, prologue)]
+        programs.update(zip(ids, (fs, prologue), strict=True))
+        found[program_id(rec['programs'][1])] = splits.of_record(rec['split']['record'], *ids)
+    return found
+
+
 def write_programs(path: str, programs: dict[str, dict]) -> None:
     """Write the programs as mkprograms.py does (nvdec names a bound program by them: test/eq.sh RAWCAP_PROGRAMS)."""
     with open(path, 'wb') as f:
@@ -221,6 +241,7 @@ def main() -> None:
     init, post = mkpack.load_init(warm_log)
     states, refused = gather(buckets, warm_registers(os.path.join(warm, 'warm.out'), warm_log))
     programs = {program_id(p): p for rec in states for p in rec['programs']}
+    found = split_programs(states, programs)
     simple = [rec['probe'] for rec in states]
     report = [f'{len(states) + len(refused)} states made directly, {len(states)} records, {len(refused)} refused']
     varying, baseline = mkpack.split_registers(simple, post)
@@ -231,8 +252,10 @@ def main() -> None:
     constexpr_tsc: list[list[int]] = []
     pipes = sorted((pipeline_of(rec, varying, prog_index, constexpr_tsc) for rec in states), key=packfile.key_hash)
     computes = compute_kernels(buckets, constexpr_tsc, laid, report)
+    used = list(dict.fromkeys(prog_recs[rec['fs']]['id'] for rec in pipes))
+    split = splits.lay_out(used, found, programs, laid, report)
     init_recs = [(sc, m, d, mkpack.RELOC_CODE.get(mkpack.RELOC.get((sc, m)), 0)) for sc, m, d in init]
-    pack = packfile.Pack(pipes, prog_recs, constexpr_tsc, baseline, init_recs, heap, computes)
+    pack = packfile.Pack(pipes, prog_recs, constexpr_tsc, baseline, init_recs, heap, computes, split)
     data, blob = packfile.pack_bytes(pack)
     os.makedirs(out_dir, exist_ok=True)
     with open(os.path.join(out_dir, 'pack.bin'), 'wb') as f:
@@ -242,8 +265,8 @@ def main() -> None:
     write_programs(os.path.join(out_dir, 'programs.bin'), programs)
     report.append(
         f'pack.bin {len(data) // 1024} KiB: {len(pipes)} pipelines, {len(computes)} kernels, '
-        f'{len(prog_recs)} programs, {len(constexpr_tsc)} constexpr samplers, {len(blob)} blob dwords, '
-        f'{len(baseline)} baseline regs'
+        f'{len(prog_recs)} programs, {len(split)} splits, {len(constexpr_tsc)} constexpr samplers, '
+        f'{len(blob)} blob dwords, {len(baseline)} baseline regs'
     )
     report += [f'  refused ({rec["why"]}): {rec["key"][:150]}' for rec in refused]
     with open(os.path.join(out_dir, 'report.txt'), 'w') as f:

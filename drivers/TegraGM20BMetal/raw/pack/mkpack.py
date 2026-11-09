@@ -383,29 +383,7 @@ def lay_out_programs(
                 used.append(pid)
     heap, prog_index, prog_recs = bytearray(), {}, []
     for pid in used:
-        pr = programs[pid]
-        off = len(heap)
-        slot = bytearray(0x80 - 0x50) + pr['image'][:80]  # header at +0x30
-        slot += pr['image'][80:]  # code at +0x80
-        slot += bytes((-len(slot)) % 0x100)
-        data_offset = (
-            len(slot) if pr['data'] else 0
-        )  # NAK's shader data where NVK uploads it: 256-aligned after the code
-        slot += pr['data']
-        heap += slot
-        prog_index[pid] = len(prog_recs)
-        prog_recs.append(
-            {
-                'id': pid,
-                'heap_offset': off,
-                'program': off + 0x30,
-                'bytes': len(slot),
-                'code': len(pr['image']) - 80,
-                'cbufs': pr['cbufs'],
-                'data_offset': data_offset,
-                'data_bytes': len(pr['data']),
-            }
-        )
+        packfile.place_graphics(pid, programs, heap, prog_index, prog_recs)
     data = sum(1 for pr in prog_recs if pr['data_bytes'])
     report.append(f'{len(prog_recs)} programs ({data} with shader data), shader heap image {len(heap) // 1024} KiB')
     return heap, prog_index, prog_recs

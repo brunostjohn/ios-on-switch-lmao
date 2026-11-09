@@ -8,7 +8,9 @@
 // records.bin, little-endian, per state: "DREC", the outcome (0 made, 1 refused, 2 failed), the key and the reason (u32 length,
 // bytes), then for a made state its PackPipeline (raw_pack.h; vs 0, fs 1, no blob), its key string, its registers (u32 count,
 // method and value pairs: raw_emit's), its vertex and fragment programs (header + code, shader data, constant buffer types:
-// each a u32 length and bytes) and its constexpr sampler headers (u32 count, eight words each), which its entries number from 0.
+// each a u32 length and bytes), its constexpr sampler headers (u32 count, eight words each), which its entries number from 0,
+// and its fragment program's split: u32 0, or 1 and its PackSplit (no program indices), its per-pixel program and its prologue
+// (as the programs above; the prologue's header 80 bytes of zeros).
 // Then per compute dispatch shape (the corpus's D lines, as the kernel probe read them: kernel_shapes.h): "DKRN", the outcome,
 // its raw_compute_key.h key and the reason, then for a made kernel its PackKernel (raw_direct_compute.h; program 0), its code,
 // shader data and constant buffer types, and its sampler headers, which its sampler entries number from 0 (slot 0x80 | n).
@@ -78,12 +80,20 @@ void record(Writer &w, const std::string &key, raw::Compiler::Outcome outcome, c
         pairs.push_back(v);
     }
     w.list(pairs);
-    for (const raw::CapturedProgram &p : rec.programs) {
+    auto program = [&](const raw::CapturedProgram &p) {
         w.list(p.image);
         w.list(p.data);
         w.list(p.cbufTypes);
-    }
+    };
+    for (const raw::CapturedProgram &p : rec.programs)
+        program(p);
     w.list(rec.samplers);
+    w.u32(rec.split);
+    if (rec.split) {
+        w.bytes(&rec.splitRecord, sizeof rec.splitRecord);
+        program(rec.splitPrograms[0]);
+        program(rec.splitPrograms[1]);
+    }
 }
 
 void kernel(Writer &w, const std::string &key, raw::Compiler::Outcome outcome, const std::string &why,
@@ -133,15 +143,16 @@ int main(int argc, char **argv)
         raw::PackRules rules;
         rules.varying = raw::emittableMethods();
         raw::Direct direct(std::move(rules));
-        uint32_t made = 0, refused = 0, failed = 0;
+        uint32_t made = 0, refused = 0, failed = 0, split = 0;
         probe::eachState(dev, qc, own, standIn, probe::corpusLines(text, own != nil),
                          [&](const std::string &line, bool ours, probe::State &s) {
                              raw::RuntimeRecord rec;
                              std::map<uint32_t, uint32_t> registers;
                              std::string why;
                              const raw::Compiler::Outcome outcome =
-                                 direct.make(s.d, s.key, rec, why, probe::probeTextures(line, ours), &registers);
+                                 direct.make(s.d, s.key, rec, why, probe::probeTextures(line, ours), &registers, true);
                              record(w, s.key, outcome, why, rec, registers);
+                             split += outcome == raw::Compiler::Outcome::Made && rec.split;
                              (outcome == raw::Compiler::Outcome::Made      ? made
                               : outcome == raw::Compiler::Outcome::Refused ? refused
                                                                            : failed)++;
@@ -160,8 +171,10 @@ int main(int argc, char **argv)
             },
             [](const std::string &, const std::string &) {});
         fclose(w.f);
-        fprintf(stderr, "directpack: %u states made, %u refused, %u failed; %u kernels made, %u refused, %u failed\n",
-                made, refused, failed, kernels[0], kernels[1], kernels[2]);
+        fprintf(
+            stderr,
+            "directpack: %u states made (%u split), %u refused, %u failed; %u kernels made, %u refused, %u failed\n",
+            made, split, refused, failed, kernels[0], kernels[1], kernels[2]);
         return 0;
     }
 }

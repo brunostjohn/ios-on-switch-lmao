@@ -39,6 +39,22 @@ raw::RuntimeRecord madeUp(uint32_t n)
         r.restore = {{0x1340, 0}};
         r.samplers.push_back({n, 1, 2, 3, 4, 5, 6, 7});
     }
+    r.splitTried = n % 2 == 0;
+    if (n % 4 == 0) {
+        r.split = true;
+        r.splitRecord.thresholdPixels = 900 + n;
+        r.splitRecord.frontierBytes = 48;
+        r.splitRecord.frontierCbuf = 3;
+        r.splitRecord.uboCount = 1;
+        r.splitRecord.uboCbuf[0] = 1;
+        r.splitRecord.prologueCbufs = 3;
+        r.splitRecord.qmd[n % 64] = n;
+        for (int k = 0; k < 2; k++) {
+            r.splitPrograms[k].id = "split" + std::to_string(n * 2 + k);
+            r.splitPrograms[k].image.assign(80 + 32 * (n + 1), uint8_t(n + 7 * k));
+            r.splitPrograms[k].cbufTypes = {4, 1};
+        }
+    }
     return r;
 }
 

@@ -299,8 +299,8 @@ inline NSArray<id<MTLTexture>> *textures(id<MTLDevice> dev, const std::vector<ra
 
 inline std::string key(const Shape &s, const raw::AirHash &air)
 {
-    return raw::computeKey(air, raw::constantsText(constantValues(s.constants)), s.maxThreads, s.multipleOfWidth, s.threads, s.threadgroupMemory,
-                           raw::computeTextures(s.textures.data(), s.textures.size()),
+    return raw::computeKey(air, raw::constantsText(constantValues(s.constants)), s.maxThreads, s.multipleOfWidth,
+                           s.threads, s.threadgroupMemory, raw::computeTextures(s.textures.data(), s.textures.size()),
                            raw::computeSamplers(s.samplers.data(), s.samplers.size()));
 }
 

@@ -189,6 +189,7 @@ Compiler::Outcome compile(const NmbDirectKernel &k, const DirectNvk &nvk, Compil
                                nullptr,
                                k.stage.subgroupSize ? &subgroup : nullptr,
                                false,
+                               false,
                                0};
     if (k.stage.stage != kComputeStage) {
         why = "a stage of VkShaderStageFlags " + std::to_string(k.stage.stage);

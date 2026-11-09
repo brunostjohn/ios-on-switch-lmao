@@ -7,6 +7,8 @@ samplers, and a buffer entry's window keeps its residual word + 1 in its top byt
 
 import struct
 
+import packfile
+
 CONSTEXPR = 0x80  # PackKernelEntry.slot of a constexpr sampler: its index in the pack's constexpr samplers
 BUFFER, TEXTURE, SAMPLER = 0, 1, 2  # runtime/raw_pack.h PackKernelEntryKind
 HEAD = struct.Struct('<QIHBb')
@@ -90,6 +92,7 @@ def lay_out(kernels: list[dict], programs: dict[str, dict], heap: bytearray, pro
             prog_recs.append(
                 {
                     'id': pid,
+                    'name': packfile.program_name(pr),
                     'heap_offset': off,
                     'program': off,
                     'bytes': len(slot),
