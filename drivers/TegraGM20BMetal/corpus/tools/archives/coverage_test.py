@@ -19,6 +19,7 @@ NOT_FROM_THE_PACK = {
     'compute': "the pack keys a kernel at its dispatch's threadgroup shape, which a descriptor never names",
     'tile': 'raw makes no tile render state',
     'tessellation': 'raw makes no tessellated render state (m2v refuses its patch draws)',
+    'unspecialized': "a function lacks a constant its library requires: the archive does not record the caller's value",
     'creation': "not a vertex and a fragment function of one framework's default.metallib (or it links another "
     "library's): the runtime makes it when created, never from the pack (RawMetalStates.mm _packable)",
     'family': 'declared only for GPU families the raw device does not answer for (Apple4 and later)',

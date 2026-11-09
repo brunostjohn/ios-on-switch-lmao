@@ -252,9 +252,15 @@ py_test(
 
 py_test(
     name = "archives_test",
-    srcs = ["corpus/tools/archives/archives_test.py"],
+    srcs = [
+        "corpus/tools/archives/archives_test.py",
+        "corpus/tools/archives/declared.py",
+    ],
     main = "corpus/tools/archives/archives_test.py",
-    deps = [":archives"],
+    deps = [
+        ":archives",
+        "//tools/gpu/shaders:metallib",
+    ],
 )
 
 py_binary(
