@@ -65,7 +65,8 @@ const char *byteView(const TegraVICPicture *wide, const TegraVICSurfaceDesc *d, 
         return nullptr;
     if (wide->sampleBytes != 2)
         return "picture sample size";
-    const uint32_t video = TEGRA_VIC_FOURCC('x', '4', '2', '0'), full = TEGRA_VIC_FOURCC('x', 'f', '2', '0');
+    const uint32_t video = TEGRA_VIC_FOURCC('x', '4', '2', '0');
+    const uint32_t full = TEGRA_VIC_FOURCC('x', 'f', '2', '0');
     if (d->fourcc != video && d->fourcc != full)
         return "16-bit picture into a surface that is not 'x420' or 'xf20'";
     bytes->fourcc = d->fourcc == video ? TEGRA_VIC_FOURCC('4', '2', '0', 'v') : TEGRA_VIC_FOURCC('4', '2', '0', 'f');
