@@ -218,3 +218,10 @@ echo "built $OUT/xroracle"
 # resolveoracle: the multisample resolves against this Mac's Metal ($OUT/resolveoracle pack/resolve.metal)
 xcrun clang++ -O1 -std=c++17 -fobjc-arc "$HERE/resolveoracle.mm" -framework Metal -framework Foundation -o "$OUT/resolveoracle"
 echo "built $OUT/resolveoracle"
+# viewframe: kernels that write half-float textures, which m2v views as unsigned integers, on raw (test/viewframe.sh)
+xcrun clang++ "${OBJC[@]}" -Wall -Wextra -x objective-c++ "$HERE/viewframe.mm" "${FACADE[@]}" "$FRONT/NativeBridgeMetalFrontend.mm" \
+    -x c++ "$RAW/runtime/raw_gpu.cpp" "$RAW/runtime/raw_split.cpp" "$RAW/fx/fx_mip.cpp" "$RAW/fx/fx_image.cpp" "$RAW/runtime/raw_kernel.cpp" "$RAW/runtime/raw_alias.cpp" "$RAW/runtime/raw_arena.cpp" "$RAW/runtime/raw_pack.cpp" "$RAW/runtime/raw_ycbcr.cpp" "$RAW/runtime/raw_zeta.cpp" "$RAW/runtime/raw_comp.cpp" "$RAW/runtime/raw_completed.cpp" "$RAW/runtime/raw_compute.cpp" "${COMPLETION[@]}" "$TREE/kits/SwitchRefusal/SwitchRefusal.c" -x none "$BRIDGE" "${LIBS[@]}" \
+    -o "$OUT/viewframe" 2>&1 | awk '!/duplicate libraries/'
+xcrun -sdk iphoneos metal -c "$TREE/hw_test_app/shaders/HWTest.metal" -o "$OUT/HWTest.air"
+xcrun -sdk iphoneos metallib "$OUT/HWTest.air" -o "$OUT/HWTest.metallib"
+echo "built $OUT/viewframe $OUT/HWTest.metallib"

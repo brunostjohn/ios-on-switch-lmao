@@ -17,6 +17,7 @@
 #include "raw_stamps.h"
 #include "raw_target.h"
 #include "raw_tiled_cache.h"
+#include "raw_view.h"
 #include "TegraGM20BLayout.h"
 
 #include <CoreFoundation/CoreFoundation.h>
@@ -1171,6 +1172,12 @@ void Device::freeTic(uint32_t tic)
 {
     memcpy(tic_.cpu + 32 * tic, tic_.cpu, 32);
     freeTic_.push_back(tic);
+    const auto views = viewTics_.equal_range(tic);
+    for (auto v = views.first; v != views.second; ++v) {
+        memcpy(tic_.cpu + 32 * v->second.second, tic_.cpu, 32);
+        freeTic_.push_back(v->second.second);
+    }
+    viewTics_.erase(views.first, views.second);
 }
 
 // Texture header of a pitch-linear 2D texture (Mesa NIL nvb097_fill_image_view_desc for a linear image: HEADER_VERSION PITCH,
@@ -4143,6 +4150,26 @@ uint32_t Device::levelTic(Texture &t, uint32_t level)
         fx::mipChainTic(t.chain->layout, t.chain->va, f->tic0, f->srgb, level, 1, w);
         memcpy(tic_.cpu + 32 * tic, w, 32);  // visible at the next submission's header invalidate
     }
+    return tic;
+}
+
+uint32_t Device::viewTic(const Texture &t, uint32_t word0)
+{
+    std::lock_guard<std::mutex> l(lock_);
+    if (!t.tic)
+        return 0;
+    const auto views = viewTics_.equal_range(t.tic);
+    for (auto v = views.first; v != views.second; ++v)
+        if (v->second.first == word0)
+            return v->second.second;
+    const uint32_t tic = allocTic();
+    if (!tic)
+        return 0;
+    uint32_t own[8], w[8];
+    memcpy(own, tic_.cpu + 32 * t.tic, 32);
+    viewHeader(own, word0, w);
+    memcpy(tic_.cpu + 32 * tic, w, 32);  // visible at the next submission's header invalidate
+    viewTics_.emplace(t.tic, std::make_pair(word0, tic));
     return tic;
 }
 
