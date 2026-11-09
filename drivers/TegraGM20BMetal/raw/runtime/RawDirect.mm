@@ -22,6 +22,7 @@ struct Asked {
     const std::string &key;
     const std::vector<uint32_t> &attributes;
     RuntimeRecord &out;
+    std::map<uint32_t, uint32_t> *registers;
     std::string why;
     Compiler::Outcome outcome = Compiler::Outcome::Failed;
 };
@@ -29,22 +30,25 @@ struct Asked {
 bool made(const NmbDirectState *state, void *ctx)
 {
     Asked &a = *static_cast<Asked *>(ctx);
-    a.outcome = directRecord(*state, a.nvk, a.rules, a.key, a.attributes, a.out, a.why);
+    a.outcome = directRecord(*state, a.nvk, a.rules, a.key, a.attributes, a.out, a.why, a.registers);
     return true;
 }
 
 }  // namespace
 
-Direct::Direct(const Pack &pack)
-    : rules_(PackRules::of(pack)),
+Direct::Direct(const Pack &pack) : Direct(PackRules::of(pack))
+{}
+
+Direct::Direct(PackRules rules)
+    : rules_(std::move(rules)),
       nvk_(native_bridge_metal_nvk_symbol ? DirectNvk::find(native_bridge_metal_nvk_symbol) : DirectNvk{})
 {}
 
 Compiler::Outcome Direct::form(MTLRenderPipelineDescriptor *descriptor, bool barrier, ProbeTextures textures,
                                const std::string &key, const std::vector<uint32_t> &attributes, RuntimeRecord &out,
-                               std::string &why)
+                               std::string &why, std::map<uint32_t, uint32_t> *registers)
 {
-    Asked a = {nvk_, rules_, key, attributes, out, {}};
+    Asked a = {nvk_, rules_, key, attributes, out, registers, {}};
     const char *refused = nullptr;
     if (!native_bridge_metal_render_direct(descriptor, barrier, textures.format, textures.samples, made, &a,
                                            &refused)) {
@@ -56,7 +60,7 @@ Compiler::Outcome Direct::form(MTLRenderPipelineDescriptor *descriptor, bool bar
 }
 
 Compiler::Outcome Direct::make(MTLRenderPipelineDescriptor *descriptor, const std::string &key, RuntimeRecord &out,
-                               std::string &why, ProbeTextures textures)
+                               std::string &why, ProbeTextures textures, std::map<uint32_t, uint32_t> *registers)
 {
     if (!native_bridge_metal_render_direct || !nvk_.complete()) {
         why = "the frontend or NVK has no direct compile";
@@ -66,10 +70,10 @@ Compiler::Outcome Direct::make(MTLRenderPipelineDescriptor *descriptor, const st
     for (MTLVertexAttribute *a in descriptor.vertexFunction.vertexAttributes)
         if (a.isActive)
             attributes.push_back(uint32_t(a.attributeIndex));
-    Compiler::Outcome outcome = form(descriptor, false, textures, key, attributes, out, why);
+    Compiler::Outcome outcome = form(descriptor, false, textures, key, attributes, out, why, registers);
     if (outcome != Compiler::Outcome::Refused || why.rfind("storage form", 0) != 0)
         return outcome;
-    outcome = form(descriptor, true, textures, key, attributes, out, why);
+    outcome = form(descriptor, true, textures, key, attributes, out, why, registers);
     if (outcome == Compiler::Outcome::Made)
         out.pipeline.flags |= PipelineBarrierForm;
     return outcome;

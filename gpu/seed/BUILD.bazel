@@ -68,6 +68,7 @@ seed_tools(
     precompile = GM20B_METAL + ":precompile/precompile.mm",
     raw_generator = GM20B_METAL + ":raw/pack/rawpack.py",
     raw_srcs = [
+        GM20B_METAL + ":raw_direct_sources",
         GM20B_METAL + ":raw_pack_generator",
         METAL + ":NativeBridgeMetalFrontend.mm",
         METAL + ":frontend_headers",
