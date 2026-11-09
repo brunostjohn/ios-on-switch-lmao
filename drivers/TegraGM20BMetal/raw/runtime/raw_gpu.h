@@ -318,6 +318,7 @@ struct Sampler {
 };
 
 struct SplitState;
+struct SplitSource;
 
 struct Pipeline {
     const PackPipeline *rec = nullptr;
@@ -358,7 +359,9 @@ struct Pipeline {
     // push words setting back the registers outside the pack's varying ones its methods set (a state the runtime made:
     // raw_record.h extras), to their value in every pack state: emitted before the next state's methods
     std::vector<uint32_t> restore;
-    // where its fragment program is split (raw_split.cpp): the state again with the per-pixel program; on that twin, the split
+    // where its fragment program is split (raw_split.cpp): what its twin is made of, and the twin, made at the first draw that
+    // takes it (both read without the device's lock); on that twin, its split
+    const SplitSource *splitSource = nullptr;
     SplitState *split = nullptr;
     const SplitState *splitOf = nullptr;
 };
@@ -386,6 +389,23 @@ struct PlacedProgram {
     uint32_t program = 0;
     uint64_t data = 0;
     const uint8_t *header = nullptr;  // its shader header, as the CPU holds it
+};
+
+// What a state's split twin is made of: the pack's split (its programs by index) or a runtime record's programs, and the
+// state's own inputs to Device::build
+struct SplitSource {
+    PackSplit rec = {};
+    bool packed = false;
+    // a runtime record's programs as heap slots: the per-pixel one laid out as the pack lays one (its PackProgram at heap
+    // offset 0), the prologue's code with its shader data at prologueDataAt
+    std::vector<uint8_t> fsSlot, prologueSlot;
+    PackProgram fsInfo = {};
+    uint32_t prologueDataAt = 0, prologueDataBytes = 0;
+    const PackPipeline *pp = nullptr;
+    const uint32_t *blob = nullptr;
+    const char *keyString = nullptr;
+    PlacedProgram vs;
+    bool caTransform = false;
 };
 
 struct RuntimeRecord;
@@ -760,6 +780,8 @@ public:
     // A state the runtime made a record of (raw_record.h), drawn from then on as the pack's are; null: its programs find no room
     // in the heap or its samplers none in the header pool (`why`)
     Pipeline *addRecord(const RuntimeRecord &r, bool caTransform, std::string &why);
+    // A runtime record's split made after its state (RuntimeRecord::split): its draws may take it from then on
+    void addSplit(const RuntimeRecord &r);
 
     // Resources (thread safe). All textures are 2D, one level, one sample, pitch-linear.
     // pool memory, rows 256-byte aligned; `wc`: write-combined GPU-pool memory (a texture the CPU writes with replaceRegion:
@@ -1202,8 +1224,12 @@ private:
     bool heapPlace(const uint8_t *bytes, uint32_t size, uint64_t &offset);
     void build(Pipeline &pl, const PackPipeline &pp, const PlacedProgram &vs, const PlacedProgram &fs,
                const uint32_t *blob, const char *keyString, bool caTransform);
-    void buildSplit(Pipeline &pl, const PackPipeline &pp, const PackSplit &split, const PlacedProgram &vs,
-                    const uint32_t *blob, const char *keyString, bool caTransform);
+    // lock_ held: `pl`'s split offered, its twin made when a draw first takes it (makeSplit)
+    void offerSplit(Pipeline &pl, SplitSource &&source);
+    SplitState *makeSplit(Pipeline &pl);
+    bool placeSplitPrograms(const SplitSource &source, PlacedProgram &fs, uint32_t &prologue, uint64_t &prologueData,
+                            uint32_t &prologueDataBytes);
+    std::deque<SplitSource> splitSources_;
     std::deque<SplitState> splitStates_;
     // The constexpr samplers' header indices, the pack's then the runtime records' (addRecord, under lock_). A slot is written
     // once, before the state that names it is published, and never moves: a draw reads it without lock_.
@@ -1233,8 +1259,7 @@ private:
 
     std::map<std::string, CompletedProgram> completedPrograms_;  // by program id and constant buffer types
     bool placeCompleted(const CapturedProgram &p, PlacedProgram &out);
-    void addCompletedSplit(Pipeline &pl, const Completed &c, const RuntimeRecord &r, const PlacedProgram &vs,
-                           bool caTransform);
+    void offerCompletedSplit(Completed &c, const RuntimeRecord &r, const PlacedProgram &vs, bool caTransform);
     bool takeTsc(uint32_t &tsc);
     const Pipeline *extrasLive_ = nullptr;  // the state whose extras (Pipeline::restore) the channel holds
     CommandBuffer cb_;

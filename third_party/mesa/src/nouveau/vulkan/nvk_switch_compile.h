@@ -40,6 +40,11 @@ struct switch_nvk_stage_info {
    const void *stage_pnext;
    /* The fragment library's multisample state */
    bool sample_shading;
+   /* A fragment stage's split for the raw path too (nvk_switch_split.h): it
+    * compiles the stage about twice over, which the device does off the
+    * state's creation
+    */
+   bool split;
    /* The colour attachments of a 16-bit float format (bit j: attachment j),
     * whose float outputs the fragment program rounds to nearest even
     * (nvk_switch_round.h)

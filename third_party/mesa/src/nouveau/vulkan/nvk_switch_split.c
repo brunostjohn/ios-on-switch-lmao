@@ -39,6 +39,18 @@
  */
 #define SWITCH_SPLIT_PIXELS_PER_CYCLE 256
 
+_Thread_local bool switch_nvk_split_current;
+
+bool
+switch_nvk_split_wanted(void)
+{
+#if defined(__APPLE__) && TARGET_OS_OSX
+   return true;
+#else
+   return switch_nvk_split_current;
+#endif
+}
+
 /* The host twin's proof (nvk_switch_split_proof.c): none on the device */
 static unsigned
 proof_samples(void)

@@ -739,9 +739,17 @@ Pipeline *Device::pipeline(uint64_t keyHash, PackForm form, bool caTransform)
         return nullptr;
     }
     build(pl, pp, vs, fs, pack_.section<uint32_t>(PackBlob) + pp.blob, pack_.string(pp.keyString), caTransform);
-    if (const PackSplit *split = pack_.split(pp.fs))
-        buildSplit(pl, pp, *split, vs, pack_.section<uint32_t>(PackBlob) + pp.blob, pack_.string(pp.keyString),
-                   caTransform);
+    if (const PackSplit *split = pack_.split(pp.fs)) {
+        SplitSource source;
+        source.rec = *split;
+        source.packed = true;
+        source.pp = &pp;
+        source.blob = pack_.section<uint32_t>(PackBlob) + pp.blob;
+        source.keyString = pack_.string(pp.keyString);
+        source.vs = vs;
+        source.caTransform = caTransform;
+        offerSplit(pl, std::move(source));
+    }
     return &pl;
 }
 
@@ -3396,8 +3404,7 @@ bool RenderEncoder::prepare(Pipeline *pl, uint32_t primitive, int32_t first, uin
     const bool empty = vp_[2] == 0 || vp_[3] == 0;
     axis(vp_[0], empty ? 0 : vp_[2], areaW_, sc_[0], sc_[0] + sc_[2], x);
     axis(vp_[1], empty ? 0 : vp_[3], areaH_, sc_[1], sc_[1] + sc_[3], y);
-    if (pl->split)
-        pl = splitTwin(pl, primitive, first, indexed ? drawIndexCount_ : count, {x[0], y[0], x[1], y[1]});
+    pl = splitTwin(pl, primitive, first, indexed ? drawIndexCount_ : count, {x[0], y[0], x[1], y[1]});
     if (!whole_) {
         if (x[1] > x[0] && y[1] > y[0]) {
             const std::array<uint32_t, 4> r = {x[0], y[0], x[1], y[1]};

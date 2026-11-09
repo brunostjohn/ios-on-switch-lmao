@@ -152,10 +152,9 @@ TEST(SlmOwned, EveryPlacedProgramGetsTheAreaBeforeItsBind)
     const std::string completed = SourceText("../raw/runtime/raw_completed.cpp");
     EXPECT_THAT(Body(completed, "bool Device::placeCompleted(const CapturedProgram &p, PlacedProgram &out)"),
                 HasSubstr("slmNeed(slmPerWarpOfHeader(p.image.data()))"));
-    const std::string runtimeSplit = Body(completed, "void Device::addCompletedSplit(");
-    EXPECT_LT(at(runtimeSplit, "slmNeed(slmPerWarpOfQmd(r.splitRecord.qmd))"), at(runtimeSplit, "build(s.pipeline,"));
-    const std::string split = Body(SourceText("../raw/runtime/raw_split.cpp"), "void Device::buildSplit(");
-    EXPECT_LT(at(split, "slmNeed(std::max(slmPerWarpOfHeader(fs.header), slmPerWarpOfQmd(split.qmd)))"),
+    const std::string split =
+        Body(SourceText("../raw/runtime/raw_split.cpp"), "SplitState *Device::makeSplit(Pipeline &pl)");
+    EXPECT_LT(at(split, "slmNeed(std::max(slmPerWarpOfHeader(fs.header), slmPerWarpOfQmd(source->rec.qmd)))"),
               at(split, "build(s.pipeline,"));
     const std::string compute = SourceText("../raw/runtime/raw_compute.cpp");
     EXPECT_THAT(Body(compute, "const ComputeState *computeState(Device &dev, uint64_t keyHash)"),

@@ -36,34 +36,39 @@ bool Device::placeCompleted(const CapturedProgram &p, PlacedProgram &out)
     return true;
 }
 
-// lock_ held: a runtime record's split (RuntimeRecord::split), its per-pixel program placed as a 3D program and its prologue
-// as a kernel (code at its slot's start, shader data 256-aligned after), and the twin of `pl` built; none where the heap or
-// local memory has no room for them (the state draws whole)
-void Device::addCompletedSplit(Pipeline &pl, const Completed &c, const RuntimeRecord &r, const PlacedProgram &vs,
-                               bool caTransform)
+// lock_ held: a runtime record's split offered to its state (RuntimeRecord::split; the prologue's image an 80-byte header of
+// zeros before its code), its programs laid out as heap slots for the draw that first takes it
+void Device::offerCompletedSplit(Completed &c, const RuntimeRecord &r, const PlacedProgram &vs, bool caTransform)
 {
     const CapturedProgram &prologue = r.splitPrograms[1];
-    PlacedProgram fs;
-    if (prologue.image.size() <= 80 || !placeCompleted(r.splitPrograms[0], fs) ||
-        !slmNeed(slmPerWarpOfQmd(r.splitRecord.qmd)))
+    if (prologue.image.size() <= 80 || r.splitPrograms[0].image.size() < sizeof CompletedProgram::header)
         return;
-    std::vector<uint8_t> slot(prologue.image.begin() + 80, prologue.image.end());
-    slot.resize((slot.size() + 0xFF) & ~size_t(0xFF));
-    const size_t dataAt = slot.size();
-    slot.insert(slot.end(), prologue.data.begin(), prologue.data.end());
-    uint64_t at = 0;
-    if (!heapPlace(slot.data(), uint32_t(slot.size()), at))
-        return;
-    stats.programsPlaced++;
-    SplitState &s = splitStates_.emplace_back();
-    s.rec = r.splitRecord;
-    s.prologue = uint32_t(at);
-    s.prologueData = prologue.data.empty() ? 0 : heap_.va + at + dataAt;
-    s.prologueDataBytes = uint32_t(std::min<size_t>(prologue.data.size(), 0x10000));
-    build(s.pipeline, c.record, vs, fs, c.blob.data(), c.keyString.c_str(), caTransform);
-    s.pipeline.restore = pl.restore;
-    s.pipeline.splitOf = &s;
-    pl.split = &s;
+    SplitSource source;
+    source.rec = r.splitRecord;
+    source.fsSlot = programSlot(r.splitPrograms[0], source.fsInfo);
+    source.prologueSlot.assign(prologue.image.begin() + 80, prologue.image.end());
+    source.prologueSlot.resize((source.prologueSlot.size() + 0xFF) & ~size_t(0xFF));
+    source.prologueDataAt = uint32_t(source.prologueSlot.size());
+    source.prologueDataBytes = uint32_t(prologue.data.size());
+    source.prologueSlot.insert(source.prologueSlot.end(), prologue.data.begin(), prologue.data.end());
+    source.pp = &c.record;
+    source.blob = c.blob.data();
+    source.keyString = c.keyString.c_str();
+    source.vs = vs;
+    source.caTransform = caTransform;
+    offerSplit(c.pipeline, std::move(source));
+}
+
+void Device::addSplit(const RuntimeRecord &r)
+{
+    std::lock_guard<std::mutex> l(lock_);
+    for (Completed &c : completedStore_)
+        if (c.record.keyHash == r.pipeline.keyHash && !c.pipeline.splitSource && !c.pipeline.split && r.split) {
+            PlacedProgram vs;
+            if (placeCompleted(r.programs[0], vs))
+                offerCompletedSplit(c, r, vs, c.pipeline.caTransform);
+            return;
+        }
 }
 
 Pipeline *Device::addRecord(const RuntimeRecord &r, bool caTransform, std::string &why)
@@ -115,7 +120,7 @@ Pipeline *Device::addRecord(const RuntimeRecord &r, bool caTransform, std::strin
         w.m(m, v);
     stored.pipeline.restore.assign(words.data(), w.at);
     if (r.split)
-        addCompletedSplit(stored.pipeline, stored, r, vs, caTransform);
+        offerCompletedSplit(stored, r, vs, caTransform);
     completed_[key] = &stored.pipeline;
     return &stored.pipeline;
 }

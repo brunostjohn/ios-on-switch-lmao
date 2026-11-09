@@ -594,7 +594,7 @@ nvk_compile_nir(struct nvk_device *dev, nir_shader *nir,
       robust2_modes |= nir_var_mem_ssbo;
 
    nir_shader *split_src = NULL;
-   if (nir->info.stage == MESA_SHADER_FRAGMENT)
+   if (nir->info.stage == MESA_SHADER_FRAGMENT && switch_nvk_split_wanted())
       split_src = nir_shader_clone(NULL, nir);
 
    shader->nak = nak_compile_shader(nir, dump_asm, pdev->nak,

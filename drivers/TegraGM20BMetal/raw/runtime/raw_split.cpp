@@ -45,42 +45,84 @@ int pixelUboEntry(const Pipeline &pl, uint8_t slot)
 
 }  // namespace
 
-// lock_ held: `pl`'s twin of split `split` with its programs placed; none where the heap or local memory has no room for them
-// (the state draws whole)
-void Device::buildSplit(Pipeline &pl, const PackPipeline &pp, const PackSplit &split, const PlacedProgram &vs,
-                        const uint32_t *blob, const char *keyString, bool caTransform)
+void Device::offerSplit(Pipeline &pl, SplitSource &&source)
 {
-    const PackProgram *progs = pack_.section<PackProgram>(PackPrograms);
+    splitSources_.push_back(std::move(source));
+    __atomic_store_n(&pl.splitSource, &splitSources_.back(), __ATOMIC_RELEASE);
+}
+
+bool Device::placeSplitPrograms(const SplitSource &source, PlacedProgram &fs, uint32_t &prologue,
+                                uint64_t &prologueData, uint32_t &prologueDataBytes)
+{
+    if (source.packed) {
+        const PackProgram *progs = pack_.section<PackProgram>(PackPrograms);
+        if (!place(source.rec.fs, fs.program, fs.data) || !place(source.rec.prologue, prologue, prologueData))
+            return false;
+        fs.record = &progs[source.rec.fs];
+        fs.header = pack_.section<uint8_t>(PackHeap) + progs[source.rec.fs].program;
+        prologueDataBytes = std::min(progs[source.rec.prologue].dataBytes, kMaxCbufBytes);
+        return true;
+    }
+    uint64_t pixel = 0, compute = 0;
+    if (!heapPlace(source.fsSlot.data(), uint32_t(source.fsSlot.size()), pixel) ||
+        !heapPlace(source.prologueSlot.data(), uint32_t(source.prologueSlot.size()), compute))
+        return false;
+    stats.programsPlaced += 2;
+    fs.record = &source.fsInfo;
+    fs.program = uint32_t(pixel) + source.fsInfo.program;
+    fs.data = source.fsInfo.dataBytes ? heap_.va + pixel + source.fsInfo.dataOffset : 0;
+    fs.header = source.fsSlot.data() + source.fsInfo.program;
+    prologue = uint32_t(compute);
+    prologueData = source.prologueDataBytes ? heap_.va + compute + source.prologueDataAt : 0;
+    prologueDataBytes = std::min(source.prologueDataBytes, kMaxCbufBytes);
+    return true;
+}
+
+// `pl`'s twin, made once, at its first draw that takes it: the pack's states and the runtime's records only offer theirs
+// (offerSplit), so a split no draw is large enough for takes no heap. None where the heap or local memory has no room (the
+// state draws whole from then on).
+SplitState *Device::makeSplit(Pipeline &pl)
+{
+    std::lock_guard<std::mutex> l(lock_);
+    if (pl.split)
+        return pl.split;
+    const SplitSource *source = pl.splitSource;
+    if (!source)
+        return nullptr;
     PlacedProgram fs;
-    uint32_t prologue = 0;
+    uint32_t prologue = 0, prologueDataBytes = 0;
     uint64_t prologueData = 0;
-    if (!place(split.fs, fs.program, fs.data) || !place(split.prologue, prologue, prologueData))
-        return;
-    fs.record = &progs[split.fs];
-    fs.header = pack_.section<uint8_t>(PackHeap) + progs[split.fs].program;
-    if (!slmNeed(std::max(slmPerWarpOfHeader(fs.header), slmPerWarpOfQmd(split.qmd))))
-        return;
+    if (!placeSplitPrograms(*source, fs, prologue, prologueData, prologueDataBytes) ||
+        !slmNeed(std::max(slmPerWarpOfHeader(fs.header), slmPerWarpOfQmd(source->rec.qmd)))) {
+        stats.heapFull++;
+        __atomic_store_n(&pl.splitSource, nullptr, __ATOMIC_RELEASE);
+        return nullptr;
+    }
     SplitState &s = splitStates_.emplace_back();
-    s.rec = split;
+    s.rec = source->rec;
     s.prologue = prologue;
     s.prologueData = prologueData;
-    s.prologueDataBytes = std::min(progs[split.prologue].dataBytes, kMaxCbufBytes);
-    build(s.pipeline, pp, vs, fs, blob, keyString, caTransform);
+    s.prologueDataBytes = prologueDataBytes;
+    build(s.pipeline, *source->pp, source->vs, fs, source->blob, source->keyString, source->caTransform);
+    s.pipeline.restore = pl.restore;
     s.pipeline.splitOf = &s;
-    pl.split = &s;
+    __atomic_store_n(&pl.split, &s, __ATOMIC_RELEASE);
+    return &s;
 }
 
 Pipeline *RenderEncoder::splitTwin(Pipeline *pl, uint32_t primitive, int32_t first, uint32_t count,
                                    const PixelBox &limit) const
 {
-    const SplitState &s = *pl->split;
+    const SplitSource *source = __atomic_load_n(&pl->splitSource, __ATOMIC_ACQUIRE);
+    if (!source)
+        return pl;
     PixelBox box;
     if (!WrittenRegion::bounds(geometry(*pl, primitive, first, count, limit), box))
         box = limit;
-    if (box.empty() || uint64_t(box.x1 - box.x0) * (box.y1 - box.y0) < s.rec.thresholdPixels)
+    if (box.empty() || uint64_t(box.x1 - box.x0) * (box.y1 - box.y0) < source->rec.thresholdPixels)
         return pl;
-    for (uint8_t k = 0; k < s.rec.uboCount; k++) {
-        const int entry = pixelUboEntry(s.pipeline, s.rec.uboCbuf[k]);
+    for (uint8_t k = 0; k < source->rec.uboCount; k++) {
+        const int entry = pixelUboEntry(*pl, source->rec.uboCbuf[k]);
         if (entry < 0)
             return pl;
         const PackEntry &e = pl->rec->entry[entry];
@@ -88,7 +130,10 @@ Pipeline *RenderEncoder::splitTwin(Pipeline *pl, uint32_t primitive, int32_t fir
         if (!b.va || (b.buffer && cb_->buffersWritten_))
             return pl;
     }
-    return &pl->split->pipeline;
+    SplitState *s = __atomic_load_n(&pl->split, __ATOMIC_ACQUIRE);
+    if (!s)
+        s = dev_->makeSplit(*pl);
+    return s ? &s->pipeline : pl;
 }
 
 void RenderEncoder::launchSplit(Push &p, const Pipeline &twin, const uint32_t *set)
@@ -151,7 +196,9 @@ void CommandBuffer::launchPrologues()
     p.m(INVALIDATE_SHADER_CACHES_NO_WFI_3D, kInvalidateData | kInvalidateConstant);
     d.stats.uploadBytes += uint64_t(splits_.size()) * sizeof(PackSplit::qmd);
     d.stats.pushBytes += uint64_t(p.at - start) * 4;
+#if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
     d.stats.splitPrologues += splits_.size();
+#endif
     // the submission prologue may share segments_[0] with what followed it in the ring
     const TegraGM20BAbiPush head = segments_[0];
     segments_[0].dwords = prologueDwords_;
