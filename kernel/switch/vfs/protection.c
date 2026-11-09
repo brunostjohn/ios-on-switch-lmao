@@ -175,8 +175,7 @@ int switch_protection_setattr_end(vnode_t vp, int32_t pclass, vfs_context_t ctx)
     return pclass == PROTECTION_CLASS_DEFAULT ? 0 : switch_protection_relabel(vp, pclass, ctx);
 }
 
-void switch_protection_getattr(mount_t mp, vnode_t vp, uint32_t commonattr, struct vnode_attr *vap,
-                               vfs_context_t ctx)
+void switch_protection_getattr(mount_t mp, vnode_t vp, uint32_t commonattr, struct vnode_attr *vap, vfs_context_t ctx)
 {
     if (!(commonattr & ATTR_CMN_DATA_PROTECT_FLAGS) || !VATTR_IS_ACTIVE(vap, va_dataprotect_class) || mp == NULL) {
         return;
@@ -225,23 +224,23 @@ int switch_protection_listxattr(vnode_t vp, uio_t uio, size_t *size, int options
     if (!switch_protection_volume(vp) || switch_protection_label(vp, &label, ctx) == ENOATTR) {
         return vn_listxattr(vp, uio, size, options, ctx);
     }
-    size_t total = 0;
-    int error = vn_listxattr(vp, NULL, &total, options, ctx);
-    if (error || total == 0) {
+    size_t names_size = 0;
+    int error = vn_listxattr(vp, NULL, &names_size, options, ctx);
+    if (error || names_size == 0) {
         return error ? error : vn_listxattr(vp, uio, size, options, ctx);
     }
-    char *names = kalloc_data(total, Z_WAITOK);
+    char *names = kalloc_data(names_size, Z_WAITOK);
     if (names == NULL) {
         return ENOMEM;
     }
     UIO_STACKBUF(uio_buf, 1);
     uio_t names_uio = uio_createwithbuffer(1, 0, UIO_SYSSPACE, UIO_READ, uio_buf, sizeof(uio_buf));
-    uio_addiov(names_uio, CAST_USER_ADDR_T(names), total);
+    uio_addiov(names_uio, CAST_USER_ADDR_T(names), names_size);
     size_t listed = 0;
     error = vn_listxattr(vp, names_uio, &listed, options, ctx);
     if (!error) {
-        const size_t length = switch_protection_hide(names, total - (size_t)uio_resid(names_uio),
-                                                     SWITCH_PROTECTION_XATTR);
+        const size_t length =
+            switch_protection_hide(names, names_size - (size_t)uio_resid(names_uio), SWITCH_PROTECTION_XATTR);
         if (uio == NULL) {
             *size = length;
         } else if (length > (size_t)uio_resid(uio)) {
@@ -250,6 +249,6 @@ int switch_protection_listxattr(vnode_t vp, uio_t uio, size_t *size, int options
             error = uiomove(names, (int)length, uio);
         }
     }
-    kfree_data(names, total);
+    kfree_data(names, names_size);
     return error;
 }

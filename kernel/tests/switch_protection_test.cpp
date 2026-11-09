@@ -105,10 +105,11 @@ TEST(SwitchProtection, TheLabelIsInTheNamespaceUserlandCannotTouch)
 TEST(SwitchProtection, SetattrlistLabelsAfterAuthorizationAndTheMacCheck)
 {
     const std::string body = Body(Text(VFS_ATTRLIST_12377), "\nsetattrlist_internal(vnode_t vp,");
-    const size_t unpack = body.find("ATTR_UNPACK(va.va_dataprotect_class);\n"
-                                    "\t\tVATTR_SET_ACTIVE(&va, va_dataprotect_class);\n"
-                                    "#if CONFIG_MACF\n"
-                                    "\t\tif ((error = mac_vnode_check_dataprotect_set(ctx, vp, &va.va_dataprotect_class)))");
+    const size_t unpack =
+        body.find("ATTR_UNPACK(va.va_dataprotect_class);\n"
+                  "\t\tVATTR_SET_ACTIVE(&va, va_dataprotect_class);\n"
+                  "#if CONFIG_MACF\n"
+                  "\t\tif ((error = mac_vnode_check_dataprotect_set(ctx, vp, &va.va_dataprotect_class)))");
     const size_t authorize = body.find("vnode_authorize(vp, NULL, action, ctx)");
     const size_t begin = body.find("switch_protection_setattr_begin(vp, &va, &switch_class, ctx)");
     const size_t setattr = body.find("vnode_setattr(vp, &va, ctx)");
@@ -152,7 +153,8 @@ TEST(SwitchProtection, ACreateWhoseLabelFailsFails)
 TEST(SwitchProtection, BulkClassRequestsOnDataGoThroughGetattrlist)
 {
     const std::string body = Body(Text(VFS_ATTRLIST_12377), "\ngetattrlistbulk(proc_t p,");
-    const size_t fallback = body.find("|| switch_protection_bulk_by_entry(dvp, al.commonattr)) {\n\t\terror = ENOTSUP;");
+    const size_t fallback =
+        body.find("|| switch_protection_bulk_by_entry(dvp, al.commonattr)) {\n\t\terror = ENOTSUP;");
     EXPECT_NE(fallback, std::string::npos);
     EXPECT_LT(fallback, body.find("VNOP_GETATTRLISTBULK(dvp,"));
 }

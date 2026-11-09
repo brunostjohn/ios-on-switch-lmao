@@ -12,10 +12,10 @@
 #include <string.h>
 
 /* sys/content_protection.h's values; protection.c checks that they agree. */
-#define SWITCH_PROTECTION_DEFAULT (-1)
+#define SWITCH_PROTECTION_DEFAULT  (-1)
 #define SWITCH_PROTECTION_DIR_NONE 0
-#define SWITCH_PROTECTION_C 3
-#define SWITCH_PROTECTION_D 4
+#define SWITCH_PROTECTION_C        3
+#define SWITCH_PROTECTION_D        4
 
 /* xattr_protected's namespace: userland can neither read, set, remove nor (listxattr hides it) see the label. */
 #define SWITCH_PROTECTION_XATTR "com.apple.system.switch.protection-class"
