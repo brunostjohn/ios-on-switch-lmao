@@ -7,6 +7,7 @@
 from tools.devicerun.apps import APPS
 from tools.devicerun.audio import AUDIO
 from tools.devicerun.hwtest import HWTEST
+from tools.devicerun.joycon import JOYCON
 from tools.devicerun.lockscreen import LOCKSCREEN
 from tools.devicerun.morning import MORNING
 from tools.devicerun.protection import PROTECTION
@@ -686,64 +687,7 @@ GROUPS: dict[str, list[Check]] = {
             note='GPU KiB live; boot 15 peaked at 1.18 GB (backboardd) with 1.5 GB wired, pushing file pages out',
         ),
     ],
-    'joycon': [
-        # Every attach reads the Joy-Con's pairing log and says what its slot in use holds.
-        Check(
-            'joycon.slot-read',
-            'r108-btpair',
-            'SwitchJoyCon: Joy-Con',
-            'count >= 1',
-            process=KERNEL,
-            regex=r'(?:slot (?P<slot>\d+) in use names (?P<host>[0-9a-f:]+), '
-            r'host capability (?P<caps>0x[0-9a-f]+)|no slot in use)',
-            show=('slot', 'host', 'caps'),
-            source='drivers/SwitchJoyCon/SwitchJoyConRail.cpp finishPairing',
-        ),
-        # Every attach pairs the Joy-Con over the rail: one whose slot already named the console, left as it was, never
-        # paged after a detach (boot 17).
-        Check(
-            'joycon.pairing-skipped',
-            'r108-btexchange',
-            'SwitchJoyCon: Joy-Con',
-            process=KERNEL,
-            regex=r'paired to [0-9a-f:]+ (?!over the rail)',
-            needs='joycon.slot-read',
-            source='drivers/SwitchJoyCon/SwitchJoyConRail.cpp finishPairing',
-        ),
-        Check(
-            'joycon.detached',
-            'r108-btpair',
-            'on the rail stopped answering',
-            REPORT,
-            process=KERNEL,
-            source='drivers/SwitchJoyCon/SwitchJoyConRail.cpp tick',
-        ),
-        # A Joy-Con off the rail pages the console (a host page to it times out unless it is in sync mode).
-        Check(
-            'joycon.bt-paged',
-            'r108-btpair',
-            'link <- Connection Request',
-            'count >= 1',
-            process=KERNEL,
-            regex=r'Connection Request (?P<address>[0-9a-f:]+) class 000508',
-            show=('address',),
-            needs='joycon.detached',
-            source='drivers/SwitchBluetooth/SwitchBluetoothLinks.h',
-            note='boot 16: R and L paged at 04:05 after a button press',
-        ),
-        # bluetoothd without a key for a device that connected: a first pairing in Settings, or a Joy-Con whose rail key
-        # joyconpaird did not hand over.
-        Check(
-            'joycon.bt-key-missing',
-            'r108-btpair',
-            'link -> Link Key Request Negative Reply',
-            REPORT,
-            process=KERNEL,
-            regex=r'Negative Reply (?P<address>[0-9a-f:]+)',
-            show=('address',),
-            source='drivers/SwitchBluetooth/SwitchBluetoothLinks.h',
-        ),
-    ],
+    'joycon': JOYCON,
     'apps': APPS,
     'wifi': [
         Check(

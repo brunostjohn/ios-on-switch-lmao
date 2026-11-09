@@ -13,6 +13,7 @@ py_library(
         "checks.py",
         "devicerun.py",
         "hwtest.py",
+        "joycon.py",
         "lockscreen.py",
         "morning.py",
         "protection.py",
@@ -93,5 +94,13 @@ py_test(
     name = "apps_test",
     size = "small",
     srcs = ["apps_test.py"],
+    deps = [":lib"],
+)
+
+# joycon.py's checks over boot 18's Joy-Con lines.
+py_test(
+    name = "joycon_test",
+    size = "small",
+    srcs = ["joycon_test.py"],
     deps = [":lib"],
 )
