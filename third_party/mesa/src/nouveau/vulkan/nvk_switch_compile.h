@@ -16,11 +16,11 @@
 
 #include <vulkan/vulkan_core.h>
 
+#include "nvk_switch_split.h"
+
 #ifdef __cplusplus
 extern "C" {
 #endif
-
-struct switch_nvk_split;
 
 struct switch_nvk_stage_info {
    const uint32_t *spirv;
@@ -75,6 +75,26 @@ VkResult switch_nvk_compile_stage(VkDevice device,
                                   const struct switch_nvk_stage_info *info,
                                   struct switch_nvk_stage *out);
 void switch_nvk_stage_finish(VkDevice device, struct switch_nvk_stage *stage);
+
+/* A stage's split as the raw path records one: its per-pixel program and its
+ * prologue as stages (the prologue's header zeros, as programs.bin holds a
+ * kernel's; neither owns anything), its layout, QMD and threshold
+ */
+struct switch_nvk_split_parts {
+   struct switch_nvk_stage fs;
+   struct switch_nvk_stage prologue;
+   struct switch_nvk_split_layout layout;
+   uint32_t qmd[64];
+   uint32_t threshold_pixels;
+};
+
+void switch_nvk_split_parts(const struct switch_nvk_split *split,
+                            struct switch_nvk_split_parts *out);
+
+/* sizeof switch_nvk_stage_info, switch_nvk_stage and switch_nvk_split_parts:
+ * the plugin's copies of them are checked against these
+ */
+void switch_nvk_compile_abi(uint32_t sizes[3]);
 
 /* Where a descriptor set layout's binding lives in a set's descriptor buffer */
 struct switch_nvk_set_binding {

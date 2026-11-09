@@ -2,7 +2,8 @@
 // The raw device's completion of the states its pack lacks (RawMetal.mm), of any library's functions: each asked once per
 // process and per build. A state is looked up in the record cache under the process's shader cache directory when it is created
 // (made()), else made directly (RawDirect.h: m2v's translation and NVK's stage compile, no pipeline or capture), its record kept,
-// and handed to the raw device; for a state it refuses, m2v draws it.
+// and handed to the raw device; for a state it refuses, m2v draws it. Its fragment program's split, which costs about one more
+// compile of that stage, is made after, off its creation: offered to the state and kept with its record.
 #pragma once
 #import <Metal/Metal.h>
 #include <dispatch/dispatch.h>
@@ -10,6 +11,7 @@
 #include <map>
 #include <memory>
 #include <mutex>
+#include <set>
 #include <string>
 #include "raw_compiler.h"
 #include "raw_metallib.h"
@@ -52,12 +54,15 @@ private:
     std::unique_ptr<Direct> direct_;
     std::once_flag directMade_;  // make() runs on the compile queue and on creating threads at once
     uint64_t stack_;
-    dispatch_queue_t queue_;
+    dispatch_queue_t queue_, splitQueue_;
     std::mutex lock_;
     std::map<uint64_t, Ask> asked_;  // by CacheKey::name, what make() makes
+    std::set<uint64_t> splitAsked_;  // by CacheKey::name, the states whose split splitLater made or is making
 
     bool keyOf(Ask &a, CacheKey &k);
+    Direct &direct();
     Compiler::Outcome make(const CacheKey &k, RuntimeRecord &record, std::string &why);
+    void splitLater(const CacheKey &k, const RuntimeRecord &record);
 };
 
 }  // namespace raw
