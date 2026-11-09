@@ -4,6 +4,7 @@
 'timeline' checks are INFO: open issues whose count is the baseline for their fix, and manual steps to read in order.
 """
 
+from tools.devicerun.audio import AUDIO
 from tools.devicerun.hwtest import HWTEST
 from tools.devicerun.lockscreen import LOCKSCREEN
 from tools.devicerun.morning import MORNING
@@ -243,6 +244,16 @@ GROUPS: dict[str, list[Check]] = {
             process=KERNEL,
             regex='fault',
             source='drivers/TegraGM20B/gpu.c (nvkm fault reports)',
+        ),
+        Check(
+            'gpu.pbentry',
+            'r121-crashgpu',
+            '[PBENTRY] ch ',
+            process=KERNEL,
+            regex=r'\.gpu: fifo: PBDMA\d: \w+ \[PBENTRY\] ch \d+ \[\w+ (?P<who>[^\]]+)\]',
+            show=('who',),
+            source='drivers/TegraGM20B/gpu.c (nvkm PBDMA interrupt)',
+            note='the GPU fetched a zero push word; boot 15: MercuryPosterExt x76, its raw push ring a system BO',
         ),
     ],
     'display': [
@@ -632,6 +643,65 @@ GROUPS: dict[str, list[Check]] = {
             note='GPU KiB live; boot 15 peaked at 1.18 GB (backboardd) with 1.5 GB wired, pushing file pages out',
         ),
     ],
+    'joycon': [
+        # Every attach reads the Joy-Con's pairing log and says what its slot in use holds.
+        Check(
+            'joycon.slot-read',
+            'r108-btpair',
+            'SwitchJoyCon: Joy-Con',
+            'count >= 1',
+            process=KERNEL,
+            regex=r'(?:slot (?P<slot>\d+) in use names (?P<host>[0-9a-f:]+), '
+            r'host capability (?P<caps>0x[0-9a-f]+)|no slot in use)',
+            show=('slot', 'host', 'caps'),
+            source='drivers/SwitchJoyCon/SwitchJoyConRail.cpp finishPairing',
+        ),
+        # A Joy-Con whose slot in use already names this console (paired by the rail, Horizon or Settings) is not
+        # paired again: boot 16 rewrote it at every attach and lost a Settings pairing.
+        Check(
+            'joycon.pairing-rewritten',
+            'r108-btpair',
+            'written over the rail',
+            regex=r'paired to (?P<host>[0-9a-f:]+) \(written over the rail; slot \d+ in use names (?P=host),',
+            process=KERNEL,
+            needs='joycon.slot-read',
+            source='drivers/SwitchJoyCon/SwitchJoyConRail.cpp finishPairing',
+        ),
+        Check(
+            'joycon.detached',
+            'r108-btpair',
+            'on the rail stopped answering',
+            REPORT,
+            process=KERNEL,
+            source='drivers/SwitchJoyCon/SwitchJoyConRail.cpp tick',
+        ),
+        # A Joy-Con off the rail pages the console (a host page to it times out unless it is in sync mode).
+        Check(
+            'joycon.bt-paged',
+            'r108-btpair',
+            'link <- Connection Request',
+            'count >= 1',
+            process=KERNEL,
+            regex=r'Connection Request (?P<address>[0-9a-f:]+) class 000508',
+            show=('address',),
+            needs='joycon.detached',
+            source='drivers/SwitchBluetooth/SwitchBluetoothLinks.h',
+            note='boot 16: R and L paged at 04:05 after a button press',
+        ),
+        # bluetoothd without a key for a device that connected: a first pairing in Settings, or a Joy-Con whose rail key
+        # joyconpaird did not hand over.
+        Check(
+            'joycon.bt-key-missing',
+            'r108-btpair',
+            'link -> Link Key Request Negative Reply',
+            REPORT,
+            process=KERNEL,
+            regex=r'Negative Reply (?P<address>[0-9a-f:]+)',
+            show=('address',),
+            source='drivers/SwitchBluetooth/SwitchBluetoothLinks.h',
+        ),
+    ],
+    'audio': AUDIO,
     'gpu-morning': MORNING,
     'hwtest': HWTEST,
     'lockscreen': LOCKSCREEN,

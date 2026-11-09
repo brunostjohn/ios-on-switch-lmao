@@ -8,6 +8,7 @@ lint_files()
 py_library(
     name = "lib",
     srcs = [
+        "audio.py",
         "checks.py",
         "devicerun.py",
         "hwtest.py",
@@ -50,6 +51,14 @@ py_test(
     name = "raw_stats_test",
     size = "small",
     srcs = ["raw_stats_test.py"],
+    deps = [":lib"],
+)
+
+# audio.py's checks over boot 16's audiomxd lines.
+py_test(
+    name = "audio_test",
+    size = "small",
+    srcs = ["audio_test.py"],
     deps = [":lib"],
 )
 
