@@ -14,6 +14,16 @@ namespace {
 
 constexpr uint64_t kCacheCap = 8u << 20;
 
+// A compute key (raw_compute_key.h) with its function constants moved last: a log line cut short keeps its shape and bindings
+std::string constantsLast(const std::string &key)
+{
+    const size_t constants = key.find(" | "), shape = key.find(" | max=");
+    if (constants == std::string::npos || shape == std::string::npos || shape < constants)
+        return key;
+    return key.substr(0, constants) + key.substr(shape) + " | constants" +
+           key.substr(constants + 2, shape - constants - 2);
+}
+
 }  // namespace
 
 Completion::Completion(Device &device, const char *cacheDir, uint64_t stack)
@@ -201,8 +211,12 @@ const ComputeState *Completion::kernel(MTLComputePipelineDescriptor *descriptor,
         if (outcome != Compiler::Outcome::Failed)
             cache_.storeKernel(k, outcome == Compiler::Outcome::Made ? record.get() : nullptr, why);
         if (outcome == Compiler::Outcome::Made)
-            once([NSString stringWithFormat:@"a kernel the pack lacks, made at its first dispatch in %llu us: %.600s",
-                                            (unsigned long long)(nowUs() - began), key.c_str()]);
+            once([NSString
+                stringWithFormat:@"a kernel the pack lacks, made at its first dispatch of %u,%u,%u threads in "
+                                 @"%llu us: %s %s",
+                                 dispatch.threads[0], dispatch.threads[1], dispatch.threads[2],
+                                 (unsigned long long)(nowUs() - began),
+                                 descriptor.computeFunction.name.UTF8String ?: "-", constantsLast(key).c_str()]);
         break;
     }
     }
@@ -213,8 +227,10 @@ const ComputeState *Completion::kernel(MTLComputePipelineDescriptor *descriptor,
     made.refused = outcome == Compiler::Outcome::Refused;
     made.failures += !made.state && !made.refused;
     if (!made.state)
-        once([NSString stringWithFormat:@"a kernel the pack lacks %s: %s | %.600s",
-                                        made.refused ? "is refused" : "was not made", why.c_str(), key.c_str()]);
+        once([NSString stringWithFormat:@"a kernel the pack lacks %s at %u,%u,%u threads: %s | %s %s",
+                                        made.refused ? "is refused" : "was not made", dispatch.threads[0],
+                                        dispatch.threads[1], dispatch.threads[2], why.c_str(),
+                                        descriptor.computeFunction.name.UTF8String ?: "-", constantsLast(key).c_str()]);
     return made.state;
 }
 
