@@ -12,5 +12,7 @@ public enum Scenes {
         ExtendedBlendScene(), MipmapScene(), MSAAResolveScene(), MPSBlurScene(), CoreImageBlurScene(),
         HalfArithmeticScene(), SM53ProbeScene(), XRBlendScene(), TextureKindsScene(), LatencyScene(),
         LinkedFunctionScene(),
+        StorageOffsetScene(),
+        PixelSamplerScene(),
     ]
 }
