@@ -311,6 +311,19 @@ GROUPS: dict[str, list[Check]] = {
             note='open; was ~86/10 min',
         ),
         Check('display.thermal-iomfb', 'r32-color', 'IOMFB failure', REPORT, process='thermalmonitord'),
+        Check(
+            'display.sbim',
+            'r104-sbim',
+            'EDRServerEnableSBIM: IORegistryEntrySetCFProperty()',
+            process='backboardd',
+            regex=r'=> (?P<code>0x[0-9a-f]+)',
+            where='code != 3758097095',
+            show=('code',),
+            source='drivers/NativeMobileDisplay/NativeLegacyDisplay.cpp (setProperties, SwitchSBIM.h)',
+            note='libEDR setting enableSBIM on the framebuffer while EDR is engaged (iOS 27). kIOReturnUnsupported '
+            "(0xe00002c7, 3758097095) is J181's answer for a display without SBIM statistics: libEDR logs it once and "
+            "stops asking. Boot 15: kIOReturnBadArgument (0xe00002c2) x13, from the family's own setProperties",
+        ),
     ],
     'media': [
         Check(

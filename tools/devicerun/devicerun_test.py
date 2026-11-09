@@ -102,6 +102,33 @@ class Rules(unittest.TestCase):
         self.assertIn('kernel_task/SwitchVIC/pitch x1', run(refusal)['refusal.kernel'].observed)
 
 
+class Sbim(unittest.TestCase):
+    CHECK = next(c for c in checks.GROUPS['display'] if c.name == 'display.sbim')
+
+    @staticmethod
+    def line(code: str) -> dict:
+        return {
+            'timestamp': '2026-11-08 19:11:01.701000-0800',
+            'bootUUID': '31AB01C1',
+            'processImagePath': '/usr/libexec/backboardd',
+            'subsystem': '',
+            'category': '',
+            'messageType': 'Error',
+            'eventMessage': f'libEDR - EDRServerEnableSBIM: IORegistryEntrySetCFProperty() => {code}',
+        }
+
+    def verdict(self, *codes: str) -> str:
+        results, _ = devicerun.run_checks([self.line(c) for c in codes], [self.CHECK])
+        return results[0].verdict
+
+    def test_boot_15s_bad_argument_fails(self):
+        self.assertEqual(self.verdict('0xe00002c2', '0xe00002c2'), FAIL)
+
+    def test_the_one_unsupported_answer_passes(self):
+        self.assertEqual(self.verdict('0xe00002c7'), PASS)
+        self.assertEqual(self.verdict(), PASS)
+
+
 class Reports(unittest.TestCase):
     def test_frames_and_crashes(self):
         _, frame_lines = devicerun.run_checks(devicerun.read_ndjson(str(NDJSON)), [])
