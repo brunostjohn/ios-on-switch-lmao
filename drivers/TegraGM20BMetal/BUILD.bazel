@@ -152,11 +152,14 @@ py_test(
 )
 
 # The same for iOS 27's QuartzCore (raw/pack/ca/caspec27.py): every state of the raw pack's tiers against the functions
-# and constants its own library declares (no iOS 27 journal exists yet).
+# and constants its own library declares, and the journal's iOS 27 states made as drawn.
 py_test(
     name = "caspec27_test",
     srcs = ["raw/pack/ca/caspec27_test.py"],
-    data = ["raw/pack/ca/qc-24B119.json"],
+    data = [
+        "precompile/corpus.log",
+        "raw/pack/ca/qc-24B119.json",
+    ],
     main = "raw/pack/ca/caspec27_test.py",
     deps = [":raw_pack"],
 )
