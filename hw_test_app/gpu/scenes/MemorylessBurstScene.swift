@@ -2,14 +2,17 @@ import Foundation
 import HWTestCore
 import Metal
 
-/// A pass's memoryless attachment is backed by memory the raw path keeps by its size, for later passes of the same
-/// size. Boot 15's keyboard drew Core Animation's passes at a new size every frame; backboardd's chunks grew from 356
-/// to 953 MB in 35 s and stayed at 912 MB. This draws one pass a frame into a memoryless RGBA16Float attachment that
-/// grows 8 x 5 pixels a frame for `frames` frames, then enough small passes for the backings to expire. pool_before_kb,
-/// pool_peak_kb and pool_after_kb are the raw pool's chunks then, backings_after_kb the backings still held and
-/// grows_burst the allocations of the burst that wired a chunk themselves (a client has no grower thread: the render
-/// server's line says grow=). On the raw facade nothing may be held after, and the pool must come back to within two
-/// chunks of where it started.
+/// A pass's memoryless attachment is backed by a view of memory its attachment slot's passes share, taken in size
+/// classes, as compressed memory is: a pass that fits the largest the slot holds takes a view of it, one that does not
+/// takes a larger class, and the smaller memory goes once its last use completes. Boot 15's keyboard drew Core
+/// Animation's passes at a new size every frame; backboardd's chunks grew from 356 to 953 MB in 35 s and stayed at 912
+/// MB. This draws one pass a frame into a memoryless RGBA16Float attachment that grows 8 x 5 pixels a frame for
+/// `frames` frames, then shrinks back through sizes 4 pixels off those, then enough small passes for the backings to
+/// expire. backings_grow_kb and backings_shrink_kb are the backings' memory held after each half: the shrinking half
+/// must take none. pool_before_kb, pool_peak_kb and pool_after_kb are the raw pool's chunks then, backings_after_kb the
+/// backings' memory still held and grows_burst the allocations of the burst that wired a chunk themselves (a client has
+/// no grower thread: the render server's line says grow=). On the raw facade nothing may be held after, and the pool
+/// must come back to within two chunks of where it started.
 struct MemorylessBurstScene: GPUScene {
     let id = "gpu.raw.memoryless_burst"
     let name = "Memoryless attachments at a new size every frame: what the raw pool holds after"
@@ -45,13 +48,23 @@ struct MemorylessBurstScene: GPUScene {
             try await Task.sleep(nanoseconds: 50_000_000)
         }
         let before = RawFacade.memory(of: gpu.device)
-        for frame in 0..<Self.frames {
-            let scratch = try gpu.texture(
-                .rgba16Float, 320 + 8 * frame, 180 + 5 * frame, usage: [.renderTarget], storage: .memoryless)
+        let sizes =
+            (0..<Self.frames).map { (320 + 8 * $0, 180 + 5 * $0) }
+            + (0..<Self.frames).map { (316 + 8 * (Self.frames - 1 - $0), 176 + 5 * (Self.frames - 1 - $0)) }
+        var grown: [String: Int] = [:]
+        for (frame, (width, height)) in sizes.enumerated() {
+            if frame == Self.frames { grown = RawFacade.memory(of: gpu.device) }
+            let scratch = try gpu.texture(.rgba16Float, width, height, usage: [.renderTarget], storage: .memoryless)
             let timing = try await draw(scratch)
             result.expect(timing.path == "raw", "frame \(frame) drawn on \(timing.path)")
         }
         let peak = RawFacade.memory(of: gpu.device)
+        if let atGrown = grown["backings"], let atShrunk = peak["backings"] {
+            result.metrics.set("backings_grow_kb", atGrown >> 10)
+            result.metrics.set("backings_shrink_kb", atShrunk >> 10)
+            result.expect(
+                atShrunk <= atGrown, "the shrinking frames made \((atShrunk - atGrown) >> 10) KiB of backings")
+        }
         let small = try gpu.texture(.bgra8Unorm, 16, 16)
         for _ in 0..<Self.settle {
             _ = try await gpu.run { commands in

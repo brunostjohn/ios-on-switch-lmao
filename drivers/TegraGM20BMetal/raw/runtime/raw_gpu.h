@@ -1004,8 +1004,8 @@ public:
     struct Stats {
         std::atomic<uint64_t> commits{0}, pushBytes{0}, uploadBytes{0}, ringWaits{0}, ringsOutgrown{0}, imports{0},
             importBytes{0}, poolBytes{0}, poolChunks{0}, cleanBytes{0}, poolStalls{0};
-        // memoryless attachments' uncompressed backings held (count, bytes; retired ones among them) and the free bytes of the
-        // block-linear and zeta chunks, as trimBackings last counted them
+        // uncompressed backings held now and their memory (a memoryless one's shared plain memory, a shadow's own), and the
+        // retired ones among them and the free bytes of the block-linear and zeta chunks as trimBackings last counted them
         std::atomic<uint64_t> backings{0}, backingBytes{0}, retiredBackings{0}, tiledFreeBytes{0};
         // surface imports made (a kernel import each) and found live, since open
         std::atomic<uint64_t> importsMade{0}, importHits{0};
@@ -1270,16 +1270,38 @@ private:
     std::vector<TiledWant> tiledWanted_;
     bool tiledWanted(const std::vector<Chunk> &chunks) const;
 
+    // Plain memory under the memoryless backings of one tag and memory (the pool, block-linear chunks or a zeta format's),
+    // each its own view (texture header, layout) of the same bytes, as compressed memory is (raw_comp.h CompMem): taken in
+    // size classes (sizeClassBytes of kBlAlign), the largest one new backings go on, given back with its last view
+    struct PlainMem {
+        Span span;
+        uint64_t align = 0;
+        uint32_t tag = 0, memory = 0;  // kPlainPool, kPlainBl, or kPlainZeta + the zeta format's index
+        uint32_t views = 0;
+    };
+
     struct Backing {
         Texture texture;
         uint32_t tag = 0;
         uint32_t lastUse = 0;                     // the seqno of the last submission that used it (0: never submitted)
         uint64_t lastCommit = 0, lastClosed = 0;  // commitCount_ and closedCount_ when a pass last asked for it
-        uint64_t usedNs = 0;      // compClock() when made, and at each commit of a command buffer that used it
-        CompMem *comp = nullptr;  // the compressed memory it is a view of (raw_comp.h), else none
-        // a compressed backing of its shape replaced it: no pass takes it again, trimBackings frees it
+        uint64_t usedNs = 0;        // compClock() when made, and at each commit of a command buffer that used it
+        CompMem *comp = nullptr;    // the compressed memory it is a view of (raw_comp.h), else none
+        PlainMem *plain = nullptr;  // or the plain memory (a memoryless one's)
+        // a compressed backing of its shape, or one on larger memory of its tag, replaced it: no pass takes it again,
+        // trimBackings frees it
         bool retired = false;
     };
+
+    static constexpr uint32_t kPlainPool = 0, kPlainBl = 1, kPlainZeta = 2;
+    std::vector<std::unique_ptr<PlainMem>> plainMems_;
+    PlainMem *largestPlain(uint32_t tag, uint32_t memory) const;
+    // A memoryless backing of `m`'s shape on the largest plain memory of its tag and memory, made where none holds it;
+    // nullptr when no memory or header is had
+    Backing *plainBacking(const Texture &m, uint32_t tag, bool blockLinear);
+    void plainFree(Backing &b);
+    void freePlainSpan(PlainMem &mem);
+    void dropPlain(PlainMem *mem);  // its span back, and it out of plainMems_
 
     std::vector<Backing *> backings_;  // memoryless attachments' memory, by size and format
     // the pool's growth ahead of need (lock_): free bytes of its shared chunks, a chunk being made by the grower thread
@@ -1365,10 +1387,14 @@ private:
     void compStop();
     // Asks compThread_ for `w` unless it was
     void compAsk(const CompWant &w);
+    // compThread_ started where it is not: it trims what an idle process holds when it turns stale (compDeadline)
+    void compStart();
+    bool compRearm_ = false;  // shared plain memory was made: compThread_ takes its deadline (lock_)
     void compFree(Backing &b);
     // Made buffers no backing took while stale, at `now`
     void compTrim(uint64_t now);
-    // When compressed memory, a made buffer or a retired backing next turns stale (compClock()), 0 with none held
+    // When compressed or shared plain memory, a made buffer or a retired backing next turns stale (compClock()), 0 with
+    // none held
     uint64_t compDeadline() const;
     // A clear of target t (counted only when compressed): `full` it covers t whole, `boot` its value is the boot ZBC table's
     void countZbc(const Texture &t, bool full, bool boot);
