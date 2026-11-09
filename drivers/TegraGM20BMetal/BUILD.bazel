@@ -152,11 +152,14 @@ py_test(
 )
 
 # The same for iOS 27's QuartzCore (raw/pack/ca/caspec27.py): every state of the raw pack's tiers against the functions
-# and constants its own library declares (no iOS 27 journal exists yet).
+# and constants its own library declares, and the journal's iOS 27 states made as drawn.
 py_test(
     name = "caspec27_test",
     srcs = ["raw/pack/ca/caspec27_test.py"],
-    data = ["raw/pack/ca/qc-24B119.json"],
+    data = [
+        "precompile/corpus.log",
+        "raw/pack/ca/qc-24B119.json",
+    ],
     main = "raw/pack/ca/caspec27_test.py",
     deps = [":raw_pack"],
 )
@@ -177,6 +180,73 @@ py_test(
     "run_corpus",
     "runtime_compile_callers",
 ]]
+
+# The pipeline states Apple's OS declares ahead (corpus/tools/archives): binary archives, pipeline libraries and pipeline
+# scripts. `bazel run //drivers/TegraGM20BMetal:declared -- --root <mounted OS volume> --root <mounted cryptex>...
+# --inventory <tsv>` writes precompile/archives/<build>.tsv from an IPSW's images; archive_coverage diffs one against the
+# raw pack's states and the device's journals.
+# What the raw pack makes of them (//gpu/seed:raw_pack takes the IPSW kind's: tools/gpu/rawpack.py archive_lines).
+filegroup(
+    name = "archive_inventories",
+    srcs = glob(["precompile/archives/*.tsv"]),
+)
+
+py_library(
+    name = "archives",
+    srcs = glob(
+        ["corpus/tools/archives/*.py"],
+        exclude = [
+            "corpus/tools/archives/*_test.py",
+            "corpus/tools/archives/coverage.py",
+            "corpus/tools/archives/declared.py",
+        ],
+    ),
+)
+
+py_binary(
+    name = "declared",
+    srcs = ["corpus/tools/archives/declared.py"],
+    main = "corpus/tools/archives/declared.py",
+    deps = [
+        ":archives",
+        "//tools/gpu/shaders:metallib",
+    ],
+)
+
+py_binary(
+    name = "archive_coverage",
+    srcs = ["corpus/tools/archives/coverage.py"],
+    main = "corpus/tools/archives/coverage.py",
+    deps = [
+        ":archives",
+        ":raw_pack",
+    ],
+)
+
+# Every render state the IPSW kinds' archives declare for the device is the raw pack's, or raw takes it from elsewhere
+py_test(
+    name = "archive_coverage_test",
+    srcs = ["corpus/tools/archives/coverage_test.py"],
+    data = [
+        "precompile/corpus.log",
+        "raw/pack/ca/qc-21H461.json",
+        "raw/pack/ca/qc-24B119.json",
+        ":archive_inventories",
+    ],
+    main = "corpus/tools/archives/coverage_test.py",
+    deps = [
+        ":archives",
+        ":raw_pack",
+        "//tools/gpu:rawpack_steps",
+    ],
+)
+
+py_test(
+    name = "archives_test",
+    srcs = ["corpus/tools/archives/archives_test.py"],
+    main = "corpus/tools/archives/archives_test.py",
+    deps = [":archives"],
+)
 
 py_binary(
     name = "ordercheck",

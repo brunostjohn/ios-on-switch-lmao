@@ -125,33 +125,43 @@ def ca_corpus(qc: Path, corpus: Path, work: Path) -> Path:
     else:
         print(f"rawpack: no QuartzCore tables for default.metallib {digest[:16]}: the corpus's states as they are")
         return corpus
+    out = work / 'corpus.ca.log'
+    with open(corpus) as src:
+        lines = src.readlines()
+    sys.path.insert(0, str(HERE / 'ca'))
+    import caspec  # noqa: PLC0415 (ca/ is only on the path here)
+
+    with open(out, 'w') as dst:
+        dst.writelines(line for line in lines if not caspec.corpus_fields(line)[0])
+        for tier, made in ca_states(path, corpus):
+            dst.writelines(line + '\n' for line in made)
+            print(f'rawpack: Core Animation states, {tier}: {len(made)}')
+    return out
+
+
+def ca_states(tables_path: Path, corpus: Path) -> list[tuple[str, list[str]]]:
+    """Give the Core Animation states the pack holds, each once by its key, by tier: those harvested, then caset's.
+
+    Every state a device drew goes in as it drew it (QuartzCore makes some names otherwise than the journal holds them,
+    a harvested c1=550 state regenerated with c1=115, or not at all), then those made from their names (ca/caset.py,
+    ca/caspec.py: QuartzCore's own decoding of a name into a state, with this IPSW's tables, ca/qc-<build>.json).
+    """
     sys.path.insert(0, str(HERE / 'ca'))
     import caset  # noqa: PLC0415 (ca/ is only on the path here)
     import caspec  # noqa: PLC0415
 
-    tables = caspec.Tables(str(path))
-    out = work / 'corpus.ca.log'
-    with open(corpus) as src:
-        lines = src.readlines()
+    tables = caspec.Tables(str(tables_path))
     keys: set[str] = set()
 
     def fresh(line: str) -> bool:
-        key = state_key(line.rstrip('\n'))
+        key = state_key(line)
         return not (key in keys or keys.add(key))
 
-    with open(out, 'w') as dst:
-        dst.writelines(line for line in lines if not caspec.corpus_fields(line)[0])
-        # every state a device drew, as it drew it: QuartzCore makes some names otherwise than the journal holds them (a
-        # harvested c1=550 state regenerated with c1=115) or not at all
-        harvested = [
-            line for line in lines if line.startswith('R ok=1 ') and caspec.corpus_fields(line)[0] and fresh(line)
-        ]
-        dst.writelines(harvested)
-        print(f'rawpack: Core Animation states, harvested: {len(harvested)}')
-        for tier, names in caset.labels(tables, caset.corpus_names(str(corpus), tables), CA_TIERS).items():
-            made = [line for line in (caspec.state_line(tables, n) + '\n' for n in names) if fresh(line)]
-            dst.writelines(made)
-            print(f'rawpack: Core Animation states, {tier}: {len(made)}')
+    with open(corpus) as f:
+        drawn = [line.rstrip('\n') for line in f if line.startswith('R ok=1 ') and caspec.corpus_fields(line)[0]]
+    out = [('harvested', [line for line in drawn if fresh(line)])]
+    for tier, names in caset.labels(tables, caset.corpus_names(str(corpus), tables), CA_TIERS).items():
+        out.append((tier, [line for line in (caspec.state_line(tables, n) for n in names) if fresh(line)]))
     return out
 
 
