@@ -24,11 +24,13 @@ writes <out>/pack.bin, pack.json, layouts.txt, report.txt and keeps the buckets 
 --build-only compiles directpack, the probes, the mock GPU (libmock_iokit.dylib) and own.metallib into <dir> and stops;
 --prebuilt <dir> runs those instead of compiling them (//gpu/seed:local_tools makes them its own action, so a corpus
 edit only reruns the buckets).
+--ca-names: Core Animation states a device's logs name as missing from the pack (precompile/ca_names.py), made from
+their names in the corpus tier, as the journal's own are.
 --stack: the build's stack key (the plugin is compiled with the same value), stamped into the pack header: the runtime
 refuses a pack of another build.
 The same work in three steps, for a build that caches each bucket's run (it depends on the bucket's state lines and the
 tools alone):
-       rawpack.py --split --qc <default.metallib> --corpus <corpus.log> --out <dir>
+       rawpack.py --split --qc <default.metallib> --corpus <corpus.log> [--ca-names <ca-names/<build>.txt>] --out <dir>
            writes <dir>/work/bucket0 .. bucket15, each a corpus.log of its states
        rawpack.py --probe-bucket <bucket dir> --prebuilt <dir> --nvk <host twin dylib> --qc <default.metallib>
            makes one bucket in place: records.bin, bucket 0's warm.{out,log}, its kernels' compute.{out,log} and
@@ -112,7 +114,7 @@ def library_root(qc: Path) -> str:
 CA_TIERS = ('corpus', 'manifest', 'variants', 'blend', 'fetch')
 
 
-def ca_corpus(qc: Path, corpus: Path, work: Path) -> Path:
+def ca_corpus(qc: Path, corpus: Path, work: Path, names: list[str] = ()) -> Path:
     """Give the corpus with its Core Animation lines as harvested and those made from their names (ca/ tables).
 
     Without this QuartzCore's tables in ca/, the corpus as it is.
@@ -133,13 +135,13 @@ def ca_corpus(qc: Path, corpus: Path, work: Path) -> Path:
 
     with open(out, 'w') as dst:
         dst.writelines(line for line in lines if not caspec.corpus_fields(line)[0])
-        for tier, made in ca_states(path, corpus):
+        for tier, made in ca_states(path, corpus, names):
             dst.writelines(line + '\n' for line in made)
             print(f'rawpack: Core Animation states, {tier}: {len(made)}')
     return out
 
 
-def ca_states(tables_path: Path, corpus: Path) -> list[tuple[str, list[str]]]:
+def ca_states(tables_path: Path, corpus: Path, names: list[str] = ()) -> list[tuple[str, list[str]]]:
     """Give the Core Animation states the pack holds, each once by its key, by tier: those harvested, then caset's.
 
     Every state a device drew goes in as it drew it (QuartzCore makes some names otherwise than the journal holds them,
@@ -160,8 +162,9 @@ def ca_states(tables_path: Path, corpus: Path) -> list[tuple[str, list[str]]]:
     with open(corpus) as f:
         drawn = [line.rstrip('\n') for line in f if line.startswith('R ok=1 ') and caspec.corpus_fields(line)[0]]
     out = [('harvested', [line for line in drawn if fresh(line)])]
-    for tier, names in caset.labels(tables, caset.corpus_names(str(corpus), tables), CA_TIERS).items():
-        out.append((tier, [line for line in (caspec.state_line(tables, n) for n in names) if fresh(line)]))
+    named = caset.corpus_names(str(corpus), tables) + [n for n in names if caset.makes(tables, n)]
+    for tier, labels in caset.labels(tables, named, CA_TIERS).items():
+        out.append((tier, [line for line in (caspec.state_line(tables, n) for n in labels) if fresh(line)]))
     return out
 
 
@@ -312,7 +315,10 @@ def split_buckets(corpus: Path, work: Path, count: int) -> list[Path]:
 
 
 def state_key(line: str) -> str:
-    """Give an R line's state key as probe.mm prints it: every descriptor field but the label, then its functions.
+    """Give an R line's state key as its text names it: every descriptor field but the label, then its functions.
+
+    The pack files a state under the key the runtime computes of the descriptor made of the line (probe_states.h,
+    runtime/RawPipelineKey.h), which is this for a line written as the device journals it.
 
     No lib= field is in it; the functions the state links follow its stages (probe_states.h linkedFunction); a line
     whose first library is another framework's default.metallib than QuartzCore's ends with " | l <framework>"
@@ -467,7 +473,8 @@ def main() -> None:
     work = out / 'work'
     shutil.rmtree(work, ignore_errors=True)
     work.mkdir(parents=True)
-    corpus = ca_corpus(qc, corpus, work)
+    names = Path(option('--ca-names', False) or os.devnull).read_text().split()
+    corpus = ca_corpus(qc, corpus, work, names)
     if '--split' in sys.argv[1:]:  # --split --qc <metallib> --corpus <corpus.log> --out <dir>: <dir>/work/bucket<i>
         split_buckets(corpus, work, BUCKETS)
         return
