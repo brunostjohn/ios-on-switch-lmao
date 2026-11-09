@@ -68,3 +68,26 @@ struct PlanesTest: HWTest {
         return values
     }
 }
+
+/// CoreVideo describes none of Apple's compressed pixel formats (AGX, HTPC, universal): tiled layouts that only Apple's
+/// GPU, decoders and display write or read. Without a description no producer allocates a surface in one, so none
+/// reaches the compositor or the display.
+struct PlainSurfacesTest: HWTest {
+    let id = "display.plain_surfaces"
+    let name = "No compressed pixel formats in CoreVideo"
+    let subsystem = Subsystem.compositor
+
+    static let formats = ["&BGA", "&8v0", "&8f0"]
+
+    func run(_ context: TestContext) async throws -> Outcome {
+        let checks = Self.formats.map { name -> (String, Bool) in
+            let format = name.utf8.reduce(OSType(0)) { $0 << 8 | OSType($1) }
+            let described = CVPixelFormatDescriptionCreateWithPixelFormatType(nil, format) != nil
+            var buffer: CVPixelBuffer?
+            let attributes = [kCVPixelBufferIOSurfacePropertiesKey: [:]] as CFDictionary
+            let made = CVPixelBufferCreate(nil, 1280, 720, format, attributes, &buffer) == kCVReturnSuccess
+            return ("CoreVideo neither describes nor allocates '\(name)'", !described && !made)
+        }
+        return .judged(checks, Metrics())
+    }
+}

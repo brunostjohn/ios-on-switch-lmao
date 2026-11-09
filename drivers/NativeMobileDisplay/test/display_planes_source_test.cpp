@@ -135,6 +135,8 @@ TEST(DisplayPlanesSource, DriverFollowsTheRules)
     const std::string limits = Method(source, "    void publishPlaneLimits()\n");
     EXPECT_THAT(limits, HasSubstr("{\"PlaneBaseAlignmentLinear\", native_planes::kPublishedBaseAlignment}"));
     // iOS 27's own limits; iOS 17's dictionary has no key they add.
+    EXPECT_THAT(limits,
+                HasSubstr("publish(\"IOMFBMaxSrcPixels\", source, limits.compressionUnsupported ? 8 : 7, 64);"));
     ExpectBefore(limits, "#if SWITCH_IPSW_KIND_24B119", "native_planes::kLimits24B119;");
     EXPECT_THAT(
         limits,
@@ -224,6 +226,33 @@ TEST(DisplayPlanesSource, DetachReasonsLoggedOnlyByDebugIos27Kernels)
     EXPECT_EQ(Count(xnu27, "CA_PRINT_DETACHING=1"), 1u);
     EXPECT_EQ(Count(xnu27, "NATIVE_SWITCH_CA_PRINT_DETACHING NULL"), 2u);
     EXPECT_THAT(XnuKernExec(), Not(HasSubstr("CA_PRINT_DETACHING")));
+}
+
+// iOS 27's CoreVideo registers no compressed pixel format (H12's AGX and HTPC tiled layouts), so nothing hands the display
+// a surface in one; iOS 17's MobileGestalt answers have none to begin with.
+TEST(DisplayPlanesSource, Ios27CoreVideoMakesNoCompressedSurfaces)
+{
+    const std::string setup = Between(Runfile(XNU27_KERN_EXEC), "\nnative_switch_setup_state(", "\n}\n");
+    EXPECT_THAT(setup,
+                HasSubstr("{\"com.apple.corevideo\", SWITCH_PLIST(\"<key>disable-buffer-compression</key><true/>\"), "
+                          "kSetupManaged},"));
+    EXPECT_THAT(XnuKernExec(), Not(HasSubstr("disable-buffer-compression")));
+}
+
+// A detached layer refused for its format or layout is logged with its surface's geometry on debug kernels only.
+TEST(DisplayPlanesSource, RefusedLayoutsLoggedOnlyByDebugKernels)
+{
+    const std::string source = SourceText("../NativeLegacyDisplay.cpp");
+    const std::string totals = SourceText("../NativePlanesTotals.h");
+    ExpectBefore(source,
+                 "reason = native_planes::checkUpdated(updated, background, hasSurface, layers, width, height);",
+                 "planeNoteRefused(reason, updated, hasSurface, layers, width, height);");
+    const std::string debug = Between(totals, "#if SWITCH_FRAME_TIMELINE\n", "#else\n");
+    EXPECT_THAT(debug, HasSubstr("switch_refusal_k(key, \"display\", \"plane-layout\","));
+    EXPECT_THAT(
+        Between(totals, "#else\n", "#endif\n"),
+        HasSubstr("static void planeNoteRefused(unsigned, uint32_t, const bool *, const native_planes::Layer *, "
+                  "uint32_t, uint32_t)\n{}"));
 }
 
 // Window B changes whose surface the GPU renders follow NativePlaneFence.h: they ride on the window A frame's present,

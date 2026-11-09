@@ -189,6 +189,7 @@ host_test(
         "//drivers/NativeMobileDisplay:NativeLegacyDisplay.cpp",
         "//drivers/NativeMobileDisplay:NativePlaneFenceDisplay.h",
         "//drivers/NativeMobileDisplay:NativePlanesDisplay.h",
+        "//drivers/NativeMobileDisplay:NativePlanesTotals.h",
         "//kernel/xnu-10063.141.1/bsd:kern/kern_exec.c",
         "//kernel/xnu-12377.121.6/bsd:kern/kern_exec.c",
         "//kits/SwitchABI:interface/IOSurface.json",

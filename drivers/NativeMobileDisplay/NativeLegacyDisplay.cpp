@@ -4964,6 +4964,7 @@ public:
                 accepted = reason == 5;
             } else {
                 reason = native_planes::checkUpdated(updated, background, hasSurface, layers, width, height);
+                planeNoteRefused(reason, updated, hasSurface, layers, width, height);
                 // The UI's own memory: its rows within the descriptor (a surface larger than the display, rows or lines
                 // padded to the GPU's alignment, is accepted: only the visible rectangle is read).
                 for (unsigned i = 0; !reason && i < native_planes::kLayers; ++i) {
@@ -5270,8 +5271,9 @@ public:
                                 {"MaxSrcBufferHeight", limits.maxSrcBuffer},
                                 {"MaxVideoSrcDownscalingWidth", limits.maxSrcRectWidth},
                                 {"VideoClock", 78000000},
-                                {"PixelClock", 78000000}};
-        publish("IOMFBMaxSrcPixels", source, 7, 64);
+                                {"PixelClock", 78000000},
+                                {"IOMFBCompressionSupport", 0}};
+        publish("IOMFBMaxSrcPixels", source, limits.compressionUnsupported ? 8 : 7, 64);
         const Entry base[] = {{"PlaneBaseAlignmentLinear", native_planes::kPublishedBaseAlignment}};
         publish("DisplayPipePlaneBaseAlignment", base, 1, 64);
         const Entry layers[] = {{"MaxNumLayers", limits.maxLayers}};

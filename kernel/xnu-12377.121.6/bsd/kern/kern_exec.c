@@ -9378,6 +9378,11 @@ native_switch_setup_state(proc_t p, user_addr_t scratch, mount_t data_mount)
 		 * IsLargeIPad() (ArtworkDeviceSubType 2732), which forces the Pro class on every screen (vm_unix.c's Switch
 		 * keyboard). Managed: the user's other keyboard settings in the domain stay theirs. */
 		{"com.apple.keyboard.preferences", SWITCH_PLIST("<key>KeyboardUseProLayout</key><false/>"), kSetupManaged},
+		/* MobileGestalt's IOSurfaceFormatDictionary is a table by /arm-io soc-generation: H12 has buffer-compression and
+		 * media-compression, so CoreVideo registers the AGX and HTPC compressed tiled formats ('&BGA', '&8v0', ...),
+		 * which only Apple's GPU, decoders and display write or read. CoreVideo's own switch leaves every compressed
+		 * family out, and producers fall back to the plain formats. */
+		{"com.apple.corevideo", SWITCH_PLIST("<key>disable-buffer-compression</key><true/>"), kSetupManaged},
 		{"com.apple.UIKit", SWITCH_PLIST("<key>UIPreferredContentSizeCategoryName</key>"
 		    "<string>UICTContentSizeCategoryXXL</string>"), kSetupOnce, kSetupUnitScale}, /* the user's Text Size then sticks */
 		/* Seeded once: DataMigrator keeps its results and its hang-reboot count in this domain. */
