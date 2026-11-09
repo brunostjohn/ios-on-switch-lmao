@@ -610,6 +610,16 @@ GROUPS: dict[str, list[Check]] = {
             source='drivers/NativeSwitchBlock/NativeSwitchBlock.cpp',
             note='MiB read and written per second since the first request; boot 15 25.7 (22688 MiB in 883 s)',
         ),
+        Check(
+            'storage.cryptex-completion',
+            'r116-sched',
+            'SwitchCryptex: ',
+            REPORT,
+            process=KERNEL,
+            regex=r'(?P<n>\d+) completions, client (?P<client_us>\d+) us \(max (?P<max_us>\d+) us\); '
+            r'copied (?P<kib>\d+) KiB in (?P<copy_us>\d+) us',
+            source='drivers/NativeSwitchBlock/SwitchCryptexStats.h',
+        ),
     ],
     'memory': [
         Check(
