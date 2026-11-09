@@ -17,5 +17,6 @@ public enum Scenes {
         PixelSamplerScene(),
         TraceIdScene(),
         KernelOffsetScene(),
+        MemorylessBurstScene(),
     ]
 }

@@ -824,6 +824,8 @@ public:
     // The write-combined chunks held (non-dedicated) and their bytes (test/poolcheck.cpp: they follow what is in them)
     uint32_t wcChunksHeld();
     uint64_t wcChunkBytesHeld();
+    // The free bytes of the block-linear chunks (test/poolcheck.cpp: a chunk's worth kept ahead)
+    uint64_t blChunkFreeBytes();
 
     // the shader heap's bound bytes (the programs placed so far, in steps)
     uint64_t heapBytes() const
@@ -880,8 +882,10 @@ public:
     void destroySampler(Sampler &s);
 
     // The first pool chunk made now (its pages wired and imported), off the render thread's first texture (raw_metal_prepare),
-    // and the pool's grower started: the next chunk is made on its own thread once the free bytes of the pool's shared chunks fall
-    // below a low mark, so the render thread's allocations find room (Stats::poolStalls counts the ones that had to grow it).
+    // and the pool's grower started: the next chunk of the pool, of block-linear images or of a zeta format is made on its own
+    // thread once the free bytes of that kind's shared chunks fall below a chunk's worth, so the render thread's allocations
+    // (a pass's memoryless backings among them, made at commit) find room (Stats::poolStalls counts the ones that had to grow
+    // it).
     void warm();
 
     // Submission. begin() opens the one command buffer (the caller serialises encoding and commit); null: no channel.
@@ -977,6 +981,9 @@ public:
     struct Stats {
         std::atomic<uint64_t> commits{0}, pushBytes{0}, uploadBytes{0}, ringWaits{0}, ringsOutgrown{0}, imports{0},
             importBytes{0}, poolBytes{0}, poolChunks{0}, cleanBytes{0}, poolStalls{0};
+        // memoryless attachments' uncompressed backings held (count, bytes; retired ones among them) and the free bytes of the
+        // block-linear and zeta chunks, as trimBackings last counted them
+        std::atomic<uint64_t> backings{0}, backingBytes{0}, retiredBackings{0}, tiledFreeBytes{0};
         // surface imports made (a kernel import each) and found live, since open
         std::atomic<uint64_t> importsMade{0}, importHits{0};
         // diagnostics: color targets the raw path rendered whose address or pitch is not a multiple of 128 (NVK renders
@@ -1223,6 +1230,20 @@ private:
     // a span of chunks bound with PTE kind `kind` (block-linear images), lock_ held
     bool tiledAlloc(std::vector<Chunk> &chunks, uint32_t kind, uint64_t bytes, uint64_t align, Span &s);
     void tiledFree(std::vector<Chunk> &chunks, Span &s);
+    // lock_ held (`unlocked`: the caller's lock, let go for the kernel's wiring); the chunk's index in `chunks`
+    bool newTiledChunk(std::vector<Chunk> &chunks, uint32_t kind, uint64_t size, bool dedicated,
+                       std::unique_lock<std::mutex> *unlocked, uint32_t &index);
+    // the free bytes of a kind's shared chunks, lock_ held
+    static uint64_t tiledFreeBytes(const std::vector<Chunk> &chunks);
+
+    // the block-linear or zeta chunks the grower thread makes one of next (lock_), each once
+    struct TiledWant {
+        std::vector<Chunk> *chunks;
+        uint32_t kind;
+    };
+
+    std::vector<TiledWant> tiledWanted_;
+    bool tiledWanted(const std::vector<Chunk> &chunks) const;
 
     struct Backing {
         Texture texture;

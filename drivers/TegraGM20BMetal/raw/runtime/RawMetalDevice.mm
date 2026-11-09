@@ -58,12 +58,19 @@ static const char *zetaMemoryRefusal(int asked)
     return d;
 }
 
-// hw_test_app's system.widgets_render: the bytes the raw device holds now. pool: its pool, block-linear and depth chunks;
-// wc: its write-combined chunks; heap: the shader heap's bound parts.
+// hw_test_app's system.widgets_render and gpu.raw.memoryless_burst: the bytes the raw device holds now. pool: its pool,
+// block-linear and depth chunks; wc: its write-combined chunks; heap: the shader heap's bound parts; backings: memoryless
+// attachments' uncompressed backings (trimBackings' last count); grows: allocations that wired a chunk themselves.
 - (NSDictionary<NSString *, NSNumber *> *)switchRawMemory
 {
     raw::Device &d = *gRM->raw;
-    return @{@"pool" : @(d.stats.poolBytes.load()), @"wc" : @(d.wcChunkBytesHeld()), @"heap" : @(d.heapBytes())};
+    return @{
+        @"pool" : @(d.stats.poolBytes.load()),
+        @"wc" : @(d.wcChunkBytesHeld()),
+        @"heap" : @(d.heapBytes()),
+        @"backings" : @(d.stats.backingBytes.load()),
+        @"grows" : @(d.stats.poolStalls.load())
+    };
 }
 
 // The m2v device this one wraps (the one TEGRA_RAW_METAL=0 gives the process): hw_test_app draws each scene on both

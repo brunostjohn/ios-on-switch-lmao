@@ -862,13 +862,20 @@ void Device::growLoop()
     std::unique_lock<std::mutex> l(lock_);
     for (;;) {
         grow_.wait(l, [&] {
-            return stopping_ || growing_;
+            return stopping_ || growing_ || !tiledWanted_.empty();
         });
         if (stopping_)
             return;
         uint32_t c;
-        newChunk(sizes_.chunk, false, &l, c);  // failing, the render thread's next allocation tries itself
-        growing_ = false;
+        if (growing_) {
+            newChunk(sizes_.chunk, false, &l, c);  // failing, the render thread's next allocation tries itself
+            growing_ = false;
+        } else {
+            // the want stays listed while it is made, so an allocation that finds no room waits for it
+            const TiledWant w = tiledWanted_.front();
+            newTiledChunk(*w.chunks, w.kind, chunkSize(*w.chunks, sizes_.blChunk, 0, kBlAlign), false, &l, c);
+            tiledWanted_.erase(tiledWanted_.begin());
+        }
         grown_.notify_all();
     }
 }
@@ -946,6 +953,9 @@ void Device::warm()
         uint32_t c;
         while (poolFree_ <= sizes_.chunk && newChunk(sizes_.chunk, false, nullptr, c)) {
         }  // the first and the one ahead of it
+        while (tiledFreeBytes(blChunks_) <= sizes_.blChunk &&
+               newTiledChunk(blChunks_, fx::kBlockLinearKind, sizes_.blChunk, false, nullptr, c)) {
+        }  // and of block-linear images: the first frames' memoryless backings find room before the grower runs
     }
     if (!grower_.joinable())
         grower_ = std::thread([this] {
@@ -1625,12 +1635,68 @@ bool Device::createMemoryless(uint32_t width, uint32_t height, uint32_t format, 
 
 // ---- block-linear memory (raw/fx mip chains: kind 0xFE; zeta: kZetaPteKind), made on demand ----
 
+uint64_t Device::tiledFreeBytes(const std::vector<Chunk> &chunks)
+{
+    uint64_t free = 0;
+    for (const Chunk &ch : chunks)
+        if (ch.memory && !ch.dedicated)
+            free += ch.bytes - ch.used;
+    return free;
+}
+
+bool Device::tiledWanted(const std::vector<Chunk> &chunks) const
+{
+    return std::any_of(tiledWanted_.begin(), tiledWanted_.end(), [&](const TiledWant &w) {
+        return w.chunks == &chunks;
+    });
+}
+
+bool Device::newTiledChunk(std::vector<Chunk> &chunks, uint32_t kind, uint64_t size, bool dedicated,
+                           std::unique_lock<std::mutex> *unlocked, uint32_t &index)
+{
+    vm_address_t memory = 0;
+    if (vm_allocate(mach_task_self(), &memory, size, VM_FLAGS_ANYWHERE) != KERN_SUCCESS)
+        return false;
+    Chunk ch;
+    ch.memory = reinterpret_cast<void *>(memory);
+    ch.bytes = size;
+    ch.dedicated = dedicated;
+    if (unlocked)
+        unlocked->unlock();
+    const bool wired = k_.importPages(ch.memory, size, ch.bo);
+    if (unlocked)
+        unlocked->lock();
+    if (!wired || !k_.bindImport(ch.memory, ch.bo, kind) || (ch.bo.va & (kBlAlign - 1))) {
+        if (ch.bo.handle)
+            k_.free(ch.bo);
+        vm_deallocate(mach_task_self(), memory, size);
+        return false;
+    }
+    uint32_t c = 0;
+    while (c < chunks.size() && chunks[c].memory)
+        c++;
+    if (c == chunks.size())
+        chunks.emplace_back();
+    if (!dedicated)
+        ch.free[0] = size;
+    chunks[c] = std::move(ch);
+    stats.poolBytes += size;
+    stats.poolChunks++;
+    index = c;
+    return true;
+}
+
+// A span's first fit in a shared chunk, else a chunk made now: of its own over half a chunk, else a shared one. Where the grower
+// thread runs (the render server, warm()), the shared chunks grow ahead of need as the pool's do, so a pass's memoryless
+// backings, made at commit, find room rather than wiring a chunk on the commit path (r115: boot 15's keyboard took 64 such
+// imports of 16 MiB at ~8.5 ms each as ~10 ms encodes).
 bool Device::tiledAlloc(std::vector<Chunk> &chunks, uint32_t kind, uint64_t bytes, uint64_t align, Span &s)
 {
     align = std::max(align, kBlAlign);
     bytes = (bytes + kBlAlign - 1) & ~(kBlAlign - 1);
     s = {};
-    for (int pass = 0; pass < 2; pass++) {
+    const bool dedicated = bytes > sizes_.blChunk / 2;
+    for (int pass = 0; pass < 3; pass++) {
         for (uint32_t c = 0; c < chunks.size(); c++) {
             Chunk &ch = chunks[c];
             if (!ch.memory || ch.dedicated)
@@ -1646,42 +1712,41 @@ bool Device::tiledAlloc(std::vector<Chunk> &chunks, uint32_t kind, uint64_t byte
                     ch.free[at + bytes] = start + len - at - bytes;
                 ch.used += bytes;
                 s = {c, at, bytes, ch.bo.va + at, static_cast<uint8_t *>(ch.memory) + at};
+                if (grower_.joinable() && !tiledWanted(chunks) && tiledFreeBytes(chunks) < sizes_.blChunk) {
+                    tiledWanted_.push_back({&chunks, kind});  // the next chunk, off this thread
+                    grow_.notify_one();
+                }
                 return true;
             }
         }
-        if (pass)
+        if (pass == 2)
             break;
-        const bool dedicated = bytes > sizes_.blChunk / 2;
-        const uint64_t size = dedicated ? bytes : chunkSize(chunks, sizes_.blChunk, bytes, kBlAlign);
-        vm_address_t memory = 0;
-        if (vm_allocate(mach_task_self(), &memory, size, VM_FLAGS_ANYWHERE) != KERN_SUCCESS)
-            return false;
-        Chunk ch;
-        ch.memory = reinterpret_cast<void *>(memory);
-        ch.bytes = size;
-        ch.dedicated = dedicated;
-        if (!k_.importPages(ch.memory, size, ch.bo) || !k_.bindImport(ch.memory, ch.bo, kind) ||
-            (ch.bo.va & (kBlAlign - 1))) {
-            if (ch.bo.handle)
-                k_.free(ch.bo);
-            vm_deallocate(mach_task_self(), memory, size);
-            return false;
-        }
-        uint32_t c = 0;
-        while (c < chunks.size() && chunks[c].memory)
-            c++;
-        if (c == chunks.size())
-            chunks.emplace_back();
-        stats.poolBytes += size;
-        stats.poolChunks++;
         if (dedicated) {
-            ch.used = bytes;
-            s = {c, 0, bytes, ch.bo.va, static_cast<uint8_t *>(ch.memory)};
-            chunks[c] = std::move(ch);
+            uint32_t c;
+            if (!newTiledChunk(chunks, kind, bytes, true, nullptr, c))
+                return false;
+            chunks[c].used = bytes;
+            s = {c, 0, bytes, chunks[c].bo.va, static_cast<uint8_t *>(chunks[c].memory)};
             return true;
         }
-        ch.free[0] = size;
-        chunks[c] = std::move(ch);
+        stats.poolStalls++;
+        if (tiledWanted(chunks)) {  // the grower is making one: wait for it rather than wire a second
+            std::unique_lock<std::mutex> l(lock_, std::adopt_lock);
+            // bounded, as the pool's wait (a chunk not wired in 20 s is a stuck kernel import)
+            if (!grown_.wait_for(l, std::chrono::seconds(20), [&] {
+                    return !tiledWanted(chunks);
+                })) {
+                os_log_fault(
+                    os_log_create("com.brunostjohn.switch.TegraGM20BMetal", "raw"),
+                    "raw: block-linear chunk not wired after 20 s (the grower's import): abort() for the stack");
+                abort();
+            }
+            l.release();
+            continue;
+        }
+        uint32_t c;
+        if (!newTiledChunk(chunks, kind, chunkSize(chunks, sizes_.blChunk, bytes, kBlAlign), false, nullptr, c))
+            return false;
     }
     return false;
 }
@@ -1714,6 +1779,10 @@ void Device::tiledFree(std::vector<Chunk> &chunks, Span &s)
     if (!merged)
         ch.free[offset] = bytes;
     s = {};
+    // an empty chunk goes back while the others keep a chunk's worth free, as the pool's do: a burst's peak is not held for
+    // good (boot 15: backboardd's chunks stayed at 912 MB after its keyboard's burst)
+    if (!ch.used && tiledFreeBytes(chunks) >= ch.bytes + sizes_.blChunk)
+        freeChunk(ch);
 }
 
 bool Device::createMipTexture(uint32_t width, uint32_t height, uint32_t format, uint32_t levels, Texture &t)
@@ -1938,6 +2007,12 @@ uint64_t Device::wcChunkBytesHeld()
     for (const Chunk &ch : wcChunks_)
         n += ch.bo.handle && !ch.dedicated ? ch.bytes : 0;
     return n;
+}
+
+uint64_t Device::blChunkFreeBytes()
+{
+    std::lock_guard<std::mutex> l(lock_);
+    return tiledFreeBytes(blChunks_);
 }
 
 // The caller's pages around [bytes, bytes + length): the frontend answers minBufferNoCopyAlignmentBytes with the kernel's 4 KiB
@@ -2298,7 +2373,8 @@ void Device::freeBacking(Texture &t)
         poolFree(t.span);
 }
 
-// Backings no pass used for 600 command buffers (~10 s of frames) and whose last use completed go back to the pool.
+// Backings no pass used for 600 command buffers (~10 s of frames) and whose last use completed go back to the pool; a retired
+// one (its compressed replacement made) as soon as its last use completed, as no pass takes it again.
 void Device::trimBackings()
 {
     compTrim();
@@ -2310,9 +2386,10 @@ void Device::trimBackings()
         }
         ++it;
     }
+    uint64_t plain = 0, plainBytes = 0, retired = 0;
     for (auto it = backings_.begin(); it != backings_.end();) {
         Backing *b = *it;
-        if (commitCount_ - b->lastCommit > 600 && (!b->lastUse || done(b->lastUse))) {
+        if ((b->retired || commitCount_ - b->lastCommit > 600) && (!b->lastUse || done(b->lastUse))) {
             if (b->comp.handle)
                 compFree(*b);
             else
@@ -2321,8 +2398,20 @@ void Device::trimBackings()
             it = backings_.erase(it);
             continue;
         }
+        if (!b->comp.handle) {
+            plain++;
+            plainBytes += b->texture.span.bytes;
+            retired += b->retired;
+        }
         ++it;
     }
+    stats.backings = plain;
+    stats.backingBytes = plainBytes;
+    stats.retiredBackings = retired;
+    uint64_t tiledFree = tiledFreeBytes(blChunks_);
+    for (const std::vector<Chunk> &z : zChunks_)
+        tiledFree += tiledFreeBytes(z);
+    stats.tiledFreeBytes = tiledFree;
 }
 
 // ---- command buffer ----
