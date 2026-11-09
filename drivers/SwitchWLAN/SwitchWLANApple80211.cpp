@@ -33,31 +33,30 @@ bool gLinkAnnounced;    // wifid was told the link is up (an association) and no
 uint32_t gBtFlags;      // wifid's APPLE80211_IOC_BT_COEX_FLAGS: SWLAN_BT_* (SwitchWLANCoex.h)
 uint32_t gBtPower = 1;  // wifid's APPLE80211_IOC_BT_POWER
 int gAssocResult = kAssocOk;
+deauth_info gDeauth = {1, 0, {}, {}};  // the last link loss, for APPLE80211_IOC_DEAUTH asked
 unsigned gScanCursor, gScanning;
 
 // Events to the framework: class IEEE 802.11 (6), subclass 1, data starting with the interface's name. None before
 // IONetworkStack attached en0: nothing has asked about it yet.
-void post_event(uint32_t code, const void *payload, size_t length)
+void post_event(uint32_t code, void *payload, size_t length)
 {
     ifnet_t ifp = swlan::net::ifnet();
     if (!ifp)
         return;
-    uint8_t data[128];
-    if (length > sizeof data - 16)
-        length = sizeof data - 16;
-    memset(data, 0, 16);
-    snprintf(reinterpret_cast<char *>(data), 16, "%s%u", ifnet_name(ifp), ifnet_unit(ifp));
-    if (length)
-        memcpy(data + 16, payload, length);
+    char name[16] = {};
+    snprintf(name, sizeof name, "%s%u", ifnet_name(ifp), ifnet_unit(ifp));
     struct kev_msg msg;
     memset(&msg, 0, sizeof msg);
     msg.vendor_code = KEV_VENDOR_APPLE;
     msg.kev_class = 6;
     msg.kev_subclass = 1;
     msg.event_code = code;
-    msg.dv[0].data_length = static_cast<uint32_t>(16 + length);
-    msg.dv[0].data_ptr = data;
-    swlan_kev_post(&msg);
+    msg.dv[0].data_length = sizeof name;
+    msg.dv[0].data_ptr = name;
+    msg.dv[1].data_length = static_cast<uint32_t>(length);
+    msg.dv[1].data_ptr = payload;
+    if (const int e = swlan_kev_post(&msg))
+        IOLog("SwitchWLAN: event %u (%zu bytes) not posted: %d\n", code, length, e);
 }
 
 void on_scan_done()
@@ -448,6 +447,8 @@ int answer(bool set, apple80211req &rq)
     }  // two letters and a NUL
     case kAssociateResult:
         return answer_value(rq, static_cast<uint32_t>(gAssocResult));
+    case kDeauth:
+        return kAnswersDeauthGet ? copy_out(rq, &gDeauth, sizeof gDeauth) : EOPNOTSUPP;
     case kBtCoexFlags:
         return answer_value(rq, gBtFlags);
     case kBtPower:
@@ -546,7 +547,13 @@ void scan_done()
 void associated()
 {
     post_event(kEvSsidChanged, nullptr, 0);
-    post_event(kEvBssidChanged, nullptr, 0);
+    bssid_changed bssid = {};
+    bssid.reason = kBssidChangeLinkUpJoin;
+    post_event(kEvBssidChanged, &bssid, kJoinEventData ? sizeof bssid : 0);
+    swlan_status st;
+    switch_wlan_status_get(&st);
+    memcpy(gDeauth.bssid, st.bssid, sizeof gDeauth.bssid);
+    gDeauth.reason = 0;
     post_link_event(true, 0);
 }
 
@@ -575,7 +582,14 @@ void connect_done(int result)
             post_event(kEvSupplicant, &sup, sizeof sup);
         }
     }
-    post_event(kEvAssocDone, nullptr, 0);
+    join_report report = {};
+    swlan_status st;
+    switch_wlan_status_get(&st);
+    memcpy(report.bss[0].bssid, st.bssid, sizeof st.bssid);
+    report.bss[0].rssi = st.signal_dbm;
+    report.result = static_cast<uint32_t>(gAssocResult);
+    report.result_valid = 1;
+    post_event(kEvAssocDone, &report, kJoinEventData ? sizeof report : 0);
     // A join that failed after the association (the key handshake): the link up wifid was given goes down again.
     if (result != SWLAN_RES_OK && gLinkAnnounced)
         post_link_event(false, 0);
@@ -583,6 +597,7 @@ void connect_done(int result)
 
 void link_lost(int reason)
 {
+    gDeauth.reason = static_cast<uint32_t>(reason);
     set_link(false);
     post_link_event(false, reason);
     purge();
