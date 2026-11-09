@@ -101,6 +101,35 @@ class Rules(unittest.TestCase):
         refusal = next(c for c in checks.GROUPS['refusals'] if c.name == 'refusal.kernel')
         self.assertIn('kernel_task/SwitchVIC/pitch x1', run(refusal)['refusal.kernel'].observed)
 
+    def test_compute_view_refusals(self):
+        view = next(c for c in checks.GROUPS['refusals'] if c.name == 'refusal.compute-view')
+
+        def record(message: str, subsystem: str) -> dict:
+            return {
+                'timestamp': '2026-11-09 15:51:01.210000+0000',
+                'bootUUID': 'B00T',
+                'processImagePath': '/usr/libexec/PosterBoard',
+                'subsystem': subsystem,
+                'category': 'raw',
+                'messageType': 'Error',
+                'eventMessage': message,
+            }
+
+        boot17 = [
+            record('PosterBoard[261] compute.view: a=0 (0x0) b=0 (0x0)', checks.REFUSAL_SUBSYSTEM),
+            record(
+                'PosterBoard[261] cb.m2v: command buffer on m2v (compute): a kernel m2v binds a view of another '
+                'format at a texture slot [first predicate compute.view]',
+                checks.REFUSAL_SUBSYSTEM,
+            ),
+            record('TegraGM20BMetal: PosterBoard raw 5s why=compute.view:7/7', checks.GPU_METAL_SUBSYSTEM),
+        ]
+        results, _ = devicerun.run_checks(boot17, [view])
+        self.assertEqual(results[0].verdict, FAIL)
+        self.assertIn('PosterBoard', results[0].observed)
+        results, _ = devicerun.run_checks(boot17[2:], [view])
+        self.assertEqual(results[0].verdict, PASS)
+
     def test_wifi_join_boot16(self):
         events = devicerun.read_ndjson(str(TEST / 'wifi.ndjson'))
         results, _ = devicerun.run_checks(events, checks.GROUPS['wifi'])

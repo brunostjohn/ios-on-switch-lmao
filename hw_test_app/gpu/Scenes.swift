@@ -20,6 +20,7 @@ public enum Scenes {
         KernelOffsetScene(),
         MemorylessBurstScene(),
         KernelDirectScene(),
+        KernelViewScene(),
         HeapTwinScene(),
     ]
 }

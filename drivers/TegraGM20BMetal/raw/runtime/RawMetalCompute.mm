@@ -9,6 +9,7 @@
 #include "raw_compute.h"
 #include "raw_compute_key.h"
 #include "raw_metallib.h"
+#include "raw_view.h"
 
 @interface RMComputeState : RMTwinObject {
 @public
@@ -363,14 +364,13 @@ static bool plainTexture(RMTexture *t)
             k = nullptr;
             refused = true;
         }
-        // m2v binds its own view of another format there (a half texture's raw bits), which the raw path does not make
-        const raw::FormatInfo *f = x.kind == raw::KernelTexture && x.slot < 31 && _textures[x.slot]
-                                       ? raw::formatInfo(_textures[x.slot]->_raw.format)
-                                       : nullptr;
-        if (f && x.window && f->tic0 != x.window) {
+        RMTexture *viewed = x.kind == raw::KernelTexture && x.slot < 31 ? _textures[x.slot] : nil;
+        const raw::FormatInfo *f = viewed ? raw::formatInfo(viewed->_raw.format) : nullptr;
+        if (f && raw::slotView(x.window, f->tic0, raw::swizzledWord0(f->tic0, viewed->_raw.swizzle), f->bpp,
+                               raw::blockCompressed(f)) == raw::SlotView::None) {
             [self refuse:PredComputeView
                    value:x.slot
-                     why:@"a kernel m2v binds a view of another format at a texture slot"];
+                     why:@"a kernel m2v binds a view of another texel size at a texture slot"];
             k = nullptr;
             refused = true;
         }

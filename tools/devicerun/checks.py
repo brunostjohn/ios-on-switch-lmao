@@ -586,6 +586,18 @@ GROUPS: dict[str, list[Check]] = {
             note='generateMipmaps of a format no engine filters sends its command buffer to m2v',
             source='drivers/TegraGM20BMetal/raw/runtime/raw_mip.h',
         ),
+        Check(
+            'refusal.compute-view',
+            'r126-computeview',
+            'compute.view',
+            subsystem=REFUSAL_SUBSYSTEM,
+            regex=r'^(?P<who>[^\[]+)\[\d+\] compute\.view: ',
+            show=('who',),
+            source='drivers/TegraGM20BMetal/raw/runtime/RawMetalCompute.mm',
+            note="a kernel's texture m2v views in a format of another texel size; boot 17 (half-float writes, before "
+            'raw bound their view): PosterBoard 216 of 222 command buffers on m2v, iconservicesagent 4, '
+            'SwitchHWTest 51 (the MPS and Core Image blurs among them)',
+        ),
     ],
     'io': [
         Check('io.hid-element-values', 'r33-io', 'updateElementValues failed', REPORT, process=KERNEL),

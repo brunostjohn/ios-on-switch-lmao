@@ -58,6 +58,7 @@ TESTS: dict[str, bool] = {
             'gpu.raw.kernel_offset',
             'gpu.raw.memoryless_burst',
             'gpu.raw.kernel_direct',
+            'gpu.raw.kernel_view',
             'gpu.heap.m2v_target',
             'metal.device',
             'metal.compute',

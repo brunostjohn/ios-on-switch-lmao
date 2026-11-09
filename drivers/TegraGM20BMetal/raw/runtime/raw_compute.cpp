@@ -3,6 +3,7 @@
 #include "raw_compute.h"
 #include "raw_residual.h"
 #include "raw_slm.h"
+#include "raw_view.h"
 
 #include <algorithm>
 #include <cstring>
@@ -256,12 +257,20 @@ bool ComputeEncoder::dispatch(const uint32_t groups[3], const uint32_t threads[3
                 *why = "a texture the raw path cannot sample";
                 return false;
             }
-            const FormatInfo *f = t ? formatInfo(t->format) : nullptr;
-            if (f && e.window && f->tic0 != e.window) {
-                *why = "a kernel m2v binds a view of another format at a texture slot";
-                return false;
+            uint32_t tic = t ? t->tic : 0;
+            if (const FormatInfo *f = t ? formatInfo(t->format) : nullptr) {
+                const SlotView view =
+                    slotView(e.window, f->tic0, swizzledWord0(f->tic0, t->swizzle), f->bpp, blockCompressed(f));
+                if (view == SlotView::None) {
+                    *why = "a kernel m2v binds a view of another texel size at a texture slot";
+                    return false;
+                }
+                if (view == SlotView::View && !(tic = dev_.viewTic(*t, e.window))) {
+                    *why = "no texture header left for a kernel's view of another format";
+                    return false;
+                }
             }
-            at[0] |= t ? t->tic : 0;
+            at[0] |= tic;
         } else if (e.slot & kConstexprSampler) {
             const uint32_t index = e.slot & ~kConstexprSampler;
             if (index >= dev_.constexprCount_) {

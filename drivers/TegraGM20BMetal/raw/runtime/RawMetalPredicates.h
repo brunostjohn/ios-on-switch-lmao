@@ -55,7 +55,7 @@ enum RMPred : uint8_t {
     PredComputeOff16,   // a buffer off 16 bytes where the kernel's record names no residual word: a = slot
     PredComputeKernel,  // no pack kernel at the dispatch's shape, memory, textures and samplers
     PredComputeImage,   // a texture sampled through an image of its own: a = slot
-    PredComputeView,    // a texture where m2v binds a view of another format: a = slot
+    PredComputeView,    // a texture where m2v binds a view of another texel size: a = slot
     PredComputeEdge,    // dispatchThreads: of a grid with an edge threadgroup: a = the grid's edge
     PredMipmaps,
     PredMipmapsFormat,  // a mipmapped texture's generateMipmaps in a format neither the 2D engine nor a mip state filters: a = format
