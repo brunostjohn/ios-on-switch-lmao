@@ -110,6 +110,7 @@
 #include <sys/persona.h>
 #include <sys/reason.h>
 #include <switch/pretranslated.h>
+#include <switch/protection.h>
 #include <switch/a64x.h>
 #if SYSV_SHM
 #include <sys/shm_internal.h>           /* shmexec() */
@@ -9834,6 +9835,7 @@ load_init_program(proc_t p)
 	/* Owner overlay unions over sealed directories (SwitchRawMount.h), now that Data is mounted. */
 	native_switch_raw_overlay(p, (user_addr_t)scratch_addr);
 	switch_pretranslated_capture();
+	switch_protection_capture();
 #endif
 #endif
 #if CONFIG_MEMORYSTATUS

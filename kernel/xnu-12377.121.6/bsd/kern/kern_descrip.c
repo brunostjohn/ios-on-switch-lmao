@@ -127,6 +127,7 @@
 #include <os/atomic_private.h>
 #include <os/overflow.h>
 #include <IOKit/IOBSD.h>
+#include <switch/protection.h>
 
 void fileport_releasefg(struct fileglob *fg);
 
@@ -4515,6 +4516,12 @@ dropboth:
 			goto outdrop;
 		}
 
+		if (switch_protection_volume(vp)) {
+			error = switch_protection_get(vp, retval, &context);
+			vnode_put(vp);
+			break;
+		}
+
 		struct vnode_attr va;
 
 		VATTR_INIT(&va);
@@ -4558,12 +4565,11 @@ dropboth:
 		}
 
 		/*
-		 * Switch: the Data volume is APFS without content protection (MNT_CPROTECT clear: no per-file keys, so no
-		 * class to keep), and APFS answers a class change there with EPERM. iOS clients take that as a failed write
-		 * (SplashBoard leaves its launch snapshots at 0 bytes), so on such a volume a valid class is the no-op it is.
+		 * Switch: APFS answers a class change on a volume without content protection with EPERM, which iOS clients
+		 * take as a failed write (SplashBoard leaves its launch snapshots at 0 bytes).
 		 */
 		if (!(vfs_flags(vnode_mount(vp)) & MNT_CPROTECT)) {
-			error = cp_is_valid_class(vnode_isdir(vp), (int32_t)tmp) ? 0 : EINVAL;
+			error = switch_protection_set(vp, (int32_t)tmp, ctx);
 			vnode_put(vp);
 			break;
 		}

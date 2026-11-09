@@ -113,6 +113,8 @@ class Reports(unittest.TestCase):
         self.assertIn('SpringBoard x1', crash['crash.crashes'].observed)
         self.assertEqual(crash['crash.panics'].verdict, PASS)
         self.assertIn('JetsamEvent x1', crash['crash.jetsam'].observed)
+        self.assertEqual(crash['crash.locationd'].verdict, FAIL)
+        self.assertEqual(crash['crash.spotlightknowledged'].verdict, PASS)
         self.assertEqual(devicerun.crash_rows(None)[0].verdict, NO_DATA)
 
     def test_boot_label_selects_checks_and_steps(self):

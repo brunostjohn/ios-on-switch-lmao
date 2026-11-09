@@ -153,6 +153,7 @@
 #include <security/mac_framework.h>
 #endif
 #include <switch/identity.h>
+#include <switch/protection.h>
 
 #if CONFIG_FSE
 #define GET_PATH(x) \
@@ -3831,7 +3832,7 @@ vfs_get_statfs64(struct mount *mp, struct statfs64 *sfs)
 	sfs->f_fsid = vsfs->f_fsid;
 	sfs->f_owner = vsfs->f_owner;
 	sfs->f_type = mp->mnt_vtable->vfc_typenum;
-	sfs->f_flags = mp->mnt_flag & MNT_VISFLAGMASK;
+	sfs->f_flags = (mp->mnt_flag & MNT_VISFLAGMASK) | switch_protection_mount_flags(mp);
 	sfs->f_fssubtype = vsfs->f_fssubtype;
 	sfs->f_flags_ext = vfs_getextflags(mp);
 	vfs_getfstypename(mp, sfs->f_fstypename, MFSTYPENAMELEN);
@@ -14656,7 +14657,7 @@ munge_statfs(struct mount *mp, struct vfsstatfs *sfsp,
 		struct user64_statfs sfs;
 		my_size = copy_size = sizeof(sfs);
 		bzero(&sfs, my_size);
-		sfs.f_flags = mp->mnt_flag & MNT_VISFLAGMASK;
+		sfs.f_flags = (mp->mnt_flag & MNT_VISFLAGMASK) | switch_protection_mount_flags(mp);
 		sfs.f_type = (short)mp->mnt_vtable->vfc_typenum;
 		sfs.f_reserved1 = (short)sfsp->f_fssubtype;
 		sfs.f_bsize = (user64_long_t)sfsp->f_bsize;
@@ -14682,7 +14683,7 @@ munge_statfs(struct mount *mp, struct vfsstatfs *sfsp,
 		my_size = copy_size = sizeof(sfs);
 		bzero(&sfs, my_size);
 
-		sfs.f_flags = mp->mnt_flag & MNT_VISFLAGMASK;
+		sfs.f_flags = (mp->mnt_flag & MNT_VISFLAGMASK) | switch_protection_mount_flags(mp);
 		sfs.f_type = (short)mp->mnt_vtable->vfc_typenum;
 		sfs.f_reserved1 = (short)sfsp->f_fssubtype;
 

@@ -14,6 +14,7 @@ py_library(
         "hwtest.py",
         "lockscreen.py",
         "morning.py",
+        "protection.py",
         "raw_stats.py",
         "reports.py",
         "rules.py",
