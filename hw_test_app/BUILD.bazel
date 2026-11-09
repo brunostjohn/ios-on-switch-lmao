@@ -239,6 +239,21 @@ cc_library(
 )
 
 swift_interop_hint(
+    name = "sched_probe_module",
+    module_name = "SwitchSchedProbe",
+)
+
+# cpu.sched's spinners, timer and semaphore waiters.
+cc_library(
+    name = "sched_probe",
+    srcs = ["cpu/switch_sched_probe.c"],
+    hdrs = ["cpu/switch_sched_probe.h"],
+    aspect_hints = [":sched_probe_module"],
+    copts = ["-O2"],
+    target_compatible_with = ["@platforms//os:ios"],
+)
+
+swift_interop_hint(
     name = "a64x_probe_module",
     module_name = "SwitchA64XProbe",
 )
@@ -274,6 +289,7 @@ swift_library(
         ":core",
         ":cpu_clock",
         ":gpu",
+        ":sched_probe",
         ":video",
     ],
 )
