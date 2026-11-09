@@ -75,8 +75,8 @@ std::string cbufList(const std::vector<uint8_t> &types)
 
 // packfile.py entry_bytes, from mkpack.py buffer_entry: a 16-byte payload bound at 256 is a uniform buffer (NVK rounds its range
 // up to the cbuf alignment), else storage; the 4096-byte one's range is the function's window on the slot (0: the whole payload);
-// a uniform one's residual push word (packfile.py buffer_kind)
-PackEntry bufferEntry(const LayoutEntry &e, const RecordParts &parts)
+// its residual push word (packfile.py buffer_kind), a storage one's where no other storage slot shares its code
+PackEntry bufferEntry(const LayoutEntry &e, const RecordParts &parts, bool codeShared)
 {
     uint32_t s16 = 256, s4k = 256;
     if (parts.sizes16.count(e.offset) || parts.sizes4096.count(e.offset)) {
@@ -90,9 +90,9 @@ PackEntry bufferEntry(const LayoutEntry &e, const RecordParts &parts)
     p.stage = e.stage;
     p.slot = e.slot;
     p.samplerKind = s16 < 256 ? 1 : 0;
-    if (const auto at = parts.residuals.find(probeBindOffset(e.stage, e.slot));
-        !p.samplerKind && at != parts.residuals.end())
-        p.samplerKind = uint8_t(((at->second - 0x700) / 4 + 1) << 2);
+    const uint32_t value = p.samplerKind ? probeStorageCode(e.stage, e.slot) : probeBindOffset(e.stage, e.slot);
+    if (const auto at = parts.residuals.find(value); at != parts.residuals.end() && !(p.samplerKind && codeShared))
+        p.samplerKind |= uint8_t(((at->second - 0x700) / 4 + 1) << 2);
     p.sampler = uint8_t(window / 16);
     p.pad = uint8_t(window / 16 >> 8);
     return p;
@@ -229,12 +229,16 @@ bool assembleRecord(const RecordParts &parts, const std::string &key, const Pack
         return false;
     }
     PackPipeline &p = out.pipeline;
+    std::map<uint32_t, int> storageCodes;
+    for (const LayoutEntry &e : parts.layout)
+        if (e.buffer && bufferEntry(e, parts, false).samplerKind & 1)
+            storageCodes[probeStorageCode(e.stage, e.slot)]++;
     for (const LayoutEntry &e : parts.layout) {
         PackEntry &entry = p.entry[p.entries++];
         if (e.colorTable)
             entry = {uint16_t(e.offset), EntryColorTable, 2, 0, 0, 0, 0};
         else if (e.buffer)
-            entry = bufferEntry(e, parts);
+            entry = bufferEntry(e, parts, storageCodes[probeStorageCode(e.stage, e.slot)] > 1);
         else if (!handleEntry(e, rules, out, entry, why))
             return false;
         if (entry.kind == EntryFetch)

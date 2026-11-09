@@ -7,6 +7,7 @@
 #include <cstdio>
 #include "../pack/probe_record.h"
 #include "raw_record_parts.h"
+#include "raw_residual.h"
 #include "raw_srgb_table.h"
 
 namespace raw {
@@ -184,19 +185,13 @@ std::map<uint32_t, uint32_t> boundSizes(const nvdec::ProbeSubmission *s)
     return out;
 }
 
-// mkpack.py attach_residuals: the root push words the bind-offset run set where the 256-byte run left 0, by their value's low byte
+// mkpack.py attach_residuals
 std::map<uint32_t, uint32_t> residualWords(const nvdec::ProbeSubmission *plain, const nvdec::ProbeSubmission *bound)
 {
-    std::map<uint32_t, uint32_t> out;
     if (!plain || !bound || bound->draws != 1 || bound->dispatches || bound->records.empty() || plain->records.empty())
-        return out;
-    std::map<uint32_t, uint32_t> was;
-    for (const auto &[offset, word] : plain->records[0].pushWords)
-        was[offset] = word;
-    for (const auto &[offset, word] : bound->records[0].pushWords)
-        if (word && !was[offset])
-            out[word & 0xff] = offset;
-    return out;
+        return {};
+    const auto &was = plain->records[0].pushWords, &now = bound->records[0].pushWords;
+    return residualWordsByValue({was.begin(), was.end()}, {now.begin(), now.end()});
 }
 
 // mkpack.py vertex_streams: the Metal vertex buffer slot and stride of the first stream; false: a stream fed by no vertex slot

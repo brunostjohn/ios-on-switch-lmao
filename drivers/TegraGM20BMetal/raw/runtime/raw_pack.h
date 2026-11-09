@@ -95,8 +95,8 @@ inline bool bufferStorage(const PackEntry &e)
     return e.samplerKind & 1;
 }
 
-// A uniform buffer entry's root push word (0x700 + 4 x word) that holds m2v's SlotBindOffset residual for its slot, -1 where the
-// record names none (its states then take only offsets that are multiples of 256)
+// A buffer entry's root push word (0x700 + 4 x word) that holds m2v's SlotBindOffset residual for its slot, -1 where the record
+// names none (its states then take only offsets on m2v's base alignment: raw_residual.h)
 inline int bufferResidualWord(const PackEntry &e)
 {
     return int(e.samplerKind >> 2) - 1;

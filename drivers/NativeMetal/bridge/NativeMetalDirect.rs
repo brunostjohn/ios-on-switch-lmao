@@ -167,9 +167,17 @@ fn probe_sampler(s: u32) -> SamplerDescriptor {
     d
 }
 
-/// raw_record.h probeBindOffset
+/// pack/probe_bind.h probeBindOffset: a uniform slot's residual is the offset itself (16 or more), a storage slot's its low
+/// four bits (4, 8 or 12 at the vertex stage, which stays 4-aligned for fixed-function vertex buffers; at the fragment stage
+/// one of the twelve that are not multiples of 4)
 fn probe_bind_offset(stage: u32, slot: u32) -> u64 {
-    4 * (1 + slot as u64 + if stage == 2 { 31 } else { 0 })
+    const FRAGMENT_CODES: [u64; 12] = [1, 2, 3, 5, 6, 7, 9, 10, 11, 13, 14, 15];
+    let slot = u64::from(slot);
+    if stage == 2 {
+        16 * (12 + slot / 12) + FRAGMENT_CODES[(slot % 12) as usize]
+    } else {
+        16 * (1 + slot / 3) + 4 * (1 + slot % 3)
+    }
 }
 
 /// The bind state of probe.mm's draw `run`: every buffer slot of both stages bound (inline bytes, or the bound run's

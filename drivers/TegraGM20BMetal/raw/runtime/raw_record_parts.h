@@ -42,8 +42,9 @@ struct LayoutEntry {
 struct RecordParts {
     const CapturedProgram *programs[2] = {};  // vertex, fragment
     std::vector<LayoutEntry> layout;          // by offset
-    // By set-0 byte of a buffer entry: the range its descriptor holds with 16- and 4096-byte payloads; by a slot's own bind
-    // offset (probeBindOffset), the root word (0x700 + 4 x word) that holds it in the bind-offset draw
+    // By set-0 byte of a buffer entry: the range its descriptor holds with 16- and 4096-byte payloads; by the value a slot's
+    // residual has in the bind-offset draw (probeBindOffset, a storage slot's probeStorageCode), the root word (0x700 + 4 x
+    // word) that holds it
     std::map<uint32_t, uint32_t> sizes16, sizes4096, residuals;
     uint8_t vertexSlot = 0xFF;
     uint16_t vertexStride = 0;

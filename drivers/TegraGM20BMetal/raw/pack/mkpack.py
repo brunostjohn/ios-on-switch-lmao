@@ -403,9 +403,19 @@ def lay_out_programs(
     return heap, prog_index, prog_recs
 
 
+FRAGMENT_CODES = (1, 2, 3, 5, 6, 7, 9, 10, 11, 13, 14, 15)
+
+
 def bind_offset(stage: str, slot: int) -> int:
-    """Give the offset the probe's bind-offset run binds a slot's payload at (probe.mm PROBE_BIND_OFFSET)."""
-    return 4 * (1 + slot + (31 if stage == 'f' else 0))
+    """Give the offset the probe's bind-offset run binds a slot's payload at (probe_bind.h probeBindOffset)."""
+    if stage == 'f':
+        return 16 * (12 + slot // 12) + FRAGMENT_CODES[slot % 12]
+    return 16 * (1 + slot // 3) + 4 * (1 + slot % 3)
+
+
+def storage_code(stage: str, slot: int) -> int:
+    """Give the residual a storage slot's push word holds in the bind-offset run (probe_bind.h probeStorageCode)."""
+    return bind_offset(stage, slot) & 15
 
 
 def push_words(p: dict) -> dict[int, int]:
@@ -415,10 +425,11 @@ def push_words(p: dict) -> dict[int, int]:
 def attach_residuals(dirs: list[str], probes: list[dict]) -> None:
     """Give each probe ('residuals') the root push words the bind-offset run changed, by their value's low byte.
 
-    A uniform slot's SlotBindOffset residual is its bind offset less the multiple of NVK's 256-byte alignment at or
-    below where its window starts: in that run, the slot's own offset modulo 256 (a window starting past 256 - offset
-    makes it negative), 0 in the 256-byte run's. A bucket without the run gives none (such states take only aligned
-    offsets).
+    A slot's SlotBindOffset residual is its bind offset less the multiple of m2v's base alignment (NVK's 256 bytes for a
+    uniform buffer, 16 for a storage one) at or below where its window starts: in that run, the slot's own offset
+    modulo the alignment (a window starting past it makes it negative), 0 in the 256-byte run's. A low byte two words
+    share names neither (runtime/raw_residual.h residualWordsByValue). A bucket without the run gives none (such states
+    take only aligned offsets).
     """
     residuals = {}
     for b, d in enumerate(dirs):
@@ -434,17 +445,27 @@ def attach_residuals(dirs: list[str], probes: list[dict]) -> None:
             if p['draws'] != 1 or p['dispatches'] or not p['records'] or p['index'] not in plain:
                 continue
             was = plain[p['index']]
-            residuals[(b, p['index'])] = {v & 0xFF: o for o, v in push_words(p).items() if v and not was.get(o)}
+            changed = [(v & 0xFF, o) for o, v in push_words(p).items() if v and not was.get(o)]
+            values = collections.Counter(v for v, _ in changed)
+            residuals[(b, p['index'])] = {v: o for v, o in changed if values[v] == 1}
     for p in probes:
         p['residuals'] = residuals.get((p['bucket'], p['index']), {})
 
 
-def buffer_entry(e: tuple, index: tuple[int, int], sizes: dict[tuple, list[int]], words: dict[int, int]) -> dict:
-    s16, s4k = sizes.get((*index, e[0]), (256, 256))
-    # a 16-byte payload bound at 256: a uniform buffer (NVK rounds its range to the cbuf alignment); else storage. The
-    # 4096-byte one's range: the window (0: the whole payload)
-    ssbo = s16 < 256
+def is_storage(e: tuple, index: tuple[int, int], sizes: dict[tuple, list[int]]) -> bool:
+    """Tell a storage buffer: its 16-byte payload bound at 256 keeps 16 bytes (NVK rounds a uniform one's to 256)."""
+    return sizes.get((*index, e[0]), (256, 256))[0] < 256
+
+
+def buffer_entry(
+    e: tuple, index: tuple[int, int], sizes: dict[tuple, list[int]], words: dict[int, int], shared: set[int]
+) -> dict:
+    """Give a buffer entry; a storage one's residual word where no other storage slot of the state shares its code."""
+    s4k = sizes.get((*index, e[0]), (256, 256))[1]
+    # the 4096-byte payload's range: the window (0: the whole payload)
+    ssbo = is_storage(e, index, sizes)
     window = 0 if s4k >= 4096 else s4k
+    code = storage_code(e[2], e[3])
     return {
         'off': e[0],
         'kind': 'ubo',
@@ -453,7 +474,7 @@ def buffer_entry(e: tuple, index: tuple[int, int], sizes: dict[tuple, list[int]]
         'size': e[4],
         'ssbo': ssbo,
         'window': window,
-        'residual': None if ssbo else words.get(bind_offset(e[2], e[3])),
+        'residual': (None if code in shared else words.get(code)) if ssbo else words.get(bind_offset(e[2], e[3])),
     }
 
 
@@ -517,8 +538,11 @@ def pipeline(
     root = r['root'][1]
     rec['push'] = [(int(o, 16), int(x, 16)) for o, x in (w.split('=') for w in r.get('pushw', []))]
     rec['set_size'] = root[0x38 // 4 + 2] if 'set0' in r else 0
+    index = (p['bucket'], p['index'])
+    codes = collections.Counter(storage_code(e[2], e[3]) for e in ents if e[1] == 'ubo' and is_storage(e, index, sizes))
+    shared = {c for c, n in codes.items() if n > 1}
     entries = [
-        buffer_entry(e, (p['bucket'], p['index']), sizes, p.get('residuals', {}))
+        buffer_entry(e, index, sizes, p.get('residuals', {}), shared)
         if e[1] == 'ubo'
         else {'off': e[0], 'kind': 'color_table'}
         if e[1] == 'color_table'
