@@ -5,6 +5,8 @@
 #                  every frame back exactly with Apple's decoder in three input layouts, sync samples where they
 #                  belong, P_Skip from the reference the setup names; the SPS/PPS/avcC parsing back with AVD's
 #                  H264Syntax.c; the checker refusing each kind of bad submit; the rate control on a synthetic encoder
+#   hevcenc_host_test  HEVCEncSyntax.c's VPS, SPS, PPS and slice headers parsed back by AVD's HEVCSyntax.c and taken by
+#                  CoreMedia, the level each size and rate gets
 #
 #   bazel test //drivers/SwitchVideoEncoders/test:all
 load("//bazel/lint:defs.bzl", "lint_files")
@@ -60,6 +62,30 @@ host_library(
     linkopts = FRAMEWORKS,
     textual_hdrs = ["//drivers/SwitchVideoEncoders:AVE/AVEEncoder.c"],
     deps = [":h264_nvenc"],
+)
+
+# The HEVC parameter set and slice header writer, parsed back with AVD's HEVC syntax.
+host_library(
+    name = "hevcenc_host",
+    srcs = [
+        "hevcenc_host.c",
+        "//drivers/SwitchVideoDecoders:AVD/HEVCSyntax.c",
+        "//drivers/SwitchVideoEncoders:AVE/HEVCEncSyntax.c",
+    ],
+    hdrs = [
+        "//drivers/SwitchVideoDecoders:AVD/HEVCSyntax.h",
+        "//drivers/SwitchVideoEncoders:AVE/HEVCEncSyntax.h",
+    ],
+    copts = ["-O1"],
+    defines = ["main=hevcenc_host_main"],
+    linkopts = FRAMEWORKS,
+    deps = [":h264_nvenc"],
+)
+
+host_test(
+    name = "hevcenc_host_test",
+    srcs = ["hevcenc_host_test.cpp"],
+    deps = [":hevcenc_host"],
 )
 
 host_test(
