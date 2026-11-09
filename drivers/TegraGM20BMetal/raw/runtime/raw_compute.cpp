@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 // See raw_compute.h. Method numbers are NVIDIA's (Mesa src/nouveau/headers/nvidia/classes/clb1c0.h, cla1c0qmd.h, MIT).
 #include "raw_compute.h"
+#include "raw_residual.h"
 #include "raw_slm.h"
 
 #include <algorithm>
@@ -215,25 +216,26 @@ bool ComputeEncoder::dispatch(const uint32_t groups[3], const uint32_t threads[3
     uint64_t setVa = 0;
     uint32_t *set = reinterpret_cast<uint32_t *>(dev_.alloc(dev_.upload_, setBytes, 256, setVa));
     memset(set, 0, setBytes);
+    uint32_t residuals[32] = {}, residualMask = 0;
     for (uint32_t i = 0; i < r.entries; i++) {
         const PackKernelEntry &e = r.entry[i];
         uint32_t *at = set + e.offset / 4;
         if (e.kind == KernelBuffer) {
             const Bound &b = bufs_[e.slot];
-            // m2v's descriptor (bind/instantiate.rs descriptor_range): from the bind offset rounded down to 16, its
-            // residual a push word no record names
-            if (b.va & 15) {
+            BufferDescriptor desc;
+            if (!bufferDescriptor(e, b.va, b.size, desc)) {
                 *why = "a buffer bound at an offset that is not a multiple of 16";
                 return false;
             }
-            uint32_t range = (b.size + 15) & ~15u;
-            if (e.window && e.window < range)
-                range = e.window;
+            if (desc.word >= 0) {
+                residuals[desc.word] = desc.residual;
+                residualMask |= 1u << desc.word;
+            }
             if (b.buffer && !b.buffer->wc && b.buffer->cpu)
-                cb_.clean(b.buffer->cpu + b.offset, std::min<uint64_t>(range, b.size));
-            at[0] = uint32_t(b.va);
-            at[1] = uint32_t(b.va >> 32);
-            at[2] = b.va ? range : 0;
+                cb_.clean(b.buffer->cpu + b.offset, std::min<uint64_t>(desc.range - desc.residual, b.size));
+            at[0] = uint32_t(desc.base);
+            at[1] = uint32_t(desc.base >> 32);
+            at[2] = b.va ? desc.range : 0;
             at[3] = 0;
         } else if (e.kind == KernelTexture) {
             const Texture *t = textures_[e.slot];
@@ -270,6 +272,8 @@ bool ComputeEncoder::dispatch(const uint32_t groups[3], const uint32_t threads[3
     root[kRootSets / 4 + 2] = r.setBytes;
     for (uint32_t m = r.pushMask; m; m &= m - 1)
         root[kRootPush / 4 + __builtin_ctz(m)] = r.pushWords[__builtin_ctz(m)];
+    for (uint32_t m = residualMask; m; m &= m - 1)
+        root[kRootPush / 4 + __builtin_ctz(m)] = residuals[__builtin_ctz(m)];
     if (r.regionWord >= 0)
         memcpy(root + kRootPush / 4 + r.regionWord, region, std::min<size_t>(sizeof region, 4 * (32 - r.regionWord)));
     uint64_t qmdVa = 0;

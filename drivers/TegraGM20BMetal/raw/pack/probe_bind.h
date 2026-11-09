@@ -27,4 +27,11 @@ constexpr uint32_t probeStorageCode(uint32_t stage, uint32_t slot)
     return probeBindOffset(stage, slot) & 15;
 }
 
+// A kernel's buffer slot's residual in probecompute.mm's bind-offset dispatch (pack/kernels.py residual_code): a kernel's
+// buffers are storage buffers, and slots 15 apart share one, so a kernel binding both names no word for either
+constexpr uint32_t probeComputeCode(uint32_t slot)
+{
+    return 1 + slot % 15;
+}
+
 }  // namespace raw

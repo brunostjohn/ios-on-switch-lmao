@@ -25,13 +25,11 @@ struct BufferDescriptor {
     int word = -1;  // the root push word (0x700 + 4 x word) the residual goes to; -1: the residual is 0
 };
 
-// Buffer entry `e`'s set-0 descriptor for `size` bytes bound at `va`: m2v's range (the function's window, clamped to the bytes
-// padded to 16; a uniform one at most NVK_MAX_CBUF_SIZE and rounded up to the cbuf alignment, nvk_ubo_descriptor). False where
-// the residual is not 0 and the record names no push word for it.
-inline bool bufferDescriptor(const PackEntry &e, uint64_t va, uint32_t size, BufferDescriptor &d)
+// A set-0 buffer descriptor for `size` bytes bound at `va`: m2v's range (the function's `window` in bytes, 0 the whole buffer,
+// clamped to the bytes padded to 16; a uniform one at most NVK_MAX_CBUF_SIZE and rounded up to the cbuf alignment,
+// nvk_ubo_descriptor). False where the residual is not 0 and `word` (the record's push word for it) is -1.
+inline bool bufferDescriptor(bool storage, uint32_t window, int word, uint64_t va, uint32_t size, BufferDescriptor &d)
 {
-    const bool storage = bufferStorage(e);
-    const uint32_t window = (uint32_t(e.sampler) | uint32_t(e.pad) << 8) * 16;
     d = {};
     d.range = (size + 15) & ~15u;
     if (!storage)
@@ -41,7 +39,7 @@ inline bool bufferDescriptor(const PackEntry &e, uint64_t va, uint32_t size, Buf
     d.residual = uint32_t(va & (bufferBaseAlignment(storage) - 1));
     d.base = va - d.residual;
     if (d.residual) {
-        d.word = bufferResidualWord(e);
+        d.word = word;
         if (d.word < 0)
             return false;
         const uint64_t end = (va + size + 15) & ~15ull,
@@ -51,6 +49,18 @@ inline bool bufferDescriptor(const PackEntry &e, uint64_t va, uint32_t size, Buf
     if (!storage)
         d.range = (d.range + 255) & ~255u;
     return true;
+}
+
+inline bool bufferDescriptor(const PackEntry &e, uint64_t va, uint32_t size, BufferDescriptor &d)
+{
+    return bufferDescriptor(bufferStorage(e), (uint32_t(e.sampler) | uint32_t(e.pad) << 8) * 16, bufferResidualWord(e),
+                            va, size, d);
+}
+
+// Compute buffer entry `e`'s descriptor: a kernel's buffers are storage buffers
+inline bool bufferDescriptor(const PackKernelEntry &e, uint64_t va, uint32_t size, BufferDescriptor &d)
+{
+    return bufferDescriptor(true, kernelBufferWindow(e), kernelResidualWord(e), va, size, d);
 }
 
 // The root push words the bind-offset run set where the 256-byte run left 0, by their value's low byte (pack/mkpack.py

@@ -3,7 +3,8 @@
 
 A texture3d argument is an entry with no slot, a state holds up to 32 set-0 entries, the buffer m2v binds of its own
 beside an 8-bit sRGB target is named as such, and a storage buffer's SlotBindOffset residual word is named by its code
-(raw/pack/probe_bind.h, the runtime's raw_residual_test).
+(raw/pack/probe_bind.h, the runtime's raw_residual_test), a compute kernel's from probecompute.mm's bind-offset
+dispatch.
 """
 
 import os
@@ -12,6 +13,7 @@ import sys
 import unittest
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'raw', 'pack'))
+import kernels
 import layouts
 import mkpack
 import packfile
@@ -63,6 +65,60 @@ class RecordsTest(unittest.TestCase):
         shared = mkpack.buffer_entry((16, 'ubo', 'v', 1, 0), index, sizes, words, {mkpack.storage_code('v', 1)})
         self.assertIsNone(shared['residual'])
         self.assertEqual(packfile.buffer_kind(shared), 1)
+
+
+def kernel(entries: list[dict], push: dict[int, int], prog: str = 'p') -> dict:
+    return {'prog': prog, 'qmd': [0] * 64, 'region': 4, 'set_bytes': 0x40, 'push': push, 'entries': entries}
+
+
+def buffer(off: int, slot: int, window: int = 0) -> dict:
+    return {'off': off, 'kind': kernels.BUFFER, 'slot': slot, 'window': window}
+
+
+class KernelResidualsTest(unittest.TestCase):
+    def test_codes_are_storage_residuals_distinct_below_fifteen(self):
+        codes = [kernels.residual_code(slot) for slot in range(31)]
+        self.assertEqual(len(set(codes[:15])), 15)
+        self.assertTrue(all(0 < c < 16 for c in codes))
+        self.assertEqual(kernels.residual_code(15), kernels.residual_code(0))
+
+    def test_each_buffer_takes_the_word_set_to_its_code(self):
+        plain = kernel([buffer(0, 0), buffer(16, 2, 64)], {0: 0x11})
+        offset = kernel(
+            [buffer(0, 0, 32), buffer(16, 2, 80)], {0: 0x11, 1: kernels.residual_code(0), 3: kernels.residual_code(2)}
+        )
+        kernels.attach_residuals(plain, offset)
+        self.assertEqual([e['residual'] for e in plain['entries']], [1, 3])
+        self.assertEqual(packfile.kernel_window(plain['entries'][0]), 2 << 24)
+        self.assertEqual(packfile.kernel_window(plain['entries'][1]), 64 | 4 << 24)
+
+    def test_a_word_set_before_or_twice_names_no_slot(self):
+        plain = kernel([buffer(0, 0), buffer(16, 1)], {1: 5})
+        offset = kernel(
+            [buffer(0, 0), buffer(16, 1)],
+            {1: kernels.residual_code(0), 2: kernels.residual_code(1), 3: kernels.residual_code(1)},
+        )
+        kernels.attach_residuals(plain, offset)
+        self.assertEqual([e['residual'] for e in plain['entries']], [None, None])
+        self.assertEqual(packfile.kernel_window(plain['entries'][0]), 0)
+
+    def test_slots_sharing_a_code_name_no_word(self):
+        plain = kernel([buffer(0, 0), buffer(16, 15)], {})
+        offset = kernel([buffer(0, 0), buffer(16, 15)], {2: kernels.residual_code(0)})
+        kernels.attach_residuals(plain, offset)
+        self.assertEqual([e['residual'] for e in plain['entries']], [None, None])
+
+    def test_a_kernel_without_its_bind_offset_dispatch_keeps_its_record_with_no_words(self):
+        plain = kernel([buffer(0, 0, 32)], {})
+        kernels.attach_residuals(plain, None)
+        self.assertIsNone(plain['entries'][0]['residual'])
+        self.assertEqual(packfile.kernel_window(plain['entries'][0]), 32)
+
+    def test_a_program_that_moves_with_the_offsets_takes_none(self):
+        plain = kernel([buffer(0, 0)], {})
+        offset = kernel([buffer(0, 0)], {2: kernels.residual_code(0)}, prog='q')
+        kernels.attach_residuals(plain, offset)
+        self.assertIsNone(plain['entries'][0]['residual'])
 
 
 if __name__ == '__main__':

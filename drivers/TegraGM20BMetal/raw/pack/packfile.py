@@ -96,13 +96,19 @@ def pipeline_bytes(rec: dict, key_offset: int, blob_off: int) -> bytes:
     return head + entry_bytes(rec['entries']) + push_bytes(rec['push'])
 
 
+def kernel_window(e: dict) -> int:
+    """Give a kernel entry's window word: a buffer's window bytes, its residual word + 1 in the top byte (0: none)."""
+    residual = e.get('residual')
+    return e['window'] | (residual + 1) << 24 if residual is not None else e['window']
+
+
 def kernel_bytes(k: dict, key_offset: int) -> bytes:
     """Give a compute kernel's PackKernel: its key, program, QMD template, set size, push words and set-0 entries."""
     mask, words = 0, [0] * 32
     for w, v in k['push'].items():
         mask |= 1 << w
         words[w] = v
-    entries = b''.join(struct.pack('<HBBI', e['off'], e['kind'], e['slot'], e['window']) for e in k['entries'])
+    entries = b''.join(struct.pack('<HBBI', e['off'], e['kind'], e['slot'], kernel_window(e)) for e in k['entries'])
     entries += bytes(8 * (KERNEL_ENTRIES - len(k['entries'])))
     return (
         struct.pack('<QIHBb', fnv(k['key'].encode()), key_offset, k['program'], len(k['entries']), k['region'])

@@ -1,13 +1,15 @@
 """The compute kernels of the probe's compute runs (probecompute.mm), for mkpack.py.
 
 A bucket's compute.out names each probed dispatch shape (KPROBE <i> tg=... grid=... key=<key>), the grid's width its
-own, and the shape's second dispatch the width after it (the tags bound from elsewhere). compute.log holds nvdec's
+own, the shape's second dispatch the width after it (the tags bound from elsewhere) and its third the one after that
+(each buffer bound residual_code bytes past its tag, which names its residual word). compute.log holds nvdec's
 record of each dispatch (nvdec_compute.cpp, NVDEC_KERNELS): its QMD and program (K qmd=), the root table's push words
 (K push), m2v's DispatchRegion field (K region), set 0's size (K set) and what each of set 0's words holds (K entry).
 Tags (probecompute.mm): a buffer slot's bytes start 0xC0DE0000 | slot, texture slot t is (16 + t) x (8 + t). Every
 sampler's header goes in the pack's samplers: the key holds the samplers bound, so the header is the record's own.
 """
 
+import collections
 import os
 import re
 
@@ -16,6 +18,39 @@ TAG_BYTES = 4096
 TEXTURE_TAG = (16, 8)
 CONSTEXPR = 0x80  # PackKernelEntry.slot of a constexpr sampler: its index in the pack's constexpr samplers
 BUFFER, TEXTURE, SAMPLER = 0, 1, 2  # runtime/raw_pack.h PackKernelEntryKind
+
+
+def residual_code(slot: int) -> int:
+    """Give a buffer slot's residual in the bind-offset dispatch (pack/probe_bind.h probeComputeCode)."""
+    return 1 + slot % 15
+
+
+def attach_residuals(k: dict, offset: dict | None) -> None:
+    """Give each of `k`'s buffer entries ('residual') the root push word its SlotBindOffset residual goes to, else None.
+
+    `offset` is the bind-offset dispatch's kernel: the words it set where the plain dispatch left 0, by their value's
+    low byte (runtime/raw_residual.h residualWordsByValue), name each slot by its code; a code two of the kernel's
+    buffer slots share, or one two words hold, names no word. A kernel whose program, QMD or set-0 layout moved with the
+    offsets takes none (its buffers stay on 16-byte offsets), as does one whose bind-offset dispatch nvdec did not
+    decode (`offset` None).
+    """
+    buffers = [e for e in k['entries'] if e['kind'] == BUFFER]
+    for e in buffers:
+        e['residual'] = None
+    if offset is None:
+        return
+    layout = [(e['off'], e['kind'], e['slot']) for e in k['entries']]
+    moved = [(e['off'], e['kind'], e['slot']) for e in offset['entries']]
+    if any(k.get(f) != offset.get(f) for f in ('prog', 'qmd', 'region', 'set_bytes')) or layout != moved:
+        return
+    changed = [(v & 0xFF, w) for w, v in offset['push'].items() if v and not k['push'].get(w)]
+    held = collections.Counter(v for v, _ in changed)
+    words = {v: w for v, w in changed if held[v] == 1}
+    codes = collections.Counter(residual_code(e['slot']) for e in buffers)
+    for e in buffers:
+        code = residual_code(e['slot'])
+        if codes[code] == 1:
+            e['residual'] = words.get(code)
 
 
 def blocks(log: str) -> list[list[str]]:
@@ -106,7 +141,7 @@ def load(dirs: list[str], constexpr_tsc: list[list[int]]) -> tuple[list[dict], l
             probes = {int(m.group(5)): m for m in map(KPROBE.match, f) if m}
         dispatched = {width(lines): lines for lines in blocks(log)}
         for grid, probe in probes.items():
-            lines, moved = dispatched.get(grid), dispatched.get(grid + 1)
+            lines, moved, off = dispatched.get(grid), dispatched.get(grid + 1), dispatched.get(grid + 2)
             if not lines or not moved:
                 skipped.append((probe.group(6), 'no dispatch decoded'))
                 continue
@@ -116,6 +151,7 @@ def load(dirs: list[str], constexpr_tsc: list[list[int]]) -> tuple[list[dict], l
             samplers = list(constexpr_tsc)
             k, problems = kernel(probe, lines, samplers)
             other, _ = kernel(probe, moved, list(samplers))
+            bound = kernel(probe, off, list(samplers))[0] if off else None
             # the second dispatch bound the same tags from other addresses, through other samplers: a program, QMD or
             # push word that moved with them is a value the bindings decide, which the raw path does not compute
             if any(k.get(f) != other.get(f) for f in ('prog', 'qmd', 'push', 'region', 'set_bytes', 'entries')):
@@ -123,6 +159,7 @@ def load(dirs: list[str], constexpr_tsc: list[list[int]]) -> tuple[list[dict], l
             if problems:
                 skipped.append((k['key'], '; '.join(problems)))
                 continue
+            attach_residuals(k, bound)
             constexpr_tsc[:] = samplers
             seen.add(k['key'])
             kernels.append(k)

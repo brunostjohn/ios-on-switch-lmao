@@ -7,10 +7,12 @@
 // Tags: every buffer slot is setBytes of 4096 bytes whose first word is 0xC0DE0000 | slot (the range m2v gives a slot below
 // 4096 is the function's window on it); the line's tex= textures, each (16 + slot) x (8 + slot) in its format; its smp=
 // samplers as they are (the key holds them: the record takes their headers as its own); threadgroup memory as its tgmem=
-// field names it (<index>:<length>,...). Two command buffers per shape, their grids (3 + 2i)x5x2 and (4 + 2i)x5x2
-// threadgroups for the i-th line (its records name the dispatches by them); the second binds the same tags from buffers at
-// another address. stdout: "KPROBE <i> tg=<x,y,z>
-// grid=<x,y,z> key=<raw_compute_key.h key>" before each one is committed, "KREFUSED <i> <why>" for a shape not made.
+// field names it (<index>:<length>,...). Three command buffers per shape, their grids (3 + 3i + v)x5x2 threadgroups for the
+// i-th line (its records name the dispatches by them); the second binds the same tags from buffers at another address, the
+// third binds each of those buffers probe_bind.h's probeComputeCode bytes past its tag, which m2v's descriptor still starts
+// at, so the root push word holding the slot's SlotBindOffset residual is the one set to that code. stdout: "KPROBE <i>
+// tg=<x,y,z> grid=<x,y,z> key=<raw_compute_key.h key>" before each one is committed, "KREFUSED <i> <why>" for a shape not
+// made.
 // Libraries: lib=<path> under PROBE_LIB_ROOT (the crawl's root), lib=data:<SHA-256> as <PROBE_DATA_LIBS>/<SHA-256>.metallib.
 // usage: probecompute <nvk dylib> <cache dir> <corpus.log>
 #import <Foundation/Foundation.h>
@@ -22,6 +24,7 @@
 #include "NativeBridgeMetalFrontend.h"
 #include "bridge/NativeMetalObjects.h"
 #include "../runtime/raw_compute_key.h"
+#include "probe_bind.h"
 
 extern "C" void pushcount_report(const char *what);
 
@@ -356,14 +359,17 @@ int main(int argc, char **argv)
                 refused++;
                 continue;
             }
-            // twice: the second with the buffers elsewhere, so kernels.py keeps only what their addresses do not move
-            for (uint32_t v = 0; v < 2; v++) {
+            // the second with the buffers elsewhere, so kernels.py keeps only what their addresses do not move; the third
+            // off 16 bytes, so it names their residual words
+            for (uint32_t v = 0; v < 3; v++) {
                 id<MTLCommandBuffer> cb = [queue commandBuffer];
                 id<MTLComputeCommandEncoder> enc = [cb computeCommandEncoder];
                 [enc setComputePipelineState:ps];
                 for (uint32_t slot = 0; slot < kSlots; slot++) {
                     if (v)
-                        [enc setBuffer:buffers[slot] offset:kBufferOffset atIndex:slot];
+                        [enc setBuffer:buffers[slot]
+                                offset:kBufferOffset + (v == 2 ? raw::probeComputeCode(slot) : 0)
+                               atIndex:slot];
                     else
                         [enc setBytes:tag(slot).data() length:kTagBytes atIndex:slot];
                 }
@@ -376,7 +382,7 @@ int main(int argc, char **argv)
                 while (std::getline(memory, pair, ','))
                     [enc setThreadgroupMemoryLength:strtoul(pair.c_str() + pair.find(':') + 1, nullptr, 10)
                                             atIndex:strtoul(pair.c_str(), nullptr, 10)];
-                const uint32_t grid[3] = {3 + 2 * i + v, 5, 2};
+                const uint32_t grid[3] = {3 + 3 * i + v, 5, 2};
                 [enc dispatchThreadgroups:MTLSizeMake(grid[0], grid[1], grid[2])
                     threadsPerThreadgroup:MTLSizeMake(s.threads[0], s.threads[1], s.threads[2])];
                 [enc endEncoding];
@@ -389,7 +395,7 @@ int main(int argc, char **argv)
                 if (cb.error) {
                     failed++;
                     printf("KFAILED %u %s\n", i, cb.error.localizedDescription.UTF8String);
-                } else if (v) {
+                } else if (v == 2) {
                     made++;
                 }
             }
