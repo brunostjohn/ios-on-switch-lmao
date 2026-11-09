@@ -178,6 +178,49 @@ py_test(
     "runtime_compile_callers",
 ]]
 
+# The pipeline states Apple's OS declares ahead (corpus/tools/archives): binary archives, pipeline libraries and pipeline
+# scripts. `bazel run //drivers/TegraGM20BMetal:declared -- --root <mounted OS volume> --root <mounted cryptex>...
+# --inventory <tsv>` writes precompile/archives/<build>.tsv from an IPSW's images; archive_coverage diffs one against the
+# raw pack's states and the device's journals.
+py_library(
+    name = "archives",
+    srcs = glob(
+        ["corpus/tools/archives/*.py"],
+        exclude = [
+            "corpus/tools/archives/*_test.py",
+            "corpus/tools/archives/coverage.py",
+            "corpus/tools/archives/declared.py",
+        ],
+    ),
+)
+
+py_binary(
+    name = "declared",
+    srcs = ["corpus/tools/archives/declared.py"],
+    main = "corpus/tools/archives/declared.py",
+    deps = [
+        ":archives",
+        "//tools/gpu/shaders:metallib",
+    ],
+)
+
+py_binary(
+    name = "archive_coverage",
+    srcs = ["corpus/tools/archives/coverage.py"],
+    main = "corpus/tools/archives/coverage.py",
+    deps = [
+        ":archives",
+        ":raw_pack",
+    ],
+)
+
+py_test(
+    name = "archives_test",
+    srcs = ["corpus/tools/archives/archives_test.py"],
+    main = "corpus/tools/archives/archives_test.py",
+    deps = [":archives"],
+)
+
 py_binary(
     name = "ordercheck",
     srcs = ["raw/test/ordercheck.py"],
