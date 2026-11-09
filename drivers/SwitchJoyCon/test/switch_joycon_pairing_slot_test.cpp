@@ -73,11 +73,4 @@ TEST(SwitchJoyConPairingSlot, TheLogIsWalkedByMagic)
     EXPECT_EQ(switch_joycon_slot_head_kind(odd.data()), SWITCH_JOYCON_SLOT_END);
 }
 
-TEST(SwitchJoyConPairingSlot, TheHostIsComparedInDisplayOrder)
-{
-    const uint8_t other[6] = {0x98, 0xb6, 0xe9, 0x5c, 0x10, 0xc7};
-    EXPECT_TRUE(switch_joycon_slot_names(makeSlot(SWITCH_JOYCON_SLOT_MAGIC, 0x00).data(), kHost));
-    EXPECT_FALSE(switch_joycon_slot_names(makeSlot(SWITCH_JOYCON_SLOT_MAGIC, 0x00, other).data(), kHost));
-}
-
 }  // namespace

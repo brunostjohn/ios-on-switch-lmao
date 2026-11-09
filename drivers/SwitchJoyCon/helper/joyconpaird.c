@@ -10,9 +10,7 @@
 //     the kernel gives the controller that HostAddress (../../SwitchBluetooth/SwitchBluetooth.cpp), so those
 //     Joy-Cons reconnect without ever touching the rail. A dump is imported once (kImportedPath keeps a copy of the
 //     one imported): bluetoothd keeps the keys, and a later boot must not put back a key the rail has replaced since.
-//     A Joy-Con whose rail record is present is taken from the rail (it was just read from the Joy-Con itself), except
-//     a pairing the Joy-Con's flash shows this console made (not a Switch host: Horizon's sets its TBFC bit), whose
-//     key bluetoothd already holds.
+//     A Joy-Con whose rail record is present is taken from the rail (it was just paired there).
 // bluetoothd keeps classic link keys in the system keychain (generic password, service "MobileBluetooth", account =
 // address, access group com.apple.bluetooth: BTKCSetData in bluetoothd) and the device records in the
 // com.apple.MobileBluetooth.devices preferences domain. Neither is reachable from the kernel, and writing them behind
@@ -54,7 +52,6 @@
 #include <unistd.h>
 #include <xpc/xpc.h>
 
-#include "../SwitchJoyConPairingSlot.h"
 #include "joycon_pairing_import.h"
 
 typedef void *BTSession;
@@ -133,31 +130,18 @@ static void import(io_service_t service)
     CFStringRef sourceString = property(service, "Source", CFStringGetTypeID());
     CFDataRef key = property(service, "LinkKey", CFDataGetTypeID());
     CFNumberRef cod = property(service, "ClassOfDevice", CFNumberGetTypeID());
-    CFNumberRef capability = property(service, "HostCapability", CFNumberGetTypeID());
     char address[18] = "", name[32] = "Joy-Con", source[16] = "?";
-    uint32_t classOfDevice = 0x000508, hostCapability = 0;
+    uint32_t classOfDevice = 0x000508;
     if (nameString)
         CFStringGetCString(nameString, name, sizeof(name), kCFStringEncodingUTF8);
     if (sourceString)
         CFStringGetCString(sourceString, source, sizeof(source), kCFStringEncodingUTF8);
     if (cod)
         CFNumberGetValue(cod, kCFNumberSInt32Type, &classOfDevice);
-    if (capability)
-        CFNumberGetValue(capability, kCFNumberSInt32Type, &hostCapability);
     char from[32];
     snprintf(from, sizeof(from), "rail, %s", source);
-    const bool ours = !strcmp(source, "flash") && !(hostCapability & SWITCH_JOYCON_CAPS_SWITCH_HOST);
-    if (ours) {
-        // A pairing this console made (in Settings, Bluetooth, or over the rail, whose key was handed over then):
-        // bluetoothd keeps that key, and the copy in the Joy-Con's flash is not handed back over it.
-#if DEVELOPMENT || DEBUG
-        os_log(logger,
-               "joyconpaird: %{public}s already paired with bluetoothd (a pairing this console made, host capability "
-               "0x%02x)",
-               name, hostCapability);
-#endif
-    } else if (addressString && key && CFDataGetLength(key) == 16 &&
-               CFStringGetCString(addressString, address, sizeof(address), kCFStringEncodingUTF8)) {
+    if (addressString && key && CFDataGetLength(key) == 16 &&
+        CFStringGetCString(addressString, address, sizeof(address), kCFStringEncodingUTF8)) {
         pair(address, name, classOfDevice, CFDataGetBytePtr(key), from);
     } else {
         os_log_error(logger, "joyconpaird: a SwitchJoyConPairing record without address or 16-byte key");
@@ -172,8 +156,6 @@ static void import(io_service_t service)
         CFRelease(key);
     if (cod)
         CFRelease(cod);
-    if (capability)
-        CFRelease(capability);
 }
 
 static void matched(void *context, io_iterator_t iterator)
