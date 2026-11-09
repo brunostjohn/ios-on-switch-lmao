@@ -9,13 +9,14 @@ import UIKit
 /// button), scrolled so rows sit under the bar, composited by the render server (drawHierarchy(afterScreenUpdates:),
 /// which draws the bar's scroll edge effect, its variable blur and pocket mask, as backboardd does). It runs with the
 /// top edge effect shown and again hidden (.scrollEdgeEffectHidden). shown_rows= and hidden_rows= count the rows most
-/// of whose pixels are magenta (R and B over 200, G under 80), shown_at= and hidden_at= list them ("-" for none);
+/// of whose pixels are purple (R and B each over G by 40 levels: magenta, and a magenta line blended over the list or
+/// the bar), shown_at= and hidden_at= list them ("-" for none);
 /// bar= is the bar's bottom edge in pixels. pocket= is the mean difference x 255 between the two pictures from the top
-/// to 40 points below the bar: 0 means the snapshot holds no edge effect, and without magenta rows the test skips.
-/// Any magenta row fails it.
+/// to 40 points below the bar: 0 means the snapshot holds no edge effect, and without purple rows the test skips.
+/// Any purple row fails it. The list holds greys, white and system blue, none of which passes.
 struct PocketStripTest: HWTest {
     let id = "display.pocket_strip"
-    let name = "Navigation bar scroll edge effect: magenta rows, shown and hidden"
+    let name = "Navigation bar scroll edge effect: purple rows, shown and hidden"
     let subsystem = Subsystem.display
 
     func run(_ context: TestContext) async throws -> Outcome {
@@ -25,10 +26,10 @@ struct PocketStripTest: HWTest {
         var bar = 0
         for (name, hidden) in [("shown", false), ("hidden", true)] {
             let (picture, barBottom) = await Self.snapshot(context, hidden: hidden)
-            let rows = Self.magentaRows(picture)
+            let rows = Self.purpleRows(picture)
             metrics.set(name + "_rows", rows.count)
             metrics.set(name + "_at", Self.ranges(rows))
-            if !rows.isEmpty { reasons.append("\(rows.count) magenta rows with the edge effect \(name)") }
+            if !rows.isEmpty { reasons.append("\(rows.count) purple rows with the edge effect \(name)") }
             pictures.append(picture)
             bar = barBottom
         }
@@ -80,12 +81,14 @@ struct PocketStripTest: HWTest {
         return nil
     }
 
-    static func magentaRows(_ picture: Raster) -> [Int] {
-        (0..<picture.height).filter { y in
-            let magenta = (0..<picture.width).filter { x in
-                picture[x, y, 0] > 200.0 / 255 && picture[x, y, 1] < 80.0 / 255 && picture[x, y, 2] > 200.0 / 255
+    static func purpleRows(_ picture: Raster) -> [Int] {
+        let margin: Float = 40.0 / 255
+        return (0..<picture.height).filter { y in
+            let purple = (0..<picture.width).filter { x in
+                let green = picture[x, y, 1]
+                return picture[x, y, 0] - green > margin && picture[x, y, 2] - green > margin
             }
-            return magenta.count * 2 > picture.width
+            return purple.count * 2 > picture.width
         }
     }
 
