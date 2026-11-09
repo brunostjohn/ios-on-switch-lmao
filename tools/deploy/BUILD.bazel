@@ -16,10 +16,10 @@ py_library(
     srcs = [
         "deployed.py",
         "joycon_pairing.py",
-        "registration.py",
         "mkarchive.py",
         "poster_snapshots.py",
         "pull_logs.py",
+        "registration.py",
         "system_apps.py",
     ],
     imports = ["../.."],
