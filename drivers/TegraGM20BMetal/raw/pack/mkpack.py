@@ -354,11 +354,19 @@ def disabled_stream(m: int, v: int) -> bool:
 
 
 def split_registers(simple: list[dict], post: dict[int, dict[int, int]]) -> tuple[list[int], dict[int, int]]:
-    # registers: varying across states -> per-pipeline blob; equal -> baseline (when it differs from post-init)
+    # registers: varying across states -> per-pipeline blob; equal -> baseline (when it differs from post-init). A
+    # register foreign to a state (a target it lacks) is not its, so it decides nothing: a state with no color target
+    # (Portrait's depth-only states) would otherwise move target 0's per-target blend (0x1e00) out of the baseline, and
+    # every record would take it from the warm-up draw where the runtime's direct compile takes the init template's
     allregs = set(post[0])
     for p in simple:
         allregs |= set(p['records'][0]['regs'])
-    vals = {m: {p['records'][0]['regs'].get(m, 0) for p in simple} for m in allregs if not owned(m)}
+    counts = {id(p): targets(p['key']) for p in simple}
+    vals = {
+        m: {p['records'][0]['regs'].get(m, 0) for p in simple if not foreign(m, counts[id(p)])}
+        for m in allregs
+        if not owned(m)
+    }
     varying = sorted(m for m, v in vals.items() if len(v) > 1)
     baseline = {m: next(iter(v)) for m, v in vals.items() if len(v) == 1 and next(iter(v)) != post[0].get(m, 0)}
     return varying, baseline
