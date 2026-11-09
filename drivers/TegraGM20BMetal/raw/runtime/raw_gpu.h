@@ -1038,9 +1038,11 @@ public:
         std::atomic<uint64_t> selfOverlapSplit{0}, selfOverlapRuns{0}, selfOverlapUnbounded{0}, selfOverlapNs{0};
         // channels made again after the kernel killed one
         std::atomic<uint64_t> reopens{0};
-        // backings on compressed memory made, their bytes, and compressed memory the kernel could not make; full-target clears
-        // of compressed targets to a value the boot ZBC table holds (no texels written) and to one it does not
-        std::atomic<uint64_t> compBackings{0}, compBytes{0}, compFailed{0}, zbcHits{0}, zbcMisses{0};
+        // compressed memory held now (raw_comp.h CompMem and made buffers no backing took) and its bytes, the backings on it
+        // now; buffers made and the kernel's refusals since the device opened; full-target clears of compressed targets to a
+        // value the boot ZBC table holds (no texels written) and to one it does not
+        std::atomic<uint64_t> compHeld{0}, compHeldBytes{0}, compViews{0}, compMade{0}, compFailed{0}, zbcHits{0},
+            zbcMisses{0};
         // compute launches encoded (raw_compute.h)
         std::atomic<uint64_t> dispatches{0};
     } stats;
@@ -1271,9 +1273,10 @@ private:
     struct Backing {
         Texture texture;
         uint32_t tag = 0;
-        uint32_t lastUse = 0;  // the seqno of the last submission that used it (0: never submitted)
-        uint64_t lastCommit = 0;
-        Bo comp;  // its own compressed BO (raw_comp.h), else none
+        uint32_t lastUse = 0;                     // the seqno of the last submission that used it (0: never submitted)
+        uint64_t lastCommit = 0, lastClosed = 0;  // commitCount_ and closedCount_ when a pass last asked for it
+        uint64_t usedNs = 0;      // compClock() when made, and at each commit of a command buffer that used it
+        CompMem *comp = nullptr;  // the compressed memory it is a view of (raw_comp.h), else none
         // a compressed backing of its shape replaced it: no pass takes it again, trimBackings frees it
         bool retired = false;
     };
@@ -1287,6 +1290,7 @@ private:
     bool newChunk(uint64_t size, bool dedicated, std::unique_lock<std::mutex> *unlocked, uint32_t &index);
     void growLoop();
     uint64_t commitCount_ = 0;
+    uint64_t closedCount_ = 0;  // command buffers committed or abandoned (lock_)
 
     bool init(std::string &err);
     bool openChannel(std::string &err);
@@ -1359,8 +1363,13 @@ private:
     // What was asked for, made, `l` dropped around each kernel allocation
     void compMake(std::unique_lock<std::mutex> &l);
     void compStop();
+    // Asks compThread_ for `w` unless it was
+    void compAsk(const CompWant &w);
     void compFree(Backing &b);
-    void compTrim();
+    // Made buffers no backing took while stale, at `now`
+    void compTrim(uint64_t now);
+    // When compressed memory, a made buffer or a retired backing next turns stale (compClock()), 0 with none held
+    uint64_t compDeadline() const;
     // A clear of target t (counted only when compressed): `full` it covers t whole, `boot` its value is the boot ZBC table's
     void countZbc(const Texture &t, bool full, bool boot);
 };

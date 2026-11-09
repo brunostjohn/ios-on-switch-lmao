@@ -2353,29 +2353,33 @@ Texture *Device::backing(const Texture &m, uint32_t tag, bool blockLinear)
 {
     blockLinear |= m.zeta;
     const uint32_t kind = compKind(m, tag, blockLinear);
+    const CompMem *mem = kind ? comp_.largest(tag, kind) : nullptr;
     Backing *plain = nullptr;
     blockLinear |= m.samples > 1;
+    const auto asked = [&](Backing *b) {
+        b->lastCommit = commitCount_;
+        b->lastClosed = closedCount_;
+        return &b->texture;
+    };
     for (Backing *b : backings_)
         if (!b->retired && b->texture.width == m.width && b->texture.height == m.height &&
             b->texture.format == m.format && b->tag == tag && b->texture.blockLinear == blockLinear &&
             b->texture.samples == m.samples) {
-            if (b->texture.comptags || !kind) {
-                b->lastCommit = commitCount_;
-                return &b->texture;
-            }
-            plain = b;
+            if (!kind || (b->comp && b->comp == mem))
+                return asked(b);
+            if (b->comp)
+                b->retired = true;  // larger memory of its tag and kind took its place: a view of that replaces it
+            else
+                plain = b;
         }
     if (Backing *c = kind ? compBacking(m, tag, kind) : nullptr) {
         if (plain)
             plain->retired = true;
-        c->lastCommit = commitCount_;
         backings_.push_back(c);
-        return &c->texture;
+        return asked(c);
     }
-    if (plain) {
-        plain->lastCommit = commitCount_;
-        return &plain->texture;
-    }
+    if (plain)
+        return asked(plain);
     Backing *b = new Backing;
     Texture &t = b->texture;
     if (m.zeta) {
@@ -2426,9 +2430,9 @@ Texture *Device::backing(const Texture &m, uint32_t tag, bool blockLinear)
         writeTic(t);
     }
     b->tag = tag;
-    b->lastCommit = commitCount_;
+    b->usedNs = compClock();
     backings_.push_back(b);
-    return &t;
+    return asked(b);
 }
 
 // lock_ held
@@ -2446,10 +2450,13 @@ void Device::freeBacking(Texture &t)
 }
 
 // Backings no pass used for 600 command buffers (~10 s of frames) and whose last use completed go back to the pool; a retired
-// one (its compressed replacement made) as soon as its last use completed, as no pass takes it again.
+// one (its compressed replacement made) as soon as its last use completed, as no pass takes it again; one on compressed memory
+// after 10 s unused too, also while the process commits nothing (raw_comp.h backingStale; the compressed-memory thread trims
+// then).
 void Device::trimBackings()
 {
-    compTrim();
+    const uint64_t now = compClock();
+    compTrim(now);
     for (auto it = spares_.begin(); it != spares_.end();) {
         if (commitCount_ - it->freedAt > 600) {
             freeChunk(chunks_[it->chunk]);
@@ -2461,8 +2468,10 @@ void Device::trimBackings()
     uint64_t plain = 0, plainBytes = 0, retired = 0;
     for (auto it = backings_.begin(); it != backings_.end();) {
         Backing *b = *it;
-        if ((b->retired || commitCount_ - b->lastCommit > 600) && (!b->lastUse || done(b->lastUse))) {
-            if (b->comp.handle)
+        if (backingStale(commitCount_, b->lastCommit, closedCount_, b->lastClosed, now, b->usedNs, b->retired,
+                         b->comp != nullptr) &&
+            (!b->lastUse || done(b->lastUse))) {
+            if (b->comp)
                 compFree(*b);
             else
                 freeBacking(b->texture);
@@ -2470,7 +2479,7 @@ void Device::trimBackings()
             it = backings_.erase(it);
             continue;
         }
-        if (!b->comp.handle) {
+        if (!b->comp) {
             plain++;
             plainBytes += b->texture.span.bytes;
             retired += b->retired;
@@ -2987,11 +2996,15 @@ bool CommandBuffer::commit(uint32_t &seqno)
     d.extrasLive_ = extrasLive_;
     {
         std::lock_guard<std::mutex> l(d.lock_);
+        const uint64_t now = compClock();
         for (Texture *b : backings_)
             for (Device::Backing *k : d.backings_)
-                if (&k->texture == b)
+                if (&k->texture == b) {
                     k->lastUse = seq;
+                    k->usedNs = now;
+                }
         d.commitCount_++;
+        d.closedCount_++;
     }
     d.stats.commits++;
     return true;
@@ -3008,6 +3021,10 @@ bool Device::gpuNanoseconds(uint32_t stamp, uint64_t &ns) const
 void CommandBuffer::abandon()
 {
     Device &d = *dev_;
+    {
+        std::lock_guard<std::mutex> l(d.lock_);
+        d.closedCount_++;
+    }
     d.overflowing_ = false;
     d.overflow_.clear();
     for (Device::Ring *r : {&d.push_, &d.upload_}) {
