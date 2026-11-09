@@ -873,6 +873,12 @@ public:
     // A mipmapped 2D texture of `levels` levels: level 0 of its block-linear chain (Texture::chain), its header the chain's.
     // False: not one the raw path keeps (not a render target format, extended range, no memory).
     bool createMipTexture(uint32_t width, uint32_t height, uint32_t format, uint32_t levels, Texture &t);
+    // A block-compressed 2D texture (or 2D array) over the caller's `bytes` (newTextureWithBytesNoCopy), already laid out as
+    // `layout` (fx::blockChainLayout of its texel size, levels and layers): the pages imported under kind 0xFE, cleaned to
+    // memory, and a block-linear header over them, of the texel size. False: not a block-compressed format, `length` short
+    // of the layout, a base off 512 bytes, or the import or header refused.
+    bool createBlockTextureOver(void *bytes, uint64_t length, uint32_t width, uint32_t height, uint32_t format,
+                                const fx::MipChain &layout, Texture &t);
     // The texture header of level `level` of mipmapped texture `t`'s chain alone, as NVK's view of that level (a pass into
     // the level fetches its color through it); 0: none
     uint32_t levelTic(Texture &t, uint32_t level);

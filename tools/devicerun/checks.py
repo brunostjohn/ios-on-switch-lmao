@@ -535,6 +535,14 @@ GROUPS: dict[str, list[Check]] = {
     ],
     'refusals': [
         Check(
+            'refusal.bytesnocopy',
+            'r119-rawgaps',
+            'texture.bytesnocopy',
+            subsystem=REFUSAL_SUBSYSTEM,
+            note='a nil no-copy texture leaves a compressed image undrawn (Core Animation keeps no copy)',
+            source='drivers/TegraGM20BMetal/raw/runtime/RawMetalNoCopy.mm',
+        ),
+        Check(
             'refusal.user',
             'r33-platform',
             ']',

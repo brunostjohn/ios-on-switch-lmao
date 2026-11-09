@@ -1909,6 +1909,57 @@ bool Device::createMipTexture(uint32_t width, uint32_t height, uint32_t format, 
     return true;
 }
 
+bool Device::createBlockTextureOver(void *bytes, uint64_t length, uint32_t width, uint32_t height, uint32_t format,
+                                    const fx::MipChain &layout, Texture &t)
+{
+    const FormatInfo *f = formatInfo(format);
+    if (!blockCompressed(f) || !bytes || length < layout.bytes || (uintptr_t(bytes) & 511) || layout.bpp != f->bpp ||
+        !shape(width, height, format, t))
+        return false;
+    cleanToMemory(bytes, layout.bytes);
+    Import *i = new Import;
+    if (!k_.importPages(bytes, length, i->bo, 0, true)) {
+        delete i;
+        return false;
+    }
+    std::lock_guard<std::mutex> l(lock_);
+    if (!k_.bindImport(bytes, i->bo, TGM_LAYOUT_KIND)) {
+        delete i;
+        return false;
+    }
+    i->kind = TGM_LAYOUT_KIND;
+    i->refs = 1;
+    i->base = uintptr_t(bytes);
+    i->bytes = length;
+    stats.imports++;
+    stats.importsMade++;
+    stats.importBytes += i->bo.bytes;
+    if (!(t.tic = allocTic())) {
+        release(i);
+        return false;
+    }
+    t.import = i;
+    t.va = i->bo.va;
+    t.cpu = static_cast<uint8_t *>(bytes);
+    t.pitch = layout.level[0].rowBytes;
+    t.blockLinear = true;
+    t.blockHeight = layout.yLog2;
+    t.layers = layout.layers;
+    t.layerBytes = layout.arrayStride;
+    t.type = uint8_t(layout.layers > 1 ? fx::kTexTwoDArray : fx::kTexTwoD);
+    uint32_t w[8];
+    fx::mipChainTic(layout, t.va, f->tic0, f->srgb, 0, layout.levels, w, t.type);
+    setField(w, 143, 128, width - 1);  // WIDTH_MINUS_ONE in texels (NIL's extent_px)
+    setField(w, 175, 160, height - 1);
+    memcpy(tic_.cpu + 32 * t.tic, w, 32);
+    if (layout.levels > 1) {
+        t.chain = new Texture::Chain;
+        t.chain->layout = layout;
+        t.chain->va = t.va;
+    }
+    return true;
+}
+
 void Device::destroyTexture(Texture &t)
 {
     if (t.view) {
@@ -4102,7 +4153,12 @@ static bool chainLevelView(const Texture &t, uint32_t level, uint32_t rtFormat, 
     out.bpp = t.bpp;
     out.blockLinear = true;
     out.blockHeight = d.blockHeight;
-    out.layerBytes = d.layerBytes;
+    out.layerBytes = t.chain->layout.layers > 1 ? t.chain->layout.arrayStride : d.layerBytes;
+    out.layers = t.chain->layout.layers;
+    out.blockW = t.blockW;
+    out.blockH = t.blockH;
+    out.texelWidth = std::max(1u, t.texelWidth >> level);
+    out.texelHeight = std::max(1u, t.texelHeight >> level);
     return true;
 }
 
