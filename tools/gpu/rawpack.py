@@ -8,8 +8,9 @@ One action per step (gpu/seed/tools.bzl seed_tools builds, gpu/seed/defs.bzl see
         the generator's host tools (directpack and the probes through this build's frontend and host bridge, the mock
         GM20B, the raw path's own.metallib) into <dir>
     rawpack.py corpus --corpus corpus.log [--archives <build>.tsv] --out <file>
-        the corpus lines the probe makes (raw/pack/probe.mm: Core Animation's render states, without lib=), so an edit
-        to any other line leaves the run's input as it was; with the render states Apple's archives declare for the
+        the corpus lines the probe makes (raw/pack/probe.mm: Core Animation's render states, without lib=, and every
+        other framework's the runtime looks up in the pack, framework_line), so an edit to any other line leaves the
+        run's input as it was; with the render states Apple's archives declare for the
         device (precompile/archives/<build>.tsv) whose functions are one framework's default.metallib
     rawpack.py split --generator <rawpack.py> --qc default.metallib --corpus <file> [--ca-names <file>]
                      --out <bucket corpus>...
@@ -45,19 +46,24 @@ LIBRARY = re.compile(r' lib=\S+')
 LINKED_LIBRARY = re.compile(r'( \| [vf][lp] \S+) lib=\S+')
 # What the link reads of a bucket (directlink.py)
 KEPT = ('records.bin', 'warm.out', 'warm.log', 'programs.bin', 'compute.out', 'compute.log')
-# The frameworks other than QuartzCore whose states the pack holds: their lines keep lib=, which the probe loads
-# them from
-FRAMEWORKS = ('RenderBox',)
 FRAMEWORK_LIBRARY = re.compile(r' lib=/System/Library/(?:Private)?Frameworks/(\w+)\.framework/default\.metallib')
+STAGE_LIBRARY = re.compile(r' \| [vf] \S+( lib=\S+)')
 
 
 def framework_line(line: str) -> bool:
-    """Whether the line's stages are both one pack framework's default.metallib (what they link may be another's)."""
-    libs = set(LIBRARY.findall(LINKED_LIBRARY.sub(r'\1', line)))
-    return len(libs) == 1 and any(
-        lib == f' lib=/System/Library/PrivateFrameworks/{name}.framework/default.metallib'
-        for lib in libs
-        for name in FRAMEWORKS
+    """Whether the runtime looks the line's state up in the pack under its framework (RawMetalStates.mm _packable).
+
+    A vertex and a fragment function of one framework's default.metallib, and every function it links a framework
+    library's; not QuartzCore's, whose states the pack makes from their names (rawpack.py ca_states).
+    """
+    stages = STAGE_LIBRARY.findall(line)
+    frameworks = {m.group(1) for lib in stages if (m := FRAMEWORK_LIBRARY.fullmatch(lib))}
+    linked = [lib for lib in LIBRARY.findall(line) if lib not in stages]
+    return (
+        len(stages) == 2
+        and len(set(stages)) == len(frameworks) == 1
+        and frameworks != {'QuartzCore'}
+        and all(FRAMEWORK_LIBRARY.fullmatch(lib) for lib in linked)
     )
 
 
@@ -74,19 +80,15 @@ def probe_lines(corpus: str) -> list[str]:
 def archive_lines(inventory: str) -> list[str]:
     """Return the render states an archive inventory (corpus/tools/archives/declared.py) has the pack make.
 
-    Those declared for the raw device's GPU families that the runtime looks up in the pack (RawMetalStates.mm
-    _packable: a vertex and a fragment function, both one framework's default.metallib, and so is every function it
-    links); not QuartzCore's, whose archive is its offline compilation manifest (raw/pack/ca/caset.py's manifest tier).
-    They keep lib=, which the probe loads them from.
+    Those declared for the raw device's GPU families that the runtime looks up in the pack (framework_line);
+    QuartzCore's archive is its offline compilation manifest (raw/pack/ca/caset.py's manifest tier). They keep lib=,
+    which the probe loads them from.
     """
     out = []
     for row in inventory.splitlines():
         kind, _owner, _source, family, line = row.split('\t')
-        libraries = set(LIBRARY.findall(line))
-        frameworks = set(FRAMEWORK_LIBRARY.findall(line))
-        both = ' | v - ' not in line and ' | f - ' not in line
-        if kind == 'render' and family == 'device' and both and len(libraries) == len(frameworks) == 1:
-            out += [line] if frameworks != {'QuartzCore'} else []
+        if kind == 'render' and family == 'device' and framework_line(line):
+            out.append(line)
     return out
 
 
