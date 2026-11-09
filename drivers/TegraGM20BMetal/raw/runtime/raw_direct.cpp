@@ -331,7 +331,7 @@ bool DirectNvk::complete() const
 
 Compiler::Outcome directRecord(const NmbDirectState &state, const DirectNvk &nvk, const PackRules &rules,
                                const std::string &key, const std::vector<uint32_t> &attributes, RuntimeRecord &out,
-                               std::string &why)
+                               std::string &why, std::map<uint32_t, uint32_t> *registers)
 {
     out = {};
     void *device = handle(state.device);
@@ -366,7 +366,11 @@ Compiler::Outcome directRecord(const NmbDirectState &state, const DirectNvk &nvk
             parts.push[kRootPush + 4 * i] = draw.push[i];
     parts.setBytes =
         draw.set0 ? uint16_t(reinterpret_cast<SetLayoutSize>(nvk.setLayoutSize)(device, handle(draw.set0))) : 0;
-    return assembleRecord(parts, key, rules, out, why) ? Compiler::Outcome::Made : Compiler::Outcome::Refused;
+    if (!assembleRecord(parts, key, rules, out, why))
+        return Compiler::Outcome::Refused;
+    if (registers)
+        *registers = parts.regs;
+    return Compiler::Outcome::Made;
 }
 
 }  // namespace raw

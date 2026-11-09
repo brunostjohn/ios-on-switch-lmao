@@ -4,6 +4,7 @@
 // to every record of a pack, test/vertexcheck the vertex input's.
 #pragma once
 #include <cstdint>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -37,5 +38,8 @@ bool emitState(const std::string &keyFields, const EmitProgram &vertex, const Em
 // lacks, or a format or step m2v would fetch in the shader (`why`)
 bool emitVertexInput(const std::string &keyFields, const std::vector<uint32_t> &attributes,
                      std::vector<EmitRegister> &out, std::string &why);
+
+// Every method emitState and emitVertexInput may write
+std::set<uint32_t> emittableMethods();
 
 }  // namespace raw
