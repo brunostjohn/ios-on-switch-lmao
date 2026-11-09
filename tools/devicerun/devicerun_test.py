@@ -101,6 +101,25 @@ class Rules(unittest.TestCase):
         refusal = next(c for c in checks.GROUPS['refusals'] if c.name == 'refusal.kernel')
         self.assertIn('kernel_task/SwitchVIC/pitch x1', run(refusal)['refusal.kernel'].observed)
 
+    def test_wifi_join_boot16(self):
+        events = devicerun.read_ndjson(str(TEST / 'wifi.ndjson'))
+        results, _ = devicerun.run_checks(events, checks.GROUPS['wifi'])
+        got = {r.check.name: r for r in results}
+        self.assertEqual(got['wifi.joined'].verdict, PASS)
+        self.assertEqual(got['wifi.join-completion-failed'].verdict, FAIL)
+        self.assertIn('-3902', got['wifi.join-completion-failed'].observed)
+        self.assertNotIn('-100', got['wifi.join-completion-failed'].observed)
+        self.assertEqual(got['wifi.join-report-unset'].verdict, FAIL)
+        self.assertEqual(got['wifi.event-not-posted'].verdict, PASS)
+        self.assertEqual(got['wifi.dhcp-link-local'].verdict, FAIL)
+        self.assertEqual(got['wifi.ipv6-solicit-failed'].verdict, FAIL)
+
+    def test_wifi_checks_wait_for_a_join(self):
+        got = run(*checks.GROUPS['wifi'])
+        self.assertEqual(got['wifi.joined'].verdict, NO_DATA)
+        self.assertEqual(got['wifi.join-completion-failed'].verdict, NO_DATA)
+        self.assertEqual(got['wifi.dhcp-link-local'].verdict, NO_DATA)
+
 
 class Sbim(unittest.TestCase):
     CHECK = next(c for c in checks.GROUPS['display'] if c.name == 'display.sbim')

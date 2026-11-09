@@ -151,6 +151,16 @@ host_test(
     ],
 )
 
+# iOS 27's kernel events may take one mbuf cluster (SwitchWLAN's 24B119 join report); iOS 17's are as Apple ships them.
+host_test(
+    name = "xnu_kev_cluster_source_test",
+    srcs = ["xnu_kev_cluster_source_test.cpp"],
+    data = [
+        "//kernel/xnu-10063.141.1/bsd:kern/kern_event.c",
+        "//kernel/xnu-12377.121.6/bsd:kern/kern_event.c",
+    ],
+)
+
 host_test(
     name = "xnu_memcmp_source_test",
     srcs = ["xnu_memcmp_source_test.cpp"],
