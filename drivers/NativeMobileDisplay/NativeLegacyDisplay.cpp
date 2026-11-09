@@ -4964,6 +4964,7 @@ public:
                 accepted = reason == 5;
             } else {
                 reason = native_planes::checkUpdated(updated, background, hasSurface, layers, width, height);
+                planeNoteRefused(reason, updated, hasSurface, layers, width, height);
                 // The UI's own memory: its rows within the descriptor (a surface larger than the display, rows or lines
                 // padded to the GPU's alignment, is accepted: only the visible rectangle is read).
                 for (unsigned i = 0; !reason && i < native_planes::kLayers; ++i) {

@@ -239,6 +239,22 @@ TEST(DisplayPlanesSource, Ios27CoreVideoMakesNoCompressedSurfaces)
     EXPECT_THAT(XnuKernExec(), Not(HasSubstr("disable-buffer-compression")));
 }
 
+// A detached layer refused for its format or layout is logged with its surface's geometry on debug kernels only.
+TEST(DisplayPlanesSource, RefusedLayoutsLoggedOnlyByDebugKernels)
+{
+    const std::string source = SourceText("../NativeLegacyDisplay.cpp");
+    const std::string totals = SourceText("../NativePlanesTotals.h");
+    ExpectBefore(source,
+                 "reason = native_planes::checkUpdated(updated, background, hasSurface, layers, width, height);",
+                 "planeNoteRefused(reason, updated, hasSurface, layers, width, height);");
+    const std::string debug = Between(totals, "#if SWITCH_FRAME_TIMELINE\n", "#else\n");
+    EXPECT_THAT(debug, HasSubstr("switch_refusal_k(key, \"display\", \"plane-layout\","));
+    EXPECT_THAT(
+        Between(totals, "#else\n", "#endif\n"),
+        HasSubstr("static void planeNoteRefused(unsigned, uint32_t, const bool *, const native_planes::Layer *, "
+                  "uint32_t, uint32_t)\n{}"));
+}
+
 // Window B changes whose surface the GPU renders follow NativePlaneFence.h: they ride on the window A frame's present,
 // which also waits for the plane surface's writers, or on a fence of their own whose completion writes them; a frame no
 // present carries drops such a change; nothing writes them from the kick.
