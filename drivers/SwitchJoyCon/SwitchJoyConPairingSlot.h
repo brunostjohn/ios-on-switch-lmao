@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: BSD-2-Clause-Patent
 // A Joy-Con's Bluetooth pairing log (SPI 0x2000, SwitchJoyConRail.cpp "Pairing"), as the rail reads it: 0x26-byte
-// slots, magic 0x95 the one in use, 0x00 an earlier pairing, anything else (erased flash) the end of the log. Plain C,
-// so test/switch_joycon_pairing_slot_test.cpp drives it on the host.
+// slots, magic 0x95 the one in use, 0x00 an earlier pairing, anything else (erased flash) the end of the log.
 //
 // Slot layout (deku spi_flash_notes.md; hekate jc_hid_in_pair_data_t): magic, size 0x22, checksum (2), host BD_ADDR
 // (display order), LTK (16), zeros (10), host capability, zero. The checksum is the byte sum of offsets 4..0x25 XOR
@@ -33,7 +32,6 @@ enum switch_joycon_slot_kind {
     SWITCH_JOYCON_SLOT_END,      // erased or not a slot: no pairing in use
 };
 
-// What a slot's head says.
 static inline enum switch_joycon_slot_kind switch_joycon_slot_head_kind(const uint8_t head[SWITCH_JOYCON_SLOT_HEAD])
 {
     if (head[1] != SWITCH_JOYCON_SLOT_SIZE)
@@ -43,7 +41,6 @@ static inline enum switch_joycon_slot_kind switch_joycon_slot_head_kind(const ui
     return head[0] == 0x00 ? SWITCH_JOYCON_SLOT_EARLIER : SWITCH_JOYCON_SLOT_END;
 }
 
-// A whole slot's checksum.
 static inline bool switch_joycon_slot_valid(const uint8_t slot[SWITCH_JOYCON_SLOT_BYTES])
 {
     uint8_t sum = 0;
@@ -52,7 +49,6 @@ static inline bool switch_joycon_slot_valid(const uint8_t slot[SWITCH_JOYCON_SLO
     return (uint8_t)(sum ^ 0x55u) == slot[2];
 }
 
-// Whether a valid slot names `host` (display order).
 static inline bool switch_joycon_slot_names(const uint8_t slot[SWITCH_JOYCON_SLOT_BYTES], const uint8_t host[6])
 {
     return memcmp(slot + 4, host, 6) == 0;

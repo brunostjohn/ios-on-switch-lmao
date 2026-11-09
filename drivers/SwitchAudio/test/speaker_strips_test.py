@@ -85,7 +85,7 @@ def dsp_graph_refusal(strip: dict) -> str | None:
             if not isinstance(effect, dict) or not effect.get('displayname'):
                 return 'an effect without a displayname'
             if version == 1 and not isinstance(effect.get('aupreset'), dict):
-                return f"version 1 and {effect['displayname']} has no aupreset"
+                return f'version 1 and {effect["displayname"]} has no aupreset'
             if not isinstance(effect.get('bypass', 0), int):
                 return f"{effect['displayname']}'s bypass is not a number"
     return None

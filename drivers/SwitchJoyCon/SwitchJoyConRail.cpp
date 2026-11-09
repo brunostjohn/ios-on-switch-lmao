@@ -1561,7 +1561,7 @@ void SwitchJoyConRail::pairingReply(Side &s, const uint8_t *report, size_t lengt
 void SwitchJoyConRail::finishPairing(Side &s, bool paired, const char *how)
 {
     s.timer->cancelTimeout();
-    // Once per attach, the system log: what the Joy-Con's pairing log held before anything was written.
+#if DEVELOPMENT || DEBUG
     char found[96] = "no slot in use";
     if (s.slotCorrupt)
         snprintf(found, sizeof(found), "slot %u in use fails its checksum", s.slot);
@@ -1570,16 +1570,19 @@ void SwitchJoyConRail::finishPairing(Side &s, bool paired, const char *how)
         snprintf(found, sizeof(found), "slot %u in use names %02x:%02x:%02x:%02x:%02x:%02x, host capability 0x%02x",
                  s.slot, h[0], h[1], h[2], h[3], h[4], h[5], s.slotBytes[SWITCH_JOYCON_SLOT_CAPS]);
     }
+#endif
     if (paired) {
         publishPairing(s, how);
+#if DEVELOPMENT || DEBUG
         os_log(OS_LOG_DEFAULT,
                "SwitchJoyCon: Joy-Con (%c) %02x:%02x:%02x:%02x:%02x:%02x paired to %02x:%02x:%02x:%02x:%02x:%02x (%s; "
                "%s)",
                s.cfg->letter, s.mac[0], s.mac[1], s.mac[2], s.mac[3], s.mac[4], s.mac[5], host[0], host[1], host[2],
                host[3], host[4], host[5],
                strcmp(how, "rail") ? "its slot in use, nothing written" : "written over the rail", found);
+#endif
     } else {
-        IOLog("SwitchJoyCon: Joy-Con (%c) not paired for Bluetooth: %s (%s)\n", s.cfg->letter, how, found);
+        IOLog("SwitchJoyCon: Joy-Con (%c) not paired for Bluetooth: %s\n", s.cfg->letter, how);
     }
     run(s);
 }

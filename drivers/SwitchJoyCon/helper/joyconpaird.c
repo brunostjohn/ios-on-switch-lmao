@@ -150,10 +150,12 @@ static void import(io_service_t service)
     if (ours) {
         // A pairing this console made (in Settings, Bluetooth, or over the rail, whose key was handed over then):
         // bluetoothd keeps that key, and the copy in the Joy-Con's flash is not handed back over it.
+#if DEVELOPMENT || DEBUG
         os_log(logger,
                "joyconpaird: %{public}s already paired with bluetoothd (a pairing this console made, host capability "
                "0x%02x)",
                name, hostCapability);
+#endif
     } else if (addressString && key && CFDataGetLength(key) == 16 &&
                CFStringGetCString(addressString, address, sizeof(address), kCFStringEncodingUTF8)) {
         pair(address, name, classOfDevice, CFDataGetBytePtr(key), from);
