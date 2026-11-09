@@ -57,7 +57,10 @@ kernel_driver(
     name = tool,
     srcs = ["helper/{}.c".format(tool)],
     out = "build/switch-joycon/" + tool,
-    hdrs = ["helper/joycon_pairing_import.h"] if tool == "joyconpaird" else [],
+    hdrs = [
+        "SwitchJoyConPairingSlot.h",
+        "helper/joycon_pairing_import.h",
+    ] if tool == "joyconpaird" else [],
     copts = [
         "-O2",
         "-Wall",

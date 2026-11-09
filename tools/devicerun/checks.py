@@ -558,6 +558,64 @@ GROUPS: dict[str, list[Check]] = {
         ),
         Check('io.securityd-sos', 'r32-cpuhog', 'Source was stale because shmem was null', REPORT, process='securityd'),
     ],
+    'joycon': [
+        # Every attach reads the Joy-Con's pairing log and says what its slot in use holds.
+        Check(
+            'joycon.slot-read',
+            'r108-btpair',
+            'SwitchJoyCon: Joy-Con',
+            'count >= 1',
+            process=KERNEL,
+            regex=r'(?:slot (?P<slot>\d+) in use names (?P<host>[0-9a-f:]+), '
+            r'host capability (?P<caps>0x[0-9a-f]+)|no slot in use)',
+            show=('slot', 'host', 'caps'),
+            source='drivers/SwitchJoyCon/SwitchJoyConRail.cpp finishPairing',
+        ),
+        # A Joy-Con whose slot in use already names this console (paired by the rail, Horizon or Settings) is not
+        # paired again: boot 16 rewrote it at every attach and lost a Settings pairing.
+        Check(
+            'joycon.pairing-rewritten',
+            'r108-btpair',
+            'written over the rail',
+            regex=r'paired to (?P<host>[0-9a-f:]+) \(written over the rail; slot \d+ in use names (?P=host),',
+            process=KERNEL,
+            needs='joycon.slot-read',
+            source='drivers/SwitchJoyCon/SwitchJoyConRail.cpp finishPairing',
+        ),
+        Check(
+            'joycon.detached',
+            'r108-btpair',
+            'on the rail stopped answering',
+            REPORT,
+            process=KERNEL,
+            source='drivers/SwitchJoyCon/SwitchJoyConRail.cpp tick',
+        ),
+        # A Joy-Con off the rail pages the console (a host page to it times out unless it is in sync mode).
+        Check(
+            'joycon.bt-paged',
+            'r108-btpair',
+            'link <- Connection Request',
+            'count >= 1',
+            process=KERNEL,
+            regex=r'Connection Request (?P<address>[0-9a-f:]+) class 000508',
+            show=('address',),
+            needs='joycon.detached',
+            source='drivers/SwitchBluetooth/SwitchBluetoothLinks.h',
+            note='boot 16: R and L paged at 04:05 after a button press',
+        ),
+        # bluetoothd without a key for a device that connected: a first pairing in Settings, or a Joy-Con whose rail key
+        # joyconpaird did not hand over.
+        Check(
+            'joycon.bt-key-missing',
+            'r108-btpair',
+            'link -> Link Key Request Negative Reply',
+            REPORT,
+            process=KERNEL,
+            regex=r'Negative Reply (?P<address>[0-9a-f:]+)',
+            show=('address',),
+            source='drivers/SwitchBluetooth/SwitchBluetoothLinks.h',
+        ),
+    ],
     'gpu-morning': MORNING,
     'hwtest': HWTEST,
     'lockscreen': LOCKSCREEN,
