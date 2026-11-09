@@ -3,8 +3,9 @@
 LaunchServices scans the system app directories only during datamigrator's upgrade migration
 (00LaunchServicesMigrator.migrator's populateLSDatabase), which runs when the build recorded in com.apple.migration
 differs from the running one, or when /private/var/datamigrator/migrate exists: the sentinel datamigrator's own
-forceMigrationOnNextReboot writes and removes once the migration has run. The deploy writes that sentinel when the
-overlay's /Applications changed, so the next boot registers the new bundles and drops the removed ones.
+forceMigrationOnNextReboot writes and removes once the migration has run. The deploy writes that sentinel when what
+LaunchServices registers for the overlay's /Applications changed (registration.py), so the next boot registers the new
+bundles and drops the removed ones; a rebuilt executable alone asks for nothing.
 
 From iOS 27 the migrator registers them only while lsd rebuilds its database ("no rebuild is in progress, so why is our
 migrator running?"), which an OS update starts by changing the build and a missing store starts as well. There a
@@ -25,7 +26,8 @@ import shutil
 import stat
 from pathlib import Path
 
-from tools.install import card as cards, host, renamed
+from tools.deploy import registration
+from tools.install import host, renamed
 
 SENTINEL = 'datamigrator/migrate'
 MARKER = f'{renamed.DATA_FOLDER}/system-app-migration'
@@ -41,7 +43,8 @@ MOBILE = 501
 
 
 def digest(data_root: Path) -> str | None:
-    return cards.tree_digest(Path(data_root) / renamed.DATA_FOLDER / APPLICATIONS)
+    """Return the digest of what LaunchServices registers for the overlay's apps (registration.py)."""
+    return registration.digest(Path(data_root) / renamed.DATA_FOLDER / APPLICATIONS)
 
 
 def rebuilds_launchservices(ios_version: str | None) -> bool:

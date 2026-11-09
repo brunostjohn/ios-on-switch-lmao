@@ -16,6 +16,7 @@ py_library(
     srcs = [
         "deployed.py",
         "joycon_pairing.py",
+        "registration.py",
         "mkarchive.py",
         "poster_snapshots.py",
         "pull_logs.py",
@@ -24,6 +25,7 @@ py_library(
     imports = ["../.."],
     deps = [
         "//tools/common:files",
+        "//tools/common:macho",
         "//tools/common:paths",
         "//tools/hwtest:lib",
         "//tools/install:lib",
