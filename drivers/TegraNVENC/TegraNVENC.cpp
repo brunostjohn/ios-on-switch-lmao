@@ -392,6 +392,10 @@ int run(const TegraNVENCSubmit *s, TegraNVENCResolve resolve, void *context, uin
         *why = "counts";
         return -22;
     }
+    if (s->codec >= 32 || !(kTegraNVENCCodecs & (1u << s->codec))) {
+        *why = "codec";
+        return -22;
+    }
     TegraNVENCBlock blocks[TEGRA_NVENC_MAX_ENTRIES];
     uint64_t avail[TEGRA_NVENC_MAX_ENTRIES] = {};
     for (uint32_t i = 0; i < s->entry_count; i++) {

@@ -45,8 +45,9 @@ enum TegraNVENCMethod {
 };
 
 enum {
-    TEGRA_NVENC_CODEC_H264 = 1
-};  // NVENC application id (clc5b7.h NVC5B7_SET_APPLICATION_ID_ID_NVENC_H264)
+    TEGRA_NVENC_CODEC_H264 = 1,
+    TEGRA_NVENC_CODEC_H265 = 3,
+};  // NVENC application ids (clc5b7.h NVC5B7_SET_APPLICATION_ID_ID_NVENC_*)
 
 // Input picture layouts (nvenc_h264_surface_cfg_s of input_cfg); TegraNVENCInfo.input_layout names the one in use.
 enum {
@@ -110,8 +111,8 @@ enum {
     TEGRA_NVENC_ENTRY_RELOC = 1
 };
 
-// The setup is nvenc_h264_drv_pic_setup_s followed by the control arrays its pic_control offsets name (slice, ME, MD,
-// quantisation), all inside setup_bytes.
+// The setup is nvenc_h264_drv_pic_setup_s (H.264) or nvenc_h265_drv_pic_setup_s (H.265) followed by the control
+// arrays its pic_control offsets name (slice, ME, MD, quantisation), all inside setup_bytes.
 #define TEGRA_NVENC_MAX_ENTRIES 48
 #define TEGRA_NVENC_MAX_RANGES  4
 #define TEGRA_NVENC_MAX_SETUP   2048

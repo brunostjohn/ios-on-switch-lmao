@@ -21,12 +21,12 @@ static uint32_t align(uint32_t v, uint32_t a)
 
 uint32_t hevcenc_coded_width(const HEVCEncConfig *c)
 {
-    return align(c->width, 1u << c->log2_min_cb);
+    return align(c->width, 1u << c->log2_ctb);
 }
 
 uint32_t hevcenc_coded_height(const HEVCEncConfig *c)
 {
-    return align(c->height, 1u << c->log2_min_cb);
+    return align(c->height, 1u << c->log2_ctb);
 }
 
 int hevcenc_configure(HEVCEncConfig *c)
@@ -250,7 +250,7 @@ size_t hevcenc_write_pps(const HEVCEncConfig *c, uint8_t *out, size_t cap)
     h264bits_ue(&b, 0);    // num_ref_idx_l1_default_active_minus1
     h264bits_se(&b, 0);    // init_qp_minus26
     h264bits_u(&b, 0, 1);  // constrained_intra_pred_flag
-    h264bits_u(&b, 0, 1);  // transform_skip_enabled_flag
+    h264bits_u(&b, 1, 1);  // transform_skip_enabled_flag
     h264bits_u(&b, 0, 1);  // cu_qp_delta_enabled_flag: one QP a picture
     h264bits_se(&b, 0);    // pps_cb_qp_offset
     h264bits_se(&b, 0);    // pps_cr_qp_offset
@@ -260,7 +260,7 @@ size_t hevcenc_write_pps(const HEVCEncConfig *c, uint8_t *out, size_t cap)
     h264bits_u(&b, 0, 1);  // transquant_bypass_enabled_flag
     h264bits_u(&b, 0, 1);  // tiles_enabled_flag
     h264bits_u(&b, 0, 1);  // entropy_coding_sync_enabled_flag
-    h264bits_u(&b, 0, 1);  // pps_loop_filter_across_slices_enabled_flag (one slice a picture)
+    h264bits_u(&b, 1, 1);  // pps_loop_filter_across_slices_enabled_flag
     h264bits_u(&b, 0, 1);  // deblocking_filter_control_present_flag
     h264bits_u(&b, 0, 1);  // pps_scaling_list_data_present_flag
     h264bits_u(&b, 0, 1);  // lists_modification_present_flag
@@ -297,6 +297,7 @@ void hevcenc_slice_header(const HEVCEncConfig *c, const HEVCEncPicture *p, H264B
         h264bits_ue(b, 0);    // five_minus_max_num_merge_cand
     }
     h264bits_se(b, (int32_t)p->qp - 26);  // slice_qp_delta
+    h264bits_u(b, 1, 1);                  // slice_loop_filter_across_slices_enabled_flag (deblocking is on)
 }
 
 size_t hevcenc_write_hvcc(const HEVCEncConfig *c, uint8_t *out, size_t cap)

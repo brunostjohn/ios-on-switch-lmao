@@ -5,7 +5,8 @@
 //
 // The stream: Main profile (4:2:0, 8 bits), progressive, one slice segment per picture, no B pictures (output order =
 // decode order), each P picture predicting from the picture before it (one short-term reference picture set in the
-// SPS: delta POC -1), an IDR (IDR_W_RADL) at every key frame, 16-bit POC LSB. The coding tree sizes and the tools
+// SPS: delta POC -1), an IDR (IDR_W_RADL) at every key frame, 8-bit POC LSB, transform skip and loop filtering
+// across slices on (the PPS NVIDIA's T210 driver states). The coding tree sizes and the tools
 // (AMP, SAO, temporal MVP, strong intra smoothing) are the config's, so the SPS states whatever NVENC's setup is made
 // to do.
 #ifndef HEVC_ENC_SYNTAX_H
@@ -16,11 +17,11 @@
 #include "H264NVENC.h"
 
 enum {
-    HEVCENC_LOG2_MAX_POC_LSB = 16,
+    HEVCENC_LOG2_MAX_POC_LSB = 8,  // what NVENC 5.0's H.265 setup states (TegraNVENC/nvidia/SOURCE-H265)
 };
 
 typedef struct {
-    uint32_t width, height;  // displayed size; the coded size is whole minimum coding blocks, cropped in the SPS
+    uint32_t width, height;  // displayed size; the coded size is whole CTBs (what NVENC codes), cropped in the SPS
     uint8_t level_idc;       // general_level_idc (30 x the level); 0: chosen from the size and frame rate
     uint8_t log2_ctb, log2_min_cb, log2_min_tb, log2_max_tb;
     uint8_t max_tr_depth_inter, max_tr_depth_intra;

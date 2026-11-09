@@ -106,7 +106,7 @@ static void checkCase(const Case *t)
     checkSlice(&configured, &params, &idr);
     checkSlice(&configured, &params, &p);
     HEVCEncPicture wrapped = far;
-    wrapped.poc = far.poc & 0xffff;
+    wrapped.poc = far.poc & ((1u << HEVCENC_LOG2_MAX_POC_LSB) - 1);
     checkSlice(&configured, &params, &wrapped);
 
     const uint8_t *sets[3] = {vps, sps, pps};
