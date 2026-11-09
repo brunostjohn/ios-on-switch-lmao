@@ -28,7 +28,7 @@ public enum Registry {
     ]
 
     static let sensorsAndInput: [any HWTest] = [
-        AccelerometerTest(), GyroscopeTest(), DeviceMotionTest(), AmbientLightTest(), ControllersTest(),
+        AccelerometerTest(), GyroscopeTest(), DeviceMotionTest(), AmbientLightTest(), ControllersTest(), RailTest(),
         JoyConInputTest(), GameControllerTest(), KeyboardTest(), TouchTest(),
     ]
 
