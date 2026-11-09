@@ -65,6 +65,24 @@ enum class Memory : uint8_t {
     Bl
 };
 
+// Zeta memory another driver keeps (NVK's image, NativeBridgeMetalFrontend.h switch_nvk_image_memory): its GPU address and
+// size, level 0's row stride, its texel size, block height and depth (log2 GOBs), its array stride; tiled and compressed as
+// its binding maps it
+struct ZetaMemory {
+    uint64_t va = 0, bytes = 0, layerBytes = 0;
+    uint32_t pitch = 0, bpp = 0;
+    uint8_t blockHeight = 0, blockDepth = 0;
+    bool tiled = false, compressed = false;
+};
+
+// A blit's aspect of a depth/stencil texture, numbered as the MTLBlitOption that names it (RawMetalBlit.mm records the option):
+// DepthFromDepthStencil (1) or StencilFromDepthStencil (2), else the whole texel (0)
+enum : uint8_t {
+    kAspectWhole = 0,
+    kAspectDepth = 1,
+    kAspectStencil = 2
+};
+
 // Memory of the raw path an m2v view uses in place (RawMetal.mm's twins), as NVK takes it (switch_nvk_import_foreign): the BO
 // it lies in, bound already in the GPU VM the two drivers share (raw_kernel.h), and a lease the view holds (Device::holdLease,
 // dropLease, any thread) so the memory outlives the view's last use. One hold of it is the caller's to drop.
@@ -207,13 +225,25 @@ struct Texture {
     uint8_t samples = 1;
 
     // A depth/stencil format (raw_zeta.h kZetaFormatInfo): block-linear zeta memory, bound with its format's PTE kind; never
-    // sampled, copied or a colour target
+    // sampled or a colour target. A stored one (not memoryless) is NVK's image, rendered and copied in place, by aspect
+    // (BlitEncoder::copyBufferTexels): a Depth32Float_Stencil8 one's stencil through stencilTemp, two bytes a texel (NVK's
+    // stencil_copy_temp)
     bool zeta = false;
+    Texture *stencilTemp = nullptr;
 
     // Device::createView's: a header of its own over its parent's memory. Whatever else it was copied from the parent with
     // (planes, stand-ins, images) stays the parent's, which outlives it: destroyTexture frees its header alone.
     bool view = false;
 };
+
+// The bytes of each texel a blit between `t` and a buffer moves in the buffer, as Metal's: a Depth32Float_Stencil8 aspect's (its
+// depth 4, its stencil 1), RGB10A8_2P_XR10's color word (raw_xr.h), else the texel's
+inline uint32_t bufferUnit(const Texture &t, uint8_t aspect)
+{
+    if (t.zeta && t.format == kZetaFormat && aspect != kAspectWhole)
+        return aspect == kAspectStencil ? 1 : 4;
+    return bufferTexelBytes(t.format, t.bpp);
+}
 
 struct Buffer {
     uint64_t va = 0, length = 0;
@@ -516,9 +546,10 @@ public:
                     uint32_t dy, uint32_t dz, uint32_t w, uint32_t h);
     // `w` x `h` texels between rows `pitch` bytes apart at `va` (both multiples of the texel's component, at most 4 bytes) and
     // (x, y) of plane z of `t`, pitch or block-linear: into `t` where `toTexture`, else out of it (vkCmdCopyBufferToImage,
-    // vkCmdCopyImageToBuffer); the buffer's texels bufferTexelBytes each (raw_xr.h)
+    // vkCmdCopyImageToBuffer); the buffer's texels bufferUnit each. A Depth32Float_Stencil8 aspect's copy is NVK's
+    // (nvk_remap_extract_aspect, insert_aspect): depth its texel's first word, stencil its fifth byte through t.stencilTemp
     void copyBufferTexels(uint64_t va, uint32_t pitch, const Texture &t, uint32_t x, uint32_t y, uint32_t z, uint32_t w,
-                          uint32_t h, bool toTexture);
+                          uint32_t h, bool toTexture, uint8_t aspect = kAspectWhole);
     // A planar texture's image from its surface's planes (Texture::planar): two remapped copies, the luma codes into green
     // (alpha 255), then the chroma pairs into red (Cr) and blue (Cb), each leaving the other components as they are
     void convertPlanar(const Texture &t);
@@ -713,6 +744,13 @@ public:
                         uint32_t baseLayer, uint32_t layers, Texture &t);
     // Memoryless (a pass gives it a backing); the depth/stencil formats among them, as zeta (Texture::zeta)
     bool createMemoryless(uint32_t width, uint32_t height, uint32_t format, Texture &t, uint32_t samples = 1);
+    // A stored depth/stencil texture of one sample over zeta memory another driver of the process keeps (NVK's image: one
+    // allocation both drivers render and copy in place), laid out as `m` says; false where it is not a layout the raw path
+    // renders (*why says which way)
+    bool createZetaOver(const ZetaMemory &m, uint32_t width, uint32_t height, uint32_t format, Texture &t,
+                        const char **why);
+    // A Depth32Float_Stencil8 texture's stencil temp (Texture::stencilTemp), made on its first stencil copy
+    bool stencilTemp(Texture &t);
     // A 1D texture: NIL's 1D image, one block-linear row (y_log2 0) under a ONE_D header, in block-linear memory the CPU
     // writes through its tiled view (a 1D header takes no pitch layout)
     bool createLine(uint32_t width, uint32_t format, Texture &t);
