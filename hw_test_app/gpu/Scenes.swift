@@ -15,5 +15,6 @@ public enum Scenes {
         LinkedFunctionScene(),
         StorageOffsetScene(),
         PixelSamplerScene(),
+        TraceIdScene(),
     ]
 }

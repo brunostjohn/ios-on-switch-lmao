@@ -135,10 +135,9 @@ static void giveRecording(RMCommandBuffer *b)
 
 - (uint64_t)globalTraceObjectID
 {
-    static std::atomic<uint64_t> ids{0};
     std::lock_guard<std::mutex> l(_lock);
     if (!_traceId)
-        _traceId = ++ids;
+        _traceId = nextTraceId();
     return _traceId;
 }
 
