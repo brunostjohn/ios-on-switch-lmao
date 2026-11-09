@@ -18,17 +18,17 @@ FRONTIER = re.compile(r'cb(\d+) frontier size=\w+ (.*)$')
 UBO = re.compile(r'cb\d+ type=5 size=\w+ data=(\S+)$')
 
 
-def load(path: str) -> dict[str, dict]:
-    """Give the pack's splits by their whole program's name as nvdec gives it (pack.json)."""
+def load(path: str) -> list[dict]:
+    """Give every packed split, naming its programs as nvdec does (pack.json)."""
     if not path or not os.path.exists(path):
-        return {}
+        return []
     with open(path) as f:
         pack = json.load(f)
     ids = [p.get('name', p['id']) for p in pack['programs']]
-    return {
-        ids[s['whole']]: {'fs': ids[s['fs']], 'prologue': ids[s['prologue']], 'ubos': s['ubo_cbufs']}
+    return [
+        {'whole': ids[s['whole']], 'fs': ids[s['fs']], 'prologue': ids[s['prologue']], 'ubos': s['ubo_cbufs']}
         for s in pack.get('splits', [])
-    }
+    ]
 
 
 def stage_lines(ev: dict, stage: str) -> dict[str, str]:
@@ -67,15 +67,15 @@ def check(ev: dict, split: dict, launches: set[str]) -> str | None:
     return None
 
 
-def fold(frames_of: list[list[dict]], splits: dict[str, dict]) -> tuple[int, list[str]]:
+def fold(frames_of: list[list[dict]], splits: list[dict]) -> tuple[int, list[str]]:
     """Give each split draw its whole program and no frontier, and take the prologue dispatches out.
 
     Return the split draws and why each that is not NVK's draw is not.
     """
     # wholes whose per-pixel parts compile alike share one per-pixel program (splits.py per_pixel)
     by_fs: dict[str, list] = {}
-    for whole, s in splits.items():
-        by_fs.setdefault(s['fs'], []).append((whole, s))
+    for s in splits:
+        by_fs.setdefault(s['fs'], []).append((s['whole'], s))
     count, failed = 0, []
     for fi, events in enumerate(frames_of):
         launches = {

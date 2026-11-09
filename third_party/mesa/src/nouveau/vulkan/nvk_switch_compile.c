@@ -19,6 +19,7 @@
 #include "nvk_sampler.h"
 #include "nvk_shader.h"
 #include "nvk_switch_capture.h"
+#include "nvk_switch_push.h"
 #include "nvk_switch_round.h"
 #include "nvk_switch_split.h"
 
@@ -85,6 +86,9 @@ switch_nvk_compile_stage(VkDevice _device,
       .ms = info->stage == VK_SHADER_STAGE_FRAGMENT_BIT ? &ms : NULL,
    };
 
+   struct switch_nvk_const_push push = {.mask = info->const_push_mask};
+   memcpy(push.words, info->const_push_words, sizeof(push.words));
+   switch_nvk_const_push_current = push.mask ? &push : NULL;
    switch_nvk_half_targets_current = info->half_targets;
    struct vk_shader *shader = NULL;
    switch_nvk_split_current = info->split;
@@ -94,6 +98,7 @@ switch_nvk_compile_stage(VkDevice _device,
                                         info->layout,
                                         info->stage == VK_SHADER_STAGE_COMPUTE_BIT ?
                                         NULL : &state, &shader);
+   switch_nvk_const_push_current = NULL;
    switch_nvk_half_targets_current = 0;
    switch_nvk_split_current = false;
    if (result != VK_SUCCESS)
