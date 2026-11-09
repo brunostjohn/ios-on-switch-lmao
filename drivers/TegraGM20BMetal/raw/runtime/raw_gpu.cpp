@@ -2349,6 +2349,130 @@ bool Device::createYcbcrTexture(uint64_t surfaceId, void *base, uint64_t allocBy
 // A memoryless attachment's memory: one per size, format, tag and layout, kept while passes use it (m2v 0105 gives a memoryless
 // attachment linear memory in a pass that renders to linear memory; NVK renders a pass with a block-linear colour target or a
 // depth/stencil attachment into block-linear colour). Called with the device lock held.
+Device::PlainMem *Device::largestPlain(uint32_t tag, uint32_t memory) const
+{
+    PlainMem *best = nullptr;
+    for (const auto &m : plainMems_)
+        if (m->tag == tag && m->memory == memory && (!best || m->span.bytes > best->span.bytes))
+            best = m.get();
+    return best;
+}
+
+Device::Backing *Device::plainBacking(const Texture &m, uint32_t tag, bool blockLinear)
+{
+    Texture t;
+    fx::MipChain c;
+    uint64_t bytes = 0, align = kBlAlign;
+    uint32_t memory = kPlainPool;
+    const FormatInfo *f = formatInfo(m.format);
+    if (m.zeta) {
+        memory = kPlainZeta + zetaFormatIndex(m.format);
+        uint64_t zetaAlign = 0;
+        if (!zetaShape(m.width, m.height, m.format, m.samples, t, bytes, zetaAlign))
+            return nullptr;
+        align = std::max(align, zetaAlign);
+    } else if (blockLinear) {
+        memory = kPlainBl;
+        if (!f || !shape(m.width, m.height, m.format, t) || !fx::msLayout(m.width, m.height, m.samples, t.bpp, c))
+            return nullptr;
+        bytes = c.bytes;
+        align = std::max<uint64_t>(align, c.align);
+        t.pitch = c.level[0].rowBytes;
+        t.blockLinear = true;
+        t.blockHeight = c.level[0].yLog2;
+        t.layerBytes = uint64_t(c.level[0].rowBytes) * c.level[0].rows;
+        t.samples = m.samples;
+    } else {
+        if (!f || !shape(m.width, m.height, m.format, t))
+            return nullptr;
+        t.pitch = (m.width * t.bpp + 255) & ~255u;
+        bytes = uint64_t(t.pitch) * t.height;
+    }
+    PlainMem *mem = largestPlain(tag, memory);
+    if (!mem || mem->span.bytes < bytes || (mem->span.va & (align - 1))) {
+        auto made = std::make_unique<PlainMem>();
+        made->tag = tag;
+        made->memory = memory;
+        made->align = align;
+        const uint64_t want = sizeClassBytes(bytes, kBlAlign);
+        const bool ok = memory == kPlainPool ? poolAlloc(want, made->span)
+                        : memory == kPlainBl
+                            ? blAlloc(want, align, made->span)
+                            : tiledAlloc(zChunks_[memory - kPlainZeta], kZetaFormatInfo[memory - kPlainZeta].kind, want,
+                                         align, made->span);
+        if (!ok || (made->span.va & (align - 1))) {
+            if (ok)
+                freePlainSpan(*made);
+            return nullptr;
+        }
+        stats.backingBytes += made->span.bytes;
+        plainMems_.push_back(std::move(made));
+        mem = plainMems_.back().get();
+        // the views of its tag's smaller memory: no pass takes them again (an animated layer seldom asks a size twice), so it
+        // goes back once their last uses complete rather than 10 s on
+        for (Backing *b : backings_)
+            if (b->plain && b->plain != mem && b->plain->tag == tag && b->plain->memory == memory)
+                b->retired = true;
+        compRearm_ = true;  // an idle process gives it back when it turns stale
+        compStart();
+    }
+    t.va = mem->span.va;
+    t.cpu = memory == kPlainPool ? mem->span.cpu : nullptr;
+    if (!m.zeta) {
+        if (!(t.tic = allocTic())) {
+            if (!mem->views)
+                dropPlain(mem);
+            return nullptr;
+        }
+        if (blockLinear) {
+            uint32_t w[8];
+            fx::mipChainTic(c, t.va, f->tic0, f->srgb, 0, 1, w);
+            memcpy(tic_.cpu + 32 * t.tic, w, 32);  // visible at the next submission's header invalidate
+        } else {
+            t.renderable = t.renderable && linearTarget(t);
+            writeTic(t);
+        }
+    }
+    auto *b = new Backing;
+    b->texture = t;
+    b->tag = tag;
+    b->plain = mem;
+    b->usedNs = compClock();
+    mem->views++;
+    stats.backings++;
+    return b;
+}
+
+void Device::freePlainSpan(PlainMem &mem)
+{
+    if (mem.memory == kPlainPool)
+        poolFree(mem.span);
+    else if (mem.memory == kPlainBl)
+        blFree(mem.span);
+    else
+        tiledFree(zChunks_[mem.memory - kPlainZeta], mem.span);
+}
+
+void Device::dropPlain(PlainMem *mem)
+{
+    stats.backingBytes -= mem->span.bytes;
+    freePlainSpan(*mem);
+    plainMems_.erase(std::find_if(plainMems_.begin(), plainMems_.end(), [&](const std::unique_ptr<PlainMem> &p) {
+        return p.get() == mem;
+    }));
+}
+
+void Device::plainFree(Backing &b)
+{
+    if (b.texture.tic)
+        freeTic(b.texture.tic);
+    stats.backings--;
+    PlainMem *mem = b.plain;
+    b.plain = nullptr;
+    if (!--mem->views)
+        dropPlain(mem);
+}
+
 Texture *Device::backing(const Texture &m, uint32_t tag, bool blockLinear)
 {
     blockLinear |= m.zeta;
@@ -2365,6 +2489,10 @@ Texture *Device::backing(const Texture &m, uint32_t tag, bool blockLinear)
         if (!b->retired && b->texture.width == m.width && b->texture.height == m.height &&
             b->texture.format == m.format && b->tag == tag && b->texture.blockLinear == blockLinear &&
             b->texture.samples == m.samples) {
+            if (b->plain && b->plain != largestPlain(tag, b->plain->memory)) {
+                b->retired = true;  // larger plain memory of its tag took its place: a view of that replaces it
+                continue;
+            }
             if (!kind || (b->comp && b->comp == mem))
                 return asked(b);
             if (b->comp)
@@ -2380,6 +2508,15 @@ Texture *Device::backing(const Texture &m, uint32_t tag, bool blockLinear)
     }
     if (plain)
         return asked(plain);
+    // a memoryless attachment's (tag 0: a zeta's): plain memory shared by its tag's backings, in size classes; a shadow
+    // target's (tag 1 + j) is its own
+    if (tag == 0 || tag >= kMemorylessTag) {
+        Backing *v = plainBacking(m, tag, blockLinear);
+        if (!v)
+            return nullptr;
+        backings_.push_back(v);
+        return asked(v);
+    }
     Backing *b = new Backing;
     Texture &t = b->texture;
     if (m.zeta) {
@@ -2432,6 +2569,8 @@ Texture *Device::backing(const Texture &m, uint32_t tag, bool blockLinear)
     b->tag = tag;
     b->usedNs = compClock();
     backings_.push_back(b);
+    stats.backings++;
+    stats.backingBytes += t.span.bytes;
     return asked(b);
 }
 
@@ -2450,9 +2589,9 @@ void Device::freeBacking(Texture &t)
 }
 
 // Backings no pass used for 600 command buffers (~10 s of frames) and whose last use completed go back to the pool; a retired
-// one (its compressed replacement made) as soon as its last use completed, as no pass takes it again; one on compressed memory
-// after 10 s unused too, also while the process commits nothing (raw_comp.h backingStale; the compressed-memory thread trims
-// then).
+// one (a compressed backing, or one on larger memory of its tag, replaced it) as soon as its last use completed, as no pass
+// takes it again; one on compressed or shared plain memory after 10 s unused too, also while the process commits nothing
+// (raw_comp.h backingStale; the compressed-memory thread trims then).
 void Device::trimBackings()
 {
     const uint64_t now = compClock();
@@ -2465,29 +2604,28 @@ void Device::trimBackings()
         }
         ++it;
     }
-    uint64_t plain = 0, plainBytes = 0, retired = 0;
+    uint64_t retired = 0;
     for (auto it = backings_.begin(); it != backings_.end();) {
         Backing *b = *it;
         if (backingStale(commitCount_, b->lastCommit, closedCount_, b->lastClosed, now, b->usedNs, b->retired,
-                         b->comp != nullptr) &&
+                         b->comp || b->plain) &&
             (!b->lastUse || done(b->lastUse))) {
-            if (b->comp)
+            if (b->comp) {
                 compFree(*b);
-            else
+            } else if (b->plain) {
+                plainFree(*b);
+            } else {
+                stats.backings--;
+                stats.backingBytes -= b->texture.span.bytes;
                 freeBacking(b->texture);
+            }
             delete b;
             it = backings_.erase(it);
             continue;
         }
-        if (!b->comp) {
-            plain++;
-            plainBytes += b->texture.span.bytes;
-            retired += b->retired;
-        }
+        retired += !b->comp && b->retired;
         ++it;
     }
-    stats.backings = plain;
-    stats.backingBytes = plainBytes;
     stats.retiredBackings = retired;
     uint64_t tiledFree = tiledFreeBytes(blChunks_);
     for (const std::vector<Chunk> &z : zChunks_)

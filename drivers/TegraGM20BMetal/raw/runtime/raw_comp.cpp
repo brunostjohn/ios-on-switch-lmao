@@ -91,6 +91,11 @@ void Device::compAsk(const CompWant &w)
     if (comp_.asked(w, commitCount_))
         return;
     comp_.wanted.push_back(w);
+    compStart();
+}
+
+void Device::compStart()
+{
     if (!compThread_.joinable())
         compThread_ = std::thread([this] {
             pthread_set_qos_class_self_np(QOS_CLASS_USER_INTERACTIVE, 0);
@@ -98,7 +103,7 @@ void Device::compAsk(const CompWant &w)
             followers().join();  // it binds under lock_, which the committer's render thread waits for
             std::unique_lock<std::mutex> l(lock_);
             const auto asked = [&] {
-                return stopping_ || !comp_.wanted.empty();
+                return stopping_ || !comp_.wanted.empty() || compRearm_;
             };
             for (;;) {
                 // what a process that commits nothing stopped using goes when it turns stale, not at its next commit
@@ -108,6 +113,7 @@ void Device::compAsk(const CompWant &w)
                     compWake_.wait(l, asked);
                 if (stopping_)
                     return;
+                compRearm_ = false;
                 compMake(l);
                 trimBackings();
             }
@@ -235,7 +241,7 @@ uint64_t Device::compDeadline() const
     for (const Backing *b : backings_)
         if (b->retired)
             due(b->usedNs);  // once its last use completed
-        else if (b->comp)
+        else if (b->comp || b->plain)
             due(b->usedNs + kCompIdleNs);
     for (const CompBo &r : comp_.ready)
         due(r.readyNs + kCompIdleNs);

@@ -151,14 +151,15 @@ inline uint64_t compClock()
 
 // Whether a backing is stale `now`, with `commits` command buffers committed and `closed` committed or abandoned: last asked
 // for at commit count `lastCommit` and closed count `lastClosed`, last committed at `usedNs`. A retired one (no pass takes it
-// again) is at once; any after 600 command buffers; one on compressed memory after kCompIdleNs too. One asked for since the
-// last close is in the command buffer being encoded: never stale.
+// again) is at once; any after 600 command buffers; one on memory its tag's backings share (compressed, or a memoryless one's
+// plain memory: Device::PlainMem) after kCompIdleNs too. One asked for since the last close is in the command buffer being
+// encoded: never stale.
 inline bool backingStale(uint64_t commits, uint64_t lastCommit, uint64_t closed, uint64_t lastClosed, uint64_t now,
-                         uint64_t usedNs, bool retired, bool compressed)
+                         uint64_t usedNs, bool retired, bool shared)
 {
     if (lastClosed >= closed)
         return false;
-    return retired || commits - lastCommit > kCompIdleCommits || (compressed && now - usedNs > kCompIdleNs);
+    return retired || commits - lastCommit > kCompIdleCommits || (shared && now - usedNs > kCompIdleNs);
 }
 
 // Whether a made buffer no backing took, made at commit count `madeAt` and `readyNs`, is stale
