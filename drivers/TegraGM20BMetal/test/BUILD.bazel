@@ -25,8 +25,8 @@
 #                     SET_ZT_FORMAT and texture header word 0, and each compressed format's word 0, rebuilt from NIL's
 #                     row of NVK's format by NIL's generator rules
 #   mkpack_owned_test raw/pack/mkpack.py: no blob or baseline register is one the raw path owns
-#   splits_layout_test  raw/pack/splits.py: a split's per-pixel program bound as its whole program binds its uniform
-#                     buffers, where two wholes share its bytes
+#   splits_layout_test  raw/pack/splits.py: a split is packed only where its per-pixel program binds its uniform
+#                     buffers as its whole program does
 #   raw_tiled_cache_test  raw/runtime/raw_tiled_cache.h: with the kernel's tiled-cache bit, deko3d's configuration then the
 #                     enable at context init and one flush per pass and per command buffer; nothing without it
 #   raw_comp_test     raw/runtime/raw_comp.h: the compressible kinds the raw path binds are the kernel kind table's (nouveau

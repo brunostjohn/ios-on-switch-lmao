@@ -5,8 +5,8 @@ from dataclasses import dataclass, field
 
 MAGIC = b'GM20BPK1'
 # 2: the header's stack key (rawpack.py --stack) after the section table; 3: barrier-form records; 4: programs' shader
-# data and constant buffer types; 6: compute kernels (runtime/raw_pack.h PackKernel); 8: a texture3d entry's Metal index;
-# 9: split fragment programs (PackSplit)
+# data and constant buffer types; 6: compute kernels (runtime/raw_pack.h PackKernel); 8: a texture3d entry's Metal
+# index; 9: split fragment programs (PackSplit)
 VERSION = 9
 SECTIONS = 10  # runtime/raw_pack.h PackSectionCount
 KERNEL_ENTRIES = 16  # PackKernel.entry's length
@@ -141,7 +141,7 @@ def place_graphics(
     prog_index[pid] = len(prog_recs)
     prog_recs.append(
         {
-            'id': pr.get('id', pid),
+            'id': pid,
             'heap_offset': off,
             'program': off + 0x30,
             'bytes': len(slot),

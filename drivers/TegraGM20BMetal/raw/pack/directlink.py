@@ -202,7 +202,7 @@ def split_programs(states: list[dict], programs: dict[str, dict]) -> dict[str, d
 def write_programs(path: str, programs: dict[str, dict]) -> None:
     """Write the programs as mkprograms.py does (nvdec names a bound program by them: test/eq.sh RAWCAP_PROGRAMS)."""
     with open(path, 'wb') as f:
-        for p in (p for pid, p in programs.items() if pid == program_id(p)):
+        for p in programs.values():
             f.write(b'NVPG' + struct.pack('<III', len(p['image']) - 80, len(p['cbufs']), len(p['data'])))
             f.write(bytes(p['cbufs']) + p['image'] + p['data'])
 

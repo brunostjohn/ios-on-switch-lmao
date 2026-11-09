@@ -37,20 +37,14 @@ def instruction_slots(program: dict) -> int:
     return (len(program['image']) - 80) // 32 * 3
 
 
-def per_pixel(s: dict, whole: str, programs: dict[str, dict]) -> str | None:
-    """Give the key of the split's per-pixel program bound as `whole` binds its constant buffers, or None.
+def binds_as_whole(s: dict, whole: str, programs: dict[str, dict]) -> bool:
+    """Whether the split's per-pixel program binds its constant buffers as `whole` does, its frontier after them.
 
-    The pack keeps one program per id (its bytes), and the per-pixel parts of two wholes that bind a uniform buffer at
-    different set-0 offsets (raw_pack.h cbufUboOffset: the offset is in the type) can compile to the same bytes.
+    A uniform buffer's type holds its set-0 offset (raw_pack.h cbufUboOffset): the twin binds the per-pixel program's
+    buffers from its state's set-0 entries, so a type the whole program does not name binds another buffer.
     """
-    types = programs[whole]['cbufs'] + [FRONTIER]
-    if s['frontier_cbuf'] != len(types) - 1:
-        return None
-    if programs[s['fs']]['cbufs'] == types:
-        return s['fs']
-    key = f'{s["fs"]} {bytes(types).hex()}'
-    programs.setdefault(key, dict(programs[s['fs']], cbufs=types, id=s['fs']))
-    return key
+    types = programs[whole]['cbufs']
+    return s['frontier_cbuf'] == len(types) and programs[s['fs']]['cbufs'] == [*types, FRONTIER]
 
 
 def lay_out(
@@ -63,8 +57,10 @@ def lay_out(
         s = found.get(whole)
         if not s or s['fs'] not in programs or s['prologue'] not in programs:
             continue
-        fs = per_pixel(s, whole, programs)
-        if not fs or len(programs[fs]['cbufs']) > PROGRAM_CBUFS or s['prologue_cbufs'] > QMD_CBUFS:
+        fs = s['fs']
+        if len(programs[fs]['cbufs']) > PROGRAM_CBUFS or s['prologue_cbufs'] > QMD_CBUFS:
+            continue
+        if not binds_as_whole(s, whole, programs):
             continue
         packfile.place_graphics(fs, programs, heap, prog_index, prog_recs)
         kernel = {'prog': s['prologue']}

@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""splits.py lays out each split's per-pixel program with its whole program's constant buffer types.
+"""splits.py packs a split only where its per-pixel program binds its constant buffers as its whole program does.
 
-Two wholes whose per-pixel parts compile to the same bytes share one program id, and the pack keeps one program per
-id. A uniform buffer's type holds its set-0 offset: a twin bound by another whole's types reads another buffer.
+A uniform buffer's constant buffer type holds its set-0 offset, and the twin binds the per-pixel program's buffers from
+its state's set-0 entries: a type the whole program does not name would bind another buffer.
 """
 
 import os
@@ -24,40 +24,35 @@ def program(fill: int, cbufs: list[int]) -> dict:
     return {'image': bytes([fill]) * 96, 'cbufs': cbufs, 'data': b''}
 
 
-def split(fs: str) -> dict:
-    return {
-        'fs': fs,
-        'prologue': 'p',
-        'frontier_cbuf': 3,
-        'prologue_cbufs': 2,
-        'ubo_cbufs': [2],
-    }
+def split(fs: str, frontier_cbuf: int = 3) -> dict:
+    return {'fs': fs, 'prologue': 'p', 'frontier_cbuf': frontier_cbuf, 'prologue_cbufs': 2, 'ubo_cbufs': [2]}
 
 
-class PerPixelTest(unittest.TestCase):
+class LayOutTest(unittest.TestCase):
     def programs(self) -> dict[str, dict]:
         return {
             'a': program(1, [ROOT, SET, ubo(48)]),
             'b': program(2, [ROOT, SET, ubo(32)]),
-            'f': program(3, [ROOT, SET, ubo(48), FRONTIER]),
+            'fa': program(3, [ROOT, SET, ubo(48), FRONTIER]),
             'p': {'image': bytes(80) + bytes(16), 'cbufs': [4, ubo(48)], 'data': b''},
         }
 
-    def test_each_whole_binds_its_own_offsets(self) -> None:
+    def lay_out(self, found: dict[str, dict]) -> list[str]:
         programs = self.programs()
         laid = (bytearray(), {}, [])
         for whole in ('a', 'b'):
             packfile.place_graphics(whole, programs, *laid)
-        out = splits.lay_out(['a', 'b'], {'a': split('f'), 'b': split('f')}, programs, laid, [])
-        _, _, recs = laid
-        by_whole = {recs[s['whole']]['id']: recs[s['fs']] for s in out}
-        self.assertEqual(by_whole['a']['cbufs'], [ROOT, SET, ubo(48), FRONTIER])
-        self.assertEqual(by_whole['b']['cbufs'], [ROOT, SET, ubo(32), FRONTIER])
-        self.assertEqual(by_whole['b']['id'], 'f')
+        out = splits.lay_out(['a', 'b'], found, programs, laid, [])
+        return [laid[2][s['whole']]['id'] for s in out]
 
-    def test_a_frontier_past_the_wholes_buffers_is_left_out(self) -> None:
-        programs = self.programs()
-        self.assertIsNone(splits.per_pixel(dict(split('f'), frontier_cbuf=2), 'a', programs))
+    def test_a_split_bound_as_its_whole_is_packed(self) -> None:
+        self.assertEqual(self.lay_out({'a': split('fa')}), ['a'])
+
+    def test_a_split_naming_another_offset_is_left_out(self) -> None:
+        self.assertEqual(self.lay_out({'b': split('fa')}), [])
+
+    def test_a_frontier_not_after_the_wholes_buffers_is_left_out(self) -> None:
+        self.assertEqual(self.lay_out({'a': split('fa', frontier_cbuf=2)}), [])
 
 
 if __name__ == '__main__':
