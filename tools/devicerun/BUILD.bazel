@@ -12,6 +12,7 @@ py_library(
         "audio.py",
         "checks.py",
         "devicerun.py",
+        "dispatch.py",
         "hwtest.py",
         "lockscreen.py",
         "morning.py",
@@ -69,6 +70,14 @@ py_test(
     name = "lockscreen_test",
     size = "small",
     srcs = ["lockscreen_test.py"],
+    deps = [":lib"],
+)
+
+# dispatch.py's checks over boot 18's locationd starts and its kernel crash lines.
+py_test(
+    name = "dispatch_test",
+    size = "small",
+    srcs = ["dispatch_test.py"],
     deps = [":lib"],
 )
 

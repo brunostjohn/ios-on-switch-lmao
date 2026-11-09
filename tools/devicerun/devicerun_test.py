@@ -190,6 +190,8 @@ class Reports(unittest.TestCase):
         self.assertIn('JetsamEvent x1', crash['crash.jetsam'].observed)
         self.assertEqual(crash['crash.locationd'].verdict, FAIL)
         self.assertEqual(crash['crash.spotlightknowledged'].verdict, PASS)
+        self.assertEqual(crash['crash.stale-sync-waiter'].verdict, FAIL)
+        self.assertEqual(crash['crash.stale-sync-waiter'].observed, '2, newest locationd-2026-11-09-034109.ips')
         self.assertEqual(devicerun.crash_rows(None)[0].verdict, NO_DATA)
 
     def test_boot_label_selects_checks_and_steps(self):
