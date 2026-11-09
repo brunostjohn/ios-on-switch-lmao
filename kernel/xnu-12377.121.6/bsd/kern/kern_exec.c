@@ -9028,6 +9028,50 @@ native_switch_never_dim_release(proc_t p, user_addr_t scratch, mount_t data_moun
 	printf("SwitchRawBoot: never-dim keys of earlier builds: %s (%d)\n", results[result], error);
 }
 
+/* True Tone starts off, as Settings' switch leaves it: -[CBColorModuleShared CAEnabledPropertyHandler:] saves
+ * CBColorAdaptationEnabled as an integer in com.apple.CoreBrightness for the current user and current host, and
+ * activateColorAdaptation turns True Tone on when the key is not there. iOS's CoreFoundation keeps per-host values apart
+ * only for kCFPreferencesAnyUser (-[_CFXPreferences withSourceForIdentifier:user:byHost:...] drops byHost for any other
+ * user), so the key lives in the domain's plain file, beside CoreBrightness's other settings (Night Shift's colour
+ * temperature, auto-brightness's learned preference). The ambient light sensor has no colour, so CoreBrightness's
+ * repair path would otherwise adapt to its fixed 4000 K white. The key goes in only where it is missing, every other
+ * object kept: once the switch has been used the key is the user's. Before cfprefsd runs. */
+static void
+native_switch_true_tone_default(proc_t p, user_addr_t scratch, mount_t data_mount)
+{
+	static const char plist[] = "/private/var/mobile/Library/Preferences/com.apple.CoreBrightness.plist",
+	    key[] = "CBColorAdaptationEnabled";
+	static const char *const results[] = {"already set", "", "", "plist unreadable", "added"};
+	static const uint8_t empty[] = "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<plist version=\"1.0\"><dict/></plist>\n";
+	char *bytes = NULL;
+	int length = 0, error = native_switch_read_data_file(p, plist, data_mount, &bytes, &length);
+	if (error && error != ENOENT) {
+		printf("SwitchRawBoot: True Tone default: %s: %d\n", plist, error);
+		return;
+	}
+	const uint8_t *source = bytes ? (const uint8_t *)bytes : empty;
+	const size_t source_length = bytes ? (size_t)length : sizeof(empty) - 1;
+	const size_t room = switch_prefs_add_room(source_length);
+	size_t edited = room;
+	uint8_t *out = kalloc_data((vm_size_t)room, Z_WAITOK);
+	enum switch_prefs_result result = SWITCH_PREFS_UNREADABLE;
+	error = 0;
+	if (!out) {
+		error = ENOMEM;
+	} else {
+		result = switch_prefs_add_integer(source, source_length, key, 0, out, &edited);
+		if (result == SWITCH_PREFS_ADDED) {
+			error = native_switch_watchdog_file(p, scratch, plist, (const char *)out, (int)edited, data_mount,
+			    501, 501, 0600);
+		}
+		kfree_data(out, (vm_size_t)room);
+	}
+	if (bytes) kfree_data(bytes, (vm_size_t)length);
+	if (result != SWITCH_PREFS_UNCHANGED || error) {
+		printf("SwitchRawBoot: True Tone default: %s (%d)\n", error == ENOMEM ? "no memory" : results[result], error);
+	}
+}
+
 /* MobileGestalt caches its answers (DisplayBootRotation among them) keyed by the OS build alone, so an answer from the
  * other mode would outlive the ADT change. When the mode differs from the last boot's (a marker per locked orientation),
  * the cache is removed once and MobileGestalt makes it again. Failures are logged only; the next boot tries again. */
@@ -9389,13 +9433,6 @@ native_switch_setup_state(proc_t p, user_addr_t scratch, mount_t data_mount)
 		{"com.apple.migration", SWITCH_PLIST("<key>LastSystemVersion</key><string>" SWITCH_IPSW_BUILD "</string>"
 		    "<key>DMUserDataDisposition</key><dict><key>SyntheticDidUpgrade</key><false/>"
 		    "<key>buildVersion</key><string>" SWITCH_IPSW_BUILD "</string></dict>"), kSetupOnce},
-		/* True Tone starts off, as Settings' switch leaves it: CoreBrightness's -[CBColorModuleShared
-		 * CAEnabledPropertyHandler:] saves CBColorAdaptationEnabled as an integer in com.apple.CoreBrightness for the
-		 * current user and current host, and iOS's ByHost identifier is empty (the double dot). The ambient light sensor
-		 * has no colour, so CoreBrightness's repair path would otherwise adapt to its fixed 4000 K white. Seeded once:
-		 * the switch then writes the user's choice into the same file. */
-		{"ByHost/com.apple.CoreBrightness.", SWITCH_PLIST("<key>CBColorAdaptationEnabled</key><integer>0</integer>"),
-		    kSetupOnce},
 	};
 #undef SWITCH_SPRINGBOARD
 #undef SWITCH_PLIST
@@ -9415,7 +9452,6 @@ native_switch_setup_state(proc_t p, user_addr_t scratch, mount_t data_mount)
 		{"/private/var/db/dslocal/nodes/Default/groups", 0, 0755},
 		{"/private/var/db/dslocal/nodes/Default/config", 0, 0755},
 		{"/private/var/mobile/Documents", 501, 0755},
-		{"/private/var/mobile/Library/Preferences/ByHost", 501, 0755},
 	};
 	int error = 0;
 	for (unsigned i = 0; i < sizeof(directories) / sizeof(directories[0]) && !error; ++i)
@@ -9453,6 +9489,7 @@ native_switch_setup_state(proc_t p, user_addr_t scratch, mount_t data_mount)
 		native_switch_portrait_cache(p, scratch, data_mount);
 		native_switch_rotation_lock_release(p, scratch, data_mount);
 		native_switch_never_dim_release(p, scratch, data_mount);
+		native_switch_true_tone_default(p, scratch, data_mount);
 		native_switch_gamut_cache(p, scratch, data_mount);
 		native_switch_identity_cache(p, scratch, data_mount);
 		native_switch_als_cache(p, scratch, data_mount);

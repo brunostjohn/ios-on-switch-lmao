@@ -59,6 +59,9 @@
 #   switch_prefs_test        kernel/switch/boot/prefs.c takes keys out of plists CoreFoundation wrote and reads back
 #                            (binary, both count forms, wide references, damaged files; XML as the setup wrote it); no
 #                            boot-time setup in either tree or the 12377 port record sets SpringBoard's never-dim keys
+#   switch_prefs_add_test    kernel/switch/boot/prefs.c adds a missing integer key to plists CoreFoundation wrote and
+#                            reads back (binary, offsets widening, XML, <dict/>), never replaces one; only 27's setup
+#                            adds True Tone's default
 #
 #   bazel test //kernel/tests:all
 load("@bazel_skylib//rules:copy_file.bzl", "copy_file")
@@ -587,6 +590,20 @@ host_test(
         "//kernel/xnu-10063.141.1/bsd:kern/kern_exec.c",
         "//kernel/xnu-12377.121.6/bsd:kern/kern_exec.c",
         "//translate/arm64e:xnu/port-12377/switch-on-12377.diff",
+    ],
+    linkopts = [
+        "-framework",
+        "CoreFoundation",
+    ],
+    deps = [":prefs"],
+)
+
+host_test(
+    name = "switch_prefs_add_test",
+    srcs = ["switch_prefs_add_test.cpp"],
+    data = [
+        "//kernel/xnu-10063.141.1/bsd:kern/kern_exec.c",
+        "//kernel/xnu-12377.121.6/bsd:kern/kern_exec.c",
     ],
     linkopts = [
         "-framework",
