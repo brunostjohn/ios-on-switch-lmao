@@ -30,6 +30,7 @@ TESTS: dict[str, bool] = {
             'gpu.blur_chain_nan',
             'gpu.ca.draw_then_copy',
             'gpu.ca.hot_states',
+            'gpu.ca.generic_texture3d',
             'gpu.upload.glyph_atlas',
             'gpu.upload.replace_region',
             'gpu.upload.blit_buffer',
