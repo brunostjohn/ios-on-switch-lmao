@@ -72,7 +72,10 @@ def fold(frames_of: list[list[dict]], splits: dict[str, dict]) -> tuple[int, lis
 
     Return the split draws and why each that is not NVK's draw is not.
     """
-    by_fs = {s['fs']: (whole, s) for whole, s in splits.items()}
+    # wholes whose per-pixel parts compile alike share one per-pixel program (splits.py per_pixel)
+    by_fs: dict[str, list] = {}
+    for whole, s in splits.items():
+        by_fs.setdefault(s['fs'], []).append((whole, s))
     count, failed = 0, []
     for fi, events in enumerate(frames_of):
         launches = {
@@ -88,9 +91,9 @@ def fold(frames_of: list[list[dict]], splits: dict[str, dict]) -> tuple[int, lis
             prog = re.search(r'prog=(\S+)', stage)
             if not prog or prog.group(1) not in by_fs:
                 continue
-            whole, split = by_fs[prog.group(1)]
             count += 1
-            why = check(ev, split, launches)
+            checked = [(whole, check(ev, split, launches)) for whole, split in by_fs[prog.group(1)]]
+            whole, why = next(((w, None) for w, y in checked if y is None), checked[0])
             if why:
                 failed.append(f'frame {fi} draw {di}: {why}')
                 continue

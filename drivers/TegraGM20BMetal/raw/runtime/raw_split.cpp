@@ -43,6 +43,18 @@ int pixelUboEntry(const Pipeline &pl, uint8_t slot)
     return -1;
 }
 
+// The twin reads each uniform buffer from the set-0 entry its state does: its per-pixel program's constant buffer types name
+// the same offsets (a UBO's type holds its offset)
+bool bindsAsWhole(const Pipeline &twin, const Pipeline &whole)
+{
+    if (!twin.ubosNamed)
+        return false;
+    for (uint8_t u = 0; u < whole.uboCount; u++)
+        if (whole.ubos[u].group == kPixelGroup && pixelUboEntry(twin, whole.ubos[u].slot) != whole.ubos[u].entry)
+            return false;
+    return true;
+}
+
 }  // namespace
 
 void Device::offerSplit(Pipeline &pl, SplitSource &&source)
@@ -104,6 +116,11 @@ SplitState *Device::makeSplit(Pipeline &pl)
     s.prologueData = prologueData;
     s.prologueDataBytes = prologueDataBytes;
     build(s.pipeline, *source->pp, source->vs, fs, source->blob, source->keyString, source->caTransform);
+    if (!bindsAsWhole(s.pipeline, pl)) {
+        splitStates_.pop_back();
+        __atomic_store_n(&pl.splitSource, nullptr, __ATOMIC_RELEASE);
+        return nullptr;
+    }
     s.pipeline.restore = pl.restore;
     s.pipeline.splitOf = &s;
     __atomic_store_n(&pl.split, &s, __ATOMIC_RELEASE);

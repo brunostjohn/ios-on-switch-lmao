@@ -141,7 +141,7 @@ def place_graphics(
     prog_index[pid] = len(prog_recs)
     prog_recs.append(
         {
-            'id': pid,
+            'id': pr.get('id', pid),
             'heap_offset': off,
             'program': off + 0x30,
             'bytes': len(slot),

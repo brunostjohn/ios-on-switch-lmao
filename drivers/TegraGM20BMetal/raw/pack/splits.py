@@ -20,6 +20,7 @@ import packfile
 RECORD = struct.Struct('<4sQQQ8I8s256s6Q')
 PROGRAM_CBUFS = 11
 QMD_CBUFS = 8
+FRONTIER = 6  # runtime/raw_pack.h CbufFrontier
 
 
 def record(ids: tuple[int, int, int], split: dict, whole: dict) -> bytes:
@@ -67,6 +68,22 @@ def load(dirs: list[str]) -> dict[str, dict]:
     return out
 
 
+def per_pixel(s: dict, whole: str, programs: dict[str, dict]) -> str | None:
+    """Give the key of the split's per-pixel program bound as `whole` binds its constant buffers, or None.
+
+    programs.bin keeps one record per program's bytes, and the per-pixel parts of two wholes that bind a uniform buffer
+    at different set-0 offsets (mkprograms.py cbuf_code: the offset is in the type) can compile to the same bytes.
+    """
+    types = programs[whole]['cbufs'] + [FRONTIER]
+    if s['frontier_cbuf'] != len(types) - 1:
+        return None
+    if programs[s['fs']]['cbufs'] == types:
+        return s['fs']
+    key = f'{s["fs"]} {bytes(types).hex()}'
+    programs.setdefault(key, dict(programs[s['fs']], cbufs=types, id=s['fs']))
+    return key
+
+
 def lay_out(
     used: list[str], found: dict[str, dict], programs: dict[str, dict], laid: tuple, report: list[str]
 ) -> list[dict]:
@@ -77,12 +94,13 @@ def lay_out(
         s = found.get(whole)
         if not s or s['fs'] not in programs or s['prologue'] not in programs:
             continue
-        if len(programs[s['fs']]['cbufs']) > PROGRAM_CBUFS or s['prologue_cbufs'] > QMD_CBUFS:
+        fs = per_pixel(s, whole, programs)
+        if not fs or len(programs[fs]['cbufs']) > PROGRAM_CBUFS or s['prologue_cbufs'] > QMD_CBUFS:
             continue
-        packfile.place_graphics(s['fs'], programs, heap, prog_index, prog_recs)
+        packfile.place_graphics(fs, programs, heap, prog_index, prog_recs)
         kernel = {'prog': s['prologue']}
         kernels.lay_out([kernel], programs, heap, prog_index, prog_recs)
-        out.append(dict(s, whole=prog_index[whole], fs=prog_index[s['fs']], prologue=kernel['program']))
+        out.append(dict(s, whole=prog_index[whole], fs=prog_index[fs], prologue=kernel['program']))
         before += s['stats'][0]
         after += s['stats'][2]
     out.sort(key=lambda s: s['whole'])
