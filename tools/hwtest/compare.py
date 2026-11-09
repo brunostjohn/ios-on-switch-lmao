@@ -100,6 +100,9 @@ def stopped(latest: Report) -> list[str]:
     if latest.finished:
         return []
     health = latest.mac.get('health') or {}
+    interruption = latest.run.get('interruption')
+    if interruption:
+        return [f'INTERRUPTED at {latest.current or "(between tests)"}: the app was {interruption}, not a crash']
     lines = [f'STOPPED at {latest.current or "(between tests)"}: the run never finished']
     lines += [f'  HW Test crash report: {crash}' for crash in health.get('hwtest_crashes', [])]
     lines += [f'  kernel panic saved: {panic}' for panic in health.get('panics', [])]

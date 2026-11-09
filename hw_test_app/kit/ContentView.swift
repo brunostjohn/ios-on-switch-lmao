@@ -50,6 +50,18 @@ public struct ContentView: View {
             }
         }
         .onAppear { suite.launch() }
+        .onReceive(NotificationCenter.default.publisher(for: UIApplication.didEnterBackgroundNotification)) { _ in
+            suite.interrupted("backgrounded")
+        }
+        .onReceive(NotificationCenter.default.publisher(for: UIApplication.willTerminateNotification)) { _ in
+            suite.interrupted("closed")
+        }
+        .onReceive(NotificationCenter.default.publisher(for: UIScene.didDisconnectNotification)) { _ in
+            suite.interrupted("closed")
+        }
+        .onReceive(NotificationCenter.default.publisher(for: UIApplication.willEnterForegroundNotification)) { _ in
+            suite.interrupted(nil)
+        }
     }
 
     /// Every test by subsystem, between runs; tapping one reruns it.

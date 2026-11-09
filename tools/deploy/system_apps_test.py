@@ -2,6 +2,7 @@
 
 import os
 import plistlib
+import struct
 import tempfile
 import unittest
 from pathlib import Path
@@ -27,15 +28,60 @@ def bundle(app: Path, bundle_id: str, executable: bytes | None = b'arm64e') -> P
     return app
 
 
-def package(root: Path, executable: bytes | None) -> Path:
+ENTITLEMENTS = {'platform-application': True, 'com.apple.private.security.container-required': True}
+
+
+def signed(code: bytes, identifier: str = 'com.brunostjohn.switch.hwtest', entitlements: dict = ENTITLEMENTS) -> bytes:
+    """Return a thin ARM64 Mach-O: `code`, then a signature with a CodeDirectory and an entitlements blob."""
+    ident = identifier.encode() + b'\0'
+    directory = struct.pack(
+        '>IIIIIIIIIBBBBIII',
+        0xFADE0C02,
+        52 + len(ident) + 5,
+        0x20400,
+        2,
+        0,
+        52,
+        0,
+        0,
+        0,
+        32,
+        2,
+        0,
+        12,
+        0,
+        0,
+        52 + len(ident),
+    )
+    directory += ident + b'TEAM\0'
+    xml = plistlib.dumps(entitlements)
+    blob = struct.pack('>II', 0xFADE7171, 8 + len(xml)) + xml
+    superblob = struct.pack('>III', 0xFADE0CC0, 12 + 16 + len(directory) + len(blob), 2)
+    superblob += struct.pack('>II', 0, 28) + struct.pack('>II', 5, 28 + len(directory)) + directory + blob
+    offset = 48 + len(code)
+    header = struct.pack('<8I', 0xFEEDFACF, 0x100000C, 0, 2, 1, 16, 0, 0) + struct.pack(
+        '<4I', 0x1D, 16, offset, len(superblob)
+    )
+    return header + code + superblob
+
+
+def package(root: Path, app: dict | None) -> Path:
+    """Return a boot package whose overlay has SwitchHWTest.app made from `app` (code, Info.plist, entitlements)."""
     root = Path(root)
     tool = root / 'overlay/usr/sbin/BlueTool'
     tool.parent.mkdir(parents=True, exist_ok=True)
     tool.write_bytes(b'tool')
-    if executable is not None:
-        app = root / 'overlay/Applications/SwitchHWTest.app/SwitchHWTest'
-        app.parent.mkdir(parents=True, exist_ok=True)
-        app.write_bytes(executable)
+    if app is not None:
+        bundle_root = root / 'overlay/Applications/SwitchHWTest.app'
+        bundle_root.mkdir(parents=True, exist_ok=True)
+        info = {'CFBundleIdentifier': 'com.brunostjohn.switch.hwtest', 'CFBundleExecutable': 'SwitchHWTest'}
+        (bundle_root / 'Info.plist').write_bytes(plistlib.dumps({**info, **app.get('info', {})}))
+        (bundle_root / 'SwitchHWTest').write_bytes(
+            signed(app['code'], entitlements=app.get('entitlements', ENTITLEMENTS))
+        )
+        for name, data in app.get('files', {}).items():
+            (bundle_root / name).parent.mkdir(parents=True, exist_ok=True)
+            (bundle_root / name).write_bytes(data)
     return root
 
 
@@ -46,31 +92,64 @@ class SystemAppsTest(unittest.TestCase):
         self.data.mkdir()
         self.sentinel = self.data / system_apps.SENTINEL
 
-    def deploy(self, executable: bytes | None) -> bool:
-        package_root = package(self.tmp / f'package-{executable!r}', executable)
+    def deploy(self, app: dict | None) -> bool:
+        package_root = package(self.tmp / f'package-{len(list(self.tmp.iterdir()))}', app)
         before = system_apps.digest(self.data)
         cards.sync_overlay(self.data, package_root, Log())
         return system_apps.request_migration(self.data, before, Log())
 
+    def redeploy(self, app: dict | None) -> bool:
+        self.sentinel.unlink(missing_ok=True)
+        return self.deploy(app)
+
     def test_a_new_app_asks_for_the_migration(self):
-        self.assertTrue(self.deploy(b'v1'))
+        self.assertTrue(self.deploy({'code': b'v1'}))
         self.assertTrue(self.sentinel.is_file())
 
     def test_an_unchanged_app_does_not(self):
-        self.deploy(b'v1')
-        self.sentinel.unlink()
-        self.assertFalse(self.deploy(b'v1'))
+        self.deploy({'code': b'v1'})
+        self.assertFalse(self.redeploy({'code': b'v1'}))
         self.assertFalse(self.sentinel.exists())
 
-    def test_a_rebuilt_app_does(self):
-        self.deploy(b'v1')
-        self.sentinel.unlink()
-        self.assertTrue(self.deploy(b'v2'))
+    def test_a_rebuilt_executable_or_resource_alone_does_not(self):
+        self.deploy({'code': b'v1', 'files': {'default.metallib': b'a', 'media/clip.mp4': b'a'}})
+        self.assertFalse(
+            self.redeploy({'code': b'v2 longer', 'files': {'default.metallib': b'b', 'media/clip.mp4': b'b'}})
+        )
+        self.assertFalse(self.sentinel.exists())
+
+    def test_an_info_plist_change_does(self):
+        self.deploy({'code': b'v1'})
+        self.assertTrue(self.redeploy({'code': b'v1', 'info': {'CFBundleDisplayName': 'HW Test 2'}}))
+
+    def test_a_localized_name_change_does(self):
+        self.deploy({'code': b'v1', 'files': {'en.lproj/InfoPlist.strings': b'"CFBundleDisplayName" = "A";'}})
+        self.assertTrue(
+            self.redeploy({'code': b'v1', 'files': {'en.lproj/InfoPlist.strings': b'"CFBundleDisplayName" = "B";'}})
+        )
+
+    def test_an_icon_or_its_asset_catalog_changing_does(self):
+        icons = {'CFBundleIcons': {'CFBundlePrimaryIcon': {'CFBundleIconFiles': ['AppIcon60x60']}}}
+        self.deploy({'code': b'v1', 'info': icons, 'files': {'AppIcon60x60@2x.png': b'a', 'Assets.car': b'a'}})
+        self.assertTrue(
+            self.redeploy({'code': b'v1', 'info': icons, 'files': {'AppIcon60x60@2x.png': b'b', 'Assets.car': b'a'}})
+        )
+        self.assertTrue(
+            self.redeploy({'code': b'v1', 'info': icons, 'files': {'AppIcon60x60@2x.png': b'b', 'Assets.car': b'b'}})
+        )
+
+    def test_an_entitlements_change_does(self):
+        self.deploy({'code': b'v1'})
+        self.assertTrue(self.redeploy({'code': b'v1', 'entitlements': {**ENTITLEMENTS, 'com.apple.private.x': True}}))
+
+    def test_an_added_extension_does(self):
+        self.deploy({'code': b'v1'})
+        extension = {'PlugIns/W.appex/Info.plist': plistlib.dumps({'CFBundleIdentifier': 'w'})}
+        self.assertTrue(self.redeploy({'code': b'v1', 'files': extension}))
 
     def test_a_removed_app_does(self):
-        self.deploy(b'v1')
-        self.sentinel.unlink()
-        self.assertTrue(self.deploy(None))
+        self.deploy({'code': b'v1'})
+        self.assertTrue(self.redeploy(None))
         self.assertTrue(self.sentinel.is_file())
 
     def test_no_apps_ever_leaves_migration_alone(self):
@@ -81,11 +160,11 @@ class SystemAppsTest(unittest.TestCase):
         marker = self.data / system_apps.MARKER
         marker.parent.mkdir(parents=True, exist_ok=True)
         marker.touch()
-        self.assertTrue(self.deploy(b'v1'))
+        self.assertTrue(self.deploy({'code': b'v1'}))
         self.assertFalse(marker.exists())
 
     def test_force_asks_with_unchanged_apps(self):
-        self.deploy(b'v1')
+        self.deploy({'code': b'v1'})
         self.sentinel.unlink()
         before = system_apps.digest(self.data)
         self.assertTrue(system_apps.request_migration(self.data, before, Log(), force=True))

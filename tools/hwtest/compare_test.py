@@ -91,6 +91,13 @@ class Summary(unittest.TestCase):
         self.assertIn('crashes backboardd 1', text)
         self.assertIn('no earlier run of this app on this build', text)
 
+    def test_a_run_the_person_closed_is_interrupted_not_stopped(self):
+        latest = report(2, entry('a', 'PASS'), status='running', current='gpu.blur.coreimage')
+        latest.data['run']['interruption'] = 'closed'
+        text = compare.summary(latest, [])
+        self.assertIn('INTERRUPTED at gpu.blur.coreimage: the app was closed, not a crash', text)
+        self.assertNotIn('STOPPED', text)
+
     def test_long_sections_are_cut(self):
         previous = report(1, *[entry(f't{i}', 'PASS') for i in range(15)])
         latest = report(2, *[entry(f't{i}', 'FAIL', 'bad') for i in range(15)])
