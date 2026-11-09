@@ -143,11 +143,53 @@ class Rules(unittest.TestCase):
         self.assertEqual(got['wifi.dhcp-link-local'].verdict, FAIL)
         self.assertEqual(got['wifi.ipv6-solicit-failed'].verdict, FAIL)
 
+    def test_wifi_boot18_never_transmits(self):
+        got = self.wifi(list(devicerun.read_ndjson(str(TEST / 'wifi_boot18.ndjson'))))
+        self.assertEqual(got['wifi.joined'].verdict, PASS)
+        self.assertEqual(got['wifi.en0-up'].verdict, FAIL)
+        self.assertEqual(got['wifi.en0-output'].verdict, FAIL)
+        self.assertIn('max(batches) 0', got['wifi.en0-output'].observed)
+        self.assertEqual(got['wifi.tx-frames'].verdict, FAIL)
+        self.assertEqual(got['wifi.dhcp-bound'].verdict, FAIL)
+        self.assertEqual(got['wifi.dhcp-link-local'].verdict, FAIL)
+        self.assertEqual(got['wifi.connection-id-refused'].verdict, FAIL)
+
+    def test_wifi_en0_sending_and_a_lease_pass(self):
+        sent = {
+            'SwitchWLAN: stats ': ('tx 0 (0 KB)', 'tx 41 (6 KB)'),
+            'SwitchWLAN: data ': ('en0 0 starts 0 batches', 'en0 9 starts 9 batches'),
+        }
+        records = []
+        for record in devicerun.read_ndjson(str(TEST / 'wifi_boot18.ndjson')):
+            message = record['eventMessage']
+            if any(gone in message for gone in ('LINKLOCAL', 'no server', 'connection ID', 'CONNECTION_ID')):
+                continue
+            for prefix, (was, now) in sent.items():
+                if message.startswith(prefix):
+                    message = message.replace(was, now)
+            records.append({**record, 'eventMessage': message})
+        records.append({**records[-1], 'processImagePath': '/usr/libexec/configd', 'eventMessage': 'DHCP en0: BOUND'})
+        records.insert(0, {**records[0], 'eventMessage': 'SwitchWLAN: en0 up, its output thread started'})
+        got = self.wifi(records)
+        self.assertEqual(got['wifi.en0-up'].verdict, PASS)
+        self.assertEqual(got['wifi.en0-output'].verdict, PASS)
+        self.assertEqual(got['wifi.tx-frames'].verdict, PASS)
+        self.assertEqual(got['wifi.dhcp-bound'].verdict, PASS)
+        self.assertEqual(got['wifi.dhcp-link-local'].verdict, PASS)
+        self.assertEqual(got['wifi.connection-id-refused'].verdict, PASS)
+
+    @staticmethod
+    def wifi(records: list[dict]) -> dict[str, rules.Result]:
+        results, _ = devicerun.run_checks(records, checks.GROUPS['wifi'])
+        return {r.check.name: r for r in results}
+
     def test_wifi_checks_wait_for_a_join(self):
         got = run(*checks.GROUPS['wifi'])
         self.assertEqual(got['wifi.joined'].verdict, NO_DATA)
         self.assertEqual(got['wifi.join-completion-failed'].verdict, NO_DATA)
         self.assertEqual(got['wifi.dhcp-link-local'].verdict, NO_DATA)
+        self.assertEqual(got['wifi.en0-output'].verdict, NO_DATA)
+        self.assertEqual(got['wifi.dhcp-bound'].verdict, NO_DATA)
 
 
 class Sbim(unittest.TestCase):

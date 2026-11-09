@@ -33,6 +33,7 @@ bool gLinkAnnounced;    // wifid was told the link is up (an association) and no
 uint32_t gBtFlags;      // wifid's APPLE80211_IOC_BT_COEX_FLAGS: SWLAN_BT_* (SwitchWLANCoex.h)
 uint32_t gBtPower = 1;  // wifid's APPLE80211_IOC_BT_POWER
 int gAssocResult = kAssocOk;
+uint32_t gConnectionId;                // one per association; 0 before the first
 deauth_info gDeauth = {1, 0, {}, {}};  // the last link loss, for APPLE80211_IOC_DEAUTH asked
 unsigned gScanCursor, gScanning;
 
@@ -363,6 +364,7 @@ int answer(bool set, apple80211req &rq)
         case kPowerSave:
         case kAuthType:
         case kCipherKey:
+        case kProtocolCleanupComplete:
         // The events this caller monitors (IO80211's Apple80211FilterMonitoringEvent: a flag and a 256-bit map). en0
         // posts every event to every listener, a superset of any filter. 24B119's wifid stops setting up its Wi-Fi
         // device (WiFiDeviceScheduleWithQueue) when this is refused.
@@ -447,6 +449,8 @@ int answer(bool set, apple80211req &rq)
     }  // two letters and a NUL
     case kAssociateResult:
         return answer_value(rq, static_cast<uint32_t>(gAssocResult));
+    case kConnectionId:
+        return answer_bytes(rq, &gConnectionId, sizeof gConnectionId);
     case kDeauth:
         return kAnswersDeauthGet ? copy_out(rq, &gDeauth, sizeof gDeauth) : EOPNOTSUPP;
     case kBtCoexFlags:
@@ -546,6 +550,8 @@ void scan_done()
 // joined (r3j: completion, then the link up, held for good).
 void associated()
 {
+    if (++gConnectionId == 0)
+        gConnectionId = 1;
     post_event(kEvSsidChanged, nullptr, 0);
     bssid_changed bssid = {};
     bssid.reason = kBssidChangeLinkUpJoin;
