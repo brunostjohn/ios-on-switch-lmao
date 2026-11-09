@@ -1069,10 +1069,12 @@ private:
 
     // A role's memory steps: the shared pool chunk (a span over half of one gets its own), a chunk of block-linear images, a
     // chunk of write-combined buffers, and the rings' first sizes (each doubles where an allocation waited, to the render
-    // server's)
+    // server's). A client's chunks of a kind start smaller and grow with what it holds (chunkSize).
     struct Sizes {
         uint64_t chunk, blChunk, wcChunk, push, upload;
     };
+
+    uint64_t chunkSize(const std::vector<Chunk> &chunks, uint64_t cap, uint64_t need, uint64_t align) const;
 
     static const Sizes kSizes[2];
     Role role_ = Role::RenderServer;

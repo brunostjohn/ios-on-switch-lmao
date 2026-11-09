@@ -40,6 +40,11 @@
  *   DefaultWatchdogTimeoutProvider returns (the one the watchdog arms), give getPlaceholders(n) max(n + 10, 20) s, a
  *   budget for Apple's cores that one batch on the A57s overruns. Both become (n + 10) x 5 s: fmov d2, #20.0 becomes
  *   fmov d2, #5.0 and fmaxnm d0, d0, d2 becomes fmul d0, d0, d2, before the fcsel that picks the case.
+ * - WidgetKit (.03), the archiver's image limit (the archive's image check and its auxiliary graphics both take it): an
+ *   image may be 2.2 x 2 times the widget's size in points, in pixels at the -scale of its environment, the display's.
+ *   J181's widgets are drawn with 2x images, its scale, and a widget here gets the same images at every UI scale: at
+ *   1.25 GameCenter's 310 x 310 pixel artwork in a 103.5 point lock screen widget is 96100 pixels over a limit of
+ *   73646.7, and the archive throws. Both -scale sends become fmov d0, #2.0, the limit J181 archives against.
  * 21H461's other sites are not here. 27's -[_UIBatteryView _fillLayerFrame:cornerRadius:] fills the body's own
  * frame (no inset), so SpringBoard's and Control Center's batteries have no gap to even out. +[PKIconImageCache
  * settingsIconCacheWithScale:] returns nil at every scale and 24B119 ships no iconCache artwork. Control Center's
@@ -180,6 +185,19 @@ static const struct switch_us_site switch_us_sites_24B119[] = {
 			  { 0x02, 0x90, 0x62, 0x1e, 0x00, 0x08, 0x62, 0x1e } },
 		},
 		"WidgetKit", "placeholder batch deadline (n + 10) x 5 s", true,
+	},
+	{   /* .03 */
+		{ 0x8f, 0x50, 0x44, 0x24, 0x74, 0xa0, 0x3b, 0x04, 0xb1, 0x03, 0xe8, 0xd2, 0x5a, 0x06, 0xe3, 0x8b },
+		0x18bc28000ULL, 0x3828000ULL, 0x3000ULL, 1, 1,
+		{
+			/* 0x18bc2b3b0: bl size; mov v10.16b, v0.16b; mov v11.16b, v1.16b; mov x0, x20; bl scale;
+			 * fmul d10, d10, d0; mov x0, x20; bl scale -> fmov d0, #2.0 for each bl scale */
+			{ 0x382b3b0ULL, 32, 16, 16, SWITCH_US_FIXED,
+			  { 0x3c, 0x63, 0x0f, 0x95, 0x0a, 0x1c, 0xa0, 0x4e, 0x2b, 0x1c, 0xa1, 0x4e, 0xe0, 0x03, 0x14, 0xaa,
+			    0x6c, 0x5e, 0x0f, 0x95, 0x4a, 0x09, 0x60, 0x1e, 0xe0, 0x03, 0x14, 0xaa, 0x69, 0x5e, 0x0f, 0x95 },
+			  { 0x00, 0x10, 0x60, 0x1e, 0x4a, 0x09, 0x60, 0x1e, 0xe0, 0x03, 0x14, 0xaa, 0x00, 0x10, 0x60, 0x1e } },
+		},
+		"WidgetKit", "archived image limit of a 2x screen", true,
 	},
 };
 

@@ -121,6 +121,9 @@ constexpr size_t kDedicatedSpares = 2;
 // one for the GPU's instruction prefetch past a program's end. The render server binds kHeapAtOpen at its start: what Core
 // Animation's states place in their first frames (17's journal: 1.13 MiB).
 constexpr uint64_t kProgramWindow = 1ull << 32, kHeapStep = 256 << 10, kHeapSlack = 0x1000, kHeapAtOpen = 2 << 20;
+// A client's first chunk of a kind, and its first heap part, as a share of the role's size: a widget's few surfaces and states
+// fit, and jetsam limits of a few tens of MB leave nothing for a render server's steps.
+constexpr uint64_t kClientFirstShare = 16, kClientHeapFirstShare = 4;
 // INVALIDATE_SHADER_CACHES and its _NO_WFI form (cl9097.h, cla097.h): INSTRUCTION bit 0, FLUSH_DATA 2, DATA 4, CONSTANT 12
 constexpr uint32_t kInvalidateInstruction = 1u << 0, kFlushData = 1u << 2, kInvalidateData = 1u << 4,
                    kInvalidateConstant = 1u << 12;
@@ -235,7 +238,7 @@ void cleanToMemory(const void *at, uint64_t bytes)
 }
 }  // namespace
 
-// The render server's: what one 720p screen's composition holds. A client's: m2v's block (M2V_BLOCK_MIB outside backboardd).
+// The render server's: what one 720p screen's composition holds. A client's: the most it grows a chunk to (chunkSize).
 const Device::Sizes Device::kSizes[2] = {
     {16 << 20, 16 << 20, 4 << 20, 2 << 20, 4 << 20},
     {4 << 20, 4 << 20, 1 << 20, 256 << 10, 512 << 10},
@@ -597,9 +600,12 @@ bool Device::heapGrow(uint64_t end)
         return true;
     if (end > heap_.bytes)
         return false;
+    // a client's parts double from a quarter step, as its chunks do
+    const uint64_t step =
+        role_ == Role::Client ? std::clamp(heapBound_, kHeapStep / kClientHeapFirstShare, kHeapStep) : kHeapStep;
     HeapPart part;
     part.offset = heapBound_;
-    part.bytes = std::min(heap_.bytes - heapBound_, (end - heapBound_ + kHeapStep - 1) & ~(kHeapStep - 1));
+    part.bytes = std::min(heap_.bytes - heapBound_, (end - heapBound_ + step - 1) & ~(step - 1));
     vm_address_t cpu = 0;
     if (vm_allocate(mach_task_self(), &cpu, part.bytes, VM_FLAGS_ANYWHERE) != KERN_SUCCESS)
         return false;
@@ -800,6 +806,22 @@ void Device::build(Pipeline &pl, const PackPipeline &pp, const PlacedProgram &vs
 // free bytes fall below a chunk's worth the grower thread makes the next one, so this (the render thread's resource creation) finds room;
 // one that does not waits for a chunk the grower is making, or makes one itself (Stats::poolStalls: a burst outran the mark).
 
+// The size of a new shared chunk of a kind that must hold `need` bytes: the role's (`cap`) for the render server; for a client,
+// what it already holds of that kind, from a sixteenth of the role's to all of it, so its chunks double as it draws more
+uint64_t Device::chunkSize(const std::vector<Chunk> &chunks, uint64_t cap, uint64_t need, uint64_t align) const
+{
+    uint64_t size = cap;
+    if (role_ == Role::Client) {
+        uint64_t held = 0;
+        for (const Chunk &ch : chunks)
+            if (!ch.dedicated)
+                held += ch.bytes;
+        size = std::clamp(held, cap / kClientFirstShare, cap);
+    }
+    size = std::max(size, need);
+    return (size + align - 1) & ~(align - 1);
+}
+
 // lock_ held (`unlocked`: the caller's lock, let go for the kernel's wiring and taken again); the chunk's index in chunks_
 bool Device::newChunk(uint64_t size, bool dedicated, std::unique_lock<std::mutex> *unlocked, uint32_t &index)
 {
@@ -911,7 +933,7 @@ bool Device::poolAlloc(uint64_t bytes, Span &s)
             continue;
         }
         uint32_t c;
-        if (!newChunk(sizes_.chunk, false, nullptr, c))
+        if (!newChunk(chunkSize(chunks_, sizes_.chunk, bytes, pageSize()), false, nullptr, c))
             return false;
     }
     return false;
@@ -1630,7 +1652,7 @@ bool Device::tiledAlloc(std::vector<Chunk> &chunks, uint32_t kind, uint64_t byte
         if (pass)
             break;
         const bool dedicated = bytes > sizes_.blChunk / 2;
-        const uint64_t size = dedicated ? bytes : sizes_.blChunk;
+        const uint64_t size = dedicated ? bytes : chunkSize(chunks, sizes_.blChunk, bytes, kBlAlign);
         vm_address_t memory = 0;
         if (vm_allocate(mach_task_self(), &memory, size, VM_FLAGS_ANYWHERE) != KERN_SUCCESS)
             return false;
@@ -1832,7 +1854,7 @@ bool Device::wcAlloc(uint64_t bytes, Span &s)
         if (pass)
             break;
         const bool dedicated = bytes > sizes_.wcChunk / 2;
-        const uint64_t size = dedicated ? bytes : sizes_.wcChunk;
+        const uint64_t size = dedicated ? bytes : chunkSize(wcChunks_, sizes_.wcChunk, bytes, pageSize());
         Chunk ch;
         if (!k_.alloc(size, true, ch.bo))
             return false;  // the GPU pool is full: pool memory instead (createBuffer)

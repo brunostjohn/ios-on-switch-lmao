@@ -373,12 +373,57 @@ TEST(XnuUiScaleSites24B119, PlaceholderBatchDeadlineIsNPlusTenTimesFiveInBothCop
     EXPECT_EQ((n + 10) * 5, 115);
 }
 
-TEST(XnuUiScaleSites24B119, OnlyTheGridAndTheWidgetDeadlineApplyAtScaleOne)
+namespace {
+// The archiver's limit in pixels for a widget of `points` and a display scale (the site's caller's arithmetic): 2.2
+// and 2 times the widget's pixels, each at least 80
+double ArchivedImageLimit(Size points, double scale)
+{
+    return std::fmax(2.2 * points.width * scale, 80) * std::fmax(2.0 * points.height * scale, 80);
+}
+}  // namespace
+
+TEST(XnuUiScaleSites24B119, ArchivedImageLimitIsAt2xInsteadOfTheDisplaysScale)
+{
+    const switch_us_site *site = Named("WidgetKit archived image limit of a 2x screen");
+    ASSERT_NE(site, nullptr);
+    EXPECT_TRUE(site->every_scale);
+    ASSERT_EQ(site->edits, 1u);
+    const switch_us_edit &edit = site->edit[0];
+    ASSERT_EQ(edit.length, 32u);
+    EXPECT_EQ(edit.kind, SWITCH_US_FIXED);
+    // bl size (its CGSize in d0, d1); mov v10.16b, v0.16b; mov v11.16b, v1.16b; mov x0, x20; bl scale;
+    // fmul d10, d10, d0; mov x0, x20; bl scale
+    EXPECT_EQ(Word(edit.stock) >> 26, 0x25u);
+    EXPECT_EQ(Word(edit.stock + 4), 0x4ea01c0au);
+    EXPECT_EQ(Word(edit.stock + 8), 0x4ea11c2bu);
+    EXPECT_EQ(Word(edit.stock + 12), 0xaa1403e0u);
+    EXPECT_EQ(Word(edit.stock + 16) >> 26, 0x25u);
+    EXPECT_EQ(Word(edit.stock + 20), 0x1e60094au);
+    EXPECT_EQ(Word(edit.stock + 24), 0xaa1403e0u);
+    EXPECT_EQ(Word(edit.stock + 28) >> 26, 0x25u);
+    // both sends go to the same objc stub
+    EXPECT_EQ(BranchTarget(AddressOf(*site, edit, 16), Word(edit.stock + 16)),
+              BranchTarget(AddressOf(*site, edit, 28), Word(edit.stock + 28)));
+    ASSERT_EQ(edit.at, 16u);
+    ASSERT_EQ(edit.size, 16u);
+    EXPECT_EQ(Word(edit.patched), switch_a64_fmov_d_int(0, 2));
+    EXPECT_EQ(std::memcmp(edit.patched + 4, edit.stock + 20, 8), 0);
+    EXPECT_EQ(Word(edit.patched + 12), switch_a64_fmov_d_int(0, 2));
+
+    // boot 15: GameCenter's 310 x 310 artwork in the lock screen's 103.5 point small widget
+    const Size widget = {103.5, 103.5};
+    EXPECT_NEAR(ArchivedImageLimit(widget, 1.25), 73646.71875, 1e-6);
+    EXPECT_GT(310.0 * 310.0, ArchivedImageLimit(widget, 1.25));
+    EXPECT_LE(310.0 * 310.0, ArchivedImageLimit(widget, 2));
+}
+
+TEST(XnuUiScaleSites24B119, OnlyTheGridAndWidgetKitApplyAtScaleOne)
 {
     for (size_t i = 0; i < kCache.count; i++) {
         const std::string name = switch_ui_scale_sites::NameOf(kCache.sites[i]);
         const bool every_scale = name == "SpringBoardHome home screen grid 3x5" ||
-                                 name == "WidgetKit placeholder batch deadline (n + 10) x 5 s";
+                                 name == "WidgetKit placeholder batch deadline (n + 10) x 5 s" ||
+                                 name == "WidgetKit archived image limit of a 2x screen";
         EXPECT_EQ(kCache.sites[i].every_scale, every_scale) << name;
     }
 }

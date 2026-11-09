@@ -41,7 +41,7 @@
 #                            below 768x1024 and every other screen's unchanged; the home grid the row of screen type
 #                            0x68, the one every scale's screen falls through to; the switcher's landscape-only card
 #                            scale keeping the shipped calls and exit; both copies of WidgetKit's placeholder deadline;
-#                            only the grid and the deadline applied at scale 1
+#                            WidgetKit's archived image limit at 2x; only the grid and WidgetKit's two applied at scale 1
 #   xnu_page_ratio_test      16 KiB VM pages over the 4 KiB granule: pmap.c's write_pte_fast (both trees) writes a
 #                            VM page as four consecutive 4 KiB frames, repeats empty and compressed entries, refuses an
 #                            unaligned PTE

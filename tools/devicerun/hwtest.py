@@ -136,6 +136,7 @@ TESTS: dict[str, bool] = {
     'input.controllers': False,
     'gpu.texture.kinds': False,
     'system.union_readdir': False,
+    'system.widgets_render': False,
 }
 
 # The tests only one iOS version's app runs (hw_test_app/app<version>), by that version.
