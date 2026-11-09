@@ -90,6 +90,7 @@ TESTS: dict[str, bool] = {
     'display.colour': False,
     'display.planes': False,
     'display.plain_surfaces': False,
+    'display.snapshot': False,
     'display.wake_gpu': True,
     'ui.text': False,
     'ui.blur': False,
