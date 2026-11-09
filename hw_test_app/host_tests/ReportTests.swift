@@ -76,6 +76,24 @@ final class ReportTests: XCTestCase {
         XCTAssertNil(Report.lastBootStoppedIn([stopped, finished], boot: "B2"))
     }
 
+    func testAnInterruptedTestRunsAgainInsteadOfCountingAsACrash() throws {
+        var run = report()
+        run.plan(["a", "b", "c"])
+        run.record(record("a", .pass()))
+        run.begin("b")
+        run.interrupt("backgrounded")
+        let saved = try Report.decoded(try run.encoded())
+        XCTAssertEqual(saved.run.interruption, "backgrounded")
+        XCTAssertEqual(Report.interrupted([saved], boot: boot)?.run.current, "b")
+        var resumed = saved
+        resumed.requeueInterrupted()
+        XCTAssertEqual(resumed.remaining, ["b", "c"])
+        XCTAssertNil(resumed.run.interruption)
+        XCTAssertEqual(resumed.summary.crashed, 0)
+        run.interrupt(nil)
+        XCTAssertNil(run.run.interruption, "back in the foreground")
+    }
+
     func testACrashIsAFailThatSaysSo() throws {
         var run = report()
         run.plan(["a", "b"])

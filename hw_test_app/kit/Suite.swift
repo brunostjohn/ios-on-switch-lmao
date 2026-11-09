@@ -54,7 +54,11 @@ public final class Suite: ObservableObject {
         let reports = store.reports()
         if let interrupted = Report.interrupted(reports, boot: boot) {
             show(interrupted)
-            if let current = interrupted.run.current {
+            if let current = interrupted.run.current, let reason = interrupted.run.interruption {
+                report?.requeueInterrupted()
+                let name = tests.first { $0.id == current }?.name ?? current
+                notice = "HW Test was \(reason) while \(name) ran: it runs again and the run goes on."
+            } else if let current = interrupted.run.current {
                 let crash = crashRecord(current)
                 finish(crash)
                 notice = "The app's process ended while \(crash.name) ran: recorded as a crash, the run goes on."
@@ -67,6 +71,14 @@ public final class Suite: ObservableObject {
         } else {
             runAll()
         }
+    }
+
+    /// The app going to the background or away while a run goes: written to the card at once, so the next launch
+    /// tells a person's or the system's ending of the process from a crash.
+    func interrupted(_ reason: String?) {
+        guard running, report?.run.interruption != reason else { return }
+        report?.interrupt(reason)
+        save()
     }
 
     func runAll() {

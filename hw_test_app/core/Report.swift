@@ -49,9 +49,12 @@ public struct Report: Codable, Equatable {
         public var finished: String?
         /// Every test the run means to finish, in run order.
         public var order: [String]
+        /// Set while the app is in the background or closing ("backgrounded", "closed"): a process that ends then was
+        /// ended by the person or by the system, not by the test.
+        public var interruption: String?
 
         enum CodingKeys: String, CodingKey {
-            case id, ios, started, status, current, finished, order
+            case id, ios, started, status, current, finished, order, interruption
             case bootUUID = "boot_uuid"
         }
     }
@@ -88,7 +91,7 @@ public struct Report: Codable, Equatable {
         let stamp = Self.stamp(started)
         run = Run(
             id: "\(bootUUID)-\(stamp)", bootUUID: bootUUID, ios: ios, started: Self.timestamp(started), status: .done,
-            current: nil, finished: nil, order: [])
+            current: nil, finished: nil, order: [], interruption: nil)
         self.identity = identity
         results = []
         summary = Summary(pass: 0, fail: 0, skip: 0)
@@ -115,6 +118,16 @@ public struct Report: Codable, Equatable {
         run.current = id
     }
 
+    public mutating func interrupt(_ reason: String?) {
+        run.interruption = reason
+    }
+
+    /// Puts the test an interruption cut short back among the remaining ones, to run again.
+    public mutating func requeueInterrupted() {
+        run.current = nil
+        run.interruption = nil
+    }
+
     /// A test's record; a rerun replaces its earlier entry in place.
     public mutating func record(_ record: TestRecord) {
         let entry = Entry(record)
@@ -130,6 +143,7 @@ public struct Report: Codable, Equatable {
     public mutating func finish(at date: Date) {
         run.status = .done
         run.current = nil
+        run.interruption = nil
         run.finished = Self.timestamp(date)
     }
 
