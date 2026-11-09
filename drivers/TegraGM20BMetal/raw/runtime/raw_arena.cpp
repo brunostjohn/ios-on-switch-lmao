@@ -17,7 +17,7 @@ bool Device::arenaFootprint(uint32_t width, uint32_t height, uint32_t format, bo
                             uint64_t &align)
 {
     Texture t;
-    if (!shape(width, height, format, t))
+    if (!shape(width, height, format, t) || t.blockW > 1 || t.blockH > 1)
         return false;
     if (blockLinear) {
         tgm_layout bl;

@@ -47,6 +47,7 @@ static void copyPlanes(raw::BlitEncoder *be, raw::CommandBuffer *rc, const raw::
                        uint64_t row, uint64_t image, const raw::Texture &t, uint32_t x, uint32_t y, uint32_t z,
                        uint32_t w, uint32_t h, uint32_t planes, bool intoTexture, uint8_t aspect)
 {
+    raw::toElements(t, x, y, w, h);  // (whole blocks: checked at record)
     const uint32_t unit = raw::bufferUnit(t, aspect);
     for (uint32_t k = 0; k < std::max(planes, 1u); k++) {
         const uint64_t at = offset + k * image;
@@ -81,9 +82,12 @@ void encodeBlit(RMCommandBuffer *cb, const Cmd &c, raw::CommandBuffer *rc, raw::
             raw::chainLevelImage(s->_raw, uint32_t(sl), fromLevel);
         if (dl)
             raw::chainLevelImage(t->_raw, uint32_t(dl), toLevel);
+        uint32_t ex = sx, ey = sy, ew = w, eh = h;
+        raw::toElements(s->_raw, ex, ey, ew, eh);  // (whole blocks, the same blocks both sides: checked at record)
+        const uint32_t fx = dx / t->_raw.blockW, fy = dy / t->_raw.blockH;
         for (uint32_t k = 0; k < std::max(d, 1u); k++)
-            be->copyTexels(sl ? fromLevel : s->_raw, sx, sy, layerOrPlane(s->_raw, ss, sz + k), dl ? toLevel : t->_raw,
-                           dx, dy, layerOrPlane(t->_raw, ds, dz + k), w, h);
+            be->copyTexels(sl ? fromLevel : s->_raw, ex, ey, layerOrPlane(s->_raw, ss, sz + k), dl ? toLevel : t->_raw,
+                           fx, fy, layerOrPlane(t->_raw, ds, dz + k), ew, eh);
         break;
     }
     case OpMipmaps: {  // a chain's levels from level 0 (decided at record)

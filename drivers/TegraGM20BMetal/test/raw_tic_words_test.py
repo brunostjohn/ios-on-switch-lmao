@@ -1,8 +1,9 @@
-"""raw/runtime/raw_zeta.h: each depth/stencil format's SET_ZT_FORMAT and texture header word 0 are what NVK writes.
+"""raw's texture header word 0 of each depth/stencil and block-compressed format is what NVK writes.
 
-NVK takes both from NIL's row of the image's format (nil_formats.csv through nil_format_table_gen.py), and samples a
-depth aspect through a view that keeps the image's format (nvk_image_view.c). The words are rebuilt here from that
-row and the class headers by the generator's rules.
+raw/runtime/raw_zeta.h (with SET_ZT_FORMAT) and raw_gpu.cpp's kFormats rows that name NIL's format. NVK takes both
+words from NIL's row of the image's format (nil_formats.csv through nil_format_table_gen.py), and samples a depth
+aspect through a view that keeps the image's format (nvk_image_view.c). The words are rebuilt here from that row and
+the class headers by the generator's rules.
 """
 
 import re
@@ -11,6 +12,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[3]
 ZETA = ROOT / 'drivers/TegraGM20BMetal/raw/runtime/raw_zeta.h'
+FORMATS = ROOT / 'drivers/TegraGM20BMetal/raw/runtime/raw_gpu.cpp'
 NIL = ROOT / 'third_party/mesa/src/nouveau/nil/nil_formats.csv'
 CLASSES = ROOT / 'third_party/mesa/src/nouveau/headers/nvidia/classes'
 
@@ -39,7 +41,7 @@ def nil_rows() -> dict[str, list[str]]:
 
 def tic0(row: list[str], tex: dict[str, int]) -> int:
     _, _, tcs, types, _, srcs = row[:6]
-    word = tex['NVB197_TEXHEAD_BL_COMPONENTS_SIZES_' + tcs]
+    word = tex['NVB197_TEXHEAD_BL_COMPONENTS_SIZES_' + tcs]  # (the B097 header's codes, ASTC's among them)
     names = {'S': 'SNORM', 'N': 'UNORM', 'I': 'SINT', 'U': 'UINT', 'F': 'FLOAT'}
     for c in range(4):
         kind = types[c] if c < len(types) else types[0]
@@ -54,7 +56,7 @@ def tic0(row: list[str], tex: dict[str, int]) -> int:
     return word
 
 
-class RawZetaTicTest(unittest.TestCase):
+class RawTicWordsTest(unittest.TestCase):
     def test_zeta_words_are_nils(self):
         tex = defines(CLASSES / 'clb197tex.h') | defines(CLASSES / 'cl9097tex.h')
         threed = defines(CLASSES / 'clb197.h')
@@ -67,6 +69,18 @@ class RawZetaTicTest(unittest.TestCase):
             with self.subTest(metal=metal, pipe=row[0]):
                 self.assertEqual(int(zt, 16), threed['NVB197_SET_ZT_FORMAT_V_' + row[1]])
                 self.assertEqual(int(word, 16), tic0(row, tex))
+
+    def test_block_compressed_words_are_nils(self):
+        tex = defines(CLASSES / 'clb097tex.h') | defines(CLASSES / 'cl9097tex.h')
+        tex = {k.replace('NVB097_', 'NVB197_'): v for k, v in tex.items()}
+        rows = nil_rows()
+        row_pattern = r'\{(\d+), 0, (0x[0-9a-f]+), \d+, (true|false), \d+, \d+\},\s*// \w+: (\w+)'
+        table = re.findall(row_pattern, FORMATS.read_text())
+        self.assertGreaterEqual(len(table), 40)
+        for metal, word, srgb, pipe in table:
+            with self.subTest(metal=metal, pipe=pipe):
+                self.assertEqual(int(word, 16), tic0(rows[pipe], tex))
+                self.assertEqual(srgb == 'true', 'SRGB' in pipe)
 
 
 if __name__ == '__main__':

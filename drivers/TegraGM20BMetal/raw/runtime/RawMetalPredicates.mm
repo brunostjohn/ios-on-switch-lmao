@@ -115,7 +115,9 @@ static bool keptFormat(MTLTextureDescriptor *d)
     if (raw::xrForm(uint32_t(d.pixelFormat)) == raw::XrForm::Planes && d.storageMode != MTLStorageModePrivate &&
         d.storageMode != MTLStorageModeMemoryless)
         return false;
-    return raw::formatInfo(uint32_t(d.pixelFormat)) != nullptr;
+    // a block-compressed texture is private: written and read by the copy engine in whole blocks, never by the CPU
+    const raw::FormatInfo *f = raw::formatInfo(uint32_t(d.pixelFormat));
+    return f && (!raw::blockCompressed(f) || d.storageMode == MTLStorageModePrivate);
 }
 
 // A texture the raw path keeps: 2D, one level, one sample, a format it has a header for, not rotated (the descriptor's rotation SPI:
@@ -154,7 +156,8 @@ bool lineShape(MTLTextureDescriptor *d)
 {
     return d.textureType == MTLTextureType1D && d.mipmapLevelCount <= 1 && d.sampleCount <= 1 && d.arrayLength <= 1 &&
            d.height <= 1 && d.depth <= 1 && d.storageMode != MTLStorageModeMemoryless &&
-           raw::xrForm(uint32_t(d.pixelFormat)) == raw::XrForm::None && raw::formatInfo(uint32_t(d.pixelFormat));
+           raw::xrForm(uint32_t(d.pixelFormat)) == raw::XrForm::None && raw::formatInfo(uint32_t(d.pixelFormat)) &&
+           !raw::blockCompressed(raw::formatInfo(uint32_t(d.pixelFormat)));
 }
 
 // m2v makes a 3D texture it may render into 2D-array compatible (image_plan.rs render_3d_flags), which NIL lays out one plane a
@@ -172,7 +175,7 @@ bool volumeShape(MTLTextureDescriptor *d)
     const raw::FormatInfo *f = raw::formatInfo(uint32_t(d.pixelFormat));
     return d.textureType == MTLTextureType3D && d.mipmapLevelCount <= 1 && d.sampleCount <= 1 && d.arrayLength <= 1 &&
            d.storageMode != MTLStorageModeMemoryless && raw::xrForm(uint32_t(d.pixelFormat)) == raw::XrForm::None &&
-           f && (f->rt || !volumeRendered(d));
+           f && !raw::blockCompressed(f) && (f->rt || !volumeRendered(d));
 }
 
 // A 2D array, cube or cube array the raw path keeps (raw::Device::createArray): one level, one sample, of a format it has a
@@ -181,7 +184,8 @@ uint32_t arrayType(MTLTextureDescriptor *d)
 {
     const bool kept =
         d.mipmapLevelCount <= 1 && d.sampleCount <= 1 && d.depth <= 1 && d.storageMode != MTLStorageModeMemoryless &&
-        raw::xrForm(uint32_t(d.pixelFormat)) == raw::XrForm::None && raw::formatInfo(uint32_t(d.pixelFormat));
+        raw::xrForm(uint32_t(d.pixelFormat)) == raw::XrForm::None && raw::formatInfo(uint32_t(d.pixelFormat)) &&
+        !raw::blockCompressed(raw::formatInfo(uint32_t(d.pixelFormat)));
     if (!kept)
         return 0;
     switch (d.textureType) {
