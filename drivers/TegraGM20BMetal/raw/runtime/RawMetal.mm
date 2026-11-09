@@ -19,6 +19,8 @@
 //    copy (which waits on the GPU for every channel that imports the surface) never runs before the frame's work is submitted.
 #import "RawMetalInternal.h"
 
+#include <mach/mach.h>
+
 #if SWITCH_FRAME_TIMELINE
 std::atomic<uint64_t> gSurfaceTextures{0}, gTwinsMade{0};  // the frame timeline's churn counts (SwitchFrameTimeline.h)
 #endif
@@ -148,6 +150,27 @@ RawState *gRM;
 }
 
 @end
+
+#if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
+// What the process keeps once the GPU's idle memory went back: jetsam reads phys_footprint against the daemon's limits
+// (JetsamProperties: iconservicesagent's ActiveSoft 200 MB, InactiveHard 15 MB); the rest of it is mostly IOKit's mappings
+static void logGivenBack()
+{
+    task_vm_info_data_t vm = {};
+    mach_msg_type_number_t count = TASK_VM_INFO_COUNT;
+    if (task_info(mach_task_self(), TASK_VM_INFO, reinterpret_cast<task_info_t>(&vm), &count) != KERN_SUCCESS)
+        return;
+    const raw::Device::Stats &k = gRM->raw->stats;
+    const uint64_t footprint = vm.phys_footprint >> 20, internal = vm.internal >> 20, compressed = vm.compressed >> 20;
+    os_log(
+        rawLog(),
+        "raw: idle memory given back: pool %llu MB in %llu chunks; footprint %llu MB (internal %llu, compressed %llu, "
+        "other %llu)",
+        (unsigned long long)(k.poolBytes.load() >> 20), (unsigned long long)k.poolChunks.load(),
+        (unsigned long long)footprint, (unsigned long long)internal, (unsigned long long)compressed,
+        (unsigned long long)(footprint > internal + compressed ? footprint - internal - compressed : 0));
+}
+#endif
 
 // raw_metal_prepare's thread and what it made (taken once, by raw_metal_device_open)
 static struct {
@@ -329,6 +352,9 @@ id<MTLDevice> raw_metal_device_open(const char *packPath, uint64_t stack, id<MTL
     gRawRelease.start(
         [](void *) {
             gRM->raw->trim();
+#if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
+            logGivenBack();
+#endif
         },
         nullptr);
     const bool renderServer = dev->role() == raw::Device::Role::RenderServer;
