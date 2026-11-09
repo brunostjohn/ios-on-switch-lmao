@@ -297,7 +297,8 @@ IOReturn AppleD5500UserClient::run(uint32_t method, const void *in, uint32_t inS
         }
         if (!p->pitch || p->pitch % 64 || !p->rows || p->rows % 32 || p->block_height_log2 != 1 ||
             p->chroma_offset % 256 || p->chroma_offset < luma || picture > b->block.size ||
-            static_cast<uint64_t>(p->crop_x) + p->width > p->pitch ||
+            (p->sample_bytes != 1 && p->sample_bytes != 2) || p->reserved ||
+            (static_cast<uint64_t>(p->crop_x) + p->width) * p->sample_bytes > p->pitch ||
             static_cast<uint64_t>(p->crop_y) + p->height > p->rows) {
             // As for any refusal: the caller copies on the CPU.
             switch_dcache_clean_invalidate(b->block.va, b->block.size);
@@ -319,6 +320,7 @@ IOReturn AppleD5500UserClient::run(uint32_t method, const void *in, uint32_t inS
         vic.dstX = p->dst_x;
         vic.dstY = p->dst_y;
         vic.surfaceID = p->surface_id;
+        vic.sampleBytes = p->sample_bytes;
         const char *why = nullptr;
         const int err = tegra_vic_present(&vic, current_task(), &why);
         if (err) {
