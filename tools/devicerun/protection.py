@@ -25,7 +25,6 @@ PROTECTION = [
         note='iOS 27 kernels only',
     ),
     Check('protection.off', OWNER, 'SwitchProtection: off', process=KERNEL, source=SOURCE),
-    Check('protection.not-kept', OWNER, 'SwitchProtection: class', process=KERNEL, source=SOURCE),
     Check(
         'protection.sqlite',
         OWNER,

@@ -4564,16 +4564,6 @@ dropboth:
 			goto outdrop;
 		}
 
-		/*
-		 * Switch: APFS answers a class change on a volume without content protection with EPERM, which iOS clients
-		 * take as a failed write (SplashBoard leaves its launch snapshots at 0 bytes).
-		 */
-		if (!(vfs_flags(vnode_mount(vp)) & MNT_CPROTECT)) {
-			error = switch_protection_set(vp, (int32_t)tmp, ctx);
-			vnode_put(vp);
-			break;
-		}
-
 		struct vnode_attr va;
 
 #if CONFIG_MACF
@@ -4585,6 +4575,16 @@ dropboth:
 		}
 		tmp = (int)dataprotect_class;
 #endif
+
+		/*
+		 * Switch: APFS answers a class change on a volume without content protection with EPERM, which iOS clients
+		 * take as a failed write (SplashBoard leaves its launch snapshots at 0 bytes).
+		 */
+		if (!(vfs_flags(vnode_mount(vp)) & MNT_CPROTECT)) {
+			error = switch_protection_set(vp, (int32_t)tmp, ctx);
+			vnode_put(vp);
+			break;
+		}
 
 		VATTR_INIT(&va);
 		VATTR_SET(&va, va_dataprotect_class, tmp);

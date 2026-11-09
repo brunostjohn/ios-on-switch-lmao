@@ -4410,7 +4410,7 @@ unionread:
 	 */
 	if ((al.commonattr &
 	    (ATTR_CMN_UUID | ATTR_CMN_GRPUUID | ATTR_CMN_EXTENDED_SECURITY)) ||
-	    !(al.commonattr & ATTR_CMN_OBJTYPE)) {
+	    !(al.commonattr & ATTR_CMN_OBJTYPE) || switch_protection_bulk_by_entry(dvp, al.commonattr)) {
 		error = ENOTSUP;
 	} else {
 		struct vnode_attr *va;
@@ -4586,6 +4586,7 @@ setattrlist_internal(vnode_t vp, struct setattrlist_args *uap, proc_t p, vfs_con
 	char            *user_buf, *cursor, *bufend, *fndrinfo, *cp, *volname;
 	int             proc_is64, error;
 	kauth_filesec_t rfsec;
+	int32_t         switch_class;
 	size_t attr_max_buffer = proc_support_long_paths(vfs_context_proc(ctx)) ?
 	    ATTR_MAX_BUFFER_LONGPATHS : ATTR_MAX_BUFFER;
 
@@ -4806,18 +4807,12 @@ setattrlist_internal(vnode_t vp, struct setattrlist_args *uap, proc_t p, vfs_con
 	/* Support setattrlist of data protection class */
 	if (al.commonattr & ATTR_CMN_DATA_PROTECT_FLAGS) {
 		ATTR_UNPACK(va.va_dataprotect_class);
-		if (!(vfs_flags(vnode_mount(vp)) & MNT_CPROTECT)) {
-			if ((error = switch_protection_set(vp, (int32_t)va.va_dataprotect_class, ctx)) != 0) {
-				goto out;
-			}
-		} else {
-			VATTR_SET_ACTIVE(&va, va_dataprotect_class);
+		VATTR_SET_ACTIVE(&va, va_dataprotect_class);
 #if CONFIG_MACF
-			if ((error = mac_vnode_check_dataprotect_set(ctx, vp, &va.va_dataprotect_class))) {
-				goto out;
-			}
-#endif
+		if ((error = mac_vnode_check_dataprotect_set(ctx, vp, &va.va_dataprotect_class))) {
+			goto out;
 		}
+#endif
 	}
 
 	/* volume */
@@ -4892,6 +4887,9 @@ setattrlist_internal(vnode_t vp, struct setattrlist_args *uap, proc_t p, vfs_con
 		VFS_DEBUG(ctx, vp, "ATTRLIST - ERROR: authorization failed");
 		goto out_unbusy;
 	}
+	if ((error = switch_protection_setattr_begin(vp, &va, &switch_class, ctx)) != 0) {
+		goto out_unbusy;
+	}
 
 	/*
 	 * When we're setting both the access mask and the finder info, then
@@ -4916,6 +4914,9 @@ setattrlist_internal(vnode_t vp, struct setattrlist_args *uap, proc_t p, vfs_con
 	 */
 	if ((va.va_active != 0LL) && ((error = vnode_setattr(vp, &va, ctx)) != 0)) {
 		VFS_DEBUG(ctx, vp, "ATTRLIST - ERROR: filesystem returned %d", error);
+		goto out_unbusy;
+	}
+	if ((error = switch_protection_setattr_end(vp, switch_class, ctx)) != 0) {
 		goto out_unbusy;
 	}
 

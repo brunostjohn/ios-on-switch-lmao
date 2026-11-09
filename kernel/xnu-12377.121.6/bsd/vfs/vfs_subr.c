@@ -8089,7 +8089,7 @@ vn_create(vnode_t dvp, vnode_t *vpp, struct nameidata *ndp, struct vnode_attr *v
 		error = vnode_setattr_fallback(*vpp, vap, ctx);
 	}
 	if (error == 0) {
-		switch_protection_create_end(dvp, *vpp, switch_class, ctx);
+		error = switch_protection_create_end(dvp, *vpp, switch_class, ctx);
 	}
 
 #if CONFIG_MACF

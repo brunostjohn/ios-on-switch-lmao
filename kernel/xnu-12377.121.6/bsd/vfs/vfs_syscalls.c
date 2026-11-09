@@ -14455,7 +14455,7 @@ listxattr(proc_t p, struct listxattr_args *uap, user_ssize_t *retval)
 		uio_addiov(auio, uap->namebuf, uap->bufsize);
 	}
 
-	error = vn_listxattr(vp, auio, &attrsize, uap->options, ctx);
+	error = switch_protection_listxattr(vp, auio, &attrsize, uap->options, ctx);
 
 	vnode_put(vp);
 	if (auio) {
@@ -14498,7 +14498,7 @@ flistxattr(proc_t p, struct flistxattr_args *uap, user_ssize_t *retval)
 		uio_addiov(auio, uap->namebuf, uap->bufsize);
 	}
 
-	error = vn_listxattr(vp, auio, &attrsize, uap->options, vfs_context_current());
+	error = switch_protection_listxattr(vp, auio, &attrsize, uap->options, vfs_context_current());
 
 	vnode_put(vp);
 	file_drop(uap->fd);
