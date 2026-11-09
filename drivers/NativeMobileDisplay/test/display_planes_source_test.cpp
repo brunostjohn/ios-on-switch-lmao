@@ -135,6 +135,8 @@ TEST(DisplayPlanesSource, DriverFollowsTheRules)
     const std::string limits = Method(source, "    void publishPlaneLimits()\n");
     EXPECT_THAT(limits, HasSubstr("{\"PlaneBaseAlignmentLinear\", native_planes::kPublishedBaseAlignment}"));
     // iOS 27's own limits; iOS 17's dictionary has no key they add.
+    EXPECT_THAT(limits,
+                HasSubstr("publish(\"IOMFBMaxSrcPixels\", source, limits.compressionUnsupported ? 8 : 7, 64);"));
     ExpectBefore(limits, "#if SWITCH_IPSW_KIND_24B119", "native_planes::kLimits24B119;");
     EXPECT_THAT(
         limits,
