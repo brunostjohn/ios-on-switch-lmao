@@ -43,6 +43,10 @@ extern "C" id native_bridge_metal_texture_tiled_in_place(id buffer, id descripto
     __attribute__((weak_import));
 extern "C" id native_bridge_metal_render_pipeline_lazy(id device, id descriptor, NSUInteger options)
     __attribute__((weak_import));
+// Where NVK keeps a texture's texels (a stored depth/stencil texture the raw path renders and copies in place)
+struct switch_nvk_image_memory;
+extern "C" int native_bridge_metal_texture_memory(id texture, struct switch_nvk_image_memory *out)
+    __attribute__((weak_import));
 
 // A wait the plugin bounds (r9-hang: r7n's and r7o's freezes were a userland wait with no end in backboardd's render thread):
 // past kWaitLimit, one line naming the wait and the object, then abort(), for a crash report with the stack instead of a silent
@@ -203,6 +207,15 @@ void declareGpuWrites(RMTexture *t);
 #if SWITCH_FRAME_TIMELINE
 void traceSurfaceImage(RMTexture *t, const char *what, uint32_t seed);
 #endif
+
+// RawMetalEncode.mm: the imports a texture's or buffer's memory lies in, named to the submission
+void useTexture(raw::CommandBuffer *rc, RMTexture *t, bool write);
+void useBuffer(raw::CommandBuffer *rc, RMBuffer *b, bool write);
+
+// RawMetalEncodeBlit.mm: a blit encoder's command of the tape onto the raw path's copy engine; a texture it writes leaves
+// `fresh` and `standInFresh` (its pool image and its stand-in are refreshed again before a sample)
+void encodeBlit(RMCommandBuffer *cb, const Cmd &c, raw::CommandBuffer *rc, raw::BlitEncoder *be,
+                std::set<RMTexture *> &fresh, std::set<RMTexture *> &standInFresh);
 
 // RawMetalTextureCpu.mm
 void cpuTiled(RMTexture *t, MTLRegion r, uint8_t *bytes, NSUInteger row, bool write);

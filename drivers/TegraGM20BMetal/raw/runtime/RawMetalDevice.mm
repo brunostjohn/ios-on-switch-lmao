@@ -1,5 +1,32 @@
 // SPDX-License-Identifier: MIT
 #import "RawMetalInternal.h"
+#include "NativeBridgeMetalFrontend.h"
+
+// Why the raw path does not take a stored depth/stencil texture's m2v texture in place, from the answer of
+// native_bridge_metal_texture_memory (-3: m2v made no texture)
+static const char *zetaMemoryRefusal(int asked)
+{
+    switch (asked) {
+    case -3:
+        return "m2v made no texture";
+    case -1:
+        return "the frontend or NVK has no texture memory accessor";
+    case -2:
+        return "its texels are no one NVK image's";
+    case 2:
+        return "NVK's image has more than one plane";
+    case 3:
+        return "NVK's image is not bound";
+    case 4:
+        return "NVK's image has more than one level";
+    case 5:
+        return "NVK's image has more than one layer";
+    case 6:
+        return "NVK's image is multisampled";
+    default:
+        return "NVK names no image";
+    }
+}
 
 @implementation RMDevice
 
@@ -205,6 +232,34 @@
         t->_rawOk = gRM->raw->createArray(uint32_t(d.width), uint32_t(d.height),
                                           uint32_t(std::max<NSUInteger>(d.arrayLength, 1) * faces),
                                           uint32_t(d.pixelFormat), array, t->_raw);
+    } else if (d.storageMode != MTLStorageModeMemoryless && zetaDescriptor(d)) {
+        // one allocation for both drivers: m2v's texture, which the raw path renders and copies in place
+        t->_kind = RMTexturePool;
+        id twin = [gRM->fallback newTextureWithDescriptor:d];
+        struct switch_nvk_image_memory m;
+        const int asked = !twin                                 ? -3
+                          : !native_bridge_metal_texture_memory ? -1
+                                                                : native_bridge_metal_texture_memory(twin, &m);
+        const char *why = asked ? zetaMemoryRefusal(asked) : nullptr;
+        if (!asked) {
+            raw::ZetaMemory z;
+            z.va = m.addr;
+            z.bytes = m.size_B;
+            z.layerBytes = m.array_stride_B;
+            z.pitch = m.row_stride_B;
+            z.bpp = m.texel_B;
+            z.blockHeight = m.y_log2;
+            z.blockDepth = m.z_log2;
+            z.tiled = m.tiled;
+            z.compressed = m.compressed;
+            t->_rawOk = gRM->raw->createZetaOver(z, uint32_t(d.width), uint32_t(d.height), uint32_t(d.pixelFormat),
+                                                 t->_raw, &why);
+        }
+        if (!t->_rawOk)
+            SWITCH_REFUSE_DETAIL("raw", "zeta.over", d.pixelFormat,
+                                 "a stored %lux%lu depth/stencil texture of format %lu stays m2v's: %s",
+                                 (unsigned long)d.width, (unsigned long)d.height, (unsigned long)d.pixelFormat, why);
+        twinPublish(t, t->_twin, twin);
     } else if (d.storageMode == MTLStorageModeMemoryless) {
         t->_kind = RMTextureMemoryless;
         t->_rawOk = gRM->raw->createMemoryless(uint32_t(d.width), uint32_t(d.height), uint32_t(d.pixelFormat), t->_raw,
@@ -218,7 +273,7 @@
             keepExtendedRange(d, t->_raw, false);
     }
     if (!t->_rawOk) {
-        RMTexture *w = (RMTexture *)[self wrapTwin:[gRM->fallback newTextureWithDescriptor:d] descriptor:d];
+        RMTexture *w = (RMTexture *)[self wrapTwin:t->_twin ?: [gRM->fallback newTextureWithDescriptor:d] descriptor:d];
         if (w)
             refuseTexture(w, PredTexPoolAlloc, d.width, d.height, @"twin-only (pool)", nil);
         return (id<MTLTexture>)w;

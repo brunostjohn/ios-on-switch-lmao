@@ -1274,6 +1274,17 @@ pub extern "C" fn nmb_texture_release(texture: *mut NmbTexture) {
     release(texture)
 }
 
+/// The texture's `VkImage` (metal2vulkan's interop hook, `Texture::vk_image`), as its handle's bits: 0 where its texels are no
+/// one image's. Read-only: the raw GM20B path asks NVK where that image's memory lies, to render and copy it in place.
+#[unsafe(no_mangle)]
+pub extern "C" fn nmb_texture_vk_image(texture: *const NmbTexture) -> u64 {
+    use ash::vk::Handle;
+    // SAFETY: the image stays the texture's; the caller only reads where its memory lies, while the texture lives.
+    guard(0, || {
+        Ok(unsafe { get(texture)?.0.vk_image() }.map_or(0, |image| image.as_raw()))
+    })
+}
+
 #[unsafe(no_mangle)]
 pub extern "C" fn nmb_texture_describe(texture: *const NmbTexture, out: *mut NmbTextureDescriptor) {
     guard((), || {

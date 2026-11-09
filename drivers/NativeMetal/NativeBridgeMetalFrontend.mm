@@ -2208,6 +2208,17 @@ extern "C" void *native_bridge_metal_nvk_symbol(const char *name)
     return nvkSymbol(name);
 }
 
+extern "C" int native_bridge_metal_texture_memory(id texture, struct switch_nvk_image_memory *out)
+{
+    using Memory = int (*)(uint64_t, struct switch_nvk_image_memory *);
+    static const Memory memory = reinterpret_cast<Memory>(nvkSymbol("switch_nvk_image_memory"));
+    if (!memory)
+        return -1;
+    const uint64_t image =
+        [texture isKindOfClass:[NBTexture class]] ? nmb_texture_vk_image(((NBTexture *)texture).handle) : 0;
+    return image && out ? memory(image, out) : -2;
+}
+
 // TegraGM20BMetal: the m2v twin of a state its raw path draws, made at its first set (AsyncPipelines.h startLazy); made
 // here when this process makes its states on the asking thread.
 extern "C" id native_bridge_metal_render_pipeline_lazy(id device, id descriptor, NSUInteger options)

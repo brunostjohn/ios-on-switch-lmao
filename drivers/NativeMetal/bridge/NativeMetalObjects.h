@@ -145,6 +145,8 @@ bool nmb_texture_is_aliasable(const NmbTexture *);
 bool nmb_buffer_is_aliasable(const NmbBuffer *);
 void nmb_texture_release(NmbTexture *);
 void nmb_texture_describe(const NmbTexture *, struct NmbTextureDescriptor *out);
+/* The texture's VkImage handle (metal2vulkan Texture::vk_image), 0 where its texels are no one image's. */
+uint64_t nmb_texture_vk_image(const NmbTexture *);
 bool nmb_texture_replace(NmbTexture *, const uint64_t region[6], uint64_t level, uint64_t slice, const void *bytes,
                          uint64_t bytes_per_row, uint64_t bytes_per_image, uint64_t length);
 bool nmb_texture_get_bytes(const NmbTexture *, void *bytes, uint64_t bytes_per_row, uint64_t bytes_per_image,

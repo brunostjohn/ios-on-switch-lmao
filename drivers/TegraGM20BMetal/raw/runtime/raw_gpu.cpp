@@ -1505,6 +1505,42 @@ bool Device::createPartView(const Texture &of, uint32_t format, uint32_t type, u
     return true;
 }
 
+bool Device::createZetaOver(const ZetaMemory &m, uint32_t width, uint32_t height, uint32_t format, Texture &t,
+                            const char **why)
+{
+    uint64_t bytes, align;
+    *why = !zetaShape(width, height, format, 1, t, bytes, align) ? "a size or format the raw path renders no zeta of"
+           : !m.va                                               ? "its image is not bound"
+           : !m.tiled                                            ? "its image is pitch-linear"
+           : m.blockDepth                                        ? "its image's blocks are deeper than one plane"
+           : m.bpp != t.bpp                                      ? "its texel size is not the format's"
+           : m.pitch < width * t.bpp || m.pitch % 64             ? "its row stride is not whole GOBs of its texels"
+           : m.bytes < m.layerBytes || uint64_t(m.pitch) * height > m.bytes ? "its image is smaller than its rows"
+                                                                            : nullptr;
+    if (*why)
+        return false;
+    t.va = m.va;
+    t.pitch = m.pitch;
+    t.blockHeight = m.blockHeight;
+    t.layerBytes = m.layerBytes;
+    t.comptags = m.compressed;
+    return true;
+}
+
+bool Device::stencilTemp(Texture &t)
+{
+    constexpr uint32_t kRG8Unorm = 30;
+    if (t.stencilTemp || !t.zeta || t.format != kZetaFormat)
+        return t.stencilTemp != nullptr;
+    Texture *temp = new Texture;
+    if (!createTexture(t.width, t.height, kRG8Unorm, *temp)) {
+        delete temp;
+        return false;
+    }
+    t.stencilTemp = temp;
+    return true;
+}
+
 bool Device::createMemoryless(uint32_t width, uint32_t height, uint32_t format, Texture &t, uint32_t samples)
 {
     uint64_t bytes, align;
@@ -1664,12 +1700,12 @@ void Device::destroyTexture(Texture &t)
         t = {};
         return;
     }
-    for (Texture *plane : {t.luma, t.chroma, t.planarStandIn})
+    for (Texture *plane : {t.luma, t.chroma, t.planarStandIn, t.stencilTemp})
         if (plane) {
             destroyTexture(*plane);
             delete plane;
         }
-    t.luma = t.chroma = t.planarStandIn = nullptr;
+    t.luma = t.chroma = t.planarStandIn = t.stencilTemp = nullptr;
     if (t.standIn) {
         destroyTexture(*t.standIn);
         delete t.standIn;
@@ -2527,7 +2563,7 @@ RenderEncoder *CommandBuffer::render(const PassDesc &pass)
     // one of them is, or is a pitch target the hardware cannot take (rendered through a shadow either way), or beside a zeta,
     // its pitch ones then rendered through block-linear shadows as NVK does; memoryless ones get a backing of the pass's layout
     const Texture *zeta = pass.depthStencil.texture;
-    if (zeta && (!zeta->zeta || !zeta->memoryless))
+    if (zeta && !zeta->zeta)
         return nullptr;
     // every attachment of one sample count (Metal's rule)
     uint8_t samples = zeta ? zeta->samples : 0;
@@ -2542,7 +2578,7 @@ RenderEncoder *CommandBuffer::render(const PassDesc &pass)
     for (uint32_t j = 0; j < pass.count && j < 8; j++)
         if (const Texture *t = pass.color[j].texture; t && !t->memoryless && (t->blockLinear || t->shadowTarget))
             blockLinear = true;
-    if (zeta) {
+    if (zeta && zeta->memoryless) {
         std::lock_guard<std::mutex> l(dev_->lock_);
         Texture *b = dev_->backing(*zeta);
         if (!b)
@@ -3571,11 +3607,21 @@ uint32_t texelRemap(uint32_t bpp)
     return 0 | 1 << 4 | 2 << 8 | 3 << 12 | (comp - 1) << 16 | (n - 1) << 20 | (n - 1) << 24;
 }
 
+// SET_REMAP_COMPONENTS of one-, two- or four-byte components (`size`): DST_X..W each SRC_X..W (0..3) or NO_WRITE (6), the
+// source's and destination's component counts (clb0b5)
+constexpr uint32_t kRemapNoWrite = 6;
+
+constexpr uint32_t remapOf(uint32_t x, uint32_t y, uint32_t z, uint32_t w, uint32_t size, uint32_t src, uint32_t dst)
+{
+    return x | y << 4 | z << 8 | w << 12 | (size - 1) << 16 | (src - 1) << 20 | (dst - 1) << 24;
+}
+
 // `w` x `h` texels as nouveau_copy_rect moves them: a remap of components (`bytes` of each texel moved), so lengths, widths and
 // origins count texels; a block-linear side by its block size (one GOB wide, Fermi's 8-row GOBs), its width the row stride in
-// texels, a 3D image's plane by its depth and layer
+// texels, a 3D image's plane by its depth and layer. `ordered`: NON_PIPELINED, after every earlier copy has completed (one that
+// reads what the copy before it wrote)
 void copyRemapped(Push &p, const CopySide &s, const CopySide &d, uint32_t w, uint32_t h, uint32_t remap, uint32_t bytes,
-                  Device::Stats &stats)
+                  Device::Stats &stats, bool ordered = false)
 {
     if (!w || !h || !bytes)
         return;
@@ -3601,6 +3647,8 @@ void copyRemapped(Push &p, const CopySide &s, const CopySide &d, uint32_t w, uin
               SUBC_COPY);
     else
         launch |= kDstPitch;
+    if (ordered)
+        launch = (launch & ~3u) | 2u;
     p.m(CE_LAUNCH_DMA, launch, SUBC_COPY);
 }
 
@@ -4113,11 +4161,37 @@ void BlitEncoder::copyTexels(const Texture &src, uint32_t sx, uint32_t sy, uint3
 }
 
 void BlitEncoder::copyBufferTexels(uint64_t va, uint32_t pitch, const Texture &t, uint32_t x, uint32_t y, uint32_t z,
-                                   uint32_t w, uint32_t h, bool toTexture)
+                                   uint32_t w, uint32_t h, bool toTexture, uint8_t aspect)
 {
-    room(32);
+    room(48);
     const CopySide rows{va, pitch}, texels = sideOf(t, x, y, z);
     const CopySide &from = toTexture ? rows : texels, &to = toTexture ? texels : rows;
+    if (t.zeta && t.format == kZetaFormat && aspect == kAspectDepth) {
+        // the texel's first word: depth
+        copyRemapped(p_, from, to, w, h,
+                     toTexture ? remapOf(0, kRemapNoWrite, kRemapNoWrite, kRemapNoWrite, 4, 1, 2)
+                               : remapOf(0, kRemapNoWrite, kRemapNoWrite, kRemapNoWrite, 4, 2, 1),
+                     4, dev_->stats);
+        return;
+    }
+    if (t.zeta && t.format == kZetaFormat && aspect == kAspectStencil && t.stencilTemp) {
+        // its fifth byte, stencil: as the third of its two-byte components to or from the temp's two bytes a texel, and those
+        // two bytes' first to or from the buffer's byte
+        const Texture &s = *t.stencilTemp;
+        const CopySide temp{s.va + uint64_t(y) * s.pitch + 2ull * x, s.pitch};
+        if (toTexture) {
+            copyRemapped(p_, rows, temp, w, h, remapOf(0, kRemapNoWrite, kRemapNoWrite, kRemapNoWrite, 1, 1, 2), 1,
+                         dev_->stats);
+            copyRemapped(p_, temp, texels, w, h, remapOf(kRemapNoWrite, kRemapNoWrite, 0, kRemapNoWrite, 2, 1, 4), 2,
+                         dev_->stats, true);
+        } else {
+            copyRemapped(p_, texels, temp, w, h, remapOf(2, kRemapNoWrite, kRemapNoWrite, kRemapNoWrite, 2, 4, 1), 2,
+                         dev_->stats);
+            copyRemapped(p_, temp, rows, w, h, remapOf(0, kRemapNoWrite, kRemapNoWrite, kRemapNoWrite, 1, 2, 1), 1,
+                         dev_->stats, true);
+        }
+        return;
+    }
     if (xrForm(t.format) == XrForm::Planes) {
         // four-byte components: the texel's color word to the buffer's word, or into the texel with its alpha word NO_WRITE (6)
         constexpr uint32_t kOut = 3u << 16 | 1u << 20, kIn = 6u << 4 | 3u << 16 | 1u << 24;

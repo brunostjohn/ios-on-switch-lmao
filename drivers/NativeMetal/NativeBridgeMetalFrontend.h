@@ -66,6 +66,18 @@ bool native_bridge_metal_render_direct(id descriptor, bool barrier, NSUInteger t
 // A symbol of the NVK this device opened (null: none)
 void *native_bridge_metal_nvk_symbol(const char *name);
 
+// Where NVK keeps a texture's texels (NVK's switch_nvk_image_memory, the same layout): one plane, level, layer and sample, its GPU
+// address and size, the PTE kind its memory is mapped with, its texel size and level 0's layout. The raw GM20B path renders and
+// copies a stored depth/stencil texture there, in place. 0, else why not: NVK's reason (1 no image, 2 more than one plane, 3 not
+// bound, 4 more than one level, 5 more than one layer, 6 multisampled), -1 no such NVK export, -2 its texels are no one image's.
+struct switch_nvk_image_memory {
+    uint64_t addr, size_B, array_stride_B;
+    uint32_t row_stride_B, texel_B;
+    uint8_t pte_kind, compressed, tiled, y_log2, z_log2;
+};
+
+int native_bridge_metal_texture_memory(id texture, struct switch_nvk_image_memory *out);
+
 // Memory another driver of this process keeps bound in the GPU VM it shares with NVK (the raw GM20B path's: raw_gpu.h Alias): the
 // BO's first byte for the CPU, its size, handle and GPU address, the PTE kind of that binding, and the lease a view holds.
 struct switch_foreign_memory {
