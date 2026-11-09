@@ -106,14 +106,15 @@
 // bluetoothd's first connect), after the rails handshake the Joy-Cons seated at boot, so a Joy-Con that attaches before
 // it runs unpaired and is paired the moment it arrives (switch_joycon_bluetooth_address: its HID device goes away for
 // the pairing, about 0.1 s, and comes back, before anything has opened it); later attaches pair before the HID device
-// is published. Pairing reads the Joy-Con's pairing log (SPI 0x2000, 0x26-byte
-// slots: magic, size 0x22, checksum, host BD_ADDR display order, LTK; hekate 1084-1245, deku spi_flash_notes.md 44-76):
-// earlier pairings have magic 0x00, the one in use 0x95, erased flash ends it; the slot in use is read whole and its
-// checksum computed with the host capability it holds (SwitchJoyConPairingSlot.h). If it names this address, nothing
-// is written (a Joy-Con paired in Horizon to the address SwitchBluetooth adopted, or in Settings, Bluetooth); else
-// the Joy-Con is paired over the rail with subcommand 0x01 (deku bluetooth_hid_subcommands_notes.md 13-52): 01 <host
-// BD_ADDR LSB first> -> Joy-Con BD_ADDR; 02 -> LTK, each byte XOR 0xAA; 03 -> saved, which makes it the slot in use
-// (Horizon pairs it back the next time it is attached there). The result is published as a SwitchJoyConPairing
+// is published. Every attach pairs the Joy-Con over the rail with subcommand 0x01 (deku
+// bluetooth_hid_subcommands_notes.md 13-52): 01 <host BD_ADDR LSB first> -> Joy-Con BD_ADDR; 02 -> LTK, each byte XOR
+// 0xAA; 03 -> saved, which makes it the slot in use (Horizon pairs it back the next time it is attached there). It does
+// so whatever the Joy-Con already holds: seen on the console, a Joy-Con whose slot in use already named this address,
+// left as it was, never paged after a detach; paired over the rail in that attach, it pages within two seconds of a
+// button press. Debug builds first read the Joy-Con's pairing log (SPI 0x2000, 0x26-byte slots: magic, size 0x22,
+// checksum, host BD_ADDR display order, LTK, host capability; hekate 1084-1245, deku spi_flash_notes.md 44-76: earlier
+// pairings magic 0x00, the one in use 0x95, erased flash its end; SwitchJoyConPairingSlot.h) to log what the slot in use
+// held before the pairing. The result is published as a SwitchJoyConPairing
 // registry entry (Address, LinkKey in HCI order, Name, ClassOfDevice, ProductID) for joyconpaird (helper/), which
 // hands it to bluetoothd: pulled off the rail, the Joy-Con pages this address when a button is pressed and reconnects
 // over Bluetooth. The console never reaches it the other way: a Joy-Con that is not in sync mode does not page-scan,
@@ -399,6 +400,12 @@ constexpr uint32_t kResendMS = 5, kDisconnectSends = 40, kFastCommandMS = 1000, 
 // Pairing slots (deku spi_flash_notes.md 44-76; hekate 1158-1166 reads 0x1A of each 0x26-byte slot): the log fills the
 // 4 KiB section (deku), so the slot in use can be any of them.
 constexpr uint32_t kSlotBase = 0x2000, kSlotStride = 0x26, kSlots = 0x1000 / kSlotStride;
+// The pairing log is read before every pairing, for its log line (see the header), in debug builds only.
+#if DEVELOPMENT || DEBUG
+constexpr bool kReportSlot = true;
+#else
+constexpr bool kReportSlot = false;
+#endif
 constexpr uint32_t kJoyConClass = 0x000508;  // Peripheral / Gamepad, as switchroot's BlueZ record
 
 uint8_t crc8(const uint8_t *data, size_t length)
@@ -1433,7 +1440,7 @@ void SwitchJoyConRail::startPairing(Side &s)
     s.pairPending = false;
     dropHid(s);
     s.phase = kPairing;
-    s.step = kReadSlot;
+    s.step = kReportSlot ? kReadSlot : kSendHost;
     s.slot = 0;
     s.slotInUse = s.slotCorrupt = false;
     sendPairStep(s);
@@ -1476,7 +1483,7 @@ void SwitchJoyConRail::sendPairStep(Side &s)
 }
 
 // An SPI read of the pairing log (SwitchJoyConPairingSlot.h): data is the address (4), the size, then the bytes. The
-// log is walked by magic; the slot in use is read whole and checked, and reused when it names this console.
+// log is walked by magic and the slot in use read whole and checked, for the log line; the pairing follows either way.
 void SwitchJoyConRail::pairingSlotReply(Side &s, const uint8_t *data, bool ack, size_t length)
 {
     const bool tail = s.step == kReadSlotTail;
@@ -1509,14 +1516,6 @@ void SwitchJoyConRail::pairingSlotReply(Side &s, const uint8_t *data, bool ack, 
     } else {
         s.slotInUse = switch_joycon_slot_valid(s.slotBytes);
         s.slotCorrupt = !s.slotInUse;
-        if (s.slotInUse && switch_joycon_slot_names(s.slotBytes, host)) {
-            // Stored most significant byte first; HCI and bluetoothd take the key least significant byte first (hekate
-            // 761-762 reverses it for joycon_mac.ini, which BlueZ uses as is).
-            for (unsigned i = 0; i < 16; ++i)
-                s.key[i] = s.slotBytes[10 + 15 - i];
-            finishPairing(s, true, "flash");
-            return;
-        }
     }
     s.step = kSendHost;
     sendPairStep(s);
@@ -1562,24 +1561,24 @@ void SwitchJoyConRail::finishPairing(Side &s, bool paired, const char *how)
 {
     s.timer->cancelTimeout();
 #if DEVELOPMENT || DEBUG
-    char found[96] = "no slot in use";
+    char found[96] = "before: no slot in use";
     if (s.slotCorrupt)
-        snprintf(found, sizeof(found), "slot %u in use fails its checksum", s.slot);
+        snprintf(found, sizeof(found), "before: slot %u in use fails its checksum", s.slot);
     if (s.slotInUse) {
         const uint8_t *h = s.slotBytes + 4;
-        snprintf(found, sizeof(found), "slot %u in use names %02x:%02x:%02x:%02x:%02x:%02x, host capability 0x%02x",
-                 s.slot, h[0], h[1], h[2], h[3], h[4], h[5], s.slotBytes[SWITCH_JOYCON_SLOT_CAPS]);
+        snprintf(found, sizeof(found),
+                 "before: slot %u in use names %02x:%02x:%02x:%02x:%02x:%02x, host capability 0x%02x", s.slot, h[0],
+                 h[1], h[2], h[3], h[4], h[5], s.slotBytes[SWITCH_JOYCON_SLOT_CAPS]);
     }
 #endif
     if (paired) {
         publishPairing(s, how);
 #if DEVELOPMENT || DEBUG
         os_log(OS_LOG_DEFAULT,
-               "SwitchJoyCon: Joy-Con (%c) %02x:%02x:%02x:%02x:%02x:%02x paired to %02x:%02x:%02x:%02x:%02x:%02x (%s; "
-               "%s)",
+               "SwitchJoyCon: Joy-Con (%c) %02x:%02x:%02x:%02x:%02x:%02x paired to %02x:%02x:%02x:%02x:%02x:%02x over "
+               "the rail (%s)",
                s.cfg->letter, s.mac[0], s.mac[1], s.mac[2], s.mac[3], s.mac[4], s.mac[5], host[0], host[1], host[2],
-               host[3], host[4], host[5],
-               strcmp(how, "rail") ? "its slot in use, nothing written" : "written over the rail", found);
+               host[3], host[4], host[5], kReportSlot ? found : "");
 #endif
     } else {
         IOLog("SwitchJoyCon: Joy-Con (%c) not paired for Bluetooth: %s\n", s.cfg->letter, how);
@@ -1616,12 +1615,6 @@ void SwitchJoyConRail::publishPairing(Side &s, const char *source)
                             static_cast<unsigned long long>(s.cfg->left ? kSwitchJoyConLeftPID : kSwitchJoyConRightPID),
                             32);
         record->setProperty("Source", source);
-        // Who made a pairing the rail only read: a Switch host (Horizon) sets SWITCH_JOYCON_CAPS_SWITCH_HOST; one this
-        // console's bluetoothd made over the air does not, and bluetoothd already holds its key (joyconpaird).
-        if (!strcmp(source, "flash")) {
-            record->setProperty("HostCapability", static_cast<unsigned long long>(s.slotBytes[SWITCH_JOYCON_SLOT_CAPS]),
-                                8);
-        }
     }
     OSSafeReleaseNULL(mac);
     OSSafeReleaseNULL(key);

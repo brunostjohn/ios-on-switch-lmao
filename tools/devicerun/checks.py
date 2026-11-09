@@ -656,14 +656,14 @@ GROUPS: dict[str, list[Check]] = {
             show=('slot', 'host', 'caps'),
             source='drivers/SwitchJoyCon/SwitchJoyConRail.cpp finishPairing',
         ),
-        # A Joy-Con whose slot in use already names this console (paired by the rail, Horizon or Settings) is not
-        # paired again: boot 16 rewrote it at every attach and lost a Settings pairing.
+        # Every attach pairs the Joy-Con over the rail: one whose slot already named the console, left as it was, never
+        # paged after a detach (boot 17).
         Check(
-            'joycon.pairing-rewritten',
-            'r108-btpair',
-            'written over the rail',
-            regex=r'paired to (?P<host>[0-9a-f:]+) \(written over the rail; slot \d+ in use names (?P=host),',
+            'joycon.pairing-skipped',
+            'r108-btexchange',
+            'SwitchJoyCon: Joy-Con',
             process=KERNEL,
+            regex=r'paired to [0-9a-f:]+ (?!over the rail)',
             needs='joycon.slot-read',
             source='drivers/SwitchJoyCon/SwitchJoyConRail.cpp finishPairing',
         ),

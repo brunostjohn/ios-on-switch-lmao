@@ -18,13 +18,12 @@
 extern "C" {
 #endif
 
-#define SWITCH_JOYCON_SLOT_BYTES       0x26u
-#define SWITCH_JOYCON_SLOT_HEAD        0x1Au  // magic .. LTK
-#define SWITCH_JOYCON_SLOT_TAIL        (SWITCH_JOYCON_SLOT_BYTES - SWITCH_JOYCON_SLOT_HEAD)
-#define SWITCH_JOYCON_SLOT_CAPS        0x24u
-#define SWITCH_JOYCON_SLOT_MAGIC       0x95u
-#define SWITCH_JOYCON_SLOT_SIZE        0x22u
-#define SWITCH_JOYCON_CAPS_SWITCH_HOST 0x20u  // bit 5: paired to a TBFC host (a Switch: Horizon made this pairing)
+#define SWITCH_JOYCON_SLOT_BYTES 0x26u
+#define SWITCH_JOYCON_SLOT_HEAD  0x1Au  // magic .. LTK
+#define SWITCH_JOYCON_SLOT_TAIL  (SWITCH_JOYCON_SLOT_BYTES - SWITCH_JOYCON_SLOT_HEAD)
+#define SWITCH_JOYCON_SLOT_CAPS  0x24u
+#define SWITCH_JOYCON_SLOT_MAGIC 0x95u
+#define SWITCH_JOYCON_SLOT_SIZE  0x22u
 
 enum switch_joycon_slot_kind {
     SWITCH_JOYCON_SLOT_EARLIER,  // an earlier pairing: the next slot
@@ -47,11 +46,6 @@ static inline bool switch_joycon_slot_valid(const uint8_t slot[SWITCH_JOYCON_SLO
     for (unsigned i = 4; i < SWITCH_JOYCON_SLOT_BYTES; ++i)
         sum = (uint8_t)(sum + slot[i]);
     return (uint8_t)(sum ^ 0x55u) == slot[2];
-}
-
-static inline bool switch_joycon_slot_names(const uint8_t slot[SWITCH_JOYCON_SLOT_BYTES], const uint8_t host[6])
-{
-    return memcmp(slot + 4, host, 6) == 0;
 }
 
 #ifdef __cplusplus
