@@ -71,6 +71,14 @@ py_test(
     deps = [":lib"],
 )
 
+# protection.py's checks over boot 15's content-protection lines and a kernel that labels.
+py_test(
+    name = "protection_test",
+    size = "small",
+    srcs = ["protection_test.py"],
+    deps = [":lib"],
+)
+
 # stutter.py's frame-pacing checks over lines in the kernel's formats.
 py_test(
     name = "stutter_test",
