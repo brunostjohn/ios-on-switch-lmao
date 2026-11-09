@@ -39,6 +39,8 @@ Completion::Completion(Device &device, const char *cacheDir, uint64_t stack)
 
 Completion::~Completion()
 {
+    dispatch_sync(splitQueue_, ^{
+                  });
     compiler_.reset();
 }
 
@@ -196,6 +198,7 @@ void Completion::splitLater(const CacheKey &k, const RuntimeRecord &record)
         a = it->second;
     }
     auto kept = std::make_shared<RuntimeRecord>(record);
+    const CacheKey key = k;  // a block holds a reference parameter as the reference
     dispatch_async(splitQueue_, ^{
         RuntimeRecord made;
         std::string why;
@@ -215,7 +218,7 @@ void Completion::splitLater(const CacheKey &k, const RuntimeRecord &record)
             kept->splitPrograms[1] = std::move(made.splitPrograms[1]);
             device_.addSplit(*kept);
         }
-        cache_.store(k, kept.get(), std::string());
+        cache_.store(key, kept.get(), std::string());
     });
 }
 
