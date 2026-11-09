@@ -72,7 +72,7 @@ def push_bytes(push: list[tuple[int, int]]) -> bytes:
 
 def key_hash(rec: dict) -> int:
     # the raw path's own states (probe.mm PROBE_OWN_LIB) by the name the runtime asks for (raw_gpu.cpp ycbcrPipeline and
-    # standInPipeline, runtime/raw_xr.h xrConversion, runtime/raw_samples.h resolveState)
+    # standInPipeline, runtime/raw_xr.h xrConversion, runtime/raw_samples.h resolveState, runtime/raw_mip.h mipState)
     parts = rec['key'].split(' | ')
     pair = f'{parts[1].rstrip()} | {parts[2]}' if len(parts) == 3 else ''
     for family, vertex, fragments in (
@@ -83,6 +83,31 @@ def key_hash(rec: dict) -> int:
             'resolve',
             'resolve_vert',
             ('rgba8_frag', 'rgba8_srgb_frag', 'bgra8_frag', 'bgra8_srgb_frag', 'rg11b10f_frag', 'rgba16f_frag'),
+        ),
+        (
+            'mip',
+            'mip_vert',
+            tuple(
+                f'{name}_frag'
+                for name in (
+                    'a8',
+                    'r16',
+                    'r16f',
+                    'b5g6r5',
+                    'bgr5a1',
+                    'r32f',
+                    'rg16',
+                    'rg16f',
+                    'rgba8_srgb',
+                    'bgra8_srgb',
+                    'rgb10a2',
+                    'rg11b10f',
+                    'bgr10a2',
+                    'rg32f',
+                    'rgba16',
+                    'rgba32f',
+                )
+            ),
         ),
     ):
         for fragment in fragments:

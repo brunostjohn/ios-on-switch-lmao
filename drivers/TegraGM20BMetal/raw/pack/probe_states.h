@@ -267,14 +267,35 @@ inline std::vector<std::string> corpusLines(NSString *text, bool own)
     }
     if (!own)
         return lines;
-    for (const char *out :
-         {"115 | v ycbcr_vert | f ycbcr_converted_frag", "125 | v ycbcr_vert | f ycbcr_srgb_frag",
-          "70 | v ycbcr_vert | f ycbcr_codes_frag", "90 | v ycbcr_vert | f ycbcr_codes10_frag",
-          "115 | v xr_vert | f xr_bgr10_frag", "115 | v xr_vert | f xr_bgra10_frag",
-          "115 | v xr_vert | f xr_planes_frag", "70 | v resolve_vert | f resolve_rgba8_frag",
-          "70 | v resolve_vert | f resolve_rgba8_srgb_frag", "80 | v resolve_vert | f resolve_bgra8_frag",
-          "80 | v resolve_vert | f resolve_bgra8_srgb_frag", "92 | v resolve_vert | f resolve_rg11b10f_frag",
-          "115 | v resolve_vert | f resolve_rgba16f_frag"}) {
+    for (const char *out : {"115 | v ycbcr_vert | f ycbcr_converted_frag",
+                            "125 | v ycbcr_vert | f ycbcr_srgb_frag",
+                            "70 | v ycbcr_vert | f ycbcr_codes_frag",
+                            "90 | v ycbcr_vert | f ycbcr_codes10_frag",
+                            "115 | v xr_vert | f xr_bgr10_frag",
+                            "115 | v xr_vert | f xr_bgra10_frag",
+                            "115 | v xr_vert | f xr_planes_frag",
+                            "70 | v resolve_vert | f resolve_rgba8_frag",
+                            "70 | v resolve_vert | f resolve_rgba8_srgb_frag",
+                            "80 | v resolve_vert | f resolve_bgra8_frag",
+                            "80 | v resolve_vert | f resolve_bgra8_srgb_frag",
+                            "92 | v resolve_vert | f resolve_rg11b10f_frag",
+                            "115 | v resolve_vert | f resolve_rgba16f_frag",
+                            "1 | v mip_vert | f mip_a8_frag",
+                            "20 | v mip_vert | f mip_r16_frag",
+                            "25 | v mip_vert | f mip_r16f_frag",
+                            "40 | v mip_vert | f mip_b5g6r5_frag",
+                            "43 | v mip_vert | f mip_bgr5a1_frag",
+                            "55 | v mip_vert | f mip_r32f_frag",
+                            "60 | v mip_vert | f mip_rg16_frag",
+                            "65 | v mip_vert | f mip_rg16f_frag",
+                            "71 | v mip_vert | f mip_rgba8_srgb_frag",
+                            "81 | v mip_vert | f mip_bgra8_srgb_frag",
+                            "90 | v mip_vert | f mip_rgb10a2_frag",
+                            "92 | v mip_vert | f mip_rg11b10f_frag",
+                            "94 | v mip_vert | f mip_bgr10a2_frag",
+                            "105 | v mip_vert | f mip_rg32f_frag",
+                            "110 | v mip_vert | f mip_rgba16_frag",
+                            "125 | v mip_vert | f mip_rgba32f_frag"}) {
         std::string o = out;
         const size_t bar = o.find(' ');
         lines.push_back("@O R ok=1 label=raw.own samples=1 topo=0 ds=0/0 c0=" + o.substr(0, bar) + ":15:0:1:0:0:1:0:0" +

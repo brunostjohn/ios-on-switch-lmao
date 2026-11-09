@@ -260,7 +260,7 @@ def build(work: Path, bridge: Path, metal_abi: Path) -> None:
         [HERE / 'directpack.mm', RAW / 'runtime/RawDirect.mm'],
         tuple(RAW / f'runtime/{name}.cpp' for name in DIRECT_RUNTIME),
     )
-    own = ('ycbcr', 'xr', 'resolve')
+    own = ('ycbcr', 'xr', 'resolve', 'mip')
     exact = {'resolve': ['-fno-fast-math']}  # its sums in sample order and its NaN tests kept (resolve.metal)
     for name in own:
         run(

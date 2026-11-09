@@ -828,6 +828,8 @@ public:
     Pipeline *xrPipeline(XrForm form);
     // The pack's resolve state into a target of `format` (raw_samples.h resolveState), null if the pack has none
     Pipeline *resolvePipeline(uint32_t format);
+    // The pack's state that draws a chain level of `format` from the level above (raw_mip.h mipState), null if the pack has none
+    Pipeline *mipPipeline(uint32_t format);
     // s's header under address map `map` (Texture::addressMap), made now if it is not yet
     bool samplerVariant(Sampler &s, uint8_t map);
     // A two-plane 4:4:4 surface's texture of RGB8_444_2P (542): its planes at `luma`/`chroma` (offsets in the allocation,
