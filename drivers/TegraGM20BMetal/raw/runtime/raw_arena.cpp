@@ -206,6 +206,15 @@ void Device::setArenaVolatile(uint32_t arena, bool isVolatile)
         arenas_[arena].isVolatile = isVolatile;
 }
 
+uint64_t Device::arenaBytes()
+{
+    std::lock_guard<std::mutex> l(lock_);
+    uint64_t bytes = 0;
+    for (const Arena &a : arenas_)
+        bytes += a.used && !a.purged ? a.bytes : 0;
+    return bytes;
+}
+
 bool Device::arenaPurged(uint32_t arena)
 {
     std::lock_guard<std::mutex> l(lock_);

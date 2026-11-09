@@ -800,6 +800,8 @@ public:
     // Fresh pages where it was (their contents zero); false: no memory, it stays purged
     bool restoreArena(uint32_t arena);
 
+    uint64_t arenaBytes();  // bound: purged arenas' are not
+
     uint32_t purgedArenas() const
     {
         return purgedArenas_.load();
