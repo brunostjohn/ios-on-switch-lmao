@@ -206,7 +206,7 @@ IOReturn AppleAVE2UserClient::run(uint32_t method, const void *in, uint32_t inSi
         memset(info, 0, sizeof(*info));
         info->abi_version = TEGRA_NVENC_ABI_VERSION;
         info->nvenc_version = 0x50;
-        info->codecs = 1u << TEGRA_NVENC_CODEC_H264;
+        info->codecs = kTegraNVENCCodecs;
         info->max_width = info->max_height = 4096;
         info->max_mbs = 36864;
         info->input_layout = TEGRA_NVENC_LAYOUT_TILED16;
