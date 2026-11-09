@@ -123,6 +123,7 @@ TESTS: dict[str, bool] = {
     'crypto.local_authentication': False,
     'system.identity': False,
     'system.power': False,
+    'system.thermal': False,
     'system.memory': False,
     'cpu.clock': False,
     'cpu.sustained': False,
