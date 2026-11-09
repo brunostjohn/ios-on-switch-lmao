@@ -1087,9 +1087,20 @@ void Device::freeTic(uint32_t tic)
 // TEXTURE_TYPE TWO_D_NO_MIPMAP), word 0 NVK's for the format
 void Device::writeTic(const Texture &t)
 {
+    fx::MipChain one;
+    if (t.zeta) {  // NVK's image as laid out (createZetaOver): one level, its block height
+        uint32_t w[8];
+        one.width = t.width;
+        one.height = t.height;
+        one.levels = 1;
+        one.bpp = t.bpp;
+        one.yLog2 = t.blockHeight;
+        fx::mipChainTic(one, t.va, kZetaFormatInfo[zetaFormatIndex(t.format)].tic0, false, 0, 1, w, fx::kTexTwoD);
+        memcpy(tic_.cpu + 32 * t.tic, w, 32);
+        return;
+    }
     const FormatInfo *f = formatInfo(t.format);
     uint32_t w[8] = {f->tic0};
-    fx::MipChain one;
     if (t.layers > 1 && fx::arrayLayout(t.width, t.height, t.layers, 1, t.bpp, one)) {
         fx::mipChainTic(one, t.va, f->tic0, f->srgb, 0, 1, w, t.type);
         memcpy(tic_.cpu + 32 * t.tic, w, 32);
@@ -1505,8 +1516,8 @@ bool Device::createPartView(const Texture &of, uint32_t format, uint32_t type, u
     return true;
 }
 
-bool Device::createZetaOver(const ZetaMemory &m, uint32_t width, uint32_t height, uint32_t format, Texture &t,
-                            const char **why)
+bool Device::createZetaOver(const ZetaMemory &m, uint32_t width, uint32_t height, uint32_t format, bool sampled,
+                            Texture &t, const char **why)
 {
     uint64_t bytes, align;
     *why = !zetaShape(width, height, format, 1, t, bytes, align) ? "a size or format the raw path renders no zeta of"
@@ -1516,7 +1527,9 @@ bool Device::createZetaOver(const ZetaMemory &m, uint32_t width, uint32_t height
            : m.bpp != t.bpp                                      ? "its texel size is not the format's"
            : m.pitch < width * t.bpp || m.pitch % 64             ? "its row stride is not whole GOBs of its texels"
            : m.bytes < m.layerBytes || uint64_t(m.pitch) * height > m.bytes ? "its image is smaller than its rows"
-                                                                            : nullptr;
+           : sampled && m.pitch != (width * t.bpp + 63) / 64 * 64
+               ? "its row stride is not the one a texture header implies"
+               : nullptr;
     if (*why)
         return false;
     t.va = m.va;
@@ -1524,6 +1537,13 @@ bool Device::createZetaOver(const ZetaMemory &m, uint32_t width, uint32_t height
     t.blockHeight = m.blockHeight;
     t.layerBytes = m.layerBytes;
     t.comptags = m.compressed;
+    if (!sampled)
+        return true;
+    if (!(t.tic = allocTic())) {
+        *why = "no texture header is left";
+        return false;
+    }
+    writeTic(t);
     return true;
 }
 

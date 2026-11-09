@@ -234,6 +234,42 @@ int main(int argc, char **argv)
             expect([in isEqualToString:@"raw"] && copied && [out isEqualToString:@"raw"] && same, what,
                    [NSString stringWithFormat:@"%@ / m2v / %@", in, out]);
         }
+        for (MTLPixelFormat f : {MTLPixelFormatDepth32Float, MTLPixelFormatDepth16Unorm}) {
+            // HW Test's gpu.clear.formats targets, which may also be sampled: a clear pass, a readback with no options
+            d.pixelFormat = f;
+            d.usage = MTLTextureUsageRenderTarget | MTLTextureUsageShaderRead;
+            RMTexture *t = (RMTexture *)[dev newTextureWithDescriptor:d];
+            MTLRenderPassDescriptor *clear = [MTLRenderPassDescriptor renderPassDescriptor];
+            clear.depthAttachment.texture = t;
+            clear.depthAttachment.loadAction = MTLLoadActionClear;
+            clear.depthAttachment.storeAction = MTLStoreActionStore;
+            clear.depthAttachment.clearDepth = 0.25;
+            id<MTLCommandBuffer> c = [q commandBuffer];
+            [[c renderCommandEncoderWithDescriptor:clear] endEncoding];
+            [c commit];
+            [c waitUntilCompleted];
+            id<MTLCommandBuffer> r = [q commandBuffer];
+            id<MTLBlitCommandEncoder> e = [r blitCommandEncoder];
+            [e copyFromTexture:t
+                             sourceSlice:0
+                             sourceLevel:0
+                            sourceOrigin:MTLOriginMake(0, 0, 0)
+                              sourceSize:MTLSizeMake(w, h, 1)
+                                toBuffer:depth
+                       destinationOffset:0
+                  destinationBytesPerRow:w * 4
+                destinationBytesPerImage:w * h * 4];
+            [e endEncoding];
+            [r commit];
+            [r waitUntilCompleted];
+            char what[128];
+            snprintf(what, sizeof what,
+                     "format %lu, a render target also sampled: its own texture header, cleared and read back",
+                     (unsigned long)f);
+            expect(t->_rawOk && t->_raw.zeta && t->_raw.tic && [path(c) isEqualToString:@"raw"] &&
+                       [path(r) isEqualToString:@"raw"],
+                   what, [NSString stringWithFormat:@"%@ / %@", path(c), path(r)]);
+        }
         printf("raw facade: %d case(s) failed\n", failed);
         return failed ? 1 : 0;
     }

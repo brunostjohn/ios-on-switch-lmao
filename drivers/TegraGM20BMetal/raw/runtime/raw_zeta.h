@@ -25,17 +25,19 @@ struct Texture;
 constexpr uint32_t kZetaFormat = 260;  // MTLPixelFormatDepth32Float_Stencil8
 
 // A depth/stencil format the raw path renders: its MTLPixelFormat, SET_ZT_FORMAT, texel bytes, PTE kind (gm107 dev_mmu.h),
-// and whether it has stencil
+// whether it has stencil, and the texture header word 0 NVK samples its depth through (nil_formats.csv's row of the image's
+// format, which NVK's depth-aspect view keeps: R the depth, 0 0 1)
 struct ZetaFormat {
     uint32_t metal, zt, bpp, kind;
     bool stencil;
+    uint32_t tic0;
 };
 
 constexpr uint32_t kZetaFormats = 3;
 constexpr ZetaFormat kZetaFormatInfo[kZetaFormats] = {
-    {250, 0x13, 2, 0x01, false},  // Depth16Unorm: Z16
-    {252, 0x0a, 4, 0x7b, false},  // Depth32Float: ZF32
-    {260, 0x19, 8, 0xc3, true},   // Depth32Float_Stencil8: ZF32_X24S8
+    {250, 0x13, 2, 0x01, false, 0x7012493a},  // Depth16Unorm: Z16, UNORM
+    {252, 0x0a, 4, 0x7b, false, 0x7017ffaf},  // Depth32Float: ZF32, FLOAT
+    {260, 0x19, 8, 0xc3, true, 0x7017f3b0},   // Depth32Float_Stencil8: ZF32_X24S8, FLOAT depth, UINT stencil
 };
 
 // its index in kZetaFormatInfo, kZetaFormats for none

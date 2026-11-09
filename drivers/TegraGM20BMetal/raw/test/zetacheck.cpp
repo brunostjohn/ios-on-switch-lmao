@@ -86,12 +86,20 @@ int main(int argc, char **argv)
         const raw::ZetaMemory m{memory.va, bytes, shape.layerBytes, shape.pitch, shape.bpp, shape.blockHeight, 0,
                                 true,      false};
         const char *declined = nullptr;
-        if (!dev.createZetaOver(m, c.w, c.h, c.format, t, &declined)) {
+        if (!dev.createZetaOver(m, c.w, c.h, c.format, false, t, &declined)) {
             expect(false, declined);
             continue;
         }
-        expect(t.zeta && !t.memoryless && t.va == memory.va && (c.format != 260 || dev.stencilTemp(t)),
+        expect(t.zeta && !t.memoryless && t.va == memory.va && !t.tic && (c.format != 260 || dev.stencilTemp(t)),
                "a stored zeta texture over that memory");
+        raw::Texture sampled;
+        raw::ZetaMemory wide = m;
+        wide.pitch += 64;
+        wide.bytes += uint64_t(64) * c.h;
+        expect(dev.createZetaOver(m, c.w, c.h, c.format, true, sampled, &declined) && sampled.tic &&
+                   !dev.createZetaOver(wide, c.w, c.h, c.format, true, shape, &declined),
+               "sampled: a texture header, only where its rows are the ones a header implies");
+        dev.destroyTexture(sampled);
         auto texelByte = [&](const raw::Texture &z, uint32_t x, uint32_t y, uint32_t b) -> uint8_t & {
             return ::texelByte(memory.cpu, z, x, y, b);
         };

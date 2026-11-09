@@ -232,8 +232,9 @@ struct Texture {
     // A multisampled texture's samples a pixel (fx::msLayout): its memory the sample grid, height and width in pixels
     uint8_t samples = 1;
 
-    // A depth/stencil format (raw_zeta.h kZetaFormatInfo): block-linear zeta memory, bound with its format's PTE kind; never
-    // sampled or a colour target. A stored one (not memoryless) is NVK's image, rendered and copied in place, by aspect
+    // A depth/stencil format (raw_zeta.h kZetaFormatInfo): block-linear zeta memory, bound with its format's PTE kind; never a
+    // colour target, sampled (tic) only where it was made to be. A stored one (not memoryless) is NVK's image, rendered,
+    // sampled and copied in place, by aspect
     // (BlitEncoder::copyBufferTexels): a Depth32Float_Stencil8 one's stencil through stencilTemp, two bytes a texel (NVK's
     // stencil_copy_temp)
     bool zeta = false;
@@ -765,9 +766,9 @@ public:
     // Memoryless (a pass gives it a backing); the depth/stencil formats among them, as zeta (Texture::zeta)
     bool createMemoryless(uint32_t width, uint32_t height, uint32_t format, Texture &t, uint32_t samples = 1);
     // A stored depth/stencil texture of one sample over zeta memory another driver of the process keeps (NVK's image: one
-    // allocation both drivers render and copy in place), laid out as `m` says; false where it is not a layout the raw path
-    // renders (*why says which way)
-    bool createZetaOver(const ZetaMemory &m, uint32_t width, uint32_t height, uint32_t format, Texture &t,
+    // allocation both drivers render, sample and copy in place), laid out as `m` says, with a texture header of its depth where
+    // `sampled`; false where it is not a layout the raw path renders (*why says which way)
+    bool createZetaOver(const ZetaMemory &m, uint32_t width, uint32_t height, uint32_t format, bool sampled, Texture &t,
                         const char **why);
     // A Depth32Float_Stencil8 texture's stencil temp (Texture::stencilTemp), made on its first stencil copy
     bool stencilTemp(Texture &t);

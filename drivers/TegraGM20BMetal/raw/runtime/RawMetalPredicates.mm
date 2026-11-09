@@ -197,8 +197,8 @@ uint32_t arrayType(MTLTextureDescriptor *d)
 }
 
 // A depth/stencil texture of a format the raw path renders (raw_zeta.h kZetaFormatInfo), one level, no rotation: memoryless, 2D
-// of one sample or 2D multisampled of 2 or 4; or stored (private), 2D of one sample, a render target and nothing else: m2v's
-// texture, which the raw path renders and copies in place (one allocation for both drivers, NVK's image)
+// of one sample or 2D multisampled of 2 or 4; or stored (private), 2D of one sample, a render target that may also be sampled:
+// m2v's texture, which the raw path renders, samples and copies in place (one allocation for both drivers, NVK's image)
 bool zetaDescriptor(MTLTextureDescriptor *d)
 {
     static const SEL rotation = NSSelectorFromString(@"rotation");
@@ -208,7 +208,7 @@ bool zetaDescriptor(MTLTextureDescriptor *d)
                                                            : d.textureType == MTLTextureType2DMultisample &&
                                                                  (d.sampleCount == 2 || d.sampleCount == 4);
     const bool stored = d.storageMode == MTLStorageModePrivate && d.textureType == MTLTextureType2D &&
-                        d.usage == MTLTextureUsageRenderTarget;
+                        (d.usage & ~MTLTextureUsageShaderRead) == MTLTextureUsageRenderTarget;
     return samples && d.mipmapLevelCount <= 1 && d.arrayLength <= 1 && d.depth <= 1 && !turned &&
            raw::zetaFormatIndex(uint32_t(d.pixelFormat)) < raw::kZetaFormats &&
            (d.storageMode == MTLStorageModeMemoryless || stored);
