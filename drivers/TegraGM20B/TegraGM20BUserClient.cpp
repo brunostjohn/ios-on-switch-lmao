@@ -25,6 +25,7 @@
 #include "TegraGM20BPoolPolicy.h"
 #include "TegraGM20BViews.h"
 #include "TegraGM20BPushScan.h"
+#include "TegraGM20BReadback.h"
 #include "TegraGM20BSchedPolicy.h"
 #include "TegraGM20BSharedWiring.h"
 #include "shim/include/switch_tiled_cache.h"
@@ -928,6 +929,9 @@ OSDefineMetaClassAndStructors(AGXDeviceUserClient, IOUserClient)
 IOReturn AGXDeviceUserClient::clientClose()
 {
 	releaseMappings();  // first: a view still mapped would keep its pool pages as an orphan (releaseBo)
+#if TGM_STATS
+	tgm_readback_closed(this);
+#endif
 	IOLockLock(lock_);
 	closing_ = true;
 	hangHolder_ = current_thread();
@@ -954,6 +958,9 @@ IOReturn AGXDeviceUserClient::clientClose()
 
 void AGXDeviceUserClient::free()
 {
+#if TGM_STATS
+	tgm_readback_closed(this);
+#endif
 	if (lock_) {
 		releaseMappings();
 		closing_ = true;
@@ -2245,6 +2252,12 @@ IOReturn AGXDeviceUserClient::run(uint32_t method, const void *in, uint32_t inSi
 		wantIn = sizeof(TegraGM20BAbiZbc);
 		wantOut = sizeof(TegraGM20BAbiZbcReply);
 		break;
+#if TGM_STATS
+	case TegraGM20BMethodReadback:
+		wantIn = sizeof(TegraGM20BAbiReadback);
+		wantOut = sizeof(TegraGM20BAbiReadbackReply);
+		break;
+#endif
 	default:
 		return kIOReturnUnsupported;
 	}
@@ -2323,6 +2336,12 @@ IOReturn AGXDeviceUserClient::run(uint32_t method, const void *in, uint32_t inSi
 		return zbcAdd(static_cast<const TegraGM20BAbiZbc *>(in),
 			      static_cast<TegraGM20BAbiZbcReply *>(out));
 	}
+#if TGM_STATS
+	if (method == TegraGM20BMethodReadback) {
+		return tgm_readback_call(this, static_cast<const TegraGM20BAbiReadback *>(in),
+					 static_cast<TegraGM20BAbiReadbackReply *>(out));
+	}
+#endif
 	IOLockLock(lock_);
 	// A channel killed for a GPU fault or hang (client fault isolation) refuses only what names it (Exec, Order and
 	// WaitFence answer kIOReturnNotResponding, GetStatus its error); the connection's memory, binds and other channels
@@ -2443,6 +2462,13 @@ IOReturn AGXDeviceUserClient::externalMethod(uint32_t selector,
 IOReturn AGXDeviceUserClient::clientMemoryForType(UInt32 type, IOOptionBits *options,
 						  IOMemoryDescriptor **memory)
 {
+#if TGM_STATS
+	if (IOMemoryDescriptor *readback = tgm_readback_memory(this, type)) {
+		*memory = readback;
+		*options = kIOMapAnywhere | kIOMapDefaultCache;
+		return kIOReturnSuccess;
+	}
+#endif
 	IOLockLock(lock_);
 	IOReturn ret = kIOReturnBadArgument;
 	if (type == kFenceToken && fence_view_) {
@@ -2531,6 +2557,7 @@ extern "C" IOReturn tegra_gm20b_new_user_client(IOService *provider, task_t task
 //             (wired) descriptor and its GPU mapping at kPresentSurface + i * 16 MiB; the least recently offered one goes
 //             when a fifth surface comes. Its CPU caches are cleaned once, when it is imported (the GPU, which wrote it,
 //             does not snoop them, and a dirty line written back later would land on its pixels).
+//   read-back debug kernels: two buffers at 0x50000000 + i * 8 MiB (TegraGM20BReadback.cpp)
 // native_legacy_gpu_complete (NativeLegacyDisplay.cpp, declared by TegraScanoutCopy.h) is a plain reference: the kernel's static
 // link refuses undefined weak ones, and the display is in every kernel that has this driver.
 namespace
@@ -2710,13 +2737,25 @@ extern "C" int tegra_gm20b_scanout_copy(const struct TegraScanoutCopy *copy)
 	const uint64_t source = target || fenceOnly ? presentSurface(memory, copy->sourceBytes,
 								     sourceBlock, &sourcePa)
 						    : 0;
-	const int ret =
-		(target || fenceOnly) && source
-			? tgm_present_copy(source, sourcePa, copy->alsoWritten & ~0xfffULL,
-					   copy->sourceStride, static_cast<int>(sourceBlock),
-					   copy->width, copy->height, target, copy->targetPitch,
-					   copy->blockHeightLog2, presentDone, copy->display)
-			: -12;  // ENOMEM: the target or the surface could not be mapped
+	int ret = -12;  // ENOMEM: the target or the surface could not be mapped
+	if ((target || fenceOnly) && source) {
+#if TGM_STATS
+		tgm_present_read reads[TGM_PRESENT_READS] = {};
+		const uint32_t nreads = tgm_readback_take(copy, source, sourceBlock, target, reads);
+		ret = tgm_present_copy_read(
+			source, sourcePa, copy->alsoWritten & ~0xfffULL, copy->sourceStride,
+			static_cast<int>(sourceBlock), copy->width, copy->height, target,
+			copy->targetPitch, copy->blockHeightLog2,
+			nreads ? tgm_readback_done : presentDone, copy->display, reads, nreads);
+		if (ret && nreads)
+			tgm_readback_refused();
+#else
+		ret = tgm_present_copy(source, sourcePa, copy->alsoWritten & ~0xfffULL,
+				       copy->sourceStride, static_cast<int>(sourceBlock),
+				       copy->width, copy->height, target, copy->targetPitch,
+				       copy->blockHeightLog2, presentDone, copy->display);
+#endif
+	}
 	IOLockUnlock(gPresentLock);
 	return ret ? ioreturn(ret) : 0;
 }
