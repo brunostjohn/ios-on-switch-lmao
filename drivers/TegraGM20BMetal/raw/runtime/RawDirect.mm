@@ -4,6 +4,7 @@
 
 #include <cstring>
 #include "NativeBridgeMetalFrontend.h"
+#include "raw_direct_compute.h"
 #include "raw_pack.h"
 
 // Weak, so the host benchmark links without the frontend
@@ -11,6 +12,9 @@ extern "C" bool native_bridge_metal_render_direct(id descriptor, bool barrier, N
                                                   NSUInteger textureSamples,
                                                   bool (*each)(const struct NmbDirectState *, void *), void *ctx,
                                                   const char **why) __attribute__((weak_import));
+extern "C" bool native_bridge_metal_compute_direct(id descriptor, const struct NmbDirectDispatch *dispatch,
+                                                   bool (*each)(const struct NmbDirectKernel *, void *), void *ctx,
+                                                   const char **why) __attribute__((weak_import));
 extern "C" void *native_bridge_metal_nvk_symbol(const char *name) __attribute__((weak_import));
 
 namespace raw {
@@ -31,6 +35,21 @@ bool made(const NmbDirectState *state, void *ctx)
 {
     Asked &a = *static_cast<Asked *>(ctx);
     a.outcome = directRecord(*state, a.nvk, a.rules, a.key, a.attributes, a.out, a.why, a.registers);
+    return true;
+}
+
+struct AskedKernel {
+    const DirectNvk &nvk;
+    const std::string &key;
+    ComputeRecord &out;
+    std::string why;
+    Compiler::Outcome outcome = Compiler::Outcome::Failed;
+};
+
+bool madeKernel(const NmbDirectKernel *kernel, void *ctx)
+{
+    AskedKernel &a = *static_cast<AskedKernel *>(ctx);
+    a.outcome = directKernel(*kernel, a.nvk, a.key, a.out, a.why);
     return true;
 }
 
@@ -77,6 +96,27 @@ Compiler::Outcome Direct::make(MTLRenderPipelineDescriptor *descriptor, const st
     if (outcome == Compiler::Outcome::Made)
         out.pipeline.flags |= PipelineBarrierForm;
     return outcome;
+}
+
+}  // namespace raw
+
+namespace raw {
+
+Compiler::Outcome Direct::kernel(MTLComputePipelineDescriptor *descriptor, const NmbDirectDispatch &dispatch,
+                                 const std::string &key, ComputeRecord &out, std::string &why)
+{
+    if (!native_bridge_metal_compute_direct || !nvk_.kernelComplete()) {
+        why = "the frontend or NVK has no direct compile of kernels";
+        return Compiler::Outcome::Failed;
+    }
+    AskedKernel a = {nvk_, key, out, {}};
+    const char *refused = nullptr;
+    if (!native_bridge_metal_compute_direct(descriptor, &dispatch, madeKernel, &a, &refused)) {
+        why = std::string("m2v refused its translation: ") + (refused ? refused : "");
+        return refused && !strncmp(refused, "retry: ", 7) ? Compiler::Outcome::Failed : Compiler::Outcome::Refused;
+    }
+    why = a.why;
+    return a.outcome;
 }
 
 }  // namespace raw

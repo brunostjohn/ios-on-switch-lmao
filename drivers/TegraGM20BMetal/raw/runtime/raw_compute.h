@@ -19,19 +19,12 @@
 #include <cstdint>
 #include <string>
 #include <vector>
+#include "raw_compute_record.h"
 #include "raw_gpu.h"
 
 namespace raw {
 
 constexpr uint32_t kQmdWords = 64;
-
-// A kernel's record with its program (pack/mkpack.py's from a probe dispatch, or one the runtime made): placeCompute puts the
-// program in the heap
-struct ComputeRecord {
-    PackKernel kernel = {};
-    std::vector<uint8_t> code, data;  // NAK's program, and its shader data (uploaded 256-aligned after the code)
-    uint8_t cbufType[8] = {};         // its constant buffer slots' PackCbufType (CbufRoot, CbufSet, ...)
-};
 
 // A kernel ready to dispatch: its record and where its program lies in the heap
 struct ComputeState {

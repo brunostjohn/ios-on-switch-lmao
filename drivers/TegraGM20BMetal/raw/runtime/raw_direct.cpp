@@ -2,6 +2,7 @@
 // See raw_direct.h. What the probe's capture reads of NVK's commands (raw_record.cpp) is read here from what made them: m2v's plan
 // of each probe draw and NVK's own rules for the layout and the descriptors.
 #include "raw_direct.h"
+#include "raw_direct_nvk.h"
 #include "raw_residual.h"
 
 #include <algorithm>
@@ -14,80 +15,11 @@
 namespace raw {
 namespace {
 
-// nvk_switch_compile.h, with Vulkan's handles as pointers (this build has no Vulkan headers)
-struct NvkStageInfo {
-    const uint32_t *spirv;
-    size_t spirvBytes;
-    const char *entry;
-    uint32_t stage;
-    const void *specialization;
-    void *layout;
-    uint64_t pipelineFlags;
-    const void *pipelinePnext;
-    const void *stagePnext;
-    bool sampleShading;
-    uint32_t halfTargets;
-};
-
-struct NvkStage {
-    uint8_t header[80];
-    const void *code;
-    uint32_t codeBytes;
-    const void *data;
-    uint32_t dataBytes;
-    uint8_t cbufTypes[16];
-    uint32_t cbufCount;
-    uint8_t numGprs;
-    bool earlyFragmentTests, writesDepth, postDepthCoverage;
-    void *owner;
-};
-
-struct NvkSetBinding {
-    uint32_t offset, stride, arraySize;
-    bool immutableSamplers;
-};
-
-// VkPipelineShaderStageRequiredSubgroupSizeCreateInfo
-struct SubgroupSize {
-    uint32_t sType = 1000225001;
-    const void *next = nullptr;
-    uint32_t size;
-};
-
-using CompileStage = int32_t (*)(void *device, const NvkStageInfo *, NvkStage *);
-using StageFinish = void (*)(void *device, NvkStage *);
-using SetLayoutBinding = bool (*)(void *layout, uint32_t binding, NvkSetBinding *);
-using SetLayoutSize = uint32_t (*)(void *device, void *layout);
-using ImmutableSamplerHeader = bool (*)(void *device, void *layout, uint32_t binding, uint32_t element, uint32_t *);
-using BufferDescriptorSize = uint32_t (*)(void *device, int32_t type, uint64_t range);
-
 // VK_PIPELINE_CREATE_2_LIBRARY_BIT_KHR: m2v's states are made of pipeline libraries
 constexpr uint64_t kLibraryBit = 0x800;
 constexpr uint32_t kRootPush = 0x700;
 constexpr int32_t kViewType3D = 2;  // VK_IMAGE_VIEW_TYPE_3D
 constexpr uint32_t kTagged = 16;    // probe.mm's fragment textures and samplers
-
-enum DescriptorType : int32_t {
-    Sampler = 0,
-    CombinedImageSampler = 1,
-    SampledImage = 2,
-    StorageImage = 3,
-    UniformBuffer = 6,
-    StorageBuffer = 7,
-    UniformBufferDynamic = 8,
-    StorageBufferDynamic = 9,
-    InputAttachment = 10
-};
-
-bool bufferType(int32_t t)
-{
-    return t >= UniformBuffer && t <= StorageBufferDynamic;
-}
-
-void *handle(uint64_t h)
-{
-    return reinterpret_cast<void *>(uintptr_t(h));
-}
 
 std::string hex(uint64_t v)
 {
@@ -141,7 +73,7 @@ public:
     {
         for (NvkStage &s : made_)
             if (s.owner)
-                reinterpret_cast<StageFinish>(nvk_.stageFinish)(device_, &s);
+                nvk::stageFinish(nvk_, device_, s);
     }
 
     // Refused: a state the raw path does not draw from a record; Failed: NVK could not compile a stage
@@ -170,7 +102,7 @@ public:
                                        s.subgroupSize ? &subgroup : nullptr,
                                        state.sampleShading,
                                        halfTargets};
-            const int32_t result = reinterpret_cast<CompileStage>(nvk_.compileStage)(device_, &info, &made_[k]);
+            const int32_t result = nvk::compileStage(nvk_, device_, info, made_[k]);
             if (result != 0) {
                 why = "NVK refused stage " + std::to_string(k) + " (VkResult " + std::to_string(result) + ")";
                 return Compiler::Outcome::Failed;
@@ -201,7 +133,7 @@ private:
 bool offsetOf(const DirectNvk &nvk, const NmbDirectDraw &d, const NmbDirectWrite &w, uint32_t &offset)
 {
     NvkSetBinding b = {};
-    if (!d.set0 || !reinterpret_cast<SetLayoutBinding>(nvk.setLayoutBinding)(handle(d.set0), w.binding, &b))
+    if (!d.set0 || !nvk::setLayoutBinding(nvk, d.set0, w.binding, b))
         return false;
     offset = b.offset + w.element * b.stride;
     return true;
@@ -261,8 +193,7 @@ bool layout(const DirectNvk &nvk, void *device, const NmbDirectDraw &d, std::vec
         if (w.type == Sampler || w.type == CombinedImageSampler) {
             if (w.sampler == NMB_DIRECT_IMMUTABLE) {
                 e.smp = Smp::Constexpr;
-                e.headerKnown = reinterpret_cast<ImmutableSamplerHeader>(nvk.immutableSamplerHeader)(
-                    device, handle(d.set0), w.binding, w.element, e.header.data());
+                e.headerKnown = nvk::immutableSamplerHeader(nvk, device, d.set0, w.binding, w.element, e.header.data());
             } else if (w.sampler < kTagged) {
                 e.smp = Smp::Slot;
                 e.smpSlot = uint8_t(w.sampler);
@@ -287,7 +218,7 @@ std::map<uint32_t, uint32_t> boundSizes(const DirectNvk &nvk, void *device, cons
         const NmbDirectWrite &w = d.writes[i];
         uint32_t offset = 0;
         if (w.set == 0 && bufferType(w.type) && offsetOf(nvk, d, w, offset))
-            out[offset] = reinterpret_cast<BufferDescriptorSize>(nvk.bufferDescriptorSize)(device, w.type, w.range);
+            out[offset] = nvk::bufferDescriptorSize(nvk, device, w.type, w.range);
     }
     return out;
 }
@@ -337,6 +268,9 @@ DirectNvk DirectNvk::find(void *(*symbol)(const char *name))
     nvk.setLayoutSize = symbol("switch_nvk_set_layout_size");
     nvk.immutableSamplerHeader = symbol("switch_nvk_immutable_sampler_header");
     nvk.bufferDescriptorSize = symbol("switch_nvk_buffer_descriptor_size");
+    nvk.samplerHeader = symbol("switch_nvk_sampler_header");
+    nvk.computeQmd = symbol("switch_nvk_compute_qmd");
+    nvk.viewHeaderWord0 = symbol("switch_nvk_view_header_word0");
     return nvk;
 }
 
@@ -344,6 +278,11 @@ bool DirectNvk::complete() const
 {
     return compileStage && stageFinish && setLayoutBinding && setLayoutSize && immutableSamplerHeader &&
            bufferDescriptorSize;
+}
+
+bool DirectNvk::kernelComplete() const
+{
+    return complete() && samplerHeader && computeQmd && viewHeaderWord0;
 }
 
 Compiler::Outcome directRecord(const NmbDirectState &state, const DirectNvk &nvk, const PackRules &rules,
@@ -382,8 +321,7 @@ Compiler::Outcome directRecord(const NmbDirectState &state, const DirectNvk &nvk
     for (uint32_t i = 0; i < 32; i++)
         if (draw.pushMask >> i & 1)
             parts.push[kRootPush + 4 * i] = draw.push[i];
-    parts.setBytes =
-        draw.set0 ? uint16_t(reinterpret_cast<SetLayoutSize>(nvk.setLayoutSize)(device, handle(draw.set0))) : 0;
+    parts.setBytes = draw.set0 ? uint16_t(nvk::setLayoutSize(nvk, device, draw.set0)) : 0;
     if (!assembleRecord(parts, key, rules, out, why))
         return Compiler::Outcome::Refused;
     if (registers)

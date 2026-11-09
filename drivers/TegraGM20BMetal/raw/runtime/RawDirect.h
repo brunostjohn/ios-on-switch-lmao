@@ -6,7 +6,10 @@
 #import <Metal/Metal.h>
 #include <string>
 #include "raw_compiler.h"
+#include "raw_compute_record.h"
 #include "raw_direct.h"
+
+struct NmbDirectDispatch;
 
 namespace raw {
 
@@ -30,6 +33,10 @@ public:
     Compiler::Outcome make(MTLRenderPipelineDescriptor *descriptor, const std::string &key, RuntimeRecord &out,
                            std::string &why, ProbeTextures textures = {},
                            std::map<uint32_t, uint32_t> *registers = nullptr);
+    // The record of `descriptor`'s kernel at a dispatch of `dispatch`'s shape and bindings, whose compute key is `key`
+    // (raw_direct_compute.h)
+    Compiler::Outcome kernel(MTLComputePipelineDescriptor *descriptor, const NmbDirectDispatch &dispatch,
+                             const std::string &key, ComputeRecord &out, std::string &why);
 
 private:
     PackRules rules_;
