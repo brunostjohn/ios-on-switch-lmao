@@ -1,11 +1,12 @@
 // SPDX-License-Identifier: MIT
-// raw GM20B path: stored Depth32Float_Stencil8 render targets through the facade (HW Test's metal.render.depth_stencil), over
+// raw GM20B path: stored depth/stencil render targets through the facade (HW Test's metal.render.depth_stencil), over
 // the mock GPU (NVDEC_WRITETHROUGH, whose copy engine runs and whose 3D engine does not). Each is one allocation, NVK's image,
 // which the raw path renders and copies in place. Interleaved: the raw path writes texture A's depth and stencil from buffers
 // (MTLBlitOptionDepthFromDepthStencil, StencilFromDepthStencil), m2v copies A into B, the raw path reads B's back; then the
 // raw path writes B, m2v copies it into A, the raw path reads A: each driver sees the texels the other wrote. A pass that loads
 // and stores one takes the raw path, and, given HW Test's shader library, its test's pass (three quads under depth and stencil
-// states, its own functions made at their states' creation) too.
+// states, its own functions made at their states' creation) too, and so do gpu.clear.formats' sampled Depth32Float,
+// Depth16Unorm and Stencil8 targets' clears and readbacks.
 // usage: zetaframe <pack> <cache> <nvk dylib> [HW Test's metallib]
 #import <Foundation/Foundation.h>
 #import <Metal/Metal.h>
@@ -233,6 +234,45 @@ int main(int argc, char **argv)
                      'A' + round, 'A' + round, 'B' - round, 'B' - round);
             expect([in isEqualToString:@"raw"] && copied && [out isEqualToString:@"raw"] && same, what,
                    [NSString stringWithFormat:@"%@ / m2v / %@", in, out]);
+        }
+        for (MTLPixelFormat f : {MTLPixelFormatDepth32Float, MTLPixelFormatDepth16Unorm, MTLPixelFormatStencil8}) {
+            // HW Test's gpu.clear.formats targets, which may also be sampled: a clear pass, a readback with no options
+            d.pixelFormat = f;
+            d.usage = MTLTextureUsageRenderTarget | MTLTextureUsageShaderRead;
+            RMTexture *t = (RMTexture *)[dev newTextureWithDescriptor:d];
+            MTLRenderPassDescriptor *clear = [MTLRenderPassDescriptor renderPassDescriptor];
+            MTLRenderPassAttachmentDescriptor *aspect =
+                f == MTLPixelFormatStencil8 ? clear.stencilAttachment : clear.depthAttachment;
+            aspect.texture = t;
+            aspect.loadAction = MTLLoadActionClear;
+            aspect.storeAction = MTLStoreActionStore;
+            clear.depthAttachment.clearDepth = 0.25;
+            clear.stencilAttachment.clearStencil = 0x5a;
+            id<MTLCommandBuffer> c = [q commandBuffer];
+            [[c renderCommandEncoderWithDescriptor:clear] endEncoding];
+            [c commit];
+            [c waitUntilCompleted];
+            id<MTLCommandBuffer> r = [q commandBuffer];
+            id<MTLBlitCommandEncoder> e = [r blitCommandEncoder];
+            [e copyFromTexture:t
+                             sourceSlice:0
+                             sourceLevel:0
+                            sourceOrigin:MTLOriginMake(0, 0, 0)
+                              sourceSize:MTLSizeMake(w, h, 1)
+                                toBuffer:depth
+                       destinationOffset:0
+                  destinationBytesPerRow:w * t->_raw.bpp
+                destinationBytesPerImage:w * h * t->_raw.bpp];
+            [e endEncoding];
+            [r commit];
+            [r waitUntilCompleted];
+            char what[128];
+            snprintf(what, sizeof what,
+                     "format %lu, a render target also sampled: its own texture header, cleared and read back",
+                     (unsigned long)f);
+            expect(t->_rawOk && t->_raw.zeta && t->_raw.tic && [path(c) isEqualToString:@"raw"] &&
+                       [path(r) isEqualToString:@"raw"],
+                   what, [NSString stringWithFormat:@"%@ / %@", path(c), path(r)]);
         }
         printf("raw facade: %d case(s) failed\n", failed);
         return failed ? 1 : 0;

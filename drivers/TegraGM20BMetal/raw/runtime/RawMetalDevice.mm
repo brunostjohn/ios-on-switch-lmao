@@ -253,7 +253,7 @@ static const char *zetaMemoryRefusal(int asked)
             z.tiled = m.tiled;
             z.compressed = m.compressed;
             t->_rawOk = gRM->raw->createZetaOver(z, uint32_t(d.width), uint32_t(d.height), uint32_t(d.pixelFormat),
-                                                 t->_raw, &why);
+                                                 (d.usage & MTLTextureUsageShaderRead) != 0, t->_raw, &why);
         }
         if (!t->_rawOk)
             SWITCH_REFUSE_DETAIL("raw", "zeta.over", d.pixelFormat,

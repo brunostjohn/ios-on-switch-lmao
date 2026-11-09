@@ -232,8 +232,9 @@ struct Texture {
     // A multisampled texture's samples a pixel (fx::msLayout): its memory the sample grid, height and width in pixels
     uint8_t samples = 1;
 
-    // A depth/stencil format (raw_zeta.h kZetaFormatInfo): block-linear zeta memory, bound with its format's PTE kind; never
-    // sampled or a colour target. A stored one (not memoryless) is NVK's image, rendered and copied in place, by aspect
+    // A depth/stencil format (raw_zeta.h kZetaFormatInfo): block-linear zeta memory, bound with its format's PTE kind; never a
+    // colour target, sampled (tic) only where it was made to be. A stored one (not memoryless) is NVK's image, rendered,
+    // sampled and copied in place, by aspect
     // (BlitEncoder::copyBufferTexels): a Depth32Float_Stencil8 one's stencil through stencilTemp, two bytes a texel (NVK's
     // stencil_copy_temp)
     bool zeta = false;
@@ -316,9 +317,10 @@ struct Pipeline {
     uint8_t samples = 1;  // its key's rasterSampleCount: a pass of attachments of that many samples draws it
     // SET_HYBRID_ANTI_ALIAS_CONTROL's passes: more than one where it shades per sample, whose sample masks differ (raw_samples.h)
     uint8_t samplePasses = 1;
-    uint8_t readBits = 0;      // colors its draws read as they were: blended into, or written through a partial mask
-    uint8_t fetchBits = 0;     // colors it reads by framebuffer fetch
-    uint32_t depthFormat = 0;  // its key's depth and stencil attachment format (ds=<format>/<format>; 0: none)
+    uint8_t readBits = 0;   // colors its draws read as they were: blended into, or written through a partial mask
+    uint8_t fetchBits = 0;  // colors it reads by framebuffer fetch
+    uint32_t depthFormat =
+        0;  // its key's depth attachment format, else its stencil one (ds=<format>/<format>; 0: none)
     // push words setting back the registers outside the pack's varying ones its methods set (a state the runtime made:
     // raw_record.h extras), to their value in every pack state: emitted before the next state's methods
     std::vector<uint32_t> restore;
@@ -349,7 +351,7 @@ struct ColorAttachment {
     float clear[4] = {};
 };
 
-// The pass's Depth32Float_Stencil8 attachment, its depth and stencil aspects one texture (memoryless: neither loaded nor stored)
+// The pass's depth/stencil attachment: one zeta texture as each aspect its format has (memoryless: neither loaded nor stored)
 struct DepthStencilAttachment {
     Texture *texture = nullptr;
     bool clearDepth = false, clearStencil = false;  // the aspect's load is Clear (else DontCare)
@@ -765,9 +767,9 @@ public:
     // Memoryless (a pass gives it a backing); the depth/stencil formats among them, as zeta (Texture::zeta)
     bool createMemoryless(uint32_t width, uint32_t height, uint32_t format, Texture &t, uint32_t samples = 1);
     // A stored depth/stencil texture of one sample over zeta memory another driver of the process keeps (NVK's image: one
-    // allocation both drivers render and copy in place), laid out as `m` says; false where it is not a layout the raw path
-    // renders (*why says which way)
-    bool createZetaOver(const ZetaMemory &m, uint32_t width, uint32_t height, uint32_t format, Texture &t,
+    // allocation both drivers render, sample and copy in place), laid out as `m` says, with a texture header of its depth where
+    // `sampled`; false where it is not a layout the raw path renders (*why says which way)
+    bool createZetaOver(const ZetaMemory &m, uint32_t width, uint32_t height, uint32_t format, bool sampled, Texture &t,
                         const char **why);
     // A Depth32Float_Stencil8 texture's stencil temp (Texture::stencilTemp), made on its first stencil copy
     bool stencilTemp(Texture &t);

@@ -42,15 +42,18 @@ static bool blitOptionsMoot(id<MTLTexture> t, MTLBlitOption options)
 }
 
 // The aspect a copy between `t` and a buffer moves (raw::kAspect*), -1 where the raw path does not: a stored
-// Depth32Float_Stencil8's depth or stencil (Metal takes exactly one of the two options of it), a stored Depth32Float's or
-// Depth16Unorm's texel (no option, or the depth one), a colour texture's under moot options
+// Depth32Float_Stencil8's depth or stencil (Metal takes exactly one of the two options of it), a stored one-aspect format's
+// texel (no option, or its aspect's), a colour texture's under moot options
 static int blitAspect(id<MTLTexture> t, MTLBlitOption options)
 {
     RMTexture *x = [(id)t isKindOfClass:[RMTexture class]] ? (RMTexture *)t : nil;
     if (!x || !x->_rawOk || !x->_raw.zeta)
         return blitOptionsMoot(t, options) ? raw::kAspectWhole : -1;
-    if (x->_raw.format != raw::kZetaFormat)
-        return options == MTLBlitOptionNone || options == MTLBlitOptionDepthFromDepthStencil ? raw::kAspectWhole : -1;
+    if (x->_raw.format != raw::kZetaFormat) {
+        const MTLBlitOption own = raw::zetaHasDepth(x->_raw.format) ? MTLBlitOptionDepthFromDepthStencil
+                                                                    : MTLBlitOptionStencilFromDepthStencil;
+        return options == MTLBlitOptionNone || options == own ? raw::kAspectWhole : -1;
+    }
     if (options == MTLBlitOptionDepthFromDepthStencil)
         return raw::kAspectDepth;
     if (options != MTLBlitOptionStencilFromDepthStencil)
