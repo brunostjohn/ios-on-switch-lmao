@@ -27,6 +27,8 @@ class RecordsTest(unittest.TestCase):
     def test_only_known_own_shader_pairs_use_alias_keys(self):
         own = 'samples=1 topo=0 ds=0/0 c0=80:15:0:1:0:0:1:0:0 | v resolve_vert  | f resolve_bgra8_frag'
         self.assertEqual(packfile.key_hash({'key': own}), packfile.fnv(b'raw.resolve.resolve_bgra8_frag'))
+        mip = 'samples=1 topo=0 ds=0/0 c0=43:15:0:1:0:0:1:0:0 | v mip_vert  | f mip_bgr5a1_frag'
+        self.assertEqual(packfile.key_hash({'key': mip}), packfile.fnv(b'raw.mip.mip_bgr5a1_frag'))
         for key in (
             own + ' | l RenderBox',
             own + ' | air 1234',

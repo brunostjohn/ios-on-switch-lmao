@@ -285,13 +285,37 @@ uint64_t packKeyHash(const std::string &key)
             vertex.pop_back();
         pair = vertex + " | f " + key.substr(fragmentAt + 5);
     }
-    for (const char *state :
-         {"ycbcr_vert | f ycbcr_converted_frag", "ycbcr_vert | f ycbcr_srgb_frag", "ycbcr_vert | f ycbcr_codes_frag",
-          "ycbcr_vert | f ycbcr_codes10_frag", "xr_vert | f xr_bgr10_frag", "xr_vert | f xr_bgra10_frag",
-          "xr_vert | f xr_planes_frag", "two_plane_cover | f two_plane_load", "two_plane_cover | f two_plane_store",
-          "resolve_vert | f resolve_rgba8_frag", "resolve_vert | f resolve_rgba8_srgb_frag",
-          "resolve_vert | f resolve_bgra8_frag", "resolve_vert | f resolve_bgra8_srgb_frag",
-          "resolve_vert | f resolve_rg11b10f_frag", "resolve_vert | f resolve_rgba16f_frag"}) {
+    for (const char *state : {"ycbcr_vert | f ycbcr_converted_frag",
+                              "ycbcr_vert | f ycbcr_srgb_frag",
+                              "ycbcr_vert | f ycbcr_codes_frag",
+                              "ycbcr_vert | f ycbcr_codes10_frag",
+                              "xr_vert | f xr_bgr10_frag",
+                              "xr_vert | f xr_bgra10_frag",
+                              "xr_vert | f xr_planes_frag",
+                              "two_plane_cover | f two_plane_load",
+                              "two_plane_cover | f two_plane_store",
+                              "resolve_vert | f resolve_rgba8_frag",
+                              "resolve_vert | f resolve_rgba8_srgb_frag",
+                              "resolve_vert | f resolve_bgra8_frag",
+                              "resolve_vert | f resolve_bgra8_srgb_frag",
+                              "resolve_vert | f resolve_rg11b10f_frag",
+                              "resolve_vert | f resolve_rgba16f_frag",
+                              "mip_vert | f mip_a8_frag",
+                              "mip_vert | f mip_r16_frag",
+                              "mip_vert | f mip_r16f_frag",
+                              "mip_vert | f mip_b5g6r5_frag",
+                              "mip_vert | f mip_bgr5a1_frag",
+                              "mip_vert | f mip_r32f_frag",
+                              "mip_vert | f mip_rg16_frag",
+                              "mip_vert | f mip_rg16f_frag",
+                              "mip_vert | f mip_rgba8_srgb_frag",
+                              "mip_vert | f mip_bgra8_srgb_frag",
+                              "mip_vert | f mip_rgb10a2_frag",
+                              "mip_vert | f mip_rg11b10f_frag",
+                              "mip_vert | f mip_bgr10a2_frag",
+                              "mip_vert | f mip_rg32f_frag",
+                              "mip_vert | f mip_rgba16_frag",
+                              "mip_vert | f mip_rgba32f_frag"}) {
         if (pair != state)
             continue;
         const size_t vertexEnd = pair.find(" | f ");

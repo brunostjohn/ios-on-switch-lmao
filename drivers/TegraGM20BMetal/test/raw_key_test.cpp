@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: MIT
+#include "../raw/runtime/raw_mip.h"
 #include "../raw/runtime/raw_record.h"
 #include <gtest/gtest.h>
 
@@ -21,6 +22,23 @@ TEST(RawKey, InternalLookupsFindCanonicalOwnStates)
         for (const char *suffix : {" | l RenderBox", " | air 1234", " | cubic 1"})
             EXPECT_EQ(raw::packKeyHash(key + suffix), hash(key + suffix));
     }
+}
+
+// Every format raw_mip.h draws a chain for finds its pack state under the key the probe gives it
+TEST(RawKey, EveryMipStateIsAnOwnState)
+{
+    int states = 0;
+    for (uint32_t format = 0; format < 700; format++) {
+        const char *name = raw::mipState(format);
+        if (!name)
+            continue;
+        states++;
+        const std::string fragment = std::string(name).substr(sizeof "raw.mip." - 1);
+        const std::string key =
+            "samples=1 topo=0 ds=0/0 c0=" + std::to_string(format) + ":15:0:1:0:0:1:0:0  | v mip_vert  | f " + fragment;
+        EXPECT_EQ(raw::packKeyHash(key), hash(name)) << format;
+    }
+    EXPECT_EQ(states, 16);
 }
 
 TEST(RawKey, FrameworkResolveSpecializationsHaveDistinctKeys)

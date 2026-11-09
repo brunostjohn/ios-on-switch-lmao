@@ -8,6 +8,7 @@
 #include "raw_clear.h"
 #include "raw_follow.h"
 #include "raw_gpu.h"
+#include "raw_mip.h"
 #include "raw_owned.h"
 #include "raw_residual.h"
 #include "raw_samples.h"
@@ -2355,6 +2356,12 @@ Pipeline *Device::xrPipeline(XrForm form)
 Pipeline *Device::resolvePipeline(uint32_t format)
 {
     const char *name = resolveState(format);
+    return name ? pipeline(Pack::fnv(name, strlen(name))) : nullptr;
+}
+
+Pipeline *Device::mipPipeline(uint32_t format)
+{
+    const char *name = mipState(format);
     return name ? pipeline(Pack::fnv(name, strlen(name))) : nullptr;
 }
 
@@ -4710,7 +4717,7 @@ void BlitEncoder::barrier()
 void BlitEncoder::generate(Texture &t)
 {
     Texture::Chain *c = t.chain;
-    if (!c || !c->fmt2d)  // (the facade sends those to m2v: PredMipmapsFormat)
+    if (!c || !c->fmt2d)  // (the 3D engine's passes take those: mipPasses)
         return;
     const uint32_t last = c->layout.levels - 1;
     room(uint32_t(fx::generateWords(c->layout, 0, last)));

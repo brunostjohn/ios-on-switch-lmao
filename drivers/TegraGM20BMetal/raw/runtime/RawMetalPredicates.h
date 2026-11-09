@@ -58,7 +58,7 @@ enum RMPred : uint8_t {
     PredComputeView,    // a texture where m2v binds a view of another format: a = slot
     PredComputeEdge,    // dispatchThreads: of a grid with an edge threadgroup: a = the grid's edge
     PredMipmaps,
-    PredMipmapsFormat,  // a mipmapped texture's generateMipmaps in a format the 2D engine does not filter: a = format
+    PredMipmapsFormat,  // a mipmapped texture's generateMipmaps in a format neither the 2D engine nor a mip state filters: a = format
     PredEvent,
     // found while encoding (the raw encode ran up to here and was thrown away)
     PredEncPlanarCopy,

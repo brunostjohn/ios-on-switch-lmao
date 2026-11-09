@@ -578,6 +578,14 @@ GROUPS: dict[str, list[Check]] = {
             show=('who', 'domain', 'reason'),
             source='kits/SwitchRefusal/SwitchRefusal.c (kernel default log)',
         ),
+        Check(
+            'refusal.mipmaps-format',
+            'r119-rawgaps',
+            'mipmaps.fmt',
+            subsystem=REFUSAL_SUBSYSTEM,
+            note='generateMipmaps of a format no engine filters sends its command buffer to m2v',
+            source='drivers/TegraGM20BMetal/raw/runtime/raw_mip.h',
+        ),
     ],
     'io': [
         Check('io.hid-element-values', 'r33-io', 'updateElementValues failed', REPORT, process=KERNEL),
