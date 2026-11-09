@@ -37,17 +37,17 @@ static void missing(const char *cls, const char *sel)
     fprintf(stderr, "MISSING -[%s %s]\n", cls, sel);
 }
 
-// The pixel formats of the color attachments the lines' states write (writeMask not 0), from their "c<i>=<format>:<mask>:"
-// fields
-static std::set<unsigned> writtenFormats(const std::vector<std::string> &lines)
+// The color attachments the lines' states write (writeMask not 0), by index and pixel format, from their
+// "c<i>=<format>:<mask>:" fields
+static std::set<std::pair<unsigned, unsigned>> writtenTargets(const std::vector<std::string> &lines)
 {
-    std::set<unsigned> out;
+    std::set<std::pair<unsigned, unsigned>> out;
     for (const std::string &line : lines) {
         const std::string head = line.substr(0, line.find(" | v "));
         for (size_t at = head.find(" c"); at != std::string::npos; at = head.find(" c", at + 2)) {
             unsigned i, format, mask;
             if (sscanf(head.c_str() + at, " c%u=%u:%u:", &i, &format, &mask) == 3 && mask)
-                out.insert(format);
+                out.insert({i, format});
         }
     }
     return out;
@@ -195,10 +195,13 @@ int main(int argc, char **argv)
             fb = [dev newTextureWithDescriptor:td iosurface:fbSurface plane:0];
         }
         NSMutableDictionary<NSString *, id<MTLTexture>> *targets = [NSMutableDictionary dictionary];
-        // (samples > 1: a memoryless multisampled target, as a multisampled state renders only into one of its count)
-        auto target = [&](MTLPixelFormat f, bool memoryless, NSUInteger samples = 1) -> id<MTLTexture> {
+        // (samples > 1: a memoryless multisampled target, as a multisampled state renders only into one of its count). `own`: a
+        // color attachment's own texture, so that a fetch of one of two attachments of a format names which (layouts.py
+        // reads the attachment a fetched texture is)
+        auto target = [&](MTLPixelFormat f, bool memoryless, NSUInteger samples = 1,
+                          unsigned own = 0) -> id<MTLTexture> {
             NSString *k =
-                [NSString stringWithFormat:@"%lu.%d.%lu", (unsigned long)f, memoryless, (unsigned long)samples];
+                [NSString stringWithFormat:@"%lu.%d.%lu.%u", (unsigned long)f, memoryless, (unsigned long)samples, own];
             if (!targets[k] && f == kRGB8_444_2P) {
                 targets[k] = planarTarget(dev, 64, 64);
                 return targets[k];
@@ -473,8 +476,8 @@ int main(int argc, char **argv)
                 pass.colorAttachments[c].storeAction = MTLStoreActionDontCare;
             }
             id<MTLCommandBuffer> cb = [queue commandBuffer];
-            for (unsigned format : writtenFormats(lines)) {
-                id<MTLTexture> t = target((MTLPixelFormat)format, false);
+            for (const auto &[index, format] : writtenTargets(lines)) {
+                id<MTLTexture> t = target((MTLPixelFormat)format, false, 1, index + 1);
                 if (!t)
                     continue;
                 MTLRenderPassDescriptor *clear = [MTLRenderPassDescriptor renderPassDescriptor];
@@ -545,7 +548,7 @@ int main(int argc, char **argv)
                 const bool memoryless = ca.writeMask == 0 || samples > 1;
                 id<MTLTexture> t = (!memoryless && !usedFb && ca.pixelFormat == MTLPixelFormatBGRA8Unorm)
                                        ? fb
-                                       : target(ca.pixelFormat, memoryless, samples);
+                                       : target(ca.pixelFormat, memoryless, samples, memoryless ? 0 : unsigned(c) + 1);
                 usedFb |= t == fb;
                 pass.colorAttachments[c].texture = t;
                 // a 542 snapshot renders into the frontend's RGBA16Float stand-in, which a load or store would draw from or
