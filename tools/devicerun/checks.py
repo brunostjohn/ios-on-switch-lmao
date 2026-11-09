@@ -4,6 +4,7 @@
 'timeline' checks are INFO: open issues whose count is the baseline for their fix, and manual steps to read in order.
 """
 
+from tools.devicerun.apps import APPS
 from tools.devicerun.audio import AUDIO
 from tools.devicerun.hwtest import HWTEST
 from tools.devicerun.lockscreen import LOCKSCREEN
@@ -701,6 +702,7 @@ GROUPS: dict[str, list[Check]] = {
             source='drivers/SwitchBluetooth/SwitchBluetoothLinks.h',
         ),
     ],
+    'apps': APPS,
     'audio': AUDIO,
     'gpu-morning': MORNING,
     'hwtest': HWTEST,
