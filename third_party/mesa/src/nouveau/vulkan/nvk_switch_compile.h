@@ -55,6 +55,9 @@ struct switch_nvk_stage_info {
     * (nvk_switch_round.h)
     */
    uint32_t half_targets;
+   /* Root push words [0x700, 0x780) constant across draws (bit i: word i). */
+   uint32_t const_push_mask;
+   uint32_t const_push_words[32];
 };
 
 struct switch_nvk_stage {

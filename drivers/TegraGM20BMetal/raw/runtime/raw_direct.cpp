@@ -3,6 +3,7 @@
 // of each probe draw and NVK's own rules for the layout and the descriptors.
 #include "raw_direct.h"
 #include "raw_direct_nvk.h"
+#include "raw_direct_push.h"
 #include "raw_residual.h"
 
 #include <algorithm>
@@ -113,18 +114,21 @@ public:
             }
             SubgroupSize subgroup;
             subgroup.size = s.subgroupSize;
-            const NvkStageInfo info = {s.spirv,
-                                       s.spirvBytes,
-                                       s.entry,
-                                       s.stage,
-                                       s.specialization,
-                                       handle(state.layout),
-                                       kLibraryBit,
-                                       nullptr,
-                                       s.subgroupSize ? &subgroup : nullptr,
-                                       state.sampleShading,
-                                       split && s.stage == kFragmentBit,
-                                       halfTargets};
+            NvkStageInfo info = {s.spirv,
+                                 s.spirvBytes,
+                                 s.entry,
+                                 s.stage,
+                                 s.specialization,
+                                 handle(state.layout),
+                                 kLibraryBit,
+                                 nullptr,
+                                 s.subgroupSize ? &subgroup : nullptr,
+                                 state.sampleShading,
+                                 split && s.stage == kFragmentBit,
+                                 halfTargets,
+                                 constantPushWords(state),
+                                 {}};
+            memcpy(info.constPushWords, state.draws[0].push, sizeof info.constPushWords);
             const int32_t result = nvk::compileStage(nvk_, device_, info, made_[k]);
             if (result != 0) {
                 why = "NVK refused stage " + std::to_string(k) + " (VkResult " + std::to_string(result) + ")";

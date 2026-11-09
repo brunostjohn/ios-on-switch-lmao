@@ -72,6 +72,7 @@ filegroup(
         "raw/runtime/raw_direct_compute.cpp",
         "raw/runtime/raw_direct_compute.h",
         "raw/runtime/raw_direct_nvk.h",
+        "raw/runtime/raw_direct_push.h",
         "raw/runtime/raw_emit.cpp",
         "raw/runtime/raw_emit.h",
         "raw/runtime/raw_pack.cpp",

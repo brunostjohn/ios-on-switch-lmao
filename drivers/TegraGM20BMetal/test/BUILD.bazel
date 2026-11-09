@@ -383,6 +383,19 @@ host_test(
 )
 
 host_test(
+    name = "raw_direct_push_test",
+    srcs = [
+        "raw_direct_push_test.cpp",
+        "//drivers/NativeMetal:bridge/NativeMetalDirect.h",
+        "//drivers/NativeMetal:bridge/NativeMetalObjects.h",
+        "//drivers/TegraGM20BMetal:raw/pack/probe_bind.h",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_direct_push.h",
+    ],
+    copts = ["-Idrivers/NativeMetal"],
+    cxx_std = "c++17",
+)
+
+host_test(
     name = "raw_residual_test",
     srcs = [
         "raw_residual_test.cpp",

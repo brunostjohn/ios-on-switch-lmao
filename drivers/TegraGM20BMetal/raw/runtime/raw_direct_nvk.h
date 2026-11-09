@@ -21,6 +21,8 @@ struct NvkStageInfo {
     bool sampleShading;
     bool split;
     uint32_t halfTargets;
+    uint32_t constPushMask;
+    uint32_t constPushWords[32];
 };
 
 struct NvkStage {
