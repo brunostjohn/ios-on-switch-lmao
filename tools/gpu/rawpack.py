@@ -7,9 +7,10 @@ One action per step (gpu/seed/tools.bzl seed_tools builds, gpu/seed/defs.bzl see
                      --out <dir>
         the generator's host tools (directpack and the probes through this build's frontend and host bridge, the mock
         GM20B, the raw path's own.metallib) into <dir>
-    rawpack.py corpus --corpus corpus.log --out <file>
+    rawpack.py corpus --corpus corpus.log [--archives <build>.tsv] --out <file>
         the corpus lines the probe makes (raw/pack/probe.mm: Core Animation's render states, without lib=), so an edit
-        to any other line leaves the run's input as it was
+        to any other line leaves the run's input as it was; with the render states Apple's archives declare for the
+        device (precompile/archives/<build>.tsv) whose functions are one framework's default.metallib
     rawpack.py split --generator <rawpack.py> --qc default.metallib --corpus <file> --out <bucket corpus>...
         the states of each of the generator's buckets
     rawpack.py probe --generator <rawpack.py> --raw <dir> --nvk <twin dylib> --qc default.metallib
@@ -45,6 +46,7 @@ KEPT = ('records.bin', 'warm.out', 'warm.log', 'programs.bin', 'compute.out', 'c
 # The frameworks other than QuartzCore whose states the pack holds: their lines keep lib=, which the probe loads
 # them from
 FRAMEWORKS = ('RenderBox',)
+FRAMEWORK_LIBRARY = re.compile(r' lib=/System/Library/(?:Private)?Frameworks/(\w+)\.framework/default\.metallib')
 
 
 def framework_line(line: str) -> bool:
@@ -65,6 +67,25 @@ def probe_lines(corpus: str) -> list[str]:
         if (line.startswith('R ') and ' ok=1 ' in line and (PROBE_LABEL in line or framework_line(line)))
         or line.startswith('D ok=1 ')
     ]
+
+
+def archive_lines(inventory: str) -> list[str]:
+    """Return the render states an archive inventory (corpus/tools/archives/declared.py) has the pack make.
+
+    Those declared for the raw device's GPU families that the runtime looks up in the pack (RawMetalStates.mm
+    _packable: a vertex and a fragment function, both one framework's default.metallib, and so is every function it
+    links); not QuartzCore's, whose archive is its offline compilation manifest (raw/pack/ca/caset.py's manifest tier).
+    They keep lib=, which the probe loads them from.
+    """
+    out = []
+    for row in inventory.splitlines():
+        kind, _owner, _source, family, line = row.split('\t')
+        libraries = set(LIBRARY.findall(line))
+        frameworks = set(FRAMEWORK_LIBRARY.findall(line))
+        both = ' | v - ' not in line and ' | f - ' not in line
+        if kind == 'render' and family == 'device' and both and len(libraries) == len(frameworks) == 1:
+            out += [line] if frameworks != {'QuartzCore'} else []
+    return out
 
 
 def generate(generator: list[str], arguments: list[str | Path], env: dict[str, str], what: str) -> str:
@@ -151,6 +172,7 @@ def main() -> None:
     corpus = steps.add_parser('corpus')
     for name in ('corpus', 'out'):
         corpus.add_argument('--' + name, required=True)
+    corpus.add_argument('--archives')
     for step, names in STEPS.items():
         p = steps.add_parser(step)
         for name in names:
@@ -159,7 +181,11 @@ def main() -> None:
     steps.choices['link'].add_argument('buckets', nargs='+')
     args = parser.parse_args()
     if args.step == 'corpus':
-        Path(args.out).write_text(''.join(line + '\n' for line in probe_lines(Path(args.corpus).read_text())))
+        lines = probe_lines(Path(args.corpus).read_text())
+        if args.archives:
+            harvested = set(lines)
+            lines += [line for line in archive_lines(Path(args.archives).read_text()) if line not in harvested]
+        Path(args.out).write_text(''.join(line + '\n' for line in lines))
         return
     root = Path.cwd()
     work = fresh(root / f'_rawpack_{args.step}_{os.getpid()}')
