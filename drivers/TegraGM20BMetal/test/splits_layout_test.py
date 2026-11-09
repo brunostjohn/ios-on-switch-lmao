@@ -5,12 +5,16 @@ A uniform buffer's constant buffer type holds its set-0 offset, and the twin bin
 its state's set-0 entries: a type the whole program does not name would bind another buffer.
 """
 
+import json
 import os
 import sys
+import tempfile
 import unittest
+from pathlib import Path
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'raw', 'pack'))
 import directlink
+import eqsplit
 import packfile
 import splits
 
@@ -88,6 +92,48 @@ class SplitIdentityTest(unittest.TestCase):
             self.assertEqual(laid[2][split['fs']]['id'], directlink.program_id(state['split']['programs'][0]))
             self.assertEqual(laid[2][split['prologue']]['id'], directlink.program_id(state['split']['programs'][1]))
         self.assertNotIn(ids[2], found)
+
+
+class EquivalenceTest(unittest.TestCase):
+    def test_each_split_variant_is_checked_against_its_own_prologue(self):
+        pack = {
+            'programs': [{'id': name} for name in ('whole', 'whole', 'fa', 'pa', 'fb', 'pb')],
+            'splits': [
+                {'whole': 0, 'fs': 2, 'prologue': 3, 'ubo_cbufs': []},
+                {'whole': 1, 'fs': 4, 'prologue': 5, 'ubo_cbufs': []},
+            ],
+        }
+        with tempfile.TemporaryDirectory() as scratch:
+            path = Path(scratch) / 'pack.json'
+            path.write_text(json.dumps(pack))
+            variants = eqsplit.load(str(path))
+        self.assertEqual(len(variants), 2)
+        events = []
+        for name in ('a', 'b'):
+            launch = f'prologue=p{name} push=01'
+            events.extend(
+                [
+                    {'head': 'DISPATCH', 'lines': [f'split {launch} frontier=0']},
+                    {
+                        'head': 'DRAW',
+                        'lines': [f'stage5 prog=f{name} regs=1', 'cb0 root push=01', f'cb1 frontier size=10 {launch}'],
+                    },
+                ]
+            )
+        frames = [events]
+        self.assertEqual(eqsplit.fold(frames, variants), (2, []))
+        self.assertEqual([e['lines'][0] for e in events], ['stage5 prog=whole regs=*'] * 2)
+        invalid = [
+            [
+                {
+                    'head': 'DRAW',
+                    'lines': ['stage5 prog=fa regs=1', 'cb0 root push=01', 'cb1 frontier size=10 prologue=pb push=01'],
+                }
+            ]
+        ]
+        count, errors = eqsplit.fold(invalid, variants)
+        self.assertEqual(count, 1)
+        self.assertEqual(len(errors), 1)
 
 
 if __name__ == '__main__':
