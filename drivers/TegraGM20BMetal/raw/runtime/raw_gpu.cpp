@@ -202,6 +202,49 @@ const FormatInfo kFormats[] = {
     {110, 0xc6, 0x58d24903, 8, false},   // RGBA16Unorm
     {115, 0xca, 0x58d7ff83, 8, false},   // RGBA16Float (rendered: a 4:2:0 texture's converted image)
     {125, 0xc0, 0x58d7ff81, 16, false},  // RGBA32Float (rendered: an sRGB 4:2:0 texture's image)
+    // block-compressed (sampled only, private: Metal's copies move whole blocks), word 0 NIL's row of NVK's format
+    {130, 0, 0x58d24924, 8, false, 4, 4},     // BC1_RGBA: DXT1_RGBA
+    {131, 0, 0x58d24924, 8, true, 4, 4},      // BC1_RGBA_sRGB: DXT1_SRGBA
+    {132, 0, 0x58d24925, 16, false, 4, 4},    // BC2_RGBA: DXT3_RGBA
+    {133, 0, 0x58d24925, 16, true, 4, 4},     // BC2_RGBA_sRGB: DXT3_SRGBA
+    {134, 0, 0x58d24926, 16, false, 4, 4},    // BC3_RGBA: DXT5_RGBA
+    {135, 0, 0x58d24926, 16, true, 4, 4},     // BC3_RGBA_sRGB: DXT5_SRGBA
+    {140, 0, 0x70124927, 8, false, 4, 4},     // BC4_RUnorm: RGTC1_UNORM
+    {141, 0, 0x701124a7, 8, false, 4, 4},     // BC4_RSnorm: RGTC1_SNORM
+    {142, 0, 0x70d24928, 16, false, 4, 4},    // BC5_RGUnorm: RGTC2_UNORM
+    {143, 0, 0x70d124a8, 16, false, 4, 4},    // BC5_RGSnorm: RGTC2_SNORM
+    {150, 0, 0x78d7ff90, 16, false, 4, 4},    // BC6H_RGBFloat: BPTC_RGB_FLOAT
+    {151, 0, 0x78d7ff91, 16, false, 4, 4},    // BC6H_RGBUfloat: BPTC_RGB_UFLOAT
+    {152, 0, 0x58d24917, 16, false, 4, 4},    // BC7_RGBAUnorm: BPTC_RGBA_UNORM
+    {153, 0, 0x58d24917, 16, true, 4, 4},     // BC7_RGBAUnorm_sRGB: BPTC_SRGBA
+    {186, 0, 0x58d24940, 16, true, 4, 4},     // ASTC_4x4_sRGB: ASTC_4x4_SRGB
+    {187, 0, 0x58d24950, 16, true, 5, 4},     // ASTC_5x4_sRGB: ASTC_5x4_SRGB
+    {188, 0, 0x58d24941, 16, true, 5, 5},     // ASTC_5x5_sRGB: ASTC_5x5_SRGB
+    {189, 0, 0x58d24951, 16, true, 6, 5},     // ASTC_6x5_sRGB: ASTC_6x5_SRGB
+    {190, 0, 0x58d24942, 16, true, 6, 6},     // ASTC_6x6_sRGB: ASTC_6x6_SRGB
+    {192, 0, 0x58d24955, 16, true, 8, 5},     // ASTC_8x5_sRGB: ASTC_8x5_SRGB
+    {193, 0, 0x58d24952, 16, true, 8, 6},     // ASTC_8x6_sRGB: ASTC_8x6_SRGB
+    {194, 0, 0x58d24944, 16, true, 8, 8},     // ASTC_8x8_sRGB: ASTC_8x8_SRGB
+    {195, 0, 0x58d24956, 16, true, 10, 5},    // ASTC_10x5_sRGB: ASTC_10x5_SRGB
+    {196, 0, 0x58d24957, 16, true, 10, 6},    // ASTC_10x6_sRGB: ASTC_10x6_SRGB
+    {197, 0, 0x58d24953, 16, true, 10, 8},    // ASTC_10x8_sRGB: ASTC_10x8_SRGB
+    {198, 0, 0x58d24945, 16, true, 10, 10},   // ASTC_10x10_sRGB: ASTC_10x10_SRGB
+    {199, 0, 0x58d24954, 16, true, 12, 10},   // ASTC_12x10_sRGB: ASTC_12x10_SRGB
+    {200, 0, 0x58d24946, 16, true, 12, 12},   // ASTC_12x12_sRGB: ASTC_12x12_SRGB
+    {204, 0, 0x58d24940, 16, false, 4, 4},    // ASTC_4x4_LDR: ASTC_4x4
+    {205, 0, 0x58d24950, 16, false, 5, 4},    // ASTC_5x4_LDR: ASTC_5x4
+    {206, 0, 0x58d24941, 16, false, 5, 5},    // ASTC_5x5_LDR: ASTC_5x5
+    {207, 0, 0x58d24951, 16, false, 6, 5},    // ASTC_6x5_LDR: ASTC_6x5
+    {208, 0, 0x58d24942, 16, false, 6, 6},    // ASTC_6x6_LDR: ASTC_6x6
+    {210, 0, 0x58d24955, 16, false, 8, 5},    // ASTC_8x5_LDR: ASTC_8x5
+    {211, 0, 0x58d24952, 16, false, 8, 6},    // ASTC_8x6_LDR: ASTC_8x6
+    {212, 0, 0x58d24944, 16, false, 8, 8},    // ASTC_8x8_LDR: ASTC_8x8
+    {213, 0, 0x58d24956, 16, false, 10, 5},   // ASTC_10x5_LDR: ASTC_10x5
+    {214, 0, 0x58d24957, 16, false, 10, 6},   // ASTC_10x6_LDR: ASTC_10x6
+    {215, 0, 0x58d24953, 16, false, 10, 8},   // ASTC_10x8_LDR: ASTC_10x8
+    {216, 0, 0x58d24945, 16, false, 10, 10},  // ASTC_10x10_LDR: ASTC_10x10
+    {217, 0, 0x58d24954, 16, false, 12, 10},  // ASTC_12x10_LDR: ASTC_12x10
+    {218, 0, 0x58d24946, 16, false, 12, 12},  // ASTC_12x12_LDR: ASTC_12x12
     // the extended-range formats' codes (raw_xr.h), as m2v's NVK renders and fetches them: RG32_UINT, RGBA16_UINT, R32_UINT
     {550, 0xcd, 0x60d49204, 8, false},  // RGB10A8_2P_XR10
     {552, 0xc9, 0x58d49203, 8, false},  // BGRA10_XR
@@ -1126,6 +1169,8 @@ void Device::writeTic(const Texture &t)
                (t.type == fx::kTexThreeD &&
                 fx::volumeLayout(t.width, t.height, t.depth, 1, t.bpp, !t.blockDepth, one)) ||
                (t.blockLinear && fx::mipChainLayout(t.width, t.height, 1, t.bpp, one))) {  // NIL's header of the image
+        if (t.blockW > 1 || t.blockH > 1)
+            one.yLog2 = t.blockHeight;  // (blockLayout's)
         fx::mipChainTic(one, t.va, f->tic0, f->srgb, 0, 1, w, t.type);
     } else {
         w[0] = f->tic0;
@@ -1144,6 +1189,10 @@ void Device::writeTic(const Texture &t)
         setField(w, 191, 191, 1);  // NORMALIZED_COORDS
         setField(w, 216, 215, 2);  // ANISO_FINE_SPREAD_FUNC TWO
         setField(w, 218, 217, 1);  // ANISO_COARSE_SPREAD_FUNC ONE
+    }
+    if (t.blockW > 1 || t.blockH > 1) {
+        setField(w, 143, 128, t.texelWidth - 1);  // WIDTH_MINUS_ONE in texels (NIL's extent_px)
+        setField(w, 175, 160, t.texelHeight - 1);
     }
     w[0] = swizzledWord0(w[0], t.swizzle);
     memcpy(tic_.cpu + 32 * t.tic, w, 32);  // write-combined: visible at the next submission's header invalidate
@@ -1193,29 +1242,52 @@ bool shape(uint32_t width, uint32_t height, uint32_t format, Texture &t)
     if (!f || !width || !height || width > 16384 || height > 16384)
         return false;
     t = {};
-    t.width = width;
-    t.height = height;
+    t.blockW = f->blockW;
+    t.blockH = f->blockH;
+    t.texelWidth = width;
+    t.texelHeight = height;
+    t.width = (width + f->blockW - 1) / f->blockW;
+    t.height = (height + f->blockH - 1) / f->blockH;
     t.format = format;
     t.bpp = f->bpp;
     t.renderable = f->rt != 0;
     return true;
 }
 
+// NIL's layout of a block-compressed image: its blocks tiled, the block height chosen by its height in texels (Tiling::choose
+// reads extent_px) and clamped to its rows of blocks
+static void blockLayout(const Texture &t, tgm_layout &bl)
+{
+    const uint8_t y =
+        uint8_t(std::min<uint32_t>(tgm_layout_y_log2(t.texelHeight), tgm_layout_log2_ceil((t.height + 7) / 8)));
+    const uint64_t block = 512ull << y;
+    bl.y_log2 = y;
+    bl.rows = (t.height + (8u << y) - 1) / (8u << y) * (8u << y);
+    bl.align = std::max<uint64_t>(block, 4096);
+    bl.bytes = (uint64_t(bl.row_bytes) * bl.rows + bl.align - 1) / bl.align * bl.align;
+}
+
 bool Device::createTexture(uint32_t width, uint32_t height, uint32_t format, Texture &t, bool wc, bool tiled)
 {
     if (!shape(width, height, format, t))
         return false;
-    t.pitch = (width * t.bpp + 255) & ~255u;
+    const bool blocks = t.blockW > 1 || t.blockH > 1;
+    t.pitch = (t.width * t.bpp + 255) & ~255u;
     std::lock_guard<std::mutex> l(lock_);
-    const uint64_t bytes = uint64_t(t.pitch) * height;
+    const uint64_t bytes = uint64_t(t.pitch) * t.height;
     tgm_layout bl;
-    // (a colour format: the chunks are bound under colour kind 0xFE, which a depth/stencil format's zeta is not)
-    if (tiled && !wc && t.renderable && tgm_layout_tiled(width, height, t.bpp, &bl) &&
-        blAlloc(bl.bytes, bl.align, t.span)) {
+    // (a colour format: the chunks are bound under colour kind 0xFE, which a depth/stencil format's zeta is not; a
+    // block-compressed one is NVK's optimal image, never pitch)
+    const bool laid = tiled && !wc && (t.renderable || blocks) && tgm_layout_tiled(t.width, t.height, t.bpp, &bl);
+    if (laid && blocks)
+        blockLayout(t, bl);
+    if (laid && blAlloc(bl.bytes, bl.align, t.span)) {
         t.pitch = bl.row_bytes;
         t.blockLinear = true;
         t.blockHeight = bl.y_log2;
         t.layerBytes = bl.bytes;
+    } else if (blocks) {
+        return false;
     } else if (wc && wcAlloc(bytes, t.span)) {
         t.wc = true;
         stats.wcBytes += t.span.bytes;
@@ -1458,8 +1530,8 @@ bool Device::createPlanarTarget(uint64_t surfaceId, void *base, uint64_t allocBy
 bool Device::createBufferTexture(const Buffer &b, uint64_t offset, uint32_t width, uint32_t height, uint32_t pitch,
                                  uint32_t format, Texture &t)
 {
-    if (!shape(width, height, format, t) || (pitch & 31) || pitch < width * t.bpp || ((b.va + offset) & 31) ||
-        offset + uint64_t(pitch) * height > b.length)
+    if (!shape(width, height, format, t) || blockCompressed(formatInfo(format)) || (pitch & 31) ||
+        pitch < width * t.bpp || ((b.va + offset) & 31) || offset + uint64_t(pitch) * height > b.length)
         return false;
     std::lock_guard<std::mutex> l(lock_);
     t.pitch = pitch;
@@ -1480,8 +1552,8 @@ bool Device::createView(const Texture &of, uint32_t format, Texture &t)
     if (of.converted())
         return false;
     const FormatInfo *f = formatInfo(format);
-    if (!f || f->bpp != of.bpp || of.memoryless || of.sampled || xrForm(format) != XrForm::None ||
-        xrForm(of.format) != XrForm::None)
+    if (!f || f->bpp != of.bpp || f->blockW != of.blockW || f->blockH != of.blockH || of.memoryless || of.sampled ||
+        xrForm(format) != XrForm::None || xrForm(of.format) != XrForm::None)
         return false;
     std::lock_guard<std::mutex> l(lock_);
     t = of;
@@ -1512,9 +1584,9 @@ bool Device::createPartView(const Texture &of, uint32_t format, uint32_t type, u
     const FormatInfo *f = formatInfo(format);
     const bool cube = type == fx::kTexCube || type == fx::kTexCubeArray;
     if (of.converted() || !of.blockLinear || of.zeta || of.type == fx::kTexOneD || of.type == fx::kTexThreeD || !f ||
-        f->bpp != of.bpp || of.memoryless || of.sampled || xrForm(format) != XrForm::None ||
-        xrForm(of.format) != XrForm::None || !levels || !layers || (type == fx::kTexTwoD && layers != 1) ||
-        (cube && (layers % 6 || of.width != of.height)))
+        f->bpp != of.bpp || blockCompressed(f) || of.blockW > 1 || of.blockH > 1 || of.memoryless || of.sampled ||
+        xrForm(format) != XrForm::None || xrForm(of.format) != XrForm::None || !levels || !layers ||
+        (type == fx::kTexTwoD && layers != 1) || (cube && (layers % 6 || of.width != of.height)))
         return false;
     fx::MipChain c;
     uint64_t va = of.va;

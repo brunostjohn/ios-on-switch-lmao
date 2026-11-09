@@ -102,7 +102,13 @@ struct FormatInfo {
     uint32_t mtl, rt, tic0;
     uint8_t bpp;
     bool srgb;
+    uint8_t blockW = 1, blockH = 1;  // a block-compressed format's texels a block, whose bytes bpp is
 };
+
+inline bool blockCompressed(const FormatInfo *f)
+{
+    return f && (f->blockW > 1 || f->blockH > 1);
+}
 
 const FormatInfo *formatInfo(uint32_t mtlPixelFormat);
 
@@ -244,12 +250,29 @@ struct Texture {
     // (planes, stand-ins, images) stays the parent's, which outlives it: destroyTexture frees its header alone.
     bool view = false;
     bool arena = false;  // its span is an MTLHeap's (Device::arenaTexture): span.chunk names the arena
+    // A block-compressed format's (as NIL lays one out): width, height and pitch count its blocks of blockW x blockH texels,
+    // texelWidth x texelHeight its texels, the header's size. Metal's copies address texels (toElements).
+    uint8_t blockW = 1, blockH = 1;
+    uint32_t texelWidth = 0, texelHeight = 0;
     // Its channels' MTLTextureSwizzle (red, green, blue, alpha), which its header's X..W_SOURCE take (Device::swizzle); a view
     // starts from the identity, whatever its parent's
     uint8_t swizzle[4] = {2, 3, 4, 5};
 };
 
 constexpr uint8_t kIdentitySwizzle[4] = {2, 3, 4, 5};
+
+// A copy's texel origin and size in `t` as its elements (a block-compressed texture's blocks; Metal's origins are whole blocks,
+// a size reaching its edge may end inside one); false where the origin is not a block's
+inline bool toElements(const Texture &t, uint32_t &x, uint32_t &y, uint32_t &w, uint32_t &h)
+{
+    if (x % t.blockW || y % t.blockH)
+        return false;
+    x /= t.blockW;
+    y /= t.blockH;
+    w = (w + t.blockW - 1) / t.blockW;
+    h = (h + t.blockH - 1) / t.blockH;
+    return true;
+}
 
 // Texture header word 0 with its sources read through `channels` (MTLTextureSwizzle each: Zero, One, Red, Green, Blue, Alpha);
 // One is the integer or float one the format's own sources use

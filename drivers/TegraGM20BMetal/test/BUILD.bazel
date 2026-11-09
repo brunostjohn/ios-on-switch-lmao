@@ -21,8 +21,9 @@
 #   raw_slm_test      raw/runtime/raw_slm.h: the shader local memory a program's header or a kernel's QMD asks of a
 #                     warp, the area NVK sizes for it, the methods that give it to the raw channel's 3D and compute
 #                     classes (the runtime's, never a record's), ahead of every program of the pack or a record
-#   raw_zeta_tic_test raw/runtime/raw_zeta.h: each depth/stencil format's SET_ZT_FORMAT and the texture header word 0 its
-#                     depth is sampled through, rebuilt from NIL's row of NVK's format by NIL's generator rules
+#   raw_tic_words_test  raw/runtime/raw_zeta.h and raw_gpu.cpp's block-compressed rows: each depth/stencil format's
+#                     SET_ZT_FORMAT and texture header word 0, and each compressed format's word 0, rebuilt from NIL's
+#                     row of NVK's format by NIL's generator rules
 #   mkpack_owned_test raw/pack/mkpack.py: no blob or baseline register is one the raw path owns
 #   raw_tiled_cache_test  raw/runtime/raw_tiled_cache.h: with the kernel's tiled-cache bit, deko3d's configuration then the
 #                     enable at context init and one flush per pass and per command buffer; nothing without it
@@ -229,11 +230,13 @@ py_test(
 )
 
 py_test(
-    name = "raw_zeta_tic_test",
-    srcs = ["raw_zeta_tic_test.py"],
+    name = "raw_tic_words_test",
+    srcs = ["raw_tic_words_test.py"],
     data = [
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_gpu.cpp",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_zeta.h",
         "//third_party/mesa/src/nouveau/headers:nvidia/classes/cl9097tex.h",
+        "//third_party/mesa/src/nouveau/headers:nvidia/classes/clb097tex.h",
         "//third_party/mesa/src/nouveau/headers:nvidia/classes/clb197.h",
         "//third_party/mesa/src/nouveau/headers:nvidia/classes/clb197tex.h",
         "//third_party/mesa/src/nouveau/nil:nil_formats.csv",
