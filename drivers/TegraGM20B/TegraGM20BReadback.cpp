@@ -77,7 +77,7 @@ bool makeBuffer(Buffer &b, uint32_t i)
 {
 	b.memory = IOBufferMemoryDescriptor::inTaskWithOptions(kernel_task, kIODirectionInOut,
 							       kReadbackBytes, PAGE_SIZE);
-	b.prepared = b.memory && b.memory->prepare() == kIOReturnSuccess;
+	b.prepared = b.memory != nullptr && b.memory->prepare() == kIOReturnSuccess;
 	b.npages = static_cast<uint32_t>(kReadbackBytes >> 12);
 	b.pas = b.prepared ? IONew(uint64_t, b.npages) : nullptr;
 	if (!b.pas)
