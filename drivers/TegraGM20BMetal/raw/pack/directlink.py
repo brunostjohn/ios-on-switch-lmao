@@ -70,8 +70,12 @@ def load_records(path: str) -> list[dict]:
 
 
 def program_id(program: dict) -> str:
-    """Name a program as mkprograms.py does: the FNV-1a of its header, code and shader data."""
-    return f'{packfile.fnv(program["image"] + program["data"]):x}'
+    """Name a program by its header, code, shader data and constant buffer types (FNV-1a).
+
+    One code can read its uniform buffers at other set-0 offsets in another state (its constant buffer types): each is
+    a program of its own, so neither state binds the other's.
+    """
+    return f'{packfile.fnv(program["image"] + program["data"] + bytes(program["cbufs"])):x}'
 
 
 def entries_of(pipeline: bytes, count: int, samplers: list[list[int]], constexpr_tsc: list[list[int]]) -> list[dict]:
@@ -162,7 +166,7 @@ def gather(buckets: list[str], context: dict[int, int]) -> tuple[list[dict], lis
             regs = dict(context)
             regs.update(rec['regs'])
             for method, program in zip(PROGRAM_OFFSETS, rec['programs'], strict=True):
-                regs[method] = packfile.fnv(program['image'] + program['data']) & 0xFFFFFFFF
+                regs[method] = int(program_id(program), 16) & 0xFFFFFFFF
             regs = {m: 0 if mkpack.disabled_stream(m, v) else v for m, v in regs.items() if not mkpack.foreign(m, n)}
             ids = [program_id(program) for program in rec['programs']]
             rec['probe'] = {

@@ -8,6 +8,7 @@
  */
 #include "nvk_shader.h"
 #include "nvk_switch_push.h"
+#include "nvk_switch_round.h"
 #include "nvk_switch_capture.h"
 
 #include "nvk_cmd_buffer.h"
@@ -415,6 +416,8 @@ nvk_lower_nir(struct nvk_device *dev, nir_shader *nir,
             nir_address_format_32bit_offset);
    NIR_PASS(_, nir, switch_nvk_fold_const_push,
             switch_nvk_const_push_current);
+   NIR_PASS(_, nir, switch_nvk_round_half_outputs,
+            switch_nvk_half_targets_current);
 
    struct nvk_cbuf_map *cbuf_map = NULL;
    if (!(pdev->debug_flags & NVK_DEBUG_NO_CBUF)) {
