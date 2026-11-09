@@ -30,7 +30,7 @@ int switch_protection_get(struct vnode *vp, int32_t *pclass, struct vfs_context 
 /* F_SETPROTECTIONCLASS and setattrlist on a local writable volume without MNT_CPROTECT. */
 int switch_protection_set(struct vnode *vp, int32_t pclass, struct vfs_context *ctx);
 
-/* ATTR_CMN_DATA_PROTECT_FLAGS, when the filesystem left it unsupported. */
+/* ATTR_CMN_DATA_PROTECT_FLAGS on a local writable volume without MNT_CPROTECT, whatever the filesystem said. */
 void switch_protection_getattr(struct mount *mp, struct vnode *vp, uint32_t commonattr, struct vnode_attr *vap,
                                struct vfs_context *ctx);
 
