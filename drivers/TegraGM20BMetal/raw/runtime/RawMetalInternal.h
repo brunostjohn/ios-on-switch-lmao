@@ -200,6 +200,15 @@ void declareGpuWrites(RMTexture *t);
 void traceSurfaceImage(RMTexture *t, const char *what, uint32_t seed);
 #endif
 
+// RawMetalEncode.mm: the imports a texture's or buffer's memory lies in, named to the submission
+void useTexture(raw::CommandBuffer *rc, RMTexture *t, bool write);
+void useBuffer(raw::CommandBuffer *rc, RMBuffer *b, bool write);
+
+// RawMetalEncodeBlit.mm: a blit encoder's command of the tape onto the raw path's copy engine; a texture it writes leaves
+// `fresh` and `standInFresh` (its pool image and its stand-in are refreshed again before a sample)
+void encodeBlit(RMCommandBuffer *cb, const Cmd &c, raw::CommandBuffer *rc, raw::BlitEncoder *be,
+                std::set<RMTexture *> &fresh, std::set<RMTexture *> &standInFresh);
+
 // RawMetalTextureCpu.mm
 void cpuTiled(RMTexture *t, MTLRegion r, uint8_t *bytes, NSUInteger row, bool write);
 void cpuLevel(RMTexture *t, MTLRegion r, NSUInteger level, uint8_t *bytes, NSUInteger row, bool write);
