@@ -17,6 +17,7 @@
 #include "nvk_sampler.h"
 #include "nvk_shader.h"
 #include "nvk_switch_capture.h"
+#include "nvk_switch_round.h"
 
 #include "vk_graphics_state.h"
 #include "vk_pipeline.h"
@@ -80,11 +81,13 @@ switch_nvk_compile_stage(VkDevice _device,
       .ms = info->stage == VK_SHADER_STAGE_FRAGMENT_BIT ? &ms : NULL,
    };
 
+   switch_nvk_half_targets_current = info->half_targets;
    struct vk_shader *shader = NULL;
    VkResult result =
       vk_pipeline_compile_library_stage(&dev->vk, info->pipeline_flags,
                                         info->pipeline_pnext, &stage,
                                         info->layout, &state, &shader);
+   switch_nvk_half_targets_current = 0;
    if (result != VK_SUCCESS)
       return result;
 

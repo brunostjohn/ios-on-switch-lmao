@@ -38,6 +38,11 @@ struct switch_nvk_stage_info {
    const void *stage_pnext;
    /* The fragment library's multisample state */
    bool sample_shading;
+   /* The colour attachments of a 16-bit float format (bit j: attachment j),
+    * whose float outputs the fragment program rounds to nearest even
+    * (nvk_switch_round.h)
+    */
+   uint32_t half_targets;
 };
 
 struct switch_nvk_stage {

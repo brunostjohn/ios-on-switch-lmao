@@ -26,6 +26,7 @@ struct NvkStageInfo {
     const void *pipelinePnext;
     const void *stagePnext;
     bool sampleShading;
+    uint32_t halfTargets;
 };
 
 struct NvkStage {
@@ -116,6 +117,21 @@ CapturedProgram programOf(const NvkStage &s)
     return p;
 }
 
+// The written colour attachments of a 16-bit float format the key names ("c<j>=<MTLPixelFormat>:<writeMask>:"): R16Float,
+// RG16Float, RGBA16Float
+uint32_t halfFloatTargets(const std::string &key)
+{
+    const std::string fields = key.substr(0, key.find(" | "));
+    uint32_t out = 0;
+    for (size_t at = fields.find(" c"); at != std::string::npos; at = fields.find(" c", at + 2)) {
+        unsigned j, format, mask;
+        if (sscanf(fields.c_str() + at, " c%u=%u:%u:", &j, &format, &mask) == 3 && j < 8 && mask &&
+            (format == 25 || format == 65 || format == 115))
+            out |= 1u << j;
+    }
+    return out;
+}
+
 class Stages {
 public:
     Stages(const DirectNvk &nvk, void *device) : nvk_(nvk), device_(device)
@@ -129,7 +145,7 @@ public:
     }
 
     // Refused: a state the raw path does not draw from a record; Failed: NVK could not compile a stage
-    Compiler::Outcome compile(const NmbDirectState &state, std::string &why)
+    Compiler::Outcome compile(const NmbDirectState &state, uint32_t halfTargets, std::string &why)
     {
         if (state.stageCount != 2) {
             why = std::to_string(state.stageCount) + " stages";
@@ -152,7 +168,8 @@ public:
                                        kLibraryBit,
                                        nullptr,
                                        s.subgroupSize ? &subgroup : nullptr,
-                                       state.sampleShading};
+                                       state.sampleShading,
+                                       halfTargets};
             const int32_t result = reinterpret_cast<CompileStage>(nvk_.compileStage)(device_, &info, &made_[k]);
             if (result != 0) {
                 why = "NVK refused stage " + std::to_string(k) + " (VkResult " + std::to_string(result) + ")";
@@ -349,7 +366,8 @@ Compiler::Outcome directRecord(const NmbDirectState &state, const DirectNvk &nvk
         return Compiler::Outcome::Refused;
     }
     Stages stages(nvk, device);
-    if (const Compiler::Outcome compiled = stages.compile(state, why); compiled != Compiler::Outcome::Made)
+    if (const Compiler::Outcome compiled = stages.compile(state, halfFloatTargets(key), why);
+        compiled != Compiler::Outcome::Made)
         return compiled;
     RecordParts parts;
     parts.programs[0] = &stages.program(0);
