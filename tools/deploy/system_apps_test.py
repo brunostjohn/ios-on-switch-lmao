@@ -128,6 +128,16 @@ class SystemAppsTest(unittest.TestCase):
             self.redeploy({'code': b'v1', 'files': {'en.lproj/InfoPlist.strings': b'"CFBundleDisplayName" = "B";'}})
         )
 
+    def test_an_icon_or_its_asset_catalog_changing_does(self):
+        icons = {'CFBundleIcons': {'CFBundlePrimaryIcon': {'CFBundleIconFiles': ['AppIcon60x60']}}}
+        self.deploy({'code': b'v1', 'info': icons, 'files': {'AppIcon60x60@2x.png': b'a', 'Assets.car': b'a'}})
+        self.assertTrue(
+            self.redeploy({'code': b'v1', 'info': icons, 'files': {'AppIcon60x60@2x.png': b'b', 'Assets.car': b'a'}})
+        )
+        self.assertTrue(
+            self.redeploy({'code': b'v1', 'info': icons, 'files': {'AppIcon60x60@2x.png': b'b', 'Assets.car': b'b'}})
+        )
+
     def test_an_entitlements_change_does(self):
         self.deploy({'code': b'v1'})
         self.assertTrue(self.redeploy({'code': b'v1', 'entitlements': {**ENTITLEMENTS, 'com.apple.private.x': True}}))
