@@ -228,6 +228,17 @@ TEST(DisplayPlanesSource, DetachReasonsLoggedOnlyByDebugIos27Kernels)
     EXPECT_THAT(XnuKernExec(), Not(HasSubstr("CA_PRINT_DETACHING")));
 }
 
+// iOS 27's CoreVideo registers no compressed pixel format (H12's AGX and HTPC tiled layouts), so nothing hands the display
+// a surface in one; iOS 17's MobileGestalt answers have none to begin with.
+TEST(DisplayPlanesSource, Ios27CoreVideoMakesNoCompressedSurfaces)
+{
+    const std::string setup = Between(Runfile(XNU27_KERN_EXEC), "\nnative_switch_setup_state(", "\n}\n");
+    EXPECT_THAT(setup,
+                HasSubstr("{\"com.apple.corevideo\", SWITCH_PLIST(\"<key>disable-buffer-compression</key><true/>\"), "
+                          "kSetupManaged},"));
+    EXPECT_THAT(XnuKernExec(), Not(HasSubstr("disable-buffer-compression")));
+}
+
 // Window B changes whose surface the GPU renders follow NativePlaneFence.h: they ride on the window A frame's present,
 // which also waits for the plane surface's writers, or on a fence of their own whose completion writes them; a frame no
 // present carries drops such a change; nothing writes them from the kick.
