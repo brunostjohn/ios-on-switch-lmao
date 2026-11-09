@@ -65,6 +65,7 @@ host_test(
         "//drivers/SwitchAudio:SwitchAudioStream.cpp",
         "//drivers/SwitchAudio:SwitchRT5639.cpp",
         "//drivers/SwitchAudio:hal/SwitchAudioPlugIn.c",
+        "//drivers/TegraGPIO:TegraGPIO.cpp",
     ],
     deps = [":neon_harness"],
 )
