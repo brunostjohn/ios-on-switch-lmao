@@ -6,8 +6,8 @@
 // so it is a late object (Drivers.cmake switch_late_object) whose static initializer runs from
 // switch_joycon_hid_prepare() once IOHIDFamily is loaded. Overrides: NativeHidInput's set (free, start, stop,
 // getWorkLoop, newTransportString, newProductString, newReportDescriptor; the bindings leave exactly those IOHIDDevice
-// slots unbound), slot 183, setReport (below), and handleOpen/handleClose, which call the bound originals and keep
-// the device's backboardd session (below).
+// slots unbound), slot 183, setReport (below), handleOpen/handleClose, which call the bound originals and keep the
+// device's backboardd session (below), and on 27 the identity getters (below).
 //
 // Unlike the touch screen and buttons, no IOHIDEventDriver may sit on these devices. iPadOS 17's own Joy-Con support
 // is user space (all verified in the 21H461 OS image):
@@ -47,6 +47,13 @@
 // still speaks to the IOHIDDevice through HIDDevice (synchronous setReport = slot 183, as on 17). So the 27 build adds
 // neither the dummy personalities, which would take the interface from Apple's driver, nor HIDServiceSupport on the
 // device.
+//
+// The plugin's matchService now reads VendorID, ProductID (and PrimaryUsage) from that driver, not the device.
+// IOHIDEventService::start sets each one from its IOHIDInterface (0 when missing), and IOHIDDevice::publishProperties
+// gives the interface only what the device's new*() getters return; a property set on the device reaches personality
+// matching (IOHIDInterface::matchPropertyTable asks the device) but not the interface. So on 27 the device answers
+// newManufacturerString, newVendorIDNumber, newProductIDNumber and newSerialNumberString, as bluetoothd's
+// IOHIDUserDevice does, and publishProperties puts them on the device and the interface.
 //
 // With one addition: a rail device outlives a backboardd restart (a respring), and gamecontrollerd takes only one
 // plugin session per HID service, so the restarted backboardd's plugin and GamepadHIDServiceFilter would be refused
@@ -210,6 +217,28 @@ public:
         return OSString::withCString(left ? "Joy-Con (L)" : "Joy-Con (R)");
     }
 
+#if XNU_12377_121_6
+    OSString *newManufacturerString() const override
+    {
+        return OSString::withCString("Nintendo");
+    }
+
+    OSNumber *newVendorIDNumber() const override
+    {
+        return OSNumber::withNumber(kNintendo, 32);
+    }
+
+    OSNumber *newProductIDNumber() const override
+    {
+        return OSNumber::withNumber(left ? kSwitchJoyConLeftPID : kSwitchJoyConRightPID, 32);
+    }
+
+    OSString *newSerialNumberString() const override
+    {
+        return OSString::withCString(serial);
+    }
+#endif
+
     IOReturn newReportDescriptor(IOMemoryDescriptor **out) const override
     {
         *out = IOBufferMemoryDescriptor::withBytes(kJoyConDescriptor, sizeof(kJoyConDescriptor), kIODirectionNone);
@@ -294,6 +323,7 @@ public:
         input = IOBufferMemoryDescriptor::withCapacity(kLargestInput, kIODirectionNone);
         if (!loop || !input)
             return false;
+#if !XNU_12377_121_6
         // bluetoothd's HID devices carry these (com.apple.MobileBluetooth.InputDevice); HIDServiceSupport is what the
         // property-merger personality would add, set here as well so the device does not depend on its probe order.
         setProperty("VendorID", static_cast<unsigned long long>(kNintendo), 32);
@@ -301,7 +331,6 @@ public:
                     32);
         setProperty("Manufacturer", "Nintendo");
         setProperty("SerialNumber", serial);
-#if !XNU_12377_121_6
         setProperty("HIDServiceSupport", true);
 #endif
         return IOHIDDevice::start(provider);

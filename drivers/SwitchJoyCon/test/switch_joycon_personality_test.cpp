@@ -36,4 +36,19 @@ TEST(SwitchJoyConPersonalities, Ios27LeavesTheInterfaceToApplesDriver)
     EXPECT_THAT(build, HasSubstr("        addButtonsPersonality();")) << "Home and Capture stay the console's buttons";
 }
 
+// 24B119's JoyConHIDServicePlugin reads VendorID and ProductID from AppleGCHIDUserEventDriver, which copies them from
+// the IOHIDInterface; IOHIDDevice::publishProperties fills the interface only from the device's getters.
+TEST(SwitchJoyConPersonalities, Ios27PublishesItsIdentityThroughTheGetters)
+{
+    const char *getters[] = {
+        "OSString *newManufacturerString() const override", "OSNumber *newVendorIDNumber() const override",
+        "OSNumber *newProductIDNumber() const override", "OSString *newSerialNumberString() const override"};
+    const std::string ios27 = Configured(SourceText("../SwitchJoyConHID.cpp"), "XNU_12377_121_6", true);
+    const std::string ios17 = Configured(SourceText("../SwitchJoyConHID.cpp"), "XNU_12377_121_6", false);
+    for (const char *getter : getters) {
+        EXPECT_THAT(ios27, HasSubstr(getter));
+        EXPECT_THAT(ios17, Not(HasSubstr(getter))) << "iOS 17's plugin reads the device's own properties";
+    }
+}
+
 }  // namespace

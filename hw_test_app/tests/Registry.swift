@@ -29,7 +29,7 @@ public enum Registry {
 
     static let sensorsAndInput: [any HWTest] = [
         AccelerometerTest(), GyroscopeTest(), DeviceMotionTest(), AmbientLightTest(), ControllersTest(),
-        GameControllerTest(), KeyboardTest(), TouchTest(),
+        JoyConInputTest(), GameControllerTest(), KeyboardTest(), TouchTest(),
     ]
 
     static let connectivityAndStorage: [any HWTest] = [
