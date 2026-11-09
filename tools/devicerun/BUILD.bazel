@@ -8,6 +8,7 @@ lint_files()
 py_library(
     name = "lib",
     srcs = [
+        "apps.py",
         "audio.py",
         "checks.py",
         "devicerun.py",
@@ -75,5 +76,13 @@ py_test(
     name = "stutter_test",
     size = "small",
     srcs = ["stutter_test.py"],
+    deps = [":lib"],
+)
+
+# apps.py's checks over boot 16b's lsd and SpringBoard lines.
+py_test(
+    name = "apps_test",
+    size = "small",
+    srcs = ["apps_test.py"],
     deps = [":lib"],
 )

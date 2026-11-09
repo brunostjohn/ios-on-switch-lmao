@@ -146,6 +146,7 @@ TESTS: dict[str, bool] = {
     'input.rail': False,
     'gpu.texture.kinds': False,
     'system.union_readdir': False,
+    'system.overlay_apps': False,
     'system.widgets_render': False,
 }
 
