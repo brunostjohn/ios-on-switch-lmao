@@ -14,7 +14,8 @@
 // Every job must run with the engine's GP timer on and at most 1 << 27 cycles, as NVDEC's.
 // Only progressive 4:2:0 8-bit H.264 frames, one slice, one control of each kind.
 // Slicing is the one NVIDIA's own T210 driver uses (TegraNVENC/nvidia/SOURCE): slice_mode 0 (the firmware walks the
-// slice control array, here one control covering every macroblock) with max_slice_size at least the macroblock count.
+// slice control array, here one control of exactly the picture's macroblocks, as the H.265 checker requires of its
+// CTBs) with max_slice_size at least the macroblock count.
 // slice_mode 1 is refused: NVIDIA's T210 driver never sends it, NVENC 5.0's H.264 app then runs the picture as one
 // hardware-chained run (target count the whole picture, each slice-done interrupt restarting the next, app 0x0fe1 and
 // 0x38ea), and NVIDIA's Ada NVENC hangs on it (github.com/mickys/nvenc docs/reports/T2.05e.md, MIT). On this NVENC it
@@ -142,7 +143,7 @@ static inline const char *tegra_nvenc_check(const TegraNVENCSubmit *s, const uin
             return "control offset";
     }
     const nvenc_h264_slice_control_s *slice = (const nvenc_h264_slice_control_s *)(s->setup + pc->slice_control_offset);
-    if (slice->num_mb < mbs || slice->ROI_enable || slice->force_intra > 1)
+    if (slice->num_mb != mbs || slice->ROI_enable || slice->force_intra > 1)
         return "slice control";
     const nvenc_h264_me_control_s *me = (const nvenc_h264_me_control_s *)(s->setup + pc->me_control_offset);
     if (me->me_only_mode || me->mv_only_enable)

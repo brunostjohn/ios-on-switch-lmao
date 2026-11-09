@@ -24,7 +24,8 @@ method values to DMEM 0x3b8 (method 0x700 + 4k at 0x3b8 + 4k, 0xf400-0xf4a0; SET
   - End of picture (fn 0xfcf5): a wait that ends on an error or engine idle, then an unbounded spin at 0xfd35 until
     the CTBs the ISR counts (DMEM 0x360 += I[0x1848], 0x2776) reach the picture's (DMEM 0x38c, fn 0xfe8b), then
     unbounded polls of I[0x1964], I[0x4c] and I[0x410]. A stalled engine hangs the app there whatever the GP timer
-    does. The H.264 app has the same spin (fn 0x48b9, 0x4916), its target the slice control's num_mb (0x38df).
+    does. The H.264 app has the same spin (fn 0x48b9, 0x4916), its target the slice control's num_mb (0x38df) clamped
+    to the picture (0x38f7-0x390e; SOURCE).
   - Reference lists: l0[0..3] go to I/O 0x1884 as entry bit 0 and entry bits 1-4 per byte (0x143dd-0x1442e): an entry
     is DPB slot << 1, the driver's -2 (0xfe) unused. pic_type: (pic_type + 2) & 3 > 1 is inter (0x14208).
 
