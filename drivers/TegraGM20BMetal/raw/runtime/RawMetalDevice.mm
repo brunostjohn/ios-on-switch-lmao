@@ -188,7 +188,7 @@ static const char *zetaMemoryRefusal(int asked)
 // view of it is (texture_tiled_in_place).
 - (id<MTLTexture>)newTextureWithDescriptor:(MTLTextureDescriptor *)d
 {
-    return [self rmNewTexture:d tiled:d.storageMode == MTLStorageModePrivate];
+    return swizzled([self rmNewTexture:d tiled:d.storageMode == MTLStorageModePrivate], d.swizzle);
 }
 
 - (id<MTLTexture>)rmNewTexture:(MTLTextureDescriptor *)d tiled:(bool)tiled
@@ -349,6 +349,11 @@ static bool producesTexture(MTLTextureDescriptor *d)
 }
 
 - (id<MTLTexture>)newTextureWithDescriptor:(MTLTextureDescriptor *)d iosurface:(IOSurfaceRef)s plane:(NSUInteger)plane
+{
+    return swizzled([self rmSurfaceTexture:d iosurface:s plane:plane], d.swizzle);
+}
+
+- (id<MTLTexture>)rmSurfaceTexture:(MTLTextureDescriptor *)d iosurface:(IOSurfaceRef)s plane:(NSUInteger)plane
 {
     SWITCH_API(ApiObject);
     if (!s)

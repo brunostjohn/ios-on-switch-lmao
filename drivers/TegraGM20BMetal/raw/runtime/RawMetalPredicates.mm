@@ -185,6 +185,8 @@ uint32_t arrayType(MTLTextureDescriptor *d)
     if (!kept)
         return 0;
     switch (d.textureType) {
+    case MTLTextureType1DArray:
+        return d.height <= 1 ? raw::fx::kTexOneDArray : 0;
     case MTLTextureType2DArray:
         return raw::fx::kTexTwoDArray;
     case MTLTextureTypeCube:
