@@ -53,6 +53,7 @@ TESTS: dict[str, bool] = {
             'gpu.draw.linked_function',
             'gpu.raw.storage_offset',
             'gpu.raw.pixel_sampler',
+            'gpu.raw.trace_ids',
             'metal.device',
             'metal.compute',
             'metal.render.color',

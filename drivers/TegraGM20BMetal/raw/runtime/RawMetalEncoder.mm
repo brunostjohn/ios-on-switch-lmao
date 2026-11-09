@@ -1,7 +1,21 @@
 // SPDX-License-Identifier: MIT
 #import "RawMetalInternal.h"
 
+// One count for every kind, as IOAccelDeviceGetNextGlobalTraceID is the device's
+uint64_t nextTraceId()
+{
+    static std::atomic<uint64_t> ids{0};
+    return ids.fetch_add(1, std::memory_order_relaxed) + 1;
+}
+
 @implementation RMEncoder
+
+- (uint64_t)globalTraceObjectID
+{
+    if (!_traceId)
+        _traceId = nextTraceId();
+    return _traceId;
+}
 
 - (id)rmTwin
 {

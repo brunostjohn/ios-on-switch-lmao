@@ -349,8 +349,13 @@ static inline void hit(RMCommandBuffer *cb, RMPred p, uint64_t a = 0, uint64_t b
 @public
     RMCommandBuffer *_cb;
     bool _ended;
+    uint64_t _traceId;
 }
 @end
+
+// The next of the device's trace object IDs, which its command buffers and encoders take at their first globalTraceObjectID
+// (RawMetalEncoder.mm)
+uint64_t nextTraceId();
 
 // A render encoder keeps what its draws need to decide, as they are recorded, whether the raw path draws them exactly as m2v
 // would: the state, each bound buffer's address, the textures, the pass's formats. A draw it would not is the command buffer's

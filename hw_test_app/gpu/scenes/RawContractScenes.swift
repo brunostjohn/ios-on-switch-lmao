@@ -128,3 +128,48 @@ struct PixelSamplerScene: GPUScene {
         return result
     }
 }
+
+/// globalTraceObjectID, which MPS asks of every encoder for its kdebug traces (cameracaptured's compute encoders were
+/// answered zero on boot 15): a command buffer, its blit encoder and its compute encoder each answer an ID of their
+/// own, the same one when asked again, and the command buffer stays raw. m2v's encoders have no such method.
+struct TraceIdScene: GPUScene {
+    let id = "gpu.raw.trace_ids"
+    let name = "Command buffers and encoders answer trace object IDs of their own"
+
+    func run(_ gpu: GPU) async throws -> SceneResult {
+        var result = SceneResult()
+        let selector = NSSelectorFromString("globalTraceObjectID")
+        func traceId(_ object: AnyObject) -> UInt64? {
+            guard object.responds(to: selector) else { return nil }
+            typealias Getter = @convention(c) (AnyObject, Selector) -> UInt64
+            return unsafeBitCast(object.method(for: selector), to: Getter.self)(object, selector)
+        }
+        let buffer = try gpu.buffer(256)
+        var asked: [(String, UInt64?, UInt64?)] = []
+        let timing = try await gpu.run { commands in
+            let blit = commands.makeBlitCommandEncoder()!
+            asked.append(("blit", traceId(blit), traceId(blit)))
+            blit.fill(buffer: buffer, range: 0..<256, value: 1)
+            blit.endEncoding()
+            let compute = commands.makeComputeCommandEncoder()!
+            asked.append(("compute", traceId(compute), traceId(compute)))
+            compute.endEncoding()
+            asked.append(("command buffer", traceId(commands), traceId(commands)))
+        }
+        let kind = RawFacade.kind(of: gpu.device)
+        var seen = Set<UInt64>()
+        for (label, first, again) in asked {
+            guard let first else {
+                result.expect(kind == "m2v", "\(label) has no globalTraceObjectID")
+                continue
+            }
+            result.expect(first != 0, "\(label) answered 0")
+            result.expect(first == again, "\(label) answered \(first), then \(again ?? 0)")
+            result.expect(seen.insert(first).inserted, "\(label) answered another object's ID \(first)")
+        }
+        result.metrics.set("ids", asked.map { "\($0.1 ?? 0)" }.joined(separator: ","))
+        result.metrics.set("path", timing.path)
+        if kind == "raw" { result.expect(timing.path == "raw", "drawn on \(timing.path)") }
+        return result
+    }
+}

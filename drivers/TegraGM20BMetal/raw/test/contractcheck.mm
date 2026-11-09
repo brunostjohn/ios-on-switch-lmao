@@ -8,6 +8,7 @@
 //   the bytes in it; and the buffers a compute pass names, as arguments and in arrays, are marked written by the GPU once it
 //   completes (on m2v, which the replay hands their twins), so the CPU's next read of them invalidates its cached lines; and a
 //   command buffer whose raw submission the kernel refused after part of it ran completes with an error, not replayed.
+//   Command buffers and their encoders answer globalTraceObjectID with IDs of their own, and stay raw.
 // - Either way: the queues' GPU priorities reach the kernel (Priority, method 18) as the most urgent any live queue asked for,
 //   with no m2v queue made for them.
 // usage: contractcheck <pack> <cache dir> [<nvk dylib>]
@@ -146,6 +147,36 @@ static void fillRaw(id<MTLDevice> dev)
         wrong += p[i] != (i >= 5 && i < 1005 ? 0x5a : 0xee);
     printf("a fill on the raw path: status %lu, %u bytes wrong\n", (unsigned long)cb.status, wrong);
     expect(cb.status == MTLCommandBufferStatusCompleted && !wrong, "it completes with its range filled");
+}
+
+// globalTraceObjectID (MPS's kdebug traces ask encoders): every command buffer and encoder answers its own nonzero ID from one
+// count, the same one each time, and asking keeps the command buffer raw
+static void traceIds(id<MTLDevice> dev)
+{
+    SEL trace = sel_registerName("globalTraceObjectID");
+    auto idOf = [&](id object) {
+        return ((uint64_t (*)(id, SEL))objc_msgSend)(object, trace);
+    };
+    id<MTLCommandQueue> q = [dev newCommandQueue];
+    id<MTLBuffer> b = [dev newBufferWithLength:256 options:MTLResourceStorageModeShared];
+    id<MTLCommandBuffer> cb = [q commandBuffer];
+    id<MTLBlitCommandEncoder> blit = [cb blitCommandEncoder];
+    const uint64_t ids[3] = {idOf(cb), idOf(blit), idOf(cb)};
+    [blit fillBuffer:b range:NSMakeRange(0, 256) value:1];
+    [blit endEncoding];
+    id<MTLComputeCommandEncoder> compute = [cb computeCommandEncoder];
+    const uint64_t computeId = idOf(compute);
+    [compute endEncoding];
+    [cb commit];
+    [cb waitUntilCompleted];
+    const char *path = ((NSString * (*)(id, SEL)) objc_msgSend)(cb, sel_registerName("switchRawPath")).UTF8String;
+    printf("trace IDs: command buffer %llu (again %llu), blit %llu, compute %llu; path %s\n",
+           (unsigned long long)ids[0], (unsigned long long)ids[2], (unsigned long long)ids[1],
+           (unsigned long long)computeId, path);
+    expect(ids[0] && ids[0] == ids[2] && ids[1] && computeId && ids[1] != ids[0] && computeId != ids[1] &&
+               computeId != ids[0] && idOf(blit) == ids[1],
+           "each answers its own nonzero ID, the same each time");
+    expect(cb.status == MTLCommandBufferStatusCompleted && !strcmp(path, "raw"), "the command buffer stays raw");
 }
 
 static void bytesWithoutRoom(id<MTLDevice> dev)
@@ -298,6 +329,7 @@ int main(int argc, char **argv)
             partialNotReplayed(dev);
         } else {
             fillRaw(dev);  // first: handlersRun refuses the raw channel for a second
+            traceIds(dev);
             handlersRun(dev);
             openEncoderFreed(dev);
         }
