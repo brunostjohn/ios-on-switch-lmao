@@ -15,7 +15,6 @@
 #include "raw_srgb_table.h"
 #include "raw_stamps.h"
 #include "raw_target.h"
-#include "raw_texture3d.h"
 #include "raw_tiled_cache.h"
 #include "TegraGM20BLayout.h"
 
@@ -3148,17 +3147,6 @@ bool RenderEncoder::drawIndexed(uint32_t primitive, uint32_t count, uint32_t ind
     return true;
 }
 
-static Texture3dBinding<Texture> texture3dOf(const PackPipeline &r, const Texture *const (&textures)[16])
-{
-    uint32_t named = 0;
-    for (uint32_t i = 0; i < r.entries; i++)
-        if (r.entry[i].kind == EntryTexture && r.entry[i].slot < 16)
-            named |= 1u << r.entry[i].slot;
-    return texture3dBinding(textures, 16, named, [](const Texture &t) {
-        return t.type == fx::kTexThreeD;
-    });
-}
-
 bool RenderEncoder::prepare(Pipeline *pl, uint32_t primitive, int32_t first, uint32_t vFirst, uint32_t vCount,
                             uint32_t baseInstance, bool indexed, const char **why)
 {
@@ -3303,17 +3291,16 @@ bool RenderEncoder::prepare(Pipeline *pl, uint32_t primitive, int32_t first, uin
             }
             tic = t ? t->tic : 0;
         } else if (e.kind == EntryTexture3d) {
-            const Texture3dBinding<Texture> v = texture3dOf(r, textures_);
-            if (v.ambiguous || (v.texture && !v.texture->tic)) {
-                *why = v.ambiguous
-                           ? "distinct 3D textures bound where the state's texture3d arguments cannot tell which "
-                             "takes which"
-                           : "a texture the raw path cannot sample";
-                const Texture *t = textures_[v.slot];
-                cb_->refusal = {RefNoTic, uint32_t(v.slot), t->format, t->width};
+            // a texture of another type there is no binding of the argument: m2v writes its neutral, raw an empty handle
+            const Texture *t = e.slot < 16 && textures_[e.slot] && textures_[e.slot]->type == fx::kTexThreeD
+                                   ? textures_[e.slot]
+                                   : nullptr;
+            if (t && !t->tic) {
+                *why = "a texture the raw path cannot sample";
+                cb_->refusal = {RefNoTic, e.slot, t->format, t->width};
                 return false;
             }
-            tic = v.texture ? v.texture->tic : 0;
+            tic = t ? t->tic : 0;
         }
         const uint8_t map = e.kind == EntryTexture && textures_[e.slot] ? textures_[e.slot]->addressMap : 0;
         if (e.samplerKind == SamplerSlot) {

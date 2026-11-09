@@ -238,7 +238,8 @@ EXPECTED_SKIPS = (
     "a buffer of m2v's own",
     'no fragment stage',
 )
-# raw_pack.h kNoSlot: a texture3d argument's Metal index, which the probe cannot tell (m2v binds its own 3D view there)
+# raw_pack.h kNoSlot: a texture3d argument's Metal index, which the probe cannot tell (m2v binds its own 3D view
+# there); the direct compile's records name it
 NO_SLOT = 0xFF
 
 

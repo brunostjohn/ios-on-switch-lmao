@@ -28,7 +28,7 @@ enum PackSectionId {
     PackSectionCount
 };
 
-constexpr uint32_t kPackVersion = 7;
+constexpr uint32_t kPackVersion = 8;
 
 struct PackHeader {
     char magic[8];                                    // "GM20BPK1"
@@ -63,8 +63,8 @@ enum PackEntryKind : uint8_t {
     EntryUbo = 1,
     EntryTexture = 2,
     EntryFetch = 3,
-    // A texture3d argument (Core Animation's colour cubes): m2v binds its own 3D view there, so the record knows no Metal
-    // index (slot kNoSlot); the state draws on raw while it samples nothing there (RenderEncoder::prepare)
+    // A texture3d argument (Core Animation's colour cubes) at fragment texture index `slot`; a texture of another type bound
+    // there leaves its handle empty (RenderEncoder::prepare). The warm-up probe's record has none (kNoSlot).
     EntryTexture3d = 4,
     // The colour table m2v's program reads to write an 8-bit sRGB colour target as Metal does (raw_srgb_table.h): a storage
     // buffer descriptor of the device's own copy
