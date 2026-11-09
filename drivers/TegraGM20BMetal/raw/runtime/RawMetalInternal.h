@@ -47,6 +47,8 @@ extern "C" id native_bridge_metal_render_pipeline_lazy(id device, id descriptor,
 struct switch_nvk_image_memory;
 extern "C" int native_bridge_metal_texture_memory(id texture, struct switch_nvk_image_memory *out)
     __attribute__((weak_import));
+// Why the bridge's last call on this thread failed (bridge/NativeMetalObjects.h)
+extern "C" const char *nmb_last_error(void) __attribute__((weak_import));
 
 // A wait the plugin bounds (r9-hang: r7n's and r7o's freezes were a userland wait with no end in backboardd's render thread):
 // past kWaitLimit, one line naming the wait and the object, then abort(), for a crash report with the stack instead of a silent
@@ -204,6 +206,8 @@ RMLibrary *wrapLibrary(id device, id<MTLLibrary> twin, NSString *path);
 // RawMetalHeap.mm: the purged heaps a committed command buffer's resources lie in, given their pages back before it is encoded
 // (it counts as committed already, so no purge runs meanwhile)
 void restoreArenas(RMCommandBuffer *cb);
+// A heap's pages back if it was purged (an m2v twin aliases them); true without a heap or an arena
+bool heapResident(RMHeap *h);
 
 // RawMetalTexture.mm
 void declareGpuWrites(RMTexture *t);
