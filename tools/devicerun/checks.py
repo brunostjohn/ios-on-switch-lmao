@@ -827,6 +827,14 @@ GROUPS: dict[str, list[Check]] = {
             note='boot 18: INIT retries, then "no server" and a 169.254 address',
         ),
         Check(
+            'wifi.connection-id-refused',
+            'r133-wifitx',
+            ('acknowledge Wi-Fi connection ID', 'APPLE80211_IOC_CONNECTION_ID)failed'),
+            process='configd',
+            source='drivers/SwitchWLAN/SwitchWLANApple80211.cpp',
+            note="boot 18: IPConfiguration's connection ID read and acknowledgement both answered -3903",
+        ),
+        Check(
             'wifi.dhcp-link-local',
             'r107-wifijoin',
             'LINKLOCAL en0: setting 169.254.',

@@ -151,6 +151,7 @@ class Rules(unittest.TestCase):
         self.assertEqual(got['wifi.tx-frames'].verdict, FAIL)
         self.assertEqual(got['wifi.dhcp-bound'].verdict, FAIL)
         self.assertEqual(got['wifi.dhcp-link-local'].verdict, FAIL)
+        self.assertEqual(got['wifi.connection-id-refused'].verdict, FAIL)
 
     def test_wifi_en0_sending_and_a_lease_pass(self):
         sent = {
@@ -160,7 +161,7 @@ class Rules(unittest.TestCase):
         records = []
         for record in devicerun.read_ndjson(str(TEST / 'wifi_boot18.ndjson')):
             message = record['eventMessage']
-            if message.startswith('LINKLOCAL') or 'no server' in message:
+            if any(gone in message for gone in ('LINKLOCAL', 'no server', 'connection ID', 'CONNECTION_ID')):
                 continue
             for prefix, (was, now) in sent.items():
                 if message.startswith(prefix):
@@ -172,6 +173,7 @@ class Rules(unittest.TestCase):
         self.assertEqual(got['wifi.tx-frames'].verdict, PASS)
         self.assertEqual(got['wifi.dhcp-bound'].verdict, PASS)
         self.assertEqual(got['wifi.dhcp-link-local'].verdict, PASS)
+        self.assertEqual(got['wifi.connection-id-refused'].verdict, PASS)
 
     @staticmethod
     def wifi(records: list[dict]) -> dict[str, rules.Result]:
