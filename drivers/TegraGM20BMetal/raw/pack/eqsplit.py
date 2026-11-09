@@ -19,12 +19,12 @@ UBO = re.compile(r'cb\d+ type=5 size=\w+ data=(\S+)$')
 
 
 def load(path: str) -> dict[str, dict]:
-    """Give the pack's splits by their whole program's id (pack.json)."""
+    """Give the pack's splits by their whole program's name as nvdec gives it (pack.json)."""
     if not path or not os.path.exists(path):
         return {}
     with open(path) as f:
         pack = json.load(f)
-    ids = [p['id'] for p in pack['programs']]
+    ids = [p.get('name', p['id']) for p in pack['programs']]
     return {
         ids[s['whole']]: {'fs': ids[s['fs']], 'prologue': ids[s['prologue']], 'ubos': s['ubo_cbufs']}
         for s in pack.get('splits', [])

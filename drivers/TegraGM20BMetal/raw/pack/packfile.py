@@ -124,6 +124,14 @@ def kernel_bytes(k: dict, key_offset: int) -> bytes:
     )
 
 
+def program_name(program: dict) -> str:
+    """Give the name nvdec gives a bound program: the FNV-1a of its header, code and shader data.
+
+    The pack's ids hold its constant buffer types too (directlink.py program_id), which nvdec cannot see.
+    """
+    return f'{fnv(program["image"] + program["data"]):x}'
+
+
 def place_graphics(
     pid: str, programs: dict[str, dict], heap: bytearray, prog_index: dict[str, int], prog_recs: list[dict]
 ) -> None:
@@ -142,6 +150,7 @@ def place_graphics(
     prog_recs.append(
         {
             'id': pid,
+            'name': program_name(pr),
             'heap_offset': off,
             'program': off + 0x30,
             'bytes': len(slot),
@@ -284,13 +293,17 @@ def entry_kind(e: dict) -> str:
     return 'u' if e['kind'] in ('ubo', 'color_table') else ('h' if e.get('smp') else 't')
 
 
+def name(program: dict) -> str:
+    return program.get('name', program['id'])
+
+
 def write_layouts(path: str, pack: Pack) -> None:
     # decoder table: pipeline set-0 layouts by program pair, so nvdec compares only the bytes a layout defines
     split = {s['whole']: s['fs'] for s in pack.splits}
     with open(path, 'w') as f:
         for rec in pack.pipes:
             slots = ' '.join(f'{e["off"]}:{entry_kind(e)}' for e in rec['entries'])
-            vs = pack.programs[rec['vs']]['id']
+            vs = name(pack.programs[rec['vs']])
             for fs in (rec['fs'], split.get(rec['fs'])):
                 if fs is not None:
-                    f.write(f'{vs} {pack.programs[fs]["id"]} {rec["set_size"]:x} {slots}\n')
+                    f.write(f'{vs} {name(pack.programs[fs])} {rec["set_size"]:x} {slots}\n')

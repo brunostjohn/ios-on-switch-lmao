@@ -13,6 +13,8 @@ import collections
 import os
 import re
 
+import packfile
+
 KPROBE = re.compile(r'KPROBE (\d+) tg=(\d+),(\d+),(\d+) grid=(\d+),\S+ key=(.*)$')
 TAG_BYTES = 4096
 TEXTURE_TAG = (16, 8)
@@ -186,6 +188,7 @@ def lay_out(kernels: list[dict], programs: dict[str, dict], heap: bytearray, pro
             prog_recs.append(
                 {
                     'id': pid,
+                    'name': packfile.program_name(pr),
                     'heap_offset': off,
                     'program': off,
                     'bytes': len(slot),
