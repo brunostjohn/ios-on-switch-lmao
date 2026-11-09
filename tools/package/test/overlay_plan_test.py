@@ -45,11 +45,15 @@ class KindTest(unittest.TestCase):
     def released(self) -> list[dict]:
         return [e for e in self.manifest['files'] if not e.get('debug')]
 
+    @staticmethod
+    def union(entry: dict) -> str:
+        return entry.get('union', entry['path'].rpartition('/')[0])
+
     def test_each_kind_unions_only_its_own_bundles(self):
-        shared = {e['path'].rpartition('/')[0] for e in self.released() if 'kind' not in e}
+        shared = {self.union(e) for e in self.released() if 'kind' not in e}
         for kind in KINDS:
-            mine = {e['path'].rpartition('/')[0] for e in self.released() if e.get('kind') == kind}
-            others = {e['path'].rpartition('/')[0] for e in self.released() if e.get('kind', kind) != kind} - shared
+            mine = {self.union(e) for e in self.released() if e.get('kind') == kind}
+            others = {self.union(e) for e in self.released() if e.get('kind', kind) != kind} - shared
             dirs = {d for d, _ in self.plan(kind)['dirs']}
             self.assertLessEqual(mine, dirs, kind)
             self.assertFalse(others & dirs, kind)
