@@ -1,7 +1,7 @@
 # raw's API inventory, written by raw/test/selcover (SELCOVER_WRITE=1; selcover_inventory.h says what each
 # column holds): container, item, selector, m2v, sent by, raw
-# m2v's items: base 5 m2v 13 m2vobj 35 none 65 raw 236 read 292 refused 163 unread 201 zero 47
-# sent selectors: base 88 m2v 25 m2vobj 44 none 8 raw 440 refused 56 zero 154
+# m2v's items: base 5 m2v 11 m2vobj 35 none 65 raw 238 read 292 refused 163 unread 201 zero 47
+# sent selectors: base 88 m2v 23 m2vobj 44 none 8 raw 442 refused 56 zero 154
 MTLArgument	access	access	I	-	read
 MTLArgument	active	isActive	I	-	unread
 MTLArgument	arrayLength	arrayLength	I	-	read
@@ -576,8 +576,8 @@ MTLDevice	convertSparsePixelRegions:toTileRegions:withTileSize:alignmentMode:num
 MTLDevice	convertSparseTileRegions:toPixelRegions:withTileSize:numRegions:	convertSparseTileRegions:toPixelRegions:withTileSize:numRegions:	I	-	refused
 MTLDevice	depth24Stencil8PixelFormatSupported	isDepth24Stencil8PixelFormatSupported	I	-	raw
 MTLDevice	hasUnifiedMemory	hasUnifiedMemory	I	21H461,24B119	raw
-MTLDevice	heapBufferSizeAndAlignWithLength:options:	heapBufferSizeAndAlignWithLength:options:	I	21H461,24B119	m2v
-MTLDevice	heapTextureSizeAndAlignWithDescriptor:	heapTextureSizeAndAlignWithDescriptor:	I	21H461,24B119	m2v
+MTLDevice	heapBufferSizeAndAlignWithLength:options:	heapBufferSizeAndAlignWithLength:options:	I	21H461,24B119	raw
+MTLDevice	heapTextureSizeAndAlignWithDescriptor:	heapTextureSizeAndAlignWithDescriptor:	I	21H461,24B119	raw
 MTLDevice	maxBufferLength	maxBufferLength	I	21H461,24B119	raw
 MTLDevice	maxThreadgroupMemoryLength	maxThreadgroupMemoryLength	I	21H461,24B119	raw
 MTLDevice	maxThreadsPerThreadgroup	maxThreadsPerThreadgroup	I	21H461,24B119	raw

@@ -352,6 +352,7 @@ id<MTLDevice> raw_metal_device_open(const char *packPath, uint64_t stack, id<MTL
     gRawRelease.start(
         [](void *) {
             gRM->raw->trim();
+            gRM->raw->purgeArenas(gRM->committed);
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
             logGivenBack();
 #endif

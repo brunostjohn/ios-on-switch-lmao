@@ -433,7 +433,9 @@ void commitBuffer(RMCommandBuffer *cb)
     raw::followers().committing();
     planSegments(cb);
     RawState &r = *gRM;
-    r.committed.fetch_add(1, std::memory_order_relaxed);
+    r.committed.fetch_add(1);
+    if (r.raw->purgedArenas())
+        restoreArenas(cb);
     if (waitsForEvent(cb)) {
         std::lock_guard<std::mutex> h(gHoldersLock);
         gHolders.insert(cb);

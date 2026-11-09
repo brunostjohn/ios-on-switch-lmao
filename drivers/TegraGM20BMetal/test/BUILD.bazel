@@ -41,6 +41,8 @@
 #                     (raw/test/samplercheck: their headers against NVK's)
 #   raw_archive_test  raw/runtime/raw_archive.h: the binary archive files the device opens where m2v's reader does not
 #                     (iOS 27's thin Apple GPU binaries), as Metal opens a file of another GPU's binaries
+#   raw_heap_test     raw/runtime/raw_heap.h: an MTLHeap's placements in its one span, Metal's contract (a full heap
+#                     answers nil, aliasable ranges are taken again, usedSize and maxAvailableSizeWithAlignment)
 #   raw_residual_test raw/runtime/raw_residual.h: a buffer bound off m2v's descriptor base alignment (16 bytes for a
 #                     storage buffer, 256 for a uniform one) at the aligned base with its SlotBindOffset residual in the
 #                     push word raw/pack/probe_bind.h's bind-offset run names
@@ -338,6 +340,15 @@ host_test(
     srcs = [
         "raw_archive_test.cpp",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_archive.h",
+    ],
+    cxx_std = "c++17",
+)
+
+host_test(
+    name = "raw_heap_test",
+    srcs = [
+        "raw_heap_test.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_heap.h",
     ],
     cxx_std = "c++17",
 )

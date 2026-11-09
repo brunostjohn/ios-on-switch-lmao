@@ -35,6 +35,7 @@
 #include <mach/kern_return.h>
 #include "raw_comp.h"
 #include "raw_kernel.h"
+#include "raw_heap.h"
 #include "raw_pack.h"
 #include "raw_push.h"
 #include "raw_overlap.h"
@@ -57,12 +58,14 @@ constexpr uint32_t kPteKindPitch = 0;
 
 struct Lease;  // raw_alias.cpp
 
-// Where memory comes from: the pool, the write-combined GPU pool, an import, the block-linear chunks (kind 0xFE)
+// Where memory comes from: the pool, the write-combined GPU pool, an import, the block-linear chunks (kind 0xFE), an MTLHeap's
+// span (raw_arena.cpp)
 enum class Memory : uint8_t {
     Pool,
     Wc,
     Import,
-    Bl
+    Bl,
+    Arena
 };
 
 // Memory of the raw path an m2v view uses in place (RawMetal.mm's twins), as NVK takes it (switch_nvk_import_foreign): the BO
@@ -84,6 +87,11 @@ struct FormatInfo {
 };
 
 const FormatInfo *formatInfo(uint32_t mtlPixelFormat);
+
+// A texture of this size and format the raw path can lay out: `t` reset to it, with no memory yet
+bool shape(uint32_t width, uint32_t height, uint32_t format, Texture &t);
+
+constexpr uint64_t kBlAlign = 16384;  // NVK's image alignment here (r12-cafx niloracle), a multiple of NIL's
 
 // An import of this task's pages into the GPU VM, shared by everything over them.
 struct Import {
@@ -213,6 +221,7 @@ struct Texture {
     // Device::createView's: a header of its own over its parent's memory. Whatever else it was copied from the parent with
     // (planes, stand-ins, images) stays the parent's, which outlives it: destroyTexture frees its header alone.
     bool view = false;
+    bool arena = false;  // its span is an MTLHeap's (Device::arenaTexture): span.chunk names the arena
 };
 
 struct Buffer {
@@ -225,6 +234,7 @@ struct Buffer {
     Import *import = nullptr;  // a caller's no-copy pages, else
     Span span;                 // pool memory
     Lease *lease = nullptr;    // as Texture::lease
+    bool arena = false;        // as Texture::arena
 };
 
 // Level `level` (1 .. levels - 1) of mipmapped texture `t`'s chain as a render target (raw_target.h: NVK's block-linear
@@ -763,6 +773,38 @@ public:
     bool createBufferNoCopy(void *bytes, uint64_t length, Buffer &b);
     void destroyBuffer(Buffer &b);
 
+    // MTLHeaps (raw_arena.cpp): an arena is one GPU VA reservation bound whole to host pages of its own, under
+    // TGM_LAYOUT_KIND for a private heap's block-linear textures or pitch for a shared heap's textures and buffers, its
+    // resources placed in it (raw_heap.h). Purged, its pages go back and its VA and CPU range stay reserved, so restoring it
+    // binds fresh pages where its resources' addresses and texture headers already point.
+    bool createArena(uint64_t bytes, bool blockLinear, uint32_t &arena);
+    void destroyArena(uint32_t arena);  // once its resources are gone; an m2v view's lease keeps it until its last drop
+    bool arenaTexture(uint32_t arena, uint32_t width, uint32_t height, uint32_t format, Texture &t);
+    bool arenaBuffer(uint32_t arena, uint64_t length, Buffer &b);
+    // makeAliasable: the range goes back for later placements (at an m2v view's last drop, if one aliases it)
+    void arenaRelease(Texture &t);
+    void arenaRelease(Buffer &b);
+    uint64_t arenaUsed(uint32_t arena);
+    uint64_t arenaLargestFree(uint32_t arena, uint64_t align);
+    // What an arena texture of this shape takes; false: it is placed nowhere (the heap makes it as the device does)
+    static bool arenaFootprint(uint32_t width, uint32_t height, uint32_t format, bool blockLinear, uint64_t &bytes,
+                               uint64_t &align);
+    // Volatile arenas give their pages back at purgeArenas: once every submission completed, no m2v view holds them and
+    // `committed` (the caller's command buffers committed and unfinished) is 0. A commit adds to it before it reads
+    // purgedArenas() and the purge counts itself there before it reads `committed`, both sequentially consistent, so one of
+    // them sees the other: the commit restores what it reaches, or the purge does not happen.
+    void setArenaVolatile(uint32_t arena, bool isVolatile);
+    void purgeArena(uint32_t arena, const std::atomic<uint32_t> &committed);
+    void purgeArenas(const std::atomic<uint32_t> &committed);
+    bool arenaPurged(uint32_t arena);
+    // Fresh pages where it was (their contents zero); false: no memory, it stays purged
+    bool restoreArena(uint32_t arena);
+
+    uint32_t purgedArenas() const
+    {
+        return purgedArenas_.load();
+    }
+
     // The memory an m2v view of t (a pool or write-combined texture) or b uses in place, one hold taken for the caller (raw_alias.cpp).
     // False: nothing to alias (memoryless, a view's memory), or the connection is not NVK's.
     bool alias(Texture &t, Alias &a);
@@ -1096,6 +1138,23 @@ private:
         tiledFree(blChunks_, s);
     }
 
+    struct Arena {
+        uint64_t va = 0, bytes = 0;
+        uint32_t kind = 0;
+        uint8_t *cpu = nullptr;  // its host range, reserved for good; its pages wired and bound unless purged
+        Bo bo;
+        HeapPlacement place;
+        uint32_t leases = 0;  // m2v views of its resources (raw_alias.cpp): never purged or freed under one
+        bool used = false, isVolatile = false, purged = false, dying = false;
+    };
+
+    std::vector<Arena> arenas_;
+    std::atomic<uint32_t> purgedArenas_{0};
+    bool bindArena(Arena &a);  // lock_ held
+    void freeArena(Arena &a);  // lock_ held
+    void arenaFree(Span &s);   // lock_ held
+    bool aliasArena(const Span &s, Lease *&lease, Alias &a);
+
     // a span of chunks bound with PTE kind `kind` (block-linear images), lock_ held
     bool tiledAlloc(std::vector<Chunk> &chunks, uint32_t kind, uint64_t bytes, uint64_t align, Span &s);
     void tiledFree(std::vector<Chunk> &chunks, Span &s);
@@ -1166,7 +1225,7 @@ private:
 
     static Memory memoryOf(const Texture &t)
     {
-        return t.blockLinear ? Memory::Bl : t.wc ? Memory::Wc : Memory::Pool;
+        return t.arena ? Memory::Arena : t.blockLinear ? Memory::Bl : t.wc ? Memory::Wc : Memory::Pool;
     }
 
     // A memoryless color attachment j's memory (tag kMemorylessTag + j: two of a pass never share one), a shadow target's pool

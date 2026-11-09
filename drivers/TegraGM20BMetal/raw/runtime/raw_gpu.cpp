@@ -1131,7 +1131,7 @@ static bool linearTarget(const Texture &t)
     return !((t.va | t.pitch) & 127);
 }
 
-static bool shape(uint32_t width, uint32_t height, uint32_t format, Texture &t)
+bool shape(uint32_t width, uint32_t height, uint32_t format, Texture &t)
 {
     const FormatInfo *f = formatInfo(format);
     if (!f || !width || !height || width > 16384 || height > 16384)
@@ -1522,8 +1522,6 @@ bool Device::createMemoryless(uint32_t width, uint32_t height, uint32_t format, 
 
 // ---- block-linear memory (raw/fx mip chains: kind 0xFE; zeta: kZetaPteKind), made on demand ----
 
-constexpr uint64_t kBlAlign = 16384;  // NVK's image alignment here (r12-cafx niloracle), a multiple of NIL's
-
 bool Device::tiledAlloc(std::vector<Chunk> &chunks, uint32_t kind, uint64_t bytes, uint64_t align, Span &s)
 {
     align = std::max(align, kBlAlign);
@@ -1861,7 +1859,7 @@ void Device::destroyBuffer(Buffer &b)
     std::lock_guard<std::mutex> l(lock_);
     if (b.import)
         release(b.import);
-    freeSpan(b.span, b.wc ? Memory::Wc : Memory::Pool, b.lease);
+    freeSpan(b.span, b.arena ? Memory::Arena : b.wc ? Memory::Wc : Memory::Pool, b.lease);
     b = {};
 }
 
