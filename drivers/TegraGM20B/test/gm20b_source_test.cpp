@@ -8,7 +8,7 @@
 //    the copy engine zeroed it; the scrubber gives a range back clean only from its fence's interrupt pass, never waits
 //    on the CPU, and panics with one line on a range not back in time;
 //  - the user client reads pushes only through TegraGM20BPushScan.h and profiles only what it read;
-//  - a fence-only present (direct scanout) copies nothing.
+//  - a fence-only present (direct scanout) copies nothing, and the debug read-back rides the frame's own present.
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
@@ -378,6 +378,39 @@ TEST(GM20BPresentSource, PresentWaitsForWindowBsWritersToo)
 	EXPECT_THAT(fence, Not(HasSubstr("presentSurface(")));
 }
 
+// The scanout read-back (TegraGM20BReadbackABI.h) rides the frame's own present: a submission of its own would hold the
+// present channel, which then refuses the display's next offer, and the display copies that frame on the CPU. Its copies
+// run after the frame's copy, each after the copies before it, into pitch-linear buffers, and before the fence; a refused
+// present gives the read-back back; its completion, in the GPU interrupt pass, takes no lock and touches no cache; and a
+// release kernel has none of it.
+TEST(GM20BPresentSource, ReadbackRidesTheFramesPresent)
+{
+	const std::string copy = flat(Between(gpu(), "static int present_copy(", "\n}\n"));
+	expectBefore(copy, "if (dst_va) {", "present_push_reads(push, reads, nreads);");
+	expectBefore(copy, "present_push_reads(push, reads, nreads);", "chan_fence(chan);");
+	EXPECT_THAT(copy, HasSubstr("nreads * TGM_PRESENT_READ_DWORDS"));
+	const std::string reads = flat(Between(gpu(), "static void present_push_reads(", "\n}\n"));
+	EXPECT_THAT(reads, HasSubstr("NVB0B5_LAUNCH_DMA_NON_PIPELINED"));
+	EXPECT_THAT(reads, HasSubstr("NVB0B5_LAUNCH_DMA_DST_PITCH"));
+	expectBefore(gpu(), "#if TGM_STATS\n/* Each read-back", "static void present_push_reads(");
+
+	const std::string scanout =
+		flat(Between(client(), "extern \"C\" int tegra_gm20b_scanout_copy(", "\n}\n"));
+	expectBefore(scanout, "#if TGM_STATS tgm_present_read reads",
+		     "#else ret = tgm_present_copy(");
+	EXPECT_THAT(scanout, HasSubstr("nreads ? tgm_readback_done : presentDone"));
+	EXPECT_THAT(scanout, HasSubstr("if (ret && nreads) tgm_readback_refused();"));
+
+	const std::string readback = SourceText("../TegraGM20BReadback.cpp");
+	const std::string done =
+		flat(definition(readback, "void tgm_readback_done(void *display, int status)"));
+	EXPECT_THAT(done, HasSubstr("native_legacy_gpu_complete(display, status);"));
+	EXPECT_THAT(done, Not(HasSubstr("IOLock")));
+	EXPECT_THAT(done, Not(HasSubstr("tgm_cpu_clean_pages")));
+	expectBefore(readback, "#include \"TegraGM20BReadback.h\"\n\n#if TGM_STATS\n", "namespace");
+	EXPECT_EQ(readback.substr(readback.size() - 7), "#endif\n");
+}
+
 // A tiled (block-linear) source: the copy engine reads it block-linear with the tiled block height, never as pitch, through
 // a mapping of the kind its texels were written under; a surface's layout comes from its decision (SurfaceLayout), never
 // from how one client bound it.
@@ -405,9 +438,9 @@ TEST(GM20BSleepSource, GpuTouchingPathsGoThroughTheGate)
 		const std::string body = flat(definition(gpu(), waits));
 		expectBefore(body, "gate_enter();", "gate_leave();");
 	}
-	for (const char *refused :
-	     {"int tgm_present_copy(", "int tgm_pool_scrub(uint64_t pa, uint64_t bytes)",
-	      "static void scrub_work(void *arg)"}) {
+	for (const char *refused : {"int tgm_present_copy(", "int tgm_present_copy_read(",
+				    "int tgm_pool_scrub(uint64_t pa, uint64_t bytes)",
+				    "static void scrub_work(void *arg)"}) {
 		const std::string body = flat(definition(gpu(), refused));
 		expectBefore(body, "if (!gate_try())", "gate_leave();");
 	}

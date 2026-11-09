@@ -14,6 +14,13 @@ import UIKit
 /// bar= is the bar's bottom edge in pixels. pocket= is the mean difference x 255 between the two pictures from the top
 /// to 40 points below the bar: 0 means the snapshot holds no edge effect, and without purple rows the test skips.
 /// Any purple row fails it. The list holds greys, white and system blue, none of which passes.
+///
+/// With the edge effect shown, a debug kernel's scanout read-back (ScanoutReadback) also gives the frame's
+/// framebuffer (what backboardd rendered for the panel, before the display's copy) and its scanout buffer (what window A
+/// scans), judged the same way: framebuffer_rows/at, scanout_rows/at. stage= is the first of render, framebuffer and
+/// scanout with purple rows; "none" puts a strip the panel shows after the scanout buffer (the display controller's
+/// colour pipeline or window B, or the panel). copy_rows= counts the rows the display's copy changed (it moves bytes:
+/// any is a failure); direct=1 when window A scans the framebuffer itself. readback= is ok or why there is none.
 struct PocketStripTest: HWTest {
     let id = "display.pocket_strip"
     let name = "Navigation bar scroll edge effect: purple rows, shown and hidden"
@@ -23,15 +30,18 @@ struct PocketStripTest: HWTest {
         var metrics = Metrics()
         var reasons: [String] = []
         var pictures: [Raster] = []
+        var saved: [(String, Raster)] = []
         var bar = 0
         for (name, hidden) in [("shown", false), ("hidden", true)] {
-            let (picture, barBottom) = await Self.snapshot(context, hidden: hidden)
+            let (picture, barBottom, view) = await Self.snapshot(context, hidden: hidden)
             let rows = Self.purpleRows(picture)
             metrics.set(name + "_rows", rows.count)
             metrics.set(name + "_at", Self.ranges(rows))
             if !rows.isEmpty { reasons.append("\(rows.count) purple rows with the edge effect \(name)") }
             pictures.append(picture)
+            saved.append((name, picture))
             bar = barBottom
+            if !hidden { saved += await Self.readBack(view, renderRows: rows, &metrics, &reasons) }
         }
         metrics.set("bar", bar)
         let scale = await MainActor.run { UIScreen.main.scale }
@@ -41,7 +51,7 @@ struct PocketStripTest: HWTest {
         if !reasons.isEmpty {
             let directory = context.documents.appendingPathComponent("ui").appendingPathComponent(id)
             try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-            for (name, picture) in zip(["shown", "hidden"], pictures) {
+            for (name, picture) in saved {
                 try? picture.png()?.write(to: directory.appendingPathComponent("\(name).png"))
             }
             return .fail(LogLine.fitted(reasons), metrics)
@@ -50,8 +60,56 @@ struct PocketStripTest: HWTest {
         return .pass(metrics)
     }
 
-    /// The composited picture and the navigation bar's bottom edge in its pixels.
-    static func snapshot(_ context: TestContext, hidden: Bool) async -> (Raster, Int) {
+    /// The framebuffer and scanout buffer of a frame of the list on stage, judged as its render was; the pictures to
+    /// save on a failure.
+    static func readBack(
+        _ view: UIView, renderRows: [Int], _ metrics: inout Metrics, _ reasons: inout [String]
+    ) async
+        -> [(String, Raster)]
+    {
+        let result = await ScanoutReadback.capture(nudge: { nudge(view) })
+        guard case .frame(let frame) = result else {
+            if case .unavailable(let why) = result { metrics.set("readback", why) }
+            if !renderRows.isEmpty { metrics.set("stage", "render") }
+            return []
+        }
+        metrics.set("readback", "ok")
+        metrics.set("direct", frame.direct)
+        metrics.set("copy_rows", frame.copyRows)
+        var stage = renderRows.isEmpty ? nil : "render"
+        let images = [("framebuffer", frame.framebuffer), ("scanout", frame.scanout)]
+        for (name, image) in images {
+            let rows = purpleRows(image)
+            metrics.set(name + "_rows", rows.count)
+            metrics.set(name + "_at", ranges(rows))
+            if !rows.isEmpty {
+                reasons.append("\(rows.count) purple rows in the \(name)")
+                stage = stage ?? name
+            }
+        }
+        metrics.set("stage", stage ?? "none")
+        if !frame.direct && frame.copyRows > 0 { reasons.append("the display's copy changed \(frame.copyRows) rows") }
+        return images
+    }
+
+    /// A grey dot in the corner, toggled: the render server draws a frame for it, which the display then presents.
+    @MainActor
+    static func nudge(_ view: UIView) {
+        let tag = 0x5242
+        let dot =
+            view.viewWithTag(tag)
+            ?? {
+                let dot = UIView(frame: CGRect(x: view.bounds.maxX - 4, y: view.bounds.maxY - 4, width: 2, height: 2))
+                dot.tag = tag
+                dot.backgroundColor = .gray
+                view.addSubview(dot)
+                return dot
+            }()
+        dot.alpha = dot.alpha == 1 ? 0.9 : 1
+    }
+
+    /// The composited picture, the navigation bar's bottom edge in its pixels, and the view on stage.
+    static func snapshot(_ context: TestContext, hidden: Bool) async -> (Raster, Int, UIView) {
         let host = await context.onStage(fullScreen: true) { stage -> UIHostingController<PocketList> in
             let host = UIHostingController(rootView: PocketList(hidden: hidden))
             host.view.frame = Snapshots.aligned(UIScreen.main.bounds)
@@ -68,7 +126,7 @@ struct PocketStripTest: HWTest {
         return await MainActor.run {
             let view = host.view!
             let bar = first(UINavigationBar.self, in: view).map { $0.convert($0.bounds, to: view).maxY } ?? 0
-            return (Snapshots.composited(view), Int((bar * (view.window?.screen.scale ?? 1)).rounded()))
+            return (Snapshots.composited(view), Int((bar * (view.window?.screen.scale ?? 1)).rounded()), view)
         }
     }
 

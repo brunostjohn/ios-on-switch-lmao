@@ -388,9 +388,27 @@ void tgm_coherency_tiled_bind(struct tgm_coh *c, int add);
 #else
 #define TGM_STATS 0
 #endif
+/* Debug kernels: copies a present runs after its frame's copy and before its fence (TegraGM20BReadback.cpp), each into a
+ * pitch-linear destination dst_pitch bytes across, width x 4 bytes of height lines, from a pitch source (src_block_log2
+ * < 0: src_pitch bytes per row) or a block-linear one (8-line GOBs, blocks one GOB wide and 2^src_block_log2 high,
+ * src_pitch bytes across). tgm_present_copy_read is tgm_present_copy with them. A release kernel has the type only. */
+struct tgm_present_read {
+	uint64_t src_va, dst_va;
+	uint32_t src_pitch, dst_pitch, width, height;
+	int32_t src_block_log2;
+	uint32_t reserved;
+};
+
+#define TGM_PRESENT_READS 2
+
 #if TGM_STATS
 /* Debug kernels: clock gating on (1) or off (0), for the A/B (TegraGM20B.cpp's debug.switch_gpu_clkgate). 0 or -EBUSY. */
 int tgm_clkgate_switch(int on);
+
+int tgm_present_copy_read(uint64_t src_va, uint64_t src_pa, uint64_t also_pa, uint64_t stride,
+			  int src_block, uint32_t width, uint32_t height, uint64_t dst_va,
+			  uint32_t dst_pitch, uint32_t block_height_log2, void (*done)(void *, int),
+			  void *arg, const struct tgm_present_read *reads, uint32_t nreads);
 #endif
 /* The stats: one log line per 5 s of submissions (submits, fence latency, imports, pool, MC errors).
  * tgm_stats_import(+bytes, first page) for each host import made, (-bytes, first page) for each one released. */

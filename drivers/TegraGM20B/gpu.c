@@ -4668,6 +4668,7 @@ int tgm_chan_exec(struct tgm_chan *chan, const struct tgm_push *pushes, uint32_t
 #define NVB0B5_LAUNCH_DMA_FLUSH_ENABLE (1u << 2)
 #define NVB0B5_LAUNCH_DMA_SRC_PITCH (1u << 7)       /* SRC_MEMORY_LAYOUT 7:7, PITCH 1 */
 #define NVB0B5_LAUNCH_DMA_DST_BLOCKLINEAR (0u << 8) /* DST_MEMORY_LAYOUT 8:8, BLOCKLINEAR 0 */
+#define NVB0B5_LAUNCH_DMA_DST_PITCH (1u << 8)
 #define NVB0B5_LAUNCH_DMA_MULTI_LINE (1u << 9)
 #define NVB0B5_OFFSET_IN_UPPER 0x0400
 #define NVB0B5_OFFSET_IN_LOWER 0x0404
@@ -4691,6 +4692,8 @@ int tgm_chan_exec(struct tgm_chan *chan, const struct tgm_push *pushes, uint32_t
 #define NVB0B5_SET_SRC_DEPTH 0x0734
 #define NVB0B5_SET_SRC_LAYER 0x0738
 #define NVB0B5_SET_SRC_ORIGIN 0x073c
+/* a read-back's pushes (present_push_reads): 9 + 7 + 2 */
+#define TGM_PRESENT_READ_DWORDS 18
 #define TGM_PRESENT_NS \
 	(1000 *        \
 	 NSEC_PER_MSEC) /* as the display's own limit: compositor jobs up to ~90 ms were seen */
@@ -4953,10 +4956,45 @@ static int present_imports(const struct tgm_chan *user, uint64_t src_pa, uint64_
 	return vm_imports(user->vm, src_pa) || (also_pa && vm_imports(user->vm, also_pa));
 }
 
+#if TGM_STATS
+/* Each read-back waits for the copies before it (NON_PIPELINED: the scanout buffer is read after the frame's copy wrote
+ * it); the fence after them flushes their writes past the L2. */
+static void present_push_reads(struct nvif_push *push, const struct tgm_present_read *reads, u32 n)
+{
+	u32 i = 0;
+
+	for (i = 0; i < n; i++) {
+		const struct tgm_present_read *r = &reads[i];
+		const int block = r->src_block_log2 >= 0;
+
+		/* nouveau's NVDEF/NVVAL/PUSH_* macros compute in int and repeat their branches. */
+		/* NOLINTBEGIN(bugprone-signed-bitwise,bugprone-branch-clone) */
+		PUSH_NVSQ(push, NVA0B5, NVB0B5_OFFSET_IN_UPPER, upper_32_bits(r->src_va),
+			  NVB0B5_OFFSET_IN_LOWER, lower_32_bits(r->src_va), NVB0B5_OFFSET_OUT_UPPER,
+			  upper_32_bits(r->dst_va), NVB0B5_OFFSET_OUT_LOWER,
+			  lower_32_bits(r->dst_va), NVB0B5_PITCH_IN, block ? 0 : r->src_pitch,
+			  NVB0B5_PITCH_OUT, r->dst_pitch, NVB0B5_LINE_LENGTH_IN, r->width * 4,
+			  NVB0B5_LINE_COUNT, r->height);
+		if (block) {
+			PUSH_NVSQ(push, NVA0B5, NVB0B5_SET_SRC_BLOCK_SIZE,
+				  NVB0B5_BLOCK_SIZE_FERMI_8((u32)r->src_block_log2),
+				  NVB0B5_SET_SRC_WIDTH, r->src_pitch, NVB0B5_SET_SRC_HEIGHT,
+				  r->height, NVB0B5_SET_SRC_DEPTH, 1, NVB0B5_SET_SRC_LAYER, 0,
+				  NVB0B5_SET_SRC_ORIGIN, 0);
+		}
+		PUSH_NVSQ(push, NVA0B5, NVB0B5_LAUNCH_DMA,
+			  NVB0B5_LAUNCH_DMA_NON_PIPELINED | NVB0B5_LAUNCH_DMA_FLUSH_ENABLE |
+				  (block ? 0 : NVB0B5_LAUNCH_DMA_SRC_PITCH) |
+				  NVB0B5_LAUNCH_DMA_DST_PITCH | NVB0B5_LAUNCH_DMA_MULTI_LINE);
+		/* NOLINTEND(bugprone-signed-bitwise,bugprone-branch-clone) */
+	}
+}
+#endif
+
 static int present_copy(uint64_t src_va, uint64_t src_pa, uint64_t also_pa, uint64_t stride,
 			int src_block, uint32_t width, uint32_t height, uint64_t dst_va,
 			uint32_t dst_pitch, uint32_t block_height_log2, void (*done)(void *, int),
-			void *arg)
+			void *arg, const struct tgm_present_read *reads, u32 nreads)
 {
 	struct tgm_chan *chan = present.chan;
 	struct tgm_chan *user = NULL;
@@ -4984,9 +5022,10 @@ static int present_copy(uint64_t src_va, uint64_t src_pa, uint64_t also_pa, uint
 	list_for_each_entry(user, &live_chans, live) room += room < TGM_SYNC_MAX && !user->kernel;
 	mutex_unlock(&live_lock);
 	push = &chan->chan.push;
-	ret = chan_push_wait(
-		chan, room * 5 + 47 +
-			      CHAN_FENCE_DWORDS); /* acquires, a start stamp, the copy, the fence */
+	ret = chan_push_wait(chan,
+			     room * 5 + 47 + nreads * TGM_PRESENT_READ_DWORDS +
+				     CHAN_FENCE_DWORDS); /* acquires, a start stamp, the copy, the
+								  read-backs, the fence */
 	if (ret == -ETIMEDOUT) {
 		tgm_chan_stalled(chan, "present: push buffer still full after 1 s", chan->submitted,
 				 NSEC_PER_SEC);
@@ -5061,6 +5100,10 @@ static int present_copy(uint64_t src_va, uint64_t src_pa, uint64_t also_pa, uint
 				  NVB0B5_LAUNCH_DMA_DST_BLOCKLINEAR | NVB0B5_LAUNCH_DMA_MULTI_LINE);
 		/* NOLINTEND(bugprone-signed-bitwise,bugprone-branch-clone) */
 	}
+#if TGM_STATS
+	if (nreads)
+		present_push_reads(push, reads, nreads);
+#endif
 	/* set before the kick: the nonstall interrupt can come before chan_fence returns */
 	present.done = done;
 	present.arg = arg;
@@ -5089,10 +5132,29 @@ int tgm_present_copy(uint64_t src_va, uint64_t src_pa, uint64_t also_pa, uint64_
 	if (!gate_try())
 		return -EBUSY;
 	ret = present_copy(src_va, src_pa, also_pa, stride, src_block, width, height, dst_va,
-			   dst_pitch, block_height_log2, done, arg);
+			   dst_pitch, block_height_log2, done, arg, NULL, 0);
 	gate_leave();
 	return ret;
 }
+
+#if TGM_STATS
+int tgm_present_copy_read(uint64_t src_va, uint64_t src_pa, uint64_t also_pa, uint64_t stride,
+			  int src_block, uint32_t width, uint32_t height, uint64_t dst_va,
+			  uint32_t dst_pitch, uint32_t block_height_log2, void (*done)(void *, int),
+			  void *arg, const struct tgm_present_read *reads, uint32_t nreads)
+{
+	int ret = 0;
+
+	if (nreads > TGM_PRESENT_READS)
+		return -EINVAL;
+	if (!gate_try())
+		return -EBUSY;
+	ret = present_copy(src_va, src_pa, also_pa, stride, src_block, width, height, dst_va,
+			   dst_pitch, block_height_log2, done, arg, reads, nreads);
+	gate_leave();
+	return ret;
+}
+#endif
 
 /* pool scrub: the copy engine zeroes pool pages:
  * The CPU would spend 0.3 s of every boot zeroing the pool at M1 (256 MiB through the write-combined aperture), and a
