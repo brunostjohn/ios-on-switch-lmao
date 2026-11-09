@@ -5530,6 +5530,23 @@ static bool computeDescriptor(MTLComputePipelineDescriptor *d, NmbComputePipelin
     return true;
 }
 
+extern "C" bool native_bridge_metal_compute_direct(id descriptor, const struct NmbDirectDispatch *dispatch,
+                                                   bool (*each)(const struct NmbDirectKernel *, void *), void *ctx,
+                                                   const char **why)
+{
+    NmbComputePipelineDescriptor p = {};
+    std::vector<NmbFunction *> linked;
+    NSError *error = nil;
+    if (!gDevice || !computeDescriptor((MTLComputePipelineDescriptor *)descriptor, &p, linked, &error)) {
+        *why = gDevice ? "a function of another device, or what the frontend does not represent" : "no device";
+        return false;
+    }
+    if (nmb_compute_pipeline_direct(gDevice, &p, dispatch, each, ctx))
+        return true;
+    *why = nmb_last_error();
+    return false;
+}
+
 // ---- binary archives ----
 @interface NBBinaryArchive : NBObject
 @property (nonatomic) NmbBinaryArchive *handle;

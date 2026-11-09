@@ -63,6 +63,12 @@ struct NmbDirectState;
 bool native_bridge_metal_render_direct(id descriptor, bool barrier, NSUInteger textureFormat, NSUInteger textureSamples,
                                        bool (*each)(const struct NmbDirectState *, void *), void *ctx,
                                        const char **why);
+// The same of a compute state at one dispatch shape (NmbDirectDispatch)
+struct NmbDirectDispatch;
+struct NmbDirectKernel;
+bool native_bridge_metal_compute_direct(id descriptor, const struct NmbDirectDispatch *dispatch,
+                                        bool (*each)(const struct NmbDirectKernel *, void *), void *ctx,
+                                        const char **why);
 // A symbol of the NVK this device opened (null: none)
 void *native_bridge_metal_nvk_symbol(const char *name);
 

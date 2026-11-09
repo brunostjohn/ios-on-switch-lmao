@@ -3,8 +3,9 @@
  * SPDX-License-Identifier: MIT
  *
  * Switch: one stage of a render state compiled as metal2vulkan's pipeline
- * libraries compile it, with no pipeline, for the raw GM20B path to make the
- * state's record from (nvk_switch_compile.c). The plugin finds it with dlsym.
+ * libraries compile it, or a kernel as its compute pipeline compiles it, with
+ * no pipeline, for the raw GM20B path to make the state's record from
+ * (nvk_switch_compile.c). The plugin finds it with dlsym.
  */
 
 #ifndef NVK_SWITCH_COMPILE_H
@@ -87,6 +88,23 @@ bool switch_nvk_immutable_sampler_header(VkDevice device,
                                          VkDescriptorSetLayout layout,
                                          uint32_t binding, uint32_t element,
                                          uint32_t header[8]);
+/* The header NVK made for `sampler` */
+bool switch_nvk_sampler_header(VkDevice device, VkSampler sampler,
+                               uint32_t header[8]);
+/* The QMD NVK fills for a dispatch of compute `stage` with set 0 of
+ * `set_bytes`, its program offset, grid and constant buffer addresses 0;
+ * false where the stage reads another constant buffer than the root table,
+ * set 0 and its shader data
+ */
+bool switch_nvk_compute_qmd(VkDevice device,
+                            const struct switch_nvk_stage *stage,
+                            uint32_t set_bytes, uint32_t qmd[64]);
+/* Word 0 of the texture header of a view of `format` with `components`, as
+ * a sampled or storage image (format and swizzle alone)
+ */
+bool switch_nvk_view_header_word0(VkDevice device, VkFormat format,
+                                  const VkComponentMapping *components,
+                                  bool storage, uint32_t *word0);
 /* The size a buffer descriptor of `type` over `range` bytes holds */
 uint32_t switch_nvk_buffer_descriptor_size(VkDevice device,
                                            VkDescriptorType type,
