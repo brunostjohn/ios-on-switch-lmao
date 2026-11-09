@@ -1138,7 +1138,7 @@ private:
         uint8_t header[80];
     };
 
-    std::map<std::string, CompletedProgram> completedPrograms_;  // by program id
+    std::map<std::string, CompletedProgram> completedPrograms_;  // by program id and constant buffer types
     bool placeCompleted(const CapturedProgram &p, PlacedProgram &out);
     bool takeTsc(uint32_t &tsc);
     const Pipeline *extrasLive_ = nullptr;  // the state whose extras (Pipeline::restore) the channel holds

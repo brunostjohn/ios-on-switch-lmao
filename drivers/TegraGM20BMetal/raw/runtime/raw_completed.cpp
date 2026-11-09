@@ -7,11 +7,13 @@
 
 namespace raw {
 
-// lock_ held: a program's slot laid out as the pack lays one (programSlot), once per program, placed as the pack's programs are
-// (heapPlace). The next submission's prologue invalidates the shader and constant caches before any draw reads it.
+// lock_ held: a program's slot laid out as the pack lays one (programSlot), once per program and constant buffer layout (one code
+// can read its uniform buffers at another state's set-0 offsets), placed as the pack's programs are (heapPlace). The next
+// submission's prologue invalidates the shader and constant caches before any draw reads it.
 bool Device::placeCompleted(const CapturedProgram &p, PlacedProgram &out)
 {
-    if (const auto it = completedPrograms_.find(p.id); it != completedPrograms_.end()) {
+    const std::string key = p.id + std::string(p.cbufTypes.begin(), p.cbufTypes.end());
+    if (const auto it = completedPrograms_.find(key); it != completedPrograms_.end()) {
         out = it->second.placed;
         return true;
     }
@@ -23,7 +25,7 @@ bool Device::placeCompleted(const CapturedProgram &p, PlacedProgram &out)
     if (!heapPlace(slot.data(), uint32_t(slot.size()), at))
         return false;
     info.heapOffset = uint32_t(at);
-    CompletedProgram &placed = completedPrograms_[p.id];
+    CompletedProgram &placed = completedPrograms_[key];
     placed.info = info;
     memcpy(placed.header, p.image.data(), sizeof placed.header);
     placed.placed = {&placed.info, uint32_t(at) + info.program, info.dataBytes ? heap_.va + at + info.dataOffset : 0,
