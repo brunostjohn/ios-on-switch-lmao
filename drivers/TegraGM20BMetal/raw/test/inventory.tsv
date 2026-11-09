@@ -1,7 +1,7 @@
 # raw's API inventory, written by raw/test/selcover (SELCOVER_WRITE=1; selcover_inventory.h says what each
 # column holds): container, item, selector, m2v, sent by, raw
-# m2v's items: base 5 m2v 14 m2vobj 35 none 65 raw 235 read 292 refused 163 unread 201 zero 47
-# sent selectors: base 88 m2v 26 m2vobj 44 none 8 raw 439 refused 56 zero 154
+# m2v's items: base 5 m2v 13 m2vobj 35 none 65 raw 236 read 292 refused 163 unread 201 zero 47
+# sent selectors: base 88 m2v 25 m2vobj 44 none 8 raw 440 refused 56 zero 154
 MTLArgument	access	access	I	-	read
 MTLArgument	active	isActive	I	-	unread
 MTLArgument	arrayLength	arrayLength	I	-	read
@@ -585,7 +585,7 @@ MTLDevice	minimumLinearTextureAlignmentForPixelFormat:	minimumLinearTextureAlign
 MTLDevice	name	name	I	21H461,24B119	raw
 MTLDevice	newArgumentEncoderWithArguments:	newArgumentEncoderWithArguments:	I	21H461,24B119	m2v
 MTLDevice	newArgumentEncoderWithBufferBinding:	newArgumentEncoderWithBufferBinding:	I	21H461,24B119	base
-MTLDevice	newBinaryArchiveWithDescriptor:error:	newBinaryArchiveWithDescriptor:error:	I	21H461,24B119	m2v
+MTLDevice	newBinaryArchiveWithDescriptor:error:	newBinaryArchiveWithDescriptor:error:	I	21H461,24B119	raw
 MTLDevice	newBufferWithBytes:length:options:	newBufferWithBytes:length:options:	I	21H461,24B119	raw
 MTLDevice	newBufferWithBytesNoCopy:length:options:deallocator:	newBufferWithBytesNoCopy:length:options:deallocator:	I	21H461,24B119	raw
 MTLDevice	newBufferWithLength:options:	newBufferWithLength:options:	I	21H461,24B119	raw

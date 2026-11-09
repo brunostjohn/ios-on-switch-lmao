@@ -39,6 +39,8 @@
 #                     (raw/test/targetcheck.py: its target formats against NVK's)
 #   raw_sampler_test  raw/runtime/raw_sampler.h: the Metal samplers the raw path takes, as m2v samples them on NVK
 #                     (raw/test/samplercheck: their headers against NVK's)
+#   raw_archive_test  raw/runtime/raw_archive.h: the binary archive files the device opens where m2v's reader does not
+#                     (iOS 27's thin Apple GPU binaries), as Metal opens a file of another GPU's binaries
 #   raw_residual_test raw/runtime/raw_residual.h: a buffer bound off m2v's descriptor base alignment (16 bytes for a
 #                     storage buffer, 256 for a uniform one) at the aligned base with its SlotBindOffset residual in the
 #                     push word raw/pack/probe_bind.h's bind-offset run names
@@ -327,6 +329,15 @@ host_test(
         "//drivers/TegraGM20BMetal:raw/runtime/raw_bounds.h",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_overlap.h",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_region.h",
+    ],
+    cxx_std = "c++17",
+)
+
+host_test(
+    name = "raw_archive_test",
+    srcs = [
+        "raw_archive_test.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_archive.h",
     ],
     cxx_std = "c++17",
 )
