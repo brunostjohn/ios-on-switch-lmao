@@ -90,7 +90,8 @@ inline uint32_t gobOffset(uint32_t xB, uint32_t y)
 uint32_t gobOffsetFermi(uint32_t xB, uint32_t y);
 
 // TEXHEAD_BL TEXTURE_TYPE (clb097tex.h), NIL pipe_to_nv_texture_type of a view's type
-constexpr uint32_t kTexOneD = 0, kTexTwoD = 1, kTexThreeD = 2, kTexCube = 3, kTexTwoDArray = 5, kTexCubeArray = 8;
+constexpr uint32_t kTexOneD = 0, kTexTwoD = 1, kTexThreeD = 2, kTexCube = 3, kTexOneDArray = 4, kTexTwoDArray = 5,
+                   kTexCubeArray = 8;
 
 // The texture header of the chain at GPU address `va` (512-byte aligned): word 0 from `tic0` (the format's components, data
 // types and swizzle: raw::formatInfo()->tic0), a view of levels [baseLevel, baseLevel + levelCount). NIL nvb097 for a view of

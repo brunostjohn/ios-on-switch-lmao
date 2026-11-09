@@ -184,7 +184,7 @@ bool resident(RMHeap *h)
             return nil;
         t->_rawOk = true;
         t->_heap = self;
-        return (id<MTLTexture>)t;
+        return swizzled((id<MTLTexture>)t, d.swizzle);
     }
     const MTLSizeAndAlign need = [(id<MTLDevice>)_device heapTextureSizeAndAlignWithDescriptor:d];
     if (![self rmTake:need.size])

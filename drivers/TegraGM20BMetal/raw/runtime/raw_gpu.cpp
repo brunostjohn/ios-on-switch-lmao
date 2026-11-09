@@ -1091,50 +1091,70 @@ void Device::freeTic(uint32_t tic)
 void Device::writeTic(const Texture &t)
 {
     fx::MipChain one;
+    uint32_t w[8] = {};
     if (t.zeta) {  // NVK's image as laid out (createZetaOver): one level, its block height
-        uint32_t w[8];
         one.width = t.width;
         one.height = t.height;
         one.levels = 1;
         one.bpp = t.bpp;
         one.yLog2 = t.blockHeight;
         fx::mipChainTic(one, t.va, kZetaFormatInfo[zetaFormatIndex(t.format)].tic0, false, 0, 1, w, fx::kTexTwoD);
-        memcpy(tic_.cpu + 32 * t.tic, w, 32);
-        return;
-    }
-    const FormatInfo *f = formatInfo(t.format);
-    uint32_t w[8] = {f->tic0};
-    if (t.layers > 1 && fx::arrayLayout(t.width, t.height, t.layers, 1, t.bpp, one)) {
+    } else if (const FormatInfo *f = formatInfo(t.format);
+               (t.layers > 1 && fx::arrayLayout(t.width, t.height, t.layers, 1, t.bpp, one)) ||
+               (t.type == fx::kTexThreeD &&
+                fx::volumeLayout(t.width, t.height, t.depth, 1, t.bpp, !t.blockDepth, one)) ||
+               (t.blockLinear && fx::mipChainLayout(t.width, t.height, 1, t.bpp, one))) {  // NIL's header of the image
         fx::mipChainTic(one, t.va, f->tic0, f->srgb, 0, 1, w, t.type);
-        memcpy(tic_.cpu + 32 * t.tic, w, 32);
-        return;
+    } else {
+        w[0] = f->tic0;
+        setField(w, 87, 85, 2);                        // HEADER_VERSION PITCH
+        setField(w, 63, 37, (t.va >> 5) & 0x7ffffff);  // ADDRESS_BITS31TO5
+        setField(w, 79, 64, (t.va >> 32) & 0xffff);
+        setField(w, 111, 96, (t.pitch >> 5) & 0xffff);
+        setField(w, 154, 151, 7);  // TWO_D_NO_MIPMAP
+        setField(w, 112, 112, 1);  // LOD_ANISO_QUALITY2
+        setField(w, 113, 113, 1);  // LOD_ANISO_QUALITY HIGH
+        setField(w, 114, 114, 1);  // LOD_ISO_QUALITY HIGH
+        setField(w, 143, 128, t.width - 1);
+        setField(w, 175, 160, t.height - 1);
+        setField(w, 150, 150, f->srgb);
+        setField(w, 159, 157, 7);  // BORDER_SIZE BORDER_SAMPLER_COLOR
+        setField(w, 191, 191, 1);  // NORMALIZED_COORDS
+        setField(w, 216, 215, 2);  // ANISO_FINE_SPREAD_FUNC TWO
+        setField(w, 218, 217, 1);  // ANISO_COARSE_SPREAD_FUNC ONE
     }
-    if (t.type == fx::kTexThreeD && fx::volumeLayout(t.width, t.height, t.depth, 1, t.bpp, !t.blockDepth, one)) {
-        fx::mipChainTic(one, t.va, f->tic0, f->srgb, 0, 1, w, t.type);
-        memcpy(tic_.cpu + 32 * t.tic, w, 32);
-        return;
-    }
-    if (t.blockLinear && fx::mipChainLayout(t.width, t.height, 1, t.bpp, one)) {  // NIL's header of a one-level image
-        fx::mipChainTic(one, t.va, f->tic0, f->srgb, 0, 1, w, t.type);
-        memcpy(tic_.cpu + 32 * t.tic, w, 32);
-        return;
-    }
-    setField(w, 87, 85, 2);                        // HEADER_VERSION PITCH
-    setField(w, 63, 37, (t.va >> 5) & 0x7ffffff);  // ADDRESS_BITS31TO5
-    setField(w, 79, 64, (t.va >> 32) & 0xffff);
-    setField(w, 111, 96, (t.pitch >> 5) & 0xffff);
-    setField(w, 154, 151, 7);  // TWO_D_NO_MIPMAP
-    setField(w, 112, 112, 1);  // LOD_ANISO_QUALITY2
-    setField(w, 113, 113, 1);  // LOD_ANISO_QUALITY HIGH
-    setField(w, 114, 114, 1);  // LOD_ISO_QUALITY HIGH
-    setField(w, 143, 128, t.width - 1);
-    setField(w, 175, 160, t.height - 1);
-    setField(w, 150, 150, f->srgb);
-    setField(w, 159, 157, 7);              // BORDER_SIZE BORDER_SAMPLER_COLOR
-    setField(w, 191, 191, 1);              // NORMALIZED_COORDS
-    setField(w, 216, 215, 2);              // ANISO_FINE_SPREAD_FUNC TWO
-    setField(w, 218, 217, 1);              // ANISO_COARSE_SPREAD_FUNC ONE
+    w[0] = swizzledWord0(w[0], t.swizzle);
     memcpy(tic_.cpu + 32 * t.tic, w, 32);  // write-combined: visible at the next submission's header invalidate
+}
+
+void Device::swizzle(Texture &t, const uint8_t channels[4])
+{
+    std::lock_guard<std::mutex> l(lock_);
+    memcpy(t.swizzle, channels, 4);
+    if (!t.tic)
+        return;
+    uint32_t *w = reinterpret_cast<uint32_t *>(tic_.cpu + 32 * t.tic);
+    w[0] = swizzledWord0(w[0], t.swizzle);
+}
+
+uint32_t swizzledWord0(uint32_t word0, const uint8_t channels[4])
+{
+    constexpr uint32_t kZero = 0, kOneInt = 6, kOneFloat = 7, kSint = 3, kUint = 4;
+    auto source = [&](uint32_t c) {
+        return word0 >> (19 + 3 * c) & 7;
+    };
+    const uint32_t redType = word0 >> 7 & 7;
+    uint32_t one = redType == kSint || redType == kUint ? kOneInt : kOneFloat;
+    for (uint32_t c = 0; c < 4; c++)
+        if (source(c) == kOneInt || source(c) == kOneFloat)
+            one = source(c);
+    uint32_t out = word0 & ~(0xfffu << 19);
+    for (uint32_t c = 0; c < 4; c++) {
+        const uint8_t s = channels[c];  // MTLTextureSwizzle: Zero, One, Red, Green, Blue, Alpha
+        const uint32_t from = s == 0 ? kZero : s == 1 ? one : s <= 5 ? source(s - 2u) : source(c);
+        out |= from << (19 + 3 * c);
+    }
+    return out;
 }
 
 // A pitch-linear color target: its address and pitch multiples of 128 (NVK renders a linear image only so, nvk_rendering_linear,
@@ -1443,6 +1463,7 @@ bool Device::createView(const Texture &of, uint32_t format, Texture &t)
         return false;
     std::lock_guard<std::mutex> l(lock_);
     t = of;
+    memcpy(t.swizzle, kIdentitySwizzle, 4);
     t.view = true;
     t.format = format;
     t.renderable = f->rt != 0 && (t.blockLinear || linearTarget(t));
@@ -1501,6 +1522,7 @@ bool Device::createPartView(const Texture &of, uint32_t format, uint32_t type, u
     c.layers = layers;
     std::lock_guard<std::mutex> l(lock_);
     t = image;
+    memcpy(t.swizzle, kIdentitySwizzle, 4);
     t.view = true;
     t.format = format;
     t.type = uint8_t(type);

@@ -432,10 +432,32 @@ void traceSurfaceImage(RMTexture *t, const char *what, uint32_t seed)
     [self getBytes:bytes bytesPerRow:row bytesPerImage:0 fromRegion:r mipmapLevel:level slice:0];
 }
 
-// The header type of a view of `type` (0: one the raw path makes none of)
-static uint32_t viewHeaderType(MTLTextureType type)
+bool identitySwizzle(MTLTextureSwizzleChannels s)
+{
+    return s.red == MTLTextureSwizzleRed && s.green == MTLTextureSwizzleGreen && s.blue == MTLTextureSwizzleBlue &&
+           s.alpha == MTLTextureSwizzleAlpha;
+}
+
+id<MTLTexture> swizzled(id<MTLTexture> t, MTLTextureSwizzleChannels s)
+{
+    RMTexture *x = [(id)t isKindOfClass:[RMTexture class]] ? (RMTexture *)t : nil;
+    if (!x || identitySwizzle(s))
+        return t;
+    x->_descriptor.swizzle = s;
+    const uint8_t channels[4] = {uint8_t(s.red), uint8_t(s.green), uint8_t(s.blue), uint8_t(s.alpha)};
+    if (x->_rawOk)
+        gRM->raw->swizzle(x->_raw, channels);
+    return t;
+}
+
+// The header type of a view of `type` (-1: one the raw path makes none of)
+static int viewHeaderType(MTLTextureType type)
 {
     switch (type) {
+    case MTLTextureType1D:
+        return raw::fx::kTexOneD;
+    case MTLTextureType1DArray:
+        return raw::fx::kTexOneDArray;
     case MTLTextureType2D:
         return raw::fx::kTexTwoD;
     case MTLTextureType2DArray:
@@ -445,7 +467,7 @@ static uint32_t viewHeaderType(MTLTextureType type)
     case MTLTextureTypeCubeArray:
         return raw::fx::kTexCubeArray;
     default:
-        return 0;
+        return -1;
     }
 }
 
@@ -480,11 +502,11 @@ static uint32_t viewHeaderType(MTLTextureType type)
     v->_viewPart = true;
     v->_viewLevels = levels;
     v->_viewSlices = slices;
-    const uint32_t header = viewHeaderType(type);
-    if (_rawOk && header && raw::formatInfo(uint32_t(format)))
-        v->_rawOk =
-            gRM->raw->createPartView(_raw, uint32_t(format), header, uint32_t(levels.location), uint32_t(levels.length),
-                                     uint32_t(slices.location), uint32_t(slices.length), v->_raw);
+    const int header = viewHeaderType(type);
+    if (_rawOk && header >= 0 && raw::formatInfo(uint32_t(format)))
+        v->_rawOk = gRM->raw->createPartView(_raw, uint32_t(format), uint32_t(header), uint32_t(levels.location),
+                                             uint32_t(levels.length), uint32_t(slices.location),
+                                             uint32_t(slices.length), v->_raw);
     if (v->_rawOk)
         return (id<MTLTexture>)v;
     if (![v rmTwin])
@@ -494,6 +516,26 @@ static uint32_t viewHeaderType(MTLTextureType type)
                                              (unsigned long)levels.location, (unsigned long)levels.length,
                                              (unsigned long)slices.location, (unsigned long)slices.length]);
     return (id<MTLTexture>)v;
+}
+
+// A swizzled view: the view, its header reading its channels so. m2v's texture answers nil to this, so a view the raw path does
+// not hold is m2v's unswizzled one, said so.
+- (id<MTLTexture>)newTextureViewWithPixelFormat:(MTLPixelFormat)format
+                                    textureType:(MTLTextureType)type
+                                         levels:(NSRange)levels
+                                         slices:(NSRange)slices
+                                        swizzle:(MTLTextureSwizzleChannels)swizzle
+{
+    RMTexture *v = (RMTexture *)[self newTextureViewWithPixelFormat:format
+                                                        textureType:type
+                                                             levels:levels
+                                                             slices:slices];
+    if (v && !v->_rawOk && !identitySwizzle(swizzle))
+        SWITCH_REFUSE_DETAIL("raw", "tex.swizzle", format,
+                             "a swizzled view of format %lu, type %lu, over a texture the raw path does not hold: m2v "
+                             "samples it unswizzled",
+                             (unsigned long)format, (unsigned long)type);
+    return swizzled((id<MTLTexture>)v, swizzle);
 }
 
 - (id<MTLTexture>)newTextureViewWithPixelFormat:(MTLPixelFormat)format

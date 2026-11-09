@@ -176,7 +176,7 @@
     }
     if (!t->_rawOk && ![t rmTwin])
         return nil;
-    return (id<MTLTexture>)t;
+    return swizzled((id<MTLTexture>)t, d.swizzle);
 }
 
 // SPI (Core Animation): the same, one 2D image

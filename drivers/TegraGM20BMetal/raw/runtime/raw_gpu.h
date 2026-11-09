@@ -244,7 +244,16 @@ struct Texture {
     // (planes, stand-ins, images) stays the parent's, which outlives it: destroyTexture frees its header alone.
     bool view = false;
     bool arena = false;  // its span is an MTLHeap's (Device::arenaTexture): span.chunk names the arena
+    // Its channels' MTLTextureSwizzle (red, green, blue, alpha), which its header's X..W_SOURCE take (Device::swizzle); a view
+    // starts from the identity, whatever its parent's
+    uint8_t swizzle[4] = {2, 3, 4, 5};
 };
+
+constexpr uint8_t kIdentitySwizzle[4] = {2, 3, 4, 5};
+
+// Texture header word 0 with its sources read through `channels` (MTLTextureSwizzle each: Zero, One, Red, Green, Blue, Alpha);
+// One is the integer or float one the format's own sources use
+uint32_t swizzledWord0(uint32_t word0, const uint8_t channels[4]);
 
 // The bytes of each texel a blit between `t` and a buffer moves in the buffer, as Metal's: a Depth32Float_Stencil8 aspect's (its
 // depth 4, its stencil 1), RGB10A8_2P_XR10's color word (raw_xr.h), else the texel's
@@ -759,6 +768,8 @@ public:
                              uint32_t format,
                              Texture &t);  // over a buffer's memory (t holds no reference: the caller keeps the buffer)
     bool createView(const Texture &of, uint32_t format, Texture &t);  // the same memory as another format
+    // Its header's sources read through `channels` (MTLTextureSwizzle each, Texture::swizzle), its header written as it is
+    void swizzle(Texture &t, const uint8_t channels[4]);
     // A view of part of a block-linear 2D texture, chain, array or cube: levels [baseLevel, +levels) of a chain, or layers
     // [baseLayer, +layers) of an array or cube, as a view of `type` (fx::kTexTwoD, kTexTwoDArray, kTexCube, kTexCubeArray). Its
     // image is the part's first level and layer, which copies address and a pass renders into as a 2D view of one of each.
