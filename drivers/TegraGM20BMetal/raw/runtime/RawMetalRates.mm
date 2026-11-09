@@ -89,7 +89,7 @@ size_t raw_metal_rates(char *out, size_t size)
     snprintf(diag, sizeof diag,
              " sp=%llu/%llu evsp=%llu/%llu abortenc=%.0fus/a replay=%.0fus/m rclean=%.0fKB/m "
              "rt128=%llu(pitch %u va&255 %u) rtmix=%llu lvl=%llu states=%llu/%llu/%llu/%llu/%.0fms "
-             "atcreate=%llu/%.0fus comp=%llu/%lluKB/f%llu zbc=%llu/%llu why=%s",
+             "atcreate=%llu/%.0fus comp=%llu/%lluKB/f%llu bk=%llu/%lluMB/r%llu tfree=%lluMB zbc=%llu/%llu why=%s",
              (unsigned long long)sp, (unsigned long long)segs, (unsigned long long)evSplits,
              (unsigned long long)evWhole, (s.abortUs.load() - gRates.abortUs) / double(aborts ? aborts : 1),
              (s.replayUs.load() - gRates.replayUs) / double(m2vs),
@@ -101,7 +101,9 @@ size_t raw_metal_rates(char *out, size_t size)
              made.makeUs / 1000.0, (unsigned long long)made.lookupHits,
              made.lookupHits ? double(made.lookupUs) / double(made.lookupHits) : 0.0,
              (unsigned long long)k.compBackings.load(), (unsigned long long)(k.compBytes.load() >> 10),
-             (unsigned long long)k.compFailed.load(), (unsigned long long)k.zbcHits.load(),
+             (unsigned long long)k.compFailed.load(), (unsigned long long)k.backings.load(),
+             (unsigned long long)(k.backingBytes.load() >> 20), (unsigned long long)k.retiredBackings.load(),
+             (unsigned long long)(k.tiledFreeBytes.load() >> 20), (unsigned long long)k.zbcHits.load(),
              (unsigned long long)k.zbcMisses.load(), *preds ? preds : "-");
 #if SWITCH_FRAME_TIMELINE
     {

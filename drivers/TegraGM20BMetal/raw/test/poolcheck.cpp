@@ -3,10 +3,14 @@
 // buffers (write-combined GPU-pool chunks, r17) and textures (pool chunks) is made and freed, over the mock GPU; after it the
 // device keeps one empty write-combined chunk and a chunk's worth of free pool memory, not the burst's (r8a: the compositor
 // held 107 MiB of the GPU pool at 15:16 and 63 after, the raw pool 320 MB in 20 chunks to the end, and Maps was refused
-// a 4 MiB BO with 33 MiB of the pool free).
+// a 4 MiB BO with 33 MiB of the pool free). Then a burst of block-linear images (private textures; a pass's memoryless backings
+// take the same chunks at commit) with the grower running: its chunks are made ahead of need, so no allocation wires one
+// itself, and go back after it (boot 15: backboardd's grew 356 -> 953 MB in 64 imports on the commit path and stayed).
 // usage: poolcheck <pack.bin>
+#include <chrono>
 #include <cstdio>
 #include <string>
+#include <thread>
 #include <vector>
 #include "../runtime/raw_gpu.h"
 
@@ -58,6 +62,33 @@ int main(int argc, char **argv)
     raw::Buffer again;
     expect(dev.createBuffer(256 << 10, again, true) && again.wc, "a shared buffer after the trim is write-combined");
     dev.destroyBuffer(again);
+
+    dev.warm();
+    std::this_thread::sleep_for(std::chrono::milliseconds(50));  // the grower's start
+    const uint64_t tiledBefore = dev.stats.poolBytes.load(), stallsBefore = dev.stats.poolStalls.load();
+    expect(dev.blChunkFreeBytes() > (16ull << 20), "warm() makes the block-linear chunk ahead of the first");
+    std::vector<raw::Texture> images(64);
+    unsigned imagesMade = 0;
+    for (raw::Texture &t : images) {
+        imagesMade += dev.createTexture(1024, 512, 80, t, false, true) && t.blockLinear;  // 2 MiB each
+        std::this_thread::sleep_for(std::chrono::milliseconds(2));                        // a frame: the grower's turn
+    }
+    const uint64_t tiledPeak = dev.stats.poolBytes.load(), stalls = dev.stats.poolStalls.load() - stallsBefore,
+                   ahead = dev.blChunkFreeBytes();
+    std::printf(
+        "block-linear burst: %u images, pool %llu -> %llu MiB, %llu MiB free after it, %llu allocations wired a "
+        "chunk themselves\n",
+        imagesMade, (unsigned long long)(tiledBefore >> 20), (unsigned long long)(tiledPeak >> 20),
+        (unsigned long long)(ahead >> 20), (unsigned long long)stalls);
+    expect(imagesMade == images.size(), "the block-linear burst was made");
+    expect(ahead >= (16ull << 20), "a block-linear chunk's worth kept free ahead of need (was: none, grown when full)");
+    expect(stalls == 0, "no block-linear allocation wired a chunk itself");
+    for (raw::Texture &t : images)
+        dev.destroyTexture(t);
+    const uint64_t tiledAfter = dev.stats.poolBytes.load();
+    std::printf("after: pool %llu MiB\n", (unsigned long long)(tiledAfter >> 20));
+    expect(tiledAfter <= tiledBefore + (32ull << 20),
+           "the block-linear chunks back to a chunk's worth past the start (was: the burst's, for good)");
     if (failures) {
         std::printf("FAIL: poolcheck (%d)\n", failures);
         return 1;
