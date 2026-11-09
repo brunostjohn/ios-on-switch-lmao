@@ -244,6 +244,16 @@ GROUPS: dict[str, list[Check]] = {
             regex='fault',
             source='drivers/TegraGM20B/gpu.c (nvkm fault reports)',
         ),
+        Check(
+            'gpu.pbentry',
+            'r121-crashgpu',
+            '[PBENTRY] ch ',
+            process=KERNEL,
+            regex=r'\.gpu: fifo: PBDMA\d: \w+ \[PBENTRY\] ch \d+ \[\w+ (?P<who>[^\]]+)\]',
+            show=('who',),
+            source='drivers/TegraGM20B/gpu.c (nvkm PBDMA interrupt)',
+            note='the GPU fetched a zero push word; boot 15: MercuryPosterExt x76, its raw push ring a system BO',
+        ),
     ],
     'display': [
         Check(
