@@ -565,6 +565,13 @@ public:
     void convertPlanar(const Texture &t);
     // generateMipmaps of a mipmapped texture (Texture::chain) on the 2D engine: each later level from the one above, in place
     void generate(Texture &t);
+    // The next command reads the memory `read` names and writes the memory `write` names (null: none; a name is any pointer
+    // that stands for one memory): where it reads or writes what an earlier command of this encoder wrote, or writes what one
+    // read, it waits for those first (barrier), as Metal orders a blit encoder's commands on one resource
+    void access(const void *read, const void *write);
+    // Every copy and 2D blit before it completes before any after it starts: NVK's wait between transfers
+    // (nvk_cmd_flush_wait_dep), as the copy engine starts a PIPELINED launch before the ones before it have landed
+    void barrier();
     void end();
 
 private:
@@ -573,6 +580,9 @@ private:
     Device *dev_ = nullptr;
     Push p_;
     uint32_t *start_ = nullptr;
+    static constexpr uint8_t kAccesses = 16;
+    const void *read_[kAccesses] = {}, *written_[kAccesses] = {};
+    uint8_t reads_ = 0, writes_ = 0;
     void room(uint32_t words = 56);  // at least `words` words left in the reservation
 };
 

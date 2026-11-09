@@ -2,6 +2,24 @@
 // A blit encoder's commands of the tape onto the copy engine (and the 2D engine's mip chains): see encodeRaw.
 #import "RawMetalInternal.h"
 
+// What stands for a texture's memory in its blit encoder's order (raw::BlitEncoder::access): its surface, its buffer, or the
+// texture a view views
+static const void *memoryOf(RMTexture *t)
+{
+    while (t && t->_kind == RMTextureView && t->_parent)
+        t = t->_parent;
+    if (t && t->_surface)
+        return t->_surface;
+    if (t && t->_buffer)
+        return (__bridge const void *)t->_buffer;
+    return (__bridge const void *)t;
+}
+
+static const void *memoryOf(RMBuffer *b)
+{
+    return (__bridge const void *)b;
+}
+
 // The copy engine's copies of those rows into or out of plane z: one copy of every row where they lie a pitch apart, else one
 // per row
 static void copyRows(raw::BlitEncoder *be, uint64_t bufferVa, const BufferRows &r, uint64_t offset,
@@ -49,6 +67,7 @@ void encodeBlit(RMCommandBuffer *cb, const Cmd &c, raw::CommandBuffer *rc, raw::
         RMTexture *s = (__bridge RMTexture *)c.obj, *t = (__bridge RMTexture *)c.obj2;
         useTexture(rc, s, false);
         useTexture(rc, t, true);
+        be->access(memoryOf(s), memoryOf(t));
         if (!fresh.empty())
             fresh.erase(t);
         standInFresh.erase(t);
@@ -70,6 +89,7 @@ void encodeBlit(RMCommandBuffer *cb, const Cmd &c, raw::CommandBuffer *rc, raw::
     case OpMipmaps: {  // a chain's levels from level 0 (decided at record)
         RMTexture *t = (__bridge RMTexture *)c.obj;
         useTexture(rc, t, true);
+        be->access(memoryOf(t), memoryOf(t));
         be->generate(t->_raw);
         break;
     }
@@ -77,6 +97,7 @@ void encodeBlit(RMCommandBuffer *cb, const Cmd &c, raw::CommandBuffer *rc, raw::
         RMBuffer *s = (__bridge RMBuffer *)c.obj, *t = (__bridge RMBuffer *)c.obj2;
         useBuffer(rc, s, false);
         useBuffer(rc, t, true);
+        be->access(memoryOf(s), memoryOf(t));
         const uint64_t n = extra(cb, c.x + 1), dof = extra(cb, c.x);
         if (!s->_raw.wc)
             rc->clean(s->_raw.cpu + c.c, n);
@@ -89,6 +110,7 @@ void encodeBlit(RMCommandBuffer *cb, const Cmd &c, raw::CommandBuffer *rc, raw::
         RMBuffer *t = (__bridge RMBuffer *)c.obj;
         const uint64_t n = extra(cb, c.x);
         useBuffer(rc, t, true);
+        be->access(nullptr, memoryOf(t));
         if (!t->_raw.wc)
             rc->clean(t->_raw.cpu + c.c, n, true);
         be->fillBytes(t->_raw.va + c.c, n, uint8_t(c.a));
@@ -99,6 +121,7 @@ void encodeBlit(RMCommandBuffer *cb, const Cmd &c, raw::CommandBuffer *rc, raw::
         RMTexture *t = (__bridge RMTexture *)c.obj2;
         useBuffer(rc, s, false);
         useTexture(rc, t, true);
+        be->access(memoryOf(s), memoryOf(t));
         const uint64_t x = c.x, o = extra(cb, x + 8), so = extra(cb, x), row = extra(cb, x + 1),
                        image = extra(cb, x + 2);
         const uint64_t w = extra(cb, x + 3), h = extra(cb, x + 4), d = extra(cb, x + 5), dl = extra(cb, x + 7),
@@ -118,6 +141,7 @@ void encodeBlit(RMCommandBuffer *cb, const Cmd &c, raw::CommandBuffer *rc, raw::
         RMBuffer *t = (__bridge RMBuffer *)c.obj2;
         useTexture(rc, s, false);
         useBuffer(rc, t, true);
+        be->access(memoryOf(s), memoryOf(t));
         const uint64_t x = c.x, o = extra(cb, x + 2),
                        sz = layerOrPlane(s->_raw, uint32_t(extra(cb, x)), uint32_t(extra(cb, x + 3))),
                        w = extra(cb, x + 4), h = extra(cb, x + 5), d = extra(cb, x + 6), dof = extra(cb, x + 7),
