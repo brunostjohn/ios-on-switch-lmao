@@ -116,7 +116,10 @@ CA_TIERS = ('corpus', 'manifest', 'variants', 'blend', 'fetch')
 
 
 def ca_corpus(qc: Path, corpus: Path, work: Path) -> Path:
-    """Give the corpus with its Core Animation lines made from their names, when ca/ has this QuartzCore's tables."""
+    """Give the corpus with its Core Animation lines as harvested and those made from their names (ca/ tables).
+
+    Without this QuartzCore's tables in ca/, the corpus as it is.
+    """
     digest = hashlib.sha256(qc.read_bytes()).hexdigest()
     for path in sorted((HERE / 'ca').glob('qc-*.json')):
         with open(path) as f:
@@ -131,11 +134,27 @@ def ca_corpus(qc: Path, corpus: Path, work: Path) -> Path:
 
     tables = caspec.Tables(str(path))
     out = work / 'corpus.ca.log'
-    with open(corpus) as src, open(out, 'w') as dst:
-        dst.writelines(line for line in src if not caspec.corpus_fields(line)[0])
+    with open(corpus) as src:
+        lines = src.readlines()
+    keys: set[str] = set()
+
+    def fresh(line: str) -> bool:
+        key = state_key(line.rstrip('\n'))
+        return not (key in keys or keys.add(key))
+
+    with open(out, 'w') as dst:
+        dst.writelines(line for line in lines if not caspec.corpus_fields(line)[0])
+        # every state a device drew, as it drew it: QuartzCore makes some names otherwise than the journal holds them (a
+        # harvested c1=550 state regenerated with c1=115) or not at all
+        harvested = [
+            line for line in lines if line.startswith('R ok=1 ') and caspec.corpus_fields(line)[0] and fresh(line)
+        ]
+        dst.writelines(harvested)
+        print(f'rawpack: Core Animation states, harvested: {len(harvested)}')
         for tier, names in caset.labels(tables, caset.corpus_names(str(corpus), tables), CA_TIERS).items():
-            dst.writelines(caspec.state_line(tables, n) + '\n' for n in names)
-            print(f'rawpack: Core Animation states, {tier}: {len(names)}')
+            made = [line for line in (caspec.state_line(tables, n) + '\n' for n in names) if fresh(line)]
+            dst.writelines(made)
+            print(f'rawpack: Core Animation states, {tier}: {len(made)}')
     return out
 
 
