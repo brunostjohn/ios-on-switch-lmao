@@ -24,12 +24,13 @@
 // bits, and stores the 16 bytes as they come as an authenticated combination key (type 5; FUN_100555d1c(key, 5),
 // FUN_10056a990), so importing the same key again changes nothing.
 //
-// Started by iOS 17's BlueTool stand-in at each of bluetoothd's chip boots (../../SwitchBluetooth/BlueTool/BlueTool.c:
-// launchd does not load LaunchDaemons plists from the Data overlay; iOS 27's stand-in is sandboxed and starts nothing),
-// so it runs as mobile, outside any sandbox, with
-// com.apple.bluetooth.system/.internal (what sharingd holds for MobileBluetooth's accessory calls). One instance runs
-// (kLockPath); it imports the dump and every rail record present, then waits for new rail records for the boot, or until
-// bluetoothd's session ends (the next chip boot starts it again). MobileBluetooth is private: it is loaded with dlopen,
+// On iOS 17 the BlueTool stand-in starts it at each of bluetoothd's chip boots (../../SwitchBluetooth/BlueTool/BlueTool.c:
+// launchd does not load LaunchDaemons plists from the Data overlay). On iOS 27, whose stand-in is sandboxed, launchd
+// starts it at boot from com.brunostjohn.switch.joyconpaird.plist, which the overlay shows in the Supplemental cryptex's
+// LaunchDaemons (overlay/manifest.json), and again after a failing exit. Either way it runs as mobile, outside any
+// sandbox, with com.apple.bluetooth.system/.internal (what sharingd holds for MobileBluetooth's accessory calls). One
+// instance runs (kLockPath); it imports the dump and every rail record present, then waits for new rail records for the
+// boot, or until bluetoothd's session ends. MobileBluetooth is private: it is loaded with dlopen,
 // and the prototypes below are from its disassembly (21H461, BTAccessoryManagerSetLinkKeyEx: x0 manager, x1 address
 // bytes, x2 name, w3 class, w4 service mask, x5 key, x6 device out).
 #include <CoreFoundation/CoreFoundation.h>
@@ -273,18 +274,24 @@ static void importStaged(void)
     CFRelease(staged);
 }
 
+// Exits so that the starter tries again only when that can help: launchd restarts the agent after a failing exit
+// (KeepAlive SuccessfulExit false), and only bluetoothd going away is cured by starting again. A dead session must not
+// keep the lock either way.
+static void quit(bool retry)
+{
+    exit(retry ? EXIT_FAILURE : EXIT_SUCCESS);
+}
+
 static void sessionEvent(BTSession session, int event, int result, void *context)
 {
     if (event != 0 || result != 0) {
-        // Anything but attached: bluetoothd went away (or refused), and a dead session must not keep the lock; its next
-        // chip boot starts this again.
         os_log_error(logger, "joyconpaird: bluetoothd session event %d result %d", event, result);
-        exit(1);
+        quit(result == 0 && (event == 1 || event == 2));  // detached or terminated: bluetoothd went away
     }
     int error = BTAccessoryManagerGetDefault(session, &manager);
     if (error) {
         os_log_error(logger, "joyconpaird: no accessory manager: %d", error);
-        exit(1);
+        quit(false);
     }
     // Records already published, then any the rail driver publishes while this process lives.
     port = IONotificationPortCreate(kIOMainPortDefault);
@@ -293,7 +300,7 @@ static void sessionEvent(BTSession session, int event, int result, void *context
         port, kIOFirstMatchNotification, IOServiceMatching("SwitchJoyConPairing"), matched, NULL, &records);
     if (kr != KERN_SUCCESS) {
         os_log_error(logger, "joyconpaird: IOServiceAddMatchingNotification: %#x", kr);
-        exit(1);
+        quit(false);
     }
     matched(NULL, records);
     importStaged();
@@ -302,8 +309,8 @@ static void sessionEvent(BTSession session, int event, int result, void *context
 int main(void)
 {
     logger = os_log_create("com.brunostjohn.switch.joyconpaird", "pairing");
-    // One instance: BlueTool starts this at every chip boot, and the lock goes with the process. An agent whose session
-    // just ended may still be on its way out: a few tries, 200 ms apart.
+    // One instance: iOS 17's BlueTool starts this at every chip boot, and the lock goes with the process. An agent whose
+    // session just ended may still be on its way out: a few tries, 200 ms apart.
     const int lock = open(kLockPath, O_RDWR | O_CREAT | O_NOFOLLOW | O_CLOEXEC, 0644);
     bool locked = false;
     for (unsigned tries = 0; lock >= 0 && !locked && tries < 10; ++tries) {
@@ -322,14 +329,14 @@ int main(void)
     if (!BTSessionAttachWithQueue || !BTAccessoryManagerGetDefault || !BTDeviceAddressFromString ||
         !BTAccessoryManagerSetLinkKeyEx) {
         os_log_error(logger, "joyconpaird: MobileBluetooth unavailable: %{public}s", dlerror());
-        return 1;
+        quit(false);
     }
     static const BTSessionCallbacks callbacks = {sessionEvent, {NULL, NULL, NULL}};
     dispatch_async(queue, ^{
         int error = BTSessionAttachWithQueue("com.brunostjohn.switch.joyconpaird", &callbacks, NULL, queue);
         if (error) {
             os_log_error(logger, "joyconpaird: BTSessionAttachWithQueue: %d", error);
-            exit(1);
+            quit(false);
         }
     });
     dispatch_main();

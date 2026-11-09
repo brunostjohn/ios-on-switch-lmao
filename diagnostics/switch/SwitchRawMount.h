@@ -143,8 +143,14 @@ static int native_switch_raw_cache_prepare(proc_t p, user_addr_t scratch, user_a
     SWITCH_RAW_STEP("Preboot mount",
                     native_switch_raw_mount(p, scratch, "/private/preboot", path, preboot_device, 0, &preboot_mount));
     static const char *const directories[] = {"/private/preboot/Cryptexes", "/private/preboot/Cryptexes/OS",
-                                              "/private/preboot/Cryptexes/App"};
-    for (unsigned i = 0; i < 3; ++i)
+                                              "/private/preboot/Cryptexes/App",
+#if XNU_12377_121_6
+                                              /* The overlay's union point for the launchd plists 24B119 bootstraps
+                                               * through /System/Cryptexes/Supplemental (commpage.c). */
+                                              "/private/preboot/Cryptexes/Supplemental"
+#endif
+    };
+    for (unsigned i = 0; i < sizeof(directories) / sizeof(directories[0]); ++i)
         SWITCH_RAW_STEP(directories[i], native_switch_raw_directory(p, scratch, directories[i], preboot_mount, 1));
     dev_t cache_device = NODEV;
     /* Real iOS grafts these cryptexes onto the Preboot volume (libignition), so LaunchServices files their bundles
