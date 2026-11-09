@@ -203,6 +203,14 @@ uint64_t bufferRow(const BufferRows &r, uint64_t offset, uint64_t bytesPerRow, u
 // RawMetalLibrary.mm
 RMLibrary *wrapLibrary(id device, id<MTLLibrary> twin, NSString *path);
 
+// RawMetalStates.mm: a descriptor whose functions are this device's, over their m2v twins
+MTLRenderPipelineDescriptor *twinDescriptor(MTLRenderPipelineDescriptor *d);
+
+// RawMetalCubic.mm: the cubic binds (raw_cubic.h) of a draw of `pl` with these fragment samplers and textures bound (empty: no
+// cubic sampler where it samples), and `p`'s variant for them: null where it is refused, or not made yet (*making: asked)
+raw::CubicBinds cubicBinds(const raw::Pipeline &pl, RMSampler *const samplers[16], RMTexture *const textures[16]);
+raw::Pipeline *cubicVariant(RMPipeline *p, const raw::CubicBinds &b, bool *making);
+
 // RawMetalHeap.mm: the purged heaps a committed command buffer's resources lie in, given their pages back before it is encoded
 // (it counts as committed already, so no purge runs meanwhile)
 void restoreArenas(RMCommandBuffer *cb);

@@ -10,6 +10,7 @@
 #include "bridge/NativeMetalDirect.h"
 #include "raw_compiler.h"
 #include "raw_compute_record.h"
+#include "raw_cubic.h"
 #include "raw_direct.h"
 
 namespace raw {
@@ -38,6 +39,7 @@ private:
 struct ProbeTextures {
     MTLPixelFormat format = MTLPixelFormatBGRA8Unorm;
     NSUInteger samples = 1;
+    CubicBinds cubic;  // the cubic samplers and the textures sampled through them (a state's cubic variant)
 };
 
 class Direct {
