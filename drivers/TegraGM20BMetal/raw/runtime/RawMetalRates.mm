@@ -187,6 +187,50 @@ size_t raw_metal_rates(char *out, size_t size)
 }
 
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
+// "fetch whole=W/Vv/BB seq=S/Tt ilk=I rec=<reason>:n,... enc=<reason>:n,...": drawn whole on the CPU's proof (the
+// vertices and bytes it read for it), a triangle at a time (the triangles), inside the pixel interlock, and refused as
+// recorded and at encoding by reason ("-" for none). The plugin's rates timer only (its 5 s windows).
+size_t raw_metal_fetch_rates(char *out, size_t size)
+{
+    if (!gRM || !size)
+        return 0;
+    const raw::FetchCounts &k = gRM->raw->stats.fetch;
+    constexpr size_t kTotals = 6, kAll = kTotals + 2 * raw::kFetchRefusals;
+    static uint64_t last[kAll];
+    uint64_t now[kAll] = {k.provenWhole.load(), k.proofVertices.load(),       k.proofBytes.load(),
+                          k.sequential.load(),  k.sequentialTriangles.load(), k.interlocked.load()};
+    for (size_t r = 0; r < raw::kFetchRefusals; ++r) {
+        now[kTotals + r] = k.refusedAtRecord[r].load();
+        now[kTotals + raw::kFetchRefusals + r] = k.refusedAtEncode[r].load();
+    }
+    uint64_t d[kAll];
+    bool any = false;
+    for (size_t i = 0; i < kAll; ++i) {
+        d[i] = now[i] - last[i];
+        last[i] = now[i];
+        any |= d[i] && i != 1 && i != 2;
+    }
+    if (!any)
+        return 0;
+    auto reasons = [&](const uint64_t *counts, char *at, size_t room) {
+        size_t used = 0;
+        for (size_t r = 1; r < raw::kFetchRefusals && used < room; ++r)
+            if (counts[r])
+                used += size_t(snprintf(at + used, room - used, "%s%s:%llu", used ? "," : "",
+                                        raw::kFetchRefusalNames[r], (unsigned long long)counts[r]));
+        if (!used)
+            snprintf(at, room, "-");
+    };
+    char record[96], encode[112];
+    reasons(d + kTotals, record, sizeof record);
+    reasons(d + kTotals + raw::kFetchRefusals, encode, sizeof encode);
+    const int n =
+        snprintf(out, size, "fetch whole=%llu/%lluv/%lluB seq=%llu/%llut ilk=%llu rec=%s enc=%s",
+                 (unsigned long long)d[0], (unsigned long long)d[1], (unsigned long long)d[2], (unsigned long long)d[3],
+                 (unsigned long long)d[4], (unsigned long long)d[5], record, encode);
+    return n > 0 ? std::min(size_t(n), size - 1) : 0;
+}
+
 // The stall line (r7p8: the compositor stopped committing for good with nothing in the log): every 5 s, on a timer of its own,
 // what the raw path has pending, read without waiting (a lock another thread holds is reported held, not waited for). Once
 // nothing was committed or completed over two ticks while work is pending or one of its locks stays held, one line names it,

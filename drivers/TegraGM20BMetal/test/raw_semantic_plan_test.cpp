@@ -431,6 +431,37 @@ TEST(SemanticPlan, PreparedRangeCachesDistinctPipelinesAcrossEncoderSummaries)
     }
 }
 
+// The submission splits a native range at an encoder it refused: the parts were never prepared, their encoders were
+TEST(SemanticPlan, AnUnpreparedRangeOfEncodersVisitsEachEncodersPreparedStates)
+{
+    RMCommandPlan plan;
+    std::vector<size_t> begins;
+    for (uintptr_t state : {10, 20, 30}) {
+        begins.push_back(plan.size());
+        plan.record(cmd(OpRender), {});
+        plan.record(binding(OpPipeline, 0, 0, state), {});
+        draw(plan);
+        plan.record(cmd(OpEnd), {});
+        plan.prepareRange(begins.back(), plan.size());
+    }
+    std::vector<void *> visited;
+    plan.forEachRenderPipeline(begins[1], plan.size(), [&](void *state) {
+        visited.push_back(state);
+    });
+    EXPECT_EQ(visited, (std::vector<void *>{object(20), object(30)}));
+    visited.clear();
+    plan.forEachRenderPipeline(begins[0], begins[1], [&](void *state) {
+        visited.push_back(state);
+    });
+    EXPECT_EQ(visited, (std::vector<void *>{object(10)}));
+    plan.prepareRange(0, plan.size());
+    visited.clear();
+    plan.forEachRenderPipeline(0, plan.size(), [&](void *state) {
+        visited.push_back(state);
+    });
+    EXPECT_EQ(visited, (std::vector<void *>{object(10), object(20), object(30)}));
+}
+
 TEST(SemanticPlan, TextureSamplingAndAttachmentLoadsRemainDistinct)
 {
     RMCommandPlan plan;

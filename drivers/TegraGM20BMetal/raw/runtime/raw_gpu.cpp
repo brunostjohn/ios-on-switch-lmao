@@ -3679,18 +3679,37 @@ const RenderEncoder::Runs *RenderEncoder::selfRuns(const Pipeline &pl, uint32_t 
     static thread_local TriangleRuns triangles;
     runs.clear();
     runWinding_.fill(false);
-    const uint32_t singlePrimitive = primitive == 0 ? 1 : primitive <= 2 ? 2 : 3;
-    if (!(pl.fetchBits & pl.writeBits & ~pl.storageBits) || (count <= singlePrimitive && instances == 1))
+    const FetchDraw shape = {primitive, count, instances};
+    const bool fetchesOwn = fetchesOwnColor(pl.fetchBits, pl.writeBits, pl.storageBits);
+#if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
+    if (pl.fetchBits & pl.storageBits)
+        dev_->stats.fetch.interlocked++;
+#endif
+    if (!fetchesOwn || singlePrimitive(shape))
         return &runs;
+    if (const FetchRefusal refusal = fetchRefusal(fetchesOwn, pl.caTransform, shape); refusal != FetchRefusal::None)
+        return refuseFetch(refusal, primitive, count, instances, why);
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
     const auto start = std::chrono::steady_clock::now();
 #endif
     auto analysis = geometryCache_.analysis(geometry(pl, primitive, first, count, {0, 0, ~0u, ~0u}), bindingRevision_,
                                             cb_->geometryBudget_);
-    const bool told = instances == 1 && (primitive == 3 || primitive == 4) && triangles.split(analysis, runs);
+#if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
+    const GeometrySnapshot *proof =
+        analysis.geometry().bounded && !analysis.snapshot().evaluated ? &analysis.snapshot() : nullptr;
+#endif
+    const bool told = triangles.split(analysis, runs);
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
     dev_->stats.selfOverlapNs += uint64_t(
         std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - start).count());
+    if (proof && proof->valid) {
+        const DrawGeometry &g = proof->source;
+        dev_->stats.fetch.proofVertices += g.count;
+        dev_->stats.fetch.proofBytes +=
+            64 + uint64_t(g.count) * (g.indexSize + uint64_t(g.positions.components) * sizeof(float));
+    }
+    if (told && runs.empty())
+        dev_->stats.fetch.provenWhole++;
     if (!told)
         dev_->stats.selfOverlapUnbounded++;
     else if (!runs.empty()) {
@@ -3705,15 +3724,29 @@ const RenderEncoder::Runs *RenderEncoder::selfRuns(const Pipeline &pl, uint32_t 
         // small direct draws native: each triangle is ordered by prepare()'s existing framebuffer-fetch barrier.
         // No position or index bytes are read, and no unproven non-overlap assumption is made.
         if (pl.caTransform && !pl.primitiveId &&
-            TriangleRuns::sequential(primitive, count, instances, drawIndices_ != nullptr, runs, runWinding_))
+            TriangleRuns::sequential(primitive, count, instances, drawIndices_ != nullptr, runs, runWinding_)) {
+#if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
+            dev_->stats.fetch.sequential++;
+            dev_->stats.fetch.sequentialTriangles += runs.size();
+#endif
             return &runs;
-        *why = "framebuffer-fetch ordering requires an interlocked program or available bounded geometry";
-        cb_->refusal = {RefGeometry, primitive, count, instances};
-        return nullptr;
+        }
+        return refuseFetch(FetchRefusal::Geometry, primitive, count, instances, why);
     }
     if (primitive == 4)
         runWinding_ = TriangleRuns::winding(analysis, runs);
     return &runs;
+}
+
+const RenderEncoder::Runs *RenderEncoder::refuseFetch(FetchRefusal refusal, uint32_t primitive, uint32_t count,
+                                                      uint32_t instances, const char **why)
+{
+    *why = fetchRefusalWhy(refusal);
+    cb_->refusal = {RefGeometry, primitive, count, instances};
+#if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
+    dev_->stats.fetch.refusedAtEncode[size_t(refusal)]++;
+#endif
+    return nullptr;
 }
 
 // NVK's indexed draw on MAXWELL_B: the index buffer as NVK_MME_BIND_IB sets it (start, last byte, the restart index of the type,
@@ -3832,9 +3865,15 @@ bool RenderEncoder::indirect(uint32_t primitive, bool indexed, const Buffer *arg
 {
     if (!pipeline_)
         return true;
-    if (pipeline_->fetchBits & pipeline_->writeBits & ~pipeline_->storageBits) {
-        *why = "indirect framebuffer-fetch draws require an interlocked program";
-        cb_->refusal = {RefGeometry, primitive, 0, 0};
+    const Pipeline &pl = *pipeline_;
+    const bool fetchesOwn = fetchesOwnColor(pl.fetchBits, pl.writeBits, pl.storageBits);
+#if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
+    if (pl.fetchBits & pl.storageBits)
+        dev_->stats.fetch.interlocked++;
+#endif
+    if (const FetchRefusal refusal = fetchRefusal(fetchesOwn, pl.caTransform, {primitive, 0, 1, true});
+        refusal != FetchRefusal::None) {
+        refuseFetch(refusal, primitive, 0, 0, why);
         return false;
     }
     const uint32_t bytes = indexed ? 20 : 16;

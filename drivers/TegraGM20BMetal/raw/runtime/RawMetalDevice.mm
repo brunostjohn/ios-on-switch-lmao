@@ -50,6 +50,18 @@ static const char *zetaMemoryRefusal(int asked)
     d[@"aborted"] = @(s.aborted.load());
     d[@"reopens"] = @(gRM->raw->stats.reopens.load());
     d[@"split_prologues"] = @(gRM->raw->stats.splitLaunches.load());
+    const raw::FetchCounts &fetch = gRM->raw->stats.fetch;
+    d[@"fetch_whole"] = @(fetch.provenWhole.load());
+    d[@"fetch_proof_vertices"] = @(fetch.proofVertices.load());
+    d[@"fetch_sequential"] = @(fetch.sequential.load());
+    d[@"fetch_triangles"] = @(fetch.sequentialTriangles.load());
+    d[@"fetch_interlocked"] = @(fetch.interlocked.load());
+    for (size_t r = 1; r < raw::kFetchRefusals; r++) {
+        if (const uint64_t n = fetch.refusedAtRecord[r].load())
+            d[[NSString stringWithFormat:@"fetch_record.%s", raw::kFetchRefusalNames[r]]] = @(n);
+        if (const uint64_t n = fetch.refusedAtEncode[r].load())
+            d[[NSString stringWithFormat:@"fetch_encode.%s", raw::kFetchRefusalNames[r]]] = @(n);
+    }
     for (int r = 1; r < WhyCount; r++)
         if (const uint64_t n = s.reasons[r].load())
             d[[NSString stringWithFormat:@"m2v.%s", kReasonNames[r]]] = @(n);

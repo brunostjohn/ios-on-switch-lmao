@@ -273,7 +273,7 @@ const char *ycbcrPlan(MTLTextureDescriptor *d, IOSurfaceRef s, NSUInteger plane,
 id<MTLCommandBuffer> replay(RMCommandBuffer *cb, size_t from, size_t to, bool part);
 
 // RawMetalEncode.mm
-bool encodeRaw(RMCommandBuffer *cb, size_t from, size_t to, const char **why);
+bool encodeRaw(RMCommandBuffer *cb, size_t from, size_t to, const char **why, size_t *refusedEncoder);
 
 // RawMetalEvents.mm
 extern std::mutex gHoldersLock;

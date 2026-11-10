@@ -35,6 +35,7 @@
 #include <mach/kern_return.h>
 #include "raw_comp.h"
 #include "raw_descriptors.h"
+#include "raw_fetch_order.h"
 #include "raw_kernel.h"
 #include "raw_heap.h"
 #include "raw_order.h"
@@ -632,6 +633,8 @@ private:
     using Runs = std::vector<std::pair<uint32_t, uint32_t>>;
     const Runs *selfRuns(const Pipeline &pl, uint32_t primitive, int32_t first, uint32_t count, uint32_t instances,
                          const char **why);
+    const Runs *refuseFetch(FetchRefusal refusal, uint32_t primitive, uint32_t count, uint32_t instances,
+                            const char **why);
     const uint8_t *drawIndices_ = nullptr;
     const Buffer *drawIndexBuffer_ = nullptr;
     bool drawIndexCpuSafe_ = false;
@@ -1164,6 +1167,7 @@ public:
         // twice, and the runs; those of more than one triangle it could not tell apart (drawn whole, unordered within);
         // the CPU time telling them (raw_overlap.h)
         std::atomic<uint64_t> selfOverlapSplit{0}, selfOverlapRuns{0}, selfOverlapUnbounded{0}, selfOverlapNs{0};
+        FetchCounts fetch;
         // channels made again after the kernel killed one
         std::atomic<uint64_t> reopens{0};
         // compressed memory held now (raw_comp.h CompMem and made buffers no backing took) and its bytes, the backings on it

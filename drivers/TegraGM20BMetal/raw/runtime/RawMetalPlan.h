@@ -171,6 +171,25 @@ public:
         return rangePipelines_.at({from, to});
     }
 
+    // The render states a range's draws use: as its range was prepared, else (a range the submission split at a refused
+    // encoder) each of its encoders' own, which were prepared as they were recorded
+    template <typename F> void forEachRenderPipeline(size_t from, size_t to, F visit) const
+    {
+        if (const auto found = rangePipelines_.find({from, to}); found != rangePipelines_.end()) {
+            for (void *object : found->second)
+                visit(object);
+            return;
+        }
+        for (size_t at = from; at < std::min(to, size());) {
+            const Op op = operations_[at].op;
+            const size_t end = op == OpRender || op == OpCompute || op == OpBlit ? encoderEnd(at) : at + 1;
+            if (const auto encoder = rangePipelines_.find({at, end}); encoder != rangePipelines_.end())
+                for (void *object : encoder->second)
+                    visit(object);
+            at = std::max(end, at + 1);
+        }
+    }
+
     size_t storageBytes() const;
     void clear();
 
