@@ -192,6 +192,73 @@ class Rules(unittest.TestCase):
         self.assertEqual(got['wifi.dhcp-bound'].verdict, NO_DATA)
 
 
+class UsbHost(unittest.TestCase):
+    """The host-mode checks over boot-1109-2145's lines (a keyboard plugged twice) and a boot that enumerates."""
+
+    @staticmethod
+    def usb(records: list[dict]) -> dict[str, rules.Result]:
+        results, _ = devicerun.run_checks(records, checks.GROUPS['usb'])
+        return {r.check.name: r for r in results}
+
+    @staticmethod
+    def kernel(second: int, message: str, boot: str = 'B0000000-0000-0000-0000-000000000001') -> dict:
+        return {
+            'timestamp': f'2026-11-10 09:00:{second:02d}.000000+0000',
+            'bootUUID': boot,
+            'processImagePath': '/kernel.development',
+            'subsystem': '',
+            'category': '',
+            'messageType': 'Default',
+            'eventMessage': message,
+        }
+
+    def test_boot_1109_2145(self):
+        got = self.usb(list(devicerun.read_ndjson(str(TEST / 'usb_host_boot1109.ndjson'))))
+        for name in (
+            'usb.host-save-state',
+            'usb.host-exception',
+            'usb.host-port-properties',
+            'usb.host-connect',
+            'usb.host-device-arrives',
+        ):
+            self.assertEqual(got[name].verdict, FAIL, name)
+        self.assertIn('save state failed', got['usb.host-exception'].observed)
+
+    def test_a_keyboard_that_enumerates(self):
+        got = self.usb(
+            [
+                self.kernel(0, 'SwitchUSB: host controller up (AppleUSBXHCI, 1 interrupter, 3 shown to AppleUSBXHCI)'),
+                self.kernel(1, 'SwitchUSB: host role (a device on the port, VBUS on)'),
+                self.kernel(
+                    2,
+                    'SwitchUSB: host role +1 s (change 1, 1/2): xHCI USBCMD 0x801 USBSTS 0x8, pad 0 = port 5 '
+                    '(USB2 5+5): U0 low speed, SS port 0 = port 1 (USB3 1+4): RxDetect nothing',
+                ),
+                self.kernel(3, 'SwitchUSB: USB device Keyboard (05ac:024f) registered at location 0x5000000'),
+            ]
+        )
+        for name in (
+            'usb.host-save-state',
+            'usb.host-exception',
+            'usb.host-port-properties',
+            'usb.host-connect',
+            'usb.host-device-arrives',
+        ):
+            self.assertEqual(got[name].verdict, PASS, name)
+
+    def test_the_restore_after_sc7_excuses_its_exception(self):
+        exception = (
+            'SwitchXHCI@00000000: AppleUSBHostController::hardwareExceptionThreadCallGated: 0x00000004 '
+            '(save state failed)'
+        )
+        up = 'SwitchUSB: host controller up (AppleUSBXHCI, 1 interrupter, 3 shown to AppleUSBXHCI)'
+        restore = "SwitchUSB: XUSB host restore after SC7: the controller's state went with the falcon, USBSTS.SRE"
+        got = self.usb([self.kernel(0, up), self.kernel(1, restore), self.kernel(2, exception)])
+        self.assertEqual(got['usb.host-exception'].verdict, PASS)
+        got = self.usb([self.kernel(0, up), self.kernel(2, exception)])
+        self.assertEqual(got['usb.host-exception'].verdict, FAIL)
+
+
 class Sbim(unittest.TestCase):
     CHECK = next(c for c in checks.GROUPS['display'] if c.name == 'display.sbim')
 
