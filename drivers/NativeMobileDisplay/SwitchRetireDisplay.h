@@ -10,8 +10,9 @@
         for (const int entry : entries)
             if (entry != kNoBuffer)
                 include(entryPendingSeq[entry] ? entryPendingSeq[entry] : entrySeq[entry]);
-        const auto plane = [&include](const PlaneSet &set) {
-            include(set.pendingSeq ? set.pendingSeq : set.seq);
+        const auto plane = [this, &include](const PlaneSet &set) {
+            if (!planesAbandoned)
+                include(set.pendingSeq ? set.pendingSeq : set.seq);
         };
         if (planeRecovering)
             plane(planeRecoveryTarget);

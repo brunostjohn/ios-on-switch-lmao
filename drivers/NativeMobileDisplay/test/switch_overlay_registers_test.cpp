@@ -448,17 +448,52 @@ TEST(OverlayRecovery, LateOlderReadyCompositionCannotReplaceNewerOne)
     EXPECT_EQ(d.planeRecoveryTarget.pendingSeq, 4u);
 }
 
-TEST(OverlayRecovery, NeverDisabledHardwareFailsWithoutReleasingAnyMemory)
+TEST(OverlayRecovery, NeverDisabledHardwareTurnsOverlaysOffForTheBootAndKeepsTheirMemory)
 {
     Display d;
     ASSERT_TRUE(d.stage(video(native_planes::kBt601)));
     d.latch();
     d.beginPlaneRecovery("test");
     d.frameEnds += Display::kLatchFrames;
-    EXPECT_THROW(d.planeRecoveryFrameEnd(), std::runtime_error);
-    EXPECT_TRUE(d.planeRecovering);
+    EXPECT_NO_THROW(d.planeRecoveryFrameEnd());
+    EXPECT_TRUE(d.planesAbandoned);
+    EXPECT_FALSE(d.planesOn);
+    EXPECT_FALSE(d.planeRecovering);
     EXPECT_TRUE(d.planeLatch.uses(1));
     EXPECT_EQ(d.releases, 0u);
+    const auto before = d.registers;
+    EXPECT_FALSE(d.stage(video(native_planes::kBt709, 2)));
+    EXPECT_EQ(d.registers, before);
+}
+
+TEST(OverlayRecovery, UnderflowBeforeTheFirstCleanSecondTurnsOverlaysOffForTheBoot)
+{
+    Display d;
+    ASSERT_TRUE(d.stage(video(native_planes::kBt601)));
+    d.latch();
+    d.notePlaneFrame(true, true);
+    d.overlayUnderflowed();
+    EXPECT_FALSE(d.planesOn);
+    EXPECT_TRUE(d.planeRecovering);
+    d.dc[Display::kDcStateControl] = 0;
+    ASSERT_TRUE(d.planeRecoveryFrameEnd());
+    ASSERT_TRUE(d.planeLatch.requested());
+    EXPECT_FALSE(d.planeSetOf(d.planeLatch.armed).on());
+}
+
+TEST(OverlayRecovery, UnderflowAfterOverlaysScannedCleanlyRecoversThem)
+{
+    Display d;
+    ASSERT_TRUE(d.stage(video(native_planes::kBt601)));
+    d.latch();
+    for (unsigned i = 0; i != Display::kPlaneProvenFrames; ++i)
+        d.notePlaneFrame(true, false);
+    EXPECT_TRUE(d.planesProven);
+    d.overlayUnderflowed();
+    EXPECT_TRUE(d.planesOn);
+    d.dc[Display::kDcStateControl] = 0;
+    ASSERT_TRUE(d.planeRecoveryFrameEnd());
+    EXPECT_TRUE(d.planeSetOf(d.planeLatch.armed).on());
 }
 
 TEST(OverlayRecovery, ResumeRestartsBoundFromTheFreshOffRequest)

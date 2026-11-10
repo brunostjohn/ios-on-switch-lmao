@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: BSD-2-Clause-Patent
-bool planeRecovering = false;
+bool planeRecovering = false, planesAbandoned = false;
 uint64_t planeRecoveryAt = 0;
 PlaneSet planeRecoveryTarget = {};
 
@@ -44,6 +44,50 @@ void beginPlaneRecovery(const char *why)
     writePlaneRecoveryOff();
 }
 
+// Windows B and C did not take their off request: they may still scan every slot their sets name, so nothing of theirs
+// is released for the rest of the boot, no overlay is asked for again, and the swaps they carried retire without them.
+void abandonPlanes()
+{
+    IOLog("SwitchDisplay: overlay windows did not stop in %u frames: overlays off for this boot, their memory kept\n",
+          kLatchFrames);
+    __atomic_store_n(&planesOn, false, __ATOMIC_RELEASE);
+    planesAbandoned = true;
+    planeRecovering = false;
+    planeRecoveryTarget = {};
+    planeHeldSet = false;
+}
+
+// The overlay path's bring-up check is its first use: windows that underflow before an overlay ever scanned cleanly
+// for kPlaneProvenFrames are turned off for the boot, through a recovery whose target has no overlay.
+static constexpr unsigned kPlaneProvenFrames = 60;
+bool planesProven = false;
+unsigned planeCleanFrames = 0;
+
+void notePlaneFrame(bool overlaid, bool underflowed)
+{
+    if (!overlaid || planesProven)
+        return;
+    if (underflowed) {
+        planeCleanFrames = 0;
+        return;
+    }
+    if (++planeCleanFrames < kPlaneProvenFrames)
+        return;
+    planesProven = true;
+    if (stats)
+        IOLog("SwitchDisplay: overlay windows scanned %u frames cleanly through the SMMU\n", kPlaneProvenFrames);
+}
+
+void overlayUnderflowed()
+{
+    if (planesProven) {
+        beginPlaneRecovery("overlay underflowed 3 frames in a row");
+        return;
+    }
+    __atomic_store_n(&planesOn, false, __ATOMIC_RELEASE);
+    beginPlaneRecovery("overlay underflowed before it ever scanned cleanly: overlays off for this boot");
+}
+
 bool planeRecoveryFrameEnd()
 {
     if (!planeRecovering)
@@ -55,7 +99,7 @@ bool planeRecoveryFrameEnd()
     dc[kDcStateAccess] = access;
     if (!disabled || (dc[kDcStateControl] & (kWinBActReq | kWinCActReq))) {
         if (frameEnds - planeRecoveryAt >= kLatchFrames)
-            panic("SwitchDisplay: overlay recovery could not stop both windows in %u frames", kLatchFrames);
+            abandonPlanes();
         return true;
     }
     // Only observed inactive windows permit replacing their live CSC/filter state or releasing old snapshots.
@@ -66,7 +110,9 @@ bool planeRecoveryFrameEnd()
     }
     planeUnderflowRun = 0;
     planeRecovering = false;
-    const PlaneSet restore = planeRecoveryTarget;
+    PlaneSet restore = planeRecoveryTarget;
+    if (!planesOn)
+        restore.window[0] = restore.window[1] = {};
     planeRecoveryTarget = {};
     planeFlipOnly(restore);
     planeReleaseIdle();

@@ -37,12 +37,25 @@ struct Display {
     }
     void frameShown(uint64_t sequence, uint64_t at) { shown.push_back({sequence, at}); }
     void kickSwapQueue() { ++kicks; }
-    bool planeRecovering = false;
+    bool planeRecovering = false, planesAbandoned = false;
     PlaneSet planeRecoveryTarget = {};
     struct Probe { bool on = false; bool active() const { return on; } } probe, planeProbe;
     bool kickDeferred = false, tapeSettle = false, probeRequest = false, hwSuspended = false, scanoutStopped = false;
 #include "../SwitchRetireDisplay.h"
 };
+
+TEST(DisplayRetirement, AbandonedOverlaySetsNoLongerHoldRetirement)
+{
+    Display display;
+    display.queue = {{1}, {2}};
+    display.planeLatch.armed = 0;
+    display.planes[0] = {1, 1};
+    display.retireThrough(2, 100);
+    EXPECT_TRUE(display.retired.empty());
+    display.planesAbandoned = true;
+    display.retireThrough(2, 110);
+    EXPECT_EQ(display.retired, (std::vector<uint64_t>{1, 2}));
+}
 
 TEST(DisplayRetirement, DeferredSwapGoesAgainAtAnIdleFrameEndAndOnlyThere)
 {

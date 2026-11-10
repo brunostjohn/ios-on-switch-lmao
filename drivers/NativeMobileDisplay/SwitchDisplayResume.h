@@ -1,9 +1,30 @@
 // SPDX-License-Identifier: BSD-2-Clause-Patent
+// SC7 reset the MC: the dc swgroup is in bypass again. A domain that does not come back turns direct scanout and the
+// overlays off and puts window A back on the identity-mapped scan buffers, the path that ran before either.
 void reattachDirect()
 {
     char why[160];
-    if (switch_smmu_restore(TEGRA_SMMU_ASID_DISPLAY, probeDomain.ptb(), TEGRA_SMMU_DC_ASID, why, sizeof(why)))
-        panic("SwitchDisplay: SC7 retained scanout domain could not be restored: %s", why);
+    if (!switch_smmu_restore(TEGRA_SMMU_ASID_DISPLAY, probeDomain.ptb(), TEGRA_SMMU_DC_ASID, why, sizeof(why)))
+        return;
+    IOLog("SwitchDisplay: SMMU domain not restored after SC7 (%s): direct scanout%s off, window A back on its scan "
+          "buffers\n",
+          why, planesAttached ? " and overlays" : "");
+    stopPlanes();
+    planesAttached = false;
+    if (!directAttached)
+        return;
+    directOn = directAttached = false;
+    for (size_t i = 0; i < sizeof(kWindowAState) / sizeof(kWindowAState[0]); ++i) {
+        if (kWindowAState[i] == kWinbufStartAddr)
+            savedWindow[i] = surfaceAddress(0);
+        if (kWindowAState[i] == kWinbufSurfaceKind)
+            savedWindow[i] = kBlockSurfaceKind;
+        if (kWindowAState[i] == kWinLineStride)
+            savedWindow[i] = kBlockLineStride;
+        if (kWindowAState[i] == kWinbufHOffset)
+            savedWindow[i] = kBlockHOffset;
+    }
+    ring.reset(ring.buffers);
 }
 
 bool finishResume()
@@ -15,7 +36,7 @@ bool finishResume()
     if (!captureDisplayMemory(switch_display::TimingBank::Programmed))
         IOLog("SwitchDisplay: SC7 left no valid display timing: display memory admission off\n");
     if (directAttached || planesAttached)
-        reattachDirect();  // SC7 reset the MC: the dc swgroup is in bypass again
+        reattachDirect();
     dc[kDcStateAccess] = 0;
     dc[kDcWindowHeader] = kWindowASelect;
     dc[kWinOptions] = 0;

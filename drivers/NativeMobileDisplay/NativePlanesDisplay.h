@@ -312,7 +312,8 @@ void retireUnshown(uint64_t seq)
 // Every DC A frame end, under the gate.
 void planeFrameEnd()
 {
-    if (planeProbeTick() || !planesAttached || hwSuspended || scanoutStopped || gPanicRestore.panicking)
+    if (planeProbeTick() || !planesAttached || planesAbandoned || hwSuspended || scanoutStopped ||
+        gPanicRestore.panicking)
         return;
     if (planeRecoveryFrameEnd())
         return;
@@ -339,6 +340,8 @@ void planeFrameEnd()
         }
     }
     const uint32_t underflow = dc[kDcIntStatus] & (kWinBUnderflowInt | kWinCUnderflowInt);
+    const bool overlaid = planeSetOf(planeLatch.active).on();
+    notePlaneFrame(overlaid, underflow != 0);
     if (!underflow) {
         planeUnderflowRun = 0;
         return;
@@ -346,8 +349,8 @@ void planeFrameEnd()
     dc[kDcIntStatus] = underflow;
     if (stats)
         ++stPlaneUnderflows;
-    if (planeSetOf(planeLatch.active).on() && ++planeUnderflowRun >= kPlaneUnderflowFrames)
-        beginPlaneRecovery("overlay underflowed 3 frames in a row");
+    if (overlaid && ++planeUnderflowRun >= kPlaneUnderflowFrames)
+        overlayUnderflowed();
 }
 
 // The display stops: window B off, every slot given back (the caller detaches the domain).
