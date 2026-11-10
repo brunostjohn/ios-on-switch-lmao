@@ -109,6 +109,27 @@ void planeBlendA(bool over, uint32_t &update, uint32_t &request)
     request |= kGeneralActReq | kWinAActReq;
 }
 
+// A set waits only for an overlay latch that is coming (its frame end restages it); with none coming, waiting would
+// hold every later swap's retirement for good, so the overlays that keep it from going out are dropped instead.
+bool planeHoldForLatch(const PlaneSet &p)
+{
+    if (!planeLatch.requested())
+        return false;
+    planeHeld = p;
+    planeHeldSet = true;
+    return true;
+}
+
+void planeDropOverlays(PlaneSet &p, unsigned windows)
+{
+    for (unsigned window = 0; window != 2; ++window)
+        if ((windows & (1u << window)) && p.window[window].on) {
+            p.window[window] = {};
+            if (stats)
+                ++stPlaneDropped;
+        }
+}
+
 // Window B's set p into its assembly registers, with the request bits for the caller's one STATE_CONTROL write; or, while
 // which of the last two sets the boundary took is open, held for the frame end that settles it (newest wins).
 bool planeStage(PlaneSet p, uint32_t &update, uint32_t &request)
@@ -118,11 +139,13 @@ bool planeStage(PlaneSet p, uint32_t &update, uint32_t &request)
         return false;
     }
     const switch_display::WindowState windows[2] = {planeWindowState(0), planeWindowState(1)};
-    const auto assignment = switch_display::assign(p.window, windows);
+    auto assignment = switch_display::assign(p.window, windows);
     if (assignment.convert) {
-        planeHeld = planeTarget = p;
-        planeHeldSet = true;
-        return false;
+        planeTarget = p;
+        if (planeHoldForLatch(p))
+            return false;
+        planeDropOverlays(p, assignment.convert);
+        assignment = switch_display::assign(p.window, windows);
     }
     if (assignment.window[0] != 0) {
         const auto first = p.window[0];
@@ -130,10 +153,16 @@ bool planeStage(PlaneSet p, uint32_t &update, uint32_t &request)
         p.window[1] = first;
     }
     planeTarget = p;
-    if (!planeLatch.mayWrite() || !planeReserveBandwidth(p)) {
+    if (!planeLatch.mayWrite()) {
         planeHeld = p;
         planeHeldSet = true;
         return false;
+    }
+    if (!planeReserveBandwidth(p)) {
+        if (planeHoldForLatch(p))
+            return false;
+        planeDropOverlays(p, 3);
+        planeTarget = p;
     }
     PlaneSet commit = p;
     if (!commit.pendingSeq)

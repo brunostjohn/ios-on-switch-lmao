@@ -59,7 +59,7 @@ struct Display {
     int planeCsc[2][2] = {{-1, -1}, {-1, -1}};
     uint32_t planeBlendSaved[3] = {}, pitchActControl = UINT32_MAX;
     uint64_t planeRequestedAt = 0, frameEnds = 10;
-    unsigned stPlaneFlips = 0, deadlines = 0, releases = 0, planeUnderflowRun = 0;
+    unsigned stPlaneFlips = 0, stPlaneDropped = 0, deadlines = 0, releases = 0, planeUnderflowRun = 0;
     static constexpr unsigned kLatchFrames = 4;
 
     void scanoutMemoryBarrier()
@@ -212,17 +212,53 @@ TEST(OverlayRegisters, MixedTransitionReservesBothOldAndNewBeforeProgramming)
     EXPECT_EQ(display.displayBandwidth.bytes(), single);
 }
 
-TEST(OverlayRegisters, BandwidthRefusalKeepsCurrentRegistersAndDoesNotArm)
+TEST(OverlayRegisters, BandwidthRefusalWithNoLatchComingArmsTheOverlaysOffInsteadOfHolding)
+{
+    Display display;
+    display.stats = true;
+    ASSERT_TRUE(display.stage(video(native_planes::kBt601)));
+    display.latch();
+    reserveError = -1;
+    auto next = video(native_planes::kBt709, 2);
+    next.seq = 2;
+    ASSERT_TRUE(display.stage(next));
+    EXPECT_FALSE(display.planeHeldSet);
+    ASSERT_TRUE(display.planeLatch.requested());
+    EXPECT_FALSE(display.planeSetOf(display.planeLatch.armed).on());
+    EXPECT_EQ(display.planeSetOf(display.planeLatch.armed).seq, 2u);
+    EXPECT_EQ(display.dc[Display::kWinBBase + native_planes::kOptions], 0u);
+    EXPECT_EQ(display.dc[Display::kWinCBase + native_planes::kOptions], 0u);
+    EXPECT_EQ(display.stPlaneDropped, 1u);
+}
+
+TEST(OverlayRegisters, BandwidthRefusalWithALatchComingWaitsForItThenGoes)
 {
     Display display;
     ASSERT_TRUE(display.stage(video(native_planes::kBt601)));
-    display.latch();
-    const auto before = display.registers;
     reserveError = -1;
+    const auto before = display.registers;
     EXPECT_FALSE(display.stage(video(native_planes::kBt709, 2)));
     EXPECT_EQ(display.registers, before);
-    EXPECT_FALSE(display.planeLatch.requested());
     EXPECT_TRUE(display.planeHeldSet);
+    reserveError = 0;
+    display.latch();
+    display.planeHeldSet = false;
+    ASSERT_TRUE(display.stage(display.planeHeld));
+    EXPECT_TRUE(display.planeSetOf(display.planeLatch.armed).on());
+}
+
+TEST(OverlayRegisters, ConversionNeededWithNoLatchComingDropsThatOverlayInsteadOfHolding)
+{
+    Display display;
+    display.stats = true;
+    auto both = video(native_planes::kBt601, 1);
+    both.window[1] = video(native_planes::kBt709, 2).window[0];
+    ASSERT_TRUE(display.stage(both));
+    display.latch();
+    ASSERT_TRUE(display.stage(video(native_planes::kBt2020, 3)));
+    EXPECT_FALSE(display.planeHeldSet);
+    EXPECT_FALSE(display.planeSetOf(display.planeLatch.armed).on());
+    EXPECT_EQ(display.stPlaneDropped, 1u);
 }
 
 TEST(OverlayRegisters, TwoPossiblyLiveMatricesCannotBeChangedBeforeRetirement)
