@@ -104,11 +104,11 @@ class Key(unittest.TestCase):
                 shutil.copyfile(path, self.root / path)
 
     def key(self, ipsw: str = 'one build') -> str:
-        """The key of the copy, over the paths the rule hashes that this test has (NVK and the crates.io crates aside)."""
+        """Give the copy's key over the paths the rule hashes that this test has (not NVK or the crates.io crates)."""
         return raw_stack.key(ipsw, {name: self.root / name for name in hashed() if (self.root / name).is_file()})
 
     def edited(self, path: Path) -> str:
-        """The copy's key with `path` edited, then put back."""
+        """Give the copy's key with `path` edited, then put `path` back."""
         target = self.root / path
         original = target.read_bytes()
         target.write_bytes(original + b'\n// edited\n')

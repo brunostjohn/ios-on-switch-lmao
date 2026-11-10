@@ -261,15 +261,19 @@ raw_stack = rule(
     implementation = _raw_stack_impl,
     doc = """The raw path's stack key (tools/gpu/raw_stack.py): what its records are made and read by.
 
-    srcs and readers, by path and bytes, with NVK, MetalABI.h, every crate the Metal bridge compiles (its sources, compile
-    data and build scripts) and the IPSW build. Each C, C++, Objective-C++ and Metal unit of srcs is checked to include only
-    srcs and MetalABI.h; the hashed files' paths are the output group `inputs`.""",
+    srcs and readers, by path and bytes, with NVK, MetalABI.h, every crate the Metal bridge compiles (its sources,
+    compile data and build scripts) and the IPSW build. Each C, C++, Objective-C++ and Metal unit of srcs is checked to
+    include only srcs and MetalABI.h; the hashed files' paths are the output group `inputs`.""",
     attrs = _XCODE | {
-        "srcs": attr.label_list(mandatory = True, allow_files = True, doc = "what records, pack entries and native records are made by"),
-        "readers": attr.label_list(allow_files = True, doc = "the device's readers of a record, each a file of its own"),
+        "srcs": attr.label_list(
+            mandatory = True,
+            allow_files = True,
+            doc = "what records, pack entries and native records are made by",
+        ),
+        "readers": attr.label_list(allow_files = True, doc = "files that only read the records the device made"),
         "bridge": attr.label(mandatory = True, aspects = [_crate_sources], doc = "the Metal bridge (its crate graph)"),
         "include_markers": attr.label_list(allow_files = True, doc = "one file per -I directory of srcs' units"),
-        "metal_abi": attr.label(mandatory = True, allow_single_file = True, doc = "the selected IPSW kind's MetalABI.h"),
+        "metal_abi": attr.label(mandatory = True, allow_single_file = True, doc = "the IPSW kind's MetalABI.h"),
         "nvk": attr.label(mandatory = True, allow_single_file = True),
         "ipsw": attr.label(default = "//ipsw:current", providers = [IpswInfo]),
         "_tool": attr.label(default = "//tools/gpu:raw_stack", executable = True, cfg = "exec"),
