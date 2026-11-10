@@ -977,9 +977,11 @@ class AGXDeviceUserClient : public IOUserClient
 	bool bindingIdle(const RetiredBinding *binding) const;
 	void takeRetiredOverlaps(uint64_t va, uint64_t bytes);
 	void retire(RetiredBinding *record);
-	IOReturn cutOverlaps(uint64_t va, uint64_t range, bool now, bool replace, RetiredBinding **spare);
+	IOReturn cutOverlaps(uint64_t va, uint64_t range, bool now, bool replace,
+			     RetiredBinding **spare);
 	bool workQueued(uint64_t va, uint64_t range) const;
-	IOReturn mapRange(const TegraGM20BAbiBindOp &op, Bo *bo, RetiredBinding *record, bool queued);
+	IOReturn mapRange(const TegraGM20BAbiBindOp &op, Bo *bo, RetiredBinding *record,
+			  bool queued);
 	void issueBind();
 	void installPendingBinds();
 	void logFaultBindings();

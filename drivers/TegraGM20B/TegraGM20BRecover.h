@@ -166,7 +166,8 @@ struct tgm_hang_candidate {
  * channel either way. So a channel stuck and not moving at a hang check is blamed only when the check before it saw the
  * same with its fence where it is now: two consecutive checks, at the checks' own cadence. *strikes and *seen carry the
  * channel's state between checks. */
-static inline int tgm_hang_confirm(int stuck_still, uint32_t completed, uint32_t *strikes, uint32_t *seen)
+static inline int tgm_hang_confirm(int stuck_still, uint32_t completed, uint32_t *strikes,
+				   uint32_t *seen)
 {
 	if (!stuck_still) {
 		*strikes = 0;

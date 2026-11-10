@@ -143,8 +143,8 @@ void AGXDeviceUserClient::takeRetiredOverlaps(uint64_t va, uint64_t bytes)
 {
 	const auto overlaps = [=](const RetiredBinding *record) {
 		uint64_t from = 0, span = 0;
-		return !switch_gpu_mapping_span(record->mapping, &from, &span) && from < va + bytes &&
-		       va < from + span;
+		return !switch_gpu_mapping_span(record->mapping, &from, &span) &&
+		       from < va + bytes && va < from + span;
 	};
 	RetiredBinding *const lists[] = {retired_, unmapping_};
 	IOLockLock(unmapLock_);
@@ -219,16 +219,16 @@ IOReturn AGXDeviceUserClient::cutOverlaps(uint64_t va, uint64_t range, bool now,
 		keep(above);
 		record->va = b.va > va ? b.va : va;
 		record->range = (b.va + b.range < end ? b.va + b.range : end) - record->va;
-		noteBind(replace ? TGM_BIND_REPLACED : TGM_BIND_UNMAP, record->va, record->range, b.bo,
-			 b.bo_offset + (record->va - b.va), record->kind);
+		noteBind(replace ? TGM_BIND_REPLACED : TGM_BIND_UNMAP, record->va, record->range,
+			 b.bo, b.bo_offset + (record->va - b.va), record->kind);
 		record->mapping = taken;
 		if (now) {
 			switch_gpu_vm_unmap(vm_, &record->mapping);
 			switch_gpu_mapping *const kept[] = {below, above};
 			for (auto *part : kept)
 				if (switch_gpu_mapping_pending(part))
-					switch_gpu_vm_install(vm_, part, b.bo->mem, record->kind, int(b.bo->readOnly),
-							      record->vol);
+					switch_gpu_vm_install(vm_, part, b.bo->mem, record->kind,
+							      int(b.bo->readOnly), record->vol);
 		} else if (switch_gpu_mapping_pending(below) || switch_gpu_mapping_pending(above)) {
 			issueBind();
 		}
@@ -241,15 +241,18 @@ IOReturn AGXDeviceUserClient::cutOverlaps(uint64_t va, uint64_t range, bool now,
 // lock_ held; [op.va, op.va + op.range) is free of bindings. The new binding's PTEs go in now, or with queued, in
 // retirement after the work queued before this Map completes, its submissions from now on waiting for the bind epoch.
 // record is consumed either way.
-IOReturn AGXDeviceUserClient::mapRange(const TegraGM20BAbiBindOp &op, Bo *bo, RetiredBinding *record, bool queued)
+IOReturn AGXDeviceUserClient::mapRange(const TegraGM20BAbiBindOp &op, Bo *bo,
+				       RetiredBinding *record, bool queued)
 {
 	const uint8_t kind = uint8_t(op.kind), vol = op.op == TegraGM20BBindMapVolatile;
 	switch_gpu_mapping *mapping = nullptr;
 	if (!queued)
 		takeRetiredOverlaps(op.va, op.range);
-	const int err = queued ? switch_gpu_vm_prepare(vm_, op.va, op.range, bo->mem, op.bo_offset, kind, &mapping)
-			       : switch_gpu_vm_map_volatile(vm_, op.va, op.range, bo->mem, op.bo_offset, kind,
-							    int(bo->readOnly), vol, &mapping);
+	const int err =
+		queued ? switch_gpu_vm_prepare(vm_, op.va, op.range, bo->mem, op.bo_offset, kind,
+					       &mapping)
+		       : switch_gpu_vm_map_volatile(vm_, op.va, op.range, bo->mem, op.bo_offset,
+						    kind, int(bo->readOnly), vol, &mapping);
 	noteBind(err ? TGM_BIND_REFUSED : TGM_BIND_MAP, op.va, op.range, bo, op.bo_offset, kind);
 	if (err) {
 		IODelete(record, RetiredBinding, 1);
@@ -280,14 +283,15 @@ bool AGXDeviceUserClient::workQueued(uint64_t va, uint64_t range) const
 		for (const auto *record = list; record && !held; record = record->next) {
 			uint64_t from = 0, bytes = 0;
 			held = switch_gpu_mapping_installed(record->mapping) &&
-			       !switch_gpu_mapping_span(record->mapping, &from, &bytes) && from < va + range &&
-			       va < from + bytes;
+			       !switch_gpu_mapping_span(record->mapping, &from, &bytes) &&
+			       from < va + range && va < from + bytes;
 		}
 	if (!held)
 		return false;
 	for (uint32_t slot = 0; slot < kMaxChannels; ++slot)
 		if (chans_[slot] && !tgm_chan_error(chans_[slot]) &&
-		    int32_t(tgm_chan_completed(chans_[slot]) - tgm_chan_submitted(chans_[slot])) < 0)
+		    int32_t(tgm_chan_completed(chans_[slot]) - tgm_chan_submitted(chans_[slot])) <
+			    0)
 			return true;
 	return false;
 }
@@ -297,7 +301,8 @@ bool AGXDeviceUserClient::workQueued(uint64_t va, uint64_t range) const
 void AGXDeviceUserClient::issueBind()
 {
 	++bindIssued_;
-	tgm_vm_bind_wait(vm_, fence_gpu_ + kBindEpochWord * 4, fence_va_ + kBindEpochWord, bindIssued_);
+	tgm_vm_bind_wait(vm_, fence_gpu_ + kBindEpochWord * 4, fence_va_ + kBindEpochWord,
+			 bindIssued_);
 	__atomic_store_n(&retirementPending_, 1u, __ATOMIC_RELEASE);
 }
 
@@ -317,8 +322,8 @@ void AGXDeviceUserClient::installPendingBinds()
 		const auto holds = [&](const RetiredBinding *record) {
 			uint64_t from = 0, bytes = 0;
 			return switch_gpu_mapping_installed(record->mapping) &&
-			       !switch_gpu_mapping_span(record->mapping, &from, &bytes) && from < b.va + b.range &&
-			       b.va < from + bytes;
+			       !switch_gpu_mapping_span(record->mapping, &from, &bytes) &&
+			       from < b.va + b.range && b.va < from + bytes;
 		};
 		bool held = false;
 		const RetiredBinding *const lists[] = {retired_, unmapping_};
@@ -329,10 +334,11 @@ void AGXDeviceUserClient::installPendingBinds()
 			waiting = true;
 			continue;
 		}
-		if (switch_gpu_vm_install(vm_, mapping, b.bo->mem, b.retirement->kind, int(b.bo->readOnly),
-					  b.retirement->vol))
-			IOLog("tegra-gm20b: %s: bind %#llx+%#llx could not be mapped; it stays unmapped\n", owner_,
-			      b.va, b.range);
+		if (switch_gpu_vm_install(vm_, mapping, b.bo->mem, b.retirement->kind,
+					  int(b.bo->readOnly), b.retirement->vol))
+			IOLog("tegra-gm20b: %s: bind %#llx+%#llx could not be mapped; it stays "
+			      "unmapped\n",
+			      owner_, b.va, b.range);
 	}
 	if (waiting)
 		return;

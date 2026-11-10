@@ -1868,10 +1868,11 @@ static enum tgm_hang hang_recover(struct tgm_chan *late, const char *who, u32 se
 		if (j < i)
 			c[i].stuck = c[j].stuck;
 		else
-			c[i].stuck = chans[i] && tgm_hang_confirm(chan_stuck(chans[i], now) && !c[i].moving,
-								  tgm_chan_completed(chans[i]),
-								  &chans[i]->hang_strikes,
-								  &chans[i]->hang_seen);
+			c[i].stuck =
+				chans[i] &&
+				tgm_hang_confirm(chan_stuck(chans[i], now) && !c[i].moving,
+						 tgm_chan_completed(chans[i]),
+						 &chans[i]->hang_strikes, &chans[i]->hang_seen);
 	}
 	for (i = 0; i <= n; i++) {
 		const struct tgm_order *w = chans[i] ? &chans[i]->waited : NULL;

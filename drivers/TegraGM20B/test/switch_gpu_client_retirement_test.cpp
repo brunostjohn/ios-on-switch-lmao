@@ -180,8 +180,13 @@ int switch_gpu_vm_split(void *, switch_gpu_mapping **mapping, tgm_mem *, uint8_t
 	const uint64_t low = std::max(old->va, va), high = std::min(oldEnd, end);
 	const bool keep = old->big && (old->va < va || oldEnd > end);
 	const auto part = [&](uint64_t from, uint64_t to) {
-		return new switch_gpu_mapping{old->id, from, to - from, old->buffer, old->offset + (from - old->va),
-					      old->pending || keep, false};
+		return new switch_gpu_mapping{old->id,
+					      from,
+					      to - from,
+					      old->buffer,
+					      old->offset + (from - old->va),
+					      old->pending || keep,
+					      false};
 	};
 	*below = old->va < va ? part(old->va, va) : nullptr;
 	*taken = keep && !old->pending ? new switch_gpu_mapping(*old) : part(low, high);
@@ -228,15 +233,15 @@ int switch_gpu_vm_install(void *, switch_gpu_mapping *mapping, tgm_mem *, uint8_
 	return 0;
 }
 
-int switch_gpu_vm_prepare(void *, uint64_t va, uint64_t range, tgm_mem *mem, uint64_t offset, uint8_t,
-			  switch_gpu_mapping **out)
+int switch_gpu_vm_prepare(void *, uint64_t va, uint64_t range, tgm_mem *mem, uint64_t offset,
+			  uint8_t, switch_gpu_mapping **out)
 {
 	*out = new switch_gpu_mapping{9000, va, range, mem->buffer, offset, true, false};
 	return 0;
 }
 
-int switch_gpu_vm_map_volatile(void *, uint64_t va, uint64_t range, tgm_mem *mem, uint64_t offset, uint8_t, int,
-			       int, switch_gpu_mapping **out)
+int switch_gpu_vm_map_volatile(void *, uint64_t va, uint64_t range, tgm_mem *mem, uint64_t offset,
+			       uint8_t, int, int, switch_gpu_mapping **out)
 {
 	*out = new switch_gpu_mapping{9000, va, range, mem->buffer, offset, true, false};
 	installPtes(*out);
@@ -445,7 +450,8 @@ public:
 		return add(id, va, 4096);
 	}
 
-	Bo *add(unsigned id, uint64_t va, uint64_t bytes, std::vector<uint8_t> *buffer = nullptr, bool big = false)
+	Bo *add(unsigned id, uint64_t va, uint64_t bytes, std::vector<uint8_t> *buffer = nullptr,
+		bool big = false)
 	{
 		auto *bo = new Bo;
 		bo->handle = id;

@@ -331,7 +331,8 @@ TEST_F(VmMap, CutBigPageKeepsItsPteUntilRetirementAndItsRestWaitsForInstall)
 	calls.clear();
 	ASSERT_EQ(switch_gpu_vm_install(&a, below, &memory, 0, 0, 0), 0);
 	ASSERT_EQ(switch_gpu_vm_install(&a, above, &memory, 0, 0, 0), 0);
-	const std::vector<std::pair<u64, u64>> remapped = {{0x40000000, 0x8000}, {0x40009000, 0x17000}};
+	const std::vector<std::pair<u64, u64>> remapped = {{0x40000000, 0x8000},
+							   {0x40009000, 0x17000}};
 	ASSERT_EQ(calls.size(), 4u);
 	for (size_t i = 0; i < remapped.size(); ++i) {
 		EXPECT_EQ(calls[2 * i].operation, 'g');

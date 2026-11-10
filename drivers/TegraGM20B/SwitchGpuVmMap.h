@@ -268,11 +268,12 @@ static struct switch_gpu_mapping *mapping_alloc(u32 count)
 
 static void mapping_add(struct switch_gpu_mapping *part, u64 va, u64 offset, u64 bytes, u8 shift)
 {
-	part->entries[part->count++] = (struct switch_gpu_mapping_entry){va, offset, bytes, shift, 0};
+	part->entries[part->count++] =
+		(struct switch_gpu_mapping_entry){va, offset, bytes, shift, 0};
 }
 
-static void mapping_add_pending(struct switch_gpu_mapping *part, u64 va, u64 offset, u64 bytes, u8 shift,
-				u8 pending)
+static void mapping_add_pending(struct switch_gpu_mapping *part, u64 va, u64 offset, u64 bytes,
+				u8 shift, u8 pending)
 {
 	mapping_add(part, va, offset, bytes, shift);
 	part->entries[part->count - 1].pending = pending;
@@ -299,7 +300,8 @@ int switch_gpu_vm_split(struct tgm_vm *vm, struct switch_gpu_mapping **mapping, 
 			return -EINVAL;
 		counts[0] += e->va < va;
 		counts[2] += e_end > end;
-		counts[1] += e->va < end && va < e_end && !(cut && e->pending && e->shift != PAGE_SHIFT);
+		counts[1] +=
+			e->va < end && va < e_end && !(cut && e->pending && e->shift != PAGE_SHIFT);
 	}
 	for (p = 0; p < 3; ++p) {
 		parts[p] = mapping_alloc(counts[p]);
@@ -319,17 +321,17 @@ int switch_gpu_vm_split(struct tgm_vm *vm, struct switch_gpu_mapping **mapping, 
 		const u8 kept = big ? PAGE_SHIFT : e->shift, pending = big ? 1 : e->pending;
 		const u64 low = e->va > va ? e->va : va, high = e_end < end ? e_end : end;
 		if (e->va < va)
-			mapping_add_pending(parts[0], e->va, e->offset, (e_end < va ? e_end : va) - e->va, kept,
-					    pending);
+			mapping_add_pending(parts[0], e->va, e->offset,
+					    (e_end < va ? e_end : va) - e->va, kept, pending);
 		if (big && !e->pending)
 			mapping_add_pending(parts[1], e->va, e->offset, e->bytes, e->shift, 0);
 		else if (e->va < end && va < e_end && !big)
-			mapping_add_pending(parts[1], low, e->offset + (low - e->va), high - low, e->shift,
-					    e->pending);
+			mapping_add_pending(parts[1], low, e->offset + (low - e->va), high - low,
+					    e->shift, e->pending);
 		if (e_end > end) {
 			const u64 from = e->va > end ? e->va : end;
-			mapping_add_pending(parts[2], from, e->offset + (from - e->va), e_end - from, kept,
-					    pending);
+			mapping_add_pending(parts[2], from, e->offset + (from - e->va),
+					    e_end - from, kept, pending);
 		}
 	}
 	for (p = 0; p < 3; ++p) {
@@ -346,8 +348,8 @@ int switch_gpu_vm_split(struct tgm_vm *vm, struct switch_gpu_mapping **mapping, 
 	return 0;
 }
 
-int switch_gpu_vm_prepare(struct tgm_vm *vm, u64 va, u64 range, struct tgm_mem *mem, u64 offset, u8 kind,
-			  struct switch_gpu_mapping **mapping)
+int switch_gpu_vm_prepare(struct tgm_vm *vm, u64 va, u64 range, struct tgm_mem *mem, u64 offset,
+			  u8 kind, struct switch_gpu_mapping **mapping)
 {
 	struct switch_gpu_mapping_run run;
 	struct switch_gpu_mapping *made;
@@ -364,8 +366,8 @@ int switch_gpu_vm_prepare(struct tgm_vm *vm, u64 va, u64 range, struct tgm_mem *
 	for (at = 0; at < range; at += run.bytes, ++count)
 		if (gpu.mmu.kind[kind] != kind)
 			run = (struct switch_gpu_mapping_run){range, SWITCH_GPU_BIG_SHIFT};
-		else if (!switch_gpu_mapping_next(mem->pages, mem->npages, va + at, offset + at, range - at,
-						  &run))
+		else if (!switch_gpu_mapping_next(mem->pages, mem->npages, va + at, offset + at,
+						  range - at, &run))
 			return -EINVAL;
 	made = mapping_alloc(count);
 	if (!made)
@@ -374,8 +376,8 @@ int switch_gpu_vm_prepare(struct tgm_vm *vm, u64 va, u64 range, struct tgm_mem *
 		if (gpu.mmu.kind[kind] != kind)
 			run = (struct switch_gpu_mapping_run){range, SWITCH_GPU_BIG_SHIFT};
 		else
-			switch_gpu_mapping_next(mem->pages, mem->npages, va + at, offset + at, range - at,
-						&run);
+			switch_gpu_mapping_next(mem->pages, mem->npages, va + at, offset + at,
+						range - at, &run);
 		mapping_add_pending(made, va + at, offset + at, run.bytes, run.shift, 1);
 	}
 	*mapping = made;
@@ -384,8 +386,8 @@ int switch_gpu_vm_prepare(struct tgm_vm *vm, u64 va, u64 range, struct tgm_mem *
 
 int switch_gpu_mapping_pending(const struct switch_gpu_mapping *mapping);
 
-int switch_gpu_vm_install(struct tgm_vm *vm, struct switch_gpu_mapping *mapping, struct tgm_mem *mem, u8 kind,
-			  int read_only, int vol)
+int switch_gpu_vm_install(struct tgm_vm *vm, struct switch_gpu_mapping *mapping,
+			  struct tgm_mem *mem, u8 kind, int read_only, int vol)
 {
 	struct gf100_vmm_map_v0 args = {
 		.version = 0, .vol = !!vol || !l2_on(), .ro = !!read_only, .kind = kind};
@@ -406,10 +408,11 @@ int switch_gpu_vm_install(struct tgm_vm *vm, struct switch_gpu_mapping *mapping,
 		memory = mem_mapping_view(mem, e, &memory_offset);
 		ret = nvif_vmm_raw_get(&vm->vmm, e->va, e->bytes, e->shift);
 		if (!ret) {
-			ret = nvif_vmm_raw_map(&vm->vmm, e->va, e->bytes, e->shift, &args, sizeof(args), memory,
-					       memory_offset);
+			ret = nvif_vmm_raw_map(&vm->vmm, e->va, e->bytes, e->shift, &args,
+					       sizeof(args), memory, memory_offset);
 			if (ret)
-				e->pending = 2; /* got, not mapped: put below, outside the ordered scope */
+				e->pending =
+					2; /* got, not mapped: put below, outside the ordered scope */
 		}
 		if (!ret)
 			e->pending = 0;
