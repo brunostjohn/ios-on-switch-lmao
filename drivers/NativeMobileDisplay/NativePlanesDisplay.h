@@ -88,7 +88,6 @@ static native_planes::Layer planeLayerOf(const unsigned char *bytes, unsigned i,
 struct PlaneDecision {
     OSObject *ui;
     bool uiNew, blank, planeChange;
-    OSObject *waitSource;
     bool waitSlot;
     PlaneSet set;
 };

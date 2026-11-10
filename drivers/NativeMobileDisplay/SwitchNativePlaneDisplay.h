@@ -5,6 +5,12 @@ int planeNativeSlotFor(OSObject *surface, const native_planes::Layer &layer, uin
     SwitchNativeScanout scanout = {};
     int error = switch_native_scanout_acquire(surface, &scanout);
     resolved = true;
+    // Only a surface with no native picture, one the window cannot take, or a retired one falls back to its pitch
+    // representation; a busy one (-16) keeps the frame on screen rather than read the representation being replaced.
+    if (error && error != -2 && error != -95 && error != SWITCH_GPU_BACKING_STALE) {
+        switch_native_scanout_release(&scanout);
+        return error;
+    }
     if (error || !switch_native_plane_image(layer, width, height, scanout.view.layout,
                                             scanout.view.crop.x, scanout.view.crop.y, image)) {
         switch_native_scanout_release(&scanout);

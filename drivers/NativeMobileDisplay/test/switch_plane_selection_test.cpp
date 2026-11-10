@@ -11,7 +11,7 @@ struct Display {
     using PlaneSet = switch_display::Composition;
     static constexpr unsigned swapUpdated = 0, swapReady = 4, swapEffectiveSurfaces = 8;
     struct PlaneLayerRecord { OSObject *surface = nullptr; native_planes::Layer layer; } planeLayers[4];
-    struct PlaneDecision { OSObject *ui; bool uiNew, blank, planeChange; OSObject *waitSource; bool waitSlot; PlaneSet set; };
+    struct PlaneDecision { OSObject *ui; bool uiNew, blank, planeChange; bool waitSlot; PlaneSet set; };
     bool stats = false, planesOn = true;
     OSObject *planeShownUi = nullptr;
     unsigned stPlaneUnready = 0, stPlaneDropped = 0, conversions = 0;
@@ -105,21 +105,9 @@ TEST(PlaneSelection, ProducerUpdateKeepsUnchangedUiAndOtherOverlay)
     EXPECT_TRUE(decision.set.uses(3));
     EXPECT_FALSE(decision.set.uses(2));
 }
-TEST(PlaneSelection, CpuOwnershipDeferralDoesNotAcceptPartialComposition)
-{
-    Display display;
-    const auto request = frame(display);
-    display.mapError = -16;
-    Display::PlaneDecision decision;
-    display.planeDecide(&request, decision);
-    EXPECT_EQ(decision.waitSource, &surfaces[0]);
-    EXPECT_FALSE(decision.planeChange);
-    EXPECT_EQ(display.planeBuildingSlots, 0u);
-}
-
 TEST(PlaneSelection, BusySourceKeepsTheCurrentFrameForTheNextFrameEnd)
 {
-    for (int busy : {-11, -115, int(SWITCH_GPU_BACKING_STALE)}) {
+    for (int busy : {-16, -11, -115, int(SWITCH_GPU_BACKING_STALE)}) {
         Display display;
         const auto request = frame(display);
         display.mapError = busy;

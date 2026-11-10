@@ -101,10 +101,6 @@ void planeDecide(const OriginalLegacySwapRequest *request, PlaneDecision &d)
                                                        overlay.image, resolved) : -19;
         if (slot == -2)
             continue;
-        if (slot == -16) {
-            d.waitSource = layer.surface;
-            return;
-        }
         if (planeRetry(slot)) {
             d.waitSlot = true;
             return;

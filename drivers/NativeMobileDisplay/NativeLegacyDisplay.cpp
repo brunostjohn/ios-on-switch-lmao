@@ -3486,10 +3486,6 @@ public:
         }
         PlaneDecision pd;
         planeDecide(request, pd);
-        if (pd.waitSource) {
-            deferSource(request, pd.waitSource);
-            return;
-        }
         if (pd.waitSlot) {
             kickDeferred = true;
             return;

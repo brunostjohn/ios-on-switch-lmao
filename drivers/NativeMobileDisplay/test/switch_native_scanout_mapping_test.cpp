@@ -162,6 +162,21 @@ TEST_F(NativeScanoutMapping, OrdinarySurfaceCapturesExactBackingAndContentGenera
     EXPECT_EQ(display->planeSlots[0].native->allocation.allocation_id, 2u);
     EXPECT_EQ(display->planeSlots[0].native->view.producer.value, 92u);
 }
+TEST_F(NativeScanoutMapping, BusyNativeSurfaceIsRetriedNotReadThroughItsPitchRepresentation)
+{
+    nativeError = -16;
+    EXPECT_EQ(admit(), -16);
+    EXPECT_EQ(pitchAcquisitions, 0u);
+    EXPECT_EQ(display->probeDomain.maps, 0u);
+    EXPECT_EQ(leases, 0u);
+    nativeError = -22;
+    EXPECT_EQ(admit(), -22);
+    EXPECT_EQ(pitchAcquisitions, 0u);
+    nativeError = int(SWITCH_GPU_BACKING_STALE);
+    EXPECT_EQ(admit(), 0);
+    EXPECT_EQ(pitchAcquisitions, 1u);
+}
+
 TEST_F(NativeScanoutMapping, IncompletePhysicalExtentCannotReachSmmu)
 {
     nextNative.allocation.page_count = 1;
