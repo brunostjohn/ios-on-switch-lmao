@@ -16,6 +16,7 @@ constexpr uint64_t Page = 4096, PushVa = 1ULL << 20;
 
 struct Job {
 	bool busy;
+	uint32_t dwords;
 	SwitchGpuCopyMapping *source, *destination;
 	switch_gpu_backing_token completion;
 	tegra_gm20b_ce_done done;
@@ -109,6 +110,20 @@ int channel()
 	return 0;
 }
 
+#if DEVELOPMENT || DEBUG
+// What the CPU wrote for a failed job, beside the PBDMA's view of it in a PBENTRY report
+void logFailedPush(const Job &job, int result)
+{
+	const auto slot = uint32_t(&job - queue.jobs);
+	const uint32_t *push = queue.words + slot * (Page / 4);
+	char words[9 * 32 + 1] = "";
+	for (uint32_t i = 0, at = 0; i < job.dwords && i < 32; ++i)
+		at += uint32_t(snprintf(words + at, sizeof(words) - at, " %08x", push[i]));
+	IOLog("SwitchGpu: ce-copy job %llu failed (%d): slot %u at %#llx, %u words:%s\n",
+	      job.completion.value, result, slot, PushVa + slot * Page, job.dwords, words);
+}
+#endif
+
 void retire(thread_call_param_t, thread_call_param_t)
 {
 	tegra_gm20b_ce_done callbacks[Jobs];
@@ -125,8 +140,12 @@ void retire(thread_call_param_t, thread_call_param_t)
 			pending = true;
 			continue;
 		}
-		if (result < 0)
+		if (result < 0) {
 			queue.semanticFailed = true;
+#if DEVELOPMENT || DEBUG
+			logFailedPush(job, result);
+#endif
+		}
 		switch_gpu_copy_mapping_put(job.source);
 		switch_gpu_copy_mapping_put(job.destination);
 		switch_gpu_backing_token_release(&job.completion);
@@ -356,6 +375,7 @@ extern "C" int tegra_gm20b_ce_copy_plane_checked(
 			PushVa + slot * Page,
 			tgm_copy_push(queue.words + slot * (Page / 4), &copy, nullptr, 0), 0, 0, 0};
 		result = submit(job, push, source, destination, ownership, events);
+		job.dwords = push.dwords;
 	}
 	if (!result) {
 		job.busy = true;
