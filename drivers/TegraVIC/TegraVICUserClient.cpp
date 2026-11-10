@@ -57,6 +57,7 @@
 #include "SwitchVICTransform.h"
 #include "SwitchVICEvents.h"
 #include "SwitchVICRequests.h"
+#include "SwitchVICStats.h"
 #include "../TegraGM20B/TegraGM20BLayout.h"
 
 // The kernel's IOService/IOUserClient implementations, called directly (they are the defaults the vtable copies
@@ -164,20 +165,25 @@ IOLock *gQueueLock;
 SwitchVICRequests<Job> gRequests;
 
 #if TEGRA_VIC_STATS
-// Stats for the unified log (one line per 5 s window with work). `pitch`: refusals for a row pitch VIC cannot address,
-// which CoreVideo's buffers sized by the display pipe's stride requirement never have.
-struct {
-    uint64_t windowStart, jobs, ops, refused, pitch, failed, engineUs, mapUs, bytes;
-} gStats;
+// `pitch`: refusals for a row pitch VIC cannot address, which CoreVideo's buffers sized by the display pipe's stride
+// requirement never have.
+SwitchVICStats gStats;
 #endif
 
-// `why` is a literal: the refusal's key as well as its text.
-void refused(IOReturn ret, const char *why)
+char fourccChar(uint32_t fourcc, unsigned shift)
+{
+    const char c = static_cast<char>(fourcc >> shift);
+    return c >= ' ' && c <= '~' ? c : '?';
+}
+
+// `why` is a literal: the refusal's key as well as its text. Each pair of formats is a reason of its own, so every
+// pairing the callers try is named once.
+void refused(IOReturn ret, const char *why, const TegraVICSurfaceDesc &src, const TegraVICSurfaceDesc &dst)
 {
 #if TEGRA_VIC_STATS
-    __atomic_add_fetch(&gStats.refused, 1, __ATOMIC_RELAXED);
+    gStats.add(gStats.refused, 1);
     if (!strncmp(why, "row pitch", 9))
-        __atomic_add_fetch(&gStats.pitch, 1, __ATOMIC_RELAXED);
+        gStats.add(gStats.pitch, 1);
 #endif
     const char *kind = "surface lookup";
     if (ret == kIOReturnUnsupported) {
@@ -185,7 +191,15 @@ void refused(IOReturn ret, const char *why)
     } else if (ret == kIOReturnBadArgument) {
         kind = "bad request";
     }
-    switch_refusal("TegraVIC", why, "IOSurfaceAccelerator transform refused (%s), the caller falls back", kind);
+    const uint64_t key = switch_refusal_key_with(switch_refusal_key("TegraVIC", why),
+                                                 (uint64_t(src.fourcc) << 32) | dst.fourcc);
+    switch_refusal_k(key, "TegraVIC", why,
+                     "IOSurfaceAccelerator transform refused (%s), the caller falls back: '%c%c%c%c' %ux%u to "
+                     "'%c%c%c%c' %ux%u",
+                     kind, fourccChar(src.fourcc, 24), fourccChar(src.fourcc, 16), fourccChar(src.fourcc, 8),
+                     fourccChar(src.fourcc, 0), src.width, src.height, fourccChar(dst.fourcc, 24),
+                     fourccChar(dst.fourcc, 16), fourccChar(dst.fourcc, 8), fourccChar(dst.fourcc, 0), dst.width,
+                     dst.height);
 }
 
 #if TEGRA_VIC_STATS
@@ -226,6 +240,9 @@ struct Job {
     IOReturn status;
     bool done, detached;  // detached: its synchronous caller was interrupted and finishJob frees it
     TegraVICJob check;  // the submitting thread's check of each operation
+#if TEGRA_VIC_STATS
+    uint64_t submittedUs;
+#endif
 };
 
 uint32_t pitchAlign()
@@ -261,35 +278,37 @@ bool runJob(Job *job, IOReturn *status)
     const int prepared = job->eventStatus ? job->eventStatus : switch_vic_events_prepare(job->events);
     if (prepared) { *status = ioreturn(prepared); return true; }
     int submitted = 0;
+#if TEGRA_VIC_STATS
+    // Read before submitting: the job may complete and be freed before the submission returns.
+    const uint64_t began = switch_now_us();
+    job->submittedUs = began;
+    const uint32_t operations = job->plan.count;
+    const uint64_t addressed = tegra_vic_surface_extent(&job->dst.desc) +
+                               (job->plan.readsSource ? tegra_vic_surface_extent(&job->src.desc) : 0);
+#endif
     if (!job->bounceSrc && !job->bounceDst)
         submitted = switch_vic_transform(&job->src, &job->dst, &job->plan, job->chromaSite,
                                           transformed, job, job->events);
-    if (!submitted)
+    const bool bounced = !submitted;
+    if (bounced)
         submitted = switch_vic_bounce_submit(&job->src, &job->dst, &job->plan, job->chromaSite,
                                               transformed, job, job->events);
-    if (submitted > 0) return false;
-    *status = ioreturn(submitted);
-    return true;
+    if (submitted <= 0) {
+        *status = ioreturn(submitted);
+        return true;
+    }
+#if TEGRA_VIC_STATS
+    gStats.submission(operations, bounced, switch_now_us() - began, addressed);
+#endif
+    return false;
 }
 
 #if TEGRA_VIC_STATS
 void statsLine()
 {
-    const uint64_t now = switch_now_us();
-    if (!gStats.windowStart)
-        gStats.windowStart = now;
-    if (now - gStats.windowStart < 5000000)
-        return;
-    char line[200];
-    snprintf(line, sizeof(line),
-             "TegraVIC: %llus jobs=%llu ops=%llu refused=%llu pitch=%llu failed=%llu engine=%lluus/job "
-             "cpu=%lluus/job mapped=%lluKB/job",
-             (now - gStats.windowStart) / 1000000, gStats.jobs, gStats.ops, gStats.refused, gStats.pitch, gStats.failed,
-             gStats.jobs ? gStats.engineUs / gStats.jobs : 0, gStats.jobs ? gStats.mapUs / gStats.jobs : 0,
-             gStats.jobs ? (gStats.bytes >> 10) / gStats.jobs : 0);
-    os_log(OS_LOG_DEFAULT, "%s", line);
-    bzero(&gStats, sizeof(gStats));
-    gStats.windowStart = now;
+    char line[220];
+    if (gStats.line(switch_now_us(), line, sizeof(line)))
+        os_log(OS_LOG_DEFAULT, "%s", line);
 }
 #endif
 
@@ -321,9 +340,7 @@ void engineThread(void *, wait_result_t)
 void finishJob(Job *job, IOReturn status)
 {
 #if TEGRA_VIC_STATS
-    gStats.jobs++;
-    if (status)
-        gStats.failed++;
+    gStats.finished(status, job->submittedUs ? switch_now_us() - job->submittedUs : 0);
     statsLine();
 #endif
     switch_vic_events_release(&job->events);
@@ -474,7 +491,7 @@ IOReturn transform(Conn *conn, const void *in, uint32_t size)
         ret = ioreturn(switch_vic_events_create(current_task(), r, eventsReady, job, &job->events));
     if (ret) {
         switch_vic_events_release(&job->events);
-        refused(ret, why ? why : "surface lookup");
+        refused(ret, why ? why : "surface lookup", job->src.desc, job->dst.desc);
         tegra_vic_surface_release(&job->src);
         tegra_vic_surface_release(&job->dst);
         IODelete(job, Job, 1);

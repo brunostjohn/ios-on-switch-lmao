@@ -31,6 +31,14 @@ host_test(
     ],
 )
 
+host_test(
+    name = "switch_vic_stats_test",
+    srcs = [
+        "switch_vic_stats_test.cpp",
+        "//drivers/TegraVIC:SwitchVICStats.h",
+    ],
+)
+
 # vic_host.c's checks, its main() renamed so the test calls it.
 host_library(
     name = "vic_host",
