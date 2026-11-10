@@ -1228,7 +1228,8 @@ struct tgm_chan {
 	struct tgm_order order[TGM_ORDER_MAX];
 	struct tgm_order waited;
 	struct tgm_hang_log hang;
-	u64 get_seen, get_ns; /* hang_recover: its GPFIFO and pushbuffer GET as last read, and when they last moved */
+	u64 get_seen,
+		get_ns; /* hang_recover: its GPFIFO and pushbuffer GET as last read, and when they last moved */
 #if TGM_STATS
 	u64 killed_ns; /* chan_killed's time, for a fault's line (TegraGM20BUserClient.cpp) */
 #endif
@@ -1730,7 +1731,9 @@ static int chan_stuck(struct tgm_chan *chan, u64 now)
 static int chan_moving(struct tgm_chan *chan, u64 now)
 {
 	volatile u32 *userd = chan->user.map.ptr;
-	const u64 get = userd ? (u64)userd[0x88 / 4] << 40 ^ (u64)userd[0x44 / 4] << 32 ^ userd[0x40 / 4] : 0;
+	const u64 get =
+		userd ? (u64)userd[0x88 / 4] << 40 ^ (u64)userd[0x44 / 4] << 32 ^ userd[0x40 / 4]
+		      : 0;
 
 	if (get != chan->get_seen) {
 		chan->get_seen = get;
@@ -1818,7 +1821,8 @@ static enum tgm_hang hang_recover(struct tgm_chan *late, const char *who, u32 se
 	for (chan = late, i = 0; chan && i < 2; i++) {
 		struct tgm_chan *source = NULL;
 
-		if (!chan->waited.cpu || (s32)(READ_ONCE(*chan->waited.cpu) - chan->waited.seqno) >= 0)
+		if (!chan->waited.cpu ||
+		    (s32)(READ_ONCE(*chan->waited.cpu) - chan->waited.seqno) >= 0)
 			break;
 		source = live_by(chan->waited.id, 0);
 		if (!source)

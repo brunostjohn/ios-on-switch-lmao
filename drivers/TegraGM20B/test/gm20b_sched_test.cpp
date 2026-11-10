@@ -390,8 +390,8 @@ struct Candidates {
 // live, stuck, kernel, resident (an engine or PBDMA is on it), moving (fence or GET), waits (1 + the source's index)
 constexpr tgm_hang_candidate kStuckClient = {1, 1, 0, 0, 0, 0}, kBusyClient = {1, 0, 0, 0, 0, 0},
 			     kNone = {0, 0, 0, 0, 0, 0}, kStuckResident = {1, 1, 0, 1, 0, 0},
-			     kMovingResident = {1, 1, 0, 1, 1, 0}, kStuckKernel = {1, 1, 1, 1, 0, 0},
-			     kBusyKernel = {1, 0, 1, 0, 0, 0};
+			     kMovingResident = {1, 1, 0, 1, 1, 0},
+			     kStuckKernel = {1, 1, 1, 1, 0, 0}, kBusyKernel = {1, 0, 1, 0, 0, 0};
 
 constexpr tgm_hang_candidate waiting(tgm_hang_candidate c, int source, int moving = 0)
 {
@@ -439,7 +439,8 @@ TEST(HangBlame, ChannelsWaitingBehindAnEngineThatMovesAreNotKilled)
 
 TEST(HangBlame, AResidentChannelThatDoesNotMoveIsKilledNotItsWaiters)
 {
-	Candidates k{{kStuckResident, kStuckClient, waiting(kStuckClient, 1), waiting(kStuckClient, 0)}};
+	Candidates k{
+		{kStuckResident, kStuckClient, waiting(kStuckClient, 1), waiting(kStuckClient, 0)}};
 	int blame;
 	EXPECT_EQ(k.verdict(blame), TGM_HANG_RECOVERING);
 	EXPECT_EQ(blame, 0);

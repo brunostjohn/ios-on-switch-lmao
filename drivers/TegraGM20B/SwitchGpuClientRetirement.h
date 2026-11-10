@@ -149,7 +149,8 @@ void AGXDeviceUserClient::takeRetiredOverlaps(uint64_t va, uint64_t bytes)
 		for (auto *record = list; record; record = record->next)
 			if (record->mapping && overlaps(record)) {
 				switch_gpu_vm_unmap(vm_, &record->mapping);
-				noteBind(TGM_BIND_GONE, record->va, record->range, record->bo, 0, record->kind);
+				noteBind(TGM_BIND_GONE, record->va, record->range, record->bo, 0,
+					 record->kind);
 			}
 	IOLockUnlock(unmapLock_);
 }
@@ -318,7 +319,8 @@ void AGXDeviceUserClient::unbindOverlaps(uint64_t va, uint64_t range, Bo *only)
 		Binding &b = binds_[i];
 		if (b.va < va + range && va < b.va + b.range && (!only || b.bo == only)) {
 			if (only)
-				noteBind(TGM_BIND_FREED, b.va, b.range, b.bo, b.bo_offset, b.retirement->kind);
+				noteBind(TGM_BIND_FREED, b.va, b.range, b.bo, b.bo_offset,
+					 b.retirement->kind);
 			retire(b.retirement);
 			--nbinds_;
 			memmove(&binds_[i], &binds_[i + 1], sizeof(Binding) * (nbinds_ - i));
@@ -343,12 +345,16 @@ void AGXDeviceUserClient::logFaultBindings()
 		const Binding *binding = switch_gpu_binding_find(binds_, nbinds_, fault, 1);
 		char pages[160] = "";
 		if (binding)
-			switch_gpu_mapping_describe(binding->retirement->mapping, pages, sizeof(pages));
+			switch_gpu_mapping_describe(binding->retirement->mapping, pages,
+						    sizeof(pages));
 		if (binding)
-			IOLog("tegra-gm20b: channel %u fault at %#llx: binding %#llx+%#llx (handle %llu, pages %s)\n",
-			      slot + 1, fault, binding->va, binding->range, binding->bo->handle, pages);
+			IOLog("tegra-gm20b: channel %u fault at %#llx: binding %#llx+%#llx (handle "
+			      "%llu, pages %s)\n",
+			      slot + 1, fault, binding->va, binding->range, binding->bo->handle,
+			      pages);
 		else
-			IOLog("tegra-gm20b: channel %u fault at %#llx: binding none\n", slot + 1, fault);
+			IOLog("tegra-gm20b: channel %u fault at %#llx: binding none\n", slot + 1,
+			      fault);
 		describeFault(slot, fault);
 	}
 }
@@ -356,8 +362,8 @@ void AGXDeviceUserClient::logFaultBindings()
 #if TGM_STATS
 static_assert(kMaxChannels == TGM_BIND_CHANNELS, "a note keeps each slot's submitted seqno");
 
-void AGXDeviceUserClient::noteBind(uint8_t op, uint64_t va, uint64_t range, const Bo *bo, uint64_t boOffset,
-				   uint8_t kind)
+void AGXDeviceUserClient::noteBind(uint8_t op, uint64_t va, uint64_t range, const Bo *bo,
+				   uint64_t boOffset, uint8_t kind)
 {
 	tgm_bind_history *&history = bindHistory_[va >= TGM_KERNEL_VA / 2];
 	if (!history) {
@@ -375,7 +381,7 @@ void AGXDeviceUserClient::noteBind(uint8_t op, uint64_t va, uint64_t range, cons
 	if (bo) {
 		n.handle = bo->handle;
 		n.bo_bytes = bo->bytes;
-		n.origin = bo->wired ? TGM_BIND_IMPORT
+		n.origin = bo->wired     ? TGM_BIND_IMPORT
 			   : bo->chunked ? TGM_BIND_COMPRESSIBLE
 			   : bo->pool_va ? TGM_BIND_POOL
 					 : TGM_BIND_ALLOC;
@@ -401,14 +407,17 @@ void AGXDeviceUserClient::describeFault(uint32_t slot, uint64_t va)
 					     : (after < nbinds_ ? &binds_[after] : nullptr);
 		if (b && !(side == 0 && va < b->va + b->range))
 			snprintf(sides[side], sizeof(sides[side]),
-				 "%#llx+%#llx of BO %llu (%llu bytes at %#llx), kind %#x", b->va, b->range,
-				 b->bo->handle, b->bo->bytes, b->bo_offset, b->retirement->kind);
+				 "%#llx+%#llx of BO %llu (%llu bytes at %#llx), kind %#x", b->va,
+				 b->range, b->bo->handle, b->bo->bytes, b->bo_offset,
+				 b->retirement->kind);
 	}
-	IOLog("tegra-gm20b: %s channel %u fault VA %#llx (jobs %u-%u failed): below: %s; above: %s\n", owner_,
-	      slot + 1, va, failed, last, sides[0], sides[1]);
+	IOLog("tegra-gm20b: %s channel %u fault VA %#llx (jobs %u-%u failed): below: %s; above: "
+	      "%s\n",
+	      owner_, slot + 1, va, failed, last, sides[0], sides[1]);
 	const tgm_bind_history *history = bindHistory_[va >= TGM_KERNEL_VA / 2];
 	uint32_t near[16];
-	const uint32_t n = history ? tgm_bind_history_near(history, va, TGM_BIND_SLACK, near, 16) : 0;
+	const uint32_t n =
+		history ? tgm_bind_history_near(history, va, TGM_BIND_SLACK, near, 16) : 0;
 	const uint64_t now = nowNs(), killed = tgm_chan_killed_ns(chans_[slot]);
 	uint32_t shownBefore = 0, shownAfter = 0;
 	for (uint32_t i = 0; i < n; i++) {
@@ -422,8 +431,11 @@ void AGXDeviceUserClient::describeFault(uint32_t slot, uint64_t va)
 		tgm_bind_note_format(line, sizeof(line), &note, now, killed, slot, failed);
 		IOLog("tegra-gm20b: fault VA %#llx: %s\n", va, line);
 	}
-	const uint32_t kept = !history ? 0u : history->written < TGM_BIND_NOTES ? history->written : TGM_BIND_NOTES;
-	IOLog("tegra-gm20b: fault VA %#llx: %u maps and unmaps near it among the last %u of its half of the address "
+	const uint32_t kept = !history                            ? 0u
+			      : history->written < TGM_BIND_NOTES ? history->written
+								  : TGM_BIND_NOTES;
+	IOLog("tegra-gm20b: fault VA %#llx: %u maps and unmaps near it among the last %u of its "
+	      "half of the address "
 	      "space, which go back %llu ms\n",
 	      va, n, kept, history ? tgm_bind_history_span_ns(history, now) / 1000000 : 0);
 }

@@ -922,7 +922,8 @@ class AGXDeviceUserClient : public IOUserClient
     // and unmaps are kept apart from the raw path's
     tgm_bind_history *bindHistory_[2] = {};
 #endif
-    void noteBind(uint8_t op, uint64_t va, uint64_t range, const Bo *bo, uint64_t boOffset, uint8_t kind);
+    void noteBind(uint8_t op, uint64_t va, uint64_t range, const Bo *bo, uint64_t boOffset,
+		  uint8_t kind);
     void describeFault(uint32_t slot, uint64_t va);
     thread_call_t retireCall_ = nullptr;
     uint32_t retiredCount_ = 0, retireRemaining_ = 0, retirementPending_ = 0,
@@ -1687,7 +1688,8 @@ IOReturn AGXDeviceUserClient::vmBind(const TegraGM20BAbiVmBind *in, uint32_t cou
 		Bo *bo = unmap ? nullptr : findBo(op.handle);
 		if (!unmap &&
 		    (!bo || op.bo_offset > bo->bytes || op.range > bo->bytes - op.bo_offset)) {
-			noteBind(TGM_BIND_REFUSED, op.va, op.range, bo, op.bo_offset, uint8_t(op.kind));
+			noteBind(TGM_BIND_REFUSED, op.va, op.range, bo, op.bo_offset,
+				 uint8_t(op.kind));
 			return kIOReturnBadArgument;
 		}
 		const Binding *same = switch_gpu_binding_find(binds_, nbinds_, op.va, op.range);
