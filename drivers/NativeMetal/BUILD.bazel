@@ -19,6 +19,7 @@ filegroup(
         "GpuMemoryRelease.h",
         "ImageFilterLink.h",
         "LimitsTable.h",
+        "MetallibEntries.h",
         "NativeBridgeMetalFrontend.h",
         "NativeMetalArtifactCache.h",
         "NativeComputeArtifactStorage.h",
