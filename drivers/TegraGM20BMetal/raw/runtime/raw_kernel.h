@@ -156,6 +156,11 @@ public:
         return (info_.flags & TegraGM20BInfoSubmitAddress) ? TegraGM20BMaxJobPushes : TegraGM20BMaxPushes;
     }
 
+    bool nativeSurfaceViews() const
+    {
+        return (info_.flags & TegraGM20BInfoNativeSurfaceView) && exactJobs();
+    }
+
     bool exactJobs() const
     {
         return (info_.flags & TegraGM20BInfoSubmitAddress) != 0;

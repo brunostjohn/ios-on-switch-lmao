@@ -38,6 +38,8 @@ struct Kernel {
     TegraGM20BAbiNativeSurfaceViewReply next = {};
     int result = KERN_SUCCESS;
     unsigned queries = 0, frees = 0;
+    bool views = true;
+    bool nativeSurfaceViews() const { return views; }
     int nativeSurfaceView(const Bo &, Bo &bo, TegraGM20BAbiNativeSurfaceViewReply &layout)
     {
         ++queries;
@@ -231,6 +233,17 @@ TEST_F(RawNativeSurface, UnsupportedRepresentationIsRequeriedOnLaterCommandBuffe
     next.dev_ = &device;
     EXPECT_NE(next.readTexture(&y), &y);
     EXPECT_EQ(device.k_.queries, 2u);
+}
+
+// The current kernel has no NativeSurfaceView: no query, no lock, no surface made, per read
+TEST_F(RawNativeSurface, AKernelWithoutViewsReadsTheSourceWithoutAQuery)
+{
+    device.k_.views = false;
+    EXPECT_EQ(cb.readTexture(&y), &y);
+    EXPECT_EQ(cb.readTexture(&y), &y);
+    EXPECT_EQ(device.k_.queries, 0u);
+    EXPECT_EQ(source.native, nullptr);
+    EXPECT_TRUE(device.nativeSurfaces_.empty());
 }
 
 TEST_F(RawNativeSurface, FailedProducerIsReportedAndNeverCachedAsOrdinarySuccess)
