@@ -94,6 +94,8 @@ host_test(
     data = [
         "//drivers/TegraGM20B:TegraGM20BCopy.h",
         "//drivers/TegraVIC:SwitchVICBounceSubmit.cpp",
+        "//drivers/TegraVIC:SwitchVICJobs.h",
+        "//drivers/TegraVIC:TegraVIC.h",
     ],
 )
 

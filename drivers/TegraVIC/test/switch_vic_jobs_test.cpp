@@ -489,3 +489,15 @@ TEST_F(SwitchVICJobsTest, CompletedHardwareWithFailedProducerRetiresOnlyItsOwnJo
     EXPECT_EQ(waitSequence(independent.fence), 0);
     EXPECT_EQ(waitSequence(failed.fence), -5);
 }
+
+// A submission records its output as a write, or VIC refuses it: an unrecorded write would leave the GPU's L2 lines of the
+// allocation valid for its next reader.
+TEST_F(SwitchVICJobsTest, ASubmissionWithoutAWriteUseIsRefused)
+{
+    switch_gpu_backing_use readOnly[1] = {{uses[0].backing, SWITCH_GPU_BACKING_READ, 0}};
+    EXPECT_EQ(switch_vic_submit_checked(jobs, 1, nullptr, {nullptr, 0, nullptr, 0, nullptr, 0}, nullptr, nullptr,
+                                        nullptr), -22);
+    EXPECT_EQ(switch_vic_submit_checked(jobs, 1, nullptr, {readOnly, 1, nullptr, 0, nullptr, 0}, nullptr, nullptr,
+                                        nullptr), -22);
+    EXPECT_EQ(gQueue.submitted, gQueue.completed);
+}

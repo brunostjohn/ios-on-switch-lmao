@@ -131,12 +131,6 @@ bool switch_vic_jobs_start(const TegraVICBuffer &configs, uint32_t syncpt, uint3
     return true;
 }
 
-extern "C" int switch_vic_submit_after(const TegraVICJob *job, const TegraVICAcquire *acquire,
-                                       void (*completion)(void *, int), void *context, uint32_t *fence)
-{
-    return switch_vic_submit_batch(job, 1, acquire, nullptr, 0, completion, context, fence);
-}
-
 int switch_vic_submit_batch(const TegraVICJob *jobs, uint32_t count, const TegraVICAcquire *acquire,
                             switch_gpu_backing_use *uses, uint32_t useCount, void (*completion)(void *, int),
                             void *context, uint32_t *fence)
@@ -164,6 +158,13 @@ int switch_vic_submit_checked(const TegraVICJob *jobs, uint32_t count, const Teg
         return -19;
     if (!jobs || !count || count > kBatchMax || (useCount && !uses) ||
         (ownership.guardCount && (!ownership.guards || !useCount)) || (leaseCount && (!leases || !useCount)))
+        return -22;
+    // A job's output is a recorded write: it moves the allocation's host epoch, so the GPU's next reader invalidates its
+    // L2 before reading what VIC wrote.
+    bool writes = false;
+    for (uint32_t i = 0; i < useCount; ++i)
+        writes |= (uses[i].access & SWITCH_GPU_BACKING_WRITE) != 0;
+    if (!writes)
         return -22;
     for (uint32_t j = 0; j < count; ++j) {
         if (jobs[j].count > TEGRA_VIC_MAX_METHODS)

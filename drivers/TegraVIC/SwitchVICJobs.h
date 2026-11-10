@@ -11,8 +11,6 @@ bool switch_vic_jobs_start(const TegraVICBuffer &configs, uint32_t syncpt, uint3
 void switch_vic_jobs_suspend();
 void switch_vic_jobs_resume(bool ready, uint32_t completed);
 
-extern "C" int switch_vic_submit_after(const TegraVICJob *job, const TegraVICAcquire *acquire,
-                                       void (*completion)(void *, int), void *context, uint32_t *fence);
 extern "C" int switch_vic_wait(uint32_t fence);
 int switch_vic_submit_batch(const TegraVICJob *jobs, uint32_t count, const TegraVICAcquire *acquire,
                             switch_gpu_backing_use *uses, uint32_t useCount, void (*completion)(void *, int),

@@ -1,6 +1,5 @@
 // SPDX-License-Identifier: BSD-2-Clause-Patent
-// What VIC hands another engine, and what it writes, goes through the GPU's ownership layer: a copy-engine copy is only
-// the checked one, whose completion reports the copy's own failure to the job that queued it.
+// What VIC hands another engine, and what it writes, goes through the GPU's ownership layer.
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
@@ -18,4 +17,17 @@ TEST(VicOwnershipSource, CopyEngineCopiesAreCheckedAndReportTheirFailure)
     const std::string bounce = SourceText("../SwitchVICBounceSubmit.cpp");
     EXPECT_THAT(bounce, HasSubstr("const tegra_gm20b_ce_done done = {TEGRA_GM20B_CE_NO_SYNCPT, completed, work};"));
     EXPECT_THAT(bounce, HasSubstr("nullptr, &done,"));
+}
+
+// Every VIC submission names what it reads and writes (switch_vic_submit_checked's uses), so a write VIC makes moves
+// its allocation's host epoch and the next GPU reader invalidates the GPU's L2 before reading it. The entry points that
+// submitted with no uses are gone.
+TEST(VicOwnershipSource, EveryVicSubmissionRecordsItsUses)
+{
+    const std::string engine = SourceText("../TegraVIC.h");
+    EXPECT_THAT(engine, Not(HasSubstr("int tegra_vic_run(")));
+    EXPECT_THAT(engine, Not(HasSubstr("int tegra_vic_run_after(")));
+    EXPECT_THAT(SourceText("../SwitchVICJobs.h"), Not(HasSubstr("switch_vic_submit_after(")));
+    EXPECT_THAT(SourceText("../SwitchVICBounceSubmit.cpp"),
+                HasSubstr("switch_gpu_backing_use uses[5] = {{output, SWITCH_GPU_BACKING_WRITE, 0}};"));
 }

@@ -45,17 +45,11 @@ int tegra_vic_buffer(uint64_t size, TegraVICBuffer *out);  // from the kernel ar
 // `writable` 0 maps them read-only for the engine. Returns the window's address.
 uint64_t tegra_vic_window_map(uint32_t window, const uint64_t *pages, uint32_t count, bool writable);
 void tegra_vic_window_clear(uint32_t window);
-// The synchronous entry point uses the configuration ring and sleeps on its completion worker.
-// Legacy window callers hold tegra_vic_lock across map, submission, completion and unmap.
-int tegra_vic_run(const TegraVICJob *job, uint64_t *busyUs);
-
 // Another engine's syncpoint threshold VIC's channel waits for on the hardware before the job starts.
 struct TegraVICAcquire {
     uint32_t syncpt, threshold;
 };
 
-// tegra_vic_run, after `acquire` (null: none); *fence (null: not wanted) is the VIC syncpoint value the job reached.
-int tegra_vic_run_after(const TegraVICJob *job, const TegraVICAcquire *acquire, uint64_t *busyUs, uint32_t *fence);
 // VIC's syncpoint, for an engine that waits for a job's fence.
 uint32_t tegra_vic_syncpt(void);
 uint64_t tegra_vic_config_address(void);

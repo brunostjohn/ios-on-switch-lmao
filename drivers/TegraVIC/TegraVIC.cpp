@@ -556,29 +556,6 @@ extern "C" void switch_vic_mapping_destroy(uint64_t address, uint32_t count)
     IOLockUnlock(gMappingLock);
 }
 
-extern "C" int tegra_vic_run_after(const TegraVICJob *job, const TegraVICAcquire *acquire, uint64_t *busyUs,
-                                   uint32_t *fence)
-{
-    if (!gUp)
-        return -19;
-    const uint64_t start = switch_now_us();
-    uint32_t next = 0;
-    int ret = switch_vic_submit_after(job, acquire, nullptr, nullptr, &next);
-    if (!ret) {
-        ret = switch_vic_wait(next);
-        if (fence)
-            *fence = next;
-    }
-    if (busyUs)
-        *busyUs = switch_now_us() - start;
-    return ret;
-}
-
-extern "C" int tegra_vic_run(const TegraVICJob *job, uint64_t *busyUs)
-{
-    return tegra_vic_run_after(job, nullptr, busyUs, nullptr);
-}
-
 extern "C" uint32_t tegra_vic_syncpt(void)
 {
     return gSyncpt;
