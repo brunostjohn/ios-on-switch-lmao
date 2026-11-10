@@ -59,7 +59,7 @@ struct Display {
     struct Plane { uint64_t seq = 0; uint32_t address = 0; };
     struct Probe { bool active() const { return false; } } probe;
     TegraScanoutRing ring;
-    std::array<uint64_t, TegraScanoutRing::kMaxEntries> entrySeq{}, marks{};
+    std::array<uint64_t, TegraScanoutRing::kMaxEntries> entrySeq{}, entryPendingSeq{}, marks{};
     std::array<bool, TegraScanoutRing::kMaxEntries> entryPlaneSet{};
     std::array<Plane, TegraScanoutRing::kMaxEntries> entryPlane{};
     Plane planeNext{}, planeTarget{}, stagedPlane{};
@@ -135,6 +135,7 @@ struct Display {
     void notePresent(uint64_t, uint64_t, uint64_t) { ++presents; }
     void retireThrough(uint64_t seq, uint64_t stamp) { retired = seq; retiredAt = stamp; }
     void flipLatched() { ++latched; }
+    void releaseIdleDirectReads() {}
     void checkFlip(bool)
     {
         const int asked = ring.pending;

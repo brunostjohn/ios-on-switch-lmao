@@ -9,6 +9,7 @@
 #include "TegraDisplayB.h"
 
 #include <IOKit/IOLib.h>
+#include "../TegraDisplayFlip/SwitchDisplayPriority.h"
 
 #include "../../kits/SwitchCAR/SwitchCAR.h"
 #include "../../kits/SwitchCAR/SwitchPMC.h"
@@ -81,8 +82,8 @@ constexpr Reg kInit[] = {
     {DC_CMD_STATE_CONTROL, kGeneralUpdate},
     {DC_CMD_STATE_CONTROL, kGeneralActReq},
     {DC_DISP_DC_MCCIF_FIFOCTRL, 0},
-    {DC_DISP_DISP_MEM_HIGH_PRIORITY, 0},
-    {DC_DISP_DISP_MEM_HIGH_PRIORITY_TIMER, 0},
+    {DC_DISP_DISP_MEM_HIGH_PRIORITY, SwitchDisplayPriority::kThresholds},
+    {DC_DISP_DISP_MEM_HIGH_PRIORITY_TIMER, SwitchDisplayPriority::kDelays},
     {DC_CMD_DISPLAY_WINDOW_HEADER, 0xf0},
     {DC_WIN_WIN_OPTIONS, 0},
     {DC_WIN_DV_CONTROL, 0},

@@ -43,7 +43,7 @@
 #
 #   bazel test //drivers/NativeMobileDisplay/test:all
 load("//bazel/lint:defs.bzl", "lint_files")
-load("//bazel/testing:defs.bzl", "host_test")
+load("//bazel/testing:defs.bzl", "host_shims", "host_test")
 
 lint_files()
 
@@ -169,10 +169,15 @@ host_test(
     name = "native_legacy_display_source_test",
     srcs = ["native_legacy_display_source_test.cpp"],
     data = [
+        "//drivers/NativeMobileDisplay:SwitchOverlayRegisters.h",
+        "//drivers/NativeMobileDisplay:SwitchPlaneSelection.h",
         "//diagnostics/switch:SwitchDiag.c",
         "//diagnostics/switch:SwitchPanicSave.c",
         "//drivers/NativeMobileDisplay:NativeLegacyDisplay.cpp",
         "//drivers/NativeMobileDisplay:SwitchScanoutStart.h",
+        "//drivers/NativeMobileDisplay:SwitchDisplayResume.h",
+        "//drivers/NativeMobileDisplay:SwitchDirectSlots.h",
+        "//drivers/NativeMobileDisplay:SwitchRetireDisplay.h",
         "//drivers/NativeMobileDisplay:SwitchScanoutSetup.h",
         "//kits/SwitchABI:kinds/21H461/IOMobileFramebufferLegacy.json",
     ],
@@ -183,6 +188,7 @@ host_test(
     srcs = [
         "display_planes_test.cpp",
         "//drivers/NativeMobileDisplay:NativePlanes.h",
+        "//drivers/TegraVIC:SwitchSurfaceColor.h",
         "//drivers/TegraGM20B:TegraGM20BLayout.h",
     ],
     copts = [
@@ -204,6 +210,7 @@ host_test(
     srcs = [
         "display_planes_block_test.cpp",
         "//drivers/NativeMobileDisplay:NativePlanes.h",
+        "//drivers/TegraVIC:SwitchSurfaceColor.h",
         "//drivers/TegraGM20B:TegraGM20BLayout.h",
     ],
     copts = ["-O1"],
@@ -214,9 +221,14 @@ host_test(
     srcs = [
         "display_blend_test.cpp",
         "//drivers/NativeMobileDisplay:NativePlanes.h",
+        "//drivers/TegraVIC:SwitchSurfaceColor.h",
         "//drivers/TegraGM20B:TegraGM20BLayout.h",
     ],
-    data = ["//drivers/NativeMobileDisplay:NativePlanesDisplay.h"],
+    data = [
+        "//drivers/NativeMobileDisplay:NativePlanesDisplay.h",
+        "//drivers/NativeMobileDisplay:SwitchOverlayRegisters.h",
+        "//drivers/NativeMobileDisplay:SwitchPlaneSelection.h",
+    ],
 )
 
 host_test(
@@ -225,8 +237,14 @@ host_test(
     data = [
         "//drivers/NativeMobileDisplay:NativeLegacyDisplay.cpp",
         "//drivers/NativeMobileDisplay:SwitchScanoutStart.h",
+        "//drivers/NativeMobileDisplay:SwitchDirectSlots.h",
         "//drivers/NativeMobileDisplay:NativePlaneFenceDisplay.h",
+        "//drivers/NativeMobileDisplay:SwitchPlaneFenceAdmission.h",
+        "//drivers/NativeMobileDisplay:SwitchCopiedPlanes.h",
         "//drivers/NativeMobileDisplay:NativePlanesDisplay.h",
+        "//drivers/NativeMobileDisplay:SwitchNativePlaneDisplay.h",
+        "//drivers/NativeMobileDisplay:SwitchOverlayRegisters.h",
+        "//drivers/NativeMobileDisplay:SwitchPlaneSelection.h",
         "//drivers/NativeMobileDisplay:NativePlanesTotals.h",
         "//kernel/xnu-10063.141.1/bsd:kern/kern_exec.c",
         "//kernel/xnu-12377.121.6/bsd:kern/kern_exec.c",
@@ -244,6 +262,7 @@ host_test(
         "display_column_scan_test.cpp",
         "//drivers/NativeMobileDisplay:NativeColumnScan.h",
         "//drivers/NativeMobileDisplay:NativePlanes.h",
+        "//drivers/TegraVIC:SwitchSurfaceColor.h",
         "//drivers/TegraGM20B:TegraGM20BLayout.h",
     ],
     copts = ["-O1"],
@@ -255,6 +274,251 @@ host_test(
     srcs = [
         "switch_scanout_start_test.cpp",
         "//drivers/NativeMobileDisplay:SwitchScanoutStart.h",
+        "//drivers/NativeMobileDisplay:SwitchDirectSlots.h",
         "//drivers/TegraDisplayFlip:TegraScanoutRing.h",
+    ],
+)
+
+
+host_test(
+    name = "switch_native_plane_test",
+    srcs = [
+        "switch_native_plane_test.cpp",
+        "//drivers/NativeMobileDisplay:SwitchNativePlane.h",
+        "//drivers/TegraVIC:SwitchSurfaceColor.h",
+        "//drivers/NativeMobileDisplay:NativePlanes.h",
+        "//drivers/TegraGM20B:SwitchGpuBacking.h",
+        "//drivers/TegraGM20B:TegraGM20BLayout.h",
+    ],
+)
+
+
+host_shims(
+    name = "native_scanout_kernel",
+    headers = ["IOKit/IOTypes.h", "kern/task.h"],
+    stubs = "switch_native_scanout_stubs.h",
+)
+
+host_test(
+    name = "switch_native_scanout_mapping_test",
+    srcs = [
+        "switch_native_scanout_mapping_test.cpp",
+        "//drivers/NativeMobileDisplay:SwitchDisplayComposition.h",
+        "//drivers/NativeMobileDisplay:SwitchNativePlaneDisplay.h",
+        "//drivers/SwitchPower:SwitchDisplayBandwidth.h",
+        "//drivers/NativeMobileDisplay:SwitchNativePlane.h",
+        "//drivers/TegraVIC:SwitchSurfaceColor.h",
+        "//drivers/NativeMobileDisplay:NativePlanes.h",
+        "//drivers/TegraDisplayFlip:TegraScanoutCopy.h",
+        "//drivers/TegraVIC:SwitchNativeScanout.h",
+        "//drivers/TegraVIC:SwitchNativeSurface.h",
+        "//drivers/TegraVIC:SwitchVICPicture.h",
+        "//drivers/TegraVIC:TegraVICSurface.h",
+        "//drivers/TegraVIC:TegraVICRequest.h",
+        "//drivers/TegraVIC:TegraVICConfig.h",
+        "//drivers/TegraGM20B:SwitchGpuBacking.h",
+        "//drivers/TegraGM20B:TegraGM20BLayout.h",
+    ],
+    deps = [":native_scanout_kernel"],
+)
+
+host_test(
+    name = "switch_direct_slots_test",
+    srcs = [
+        "switch_direct_slots_test.cpp",
+        "//drivers/NativeMobileDisplay:SwitchDirectSlots.h",
+        "//drivers/TegraVIC:SwitchNativeScanout.h",
+        "//drivers/TegraVIC:SwitchNativeSurface.h",
+        "//drivers/TegraVIC:TegraVICSurface.h",
+        "//drivers/TegraVIC:TegraVICPresent.h",
+        "//drivers/TegraVIC:TegraVICRequest.h",
+        "//drivers/TegraVIC:SwitchSurfaceColor.h",
+        "//drivers/TegraVIC:TegraVICConfig.h",
+        "//drivers/TegraVIC:SwitchVICPicture.h",
+        "//drivers/TegraGM20B:SwitchGpuBacking.h",
+        "//drivers/TegraDisplayFlip:TegraScanoutRing.h",
+    ],
+    deps = [":native_scanout_kernel"],
+)
+
+host_test(
+    name = "switch_display_admission_test",
+    srcs = [
+        "switch_display_admission_test.cpp",
+        "//drivers/NativeMobileDisplay:SwitchDisplayBandwidthDisplay.h",
+        "//drivers/NativeMobileDisplay:SwitchDisplayMemoryEnvelope.h",
+        "//drivers/SwitchPower:SwitchDisplayMemory.h",
+        "//drivers/NativeMobileDisplay:NativePlanes.h",
+        "//drivers/TegraVIC:SwitchSurfaceColor.h",
+        "//drivers/NativeMobileDisplay:SwitchDisplayComposition.h",
+        "//drivers/TegraGM20B:TegraGM20BLayout.h",
+        "//drivers/SwitchPower:SwitchDisplayBandwidth.h",
+    ],
+)
+
+
+host_test(
+    name = "switch_source_wait_test",
+    srcs = [
+        "switch_source_wait_test.cpp",
+        "//drivers/NativeMobileDisplay:SwitchSourceWaitDisplay.h",
+        "//drivers/TegraVIC:SwitchNativeScanout.h",
+        "//drivers/TegraVIC:SwitchNativeSurface.h",
+        "//drivers/TegraVIC:TegraVICSurface.h",
+        "//drivers/TegraVIC:TegraVICRequest.h",
+        "//drivers/TegraVIC:SwitchSurfaceColor.h",
+        "//drivers/TegraVIC:TegraVICConfig.h",
+        "//drivers/TegraVIC:SwitchVICPicture.h",
+        "//drivers/TegraGM20B:SwitchGpuBacking.h",
+    ],
+    deps = [":native_scanout_kernel"],
+)
+
+
+host_test(
+    name = "switch_composition_test",
+    srcs = [
+        "switch_composition_test.cpp",
+        "//drivers/NativeMobileDisplay:SwitchDisplayComposition.h",
+        "//drivers/NativeMobileDisplay:NativePlanes.h",
+        "//drivers/TegraVIC:SwitchSurfaceColor.h",
+        "//drivers/SwitchPower:SwitchDisplayBandwidth.h",
+        "//drivers/TegraGM20B:TegraGM20BLayout.h",
+    ],
+)
+
+
+host_test(
+    name = "switch_composition_registers_test",
+    srcs = [
+        "switch_composition_registers_test.cpp",
+        "//drivers/NativeMobileDisplay:SwitchDisplayComposition.h",
+        "//drivers/NativeMobileDisplay:SwitchCompositionRegisters.h",
+        "//drivers/NativeMobileDisplay:NativePlanes.h",
+        "//drivers/TegraVIC:SwitchSurfaceColor.h",
+        "//drivers/SwitchPower:SwitchDisplayBandwidth.h",
+        "//drivers/TegraGM20B:TegraGM20BLayout.h",
+    ],
+)
+
+
+host_test(
+    name = "switch_display_retirement_test",
+    srcs = [
+        "switch_display_retirement_test.cpp",
+        "//drivers/NativeMobileDisplay:SwitchDisplayRetirement.h",
+        "//drivers/NativeMobileDisplay:SwitchRetireDisplay.h",
+    ],
+)
+
+
+host_test(
+    name = "switch_plane_conversion_test",
+    srcs = [
+        "switch_plane_conversion_test.cpp",
+        "//drivers/NativeMobileDisplay:SwitchPlaneConversionDisplay.h",
+        "//drivers/NativeMobileDisplay:SwitchScanoutBuffer.h",
+        "//drivers/NativeMobileDisplay:NativePlanes.h",
+        "//drivers/TegraVIC:SwitchSurfaceColor.h",
+        "//drivers/TegraVIC:SwitchNativeVICImage.h",
+        "//drivers/TegraVIC:SwitchVICScanoutConvert.h",
+        "//drivers/TegraVIC:SwitchNativeScanout.h",
+        "//drivers/TegraVIC:SwitchNativeSurface.h",
+        "//drivers/TegraVIC:TegraVICSurface.h",
+        "//drivers/TegraVIC:TegraVICRequest.h",
+        "//drivers/TegraVIC:TegraVICConfig.h",
+        "//drivers/TegraVIC:SwitchVICPicture.h",
+        "//drivers/TegraGM20B:SwitchGpuBacking.h",
+        "//drivers/TegraGM20B:TegraGM20BLayout.h",
+    ],
+    deps = [":native_scanout_kernel"],
+)
+
+host_test(
+    name = "switch_plane_fence_admission_test",
+    srcs = [
+        "switch_plane_fence_admission_test.cpp",
+        "//drivers/NativeMobileDisplay:SwitchPlaneFenceAdmission.h",
+        "//drivers/NativeMobileDisplay:SwitchCopiedPlanes.h",
+        "//drivers/TegraGM20B:SwitchGpuBacking.h",
+    ],
+)
+
+host_test(
+    name = "switch_overlay_registers_test",
+    srcs = [
+        "switch_overlay_registers_test.cpp",
+        "//drivers/NativeMobileDisplay:SwitchPlanesResume.h",
+        "//drivers/NativeMobileDisplay:SwitchOverlayRegisters.h",
+        "//drivers/NativeMobileDisplay:SwitchOverlayRecovery.h",
+        "//drivers/NativeMobileDisplay:SwitchPlaneSelection.h",
+        "//drivers/NativeMobileDisplay:SwitchDisplayBandwidthDisplay.h",
+        "//drivers/NativeMobileDisplay:SwitchDisplayMemoryEnvelope.h",
+        "//drivers/SwitchPower:SwitchDisplayMemory.h",
+        "//drivers/NativeMobileDisplay:SwitchCompositionRegisters.h",
+        "//drivers/NativeMobileDisplay:SwitchDisplayComposition.h",
+        "//drivers/NativeMobileDisplay:NativePlanes.h",
+        "//drivers/TegraVIC:SwitchSurfaceColor.h",
+        "//drivers/SwitchPower:SwitchDisplayBandwidth.h",
+        "//drivers/TegraGM20B:TegraGM20BLayout.h",
+    ],
+)
+
+host_test(
+    name = "switch_plane_selection_test",
+    srcs = [
+        "switch_plane_selection_test.cpp",
+        "//drivers/NativeMobileDisplay:SwitchPlaneSelection.h",
+        "//drivers/NativeMobileDisplay:SwitchDisplayComposition.h",
+        "//drivers/NativeMobileDisplay:NativePlanes.h",
+        "//drivers/TegraVIC:SwitchSurfaceColor.h",
+        "//drivers/SwitchPower:SwitchDisplayBandwidth.h",
+        "//drivers/TegraGM20B:TegraGM20BLayout.h",
+    ],
+)
+
+host_test(
+    name = "switch_copied_planes_test",
+    srcs = [
+        "switch_copied_planes_test.cpp",
+        "//drivers/NativeMobileDisplay:SwitchCopiedPlanes.h",
+        "//drivers/NativeMobileDisplay:SwitchDisplayComposition.h",
+        "//drivers/NativeMobileDisplay:NativePlanes.h",
+        "//drivers/TegraVIC:SwitchSurfaceColor.h",
+        "//drivers/SwitchPower:SwitchDisplayBandwidth.h",
+        "//drivers/TegraGM20B:TegraGM20BLayout.h",
+    ],
+)
+
+host_test(
+    name = "switch_scanout_retirement_test",
+    srcs = [
+        "switch_scanout_retirement_test.cpp",
+        "//drivers/NativeMobileDisplay:SwitchScanoutRetirement.h",
+        "//drivers/NativeMobileDisplay:NativePlanes.h",
+        "//drivers/TegraVIC:SwitchSurfaceColor.h",
+        "//drivers/TegraGM20B:TegraGM20BLayout.h",
+    ],
+)
+
+
+host_test(
+    name = "switch_display_memory_envelope_test",
+    srcs = [
+        "switch_display_memory_envelope_test.cpp",
+        "//drivers/NativeMobileDisplay:SwitchDisplayMemoryEnvelope.h",
+        "//drivers/NativeMobileDisplay:SwitchDisplayMemoryTiming.h",
+        "//drivers/SwitchPower:SwitchDisplayMemory.h",
+    ],
+)
+
+host_test(
+    name = "switch_display_resume_test",
+    srcs = [
+        "switch_display_resume_test.cpp",
+        "//drivers/NativeMobileDisplay:SwitchDisplayResume.h",
+        "//drivers/NativeMobileDisplay:SwitchDisplayMemoryTiming.h",
+        "//drivers/SwitchPower:SwitchDisplayMemory.h",
+        "//drivers/TegraSMMU:TegraSMMU.h",
     ],
 )

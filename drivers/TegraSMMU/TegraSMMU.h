@@ -73,6 +73,8 @@ static inline void tegra_smmu_ids_distinct(enum tegra_smmu_asid asid, enum tegra
 // swgroup is translated by another ASID, or a register did not take.
 int tegra_smmu_attach(uint32_t asid, uint32_t ptb, uint32_t asidReg, uint32_t translationReg, uint32_t translationBits,
                       char *line, size_t size);
+// Restore a retained attachment after reset, before that client resumes DMA. A different or detached identity is refused.
+int switch_smmu_restore(uint32_t asid, uint32_t ptb, uint32_t asidReg, char *line, size_t size);
 // The swgroup back to bypass, the ASID's directory cleared, a flush.
 void tegra_smmu_detach(uint32_t asid, uint32_t asidReg);
 // After a change to the ASID's tables (cleaned to memory first): PTC all, then the ASID's TLB entries.

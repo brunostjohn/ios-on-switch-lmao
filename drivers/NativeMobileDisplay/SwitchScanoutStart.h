@@ -4,7 +4,7 @@
     {
         const bool mayReplace = ring.pending == kNoBuffer || sameLayout(i, ring.pending);
         const TegraScanoutRing::Ready how = ring.ready(i, mayReplace);
-        entrySeq[i] = seqOf(flipRequest);
+        entrySeq[i] = entryPendingSeq[i] = seqOf(flipRequest);
         // r18-planes: the window B change of the swap this frame shows goes out with it (writeFlip), now or at the latch
         // that releases a held frame.
         entryPlaneSet[i] = planeNextSet;
@@ -56,6 +56,7 @@
         if (doubleBuffer && !entryPrepared) {
             ring.ready(target);
             entrySeq[target] = seqOf(flipRequest);
+            entryPendingSeq[target] = entrySeq[target];
             markFlip(target);
         }
         uint32_t update = kGeneralUpdate | kWinAUpdate;
@@ -123,6 +124,7 @@
                 const int asked = ring.pending;
                 const int replaced = ring.superseded;
                 ring.latch(surfaceIndex(start), false);
+                releaseIdleDirectReads();
                 if (replaced != kNoBuffer)
                     ++stReplaced;
                 const uint64_t stamp = __atomic_load_n(&feStamp, __ATOMIC_ACQUIRE);

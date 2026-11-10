@@ -17,7 +17,7 @@ using testing::Not;
 namespace {
 const std::string &display()
 {
-    static const std::string source = (SourceText("../NativeLegacyDisplay.cpp") + SourceText("../SwitchScanoutStart.h"));
+    static const std::string source = (SourceText("../NativeLegacyDisplay.cpp") + SourceText("../SwitchScanoutStart.h") + SourceText("../SwitchDirectSlots.h") + SourceText("../SwitchRetireDisplay.h") + SourceText("../SwitchDisplayResume.h"));
     return source;
 }
 
@@ -97,7 +97,7 @@ TEST(DirectScanoutSource, FrameInfoAtEveryPresent)
 TEST(DirectScanoutSource, NoEarlyRetireOrCollapseOnceRetiringAtTheLatch)
 {
     EXPECT_THAT(display(), HasSubstr("if (!latchRetire && retireSwap(request, true))"));
-    EXPECT_THAT(display(), HasSubstr("asyncCopy == 2 && !latchRetire && retireSwap"));
+    EXPECT_THAT(display(), HasSubstr("asyncCopy == 2 && !latchRetire && sourceWait->read.lease && retireSwap"));
     EXPECT_THAT(display(), HasSubstr("if (!latchRetire) {"));
     expectBefore(method(display(), "    void finishTransfer("), "if (latchRetire)", "retireSwap");
 }
@@ -123,8 +123,10 @@ TEST(DirectScanoutSource, SlotsHoldTheSurfaceTheyScan)
 {
     const std::string make = method(display(), "    int directSlotFor(");
     EXPECT_THAT(make, HasSubstr("surface->retain();"));
-    EXPECT_THAT(make, HasSubstr("holdLayout(slots[victim], tiled)"));
-    EXPECT_THAT(make, HasSubstr("holdLayout(slots[k], tiled)"));
+    EXPECT_THAT(make, HasSubstr("holdLayout(slot, tiled)"));
+    EXPECT_THAT(make, HasSubstr("*slot.read = snapshot;"));
+    const std::string latch = method(display(), "    void checkFlip(bool atFrameEnd)\n");
+    expectBefore(latch, "releaseIdleDirectReads();", "retireThrough(entrySeq[asked], stamp);");
     EXPECT_THAT(method(display(), "    static bool holdLayout("), HasSubstr("tegra_gm20b_surface_hold("));
     const std::string drop = method(display(), "    void dropSlot(unsigned k)\n");
     expectBefore(drop, "probeDomain.unmap(", "tegra_gm20b_surface_unhold(slot.layout);");
@@ -224,7 +226,7 @@ TEST(VsyncPhaseSource, ReplacementsAndResume)
                  "if (stReplaced < phaseReplacedSeen)\n            phaseReplacedSeen = 0;",
                  "if (stReplaced != phaseReplacedSeen)");
     // SC7 resets the DC: the phase's registers go back before finishResume's latch request.
-    expectBefore(after(display(), "    bool finishResume()"), "writePhaseRegisters()", "kGeneralActReq | kWinAActReq");
+    expectBefore(after(display(), "bool finishResume()"), "writePhaseRegisters()", "kGeneralActReq | kWinAActReq");
 }
 
 // The display's SMMU probe runs through the same DisplaySmmuProbe::perform that display_probe_test drives, is held but
@@ -353,11 +355,37 @@ TEST(LegacyFramebufferTable, ContractSlotsOverridden)
          {"\"211\": \"changeFrameInfo\"", "\"213\": \"supportedFrameInfo\"", "\"274\": \"setDisplayTemperature\"",
           "\"306\": \"platformFrameInfoNotify\"", "\"307\": \"sendFrameInfo\""})
         EXPECT_THAT(layout, HasSubstr(entry));
-    const std::string source = (SourceText("../NativeLegacyDisplay.cpp") + SourceText("../SwitchScanoutStart.h"));
+    const std::string source = (SourceText("../NativeLegacyDisplay.cpp") + SourceText("../SwitchScanoutStart.h") + SourceText("../SwitchDirectSlots.h") + SourceText("../SwitchRetireDisplay.h") + SourceText("../SwitchDisplayResume.h"));
     for (const char *method : {"    IOReturn changeFrameInfo(uint32_t type, void *client, uint32_t mask) override",
                                "    IOReturn sendFrameInfo(void *client, const void *frame) override",
                                "    IOReturn setDisplayTemperature(const uint32_t *temperatures) override"})
         EXPECT_THAT(source, HasSubstr(method));
     EXPECT_THAT(Between(source, "    IOReturn setDisplayTemperature(", "\n    }\n"),
                 HasSubstr("return kIOReturnSuccess;"));
+}
+
+TEST(DirectScanoutSource, FailedExactProducerNeverFallsThroughToCpuCopy)
+{
+    for (const char *name : {"    bool offerDirect(", "    bool offerGpuCopy("}) {
+        const std::string offer = method(display(), name);
+        const std::string lost = Between(offer, "if (offered == TEGRA_SCANOUT_SOURCE_LOST)", "            if (stats)");
+        EXPECT_THAT(lost, HasSubstr("noteTaken(request, kickAt);"));
+        EXPECT_THAT(lost, HasSubstr("planeNextSet = false;"));
+        EXPECT_THAT(lost, HasSubstr("kIOReturnAborted"));
+        EXPECT_THAT(lost, HasSubstr("dropLostFrame(request,"));
+        EXPECT_THAT(lost, HasSubstr("return true;"));
+    }
+}
+
+TEST(DisplayResumeSource, RestoreRunsOnTheFamilyGateBeforeCompletionCallbacks)
+{
+    const auto source = SourceText("../NativeLegacyDisplay.cpp");
+    const auto resume = SourceText("../SwitchDisplayResume.h");
+    EXPECT_THAT(source, HasSubstr("display->getWorkLoop()->runAction("));
+    EXPECT_THAT(source, HasSubstr("return d->finishResume();"));
+    expectBefore(resume, "getWorkLoop()->inGate()", "reattachDirect();");
+    expectBefore(resume, "if (!planesResume())", "hwSuspended = false");
+    expectBefore(resume, "if (!planesResume())", "setScanout(true)");
+    expectBefore(resume, "if (!planesResume())", "presentCopied()");
+    expectBefore(resume, "if (!planesResume())", "presentGpuCopy()");
 }

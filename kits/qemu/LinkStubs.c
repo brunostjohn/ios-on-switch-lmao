@@ -3,7 +3,6 @@
 // leave out. The kernel link needs each symbol even where its caller never runs or treats it as absent. They are weak:
 // a linked component that defines a hook (qemu_root_defconfig's display archive defines the first one) replaces it.
 
-#include <stdbool.h>
 #include <stdint.h>
 
 #define STUB __attribute__((weak))
@@ -55,20 +54,12 @@ STUB int boot_progress_pulse_anchor(uintptr_t address, uint64_t bytes, unsigned 
 }
 
 // Called weakly and answered as the absent component does: the scheduler's render-dependency trace (TegraGM20B: nothing
-// traced) and the display's readiness for NVDEC's native output (TegraNVDEC: not ready, so the capability stays off).
-// The components that define them replace these.
+// traced). The component that defines it replaces this.
 void switch_sched_render_dependency(int entering);
 
 STUB void switch_sched_render_dependency(int entering)
 {
     (void)entering;
-}
-
-bool switch_native_surface_display_ready(void);
-
-STUB bool switch_native_surface_display_ready(void)
-{
-    return false;
 }
 
 // NOLINTEND(misc-use-internal-linkage, readability-non-const-parameter)
