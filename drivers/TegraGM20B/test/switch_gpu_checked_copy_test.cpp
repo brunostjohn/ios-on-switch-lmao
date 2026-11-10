@@ -19,7 +19,7 @@ struct tgm_mem {
 };
 
 struct tgm_chan {
-	uint32_t submitted = 0, completed = 0;
+	uint32_t submitted = 0, completed = 0, killed = 0;  // killed: its first killed seqno
 	bool failed = false;
 };
 
@@ -42,6 +42,10 @@ tgm_vm space;
 tgm_chan gpu;
 volatile uint32_t fence;
 unsigned maps, unmaps, execs, commits, aborts, tokenRefs, roomWaits, adoptions, binds;
+// Each channel's tokens carry its id; a replaced channel keeps answering for them.
+uint32_t channelId;
+unsigned channelsMade, resets;
+std::map<uint32_t, tgm_chan> replaced;
 int nextError, guardError, semanticStatus;
 unsigned memoryCalls, memoryFailure, poolFrees;
 bool locked, entered, early, capture, covered;
@@ -73,6 +77,20 @@ void finish(int semantic = 1)
 	if (irq)
 		irq(irqContext);
 	pump();
+}
+
+// chan_killed: the channel's error, its fence released and the kill's fenced callback; its retirement not yet run.
+void kill()
+{
+	gpu.killed = gpu.completed + 1;
+	gpu.failed = true;
+	gpu.completed = gpu.submitted;
+	irq(irqContext);
+}
+
+const tgm_chan &channelOf(const switch_gpu_backing_token &token)
+{
+	return token.queue == channelId ? gpu : replaced.at(token.queue);
 }
 }
 
@@ -181,6 +199,9 @@ extern "C" void switch_gpu_vm_unmap(tgm_vm *, switch_gpu_mapping **p)
 extern "C" int tgm_chan_new_copy(tgm_vm *, const void *, volatile uint32_t *, uint64_t,
 				 const char *, int, tgm_chan **out)
 {
+	if (channelsMade++)
+		replaced[channelId] = gpu;
+	++channelId;
 	gpu = {};
 	*out = &gpu;
 	return 0;
@@ -216,7 +237,7 @@ extern "C" void switch_gpu_chan_submit_leave()
 
 extern "C" void switch_gpu_chan_next_token(tgm_chan *, switch_gpu_backing_token *out)
 {
-	*out = {gpu.submitted + 1, 1, SWITCH_GPU_ENGINE_GM20B, 1};
+	*out = {gpu.submitted + 1, 1, SWITCH_GPU_ENGINE_GM20B, channelId};
 }
 
 extern "C" int switch_gpu_chan_exec_visibility(tgm_chan *, const tgm_push *push, uint32_t count,
@@ -314,7 +335,18 @@ extern "C" void switch_gpu_backing_token_release(const switch_gpu_backing_token 
 
 extern "C" int switch_gpu_backing_token_external_status(const switch_gpu_backing_token *p)
 {
-	return p->value > gpu.completed ? 0 : semanticStatus;
+	const tgm_chan &chan = channelOf(*p);
+	if (chan.killed && p->value >= chan.killed)
+		return -5;
+	return p->value > chan.completed ? 0 : semanticStatus;
+}
+
+extern "C" int switch_gpu_backing_token_physical_status(const switch_gpu_backing_token *p, int)
+{
+	const tgm_chan &chan = channelOf(*p);
+	if (chan.killed && p->value >= chan.killed)
+		return -5;
+	return p->value > chan.completed ? 0 : 1;
 }
 
 extern "C" int switch_gpu_backing_begin_checked(switch_gpu_backing_use *uses, uint32_t count,
@@ -398,6 +430,7 @@ bool SwitchGpuEventChannel::initialize()
 
 void SwitchGpuEventChannel::reset()
 {
+	++resets;
 }
 
 int SwitchGpuEventJob::prepareKernel(const switch_gpu_event_submission *p)
@@ -466,7 +499,8 @@ protected:
 	void SetUp() override
 	{
 		maps = unmaps = execs = commits = aborts = tokenRefs = roomWaits = adoptions =
-			binds = leaseCount = 0;
+			binds = leaseCount = channelsMade = resets = 0;
+		replaced.clear();
 		nextError = guardError = 0;
 		memoryCalls = memoryFailure = poolFrees = 0;
 		semanticStatus = 1;
@@ -684,6 +718,83 @@ TEST_F(CheckedCopy, ASameShapeCopyInARewrittenSlotMovesItsOwnPlanes)
 	EXPECT_EQ(a.second->bytes[0], 0xa1);
 	EXPECT_EQ(b.second->bytes[0], 0xa1);
 }
+}
+
+// The kill left nothing of the old channel's copies to order behind: the next copy goes on a new channel at once, and
+// the killed one fails alone when its retirement runs.
+TEST_F(CheckedCopy, AKilledChannelTakesTheNextCopyOnANewChannelBeforeItsCopiesRetire)
+{
+	auto a = allocation(), b = allocation();
+	ASSERT_EQ(copy(a, b), 0);
+	kill();
+	ASSERT_EQ(copy(b, a), 0);
+	EXPECT_EQ(channelsMade, 2u);
+	EXPECT_EQ(resets, 1u);
+	EXPECT_EQ(calls, 0u);
+	pump();
+	EXPECT_EQ(calls, 1u);
+	EXPECT_EQ(callbackStatus, -5);
+	ASSERT_EQ(copy(a, b), 0);
+	EXPECT_EQ(channelsMade, 2u);
+	EXPECT_EQ(resets, 1u);
+	finish();
+	EXPECT_EQ(calls, 3u);
+	EXPECT_EQ(callbackStatus, 0);
+}
+
+// A failed event order starts over at once while the channel keeps running its copies; the copy behind the failure
+// that fails with it belongs to the old order and does not restart the new one. The channel, whose timeline keeps the
+// failure, is replaced at the first copy that finds it idle.
+TEST_F(CheckedCopy, AFailedEventOrderStartsOverWithoutRefusingAndTheChannelGoesWhenIdle)
+{
+	auto a = allocation(), b = allocation();
+	ASSERT_EQ(copy(a, b), 0);
+	ASSERT_EQ(copy(b, a), 0);
+	gpu.completed = 1;
+	semanticStatus = -5;
+	irq(irqContext);
+	pump();
+	EXPECT_EQ(calls, 1u);
+	EXPECT_EQ(callbackStatus, -5);
+	ASSERT_EQ(copy(a, b), 0);
+	EXPECT_EQ(channelsMade, 1u);
+	EXPECT_EQ(resets, 1u);
+	gpu.completed = 2;
+	irq(irqContext);
+	pump();
+	EXPECT_EQ(calls, 2u);
+	ASSERT_EQ(copy(b, a), 0);
+	EXPECT_EQ(channelsMade, 1u);
+	EXPECT_EQ(resets, 1u);
+	finish();
+	EXPECT_EQ(calls, 4u);
+	EXPECT_EQ(callbackStatus, 0);
+	ASSERT_EQ(copy(a, b), 0);
+	EXPECT_EQ(channelsMade, 2u);
+	EXPECT_EQ(resets, 1u);
+}
+
+// The one refusal left: a copy done on the GPU whose events are still pending must complete before what follows, and a
+// new order cannot follow it without inheriting the kill's failure.
+TEST_F(CheckedCopy, ACopyWaitingOnlyForItsEventsHoldsTheRestartUntilItRetires)
+{
+	auto a = allocation(), b = allocation();
+	ASSERT_EQ(copy(a, b), 0);
+	ASSERT_EQ(copy(b, a), 0);
+	gpu.completed = 1;
+	semanticStatus = 0;
+	kill();
+	pump();
+	EXPECT_EQ(calls, 1u);
+	EXPECT_EQ(callbackStatus, -5);
+	EXPECT_EQ(copy(a, b), -16);
+	EXPECT_EQ(channelsMade, 1u);
+	semanticStatus = 1;
+	switch_gpu_copy_completed();
+	pump();
+	EXPECT_EQ(calls, 2u);
+	ASSERT_EQ(copy(a, b), 0);
+	EXPECT_EQ(channelsMade, 2u);
 }
 
 TEST_F(CheckedCopy, PartialInitializationReturnsItsControlAllocation)

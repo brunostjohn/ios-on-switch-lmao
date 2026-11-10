@@ -16,7 +16,7 @@ constexpr uint64_t Page = 4096, PushVa = 1ULL << 20;
 
 struct Job {
 	bool busy;
-	uint32_t dwords;
+	uint32_t dwords, order;
 	SwitchGpuCopyMapping *source, *destination;
 	switch_gpu_backing_token completion;
 	tegra_gm20b_ce_done done;
@@ -32,8 +32,8 @@ struct Copier {
 	volatile uint32_t *fenceCpu;
 	uint64_t pushPa, fenceGpu, fencePage, pages[Jobs];
 	thread_call_t retirement;
-	bool semanticFailed;
-	uint32_t waitingSources;
+	bool semanticFailed, replaceChannel;
+	uint32_t waitingSources, order;
 	Job jobs[Jobs];
 	SwitchGpuCopyMappings mappings;
 	SwitchGpuEventChannel authority;
@@ -88,15 +88,46 @@ fail:
 	return false;
 }
 
+// A copy whose own work is done while its event waits are not. Restarting the event order (authority.reset) would let
+// the copies after it complete first, and the order cannot put a copy behind it without also handing that copy the
+// failure that ended the old order, so a new copy is refused until it retires.
+bool awaitingEvents()
+{
+	for (const auto &job : queue.jobs)
+		if (job.busy && switch_gpu_backing_token_physical_status(&job.completion, 0) &&
+		    !switch_gpu_backing_token_external_status(&job.completion))
+			return true;
+	return false;
+}
+
+bool idle()
+{
+	for (const auto &job : queue.jobs)
+		if (job.busy)
+			return false;
+	return true;
+}
+
+// A failure restarts the event order at once; copies of an earlier order that fail later (queue.order) do not restart
+// the new one. A killed channel's copies are settled (fence released, timeline failed: chan_killed has run once
+// tgm_chan_del returns) and retire through the tokens they hold, so it is replaced at once. A live channel whose order
+// failed keeps running its copies, and is replaced at its first idle moment, when deleting it waits for nothing: its
+// timeline keeps the failed seqno, and while any timeline does, every event job takes the semantic path
+// (switch_gpu_backing_has_semantics).
 int channel()
 {
-	if (queue.channel && (tgm_chan_error(queue.channel) || queue.semanticFailed)) {
-		for (const auto &job : queue.jobs)
-			if (job.busy)
-				return -16;
-		tgm_chan_del(&queue.channel);
+	const bool killed = queue.channel && tgm_chan_error(queue.channel);
+	if (killed || queue.semanticFailed) {
+		if (awaitingEvents())
+			return -16;
 		queue.authority.reset();
 		queue.semanticFailed = false;
+		queue.replaceChannel = true;
+		++queue.order;
+	}
+	if (queue.replaceChannel && (killed || idle())) {
+		tgm_chan_del(&queue.channel);
+		queue.replaceChannel = false;
 	}
 	if (!queue.vm && !openSpace())
 		return -12;
@@ -141,7 +172,7 @@ void retire(thread_call_param_t, thread_call_param_t)
 			continue;
 		}
 		if (result < 0) {
-			queue.semanticFailed = true;
+			queue.semanticFailed |= job.order == queue.order;
 #if DEVELOPMENT || DEBUG
 			logFailedPush(job, result);
 #endif
@@ -379,6 +410,7 @@ extern "C" int tegra_gm20b_ce_copy_plane_checked(
 	}
 	if (!result) {
 		job.busy = true;
+		job.order = queue.order;
 		job.done = done ? *done
 				: tegra_gm20b_ce_done{TEGRA_GM20B_CE_NO_SYNCPT, nullptr, nullptr};
 	} else {
