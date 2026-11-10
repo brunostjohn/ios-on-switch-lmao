@@ -3350,6 +3350,7 @@ bool CommandBuffer::acquireGeometry(const Buffer &buffer, const uint8_t *cpu, ui
         if (address >= start && address - start < read.bytes && bytes <= read.bytes - (address - start))
             return !surfaces_.writesBacking(bo.handle, base, bo.bytes);
     }
+    RAW_ENCODE_SPAN(GeometryAcquire);
     std::lock_guard<std::mutex> lock(d.lock_);
     Bo bo;
     if (buffer.import) {
@@ -3401,6 +3402,7 @@ void CommandBuffer::releaseGeometry()
 {
     if (geometryReads_.empty())
         return;
+    RAW_ENCODE_SPAN(GeometryRelease);
     std::lock_guard<std::mutex> lock(dev_->lock_);
     for (const auto &read : geometryReads_)
         if (!dev_->k_.cpuAccess(read.bo, read.offset, read.bytes, read.access, false))
@@ -3418,6 +3420,7 @@ std::shared_ptr<ResourceReadyCompletion> CommandBuffer::resourceReadiness(std::f
 
 bool CommandBuffer::commit(uint32_t &seqno)
 {
+    RAW_ENCODE_SPAN(Commit);
     if (nativeError)
         return false;
     struct ReleaseReads {
@@ -3851,6 +3854,7 @@ void RenderEncoder::barrier()
 bool RenderEncoder::draw(uint32_t primitive, uint32_t first, uint32_t count, uint32_t instances, uint32_t baseInstance,
                          const char **why)
 {
+    RAW_ENCODE_SPAN(Draw);
     Pipeline *pl = formFor(pipeline_);
     if (!pl)
         return true;  // m2v drops a draw without a pipeline (parity 0006) the same way
@@ -4008,6 +4012,7 @@ bool RenderEncoder::drawIndexed(uint32_t primitive, uint32_t count, uint32_t ind
                                 uint64_t offset, uint32_t instances, int32_t baseVertex, uint32_t baseInstance,
                                 const char **why)
 {
+    RAW_ENCODE_SPAN(Draw);
     Pipeline *pl = formFor(pipeline_);
     if (!pl)
         return true;
@@ -4115,6 +4120,7 @@ bool RenderEncoder::drawIndexed(uint32_t primitive, uint32_t count, uint32_t ind
 bool RenderEncoder::indirect(uint32_t primitive, bool indexed, const Buffer *arguments, uint64_t offset,
                              const char **why)
 {
+    RAW_ENCODE_SPAN(Draw);
     if (!pipeline_)
         return true;
     Pipeline *form = formFor(pipeline_);
@@ -4194,6 +4200,7 @@ bool RenderEncoder::drawIndexedIndirect(uint32_t primitive, uint32_t indexSize, 
 bool RenderEncoder::prepare(Pipeline *pl, uint32_t primitive, int32_t first, uint32_t vFirst, uint32_t vCount,
                             uint32_t baseInstance, bool indexed, const char **why)
 {
+    RAW_ENCODE_SPAN(Prepare);
     const uint32_t count = vCount;
     const bool firstDraw = !drew_;
     drew_ = true;
@@ -4211,6 +4218,7 @@ bool RenderEncoder::prepare(Pipeline *pl, uint32_t primitive, int32_t first, uin
     const bool empty = vp_[2] == 0 || vp_[3] == 0;
     axis(vp_[0], empty ? 0 : vp_[2], areaW_, sc_[0], sc_[0] + sc_[2], x);
     axis(vp_[1], empty ? 0 : vp_[3], areaH_, sc_[1], sc_[1] + sc_[3], y);
+    RAW_ENCODE_BEGIN(geometrySpan, Geometry);
     DrawGeometry g;
     if (pl->storageBits && !(pl->fetchBits & ~pl->storageBits))
         g.limit = {x[0], y[0], x[1], y[1]};
@@ -4230,6 +4238,7 @@ bool RenderEncoder::prepare(Pipeline *pl, uint32_t primitive, int32_t first, uin
             }
         }
     }
+    RAW_ENCODE_END(geometrySpan);
     const Texture *zeta = pass_.depthStencil.texture;
     if (compatible_ != pl) {
         for (uint32_t j = 0; j < 8; j++) {  // the pass's attachments are the formats the state was made for
@@ -4292,6 +4301,7 @@ bool RenderEncoder::prepare(Pipeline *pl, uint32_t primitive, int32_t first, uin
         cb_->refusal = {};
         return false;
     }
+    RAW_ENCODE_BEGIN(descriptorSpan, Descriptors);
     const auto *prepared = descriptors_.resolve(
         pl, bindingRevision_,
         [&](PreparedDescriptorWords &prepared) {
@@ -4425,6 +4435,7 @@ bool RenderEncoder::prepare(Pipeline *pl, uint32_t primitive, int32_t first, uin
 #endif
             return address;
         });
+    RAW_ENCODE_END(descriptorSpan);
     if (!prepared)
         return false;
     const uint32_t *set = prepared->words.data();
@@ -4579,6 +4590,7 @@ bool RenderEncoder::prepare(Pipeline *pl, uint32_t primitive, int32_t first, uin
     // storage write.
     // A fetch through the texture unit that meets only ROP writes needs the barrier only where its pixels meet theirs
     // (raw_region.h); nothing bounds a storage access's pixels.
+    RAW_ENCODE_BEGIN(barrierSpan, Barriers);
     const AttachmentAccess access{pl->readBits, pl->writeBits, uint8_t(pl->fetchBits & ~pl->storageBits),
                                   pl->storageBits};
     if (firstDraw && !indirectGeometry_ && !pl->dropsPixels) {
@@ -4613,6 +4625,7 @@ bool RenderEncoder::prepare(Pipeline *pl, uint32_t primitive, int32_t first, uin
             written_.clear();
         }
     }
+    RAW_ENCODE_END(barrierSpan);
     if (drawParamsUnknown_ || uint32_t(first) != first_ || baseInstance != baseInstance_) {
         // nvk_mme_build_set_draw_params: root draw.vs.{base_vertex, base_instance} and the base registers
         const uint32_t v[2] = {uint32_t(first), baseInstance};
@@ -5123,6 +5136,7 @@ void RenderEncoder::continuePass(uint8_t stores)
 
 void RenderEncoder::end()
 {
+    RAW_ENCODE_SPAN(PassEnd);
     Device &d = *dev_;
     endShaderTests();
     if (p_.room() < 64 + kSampleWords)

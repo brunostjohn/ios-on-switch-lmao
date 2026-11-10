@@ -2,6 +2,7 @@
 // See raw_kernel.h. The transport (direct call, or tunnel {magic, method} + record through the selector that answers the tunnel
 // probe) is nvkmd_darwin's (out/gpu/nvk/nvk-darwin.patch, MIT), so whatever the kext admits for NVK it admits here.
 #include "raw_kernel.h"
+#include "raw_encode_profile.h"
 
 #include <IOKit/IOKitLib.h>
 #include <dlfcn.h>
@@ -70,6 +71,7 @@ static std::string failed(const char *what, int kr)
 
 int Kernel::call(uint32_t method, const void *in, size_t inSize, void *out, size_t outSize)
 {
+    RAW_ENCODE_SPAN(Kernel);
     size_t outBytes = outSize;
     if (!tunnel_)
         return IOConnectCallStructMethod(conn_, method, in, inSize, outSize ? out : nullptr,

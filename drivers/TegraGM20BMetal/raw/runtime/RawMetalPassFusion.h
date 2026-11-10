@@ -6,6 +6,7 @@
 
 inline raw::FusionPass fusionPass(RMCommandBuffer *cb, size_t begin)
 {
+    RAW_ENCODE_SPAN(Fusion);
     const Cmd command = cb->_plan.legacy(begin);
     const RMPass &pass = cb->_passes[command.x];
     MTLRenderPassDescriptor *descriptor = (__bridge MTLRenderPassDescriptor *)command.obj;

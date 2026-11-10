@@ -56,6 +56,7 @@ static bool encodeRawAttempt(RMCommandBuffer *cb, size_t from, size_t to, const 
         *why = "the event producer no longer belongs to this GPU channel";
         return false;
     }
+    RAW_ENCODE_BEGIN(resourceSpan, Resources);
     const auto buffers = [&](auto visit) {
         cb->_plan.forEachResource(from, to, RMResourceKind::Buffer, visit);
     };
@@ -307,6 +308,7 @@ static bool encodeRawAttempt(RMCommandBuffer *cb, size_t from, size_t to, const 
             }
         }
     }
+    RAW_ENCODE_END(resourceSpan);
     // textures sampled through a pool image (rows 16 but not 32 apart, raw::Texture::sampled): refreshed from their texels by the
     // copy engine before the first pass that samples them, and again after work here wrote them (m2v copies such a surface into
     // its shadow at each encoder that uses it once written since)
@@ -371,11 +373,13 @@ static bool encodeRawAttempt(RMCommandBuffer *cb, size_t from, size_t to, const 
         }
         return true;
     };
+    RAW_ENCODE_BEGIN(loopSpan, Loop);
     for (size_t at = from; at < to; at++) {
         const Cmd c = cb->_plan.legacy(at);
         if (c.op == OpRender || c.op == OpCompute || c.op == OpBlit)
             encoder = at;
         if (c.op == OpDispatch) {
+            RAW_ENCODE_SPAN(Compute);
             const auto &dispatch = cb->_plan.dispatch(at);
             const auto *kernels = static_cast<const raw::ComputeKernelSet<raw::ComputeState> *>(dispatch.kernel);
             const auto &state = cb->_plan.kernelStates[dispatch.state];
@@ -421,8 +425,12 @@ static bool encodeRawAttempt(RMCommandBuffer *cb, size_t from, size_t to, const 
             }
             continue;
         }
-        encodePlannedState(cb, at, *rc, re, ce ? &*ce : nullptr, stateCursor);
+        {
+            RAW_ENCODE_SPAN(State);
+            encodePlannedState(cb, at, *rc, re, ce ? &*ce : nullptr, stateCursor);
+        }
         if (isKernelCommand(c.op)) {
+            RAW_ENCODE_SPAN(Compute);
             if (const char *w = nullptr; !encodeKernel(*ce, *rc, cb, c, &w))
                 return fail(PredCompute, w, c.op);
             continue;
@@ -434,6 +442,7 @@ static bool encodeRawAttempt(RMCommandBuffer *cb, size_t from, size_t to, const 
             ce->setSerial(serialCompute);
             break;
         case OpRender: {
+            RAW_ENCODE_SPAN(Pass);
             const RMPass &pass = cb->_passes[c.x];
             renderBegin = at;
             if (continuing) {
@@ -579,7 +588,8 @@ static bool encodeRawAttempt(RMCommandBuffer *cb, size_t from, size_t to, const 
                 return refused();
             break;
         }
-        case OpMipmaps:
+        case OpMipmaps: {
+            RAW_ENCODE_SPAN(Blit);
             if (!((__bridge RMTexture *)c.obj)->_raw.chain->fmt2d) {  // the 3D engine's passes (decided at record)
                 be->end();
                 if (!mipPasses(rc, (__bridge RMTexture *)c.obj, why))
@@ -589,17 +599,22 @@ static bool encodeRawAttempt(RMCommandBuffer *cb, size_t from, size_t to, const 
             }
             encodeBlit(cb, c, rc, be, fresh, standInFresh);
             break;
+        }
         case OpCopyTexture:
         case OpCopyBuffer:
         case OpFillBuffer:
         case OpCopyBufferToTexture:
-        case OpCopyTextureToBuffer:
+        case OpCopyTextureToBuffer: {
+            RAW_ENCODE_SPAN(Blit);
             encodeBlit(cb, c, rc, be, fresh, standInFresh);
             break;
+        }
         default:  // states, fences, events, resources the raw path needs nothing for
             break;
         }
     }
+    RAW_ENCODE_END(loopSpan);
+    RAW_ENCODE_SPAN(Tail);
     if (re)
         re->end();
     if (re && !resolvePasses())

@@ -45,6 +45,7 @@
 #include "raw_attachment_lifetime.h"
 #include "raw_stats.h"
 #include "raw_descriptors.h"
+#include "raw_encode_profile.h"
 #include "raw_transfer.h"
 #include "raw_fetch_order.h"
 #include "raw_kernel.h"
@@ -1332,6 +1333,7 @@ public:
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
         std::atomic<uint64_t> splitLaunches{0};
         std::atomic<uint64_t> interlockDraws{0}, storageBarriers{0};
+        EncodeTotals encode;
 #endif
 #else
         std::atomic<uint64_t> heapFull{0};
