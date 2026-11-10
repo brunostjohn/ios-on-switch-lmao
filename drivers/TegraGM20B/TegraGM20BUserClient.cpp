@@ -1021,7 +1021,7 @@ void AGXDeviceUserClient::free()
 #if TGM_STATS
 		for (tgm_bind_history *history : bindHistory_)
 			if (history)
-				IODelete(history, tgm_bind_history, 1);
+				IOFreeData(history, sizeof(tgm_bind_history));
 #endif
 		if (job_) {
 			IODelete(job_->bytes, uint64_t, (kJobBytes + 7) / 8);
@@ -2294,7 +2294,8 @@ void AGXDeviceUserClient::noteBind(uint8_t op, uint64_t va, uint64_t range, cons
 {
 	tgm_bind_history *&history = bindHistory_[bindHalf(va)];
 	if (!history) {
-		history = IONew(tgm_bind_history, 1);
+		/* 44 KiB: past IONew's 16 KiB typed limit, and it holds no pointer */
+		history = static_cast<tgm_bind_history *>(IOMallocData(sizeof(tgm_bind_history)));
 		if (!history)
 			return;
 		history->written = 0;
