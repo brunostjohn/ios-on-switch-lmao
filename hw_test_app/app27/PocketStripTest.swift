@@ -15,12 +15,12 @@ import UIKit
 /// to 40 points below the bar: 0 means the snapshot holds no edge effect, and without purple rows the test skips.
 /// Any purple row fails it. The list holds greys, white and system blue, none of which passes.
 /// strip_rgb and strip_range describe the first purple row; other_rgb samples the other run at that position;
-/// strip_above_rgb and strip_below_rgb the rows on either side of it. Opaque 255,0,255 is what Metal reads from a
-/// BGRA8 texel no pass wrote, so that colour names a row composited from an intermediate's unwritten texels.
-/// snapshot= is the shown picture's size and host_at= the list's origin in the window, in pixels.
-/// half_at= and pixel_at= list the purple rows with the list moved down by half a pixel and by a whole pixel
-/// (half_bar=, pixel_bar= its bar edge in the list then): a row that stays at the bar's edge is drawn with it, one that
-/// comes and goes with the half-pixel move depends on how a fractional edge rounds.
+/// strip_above_rgb and strip_below_rgb the rows on either side of it. snapshot= is the shown picture's size and
+/// host_at= the list's origin in the window, in pixels.
+/// More runs with the edge effect shown, each giving <run>_at= (its purple rows) and <run>_bar= (the bar's bottom edge
+/// in that picture): soft and hard force the effect's style (.scrollEdgeEffectStyle), and a strip in hard alone is
+/// the hard style's keyline; half and pixel move the list down by half a pixel and by a whole one inside the stage and
+/// snapshot the stage, so a strip that comes and goes with the half-pixel move depends on how a fractional edge rounds.
 ///
 /// With the edge effect shown, a debug kernel's scanout read-back (ScanoutReadback) also gives the frame's
 /// framebuffer (what backboardd rendered for the panel, before the display's copy) and its scanout buffer (what window
@@ -35,6 +35,7 @@ struct PocketStripTest: HWTest {
     let id = "display.pocket_strip"
     let name = "Navigation bar scroll edge effect: purple rows, shown and hidden"
     let subsystem = Subsystem.display
+    var timeout: TimeInterval { 180 }
 
     struct Shot {
         let picture: Raster
@@ -80,8 +81,11 @@ struct PocketStripTest: HWTest {
         let band = min(pictures[0].height, pictures[1].height, bar + Int(40 * scale))
         let pocket = Self.meanDifference(pictures[0], pictures[1], rows: band)
         metrics.set("pocket", Int((pocket * 255).rounded()))
-        for (name, pixels) in [("half", 0.5), ("pixel", 1.0)] {
-            let shot = await Self.snapshot(context, hidden: false, shift: pixels / scale)
+        let runs: [(String, ScrollEdgeEffectStyle?, CGFloat)] = [
+            ("soft", .soft, 0), ("hard", .hard, 0), ("half", nil, 0.5 / scale), ("pixel", nil, 1 / scale),
+        ]
+        for (name, style, shift) in runs {
+            let shot = await Self.snapshot(context, hidden: false, style: style, shift: shift)
             let rows = Self.purpleRows(shot.picture)
             metrics.set(name + "_at", Self.ranges(rows))
             metrics.set(name + "_bar", shot.bar)
@@ -167,11 +171,13 @@ struct PocketStripTest: HWTest {
         dot.alpha = dot.alpha == 1 ? 0.9 : 1
     }
 
-    /// The composited picture of the list moved down by `shift` points, its navigation bar's bottom edge in pixels,
-    /// the view on stage and its origin in the window in pixels.
-    static func snapshot(_ context: TestContext, hidden: Bool, shift: CGFloat = 0) async -> Shot {
+    /// The composited picture (of the stage when the list is moved down by `shift` points, else of the list), the
+    /// navigation bar's bottom edge in that picture's pixels, the list's view and its origin in the window in pixels.
+    static func snapshot(
+        _ context: TestContext, hidden: Bool, style: ScrollEdgeEffectStyle? = nil, shift: CGFloat = 0
+    ) async -> Shot {
         let host = await context.onStage(fullScreen: true) { stage -> UIHostingController<PocketList> in
-            let host = UIHostingController(rootView: PocketList(hidden: hidden))
+            let host = UIHostingController(rootView: PocketList(hidden: hidden, style: style))
             host.view.frame = Snapshots.aligned(UIScreen.main.bounds).offsetBy(dx: 0, dy: shift)
             stage.addSubview(host.view)
             return host
@@ -185,12 +191,13 @@ struct PocketStripTest: HWTest {
         await Snapshots.settle()
         return await MainActor.run {
             let view = host.view!
+            let pictured = shift == 0 ? view : view.superview ?? view
             let scale = view.window?.screen.scale ?? 1
-            let bar = first(UINavigationBar.self, in: view).map { $0.convert($0.bounds, to: view).maxY } ?? 0
+            let bar = first(UINavigationBar.self, in: view).map { $0.convert($0.bounds, to: pictured).maxY } ?? 0
             let origin = view.convert(CGPoint.zero, to: nil)
             let hostOrigin = [origin.x, origin.y].map { String(format: "%.2f", $0 * scale) }.joined(separator: ",")
             return Shot(
-                picture: Snapshots.composited(view), bar: Int((bar * scale).rounded()), view: view,
+                picture: Snapshots.composited(pictured), bar: Int((bar * scale).rounded()), view: view,
                 hostOrigin: hostOrigin)
         }
     }
@@ -261,6 +268,7 @@ struct PocketStripTest: HWTest {
 
 struct PocketList: View {
     let hidden: Bool
+    let style: ScrollEdgeEffectStyle?
 
     var body: some View {
         NavigationStack {
@@ -275,6 +283,7 @@ struct PocketList: View {
             }
             .listStyle(.insetGrouped)
             .scrollEdgeEffectHidden(hidden, for: .top)
+            .scrollEdgeEffectStyle(style, for: .top)
             .navigationTitle("Hardware tests")
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) { Button("Run All") {} }
