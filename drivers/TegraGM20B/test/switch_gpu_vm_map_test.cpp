@@ -269,3 +269,106 @@ TEST_F(VmMap, PreparedUncompressedBigViewCannotBecomeIndependentCompressionAutho
 	EXPECT_EQ(mapping, nullptr);
 	EXPECT_TRUE(calls.empty());
 }
+
+// A sub-range Unmap or Map of one binding takes only that range: PTEs outside it keep their values.
+TEST_F(VmMap, SplitOfA4KRunKeepsEveryPteOutsideTheRange)
+{
+	switch_gpu_mapping *mapping = nullptr, *below = nullptr, *taken = nullptr, *above = nullptr;
+	ASSERT_EQ(switch_gpu_vm_map(&a, 0x40000000, 8 * PAGE_SIZE, &memory, 0, 0, 0, &mapping), 0);
+	ASSERT_EQ(mapping->count, 1u);
+	calls.clear();
+	ASSERT_EQ(switch_gpu_vm_split(&a, &mapping, &memory, 0, 0, 0, 0x40002000, 0x2000, &below,
+				      &taken, &above),
+		  0);
+	EXPECT_EQ(mapping, nullptr);
+	EXPECT_TRUE(calls.empty());
+	u64 va = 0, bytes = 0;
+	ASSERT_EQ(switch_gpu_mapping_span(below, &va, &bytes), 0);
+	EXPECT_EQ(va, 0x40000000u);
+	EXPECT_EQ(bytes, 0x2000u);
+	ASSERT_EQ(switch_gpu_mapping_span(above, &va, &bytes), 0);
+	EXPECT_EQ(va, 0x40004000u);
+	EXPECT_EQ(bytes, 0x4000u);
+	EXPECT_EQ(above->entries[0].offset, 0x4000u);
+	switch_gpu_vm_unmap(&a, &taken);
+	ASSERT_EQ(calls.size(), 2u);
+	EXPECT_EQ(calls[0].operation, 'u');
+	EXPECT_EQ(calls[0].va, 0x40002000u);
+	EXPECT_EQ(calls[0].bytes, 0x2000u);
+	EXPECT_EQ(calls[1].operation, 'p');
+	EXPECT_EQ(calls[1].bytes, 0x2000u);
+	switch_gpu_vm_unmap(&a, &below);
+	switch_gpu_vm_unmap(&a, &above);
+}
+
+TEST_F(VmMap, CutBigPageMapsItsRemainderAgainWith4KPages)
+{
+	mem_prepare_big_views(&memory);
+	switch_gpu_mapping *mapping = nullptr, *below = nullptr, *taken = nullptr, *above = nullptr;
+	ASSERT_EQ(map(a, &mapping), 0);
+	ASSERT_EQ(mapping->entries[0].shift, 17);
+	calls.clear();
+	ASSERT_EQ(switch_gpu_vm_split(&a, &mapping, &memory, 0, 0, 0, 0x40008000, 0x1000, &below,
+				      &taken, &above),
+		  0);
+	EXPECT_EQ(taken, nullptr);
+	ASSERT_EQ(calls.size(), 6u);
+	EXPECT_EQ(calls[0].operation, 'u');
+	EXPECT_EQ(calls[0].shift, 17);
+	EXPECT_EQ(calls[1].operation, 'p');
+	const std::vector<std::pair<u64, u64>> remapped = {{0x40000000, 0x8000}, {0x40009000, 0x17000}};
+	for (size_t i = 0; i < remapped.size(); ++i) {
+		EXPECT_EQ(calls[2 + 2 * i].operation, 'g');
+		EXPECT_EQ(calls[3 + 2 * i].operation, 'm');
+		EXPECT_EQ(calls[3 + 2 * i].va, remapped[i].first);
+		EXPECT_EQ(calls[3 + 2 * i].bytes, remapped[i].second);
+		EXPECT_EQ(calls[3 + 2 * i].shift, 12);
+		EXPECT_EQ(calls[3 + 2 * i].offset, remapped[i].first - 0x40000000);
+		EXPECT_EQ(calls[3 + 2 * i].memory, &memory.mem);
+	}
+	ASSERT_NE(below, nullptr);
+	ASSERT_EQ(above->count, 2u);
+	EXPECT_EQ(above->entries[1].va, 0x40020000u);
+	char text[128];
+	switch_gpu_mapping_describe(below, text, sizeof(text));
+	EXPECT_STREQ(text, "0x40000000+0x8000/12");
+	switch_gpu_vm_unmap(&a, &below);
+	switch_gpu_vm_unmap(&a, &above);
+}
+
+TEST_F(VmMap, CompressedMappingCutInsideABigPageIsRefusedUntouched)
+{
+	memory.page = memory.mem.shift = 17;
+	memory.bytes = memory.mem.bytes = 32 * PAGE_SIZE;
+	memory.npages = 32;
+	gpu.mmu.kind[0x42] = 0xfe;
+	switch_gpu_mapping *mapping = nullptr, *below = nullptr, *taken = nullptr, *above = nullptr;
+	ASSERT_EQ(switch_gpu_vm_map(&a, 0x40000000, memory.bytes, &memory, 0, 0x42, 0, &mapping), 0);
+	calls.clear();
+	EXPECT_EQ(switch_gpu_vm_split(&a, &mapping, &memory, 0x42, 0, 0, 0x40001000, 0x1000, &below,
+				      &taken, &above),
+		  -EINVAL);
+	EXPECT_NE(mapping, nullptr);
+	EXPECT_TRUE(calls.empty());
+	switch_gpu_vm_unmap(&a, &mapping);
+}
+
+TEST_F(VmMap, RemainderThatCannotBeMappedAgainLeavesItsPartAndTheOrderedScope)
+{
+	mem_prepare_big_views(&memory);
+	switch_gpu_mapping *mapping = nullptr, *below = nullptr, *taken = nullptr, *above = nullptr;
+	ASSERT_EQ(map(a, &mapping), 0);
+	calls.clear();
+	failMap = mapCount + 1;
+	ASSERT_EQ(switch_gpu_vm_split(&a, &mapping, &memory, 0, 0, 0, 0x40008000, 0x1000, &below,
+				      &taken, &above),
+		  0);
+	ASSERT_NE(below, nullptr);
+	ASSERT_EQ(above->count, 1u);
+	EXPECT_EQ(above->entries[0].va, 0x40020000u);
+	EXPECT_EQ(calls.back().operation, 'p');
+	EXPECT_EQ(calls.back().va, 0x40009000u);
+	EXPECT_FALSE(calls.back().deferred);
+	switch_gpu_vm_unmap(&a, &below);
+	switch_gpu_vm_unmap(&a, &above);
+}

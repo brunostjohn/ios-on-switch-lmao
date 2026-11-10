@@ -731,7 +731,7 @@ TEST(GM20BTlbSource, MapsOrderedOnTheGpuRemovalsSynchronous)
 {
 	EXPECT_THAT(client(), HasSubstr("switch_gpu_vm_map_volatile(vm_, op.va"));
 	EXPECT_EQ(Count(client(), "tgm_vm_map("), 0u);
-	EXPECT_EQ(Count(gpu(), "nvxnu_gpu_ordered_begin();"), 2u);
+	EXPECT_EQ(Count(gpu(), "nvxnu_gpu_ordered_begin();"), 3u);
 	const std::string map = flat(definition(gpu(), "static int vm_map("));
 	expectBefore(map, "nvxnu_gpu_ordered_end(ordered_scope);", "nvif_vmm_raw_put(");
 	const std::string mixed = flat(definition(gpu(), "int switch_gpu_vm_map_volatile("));
@@ -742,6 +742,11 @@ TEST(GM20BTlbSource, MapsOrderedOnTheGpuRemovalsSynchronous)
 	EXPECT_THAT(unmap, HasSubstr("entry->va, entry->bytes, entry->shift"));
 	EXPECT_THAT(flat(definition(gpu(), "void tgm_vm_del(")),
 		    HasSubstr("mmu_invalidate_all();"));
+	const std::string split = flat(definition(gpu(), "int switch_gpu_vm_split("));
+	expectBefore(split, "nvif_vmm_raw_put(&vm->vmm, e->va, e->bytes, e->shift);",
+		     "ordered_scope = nvxnu_gpu_ordered_begin();");
+	expectBefore(split, "nvxnu_gpu_ordered_end(ordered_scope);",
+		     "nvif_vmm_raw_put(&vm->vmm, lost[p].va, lost[p].bytes, PAGE_SHIFT);");
 }
 
 // Rail-gating (TegraGM20BRail.h): every other gpu.lock taker goes through gpu_lock(), which wakes a rail-gated GPU in

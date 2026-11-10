@@ -901,6 +901,8 @@ class AGXDeviceUserClient : public IOUserClient
     uint32_t channelLevels_[kMaxChannels] = {};
     Bo *bos_ = nullptr, *zombies_ = nullptr, *readyBos_ = nullptr;
     RetiredBinding *retired_ = nullptr, **retiredTail_ = &retired_, *unmapping_ = nullptr;
+    IOLock *unmapLock_ = nullptr;  // a retired binding's PTEs go under it (retireBatch, takeRetiredOverlaps)
+    bool faultLogged_[kMaxChannels] = {};
     thread_call_t retireCall_ = nullptr;
     uint32_t retiredCount_ = 0, retireRemaining_ = 0, retirementPending_ = 0,
 	     retirementStopped_ = 0;
@@ -948,7 +950,10 @@ class AGXDeviceUserClient : public IOUserClient
 	void retireBatch();
 	void scheduleRetirement();
 	bool bindingIdle(const RetiredBinding *binding) const;
-	IOReturn waitRetiredOverlaps(uint64_t va, uint64_t bytes);
+	void takeRetiredOverlaps(uint64_t va, uint64_t bytes);
+	void retire(RetiredBinding *record);
+	IOReturn cutOverlaps(uint64_t va, uint64_t range, bool now, RetiredBinding **spare);
+	void logFaultBindings();
 	static void retirementWork(thread_call_param_t, thread_call_param_t);
 	static void retirementFence(void *owner);
 	void unbindOverlaps(uint64_t va, uint64_t range, Bo *only);
@@ -1021,7 +1026,8 @@ OSDefineMetaClassAndStructors(AGXDeviceUserClient, IOUserClient)
 	proc_selfname(owner_, sizeof(owner_));
 
 	lock_ = IOLockAlloc();
-	if (!lock_ || !events_.initialize() || !resources_.initialize())
+	unmapLock_ = IOLockAlloc();
+	if (!lock_ || !unmapLock_ || !events_.initialize() || !resources_.initialize())
 		return false;
 	for (auto &submitLock : submitLocks_)
 		if (!(submitLock = IOLockAlloc()))
@@ -1083,6 +1089,10 @@ void AGXDeviceUserClient::free()
 		resources_.destroy();
 		IOLockFree(lock_);
 		lock_ = nullptr;
+	}
+	if (unmapLock_) {
+		IOLockFree(unmapLock_);
+		unmapLock_ = nullptr;
 	}
 	if (counted_)
 		__atomic_sub_fetch(&gConnections, 1, __ATOMIC_SEQ_CST);
@@ -1650,27 +1660,22 @@ IOReturn AGXDeviceUserClient::vmBind(const TegraGM20BAbiVmBind *in, uint32_t cou
 		if (op.op == TegraGM20BBindMapSparse)
 			return kIOReturnUnsupported;  // InfoSparse is not advertised in v1
 		const uint64_t start = statsNowNs();
-		if (op.op == TegraGM20BBindUnmap) {
-			unbindOverlaps(op.va, op.range, nullptr);
-			tgm_stats_bind(0, op.range >> 12, statsNowNs() - start);
-			continue;
-		}
-		if (op.op != TegraGM20BBindMap && op.op != TegraGM20BBindMapVolatile)
+		const bool unmap = op.op == TegraGM20BBindUnmap;
+		if (!unmap && op.op != TegraGM20BBindMap && op.op != TegraGM20BBindMapVolatile)
 			return kIOReturnBadArgument;
-		Bo *bo = findBo(op.handle);
-		if (!bo || op.bo_offset > bo->bytes || op.range > bo->bytes - op.bo_offset)
+		Bo *bo = unmap ? nullptr : findBo(op.handle);
+		if (!unmap && (!bo || op.bo_offset > bo->bytes || op.range > bo->bytes - op.bo_offset))
 			return kIOReturnBadArgument;
 		const Binding *same = switch_gpu_binding_find(binds_, nbinds_, op.va, op.range);
-		if (same && same->va == op.va && same->range == op.range && same->bo == bo &&
+		if (!unmap && same && same->va == op.va && same->range == op.range && same->bo == bo &&
 		    same->bo_offset == op.bo_offset && same->retirement->kind == op.kind &&
 		    same->retirement->vol == (op.op == TegraGM20BBindMapVolatile))
 			continue;
-		unbindOverlaps(op.va, op.range, nullptr);
-		const IOReturn retired = waitRetiredOverlaps(op.va, op.range);
-		if (retired)
-			return retired;
-		if (nbinds_ == cap_binds_) {
-			const uint32_t cap = cap_binds_ ? cap_binds_ * 2 : 64;
+		// Everything a cut and the new binding need, before any binding changes.
+		if (nbinds_ + 2 > cap_binds_) {
+			uint32_t cap = cap_binds_ ? cap_binds_ * 2 : 64;
+			while (cap < nbinds_ + 2)
+				cap *= 2;
 			Binding *grown = IONew(Binding, cap);
 			if (!grown)
 				return kIOReturnNoMemory;
@@ -1681,9 +1686,27 @@ IOReturn AGXDeviceUserClient::vmBind(const TegraGM20BAbiVmBind *in, uint32_t cou
 			binds_ = grown;
 			cap_binds_ = cap;
 		}
-		auto *record = IONew(RetiredBinding, 1);
-		if (!record)
-			return kIOReturnNoMemory;
+		RetiredBinding *spare[2] = {IONew(RetiredBinding, 1), IONew(RetiredBinding, 1)};
+		auto *record = unmap ? nullptr : IONew(RetiredBinding, 1);
+		const auto freeSpare = [&] {
+			for (auto *each : spare)
+				if (each)
+					IODelete(each, RetiredBinding, 1);
+		};
+		IOReturn cut = !spare[0] || !spare[1] || (!unmap && !record) ? kIOReturnNoMemory : kIOReturnSuccess;
+		if (!cut)
+			cut = cutOverlaps(op.va, op.range, !unmap, spare);
+		freeSpare();
+		if (unmap || cut) {
+			if (record)
+				IODelete(record, RetiredBinding, 1);
+			if (unmap && !cut)
+				tgm_stats_bind(0, op.range >> 12, statsNowNs() - start);
+			if (cut)
+				return cut;
+			continue;
+		}
+		takeRetiredOverlaps(op.va, op.range);
 		switch_gpu_mapping *mapping = nullptr;
 		const int err = switch_gpu_vm_map_volatile(vm_, op.va, op.range, bo->mem, op.bo_offset,
 						   static_cast<uint8_t>(op.kind),
@@ -1801,6 +1824,7 @@ IOReturn AGXDeviceUserClient::channelCreate(const TegraGM20BAbiChannelCreate *in
 	if (level_ != TGM_LEVEL_FOREGROUND && !critical_)
 		tgm_chan_set_level(chans_[slot], level_);
 	channelLevels_[slot] = level_;
+	faultLogged_[slot] = false;
 	tgm_chan_on_fence(chans_[slot], retirementFence, this);
 	out->channel = slot + 1;
 	out->fence_token = kFenceToken;

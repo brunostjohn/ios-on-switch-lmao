@@ -5,6 +5,7 @@
  */
 #ifndef TEGRA_GM20B_GPU_H
 #define TEGRA_GM20B_GPU_H
+#include <stddef.h>
 #include <stdint.h>
 #ifdef __cplusplus
 extern "C" {
@@ -113,6 +114,20 @@ int switch_gpu_vm_map_volatile(struct tgm_vm *vm, uint64_t va, uint64_t range,
 	struct tgm_mem *mem, uint64_t offset, uint8_t kind, int read_only, int vol,
 	struct switch_gpu_mapping **mapping);
 void switch_gpu_vm_unmap(struct tgm_vm *vm, struct switch_gpu_mapping **mapping);
+/* Cuts [va, va + range) out of *mapping, made by switch_gpu_vm_map_volatile of mem with kind, read_only and vol, and
+ * consumes it. What stays mapped below and above the range comes back as *below and *above, the range's own entries,
+ * still mapped, as *taken (each NULL when empty). PTEs keep their values except in a 128 KiB page an edge cuts: that page
+ * is unmapped and its part outside the range mapped again with 4 KiB pages (a GPU access there in between faults; a
+ * remainder that cannot be mapped again stays unmapped, out of *below and *above). A compressed mapping cut inside a
+ * 128 KiB page is refused, and on any error *mapping is untouched. */
+int switch_gpu_vm_split(struct tgm_vm *vm, struct switch_gpu_mapping **mapping, struct tgm_mem *mem,
+	uint8_t kind, int read_only, int vol, uint64_t va, uint64_t range,
+	struct switch_gpu_mapping **below, struct switch_gpu_mapping **taken,
+	struct switch_gpu_mapping **above);
+/* The VA range from a mapping's first entry to the end of its last. */
+int switch_gpu_mapping_span(const struct switch_gpu_mapping *mapping, uint64_t *va, uint64_t *bytes);
+/* "va+bytes/page shift" per entry, for a log line. */
+void switch_gpu_mapping_describe(const struct switch_gpu_mapping *mapping, char *out, size_t size);
 /* A zero-bandwidth-clear entry (ds, l2 as TegraGM20BAbiZbc has them): its table index, or -EINVAL (format), -ENOSPC
  * (table full), -ENODEV (no compression). */
 int tgm_zbc_add(int depth, uint32_t format, const uint32_t ds[4], const uint32_t l2[4]);
