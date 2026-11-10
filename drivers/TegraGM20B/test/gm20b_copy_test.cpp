@@ -32,8 +32,8 @@ std::vector<uint8_t> copy(tgm_copy_job job, const std::vector<uint8_t> &src, uin
 {
 	std::vector<uint8_t> s = src, d(dstBytes, kUntouched);
 	Memory memory;
-	memory.regions[kSrcVa] = &s;
-	memory.regions[kDstVa] = &d;
+	memory.map(kSrcVa, s);
+	memory.map(kDstVa, d);
 	job.src_va = kSrcVa + srcOffset;
 	job.dst_va = kDstVa + dstOffset;
 	uint32_t w[TGM_COPY_DWORDS];

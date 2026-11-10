@@ -48,9 +48,9 @@ struct Surface {
 		bytesPerRow = c.w * c.bpp + c.pad;
 		surface.assign(std::max<uint64_t>(l.bytes, uint64_t(bytesPerRow) * c.h), 0);
 		rows.assign((uint64_t(bytesPerRow) * c.h + 4095) & ~4095ull, 0);
-		memory.regions[kSurfaceVa] = &surface;
-		memory.regions[kSurfaceRowsVa] = &surface;
-		memory.regions[kRowsVa] = &rows;
+		memory.map(kSurfaceVa, surface);
+		memory.map(kSurfaceRowsVa, surface);
+		memory.map(kRowsVa, rows);
 	}
 
 	void move(tgm_relayout_op op, const std::vector<tgm_relayout_wait> &waits = {})
@@ -213,7 +213,7 @@ TEST(Relayout, CheckpointMakesPartialInPlaceOverwriteRecoverable)
 					s.bytesPerRow);
 		std::vector<uint8_t> checkpoint(4, 0);
 		constexpr uint64_t checkpointVa = 4ULL << 32;
-		s.memory.regions[checkpointVa] = &checkpoint;
+		s.memory.map(checkpointVa, checkpoint);
 		const tgm_relayout_move move = {kSurfaceVa,    kSurfaceRowsVa, kRowsVa,
 						s.bytesPerRow, operation,      s.rows.size(),
 						checkpointVa};
@@ -250,7 +250,7 @@ TEST(Relayout, FailureBeforeCheckpointLeavesOriginalLayoutUntouched)
 	const auto before = s.surface;
 	std::vector<uint8_t> checkpoint(4, 0);
 	constexpr uint64_t checkpointVa = 4ULL << 32;
-	s.memory.regions[checkpointVa] = &checkpoint;
+	s.memory.map(checkpointVa, checkpoint);
 	const tgm_relayout_move move = {
 		kSurfaceVa,    kSurfaceRowsVa, kRowsVa, s.bytesPerRow, TGM_RELAYOUT_TILE_IN_PLACE,
 		s.rows.size(), checkpointVa};

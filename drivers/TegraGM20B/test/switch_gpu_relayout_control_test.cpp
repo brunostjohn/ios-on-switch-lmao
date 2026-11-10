@@ -77,9 +77,7 @@ extern "C" int tgm_vm_map_ordered(tgm_vm *, uint64_t va, uint64_t bytes, tgm_mem
 	EXPECT_EQ(bytes, pushBytes.size());
 	EXPECT_EQ(offset, 0u);
 	EXPECT_EQ(kind, 0u);
-	memory.regions[va] = &pushBytes;
-	if (readOnly)
-		memory.readOnly.insert(va);
+	memory.map(va, pushBytes, readOnly != 0);
 	return 0;
 }
 
@@ -221,7 +219,7 @@ TEST_F(RelayoutControl, ActualMappingAllowsGpuCheckpointWithoutChangingCommands)
 		tgm_relayout_checkpoint(gRelayout.pushCpu, kPushVa + uint64_t(kCheckpointWord) * 4);
 	const std::vector<uint8_t> commands(pushBytes.begin(), pushBytes.begin() + n * 4);
 	CopyEngine ce(memory);
-	ce.run(gRelayout.pushCpu, n);
+	ce.runAt(kPushVa, n);
 	ASSERT_FALSE(ce.fault);
 	EXPECT_EQ(gRelayout.pushCpu[kCheckpointWord], 1u);
 	EXPECT_TRUE(std::equal(commands.begin(), commands.end(), pushBytes.begin()));
@@ -229,13 +227,24 @@ TEST_F(RelayoutControl, ActualMappingAllowsGpuCheckpointWithoutChangingCommands)
 
 TEST_F(RelayoutControl, ReadOnlyMappingReproducesHostSemaphoreWriteFault)
 {
-	memory.readOnly.insert(kPushVa);
+	memory.map(kPushVa, pushBytes, true);
 	const uint32_t n =
 		tgm_relayout_checkpoint(gRelayout.pushCpu, kPushVa + uint64_t(kCheckpointWord) * 4);
 	CopyEngine ce(memory);
-	ce.run(gRelayout.pushCpu, n);
+	ce.runAt(kPushVa, n);
 	EXPECT_TRUE(ce.fault);
 	EXPECT_EQ(gRelayout.pushCpu[kCheckpointWord], 0u);
+}
+
+TEST_F(RelayoutControl, PushTheDriverNeverMappedFaultsBeforeItsFirstMethod)
+{
+	memory.unmap(kPushVa, pushBytes.size());
+	const uint32_t n =
+		tgm_relayout_checkpoint(gRelayout.pushCpu, kPushVa + uint64_t(kCheckpointWord) * 4);
+	CopyEngine ce(memory);
+	ce.runAt(kPushVa, n);
+	EXPECT_TRUE(ce.fault);
+	EXPECT_TRUE(ce.m.empty());
 }
 }  // namespace
 

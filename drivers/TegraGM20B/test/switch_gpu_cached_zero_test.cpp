@@ -19,7 +19,7 @@ struct tgm_mem {
 };
 
 struct switch_gpu_mapping {
-	uint64_t address;
+	uint64_t address, bytes;
 };
 
 struct tgm_chan {
@@ -39,7 +39,7 @@ tgm_vm space;
 tgm_chan gpu;
 std::map<uint64_t, std::vector<uint8_t> *> buffers;
 Memory memory;
-std::map<uint32_t, std::vector<uint32_t>> pending;
+std::map<uint32_t, std::pair<uint64_t, uint32_t>> pending;  // seqno -> push GPU address, dwords
 unsigned maps, unmaps, cacheOps, execs, nextError, progressChecks;
 int mapError;
 bool early;
@@ -61,7 +61,7 @@ void finish(bool failed = false, bool emulate = true)
 	if (!failed && emulate)
 		for (const auto &[sequence, push] : pending) {
 			CopyEngine ce(memory);
-			ce.run(push.data(), uint32_t(push.size()));
+			ce.runAt(push.first, push.second);
 			EXPECT_FALSE(ce.fault);
 		}
 	pending.clear();
@@ -184,10 +184,14 @@ extern "C" void tgm_mem_del(tgm_mem **value)
 	*value = nullptr;
 }
 
-extern "C" int tgm_vm_map_ordered(tgm_vm *, uint64_t, uint64_t, tgm_mem *, uint64_t, uint8_t, int readOnly,
-				  uint8_t *)
+extern "C" int tgm_vm_map_ordered(tgm_vm *, uint64_t va, uint64_t bytes, tgm_mem *mem, uint64_t offset,
+				  uint8_t, int readOnly, uint8_t *)
 {
+	EXPECT_EQ(mem->pages[0], 0x100000u);
+	EXPECT_EQ(offset, 0u);
+	EXPECT_EQ(bytes, sizeof(words));
 	pushReadOnly = readOnly;
+	memory.map(va, reinterpret_cast<uint8_t *>(words.data()), bytes, readOnly != 0);
 	return 0;
 }
 
@@ -206,10 +210,8 @@ extern "C" int switch_gpu_vm_map_volatile(tgm_vm *, uint64_t va, uint64_t, tgm_m
 	destinationReadOnly = readOnly;
 	destinationVolatile = vol;
 	++maps;
-	memory.regions[va] = buffers.at(mem->pages[0]);
-	if (readOnly)
-		memory.readOnly.insert(va);
-	*out = new switch_gpu_mapping{va};
+	memory.map(va, *buffers.at(mem->pages[0]), readOnly != 0);
+	*out = new switch_gpu_mapping{va, mem->count * 4096ull};
 	return 0;
 }
 
@@ -223,9 +225,7 @@ extern "C" void switch_gpu_vm_unmap(tgm_vm *, switch_gpu_mapping **mapping)
 {
 	if (*mapping) {
 		++unmaps;
-		memory.last = nullptr;
-		memory.regions.erase((*mapping)->address);
-		memory.readOnly.erase((*mapping)->address);
+		memory.unmap((*mapping)->address, (*mapping)->bytes);
 		delete *mapping;
 		*mapping = nullptr;
 	}
@@ -289,8 +289,7 @@ extern "C" int tgm_chan_exec(tgm_chan *, const tgm_push *push, uint32_t count, u
 		nextError = 0;
 		return result;
 	}
-	const auto *start = words.data() + (push->va - (1ULL << 20)) / 4;
-	pending[++gpu.submitted] = {start, start + push->dwords};
+	pending[++gpu.submitted] = {push->va, push->dwords};
 	*seq = gpu.submitted;
 	if (early) {
 		gpu.completed = gpu.submitted;
