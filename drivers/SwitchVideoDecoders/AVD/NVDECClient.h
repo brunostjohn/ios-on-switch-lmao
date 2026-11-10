@@ -19,6 +19,9 @@ void nvdec_close(NVDECClient *client);
 uint32_t nvdec_codecs(const NVDECClient *client);
 // TegraNVDECInfo.features has TEGRA_NVDEC_FEATURE_PRESENT: VIC copies pictures into IOSurfaces (nvdec_present).
 bool nvdec_can_present(const NVDECClient *client);
+bool switch_nvdec_can_export(const NVDECClient *client);
+int switch_nvdec_export(NVDECClient *client, const TegraNVDECPresent *picture);
+int switch_nvdec_recycle(void *client, uint32_t handle, uint64_t bytes, void **address);
 // A decoded picture into an IOSurface of this process (TegraNVDECPresent); 0, or the IOReturn (the picture's range is
 // then invalidated for a CPU copy).
 int nvdec_present(NVDECClient *client, const TegraNVDECPresent *present);

@@ -41,7 +41,8 @@ typedef struct {
     bool frame_mbs_only, mb_adaptive_frame_field, direct_8x8_inference;
     uint32_t crop_left, crop_right, crop_top, crop_bottom;  // in luma samples
     // VUI
-    bool full_range, colour_description;
+    bool full_range, colour_description, chroma_location;
+    uint32_t chroma_top, chroma_bottom;
     uint8_t colour_primaries, transfer, matrix;
     bool bitstream_restriction;
     uint8_t max_num_reorder_frames, max_dec_frame_buffering;

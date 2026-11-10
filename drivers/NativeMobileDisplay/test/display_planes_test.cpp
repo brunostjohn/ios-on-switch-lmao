@@ -216,7 +216,10 @@ void testRefusals()
     layers[0].surface = makeSurface(kKindBgra, 512, 512);
     layers[0].src = {0, 0, 512, 512};
     layers[0].dst = {0, 0, 512, 512};
-    CHECK(checkUpdated(7, 0, has, layers, W, H) == kTwoUi, "three layers with surfaces (IOMFBNumLayers 2)");
+    CHECK(checkUpdated(7, 0, has, layers, W, H) == kAccepted, "UI plus two detached layers");
+    has[3] = true;
+    layers[3] = layers[0];
+    CHECK(checkUpdated(15, 0, has, layers, W, H) == kTwoUi, "four layers exceed the three physical windows");
     // Today's swap (one full-frame BGRA layer in layer 0) is still accepted, as before r18.
     bool one[kLayers] = {true, false, false, false};
     Layer ui[kLayers];
@@ -230,6 +233,7 @@ void testImage()
     Layer l;
     l.kind = kKindNv12Video;
     l.surface = makeSurface(kKindNv12Video, 1280, 720);
+    l.surface.colorMatrix = 2;
     l.src = {0, 0, 1280, 720};
     l.dst = {0, 437, 720, 405};
     Image m;
@@ -292,9 +296,9 @@ void testCsc()
 {
     struct Std {
         double kr, kb;
-    } const stds[2] = {{0.299, 0.114}, {0.2126, 0.0722}};
+    } const stds[3] = {{0.299, 0.114}, {0.2126, 0.0722}, {0.2627, 0.0593}};
 
-    for (unsigned s = 0; s < 2; ++s)
+    for (unsigned s = 0; s < 3; ++s)
         for (unsigned full = 0; full < 2; ++full) {
             const double kg = 1 - stds[s].kr - stds[s].kb, cy = full ? 1.0 : 255.0 / 219, cc = full ? 1.0 : 255.0 / 224;
             const double want[8] = {full ? 0.0 : -16.0,
@@ -342,7 +346,7 @@ void testRoles()
     CHECK(r.ui == 1 && r.plane == 0 && !r.extra, "two full-frame layers: %d %d", r.ui, r.plane);
     bool three[kLayers] = {true, true, true, false};
     r = rolesOf(three, layers, W, H);
-    CHECK(r.ui == 1 && r.plane == 0 && r.extra == 1, "three layers: the lower detached one is not shown");
+    CHECK(r.ui == 1 && r.plane == 0 && r.second == 2 && !r.extra, "three layers retain both detached layers in stack order");
 }
 
 // DC A's window B with the ARM copy: writes go to assembly; UPDATE copies assembly to ARM; at a boundary with ACT_REQ out,
@@ -480,4 +484,30 @@ TEST(DisplayPlanes, Limits24B119AreIos17sWithoutPackedOrCompressed)
     EXPECT_EQ(ios27.planeBaseAlignment, ios17.planeBaseAlignment);
     EXPECT_EQ(ios27.strideAlignment, ios17.strideAlignment);
     EXPECT_EQ(ios27.maxLayers, ios17.maxLayers);
+    EXPECT_EQ(ios27.maxLayers, 3u);
+}
+
+TEST(DisplayPlanes, MatrixFollowsMetadataWithoutResolutionInference)
+{
+    Surface surface = makeSurface(kKindNv12Video, 1920, 1080);
+    EXPECT_EQ(matrixOf(surface), kBt601);
+    surface.colorMatrix = 1;
+    EXPECT_EQ(matrixOf(surface), kBt601);
+    surface.width = surface.height = 32;
+    surface.colorMatrix = 2;
+    EXPECT_EQ(matrixOf(surface), kBt709);
+    surface.colorMatrix = 3;
+    EXPECT_EQ(matrixOf(surface), kBt2020);
+}
+
+TEST(DisplayPlanes, DirectPlaneColorAdmissionRequiresQualifiedDisplayEncoding)
+{
+    EXPECT_TRUE(switch_surface_dc_color(0, 0, 0, 0));
+    EXPECT_TRUE(switch_surface_dc_color(1, 1, 1, 1));
+    EXPECT_TRUE(switch_surface_dc_color(13, 1, 0, 0));
+    EXPECT_FALSE(switch_surface_dc_color(16, 9, 1, 1));
+    EXPECT_FALSE(switch_surface_dc_color(18, 9, 1, 1));
+    EXPECT_FALSE(switch_surface_dc_color(1, 12, 1, 1));
+    EXPECT_FALSE(switch_surface_dc_color(1, 1, 2, 2));
+    EXPECT_FALSE(switch_surface_dc_color(1, 1, 1, 3));
 }

@@ -4,6 +4,8 @@ bool scanoutQualification = false;
 
 void initializeScanout()
 {
+    if (primary && !captureDisplayMemory())
+        IOLog("SwitchDisplay: the display timing cannot be read: no memory admission, overlays off\n");
 #if (defined(DEVELOPMENT) && DEVELOPMENT) || (defined(DEBUG) && DEBUG)
     int qualification = 0;
     PE_parse_boot_argn("switch-display-qualification", &qualification, sizeof(qualification));
@@ -12,6 +14,8 @@ void initializeScanout()
         return;
 #endif
     probeRan = planeProbeRan = true;
+    if (primary && dc)
+        SwitchDisplayPriority::initialize(dc);
     if (!primary || !doubleBuffer || !probeTables.memory || !SWITCH_PORTRAIT_NATIVE)
         return;
     if (otherWindowEnabled()) {
@@ -32,7 +36,7 @@ void initializeScanout()
     cleanDomain();
     char why[160];
     if (tegra_smmu_attach(TEGRA_SMMU_ASID_DISPLAY, probeDomain.ptb(), TEGRA_SMMU_DC_ASID,
-                          TEGRA_SMMU_TRANSLATION_ENABLE_0, kDisplay0aTranslation | kDisplay0bTranslation,
+                          TEGRA_SMMU_TRANSLATION_ENABLE_0, kDisplay0aTranslation | kDisplay0bTranslation | kDisplay0cTranslation,
                           why, sizeof(why))) {
         IOLog("SwitchDisplay: scanout domain refused: %s\n", why);
         return;

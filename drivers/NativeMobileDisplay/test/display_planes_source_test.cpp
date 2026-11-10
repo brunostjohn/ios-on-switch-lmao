@@ -77,8 +77,8 @@ TEST(DisplayPlanesSource, PlaneAccessorsAreTegraVics)
 
 TEST(DisplayPlanesSource, DriverFollowsTheRules)
 {
-    const std::string source = (SourceText("../NativeLegacyDisplay.cpp") + SourceText("../SwitchScanoutStart.h"));
-    const std::string planes = SourceText("../NativePlanesDisplay.h");
+    const std::string source = (SourceText("../NativeLegacyDisplay.cpp") + SourceText("../SwitchScanoutStart.h") + SourceText("../SwitchDirectSlots.h"));
+    const std::string planes = (SourceText("../NativePlanesDisplay.h") + SourceText("../SwitchOverlayRegisters.h") + SourceText("../SwitchPlaneSelection.h"));
     EXPECT_THAT(source, HasSubstr("#include \"NativePlanesDisplay.h\""));
     // validateSwap mirrors the published limits through checkUpdated; the UI's memory is still bounded.
     const std::string validate =
@@ -103,7 +103,7 @@ TEST(DisplayPlanesSource, DriverFollowsTheRules)
     // A latched window B set retires its swaps in queue order; a stuck one or an underflow run turns planes off.
     const std::string frame = Function(planes, "void planeFrameEnd()\n");
     EXPECT_THAT(frame, HasSubstr("retireThrough(now.seq, __atomic_load_n(&feStamp, __ATOMIC_ACQUIRE))"));
-    EXPECT_THAT(frame, HasSubstr("planesOff("));
+    EXPECT_THAT(frame, HasSubstr("beginPlaneRecovery("));
     EXPECT_THAT(source, HasSubstr("if (status & kFrameEndInt)\n            planeFrameEnd();"));
     // The first client frame's swap retires at its own latch (latchRetire is on from the plane probe, before it).
     EXPECT_THAT(Method(source, "    void startRotation(int target = kNoBuffer)\n"), HasSubstr("entrySeq[target] = seqOf(flipRequest);"));
@@ -153,8 +153,8 @@ TEST(DisplayPlanesSource, DriverFollowsTheRules)
 // a flip or window B).
 TEST(DisplayPlanesSource, TheConsoleHoldKeepsTheScreen)
 {
-    const std::string source = (SourceText("../NativeLegacyDisplay.cpp") + SourceText("../SwitchScanoutStart.h"));
-    const std::string planes = SourceText("../NativePlanesDisplay.h");
+    const std::string source = (SourceText("../NativeLegacyDisplay.cpp") + SourceText("../SwitchScanoutStart.h") + SourceText("../SwitchDirectSlots.h"));
+    const std::string planes = (SourceText("../NativePlanesDisplay.h") + SourceText("../SwitchOverlayRegisters.h") + SourceText("../SwitchPlaneSelection.h"));
     EXPECT_EQ(Count(source, "switch_console_hold"), 4u);  // the declaration, consoleHolds and its comment
     const std::string holds = Method(source, "    bool consoleHolds() const\n");
     ExpectBefore(holds, "if (rotated || &switch_console_hold == nullptr)\n            return false;",
@@ -184,19 +184,22 @@ TEST(DisplayPlanesSource, TheConsoleHoldKeepsTheScreen)
 // held layout is not that one is not used.
 TEST(DisplayPlanesSource, PlaneSlotsHoldTheSurfaceTheyScan)
 {
-    const std::string planes = SourceText("../NativePlanesDisplay.h");
+    const std::string planes = (SourceText("../NativePlanesDisplay.h") + SourceText("../SwitchOverlayRegisters.h") + SourceText("../SwitchPlaneSelection.h"));
     const std::string make = Function(planes, "int planeSlotFor(");
     EXPECT_THAT(make, HasSubstr("surface->retain();"));
     EXPECT_THAT(make, HasSubstr("planeSlots[k].tiled == tiled"));
     ExpectBefore(make, "tegra_gm20b_surface_hold(", "(held != 0) != tiled");
     const std::string decide = Function(planes, "void planeDecide(");
-    ExpectBefore(decide, "surfaceLayout(r.surface, block)", "image.surfaceKind != 0);");
+    ExpectBefore(decide, "planeNativeSlotFor(layer.surface", "planeBuildingSlots |= 1u << unsigned(slot)");
+    const auto native = SourceText("../SwitchNativePlaneDisplay.h");
+    ExpectBefore(native, "switch_native_scanout_acquire(surface", "planeMapSnapshot(scanout, image)");
+    EXPECT_THAT(native, HasSubstr("surfaceLayout(surface, block)"));
     EXPECT_THAT(Function(planes, "static const tgm_layout *surfaceLayout("),
                 HasSubstr("tegra_gm20b_surface_layout(pa & ~0xfffULL, &block) == 1"));
-    const std::string write = Function(planes, "void planeWriteRegisters(const PlaneSet &p)");
+    const std::string write = Function(planes, "void planeWriteWindowRegisters(unsigned window, const switch_display::Overlay &p, bool live)");
     EXPECT_THAT(write, HasSubstr("buf[kSurfaceKind] = m.surfaceKind;"));
     EXPECT_THAT(write, HasSubstr("buf[kVOffset] = m.vOffset;"));
-    EXPECT_THAT(Function(planes, "static bool planeSame("), HasSubstr("x.surfaceKind == y.surfaceKind"));
+    EXPECT_THAT(Function(planes, "static bool planeSame("), HasSubstr("x.surfaceKind != y.surfaceKind"));
     const std::string drop = Function(planes, "void planeDropSlot(unsigned k)");
     ExpectBefore(drop, "probeDomain.unmap(", "tegra_gm20b_surface_unhold(slot.layout);");
     ExpectBefore(drop, "tegra_gm20b_surface_unhold(slot.layout);", "slot.memory->release();");
@@ -242,7 +245,7 @@ TEST(DisplayPlanesSource, Ios27CoreVideoMakesNoCompressedSurfaces)
 // A detached layer refused for its format or layout is logged with its surface's geometry on debug kernels only.
 TEST(DisplayPlanesSource, RefusedLayoutsLoggedOnlyByDebugKernels)
 {
-    const std::string source = (SourceText("../NativeLegacyDisplay.cpp") + SourceText("../SwitchScanoutStart.h"));
+    const std::string source = (SourceText("../NativeLegacyDisplay.cpp") + SourceText("../SwitchScanoutStart.h") + SourceText("../SwitchDirectSlots.h"));
     const std::string totals = SourceText("../NativePlanesTotals.h");
     ExpectBefore(source,
                  "reason = native_planes::checkUpdated(updated, background, hasSurface, layers, width, height);",
@@ -260,28 +263,37 @@ TEST(DisplayPlanesSource, RefusedLayoutsLoggedOnlyByDebugKernels)
 // present carries drops such a change; nothing writes them from the kick.
 TEST(DisplayPlanesSource, WindowBWaitsForTheGpuOnSurfacesItRenders)
 {
-    const std::string source = (SourceText("../NativeLegacyDisplay.cpp") + SourceText("../SwitchScanoutStart.h"));
-    const std::string planes = SourceText("../NativePlanesDisplay.h");
+    const std::string source = (SourceText("../NativeLegacyDisplay.cpp") + SourceText("../SwitchScanoutStart.h") + SourceText("../SwitchDirectSlots.h"));
+    const std::string planes = (SourceText("../NativePlanesDisplay.h") + SourceText("../SwitchOverlayRegisters.h") + SourceText("../SwitchPlaneSelection.h"));
     const std::string fence = SourceText("../NativePlaneFenceDisplay.h");
     for (const char *offer : {"    bool offerGpuCopy(", "    bool offerDirect("}) {
         const std::string body = Method(source, offer);
         ExpectBefore(body, "copy.alsoWritten = planeNextAlsoWritten();", "tegra_gm20b_scanout_copy(&copy)");
     }
     const std::string kick = Method(source, "    void kickOnce()\n");
-    ExpectBefore(kick, "planeNextUnfenced();  // no GPU present carries this frame from here on",
-                 "native_legacy_gpu_offer(this, memory, sourceStride, width, height)");
-    ExpectBefore(kick, "offerGpuCopy(request, memory, sourceStride, allocation, width, height, tiled, kickAt)",
-                 "planeNextUnfenced();  // no GPU present carries this frame from here on");
+    EXPECT_THAT(kick, Not(HasSubstr("planeNextUnfenced")));
+    EXPECT_THAT(kick, HasSubstr("!(planeNextSet && planeFenced(planeNext))"));
+    const auto copied = SourceText("../SwitchCopiedPlanes.h");
+    EXPECT_THAT(copied, HasSubstr("if (!copyPixelsReady || !copyPlaneReady)"));
+    EXPECT_THAT(Method(source, "    void startCopy("), HasSubstr("beginCopiedPlaneFence()"));
+    EXPECT_THAT(Method(source, "    void copyFinished()"), HasSubstr("copiedPixelsFinished()"));
     const std::string only = Function(planes, "void kickPlaneOnly(");
     ExpectBefore(only, "native_planes::planeRoute(planeFenced(p), false, false) == native_planes::PlaneRoute::kNow",
                  "planeOut(p);");
     ExpectBefore(only, "} else if (planeFence(p)) {", "transferred = true;");
-    EXPECT_THAT(Function(fence, "bool planeFence(const PlaneSet &p)"),
-                HasSubstr("tegra_gm20b_scanout_fence(this, pa)"));
+    const std::string admission = Function(fence, "bool planeFence(const PlaneSet &p)");
+    EXPECT_THAT(admission, Not(HasSubstr("switch_gpu_bridge_fence(")));
+    ExpectBefore(admission, "planeFencePending = true;", "copySource->interruptOccurred");
+    EXPECT_THAT(Method(source, "    void copyWork()\n"), HasSubstr("planeFenceWork();"));
+    const std::string worker = SourceText("../SwitchPlaneFenceAdmission.h");
+    EXPECT_THAT(worker, HasSubstr("switch_gpu_bridge_fence(producers, count"));
+    EXPECT_THAT(worker, HasSubstr("switch_gpu_bridge_wait_room()"));
+    EXPECT_THAT(Function(fence, "bool planeFenced(const PlaneSet &p) const"),
+                HasSubstr("switch_gpu_backing_token_external_status"));
     const std::string done = Function(fence, "void finishPlaneFence(int status)");
     ExpectBefore(done, "if (status || !planesOn) {", "planeOut(planeFencing);");
     EXPECT_THAT(Method(source, "    void finishGpuSwap(int status)\n"),
                 HasSubstr("if (gpuScanout && planeFencePending) {\n            finishPlaneFence(status);"));
     EXPECT_THAT(Function(fence, "uint64_t planeFencePa(const PlaneSet &p) const"),
-                HasSubstr("planeSlots[p.slot].memory->getPhysicalSegment(0, &length, kIOMemoryMapperNone)"));
+                HasSubstr("planeSlots[overlay.slot].memory->getPhysicalSegment(0, &length, kIOMemoryMapperNone)"));
 }

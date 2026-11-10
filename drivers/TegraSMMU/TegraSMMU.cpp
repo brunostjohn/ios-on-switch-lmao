@@ -5,6 +5,7 @@
 #include <libkern/libkern.h>
 #include "TegraSMMU.h"
 #include "TegraSMMUAttachments.h"
+#include "SwitchSmmuRegisters.h"
 #include "../../kits/SwitchMMIO/SwitchMMIOKernel.h"
 
 namespace {
@@ -57,36 +58,28 @@ bool ready()
     return true;
 }
 
-// Lock held.
+struct RegisterAccess {
+    uint32_t read(uint32_t offset) const
+    {
+        return r32(offset);
+    }
+
+    void write(uint32_t offset, uint32_t value) const
+    {
+        w32(offset, value);
+    }
+};
+
 void flushLocked(uint32_t asid)
 {
-    w32(PTC_FLUSH, 0);  // all
-    (void)r32(PTB_ASID);
-    w32(TLB_FLUSH, TLB_FLUSH_ASID_MATCH | (asid << 24));  // this ASID, every address
-    (void)r32(PTB_ASID);
+    RegisterAccess io;
+    switch_smmu::flush(io, asid);
 }
 
-// Lock held: the directory (read back), a flush, the clients' translation bits, the swgroup, a flush.
 int programLocked(const tegra_smmu_attachment &a, char *line, size_t size)
 {
-    w32(PTB_ASID, a.asid);
-    w32(PTB_DATA, a.ptb);
-    (void)r32(PTB_ASID);
-    w32(PTB_ASID, a.asid);
-    if (r32(PTB_DATA) != a.ptb) {
-        snprintf(line, size, "ASID %u directory did not take (PTB_DATA %#x, wrote %#x)", a.asid, r32(PTB_DATA), a.ptb);
-        return -1;
-    }
-    flushLocked(a.asid);
-    w32(a.translationReg, r32(a.translationReg) | a.translationBits);
-    w32(a.asidReg, ASID_ENABLE | a.asid);
-    (void)r32(a.asidReg);
-    if (r32(a.asidReg) != (ASID_ENABLE | a.asid)) {
-        snprintf(line, size, "swgroup ASID did not take (MC %#x = %#x)", a.asidReg, r32(a.asidReg));
-        return -1;
-    }
-    flushLocked(a.asid);
-    return 0;
+    RegisterAccess io;
+    return switch_smmu::program(io, a, line, size);
 }
 }  // namespace
 
@@ -113,6 +106,19 @@ extern "C" int tegra_smmu_attach(uint32_t asid, uint32_t ptb, uint32_t asidReg, 
 out:
     IOSimpleLockUnlock(gLock);
     return ret;
+}
+
+extern "C" int switch_smmu_restore(uint32_t asid, uint32_t ptb, uint32_t asidReg, char *line, size_t size)
+{
+    if (!ready()) {
+        snprintf(line, size, "cannot map the memory controller");
+        return -1;
+    }
+    IOSimpleLockLock(gLock);
+    RegisterAccess io;
+    const int result = switch_smmu::restore(io, gAttached, asid, ptb, asidReg, line, size);
+    IOSimpleLockUnlock(gLock);
+    return result;
 }
 
 extern "C" void tegra_smmu_detach(uint32_t asid, uint32_t asidReg)

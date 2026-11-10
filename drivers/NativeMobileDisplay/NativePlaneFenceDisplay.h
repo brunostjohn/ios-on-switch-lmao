@@ -7,43 +7,44 @@
 static inline PlaneSet planeFencing = {};
 static inline bool planeFencePending = false;
 
-static bool planeFenced(const PlaneSet &p)
+bool planeFenced(const PlaneSet &p) const
 {
-    return p.on && p.image.surfaceKind != 0;
+    for (const auto &overlay : p.window) {
+        if (!overlay.on)
+            continue;
+        const auto *native = planeSlots[overlay.slot].native;
+        if (native && native->lease) {
+            if (native->view.producer.engine && switch_gpu_backing_token_external_status(&native->view.producer) != 1)
+                return true;
+        } else if (overlay.image.surfaceKind) {
+            return true;
+        }
+    }
+    return false;
 }
 
-// The first page of the surface p scans (the GPU keys a surface's writers by it), 0 for a set nothing on the GPU writes.
 uint64_t planeFencePa(const PlaneSet &p) const
 {
-    if (!planeFenced(p) || !planeSlots[p.slot].memory)
-        return 0;
-    IOByteCount length = 0;
-    return planeSlots[p.slot].memory->getPhysicalSegment(0, &length, kIOMemoryMapperNone) & ~0xfffULL;
+    for (const auto &overlay : p.window) {
+        if (!overlay.on || planeSlots[overlay.slot].native || !overlay.image.surfaceKind ||
+            !planeSlots[overlay.slot].memory)
+            continue;
+        IOByteCount length = 0;
+        return planeSlots[overlay.slot].memory->getPhysicalSegment(0, &length, kIOMemoryMapperNone) & ~0xfffULL;
+    }
+    return 0;
 }
 
-// The window A present's other surface: window B's, when its change goes out with this frame and the GPU renders it.
 uint64_t planeNextAlsoWritten() const
 {
     return planeNextSet ? planeFencePa(planeNext) : 0;
-}
-
-// A window A frame that no GPU present carries: a change it would carry whose surface the GPU renders is not shown.
-void planeNextUnfenced()
-{
-    if (!planeNextSet ||
-        native_planes::planeRoute(planeFenced(planeNext), true, false) != native_planes::PlaneRoute::kNotShown)
-        return;
-    planeNextSet = false;
-    if (stats)
-        ++stPlaneDropped;
 }
 
 // A plane-only swap's set whose surface the GPU renders: a present of its own, with no copy, whose completion writes it
 // (finishPlaneFence). False: the GPU declined it.
 bool planeFence(const PlaneSet &p)
 {
-    const uint64_t pa = planeFencePa(p);
-    if (!gpuCopy || !gpuDoneSource || !pa || tegra_gm20b_scanout_fence(this, pa))
+    if (!gpuCopy || !gpuDoneSource || !copySource || copyStopping)
         return false;
     planeFencing = p;
     planeFencePending = true;
@@ -59,6 +60,8 @@ bool planeFence(const PlaneSet &p)
     __atomic_store_n(&gpuScanout, true, __ATOMIC_RELEASE);
     gpuDeadlines = 0;
     gpuDeadline->setTimeoutMS(kGpuCopyDeadlineMS);
+    planeFenceQueued = true;
+    copySource->interruptOccurred(nullptr, nullptr, 0);
     return true;
 }
 
@@ -69,6 +72,10 @@ void finishPlaneFence(int status)
     gpuDeadline->cancelTimeout();
     __atomic_store_n(&gpuScanout, false, __ATOMIC_RELEASE);
     planeFencePending = false;
+    if (copyPlaneJoined) {
+        copiedPlaneFenceFinished(status);
+        return;
+    }
     transferred = false;
     if (status || !planesOn) {
         planeNotShown(planeFencing);

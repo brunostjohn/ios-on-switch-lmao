@@ -25,6 +25,7 @@ typedef struct {
     const uint8_t *counts;  // unpacked trace counts (NVDEC layout)
     const VP9TraceFrame *frame;
     int jobs, refused, shown;
+    unsigned recycled;
     bool haveFirst;
     TegraNVDECSubmit first;
     uint64_t firstAvail[TEGRA_NVDEC_MAX_ENTRIES];
@@ -45,6 +46,21 @@ static int fakeAlloc(void *ctx, uint64_t size, uint32_t *handle, void **va)
         return 0;
     }
     return -1;
+}
+
+static int switch_fake_recycle(void *ctx, uint32_t handle, uint64_t bytes, void **address)
+{
+    Fake *f = ctx;
+    if (!handle || handle >= 64 || !f->va[handle] || bytes != f->size[handle])
+        return -1;
+    void *next = calloc(1, bytes);
+    if (!next)
+        return -1;
+    free(f->va[handle]);
+    f->va[handle] = next;
+    *address = next;
+    ++f->recycled;
+    return 0;
 }
 
 static void fakeFree(void *ctx, uint32_t handle)
@@ -109,7 +125,8 @@ static int fakeWait(void *ctx, const TegraNVDECWait *w)
 static void *fakeDecoded(void *ctx, const H264Picture *pic)
 {
     Fake *f = ctx;
-    (void)pic;
+    if (pic->luma != f->va[pic->handle])
+        ++f->refused;
     f->shown++;
     return malloc(1);
 }
@@ -137,7 +154,7 @@ static int runClip(const char *name, const uint32_t *sizes, int packets, const u
     }
     Fake fake = {.counts = counts};
     const H264Backend backend = {&fake,       fakeAlloc, fakeFree, fakeSubmit, fakeWait,
-                                 fakeDecoded, fakeEmit,  fakeEmit, NULL};
+                                 fakeDecoded, fakeEmit,  fakeEmit, NULL, switch_fake_recycle};
     VP9Decoder *d = vp9_decoder_create(&backend);
     int bad = 0, record = 0;
     if (vp9_decoder_configure(d, 512, 288))
@@ -215,7 +232,7 @@ static int runClip(const char *name, const uint32_t *sizes, int packets, const u
         fprintf(stderr, "%s: %d frames decoded, libvpx %d\n", name, record, traced);
         bad++;
     }
-    bad += fake.refused;
+    bad += fake.refused + (fake.recycled == 0);
     *shownOut = fake.shown;
     // The checker's refusals, each from the clip's first (accepted) submit.
     if (fake.haveFirst && !strcmp(name, "A")) {

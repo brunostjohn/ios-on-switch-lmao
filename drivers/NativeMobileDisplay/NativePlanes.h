@@ -51,6 +51,7 @@
 #include <string.h>
 
 #include "../TegraGM20B/TegraGM20BLayout.h"
+#include "../TegraVIC/SwitchSurfaceColor.h"
 
 namespace native_planes {
 
@@ -95,6 +96,7 @@ constexpr uint32_t fourcc(char a, char b, char c, char d)
 // An IOSurface as the kernel's IOSurface describes it (plane fields for planar formats only).
 struct Surface {
     uint32_t format = 0, planes = 0, width = 0, height = 0;
+    uint32_t colorMatrix = 0, transfer = 0, primaries = 0, chromaTop = 0, chromaBottom = 0;
     uint64_t allocation = 0, descriptorBytes = 0;
     uint64_t offset[2] = {};
     uint32_t stride[2] = {}, planeHeight[2] = {};
@@ -133,14 +135,14 @@ inline bool isNv12(Kind k)
 // A10X's own values where the DC can do as much (IOMFBScalingLimits 4/4/4/4 [V]); MaxSrcRectWidth 1920 (CA's own default)
 // because the V filter's line buffer on T210 is not documented in any source, so wider sources are scaled by the IOSA copy
 // first, and buffers up to 2048 x 2048 (a 1080p frame; anything bigger is copied by it too); plane bases 64-byte aligned (the DC's pitch alignment, mainline pitch_align); rows 128-byte aligned (what the GPU
-// renders in place, already published; video pool rows are 256). Two layers, as A10X: the UI and one detached layer.
+// renders in place, already published; video pool rows are 256). Three windows: the UI and two independently fenced detached layers.
 struct Limits {
     uint32_t minScaleFraction = 4, maxScale = 4;  // 1/4 .. 4x on each axis
     uint32_t maxSrcRectWidth = 1920;
     uint64_t maxSrcRectTotal = 1920ULL * 1088;
     uint32_t maxSrcBuffer = 2048;  // so rows x stride of any source fits one 20 MiB slot (8 KiB x 2048 = 16 MiB)
     uint32_t planeBaseAlignment = 64, strideAlignment = 128;
-    uint32_t maxLayers = 2;
+    uint32_t maxLayers = 3;
     bool packedYuvUnsupported = false;    // published as IOMFBYUVPackedUnSupported (24B119 only, see kLimits24B119)
     bool compressionUnsupported = false;  // published as IOMFBMaxSrcPixels' IOMFBCompressionSupport 0 (24B119 only)
 };
@@ -253,23 +255,25 @@ inline uint32_t vFilterTap(unsigned i)
 // Y'CbCr to RGB (WIN_CSC_YOF..KVB, 0x611-0x618): YOF s.7.0, KYRGB 2.8, KUR/KVR/KUB/KVB s.2.8, KUG/KVG s.1.8 (tegra_dc_ext.h).
 // Rounded from the standards' Kr/Kb with video range scaled by 255/219 (luma) and 255/224 (chroma); tests check them against
 // the float conversion, and BT.601 video range within one step of the TRM default every source programs (f0 12a 0 198 39b 32f
-// 204 0). Which standard: BT.709 from 1280 wide or 720 high up, BT.601 below (CoreVideo's default for untagged buffers, the
-// rule TegraVIC uses) [I: the kernel does not read the surface's YCbCrMatrix attachment].
+// 204 0). Untagged input uses the same conservative BT.601 policy as VIC.
 enum Matrix {
     kBt601,
-    kBt709
+    kBt709,
+    kBt2020
 };
 
-constexpr uint32_t kCsc[2][2][8] = {
+constexpr uint32_t kCsc[3][2][8] = {
     {{0x0f0, 0x12a, 0x000, 0x199, 0x39c, 0x330, 0x204, 0x000},
      {0x000, 0x100, 0x000, 0x167, 0x3a8, 0x349, 0x1c6, 0x000}},
     {{0x0f0, 0x12a, 0x000, 0x1cb, 0x3c9, 0x378, 0x21d, 0x000},
      {0x000, 0x100, 0x000, 0x193, 0x3d0, 0x388, 0x1db, 0x000}},
+    {{0x0f0, 0x12a, 0x000, 0x1ae, 0x3d0, 0x359, 0x224, 0x000},
+     {0x000, 0x100, 0x000, 0x179, 0x3d6, 0x36e, 0x1e2, 0x000}},
 };
 
 inline Matrix matrixOf(const Surface &s)
 {
-    return s.width >= 1280 || s.height >= 720 ? kBt709 : kBt601;
+    return s.colorMatrix == 2 ? kBt709 : s.colorMatrix == 3 ? kBt2020 : kBt601;
 }
 
 // DDA increment, 4.12, as L4T computes it (in / out, window.c compute_dda_inc), so a 4x layer is exactly 4.0 (mainline's
@@ -384,6 +388,11 @@ inline bool imageOf(const Layer &l, uint32_t width, uint32_t height, Image &imag
 {
     image = Image();
     image.yuv = isNv12(l.kind);
+    if ((image.yuv && l.surface.colorMatrix > 3) ||
+        !switch_surface_dc_color(l.surface.transfer, l.surface.primaries,
+                                 image.yuv ? l.surface.chromaTop : 0,
+                                 image.yuv ? l.surface.chromaBottom : 0))
+        return false;
     const uint32_t bpp = image.yuv ? 1 : 4;  // bytes per pixel the offsets and PRESCALED count (luma)
     const uint32_t hMax = image.yuv ? 8 : 4;
     const uint32_t vMax = 15;  // DDA limits (4:2:0 counts as 2 bytes per pixel)
@@ -466,37 +475,33 @@ inline unsigned checkDetached(const Layer &l, uint32_t width, uint32_t height, c
 }
 
 // --- The swap's layers --------------------------------------------------------------------------------------------------
-// Which layer window A shows (the UI) and which one window B shows, for the effective set of a swap: the UI is the topmost
-// full-frame BGRA layer, window B the topmost other one below it. Anything more (a third layer, a layer above the UI) is not
-// something Core Animation sends under MaxNumLayers 2; it is not shown and counted.
+// The full-frame UI is above up to two detached layers in the family's stack order.
 struct Roles {
-    int ui = -1, plane = -1;
-    unsigned extra = 0;  // present layers neither window shows
+    int ui = -1, plane = -1, second = -1;
+    unsigned extra = 0;
 };
 
 inline Roles rolesOf(const bool present[kLayers], const Layer layers[kLayers], uint32_t width, uint32_t height)
 {
     Roles r;
-    unsigned uiPosition = 0;
+    for (unsigned i = 0; i < kLayers; ++i)
+        if (present[i] && isUi(layers[i], width, height) &&
+            (r.ui < 0 || stackPosition(i) > stackPosition(unsigned(r.ui))))
+            r.ui = int(i);
     for (unsigned i = 0; i < kLayers; ++i) {
-        if (present[i] && isUi(layers[i], width, height) && (r.ui < 0 || stackPosition(i) > uiPosition)) {
-            r.ui = static_cast<int>(i);
-            uiPosition = stackPosition(i);
-        }
-    }
-    unsigned planePosition = 0;
-    for (unsigned i = 0; i < kLayers; ++i) {
-        if (!present[i] || static_cast<int>(i) == r.ui)
+        if (!present[i] || int(i) == r.ui)
             continue;
-        if (r.ui >= 0 && stackPosition(i) > uiPosition) {
+        if (r.ui >= 0 && stackPosition(i) > stackPosition(unsigned(r.ui))) {
             ++r.extra;
-            continue;
-        }
-        if (r.plane < 0 || stackPosition(i) > planePosition) {
-            if (r.plane >= 0)
+        } else if (r.plane < 0 || stackPosition(i) > stackPosition(unsigned(r.plane))) {
+            if (r.second >= 0)
                 ++r.extra;
-            r.plane = static_cast<int>(i);
-            planePosition = stackPosition(i);
+            r.second = r.plane;
+            r.plane = int(i);
+        } else if (r.second < 0 || stackPosition(i) > stackPosition(unsigned(r.second))) {
+            if (r.second >= 0)
+                ++r.extra;
+            r.second = int(i);
         } else {
             ++r.extra;
         }

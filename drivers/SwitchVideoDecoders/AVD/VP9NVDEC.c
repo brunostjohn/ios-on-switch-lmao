@@ -174,8 +174,15 @@ static int takeSurface(VP9Decoder *d, uint32_t width, uint32_t height)
         Surface *s = &d->surf[i];
         if (s->refs)
             continue;
-        if (s->handle && s->pitch >= pitch && s->rows >= rows)
+        if (s->handle && s->pitch >= pitch && s->rows >= rows) {
+            if (d->b.recycle) {
+                void *address = s->va;
+                if (d->b.recycle(d->b.ctx, s->handle, s->bytes, &address))
+                    return -1;
+                s->va = address;
+            }
             return i;
+        }
         if (empty < 0 || !d->surf[empty].handle)
             empty = i;
     }

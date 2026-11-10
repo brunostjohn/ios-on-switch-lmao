@@ -20,11 +20,15 @@
 #include "../../kits/SwitchCAR/SwitchCAR.h"
 #include "../../kits/SwitchIdle/switch_idle.h"
 #include "../../kits/SwitchMMIO/SwitchMMIOKernel.h"
+#include "../../kits/SwitchMMIO/SwitchMMIOWords.h"
+#include "SwitchDisplayMemoryState.h"
 #include "SwitchEMC.h"
 #include "SwitchEMCGovernor.h"
+#include "SwitchDisplayBandwidth.h"
 #include "SwitchPower.h"
 
 namespace {
+uint64_t gDisplayBytes = 78000000ULL * 4;
 constexpr uint64_t kActmonPA = 0x6000c800;
 constexpr uint32_t kGlbStatus = 0x00, kGlbPeriodCtrl = 0x04, kGlbMcAll = 1u << 26;
 constexpr uint32_t kMcAll = 0x1c0;
@@ -46,6 +50,10 @@ class SwitchEMC : public OSObject {
     IOInterruptEventSource *actmon = nullptr, *signal = nullptr;
     IOTimerEventSource *hold = nullptr;
     volatile uint8_t *regs = nullptr;
+    SwitchMMIOWords mcRegs;
+    switch_display::MemoryState memoryState;
+    bool memoryQualified = false, memoryDirty = false;
+    uint32_t memoryAppliedKhz = 0;
     uint32_t khz[SWITCH_EMC_MAX_RATES] = {};
     unsigned count = 0, cur = 0;
     bool governing = false, refusalLogged = false;
@@ -65,7 +73,13 @@ class SwitchEMC : public OSObject {
     bool held(uint64_t now);
     void armHoldEnd(uint64_t now);
     void program();
-    void moveTo(unsigned index);
+    bool moveTo(unsigned index);
+    unsigned reconcileRate(uint32_t observed, bool quiesced = false);
+    unsigned memoryFloor(unsigned first) const;
+    void dropDisplayMemory(const char *why);
+    bool programMemory(uint32_t before, uint32_t after, bool force = false);
+    static IOReturn memoryAction(OSObject *owner, void *request, void *result, void *, void *);
+    static IOReturn displayAction(OSObject *owner, void *bytes, void *result, void *, void *);
     bool setup(char *why, size_t size);
     void startActmon();
     void stopActmon();
@@ -76,9 +90,16 @@ class SwitchEMC : public OSObject {
 public:
     // Thread context, once: the governor ready but not yet governing; nullptr with `why` filled when it cannot run.
     static SwitchEMC *create(char *why, size_t size);
-    void govern();
+    void govern(bool resume = false);
     void pause();
     void hint();
+    void deadline(uint64_t until);
+    int reserveDisplay(uint64_t bytes);
+    int reserveMemory(const switch_display_memory_head &request);
+    bool displayMemoryReady() const
+    {
+        return __atomic_load_n(&memoryQualified, __ATOMIC_ACQUIRE);
+    }
 #if DEVELOPMENT || DEBUG
     static IOReturn statsAction(OSObject *owner, void *line, void *size, void *written, void *);
     size_t stats(char *line, size_t size);
@@ -102,6 +123,9 @@ void framesStarted()
         emc->hint();
 }
 }  // namespace
+
+#include "SwitchDisplayMemoryEMC.h"
+#include "SwitchEMCClock.h"
 
 SwitchEMC *SwitchEMC::create(char *why, size_t size)
 {
@@ -149,6 +173,15 @@ bool SwitchEMC::setup(char *why, size_t size)
         return false;
     }
     cur = count - 1;
+    mcRegs = SwitchMMIOWords(switch_mmio_map(0x70019000, 0x1000));
+    const auto emcProfile = switch_mmio_map(0x7001b000, 0x1000);
+    const auto chipProfile = switch_mmio_map(0x70000800, 0x100);
+    const uint32_t hidrev = chipProfile ? switch_mmio_read32(chipProfile, 4) : 0;
+    const uint32_t fbio = emcProfile ? switch_mmio_read32(emcProfile, 0x104) : 0;
+    memoryQualified = mcRegs && emcProfile && chipProfile && switch_display::memoryProfile(hidrev, fbio);
+    if (!memoryQualified)
+        IOLog("SwitchEMC: display memory admission off: HIDREV %#x FBIO_CFG5 %#x is not a T210B01 with LPDDR4\n",
+              hidrev, fbio);
     regs = switch_mmio_map(kActmonPA, 0x400);
     loop = IOWorkLoop::workLoop();
     IOService *nub = switch_interrupt_nub(kActmonIntid, false);
@@ -187,7 +220,9 @@ void SwitchEMC::program()
 {
     const uint64_t now = mach_absolute_time();
     const bool keep = held(now);
-    const switch_emc_wmarks w = switch_emc_watermarks(khz, count, cur, keep);
+    switch_emc_wmarks w = switch_emc_watermarks(khz, count, cur, keep);
+    if (cur <= memoryFloor(0))
+        w.down_on = false;
     const uint32_t base = kMcAll;
     switch_mmio_write32(regs, base + kUpWmark, w.up);
     switch_mmio_write32(regs, base + kDownWmark, w.down);
@@ -202,27 +237,28 @@ void SwitchEMC::program()
         armHoldEnd(now);
 }
 
-void SwitchEMC::moveTo(unsigned index)
+IOReturn SwitchEMC::displayAction(OSObject *owner, void *bytes, void *result, void *, void *)
 {
-    if (index == cur)
-        return;
-    unsigned now = 0;
-    const int err = tegra_bpmp_emc_set(khz[index], &now);
-    if (err) {
-        if (!refusalLogged) {
-            os_log_error(OS_LOG_DEFAULT, "SwitchEMC: the BPMP refused %u kHz (%d); staying at %u kHz", khz[index], err,
-                         khz[cur]);
-        }
-        refusalLogged = true;
-        return;
+    auto *self = static_cast<SwitchEMC *>(owner);
+    const uint64_t demand = *static_cast<uint64_t *>(bytes);
+    const unsigned floor = switch_display::row(self->khz, self->count, demand);
+    int error = floor >= self->count ? -28 : 0;
+    if (!error && floor > self->cur && !self->moveTo(floor))
+        error = -5;
+    if (!error) {
+        __atomic_store_n(&gDisplayBytes, demand, __ATOMIC_RELEASE);
+        if (self->governing)
+            self->program();
     }
-#if DEVELOPMENT || DEBUG
-    const uint64_t t = mach_absolute_time();
-    residency[cur] += t - since;
-    since = t;
-    moves++;
-#endif
-    cur = index;
+    *static_cast<int *>(result) = error;
+    return kIOReturnSuccess;
+}
+
+int SwitchEMC::reserveDisplay(uint64_t bytes)
+{
+    int error = 0;
+    loop->runAction(&SwitchEMC::displayAction, this, &bytes, &error);
+    return error;
 }
 
 void SwitchEMC::actmonFired(OSObject *owner, IOInterruptEventSource *, int)
@@ -273,7 +309,11 @@ void SwitchEMC::holdFired(OSObject *owner, IOTimerEventSource *)
 // Any context (the scheduler's callout, an interrupt filter, a thread): the top rate at once, kept for the hold.
 void SwitchEMC::hint()
 {
-    const uint64_t until = mach_absolute_time() + holdTicks;
+    deadline(mach_absolute_time() + holdTicks);
+}
+
+void SwitchEMC::deadline(uint64_t until)
+{
     uint64_t was = __atomic_load_n(&hintUntil, __ATOMIC_RELAXED);
     while (until > was &&
            !__atomic_compare_exchange_n(&hintUntil, &was, until, true, __ATOMIC_RELEASE, __ATOMIC_RELAXED)) {
@@ -310,23 +350,6 @@ void SwitchEMC::stopActmon()
     hold->cancelTimeout();
 }
 
-IOReturn SwitchEMC::governAction(OSObject *owner, void *, void *, void *, void *)
-{
-    auto *self = static_cast<SwitchEMC *>(owner);
-    unsigned now = 0;
-    if (self->governing || tegra_bpmp_emc_get(&now))
-        return kIOReturnSuccess;
-    const unsigned row = switch_emc_row(self->khz, self->count, now);
-    if (row < self->count)
-        self->cur = row;
-#if DEVELOPMENT || DEBUG
-    self->since = mach_absolute_time();
-#endif
-    self->governing = true;
-    self->startActmon();
-    return kIOReturnSuccess;
-}
-
 IOReturn SwitchEMC::pauseAction(OSObject *owner, void *, void *, void *, void *)
 {
     auto *self = static_cast<SwitchEMC *>(owner);
@@ -343,9 +366,12 @@ IOReturn SwitchEMC::pauseAction(OSObject *owner, void *, void *, void *, void *)
 }
 
 // Thread context: the work loop runs it.
-void SwitchEMC::govern()
+void SwitchEMC::govern(bool resume)
 {
-    loop->runAction(&SwitchEMC::governAction, this);
+    const IOReturn error = loop->runAction(&SwitchEMC::governAction, this, resume ? this : nullptr);
+    if (resume && error != kIOReturnSuccess)
+        os_log_error(OS_LOG_DEFAULT, "SwitchEMC: not governing after SC7 (%#x): the EMC stays at %u kHz", error,
+                     khz[cur]);
 }
 
 void SwitchEMC::pause()
@@ -424,6 +450,24 @@ extern "C" void switch_emc_gpu_submit(void)
         emc->hint();
 }
 
+extern "C" int switch_emc_display_reserve(uint64_t bytes_per_second)
+{
+    if (SwitchEMC *emc = __atomic_load_n(&gEMC, __ATOMIC_ACQUIRE)) {
+        if (bytes_per_second == __atomic_load_n(&gDisplayBytes, __ATOMIC_ACQUIRE))
+            return 0;
+        return emc->reserveDisplay(bytes_per_second);
+    }
+    uint64_t old = __atomic_load_n(&gDisplayBytes, __ATOMIC_RELAXED);
+    while (old < bytes_per_second && !__atomic_compare_exchange_n(&gDisplayBytes, &old, bytes_per_second, true,
+                                                                  __ATOMIC_RELEASE, __ATOMIC_RELAXED)) {
+    }
+    if (SwitchEMC *emc = __atomic_load_n(&gEMC, __ATOMIC_ACQUIRE))
+        return emc->reserveDisplay(bytes_per_second);
+    unsigned khz = 0;
+    const int error = tegra_bpmp_emc_get(&khz);
+    return error ? error : khz >= switch_display::floorKhz(bytes_per_second) ? 0 : -28;
+}
+
 extern "C" void switch_emc_suspend(void)
 {
     if (SwitchEMC *emc = __atomic_load_n(&gEMC, __ATOMIC_ACQUIRE))
@@ -433,7 +477,7 @@ extern "C" void switch_emc_suspend(void)
 extern "C" void switch_emc_resume(void)
 {
     if (SwitchEMC *emc = __atomic_load_n(&gEMC, __ATOMIC_ACQUIRE))
-        emc->govern();
+        emc->govern(true);
 }
 
 #if DEVELOPMENT || DEBUG
