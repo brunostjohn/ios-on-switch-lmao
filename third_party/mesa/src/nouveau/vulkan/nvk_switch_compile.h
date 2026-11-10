@@ -58,7 +58,13 @@ struct switch_nvk_stage_info {
    /* Root push words [0x700, 0x780) constant across draws (bit i: word i). */
    uint32_t const_push_mask;
    uint32_t const_push_words[32];
+   uint64_t center_frag_depth;
+   const struct switch_nvk_ir *semantic;
+   const void *portable_context;
+   bool (*portable)(const void *context, const uint32_t **words, size_t *bytes);
 };
+
+extern _Thread_local bool switch_nvk_center_frag_depth_current;
 
 struct switch_nvk_stage {
    uint8_t header[80];
@@ -77,12 +83,27 @@ struct switch_nvk_stage {
     */
    const struct switch_nvk_split *split;
    void *owner; /* holds code and data until switch_nvk_stage_finish */
+   uint32_t interlock_control; /* SET_PIXEL_SHADER_INTERLOCK_CONTROL */
+   uint64_t uses_sample_shading;
+   uint32_t semantic_version;
 };
 
 VkResult switch_nvk_compile_stage(VkDevice device,
                                   const struct switch_nvk_stage_info *info,
                                   struct switch_nvk_stage *out);
 void switch_nvk_stage_finish(VkDevice device, struct switch_nvk_stage *stage);
+
+struct switch_nvk_stage_metrics {
+   uint32_t version, code_bytes, instructions, gprs, max_warps;
+   uint32_t scratch_bytes, memory_spills, memory_fills, register_spills, register_fills;
+   uint64_t static_cycles;
+};
+
+bool switch_nvk_stage_metrics(const struct switch_nvk_stage *stage,
+                              struct switch_nvk_stage_metrics *out, size_t bytes);
+VkResult switch_nvk_compile_ranked_stage(VkDevice device,
+                                         const struct switch_nvk_stage_info *info,
+                                         struct switch_nvk_stage *out);
 
 /* A stage's split as the raw path records one: its per-pixel program and its
  * prologue as stages (the prologue's header zeros, as programs.bin holds a
@@ -94,6 +115,7 @@ struct switch_nvk_split_parts {
    struct switch_nvk_split_layout layout;
    uint32_t qmd[64];
    uint32_t threshold_pixels;
+   struct switch_nvk_split_cost cost;
 };
 
 void switch_nvk_split_parts(const struct switch_nvk_split *split,

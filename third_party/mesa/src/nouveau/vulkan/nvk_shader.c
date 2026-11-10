@@ -10,6 +10,7 @@
 #include "nvk_switch_push.h"
 #include "nvk_switch_round.h"
 #include "nvk_switch_capture.h"
+#include "nvk_switch_compile.h"
 #include "nvk_switch_split.h"
 
 #include "nvk_cmd_buffer.h"
@@ -196,6 +197,7 @@ nvk_populate_fs_key(struct nak_fs_key *key,
                     const struct vk_graphics_pipeline_state *state)
 {
    memset(key, 0, sizeof(*key));
+   key->center_frag_depth = switch_nvk_center_frag_depth_current;
 
    /* Turn underestimate on when no state is availaible or if explicitly set */
    if (state == NULL || state->rs == NULL ||

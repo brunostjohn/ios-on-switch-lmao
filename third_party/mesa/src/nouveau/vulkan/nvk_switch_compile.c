@@ -22,12 +22,24 @@
 #include "nvk_switch_push.h"
 #include "nvk_switch_round.h"
 #include "nvk_switch_split.h"
+#include "nvk_switch_ir.h"
 
 #include "vk_graphics_state.h"
 #include "vk_pipeline.h"
 #include "vk_shader.h"
 
 #define SWITCH_EXPORT __attribute__((visibility("default")))
+
+_Thread_local bool switch_nvk_center_frag_depth_current;
+
+static nir_shader *
+build_semantic(const void *program,
+                const struct nir_shader_compiler_options *options,
+                const struct spirv_to_nir_options *address_options,
+                const VkSpecializationInfo *specialization)
+{
+   return switch_nvk_ir_to_nir(program, options, address_options, specialization);
+}
 
 void
 switch_nvk_stage_of(const struct nvk_shader *shader,
@@ -47,6 +59,11 @@ switch_nvk_stage_of(const struct nvk_shader *shader,
       out->early_fragment_tests = shader->info.fs.early_fragment_tests;
       out->writes_depth = shader->info.fs.writes_depth;
       out->post_depth_coverage = shader->info.fs.post_depth_coverage;
+      out->uses_sample_shading = shader->info.fs.uses_sample_shading || shader->sample_shading_enable;
+      unsigned mode = shader->info.fs.interlock_mode;
+      if (shader->sample_shading_enable && mode == NAK_FS_INTERLOCK_MODE_PIXEL)
+         mode = NAK_FS_INTERLOCK_MODE_SAMPLE;
+      out->interlock_control = mode | (shader->info.fs.interlock_unordered ? 8 : 0);
    }
 }
 
@@ -64,7 +81,7 @@ switch_nvk_compile_stage(VkDevice _device,
    VK_FROM_HANDLE(nvk_device, dev, _device);
    memset(out, 0, sizeof(*out));
 
-   const VkShaderModuleCreateInfo module = {
+   VkShaderModuleCreateInfo module = {
       .sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO,
       .pNext = info->stage_pnext,
       .codeSize = info->spirv_bytes,
@@ -92,20 +109,36 @@ switch_nvk_compile_stage(VkDevice _device,
    switch_nvk_half_targets_current = info->half_targets;
    struct vk_shader *shader = NULL;
    switch_nvk_split_current = info->split;
+   switch_nvk_center_frag_depth_current = info->center_frag_depth != 0;
+   bool native_used = false;
    VkResult result =
-      vk_pipeline_compile_library_stage(&dev->vk, info->pipeline_flags,
+      vk_pipeline_compile_native_stage(&dev->vk, info->pipeline_flags,
                                         info->pipeline_pnext, &stage,
                                         info->layout,
                                         info->stage == VK_SHADER_STAGE_COMPUTE_BIT ?
-                                        NULL : &state, &shader);
+                                        NULL : &state,
+                                        info->stage == VK_SHADER_STAGE_COMPUTE_BIT ? build_semantic : NULL,
+                                        info->semantic, &native_used, &shader);
+   if (result == VK_PIPELINE_COMPILE_REQUIRED && info->portable) {
+      if (!info->portable(info->portable_context, &module.pCode, &module.codeSize)) {
+         result = VK_ERROR_UNKNOWN;
+      } else {
+         result = vk_pipeline_compile_native_stage(&dev->vk, info->pipeline_flags,
+                    info->pipeline_pnext, &stage, info->layout,
+                    info->stage == VK_SHADER_STAGE_COMPUTE_BIT ? NULL : &state,
+                    NULL, NULL, &native_used, &shader);
+      }
+   }
    switch_nvk_const_push_current = NULL;
    switch_nvk_half_targets_current = 0;
    switch_nvk_split_current = false;
+   switch_nvk_center_frag_depth_current = false;
    if (result != VK_SUCCESS)
       return result;
 
    switch_nvk_stage_of(container_of(shader, struct nvk_shader, vk), out);
    out->owner = shader;
+   out->semantic_version = native_used ? info->semantic->version : 0;
    return VK_SUCCESS;
 }
 
@@ -140,10 +173,14 @@ switch_nvk_split_parts(const struct switch_nvk_split *split,
    out->fs.early_fragment_tests = split->fs.info.fs.early_fragment_tests;
    out->fs.writes_depth = split->fs.info.fs.writes_depth;
    out->fs.post_depth_coverage = split->fs.info.fs.post_depth_coverage;
+   out->fs.uses_sample_shading = split->fs.info.fs.uses_sample_shading;
+   out->fs.interlock_control = split->fs.info.fs.interlock_mode |
+                               (split->fs.info.fs.interlock_unordered ? 8 : 0);
    split_program(&split->prologue, &out->prologue);
    out->layout = split->layout;
    memcpy(out->qmd, split->qmd, sizeof(out->qmd));
    out->threshold_pixels = split->threshold_pixels;
+   out->cost = split->cost;
 }
 
 SWITCH_EXPORT void
@@ -340,7 +377,8 @@ switch_nvk_view_header_word0(VkDevice _device, VkFormat format,
    VK_FROM_HANDLE(nvk_device, dev, _device);
    const struct nvk_physical_device *pdev = nvk_device_physical(dev);
    const enum pipe_format p_format = nvk_format_to_pipe_format(format);
-   if (p_format == PIPE_FORMAT_NONE)
+   if (p_format == PIPE_FORMAT_NONE ||
+       (storage && !nil_format_supports_storage(&pdev->info, p_format)))
       return false;
 
    const struct nil_image_init_info init = {

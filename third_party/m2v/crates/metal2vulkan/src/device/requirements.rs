@@ -436,6 +436,8 @@ pub enum FloatControl {
 #[non_exhaustive]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum VkProperty {
+    /// The native SM53 backend accepts the restricted half-operation profile.
+    NativeSm53Half,
     /// `subgroupSupportedStages` contains the stage.
     SubgroupStage(Stage),
     /// `subgroupSupportedOperations` contains the operation class.

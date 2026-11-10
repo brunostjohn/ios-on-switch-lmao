@@ -65,14 +65,17 @@ inline const Policy &policy()
         p.api = envNumber("NMB_ASYNC_PSO_API", device) != 0;
         p.threads =
             (unsigned)std::max<uint64_t>(1, std::min<uint64_t>(4, envNumber("NMB_ASYNC_PSO_THREADS", p.threads)));
+#if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
         if (p.on || p.api)
             NSLog(@"native-metal: async pipelines: sync API %s, completion API %s, %u workers", p.on ? "on" : "off",
                   p.api ? "on" : "off", p.threads);
+#endif
     });
     return p;
 }
 
 // The counters behind the rates line's apso= part, taken (and cleared) by appendRates.
+#if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
 struct Counters {
     std::atomic<uint64_t> started{0}, made{0}, failed{0};  // creations handed to a worker, made, refused
     std::atomic<uint64_t> pending{0}, caught{0};  // sets that found a state being made, and of them made in the wait
@@ -97,6 +100,7 @@ inline void raiseMax(std::atomic<uint64_t> &max, uint64_t v)
     }
 }
 
+#endif
 // One creation in flight. `work` makes it with the synchronous path (on a worker, or on a set that waits it out) and returns
 // the state it made (an NBRenderPipeline that owns its handle), or nil with `failure`.
 struct Making {
@@ -111,7 +115,9 @@ struct Making {
     std::condition_variable finished;
     State state = Queued;
     bool lazy = false;  // startLazy's, not asked for by a set yet
+#if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
     uint64_t asked = 0;
+#endif
     pthread_t runner = nullptr;  // the thread making it, once one does
     qos_class_t runnerClass = QOS_CLASS_UNSPECIFIED;
     pthread_override_t urged = nullptr;  // urge()'s class on the runner, until the state is made
@@ -159,12 +165,14 @@ inline bool run(const std::shared_ptr<Making> &m)
     if (urged)
         pthread_override_qos_class_end_np(urged);
     m->finished.notify_all();
+#if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
     Counters &c = counters();
     (made ? c.made : c.failed)++;
     const uint64_t took = usNow() - m->asked;
     c.readyN++;
     c.readyUs += took;
     raiseMax(c.readyMaxUs, took);
+#endif
     for (const auto &observer : observers)
         observer();
     return true;
@@ -221,8 +229,10 @@ inline Workers &workers()
 // Hand `m` to the workers.
 inline void start(const std::shared_ptr<Making> &m)
 {
+#if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
     m->asked = usNow();
     counters().started++;
+#endif
     workers().submit([m] {
         run(m);
     });
@@ -232,8 +242,10 @@ inline void start(const std::shared_ptr<Making> &m)
 inline void startLazy(const std::shared_ptr<Making> &m)
 {
     m->lazy = true;
+#if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
     counters().started++;
     counters().lazy++;
+#endif
 }
 
 // A set of `m` (under m->lock): a lazy creation is asked for from now, and a pass that skips hands it to the workers.
@@ -242,8 +254,10 @@ inline void wanted(const std::shared_ptr<Making> &m, bool skips)
     if (!m->lazy)
         return;
     m->lazy = false;
+#if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
     m->asked = usNow();
     counters().lazySet++;
+#endif
     if (skips)
         workers().submit([m] {
             run(m);
@@ -340,17 +354,21 @@ inline bool ready(const std::shared_ptr<Making> &m)
             return m->state == Making::Made;
         wanted(m, false);
     }
+#if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
     Counters &c = counters();
     c.pending++;
     const uint64_t began = usNow();
+#endif
     run(m);
     std::unique_lock<std::mutex> g(m->lock);
     Lend lend(*m);
     const bool completed = m->finished.wait_for(g, std::chrono::seconds(60), [&] {
         return m->done();
     });
+#if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
     c.offWaits++;
     c.offWaitUs += usNow() - began;
+#endif
     return completed && m->state == Making::Made;
 }
 
@@ -360,6 +378,7 @@ inline bool ready(const std::shared_ptr<Making> &m)
 // no set found one being made.
 inline size_t appendRates(char *out, size_t size)
 {
+#if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
     Counters &c = counters();
     const uint64_t started = c.started.exchange(0), made = c.made.exchange(0), failed = c.failed.exchange(0);
     const uint64_t pending = c.pending.exchange(0), caught = c.caught.exchange(0), sets = c.skippedSets.exchange(0);
@@ -380,6 +399,11 @@ inline size_t appendRates(char *out, size_t size)
                  (unsigned long long)(readyN ? readyUs / readyN / 1000 : 0), (unsigned long long)(readyMax / 1000),
                  (unsigned long long)redraws, (unsigned long long)lazy, (unsigned long long)lazySet);
     return n > 0 ? std::min<size_t>((size_t)n, size - 1) : 0;
+#else
+    (void)out;
+    (void)size;
+    return 0;
+#endif
 }
 
 }  // namespace nbasync

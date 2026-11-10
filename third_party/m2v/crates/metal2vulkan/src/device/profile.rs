@@ -392,6 +392,7 @@ impl DeviceProfile {
 /// Every field of a profile, policy included. The fingerprint hashes all of them.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ProfileFields {
+    pub native_target: crate::device::NativeShaderTarget,
     /// Memory's A/F split.
     pub buffer_access: BufferAccess,
     pub pointer_domain: PointerDomain,

@@ -72,6 +72,9 @@ bool native_bridge_metal_render_direct(id descriptor, bool barrier, NSUInteger t
 // The same of a compute state at one dispatch shape (NmbDirectDispatch)
 struct NmbDirectDispatch;
 struct NmbDirectKernel;
+// The caller retains this descriptor unchanged; its native semantic artifact is reused by later direct dispatches.
+id native_bridge_metal_compute_prepare(id descriptor, NSUInteger options, id *reflection, NSError **error);
+bool native_bridge_metal_compute_save(id artifact, const char *directory, char *name, size_t name_size);
 bool native_bridge_metal_compute_direct(id descriptor, const struct NmbDirectDispatch *dispatch,
                                         bool (*each)(const struct NmbDirectKernel *, void *), void *ctx,
                                         const char **why);

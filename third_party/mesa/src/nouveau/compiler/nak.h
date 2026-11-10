@@ -60,7 +60,8 @@ struct nak_fs_key {
    bool force_sample_shading;
    bool uses_underestimate;
 
-   uint8_t pad;
+   /** Raw shader depth tests reconstruct sample depth from pixel-center Z. */
+   bool center_frag_depth;
 };
 PRAGMA_DIAGNOSTIC_POP
 static_assert(sizeof(struct nak_fs_key) == 4, "This struct has no holes");

@@ -488,12 +488,13 @@ fn eprint_hex(label: &str, data: &[u32]) {
 }
 
 macro_rules! pass {
-    ($s: expr, $pass: ident) => {
-        $s.$pass();
+    ($s: expr, $pass: ident) => {{
+        let result = $s.$pass();
         if DEBUG.print() {
             eprintln!("NAK IR after {}:\n{}", stringify!($pass), $s);
         }
-    };
+        result
+    }};
 }
 
 fn nak_compile_shader_internal(
@@ -533,15 +534,18 @@ fn nak_compile_shader_internal(
     pass!(s, opt_uniform_instrs);
     pass!(s, opt_copy_prop);
     pass!(s, opt_prmt);
-    if sm53_probe {
-        pass!(s, opt_sm53_half_probe);
-    }
+    let half_rewrites = if sm53_probe {
+        pass!(s, opt_sm53_half_probe)
+    } else {
+        0
+    };
     pass!(s, opt_lop);
     pass!(s, opt_copy_prop);
     pass!(s, opt_dce);
     pass!(s, opt_out);
     if sm53_probe {
-        pass!(s, opt_sm53_f32_source_probe);
+        let source_rewrites = pass!(s, opt_sm53_f32_source_probe);
+        s.stamp_sm53_probe(half_rewrites, source_rewrites);
     }
     pass!(s, legalize);
     pass!(s, opt_dce);

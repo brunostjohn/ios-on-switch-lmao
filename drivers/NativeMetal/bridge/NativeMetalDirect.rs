@@ -9,8 +9,8 @@ use ash::vk as avk;
 use metal2vulkan::Budget;
 use metal2vulkan::bind::{
     BindState, BindingPlan, BoundBuffer, BoundSampler, BoundTexture, DescriptorRange, DrawCall, DrawCommands,
-    FieldLocation, ImageSource, NeutralResource, SamplerDescriptor, SamplerSource, StageTable, TextureFacts,
-    WriteSource,
+    FieldLocation, FragmentTests, ImageSource, NeutralResource, SamplerDescriptor, SamplerSource, StageTable,
+    TextureFacts, WriteSource,
 };
 use metal2vulkan::cache::VariantKey;
 use metal2vulkan::device::{DeviceDescription, VkExtension, VkFeature};
@@ -20,7 +20,8 @@ use metal2vulkan::metal::{
     TextureUsage,
 };
 use metal2vulkan::pipeline::{
-    PipelineLayout, PushField, RenderPipeline, RenderPipelineDescriptor, SlotClass, SlotInterface, SlotRef, Stage,
+    GraphicsState, PipelineLayout, PushField, RenderPipeline, RenderPipelineDescriptor, SlotClass, SlotInterface,
+    SlotRef, Stage, StandInView, StorageAttachmentView,
 };
 use std::ffi::{CString, c_char, c_void};
 use std::sync::{Arc, Mutex};
@@ -41,6 +42,9 @@ pub struct NmbDirectStage {
     pub flags: u32,
     pub subgroup_size: u32,
     pub specialization: *const avk::SpecializationInfo<'static>,
+    pub semantic: *const c_void,
+    pub portable_context: *const c_void,
+    pub portable: Option<unsafe extern "C" fn(*const c_void, *mut *const u32, *mut usize) -> bool>,
 }
 
 #[repr(u32)]
@@ -56,6 +60,8 @@ pub enum NmbDirectSource {
     Neutral,
     ColorTable,
     Other,
+    DepthStandIn,
+    StencilStandIn,
 }
 
 pub const NMB_DIRECT_IMMUTABLE: u32 = u32::MAX;
@@ -86,6 +92,8 @@ pub struct NmbDirectDraw {
     pub push: [u32; 32],
     pub blend_color_word: u32,
     pub half_blend_color_word: u32,
+    pub depth_test_word: u32,
+    pub stencil_test_word: u32,
     pub push_holes: u32,
     pub vertex_slot: u32,
     pub vertex_stride: u32,
@@ -116,6 +124,7 @@ pub struct NmbDirectBinds {
     pub cubic_count: u32,
     pub textures: *const NmbDirectTextureFormat,
     pub texture_count: u32,
+    pub fragment_tests: u32,
 }
 
 /// What the probe binds besides its tagged textures and samplers: cubic sampler states, and other textures' formats, by slot
@@ -123,6 +132,7 @@ pub struct NmbDirectBinds {
 struct Binds {
     cubic: Vec<(u32, SamplerDescriptor)>,
     textures: Vec<(u32, PixelFormat)>,
+    fragment_tests: u32,
 }
 
 impl Binds {
@@ -134,6 +144,10 @@ impl Binds {
         let Some(b) = (unsafe { binds.as_ref() }) else {
             return Ok(out);
         };
+        if b.fragment_tests > 4 {
+            return Err("invalid native fragment-test mode".into());
+        }
+        out.fragment_tests = b.fragment_tests;
         let cubic: &[NmbDirectCubicSampler] = if b.cubic.is_null() {
             &[]
         } else {
@@ -166,6 +180,50 @@ impl Binds {
 }
 
 #[repr(C)]
+#[derive(Clone, Copy, Default, PartialEq, Eq)]
+pub struct NmbDirectStorage {
+    pub mask: u32,
+    pub writes: u32,
+    pub sample_planes: u32,
+    pub samples: u32,
+    pub formats: [u32; 8],
+    pub fragment_tests: u32,
+    pub depth_format: u32,
+    pub stencil_format: u32,
+    pub test_samples: u32,
+    pub test_planes: u32,
+}
+
+fn storage_of(graphics: &GraphicsState) -> Result<NmbDirectStorage, String> {
+    let mut storage = NmbDirectStorage::default();
+    if let Some(tests) = graphics.shader_tests {
+        storage.depth_format = tests.depth.format.as_raw() as u32;
+        storage.test_samples = tests.depth.samples;
+        storage.test_planes = u32::from(!matches!(tests.depth.view, StandInView::Image));
+        if let Some(stencil) = tests.stencil {
+            if stencil.samples != tests.depth.samples {
+                return Err("storage form: depth and stencil sample counts differ".into());
+            }
+            storage.stencil_format = stencil.format.as_raw() as u32;
+            storage.test_planes |= u32::from(!matches!(stencil.view, StandInView::Image)) << 1;
+        }
+    }
+    for attachment in &graphics.storage_attachments {
+        let index = attachment.color_index as usize;
+        if index >= storage.formats.len() || storage.mask & (1 << index) != 0 {
+            return Err("storage form: invalid color attachment index".into());
+        }
+        storage.mask |= 1 << index;
+        storage.writes |= u32::from(attachment.writes) << index;
+        storage.sample_planes |=
+            u32::from(matches!(attachment.view, StorageAttachmentView::SamplePlanes { .. })) << index;
+        storage.samples = graphics.rasterization_samples.as_raw();
+        storage.formats[index] = attachment.uint_view.unwrap_or(attachment.format).as_raw() as u32;
+    }
+    Ok(storage)
+}
+
+#[repr(C)]
 pub struct NmbDirectState {
     pub device: u64,
     pub layout: u64,
@@ -173,6 +231,7 @@ pub struct NmbDirectState {
     pub stages: [NmbDirectStage; 2],
     pub sample_shading: bool,
     pub storage_form: bool,
+    pub storage: NmbDirectStorage,
     pub blended: u32,
     pub draws: [NmbDirectDraw; 4],
 }
@@ -189,9 +248,25 @@ pub(crate) fn compile_error(what: &'static str) -> impl FnOnce(metal2vulkan::err
 /// The compile device of the probe's barrier form: the runtime's enabled description without the pixel interlock, as the
 /// pack's barrier probe ran NVK with it hidden (NVK_DEBUG=no_fsi). One per process, made at its first ask.
 static BARRIER: Mutex<Option<(usize, Arc<metal2vulkan::device::Device>)>> = Mutex::new(None);
+static ORDERED: Mutex<Option<(usize, Arc<metal2vulkan::device::Device>)>> = Mutex::new(None);
+static COMPUTE: Mutex<Option<([u8; 32], Arc<metal2vulkan::device::Device>)>> = Mutex::new(None);
 
-fn barrier_device(nmb: &NmbDevice) -> Result<Arc<metal2vulkan::device::Device>, String> {
-    let mut kept = BARRIER.lock().map_err(|_| "barrier device lock")?;
+pub(crate) fn native_compute_device(nmb: &NmbDevice) -> Result<Arc<metal2vulkan::device::Device>, String> {
+    let mut kept = COMPUTE.lock().map_err(|_| "native compute device lock")?;
+    let compile = nmb.device().compile_device();
+    let fingerprint = compile.profile_fingerprint();
+    if let Some((_, device)) = kept.as_ref().filter(|(of, _)| *of == fingerprint) {
+        return Ok(device.clone());
+    }
+    let device = Arc::new(compile.with_native_target(metal2vulkan::device::NativeShaderTarget::Sm53));
+    *kept = Some((fingerprint, device.clone()));
+    Ok(device)
+}
+
+fn specialized_device(nmb: &NmbDevice, barrier: bool) -> Result<Arc<metal2vulkan::device::Device>, String> {
+    let mut kept = if barrier { &BARRIER } else { &ORDERED }
+        .lock()
+        .map_err(|_| "native compile device lock")?;
     let id = nmb as *const NmbDevice as usize;
     if let Some((of, device)) = kept.as_ref().filter(|(of, _)| *of == id) {
         let _ = of;
@@ -207,15 +282,30 @@ fn barrier_device(nmb: &NmbDevice) -> Result<Arc<metal2vulkan::device::Device>, 
         .with_enabled(runtime.enabled())
         .map_err(e("enabled description"))?;
     enabled.generated_commands = None;
-    let policy = *runtime.compile_device().policy();
+    let mut policy = *runtime.compile_device().policy();
     let same = metal2vulkan::device::Device::new(enabled.clone(), policy).map_err(e("compile device"))?;
     if same.profile_fingerprint() != runtime.compile_device().profile_fingerprint() {
         return Err("the runtime's compile device is not its enabled description's".into());
     }
-    enabled.extensions.remove(&VkExtension::ExtFragmentShaderInterlock);
-    enabled.features.remove(&VkFeature::FragmentShaderPixelInterlock);
-    enabled.features.remove(&VkFeature::FragmentShaderSampleInterlock);
-    let device = Arc::new(metal2vulkan::device::Device::new(enabled, policy).map_err(e("barrier compile device"))?);
+    if barrier {
+        enabled.extensions.remove(&VkExtension::ExtFragmentShaderInterlock);
+        enabled.features.remove(&VkFeature::FragmentShaderPixelInterlock);
+        enabled.features.remove(&VkFeature::FragmentShaderSampleInterlock);
+    } else {
+        policy.framebuffer_fetch = metal2vulkan::device::FramebufferFetchPolicy::RequireOrdered;
+        // The raw stage compiler explicitly interpolates FragCoord.z at the pixel center.
+        // This profile uses that contract for sample-depth correction; the runtime profile stays unchanged.
+    }
+    let device = if barrier {
+        metal2vulkan::device::Device::new(enabled, policy)
+    } else {
+        metal2vulkan::device::Device::new_with_center_fragment_depth(enabled, policy)
+    };
+    let device = Arc::new(
+        device
+            .map_err(e("native compile device"))?
+            .with_native_target(metal2vulkan::device::NativeShaderTarget::Sm53),
+    );
     *kept = Some((id, device.clone()));
     Ok(device)
 }
@@ -281,6 +371,13 @@ fn volume_slots(pipeline: &RenderPipeline) -> Vec<u32> {
 /// fragment stage, `binds`' in their places
 fn probe_state(run: usize, format: PixelFormat, samples: u32, volumes: &[u32], binds: &Binds) -> BindState {
     let mut state = BindState::default();
+    state.fragment_tests = match binds.fragment_tests {
+        1 => FragmentTests::Pass,
+        2 => FragmentTests::Drop,
+        3 => FragmentTests::Depth { writes: true },
+        4 => FragmentTests::Stencil,
+        _ => FragmentTests::Any,
+    };
     for stage in [Stage::Vertex, Stage::Fragment] {
         let mut table = StageTable::default();
         for slot in 0..PROBE_SLOTS {
@@ -407,9 +504,23 @@ pub(crate) fn write_of(w: &metal2vulkan::bind::DescriptorWrite, ranges: &[Descri
             out.source = NmbDirectSource::Attachment;
             out.slot = *color_index;
         }
-        WriteSource::TileAttachment { color_index, .. } => {
+        WriteSource::TileAttachment { color_index, view, .. } => {
             out.source = NmbDirectSource::StorageAttachment;
+            out.stage = 2;
             out.slot = *color_index;
+            out.view_type = match view {
+                StorageAttachmentView::Attachment => avk::ImageViewType::TYPE_2D.as_raw(),
+                StorageAttachmentView::SamplePlanes { .. } => avk::ImageViewType::TYPE_2D_ARRAY.as_raw(),
+            };
+        }
+        WriteSource::DepthStandIn | WriteSource::StencilStandIn => {
+            out.source = if matches!(w.source, WriteSource::DepthStandIn) {
+                NmbDirectSource::DepthStandIn
+            } else {
+                NmbDirectSource::StencilStandIn
+            };
+            out.stage = 2;
+            out.view_type = avk::ImageViewType::TYPE_2D.as_raw();
         }
         WriteSource::Neutral(neutral) => {
             out.source = NmbDirectSource::Neutral;
@@ -576,6 +687,8 @@ fn draw_of(
         push: [0; 32],
         blend_color_word: 0,
         half_blend_color_word: 0,
+        depth_test_word: 0,
+        stencil_test_word: 0,
         push_holes: run.commands.push_holes.len() as u32,
         vertex_slot: u32::MAX,
         vertex_stride: 0,
@@ -585,17 +698,19 @@ fn draw_of(
         let (word, bytes) = match field.field {
             PushField::BlendColor => (&mut draw.blend_color_word, 32),
             PushField::HalfBlendColor => (&mut draw.half_blend_color_word, 16),
+            PushField::ShaderTestsState => (&mut draw.depth_test_word, 16),
+            PushField::ShaderStencilState => (&mut draw.stencil_test_word, 16),
             _ => continue,
         };
         let FieldLocation::PushWindow { offset } = field.location else {
-            return Err("blend color outside the root push window".into());
+            return Err("dynamic state outside the root push window".into());
         };
         if field.size != bytes || offset % 4 != 0 || offset > 128 - bytes {
-            return Err("invalid blend color push placement".into());
+            return Err("invalid dynamic state push placement".into());
         }
         let encoded = offset / 4 + 1;
         if *word != 0 && *word != encoded {
-            return Err("multiple blend color push placements".into());
+            return Err("multiple dynamic state push placements".into());
         }
         *word = encoded;
     }
@@ -668,7 +783,11 @@ pub unsafe extern "C" fn nmb_render_pipeline_direct(
         let nmb = get(device)?;
         let runtime = nmb.device();
         let descriptor = render_descriptor(descriptor)?;
-        let barrier_compile = if barrier { Some(barrier_device(nmb)?) } else { None };
+        let barrier_compile = if barrier || binds.fragment_tests != 0 {
+            Some(specialized_device(nmb, barrier)?)
+        } else {
+            None
+        };
         let compile = barrier_compile.as_deref().unwrap_or(runtime.compile_device());
         let format = match texture_format {
             0 => PixelFormat::BGRA8Unorm,
@@ -727,6 +846,15 @@ pub unsafe extern "C" fn nmb_render_pipeline_direct(
 
         let first = &runs[0];
         let pipeline = &variants[first.variant].1;
+        let mut storage = storage_of(&pipeline.graphics)?;
+        for run in &runs {
+            if storage_of(&variants[run.variant].1.graphics)? != storage {
+                return Err("storage form: probe variants change the attachment contract".into());
+            }
+        }
+        if storage.mask != 0 {
+            storage.fragment_tests = binds.fragment_tests;
+        }
         let specialization = &first.plan.specialization;
         let entries: Vec<CString> = pipeline
             .stages
@@ -768,9 +896,13 @@ pub unsafe extern "C" fn nmb_render_pipeline_direct(
                 flags: 0,
                 subgroup_size: 0,
                 specialization: std::ptr::null(),
+                semantic: std::ptr::null(),
+                portable_context: std::ptr::null(),
+                portable: None,
             }; 2],
             sample_shading: pipeline.graphics.sample_shading,
-            storage_form: !barrier && !variants[0].1.graphics.storage_attachments.is_empty(),
+            storage_form: storage.mask != 0,
+            storage,
             blended: pipeline
                 .graphics
                 .color_attachments
@@ -793,6 +925,9 @@ pub unsafe extern "C" fn nmb_render_pipeline_direct(
                 } else {
                     (&infos[k] as *const avk::SpecializationInfo<'_>).cast()
                 },
+                semantic: std::ptr::null(),
+                portable_context: std::ptr::null(),
+                portable: None,
             };
         }
         // SAFETY: the caller's contract; everything `state` points at lives until after the call.

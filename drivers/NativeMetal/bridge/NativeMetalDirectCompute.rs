@@ -4,6 +4,7 @@
 //! with no pipeline state, command buffer or capture. Only the translator's public API is used; the runtime device lends its
 //! compile device and its Vulkan device, on which the variant's layout and samplers are made for NVK.
 
+use crate::compute_artifact::NmbComputeArtifact;
 use crate::direct::{Layout, NMB_DIRECT_IMMUTABLE, NmbDirectStage, NmbDirectWrite, compile_error, write_of};
 use crate::objects::{
     NmbComputePipelineDescriptor, NmbDevice, NmbSamplerDescriptor, compute_descriptor, e, get, guard, raw,
@@ -13,12 +14,13 @@ use ash::vk as avk;
 use metal2vulkan::Budget;
 use metal2vulkan::bind::{
     BindState, BindingPlan, BoundBuffer, BoundSampler, BoundTexture, Dispatch, DispatchCommands, FieldLocation,
-    ImageSource, SamplerSource, StageTable, TextureFacts, WriteSource,
+    ImageSource, NeutralResource, SamplerSource, StageTable, TextureFacts, UseTarget, WriteSource,
 };
 use metal2vulkan::cache::VariantKey;
 use metal2vulkan::metal::{PixelFormat, TextureSwizzleChannels, TextureType, TextureUsage};
-use metal2vulkan::pipeline::{ComputePipeline, ComputePipelineDescriptor, PushField, Stage, StageSource};
+use metal2vulkan::pipeline::{ComputePipeline, ComputePipelineDescriptor, NativePipeline, NativeProgram, NativeRecord, PushField, SlotClass, Stage, StageSource};
 use std::ffi::{CString, c_void};
+use std::sync::Arc;
 
 const SLOTS: u32 = 31;
 const TAG_BYTES: u32 = 4096;
@@ -50,6 +52,7 @@ pub struct NmbDirectDispatch {
     pub texture_count: u32,
     pub samplers: *const NmbDirectBoundSampler,
     pub sampler_count: u32,
+    pub region_mode: u32,
 }
 
 #[repr(C)]
@@ -81,6 +84,34 @@ pub struct NmbDirectKernel {
     pub regions: u32,
     pub push_holes: u32,
     pub variant: *const std::ffi::c_char,
+    pub buffer_reads: u32,
+    pub buffer_writes: u32,
+    pub texture_reads: u32,
+    pub texture_writes: u32,
+}
+
+fn access_masks(plans: [&BindingPlan; 3]) -> [u32; 4] {
+    let mut masks = [0u32; 4];
+    for use_ in plans.into_iter().flat_map(|p| &p.uses) {
+        let UseTarget::Slot(slot) = use_.resource else {
+            if use_.access.write {
+                masks[1] = u32::MAX;
+                masks[3] = u32::MAX;
+            }
+            continue;
+        };
+        if slot.stage != Stage::Kernel || slot.index >= 32 {
+            continue;
+        }
+        let base = match slot.class {
+            SlotClass::Buffer => 0,
+            SlotClass::Texture => 2,
+            SlotClass::Sampler => continue,
+        };
+        masks[base] |= u32::from(use_.access.read) << slot.index;
+        masks[base + 1] |= u32::from(use_.access.write) << slot.index;
+    }
+    masks
 }
 
 /// Which of the probe's dispatches a bind state is: 4096 inline bytes at every slot, the same bytes `MOVED_OFFSET` into a
@@ -159,12 +190,12 @@ fn bind_state(run: Run, dispatch: &NmbDirectDispatch) -> Result<BindState, Strin
 
 /// The kernel compiled under variant `key`, as the runtime compiles a state's variant: the function under the key's lowering
 /// inputs with the descriptor's stage input and call stack depth, then the pipeline of it
-fn compiled(
+pub(crate) fn compiled(
     compile: &metal2vulkan::device::Device,
     descriptor: &ComputePipelineDescriptor,
     key: &VariantKey,
     budget: &Budget,
-) -> Result<ComputePipeline, String> {
+) -> Result<NativeComputePipeline, String> {
     let StageSource::Function(function) = &descriptor.kernel else {
         return Err("a kernel compiled already".into());
     };
@@ -172,17 +203,24 @@ fn compiled(
     inputs.stage_input = descriptor.stage_input.clone();
     inputs.max_call_stack_depth = Some(descriptor.max_call_stack_depth).filter(|&k| k > 1);
     let function = compile
-        .compile_function(function, &inputs, budget)
+        .compile_native_function(function, &inputs, budget)
         .map_err(compile_error("compile kernel"))?;
-    let mut d = descriptor.clone();
-    d.kernel = StageSource::Compiled(function);
-    compile
-        .compile_compute_pipeline(&d, budget)
-        .map_err(compile_error("compile"))
+    let pipeline = function.into_pipeline(compile, descriptor).map_err(compile_error("link native kernel"))?;
+    Ok(NativeComputePipeline { pipeline: Arc::new(pipeline) })
+}
+
+#[derive(Clone)]
+pub(crate) struct NativeComputePipeline {
+    pub pipeline: Arc<NativePipeline>,
+}
+
+impl std::ops::Deref for NativeComputePipeline {
+    type Target = ComputePipeline;
+    fn deref(&self) -> &Self::Target { &self.pipeline.metadata }
 }
 
 struct Settled {
-    pipeline: ComputePipeline,
+    pipeline: NativeComputePipeline,
     plan: BindingPlan,
     commands: DispatchCommands,
 }
@@ -193,15 +231,20 @@ fn settle(
     state: &BindState,
     dispatch: &Dispatch,
     budget: &Budget,
+    artifact: Option<&NmbComputeArtifact>,
 ) -> Result<Settled, String> {
     let shape = state.shape();
-    let base = compiled(compile, descriptor, &VariantKey::new(), budget)?;
+    let pipeline = |key: &VariantKey| match artifact {
+        Some(artifact) => artifact.pipeline(key, budget).map(|p| (*p).clone()),
+        None => compiled(compile, descriptor, key, budget),
+    };
+    let base = pipeline(&VariantKey::new())?;
     let plan = base.plan(compile, &shape).map_err(e("plan"))?;
     let wanted = plan.dispatch_variant(dispatch).map_err(e("dispatch variant"))?;
     let (pipeline, plan) = if wanted == VariantKey::new() {
         (base, plan)
     } else {
-        let pipeline = compiled(compile, descriptor, &wanted, budget)?;
+        let pipeline = pipeline(&wanted)?;
         let plan = pipeline.plan(compile, &shape).map_err(e("plan variant"))?;
         if plan.dispatch_variant(dispatch).map_err(e("dispatch variant"))? != wanted {
             return Err("the plan of a compiled variant asks for another variant".into());
@@ -281,6 +324,19 @@ impl Samplers<'_> {
         source: &SamplerSource,
         image_format: Option<metal2vulkan::vk::Format>,
     ) -> Result<u64, String> {
+        if let SamplerSource::Neutral(NeutralResource::Sampler { compare }) = source {
+            let info = avk::SamplerCreateInfo::default()
+                .mag_filter(avk::Filter::NEAREST)
+                .min_filter(avk::Filter::NEAREST)
+                .mipmap_mode(avk::SamplerMipmapMode::NEAREST)
+                .address_mode_u(avk::SamplerAddressMode::CLAMP_TO_EDGE)
+                .address_mode_v(avk::SamplerAddressMode::CLAMP_TO_EDGE)
+                .address_mode_w(avk::SamplerAddressMode::CLAMP_TO_EDGE)
+                .max_lod(avk::LOD_CLAMP_NONE)
+                .compare_enable(*compare)
+                .compare_op(avk::CompareOp::NEVER);
+            return self.create(&info);
+        }
         let SamplerSource::Slot {
             slot,
             compare,
@@ -303,8 +359,12 @@ impl Samplers<'_> {
         let mut reduction = avk::SamplerReductionModeCreateInfo::default();
         let mut border = avk::SamplerBorderColorComponentMappingCreateInfoEXT::default();
         let info = metal2vulkan::ash_interop::sampler_create_info(&desc, &mut reduction, &mut border);
+        self.create(&info)
+    }
+
+    fn create(&mut self, info: &avk::SamplerCreateInfo<'_>) -> Result<u64, String> {
         // SAFETY: `info` and its chain are live for the call.
-        let sampler = unsafe { self.device.create_sampler(&info, None) }.map_err(e("sampler"))?;
+        let sampler = unsafe { self.device.create_sampler(info, None) }.map_err(e("sampler"))?;
         self.made.push(sampler);
         Ok(avk::Handle::as_raw(sampler))
     }
@@ -361,6 +421,9 @@ fn kernel_write(
             };
             out.sampler = samplers.make(compile, state, &source, None)?;
         }
+        WriteSource::Neutral(neutral @ NeutralResource::Sampler { .. }) => {
+            out.sampler = samplers.make(compile, state, &SamplerSource::Neutral(*neutral), None)?;
+        }
         WriteSource::CombinedImageSampler { image, sampler } => {
             let format = match image {
                 ImageSource::Texture { view, .. } => {
@@ -390,92 +453,191 @@ pub unsafe extern "C" fn nmb_compute_pipeline_direct(
 ) -> bool {
     guard(false, || {
         let nmb = get(device)?;
-        let runtime = nmb.device();
-        let compile = runtime.compile_device();
+        let native = crate::direct::native_compute_device(nmb)?;
         let descriptor = compute_descriptor(descriptor)?;
         let ask = get(dispatch)?;
-        let budget = Budget::standard();
-        let call = Dispatch::Threadgroups {
-            groups: GRID,
-            threads_per_group: ask.threads,
-        };
-        let state = bind_state(Run::Bytes, ask)?;
-        let plain = settle(compile, &descriptor, &state, &call, &budget)?;
-        let moved = settle(compile, &descriptor, &bind_state(Run::Moved, ask)?, &call, &budget)?;
-        let bound = settle(compile, &descriptor, &bind_state(Run::Bound, ask)?, &call, &budget)?;
-        let region = |s: &Settled| s.commands.regions.first().map(|r| r.specialization.clone());
-        let same = |s: &Settled| {
-            s.plan.variant == plain.plan.variant
-                && region(s) == region(&plain)
-                && layout_of(&s.plan) == layout_of(&plain.plan)
-        };
-        let (push_mask, push) = push_words(&plain.commands);
-        let (moved_mask, moved_push) = push_words(&moved.commands);
-        let (bound_mask, bound_push) = push_words(&bound.commands);
-        let ranges = |s: &Settled| -> Vec<(u32, u32, u64)> {
-            s.commands
-                .descriptor_ranges
-                .iter()
-                .map(|r| (r.set, r.binding, r.range.range))
-                .collect()
-        };
-        let moved_same = same(&moved) && ranges(&moved) == ranges(&plain);
-
-        // SAFETY: the runtime device's own handles, used while it lives.
-        let handles = unsafe { runtime.raw() };
-        let layout = Layout::new(handles.device, &plain.pipeline.layout)?;
-        let mut samplers = Samplers {
-            device: handles.device,
-            made: Vec::new(),
-        };
-        let writes = plain
-            .plan
-            .descriptors
-            .iter()
-            .map(|w| kernel_write(w, &plain.commands, compile, &state, &mut samplers))
-            .collect::<Result<Vec<_>, String>>()?;
-        let first = plain.commands.regions.first();
-        let specialization = first.map(|r| r.specialization.clone()).unwrap_or_default();
-        let map: Vec<avk::SpecializationMapEntry> = specialization.entries.iter().map(|&m| m.into()).collect();
-        let info = avk::SpecializationInfo::default()
-            .map_entries(&map)
-            .data(&specialization.data);
-        let stage = &plain.pipeline.stage;
-        let entry = CString::new(stage.entry_point.as_str()).unwrap_or_default();
-        let variant = CString::new(format!("{:?}", plain.plan.variant)).unwrap_or_default();
-        let kernel = NmbDirectKernel {
-            device: avk::Handle::as_raw(handles.device.handle()),
-            layout: avk::Handle::as_raw(layout.pipeline),
-            set0: layout.set0(),
-            stage: NmbDirectStage {
-                spirv: stage.spirv.as_ptr(),
-                spirv_bytes: stage.spirv.len() * 4,
-                entry: entry.as_ptr(),
-                stage: avk::ShaderStageFlags::from(stage.stage).as_raw(),
-                flags: first.map_or(0, |r| avk::PipelineShaderStageCreateFlags::from(r.stage_flags).as_raw()),
-                subgroup_size: first.and_then(|r| r.required_subgroup_size).unwrap_or(0),
-                specialization: if map.is_empty() {
-                    std::ptr::null()
-                } else {
-                    (&info as *const avk::SpecializationInfo<'_>).cast()
-                },
-            },
-            writes: writes.as_ptr(),
-            write_count: writes.len() as u32,
-            push_mask,
-            push,
-            moved_mask,
-            moved: moved_push,
-            bound_mask,
-            bound: bound_push,
-            moved_same,
-            bound_same: same(&bound),
-            region_word: region_word(&plain.plan),
-            regions: plain.commands.regions.len() as u32,
-            push_holes: plain.commands.push_holes.len() as u32,
-            variant: variant.as_ptr(),
-        };
-        // SAFETY: the caller's contract; everything `kernel` points at lives until after the call.
-        Ok(unsafe { each(&kernel, ctx) })
+        direct(nmb, &native, &descriptor, None, ask, each, ctx)
     })
+}
+
+/// # Safety
+/// The artifact and dispatch are live; the callback is valid for this call.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nmb_compute_artifact_direct(
+    device: *mut NmbDevice,
+    artifact: *const NmbComputeArtifact,
+    dispatch: *const NmbDirectDispatch,
+    each: unsafe extern "C" fn(kernel: *const NmbDirectKernel, ctx: *mut c_void) -> bool,
+    ctx: *mut c_void,
+) -> bool {
+    guard(false, || {
+        let artifact = get(artifact)?;
+        direct(
+            get(device)?,
+            &artifact.compile,
+            &artifact.descriptor,
+            Some(artifact),
+            get(dispatch)?,
+            each,
+            ctx,
+        )
+    })
+}
+
+fn direct(
+    nmb: &NmbDevice,
+    compile: &metal2vulkan::device::Device,
+    descriptor: &ComputePipelineDescriptor,
+    artifact: Option<&NmbComputeArtifact>,
+    ask: &NmbDirectDispatch,
+    each: unsafe extern "C" fn(kernel: *const NmbDirectKernel, ctx: *mut c_void) -> bool,
+    ctx: *mut c_void,
+) -> Result<bool, String> {
+    let runtime = nmb.device();
+    let budget = Budget::standard();
+    let call = if ask.region_mode != 0 {
+        Dispatch::ThreadgroupRange { groups: GRID, first: [0; 3], count: GRID, threads_per_group: ask.threads }
+    } else {
+        Dispatch::Threadgroups { groups: GRID, threads_per_group: ask.threads }
+    };
+    let state = bind_state(Run::Bytes, ask)?;
+    let plain = settle(compile, descriptor, &state, &call, &budget, artifact)?;
+    let moved = settle(
+        compile,
+        descriptor,
+        &bind_state(Run::Moved, ask)?,
+        &call,
+        &budget,
+        artifact,
+    )?;
+    let bound = settle(
+        compile,
+        descriptor,
+        &bind_state(Run::Bound, ask)?,
+        &call,
+        &budget,
+        artifact,
+    )?;
+    let region = |s: &Settled| s.commands.regions.first().map(|r| r.specialization.clone());
+    let same = |s: &Settled| {
+        s.plan.variant == plain.plan.variant
+            && region(s) == region(&plain)
+            && layout_of(&s.plan) == layout_of(&plain.plan)
+    };
+    let (push_mask, push) = push_words(&plain.commands);
+    let (moved_mask, moved_push) = push_words(&moved.commands);
+    let (bound_mask, bound_push) = push_words(&bound.commands);
+    let ranges = |s: &Settled| -> Vec<(u32, u32, u64)> {
+        s.commands
+            .descriptor_ranges
+            .iter()
+            .map(|r| (r.set, r.binding, r.range.range))
+            .collect()
+    };
+    let moved_same = same(&moved) && ranges(&moved) == ranges(&plain);
+
+    // SAFETY: the runtime device's own handles, used while it lives.
+    let handles = unsafe { runtime.raw() };
+    let layout = Layout::new(handles.device, &plain.pipeline.layout)?;
+    let mut samplers = Samplers {
+        device: handles.device,
+        made: Vec::new(),
+    };
+    let writes = plain
+        .plan
+        .descriptors
+        .iter()
+        .map(|w| kernel_write(w, &plain.commands, compile, &state, &mut samplers))
+        .collect::<Result<Vec<_>, String>>()?;
+    let first = plain.commands.regions.first();
+    let specialization = first.map(|r| r.specialization.clone()).unwrap_or_default();
+    let map: Vec<avk::SpecializationMapEntry> = specialization.entries.iter().map(|&m| m.into()).collect();
+    let info = avk::SpecializationInfo::default()
+        .map_entries(&map)
+        .data(&specialization.data);
+    let stage = &plain.pipeline.stage;
+    let entry = CString::new(stage.entry_point.as_str()).unwrap_or_default();
+    let variant = CString::new(format!("{:?}", plain.plan.variant)).unwrap_or_default();
+    let semantic = plain.pipeline.pipeline.program.as_ref().map(SemanticView::of);
+    // InlineBytes have no buffer hazard entries; the moved and bound plans expose those accesses.
+    let [buffer_reads, buffer_writes, texture_reads, texture_writes] =
+        access_masks([&plain.plan, &moved.plan, &bound.plan]);
+    let kernel = NmbDirectKernel {
+        device: avk::Handle::as_raw(handles.device.handle()),
+        layout: avk::Handle::as_raw(layout.pipeline),
+        set0: layout.set0(),
+        stage: NmbDirectStage {
+            spirv: stage.spirv.as_ptr(),
+            spirv_bytes: stage.spirv.len() * 4,
+            entry: entry.as_ptr(),
+            stage: avk::ShaderStageFlags::from(stage.stage).as_raw(),
+            flags: first.map_or(0, |r| avk::PipelineShaderStageCreateFlags::from(r.stage_flags).as_raw()),
+            subgroup_size: first.and_then(|r| r.required_subgroup_size).unwrap_or(0),
+            specialization: if map.is_empty() {
+                std::ptr::null()
+            } else {
+                (&info as *const avk::SpecializationInfo<'_>).cast()
+            },
+            semantic: semantic.as_ref().map_or(std::ptr::null(), |p| (p as *const SemanticView).cast()),
+            portable_context: Arc::as_ptr(&plain.pipeline.pipeline).cast(),
+            portable: Some(materialize_portable),
+        },
+        writes: writes.as_ptr(),
+        write_count: writes.len() as u32,
+        push_mask,
+        push,
+        moved_mask,
+        moved: moved_push,
+        bound_mask,
+        bound: bound_push,
+        moved_same,
+        bound_same: same(&bound),
+        region_word: region_word(&plain.plan),
+        regions: plain.commands.regions.len() as u32,
+        push_holes: plain.commands.push_holes.len() as u32,
+        variant: variant.as_ptr(),
+        buffer_reads,
+        buffer_writes,
+        texture_reads,
+        texture_writes,
+    };
+    // SAFETY: the caller's contract; everything `kernel` points at lives until after the call.
+    Ok(unsafe { each(&kernel, ctx) })
+}
+
+unsafe extern "C" fn materialize_portable(context: *const c_void, words: *mut *const u32, bytes: *mut usize) -> bool {
+    guard(false, || {
+        let pipeline = get(context.cast::<NativePipeline>())?;
+        let portable = pipeline.portable_words().map_err(compile_error("portable native fallback"))?;
+        // SAFETY: NVK supplies both output fields, and the pipeline owns the returned words through the callback.
+        unsafe {
+            *words.as_mut().ok_or("null portable words")? = portable.as_ptr();
+            *bytes.as_mut().ok_or("null portable size")? = portable.len() * 4;
+        }
+        Ok(true)
+    })
+}
+
+#[repr(C)]
+struct SemanticView {
+    version: u32,
+    types: u32,
+    values: u32,
+    blocks: u32,
+    entry: u32,
+    record_count: u32,
+    operand_count: u32,
+    records: *const NativeRecord,
+    operands: *const u32,
+}
+
+impl SemanticView {
+    fn of(program: &NativeProgram) -> Self {
+        Self {
+            version: NativeProgram::VERSION,
+            types: program.types, values: program.values, blocks: program.blocks, entry: program.entry,
+            record_count: program.records.len() as u32, operand_count: program.operands.len() as u32,
+            records: program.records.as_ptr(), operands: program.operands.as_ptr(),
+        }
+    }
 }

@@ -27,6 +27,8 @@ use crate::spirv::ir::{
 };
 use crate::spirv::testing::{assert_valid, committed_profiles};
 
+mod native_sm53;
+
 // ---- Forms ----
 
 fn int(bits: u8) -> Form {

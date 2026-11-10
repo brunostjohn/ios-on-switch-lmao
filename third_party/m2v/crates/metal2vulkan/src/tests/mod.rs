@@ -27,6 +27,7 @@ mod engine_bias_reach;
 mod engine_bicubic;
 mod engine_binder;
 mod engine_buffer_table;
+pub(crate) mod engine_bound_alignment;
 mod engine_chosen_pointers;
 mod engine_copy;
 mod engine_coverage_loop;

@@ -21,6 +21,9 @@ typedef struct NmbDirectStage {
     uint32_t flags;              // VkPipelineShaderStageCreateFlags
     uint32_t subgroupSize;       // 0: none required
     const void *specialization;  // VkSpecializationInfo, null without constants
+    const void *semantic;
+    const void *portableContext;
+    bool (*portable)(const void *context, const uint32_t **words, size_t *bytes);
 } NmbDirectStage;
 
 typedef enum NmbDirectSource : uint32_t {
@@ -33,7 +36,9 @@ typedef enum NmbDirectSource : uint32_t {
     NmbDirectStorageAttachment,  // a color attachment as a storage image (the interlocked storage form's)
     NmbDirectNeutral,
     NmbDirectColorTable,  // m2v's sRGB colour table (bind::color_write_table), the same bytes for every state
-    NmbDirectOther
+    NmbDirectOther,
+    NmbDirectDepthStandIn,
+    NmbDirectStencilStandIn
 } NmbDirectSource;
 
 #define NMB_DIRECT_IMMUTABLE UINT32_MAX
@@ -58,11 +63,19 @@ typedef struct NmbDirectDraw {
     uint32_t pushMask;  // the push-constant words [0, 128) the draw writes, and their values
     uint32_t push[32];
     uint32_t blendColorWord, halfBlendColorWord;  // push word + 1, zero when absent
-    uint32_t pushHoles;                           // push words the consumer fills with addresses
+    uint32_t depthTestWord, stencilTestWord;
+    uint32_t pushHoles;   // push words the consumer fills with addresses
     uint32_t vertexSlot;  // the first fixed-function vertex buffer's Metal slot (UINT32_MAX: none) and stride
     uint32_t vertexStride;
     const char *variant;
 } NmbDirectDraw;
+
+typedef struct NmbDirectStorage {
+    uint32_t mask, writes, samplePlanes, samples;
+    uint32_t formats[8];  // actual identity-mapped storage view, including sRGB's integer view
+    uint32_t fragmentTests;
+    uint32_t depthFormat, stencilFormat, testSamples, testPlanes;
+} NmbDirectStorage;
 
 typedef struct NmbDirectState {
     uint64_t device;  // VkDevice of the stage compile
@@ -71,6 +84,7 @@ typedef struct NmbDirectState {
     NmbDirectStage stages[2];
     bool sampleShading;
     bool storageForm;  // the fragment function reads color attachments through storage under the interlock
+    NmbDirectStorage storage;
     uint32_t blended;  // the color attachments m2v hands a Vulkan blend, by index
     NmbDirectDraw draws
         [4];  // probe.mm's: 256, 16 and 4096 inline bytes per slot, and 256 bytes in buffers at each slot's own offset
@@ -95,6 +109,7 @@ typedef struct NmbDirectBinds {
     uint32_t cubicCount;
     const NmbDirectTextureFormat *textures;
     uint32_t textureCount;
+    uint32_t fragmentTests;
 } NmbDirectBinds;
 
 // `descriptor`'s state (its stages' linked functions included) as the translator makes it for the probe's draws, handed to
@@ -125,6 +140,7 @@ typedef struct NmbDirectDispatch {
     uint32_t textureCount;
     const NmbDirectBoundSampler *samplers;
     uint32_t samplerCount;
+    uint32_t regionMode;
 } NmbDirectDispatch;
 
 typedef struct NmbDirectKernelWrite {
@@ -149,6 +165,7 @@ typedef struct NmbDirectKernel {
     uint32_t regions;    // the plain dispatch's Vulkan dispatches
     uint32_t pushHoles;  // push words the consumer fills with addresses
     const char *variant;
+    uint32_t bufferReads, bufferWrites, textureReads, textureWrites;
 } NmbDirectKernel;
 
 // `descriptor`'s compute state as the translator makes it for a dispatch of `dispatch`'s threadgroup shape and bindings, handed

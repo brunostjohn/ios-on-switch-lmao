@@ -8,6 +8,7 @@ load("//bazel/lint:defs.bzl", "lint_files")
 load("//third_party/mesa/bazel:defs.bzl", "MESA_LINT_EXCLUDE", "MESA_PY_DEPS", "mesa_args", "mesa_cc_library", "mesa_files", "mesa_genrule")
 load("//third_party/mesa/bazel:identity.bzl", "mesa_identity_files")
 load("//third_party/mesa/bazel:rust.bzl", "NOUVEAU_RUST_ARGS", "RUST_GLOBAL_ARGS", "mesa_rust_library")
+load(":fs_depth_test.bzl", "fs_depth_test_binary")
 
 package(default_visibility = ["//visibility:public"])
 
@@ -307,5 +308,111 @@ py_test(
         "sm53_half_tests",
     ],
     data = [":nak_sm53_half_test_bin"],
+    main = "run_host_test.py",
+)
+
+mesa_cc_library(
+    name = "nak_fs_depth_test_objects",
+    testonly = True,
+    sources = [
+        "nak_fs_depth_test.c",
+        "nak_nir_lower_fs_inputs.c",
+    ],
+    c_args = mesa_args("c", include_dirs = [
+        "src/nouveau/compiler",
+        "gen:src/nouveau/compiler",
+        "include",
+        "gen:include",
+        "src",
+        "gen:src",
+        "src/compiler",
+        "gen:src/compiler",
+        "src/compiler/nir",
+        "gen:src/compiler/nir",
+        "src/nouveau/nil",
+        "gen:src/nouveau/nil",
+        "src/nouveau/headers",
+        "gen:src/nouveau/headers",
+        "src/nouveau/headers/nvidia/classes",
+        "gen:src/util",
+        "gen:src/util/format",
+    ]),
+)
+
+fs_depth_test_binary(
+    name = "nak_fs_depth_test_bin",
+    testonly = True,
+    archives = [
+        ":nak_fs_depth_test_objects",
+        "//third_party/mesa/src/compiler/nir:nir",
+        "//third_party/mesa/src/compiler:compiler",
+        "//third_party/mesa/src/util:mesa_util",
+        "//third_party/mesa/src/util:mesa_util_simd",
+        "//third_party/mesa/src/c11/impl:mesa_util_c11",
+        "//third_party/mesa/src/util/blake3",
+    ],
+)
+
+mesa_files(
+    name = "nak_fs_depth_test_host",
+    testonly = True,
+    srcs = [":nak_fs_depth_test_bin"],
+    platform = "macos",
+)
+
+py_test(
+    name = "fs_depth_test",
+    size = "small",
+    srcs = ["run_host_test.py"],
+    args = ["$(rootpath :nak_fs_depth_test_host)", "depth"],
+    data = [":nak_fs_depth_test_host"],
+    main = "run_host_test.py",
+)
+
+mesa_cc_library(
+    name = "nak_half_contract_test_objects",
+    testonly = True,
+    sources = ["nak_half_contract_test.c"],
+    c_args = mesa_args("c", include_dirs = [
+        "include",
+        "gen:include",
+        "src",
+        "gen:src",
+        "src/compiler",
+        "gen:src/compiler",
+        "src/compiler/nir",
+        "gen:src/compiler/nir",
+        "gen:src/util",
+        "gen:src/util/format",
+    ]),
+)
+
+fs_depth_test_binary(
+    name = "nak_half_contract_test_bin",
+    testonly = True,
+    archives = [
+        ":nak_half_contract_test_objects",
+        "//third_party/mesa/src/compiler/nir:nir",
+        "//third_party/mesa/src/compiler:compiler",
+        "//third_party/mesa/src/util:mesa_util",
+        "//third_party/mesa/src/util:mesa_util_simd",
+        "//third_party/mesa/src/c11/impl:mesa_util_c11",
+        "//third_party/mesa/src/util/blake3",
+    ],
+)
+
+mesa_files(
+    name = "nak_half_contract_test_host",
+    testonly = True,
+    srcs = [":nak_half_contract_test_bin"],
+    platform = "macos",
+)
+
+py_test(
+    name = "half_contract_test",
+    size = "small",
+    srcs = ["run_host_test.py"],
+    args = ["$(rootpath :nak_half_contract_test_host)", "half-contract"],
+    data = [":nak_half_contract_test_host"],
     main = "run_host_test.py",
 )

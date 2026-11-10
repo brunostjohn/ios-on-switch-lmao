@@ -1,3 +1,5 @@
+load("@rules_rust//rust:defs.bzl", "rust_test")
+
 # drivers/NativeMetal on the host:
 #   limits_table_test       LimitsTable.h: the device's answers in the base class's limits table, past a field the base
 #                           class reads elsewhere (21H461's minConstantBufferAlignmentBytes)
@@ -9,6 +11,21 @@ load("//bazel/lint:defs.bzl", "lint_files")
 load("//bazel/testing:defs.bzl", "host_test")
 
 lint_files()
+
+rust_test(
+    name = "native_variants_test",
+    srcs = ["//drivers/NativeMetal:bridge/NativeMetalVariants.rs"],
+    edition = "2024",
+)
+
+host_test(
+    name = "native_artifact_cache_test",
+    srcs = [
+        "native_artifact_cache_test.cpp",
+        "//drivers/NativeMetal:NativeMetalArtifactCache.h",
+    ],
+    cxx_std = "c++17",
+)
 
 host_test(
     name = "limits_table_test",
@@ -38,13 +55,42 @@ host_test(
     cxx_std = "c++17",
 )
 
-host_test(
-    name = "async_pipelines_test",
+[host_test(
+    name = name,
     srcs = [
         "async_pipelines_test.cpp",
         "//drivers/NativeMetal:AsyncPipelines.h",
     ],
-    copts = ["-x", "objective-c++", "-fobjc-arc"],
+    copts = [
+        "-x",
+        "objective-c++",
+        "-fobjc-arc",
+    ] + defines,
     cxx_std = "c++17",
-    linkopts = ["-framework", "Foundation"],
+    linkopts = [
+        "-framework",
+        "Foundation",
+    ],
+) for name, defines in [
+    ("async_pipelines_test", []),
+    ("async_pipelines_release_test", ["-DSWITCH_DEBUG=0"]),
+]]
+
+host_test(
+    name = "switch_compile_reply_test",
+    srcs = [
+        "switch_compile_reply_test.cpp",
+        "//drivers/NativeMetal:SwitchCompileReply.h",
+    ],
+    copts = [
+        "-x",
+        "objective-c++",
+        "-fobjc-arc",
+        "-Wno-deprecated-declarations",
+    ],
+    cxx_std = "c++17",
+    linkopts = [
+        "-framework",
+        "Foundation",
+    ],
 )

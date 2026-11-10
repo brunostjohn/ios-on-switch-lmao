@@ -2,11 +2,13 @@
 # Translated from the compile, archive and generator commands of the meson builds that reproduce main's NVK dylibs.
 
 load("@rules_python//python:py_binary.bzl", "py_binary")
+load("@rules_python//python:py_test.bzl", "py_test")
 load("//bazel/lint:defs.bzl", "lint_files")
-load("//third_party/mesa/bazel:defs.bzl", "MESA_LINT_EXCLUDE", "MESA_PY_DEPS", "mesa_archive", "mesa_args", "mesa_cc_library", "mesa_file", "mesa_genrule")
+load("//third_party/mesa/bazel:defs.bzl", "MESA_LINT_EXCLUDE", "MESA_PY_DEPS", "mesa_archive", "mesa_args", "mesa_cc_library", "mesa_file", "mesa_files", "mesa_genrule")
 load("//third_party/mesa/bazel:identity.bzl", "mesa_identity_files", "nvk_compiler_identity")
 load("//third_party/mesa/bazel:link.bzl", "mesa_dylib")
 load("//third_party/mesa/bazel:rust.bzl", "NOUVEAU_RUST_ARGS", "mesa_rust_library")
+load("//third_party/mesa/src/nouveau/compiler:fs_depth_test.bzl", "fs_depth_test_binary")
 
 package(default_visibility = ["//visibility:public"])
 
@@ -318,6 +320,16 @@ mesa_cc_library(
         "nvk_switch_capture.c",
         "nvk_switch_compile.c",
         "nvk_switch_directcheck.c",
+        "nvk_switch_ir.c",
+        "nvk_switch_ir_alu.c",
+        "nvk_switch_ir_barrier.c",
+        "nvk_switch_ir_decl.c",
+        "nvk_switch_ir_glsl.c",
+        "nvk_switch_ir_instr.c",
+        "nvk_switch_ir_image.c",
+        "nvk_switch_ir_image_types.c",
+        "nvk_switch_ir_values.c",
+        "nvk_switch_rank.c",
         "nvk_switch_push.c",
         "nvk_switch_round.c",
         "nvk_switch_split.c",
@@ -788,4 +800,48 @@ mesa_dylib(
         "//conditions:default": "macos",
     }),
     stubs = "nvk-absent-entrypoints",
+)
+
+mesa_cc_library(
+    name = "split_batch_test_objects",
+    testonly = True,
+    c_args = NVK_C_ARGS,
+    sources = [
+        "nvk_switch_split_batch_test.c",
+        "nvk_switch_split_fold.c",
+        "nvk_switch_split_prologue.c",
+    ],
+)
+
+fs_depth_test_binary(
+    name = "split_batch_test_bin",
+    testonly = True,
+    archives = [
+        ":split_batch_test_objects",
+        "//third_party/mesa/src/compiler/nir:nir",
+        "//third_party/mesa/src/compiler:compiler",
+        "//third_party/mesa/src/util:mesa_util",
+        "//third_party/mesa/src/util:mesa_util_simd",
+        "//third_party/mesa/src/c11/impl:mesa_util_c11",
+        "//third_party/mesa/src/util/blake3",
+    ],
+)
+
+mesa_files(
+    name = "split_batch_test_host",
+    testonly = True,
+    srcs = [":split_batch_test_bin"],
+    platform = "macos",
+)
+
+py_test(
+    name = "split_batch_test",
+    size = "small",
+    srcs = ["//third_party/mesa/src/nouveau/compiler:run_host_test.py"],
+    args = [
+        "$(rootpath :split_batch_test_host)",
+        "split-batch",
+    ],
+    data = [":split_batch_test_host"],
+    main = "//third_party/mesa/src/nouveau/compiler:run_host_test.py",
 )

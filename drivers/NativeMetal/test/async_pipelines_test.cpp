@@ -246,3 +246,16 @@ TEST(AsyncPipelines, AClaimedLazyCreationIsLeftToItsUrgerWhileWorkersIdle)
     EXPECT_EQ(notified.load(), 1u);
     EXPECT_EQ(nbasync::claim(state), 1);
 }
+
+TEST(AsyncPipelines, ProfileKeepsStatisticsOutOfRelease)
+{
+    char text[256] = "unchanged";
+#if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
+    nbasync::counters().started++;
+    EXPECT_GT(nbasync::appendRates(text, sizeof text), 0u);
+    EXPECT_NE(strstr(text, "apso="), nullptr);
+#else
+    EXPECT_EQ(nbasync::appendRates(text, sizeof text), 0u);
+    EXPECT_STREQ(text, "unchanged");
+#endif
+}

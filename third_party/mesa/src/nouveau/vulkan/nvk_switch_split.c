@@ -134,8 +134,6 @@ name_cbufs(const struct nvk_cbuf_map *map, struct switch_nvk_split *split)
 
    split->prologue.cbuf_count = l->prologue_cbufs;
    split->prologue.cbuf_types[SWITCH_SPLIT_PARAMS_CBUF] = SWITCH_SPLIT_CBUF_PARAMS;
-   for (uint32_t u = 0; u < l->ubo_count; u++)
-      split->prologue.cbuf_types[1 + u] = split->fs.cbuf_types[l->ubo_cbuf[u]];
    if (l->shader_data_cbuf)
       split->prologue.cbuf_types[l->shader_data_cbuf] = NVK_CBUF_TYPE_SHADER_DATA;
 }
@@ -171,13 +169,25 @@ switch_nvk_split_compile(struct nvk_device *dev, const nir_shader *fs,
    }
    ralloc_free(nir.fs);
    ralloc_free(nir.prologue);
-   if (!ok || !wins(whole, &split->fs.info)) {
+   if (!ok || !wins(whole, &split->fs.info) ||
+       split->prologue.info.num_static_cycles > UINT32_MAX) {
       switch_nvk_split_free(split);
       return NULL;
    }
    name_cbufs(map, split);
    fill_qmd(dev, split);
    split->threshold_pixels = threshold_pixels(whole, split);
+   /* Fixed launch/drain costs are conservative heuristics, not device measurements. */
+   split->cost = (struct switch_nvk_split_cost) {
+      .version = 1,
+      .launch_cycles = SWITCH_SPLIT_DRAW_CYCLES,
+      .drain_cycles = SWITCH_SPLIT_DRAW_CYCLES,
+      .prologue_warp_cycles = split->prologue.info.num_static_cycles,
+      .prologue_instructions = split->prologue.info.num_instrs,
+      .saved_pixel_instructions = whole->num_instrs - split->fs.info.num_instrs,
+      .saved_pixel_cycles = MIN2(whole->num_static_cycles - split->fs.info.num_static_cycles, UINT32_MAX),
+      .frontier_values = split->layout.frontier_values,
+   };
    return split;
 }
 

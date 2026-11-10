@@ -392,6 +392,18 @@ pub fn link(
     })
 }
 
+pub(crate) fn link_compute(interface: &StageInterface, p: &DeviceProfile) -> Result<Linked, Error> {
+    let ifaces = [interface];
+    check_stages(&ifaces, &LinkInputs::compute())?;
+    let mut table = LinkTable::default();
+    let layout = layout(&ifaces, &[], &mut table, p)?;
+    let specialization = specialize(&ifaces, &mut table)?;
+    Ok(Linked {
+        table, layout, specialization, interface: pipeline_interface(&ifaces),
+        vertex_input: VertexInputState::default(), graphics: None, control: None,
+    })
+}
+
 /// The graphics state of a render or mesh render pipeline whose geometry stage (its vertex or
 /// mesh stage) is `geometry`, with its fragment stage's.
 fn render_state(
