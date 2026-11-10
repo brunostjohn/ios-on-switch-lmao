@@ -375,6 +375,7 @@ host_test(
     srcs = [
         "raw_comp_test.cpp",
         "//drivers/TegraGM20B:TegraGM20BABI.h",
+        "//drivers/TegraGM20B:TegraGM20BLayout.h",
         "//drivers/TegraGM20BMetal:raw/pack/nvdec_comp.h",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_comp.h",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_kernel.h",
