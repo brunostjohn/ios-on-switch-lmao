@@ -4,6 +4,8 @@
 // draws refused before any vertex is read are decided by fetchRefusal as each draw is recorded, so only their encoder
 // goes to m2v; FetchRefusal::Geometry, which depends on what the CPU can read at submission, is selfRuns' alone.
 #pragma once
+#include <atomic>
+#include <cstddef>
 #include <cstdint>
 
 namespace raw {
@@ -16,6 +18,20 @@ enum class FetchRefusal : uint8_t {
     Transform,  // not Core Animation's transform: nothing bounds its vertices on the CPU
     Geometry,   // its vertices unreadable or too many, or its runs would restart a fragment primitive ID
     Count
+};
+
+constexpr size_t kFetchRefusals = size_t(FetchRefusal::Count);
+constexpr const char *kFetchRefusalNames[kFetchRefusals] = {"-",         "indirect",  "topology",
+                                                            "instances", "transform", "geometry"};
+
+// Fetching draws by how they kept raster order since the device opened, counted in debug builds only: drawn whole on the
+// CPU's proof that no two of their triangles share a pixel, with the vertices and bytes the proof read; drawn a triangle
+// at a time without one (selfRuns' small direct Core Animation draws) and those triangles; fetched inside the pixel
+// interlock; refused, by reason, as recorded (the encoder to m2v) and at encoding
+struct FetchCounts {
+    std::atomic<uint64_t> provenWhole{0}, proofVertices{0}, proofBytes{0}, sequential{0}, sequentialTriangles{0},
+        interlocked{0};
+    std::atomic<uint64_t> refusedAtRecord[kFetchRefusals]{}, refusedAtEncode[kFetchRefusals]{};
 };
 
 struct FetchDraw {

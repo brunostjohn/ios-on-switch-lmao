@@ -1160,6 +1160,7 @@ public:
         // twice, and the runs; those of more than one triangle it could not tell apart (drawn whole, unordered within);
         // the CPU time telling them (raw_overlap.h)
         std::atomic<uint64_t> selfOverlapSplit{0}, selfOverlapRuns{0}, selfOverlapUnbounded{0}, selfOverlapNs{0};
+        FetchCounts fetch;
         // channels made again after the kernel killed one
         std::atomic<uint64_t> reopens{0};
         // compressed memory held now (raw_comp.h CompMem and made buffers no backing took) and its bytes, the backings on it

@@ -3681,6 +3681,10 @@ const RenderEncoder::Runs *RenderEncoder::selfRuns(const Pipeline &pl, uint32_t 
     runWinding_.fill(false);
     const FetchDraw shape = {primitive, count, instances};
     const bool fetchesOwn = fetchesOwnColor(pl.fetchBits, pl.writeBits, pl.storageBits);
+#if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
+    if (pl.fetchBits & pl.storageBits)
+        dev_->stats.fetch.interlocked++;
+#endif
     if (!fetchesOwn || singlePrimitive(shape))
         return &runs;
     if (const FetchRefusal refusal = fetchRefusal(fetchesOwn, pl.caTransform, shape); refusal != FetchRefusal::None)
@@ -3690,10 +3694,22 @@ const RenderEncoder::Runs *RenderEncoder::selfRuns(const Pipeline &pl, uint32_t 
 #endif
     auto analysis = geometryCache_.analysis(geometry(pl, primitive, first, count, {0, 0, ~0u, ~0u}), bindingRevision_,
                                             cb_->geometryBudget_);
+#if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
+    const GeometrySnapshot *proof =
+        analysis.geometry().bounded && !analysis.snapshot().evaluated ? &analysis.snapshot() : nullptr;
+#endif
     const bool told = triangles.split(analysis, runs);
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
     dev_->stats.selfOverlapNs += uint64_t(
         std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - start).count());
+    if (proof && proof->valid) {
+        const DrawGeometry &g = proof->source;
+        dev_->stats.fetch.proofVertices += g.count;
+        dev_->stats.fetch.proofBytes +=
+            64 + uint64_t(g.count) * (g.indexSize + uint64_t(g.positions.components) * sizeof(float));
+    }
+    if (told && runs.empty())
+        dev_->stats.fetch.provenWhole++;
     if (!told)
         dev_->stats.selfOverlapUnbounded++;
     else if (!runs.empty()) {
@@ -3708,8 +3724,13 @@ const RenderEncoder::Runs *RenderEncoder::selfRuns(const Pipeline &pl, uint32_t 
         // small direct draws native: each triangle is ordered by prepare()'s existing framebuffer-fetch barrier.
         // No position or index bytes are read, and no unproven non-overlap assumption is made.
         if (pl.caTransform && !pl.primitiveId &&
-            TriangleRuns::sequential(primitive, count, instances, drawIndices_ != nullptr, runs, runWinding_))
+            TriangleRuns::sequential(primitive, count, instances, drawIndices_ != nullptr, runs, runWinding_)) {
+#if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
+            dev_->stats.fetch.sequential++;
+            dev_->stats.fetch.sequentialTriangles += runs.size();
+#endif
             return &runs;
+        }
         return refuseFetch(FetchRefusal::Geometry, primitive, count, instances, why);
     }
     if (primitive == 4)
@@ -3722,6 +3743,9 @@ const RenderEncoder::Runs *RenderEncoder::refuseFetch(FetchRefusal refusal, uint
 {
     *why = fetchRefusalWhy(refusal);
     cb_->refusal = {RefGeometry, primitive, count, instances};
+#if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
+    dev_->stats.fetch.refusedAtEncode[size_t(refusal)]++;
+#endif
     return nullptr;
 }
 
@@ -3843,6 +3867,10 @@ bool RenderEncoder::indirect(uint32_t primitive, bool indexed, const Buffer *arg
         return true;
     const Pipeline &pl = *pipeline_;
     const bool fetchesOwn = fetchesOwnColor(pl.fetchBits, pl.writeBits, pl.storageBits);
+#if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
+    if (pl.fetchBits & pl.storageBits)
+        dev_->stats.fetch.interlocked++;
+#endif
     if (const FetchRefusal refusal = fetchRefusal(fetchesOwn, pl.caTransform, {primitive, 0, 1, true});
         refusal != FetchRefusal::None) {
         refuseFetch(refusal, primitive, 0, 0, why);
