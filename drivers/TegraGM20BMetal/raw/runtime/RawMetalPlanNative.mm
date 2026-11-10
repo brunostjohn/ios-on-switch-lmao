@@ -39,6 +39,7 @@ struct NativePlanSink {
         }
     }
 
+    // A vertex texture (stage 1) binds nothing: no raw record reads one, raw_direct.cpp refuses a vertex-stage handle
     void texture(uint32_t stage, uint32_t slot, void *value)
     {
         RMTexture *object = (__bridge RMTexture *)value;

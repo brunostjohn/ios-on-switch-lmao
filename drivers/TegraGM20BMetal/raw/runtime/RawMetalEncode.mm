@@ -633,9 +633,7 @@ static bool encodeRawAttempt(RMCommandBuffer *cb, size_t from, size_t to, const 
         if (stale)
             rc->invalidateNativeReads();
         else if (rc->nativeError && !rc->partial)
-            cb->_segError = [NSError errorWithDomain:MTLCommandBufferErrorDomain
-                                               code:MTLCommandBufferErrorInternal
-                                           userInfo:@{NSLocalizedDescriptionKey : @"Native ownership or event dependency failed"}];
+            failCommandBuffer(cb, @"Native ownership or event dependency failed");
         if (stale) {
             rc->abandon();
             return false;
@@ -677,8 +675,6 @@ bool encodeRaw(RMCommandBuffer *cb, size_t from, size_t to, const char **why, si
             return false;
     }
     *why = "the native surface changed repeatedly before submission";
-    cb->_segError = [NSError errorWithDomain:MTLCommandBufferErrorDomain
-                                       code:MTLCommandBufferErrorInternal
-                                   userInfo:@{NSLocalizedDescriptionKey : @"Native surface changed during submission"}];
+    failCommandBuffer(cb, @"Native surface changed during submission");
     return false;
 }

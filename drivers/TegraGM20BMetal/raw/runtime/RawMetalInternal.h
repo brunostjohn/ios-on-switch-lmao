@@ -326,6 +326,8 @@ void scheduled(RMCommandBuffer *cb);
 dispatch_queue_t followingRootQueue();
 dispatch_queue_t followingSerialQueue(const char *label);
 void finish(RMCommandBuffer *cb, NSError *error);
+// The command buffer's error, unless it has one: under its lock, which waitUntilScheduled reads it under
+void failCommandBuffer(RMCommandBuffer *cb, NSString *reason);
 void segmentCompleted(RMCommandBuffer *cb, NSError *error, const raw::RetirementWrites &writes, uint32_t dependencies,
                       const std::vector<RMNativeEventSignal> &signals = {},
                       const std::vector<raw::EventTimeline::Promise> &waits = {},

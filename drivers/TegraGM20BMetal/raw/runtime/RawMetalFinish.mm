@@ -205,6 +205,16 @@ static void deliverCompletion(dispatch_block_t run, dispatch_queue_t q, dispatch
         dispatch_async(target, run);
 }
 
+void failCommandBuffer(RMCommandBuffer *cb, NSString *reason)
+{
+    NSError *error = [NSError errorWithDomain:MTLCommandBufferErrorDomain
+                                         code:MTLCommandBufferErrorInternal
+                                     userInfo:@{NSLocalizedDescriptionKey : reason}];
+    std::lock_guard<std::mutex> l(cb->_lock);
+    if (!cb->_segError)
+        cb->_segError = error;
+}
+
 void finish(RMCommandBuffer *cb, NSError *error)
 {
     bool pending;

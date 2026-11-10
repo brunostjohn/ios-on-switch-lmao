@@ -111,9 +111,7 @@ void planSegments(RMCommandBuffer *cb)
         NSString *reason = error == RMPlanError::EventInsideEncoder ? @"An event was encoded inside an active encoder" :
                            error == RMPlanError::NestedEncoder ? @"An encoder began before the previous encoder ended" :
                            @"An encoder did not end before commit";
-        cb->_segError = [NSError errorWithDomain:MTLCommandBufferErrorDomain
-                                           code:MTLCommandBufferErrorInternal
-                                       userInfo:@{NSLocalizedDescriptionKey : reason}];
+        failCommandBuffer(cb, reason);
         return;
     }
     for (const auto &range : plan.ranges()) {
