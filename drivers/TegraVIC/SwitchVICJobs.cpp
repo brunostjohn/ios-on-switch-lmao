@@ -81,15 +81,19 @@ void retireThread(void *, wait_result_t)
         while (!gQueue.count)
             IOLockSleep(gLock, &gQueue.count, THREAD_UNINT);
         SwitchVICQueue::Job job = gQueue.jobs[gQueue.head];
+        const switch_gpu_bridge *bridge = gQueue.batchEnd().bridge;
         IOLockUnlock(gLock);
+        // The bound is VIC's own work: a GPU producer the stream waits for, slow or killed (its recovery advances the
+        // fence the bridge acquires), is waited for first, on the bridge's completion.
+        const int producers = bridge ? switch_gpu_bridge_wait(bridge) : 1;
         // This thread is the only threshold waiter on VIC's syncpoint. Other waiters sleep on completed below.
         const int status = tegra_host1x_syncpt_wait(gSyncpt, static_cast<uint32_t>(job.fence), job.boundUs);
         if (status) {
             char engine[256], host[200];
             tegra_vic_describe(engine, sizeof(engine));
             tegra_host1x_describe_channel(TEGRA_HOST1X_CHANNEL_VIC, host, sizeof(host));
-            panic("TegraVIC: fence %llu failed (%d) after %llu us; %s; %s", job.fence, status,
-                  switch_now_us() - job.submittedUs, engine, host);
+            panic("TegraVIC: fence %llu failed (%d) after %llu us, GPU producers %d; %s; %s", job.fence, status,
+                  switch_now_us() - job.submittedUs, producers, engine, host);
         }
         const int result = completeJob(job);
         IOLockLock(gLock);
@@ -338,7 +342,8 @@ retry:
             gQueue.publish({0, bound(jobs[j], acquire != nullptr || needed != 0), started,
                             j + 1 == count ? completion : nullptr, context,
                             j + 1 == count ? dependencies.takeBridge() : nullptr,
-                            j + 1 == count ? batch.value : nullptr, j + 1 == count ? outcome.take() : nullptr});
+                            j + 1 == count ? batch.value : nullptr, j + 1 == count ? outcome.take() : nullptr,
+                            count - 1 - j});
         if (batch.value)
             switch_gpu_event_waits_retain(batch.value);
         if (useCount)

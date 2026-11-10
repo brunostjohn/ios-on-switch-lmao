@@ -89,6 +89,9 @@ void retireThread(void *, wait_result_t)
             IOLockSleep(gLock, &gQueue.count, THREAD_UNINT);
         auto job = gQueue.jobs[gQueue.head];
         IOLockUnlock(gLock);
+        // The bound is NVDEC's own work: a GPU producer the stream waits for, slow or killed, is waited for first.
+        if (job.bridge)
+            (void)switch_gpu_bridge_wait(job.bridge);
         const uint32_t fence = static_cast<uint32_t>(job.sequence);
         const int error = tegra_host1x_syncpt_wait(gSyncpt, fence, kWaitBoundUs);
         if (error)

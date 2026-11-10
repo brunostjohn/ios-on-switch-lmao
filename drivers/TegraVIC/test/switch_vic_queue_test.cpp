@@ -155,3 +155,19 @@ TEST(SwitchVICQueue, ExhaustedSoftwareSequenceRejectsWithoutWrapping)
     EXPECT_TRUE(queue.retire(UINT32_MAX));
     EXPECT_FALSE(queue.rebase(0));
 }
+
+TEST(SwitchVICQueue, EveryJobOfABatchFindsTheBridgeItsStreamWaitsOn)
+{
+    SwitchVICQueue queue;
+    ASSERT_TRUE(queue.reset(30));
+    ASSERT_TRUE(queue.publish({}));
+    auto *bridge = reinterpret_cast<switch_gpu_bridge *>(uintptr_t(0x40));
+    for (uint32_t j = 0; j < 3; ++j)
+        ASSERT_TRUE(queue.publish({0, 1, 1, nullptr, nullptr, j == 2 ? bridge : nullptr, nullptr, nullptr, 2 - j}));
+    EXPECT_EQ(queue.batchEnd().bridge, nullptr);
+    ASSERT_TRUE(queue.retire(31));
+    for (uint32_t fence = 32; fence <= 34; ++fence) {
+        EXPECT_EQ(queue.batchEnd().bridge, bridge);
+        ASSERT_TRUE(queue.retire(fence));
+    }
+}

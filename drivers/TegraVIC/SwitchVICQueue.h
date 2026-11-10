@@ -19,6 +19,7 @@ struct SwitchVICQueue {
         switch_gpu_bridge *bridge = nullptr;
         switch_gpu_event_waits *semantics = nullptr;
         SwitchHost1xResult *outcome = nullptr;
+        uint32_t toBatchEnd = 0;  // jobs after this one in its batch: the last holds the batch's bridge
     };
 
     Job jobs[kSlots] = {};
@@ -43,6 +44,11 @@ struct SwitchVICQueue {
     bool canPublish(uint32_t amount) const
     {
         return amount && amount <= kSlots - count && submitted <= UINT64_MAX - amount;
+    }
+
+    const Job &batchEnd() const
+    {
+        return jobs[(head + jobs[head].toBatchEnd) % kSlots];
     }
 
     uint32_t configurationSlot(uint32_t job) const
