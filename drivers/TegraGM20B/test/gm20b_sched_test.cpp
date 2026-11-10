@@ -387,13 +387,23 @@ struct Candidates {
 	}
 };
 
-constexpr tgm_hang_candidate kStuckClient = {1, 1, 0}, kBusyClient = {1, 0, 0}, kNone = {0, 0, 0},
-			     kStuckKernel = {1, 1, 1}, kBusyKernel = {1, 0, 1};
+// live, stuck, kernel, resident (an engine or PBDMA is on it), moving (fence or GET), waits (1 + the source's index)
+constexpr tgm_hang_candidate kStuckClient = {1, 1, 0, 0, 0, 0}, kBusyClient = {1, 0, 0, 0, 0, 0},
+			     kNone = {0, 0, 0, 0, 0, 0}, kStuckResident = {1, 1, 0, 1, 0, 0},
+			     kMovingResident = {1, 1, 0, 1, 1, 0}, kStuckKernel = {1, 1, 1, 1, 0, 0},
+			     kBusyKernel = {1, 0, 1, 0, 0, 0};
+
+constexpr tgm_hang_candidate waiting(tgm_hang_candidate c, int source, int moving = 0)
+{
+	c.waits = uint8_t(source + 1);
+	c.moving = uint8_t(moving);
+	return c;
+}
 
 TEST(HangBlame, Deploy2045KillsTheContextGrCannotSwitch)
 {
 	// the present waited for backboardd; GR's switch blames Maps (restoring 26), PBDMA0 is on 26 too
-	Candidates k{{kStuckClient, kNone, kStuckClient}};
+	Candidates k{{kStuckResident, kNone, kStuckClient}};
 	int blame;
 	EXPECT_EQ(k.verdict(blame), TGM_HANG_RECOVERING);
 	EXPECT_EQ(blame, 0);
@@ -402,7 +412,7 @@ TEST(HangBlame, Deploy2045KillsTheContextGrCannotSwitch)
 TEST(HangBlame, TheCompositorIsRecoveredWhenItIsTheOneStuck)
 {
 	// GR stuck saving backboardd's context: suspects 3 (backboardd) then 26 (Maps), late is backboardd
-	Candidates k{{kStuckClient, kStuckClient, kNone, kStuckClient}};
+	Candidates k{{kStuckResident, kStuckResident, kNone, kStuckClient}};
 	int blame;
 	EXPECT_EQ(k.verdict(blame), TGM_HANG_RECOVERING);
 	EXPECT_EQ(blame, 0);
@@ -417,12 +427,38 @@ TEST(HangBlame, AChannelOnAnEndlessAcquireBlamesItself)
 	EXPECT_EQ(blame, 1);
 }
 
-TEST(HangBlame, TheTaskChannelItWaitsOnComesBeforeIt)
+// iconservicesagent's channel 20 on slice B's boot: GR and PBDMA0 on another process's long 3D work that keeps going,
+// channel 20 not resident with work pending behind it, and the late sibling's order acquire on channel 20.
+TEST(HangBlame, ChannelsWaitingBehindAnEngineThatMovesAreNotKilled)
 {
-	Candidates k{{kBusyClient, kStuckClient, kStuckClient}};
+	Candidates k{{kMovingResident, kStuckClient, waiting(kStuckClient, 1)}};
+	int blame;
+	EXPECT_EQ(k.verdict(blame), TGM_HANG_PROGRESSING);
+	EXPECT_EQ(blame, -1);
+}
+
+TEST(HangBlame, AResidentChannelThatDoesNotMoveIsKilledNotItsWaiters)
+{
+	Candidates k{{kStuckResident, kStuckClient, waiting(kStuckClient, 1), waiting(kStuckClient, 0)}};
 	int blame;
 	EXPECT_EQ(k.verdict(blame), TGM_HANG_RECOVERING);
-	EXPECT_EQ(blame, 1);
+	EXPECT_EQ(blame, 0);
+}
+
+TEST(HangBlame, WithNoEngineOnThemTheBlameFollowsTheAcquiresToTheEnd)
+{
+	Candidates k{{kNone, waiting(kStuckClient, 2), kStuckClient, waiting(kStuckClient, 1)}};
+	int blame;
+	EXPECT_EQ(k.verdict(blame), TGM_HANG_RECOVERING);
+	EXPECT_EQ(blame, 2);
+}
+
+TEST(HangBlame, AnAcquireOnASourceThatMovesIsSlowWork)
+{
+	Candidates k{{kNone, {1, 1, 0, 0, 1, 0}, waiting(kStuckClient, 1)}};
+	int blame;
+	EXPECT_EQ(k.verdict(blame), TGM_HANG_PROGRESSING);
+	EXPECT_EQ(blame, -1);
 }
 
 TEST(HangBlame, SlowWorkIsNotKilled)
@@ -452,7 +488,7 @@ TEST(HangBlame, LateKernelWorkPanicsOnlyWhenNothingProgresses)
 
 TEST(HangBlame, ALateChannelAlreadyKilledIsRecovering)
 {
-	Candidates k{{kNone, {1, 0, 0}}};
+	Candidates k{{kNone, kBusyClient}};
 	k.late_dead = 1;
 	int blame;
 	EXPECT_EQ(k.verdict(blame), TGM_HANG_RECOVERING);

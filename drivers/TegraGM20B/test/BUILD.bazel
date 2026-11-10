@@ -180,6 +180,16 @@ host_test(
 )
 
 host_test(
+    name = "gm20b_hang_detail_test",
+    srcs = [
+        "gm20b_hang_detail_test.cpp",
+        "//drivers/TegraGM20B:TegraGM20BGpu.h",
+        "//drivers/TegraGM20B:TegraGM20BHangDecode.h",
+    ],
+    cxx_std = "c++17",
+)
+
+host_test(
     name = "gm20b_sched_test",
     srcs = [
         "gm20b_sched_test.cpp",

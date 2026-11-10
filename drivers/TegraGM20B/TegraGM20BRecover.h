@@ -156,23 +156,44 @@ struct tgm_hang_candidate {
 	uint8_t live; /* a channel of the kernel's list */
 	uint8_t stuck; /* work pending and nothing completed for the stuck time (gpu.c TGM_STUCK_NS) */
 	uint8_t kernel; /* the present's or the scrubber's */
+	uint8_t resident; /* an engine or PBDMA is on it (tgm_recover_suspects) */
+	uint8_t moving; /* its fence, or its GPFIFO and pushbuffer GET, moved within the stuck time */
+	uint8_t waits; /* 1 + the candidate its pending order acquire waits on; 0: none */
 };
 
-/* Candidates in order: tgm_recover_suspects' channels, the channel of its task the late one waits on, the late one. The first
- * stuck one is to blame (*blame, its index; else -1): a client's is killed, a kernel channel's is fatal. With none stuck, a
- * dead late channel is recovered already, and late kernel work with nothing progressing anywhere is fatal. */
+/* Candidates in order: tgm_recover_suspects' channels, the channels the late one waits on through order acquires, the late
+ * one (last). A channel an engine is on that is stuck and does not move is to blame (*blame, its index; else -1): a
+ * client's is killed, a kernel channel's is fatal. While an engine is on a channel that moves the GPU is busy, not hung,
+ * and nothing is killed, whatever waits behind it. With no engine on any of them, the blame follows the late one's
+ * acquires to the channel at the end of that chain, and only a stuck one that does not move is killed; a chain through
+ * a source that moves is slow work. A dead late channel is recovered already, and late kernel work with nothing
+ * progressing anywhere is fatal. */
 static inline enum tgm_hang tgm_hang_blame(const struct tgm_hang_candidate *c, int n, int late_dead,
 					   int late_kernel, int any_progress, int *blame)
 {
-	int i = 0;
+	int i = 0, at = n - 1;
 
 	*blame = -1;
 	for (i = 0; i < n; i++) {
-		if (!c[i].live || !c[i].stuck)
+		if (!c[i].live || !c[i].resident || !c[i].stuck || c[i].moving)
 			continue;
 		if (c[i].kernel)
 			return TGM_HANG_STUCK;
 		*blame = i;
+		return TGM_HANG_RECOVERING;
+	}
+	for (i = 0; i < n; i++)
+		if (c[i].live && c[i].resident && c[i].moving)
+			return TGM_HANG_PROGRESSING;
+	for (i = 0; n && i < n && c[at].waits && c[at].waits <= n; i++) {
+		at = c[at].waits - 1;
+		if (!c[at].live || c[at].moving)
+			return late_dead ? TGM_HANG_RECOVERING : TGM_HANG_PROGRESSING;
+	}
+	if (n && c[at].live && c[at].stuck && !c[at].moving) {
+		if (c[at].kernel)
+			return TGM_HANG_STUCK;
+		*blame = at;
 		return TGM_HANG_RECOVERING;
 	}
 	if (late_dead)
