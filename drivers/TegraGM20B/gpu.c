@@ -1965,6 +1965,40 @@ static struct tgm_chan *live_by(u64 id, int chid)
 	return NULL;
 }
 
+#if TGM_STATS
+/* live_lock held: the blamed channel's own order wait and the late one's progress, as a line of its
+ * own (TegraGM20BHangDecode.h tgm_hang_detail) */
+static void hang_detail(struct tgm_chan *blame, struct tgm_chan *late, u64 now)
+{
+	const struct tgm_order *w = &blame->waited;
+	struct tgm_hang_detail d = {0};
+	struct tgm_chan *source = NULL;
+	char line[TGM_HANG_LINE];
+
+	d.chid = blame->chid;
+	d.stalled_ms = (now - chan_progress_ns(blame)) / 1000000;
+	if (w->cpu && (s32)(READ_ONCE(*w->cpu) - w->seqno) < 0) {
+		d.waits = 1;
+		d.wait_chid = w->chid;
+		d.wait_seqno = w->seqno;
+		d.wait_at = READ_ONCE(*w->cpu);
+		source = live_by(w->id, 0);
+	}
+	if (source) {
+		d.source_live = 1;
+		d.source_done = tgm_chan_completed(source);
+		d.source_submitted = READ_ONCE(source->submitted);
+		d.source_ms = (now - chan_progress_ns(source)) / 1000000;
+	}
+	d.late_chid = late->chid;
+	d.late_done = tgm_chan_completed(late);
+	d.late_submitted = READ_ONCE(late->submitted);
+	d.late_ms = (now - chan_progress_ns(late)) / 1000000;
+	tgm_hang_detail_format(line, sizeof(line), &d);
+	nvxnu_log("tegra-gm20b: GPU hang detail: %s\n", line);
+}
+#endif
+
 /* A wait on `late` (the present's or the scrubber's channel when its own work is late) ran out with no GPU error
  * reported. The channel to blame (TegraGM20BRecover.h tgm_hang_blame) is the first stuck one of what the engines and
  * PBDMAs are on (a context switch that does not finish blames the context nvkm's own recovery would), the channel of its
@@ -2015,6 +2049,9 @@ static enum tgm_hang hang_recover(struct tgm_chan *late, const char *who, u32 se
 		"tegra-gm20b: GPU hang, recovering %s (channel %u): %s waited %llu ms for %s fence "
 		"%u; %s\n",
 		blame->owner, blame->chid, who, waited_ns / 1000000, late->owner, seqno, state);
+#if TGM_STATS
+	hang_detail(blame, late, now);
+#endif
 	chan_isolate(blame, report, now);
 	tgm_recover_fault(gpu.device, blame->chid);
 	return verdict;
