@@ -53,7 +53,7 @@ void switch_vic_surface_release_access(SwitchVICSurfaceAccess *access)
         --access->backing->refs;
     *access = {};
 }
-int switch_native_surface_acquire(const TegraVICSurface *surface, SwitchNativeSurfaceView *view)
+int switch_native_surface_acquire(const TegraVICSurface *surface, SwitchNativeSurfaceView *view, bool)
 {
     if (!nativeInput)
         return -2;

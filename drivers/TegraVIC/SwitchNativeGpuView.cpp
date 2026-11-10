@@ -68,7 +68,7 @@ extern "C" int switch_native_surface_gpu_acquire(void *object, switch_gpu_native
     if (described)
         return described;
     SwitchNativeSurfaceView view = {};
-    int error = switch_native_surface_acquire(&surface, &view);
+    int error = switch_native_surface_acquire(&surface, &view, false);
     if (error == -2 || error == -95 || error == SWITCH_GPU_BACKING_STALE) {
         error = pitchView(surface, out);
     } else if (!error) {

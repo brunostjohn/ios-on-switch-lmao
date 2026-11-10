@@ -71,7 +71,7 @@ int switch_vic_transform(const TegraVICSurface *source, const TegraVICSurface *d
     work->context = context;
     int error = switch_vic_surface_access(destination, true, &work->access[1]);
     if (!error && plan->readsSource) {
-        const int native = switch_native_surface_acquire(source, &work->native);
+        const int native = switch_native_surface_acquire(source, &work->native, false);
         if (native == -2 || native == -95 || native == SWITCH_GPU_BACKING_STALE)
             error = switch_vic_surface_access(source, false, &work->access[0], work->access[1].owned != nullptr);
         else

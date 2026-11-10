@@ -180,14 +180,14 @@ int prepare(const TegraVICSurface *surface, SwitchNativeSurface *native, uint32_
 }
 }  // namespace
 
-int switch_native_surface_acquire(const TegraVICSurface *surface, SwitchNativeSurfaceView *view)
+int switch_native_surface_acquire(const TegraVICSurface *surface, SwitchNativeSurfaceView *view, bool avoid)
 {
     if (!view)
         return -22;
     *view = {};
     if (!surface || !surface->surface || !surface->memory)
         return -22;
-    const int entered = SwitchMemoryAttachment::enterCpu(surface->memory, false);
+    const int entered = SwitchMemoryAttachment::enterCpu(surface->memory, avoid);
     if (entered)
         return entered;
     auto *native = copy(surface->memory);

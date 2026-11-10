@@ -66,7 +66,7 @@ void switch_vic_surface_unreserve(SwitchVICSurfaceAccess *a) { if (a->descriptor
 void switch_vic_surface_release_access(SwitchVICSurfaceAccess *a) {
     switch_vic_surface_unreserve(a); if (a->backing) --a->backing->refs; *a = {};
 }
-int switch_native_surface_acquire(const TegraVICSurface *, SwitchNativeSurfaceView *) { return -2; }
+int switch_native_surface_acquire(const TegraVICSurface *, SwitchNativeSurfaceView *, bool) { return -2; }
 void switch_native_surface_release(SwitchNativeSurfaceView *) {}
 SwitchVICMapping *switch_vic_mapping_acquire(switch_gpu_backing *b, bool) { return b == &sourceBacking ? &sourceMap : &destinationMap; }
 void switch_vic_mapping_release(SwitchVICMapping *) {}

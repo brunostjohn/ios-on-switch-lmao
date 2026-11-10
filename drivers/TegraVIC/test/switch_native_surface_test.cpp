@@ -310,7 +310,7 @@ TEST_F(NativeSurface, PublicationRetainsDecoderAllocationAndGuardedViews)
     EXPECT_EQ(native.readers, 1u);
     SwitchNativeSurfaceView view = {};
     const unsigned finished = finishedViews;
-    ASSERT_EQ(switch_native_surface_acquire(&surface, &view), 0);
+    ASSERT_EQ(switch_native_surface_acquire(&surface, &view, false), 0);
     EXPECT_EQ(finishedViews, finished + 1);
     EXPECT_EQ(view.logical, &logical);
     EXPECT_EQ(view.native, &native);
@@ -359,7 +359,7 @@ TEST_F(NativeSurface, MutableCpuAccessInvalidatesRetainedNativeViewsBeforeExposi
 {
     ASSERT_EQ(switch_native_surface_publish(&surface, &picture), 0);
     SwitchNativeSurfaceView view = {};
-    ASSERT_EQ(switch_native_surface_acquire(&surface, &view), 0);
+    ASSERT_EQ(switch_native_surface_acquire(&surface, &view, false), 0);
     switch_gpu_backing *backing = nullptr;
     switch_gpu_cpu_lease *owned = nullptr;
     ASSERT_EQ(prepareCpu(object, 0, &backing, &owned), 0);
@@ -368,7 +368,7 @@ TEST_F(NativeSurface, MutableCpuAccessInvalidatesRetainedNativeViewsBeforeExposi
     EXPECT_EQ(native.readers, 0u);
     EXPECT_EQ(transfers, 1u);
     SwitchNativeSurfaceView stale = {};
-    EXPECT_EQ(switch_native_surface_acquire(&surface, &stale), SWITCH_GPU_BACKING_STALE);
+    EXPECT_EQ(switch_native_surface_acquire(&surface, &stale, false), SWITCH_GPU_BACKING_STALE);
     finishCpu(object, backing, &owned);
     switch_native_surface_release(&view);
 }
@@ -377,7 +377,7 @@ TEST_F(NativeSurface, FailedMaterializationPreservesNativeAuthorityAndLayout)
 {
     ASSERT_EQ(switch_native_surface_publish(&surface, &picture), 0);
     SwitchNativeSurfaceView before = {};
-    ASSERT_EQ(switch_native_surface_acquire(&surface, &before), 0);
+    ASSERT_EQ(switch_native_surface_acquire(&surface, &before, false), 0);
     transferError = -5;
     switch_gpu_backing *backing = nullptr;
     switch_gpu_cpu_lease *owned = nullptr;
@@ -394,7 +394,7 @@ TEST_F(NativeSurface, DescriptorRecycleStalesOldViewsAndReleasesOldDecoderLease)
 {
     ASSERT_EQ(switch_native_surface_publish(&surface, &picture), 0);
     SwitchNativeSurfaceView previous = {};
-    ASSERT_EQ(switch_native_surface_acquire(&surface, &previous), 0);
+    ASSERT_EQ(switch_native_surface_acquire(&surface, &previous, false), 0);
     picture.backing = &replacement;
     ASSERT_EQ(switch_native_surface_publish(&surface, &picture), 0);
     EXPECT_NE(*previous.guard.generation, previous.guard.expected);
@@ -403,7 +403,7 @@ TEST_F(NativeSurface, DescriptorRecycleStalesOldViewsAndReleasesOldDecoderLease)
     EXPECT_EQ(replacement.readers, 1u);
     EXPECT_EQ(seeds, 2u);
     SwitchNativeSurfaceView next = {};
-    ASSERT_EQ(switch_native_surface_acquire(&surface, &next), 0);
+    ASSERT_EQ(switch_native_surface_acquire(&surface, &next, false), 0);
     EXPECT_EQ(next.native, &replacement);
     switch_native_surface_release(&next);
     switch_native_surface_release(&previous);
@@ -413,7 +413,7 @@ TEST_F(NativeSurface, FailedReplacementRestoresPreviousAuthority)
 {
     ASSERT_EQ(switch_native_surface_publish(&surface, &picture), 0);
     SwitchNativeSurfaceView previous = {};
-    ASSERT_EQ(switch_native_surface_acquire(&surface, &previous), 0);
+    ASSERT_EQ(switch_native_surface_acquire(&surface, &previous, false), 0);
     picture.backing = &replacement;
     generationError = -16;
     EXPECT_EQ(switch_native_surface_publish(&surface, &picture), -16);
@@ -422,7 +422,7 @@ TEST_F(NativeSurface, FailedReplacementRestoresPreviousAuthority)
     EXPECT_EQ(replacement.readers, 0u);
     EXPECT_EQ(seeds, 1u);
     SwitchNativeSurfaceView after = {};
-    ASSERT_EQ(switch_native_surface_acquire(&surface, &after), 0);
+    ASSERT_EQ(switch_native_surface_acquire(&surface, &after, false), 0);
     EXPECT_EQ(after.native, &native);
     switch_native_surface_release(&after);
     switch_native_surface_release(&previous);
@@ -451,7 +451,7 @@ TEST_F(NativeSurface, AliasWithDifferentGeometryCannotSampleNativePlanes)
     auto alias = surface;
     alias.desc.width = 32;
     SwitchNativeSurfaceView view = {};
-    EXPECT_EQ(switch_native_surface_acquire(&alias, &view), -95);
+    EXPECT_EQ(switch_native_surface_acquire(&alias, &view, false), -95);
     EXPECT_EQ(view.owner, nullptr);
 }
 
@@ -524,7 +524,7 @@ TEST_F(NativeSurface, RetainedViewOwnsAllocationAfterDescriptorAndSurfaceDestruc
 {
     ASSERT_EQ(switch_native_surface_publish(&surface, &picture), 0);
     SwitchNativeSurfaceView view = {};
-    ASSERT_EQ(switch_native_surface_acquire(&surface, &view), 0);
+    ASSERT_EQ(switch_native_surface_acquire(&surface, &view, false), 0);
     object->release();
     object = nullptr;
     memory->release();
@@ -546,7 +546,7 @@ TEST_F(NativeSurface, AcquiredViewCannotEscapeFailedPublication)
     auto publisher = std::async(std::launch::async, [&] { return switch_native_surface_publish(&surface, &picture); });
     replacing.get_future().wait();
     SwitchNativeSurfaceView view = {};
-    auto reader = std::async(std::launch::async, [&] { return switch_native_surface_acquire(&surface, &view); });
+    auto reader = std::async(std::launch::async, [&] { return switch_native_surface_acquire(&surface, &view, false); });
     EXPECT_EQ(reader.wait_for(std::chrono::milliseconds(20)), std::future_status::timeout);
     releaseReplacement.set_value();
     EXPECT_EQ(publisher.get(), -16);
@@ -598,7 +598,7 @@ TEST_F(NativeSurface, MutableGpuPreparationInvalidatesOldNativeViewsAfterQueuedC
 {
     ASSERT_EQ(switch_native_surface_publish(&surface, &picture), 0);
     SwitchNativeSurfaceView view = {};
-    ASSERT_EQ(switch_native_surface_acquire(&surface, &view), 0);
+    ASSERT_EQ(switch_native_surface_acquire(&surface, &view, false), 0);
     cpuAcquisitions = 0;
     switch_gpu_backing *backing = nullptr;
     switch_gpu_cpu_lease *owned = nullptr;
@@ -621,7 +621,7 @@ TEST_F(NativeSurface, FailedGpuMaterializationPreservesNativeAuthority)
     EXPECT_EQ(backing, nullptr); EXPECT_EQ(owned, nullptr);
     finishCpu(object, backing, &owned);
     SwitchNativeSurfaceView view = {};
-    EXPECT_EQ(switch_native_surface_acquire(&surface, &view), 0);
+    EXPECT_EQ(switch_native_surface_acquire(&surface, &view, false), 0);
     switch_native_surface_release(&view);
 }
 TEST_F(NativeSurface, AvoidSyncGpuReadCanQueueWithoutWaitingAndCpuReadStillAcquires)
@@ -682,6 +682,28 @@ TEST_F(NativeSurface, PitchScanoutQueuesOnceAndPinsTheExactVicProducer)
     EXPECT_EQ(SwitchMemoryAttachment::cpuUsers(memory), 0u);
     switch_native_scanout_release(&scanout);
     EXPECT_EQ(logical.readers, 0u);
+}
+TEST_F(NativeSurface, ScanoutAcquireDoesNotWaitForAPublicationWaitingOnTheScreen)
+{
+    ASSERT_EQ(switch_native_surface_publish(&surface, &picture), 0);
+    SwitchNativeScanout onScreen = {};
+    ASSERT_EQ(switch_native_scanout_pitch(object, &onScreen), 0);
+    ASSERT_EQ(logical.readers, 1u);
+    picture.backing = &replacement;
+    auto publisher = std::async(std::launch::async, [&] { return switch_native_surface_publish(&surface, &picture); });
+    while (SwitchMemoryAttachment::enterExclusive(memory, true) == 0)
+        SwitchMemoryAttachment::leaveExclusive(memory);
+    SwitchNativeScanout next = {};
+    auto display = std::async(std::launch::async, [&] { return switch_native_scanout_acquire(object, &next); });
+    ASSERT_EQ(display.wait_for(std::chrono::seconds(5)), std::future_status::ready);
+    EXPECT_EQ(display.get(), -16);
+    EXPECT_EQ(next.lease, nullptr);
+    EXPECT_EQ(publisher.wait_for(std::chrono::milliseconds(20)), std::future_status::timeout);
+    switch_native_scanout_release(&onScreen);
+    EXPECT_EQ(publisher.get(), 0);
+    ASSERT_EQ(switch_native_scanout_acquire(object, &next), 0);
+    EXPECT_EQ(next.view.native, &replacement);
+    switch_native_scanout_release(&next);
 }
 TEST_F(NativeSurface, PitchMutationDuringSnapshotHandoffCannotChangeTheAcceptedImage)
 {

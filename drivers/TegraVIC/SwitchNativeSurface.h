@@ -21,7 +21,8 @@ struct SwitchNativeSurfaceView {
 };
 
 // A view retains both backings. Every engine read submits both uses and both guards in one checked ownership transaction.
-int switch_native_surface_acquire(const TegraVICSurface *surface, SwitchNativeSurfaceView *view);
+// avoid: -16 instead of waiting for a publication in progress, which may itself wait for leases the caller holds.
+int switch_native_surface_acquire(const TegraVICSurface *surface, SwitchNativeSurfaceView *view, bool avoid);
 void switch_native_surface_release(SwitchNativeSurfaceView *view);
 int switch_native_surface_publish(const TegraVICSurface *surface, const TegraVICPicture *picture);
 
