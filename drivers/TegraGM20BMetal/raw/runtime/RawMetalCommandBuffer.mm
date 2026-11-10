@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 #import "RawMetalInternal.h"
 #include "raw_execution_plan.h"
-#include "raw_scheduled_wait.h"
+#include "raw_compute.h"
 
 // ---- the device's submission machinery ----
 
@@ -95,6 +95,18 @@ static void giveRecording(RMCommandBuffer *b)
     if (!object || !_ownerKeys.insert((__bridge void *)object).second)
         return;
     _owners.push_back(object);
+    RMResourceFacts facts;
+    facts.cpuBuffer = (__bridge void *)cpuBufferOfResource(object);
+    if ([object isKindOfClass:[RMBuffer class]])
+        facts.kind = RMResourceKind::Buffer;
+    else if ([object isKindOfClass:[RMTexture class]]) {
+        facts.kind = RMResourceKind::Texture;
+        RMTexture *texture = (RMTexture *)object;
+        facts.roles = uint8_t((texture->_raw.converted() ? RMResourceFacts::Converted : 0) |
+                              (texture->_raw.planarStandIn ? RMResourceFacts::PlanarTarget : 0));
+    } else if ([object isKindOfClass:[RMSampler class]])
+        facts.kind = RMResourceKind::Sampler;
+    _plan.registerResource((__bridge void *)object, facts);
 }
 
 - (void)record:(const Cmd &)cmd
@@ -111,36 +123,43 @@ static void giveRecording(RMCommandBuffer *b)
                 if (!native && [(id)pipeline isKindOfClass:[RMPipeline class]])
                     native = pipeline->_raw;
                 if (native && native->rec) {
-                    const auto &record = *native->rec;
-                    for (uint32_t i = 0; i < record.entries; ++i) {
-                        const auto &entry = record.entry[i];
-                        if (entry.kind == raw::EntryUbo && entry.stage >= 1 && entry.stage <= 2 && entry.slot < 31) {
-                            const auto &binding =
-                                _plan.buffers[entry.stage - 1][state.buffers[entry.stage - 1]][entry.slot];
-                            if (binding.source == raw::BufferBinding::Source::Buffer)
-                                uses.push_back({binding.object,
-                                                uint8_t(raw::ResourceUse::Read |
-                                                        (raw::bufferStorage(entry) ? raw::ResourceUse::Write : 0))});
-                        } else if ((entry.kind == raw::EntryTexture || entry.kind == raw::EntryTexture3d) &&
-                                   entry.slot < 31) {
-                            uses.push_back({_plan.textures[1][state.textures[1]].objects[entry.slot],
-                                            raw::ResourceUse::Read | raw::ResourceUse::Sample});
+                    _plan.resolveRenderUses(index, native, [&] {
+                        std::vector<raw::ResourceUse> bound;
+                        const auto &record = *native->rec;
+                        for (uint32_t i = 0; i < record.entries; ++i) {
+                            const auto &entry = record.entry[i];
+                            if (entry.kind == raw::EntryUbo && entry.stage >= 1 && entry.stage <= 2 && entry.slot < 31) {
+                                const auto &binding =
+                                    _plan.buffers[entry.stage - 1][state.buffers[entry.stage - 1]][entry.slot];
+                                if (binding.source == raw::BufferBinding::Source::Buffer)
+                                    bound.push_back({binding.object,
+                                                    uint8_t(raw::ResourceUse::Read |
+                                                            (raw::bufferStorage(entry) ? raw::ResourceUse::Write : 0))});
+                            } else if ((entry.kind == raw::EntryTexture || entry.kind == raw::EntryTexture3d) &&
+                                       entry.slot < 31) {
+                                bound.push_back({_plan.textures[1][state.textures[1]].objects[entry.slot],
+                                                raw::ResourceUse::Read | raw::ResourceUse::Sample});
+                            }
+                            if ((entry.kind == raw::EntryTexture || entry.kind == raw::EntryTexture3d ||
+                                 entry.kind == raw::EntrySamplerOnly) &&
+                                entry.samplerKind == raw::SamplerSlot && entry.sampler < 16)
+                                bound.push_back(
+                                    {_plan.samplers[1][state.samplers[1]].objects[entry.sampler], raw::ResourceUse::Read});
                         }
-                        if ((entry.kind == raw::EntryTexture || entry.kind == raw::EntryTexture3d ||
-                             entry.kind == raw::EntrySamplerOnly) &&
-                            entry.samplerKind == raw::SamplerSlot && entry.sampler < 16)
-                            uses.push_back(
-                                {_plan.samplers[1][state.samplers[1]].objects[entry.sampler], raw::ResourceUse::Read});
-                    }
-                    if (record.vertexSlot < 31 && record.vertexStride) {
-                        const auto &binding = _plan.buffers[0][state.buffers[0]][record.vertexSlot];
-                        if (binding.source == raw::BufferBinding::Source::Buffer)
-                            uses.push_back({binding.object, raw::ResourceUse::Read});
-                    }
-                    _plan.setRenderUses(index, uses);
-                    uses.clear();
+                        if (record.vertexSlot < 31 && record.vertexStride) {
+                            const auto &binding = _plan.buffers[0][state.buffers[0]][record.vertexSlot];
+                            if (binding.source == raw::BufferBinding::Source::Buffer)
+                                bound.push_back({binding.object, raw::ResourceUse::Read});
+                        }
+                        return bound;
+                    });
                 }
             }
+        } else if (cmd.op == OpDispatch && cmd.obj2) {
+            const char *why = nullptr;
+            if (!admitComputeDispatch(self, _plan.size() - 1,
+                                       static_cast<const raw::ComputeKernelSet<raw::ComputeState> *>(cmd.obj2), &why))
+                [self takeReason:WhyCompute why:[NSString stringWithUTF8String:why]];
         } else if (cmd.op == OpRender) {
             const RMPass &pass = _passes[cmd.x];
             for (const RMPass::Color &a : pass.color)
@@ -148,16 +167,15 @@ static void giveRecording(RMCommandBuffer *b)
                     uses.push_back({(__bridge void *)a.texture,
                                     uint8_t(raw::ResourceUse::Write |
                                             (a.load == MTLLoadActionLoad ? raw::ResourceUse::Read : 0))});
-            MTLRenderPassDescriptor *descriptor = (__bridge MTLRenderPassDescriptor *)cmd.obj;
             if (pass.depth)
                 uses.push_back({(__bridge void *)pass.depth,
                                 uint8_t(raw::ResourceUse::Write |
                                         (pass.depthLoad == MTLLoadActionLoad || pass.stencilLoad == MTLLoadActionLoad
                                              ? raw::ResourceUse::Read
                                              : 0))});
-            for (NSUInteger i = 0; i < 8; ++i)
-                if (id texture = descriptor.colorAttachments[i].resolveTexture)
-                    uses.push_back({(__bridge void *)texture, raw::ResourceUse::Write});
+            for (const RMPass::Color &a : pass.color)
+                if (a.resolve)
+                    uses.push_back({(__bridge void *)a.resolve, raw::ResourceUse::Write});
         } else if (cmd.op == OpInvocation) {
             raw::forEachObject((__bridge NSInvocation *)cmd.obj, [&](id object) {
                 uses.push_back({(__bridge void *)object, raw::ResourceUse::Read | raw::ResourceUse::Write});
@@ -343,8 +361,7 @@ static void giveRecording(RMCommandBuffer *b)
                 _scheduledHandlers = [NSMutableArray array];
             [_scheduledHandlers addObject:[block copy]];
         } else {
-            _handlersQueued = true;
-            dispatch_async(_queue->_handlers, ^{
+            dispatch_async(scheduledQueueLocked(self), ^{
                 block((id<MTLCommandBuffer>)self);
             });
         }
@@ -433,19 +450,14 @@ static void giveRecording(RMCommandBuffer *b)
 - (void)waitUntilScheduled
 {
     std::unique_lock<std::mutex> l(_lock);
-    auto returns = [&] {
-        return raw::scheduledWaitReturns(_scheduledDone, _held, _segError != nil);
-    };
-    if (_committed && !returns()) {
-        const BlockedWait blocked(gRM->stats.scheduledWaits, gRM->stats.scheduledWaitUs);
-        _changed.wait(l, returns);
-    }
-#if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
-    if (_held && !_scheduledDone && !_heldReturnUs) {
-        _heldReturnUs = nowUs();
-        gRM->stats.heldReturns++;
-    }
+    if (!_committed || _scheduledDone)
+        return;
+#if SWITCH_RAW_DIAGNOSTICS
+    const BlockedWait blocked(gRM->stats.scheduledWaits, gRM->stats.scheduledWaitUs);
 #endif
+    _changed.wait(l, [&] {
+        return _scheduledDone;
+    });
 }
 
 - (void)waitUntilCompleted
@@ -453,13 +465,24 @@ static void giveRecording(RMCommandBuffer *b)
     std::unique_lock<std::mutex> l(_lock);
     if (!_committed || _completedDone)
         return;
+#if SWITCH_RAW_DIAGNOSTICS
     const BlockedWait blocked(gRM->stats.completedWaits, gRM->stats.completedWaitUs);
+#endif
     _changed.wait(l, [&] {
         return _completedDone;
     });
 }
 
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
+- (NSNumber *)switchRawWholePrograms
+{
+    std::lock_guard<std::mutex> lock(_lock);
+    if (_committed)
+        return @NO;
+    _forceWholePrograms = true;
+    return @YES;
+}
+
 // hw_test_app's attribution, final once the command buffer completed (its completed handlers may ask): "raw",
 // "m2v:<reason>:<first predicate>" or "split:<raw segments>+<m2v segments>:<reason>:<first predicate>"
 - (NSString *)switchRawPath
@@ -545,10 +568,8 @@ static void giveRecording(RMCommandBuffer *b)
 
 - (instancetype)init
 {
-    if ((self = [super init])) {
+    if ((self = [super init]))
         queuePriorityAdd(self);
-        _handlers = followingSerialQueue("com.brunostjohn.switch.raw.command.handlers");
-    }
     return self;
 }
 

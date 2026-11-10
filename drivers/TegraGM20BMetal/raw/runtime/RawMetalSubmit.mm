@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: MIT
 #import "RawMetalInternal.h"
-#include "raw_execution_plan.h"
-#include "raw_order.h"
+#include "RawMetalPlanExecution.h"
 
 // ---- commit: order between the two drivers ----
 // With the kernel's Order (TegraGM20BABI.h method 14), the two drivers' command buffers are ordered on the GPU: before a raw
@@ -20,40 +19,30 @@ bool m2vClear()
     return gRM->gpuOrder ? gRM->m2vUnscheduled == 0 : gRM->m2vPending == 0;
 }
 
-// The kernel refused an Order: the drivers are ordered on the CPU until the kernel makes the raw channel again (one line).
+// The kernel refused an Order: from here on the drivers are ordered on the CPU (one line).
 void orderRefused(const char *what, int kr)
 {
-    once([NSString stringWithFormat:@"CPU-ordered: the kernel refused Order (%s, 0x%x)", what, kr]);
+    once([NSString stringWithFormat:@"CPU-ordered from now on: the kernel refused Order (%s, 0x%x)", what, kr]);
     std::lock_guard<std::mutex> m(gRM->m2vLock);
     gRM->gpuOrder = false;
-    gRM->orderRefusedAt = gRM->raw->stats.reopens.load(std::memory_order_relaxed);
-}
-
-// A raw submission went through on a channel the kernel made since it refused an Order: GPU order again
-static void orderReturned()
-{
-    RawState &r = *gRM;
-    if (!raw::orderReturns(r.gpuOrder, r.raw->canOrder(), r.raw->stats.reopens.load(std::memory_order_relaxed),
-                           r.orderRefusedAt))
-        return;
-    std::lock_guard<std::mutex> m(r.m2vLock);
-    r.gpuOrder = true;
 }
 
 static void countDriver(int driver)
 {
+#if SWITCH_RAW_DIAGNOSTICS
     RawState &r = *gRM;
     if (r.lastDriver && r.lastDriver != driver)
-        r.stats.switches++;
+        RAW_DIAGNOSTIC(r.stats.switches++);
     r.lastDriver = driver;
+#else
+    (void)driver;
+#endif
 }
 
-// Submits `cb` now: the caller holds gRM->submit and everything committed before it is submitted. false: not yet (a raw
-// range whose Order the kernel refused just now waits for the m2v work before it to complete, one with no raw channel goes
-// to m2v; the caller keeps it first).
 // Diagnostics: each predicate `cb` hit, once (and once more when it was the only one)
 static void countPreds(RMCommandBuffer *cb)
 {
+#if SWITCH_RAW_DIAGNOSTICS
     const uint64_t m = cb->_preds;
     if (!m)
         return;
@@ -64,6 +53,9 @@ static void countPreds(RMCommandBuffer *cb)
         if (only)
             gPredOnly[p].fetch_add(1, std::memory_order_relaxed);
     }
+#else
+    (void)cb;
+#endif
 }
 
 #if SWITCH_FRAME_TIMELINE
@@ -93,84 +85,36 @@ void planSegments(RMCommandBuffer *cb)
 {
     cb->_segs.clear();
     cb->_segNext = 0;
+    cb->_gpuPrefixEligible = true;
     [cb closeEncoder];
     raw::ExecutionPlan plan;
-    const size_t count = cb->_plan.size();
-    size_t begin = 0;
-    bool open = false;
-    bool native = cb->_reason == WhyRaw;
-    for (size_t at = 0; at < count; ++at) {
-        const Cmd c = cb->_plan.legacy(at);
-        if (c.op == OpRender || c.op == OpCompute || c.op == OpBlit) {
-            begin = at;
-            open = true;
-            native = !cb->_whole && !c.index;
-        } else if (c.op == OpEnd && open) {
-            plan.append(begin, at + 1, native ? raw::ExecutionKind::native : raw::ExecutionKind::compatibility);
-            open = false;
-        } else if (c.op == OpSignalEvent || c.op == OpWaitEvent) {
-            if (open) {
-                cb->_segError = [NSError
-                    errorWithDomain:MTLCommandBufferErrorDomain
-                               code:MTLCommandBufferErrorInternal
-                           userInfo:@{NSLocalizedDescriptionKey : @"An event was encoded inside an active encoder"}];
-                return;
-            }
-            id event = (__bridge id)c.obj;
-            const bool observable = [event respondsToSelector:@selector(signaledValue)] &&
-                                    [event respondsToSelector:@selector(setSignaledValue:)] &&
-                                    [event respondsToSelector:@selector(notifyListener:atValue:block:)];
-            plan.append(at, at + 1,
-                        observable ? (c.op == OpSignalEvent ? raw::ExecutionKind::signal : raw::ExecutionKind::wait)
-                                   : raw::ExecutionKind::compatibility);
-        } else if (!open) {
-            // Opaque command-buffer operations retain their original position and explicit backend boundary.
-            plan.append(at, at + 1, raw::ExecutionKind::compatibility);
-        }
-    }
-    if (open) {
-        cb->_segError =
-            [NSError errorWithDomain:MTLCommandBufferErrorDomain
-                                code:MTLCommandBufferErrorInternal
-                            userInfo:@{NSLocalizedDescriptionKey : @"An encoder did not end before commit"}];
+    const auto error = makeExecutionPlan(cb->_plan, cb->_whole, plan, [](const RMPlanEvent &entry) {
+        id event = (__bridge id)entry.event;
+        return [event respondsToSelector:@selector(signaledValue)] &&
+               [event respondsToSelector:@selector(setSignaledValue:)] &&
+               [event respondsToSelector:@selector(notifyListener:atValue:block:)];
+    });
+    if (error != RMPlanError::None) {
+        NSString *reason = error == RMPlanError::EventInsideEncoder ? @"An event was encoded inside an active encoder" :
+                           error == RMPlanError::NestedEncoder ? @"An encoder began before the previous encoder ended" :
+                           @"An encoder did not end before commit";
+        cb->_segError = [NSError errorWithDomain:MTLCommandBufferErrorDomain
+                                           code:MTLCommandBufferErrorInternal
+                                       userInfo:@{NSLocalizedDescriptionKey : reason}];
         return;
     }
     for (const auto &range : plan.ranges()) {
         cb->_plan.prepareRange(range.from, range.to);
-        cb->_segs.push_back({uint32_t(range.from), uint32_t(range.to), range.kind == raw::ExecutionKind::native,
-                             range.kind == raw::ExecutionKind::wait || range.kind == raw::ExecutionKind::signal});
+        const bool native = range.kind == raw::ExecutionKind::native &&
+                            !cb->_plan.nativeRangeRefusal(range.from, range.to);
+        cb->_segs.push_back({uint32_t(range.from), uint32_t(range.to), native,
+                             range.kind == raw::ExecutionKind::wait || range.kind == raw::ExecutionKind::signal,
+                             false, range.gpuWait});
     }
 }
 
-// Whether only signals follow range `at`: they are published once the work before them completes, so the command buffer is
-// scheduled with its last work, not with its completion
-static bool onlySignalsAfter(RMCommandBuffer *cb, size_t at)
-{
-    for (size_t i = at + 1; i < cb->_segs.size(); ++i)
-        if (!cb->_segs[i].event || cb->_plan.operation(cb->_segs[i].from).op != OpSignalEvent)
-            return false;
-    return true;
-}
-
-// The raw path refused `encoder` of the native range being submitted (a draw of it, found while encoding): only that
-// encoder goes to m2v, and the encoders around it are submitted raw, each side encoded again as a range of its own. The
-// encoder's own range was prepared as it was recorded; nothing here writes the plan, which completion handlers of this
-// command buffer's earlier ranges may be reading.
-static void isolateRefused(RMCommandBuffer *cb, size_t encoder)
-{
-    const RMSegment range = cb->_segs[cb->_segNext];
-    const size_t end = encoder < range.to ? cb->_plan.encoderEnd(encoder) : range.to;
-    std::vector<RMSegment> parts;
-    for (const raw::ExecutionRange &part :
-         raw::isolate({range.from, range.to, raw::ExecutionKind::native}, encoder, end))
-        parts.push_back({uint32_t(part.from), uint32_t(part.to), part.kind == raw::ExecutionKind::native});
-    cb->_segs.erase(cb->_segs.begin() + ptrdiff_t(cb->_segNext));
-    cb->_segs.insert(cb->_segs.begin() + ptrdiff_t(cb->_segNext), parts.begin(), parts.end());
-}
-
-// The raw device's encoding arenas have one CPU owner. This lock is separate from the scheduler; no event or CPU GPU-fence
-// wait happens here. A single visit emits one legal range and yields, retaining the Metal queue's reservation.
-bool submitLocked(RMCommandBuffer *cb)
+// Only the submit worker owns the encoding arenas. A visit emits one legal range and yields its queue's reservation.
+bool submitRange(RMCommandBuffer *cb)
 {
     RawState &r = *gRM;
     NSError *priorError;
@@ -188,17 +132,15 @@ bool submitLocked(RMCommandBuffer *cb)
     }
     RMSegment &range = cb->_segs[cb->_segNext];
     const bool last = cb->_segNext + 1 == cb->_segs.size();
-    const bool lastWork = onlySignalsAfter(cb, cb->_segNext);
     if (range.event) {
         const Cmd event = cb->_plan.legacy(range.from);
-        if (event.op == OpSignalEvent && !range.promised) {
+        if (event.op == OpWaitEvent)
+            releaseEventWaits(cb);
+        if (event.op == OpSignalEvent && !range.gpuSignal) {
             // eventReadiness required all earlier submitted ranges to retire successfully before reaching this position.
             id<MTLSharedEvent> target = (__bridge id)event.obj;
             if (target.signaledValue < event.c)
                 target.signaledValue = event.c;
-#if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
-            r.stats.signalsAfterWork++;
-#endif
         }
         cb->_eventStart = {};
         cb->_eventArmed = 0;
@@ -206,33 +148,34 @@ bool submitLocked(RMCommandBuffer *cb)
         if (r.gpuOrder && r.m2vSinceRaw) {
             uint32_t waits = 0;
             const int kr = r.raw->orderAfterOthers(waits);
-            const raw::OrderAnswer answer = raw::orderAnswer(kr);
-            if (answer == raw::OrderAnswer::noChannel) {
-                // A channel the next encode made again would run this range unordered after the m2v work before it
-                range.raw = false;
-                cb->_reason = WhyEncode;
-                cb->_why = @"the raw channel is being made again";
-                return false;
-            }
-            if (answer == raw::OrderAnswer::refused) {
+            if (kr != KERN_SUCCESS) {
                 orderRefused("raw after m2v", kr);
                 return false;
             }
             r.m2vSinceRaw = false;
-            r.stats.acquires += waits;
+            RAW_DIAGNOSTIC(r.stats.acquires += waits);
         }
         const char *why = nullptr;
 #if SWITCH_FRAME_TIMELINE
         const uint64_t began = nowUs();
         cb->_frame.mark(switch_frame::EncodeStart);
 #endif
-        size_t refusedEncoder = range.to;
-        const bool encoded = encodeRaw(cb, range.from, range.to, &why, &refusedEncoder);
+        const bool encoded = encodeRaw(cb, range.from, range.to, &why);
 #if SWITCH_FRAME_TIMELINE
         cb->_frame.mark(switch_frame::EncodeEnd);
-        r.stats.encodeUs += nowUs() - began;
+        RAW_DIAGNOSTIC(r.stats.encodeUs += nowUs() - began);
 #endif
         if (!encoded) {
+            {
+                std::lock_guard<std::mutex> l(cb->_lock);
+                priorError = cb->_segError;
+            }
+            if (priorError) {
+                finish(cb, priorError);
+                return true;
+            }
+            if (cb->_resourceReady)
+                return false;
             if (cb->_partial) {
                 // raw::CommandBuffer::commit drains its published prefix before reporting a partial failure.
                 markWrittenRange(cb, range.from, range.to);
@@ -241,20 +184,19 @@ bool submitLocked(RMCommandBuffer *cb)
                                            userInfo:nil]);
                 return true;
             }
+            range.raw = false;
             cb->_reason = WhyEncode;
             cb->_why = [NSString stringWithUTF8String:why ?: "?"];
-            isolateRefused(cb, refusedEncoder);
             return false;
         }
-        r.stats.raw++;
+        RAW_DIAGNOSTIC(r.stats.raw++);
         r.rawSinceM2v = true;
-        if (!r.gpuOrder)
-            orderReturned();
         countDriver(1);
         retireRawRange(cb, range.from, range.to);
-        if (lastWork)
+        if (last)
             scheduled(cb);
     } else {
+        cb->_gpuPrefixEligible = false;
         if (r.gpuOrder && r.rawSinceM2v) {
             uint32_t waits = 0;
             const int kr = r.raw->orderOthersAfter(waits);
@@ -262,7 +204,7 @@ bool submitLocked(RMCommandBuffer *cb)
                 orderRefused("m2v after raw", kr);
                 return false;
             }
-            r.stats.acquires += waits;
+            RAW_DIAGNOSTIC(r.stats.acquires += waits);
         }
 #if SWITCH_FRAME_TIMELINE
         const uint64_t began = nowUs();
@@ -284,9 +226,9 @@ bool submitLocked(RMCommandBuffer *cb)
         r.m2vSinceRaw = true;
         cb->_m2v = true;
         countDriver(2);
-        r.stats.m2v++;
+        RAW_DIAGNOSTIC(r.stats.m2v++);
         countPreds(cb);
-        const size_t from = range.from, to = range.to;
+        const auto writes = captureWrittenRange(cb, range.from, range.to);
         {
             std::lock_guard<std::mutex> l(cb->_lock);
             ++cb->_segmentPending;
@@ -298,16 +240,15 @@ bool submitLocked(RMCommandBuffer *cb)
             ++r.m2vUnscheduled;
         }
         [m addScheduledHandler:^(id<MTLCommandBuffer>) {
-            // before the raw command buffer behind it may be submitted (m2vClear), so its scheduled handlers go first
-            if (lastWork)
-                scheduled(cb);
             {
                 std::lock_guard<std::mutex> l(gRM->m2vLock);
                 if (!counted)
                     --gRM->m2vUnscheduled;
                 counted = true;
             }
-            wakeSubmit();
+            wakeSubmit(nullptr, RMCompatibilityProgress);
+            if (last)
+                scheduled(cb);
         }];
         [m addCompletedHandler:^(id<MTLCommandBuffer> done) {
             {
@@ -317,16 +258,18 @@ bool submitLocked(RMCommandBuffer *cb)
                 counted = true;
                 --gRM->m2vPending;
             }
-            segmentCompleted(cb, done.error, from, to);
+            segmentCompleted(cb, done.error, *writes, RMCompatibilityProgress);
         }];
         cb->_submittedM2v = true;
         [m commit];
 #if SWITCH_FRAME_TIMELINE
-        r.stats.replayUs += nowUs() - began;
+        RAW_DIAGNOSTIC(r.stats.replayUs += nowUs() - began);
         noteReplay(cb->_frame, cb->_frame.mark(switch_frame::Returned));
 #endif
     }
     ++cb->_segNext;
+    if (last && range.event)
+        scheduled(cb);
     if (last)
         finish(cb, nil);  // joins every submitted range before handlers/resources are released
     return last;

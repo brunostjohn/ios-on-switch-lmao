@@ -29,12 +29,12 @@
 #include "../../../../kits/SwitchRefusal/SwitchRefusalSite.h"
 #include "RawAlias.h"
 #include "RawComplete.h"
-#include "raw_event_timeline.h"
 #include "raw_follow.h"
 #include "raw_gpu.h"
 #include "TegraGM20BLayout.h"
 #include "../../../../kits/SwitchRefusal/SwitchRefusal.h"
 #include "RawMetalObjects.h"
+#include "raw_retirement.h"
 
 // Buffer-backed texture views share the caller's cached CPU pointer with their parent buffer.
 static inline RMBuffer *cpuBufferOfResource(id object)
@@ -59,8 +59,6 @@ extern "C" id native_bridge_metal_render_pipeline_lazy(id device, id descriptor,
     __attribute__((weak_import));
 extern "C" int native_bridge_metal_render_pipeline_ready(id pipeline, void (^observer)(void))
     __attribute__((weak_import));
-extern "C" int native_bridge_metal_render_pipeline_urge(id pipeline, void (^observer)(void), dispatch_queue_t queue)
-    __attribute__((weak_import));
 // Where NVK keeps a texture's texels (a stored depth/stencil texture the raw path renders and copies in place)
 struct switch_nvk_image_memory;
 extern "C" int native_bridge_metal_texture_memory(id texture, struct switch_nvk_image_memory *out)
@@ -81,11 +79,9 @@ double hostSeconds();
 uint64_t nowUs();
 
 struct Stats {
+#if SWITCH_RAW_DIAGNOSTICS
     std::atomic<uint64_t> raw{0}, m2v{0}, deferred{0}, aborted{0}, encodeUs{0}, draws{0}, passes{0}, copies{0},
         reasons[WhyCount]{}, switches{0}, cpuOrdered{0}, acquires{0}, eventsReleased{0}, heldReturns{0};
-    // signals published as the raw range before them completed (raw_promised_signals.h); signals the CPU set once its
-    // queue's head had waited for the work before them; event waits armed on a value a submitted command buffer promised
-    std::atomic<uint64_t> signalsPublished{0}, signalsAfterWork{0}, waitsOnPromise{0};
     // diagnostics (r10-rawsweep): the raw encode thrown away by aborted command buffers, the m2v replay's time on the committing
     // thread (replay + commit), and the bytes replay cleans
     std::atomic<uint64_t> abortUs{0}, replayUs{0}, replayClean{0};
@@ -107,6 +103,7 @@ struct Stats {
     std::atomic<uint64_t> twinForwards{
         0};  // selectors m2v's object answers that a facade object has no method for (answerMissing)
     std::atomic<uint64_t> zeroAnswers{0};  // selectors answered zero, as m2v's objects answer them (answerZero)
+#endif
 #endif
 };
 
@@ -143,7 +140,7 @@ private:
 // subclass of the m2v device's own class (raw_metal_device_open), so it is an _MTLDevice that conforms to Metal's protocols as
 // the m2v device does and answers every selector the facade does not override with the m2v device's own method; it has no
 // instance variables of its own (the base class's ABI is fixed), so its state lives here.
-struct RMEventSignal {
+struct RMNativeEventSignal {
     void *event;
     raw::EventTimeline::Promise promise;
 };
@@ -151,21 +148,23 @@ struct RMEventSignal {
 struct RMRawRetirement {
     RMCommandBuffer *buffer;
     uint32_t seqno;
-    size_t from, to;
-    std::vector<RMEventSignal> signals;  // the signals after it, published as it completes (publishRawEventSignals)
+    std::shared_ptr<const raw::RetirementWrites> writes;
+    std::vector<RMNativeEventSignal> signals;
+    std::vector<raw::EventTimeline::Promise> waits;
+    uint64_t generation = 0;
+    raw::CpuCompletion cpu;
 };
 
 struct RawState {
     raw::Device *raw = nullptr;
+    std::shared_ptr<raw::SharedEvents> sharedEvents;
     id<MTLDevice> fallback;  // the m2v device
     id device;               // the raw device object
-    std::mutex submit;
     std::mutex schedule;
     std::mutex eventValues;
-    raw::EventTimeline events;  // eventValues held
+    raw::EventTimeline events;
     raw::SubmitQueue<void *, RMCommandBuffer *> waiting;
     std::condition_variable waitingChanged;
-    uint64_t scheduleGeneration = 0;
     std::mutex m2vLock;
     std::condition_variable m2vChanged;
     uint32_t m2vPending = 0;      // m2v command buffers committed and not completed
@@ -173,14 +172,13 @@ struct RawState {
     // The two drivers' order (submit lock): on the GPU when the kernel has Order (TegraGM20BInfoOrder), else on the CPU (the
     // m2v work before a raw command buffer completes first, and the raw work before an m2v one).
     bool gpuOrder = false;
-    uint64_t orderRefusedAt = 0;  // raw::Device::Stats::reopens when the kernel last refused an Order (raw_order.h)
     bool rawSinceM2v =
         false;  // raw work submitted since the last m2v commit: the next m2v one waits for it (BeforeTask)
     bool m2vSinceRaw =
         false;           // m2v work submitted since the last raw submission: the next raw one waits for it (AfterTask)
-    int lastDriver = 0;  // 1 raw, 2 m2v: the last command buffer's, for the switch count
-    NSMapTable *rawSignals,
-        *m2vSignals;  // shared event -> highest value a submitted command buffer of each driver signals
+#if SWITCH_RAW_DIAGNOSTICS
+    int lastDriver = 0;
+#endif
     MTLSharedEventListener *listener;  // the CPU-ordered remainder's event waits
     std::mutex doneLock;
     std::condition_variable doneChanged;
@@ -272,7 +270,10 @@ bool mipPasses(raw::CommandBuffer *rc, RMTexture *t, const char **why);
 
 // RawMetalTextureCpu.mm: `bytes` from `from` cleaned to memory (or cleaned and invalidated), then a DSB
 void cacheLines(const uint8_t *from, uint64_t bytes, bool invalidate);
+bool transferTexture(RMTexture *texture, MTLRegion region, NSUInteger level, NSUInteger slice,
+                     void *bytes, NSUInteger row, NSUInteger image, bool write);
 void cpuTiled(RMTexture *t, MTLRegion r, uint8_t *bytes, NSUInteger row, bool write);
+const tgm_layout *textureCpuImportLayout(RMTexture *texture);
 void cpuLevel(RMTexture *t, MTLRegion r, NSUInteger level, uint8_t *bytes, NSUInteger row, bool write);
 void cpuVolume(RMTexture *t, MTLRegion r, uint8_t *bytes, NSUInteger row, NSUInteger image, bool write);
 void cpuLayer(RMTexture *t, MTLRegion r, NSUInteger slice, uint8_t *bytes, NSUInteger row, bool write);
@@ -284,7 +285,7 @@ const char *ycbcrPlan(MTLTextureDescriptor *d, IOSurfaceRef s, NSUInteger plane,
 id<MTLCommandBuffer> replay(RMCommandBuffer *cb, size_t from, size_t to, bool part);
 
 // RawMetalEncode.mm
-bool encodeRaw(RMCommandBuffer *cb, size_t from, size_t to, const char **why, size_t *refusedEncoder);
+bool encodeRaw(RMCommandBuffer *cb, size_t from, size_t to, const char **why);
 
 // RawMetalEvents.mm
 extern std::mutex gHoldersLock;
@@ -293,29 +294,37 @@ bool waitsForEvent(RMCommandBuffer *cb);
 void armEventWaits(RMCommandBuffer *cb);
 raw::EventReadiness eventReadiness(RMCommandBuffer *cb, raw::EventDeadline::Time &nextWake);
 bool expiredEventWait(RMCommandBuffer *cb, size_t index);
+std::vector<RMNativeEventSignal> publishRawEventSignals(RMCommandBuffer *cb);
+void retireEventSignals(const std::vector<RMNativeEventSignal> &signals, bool success);
+bool validateNativeEventWaits(RMCommandBuffer *cb, uint64_t generation);
+void releaseEventWaits(RMCommandBuffer *cb);
+std::shared_ptr<raw::SharedEventLease> sharedEventLease(id event);
+int sharedEventReadiness(RMCommandBuffer *cb, id event, uint64_t value, bool native);
+bool sharedWaitsReady(RMCommandBuffer *cb, bool native);
+void prepareSharedEvents(RMCommandBuffer *cb, raw::CommandBuffer *commands);
+void publishSharedEvents(RMCommandBuffer *cb);
 void enqueueBuffer(RMCommandBuffer *cb);
-void wakeSubmit();
+enum RMReadyDependency : uint32_t { RMRawProgress = 1, RMCompatibilityProgress = 2 };
+void wakeSubmit(void *queue, uint32_t dependencies = 0);
 bool m2vClear();
 void planSegments(RMCommandBuffer *cb);
-bool submitLocked(RMCommandBuffer *cb);
+bool submitRange(RMCommandBuffer *cb);
 void unhold(RMCommandBuffer *cb);
-uint64_t signalled(NSMapTable *map, void *event);
-void forgetSignals();
-std::vector<RMEventSignal> publishRawEventSignals(RMCommandBuffer *cb);
-void retireEventSignals(const std::vector<RMEventSignal> &signals, bool success);
-// A submitted command buffer signals at least `value` on `event` once its work completes
-bool promisedEvent(void *event, uint64_t value);
 
 // RawMetalFinish.mm
 void forEachWritten(RMCommandBuffer *cb, size_t from, size_t to, void (*written)(void *));
 extern GpuMemoryRelease &gRawRelease;
 void scheduled(RMCommandBuffer *cb);
+dispatch_queue_t scheduledQueueLocked(RMCommandBuffer *cb);
 dispatch_queue_t followingRootQueue();
 dispatch_queue_t followingSerialQueue(const char *label);
 void finish(RMCommandBuffer *cb, NSError *error);
-void segmentCompleted(RMCommandBuffer *cb, NSError *error, size_t from, size_t to,
-                      const std::vector<RMEventSignal> &signals = {});
+void segmentCompleted(RMCommandBuffer *cb, NSError *error, const raw::RetirementWrites &writes, uint32_t dependencies,
+                      const std::vector<RMNativeEventSignal> &signals = {},
+                      const std::vector<raw::EventTimeline::Promise> &waits = {},
+                      const raw::CpuCompletion *cpu = nullptr);
 void retireRawRange(RMCommandBuffer *cb, size_t from, size_t to);
+std::shared_ptr<const raw::RetirementWrites> captureWrittenRange(RMCommandBuffer *cb, size_t from, size_t to);
 void markWrittenRange(RMCommandBuffer *cb, size_t from, size_t to);
 void completionLoop();
 
@@ -338,6 +347,8 @@ void queuePriorityRemove(RMQueue *queue);
 void orderRefused(const char *what, int kr);
 void commitBuffer(RMCommandBuffer *cb);
 void submitLoop();
+bool admitComputeDispatch(RMCommandBuffer *cb, size_t at, const raw::ComputeKernelSet<raw::ComputeState> *kernels, const char **why);
+int computeReadiness(RMCommandBuffer *cb, const RMSegment &range, raw::EventDeadline::Time &deadline);
 
 // RawMetalRates.mm
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG

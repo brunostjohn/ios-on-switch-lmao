@@ -1,173 +1,230 @@
 // SPDX-License-Identifier: MIT
 #include <gtest/gtest.h>
+#include <memory>
 #include <vector>
 #include "../raw/runtime/raw_submit_queue.h"
 
 namespace {
+using Queue = raw::SubmitQueue<int, int>;
+using namespace std::chrono_literals;
 
-TEST(SubmitQueue, AnotherQueuesProducerBypassesBlockedConsumer)
+void commit(Queue &q, int key, int value)
 {
-    raw::SubmitQueue<int, int> q;
-    q.reserve(1, 10);
-    q.reserve(1, 11);
-    q.reserve(2, 20);
-    q.commit(1, 10);
-    q.commit(1, 11);
-    q.commit(2, 20);
-    EXPECT_EQ(q.ready([](int job) {
-        return job != 10;
-    }),
-              20);
-    EXPECT_TRUE(q.retire(2, 20));
-    EXPECT_EQ(q.ready([](int) {
-        return true;
-    }),
-              10);
-    EXPECT_FALSE(q.retire(1, 11));
-    EXPECT_TRUE(q.retire(1, 10));
-    EXPECT_EQ(q.ready([](int) {
-        return true;
-    }),
-              11);
+    const auto reservation = q.reserve(key, value);
+    ASSERT_TRUE(q.commit(key, value, reservation));
+}
+
+TEST(SubmitQueue, ProducerBypassesParkedConsumer)
+{
+    Queue q;
+    commit(q, 1, 10);
+    commit(q, 1, 11);
+    commit(q, 2, 20);
+    auto consumer = q.next();
+    ASSERT_EQ(consumer.value, 10);
+    ASSERT_TRUE(q.park(consumer));
+    auto producer = q.next();
+    ASSERT_EQ(producer.value, 20);
+    q.retire(producer);
+    EXPECT_FALSE(q.next());
+    q.wake(1);
+    consumer = q.next();
+    ASSERT_EQ(consumer.value, 10);
+    q.retire(consumer);
+    EXPECT_EQ(q.next().value, 11);
 }
 
 TEST(SubmitQueue, EnqueueReservesOrderBeforeCommit)
 {
-    raw::SubmitQueue<int, int> q;
-    q.reserve(1, 1);
-    q.reserve(1, 2);
-    q.commit(1, 2);
-    EXPECT_EQ(q.ready([](int) {
-        return true;
-    }),
-              0);
-    q.commit(1, 1);
-    EXPECT_EQ(q.ready([](int) {
-        return true;
-    }),
-              1);
-    q.retire(1, 1);
-    EXPECT_EQ(q.ready([](int) {
-        return true;
-    }),
-              2);
+    Queue q;
+    const auto reservation = q.reserve(1, 1);
+    commit(q, 1, 2);
+    EXPECT_FALSE(q.next());
+    q.commit(1, 1, reservation);
+    auto t = q.next();
+    ASSERT_EQ(t.value, 1);
+    q.retire(t);
+    EXPECT_EQ(q.next().value, 2);
 }
 
-TEST(SubmitQueue, ReusesDrainedQueuesWithoutLosingReservations)
+TEST(SubmitQueue, WakeDuringReadinessCheckCannotBeLost)
 {
-    raw::SubmitQueue<int, int> q;
-    q.reserve(1, 10);
-    q.commit(1, 10);
-    ASSERT_TRUE(q.retire(1, 10));
-    EXPECT_FALSE(q.retire(1, 10));
-    EXPECT_EQ(q.ready([](int) {
-        return true;
-    }),
-              0);
-    q.reserve(2, 20);
-    q.reserve(1, 11);
-    q.commit(1, 11);
-    EXPECT_EQ(q.ready([](int) {
-        return true;
-    }),
-              11);
-    q.commit(2, 20);
-    EXPECT_EQ(q.ready([](int) {
-        return true;
-    }),
-              20);
-    ASSERT_TRUE(q.retire(2, 20));
-    ASSERT_TRUE(q.retire(1, 11));
-    EXPECT_TRUE(q.empty());
+    Queue q;
+    commit(q, 1, 10);
+    auto t = q.next();
+    q.wake(1);
+    EXPECT_FALSE(q.park(t));
+    t = q.next();
+    ASSERT_EQ(t.value, 10);
+    ASSERT_TRUE(q.park(t));
+    EXPECT_FALSE(q.next());
 }
 
-TEST(SubmitQueue, QueuesTakeTurnsAndBlockedHeadsKeepTheirPlace)
+TEST(SubmitQueue, ProgressBeforeDependencyRegistrationCannotBeLost)
 {
-    raw::SubmitQueue<int, int> q;
-    for (int i : {1, 2, 3}) {
-        q.reserve(1, i);
-        q.commit(1, i);
+    Queue q;
+    commit(q, 1, 10);
+    auto t = q.next();
+    q.wakeDependencies(1);
+    EXPECT_FALSE(q.park(t, 1));
+    t = q.next();
+    q.wakeDependencies(2);
+    EXPECT_TRUE(q.park(t, 1));
+    EXPECT_FALSE(q.next());
+    q.wakeDependencies(1);
+    EXPECT_EQ(q.next().value, 10);
+}
+
+TEST(SubmitQueue, OnlyAffectedHeadRunsAmongTenThousandWaiters)
+{
+    Queue q;
+    for (int key = 1; key <= 10000; ++key) {
+        commit(q, key, key);
+        auto t = q.next();
+        ASSERT_EQ(t.key, key);
+        q.park(t);
     }
-    q.reserve(2, 4);
-    q.commit(2, 4);
-    q.retire(1, 1);
-    EXPECT_EQ(q.ready([](int) {
-        return true;
-    }),
-              4);
-    EXPECT_EQ(q.ready([](int i) {
-        return i != 4;
-    }),
-              2);
-    EXPECT_EQ(q.size(), 3u);
-    q.retire(2, 4);
-    q.retire(1, 2);
-    q.retire(1, 3);
-    EXPECT_TRUE(q.empty());
+    q.wake(7000);
+    auto t = q.next();
+    ASSERT_EQ(t.key, 7000);
+    EXPECT_FALSE(q.next());
+    q.retire(t);
+    EXPECT_EQ(q.size(), 9999u);
 }
 
-// RawMetalSchedule.mm holds a queue whose head waits on a compile or an event: waitUntilScheduled of every command buffer
-// committed on it returns, without the compile, the event or the GPU
-TEST(SubmitQueue, AHeadWaitingOnACompileHoldsEveryCommandBufferCommittedBehindIt)
+TEST(SubmitQueue, YieldingHeadCannotStarveOtherQueues)
 {
-    raw::SubmitQueue<int, int> q;
-    q.reserve(1, 10);
-    q.reserve(1, 11);
-    q.reserve(1, 12);
-    q.reserve(2, 20);
-    q.commit(1, 10);
-    q.commit(1, 11);
-    q.commit(2, 20);
-    std::vector<int> held;
-    q.hold(1, held);
-    EXPECT_EQ(held, (std::vector<int>{10, 11}));
-    held.clear();
-    q.hold(1, held);
-    EXPECT_TRUE(held.empty());
-    q.commit(1, 12);
-    q.hold(1, held);
-    EXPECT_EQ(held, (std::vector<int>{12}));
-    std::vector<int> released;
-    q.release(2, released);
-    EXPECT_TRUE(released.empty());
-    EXPECT_EQ(q.ready([](int) {
-        return true;
-    }),
-              10);
+    Queue q;
+    for (int key : {1, 2, 3})
+        commit(q, key, key * 10);
+    for (int cycle = 0; cycle < 10000; ++cycle)
+        for (int key : {1, 2, 3}) {
+            auto t = q.next();
+            ASSERT_EQ(t.key, key);
+            q.yield(t);
+        }
 }
 
-TEST(SubmitQueue, AHeadThatGoesOnReleasesWhatItsHoldHeld)
+TEST(SubmitQueue, OverlappingDependencyMasksQueueEachHeadOnce)
 {
-    raw::SubmitQueue<int, int> q;
-    for (int i : {1, 2}) {
-        q.reserve(1, i);
-        q.commit(1, i);
+    Queue q;
+    for (int key : {1, 2, 3})
+        commit(q, key, key);
+    auto a = q.next(), b = q.next(), c = q.next();
+    q.park(a, 3);
+    q.park(b, 1);
+    q.park(c, 2);
+    q.wakeDependencies(3);
+    EXPECT_EQ(q.next().key, 1);
+    EXPECT_EQ(q.next().key, 2);
+    EXPECT_EQ(q.next().key, 3);
+    EXPECT_FALSE(q.next());
+}
+
+TEST(SubmitQueue, DeadlinesWakeExactlyTheirHeadAndLeaveNoStaleTimers)
+{
+    Queue q;
+    commit(q, 1, 10);
+    commit(q, 2, 20);
+    auto a = q.next(), b = q.next();
+    q.park(a, 0, Queue::Time{} + 50ms);
+    q.park(b, 0, Queue::Time{} + 60ms);
+    q.expire(Queue::Time{} + 49ms);
+    EXPECT_FALSE(q.next());
+    q.expire(Queue::Time{} + 50ms);
+    a = q.next();
+    ASSERT_EQ(a.key, 1);
+    q.retire(a);
+    EXPECT_FALSE(q.next());
+    q.wake(2);
+    b = q.next();
+    ASSERT_EQ(b.key, 2);
+    EXPECT_EQ(q.deadline(), Queue::Time::max());
+    q.retire(b);
+}
+
+TEST(SubmitQueue, RecycledNodesAndRepeatedValuesRejectStaleTickets)
+{
+    Queue q;
+    commit(q, 1, 10);
+    auto old = q.next();
+    q.retire(old);
+    commit(q, 2, 10);
+    auto current = q.next();
+    q.wake(1);
+    EXPECT_FALSE(q.next());
+    EXPECT_FALSE(q.retire(old));
+    q.retire(current);
+    commit(q, 1, 10);
+    current = q.next();
+    EXPECT_FALSE(q.retire(old));
+    EXPECT_TRUE(q.retire(current));
+}
+
+TEST(SubmitQueue, TicketKeepsFinalOwnerAliveOutsideSchedulerLock)
+{
+    bool locked = false, destroyed = false;
+    auto value = std::shared_ptr<int>(new int(1), [&](int *p) {
+        EXPECT_FALSE(locked);
+        destroyed = true;
+        delete p;
+    });
+    raw::SubmitQueue<int, std::shared_ptr<int>> q;
+    const auto reservation = q.reserve(1, value);
+    q.commit(1, value, reservation);
+    value.reset();
+    auto ticket = q.next();
+    locked = true;
+    q.retire(ticket);
+    EXPECT_FALSE(destroyed);
+    locked = false;
+    ticket.value.reset();
+    EXPECT_TRUE(destroyed);
+}
+
+struct CountedValue {
+    unsigned value = 0;
+    size_t *comparisons = nullptr;
+    bool operator!=(const CountedValue &other) const
+    {
+        ++*comparisons;
+        return value != other.value;
     }
-    std::vector<int> held, released;
-    q.hold(1, held);
-    ASSERT_TRUE(q.retire(1, 1));
-    q.release(1, released);
-    EXPECT_EQ(released, (std::vector<int>{2}));
-    released.clear();
-    q.release(1, released);
-    EXPECT_TRUE(released.empty());
-    held.clear();
-    q.hold(1, held);
-    EXPECT_EQ(held, (std::vector<int>{2}));
+};
+
+TEST(SubmitQueue, CommitsAddressReservationsWithoutScanningPendingWork)
+{
+    raw::SubmitQueue<int, CountedValue> queue;
+    std::vector<decltype(queue)::Reservation> reservations;
+    size_t comparisons = 0;
+    for (unsigned i = 0; i < 10000; ++i)
+        reservations.push_back(queue.reserve(1, {i, &comparisons}));
+    for (unsigned i = 10000; i-- > 0;)
+        ASSERT_TRUE(queue.commit(1, {i, &comparisons}, reservations[i]));
+    EXPECT_EQ(comparisons, 10000u);
+    EXPECT_EQ(queue.next().value.value, 0u);
 }
 
-TEST(SubmitQueue, ADrainedQueueTakenByAnotherKeyIsNotHeld)
+TEST(SubmitQueue, ReservationsSurvivePrefixRetirementAndRejectRecycledQueues)
 {
-    raw::SubmitQueue<int, int> q;
-    q.reserve(1, 1);
-    q.commit(1, 1);
-    std::vector<int> held, released;
-    q.hold(1, held);
-    ASSERT_TRUE(q.retire(1, 1));
-    q.reserve(2, 2);
-    q.commit(2, 2);
-    q.release(2, released);
-    EXPECT_TRUE(released.empty());
+    Queue queue;
+    const auto first = queue.reserve(1, 10);
+    const auto second = queue.reserve(1, 20);
+    ASSERT_TRUE(queue.commit(1, 10, first));
+    ASSERT_TRUE(queue.retire(queue.next()));
+    EXPECT_FALSE(queue.commit(1, 10, first));
+    EXPECT_FALSE(queue.commit(1, 10, second));
+    ASSERT_TRUE(queue.commit(1, 20, second));
+    ASSERT_TRUE(queue.retire(queue.next()));
+    const auto replacement = queue.reserve(2, 20);
+    EXPECT_FALSE(queue.commit(2, 20, second));
+    EXPECT_FALSE(queue.commit(2, 20, {}));
+    EXPECT_FALSE(queue.commit(2, 20, {replacement.generation, UINT64_MAX}));
+    ASSERT_TRUE(queue.commit(2, 20, replacement));
+    ASSERT_TRUE(queue.retire(queue.next()));
+    const auto reused = queue.reserve(1, 10);
+    EXPECT_FALSE(queue.commit(1, 10, first));
+    EXPECT_TRUE(queue.commit(1, 10, reused));
 }
 
 TEST(EventDeadline, UnspecifiedTimeoutNeverManufacturesAnEvent)

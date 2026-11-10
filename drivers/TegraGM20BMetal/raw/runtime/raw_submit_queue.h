@@ -1,157 +1,283 @@
 // SPDX-License-Identifier: MIT
 #pragma once
+#include <array>
 #include <chrono>
-#include <cstddef>
 #include <cstdint>
 #include <deque>
 #include <list>
-#include <vector>
+#include <map>
+#include <unordered_map>
 
 namespace raw {
+template <class Key, class Value> class SubmitQueue {
+public:
+    using Time = std::chrono::steady_clock::time_point;
 
-template <typename Key, typename Value> class SubmitQueue {
+    struct Reservation {
+        uint64_t generation = 0, position = 0;
+    };
+
+    struct Ticket {
+        Key key{};
+        Value value{};
+        uint64_t revision = 0, head = 0;
+        std::array<uint64_t, 2> dependencies{};
+
+        explicit operator bool() const
+        {
+            return revision != 0;
+        }
+    };
+
+private:
+    struct Queue;
+
+    struct Link {
+        Queue *before = nullptr, *after = nullptr;
+        bool linked = false;
+    };
+
+    struct Chain {
+        Queue *first = nullptr, *last = nullptr;
+    };
+
+    using Deadlines = std::multimap<Time, Queue *>;
+
     struct Entry {
         Value value;
         bool committed = false;
-        bool held = false;
     };
 
     struct Queue {
-        Key key;
+        Key key{};
         std::deque<Entry> entries;
-        bool held = false;
+        std::array<Link, 4> links{};
+        typename Deadlines::iterator deadline;
+        uint64_t revision = 0, head = 0;
+        uint64_t reservationGeneration = 0, reserved = 0, retired = 0;
+        bool visiting = false, timed = false;
     };
 
-    std::list<Queue> queues_;
+    std::list<Queue> storage_;
+    std::unordered_map<Key, Queue *> lookup_;
+    std::array<Chain, 4> chains_{};
+    Deadlines deadlines_;
+    std::array<uint64_t, 2> dependencies_{};
+    uint64_t revision_ = 0;
+    uint64_t reservationGeneration_ = 0;
     size_t size_ = 0;
-    size_t heldQueues_ = 0;
+
+    void unlink(Queue &q, unsigned chain)
+    {
+        auto &link = q.links[chain];
+        if (!link.linked)
+            return;
+        if (link.before)
+            link.before->links[chain].after = link.after;
+        else
+            chains_[chain].first = link.after;
+        if (link.after)
+            link.after->links[chain].before = link.before;
+        else
+            chains_[chain].last = link.before;
+        link = {};
+    }
+
+    void append(Queue &q, unsigned chain)
+    {
+        if (q.links[chain].linked)
+            return;
+        auto &list = chains_[chain];
+        q.links[chain] = {list.last, nullptr, true};
+        if (list.last)
+            list.last->links[chain].after = &q;
+        else
+            list.first = &q;
+        list.last = &q;
+    }
+
+    void clearWait(Queue &q)
+    {
+        unlink(q, 1);
+        unlink(q, 2);
+        if (q.timed) {
+            deadlines_.erase(q.deadline);
+            q.timed = false;
+        }
+    }
+
+    void activate(Queue &q)
+    {
+        clearWait(q);
+        if (!q.visiting && !q.entries.empty() && q.entries.front().committed)
+            append(q, 0);
+    }
+
+    Queue *find(Key key)
+    {
+        auto at = lookup_.find(key);
+        return at == lookup_.end() ? nullptr : at->second;
+    }
+
+    Queue *visiting(const Ticket &ticket)
+    {
+        auto *q = find(ticket.key);
+        return q && q->visiting && !q->entries.empty() && q->head == ticket.head &&
+                       q->entries.front().value == ticket.value
+                   ? q
+                   : nullptr;
+    }
 
 public:
-    void reserve(Key key, Value value)
+    SubmitQueue() = default;
+    SubmitQueue(const SubmitQueue &) = delete;
+    SubmitQueue &operator=(const SubmitQueue &) = delete;
+    SubmitQueue(SubmitQueue &&) = delete;
+    SubmitQueue &operator=(SubmitQueue &&) = delete;
+
+    Reservation reserve(Key key, Value value)
     {
-        Queue *unused = nullptr;
-        for (Queue &q : queues_) {
-            if (q.key == key) {
-                q.entries.push_back({value});
-                ++size_;
-                return;
+        auto *q = find(key);
+        if (!q) {
+            q = chains_[3].first;
+            if (q) {
+                lookup_.erase(q->key);
+                unlink(*q, 3);
+            } else {
+                storage_.emplace_back();
+                q = &storage_.back();
             }
-            if (q.entries.empty())
-                unused = &q;
+            q->key = key;
+            q->reservationGeneration = ++reservationGeneration_;
+            q->reserved = q->retired = 0;
+            lookup_.emplace(key, q);
         }
-        if (unused) {
-            heldQueues_ -= unused->held;
-            unused->key = key;
-            unused->held = false;
-            unused->entries.push_back({value});
-        } else {
-            queues_.push_back({key, {{value}}});
-        }
+        unlink(*q, 3);
+        q->entries.push_back({value});
         ++size_;
+        if (q->entries.size() == 1)
+            q->head = q->revision = ++revision_;
+        return {q->reservationGeneration, ++q->reserved};
     }
 
-    bool commit(Key key, Value value)
+    bool commit(Key key, Value value, Reservation reservation)
     {
-        for (Queue &q : queues_)
-            if (q.key == key)
-                for (Entry &e : q.entries)
-                    if (e.value == value) {
-                        e.committed = true;
-                        return true;
-                    }
-        return false;
+        auto *q = find(key);
+        if (!q || reservation.generation != q->reservationGeneration ||
+            reservation.position <= q->retired || reservation.position > q->reserved)
+            return false;
+        auto &entry = q->entries[reservation.position - q->retired - 1];
+        if (entry.value != value)
+            return false;
+        entry.committed = true;
+        if (&entry == &q->entries.front())
+            activate(*q);
+        return true;
     }
 
-    template <typename Ready> Value ready(Ready eligible) const
+    Ticket next()
     {
-        for (const Queue &q : queues_) {
-            if (q.entries.empty())
-                continue;
-            const Entry &e = q.entries.front();
-            if (e.committed && eligible(e.value))
-                return e.value;
+        auto *q = chains_[0].first;
+        if (!q)
+            return {};
+        unlink(*q, 0);
+        q->visiting = true;
+        return {q->key, q->entries.front().value, q->revision, q->head, dependencies_};
+    }
+
+    void wake(Key key)
+    {
+        if (auto *q = find(key)) {
+            q->revision = ++revision_;
+            activate(*q);
         }
-        return {};
     }
 
-    void heads(std::vector<Value> &out) const
+    void wakeDependencies(uint32_t mask)
     {
-        out.clear();
-        for (const Queue &q : queues_)
-            if (!q.entries.empty() && q.entries.front().committed)
-                out.push_back(q.entries.front().value);
-    }
-
-    bool retire(Key key, Value value)
-    {
-        for (auto at = queues_.begin(); at != queues_.end(); ++at) {
-            if (at->key != key)
+        for (unsigned i = 0; i < 2; ++i) {
+            if (!(mask & (1u << i)))
                 continue;
-            if (at->entries.empty() || at->entries.front().value != value)
-                return false;
-            at->entries.pop_front();
-            --size_;
-            queues_.splice(queues_.end(), queues_, at);
-            return true;
+            ++dependencies_[i];
+            while (auto *q = chains_[i + 1].first) {
+                q->revision = ++revision_;
+                activate(*q);
+            }
         }
-        return false;
     }
 
-    // The queue's head waits for what Metal's GPU, not its scheduler, waits for (raw_scheduled_wait.h holds): it and every
-    // job committed behind it count as scheduled. `held`: those not held before.
-    void hold(Key key, std::vector<Value> &held)
+    bool park(const Ticket &ticket, uint32_t mask = 0, Time due = Time::max())
     {
-        for (Queue &q : queues_)
-            if (q.key == key) {
-                heldQueues_ += !q.held;
-                q.held = true;
-                for (Entry &e : q.entries)
-                    if (e.committed && !e.held) {
-                        e.held = true;
-                        held.push_back(e.value);
-                    }
-                return;
-            }
+        auto *q = visiting(ticket);
+        if (!q)
+            return false;
+        bool changed = q->revision != ticket.revision;
+        for (unsigned i = 0; i < 2; ++i)
+            changed |= (mask & (1u << i)) && ticket.dependencies[i] != dependencies_[i];
+        q->visiting = false;
+        if (changed) {
+            activate(*q);
+            return false;
+        }
+        for (unsigned i = 0; i < 2; ++i)
+            if (mask & (1u << i))
+                append(*q, i + 1);
+        if (due != Time::max()) {
+            q->deadline = deadlines_.emplace(due, q);
+            q->timed = true;
+        }
+        return true;
     }
 
-    // The queue's head goes on: `released`, the jobs its hold held
-    void release(Key key, std::vector<Value> &released)
+    bool yield(const Ticket &ticket)
     {
-        if (!heldQueues_)
-            return;
-        for (Queue &q : queues_)
-            if (q.key == key) {
-                if (!q.held)
-                    return;
-                --heldQueues_;
-                q.held = false;
-                for (Entry &e : q.entries)
-                    if (e.held) {
-                        e.held = false;
-                        released.push_back(e.value);
-                    }
-                return;
-            }
+        auto *q = visiting(ticket);
+        if (!q)
+            return false;
+        q->visiting = false;
+        activate(*q);
+        return true;
     }
 
-    // A partially submitted job retains its queue reservation while other queues get a scheduling opportunity.
-    void yield(Key key)
+    bool retire(const Ticket &ticket)
     {
-        for (auto at = queues_.begin(); at != queues_.end(); ++at)
-            if (at->key == key) {
-                queues_.splice(queues_.end(), queues_, at);
-                return;
-            }
+        auto *q = visiting(ticket);
+        if (!q)
+            return false;
+        q->entries.pop_front();
+        ++q->retired;
+        --size_;
+        q->visiting = false;
+        q->head = q->revision = ++revision_;
+        if (q->entries.empty())
+            append(*q, 3);
+        else
+            activate(*q);
+        return true;
+    }
+
+    void expire(Time now)
+    {
+        while (!deadlines_.empty() && deadlines_.begin()->first <= now) {
+            auto *q = deadlines_.begin()->second;
+            q->revision = ++revision_;
+            activate(*q);
+        }
+    }
+
+    Time deadline() const
+    {
+        return deadlines_.empty() ? Time::max() : deadlines_.begin()->first;
+    }
+
+    bool ready() const
+    {
+        return chains_[0].first != nullptr;
     }
 
     size_t size() const
     {
         return size_;
-    }
-
-    bool empty() const
-    {
-        return size_ == 0;
     }
 };
 

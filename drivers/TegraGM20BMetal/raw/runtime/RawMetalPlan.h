@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #pragma once
+#include "raw_dispatch_regions.h"
 #include "RawMetalArguments.h"
 #include "raw_semantic_state.h"
 #include <algorithm>
@@ -22,6 +23,11 @@ struct RMPlanBegin {
     uint32_t dispatchType = 0;
     bool refused = false;
     size_t end = 0;
+    uint32_t rasterBegin = 0, rasterCount = 0;
+};
+
+struct RMPlanRasterGroup {
+    uint32_t state = 0, draws = 0;
 };
 
 struct RMPlanDraw {
@@ -39,9 +45,12 @@ struct RMPlanDispatch {
     uint32_t state = 0;
     uint32_t surfaceSlots = 0;
     const void *kernel = nullptr;
+    void *pending = nullptr;
+    size_t encoderBegin = 0;
     std::array<uint64_t, 3> grid{}, groups{};
     std::array<uint32_t, 3> threads{};
     bool perThread = false;
+    raw::ComputeDispatch regions;
 };
 
 struct RMPlanTransfer {
@@ -65,6 +74,23 @@ struct RMPlanOperation {
     uint32_t uses = 0;
 };
 
+enum class RMPlanError : uint8_t { None, NestedEncoder, EventInsideEncoder, UnclosedEncoder };
+
+enum class RMResourceKind : uint8_t { Other, Buffer, Texture, Sampler, Count };
+
+struct RMResourceFacts {
+    enum Role : uint8_t { Converted = 1, PlanarTarget = 2 };
+    void *cpuBuffer = nullptr;
+    RMResourceKind kind = RMResourceKind::Other;
+    uint8_t roles = 0;
+};
+
+struct RMRangeResource {
+    void *object = nullptr;
+    RMResourceFacts facts;
+    uint8_t access = 0;
+};
+
 class RMCommandPlan {
     struct UseSpan {
         uint32_t begin = 0, count = 0;
@@ -73,6 +99,9 @@ class RMCommandPlan {
     std::vector<RMPlanOperation> operations_;
     std::vector<RMPlanBegin> begins_;
     std::vector<RMPlanDraw> draws_;
+    std::vector<RMPlanRasterGroup> rasterGroups_;
+    std::unordered_map<uint32_t, uint32_t> rasterGroupIndex_;
+    uint32_t lastRasterGroup_ = raw::kNoSnapshot;
     std::vector<RMPlanDispatch> dispatches_;
     std::vector<RMPlanTransfer> transfers_;
     std::vector<RMPlanControl> controls_;
@@ -82,16 +111,34 @@ class RMCommandPlan {
     uint64_t renderGeneration_ = 0, kernelGeneration_ = 0, stateEpoch_ = 0;
     uint64_t eligibilityGeneration_ = 0;
     uint64_t savedRender_ = UINT64_MAX, savedKernel_ = UINT64_MAX;
+    uint64_t resourceRevision_[2]{}, savedResources_[2]{UINT64_MAX, UINT64_MAX};
+    uint32_t resourceUses_[2]{};
     uint32_t currentRender_ = raw::kNoSnapshot, currentKernel_ = raw::kNoSnapshot;
     Op encoder_ = OpEnd;
+    RMPlanError recordingError_ = RMPlanError::None;
     size_t encoderBegin_ = 0;
-    std::map<std::pair<size_t, size_t>, uint32_t> rangeUses_;
-    std::map<std::pair<size_t, size_t>, std::vector<void *>> rangePipelines_;
+    struct Range {
+        uint32_t uses = 0;
+        std::vector<void *> pipelines, variants;
+        std::vector<size_t> computes;
+        std::vector<RMRangeResource> resources;
+        std::array<uint32_t, size_t(RMResourceKind::Count) + 1> first{};
+        void *planarFeedback = nullptr;
+    };
+    std::map<std::pair<size_t, size_t>, Range> ranges_;
+    std::unordered_map<void *, RMResourceFacts> resourceFacts_;
+    void classifyRange(Range &range);
+    size_t rangeStorageBytes() const;
     std::map<std::tuple<uint32_t, uintptr_t, uintptr_t>, uint32_t> drawUseSpans_;
+    using ResourceKey = std::pair<uint64_t, uintptr_t>;
+    std::map<ResourceKey, uint32_t> renderUseSpans_, kernelUseSpans_;
+    ResourceKey lastRenderUseKey_{UINT64_MAX, 0};
+    uint32_t lastRenderUses_ = 0;
     uint32_t drawUses(uint32_t base, void *indices, void *arguments);
     uint32_t captureRender();
     uint32_t captureKernel();
     uint32_t saveUses(const std::vector<raw::ResourceUse> &uses);
+    void applyRenderUses(uint32_t state, uint32_t span);
     bool setter(const Cmd &c, const std::vector<uint64_t> &extra);
 
 public:
@@ -104,6 +151,30 @@ public:
     std::vector<raw::KernelStateRef> kernelStates;
 
     bool record(const Cmd &c, const std::vector<uint64_t> &extra);
+
+    template <typename Build> void setKernelUses(size_t at, const void *nativeKernel, Build build)
+    {
+        auto &operation = operations_[at];
+        const auto &state = kernelStates[dispatches_[operation.payload].state];
+        const auto key = std::make_pair(state.resourceRevision, reinterpret_cast<uintptr_t>(nativeKernel));
+        auto [found, inserted] = kernelUseSpans_.try_emplace(key, 0);
+        if (inserted)
+            found->second = saveUses(build());
+        operation.uses = found->second;
+    }
+
+    template <typename Build> void resolveRenderUses(uint32_t state, const void *nativePipeline, Build build)
+    {
+        const ResourceKey key{renderStates[state].resourceRevision, reinterpret_cast<uintptr_t>(nativePipeline)};
+        if (key != lastRenderUseKey_) {
+            auto [found, inserted] = renderUseSpans_.try_emplace(key, 0);
+            if (inserted)
+                found->second = saveUses(build());
+            lastRenderUseKey_ = key;
+            lastRenderUses_ = found->second;
+        }
+        applyRenderUses(state, lastRenderUses_);
+    }
 
     size_t size() const
     {
@@ -120,14 +191,52 @@ public:
         return operations_[at];
     }
 
+    RMPlanError recordingError() const
+    {
+        return recordingError_ != RMPlanError::None ? recordingError_ :
+            encoder_ != OpEnd ? RMPlanError::UnclosedEncoder : RMPlanError::None;
+    }
+
+    const RMPlanBegin &begin(size_t at) const
+    {
+        return begins_[operations_[at].payload];
+    }
+
+    const RMPlanEvent &event(size_t at) const
+    {
+        return events_[operations_[at].payload];
+    }
+
     const RMPlanDraw &draw(size_t at) const
     {
         return draws_[operations_[at].payload];
     }
 
+    template <typename F> void forEachRasterGroup(size_t begin, F visit) const
+    {
+        const auto &pass = begins_[operations_[begin].payload];
+        for (uint32_t i = 0; i < pass.rasterCount; ++i) {
+            const auto &group = rasterGroups_[pass.rasterBegin + i];
+            visit(raster[group.state], group.draws);
+        }
+    }
+
     const RMPlanDispatch &dispatch(size_t at) const
     {
         return dispatches_[operations_[at].payload];
+    }
+
+    void resolveDispatch(size_t at, const void *kernel, uint32_t surfaceSlots)
+    {
+        auto &dispatch = dispatches_[operations_[at].payload];
+        dispatch.kernel = kernel;
+        dispatch.surfaceSlots = surfaceSlots;
+        dispatch.pending = nullptr;
+    }
+
+    void invalidateUses()
+    {
+        ranges_.clear();
     }
 
     const RMPlanControl &control(size_t at) const
@@ -144,7 +253,18 @@ public:
 
     void setRefused(size_t at, bool refused)
     {
-        begins_[operations_[at].payload].refused = refused;
+        auto &begin = begins_[operations_[at].payload];
+        begin.refused = refused || nativeRangeRefusal(at, begin.end);
+    }
+
+    void registerResource(void *object, RMResourceFacts facts);
+    void *nativeRangeRefusal(size_t from, size_t to) const;
+    template <typename F> void forEachResource(size_t from, size_t to, RMResourceKind kind, F visit) const
+    {
+        const auto &range = ranges_.at({from, to});
+        const size_t index = size_t(kind);
+        for (uint32_t i = range.first[index]; i < range.first[index + 1]; ++i)
+            visit(range.resources[i]);
     }
 
     void addUses(size_t at, const std::vector<raw::ResourceUse> &uses);
@@ -168,26 +288,17 @@ public:
 
     const std::vector<void *> &renderPipelines(size_t from, size_t to) const
     {
-        return rangePipelines_.at({from, to});
+        return ranges_.at({from, to}).pipelines;
     }
 
-    // The render states a range's draws use: as its range was prepared, else (a range the submission split at a refused
-    // encoder) each of its encoders' own, which were prepared as they were recorded
-    template <typename F> void forEachRenderPipeline(size_t from, size_t to, F visit) const
+    const std::vector<void *> &renderVariants(size_t from, size_t to) const
     {
-        if (const auto found = rangePipelines_.find({from, to}); found != rangePipelines_.end()) {
-            for (void *object : found->second)
-                visit(object);
-            return;
-        }
-        for (size_t at = from; at < std::min(to, size());) {
-            const Op op = operations_[at].op;
-            const size_t end = op == OpRender || op == OpCompute || op == OpBlit ? encoderEnd(at) : at + 1;
-            if (const auto encoder = rangePipelines_.find({at, end}); encoder != rangePipelines_.end())
-                for (void *object : encoder->second)
-                    visit(object);
-            at = std::max(end, at + 1);
-        }
+        return ranges_.at({from, to}).variants;
+    }
+
+    const std::vector<size_t> &pendingComputes(size_t from, size_t to) const
+    {
+        return ranges_.at({from, to}).computes;
     }
 
     size_t storageBytes() const;
@@ -195,8 +306,8 @@ public:
 
     template <typename F> void forEachUse(size_t from, size_t to, F visit) const
     {
-        if (const auto found = rangeUses_.find({from, to}); found != rangeUses_.end()) {
-            const UseSpan span = useSpans_[found->second];
+        if (const auto found = ranges_.find({from, to}); found != ranges_.end()) {
+            const UseSpan span = useSpans_[found->second.uses];
             for (uint32_t i = 0; i < span.count; ++i) {
                 const auto &use = uses_[span.begin + i];
                 visit(use.object, use.access);

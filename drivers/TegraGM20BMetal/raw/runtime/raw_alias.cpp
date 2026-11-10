@@ -5,8 +5,126 @@
 // thread drops it: the raw object's destroy (its command buffers completed) or NVK's free (m2v's use of the view ended), so the
 // VA is never reused while either driver's work can still reach it.
 #include "raw_gpu.h"
+#include <os/log.h>
 
 namespace raw {
+
+void reportCpuReleaseFailure()
+{
+    os_log_error(OS_LOG_DEFAULT, "raw: CPU backing release failed");
+}
+
+Bo Device::bufferBoLocked(const Buffer &buffer) const
+{
+    if (buffer.import)
+        return buffer.import->bo;
+    if (!buffer.span.valid())
+        return {};
+    const uint32_t index = buffer.span.chunk;
+    if (buffer.arena)
+        return index < arenas_.size() && !arenas_[index].purged ? arenas_[index].bo : Bo{};
+    const auto &chunks = buffer.wc ? wcChunks_ : chunks_;
+    return index < chunks.size() ? chunks[index].bo : Bo{};
+}
+
+CpuCompletion Device::captureCpuCompletion(uint32_t seqno, uint64_t generation,
+                                           const std::vector<const Buffer *> &buffers)
+{
+    CpuCompletion result;
+    result.supported = (k_.info().flags & TegraGM20BInfoCpuComplete) != 0;
+    if (!result.supported || buffers.empty())
+        return result;
+    std::lock_guard<std::mutex> lock(lock_);
+    if (generation != channelGeneration() || !channelReady_.load(std::memory_order_acquire) || fence_ == &kNoFence) {
+        result.valid = false;
+        return result;
+    }
+    const auto *identity = reinterpret_cast<const volatile TegraGM20BAbiFenceIdentity *>(
+        reinterpret_cast<const volatile uint8_t *>(fence_) + sizeof(TegraGM20BAbiFence) +
+        sizeof(TegraGM20BAbiFenceSemantic));
+    result.channelUid = __atomic_load_n(&identity->channel_uid, __ATOMIC_ACQUIRE);
+    result.channel = channel_;
+    result.seqno = seqno;
+    for (const Buffer *buffer : buffers) {
+        if (!buffer || !buffer->hostVisible || buffer->wc || !buffer->cpu)
+            continue;
+        const Bo bo = bufferBoLocked(*buffer);
+        const uint64_t prefix = bo.va - bo.vaBase;
+        const uintptr_t address = uintptr_t(buffer->cpu);
+        if (!bo.handle || !bo.cpu || bo.va < bo.vaBase || prefix > uintptr_t(bo.cpu)) {
+            result.valid = false;
+            break;
+        }
+        const uintptr_t base = uintptr_t(bo.cpu) - prefix;
+        if (address < base || !buffer->length || address - base > bo.bytes ||
+            buffer->length > bo.bytes - (address - base)) {
+            result.valid = false;
+            break;
+        }
+        result.ranges.push_back({bo.handle, address - base, buffer->length});
+    }
+    result.coalesce();
+    return result;
+}
+
+bool Device::hostAccess(const Buffer &buffer, bool write, HostAccess &access)
+{
+    return hostAccess(buffer, buffer.cpu, buffer.length, write, access);
+}
+
+bool Device::hostAccess(const Buffer &buffer, const void *cpu, uint64_t bytes, bool write, HostAccess &access)
+{
+    if (!hostRangeContains(buffer.cpu, buffer.length, cpu, bytes))
+        return false;
+    Bo bo;
+    {
+        std::lock_guard<std::mutex> lock(lock_);
+        bo = bufferBoLocked(buffer);
+    }
+    return access.acquire(k_, bo, cpu, bytes, write);
+}
+
+bool Device::hostAccess(const Texture &texture, bool write, HostAccess &access)
+{
+    return hostAccess(texture, texture.cpu, 0, write, access);
+}
+
+bool Device::hostAccess(const Texture &texture, const void *cpu, uint64_t requestedBytes,
+                        bool write, HostAccess &access)
+{
+    Bo bo;
+    uint64_t bytes = 0;
+    {
+        std::lock_guard<std::mutex> lock(lock_);
+        if (texture.span.valid()) {
+            const uint32_t index = texture.span.chunk;
+            if (texture.arena) {
+                if (index >= arenas_.size() || arenas_[index].purged)
+                    return false;
+                bo = arenas_[index].bo;
+            } else {
+                const Memory from = memoryOf(texture);
+                const auto &chunks = from == Memory::Bl ? blChunks_ : from == Memory::Wc ? wcChunks_ : chunks_;
+                if (index >= chunks.size())
+                    return false;
+                bo = chunks[index].bo;
+            }
+            bytes = texture.span.bytes;
+        } else if (texture.import) {
+            bo = texture.import->bo;
+            if (bo.va < bo.vaBase || bo.va - bo.vaBase > uintptr_t(bo.cpu))
+                return false;
+            const uintptr_t base = uintptr_t(bo.cpu) - (bo.va - bo.vaBase);
+            const uintptr_t ownerAddress = uintptr_t(texture.cpu);
+            if (ownerAddress < base || ownerAddress - base >= bo.bytes)
+                return false;
+            bytes = bo.bytes - (ownerAddress - base);
+        }
+    }
+    if (requestedBytes && !hostRangeContains(texture.cpu, bytes, cpu, requestedBytes))
+        return false;
+    return access.acquire(k_, bo, cpu, requestedBytes ? requestedBytes : bytes, write);
+}
 
 struct Lease {
     Device *dev;
@@ -14,7 +132,6 @@ struct Lease {
     Memory from;
     Span span;
     Import *import;
-    bool placed = true;  // an arena lease's span is its own placement (aliasArenaRange's is not)
 };
 
 namespace {
@@ -59,10 +176,7 @@ void Device::dropLocked(Lease *lease)
         break;
     case Memory::Arena:
         arenas_[lease->span.chunk].leases--;
-        if (lease->placed)
-            arenaFree(lease->span);
-        else if (arenas_[lease->span.chunk].dying && !arenas_[lease->span.chunk].leases)
-            freeArena(arenas_[lease->span.chunk]);
+        arenaFree(lease->span);
         break;
     }
     delete lease;
@@ -124,26 +238,6 @@ bool Device::alias(Buffer &b, Alias &a)
         return aliasArena(b.span, b.lease, a);
     const Chunk &ch = (b.wc ? wcChunks_ : chunks_)[b.span.chunk];
     describe(ch.bo, kPteKindPitch, leaseSpan(b.lease, b.span, b.wc ? Memory::Wc : Memory::Pool), a);
-    return true;
-}
-
-bool Device::aliasArenaRange(uint32_t arena, uint64_t va, uint64_t bytes, Alias &a)
-{
-    if (!k_.shared())
-        return false;
-    std::lock_guard<std::mutex> l(lock_);
-    if (arena >= arenas_.size() || !arenas_[arena].used || arenas_[arena].dying || arenas_[arena].purged)
-        return false;
-    Arena &ar = arenas_[arena];
-    if (!bytes || va < ar.va || bytes > ar.bytes || va - ar.va > ar.bytes - bytes)
-        return false;
-    a.cpu = ar.cpu;
-    a.bytes = ar.bytes;
-    a.handle = ar.bo.handle;
-    a.va = ar.va;
-    a.kind = ar.kind;
-    a.lease = new Lease{this, 1, Memory::Arena, {arena, va - ar.va, bytes, va, ar.cpu + (va - ar.va)}, nullptr, false};
-    ar.leases++;
     return true;
 }
 

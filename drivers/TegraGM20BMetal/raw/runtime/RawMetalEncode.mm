@@ -1,13 +1,14 @@
 // SPDX-License-Identifier: MIT
 #import "RawMetalPlanAdapters.h"
+#import "RawMetalPassFusion.h"
+#import "RawMetalSplitPlan.h"
 #include <optional>
 #include "raw_compute.h"
+#include "raw_compute_lookup.h"
 #include "raw_samples.h"
 
 // ---- the tape onto the raw path ----
-// false: something in it the raw path cannot do after all (*why); nothing of it was submitted then. A refusal inside one
-// encoder names that encoder's first command in *refusedEncoder; one no encoder owns (the channel's, the kernel's, a planar
-// texture sampled and rendered across the range) leaves it alone.
+// false: something in it the raw path cannot do after all (*why); nothing of it was submitted then
 // The host imports a texture's memory lies in, named to the submission (raw::CommandBuffer::use): a surface's or a planar
 // texture's planes, a buffer texture's buffer's, a view's parent's; and a YCbCr texture's planes, which only its conversion
 // reads (its image is pool memory).
@@ -31,7 +32,7 @@ void useBuffer(raw::CommandBuffer *rc, RMBuffer *b, bool write)
         rc->use(b->_raw, write);
 }
 
-bool encodeRaw(RMCommandBuffer *cb, size_t from, size_t to, const char **why, size_t *refusedEncoder)
+static bool encodeRawAttempt(RMCommandBuffer *cb, size_t from, size_t to, const char **why, bool &stale)
 {
     raw::Device &d = *gRM->raw;
     raw::CommandBuffer *rc = d.begin();
@@ -42,29 +43,72 @@ bool encodeRaw(RMCommandBuffer *cb, size_t from, size_t to, const char **why, si
         hit(cb, PredEncNoChannel);
         return false;
     }
-    cb->_plan.forEachUse(from, to, [&](void *value, uint8_t access) {
-        id object = (__bridge id)value;
-        const bool write = access & raw::ResourceUse::Write;
-        if (RMBuffer *buffer = cpuBufferOfResource(object);
-            buffer && !buffer->_raw.wc && (write || (access & raw::ResourceUse::Explicit)))
+    const uint64_t generation = d.channelGeneration();
+    rc->internalCompletion();
+#if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
+    rc->forceWholePrograms(cb->_forceWholePrograms);
+#endif
+    if (!validateNativeEventWaits(cb, generation)) {
+        rc->abandon();
+        *why = "the event producer no longer belongs to this GPU channel";
+        return false;
+    }
+    const auto buffers = [&](auto visit) {
+        cb->_plan.forEachResource(from, to, RMResourceKind::Buffer, visit);
+    };
+    const auto textures = [&](auto visit) {
+        cb->_plan.forEachResource(from, to, RMResourceKind::Texture, visit);
+    };
+    const auto pitchBuffer = [&](const RMRangeResource &use) {
+        if (RMBuffer *buffer = (__bridge RMBuffer *)use.facts.cpuBuffer)
+            rc->requirePitch(buffer->_raw.import);
+    };
+    buffers(pitchBuffer);
+    textures([&](const RMRangeResource &use) {
+        pitchBuffer(use);
+        RMTexture *texture = (__bridge RMTexture *)use.object;
+        if ((use.access & (raw::ResourceUse::Write | raw::ResourceUse::Explicit)) ||
+            !(use.access & raw::ResourceUse::Sample)) {
+            rc->requirePitch(texture->_raw.import);
+            for (const raw::Texture *plane : {texture->_raw.luma, texture->_raw.chroma})
+                if (plane)
+                    rc->requirePitch(plane->import);
+        }
+    });
+    textures([&](const RMRangeResource &use) {
+        if (!(use.access & raw::ResourceUse::Sample))
+            return;
+        RMTexture *texture = (__bridge RMTexture *)use.object;
+        for (const raw::Texture *plane : {&texture->_raw, texture->_raw.luma, texture->_raw.chroma})
+            if (plane && plane->nativePlane != ~0u && rc->readTexture(plane) == plane)
+                rc->requirePitch(plane->import);
+    });
+    const auto cleanBuffer = [&](const RMRangeResource &use) {
+        const bool write = use.access & raw::ResourceUse::Write;
+        if (RMBuffer *buffer = (__bridge RMBuffer *)use.facts.cpuBuffer;
+            buffer && buffer->_raw.hostVisible && !buffer->_raw.wc &&
+            (write || (use.access & raw::ResourceUse::Explicit)))
             rc->clean(buffer->_raw.cpu, buffer->_raw.length, write);
-        if ([object isKindOfClass:[RMBuffer class]])
-            useBuffer(rc, (RMBuffer *)object, write);
-        else if ([object isKindOfClass:[RMTexture class]])
-            useTexture(rc, (RMTexture *)object, write);
+    };
+    buffers([&](const RMRangeResource &use) {
+        cleanBuffer(use);
+        useBuffer(rc, (__bridge RMBuffer *)use.object, use.access & raw::ResourceUse::Write);
+    });
+    textures([&](const RMRangeResource &use) {
+        cleanBuffer(use);
+        useTexture(rc, (__bridge RMTexture *)use.object, use.access & raw::ResourceUse::Write);
     });
     raw::RenderEncoder *re = nullptr;
     raw::BlitEncoder *be = nullptr;
     std::optional<raw::ComputeEncoder> ce;
     bool serialCompute = false;
     raw::StateCursor stateCursor;
-    size_t encoder = to;
+    size_t renderBegin = to;
+    bool continuing = false;
 
     auto fail = [&](RMPred p, const char *w, uint64_t a = 0, uint64_t b = 0) {
         *why = w;
         hit(cb, p, a, b);
-        if (encoder < to)
-            *refusedEncoder = encoder;
         rc->abandon();
         return false;
     };
@@ -75,8 +119,6 @@ bool encodeRaw(RMCommandBuffer *cb, size_t from, size_t to, const char **why, si
         const raw::Refusal &f = rc->refusal;
         hit(cb, f.id < sizeof map / sizeof *map ? map[f.id] : PredEncPassRender, f.a,
             uint64_t(f.b) | uint64_t(f.c) << 32);
-        if (encoder < to)
-            *refusedEncoder = encoder;
         rc->abandon();
         return false;
     };
@@ -166,30 +208,20 @@ bool encodeRaw(RMCommandBuffer *cb, size_t from, size_t to, const char **why, si
     struct Conversion {
         RMTexture *t;
         uint32_t seed;
-        uint64_t writes;
+        uint64_t writes, nativeGeneration;
     };
 
     std::vector<Conversion> converted;  // planar images converted here, at their surfaces' seeds and write counts
     {
-        std::vector<RMTexture *> planar, rendered;
+        std::vector<RMTexture *> planar;
         std::vector<RMSampler *> samplers;
-        cb->_plan.forEachUse(from, to, [&](void *value, uint8_t access) {
-            id object = (__bridge id)value;
-            if ([object isKindOfClass:[RMSampler class]]) {
-                samplers.push_back((RMSampler *)object);
-            } else if ([object isKindOfClass:[RMTexture class]]) {
-                RMTexture *texture = (RMTexture *)object;
-                if ((access & raw::ResourceUse::Sample) && texture->_raw.converted())
-                    planar.push_back(texture);
-                if ((access & raw::ResourceUse::Write) && texture->_raw.planarStandIn)
-                    rendered.push_back(texture);
-            }
+        cb->_plan.forEachResource(from, to, RMResourceKind::Sampler, [&](const RMRangeResource &use) {
+            samplers.push_back((__bridge RMSampler *)use.object);
         });
-        // its image is converted once, before the passes: one that a pass here also stores into is m2v's
-        for (RMTexture *t : rendered)
-            if (std::find(planar.begin(), planar.end(), t) != planar.end())
-                return fail(PredEncPlanarRT, "a planar texture sampled and rendered in one command buffer",
-                            t->_raw.width, t->_raw.height);
+        textures([&](const RMRangeResource &use) {
+            if ((use.access & raw::ResourceUse::Sample) && (use.facts.roles & RMResourceFacts::Converted))
+                planar.push_back((__bridge RMTexture *)use.object);
+        });
         if (!planar.empty()) {
             // the samplers' headers under the planar textures' address maps (m2v's), which the draws' handles take
             for (RMTexture *t : planar)
@@ -203,9 +235,12 @@ bool encodeRaw(RMCommandBuffer *cb, size_t from, size_t to, const char **why, si
             for (RMTexture *t : planar) {
                 const uint32_t seed = t->_surface ? IOSurfaceGetSeed(t->_surface) : 0;
                 const uint64_t writes = t->_surface ? surfaceWrites(t->_surface) : 0;
-                if (!t->_surface || !t->_imageCurrent || t->_imageSeed != seed || t->_imageWrites != writes) {
+                const raw::Texture *luma = rc->readTexture(t->_raw.luma);
+                const uint64_t nativeGeneration = luma ? luma->nativeGeneration : 0;
+                if (!t->_surface || !t->_imageCurrent || t->_imageSeed != seed || t->_imageWrites != writes ||
+                    t->_imageNativeGeneration != nativeGeneration) {
                     stale.push_back(t);
-                    converted.push_back({t, seed, writes});
+                    converted.push_back({t, seed, writes, nativeGeneration});
 #if SWITCH_FRAME_TIMELINE
                     traceSurfaceImage(t, "converted", seed);
 #endif
@@ -231,7 +266,7 @@ bool encodeRaw(RMCommandBuffer *cb, size_t from, size_t to, const char **why, si
             for (RMTexture *t : planar)
                 if (t->_raw.ycbcr)
                     for (const raw::Texture *x : {t->_raw.luma, t->_raw.chroma})
-                        if (x && x->sampled) {
+                        if (x && x->sampled && rc->readTexture(x) == x) {
                             if (!fill)
                                 fill = rc->blit();
                             fill->copyTexels(*x, 0, 0, 0, *x->sampled, 0, 0, 0, x->width, x->height);
@@ -268,15 +303,18 @@ bool encodeRaw(RMCommandBuffer *cb, size_t from, size_t to, const char **why, si
     // its shadow at each encoder that uses it once written since)
     std::set<RMTexture *> fresh;
     raw::Texture levelTargets[8];  // the open pass's level targets: the encoder reads them until its end()
+#if SWITCH_RAW_DIAGNOSTICS
     uint64_t levelPasses = 0;
     static std::atomic<bool> loggedLevel{false};
+#endif
     auto refresh = [&](size_t pass) {
-        cb->_plan.forEachUse(pass, cb->_plan.encoderEnd(pass), [&](void *value, uint8_t access) {
-            id object = (__bridge id)value;
-            if (!(access & raw::ResourceUse::Sample) || ![object isKindOfClass:[RMTexture class]])
+        cb->_plan.forEachResource(pass, cb->_plan.encoderEnd(pass), RMResourceKind::Texture,
+                                  [&](const RMRangeResource &use) {
+            if (!(use.access & raw::ResourceUse::Sample))
                 return;
-            RMTexture *t = (RMTexture *)object;
-            if (!t->_raw.sampled || (!t->_raw.surfaceView && !fresh.insert(t).second))
+            RMTexture *t = (__bridge RMTexture *)use.object;
+            if (rc->readTexture(&t->_raw) != &t->_raw || !t->_raw.sampled ||
+                (!t->_raw.surfaceView && !fresh.insert(t).second))
                 return;
             const raw::Texture &x = t->_raw;
             raw::BlitEncoder *b = rc->blit();
@@ -292,11 +330,11 @@ bool encodeRaw(RMCommandBuffer *cb, size_t from, size_t to, const char **why, si
         codes;  // the conversions' sources: the codes' headers (the encoder reads them until its end)
     auto standIns = [&](size_t pass) {
         std::vector<RMTexture *> stale;
-        cb->_plan.forEachUse(pass, cb->_plan.encoderEnd(pass), [&](void *value, uint8_t access) {
-            id object = (__bridge id)value;
-            if (!(access & raw::ResourceUse::Sample) || ![object isKindOfClass:[RMTexture class]])
+        cb->_plan.forEachResource(pass, cb->_plan.encoderEnd(pass), RMResourceKind::Texture,
+                                  [&](const RMRangeResource &use) {
+            if (!(use.access & raw::ResourceUse::Sample))
                 return;
-            RMTexture *texture = (RMTexture *)object;
+            RMTexture *texture = (__bridge RMTexture *)use.object;
             if (texture->_raw.standIn && !standInFresh.count(texture))
                 stale.push_back(texture);
         });
@@ -326,18 +364,17 @@ bool encodeRaw(RMCommandBuffer *cb, size_t from, size_t to, const char **why, si
     };
     for (size_t at = from; at < to; at++) {
         const Cmd c = cb->_plan.legacy(at);
-        if (c.op == OpRender || c.op == OpCompute || c.op == OpBlit)
-            encoder = at;
         if (c.op == OpDispatch) {
             const auto &dispatch = cb->_plan.dispatch(at);
-            const auto *kernel = static_cast<const raw::ComputeState *>(dispatch.kernel);
+            const auto *kernels = static_cast<const raw::ComputeKernelSet<raw::ComputeState> *>(dispatch.kernel);
             const auto &state = cb->_plan.kernelStates[dispatch.state];
             const auto &textures = cb->_plan.textures[2][state.textures].objects;
             std::array<RMTexture *, 31> shadows{};
             size_t count = 0;
             for (uint32_t slots = dispatch.surfaceSlots; slots; slots &= slots - 1) {
                 RMTexture *texture = (__bridge RMTexture *)textures[__builtin_ctz(slots)];
-                if (texture && std::find(shadows.begin(), shadows.begin() + count, texture) == shadows.begin() + count)
+                if (texture && rc->readTexture(&texture->_raw) == &texture->_raw &&
+                    std::find(shadows.begin(), shadows.begin() + count, texture) == shadows.begin() + count)
                     shadows[count++] = texture;
             }
             auto copyShadows = [&](bool store) {
@@ -357,11 +394,16 @@ bool encodeRaw(RMCommandBuffer *cb, size_t from, size_t to, const char **why, si
             if (count)
                 copyShadows(false);
             encodePlannedState(cb, at, *rc, re, &*ce, stateCursor);
-            const uint32_t groups[3] = {uint32_t(dispatch.groups[0]), uint32_t(dispatch.groups[1]),
-                                        uint32_t(dispatch.groups[2])};
-            ce->setState(kernel);
-            if (const char *w = nullptr; !ce->dispatch(groups, dispatch.threads.data(), &w))
-                return fail(PredCompute, w, c.op);
+            const auto &regions = dispatch.regions;
+            if (!kernels || kernels->count != regions.count)
+                return fail(PredCompute, "a dispatch with an incomplete region plan", c.op);
+            for (uint8_t region = 0; region < regions.count; ++region) {
+                ce->setState(kernels->jobs[region]->value());
+                if (const char *w = nullptr;
+                    !ce->dispatchRegion(regions.regions[region], regions.grid, regions.nominal, !region,
+                                        region + 1 == regions.count, &w))
+                    return fail(PredCompute, w, c.op);
+            }
             if (count) {
                 copyShadows(true);
                 fresh.clear();
@@ -382,6 +424,17 @@ bool encodeRaw(RMCommandBuffer *cb, size_t from, size_t to, const char **why, si
             break;
         case OpRender: {
             const RMPass &pass = cb->_passes[c.x];
+            renderBegin = at;
+            if (continuing) {
+                continuing = false;
+                uint8_t stores = 0;
+                for (uint32_t i = 0; i < 8; ++i)
+                    if (pass.color[i].texture && pass.color[i].store == MTLStoreActionStore)
+                        stores |= uint8_t(1u << i);
+                re->continuePass(stores);
+                planSplitPrograms(cb, at, *re);
+                break;
+            }
             if (cb->_sampledShadows)
                 refresh(at);
             if (cb->_standIns && !standIns(at))
@@ -411,10 +464,12 @@ bool encodeRaw(RMCommandBuffer *cb, size_t from, size_t to, const char **why, si
                     if (!raw::chainLevelTarget(t->_raw, uint32_t(a.level), levelTargets[j]))
                         return fail(PredEncPassRender, "a mip level the raw path cannot render to", a.level);
                     levelTargets[j].tic = gRM->raw->levelTic(t->_raw, uint32_t(a.level));
+#if SWITCH_RAW_DIAGNOSTICS
                     levelPasses++;
                     if (!loggedLevel.exchange(true))
                         os_log(rawLog(), "raw: renders into mip levels (first: level %lu of %ux%u format %u)",
                                (unsigned long)a.level, t->_raw.width, t->_raw.height, t->_raw.format);
+#endif
                 }
                 p.color[j].texture = a.level                 ? &levelTargets[j]
                                      : t->_raw.planarStandIn ? t->_raw.planarStandIn
@@ -425,8 +480,7 @@ bool encodeRaw(RMCommandBuffer *cb, size_t from, size_t to, const char **why, si
                 p.color[j].store =
                     a.store == MTLStoreActionStore || a.store == MTLStoreActionStoreAndMultisampleResolve;
                 if (a.store == MTLStoreActionMultisampleResolve || a.store == MTLStoreActionStoreAndMultisampleResolve)
-                    if (RMTexture *r =
-                            (RMTexture *)((__bridge MTLRenderPassDescriptor *)c.obj).colorAttachments[j].resolveTexture)
+                    if (RMTexture *r = (RMTexture *)a.resolve)
                         resolves.push_back({j, r});
                 const MTLClearColor k = a.clear;
                 p.color[j].clear[0] = float(k.red);
@@ -450,12 +504,18 @@ bool encodeRaw(RMCommandBuffer *cb, size_t from, size_t to, const char **why, si
             standInLoads.clear();
             if (!(re = rc->render(p)))
                 return fail(PredEncPassRender, "a pass the raw path cannot render to", p.count);
+            planSplitPrograms(cb, at, *re);
             break;
         }
         case OpBlit:
             be = rc->blit();
             break;
         case OpEnd:
+            if (re && at + 1 < to && cb->_plan.operation(at + 1).op == OpRender &&
+                raw::canFusePasses(fusionPass(cb, renderBegin), fusionPass(cb, at + 1))) {
+                continuing = true;
+                break;
+            }
             if (re)
                 re->end();
             if (re && !resolvePasses())
@@ -539,25 +599,73 @@ bool encodeRaw(RMCommandBuffer *cb, size_t from, size_t to, const char **why, si
     for (RMTexture *t : standInStores)
         if (standInPass(t, true))
             return false;
-    encoder = to;
     uint32_t seq = 0;
+    prepareSharedEvents(cb, rc);
     if (!rc->commit(seq)) {
         cb->_partial = rc->partial;
+        if (rc->admissionBlocked) {
+            RMQueue *queue = cb->_queue;
+            int armed = KERN_SUCCESS;
+            cb->_resourceReady = rc->resourceReadiness([queue] { wakeSubmit((__bridge void *)queue); }, armed);
+            if (!cb->_resourceReady) {
+                std::lock_guard<std::mutex> lock(cb->_lock);
+                cb->_segError = [NSError errorWithDomain:MTLCommandBufferErrorDomain
+                                                   code:MTLCommandBufferErrorInternal
+                                               userInfo:@{NSLocalizedDescriptionKey : @"Resource readiness notification could not be armed"}];
+            }
+            rc->abandon();
+            return false;
+        }
+        stale = rc->nativeError == kIOReturnNotReady && !rc->partial;
+        if (stale)
+            rc->invalidateNativeReads();
+        else if (rc->nativeError && !rc->partial)
+            cb->_segError = [NSError errorWithDomain:MTLCommandBufferErrorDomain
+                                               code:MTLCommandBufferErrorInternal
+                                           userInfo:@{NSLocalizedDescriptionKey : @"Native ownership or event dependency failed"}];
+        if (stale) {
+            rc->abandon();
+            return false;
+        }
         return fail(PredEncKernel, "the kernel refused the submission");
     }
+    publishSharedEvents(cb);
     for (const Conversion &c : converted) {  // (submitted: their images hold the surfaces at these seeds)
         c.t->_imageSeed = c.seed;
         c.t->_imageWrites = c.writes;
+        c.t->_imageNativeGeneration = c.nativeGeneration;
         c.t->_imageCurrent = true;
     }
     noteSurfaceWrites(cb, from, to);
     for (RMTexture *t : planesWritten)  // a write the surface's seed does not show: its image is converted again
         t->_imageCurrent = false;
     cb->_seqno = seq;
+    cb->_channelGeneration = generation;
     cb->_stamp = cb->_segs.size() == 1 && cb->_segs.front().raw ? rc->stamp : 0;
-    d.stats.levelPasses += levelPasses;
-    gRM->stats.draws += rc->draws;
-    gRM->stats.passes += rc->passes;
-    gRM->stats.copies += rc->blits;
+    RAW_DIAGNOSTIC(d.stats.levelPasses += levelPasses);
+    RAW_DIAGNOSTIC(gRM->stats.draws += rc->draws);
+    RAW_DIAGNOSTIC(gRM->stats.passes += rc->passes);
+    RAW_DIAGNOSTIC(gRM->stats.copies += rc->blits);
     return true;
+}
+
+bool encodeRaw(RMCommandBuffer *cb, size_t from, size_t to, const char **why)
+{
+    if (RMTexture *feedback = (__bridge RMTexture *)cb->_plan.nativeRangeRefusal(from, to)) {
+        *why = "a planar texture sampled and rendered in one command buffer";
+        hit(cb, PredEncPlanarRT, feedback->_raw.width, feedback->_raw.height);
+        return false;
+    }
+    for (unsigned attempt = 0; attempt < 3; ++attempt) {
+        bool stale = false;
+        if (encodeRawAttempt(cb, from, to, why, stale))
+            return true;
+        if (!stale)
+            return false;
+    }
+    *why = "the native surface changed repeatedly before submission";
+    cb->_segError = [NSError errorWithDomain:MTLCommandBufferErrorDomain
+                                       code:MTLCommandBufferErrorInternal
+                                   userInfo:@{NSLocalizedDescriptionKey : @"Native surface changed during submission"}];
+    return false;
 }

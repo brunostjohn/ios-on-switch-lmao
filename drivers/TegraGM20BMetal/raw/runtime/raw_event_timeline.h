@@ -1,6 +1,4 @@
 // SPDX-License-Identifier: MIT
-// Shared event values a submitted command buffer signals once its work completes (RawMetalEvents.mm): each a promise its
-// completion settles, the CPU-visible value written only when it succeeds.
 #pragma once
 #include <algorithm>
 #include <atomic>
@@ -22,19 +20,14 @@ struct EventFence {
     }
 };
 
-enum class EventOutcome : uint8_t {
-    pending,
-    succeeded,
-    failed
-};
+enum class EventOutcome : uint8_t { pending, succeeded, failed };
 
 class EventPromise {
 public:
     const EventFence fence;
     const uint64_t value;
 
-    EventPromise(EventFence fence, uint64_t value) : fence(fence), value(value)
-    {}
+    EventPromise(EventFence fence, uint64_t value) : fence(fence), value(value) {}
 
     EventOutcome outcome() const
     {
@@ -44,7 +37,8 @@ public:
     bool orderedOn(uint64_t generation) const
     {
         const EventOutcome state = outcome();
-        return state == EventOutcome::succeeded || (state == EventOutcome::pending && fence.generation == generation);
+        return state == EventOutcome::succeeded ||
+               (state == EventOutcome::pending && fence.generation == generation);
     }
 
     bool settle(bool success)
@@ -130,30 +124,13 @@ public:
         return true;
     }
 
-    // A command buffer already submitted signals at least `value` once its work completes, success or not: a wait for it
-    // needs nothing its waiter does
-    bool promised(Key event, uint64_t value) const
-    {
-        const auto it = events_.find(event);
-        if (it == events_.end())
-            return false;
-        for (auto at = it->second.signals.lower_bound(value); at != it->second.signals.end(); ++at)
-            if (at->second->outcome() == EventOutcome::pending)
-                return true;
-        return false;
-    }
-
-    size_t size() const
-    {
-        return events_.size();
-    }
+    size_t size() const { return events_.size(); }
 
 private:
     struct State {
         std::multimap<uint64_t, Promise> signals;
         std::map<Key, uint64_t> waiters;
     };
-
     std::unordered_map<Key, State> events_;
 
     void prune(decltype(events_)::iterator it)
@@ -163,14 +140,10 @@ private:
     }
 };
 
-enum class EventDependencyState {
-    ready,
-    blocked,
-    failed
-};
+enum class EventDependencyState { ready, blocked, failed };
 
-inline EventDependencyState eventDependencies(const std::vector<EventTimeline::Promise> &promises, uint64_t generation,
-                                              bool gpuOrdered)
+inline EventDependencyState eventDependencies(const std::vector<EventTimeline::Promise> &promises,
+                                               uint64_t generation, bool gpuOrdered)
 {
     bool blocked = false;
     for (const auto &promise : promises) {
@@ -183,4 +156,4 @@ inline EventDependencyState eventDependencies(const std::vector<EventTimeline::P
     return blocked ? EventDependencyState::blocked : EventDependencyState::ready;
 }
 
-}  // namespace raw
+} // namespace raw

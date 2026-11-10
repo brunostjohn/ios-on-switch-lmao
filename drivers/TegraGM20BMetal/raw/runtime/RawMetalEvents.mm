@@ -1,15 +1,13 @@
 // SPDX-License-Identifier: MIT
 #import "RawMetalInternal.h"
-#include "raw_promised_signals.h"
 
 @implementation RMCommandBuffer (Events)
 
 // `milliseconds`: a wait's own limit (encodeWaitForEvent:value:timeout:), 0 for none
 - (void)event:(id<MTLEvent>)event value:(uint64_t)value signal:(bool)signal timeout:(uint32_t)milliseconds
 {
-    // the m2v device's events, shared or plain (NBEvent answers a shared event's value, set and notifications): the raw path
-    // signals them from the CPU once its work completes, and holds its work until a wait is covered (waitCovered); an event
-    // without those (another device's) is m2v's alone
+    // Plain compatibility events expose this observation contract too. Kernel-backed shared events additionally carry
+    // their native capability through the atomic job; opaque events retain a compatibility boundary.
     if (![(id)event respondsToSelector:@selector(signaledValue)] ||
         ![(id)event respondsToSelector:@selector(setSignaledValue:)] ||
         ![(id)event respondsToSelector:@selector(notifyListener:atValue:block:)]) {
@@ -75,90 +73,6 @@ void unhold(RMCommandBuffer *cb)
 #endif
 }
 
-uint64_t signalled(NSMapTable *map, void *event)
-{
-    std::lock_guard<std::mutex> l(gRM->eventValues);
-    NSNumber *n = [map objectForKey:(__bridge id)event];
-    return n ? n.unsignedLongLongValue : 0;
-}
-
-// Only completed execution ranges publish CPU event values. A later wait cannot observe a signal from an unexecuted
-// suffix, and a failed/cancelled range never manufactures a successful signal.
-void forgetSignals()
-{
-    std::lock_guard<std::mutex> l(gRM->eventValues);
-    [gRM->rawSignals removeAllObjects];
-    [gRM->m2vSignals removeAllObjects];
-}
-
-static raw::RangeKind rangeKind(RMCommandBuffer *cb, size_t at)
-{
-    const RMSegment &range = cb->_segs[at];
-    if (!range.event)
-        return range.raw ? raw::RangeKind::native : raw::RangeKind::compatibility;
-    return cb->_plan.operation(range.from).op == OpSignalEvent ? raw::RangeKind::signal : raw::RangeKind::wait;
-}
-
-// The raw range at _segNext was just submitted: the signals right after it are promised, to be published as it completes
-// (raw_promised_signals.h), so they no longer hold its queue's head until then
-std::vector<RMEventSignal> publishRawEventSignals(RMCommandBuffer *cb)
-{
-    std::vector<RMEventSignal> signals;
-    const uint32_t generation = gRM->raw->channelGeneration();
-    if (!cb->_rawGeneration)
-        cb->_rawGeneration = generation;
-    const size_t next = cb->_segNext + 1;
-    if (next >= cb->_segs.size() || rangeKind(cb, next) != raw::RangeKind::signal)
-        return signals;
-    bool failed;
-    {
-        std::lock_guard<std::mutex> l(cb->_lock);
-        failed = cb->_segError != nil;
-    }
-    const size_t end = raw::promisedSignalsEnd(
-        [cb](size_t at) {
-            return rangeKind(cb, at);
-        },
-        cb->_segs.size(), cb->_segNext, cb->_rawGeneration == generation, failed);
-    std::vector<raw::EventTimeline::Key> wake;
-    std::lock_guard<std::mutex> l(gRM->eventValues);
-    for (size_t at = next; at < end; ++at) {
-        RMSegment &range = cb->_segs[at];
-        const Cmd event = cb->_plan.legacy(range.from);
-        auto promise =
-            gRM->events.publish(reinterpret_cast<uintptr_t>(event.obj), event.c, {cb->_seqno, generation}, wake);
-        if (!promise)
-            break;
-        signals.push_back({event.obj, std::move(promise)});
-        range.promised = true;
-    }
-#if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
-    gRM->stats.signalsPublished += signals.size();
-#endif
-    return signals;
-}
-
-// The raw range the signals followed completed: on success each value is written before its promise leaves the
-// registry, so a wait never finds it neither promised nor reached
-void retireEventSignals(const std::vector<RMEventSignal> &signals, bool success)
-{
-    for (const RMEventSignal &signal : signals) {
-        if (success) {
-            id<MTLSharedEvent> event = (__bridge id)signal.event;
-            if (event.signaledValue < signal.promise->value)
-                event.signaledValue = signal.promise->value;
-        }
-        std::lock_guard<std::mutex> l(gRM->eventValues);
-        gRM->events.retire(reinterpret_cast<uintptr_t>(signal.event), signal.promise, success);
-    }
-}
-
-bool promisedEvent(void *event, uint64_t value)
-{
-    std::lock_guard<std::mutex> l(gRM->eventValues);
-    return gRM->events.promised(reinterpret_cast<uintptr_t>(event), value);
-}
-
 void armEventWaits(RMCommandBuffer *cb)
 {
     cb->_eventWaits.clear();
@@ -169,6 +83,38 @@ void armEventWaits(RMCommandBuffer *cb)
 raw::EventReadiness eventReadiness(RMCommandBuffer *cb, raw::EventDeadline::Time &nextWake)
 {
     using Readiness = raw::EventReadiness;
+    if (cb->_resourceReady) {
+        const int result = cb->_resourceReady->result();
+        if (result == kIOReturnNotReady)
+            return Readiness::blocked;
+        cb->_resourceReady.reset();
+        if (result != KERN_SUCCESS) {
+            std::lock_guard<std::mutex> lock(cb->_lock);
+            cb->_segError = [NSError errorWithDomain:MTLCommandBufferErrorDomain
+                                               code:MTLCommandBufferErrorInternal
+                                           userInfo:@{NSLocalizedDescriptionKey : @"Resource readiness failed before GPU submission"}];
+            return Readiness::ready;
+        }
+    }
+    const bool native = cb->_segNext < cb->_segs.size() &&
+                        (cb->_segs[cb->_segNext].raw || cb->_segs[cb->_segNext].gpuSignal ||
+                         cb->_segs[cb->_segNext].gpuWait);
+    if (!sharedWaitsReady(cb, native))
+        return Readiness::blocked;
+    if (!cb->_gpuEventWaits.empty()) {
+        std::lock_guard<std::mutex> lock(cb->_lock);
+        switch (raw::eventDependencies(cb->_gpuEventWaits, gRM->raw->channelGeneration(), native)) {
+        case raw::EventDependencyState::blocked:
+            return Readiness::blocked;
+        case raw::EventDependencyState::failed:
+            cb->_segError = [NSError errorWithDomain:MTLCommandBufferErrorDomain
+                                               code:MTLCommandBufferErrorInternal
+                                           userInfo:@{NSLocalizedDescriptionKey : @"A GPU event producer failed"}];
+            return Readiness::ready;
+        case raw::EventDependencyState::ready:
+            break;
+        }
+    }
     if (cb->_segNext >= cb->_segs.size())
         return Readiness::ready;
     const RMSegment &range = cb->_segs[cb->_segNext];
@@ -176,7 +122,7 @@ raw::EventReadiness eventReadiness(RMCommandBuffer *cb, raw::EventDeadline::Time
         return Readiness::ready;
     const Cmd c = cb->_plan.legacy(range.from);
     if (c.op == OpSignalEvent) {
-        if (range.promised)
+        if (range.gpuSignal)
             return Readiness::ready;
         std::lock_guard<std::mutex> l(cb->_lock);
         return cb->_segmentPending ? Readiness::blocked : Readiness::ready;
@@ -184,6 +130,24 @@ raw::EventReadiness eventReadiness(RMCommandBuffer *cb, raw::EventDeadline::Time
     id event = (__bridge id)c.obj;
     if ([event signaledValue] >= c.c)
         return Readiness::ready;
+    const int shared = sharedEventReadiness(cb, event, c.c, range.gpuWait);
+    if (shared > 0)
+        return Readiness::ready;
+    if (range.gpuWait && shared < 0) {
+        cb->_nativeWaitEvent = c.obj;
+        raw::EventTimeline::Promise promise;
+        {
+            std::lock_guard<std::mutex> lock(gRM->eventValues);
+            promise = gRM->events.observe(reinterpret_cast<uintptr_t>(c.obj), c.c,
+                                           reinterpret_cast<uintptr_t>((__bridge void *)cb->_queue),
+                                           gRM->raw->channelGeneration());
+        }
+        if (promise) {
+            std::lock_guard<std::mutex> lock(cb->_lock);
+            cb->_gpuEventWaits.push_back(std::move(promise));
+            return Readiness::ready;
+        }
+    }
     {
         std::lock_guard<std::mutex> l(cb->_lock);
         if (cb->_segmentPending)
@@ -194,16 +158,14 @@ raw::EventReadiness eventReadiness(RMCommandBuffer *cb, raw::EventDeadline::Time
         cb->_eventArmed = range.from + 1;
         cb->_eventStart = raw::EventDeadline::Clock::now();
         cb->_eventWaits.push_back(range.from);
-#if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
-        if (promisedEvent(c.obj, c.c))
-            gRM->stats.waitsOnPromise++;
-#endif
         // Registration is done outside the scheduler mutex: an already satisfied event may deliver its notification
         // immediately. The callback does not retain a command buffer or scan unrelated dependency lists.
-        [event notifyListener:gRM->listener
+        void *queue = (__bridge void *)cb->_queue;
+        if (shared < 0)
+            [event notifyListener:gRM->listener
                       atValue:c.c
                         block:^(id<MTLSharedEvent>, uint64_t) {
-                            wakeSubmit();
+                            wakeSubmit(queue);
                         }];
     }
     const raw::EventDeadline deadline(cb->_eventStart, c.a);
@@ -211,6 +173,86 @@ raw::EventReadiness eventReadiness(RMCommandBuffer *cb, raw::EventDeadline::Time
     if (state == Readiness::blocked)
         nextWake = std::min(nextWake, deadline.until());
     return state;
+}
+
+std::vector<RMNativeEventSignal> publishRawEventSignals(RMCommandBuffer *cb)
+{
+    std::vector<RMNativeEventSignal> signals;
+    std::vector<uintptr_t> wake;
+    if (!cb->_rawPrefixGeneration)
+        cb->_rawPrefixGeneration = cb->_channelGeneration;
+    if (cb->_rawPrefixGeneration != cb->_channelGeneration)
+        cb->_gpuPrefixEligible = false;
+    if (!cb->_gpuPrefixEligible || cb->_segNext + 1 >= cb->_segs.size() ||
+        !cb->_segs[cb->_segNext + 1].event)
+        return signals;
+    {
+        std::lock_guard<std::mutex> lock(cb->_lock);
+        if (cb->_segError)
+            return signals;
+        std::lock_guard<std::mutex> events(gRM->eventValues);
+        for (size_t at = cb->_segNext + 1; at < cb->_segs.size(); ++at) {
+            auto &range = cb->_segs[at];
+            if (!range.event)
+                break;
+            const Cmd event = cb->_plan.legacy(range.from);
+            if (event.op != OpSignalEvent)
+                break;
+            if (range.gpuSignal)
+                continue;
+            auto promise = gRM->events.publish(reinterpret_cast<uintptr_t>(event.obj), event.c,
+                                               {cb->_seqno, cb->_channelGeneration}, wake);
+            if (!promise)
+                break;
+            signals.push_back({event.obj, std::move(promise)});
+            range.gpuSignal = true;
+        }
+    }
+    for (uintptr_t queue : wake)
+        wakeSubmit(reinterpret_cast<void *>(queue));
+    return signals;
+}
+
+void retireEventSignals(const std::vector<RMNativeEventSignal> &signals, bool success)
+{
+    for (const auto &signal : signals) {
+        std::vector<uintptr_t> wake;
+        {
+            std::lock_guard<std::mutex> lock(gRM->eventValues);
+            gRM->events.retire(reinterpret_cast<uintptr_t>(signal.event), signal.promise, success, &wake);
+        }
+        if (success) {
+            id<MTLSharedEvent> event = (__bridge id)signal.event;
+            if (event.signaledValue < signal.promise->value)
+                event.signaledValue = signal.promise->value;
+        }
+        for (uintptr_t queue : wake)
+            wakeSubmit(reinterpret_cast<void *>(queue));
+    }
+}
+
+bool validateNativeEventWaits(RMCommandBuffer *cb, uint64_t generation)
+{
+    if (cb->_gpuEventWaits.empty())
+        return true;
+    std::lock_guard<std::mutex> lock(cb->_lock);
+    if (raw::eventDependencies(cb->_gpuEventWaits, generation, true) == raw::EventDependencyState::ready)
+        return true;
+    cb->_segError = [NSError errorWithDomain:MTLCommandBufferErrorDomain
+                                       code:MTLCommandBufferErrorInternal
+                                   userInfo:@{NSLocalizedDescriptionKey : @"The GPU event producer was lost"}];
+    return false;
+}
+
+void releaseEventWaits(RMCommandBuffer *cb)
+{
+    cb->_sharedEventWatch.reset();
+    if (!cb->_nativeWaitEvent)
+        return;
+    std::lock_guard<std::mutex> lock(gRM->eventValues);
+    gRM->events.unobserve(reinterpret_cast<uintptr_t>(cb->_nativeWaitEvent),
+                          reinterpret_cast<uintptr_t>((__bridge void *)cb->_queue));
+    cb->_nativeWaitEvent = nullptr;
 }
 
 bool expiredEventWait(RMCommandBuffer *cb, size_t index)

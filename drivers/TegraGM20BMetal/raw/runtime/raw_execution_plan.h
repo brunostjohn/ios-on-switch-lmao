@@ -16,6 +16,7 @@ enum class ExecutionKind : uint8_t {
 struct ExecutionRange {
     size_t from, to;
     ExecutionKind kind;
+    bool gpuWait = false;
 };
 
 struct ExecutionAttribution {
@@ -51,8 +52,12 @@ public:
         const bool work = kind == ExecutionKind::native || kind == ExecutionKind::compatibility;
         if (work && !ranges_.empty() && ranges_.back().kind == kind && ranges_.back().to == from)
             ranges_.back().to = to;
-        else
+        else {
             ranges_.push_back({from, to, kind});
+            if (kind == ExecutionKind::native)
+                for (size_t at = ranges_.size() - 1; at && ranges_[at - 1].kind == ExecutionKind::wait; --at)
+                    ranges_[at - 1].gpuWait = true;
+        }
     }
 
     const std::vector<ExecutionRange> &ranges() const
@@ -60,21 +65,5 @@ public:
         return ranges_;
     }
 };
-
-// A native range whose encoder [from, to) the raw path refused while encoding it: that encoder alone goes to m2v, and
-// the encoders before and after it stay native, each side a range of its own. An encoder not inside the range, or
-// none, sends the whole range to m2v.
-inline std::vector<ExecutionRange> isolate(const ExecutionRange &range, size_t from, size_t to)
-{
-    if (from < range.from || to > range.to || from >= to)
-        return {{range.from, range.to, ExecutionKind::compatibility}};
-    std::vector<ExecutionRange> parts;
-    if (range.from < from)
-        parts.push_back({range.from, from, ExecutionKind::native});
-    parts.push_back({from, to, ExecutionKind::compatibility});
-    if (to < range.to)
-        parts.push_back({to, range.to, ExecutionKind::native});
-    return parts;
-}
 
 }  // namespace raw

@@ -597,8 +597,6 @@ void startRates()
         // The raw path's own: command buffers on each path and why, encode, draws, memory.
         if (gRaw && raw_metal_rates(line, sizeof line))
             os_log(logger(), "TegraGM20BMetal: %{public}s %{public}s", processWord(), line);
-        if (gRaw && raw_metal_fetch_rates(line, sizeof line))
-            os_log(logger(), "TegraGM20BMetal: %{public}s %{public}s", processWord(), line);
     });
     dispatch_resume(timer);
 }
@@ -779,7 +777,7 @@ id openDevice(unsigned port)
                        getprogname(), pack, (unsigned long long)TEGRA_RAW_STACK);
                 device = raw;
                 gRaw = true;
-                raw_metal_complete_states(cache);
+                raw_metal_complete_states(cache, pack);
             } else {
                 os_log_error(logger(),
                              "TegraGM20BMetal: raw GM20B path off in %{public}s (%{public}@): m2v device kept",

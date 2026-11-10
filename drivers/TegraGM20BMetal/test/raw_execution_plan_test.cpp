@@ -86,78 +86,23 @@ TEST(ExecutionPlan, EmptyAndEventOnlyCommandBuffersKeepExactPositions)
     EXPECT_EQ(empty.ranges()[1].from, 1u);
 }
 
-raw::ExecutionAttribution routeOf(const std::vector<raw::ExecutionRange> &ranges)
-{
-    raw::ExecutionAttribution route;
-    for (const auto &range : ranges)
-        route.add(range.kind == ExecutionKind::native, false);
-    return route;
-}
-
-// Three render encoders recorded raw share one submission; the middle one's draw is refused while it is encoded
-TEST(ExecutionPlan, ARefusedEncoderAloneGoesToCompatibilityAndItsNeighboursStayNative)
+TEST(ExecutionPlan, ConsecutiveNativeWaitsAvoidCpuRetirement)
 {
     raw::ExecutionPlan plan;
-    plan.append(0, 5, ExecutionKind::native);
-    plan.append(5, 9, ExecutionKind::native);
-    plan.append(9, 14, ExecutionKind::native);
-    ASSERT_EQ(plan.ranges().size(), 1u);
-    const auto parts = raw::isolate(plan.ranges()[0], 5, 9);
-    ASSERT_EQ(parts.size(), 3u);
-    EXPECT_EQ(parts[0].from, 0u);
-    EXPECT_EQ(parts[0].to, 5u);
-    EXPECT_EQ(parts[0].kind, ExecutionKind::native);
-    EXPECT_EQ(parts[1].from, 5u);
-    EXPECT_EQ(parts[1].to, 9u);
-    EXPECT_EQ(parts[1].kind, ExecutionKind::compatibility);
-    EXPECT_EQ(parts[2].from, 9u);
-    EXPECT_EQ(parts[2].to, 14u);
-    EXPECT_EQ(parts[2].kind, ExecutionKind::native);
-    const auto route = routeOf(parts);
-    EXPECT_EQ(route.native, 2u);
-    EXPECT_EQ(route.compatibility, 1u);
-    EXPECT_TRUE(route.mixed());
-}
-
-TEST(ExecutionPlan, ARefusedFirstOrLastEncoderLeavesOneNativeSide)
-{
-    const raw::ExecutionRange range{0, 14, ExecutionKind::native};
-    const auto first = raw::isolate(range, 0, 5);
-    ASSERT_EQ(first.size(), 2u);
-    EXPECT_EQ(first[0].kind, ExecutionKind::compatibility);
-    EXPECT_EQ(first[0].to, 5u);
-    EXPECT_EQ(first[1].kind, ExecutionKind::native);
-    EXPECT_EQ(first[1].from, 5u);
-    EXPECT_EQ(first[1].to, 14u);
-    const auto last = raw::isolate(range, 9, 14);
-    ASSERT_EQ(last.size(), 2u);
-    EXPECT_EQ(last[0].kind, ExecutionKind::native);
-    EXPECT_EQ(last[0].to, 9u);
-    EXPECT_EQ(last[1].kind, ExecutionKind::compatibility);
-    EXPECT_EQ(last[1].from, 9u);
-}
-
-TEST(ExecutionPlan, ARefusalNoEncoderOwnsSendsTheWholeRangeToCompatibility)
-{
-    const raw::ExecutionRange range{3, 14, ExecutionKind::native};
-    for (const auto &[from, to] : std::vector<std::pair<size_t, size_t>>{{14, 14}, {0, 5}, {9, 20}, {6, 6}}) {
-        const auto parts = raw::isolate(range, from, to);
-        ASSERT_EQ(parts.size(), 1u);
-        EXPECT_EQ(parts[0].from, 3u);
-        EXPECT_EQ(parts[0].to, 14u);
-        EXPECT_EQ(parts[0].kind, ExecutionKind::compatibility);
-        EXPECT_TRUE(routeOf(parts).onlyCompatibility());
-    }
-}
-
-// A refused range that held one encoder is replaced by that encoder alone: nothing native is left to split
-TEST(ExecutionPlan, ARefusedSingleEncoderRangeIsOneCompatibilityRange)
-{
-    const auto parts = raw::isolate({5, 9, ExecutionKind::native}, 5, 9);
-    ASSERT_EQ(parts.size(), 1u);
-    EXPECT_EQ(parts[0].kind, ExecutionKind::compatibility);
-    EXPECT_EQ(parts[0].from, 5u);
-    EXPECT_EQ(parts[0].to, 9u);
+    plan.append(0, 1, ExecutionKind::wait);
+    plan.append(1, 2, ExecutionKind::wait);
+    plan.append(2, 5, ExecutionKind::native);
+    plan.append(5, 6, ExecutionKind::wait);
+    plan.append(6, 7, ExecutionKind::signal);
+    plan.append(7, 8, ExecutionKind::wait);
+    plan.append(8, 10, ExecutionKind::compatibility);
+    plan.append(10, 11, ExecutionKind::wait);
+    const auto &ranges = plan.ranges();
+    ASSERT_EQ(ranges.size(), 8);
+    EXPECT_TRUE(ranges[0].gpuWait);
+    EXPECT_TRUE(ranges[1].gpuWait);
+    for (size_t at = 2; at < ranges.size(); ++at)
+        EXPECT_FALSE(ranges[at].gpuWait);
 }
 
 // Regression journey: A publishes E then waits F; B (queued later) waits E then publishes F. Preflighting all of A's
@@ -178,37 +123,38 @@ TEST(ExecutionPlan, InteriorWaitDoesNotPreventItsOwnEarlierSignalFromReleasingTh
     std::map<unsigned, bool> signals;
     raw::SubmitQueue<int, int> queue;
     for (int job : {1, 2}) {
-        queue.reserve(job, job);
-        queue.commit(job, job);
+        const auto reservation = queue.reserve(job, job);
+        queue.commit(job, job, reservation);
     }
     std::vector<int> submitted;
-    for (unsigned step = 0; !queue.empty() && step < 20; ++step) {
-        const int job = queue.ready([&](int id) {
-            const auto kind = plans[id]->ranges()[cursors[id]].kind;
-            if (kind == ExecutionKind::wait)
-                return signals[id == 1 ? 2 : 1];
-            if (kind == ExecutionKind::signal)
-                return pending[id] == 0;
-            return true;
-        });
-        if (!job) {
-            // Fence completion is independent of selection. No blocked queue owns the submission worker.
+    for (unsigned step = 0; queue.size() && step < 40; ++step) {
+        const auto ticket = queue.next();
+        if (!ticket) {
             pending = {};
+            queue.wake(1);
+            queue.wake(2);
             continue;
         }
+        const int job = ticket.value;
         const auto kind = plans[job]->ranges()[cursors[job]].kind;
-        if (kind == ExecutionKind::signal)
+        if ((kind == ExecutionKind::wait && !signals[job == 1 ? 2 : 1]) ||
+            (kind == ExecutionKind::signal && pending[job])) {
+            queue.park(ticket);
+            continue;
+        }
+        if (kind == ExecutionKind::signal) {
             signals[job] = true;
-        else if (kind != ExecutionKind::wait) {
+            queue.wake(job == 1 ? 2 : 1);
+        } else if (kind != ExecutionKind::wait) {
             ++pending[job];
             submitted.push_back(job);
         }
         if (++cursors[job] == plans[job]->ranges().size())
-            ASSERT_TRUE(queue.retire(job, job));
+            ASSERT_TRUE(queue.retire(ticket));
         else
-            queue.yield(job);
+            queue.yield(ticket);
     }
-    EXPECT_TRUE(queue.empty());
+    EXPECT_EQ(queue.size(), 0u);
     EXPECT_EQ(submitted, (std::vector<int>{1, 2, 1}));
     EXPECT_TRUE(signals[1]);
     EXPECT_TRUE(signals[2]);
@@ -218,18 +164,21 @@ TEST(SubmitQueue, PartialSubmissionYieldsWithoutReleasingItsReservation)
 {
     raw::SubmitQueue<int, int> queue;
     for (int job : {11, 12, 21}) {
-        queue.reserve(job / 10, job);
-        queue.commit(job / 10, job);
+        const auto reservation = queue.reserve(job / 10, job);
+        queue.commit(job / 10, job, reservation);
     }
-    queue.yield(1);
-    EXPECT_EQ(queue.ready([](int) {
-        return true;
-    }),
-              21);
-    EXPECT_FALSE(queue.retire(1, 12));
-    std::vector<int> heads;
-    queue.heads(heads);
-    EXPECT_EQ(heads, (std::vector<int>{21, 11}));
+    auto first = queue.next();
+    ASSERT_EQ(first.value, 11);
+    queue.yield(first);
+    auto second = queue.next();
+    ASSERT_EQ(second.value, 21);
+    auto resumed = queue.next();
+    ASSERT_EQ(resumed.value, 11);
+    EXPECT_FALSE(queue.next());
     EXPECT_EQ(queue.size(), 3u);
+    queue.retire(resumed);
+    auto next = queue.next();
+    ASSERT_EQ(next.value, 12);
+    EXPECT_FALSE(queue.retire(first));
 }
 }  // namespace

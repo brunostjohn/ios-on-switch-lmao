@@ -6,6 +6,7 @@
 // imports, the copies and the abortable command buffer.
 #include "../fx/fx_image.h"
 #include "raw_clear.h"
+#include "raw_attachment_lifetime.h"
 #include "raw_dynamic_push.h"
 #include "../../../NativeMetal/bridge/NativeMetalBlend.h"
 #include "raw_follow.h"
@@ -15,10 +16,15 @@
 #include "raw_owned.h"
 #include "raw_residual.h"
 #include "raw_samples.h"
+#include "raw_fragment_tests.h"
+#include "raw_shader_tests.h"
+#include "raw_shader_test_push.h"
 #include "raw_slm.h"
 #include "raw_srgb_table.h"
 #include "raw_stamps.h"
+#include "raw_storage.h"
 #include "raw_surface_view.h"
+#include "raw_native_surface.h"
 #include "raw_target.h"
 #include "raw_tiled_cache.h"
 #include "raw_view.h"
@@ -184,6 +190,7 @@ const FormatInfo kFormats[] = {
     {1, 0xf7, 0x2002491d, 1, false},     // A8Unorm
     {10, 0xf3, 0x7012491d, 1, false},    // R8Unorm
     {11, 0, 0x7012491d, 1, true},        // R8Unorm_sRGB
+    {13, 0, 0x6014921d, 1, false},      // R8Uint, storage/sampled
     {20, 0xee, 0x7012491b, 2, false},    // R16Unorm
     {23, 0, 0x6014921b, 2, false},       // R16Uint (NIL's R16_UINT: UINT components, alpha ONE_INT; sampled only)
     {25, 0xf2, 0x7017ff9b, 2, false},    // R16Float
@@ -326,12 +333,12 @@ uint8_t *Device::alloc(Ring &r, uint32_t bytes, uint32_t align, uint64_t &va)
         // and block in the kernel (WaitFence: the fence interrupt) for what overlaps. Sized so a Core Animation frame never
         // waits.
         for (auto it = r.inflight.begin(); it != r.inflight.end();) {
-            if (it->seqno && done(it->seqno)) {
+            if (it->submitted && done(it->seqno)) {
                 it = r.inflight.erase(it);
                 continue;
             }
-            if (it->begin < at + bytes && at < it->end && it->seqno) {
-                stats.ringWaits++;
+            if (it->begin < at + bytes && at < it->end && it->submitted) {
+                RAW_DIAGNOSTIC(stats.ringWaits++);
                 r.waited = true;
                 wait(it->seqno);
                 it = r.inflight.erase(it);
@@ -361,7 +368,7 @@ bool Device::ownWords(const Ring &r, uint64_t at, uint64_t bytes) const
     if (at < r.head && r.since < at + bytes && r.since < r.head)
         return true;
     for (const Ring::Span &s : r.inflight)
-        if (!s.seqno && s.begin < at + bytes && at < s.end)
+        if (!s.submitted && s.begin < at + bytes && at < s.end)
             return true;
     return false;
 }
@@ -371,9 +378,9 @@ bool Device::ownWords(const Ring &r, uint64_t at, uint64_t bytes) const
 bool Device::outgrow(Ring &r, uint32_t bytes, uint64_t &at)
 {
     Bo larger;
-    if (!k_.alloc(std::max<uint64_t>(r.bo.bytes * 2, uint64_t(bytes) * 2), true, larger))
+    if (!k_.allocControl(std::max<uint64_t>(r.bo.bytes * 2, uint64_t(bytes) * 2), larger))
         return false;
-    stats.ringsOutgrown++;
+    RAW_DIAGNOSTIC(stats.ringsOutgrown++);
     r.outgrown.push_back(r.bo);
     r.bo = larger;
     r.head = r.since = r.clear = 0;
@@ -387,13 +394,15 @@ void Device::retire(Ring &r, uint32_t seqno)
     for (const Bo &b : r.outgrown)
         grownOut_.push_back({b, seqno});
     r.outgrown.clear();
-    while (!r.inflight.empty() && r.inflight.front().seqno && done(r.inflight.front().seqno))
+    while (!r.inflight.empty() && r.inflight.front().submitted && done(r.inflight.front().seqno))
         r.inflight.pop_front();
     for (auto &s : r.inflight)
-        if (!s.seqno)
+        if (!s.submitted) {
             s.seqno = seqno;
+            s.submitted = true;
+        }
     if (r.head > r.since)
-        r.inflight.push_back({r.since, r.head, seqno});
+        r.inflight.push_back({r.since, r.head, seqno, true});
     r.since = r.head;
 }
 
@@ -401,6 +410,7 @@ void Device::retire(Ring &r, uint32_t seqno)
 
 Device::~Device()
 {
+    transfers_.close(k_, lock_);
     cb_.releaseGeometry();
     // the render server keeps its device until it exits; a host test's device: the kernel frees what the connection held
     {
@@ -411,6 +421,9 @@ Device::~Device()
     if (grower_.joinable())
         grower_.join();
     compStop();
+    if (channel_)
+        k_.closeChannel(channel_);
+    reapNativeSurfaces(true);
 }
 
 uint32_t Device::contextWords() const
@@ -475,9 +488,9 @@ bool Device::open(const char *packPath, uint64_t stack, std::string &err, Role r
 // which textures, samplers and states need before any submission. The render server's channel, heap and first chunks too.
 bool Device::init(std::string &err)
 {
-    if (!k_.alloc(kTicCount * 32, true, tic_) || !k_.alloc(kTscCount * 32, true, tsc_) ||
-        !k_.alloc(0x1000, true, root_) || !k_.alloc(0x10000, true, zero_) || !k_.alloc(0x1000, true, tickets_) ||
-        !k_.alloc(kColorTableBytes, true, colorTable_) || !k_.alloc(kStampSlots * sizeof(StampSlot), true, stamps_)) {
+    if (!k_.allocControl(kTicCount * 32, tic_) || !k_.allocControl(kTscCount * 32, tsc_) ||
+        !k_.allocControl(0x1000, root_) || !k_.allocControl(0x10000, zero_) || !k_.allocControl(0x1000, tickets_) ||
+        !k_.allocControl(kColorTableBytes, colorTable_) || !k_.allocControl(kStampSlots * sizeof(StampSlot), stamps_)) {
         err = k_.error();
         return false;
     }
@@ -565,6 +578,7 @@ bool Device::ensureChannel()
         channelRetryNs_ = now + kChannelRetryNs;
         return false;
     }
+    channelGeneration_.fetch_add(1, std::memory_order_release);
     channelReady_.store(true, std::memory_order_release);
     return true;
 }
@@ -585,7 +599,7 @@ bool Device::openChannel(std::string &err)
         fence_ = &kNoFence;
         return false;
     };
-    if (!k_.alloc(sizes_.push, true, push_.bo) || !k_.alloc(sizes_.upload, true, upload_.bo) ||
+    if (!k_.allocControl(sizes_.push, push_.bo) || !k_.allocControl(sizes_.upload, upload_.bo) ||
         !k_.channel(kEngines, channel_, fence_))
         return undo(false);
     const uint32_t words = contextWords() + uint32_t(fx::twodInitWords());
@@ -617,7 +631,7 @@ bool Device::place(uint32_t prog, uint32_t &program, uint64_t &data)
         if (!heapPlace(pack_.section<uint8_t>(PackHeap) + p.heapOffset, p.bytes, at))
             return false;
         placed_[prog] = uint32_t(at);
-        stats.programsPlaced++;
+        RAW_DIAGNOSTIC(stats.programsPlaced++);
     }
     program = placed_[prog] + (p.program - p.heapOffset);
     data = p.dataBytes ? heap_.va + placed_[prog] + p.dataOffset : 0;
@@ -724,7 +738,8 @@ static uint8_t bindProgramCbufs(Push &w, const PackProgram &prog, uint32_t group
 Pipeline *Device::pipeline(uint64_t keyHash, PackForm form, bool caTransform)
 {
     const PackPipeline *rec = pack_.find(keyHash, form);
-    if (rec && !usableDynamicPush(*rec, pack_.string(rec->keyString)))
+    if (rec && (!usableDynamicPush(*rec, pack_.string(rec->keyString)) ||
+                !usableStorageMetadata(*rec, pack_.section<uint32_t>(PackBlob) + rec->blob, rec->blobDwords)))
         rec = nullptr;
     std::lock_guard<std::mutex> l(lock_);
     if (!rec) {
@@ -750,7 +765,7 @@ Pipeline *Device::pipeline(uint64_t keyHash, PackForm form, bool caTransform)
         return nullptr;
     }
     build(pl, pp, vs, fs, pack_.section<uint32_t>(PackBlob) + pp.blob, pack_.string(pp.keyString), caTransform);
-    if (const PackSplit *split = pack_.split(pp.fs)) {
+    if (const PackSplit *split = pack_.split(pp.fs); split && !pl.storageBits) {
         SplitSource source;
         source.rec = *split;
         source.packed = true;
@@ -769,9 +784,17 @@ Pipeline *Device::pipeline(uint64_t keyHash, PackForm form, bool caTransform)
 void Device::build(Pipeline &pl, const PackPipeline &pp, const PlacedProgram &vs, const PlacedProgram &fs,
                    const uint32_t *blob, const char *keyString, bool caTransform)
 {
+    auto instructions = [](const PackProgram &program) {
+        const uint32_t bytes = program.dataBytes ? program.dataOffset : program.bytes;
+        return std::max(1u, (bytes > 128 ? bytes - 128 : 0) / 8);
+    };
+    pl.vertexInstructions = instructions(*vs.record);
+    pl.fragmentInstructions = instructions(*fs.record);
     std::vector<uint32_t> words(64 + 16 + pp.blobDwords * 2);
     Push w{words.data(), words.data() + words.size()};
     uint32_t writes[8];
+    uint32_t interlockControl = 0;
+    uint32_t sampleControl = 1;
     memcpy(writes, ctWrite_, sizeof writes);
     for (uint32_t k = 0; k < pp.blobDwords; k += 2) {
         const uint32_t m = blob[k], v = blob[k + 1];
@@ -779,16 +802,21 @@ void Device::build(Pipeline &pl, const PackPipeline &pp, const PlacedProgram &vs
             continue;  // a pack made before the method was the runtime's: the probe process's value
         if (m >= CT_WRITE && m < CT_WRITE + 32)
             writes[(m - CT_WRITE) / 4] = v;
+        if (m == PIXEL_SHADER_INTERLOCK_CONTROL) {
+            interlockControl = v;
+            continue;
+        }
+        if (m == HYBRID_ANTI_ALIAS_CONTROL) {
+            sampleControl = v;
+            continue;
+        }
         w.m(m, v);
     }
+    w.m(PIXEL_SHADER_INTERLOCK_CONTROL, interlockControl);
+    w.m(HYBRID_ANTI_ALIAS_CONTROL, sampleControl);
     for (uint32_t c = 0; c < 8; c++)
         if (writes[c] & 0x1111)  // R_ENABLE, G_ENABLE, B_ENABLE, A_ENABLE
             pl.writeBits |= uint8_t(1u << c);
-    // TILE_COALESCER_MODE: conflicts by sample or pixel
-    bool interlocked = false;
-    for (uint32_t k = 0; k < pp.blobDwords; k += 2)
-        if (blob[k] == PIXEL_SHADER_INTERLOCK_CONTROL)
-            interlocked = blob[k + 1] & 3;
     w.m(0x2044, vs.program);  // SET_PIPELINE_PROGRAM(VERTEX)
     w.m(0x2144, fs.program);  // SET_PIPELINE_PROGRAM(PIXEL)
     pl.setSlot[0] = bindProgramCbufs(w, *vs.record, 0, vs.data, root_.va);
@@ -859,8 +887,12 @@ void Device::build(Pipeline &pl, const PackPipeline &pp, const PlacedProgram &vs
     for (uint32_t k = 0; k < pp.entries; k++)
         if (pp.entry[k].kind == EntryFetch && pp.entry[k].slot < 8)
             pl.fetchBits |= uint8_t(1u << pp.entry[k].slot);
-    if (interlocked)
-        pl.storageBits = pl.fetchBits;
+    if (pp.flags & PipelineStorageMetadata) {
+        pl.storageBits = pp.storageMask;
+        pl.storageWriteBits = pp.storageWriteMask;
+        memcpy(pl.storageTic, pp.storageTic, sizeof pl.storageTic);
+        pl.readBits &= ~pl.storageBits;
+    }
     pl.rec = &pp;
 }
 
@@ -917,8 +949,8 @@ bool Device::newChunk(uint64_t size, bool dedicated, std::unique_lock<std::mutex
         poolFree_ += size;
     }
     chunks_[c] = std::move(ch);
-    stats.poolBytes += size;
-    stats.poolChunks++;
+    RAW_DIAGNOSTIC(stats.poolBytes += size);
+    RAW_DIAGNOSTIC(stats.poolChunks++);
     index = c;
     return true;
 }
@@ -990,7 +1022,7 @@ bool Device::poolAlloc(uint64_t bytes, Span &s)
         }
         if (pass == 2)
             break;
-        stats.poolStalls++;
+        RAW_DIAGNOSTIC(stats.poolStalls++);
         if (growing_) {  // the grower is making one: wait for it rather than wire a second
             std::unique_lock<std::mutex> l(lock_, std::adopt_lock);
             // bounded, as every wait of the plugin's: a chunk not wired in 20 s is a stuck kernel import, said once and
@@ -1077,8 +1109,8 @@ void Device::poolFree(Span &s)
 // lock_ held: an imported chunk's BO and pages go back (the kernel keeps the pages until the work submitted before has completed)
 void Device::freeChunk(Chunk &ch)
 {
-    stats.poolBytes -= ch.bytes;
-    stats.poolChunks--;
+    RAW_DIAGNOSTIC(stats.poolBytes -= ch.bytes);
+    RAW_DIAGNOSTIC(stats.poolChunks--);
     k_.free(ch.bo);
     vm_deallocate(mach_task_self(), vm_address_t(ch.memory), ch.bytes);
     ch = Chunk();
@@ -1087,6 +1119,7 @@ void Device::freeChunk(Chunk &ch)
 void Device::trim()
 {
     std::lock_guard<std::mutex> l(lock_);
+    reapNativeSurfaces();
     for (const Spare &sp : spares_)
         freeChunk(chunks_[sp.chunk]);
     spares_.clear();
@@ -1120,7 +1153,7 @@ Import *Device::importSurface(uint64_t id, void *base, uint64_t bytes, const voi
         auto it = surfaces_.find(key);
         if (it != surfaces_.end()) {
             it->second->refs++;
-            stats.importHits++;
+            RAW_DIAGNOSTIC(stats.importHits++);
             return it->second;
         }
     }
@@ -1153,9 +1186,9 @@ Import *Device::importSurface(uint64_t id, void *base, uint64_t bytes, const voi
         i->owner = CFRetain(owner);
     if (id)
         surfaces_[key] = i;
-    stats.imports++;
-    stats.importsMade++;
-    stats.importBytes += i->bo.bytes;
+    RAW_DIAGNOSTIC(stats.imports++);
+    RAW_DIAGNOSTIC(stats.importsMade++);
+    RAW_DIAGNOSTIC(stats.importBytes += i->bo.bytes);
     return i;
 }
 
@@ -1165,8 +1198,10 @@ void Device::release(Import *i)
         return;
     if (i->id)
         surfaces_.erase(std::make_tuple(i->id, i->base, i->bytes));
-    stats.imports--;
-    stats.importBytes -= i->bo.bytes;
+    RAW_DIAGNOSTIC(stats.imports--);
+    RAW_DIAGNOSTIC(stats.importBytes -= i->bo.bytes);
+    if (i->native)
+        i->native->cached = false;
     k_.free(i->bo);
     if (i->owner)
         CFRelease(i->owner);
@@ -1336,10 +1371,10 @@ bool Device::createTexture(uint32_t width, uint32_t height, uint32_t format, Tex
         return false;
     } else if (wc && wcAlloc(bytes, t.span)) {
         t.wc = true;
-        stats.wcBytes += t.span.bytes;
+        RAW_DIAGNOSTIC(stats.wcBytes += t.span.bytes);
     } else {
         if (wc)
-            stats.wcFallbacks++;
+            RAW_DIAGNOSTIC(stats.wcFallbacks++);
         if (!poolAlloc(bytes, t.span))
             return false;
     }
@@ -1450,6 +1485,7 @@ bool Device::tiledSurfaceTexture(uint64_t offset, uint32_t width, uint32_t heigh
     t.blockLinear = true;
     t.blockHeight = l.y_log2;
     t.layerBytes = l.bytes;
+    t.storage = {t.va, l.bytes, !t.import->id};
     t.surfaceX = view.x;
     t.surfaceY = view.y;
     t.surfaceView = !view.direct;
@@ -1521,6 +1557,7 @@ bool Device::createSurfaceTexture(uint64_t surfaceId, void *base, uint64_t alloc
         return true;
     }
     t.va = t.import->bo.va + offset;
+    t.storage = {t.va, std::min(uint64_t(pitch) * height, allocBytes - offset), !t.import->id};
     t.cpu = static_cast<uint8_t *>(base) + offset;
     t.shadowTarget = t.renderable && !linearTarget(t);
     t.renderable = t.renderable && linearTarget(t);
@@ -1602,11 +1639,13 @@ bool Device::createBufferTexture(const Buffer &b, uint64_t offset, uint32_t widt
                                  uint32_t format, Texture &t)
 {
     if (!shape(width, height, format, t) || blockCompressed(formatInfo(format)) || (pitch & 31) ||
-        pitch < width * t.bpp || ((b.va + offset) & 31) || offset + uint64_t(pitch) * height > b.length)
+        pitch < width * t.bpp || offset > b.length || uint64_t(pitch) * height > b.length - offset ||
+        offset > UINT64_MAX - b.va || ((b.va + offset) & 31))
         return false;
     std::lock_guard<std::mutex> l(lock_);
     t.pitch = pitch;
     t.va = b.va + offset;
+    t.storage = {t.va, uint64_t(pitch) * height, b.hostVisible};
     t.shadowTarget = t.renderable && !linearTarget(t);
     t.renderable = t.renderable && linearTarget(t);
     t.cpu = b.cpu + offset;
@@ -1628,12 +1667,14 @@ bool Device::createView(const Texture &of, uint32_t format, Texture &t)
         return false;
     std::lock_guard<std::mutex> l(lock_);
     t = of;
+    t.storage = of.storageRange();
     memcpy(t.swizzle, kIdentitySwizzle, 4);
     t.view = true;
     t.format = format;
     t.renderable = f->rt != 0 && (t.blockLinear || linearTarget(t));
     t.shadowTarget = f->rt != 0 && !t.blockLinear && !linearTarget(t);
-    t.import = nullptr;  // the viewed texture owns the memory (RawMetal.mm keeps it alive while a view lives)
+    // Native-plane lookup needs the parent import; a view never releases its non-owning reference.
+    t.import = of.nativePlane != ~0u ? of.import : nullptr;
     t.span = {};
     t.lease = nullptr;
     t.chain = nullptr;  // a mipmapped texture's view: every level sampled, level 0 rendered and copied
@@ -1687,6 +1728,7 @@ bool Device::createPartView(const Texture &of, uint32_t format, uint32_t type, u
     c.layers = layers;
     std::lock_guard<std::mutex> l(lock_);
     t = image;
+    t.storage = of.storageRange();
     memcpy(t.swizzle, kIdentitySwizzle, 4);
     t.view = true;
     t.format = format;
@@ -1723,6 +1765,7 @@ bool Device::createZetaOver(const ZetaMemory &m, uint32_t width, uint32_t height
     if (*why)
         return false;
     t.va = m.va;
+    t.storage = {m.va, m.bytes, false};
     t.pitch = m.pitch;
     t.blockHeight = m.blockHeight;
     t.layerBytes = m.layerBytes;
@@ -1813,8 +1856,8 @@ bool Device::newTiledChunk(std::vector<Chunk> &chunks, uint32_t kind, uint64_t s
     if (!dedicated)
         ch.free[0] = size;
     chunks[c] = std::move(ch);
-    stats.poolBytes += size;
-    stats.poolChunks++;
+    RAW_DIAGNOSTIC(stats.poolBytes += size);
+    RAW_DIAGNOSTIC(stats.poolChunks++);
     index = c;
     return true;
 }
@@ -1862,7 +1905,7 @@ bool Device::tiledAlloc(std::vector<Chunk> &chunks, uint32_t kind, uint64_t byte
             s = {c, 0, bytes, chunks[c].bo.va, static_cast<uint8_t *>(chunks[c].memory)};
             return true;
         }
-        stats.poolStalls++;
+        RAW_DIAGNOSTIC(stats.poolStalls++);
         if (tiledWanted(chunks)) {  // the grower is making one: wait for it rather than wire a second
             std::unique_lock<std::mutex> l(lock_, std::adopt_lock);
             // bounded, as the pool's wait (a chunk not wired in 20 s is a stuck kernel import)
@@ -1954,8 +1997,8 @@ bool Device::createMipTexture(uint32_t width, uint32_t height, uint32_t format, 
     fx::mipChainTic(c->layout, c->va, f->tic0, f->srgb, 0, levels, w);
     memcpy(tic_.cpu + 32 * t.tic, w, 32);  // the texture's header: the chain's (visible at the next header invalidate)
     t.chain = c;
-    stats.chains++;
-    stats.chainBytes += c->layout.bytes;
+    RAW_DIAGNOSTIC(stats.chains++);
+    RAW_DIAGNOSTIC(stats.chainBytes += c->layout.bytes);
     return true;
 }
 
@@ -1981,15 +2024,16 @@ bool Device::createBlockTextureOver(void *bytes, uint64_t length, uint32_t width
     i->refs = 1;
     i->base = uintptr_t(bytes);
     i->bytes = length;
-    stats.imports++;
-    stats.importsMade++;
-    stats.importBytes += i->bo.bytes;
+    RAW_DIAGNOSTIC(stats.imports++);
+    RAW_DIAGNOSTIC(stats.importsMade++);
+    RAW_DIAGNOSTIC(stats.importBytes += i->bo.bytes);
     if (!(t.tic = allocTic())) {
         release(i);
         return false;
     }
     t.import = i;
     t.va = i->bo.va;
+    t.storage = {t.va, layout.bytes, true};
     t.cpu = static_cast<uint8_t *>(bytes);
     t.pitch = layout.level[0].rowBytes;
     t.blockLinear = true;
@@ -2060,23 +2104,55 @@ bool Device::createBuffer(uint64_t length, Buffer &b, bool wc)
     b = {};
     if (!length)
         length = 16;
-    std::lock_guard<std::mutex> l(lock_);
-    if (wc) {
-        if (wcAlloc(length, b.span)) {
+    {
+        std::lock_guard<std::mutex> l(lock_);
+        if (wc && wcAlloc(length, b.span)) {
             b.wc = true;
-            b.va = b.span.va;
-            b.cpu = b.span.cpu;
-            b.length = length;
-            stats.wcBytes += b.span.bytes;
-            return true;
+            RAW_DIAGNOSTIC(stats.wcBytes += b.span.bytes);
+        } else {
+            if (wc)
+                RAW_DIAGNOSTIC(stats.wcFallbacks++);
+            if (!poolAlloc(length, b.span))
+                return false;
         }
-        stats.wcFallbacks++;
     }
-    if (!poolAlloc(length, b.span))
-        return false;
     b.va = b.span.va;
     b.cpu = b.span.cpu;
     b.length = length;
+    // A reused span may still have dirty GPU lines from its previous owner. Acquire before exposing CPU bytes.
+    HostAccess access;
+    if (k_.jobVisibility() && (!hostAccess(b, true, access) || !access.finish())) {
+        destroyBuffer(b);
+        return false;
+    }
+    return true;
+}
+
+bool Device::createControlBuffer(uint64_t length, Buffer &buffer)
+{
+    buffer = {};
+    if (!length)
+        length = 16;
+    std::lock_guard<std::mutex> lock(lock_);
+    Chunk chunk;
+    if (!k_.allocControl(length, chunk.bo))
+        return false;
+    chunk.memory = chunk.bo.cpu;
+    chunk.bytes = chunk.used = chunk.bo.bytes;
+    chunk.dedicated = true;
+    uint32_t index = 0;
+    while (index < wcChunks_.size() && wcChunks_[index].bo.handle)
+        ++index;
+    if (index == wcChunks_.size())
+        wcChunks_.emplace_back();
+    buffer.span = {index, 0, chunk.bytes, chunk.bo.va, chunk.bo.cpu};
+    buffer.va = chunk.bo.va;
+    buffer.cpu = chunk.bo.cpu;
+    buffer.length = length;
+    buffer.wc = true;
+    buffer.hostVisible = false;
+    RAW_DIAGNOSTIC(stats.wcBytes += chunk.bytes);
+    wcChunks_[index] = std::move(chunk);
     return true;
 }
 
@@ -2138,7 +2214,7 @@ void Device::wcFree(Span &s)
         return;
     Chunk &ch = wcChunks_[s.chunk];
     ch.used -= s.bytes;
-    stats.wcBytes -= s.bytes;
+    RAW_DIAGNOSTIC(stats.wcBytes -= s.bytes);
     if (ch.dedicated) {
         k_.free(ch.bo);
         ch = Chunk();
@@ -2449,6 +2525,11 @@ bool Device::createYcbcrTexture(uint64_t surfaceId, void *base, uint64_t allocBy
         return undo();
     if (!createTexture(width, height, plan.image, t, false, true))  // block-linear, as NVK makes m2v's converted image
         return undo();
+    if (plan.nativePlanes) {
+        y->nativePlane = 0;
+        if (c)
+            c->nativePlane = 1;
+    }
     t.luma = y;
     t.chroma = c;
     memcpy(t.shape, plan.shape, sizeof t.shape);
@@ -2523,7 +2604,7 @@ Device::Backing *Device::plainBacking(const Texture &m, uint32_t tag, bool block
                 freePlainSpan(*made);
             return nullptr;
         }
-        stats.backingBytes += made->span.bytes;
+        RAW_DIAGNOSTIC(stats.backingBytes += made->span.bytes);
         plainMems_.push_back(std::move(made));
         mem = plainMems_.back().get();
         // the views of its tag's smaller memory: no pass takes them again (an animated layer seldom asks a size twice), so it
@@ -2535,6 +2616,7 @@ Device::Backing *Device::plainBacking(const Texture &m, uint32_t tag, bool block
         compStart();
     }
     t.va = mem->span.va;
+    t.storage = {t.va, bytes, false};
     t.cpu = memory == kPlainPool ? mem->span.cpu : nullptr;
     if (!m.zeta) {
         if (!(t.tic = allocTic())) {
@@ -2557,7 +2639,7 @@ Device::Backing *Device::plainBacking(const Texture &m, uint32_t tag, bool block
     b->plain = mem;
     b->usedNs = compClock();
     mem->views++;
-    stats.backings++;
+    RAW_DIAGNOSTIC(stats.backings++);
     return b;
 }
 
@@ -2573,7 +2655,7 @@ void Device::freePlainSpan(PlainMem &mem)
 
 void Device::dropPlain(PlainMem *mem)
 {
-    stats.backingBytes -= mem->span.bytes;
+    RAW_DIAGNOSTIC(stats.backingBytes -= mem->span.bytes);
     freePlainSpan(*mem);
     plainMems_.erase(std::find_if(plainMems_.begin(), plainMems_.end(), [&](const std::unique_ptr<PlainMem> &p) {
         return p.get() == mem;
@@ -2584,126 +2666,59 @@ void Device::plainFree(Backing &b)
 {
     if (b.texture.tic)
         freeTic(b.texture.tic);
-    stats.backings--;
+    RAW_DIAGNOSTIC(stats.backings--);
     PlainMem *mem = b.plain;
     b.plain = nullptr;
     if (!--mem->views)
         dropPlain(mem);
 }
 
-Texture *Device::backing(const Texture &m, uint32_t tag, bool blockLinear)
+Texture *Device::backing(const Texture &m, uint32_t tag, bool blockLinear, bool compression)
 {
     blockLinear |= m.zeta;
-    const uint32_t kind = compKind(m, tag, blockLinear);
+    const uint32_t kind = compression ? compKind(m, tag, blockLinear) : 0;
     const CompMem *mem = kind ? comp_.largest(tag, kind) : nullptr;
     Backing *plain = nullptr;
     blockLinear |= m.samples > 1;
     const auto asked = [&](Backing *b) {
         b->lastCommit = commitCount_;
         b->lastClosed = closedCount_;
+        if (tag < lastBackings_.size())
+            lastBackings_[tag] = b;
         return &b->texture;
     };
+    const auto matches = [&](const Backing *b) {
+        return b && !b->retired && b->texture.width == m.width && b->texture.height == m.height &&
+               b->texture.format == m.format && b->tag == tag && b->texture.blockLinear == blockLinear &&
+               b->texture.samples == m.samples;
+    };
+    if (Backing *last = tag < lastBackings_.size() ? lastBackings_[tag] : nullptr;
+        matches(last) && backingCompressionMatches(last->comp != nullptr, last->comp, mem, kind != 0))
+        return asked(last);
     for (Backing *b : backings_)
-        if (!b->retired && b->texture.width == m.width && b->texture.height == m.height &&
-            b->texture.format == m.format && b->tag == tag && b->texture.blockLinear == blockLinear &&
-            b->texture.samples == m.samples) {
+        if (matches(b)) {
             if (b->plain && b->plain != largestPlain(tag, b->plain->memory)) {
                 b->retired = true;  // larger plain memory of its tag took its place: a view of that replaces it
                 continue;
             }
-            if (!kind || (b->comp && b->comp == mem))
+            if (backingCompressionMatches(b->comp != nullptr, b->comp, mem, kind != 0))
                 return asked(b);
-            if (b->comp)
+            if (b->comp && kind)
                 b->retired = true;  // larger memory of its tag and kind took its place: a view of that replaces it
-            else
+            else if (!b->comp)
                 plain = b;
         }
     if (Backing *c = kind ? compBacking(m, tag, kind) : nullptr) {
-        if (plain)
-            plain->retired = true;
         backings_.push_back(c);
         return asked(c);
     }
     if (plain)
         return asked(plain);
-    // a memoryless attachment's (tag 0: a zeta's): plain memory shared by its tag's backings, in size classes; a shadow
-    // target's (tag 1 + j) is its own
-    if (tag == 0 || tag >= kMemorylessTag) {
-        Backing *v = plainBacking(m, tag, blockLinear);
-        if (!v)
-            return nullptr;
-        backings_.push_back(v);
-        return asked(v);
-    }
-    Backing *b = new Backing;
-    Texture &t = b->texture;
-    if (m.zeta) {
-        uint64_t bytes, align;
-        const uint32_t z = zetaFormatIndex(m.format);
-        if (!zetaShape(m.width, m.height, m.format, m.samples, t, bytes, align) ||
-            !tiledAlloc(zChunks_[z], kZetaFormatInfo[z].kind, bytes, align, t.span)) {
-            delete b;
-            return nullptr;
-        }
-        t.va = t.span.va;
-    } else if (blockLinear) {
-        fx::MipChain c;
-        const FormatInfo *f = formatInfo(m.format);
-        if (!f || !shape(m.width, m.height, m.format, t) || !fx::msLayout(m.width, m.height, m.samples, t.bpp, c) ||
-            !blAlloc(c.bytes, c.align, t.span) || !(t.tic = allocTic())) {
-            blFree(t.span);
-            delete b;
-            return nullptr;
-        }
-        t.va = t.span.va;
-        t.pitch = c.level[0].rowBytes;
-        t.blockLinear = true;
-        t.blockHeight = c.level[0].yLog2;
-        t.layerBytes = uint64_t(c.level[0].rowBytes) * c.level[0].rows;
-        t.samples = m.samples;
-        uint32_t w[8];
-        fx::mipChainTic(c, t.va, f->tic0, f->srgb, 0, 1, w);
-        memcpy(tic_.cpu + 32 * t.tic, w, 32);  // visible at the next submission's header invalidate
-    } else {
-        if (!shape(m.width, m.height, m.format, t)) {
-            delete b;
-            return nullptr;
-        }
-        t.pitch = (m.width * t.bpp + 255) & ~255u;
-        if (!poolAlloc(uint64_t(t.pitch) * t.height, t.span)) {
-            delete b;
-            return nullptr;
-        }
-        t.va = t.span.va;
-        t.cpu = t.span.cpu;
-        if (!(t.tic = allocTic())) {
-            poolFree(t.span);
-            delete b;
-            return nullptr;
-        }
-        t.renderable = t.renderable && linearTarget(t);
-        writeTic(t);
-    }
-    b->tag = tag;
-    b->usedNs = compClock();
-    backings_.push_back(b);
-    stats.backings++;
-    stats.backingBytes += t.span.bytes;
-    return asked(b);
-}
-
-// lock_ held
-void Device::freeBacking(Texture &t)
-{
-    if (t.tic) {
-        freeTic(t.tic);
-    }
-    if (t.zeta)
-        tiledFree(zChunks_[zetaFormatIndex(t.format)], t.span);
-    else if (t.blockLinear)
-        blFree(t.span);
-    else
-        poolFree(t.span);
+    Backing *view = plainBacking(m, tag, blockLinear);
+    if (!view)
+        return nullptr;
+    backings_.push_back(view);
+    return asked(view);
 }
 
 // Backings no pass used for 600 command buffers (~10 s of frames) and whose last use completed go back to the pool; a retired
@@ -2722,33 +2737,35 @@ void Device::trimBackings()
         }
         ++it;
     }
+#if SWITCH_RAW_DIAGNOSTICS
     uint64_t retired = 0;
+#endif
     for (auto it = backings_.begin(); it != backings_.end();) {
         Backing *b = *it;
         if (backingStale(commitCount_, b->lastCommit, closedCount_, b->lastClosed, now, b->usedNs, b->retired,
                          b->comp || b->plain) &&
-            (!b->lastUse || done(b->lastUse))) {
+            (!b->submitted || done(b->lastUse))) {
+            if (b->tag < lastBackings_.size() && lastBackings_[b->tag] == b)
+                lastBackings_[b->tag] = nullptr;
             if (b->comp) {
                 compFree(*b);
             } else if (b->plain) {
                 plainFree(*b);
-            } else {
-                stats.backings--;
-                stats.backingBytes -= b->texture.span.bytes;
-                freeBacking(b->texture);
             }
             delete b;
             it = backings_.erase(it);
             continue;
         }
-        retired += !b->comp && b->retired;
+        RAW_DIAGNOSTIC(retired += !b->comp && b->retired);
         ++it;
     }
-    stats.retiredBackings = retired;
+    RAW_DIAGNOSTIC(stats.retiredBackings = retired);
+#if SWITCH_RAW_DIAGNOSTICS
     uint64_t tiledFree = tiledFreeBytes(blChunks_);
     for (const std::vector<Chunk> &z : zChunks_)
         tiledFree += tiledFreeBytes(z);
-    stats.tiledFreeBytes = tiledFree;
+    RAW_DIAGNOSTIC(stats.tiledFreeBytes = tiledFree);
+#endif
 }
 
 // ---- command buffer ----
@@ -2756,13 +2773,27 @@ void Device::trimBackings()
 // A wait the kernel refuses with no kill (the call failed, or the submit thread's reopen destroyed the channel meanwhile) is
 // no completion: the channel's status decides. A healthy channel is waited on again; one that keeps refusing is taken as
 // killed, with everything it has not completed, so nothing it may still run is released or written over as done.
-bool Device::waitFence(uint32_t seqno)
+void Device::waitGenerationRetired(uint64_t generation)
+{
+    if (retiredGeneration_.load(std::memory_order_acquire) >= generation)
+        return;
+    std::unique_lock<std::mutex> lock(channelLock_);
+    channelRetired_.wait(lock, [&] {
+        return retiredGeneration_.load(std::memory_order_acquire) >= generation;
+    });
+}
+
+bool Device::waitFence(uint32_t seqno, uint64_t generation)
 {
     constexpr unsigned kRefusals = 3;
     const uint32_t ch = channel_, opened = k_.opened();
     for (unsigned refused = 0; !done(seqno);) {
+        if (channelGeneration() != generation)
+            return false;
         if (k_.wait(ch, seqno))
             break;
+        if (channelGeneration() != generation)
+            return false;
         TegraGM20BAbiStatus st;
         if (k_.lost(ch) || !k_.status(ch, st)) {  // killed, or destroyed by a reopen that kept its kill record
             noteLost();
@@ -2773,7 +2804,7 @@ bool Device::waitFence(uint32_t seqno)
             noteLost();
             break;
         }
-        if (int32_t(st.completed - seqno) >= 0)
+        if (done(seqno))
             return !lost(seqno);
         if (++refused == kRefusals) {
             os_log_error(os_log_create("com.brunostjohn.switch.TegraGM20BMetal", "raw"),
@@ -2783,6 +2814,8 @@ bool Device::waitFence(uint32_t seqno)
                 std::lock_guard<std::mutex> l(killedLock_);
                 killedKept_[killedNext_++ % killedKept_.size()] = {
                     st.completed + 1, __atomic_load_n(&lastSeqno_, __ATOMIC_RELAXED), kWaitRefused};
+                keptThrough_.store(__atomic_load_n(&lastSeqno_, __ATOMIC_RELAXED), std::memory_order_relaxed);
+                keptKills_.store(true, std::memory_order_release);
             }
             k_.markLost(ch, opened);  // begin() makes it again
             noteLost();
@@ -2803,16 +2836,24 @@ void Device::noteLost()
 bool Device::liveKill(Killed &k) const
 {
     const volatile uint32_t *fence = fence_;
-    if (!k_.killRecords() || fence == &kNoFence)
+    if (fence == &kNoFence)
         return false;
-    const auto *record = reinterpret_cast<const volatile TegraGM20BAbiFence *>(fence);
-    std::atomic_thread_fence(std::memory_order_acquire);
-    k.error = record->error;
-    if (!k.error)
+    if (k_.killRecords()) {
+        const auto *record = reinterpret_cast<const volatile TegraGM20BAbiFence *>(fence);
+        std::atomic_thread_fence(std::memory_order_acquire);
+        k.error = record->error;
+        if (k.error) {
+            std::atomic_thread_fence(std::memory_order_acquire);
+            k.first = record->killed_first;
+            k.last = record->killed_last;
+            return true;
+        }
+    }
+    const uint32_t last = __atomic_load_n(&lastSeqno_, __ATOMIC_RELAXED);
+    const auto semantic = semanticFence(last);
+    if (semantic.status != SemanticFenceStatus::Failed)
         return false;
-    std::atomic_thread_fence(std::memory_order_acquire);
-    k.first = record->killed_first;
-    k.last = record->killed_last;
+    k = {semantic.first, last, kDependencyFailed};
     return true;
 }
 
@@ -2826,6 +2867,9 @@ bool Device::killed(uint32_t seqno) const
         killedError_.store(live.error, std::memory_order_relaxed);
         return true;
     }
+    if (!keptKills_.load(std::memory_order_acquire) ||
+        int32_t(seqno - keptThrough_.load(std::memory_order_relaxed)) > 0)
+        return false;
     std::lock_guard<std::mutex> l(killedLock_);
     for (const Killed &kept : killedKept_)
         if (covers(kept)) {
@@ -2877,6 +2921,8 @@ std::string Device::vaOwner(uint64_t va)
 
 bool Device::reopen()
 {
+    // Invalidate consumers before a destroyed slot can name another channel.
+    const uint64_t retiring = channelGeneration_.fetch_add(1, std::memory_order_release);
     if (!contextless_) {  // the first try for this death: what the channel had failed, its kill record is kept
         noteLost();
         Killed live = {};
@@ -2884,12 +2930,19 @@ bool Device::reopen()
             k_.markLost(channel_, k_.opened());
             std::lock_guard<std::mutex> l(killedLock_);
             killedKept_[killedNext_++ % killedKept_.size()] = live;
+            keptThrough_.store(live.last, std::memory_order_relaxed);
+            keptKills_.store(true, std::memory_order_release);
         }
         contextless_ = true;
     }
     // Closed once: the connection is NVK's, whose next channel may take the slot number
     if (channel_)
         k_.closeChannel(channel_);
+    {
+        std::lock_guard<std::mutex> lock(channelLock_);
+        retiredGeneration_.store(retiring, std::memory_order_release);
+    }
+    channelRetired_.notify_all();
     channel_ = 0;
     fence_ = &kNoFence;
     auto refused = [&] {
@@ -2899,13 +2952,13 @@ bool Device::reopen()
     };
     if (!k_.channel(kEngines, channel_, fence_))
         return refused();
-    stats.reopens++;
+    RAW_DIAGNOSTIC(stats.reopens++);
     push_.inflight.clear();
     upload_.inflight.clear();
     {
         std::lock_guard<std::mutex> l(lock_);
         for (Backing *b : backings_)
-            b->lastUse = 0;
+            b->submitted = false;
         heapInvalidated_ = ~0ull;
     }
     slmChannel_ = 0;
@@ -2946,7 +2999,7 @@ void Device::growRing(Ring &r, uint64_t most)
     const bool grow = r.waited && r.bo.bytes < most;
     r.waited = false;
     Bo larger;
-    if (!grow || !k_.alloc(std::min(r.bo.bytes * 2, most), true, larger))
+    if (!grow || !k_.allocControl(std::min(r.bo.bytes * 2, most), larger))
         return;
     grownOut_.push_back({r.bo, lastSeqno_});
     r.bo = larger;
@@ -2973,13 +3026,25 @@ CommandBuffer *Device::begin()
     CommandBuffer &cb = cb_;
     cb.dev_ = this;
     cb.segments_.clear();
-    cb.clean_.clear();
-    cb.flush_.clear();
+    cb.batchWork_ = {};
+    cb.dirty_.clear();
     cb.backings_.clear();
     cb.surfaces_.clear();
+    cb.sharedWaits_.clear();
+    cb.sharedSignals_.clear();
+    cb.visibility_ = JobVisibility::Legacy;
+    cb.externalWrites_ = false;
+#if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
+    cb.forceWholePrograms_ = false;
+#endif
     cb.draws = cb.passes = cb.blits = 0;
     cb.refusal = {};
     cb.partial = false;
+    cb.admissionBlocked = false;
+    cb.nativeError = 0;
+    cb.nativeReads_.clear();
+    cb.nativeSurfaces_.clear();
+    cb.pitchImports_.clear();
     overflowing_ = false;
     overflow_.clear();
     cb.pushStart_ = push_.head;
@@ -2991,6 +3056,7 @@ CommandBuffer *Device::begin()
     cb.drawn_ = false;
     {
         std::lock_guard<std::mutex> l(lock_);
+        reapNativeSurfaces();
         if (commitCount_ % 64 == 0)
             trimBackings();
         cb.stamp = stampOf(commitCount_);
@@ -3012,6 +3078,8 @@ CommandBuffer *Device::begin()
     cb.segment(start, p.at);
     cb.prologueDwords_ = uint32_t(p.at - start);
     cb.splits_.clear();
+    cb.splitRecords_.clear();
+    cb.splitReuse_.clear();
     cb.buffersWritten_ = false;
     cb.geometryBudget_ = {};
     return &cb;
@@ -3022,28 +3090,12 @@ void CommandBuffer::segment(uint32_t *from, uint32_t *to)
     if (to == from)
         return;
     const uint64_t va = dev_->push_.bo.va + (reinterpret_cast<uint8_t *>(from) - dev_->push_.bo.cpu);
-    // contiguous with the last segment: one GPFIFO entry
-    if (!segments_.empty() && !segments_.back().flags &&
-        segments_.back().va + uint64_t(segments_.back().dwords) * 4 == va &&
-        segments_.back().dwords + uint64_t(to - from) < (1u << 21) - 1) {
-        segments_.back().dwords += uint32_t(to - from);
-        return;
-    }
-    segments_.push_back({va, uint32_t(to - from), 0});
+    segments_.append({va, uint32_t(to - from), 0});
 }
 
 void CommandBuffer::clean(const void *cpu, uint64_t bytes, bool invalidate)
 {
-    if (!cpu || !bytes)
-        return;
-    auto &list = invalidate ? flush_ : clean_;
-    const uintptr_t a = uintptr_t(cpu);
-    if (!list.empty() && a >= list.back().first &&
-        a <= list.back().first + list.back().second) {  // CA's rings: adjacent
-        list.back().second = std::max<uint64_t>(list.back().second, a + bytes - list.back().first);
-        return;
-    }
-    list.push_back({a, bytes});
+    dirty_.add(cpu, bytes, invalidate);
 }
 
 RenderEncoder *CommandBuffer::render(const PassDesc &pass)
@@ -3052,11 +3104,14 @@ RenderEncoder *CommandBuffer::render(const PassDesc &pass)
     // a pass's lists keep the last one's capacity: no allocation a steady frame
     std::vector<RenderEncoder::Body> bodies = std::move(e.bodies_);
     std::vector<std::array<uint32_t, 4>> rects = std::move(e.rects_);
+    SplitPassPlan splitPlan = std::move(e.splitPlan_);
     bodies.clear();
     rects.clear();
+    splitPlan.clear();
     e = RenderEncoder();
     e.bodies_ = std::move(bodies);
     e.rects_ = std::move(rects);
+    e.splitPlan_ = std::move(splitPlan);
     e.cb_ = this;
     e.dev_ = dev_;
     e.pass_ = pass;
@@ -3087,6 +3142,12 @@ RenderEncoder *CommandBuffer::render(const PassDesc &pass)
         e.pass_.depthStencil.texture = b;
         backings_.push_back(b);
     }
+    uint8_t scratchMask = 0;
+    for (uint32_t j = 0; j < pass.count && j < 8; ++j)
+        if (const Texture *t = pass.color[j].texture;
+            t && (t->memoryless || t->shadowTarget || (blockLinear && !t->blockLinear)))
+            scratchMask |= uint8_t(1u << j);
+    const auto scratchTags = transientColorTags(scratchMask);
     for (uint32_t j = 0; j < pass.count && j < 8; j++) {
         const Texture *t = pass.color[j].texture;
         if (!t)
@@ -3096,14 +3157,14 @@ RenderEncoder *CommandBuffer::render(const PassDesc &pass)
         const bool mixed = blockLinear && !t->blockLinear && !t->memoryless;
         if (t->shadowTarget || mixed) {  // rendered through a pool image (end(): copied in before, back after)
             if (mixed) {
-                dev_->stats.rtMixed++;
+                RAW_DIAGNOSTIC(dev_->stats.rtMixed++);
             } else {
-                dev_->stats.rtUnaligned++;
-                dev_->stats.rtUnalignedPitch = t->pitch;
-                dev_->stats.rtUnalignedVa = uint32_t(t->va & 255);
+                RAW_DIAGNOSTIC(dev_->stats.rtUnaligned++);
+                RAW_DIAGNOSTIC(dev_->stats.rtUnalignedPitch = t->pitch);
+                RAW_DIAGNOSTIC(dev_->stats.rtUnalignedVa = uint32_t(t->va & 255));
             }
             std::lock_guard<std::mutex> l(dev_->lock_);
-            Texture *b = dev_->backing(*t, 1 + j, blockLinear);
+            Texture *b = dev_->backing(*t, scratchTags[j], blockLinear, false);
             if (!b || !b->renderable)
                 return nullptr;
             e.pass_.color[j].texture = b;
@@ -3113,7 +3174,7 @@ RenderEncoder *CommandBuffer::render(const PassDesc &pass)
         }
         if (t->memoryless) {  // back it for this pass
             std::lock_guard<std::mutex> l(dev_->lock_);
-            Texture *b = dev_->backing(*t, Device::kMemorylessTag + j, blockLinear);
+            Texture *b = dev_->backing(*t, scratchTags[j], blockLinear);
             if (!b)
                 return nullptr;
             e.pass_.color[j].texture = b;
@@ -3140,12 +3201,11 @@ RenderEncoder *CommandBuffer::render(const PassDesc &pass)
         e.areaW_ = std::min(e.areaW_, pass.width);
     if (pass.height)
         e.areaH_ = std::min(e.areaH_, pass.height);
-    // a Clear load is a color write the prologue's CLEAR_SURFACE makes ahead of the draws: a draw that fetches the color
-    // takes the fetch barrier after it, as NVK's first fetch after its clears does, or it reads what was there before
+    // DontCare can become a clear after later draws establish readBits_. Treat its deferred prologue write like Clear.
     for (uint32_t j = 0; j < pass.count && j < 8; j++)
-        if (e.pass_.color[j].texture && e.pass_.color[j].load == ColorAttachment::Clear)
-            e.writtenBits_ |= uint8_t(1u << j);
-    if (e.writtenBits_) {
+        if (e.pass_.color[j].texture && e.pass_.color[j].load != ColorAttachment::Load)
+            e.attachmentWrites_.rop |= uint8_t(1u << j);
+    if (e.attachmentWrites_.rop) {
         DrawGeometry cleared;
         cleared.limit = {0, 0, e.areaW_, e.areaH_};
         e.written_.add(cleared);
@@ -3176,24 +3236,68 @@ BlitEncoder *CommandBuffer::blit()
     return &e;
 }
 
-void CommandBuffer::useAddress(uint64_t va, bool write)
+Texture::StorageRange Texture::storageRange() const
+{
+    if (storage.bytes)
+        return storage;
+    if (span.bytes)
+        return {span.va, span.bytes, false};
+    if (chain)
+        return {chain->va, chain->layout.bytes, false};
+    if ((blockLinear || nativeGeneration) && layerBytes && layers && layerBytes <= UINT64_MAX / layers)
+        return {va, layerBytes * layers, false};
+    return {};
+}
+
+static bool importContains(const Import *import, uint64_t va, uint64_t bytes)
+{
+    if (!import || !bytes)
+        return false;
+    const uint64_t base = import->bo.vaBase ? import->bo.vaBase : import->bo.va;
+    return va >= base && va - base <= import->bo.bytes && bytes <= import->bo.bytes - (va - base);
+}
+
+static uint64_t rowStorageBytes(uint32_t pitch, uint32_t width, uint32_t height, uint32_t element)
+{
+    if (!width || !height || !element)
+        return 0;
+    const uint64_t rows = uint64_t(pitch) * (height - 1), last = uint64_t(width) * element;
+    return last <= UINT64_MAX - rows ? rows + last : 0;
+}
+
+void CommandBuffer::useAddress(uint64_t va, uint64_t bytes, bool write)
 {
     if (va && dev_->k_.exactJobs())
-        surfaces_.addAddress(va, 1, write);
+        surfaces_.addAddress(va, bytes ? bytes : 1, write,
+                             bytes && bytes <= UINT32_MAX && dev_->k_.rangeUses() ? TegraGM20BSurfaceRange : 0u);
 }
 
 void CommandBuffer::use(const Buffer &buffer, bool write)
 {
     buffersWritten_ |= write;
-    use(buffer.import, write);
+    externalWrites_ |= write && buffer.hostVisible;
+    const bool ranged = dev_->k_.rangeUses() && buffer.length && buffer.length <= UINT32_MAX;
+    if (!ranged || !importContains(buffer.import, buffer.va, buffer.length))
+        use(buffer.import, write);
     if (buffer.va && buffer.length && dev_->k_.exactJobs())
-        surfaces_.addAddress(buffer.va, buffer.length, write);
+        surfaces_.addAddress(buffer.va, buffer.length, write,
+                             (buffer.hostVisible && dev_->k_.jobVisibility() ? TegraGM20BSurfaceHostWritten : 0u) |
+                             (ranged ? TegraGM20BSurfaceRange : 0u));
 }
 
 void CommandBuffer::use(const Texture &texture, bool write)
 {
-    use(texture.import, write);
-    useAddress(texture.va, write);
+    const Texture *view = write ? &texture : readTexture(&texture);
+    const auto storage = view->storageRange();
+    const bool ranged = dev_->k_.rangeUses() && storage.bytes && storage.bytes <= UINT32_MAX;
+    if (!ranged || !importContains(view->import, storage.va, storage.bytes))
+        use(view->import, write);
+    const bool hostVisible = storage.hostVisible || (view->import && !view->import->id);
+    externalWrites_ |= hostVisible && write;
+    if (view->va && dev_->k_.exactJobs())
+        surfaces_.addAddress(storage.bytes ? storage.va : view->va, storage.bytes ? storage.bytes : 1, write,
+                             (hostVisible && dev_->k_.jobVisibility() ? TegraGM20BSurfaceHostWritten : 0u) |
+                             (ranged ? TegraGM20BSurfaceRange : 0u));
 }
 
 // Read ownership remains held until every consuming GPU job is published. Releasing after the CPU copy alone
@@ -3230,6 +3334,8 @@ bool CommandBuffer::acquireGeometry(const Buffer &buffer, const uint8_t *cpu, ui
         if (buffer.arena) {
             if (index >= d.arenas_.size() || d.arenas_[index].purged)
                 return false;
+            if (d.arenas_[index].bufferVa != d.arenas_[index].va)
+                return false;  // Private placement aliases can also be written through their tiled VA.
             bo = d.arenas_[index].bo;
         } else {
             const auto &chunks = buffer.wc ? d.wcChunks_ : d.chunks_;
@@ -3278,8 +3384,17 @@ void CommandBuffer::releaseGeometry()
     geometryReads_.clear();
 }
 
+std::shared_ptr<ResourceReadyCompletion> CommandBuffer::resourceReadiness(std::function<void()> ready, int &result)
+{
+    auto events = dev_->k_.resourceReady() ? dev_->k_.sharedEvents() : nullptr;
+    result = kIOReturnUnsupported;
+    return events ? events->resources(surfaces_.uses(), std::move(ready), result) : nullptr;
+}
+
 bool CommandBuffer::commit(uint32_t &seqno)
 {
+    if (nativeError)
+        return false;
     struct ReleaseReads {
         CommandBuffer &cb;
 
@@ -3333,7 +3448,7 @@ bool CommandBuffer::commit(uint32_t &seqno)
         auto *head = reinterpret_cast<uint32_t *>(d.alloc(d.push_, kSlmWords * 4, 4, va));
         Push p{head, head + kSlmWords};
         emitSlm(p, slmVa, slmArea(slmGiven, d.k_.info().tpc_count));
-        segments_.insert(segments_.begin(), {va, uint32_t(p.at - head), 0});
+        segments_.insert(0, {va, uint32_t(p.at - head), 0});
     }
     if (!segments_.empty()) {
         uint64_t va;
@@ -3344,26 +3459,22 @@ bool CommandBuffer::commit(uint32_t &seqno)
         emitStamp(p, d.stamps_.va + stampOffset(stamp), stamp);
         segment(tail, p.at);
     }
-    // CPU writes the GPU reads: to memory, by address (no set/way operation, nothing global)
-    uint64_t cleaned = 0;
+    for (const auto &range : dirty_.merged()) {
 #if defined(__aarch64__)
-    for (const auto &r : clean_) {
-        for (uintptr_t a = r.first & ~uintptr_t(63); a < r.first + r.second; a += 64)
-            __asm__ volatile("dc cvac, %0" ::"r"(a) : "memory");
-        cleaned += r.second;
-    }
-    for (const auto &r : flush_) {
-        for (uintptr_t a = r.first & ~uintptr_t(63); a < r.first + r.second; a += 64)
-            __asm__ volatile("dc civac, %0" ::"r"(a) : "memory");
-        cleaned += r.second;
-    }
-    // the cleans, and the write-combined ring writes, complete before the kernel rings GP_PUT
-    __asm__ volatile("dsb sy" ::: "memory");
-#else
-    for (const auto &r : clean_)
-        cleaned += r.second;
+        if (range.invalidate) {
+            for (uintptr_t address = range.begin; address < range.end; address += 64)
+                __asm__ volatile("dc civac, %0" ::"r"(address) : "memory");
+        } else {
+            for (uintptr_t address = range.begin; address < range.end; address += 64)
+                __asm__ volatile("dc cvac, %0" ::"r"(address) : "memory");
+        }
 #endif
-    d.stats.cleanBytes += cleaned;
+        RAW_DIAGNOSTIC(d.stats.cleanBytes += range.end - range.begin);
+    }
+#if defined(__aarch64__)
+    // The cleans and WC ring writes complete before the kernel rings GP_PUT.
+    __asm__ volatile("dsb sy" ::: "memory");
+#endif
     if (d.k_.exactJobs()) {
         std::lock_guard<std::mutex> lock(d.lock_);
         auto control = [&](const Bo &bo, bool write) {
@@ -3375,26 +3486,49 @@ bool CommandBuffer::commit(uint32_t &seqno)
         for (const Bo *bo : {&d.root_, &d.tickets_, &d.stamps_, &d.slm_})
             control(*bo, true);
         for (const auto &part : d.heapParts_)
-            control(part.bo, false);
+            surfaces_.addAccess(part.bo.handle, TegraGM20BSurfaceRead |
+                (invalidates && d.k_.jobVisibility() ? uint32_t(TegraGM20BSurfaceHostWritten) : 0u));
         for (const Bo &bo : d.slmOutgrown_)
             control(bo, true);
         // Split compute writes its frontier into upload storage. Retired chunks remain live through this submission.
         control(d.upload_.bo, true);
         for (const Bo &bo : d.upload_.outgrown)
             control(bo, true);
+        control(d.push_.bo, false);
+        for (const Bo &bo : d.push_.outgrown)
+            control(bo, false);
     }
     if (geometryWritable())
         return false;  // later internal writes invalidate the CPU proof; no prefix may reach the GPU
+    if (!batchWork_.operations)
+        segments_.includeTail();
+    if (!segments_.valid(d.k_.maxPushes()))
+        return false;  // validate all indivisible continuation groups before publishing any prefix
+    const bool multiple = (!segments_.empty() && segments_.next(0, d.k_.maxPushes()) < segments_.size()) ||
+                          sharedWaits_.size() + sharedSignals_.size() > TegraGM20BMaxJobEvents;
+    const uint64_t admissionCookie = multiple && d.k_.resourceReady() ? d.k_.nextAdmission() : 0;
+    bool admissionHeld = false;
     uint32_t seq = 0;
-    for (size_t at = 0; at < segments_.size();) {
-        uint32_t n = uint32_t(std::min<size_t>(d.k_.maxPushes(), segments_.size() - at));
-        while (n && (segments_[at + n - 1].flags & TegraGM20BPushIncomplete))
-            --n;
-        if (!n)
-            return false;  // a continuation group must fit one atomic submission
-
-        if (!d.k_.exec(d.channel_, segments_.data() + at, n, d.lastSeqno_, seq, &surfaces_)) {
-            if (at) {  // its first batches run on: abandon() may give their ring words back only once they completed
+    auto submit = [&](const TegraGM20BAbiPush *pushes, uint32_t count, SurfaceList &resources,
+                      JobVisibility visibility, const JobEvents &events, bool last) {
+        int result = KERN_SUCCESS;
+        const JobAdmission admission{admissionCookie, admissionCookie ?
+            (published ? uint32_t(TegraGM20BSubmitAdmissionContinue) : uint32_t(TegraGM20BSubmitAdmissionBegin)) |
+            (last ? uint32_t(TegraGM20BSubmitAdmissionEnd) : 0u) : 0u};
+        if (!d.k_.exec(d.channel_, pushes, count, d.lastSeqno_, seq,
+                      admissionCookie ? &surfaces_ : &resources, &result, visibility, events, admission)) {
+            admissionBlocked = !published && result == kIOReturnCannotLock && d.k_.resourceReady();
+            if (admissionHeld) {
+                SurfaceList empty;
+                uint32_t cancelled = 0;
+                (void)d.k_.exec(d.channel_, nullptr, 0, 0, cancelled, &empty, nullptr, JobVisibility::Internal,
+                               {}, {admissionCookie, TegraGM20BSubmitAdmissionCancel});
+                admissionHeld = false;
+            }
+            if ((!nativeSurfaces_.empty() || !sharedWaits_.empty() || !sharedSignals_.empty()) &&
+                (result == kIOReturnNotReady || result == kIOReturnAborted))
+                nativeError = result;
+            if (published) {
                 partial = true;
                 d.wait(d.lastSeqno_);
                 d.contextless_ = true;
@@ -3402,10 +3536,56 @@ bool CommandBuffer::commit(uint32_t &seqno)
             return false;
         }
         published = true;
+        admissionHeld = admissionCookie && !last;
         d.lastSeqno_ = seq;
+        return true;
+    };
+    SurfaceList eventResources;
+    size_t waited = 0, signaled = 0;
+    // Capacity is an ABI bound, not permission to truncate dependencies. Prefix joins use the same channel's order.
+    while (sharedWaits_.size() - waited + std::min<size_t>(sharedSignals_.size(), TegraGM20BMaxJobEvents) >
+           TegraGM20BMaxJobEvents) {
+        const uint32_t count = uint32_t(std::min<size_t>(sharedWaits_.size() - waited, TegraGM20BMaxJobEvents));
+        const JobEvents events{sharedWaits_.data() + waited, nullptr, count, 0};
+        if (!submit(nullptr, 0, eventResources, JobVisibility::Internal, events, false))
+            return false;
+        waited += count;
+    }
+    for (size_t at = 0; at < segments_.size();) {
+        const uint32_t n = uint32_t(segments_.next(at, d.k_.maxPushes()));
+
+        const JobVisibility visibility = visibility_ == JobVisibility::Legacy ? JobVisibility::Legacy :
+            externalWrites_ && at + n == segments_.size() ? JobVisibility::External : JobVisibility::Internal;
+        const uint32_t waitCount = uint32_t(sharedWaits_.size() - waited);
+        const uint32_t signalCount = at + n == segments_.size() ?
+            uint32_t(std::min<size_t>(sharedSignals_.size(), TegraGM20BMaxJobEvents - waitCount)) : 0;
+        const JobEvents events{waitCount ? sharedWaits_.data() + waited : nullptr,
+                              signalCount ? sharedSignals_.data() : nullptr, waitCount, signalCount};
+        const bool last = at + n == segments_.size() && waited + waitCount == sharedWaits_.size() &&
+                          signaled + signalCount == sharedSignals_.size();
+        if (!submit(segments_.data() + at, n, surfaces_, visibility, events, last))
+            return false;
+        waited += waitCount;
+        signaled += signalCount;
+        for (NativeSurface *surface : nativeSurfaces_) {
+            surface->lastUse = seq;
+            surface->channelGeneration = d.channelGeneration();
+        }
         at += n;
     }
-    seqno = seq;
+    while (waited < sharedWaits_.size() || signaled < sharedSignals_.size()) {
+        const uint32_t waitCount = uint32_t(std::min<size_t>(sharedWaits_.size() - waited, TegraGM20BMaxJobEvents));
+        const uint32_t signalCount = uint32_t(std::min<size_t>(sharedSignals_.size() - signaled,
+                                                             TegraGM20BMaxJobEvents - waitCount));
+        const JobEvents events{waitCount ? sharedWaits_.data() + waited : nullptr,
+                              signalCount ? sharedSignals_.data() + signaled : nullptr, waitCount, signalCount};
+        const bool last = waited + waitCount == sharedWaits_.size() && signaled + signalCount == sharedSignals_.size();
+        if (!submit(nullptr, 0, eventResources, JobVisibility::External, events, last))
+            return false;
+        waited += waitCount;
+        signaled += signalCount;
+    }
+    seqno = d.lastSeqno_;
     if (slmGiven)
         d.slmChannel_ = slmGiven;
     d.retire(d.push_, seq);
@@ -3421,12 +3601,14 @@ bool CommandBuffer::commit(uint32_t &seqno)
             for (Device::Backing *k : d.backings_)
                 if (&k->texture == b) {
                     k->lastUse = seq;
+                    k->submitted = true;
                     k->usedNs = now;
                 }
         d.commitCount_++;
         d.closedCount_++;
     }
-    d.stats.commits++;
+    releaseNativeReads();
+    RAW_DIAGNOSTIC(d.stats.commits++);
     return true;
 }
 
@@ -3441,6 +3623,7 @@ bool Device::gpuNanoseconds(uint32_t stamp, uint64_t &ns) const
 void CommandBuffer::abandon()
 {
     releaseGeometry();
+    releaseNativeReads();
     Device &d = *dev_;
     {
         std::lock_guard<std::mutex> l(d.lock_);
@@ -3451,7 +3634,7 @@ void CommandBuffer::abandon()
     for (Device::Ring *r : {&d.push_, &d.upload_}) {
         // drop the open command buffer's spans and give back what it took (nothing else was allocated since: one encodes)
         for (auto it = r->inflight.begin(); it != r->inflight.end();)
-            it = it->seqno ? std::next(it) : r->inflight.erase(it);
+            it = it->submitted ? std::next(it) : r->inflight.erase(it);
         r->head = r->since = (r == &d.push_ ? pushStart_ : uploadStart_);
         if (!r->outgrown.empty()) {  // it began in a ring it grew out of: the new one is empty
             for (const Bo &b : r->outgrown)
@@ -3461,8 +3644,7 @@ void CommandBuffer::abandon()
         }
     }
     segments_.clear();
-    clean_.clear();
-    flush_.clear();
+    dirty_.clear();
     surfaces_.clear();
 }
 
@@ -3483,6 +3665,23 @@ void RenderEncoder::reserve()
     p_ = Push{bodyStart_, bodyStart_ + room};
 }
 
+void RenderEncoder::finishDraw(uint32_t vertices, uint32_t instances, bool indirect)
+{
+    const Pipeline &pl = *emitted_;
+    const uint64_t vertexWork = BatchWork::product(BatchWork::product(vertices, instances), pl.vertexInstructions);
+    const uint64_t fragmentWork = BatchWork::product(BatchWork::product(drawPixels_, instances),
+                                                    uint64_t(pl.fragmentInstructions) * pl.samplePasses);
+    if (!cb_->batchWork_.add(indirect ? BatchWork::kLimit : vertexWork + fragmentWork))
+        return;
+    if (p_.at > bodyStart_) {
+        bodies_.push_back({bodyStart_, p_.at, 0, 0, false, true});
+        bodyStart_ = p_.at;
+    } else if (!bodies_.empty()) {
+        bodies_.back().batchEnd = true;  // complete indirect argument continuation, never its method header
+    }
+    cb_->batchWork_ = {};
+}
+
 void RenderEncoder::setBytes(int stage, uint32_t slot, const void *bytes, uint32_t length)
 {
     if (slot >= 31 || stage < 1 || stage > 2)
@@ -3496,7 +3695,7 @@ void RenderEncoder::setBytes(int stage, uint32_t slot, const void *bytes, uint32
                           m};  // m2v binds the Metal length (its upload chunks are 256-byte aligned)
     bufs_[stage][slot].resourceVa = dev_->upload_.bo.va;
     invalidateDescriptors();
-    dev_->stats.uploadBytes += chunk;
+    RAW_DIAGNOSTIC(dev_->stats.uploadBytes += chunk);
 }
 
 void RenderEncoder::setBytesAt(int stage, uint32_t slot, uint64_t va, uint32_t length, const uint8_t *cpu,
@@ -3509,6 +3708,11 @@ void RenderEncoder::setBytesAt(int stage, uint32_t slot, uint64_t va, uint32_t l
     if (old.va == va && old.size == length && !old.buffer && old.cpu == cpu && old.resourceVa == resourceVa)
         return;
     bufs_[stage][slot] = {va, length, nullptr, 0, cpu, resourceVa};
+    if (allocation) {
+        cb_->use(*allocation, false);
+        if (allocation->hostVisible && !allocation->wc)
+            cb_->clean(cpu, length);
+    }
     invalidateDescriptors();
 }
 
@@ -3555,6 +3759,8 @@ void RenderEncoder::setScissor(uint32_t x, uint32_t y, uint32_t w, uint32_t h)
 // Metal's viewport as m2v gives it to Vulkan (y flipped: y + h, height -h) and NVK writes it (nvk_emit_viewport)
 void RenderEncoder::setViewport(double x, double y, double w, double h, double znear, double zfar)
 {
+    depthRange_[0] = float(znear);
+    depthRange_[1] = float(zfar);
     vp_[0] = x;
     vp_[1] = y;
     vp_[2] = w;
@@ -3588,6 +3794,7 @@ void RenderEncoder::setBlendColor(const float rgba[4])
 void RenderEncoder::setDepthStencil(const DepthStencilDesc *d)
 {
     ds_ = d ? *d : DepthStencilDesc();
+    compatible_ = nullptr;
     dsDirty_ = true;
 }
 
@@ -3608,7 +3815,7 @@ void RenderEncoder::barrier()
     p_.m(WAIT_FOR_IDLE, 0);
     p_.m(INVALIDATE_SHADER_CACHES, kBetweenPasses);
     p_.m(INVALIDATE_TEXTURE_DATA_CACHE_NO_WFI, 0);
-    writtenBits_ = storageWrittenBits_ = 0;
+    attachmentWrites_ = {};
     written_.clear();
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
     anyWritten_ = false;
@@ -3651,6 +3858,7 @@ bool RenderEncoder::draw(uint32_t primitive, uint32_t first, uint32_t count, uin
             p_.m(BEGIN, 0);
             p_.inc(VERTEX_ARRAY_START, {first + begin, end - begin});
             p_.m(END, 0);
+            finishDraw(end - begin, 1);
         }
         cb_->draws++;
         return true;
@@ -3667,6 +3875,7 @@ bool RenderEncoder::draw(uint32_t primitive, uint32_t first, uint32_t count, uin
         mme::draw(p_, false, first, count, instances);
     }
     cb_->draws++;
+    finishDraw(count, instances);
     return true;
 }
 
@@ -3679,42 +3888,22 @@ const RenderEncoder::Runs *RenderEncoder::selfRuns(const Pipeline &pl, uint32_t 
     static thread_local TriangleRuns triangles;
     runs.clear();
     runWinding_.fill(false);
-    const FetchDraw shape = {primitive, count, instances};
-    const bool fetchesOwn = fetchesOwnColor(pl.fetchBits, pl.writeBits, pl.storageBits);
-#if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
-    if (pl.fetchBits & pl.storageBits)
-        dev_->stats.fetch.interlocked++;
-#endif
-    if (!fetchesOwn || singlePrimitive(shape))
+    const uint32_t singlePrimitive = primitive == 0 ? 1 : primitive <= 2 ? 2 : 3;
+    if (!(pl.fetchBits & pl.writeBits & ~pl.storageBits) || (count <= singlePrimitive && instances == 1))
         return &runs;
-    if (const FetchRefusal refusal = fetchRefusal(fetchesOwn, pl.caTransform, shape); refusal != FetchRefusal::None)
-        return refuseFetch(refusal, primitive, count, instances, why);
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
     const auto start = std::chrono::steady_clock::now();
 #endif
     auto analysis = geometryCache_.analysis(geometry(pl, primitive, first, count, {0, 0, ~0u, ~0u}), bindingRevision_,
                                             cb_->geometryBudget_);
+    const bool told = instances == 1 && (primitive == 3 || primitive == 4) && triangles.split(analysis, runs);
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
-    const GeometrySnapshot *proof =
-        analysis.geometry().bounded && !analysis.snapshot().evaluated ? &analysis.snapshot() : nullptr;
-#endif
-    const bool told = triangles.split(analysis, runs);
-#if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
-    dev_->stats.selfOverlapNs += uint64_t(
-        std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - start).count());
-    if (proof && proof->valid) {
-        const DrawGeometry &g = proof->source;
-        dev_->stats.fetch.proofVertices += g.count;
-        dev_->stats.fetch.proofBytes +=
-            64 + uint64_t(g.count) * (g.indexSize + uint64_t(g.positions.components) * sizeof(float));
-    }
-    if (told && runs.empty())
-        dev_->stats.fetch.provenWhole++;
+    RAW_DIAGNOSTIC(dev_->stats.selfOverlapNs += uint64_t( std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - start).count()));
     if (!told)
-        dev_->stats.selfOverlapUnbounded++;
+        RAW_DIAGNOSTIC(dev_->stats.selfOverlapUnbounded++);
     else if (!runs.empty()) {
-        dev_->stats.selfOverlapSplit++;
-        dev_->stats.selfOverlapRuns += runs.size();
+        RAW_DIAGNOSTIC(dev_->stats.selfOverlapSplit++);
+        RAW_DIAGNOSTIC(dev_->stats.selfOverlapRuns += runs.size());
     }
 #else
     (void)told;
@@ -3724,29 +3913,16 @@ const RenderEncoder::Runs *RenderEncoder::selfRuns(const Pipeline &pl, uint32_t 
         // small direct draws native: each triangle is ordered by prepare()'s existing framebuffer-fetch barrier.
         // No position or index bytes are read, and no unproven non-overlap assumption is made.
         if (pl.caTransform && !pl.primitiveId &&
-            TriangleRuns::sequential(primitive, count, instances, drawIndices_ != nullptr, runs, runWinding_)) {
-#if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
-            dev_->stats.fetch.sequential++;
-            dev_->stats.fetch.sequentialTriangles += runs.size();
-#endif
+            TriangleRuns::sequential(primitive, count, instances, drawIndices_ != nullptr,
+                                                       runs, runWinding_))
             return &runs;
-        }
-        return refuseFetch(FetchRefusal::Geometry, primitive, count, instances, why);
+        *why = "framebuffer-fetch ordering requires an interlocked program or available bounded geometry";
+        cb_->refusal = {RefGeometry, primitive, count, instances};
+        return nullptr;
     }
     if (primitive == 4)
         runWinding_ = TriangleRuns::winding(analysis, runs);
     return &runs;
-}
-
-const RenderEncoder::Runs *RenderEncoder::refuseFetch(FetchRefusal refusal, uint32_t primitive, uint32_t count,
-                                                      uint32_t instances, const char **why)
-{
-    *why = fetchRefusalWhy(refusal);
-    cb_->refusal = {RefGeometry, primitive, count, instances};
-#if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
-    dev_->stats.fetch.refusedAtEncode[size_t(refusal)]++;
-#endif
-    return nullptr;
 }
 
 // NVK's indexed draw on MAXWELL_B: the index buffer as NVK_MME_BIND_IB sets it (start, last byte, the restart index of the type,
@@ -3794,7 +3970,7 @@ bool RenderEncoder::drawIndexed(uint32_t primitive, uint32_t count, uint32_t ind
         padded.cpu = m;
         padded.length = bytes;
         padded.wc = true;
-        dev_->stats.uploadBytes += bytes;
+        RAW_DIAGNOSTIC(dev_->stats.uploadBytes += bytes);
         ib = &padded;
         drawIndexCpuSafe_ = true;  // immutable upload bytes owned by this command buffer
         drawIndexBuffer_ = nullptr;
@@ -3804,7 +3980,7 @@ bool RenderEncoder::drawIndexed(uint32_t primitive, uint32_t count, uint32_t ind
     // Never scan potentially GPU-produced indices to choose a CPU cache range. Cached vertex bindings are
     // cleaned conservatively below; WC vertices need no clean, and geometry reads have their own read lease.
     const uint8_t *at = ib->cpu + offset;
-    if (!ib->wc)
+    if (ib->hostVisible && !ib->wc)
         cb_->clean(at, uint64_t(count) * indexSize);
     drawIndices_ = at;
     drawIndexSize_ = indexSize;
@@ -3853,6 +4029,7 @@ bool RenderEncoder::drawIndexed(uint32_t primitive, uint32_t count, uint32_t ind
         } else {
             mme::draw(p_, true, begin, end - begin, instances);
         }
+        finishDraw(end - begin, instances);
     }
     cb_->draws++;
     return true;
@@ -3865,15 +4042,9 @@ bool RenderEncoder::indirect(uint32_t primitive, bool indexed, const Buffer *arg
 {
     if (!pipeline_)
         return true;
-    const Pipeline &pl = *pipeline_;
-    const bool fetchesOwn = fetchesOwnColor(pl.fetchBits, pl.writeBits, pl.storageBits);
-#if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
-    if (pl.fetchBits & pl.storageBits)
-        dev_->stats.fetch.interlocked++;
-#endif
-    if (const FetchRefusal refusal = fetchRefusal(fetchesOwn, pl.caTransform, {primitive, 0, 1, true});
-        refusal != FetchRefusal::None) {
-        refuseFetch(refusal, primitive, 0, 0, why);
+    if (pipeline_->fetchBits & pipeline_->writeBits & ~pipeline_->storageBits) {
+        *why = "indirect framebuffer-fetch draws require an interlocked program";
+        cb_->refusal = {RefGeometry, primitive, 0, 0};
         return false;
     }
     const uint32_t bytes = indexed ? 20 : 16;
@@ -3889,7 +4060,7 @@ bool RenderEncoder::indirect(uint32_t primitive, bool indexed, const Buffer *arg
     if (!prepared)
         return false;
     cb_->use(*arguments, false);
-    if (!arguments->wc && arguments->cpu)
+    if (arguments->hostVisible && !arguments->wc && arguments->cpu)
         cb_->clean(arguments->cpu + offset, bytes);
     if (p_.room() < 8)
         reserve();
@@ -3906,6 +4077,7 @@ bool RenderEncoder::indirect(uint32_t primitive, bool indexed, const Buffer *arg
     drawParamsUnknown_ =
         true;  // the macro changed draw root words/base registers; the next direct draw must restore them
     ++cb_->draws;
+    finishDraw(0, 0, true);
     return true;
 }
 
@@ -3936,7 +4108,7 @@ bool RenderEncoder::drawIndexedIndirect(uint32_t primitive, uint32_t indexSize, 
     ibVa_ = va;
     ibEnd_ = last;
     ibSize_ = indexSize;
-    if (!indices->wc && indices->cpu)
+    if (indices->hostVisible && !indices->wc && indices->cpu)
         cb_->clean(indices->cpu + indexOffset, indices->length - indexOffset);
     return indirect(primitive, true, arguments, argumentOffset, why);
 }
@@ -3947,7 +4119,7 @@ bool RenderEncoder::prepare(Pipeline *pl, uint32_t primitive, int32_t first, uin
     const uint32_t count = vCount;
     const bool firstDraw = !drew_;
     drew_ = true;
-    readBits_ |= pl->readBits;
+    readBits_ |= pl->readBits | pl->fetchBits;
     // the pixels it may write: its scissor within its viewport's pixels (m2v vk_scissors, viewport_pixels)
     auto axis = [](double origin, double size, uint32_t limit, uint32_t lo, uint32_t hi, uint32_t out[2]) {
         const double a = size < 0 ? origin + size : origin, b = size < 0 ? origin : origin + size;
@@ -3961,7 +4133,11 @@ bool RenderEncoder::prepare(Pipeline *pl, uint32_t primitive, int32_t first, uin
     const bool empty = vp_[2] == 0 || vp_[3] == 0;
     axis(vp_[0], empty ? 0 : vp_[2], areaW_, sc_[0], sc_[0] + sc_[2], x);
     axis(vp_[1], empty ? 0 : vp_[3], areaH_, sc_[1], sc_[1] + sc_[3], y);
-    const DrawGeometry g = geometry(*pl, primitive, first, indexed ? drawIndexCount_ : count, {x[0], y[0], x[1], y[1]});
+    DrawGeometry g;
+    if (pl->storageBits && !(pl->fetchBits & ~pl->storageBits))
+        g.limit = {x[0], y[0], x[1], y[1]};
+    else
+        g = geometry(*pl, primitive, first, indexed ? drawIndexCount_ : count, {x[0], y[0], x[1], y[1]});
     auto geometryAnalysis = geometryCache_.analysis(g, bindingRevision_, cb_->geometryBudget_);
     if (!indirectGeometry_)
         pl = splitTwin(pl, geometryAnalysis);
@@ -3976,27 +4152,37 @@ bool RenderEncoder::prepare(Pipeline *pl, uint32_t primitive, int32_t first, uin
             }
         }
     }
-    for (uint32_t j = 0; j < 8; j++) {  // the pass's attachments are the formats the state was made for
-        const Texture *t = j < pass_.count ? pass_.color[j].texture : nullptr;
-        if ((t ? t->format : 0) != pl->colorFormats[j] && !(t && pl->colorFormats[j] == 0)) {
-            *why = "a state whose color formats differ from the pass's";
-            cb_->refusal = {RefColorFormats, j, t ? t->format : 0, pl->colorFormats[j]};
+    const Texture *zeta = pass_.depthStencil.texture;
+    if (compatible_ != pl) {
+        for (uint32_t j = 0; j < 8; j++) {  // the pass's attachments are the formats the state was made for
+            const Texture *t = j < pass_.count ? pass_.color[j].texture : nullptr;
+            if ((t ? t->format : 0) != pl->colorFormats[j] && !(t && pl->colorFormats[j] == 0)) {
+                *why = "a state whose color formats differ from the pass's";
+                cb_->refusal = {RefColorFormats, j, t ? t->format : 0, pl->colorFormats[j]};
+                return false;
+            }
+        }
+        if (!fragmentTestsMatch(pl->rec->storageTests, ds_, zeta ? zeta->format : 0)) {
+            *why = "an ordered storage variant whose depth/stencil tests differ from the draw";
+            cb_->refusal = {RefDepthStencil, pl->rec->storageTests, uint8_t(fragmentTests(ds_, zeta ? zeta->format : 0)), 0};
             return false;
         }
+        // Metal tests a state's depth and stencil against the pass's hidden attachments where it has none (metal2vulkan
+        // depth_stencil.rs depth_without_attachment), which NVK's gating does not give
+        if (pl->depthFormat != (zeta ? zeta->format : 0) || (!zeta && ds_.active())) {
+            *why = "a depth/stencil state or format the pass's depth/stencil attachment does not take";
+            cb_->refusal = {RefDepthStencil, pl->depthFormat, zeta ? zeta->format : 0, ds_.active()};
+            return false;
+        }
+        if (pl->samples != samples_ || !sampleShadingMasks(samples_, pl->samplePasses, compatibleSampleMasks_)) {
+            *why = "a state whose samples a pixel or per-sample shading the pass's attachments do not take";
+            cb_->refusal = {RefSamples, pl->samples, samples_, pl->samplePasses};
+            return false;
+        }
+        compatible_ = pl;
     }
-    const Texture *zeta = pass_.depthStencil.texture;
-    // Metal tests a state's depth and stencil against the pass's hidden attachments where it has none (metal2vulkan
-    // depth_stencil.rs depth_without_attachment), which NVK's gating does not give
-    if (pl->depthFormat != (zeta ? zeta->format : 0) || (!zeta && ds_.active())) {
-        *why = "a depth/stencil state or format the pass's depth/stencil attachment does not take";
-        cb_->refusal = {RefDepthStencil, pl->depthFormat, zeta ? zeta->format : 0, ds_.active()};
+    if (!prepareShaderTests(*pl, why))
         return false;
-    }
-    if (pl->samples != samples_ || pl->samplePasses > 1) {
-        *why = "a state whose samples a pixel or per-sample shading the pass's attachments do not take";
-        cb_->refusal = {RefSamples, pl->samples, samples_, pl->samplePasses};
-        return false;
-    }
     if (p_.room() < 1024 + pl->methods.size() + (cb_->extrasLive_ ? cb_->extrasLive_->restore.size() : 0))
         reserve();
     Device &d = *dev_;
@@ -4013,8 +4199,10 @@ bool RenderEncoder::prepare(Pipeline *pl, uint32_t primitive, int32_t first, uin
     }
     if (dsDirty_) {
         emitDepthStencil(p,
-                         depthStencilRegs(ds_, stencilRef_[0], stencilRef_[1], zeta && zetaHasDepth(zeta->format),
-                                          zeta && zetaHasStencil(zeta->format)),
+                         shaderTestsActive_ ? shaderDepthStencilRegs(zeta && zetaHasDepth(zeta->format))
+                                            : depthStencilRegs(ds_, stencilRef_[0], stencilRef_[1],
+                                                               zeta && zetaHasDepth(zeta->format),
+                                                               zeta && zetaHasStencil(zeta->format)),
                          cb_->ds_);
         dsDirty_ = false;
     }
@@ -4047,7 +4235,7 @@ bool RenderEncoder::prepare(Pipeline *pl, uint32_t primitive, int32_t first, uin
                     if (b.buffer)
                         cb_->use(*b.buffer, bufferStorage(e));
                     else
-                        cb_->useAddress(b.resourceVa, bufferStorage(e));
+                        cb_->useAddress(b.va, b.size, bufferStorage(e));
                     BufferDescriptor desc;
                     if (!bufferDescriptor(e, b.va, b.size, desc)) {
                         *why = bufferStorage(e)
@@ -4063,7 +4251,7 @@ bool RenderEncoder::prepare(Pipeline *pl, uint32_t primitive, int32_t first, uin
                         prepared.residuals[desc.word] = desc.residual;
                         prepared.residualMask |= 1u << desc.word;
                     }
-                    if (b.buffer && !b.buffer->wc)
+                    if (b.buffer && b.buffer->hostVisible && !b.buffer->wc)
                         cb_->clean(b.buffer->cpu + b.offset, std::min<uint64_t>(desc.range - desc.residual, b.size));
                     at[0] = uint32_t(desc.base);
                     at[1] = uint32_t(desc.base >> 32);
@@ -4072,7 +4260,18 @@ bool RenderEncoder::prepare(Pipeline *pl, uint32_t primitive, int32_t first, uin
                     continue;
                 }
                 uint32_t tic = 0, tsc = 0;
-                if (e.kind == EntryTexture) {
+                if (e.kind == EntryDepthTest || e.kind == EntryStencilTest) {
+                    const bool depth = e.kind == EntryDepthTest;
+                    const Texture *t = depth ? shaderDepth_ : shaderStencil_;
+                    const uint32_t view = depth ? r.shaderTests.depthTic : r.shaderTests.stencilTic;
+                    if (!t || t->samples != samples_ || texelBytes(view) != t->bpp ||
+                        !(tic = d.viewTic(*t, view))) {
+                        *why = "an unavailable native shader depth/stencil view";
+                        cb_->refusal = {RefDepthStencil, e.kind, t ? t->format : 0, samples_};
+                        return false;
+                    }
+                    cb_->use(*t, true);
+                } else if (e.kind == EntryTexture) {
                     const Texture *t = textures_[e.slot];
                     if (t && !t->tic) {
                         *why = "a texture the raw path cannot sample";
@@ -4089,17 +4288,23 @@ bool RenderEncoder::prepare(Pipeline *pl, uint32_t primitive, int32_t first, uin
                         cb_->refusal = {RefNoTic, e.slot, t->format, t->width};
                         return false;
                     }
-                    // metal2vulkan's storage view of an 8-bit sRGB color is its texel size's unsigned-integer format, not the
-                    // texture's header
-                    const FormatInfo *f = t && (pl->storageBits >> e.slot & 1) ? formatInfo(t->format) : nullptr;
-                    if (f && f->srgb) {
-                        *why = "an sRGB color read and written in the pixel interlock";
-                        cb_->refusal = {RefNoTic, e.slot, t->format, t->width};
-                        return false;
-                    }
                     if (t)
-                        cb_->use(*t, pl->storageBits >> e.slot & 1);
+                        cb_->use(*t, pl->storageWriteBits >> e.slot & 1);
                     tic = t ? t->tic : 0;
+                    if (t && (pl->storageBits >> e.slot & 1)) {
+                        if (texelBytes(pl->storageTic[e.slot]) != t->bpp ||
+                            t->samples != pl->rec->storageSamples || t->compressed) {
+                            *why = "an incompatible framebuffer storage view";
+                            cb_->refusal = {RefNoTic, e.slot, t->format, t->width};
+                            return false;
+                        }
+                        tic = d.viewTic(*t, pl->storageTic[e.slot]);
+                        if (!tic) {
+                            *why = "no room for the framebuffer storage view";
+                            cb_->refusal = {RefNoTic, e.slot, t->format, t->width};
+                            return false;
+                        }
+                    }
                 } else if (e.kind == EntryTexture3d) {
                     // a texture of another type there is no binding of the argument: m2v writes its neutral, raw an empty handle
                     const Texture *t = e.slot < 16 && textures_[e.slot] && textures_[e.slot]->type == fx::kTexThreeD
@@ -4138,7 +4343,7 @@ bool RenderEncoder::prepare(Pipeline *pl, uint32_t primitive, int32_t first, uin
             uint8_t *upload = d.alloc(d.upload_, sizeof(words), 256, address);
             memcpy(upload, words.data(), sizeof(words));
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
-            d.stats.uploadBytes += sizeof(words);
+            RAW_DIAGNOSTIC(d.stats.uploadBytes += sizeof(words));
 #endif
             return address;
         });
@@ -4150,7 +4355,8 @@ bool RenderEncoder::prepare(Pipeline *pl, uint32_t primitive, int32_t first, uin
     const uint64_t setVa = prepared->address;
     writeRaster(p, rasterFor(primitive));
     const bool dynamicBlend = r.blendColorWord || r.halfBlendColorWord;
-    if (pl != emitted_ || residualMask || residualsPushed_ || (dynamicBlend && blendColorDirty_)) {
+    if (pl != emitted_ || residualMask || residualsPushed_ || (dynamicBlend && blendColorDirty_) ||
+        r.shaderTests.flags) {
         if (pl != emitted_) {
             blendColorDirty_ |= pl->constantBlend || dynamicBlend;
             if (cb_->extrasLive_ && cb_->extrasLive_ != pl) {
@@ -4181,6 +4387,7 @@ bool RenderEncoder::prepare(Pipeline *pl, uint32_t primitive, int32_t first, uin
             blendWordsDirty_ = false;
         }
         patchBlendPush(r, blendColor_, blendWords_, want);
+        patchShaderTestPush(r.shaderTests, ds_, stencilRef_, depthRange_, false, want);
         for (int i = 0; i < 32;) {
             if (!(pl->pushMask >> i & 1) || root[i] == want[i]) {
                 i++;
@@ -4196,6 +4403,11 @@ bool RenderEncoder::prepare(Pipeline *pl, uint32_t primitive, int32_t first, uin
         }
         emitted_ = pl;
         residualsPushed_ = residualMask != 0;
+    }
+    if (samplePasses_ != pl->samplePasses) {
+        p.m(LOAD_CB_OFFSET, kRootSampleInfo + 8);
+        p.nonInc(LOAD_CB, compatibleSampleMasks_, 4);
+        samplePasses_ = pl->samplePasses;
     }
     const uint32_t topo = nvTopology(primitive), restart = (primitive == 2 || primitive == 4) ? 1 : 0;
     if (topo != topology_) {
@@ -4235,13 +4447,13 @@ bool RenderEncoder::prepare(Pipeline *pl, uint32_t primitive, int32_t first, uin
             if (b.buffer)
                 cb_->use(*b.buffer, false);
             else
-                cb_->useAddress(b.resourceVa, false);
+                cb_->useAddress(b.va, b.size, false);
             p.inc(VERTEX_STREAM_LOCATION, {uint32_t(location >> 32), uint32_t(location)});
             p.inc(VERTEX_STREAM_LIMIT, {uint32_t(limit >> 32), uint32_t(limit)});
             vbVa_ = location;
             vbLimit_ = limit;
         }
-        if (b.buffer && !b.buffer->wc && r.vertexStride) {  // the vertices this draw reads, CPU-written (cached memory)
+        if (b.buffer && b.buffer->hostVisible && !b.buffer->wc && r.vertexStride) {
             const uint64_t from =
                 std::min(b.offset + (indexed ? 0 : uint64_t(vFirst) * r.vertexStride), b.buffer->length);
             const uint64_t bytes =
@@ -4289,18 +4501,18 @@ bool RenderEncoder::prepare(Pipeline *pl, uint32_t primitive, int32_t first, uin
     // storage write.
     // A fetch through the texture unit that meets only ROP writes needs the barrier only where its pixels meet theirs
     // (raw_region.h); nothing bounds a storage access's pixels.
-    const uint8_t texFetched = pl->fetchBits & ~pl->storageBits, ropAccessed = pl->writeBits | pl->readBits;
+    const AttachmentAccess access{pl->readBits, pl->writeBits, uint8_t(pl->fetchBits & ~pl->storageBits),
+                                  pl->storageBits};
     if (firstDraw && !indirectGeometry_ && !pl->dropsPixels) {
         const uint8_t opaque = pl->writeBits & ~(pl->readBits | pl->fetchBits | pl->storageBits);
         if (opaque && geometryAnalysis.covers(primitive == 3, areaW_, areaH_))
             covered_ = opaque;
     }
-    const bool storage =
-        (pl->storageBits & writtenBits_) | (ropAccessed & storageWrittenBits_) | (texFetched & storageWrittenBits_);
-    if (storage || (texFetched && writtenBits_)) {
-        if (!storage && !written_.meets(geometryAnalysis)) {
+    const AttachmentBarrier needed = access.after(attachmentWrites_.rop, attachmentWrites_.storage);
+    if (needed != AttachmentBarrier::None) {
+        if (needed == AttachmentBarrier::Pixel && !written_.meets(geometryAnalysis)) {
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
-            dev_->stats.fetchBarriersElided++;
+            RAW_DIAGNOSTIC(dev_->stats.fetchBarriersElided++);
 #endif
 #ifdef SWITCH_RAW_HARNESS_MARKS
             // the host frame harness's builds only (test/build.sh): nvdec names this mark ELIDED, and eqcheck takes a
@@ -4309,10 +4521,17 @@ bool RenderEncoder::prepare(Pipeline *pl, uint32_t primitive, int32_t first, uin
 #endif
         } else {
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
-            dev_->stats.fetchBarriers++;
+            RAW_DIAGNOSTIC(dev_->stats.fetchBarriers++);
 #endif
-            fetchBarrier(p);
-            writtenBits_ = storageWrittenBits_ = 0;
+            if (needed == AttachmentBarrier::Shader) {
+                RAW_DIAGNOSTIC(d.stats.storageBarriers++);
+                tiledCacheDrain(p, d.k_.info());
+                p.m(INVALIDATE_SHADER_CACHES, kFlushData | kInvalidateData);
+                p.m(INVALIDATE_TEXTURE_DATA_CACHE_NO_WFI, 0);
+            } else {
+                fetchBarrier(p);
+            }
+            attachmentWrites_.synchronized(needed);
             written_.clear();
         }
     }
@@ -4333,10 +4552,15 @@ bool RenderEncoder::prepare(Pipeline *pl, uint32_t primitive, int32_t first, uin
         baseVertex_ = baseVertex;
     }
     drawParamsUnknown_ = false;
-    writtenBits_ |= pl->writeBits;
-    storageWrittenBits_ |= pl->storageBits;
+    RAW_DIAGNOSTIC(dev_->stats.interlockDraws += pl->storageBits != 0);
+    attachmentWrites_.rop |= pl->writeBits;
+    attachmentWrites_.storage |= pl->storageWriteBits;
     if (pl->writeBits)
         written_.add(geometryAnalysis);
+    // Reuse a bound already established for split/coverage/fetch decisions. Admission never triggers new CPU geometry
+    // reads; unknown geometry uses the clipped viewport/scissor extent rather than the whole render target.
+    const PixelBox costBox = geometryAnalysis.cachedBox();
+    drawPixels_ = costBox.empty() ? 0 : uint64_t(costBox.x1 - costBox.x0) * (costBox.y1 - costBox.y0);
     return true;
 }
 
@@ -4419,13 +4643,13 @@ void RenderEncoder::fetchBarrier(Push &p)
 void RenderEncoder::countRules(const Pipeline &pl)
 {
     if (pl.fetchBits && anyWritten_) {
-        dev_->stats.fetchBarriersAnyColor++;
+        RAW_DIAGNOSTIC(dev_->stats.fetchBarriersAnyColor++);
         anyWritten_ = false;
     }
     anyWritten_ |= pl.writeBits != 0;
     const uint8_t stored = pl.fetchBits & pl.writeBits, ropWrites = pl.writeBits & ~pl.fetchBits;
     if ((pl.fetchBits & ropWritten_) || (ropWrites & storageWritten_)) {
-        dev_->stats.fetchBarriersInterlocked++;
+        RAW_DIAGNOSTIC(dev_->stats.fetchBarriersInterlocked++);
         ropWritten_ = storageWritten_ = 0;
     }
     ropWritten_ |= ropWrites;
@@ -4448,14 +4672,7 @@ static void clearWords(uint32_t format, const float in[4], uint32_t out[4], bool
 namespace {
 // One side of a copy-engine copy: pitch (va the first texel's, rows `pitch` apart) or a block-linear image (va its first byte,
 // `pitch` its row stride, the copy from texel (x, y) of plane `layer` of its width x height x depth)
-struct CopySide {
-    uint64_t va = 0;
-    uint32_t pitch = 0, x = 0, y = 0, width = 0, height = 0;
-    bool blockLinear = false;
-    uint8_t blockHeight = 0;
-    uint32_t depth = 1, layer = 0;
-    uint8_t blockDepth = 0;
-};
+using CopySide = CopySurface;
 
 // z: a 3D texture's plane, or an array's layer (its own 2D image, layerBytes on: NVK's array_stride step)
 CopySide sideOf(const Texture &t, uint32_t x, uint32_t y, uint32_t z)
@@ -4473,8 +4690,7 @@ CopySide sideOf(const Texture &t, uint32_t x, uint32_t y, uint32_t z)
 // SET_REMAP_COMPONENTS of a texel copy: DST_X..W = SRC_X..W, COMPONENT_SIZE, NUM_SRC_COMPONENTS, NUM_DST_COMPONENTS
 uint32_t texelRemap(uint32_t bpp)
 {
-    const uint32_t comp = std::min(bpp, 4u), n = bpp / comp;
-    return 0 | 1 << 4 | 2 << 8 | 3 << 12 | (comp - 1) << 16 | (n - 1) << 20 | (n - 1) << 24;
+    return copyTexelRemap(bpp);
 }
 
 // SET_REMAP_COMPONENTS of one-, two- or four-byte components (`size`): DST_X..W each SRC_X..W (0..3) or NO_WRITE (6), the
@@ -4491,35 +4707,13 @@ constexpr uint32_t remapOf(uint32_t x, uint32_t y, uint32_t z, uint32_t w, uint3
 // texels, a 3D image's plane by its depth and layer. `ordered`: NON_PIPELINED, after every earlier copy has completed (one that
 // reads what the copy before it wrote)
 void copyRemapped(Push &p, const CopySide &s, const CopySide &d, uint32_t w, uint32_t h, uint32_t remap, uint32_t bytes,
-                  Device::Stats &stats, bool ordered = false)
+                  [[maybe_unused]] Device::Stats &stats, bool ordered = false)
 {
     if (!w || !h || !bytes)
         return;
-    stats.ceOps++;
-    stats.ceBytes += uint64_t(w) * bytes * h;
-    p.m(CE_SET_REMAP_COMPONENTS, remap, SUBC_COPY);
-    p.inc(CE_OFFSET_IN_UPPER,
-          {uint32_t(s.va >> 32), uint32_t(s.va), uint32_t(d.va >> 32), uint32_t(d.va), s.pitch, d.pitch, w, h},
-          SUBC_COPY);
-    constexpr uint32_t kGobHeightFermi8 = 1u << 12, kSrcPitch = 1u << 7, kDstPitch = 1u << 8;
-    uint32_t launch = (kLaunchPitch & ~(kSrcPitch | kDstPitch)) | 1u << 10;  // REMAP_ENABLE
-    if (s.blockLinear)
-        p.inc(CE_SET_SRC_BLOCK_SIZE,
-              {uint32_t(s.blockHeight) << 4 | uint32_t(s.blockDepth) << 8 | kGobHeightFermi8, s.width, s.height,
-               s.depth, s.layer, s.y << 16 | s.x},
-              SUBC_COPY);
-    else
-        launch |= kSrcPitch;
-    if (d.blockLinear)
-        p.inc(CE_SET_DST_BLOCK_SIZE,
-              {uint32_t(d.blockHeight) << 4 | uint32_t(d.blockDepth) << 8 | kGobHeightFermi8, d.width, d.height,
-               d.depth, d.layer, d.y << 16 | d.x},
-              SUBC_COPY);
-    else
-        launch |= kDstPitch;
-    if (ordered)
-        launch = (launch & ~3u) | 2u;
-    p.m(CE_LAUNCH_DMA, launch, SUBC_COPY);
+    RAW_DIAGNOSTIC(stats.ceOps++);
+    RAW_DIAGNOSTIC(stats.ceBytes += uint64_t(w) * bytes * h);
+    emitCopy(p, s, d, w, h, remap, ordered);
 }
 
 // `w` x `h` texels of `bpp` bytes, each in min(bpp, 4)-byte components
@@ -4536,6 +4730,105 @@ void copyRows(Push &p, uint64_t src, uint32_t srcPitch, uint64_t dst, uint32_t d
     copySides(p, {src, srcPitch}, {dst, dstPitch}, width, lines, bpp, stats);
 }
 }  // namespace
+
+bool RenderEncoder::prepareShaderTests(const Pipeline &pipeline, const char **why)
+{
+    const uint8_t flags = pipeline.rec->shaderTests.flags;
+    if (!flags) {
+        endShaderTests();
+        return true;
+    }
+    const Texture *zeta = pass_.depthStencil.texture;
+    ShaderTestShape copy;
+    if (!zeta || !shaderTestShape(zeta->format, samples_, areaW_, areaH_, flags, copy)) {
+        *why = "a shader depth/stencil test whose attachment cannot be copied exactly";
+        cb_->refusal = {RefDepthStencil, zeta ? zeta->format : 0, flags, samples_};
+        return false;
+    }
+    const uint8_t missing = flags & ~shaderTestsActive_;
+    if (!missing)
+        return true;
+    auto obtain = [&](Texture *&slot, uint32_t format, uint32_t tag) {
+        if (slot)
+            return true;
+        Texture shape;
+        shape.width = zeta->width;
+        shape.height = zeta->height;
+        shape.format = format;
+        shape.samples = samples_;
+        {
+            std::lock_guard<std::mutex> lock(dev_->lock_);
+            slot = dev_->backing(shape, tag, true, false);
+        }
+        if (!slot)
+            return false;
+        cb_->backings_.push_back(slot);
+        cb_->use(*slot, true);
+        ++bindingRevision_;
+        return true;
+    };
+    constexpr uint32_t kR32Float = 55, kR8Uint = 13, kRG8Unorm = 30;
+    if (((missing & kShaderTestDepth) && !obtain(shaderDepth_, kR32Float, Device::kShaderDepthTag)) ||
+        ((missing & kShaderTestStencil) && !obtain(shaderStencil_, kR8Uint, Device::kShaderStencilTag)) ||
+        ((missing & kShaderTestStencil) && copy.packedStencil &&
+         !obtain(shaderStencilTemp_, kRG8Unorm, Device::kShaderStencilTempTag))) {
+        *why = "no native backing for shader depth/stencil tests";
+        cb_->refusal = {RefDepthStencil, zeta->format, flags, samples_};
+        return false;
+    }
+    copyShaderTests(missing, false);
+    shaderTestsActive_ |= missing;
+    dsDirty_ = true;
+    return true;
+}
+
+void RenderEncoder::copyShaderTests(uint8_t flags, bool toAttachment)
+{
+    if (p_.room() < 256)
+        reserve();
+    const Texture &zeta = *pass_.depthStencil.texture;
+    ShaderTestShape shape;
+    shaderTestShape(zeta.format, samples_, areaW_, areaH_, flags, shape);
+    auto side = [](const Texture &texture) {
+        auto result = sideOf(texture, 0, 0, 0);
+        result.height = sampleRows(texture);
+        return result;
+    };
+    const CopySide attachment = side(zeta);
+    cb_->use(zeta, toAttachment);
+    tiledCacheDrain(p_, dev_->k_.info());
+    p_.m(WAIT_FOR_IDLE, 0);
+    if (toAttachment)
+        p_.m(INVALIDATE_SHADER_CACHES, kFlushData | kInvalidateData);
+    const auto image = [&](ShaderTestImage which) {
+        switch (which) {
+        case ShaderTestImage::depth: return side(*shaderDepth_);
+        case ShaderTestImage::stencil: return side(*shaderStencil_);
+        case ShaderTestImage::temporary: return side(*shaderStencilTemp_);
+        case ShaderTestImage::attachment: return attachment;
+        }
+        return attachment;
+    };
+    const auto copies = shaderTestTransfers(flags, shape.packedStencil, toAttachment);
+    for (uint8_t at = 0; at < copies.count; ++at) {
+        const auto &copy = copies.transfers[at];
+        copyRemapped(p_, image(copy.source), image(copy.destination), shape.width, shape.height,
+                     copy.remap, copy.bytes, dev_->stats, copy.ordered);
+    }
+    p_.inc(CE_LINE_LENGTH_IN, {0, 0}, SUBC_COPY);
+    p_.m(CE_LAUNCH_DMA, (kLaunchPitch & ~3u) | 2u | (1u << 10), SUBC_COPY);
+    p_.m(INVALIDATE_SHADER_CACHES, kInvalidateData);
+    p_.m(INVALIDATE_TEXTURE_DATA_CACHE_NO_WFI, 0);
+}
+
+void RenderEncoder::endShaderTests()
+{
+    if (!shaderTestsActive_)
+        return;
+    copyShaderTests(shaderTestsActive_, true);
+    shaderTestsActive_ = 0;
+    dsDirty_ = true;
+}
 
 static void targetWords(Push &p, uint32_t m, const Texture &t)
 {
@@ -4594,6 +4887,7 @@ static bool chainLevelView(const Texture &t, uint32_t level, uint32_t rtFormat, 
     if (!t.chain || !chainLevelDesc(t.chain->layout, t.chain->va, level, rtFormat, d))
         return false;
     out = Texture();
+    out.storage = t.storageRange();
     out.va = d.va;
     out.width = t.chain->layout.level[level].width;
     out.height = d.height;
@@ -4623,6 +4917,41 @@ bool chainLevelTarget(const Texture &t, uint32_t level, Texture &out)
 bool chainLevelImage(const Texture &t, uint32_t level, Texture &out)
 {
     return chainLevelView(t, level, ~0u, out);
+}
+
+TextureTransferResult Device::transferTexture(const Texture &texture, uint32_t level, uint32_t slice,
+                                              const uint32_t origin[3], const uint32_t size[3], void *bytes,
+                                              uint64_t row, uint64_t image, bool write, std::shared_ptr<void> owner)
+{
+    Texture view;
+    const Texture *selected = &texture;
+    if (texture.chain) {
+        if (!chainLevelImage(texture, level, view))
+            return TextureTransferResult::Unsupported;
+        selected = &view;
+    } else if (level) {
+        return TextureTransferResult::Unsupported;
+    }
+    const Texture &t = *selected;
+    if (!t.va || t.zeta || t.samples > 1 || t.converted() || t.blockW > 1 || t.blockH > 1 ||
+        xrForm(t.format) != XrForm::None || !size[0] || !size[1] || !size[2] ||
+        origin[0] > t.width || size[0] > t.width - origin[0] ||
+        origin[1] > t.height || size[1] > t.height - origin[1])
+        return TextureTransferResult::Unsupported;
+    const bool volume = t.type == fx::kTexThreeD;
+    if (volume ? (slice || origin[2] > t.depth || size[2] > t.depth - origin[2])
+               : (slice >= std::max(1u, t.layers) || origin[2] || size[2] != 1))
+        return TextureTransferResult::Unsupported;
+    TextureTransfer region;
+    region.texture = sideOf(t, origin[0], origin[1], volume ? origin[2] : slice);
+    region.width = size[0];
+    region.height = size[1];
+    region.planes = size[2];
+    region.bpp = t.bpp;
+    if (!transfers_.copy(k_, lock_, region, bytes, row, image, write, std::move(owner)))
+        return TextureTransferResult::Failed;
+    RAW_DIAGNOSTIC((write ? stats.textureUploads : stats.textureReadbacks).fetch_add(1, std::memory_order_relaxed));
+    return TextureTransferResult::Complete;
 }
 
 void RenderEncoder::setDepthBias(float constant, float slope, float clamp)
@@ -4685,9 +5014,38 @@ void RenderEncoder::writeRaster(Push &p, const Raster &want)
     }
 }
 
+void RenderEncoder::continuePass(uint8_t stores)
+{
+    // Clear reach is a Metal encoder property, including its empty-draw behavior.
+    // Later encoders must not enlarge or elide the first encoder's clear.
+    if (!clearsSealed_) {
+        initialClears_ = clears();
+        clearsSealed_ = true;
+    }
+    for (uint32_t i = 0; i < 8; ++i)
+        pass_.color[i].store = stores & (1u << i);
+    pipeline_ = nullptr;
+    for (auto &stage : bufs_)
+        for (auto &binding : stage)
+            binding = {};
+    std::fill(std::begin(textures_), std::end(textures_), nullptr);
+    std::fill(std::begin(samplers_), std::end(samplers_), nullptr);
+    invalidateDescriptors();
+    setDepthStencil(nullptr);
+    setStencilReference(0, 0);
+    setViewport(0, 0, areaW_, areaH_, 0, 1);
+    setScissor(0, 0, areaW_, areaH_);
+    raster_ = {};
+    setDepthBias(0, 0, 0);
+    const float blend[4] = {};
+    setBlendColor(blend);
+    RAW_DIAGNOSTIC(dev_->stats.fusedPasses++);
+}
+
 void RenderEncoder::end()
 {
     Device &d = *dev_;
+    endShaderTests();
     if (p_.room() < 64 + kSampleWords)
         reserve();
     writeRaster(p_, Raster());
@@ -4706,12 +5064,14 @@ void RenderEncoder::end()
         sampleWords(p_, 1, d.root_.va);
     if (drew_)
         tiledCacheDrain(p_, d.k_.info());
+    if (attachmentWrites_.storage)
+        p_.m(INVALIDATE_SHADER_CACHES, kFlushData | kInvalidateData);
     checkRoom(p_, "a pass body");
     if (p_.at > bodyStart_)
         bodies_.push_back({bodyStart_, p_.at});
     d.push_.head = uint64_t(reinterpret_cast<uint8_t *>(p_.at) - d.push_.bo.cpu);  // give back the unused reservation
     // pass prologue: the full barrier m2v puts between passes, the targets, then the clears
-    const std::vector<Clear> cl = clears();
+    const std::vector<Clear> cl = clearsSealed_ ? std::move(initialClears_) : clears();
     const std::vector<uint32_t> &restore = extrasAtBegin_ ? extrasAtBegin_->restore : std::vector<uint32_t>();
     const uint32_t room = 160 + 8 * 32 + uint32_t(cl.size()) * 48 + kZetaTargetWords + kZetaClearWords + 16 +
                           kSampleWords + uint32_t(restore.size());
@@ -4730,7 +5090,7 @@ void RenderEncoder::end()
     bool copied = false;
     for (uint32_t j = 0; j < pass_.count && j < 8; j++)
         if (const Texture *o = shadowOf_[j]) {
-            if (pass_.color[j].load == ColorAttachment::Clear)
+            if (pass_.color[j].load == ColorAttachment::Clear || attachmentStartsCleared(j, areaW_, areaH_, cl))
                 continue;
             cb_->use(*o, false);
             cb_->use(*pass_.color[j].texture, true);
@@ -4760,7 +5120,8 @@ void RenderEncoder::end()
         uint32_t v[4] = {};
         clearWords(pass_.color[c.target].texture->format, c.value, v,
                    !called_ && pass_.color[c.target].texture->compressed);
-        d.countZbc(*t, !c.x0 && !c.y0 && c.x1 >= t->width && c.y1 >= t->height, zbcBootColor(t->format, v));
+        RAW_DIAGNOSTIC(d.countZbc(*t, !c.x0 && !c.y0 && c.x1 >= t->width && c.y1 >= t->height,
+                                  zbcBootColor(t->format, v)));
         p.inc(COLOR_CLEAR_VALUE, {v[0], v[1], v[2], v[3]});
         p.inc(CLEAR_RECT_H, {c.x1 << 16 | c.x0, c.y1 << 16 | c.y0});
         p.m(CLEAR_SURFACE_CONTROL, 0x10);  // USE_CLEAR_RECT
@@ -4801,15 +5162,16 @@ void RenderEncoder::end()
                                                  zs.clearStencil && zetaHasStencil(zs.texture->format))
                                  : 0;
     zetaClearValues(p, zsBits & 1, zs.depth, zsBits & 2, zs.stencil);
-    if (zsBits & 1)
-        d.countZbc(*zs.texture, areaW_ >= zs.texture->width && areaH_ >= zs.texture->height, zbcBootDepth(zs.depth));
+    RAW_DIAGNOSTIC(if (zsBits & 1) d.countZbc(*zs.texture, areaW_ >= zs.texture->width && areaH_ >= zs.texture->height,
+                                            zbcBootDepth(zs.depth)));
     for (const Clear &c : cl) {
         if (c.own)
             continue;
         uint32_t v[4] = {};
         const Texture *t = pass_.color[c.target].texture;
         clearWords(t->format, c.value, v, !called_ && t->compressed);
-        d.countZbc(*t, !c.x0 && !c.y0 && c.x1 >= t->width && c.y1 >= t->height, zbcBootColor(t->format, v));
+        RAW_DIAGNOSTIC(d.countZbc(*t, !c.x0 && !c.y0 && c.x1 >= t->width && c.y1 >= t->height,
+                                  zbcBootColor(t->format, v)));
         const bool area = !c.x0 && !c.y0 && c.x1 == areaW_ && c.y1 == areaH_;
         p.inc(COLOR_CLEAR_VALUE, {v[0], v[1], v[2], v[3]});
         p.inc(CLEAR_RECT_H, {c.x1 << 16 | c.x0, c.y1 << 16 | c.y0});
@@ -4831,15 +5193,17 @@ void RenderEncoder::end()
     d.push_.head = uint64_t(reinterpret_cast<uint8_t *>(p.at) - d.push_.bo.cpu);
     for (auto &b : bodies_) {
         if (b.indirectVa) {
-            cb_->segments_.push_back({b.indirectVa, b.indirectWords, TegraGM20BPushNoPrefetch});
+            cb_->segments_.append({b.indirectVa, b.indirectWords, TegraGM20BPushNoPrefetch}, false);
         } else {
             cb_->segment(b.first, b.second);
             if (b.incomplete)
                 cb_->segments_.back().flags |= TegraGM20BPushIncomplete;
-            d.stats.pushBytes += uint64_t(b.second - b.first) * 4;
+            RAW_DIAGNOSTIC(d.stats.pushBytes += uint64_t(b.second - b.first) * 4);
         }
+        if (b.batchEnd)
+            cb_->segments_.finishBatch();
     }
-    d.stats.pushBytes += uint64_t(p.at - start) * 4;
+    RAW_DIAGNOSTIC(d.stats.pushBytes += uint64_t(p.at - start) * 4);
     bodies_.clear();
     // shadow targets the pass stores: their pool images back over what it rendered (the render area; a Clear's reach past it),
     // after the 3D engine is done with them
@@ -4868,7 +5232,7 @@ void RenderEncoder::end()
         checkRoom(q, "a pass's shadow stores");
         cb_->segment(at, q.at);
         d.push_.head = uint64_t(reinterpret_cast<uint8_t *>(q.at) - d.push_.bo.cpu);
-        d.stats.pushBytes += uint64_t(q.at - at) * 4;
+        RAW_DIAGNOSTIC(d.stats.pushBytes += uint64_t(q.at - at) * 4);
     }
 }
 
@@ -4934,9 +5298,9 @@ std::vector<RenderEncoder::Clear> RenderEncoder::clears() const
             }
             Clear c{j, 0, 0, rw, rh, a.clear};
             c.own = rw != w || rh != h;
-            dev_->stats.clears++;
+            RAW_DIAGNOSTIC(dev_->stats.clears++);
             if (!c.own && (covered_ >> j & 1)) {
-                dev_->stats.clearsElided++;
+                RAW_DIAGNOSTIC(dev_->stats.clearsElided++);
                 continue;
             }
             out.push_back(c);
@@ -4995,8 +5359,8 @@ void BlitEncoder::room(uint32_t words)
 void BlitEncoder::copyBytes(uint64_t src, uint64_t dst, uint64_t bytes)
 {
     if (bytes) {
-        cb_->useAddress(src, false);
-        cb_->useAddress(dst, true);
+        cb_->useAddress(src, bytes, false);
+        cb_->useAddress(dst, bytes, true);
     }
     cb_->buffersWritten_ = true;
     for (uint64_t done = 0; done < bytes;) {
@@ -5007,8 +5371,8 @@ void BlitEncoder::copyBytes(uint64_t src, uint64_t dst, uint64_t bytes)
                SUBC_COPY);
         p_.inc(CE_LINE_LENGTH_IN, {n, 1}, SUBC_COPY);
         p_.m(CE_LAUNCH_DMA, kLaunchPitch, SUBC_COPY);
-        dev_->stats.ceOps++;
-        dev_->stats.ceBytes += n;
+        RAW_DIAGNOSTIC(dev_->stats.ceOps++);
+        RAW_DIAGNOSTIC(dev_->stats.ceBytes += n);
         done += n;
     }
 }
@@ -5016,19 +5380,19 @@ void BlitEncoder::copyBytes(uint64_t src, uint64_t dst, uint64_t bytes)
 void BlitEncoder::fillBytes(uint64_t dst, uint64_t bytes, uint8_t value)
 {
     if (bytes)
-        cb_->useAddress(dst, true);
+        cb_->useAddress(dst, bytes, true);
     cb_->buffersWritten_ = true;
     // SET_REMAP_COMPONENTS: DST_X..W CONST_A (4), COMPONENT_SIZE ONE (0) or FOUR (3) bytes, one source and destination
     // component; LAUNCH_DMA: PIPELINED, FLUSH, pitch both sides, REMAP
     constexpr uint32_t kConstA = 0x4444, kRemap = 1u << 10, kMaxDim = 1u << 15;
     constexpr uint32_t kLaunch = 1u | 1u << 2 | 1u << 7 | 1u << 8 | kRemap;
-    auto run = [&](uint64_t at, uint32_t width, uint32_t height, uint32_t unit) {
+    auto run = [&](uint64_t at, uint32_t width, uint32_t height, [[maybe_unused]] uint32_t unit) {
         room();
         p_.inc(CE_OFFSET_IN_UPPER + 8, {uint32_t(at >> 32), uint32_t(at)}, SUBC_COPY);
         p_.inc(CE_LINE_LENGTH_IN, {width, height}, SUBC_COPY);
         p_.m(CE_LAUNCH_DMA, kLaunch | (height > 1 ? 1u << 9 : 0), SUBC_COPY);
-        dev_->stats.ceOps++;
-        dev_->stats.ceBytes += uint64_t(width) * height * unit;
+        RAW_DIAGNOSTIC(dev_->stats.ceOps++);
+        RAW_DIAGNOSTIC(dev_->stats.ceBytes += uint64_t(width) * height * unit);
     };
     auto bytesOf = [&](uint64_t at, uint64_t n) {
         if (!n)
@@ -5064,8 +5428,8 @@ void BlitEncoder::copyRect(uint64_t src, uint32_t srcPitch, uint64_t dst, uint32
     cb_->buffersWritten_ = true;
     if (!width || !lines || !bpp)
         return;
-    cb_->useAddress(src, false);
-    cb_->useAddress(dst, true);
+    cb_->useAddress(src, rowStorageBytes(srcPitch, width, lines, bpp), false);
+    cb_->useAddress(dst, rowStorageBytes(dstPitch, width, lines, bpp), true);
     room();
     copyRows(p_, src, srcPitch, dst, dstPitch, width, lines, bpp, dev_->stats);
 }
@@ -5083,7 +5447,10 @@ void BlitEncoder::copyBufferTexels(uint64_t va, uint32_t pitch, const Texture &t
                                    uint32_t w, uint32_t h, bool toTexture, uint8_t aspect)
 {
     cb_->buffersWritten_ |= !toTexture;
-    cb_->useAddress(va, !toTexture);
+    const uint32_t element = t.zeta && aspect == kAspectStencil ? 1 :
+                             t.zeta && aspect == kAspectDepth ? 4 : bufferTexelBytes(t.format, t.bpp);
+    if (w && h)
+        cb_->useAddress(va, rowStorageBytes(pitch, w, h, element), !toTexture);
     cb_->use(t, toTexture);
     room(48);
     const CopySide rows{va, pitch}, texels = sideOf(t, x, y, z);
@@ -5131,12 +5498,11 @@ void BlitEncoder::convertPlanar(const Texture &t)
 {
     if (!t.planar || !t.width || !t.height)
         return;
-    cb_->useAddress(t.planes.luma, false);
-    cb_->useAddress(t.planes.chroma, false);
+    cb_->useAddress(t.planes.luma, rowStorageBytes(t.planes.lumaPitch, t.width, t.height, 1), false);
+    cb_->useAddress(t.planes.chroma, rowStorageBytes(t.planes.chromaPitch, t.width, t.height, 2), false);
     cb_->use(t, true);
-    dev_->stats.ceOps += 2;
-    dev_->stats.ceBytes +=
-        uint64_t(t.width) * t.height * 4 * 2;  // (each launch writes the image's rows, through NO_WRITE)
+    RAW_DIAGNOSTIC(dev_->stats.ceOps += 2);
+    RAW_DIAGNOSTIC(dev_->stats.ceBytes += uint64_t(t.width) * t.height * 4 * 2);  // (each launch writes the image's rows, through NO_WRITE)
     room();
     constexpr uint32_t A = 4, W = 6, one = 0 << 16, dst4 = 3u << 24;
     p_.m(CE_SET_REMAP_CONST_A, 0xff, SUBC_COPY);
@@ -5187,11 +5553,11 @@ void BlitEncoder::generate(Texture &t)
     Texture::Chain *c = t.chain;
     if (!c || !c->fmt2d)  // (the 3D engine's passes take those: mipPasses)
         return;
-    cb_->useAddress(c->va, true);
+    cb_->useAddress(c->va, c->layout.bytes, true);
     const uint32_t last = c->layout.levels - 1;
     room(uint32_t(fx::generateWords(c->layout, 0, last)));
     fx::emitGenerate(p_, c->layout, c->va, nullptr, c->fmt2d, 0, last);
-    dev_->stats.chainGenerates++;
+    RAW_DIAGNOSTIC(dev_->stats.chainGenerates++);
 }
 
 void BlitEncoder::end()
@@ -5199,7 +5565,7 @@ void BlitEncoder::end()
     checkRoom(p_, "a blit encoder");
     cb_->segment(start_, p_.at);
     dev_->push_.head = uint64_t(reinterpret_cast<uint8_t *>(p_.at) - dev_->push_.bo.cpu);
-    dev_->stats.pushBytes += uint64_t(p_.at - start_) * 4;
+    RAW_DIAGNOSTIC(dev_->stats.pushBytes += uint64_t(p_.at - start_) * 4);
 }
 
 }  // namespace raw

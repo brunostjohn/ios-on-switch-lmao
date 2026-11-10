@@ -15,8 +15,15 @@
 #include "raw_gpu.h"
 #include "RawMetalPredicates.h"
 #include "RawResidency.h"
-#include "raw_handler_order.h"
 #include "raw_submit_queue.h"
+#include "raw_event_timeline.h"
+#include "raw_variant.h"
+
+namespace raw {
+template <typename T> class ComputeKernelJob;
+template <typename T> class ComputeKernelSet;
+struct ComputeState;
+}
 
 @class RMDevice, RMCommandBuffer;
 
@@ -116,6 +123,7 @@ typedef NS_ENUM(uint8_t, RMTextureKind) {
     // a planar texture's image (4:2:0 converted, 4:4:4 codes) holds its surface at this seed (_imageCurrent): converted
     // again only once the surface's seed moves (r8a: a YouTube page's thumbnails converted again at every command buffer)
     uint32_t _imageSeed;
+    uint64_t _imageNativeGeneration;
     uint64_t _imageWrites;  // and its surface's writes the seed does not show (surfaceWrites)
     bool _imageCurrent;
     RMTexture *_parent;  // a view's
@@ -153,10 +161,8 @@ typedef NS_ENUM(uint8_t, RMTextureKind) {
     bool _asked;                             // its record asked of the runtime (completeLater)
     std::string _key;                        // its pack key (completable states')
     MTLRenderPipelineDescriptor *_madeFrom;  // completable states': what its cubic variants are made of
-    // its cubic variants (raw_cubic.h) by their binds' name: null where the runtime refused one; `_variantsAsked`: being made
     std::mutex _variantLock;
-    std::map<std::string, raw::Pipeline *> _variants;
-    std::set<std::string> _variantsAsked;
+    std::map<std::string, std::shared_ptr<raw::Variant<raw::Pipeline>>> _variants;
 }
 @end
 
@@ -174,8 +180,6 @@ typedef NS_ENUM(uint8_t, RMTextureKind) {
 @interface RMQueue : RMObject {
 @public
     dispatch_queue_t _completionQueue;
-    dispatch_queue_t _handlers;  // its command buffers' scheduled handlers, in its order
-    std::atomic<void *> _last;   // the command buffer enqueued last, retained until its completed handlers ran
     uint32_t _gpuPriority, _backgroundGpuPriority;  // what it asked for (RawMetalQueuePriority.mm)
     raw::ResidencySets _residency;
 }
@@ -191,6 +195,7 @@ struct RMPass {
         MTLLoadAction load;
         MTLStoreAction store;
         MTLClearColor clear;
+        __unsafe_unretained id resolve;
     } color[8];
 
     __unsafe_unretained id depth;
@@ -214,7 +219,15 @@ struct RMSegment {
     uint32_t from, to;
     bool raw;
     bool event = false;
-    bool promised = false;  // a signal whose value the raw range before it publishes as it completes
+    bool gpuSignal = false;
+    bool gpuWait = false;
+};
+
+struct RMSharedEventWait {
+    void *event;
+    std::shared_ptr<raw::SharedEventLease> lease;
+    uint64_t value;
+    std::shared_ptr<raw::SharedEventCompletion> completion = {};
 };
 
 @interface RMCommandBuffer : RMObject {
@@ -231,10 +244,21 @@ struct RMSegment {
     // frame. The command buffer completes with its last segment.
     size_t _encAt;
     bool _encOpen, _encRefused, _whole;
+#if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
+    bool _forceWholePrograms;
+#endif
     std::vector<RMSegment> _segs;
     size_t _segNext;
     NSError *_segError;  // an m2v segment's error, reported at completion
     uint32_t _segmentPending;
+    uint64_t _channelGeneration, _rawPrefixGeneration;
+    bool _gpuPrefixEligible;
+    std::vector<raw::EventTimeline::Promise> _gpuEventWaits;
+    std::vector<RMSharedEventWait> _sharedEventWaits;
+    std::vector<size_t> _sharedSignalRanges;
+    std::shared_ptr<raw::SharedEventWatch> _sharedEventWatch;
+    std::shared_ptr<raw::ResourceReadyCompletion> _resourceReady;
+    void *_nativeWaitEvent;
     bool _finishReady, _finishing, _submittedM2v;
     bool
         _sampledShadows;  // it binds a texture sampled through a pool image (raw::Texture::sampled): encodeRaw refreshes them
@@ -248,24 +272,21 @@ struct RMSegment {
     RMReason _reason;
     NSString *_why;
     NSMutableArray *_scheduledHandlers, *_completedHandlers;
-    bool _handlersQueued;      // scheduled handlers went to its queue's _handlers: its completed ones go behind them
-    RMCommandBuffer *_before;  // enqueued before it on its queue, until its own completed handlers were handed on
-    raw::HandlerTurn _turn;
+    dispatch_queue_t _scheduledQueue;
     MTLCommandBufferStatus _status;
     NSError *_error;
     RMQueue *_queue;
     bool _enqueued;
+    raw::SubmitQueue<void *, RMCommandBuffer *>::Reservation _reservation;
     std::vector<size_t> _eventWaits;
     raw::EventDeadline::Time _eventStart;
+    std::map<void *, raw::EventDeadline::Time> _pipelineStarted;
     std::unordered_set<void *> _pipelineObserved;  // one readiness subscription per compatibility state
-    size_t _eventArmed;                            // operation position + 1; only the current wait installs a listener
+    std::map<void *, raw::EventDeadline::Time> _variantStarted;
+    std::unordered_set<void *> _variantObserved;
+    std::map<void *, std::shared_ptr<raw::ComputeKernelSet<raw::ComputeState>>> _computeJobs;
+    size_t _eventArmed;  // operation position + 1; only the current wait installs a listener
     bool _committed, _scheduledDone, _completedDone, _m2v;
-    // its queue's head waits on a shared event Metal's GPU would wait for: waitUntilScheduled returns, its scheduled
-    // handlers still wait for its submission (raw_scheduled_wait.h)
-    bool _held;
-#if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
-    uint64_t _heldReturnUs;  // when waitUntilScheduled returned for it held, until it was submitted
-#endif
     // its event signals are in m2v work (replayed whole, or in its last segment): finish() makes none
     bool _signalsOnM2v;
     bool
@@ -276,8 +297,7 @@ struct RMSegment {
     std::mutex _lock;
     std::condition_variable _changed;
     uint32_t _seqno;
-    uint32_t _rawGeneration;  // the channel its first raw range ran on (raw::Device::channelGeneration), 0 before one
-    uint32_t _stamp;          // its raw submission's GPU time stamps (raw::CommandBuffer::stamp), 0 for any other
+    uint32_t _stamp;  // its raw submission's GPU time stamps (raw::CommandBuffer::stamp), 0 for any other
     double _kernelStart, _kernelEnd, _gpuStart, _gpuEnd;
     __weak id _active;        // the encoder being recorded (weak: it holds the command buffer, its caller holds it)
     uint64_t _preds;          // every refusal predicate it hit (1 << RMPred)
@@ -335,7 +355,8 @@ uint64_t nextTraceId();
     uint16_t _cubicMask;
     uint64_t _checkedGeneration;
     const raw::Pipeline *_checkedPipeline;
-    raw::Pipeline *_drawn;  // the record its draws are recorded with: the state's, or a cubic variant of it
+    raw::Pipeline *_drawn;
+    raw::Variant<raw::Pipeline> *_drawnVariant;
     uint32_t _formats[8];   // the pass's color attachments' formats as the raw path holds them (0: none)
     uint32_t _count;        // its attachment count (the last attachment's index + 1)
     uint32_t _zeta;         // its depth/stencil attachment's format as the raw path holds it (0: none)
@@ -354,7 +375,8 @@ uint64_t nextTraceId();
 @end
 
 // RawMetalCompute.mm: a compute state over m2v's (`twin`), with what the raw pack keys its kernels by
-id rmComputeState(id device, id twin, id<MTLFunction> function, MTLComputePipelineDescriptor *descriptor);
+id rmComputeState(id device, id<MTLDevice> fallback, MTLComputePipelineDescriptor *descriptor, MTLPipelineOption options,
+                  MTLAutoreleasedComputePipelineReflection *reflection, NSError **error);
 // m2v's replay and the raw encode of a compute encoder's commands (the Op*Kernel* ones and OpDispatch): false from the raw
 // encode where it refuses one (*why)
 bool isKernelCommand(Op op);

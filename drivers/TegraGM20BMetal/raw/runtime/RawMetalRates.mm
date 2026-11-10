@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 #import "RawMetalInternal.h"
 
+#if SWITCH_RAW_DIAGNOSTICS
 static uint64_t gPredRates[PredCount];  // the rates line's last gPredCbs (its timer thread only)
 
 // ---- the rates line ----
@@ -10,6 +11,8 @@ static struct {
         completedWaits, completedWaitUs, abortUs, replayUs, replayClean, rtUnaligned, rtMixed, predOnly[PredCount],
         splits, splitM2v, eventSplits, eventWhole, levelPasses;
 } gRates;
+
+#endif
 
 bool raw_metal_texture_kept(id<MTLTexture> texture)
 {
@@ -35,6 +38,7 @@ const void *raw_metal_texture_image(id<MTLTexture> texture, size_t *pitch)
 
 size_t raw_metal_rates(char *out, size_t size)
 {
+#if SWITCH_RAW_DIAGNOSTICS
     if (!gRM || !size)
         return 0;
     Stats &s = gRM->stats;
@@ -145,7 +149,7 @@ size_t raw_metal_rates(char *out, size_t size)
         out, size,
         "raw %.0fs c=%llu(%.1f/s) m2v=%llu%s%s%s sw=%llu cpu=%llu acq=%llu enc=%.0fus/c d=%.1f p=%.1f b=%.2f "
         "defer=%llu abort=%llu rw=%llu pool=%lluMB/%llu grow=%llu imp=%llu/%lluMB clean=%.1fKB/c ce=%llu/%.0fKB "
-        "ev=%llu/%llu sig=%llu/%llu/%llu ws=%llu/%lluus wc=%llu/%lluus%s",
+        "ev=%llu/%llu ws=%llu/%lluus wc=%llu/%lluus%s",
         secs, (unsigned long long)c, c / secs, (unsigned long long)f, *reasons ? "(" : "", reasons, *reasons ? ")" : "",
         (unsigned long long)(s.switches.load() - gRates.switches),
         (unsigned long long)(s.cpuOrdered.load() - gRates.cpuOrdered),
@@ -159,8 +163,6 @@ size_t raw_metal_rates(char *out, size_t size)
         k.cleanBytes.exchange(0) / 1024.0 / per, (unsigned long long)k.ceOps.exchange(0),
         k.ceBytes.exchange(0) / 1024.0, (unsigned long long)(s.eventsReleased.load() - gRates.eventsReleased),
         (unsigned long long)(s.heldReturns.load() - gRates.heldReturns),
-        (unsigned long long)s.signalsPublished.exchange(0), (unsigned long long)s.signalsAfterWork.exchange(0),
-        (unsigned long long)s.waitsOnPromise.exchange(0),
         (unsigned long long)(s.scheduledWaits.load() - gRates.scheduledWaits),
         (unsigned long long)(s.scheduledWaitUs.load() - gRates.scheduledWaitUs),
         (unsigned long long)(s.completedWaits.load() - gRates.completedWaits),
@@ -186,53 +188,14 @@ size_t raw_metal_rates(char *out, size_t size)
     gRates.completedWaitUs = s.completedWaitUs.load();
     gRates.lastUs = now;
     return n > 0 ? std::min(size_t(n), size - 1) : 0;
+#else
+    (void)out;
+    (void)size;
+    return 0;
+#endif
 }
 
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
-// "fetch whole=W/Vv/BB seq=S/Tt ilk=I rec=<reason>:n,... enc=<reason>:n,...": drawn whole on the CPU's proof (the
-// vertices and bytes it read for it), a triangle at a time (the triangles), inside the pixel interlock, and refused as
-// recorded and at encoding by reason ("-" for none). The plugin's rates timer only (its 5 s windows).
-size_t raw_metal_fetch_rates(char *out, size_t size)
-{
-    if (!gRM || !size)
-        return 0;
-    const raw::FetchCounts &k = gRM->raw->stats.fetch;
-    constexpr size_t kTotals = 6, kAll = kTotals + 2 * raw::kFetchRefusals;
-    static uint64_t last[kAll];
-    uint64_t now[kAll] = {k.provenWhole.load(), k.proofVertices.load(),       k.proofBytes.load(),
-                          k.sequential.load(),  k.sequentialTriangles.load(), k.interlocked.load()};
-    for (size_t r = 0; r < raw::kFetchRefusals; ++r) {
-        now[kTotals + r] = k.refusedAtRecord[r].load();
-        now[kTotals + raw::kFetchRefusals + r] = k.refusedAtEncode[r].load();
-    }
-    uint64_t d[kAll];
-    bool any = false;
-    for (size_t i = 0; i < kAll; ++i) {
-        d[i] = now[i] - last[i];
-        last[i] = now[i];
-        any |= d[i] && i != 1 && i != 2;
-    }
-    if (!any)
-        return 0;
-    auto reasons = [&](const uint64_t *counts, char *at, size_t room) {
-        size_t used = 0;
-        for (size_t r = 1; r < raw::kFetchRefusals && used < room; ++r)
-            if (counts[r])
-                used += size_t(snprintf(at + used, room - used, "%s%s:%llu", used ? "," : "",
-                                        raw::kFetchRefusalNames[r], (unsigned long long)counts[r]));
-        if (!used)
-            snprintf(at, room, "-");
-    };
-    char record[96], encode[112];
-    reasons(d + kTotals, record, sizeof record);
-    reasons(d + kTotals + raw::kFetchRefusals, encode, sizeof encode);
-    const int n =
-        snprintf(out, size, "fetch whole=%llu/%lluv/%lluB seq=%llu/%llut ilk=%llu rec=%s enc=%s",
-                 (unsigned long long)d[0], (unsigned long long)d[1], (unsigned long long)d[2], (unsigned long long)d[3],
-                 (unsigned long long)d[4], (unsigned long long)d[5], record, encode);
-    return n > 0 ? std::min(size_t(n), size - 1) : 0;
-}
-
 // The stall line (r7p8: the compositor stopped committing for good with nothing in the log): every 5 s, on a timer of its own,
 // what the raw path has pending, read without waiting (a lock another thread holds is reported held, not waited for). Once
 // nothing was committed or completed over two ticks while work is pending or one of its locks stays held, one line names it,

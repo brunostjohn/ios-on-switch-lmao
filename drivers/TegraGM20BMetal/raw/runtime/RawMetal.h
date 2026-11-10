@@ -24,7 +24,7 @@ void raw_metal_prepare(const char *packPath, uint64_t stack);
 id<MTLDevice> raw_metal_device_open(const char *packPath, uint64_t stack, id<MTLDevice> fallback, NSString **error);
 // Turns on the runtime's completion of the Core Animation states the pack lacks (RawComplete.h): their records made off the render
 // thread and kept under `cacheDir`, the process's own shader cache directory (null: in memory only). After raw_metal_device_open.
-void raw_metal_complete_states(const char *cacheDir);
+void raw_metal_complete_states(const char *cacheDir, const char *packPath = nullptr);
 // The pack key of a render pipeline descriptor whose functions are this facade's (the frontend journal's R-line fields but the label,
 // then " | l <framework>" for functions of a framework's default library other than QuartzCore's).
 NSString *raw_metal_pipeline_key(MTLRenderPipelineDescriptor *descriptor);
@@ -34,9 +34,6 @@ bool raw_metal_linked_packable(MTLRenderPipelineDescriptor *descriptor);
 // draws, passes, copies, waits, memory; and the states the runtime made since the device opened (states=<records from the
 // cache>/<probes>/<refused>/<failed>/<ms making them>). The plugin logs it every 5 s with the m2v line (TEGRA_M2V_TELEMETRY).
 size_t raw_metal_rates(char *out, size_t size);
-// Debug builds: one line of the fetching draws since the previous call (0 when there were none), by how each kept raster
-// order (raw_fetch_order.h FetchCounts). The plugin logs it after the rates line.
-size_t raw_metal_fetch_rates(char *out, size_t size);
 // Host tests: the CPU's view of the image the raw path samples for `texture` (a planar texture's converted image), its row pitch
 // in *pitch; null when the raw path holds none.
 const void *raw_metal_texture_image(id<MTLTexture> texture, size_t *pitch);

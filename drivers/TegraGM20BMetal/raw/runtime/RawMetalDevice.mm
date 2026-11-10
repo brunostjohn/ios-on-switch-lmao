@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 #import "RawMetalInternal.h"
 #include "NativeBridgeMetalFrontend.h"
+#import "SwitchSharedEvent.h"
 
 // Why the raw path does not take a stored depth/stencil texture's m2v texture in place, from the answer of
 // native_bridge_metal_texture_memory (-3: m2v made no texture)
@@ -30,6 +31,31 @@ static const char *zetaMemoryRefusal(int asked)
 
 @implementation RMDevice
 
+- (id<MTLSharedEvent>)newSharedEvent
+{
+    return gRM->sharedEvents ? [[SwitchSharedEvent alloc] initWithOptions:0] : [gRM->fallback newSharedEvent];
+}
+
+- (id<MTLSharedEvent>)newSharedEventWithHandle:(MTLSharedEventHandle *)handle
+{
+    return gRM->sharedEvents ? [[SwitchSharedEvent alloc] initWithHandle:handle] :
+                              [gRM->fallback newSharedEventWithHandle:handle];
+}
+
+- (id<MTLSharedEvent>)newSharedEventWithOptions:(NSInteger)options
+{
+    if (gRM->sharedEvents)
+        return [[SwitchSharedEvent alloc] initWithOptions:NSUInteger(options)];
+    return ((id (*)(id, SEL, NSInteger))objc_msgSend)(gRM->fallback, _cmd, options);
+}
+
+- (id<MTLSharedEvent>)newSharedEventWithMachPort:(mach_port_t)port
+{
+    if (gRM->sharedEvents)
+        return [[SwitchSharedEvent alloc] initWithMachPort:port];
+    return ((id (*)(id, SEL, mach_port_t))objc_msgSend)(gRM->fallback, _cmd, port);
+}
+
 - (void)rmCommit:(RMCommandBuffer *)cb
 {
     commitBuffer(cb);
@@ -50,18 +76,11 @@ static const char *zetaMemoryRefusal(int asked)
     d[@"aborted"] = @(s.aborted.load());
     d[@"reopens"] = @(gRM->raw->stats.reopens.load());
     d[@"split_prologues"] = @(gRM->raw->stats.splitLaunches.load());
-    const raw::FetchCounts &fetch = gRM->raw->stats.fetch;
-    d[@"fetch_whole"] = @(fetch.provenWhole.load());
-    d[@"fetch_proof_vertices"] = @(fetch.proofVertices.load());
-    d[@"fetch_sequential"] = @(fetch.sequential.load());
-    d[@"fetch_triangles"] = @(fetch.sequentialTriangles.load());
-    d[@"fetch_interlocked"] = @(fetch.interlocked.load());
-    for (size_t r = 1; r < raw::kFetchRefusals; r++) {
-        if (const uint64_t n = fetch.refusedAtRecord[r].load())
-            d[[NSString stringWithFormat:@"fetch_record.%s", raw::kFetchRefusalNames[r]]] = @(n);
-        if (const uint64_t n = fetch.refusedAtEncode[r].load())
-            d[[NSString stringWithFormat:@"fetch_encode.%s", raw::kFetchRefusalNames[r]]] = @(n);
-    }
+    d[@"interlock_draws"] = @(gRM->raw->stats.interlockDraws.load());
+    d[@"storage_barriers"] = @(gRM->raw->stats.storageBarriers.load());
+    d[@"texture_uploads"] = @(gRM->raw->stats.textureUploads.load());
+    d[@"fused_passes"] = @(gRM->raw->stats.fusedPasses.load());
+    d[@"texture_readbacks"] = @(gRM->raw->stats.textureReadbacks.load());
     for (int r = 1; r < WhyCount; r++)
         if (const uint64_t n = s.reasons[r].load())
             d[[NSString stringWithFormat:@"m2v.%s", kReasonNames[r]]] = @(n);
@@ -175,6 +194,7 @@ static const char *zetaMemoryRefusal(int asked)
         t->_twin = [gRM->fallback newBufferWithLength:n options:o];
         return t->_twin ? (id<MTLBuffer>)t : nil;
     }
+    b->_raw.hostVisible = (o & MTLResourceStorageModeMask) != MTLResourceStorageModePrivate;
     return (id<MTLBuffer>)b;
 }
 
@@ -189,7 +209,13 @@ static const char *zetaMemoryRefusal(int asked)
         t->_twin = [gRM->fallback newBufferWithBytes:p length:n options:o];
         return t->_twin ? b : nil;
     }
-    memcpy(((RMBuffer *)b)->_raw.cpu, p, n);  // the draws that read it clean the lines they read
+    RMBuffer *buffer = (RMBuffer *)b;
+    raw::HostAccess access;
+    if (!buffer->_raw.hostVisible && !gRM->raw->hostAccess(buffer->_raw, true, access))
+        return nil;
+    memcpy(buffer->_raw.cpu, p, n);
+    if (!access.finish())
+        return nil;
     return b;
 }
 
@@ -447,6 +473,9 @@ static bool producesTexture(MTLTextureDescriptor *d)
             uintptr_t(IOSurfaceGetBaseAddressOfPlane(s, plane)) - uintptr_t(base), uint32_t(d.width),
             uint32_t(d.height), uint32_t(IOSurfaceGetBytesPerRowOfPlane(s, plane)), uint32_t(d.pixelFormat), t->_raw,
             false);
+        const OSType fourcc = IOSurfaceGetPixelFormat(s);
+        if (t->_rawOk && (fourcc == 0x34323076 || fourcc == 0x34323066))
+            t->_raw.nativePlane = uint32_t(plane);
     }
     if (t->_rawOk && t->_raw.converted())
         surfaceConverted(s, true);
