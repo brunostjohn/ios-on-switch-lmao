@@ -211,7 +211,7 @@ size_t raw_metal_fetch_rates(char *out, size_t size)
     if (!gRM || !size)
         return 0;
     const raw::FetchCounts &k = gRM->raw->stats.fetch;
-    constexpr size_t kTotals = 6, kAll = kTotals + 2 * raw::kFetchRefusals;
+    constexpr size_t kTotals = 6, kAll = kTotals + 2 * raw::kFetchRefusals + raw::kStorageFallbacks;
     static uint64_t last[kAll];
     uint64_t now[kAll] = {k.provenWhole.load(), k.proofVertices.load(),       k.proofBytes.load(),
                           k.sequential.load(),  k.sequentialTriangles.load(), k.interlocked.load()};
@@ -219,6 +219,8 @@ size_t raw_metal_fetch_rates(char *out, size_t size)
         now[kTotals + r] = k.refusedAtRecord[r].load();
         now[kTotals + raw::kFetchRefusals + r] = k.refusedAtEncode[r].load();
     }
+    for (size_t r = 0; r < raw::kStorageFallbacks; ++r)
+        now[kTotals + 2 * raw::kFetchRefusals + r] = k.storageFallback[r].load();
     uint64_t d[kAll];
     bool any = false;
     for (size_t i = 0; i < kAll; ++i) {
@@ -228,23 +230,50 @@ size_t raw_metal_fetch_rates(char *out, size_t size)
     }
     if (!any)
         return 0;
-    auto reasons = [&](const uint64_t *counts, char *at, size_t room) {
+    auto reasons = [&](const uint64_t *counts, size_t kinds, const char *const *names, char *at, size_t room) {
         size_t used = 0;
-        for (size_t r = 1; r < raw::kFetchRefusals && used < room; ++r)
+        for (size_t r = 1; r < kinds && used < room; ++r)
             if (counts[r])
-                used += size_t(snprintf(at + used, room - used, "%s%s:%llu", used ? "," : "",
-                                        raw::kFetchRefusalNames[r], (unsigned long long)counts[r]));
+                used += size_t(snprintf(at + used, room - used, "%s%s:%llu", used ? "," : "", names[r],
+                                        (unsigned long long)counts[r]));
         if (!used)
             snprintf(at, room, "-");
     };
-    char record[96], encode[112];
-    reasons(d + kTotals, record, sizeof record);
-    reasons(d + kTotals + raw::kFetchRefusals, encode, sizeof encode);
+    char record[96], encode[112], storage[112];
+    reasons(d + kTotals, raw::kFetchRefusals, raw::kFetchRefusalNames, record, sizeof record);
+    reasons(d + kTotals + raw::kFetchRefusals, raw::kFetchRefusals, raw::kFetchRefusalNames, encode, sizeof encode);
+    reasons(d + kTotals + 2 * raw::kFetchRefusals, raw::kStorageFallbacks, raw::kStorageFallbackNames, storage,
+            sizeof storage);
     const int n =
-        snprintf(out, size, "fetch whole=%llu/%lluv/%lluB seq=%llu/%llut ilk=%llu rec=%s enc=%s",
+        snprintf(out, size, "fetch whole=%llu/%lluv/%lluB seq=%llu/%llut ilk=%llu rec=%s enc=%s sto=%s",
                  (unsigned long long)d[0], (unsigned long long)d[1], (unsigned long long)d[2], (unsigned long long)d[3],
-                 (unsigned long long)d[4], (unsigned long long)d[5], record, encode);
+                 (unsigned long long)d[4], (unsigned long long)d[5], record, encode, storage);
     return n > 0 ? std::min(size_t(n), size - 1) : 0;
+}
+
+size_t raw_metal_fetch_keys(char *out, size_t size)
+{
+    if (!gRM || !size)
+        return 0;
+    raw::FetchCounts &k = gRM->raw->stats.fetch;
+    size_t used = 0;
+    bool any = false;
+    auto keys = [&](const char *name, raw::KeyTally &tally) {
+        const auto top = tally.take(8);
+        any |= !top.empty();
+        used += size_t(snprintf(out + used, size - used, " %s=", name));
+        for (size_t i = 0; i < top.size() && used < size; i++)
+            used += size_t(snprintf(out + used, size - used, "%s%016llx:%llu", i ? "," : "",
+                                    (unsigned long long)top[i].first, (unsigned long long)top[i].second));
+        if (top.empty() && used < size)
+            used += size_t(snprintf(out + used, size - used, "-"));
+        used = std::min(used, size - 1);
+    };
+    used = size_t(snprintf(out, size, "fetch keys"));
+    keys("rec", k.recordKeys);
+    keys("enc", k.encodeKeys);
+    keys("sto", k.fallbackKeys);
+    return any ? used : 0;
 }
 
 // The stall line (r7p8: the compositor stopped committing for good with nothing in the log): every 5 s, on a timer of its own,

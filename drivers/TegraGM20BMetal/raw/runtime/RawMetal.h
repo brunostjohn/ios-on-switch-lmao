@@ -37,6 +37,9 @@ size_t raw_metal_rates(char *out, size_t size);
 // Debug builds: one line of the fetching draws since the previous call (0 when there were none), by how each kept raster
 // order (raw_fetch_order.h FetchCounts). The plugin logs it after the rates line.
 size_t raw_metal_fetch_rates(char *out, size_t size);
+// "fetch keys rec=<key>:n,... enc=... sto=...": the pipeline keys behind the window's record-time and encode-time
+// refusals and storage-to-barrier fallbacks, eight of each at most, most first; 0 when none
+size_t raw_metal_fetch_keys(char *out, size_t size);
 // Host tests: the CPU's view of the image the raw path samples for `texture` (a planar texture's converted image), its row pitch
 // in *pitch; null when the raw path holds none.
 const void *raw_metal_texture_image(id<MTLTexture> texture, size_t *pitch);

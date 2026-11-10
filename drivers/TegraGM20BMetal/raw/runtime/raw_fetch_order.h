@@ -7,6 +7,8 @@
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
+#include "raw_key_tally.h"
+#include "raw_storage_form.h"
 
 namespace raw {
 
@@ -32,6 +34,9 @@ struct FetchCounts {
     std::atomic<uint64_t> provenWhole{0}, proofVertices{0}, proofBytes{0}, sequential{0}, sequentialTriangles{0},
         interlocked{0};
     std::atomic<uint64_t> refusedAtRecord[kFetchRefusals]{}, refusedAtEncode[kFetchRefusals]{};
+    std::atomic<uint64_t> storageFallback[kStorageFallbacks]{};
+    // the pipeline key hashes behind refusedAtRecord, refusedAtEncode and storageFallback
+    KeyTally recordKeys, encodeKeys, fallbackKeys;
 };
 
 struct FetchDraw {

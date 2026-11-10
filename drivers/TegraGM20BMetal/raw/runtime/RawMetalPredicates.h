@@ -74,6 +74,7 @@ enum RMPred : uint8_t {
     PredEncSamples,       // a = the state's samples, b = the pass's | the state's shading passes << 32
     PredEncNoChannel,     // the kernel refused the channel or its context (logged with its answer)
     PredEncGeometry,      // a = primitive, b = count | instances << 32; no native raster-order plan
+    PredEncStorageView,   // a = attachment, b = format | width << 32: no storage view and no barrier form to take
     PredCount
 };
 
@@ -136,7 +137,8 @@ static constexpr const char *kPredNames[] = {"-",
                                              "enc.ds",
                                              "enc.samples",
                                              "enc.nochannel",
-                                             "enc.geometry"};
+                                             "enc.geometry",
+                                             "enc.storage"};
 static_assert(sizeof kPredNames / sizeof *kPredNames == PredCount, "a name for each predicate");
 
 // What makes a command buffer go to m2v (counted, one log line each kind)

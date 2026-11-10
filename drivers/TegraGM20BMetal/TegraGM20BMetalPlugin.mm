@@ -599,6 +599,8 @@ void startRates()
             os_log(logger(), "TegraGM20BMetal: %{public}s %{public}s", processWord(), line);
         if (gRaw && raw_metal_fetch_rates(line, sizeof line))
             os_log(logger(), "TegraGM20BMetal: %{public}s %{public}s", processWord(), line);
+        if (gRaw && raw_metal_fetch_keys(line, sizeof line))
+            os_log(logger(), "TegraGM20BMetal: %{public}s %{public}s", processWord(), line);
     });
     dispatch_resume(timer);
 }

@@ -3,6 +3,27 @@
 #import "RawMetalInternal.h"
 #include "raw_raster_area.h"
 
+inline raw::Pipeline *nativeOf(const raw::RasterState &state)
+{
+    RMPipeline *pipeline = (__bridge RMPipeline *)state.pipeline;
+    auto *variant = static_cast<raw::Variant<raw::Pipeline> *>(state.nativeVariant);
+    return variant                ? variant->value()
+           : state.nativePipeline ? static_cast<raw::Pipeline *>(state.nativePipeline)
+           : pipeline             ? pipeline->_raw
+                                  : nullptr;
+}
+
+// The colors the pass's draws bind as storage images (raw::PassDesc::storageMask)
+inline uint8_t passStorageMask(RMCommandBuffer *cb, size_t begin)
+{
+    uint8_t mask = 0;
+    cb->_plan.forEachRasterGroup(begin, [&](const raw::RasterState &state, uint32_t) {
+        if (const raw::Pipeline *native = nativeOf(state))
+            mask |= native->storageBits;
+    });
+    return mask;
+}
+
 inline void planSplitPrograms(RMCommandBuffer *cb, size_t begin, raw::RenderEncoder &encoder)
 {
     encoder.beginSplitPlan();
@@ -11,13 +32,7 @@ inline void planSplitPrograms(RMCommandBuffer *cb, size_t begin, raw::RenderEnco
         return;
 #endif
     cb->_plan.forEachRasterGroup(begin, [&](const raw::RasterState &state, uint32_t draws) {
-        RMPipeline *pipeline = (__bridge RMPipeline *)state.pipeline;
-        auto *variant = static_cast<raw::Variant<raw::Pipeline> *>(state.nativeVariant);
-        raw::Pipeline *native = variant              ? variant->value()
-                                : state.nativePipeline ? static_cast<raw::Pipeline *>(state.nativePipeline)
-                                : pipeline             ? pipeline->_raw
-                                                       : nullptr;
-        encoder.addSplitCandidates(native, draws, raw::rasterPixelLimit(state, encoder.areaWidth(),
+        encoder.addSplitCandidates(nativeOf(state), draws, raw::rasterPixelLimit(state, encoder.areaWidth(),
                                                                        encoder.areaHeight()));
     });
     encoder.finishSplitPlan();

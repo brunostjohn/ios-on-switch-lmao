@@ -380,6 +380,9 @@ struct Pipeline {
     uint8_t storageBits = 0;
     uint8_t storageWriteBits = 0;
     uint32_t storageTic[8] = {};
+    // the same state's barrier form, which orders its fetches with barriers where a pass's attachments cannot be viewed as
+    // the storage images of this one (raw_storage_form.h); resolved with the state, null where the pack has none
+    Pipeline *barrierTwin = nullptr;
     bool constantBlend = false;     // a blend factor of a blended color is the encoder's blend color
     uint32_t colorFormats[8] = {};  // MTLPixelFormat of each color attachment the state was made for (0: none)
     // its vertex function is Core Animation's fixed_vert_l?h_spc (raw_bounds.h), and attribute 0 (the position) as its key
@@ -483,6 +486,9 @@ struct PassDesc {
     // renderTargetWidth / renderTargetHeight: the render area's bounds where nonzero (m2v render_pass.rs `area`: the
     // attachments' smallest extent, each axis limited by its target size)
     uint32_t width = 0, height = 0;
+    // colors a draw of the pass binds as storage images (a pipeline's storage form): their memoryless backings take no
+    // compression, which the surface unit cannot read through
+    uint8_t storageMask = 0;
 };
 
 class RenderEncoder {
@@ -690,10 +696,12 @@ private:
     // colors the pass's first draw overwrites whole and opaquely: their clears inside the render area are not needed
     uint8_t covered_ = 0;
     using Runs = std::vector<std::pair<uint32_t, uint32_t>>;
+    // `pl`, or its barrier twin where an attachment of this pass cannot be viewed as one of its storage images
+    Pipeline *formFor(Pipeline *pl);
     const Runs *selfRuns(const Pipeline &pl, uint32_t primitive, int32_t first, uint32_t count, uint32_t instances,
                          const char **why);
-    const Runs *refuseFetch(FetchRefusal refusal, uint32_t primitive, uint32_t count, uint32_t instances,
-                            const char **why);
+    const Runs *refuseFetch(const Pipeline &pl, FetchRefusal refusal, uint32_t primitive, uint32_t count,
+                            uint32_t instances, const char **why);
     const uint8_t *drawIndices_ = nullptr;
     const Buffer *drawIndexBuffer_ = nullptr;
     bool drawIndexCpuSafe_ = false;
@@ -778,7 +786,8 @@ enum RefusalId : uint8_t {
     RefNoTic,
     RefDepthStencil,  // a: the state's depth format, b: the pass's
     RefSamples,       // a: the state's samples, b: the pass's, c: the state's shading passes
-    RefGeometry       // CPU ordering proof unavailable; requires an interlocked native program
+    RefGeometry,      // CPU ordering proof unavailable; requires an interlocked native program
+    RefStorageView    // a: the attachment, b: its format, c: its width (raw_storage_form.h)
 };
 
 struct Refusal {
@@ -934,6 +943,7 @@ public:
     // A pack pipeline by its state key's FNV-1a (RawMetal.mm rawPipelineKey); null: not in the pack.
     // caTransform: its vertex function is Core Animation's fixed_vert_l?h_spc (Pipeline::caTransform)
     Pipeline *pipeline(uint64_t keyHash, PackForm form = PackForm::Default, bool caTransform = false);
+    Pipeline *placePipeline(uint64_t keyHash, PackForm form, bool caTransform);
     // A state the runtime made a record of (raw_record.h), drawn from then on as the pack's are; null: its programs find no room
     // in the heap or its samplers none in the header pool (`why`)
     Pipeline *addRecord(const RuntimeRecord &r, bool caTransform, std::string &why, bool *retry = nullptr);

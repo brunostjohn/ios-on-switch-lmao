@@ -737,10 +737,35 @@ static uint8_t bindProgramCbufs(Push &w, const PackProgram &prog, uint32_t group
 // as push words with its programs placed in the heap. Else one the runtime made (addRecord).
 Pipeline *Device::pipeline(uint64_t keyHash, PackForm form, bool caTransform)
 {
+    Pipeline *pl = placePipeline(keyHash, form, caTransform);
+    if (form != PackForm::Default || !pl || !pl->storageBits)
+        return pl;
+    Pipeline *twin = placePipeline(keyHash, PackForm::Barrier, caTransform);
+    std::lock_guard<std::mutex> l(lock_);
+    if (twin && twin != pl && !twin->storageBits)
+        pl->barrierTwin = twin;
+    return pl;
+}
+
+Pipeline *Device::placePipeline(uint64_t keyHash, PackForm form, bool caTransform)
+{
+    const auto usable = [&](const PackPipeline *rec) {
+        return rec && usableDynamicPush(*rec, pack_.string(rec->keyString)) &&
+               usableStorageMetadata(*rec, pack_.section<uint32_t>(PackBlob) + rec->blob, rec->blobDwords);
+    };
     const PackPipeline *rec = pack_.find(keyHash, form);
-    if (rec && (!usableDynamicPush(*rec, pack_.string(rec->keyString)) ||
-                !usableStorageMetadata(*rec, pack_.section<uint32_t>(PackBlob) + rec->blob, rec->blobDwords)))
-        rec = nullptr;
+    if (rec && !usable(rec)) {
+        const PackPipeline *barrier =
+            form == PackForm::Default && (rec->flags & PipelineStorageMetadata) ? pack_.find(keyHash, PackForm::Barrier)
+                                                                                 : nullptr;
+        rec = usable(barrier) ? barrier : nullptr;
+#if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
+        if (rec) {
+            stats.fetch.storageFallback[size_t(StorageFallback::Metadata)]++;
+            stats.fetch.fallbackKeys.note(keyHash);
+        }
+#endif
+    }
     std::lock_guard<std::mutex> l(lock_);
     if (!rec) {
         const auto made = completed_.find(keyHash);
@@ -3174,7 +3199,7 @@ RenderEncoder *CommandBuffer::render(const PassDesc &pass)
         }
         if (t->memoryless) {  // back it for this pass
             std::lock_guard<std::mutex> l(dev_->lock_);
-            Texture *b = dev_->backing(*t, scratchTags[j], blockLinear);
+            Texture *b = dev_->backing(*t, scratchTags[j], blockLinear, !(pass.storageMask >> j & 1));
             if (!b)
                 return nullptr;
             e.pass_.color[j].texture = b;
@@ -3826,7 +3851,7 @@ void RenderEncoder::barrier()
 bool RenderEncoder::draw(uint32_t primitive, uint32_t first, uint32_t count, uint32_t instances, uint32_t baseInstance,
                          const char **why)
 {
-    Pipeline *pl = pipeline_;
+    Pipeline *pl = formFor(pipeline_);
     if (!pl)
         return true;  // m2v drops a draw without a pipeline (parity 0006) the same way
     called_ = true;
@@ -3893,7 +3918,7 @@ const RenderEncoder::Runs *RenderEncoder::selfRuns(const Pipeline &pl, uint32_t 
     if (!fetchesOwn || singlePrimitive(shape))
         return &runs;
     if (const FetchRefusal refusal = fetchRefusal(fetchesOwn, pl.caTransform, shape); refusal != FetchRefusal::None)
-        return refuseFetch(refusal, primitive, count, instances, why);
+        return refuseFetch(pl, refusal, primitive, count, instances, why);
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
     const auto start = std::chrono::steady_clock::now();
 #endif
@@ -3936,20 +3961,41 @@ const RenderEncoder::Runs *RenderEncoder::selfRuns(const Pipeline &pl, uint32_t 
 #endif
             return &runs;
         }
-        return refuseFetch(FetchRefusal::Geometry, primitive, count, instances, why);
+        return refuseFetch(pl, FetchRefusal::Geometry, primitive, count, instances, why);
     }
     if (primitive == 4)
         runWinding_ = TriangleRuns::winding(analysis, runs);
     return &runs;
 }
 
-const RenderEncoder::Runs *RenderEncoder::refuseFetch(FetchRefusal refusal, uint32_t primitive, uint32_t count,
-                                                      uint32_t instances, const char **why)
+Pipeline *RenderEncoder::formFor(Pipeline *pl)
+{
+    if (!pl || !pl->storageBits)
+        return pl;
+    StorageFallback reason = StorageFallback::None;
+    for (uint32_t slot = 0; slot < 8 && reason == StorageFallback::None; slot++)
+        if (const Texture *t = pass_.color[slot].texture; t && (pl->storageBits >> slot & 1))
+            reason = storageViewMismatch(texelBytes(pl->storageTic[slot]), pl->rec->storageSamples, *t);
+    if (reason == StorageFallback::None)
+        return pl;
+#if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
+    const StorageFallback counted = pl->barrierTwin ? reason : StorageFallback::NoTwin;
+    dev_->stats.fetch.storageFallback[size_t(counted)]++;
+    dev_->stats.fetch.fallbackKeys.note(pl->rec->keyHash);
+#endif
+    return pl->barrierTwin ? pl->barrierTwin : pl;
+}
+
+const RenderEncoder::Runs *RenderEncoder::refuseFetch(const Pipeline &pl, FetchRefusal refusal, uint32_t primitive,
+                                                      uint32_t count, uint32_t instances, const char **why)
 {
     *why = fetchRefusalWhy(refusal);
     cb_->refusal = {RefGeometry, primitive, count, instances};
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
     dev_->stats.fetch.refusedAtEncode[size_t(refusal)]++;
+    dev_->stats.fetch.encodeKeys.note(pl.rec ? pl.rec->keyHash : 0);
+#else
+    (void)pl;
 #endif
     return nullptr;
 }
@@ -3962,7 +4008,7 @@ bool RenderEncoder::drawIndexed(uint32_t primitive, uint32_t count, uint32_t ind
                                 uint64_t offset, uint32_t instances, int32_t baseVertex, uint32_t baseInstance,
                                 const char **why)
 {
-    Pipeline *pl = pipeline_;
+    Pipeline *pl = formFor(pipeline_);
     if (!pl)
         return true;
     called_ = true;
@@ -4071,11 +4117,12 @@ bool RenderEncoder::indirect(uint32_t primitive, bool indexed, const Buffer *arg
 {
     if (!pipeline_)
         return true;
-    const Pipeline &pl = *pipeline_;
+    Pipeline *form = formFor(pipeline_);
+    const Pipeline &pl = *form;
     const bool fetchesOwn = fetchesOwnColor(pl.fetchBits, pl.writeBits, pl.storageBits);
     if (const FetchRefusal refusal = fetchRefusal(fetchesOwn, pl.caTransform, {primitive, 0, 1, true});
         refusal != FetchRefusal::None) {
-        refuseFetch(refusal, primitive, 0, 0, why);
+        refuseFetch(pl, refusal, primitive, 0, 0, why);
         return false;
     }
     const uint32_t bytes = indexed ? 20 : 16;
@@ -4086,7 +4133,7 @@ bool RenderEncoder::indirect(uint32_t primitive, bool indexed, const Buffer *arg
     }
     called_ = true;
     indirectGeometry_ = true;
-    const bool prepared = prepare(pipeline_, primitive, 0, 0, UINT32_MAX, 0, indexed, why);
+    const bool prepared = prepare(form, primitive, 0, 0, UINT32_MAX, 0, indexed, why);
     indirectGeometry_ = false;
     if (!prepared)
         return false;
@@ -4323,16 +4370,16 @@ bool RenderEncoder::prepare(Pipeline *pl, uint32_t primitive, int32_t first, uin
                         cb_->use(*t, pl->storageWriteBits >> e.slot & 1);
                     tic = t ? t->tic : 0;
                     if (t && (pl->storageBits >> e.slot & 1)) {
-                        if (texelBytes(pl->storageTic[e.slot]) != t->bpp ||
-                            t->samples != pl->rec->storageSamples || t->compressed) {
+                        if (storageViewMismatch(texelBytes(pl->storageTic[e.slot]), pl->rec->storageSamples, *t) !=
+                            StorageFallback::None) {
                             *why = "an incompatible framebuffer storage view";
-                            cb_->refusal = {RefNoTic, e.slot, t->format, t->width};
+                            cb_->refusal = {RefStorageView, e.slot, t->format, t->width};
                             return false;
                         }
                         tic = d.viewTic(*t, pl->storageTic[e.slot]);
                         if (!tic) {
                             *why = "no room for the framebuffer storage view";
-                            cb_->refusal = {RefNoTic, e.slot, t->format, t->width};
+                            cb_->refusal = {RefStorageView, e.slot, t->format, t->width};
                             return false;
                         }
                     }

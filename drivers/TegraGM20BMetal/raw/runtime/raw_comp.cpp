@@ -221,10 +221,8 @@ void Device::compStop()
 
 void Device::compFree(Backing &b)
 {
-    if (b.texture.tic) {
-        memset(tic_.cpu + 32 * b.texture.tic, 0, 32);
-        freeTic_.push_back(b.texture.tic);
-    }
+    if (b.texture.tic)
+        freeTic(b.texture.tic);
     RAW_DIAGNOSTIC(stats.compViews--);
     CompMem *mem = b.comp;
     b.comp = nullptr;
