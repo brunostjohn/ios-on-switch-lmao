@@ -3,7 +3,7 @@ r"""List what deploy stages onto the Data volume (//gpu:bundle): the signed bund
 
 usage: stage_manifest.py --self <rlocation> --base <dir> --base-rlocation R --seed <join's dir> --seed-rlocation R
                          --pack <bucket pack> --pack-rlocation R ... --raw <dir> --raw-rlocation R --out <manifest>
-                         --native <stamped native dir> --native-rlocation R
+                         --native <packed native dir> --native-rlocation R
 
 The manifest names files where Bazel left them, in //deploy:sd's runfiles, so nothing is copied to make it:
 
@@ -18,6 +18,7 @@ import argparse
 from pathlib import Path
 
 from tools.common import hashing
+from tools.gpu import seed_pack
 
 HEADER = '# gpu stage 1 '
 SEED = 'ngpu/addons/TegraGM20BMetal.m2v-seed/shared'
@@ -29,6 +30,21 @@ def line(path: Path, digest: str, target: str, rlocation: str) -> str:
     """Return the manifest line of the file at `path`, staged at `target`."""
     mode = 0o755 if path.name in EXECUTABLES else 0o644
     return f'{target}\t{digest}\t{path.stat().st_size}\t{mode:o}\t{rlocation}'
+
+
+def native_target(native: Path, relative: str) -> str | None:
+    """Return where a file of the packed native seed goes on the volume.
+
+    None for the host's files beside it and the derived entries' packs.
+    """
+    top, _, below = relative.partition('/')
+    if top == 'native-analysis':
+        under = SEED
+    elif top.startswith('raw-'):
+        under = RAW + '/native'
+    else:
+        return None
+    return under + '/' + relative if below and seed_pack.staged(native / top, below) else None
 
 
 def tree(directory: Path, rlocation: str, under: str) -> list[tuple[Path, str, str]]:
@@ -67,8 +83,9 @@ def main() -> None:
     ]
     files += tree(Path(args.raw), args.raw_rlocation, RAW + '/')
     files += [
-        (path, (SEED if relative.startswith('native-analysis/') else RAW + '/native') + '/' + relative, rlocation)
+        (path, target, rlocation)
         for path, relative, rlocation in tree(Path(args.native), args.native_rlocation, '')
+        if (target := native_target(Path(args.native), relative))
     ]
     digests = hashing.sha256_files([path for path, _, _ in files])
     lines = [line(path, digest, *where) for (path, *where), digest in zip(files, digests, strict=True)]

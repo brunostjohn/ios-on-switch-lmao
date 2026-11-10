@@ -228,7 +228,12 @@ static void makeRecord(RMPipeline *p, MTLRenderPipelineDescriptor *d)
     a.caTransform = p->_caTransform;
     a.own = !p->_packable;
     bool retry = false;
-    if ((p->_raw = gRM->completion->makeNow(a, &retry)) || !retry)
+    p->_raw = gRM->completion->makeNow(a, &retry);
+#if SWITCH_RAW_DIAGNOSTICS
+    if (p->_raw && native_bridge_metal_journal_render)
+        native_bridge_metal_journal_render(a.descriptor, 0);
+#endif
+    if (p->_raw || !retry)
         return;
     p->_asked = true;
     __weak RMPipeline *weak = p;

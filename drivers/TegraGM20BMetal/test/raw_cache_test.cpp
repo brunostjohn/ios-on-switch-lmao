@@ -8,11 +8,13 @@
 
 #include <gtest/gtest.h>
 
+#include <mach/mach.h>
+#include <pthread/qos.h>
 #include <sys/stat.h>
 #include <cstdlib>
 #include <cstring>
 #include <fstream>
-#include <filesystem>
+#include <thread>
 
 namespace {
 
@@ -251,100 +253,6 @@ TEST(RawCache, KeepsKernelsAndTheirRefusals)
     EXPECT_EQ(cache.load(made, state, why), raw::RecordCache::Found::None);
 }
 
-class NativeSeed : public testing::Test {
-protected:
-    std::filesystem::path root, seed, local;
-    raw::CacheKey key = cachechecks::keyOf(0x123, "native state", 7);
-    raw::RuntimeRecord record = madeUp(4);
-
-    void SetUp() override
-    {
-        std::string pattern = std::string(getenv("TEST_TMPDIR") ?: "/tmp") + "/native-seed-XXXXXX";
-        char *made = mkdtemp(pattern.data());
-        ASSERT_NE(made, nullptr);
-        root = made;
-        seed = root / "seed";
-        local = root / "private";
-        std::filesystem::create_directories(seed);
-        std::filesystem::create_directories(local);
-        raw::RecordCache builder;
-        ASSERT_TRUE(builder.open(seed.string(), key.stack, 0));
-        ASSERT_TRUE(builder.store(key, &record, ""));
-    }
-
-    void TearDown() override
-    {
-        if (!root.empty())
-            std::filesystem::remove_all(root);
-    }
-};
-
-TEST_F(NativeSeed, ReadOnlyConsumerLoadsWithoutPrivateCacheAndCannotStore)
-{
-    raw::RecordCache cache;
-    ASSERT_TRUE(cache.attachSeed(seed.string(), key.stack));
-    raw::RuntimeRecord loaded;
-    std::string why;
-    EXPECT_EQ(cache.load(key, loaded, why), raw::RecordCache::Found::Record);
-    EXPECT_TRUE(cachechecks::same(loaded, record));
-    EXPECT_FALSE(cache.store(key, &record, ""));
-    cache.tidy();
-    EXPECT_EQ(cache.bytes(), 0u);
-    EXPECT_EQ(cache.load(key, loaded, why), raw::RecordCache::Found::Record);
-}
-
-TEST_F(NativeSeed, SeedWinsOverPrivateRecordAndInvalidSeedFallsBack)
-{
-    raw::RecordCache cache;
-    ASSERT_TRUE(cache.open(local.string(), key.stack, 0));
-    const auto privateRecord = madeUp(1);
-    ASSERT_TRUE(cache.store(key, &privateRecord, ""));
-    ASSERT_TRUE(cache.attachSeed(seed.string(), key.stack));
-    raw::RuntimeRecord loaded;
-    std::string why;
-    EXPECT_EQ(cache.load(key, loaded, why), raw::RecordCache::Found::Record);
-    EXPECT_TRUE(cachechecks::same(loaded, record));
-    for (const auto &file : std::filesystem::recursive_directory_iterator(seed))
-        if (file.path().extension() == ".rec")
-            std::ofstream(file.path(), std::ios::binary | std::ios::trunc) << "broken";
-    EXPECT_EQ(cache.load(key, loaded, why), raw::RecordCache::Found::Record);
-    EXPECT_TRUE(cachechecks::same(loaded, privateRecord));
-}
-
-TEST_F(NativeSeed, ExactStackAirAndKeyAreRequired)
-{
-    raw::RecordCache cache;
-    ASSERT_TRUE(cache.attachSeed(seed.string(), key.stack));
-    raw::RuntimeRecord loaded;
-    std::string why;
-    for (auto other : {cachechecks::keyOf(key.stack + 1, key.key, 7),
-                       cachechecks::keyOf(key.stack, key.key, 8),
-                       cachechecks::keyOf(key.stack, key.key + "x", 7)})
-        EXPECT_EQ(cache.load(other, loaded, why), raw::RecordCache::Found::None);
-    ASSERT_TRUE(cache.open(local.string(), key.stack + 1, 0));
-    EXPECT_FALSE(cache.attachSeed(seed.string(), key.stack));
-    EXPECT_EQ(cache.load(key, loaded, why), raw::RecordCache::Found::None);
-}
-
-TEST_F(NativeSeed, ComputeRecordLoadsFromTheSameImmutableLayer)
-{
-    key.key = "kernel | explicit dispatch shape";
-    raw::ComputeRecord original;
-    original.keyString = key.key;
-    original.code.assign(128, 0x42);
-    original.cbufs = 1;
-    raw::RecordCache builder;
-    ASSERT_TRUE(builder.open(seed.string(), key.stack, 0));
-    ASSERT_TRUE(builder.storeKernel(key, &original, ""));
-    raw::RecordCache cache;
-    ASSERT_TRUE(cache.attachSeed(seed.string(), key.stack));
-    raw::ComputeRecord loaded;
-    std::string why;
-    EXPECT_EQ(cache.loadKernel(key, loaded, why), raw::RecordCache::Found::Record);
-    EXPECT_EQ(loaded.code, original.code);
-    EXPECT_EQ(loaded.keyString, original.keyString);
-}
-
 // Cold work is deliberately held at a barrier: unrelated warm work and callbacks must progress before it is released.
 TEST(RawCompiler, IndependentColdKeysOverlapWhileWarmKeysRemainReady)
 {
@@ -471,6 +379,125 @@ TEST(RawCompiler, ComputeTasksShareTheRenderWorkerLimitAndDrain)
     EXPECT_EQ(entered, 4u);
     EXPECT_EQ(active, 0u);
     EXPECT_EQ(maximum, 2u);
+}
+
+int scheduledPriority()
+{
+    thread_extended_info_data_t info = {};
+    mach_msg_type_number_t count = THREAD_EXTENDED_INFO_COUNT;
+    const mach_port_t self = mach_thread_self();
+    const kern_return_t kr = thread_info(self, THREAD_EXTENDED_INFO, reinterpret_cast<thread_info_t>(&info), &count);
+    mach_port_deallocate(mach_task_self(), self);
+    return kr == KERN_SUCCESS ? info.pth_curpri : -1;
+}
+
+// Two utility-class compiles hold both slots; a user-interactive creation that waits for one raises them both until a
+// slot is free, and then makes its own state.
+TEST(RawCompiler, AWaitingCreationLendsItsClassToTheSlotHolders)
+{
+    std::mutex lock;
+    std::condition_variable changed;
+    unsigned holding = 0, raised = 0;
+    std::atomic<bool> waiterMade{false};
+    raw::Compiler compiler(nullptr, [&](const raw::CacheKey &k, raw::RuntimeRecord &record, std::string &) {
+        record = madeUp(3);
+        if (k.key == "waiter")
+            return raw::Compiler::Outcome::Made;
+        pthread_set_qos_class_self_np(QOS_CLASS_UTILITY, 0);
+        const int own = scheduledPriority();
+        {
+            std::lock_guard<std::mutex> guard(lock);
+            ++holding;
+            changed.notify_all();
+        }
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+        while (scheduledPriority() <= own && std::chrono::steady_clock::now() < deadline)
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        std::unique_lock<std::mutex> guard(lock);
+        raised += scheduledPriority() > own;
+        changed.notify_all();
+        // the first to give its slot back ends the lending: both hold theirs until both were raised
+        changed.wait_until(guard, deadline, [&] {
+            return raised == 2;
+        });
+        return raw::Compiler::Outcome::Made;
+    });
+    raw::CacheKey held[2], waiter;
+    for (unsigned i = 0; i < 2; ++i)
+        held[i].key = "held-" + std::to_string(i);
+    waiter.key = "waiter";
+    for (const auto &k : held)
+        compiler.ask(k, nullptr);
+    {
+        std::unique_lock<std::mutex> guard(lock);
+        ASSERT_TRUE(changed.wait_for(guard, std::chrono::seconds(5), [&] {
+            return holding == 2;
+        }));
+    }
+    std::thread creation([&] {
+        pthread_set_qos_class_self_np(QOS_CLASS_USER_INTERACTIVE, 0);
+        raw::RuntimeRecord record;
+        std::string why;
+        waiterMade = compiler.makeNow(waiter, record, why) == raw::Compiler::State::Ready;
+    });
+    creation.join();
+    compiler.drain();
+    EXPECT_TRUE(waiterMade.load());
+    EXPECT_EQ(raised, 2u);
+}
+
+// A creation on a fixed-priority thread with no class (Core Animation's render thread) compiles while both slots are held.
+TEST(RawCompiler, AFixedPriorityCreationDoesNotWaitForASlot)
+{
+    std::mutex lock;
+    std::condition_variable changed;
+    unsigned holding = 0;
+    bool release = false;
+    raw::Compiler compiler(nullptr, [&](const raw::CacheKey &k, raw::RuntimeRecord &record, std::string &) {
+        record = madeUp(4);
+        if (k.key == "fixed")
+            return raw::Compiler::Outcome::Made;
+        std::unique_lock<std::mutex> guard(lock);
+        ++holding;
+        changed.notify_all();
+        changed.wait(guard, [&] {
+            return release;
+        });
+        return raw::Compiler::Outcome::Made;
+    });
+    raw::CacheKey held[2], fixed;
+    for (unsigned i = 0; i < 2; ++i)
+        held[i].key = "held-" + std::to_string(i);
+    fixed.key = "fixed";
+    for (const auto &k : held)
+        compiler.ask(k, nullptr);
+    {
+        std::unique_lock<std::mutex> guard(lock);
+        ASSERT_TRUE(changed.wait_for(guard, std::chrono::seconds(5), [&] {
+            return holding == 2;
+        }));
+    }
+    std::atomic<bool> fixedPriority{false}, made{false};
+    std::thread creation([&] {
+        sched_param param = {};
+        param.sched_priority = 47;
+        fixedPriority = pthread_setschedparam(pthread_self(), SCHED_RR, &param) == 0 &&
+                        qos_class_self() == QOS_CLASS_UNSPECIFIED;
+        if (!fixedPriority)
+            return;
+        raw::RuntimeRecord record;
+        std::string why;
+        made = compiler.makeNow(fixed, record, why) == raw::Compiler::State::Ready;
+    });
+    creation.join();
+    EXPECT_TRUE(fixedPriority.load());
+    EXPECT_TRUE(made.load());
+    {
+        std::lock_guard<std::mutex> guard(lock);
+        release = true;
+        changed.notify_all();
+    }
+    compiler.drain();
 }
 
 }  // namespace

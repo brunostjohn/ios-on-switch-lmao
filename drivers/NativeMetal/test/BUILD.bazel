@@ -5,6 +5,9 @@ load("@rules_rust//rust:defs.bzl", "rust_test")
 #                           class reads elsewhere (21H461's minConstantBufferAlignmentBytes)
 #   queue_priority_test     QueuePriority.h: the process's GPU priority from its Metal queues' (Core Animation's)
 #   image_filter_link_test  ImageFilterLink.h: Core Image's filter-function link request for the system's Metal compiler
+#   native_artifact_seed_test  NativeComputeArtifactStorage.h: the process's own analyses, then the seed's packed ones
+#                           (SWITCH_SEED_TREE=<an image's ngpu/addons> with --test_env also reads back some of a built seed's)
+#   metallib_entries_test   MetallibEntries.h: a metallib's function list, and which entries Metal answers as extern
 #
 #   bazel test //drivers/NativeMetal/test:all
 load("//bazel/lint:defs.bzl", "lint_files")
@@ -23,6 +26,20 @@ host_test(
     srcs = [
         "native_artifact_cache_test.cpp",
         "//drivers/NativeMetal:NativeMetalArtifactCache.h",
+        "//kits/SwitchSeedPack:SwitchSeedPack.h",
+    ],
+    cxx_std = "c++17",
+)
+
+host_test(
+    name = "native_artifact_seed_test",
+    srcs = [
+        "native_artifact_seed_test.cpp",
+        "//drivers/NativeMetal:NativeComputeArtifactStorage.h",
+        "//drivers/NativeMetal:NativeMetalArtifactCache.h",
+        "//drivers/NativeMetal:bridge/NativeMetalComputeArtifact.h",
+        "//kits/SwitchSeedPack:SwitchSeedPack.h",
+        "//kits/SwitchSeedPack:SwitchSeedPackWriter.h",
     ],
     cxx_std = "c++17",
 )
@@ -55,6 +72,15 @@ host_test(
     cxx_std = "c++17",
 )
 
+host_test(
+    name = "metallib_entries_test",
+    srcs = [
+        "metallib_entries_test.cpp",
+        "//drivers/NativeMetal:MetallibEntries.h",
+    ],
+    cxx_std = "c++17",
+)
+
 [host_test(
     name = name,
     srcs = [
@@ -73,7 +99,10 @@ host_test(
     ],
 ) for name, defines in [
     ("async_pipelines_test", []),
-    ("async_pipelines_release_test", ["-DSWITCH_DEBUG=0"]),
+    (
+        "async_pipelines_release_test",
+        ["-DSWITCH_DEBUG=0"],
+    ),
 ]]
 
 host_test(

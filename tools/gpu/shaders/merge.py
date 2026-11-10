@@ -4,7 +4,8 @@ usage: merge.py join --index <bucket index>... --report <bucket report>... [--re
                      [--replies <compile reply store>] --ipsw <build> --plan <plan.json> --inventory <inventory.json>
                      --out <dir>
        merge.py check --tools-manifest <MANIFEST.json> --twin <tools' libvulkan_nouveau.dylib> --base <path>... --out F
-       merge.py tree --seed <join's dir> --pack <bucket pack>... [--raw <raw pack dir>] --out <tree dir> --size F
+       merge.py tree --seed <join's dir> --pack <bucket pack>... [--raw <raw pack dir>] [--native <packed native dir>]
+                     --out <tree dir> --size F
 
 join: the seed is every bucket's cache directory laid over one another (an entry's name is what it holds, so two
 buckets' entries of one name are the same bytes), the device's driver records of the tools' NVK identity beside them,
@@ -19,9 +20,10 @@ check: refuses tools that are not the GPU bundle's (--base: its tree or files): 
 NVK's LC_UUID (nvk_twin.py gives the twin the iOS dylib's), and the bundle's Info.plist must name the tools' stack key
 (NVK, m2v, the bridge and the frontend); a seed of other tools would never be hit. A validation action: the seed does
 not wait for it.
-tree: ngpu/addons/TegraGM20BMetal.m2v-seed/shared (the join's files and packs/<NNN>) and
-ngpu/addons/TegraGM20BMetal.raw, directories 0755 and files 0644 (APFS clones of the sources), and size.json (bytes,
-files, blocks4k: what the tree takes on APFS) beside it.
+tree: ngpu/addons/TegraGM20BMetal.m2v-seed/shared (the join's files and packs/<NNN>, and the packed native seed's
+native-analysis/) and ngpu/addons/TegraGM20BMetal.raw (with the packed native seed's raw-<stack>/ in native/; of the
+packed native seed, only each index and its observed packs go: tools/gpu/seed_pack.py), directories 0755 and files
+0644 (APFS clones of the sources), and size.json (bytes, files, blocks4k: what the tree takes on APFS) beside it.
 """
 
 import argparse
@@ -37,6 +39,7 @@ import sys
 from collections import Counter
 from pathlib import Path
 
+from tools.gpu import seed_pack
 from tools.gpu.nvk_twin import lc_uuid
 from tools.gpu.shaders import replies as compiler_replies
 
@@ -260,6 +263,28 @@ def clone(source: Path, target: Path) -> None:
     target.chmod(0o644)
 
 
+def native_pairs(native: Path, out: Path) -> list[tuple[Path, Path]]:
+    """Return the packed native seed's staged files and where they go.
+
+    The host's manifest and coverage beside them and the derived entries' packs stay.
+    """
+    pairs = []
+    for path in sorted(native.rglob('*')):
+        relative = path.relative_to(native)
+        if not path.is_file() or len(relative.parts) < 2:
+            continue
+        top = relative.parts[0]
+        if top == 'native-analysis':
+            under = out / SEED
+        elif top.startswith('raw-'):
+            under = out / RAW / 'native'
+        else:
+            continue
+        if seed_pack.staged(native / top, relative.relative_to(top).as_posix()):
+            pairs.append((path, under / relative))
+    return pairs
+
+
 def tree(args: argparse.Namespace) -> None:
     """Lay the seed and the raw pack out under ngpu/addons, and write the size."""
     out = args.out
@@ -269,11 +294,7 @@ def tree(args: argparse.Namespace) -> None:
     if args.raw:
         pairs += [(p, out / RAW / p.relative_to(args.raw)) for p in sorted(args.raw.rglob('*')) if p.is_file()]
     if args.native:
-        for path in sorted(args.native.rglob('*')):
-            if path.is_file():
-                relative = path.relative_to(args.native)
-                target = out / SEED if relative.parts[0] == 'native-analysis' else out / RAW / 'native'
-                pairs.append((path, target / relative))
+        pairs += native_pairs(args.native, out)
     for source, target in pairs:
         target.parent.mkdir(parents=True, exist_ok=True)
         clone(source, target)

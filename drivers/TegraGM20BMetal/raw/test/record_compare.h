@@ -32,10 +32,29 @@ inline std::string blobDifferences(const uint32_t *packed, uint32_t packedDwords
     return "[" + out + " ]";
 }
 
+// The made record with its constexpr samplers numbered as the pack's; false: a header the pack lacks
+inline bool inPackSamplers(const raw::Pack &pack, const raw::RuntimeRecord &r, raw::PackPipeline &out)
+{
+    out = r.pipeline;
+    const uint32_t *headers = pack.section<uint32_t>(raw::PackSamplers);
+    bool unknown = false;
+    return raw::placeConstexprSamplers(
+        out, r.samplers,
+        [&](const std::array<uint32_t, 8> &words, uint32_t &index) {
+            for (index = 0; index < pack.header()->samplers; index++)
+                if (!memcmp(headers + 8 * index, words.data(), sizeof words))
+                    return true;
+            return false;
+        },
+        unknown);
+}
+
 inline std::string differences(const raw::Pack &pack, const raw::PackPipeline &pp, const raw::RuntimeRecord &r)
 {
     std::string why;
-    const raw::PackPipeline &rp = r.pipeline;
+    raw::PackPipeline rp;
+    if (!inPackSamplers(pack, r, rp))
+        why += " samplers";
     if (pack.string(pp.keyString) != r.keyString)
         why += " key-fields";
     const uint32_t *blob = pack.section<uint32_t>(raw::PackBlob) + pp.blob;
@@ -65,7 +84,7 @@ inline std::string differences(const raw::Pack &pack, const raw::PackPipeline &p
         why += " flags";
     if (pp.keyHash != rp.keyHash)
         why += " key";
-    if (!r.extras.empty() || !r.samplers.empty())
+    if (!r.extras.empty())
         why += " extras";
     for (int k = 0; k < 2; k++) {
         const raw::PackProgram &packed = pack.section<raw::PackProgram>(raw::PackPrograms)[k ? pp.fs : pp.vs];

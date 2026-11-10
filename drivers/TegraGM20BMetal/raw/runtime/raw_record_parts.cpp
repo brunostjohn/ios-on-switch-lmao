@@ -99,7 +99,7 @@ PackEntry bufferEntry(const LayoutEntry &e, const RecordParts &parts, bool codeS
 }
 
 // packfile.py entry_bytes, from mkpack.py handle_entry; false: a problem (`why`)
-bool handleEntry(const LayoutEntry &e, const PackRules &rules, RuntimeRecord &rec, PackEntry &p, std::string &why)
+bool handleEntry(const LayoutEntry &e, RuntimeRecord &rec, PackEntry &p, std::string &why)
 {
     p = {};
     p.offset = uint16_t(e.offset);
@@ -142,13 +142,9 @@ bool handleEntry(const LayoutEntry &e, const PackRules &rules, RuntimeRecord &re
             why = "a constexpr sampler's header unread";
             return false;
         }
-        size_t at = std::find(rules.samplers.begin(), rules.samplers.end(), e.header) - rules.samplers.begin();
-        if (at == rules.samplers.size()) {
-            const size_t own = std::find(rec.samplers.begin(), rec.samplers.end(), e.header) - rec.samplers.begin();
-            if (own == rec.samplers.size())
-                rec.samplers.push_back(e.header);
-            at = rules.samplers.size() + own;
-        }
+        const size_t at = std::find(rec.samplers.begin(), rec.samplers.end(), e.header) - rec.samplers.begin();
+        if (at == rec.samplers.size())
+            rec.samplers.push_back(e.header);
         p.samplerKind = SamplerConstexpr;
         p.sampler = uint8_t(at);
         break;
@@ -244,7 +240,7 @@ bool assembleRecord(const RecordParts &parts, const std::string &key, const Pack
             entry = {uint16_t(e.offset), EntryColorTable, 2, 0, 0, 0, 0};
         else if (e.buffer)
             entry = bufferEntry(e, parts, storageCodes[probeStorageCode(e.stage, e.slot)] > 1);
-        else if (!handleEntry(e, rules, out, entry, why))
+        else if (!handleEntry(e, out, entry, why))
             return false;
         if (entry.kind == EntryFetch)
             p.flags |= PipelineFetches;
@@ -379,12 +375,6 @@ PackRules PackRules::of(const Pack &pack, std::map<uint32_t, uint32_t> context)
     const uint32_t *base = pack.section<uint32_t>(PackBaseline);
     for (uint64_t i = 0; i < pack.bytes(PackBaseline) / 8; i++)
         r.baseline[base[2 * i]] = base[2 * i + 1];
-    const uint32_t *samplers = pack.section<uint32_t>(PackSamplers);
-    for (uint32_t i = 0; i < pack.header()->samplers; i++) {
-        std::array<uint32_t, 8> w;
-        memcpy(w.data(), samplers + 8 * i, sizeof w);
-        r.samplers.push_back(w);
-    }
     return r;
 }
 

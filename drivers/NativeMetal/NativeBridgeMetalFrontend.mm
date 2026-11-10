@@ -46,6 +46,7 @@
 #include "ImageFilterLink.h"
 #include "LimitsTable.h"
 #include "MetalABI.h"
+#include "MetallibEntries.h"
 #include "QueuePriority.h"
 #include "SurfaceLayout.h"
 #include "SwitchFrameTimeline.h"
@@ -1774,7 +1775,10 @@ static uint64_t constantBytes(uint64_t type)
 static std::string quartzCoreCallers();
 #endif
 static bool systemCompiler();
-@implementation NBLibrary
+@implementation NBLibrary {
+    std::once_flag _externsRead;
+    NSArray<NSString *> *_externs;
+}
 
 - (void)dealloc
 {
@@ -1942,8 +1946,10 @@ static bool systemCompiler();
     handler(function, error);
 }
 
+// m2v lists every entry of the library; Metal leaves its extern functions out (externFunctionNames)
 - (NSArray<NSString *> *)functionNames
 {
+    NSSet<NSString *> *externs = [NSSet setWithArray:[self metallibExterns]];
     NSMutableArray *names = [NSMutableArray array];
     for (uint32_t i = 0, n = nmb_library_function_count(_handle); i < n; i++) {
         const size_t length = nmb_library_function_name(_handle, i, nullptr, 0);
@@ -1953,9 +1959,40 @@ static bool systemCompiler();
         NSString *entry = [[NSString alloc] initWithBytes:name.data() length:length encoding:NSUTF8StringEncoding];
         if (!entry)
             return nil;
-        [names addObject:entry];
+        if (![externs containsObject:entry])
+            [names addObject:entry];
     }
     return names;
+}
+
+// Core Image counts its own kernels (ci_stdlib, ci_filters: CI::DAGPrecompiledKernels) from these and finds a kernel's library by
+// them; with none it makes every graph of them from source rather than stitching or linking it
+// (newLibraryWithImageFilterFunctionsSPI:).
+- (NSArray<NSString *> *)externFunctionNames
+{
+    return [self metallibExterns];
+}
+
+// From the library's own bytes. functionNames reads these rather than externFunctionNames, which the QEMU plugin answers from the
+// Mac's library over its wire.
+- (NSArray<NSString *> *)metallibExterns
+{
+    std::call_once(_externsRead, [&] {
+        NSMutableArray<NSString *> *names = [NSMutableArray array];
+        for (const std::string &name : switch_metal::metallibExternNames(_bytes, _length))
+            if (NSString *entry = [[NSString alloc] initWithBytes:name.data()
+                                                           length:name.size()
+                                                         encoding:NSUTF8StringEncoding])
+                [names addObject:entry];
+        _externs = [names copy];
+    });
+    return _externs;
+}
+
+// As Metal's: the function of any name the library has, extern or not
+- (id<MTLFunction>)newExternFunctionWithName:(NSString *)name
+{
+    return [self newFunctionWithName:name];
 }
 
 - (id<MTLFunction>)newFunctionWithName:(NSString *)name
@@ -1973,64 +2010,7 @@ static bool systemCompiler();
     return (id<MTLFunction>)function;
 }
 
-// No externFunctionNames (the plugin answers it nil). Metal lists a Core Image library's functions there and none in functionNames;
-// 21H461's Core Image counts its own kernels (ci_stdlib, ci_filters: CI::DAGPrecompiledKernels) from it, so on this device it makes
-// every graph of them from source rather than stitching or linking it (CI::LegacyDAGDescriptor, newLibraryWithImageFilterFunctionsSPI:).
 @end
-
-// Each entry of a library's metallib function list, in order, until `visit` answers false: its NAME and, when both tags are there, its
-// bitcode's offset into the bitcode section (OFFT's third u64) and size (MDSZ). Header: function list at 24,
-// bitcode section offset and size at 72 and 80; an entry is a u32 size (counting itself), then tags (a fourcc, a u16 length and the
-// bytes) up to ENDT. False when the metallib is malformed or the library kept no bytes.
-static bool forEachLibraryEntry(NBLibrary *library, bool (^visit)(const std::string &, uint64_t, uint64_t, bool))
-{
-    const uint8_t *file = library.bytes;
-    const size_t length = library.length;
-    if (!file || length < 88 || memcmp(file, "MTLB", 4))
-        return false;
-    uint64_t listAt;
-    memcpy(&listAt, file + 24, 8);
-    if (listAt > length - 4)
-        return false;
-    uint32_t count;
-    memcpy(&count, file + listAt, 4);
-    size_t at = listAt + 4;
-    for (uint32_t i = 0; i < count; i++) {
-        uint32_t size;
-        if (at > length - 4)
-            return false;
-        memcpy(&size, file + at, 4);
-        if (size < 8 || size > length - at)
-            return false;
-        const size_t end = at + size;
-        std::string name;
-        uint64_t bytes = 0, offset = 0;
-        bool sized = false, placed = false;
-        for (size_t t = at + 4; t + 4 <= end && memcmp(file + t, "ENDT", 4);) {
-            if (t + 6 > end)
-                return false;
-            uint16_t n;
-            memcpy(&n, file + t + 4, 2);
-            const uint8_t *v = file + t + 6;
-            if (n > end - (t + 6))
-                return false;
-            if (!memcmp(file + t, "NAME", 4))
-                name.assign((const char *)v, strnlen((const char *)v, n));
-            else if (!memcmp(file + t, "MDSZ", 4) && n >= 8) {
-                memcpy(&bytes, v, 8);
-                sized = true;
-            } else if (!memcmp(file + t, "OFFT", 4) && n >= 24) {
-                memcpy(&offset, v + 16, 8);
-                placed = true;
-            }
-            t += 6 + n;
-        }
-        if (!visit(name, offset, bytes, sized && placed))
-            return true;
-        at = end;
-    }
-    return true;
-}
 
 // A function's wrapped bitcode in its library's metallib (the entry NAMEd as the function): what a stitching request carries for each
 // function, as Metal's own MTLLibraryBuilder sends it. Nil when the library kept no bytes or does not list the function.
@@ -2040,18 +2020,19 @@ static NSData *functionBitcode(NBFunction *function)
     const uint8_t *file = library.bytes;
     const size_t length = library.length;
     const std::string wanted = function.libraryName.UTF8String ?: "";
-    if (!file || wanted.empty() || length < 88)
+    if (!file || wanted.empty() || length < switch_metal::kMetallibHeaderBytes)
         return nil;
     uint64_t bitcodeAt, bitcodeSize;
     memcpy(&bitcodeAt, file + 72, 8);
     memcpy(&bitcodeSize, file + 80, 8);
     if (bitcodeAt > length || bitcodeSize > length - bitcodeAt)
         return nil;
-    __block NSData *bitcode = nil;
-    forEachLibraryEntry(library, ^(const std::string &entry, uint64_t offset, uint64_t bytes, bool placed) {
-        if (entry != wanted)
+    NSData *bitcode = nil;
+    switch_metal::forEachMetallibEntry(file, length, [&](const switch_metal::MetallibEntry &entry) {
+        if (entry.name != wanted)
             return true;
-        if (placed && offset <= bitcodeSize && bytes <= bitcodeSize - offset)
+        const uint64_t offset = entry.bitcodeOffset, bytes = entry.bitcodeBytes;
+        if (entry.placed && offset <= bitcodeSize && bytes <= bitcodeSize - offset)
             bitcode = [NSData dataWithBytes:file + bitcodeAt + offset length:(NSUInteger)bytes];
         return false;
     });
@@ -5214,6 +5195,15 @@ static std::string journalComputePipeline(MTLComputePipelineDescriptor *d, NBFun
 }
 
 #endif
+
+extern "C" void native_bridge_metal_journal_render(id descriptor, NSUInteger options)
+{
+    SWITCH_METAL_DIAGNOSTIC(journalRenderPipeline((MTLRenderPipelineDescriptor *)descriptor, (MTLPipelineOption)options,
+                                                  nowUs(), nullptr, std::string()));
+    (void)descriptor;
+    (void)options;
+}
+
 static bool linkedHandles(NSArray *functions, std::vector<NmbFunction *> &out);
 
 // A stage's visible and private linked functions appended to `linked`; false for what the bridge does not represent (binary

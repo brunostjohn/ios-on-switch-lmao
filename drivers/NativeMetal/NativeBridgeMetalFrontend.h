@@ -81,6 +81,10 @@ bool native_bridge_metal_compute_direct(id descriptor, const struct NmbDirectDis
 // A dispatch of compute `state` (this device's) the raw GM20B path ran instead, journaled as its own dispatches are (a D line)
 void native_bridge_metal_journal_dispatch(id state, MTLSize grid, MTLSize group, bool threads, const char *memory,
                                           const char *textures, const char *samplers);
+// A render state of this device's functions the raw GM20B path draws from a record it completed itself, journaled as a
+// creation is (an R line): its m2v twin is made only if a command buffer falls back, and the harvest learns states from
+// the journal alone
+void native_bridge_metal_journal_render(id descriptor, NSUInteger options);
 // A symbol of the NVK this device opened (null: none)
 void *native_bridge_metal_nvk_symbol(const char *name);
 

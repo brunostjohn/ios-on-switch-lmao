@@ -13,6 +13,7 @@
 #include <sys/stat.h>
 #include <unistd.h>
 #include <utility>
+#include "../../kits/SwitchSeedPack/SwitchSeedPack.h"
 
 namespace native_artifact_cache {
 using Key = std::array<uint8_t, 32>;
@@ -42,6 +43,15 @@ inline void put(uint8_t *bytes, uint64_t value, unsigned count)
 {
     for (unsigned i = 0; i < count; ++i)
         bytes[i] = uint8_t(value >> (8 * i));
+}
+
+// The envelope's magic, version, header size, payload length and key; not its payload's digest
+inline bool headerMatches(const uint8_t *envelope, size_t size, const Key &key)
+{
+    return size > kHeaderBytes && size <= kHeaderBytes + kMaxPayloadBytes &&
+           !memcmp(envelope, kMagic.data(), kMagic.size()) && little(envelope + 8, 4) == 1 &&
+           little(envelope + 12, 4) == kHeaderBytes && little(envelope + 16, 8) == size - kHeaderBytes &&
+           !memcmp(envelope + 24, key.data(), key.size());
 }
 
 class Mapping {
@@ -101,9 +111,7 @@ public:
         const auto *header = static_cast<const uint8_t *>(mapped);
         Key digest = {};
         const size_t bytes = size_t(info.st_size) - kHeaderBytes;
-        bool matches = !memcmp(header, kMagic.data(), kMagic.size()) && little(header + 8, 4) == 1 &&
-                       little(header + 12, 4) == kHeaderBytes && little(header + 16, 8) == bytes &&
-                       !memcmp(header + 24, key.data(), key.size());
+        bool matches = headerMatches(header, size_t(info.st_size), key);
         if (matches) {
             CC_SHA256(header + kHeaderBytes, CC_LONG(bytes), digest.data());
             matches = !memcmp(header + 56, digest.data(), digest.size());
@@ -114,6 +122,30 @@ public:
         }
         mapping_ = mapped;
         length_ = size_t(info.st_size);
+        return true;
+    }
+};
+
+// The seed's envelopes, packed by key (kits/SwitchSeedPack). Unlike the writable cache's files, a payload is not hashed
+// again on each load: the seed is build output, read only and staged with a read-back. The index names the m2v build
+// that made it, which nothing here can ask m2v for; every key already hashes that build's sources, so a seed of another
+// build is only ever missed.
+class Seed {
+    switch_seed_pack::Seed packed_;
+
+public:
+    bool open(const std::string &directory)
+    {
+        return packed_.open(directory, uint32_t(Key().size()), nullptr);
+    }
+
+    bool find(const Key &key, const void *&payload, size_t &bytes) const
+    {
+        switch_seed_pack::Bytes envelope;
+        if (!packed_.find(key.data(), envelope) || !headerMatches(envelope.data, envelope.size, key))
+            return false;
+        payload = envelope.data + kHeaderBytes;
+        bytes = envelope.size - kHeaderBytes;
         return true;
     }
 };

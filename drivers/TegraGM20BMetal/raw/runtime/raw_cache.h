@@ -16,6 +16,10 @@
 #include "raw_compute_record.h"
 #include "raw_record.h"
 
+namespace switch_seed_pack {
+class Seed;
+}
+
 namespace raw {
 
 // What a made record depends on: the build (its stack key hashes the pack, m2v, NVK and NAK, the frontend and the raw path's own
@@ -31,12 +35,15 @@ struct CacheKey {
 
 class RecordCache {
 public:
+    RecordCache();
+    ~RecordCache();
     // false: no entry can be kept (`dir` unusable); loads miss and stores do nothing then. attach() then tidy().
     bool open(const std::string &dir, uint64_t stack, uint64_t capBytes);
     // The directory taken for loads and stores at once (a mkdir); tidy() removes another build's entries and a dead writer's
     // temporaries and counts the bytes kept, which stores need for the cap: it may run later, on another thread
     bool attach(const std::string &dir, uint64_t stack, uint64_t capBytes);
-    // Installed native records are immutable and shared; attach before any compiler worker starts.
+    // The installed native records, <dir>/raw-<stack>/ packed (kits/SwitchSeedPack), are mapped here and read in place
+    // before the directory's own entries; attach before any compiler worker starts.
     bool attachSeed(const std::string &dir, uint64_t stack);
     void tidy();
 
@@ -46,7 +53,8 @@ public:
         Refusal
     };
 
-    Found load(const CacheKey &k, RuntimeRecord &record, std::string &refusal);
+    // *seeded: whether the entry came from the installed seed rather than this process's own directory
+    Found load(const CacheKey &k, RuntimeRecord &record, std::string &refusal, bool *seeded = nullptr);
     // `record` null: the state's refusal (`refusal`)
     bool store(const CacheKey &k, const RuntimeRecord *record, const std::string &refusal);
     // A kernel's record at one compute key (raw_compute_key.h), or its refusal, as a state's
@@ -60,13 +68,14 @@ public:
     }
 
 private:
-    std::string dir_, seed_;
+    std::string dir_;
+    std::unique_ptr<switch_seed_pack::Seed> seed_;
     uint64_t stack_ = 0, cap_ = 0, bytes_ = 0;
     mutable std::mutex lock_;
     std::string parent_;
     std::string path(const CacheKey &k) const;
     void evict(uint64_t room);
-    bool loadBytes(const std::string &dir, const CacheKey &k, std::string &bytes);
+    bool loadBytes(bool seed, const CacheKey &k, std::string &bytes) const;
     bool storeBytes(const CacheKey &k, const std::string &bytes);
 };
 

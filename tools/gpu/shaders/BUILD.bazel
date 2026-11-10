@@ -71,6 +71,8 @@ py_test(
         "native_seed_test.py",
         "precompile.py",
     ],
+    data = ["//kits/SwitchSeedPack:seedpack"],
+    deps = ["@rules_python//python/runfiles"],
 )
 
 py_binary(
@@ -100,6 +102,7 @@ py_binary(
     deps = [
         ":replies",
         "//tools/gpu:nvk_twin",
+        "//tools/gpu:seed_pack",
     ],
 )
 
@@ -123,5 +126,6 @@ py_test(
     deps = [
         ":replies",
         "//tools/gpu:nvk_twin",
+        "//tools/gpu:seed_pack",
     ],
 )

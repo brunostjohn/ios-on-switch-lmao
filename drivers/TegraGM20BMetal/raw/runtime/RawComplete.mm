@@ -2,6 +2,7 @@
 // See RawComplete.h.
 #import "RawComplete.h"
 
+#include <mach/mach.h>
 #include <cstring>
 #include "NativeBridgeMetalFrontend.h"
 #include "RawDirect.h"
@@ -14,6 +15,46 @@ namespace raw {
 namespace {
 
 constexpr uint64_t kCacheCap = 8u << 20;
+
+#if SWITCH_RAW_DIAGNOSTICS
+// One runtime compile's cost on the thread that ran it, for the line that names it: wall time, the thread's own CPU time
+// (wall far above CPU is a starved or preempted compile, not a heavy one) and the thread's class or fixed priority
+class CompileCost {
+public:
+    CompileCost() : wallUs_(nowUs()), cpuNs_(clock_gettime_nsec_np(CLOCK_THREAD_CPUTIME_ID))
+    {}
+
+    std::string text() const
+    {
+        return std::to_string((nowUs() - wallUs_) / 1000) + " ms (" + cpu() + ")";
+    }
+
+    std::string cpu() const
+    {
+        // the scheduler's current priority: pthread_getschedparam answers a classed thread's cached 31
+        thread_extended_info_data_t info = {};
+        mach_msg_type_number_t count = THREAD_EXTENDED_INFO_COUNT;
+        const mach_port_t self = mach_thread_self();
+        thread_info(self, THREAD_EXTENDED_INFO, reinterpret_cast<thread_info_t>(&info), &count);
+        mach_port_deallocate(mach_task_self(), self);
+        const qos_class_t c = qos_class_self();
+        const char *qos = c == QOS_CLASS_USER_INTERACTIVE ? "UI"
+                          : c == QOS_CLASS_USER_INITIATED ? "IN"
+                          : c == QOS_CLASS_DEFAULT        ? "DF"
+                          : c == QOS_CLASS_UTILITY        ? "UT"
+                          : c == QOS_CLASS_BACKGROUND     ? "BG"
+                                                          : "fixed";
+        char out[64];
+        snprintf(out, sizeof out, "%llu ms CPU, %s %d",
+                 (unsigned long long)((clock_gettime_nsec_np(CLOCK_THREAD_CPUTIME_ID) - cpuNs_) / 1000000), qos,
+                 info.pth_curpri);
+        return out;
+    }
+
+private:
+    uint64_t wallUs_, cpuNs_;
+};
+#endif
 
 // A compute key (raw_compute_key.h) with its function constants moved last: a log line cut short keeps its shape and bindings
 std::string constantsLast(const std::string &key)
@@ -207,7 +248,20 @@ Compiler::Outcome Completion::make(const CacheKey &k, RuntimeRecord &record, std
     ProbeTextures textures;
     textures.cubic = a.cubic;
     textures.fragmentTests = a.fragmentTests;
+#if SWITCH_RAW_DIAGNOSTICS
+    const CompileCost cost;
+#endif
     const Compiler::Outcome outcome = direct().make(a.descriptor, a.key, record, why, textures);
+#if SWITCH_RAW_DIAGNOSTICS
+    os_log(
+        rawLog(),
+        "raw: a state the pack lacks %{public}s in %{public}s after %llu ms for a compile slot: %016llx %{public}.400s",
+        outcome == Compiler::Outcome::Made      ? "made"
+        : outcome == Compiler::Outcome::Refused ? "refused"
+                                                : "not made",
+        cost.text().c_str(), (unsigned long long)(Compiler::slotWaitUs() / 1000), (unsigned long long)k.name(),
+        a.key.c_str());
+#endif
     if (outcome != Compiler::Outcome::Made)
         once([NSString stringWithFormat:@"a state the pack lacks %s: %s | %.600s",
                                         outcome == Compiler::Outcome::Refused ? "is refused" : "was not made",
@@ -255,6 +309,7 @@ const ComputeState *Completion::kernel(MTLComputePipelineDescriptor *descriptor,
         case RecordCache::Found::None: {
 #if SWITCH_RAW_DIAGNOSTICS
             const uint64_t began = nowUs();
+            const CompileCost cost;
 #endif
             outcome = direct().kernel(descriptor, dispatch, key, record, why);
             if (outcome != Compiler::Outcome::Failed) {
@@ -269,9 +324,9 @@ const ComputeState *Completion::kernel(MTLComputePipelineDescriptor *descriptor,
             if (outcome == Compiler::Outcome::Made)
                 once([NSString
                     stringWithFormat:@"a kernel the pack lacks, made at its first dispatch of %u,%u,%u threads in "
-                                     @"%llu us: %s %s",
+                                     @"%llu us (%s): %s %s",
                                      dispatch.threads[0], dispatch.threads[1], dispatch.threads[2],
-                                     (unsigned long long)(nowUs() - began),
+                                     (unsigned long long)(nowUs() - began), cost.cpu().c_str(),
                                      descriptor.computeFunction.name.UTF8String ?: "-", constantsLast(key).c_str()]);
 #endif
             break;
@@ -318,7 +373,15 @@ void Completion::splitLater(const CacheKey &k, const RuntimeRecord &record)
         ProbeTextures textures;
         textures.cubic = a.cubic;
         textures.fragmentTests = a.fragmentTests;
+#if SWITCH_RAW_DIAGNOSTICS
+        const CompileCost cost;
+#endif
         const Compiler::Outcome outcome = direct().make(a.descriptor, a.key, made, why, textures, nullptr, true);
+#if SWITCH_RAW_DIAGNOSTICS
+        os_log(rawLog(), "raw: a state's split compile %{public}s in %{public}s: %016llx",
+               outcome == Compiler::Outcome::Made ? (made.split ? "split it" : "found no split") : "failed",
+               cost.text().c_str(), (unsigned long long)key.name());
+#endif
         if (outcome == Compiler::Outcome::Failed)
             return;
         const bool same = outcome == Compiler::Outcome::Made && made.programs[0].id == kept->programs[0].id &&

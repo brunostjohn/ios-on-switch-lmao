@@ -220,16 +220,11 @@ void raw_metal_prepare(const char *packPath, uint64_t stack)
     });
 }
 
-void raw_metal_complete_states(const char *cacheDir, const char *packPath)
+void raw_metal_complete_states(const char *cacheDir, const char *nativeSeed)
 {
-    if (gRM && gRM->fallback && !gRM->completion) {
-        std::string nativeSeed;
-        if (packPath)
-            if (const char *slash = strrchr(packPath, '/'))
-                nativeSeed = std::string(packPath, slash - packPath) + "/native";
-        gRM->completion = std::make_unique<raw::Completion>(*gRM->raw, cacheDir, gRM->raw->pack().header()->stack,
-                                                           nativeSeed.c_str());
-    }
+    if (gRM && gRM->fallback && !gRM->completion)
+        gRM->completion =
+            std::make_unique<raw::Completion>(*gRM->raw, cacheDir, gRM->raw->pack().header()->stack, nativeSeed);
 }
 
 // libdispatch SPI (dispatch/private/queue_private.h): a root queue over threads of its own, `configure` run on each as it

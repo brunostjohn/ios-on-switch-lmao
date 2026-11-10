@@ -1,4 +1,5 @@
 import hashlib
+import struct
 import sys
 import tempfile
 import unittest
@@ -8,24 +9,35 @@ from unittest import mock
 from tools.gpu import stage_manifest
 
 
+def index(packs: int, observed: int, magic: bytes = b'SWSEEDPK') -> bytes:
+    return struct.pack('<8sIIIIII', magic, 1, 8, 0, packs, observed, 0) + bytes(32)
+
+
 class StageManifestTest(unittest.TestCase):
-    def test_native_records_and_analysis_reach_the_runtime_lookup_paths(self):
+    def test_packed_native_records_and_analysis_reach_the_runtime_lookup_paths(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            record = 'raw-0123456789abcdef/1111111111111111.rec'
-            analysis = 'native-analysis/' + 'a' * 64 + '.nca'
+            records = 'raw-0123456789abcdef/'
+            analysis = 'native-analysis/'
             inputs = {
                 'base/ngpu/addons/TegraGM20BMetal.bundle/TegraGM20BMetal': b'plugin',
                 'seed/SEED': b'compatible seed',
                 'seed/MANIFEST.json': b'{}',
                 'pack': b'compatibility records',
                 'raw/pack.bin': b'raw pipeline pack',
-                'native/' + record: b'native record',
-                'native/' + analysis: b'native analysis',
+                'native/' + records + 'index': index(2, 1),
+                'native/' + records + 'packs/000': b'native records',
+                'native/' + analysis + 'index': index(3, 2),
+                'native/' + analysis + 'packs/000': b'native analyses',
+                'native/' + analysis + 'packs/001': b'more native analyses',
+            }
+            host = {
                 'native/manifest.json': b'native manifest',
                 'native/coverage.json': b'{"complete":false}',
+                'native/' + records + 'packs/001': b'derived native records',
+                'native/' + analysis + 'packs/002': b'derived native analyses',
             }
-            for name, data in inputs.items():
+            for name, data in (inputs | host).items():
                 path = root / name
                 path.parent.mkdir(parents=True, exist_ok=True)
                 path.write_bytes(data)
@@ -41,22 +53,41 @@ class StageManifestTest(unittest.TestCase):
             files = {parts[0]: parts[1:] for parts in (line.split('\t') for line in lines[1:])}
             self.assertEqual(len(files), len(inputs))
             expected = {
-                stage_manifest.RAW + '/native/' + record: 'native/' + record,
-                stage_manifest.SEED + '/' + analysis: 'native/' + analysis,
-                stage_manifest.RAW + '/native/manifest.json': 'native/manifest.json',
-                stage_manifest.RAW + '/native/coverage.json': 'native/coverage.json',
+                stage_manifest.RAW + '/native/' + records + 'index': 'native/' + records + 'index',
+                stage_manifest.RAW + '/native/' + records + 'packs/000': 'native/' + records + 'packs/000',
+                stage_manifest.SEED + '/' + analysis + 'index': 'native/' + analysis + 'index',
+                stage_manifest.SEED + '/' + analysis + 'packs/000': 'native/' + analysis + 'packs/000',
+                stage_manifest.SEED + '/' + analysis + 'packs/001': 'native/' + analysis + 'packs/001',
                 stage_manifest.RAW + '/pack.bin': 'raw/pack.bin',
                 stage_manifest.SEED + '/packs/000': 'pack',
             }
             for target, source in expected.items():
                 data = inputs[source]
                 self.assertEqual(files[target], [hashlib.sha256(data).hexdigest(), str(len(data)), '644', source])
+            self.assertFalse([target for target in files if target.endswith(('manifest.json', 'coverage.json'))])
+            derived = [
+                stage_manifest.RAW + '/native/' + records + 'packs/001',
+                stage_manifest.SEED + '/' + analysis + 'packs/002',
+            ]
+            self.assertFalse([target for target in derived if target in files])
             plugin = 'ngpu/addons/TegraGM20BMetal.bundle/TegraGM20BMetal'
             self.assertEqual(files[plugin][2], '755')
             for digest, length, _, source in files.values():
                 data = (root / source).read_bytes()
                 self.assertEqual(hashlib.sha256(data).hexdigest(), digest)
                 self.assertEqual(len(data), int(length))
+
+    def test_a_packed_directory_without_a_seed_pack_index_is_refused(self):
+        with tempfile.TemporaryDirectory() as directory:
+            native = Path(directory)
+            for name, data in (
+                ('raw-0123456789abcdef/index', index(2, 1, b'NOTASEED')),
+                ('native-analysis/index', b''),
+            ):
+                (native / name).parent.mkdir(parents=True)
+                (native / name).write_bytes(data)
+                with self.assertRaisesRegex(ValueError, 'seed pack'):
+                    stage_manifest.native_target(native, name.replace('index', 'packs/000'))
 
 
 if __name__ == '__main__':

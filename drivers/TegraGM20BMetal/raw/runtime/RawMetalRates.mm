@@ -93,7 +93,8 @@ size_t raw_metal_rates(char *out, size_t size)
     snprintf(diag, sizeof diag,
              " sp=%llu/%llu evsp=%llu/%llu abortenc=%.0fus/a replay=%.0fus/m rclean=%.0fKB/m "
              "rt128=%llu(pitch %u va&255 %u) rtmix=%llu lvl=%llu states=%llu/%llu/%llu/%llu/%.0fms "
-             "atcreate=%llu/%.0fus comp=%llu/%lluKB/v%llu/m%llu/f%llu bk=%llu/%lluMB/r%llu tfree=%lluMB zbc=%llu/%llu "
+             "atcreate=%llu/%.0fus/s%llu/o%llu swait=%.0fms comp=%llu/%lluKB/v%llu/m%llu/f%llu bk=%llu/%lluMB/r%llu "
+             "tfree=%lluMB zbc=%llu/%llu "
              "split=%llu why=%s",
              (unsigned long long)sp, (unsigned long long)segs, (unsigned long long)evSplits,
              (unsigned long long)evWhole, (s.abortUs.load() - gRates.abortUs) / double(aborts ? aborts : 1),
@@ -104,14 +105,14 @@ size_t raw_metal_rates(char *out, size_t size)
              (unsigned long long)(k.levelPasses.load() - gRates.levelPasses), (unsigned long long)made.hits,
              (unsigned long long)made.misses, (unsigned long long)made.refusals, (unsigned long long)made.failures,
              made.makeUs / 1000.0, (unsigned long long)made.lookupHits,
-             made.lookupHits ? double(made.lookupUs) / double(made.lookupHits) : 0.0,
-             (unsigned long long)k.compHeld.load(), (unsigned long long)(k.compHeldBytes.load() >> 10),
-             (unsigned long long)k.compViews.load(), (unsigned long long)k.compMade.load(),
-             (unsigned long long)k.compFailed.load(), (unsigned long long)k.backings.load(),
-             (unsigned long long)(k.backingBytes.load() >> 20), (unsigned long long)k.retiredBackings.load(),
-             (unsigned long long)(k.tiledFreeBytes.load() >> 20), (unsigned long long)k.zbcHits.load(),
-             (unsigned long long)k.zbcMisses.load(), (unsigned long long)k.splitPrologues.exchange(0),
-             *preds ? preds : "-");
+             made.lookupHits ? double(made.lookupUs) / double(made.lookupHits) : 0.0, (unsigned long long)made.seedHits,
+             (unsigned long long)made.ownHits, made.waitUs / 1000.0, (unsigned long long)k.compHeld.load(),
+             (unsigned long long)(k.compHeldBytes.load() >> 10), (unsigned long long)k.compViews.load(),
+             (unsigned long long)k.compMade.load(), (unsigned long long)k.compFailed.load(),
+             (unsigned long long)k.backings.load(), (unsigned long long)(k.backingBytes.load() >> 20),
+             (unsigned long long)k.retiredBackings.load(), (unsigned long long)(k.tiledFreeBytes.load() >> 20),
+             (unsigned long long)k.zbcHits.load(), (unsigned long long)k.zbcMisses.load(),
+             (unsigned long long)k.splitPrologues.exchange(0), *preds ? preds : "-");
 #if SWITCH_FRAME_TIMELINE
     {
         const size_t used = strlen(diag);

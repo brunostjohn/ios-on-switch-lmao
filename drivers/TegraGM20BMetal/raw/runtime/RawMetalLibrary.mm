@@ -134,6 +134,16 @@
     return [(id<MTLLibrary>)_twin functionNames];
 }
 
+- (NSArray<NSString *> *)externFunctionNames
+{
+    return [_twin externFunctionNames];
+}
+
+- (id<MTLFunction>)newExternFunctionWithName:(NSString *)name
+{
+    return (id<MTLFunction>)[self wrap:[_twin newExternFunctionWithName:name] name:name constants:nil];
+}
+
 - (MTLLibraryType)type
 {
     return [(id<MTLLibrary>)_twin type];

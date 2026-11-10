@@ -19,6 +19,7 @@ filegroup(
         "GpuMemoryRelease.h",
         "ImageFilterLink.h",
         "LimitsTable.h",
+        "MetallibEntries.h",
         "NativeBridgeMetalFrontend.h",
         "NativeMetalArtifactCache.h",
         "NativeComputeArtifactStorage.h",
@@ -34,6 +35,7 @@ filegroup(
         "bridge/NativeMetalComputeArtifact.h",
         "bridge/NativeMetalObjects.h",
         "//kits/SwitchDMA:SwitchDcache.h",
+        "//kits/SwitchSeedPack:SwitchSeedPack.h",
     ],
 )
 

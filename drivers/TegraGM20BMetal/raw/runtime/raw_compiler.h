@@ -11,6 +11,8 @@
 
 namespace raw {
 
+class CompileSlots;
+
 // The states this process completes: each asked state made once, by the disk cache or `make` (the probe and record), with per-key exclusion
 // on bounded user-initiated workers, or on the creating thread (makeNow). A later ask of a state answers its result or
 // that it is still being made. A refusal sticks; a probe that could not run is tried again by a later ask, kRetries times at
@@ -57,10 +59,16 @@ public:
 #if SWITCH_RAW_DIAGNOSTICS
         uint64_t hits = 0, misses = 0, refusals = 0, failures = 0, makeUs = 0;
         uint64_t lookupHits = 0, lookupUs = 0;  // hits found by lookup() at a state's creation, and their cost
+        uint64_t seedHits = 0, ownHits = 0;     // of lookupHits, the installed seed's and this process's directory's
+        uint64_t waitUs = 0;                    // of makeUs, the makes' waits for a compile slot
 #endif
     };
 
     Stats stats() const;
+#if SWITCH_RAW_DIAGNOSTICS
+    // The calling thread's wait for the compile slot of the make it is running (make_ may ask)
+    static uint64_t slotWaitUs();
+#endif
 
 private:
     struct Entry {
@@ -81,7 +89,7 @@ private:
     uint64_t retryUs_;
     void *queue_;
     void *persistence_;
-    void *slots_;  // at most two cold compiles; unrelated warm keys never take this semaphore
+    std::unique_ptr<CompileSlots> slots_;  // at most two cold compiles; unrelated warm keys never take a slot
     mutable std::mutex lock_;
     std::condition_variable idle_;
     uint64_t queued_ = 0;

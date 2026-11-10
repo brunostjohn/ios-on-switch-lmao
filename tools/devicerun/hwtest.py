@@ -166,6 +166,7 @@ BY_IOS: dict[str, dict[str, bool]] = {
         'metal4.device': False,
         'metal.archive.framework': False,
         'ui.glass': False,
+        'ui.glass_motion': False,
         'display.pocket_strip': False,
         'display.true_tone_default': False,
         'pacing.glass_over': False,

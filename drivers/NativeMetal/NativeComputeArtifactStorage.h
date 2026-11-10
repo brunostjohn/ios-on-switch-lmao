@@ -1,22 +1,26 @@
 // SPDX-License-Identifier: MIT
 #pragma once
+#include <mutex>
 #include "NativeMetalArtifactCache.h"
 #include "bridge/NativeMetalComputeArtifact.h"
 
 class NativeComputeArtifactStorage {
 public:
+    // The process's own directory, read first; then the seed's index and packs, mapped at the first load
     std::string cache, seed;
 
     NmbComputeArtifact *load(NmbDevice *device, const NmbComputePipelineDescriptor &descriptor, bool reflection,
                              const native_artifact_cache::Key &key) const
     {
-        for (const auto *directory : {&cache, &seed}) {
-            native_artifact_cache::Mapping mapped;
-            if (mapped.load(*directory, key))
-                if (auto *artifact = nmb_compute_artifact_import(device, &descriptor, reflection, mapped.data(),
-                                                                 mapped.size()))
-                    return artifact;
-        }
+        native_artifact_cache::Mapping mapped;
+        if (mapped.load(cache, key))
+            if (auto *artifact =
+                    nmb_compute_artifact_import(device, &descriptor, reflection, mapped.data(), mapped.size()))
+                return artifact;
+        const void *payload = nullptr;
+        size_t bytes = 0;
+        if (seeded().find(key, payload, bytes))
+            return nmb_compute_artifact_import(device, &descriptor, reflection, payload, bytes);
         return nullptr;
     }
 
@@ -34,5 +38,18 @@ public:
                 return native_artifact_cache::store(out.directory, out.key, bytes, size);
             },
             &context);
+    }
+
+private:
+    mutable std::once_flag opened_;
+    mutable native_artifact_cache::Seed packed_;
+
+    const native_artifact_cache::Seed &seeded() const
+    {
+        std::call_once(opened_, [this] {
+            if (!seed.empty())
+                packed_.open(seed);
+        });
+        return packed_;
     }
 };
