@@ -65,8 +65,8 @@ void retire(thread_call_param_t, thread_call_param_t)
     IOLockLock(queue.lock);
     __atomic_store_n(&queue.waitingSources, 1u, __ATOMIC_RELEASE);
     bool pendingSources = false;
-    const uint32_t completed = queue.channel ? tgm_chan_completed(queue.channel) : 0;
-    const bool failed = queue.channel && tgm_chan_error(queue.channel);
+    int failed = 0;
+    const uint32_t completed = queue.channel ? tgm_chan_settled(queue.channel, &failed) : 0;
     for (auto &job : queue.jobs) {
         if (!job.active || (!failed && int32_t(completed - job.sequence) < 0))
             continue;

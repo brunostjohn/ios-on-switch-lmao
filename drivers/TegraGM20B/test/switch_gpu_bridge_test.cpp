@@ -97,6 +97,12 @@ extern "C" int tgm_chan_new_copy(tgm_vm *, const void *, volatile uint32_t *, ui
 extern "C" void tgm_chan_del(tgm_chan **chan) { *chan = nullptr; }
 extern "C" uint32_t tgm_chan_error(tgm_chan *chan) { return chan->failed ? 5 : 0; }
 extern "C" uint32_t tgm_chan_completed(tgm_chan *chan) { return chan->completed; }
+extern "C" uint32_t tgm_chan_settled(tgm_chan *chan, int *failed)
+{
+    const uint32_t done = chan->completed;
+    *failed = chan->failed;
+    return done;
+}
 extern "C" void tgm_chan_on_fence(tgm_chan *, void (*fn)(void *), void *arg) { fenceCallback = fn; fenceContext = arg; }
 extern "C" int tegra_host1x_syncpt_alloc(uint32_t *id) { *id = syncpointCount++; return 0; }
 extern "C" uint32_t tegra_host1x_syncpt_read(uint32_t id) { return syncpoints[id]; }

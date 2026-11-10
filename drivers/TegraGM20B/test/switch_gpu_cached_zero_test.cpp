@@ -43,6 +43,8 @@ std::map<uint32_t, std::vector<uint32_t>> pending;
 unsigned maps, unmaps, cacheOps, execs, nextError, progressChecks;
 int mapError;
 bool early;
+// chan_killed landing at the fence read: the error first, then the fence over the abandoned scrub.
+bool killAtFenceRead;
 bool pushReadOnly, destinationReadOnly, destinationVolatile;
 void (*fenceCallback)(void *);
 void *fenceContext;
@@ -113,6 +115,7 @@ class CachedZero : public testing::Test
 		nextError = 0;
 		mapError = 0;
 		early = false;
+		killAtFenceRead = false;
 	}
 
 	void TearDown() override
@@ -254,7 +257,20 @@ extern "C" uint32_t tgm_chan_error(tgm_chan *chan)
 
 extern "C" uint32_t tgm_chan_completed(tgm_chan *chan)
 {
+	if (killAtFenceRead) {
+		killAtFenceRead = false;
+		chan->failed = true;
+		pending.clear();
+		chan->completed = chan->submitted;
+	}
 	return chan->completed;
+}
+
+extern "C" uint32_t tgm_chan_settled(tgm_chan *chan, int *failed)
+{
+	const uint32_t done = tgm_chan_completed(chan);
+	*failed = chan->failed;
+	return done;
 }
 
 extern "C" void tgm_chan_check_progress(tgm_chan *, const char *, uint32_t)
@@ -355,6 +371,21 @@ TEST_F(CachedZero, FailedQuiescedChannelRefusesZeroSuccessAndLaterReopens)
 	finish();
 	EXPECT_EQ(a.result, 0);
 	EXPECT_EQ(a.callbacks, 2u);
+}
+
+TEST_F(CachedZero, ScrubKilledBetweenRetirementsReadsIsNeverReportedClean)
+{
+	Allocation a;
+	ASSERT_EQ(a.submit(), 0);
+	killAtFenceRead = true;
+	fenceCallback(fenceContext);
+	pump();
+	EXPECT_EQ(a.callbacks, 1u);
+	EXPECT_EQ(a.result, -5);
+	EXPECT_TRUE(std::all_of(a.bytes.begin(), a.bytes.end(), [](auto b) {
+		return b == 0xa7;
+	}));
+	gpu.failed = false;
 }
 
 TEST_F(CachedZero, MappingFailureLeavesNoPublishedAllocation)

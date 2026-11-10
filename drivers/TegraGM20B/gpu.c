@@ -1287,6 +1287,14 @@ uint32_t tgm_chan_error(struct tgm_chan *chan)
 	return chan->error;
 }
 
+uint32_t tgm_chan_settled(struct tgm_chan *chan, int *failed)
+{
+	const u32 done = __atomic_load_n(chan->fence_cpu, __ATOMIC_ACQUIRE);
+
+	*failed = READ_ONCE(chan->error) != 0;
+	return done;
+}
+
 uint64_t tgm_chan_fault_va(struct tgm_chan *chan)
 {
 	return READ_ONCE(chan->fault_va);

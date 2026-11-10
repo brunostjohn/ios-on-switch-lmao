@@ -72,8 +72,8 @@ void retire(thread_call_param_t, thread_call_param_t)
 	Job finished[kJobs];
 	uint32_t count = 0;
 	IOLockLock(queue.lock);
-	const bool failed = queue.channel && tgm_chan_error(queue.channel);
-	const uint32_t done = queue.channel ? tgm_chan_completed(queue.channel) : 0;
+	int failed = 0;
+	const uint32_t done = queue.channel ? tgm_chan_settled(queue.channel, &failed) : 0;
 	for (auto &job : queue.jobs) {
 		if (!job.mapping || (!failed && int32_t(done - job.sequence) < 0))
 			continue;
