@@ -121,15 +121,23 @@ void traceSurfaceImage(RMTexture *t, const char *what, uint32_t seed)
         case RMTexturePool: {  // m2v's in-place texture over the same pool memory (as an IOSurface's)
             const size_t page = size_t(getpagesize());
             raw::Alias a;
-            const bool shared = heapResident(_heap) && gRM->raw->alias(_raw, a);
-            id<MTLBuffer> pages =
-                shared ? rawAliasBuffer(a, _raw.span.cpu, (NSUInteger(_raw.span.bytes) + page - 1) & ~(page - 1),
-                                        MTLResourceStorageModeShared)
-                       : nil;
-            why = !_raw.span.valid() ? "it has no memory of its own"
-                  : !shared          ? "its memory could not be aliased (a purged heap's that did not come back)"
-                  : !pages           ? "m2v did not take its memory"
-                                     : "m2v made no texture over its memory";
+            // Made aliasable before its first replay: its placement is given back, its address and its heap's arena kept
+            const bool released = _raw.arena && !_raw.span.valid() && _heap && _heap->_arena;
+            uint8_t *cpu = released ? _raw.cpu : _raw.span.cpu;
+            uint64_t bytes = _raw.span.bytes, align;
+            const bool shared =
+                heapResident(_heap) &&
+                (released ? raw::Device::arenaFootprint(_raw.width, _raw.height, uint32_t(_descriptor.pixelFormat),
+                                                        _raw.blockLinear, bytes, align) &&
+                                gRM->raw->aliasArenaRange(_heap->_arena - 1, _raw.va, bytes, a)
+                          : gRM->raw->alias(_raw, a));
+            id<MTLBuffer> pages = shared ? rawAliasBuffer(a, cpu, (NSUInteger(bytes) + page - 1) & ~(page - 1),
+                                                          MTLResourceStorageModeShared)
+                                         : nil;
+            why = !_raw.span.valid() && !released ? "it has no memory of its own"
+                  : !shared ? "its memory could not be aliased (a purged heap's that did not come back)"
+                  : !pages  ? "m2v did not take its memory"
+                            : "m2v made no texture over its memory";
             MTLTextureDescriptor *d = _descriptor;
             if (_raw.chain && d.storageMode == MTLStorageModeMemoryless) {  // every level, in place (memory here)
                 d = [_descriptor copy];

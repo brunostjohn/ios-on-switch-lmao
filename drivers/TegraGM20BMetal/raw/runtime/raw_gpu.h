@@ -1136,6 +1136,9 @@ public:
     // False: nothing to alias (memoryless, a view's memory), or the connection is not NVK's.
     bool alias(Texture &t, Alias &a);
     bool alias(Buffer &b, Alias &a);
+    // [va, va + bytes) of an arena whose placement there was given back (makeAliasable): the lease holds the arena, never the
+    // placement, which a resource placed since may own
+    bool aliasArenaRange(uint32_t arena, uint64_t va, uint64_t bytes, Alias &a);
     // The surface's import, made now if no texture of the raw path holds one: an m2v import of the surface is this one, aliased.
     bool aliasSurface(uint64_t surfaceId, void *base, uint64_t bytes, const void *surface, Alias &a);
     static void holdLease(void *lease);

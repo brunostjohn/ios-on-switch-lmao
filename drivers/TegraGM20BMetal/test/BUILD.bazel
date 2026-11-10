@@ -69,6 +69,8 @@
 #                     same for every pair of halves; and fquantize2f16's widening as HADD2.F32 (nak/from_nir.rs)
 #   raw_order_test    raw/runtime/raw_order.h: the raw path orders on the CPU only after the kernel refused an Order, never
 #                     while its channel is being made again, and orders on the GPU again once the kernel made it
+#   raw_replay_twins_test  raw/runtime/raw_replay_twins.h: a range m2v replays fails whole, before any pass of it is
+#                     encoded, when an attachment of one of its passes has no twin
 #   nak_fp32_flush_test  NAK's fp32 flush elision (nak_nir_algebraic.py): a flushed source under fneg or fabs feeds an FTZ
 #                     instruction as its source does, and no FTZ result or widened half is a denormal
 #
@@ -247,6 +249,15 @@ host_test(
     srcs = [
         "raw_order_test.cpp",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_order.h",
+    ],
+    cxx_std = "c++17",
+)
+
+host_test(
+    name = "raw_replay_twins_test",
+    srcs = [
+        "raw_replay_twins_test.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_replay_twins.h",
     ],
     cxx_std = "c++17",
 )
