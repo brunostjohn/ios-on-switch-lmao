@@ -15,6 +15,8 @@ uint64_t nowUs()
     return clock_gettime_nsec_np(CLOCK_UPTIME_RAW) / 1000;
 }
 
+thread_local uint64_t tSlotWaitUs;
+
 }  // namespace
 
 // A thread waiting for a slot lends its class to every holder below it for as long as it waits (a dispatch semaphore lends
@@ -210,7 +212,8 @@ RecordCache::Found Compiler::lookup(const CacheKey &k, RuntimeRecord &record, st
         }
     }
     auto loaded = std::make_unique<RuntimeRecord>();
-    const RecordCache::Found found = cache_ ? cache_->load(k, *loaded, why) : RecordCache::Found::None;
+    bool seeded = false;
+    const RecordCache::Found found = cache_ ? cache_->load(k, *loaded, why, &seeded) : RecordCache::Found::None;
     if (found == RecordCache::Found::None)
         return found;
     if (found == RecordCache::Found::Record)
@@ -218,6 +221,7 @@ RecordCache::Found Compiler::lookup(const CacheKey &k, RuntimeRecord &record, st
     std::lock_guard<std::mutex> l(lock_);
     RAW_DIAGNOSTIC(stats_.hits++;
                    stats_.lookupHits++;
+                   (seeded ? stats_.seedHits : stats_.ownHits)++;
                    stats_.lookupUs += nowUs() - began);
     // an ask that came in since keeps its own entry (its job finds the same entry on disk)
     if (const auto [it, first] = entries_.try_emplace(k.name()); first) {
@@ -252,6 +256,8 @@ Compiler::Outcome Compiler::produce(const CacheKey &k, RuntimeRecord &record, st
 
     uint64_t waited = 0;
     const CompileSlots::Held slot = slots_->take(&waited);
+    tSlotWaitUs = waited;
+    RAW_DIAGNOSTIC(std::lock_guard<std::mutex> l(lock_); stats_.waitUs += waited);
     const Outcome outcome = make_(k, record, why);
     if (found == RecordCache::Found::None && outcome != Outcome::Failed && cache_)
         dispatch_async_f(
@@ -360,6 +366,11 @@ void Compiler::drain()
     });
     l.unlock();
     dispatch_sync_f(static_cast<dispatch_queue_t>(persistence_), nullptr, [](void *) {});
+}
+
+uint64_t Compiler::slotWaitUs()
+{
+    return tSlotWaitUs;
 }
 
 Compiler::Stats Compiler::stats() const

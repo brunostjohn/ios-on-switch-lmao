@@ -59,10 +59,14 @@ public:
 #if SWITCH_RAW_DIAGNOSTICS
         uint64_t hits = 0, misses = 0, refusals = 0, failures = 0, makeUs = 0;
         uint64_t lookupHits = 0, lookupUs = 0;  // hits found by lookup() at a state's creation, and their cost
+        uint64_t seedHits = 0, ownHits = 0;     // of lookupHits, the installed seed's and this process's directory's
+        uint64_t waitUs = 0;                    // of makeUs, the makes' waits for a compile slot
 #endif
     };
 
     Stats stats() const;
+    // The calling thread's wait for the compile slot of the make it is running (make_ may ask)
+    static uint64_t slotWaitUs();
 
 private:
     struct Entry {

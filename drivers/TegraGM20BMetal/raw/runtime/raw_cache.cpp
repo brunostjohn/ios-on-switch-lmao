@@ -292,13 +292,16 @@ bool RecordCache::loadBytes(const std::string &dir, const CacheKey &k, std::stri
     return !dir.empty() && k.stack == stack_ && readFile(dir + "/" + hex16(k.name()) + ".rec", bytes);
 }
 
-RecordCache::Found RecordCache::load(const CacheKey &k, RuntimeRecord &record, std::string &refusal)
+RecordCache::Found RecordCache::load(const CacheKey &k, RuntimeRecord &record, std::string &refusal, bool *seeded)
 {
     std::string bytes;
     for (const auto *dir : {&seed_, &dir_})
         if (loadBytes(*dir, k, bytes))
-            if (const Found found = decodeEntry(bytes, k, record, refusal); found != Found::None)
+            if (const Found found = decodeEntry(bytes, k, record, refusal); found != Found::None) {
+                if (seeded)
+                    *seeded = dir == &seed_;
                 return found;
+            }
     return Found::None;
 }
 

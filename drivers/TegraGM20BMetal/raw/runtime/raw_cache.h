@@ -46,7 +46,8 @@ public:
         Refusal
     };
 
-    Found load(const CacheKey &k, RuntimeRecord &record, std::string &refusal);
+    // *seeded: whether the entry came from the installed seed rather than this process's own directory
+    Found load(const CacheKey &k, RuntimeRecord &record, std::string &refusal, bool *seeded = nullptr);
     // `record` null: the state's refusal (`refusal`)
     bool store(const CacheKey &k, const RuntimeRecord *record, const std::string &refusal);
     // A kernel's record at one compute key (raw_compute_key.h), or its refusal, as a state's
