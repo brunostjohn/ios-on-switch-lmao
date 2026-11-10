@@ -983,8 +983,9 @@ host_library(
 )
 host_test(
     name = "switch_gpu_checked_copy_test",
-    srcs = ["switch_gpu_checked_copy_test.cpp"],
+    srcs = ["switch_gpu_checked_copy_test.cpp", "gm20b_ce_model.h", "gm20b_gpu_memory.h"],
     additional_compiler_inputs = [
+        "//drivers/TegraGM20B:TegraGM20BLayout.h",
         "//drivers/TegraGM20B:TegraGM20BCopy.cpp", "//drivers/TegraGM20B:TegraGM20BCopy.h",
         "//drivers/TegraGM20B:TegraGM20BCopyPush.h", "//drivers/TegraGM20B:TegraGM20BRelayout.h",
         "//drivers/TegraGM20B:TegraGM20BTiled.h", "//drivers/TegraGM20B:TegraGM20BSyncpt.h",

@@ -16,6 +16,7 @@ constexpr uint64_t Page = 4096, PushVa = 1ULL << 20;
 
 struct Job {
 	bool busy;
+	uint32_t dwords;
 	SwitchGpuCopyMapping *source, *destination;
 	switch_gpu_backing_token completion;
 	tegra_gm20b_ce_done done;
@@ -26,6 +27,7 @@ struct Copier {
 	tgm_vm *vm;
 	tgm_chan *channel;
 	tgm_mem *push, *fence;
+	switch_gpu_mapping *pushMapping;
 	uint32_t *words;
 	volatile uint32_t *fenceCpu;
 	uint64_t pushPa, fenceGpu, fencePage, pages[Jobs];
@@ -46,6 +48,7 @@ void fenced(void *)
 
 void discardSpace()
 {
+	switch_gpu_vm_unmap(queue.vm, &queue.pushMapping);
 	tgm_vm_del(&queue.vm);
 	tgm_mem_del(&queue.fence);
 	tgm_mem_del(&queue.push);
@@ -70,8 +73,11 @@ bool openSpace()
 	tgm_vm_claim(queue.vm, &queue);
 	for (uint32_t i = 0; i < Jobs; ++i)
 		queue.pages[i] = queue.pushPa + i * Page;
+	// Volatile: the CPU rewrites a slot's push for every job, and a job whose surfaces nobody host-wrote is submitted
+	// with no L2 invalidate ahead of it (gpu.c chan_exec), so the host would fetch the slot's last push from L2 lines.
 	if (tgm_mem_new(queue.vm, queue.pages, Jobs, &queue.push) ||
-	    tgm_vm_map_ordered(queue.vm, PushVa, Page * Jobs, queue.push, 0, 0, 1, nullptr) ||
+	    switch_gpu_vm_map_volatile(queue.vm, PushVa, Page * Jobs, queue.push, 0, 0, 1, 1,
+				       &queue.pushMapping) ||
 	    tgm_mem_new(queue.vm, &queue.fencePage, 1, &queue.fence) ||
 	    tgm_vm_kmap(queue.vm, queue.fence, Page, &queue.fenceGpu))
 		goto fail;
@@ -104,6 +110,20 @@ int channel()
 	return 0;
 }
 
+#if DEVELOPMENT || DEBUG
+// What the CPU wrote for a failed job, beside the PBDMA's view of it in a PBENTRY report
+void logFailedPush(const Job &job, int result)
+{
+	const auto slot = uint32_t(&job - queue.jobs);
+	const uint32_t *push = queue.words + slot * (Page / 4);
+	char words[9 * 32 + 1] = "";
+	for (uint32_t i = 0, at = 0; i < job.dwords && i < 32; ++i)
+		at += uint32_t(snprintf(words + at, sizeof(words) - at, " %08x", push[i]));
+	IOLog("SwitchGpu: ce-copy job %llu failed (%d): slot %u at %#llx, %u words:%s\n",
+	      job.completion.value, result, slot, PushVa + slot * Page, job.dwords, words);
+}
+#endif
+
 void retire(thread_call_param_t, thread_call_param_t)
 {
 	tegra_gm20b_ce_done callbacks[Jobs];
@@ -120,8 +140,12 @@ void retire(thread_call_param_t, thread_call_param_t)
 			pending = true;
 			continue;
 		}
-		if (result < 0)
+		if (result < 0) {
 			queue.semanticFailed = true;
+#if DEVELOPMENT || DEBUG
+			logFailedPush(job, result);
+#endif
+		}
 		switch_gpu_copy_mapping_put(job.source);
 		switch_gpu_copy_mapping_put(job.destination);
 		switch_gpu_backing_token_release(&job.completion);
@@ -351,6 +375,7 @@ extern "C" int tegra_gm20b_ce_copy_plane_checked(
 			PushVa + slot * Page,
 			tgm_copy_push(queue.words + slot * (Page / 4), &copy, nullptr, 0), 0, 0, 0, 0};
 		result = submit(job, push, source, destination, ownership, events);
+		job.dwords = push.dwords;
 	}
 	if (!result) {
 		job.busy = true;

@@ -4,7 +4,13 @@
 #include <map>
 #include <memory>
 #include "switch_gpu_copy_stubs.h"
+
+inline void IOLog(const char *, ...)
+{
+}
+
 #include "drivers/TegraGM20B/TegraGM20BCopy.cpp"
+#include "gm20b_ce_model.h"
 
 struct tgm_vm {};
 
@@ -18,7 +24,7 @@ struct tgm_chan {
 };
 
 struct switch_gpu_mapping {
-	uint64_t address;
+	uint64_t address, bytes;
 };
 
 struct switch_gpu_backing {
@@ -26,10 +32,12 @@ struct switch_gpu_backing {
 	switch_gpu_backing_layout layout{};
 	uint64_t id = 0, generation = 1;
 	unsigned refs = 1;
+	std::vector<uint8_t> bytes = std::vector<uint8_t>(4 * 4096);
 };
 
 namespace
 {
+constexpr uint64_t PoolPa = 0x100000;
 tgm_vm space;
 tgm_chan gpu;
 volatile uint32_t fence;
@@ -41,6 +49,14 @@ uint32_t leaseCount;
 void (*irq)(void *);
 void *irqContext;
 std::map<uint64_t, switch_gpu_backing *> allocations;
+// The GPU as gpu.c drives it, for the tests that run what the queue submits: the host fetches each push through the
+// page table and the L2 (gm20b_gpu_memory.h), after the L2 invalidate chan_exec puts ahead of a submission that is not
+// explicit, is host-written, or follows a GPU-ordered map (the TLB invalidate's flush).
+bool emulate, mappedSinceExec;
+Memory memory;
+uint8_t *poolBytes;
+switch_gpu_mapping pushWindow;
+std::vector<CopyEngine::Syncpt> syncpts;
 
 void pump()
 {
@@ -62,8 +78,9 @@ void finish(int semantic = 1)
 
 extern "C" void *tgm_pool_alloc(uint64_t bytes, uint64_t, uint64_t *pa)
 {
-	*pa = 0x100000;
-	return calloc(1, size_t(bytes));
+	*pa = PoolPa;
+	poolBytes = static_cast<uint8_t *>(calloc(1, size_t(bytes)));
+	return poolBytes;
 }
 
 extern "C" void tgm_pool_free(void *va, uint64_t, uint64_t)
@@ -109,9 +126,13 @@ extern "C" void tgm_mem_del(tgm_mem **p)
 	*p = nullptr;
 }
 
-extern "C" int tgm_vm_map_ordered(tgm_vm *, uint64_t, uint64_t, tgm_mem *, uint64_t, uint8_t, int,
-				  uint8_t *)
+// Cacheable, as gpu.c's vm_map maps it with the L2 on (vol = !l2_on()).
+extern "C" int tgm_vm_map_ordered(tgm_vm *, uint64_t va, uint64_t bytes, tgm_mem *mem,
+				  uint64_t offset, uint8_t, int readOnly, uint8_t *)
 {
+	EXPECT_EQ(mem->pages[0], PoolPa);
+	memory.map(va, poolBytes + offset, bytes, readOnly != 0, true);
+	mappedSinceExec = true;
 	return 0;
 }
 
@@ -121,21 +142,40 @@ extern "C" int tgm_vm_kmap(tgm_vm *, tgm_mem *, uint64_t, uint64_t *va)
 	return 0;
 }
 
-extern "C" int switch_gpu_vm_map(tgm_vm *, uint64_t va, uint64_t, tgm_mem *, uint64_t, uint8_t, int,
-				 switch_gpu_mapping **out)
+// Cacheable unless volatile, as gpu.c maps with the L2 on.
+extern "C" int switch_gpu_vm_map_volatile(tgm_vm *, uint64_t va, uint64_t bytes, tgm_mem *mem,
+					  uint64_t offset, uint8_t, int readOnly, int vol,
+					  switch_gpu_mapping **out)
 {
+	mappedSinceExec = true;
+	if (mem->pages[0] == PoolPa) {
+		memory.map(va, poolBytes + offset, bytes, readOnly != 0, !vol);
+		pushWindow = {va, bytes};
+		*out = &pushWindow;
+		return 0;
+	}
 	++maps;
-	*out = new switch_gpu_mapping{va};
+	memory.map(va, allocations.at(mem->pages[0])->bytes, readOnly != 0, !vol);
+	*out = new switch_gpu_mapping{va, bytes};
 	return 0;
+}
+
+extern "C" int switch_gpu_vm_map(tgm_vm *vm, uint64_t va, uint64_t bytes, tgm_mem *mem,
+				 uint64_t offset, uint8_t kind, int readOnly, switch_gpu_mapping **out)
+{
+	return switch_gpu_vm_map_volatile(vm, va, bytes, mem, offset, kind, readOnly, 0, out);
 }
 
 extern "C" void switch_gpu_vm_unmap(tgm_vm *, switch_gpu_mapping **p)
 {
-	if (*p) {
+	if (!*p)
+		return;
+	memory.unmap((*p)->address, (*p)->bytes);
+	if (*p != &pushWindow) {
 		++unmaps;
 		delete *p;
-		*p = nullptr;
 	}
+	*p = nullptr;
 }
 
 extern "C" int tgm_chan_new_copy(tgm_vm *, const void *, volatile uint32_t *, uint64_t,
@@ -179,7 +219,7 @@ extern "C" void switch_gpu_chan_next_token(tgm_chan *, switch_gpu_backing_token 
 	*out = {gpu.submitted + 1, 1, SWITCH_GPU_ENGINE_GM20B, 1};
 }
 
-extern "C" int switch_gpu_chan_exec_visibility(tgm_chan *, const tgm_push *, uint32_t,
+extern "C" int switch_gpu_chan_exec_visibility(tgm_chan *, const tgm_push *push, uint32_t count,
 					       const switch_gpu_backing_token *, uint32_t,
 					       uint32_t *sequence, const tgm_prof *, uint32_t flags)
 {
@@ -192,6 +232,17 @@ extern "C" int switch_gpu_chan_exec_visibility(tgm_chan *, const tgm_push *, uin
 		int result = nextError;
 		nextError = 0;
 		return result;
+	}
+	if (emulate) {
+		if (!(flags & SWITCH_GPU_SUBMIT_VISIBILITY_EXPLICIT) ||
+		    (flags & SWITCH_GPU_SUBMIT_HOST_WRITTEN) || mappedSinceExec)
+			memory.invalidateL2();
+		mappedSinceExec = false;
+		EXPECT_EQ(count, 1u);
+		CopyEngine engine(memory);
+		engine.runAt(push->va, push->dwords);
+		EXPECT_FALSE(engine.fault);
+		syncpts.insert(syncpts.end(), engine.syncpts.begin(), engine.syncpts.end());
 	}
 	*sequence = ++gpu.submitted;
 	if (early) {
@@ -420,6 +471,9 @@ protected:
 		memoryCalls = memoryFailure = poolFrees = 0;
 		semanticStatus = 1;
 		locked = entered = early = capture = covered = false;
+		emulate = mappedSinceExec = false;
+		memory = Memory{};
+		syncpts.clear();
 		gpu = {};
 		allocations.clear();
 	}
@@ -479,12 +533,13 @@ protected:
 	int copy(std::pair<IOMemoryDescriptor *, switch_gpu_backing *> a,
 		 std::pair<IOMemoryDescriptor *, switch_gpu_backing *> b,
 		 uint64_t descriptorOffset = 0,
-		 const switch_gpu_copy_ownership *ownership = nullptr)
+		 const switch_gpu_copy_ownership *ownership = nullptr,
+		 const tegra_gm20b_ce_wait *wait = nullptr)
 	{
 		tegra_gm20b_ce_plane src = {a.first, descriptorOffset, 256},
 				     dst = {b.first, 0, 256};
 		tegra_gm20b_ce_done done = {TEGRA_GM20B_CE_NO_SYNCPT, callback, this};
-		return tegra_gm20b_ce_copy_plane_checked(&src, &dst, 256, 8, nullptr, &done,
+		return tegra_gm20b_ce_copy_plane_checked(&src, &dst, 256, 8, wait, &done,
 							 a.second, 0, b.second, 0, ownership,
 							 nullptr);
 	}
@@ -595,6 +650,39 @@ TEST_F(CheckedCopy, RejectedLaterStageKeepsAcceptedPrefixAlive)
 	EXPECT_EQ(calls, 0u);
 	finish();
 	EXPECT_EQ(calls, 1u);
+}
+
+// A VIC copy back (a syncpoint wait, then the rows) in the slot a shorter copy used last, with warm mappings and no
+// host-written surface: the host fetches what was written for it, not the last push's L2 lines and the zero words past
+// them (PBENTRY after that push's LAUNCH_DMA on the device).
+TEST_F(CheckedCopy, ARewrittenSlotIsFetchedAsWritten)
+{
+	emulate = true;
+	auto a = allocation(), b = allocation();
+	ASSERT_EQ(copy(a, b), 0);
+	finish();
+	const tegra_gm20b_ce_wait afterVic = {7, 3};
+	ASSERT_EQ(copy(a, b, 0, nullptr, &afterVic), 0);
+	ASSERT_EQ(syncpts.size(), 1u);
+	EXPECT_FALSE(syncpts[0].incr);
+	EXPECT_EQ(syncpts[0].id, 7u);
+	EXPECT_EQ(syncpts[0].threshold, 3u);
+}
+
+// The same push length in a rewritten slot: a stale fetch would run the slot's last copy again, and report success.
+TEST_F(CheckedCopy, ASameShapeCopyInARewrittenSlotMovesItsOwnPlanes)
+{
+	emulate = true;
+	auto a = allocation(), b = allocation();
+	std::fill(a.second->bytes.begin(), a.second->bytes.end(), 0xa1);
+	ASSERT_EQ(copy(a, b), 0);
+	finish();
+	EXPECT_EQ(b.second->bytes[0], 0xa1);
+	std::fill(a.second->bytes.begin(), a.second->bytes.end(), 0xc3);
+	ASSERT_EQ(copy(b, a), 0);
+	finish();
+	EXPECT_EQ(a.second->bytes[0], 0xa1);
+	EXPECT_EQ(b.second->bytes[0], 0xa1);
 }
 }
 

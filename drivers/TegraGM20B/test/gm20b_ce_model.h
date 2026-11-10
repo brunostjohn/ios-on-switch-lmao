@@ -166,7 +166,8 @@ struct CopyEngine {
 		for (uint32_t i = 0; i < n;) {
 			const uint32_t h = w[i++], op = h >> 29, count = (h >> 16) & 0x1fff,
 				       subc = (h >> 13) & 7, mthd = (h & 0xfff) << 2;
-			ASSERT_EQ(op, 1u) << "INC headers only";
+			ASSERT_EQ(op, 1u) << "INC headers only: the host raises PBENTRY on header "
+					  << std::hex << h << " at word " << std::dec << i - 1;
 			for (uint32_t k = 0; k < count; k++) {
 				method(subc, mthd + 4 * k, w[i++]);
 				if (fault)
