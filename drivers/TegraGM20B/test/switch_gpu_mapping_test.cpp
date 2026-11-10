@@ -171,3 +171,14 @@ TEST(GpuMapping, EverySubrangeCoversExactlyItsOwnedPages)
     }
 }
 }  // namespace
+
+TEST(GpuMapping, AlignedPhysicalInteriorCanStartAnIndependentBigView)
+{
+    const auto physical = pages(64, 0x80010000);
+    const auto runs = plan(physical, kVa, 16 * kPage, 48 * kPage);
+    ASSERT_EQ(runs.size(), 2u);
+    EXPECT_EQ(runs[0].shift, 17);
+    EXPECT_EQ(runs[0].bytes, kBig);
+    EXPECT_EQ(runs[1].shift, 12);
+    EXPECT_EQ(runs[1].bytes, 16 * kPage);
+}

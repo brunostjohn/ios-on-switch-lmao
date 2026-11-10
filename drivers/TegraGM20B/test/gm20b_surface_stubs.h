@@ -36,7 +36,9 @@ class IOMemoryDescriptor : public OSObject {
 public:
 	uint64_t bytes = 0;
 	std::vector<uint64_t> pages;
-	unsigned prepared = 0, completed = 0, outside = 0;
+	unsigned prepared = 0, completed = 0, outside = 0, cpuUsers = 0;
+	bool exclusive = false;
+    uint64_t generation = 1;
 	bool failPrepare = false;
 	uint64_t getLength() const { return bytes; }
 	int prepare() { if (failPrepare) return -1; ++prepared; return 0; }
@@ -65,4 +67,34 @@ namespace OriginalIOSurface { constexpr unsigned long baseOffset = 0x168, client
 namespace OriginalIOSurfaceClient { constexpr unsigned long sharedClient = 0x10, map = 0x20; }
 struct OriginalIOSurfaceRootUserClient {
 static constexpr unsigned long clientTableLock = 0x20, clientTable = 0x28, clientCapacity = 0x30, sharedClient = 0x38;
+};
+
+class SwitchMemoryAttachment {
+public:
+    static int enterExclusive(IOMemoryDescriptor *memory, bool)
+    {
+        if (memory->exclusive || memory->cpuUsers) return -16;
+        memory->exclusive = true;
+        memory->retain();
+        return 0;
+    }
+    static void leaveExclusive(IOMemoryDescriptor *memory)
+    {
+        memory->exclusive = false;
+        memory->release();
+    }
+    static uint32_t cpuUsers(IOMemoryDescriptor *memory) { return memory ? memory->cpuUsers : 0; }
+    static volatile uint64_t *generation(IOMemoryDescriptor *memory) { return memory ? &memory->generation : nullptr; }
+    static int enterCpu(IOMemoryDescriptor *memory, bool)
+    {
+        if (memory->exclusive) return -16;
+        ++memory->cpuUsers;
+        memory->retain();
+        return 0;
+    }
+    static void leaveCpu(IOMemoryDescriptor *memory)
+    {
+        --memory->cpuUsers;
+        memory->release();
+    }
 };

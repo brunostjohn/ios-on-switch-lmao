@@ -13,7 +13,9 @@
 #pragma once
 #include <stdint.h>
 
-#define TEGRA_SCANOUT_COPY_VERSION 3u
+#define TEGRA_SCANOUT_COPY_VERSION 4u
+#define SWITCH_SCANOUT_MAX_DEPENDENCIES 32u
+struct switch_gpu_backing_token;
 // flags: no copy; the completion only says the compositor's GPU work on the source is done (direct scanout: the display
 // scans the source itself, through the SMMU). target, targetBytes, targetPitch and blockHeightLog2 are ignored.
 #define TEGRA_SCANOUT_COPY_FENCE_ONLY 1u
@@ -50,6 +52,9 @@ struct TegraScanoutCopy {
     // The first page of another IOSurface the present also waits for the writers of, 0 for none (version 3): window B's
     // surface, when the GPU renders it and its change goes to the screen with this frame.
     uint64_t alsoWritten;
+    // Typed producers remain retained by the caller until admission; the GPU driver retains accepted dependencies.
+    const struct switch_gpu_backing_token *dependencies;
+    uint32_t dependencyCount;
 };
 
 #ifdef __cplusplus

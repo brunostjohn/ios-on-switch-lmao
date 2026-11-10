@@ -15,6 +15,7 @@ enum tgm_bind_op {
 	TGM_BIND_REPLACED, /* a VmBind Map over it */
 	TGM_BIND_FREED,    /* a BoFree of its BO */
 	TGM_BIND_REFUSED,  /* a VmBind Map the kernel refused: nothing is bound there */
+	TGM_BIND_GONE,     /* the PTEs of a retired binding removed, once the work that could use them completed */
 };
 
 enum tgm_bind_origin {
@@ -96,6 +97,8 @@ static inline const char *tgm_bind_op_name(uint8_t op)
 		return "unmapped by its BoFree";
 	case TGM_BIND_REFUSED:
 		return "map refused";
+	case TGM_BIND_GONE:
+		return "PTEs removed (retired)";
 	default:
 		return "?";
 	}

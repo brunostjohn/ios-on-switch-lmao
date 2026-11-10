@@ -46,6 +46,28 @@ int tegra_gm20b_ce_copy_plane(const struct tegra_gm20b_ce_plane *src,
 			      uint32_t rows, const struct tegra_gm20b_ce_wait *wait,
 			      const struct tegra_gm20b_ce_done *done);
 
+struct switch_gpu_backing;
+struct switch_gpu_event_submission;
+struct switch_gpu_cpu_lease;
+struct switch_gpu_backing_guard;
+
+struct switch_gpu_copy_ownership {
+	struct switch_gpu_cpu_lease *const *leases;
+	uint32_t lease_count;
+	const struct switch_gpu_backing_guard *guards;
+	uint32_t guard_count;
+};
+
+/* backing offsets identify each plane's first byte; the descriptor pages are checked against that retained allocation.
+ * Mappings persist between copies. A failed admission consumes no callback or signal reservation. */
+int tegra_gm20b_ce_copy_plane_checked(
+	const struct tegra_gm20b_ce_plane *src, const struct tegra_gm20b_ce_plane *dst,
+	uint32_t row_bytes, uint32_t rows, const struct tegra_gm20b_ce_wait *wait,
+	const struct tegra_gm20b_ce_done *done, struct switch_gpu_backing *src_backing,
+	uint64_t src_backing_offset, struct switch_gpu_backing *dst_backing,
+	uint64_t dst_backing_offset, const struct switch_gpu_copy_ownership *ownership,
+	const struct switch_gpu_event_submission *events);
+
 #ifdef __cplusplus
 }
 #endif

@@ -44,6 +44,7 @@ SWITCH_OBJECTS = {
         ("bsd/kern/kern_codesigning.c", "prelink/shims.c", [], ["12377.121.6"]),
     ],
     "iokit": [
+        ("iokit/Kernel/IOMemoryDescriptor.cpp", "iokit/memory_attachment.cpp", []),
         ("iokit/Kernel/IOUserClient.cpp", "iokit/iosurface.cpp", []),
     ],
     "osfmk": [

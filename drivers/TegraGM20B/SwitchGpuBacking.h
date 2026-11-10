@@ -53,6 +53,7 @@ struct switch_gpu_backing_plane {
 struct switch_gpu_backing_layout {
 	uint32_t format, plane_count;
 	uint32_t color_matrix, color_range, transfer, primaries;
+	uint32_t chroma_top, chroma_bottom;
 	struct switch_gpu_backing_plane planes[SWITCH_GPU_BACKING_MAX_PLANES];
 };
 
@@ -88,24 +89,67 @@ struct switch_gpu_backing_engine {
 };
 int switch_gpu_backing_register_engine(uint32_t engine,
 				      const struct switch_gpu_backing_engine *operations);
+int switch_gpu_backing_token_retain(const struct switch_gpu_backing_token *token);
+void switch_gpu_backing_token_release(const struct switch_gpu_backing_token *token);
 int switch_gpu_backing_token_status(const struct switch_gpu_backing_token *token);
 int switch_gpu_backing_token_wait(const struct switch_gpu_backing_token *token);
+struct switch_gpu_event_waits;
+struct switch_gpu_backing_semantics {
+    int (*snapshot)(const struct switch_gpu_backing_token *, struct switch_gpu_event_waits **);
+    int (*physical_status)(const struct switch_gpu_backing_token *, int external);
+    int (*pending)(void);
+};
+int switch_gpu_backing_register_semantics(uint32_t engine,
+    const struct switch_gpu_backing_semantics *operations);
+int switch_gpu_backing_has_semantics(void);
+int switch_gpu_backing_semantic_snapshot(const struct switch_gpu_backing_token *,
+    struct switch_gpu_event_waits **);
+/* Retirement of the semantic authority itself must observe physical completion, avoiding a self-dependency. */
+int switch_gpu_backing_token_physical_status(const struct switch_gpu_backing_token *, int external);
+struct switch_gpu_backing_visibility {
+	int (*status)(const struct switch_gpu_backing_token *);
+	int (*wait)(const struct switch_gpu_backing_token *);
+};
+int switch_gpu_backing_register_visibility(uint32_t engine,
+		const struct switch_gpu_backing_visibility *operations);
+/* External completion additionally promises DRAM visibility for CPU, host1x and display consumers. */
+int switch_gpu_backing_token_external_status(const struct switch_gpu_backing_token *token);
+int switch_gpu_backing_token_external_wait(const struct switch_gpu_backing_token *token);
+/* Call after publishing an engine completion or failure, outside its timeline lock. */
+void switch_gpu_backing_completed(void);
 
 struct switch_gpu_backing_use {
 	struct switch_gpu_backing *backing;
 	uint32_t access, reserved;
 };
 
+struct switch_gpu_backing_write_range {
+    struct switch_gpu_backing *backing;
+    uint64_t offset, bytes; /* bytes zero denotes an unqualified whole-backing write. */
+};
+
+int switch_gpu_backing_cpu_track(struct switch_gpu_backing *backing);
+
+enum { SWITCH_GPU_BACKING_STALE = -116, SWITCH_GPU_BACKING_DEPENDENCY_FAILED = -125 };
+
+/* The caller retains the generation word through commit/abort. Its owner changes it only under the logical
+ * backing's full CPU WRITE lease, including invalidation when replacing a descriptor's attachment. */
+struct switch_gpu_backing_guard {
+	struct switch_gpu_backing *backing;
+	const volatile uint64_t *generation;
+	uint64_t expected;
+};
+
 struct switch_gpu_backing_transaction {
 	struct switch_gpu_backing_use *uses;
-	uint32_t count, locked, prepared;
+	uint32_t count, locked, prepared, host_written;
 	struct switch_gpu_backing_token completion;
 };
 
 /* begin sorts/merges the caller's use array and locks its backings in allocation order. Keep those locks only through
  * dependency encoding and publication; every success must end with commit or abort. No token can be lost at commit.
  * Failed work fails no later use: its records retire as completed ones do, and what a failed writer wrote is undefined
- * (logged once). Nothing here, in dependencies, or in a CPU acquire or wait returns its errno.
+ * (logged once). Nothing here, in dependencies, or in a CPU acquire, wait or snapshot returns its errno.
  * An UNLISTED use is one the engine cannot vouch for (a legacy submission's private BOs and unlisted imports): CPU
  * access and the kernel's other engines still order after the job, as after a writer when WRITE is set, but no GM20B
  * job waits for it, it waits for nothing and CPU owners never refuse it.
@@ -121,11 +165,22 @@ int switch_gpu_backing_begin_conversion(struct switch_gpu_backing_use *uses, uin
 		struct switch_gpu_cpu_lease *const *leases, uint32_t lease_count,
 		const struct switch_gpu_backing_token *completion,
 		struct switch_gpu_backing_transaction *transaction);
+int switch_gpu_backing_begin_checked(struct switch_gpu_backing_use *uses, uint32_t count,
+		const struct switch_gpu_backing_guard *guards, uint32_t guard_count,
+		const struct switch_gpu_backing_token *completion,
+		struct switch_gpu_backing_transaction *transaction);
+int switch_gpu_backing_begin_conversion_checked(struct switch_gpu_backing_use *uses, uint32_t count,
+		struct switch_gpu_cpu_lease *const *leases, uint32_t lease_count,
+		const struct switch_gpu_backing_guard *guards, uint32_t guard_count,
+		const struct switch_gpu_backing_token *completion,
+		struct switch_gpu_backing_transaction *transaction);
 int switch_gpu_backing_dependencies(const struct switch_gpu_backing_transaction *transaction,
 				    struct switch_gpu_backing_token *out, uint32_t capacity,
 				    uint32_t *needed);
 void switch_gpu_backing_commit(struct switch_gpu_backing_transaction *transaction);
 void switch_gpu_backing_abort(struct switch_gpu_backing_transaction *transaction);
+int switch_gpu_backing_write_ranges(struct switch_gpu_backing_transaction *transaction,
+    struct switch_gpu_backing_write_range *ranges, uint32_t count);
 
 /* Readers wait for writers; writers wait for all users. DISCARD is valid only for a complete cache-line overwrite.
  * release cleans written lines before advancing content_generation and making the allocation available to engines.
@@ -139,7 +194,30 @@ int switch_gpu_backing_cpu_release(struct switch_gpu_backing *backing, uint64_t 
 int switch_gpu_backing_cpu_acquire_owned(struct switch_gpu_backing *backing, uint64_t offset,
 		uint64_t bytes, uint32_t access, struct switch_gpu_cpu_lease **lease);
 int switch_gpu_backing_cpu_release_owned(struct switch_gpu_cpu_lease **lease, int wrote);
+/* Reserves full-allocation ownership for an engine conversion without waiting for already-published GPU users.
+ * Only conversion transactions may discount this reservation; it never makes bytes directly CPU-accessible. */
+int switch_gpu_backing_conversion_reserve(struct switch_gpu_backing *backing, uint32_t access,
+        int avoid, struct switch_gpu_cpu_lease **lease);
+/* Pins the current published producer and excludes replacement without waiting for it. Engine consumers still use
+ * the backing transaction; this lease cannot authorize a conversion write or direct CPU access to pending bytes. */
+int switch_gpu_backing_export_read(struct switch_gpu_backing *backing,
+        struct switch_gpu_backing_token *producer, struct switch_gpu_cpu_lease **lease);
+/* A retained immutable physical view; a zero producer means current CPU-authored bytes, cleaned for engines. */
+int switch_gpu_backing_snapshot_read(struct switch_gpu_backing *backing,
+    struct switch_gpu_backing_token *producer, struct switch_gpu_cpu_lease **lease);
+/* Thread-context admission: sleeps only for CPU writers; a GPU producer remains a retained hardware dependency. */
+int switch_gpu_backing_snapshot_read_wait(struct switch_gpu_backing *backing,
+    struct switch_gpu_backing_token *producer, struct switch_gpu_cpu_lease **lease);
+/* Consumes a full owned NO_CACHE lease into an ordinary CPU reservation without dropping ownership or its backing pin.
+ * It waits for conversion and establishes CPU cache visibility; READ leases cannot become writable. */
+int switch_gpu_backing_cpu_transfer_owned(struct switch_gpu_backing *backing,
+        struct switch_gpu_cpu_lease **lease, uint32_t access);
+/* Adopt descriptor CPU locks that began before this allocation was imported; never invalidate their live bytes. */
+int switch_gpu_backing_cpu_adopt(struct switch_gpu_backing *backing, uint32_t readers, uint32_t writers);
 int switch_gpu_backing_cpu_publish(struct switch_gpu_backing *backing, uint64_t offset, uint64_t bytes);
+int switch_gpu_backing_cpu_publish_generation(struct switch_gpu_backing *backing,
+		struct switch_gpu_cpu_lease *lease, volatile uint64_t *generation,
+		uint64_t expected, uint64_t next);
 void switch_gpu_backing_cpu_cancel(struct switch_gpu_backing *backing, uint32_t access);
 int switch_gpu_backing_wait(struct switch_gpu_backing *backing, uint32_t access);
 

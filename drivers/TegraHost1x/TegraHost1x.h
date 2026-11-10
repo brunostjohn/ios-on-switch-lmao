@@ -83,6 +83,8 @@ int tegra_host1x_start(void);
 // Syncpoints this driver hands out (above the IDs the boot chain and Horizon use: hekate di.c waits on 9).
 int tegra_host1x_syncpt_alloc(uint32_t *id);
 uint32_t tegra_host1x_syncpt_read(uint32_t id);
+// Only after the exclusive producer stopped and retained completion records say failed; this never publishes success.
+int tegra_host1x_syncpt_release_failed(uint32_t id, uint32_t threshold, uint32_t max_increments);
 
 // Sleeps until syncpoint `id` reaches `threshold` (wrapping compare) or `timeoutUs` pass. A threshold interrupt that
 // is pending at the controller but never reaches the CPU panics (one line, with the GIC's state) once a client has

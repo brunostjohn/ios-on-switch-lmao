@@ -175,7 +175,8 @@ static int interleave(struct nvkm_device *device, struct nvkm_runl *runl)
 	runl->func = &rl[runl->id].func;
 	atomic_set(&runl->changed, 1);
 	mutex_unlock(&runl->mutex);
-	__atomic_fetch_add(&st.interleaved, 1, __ATOMIC_RELAXED);
+	if (TGM_STATS)
+		__atomic_fetch_add(&st.interleaved, 1, __ATOMIC_RELAXED);
 	return 1;
 }
 

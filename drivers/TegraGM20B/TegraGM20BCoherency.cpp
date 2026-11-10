@@ -46,6 +46,10 @@ struct tgm_coh {
 	uint64_t pa;      // the surface's first physical page
 	uint32_t surfaceId;
 	uint32_t refs;  // registry lock
+	bool parked;
+	switch_gpu_backing *backing;
+	void *surface;
+	void (*releaseSurface)(void *);
 	IOLock *lock;   // pas, npages: the cache ops and a larger import's list
 	uint64_t *pas;  // the largest page list imported for it
 	uint32_t npages;
@@ -122,22 +126,25 @@ void idUnlink(const tgm_coh *c)
 
 void entryFree(tgm_coh *c)
 {
+	switch_gpu_backing_release(c->backing);
+	if (c->releaseSurface)
+		c->releaseSurface(c->surface);
 	tgm_tiled_free(c->tiled);
 	IOLockFree(c->lock);
 	IODelete(c->pas, uint64_t, c->npages);
 	IODelete(c, tgm_coh, 1);
 }
 
-void release(tgm_coh *c)  // registry lock held
+bool release(tgm_coh *c)  // registry lock held
 {
 	if (--c->refs)
-		return;
+		return false;
 	tgm_coh **p = pageSlot(c->pa);
 	if (*p == c)
 		*p = c->next;
 	if (c->surfaceId)
 		idUnlink(c);
-	entryFree(c);
+	return true;
 }
 
 bool tiledNow(const tgm_coh *c)
@@ -151,22 +158,34 @@ bool tiledNow(const tgm_coh *c)
 // GPU client imports it any more, and a CPU lock finds no entry to move it for.
 void drop(tgm_coh *const *cs, uint32_t n)
 {
-	tgm_coh *last[kBatch];
-	uint32_t nlast = 0;
+	tgm_coh *last[kBatch], *dead[kBatch];
+	uint32_t nlast = 0, ndead = 0;
 	IOLockLock(gRegistryLock);
 	for (uint32_t i = 0; i < n; i++) {
-		if (cs[i]->refs == 1 && tiledNow(cs[i]) && nlast < kBatch) {
-			last[nlast++] = cs[i];
-		} else {
-			release(cs[i]);
+		auto *c = cs[i];
+		if (c->parked && c->refs == 2) {
+			c->parked = false;
+			--c->refs;
 		}
+		if (c->refs == 1 && tiledNow(c))
+			last[nlast++] = c;
+		else if (release(c))
+			dead[ndead++] = c;
 	}
 	IOLockUnlock(gRegistryLock);
+	for (uint32_t i = 0; i < ndead; ++i)
+		entryFree(dead[i]);
 	for (uint32_t i = 0; i < nlast; i++) {
-		tgm_tiled_untile(last[i]);
+		const int result = tgm_tiled_untile(last[i]);
 		IOLockLock(gRegistryLock);
-		release(last[i]);
+		bool destroy = false;
+		if (result && last[i]->refs == 1)
+			last[i]->parked = true;
+		else
+			destroy = release(last[i]);
 		IOLockUnlock(gRegistryLock);
+		if (destroy)
+			entryFree(last[i]);
 	}
 }
 
@@ -331,7 +350,10 @@ extern "C" struct tgm_coh *tgm_coherency_add(uint64_t pa, uint32_t surface_id, c
 		fresh = nullptr;
 	}
 	if (c) {
-		c->refs++;
+		if (c->parked)
+			c->parked = false;
+		else
+			c->refs++;
 		if (writable)
 			c->writable = 1;
 		if (gpu_writes)
@@ -360,6 +382,33 @@ extern "C" struct tgm_coh *tgm_coherency_add(uint64_t pa, uint32_t surface_id, c
 		IOLockUnlock(c->lock);
 	}
 	return c;
+}
+
+extern "C" int tgm_coherency_pin(struct tgm_coh *c, struct switch_gpu_backing *backing,
+				 void *surface, void (*release_surface)(void *))
+{
+	if (!c || !backing || (surface != nullptr) != (release_surface != nullptr))
+		return -22;
+	IOLockLock(c->lock);
+	const int result = c->backing && c->backing != backing ? -22 : 0;
+	if (!result && !c->backing) {
+		switch_gpu_backing_retain(backing);
+		c->backing = backing;
+	}
+	if (!result && surface && !c->surface) {
+		c->surface = surface;
+		c->releaseSurface = release_surface;
+		surface = nullptr;
+	}
+	IOLockUnlock(c->lock);
+	if (!result && surface)
+		release_surface(surface);
+	return result;
+}
+
+extern "C" int tgm_coh_pinned(const struct tgm_coh *c)
+{
+	return c->backing != nullptr;
 }
 
 extern "C" void tgm_coherency_cleaned(struct tgm_coh *c)

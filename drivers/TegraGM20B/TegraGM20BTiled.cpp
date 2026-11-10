@@ -59,7 +59,7 @@ Decision decide(tgm_coh *c, tgm_tiled &t, uint32_t width, uint32_t height, uint3
 {
 	if (!writes)
 		return PitchSampledFirst;
-	if (!tgm_coh_alone(c))
+	if (!tgm_coh_alone(c) || !tgm_coh_pinned(c))
 		return PitchShared;
 	const tgm_relayout_pages pages = tgm_coh_pages(c);
 	const uint64_t bytes = static_cast<uint64_t>(pages.npages) << 12;
@@ -135,11 +135,11 @@ extern "C" int tgm_coherency_layout(struct tgm_coh *c, uint32_t width, uint32_t 
 	return layout;
 }
 
-extern "C" void tgm_tiled_untile(struct tgm_coh *c)
+extern "C" int tgm_tiled_untile(struct tgm_coh *c)
 {
 	tgm_coh_lock(c);
 	tgm_tiled *t = __atomic_load_n(tgm_coh_tiled(c), __ATOMIC_ACQUIRE);
-	if (t && t->tiled) {
+	if (t && t->tiled && tgm_coh_alone(c)) {
 		const tgm_relayout_pages pages = tgm_coh_pages(c);
 		tgm_relayout_pages rows;
 		tgm_scratch *scratch =
@@ -157,6 +157,8 @@ extern "C" void tgm_tiled_untile(struct tgm_coh *c)
 			      "its texels were not "
 			      "moved back to rows (%d)\n",
 			      tgm_coh_surface_id(c), ret);
+			tgm_coh_unlock(c);
+			return ret;
 		}
 #if TGM_STATS
 		__atomic_fetch_sub(&gLive, 1, __ATOMIC_RELAXED);
@@ -166,6 +168,7 @@ extern "C" void tgm_tiled_untile(struct tgm_coh *c)
 		__atomic_sub_fetch(&gTiledLive, 1, __ATOMIC_ACQ_REL);
 	}
 	tgm_coh_unlock(c);
+	return 0;
 }
 
 extern "C" int tgm_tiled_any(void)

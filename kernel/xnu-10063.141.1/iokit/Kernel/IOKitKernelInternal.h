@@ -170,6 +170,10 @@ struct IOMemoryDescriptorReserved {
 	vm_tag_t                      userTag;
 	task_t                        creator;
 	OSObject                    * contextObject;
+	OSObject                    * switchAttachment;
+	uint32_t                      switchCpuUsers;
+	bool                          switchExclusive;
+	uint64_t                      switchGeneration;
 };
 
 #if defined(__x86_64__)

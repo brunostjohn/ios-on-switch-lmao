@@ -11,6 +11,7 @@
 #include <vector>
 #include <gtest/gtest.h>
 #include "drivers/TegraGM20B/TegraGM20BGpu.h"
+#include "drivers/TegraGM20B/TegraGM20BTiled.h"
 #include "drivers/TegraGM20B/TegraGM20BLayout.h"
 #include "drivers/TegraGM20B/TegraGM20BRelayout.h"
 #include "drivers/TegraGM20B/TegraGM20BTiled.h"
@@ -266,8 +267,10 @@ tgm_coh *add(uint64_t pa, uint32_t surfaceId, const uint64_t *pas, uint32_t npag
 	     int *covered = nullptr)
 {
 	int ignored = 0;
-	return tgm_coherency_add(pa, surfaceId, pas, npages, writable, writable,
-				 covered ? covered : &ignored);
+    auto *c = tgm_coherency_add(pa, surfaceId, pas, npages, writable, writable,
+        covered ? covered : &ignored);
+    EXPECT_EQ(tgm_coherency_pin(c, reinterpret_cast<switch_gpu_backing *>(1), nullptr, nullptr), 0);
+    return c;
 }
 
 tgm_coh *sampled(uint64_t pa, uint32_t surfaceId, const uint64_t *pas, uint32_t npages)
@@ -550,6 +553,68 @@ TEST_F(Coherency, TilingMovesStartOnAScratchWithNoCpuLines)
 	EXPECT_TRUE(gMoves[0].rowsClean);
 	EXPECT_EQ(gMoves[1].op, TGM_RELAYOUT_UNTILE_IN_PLACE);
 	EXPECT_TRUE(gMoves[1].rowsClean);
+}
+
+TEST_F(Coherency, FailedFinalUntileKeepsLayoutUntilSuccessfulRetry)
+{
+    const auto p = pages(0x85400000, 5);
+    auto *c = add(p[0], 35, p.data(), 5, 1);
+    ASSERT_EQ(tgm_coherency_layout(c, kW, kH, kBpp, kRow, 1), 1);
+    gMoveFails = true;
+    tgm_coherency_put(c);
+    EXPECT_TRUE(tegra_gm20b_surface_tiled(p[0]));
+    auto *next = add(p[0], 35, p.data(), 5, 1);
+    EXPECT_EQ(next, c);
+    EXPECT_EQ(tgm_coherency_layout(next, kW, kH, kBpp, kRow, 1), 1);
+    gMoveFails = false;
+    tgm_coherency_put(next);
+    EXPECT_FALSE(tegra_gm20b_surface_tiled(p[0]));
+}
+
+TEST_F(Coherency, ParkedLayoutRetainsActualSurfaceIdentityUntilUntile)
+{
+    const auto p = pages(0x85700000, 5);
+    auto *c = add(p[0], 38, p.data(), 5, 1);
+    unsigned releases = 0;
+    const auto released = [](void *owner) { ++*static_cast<unsigned *>(owner); };
+    ASSERT_EQ(tgm_coherency_pin(c, reinterpret_cast<switch_gpu_backing *>(1), &releases, released), 0);
+    ASSERT_EQ(tgm_coherency_layout(c, kW, kH, kBpp, kRow, 1), 1);
+    gScratchFails = true;
+    tgm_coherency_put(c);
+    EXPECT_EQ(releases, 0u);
+    auto *held = tgm_coh_find_pa(p[0]);
+    gScratchFails = false;
+    tgm_coherency_put(held);
+    EXPECT_EQ(releases, 1u);
+}
+
+TEST_F(Coherency, ImportArrivingBeforeFinalUntileKeepsItsLayout)
+{
+    const auto p = pages(0x85600000, 5);
+    auto *first = add(p[0], 37, p.data(), 5, 1);
+    ASSERT_EQ(tgm_coherency_layout(first, kW, kH, kBpp, kRow, 1), 1);
+    auto *second = add(p[0], 37, p.data(), 5, 1);
+    EXPECT_EQ(tgm_tiled_untile(first), 0);
+    EXPECT_TRUE(tegra_gm20b_surface_tiled(p[0]));
+    tgm_coherency_put(first);
+    EXPECT_EQ(tgm_coherency_layout(second, kW, kH, kBpp, kRow, 1), 1);
+    tgm_coherency_put(second);
+    EXPECT_FALSE(tegra_gm20b_surface_tiled(p[0]));
+}
+
+TEST_F(Coherency, ScratchFailureAtFinalDropKeepsRegistryReachable)
+{
+    const auto p = pages(0x85500000, 5);
+    auto *c = add(p[0], 36, p.data(), 5, 1);
+    ASSERT_EQ(tgm_coherency_layout(c, kW, kH, kBpp, kRow, 1), 1);
+    gScratchFails = true;
+    tgm_coherency_put(c);
+    ASSERT_TRUE(tegra_gm20b_surface_tiled(p[0]));
+    auto *held = tgm_coh_find_pa(p[0]);
+    ASSERT_EQ(held, c);
+    gScratchFails = false;
+    tgm_coherency_put(held);
+    EXPECT_FALSE(tegra_gm20b_surface_tiled(p[0]));
 }
 
 TEST_F(Coherency, PitchForGoodUnlessTheFirstAskerWritesItAlone)

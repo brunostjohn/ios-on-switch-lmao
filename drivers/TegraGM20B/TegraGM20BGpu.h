@@ -5,6 +5,7 @@
  */
 #ifndef TEGRA_GM20B_GPU_H
 #define TEGRA_GM20B_GPU_H
+#include <stddef.h>
 #include <stdint.h>
 #ifdef __cplusplus
 extern "C" {
@@ -50,7 +51,8 @@ int tgm_idle_now(void);
 void tgm_rail_moving(void);
 void tgm_rail_moved(int demand);
 /* One power-journal line (TegraGM20B.cpp: drivers/SwitchSuspend switch_power_journal). Thread context. */
-void tgm_journal(const char *fmt, ...) __attribute__((format(printf, 1, 2)));
+void tgm_journal_impl(const char *fmt, ...) __attribute__((format(printf, 1, 2)));
+#define tgm_journal(...) do { if (TGM_STATS) tgm_journal_impl(__VA_ARGS__); } while (0)
 int tgm_stage(void);
 void tgm_get_info(struct tgm_info *info);
 uint64_t tgm_timestamp_ns(void);
@@ -68,6 +70,7 @@ void tgm_waiter_unwoken(uint32_t waiter, uint32_t seq, uint32_t seqno);
 /* GPU memory pool (contiguous, write-combined in the kernel, below 4 GiB) */
 /* align: at least the VM page (0 for just that) */
 void *tgm_pool_alloc(uint64_t bytes, uint64_t align, uint64_t *pa);
+void *tgm_pool_alloc_ready(uint64_t bytes, uint64_t align, uint64_t reserve, uint64_t *pa);
 void tgm_pool_free(void *va, uint64_t bytes, uint64_t pa);
 /* A compressible BO's memory: `bytes` (a 128 KiB multiple) as zeroed 128 KiB-aligned 128 KiB chunks of the pool, in no
  * order and adjacent or not; `pas` gets every 4 KiB page. 0, or -ENOMEM with nothing taken.
@@ -91,6 +94,7 @@ int tgm_mem_new_waited(struct tgm_vm *vm, const uint64_t *pas, uint32_t npages,
 /* The same for pages no other memory object will ever name (a BO's own): such memory may take compressible kinds. */
 int tgm_mem_new_exclusive(struct tgm_vm *vm, const uint64_t *pas, uint32_t npages,
 			  struct tgm_mem **pmem);
+int tgm_mem_can_compress(const struct tgm_mem *mem);
 void tgm_mem_del(struct tgm_mem **pmem);
 /* User range [TGM_USER_VA_START, TGM_KERNEL_VA): raw binds. read_only: the GPU may only read the range (a write is an
  * MMU fault). tgm_vm_map and tgm_vm_unmap invalidate the L2 and the TLB before they return; tgm_vm_map_ordered (a
@@ -106,7 +110,39 @@ int tgm_vm_unmap_pages(struct tgm_vm *vm, uint64_t va, uint64_t range, uint8_t p
 struct switch_gpu_mapping;
 int switch_gpu_vm_map(struct tgm_vm *vm, uint64_t va, uint64_t range, struct tgm_mem *mem,
 	uint64_t offset, uint8_t kind, int read_only, struct switch_gpu_mapping **mapping);
+int switch_gpu_vm_map_volatile(struct tgm_vm *vm, uint64_t va, uint64_t range,
+	struct tgm_mem *mem, uint64_t offset, uint8_t kind, int read_only, int vol,
+	struct switch_gpu_mapping **mapping);
 void switch_gpu_vm_unmap(struct tgm_vm *vm, struct switch_gpu_mapping **mapping);
+/* Cuts [va, va + range) out of *mapping, made by switch_gpu_vm_map_volatile or _prepare of mem with kind, and consumes
+ * it, changing no PTE. What stays below and above the range comes back as *below and *above, the range's own entries as
+ * *taken (each NULL when empty). A 128 KiB page an edge cuts goes whole to *taken, keeping its PTE until *taken is
+ * unmapped; its part outside the range comes back in *below or *above as 4 KiB entries pending switch_gpu_vm_install,
+ * which the caller runs once that PTE is gone. A compressed mapping cut inside a 128 KiB page is refused, and on any
+ * error *mapping is untouched. */
+int switch_gpu_vm_split(struct tgm_vm *vm, struct switch_gpu_mapping **mapping, struct tgm_mem *mem,
+			uint8_t kind, int read_only, int vol, uint64_t va, uint64_t range,
+			struct switch_gpu_mapping **below, struct switch_gpu_mapping **taken,
+			struct switch_gpu_mapping **above);
+/* switch_gpu_vm_map_volatile's runs, every entry pending: no PTE is written until switch_gpu_vm_install. */
+int switch_gpu_vm_prepare(struct tgm_vm *vm, uint64_t va, uint64_t range, struct tgm_mem *mem,
+			  uint64_t offset, uint8_t kind, struct switch_gpu_mapping **mapping);
+/* Maps a mapping's pending entries (GPU-ordered, as switch_gpu_vm_map_volatile). One that cannot be mapped leaves the
+ * mapping, unmapped; -ENOMEM then. switch_gpu_vm_unmap skips pending entries. */
+int switch_gpu_vm_install(struct tgm_vm *vm, struct switch_gpu_mapping *mapping,
+			  struct tgm_mem *mem, uint8_t kind, int read_only, int vol);
+int switch_gpu_mapping_pending(const struct switch_gpu_mapping *mapping);
+/* whether any entry has PTEs */
+int switch_gpu_mapping_installed(const struct switch_gpu_mapping *mapping);
+/* The connection's bind epoch: while *cpu is behind target, every submission in vm first acquires (on the GPU) the
+ * word at va until it reaches target, then invalidates the TLB (switch_gpu bind epoch, SwitchGpuClientRetirement.h). */
+void tgm_vm_bind_wait(struct tgm_vm *vm, uint64_t va, const volatile uint32_t *cpu,
+		      uint32_t target);
+/* The VA range from a mapping's first entry to the end of its last. */
+int switch_gpu_mapping_span(const struct switch_gpu_mapping *mapping, uint64_t *va,
+			    uint64_t *bytes);
+/* "va+bytes/page shift" per entry, for a log line. */
+void switch_gpu_mapping_describe(const struct switch_gpu_mapping *mapping, char *out, size_t size);
 /* A zero-bandwidth-clear entry (ds, l2 as TegraGM20BAbiZbc has them): its table index, or -EINVAL (format), -ENOSPC
  * (table full), -ENODEV (no compression). */
 int tgm_zbc_add(int depth, uint32_t format, const uint32_t ds[4], const uint32_t l2[4]);
@@ -125,6 +161,8 @@ int tgm_vm_kmap(struct tgm_vm *vm, struct tgm_mem *mem, uint64_t bytes, uint64_t
  * panicking. */
 int tgm_chan_new(struct tgm_vm *vm, const void *vm_owner, volatile uint32_t *fence_cpu,
 		 uint64_t fence_gpu_va, const char *owner, int critical, struct tgm_chan **pchan);
+int tgm_chan_new_copy(struct tgm_vm *vm, const void *vm_owner, volatile uint32_t *fence_cpu,
+    uint64_t fence_gpu_va, const char *owner, int critical, struct tgm_chan **pchan);
 /* The channel's runlist level (TegraGM20BSchedPolicy.h enum tgm_level), from its connection's GPU priority: high makes it
  * the compositor's (its kicks preempt app work, the deadline's holds leave it, the compositor's timeslice). Serialized
  * with the channel's submissions. */
@@ -158,6 +196,8 @@ struct tgm_prof;
 int tgm_chan_exec(struct tgm_chan *chan, const struct tgm_push *push, uint32_t count,
 		  uint32_t *seqno, const struct tgm_prof *prof);
 struct switch_gpu_backing_token;
+uint64_t switch_gpu_chan_identity(struct tgm_chan *chan);
+void switch_gpu_chan_token(struct tgm_chan *chan, uint32_t seqno, struct switch_gpu_backing_token *token);
 void switch_gpu_chan_next_token(struct tgm_chan *chan, struct switch_gpu_backing_token *token);
 /* Enter before taking backing locks; leave after commit/abort. Room waits require those locks released. */
 void switch_gpu_chan_submit_enter(struct tgm_chan *chan);
@@ -167,6 +207,19 @@ int switch_gpu_chan_wait_submission_room(struct tgm_chan *chan, const struct tgm
 int switch_gpu_chan_exec(struct tgm_chan *chan, const struct tgm_push *push, uint32_t count,
 	const struct switch_gpu_backing_token *dependencies, uint32_t dependency_count,
 	uint32_t *seqno, const struct tgm_prof *prof);
+enum {
+	SWITCH_GPU_SUBMIT_VISIBILITY_EXPLICIT = 1u << 0,
+	SWITCH_GPU_SUBMIT_HOST_WRITTEN = 1u << 1,
+	SWITCH_GPU_SUBMIT_EXTERNAL_VISIBILITY = 1u << 2,
+    SWITCH_GPU_SUBMIT_FORCE_FENCE = 1u << 3,
+};
+int switch_gpu_chan_exec_visibility(struct tgm_chan *chan, const struct tgm_push *push, uint32_t count,
+	const struct switch_gpu_backing_token *dependencies, uint32_t dependency_count,
+	uint32_t *seqno, const struct tgm_prof *prof, uint32_t visibility);
+struct TegraGM20BAbiFenceSemantic;
+void switch_gpu_chan_semantic_visibility(struct tgm_chan *, volatile struct TegraGM20BAbiFenceSemantic *);
+void switch_gpu_chan_visibility(struct tgm_chan *chan, volatile uint32_t *visible_cpu,
+	uint64_t visible_gpu);
 void switch_gpu_fence_hold(const volatile uint32_t *fence);
 void switch_gpu_fence_put(const volatile uint32_t *fence);
 /* The stats' push profile (gpu.c "push profile"): `prof` (or NULL) names each push of a sampled submission by what it
@@ -217,6 +270,9 @@ int tgm_chan_order(struct tgm_chan *chan, uint32_t flags, uint32_t seqno, uint32
  * self-test passed, or under client fault isolation for a client's channel: an error on a kernel channel panics
  * (nvkm's report in the panic string). */
 uint32_t tgm_chan_error(struct tgm_chan *chan);
+/* The completed seqno, then whether the channel had failed by then: chan_killed publishes its error before it advances
+ * the fence over the work it abandoned, so a seqno read here with *failed 0 was executed. */
+uint32_t tgm_chan_settled(struct tgm_chan *chan, int *failed);
 /* For error 1: the GPU VA its MMU fault report names (0: none named). */
 uint64_t tgm_chan_fault_va(struct tgm_chan *chan);
 #if (defined(DEVELOPMENT) && DEVELOPMENT) || (defined(DEBUG) && DEBUG)
@@ -259,6 +315,8 @@ void tgm_fence_page_put(const volatile uint32_t *va);
 enum tgm_fence_kernel_channel {
 	TGM_FENCE_KERNEL_COPY,
 	TGM_FENCE_KERNEL_RELAYOUT,
+	TGM_FENCE_KERNEL_BRIDGE,
+	TGM_FENCE_KERNEL_CACHED_ZERO,
 	TGM_FENCE_KERNEL_CHANNELS,
 };
 
@@ -284,6 +342,10 @@ int tgm_present_copy(uint64_t src_va, uint64_t src_pa, uint64_t also_pa, uint64_
 		     int src_block, uint32_t width, uint32_t height, uint64_t dst_va,
 		     uint32_t dst_pitch, uint32_t block_height_log2, void (*done)(void *, int),
 		     void *arg);
+int tgm_present_copy_dependencies(uint64_t src_va, uint64_t src_pa, uint64_t also_pa, uint64_t stride,
+    int src_block, uint32_t width, uint32_t height, uint64_t dst_va, uint32_t dst_pitch,
+    uint32_t block_height_log2, void (*done)(void *, int), void *arg,
+    const struct switch_gpu_backing_token *dependencies, uint32_t dependency_count);
 int tgm_present_outstanding(const void *arg);
 /* Host import bookkeeping for the present: `pa` is the import's first page; add 1 when made, 0 when released. The
  * present waits only for address spaces that import its surface (src_pa, the surface's first page), when any does. */
@@ -308,6 +370,10 @@ struct tgm_coh *tgm_coherency_add(uint64_t pa, uint32_t surface_id, const uint64
 /* SurfaceWrites (method 15): every entry of the surface counts submissions as GPU writes from now on. */
 void tgm_coherency_gpu_writes(uint32_t surface_id);
 void tgm_coherency_cleaned(struct tgm_coh *c);
+struct switch_gpu_backing;
+/* Success consumes the supplied surface reference; it keeps a parked tiled identity from being recycled. */
+int tgm_coherency_pin(struct tgm_coh *c, struct switch_gpu_backing *backing,
+    void *surface, void (*release_surface)(void *));
 void tgm_coherency_put(struct tgm_coh *c);
 /* always: mark it even if the GPU only samples it (TegraGM20BPushImportsWritten). uid, seqno: the submission (channel
  * tgm_chan_uid, its fence seqno) that may have written it, which a CPU lock waits for. */
@@ -385,6 +451,9 @@ void tgm_relayout_by_cpu(const struct tgm_relayout_pages *surface,
 			 const struct tgm_relayout_pages *rows, const struct tgm_layout *layout,
 			 uint32_t bytes_per_row, int op, const struct tgm_relayout_writer *writers,
 			 uint32_t nwriters);
+/* With the stats: the moves the CPU made for the copy engine since the last call (tgm_relayout_by_cpu, and a relayout
+ * the CPU finished after a fault), and the surface bytes they covered. */
+void tgm_relayout_cpu_stats(uint64_t *moves, uint64_t *bytes);
 /* tgm_writer_wait for a kernel copy's submission that starts with semaphore acquires on `acquired` (in push order):
  * while one of them has not completed, the wait is late on that writer, which a long wait recovers, not on the copy. */
 void tgm_copy_wait(uint32_t uid, uint32_t seqno, const struct tgm_relayout_writer *acquired,
@@ -431,6 +500,12 @@ int tgm_present_copy_read(uint64_t src_va, uint64_t src_pa, uint64_t also_pa, ui
 			  int src_block, uint32_t width, uint32_t height, uint64_t dst_va,
 			  uint32_t dst_pitch, uint32_t block_height_log2, void (*done)(void *, int),
 			  void *arg, const struct tgm_present_read *reads, uint32_t nreads);
+int tgm_present_copy_read_dependencies(uint64_t src_va, uint64_t src_pa, uint64_t also_pa,
+    uint64_t stride, int src_block, uint32_t width, uint32_t height, uint64_t dst_va,
+    uint32_t dst_pitch, uint32_t block_height_log2, void (*done)(void *, int), void *arg,
+    const struct tgm_present_read *reads, uint32_t nreads,
+    const struct switch_gpu_backing_token *dependencies, uint32_t dependency_count);
+
 #endif
 /* The stats: one log line per 5 s of submissions (submits, fence latency, imports, pool, MC errors).
  * tgm_stats_import(+bytes, first page) for each host import made, (-bytes, first page) for each one released. */
@@ -512,6 +587,8 @@ void tgm_stats_prefault(uint64_t bytes);
 /* drivers/SwitchPower (gpu.c "idle clock"): switch_perf_hint's touch/missed-frame/launch hints (any context; back to
  * the run rate at once if idle), and the CPU governor's tick (scheduler context: loads, at most one work item). */
 void tegra_gm20b_perf_hint(unsigned int hint);
+/* A continuous-nanosecond service boundary, clamped to the next 20 ms. */
+void tegra_gm20b_perf_deadline_ns(uint64_t until);
 void tegra_gm20b_idle_tick(void);
 
 #ifdef __cplusplus

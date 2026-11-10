@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: MIT
 // A killed channel's records against later users of the same allocation (SwitchGpuOwnership.cpp): no later use fails, a
-// failed write is logged once per producer, and no record or timeline reference outlives its use.
+// failed write is logged once per producer, and no record or timeline reference outlives its use. A writer's record
+// stays while its write is the allocation's current content (the producer a snapshot or export names), as a completed
+// one does; the next write retires it.
 // A test that counts log lines kills a producer (queue) of its own: the log names each producer once per binary.
 #include <array>
 #include "switch_gpu_backing_fixture.h"
@@ -49,11 +51,15 @@ TEST_F(Backing, FailedWriterFailsNoReaderAndIsLoggedOnce)
 	kill_channel(writer);
 	const int logged = ioLogLines();
 	EXPECT_EQ(publish(allocation, kRead, token(2)), 0);
-	EXPECT_EQ(refs(writer), 0);
+	EXPECT_EQ(refs(writer), 1);
 	EXPECT_EQ(ioLogLines(), logged + 1);
 	EXPECT_EQ(publish(allocation, kRead, token(3)), 0);
 	EXPECT_EQ(publish(allocation, kRead | kWrite, token(4)), 0);
+	complete(token(2));
+	complete(token(3));
+	complete(token(4));
 	EXPECT_EQ(cpu_read(allocation), 0);
+	EXPECT_EQ(refs(writer), 0);
 	EXPECT_EQ(ioLogLines(), logged + 1);
 	switch_gpu_backing_release(allocation);
 }
@@ -65,7 +71,7 @@ TEST_F(Backing, FailedWriterFailsNoCpuReader)
 	ASSERT_EQ(publish(allocation, kWrite, writer), 0);
 	kill_channel(writer);
 	EXPECT_EQ(cpu_read(allocation), 0);
-	EXPECT_EQ(refs(writer), 0);
+	EXPECT_EQ(refs(writer), 1);
 	EXPECT_EQ(cpu_read(allocation), 0);
 	EXPECT_EQ(publish(allocation, kRead, token(2)), 0);
 	switch_gpu_backing_info info = {};
@@ -85,6 +91,9 @@ TEST_F(Backing, WritesAfterAFailedWriterRun)
 	EXPECT_EQ(cpu_write(cpu, 64, 64), 0);
 	EXPECT_EQ(publish(gpu, kRead, token(3)), 0);
 	EXPECT_EQ(publish(cpu, kRead, token(3)), 0);
+	complete(token(2));
+	complete(token(3));
+	EXPECT_EQ(publish(gpu, kRead, token(3, 2)), 0);
 	EXPECT_EQ(refs(writer), 0);
 	switch_gpu_backing_release(gpu);
 	switch_gpu_backing_release(cpu);
@@ -107,7 +116,7 @@ TEST_F(Backing, OneKilledProducerOfSeveralInputsIsLoggedOnceAndFailsNoReader)
 		switch_gpu_backing_begin(uses.data(), uint32_t(uses.size()), &reader, &transaction),
 		0);
 	switch_gpu_backing_commit(&transaction);
-	EXPECT_EQ(refs(writer), 0);
+	EXPECT_EQ(refs(writer), int(inputs.size()));
 	EXPECT_EQ(ioLogLines(), logged + 1);
 	for (auto *input : inputs)
 		switch_gpu_backing_release(input);
@@ -133,6 +142,10 @@ TEST_F(Backing, ProducerKilledAfterBeginIsNothingToWaitFor)
 	switch_gpu_backing_commit(&transaction);
 	complete(reader);
 	EXPECT_EQ(publish(allocation, kRead, token(2, 2)), 0);
+	EXPECT_EQ(refs(writer), 1);
+	complete(token(2, 2));
+	EXPECT_EQ(publish(allocation, kWrite, token(2, 3)), 0);
+	EXPECT_EQ(cpu_read(allocation), 0);
 	EXPECT_EQ(refs(writer), 0);
 	switch_gpu_backing_release(allocation);
 }
@@ -165,13 +178,14 @@ TEST_F(Backing, KillInOneProcessFailsNothingInAnother)
 	ASSERT_EQ(publish(shared, kRead, b), 0);
 	kill_channel(a);
 	EXPECT_EQ(publish(shared, kRead, token(2, 2)), 0);
-	EXPECT_EQ(refs(a), 2);
 	EXPECT_EQ(publish(drawn, kRead, token(2, 3)), 0);
-	EXPECT_EQ(refs(a), 1);
+	EXPECT_EQ(refs(a), 2);
 	EXPECT_EQ(cpu_read(drawn), 0);
 	complete(token(2, 3));
 	EXPECT_EQ(publish(shared, kWrite, token(2, 5)), 0);
 	EXPECT_EQ(publish(drawn, kWrite, token(2, 5)), 0);
+	complete(token(2, 5));
+	EXPECT_EQ(cpu_read(drawn), 0);
 	EXPECT_EQ(refs(a), 0);
 	switch_gpu_backing_release(drawn);
 	switch_gpu_backing_release(shared);

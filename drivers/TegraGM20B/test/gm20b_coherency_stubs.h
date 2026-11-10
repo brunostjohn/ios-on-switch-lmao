@@ -64,6 +64,9 @@ inline void *current_thread()
 
 inline void *current_task() { return current_thread(); }
 
+inline bool &failZeroAllocation() { static bool fail = false; return fail; }
+#define IONewZero(type, count) (failZeroAllocation() ? nullptr : new type[(count)]{})
+
 #define IONew(type, count) (new type[(count)])
 #define IODelete(ptr, type, count) (delete[] (ptr))
 

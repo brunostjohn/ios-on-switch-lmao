@@ -28,6 +28,7 @@ class OSObject;
 /* IOSurfaceRoot::lookupSurface(id, task): the surface, retained for the caller, or null */
 OSObject *tgm_surface_lookup(uint32_t id, void *task);
 OSObject *switch_gpu_surface_hold(uint32_t id, void *task, const uint64_t *pages, uint32_t count);
+const volatile uint64_t *switch_gpu_surface_generation(OSObject *surface);
 #endif
 /* Whether surface `id` (looked up for `task`) lies in its creator's own memory, or cannot be looked up: such a surface
  * stays pitch */
@@ -35,9 +36,24 @@ int tgm_surface_client_memory(uint32_t id, void *task);
 int switch_gpu_surface_pages_match(uint32_t id, void *task, const uint64_t *pages, uint32_t count);
 struct SwitchGpuSurfaceGeometry;
 struct switch_gpu_backing;
+struct switch_gpu_cpu_lease;
 int switch_gpu_surface_geometry(uint32_t id, void *task, const uint64_t *pages, uint32_t count,
 	struct SwitchGpuSurfaceGeometry *geometry);
 int switch_gpu_surface_backing(uint32_t id, void *task, struct switch_gpu_backing **backing);
+int switch_gpu_surface_prepare(uint32_t id, void *task, uint32_t options,
+        struct switch_gpu_backing **backing, struct switch_gpu_cpu_lease **owned, void **descriptor);
+int switch_gpu_surface_prepare_cpu(void *surface, uint32_t id, void *task, uint32_t access,
+        struct switch_gpu_backing **backing, struct switch_gpu_cpu_lease **owned, void **descriptor);
+int switch_gpu_surface_prepare_gpu(void *surface, uint32_t id, void *task, uint32_t access,
+        struct switch_gpu_backing **backing, struct switch_gpu_cpu_lease **owned, void **descriptor);
+int switch_gpu_surface_gpu_admission(void *surface, struct switch_gpu_backing *expected, uint32_t access);
+void switch_gpu_surface_finish(void *descriptor);
+int switch_gpu_surface_adopt(void *descriptor, struct switch_gpu_backing *backing);
+void switch_gpu_surface_idle(void *descriptor);
+uint32_t switch_gpu_surface_users(void *descriptor);
+void switch_gpu_surface_descriptor_hold(void *descriptor, int hold);
+int switch_gpu_surface_imported(void *surface, struct switch_gpu_backing *backing);
+int switch_gpu_surface_layout_exclusive(void *surface, int enter);
 /* Whether the user client behind a view still lives (its task may have died holding the lock) */
 int tgm_cpu_view_live(const struct tgm_cpu_view *view);
 void tgm_cpu_view_hold(struct tgm_cpu_view *view, int hold);

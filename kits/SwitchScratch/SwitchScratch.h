@@ -24,6 +24,8 @@ struct switch_scratch {
     uint64_t bytes;
     uint64_t idleSince;  // ns, while kept
     switch_scratch *next;
+    void *deviceBacking;
+    void (*releaseDeviceBacking)(void *);
 };
 
 // At least `bytes` (whole 64 KiB), charged to `owner`: a kept one that fits and is no more than twice as large, else a

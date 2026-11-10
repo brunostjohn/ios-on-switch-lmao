@@ -21,6 +21,7 @@
 #include <kern/thread.h>
 #include <string.h>
 #include "TegraHost1x.h"
+#include "SwitchHost1xFailureRelease.h"
 #include "../ArmGIC/SwitchInterrupts.h"
 #include "../../kits/SwitchCAR/SwitchCAR.h"
 #include "../../kits/SwitchDMA/SwitchDMABuffer.h"
@@ -295,6 +296,22 @@ extern "C" int tegra_host1x_syncpt_alloc(uint32_t *id)
 extern "C" uint32_t tegra_host1x_syncpt_read(uint32_t id)
 {
     return gHost && id < kSyncpts ? sync(SYNC_SYNCPT + 4 * id) : 0;
+}
+
+extern "C" int tegra_host1x_syncpt_release_failed(uint32_t id, uint32_t threshold, uint32_t max_increments)
+{
+    if (!gHost || !gSubmitLock)
+        return TEGRA_HOST1X_ENODEV;
+    IOLockLock(gSubmitLock);
+    struct Registers {
+        uint32_t read(uint32_t offset) { return sync(offset); }
+        void write(uint32_t offset, uint32_t value) { syncWrite(offset, value); }
+        void barrier() { __asm__ volatile("dsb sy" ::: "memory"); }
+    } registers;
+    const int result = gState == 1 ? switch_host1x_release_failed(registers, id, threshold, max_increments,
+        __atomic_load_n(&gNextSyncpt, __ATOMIC_ACQUIRE)) : TEGRA_HOST1X_ENODEV;
+    IOLockUnlock(gSubmitLock);
+    return result;
 }
 
 // Linux host1x_intr_add_fence order: threshold, then enable; the value is read again after arming so an increment

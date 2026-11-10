@@ -20,7 +20,13 @@ void nvxnu_log(const char *fmt, ...) __attribute__((format(printf, 1, 2)));
 /* Periodic statistics: the unified log only (os_log), never the boot console. */
 void nvxnu_stats(const char *fmt, ...) __attribute__((format(printf, 1, 2)));
 /* Bring-up trace: nvxnu_log, then 400 ms so the console draws the line before the next (possibly hanging) step. */
-void nvxnu_step(const char *fmt, ...) __attribute__((format(printf, 1, 2)));
+void nvxnu_step_impl(const char *fmt, ...) __attribute__((format(printf, 1, 2)));
+#if DEVELOPMENT || DEBUG
+#define NVXNU_DIAGNOSTICS 1
+#else
+#define NVXNU_DIAGNOSTICS 0
+#endif
+#define nvxnu_step(...) do { if (NVXNU_DIAGNOSTICS) nvxnu_step_impl(__VA_ARGS__); } while (0)
 /* Traced bring-up (a source-level switch, off): trace lines wait for the console (nvxnu_step 400 ms, 2 s before M1, 3 s
  * per stage) */
 int nvxnu_trace_paced(void);
@@ -159,10 +165,10 @@ void nvxnu_dcache_clean_inval_pa(nvxnu_u64 pa, nvxnu_u64 size);
 /* the same over `count` 4 KiB pages, with one barrier pair for the whole list instead of one per page */
 void nvxnu_dcache_clean_inval_pages(const nvxnu_u64 *pas, nvxnu_u32 count);
 
-/* A user raw map whose page-table writes the GPU orders (gpu.c vm_map, under gpu.lock): between begin and end, on the
+/* A user raw map whose page-table writes the GPU orders (SwitchGpuVmMap.h, under its VM lock): between begin and end, on the
  * calling thread only, nvkm skips the L2 invalidate after page-table writes and the MMU TLB invalidate. */
-void nvxnu_gpu_ordered_begin(void);
-void nvxnu_gpu_ordered_end(void);
+unsigned nvxnu_gpu_ordered_begin(void);
+void nvxnu_gpu_ordered_end(unsigned scope);
 int nvxnu_gpu_ordered(void);
 
 /* the system's page faults so far (every vm_fault) and the zero-filled ones among them (XNU's vm_stat counters); with the

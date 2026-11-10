@@ -30,3 +30,17 @@ static inline const Binding *switch_gpu_binding_find(const Binding *bindings, ui
 	const uint32_t after = switch_gpu_binding_upper(bindings, count, address);
 	return after && switch_gpu_binding_contains(bindings[after - 1], address, bytes) ? &bindings[after - 1] : nullptr;
 }
+
+template <typename Binding>
+static inline bool switch_gpu_binding_offset(const Binding &binding, uint64_t address,
+                                             uint64_t bytes, uint64_t &offset)
+{
+	if (!switch_gpu_binding_contains(binding, address, bytes) || !binding.bo ||
+	    binding.bo_offset > binding.bo->bytes)
+		return false;
+	const uint64_t relative = address - binding.va;
+	if (relative > binding.bo->bytes - binding.bo_offset)
+		return false;
+	offset = binding.bo_offset + relative;
+	return bytes <= binding.bo->bytes - offset;
+}

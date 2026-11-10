@@ -29,6 +29,8 @@ IOReturn charge(IOBufferMemoryDescriptor *memory, task_t owner)
 
 void destroy(switch_scratch *s)
 {
+    if (s->releaseDeviceBacking)
+        s->releaseDeviceBacking(s->deviceBacking);
     s->memory->complete();
     s->memory->release();
     IODelete(s->pas, uint64_t, s->npages);

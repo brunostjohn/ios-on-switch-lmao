@@ -1,0 +1,12 @@
+load("//bazel/lint:defs.bzl", "lint_files")
+load("//bazel/testing:defs.bzl", "host_test")
+
+lint_files()
+
+host_test(
+    name = "switch_host1x_release_test",
+    srcs = [
+        "switch_host1x_release_test.cpp",
+        "//drivers/TegraHost1x:SwitchHost1xFailureRelease.h",
+    ],
+)

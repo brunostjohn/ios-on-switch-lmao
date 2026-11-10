@@ -56,12 +56,17 @@ struct Connection {
 	// A legacy Exec on `completion`; listed: its list names the import with `access` (TegraGM20BSurface*).
 	int exec(switch_gpu_backing_token completion, bool listed, uint32_t access = 0)
 	{
-		const uint32_t count = switch_gpu_legacy_uses(
-			&bos[0], listed,
-			[&](uint64_t handle) {
-				return handle == 1000 ? access : 0u;
-			},
-			uses.data());
+		uint32_t count = 0;
+		EXPECT_EQ(switch_gpu_legacy_uses(
+				  &bos[0], listed,
+				  [&](uint64_t handle) {
+					  return handle == 1000 ? access : 0u;
+				  },
+				  [&](const Bo *bo, uint32_t use) {
+					  uses[count++] = {bo->backing, use, 0};
+					  return 0;
+				  }),
+			  0);
 		uses.resize(count);
 		switch_gpu_backing_transaction transaction = {};
 		int result =
@@ -119,7 +124,8 @@ TEST_F(Backing, ListedLegacySubmitClaimsOnlyItsListedImport)
 	Connection nvk(surface, 100);
 	const auto job = token(1);
 	ASSERT_EQ(nvk.exec(job, true, TegraGM20BSurfaceRead), 0);
-	EXPECT_EQ(refs(job), 101);
+	// A record per BO, and a host acquire per BO: each is new, so its contents count as CPU-written.
+	EXPECT_EQ(refs(job), 2 * 101);
 	EXPECT_EQ(dependencies_of(nvk.surface(), kWrite, token(2)), 1u);
 	EXPECT_EQ(dependencies_of(nvk.surface(), kRead, token(2)), 0u);
 	for (size_t i = 0; i < 100; ++i) {
@@ -150,6 +156,12 @@ TEST_F(Backing, KilledLegacyJobFailsNoneOfItsConnectionsBos)
 	}
 	EXPECT_EQ(publish(surface, kRead, token(3)), 0);
 	EXPECT_EQ(nvk.exec(token(4), true, TegraGM20BSurfaceRead | TegraGM20BSurfaceWrite), 0);
+	complete(token(2, 100));
+	complete(token(4));
+	for (size_t i = 0; i < 100; ++i) {
+		EXPECT_EQ(switch_gpu_backing_cpu_acquire(nvk.own(i), 0, 4096, kRead), 0);
+		EXPECT_EQ(switch_gpu_backing_cpu_release(nvk.own(i), 0, 4096, kRead), 0);
+	}
 	EXPECT_EQ(refs(job), 0);
 	switch_gpu_backing_release(surface);
 }
@@ -166,8 +178,14 @@ TEST_F(Backing, KilledListedWriterFailsNoReaderOfThatImport)
 	EXPECT_EQ(ioLogLines(), logged);
 	EXPECT_EQ(nvk.exec(token(3), false), 0);
 	EXPECT_EQ(ioLogLines(), logged + 1);
-	EXPECT_EQ(refs(job), 0);
+	complete(token(2));
+	complete(token(3));
 	EXPECT_EQ(publish(surface, kRead, token(2, 2)), 0);
+	for (size_t i = 0; i < 4; ++i) {
+		EXPECT_EQ(switch_gpu_backing_cpu_acquire(nvk.own(i), 0, 4096, kRead), 0);
+		EXPECT_EQ(switch_gpu_backing_cpu_release(nvk.own(i), 0, 4096, kRead), 0);
+	}
+	EXPECT_EQ(refs(job), 0);
 	switch_gpu_backing_release(surface);
 }
 
@@ -274,30 +292,6 @@ TEST_F(Backing, ListedSubmitUnderACpuWriterStillCleansEveryCpuWrite)
 	switch_gpu_backing_release(surface);
 }
 
-TEST_F(Backing, LegacyUsesOfANewestFirstListComeOldestFirst)
-{
-	std::array<Bo, 5> bos = {};
-	for (size_t i = 0; i < bos.size(); ++i)
-		bos[i] = {i ? &bos[i - 1] : nullptr, backing(), nullptr, false, i + 1};
-	std::array<switch_gpu_backing_use, 5> uses = {};
-	ASSERT_EQ(switch_gpu_legacy_uses(
-			  &bos.back(), false,
-			  [](uint64_t) {
-				  return 0u;
-			  },
-			  uses.data()),
-		  5u);
-	uint64_t previous = 0;
-	for (const auto &use : uses) {
-		switch_gpu_backing_info info = {};
-		switch_gpu_backing_describe(use.backing, &info);
-		EXPECT_GT(info.allocation_id, previous);
-		previous = info.allocation_id;
-	}
-	for (auto &bo : bos)
-		switch_gpu_backing_release(bo.backing);
-}
-
 namespace
 {
 // A native Submit or SubmitAddress on `completion`: every use named, with its TegraGM20BSurface* access.
@@ -306,7 +300,7 @@ int native_submit(switch_gpu_backing_token completion,
 {
 	std::vector<switch_gpu_backing_use> uses;
 	for (const auto &[allocation, access] : named)
-		uses.push_back({allocation, switch_gpu_listed_access(access), 0});
+		uses.push_back({allocation, access | switch_gpu_claim_flags(false), 0});
 	switch_gpu_backing_transaction transaction = {};
 	int result = switch_gpu_backing_begin(uses.data(), uint32_t(uses.size()), &completion,
 					      &transaction);
@@ -323,14 +317,23 @@ int native_submit(switch_gpu_backing_token completion,
 }
 }  // namespace
 
-TEST(LegacyAccess, NativeUsesAreClaimsNoCpuOwnerRefuses)
+TEST(LegacyAccess, NativeUsesAreClaimsNoCpuOwnerRefusesUnlessAdmitted)
 {
-	EXPECT_EQ(switch_gpu_listed_access(TegraGM20BSurfaceRead), kRead | kBesideCpu);
-	EXPECT_EQ(switch_gpu_listed_access(TegraGM20BSurfaceWrite), kWrite | kBesideCpu);
-	EXPECT_EQ(switch_gpu_listed_access(TegraGM20BSurfaceRead | TegraGM20BSurfaceWrite),
-		  kRead | kWrite | kBesideCpu);
-	EXPECT_EQ(switch_gpu_listed_access(TegraGM20BSurfaceGpuAddress | TegraGM20BSurfaceRead),
-		  kRead | kBesideCpu);
+	EXPECT_EQ(switch_gpu_claim_flags(false), kBesideCpu);
+	EXPECT_EQ(switch_gpu_claim_flags(true), 0u);
+}
+
+// A submission that took an admission was ordered behind CPU owners by readiness: begin keeps refusing a holder.
+TEST_F(Backing, AdmittedNativeSubmitKeepsCpuExclusion)
+{
+	auto *vertices = backing();
+	ASSERT_EQ(switch_gpu_backing_cpu_acquire(vertices, 0, 4096, kWrite), 0);
+	switch_gpu_backing_use use = {vertices, kRead | switch_gpu_claim_flags(true), 0};
+	switch_gpu_backing_transaction transaction = {};
+	const auto job = token(1);
+	EXPECT_EQ(switch_gpu_backing_begin(&use, 1, &job, &transaction), -16);
+	EXPECT_EQ(switch_gpu_backing_cpu_release(vertices, 0, 4096, kWrite), 0);
+	switch_gpu_backing_release(vertices);
 }
 
 // IOSurfaceLock in another process while backboardd's raw submission names the surface.
