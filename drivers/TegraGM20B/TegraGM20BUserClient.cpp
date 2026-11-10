@@ -469,6 +469,18 @@ void spareWork(thread_call_param_t param, thread_call_param_t)
 			const int result = switch_gpu_cached_zero(s->pas, uint32_t(s->bytes >> 12),
 								  s->bmd->getBytesNoCopy(),
 								  &s->mapping, spareZeroed, s);
+			if (result == -16) {
+				// every scrub slot busy: a retiring scrub's completion runs this again
+				IOLockLock(p->lock);
+				--p->zeroing[spareClass(s->bytes)];
+				p->cleaningBytes -= s->bytes;
+				p->clean -= s->bytes;
+				s->next = p->dirty;
+				p->dirty = s;
+				p->dirtyBytes += s->bytes;
+				IOLockUnlock(p->lock);
+				return;
+			}
 			if (result)
 				spareZeroed(s, result);
 			continue;

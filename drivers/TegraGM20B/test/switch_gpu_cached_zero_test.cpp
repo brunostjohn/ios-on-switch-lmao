@@ -406,23 +406,47 @@ TEST_F(CachedZero, DuplicateInFlightClearIsRefusedWithoutReusingItsPush)
 	EXPECT_EQ(a.callbacks, 1u);
 }
 
-TEST_F(CachedZero, FullQueueSleepsUntilInterruptRetirementRatherThanPolling)
+// The spare worker is one thread call: a full queue answers Busy at once, and a retiring scrub's completion runs it again.
+TEST_F(CachedZero, FullQueueAnswersBusyWithoutSleepingAndRetirementLetsTheNextIn)
 {
 	std::vector<std::unique_ptr<Allocation>> a;
 	for (unsigned i = 0; i < 9; ++i)
 		a.push_back(std::make_unique<Allocation>());
 	for (unsigned i = 0; i < 8; ++i)
 		ASSERT_EQ(a[i]->submit(), 0);
-	auto submit = std::async(std::launch::async, [&] {
-		return a[8]->submit();
-	});
-	switch_zero_sleepers.wait(0);
-	EXPECT_EQ(switch_zero_sleepers.load(), 1u);
+	EXPECT_EQ(a[8]->submit(), -16);
+	EXPECT_EQ(switch_zero_sleepers.load(), 0u);
 	finish();
-	EXPECT_EQ(submit.get(), 0);
+	EXPECT_EQ(a[8]->submit(), 0);
 	finish();
 	for (const auto &item : a)
 		EXPECT_EQ(item->callbacks, 1u);
+}
+
+// Spares keep their window between scrubs; when every window is taken, an idle one goes, least recently used first.
+TEST_F(CachedZero, IdleWindowsGoLeastRecentlyUsedFirstWhenEveryWindowIsTaken)
+{
+	std::vector<std::unique_ptr<Allocation>> a;
+	for (unsigned i = 0; i < 65; ++i)
+		a.push_back(std::make_unique<Allocation>(1));
+	for (unsigned i = 0; i < 64; ++i) {
+		ASSERT_EQ(a[i]->submit(), 0);
+		finish();
+	}
+	ASSERT_EQ(a[0]->submit(), 0);
+	finish();
+	const unsigned unmapped = unmaps, mapped = maps;
+	ASSERT_EQ(a[64]->submit(), 0);
+	finish();
+	EXPECT_EQ(unmaps, unmapped + 1);
+	EXPECT_EQ(maps, mapped + 1);
+	ASSERT_EQ(a[0]->submit(), 0);
+	finish();
+	EXPECT_EQ(maps, mapped + 1);
+	ASSERT_EQ(a[1]->submit(), 0);
+	finish();
+	EXPECT_EQ(maps, mapped + 2);
+	EXPECT_EQ(a[1]->result, 0);
 }
 
 TEST_F(CachedZero, DeadlineChecksProgressWithoutPublishingAnUnfinishedScrub)
@@ -459,8 +483,8 @@ TEST_F(CachedZero, MappedByteBudgetIsBoundedAndReleasedMappingsRestoreCapacity)
 	ASSERT_EQ(b.submit(), 0);
 	EXPECT_EQ(c.submit(), -28);
 	finish(false, false);
-	switch_gpu_cached_mapping_drop(&a.mapping);
 	ASSERT_EQ(c.submit(), 0);
 	finish();
+	switch_gpu_cached_mapping_drop(&a.mapping);
 }
 }  // namespace

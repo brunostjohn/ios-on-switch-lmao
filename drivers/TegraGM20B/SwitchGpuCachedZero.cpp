@@ -14,9 +14,9 @@ struct switch_gpu_cached_mapping {
 	tgm_mem *memory;
 	switch_gpu_mapping *mapping;
 	uint64_t *pages;
-	uint64_t bytes, address;
+	uint64_t bytes, address, used;
 	uint32_t count, slot;
-	bool pending;
+	bool pending, mapped;
 };
 
 namespace
@@ -42,7 +42,8 @@ struct Queue {
 	tgm_mem *push, *fence;
 	uint32_t *words;
 	volatile uint32_t *fenceCpu;
-	uint64_t fenceGpu, fencePage, pushPage, mappedBytes, slots, armed;
+	uint64_t fenceGpu, fencePage, pushPage, mappedBytes, slots, armed, uses;
+	switch_gpu_cached_mapping *owners[64];  // by slot: what each mapped window holds
 	Job jobs[kJobs];
 } queue;
 
@@ -81,8 +82,6 @@ void retire(thread_call_param_t, thread_call_param_t)
 		finished[count++] = job;
 		job = {};
 	}
-	if (count)
-		IOLockWakeup(queue.lock, &queue.jobs, false);
 	arm();
 	IOLockUnlock(queue.lock);
 	for (uint32_t i = 0; i < count; ++i) {
@@ -190,25 +189,69 @@ int channel()
 	return 0;
 }
 
-void drop(switch_gpu_cached_mapping *mapping)
+void unmapWindow(switch_gpu_cached_mapping *mapping)
 {
+	if (!mapping->mapped)
+		return;
 	switch_gpu_vm_unmap(queue.vm, &mapping->mapping);
 	tgm_mem_del(&mapping->memory);
 	queue.mappedBytes -= mapping->bytes;
 	queue.slots &= ~(1ULL << mapping->slot);
+	queue.owners[mapping->slot] = nullptr;
+	mapping->mapped = false;
+}
+
+void drop(switch_gpu_cached_mapping *mapping)
+{
+	unmapWindow(mapping);
 	IODelete(mapping->pages, uint64_t, mapping->count);
 	IODelete(mapping, switch_gpu_cached_mapping, 1);
+}
+
+// Spares keep their window between scrubs; a window nothing is scrubbing goes, least recently used first, when a scrub
+// needs its room. Its owner maps again at its next scrub.
+bool evictIdle(const switch_gpu_cached_mapping *keep)
+{
+	switch_gpu_cached_mapping *oldest = nullptr;
+	for (auto *owner : queue.owners)
+		if (owner && owner != keep && !owner->pending && (!oldest || owner->used < oldest->used))
+			oldest = owner;
+	if (oldest)
+		unmapWindow(oldest);
+	return oldest != nullptr;
+}
+
+int mapWindow(switch_gpu_cached_mapping *mapping)
+{
+	while (queue.slots == UINT64_MAX || mapping->bytes > kMappedLimit - queue.mappedBytes)
+		if (!evictIdle(mapping))
+			return -28;
+	mapping->slot = uint32_t(__builtin_ctzll(~queue.slots));
+	mapping->address = (1ULL << 32) + uint64_t(mapping->slot) * kWindow;
+	queue.slots |= 1ULL << mapping->slot;
+	queue.owners[mapping->slot] = mapping;
+	queue.mappedBytes += mapping->bytes;
+	mapping->mapped = true;
+	int result = tgm_mem_new(queue.vm, mapping->pages, mapping->count, &mapping->memory);
+	if (!result)
+		result = switch_gpu_vm_map_volatile(queue.vm, mapping->address, mapping->bytes,
+						    mapping->memory, 0, 0, 0, 1, &mapping->mapping);
+	if (result)
+		unmapWindow(mapping);
+	return result;
 }
 
 int prepare(const uint64_t *pages, uint32_t count, switch_gpu_cached_mapping **out)
 {
 	const uint64_t bytes = uint64_t(count) << 12;
-	if (*out)
-		return (*out)->count == count &&
-				       !memcmp((*out)->pages, pages, size_t(count) * sizeof(*pages))
-			       ? 0
-			       : -22;
-	if (queue.slots == UINT64_MAX || bytes > kMappedLimit - queue.mappedBytes)
+	if (*out) {
+		if ((*out)->count != count ||
+		    memcmp((*out)->pages, pages, size_t(count) * sizeof(*pages)))
+			return -22;
+		(*out)->used = ++queue.uses;
+		return (*out)->mapped ? 0 : mapWindow(*out);
+	}
+	if (bytes > kMappedLimit)
 		return -28;
 	auto *mapping = IONew(switch_gpu_cached_mapping, 1);
 	if (!mapping)
@@ -222,14 +265,8 @@ int prepare(const uint64_t *pages, uint32_t count, switch_gpu_cached_mapping **o
 	memcpy(mapping->pages, pages, size_t(count) * sizeof(*pages));
 	mapping->bytes = bytes;
 	mapping->count = count;
-	mapping->slot = uint32_t(__builtin_ctzll(~queue.slots));
-	mapping->address = (1ULL << 32) + uint64_t(mapping->slot) * kWindow;
-	queue.slots |= 1ULL << mapping->slot;
-	queue.mappedBytes += bytes;
-	int result = tgm_mem_new(queue.vm, mapping->pages, count, &mapping->memory);
-	if (!result)
-		result = switch_gpu_vm_map_volatile(queue.vm, mapping->address, bytes, mapping->memory,
-						    0, 0, 0, 1, &mapping->mapping);
+	mapping->used = ++queue.uses;
+	const int result = mapWindow(mapping);
 	if (result) {
 		drop(mapping);
 		return result;
@@ -253,15 +290,12 @@ int switch_gpu_cached_zero(const uint64_t *pages, uint32_t count, void *cpu,
 		result = prepare(pages, count, mapping);
 	if (!result && (*mapping)->pending)
 		result = -16;
-	unsigned slot = kJobs;
-	while (!result) {
-		for (slot = 0; slot < kJobs && queue.jobs[slot].mapping; ++slot) {
-		}
-		if (slot != kJobs)
-			break;
-		IOLockSleep(queue.lock, &queue.jobs, THREAD_UNINT);
-		result = channel();
-	}
+	// Every job slot busy: the caller tries again when a scrub retires (its completion), never sleeping here.
+	unsigned slot = 0;
+	while (!result && slot < kJobs && queue.jobs[slot].mapping)
+		++slot;
+	if (!result && slot == kJobs)
+		result = -16;
 	if (!result) {
 		// No task or producer can access this allocation. Discard old cached CPU bytes before CE overwrites it.
 		switch_dcache_invalidate(cpu, size_t(count) * kPage);
