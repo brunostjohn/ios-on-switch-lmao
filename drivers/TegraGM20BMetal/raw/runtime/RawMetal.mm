@@ -245,6 +245,7 @@ dispatch_queue_t followingRootQueue()
 {
     static const dispatch_queue_global_t root =
         dispatch_pthread_root_queue_create("com.brunostjohn.switch.raw.following", 0, nullptr, ^{
+            pthread_setname_np("com.brunostjohn.switch.raw.following");
             pthread_set_qos_class_self_np(QOS_CLASS_USER_INTERACTIVE, 0);
             raw::followers().join();
         });
