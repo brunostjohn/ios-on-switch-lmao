@@ -8,7 +8,9 @@
 #include "raw_samples.h"
 
 // ---- the tape onto the raw path ----
-// false: something in it the raw path cannot do after all (*why); nothing of it was submitted then
+// false: something in it the raw path cannot do after all (*why); nothing of it was submitted then. A refusal inside one
+// encoder names that encoder's first command in *refusedEncoder; one no encoder owns (the channel's, the kernel's, a planar
+// texture sampled and rendered across the range) leaves it alone.
 // The host imports a texture's memory lies in, named to the submission (raw::CommandBuffer::use): a surface's or a planar
 // texture's planes, a buffer texture's buffer's, a view's parent's; and a YCbCr texture's planes, which only its conversion
 // reads (its image is pool memory).
@@ -32,7 +34,8 @@ void useBuffer(raw::CommandBuffer *rc, RMBuffer *b, bool write)
         rc->use(b->_raw, write);
 }
 
-static bool encodeRawAttempt(RMCommandBuffer *cb, size_t from, size_t to, const char **why, bool &stale)
+static bool encodeRawAttempt(RMCommandBuffer *cb, size_t from, size_t to, const char **why, bool &stale,
+                             size_t *refusedEncoder)
 {
     raw::Device &d = *gRM->raw;
     raw::CommandBuffer *rc = d.begin();
@@ -105,10 +108,13 @@ static bool encodeRawAttempt(RMCommandBuffer *cb, size_t from, size_t to, const 
     raw::StateCursor stateCursor;
     size_t renderBegin = to;
     bool continuing = false;
+    size_t encoder = to;
 
     auto fail = [&](RMPred p, const char *w, uint64_t a = 0, uint64_t b = 0) {
         *why = w;
         hit(cb, p, a, b);
+        if (encoder < to)
+            *refusedEncoder = encoder;
         rc->abandon();
         return false;
     };
@@ -119,6 +125,8 @@ static bool encodeRawAttempt(RMCommandBuffer *cb, size_t from, size_t to, const 
         const raw::Refusal &f = rc->refusal;
         hit(cb, f.id < sizeof map / sizeof *map ? map[f.id] : PredEncPassRender, f.a,
             uint64_t(f.b) | uint64_t(f.c) << 32);
+        if (encoder < to)
+            *refusedEncoder = encoder;
         rc->abandon();
         return false;
     };
@@ -364,6 +372,8 @@ static bool encodeRawAttempt(RMCommandBuffer *cb, size_t from, size_t to, const 
     };
     for (size_t at = from; at < to; at++) {
         const Cmd c = cb->_plan.legacy(at);
+        if (c.op == OpRender || c.op == OpCompute || c.op == OpBlit)
+            encoder = at;
         if (c.op == OpDispatch) {
             const auto &dispatch = cb->_plan.dispatch(at);
             const auto *kernels = static_cast<const raw::ComputeKernelSet<raw::ComputeState> *>(dispatch.kernel);
@@ -599,6 +609,7 @@ static bool encodeRawAttempt(RMCommandBuffer *cb, size_t from, size_t to, const 
     for (RMTexture *t : standInStores)
         if (standInPass(t, true))
             return false;
+    encoder = to;
     uint32_t seq = 0;
     prepareSharedEvents(cb, rc);
     if (!rc->commit(seq)) {
@@ -649,7 +660,7 @@ static bool encodeRawAttempt(RMCommandBuffer *cb, size_t from, size_t to, const 
     return true;
 }
 
-bool encodeRaw(RMCommandBuffer *cb, size_t from, size_t to, const char **why)
+bool encodeRaw(RMCommandBuffer *cb, size_t from, size_t to, const char **why, size_t *refusedEncoder)
 {
     if (RMTexture *feedback = (__bridge RMTexture *)cb->_plan.nativeRangeRefusal(from, to)) {
         *why = "a planar texture sampled and rendered in one command buffer";
@@ -658,7 +669,7 @@ bool encodeRaw(RMCommandBuffer *cb, size_t from, size_t to, const char **why)
     }
     for (unsigned attempt = 0; attempt < 3; ++attempt) {
         bool stale = false;
-        if (encodeRawAttempt(cb, from, to, why, stale))
+        if (encodeRawAttempt(cb, from, to, why, stale, refusedEncoder))
             return true;
         if (!stale)
             return false;

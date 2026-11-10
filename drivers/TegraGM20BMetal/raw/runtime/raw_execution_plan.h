@@ -66,4 +66,20 @@ public:
     }
 };
 
+// A native range whose encoder [from, to) the raw path refused while encoding it: that encoder alone goes to m2v, and
+// the encoders before and after it stay native, each side a range of its own. An encoder not inside the range, or
+// none, sends the whole range to m2v.
+inline std::vector<ExecutionRange> isolate(const ExecutionRange &range, size_t from, size_t to)
+{
+    if (from < range.from || to > range.to || from >= to)
+        return {{range.from, range.to, ExecutionKind::compatibility}};
+    std::vector<ExecutionRange> parts;
+    if (range.from < from)
+        parts.push_back({range.from, from, ExecutionKind::native});
+    parts.push_back({from, to, ExecutionKind::compatibility});
+    if (to < range.to)
+        parts.push_back({to, range.to, ExecutionKind::native});
+    return parts;
+}
+
 }  // namespace raw
