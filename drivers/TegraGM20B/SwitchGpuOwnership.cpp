@@ -62,10 +62,24 @@ int switch_gpu_backing_take_failure_locked(switch_gpu_backing *backing)
 
 namespace {
 constexpr uint32_t kAccessMask = SWITCH_GPU_BACKING_READ | SWITCH_GPU_BACKING_WRITE;
+constexpr uint32_t kUseMask = kAccessMask | SWITCH_GPU_BACKING_UNLISTED;
 
 uint32_t access_kind(uint32_t access)
 {
-	return access & SWITCH_GPU_BACKING_WRITE ? SWITCH_GPU_BACKING_WRITE : SWITCH_GPU_BACKING_READ;
+	return (access & SWITCH_GPU_BACKING_WRITE ? SWITCH_GPU_BACKING_WRITE : SWITCH_GPU_BACKING_READ) |
+		(access & SWITCH_GPU_BACKING_UNLISTED);
+}
+
+bool reads(uint32_t access)
+{
+	return (access & SWITCH_GPU_BACKING_READ) && !(access & SWITCH_GPU_BACKING_UNLISTED);
+}
+
+// A backing used both listed and unlisted by one job is ordered by everything it may do, as a listed use.
+uint32_t merge(uint32_t a, uint32_t b)
+{
+	const uint32_t merged = a | b;
+	return a & b & SWITCH_GPU_BACKING_UNLISTED ? merged : merged & ~uint32_t(SWITCH_GPU_BACKING_UNLISTED);
 }
 
 bool conflicts(uint32_t old_access, uint32_t access)
@@ -135,7 +149,7 @@ static int begin(switch_gpu_backing_use *uses, uint32_t count,
 	if (!ops)
 		return -19;
 	for (uint32_t i = 0; i < count; ++i) {
-		if (!uses[i].backing || !(uses[i].access & kAccessMask) || (uses[i].access & ~kAccessMask) ||
+		if (!uses[i].backing || !(uses[i].access & kAccessMask) || (uses[i].access & ~kUseMask) ||
 		    uses[i].reserved)
 			return -22;
 		for (uint32_t j = i; j && uses[j].backing->id < uses[j - 1].backing->id; --j) {
@@ -147,7 +161,7 @@ static int begin(switch_gpu_backing_use *uses, uint32_t count,
 	uint32_t unique = 0;
 	for (uint32_t i = 0; i < count; ++i) {
 		if (unique && uses[unique - 1].backing == uses[i].backing)
-			uses[unique - 1].access |= uses[i].access;
+			uses[unique - 1].access = merge(uses[unique - 1].access, uses[i].access);
 		else
 			uses[unique++] = uses[i];
 	}
@@ -172,7 +186,8 @@ static int begin(switch_gpu_backing_use *uses, uint32_t count,
 			else
 				--owners;
 		}
-		if (!result && (writers || (readers && (uses[i].access & SWITCH_GPU_BACKING_WRITE))))
+		if (!result && !(uses[i].access & SWITCH_GPU_BACKING_UNLISTED) &&
+		    (writers || (readers && (uses[i].access & SWITCH_GPU_BACKING_WRITE))))
 			result = -16;
 		if (!result)
 			switch_gpu_backing_prune_locked(backing);
@@ -198,8 +213,7 @@ static int begin(switch_gpu_backing_use *uses, uint32_t count,
 	// One job absorbs every failed input it reads: a kill that wrote several fails one submission, not one each.
 	int lost = 0;
 	for (uint32_t i = 0; !result && i < unique; ++i) {
-		const int failure = uses[i].access & SWITCH_GPU_BACKING_READ ?
-			switch_gpu_backing_take_failure_locked(uses[i].backing) : 0;
+		const int failure = reads(uses[i].access) ? switch_gpu_backing_take_failure_locked(uses[i].backing) : 0;
 		if (!lost)
 			lost = failure;
 	}
@@ -232,11 +246,17 @@ extern "C" int switch_gpu_backing_dependencies(const switch_gpu_backing_transact
 		return -22;
 	*needed = 0;
 	int lost = 0;
+	// The kernel's other engines follow what a GM20B job did not list; GM20B jobs follow only listed work, as
+	// TegraGM20BFences.h orders them.
+	const bool follows_unlisted = transaction->completion.engine != SWITCH_GPU_ENGINE_GM20B;
 	for (uint32_t i = 0; i < transaction->count; ++i) {
 		const auto &use = transaction->uses[i];
+		if (use.access & SWITCH_GPU_BACKING_UNLISTED)
+			continue;
 		for (uint32_t j = 0; j < use.backing->access_count; ++j) {
 			auto &access = use.backing->accesses[j];
-			if (!conflicts(access.access, use.access))
+			if (((access.access & SWITCH_GPU_BACKING_UNLISTED) && !follows_unlisted) ||
+			    !conflicts(access.access, use.access))
 				continue;
 			const int status = switch_gpu_backing_token_status(&access.token);
 			if (status < 0)
@@ -257,8 +277,7 @@ extern "C" int switch_gpu_backing_dependencies(const switch_gpu_backing_transact
 				out[*needed] = access.token;
 			++*needed;
 		}
-		const int failure = use.access & SWITCH_GPU_BACKING_READ ?
-			switch_gpu_backing_take_failure_locked(use.backing) : 0;
+		const int failure = reads(use.access) ? switch_gpu_backing_take_failure_locked(use.backing) : 0;
 		if (!lost)
 			lost = failure;
 	}

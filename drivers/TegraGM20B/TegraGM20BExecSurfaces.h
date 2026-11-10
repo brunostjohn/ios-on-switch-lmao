@@ -36,6 +36,8 @@ public:
 	int before(uint32_t slot, tgm_chan *chan, uint32_t pushes, bool dependencies = true);
 	// Once it submitted `seqno` on channel `uid`: the imports it counts as a writer of.
 	void after(bool listed, bool importsWritten, uint32_t uid, uint32_t seqno);
+	// Between before() and after(): the TegraGM20BSurface* access the Exec's list gives `handle`, 0 if it lists none.
+	uint32_t listedAccess(uint64_t handle) const;
 
 private:
 	struct Ref {
@@ -48,6 +50,7 @@ private:
 		bool given;  // set since the slot's last Exec
 		uint32_t count, flags;
 		uint64_t writes;  // bit i: uses[i] is TegraGM20BSurfaceWrite
+		uint64_t reads;   // bit i: uses[i] is TegraGM20BSurfaceRead
 		uint64_t handles[TegraGM20BMaxExecSurfaces];
 	};
 

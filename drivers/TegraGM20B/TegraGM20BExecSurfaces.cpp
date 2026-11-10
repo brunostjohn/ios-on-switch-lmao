@@ -140,12 +140,29 @@ bool ExecSurfaces::set(uint32_t slot, const TegraGM20BAbiSurfaceUse *uses, uint3
 	l->count = count;
 	l->flags = flags;
 	l->writes = 0;
+	l->reads = 0;
 	for (uint32_t i = 0; i < count; i++) {
 		l->handles[i] = uses[i].handle;
 		if (uses[i].access & TegraGM20BSurfaceWrite)
 			l->writes |= static_cast<uint64_t>(1) << i;
+		if (uses[i].access & TegraGM20BSurfaceRead)
+			l->reads |= static_cast<uint64_t>(1) << i;
 	}
 	return true;
+}
+
+uint32_t ExecSurfaces::listedAccess(uint64_t handle) const
+{
+	uint32_t access = 0;
+	for (uint32_t i = 0; taken_ && i < taken_->count; i++) {
+		if (taken_->handles[i] != handle)
+			continue;
+		if ((taken_->writes >> i) & 1)
+			access |= TegraGM20BSurfaceWrite;
+		if ((taken_->reads >> i) & 1)
+			access |= TegraGM20BSurfaceRead;
+	}
+	return access;
 }
 
 // The writers of other channels, merged per channel into at most TGM_ORDER_MAX at a time (as many acquires as a submission

@@ -21,6 +21,7 @@ enum {
 	SWITCH_GPU_BACKING_CPU_NO_CACHE = 1u << 4,
 	SWITCH_GPU_BACKING_CPU_CONCURRENT = 1u << 5,
 	SWITCH_GPU_BACKING_CPU_PRESERVE_DIRTY = 1u << 6,
+	SWITCH_GPU_BACKING_UNLISTED = 1u << 7,
 	SWITCH_GPU_CACHE_CLEAN = 0,
 	SWITCH_GPU_CACHE_INVALIDATE = 1,
 	SWITCH_GPU_CACHE_CLEAN_INVALIDATE = 2,
@@ -104,7 +105,10 @@ struct switch_gpu_backing_transaction {
  * dependency encoding and publication; every success must end with commit or abort. No token can be lost at commit.
  * A failed reader changes nothing. A failed writer leaves the contents undefined: the next use that reads them (a READ
  * here or in dependencies, a READ CPU acquire or wait) gets its errno once, unless a complete overwrite (a whole-range
- * CPU_DISCARD write) replaced them first. Writers never fail on it. */
+ * CPU_DISCARD write) replaced them first. Writers never fail on it.
+ * An UNLISTED use is one the engine cannot vouch for (a legacy submission's private BOs and unlisted imports): CPU
+ * access and the kernel's other engines still order after the job, as after a writer when WRITE is set, but no GM20B
+ * job waits for it, it waits for nothing, CPU owners never refuse it, and its failure reaches nobody. */
 int switch_gpu_backing_begin(struct switch_gpu_backing_use *uses, uint32_t count,
 			     const struct switch_gpu_backing_token *completion,
 			     struct switch_gpu_backing_transaction *transaction);

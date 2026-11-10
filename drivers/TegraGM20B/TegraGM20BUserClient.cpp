@@ -31,6 +31,7 @@
 #include "TegraGM20BSharedWiring.h"
 #include "SwitchGpuPin.h"
 #include "SwitchGpuBindings.h"
+#include "SwitchGpuLegacyUses.h"
 #include "SwitchGpuSurfaceGeometry.h"
 #include "shim/include/switch_tiled_cache.h"
 using tgm_scan::PushCounts;
@@ -2102,11 +2103,9 @@ IOReturn AGXDeviceUserClient::exec(uint32_t channel, TegraGM20BAbiPush *input, u
 			return kIOReturnBadArgument;
 		jobUses_[useCount + i] = {bo->backing, SWITCH_GPU_BACKING_READ, 0};
 	}
-	if (!native) {
-		uint32_t i = 0;
-		for (const Bo *bo = bos_; bo; bo = bo->next)
-			jobUses_[i++] = {bo->backing, uint32_t(bo->readOnly ? SWITCH_GPU_BACKING_READ : SWITCH_GPU_BACKING_WRITE), 0};
-	}
+	if (!native)
+		useTotal = switch_gpu_legacy_uses(bos_, listed,
+			[this](uint64_t handle) { return surfaces_.listedAccess(handle); }, jobUses_);
 	switch_gpu_backing_transaction transaction = {};
 	switch_gpu_backing_token completion = {};
 	uint32_t dependencies = 0;
