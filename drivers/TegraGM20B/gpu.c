@@ -65,6 +65,7 @@
 #include "TegraGM20BClkgate.h"
 #include "TegraGM20BComp.h"
 #include "TegraGM20BGpu.h"
+#include "SwitchGpuJobFences.h"
 #include "SwitchGpuTimeline.h"
 #include "SwitchGpuChannelPolicy.h"
 #include "SwitchGpuPresentTokens.h"
@@ -3978,6 +3979,11 @@ void switch_gpu_chan_next_token(struct tgm_chan *chan, struct switch_gpu_backing
 	switch_gpu_timeline_token(chan->timeline, chan->submitted + 1, token);
 }
 
+void switch_gpu_chan_job_token(struct tgm_chan *chan, uint32_t fences, struct switch_gpu_backing_token *token)
+{
+	switch_gpu_timeline_token(chan->timeline, chan->submitted + fences + 1, token);
+}
+
 int tgm_fence_kernel(unsigned int which, volatile uint32_t **va, uint64_t *page_pa,
 		     uint32_t *offset)
 {
@@ -4562,11 +4568,12 @@ static int chan_push_wait(struct tgm_chan *chan, u32 push_nr)
  * interrupt (nouveau nvc0_fence_emit32), then kick. The L2's dirty lines go to DRAM first, and the end of the submission
  * is stamped for the stats. The GET report comes before the interrupt so that a wait for room (chan_room) finds the room
  * this submission frees once its interrupt has woken it; nvif's own report at the kick lands after the interrupt. Space
- * was reserved by the caller (chan_wait_room / chan_push_wait): CHAN_FENCE_DWORDS. */
-static u32 chan_fence_visibility(struct tgm_chan *chan, int external)
+ * was reserved by the caller (chan_wait_room / chan_push_wait): CHAN_FENCE_DWORDS. A job's internal fences
+ * (chan_job_fence) released first .. next - 1 ahead of it, in the same kick. */
+static u32 chan_fence_job(struct tgm_chan *chan, int external, u32 first, u32 next)
 {
 	struct nvif_push *push = &chan->chan.push;
-	u32 next = chan->submitted + 1;
+	u32 s = 0;
 	idle_wake(); /* backstop: tgm_chan_exec and tgm_present_copy raise it before their first kick */
 	if (external && (l2_on() || chan->kernel)) {
 		/* engines idle, their writes committed to the L2 (FB flush: nvgpu gk20a_mm_fb_flush), the L2's dirty lines
@@ -4609,16 +4616,21 @@ static u32 chan_fence_visibility(struct tgm_chan *chan, int external)
 			: "memory"); /* client WC writes and our push reach DRAM before GP_PUT */
 	chan->submit_ns = nvxnu_nanotime();
 	if (stats_on())
-		WRITE_ONCE(chan->stat_sub_ns[next % CHAN_NSTAMPS], chan->submit_ns);
+		for (s = first; (s32)(next - s) >= 0; s++)
+			WRITE_ONCE(chan->stat_sub_ns[s % CHAN_NSTAMPS], chan->submit_ns);
 	if ((s32)(tgm_chan_completed(chan) - chan->submitted) >= 0) {
 		WRITE_ONCE(chan->progress_held, tgm_hold_held_ns(chan->chid, chan->submit_ns));
 		WRITE_ONCE(chan->busy_ns, chan->submit_ns);
 	}
+	/* `first` is written last: only it has a start stamp, so the preemption latency high_fenced learns stays its,
+	 * whichever of the job's seqnos shares its slot. */
 	if (chan->high) {
 		/* its fence may pass before tgm_sched_kicked returns: taken as kicked behind an app until it has */
-		WRITE_ONCE(chan->queued[next % CHAN_QUEUED].kick_ns, chan->submit_ns);
-		WRITE_ONCE(chan->queued[next % CHAN_QUEUED].behind, -1);
-		WRITE_ONCE(chan->queued[next % CHAN_QUEUED].app, 1);
+		for (s = next; (s32)(s - first) >= 0; s--) {
+			WRITE_ONCE(chan->queued[s % CHAN_QUEUED].kick_ns, chan->submit_ns);
+			WRITE_ONCE(chan->queued[s % CHAN_QUEUED].behind, -1);
+			WRITE_ONCE(chan->queued[s % CHAN_QUEUED].app, 1);
+		}
 	}
     if (switch_gpu_irq_arm(&chan->irq_state, next) && nvif_event_allow(&chan->nonstall))
         nvxnu_panic("SwitchGpu: cannot arm channel completion");
@@ -4631,16 +4643,23 @@ static u32 chan_fence_visibility(struct tgm_chan *chan, int external)
 		struct tgm_sched_queued queued;
 		enum tgm_sched_kick kick = tgm_sched_kicked(gpu.device, chan->chid, &queued);
 
-		WRITE_ONCE(chan->queued[next % CHAN_QUEUED].asked_pt, queued.asked_pt);
-		WRITE_ONCE(chan->queued[next % CHAN_QUEUED].behind, queued.behind);
-		WRITE_ONCE(chan->queued[next % CHAN_QUEUED].app, kick != TGM_KICK_CLEAR);
+		for (s = next; (s32)(s - first) >= 0; s--) {
+			WRITE_ONCE(chan->queued[s % CHAN_QUEUED].app, kick != TGM_KICK_CLEAR);
+			if (stats_on())
+				WRITE_ONCE(chan->stat_kick[s % CHAN_NSTAMPS], kick);
+		}
+		WRITE_ONCE(chan->queued[first % CHAN_QUEUED].asked_pt, queued.asked_pt);
+		WRITE_ONCE(chan->queued[first % CHAN_QUEUED].behind, queued.behind);
 		tgm_deadline_kicked(!chan->kernel, kick != TGM_KICK_CLEAR);
-		if (stats_on())
-			WRITE_ONCE(chan->stat_kick[next % CHAN_NSTAMPS], kick);
 	}
 	if (stats_on())
 		idle_stats();
 	return next;
+}
+
+static u32 chan_fence_visibility(struct tgm_chan *chan, int external)
+{
+	return chan_fence_job(chan, external, chan->submitted + 1, chan->submitted + 1);
 }
 
 static u32 chan_fence(struct tgm_chan *chan)
@@ -4759,6 +4778,58 @@ static int backing_dependencies(struct tgm_chan *chan, const struct switch_gpu_b
 	return 0;
 }
 
+/* A job's user entries and internal fences (SwitchGpuJobFences.h), in chan_exec's reserved room. */
+struct chan_job {
+	struct tgm_chan *chan;
+	const struct tgm_push *pushes;
+	const struct tgm_prof *prof;
+	u32 first; /* the GPFIFO entry the current batch starts at, for the hang log */
+	int unprefetched; /* the first push follows the L2 and TLB maintenance */
+};
+
+static void chan_job_entry(void *context, u32 i)
+{
+	struct chan_job *job = context;
+	struct tgm_chan *chan = job->chan;
+	const struct tgm_push *pushes = job->pushes;
+	const struct tgm_prof *prof = job->prof;
+
+	nvif_chan_gpfifo_push(&chan->chan, pushes[i].va, pushes[i].dwords << 2,
+			      pushes[i].no_prefetch || (job->unprefetched && !i));
+	if (prof && !pushes[i].incomplete && prof->cls[i] != TGM_PC_SKIP) {
+		push_stamp(&chan->chan.push, chan->ring_va + CHAN_PROF + i * sizeof(struct tgm_stamp),
+			   chan->submitted + 1);
+		PUSH_KICK(&chan->chan.push);
+	}
+}
+
+/* A batch's end inside a job: its fence as chan_fence_job emits an internal one, as an entry of the job's kick. Its
+ * interrupt moves the channel's progress (the stuck rule) as the batch's own submission's did. */
+static void chan_job_fence(void *context, u32 seqno)
+{
+	struct chan_job *job = context;
+	struct tgm_chan *chan = job->chan;
+	struct nvif_push *push = &chan->chan.push;
+
+	tgm_hang_log_submit(&chan->hang, seqno, job->first, chan->chan.gpfifo.cur);
+	if (stats_on())
+		push_stamp(push, chan_stamps_va(chan, seqno) + offsetof(struct tgm_stamps, end), seqno);
+	/* nouveau's NVDEF/NVVAL/PUSH_* macros compute in int and repeat their branches. */
+	/* NOLINTBEGIN(bugprone-signed-bitwise,bugprone-branch-clone) */
+	PUSH_MTHD(push, NV906F, SEMAPHOREA,
+		  NVVAL(NV906F, SEMAPHOREA, OFFSET_UPPER, upper_32_bits(chan->fence_gpu)),
+		  SEMAPHOREB, lower_32_bits(chan->fence_gpu), SEMAPHOREC, seqno, SEMAPHORED,
+		  NVDEF(NV906F, SEMAPHORED, OPERATION, RELEASE) |
+			  NVDEF(NV906F, SEMAPHORED, RELEASE_WFI, EN) |
+			  NVDEF(NV906F, SEMAPHORED, RELEASE_SIZE, 4BYTE));
+	/* NOLINTEND(bugprone-signed-bitwise,bugprone-branch-clone) */
+	nvif_chan_gpfifo_post(&chan->chan);
+	/* NOLINTNEXTLINE(bugprone-signed-bitwise): nouveau's PUSH_MTHD computes in int */
+	PUSH_MTHD(push, NV906F, NON_STALL_INTERRUPT, 0);
+	PUSH_KICK(push);
+	job->first = chan->chan.gpfifo.cur;
+}
+
 static int chan_exec(struct tgm_chan *chan, const struct tgm_push *pushes, uint32_t count,
 		     uint32_t *seqno, const struct tgm_prof *prof,
 		     const struct switch_gpu_backing_token *dependencies, u32 dependency_count, int may_wait, u32 visibility)
@@ -4766,7 +4837,10 @@ static int chan_exec(struct tgm_chan *chan, const struct tgm_push *pushes, uint3
 	u64 start = SWITCH_FRAME_TIMELINE ? nvxnu_nanotime() : 0;
 	u32 i = 0;
 	u32 stamps = 0;
-	u32 first = 0;
+	u32 fences = 0;
+	u32 last = 0;
+	struct chan_job job = {0};
+	struct switch_gpu_job_emitter emitter = {&job, chan_job_entry, chan_job_fence};
 	int ret = 0;
 	int tlb = 0;
 	u32 waits = 0;
@@ -4788,6 +4862,9 @@ static int chan_exec(struct tgm_chan *chan, const struct tgm_push *pushes, uint3
 		if (pushes[i].reserved || (pushes[i].incomplete &&
 		    (i + 1 == count || !pushes[i + 1].no_prefetch)))
 			return -EINVAL;
+	ret = switch_gpu_job_fences(pushes, count, &fences);
+	if (ret)
+		return ret;
 	if (!count && !(visibility & SWITCH_GPU_SUBMIT_FORCE_FENCE)) {
 		*seqno = chan->submitted;
 		return 0;
@@ -4815,15 +4892,16 @@ static int chan_exec(struct tgm_chan *chan, const struct tgm_push *pushes, uint3
 			WRITE_ONCE(chan->prof_seqno, 0);
 	}
 	if (prof &&
-	    (!stats_on() || chan->kernel || count > TGM_PROF_MAX || READ_ONCE(chan->prof_seqno)))
+	    (!stats_on() || chan->kernel || count > TGM_PROF_MAX || fences || READ_ONCE(chan->prof_seqno)))
 		prof = NULL;
 	for (i = 0; prof && i < count; i++)
 		stamps += !pushes[i].incomplete && prof->cls[i] != TGM_PC_SKIP;
 	/* nouveau_exec_job_run(): room for every user entry plus our fence push and, each kicked as its own entry before
 	 * them, a present wait, the task order's acquires and (stats) a start stamp, one more nvif GET semaphore
 	 * with each. A profile's stamps: an entry each, a stamp and a GET semaphore. */
-	entries = count + 6 + stamps;
-	words = CHAN_FENCE_DWORDS + 64 + 5 * (TGM_ORDER_MAX + dependency_count + 1) + 16 * stamps;
+	entries = count + 6 + stamps + fences;
+	words = CHAN_FENCE_DWORDS + 64 + 5 * (TGM_ORDER_MAX + dependency_count + 1) + 16 * stamps +
+		SWITCH_GPU_FENCE_POINT_DWORDS * fences;
 	if (!may_wait && !chan_room(chan, entries, words))
 		return -EAGAIN;
 	ret = may_wait ? chan_wait_ready(chan, entries, words) : 0;
@@ -4911,20 +4989,15 @@ static int chan_exec(struct tgm_chan *chan, const struct tgm_push *pushes, uint3
 		PUSH_KICK(&chan->chan.push);
 		/* NOLINTEND(bugprone-signed-bitwise,bugprone-branch-clone) */
 	}
-	first = chan->chan.gpfifo.cur;
-	for (i = 0; i < count; i++) {
-		nvif_chan_gpfifo_push(&chan->chan, pushes[i].va, pushes[i].dwords << 2,
-				      pushes[i].no_prefetch || (((l2_on() && host_written) || tlb) && !i));
-		if (prof && !pushes[i].incomplete && prof->cls[i] != TGM_PC_SKIP) {
-			push_stamp(&chan->chan.push,
-				   chan->ring_va + CHAN_PROF + i * sizeof(struct tgm_stamp),
-				   chan->submitted + 1);
-			PUSH_KICK(&chan->chan.push);
-		}
-	}
-	tgm_hang_log_submit(&chan->hang, chan->submitted + 1, first, chan->chan.gpfifo.cur);
+	job.chan = chan;
+	job.pushes = pushes;
+	job.prof = prof;
+	job.first = chan->chan.gpfifo.cur;
+	job.unprefetched = (l2_on() && host_written) || tlb;
+	last = switch_gpu_job_emit(pushes, count, chan->submitted, &emitter);
+	tgm_hang_log_submit(&chan->hang, last, job.first, chan->chan.gpfifo.cur);
 
-	*seqno = chan_fence_visibility(chan, external);
+	*seqno = chan_fence_job(chan, external, chan->submitted + 1, last);
 	if (SWITCH_FRAME_TIMELINE && !chan->kernel)
 		frame_submitted(chan, *seqno, start);
 	if (stats_on())
@@ -4959,15 +5032,19 @@ int switch_gpu_chan_wait_submission_room(struct tgm_chan *chan, const struct tgm
 	u32 count, u32 dependency_count, const struct tgm_prof *prof)
 {
 	u32 stamps = 0;
+	u32 fences = 0;
 	u32 i;
 	int ret;
 	if (count > TegraGM20BMaxJobPushes || dependency_count > TegraGM20BMaxJobDependencies)
 		return -E2BIG;
-	if (prof && stats_on() && !chan->kernel && count <= TGM_PROF_MAX && !READ_ONCE(chan->prof_seqno))
+	if (switch_gpu_job_fences(pushes, count, &fences))
+		return -EINVAL;
+	if (prof && stats_on() && !chan->kernel && count <= TGM_PROF_MAX && !fences && !READ_ONCE(chan->prof_seqno))
 		for (i = 0; i < count; ++i)
 			stamps += !pushes[i].incomplete && prof->cls[i] != TGM_PC_SKIP;
-	ret = chan_wait_ready(chan, count + 6 + stamps,
-		CHAN_FENCE_DWORDS + 64 + 5 * (TGM_ORDER_MAX + dependency_count) + 16 * stamps);
+	ret = chan_wait_ready(chan, count + 6 + stamps + fences,
+		CHAN_FENCE_DWORDS + 64 + 5 * (TGM_ORDER_MAX + dependency_count) + 16 * stamps +
+			SWITCH_GPU_FENCE_POINT_DWORDS * fences);
 	if (ret == -ETIMEDOUT && gpu.stage >= 3)
 		tgm_chan_stalled(chan, "exec: GPFIFO still full after 1 s", chan->submitted, NSEC_PER_SEC);
 	return READ_ONCE(chan->error) ? -EIO : ret == -ETIMEDOUT ? -EBUSY : ret;

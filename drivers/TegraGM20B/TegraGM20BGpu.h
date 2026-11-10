@@ -185,7 +185,8 @@ struct tgm_push {
 	uint32_t dwords;
 	uint8_t no_prefetch;
 	uint8_t incomplete;
-	uint16_t reserved;
+	uint8_t fence; /* an internal fence after it (TegraGM20BPushFence, SwitchGpuJobFences.h) */
+	uint8_t reserved;
 };
 /* Append the pushes, then the fence (WFI semaphore release of the next seqno), then kick. User mappings are
  * L2-cacheable: the L2's clean lines are invalidated on the GPU before the pushes are fetched and its dirty lines
@@ -199,6 +200,8 @@ struct switch_gpu_backing_token;
 uint64_t switch_gpu_chan_identity(struct tgm_chan *chan);
 void switch_gpu_chan_token(struct tgm_chan *chan, uint32_t seqno, struct switch_gpu_backing_token *token);
 void switch_gpu_chan_next_token(struct tgm_chan *chan, struct switch_gpu_backing_token *token);
+/* The token of the seqno the next job's own fence releases, after its `fences` internal ones. */
+void switch_gpu_chan_job_token(struct tgm_chan *chan, uint32_t fences, struct switch_gpu_backing_token *token);
 /* Enter before taking backing locks; leave after commit/abort. Room waits require those locks released. */
 void switch_gpu_chan_submit_enter(struct tgm_chan *chan);
 void switch_gpu_chan_submit_leave(void);

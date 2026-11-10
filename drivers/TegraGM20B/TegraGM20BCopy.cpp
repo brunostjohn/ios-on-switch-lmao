@@ -349,7 +349,7 @@ extern "C" int tegra_gm20b_ce_copy_plane_checked(
 					   done ? done->syncpt : TEGRA_GM20B_CE_NO_SYNCPT};
 		const tgm_push push = {
 			PushVa + slot * Page,
-			tgm_copy_push(queue.words + slot * (Page / 4), &copy, nullptr, 0), 0, 0, 0};
+			tgm_copy_push(queue.words + slot * (Page / 4), &copy, nullptr, 0), 0, 0, 0, 0};
 		result = submit(job, push, source, destination, ownership, events);
 	}
 	if (!result) {

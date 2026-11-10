@@ -349,8 +349,10 @@ TEST(GM20BPushScanSource, KernelUsesTheHeader)
 	EXPECT_THAT(scan, HasSubstr("scanPush(c, p, whole, nullptr, 0)"));
 	EXPECT_THAT(scan, HasSubstr("prof->cls[i] = cls;"));
 	// A stamp only after a push whose class is not SKIP, only on a profiled submission.
-	EXPECT_THAT(Between(gpu(), "static int chan_exec(", "\n}\n"),
+	EXPECT_THAT(Between(gpu(), "static void chan_job_entry(", "\n}\n"),
 		    HasSubstr("if (prof && !pushes[i].incomplete && prof->cls[i] != TGM_PC_SKIP) {"));
+	EXPECT_THAT(Between(gpu(), "static int chan_exec(", "\n}\n"),
+		    HasSubstr("|| fences || READ_ONCE(chan->prof_seqno)))"));
 }
 
 // Direct scanout's fence-only present (NativeMobileDisplay, TEGRA_SCANOUT_COPY_FENCE_ONLY) launches no copy.
@@ -567,7 +569,9 @@ TEST(GM20BRoomSource, RoomIsWaitedForByInterrupt)
 	const auto reserve = flat(definition(gpu(), "static int chan_wait_room("));
 	expectBefore(reserve, "chan_wait_ready(chan, gpfifo_nr, push_nr)",
 		     "nvif_chan_gpfifo_wait(&chan->chan, gpfifo_nr, push_nr)");
-	expectBefore(flat(definition(gpu(), "static u32 chan_fence_visibility(struct tgm_chan *chan, int external)")),
+	expectBefore(flat(definition(gpu(), "static u32 chan_fence_job(struct tgm_chan *chan, int external, u32 first, u32 next)")),
+		     "nvif_chan_gpfifo_post(&chan->chan);", "NON_STALL_INTERRUPT, 0);");
+	expectBefore(flat(definition(gpu(), "static void chan_job_fence(void *context, u32 seqno)")),
 		     "nvif_chan_gpfifo_post(&chan->chan);", "NON_STALL_INTERRUPT, 0);");
 }
 
@@ -604,7 +608,9 @@ TEST(GM20BL2Source, InvalidateOnTheGpu)
 	expectBefore(
 		exec,
 		"NVB06F_MEM_OP_D_OPERATION_MMU_TLB_INVALIDATE); } PUSH_KICK(&chan->chan.push);",
-		"pushes[i].no_prefetch || (((l2_on() && host_written) || tlb) && !i));");
+		"job.unprefetched = (l2_on() && host_written) || tlb;");
+	EXPECT_THAT(flat(Between(gpu(), "static void chan_job_entry(", "\n}\n")),
+		    HasSubstr("pushes[i].no_prefetch || (job->unprefetched && !i));"));
 }
 
 // A CPU IOSurfaceLock waits for the submissions that may write the surface: Exec names each one once it has its seqno.
@@ -1113,9 +1119,30 @@ TEST(GM20BVmSource, MappingSerializesPerAddressSpaceWithSuspendAdmission)
 	EXPECT_THAT(flat(definition(gpu(), "void tgm_vm_del(")), HasSubstr("gpu_lock();"));
 }
 
+// A command buffer's batches are one SubmitAddress (TegraGM20BPushFence): its uses are owned against the seqno of the
+// job's own fence, after every internal one (switch_gpu_job_fences_test runs the emission order).
+TEST(GM20BJobFencesSource, OneJobOwnsItsUsesUntilItsLastFence)
+{
+	const auto exec = flat(definition(client(), "IOReturn AGXDeviceUserClient::exec("));
+	EXPECT_THAT(exec, HasSubstr("const uint32_t fenceFlag = native && scratch ? uint32_t(TegraGM20BPushFence) : 0u;"));
+	EXPECT_THAT(exec, HasSubstr("if (switch_gpu_job_fences(pushes, count, &fences)) return kIOReturnBadArgument;"));
+	EXPECT_THAT(exec, HasSubstr("switch_gpu_chan_job_token(chan, fences, &completion);"));
+	EXPECT_THAT(exec, Not(HasSubstr("switch_gpu_chan_next_token(")));
+	const auto emit = flat(definition(gpu(), "static int chan_exec("));
+	EXPECT_THAT(emit, HasSubstr("entries = count + 6 + stamps + fences;"));
+	EXPECT_THAT(emit, HasSubstr("SWITCH_GPU_FENCE_POINT_DWORDS * fences;"));
+	EXPECT_THAT(emit, HasSubstr("last = switch_gpu_job_emit(pushes, count, chan->submitted, &emitter);"));
+	EXPECT_THAT(flat(definition(gpu(), "int switch_gpu_chan_wait_submission_room(")),
+		    HasSubstr("SWITCH_GPU_FENCE_POINT_DWORDS * fences);"));
+	EXPECT_THAT(flat(definition(client(), "IOReturn AGXDeviceUserClient::getInfo(")),
+		    HasSubstr("TegraGM20BInfoPushFences;"));
+	EXPECT_THAT(Between(client(), "constexpr uint32_t kInfoAwaitingUserspace =", ";"),
+		    Not(HasSubstr("TegraGM20BInfoPushFences")));
+}
+
 TEST(GM20BVisibilitySource, InternalFenceKeepsExecutionOrderAndExternalFencePublishesVisibleFirst)
 {
-	const auto fence = flat(definition(gpu(), "static u32 chan_fence_visibility("));
+	const auto fence = flat(definition(gpu(), "static u32 chan_fence_job("));
 	EXPECT_THAT(fence, HasSubstr("if (external && (l2_on() || chan->kernel))"));
 	expectBefore(fence, "NVB06F_MEM_OP_D_OPERATION_L2_FLUSH_DIRTY", "if (external && chan->visible_cpu)");
 	expectBefore(fence, "lower_32_bits(chan->visible_gpu)", "lower_32_bits(chan->fence_gpu)");
@@ -1123,7 +1150,12 @@ TEST(GM20BVisibilitySource, InternalFenceKeepsExecutionOrderAndExternalFencePubl
 	const auto exec = flat(definition(gpu(), "static int chan_exec("));
 	EXPECT_THAT(exec, HasSubstr("if ((l2_on() && host_written) || tlb)"));
 	expectBefore(exec, "NVB06F_MEM_OP_D_OPERATION_L2_FLUSH_DIRTY", "NVB06F_MEM_OP_D_OPERATION_L2_SYSMEM_INVALIDATE");
-	EXPECT_THAT(exec, HasSubstr("chan_fence_visibility(chan, external)"));
+	EXPECT_THAT(exec, HasSubstr("*seqno = chan_fence_job(chan, external, chan->submitted + 1, last);"));
+	// A batch's internal fence orders execution only: no L2 flush, no visible release.
+	const auto internal = flat(definition(gpu(), "static void chan_job_fence("));
+	EXPECT_THAT(internal, HasSubstr("RELEASE_WFI, EN"));
+	EXPECT_THAT(internal, Not(HasSubstr("L2_FLUSH_DIRTY")));
+	EXPECT_THAT(internal, Not(HasSubstr("visible_gpu")));
 	for (const char *signature : {"int tgm_vm_unmap_pages(", "void switch_gpu_vm_unmap("}) {
 		const auto unmap = flat(definition(gpu(), signature));
 		expectBefore(unmap, "nvkm_ltc_flush(gpu.device->ltc)", "nvif_vmm_raw_unmap(");

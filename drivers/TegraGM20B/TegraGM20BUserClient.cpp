@@ -42,6 +42,7 @@
 #include "SwitchGpuCpuSurface.h"
 #include "SwitchGpuCpuComplete.h"
 #include "SwitchGpuChannelPolicy.h"
+#include "SwitchGpuJobFences.h"
 #include "SwitchGpuEventClient.h"
 #include "SwitchGpuAsyncReference.h"
 #include "SwitchGpuAdmission.h"
@@ -2355,12 +2356,13 @@ IOReturn AGXDeviceUserClient::exec(uint32_t channel, TegraGM20BAbiPush *input, u
 			      offsetof(tgm_push, no_prefetch) == offsetof(TegraGM20BAbiPush, flags),
 		      "push layouts");
 	tgm_push *pushes = reinterpret_cast<tgm_push *>(input);
+	const uint32_t fenceFlag = native && scratch ? uint32_t(TegraGM20BPushFence) : 0u;
 	for (uint32_t i = 0; i < count; i++) {
 		const TegraGM20BAbiPush &p = input[i];
 		if ((p.va & 3) || !p.dwords || p.dwords >= (1u << 21) ||
 		    (p.flags & ~static_cast<uint32_t>(TegraGM20BPushNoPrefetch |
 						      TegraGM20BPushImportsWritten |
-						      TegraGM20BPushIncomplete)) ||
+						      TegraGM20BPushIncomplete | fenceFlag)) ||
 		    ((p.flags & TegraGM20BPushIncomplete) &&
 		     (i + 1 == count || !(input[i + 1].flags & TegraGM20BPushNoPrefetch))) ||
 		    p.va < TGM_USER_VA_START ||
@@ -2371,12 +2373,16 @@ IOReturn AGXDeviceUserClient::exec(uint32_t channel, TegraGM20BAbiPush *input, u
 		const uint32_t flags = p.flags;
 		pushes[i].no_prefetch = (flags & TegraGM20BPushNoPrefetch) ? 1u : 0u;
 		pushes[i].incomplete = (flags & TegraGM20BPushIncomplete) ? 1u : 0u;
+		pushes[i].fence = (flags & TegraGM20BPushFence) ? 1u : 0u;
 		pushes[i].reserved = 0;
 	}
+	uint32_t fences = 0;
+	if (switch_gpu_job_fences(pushes, count, &fences))
+		return kIOReturnBadArgument;
 	tgm_prof prof;
 	bool profiled = false;
 	if (count && pushScanOn() && pushSubmits_++ % kScanEvery == 0) {
-		profiled = count <= TGM_PROF_MAX && pushScans_++ % kProfileEvery == 0;
+		profiled = count <= TGM_PROF_MAX && !fences && pushScans_++ % kProfileEvery == 0;
 		scanPushes(pushes, count, profiled ? &prof : nullptr);
 	}
 	uint32_t seqno = 0;
@@ -2511,7 +2517,7 @@ refresh:
 	for (; !error;) {
 		dependencies = 0;
 		if (count || (visibility & TegraGM20BSubmitHasEvents))
-			switch_gpu_chan_next_token(chan, &completion);
+			switch_gpu_chan_job_token(chan, fences, &completion);
 		if (count && !error) {
 			error = leaseCount
 					? switch_gpu_backing_begin_conversion_checked(
@@ -2822,7 +2828,7 @@ IOReturn AGXDeviceUserClient::getInfo(TegraGM20BAbiInfo *out)
 		     TegraGM20BInfoCpuAccess | TegraGM20BInfoSubmitAddress | TegraGM20BInfoCpuPreserveDirty |
 		     TegraGM20BInfoCanonicalSurfaceLayout | TegraGM20BInfoNativeSurfaceView | TegraGM20BInfoJobVisibility | TegraGM20BInfoLeanCopyChannel | TegraGM20BInfoControlReserve |
 		     TegraGM20BInfoSharedEvents | TegraGM20BInfoSemanticFence | TegraGM20BInfoResourceReady |
-		     TegraGM20BInfoCpuComplete | TegraGM20BInfoUseRanges;
+		     TegraGM20BInfoCpuComplete | TegraGM20BInfoUseRanges | TegraGM20BInfoPushFences;
 	out->flags &= ~kInfoAwaitingUserspace;
 	if (info.comptag_lines && switch_gpu_compression_on())
 		out->flags |= TegraGM20BInfoCompression;

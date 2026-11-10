@@ -192,6 +192,18 @@ host_test(
 )
 
 host_test(
+    name = "switch_gpu_job_fences_test",
+    srcs = [
+        "switch_gpu_job_fences_test.cpp",
+        "//drivers/TegraGM20B:SwitchGpuJobFences.h",
+        "//drivers/TegraGM20B:TegraGM20BABI.h",
+        "//drivers/TegraGM20B:TegraGM20BFences.h",
+        "//drivers/TegraGM20B:TegraGM20BGpu.h",
+    ],
+    cxx_std = "c++17",
+)
+
+host_test(
     name = "gm20b_bind_history_test",
     srcs = [
         "gm20b_bind_history_test.cpp",
