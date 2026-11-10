@@ -3522,23 +3522,30 @@ static int compositor_timeslice_on(void)
 	return 1;
 }
 
+/* nvkm_runl_chan_get_chid returns holding spinlocks with interrupts off, and nvkm_kmap may sleep (the gk20a instobj's
+ * L2 flush and invalidate take ltc->mutex), so RAMFC is written after nvkm_chan_put. The instance block is freed only
+ * with the caller's channel object (chan->user), which neither chan_new nor a submission on the channel races. */
 static void chan_timeslice(u32 chid, u32 value)
 {
 	struct nvkm_runl *runl = NULL;
 	struct nvkm_chan *nchan = NULL;
+	struct nvkm_gpuobj *inst = NULL;
 	unsigned long flags = 0;
 
 	nvkm_runl_foreach(runl, gpu.device->fifo)
 	{
 		nchan = nvkm_runl_chan_get_chid(runl, chid, &flags);
 		if (nchan) {
-			nvkm_kmap(nchan->inst);
-			nvkm_wo32(nchan->inst, RAMFC_TIMESLICE, value);
-			nvkm_done(nchan->inst);
+			inst = nchan->inst;
 			nvkm_chan_put(&nchan, flags);
-			return;
+			break;
 		}
 	}
+	if (!inst)
+		return;
+	nvkm_kmap(inst);
+	nvkm_wo32(inst, RAMFC_TIMESLICE, value);
+	nvkm_done(inst);
 }
 
 /* gpu.lock held */
