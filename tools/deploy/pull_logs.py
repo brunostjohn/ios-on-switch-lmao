@@ -28,6 +28,7 @@ every checkout) it copies:
   <boot>-<stamp>.json, hwtest-summary.txt  HW Test's run reports (also kept in <state>/device-logs/hwtest) and the
                                         newest new run of each app against the runs before it (tools/hwtest)
   hwtest-gpu/<bundle id>/               HW Test's Documents/gpu: the GPU scenes' got, want and diff PNGs
+  hwtest-ui/<bundle id>/                HW Test's Documents/ui: the UI tests' failed pictures (display.pocket_strip's)
   lock-poster/                          the lock-screen poster's newest landscape render and its portrait one, as PNGs
                                         (tools/hwtest/posters.py; its verdict is in the log and hwtest-summary.txt)
   screenshots/                          the screenshots the user took on the device (Photos' DCIM)
