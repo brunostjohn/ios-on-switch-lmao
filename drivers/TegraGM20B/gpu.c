@@ -4837,13 +4837,37 @@ static void chan_job_fence(void *context, u32 seqno)
 	job->first = chan->chan.gpfifo.cur;
 }
 
+/* The room chan_exec reserves, and the one a waiter for it (switch_gpu_chan_wait_submission_room) waits for: one
+ * computation, so a waiter that returns leaves room the retried submission finds. nouveau_exec_job_run(): every user
+ * entry plus our fence push and, each kicked as its own entry before them, a present wait, the task order's acquires
+ * and (stats) a start stamp, one more nvif GET semaphore with each. A profile's stamps: an entry each, a stamp and a GET
+ * semaphore. A profile is given up (*prof NULL) where chan_exec gives it up; one whose completion the stats' interrupt
+ * pass no longer looks at (more than CHAN_NSTAMPS behind) does not hold the channel's. */
+static void chan_submission_room(struct tgm_chan *chan, const struct tgm_push *pushes, u32 count,
+				 u32 dependency_count, u32 job_fences, const struct tgm_prof **prof,
+				 u32 *entries, u32 *words)
+{
+	u32 profiled = READ_ONCE(chan->prof_seqno);
+	u32 stamps = 0;
+	u32 i;
+
+	if (profiled && (s32)(tgm_chan_completed(chan) - profiled) > CHAN_NSTAMPS)
+		profiled = 0;
+	if (*prof && (!stats_on() || chan->kernel || count > TGM_PROF_MAX || job_fences || profiled))
+		*prof = NULL;
+	for (i = 0; *prof && i < count; i++)
+		stamps += !pushes[i].incomplete && (*prof)->cls[i] != TGM_PC_SKIP;
+	*entries = count + 6 + stamps + job_fences;
+	*words = CHAN_FENCE_DWORDS + 64 + 5 * (TGM_ORDER_MAX + dependency_count + 1) + 16 * stamps +
+		 SWITCH_GPU_FENCE_POINT_DWORDS * job_fences;
+}
+
 static int chan_exec(struct tgm_chan *chan, const struct tgm_push *pushes, uint32_t count,
 		     uint32_t *seqno, const struct tgm_prof *prof,
 		     const struct switch_gpu_backing_token *dependencies, u32 dependency_count, int may_wait, u32 visibility)
 {
 	u64 start = SWITCH_FRAME_TIMELINE ? nvxnu_nanotime() : 0;
 	u32 i = 0;
-	u32 stamps = 0;
 	u32 fences = 0;
 	u32 last = 0;
 	struct chan_job job = {0};
@@ -4898,17 +4922,7 @@ static int chan_exec(struct tgm_chan *chan, const struct tgm_push *pushes, uint3
 		if (ps && (s32)(tgm_chan_completed(chan) - ps) > CHAN_NSTAMPS)
 			WRITE_ONCE(chan->prof_seqno, 0);
 	}
-	if (prof &&
-	    (!stats_on() || chan->kernel || count > TGM_PROF_MAX || fences || READ_ONCE(chan->prof_seqno)))
-		prof = NULL;
-	for (i = 0; prof && i < count; i++)
-		stamps += !pushes[i].incomplete && prof->cls[i] != TGM_PC_SKIP;
-	/* nouveau_exec_job_run(): room for every user entry plus our fence push and, each kicked as its own entry before
-	 * them, a present wait, the task order's acquires and (stats) a start stamp, one more nvif GET semaphore
-	 * with each. A profile's stamps: an entry each, a stamp and a GET semaphore. */
-	entries = count + 6 + stamps + fences;
-	words = CHAN_FENCE_DWORDS + 64 + 5 * (TGM_ORDER_MAX + dependency_count + 1) + 16 * stamps +
-		SWITCH_GPU_FENCE_POINT_DWORDS * fences;
+	chan_submission_room(chan, pushes, count, dependency_count, fences, &prof, &entries, &words);
 	if (!may_wait && !chan_room(chan, entries, words))
 		return -EAGAIN;
 	ret = may_wait ? chan_wait_ready(chan, entries, words) : 0;
@@ -5038,20 +5052,16 @@ void switch_gpu_chan_submit_leave(void)
 int switch_gpu_chan_wait_submission_room(struct tgm_chan *chan, const struct tgm_push *pushes,
 	u32 count, u32 dependency_count, const struct tgm_prof *prof)
 {
-	u32 stamps = 0;
 	u32 fences = 0;
-	u32 i;
+	u32 entries = 0;
+	u32 words = 0;
 	int ret;
 	if (count > TegraGM20BMaxJobPushes || dependency_count > TegraGM20BMaxJobDependencies)
 		return -E2BIG;
 	if (switch_gpu_job_fences(pushes, count, &fences))
 		return -EINVAL;
-	if (prof && stats_on() && !chan->kernel && count <= TGM_PROF_MAX && !fences && !READ_ONCE(chan->prof_seqno))
-		for (i = 0; i < count; ++i)
-			stamps += !pushes[i].incomplete && prof->cls[i] != TGM_PC_SKIP;
-	ret = chan_wait_ready(chan, count + 6 + stamps + fences,
-		CHAN_FENCE_DWORDS + 64 + 5 * (TGM_ORDER_MAX + dependency_count) + 16 * stamps +
-			SWITCH_GPU_FENCE_POINT_DWORDS * fences);
+	chan_submission_room(chan, pushes, count, dependency_count, fences, &prof, &entries, &words);
+	ret = chan_wait_ready(chan, entries, words);
 	if (ret == -ETIMEDOUT && gpu.stage >= 3)
 		tgm_chan_stalled(chan, "exec: GPFIFO still full after 1 s", chan->submitted, NSEC_PER_SEC);
 	return READ_ONCE(chan->error) ? -EIO : ret == -ETIMEDOUT ? -EBUSY : ret;

@@ -351,8 +351,8 @@ TEST(GM20BPushScanSource, KernelUsesTheHeader)
 	// A stamp only after a push whose class is not SKIP, only on a profiled submission.
 	EXPECT_THAT(Between(gpu(), "static void chan_job_entry(", "\n}\n"),
 		    HasSubstr("if (prof && !pushes[i].incomplete && prof->cls[i] != TGM_PC_SKIP) {"));
-	EXPECT_THAT(Between(gpu(), "static int chan_exec(", "\n}\n"),
-		    HasSubstr("|| fences || READ_ONCE(chan->prof_seqno)))"));
+	EXPECT_THAT(Between(gpu(), "static void chan_submission_room(", "\n}\n"),
+		    HasSubstr("|| job_fences || profiled))"));
 }
 
 // Direct scanout's fence-only present (NativeMobileDisplay, TEGRA_SCANOUT_COPY_FENCE_ONLY) launches no copy.
@@ -586,6 +586,21 @@ TEST(GM20BRoomSource, NativePublicationNeverSleepsWithBackingLocksHeld)
 	EXPECT_THAT(emit, HasSubstr("if (!may_wait && !chan_room(chan, entries, words)) return -EAGAIN;"));
 	expectBefore(emit, "chan->chan.defer_kick = true;", "nvif_chan_gpfifo_wait(&chan->chan, entries, words)");
 	EXPECT_THAT(emit, HasSubstr("chan->chan.gpfifo.cur = ring_cur;"));
+}
+
+// The waiter a submitter sleeps in after -EAGAIN waits for exactly the room chan_exec then checks, computed in one place:
+// a waiter that returned with less left the retry loops (TegraGM20BCopy.cpp submit, the user client's exec) spinning.
+TEST(GM20BRoomSource, WaiterAndSubmissionReserveOneRoom)
+{
+	EXPECT_EQ(Count(gpu(), "5 * (TGM_ORDER_MAX + dependency_count"), 1u);
+	const auto room = flat(definition(gpu(), "static void chan_submission_room("));
+	EXPECT_THAT(room, HasSubstr("5 * (TGM_ORDER_MAX + dependency_count + 1)"));
+	const char *computed =
+		"chan_submission_room(chan, pushes, count, dependency_count, fences, &prof, &entries, &words);";
+	expectBefore(flat(definition(gpu(), "static int chan_exec(")), computed,
+		     "if (!may_wait && !chan_room(chan, entries, words)) return -EAGAIN;");
+	expectBefore(flat(definition(gpu(), "int switch_gpu_chan_wait_submission_room(")), computed,
+		     "ret = chan_wait_ready(chan, entries, words);");
 }
 
 // The L2 invalidate that makes the CPU's writes visible is ordered on the GPU, in the submission's own stream, ahead of
@@ -1133,11 +1148,10 @@ TEST(GM20BJobFencesSource, OneJobOwnsItsUsesUntilItsLastFence)
 	EXPECT_THAT(exec, HasSubstr("tgm_coherency_wrote_listed(job.written[i], tgm_chan_uid(chan), seqno);"));
 	EXPECT_THAT(exec, Not(HasSubstr("findAddress(")));
 	const auto emit = flat(definition(gpu(), "static int chan_exec("));
-	EXPECT_THAT(emit, HasSubstr("entries = count + 6 + stamps + fences;"));
-	EXPECT_THAT(emit, HasSubstr("SWITCH_GPU_FENCE_POINT_DWORDS * fences;"));
+	const auto room = flat(definition(gpu(), "static void chan_submission_room("));
+	EXPECT_THAT(room, HasSubstr("*entries = count + 6 + stamps + job_fences;"));
+	EXPECT_THAT(room, HasSubstr("SWITCH_GPU_FENCE_POINT_DWORDS * job_fences;"));
 	EXPECT_THAT(emit, HasSubstr("last = switch_gpu_job_emit(pushes, count, chan->submitted, &emitter);"));
-	EXPECT_THAT(flat(definition(gpu(), "int switch_gpu_chan_wait_submission_room(")),
-		    HasSubstr("SWITCH_GPU_FENCE_POINT_DWORDS * fences);"));
 	EXPECT_THAT(flat(definition(client(), "IOReturn AGXDeviceUserClient::getInfo(")),
 		    HasSubstr("TegraGM20BInfoPushFences;"));
 	EXPECT_THAT(Between(client(), "constexpr uint32_t kInfoAwaitingUserspace =", ";"),
