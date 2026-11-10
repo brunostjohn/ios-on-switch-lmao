@@ -1,4 +1,4 @@
-"""Build native record buckets independently of the runtime stack, stamp the seed, then pack it as the device reads it."""
+"""Build native record buckets independently of the runtime stack, stamp the seed, then pack it for the device."""
 
 import argparse
 import hashlib

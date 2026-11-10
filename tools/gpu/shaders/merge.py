@@ -262,6 +262,20 @@ def clone(source: Path, target: Path) -> None:
     target.chmod(0o644)
 
 
+def native_pairs(native: Path, out: Path) -> list[tuple[Path, Path]]:
+    """Return the packed native seed's files and where they go; the host's manifest and coverage beside them stay."""
+    pairs = []
+    for path in sorted(native.rglob('*')):
+        relative = path.relative_to(native)
+        if not path.is_file() or len(relative.parts) < 2:
+            continue
+        if relative.parts[0] == 'native-analysis':
+            pairs.append((path, out / SEED / relative))
+        elif relative.parts[0].startswith('raw-'):
+            pairs.append((path, out / RAW / 'native' / relative))
+    return pairs
+
+
 def tree(args: argparse.Namespace) -> None:
     """Lay the seed and the raw pack out under ngpu/addons, and write the size."""
     out = args.out
@@ -271,14 +285,7 @@ def tree(args: argparse.Namespace) -> None:
     if args.raw:
         pairs += [(p, out / RAW / p.relative_to(args.raw)) for p in sorted(args.raw.rglob('*')) if p.is_file()]
     if args.native:
-        for path in sorted(args.native.rglob('*')):
-            relative = path.relative_to(args.native)
-            if not path.is_file() or len(relative.parts) < 2:
-                continue
-            if relative.parts[0] == 'native-analysis':
-                pairs.append((path, out / SEED / relative))
-            elif relative.parts[0].startswith('raw-'):
-                pairs.append((path, out / RAW / 'native' / relative))
+        pairs += native_pairs(args.native, out)
     for source, target in pairs:
         target.parent.mkdir(parents=True, exist_ok=True)
         clone(source, target)
