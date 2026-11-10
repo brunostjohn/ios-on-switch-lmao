@@ -41,10 +41,6 @@ extern "C" {
 bool tegra_vic_ready(void);
 const TegraVICTraits *tegra_vic_traits(void);
 int tegra_vic_buffer(uint64_t size, TegraVICBuffer *out);  // from the kernel arena; never freed
-// Maps `count` 4 KiB pages (physical addresses) at the start of a window; the rest of the window stays unmapped.
-// `writable` 0 maps them read-only for the engine. Returns the window's address.
-uint64_t tegra_vic_window_map(uint32_t window, const uint64_t *pages, uint32_t count, bool writable);
-void tegra_vic_window_clear(uint32_t window);
 // Another engine's syncpoint threshold VIC's channel waits for on the hardware before the job starts.
 struct TegraVICAcquire {
     uint32_t syncpt, threshold;
@@ -54,8 +50,6 @@ struct TegraVICAcquire {
 uint32_t tegra_vic_syncpt(void);
 uint64_t tegra_vic_config_address(void);
 uint64_t tegra_vic_filter_address(void);
-void tegra_vic_lock(void);  // held across a job's map, run and unmap (one job at a time)
-void tegra_vic_unlock(void);
 
 void tegra_vic_describe(char *buffer, size_t size);  // the falcon's state, for a failure line
 

@@ -27,13 +27,6 @@ SwitchGpuCopyMapping *oldest(SwitchGpuCopyMappings *cache)
 	return found;
 }
 
-void releaseDescriptor(void *owner)
-{
-	auto *descriptor = static_cast<IOMemoryDescriptor *>(owner);
-	descriptor->complete();
-	descriptor->release();
-}
-
 bool contains(const SwitchGpuCopyMapping &entry, uint64_t descriptorOffset, uint64_t backingOffset,
 	      uint64_t bytes)
 {
@@ -133,32 +126,4 @@ void switch_gpu_copy_mappings_clear(tgm_vm *vm, SwitchGpuCopyMappings *cache)
 		if (!entry.users)
 			discard(entry);
 	switch_gpu_relayout_cache_clear(vm, &cache->allocations);
-}
-
-switch_gpu_backing *switch_gpu_copy_register(IOMemoryDescriptor *descriptor)
-{
-	const uint64_t length = descriptor ? descriptor->getLength() : 0;
-	if (!length || length > SwitchGpuRelayoutCache::MaximumBytes ||
-	    descriptor->prepare() != kIOReturnSuccess)
-		return nullptr;
-	descriptor->retain();
-	const uint32_t count = uint32_t((length + Page - 1) / Page);
-	auto *pages = IONew(uint64_t, count);
-	if (!pages) {
-		releaseDescriptor(descriptor);
-		return nullptr;
-	}
-	bool valid = true;
-	for (uint32_t i = 0; i < count; ++i) {
-		pages[i] = descriptor->getPhysicalSegment(uint64_t(i) * Page, nullptr,
-							  kIOMemoryMapperNone);
-		valid &= pages[i] && !(pages[i] & (Page - 1));
-	}
-	auto *backing =
-		valid ? switch_gpu_backing_register(pages, count, 0, descriptor, releaseDescriptor)
-		      : nullptr;
-	IODelete(pages, uint64_t, count);
-	if (!backing)
-		releaseDescriptor(descriptor);
-	return backing;
 }

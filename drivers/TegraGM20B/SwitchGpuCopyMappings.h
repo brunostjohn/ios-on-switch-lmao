@@ -21,4 +21,3 @@ int switch_gpu_copy_mapping(tgm_vm *, SwitchGpuCopyMappings *, IOMemoryDescripto
 			    uint64_t bytes, bool tiled, SwitchGpuCopyMapping **);
 void switch_gpu_copy_mapping_put(SwitchGpuCopyMapping *);
 void switch_gpu_copy_mappings_clear(tgm_vm *, SwitchGpuCopyMappings *);
-switch_gpu_backing *switch_gpu_copy_register(IOMemoryDescriptor *);

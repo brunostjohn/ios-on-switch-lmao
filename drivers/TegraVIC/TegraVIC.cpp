@@ -121,12 +121,10 @@ constexpr uint32_t kIdentityTables = 4;  // the arena and the firmware: at most 
 constexpr uint64_t kMappingBase = 0x40000000, kMappingBytes = 1ULL << 30;
 constexpr uint32_t kTables = 1 + TEGRA_VIC_WINDOWS * kWindowTables + kIdentityTables + (kMappingBytes >> 22);
 TegraSMMUDomain gDomain;  // directory = page 0, the windows' tables pages 1.., then the identity tables
-uint32_t gWindowMapped[TEGRA_VIC_WINDOWS];  // pages mapped from each window's start
 TegraSMMUSpace gMappingSpace;
 uint32_t gMappingBitmap[TegraSMMUSpace::bitmapWords(kMappingBytes)];
 IOLock *gMappingLock;
 
-IOLock *gJobLock;    // one job at a time: map, run, unmap
 IOLock *gStateLock;  // suspend/resume against jobs
 uint32_t gSyncpt;
 bool gUp, gWedged;
@@ -162,11 +160,6 @@ bool parse(const uint8_t *fw, size_t length)
 }
 
 // --- SMMU domain (TegraSMMUDomain.h; the registers under TegraSMMU.h's lock) ---------------------------------------
-inline uint32_t *table(uint32_t index)
-{
-    return gDomain.table(index);
-}
-
 void smmuFlush()
 {
     tegra_smmu_flush(kAsid);
@@ -370,10 +363,9 @@ void bringUp(void *, wait_result_t)
     }
     gVic = switch_mmio_map(kVicPA, kVicSize);
     gMc = switch_mmio_map(kMcPA, 0x1000);
-    gJobLock = IOLockAlloc();
     gStateLock = IOLockAlloc();
     gMappingLock = IOLockAlloc();
-    if (!gVic || !gMc || !gJobLock || !gStateLock || !gMappingLock || !switch_vic_mapping_start()) {
+    if (!gVic || !gMc || !gStateLock || !gMappingLock || !switch_vic_mapping_start()) {
         IOLog("TegraVIC: V0 FAIL no mapping\n");
         return;
     }
@@ -475,48 +467,6 @@ extern "C" uint64_t tegra_vic_filter_address(void)
     return gFilter.pa;
 }
 
-extern "C" void tegra_vic_lock(void)
-{
-    IOLockLock(gJobLock);
-}
-
-extern "C" void tegra_vic_unlock(void)
-{
-    IOLockUnlock(gJobLock);
-}
-
-// Job lock held. The window's tables are fixed; pages past `count` are left (or made) unmapped, so an access beyond
-// the surface faults in the SMMU instead of reaching memory.
-extern "C" uint64_t tegra_vic_window_map(uint32_t window, const uint64_t *pages, uint32_t count, bool writable)
-{
-    const uint64_t base = kTegraVICWindowBase + window * kTegraVICWindowBytes;
-    const uint32_t limit = (uint32_t)(kTegraVICWindowBytes >> SWITCH_HW_PAGE_SHIFT);
-    if (window >= TEGRA_VIC_WINDOWS || count > limit)
-        return 0;
-    uint32_t *pt = table(1 + window * kWindowTables);  // the window's tables are consecutive pages
-    for (uint32_t i = 0; i < count; i++)
-        pt[i] = TegraSMMUDomain::entry(pages[i], writable);
-    for (uint32_t i = count; i < gWindowMapped[window]; i++)
-        pt[i] = 0;
-    switch_dcache_clean(pt,
-                        (uint64_t)(count > gWindowMapped[window] ? count : gWindowMapped[window]) *
-                            4);  // pages in a row
-    gWindowMapped[window] = count;
-    smmuFlush();
-    return base;
-}
-
-extern "C" void tegra_vic_window_clear(uint32_t window)
-{
-    if (window >= TEGRA_VIC_WINDOWS || !gWindowMapped[window])
-        return;
-    uint32_t *pt = table(1 + window * kWindowTables);
-    bzero(pt, (uint64_t)gWindowMapped[window] * 4);
-    switch_dcache_clean(pt, (uint64_t)gWindowMapped[window] * 4);
-    gWindowMapped[window] = 0;
-    smmuFlush();
-}
-
 extern "C" uint64_t switch_vic_mapping_create(const uint64_t *pages, uint32_t count, bool writable)
 {
     if (!gUp || !pages || !count || count > kMappingBytes / SWITCH_HW_PAGE_SIZE)
@@ -561,14 +511,13 @@ extern "C" uint32_t tegra_vic_syncpt(void)
     return gSyncpt;
 }
 
-// Sleep (SC7), through TegraHost1x's sleep clients. Suspend waits for the job lock (no job runs), parks the engine
-// in reset and drops the swgroup to bypass before host1x saves its syncpoints; new jobs block until resume. Resume
-// runs after host1x is back: the SMMU domain is programmed again (SC7 resets the MC), the partition powered, the falcon
-// reloaded from the kept image and proven with the V2 stream.
+// Sleep (SC7), through TegraHost1x's sleep clients. Suspend waits for the queued jobs (switch_vic_jobs_suspend), parks
+// the engine in reset and drops the swgroup to bypass before host1x saves its syncpoints; new jobs block until resume.
+// Resume runs after host1x is back: the SMMU domain is programmed again (SC7 resets the MC), the partition powered, the
+// falcon reloaded from the kept image and proven with the V2 stream.
 namespace {
 void engineSuspend()
 {
-    IOLockLock(gJobLock);
     IOLockLock(gStateLock);
     switch_vic_jobs_suspend();
     smmuDetach();
@@ -576,7 +525,6 @@ void engineSuspend()
     IODelay(2);
     switch_car_clock_disable(kClock);
     IOLockUnlock(gStateLock);
-    IOLockUnlock(gJobLock);
 }
 
 void engineResume()

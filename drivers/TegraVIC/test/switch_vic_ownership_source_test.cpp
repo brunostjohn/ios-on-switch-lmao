@@ -31,3 +31,16 @@ TEST(VicOwnershipSource, EveryVicSubmissionRecordsItsUses)
     EXPECT_THAT(SourceText("../SwitchVICBounceSubmit.cpp"),
                 HasSubstr("switch_gpu_backing_use uses[5] = {{output, SWITCH_GPU_BACKING_WRITE, 0}};"));
 }
+
+// A job's surfaces map through VIC's mapping space (switch_vic_mapping_create) and jobs queue in SwitchVICJobs: the
+// per-job windows, the lock one job held across them, and the copy engine's descriptor registration have no callers.
+TEST(VicOwnershipSource, NoJobMapsAWindowOrHoldsTheEngine)
+{
+    const std::string engine = SourceText("../TegraVIC.h");
+    EXPECT_THAT(engine, Not(HasSubstr("tegra_vic_window_map(")));
+    EXPECT_THAT(engine, Not(HasSubstr("tegra_vic_window_clear(")));
+    EXPECT_THAT(engine, Not(HasSubstr("tegra_vic_lock(")));
+    EXPECT_THAT(engine, Not(HasSubstr("tegra_vic_unlock(")));
+    EXPECT_THAT(SourceText("../TegraVIC.cpp"), Not(HasSubstr("gJobLock")));
+    EXPECT_THAT(SourceText("../../TegraGM20B/SwitchGpuCopyMappings.h"), Not(HasSubstr("switch_gpu_copy_register(")));
+}

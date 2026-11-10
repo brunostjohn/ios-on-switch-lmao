@@ -92,9 +92,11 @@ host_test(
     name = "switch_vic_ownership_source_test",
     srcs = ["switch_vic_ownership_source_test.cpp"],
     data = [
+        "//drivers/TegraGM20B:SwitchGpuCopyMappings.h",
         "//drivers/TegraGM20B:TegraGM20BCopy.h",
         "//drivers/TegraVIC:SwitchVICBounceSubmit.cpp",
         "//drivers/TegraVIC:SwitchVICJobs.h",
+        "//drivers/TegraVIC:TegraVIC.cpp",
         "//drivers/TegraVIC:TegraVIC.h",
     ],
 )
