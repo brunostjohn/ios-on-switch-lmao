@@ -296,8 +296,11 @@ TEST_F(Backing, FailureAndResetGenerationCannotBeReportedAsCompletion)
 	timelines[key(&first)].error = -5;
 	const auto reset = token(1, 99, SWITCH_GPU_ENGINE_GM20B, 2);
 	timelines[key(&reset)].completed = 99;
-	EXPECT_EQ(switch_gpu_backing_cpu_acquire(allocation, 0, 4096, SWITCH_GPU_BACKING_READ), -5);
-	EXPECT_EQ(publish(allocation, SWITCH_GPU_BACKING_READ, token(2)), -5);
+	const int logged = ioLogLines();
+	EXPECT_EQ(switch_gpu_backing_cpu_acquire(allocation, 0, 4096, SWITCH_GPU_BACKING_READ), 0);
+	EXPECT_EQ(ioLogLines(), logged + 1);
+	EXPECT_EQ(switch_gpu_backing_cpu_release(allocation, 0, 4096, SWITCH_GPU_BACKING_READ), 0);
+	EXPECT_EQ(publish(allocation, SWITCH_GPU_BACKING_READ, token(2)), 0);
 	switch_gpu_backing_release(allocation);
 }
 
@@ -338,7 +341,7 @@ TEST_F(Backing, FailedReaderFenceSurvivesPendingAcquiresWithoutPoisoningNewWork)
 	switch_gpu_backing_release(allocation);
 }
 
-TEST_F(Backing, FailedWriterStillRejectsUseAfterFailedReadersAreRetired)
+TEST_F(Backing, FailedWriterRejectsNoUseAndRetiresOnceReplaced)
 {
 	auto *allocation = backing();
 	const auto reader = token(1), writer = token(2);
@@ -346,10 +349,14 @@ TEST_F(Backing, FailedWriterStillRejectsUseAfterFailedReadersAreRetired)
 	ASSERT_EQ(publish(allocation, SWITCH_GPU_BACKING_WRITE, writer), 0);
 	timelines[key(&reader)].error = -5;
 	timelines[key(&writer)].error = -5;
-	EXPECT_EQ(publish(allocation, SWITCH_GPU_BACKING_READ, token(3)), -5);
-	EXPECT_EQ(publish(allocation, SWITCH_GPU_BACKING_WRITE, token(3)), -5);
+	EXPECT_EQ(publish(allocation, SWITCH_GPU_BACKING_READ, token(3)), 0);
+	EXPECT_EQ(publish(allocation, SWITCH_GPU_BACKING_WRITE, token(3, 2)), 0);
 	EXPECT_EQ(timelines[key(&reader)].refs, 0);
 	EXPECT_EQ(timelines[key(&writer)].refs, 1);
+	complete(token(3, 2));
+	EXPECT_EQ(switch_gpu_backing_cpu_acquire(allocation, 0, 4096, SWITCH_GPU_BACKING_READ), 0);
+	EXPECT_EQ(switch_gpu_backing_cpu_release(allocation, 0, 4096, SWITCH_GPU_BACKING_READ), 0);
+	EXPECT_EQ(timelines[key(&writer)].refs, 0);
 	switch_gpu_backing_release(allocation);
 }
 
@@ -584,20 +591,21 @@ TEST_F(Backing, CpuWriteInvalidatesTheOldExportProducer)
     switch_gpu_backing_release(allocation);
 }
 
-TEST_F(Backing, FailedProducerCannotBecomeAnImmutableExport)
+TEST_F(Backing, FailedProducerExportsUndefinedContentsWithNothingToWaitFor)
 {
     auto *allocation = backing();
     const auto writer = token(79);
     ASSERT_EQ(publish(allocation, SWITCH_GPU_BACKING_WRITE, writer), 0);
     timelines[key(&writer)].error = -5;
     switch_gpu_cpu_lease *lease = nullptr;
-    switch_gpu_backing_token producer = {};
-    EXPECT_EQ(switch_gpu_backing_export_read(allocation, &producer, &lease), -5);
-    EXPECT_EQ(lease, nullptr);
-    EXPECT_EQ(timelines[key(&writer)].refs, 2);
+    switch_gpu_backing_token producer = token(5);
+    EXPECT_EQ(switch_gpu_backing_export_read(allocation, &producer, &lease), 0);
+    EXPECT_NE(lease, nullptr);
+    EXPECT_EQ(producer.engine, 0u);
     switch_gpu_backing_info info = {};
     switch_gpu_backing_describe(allocation, &info);
-    EXPECT_EQ(info.cpu_locks, 0u);
+    EXPECT_EQ(info.cpu_locks, 1u);
+    EXPECT_EQ(switch_gpu_backing_cpu_release_owned(&lease, 0), 0);
     switch_gpu_backing_release(allocation);
 }
 
@@ -658,15 +666,16 @@ TEST_F(Backing, EngineConversionReservationCannotBypassCpuOwnership)
     switch_gpu_backing_release(allocation);
 }
 
-TEST_F(Backing, EngineConversionReservationRejectsFailedContentsWithoutLeakingOwnership)
+TEST_F(Backing, EngineConversionReservationGoesOnOverFailedContents)
 {
     auto *allocation = backing();
     const auto writer = token(87);
     ASSERT_EQ(publish(allocation, SWITCH_GPU_BACKING_WRITE, writer), 0);
     timelines[key(&writer)].error = -5;
     switch_gpu_cpu_lease *lease = nullptr;
-    EXPECT_EQ(switch_gpu_backing_conversion_reserve(allocation, SWITCH_GPU_BACKING_WRITE, 0, &lease), -5);
-    EXPECT_EQ(lease, nullptr);
+    EXPECT_EQ(switch_gpu_backing_conversion_reserve(allocation, SWITCH_GPU_BACKING_WRITE, 0, &lease), 0);
+    EXPECT_NE(lease, nullptr);
+    EXPECT_EQ(switch_gpu_backing_cpu_release_owned(&lease, 0), 0);
     switch_gpu_backing_info info = {};
     switch_gpu_backing_describe(allocation, &info);
     EXPECT_EQ(info.cpu_locks, 0u);
@@ -727,7 +736,7 @@ TEST_F(Backing, PhysicalSnapshotRetainsPendingWriterWithoutCpuWait)
     switch_gpu_backing_release(allocation);
 }
 
-TEST_F(Backing, PhysicalSnapshotRefusesCpuAndFailedGpuWriters)
+TEST_F(Backing, PhysicalSnapshotRefusesCpuWritersAndGoesOnOverFailedGpuWriters)
 {
     auto *allocation = backing();
     ASSERT_EQ(switch_gpu_backing_cpu_acquire(allocation, 0, 4096, SWITCH_GPU_BACKING_WRITE), 0);
@@ -742,8 +751,10 @@ TEST_F(Backing, PhysicalSnapshotRefusesCpuAndFailedGpuWriters)
     const auto writer = token(102);
     ASSERT_EQ(publish(allocation, SWITCH_GPU_BACKING_WRITE, writer), 0);
     timelines[key(&writer)].error = -5;
-    EXPECT_EQ(switch_gpu_backing_snapshot_read(allocation, &producer, &lease), -5);
-    EXPECT_EQ(lease, nullptr);
+    producer = writer;
+    EXPECT_EQ(switch_gpu_backing_snapshot_read(allocation, &producer, &lease), 0);
+    EXPECT_EQ(producer.engine, 0u);
+    EXPECT_EQ(switch_gpu_backing_cpu_release_owned(&lease, 0), 0);
     switch_gpu_backing_release(allocation);
 }
 

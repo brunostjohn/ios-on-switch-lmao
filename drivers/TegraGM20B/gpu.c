@@ -4570,10 +4570,9 @@ static int backing_dependencies(struct tgm_chan *chan, const struct switch_gpu_b
 	u32 i;
 	for (i = 0; i < count; ++i) {
 		const struct switch_gpu_backing_token *token = &tokens[i];
-		int status = switch_gpu_backing_token_status(token);
-		if (status < 0)
-			return SWITCH_GPU_BACKING_DEPENDENCY_FAILED;
-		if (status == 1)
+		/* A producer that failed after the ownership layer collected it leaves nothing to wait for; that layer logs it,
+		 * and its readers go on. */
+		if (switch_gpu_backing_token_status(token))
 			continue;
 		if (token->engine == SWITCH_GPU_ENGINE_GM20B) {
 			struct tgm_chan *source;

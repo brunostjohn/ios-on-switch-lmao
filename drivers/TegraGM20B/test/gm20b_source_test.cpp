@@ -626,6 +626,11 @@ TEST(GM20BFencesSource, ExecQueuesItsWritersAcquiresBeforeItSubmits)
 		     "error = switch_gpu_chan_exec_visibility(");
 	expectBefore(exec, "switch_gpu_backing_dependencies(", "error = switch_gpu_chan_exec_visibility(");
 	EXPECT_THAT(exec, HasSubstr("ownershipBusy ? kIOReturnCannotLock : ioreturn(error)"));
+	// Named uses carry no CPU exclusion unless an admission ordered them; a legacy job claims only listed imports.
+	EXPECT_THAT(exec, HasSubstr("const uint32_t claim = switch_gpu_claim_flags(admissionBegin || admissionContinue);"));
+	EXPECT_THAT(exec, HasSubstr("addUse(bo, uses[i].access, claim, offset, bytes)"));
+	EXPECT_THAT(exec, HasSubstr("addUse(bo, SWITCH_GPU_BACKING_READ, claim)"));
+	EXPECT_THAT(exec, HasSubstr("switch_gpu_legacy_uses("));
 	for (const char *signature :
 	     {"int tgm_chan_follow(struct tgm_chan *chan,", "int tgm_chan_follow_importers("}) {
 		const std::string follow = flat(definition(gpu(), signature));

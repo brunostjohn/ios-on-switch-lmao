@@ -32,6 +32,7 @@
 #include "SwitchGpuPin.h"
 #include "SwitchGpuAllocatedMemory.h"
 #include "SwitchGpuBindings.h"
+#include "SwitchGpuLegacyUses.h"
 #include "SwitchGpuSubmitGate.h"
 #include "SwitchGpuNativeSurface.h"
 #include "SwitchGpuNativeUse.h"
@@ -2327,14 +2328,22 @@ IOReturn AGXDeviceUserClient::exec(uint32_t channel, TegraGM20BAbiPush *input, u
 	}
 	uint32_t useTotal = 0, writeCount = 0, surfaceCount = 0, nativeGuardCount = 0;
 	bool hostWritten = !(visibility & TegraGM20BSubmitVisibilityExplicit);
-	const auto addUse = [&](const Bo *bo, uint32_t access, uint64_t offset = 0, uint64_t bytes = 0) {
+	const uint32_t claim = switch_gpu_claim_flags(admissionBegin || admissionContinue);
+	// flags: the SWITCH_GPU_BACKING_* ownership flags of the use beside its access
+	const auto addUse = [&](const Bo *bo, uint32_t access, uint32_t flags, uint64_t offset = 0,
+				uint64_t bytes = 0) {
 		hostWritten |= (access & TegraGM20BSurfaceHostWritten) != 0;
 		access &= ~uint32_t(TegraGM20BSurfaceGpuAddress | TegraGM20BSurfaceHostWritten | TegraGM20BSurfaceRange);
-		if (bo->nativeView)
-			return switch_gpu_native_surface_add_read(*bo->nativeView, access, job.uses,
-								  job.guards, job.capacity,
-								  useTotal, nativeGuardCount);
-		job.uses[useTotal++] = {bo->backing, access, 0};
+		if (bo->nativeView) {
+			const uint32_t first = useTotal;
+			const int error = switch_gpu_native_surface_add_read(
+				*bo->nativeView, access, job.uses, job.guards, job.capacity, useTotal,
+				nativeGuardCount);
+			for (uint32_t i = first; !error && i < useTotal; ++i)
+				job.uses[i].access |= flags;
+			return error;
+		}
+		job.uses[useTotal++] = {bo->backing, access | flags, 0};
 		if (access & SWITCH_GPU_BACKING_WRITE)
 			job.writes[writeCount++] = {bo->backing, bo->representation ? 0 : offset,
 							     bo->representation ? 0 : bytes};
@@ -2363,7 +2372,7 @@ IOReturn AGXDeviceUserClient::exec(uint32_t channel, TegraGM20BAbiPush *input, u
 		    (bytes && !switch_gpu_binding_offset(*binding, uses[i].handle, bytes, offset)) ||
 		    ((uses[i].access & TegraGM20BSurfaceWrite) && bo->readOnly))
 			return kIOReturnBadArgument;
-		if (const int error = addUse(bo, uses[i].access, offset, bytes))
+		if (const int error = addUse(bo, uses[i].access, claim, offset, bytes))
 			return ioreturn(error);
 	}
 	for (uint32_t i = 0; native && i < count; ++i) {
@@ -2373,14 +2382,19 @@ IOReturn AGXDeviceUserClient::exec(uint32_t channel, TegraGM20BAbiPush *input, u
 		hostWritten |= binding && !binding->retirement->vol;
 		if (!bo || !bo->backing)
 			return kIOReturnBadArgument;
-		if (const int error = addUse(bo, SWITCH_GPU_BACKING_READ))
+		if (const int error = addUse(bo, SWITCH_GPU_BACKING_READ, claim))
 			return ioreturn(error);
 	}
-	if (!native)
-		for (const Bo *bo = bos_; bo; bo = bo->next)
-			if (const int error = addUse(bo, bo->readOnly ? SWITCH_GPU_BACKING_READ
-								      : SWITCH_GPU_BACKING_WRITE))
-				return ioreturn(error);
+	if (!native) {
+		constexpr uint32_t kAccess = SWITCH_GPU_BACKING_READ | SWITCH_GPU_BACKING_WRITE;
+		const int error = switch_gpu_legacy_uses(
+			bos_, listed, [this](uint64_t handle) { return surfaces_.listedAccess(handle); },
+			[&](const Bo *bo, uint32_t access) {
+				return addUse(bo, access & kAccess, access & ~kAccess);
+			});
+		if (error)
+			return ioreturn(error);
+	}
 	const uint32_t guardCount = surfaceCount + nativeGuardCount;
 	if (admissionContinue && !admission.covers(job.uses, useTotal))
 		return kIOReturnBadArgument;

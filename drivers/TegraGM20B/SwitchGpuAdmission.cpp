@@ -93,7 +93,7 @@ int SwitchGpuAdmission::begin(const switch_gpu_backing_use *uses, uint32_t count
 		if (!result && (writers || (write && readers)))
 			result = -16;
 		if (!result)
-			result = switch_gpu_backing_prune_locked(backing);
+			switch_gpu_backing_prune_locked(backing);
 		if (!result && (write ? backing->gpu_admission_writers
 				      : backing->gpu_admission_readers) == UINT32_MAX)
 			result = -75;

@@ -56,7 +56,8 @@ int complete(const switch_gpu_backing_token &prefix, const SwitchGpuCpuRange &ra
 {
     auto *backing = range.backing;
     IOLockLock(backing->lock);
-    int result = switch_gpu_backing_prune_locked(backing);
+    switch_gpu_backing_prune_locked(backing);
+    int result = 0;
     const switch_gpu_backing_token *writer = nullptr;
     for (uint32_t i = 0; !result && i < backing->access_count; ++i) {
         const auto &access = backing->accesses[i];

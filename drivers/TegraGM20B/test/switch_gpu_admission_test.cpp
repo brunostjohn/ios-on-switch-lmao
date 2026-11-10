@@ -104,7 +104,7 @@ TEST_F(Backing, AdmissionRetainsIndependentQueueCountsUntilBothEnd)
 	switch_gpu_backing_release(b);
 }
 
-TEST_F(Backing, AdmissionStaleGuardAndFailedContentRefuseBeforeReservation)
+TEST_F(Backing, AdmissionStaleGuardRefusesBeforeReservationAndFailedContentDoesNot)
 {
 	auto *b = backing();
 	SwitchGpuAdmission admission;
@@ -116,8 +116,9 @@ TEST_F(Backing, AdmissionStaleGuardAndFailedContentRefuseBeforeReservation)
 	ASSERT_EQ(publish(b, kWrite, token(1)), 0);
 	const auto failed = token(1);
 	timelines[key(&failed)].error = -5;
-	EXPECT_EQ(admission.begin(&use, 1, nullptr, 0, nullptr, 0), -5);
-	EXPECT_FALSE(admission.active());
+	EXPECT_EQ(admission.begin(&use, 1, nullptr, 0, nullptr, 0), 0);
+	EXPECT_TRUE(admission.active());
+	admission.end();
 	switch_gpu_backing_release(b);
 }
 }

@@ -353,6 +353,22 @@ host_test(
 )
 
 host_test(
+    name = "switch_gpu_backing_failure_test",
+    srcs = ["switch_gpu_backing_failure_test.cpp", "switch_gpu_backing_fixture.h"],
+    deps = [":backing", ":coherency_kernel"],
+)
+
+host_test(
+    name = "switch_gpu_legacy_uses_test",
+    srcs = [
+        "switch_gpu_backing_fixture.h",
+        "switch_gpu_legacy_uses_test.cpp",
+        "//drivers/TegraGM20B:SwitchGpuLegacyUses.h",
+    ],
+    deps = [":backing", ":coherency_kernel"],
+)
+
+host_test(
     name = "switch_gpu_write_ranges_test",
     srcs = ["switch_gpu_write_ranges_test.cpp", "switch_gpu_backing_fixture.h"],
     deps = [":backing", ":coherency_kernel"],

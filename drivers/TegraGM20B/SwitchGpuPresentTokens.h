@@ -63,14 +63,14 @@ static inline int switch_gpu_present_tokens_prepare(struct switch_gpu_present_to
 	if (count > SWITCH_GPU_PRESENT_MAX_DEPENDENCIES || (count && !tokens))
 		return -22;
 	for (i = 0; i < count; ++i) {
+		/* A producer that failed before the present leaves nothing to wait for (its bytes are undefined, the
+		 * present goes on); one that fails while the present waits makes it TEGRA_SCANOUT_SOURCE_LOST. */
+		if (switch_gpu_backing_token_status(&tokens[i]) < 0)
+			continue;
 		result = switch_gpu_backing_token_retain(&tokens[i]);
 		if (result)
 			break;
 		held->tokens[held->count++] = tokens[i];
-		if (switch_gpu_backing_token_status(&tokens[i]) < 0) {
-			result = SWITCH_GPU_BACKING_DEPENDENCY_FAILED;
-			break;
-		}
 	}
 	if (result)
 		switch_gpu_present_tokens_drop(held);

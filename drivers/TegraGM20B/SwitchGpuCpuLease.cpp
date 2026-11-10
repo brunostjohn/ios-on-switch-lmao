@@ -114,17 +114,21 @@ static int snapshot_read(switch_gpu_backing *backing, switch_gpu_backing_token *
 	int result = backing->cpu_writers || backing->gpu_admission_writers ||
 		backing->cpu_readers == UINT32_MAX ? -16 : 0;
 	const switch_gpu_backing_access *writer = nullptr;
+	bool failed_writer = false;
 	for (uint32_t i = 0; !result && i < backing->access_count; ++i) {
-		const auto &access = backing->accesses[i];
-		if (!(access.access & SWITCH_GPU_BACKING_WRITE))
+		auto &access = backing->accesses[i];
+		if (!(access.access & SWITCH_GPU_BACKING_WRITE) || access.content != backing->content)
 			continue;
+		// A failed producer leaves undefined bytes and nothing to wait for: the snapshot goes on without it.
 		const int status = switch_gpu_backing_token_status(&access.token);
-		if (status < 0)
-			result = status;
-		if (access.content == backing->content)
+		if (status < 0) {
+			switch_gpu_backing_note_failure_locked(backing, access, status);
+			failed_writer = true;
+		} else {
 			writer = &access;
+		}
 	}
-	if (!result && !writer && !allow_cpu)
+	if (!result && !writer && !failed_writer && !allow_cpu)
 		result = SWITCH_GPU_BACKING_STALE;
 	if (!result && writer)
 		result = switch_gpu_backing_engine_ops(writer->token.engine)
@@ -201,7 +205,7 @@ extern "C" int switch_gpu_backing_conversion_reserve(switch_gpu_backing *backing
 		IOLockSleep(backing->lock, &backing->cpu_writers, THREAD_UNINT);
 	}
 	if (!result)
-		result = switch_gpu_backing_prune_locked(backing);
+		switch_gpu_backing_prune_locked(backing);
 	auto &users = write ? backing->cpu_writers : backing->cpu_readers;
 	if (!result && users == UINT32_MAX)
 		result = -75;

@@ -114,6 +114,22 @@ switch_gpu_backing_token token(uint32_t queue, uint64_t value = 1, uint32_t engi
 	return {value, generation, engine, queue};
 }
 
+// The channel of `of` killed: the work it had not finished reports failure.
+[[maybe_unused]] void kill_channel(const switch_gpu_backing_token &of)
+{
+	timelines[key(&of)].error = -5;
+}
+
+[[maybe_unused]] void complete(const switch_gpu_backing_token &of)
+{
+	timelines[key(&of)].completed = of.value;
+}
+
+[[maybe_unused]] int refs(const switch_gpu_backing_token &of)
+{
+	return timelines[key(&of)].refs;
+}
+
 switch_gpu_backing *backing(uint32_t count = 1)
 {
 	std::vector<uint64_t> pages;
@@ -169,7 +185,10 @@ void Backing::TearDown()
 {
 	for (auto &entry : timelines)
 		entry.second.error = -5;
-	switch_gpu_backing_retire();
+	do {
+		retirement_scheduled = false;
+		switch_gpu_backing_retire();
+	} while (retirement_scheduled);
 	for (const auto &entry : timelines)
 		EXPECT_EQ(entry.second.refs, 0);
 }

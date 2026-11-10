@@ -120,15 +120,17 @@ TEST_F(PresentTokens, PartialRetainFailureUnwindsEarlierTokens)
 	EXPECT_EQ(retainCalls, 2u);
 }
 
-TEST_F(PresentTokens, FailedInputCannotBecomeAnAcceptedPhysicalFrame)
+// A producer that failed before the present left undefined bytes and nothing to wait for; the present goes on.
+TEST_F(PresentTokens, InputFailedBeforeThePresentIsNothingToWaitFor)
 {
 	const auto producers = std::array{token(1), token(2)};
 	states[2] = -5;
-	EXPECT_EQ(switch_gpu_present_tokens_prepare(&held, producers.data(), producers.size()),
-		  SWITCH_GPU_BACKING_DEPENDENCY_FAILED);
-	EXPECT_EQ(held.count, 0u);
-	EXPECT_EQ(references[1], 0);
+	EXPECT_EQ(switch_gpu_present_tokens_prepare(&held, producers.data(), producers.size()), 0);
+	EXPECT_EQ(held.count, 1u);
+	EXPECT_EQ(references[1], 1);
 	EXPECT_EQ(references[2], 0);
+	switch_gpu_present_tokens_drop(&held);
+	EXPECT_EQ(references[1], 0);
 }
 
 TEST_F(PresentTokens, ExternalCompletionJoinsLaggingSoftwareRetirementOnlyAfterHardwareFence)
