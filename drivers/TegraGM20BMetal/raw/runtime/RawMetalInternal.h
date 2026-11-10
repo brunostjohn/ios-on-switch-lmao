@@ -296,6 +296,15 @@ bool encodeRaw(RMCommandBuffer *cb, size_t from, size_t to, const char **why, si
 // RawMetalEvents.mm
 extern std::mutex gHoldersLock;
 extern std::set<RMCommandBuffer *> gHolders;
+#if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
+// A held command buffer's shared event wait as it was armed, for the still-waiting line (rawStallTick); gHoldersLock
+struct RMEventWaitNote {
+    void *event;
+    uint64_t value;
+    uint64_t sinceUs, saidUs;
+};
+extern std::map<RMCommandBuffer *, RMEventWaitNote> gEventWaits;
+#endif
 bool waitsForEvent(RMCommandBuffer *cb);
 void armEventWaits(RMCommandBuffer *cb);
 raw::EventReadiness eventReadiness(RMCommandBuffer *cb, raw::EventDeadline::Time &nextWake);

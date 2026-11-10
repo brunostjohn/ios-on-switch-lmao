@@ -267,12 +267,13 @@ static void makeRecord(RMPipeline *p, MTLRenderPipelineDescriptor *d)
     if (!p->_raw) {
         const char *label = d.label.UTF8String ?: "-";
         SWITCH_REFUSE_DETAIL("raw", "state.unpacked", raw::Pack::fnv(label, strlen(label)),
-                             "state neither in the pack nor made at its creation: m2v draws it%s: %s",
+                             "state neither in the pack nor made at its creation: m2v draws it%s: %s (functions %s, %s)",
                              !p->_completable           ? " (a function not this device's: never made)"
                              : p->_asked                ? " until its compile, asked again, makes it"
                              : gRM->raw->stats.heapFull ? " (or the shader heap is full)"
                                                         : " (the raw log names why it was refused)",
-                             label);
+                             label, d.vertexFunction ? object_getClassName(d.vertexFunction) : "nil",
+                             d.fragmentFunction ? object_getClassName(d.fragmentFunction) : "nil");
     }
     return p;
 }

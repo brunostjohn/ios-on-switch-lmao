@@ -54,6 +54,9 @@
 // The committed command buffers that wait for a shared event, until scheduled.
 std::mutex gHoldersLock;
 std::set<RMCommandBuffer *> gHolders;
+#if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
+std::map<RMCommandBuffer *, RMEventWaitNote> gEventWaits;
+#endif
 
 bool waitsForEvent(RMCommandBuffer *cb)
 {
@@ -68,6 +71,7 @@ void unhold(RMCommandBuffer *cb)
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
     std::lock_guard<std::mutex> l(gHoldersLock);
     gHolders.erase(cb);
+    gEventWaits.erase(cb);
 #else
     (void)cb;
 #endif
@@ -139,8 +143,8 @@ raw::EventReadiness eventReadiness(RMCommandBuffer *cb, raw::EventDeadline::Time
         {
             std::lock_guard<std::mutex> lock(gRM->eventValues);
             promise = gRM->events.observe(reinterpret_cast<uintptr_t>(c.obj), c.c,
-                                           reinterpret_cast<uintptr_t>((__bridge void *)cb->_queue),
-                                           gRM->raw->channelGeneration());
+                                          reinterpret_cast<uintptr_t>((__bridge void *)cb->_queue),
+                                          gRM->raw->channelGeneration());
         }
         if (promise) {
             RAW_DIAGNOSTIC(gRM->stats.waitsOnPromise++);
@@ -159,15 +163,21 @@ raw::EventReadiness eventReadiness(RMCommandBuffer *cb, raw::EventDeadline::Time
         cb->_eventArmed = range.from + 1;
         cb->_eventStart = raw::EventDeadline::Clock::now();
         cb->_eventWaits.push_back(range.from);
+#if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
+        {
+            std::lock_guard<std::mutex> h(gHoldersLock);
+            gEventWaits[cb] = {c.obj, c.c, nowUs(), 0};
+        }
+#endif
         // Registration is done outside the scheduler mutex: an already satisfied event may deliver its notification
         // immediately. The callback does not retain a command buffer or scan unrelated dependency lists.
         void *queue = (__bridge void *)cb->_queue;
         if (shared < 0)
             [event notifyListener:gRM->listener
-                      atValue:c.c
-                        block:^(id<MTLSharedEvent>, uint64_t) {
-                            wakeSubmit(queue);
-                        }];
+                          atValue:c.c
+                            block:^(id<MTLSharedEvent>, uint64_t) {
+                                wakeSubmit(queue);
+                            }];
     }
     const raw::EventDeadline deadline(cb->_eventStart, c.a);
     const Readiness state = deadline.state([event signaledValue] >= c.c, raw::EventDeadline::Clock::now());

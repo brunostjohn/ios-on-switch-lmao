@@ -274,6 +274,23 @@ TEST(SubmitQueue, AHeldQueueCountsItsJobsScheduledAndThoseCommittedBehindIt)
     EXPECT_FALSE(committedHeld);
 }
 
+// The stall line counts the scheduler's work: a reserved job its client has not committed yet is none
+TEST(SubmitQueue, OnlyCommittedJobsArePending)
+{
+    raw::SubmitQueue<int, int> queue;
+    const auto first = queue.reserve(1, 10);
+    queue.reserve(1, 11);
+    queue.reserve(2, 20);
+    EXPECT_EQ(queue.size(), 3u);
+    EXPECT_EQ(queue.committed(), 0u);
+    ASSERT_TRUE(queue.commit(1, 10, first));
+    EXPECT_EQ(queue.committed(), 1u);
+    auto ticket = queue.next();
+    ASSERT_TRUE(ticket);
+    EXPECT_TRUE(queue.retire(ticket));
+    EXPECT_EQ(queue.committed(), 0u);
+}
+
 TEST(SubmitQueue, AHoldOfOneQueueLeavesAnotherQueueUnheld)
 {
     raw::SubmitQueue<int, int> queue;

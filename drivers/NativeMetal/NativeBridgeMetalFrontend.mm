@@ -16,6 +16,7 @@
 #include <atomic>
 #include <map>
 #include <mutex>
+#include <os/log.h>
 #include <pthread.h>
 #include <string>
 #include <unordered_map>
@@ -4048,7 +4049,13 @@ NB_RESIDENCY_SETS(use)
 {
     if (!self.encodeFailure) {
         self.encodeFailure = what;
+#if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
+        SWITCH_METAL_DIAGNOSTIC(gProblems++);
+        noteProblem(what);
+        os_log_error(OS_LOG_DEFAULT, "native-metal: command buffer refused: %{public}@", what);
+#else
         NBLOG(@"native-metal: command buffer refused: %@", what);
+#endif
     }
 }
 

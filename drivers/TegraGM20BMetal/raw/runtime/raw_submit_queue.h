@@ -316,6 +316,16 @@ public:
     {
         return size_;
     }
+
+    // jobs committed and not retired (reserved ones not committed yet are no work of the scheduler's)
+    size_t committed() const
+    {
+        size_t n = 0;
+        for (const Queue &q : storage_)
+            for (const Entry &e : q.entries)
+                n += e.committed;
+        return n;
+    }
 };
 
 enum class EventReadiness {

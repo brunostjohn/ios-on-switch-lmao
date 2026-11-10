@@ -39,7 +39,11 @@ struct Kernel {
     int result = KERN_SUCCESS;
     unsigned queries = 0, frees = 0;
     bool views = true;
-    bool nativeSurfaceViews() const { return views; }
+
+    bool nativeSurfaceViews() const
+    {
+        return views;
+    }
     int nativeSurfaceView(const Bo &, Bo &bo, TegraGM20BAbiNativeSurfaceViewReply &layout)
     {
         ++queries;

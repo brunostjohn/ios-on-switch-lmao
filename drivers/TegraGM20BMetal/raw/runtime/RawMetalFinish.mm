@@ -166,6 +166,13 @@ void segmentCompleted(RMCommandBuffer *cb, NSError *error, const raw::Retirement
                       const std::vector<RMNativeEventSignal> &signals,
                       const std::vector<raw::EventTimeline::Promise> &waits, const raw::CpuCompletion *cpu)
 {
+    if (error && ![error.domain isEqualToString:MTLCommandBufferErrorDomain])
+        error = [NSError errorWithDomain:MTLCommandBufferErrorDomain
+                                    code:MTLCommandBufferErrorInternal
+                                userInfo:@{
+                                    NSLocalizedDescriptionKey : error.localizedDescription ?: @"",
+                                    NSUnderlyingErrorKey : error
+                                }];
     if (!error && raw::eventDependencies(waits, 0, false) != raw::EventDependencyState::ready)
         error = [NSError errorWithDomain:MTLCommandBufferErrorDomain code:MTLCommandBufferErrorInternal userInfo:nil];
     if (!markWritten(writes, !error, cpu) && !error)
@@ -327,6 +334,16 @@ void finish(RMCommandBuffer *cb, NSError *error)
     deliverCompletion(run, q, handlerQueue, behindScheduled, runInline);
 }
 
+// A command buffer the kernel killed the channel of: as Metal reports the GPU's own failures (TegraGM20BAbiFence error:
+// 1 MMU fault, 4 timeout)
+static NSError *killError(uint32_t kernelError)
+{
+    const MTLCommandBufferError code = kernelError == 1   ? MTLCommandBufferErrorPageFault
+                                       : kernelError == 4 ? MTLCommandBufferErrorTimeout
+                                                          : MTLCommandBufferErrorInternal;
+    return [NSError errorWithDomain:MTLCommandBufferErrorDomain code:code userInfo:nil];
+}
+
 // The completion thread: sleeps in the kernel on each raw submission's fence (the interrupt), in order.
 void completionLoop()
 {
@@ -368,12 +385,8 @@ void completionLoop()
                 std::lock_guard<std::mutex> l(r.doneLock);
                 r.inflight.pop_front();
             }
-            segmentCompleted(cb,
-                             ok ? nil
-                                : [NSError errorWithDomain:MTLCommandBufferErrorDomain
-                                                      code:MTLCommandBufferErrorInternal
-                                                  userInfo:nil],
-                             *retired.writes, RMRawProgress, retired.signals, retired.waits, &retired.cpu);
+            segmentCompleted(cb, ok ? nil : killError(r.raw->lostError()), *retired.writes, RMRawProgress,
+                             retired.signals, retired.waits, &retired.cpu);
         }
     }
 }

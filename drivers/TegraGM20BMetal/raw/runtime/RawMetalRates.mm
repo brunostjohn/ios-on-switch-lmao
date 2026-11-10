@@ -279,8 +279,31 @@ size_t raw_metal_fetch_keys(char *out, size_t size)
 // what the raw path has pending, read without waiting (a lock another thread holds is reported held, not waited for). Once
 // nothing was committed or completed over two ticks while work is pending or one of its locks stays held, one line names it,
 // once per process. Nothing else: an idle screen has nothing pending and says nothing.
+// An untimed shared event wait waits as Metal's GPU would, without end: one line every 10 s for each still waiting after
+// 10 s, naming the event, the value it waits for and the value it has
+static void rawEventWaitTick()
+{
+    const uint64_t now = nowUs();
+    std::unique_lock<std::mutex> h(gHoldersLock, std::try_to_lock);
+    if (!h.owns_lock())
+        return;
+    for (auto &[cb, note] : gEventWaits) {
+        if (now - note.sinceUs < 10000000 || now - note.saidUs < 10000000)
+            continue;
+        const uint64_t reached = [(__bridge id<MTLSharedEvent>)note.event signaledValue];
+        if (reached >= note.value)
+            continue;
+        note.saidUs = now;
+        os_log(rawLog(),
+               "raw: still waiting on shared event %p for value %llu (it has %llu) for %llu s, queue %{public}s",
+               note.event, (unsigned long long)note.value, (unsigned long long)reached,
+               (unsigned long long)((now - note.sinceUs) / 1000000), cb->_queue.label.UTF8String ?: "-");
+    }
+}
+
 void rawStallTick()
 {
+    rawEventWaitTick();
     static uint64_t lastCommits = ~0ull, lastDone = ~0ull;
     static int still = 0;
     static bool said = false;
@@ -300,7 +323,7 @@ void rawStallTick()
     {
         std::unique_lock<std::mutex> a(r.schedule, std::try_to_lock);
         if (a.owns_lock())
-            waiting = long(r.waiting.size());
+            waiting = long(r.waiting.committed());
     }
     {
         std::unique_lock<std::mutex> b(r.doneLock, std::try_to_lock);
