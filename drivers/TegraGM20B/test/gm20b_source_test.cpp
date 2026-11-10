@@ -1155,3 +1155,20 @@ TEST(GM20BVmSource, AnAddressSpaceWithoutItsFenceViewIsNotMade)
 	expectBefore(make, "ret = fences_map(vm);", "tgm_vm_del(&vm);");
 	EXPECT_THAT(make, Not(HasSubstr("vm->fences_va = 0;")));
 }
+
+// A client unmaps a pool BO after its BoFree: the pages wait for that unmap, which releases them, and are not a leak.
+TEST(GM20BPoolSource, FreedPoolPagesGoWithTheirLastMapping)
+{
+	EXPECT_THAT(flat(definition(client(), "void AGXDeviceUserClient::releaseBo(Bo *bo)")),
+		    Not(HasSubstr("still mapped by its")));
+	for (const char *signature :
+	     {"IOReturn AGXDeviceUserClient::unmapToken(", "void AGXDeviceUserClient::releaseMappings()"})
+		EXPECT_THAT(flat(definition(client(), signature)), HasSubstr("scheduleOrphanRelease();"));
+}
+
+// Pool allocations take zeroed pages only (nvxnu_pool_alloc_ready, chunks): the refusal rules count those.
+TEST(GM20BPoolSource, PoolRefusalsCountOnlyZeroedFreePages)
+{
+	EXPECT_THAT(flat(definition(gpu(), "uint64_t tgm_pool_avail(void)")),
+		    HasSubstr("nvxnu_pool_ready_pages()"));
+}

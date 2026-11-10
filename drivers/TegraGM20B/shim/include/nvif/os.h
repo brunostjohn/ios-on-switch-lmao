@@ -1205,6 +1205,8 @@ struct page {
 
 int nvxnu_pool_setup(void);
 unsigned long nvxnu_pool_used_pages(void);
+/* free pool pages already zeroed: what a ready-only allocation (nvxnu_pool_alloc_ready, chunks) can take */
+unsigned long nvxnu_pool_ready_pages(void);
 /* BO pages in the pool (shim/linux.c): an allocation zeroes only pages a plain free left dirty; a range the caller zeroed
  * goes back clean. */
 void *nvxnu_pool_alloc_clean(unsigned long size, unsigned long align, unsigned long long *pa);

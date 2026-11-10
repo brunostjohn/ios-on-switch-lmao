@@ -714,6 +714,11 @@ unsigned long nvxnu_pool_used_pages(void)
 	return READ_ONCE(pool_used);
 }
 
+unsigned long nvxnu_pool_ready_pages(void)
+{
+	return READ_ONCE(pool_clean_free);
+}
+
 static long pool_index(u64 pa)
 {
 	u64 base = nvxnu_pool_base_pa();

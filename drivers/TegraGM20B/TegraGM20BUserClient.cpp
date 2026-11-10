@@ -1166,11 +1166,6 @@ void AGXDeviceUserClient::releaseBo(Bo *bo)
 	if (bo->pool_va && bo->view)
 		orphan = IONew(PoolOrphan, 1);
 	if (orphan) {
-		if (!__atomic_load_n(&retirementStopped_, __ATOMIC_ACQUIRE) && bo->view->getRetainCount() > 1) {
-			IOLog("tegra-gm20b: BoFree of BO %llu (%llu bytes) still mapped by its "
-			      "task: pages kept until unmapped\n",
-			      bo->handle, bo->bytes);
-		}
 		*orphan = {nullptr, bo->view, bo->pool_va, bo->pool_pa, bo->bytes, bo->handle != 0};
 		__atomic_add_fetch(&gOrphanBytes, bo->bytes, __ATOMIC_RELAXED);
 		__atomic_add_fetch(&gOrphans, 1, __ATOMIC_RELAXED);
@@ -2736,6 +2731,9 @@ IOReturn AGXDeviceUserClient::unmapToken(const TegraGM20BAbiUnmap *in)
 		found->map->unmap();
 	found->map->release();
 	IODelete(found, Mapping, 1);
+	// A freed pool BO's pages wait for its last mapping (a client unmaps after its BoFree): release them now.
+	if (__atomic_load_n(&gPoolOrphans, __ATOMIC_ACQUIRE))
+		scheduleOrphanRelease();
 	return kIOReturnSuccess;
 }
 
@@ -2753,6 +2751,8 @@ void AGXDeviceUserClient::releaseMappings()
 		IODelete(list, Mapping, 1);
 		list = next;
 	}
+	if (__atomic_load_n(&gPoolOrphans, __ATOMIC_ACQUIRE))
+		scheduleOrphanRelease();
 }
 
 namespace

@@ -825,9 +825,10 @@ void tgm_pool_free_chunks(const uint64_t *pas, uint32_t npages)
 	scrub_kick();
 }
 
+/* What BoAlloc's pool allocations can take: free pages the scrubber has zeroed. A freed page waits for it. */
 uint64_t tgm_pool_avail(void)
 {
-	return nvxnu_pool_size() - ((u64)nvxnu_pool_used_pages() << PAGE_SHIFT);
+	return (u64)nvxnu_pool_ready_pages() << PAGE_SHIFT;
 }
 
 /* Cacheable user mappings share GPU L2. Legacy submissions acquire CPU writes and publish DRAM at every fence.
