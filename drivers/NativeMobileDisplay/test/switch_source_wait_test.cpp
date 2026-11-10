@@ -2,6 +2,7 @@
 #include <gtest/gtest.h>
 #include <cstdlib>
 #include <functional>
+#include <vector>
 #include "../../TegraVIC/SwitchNativeScanout.h"
 using IOReturn = int;
 constexpr int kIOReturnSuccess=0,kIOReturnNotReady=-10,kIOReturnNoMemory=-12,kIOReturnAborted=-14;
@@ -16,6 +17,10 @@ int waitError, producerError, producerVisible;
 switch_gpu_backing_token producer;
 std::function<void()> waiting;
 uint64_t mach_absolute_time(){return 100;}
+struct CacheOp { const volatile void *va; size_t bytes; unsigned afterWaits; };
+std::vector<CacheOp> cleanInvalidates, invalidates;
+[[maybe_unused]] void switch_dcache_clean_invalidate(const volatile void *va,size_t bytes){cleanInvalidates.push_back({va,bytes,producerWaits});}
+[[maybe_unused]] void switch_dcache_invalidate(const volatile void *va,size_t bytes){invalidates.push_back({va,bytes,producerWaits});}
 void native_legacy_transfer_observed(int,const OriginalLegacySwapRequest *,uint64_t){++observations;}
 struct Event { unsigned fires=0; void interruptOccurred(void *,void *,int){++fires;} };
 struct Loop {
@@ -25,6 +30,7 @@ struct Loop {
 };
 struct NativeLegacyDisplay:OSObject {
     static constexpr int kNoBuffer=-1;
+    static constexpr bool stats=true;
     bool copyStopping=false,copyQueued=false,transferred=false,latchRetire=true,planeNextSet=true;
     unsigned kicks=0,lost=0,taken=0;
     Event event; Event *copySource=&event; Loop loop;
@@ -58,7 +64,7 @@ protected:
     NativeLegacyDisplay *display;
     OriginalLegacySwapRequest request,other;
     OSObject surface;
-    void SetUp() override { leases=waits=observations=producerWaits=0; waitError=producerError=0; producerVisible=1; producer={}; waiting={}; display=new NativeLegacyDisplay; display->request=&request; }
+    void SetUp() override { leases=waits=observations=producerWaits=0; waitError=producerError=0; producerVisible=1; cleanInvalidates.clear(); invalidates.clear(); producer={}; waiting={}; display=new NativeLegacyDisplay; display->request=&request; }
     void TearDown() override { delete display; EXPECT_EQ(leases,0u); EXPECT_EQ(surface.refs,1u); }
     void defer(){ASSERT_TRUE(display->deferSource(&request,&surface));}
 };
@@ -113,4 +119,19 @@ TEST_F(SourceWait, CpuFallbackReadsAnEngineFrameOnceItsWritesAreVisible) {
     EXPECT_EQ(display->waitCopySource(),0); EXPECT_EQ(producerWaits,1u);
     producerVisible=0;
     EXPECT_NE(display->waitCopySource(),0); EXPECT_EQ(producerWaits,2u);
+}
+
+TEST_F(SourceWait, CpuCopyCleansAndInvalidatesItsReadOnlySourceOnlyAfterItsProducer) {
+    producer={42,1,SWITCH_GPU_ENGINE_GM20B,3};
+    const char pixels[256]={};
+    uint64_t gpu=0,cache=0;
+    ASSERT_TRUE(display->holdCopySource(&surface));
+    ASSERT_EQ(display->readyCopySource(pixels,sizeof(pixels),gpu,cache),0);
+    ASSERT_EQ(cleanInvalidates.size(),1u);
+    EXPECT_EQ(cleanInvalidates[0].va,pixels); EXPECT_EQ(cleanInvalidates[0].bytes,sizeof(pixels));
+    EXPECT_EQ(cleanInvalidates[0].afterWaits,1u);
+    EXPECT_TRUE(invalidates.empty());
+    producerError=-5;
+    EXPECT_EQ(display->readyCopySource(pixels,sizeof(pixels),gpu,cache),-5);
+    EXPECT_EQ(cleanInvalidates.size(),1u); EXPECT_TRUE(invalidates.empty());
 }

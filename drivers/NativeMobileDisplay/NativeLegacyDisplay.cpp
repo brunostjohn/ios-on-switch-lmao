@@ -4042,18 +4042,11 @@ public:
         }
         const void *source = reinterpret_cast<const void *>(job.source->getVirtualAddress());
         job.status = kIOReturnSuccess;
-        const uint64_t waitAt = stats ? mach_absolute_time() : 0;
         if (__atomic_load_n(&copyStopping, __ATOMIC_ACQUIRE)) {
             job.status = kIOReturnAborted;
-        } else if (const int error = waitCopySource()) {
+        } else if (const int error = readyCopySource(source, job.allocation, job.gpu, job.cache)) {
             job.status = error == TEGRA_SCANOUT_SOURCE_LOST ? kIOReturnAborted : kIOReturnNotReady;
         } else {
-            const uint64_t cacheAt = stats ? mach_absolute_time() : 0;
-            if (stats)
-                job.gpu = cacheAt - waitAt;
-            switch_dcache_invalidate(source, job.allocation);
-            if (stats)
-                job.cache = mach_absolute_time() - cacheAt;
             if (!native_legacy_prepare_scanout()) {
                 job.status = kIOReturnNotReady;
             } else {

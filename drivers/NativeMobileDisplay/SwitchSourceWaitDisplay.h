@@ -67,6 +67,23 @@ int waitCopySource()
     return visible == 1 ? 0 : visible < 0 ? visible : -11;
 }
 
+// The copy reads through a read-only cached mapping: DC IVAC needs write permission there and would drop a line
+// another mapping dirtied, so the source's lines are cleaned and invalidated once its producer is visible.
+int readyCopySource(const void *source, uint64_t bytes, uint64_t &gpu, uint64_t &cache)
+{
+    const uint64_t waitAt = stats ? mach_absolute_time() : 0;
+    const int error = waitCopySource();
+    if (error)
+        return error;
+    const uint64_t cacheAt = stats ? mach_absolute_time() : 0;
+    switch_dcache_clean_invalidate(source, bytes);
+    if (stats) {
+        gpu = cacheAt - waitAt;
+        cache = mach_absolute_time() - cacheAt;
+    }
+    return 0;
+}
+
 void sourceWaitFinished()
 {
     sourceWaitQueued = false;
