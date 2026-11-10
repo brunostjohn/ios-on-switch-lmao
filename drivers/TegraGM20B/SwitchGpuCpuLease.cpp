@@ -110,7 +110,7 @@ static int snapshot_read(switch_gpu_backing *backing, switch_gpu_backing_token *
 	switch_gpu_backing_retain(backing);
 	IOLockLock(backing->lock);
 	while ((backing->cpu_writers || backing->gpu_admission_writers) && !avoid)
-		IOLockSleep(backing->lock, &backing->cpu_writers, THREAD_UNINT);
+		switch_gpu_backing_sleep_cpu_locked(backing);
 	int result = backing->cpu_writers || backing->gpu_admission_writers ||
 		backing->cpu_readers == UINT32_MAX ? -16 : 0;
 	const switch_gpu_backing_access *writer = nullptr;
@@ -203,7 +203,7 @@ extern "C" int switch_gpu_backing_conversion_reserve(switch_gpu_backing *backing
 			result = -16;
 			break;
 		}
-		IOLockSleep(backing->lock, &backing->cpu_writers, THREAD_UNINT);
+		switch_gpu_backing_sleep_cpu_locked(backing);
 	}
 	if (!result)
 		switch_gpu_backing_prune_locked(backing);

@@ -195,10 +195,16 @@ bool submitRange(RMCommandBuffer *cb)
 #if SWITCH_FRAME_TIMELINE
         const uint64_t began = nowUs();
         cb->_frame.mark(switch_frame::EncodeStart);
+        raw::EncodeProfile profile;
+        const uint64_t profileTicks = mach_absolute_time(), profileCpu = clock_gettime_nsec_np(CLOCK_THREAD_CPUTIME_ID);
+        raw::tEncodeProfile = &profile;
 #endif
         size_t refusedEncoder = range.to;
         const bool encoded = encodeRaw(cb, range.from, range.to, &why, &refusedEncoder);
 #if SWITCH_FRAME_TIMELINE
+        raw::tEncodeProfile = nullptr;
+        r.raw->stats.encode.add(profile, mach_absolute_time() - profileTicks,
+                                clock_gettime_nsec_np(CLOCK_THREAD_CPUTIME_ID) - profileCpu);
         cb->_frame.mark(switch_frame::EncodeEnd);
         RAW_DIAGNOSTIC(r.stats.encodeUs += nowUs() - began);
 #endif

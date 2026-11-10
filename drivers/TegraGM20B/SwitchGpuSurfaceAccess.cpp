@@ -36,6 +36,7 @@ struct Pending {
 
 IOLock *lock;
 Lease *leases, *free_leases;
+uint32_t lease_count; // leases' length, read without the lock by switch_gpu_surface_sweep
 Pending *pending, *free_pending;
 Association *associations;
 
@@ -119,8 +120,10 @@ void release_one(void *client, uint32_t id, uint32_t options, bool failed)
 	const uint32_t flags = lease->flags | access(index) | SWITCH_GPU_BACKING_CPU_NO_CACHE;
 	const bool last =
 		!lease->pending[0] && !lease->pending[1] && !lease->held[0] && !lease->held[1];
-	if (last)
+	if (last) {
 		*at = lease->next;
+		__atomic_sub_fetch(&lease_count, 1u, __ATOMIC_RELEASE);
+	}
 	IOLockUnlock(lock);
 	if (backing) {
 		if (failed)
@@ -201,7 +204,7 @@ extern "C" void switch_gpu_surface_idle(void *descriptor)
 
 extern "C" void switch_gpu_surface_sweep(void)
 {
-	if (!lock)
+	if (!lock || !__atomic_load_n(&lease_count, __ATOMIC_ACQUIRE))
 		return;
 	IOLockLock(lock);
 	Lease *dead = nullptr;
@@ -212,6 +215,7 @@ extern "C" void switch_gpu_surface_sweep(void)
 			continue;
 		}
 		*at = lease->next;
+		__atomic_sub_fetch(&lease_count, 1u, __ATOMIC_RELEASE);
 		lease->next = dead;
 		dead = lease;
 		for (auto **item = &pending; *item;) {
@@ -338,6 +342,7 @@ acquire_backing:
 			if (backing)
 				switch_gpu_backing_retain(backing);
 			leases = lease;
+			__atomic_add_fetch(&lease_count, 1u, __ATOMIC_RELEASE);
 		}
 	}
 	if (!result) {

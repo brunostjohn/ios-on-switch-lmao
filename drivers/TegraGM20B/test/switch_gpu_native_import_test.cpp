@@ -3,6 +3,7 @@
 #include <cstring>
 #include <gtest/gtest.h>
 #include "drivers/TegraGM20B/TegraGM20BABI.h"
+#include "drivers/TegraGM20B/SwitchGpuBoIndex.h"
 #include "drivers/TegraGM20B/SwitchGpuNativeSurface.h"
 
 using IOReturn = int;
@@ -132,6 +133,15 @@ public:
 	tgm_vm *vm_ = nullptr;
 	uint64_t next_handle_ = 2;
 	Bo *bos_;
+	struct HostMemory {
+		template <typename T>
+		static T *allocate(uint32_t count) { return static_cast<T *>(malloc(sizeof(T) * count)); }
+		template <typename T>
+		static void release(T *items, uint32_t) { free(items); }
+	};
+	struct Index : SwitchGpuBoIndex<Bo, HostMemory> {
+		~Index() { destroy(); }
+	} boIndex_;
 
 	Bo *findBo(uint64_t handle)
 	{

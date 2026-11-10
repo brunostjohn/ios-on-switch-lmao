@@ -45,6 +45,7 @@
 #include "raw_attachment_lifetime.h"
 #include "raw_stats.h"
 #include "raw_descriptors.h"
+#include "raw_encode_profile.h"
 #include "raw_transfer.h"
 #include "raw_fetch_order.h"
 #include "raw_kernel.h"
@@ -727,6 +728,16 @@ private:
     std::vector<Clear> clears() const;
     std::vector<Clear> initialClears_;
     bool clearsSealed_ = false;
+
+    // The pass's other headers of its attachments' memory (Device::viewTic: storage views, shader depth/stencil
+    // copies): asked of the device once a pass, not under its lock at each draw's descriptors
+    struct PassView {
+        uint32_t ownTic, word0, tic;
+    };
+
+    std::array<PassView, 8> passViews_{};
+    uint8_t passViewCount_ = 0;
+    uint32_t passViewTic(const Texture &t, uint32_t word0);
 };
 
 // Copy-engine work between passes (MAXWELL_DMA_COPY_A, as NVK's nouveau_copy_rect does it for pitch memory)
@@ -879,6 +890,10 @@ private:
     };
 
     std::vector<GeometryRead> geometryReads_;
+    // the buffers and backings whose CPU read the kernel refused in this command buffer: their draws take their
+    // scissor without asking again
+    std::vector<const Buffer *> geometryRefusedBuffers_;
+    std::vector<uint64_t> geometryRefusedBackings_;
     bool acquireGeometry(const Buffer &buffer, const uint8_t *cpu, uint64_t bytes);
     bool geometryWritable() const;
     void releaseGeometry();
@@ -1332,6 +1347,7 @@ public:
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
         std::atomic<uint64_t> splitLaunches{0};
         std::atomic<uint64_t> interlockDraws{0}, storageBarriers{0};
+        EncodeTotals encode;
 #endif
 #else
         std::atomic<uint64_t> heapFull{0};

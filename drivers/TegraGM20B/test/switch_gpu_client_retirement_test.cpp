@@ -17,6 +17,7 @@
 #include "drivers/TegraGM20B/SwitchGpuBacking.h"
 #include "drivers/TegraGM20B/TegraGM20BABI.h"
 #include "drivers/TegraGM20B/SwitchGpuBindings.h"
+#include "drivers/TegraGM20B/SwitchGpuBoIndex.h"
 #include "drivers/TegraGM20B/TegraGM20BBindHistory.h"
 #include "gm20b_gpu_memory.h"
 
@@ -373,6 +374,15 @@ public:
 	void *vm_ = nullptr;
 	tgm_chan *chans_[kMaxChannels] = {};
 	Bo *bos_ = nullptr, *zombies_ = nullptr, *readyBos_ = nullptr;
+	struct HostMemory {
+		template <typename T>
+		static T *allocate(uint32_t count) { return static_cast<T *>(malloc(sizeof(T) * count)); }
+		template <typename T>
+		static void release(T *items, uint32_t) { free(items); }
+	};
+	struct Index : SwitchGpuBoIndex<Bo, HostMemory> {
+		~Index() { destroy(); }
+	} boIndex_;
 	RetiredBinding *retired_ = nullptr, **retiredTail_ = &retired_, *unmapping_ = nullptr;
 	IOLock unmapStorage;
 	IOLock *unmapLock_ = &unmapStorage;

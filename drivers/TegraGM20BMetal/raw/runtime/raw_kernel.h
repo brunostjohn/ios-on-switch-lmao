@@ -166,6 +166,12 @@ public:
         return (info_.flags & TegraGM20BInfoSubmitAddress) != 0;
     }
 
+    // Internal fences a SubmitAddress may carry (TegraGM20BPushFence); 0: each fence is a submission of its own.
+    uint32_t maxFences() const
+    {
+        return exactJobs() && (info_.flags & TegraGM20BInfoPushFences) ? TegraGM20BMaxJobFences : 0;
+    }
+
     bool jobVisibility() const
     {
         return exactJobs() && (info_.flags & TegraGM20BInfoJobVisibility);

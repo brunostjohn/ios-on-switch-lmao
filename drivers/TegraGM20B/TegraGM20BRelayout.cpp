@@ -122,7 +122,7 @@ int move(const tgm_relayout_pages &surface, const tgm_relayout_pages &rows, cons
 					     rowsBytes,
 					     kPushVa + uint64_t(kCheckpointWord) * 4};
 		const tgm_push push = {kPushVa, tgm_relayout_push(r.pushCpu, &l, &m, waits, nwaits),
-				       0, 0, 0};
+				       0, 0, 0, 0};
 		uint32_t seqno = 0;
 		ret = tgm_chan_exec(chan, &push, 1, &seqno, nullptr);
 		if (!ret) {

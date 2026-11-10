@@ -3107,6 +3107,8 @@ CommandBuffer *Device::begin()
     cb.splitReuse_.clear();
     cb.buffersWritten_ = false;
     cb.geometryBudget_ = {};
+    cb.geometryRefusedBuffers_.clear();
+    cb.geometryRefusedBackings_.clear();
     return &cb;
 }
 
@@ -3350,6 +3352,10 @@ bool CommandBuffer::acquireGeometry(const Buffer &buffer, const uint8_t *cpu, ui
         if (address >= start && address - start < read.bytes && bytes <= read.bytes - (address - start))
             return !surfaces_.writesBacking(bo.handle, base, bo.bytes);
     }
+    if (std::find(geometryRefusedBuffers_.begin(), geometryRefusedBuffers_.end(), &buffer) !=
+        geometryRefusedBuffers_.end())
+        return false;
+    RAW_ENCODE_SPAN(GeometryAcquire);
     std::lock_guard<std::mutex> lock(d.lock_);
     Bo bo;
     if (buffer.import) {
@@ -3373,15 +3379,24 @@ bool CommandBuffer::acquireGeometry(const Buffer &buffer, const uint8_t *cpu, ui
     if (!bo.handle || address < base || address - base > bo.bytes || bytes > bo.bytes - (address - base) ||
         surfaces_.writesBacking(bo.handle, base, bo.bytes))
         return false;
+    if (std::find(geometryRefusedBackings_.begin(), geometryRefusedBackings_.end(), bo.handle) !=
+        geometryRefusedBackings_.end()) {
+        geometryRefusedBuffers_.push_back(&buffer);
+        return false;
+    }
     // Small page windows amortize adjacent matrix/vertex/index views while bounding cache-maintenance work.
     // Ownership remains whole-backing; only visibility maintenance is narrowed to these verified physical bytes.
     constexpr uint64_t page = 4096;
     const uint64_t offset = (address - base) & ~(page - 1);
     const uint64_t end = std::min(bo.bytes, (address - base + bytes + page - 1) & ~(page - 1));
     const uint64_t maintained = end - offset;
-    if (geometryReads_.size() >= 64 || maintained > geometryBudget_.maintainedBytes ||
-        !d.k_.cpuAccess(bo, offset, maintained, access, true))
+    if (geometryReads_.size() >= 64 || maintained > geometryBudget_.maintainedBytes)
         return false;
+    if (!d.k_.cpuAccess(bo, offset, maintained, access, true)) {
+        geometryRefusedBuffers_.push_back(&buffer);
+        geometryRefusedBackings_.push_back(bo.handle);
+        return false;
+    }
     geometryBudget_.maintainedBytes -= maintained;
     geometryReads_.push_back({bo, offset, maintained, access});
     return true;
@@ -3401,6 +3416,7 @@ void CommandBuffer::releaseGeometry()
 {
     if (geometryReads_.empty())
         return;
+    RAW_ENCODE_SPAN(GeometryRelease);
     std::lock_guard<std::mutex> lock(dev_->lock_);
     for (const auto &read : geometryReads_)
         if (!dev_->k_.cpuAccess(read.bo, read.offset, read.bytes, read.access, false))
@@ -3418,6 +3434,7 @@ std::shared_ptr<ResourceReadyCompletion> CommandBuffer::resourceReadiness(std::f
 
 bool CommandBuffer::commit(uint32_t &seqno)
 {
+    RAW_ENCODE_SPAN(Commit);
     if (nativeError)
         return false;
     struct ReleaseReads {
@@ -3527,10 +3544,12 @@ bool CommandBuffer::commit(uint32_t &seqno)
         return false;  // later internal writes invalidate the CPU proof; no prefix may reach the GPU
     if (!batchWork_.operations)
         segments_.includeTail();
-    if (!segments_.valid(d.k_.maxPushes()))
+    const uint32_t maxPushes = d.k_.maxPushes(), maxFences = d.k_.maxFences();
+    if (!segments_.valid(maxPushes))
         return false;  // validate all indivisible continuation groups before publishing any prefix
-    const bool multiple = (!segments_.empty() && segments_.next(0, d.k_.maxPushes()) < segments_.size()) ||
-                          sharedWaits_.size() + sharedSignals_.size() > TegraGM20BMaxJobEvents;
+    const bool multiple =
+        (!segments_.empty() && segments_.submission(0, maxPushes, maxFences) < segments_.size()) ||
+        sharedWaits_.size() + sharedSignals_.size() > TegraGM20BMaxJobEvents;
     const uint64_t admissionCookie = multiple && d.k_.resourceReady() ? d.k_.nextAdmission() : 0;
     bool admissionHeld = false;
     uint32_t seq = 0;
@@ -3540,8 +3559,13 @@ bool CommandBuffer::commit(uint32_t &seqno)
         const JobAdmission admission{admissionCookie, admissionCookie ?
             (published ? uint32_t(TegraGM20BSubmitAdmissionContinue) : uint32_t(TegraGM20BSubmitAdmissionBegin)) |
             (last ? uint32_t(TegraGM20BSubmitAdmissionEnd) : 0u) : 0u};
-        if (!d.k_.exec(d.channel_, pushes, count, d.lastSeqno_, seq,
-                      admissionCookie ? &surfaces_ : &resources, &result, visibility, events, admission)) {
+        SurfaceList *const uses = admissionCookie ? &surfaces_ : &resources;
+        RAW_DIAGNOSTIC(noteExecUses(uses->uses().size()));
+        RAW_ENCODE_BEGIN(execSpan, Exec);
+        const bool executed =
+            d.k_.exec(d.channel_, pushes, count, d.lastSeqno_, seq, uses, &result, visibility, events, admission);
+        RAW_ENCODE_END(execSpan);
+        if (!executed) {
             admissionBlocked = !published && result == kIOReturnCannotLock && d.k_.resourceReady();
             if (admissionHeld) {
                 SurfaceList empty;
@@ -3576,19 +3600,18 @@ bool CommandBuffer::commit(uint32_t &seqno)
             return false;
         waited += count;
     }
-    for (size_t at = 0; at < segments_.size();) {
-        const uint32_t n = uint32_t(segments_.next(at, d.k_.maxPushes()));
-
+    const bool pushed = segments_.submit(maxPushes, maxFences, [&](size_t at, size_t n) {
+        const bool closing = at + n == segments_.size();
         const JobVisibility visibility = visibility_ == JobVisibility::Legacy ? JobVisibility::Legacy :
-            externalWrites_ && at + n == segments_.size() ? JobVisibility::External : JobVisibility::Internal;
+            externalWrites_ && closing ? JobVisibility::External : JobVisibility::Internal;
         const uint32_t waitCount = uint32_t(sharedWaits_.size() - waited);
-        const uint32_t signalCount = at + n == segments_.size() ?
+        const uint32_t signalCount = closing ?
             uint32_t(std::min<size_t>(sharedSignals_.size(), TegraGM20BMaxJobEvents - waitCount)) : 0;
         const JobEvents events{waitCount ? sharedWaits_.data() + waited : nullptr,
                               signalCount ? sharedSignals_.data() : nullptr, waitCount, signalCount};
-        const bool last = at + n == segments_.size() && waited + waitCount == sharedWaits_.size() &&
+        const bool last = closing && waited + waitCount == sharedWaits_.size() &&
                           signaled + signalCount == sharedSignals_.size();
-        if (!submit(segments_.data() + at, n, surfaces_, visibility, events, last))
+        if (!submit(segments_.data() + at, uint32_t(n), surfaces_, visibility, events, last))
             return false;
         waited += waitCount;
         signaled += signalCount;
@@ -3596,8 +3619,10 @@ bool CommandBuffer::commit(uint32_t &seqno)
             surface->lastUse = seq;
             surface->channelGeneration = d.channelGeneration();
         }
-        at += n;
-    }
+        return true;
+    });
+    if (!pushed)
+        return false;
     while (waited < sharedWaits_.size() || signaled < sharedSignals_.size()) {
         const uint32_t waitCount = uint32_t(std::min<size_t>(sharedWaits_.size() - waited, TegraGM20BMaxJobEvents));
         const uint32_t signalCount = uint32_t(std::min<size_t>(sharedSignals_.size() - signaled,
@@ -3851,6 +3876,7 @@ void RenderEncoder::barrier()
 bool RenderEncoder::draw(uint32_t primitive, uint32_t first, uint32_t count, uint32_t instances, uint32_t baseInstance,
                          const char **why)
 {
+    RAW_ENCODE_SPAN(Draw);
     Pipeline *pl = formFor(pipeline_);
     if (!pl)
         return true;  // m2v drops a draw without a pipeline (parity 0006) the same way
@@ -4008,6 +4034,7 @@ bool RenderEncoder::drawIndexed(uint32_t primitive, uint32_t count, uint32_t ind
                                 uint64_t offset, uint32_t instances, int32_t baseVertex, uint32_t baseInstance,
                                 const char **why)
 {
+    RAW_ENCODE_SPAN(Draw);
     Pipeline *pl = formFor(pipeline_);
     if (!pl)
         return true;
@@ -4115,6 +4142,7 @@ bool RenderEncoder::drawIndexed(uint32_t primitive, uint32_t count, uint32_t ind
 bool RenderEncoder::indirect(uint32_t primitive, bool indexed, const Buffer *arguments, uint64_t offset,
                              const char **why)
 {
+    RAW_ENCODE_SPAN(Draw);
     if (!pipeline_)
         return true;
     Pipeline *form = formFor(pipeline_);
@@ -4194,6 +4222,7 @@ bool RenderEncoder::drawIndexedIndirect(uint32_t primitive, uint32_t indexSize, 
 bool RenderEncoder::prepare(Pipeline *pl, uint32_t primitive, int32_t first, uint32_t vFirst, uint32_t vCount,
                             uint32_t baseInstance, bool indexed, const char **why)
 {
+    RAW_ENCODE_SPAN(Prepare);
     const uint32_t count = vCount;
     const bool firstDraw = !drew_;
     drew_ = true;
@@ -4211,6 +4240,7 @@ bool RenderEncoder::prepare(Pipeline *pl, uint32_t primitive, int32_t first, uin
     const bool empty = vp_[2] == 0 || vp_[3] == 0;
     axis(vp_[0], empty ? 0 : vp_[2], areaW_, sc_[0], sc_[0] + sc_[2], x);
     axis(vp_[1], empty ? 0 : vp_[3], areaH_, sc_[1], sc_[1] + sc_[3], y);
+    RAW_ENCODE_BEGIN(geometrySpan, Geometry);
     DrawGeometry g;
     if (pl->storageBits && !(pl->fetchBits & ~pl->storageBits))
         g.limit = {x[0], y[0], x[1], y[1]};
@@ -4230,6 +4260,7 @@ bool RenderEncoder::prepare(Pipeline *pl, uint32_t primitive, int32_t first, uin
             }
         }
     }
+    RAW_ENCODE_END(geometrySpan);
     const Texture *zeta = pass_.depthStencil.texture;
     if (compatible_ != pl) {
         for (uint32_t j = 0; j < 8; j++) {  // the pass's attachments are the formats the state was made for
@@ -4292,6 +4323,7 @@ bool RenderEncoder::prepare(Pipeline *pl, uint32_t primitive, int32_t first, uin
         cb_->refusal = {};
         return false;
     }
+    RAW_ENCODE_BEGIN(descriptorSpan, Descriptors);
     const auto *prepared = descriptors_.resolve(
         pl, bindingRevision_,
         [&](PreparedDescriptorWords &prepared) {
@@ -4342,8 +4374,7 @@ bool RenderEncoder::prepare(Pipeline *pl, uint32_t primitive, int32_t first, uin
                     const bool depth = e.kind == EntryDepthTest;
                     const Texture *t = depth ? shaderDepth_ : shaderStencil_;
                     const uint32_t view = depth ? r.shaderTests.depthTic : r.shaderTests.stencilTic;
-                    if (!t || t->samples != samples_ || texelBytes(view) != t->bpp ||
-                        !(tic = d.viewTic(*t, view))) {
+                    if (!t || t->samples != samples_ || texelBytes(view) != t->bpp || !(tic = passViewTic(*t, view))) {
                         *why = "an unavailable native shader depth/stencil view";
                         cb_->refusal = {RefDepthStencil, e.kind, t ? t->format : 0, samples_};
                         return false;
@@ -4376,7 +4407,7 @@ bool RenderEncoder::prepare(Pipeline *pl, uint32_t primitive, int32_t first, uin
                             cb_->refusal = {RefStorageView, e.slot, t->format, t->width};
                             return false;
                         }
-                        tic = d.viewTic(*t, pl->storageTic[e.slot]);
+                        tic = passViewTic(*t, pl->storageTic[e.slot]);
                         if (!tic) {
                             *why = "no room for the framebuffer storage view";
                             cb_->refusal = {RefStorageView, e.slot, t->format, t->width};
@@ -4425,6 +4456,7 @@ bool RenderEncoder::prepare(Pipeline *pl, uint32_t primitive, int32_t first, uin
 #endif
             return address;
         });
+    RAW_ENCODE_END(descriptorSpan);
     if (!prepared)
         return false;
     const uint32_t *set = prepared->words.data();
@@ -4579,6 +4611,7 @@ bool RenderEncoder::prepare(Pipeline *pl, uint32_t primitive, int32_t first, uin
     // storage write.
     // A fetch through the texture unit that meets only ROP writes needs the barrier only where its pixels meet theirs
     // (raw_region.h); nothing bounds a storage access's pixels.
+    RAW_ENCODE_BEGIN(barrierSpan, Barriers);
     const AttachmentAccess access{pl->readBits, pl->writeBits, uint8_t(pl->fetchBits & ~pl->storageBits),
                                   pl->storageBits};
     if (firstDraw && !indirectGeometry_ && !pl->dropsPixels) {
@@ -4613,6 +4646,7 @@ bool RenderEncoder::prepare(Pipeline *pl, uint32_t primitive, int32_t first, uin
             written_.clear();
         }
     }
+    RAW_ENCODE_END(barrierSpan);
     if (drawParamsUnknown_ || uint32_t(first) != first_ || baseInstance != baseInstance_) {
         // nvk_mme_build_set_draw_params: root draw.vs.{base_vertex, base_instance} and the base registers
         const uint32_t v[2] = {uint32_t(first), baseInstance};
@@ -4930,13 +4964,28 @@ uint32_t Device::levelTic(Texture &t, uint32_t level)
     const FormatInfo *f = formatInfo(t.format);
     if (!t.chain || !f || level >= t.chain->layout.levels)
         return 0;
+    uint32_t &slot = t.chain->levelTic[level];
+    if (const uint32_t made = __atomic_load_n(&slot, __ATOMIC_ACQUIRE))
+        return made;
     std::lock_guard<std::mutex> l(lock_);
-    uint32_t &tic = t.chain->levelTic[level];
+    uint32_t tic = slot;
     if (!tic && (tic = allocTic())) {
         uint32_t w[8];
         fx::mipChainTic(t.chain->layout, t.chain->va, f->tic0, f->srgb, level, 1, w);
         memcpy(tic_.cpu + 32 * tic, w, 32);  // visible at the next submission's header invalidate
+        __atomic_store_n(&slot, tic, __ATOMIC_RELEASE);
     }
+    return tic;
+}
+
+uint32_t RenderEncoder::passViewTic(const Texture &t, uint32_t word0)
+{
+    for (uint8_t i = 0; i < passViewCount_; ++i)
+        if (passViews_[i].ownTic == t.tic && passViews_[i].word0 == word0)
+            return passViews_[i].tic;
+    const uint32_t tic = dev_->viewTic(t, word0);
+    if (tic && passViewCount_ < passViews_.size())
+        passViews_[passViewCount_++] = {t.tic, word0, tic};
     return tic;
 }
 
@@ -5123,6 +5172,7 @@ void RenderEncoder::continuePass(uint8_t stores)
 
 void RenderEncoder::end()
 {
+    RAW_ENCODE_SPAN(PassEnd);
     Device &d = *dev_;
     endShaderTests();
     if (p_.room() < 64 + kSampleWords)

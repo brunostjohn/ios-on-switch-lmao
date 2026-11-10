@@ -38,6 +38,10 @@ size_t raw_metal_rates(char *out, size_t size);
 // Debug builds: one line of the fetching draws since the previous call (0 when there were none), by how each kept raster
 // order (raw_fetch_order.h FetchCounts). The plugin logs it after the rates line.
 size_t raw_metal_fetch_rates(char *out, size_t size);
+// Debug builds: "encode n=<encodes> wall= cpu= res= loop= ... pmax=" since the previous call (0 when nothing was
+// encoded): the submit worker's encodes of raw ranges, in microseconds per encode by part (raw_encode_profile.h; a part
+// includes those nested in it), "/x" the calls per encode, cpu= the thread's CPU time and pmax= the longest prepare().
+size_t raw_metal_encode_rates(char *out, size_t size);
 // "fetch keys rec=<key>:n,... enc=... sto=...": the pipeline keys behind the window's record-time and encode-time
 // refusals and storage-to-barrier fallbacks, eight of each at most, most first; 0 when none
 size_t raw_metal_fetch_keys(char *out, size_t size);

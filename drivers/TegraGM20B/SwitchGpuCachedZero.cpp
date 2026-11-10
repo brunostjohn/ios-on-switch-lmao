@@ -304,7 +304,7 @@ int switch_gpu_cached_zero(const uint64_t *pages, uint32_t count, void *cpu,
 		const tgm_push push = {
 			kPushVa + slot * 128,
 			tgm_relayout_clear(words, (*mapping)->address, uint64_t(count) * kPage), 0,
-			0, 0};
+			0, 0, 0};
 		uint32_t sequence = 0;
 		result = tgm_chan_exec(queue.channel, &push, 1, &sequence, nullptr);
 		if (!result) {

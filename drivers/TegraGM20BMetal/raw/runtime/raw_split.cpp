@@ -161,6 +161,7 @@ Pipeline *RenderEncoder::splitTwin(Pipeline *pl, WrittenRegion::Analysis &analys
 
 void RenderEncoder::launchSplit(Push &p, const Pipeline &twin, const uint32_t *set)
 {
+    RAW_ENCODE_SPAN(SplitLaunch);
     Device &d = *dev_;
     const SplitState &s = *twin.splitOf;
     SplitLaunch l;
@@ -213,6 +214,7 @@ void CommandBuffer::launchPrologues()
 {
     if (splits_.empty())
         return;
+    RAW_ENCODE_SPAN(Prologues);
     Device &d = *dev_;
     splitBatches_.clear(splits_.size());
     uint32_t scalars = 0;

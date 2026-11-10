@@ -498,6 +498,96 @@ TEST_F(Backing, DeadSurfaceClientReleasesCpuReservationsBeforeNextEngineSubmissi
 	switch_gpu_backing_release(allocation);
 }
 
+extern uint32_t switch_gpu_cpu_sleepers;
+extern int switch_gpu_test_ready_waiting;
+void switch_gpu_backing_sort_uses(switch_gpu_backing_use *uses, uint32_t count);
+
+// Lock order: a job's uses by backing id, in place, whether they came sorted or not.
+TEST_F(Backing, UsesAreOrderedByBackingWhetherOrNotTheyCameSorted)
+{
+	switch_gpu_backing *made[6];
+	for (auto *&allocation : made)
+		allocation = backing();
+	switch_gpu_backing_use uses[6];
+	for (uint32_t i = 0; i < 6; ++i)
+		uses[i] = {made[i], SWITCH_GPU_BACKING_READ, 0};
+	switch_gpu_backing_sort_uses(uses, 6);
+	for (uint32_t i = 0; i < 6; ++i)
+		EXPECT_EQ(uses[i].backing, made[i]);
+	const uint32_t order[6] = {4, 0, 5, 2, 2, 1};
+	for (uint32_t i = 0; i < 6; ++i)
+		uses[i] = {made[order[i]], SWITCH_GPU_BACKING_READ, 0};
+	switch_gpu_backing_sort_uses(uses, 6);
+	const auto id = [](switch_gpu_backing *allocation) {
+		switch_gpu_backing_info info = {};
+		switch_gpu_backing_describe(allocation, &info);
+		return info.allocation_id;
+	};
+	for (uint32_t i = 1; i < 6; ++i)
+		EXPECT_LE(id(uses[i - 1].backing), id(uses[i].backing));
+	for (auto *allocation : made)
+		switch_gpu_backing_release(allocation);
+}
+
+// The sweep a dead client's leases wait for runs only for a job they could refuse or for a waiter they could hold.
+TEST_F(Backing, ADeadClientsLeaseIsSweptByAJobOnItsBackingNotByEveryJob)
+{
+	IOUserClient client;
+	const uint64_t page = next_page += 4096;
+	auto *held = switch_gpu_backing_register(&page, 1, 704, nullptr, nullptr);
+	auto *other = backing();
+	ASSERT_EQ(switch_gpu_surface_lock_will(&client, 704, 0), 0);
+	switch_gpu_surface_lock_did(&client, 704, 0);
+	client.inactive = true;
+	EXPECT_EQ(publish(other, SWITCH_GPU_BACKING_WRITE, token(1)), 0);
+	EXPECT_EQ(client.refs, 2u);
+	EXPECT_EQ(publish(held, SWITCH_GPU_BACKING_WRITE, token(1, 2)), 0);
+	EXPECT_EQ(client.refs, 1u);
+	switch_gpu_backing_release(other);
+	switch_gpu_backing_release(held);
+}
+
+TEST_F(Backing, AReadinessWatchGetsADeadClientsLeaseSweptByAnyJob)
+{
+	IOUserClient client;
+	const uint64_t page = next_page += 4096;
+	auto *held = switch_gpu_backing_register(&page, 1, 705, nullptr, nullptr);
+	auto *other = backing();
+	ASSERT_EQ(switch_gpu_surface_lock_will(&client, 705, 0), 0);
+	switch_gpu_surface_lock_did(&client, 705, 0);
+	client.inactive = true;
+	switch_gpu_test_ready_waiting = 1;
+	EXPECT_EQ(publish(other, SWITCH_GPU_BACKING_READ, token(1)), 0);
+	switch_gpu_test_ready_waiting = 0;
+	EXPECT_EQ(client.refs, 1u);
+	switch_gpu_backing_release(other);
+	switch_gpu_backing_release(held);
+}
+
+TEST_F(Backing, ACpuWaiterBehindADeadClientsLeaseIsWokenByAnUnrelatedJob)
+{
+	IOUserClient client;
+	const uint64_t page = next_page += 4096;
+	auto *held = switch_gpu_backing_register(&page, 1, 706, nullptr, nullptr);
+	auto *other = backing();
+	ASSERT_EQ(switch_gpu_surface_lock_will(&client, 706, 0), 0);
+	switch_gpu_surface_lock_did(&client, 706, 0);
+	client.inactive = true;
+	const uint64_t bytes = 4096;
+	std::thread waiter([&] {
+		EXPECT_EQ(switch_gpu_backing_cpu_acquire(held, 0, bytes, SWITCH_GPU_BACKING_WRITE), 0);
+		EXPECT_EQ(switch_gpu_backing_cpu_release(held, 0, bytes, SWITCH_GPU_BACKING_WRITE), 0);
+	});
+	while (!__atomic_load_n(&switch_gpu_cpu_sleepers, __ATOMIC_ACQUIRE))
+		std::this_thread::yield();
+	EXPECT_EQ(publish(other, SWITCH_GPU_BACKING_READ, token(1)), 0);
+	waiter.join();
+	EXPECT_EQ(client.refs, 1u);
+	EXPECT_EQ(switch_gpu_cpu_sleepers, 0u);
+	switch_gpu_backing_release(other);
+	switch_gpu_backing_release(held);
+}
+
 TEST_F(Backing, ExtendingGpuDirtyBackingCleansOnlyTheNewPages)
 {
 	const uint64_t pages[] = {next_page += 4096, next_page += 4096};

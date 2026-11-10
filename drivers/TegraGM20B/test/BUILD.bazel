@@ -73,6 +73,7 @@ host_test(
     name = "switch_gpu_client_retirement_test",
     srcs = [
         "switch_gpu_client_retirement_test.cpp",
+        "//drivers/TegraGM20B:SwitchGpuBoIndex.h",
         "//drivers/TegraGM20B:SwitchGpuClientRetirement.h",
         "//drivers/TegraGM20B:SwitchGpuBindings.h",
         "//drivers/TegraGM20B:TegraGM20BBindHistory.h",
@@ -192,6 +193,27 @@ host_test(
 )
 
 host_test(
+    name = "switch_gpu_bo_index_test",
+    srcs = [
+        "switch_gpu_bo_index_test.cpp",
+        "//drivers/TegraGM20B:SwitchGpuBoIndex.h",
+    ],
+    cxx_std = "c++17",
+)
+
+host_test(
+    name = "switch_gpu_job_fences_test",
+    srcs = [
+        "switch_gpu_job_fences_test.cpp",
+        "//drivers/TegraGM20B:SwitchGpuJobFences.h",
+        "//drivers/TegraGM20B:TegraGM20BABI.h",
+        "//drivers/TegraGM20B:TegraGM20BFences.h",
+        "//drivers/TegraGM20B:TegraGM20BGpu.h",
+    ],
+    cxx_std = "c++17",
+)
+
+host_test(
     name = "gm20b_bind_history_test",
     srcs = [
         "gm20b_bind_history_test.cpp",
@@ -280,6 +302,7 @@ host_test(
         "//drivers/TegraGM20B:TegraGM20BRelayout.cpp",
         "//drivers/TegraGM20B:TegraGM20BUserClient.cpp",
         "//drivers/TegraGM20B:SwitchGpuClientRetirement.h",
+        "//drivers/TegraGM20B:SwitchGpuNativeImport.h",
         "//drivers/TegraGM20B:gpu.c",
         "//drivers/TegraGM20B:SwitchGpuVmMap.h",
         "//drivers/TegraGM20B:SwitchGpuChannelCompletion.h",
@@ -664,6 +687,7 @@ host_test(
     name = "switch_gpu_native_import_test",
     srcs = [
         "switch_gpu_native_import_test.cpp",
+        "//drivers/TegraGM20B:SwitchGpuBoIndex.h",
         "//drivers/TegraGM20B:SwitchGpuNativeImport.h",
         "//drivers/TegraGM20B:SwitchGpuNativeSurface.h",
         "//drivers/TegraGM20B:SwitchGpuBacking.h",

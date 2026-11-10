@@ -55,6 +55,8 @@ IOReturn AGXDeviceUserClient::nativeSurfaceView(const TegraGM20BAbiNativeSurface
 	const Bo *source = findBo(in->source_handle);
 	if (in->flags || in->reserved || !source || !source->surface || source->nativeView)
 		return kIOReturnBadArgument;
+	if (!boIndex_.reserve())
+		return kIOReturnNoMemory;
 	if (!switch_native_surface_gpu_acquire || !switch_native_surface_gpu_release)
 		return kIOReturnUnsupported;
 	auto *view = IONewZero(switch_gpu_native_surface_view, 1);
@@ -98,6 +100,7 @@ IOReturn AGXDeviceUserClient::nativeSurfaceView(const TegraGM20BAbiNativeSurface
 	bo->handle = next_handle_++;
 	bo->next = bos_;
 	bos_ = bo;
+	boIndex_.insert(bo->handle, bo);
 	out->handle = bo->handle;
 	return kIOReturnSuccess;
 }

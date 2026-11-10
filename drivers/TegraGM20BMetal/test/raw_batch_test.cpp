@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 #include <gtest/gtest.h>
 #include <limits>
+#include <vector>
 #include "../raw/runtime/raw_batch.h"
 
 TEST(PushBatches, ContiguousMergingPreservesExplicitWorkBoundaries)
@@ -124,4 +125,108 @@ TEST(BatchWork, OverflowAndZeroDimensionsCannotWrapTheBudget)
     for (uint32_t i = 1; i < W::kOperations; ++i)
         EXPECT_FALSE(work.add(1));
     EXPECT_TRUE(work.add(1));
+}
+
+namespace {
+raw::PushBatches batches(std::initializer_list<uint32_t> sizes)
+{
+    raw::PushBatches plan;
+    uint64_t va = 0x1000;
+    for (uint32_t size : sizes) {
+        for (uint32_t i = 0; i < size; ++i, va += 0x1000)
+            plan.append({va, 16, 0}, false);
+        plan.finishBatch();
+    }
+    return plan;
+}
+
+struct Submission {
+    size_t at, n;
+    std::vector<size_t> fences;
+};
+
+std::vector<Submission> submit(raw::PushBatches &plan, uint32_t maxPushes, uint32_t maxFences)
+{
+    std::vector<Submission> made;
+    EXPECT_TRUE(plan.submit(maxPushes, maxFences, [&](size_t at, size_t n) {
+        Submission s{at, n, {}};
+        for (size_t k = at; k < at + n; ++k)
+            if (plan[k].flags & TegraGM20BPushFence)
+                s.fences.push_back(k);
+        made.push_back(s);
+        return true;
+    }));
+    return made;
+}
+}  // namespace
+
+TEST(PushBatches, EveryBatchGoesInOneSubmissionWithAFenceAtEachBatchEnd)
+{
+    auto plan = batches({2, 1, 3});
+    const auto made = submit(plan, 1024, TegraGM20BMaxJobFences);
+    ASSERT_EQ(made.size(), 1u);
+    EXPECT_EQ(made[0].at, 0u);
+    EXPECT_EQ(made[0].n, 6u);
+    EXPECT_EQ(made[0].fences, (std::vector<size_t>{1, 2}));
+}
+
+TEST(PushBatches, AKernelWithoutInternalFencesGetsASubmissionPerBatch)
+{
+    auto plan = batches({2, 1, 3});
+    const auto made = submit(plan, 1024, 0);
+    ASSERT_EQ(made.size(), 3u);
+    EXPECT_EQ(made[0].n, 2u);
+    EXPECT_EQ(made[1].n, 1u);
+    EXPECT_EQ(made[2].n, 3u);
+    for (const auto &s : made)
+        EXPECT_TRUE(s.fences.empty());
+}
+
+TEST(PushBatches, MoreBatchesThanASubmissionsFencesContinueInTheNext)
+{
+    auto plan = batches({1, 1, 1, 1, 1});
+    const auto made = submit(plan, 1024, 2);
+    ASSERT_EQ(made.size(), 2u);
+    EXPECT_EQ(made[0].n, 3u);
+    EXPECT_EQ(made[0].fences, (std::vector<size_t>{0, 1}));
+    EXPECT_EQ(made[1].at, 3u);
+    EXPECT_EQ(made[1].n, 2u);
+    EXPECT_EQ(made[1].fences, (std::vector<size_t>{3}));
+}
+
+TEST(PushBatches, AFenceNeverEndsASubmissionOrSplitsAnIndirectDraw)
+{
+    raw::PushBatches plan;
+    plan.append({0x1000, 16, 0});
+    plan.finishBatch();
+    plan.append({0x2000, 16, TegraGM20BPushIncomplete});
+    plan.finishBatch();
+    plan.append({0x3000, 4, TegraGM20BPushNoPrefetch}, false);
+    plan.finishBatch();
+    plan.append({0x4000, 16, 0});
+    const auto made = submit(plan, 1024, TegraGM20BMaxJobFences);
+    ASSERT_EQ(made.size(), 1u);
+    EXPECT_EQ(made[0].fences, (std::vector<size_t>{0, 2}));
+    EXPECT_FALSE(plan[1].flags & TegraGM20BPushFence);
+    EXPECT_FALSE(plan[3].flags & TegraGM20BPushFence);
+}
+
+TEST(PushBatches, CapacityStillSplitsAndCarriesEveryPushOnce)
+{
+    raw::PushBatches plan;
+    for (uint32_t i = 0; i < 5000; ++i) {
+        plan.append({0x1000ull + i * 0x100, i + 1, 0}, false);
+        if (i % 173 == 0)
+            plan.finishBatch();
+    }
+    size_t covered = 0;
+    for (const auto &s : submit(plan, 127, 8)) {
+        EXPECT_EQ(s.at, covered);
+        EXPECT_LE(s.n, 127u);
+        EXPECT_LE(s.fences.size(), 8u);
+        if (!s.fences.empty())
+            EXPECT_LT(s.fences.back(), s.at + s.n - 1);
+        covered += s.n;
+    }
+    EXPECT_EQ(covered, plan.size());
 }

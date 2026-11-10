@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #include "../raw/runtime/raw_shared_events.h"
+#include "../raw/runtime/raw_batch.h"
 #include "../raw/runtime/raw_kernel.h"
 #include <IOKit/IOKitLib.h>
 #include <array>
@@ -40,6 +41,8 @@ struct Model {
     unsigned submissions = 0;
     bool cpuComplete = true;
     bool rangeUses = false;
+    bool pushFences = false;
+    std::vector<std::vector<uint8_t>> records;
     unsigned cpuCalls = 0;
     int cpuReturn = 0;
     TegraGM20BAbiCpuComplete cpuRequest{};
@@ -93,6 +96,7 @@ extern "C" kern_return_t IOConnectCallStructMethod(mach_port_t connection, uint3
         info.abi_version = TegraGM20BAbiVersion;
         info.flags = TegraGM20BInfoSubmitAddress | TegraGM20BInfoJobVisibility |
                      (model.rangeUses ? uint32_t(TegraGM20BInfoUseRanges) : 0u) |
+                     (model.pushFences ? uint32_t(TegraGM20BInfoPushFences) : 0u) |
                      (model.cpuComplete ? uint32_t(TegraGM20BInfoCpuComplete) : 0u) |
                      (model.shared ? uint32_t(TegraGM20BInfoSharedEvents | TegraGM20BInfoSemanticFence |
                                               TegraGM20BInfoResourceReady) : 0u);
@@ -106,6 +110,7 @@ extern "C" kern_return_t IOConnectCallStructMethod(mach_port_t connection, uint3
         check(!address.reserved && outputSize && *outputSize == sizeof(TegraGM20BAbiExecReply), "addressed reply ABI");
         const auto *bytes = reinterpret_cast<const uint8_t *>(uintptr_t(address.address));
         model.submitted.assign(bytes, bytes + address.bytes);
+        model.records.push_back(model.submitted);
         *static_cast<TegraGM20BAbiExecReply *>(output) = {++model.submissions, 0};
         return KERN_SUCCESS;
     }
@@ -370,6 +375,54 @@ static void submit(bool tunnel, bool shared)
                        {nullptr, nullptr, 1, 0}) && model.submissions == 2, "missing event array cannot publish");
 }
 
+// A command buffer's work batches, submitted as CommandBuffer::commit submits them: one SubmitAddress carrying every
+// push and the use list once, its batch ends marked as internal fences, or, from a kernel without them, one per batch.
+static void batchSubmission(bool tunnel, bool supported)
+{
+    model = {};
+    model.tunnel = tunnel;
+    model.pushFences = supported;
+    raw::Kernel kernel;
+    std::string error;
+    check(kernel.open(error), "actual Kernel opens test connection");
+    check(kernel.maxFences() == (supported ? uint32_t(TegraGM20BMaxJobFences) : 0u), "fence capacity follows the bit");
+    raw::SurfaceList resources;
+    resources.add(9, true);
+    resources.add(10, false);
+    raw::PushBatches plan;
+    for (uint32_t batch = 0; batch < 4; ++batch) {
+        plan.append({0x10000 + batch * 0x1000, 24, 0}, false);
+        plan.append({0x10800 + batch * 0x1000, 8, 0}, false);
+        plan.finishBatch();
+    }
+    uint32_t sequence = 0;
+    const bool sent = plan.submit(kernel.maxPushes(), kernel.maxFences(), [&](size_t at, size_t n) {
+        return kernel.exec(3, plan.data() + at, uint32_t(n), 0, sequence, &resources, nullptr,
+                           raw::JobVisibility::Internal);
+    });
+    check(sent, "every batch submitted");
+    check(model.submissions == (supported ? 1u : 4u), "one kernel call per command buffer with internal fences");
+    unsigned pushes = 0, fences = 0;
+    for (const auto &record : model.records) {
+        const auto &header = *reinterpret_cast<const TegraGM20BAbiSubmit *>(record.data());
+        check(header.surface_count == 2, "each call carries the use list once");
+        const auto *submitted = reinterpret_cast<const TegraGM20BAbiPush *>(record.data() + sizeof header);
+        for (uint32_t i = 0; i < header.push_count; ++i) {
+            const bool fenced = submitted[i].flags & TegraGM20BPushFence;
+            check(fenced == (i % 2 == 1 && i + 1 < header.push_count), "a fence at each batch end inside the job");
+            fences += fenced;
+        }
+        pushes += header.push_count;
+    }
+    check(pushes == 8 && fences == (supported ? 3u : 0u), "every push once, every batch end but the last fenced");
+    if (supported)
+        return;
+    TegraGM20BAbiPush fenced[2] = {{0x10000, 24, TegraGM20BPushFence}, {0x10800, 8, 0}};
+    int result = 0;
+    check(!kernel.exec(3, fenced, 2, 0, sequence, &resources, &result, raw::JobVisibility::Internal) &&
+          result == kIOReturnBadArgument && model.submissions == 4, "a kernel without fences is never sent one");
+}
+
 static void rangeSubmission(bool tunnel, bool supported)
 {
     model = {};
@@ -547,6 +600,9 @@ int main()
     submit(false, true);
     submit(true, true);
     submit(false, false);
+    batchSubmission(false, true);
+    batchSubmission(true, true);
+    batchSubmission(false, false);
     rangeSubmission(false, true);
     rangeSubmission(true, true);
     rangeSubmission(false, false);

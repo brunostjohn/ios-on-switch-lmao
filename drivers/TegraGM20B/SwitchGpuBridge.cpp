@@ -241,7 +241,7 @@ extern "C" int switch_gpu_bridge_submit(const switch_gpu_backing_token *tokens, 
     if (!error) {
         job.threshold = tegra_host1x_syncpt_read(job.syncpoint) + TGM_SYNCPT_INCRS;
         const tgm_push push = {kPushVa + slot * kPage,
-            tgm_syncpt_incr(queue.words + slot * (kPage / 4), job.syncpoint), 0, 0, 0};
+            tgm_syncpt_incr(queue.words + slot * (kPage / 4), job.syncpoint), 0, 0, 0, 0};
         switch_gpu_chan_submit_enter(queue.channel);
         for (;;) {
             error = switch_gpu_chan_exec(queue.channel, &push, 1, job.tokens, job.count,

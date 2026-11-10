@@ -33,6 +33,7 @@
 #include "SwitchGpuPin.h"
 #include "SwitchGpuAllocatedMemory.h"
 #include "SwitchGpuBindings.h"
+#include "SwitchGpuBoIndex.h"
 #include "SwitchGpuLegacyUses.h"
 #include "SwitchGpuSubmitGate.h"
 #include "SwitchGpuNativeSurface.h"
@@ -42,6 +43,7 @@
 #include "SwitchGpuCpuSurface.h"
 #include "SwitchGpuCpuComplete.h"
 #include "SwitchGpuChannelPolicy.h"
+#include "SwitchGpuJobFences.h"
 #include "SwitchGpuEventClient.h"
 #include "SwitchGpuAsyncReference.h"
 #include "SwitchGpuAdmission.h"
@@ -722,6 +724,21 @@ IOReturn ioreturn(int err)
 		return kIOReturnError;
 	}
 }
+
+struct KernelMemory {
+	template <typename T>
+	static T *allocate(uint32_t count)
+	{
+		return IONew(T, count);
+	}
+
+	template <typename T>
+	static void release(T *items, uint32_t count)
+	{
+		if (items)
+			IODelete(items, T, count);
+	}
+};
 }  // namespace
 
 extern "C" void switch_gpu_cached_retire(IOMemoryDescriptor *memory, uint64_t *pages,
@@ -878,6 +895,7 @@ class AGXDeviceUserClient : public IOUserClient
         switch_gpu_backing_guard *guards;
         SwitchGpuSurfaceRefresh *surfaces;
         switch_gpu_cpu_lease **leases;
+		tgm_coh **written; // the listed uses' imports a job writes, as its uses resolved them
 		uint32_t capacity;
         SwitchGpuEventJob *events;
 	};
@@ -913,6 +931,7 @@ class AGXDeviceUserClient : public IOUserClient
     tgm_chan *chans_[kMaxChannels] = {};
     uint32_t channelLevels_[kMaxChannels] = {};
     Bo *bos_ = nullptr, *zombies_ = nullptr, *readyBos_ = nullptr;
+    SwitchGpuBoIndex<Bo, KernelMemory> boIndex_;
     RetiredBinding *retired_ = nullptr, **retiredTail_ = &retired_, *unmapping_ = nullptr;
     // a retired binding's PTEs go under it (retireBatch, takeRetiredOverlaps)
     IOLock *unmapLock_ = nullptr;
@@ -1106,6 +1125,7 @@ void AGXDeviceUserClient::free()
 		freeJob(job_);
 		for (auto &job : channelJobs_)
 			freeJob(job);
+		boIndex_.destroy();
 		for (auto &submitLock : submitLocks_)
 			if (submitLock)
 				IOLockFree(submitLock);
@@ -1137,11 +1157,7 @@ void AGXDeviceUserClient::free()
 
 AGXDeviceUserClient::Bo *AGXDeviceUserClient::findBo(uint64_t handle)
 {
-	for (Bo *bo = bos_; bo; bo = bo->next) {
-		if (bo->handle == handle)
-			return bo;
-	}
-	return nullptr;
+	return boIndex_.find(handle);
 }
 
 AGXDeviceUserClient::Bo *AGXDeviceUserClient::findAddress(uint64_t address, uint64_t bytes)
@@ -1287,6 +1303,8 @@ IOReturn AGXDeviceUserClient::boAlloc(const TegraGM20BAbiBoAlloc *in,
 	    (compressible &&
 	     (in->flags != TegraGM20BBoCompressible || (in->bytes & (kChunkBytes - 1)))))
 		return kIOReturnBadArgument;
+	if (!boIndex_.reserve())
+		return kIOReturnNoMemory;
 	if (__atomic_load_n(&gPoolOrphans, __ATOMIC_RELAXED))
 		scheduleOrphanRelease();  // not here: releasing a view can wait for another connection (releaseOrphans)
 	const uint64_t start = statsNowNs();
@@ -1507,6 +1525,7 @@ IOReturn AGXDeviceUserClient::boAlloc(const TegraGM20BAbiBoAlloc *in,
 	bo->token = next_token_++;
 	bo->next = bos_;
 	bos_ = bo;
+	boIndex_.insert(bo->handle, bo);
 	out->handle = bo->handle;
 	out->map_token = bo->token;
 	out->reserved = 0;
@@ -1518,7 +1537,7 @@ IOReturn AGXDeviceUserClient::boImport(const TegraGM20BAbiBoImport *in,
 {
 	if (!in->bytes || ((in->address | in->bytes) & 0xfff) || in->bytes > kMaxBoBytes)
 		return kIOReturnBadArgument;
-	if (!surfaces_.reserve())
+	if (!surfaces_.reserve() || !boIndex_.reserve())
 		return kIOReturnNoMemory;
 	const uint64_t start = statsNowNs();
 	uint64_t phase[TGM_PHASES] = {};
@@ -1649,6 +1668,7 @@ IOReturn AGXDeviceUserClient::boImport(const TegraGM20BAbiBoImport *in,
 	bo->handle = next_handle_++;
 	bo->next = bos_;
 	bos_ = bo;
+	boIndex_.insert(bo->handle, bo);
 	if (bo->coh)
 		surfaces_.add(bo->handle, bo->coh, !bo->readOnly);
 	out->handle = bo->handle;
@@ -2198,12 +2218,14 @@ bool AGXDeviceUserClient::reserveJob(JobScratch &job, uint32_t uses)
 		auto *guards = IONew(switch_gpu_backing_guard, capacity);
 		auto *surfaces = IONew(SwitchGpuSurfaceRefresh, capacity);
 		auto **leases = IONew(switch_gpu_cpu_lease *, capacity);
-		if (!made || !writes || !guards || !surfaces || !leases) {
+		auto **written = IONew(tgm_coh *, capacity);
+		if (!made || !writes || !guards || !surfaces || !leases || !written) {
 			IODelete(made, switch_gpu_backing_use, capacity);
 			IODelete(writes, switch_gpu_backing_write_range, capacity);
 			IODelete(guards, switch_gpu_backing_guard, capacity);
 			IODelete(surfaces, SwitchGpuSurfaceRefresh, capacity);
 			IODelete(leases, switch_gpu_cpu_lease *, capacity);
+			IODelete(written, tgm_coh *, capacity);
 			return false;
 		}
 		IODelete(job.uses, switch_gpu_backing_use, job.capacity);
@@ -2211,8 +2233,10 @@ bool AGXDeviceUserClient::reserveJob(JobScratch &job, uint32_t uses)
 		IODelete(job.guards, switch_gpu_backing_guard, job.capacity);
 		IODelete(job.surfaces, SwitchGpuSurfaceRefresh, job.capacity);
 		IODelete(job.leases, switch_gpu_cpu_lease *, job.capacity);
+		IODelete(job.written, tgm_coh *, job.capacity);
 		job.surfaces = surfaces;
 		job.leases = leases;
+		job.written = written;
 		job.uses = made;
 		job.writes = writes;
 		job.guards = guards;
@@ -2234,6 +2258,7 @@ void AGXDeviceUserClient::freeJob(JobScratch &job)
 	IODelete(job.guards, switch_gpu_backing_guard, job.capacity);
 	IODelete(job.surfaces, SwitchGpuSurfaceRefresh, job.capacity);
 	IODelete(job.leases, switch_gpu_cpu_lease *, job.capacity);
+	IODelete(job.written, tgm_coh *, job.capacity);
 	job = {};
 }
 
@@ -2355,12 +2380,13 @@ IOReturn AGXDeviceUserClient::exec(uint32_t channel, TegraGM20BAbiPush *input, u
 			      offsetof(tgm_push, no_prefetch) == offsetof(TegraGM20BAbiPush, flags),
 		      "push layouts");
 	tgm_push *pushes = reinterpret_cast<tgm_push *>(input);
+	const uint32_t fenceFlag = native && scratch ? uint32_t(TegraGM20BPushFence) : 0u;
 	for (uint32_t i = 0; i < count; i++) {
 		const TegraGM20BAbiPush &p = input[i];
 		if ((p.va & 3) || !p.dwords || p.dwords >= (1u << 21) ||
 		    (p.flags & ~static_cast<uint32_t>(TegraGM20BPushNoPrefetch |
 						      TegraGM20BPushImportsWritten |
-						      TegraGM20BPushIncomplete)) ||
+						      TegraGM20BPushIncomplete | fenceFlag)) ||
 		    ((p.flags & TegraGM20BPushIncomplete) &&
 		     (i + 1 == count || !(input[i + 1].flags & TegraGM20BPushNoPrefetch))) ||
 		    p.va < TGM_USER_VA_START ||
@@ -2371,12 +2397,16 @@ IOReturn AGXDeviceUserClient::exec(uint32_t channel, TegraGM20BAbiPush *input, u
 		const uint32_t flags = p.flags;
 		pushes[i].no_prefetch = (flags & TegraGM20BPushNoPrefetch) ? 1u : 0u;
 		pushes[i].incomplete = (flags & TegraGM20BPushIncomplete) ? 1u : 0u;
+		pushes[i].fence = (flags & TegraGM20BPushFence) ? 1u : 0u;
 		pushes[i].reserved = 0;
 	}
+	uint32_t fences = 0;
+	if (switch_gpu_job_fences(pushes, count, &fences))
+		return kIOReturnBadArgument;
 	tgm_prof prof;
 	bool profiled = false;
 	if (count && pushScanOn() && pushSubmits_++ % kScanEvery == 0) {
-		profiled = count <= TGM_PROF_MAX && pushScans_++ % kProfileEvery == 0;
+		profiled = count <= TGM_PROF_MAX && !fences && pushScans_++ % kProfileEvery == 0;
 		scanPushes(pushes, count, profiled ? &prof : nullptr);
 	}
 	uint32_t seqno = 0;
@@ -2391,7 +2421,7 @@ IOReturn AGXDeviceUserClient::exec(uint32_t channel, TegraGM20BAbiPush *input, u
 		events = job.events;
 		events->clear();
 	}
-	uint32_t useTotal = 0, writeCount = 0, surfaceCount = 0, nativeGuardCount = 0;
+	uint32_t useTotal = 0, writeCount = 0, surfaceCount = 0, nativeGuardCount = 0, writtenCount = 0;
 	bool hostWritten = !(visibility & TegraGM20BSubmitVisibilityExplicit);
 	const uint32_t claim = switch_gpu_claim_flags(admissionBegin || admissionContinue);
 	// flags: the SWITCH_GPU_BACKING_* ownership flags of the use beside its access
@@ -2439,7 +2469,13 @@ IOReturn AGXDeviceUserClient::exec(uint32_t channel, TegraGM20BAbiPush *input, u
 			return kIOReturnBadArgument;
 		if (const int error = addUse(bo, uses[i].access, claim, offset, bytes))
 			return ioreturn(error);
+		if (uses[i].access & TegraGM20BSurfaceWrite)
+			job.written[writtenCount++] = bo->coh;
 	}
+	// A job's pushes lie in the push ring and its indirect arguments' BOs: past kPushBos of them, a use per push.
+	constexpr uint32_t kPushBos = 8;
+	const Bo *pushed[kPushBos];
+	uint32_t pushedCount = 0;
 	for (uint32_t i = 0; native && i < count; ++i) {
 		const Binding *binding = switch_gpu_binding_find(binds_, nbinds_, pushes[i].va,
 								 uint64_t(pushes[i].dwords) * 4);
@@ -2447,6 +2483,13 @@ IOReturn AGXDeviceUserClient::exec(uint32_t channel, TegraGM20BAbiPush *input, u
 		hostWritten |= binding && !binding->retirement->vol;
 		if (!bo || !bo->backing)
 			return kIOReturnBadArgument;
+		uint32_t seen = 0;
+		while (seen < pushedCount && pushed[seen] != bo)
+			++seen;
+		if (seen < pushedCount)
+			continue;
+		if (pushedCount < kPushBos)
+			pushed[pushedCount++] = bo;
 		if (const int error = addUse(bo, SWITCH_GPU_BACKING_READ, claim))
 			return ioreturn(error);
 	}
@@ -2511,7 +2554,7 @@ refresh:
 	for (; !error;) {
 		dependencies = 0;
 		if (count || (visibility & TegraGM20BSubmitHasEvents))
-			switch_gpu_chan_next_token(chan, &completion);
+			switch_gpu_chan_job_token(chan, fences, &completion);
 		if (count && !error) {
 			error = leaseCount
 					? switch_gpu_backing_begin_conversion_checked(
@@ -2602,14 +2645,8 @@ refresh:
 		if (!native)
 			surfaces_.after(listed, importsWritten_, tgm_chan_uid(chan), seqno);
 		else
-			for (uint32_t i = 0; i < useCount; ++i)
-				if (uses[i].access & TegraGM20BSurfaceWrite) {
-					const Bo *bo = uses[i].access & TegraGM20BSurfaceGpuAddress
-							       ? findAddress(uses[i].handle)
-							       : findBo(uses[i].handle);
-					tgm_coherency_wrote_listed(bo->coh, tgm_chan_uid(chan),
-								   seqno);
-				}
+			for (uint32_t i = 0; i < writtenCount; ++i)
+				tgm_coherency_wrote_listed(job.written[i], tgm_chan_uid(chan), seqno);
 	}
 	out->seqno = seqno;
 	out->reserved = 0;
@@ -2822,7 +2859,7 @@ IOReturn AGXDeviceUserClient::getInfo(TegraGM20BAbiInfo *out)
 		     TegraGM20BInfoCpuAccess | TegraGM20BInfoSubmitAddress | TegraGM20BInfoCpuPreserveDirty |
 		     TegraGM20BInfoCanonicalSurfaceLayout | TegraGM20BInfoNativeSurfaceView | TegraGM20BInfoJobVisibility | TegraGM20BInfoLeanCopyChannel | TegraGM20BInfoControlReserve |
 		     TegraGM20BInfoSharedEvents | TegraGM20BInfoSemanticFence | TegraGM20BInfoResourceReady |
-		     TegraGM20BInfoCpuComplete | TegraGM20BInfoUseRanges;
+		     TegraGM20BInfoCpuComplete | TegraGM20BInfoUseRanges | TegraGM20BInfoPushFences;
 	out->flags &= ~kInfoAwaitingUserspace;
 	if (info.comptag_lines && switch_gpu_compression_on())
 		out->flags |= TegraGM20BInfoCompression;

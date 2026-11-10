@@ -251,6 +251,63 @@ size_t raw_metal_fetch_rates(char *out, size_t size)
     return n > 0 ? std::min(size_t(n), size - 1) : 0;
 }
 
+size_t raw_metal_encode_rates(char *out, size_t size)
+{
+    using raw::EncodePart;
+    if (!gRM || !size)
+        return 0;
+    const raw::EncodeTotals &k = gRM->raw->stats.encode;
+    static uint64_t lastEncodes, lastWall, lastCpu, lastTicks[raw::kEncodeParts], lastCalls[raw::kEncodeParts];
+    const uint64_t encodes = k.encodes.load(std::memory_order_relaxed) - lastEncodes;
+    if (!encodes)
+        return 0;
+    lastEncodes += encodes;
+    mach_timebase_info_data_t base;
+    mach_timebase_info(&base);
+    const double tickUs = double(base.numer) / double(base.denom) / 1000.0, usPerTick = tickUs / double(encodes);
+    double us[raw::kEncodeParts], calls[raw::kEncodeParts];
+    for (size_t i = 0; i < raw::kEncodeParts; ++i) {
+        const uint64_t t = k.ticks[i].load(std::memory_order_relaxed), n = k.calls[i].load(std::memory_order_relaxed);
+        us[i] = double(t - lastTicks[i]) * usPerTick;
+        calls[i] = double(n - lastCalls[i]) / double(encodes);
+        lastTicks[i] = t;
+        lastCalls[i] = n;
+    }
+    const uint64_t wall = k.wallTicks.load(std::memory_order_relaxed), cpu = k.cpuNs.load(std::memory_order_relaxed);
+    const double wallUs = double(wall - lastWall) * usPerTick, cpuUs = double(cpu - lastCpu) / 1000.0 / double(encodes);
+    lastWall = wall;
+    lastCpu = cpu;
+    static uint64_t lastExecUses;
+    const uint64_t usesNow = k.execUses.load(std::memory_order_relaxed);
+    const double execs = calls[size_t(EncodePart::Exec)] * double(encodes),
+                 execUses = execs ? double(usesNow - lastExecUses) / execs : 0.0;
+    lastExecUses = usesNow;
+    const double longestPrepareUs =
+        double(gRM->raw->stats.encode.longestPrepare.exchange(0, std::memory_order_relaxed)) * tickUs;
+    auto part = [&](EncodePart p) {
+        return us[size_t(p)];
+    };
+    auto count = [&](EncodePart p) {
+        return calls[size_t(p)];
+    };
+    const int n = snprintf(
+        out, size,
+        "encode n=%llu wall=%.0f cpu=%.0f res=%.0f loop=%.0f state=%.0f pass=%.0f splan=%.0f fuse=%.0f pend=%.0f/%.1f "
+        "draw=%.0f/%.1f prep=%.0f geo=%.0f desc=%.0f bar=%.0f slaunch=%.0f/%.1f blit=%.0f comp=%.0f tail=%.0f "
+        "commit=%.0f prolog=%.0f exec=%.0f/%.1f uses=%.0f kern=%.0f/%.1f gacq=%.0f/%.1f grel=%.0f/%.1f pmax=%.0f",
+        (unsigned long long)encodes, wallUs, cpuUs, part(EncodePart::Resources), part(EncodePart::Loop),
+        part(EncodePart::State), part(EncodePart::Pass), part(EncodePart::SplitPlan), part(EncodePart::Fusion),
+        part(EncodePart::PassEnd), count(EncodePart::PassEnd), part(EncodePart::Draw), count(EncodePart::Draw),
+        part(EncodePart::Prepare), part(EncodePart::Geometry), part(EncodePart::Descriptors),
+        part(EncodePart::Barriers), part(EncodePart::SplitLaunch), count(EncodePart::SplitLaunch),
+        part(EncodePart::Blit), part(EncodePart::Compute), part(EncodePart::Tail), part(EncodePart::Commit),
+        part(EncodePart::Prologues), part(EncodePart::Exec), count(EncodePart::Exec), execUses,
+        part(EncodePart::Kernel), count(EncodePart::Kernel), part(EncodePart::GeometryAcquire),
+        count(EncodePart::GeometryAcquire), part(EncodePart::GeometryRelease), count(EncodePart::GeometryRelease),
+        longestPrepareUs);
+    return n > 0 ? std::min(size_t(n), size - 1) : 0;
+}
+
 size_t raw_metal_fetch_keys(char *out, size_t size)
 {
     if (!gRM || !size)

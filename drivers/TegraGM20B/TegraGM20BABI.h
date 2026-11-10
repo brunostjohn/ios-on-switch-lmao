@@ -53,6 +53,7 @@ enum {
 	TegraGM20BMaxSubmitBytes = 4088, /* leaves room for the tunnel header */
 	TegraGM20BMaxJobPushes = 1024,
 	TegraGM20BMaxJobUses = 1024,
+	TegraGM20BMaxJobFences = 128,
     TegraGM20BMaxJobEvents = 32,
     TegraGM20BMaxJobDependencies = TegraGM20BMaxJobUses + TegraGM20BMaxJobEvents,
 };
@@ -87,6 +88,7 @@ enum {
     TegraGM20BInfoResourceReady = 1u << 23,
     TegraGM20BInfoCpuComplete = 1u << 24,
     TegraGM20BInfoUseRanges = 1u << 25,
+    TegraGM20BInfoPushFences = 1u << 26, /* SubmitAddress takes TegraGM20BPushFence */
 };
 
 /* CpuComplete maintains cached CPU ranges only while the accepted channel prefix still owns their current
@@ -420,6 +422,11 @@ enum {
 	 * or not: the client could not deliver a SurfaceWrites. Carried by a real push, so it takes effect with the work. */
 	TegraGM20BPushImportsWritten = 1u << 1,
 	TegraGM20BPushIncomplete = 1u << 2,
+	/* SubmitAddress with InfoPushFences: after this push the GPU waits for idle and releases the channel's next seqno
+	 * (an internal fence, with its completion interrupt), then runs the next push. The job's own fence releases the
+	 * seqno after its last such fence, which the reply names. Never on an Incomplete push or the job's last; at most
+	 * TegraGM20BMaxJobFences. */
+	TegraGM20BPushFence = 1u << 3,
 };
 
 struct TegraGM20BAbiPush {
