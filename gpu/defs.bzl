@@ -202,7 +202,6 @@ _UNITS = {
     "c": ["clang", "-isysroot", "@MACOSX_SDK@", "-x", "c", "-std=c11"],
     "cpp": ["clang++", "-isysroot", "@MACOSX_SDK@", "-x", "c++", "-std=c++17"],
     "mm": ["clang++", "-isysroot", "@MACOSX_SDK@", "-x", "objective-c++", "-std=c++17", "-fobjc-arc"],
-    "metal": ["xcrun", "-sdk", "iphoneos", "metal"],
 }
 
 # Each unit's includes with the hashed files its only inputs: a header outside them is not found and the build fails.
@@ -262,7 +261,7 @@ raw_stack = rule(
     doc = """The raw path's stack key (tools/gpu/raw_stack.py): what its records are made and read by.
 
     srcs and readers, by path and bytes, with NVK, MetalABI.h, every crate the Metal bridge compiles (its sources,
-    compile data and build scripts) and the IPSW build. Each C, C++, Objective-C++ and Metal unit of srcs is checked to
+    compile data and build scripts) and the IPSW build. Each C, C++ and Objective-C++ unit of srcs is checked to
     include only srcs and MetalABI.h; the hashed files' paths are the output group `inputs`.""",
     attrs = _XCODE | {
         "srcs": attr.label_list(
