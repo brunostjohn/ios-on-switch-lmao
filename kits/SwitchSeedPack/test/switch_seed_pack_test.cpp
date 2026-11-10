@@ -198,6 +198,53 @@ TEST_F(SeedPack, AnUnstagedPackLeavesOnlyItsEntriesMissing)
     EXPECT_LT(missing, entries.size());
 }
 
+TEST_F(SeedPack, ObservedPacksAloneServeTheObservedEntries)
+{
+    const auto directory = write("observed", entries);
+    pack::Seed seed;
+    ASSERT_TRUE(seed.open(directory, 8, identity));
+    const uint32_t observed = seed.observedPacks(), packs = seed.packs();
+    seed.close();
+    for (uint32_t number = observed; number < packs; ++number)
+        std::filesystem::remove(pack::packPath(directory, number));
+    ASSERT_TRUE(seed.open(directory, 8, identity));
+    EXPECT_EQ(seed.packs(), packs);
+    for (const auto &entry : entries)
+        EXPECT_EQ(found(seed, entry.name), entry.tier == 0 ? entry.bytes : "<missing>");
+}
+
+TEST_F(SeedPack, TheFirstAbsentDerivedPackLeavesEveryDerivedEntryMissing)
+{
+    const auto directory = write("derived", entries);
+    pack::Seed seed;
+    ASSERT_TRUE(seed.open(directory, 8, identity));
+    const uint32_t observed = seed.observedPacks();
+    ASSERT_GE(seed.packs() - observed, 2u);
+    seed.close();
+    std::filesystem::remove(pack::packPath(directory, observed));
+    ASSERT_TRUE(seed.open(directory, 8, identity));
+    for (const auto &entry : entries)
+        EXPECT_EQ(found(seed, entry.name), entry.tier == 0 ? entry.bytes : "<missing>");
+}
+
+TEST_F(SeedPack, AnAbsentObservedPackLeavesTheOtherPacksRead)
+{
+    const auto directory = write("unobserved", entries);
+    pack::Seed seed;
+    ASSERT_TRUE(seed.open(directory, 8, identity));
+    ASSERT_GE(seed.observedPacks(), 2u);
+    seed.close();
+    std::filesystem::remove(pack::packPath(directory, 0));
+    ASSERT_TRUE(seed.open(directory, 8, identity));
+    unsigned missing = 0;
+    for (const auto &entry : entries) {
+        const auto bytes = found(seed, entry.name);
+        missing += bytes == "<missing>";
+        EXPECT_TRUE(bytes == entry.bytes || (bytes == "<missing>" && entry.tier == 0));
+    }
+    EXPECT_GT(missing, 0u);
+}
+
 TEST_F(SeedPack, EntryBoundsOutsideTheirPackMiss)
 {
     std::vector<pack::Entry> one = {{std::string(8, '\x11'), 0, "", "payload"}};

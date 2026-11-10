@@ -11,8 +11,10 @@
 //
 // Names are hashes, so their leading bits spread the entries evenly over the runs. The identity is what the entries were
 // made for (the caller's: a stack key, a build); a seed of another identity does not open. Packs [0, observed packs)
-// hold only entries a device was seen to use. A pack that is not there leaves its entries missing (a stage may leave the
-// others out); one there whose length is not the index's refuses the whole seed.
+// hold only entries a device was seen to use. A pack that is not there leaves its entries missing; one there whose
+// length is not the index's refuses the whole seed. A stage stages the packs from observed packs on all or none, so the
+// first of them not there ends the opening: a seed staged with only its observed packs costs one failed open, not one
+// per pack.
 #pragma once
 #include <fcntl.h>
 #include <sys/mman.h>
@@ -108,12 +110,15 @@ public:
             return false;
         }
         packs_.resize(le32(index_.data + 20));
+        const uint32_t observed = observedPacks();
         for (uint32_t pack = 0; pack < packs_.size(); ++pack) {
             const bool mapped = mapFile(packPath(directory, pack), packs_[pack], absent);
             if ((!mapped && !absent) || (mapped && packs_[pack].size != le64(index_.data + kHeaderBytes + 8 * pack))) {
                 close();
                 return false;
             }
+            if (absent && pack >= observed)
+                break;
         }
         return true;
     }
