@@ -2705,6 +2705,15 @@ void AGXDeviceUserClient::releaseMappings()
 	}
 }
 
+namespace
+{
+// The raw runtime and NVK at this base read none of these; they turn on with the userspace unit that uses them.
+constexpr uint32_t kInfoAwaitingUserspace =
+	TegraGM20BInfoNativeSurfaceView | TegraGM20BInfoJobVisibility | TegraGM20BInfoLeanCopyChannel |
+	TegraGM20BInfoControlReserve | TegraGM20BInfoSharedEvents | TegraGM20BInfoSemanticFence |
+	TegraGM20BInfoResourceReady | TegraGM20BInfoCpuComplete | TegraGM20BInfoUseRanges;
+}  // namespace
+
 IOReturn AGXDeviceUserClient::getInfo(TegraGM20BAbiInfo *out)
 {
 	tgm_info info;
@@ -2719,6 +2728,7 @@ IOReturn AGXDeviceUserClient::getInfo(TegraGM20BAbiInfo *out)
 		     TegraGM20BInfoCanonicalSurfaceLayout | TegraGM20BInfoNativeSurfaceView | TegraGM20BInfoJobVisibility | TegraGM20BInfoLeanCopyChannel | TegraGM20BInfoControlReserve |
 		     TegraGM20BInfoSharedEvents | TegraGM20BInfoSemanticFence | TegraGM20BInfoResourceReady |
 		     TegraGM20BInfoCpuComplete | TegraGM20BInfoUseRanges;
+	out->flags &= ~kInfoAwaitingUserspace;
 	if (info.comptag_lines && switch_gpu_compression_on())
 		out->flags |= TegraGM20BInfoCompression;
 	if (switch_tiled_cache_on())

@@ -639,6 +639,13 @@ TEST(GM20BFencesSource, ExecQueuesItsWritersAcquiresBeforeItSubmits)
                                       "TegraGM20BInfoCpuComplete", "TegraGM20BInfoCpuAccess", "TegraGM20BInfoUseRanges",
                                       "TegraGM20BInfoJobVisibility"})
 		EXPECT_THAT(capabilities, HasSubstr(capability));
+	EXPECT_THAT(capabilities, HasSubstr("out->flags &= ~kInfoAwaitingUserspace;"));
+	const auto awaiting = flat(client().substr(client().find("constexpr uint32_t kInfoAwaitingUserspace")));
+	for (const char *capability :
+	     {"TegraGM20BInfoNativeSurfaceView", "TegraGM20BInfoJobVisibility", "TegraGM20BInfoLeanCopyChannel",
+	      "TegraGM20BInfoControlReserve", "TegraGM20BInfoSharedEvents", "TegraGM20BInfoSemanticFence",
+	      "TegraGM20BInfoResourceReady", "TegraGM20BInfoCpuComplete", "TegraGM20BInfoUseRanges"})
+		EXPECT_THAT(awaiting.substr(0, awaiting.find(';')), HasSubstr(capability));
 }
 
 // A SurfaceWrites a client could not deliver never leaves a GPU write unmarked: the client stops saying its imports are
