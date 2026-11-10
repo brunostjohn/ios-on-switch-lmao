@@ -23,6 +23,14 @@ static bool planeSame(const PlaneSet &a, const PlaneSet &b)
 
 uint32_t planeBuildingSlots = 0;
 
+// Retried at the next frame end, the current frame kept: a slot still scanned (-11), a surface busy with a publication
+// or a CPU writer (-16), a representation replaced under the acquire (STALE), a conversion queued (-115; its completion
+// kicks too). Any other error cannot place this layer: it is dropped and the rest of the swap shows.
+static bool planeRetry(int slot)
+{
+    return slot == -11 || slot == -16 || slot == -115 || slot == SWITCH_GPU_BACKING_STALE;
+}
+
 void planeDecide(const OriginalLegacySwapRequest *request, PlaneDecision &d)
 {
     d = {};
@@ -97,9 +105,14 @@ void planeDecide(const OriginalLegacySwapRequest *request, PlaneDecision &d)
             d.waitSource = layer.surface;
             return;
         }
-        if (slot < 0) {
+        if (planeRetry(slot)) {
             d.waitSlot = true;
             return;
+        }
+        if (slot < 0) {
+            if (stats)
+                ++stPlaneDropped;
+            continue;
         }
         overlay.on = true;
         overlay.slot = slot;
@@ -113,12 +126,18 @@ void planeDecide(const OriginalLegacySwapRequest *request, PlaneDecision &d)
         if (assignment.convert & (1u << index)) {
             const auto &layer = planeLayers[selected[index]];
             const int slot = planeConvertSlot(overlay.slot, layer.layer, width, height, overlay.image, request);
-            if (slot < 0) {
+            if (planeRetry(slot)) {
                 d.waitSlot = true;
                 return;
             }
-            overlay.slot = slot;
-            planeBuildingSlots |= 1u << unsigned(slot);
+            if (slot < 0) {
+                if (stats)
+                    ++stPlaneDropped;
+                overlay = {};
+            } else {
+                overlay.slot = slot;
+                planeBuildingSlots |= 1u << unsigned(slot);
+            }
         }
         want.window[assignment.window[index]] = overlay;
     }

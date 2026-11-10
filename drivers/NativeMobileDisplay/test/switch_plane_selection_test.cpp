@@ -2,6 +2,7 @@
 #include <gtest/gtest.h>
 #include <array>
 #include "../SwitchDisplayComposition.h"
+#include "../../TegraGM20B/SwitchGpuBacking.h"
 
 namespace {
 struct OSObject { OSObject *metaCast(const char *) { return this; } } surfaces[4];
@@ -114,6 +115,53 @@ TEST(PlaneSelection, CpuOwnershipDeferralDoesNotAcceptPartialComposition)
     EXPECT_EQ(decision.waitSource, &surfaces[0]);
     EXPECT_FALSE(decision.planeChange);
     EXPECT_EQ(display.planeBuildingSlots, 0u);
+}
+
+TEST(PlaneSelection, BusySourceKeepsTheCurrentFrameForTheNextFrameEnd)
+{
+    for (int busy : {-11, -115, int(SWITCH_GPU_BACKING_STALE)}) {
+        Display display;
+        const auto request = frame(display);
+        display.mapError = busy;
+        Display::PlaneDecision decision;
+        display.planeDecide(&request, decision);
+        EXPECT_TRUE(decision.waitSlot) << busy;
+        EXPECT_FALSE(decision.planeChange);
+        EXPECT_EQ(display.planeBuildingSlots, 0u);
+    }
+}
+
+TEST(PlaneSelection, LayerThatCannotBePlacedIsDroppedAndTheUiStillShows)
+{
+    for (int permanent : {-19, -95, -22, -12, -1}) {
+        Display display;
+        display.stats = true;
+        const auto request = frame(display);
+        display.mapError = permanent;
+        Display::PlaneDecision decision;
+        display.planeDecide(&request, decision);
+        EXPECT_FALSE(decision.waitSlot) << permanent;
+        EXPECT_EQ(decision.ui, &surfaces[1]);
+        EXPECT_TRUE(decision.uiNew);
+        EXPECT_FALSE(decision.set.on());
+        EXPECT_EQ(display.stPlaneDropped, 2u);
+    }
+}
+
+TEST(PlaneSelection, ConversionThatCannotRunDropsOnlyItsOverlay)
+{
+    Display display;
+    display.stats = true;
+    const auto request = frame(display);
+    display.live[0] = {true, 5, native_planes::kBt709, 0};
+    display.live[1] = {true, 6, native_planes::kBt709, 0};
+    display.convertError = -95;
+    Display::PlaneDecision decision;
+    display.planeDecide(&request, decision);
+    EXPECT_FALSE(decision.waitSlot);
+    EXPECT_TRUE(decision.set.uses(0));
+    EXPECT_FALSE(decision.set.window[0].on && decision.set.window[1].on);
+    EXPECT_EQ(display.stPlaneDropped, 1u);
 }
 TEST(PlaneSelection, LiveCscConflictQueuesConversionAndKeepsOldComposition)
 {

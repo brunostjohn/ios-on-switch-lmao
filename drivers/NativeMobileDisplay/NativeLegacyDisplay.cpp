@@ -1653,6 +1653,8 @@ private:
             checkInteraction();
             noteStatsWindow();
         }
+        if (status & kFrameEndInt)
+            kickAtIdleFrameEnd();
         if ((status & kFrameEndInt) && !frameEndNeeded() && tegra_panel_holds_frame_end())
             maskIdleFrameEnd();
     }

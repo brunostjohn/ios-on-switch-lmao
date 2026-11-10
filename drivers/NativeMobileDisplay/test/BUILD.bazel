@@ -469,6 +469,7 @@ host_test(
     srcs = [
         "switch_plane_selection_test.cpp",
         "//drivers/NativeMobileDisplay:SwitchPlaneSelection.h",
+        "//drivers/TegraGM20B:SwitchGpuBacking.h",
         "//drivers/NativeMobileDisplay:SwitchDisplayComposition.h",
         "//drivers/NativeMobileDisplay:NativePlanes.h",
         "//drivers/TegraVIC:SwitchSurfaceColor.h",

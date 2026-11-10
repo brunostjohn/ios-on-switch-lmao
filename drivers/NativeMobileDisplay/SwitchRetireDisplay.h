@@ -26,6 +26,18 @@
         return first;
     }
 
+    // A swap that waited for a frame end (a busy overlay source, a scanned slot) goes again at one where nothing else
+    // will kick: no window A flip or overlay set out, no console scroll, probe or overlay recovery in progress.
+    // NOLINTNEXTLINE(misc-no-recursion): kickSwapQueue's kicking flag stops re-entry; a nested kick only loops
+    void kickAtIdleFrameEnd()
+    {
+        if (!kickDeferred || ring.pending != kNoBuffer || planeLatch.requested() || tapeSettle || probeRequest ||
+            probe.active() || planeProbe.active() || planeRecovering || hwSuspended || scanoutStopped)
+            return;
+        kickDeferred = false;
+        kickSwapQueue();
+    }
+
     // At a latch (latchRetire): every taken swap at the head up to the one seen on screen (take sequence seq) retires, in queue
     // order; the one still in flight, or a newer one asked for, stays. shownAt: when the screen began showing it (mach time).
     // NOLINTNEXTLINE(misc-no-recursion): kickSwapQueue's kicking flag stops re-entry; a nested kick only loops

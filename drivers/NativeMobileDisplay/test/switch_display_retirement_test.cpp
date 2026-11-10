@@ -39,8 +39,29 @@ struct Display {
     void kickSwapQueue() { ++kicks; }
     bool planeRecovering = false;
     PlaneSet planeRecoveryTarget = {};
+    struct Probe { bool on = false; bool active() const { return on; } } probe, planeProbe;
+    bool kickDeferred = false, tapeSettle = false, probeRequest = false, hwSuspended = false, scanoutStopped = false;
 #include "../SwitchRetireDisplay.h"
 };
+
+TEST(DisplayRetirement, DeferredSwapGoesAgainAtAnIdleFrameEndAndOnlyThere)
+{
+    Display display;
+    display.kickAtIdleFrameEnd();
+    EXPECT_EQ(display.kicks, 0u);
+    display.kickDeferred = true;
+    display.ring.pending = 0;
+    display.kickAtIdleFrameEnd();
+    EXPECT_EQ(display.kicks, 0u);
+    display.ring.pending = -1;
+    display.planeLatch.armed = 1;
+    display.kickAtIdleFrameEnd();
+    EXPECT_EQ(display.kicks, 0u);
+    display.planeLatch.armed = -1;
+    display.kickAtIdleFrameEnd();
+    EXPECT_EQ(display.kicks, 1u);
+    EXPECT_FALSE(display.kickDeferred);
+}
 
 TEST(DisplayRetirement, FirstUiLatchWaitsForPairedOverlayThenCompletesWithoutAnotherUiFrame)
 {
