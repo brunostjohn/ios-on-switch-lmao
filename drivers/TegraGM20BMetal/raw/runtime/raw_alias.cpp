@@ -14,6 +14,7 @@ struct Lease {
     Memory from;
     Span span;
     Import *import;
+    bool placed = true;  // an arena lease's span is its own placement (aliasArenaRange's is not)
 };
 
 namespace {
@@ -58,7 +59,10 @@ void Device::dropLocked(Lease *lease)
         break;
     case Memory::Arena:
         arenas_[lease->span.chunk].leases--;
-        arenaFree(lease->span);
+        if (lease->placed)
+            arenaFree(lease->span);
+        else if (arenas_[lease->span.chunk].dying && !arenas_[lease->span.chunk].leases)
+            freeArena(arenas_[lease->span.chunk]);
         break;
     }
     delete lease;
@@ -120,6 +124,26 @@ bool Device::alias(Buffer &b, Alias &a)
         return aliasArena(b.span, b.lease, a);
     const Chunk &ch = (b.wc ? wcChunks_ : chunks_)[b.span.chunk];
     describe(ch.bo, kPteKindPitch, leaseSpan(b.lease, b.span, b.wc ? Memory::Wc : Memory::Pool), a);
+    return true;
+}
+
+bool Device::aliasArenaRange(uint32_t arena, uint64_t va, uint64_t bytes, Alias &a)
+{
+    if (!k_.shared())
+        return false;
+    std::lock_guard<std::mutex> l(lock_);
+    if (arena >= arenas_.size() || !arenas_[arena].used || arenas_[arena].dying || arenas_[arena].purged)
+        return false;
+    Arena &ar = arenas_[arena];
+    if (!bytes || va < ar.va || bytes > ar.bytes || va - ar.va > ar.bytes - bytes)
+        return false;
+    a.cpu = ar.cpu;
+    a.bytes = ar.bytes;
+    a.handle = ar.bo.handle;
+    a.va = ar.va;
+    a.kind = ar.kind;
+    a.lease = new Lease{this, 1, Memory::Arena, {arena, va - ar.va, bytes, va, ar.cpu + (va - ar.va)}, nullptr, false};
+    ar.leases++;
     return true;
 }
 

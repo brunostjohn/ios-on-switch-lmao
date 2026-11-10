@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #import "RawMetalPlanAdapters.h"
+#include "raw_replay_twins.h"
 
 // ---- object mapping for the m2v replay ----
 #if SWITCH_FRAME_TIMELINE
@@ -32,6 +33,53 @@ static MTLRenderPassDescriptor *twinPass(MTLRenderPassDescriptor *pass)
     return d;
 }
 
+template <typename Visit> static void forEachAttachment(MTLRenderPassDescriptor *pass, Visit &&visit)
+{
+    for (unsigned c = 0; c < 8; c++) {
+        visit((__bridge void *)pass.colorAttachments[c].texture);
+        visit((__bridge void *)pass.colorAttachments[c].resolveTexture);
+    }
+    visit((__bridge void *)pass.depthAttachment.texture);
+    visit((__bridge void *)pass.depthAttachment.resolveTexture);
+    visit((__bridge void *)pass.stencilAttachment.texture);
+    visit((__bridge void *)pass.stencilAttachment.resolveTexture);
+    visit((__bridge void *)pass.visibilityResultBuffer);
+}
+
+static void *missingAttachmentTwin(RMCommandBuffer *cb, size_t from, size_t to)
+{
+    return raw::missingTwin(
+        from, to,
+        [cb](size_t at, auto &&visit) {
+            if (cb->_plan.operation(at).op == OpRender)
+                forEachAttachment((__bridge MTLRenderPassDescriptor *)cb->_plan.legacy(at).obj, visit);
+        },
+        [](void *object) {
+            return twinOf((__bridge id)object) != nil;
+        });
+}
+
+// The command buffer's error for a range replay could not encode: `object`, an attachment with no m2v twin, named
+static void failMissingTwin(RMCommandBuffer *cb, id object)
+{
+    RMTexture *t = [object isKindOfClass:[RMTexture class]] ? (RMTexture *)object : nil;
+    const unsigned long format = t ? (unsigned long)t->_descriptor.pixelFormat : 0;
+    const char *label = [object label].UTF8String ?: "-";
+    SWITCH_REFUSE_DETAIL("raw", "replay.attachment", format,
+                         "a command buffer range failed before m2v encoded it: its attachment %s (%ux%u, format %lu) "
+                         "has no m2v twin",
+                         label, t ? t->_raw.width : 0, t ? t->_raw.height : 0, format);
+    NSString *text = [NSString
+        stringWithFormat:@"The render pass attachment %s (%ux%u, pixel format %lu) has no compatibility texture", label,
+                         t ? t->_raw.width : 0, t ? t->_raw.height : 0, format];
+    NSError *error = [NSError errorWithDomain:MTLCommandBufferErrorDomain
+                                         code:MTLCommandBufferErrorInternal
+                                     userInfo:@{NSLocalizedDescriptionKey : text}];
+    std::lock_guard<std::mutex> l(cb->_lock);
+    if (!cb->_segError)
+        cb->_segError = error;
+}
+
 // An invocation recorded on a facade encoder or command buffer, sent to the m2v one: object arguments become their twins.
 static void replayInvocation(NSInvocation *inv, id target)
 {
@@ -42,9 +90,14 @@ static void replayInvocation(NSInvocation *inv, id target)
 
 // The tape into an m2v command buffer, every object its twin; the CPU lines of the buffers it names cleaned first.
 // The tape [from, to) of `cb` as an m2v command buffer, not committed. `part`: a segment of a split command buffer (planSegments),
-// whose encoders' waits for fences another segment updated are left out: the segments' order on the GPU covers them.
+// whose encoders' waits for fences another segment updated are left out: the segments' order on the GPU covers them. Nil, with
+// nothing encoded and the command buffer's error set, where an attachment of one of its passes has no twin.
 id<MTLCommandBuffer> replay(RMCommandBuffer *cb, size_t from, size_t to, bool part)
 {
+    if (void *missing = missingAttachmentTwin(cb, from, to)) {
+        failMissingTwin(cb, (__bridge id)missing);
+        return nil;
+    }
     id<MTLCommandQueue> queue = [cb->_queue rmTwin];
 #if SWITCH_FRAME_TIMELINE
     cb->_frame.mark(switch_frame::SlotStart);
