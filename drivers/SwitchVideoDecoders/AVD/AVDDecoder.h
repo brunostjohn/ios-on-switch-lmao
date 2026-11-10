@@ -40,7 +40,7 @@ typedef struct {
     uint32_t width, height, frames, errors;
     uint64_t decodeTicks, copyTicks;  // copyTicks: placing pictures in pixel buffers (VIC's or the CPU's copy)
     bool present;
-    uint32_t presented, copied;
+    uint32_t presented, exported, copied;
 } Decoder;
 
 typedef struct {

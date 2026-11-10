@@ -119,8 +119,10 @@ static bool presentPicture(Decoder *d, const H264Picture *picture, CVPixelBuffer
                                  .sample_bytes = picture->wide ? 2 : 1};
     if (!picture->status && !picture->wide && !x && !y &&
         width == CVPixelBufferGetWidth(image) && height == CVPixelBufferGetHeight(image) &&
-        switch_nvdec_can_export(d->client) && !switch_nvdec_export(d->client, &p))
+        switch_nvdec_can_export(d->client) && !switch_nvdec_export(d->client, &p)) {
+        d->exported++;
         return true;
+    }
     const int err = nvdec_present(d->client, &p);
     if (!err)
         return true;
@@ -670,9 +672,10 @@ static void finalize(CMBaseObjectRef ref)
     if (d->frames)
         os_log(gAVDLog,
                "AVD: session %ux%u in %{public}s ended: %u frames on NVDEC, %u with errors, mean %.2f ms decode + "
-               "%.2f ms out (%u pictures by VIC, %u by the CPU)",
+               "%.2f ms out (%u pictures exported as the surface's native NVDEC picture, %u placed by VIC, %u by the "
+               "CPU)",
                d->width, d->height, getprogname(), d->frames, d->errors, ticksToMs(d->decodeTicks) / d->frames,
-               ticksToMs(d->copyTicks) / d->frames, d->presented, d->copied);
+               ticksToMs(d->copyTicks) / d->frames, d->exported, d->presented - d->exported, d->copied);
     if (d->software)
         CFRelease(d->software);
     h264_decoder_destroy(d->h264);  // frees its buffers through the client, so before closing it
