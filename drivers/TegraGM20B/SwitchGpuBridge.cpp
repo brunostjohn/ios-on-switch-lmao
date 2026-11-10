@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 #include <IOKit/IOLib.h>
 #include <IOKit/IOLocks.h>
+#include <kern/clock.h>
 #include <kern/thread_call.h>
 #include <kern/thread.h>
 #include "SwitchGpuBridge.h"
@@ -19,7 +20,7 @@ struct switch_gpu_bridge {
 };
 
 namespace {
-constexpr uint32_t kSlots = 8;
+constexpr uint32_t kSlots = 8, kHangCheckNs = 1000000000;
 constexpr uint64_t kPage = 4096, kPushVa = 1ULL << 20;
 struct BridgeQueue {
     IOLock *lock;
@@ -309,13 +310,27 @@ extern "C" int switch_gpu_bridge_status(const switch_gpu_bridge *bridge)
     return result;
 }
 
+// A bridge that stops moving waits on a producer nothing else may be waiting for. As the kernel's other waiters do, it
+// has the GPU's hang recovery look at what the GPU is stuck on; that kill releases the bridge's acquire. The caller's
+// reference keeps the channel alive across the unlocked check.
 extern "C" int switch_gpu_bridge_wait(const switch_gpu_bridge *bridge)
 {
     if (!bridge)
         return -22;
     IOLockLock(queue.lock);
-    while (bridge->active)
-        IOLockSleep(queue.lock, const_cast<switch_gpu_bridge *>(bridge), THREAD_UNINT);
+    while (bridge->active) {
+        uint64_t deadline = 0;
+        clock_interval_to_deadline(1, kHangCheckNs, &deadline);
+        if (IOLockSleepDeadline(queue.lock, const_cast<switch_gpu_bridge *>(bridge), deadline, THREAD_UNINT) !=
+                THREAD_TIMED_OUT ||
+            !bridge->active || !queue.channel)
+            continue;
+        tgm_chan *channel = queue.channel;
+        const uint32_t sequence = bridge->sequence;
+        IOLockUnlock(queue.lock);
+        tgm_chan_check_progress(channel, "host1x bridge", sequence);
+        IOLockLock(queue.lock);
+    }
     const int result = bridge->result;
     IOLockUnlock(queue.lock);
     return result;

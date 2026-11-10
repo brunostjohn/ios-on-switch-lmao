@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: MIT
 #include <gtest/gtest.h>
 #include <array>
+#include <atomic>
+#include <functional>
 #include <future>
 #include <chrono>
 #include <map>
@@ -133,6 +135,15 @@ extern "C" uint32_t tgm_chan_settled(tgm_chan *chan, int *failed)
 	return done;
 }
 extern "C" void tgm_chan_on_fence(tgm_chan *, void (*fn)(void *), void *arg) { fenceCallback = fn; fenceContext = arg; }
+std::atomic<uint32_t> progressChecks;
+std::function<void(uint32_t)> recoverStuckProducer;
+extern "C" void tgm_chan_check_progress(tgm_chan *chan, const char *, uint32_t seqno)
+{
+    EXPECT_EQ(chan, &gpu);
+    ++progressChecks;
+    if (recoverStuckProducer)
+        std::exchange(recoverStuckProducer, nullptr)(seqno);
+}
 extern "C" int tegra_host1x_syncpt_alloc(uint32_t *id) { *id = syncpointCount++; return 0; }
 extern "C" uint32_t tegra_host1x_syncpt_read(uint32_t id) { return syncpoints[id]; }
 extern "C" int tegra_host1x_syncpt_release_failed(uint32_t id, uint32_t threshold, uint32_t maximum) {
@@ -393,6 +404,25 @@ TEST_F(Bridge, RetainedConsumerWaitJoinsLaggingSemanticProducerWithoutPolling) {
     EXPECT_EQ(waiter.get(), -5);
     EXPECT_EQ(refs[key(source)], 1);
     EXPECT_EQ(switch_gpu_bridge_wait(bridge), -5);
+    release(bridge);
+    EXPECT_EQ(refs[key(source)], 0);
+}
+
+TEST_F(Bridge, StalledBridgeHasTheGpuRecoverTheProducerAndReportsItsFailure) {
+    auto source = token(95); statuses[key(source)] = 0;
+    auto *bridge = submit({source}); ASSERT_NE(bridge, nullptr);
+    uint32_t sequence = 0;
+    progressChecks = 0;
+    recoverStuckProducer = [&](uint32_t seqno) {
+        sequence = seqno;
+        statuses[key(source)] = -5;
+        releaseSyncpoint(bridge);
+        finish();
+    };
+    auto waiter = std::async(std::launch::async, [bridge] { return switch_gpu_bridge_wait(bridge); });
+    EXPECT_EQ(waiter.get(), -5);
+    EXPECT_GE(progressChecks.load(), 1u);
+    EXPECT_EQ(sequence, gpu.submitted);
     release(bridge);
     EXPECT_EQ(refs[key(source)], 0);
 }

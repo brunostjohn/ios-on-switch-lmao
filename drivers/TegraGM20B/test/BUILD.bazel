@@ -597,7 +597,13 @@ host_test(
 
 host_shims(
     name = "bridge_kernel",
-    headers = ["IOKit/IOLib.h", "IOKit/IOLocks.h", "kern/thread_call.h", "kern/thread.h"],
+    headers = [
+        "IOKit/IOLib.h",
+        "IOKit/IOLocks.h",
+        "kern/clock.h",
+        "kern/thread_call.h",
+        "kern/thread.h",
+    ],
     stubs = "switch_gpu_bridge_stubs.h",
 )
 
