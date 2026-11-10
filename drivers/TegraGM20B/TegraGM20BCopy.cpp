@@ -26,6 +26,7 @@ struct Copier {
 	tgm_vm *vm;
 	tgm_chan *channel;
 	tgm_mem *push, *fence;
+	switch_gpu_mapping *pushMapping;
 	uint32_t *words;
 	volatile uint32_t *fenceCpu;
 	uint64_t pushPa, fenceGpu, fencePage, pages[Jobs];
@@ -46,6 +47,7 @@ void fenced(void *)
 
 void discardSpace()
 {
+	switch_gpu_vm_unmap(queue.vm, &queue.pushMapping);
 	tgm_vm_del(&queue.vm);
 	tgm_mem_del(&queue.fence);
 	tgm_mem_del(&queue.push);
@@ -70,8 +72,11 @@ bool openSpace()
 	tgm_vm_claim(queue.vm, &queue);
 	for (uint32_t i = 0; i < Jobs; ++i)
 		queue.pages[i] = queue.pushPa + i * Page;
+	// Volatile: the CPU rewrites a slot's push for every job, and a job whose surfaces nobody host-wrote is submitted
+	// with no L2 invalidate ahead of it (gpu.c chan_exec), so the host would fetch the slot's last push from L2 lines.
 	if (tgm_mem_new(queue.vm, queue.pages, Jobs, &queue.push) ||
-	    tgm_vm_map_ordered(queue.vm, PushVa, Page * Jobs, queue.push, 0, 0, 1, nullptr) ||
+	    switch_gpu_vm_map_volatile(queue.vm, PushVa, Page * Jobs, queue.push, 0, 0, 1, 1,
+				       &queue.pushMapping) ||
 	    tgm_mem_new(queue.vm, &queue.fencePage, 1, &queue.fence) ||
 	    tgm_vm_kmap(queue.vm, queue.fence, Page, &queue.fenceGpu))
 		goto fail;

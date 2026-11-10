@@ -2,6 +2,7 @@
 #pragma once
 #include <gtest/gtest.h>
 #include <algorithm>
+#include <array>
 #include <cstdint>
 #include <map>
 #include <vector>
@@ -10,15 +11,17 @@
 // whether its PTE is read-only. Only the stubbed vm-map entry points (tgm_vm_map_ordered, switch_gpu_vm_map,
 // switch_gpu_vm_map_volatile, tgm_vm_kmap) fill it, at the addresses the driver asks for: a read of an unmapped page and a
 // write through a read-only PTE are faults, as the GMMU raises them.
+// The host's pushbuffer fetch goes through the GPU's L2 for a page mapped cacheable (not volatile): a line keeps what
+// its first fetch read, whatever the CPU writes behind it, until invalidateL2() (MEM_OP L2_SYSMEM_INVALIDATE).
 struct Memory {
-	static constexpr uint64_t kPage = 4096;
+	static constexpr uint64_t kPage = 4096, kLine = 128;
 
 	// A page of a test's buffer (followed through the vector, which may reallocate) or of host memory.
 	struct Pte {
 		std::vector<uint8_t> *buffer;
 		uint8_t *bytes;
 		uint64_t offset, size;
-		bool readOnly;
+		bool readOnly, cached;
 
 		uint8_t *base() const
 		{
@@ -35,24 +38,30 @@ struct Memory {
 	};
 
 	std::map<uint64_t, Pte> ptes;  // by GPU page number
+	std::map<const uint8_t *, std::array<uint8_t, kLine>> l2;  // by the line's first byte
 	uint64_t lastPage = ~0ull;
 	const Pte *last = nullptr;
 
-	void map(uint64_t va, uint8_t *bytes, uint64_t size, bool readOnly)
+	void map(uint64_t va, uint8_t *bytes, uint64_t size, bool readOnly, bool cached = false)
 	{
 		EXPECT_EQ(va % kPage, 0u) << "a GPU mapping starts on a page";
 		last = nullptr;
 		for (uint64_t at = 0; at < size; at += kPage)
 			ptes[(va + at) / kPage] = {nullptr, bytes + at, 0,
-						   std::min(kPage, size - at), readOnly};
+						   std::min(kPage, size - at), readOnly, cached};
 	}
 
-	void map(uint64_t va, std::vector<uint8_t> &buffer, bool readOnly = false)
+	void map(uint64_t va, std::vector<uint8_t> &buffer, bool readOnly = false, bool cached = false)
 	{
 		EXPECT_EQ(va % kPage, 0u) << "a GPU mapping starts on a page";
 		last = nullptr;
 		for (uint64_t at = 0; at < buffer.size(); at += kPage)
-			ptes[(va + at) / kPage] = {&buffer, nullptr, at, 0, readOnly};
+			ptes[(va + at) / kPage] = {&buffer, nullptr, at, 0, readOnly, cached};
+	}
+
+	void invalidateL2()
+	{
+		l2.clear();
 	}
 
 	void unmap(uint64_t va, uint64_t size)
@@ -94,11 +103,28 @@ struct Memory {
 	{
 		words.resize(dwords);
 		for (uint32_t i = 0; i < dwords; ++i) {
-			const uint8_t *word = at(va + uint64_t(i) * 4);
-			if (!word || (va + uint64_t(i) * 4) % kPage > kPage - 4)
+			const uint64_t address = va + uint64_t(i) * 4;
+			const uint8_t *word = at(address);
+			if (!word || address % kPage > kPage - 4)
 				return false;
+			if (last->cached)
+				word = throughL2(word, address % kPage);
 			__builtin_memcpy(&words[i], word, 4);
 		}
 		return true;
+	}
+
+private:
+	const uint8_t *throughL2(const uint8_t *byte, uint64_t pageOffset)
+	{
+		const uint64_t lineOffset = pageOffset % kLine;
+		const uint8_t *first = byte - lineOffset;
+		auto line = l2.find(first);
+		if (line == l2.end()) {
+			line = l2.emplace(first, std::array<uint8_t, kLine>{}).first;
+			std::copy_n(first, std::min(kLine, last->valid() - (pageOffset - lineOffset)),
+				    line->second.begin());
+		}
+		return line->second.data() + lineOffset;
 	}
 };
