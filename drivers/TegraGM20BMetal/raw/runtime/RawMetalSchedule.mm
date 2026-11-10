@@ -15,6 +15,7 @@ void enqueueBuffer(RMCommandBuffer *cb)
         return;
     gRM->waiting.reserve((__bridge void *)cb->_queue, cb);
     cb->_enqueued = true;
+    cb->_before = (__bridge_transfer RMCommandBuffer *)cb->_queue->_last.exchange((__bridge_retained void *)cb);
     std::lock_guard<std::mutex> b(cb->_lock);
     if (cb->_status == MTLCommandBufferStatusNotEnqueued)
         cb->_status = MTLCommandBufferStatusEnqueued;

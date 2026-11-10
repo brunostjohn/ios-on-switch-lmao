@@ -342,7 +342,8 @@ static void giveRecording(RMCommandBuffer *b)
                 _scheduledHandlers = [NSMutableArray array];
             [_scheduledHandlers addObject:[block copy]];
         } else {
-            dispatch_async(scheduledQueueLocked(self), ^{
+            _handlersQueued = true;
+            dispatch_async(_queue->_handlers, ^{
                 block((id<MTLCommandBuffer>)self);
             });
         }
@@ -536,8 +537,10 @@ static void giveRecording(RMCommandBuffer *b)
 
 - (instancetype)init
 {
-    if ((self = [super init]))
+    if ((self = [super init])) {
         queuePriorityAdd(self);
+        _handlers = followingSerialQueue("com.brunostjohn.switch.raw.command.handlers");
+    }
     return self;
 }
 

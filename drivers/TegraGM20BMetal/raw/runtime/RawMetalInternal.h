@@ -293,7 +293,6 @@ void forgetSignals();
 void forEachWritten(RMCommandBuffer *cb, size_t from, size_t to, void (*written)(void *));
 extern GpuMemoryRelease &gRawRelease;
 void scheduled(RMCommandBuffer *cb);
-dispatch_queue_t scheduledQueueLocked(RMCommandBuffer *cb);
 dispatch_queue_t followingRootQueue();
 dispatch_queue_t followingSerialQueue(const char *label);
 void finish(RMCommandBuffer *cb, NSError *error);

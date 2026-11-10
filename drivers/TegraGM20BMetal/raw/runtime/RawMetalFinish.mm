@@ -49,20 +49,14 @@ void retireRawRange(RMCommandBuffer *cb, size_t from, size_t to)
     gRM->doneChanged.notify_one();
 }
 
-dispatch_queue_t scheduledQueueLocked(RMCommandBuffer *cb)
-{
-    if (!cb->_scheduledQueue)
-        cb->_scheduledQueue = followingSerialQueue("com.brunostjohn.switch.raw.command.handlers");
-    return cb->_scheduledQueue;
-}
-
 static void dispatchScheduledLocked(RMCommandBuffer *cb, NSArray *handlers)
 {
     if (!handlers.count) {
         cb->_scheduledDone = true;
         return;
     }
-    dispatch_async(scheduledQueueLocked(cb), ^{
+    cb->_handlersQueued = true;
+    dispatch_async(cb->_queue->_handlers, ^{
         for (MTLCommandBufferHandler h in handlers)
             h((id<MTLCommandBuffer>)cb);
         {
@@ -73,7 +67,8 @@ static void dispatchScheduledLocked(RMCommandBuffer *cb, NSArray *handlers)
     });
 }
 
-// A command buffer's handlers stay ordered without holding up handlers for another command buffer it waits for.
+// A queue's command buffers' scheduled handlers run in its order, on its own serial queue: one that waits for another queue's
+// command buffer holds up none of that queue's handlers.
 void scheduled(RMCommandBuffer *cb)
 {
     unhold(cb);
@@ -121,6 +116,26 @@ void segmentCompleted(RMCommandBuffer *cb, NSError *error, size_t from, size_t t
         finish(cb, nil);
 }
 
+// A command buffer's completed handlers (`run`): on its queue's completion queue, else on the following threads, behind its
+// scheduled handlers where those went to its queue's handler queue; inline on this thread where it has neither handlers nor
+// a completion queue. Never on the handler queue itself: a slow completed handler of one frame would hold up the next
+// frame's presentDrawable. The queue's turns keep its completed handlers one at a time, in order.
+static void deliverCompletion(dispatch_block_t run, dispatch_queue_t q, dispatch_queue_t handlerQueue,
+                              bool behindScheduled, bool runInline)
+{
+    if (runInline) {
+        run();
+        return;
+    }
+    dispatch_queue_t target = q ?: followingRootQueue();
+    if (behindScheduled)
+        dispatch_async(handlerQueue, ^{
+            dispatch_async(target, run);
+        });
+    else
+        dispatch_async(target, run);
+}
+
 void finish(RMCommandBuffer *cb, NSError *error)
 {
     {
@@ -144,6 +159,7 @@ void finish(RMCommandBuffer *cb, NSError *error)
     // one that never reached a GPU. Ones scheduled() already queued run first, the completed ones queued behind them on the
     // handler queue.
     NSArray *handlers;
+    bool behindScheduled;
     {
         std::lock_guard<std::mutex> l(cb->_lock);
         NSArray *scheduledHandlers = nil;
@@ -173,6 +189,7 @@ void finish(RMCommandBuffer *cb, NSError *error)
         cb->_scheduledSent = true;  // scheduled() runs no more
         if (sendScheduled)
             dispatchScheduledLocked(cb, scheduledHandlers);
+        behindScheduled = cb->_handlersQueued;
     }
     cb->_changed.notify_all();
     void (^run)(void) = ^{
@@ -190,27 +207,27 @@ void finish(RMCommandBuffer *cb, NSError *error)
 #if SWITCH_FRAME_TIMELINE
         switch_frame::finished(cb->_frame);
 #endif
+        void *last = (__bridge void *)cb;
+        if (cb->_queue->_last.compare_exchange_strong(last, nullptr))
+            CFRelease(last);
+        if (void *next = cb->_turn.finished())
+            ((__bridge_transfer dispatch_block_t)next)();
     };
-    // A handler may submit and wait for another command buffer. Neither GPU worker nor the serial scheduled-handler queue
-    // can run it inline without preventing that work from completing.
-    bool inlineCompletion;
-    {
-        std::lock_guard<std::mutex> l(cb->_lock);
-        dispatch_queue_t q = cb->_queue ? cb->_queue->_completionQueue : nil;
-        inlineCompletion = !q && !cb->_scheduledQueue && !handlers.count;
-        if (!inlineCompletion) {
-            if (!q)
-                q = followingRootQueue();
-            if (cb->_scheduledQueue)
-                dispatch_async(cb->_scheduledQueue, ^{
-                    dispatch_async(q, run);
-                });
-            else
-                dispatch_async(q, run);
-        }
+    // A handler may submit and wait for another queue's command buffer, so none runs on a GPU worker. One that waits for a
+    // later command buffer of its own queue waits for good, as it does on Metal's serial per-queue completion queue.
+    dispatch_queue_t q = cb->_queue->_completionQueue, handlerQueue = cb->_queue->_handlers;
+    const bool runInline = !behindScheduled && !q && !handlers.count;
+    RMCommandBuffer *before = cb->_before;
+    cb->_before = nil;
+    if (before && !before->_turn.ran()) {
+        void *later = (__bridge_retained void *)[^{
+            deliverCompletion(run, q, handlerQueue, behindScheduled, runInline);
+        } copy];
+        if (before->_turn.hand(later))
+            return;
+        (void)(__bridge_transfer dispatch_block_t)later;
     }
-    if (inlineCompletion)
-        run();
+    deliverCompletion(run, q, handlerQueue, behindScheduled, runInline);
 }
 
 // The completion thread: sleeps in the kernel on each raw submission's fence (the interrupt), in order.
