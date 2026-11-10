@@ -9,6 +9,7 @@
 namespace {
 constexpr uint32_t kRead = SWITCH_GPU_BACKING_READ, kWrite = SWITCH_GPU_BACKING_WRITE;
 constexpr uint32_t kUnlisted = SWITCH_GPU_BACKING_UNLISTED, kAvoid = SWITCH_GPU_BACKING_CPU_AVOID_SYNC;
+constexpr uint32_t kBesideCpu = SWITCH_GPU_BACKING_NO_CPU_EXCLUSION;
 
 struct Bo {
 	Bo *next;
@@ -81,11 +82,11 @@ TEST(LegacyAccess, OnlyAListedImportIsAClaim)
 	EXPECT_EQ(switch_gpu_legacy_access(true, false, false, 0), kWrite | kUnlisted);
 	EXPECT_EQ(switch_gpu_legacy_access(true, true, false, 0), kRead | kUnlisted);
 	EXPECT_EQ(switch_gpu_legacy_access(true, false, true, 0), 0u);
-	EXPECT_EQ(switch_gpu_legacy_access(true, false, true, TegraGM20BSurfaceRead), kRead);
-	EXPECT_EQ(switch_gpu_legacy_access(true, false, true, TegraGM20BSurfaceWrite), kWrite);
-	EXPECT_EQ(switch_gpu_legacy_access(true, true, true, TegraGM20BSurfaceWrite), kRead);
+	EXPECT_EQ(switch_gpu_legacy_access(true, false, true, TegraGM20BSurfaceRead), kRead | kBesideCpu);
+	EXPECT_EQ(switch_gpu_legacy_access(true, false, true, TegraGM20BSurfaceWrite), kWrite | kBesideCpu);
+	EXPECT_EQ(switch_gpu_legacy_access(true, true, true, TegraGM20BSurfaceWrite), kRead | kBesideCpu);
 	EXPECT_EQ(switch_gpu_legacy_access(true, false, true, TegraGM20BSurfaceRead | TegraGM20BSurfaceWrite),
-		kRead | kWrite);
+		kRead | kWrite | kBesideCpu);
 }
 
 TEST_F(Backing, ListedLegacySubmitClaimsOnlyItsListedImport)
@@ -186,5 +187,58 @@ TEST_F(Backing, CpuOwnersNeverRefuseWhatALegacySubmitDidNotList)
 	EXPECT_EQ(nvk.exec(token(1, 2), true, 0), 0);
 	EXPECT_EQ(switch_gpu_backing_cpu_release(nvk.own(0), 0, 4096, kRead | kAvoid), 0);
 	EXPECT_EQ(switch_gpu_backing_cpu_release(surface, 0, 4096, kWrite | SWITCH_GPU_BACKING_CPU_CONCURRENT), 0);
+	switch_gpu_backing_release(surface);
+}
+
+// IOSurfaceLock in another process (SwitchGpuSurfaceAccess.cpp) while the legacy job lists the surface.
+TEST_F(Backing, IOSurfaceLocksNeverRefuseAListedLegacySubmit)
+{
+	IOUserClient client;
+	const uint64_t page = next_page += 4096;
+	auto *surface = switch_gpu_backing_register(&page, 1, 800, nullptr, nullptr);
+	Connection nvk(surface, 2);
+	ASSERT_EQ(switch_gpu_surface_lock_will(&client, 800, 1), 0);
+	switch_gpu_surface_lock_did(&client, 800, 1);
+	EXPECT_EQ(nvk.exec(token(1), true, TegraGM20BSurfaceRead), 0);
+	const auto writer = token(1, 2);
+	EXPECT_EQ(nvk.exec(writer, true, TegraGM20BSurfaceWrite), 0);
+	switch_gpu_surface_unlock_will(&client, 800, 1);
+	switch_gpu_surface_unlock_did(&client, 800, 1);
+	EXPECT_EQ(switch_gpu_surface_lock_will(&client, 800, 1 | 2), -16);
+	complete(writer);
+	const size_t before = cache.size();
+	ASSERT_EQ(switch_gpu_surface_lock_will(&client, 800, 1 | 2), 0);
+	switch_gpu_surface_lock_did(&client, 800, 1 | 2);
+	ASSERT_EQ(cache.size(), before + 1);
+	EXPECT_EQ(cache.back().invalidate, SWITCH_GPU_CACHE_INVALIDATE);
+	switch_gpu_surface_unlock_will(&client, 800, 1 | 2);
+	switch_gpu_surface_unlock_did(&client, 800, 1 | 2);
+	ASSERT_EQ(switch_gpu_surface_lock_will(&client, 800, 0), 0);
+	switch_gpu_surface_lock_did(&client, 800, 0);
+	EXPECT_EQ(nvk.exec(token(1, 3), true, TegraGM20BSurfaceRead), 0);
+	switch_gpu_surface_unlock_will(&client, 800, 0);
+	switch_gpu_surface_unlock_did(&client, 800, 0);
+	EXPECT_EQ(client.refs, 1u);
+	switch_gpu_backing_release(surface);
+}
+
+// A CPU writer's lines up to the submit are cleaned for the job; what it writes after reaches DRAM at its release.
+TEST_F(Backing, ListedSubmitUnderACpuWriterStillCleansEveryCpuWrite)
+{
+	auto *surface = backing();
+	Connection nvk(surface, 0);
+	ASSERT_EQ(publish(surface, kRead, token(9)), 0);
+	complete(token(9));
+	ASSERT_EQ(switch_gpu_backing_cpu_acquire(surface, 0, 4096, kWrite), 0);
+	const size_t before = cache.size();
+	EXPECT_EQ(nvk.exec(token(1), true, TegraGM20BSurfaceRead), 0);
+	ASSERT_EQ(cache.size(), before + 1);
+	EXPECT_EQ(cache.back().invalidate, SWITCH_GPU_CACHE_CLEAN);
+	EXPECT_EQ(cache.back().offset, 0u);
+	EXPECT_EQ(cache.back().bytes, 4096u);
+	ASSERT_EQ(switch_gpu_backing_cpu_release(surface, 0, 4096, kWrite), 0);
+	ASSERT_EQ(cache.size(), before + 2);
+	EXPECT_EQ(cache.back().invalidate, SWITCH_GPU_CACHE_CLEAN);
+	EXPECT_EQ(cache.back().bytes, 4096u);
 	switch_gpu_backing_release(surface);
 }

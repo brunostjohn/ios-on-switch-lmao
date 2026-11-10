@@ -62,7 +62,8 @@ int switch_gpu_backing_take_failure_locked(switch_gpu_backing *backing)
 
 namespace {
 constexpr uint32_t kAccessMask = SWITCH_GPU_BACKING_READ | SWITCH_GPU_BACKING_WRITE;
-constexpr uint32_t kUseMask = kAccessMask | SWITCH_GPU_BACKING_UNLISTED;
+constexpr uint32_t kBesideCpu = SWITCH_GPU_BACKING_UNLISTED | SWITCH_GPU_BACKING_NO_CPU_EXCLUSION;
+constexpr uint32_t kUseMask = kAccessMask | kBesideCpu;
 
 uint32_t access_kind(uint32_t access)
 {
@@ -78,8 +79,12 @@ bool reads(uint32_t access)
 // A backing used both listed and unlisted by one job is ordered by everything it may do, as a listed use.
 uint32_t merge(uint32_t a, uint32_t b)
 {
-	const uint32_t merged = a | b;
-	return a & b & SWITCH_GPU_BACKING_UNLISTED ? merged : merged & ~uint32_t(SWITCH_GPU_BACKING_UNLISTED);
+	uint32_t merged = (a | b) & ~kBesideCpu;
+	if (a & b & SWITCH_GPU_BACKING_UNLISTED)
+		merged |= SWITCH_GPU_BACKING_UNLISTED;
+	else if ((a & kBesideCpu) && (b & kBesideCpu))
+		merged |= SWITCH_GPU_BACKING_NO_CPU_EXCLUSION;
+	return merged;
 }
 
 bool conflicts(uint32_t old_access, uint32_t access)
@@ -186,7 +191,7 @@ static int begin(switch_gpu_backing_use *uses, uint32_t count,
 			else
 				--owners;
 		}
-		if (!result && !(uses[i].access & SWITCH_GPU_BACKING_UNLISTED) &&
+		if (!result && !(uses[i].access & kBesideCpu) &&
 		    (writers || (readers && (uses[i].access & SWITCH_GPU_BACKING_WRITE))))
 			result = -16;
 		if (!result)
