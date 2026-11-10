@@ -2,7 +2,8 @@
 // Debug builds: where the submit worker's encode of a raw range spends its time (the rates line's enc=), by part, for
 // the plugin's "encode" line. A part's time includes the parts nested in it: Resources, Loop and Tail are the encode's
 // three phases; Loop holds State, Pass (which holds SplitPlan), Fusion, Blit and Compute; Commit, in Tail, holds
-// Prologues. Draw (which holds Prepare, and Prepare Geometry, Descriptors, Barriers and SplitLaunch), PassEnd, Kernel,
+// Prologues and Exec (each Submit of the command buffer's batches; execUses: the job uses they carried). Draw (which
+// holds Prepare, and Prepare Geometry, Descriptors, Barriers and SplitLaunch), PassEnd, Kernel (every kernel call),
 // GeometryAcquire and GeometryRelease are counted in whichever phase they run. A span outside an encode (another
 // thread, or the submit worker between encodes) costs one thread-local read.
 #pragma once
@@ -35,6 +36,7 @@ enum class EncodePart : uint8_t {
     Commit,
     Prologues,
     Kernel,
+    Exec,
     GeometryAcquire,
     GeometryRelease,
     Count
@@ -45,10 +47,16 @@ constexpr size_t kEncodeParts = size_t(EncodePart::Count);
 struct EncodeProfile {
     uint64_t ticks[kEncodeParts] = {};
     uint64_t calls[kEncodeParts] = {};
-    uint64_t longestPrepare = 0;
+    uint64_t longestPrepare = 0, execUses = 0;
 };
 
 inline thread_local EncodeProfile *tEncodeProfile = nullptr;
+
+inline void noteExecUses(uint64_t uses)
+{
+    if (tEncodeProfile)
+        tEncodeProfile->execUses += uses;
+}
 
 class EncodeSpan {
 public:
@@ -84,7 +92,7 @@ private:
 
 // The encodes' profiles since the device opened, each folded in once its encode returned (the submit worker's only)
 struct EncodeTotals {
-    std::atomic<uint64_t> encodes{0}, wallTicks{0}, cpuNs{0}, longestPrepare{0};
+    std::atomic<uint64_t> encodes{0}, wallTicks{0}, cpuNs{0}, longestPrepare{0}, execUses{0};
     std::atomic<uint64_t> ticks[kEncodeParts] = {}, calls[kEncodeParts] = {};
 
     void add(const EncodeProfile &p, uint64_t wall, uint64_t cpu)
@@ -92,6 +100,7 @@ struct EncodeTotals {
         encodes.fetch_add(1, std::memory_order_relaxed);
         wallTicks.fetch_add(wall, std::memory_order_relaxed);
         cpuNs.fetch_add(cpu, std::memory_order_relaxed);
+        execUses.fetch_add(p.execUses, std::memory_order_relaxed);
         for (size_t i = 0; i < kEncodeParts; ++i) {
             if (!p.calls[i])
                 continue;

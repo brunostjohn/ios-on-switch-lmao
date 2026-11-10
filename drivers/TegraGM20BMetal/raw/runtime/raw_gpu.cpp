@@ -3557,8 +3557,13 @@ bool CommandBuffer::commit(uint32_t &seqno)
         const JobAdmission admission{admissionCookie, admissionCookie ?
             (published ? uint32_t(TegraGM20BSubmitAdmissionContinue) : uint32_t(TegraGM20BSubmitAdmissionBegin)) |
             (last ? uint32_t(TegraGM20BSubmitAdmissionEnd) : 0u) : 0u};
-        if (!d.k_.exec(d.channel_, pushes, count, d.lastSeqno_, seq,
-                      admissionCookie ? &surfaces_ : &resources, &result, visibility, events, admission)) {
+        SurfaceList *const uses = admissionCookie ? &surfaces_ : &resources;
+        RAW_DIAGNOSTIC(noteExecUses(uses->uses().size()));
+        RAW_ENCODE_BEGIN(execSpan, Exec);
+        const bool executed =
+            d.k_.exec(d.channel_, pushes, count, d.lastSeqno_, seq, uses, &result, visibility, events, admission);
+        RAW_ENCODE_END(execSpan);
+        if (!executed) {
             admissionBlocked = !published && result == kIOReturnCannotLock && d.k_.resourceReady();
             if (admissionHeld) {
                 SurfaceList empty;
