@@ -17,7 +17,7 @@ Memory memory;
 tgm_vm space;
 tgm_mem pushMemory, fenceMemory;
 volatile uint32_t fence;
-unsigned madeMemory;
+unsigned madeMemory, vmFailures, poolFrees;
 }
 
 extern "C" void *tgm_pool_alloc(uint64_t bytes, uint64_t, uint64_t *pa)
@@ -37,8 +37,27 @@ extern "C" int tgm_fence_kernel(unsigned, volatile uint32_t **cpu, uint64_t *pag
 
 extern "C" int tgm_vm_new(tgm_vm **out)
 {
+	if (vmFailures) {
+		--vmFailures;
+		return -12;
+	}
 	*out = &space;
 	return 0;
+}
+
+extern "C" void tgm_vm_del(tgm_vm **out)
+{
+	*out = nullptr;
+}
+
+extern "C" void tgm_mem_del(tgm_mem **out)
+{
+	*out = nullptr;
+}
+
+extern "C" void tgm_pool_free(void *, uint64_t, uint64_t)
+{
+	++poolFrees;
 }
 
 extern "C" void tgm_vm_claim(tgm_vm *, const void *)
@@ -180,6 +199,21 @@ class RelayoutControl : public testing::Test
 		ASSERT_TRUE(openSpace());
 	}
 };
+
+TEST_F(RelayoutControl, FailedOpenIsUndoneAndTheNextMoveOpensAgain)
+{
+	gRelayout = {};
+	madeMemory = 0;
+	vmFailures = 1;
+	const unsigned frees = poolFrees, logged = relayoutLogs;
+	EXPECT_EQ(channel(), nullptr);
+	EXPECT_EQ(poolFrees, frees + 1);
+	EXPECT_EQ(gRelayout.pushCpu, nullptr);
+	EXPECT_EQ(relayoutLogs, logged + 1);
+	EXPECT_EQ(channel(), nullptr);
+	EXPECT_EQ(gRelayout.vm, &space);
+	EXPECT_EQ(relayoutLogs, logged + 1);
+}
 
 TEST_F(RelayoutControl, ActualMappingAllowsGpuCheckpointWithoutChangingCommands)
 {

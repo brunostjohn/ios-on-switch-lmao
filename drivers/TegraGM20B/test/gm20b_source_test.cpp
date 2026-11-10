@@ -1141,3 +1141,12 @@ TEST(GM20BChannelSource, CopyChannelCreatesOnlyRequestedObjectsAndKeepsVerifiedR
     EXPECT_THAT(SourceText("../TegraGM20BCopy.cpp"), HasSubstr("tgm_chan_new_copy(queue.vm"));
     EXPECT_THAT(SourceText("../TegraGM20BRelayout.cpp"), HasSubstr("tgm_chan_new_copy(r.vm"));
 }
+
+// Every channel's acquire on another channel's fence reads the address space's view of the fence pool: a space without
+// it would refuse every cross-channel dependency for its life, so it is not made.
+TEST(GM20BVmSource, AnAddressSpaceWithoutItsFenceViewIsNotMade)
+{
+	const std::string make = flat(definition(gpu(), "int tgm_vm_new(struct tgm_vm **pvm)"));
+	expectBefore(make, "ret = fences_map(vm);", "tgm_vm_del(&vm);");
+	EXPECT_THAT(make, Not(HasSubstr("vm->fences_va = 0;")));
+}

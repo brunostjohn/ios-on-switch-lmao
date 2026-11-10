@@ -945,9 +945,12 @@ int tgm_vm_new(struct tgm_vm **pvm)
 		kfree(vm);
 		return ret;
 	}
-	/* for the task order's acquires (tgm_chan_order); without the view, Order refuses and the client orders itself */
-	if (fences_map(vm))
-		vm->fences_va = 0;
+	/* every channel's acquires on another channel's fence (task order, ownership dependencies) read this view */
+	ret = fences_map(vm);
+	if (ret) {
+		tgm_vm_del(&vm);
+		return ret;
+	}
 	*pvm = vm;
 	return 0;
 }

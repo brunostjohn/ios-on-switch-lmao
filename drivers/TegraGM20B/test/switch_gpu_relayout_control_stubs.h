@@ -14,6 +14,9 @@ class IOBufferMemoryDescriptor : public IOMemoryDescriptor
 {
 };
 
+inline unsigned relayoutLogs;
+
 inline void IOLog(const char *, ...)
 {
+	++relayoutLogs;
 }

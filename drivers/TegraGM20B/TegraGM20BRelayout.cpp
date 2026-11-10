@@ -28,7 +28,7 @@ struct Relayout {
 	uint32_t *pushCpu;
 	volatile uint32_t *fenceCpu;
 	uint64_t pushPa, fenceGpu;
-	bool failed;  // no address space: every move is refused
+	bool unavailable;  // the last open failed (logged once until one succeeds)
 	SwitchGpuRelayoutCache mappings;
 } gRelayout;
 
@@ -53,18 +53,32 @@ bool openSpace()
 	return true;
 }
 
+void discardSpace()
+{
+	Relayout &r = gRelayout;
+	tgm_vm_del(&r.vm);
+	tgm_mem_del(&r.push);
+	tgm_mem_del(&r.fence);
+	if (r.pushCpu)
+		tgm_pool_free(r.pushCpu, kPage, r.pushPa);
+	r.pushCpu = nullptr;
+}
+
 tgm_chan *channel()
 {
 	Relayout &r = gRelayout;
 	if (r.chan && tgm_chan_error(r.chan))
 		tgm_chan_del(&r.chan);
-	if (!r.vm && !r.failed && !openSpace()) {
-		r.failed = true;
-		IOLog("tegra-gm20b: block-linear surfaces cannot be moved: no address space\n");
+	if (!r.vm && !openSpace()) {
+		discardSpace();
+		if (!r.unavailable)
+			IOLog("tegra-gm20b: block-linear surfaces cannot be moved: no address space\n");
+		r.unavailable = true;
+		return nullptr;
 	}
-	if (!r.chan && !r.failed) {
+	r.unavailable = false;
+	if (!r.chan)
 		tgm_chan_new_copy(r.vm, &gRelayout, r.fenceCpu, r.fenceGpu, "relayout", 1, &r.chan);
-	}
 	return r.chan;
 }
 

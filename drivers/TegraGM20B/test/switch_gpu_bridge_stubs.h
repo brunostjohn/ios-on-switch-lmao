@@ -27,3 +27,5 @@ inline void thread_call_free(thread_call_t call) { delete call; }
 inline void thread_call_enter(thread_call_t call) { call->pending = true; }
 
 [[noreturn]] void panic(const char *, ...);
+inline unsigned switch_bridge_logs;
+inline void IOLog(const char *, ...) { ++switch_bridge_logs; }

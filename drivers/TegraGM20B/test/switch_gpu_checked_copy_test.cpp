@@ -490,6 +490,19 @@ protected:
 	}
 };
 
+TEST_F(CheckedCopy, FailedOpenIsUndoneAndTheNextCopyOpensAgain)
+{
+	auto a = allocation(), b = allocation();
+	memoryFailure = 1;
+	EXPECT_EQ(copy(a, b), -12);
+	EXPECT_EQ(poolFrees, 1u);
+	EXPECT_EQ(calls, 0u);
+	ASSERT_EQ(copy(a, b), 0);
+	finish();
+	EXPECT_EQ(calls, 1u);
+	EXPECT_EQ(callbackStatus, 0);
+}
+
 TEST_F(CheckedCopy, WarmCopiesKeepPreparedDescriptorsAndMappings)
 {
 	auto a = allocation(), b = allocation();
@@ -597,6 +610,4 @@ TEST_F(CheckedCopy, PartialInitializationReturnsItsControlAllocation)
 	EXPECT_EQ(queue.words, nullptr);
 	EXPECT_EQ(queue.dependencies, nullptr);
 	EXPECT_EQ(execs, 0u);
-	EXPECT_EQ(copy(a, b), -12);
-	EXPECT_EQ(poolFrees, 1u);
 }

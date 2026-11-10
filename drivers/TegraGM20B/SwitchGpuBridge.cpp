@@ -29,8 +29,7 @@ struct BridgeQueue {
     tgm_mem *push, *fence;
     uint32_t *words;
     volatile uint32_t *fenceCpu;
-    uint64_t fenceGpu, fencePage, pages[kSlots];
-    bool failed;
+    uint64_t fenceGpu, fencePage, pushPa, pages[kSlots];
     uint32_t waitingSources;
     switch_gpu_bridge jobs[kSlots];
 } queue;
@@ -76,8 +75,17 @@ void retire(thread_call_param_t, thread_call_param_t)
             continue;
         }
         job.result = failed ? -5 : source == 1 ? 1 : source < 0 ? source : -5;
-        if (failed && tegra_host1x_syncpt_release_failed(job.syncpoint, job.threshold, TGM_SYNCPT_INCRS))
-            panic("SwitchGpuBridge: quiesced failure could not release syncpoint %u", job.syncpoint);
+        if (failed) {
+            const int released =
+                tegra_host1x_syncpt_release_failed(job.syncpoint, job.threshold, TGM_SYNCPT_INCRS);
+            // Whatever waits on the old syncpoint fails or times out on its own engine; this slot no longer shares it.
+            if (released) {
+                IOLog("SwitchGpuBridge: syncpoint %u of a failed job stays short of %u (%d); its slot takes "
+                      "another\n",
+                      job.syncpoint, job.threshold, released);
+                job.syncpoint = 0;
+            }
+        }
         if (job.result == 1)
             for (uint32_t i = 0; i < job.count; ++i)
                 if (job.tokens[i].engine == SWITCH_GPU_ENGINE_GM20B)
@@ -131,19 +139,29 @@ bool initialize()
     return true;
 }
 
+void discardSpace()
+{
+    tgm_vm_del(&queue.vm);
+    tgm_mem_del(&queue.push);
+    tgm_mem_del(&queue.fence);
+    if (queue.words)
+        tgm_pool_free(queue.words, kPage * kSlots, queue.pushPa);
+    queue.words = nullptr;
+}
+
+// A syncpoint stays with its slot across a failed open, as host1x hands none back.
 bool openSpace()
 {
-    uint64_t pushPa = 0;
     uint32_t fenceOffset = 0;
-    queue.words = static_cast<uint32_t *>(tgm_pool_alloc(kPage * kSlots, 0, &pushPa));
+    queue.words = static_cast<uint32_t *>(tgm_pool_alloc(kPage * kSlots, 0, &queue.pushPa));
     if (!queue.words ||
         tgm_fence_kernel(TGM_FENCE_KERNEL_BRIDGE, &queue.fenceCpu, &queue.fencePage, &fenceOffset) ||
         tgm_vm_new(&queue.vm))
         return false;
     tgm_vm_claim(queue.vm, &queue);
     for (uint32_t i = 0; i < kSlots; ++i) {
-        queue.pages[i] = pushPa + i * kPage;
-        if (tegra_host1x_syncpt_alloc(&queue.jobs[i].syncpoint))
+        queue.pages[i] = queue.pushPa + i * kPage;
+        if (!queue.jobs[i].syncpoint && tegra_host1x_syncpt_alloc(&queue.jobs[i].syncpoint))
             return false;
     }
     if (tgm_mem_new(queue.vm, queue.pages, kSlots, &queue.push) ||
@@ -163,10 +181,10 @@ int channel()
                 return -16;
         tgm_chan_del(&queue.channel);
     }
-    if (!queue.vm && !queue.failed && !openSpace())
-        queue.failed = true;
-    if (queue.failed)
+    if (!queue.vm && !openSpace()) {
+        discardSpace();
         return -12;
+    }
     if (!queue.channel) {
         const int result = tgm_chan_new_copy(queue.vm, &queue, queue.fenceCpu, queue.fenceGpu,
                                         "host1x-bridge", 0, &queue.channel);
@@ -197,6 +215,9 @@ extern "C" int switch_gpu_bridge_submit(const switch_gpu_backing_token *tokens, 
     uint32_t slot = 0;
     while (slot < kSlots && queue.jobs[slot].refs)
         ++slot;
+    if (!error && slot < kSlots && !queue.jobs[slot].syncpoint &&
+        tegra_host1x_syncpt_alloc(&queue.jobs[slot].syncpoint))
+        error = -12;
     if (error || slot == kSlots) {
         IOLockUnlock(queue.lock);
         return error ? error : -16;

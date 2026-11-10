@@ -24,7 +24,8 @@ std::array<uint32_t, 8192> pushWords;
 tgm_vm space;
 tgm_mem memories[2];
 tgm_chan gpu;
-uint32_t memoryCount, syncpointCount = 160, maps, execs, roomWaits, failureReleases;
+uint32_t memoryCount, syncpointCount = 160, maps, execs, roomWaits, failureReleases, poolFrees;
+int vmFailures, releaseFailures;
 volatile uint32_t fence;
 std::vector<switch_gpu_backing_token> submittedTokens;
 uint32_t submittedWords[TGM_SYNCPT_INCR_DWORDS];
@@ -82,7 +83,13 @@ extern "C" void *tgm_pool_alloc(uint64_t, uint64_t, uint64_t *pa) { *pa = 0x1000
 extern "C" int tgm_fence_kernel(unsigned, volatile uint32_t **cpu, uint64_t *page, uint32_t *offset) {
     *cpu = &fence; *page = 0x200000; *offset = 128; return 0;
 }
-extern "C" int tgm_vm_new(tgm_vm **out) { *out = &space; return 0; }
+extern "C" int tgm_vm_new(tgm_vm **out) {
+    if (vmFailures) { --vmFailures; return -12; }
+    *out = &space; return 0;
+}
+extern "C" void tgm_vm_del(tgm_vm **vm) { *vm = nullptr; }
+extern "C" void tgm_mem_del(tgm_mem **mem) { if (*mem) --memoryCount; *mem = nullptr; }
+extern "C" void tgm_pool_free(void *, uint64_t, uint64_t) { ++poolFrees; }
 extern "C" void tgm_vm_claim(tgm_vm *, const void *) {}
 extern "C" int tgm_mem_new(tgm_vm *, const uint64_t *pages, uint32_t count, tgm_mem **out) {
     *out = &memories[memoryCount++]; **out = {pages, count}; return 0;
@@ -109,8 +116,9 @@ extern "C" uint32_t tegra_host1x_syncpt_read(uint32_t id) { return syncpoints[id
 extern "C" int tegra_host1x_syncpt_release_failed(uint32_t id, uint32_t threshold, uint32_t maximum) {
     EXPECT_TRUE(gpu.failed);
     EXPECT_LE(uint32_t(threshold - syncpoints[id]), maximum);
-    syncpoints[id] = threshold;
     ++failureReleases;
+    if (releaseFailures) { --releaseFailures; return -5; }
+    syncpoints[id] = threshold;
     return 0;
 }
 [[noreturn]] void panic(const char *, ...) { std::abort(); }
@@ -143,6 +151,19 @@ extern "C" int switch_gpu_timeline_promote(const switch_gpu_backing_token *token
     return ready;
 }
 
+// First in the file: the queue opens once per process.
+TEST_F(Bridge, FailedFirstOpenIsUndoneAndTheNextSubmitOpensAgain) {
+    const auto source = token(40);
+    statuses[key(source)] = 1;
+    vmFailures = 1;
+    switch_gpu_bridge *bridge = nullptr;
+    EXPECT_EQ(switch_gpu_bridge_submit(&source, 1, &bridge), -12);
+    EXPECT_EQ(bridge, nullptr);
+    EXPECT_EQ(poolFrees, 1u);
+    EXPECT_EQ(memoryCount, 0u);
+    ASSERT_NE(submit({source}), nullptr);
+    EXPECT_EQ(syncpointCount, 160u + 8u);
+}
 TEST_F(Bridge, PendingProducerPublishesHardwareAcquireWithoutCpuWait) {
     const auto source = token(41);
     statuses[key(source)] = 0;
@@ -249,6 +270,28 @@ TEST_F(Bridge, QuiescedChannelFailureReleasesHardwareWaitWithoutSuccess) {
     EXPECT_EQ(failureReleases, before + 1);
     EXPECT_EQ(syncpoints[id], threshold);
     EXPECT_EQ(switch_gpu_bridge_status(bridge), -5);
+}
+
+TEST_F(Bridge, UnreleasableFailedSyncpointLeavesItsSlotForAnotherWithoutPanic) {
+    auto source = token(54); statuses[key(source)] = 1;
+    auto *bridge = submit({source}); ASSERT_NE(bridge, nullptr);
+    uint32_t id, threshold;
+    switch_gpu_bridge_syncpoint(bridge, &id, &threshold);
+    releaseFailures = 1;
+    const unsigned logged = switch_bridge_logs;
+    finish(true);
+    EXPECT_EQ(switch_bridge_logs, logged + 1);
+    EXPECT_EQ(switch_gpu_bridge_status(bridge), -5);
+    release(bridge);
+    const uint32_t made = syncpointCount;
+    for (unsigned i = 0; i < 8; ++i) ASSERT_NE(submit({source}), nullptr);
+    EXPECT_EQ(syncpointCount, made + 1);
+    for (auto *each : held) {
+        if (!each) continue;
+        uint32_t other, unused;
+        switch_gpu_bridge_syncpoint(each, &other, &unused);
+        EXPECT_NE(other, id);
+    }
 }
 
 TEST_F(Bridge, ExactDisplayFenceWaitsForNativeProducerAndRetainsUntilCallback) {

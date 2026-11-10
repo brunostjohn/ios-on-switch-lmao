@@ -30,7 +30,7 @@ struct Copier {
 	volatile uint32_t *fenceCpu;
 	uint64_t pushPa, fenceGpu, fencePage, pages[Jobs];
 	thread_call_t retirement;
-	bool failed, semanticFailed;
+	bool semanticFailed;
 	uint32_t waitingSources;
 	Job jobs[Jobs];
 	SwitchGpuCopyMappings mappings;
@@ -92,9 +92,7 @@ int channel()
 		queue.authority.reset();
 		queue.semanticFailed = false;
 	}
-	if (!queue.vm && !queue.failed && !openSpace())
-		queue.failed = true;
-	if (queue.failed)
+	if (!queue.vm && !openSpace())
 		return -12;
 	if (!queue.channel) {
 		const int result = tgm_chan_new_copy(queue.vm, &queue, queue.fenceCpu,
