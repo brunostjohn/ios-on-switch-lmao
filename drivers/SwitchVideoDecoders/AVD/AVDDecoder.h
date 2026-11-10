@@ -36,7 +36,7 @@ typedef struct {
     CFDataRef avcC;              // or vpcC, hvcC
     unsigned lengthSize;
     OSType pixelFormat;
-    CFTypeRef matrix, primaries, transfer;
+    CFTypeRef matrix, primaries, transfer, chromaTop, chromaBottom;
     uint32_t width, height, frames, errors;
     uint64_t decodeTicks, copyTicks;  // copyTicks: placing pictures in pixel buffers (VIC's or the CPU's copy)
     bool present;
