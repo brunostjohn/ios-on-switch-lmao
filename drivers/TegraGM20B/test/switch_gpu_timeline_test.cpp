@@ -334,7 +334,8 @@ TEST_F(Timeline, SemanticPrefixGatesBackingAndMappedCompletionAfterPhysicalFence
 	switch_gpu_timeline_close(timeline);
 }
 
-TEST_F(Timeline, SemanticFailurePersistsAcrossPlainBackingUseButNotEarlierWork)
+// Job 9's event wait failed: job 9 failed. Jobs 10-12 on the channel did not wait for that event and completed.
+TEST_F(Timeline, SemanticFailureFailsOnlyTheJobThatWaited)
 {
 	volatile uint32_t fence = 8;
 	TegraGM20BAbiFenceSemantic mapped = {};
@@ -345,17 +346,45 @@ TEST_F(Timeline, SemanticFailurePersistsAcrossPlainBackingUseButNotEarlierWork)
 	switch_gpu_timeline_semantic *node = nullptr;
 	ASSERT_EQ(switch_gpu_timeline_semantic_reserve(&at, &authority, &node), 0);
 	fence = 12;
+	authority.result = -5;
+	EXPECT_EQ(operations.status(&at), -5);
+	EXPECT_EQ(operations.status(&later), 1);
 	switch_gpu_timeline_semantic_finish(&node, -5);
-	EXPECT_EQ(operations.status(&later), -5);
-	EXPECT_EQ(visibility.status(&later), -5);
+	EXPECT_EQ(operations.status(&at), -5);
+	EXPECT_EQ(visibility.status(&at), -5);
+	EXPECT_EQ(operations.status(&later), 1);
+	EXPECT_EQ(visibility.status(&later), 1);
 	EXPECT_EQ(operations.status(&earlier), 1);
-	EXPECT_EQ(switch_gpu_timeline_physical_status(&later, 1), 1);
 	EXPECT_EQ(mapped.flags, uint32_t(TegraGM20BFenceSemanticFailed));
 	EXPECT_EQ(mapped.failed_first, 9u);
 	switch_gpu_event_waits *captured = nullptr;
-	EXPECT_EQ(switch_gpu_timeline_semantic_snapshot(&later, &captured), -5);
+	EXPECT_EQ(switch_gpu_timeline_semantic_snapshot(&at, &captured), -5);
+	EXPECT_EQ(switch_gpu_timeline_semantic_snapshot(&later, &captured), 0);
+	EXPECT_EQ(captured, nullptr);
 	switch_gpu_timeline_close(timeline);
 	EXPECT_FALSE(switch_gpu_timeline_has_semantics());
+}
+
+// A later job with event waits of its own succeeds when they do, whatever an earlier job's waits did.
+TEST_F(Timeline, LaterJobWithItsOwnWaitsIsJudgedByThemAlone)
+{
+	volatile uint32_t fence = 0;
+	auto *timeline = switch_gpu_timeline_create(++nextId, &fence);
+	switch_gpu_event_waits failed, fine;
+	failed.result = -5;
+	fine.result = 1;
+	auto first = token(timeline, 1), second = token(timeline, 2);
+	switch_gpu_timeline_semantic *a = nullptr, *b = nullptr;
+	ASSERT_EQ(switch_gpu_timeline_semantic_reserve(&first, &failed, &a), 0);
+	ASSERT_EQ(switch_gpu_timeline_semantic_reserve(&second, &fine, &b), 0);
+	fence = 2;
+	EXPECT_EQ(operations.status(&first), -5);
+	EXPECT_EQ(operations.status(&second), 1);
+	switch_gpu_timeline_semantic_finish(&a, -5);
+	switch_gpu_timeline_semantic_finish(&b, 0);
+	EXPECT_EQ(operations.status(&first), -5);
+	EXPECT_EQ(operations.status(&second), 1);
+	switch_gpu_timeline_close(timeline);
 }
 
 TEST_F(Timeline, AbortedUnpublishedSemanticReservationDoesNotPoisonReusedSequence)
@@ -406,9 +435,10 @@ TEST_F(Timeline, EarlierSemanticFailureCannotRetireLaterPhysicalWork)
 	EXPECT_EQ(operations.status(&later), 0);
 	EXPECT_EQ(visibility.status(&later), 0);
 	waitFence = &fence;
-	EXPECT_EQ(visibility.wait(&later), -5);
+	EXPECT_EQ(visibility.wait(&later), 1);
 	EXPECT_EQ(waits.load(), 1u);
 	EXPECT_EQ(fence, 5u);
+	EXPECT_EQ(operations.status(&first), -5);
 	switch_gpu_timeline_close(timeline);
 }
 

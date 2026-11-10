@@ -17,6 +17,10 @@ struct switch_gpu_timeline_semantic {
 	uint32_t seqno;
 };
 
+// The newest jobs whose own event waits failed. A failure belongs to that job alone: later jobs on the channel do not
+// depend on its wait. An older failure pushed out by newer ones reads as its physical status.
+constexpr uint32_t kFailedKept = 8;
+
 struct switch_gpu_timeline {
 	switch_gpu_timeline *next;
 	uint64_t uid;
@@ -28,8 +32,8 @@ struct switch_gpu_timeline {
 	uint32_t refs;
 	switch_gpu_timeline_semantic *semantics;
 	volatile TegraGM20BAbiFenceSemantic *semantic_public;
-	uint32_t semantic_failed;
-	bool semantic_failure;
+	uint32_t failed[kFailedKept];
+	uint32_t failed_count;
 };
 
 namespace
@@ -37,6 +41,31 @@ namespace
 IOLock *lock;
 switch_gpu_timeline *timelines;
 uint32_t semantic_count;
+
+bool failed_locked(const switch_gpu_timeline *timeline, uint32_t value)
+{
+	const uint32_t kept = timeline->failed_count < kFailedKept ? timeline->failed_count : kFailedKept;
+	for (uint32_t i = 0; i < kept; ++i)
+		if (timeline->failed[i] == value)
+			return true;
+	return false;
+}
+
+void fail_locked(switch_gpu_timeline *timeline, uint32_t value)
+{
+	if (failed_locked(timeline, value))
+		return;
+	if (!timeline->failed_count)
+		__atomic_add_fetch(&semantic_count, 1u, __ATOMIC_RELEASE);
+	timeline->failed[timeline->failed_count % kFailedKept] = value;
+	if (++timeline->failed_count == 2 * kFailedKept)
+		timeline->failed_count = kFailedKept;
+}
+
+uint32_t newest_failure(const switch_gpu_timeline *timeline)
+{
+	return timeline->failed[(timeline->failed_count + kFailedKept - 1) % kFailedKept];
+}
 
 bool initialize()
 {
@@ -93,7 +122,7 @@ void publish_semantic_locked(switch_gpu_timeline *timeline)
 	if (!state)
 		return;
 	uint32_t pending = 0,
-		 flags = timeline->semantic_failure ? TegraGM20BFenceSemanticFailed : 0;
+		 flags = timeline->failed_count ? TegraGM20BFenceSemanticFailed : 0;
 	for (auto *node = timeline->semantics; node; node = node->next) {
 		if (!(flags & TegraGM20BFenceSemanticPending) || int32_t(node->seqno - pending) < 0)
 			pending = node->seqno;
@@ -103,7 +132,8 @@ void publish_semantic_locked(switch_gpu_timeline *timeline)
 	__atomic_store_n(&state->epoch, epoch + 1, __ATOMIC_RELEASE);
 	__atomic_thread_fence(__ATOMIC_SEQ_CST);
 	__atomic_store_n(&state->pending_first, pending, __ATOMIC_RELAXED);
-	__atomic_store_n(&state->failed_first, timeline->semantic_failed, __ATOMIC_RELAXED);
+	__atomic_store_n(&state->failed_first,
+			 timeline->failed_count ? newest_failure(timeline) : 0, __ATOMIC_RELAXED);
 	__atomic_store_n(&state->flags, flags, __ATOMIC_RELAXED);
 	__atomic_store_n(&state->epoch, epoch + 2, __ATOMIC_RELEASE);
 }
@@ -113,14 +143,16 @@ int status_locked(const switch_gpu_timeline *timeline, uint32_t value, bool exte
 	const int physical = physical_locked(timeline, value, external);
 	if (physical <= 0)
 		return physical;
-	if (timeline->semantic_failure && int32_t(value - timeline->semantic_failed) >= 0)
+	if (failed_locked(timeline, value))
 		return -5;
 	for (auto *node = timeline->semantics; node; node = node->next) {
 		if (int32_t(value - node->seqno) < 0)
 			continue;
 		const int semantic = switch_gpu_event_waits_cached_status(node->authority);
-		if (semantic != 1)
-			return semantic < 0 ? -5 : 0;
+		if (semantic == 0)
+			return 0;
+		if (semantic < 0 && node->seqno == value)
+			return -5;
 	}
 	return physical;
 }
@@ -197,7 +229,7 @@ void put_locked(switch_gpu_timeline *timeline)
 		at = &(*at)->next;
 	if (*at)
 		*at = timeline->next;
-	if (timeline->semantic_failure)
+	if (timeline->failed_count)
 		__atomic_sub_fetch(&semantic_count, 1u, __ATOMIC_RELEASE);
 	switch_gpu_fence_put(timeline->allocation);
 	IODelete(timeline, switch_gpu_timeline, 1);
@@ -244,8 +276,7 @@ extern "C" switch_gpu_timeline *switch_gpu_timeline_create(uint64_t uid,
 	IOLockLock(lock);
 	switch_gpu_fence_hold(fence);
 	const uint32_t completed = __atomic_load_n(fence, __ATOMIC_ACQUIRE);
-	*timeline = {timelines, uid, fence,   fence,   fence, completed, completed,
-		     0,         1,   nullptr, nullptr, 0,     false};
+	*timeline = {timelines, uid, fence, fence, fence, completed, completed, 0, 1, nullptr, nullptr, {}, 0};
 	timelines = timeline;
 	IOLockUnlock(lock);
 	return timeline;
@@ -339,15 +370,14 @@ extern "C" int switch_gpu_timeline_semantic_snapshot(const switch_gpu_backing_to
 	int result = 0;
 	if (!timeline) {
 		result = -19;
-	} else if (timeline->semantic_failure &&
-		   int32_t(uint32_t(token->value) - timeline->semantic_failed) >= 0) {
+	} else if (failed_locked(timeline, uint32_t(token->value))) {
 		result = -5;
 	} else {
 		for (auto *node = timeline->semantics; node; node = node->next)
 			if (int32_t(uint32_t(token->value) - node->seqno) >= 0) {
 				const int semantic =
 					switch_gpu_event_waits_cached_status(node->authority);
-				if (semantic == 1)
+				if (semantic == 1 || (semantic < 0 && node->seqno != uint32_t(token->value)))
 					continue;
 				if (semantic < 0) {
 					result = -5;
@@ -424,15 +454,8 @@ extern "C" void switch_gpu_timeline_semantic_finish(switch_gpu_timeline_semantic
 	if (*at)
 		*at = node->next;
 	__atomic_sub_fetch(&semantic_count, 1u, __ATOMIC_RELEASE);
-	if (result < 0 && result != -125) {
-		if (!timeline->semantic_failure) {
-			timeline->semantic_failure = true;
-			timeline->semantic_failed = node->seqno;
-			__atomic_add_fetch(&semantic_count, 1u, __ATOMIC_RELEASE);
-		} else if (int32_t(node->seqno - timeline->semantic_failed) < 0) {
-			timeline->semantic_failed = node->seqno;
-		}
-	}
+	if (result < 0 && result != -125)
+		fail_locked(timeline, node->seqno);
 	publish_semantic_locked(timeline);
 	put_locked(timeline);
 	IOLockUnlock(lock);
