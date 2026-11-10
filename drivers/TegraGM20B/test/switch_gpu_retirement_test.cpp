@@ -27,6 +27,8 @@ std::atomic<unsigned> scheduled{0}, waits{0}, releases{0}, statusCalls{0}, arms{
 std::atomic<uint64_t> now{100}, armed{0};
 std::atomic<bool> waitEntered{false}, unblockWait{true}, completeInStatus{false};
 uint64_t page = 0x80000000;
+// A new backing counts as CPU-written, so its first GM20B job keeps a second reference as the backing's host acquire.
+constexpr unsigned kPublished = 2;
 
 int status(const switch_gpu_backing_token *token)
 {
@@ -190,7 +192,7 @@ TEST_F(Retirement, PendingHeadDoesNotBlockReadyTail)
 	switch_gpu_backing_release(pending);
 	switch_gpu_backing_release(ready);
 	switch_gpu_backing_retire();
-	ASSERT_TRUE(releases == 1 && waits == 0 && timelines[2].refs == 1);
+	ASSERT_TRUE(releases == 1 && waits == 0 && timelines[2].refs == kPublished);
 	complete(2);
 	switch_gpu_backing_retire();
 	ASSERT_TRUE(releases == 2 && armed == 0);
@@ -235,7 +237,7 @@ TEST_F(Retirement, RecoveryStartsOnlyAtDeadlineAndRetainsToken)
 	ASSERT_TRUE(waits == 0 && releases == 0);
 	now = armed.load();
 	switch_gpu_backing_expire();
-	ASSERT_TRUE(waits == 1 && releases == 0 && timelines[1].refs == 1);
+	ASSERT_TRUE(waits == 1 && releases == 0 && timelines[1].refs == kPublished);
 	switch_gpu_backing_retire();
 	ASSERT_TRUE(releases == 1);
 }
@@ -253,7 +255,7 @@ TEST_F(Retirement, BlockedRecoveryDoesNotStopReadyReclamation)
 	});
 	for (unsigned i = 0; !waitEntered && i < 100000; ++i)
 		std::this_thread::yield();
-	ASSERT_TRUE(waitEntered && timelines[1].refs == 2);
+	ASSERT_TRUE(waitEntered && timelines[1].refs == kPublished + 1);
 	auto *ready = make();
 	publish(ready, 2);
 	complete(2);

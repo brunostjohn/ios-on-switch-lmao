@@ -198,6 +198,25 @@ public:
 		}
 	} surfaces_;
 
+	struct Service {
+		void stop()
+		{
+		}
+	} events_, resources_;
+
+	struct EventChannel {
+		void reset()
+		{
+		}
+	} eventChannels_[kMaxChannels];
+
+	struct Admission {
+		void end()
+		{
+		}
+	} admissions_[kMaxChannels];
+
+	uint64_t admissionCookies_[kMaxChannels] = {};
 	IOLock storage;
 	IOLock *lock_ = &storage;
 	void *vm_ = nullptr;
