@@ -146,6 +146,7 @@ TESTS: dict[str, bool] = {
     'cpu.sustained': False,
     'cpu.sched': False,
     'system.dispatch_sync': False,
+    'system.dispatch_sync_workloops': False,
     'system.workloop_sync': False,
     'net.wifi_link': False,
     'gpu.latency': False,
