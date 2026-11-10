@@ -161,6 +161,24 @@ struct tgm_hang_candidate {
 	uint8_t waits; /* 1 + the candidate its pending order acquire waits on; 0: none */
 };
 
+/* A long single job and a hung one look alike for the whole check: the PBDMA's GET stops once the engine's method FIFO is
+ * full, USERD's GET is a written-back copy, and GR's status and FECS's current context show the engine busy on the
+ * channel either way. So a channel stuck and not moving at a hang check is blamed only when the check before it saw the
+ * same with its fence where it is now: two consecutive checks, at the checks' own cadence. *strikes and *seen carry the
+ * channel's state between checks. */
+static inline int tgm_hang_confirm(int stuck_still, uint32_t completed, uint32_t *strikes, uint32_t *seen)
+{
+	if (!stuck_still) {
+		*strikes = 0;
+		return 0;
+	}
+	if (*strikes && *seen == completed)
+		return 1;
+	*strikes = 1;
+	*seen = completed;
+	return 0;
+}
+
 /* Candidates in order: tgm_recover_suspects' channels, the channels the late one waits on through order acquires, the late
  * one (last). A channel an engine is on that is stuck and does not move is to blame (*blame, its index; else -1): a
  * client's is killed, a kernel channel's is fatal. While an engine is on a channel that moves the GPU is busy, not hung,

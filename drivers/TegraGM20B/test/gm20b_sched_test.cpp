@@ -535,3 +535,20 @@ TEST(FaultVa, NoneWithoutAFaultLine)
 }
 
 }  // namespace
+
+TEST(HangConfirm, AChannelIsBlamedOnlyAtTheSecondCheckThatFindsItStill)
+{
+	uint32_t strikes = 0, seen = 0;
+	EXPECT_FALSE(tgm_hang_confirm(1, 40, &strikes, &seen));
+	EXPECT_TRUE(tgm_hang_confirm(1, 40, &strikes, &seen));
+}
+
+TEST(HangConfirm, ALongJobThatCompletesBetweenChecksStartsOver)
+{
+	uint32_t strikes = 0, seen = 0;
+	EXPECT_FALSE(tgm_hang_confirm(1, 40, &strikes, &seen));
+	EXPECT_FALSE(tgm_hang_confirm(1, 41, &strikes, &seen));
+	EXPECT_TRUE(tgm_hang_confirm(1, 41, &strikes, &seen));
+	EXPECT_FALSE(tgm_hang_confirm(0, 41, &strikes, &seen));
+	EXPECT_FALSE(tgm_hang_confirm(1, 41, &strikes, &seen));
+}

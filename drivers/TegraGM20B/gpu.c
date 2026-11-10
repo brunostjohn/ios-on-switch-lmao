@@ -1228,8 +1228,9 @@ struct tgm_chan {
 	struct tgm_order order[TGM_ORDER_MAX];
 	struct tgm_order waited;
 	struct tgm_hang_log hang;
-	u64 get_seen,
-		get_ns; /* hang_recover: its GPFIFO and pushbuffer GET as last read, and when they last moved */
+	/* hang_recover: its GPFIFO and pushbuffer GET as last read, and when they last moved */
+	u64 get_seen, get_ns;
+	u32 hang_strikes, hang_seen; /* tgm_hang_confirm's state between hang checks */
 #if TGM_STATS
 	u64 killed_ns; /* chan_killed's time, for a fault's line (TegraGM20BUserClient.cpp) */
 #endif
@@ -1833,10 +1834,19 @@ static enum tgm_hang hang_recover(struct tgm_chan *late, const char *who, u32 se
 	chans[n] = late;
 	for (i = 0; i <= n; i++) {
 		c[i].live = chans[i] != NULL;
-		c[i].stuck = chans[i] && chan_stuck(chans[i], now);
 		c[i].kernel = chans[i] && chans[i]->kernel;
 		c[i].resident = i < resident;
 		c[i].moving = chans[i] && chan_moving(chans[i], now);
+		for (j = 0; j < i && chans[j] != chans[i]; j++)
+			;
+		/* once per channel and check: a channel among both suspects and sources is one observation */
+		if (j < i)
+			c[i].stuck = c[j].stuck;
+		else
+			c[i].stuck = chans[i] && tgm_hang_confirm(chan_stuck(chans[i], now) && !c[i].moving,
+								  tgm_chan_completed(chans[i]),
+								  &chans[i]->hang_strikes,
+								  &chans[i]->hang_seen);
 	}
 	for (i = 0; i <= n; i++) {
 		const struct tgm_order *w = chans[i] ? &chans[i]->waited : NULL;
