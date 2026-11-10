@@ -24,7 +24,7 @@ inline void dispatchOf(const Shape &s, const uint32_t threads[3], NSArray<id<MTL
     while (std::getline(text, pair, ','))
         memory[uint32_t(strtoul(pair.c_str(), nullptr, 10))] =
             uint32_t(strtoul(pair.c_str() + pair.find(':') + 1, nullptr, 10));
-    out = std::make_unique<raw::KernelDispatch>(threads, memory);
+    out = std::make_unique<raw::KernelDispatch>(threads, memory, s.regionMode);
     for (size_t i = 0; i < s.textures.size(); i++) {
         MTLTextureDescriptor *d = [MTLTextureDescriptor new];
         d.pixelFormat = bound[i].pixelFormat;
@@ -65,11 +65,14 @@ void eachKernel(id<MTLDevice> dev, NSString *text, Each each, Refused refused)
             refused(k.line, why.empty() ? "no function " + k.shape.function : why);
             continue;
         }
-        k.key = key(k.shape, air);
-        if (!seen.insert(k.key).second)
-            continue;
         k.descriptor = descriptor(k.shape, f);
-        each(k);
+        const Shape original = k.shape;
+        eachRegionShape(original, [&](const Shape &shape, uint8_t) {
+            k.shape = shape;
+            k.key = key(k.shape, air);
+            if (seen.insert(k.key).second)
+                each(k);
+        });
     }
 }
 

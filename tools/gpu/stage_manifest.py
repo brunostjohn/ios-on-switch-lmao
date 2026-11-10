@@ -3,6 +3,7 @@ r"""List what deploy stages onto the Data volume (//gpu:bundle): the signed bund
 
 usage: stage_manifest.py --self <rlocation> --base <dir> --base-rlocation R --seed <join's dir> --seed-rlocation R
                          --pack <bucket pack> --pack-rlocation R ... --raw <dir> --raw-rlocation R --out <manifest>
+                         --native <stamped native dir> --native-rlocation R
 
 The manifest names files where Bazel left them, in //deploy:sd's runfiles, so nothing is copied to make it:
 
@@ -42,7 +43,18 @@ def tree(directory: Path, rlocation: str, under: str) -> list[tuple[Path, str, s
 def main() -> None:
     """Write the manifest."""
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    for name in ('self', 'base', 'base-rlocation', 'seed', 'seed-rlocation', 'raw', 'raw-rlocation', 'out'):
+    for name in (
+        'self',
+        'base',
+        'base-rlocation',
+        'seed',
+        'seed-rlocation',
+        'raw',
+        'raw-rlocation',
+        'native',
+        'native-rlocation',
+        'out',
+    ):
         parser.add_argument('--' + name, required=True)
     parser.add_argument('--pack', action='append', default=[])
     parser.add_argument('--pack-rlocation', action='append', default=[])
@@ -54,6 +66,10 @@ def main() -> None:
         for number, (pack, rlocation) in enumerate(zip(args.pack, args.pack_rlocation, strict=True))
     ]
     files += tree(Path(args.raw), args.raw_rlocation, RAW + '/')
+    files += [
+        (path, (SEED if relative.startswith('native-analysis/') else RAW + '/native') + '/' + relative, rlocation)
+        for path, relative, rlocation in tree(Path(args.native), args.native_rlocation, '')
+    ]
     digests = hashing.sha256_files([path for path, _, _ in files])
     lines = [line(path, digest, *where) for (path, *where), digest in zip(files, digests, strict=True)]
     Path(args.out).write_text(HEADER + args.self + '\n' + ''.join(entry + '\n' for entry in sorted(lines)))

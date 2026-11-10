@@ -25,9 +25,9 @@ import splits
 PIPELINE = struct.Struct('<QIHHIIBBBBHHI')
 # SET_PIPELINE_PROGRAM(vertex B, pixel): where each program sits in the shader heap, which the probe saw differ by state
 PROGRAM_OFFSETS = (0x2044, 0x2144)
-PIPELINE_BYTES = PIPELINE.size + packfile.PACK_ENTRIES * 8 + 4 + 32 * 4 + 4
+PIPELINE_BYTES = PIPELINE.size + packfile.PACK_ENTRIES * 8 + 4 + 32 * 4 + 4 + 36 + 16
 ENTRY_UBO, ENTRY_COLOR_TABLE = 1, 5
-TEXTURE_KINDS = {2: 'slot', 3: 'fetch', 4: 'tex3d'}
+TEXTURE_KINDS = {2: 'slot', 3: 'fetch', 4: 'tex3d', 6: 'depth_test', 7: 'stencil_test'}
 SAMPLER_SLOT, SAMPLER_CONSTEXPR = 1, 2
 
 
@@ -143,8 +143,15 @@ def pipeline_of(rec: dict, varying: list[int], prog_index: dict[str, int], const
         PIPELINE.unpack_from(p)
     )
     mask, *words = struct.unpack_from('<33I', p, PIPELINE.size + packfile.PACK_ENTRIES * 8)
-    blend, half, _reserved = struct.unpack_from('<BBH', p, PIPELINE_BYTES - 4)
+    blend, half, _reserved = struct.unpack_from('<BBH', p, PIPELINE_BYTES - 56)
+    storage_mask, storage_write_mask, storage_samples, storage_tests, *storage_tic = struct.unpack_from('<BBBB8I', p, PIPELINE_BYTES - 52)
+    depth_word, stencil_word, test_flags, _reserved, depth_tic, stencil_tic, _reserved = struct.unpack_from('<BBBBIII', p, PIPELINE_BYTES - 16)
     regs = rec['probe']['records'][0]['regs']
+    varying = list(varying)
+    if storage_mask:
+        for method in [0x0210, 0x0754, 0x1224] + [0x1a00 + 4 * i for i in range(8) if storage_mask >> i & 1]:
+            if method not in varying:
+                varying.append(method)
     return {
         'index': rec['probe']['index'],
         'key': rec['key'],
@@ -160,6 +167,16 @@ def pipeline_of(rec: dict, varying: list[int], prog_index: dict[str, int], const
         'push_metadata': bool(flags & 4),
         'blend_color_word': blend,
         'half_blend_color_word': half,
+        'storage_mask': storage_mask,
+        'storage_write_mask': storage_write_mask,
+        'storage_samples': storage_samples,
+        'storage_tests': storage_tests,
+        'depth_test_word': depth_word,
+        'stencil_test_word': stencil_word,
+        'test_flags': test_flags,
+        'depth_tic': depth_tic,
+        'stencil_tic': stencil_tic,
+        'storage_tic': storage_tic,
         'set_size': set_bytes,
         'entries': entries_of(p, entries, rec['samplers'], constexpr_tsc),
         'vbs': [{'stream': 0, 'slot': slot, 'stride': stride}] if slot != 0xFF else [],

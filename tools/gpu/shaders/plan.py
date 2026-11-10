@@ -18,7 +18,7 @@ from collections import Counter
 from pathlib import Path
 
 from tools.gpu.shaders import derive
-from tools.gpu.shaders.journal import parse_kernel, parse_render, parse_specialization
+from tools.gpu.shaders.journal import kernel_links, parse_kernel, parse_render, parse_specialization
 from tools.gpu.shaders.metallib import Function, functions
 
 DEPTHS = ('corpus', 'wide', 'deep')
@@ -65,17 +65,23 @@ def _identity(line: str) -> tuple:
         return ('R', *render.key())
     kernel = parse_kernel(line)
     if kernel:
-        return ('C', *kernel)
+        return ('C', *kernel, kernel_links(line))
     return ('S', parse_specialization(line))
 
 
 def _program(line: str) -> str:
     render = parse_render(line)
     if render:
-        return render.vertex.text() + ' | ' + (render.fragment.text() if render.fragment else '-')
+        return ' | '.join(
+            [
+                render.vertex.text(),
+                render.fragment.text() if render.fragment else '-',
+                *(tag + ' ' + stage.text() for tag, stage in render.linked),
+            ]
+        )
     kernel = parse_kernel(line)
     if kernel:
-        return kernel[1].text()
+        return ' | '.join([kernel[1].text(), *(tag + ' ' + stage.text() for tag, stage in kernel_links(line))])
     stage = parse_specialization(line)
     return stage.text() if stage else line
 
@@ -112,6 +118,7 @@ def main() -> None:
     parser.add_argument('--count', type=int, required=True)
     parser.add_argument('--store', type=Path, required=True)
     parser.add_argument('--report', type=Path, required=True)
+    parser.add_argument('--input-report', type=Path, action='append', default=[])
     args = parser.parse_args()
     if hashlib.sha256(args.qc.read_bytes()).hexdigest() != args.qc_sha256:
         sys.exit(f"{args.qc} is not the IPSW kind's QuartzCore default.metallib ({args.qc_sha256})")
@@ -129,6 +136,7 @@ def main() -> None:
         'kernels': sum(1 for fs in index.values() for f in fs if f.type == derive.KERNEL),
         'lines': {f'{tier}.{kind}': n for (tier, kind), n in sorted(kept.items())},
         'buckets': [len(b) - 1 for b in buckets],
+        'inputs': [json.loads(path.read_text()) for path in args.input_report],
     }
     args.report.write_text(json.dumps(report, indent=1) + '\n')
     print('plan:', json.dumps(report['lines']))

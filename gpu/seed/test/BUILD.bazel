@@ -34,6 +34,8 @@ RAW = [
 ) for path in [
     "crawl/tree/" + QUARTZCORE,
     "crawl/tree/data/0.metallib",
+    "crawl/tree/root/System/Library/PrivateFrameworks/RenderBox.framework/default.metallib",
+    "device/1.metallib",
     "crawl/inventory.json",
     "base/TegraGM20BMetal.bundle/Info.plist",
     "tools/precompile",
@@ -69,6 +71,7 @@ filegroup(
     srcs = [
         ":crawl/tree/" + QUARTZCORE,
         ":crawl/tree/data/0.metallib",
+        ":crawl/tree/root/System/Library/PrivateFrameworks/RenderBox.framework/default.metallib",
     ],
     tags = ["manual"],
 )
@@ -97,6 +100,7 @@ seed_raw_pack(
     srcs = [":raw/" + name for name in RAW],
     corpus = ":corpus/corpus.log",
     crawl = ":crawl",
+    device_libraries = ":device/1.metallib",
     generator = ":raw/rawpack.py",
     tags = ["manual"],
     tools = ":tools",

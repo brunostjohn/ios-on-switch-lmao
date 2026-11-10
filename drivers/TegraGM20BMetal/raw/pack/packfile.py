@@ -5,15 +5,19 @@ from dataclasses import dataclass, field
 MAGIC = b'GM20BPK1'
 # 2: the header's stack key (rawpack.py --stack) after the section table; 3: barrier-form records; 4: programs' shader
 # data and constant buffer types; 6: compute kernels (runtime/raw_pack.h PackKernel); 8: a texture3d entry's Metal
-# index; 9: split fragment programs (PackSplit); 10: dynamic blend push fields
-VERSION = 10
+# index; 9: split fragment programs (PackSplit); 10: dynamic blend push fields; 11: qualified ordered storage views
+VERSION = 14
 SECTIONS = 10  # runtime/raw_pack.h PackSectionCount
 KERNEL_ENTRIES = 16  # PackKernel.entry's length
 PROGRAM_CBUFS = 11  # PackProgram.cbufType's length (runtime/raw_pack.h)
 
 
 # PackSplit (runtime/raw_pack.h)
-PACK_SPLIT = struct.Struct('<IHHHHBBBB8s64I')
+PACK_SPLIT = struct.Struct('<IHHHHBBBB8sHH64IHH7I')
+SPLIT_COST_FIELDS = (
+    'version', 'reserved', 'launch_cycles', 'drain_cycles', 'prologue_warp_cycles',
+    'prologue_instructions', 'saved_pixel_instructions', 'saved_pixel_cycles', 'frontier_values',
+)
 
 
 def fnv(b: bytes, h: int = 0xCBF29CE484222325) -> int:
@@ -46,7 +50,7 @@ def entry_bytes(entries: list[dict]) -> bytearray:
         else:
             tk = e['tex']
             sk = e['smp']
-            tkind = 0 if tk is None else {'slot': 2, 'fetch': 3, 'tex3d': 4}[tk[0]]
+            tkind = 0 if tk is None else {'slot': 2, 'fetch': 3, 'tex3d': 4, 'depth_test': 6, 'stencil_test': 7}[tk[0]]
             skind = 0 if sk is None else (1 if sk[0] == 'slot' else 2)
             ents += struct.pack(
                 '<HBBBBBB', e['off'], tkind, 2, 0 if tk is None else tk[1], skind, 0 if sk is None else sk[1], 0
@@ -122,6 +126,7 @@ def pipeline_bytes(rec: dict, key_offset: int, blob_off: int) -> bytes:
     keyhash = key_hash(rec)
     flags = (1 if rec['fetch'] else 0) | (2 if rec.get('form') == 'barrier' else 0)  # PackPipelineFlags
     flags |= 4 if rec.get('push_metadata') else 0
+    flags |= 8 if rec.get('storage_mask') else 0
     head = struct.pack(
         '<QIHHIIBBBBHHI',
         keyhash,
@@ -139,7 +144,11 @@ def pipeline_bytes(rec: dict, key_offset: int, blob_off: int) -> bytes:
         flags,
     )
     dynamic = struct.pack('<BBH', rec.get('blend_color_word', 0), rec.get('half_blend_color_word', 0), 0)
-    return head + entry_bytes(rec['entries']) + push_bytes(rec['push']) + dynamic
+    storage = struct.pack('<BBBB8I', rec.get('storage_mask', 0), rec.get('storage_write_mask', 0),
+                          rec.get('storage_samples', 0), rec.get('storage_tests', 0), *rec.get('storage_tic', [0] * 8))
+    tests = struct.pack('<BBBBIII', rec.get('depth_test_word', 0), rec.get('stencil_test_word', 0),
+                        rec.get('test_flags', 0), 0, rec.get('depth_tic', 0), rec.get('stencil_tic', 0), 0)
+    return head + entry_bytes(rec['entries']) + push_bytes(rec['push']) + dynamic + storage + tests
 
 
 def kernel_window(e: dict) -> int:
@@ -159,7 +168,7 @@ def kernel_bytes(k: dict, key_offset: int) -> bytes:
     return (
         struct.pack('<QIHBb', fnv(k['key'].encode()), key_offset, k['program'], len(k['entries']), k['region'])
         + struct.pack('<64I', *k['qmd'])
-        + struct.pack('<HHI', k['set_bytes'], 0, mask)
+        + struct.pack('<HHI', k['set_bytes'], k.get('read_only_entries', 0), mask)
         + struct.pack('<32I', *words)
         + entries
     )
@@ -224,7 +233,10 @@ def split_bytes(found: list[dict]) -> bytes:
             s['shader_data_cbuf'],
             s['prologue_cbufs'],
             bytes(s['ubo_cbufs']) + bytes(8 - len(s['ubo_cbufs'])),
+            s.get('batch_version', 0),
+            s.get('batch_threads', 0),
             *s['qmd'],
+            *(s.get('cost', {}).get(field, 0) for field in SPLIT_COST_FIELDS),
         )
         for s in found
     )

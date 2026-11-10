@@ -152,6 +152,16 @@ int main(int argc, char **argv)
                              const raw::Compiler::Outcome outcome =
                                  direct.make(s.d, s.key, rec, why, probe::probeTextures(line, ours), &registers, true);
                              record(w, s.key, outcome, why, rec, registers);
+                             if (outcome == raw::Compiler::Outcome::Made &&
+                                 (rec.pipeline.flags & raw::PipelineStorageMetadata)) {
+                                 raw::RuntimeRecord barrier;
+                                 std::map<uint32_t, uint32_t> barrierRegisters;
+                                 std::string barrierWhy;
+                                 const auto barrierOutcome =
+                                     direct.make(s.d, s.key, barrier, barrierWhy, probe::probeTextures(line, ours),
+                                                 &barrierRegisters, true, raw::PackForm::Barrier);
+                                 record(w, s.key, barrierOutcome, barrierWhy, barrier, barrierRegisters);
+                             }
                              split += outcome == raw::Compiler::Outcome::Made && rec.split;
                              (outcome == raw::Compiler::Outcome::Made      ? made
                               : outcome == raw::Compiler::Outcome::Refused ? refused

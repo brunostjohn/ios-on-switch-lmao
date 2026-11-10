@@ -46,21 +46,25 @@ int main(int argc, char **argv)
 
     std::map<uint32_t, raw::EmitProgram> info;
     uint32_t disagree = 0;
-    auto learn = [&](uint32_t prog, uint32_t gprs, bool earlyZ, bool fragment) {
+    auto learn = [&](uint32_t prog, uint32_t gprs, bool earlyZ, bool fragment, uint32_t interlock, bool sampleShading) {
         const auto [it, first] = info.try_emplace(prog);
         if (first) {
             it->second.header = heap + programs[prog].program;
             it->second.gprs = gprs;
             it->second.earlyFragmentTests = earlyZ;
+            it->second.interlockControl = interlock;
+            it->second.usesSampleShading = sampleShading;
         } else {
-            disagree += it->second.gprs != gprs || (fragment && it->second.earlyFragmentTests != earlyZ);
+            disagree +=
+                it->second.gprs != gprs ||
+                (fragment && (it->second.earlyFragmentTests != earlyZ || it->second.interlockControl != interlock));
         }
     };
     for (uint32_t i = 0; i < count; i++) {
         const std::map<uint32_t, uint32_t> regs = registers(pack, pipes[i]);
-        learn(pipes[i].vs, regs.count(kVertexCount) ? regs.at(kVertexCount) : 0, false, false);
+        learn(pipes[i].vs, regs.count(kVertexCount) ? regs.at(kVertexCount) : 0, false, false, 0, false);
         learn(pipes[i].fs, regs.count(kPixelCount) ? regs.at(kPixelCount) : 0, regs.count(kEarlyZ) && regs.at(kEarlyZ),
-              true);
+              true, regs.count(0x1224) ? regs.at(0x1224) : 0, regs.count(0x0754) && (regs.at(0x0754) & 15) > 1);
     }
 
     uint64_t compared = 0, read = 0, unread = 0, unparsed = 0;

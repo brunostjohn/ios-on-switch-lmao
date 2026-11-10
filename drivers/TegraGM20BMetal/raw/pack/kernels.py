@@ -42,7 +42,7 @@ def kernel(rec: dict, constexpr_tsc: list[list[int]]) -> dict:
     k = rec['kernel']
     _hash, _key, _program, count, region = HEAD.unpack_from(k)
     qmd = list(struct.unpack_from('<64I', k, HEAD.size))
-    set_bytes, _pad, mask = struct.unpack_from('<HHI', k, HEAD.size + 256)
+    set_bytes, read_only, mask = struct.unpack_from('<HHI', k, HEAD.size + 256)
     words = struct.unpack_from('<32I', k, HEAD.size + 264)
     at = HEAD.size + 264 + 128
     entries = [entry(ENTRY.unpack_from(k, at + ENTRY.size * i), rec['samplers'], constexpr_tsc) for i in range(count)]
@@ -50,6 +50,7 @@ def kernel(rec: dict, constexpr_tsc: list[list[int]]) -> dict:
         'key': rec['key'],
         'region': region,
         'set_bytes': set_bytes,
+        'read_only_entries': read_only,
         'qmd': qmd,
         'push': {w: words[w] for w in range(32) if mask >> w & 1},
         'entries': entries,

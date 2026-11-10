@@ -94,7 +94,9 @@ inline std::string splitDifferences(const raw::Pack &pack, const raw::PackPipeli
     if (packed->thresholdPixels != m.thresholdPixels || packed->frontierBytes != m.frontierBytes ||
         packed->frontierCbuf != m.frontierCbuf || packed->uboCount != m.uboCount ||
         packed->shaderDataCbuf != m.shaderDataCbuf || packed->prologueCbufs != m.prologueCbufs ||
-        memcmp(packed->uboCbuf, m.uboCbuf, sizeof m.uboCbuf) || memcmp(packed->qmd, m.qmd, sizeof m.qmd))
+        packed->batchVersion != m.batchVersion || packed->batchThreads != m.batchThreads ||
+        memcmp(packed->uboCbuf, m.uboCbuf, sizeof m.uboCbuf) || memcmp(packed->qmd, m.qmd, sizeof m.qmd) ||
+        memcmp(&packed->cost, &m.cost, sizeof m.cost))
         why += " split-record";
     const raw::PackProgram *programs = pack.section<raw::PackProgram>(raw::PackPrograms);
     const uint8_t *heap = pack.section<uint8_t>(raw::PackHeap);

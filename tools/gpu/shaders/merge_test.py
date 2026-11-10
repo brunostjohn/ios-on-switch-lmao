@@ -11,8 +11,9 @@ import struct
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
-from tools.gpu.shaders import merge, precompile
+from tools.gpu.shaders import merge, precompile, replies as compiler_replies
 
 BUILD = 'b' * 64
 CONTENT = merge.CONTENT
@@ -82,6 +83,31 @@ class JoinTest(unittest.TestCase):
         report.write_text(json.dumps({'identity': identity}))
         return pack, index, report
 
+    def test_native_records_are_installed_beside_the_raw_pack(self):
+        seed, raw, native = (self.root / name for name in ('seed', 'raw', 'native'))
+        for folder in (seed, raw, native / 'raw-0000000000001234'):
+            folder.mkdir(parents=True)
+        (seed / 'SEED').write_bytes(b'identity')
+        (raw / 'pack.bin').write_bytes(b'raw pack')
+        relative = 'raw-0000000000001234/000000000000abcd.rec'
+        (native / relative).write_bytes(b'native artifact')
+        (native / 'coverage.json').write_bytes(b'{}')
+        analysis = native / 'native-analysis' / ('a' * 64 + '.nca')
+        analysis.parent.mkdir()
+        analysis.write_bytes(b'native compute analysis')
+        out = self.root / 'tree'
+        size = self.root / 'size.json'
+        merge.tree(argparse.Namespace(seed=seed, raw=raw, native=native, pack=[], out=out, size=size))
+        self.assertEqual((out / merge.RAW / 'native' / relative).read_bytes(), b'native artifact')
+        self.assertEqual((out / merge.RAW / 'pack.bin').read_bytes(), b'raw pack')
+        self.assertEqual((out / merge.RAW / 'native' / relative).stat().st_mode & 0o777, 0o644)
+        self.assertEqual((out / merge.RAW / 'native').stat().st_mode & 0o777, 0o755)
+        self.assertEqual(
+            (out / merge.SEED / 'native-analysis' / analysis.name).read_bytes(), b'native compute analysis'
+        )
+        self.assertFalse((out / merge.RAW / 'native' / 'native-analysis').exists())
+        self.assertEqual(json.loads(size.read_text())['files'], 5)
+
     def test_join_packs_the_buckets(self):
         shared = record(b'one pipeline, made by two buckets')
         named = f'v1/{CONTENT}/cc/cc' + 'c' * 62
@@ -107,18 +133,17 @@ class JoinTest(unittest.TestCase):
         ):
             (self.root / name).write_text(json.dumps(value))
         out = self.root / 'seed'
-        merge.join(
-            argparse.Namespace(
-                index=[b[1] for b in buckets],
-                report=[b[2] for b in buckets],
-                records=self.root / 'records',
-                replies=replies,
-                ipsw='21H461',
-                plan=self.root / 'plan.json',
-                inventory=self.root / 'inventory.json',
-                out=out,
-            )
+        args = argparse.Namespace(
+            index=[b[1] for b in buckets],
+            report=[b[2] for b in buckets],
+            records=self.root / 'records',
+            replies=replies,
+            ipsw='21H461',
+            plan=self.root / 'plan.json',
+            inventory=self.root / 'inventory.json',
+            out=out,
         )
+        merge.join(args)
         build, entries = read_index(out / 'index')
         self.assertEqual(build, BUILD)
         packs = [b[0] for b in buckets] + [out / 'packs/002']
@@ -139,6 +164,32 @@ class JoinTest(unittest.TestCase):
         self.assertEqual((out / 'msl' / ('a' * 64 + '.reply')).read_bytes(), good)
         manifest = json.loads((out / 'MANIFEST.json').read_text())
         self.assertEqual(manifest['compile_replies'], {'kept': 1, 'refused': 2})
+        self.assertEqual(manifest['compiler_reply_inventory']['unattributedReplies'], 1)
+        args.strict_replies = True
+        with self.assertRaisesRegex(ValueError, 'invalid reply'):
+            merge.join(args)
+
+    def test_installer_checks_copied_reply_bytes(self):
+        seed = self.root / 'seed'
+        (seed / 'msl').mkdir(parents=True)
+        path = seed / 'msl' / ('a' * 64 + '.reply')
+        path.write_bytes(reply(b'MTLB fixture'))
+        inventory = compiler_replies.inventory(seed / 'msl', strict=True)
+        (seed / 'MANIFEST.json').write_text(json.dumps({'compiler_reply_inventory': inventory}))
+        args = argparse.Namespace(
+            seed=seed, pack=[], raw=None, native=None, out=self.root / 'tree', size=self.root / 'size'
+        )
+        merge.tree(args)
+        self.assertEqual((args.out / merge.SEED / 'msl' / path.name).read_bytes(), path.read_bytes())
+        clone = merge.clone
+
+        def damaged(source: Path, target: Path) -> None:
+            clone(source, target)
+            if target.suffix == '.reply':
+                target.write_bytes(reply(b'other valid output'))
+
+        with mock.patch.object(merge, 'clone', side_effect=damaged), self.assertRaisesRegex(ValueError, 'differ'):
+            merge.tree(args)
 
 
 if __name__ == '__main__':

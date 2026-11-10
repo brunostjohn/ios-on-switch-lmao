@@ -1,6 +1,7 @@
 # The GPU bundle's build steps (gpu/defs.bzl runs them as actions).
 load("@rules_python//python:py_binary.bzl", "py_binary")
 load("@rules_python//python:py_library.bzl", "py_library")
+load("@rules_python//python:py_test.bzl", "py_test")
 load("//bazel/lint:defs.bzl", "lint_files")
 
 package(default_visibility = ["//gpu:__subpackages__"])
@@ -49,6 +50,12 @@ py_library(
     visibility = ["//drivers/TegraGM20BMetal:__pkg__"],
 )
 
+py_test(
+    name = "rawpack_test",
+    srcs = ["rawpack_test.py"],
+    deps = [":rawpack_steps"],
+)
+
 py_binary(
     name = "raw_stack",
     srcs = ["raw_stack.py"],
@@ -62,5 +69,14 @@ py_binary(
 py_binary(
     name = "stage_manifest",
     srcs = ["stage_manifest.py"],
+    deps = ["//tools/common:hashing"],
+)
+
+py_test(
+    name = "stage_manifest_test",
+    srcs = [
+        "stage_manifest.py",
+        "stage_manifest_test.py",
+    ],
     deps = ["//tools/common:hashing"],
 )

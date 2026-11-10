@@ -32,6 +32,7 @@ runs a compiler, so the image builder runs them with the release's prebuilt tool
 """
 
 import argparse
+import hashlib
 import json
 import os
 import re
@@ -134,11 +135,26 @@ def probe(args: argparse.Namespace, generator: list[str], env: dict[str, str], w
     dylib = work / 'libvulkan_nouveau.dylib'
     shutil.copyfile(args.nvk, dylib)
     dylib.chmod(0o755)
+    libraries = [Path(p) for p in args.data]
+    if args.data_dir:
+        libraries += sorted(Path(args.data_dir).glob('*.metallib'))
+    data = library_view(libraries, work / 'data')
+    env = dict(env, PROBE_DATA_LIBS=str(data.resolve()))
     arguments = ['--probe-bucket', out, '--prebuilt', Path(args.raw).resolve(), '--nvk', dylib]
     print(generate(generator, [*arguments, '--qc', Path(args.qc).resolve()], env, f'making {out.name}').rstrip())
     for path in out.iterdir():
         if path.is_file() and path.name not in KEPT:
             path.unlink()
+
+
+def library_view(libraries: list[Path], destination: Path) -> Path:
+    destination.mkdir()
+    for source in libraries:
+        digest = hashlib.sha256(source.read_bytes()).hexdigest()
+        target = destination / (digest + '.metallib')
+        if not target.exists():
+            target.symlink_to(source.resolve())
+    return destination
 
 
 def link(args: argparse.Namespace, generator: list[str], env: dict[str, str], work: Path) -> None:
@@ -184,6 +200,8 @@ def main() -> None:
             p.add_argument('--' + name, required=True)
     steps.choices['split'].add_argument('--out', nargs='+', required=True)
     steps.choices['split'].add_argument('--ca-names')
+    steps.choices['probe'].add_argument('--data-dir')
+    steps.choices['probe'].add_argument('--data', action='append', default=[])
     steps.choices['link'].add_argument('buckets', nargs='+')
     args = parser.parse_args()
     if args.step == 'corpus':

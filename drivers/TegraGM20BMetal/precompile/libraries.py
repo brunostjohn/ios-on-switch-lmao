@@ -34,6 +34,7 @@ import sys
 from collections import Counter, defaultdict
 from collections.abc import Callable
 from pathlib import Path
+from urllib.parse import quote, unquote
 
 QC = '/System/Library/Frameworks/QuartzCore.framework/default.metallib'
 
@@ -96,7 +97,31 @@ def index(root: str, out: str, devices: list[str]) -> None:
     print(f'{out}: {len(table)} function names in {libraries} libraries')
 
 
-STAGE = re.compile(r'\| ([vfklp]) (\S+)( [^|]*?)?(?= \|)')
+STAGE = re.compile(r'\| (vl|vp|fl|fp|[vfklp]) (\S+)( [^|]*?)?(?= \|)')
+INSTALLED_APP = re.compile(
+    r'^/private/var/containers/Bundle/Application/'
+    r'[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}/([^/]+\.app/.+)$'
+)
+
+
+def library_path(library: str, available: set[str]) -> str:
+    path = unquote(library)
+    if path.startswith('/System/Cryptexes/OS/'):
+        path = path[len('/System/Cryptexes/OS') :]
+    if path.startswith('/var/'):
+        path = '/private' + path
+    if path in available:
+        return quote(path, safe='/:')
+    installed = INSTALLED_APP.fullmatch(path)
+    if installed:
+        staged = '/private/var/staged_system_apps/' + installed[1]
+        if staged in available:
+            return quote(staged, safe='/:')
+    return library
+
+
+def relocate(line: str, available: set[str]) -> str:
+    return re.sub(r'(?<= )lib=(\S+)', lambda m: 'lib=' + library_path(m[1], available), line)
 
 
 GUESSES = (
@@ -155,6 +180,7 @@ def _with_library(line: str, kind: str, stages: list[Stage], choice: str | None)
 
 def resolve(index_json: str, corpus: str, out: str) -> None:
     table = json.loads(Path(index_json).read_text())
+    available = {path for paths in table.values() for path in paths}
     qc = {n for n, paths in table.items() if QC in paths}
     lines, rows = [], defaultdict(Counter)
 
@@ -165,11 +191,12 @@ def resolve(index_json: str, corpus: str, out: str) -> None:
         """
         return [None] if name in qc else table.get(name, [])
 
-    for line in Path(corpus).read_text().splitlines():
-        kind = line[:1]
-        if kind not in 'SRC':
-            lines.append(line)
+    for original in Path(corpus).read_text().splitlines():
+        kind = original[:1]
+        if kind not in 'SRCD':
+            lines.append(original)
             continue
+        line = relocate(original, available)
         stages = _stages(line, kind, candidates)
         how, choices = _choices(stages)
         for choice in choices:

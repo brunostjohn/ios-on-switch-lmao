@@ -1,9 +1,14 @@
 """harvest.py finds a system process's m2v cache by its container's identifier, whatever UUID the install gave it."""
 
+import hashlib
+import json
 import plistlib
+import struct
+import tarfile
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from drivers.TegraGM20BMetal.precompile import harvest
 
@@ -33,6 +38,71 @@ class Caches(unittest.TestCase):
             finally:
                 for root in (backboardd, other):
                     (root / 'Library').chmod(0o755)
+
+
+class Replies(unittest.TestCase):
+    def test_harvest_keeps_provenance_for_already_retained_reply_and_pack(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source, store = root / 'cache/msl', root / 'staged/msl'
+            source.mkdir(parents=True)
+            request, uuid = b'kernel source\0', bytes(range(16))
+            key = hashlib.sha256(uuid + struct.pack('<I', 13) + request).hexdigest()
+            output = b'MTLB fixture'
+            reply = b'NSC1' + struct.pack('<IQ', 0, len(output)) + hashlib.sha256(output).digest() + output
+            (source / (key + '.reply')).write_bytes(reply)
+            self.assertEqual(harvest.replies(source.parent, store), 1)
+            (source / (key + '.request')).write_bytes(request)
+            provenance = source / 'provenance/24B119' / (key + '.json')
+            provenance.parent.mkdir(parents=True)
+            provenance.write_text(
+                json.dumps(
+                    {
+                        'schema': 1,
+                        'reply': key + '.reply',
+                        'compilerUUID': uuid.hex(),
+                        'requestType': 13,
+                        'requestBytes': len(request),
+                        'requestSHA256': hashlib.sha256(request).hexdigest(),
+                        'replySHA256': hashlib.sha256(reply).hexdigest(),
+                        'metallibSHA256': hashlib.sha256(output).hexdigest(),
+                        'osBuild': '24B119',
+                        'targetBuild': '24B119',
+                    }
+                )
+            )
+            self.assertEqual(harvest.replies(source.parent, store), 0)
+            self.assertEqual((store / provenance.relative_to(source)).read_bytes(), provenance.read_bytes())
+            self.assertEqual((store / (key + '.request')).read_bytes(), request)
+            corpus = root / 'corpus.log'
+            corpus.write_text('')
+            with (
+                mock.patch.object(harvest, 'DEVICE', root / 'packed'),
+                mock.patch.object(harvest, 'embedded_libraries', return_value=set()),
+            ):
+                harvest.pack(store.parent, corpus)
+            archive = next((root / 'packed').glob('*.tar'))
+            with tarfile.open(archive) as packed:
+                self.assertEqual(
+                    set(packed.getnames()),
+                    {
+                        'msl/' + key + '.reply',
+                        'msl/' + key + '.request',
+                        'msl/provenance/24B119/' + key + '.json',
+                    },
+                )
+                self.assertEqual(packed.extractfile('msl/' + key + '.request').read(), request)
+
+    def test_harvest_refuses_conflicting_valid_reply(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source, target = root / 'cache/msl', root / 'target'
+            for folder, output in [(source, b'first'), (target, b'second')]:
+                folder.mkdir(parents=True)
+                data = b'NSC1' + struct.pack('<IQ', 0, len(output)) + hashlib.sha256(output).digest() + output
+                (folder / ('a' * 64 + '.reply')).write_bytes(data)
+            with self.assertRaisesRegex(ValueError, 'conflicting'):
+                harvest.replies(source.parent, target)
 
 
 if __name__ == '__main__':

@@ -38,6 +38,7 @@ from collections import Counter
 from pathlib import Path
 
 from tools.gpu.nvk_twin import lc_uuid
+from tools.gpu.shaders import replies as compiler_replies
 
 CONTENT = '529a20fd270ababa3e5ec2fe4d1674d93739ba5bcd61861674b4fb6db349af9f'
 RECORD_MAGIC = b'M2VPPLC\0'
@@ -73,30 +74,16 @@ def record_ok(data: bytes) -> bool:
     )
 
 
-def reply_ok(data: bytes) -> bool:
-    """Check a compile reply's envelope (NBCompileReplyHeader): magic, the lengths ending the file, the digest."""
-    if len(data) < REPLY_HEADER or data[:4] != REPLY_MAGIC:
-        return False
-    warnings, metallib = struct.unpack_from('<IQ', data, 4)
-    return (
-        metallib > 0
-        and REPLY_HEADER + warnings + metallib == len(data)
-        and hashlib.sha256(data[REPLY_HEADER:]).digest() == data[16:REPLY_HEADER]
-    )
+reply_ok = compiler_replies.reply_ok
 
 
-def copy_replies(store: Path | None, out: Path) -> tuple[dict[str, int], list[str]]:
-    """Copy the store's compile replies whose name and envelope hold into <out>; the counts and each kept one's line."""
-    counts, kept = dict.fromkeys(('kept', 'refused'), 0), []
-    for path in sorted(store.glob('*.reply')) if store and store.is_dir() else []:
-        data = path.read_bytes()
-        if not REPLY_NAME.match(path.name) or not reply_ok(data):
-            counts['refused'] += 1
-            continue
-        out.mkdir(parents=True, exist_ok=True)
-        (out / path.name).write_bytes(data)
-        kept.append(f'msl/{path.name}\0{hashlib.sha256(data).hexdigest()}\n')
-        counts['kept'] += 1
+def copy_replies(store: Path | None, out: Path, report: dict | None = None) -> tuple[dict[str, int], list[str]]:
+    report = report if report is not None else compiler_replies.inventory(store)
+    if store:
+        compiler_replies.copy_inventory(store, out, report)
+        compiler_replies.verify(out, report)
+    counts = {'kept': report['replies'], 'refused': len(report['refused'])}
+    kept = [f'msl/{relative}\0{digest}\n' for relative, digest in sorted(report['files'].items())]
     return counts, kept
 
 
@@ -212,7 +199,10 @@ def join(args: argparse.Namespace) -> None:
     digest = hashlib.sha256()
     for relative in sorted(entries):
         digest.update(f'{relative}\0{entries[relative][0]}\n'.encode())
-    replies, kept = copy_replies(args.replies, out / 'msl')
+    reply_inventory = compiler_replies.inventory(
+        args.replies, getattr(args, 'reply_input', None), getattr(args, 'strict_replies', False)
+    )
+    replies, kept = copy_replies(args.replies, out / 'msl', reply_inventory)
     for reply in kept:
         digest.update(reply.encode())
     line = f'generated m2v-build {build[:8]} nvk {identity[12:28].hex()[:8]} content {digest.hexdigest()[:8]}'
@@ -226,6 +216,7 @@ def join(args: argparse.Namespace) -> None:
                 'crawl': crawled(json.loads(args.inventory.read_text())),
                 'device_records': device,
                 'compile_replies': replies,
+                'compiler_reply_inventory': reply_inventory,
                 'disagreeing_names': disagree,
                 'crashed': [line for r in reports for line in r.get('crashed', [])],
                 'refused': refusals([line for r in reports for line in r.get('refused', [])]),
@@ -277,11 +268,22 @@ def tree(args: argparse.Namespace) -> None:
     pairs += [(pack, out / SEED / 'packs' / f'{number:03d}') for number, pack in enumerate(args.pack)]
     if args.raw:
         pairs += [(p, out / RAW / p.relative_to(args.raw)) for p in sorted(args.raw.rglob('*')) if p.is_file()]
+    if args.native:
+        for path in sorted(args.native.rglob('*')):
+            if path.is_file():
+                relative = path.relative_to(args.native)
+                target = out / SEED if relative.parts[0] == 'native-analysis' else out / RAW / 'native'
+                pairs.append((path, target / relative))
     for source, target in pairs:
         target.parent.mkdir(parents=True, exist_ok=True)
         clone(source, target)
     for path in [out, *(p for p in out.rglob('*') if p.is_dir())]:
         path.chmod(0o755)
+    manifest_path = out / SEED / 'MANIFEST.json'
+    if manifest_path.is_file():
+        reply_inventory = json.loads(manifest_path.read_text()).get('compiler_reply_inventory')
+        if reply_inventory is not None:
+            compiler_replies.verify(out / SEED / 'msl', reply_inventory)
     sizes = [target.stat().st_size for _, target in pairs]
     args.size.write_text(
         json.dumps({'bytes': sum(sizes), 'files': len(sizes), 'blocks4k': sum((s + 4095) // 4096 for s in sizes)})
@@ -298,6 +300,8 @@ def main() -> None:
     j.add_argument('--report', type=Path, action='append', required=True)
     j.add_argument('--records', type=Path)
     j.add_argument('--replies', type=Path)
+    j.add_argument('--reply-input', type=Path, action='append')
+    j.add_argument('--strict-replies', action='store_true')
     for name in ('plan', 'inventory', 'out'):
         j.add_argument('--' + name, type=Path, required=True)
     j.add_argument('--ipsw', required=True)
@@ -309,6 +313,7 @@ def main() -> None:
     t.add_argument('--seed', type=Path, required=True)
     t.add_argument('--pack', type=Path, action='append', required=True)
     t.add_argument('--raw', type=Path)
+    t.add_argument('--native', type=Path)
     t.add_argument('--out', type=Path, required=True)
     t.add_argument('--size', type=Path, required=True)
     args = parser.parse_args()

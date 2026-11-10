@@ -10,7 +10,7 @@ compilation manifest, and the closure over the blend CA puts in the pipeline and
 fragment (CA_TIERS).
 
   1. directpack.mm makes every state's record: its programs, the 3D registers raw_emit makes for it, its push words and
-     its set-0 layout; a state with a fetch the pixel interlock would order gets its barrier form; and every compute
+     its set-0 layout; qualified ordered framebuffer-fetch records retain their barrier twins; and every compute
      dispatch shape's kernel (runtime/raw_direct_compute.h);
   2. the probe (pack/probe.mm) draws one state, the warm-up, on a mock GM20B whose submissions nvdec executes
      (pack/nvdec.cpp, Mesa's Fermi MME simulator in pack/mesa): NVK's context init and the registers every record is
@@ -90,7 +90,7 @@ def option(name: str, required: bool = True) -> str | None:
     return None
 
 
-BUILT = ('probe', 'directpack', 'libmock_iokit.dylib', 'own.metallib')
+BUILT = ('probe', 'directpack', 'native-seed', 'libmock_iokit.dylib', 'own.metallib')
 # Another framework's states (their lines keep lib=, tools/gpu/rawpack.py): the probe loads that library from the
 # crawl's root
 FRAMEWORK = re.compile(r' lib=/System/Library/(?:Private)?Frameworks/\w+\.framework/default\.metallib ')
@@ -260,6 +260,11 @@ def build(work: Path, bridge: Path, metal_abi: Path) -> None:
         [HERE / 'directpack.mm', RAW / 'runtime/RawDirect.mm'],
         tuple(RAW / f'runtime/{name}.cpp' for name in DIRECT_RUNTIME),
     )
+    tool(
+        'native-seed',
+        [HERE / 'native_seed.mm', RAW / 'runtime/RawDirect.mm', RAW / 'runtime/RawRenderKey.mm'],
+        tuple(RAW / f'runtime/{name}.cpp' for name in (*DIRECT_RUNTIME, 'raw_cache', 'raw_kernel_cache')),
+    )
     own = ('ycbcr', 'xr', 'resolve', 'mip')
     exact = {'resolve': ['-fno-fast-math']}  # its sums in sample order and its NaN tests kept (resolve.metal)
     for name in own:
@@ -354,7 +359,7 @@ def bucket(tools: Path, d: Path, nvk: Path, qc: Path, env: dict[str, str]) -> st
     registers every record is laid over (directlink.py).
     """
     root = library_root(qc)
-    env = dict(env, PROBE_LIB_ROOT=root, PROBE_DATA_LIBS=str(Path(root).parent / 'data'))
+    env = dict(env, PROBE_LIB_ROOT=root, PROBE_DATA_LIBS=env.get('PROBE_DATA_LIBS', str(Path(root).parent / 'data')))
     corpus = d / 'corpus.log'
     cache = d / 'cache'
     said = []

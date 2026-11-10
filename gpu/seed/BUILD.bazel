@@ -1,4 +1,4 @@
-load("@bazel_skylib//rules:common_settings.bzl", "string_flag")
+load("@bazel_skylib//rules:common_settings.bzl", "bool_flag", "string_flag")
 load("//bazel/lint:defs.bzl", "lint_files")
 load(":defs.bzl", "metal_seed", "seed_raw_pack", "seed_tree", "shader_crawl")
 load(":tools.bzl", "seed_tools", "tools_archive")
@@ -51,6 +51,8 @@ seed_tools(
     name = "local_tools",
     hdrs = [
         METAL + ":frontend_headers",
+        GM20B_METAL + ":precompile/PrecompileCompute.h",
+        GM20B_METAL + ":precompile/PrecompileInputs.h",
         "//kits/SwitchRefusal:SwitchRefusal.h",
         "//kits/SwitchRefusal:SwitchRefusalSite.h",
     ],
@@ -88,6 +90,14 @@ tools_archive(
 
 shader_crawl(
     name = "crawl",
+    applications = select({
+        "//ipsw:ios17": ["//hw_test_app:SwitchHWTest17"],
+        "//ipsw:ios27": [
+            "//hw_test_app:SwitchHWTest27",
+            "//hw_test_app:SwitchHWTest27e",
+        ],
+    }),
+    embedded = [METAL + ":TwoPlaneStandIn.h"],
     inventory = "@ipsw//:crawl_inventory",
     qc = "@ipsw//:crawl_qc",
     tags = ["manual"],
@@ -101,7 +111,6 @@ metal_seed(
     crawl = ":crawl",
     depth = ":depth",
     device_libraries = "@gpu_device_data//:libraries",
-    embedded = [METAL + ":TwoPlaneStandIn.h"],
     records = "@gpu_device_data//:records",
     replies = "@gpu_device_data//:replies",
     tags = ["manual"],
@@ -115,6 +124,7 @@ seed_raw_pack(
     ca_names = [GM20B_METAL + ":ca_name_lists"],
     corpus = GM20B_METAL + ":precompile/corpus.log",
     crawl = ":crawl",
+    device_libraries = "@gpu_device_data//:libraries",
     generator = GM20B_METAL + ":raw/pack/rawpack.py",
     tags = ["manual"],
     tools = ":tools",

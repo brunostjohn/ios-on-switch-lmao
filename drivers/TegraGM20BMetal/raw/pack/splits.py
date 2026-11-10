@@ -28,7 +28,10 @@ def of_record(record: bytes, fs: str, prologue: str) -> dict:
         'shader_data_cbuf': shader_data_cbuf,
         'ubo_cbufs': list(ubo[:ubos]),
         'threshold': fields[0],
-        'qmd': list(fields[10:]),
+        'batch_version': fields[10],
+        'batch_threads': fields[11],
+        'qmd': list(fields[12:76]),
+        'cost': dict(zip(packfile.SPLIT_COST_FIELDS, fields[76:], strict=True)),
     }
 
 

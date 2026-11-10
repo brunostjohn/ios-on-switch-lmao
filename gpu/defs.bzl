@@ -144,7 +144,7 @@ def _metal_plugin_impl(ctx):
     )
     return [
         DefaultInfo(files = depset([out])),
-        OutputGroupInfo(debug = depset([dsym])),
+        OutputGroupInfo(debug = depset([dsym]), objects = depset(objects)),
     ]
 
 metal_plugin = rule(
@@ -278,7 +278,7 @@ def _gpu_stage_impl(ctx):
     manifest = ctx.actions.declare_file(ctx.attr.name + ".stage")
     args = ctx.actions.args()
     args.add("--self", _rlocation(ctx, manifest))
-    for flag, tree in (("--base", base), ("--seed", seed.meta), ("--raw", ctx.file.raw)):
+    for flag, tree in (("--base", base), ("--seed", seed.meta), ("--raw", ctx.file.raw), ("--native", seed.native)):
         args.add(flag, tree.path)
         args.add(flag + "-rlocation", _rlocation(ctx, tree))
     for pack in seed.packs:
@@ -288,12 +288,12 @@ def _gpu_stage_impl(ctx):
     ctx.actions.run(
         executable = ctx.executable._tool,
         arguments = [args],
-        inputs = [base, seed.meta, ctx.file.raw] + seed.packs,
+        inputs = [base, seed.meta, seed.native, ctx.file.raw] + seed.packs,
         outputs = [manifest],
         mnemonic = "GpuStageManifest",
         progress_message = "Listing the GPU bundle, the shader seed and the raw pack for the Data volume",
     )
-    files = [manifest, base, seed.meta, ctx.file.raw] + seed.packs
+    files = [manifest, base, seed.meta, seed.native, ctx.file.raw] + seed.packs
     return [DefaultInfo(files = depset([manifest]), runfiles = ctx.runfiles(files = files))]
 
 gpu_stage = rule(

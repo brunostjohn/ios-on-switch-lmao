@@ -58,6 +58,8 @@ from collections.abc import Callable, Iterator, Sequence
 from contextlib import contextmanager
 from pathlib import Path
 
+from tools.gpu.shaders import replies as compiler_replies
+
 DESCRIPTOR = re.compile(r'(samples|topo|ds|opt|c\d|a\d+)=')
 COMPUTE = re.compile(r'(form|opt|max|tgm|icb|depth|abf|mut)=')
 # The checkout: bazel run's (also what //deploy:pull_logs runs this in), else the one this file is in.
@@ -279,30 +281,14 @@ def collect(m2v: Path, store: Path) -> None:
             shutil.copyfile(path, target)
 
 
-def reply_ok(data: bytes) -> bool:
-    """Return whether `data` is a whole compile reply (the frontend's NBCompileReplyHeader, then its payload)."""
-    if len(data) < REPLY_HEADER or data[:4] != REPLY_MAGIC:
-        return False
-    warnings, metallib = int.from_bytes(data[4:8], 'little'), int.from_bytes(data[8:16], 'little')
-    return (
-        metallib > 0
-        and REPLY_HEADER + warnings + metallib == len(data)
-        and hashlib.sha256(data[REPLY_HEADER:]).digest() == data[16:REPLY_HEADER]
-    )
+reply_ok = compiler_replies.reply_ok
 
 
 def replies(m2v: Path, store: Path) -> int:
-    """Copy a cache's compile replies whose envelope checks out into `store`; how many were new."""
-    copied = 0
-    for path in sorted((m2v / 'msl').glob('*.reply')) if (m2v / 'msl').is_dir() else []:
-        target = store / path.name
-        if target.is_file() or not REPLY_NAME.match(path.name):
-            continue
-        data = path.read_bytes()
-        if reply_ok(data):
-            store.mkdir(parents=True, exist_ok=True)
-            target.write_bytes(data)
-            copied += 1
+    source = m2v / 'msl'
+    report = compiler_replies.inventory(source, strict=True)
+    copied = compiler_replies.copy_inventory(source, store, report)
+    compiler_replies.inventory(store, strict=True)
     return copied
 
 
@@ -376,9 +362,8 @@ def pack(store: Path, corpus: Path) -> None:
         for p in (store / 'data').glob('*.metallib')
         if p.stem in named and p.stem not in own and hashlib.sha256(p.read_bytes()).hexdigest() == p.stem
     )
-    members += sorted(
-        p for p in (store / 'msl').glob('*.reply') if REPLY_NAME.match(p.name) and reply_ok(p.read_bytes())
-    )
+    reply_inventory = compiler_replies.inventory(store / 'msl', strict=True)
+    members += [store / 'msl' / name for name in sorted(reply_inventory['files'])]
     if not members:
         sys.exit(f'{store}: no driver records or libraries staged (harvest.py --volume or --records-from first)')
     data = io.BytesIO()
@@ -394,7 +379,7 @@ def pack(store: Path, corpus: Path) -> None:
     out.write_bytes(data.getvalue())
     record_count = sum(1 for p in members if p.parts[-3] == 'records')
     library_count = sum(1 for p in members if p.parts[-2] == 'data')
-    reply_count = sum(1 for p in members if p.parts[-2] == 'msl')
+    reply_count = reply_inventory['replies']
     print(
         f'{out}: {record_count} driver records, {library_count} libraries '
         f'(of {len(named)} made from bytes the corpus names), {reply_count} compile replies'

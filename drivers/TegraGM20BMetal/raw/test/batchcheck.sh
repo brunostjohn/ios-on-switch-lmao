@@ -1,0 +1,40 @@
+#!/bin/bash
+set -euo pipefail
+if [[ $# -ne 1 ]]; then
+    echo "usage: $0 <output>" >&2
+    exit 2
+fi
+mkdir -p "$1"
+OUT=$(cd "$1" && pwd)
+HERE=$(cd "$(dirname "$0")" && pwd)
+RAW=$(cd "$HERE/.." && pwd)
+TREE=$(cd "$HERE/../../../.." && pwd)
+FLAGS=(-O1 -g -Wall -Wextra -std=c++17 -DSWITCH_RAW_HARNESS_MARKS -fsanitize=address,undefined -fno-sanitize-recover=all)
+for source in mme_fermi mme_fermi_sim; do
+    xcrun clang -O1 -std=c11 -w -I "$RAW/pack/mesa" -c "$RAW/pack/mesa/$source.c" -o "$OUT/$source.o"
+done
+xcrun clang -O1 -g -Wall -Wextra -fsanitize=address,undefined -I "$TREE/drivers/TegraGM20B" \
+    -c "$RAW/pack/mock_iokit.c" -o "$OUT/mock_iokit.o"
+for source in cap nvdec nvdec_compute; do
+    xcrun clang++ "${FLAGS[@]}" -DNVDEC_TWOD -I "$TREE/drivers/TegraGM20B" \
+        -c "$RAW/pack/$source.cpp" -o "$OUT/$source.o"
+done
+xcrun clang++ "${FLAGS[@]}" -c "$RAW/fx/test/twod_sim.cpp" -o "$OUT/twod_sim.o"
+xcrun clang++ -dynamiclib -fsanitize=address,undefined "$OUT/mock_iokit.o" "$OUT/cap.o" "$OUT/nvdec.o" \
+    "$OUT/nvdec_compute.o" "$OUT/twod_sim.o" "$OUT/mme_fermi.o" "$OUT/mme_fermi_sim.o" \
+    -framework IOKit -framework CoreFoundation -install_name @rpath/libmock_iokit.dylib -o "$OUT/libmock_iokit.dylib"
+SOURCES=()
+for source in gpu transfer split kernel shared_events alias arena pack ycbcr zeta comp completed compute \
+              record_parts direct direct_compute emit cache kernel_cache compiler metallib; do
+    SOURCES+=("$RAW/runtime/raw_$source.cpp")
+done
+xcrun clang++ "${FLAGS[@]}" -I "$TREE/drivers/TegraGM20B" -I "$TREE/drivers/NativeMetal" \
+    "$HERE/batchcheck.cpp" "${SOURCES[@]}" "$RAW/fx/fx_mip.cpp" "$RAW/fx/fx_image.cpp" \
+    -L "$OUT" -lmock_iokit "-Wl,-rpath,$OUT" -Wl,-U,_switch_nmb_blend_color_words -lobjc -framework Foundation -framework Metal \
+    -framework IOSurface -framework IOKit -framework CoreFoundation -o "$OUT/batchcheck"
+for mode in legacy native; do
+    if [[ $mode == native ]]; then export MOCK_NATIVE_JOBS=1; else unset MOCK_NATIVE_JOBS; fi
+    for delay in 0 100; do
+        MOCK_GPU_US=$delay "$OUT/batchcheck" > "$OUT/$mode-$delay.log" 2>&1
+    done
+done

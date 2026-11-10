@@ -36,6 +36,33 @@ class BucketTest(unittest.TestCase):
     def test_a_repeated_line_is_made_once(self):
         self.assertEqual(_buckets(CORPUS), _buckets([*CORPUS, CORPUS[0], CORPUS[-1]]))
 
+    def test_linked_function_variants_are_not_deduplicated(self):
+        lines = [
+            _render('v', 'f') + f'{tag} helper{i} lib={LIB} | ' for tag in ('vl', 'vp', 'fl', 'fp') for i in range(2)
+        ]
+        buckets = _buckets(lines)
+        self.assertEqual(sorted(line for bucket in buckets for line in bucket if line != plan.DERIVED), sorted(lines))
+        self.assertEqual(len({plan._program(line) for line in lines}), len(lines))
+
+    def test_specialized_entry_names_are_part_of_the_key(self):
+        lines = [_render('v', 'f as=' + name) for name in ('first', 'second')]
+        self.assertEqual(sum(len(b) - 1 for b in _buckets(lines)), 2)
+        self.assertNotEqual(plan._program(lines[0]), plan._program(lines[1]))
+
+    def test_specialization_records_keep_their_entry_name(self):
+        lines = [f'S ok=1 lib={LIB} name=f k=#0:53:01 as={name} | ' for name in ('first', 'second')]
+        self.assertEqual(sum(len(b) - 1 for b in _buckets(lines)), 2)
+        self.assertNotEqual(plan._program(lines[0]), plan._program(lines[1]))
+
+    def test_compute_linked_functions_are_part_of_the_key(self):
+        lines = [
+            f'C ok=1 form=d opt=0 | k kernel lib={LIB} | {tag} helper{i} lib={LIB} | '
+            for tag in ('l', 'p')
+            for i in range(2)
+        ]
+        self.assertEqual(sum(len(b) - 1 for b in _buckets(lines)), 4)
+        self.assertEqual(len({plan._program(line) for line in lines}), 4)
+
 
 if __name__ == '__main__':
     unittest.main()

@@ -35,6 +35,7 @@
 #include <fcntl.h>
 #include <pthread.h>
 #include <stdatomic.h>
+#include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -190,6 +191,7 @@ enum {
 };
 static struct job queue[16][kQueue]; /* per channel, in kick order: [head, tail) */
 static uint32_t qhead[16], qtail[16], running;
+static bool paused[16];
 static struct run runs[kJobs];
 static uint32_t nruns;
 static unsigned long order_calls, order_queued, waits_total, waits_submit;
@@ -226,6 +228,25 @@ static int async_gpu(void)
     if (gpu_us < 0)
         gpu_us = getenv("MOCK_GPU_US") ? atoi(getenv("MOCK_GPU_US")) : 0;
     return gpu_us > 0;
+}
+
+bool mock_iokit_seed_sequence(uint32_t channel, uint32_t sequence)
+{
+    pthread_mutex_lock(&gpu_lock);
+    const bool ready = channel < 16 && live[channel] && !dead[channel] &&
+                       qhead[channel] == qtail[channel] && passed(channel, submitted[channel]);
+    if (ready)
+        submitted[channel] = fence[channel * 4] = sequence;
+    pthread_mutex_unlock(&gpu_lock);
+    return ready;
+}
+
+void mock_iokit_pause(uint32_t channel, bool pause)
+{
+    pthread_mutex_lock(&gpu_lock);
+    paused[channel] = pause;
+    pthread_cond_broadcast(&gpu_cond);
+    pthread_mutex_unlock(&gpu_lock);
 }
 
 /* gpu_lock held: `waiter`'s next submission waits for `source` to pass `seqno` (one per source, the later seqno) */
@@ -271,7 +292,7 @@ static void surface_acquires(uint32_t ch, uint32_t seqno)
 /* gpu_lock held: the head of channel ch's queue may run (its acquires passed; MOCK_IGNORE_ACQUIRES: always) */
 static int head_ready(uint32_t ch, int ignore_acquires)
 {
-    if (qhead[ch] == qtail[ch])
+    if (qhead[ch] == qtail[ch] || paused[ch])
         return 0;
     const struct job *j = &queue[ch][qhead[ch] % kQueue];
     for (uint32_t k = 0; k < j->nacq && !ignore_acquires; k++)
@@ -292,7 +313,7 @@ static void *gpu_thread(void *arg)
     pthread_mutex_lock(&gpu_lock);
     for (;;) {
         if (!head_ready(ch, ignore_acquires)) {
-            if (qhead[ch] != qtail[ch] && !running) { /* nothing runs that could move a fence: none ever will */
+            if (qhead[ch] != qtail[ch] && !running && !paused[ch]) { /* nothing runs that could move a fence: none ever will */
                 int any = 0;
                 for (uint32_t c = 1; c < 16 && !any; c++)
                     any = head_ready(c, ignore_acquires);
@@ -454,6 +475,8 @@ static uint32_t surface_layout(const struct bo *bo, const struct TegraGM20BAbiSu
     return layout;
 }
 
+#include "mock_submission.h"
+
 static kern_return_t mock_call(mach_port_t c, uint32_t sel, const void *in, size_t insz, void *out, size_t *outsz)
 {
     static atomic_int logged;
@@ -498,7 +521,9 @@ static kern_return_t mock_call(mach_port_t c, uint32_t sel, const void *in, size
                                                (getenv("MOCK_NO_KILL_RECORD") ? 0 : TegraGM20BInfoKillRecord) |
                                                (getenv("MOCK_TILED_CACHE") ? TegraGM20BInfoTiledCache : 0) |
                                                (getenv("MOCK_COMPRESSION") ? TegraGM20BInfoCompression : 0) |
-                                               (getenv("MOCK_NO_PRIORITY") ? 0 : TegraGM20BInfoPriority),
+                                               (getenv("MOCK_NO_PRIORITY") ? 0 : TegraGM20BInfoPriority) |
+                                               (getenv("MOCK_NATIVE_JOBS") ? TegraGM20BInfoSubmitAddress |
+                                                TegraGM20BInfoResourceReady : 0),
                                       .chipset = 0x12e,
                                       .gpc_count = 1,
                                       .tpc_count = 2,
@@ -641,6 +666,8 @@ static kern_return_t mock_call(mach_port_t c, uint32_t sel, const void *in, size
         memcpy(out, &r, sizeof(r));
         return KERN_SUCCESS;
     }
+    case TegraGM20BMethodSubmitAddress:
+        return mock_submit(c, in, insz, out, outsz);
     case TegraGM20BMethodExec: {
         const struct TegraGM20BAbiExec *e = in;
         uint32_t ch = e->channel & 15;
@@ -677,7 +704,7 @@ static kern_return_t mock_call(mach_port_t c, uint32_t sel, const void *in, size
             memcpy(out, &r, sizeof(r));
             return KERN_SUCCESS;
         }
-        if (async_gpu()) {
+        if (async_gpu() || paused[ch]) {
             static pthread_t threads[16];
             if (!threads[ch])
                 pthread_create(&threads[ch], NULL, gpu_thread, (void *)(uintptr_t)ch);
