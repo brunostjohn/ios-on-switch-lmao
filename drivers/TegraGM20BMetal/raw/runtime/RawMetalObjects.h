@@ -15,6 +15,7 @@
 #include "raw_gpu.h"
 #include "RawMetalPredicates.h"
 #include "RawResidency.h"
+#include "raw_handler_order.h"
 #include "raw_submit_queue.h"
 #include "raw_event_timeline.h"
 #include "raw_variant.h"
@@ -180,6 +181,8 @@ typedef NS_ENUM(uint8_t, RMTextureKind) {
 @interface RMQueue : RMObject {
 @public
     dispatch_queue_t _completionQueue;
+    dispatch_queue_t _handlers;  // its command buffers' scheduled handlers, in its order
+    std::atomic<void *> _last;   // the command buffer enqueued last, retained until its completed handlers ran
     uint32_t _gpuPriority, _backgroundGpuPriority;  // what it asked for (RawMetalQueuePriority.mm)
     raw::ResidencySets _residency;
 }
@@ -272,7 +275,9 @@ struct RMSharedEventWait {
     RMReason _reason;
     NSString *_why;
     NSMutableArray *_scheduledHandlers, *_completedHandlers;
-    dispatch_queue_t _scheduledQueue;
+    bool _handlersQueued;      // scheduled handlers went to its queue's _handlers: its completed ones go behind them
+    RMCommandBuffer *_before;  // enqueued before it on its queue, until its own completed handlers were handed on
+    raw::HandlerTurn _turn;
     MTLCommandBufferStatus _status;
     NSError *_error;
     RMQueue *_queue;

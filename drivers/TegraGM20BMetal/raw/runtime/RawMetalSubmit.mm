@@ -263,6 +263,9 @@ bool submitRange(RMCommandBuffer *cb)
             ++r.m2vUnscheduled;
         }
         [m addScheduledHandler:^(id<MTLCommandBuffer>) {
+            // before the raw command buffer behind it may be submitted (m2vClear), so its scheduled handlers go first
+            if (last)
+                scheduled(cb);
             {
                 std::lock_guard<std::mutex> l(gRM->m2vLock);
                 if (!counted)
@@ -270,8 +273,6 @@ bool submitRange(RMCommandBuffer *cb)
                 counted = true;
             }
             wakeSubmit(nullptr, RMCompatibilityProgress);
-            if (last)
-                scheduled(cb);
         }];
         [m addCompletedHandler:^(id<MTLCommandBuffer> done) {
             {
