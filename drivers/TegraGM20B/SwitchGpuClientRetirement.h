@@ -400,6 +400,7 @@ void AGXDeviceUserClient::drainResources()
 	while (nbinds_)
 		unbindOverlaps(binds_[0].va, binds_[0].range, nullptr);
 	surfaces_.clear();
+	boIndex_.clear();
 	while (bos_) {
 		auto *bo = bos_;
 		bos_ = bo->next;
@@ -420,6 +421,7 @@ IOReturn AGXDeviceUserClient::boFree(const TegraGM20BAbiBoFree *in)
 		return kIOReturnBadArgument;
 	Bo *bo = *p;
 	*p = bo->next;
+	boIndex_.erase(bo->handle);
 	surfaces_.remove(bo->handle);
 	for (uint32_t i = 0; i < nbinds_;) {
 		if (binds_[i].bo == bo) {

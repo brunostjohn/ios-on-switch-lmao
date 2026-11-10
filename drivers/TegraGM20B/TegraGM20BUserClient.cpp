@@ -33,6 +33,7 @@
 #include "SwitchGpuPin.h"
 #include "SwitchGpuAllocatedMemory.h"
 #include "SwitchGpuBindings.h"
+#include "SwitchGpuBoIndex.h"
 #include "SwitchGpuLegacyUses.h"
 #include "SwitchGpuSubmitGate.h"
 #include "SwitchGpuNativeSurface.h"
@@ -723,6 +724,21 @@ IOReturn ioreturn(int err)
 		return kIOReturnError;
 	}
 }
+
+struct KernelMemory {
+	template <typename T>
+	static T *allocate(uint32_t count)
+	{
+		return IONew(T, count);
+	}
+
+	template <typename T>
+	static void release(T *items, uint32_t count)
+	{
+		if (items)
+			IODelete(items, T, count);
+	}
+};
 }  // namespace
 
 extern "C" void switch_gpu_cached_retire(IOMemoryDescriptor *memory, uint64_t *pages,
@@ -914,6 +930,7 @@ class AGXDeviceUserClient : public IOUserClient
     tgm_chan *chans_[kMaxChannels] = {};
     uint32_t channelLevels_[kMaxChannels] = {};
     Bo *bos_ = nullptr, *zombies_ = nullptr, *readyBos_ = nullptr;
+    SwitchGpuBoIndex<Bo, KernelMemory> boIndex_;
     RetiredBinding *retired_ = nullptr, **retiredTail_ = &retired_, *unmapping_ = nullptr;
     // a retired binding's PTEs go under it (retireBatch, takeRetiredOverlaps)
     IOLock *unmapLock_ = nullptr;
@@ -1107,6 +1124,7 @@ void AGXDeviceUserClient::free()
 		freeJob(job_);
 		for (auto &job : channelJobs_)
 			freeJob(job);
+		boIndex_.destroy();
 		for (auto &submitLock : submitLocks_)
 			if (submitLock)
 				IOLockFree(submitLock);
@@ -1138,11 +1156,7 @@ void AGXDeviceUserClient::free()
 
 AGXDeviceUserClient::Bo *AGXDeviceUserClient::findBo(uint64_t handle)
 {
-	for (Bo *bo = bos_; bo; bo = bo->next) {
-		if (bo->handle == handle)
-			return bo;
-	}
-	return nullptr;
+	return boIndex_.find(handle);
 }
 
 AGXDeviceUserClient::Bo *AGXDeviceUserClient::findAddress(uint64_t address, uint64_t bytes)
@@ -1288,6 +1302,8 @@ IOReturn AGXDeviceUserClient::boAlloc(const TegraGM20BAbiBoAlloc *in,
 	    (compressible &&
 	     (in->flags != TegraGM20BBoCompressible || (in->bytes & (kChunkBytes - 1)))))
 		return kIOReturnBadArgument;
+	if (!boIndex_.reserve())
+		return kIOReturnNoMemory;
 	if (__atomic_load_n(&gPoolOrphans, __ATOMIC_RELAXED))
 		scheduleOrphanRelease();  // not here: releasing a view can wait for another connection (releaseOrphans)
 	const uint64_t start = statsNowNs();
@@ -1508,6 +1524,7 @@ IOReturn AGXDeviceUserClient::boAlloc(const TegraGM20BAbiBoAlloc *in,
 	bo->token = next_token_++;
 	bo->next = bos_;
 	bos_ = bo;
+	boIndex_.insert(bo->handle, bo);
 	out->handle = bo->handle;
 	out->map_token = bo->token;
 	out->reserved = 0;
@@ -1519,7 +1536,7 @@ IOReturn AGXDeviceUserClient::boImport(const TegraGM20BAbiBoImport *in,
 {
 	if (!in->bytes || ((in->address | in->bytes) & 0xfff) || in->bytes > kMaxBoBytes)
 		return kIOReturnBadArgument;
-	if (!surfaces_.reserve())
+	if (!surfaces_.reserve() || !boIndex_.reserve())
 		return kIOReturnNoMemory;
 	const uint64_t start = statsNowNs();
 	uint64_t phase[TGM_PHASES] = {};
@@ -1650,6 +1667,7 @@ IOReturn AGXDeviceUserClient::boImport(const TegraGM20BAbiBoImport *in,
 	bo->handle = next_handle_++;
 	bo->next = bos_;
 	bos_ = bo;
+	boIndex_.insert(bo->handle, bo);
 	if (bo->coh)
 		surfaces_.add(bo->handle, bo->coh, !bo->readOnly);
 	out->handle = bo->handle;

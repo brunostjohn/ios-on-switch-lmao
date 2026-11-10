@@ -1140,6 +1140,20 @@ TEST(GM20BJobFencesSource, OneJobOwnsItsUsesUntilItsLastFence)
 		    Not(HasSubstr("TegraGM20BInfoPushFences")));
 }
 
+// A use's handle is found by the index (switch_gpu_bo_index_test), never by walking the connection's BOs; every BO
+// that joins bos_ joins the index, and every one that leaves it leaves the index.
+TEST(GM20BBoIndexSource, EveryBoListChangeKeepsTheIndex)
+{
+	const auto find = flat(definition(client(), "AGXDeviceUserClient::Bo *AGXDeviceUserClient::findBo("));
+	EXPECT_THAT(find, HasSubstr("return boIndex_.find(handle);"));
+	const std::string sources = client() + SourceText("../SwitchGpuNativeImport.h") +
+				    SourceText("../SwitchGpuClientRetirement.h");
+	EXPECT_EQ(Count(sources, "bos_ = bo;"), Count(sources, "boIndex_.insert(bo->handle, bo);"));
+	EXPECT_EQ(Count(sources, "boIndex_.reserve()"), 3u);
+	expectBefore(flat(definition(SourceText("../SwitchGpuClientRetirement.h"), "IOReturn AGXDeviceUserClient::boFree(")),
+		     "*p = bo->next;", "boIndex_.erase(bo->handle);");
+}
+
 TEST(GM20BVisibilitySource, InternalFenceKeepsExecutionOrderAndExternalFencePublishesVisibleFirst)
 {
 	const auto fence = flat(definition(gpu(), "static u32 chan_fence_job("));
