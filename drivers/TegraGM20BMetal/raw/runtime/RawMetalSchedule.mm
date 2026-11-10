@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #import "RawMetalInternal.h"
+#include "raw_scheduled_wait.h"
 
 void wakeSubmit()
 {
@@ -74,11 +75,19 @@ static int pipelineReadiness(RMCommandBuffer *cb, const RMSegment &range)
     return pending ? 0 : 1;
 }
 
-// eventReadiness found its next range blocked on a wait: a shared event value nothing reached yet
-static bool waitsOnEvent(RMCommandBuffer *cb)
+// What a head eventReadiness found blocked waits for: a wait's shared event value nothing reached yet, or, for a signal,
+// its own earlier work
+static raw::HeadWait eventWait(RMCommandBuffer *cb)
 {
-    return cb->_segNext < cb->_segs.size() && cb->_segs[cb->_segNext].event &&
-           cb->_plan.operation(cb->_segs[cb->_segNext].from).op == OpWaitEvent;
+    const bool wait = cb->_segNext < cb->_segs.size() && cb->_segs[cb->_segNext].event &&
+                      cb->_plan.operation(cb->_segs[cb->_segNext].from).op == OpWaitEvent;
+    return wait ? raw::HeadWait::event : raw::HeadWait::signal;
+}
+
+static void park(std::vector<void *> &parked, RMCommandBuffer *cb, raw::HeadWait wait)
+{
+    if (raw::holds(wait))
+        parked.push_back((__bridge void *)cb->_queue);
 }
 
 // waitUntilScheduled of the command buffers a hold took returns; one a release gave back waits for its scheduling again
@@ -99,7 +108,7 @@ void submitLoop()
 {
     RawState &r = *gRM;
     std::vector<RMCommandBuffer *> candidates, marked;
-    std::vector<void *> parked;  // queues whose head waits on a shared event or a compile
+    std::vector<void *> parked;  // queues whose head waits on a shared event
     for (;;) {
         @autoreleasepool {
             uint64_t observed;
@@ -124,8 +133,7 @@ void submitLoop()
                 }
                 const auto state = eventReadiness(candidate, deadline);
                 if (state == raw::EventReadiness::blocked) {
-                    if (waitsOnEvent(candidate))
-                        parked.push_back((__bridge void *)candidate->_queue);
+                    park(parked, candidate, eventWait(candidate));
                     continue;
                 }
                 if (state == raw::EventReadiness::expired) {
@@ -141,8 +149,10 @@ void submitLoop()
                     if (!range.event) {
                         if (range.raw) {
                             std::lock_guard<std::mutex> m(r.m2vLock);
-                            if (!m2vClear())
+                            if (!m2vClear()) {
+                                park(parked, candidate, raw::HeadWait::order);
                                 continue;
+                            }
                         } else {
                             const int ready = pipelineReadiness(candidate, range);
                             if (ready < 0) {
@@ -156,11 +166,13 @@ void submitLoop()
                                 break;
                             }
                             if (!ready) {
-                                parked.push_back((__bridge void *)candidate->_queue);
+                                park(parked, candidate, raw::HeadWait::compile);
                                 continue;
                             }
-                            if (!r.gpuOrder && !r.raw->done(r.raw->submitted()))
+                            if (!r.gpuOrder && !r.raw->done(r.raw->submitted())) {
+                                park(parked, candidate, raw::HeadWait::order);
                                 continue;
+                            }
                         }
                     }
                 }

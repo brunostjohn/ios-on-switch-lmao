@@ -97,8 +97,8 @@ public:
         return false;
     }
 
-    // The queue's head waits for what Metal's scheduler never waits for (a shared event its GPU waits for, a pipeline Metal
-    // compiled when it was made): it and every job committed behind it count as scheduled. `held`: those not held before.
+    // The queue's head waits for what Metal's GPU, not its scheduler, waits for (raw_scheduled_wait.h holds): it and every
+    // job committed behind it count as scheduled. `held`: those not held before.
     void hold(Key key, std::vector<Value> &held)
     {
         for (Queue &q : queues_)

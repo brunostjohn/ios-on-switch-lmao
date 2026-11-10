@@ -71,6 +71,8 @@
 #                     while its channel is being made again, and orders on the GPU again once the kernel made it
 #   raw_handler_order_test  raw/runtime/raw_handler_order.h: a queue's completed handlers run in the order its command
 #                     buffers were enqueued, however the threads that finish them race
+#   raw_scheduled_wait_test  raw/runtime/raw_scheduled_wait.h: waitUntilScheduled waits out a compile its queue's head
+#                     waits for and wakes when it fails; only a shared-event wait lets it return before the submission
 #   raw_replay_twins_test  raw/runtime/raw_replay_twins.h: a range m2v replays fails whole, before any pass of it is
 #                     encoded, when an attachment of one of its passes has no twin
 #   nak_fp32_flush_test  NAK's fp32 flush elision (nak_nir_algebraic.py): a flushed source under fneg or fabs feeds an FTZ
@@ -167,6 +169,15 @@ host_test(
     srcs = [
         "raw_handler_order_test.cpp",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_handler_order.h",
+    ],
+    cxx_std = "c++17",
+)
+
+host_test(
+    name = "raw_scheduled_wait_test",
+    srcs = [
+        "raw_scheduled_wait_test.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_scheduled_wait.h",
     ],
     cxx_std = "c++17",
 )

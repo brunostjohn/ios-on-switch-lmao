@@ -259,9 +259,12 @@ struct RMSegment {
     std::unordered_set<void *> _pipelineObserved;  // one readiness subscription per compatibility state
     size_t _eventArmed;                            // operation position + 1; only the current wait installs a listener
     bool _committed, _scheduledDone, _completedDone, _m2v;
-    // its queue's head waits on a shared event or a compile, which Metal's GPU waits for or Metal compiled when the state
-    // was made: waitUntilScheduled returns, its scheduled handlers still wait for its submission (raw_submit_queue.h hold)
+    // its queue's head waits on a shared event Metal's GPU would wait for: waitUntilScheduled returns, its scheduled
+    // handlers still wait for its submission (raw_scheduled_wait.h)
     bool _held;
+#if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
+    uint64_t _heldReturnUs;  // when waitUntilScheduled returned for it held, until it was submitted
+#endif
     // its event signals are in m2v work (replayed whole, or in its last segment): finish() makes none
     bool _signalsOnM2v;
     bool
