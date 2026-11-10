@@ -8,15 +8,18 @@ struct FramebufferFetchScene: GPUScene {
 
     private static let size = 64
     private static let steps = 12
+    // the interlock's stress: 64 full-screen triangles in one draw whose odd steps discard the left half, and 64 instances
+    private static let stressSteps = 64
 
     func run(_ gpu: GPU) async throws -> SceneResult {
         var result = SceneResult()
-        let indices = try gpu.buffer((0..<(Self.steps * 3)).map(UInt16.init))
+        let indices = try gpu.buffer((0..<(Self.stressSteps * 3 + 3)).map(UInt16.init))
         let indirect = try gpu.buffer([UInt32(Self.steps * 3), 1, 0, 0])
         for format in [TexelFormat.rgba8Unorm, .bgra8Unorm, .bgra8Srgb, .rgba16Float] {
             let target = try gpu.texture(format.metal, Self.size, Self.size)
             let copy = try gpu.texture(format.metal, Self.size, Self.size, usage: [.shaderRead])
             let fetch = try gpu.render(vertex: "fetch_vertex", fragment: "fetch_order_fragment", format: format.metal)
+            let region = try gpu.render(vertex: "fetch_vertex", fragment: "fetch_region_fragment", format: format.metal)
             let blend = try gpu.render(vertex: "fetch_vertex", fragment: "solid_fragment", format: format.metal) {
                 $0.colorAttachments[0].isBlendingEnabled = true
                 $0.colorAttachments[0].sourceRGBBlendFactor = .one
@@ -24,7 +27,8 @@ struct FramebufferFetchScene: GPUScene {
                 $0.colorAttachments[0].sourceAlphaBlendFactor = .zero
                 $0.colorAttachments[0].destinationAlphaBlendFactor = .one
             }
-            for mode in 0..<5 {
+            for mode in 0..<7 {
+                let steps = mode >= 5 ? Self.stressSteps : Self.steps
                 let key = "\(format.rawValue)_\(mode)"
                 let before = RawFacade.counters(of: gpu.device)
                 let timing = try await gpu.run { commands in
@@ -34,19 +38,24 @@ struct FramebufferFetchScene: GPUScene {
                     pass.colorAttachments[0].clearColor = MTLClearColor(red: 0.125, green: 0.25, blue: 0.5, alpha: 1)
                     pass.colorAttachments[0].storeAction = .store
                     let encoder = commands.makeRenderCommandEncoder(descriptor: pass)!
-                    encoder.setRenderPipelineState(fetch)
+                    encoder.setRenderPipelineState(mode == 5 ? region : fetch)
                     var discard: UInt32 = mode == 3 ? 1 : 0
-                    encoder.setFragmentBytes(&discard, length: 4, index: 0)
+                    var rule = SIMD2<UInt32>(1, UInt32(Self.size / 2))
+                    if mode == 5 {
+                        encoder.setFragmentBytes(&rule, length: 8, index: 0)
+                    } else {
+                        encoder.setFragmentBytes(&discard, length: 4, index: 0)
+                    }
                     if mode == 1 {
                         encoder.drawIndexedPrimitives(
                             type: .triangle, indexCount: Self.steps * 3, indexType: .uint16,
                             indexBuffer: indices, indexBufferOffset: 0)
-                    } else if mode == 2 {
-                        encoder.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 3, instanceCount: Self.steps)
+                    } else if mode == 2 || mode == 6 {
+                        encoder.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 3, instanceCount: steps)
                     } else if mode == 4 {
                         encoder.drawPrimitives(type: .triangle, indirectBuffer: indirect, indirectBufferOffset: 0)
                     } else {
-                        encoder.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: Self.steps * 3)
+                        encoder.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: steps * 3)
                     }
                     encoder.setRenderPipelineState(blend)
                     var addition = SIMD4<Float>(0.125, 0.25, 0.0625, 0)
@@ -54,7 +63,7 @@ struct FramebufferFetchScene: GPUScene {
                     encoder.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 3)
                     encoder.setRenderPipelineState(fetch)
                     encoder.setFragmentBytes(&discard, length: 4, index: 0)
-                    encoder.drawPrimitives(type: .triangle, vertexStart: Self.steps * 3, vertexCount: 3)
+                    encoder.drawPrimitives(type: .triangle, vertexStart: steps * 3, vertexCount: 3)
                     encoder.endEncoding()
                     let blit = commands.makeBlitCommandEncoder()!
                     blit.copy(
@@ -73,9 +82,18 @@ struct FramebufferFetchScene: GPUScene {
                     let draws = (after["interlock_draws"] ?? 0) - (before["interlock_draws"] ?? 0)
                     result.metrics.set("interlock_\(key)", draws)
                     result.expect(draws >= 2, "\(key) has no confirmed native interlock draws; diagnostic counters required")
+                    let ilk = (after["fetch_interlocked"] ?? 0) - (before["fetch_interlocked"] ?? 0)
+                    result.metrics.set("ilk_\(key)", ilk)
+                    result.expect(ilk >= 2, "\(key): the fetch line's ilk counted no interlocked fetching draw")
                 }
                 let bytes = try await gpu.read(copy, bytesPerPixel: format.bytesPerTexel)
-                let expected = Patterns.repeated(Self.expected(format, discardOdd: mode == 3), count: Self.size * Self.size)
+                let expected =
+                    mode == 5
+                    ? Self.halves(
+                        left: Self.expected(format, discardOdd: true, steps: steps),
+                        right: Self.expected(format, discardOdd: false, steps: steps))
+                    : Patterns.repeated(
+                        Self.expected(format, discardOdd: mode == 3, steps: steps), count: Self.size * Self.size)
                 result.compare(
                     key, bytes: bytes, expected: expected, format: format, width: Self.size, height: Self.size,
                     tolerance: format == .rgba16Float ? 0.002 : 3.0 / 255)
@@ -88,7 +106,11 @@ struct FramebufferFetchScene: GPUScene {
         return result
     }
 
-    private static func expected(_ format: TexelFormat, discardOdd: Bool) -> [UInt8] {
+    private static func halves(left: [UInt8], right: [UInt8]) -> [UInt8] {
+        (0..<(size * size)).flatMap { $0 % size < size / 2 ? left : right }
+    }
+
+    private static func expected(_ format: TexelFormat, discardOdd: Bool, steps: Int) -> [UInt8] {
         func stored(_ values: [Float]) -> [Float] {
             let decoded = format.decode(format.encode(values)[...])
             return decoded.enumerated().map {

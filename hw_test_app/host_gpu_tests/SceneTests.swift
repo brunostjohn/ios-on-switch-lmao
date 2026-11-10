@@ -34,7 +34,7 @@ final class SceneTests: XCTestCase {
         let scene = try XCTUnwrap(Scenes.all.first { $0.id == "gpu.raw.framebuffer_fetch" })
         let result = try await scene.run(makeGPU())
         XCTAssertTrue(result.passed, result.reasons(limit: 8).joined(separator: "; "))
-        XCTAssertEqual(result.checks.count, 40)
+        XCTAssertEqual(result.checks.count, 56)
     }
 
     func testFramebufferFetchDepthOnThisMac() async throws {
