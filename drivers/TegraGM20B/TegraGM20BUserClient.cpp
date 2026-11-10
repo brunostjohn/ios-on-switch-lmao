@@ -1733,8 +1733,9 @@ IOReturn AGXDeviceUserClient::vmBind(const TegraGM20BAbiVmBind *in, uint32_t cou
 	return kIOReturnSuccess;
 }
 
-// The decision may tile the surface on the copy engine and sleep on its fence; the connection's lock is held meanwhile,
-// as for a BoImport's wiring.
+// lock_ held on entry and exit, but not across the decision: it may tile the surface on the copy engine and sleep on its
+// fence, and the connection's other calls go on meanwhile. The surface and its coherency entry are held for it, so a
+// BoFree meanwhile frees nothing it uses.
 IOReturn AGXDeviceUserClient::surfaceLayout(const TegraGM20BAbiSurfaceLayout *in,
 	TegraGM20BAbiSurfaceLayoutReply *out)
 {
@@ -1753,17 +1754,30 @@ IOReturn AGXDeviceUserClient::surfaceLayoutInfo(const TegraGM20BAbiSurfaceLayout
 	SwitchGpuSurfaceGeometry surface = {};
 	if (switch_gpu_surface_geometry(tgm_coh_surface_id(bo->coh), task_, bo->pas, bo->npages, &surface))
 		return kIOReturnBadArgument;
+	tgm_coh *coh = bo->coh;
+	OSObject *object = bo->surface;
+	const uint64_t first = bo->pas[0];
+	tgm_coh_hold(coh);
+	if (object)
+		object->retain();
+	IOLockUnlock(lock_);
 	const bool packed = switch_gpu_surface_packed(surface);
 	const bool same = switch_gpu_surface_shape_matches(surface, in->width, in->height, in->bpp, in->bytes_per_row);
-	const bool exclusive = switch_gpu_surface_layout_exclusive(bo->surface, true) == 0;
+	const bool exclusive = switch_gpu_surface_layout_exclusive(object, true) == 0;
 	const bool writes = exclusive && packed && !surface.client_memory && (canonical || same) &&
 		(in->flags & TegraGM20BLayoutWrites);
 	const int layout = packed
-		? tgm_coherency_layout(bo->coh, uint32_t(surface.width), uint32_t(surface.height), surface.bpp,
+		? tgm_coherency_layout(coh, uint32_t(surface.width), uint32_t(surface.height), surface.bpp,
 			uint32_t(surface.pitch), writes)
-		: tgm_coherency_layout(bo->coh, 0, 0, 0, 0, 0);
+		: tgm_coherency_layout(coh, 0, 0, 0, 0, 0);
 	if (exclusive)
-		switch_gpu_surface_layout_exclusive(bo->surface, false);
+		switch_gpu_surface_layout_exclusive(object, false);
+	tgm_layout tiled = {};
+	const bool described = layout > 0 && tegra_gm20b_surface_layout(first, &tiled);
+	tgm_coherency_put(coh);
+	if (object)
+		object->release();
+	IOLockLock(lock_);
 	*out = {};
 	if (surface.width <= UINT32_MAX && surface.height <= UINT32_MAX && surface.pitch <= UINT32_MAX) {
 		out->width = uint32_t(surface.width);
@@ -1775,8 +1789,7 @@ IOReturn AGXDeviceUserClient::surfaceLayoutInfo(const TegraGM20BAbiSurfaceLayout
 		out->align = 4096;
 	}
 	if (layout > 0) {
-		tgm_layout tiled = {};
-		if (!tegra_gm20b_surface_layout(bo->pas[0], &tiled))
+		if (!described)
 			return kIOReturnNotReady;
 		*out = {canonical || same ? uint32_t(TegraGM20BLayoutTiled) : uint32_t(TegraGM20BLayoutOtherShape),
 			tiled.width, tiled.height, tiled.bpp, tiled.row_bytes, tiled.y_log2, tiled.rows, 0,
@@ -3065,7 +3078,10 @@ IOReturn AGXDeviceUserClient::run(uint32_t method, const void *in, uint32_t inSi
 	}
 #endif
 	IOLockLock(lock_);
-	const bool mutation = method != TegraGM20BMethodGetInfo && method != TegraGM20BMethodGetStatus;
+	// A layout decision holds what it uses itself and drops lock_ while the copy engine may move the surface.
+	const bool mutation = method != TegraGM20BMethodGetInfo && method != TegraGM20BMethodGetStatus &&
+			      method != TegraGM20BMethodSurfaceLayout &&
+			      method != TegraGM20BMethodSurfaceLayoutInfo;
 	if (submitGate_.closed() || (mutation && !submitGate_.beginMutation(lock_))) {
 		IOLockUnlock(lock_);
 		return kIOReturnNotOpen;

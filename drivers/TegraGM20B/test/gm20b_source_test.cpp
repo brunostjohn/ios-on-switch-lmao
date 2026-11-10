@@ -428,7 +428,7 @@ TEST(GM20BPresentSource, TiledSourceIsCopiedBlockLinear)
 		    Not(HasSubstr("tiled")));
 	EXPECT_THAT(
 		flat(Between(client(), "IOReturn AGXDeviceUserClient::surfaceLayoutInfo(", "\n}\n")),
-		HasSubstr("tgm_coherency_layout(bo->coh,"));
+		HasSubstr("tgm_coherency_layout(coh,"));
 }
 
 // System sleep (gpu.c "system sleep"): every path that touches the GPU outside gpu.lock goes through the gate
@@ -1171,4 +1171,18 @@ TEST(GM20BPoolSource, PoolRefusalsCountOnlyZeroedFreePages)
 {
 	EXPECT_THAT(flat(definition(gpu(), "uint64_t tgm_pool_avail(void)")),
 		    HasSubstr("nvxnu_pool_ready_pages()"));
+}
+
+// A layout decision may move the surface on the copy engine and wait for it: the connection's lock and mutation gate
+// are not held meanwhile, and what it uses is held for it.
+TEST(GM20BLayoutSource, LayoutDecisionHoldsNeitherTheConnectionLockNorItsGate)
+{
+	const std::string info =
+		flat(definition(client(), "IOReturn AGXDeviceUserClient::surfaceLayoutInfo("));
+	expectBefore(info, "tgm_coh_hold(coh);", "IOLockUnlock(lock_);");
+	expectBefore(info, "IOLockUnlock(lock_);", "tgm_coherency_layout(coh,");
+	expectBefore(info, "tgm_coherency_put(coh);", "IOLockLock(lock_);");
+	const std::string run = flat(definition(client(), "IOReturn AGXDeviceUserClient::run("));
+	EXPECT_THAT(run, HasSubstr("method != TegraGM20BMethodSurfaceLayout &&"));
+	EXPECT_THAT(run, HasSubstr("method != TegraGM20BMethodSurfaceLayoutInfo;"));
 }
