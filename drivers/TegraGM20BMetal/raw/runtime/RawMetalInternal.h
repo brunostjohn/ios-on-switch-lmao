@@ -58,6 +58,8 @@ extern "C" id native_bridge_metal_render_pipeline_lazy(id device, id descriptor,
     __attribute__((weak_import));
 extern "C" int native_bridge_metal_render_pipeline_ready(id pipeline, void (^observer)(void))
     __attribute__((weak_import));
+extern "C" int native_bridge_metal_render_pipeline_urge(id pipeline, void (^observer)(void), dispatch_queue_t queue)
+    __attribute__((weak_import));
 // Where NVK keeps a texture's texels (a stored depth/stencil texture the raw path renders and copies in place)
 struct switch_nvk_image_memory;
 extern "C" int native_bridge_metal_texture_memory(id texture, struct switch_nvk_image_memory *out)
@@ -160,6 +162,7 @@ struct RawState {
     // The two drivers' order (submit lock): on the GPU when the kernel has Order (TegraGM20BInfoOrder), else on the CPU (the
     // m2v work before a raw command buffer completes first, and the raw work before an m2v one).
     bool gpuOrder = false;
+    uint64_t orderRefusedAt = 0;  // raw::Device::Stats::reopens when the kernel last refused an Order (raw_order.h)
     bool rawSinceM2v =
         false;  // raw work submitted since the last m2v commit: the next m2v one waits for it (BeforeTask)
     bool m2vSinceRaw =
@@ -292,7 +295,6 @@ void forgetSignals();
 void forEachWritten(RMCommandBuffer *cb, size_t from, size_t to, void (*written)(void *));
 extern GpuMemoryRelease &gRawRelease;
 void scheduled(RMCommandBuffer *cb);
-dispatch_queue_t scheduledQueueLocked(RMCommandBuffer *cb);
 dispatch_queue_t followingRootQueue();
 dispatch_queue_t followingSerialQueue(const char *label);
 void finish(RMCommandBuffer *cb, NSError *error);

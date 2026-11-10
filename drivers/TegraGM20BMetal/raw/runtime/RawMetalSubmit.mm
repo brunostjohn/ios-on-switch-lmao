@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 #import "RawMetalInternal.h"
 #include "raw_execution_plan.h"
+#include "raw_order.h"
 
 // ---- commit: order between the two drivers ----
 // With the kernel's Order (TegraGM20BABI.h method 14), the two drivers' command buffers are ordered on the GPU: before a raw
@@ -19,12 +20,24 @@ bool m2vClear()
     return gRM->gpuOrder ? gRM->m2vUnscheduled == 0 : gRM->m2vPending == 0;
 }
 
-// The kernel refused an Order: from here on the drivers are ordered on the CPU (one line).
+// The kernel refused an Order: the drivers are ordered on the CPU until the kernel makes the raw channel again (one line).
 void orderRefused(const char *what, int kr)
 {
-    once([NSString stringWithFormat:@"CPU-ordered from now on: the kernel refused Order (%s, 0x%x)", what, kr]);
+    once([NSString stringWithFormat:@"CPU-ordered: the kernel refused Order (%s, 0x%x)", what, kr]);
     std::lock_guard<std::mutex> m(gRM->m2vLock);
     gRM->gpuOrder = false;
+    gRM->orderRefusedAt = gRM->raw->stats.reopens.load(std::memory_order_relaxed);
+}
+
+// A raw submission went through on a channel the kernel made since it refused an Order: GPU order again
+static void orderReturned()
+{
+    RawState &r = *gRM;
+    if (!raw::orderReturns(r.gpuOrder, r.raw->canOrder(), r.raw->stats.reopens.load(std::memory_order_relaxed),
+                           r.orderRefusedAt))
+        return;
+    std::lock_guard<std::mutex> m(r.m2vLock);
+    r.gpuOrder = true;
 }
 
 static void countDriver(int driver)
@@ -36,7 +49,8 @@ static void countDriver(int driver)
 }
 
 // Submits `cb` now: the caller holds gRM->submit and everything committed before it is submitted. false: not yet (a raw
-// command buffer whose Order was refused just now waits for the m2v work before it to complete; the caller keeps it first).
+// range whose Order the kernel refused just now waits for the m2v work before it to complete, one with no raw channel goes
+// to m2v; the caller keeps it first).
 // Diagnostics: each predicate `cb` hit, once (and once more when it was the only one)
 static void countPreds(RMCommandBuffer *cb)
 {
@@ -128,6 +142,16 @@ void planSegments(RMCommandBuffer *cb)
     }
 }
 
+// Whether only signals follow range `at`: they are published once the work before them completes, so the command buffer is
+// scheduled with its last work, not with its completion
+static bool onlySignalsAfter(RMCommandBuffer *cb, size_t at)
+{
+    for (size_t i = at + 1; i < cb->_segs.size(); ++i)
+        if (!cb->_segs[i].event || cb->_plan.operation(cb->_segs[i].from).op != OpSignalEvent)
+            return false;
+    return true;
+}
+
 // The raw device's encoding arenas have one CPU owner. This lock is separate from the scheduler; no event or CPU GPU-fence
 // wait happens here. A single visit emits one legal range and yields, retaining the Metal queue's reservation.
 bool submitLocked(RMCommandBuffer *cb)
@@ -148,6 +172,7 @@ bool submitLocked(RMCommandBuffer *cb)
     }
     RMSegment &range = cb->_segs[cb->_segNext];
     const bool last = cb->_segNext + 1 == cb->_segs.size();
+    const bool lastWork = onlySignalsAfter(cb, cb->_segNext);
     if (range.event) {
         const Cmd event = cb->_plan.legacy(range.from);
         if (event.op == OpSignalEvent) {
@@ -162,7 +187,15 @@ bool submitLocked(RMCommandBuffer *cb)
         if (r.gpuOrder && r.m2vSinceRaw) {
             uint32_t waits = 0;
             const int kr = r.raw->orderAfterOthers(waits);
-            if (kr != KERN_SUCCESS) {
+            const raw::OrderAnswer answer = raw::orderAnswer(kr);
+            if (answer == raw::OrderAnswer::noChannel) {
+                // A channel the next encode made again would run this range unordered after the m2v work before it
+                range.raw = false;
+                cb->_reason = WhyEncode;
+                cb->_why = @"the raw channel is being made again";
+                return false;
+            }
+            if (answer == raw::OrderAnswer::refused) {
                 orderRefused("raw after m2v", kr);
                 return false;
             }
@@ -195,9 +228,11 @@ bool submitLocked(RMCommandBuffer *cb)
         }
         r.stats.raw++;
         r.rawSinceM2v = true;
+        if (!r.gpuOrder)
+            orderReturned();
         countDriver(1);
         retireRawRange(cb, range.from, range.to);
-        if (last)
+        if (lastWork)
             scheduled(cb);
     } else {
         if (r.gpuOrder && r.rawSinceM2v) {
@@ -243,6 +278,9 @@ bool submitLocked(RMCommandBuffer *cb)
             ++r.m2vUnscheduled;
         }
         [m addScheduledHandler:^(id<MTLCommandBuffer>) {
+            // before the raw command buffer behind it may be submitted (m2vClear), so its scheduled handlers go first
+            if (lastWork)
+                scheduled(cb);
             {
                 std::lock_guard<std::mutex> l(gRM->m2vLock);
                 if (!counted)
@@ -250,8 +288,6 @@ bool submitLocked(RMCommandBuffer *cb)
                 counted = true;
             }
             wakeSubmit();
-            if (last)
-                scheduled(cb);
         }];
         [m addCompletedHandler:^(id<MTLCommandBuffer> done) {
             {

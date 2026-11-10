@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 #import "RawMetalInternal.h"
 #include "raw_execution_plan.h"
+#include "raw_scheduled_wait.h"
 
 // ---- the device's submission machinery ----
 
@@ -342,7 +343,8 @@ static void giveRecording(RMCommandBuffer *b)
                 _scheduledHandlers = [NSMutableArray array];
             [_scheduledHandlers addObject:[block copy]];
         } else {
-            dispatch_async(scheduledQueueLocked(self), ^{
+            _handlersQueued = true;
+            dispatch_async(_queue->_handlers, ^{
                 block((id<MTLCommandBuffer>)self);
             });
         }
@@ -431,12 +433,19 @@ static void giveRecording(RMCommandBuffer *b)
 - (void)waitUntilScheduled
 {
     std::unique_lock<std::mutex> l(_lock);
-    if (!_committed || _scheduledDone)
-        return;
-    const BlockedWait blocked(gRM->stats.scheduledWaits, gRM->stats.scheduledWaitUs);
-    _changed.wait(l, [&] {
-        return _scheduledDone;
-    });
+    auto returns = [&] {
+        return raw::scheduledWaitReturns(_scheduledDone, _held, _segError != nil);
+    };
+    if (_committed && !returns()) {
+        const BlockedWait blocked(gRM->stats.scheduledWaits, gRM->stats.scheduledWaitUs);
+        _changed.wait(l, returns);
+    }
+#if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
+    if (_held && !_scheduledDone && !_heldReturnUs) {
+        _heldReturnUs = nowUs();
+        gRM->stats.heldReturns++;
+    }
+#endif
 }
 
 - (void)waitUntilCompleted
@@ -536,8 +545,10 @@ static void giveRecording(RMCommandBuffer *b)
 
 - (instancetype)init
 {
-    if ((self = [super init]))
+    if ((self = [super init])) {
         queuePriorityAdd(self);
+        _handlers = followingSerialQueue("com.brunostjohn.switch.raw.command.handlers");
+    }
     return self;
 }
 

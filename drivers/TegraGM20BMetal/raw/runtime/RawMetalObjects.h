@@ -15,6 +15,7 @@
 #include "raw_gpu.h"
 #include "RawMetalPredicates.h"
 #include "RawResidency.h"
+#include "raw_handler_order.h"
 #include "raw_submit_queue.h"
 
 @class RMDevice, RMCommandBuffer;
@@ -173,6 +174,8 @@ typedef NS_ENUM(uint8_t, RMTextureKind) {
 @interface RMQueue : RMObject {
 @public
     dispatch_queue_t _completionQueue;
+    dispatch_queue_t _handlers;  // its command buffers' scheduled handlers, in its order
+    std::atomic<void *> _last;   // the command buffer enqueued last, retained until its completed handlers ran
     uint32_t _gpuPriority, _backgroundGpuPriority;  // what it asked for (RawMetalQueuePriority.mm)
     raw::ResidencySets _residency;
 }
@@ -244,17 +247,24 @@ struct RMSegment {
     RMReason _reason;
     NSString *_why;
     NSMutableArray *_scheduledHandlers, *_completedHandlers;
-    dispatch_queue_t _scheduledQueue;
+    bool _handlersQueued;      // scheduled handlers went to its queue's _handlers: its completed ones go behind them
+    RMCommandBuffer *_before;  // enqueued before it on its queue, until its own completed handlers were handed on
+    raw::HandlerTurn _turn;
     MTLCommandBufferStatus _status;
     NSError *_error;
     RMQueue *_queue;
     bool _enqueued;
     std::vector<size_t> _eventWaits;
     raw::EventDeadline::Time _eventStart;
-    std::map<void *, raw::EventDeadline::Time> _pipelineStarted;
     std::unordered_set<void *> _pipelineObserved;  // one readiness subscription per compatibility state
-    size_t _eventArmed;  // operation position + 1; only the current wait installs a listener
+    size_t _eventArmed;                            // operation position + 1; only the current wait installs a listener
     bool _committed, _scheduledDone, _completedDone, _m2v;
+    // its queue's head waits on a shared event Metal's GPU would wait for: waitUntilScheduled returns, its scheduled
+    // handlers still wait for its submission (raw_scheduled_wait.h)
+    bool _held;
+#if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
+    uint64_t _heldReturnUs;  // when waitUntilScheduled returned for it held, until it was submitted
+#endif
     // its event signals are in m2v work (replayed whole, or in its last segment): finish() makes none
     bool _signalsOnM2v;
     bool

@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #import "RawMetalInternal.h"
+#include "raw_scheduled_wait.h"
 
 void wakeSubmit()
 {
@@ -15,6 +16,7 @@ void enqueueBuffer(RMCommandBuffer *cb)
         return;
     gRM->waiting.reserve((__bridge void *)cb->_queue, cb);
     cb->_enqueued = true;
+    cb->_before = (__bridge_transfer RMCommandBuffer *)cb->_queue->_last.exchange((__bridge_retained void *)cb);
     std::lock_guard<std::mutex> b(cb->_lock);
     if (cb->_status == MTLCommandBufferStatusNotEnqueued)
         cb->_status = MTLCommandBufferStatusEnqueued;
@@ -46,8 +48,10 @@ void commitBuffer(RMCommandBuffer *cb)
     r.waitingChanged.notify_one();
 }
 
-// Return pending only for this queue head. Other queues remain runnable while its pipelines compile.
-static int pipelineReadiness(RMCommandBuffer *cb, const RMSegment &range, raw::EventDeadline::Time &deadline)
+// Return pending only for this queue head. Other queues remain runnable while its pipelines compile. A compile it waits for
+// runs at once on a thread that follows the committers (raw_follow.h), ahead of the workers' queue. A compile either
+// completes or fails: no deadline turns a slow one into an error.
+static int pipelineReadiness(RMCommandBuffer *cb, const RMSegment &range)
 {
     if (!native_bridge_metal_render_pipeline_ready)
         return 1;  // older host bridge: replay retains its synchronous contract
@@ -60,26 +64,51 @@ static int pipelineReadiness(RMCommandBuffer *cb, const RMSegment &range, raw::E
             observer = ^{
                 wakeSubmit();
             };
-        const int status = native_bridge_metal_render_pipeline_ready(state, observer);
+        const int status = first && native_bridge_metal_render_pipeline_urge
+                               ? native_bridge_metal_render_pipeline_urge(state, observer, followingRootQueue())
+                               : native_bridge_metal_render_pipeline_ready(state, observer);
         if (status < 0)
             return -1;
-        if (!status) {
-            const auto now = std::chrono::steady_clock::now();
-            const auto [start, inserted] = cb->_pipelineStarted.try_emplace(object, now);
-            const auto due = start->second + std::chrono::seconds(60);
-            if (now >= due)
-                return -1;
-            deadline = std::min(deadline, due);
+        if (!status)
             pending = true;
-        }
     }
     return pending ? 0 : 1;
+}
+
+// What a head eventReadiness found blocked waits for: a wait's shared event value nothing reached yet, or, for a signal,
+// its own earlier work
+static raw::HeadWait eventWait(RMCommandBuffer *cb)
+{
+    const bool wait = cb->_segNext < cb->_segs.size() && cb->_segs[cb->_segNext].event &&
+                      cb->_plan.operation(cb->_segs[cb->_segNext].from).op == OpWaitEvent;
+    return wait ? raw::HeadWait::event : raw::HeadWait::signal;
+}
+
+static void park(std::vector<void *> &parked, RMCommandBuffer *cb, raw::HeadWait wait)
+{
+    if (raw::holds(wait))
+        parked.push_back((__bridge void *)cb->_queue);
+}
+
+// waitUntilScheduled of the command buffers a hold took returns; one a release gave back waits for its scheduling again
+static void markHeld(std::vector<RMCommandBuffer *> &buffers, bool held)
+{
+    for (RMCommandBuffer *cb : buffers) {
+        {
+            std::lock_guard<std::mutex> l(cb->_lock);
+            cb->_held = held;
+        }
+        if (held)
+            cb->_changed.notify_all();
+    }
+    buffers.clear();
 }
 
 void submitLoop()
 {
     RawState &r = *gRM;
-    std::vector<RMCommandBuffer *> candidates;
+    std::vector<RMCommandBuffer *> candidates, marked;
+    std::vector<void *> parked;  // queues whose head waits on a shared event
     for (;;) {
         @autoreleasepool {
             uint64_t observed;
@@ -103,8 +132,10 @@ void submitLoop()
                     break;
                 }
                 const auto state = eventReadiness(candidate, deadline);
-                if (state == raw::EventReadiness::blocked)
+                if (state == raw::EventReadiness::blocked) {
+                    park(parked, candidate, eventWait(candidate));
                     continue;
+                }
                 if (state == raw::EventReadiness::expired) {
                     error = [NSError
                         errorWithDomain:MTLCommandBufferErrorDomain
@@ -118,10 +149,12 @@ void submitLoop()
                     if (!range.event) {
                         if (range.raw) {
                             std::lock_guard<std::mutex> m(r.m2vLock);
-                            if (!m2vClear())
+                            if (!m2vClear()) {
+                                park(parked, candidate, raw::HeadWait::order);
                                 continue;
+                            }
                         } else {
-                            const int ready = pipelineReadiness(candidate, range, deadline);
+                            const int ready = pipelineReadiness(candidate, range);
                             if (ready < 0) {
                                 error = [NSError
                                     errorWithDomain:MTLCommandBufferErrorDomain
@@ -132,8 +165,14 @@ void submitLoop()
                                 cb = candidate;
                                 break;
                             }
-                            if (!ready || (!r.gpuOrder && !r.raw->done(r.raw->submitted())))
+                            if (!ready) {
+                                park(parked, candidate, raw::HeadWait::compile);
                                 continue;
+                            }
+                            if (!r.gpuOrder && !r.raw->done(r.raw->submitted())) {
+                                park(parked, candidate, raw::HeadWait::order);
+                                continue;
+                            }
                         }
                     }
                 }
@@ -141,6 +180,15 @@ void submitLoop()
                 break;
             }
             candidates.clear();
+            if (!parked.empty()) {
+                {
+                    std::lock_guard<std::mutex> l(r.schedule);
+                    for (void *queue : parked)
+                        r.waiting.hold(queue, marked);
+                }
+                parked.clear();
+                markHeld(marked, true);
+            }
             if (!cb) {
                 std::unique_lock<std::mutex> l(r.schedule);
                 auto changed = [&] {
@@ -162,11 +210,13 @@ void submitLoop()
             }
             {
                 std::lock_guard<std::mutex> l(r.schedule);
+                r.waiting.release((__bridge void *)cb->_queue, marked);
                 if (submitted)
                     r.waiting.retire((__bridge void *)cb->_queue, cb);
                 else
                     r.waiting.yield((__bridge void *)cb->_queue);
             }
+            markHeld(marked, false);
         }
     }
 }
