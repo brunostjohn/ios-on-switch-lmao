@@ -13,7 +13,7 @@ bool finishResume()
     if (!hwSuspended)
         panic("SwitchDisplay: tegra_display_resume without tegra_display_suspend");
     if (!captureDisplayMemory(switch_display::TimingBank::Programmed))
-        panic("SwitchDisplay: SC7 programmed display timing is invalid");
+        IOLog("SwitchDisplay: SC7 left no valid display timing: display memory admission off\n");
     if (directAttached || planesAttached)
         reattachDirect();  // SC7 reset the MC: the dc swgroup is in bypass again
     dc[kDcStateAccess] = 0;
@@ -33,8 +33,7 @@ bool finishResume()
     dc[kDcIntEnable] = savedIntEnable;
     writeIntMask(~0u, savedIntMask);
     __atomic_store_n(&dcPending, 0u, __ATOMIC_RELAXED);
-    if (!planesResume())
-        panic("SwitchDisplay: SC7 accepted plane bandwidth could not be restored");
+    planesResume();
     hwSuspended = false;
     scanoutStopped = true;
     vblankSource->enable();

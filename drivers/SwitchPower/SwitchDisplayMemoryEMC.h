@@ -19,7 +19,7 @@ bool SwitchEMC::programMemory(uint32_t before, uint32_t after, bool force)
         return true;
     if (!force && !memoryDirty && memoryAppliedKhz == after)
         return true;
-    if (!memoryQualified || !memoryState.program(mcRegs, before, after))
+    if (!__atomic_load_n(&memoryQualified, __ATOMIC_ACQUIRE) || !memoryState.program(mcRegs, before, after))
         return false;
     memoryAppliedKhz = after;
     memoryDirty = false;
@@ -30,7 +30,7 @@ IOReturn SwitchEMC::memoryAction(OSObject *owner, void *argument, void *result, 
 {
     auto *self = static_cast<SwitchEMC *>(owner);
     const auto &request = *static_cast<const switch_display_memory_head *>(argument);
-    int error = self->memoryQualified ? 0 : -95;
+    int error = __atomic_load_n(&self->memoryQualified, __ATOMIC_ACQUIRE) ? 0 : -95;
     if (request.head > 1)
         error = -22;
     if (!error && !self->memoryState.same(request)) {
@@ -78,10 +78,26 @@ int SwitchEMC::reserveMemory(const switch_display_memory_head &request)
     return error;
 }
 
+// A plan that no longer covers the running rate turns display memory admission off for the boot: the display shows the
+// UI alone (window A needs no admission) and its overlays are dropped, never a panic.
+void SwitchEMC::dropDisplayMemory(const char *why)
+{
+    if (__atomic_exchange_n(&memoryQualified, false, __ATOMIC_ACQ_REL))
+        os_log_error(OS_LOG_DEFAULT, "SwitchEMC: display memory admission off: %s", why);
+    memoryState = {};
+    memoryDirty = false;
+}
+
 extern "C" int switch_emc_display_memory_reserve(const switch_display_memory_head *request)
 {
     if (!request)
         return -22;
     SwitchEMC *emc = __atomic_load_n(&gEMC, __ATOMIC_ACQUIRE);
     return emc ? emc->reserveMemory(*request) : -19;
+}
+
+extern "C" int switch_emc_display_memory_ready(void)
+{
+    const SwitchEMC *emc = __atomic_load_n(&gEMC, __ATOMIC_ACQUIRE);
+    return emc && emc->displayMemoryReady();
 }

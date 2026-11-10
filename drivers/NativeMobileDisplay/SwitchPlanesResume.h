@@ -1,14 +1,19 @@
 // SPDX-License-Identifier: BSD-2-Clause-Patent
-bool planesResume()
+// Overlays whose bandwidth cannot be restored resume off, as an overlay recovery's target: the UI is shown alone and the
+// swaps they carried retire at the first latch.
+void planesResume()
 {
     if (!planesOn)
-        return true;
-    const bool recovering = planeRecovering;
-    const PlaneSet now = recovering ? planeRecoveryTarget : planeSetOf(planeLatch.active);
+        return;
+    bool recovering = planeRecovering;
+    PlaneSet now = recovering ? planeRecoveryTarget : planeSetOf(planeLatch.active);
     uint32_t update = kGeneralUpdate | kWinAUpdate | kWinBUpdate | kWinCUpdate;
     uint32_t request = kGeneralActReq | kWinAActReq | kWinBActReq | kWinCActReq;
-    if (!planeReserveBandwidth(now))
-        return false;
+    if (!planeReserveBandwidth(now)) {
+        IOLog("SwitchDisplay: overlay bandwidth not restored after SC7: the overlays resume off\n");
+        now.window[0].on = now.window[1].on = false;
+        recovering = true;
+    }
     if (recovering) {
         planeLatch.reset();
         if (planeLatch.write(now) < 0)
@@ -31,5 +36,4 @@ bool planesResume()
         planeHeldSet = false;
         planeFlipOnly(planeHeld);
     }
-    return true;
 }

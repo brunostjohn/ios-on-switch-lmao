@@ -38,7 +38,7 @@ const PlaneSet &planeSetOf(int set) const
 
 bool planesReady() const
 {
-    return __atomic_load_n(&planesOn, __ATOMIC_ACQUIRE);
+    return __atomic_load_n(&planesOn, __ATOMIC_ACQUIRE) && memoryAdmissionReady();
 }
 
 // --- A swap's layers ---------------------------------------------------------------------------------------------------

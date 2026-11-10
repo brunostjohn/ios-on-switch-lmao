@@ -76,6 +76,7 @@ class SwitchEMC : public OSObject {
     bool moveTo(unsigned index);
     unsigned reconcileRate(uint32_t observed, bool quiesced = false);
     unsigned memoryFloor(unsigned first) const;
+    void dropDisplayMemory(const char *why);
     bool programMemory(uint32_t before, uint32_t after, bool force = false);
     static IOReturn memoryAction(OSObject *owner, void *request, void *result, void *, void *);
     static IOReturn displayAction(OSObject *owner, void *bytes, void *result, void *, void *);
@@ -95,6 +96,10 @@ public:
     void deadline(uint64_t until);
     int reserveDisplay(uint64_t bytes);
     int reserveMemory(const switch_display_memory_head &request);
+    bool displayMemoryReady() const
+    {
+        return __atomic_load_n(&memoryQualified, __ATOMIC_ACQUIRE);
+    }
 #if DEVELOPMENT || DEBUG
     static IOReturn statsAction(OSObject *owner, void *line, void *size, void *written, void *);
     size_t stats(char *line, size_t size);
@@ -362,7 +367,8 @@ void SwitchEMC::govern(bool resume)
 {
     const IOReturn error = loop->runAction(&SwitchEMC::governAction, this, resume ? this : nullptr);
     if (resume && error != kIOReturnSuccess)
-        panic("SwitchEMC: cannot restore display memory admission before resume");
+        os_log_error(OS_LOG_DEFAULT, "SwitchEMC: not governing after SC7 (%#x): the EMC stays at %u kHz", error,
+                     khz[cur]);
 }
 
 void SwitchEMC::pause()

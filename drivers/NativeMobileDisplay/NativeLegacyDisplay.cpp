@@ -4752,8 +4752,8 @@ public:
                         surface = surfaces[i];
                     }
                 }
-                if (!reason && !validatePlaneBandwidth(hasSurface, layers, width, height))
-                    reason = native_planes::kNotReady;
+                if (!reason)
+                    admitPlaneBandwidth(hasSurface, layers, width, height);
                 accepted = (reason == 0u);
                 if (reason == 4 || reason == native_planes::kFormat || reason == native_planes::kAlignment) {
                     native_legacy_surface_rejected(

@@ -384,8 +384,8 @@ TEST(DisplayResumeSource, RestoreRunsOnTheFamilyGateBeforeCompletionCallbacks)
     EXPECT_THAT(source, HasSubstr("display->getWorkLoop()->runAction("));
     EXPECT_THAT(source, HasSubstr("return d->finishResume();"));
     expectBefore(resume, "getWorkLoop()->inGate()", "reattachDirect();");
-    expectBefore(resume, "if (!planesResume())", "hwSuspended = false");
-    expectBefore(resume, "if (!planesResume())", "setScanout(true)");
-    expectBefore(resume, "if (!planesResume())", "presentCopied()");
-    expectBefore(resume, "if (!planesResume())", "presentGpuCopy()");
+    expectBefore(resume, "planesResume();", "hwSuspended = false");
+    expectBefore(resume, "planesResume();", "setScanout(true)");
+    expectBefore(resume, "planesResume();", "presentCopied()");
+    expectBefore(resume, "planesResume();", "presentGpuCopy()");
 }

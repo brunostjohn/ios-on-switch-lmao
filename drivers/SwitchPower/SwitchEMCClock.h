@@ -2,19 +2,22 @@
 
 unsigned SwitchEMC::reconcileRate(uint32_t observed, bool quiesced)
 {
-    unsigned row = switch_emc_row(khz, count, observed);
+    const unsigned row = switch_emc_row(khz, count, observed);
     if (row < count && !quiesced)
         return row;
     memoryDirty = true;
     if (!programMemory(quiesced ? khz[count - 1] : observed, khz[count - 1], true))
-        panic("SwitchEMC: unrecognized rate %u cannot cover the running display", observed);
+        dropDisplayMemory("its plan cannot cover the move to the top rate");
     unsigned restored = observed;
-    if ((row != count - 1 && tegra_bpmp_emc_set(khz[count - 1], &restored)) ||
-        (row = switch_emc_row(khz, count, restored)) >= count)
-        panic("SwitchEMC: cannot restore a qualified rate after %u kHz", observed);
+    const int refused = row != count - 1 ? tegra_bpmp_emc_set(khz[count - 1], &restored) : 0;
+    const unsigned now = switch_emc_row(khz, count, restored);
+    if (refused || now >= count) {
+        dropDisplayMemory("the BPMP did not restore a rate in the table");
+        return row < count ? row : cur;
+    }
     if (!programMemory(restored, restored, true))
-        panic("SwitchEMC: reconciled MC admission no longer covers the running display");
-    return row;
+        dropDisplayMemory("its plan does not cover the restored rate");
+    return now;
 }
 
 bool SwitchEMC::moveTo(unsigned index)
@@ -49,7 +52,7 @@ bool SwitchEMC::moveTo(unsigned index)
 #endif
     cur = actual;
     if (!programMemory(khz[cur], khz[cur], true))
-        panic("SwitchEMC: restored MC admission no longer covers the running display");
+        dropDisplayMemory("its plan does not cover the rate the BPMP set");
     return cur >= index;
 }
 

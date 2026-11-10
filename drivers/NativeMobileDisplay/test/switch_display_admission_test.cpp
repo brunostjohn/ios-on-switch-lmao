@@ -7,7 +7,12 @@
 
 namespace {
 std::vector<uint64_t> reservations;
-int reserveError;
+int reserveError, memoryReady = 1;
+
+int switch_emc_display_memory_ready()
+{
+    return memoryReady;
+}
 
 int switch_emc_display_memory_reserve(const switch_display_memory_head *request)
 {
@@ -86,6 +91,7 @@ protected:
     {
         reservations.clear();
         reserveError = 0;
+        memoryReady = 1;
         layers[0] = image(1440, 2560);
         layers[1] = image(720, 1280);
     }
@@ -110,6 +116,40 @@ TEST_F(DisplayAdmission, FirmwareRefusalDoesNotCommitAdmissionOrChangeVisibleFra
     EXPECT_FALSE(display.validatePlaneBandwidth(present, layers, 720, 1280));
     EXPECT_EQ(display.displayBandwidth.bytes(), 0u);
     EXPECT_TRUE(display.active.on());
+}
+
+TEST_F(DisplayAdmission, UiOnlySwapNeedsNoAdmissionAndUnavailableQualificationReservesNothing)
+{
+    present[0] = false;
+    display.admitPlaneBandwidth(present, layers, 720, 1280);
+    EXPECT_TRUE(reservations.empty());
+    present[0] = true;
+    for (int unavailable : {-19, -95}) {
+        memoryReady = 0;
+        reserveError = unavailable;
+        display.admitPlaneBandwidth(present, layers, 720, 1280);
+        EXPECT_TRUE(reservations.empty());
+        EXPECT_FALSE(display.memoryAdmissionReady());
+    }
+    memoryReady = 1;
+    display.displayMemory.invalidate();
+    display.admitPlaneBandwidth(present, layers, 720, 1280);
+    EXPECT_TRUE(reservations.empty());
+    EXPECT_FALSE(display.memoryAdmissionReady());
+}
+
+TEST_F(DisplayAdmission, OverlayAdmissionIsTriedOnlyWhileQualificationIsAvailable)
+{
+    display.admitPlaneBandwidth(present, layers, 720, 1280);
+    ASSERT_EQ(reservations.size(), 1u);
+    EXPECT_EQ(display.displayBandwidth.bytes(), 1872000000u);
+}
+
+TEST_F(DisplayAdmission, TurningEveryOverlayOffNeedsNoReservation)
+{
+    display.displayMemory.invalidate();
+    EXPECT_TRUE(display.planeReserveBandwidth(Display::PlaneSet{}));
+    EXPECT_TRUE(reservations.empty());
 }
 
 TEST_F(DisplayAdmission, AllPendingConsumersPreserveOldReservationUntilRetirement)

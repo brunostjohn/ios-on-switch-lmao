@@ -57,6 +57,11 @@ public:
         configured = applied = false;
     }
 
+    bool ready() const
+    {
+        return configured;
+    }
+
     bool configure(const switch_display_memory_head &timing, uint32_t sourceWidth, uint32_t sourceHeight, bool rotated)
     {
         if (!timing.pixel_clock_hz || !timing.active_width || !timing.active_height ||

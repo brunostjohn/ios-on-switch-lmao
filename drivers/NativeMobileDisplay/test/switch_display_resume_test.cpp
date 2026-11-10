@@ -23,6 +23,13 @@ extern "C" int switch_smmu_restore(uint32_t asid, uint32_t ptb, uint32_t group, 
 }
 
 namespace {
+unsigned logs = 0;
+
+void IOLog(const char *, ...)
+{
+    ++logs;
+}
+
 [[noreturn]] void panic(const char *, ...)
 {
     throw std::runtime_error("restore refused");
@@ -102,7 +109,7 @@ struct Display {
     bool hwSuspended = true, directAttached = true, planesAttached = true, vpulseProgrammed = true;
     bool scanoutStopped = true, rotated = true, rotationLatched = true, resumeLit = true;
     bool presentDeferred = true, gpuPresentDeferred = true, kickDeferred = true;
-    bool timingValid = true, planesValid = true, planesRestored = false;
+    bool timingValid = true, planesRestored = false;
     unsigned started = 0, callbacks = 0;
     std::vector<int> order;
 
@@ -132,15 +139,14 @@ struct Display {
     void writeIntMask(uint32_t, uint32_t)
     {}
 
-    bool planesResume()
+    void planesResume()
     {
         EXPECT_TRUE(hwSuspended);
         EXPECT_TRUE(scanoutStopped);
         EXPECT_FALSE(source.enabled);
         EXPECT_EQ(dc[kWinStart], savedWindow[0]);
         order.push_back(2);
-        planesRestored = planesValid;
-        return planesValid;
+        planesRestored = true;
     }
 
     void setScanout(bool on)
@@ -208,17 +214,6 @@ TEST(DisplayResume, FailedDomainKeepsAllAcceptedStateStoppedAndRetained)
     EXPECT_FALSE(d.source.enabled);
 }
 
-TEST(DisplayResume, FailedBandwidthCannotIlluminateOnlyTheUi)
-{
-    Display d;
-    d.planesValid = false;
-    EXPECT_THROW(d.finishResume(), std::runtime_error);
-    EXPECT_TRUE(d.hwSuspended && d.scanoutStopped);
-    EXPECT_EQ(d.callbacks + d.started, 0u);
-    EXPECT_FALSE(d.source.enabled);
-    EXPECT_EQ(d.ring.held, 7);
-}
-
 TEST(DisplayResume, SleepingPanelStillRestoresItsAcceptedState)
 {
     Display d;
@@ -229,15 +224,23 @@ TEST(DisplayResume, SleepingPanelStillRestoresItsAcceptedState)
     EXPECT_EQ(d.callbacks, 4u);
 }
 
-TEST(DisplayResume, UngatedOrInvalidTimingCannotPublishRestoredRegisters)
+TEST(DisplayResume, UngatedRestoreCannotPublishRestoredRegisters)
 {
     Display d;
     d.loop.gated = false;
     EXPECT_THROW(d.finishResume(), std::runtime_error);
-    d.loop.gated = true;
-    d.timingValid = false;
-    EXPECT_THROW(d.finishResume(), std::runtime_error);
     EXPECT_EQ(restores, 0u);
     EXPECT_EQ(d.callbacks + d.started, 0u);
+}
+
+TEST(DisplayResume, InvalidTimingTurnsAdmissionOffAndStillLightsThePanel)
+{
+    Display d;
+    d.timingValid = false;
+    logs = 0;
+    EXPECT_TRUE(d.finishResume());
+    EXPECT_EQ(logs, 1u);
+    EXPECT_EQ(d.started, 1u);
+    EXPECT_FALSE(d.hwSuspended);
 }
 }

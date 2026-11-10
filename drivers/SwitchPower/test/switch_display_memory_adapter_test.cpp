@@ -74,6 +74,11 @@ public:
     unsigned moves = 0;
     bool governing = false, refusalLogged = false;
     unsigned memoryFloor(unsigned) const;
+    void dropDisplayMemory(const char *);
+    bool displayMemoryReady() const
+    {
+        return memoryQualified;
+    }
     bool programMemory(uint32_t, uint32_t, bool = false);
     static IOReturn memoryAction(OSObject *, void *, void *, void *, void *);
     static IOReturn governAction(OSObject *, void *, void *, void *, void *);
@@ -245,13 +250,27 @@ TEST_F(MemoryAdapter, UnknownResumeClockReconcilesBeforeActmonStarts)
     EXPECT_TRUE(emc.governing);
 }
 
-TEST_F(MemoryAdapter, UnrecoverableClockNeverStartsGovernorWithStaleRow)
+TEST_F(MemoryAdapter, UnrecoverableClockTurnsDisplayAdmissionOffInsteadOfPanicking)
 {
+    ASSERT_EQ(emc.reserveMemory(request()), 0);
     getRate = 1300000;
     setResults.push_back({0, 1310000});
-    EXPECT_THROW(SwitchEMC::governAction(&emc, nullptr, nullptr, nullptr, nullptr), std::runtime_error);
-    EXPECT_FALSE(emc.governing);
-    EXPECT_EQ(emc.starts, 0u);
+    EXPECT_NO_THROW(SwitchEMC::governAction(&emc, nullptr, nullptr, nullptr, nullptr));
+    EXPECT_FALSE(emc.displayMemoryReady());
+    EXPECT_FALSE(emc.memoryState.owned[0] || emc.memoryState.owned[1]);
+    EXPECT_EQ(emc.reserveMemory(request()), -95);
+    EXPECT_EQ(switch_emc_display_memory_ready(), 0);
+}
+
+TEST_F(MemoryAdapter, ResumeWhoseBpmpRefusesTheTopRateKeepsRunningWithoutAdmission)
+{
+    ASSERT_EQ(emc.reserveMemory(request(2000000000)), 0);
+    EXPECT_EQ(switch_emc_display_memory_ready(), 1);
+    getRate = 204000;
+    setResults.push_back({-5, 204000});
+    EXPECT_NO_THROW(SwitchEMC::governAction(&emc, &emc, nullptr, nullptr, nullptr));
+    EXPECT_FALSE(emc.displayMemoryReady());
+    EXPECT_FALSE(emc.memoryState.owned[0]);
 }
 
 TEST_F(MemoryAdapter, FailedResumeReadDoesNotUsePreviousRow)

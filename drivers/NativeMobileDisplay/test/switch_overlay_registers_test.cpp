@@ -9,6 +9,11 @@ namespace {
 uint64_t reserved;
 int reserveError;
 
+int switch_emc_display_memory_ready()
+{
+    return 1;
+}
+
 int switch_emc_display_memory_reserve(const switch_display_memory_head *request)
 {
     reserved = request->peak_bytes_per_second;
@@ -445,25 +450,31 @@ TEST(OverlayRegisters, ResumeRewritesBothAcceptedWindowsBeforeRestart)
     display.registers.fill(0);
     display.planeCsc[0][0] = display.planeCsc[0][1] = -1;
     display.planeCsc[1][0] = display.planeCsc[1][1] = -1;
-    ASSERT_TRUE(display.planesResume());
+    display.planesResume();
     EXPECT_EQ(display.dc[Display::kWinBBase + native_planes::kOptions], native_planes::kWinEnable);
     EXPECT_EQ(display.dc[Display::kWinCBase + native_planes::kOptions], native_planes::kWinEnable);
     EXPECT_EQ(display.dc[Display::kDcStateControl], Display::kGeneralActReq | Display::kWinAActReq |
               Display::kWinBActReq | Display::kWinCActReq);
     EXPECT_TRUE(display.planeRegistersMatch(display.planeSetOf(display.planeLatch.active)));
 }
-TEST(OverlayRegisters, ResumeReservationFailureLeavesAcceptedPlanesAndRegistersUntouched)
+TEST(OverlayRegisters, ResumeReservationFailureResumesTheOverlaysOffAndTheUiAlone)
 {
     Display display;
-    ASSERT_TRUE(display.stage(video(native_planes::kBt709)));
+    auto p = video(native_planes::kBt709);
+    p.seq = 5;
+    ASSERT_TRUE(display.stage(p));
     display.latch();
     display.registers.fill(0);
     display.displayMemory.invalidate();
-    const auto before = display.registers;
-    EXPECT_FALSE(display.planesResume());
-    EXPECT_EQ(display.registers, before);
-    EXPECT_TRUE(display.planeSetOf(display.planeLatch.active).on());
-    EXPECT_FALSE(display.planeHeldSet);
+    EXPECT_NO_THROW(display.planesResume());
+    EXPECT_EQ(display.dc[Display::kWinBBase + native_planes::kOptions], 0u);
+    EXPECT_EQ(display.dc[Display::kWinCBase + native_planes::kOptions], 0u);
+    ASSERT_TRUE(display.planeLatch.requested());
+    EXPECT_FALSE(display.planeSetOf(display.planeLatch.armed).on());
+    EXPECT_EQ(display.planeSetOf(display.planeLatch.armed).seq, 5u);
+    EXPECT_FALSE(display.planeRecovering);
+    display.latch();
+    EXPECT_FALSE(display.planeLatch.uses(1));
 }
 
 TEST(OverlayRegisters, SuspendDuringRecoveryRestoresTargetWithoutAnOffOnlyFirstFrame)
@@ -476,7 +487,7 @@ TEST(OverlayRegisters, SuspendDuringRecoveryRestoresTargetWithoutAnOffOnlyFirstF
     display.planeRecoveryTarget.seq = 9;
     display.registers.fill(0);
     display.planeCsc[0][0] = display.planeCsc[0][1] = -1;
-    ASSERT_TRUE(display.planesResume());
+    display.planesResume();
     EXPECT_FALSE(display.planeRecovering);
     EXPECT_TRUE(display.planeLatch.requested());
     EXPECT_EQ(display.planeSetOf(display.planeLatch.armed).pendingSeq, 7u);
@@ -486,15 +497,17 @@ TEST(OverlayRegisters, SuspendDuringRecoveryRestoresTargetWithoutAnOffOnlyFirstF
     display.latch();
     EXPECT_TRUE(display.planeLatch.uses(1));
 }
-TEST(OverlayRegisters, ResumeFailurePreservesRecoveryTargetAndRetirementGuard)
+TEST(OverlayRegisters, ResumeFailureDuringRecoveryKeepsItsSwapsAndArmsTheOffTarget)
 {
     Display display;
     ASSERT_TRUE(display.stage(video(native_planes::kBt709)));
     display.latch(); display.beginPlaneRecovery("test");
+    display.planeRecoveryTarget.pendingSeq = 7;
     display.registers.fill(0); display.displayMemory.invalidate();
-    EXPECT_FALSE(display.planesResume());
-    EXPECT_TRUE(display.planeRecovering);
-    EXPECT_TRUE(display.planeRecoveryTarget.on());
-    EXPECT_TRUE(display.planeLatch.uses(1));
+    EXPECT_NO_THROW(display.planesResume());
+    EXPECT_FALSE(display.planeRecovering);
+    ASSERT_TRUE(display.planeLatch.requested());
+    EXPECT_FALSE(display.planeSetOf(display.planeLatch.armed).on());
+    EXPECT_EQ(display.planeSetOf(display.planeLatch.armed).pendingSeq, 7u);
     EXPECT_EQ(display.dc[Display::kWinBBase + native_planes::kOptions], 0u);
 }

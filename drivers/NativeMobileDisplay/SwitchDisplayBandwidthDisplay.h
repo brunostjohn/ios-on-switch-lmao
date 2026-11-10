@@ -57,6 +57,23 @@ uint64_t planeAdmissionDemand(const native_planes::Image &image)
     return image.yuv ? switch_display::add(bytes, bytes) : bytes;
 }
 
+bool memoryAdmissionReady() const
+{
+    return displayMemory.ready() && switch_emc_display_memory_ready();
+}
+
+// Never refuses a swap (a refused swap comes back every frame): window A alone scans as the firmware set it up and needs
+// no admission, and a detached layer whose admission fails here is dropped when its overlay set is armed (planeStage).
+void admitPlaneBandwidth(const bool present[native_planes::kLayers], const native_planes::Layer *layers, uint32_t width,
+                         uint32_t height)
+{
+    bool overlay = false;
+    for (unsigned layer = 0; layer != native_planes::kLayers; ++layer)
+        overlay = overlay || (present[layer] && !native_planes::isUi(layers[layer], width, height));
+    if (overlay && memoryAdmissionReady())
+        (void)validatePlaneBandwidth(present, layers, width, height);
+}
+
 bool validatePlaneBandwidth(const bool present[native_planes::kLayers], const native_planes::Layer *layers,
                             uint32_t width, uint32_t height)
 {
@@ -100,6 +117,8 @@ bool validatePlaneBandwidth(const bool present[native_planes::kLayers], const na
 
 bool planeReserveBandwidth(const PlaneSet &p)
 {
+    if (!p.on())
+        return true;
     uint32_t width = 0, height = 0;
     getDisplayDimensions(&width, &height);
     const switch_display::Demand ui = {0, 0, width, height, uint64_t(displayMemory.pixelClock()) * 4};
