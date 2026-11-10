@@ -34,6 +34,7 @@ filegroup(
         "bridge/NativeMetalComputeArtifact.h",
         "bridge/NativeMetalObjects.h",
         "//kits/SwitchDMA:SwitchDcache.h",
+        "//kits/SwitchSeedPack:SwitchSeedPack.h",
     ],
 )
 

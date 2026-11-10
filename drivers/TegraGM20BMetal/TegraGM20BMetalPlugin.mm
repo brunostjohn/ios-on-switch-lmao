@@ -319,6 +319,19 @@ const char *rawPackRefusal(char *path, size_t size)
     return access(path, R_OK) == 0 ? nullptr : "no pack staged";
 }
 
+// The installed native records beside the pack at `pack` (<Extensions>/TegraGM20BMetal.raw/native, RecordCache::attachSeed) into
+// `seed`; false if this process's sandbox may not read their index (asked without a report).
+bool rawNativeSeed(const char *pack, char *seed, size_t size)
+{
+    const char *slash = strrchr(pack, '/');
+    if (!slash)
+        return false;
+    snprintf(seed, size, "%.*s/native", int(slash - pack), pack);
+    char index[1200];
+    snprintf(index, sizeof index, "%s/raw-%016llx/index", seed, (unsigned long long)TEGRA_RAW_STACK);
+    return sandboxAllows("file-read-data", kSandboxFilterPath, index);
+}
+
 bool gRaw;  // this process's device is the raw facade
 
 #if SWITCH_DEBUG
@@ -781,7 +794,9 @@ id openDevice(unsigned port)
                        getprogname(), pack, (unsigned long long)TEGRA_RAW_STACK);
                 device = raw;
                 gRaw = true;
-                raw_metal_complete_states(cache, pack);
+                char nativeSeed[1100];
+                raw_metal_complete_states(cache,
+                                          rawNativeSeed(pack, nativeSeed, sizeof nativeSeed) ? nativeSeed : nullptr);
             } else {
                 os_log_error(logger(),
                              "TegraGM20BMetal: raw GM20B path off in %{public}s (%{public}@): m2v device kept",

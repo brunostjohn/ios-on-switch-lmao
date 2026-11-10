@@ -71,6 +71,8 @@ py_test(
         "native_seed_test.py",
         "precompile.py",
     ],
+    data = ["//kits/SwitchSeedPack:seedpack"],
+    deps = ["@rules_python//python/runfiles"],
 )
 
 py_binary(

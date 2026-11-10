@@ -23,8 +23,9 @@ void raw_metal_prepare(const char *packPath, uint64_t stack);
 // `fallback` (nil on a host benchmark: nothing can fall back then), or nil (the reason in *error).
 id<MTLDevice> raw_metal_device_open(const char *packPath, uint64_t stack, id<MTLDevice> fallback, NSString **error);
 // Turns on the runtime's completion of the Core Animation states the pack lacks (RawComplete.h): their records made off the render
-// thread and kept under `cacheDir`, the process's own shader cache directory (null: in memory only). After raw_metal_device_open.
-void raw_metal_complete_states(const char *cacheDir, const char *packPath = nullptr);
+// thread and kept under `cacheDir`, the process's own shader cache directory (null: in memory only), the installed native records
+// under `nativeSeed` read first (RecordCache::attachSeed; null: none). After raw_metal_device_open.
+void raw_metal_complete_states(const char *cacheDir, const char *nativeSeed = nullptr);
 // The pack key of a render pipeline descriptor whose functions are this facade's (the frontend journal's R-line fields but the label,
 // then " | l <framework>" for functions of a framework's default library other than QuartzCore's).
 NSString *raw_metal_pipeline_key(MTLRenderPipelineDescriptor *descriptor);

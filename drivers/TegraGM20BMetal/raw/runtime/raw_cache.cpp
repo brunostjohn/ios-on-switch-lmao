@@ -2,6 +2,7 @@
 // See raw_cache.h.
 #include "raw_cache.h"
 #include "raw_cache_io.h"
+#include "../../../../kits/SwitchSeedPack/SwitchSeedPack.h"
 
 #include <dirent.h>
 #include <fcntl.h>
@@ -232,6 +233,9 @@ RecordCache::Found decodeEntry(const std::string &bytes, const CacheKey &k, Runt
     return RecordCache::Found::Record;
 }
 
+RecordCache::RecordCache() = default;
+RecordCache::~RecordCache() = default;
+
 bool RecordCache::open(const std::string &dir, uint64_t stack, uint64_t capBytes)
 {
     if (!attach(dir, stack, capBytes))
@@ -249,7 +253,7 @@ bool RecordCache::attach(const std::string &dir, uint64_t stack, uint64_t capByt
     parent_ = dir;
     dir_ = mine;
     if (stack_ != stack)
-        seed_.clear();
+        seed_.reset();
     stack_ = stack;
     cap_ = capBytes;
     bytes_ = 0;
@@ -261,12 +265,13 @@ bool RecordCache::attachSeed(const std::string &dir, uint64_t stack)
     std::lock_guard<std::mutex> l(lock_);
     if (dir.empty() || (!dir_.empty() && stack_ != stack))
         return false;
-    const std::string path = dir + "/raw-" + hex16(stack);
-    struct stat st;
-    if (stat(path.c_str(), &st) || !S_ISDIR(st.st_mode) || access(path.c_str(), R_OK | X_OK))
+    uint8_t identity[switch_seed_pack::kIdentityBytes] = {};
+    memcpy(identity, &stack, sizeof stack);
+    auto seed = std::make_unique<switch_seed_pack::Seed>();
+    if (!seed->open(dir + "/raw-" + hex16(stack), sizeof(uint64_t), identity))
         return false;
     stack_ = stack;
-    seed_ = path;
+    seed_ = std::move(seed);
     return true;
 }
 
@@ -287,16 +292,28 @@ std::string RecordCache::path(const CacheKey &k) const
     return dir_ + "/" + hex16(k.name()) + ".rec";
 }
 
-bool RecordCache::loadBytes(const std::string &dir, const CacheKey &k, std::string &bytes)
+bool RecordCache::loadBytes(bool seed, const CacheKey &k, std::string &bytes) const
 {
-    return !dir.empty() && k.stack == stack_ && readFile(dir + "/" + hex16(k.name()) + ".rec", bytes);
+    if (k.stack != stack_)
+        return false;
+    if (!seed)
+        return !dir_.empty() && readFile(path(k), bytes);
+    const uint64_t value = k.name();
+    uint8_t name[sizeof value];
+    for (unsigned i = 0; i < sizeof name; ++i)
+        name[i] = uint8_t(value >> (8 * (sizeof name - 1 - i)));
+    switch_seed_pack::Bytes found;
+    if (!seed_ || !seed_->find(name, found) || found.size > kSizeLimit)
+        return false;
+    bytes.assign(reinterpret_cast<const char *>(found.data), found.size);
+    return true;
 }
 
 RecordCache::Found RecordCache::load(const CacheKey &k, RuntimeRecord &record, std::string &refusal)
 {
     std::string bytes;
-    for (const auto *dir : {&seed_, &dir_})
-        if (loadBytes(*dir, k, bytes))
+    for (const bool seed : {true, false})
+        if (loadBytes(seed, k, bytes))
             if (const Found found = decodeEntry(bytes, k, record, refusal); found != Found::None)
                 return found;
     return Found::None;
@@ -305,8 +322,8 @@ RecordCache::Found RecordCache::load(const CacheKey &k, RuntimeRecord &record, s
 RecordCache::Found RecordCache::loadKernel(const CacheKey &k, ComputeRecord &record, std::string &refusal)
 {
     std::string bytes;
-    for (const auto *dir : {&seed_, &dir_})
-        if (loadBytes(*dir, k, bytes))
+    for (const bool seed : {true, false})
+        if (loadBytes(seed, k, bytes))
             if (const Found found = decodeKernelEntry(bytes, k, record, refusal); found != Found::None)
                 return found;
     return Found::None;

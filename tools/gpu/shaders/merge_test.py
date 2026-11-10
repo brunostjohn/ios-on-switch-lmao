@@ -83,30 +83,36 @@ class JoinTest(unittest.TestCase):
         report.write_text(json.dumps({'identity': identity}))
         return pack, index, report
 
-    def test_native_records_are_installed_beside_the_raw_pack(self):
+    def test_packed_native_seed_is_installed_beside_the_raw_pack_without_its_host_files(self):
         seed, raw, native = (self.root / name for name in ('seed', 'raw', 'native'))
-        for folder in (seed, raw, native / 'raw-0000000000001234'):
+        for folder in (seed, raw, native / 'raw-0000000000001234' / 'packs', native / 'native-analysis' / 'packs'):
             folder.mkdir(parents=True)
         (seed / 'SEED').write_bytes(b'identity')
         (raw / 'pack.bin').write_bytes(b'raw pack')
-        relative = 'raw-0000000000001234/000000000000abcd.rec'
-        (native / relative).write_bytes(b'native artifact')
+        packed = {
+            'raw-0000000000001234/index': b'record index',
+            'raw-0000000000001234/packs/000': b'native records',
+            'native-analysis/index': b'analysis index',
+            'native-analysis/packs/000': b'native compute analyses',
+        }
+        for relative, data in packed.items():
+            (native / relative).write_bytes(data)
         (native / 'coverage.json').write_bytes(b'{}')
-        analysis = native / 'native-analysis' / ('a' * 64 + '.nca')
-        analysis.parent.mkdir()
-        analysis.write_bytes(b'native compute analysis')
+        (native / 'manifest.json').write_bytes(b'{}')
         out = self.root / 'tree'
         size = self.root / 'size.json'
         merge.tree(argparse.Namespace(seed=seed, raw=raw, native=native, pack=[], out=out, size=size))
-        self.assertEqual((out / merge.RAW / 'native' / relative).read_bytes(), b'native artifact')
-        self.assertEqual((out / merge.RAW / 'pack.bin').read_bytes(), b'raw pack')
-        self.assertEqual((out / merge.RAW / 'native' / relative).stat().st_mode & 0o777, 0o644)
+        records = out / merge.RAW / 'native' / 'raw-0000000000001234'
+        self.assertEqual((records / 'packs' / '000').read_bytes(), b'native records')
+        self.assertEqual((records / 'index').stat().st_mode & 0o777, 0o644)
         self.assertEqual((out / merge.RAW / 'native').stat().st_mode & 0o777, 0o755)
-        self.assertEqual(
-            (out / merge.SEED / 'native-analysis' / analysis.name).read_bytes(), b'native compute analysis'
-        )
+        self.assertEqual((out / merge.RAW / 'pack.bin').read_bytes(), b'raw pack')
+        analyses = out / merge.SEED / 'native-analysis'
+        self.assertEqual((analyses / 'packs' / '000').read_bytes(), b'native compute analyses')
+        self.assertEqual((analyses / 'index').read_bytes(), b'analysis index')
         self.assertFalse((out / merge.RAW / 'native' / 'native-analysis').exists())
-        self.assertEqual(json.loads(size.read_text())['files'], 5)
+        self.assertFalse(list(out.rglob('*.json')))
+        self.assertEqual(json.loads(size.read_text())['files'], 6)
 
     def test_join_packs_the_buckets(self):
         shared = record(b'one pipeline, made by two buckets')
