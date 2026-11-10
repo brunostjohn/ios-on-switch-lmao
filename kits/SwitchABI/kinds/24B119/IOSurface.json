@@ -14,9 +14,13 @@
   },
   "addresses": {
     "alloc_size": "0xfffffff009aeb438",
+    "bytes_per_element": "0xfffffff009aee628",
     "bytes_per_row": "0xfffffff009aee61c",
     "complete": "0xfffffff009aefca4",
+    "copy_value": "0xfffffff009af18bc",
     "device_unlock": "0xfffffff009af1a38",
+    "element_height": "0xfffffff009aee640",
+    "element_width": "0xfffffff009aee634",
     "format": "0xfffffff009aee5a8",
     "height": "0xfffffff009aee604",
     "lookup": "0xfffffff009affb20",
@@ -33,11 +37,15 @@
   "found": {
     "alloc_size": "ldr x0, [x0, #0x90] as in 21H461",
     "baseOffset": "value shown by f940b400 at 0xfffffff009aee6a4",
+    "bytes_per_element": "ldrh w0, [x0, #0x70]: IOSurfaceBytesPerElement; constructor stores the parsed property at this field",
     "bytes_per_row": "ldr x0, [x0, #0x68]: the field the plane-bytes-per-row accessor falls back to",
     "clientMemory": "value shown by f940a808 at 0xfffffff009af7f44",
     "clientTask": "value shown by f940b810 at 0xfffffff009af7f4c",
     "complete": "IOSurface::complete(): the lock at +0x398, the wire count at +0x22c dropped, the rest only when it reaches 0 (21H461: +0x380, +0x20c); the GOT entry right after prepare's in both kexts, as in 21H461",
+    "copy_value": "IOSurface::copyValue(OSSymbol const*, uint32_t*): takes the surface lock at +0x50, calls the retained dictionary-value accessor with key and seed output, then unlocks; the same wrapper around copyValue as 21H461",
     "device_unlock": "the device write end (surface, options), as in 21H461: under the lock at +0x50, unless options bit 0, the seed (+0xc of the root entry, now a signed pointer at +0x178) and the write count (+0x10) go up and the cache flags (+0x3d0, 21H461 +0x3b0) get 0x1c; the 7th and 10th __ZN9IOSurface GOT entries of AppleM2ScalerCSCDriver and IOMobileGraphicsFamily, as in 21H461",
+    "element_height": "ldrb w0, [x0, #0x73]: IOSurfaceElementHeight; constructor stores the parsed property at this field",
+    "element_width": "ldrb w0, [x0, #0x72]: IOSurfaceElementWidth; constructor stores the parsed property at this field",
     "format": "ldr w0, [x0, #0x80] as in 21H461",
     "height": "ldr x0, [x0, #0x60]: the field the plane-height accessor falls back to",
     "lookup": "IOSurfaceRoot::lookupSurface(id, task), as in 21H461: find_surface(id, task), the result's lock at +0xd8 and the root's at +0x140 (21H461 +0x138); the first IOSurface entry of AppleM2ScalerCSCDriver's __auth_got and the second of IOMobileGraphicsFamily's, where 21H461's GOTs hold it",
@@ -132,6 +140,26 @@
         "at": "0xfffffff009af1a38",
         "body": "d503237f a9be4ff4 a9017bfd 910043fd aa0103f4 aa0003f3 f9402800 94008f7b 37000274 f940be70 9105e271 f2f47371 dac11a30 aa1003f1 dac147f1 eb11021f 54000040 d4388e40 b9400e08 11000508 b9000e08 b943d268 321e0908 b903d268 b9401208 11000508 b9001208 f9402a60",
         "why": "the device write end (surface, options), as in 21H461: under the lock at +0x50, unless options bit 0, the seed (+0xc of the root entry, now a signed pointer at +0x178) and the write count (+0x10) go up and the cache flags (+0x3d0, 21H461 +0x3b0) get 0x1c; the 7th and 10th __ZN9IOSurface GOT entries of AppleM2ScalerCSCDriver and IOMobileGraphicsFamily, as in 21H461"
+      },
+      "copy_value": {
+        "at": "0xfffffff009af18bc",
+        "body": "d503237f a9bd57f6 a9014ff4 a9027bfd 910083fd aa0203f3 aa0103f4 aa0003f5 f9402800 94008fd8 aa1503e0 aa1403e1 aa1303e2 97fffe42 aa0003f3 f9402aa0",
+        "why": "IOSurface::copyValue(OSSymbol const*, uint32_t*): takes the surface lock at +0x50, calls the retained dictionary-value accessor with key and seed output, then unlocks; the same wrapper around copyValue as 21H461"
+      },
+      "bytes_per_element": {
+        "at": "0xfffffff009aee628",
+        "body": "7940e000 d65f03c0",
+        "why": "ldrh w0, [x0, #0x70]: IOSurfaceBytesPerElement; constructor stores the parsed property at this field"
+      },
+      "element_width": {
+        "at": "0xfffffff009aee634",
+        "body": "3941c800 d65f03c0",
+        "why": "ldrb w0, [x0, #0x72]: IOSurfaceElementWidth; constructor stores the parsed property at this field"
+      },
+      "element_height": {
+        "at": "0xfffffff009aee640",
+        "body": "3941cc00 d65f03c0",
+        "why": "ldrb w0, [x0, #0x73]: IOSurfaceElementHeight; constructor stores the parsed property at this field"
       }
     },
     "constants": {

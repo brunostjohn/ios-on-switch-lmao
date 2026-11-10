@@ -28,7 +28,11 @@
     "prepare": "0xfffffff005b9fda0",
     "complete": "0xfffffff005b9ff64",
     "device_unlock": "0xfffffff005ba0fc8",
-    "lookup": "0xfffffff005baa72c"
+    "lookup": "0xfffffff005baa72c",
+    "copy_value": "0xfffffff005ba0ed4",
+    "bytes_per_element": "0xfffffff005b9ebdc",
+    "element_width": "0xfffffff005b9ebe4",
+    "element_height": "0xfffffff005b9ebec"
   },
   "hints": {
     "functions": {
@@ -111,6 +115,26 @@
         "at": "0xfffffff005ba0fc8",
         "body": "a9be4ff4 a9017bfd 910043fd aa0103f4 aa0003f3 f9402800 94005ca0 37000174 f940be68 b9400d09 11000529 b9000d09 b943b269 321e0929 b903b269 b9401109 11000529 b9001109",
         "why": "the device write end (surface, options): under the surface's IOLock (+0x50), unless options bit 0 (read), the seed (+0xc of the root entry at +0x178) and the write count (+0x10) go up and the cache flags (+0x3b0) get 0x1c; returns 0. AppleM2ScalerCSCDriver's GOT holds it at 0xfffffff006e5ea88: what Apple's media engines call on a job's destination"
+      },
+      "copy_value": {
+        "at": "0xfffffff005ba0ed4",
+        "body": "a9bd57f6 a9014ff4 a9027bfd 910083fd aa0203f3 aa0103f4 aa0003f5 f9402800 94005cdb aa1503e0 aa1403e1 aa1303e2 97ffff91 aa0003f3 f9402aa0 94005cda",
+        "why": "IOSurface::copyValue(OSSymbol const*, uint32_t*): takes the surface lock at +0x50, calls the retained dictionary-value accessor with key and seed output, then unlocks; the same wrapper around copyValue as 21H461"
+      },
+      "bytes_per_element": {
+        "at": "0xfffffff005b9ebdc",
+        "body": "7940e000 d65f03c0",
+        "why": "ldrh w0, [x0, #0x70]: IOSurfaceBytesPerElement; constructor stores the parsed property at this field"
+      },
+      "element_width": {
+        "at": "0xfffffff005b9ebe4",
+        "body": "3941c800 d65f03c0",
+        "why": "ldrb w0, [x0, #0x72]: IOSurfaceElementWidth; constructor stores the parsed property at this field"
+      },
+      "element_height": {
+        "at": "0xfffffff005b9ebec",
+        "body": "3941cc00 d65f03c0",
+        "why": "ldrb w0, [x0, #0x73]: IOSurfaceElementHeight; constructor stores the parsed property at this field"
       }
     },
     "constants": {

@@ -235,7 +235,8 @@ static inline int32_t tegra_vic_fix(int64_t micros, int64_t one)
 
 enum {
     TEGRA_VIC_YCC_601 = 0,
-    TEGRA_VIC_YCC_709 = 1
+    TEGRA_VIC_YCC_709 = 1,
+    TEGRA_VIC_YCC_2020 = 2
 };
 
 // Luma weights (Kr, Kb) in millionths: BT.601 0.299/0.114, BT.709 0.2126/0.0722.
@@ -576,6 +577,13 @@ static inline const char *tegra_vic_build(const TegraVICImage *src, const TegraV
         if (!(t->yccIn & (same ? TEGRA_VIC_YCC_IN_COPY : TEGRA_VIC_YCC_IN_RGB)))
             return same ? "4:2:0 copy this engine has not proven" : "4:2:0 conversion this engine has not proven";
     }
+
+    const bool copyYcc = !op->fill && src->format->kind != TEGRA_VIC_KIND_RGB &&
+                         src->format->kind == dst->format->kind && src->standard == dst->standard &&
+                         t->in.cbChannel == t->out.cbChannel;
+    if (!copyYcc && ((dst->format->kind != TEGRA_VIC_KIND_RGB && dst->standard > TEGRA_VIC_YCC_709) ||
+                    (!op->fill && src->format->kind != TEGRA_VIC_KIND_RGB && src->standard > TEGRA_VIC_YCC_709)))
+        return "YCbCr matrix requires color conversion outside VIC's contract";
 
     memset(job, 0, sizeof(*job));
     uint8_t *c = job->config;

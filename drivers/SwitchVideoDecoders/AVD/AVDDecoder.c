@@ -116,9 +116,7 @@ static bool presentPicture(Decoder *d, const H264Picture *picture, CVPixelBuffer
                                  .dst_x = x,
                                  .dst_y = y,
                                  .sample_bytes = picture->wide ? 2 : 1};
-    CVPixelBufferLockBaseAddress(image, 0);  // a write lock, so the surface's seed moves as a CPU write moves it
     const int err = nvdec_present(d->client, &p);
-    CVPixelBufferUnlockBaseAddress(image, 0);
     if (!err)
         return true;
     if (err == kIOReturnUnsupported || err == kIOReturnBadArgument) {
@@ -151,8 +149,7 @@ void avd_place_picture(Decoder *d, const H264Picture *picture, CVPixelBufferRef 
                           width * bytes, height);
         block_linear_copy(chroma, chromaPitch, picture->chroma, picture->pitch, (picture->crop_x & ~1u) * bytes,
                           picture->crop_y / 2, (width & ~1u) * bytes, (height + 1) / 2);
-        // To DRAM: the GPU does not snoop the CPU's caches, and nothing cleans a surface the compositor imported
-        // before this write (its IOSurface lock and unlock are traps the kernel's coherency hook never sees).
+        // Pool images without a registered device backing still need their CPU-written rows published to DRAM.
         sys_dcache_flush(luma, lumaPitch * height);
         sys_dcache_flush(chroma, chromaPitch * ((height + 1) / 2));
         CVPixelBufferUnlockBaseAddress(image, 0);
@@ -183,7 +180,6 @@ static void *decoded(void *ctx, const H264Picture *picture)
         out->status = kVTVideoDecoderMalfunctionErr;
         return out;
     }
-    avd_place_picture(d, picture, out->image, 0, 0);
     if (d->matrix)
         CVBufferSetAttachment(out->image, kCVImageBufferYCbCrMatrixKey, d->matrix, kCVAttachmentMode_ShouldPropagate);
     if (d->primaries)
@@ -192,6 +188,7 @@ static void *decoded(void *ctx, const H264Picture *picture)
     if (d->transfer)
         CVBufferSetAttachment(out->image, kCVImageBufferTransferFunctionKey, d->transfer,
                               kCVAttachmentMode_ShouldPropagate);
+    avd_place_picture(d, picture, out->image, 0, 0);
     return out;
 }
 

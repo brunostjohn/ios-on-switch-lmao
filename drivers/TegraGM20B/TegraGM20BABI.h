@@ -39,6 +39,7 @@ enum {
 	TegraGM20BMethodCpuAcquire = 21,
 	TegraGM20BMethodCpuRelease = 22,
 	TegraGM20BMethodSubmitAddress = 23,
+	TegraGM20BMethodSurfaceLayoutInfo = 24,
 
 	TegraGM20BMaxBindOps = 100,
 	TegraGM20BMaxPushes = 255,
@@ -67,6 +68,8 @@ enum {
 	TegraGM20BInfoSubmit = 1u << 12, /* atomic surface uses and pushes (method 20) */
 	TegraGM20BInfoCpuAccess = 1u << 13,
 	TegraGM20BInfoSubmitAddress = 1u << 14,
+	TegraGM20BInfoCpuPreserveDirty = 1u << 15,
+	TegraGM20BInfoCanonicalSurfaceLayout = 1u << 16,
 };
 
 enum {
@@ -74,6 +77,7 @@ enum {
 	TegraGM20BCpuWrite = 1u << 1,
 	TegraGM20BCpuAvoidSync = 1u << 2,
 	TegraGM20BCpuDiscard = 1u << 3,
+	TegraGM20BCpuPreserveDirty = 1u << 6,
 };
 
 struct TegraGM20BAbiCpuAccess {
@@ -194,6 +198,12 @@ struct TegraGM20BAbiSurfaceLayout {
 struct TegraGM20BAbiSurfaceLayoutReply {
 	uint32_t layout; /* 0, TegraGM20BLayoutTiled or TegraGM20BLayoutOtherShape */
 	uint32_t reserved;
+};
+
+struct TegraGM20BAbiSurfaceLayoutInfo {
+	uint32_t layout, width, height, bpp;
+	uint32_t pitch, y_log2, rows, reserved;
+	uint64_t align, bytes;
 };
 
 /* Method 4. The handle dies now; its pages are released only after every channel of the connection has completed what it had
@@ -498,6 +508,7 @@ TEGRA_GM20B_ASSERT(TegraGM20BAbiBoImport, 24);
 TEGRA_GM20B_ASSERT(TegraGM20BAbiSurfaceWrites, 8);
 TEGRA_GM20B_ASSERT(TegraGM20BAbiSurfaceLayout, 32);
 TEGRA_GM20B_ASSERT(TegraGM20BAbiSurfaceLayoutReply, 8);
+TEGRA_GM20B_ASSERT(TegraGM20BAbiSurfaceLayoutInfo, 48);
 TEGRA_GM20B_ASSERT(TegraGM20BAbiBoFree, 8);
 TEGRA_GM20B_ASSERT(TegraGM20BAbiBindOp, 40);
 TEGRA_GM20B_ASSERT(TegraGM20BAbiVmBind, 4008);

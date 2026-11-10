@@ -274,3 +274,10 @@ pub use ycbcr_convert::{
     YCbCrOutput, YCbCrPlanes, YCbCrRange,
 };
 pub use ycbcr_write::{ycbcr_store, ycbcr_write, ycbcr_write_module, YCbCrWriteModule};
+
+/// The two float-bit vectors for Metal's `setBlendColorRed:green:blue:alpha:` when
+/// shader blending reads [`PushField::BlendColor`](crate::pipeline::PushField::BlendColor).
+/// They include the extended-range clamps and half rounding, including the one-minus values.
+pub fn extended_blend_color_words(color: [f32; 4]) -> [u32; 8] {
+    crate::lower::arith::extended_range::blend_color::constant_words(color)
+}

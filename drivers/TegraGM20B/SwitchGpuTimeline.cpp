@@ -4,13 +4,15 @@
 #include "SwitchGpuTimeline.h"
 #include "TegraGM20BGpu.h"
 
+static_assert(__atomic_always_lock_free(sizeof(uint64_t), nullptr));
+
 struct switch_gpu_timeline {
 	switch_gpu_timeline *next;
 	uint64_t uid;
 	const volatile uint32_t *fence;
 	const volatile uint32_t *allocation;
-	uint32_t completed, refs;
-	bool failed;
+	uint64_t terminal;
+	uint32_t refs;
 };
 
 namespace {
@@ -48,10 +50,17 @@ int status(const switch_gpu_backing_token *token)
 	const auto *timeline = find(token);
 	int result = -19;
 	if (timeline) {
-		const uint32_t completed = timeline->fence && !timeline->failed ?
-			__atomic_load_n(timeline->fence, __ATOMIC_ACQUIRE) : timeline->completed;
+		uint64_t terminal = __atomic_load_n(&timeline->terminal, __ATOMIC_ACQUIRE);
+		uint32_t completed = uint32_t(terminal);
+		if (!terminal && timeline->fence) {
+			completed = __atomic_load_n(timeline->fence, __ATOMIC_ACQUIRE);
+			// Recovery publishes failure before advancing the abandoned fence to release hardware acquires.
+			terminal = __atomic_load_n(&timeline->terminal, __ATOMIC_ACQUIRE);
+			if (terminal)
+				completed = uint32_t(terminal);
+		}
 		result = int32_t(completed - uint32_t(token->value)) >= 0 ? 1 :
-			(timeline->failed || !timeline->fence ? -5 : 0);
+			(terminal || !timeline->fence ? -5 : 0);
 	}
 	IOLockUnlock(lock);
 	return result;
@@ -117,7 +126,7 @@ extern "C" switch_gpu_timeline *switch_gpu_timeline_create(uint64_t uid, const v
 		return nullptr;
 	IOLockLock(lock);
 	switch_gpu_fence_hold(fence);
-	*timeline = {timelines, uid, fence, fence, *fence, 1, false};
+	*timeline = {timelines, uid, fence, fence, 0, 1};
 	timelines = timeline;
 	IOLockUnlock(lock);
 	return timeline;
@@ -127,12 +136,9 @@ extern "C" void switch_gpu_timeline_failed(switch_gpu_timeline *timeline, uint32
 {
 	if (!timeline)
 		return;
-	IOLockLock(lock);
-	if (!timeline->failed) {
-		timeline->completed = completed;
-		timeline->failed = true;
-	}
-	IOLockUnlock(lock);
+	uint64_t expected = 0;
+	__atomic_compare_exchange_n(&timeline->terminal, &expected, (uint64_t(1) << 32) | completed,
+		false, __ATOMIC_RELEASE, __ATOMIC_RELAXED);
 }
 
 extern "C" void switch_gpu_timeline_close(switch_gpu_timeline *timeline)
@@ -140,8 +146,10 @@ extern "C" void switch_gpu_timeline_close(switch_gpu_timeline *timeline)
 	if (!timeline)
 		return;
 	IOLockLock(lock);
-	if (!timeline->failed)
-		timeline->completed = *timeline->fence;
+	uint64_t expected = 0;
+	const uint32_t completed = __atomic_load_n(timeline->fence, __ATOMIC_ACQUIRE);
+	__atomic_compare_exchange_n(&timeline->terminal, &expected, (uint64_t(1) << 32) | completed,
+		false, __ATOMIC_RELEASE, __ATOMIC_RELAXED);
 	timeline->fence = nullptr;
 	put_locked(timeline);
 	IOLockUnlock(lock);

@@ -27,11 +27,11 @@ TEST(SwitchVICQueue, CompletionAndAdmissionSurviveSyncpointWrap)
     ASSERT_TRUE(queue.reset(0xfffffffe));
     ASSERT_TRUE(queue.publish({}));
     ASSERT_TRUE(queue.publish({}));
-    EXPECT_EQ(queue.submitted, 0u);
+    EXPECT_EQ(queue.submitted, 0x100000000ULL);
     EXPECT_FALSE(queue.retire(0xfffffffe));
     EXPECT_TRUE(queue.retire(0xffffffff));
     EXPECT_TRUE(queue.retire(0));
-    EXPECT_EQ(queue.completed, 0u);
+    EXPECT_EQ(queue.completed, 0x100000000ULL);
     EXPECT_EQ(queue.count, 0u);
 }
 
@@ -101,11 +101,57 @@ TEST(SwitchVICQueue, MixedBatchAdmissionAndRetirementPreserveEveryLiveConfigurat
             }
         } else if (queue.count) {
             ASSERT_EQ(queue.jobs[queue.head].submittedUs, expected.front());
-            ASSERT_TRUE(queue.retire(queue.jobs[queue.head].fence));
+            ASSERT_TRUE(queue.retire(static_cast<uint32_t>(queue.jobs[queue.head].fence)));
             expected.pop_front();
         }
         ASSERT_EQ(queue.count, expected.size());
         for (uint32_t i = 0; i < queue.count; ++i)
             ASSERT_EQ(queue.jobs[(queue.head + i) % queue.kSlots].submittedUs, expected[i]);
     }
+}
+
+TEST(SwitchVICQueue, ResumePreservesCompletedTokenIdentityAcrossWrap)
+{
+    SwitchVICQueue queue;
+    ASSERT_TRUE(queue.reset(0xfffffffe));
+    ASSERT_TRUE(queue.publish({}));
+    EXPECT_FALSE(queue.rebase(0));
+    ASSERT_TRUE(queue.retire(0xffffffff));
+    const uint64_t oldToken = queue.completed;
+    ASSERT_TRUE(queue.rebase(1));
+    EXPECT_EQ(queue.completed, 0x100000001ULL);
+    EXPECT_LT(oldToken, queue.completed);
+    ASSERT_TRUE(queue.publish({}));
+    EXPECT_EQ(queue.jobs[queue.head].fence, 0x100000002ULL);
+    EXPECT_FALSE(queue.retire(1));
+    EXPECT_TRUE(queue.retire(2));
+    EXPECT_FALSE(queue.rebase(1));
+}
+
+TEST(SwitchVICQueue, LegacyWaitResolvesOnlyIssuedThresholdsInTheCurrentWindow)
+{
+    SwitchVICQueue queue;
+    uint64_t sequence = 0;
+    EXPECT_FALSE(queue.legacySequence(1, &sequence));
+    ASSERT_TRUE(queue.reset(0xfffffffe));
+    ASSERT_TRUE(queue.publish({}));
+    ASSERT_TRUE(queue.publish({}));
+    ASSERT_TRUE(queue.legacySequence(0xffffffff, &sequence));
+    EXPECT_EQ(sequence, 0xffffffffULL);
+    ASSERT_TRUE(queue.legacySequence(0, &sequence));
+    EXPECT_EQ(sequence, 0x100000000ULL);
+    EXPECT_FALSE(queue.legacySequence(1, &sequence));
+    EXPECT_FALSE(queue.legacySequence(0x7fffffff, &sequence));
+}
+
+TEST(SwitchVICQueue, ExhaustedSoftwareSequenceRejectsWithoutWrapping)
+{
+    SwitchVICQueue queue;
+    queue.submitted = queue.completed = UINT64_MAX - 1;
+    EXPECT_FALSE(queue.canPublish(2));
+    EXPECT_TRUE(queue.publish({}));
+    EXPECT_FALSE(queue.publish({}));
+    EXPECT_EQ(queue.submitted, UINT64_MAX);
+    EXPECT_TRUE(queue.retire(UINT32_MAX));
+    EXPECT_FALSE(queue.rebase(0));
 }

@@ -50,11 +50,11 @@ bool planeFence(const PlaneSet &p)
     planeTarget = p;
     gpuSequence = gpuSequence + 1;
     frameInfo->tickets.gpu(p.seq, gpuSequence);
-    if (SWITCH_FRAME_TIMELINE) {
-        const auto *ticket = frameInfo->tickets.byTake(p.seq);
-        KDBG(SWITCH_KDBG_CODE(SWITCH_KDBG_PRESENT), gpuSequence, ticket ? ticket->id : 0,
-              ticket ? ticket->swapId : 0, p.seq);
-    }
+#if SWITCH_FRAME_TIMELINE
+    const auto *ticket = frameInfo->tickets.byTake(p.seq);
+    KDBG(SWITCH_KDBG_CODE(SWITCH_KDBG_PRESENT), gpuSequence, ticket ? ticket->id : 0,
+          ticket ? ticket->swapId : 0, p.seq);
+#endif
     gpuOfferedAt = mach_absolute_time();
     __atomic_store_n(&gpuScanout, true, __ATOMIC_RELEASE);
     gpuDeadlines = 0;

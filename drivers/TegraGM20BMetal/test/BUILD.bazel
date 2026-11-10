@@ -72,6 +72,7 @@
 #
 #   bazel test //drivers/TegraGM20BMetal/test:all
 load("@rules_python//python:py_test.bzl", "py_test")
+load("@rules_rust//rust:defs.bzl", "rust_test")
 load("//bazel/lint:defs.bzl", "lint_files")
 load("//bazel/testing:defs.bzl", "host_library", "host_test")
 
@@ -96,7 +97,10 @@ host_library(
         "//drivers/TegraGM20BMetal:raw/pack/mesa/util/macros.h",
         "//drivers/TegraGM20BMetal:raw/pack/mesa/util/u_math.h",
     ],
-    copts = ["-Wno-unused-parameter", "-Wno-sign-compare"],
+    copts = [
+        "-Wno-unused-parameter",
+        "-Wno-sign-compare",
+    ],
 )
 
 host_test(
@@ -106,8 +110,8 @@ host_test(
         "//drivers/TegraGM20BMetal:raw/runtime/raw_mme.h",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_push.h",
     ],
-    deps = [":raw_mme_simulator"],
     cxx_std = "c++17",
+    deps = [":raw_mme_simulator"],
 )
 
 host_test(
@@ -430,11 +434,36 @@ host_test(
 )
 
 host_test(
+    name = "raw_compute_visibility_test",
+    srcs = [
+        "raw_compute_visibility_test.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_compute_visibility.h",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_push.h",
+        "//third_party/mesa/src/nouveau/headers:nvtypes.h",
+        "//third_party/mesa/src/nouveau/headers:nvidia/classes/clb197.h",
+        "//third_party/mesa/src/nouveau/headers:nvidia/classes/clb1c0.h",
+    ],
+    copts = ["-Ithird_party/mesa/src/nouveau/headers"],
+    cxx_std = "c++17",
+)
+
+host_test(
     name = "raw_view_test",
     srcs = [
         "raw_view_test.cpp",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_view.h",
     ],
+    cxx_std = "c++17",
+)
+
+host_test(
+    name = "raw_surface_view_test",
+    srcs = [
+        "raw_surface_view_test.cpp",
+        "//drivers/TegraGM20B:TegraGM20BLayout.h",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_surface_view.h",
+    ],
+    copts = ["-Idrivers/TegraGM20B"],
     cxx_std = "c++17",
 )
 
@@ -468,6 +497,7 @@ host_test(
         "raw_bounds_test.cpp",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_bounds.h",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_region.h",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_geometry.h",
     ],
     cxx_std = "c++17",
 )
@@ -479,6 +509,7 @@ host_test(
         "//drivers/TegraGM20BMetal:raw/runtime/raw_bounds.h",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_overlap.h",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_region.h",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_geometry.h",
     ],
     cxx_std = "c++17",
 )
@@ -506,12 +537,25 @@ host_test(
     srcs = [
         "raw_direct_push_test.cpp",
         "//drivers/NativeMetal:bridge/NativeMetalDirect.h",
+        "//drivers/NativeMetal:bridge/NativeMetalBlend.h",
         "//drivers/NativeMetal:bridge/NativeMetalObjects.h",
         "//drivers/TegraGM20BMetal:raw/pack/probe_bind.h",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_direct_push.h",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_dynamic_push.h",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_pack.h",
     ],
     copts = ["-Idrivers/NativeMetal"],
     cxx_std = "c++17",
+)
+
+rust_test(
+    name = "raw_blend_words_test",
+    srcs = [
+        "raw_blend_words_test.rs",
+        "//third_party/m2v/crates/metal2vulkan:src/lower/arith/extended_range/blend_color.rs",
+    ],
+    crate_root = "raw_blend_words_test.rs",
+    edition = "2021",
 )
 
 host_test(

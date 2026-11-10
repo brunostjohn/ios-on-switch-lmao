@@ -268,6 +268,9 @@ bool assembleRecord(const RecordParts &parts, const std::string &key, const Pack
         p.pushes++;
     }
     p.setBytes = parts.setBytes;
+    p.flags |= parts.pushMetadata ? PipelinePushMetadata : 0;
+    p.blendColorWord = parts.blendColorWord;
+    p.halfBlendColorWord = parts.halfBlendColorWord;
     const size_t bar = key.find(" | ");
     out.keyString = key.substr(0, bar);
     while (!out.keyString.empty() && isspace(static_cast<unsigned char>(out.keyString.back())))

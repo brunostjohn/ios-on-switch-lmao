@@ -3516,14 +3516,10 @@ fn instantiate_into(
                     }
                 }
                 // The blend color as an extended-range blend reads it, and one minus it.
-                PushField::BlendColor => {
-                    crate::lower::arith::extended_range::blend_color::constant_words(
-                        state.blend_color,
-                    )
+                PushField::BlendColor => super::extended_blend_color_words(state.blend_color)
                     .iter()
                     .flat_map(|w| w.to_le_bytes())
-                    .collect()
-                }
+                    .collect(),
                 // The blend color as the encoder set it, which a 16-bit float blend rounds.
                 PushField::HalfBlendColor => state
                     .blend_color

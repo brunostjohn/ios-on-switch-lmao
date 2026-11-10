@@ -126,6 +126,30 @@
       "symbols": [
         "tegra_vic_ios_device_unlock"
       ]
+    },
+    "copy_value": {
+      "doc": "Retained metadata value by OSSymbol key and seed output; takes the surface lock internally.",
+      "symbols": [
+        "switch_surface_copy_value"
+      ]
+    },
+    "bytes_per_element": {
+      "doc": "Bytes per element of a packed IOSurface.",
+      "symbols": [
+        "tegra_gm20b_ios_bpe"
+      ]
+    },
+    "element_width": {
+      "doc": "Pixels in one packed element horizontally.",
+      "symbols": [
+        "tegra_gm20b_ios_element_width"
+      ]
+    },
+    "element_height": {
+      "doc": "Pixels in one packed element vertically.",
+      "symbols": [
+        "tegra_gm20b_ios_element_height"
+      ]
     }
   }
 }

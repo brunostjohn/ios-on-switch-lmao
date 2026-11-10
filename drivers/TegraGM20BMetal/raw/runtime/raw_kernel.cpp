@@ -13,7 +13,8 @@
 
 namespace raw {
 namespace {
-constexpr uint64_t kVaGranule = 0x10000;  // the GMMU big page: every range starts and ends on one
+constexpr uint64_t kVaGranule = 0x10000;
+constexpr uint64_t kBigPageAlignment = 0x20000;
 constexpr char kNvk[] = "libvulkan_nouveau.dylib";
 
 // NVK's image: the one this process loaded already, else the one beside this image (the plugin's bundle, which the m2v device's
@@ -146,8 +147,9 @@ bool Kernel::openOwn(std::string &err)
 uint64_t Kernel::allocVa(uint64_t bytes, uint64_t align)
 {
     bytes = (bytes + kVaGranule - 1) & ~(kVaGranule - 1);
-    if (align < kVaGranule)
-        align = kVaGranule;
+    const uint64_t minimumAlignment = bytes >= kBigPageAlignment ? kBigPageAlignment : kVaGranule;
+    if (align < minimumAlignment)
+        align = minimumAlignment;
     for (auto it = vaFree_.begin(); it != vaFree_.end(); ++it) {
         const uint64_t at = (it->first + align - 1) & ~(align - 1), end = it->first + it->second;
         if (at + bytes > end)
@@ -275,14 +277,27 @@ bool Kernel::priority(uint32_t priority, uint32_t background)
 }
 
 uint32_t Kernel::surfaceLayout(const Bo &bo, uint32_t width, uint32_t height, uint32_t bpp, uint32_t bytesPerRow,
-                               bool writes)
+                               bool writes, tgm_layout *canonical)
 {
-    if (!(info_.flags & TegraGM20BInfoSurfaceLayout))
-        return 0;
     const TegraGM20BAbiSurfaceLayout in = {
         bo.handle, width, height, bpp, bytesPerRow, writes ? uint32_t(TegraGM20BLayoutWrites) : 0, 0};
+    if (canonical && (info_.flags & TegraGM20BInfoCanonicalSurfaceLayout)) {
+        TegraGM20BAbiSurfaceLayoutInfo out = {};
+        if (call(TegraGM20BMethodSurfaceLayoutInfo, &in, sizeof in, &out, sizeof out) != KERN_SUCCESS)
+            return TegraGM20BLayoutOtherShape;
+        if (out.layout == TegraGM20BLayoutTiled)
+            *canonical = {out.width, out.height,          out.bpp,   out.pitch,
+                          out.rows,  uint8_t(out.y_log2), out.align, out.bytes};
+        return out.layout;
+    }
+    if (!(info_.flags & TegraGM20BInfoSurfaceLayout))
+        return 0;
     TegraGM20BAbiSurfaceLayoutReply out = {};
-    return call(TegraGM20BMethodSurfaceLayout, &in, sizeof in, &out, sizeof out) == KERN_SUCCESS ? out.layout : 0;
+    if (call(TegraGM20BMethodSurfaceLayout, &in, sizeof in, &out, sizeof out) != KERN_SUCCESS)
+        return TegraGM20BLayoutOtherShape;
+    if (canonical && out.layout == TegraGM20BLayoutTiled && !tgm_layout_tiled(width, height, bpp, canonical))
+        return TegraGM20BLayoutOtherShape;
+    return out.layout;
 }
 
 bool Kernel::bindImport(void *addr, Bo &bo, uint32_t kind)

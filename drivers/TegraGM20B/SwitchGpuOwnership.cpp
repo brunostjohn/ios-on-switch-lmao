@@ -94,12 +94,25 @@ void unlock_transaction(switch_gpu_backing_transaction *transaction)
 }
 } // namespace
 
-extern "C" int switch_gpu_backing_begin(switch_gpu_backing_use *uses, uint32_t count,
+static int begin(switch_gpu_backing_use *uses, uint32_t count,
+		switch_gpu_cpu_lease *const *leases, uint32_t lease_count,
 		const switch_gpu_backing_token *completion, switch_gpu_backing_transaction *transaction)
 {
-	if (!transaction || !completion || (count && !uses))
+	if (!transaction || !completion || (count && !uses) || (lease_count && !leases))
 		return -22;
-	if (switch_gpu_surface_sweep)
+	for (uint32_t i = 0; i < lease_count; ++i) {
+		if (!leases[i] || !(leases[i]->access & SWITCH_GPU_BACKING_CPU_NO_CACHE))
+			return -22;
+		for (uint32_t j = 0; j < i; ++j)
+			if (leases[i]->backing == leases[j]->backing)
+				return -22;
+		bool used = false;
+		for (uint32_t j = 0; j < count; ++j)
+			used |= uses[j].backing == leases[i]->backing;
+		if (!used)
+			return -22;
+	}
+	if (!lease_count && switch_gpu_surface_sweep)
 		switch_gpu_surface_sweep();
 	*transaction = {};
 	const auto *ops = switch_gpu_backing_engine_ops(completion->engine);
@@ -132,7 +145,18 @@ extern "C" int switch_gpu_backing_begin(switch_gpu_backing_use *uses, uint32_t c
 		auto *backing = uses[i].backing;
 		IOLockLock(backing->lock);
 		++transaction->locked;
-		if (backing->cpu_writers || (backing->cpu_readers && (uses[i].access & SWITCH_GPU_BACKING_WRITE)))
+		uint32_t readers = backing->cpu_readers, writers = backing->cpu_writers;
+		for (uint32_t j = 0; j < lease_count; ++j) {
+			const auto *lease = leases[j];
+			if (lease->backing != backing)
+				continue;
+			auto &owners = lease->access & SWITCH_GPU_BACKING_WRITE ? writers : readers;
+			if (!owners || lease->offset || lease->bytes != (uint64_t(backing->pages->count) << 12))
+				result = -22;
+			else
+				--owners;
+		}
+		if (!result && (writers || (readers && (uses[i].access & SWITCH_GPU_BACKING_WRITE))))
 			result = -16;
 		if (!result)
 			result = switch_gpu_backing_prune_locked(backing);
@@ -158,6 +182,21 @@ extern "C" int switch_gpu_backing_begin(switch_gpu_backing_use *uses, uint32_t c
 	if (result)
 		switch_gpu_backing_abort(transaction);
 	return result;
+}
+
+extern "C" int switch_gpu_backing_begin(switch_gpu_backing_use *uses, uint32_t count,
+		const switch_gpu_backing_token *completion, switch_gpu_backing_transaction *transaction)
+{
+	return begin(uses, count, nullptr, 0, completion, transaction);
+}
+
+extern "C" int switch_gpu_backing_begin_conversion(switch_gpu_backing_use *uses, uint32_t count,
+		switch_gpu_cpu_lease *const *leases, uint32_t lease_count,
+		const switch_gpu_backing_token *completion, switch_gpu_backing_transaction *transaction)
+{
+	if (!lease_count)
+		return -22;
+	return begin(uses, count, leases, lease_count, completion, transaction);
 }
 
 extern "C" int switch_gpu_backing_dependencies(const switch_gpu_backing_transaction *transaction,

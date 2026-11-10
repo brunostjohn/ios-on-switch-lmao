@@ -11,6 +11,7 @@
 #include "raw_compute_lookup.h"
 #include "raw_metallib.h"
 #include "raw_view.h"
+#include "raw_surface_view.h"
 
 using RMKernelResult = raw::ComputeKernelResult<raw::ComputeState>;
 
@@ -109,6 +110,7 @@ id rmComputeState(id device, id twin, id<MTLFunction> function, MTLComputePipeli
     RMSampler *_samplers[16];
     RMBuffer *_buffers[31];
     uint64_t _offsets[31];
+    std::vector<void *> _explicitResources;
 }
 
 @end
@@ -251,6 +253,9 @@ id rmComputeState(id device, id twin, id<MTLFunction> function, MTLComputePipeli
 - (void)useResource:(id<MTLResource>)resource usage:(MTLResourceUsage)usage
 {
     setBinding(_cb, OpKernelUse, 3, 0, resource, usage);
+    void *object = (__bridge void *)resource;
+    if (object && std::find(_explicitResources.begin(), _explicitResources.end(), object) == _explicitResources.end())
+        _explicitResources.push_back(object);
 }
 
 - (void)useResources:(const id<MTLResource> __unsafe_unretained[])resources
@@ -279,7 +284,8 @@ id rmComputeState(id device, id twin, id<MTLFunction> function, MTLComputePipeli
 static bool plainTexture(RMTexture *t)
 {
     const raw::Texture &x = t->_raw;
-    return t->_rawOk && x.tic && !x.chain && !x.converted() && !x.standIn && !x.sampled && !x.memoryless;
+    return t->_rawOk && x.tic && !x.chain && !x.converted() && !x.standIn && (!x.sampled || x.surfaceView) &&
+           !x.memoryless;
 }
 
 // The kernel the pack lacks, of `descriptor` at `key`, made for this dispatch (RawComplete.h), and journaled as m2v journals a
@@ -323,6 +329,7 @@ static bool plainTexture(RMTexture *t)
     else if (dispatch.reason == raw::ComputeDispatch::Range)
         [self refuse:PredComputeKernel value:groups[0] why:@"a dispatch whose threadgroups exceed the raw grid limits"];
     const raw::ComputeState *k = nullptr;
+    uint32_t surfaceSlots = 0;
     bool lookedUp = false;
     if (!refused && _state) {
         if (_specialization.threads != t) {
@@ -354,6 +361,40 @@ static bool plainTexture(RMTexture *t)
     }
     for (uint32_t e = 0; k && e < k->rec->entries; e++) {
         const raw::PackKernelEntry &x = k->rec->entry[e];
+        RMTexture *shadow = x.kind == raw::KernelTexture && x.slot < 31 ? _textures[x.slot] : nil;
+        if (shadow && shadow->_raw.surfaceView) {
+            surfaceSlots |= 1u << x.slot;
+            bool aliases = false;
+            const auto *backing = shadow->_raw.import;
+            const auto shares = [&](const raw::Import *other) {
+                return other && raw::surfaceBackingAliases(backing->id, backing->base, backing->bytes, other->id,
+                                                           other->base, other->bytes);
+            };
+            for (uint32_t other = 0; other < k->rec->entries; ++other) {
+                const auto &entry = k->rec->entry[other];
+                if (entry.slot >= 31)
+                    continue;
+                RMTexture *texture = entry.kind == raw::KernelTexture ? _textures[entry.slot] : nil;
+                RMBuffer *buffer = entry.kind == raw::KernelBuffer ? _buffers[entry.slot] : nil;
+                aliases |= (texture && texture != shadow && shares(texture->_raw.import)) ||
+                           (buffer && shares(buffer->_raw.import));
+            }
+            for (void *value : _explicitResources) {
+                id resource = (__bridge id)value;
+                if ([resource isKindOfClass:[RMTexture class]])
+                    aliases |= shares(((RMTexture *)resource)->_raw.import);
+                else if (RMBuffer *buffer = cpuBufferOfResource(resource))
+                    aliases |= shares(buffer->_raw.import);
+            }
+            if (aliases) {
+                [self refuse:PredComputeImage
+                       value:x.slot
+                         why:@"a cropped surface view aliases another dispatch resource"];
+                k = nullptr;
+                refused = true;
+                break;
+            }
+        }
         if (x.kind == raw::KernelTexture && x.slot < 31 && _textures[x.slot] && !plainTexture(_textures[x.slot])) {
             [self refuse:PredComputeImage
                    value:x.slot
@@ -387,6 +428,7 @@ static bool plainTexture(RMTexture *t)
     }
     // extras: Metal's grid (threadgroups, or threads for dispatchThreads:), then the threadgroups the raw path dispatches
     Cmd m = cmd(OpDispatch, 3, perThread);
+    m.a = surfaceSlots;
     m.c = uint64_t(t[0]) | uint64_t(t[1]) << 16 | uint64_t(t[2]) << 32;
     m.x = _cb->_extra.size();
     for (uint64_t v :

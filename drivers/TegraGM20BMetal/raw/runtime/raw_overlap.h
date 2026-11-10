@@ -28,19 +28,73 @@ class TriangleRuns {
 public:
     static constexpr uint32_t kMaxTriangles = 96;
 
-    // [begin, end) element ranges (vertices from the draw's first, or index positions) of the runs, in order. False: the
-    // draw cannot be told apart into triangles here (not bounded, too many, a vertex it cannot place), and stays whole
-    bool split(const DrawGeometry &g, bool strip, std::vector<std::pair<uint32_t, uint32_t>> &runs)
+    // A direct draw needs no CPU geometry to preserve raster order one triangle at a time. Indexed strips need
+    // their restart positions, and instanced draws need a separate instance-order plan, so neither is admitted here.
+    // Runs retain the original vertex IDs and provoking vertex; restarting an odd strip triangle reverses winding.
+    static bool sequential(uint32_t primitive, uint32_t count, uint32_t instances, bool indexed,
+                           std::vector<std::pair<uint32_t, uint32_t>> &runs,
+                           std::array<bool, kMaxTriangles> &winding)
     {
         runs.clear();
-        if (!g.bounded || !gather(g, strip))
+        winding.fill(false);
+        if (indexed || instances != 1 || (primitive != 3 && primitive != 4))
             return false;
+        const bool strip = primitive == 4;
+        const uint32_t triangles = strip ? (count > 2 ? count - 2 : 0) : count / 3;
+        if (triangles > kMaxTriangles)
+            return false;
+        for (uint32_t i = 0; i < triangles; ++i) {
+            const uint32_t first = strip ? i : i * 3;
+            runs.emplace_back(first, first + 3);
+            winding[i] = strip && (i & 1);
+        }
+        return true;
+    }
+
+    // False means an ordering proof is unavailable. Callers must use sequential primitives, interlock or refuse;
+    // drawing an unknown self-fetching primitive whole would lose raster-order semantics.
+    bool split(const DrawGeometry &geometry, bool strip, std::vector<std::pair<uint32_t, uint32_t>> &runs)
+    {
+        auto g = geometry;
+        g.strip = strip;
+        GeometryAnalysis analysis(g);
+        return split(analysis, runs);
+    }
+
+    bool split(GeometryAnalysis &analysis, std::vector<std::pair<uint32_t, uint32_t>> &runs)
+    {
+        runs.clear();
+        const auto &g = analysis.geometry();
+        if (!g.bounded)
+            return false;
+        auto &snapshot = analysis.snapshot();
+        const bool whole = !analysis.begin() && g.count == snapshot.source.count;
+        if (whole && snapshot.runsEvaluated) {
+            runs = snapshot.runs;
+            return snapshot.runsValid;
+        }
+        auto finish = [&](bool valid) {
+            if (!valid)
+                runs.clear();
+            if (whole) {
+                snapshot.runsEvaluated = true;
+                snapshot.runsValid = valid;
+                snapshot.runs = runs;
+            }
+            return valid;
+        };
+        if (!snapshot.evaluate() || !gather(analysis))
+            return finish(false);
         uint32_t runFirst = 0;
         for (uint32_t t = 1; t < count_; t++) {
             if (tri_[t].empty)
                 continue;
             for (uint32_t u = runFirst; u < t; u++) {
-                if (!tri_[u].empty && mayShare(tri_[u], tri_[t])) {
+                if (tri_[u].empty)
+                    continue;
+                if (!snapshot.takePair())
+                    return finish(false);
+                if (mayShare(tri_[u], tri_[t])) {
                     runs.push_back({runs.empty() ? 0 : tri_[runFirst].element, tri_[t - 1].element + 3});
                     runFirst = t;
                     break;
@@ -49,52 +103,54 @@ public:
         }
         if (!runs.empty())
             runs.push_back({tri_[runFirst].element, g.count});
-        return true;
+        return finish(true);
+    }
+
+    // Restarting a strip at an odd triangle reverses its assembly winding. Measure parity from this draw's
+    // beginning (not a larger cached snapshot), resetting at every primitive restart.
+    static std::array<bool, kMaxTriangles> winding(GeometryAnalysis &analysis,
+                                                   const std::vector<std::pair<uint32_t, uint32_t>> &runs)
+    {
+        std::array<bool, kMaxTriangles> result = {};
+        if (!analysis.geometry().strip || runs.empty())
+            return result;
+        const auto &points = analysis.snapshot().points;
+        size_t run = 0;
+        uint32_t first = 0;
+        for (uint32_t i = 0; i < analysis.geometry().count && run < runs.size() && run < result.size(); ++i) {
+            if (points[analysis.begin() + i].restart)
+                first = i + 1;
+            if (i == runs[run].first)
+                result[run++] = !points[analysis.begin() + i].restart && ((i - first) & 1);
+        }
+        return result;
     }
 
 private:
-    struct Vertex {
-        WindowPoint at;
-        uint32_t bits[4];
-    };
-
-    // the matrix takes nothing of y into x and w (exact vertical lines), of x into y and w (exact horizontal ones)
+    using Vertex = GeometryVertex;
     bool exactX_ = false, exactY_ = false;
 
     struct Triangle {
         Vertex v[3];
-        uint32_t element;  // its first vertex's element
-        bool empty;        // two of its vertices are one: no area
+        uint32_t element;
+        bool empty;
         double x0, y0, x1, y1;
     };
 
-    bool gather(const DrawGeometry &g, bool strip)
+    bool gather(GeometryAnalysis &analysis)
     {
         count_ = 0;
-        float matrix[16];
-        memcpy(matrix, g.matrix, sizeof matrix);
-        exactX_ = matrix[4] == 0 && matrix[7] == 0;
-        exactY_ = matrix[1] == 0 && matrix[3] == 0;
-        const DrawBounds bounds(matrix, g.viewport);
-        const uint64_t reach = g.positions.offset + g.positions.components * sizeof(float);
+        const auto &g = analysis.geometry();
+        const auto &snapshot = analysis.snapshot();
+        exactX_ = snapshot.exactX;
+        exactY_ = snapshot.exactY;
         Vertex window[3];
-        uint32_t first = 0, have = 0;  // the element of window[0], and how many of window hold this strip's vertices
+        uint32_t first = 0, have = 0;
         for (uint32_t e = 0; e < g.count; e++) {
-            uint32_t v = g.first + e;
-            if (g.indices) {
-                uint32_t x;
-                if (g.indexSize == 2) {
-                    uint16_t h;
-                    memcpy(&h, g.indices + 2 * e, 2);
-                    x = strip && h == 0xffff ? ~0u : h;
-                } else {
-                    memcpy(&x, g.indices + 4 * e, 4);
-                }
-                if (strip && x == ~0u) {
-                    have = 0;  // a restart begins a new strip
-                    continue;
-                }
-                v = g.first + x;
+            const auto &point = snapshot.points[analysis.begin() + e];
+            if (point.restart) {
+                have = 0;
+                continue;
             }
             if (have == 3) {
                 window[0] = window[1];
@@ -104,18 +160,13 @@ private:
             }
             if (!have)
                 first = e;
-            Vertex &w = window[have++];
-            if (uint64_t(v) * g.positions.stride + reach > g.positionBytes || !bounds.project(g.positions, v, w.at))
-                return false;
-            memset(w.bits, 0, sizeof w.bits);
-            memcpy(w.bits, g.positions.base + uint64_t(v) * g.positions.stride + g.positions.offset,
-                   g.positions.components * sizeof(float));
+            window[have++] = point;
             if (have < 3)
                 continue;
             if (count_ == kMaxTriangles)
                 return false;
             add(window, first);
-            if (!strip)
+            if (!g.strip)
                 have = 0;
         }
         return true;

@@ -11,16 +11,27 @@
 #include <IOKit/IOMemoryDescriptor.h>
 #include <IOKit/IOUserClient.h>
 #include <kern/locks.h>
+#include <mach/vm_param.h>
 #include <stdint.h>
 #include "OriginalIOSurface.h"
 #include "OriginalIOSurfaceClient.h"
 #include "OriginalIOSurfaceRootUserClient.h"
 #include "TegraGM20BViews.h"
+#include "SwitchGpuSurfacePages.h"
+#include "SwitchGpuSurfaceGeometry.h"
+#include "SwitchGpuBacking.h"
 
 // IOSurfaceRoot::lookupSurface(id, task), by address (kits/SwitchABI IOSurface, bound through TegraVIC's bindings)
 extern "C" OSObject *tegra_gm20b_ios_lookup(IOService *root, uint32_t id, task_t task);
 extern "C" IOMemoryDescriptor *tegra_vic_ios_memory(OSObject *surface);
 extern "C" uint64_t tegra_vic_ios_alloc_size(OSObject *surface);
+extern "C" uint64_t tegra_vic_ios_width(OSObject *surface);
+extern "C" uint64_t tegra_vic_ios_height(OSObject *surface);
+extern "C" uint64_t tegra_vic_ios_bytes_per_row(OSObject *surface);
+extern "C" uint32_t tegra_vic_ios_plane_count(OSObject *surface);
+extern "C" uint32_t tegra_gm20b_ios_bpe(OSObject *surface);
+extern "C" uint32_t tegra_gm20b_ios_element_width(OSObject *surface);
+extern "C" uint32_t tegra_gm20b_ios_element_height(OSObject *surface);
 
 namespace
 {
@@ -136,28 +147,104 @@ extern "C" int tgm_surface_client_memory(uint32_t id, void *task)
 	return client;
 }
 
-extern "C" int switch_gpu_surface_pages_match(uint32_t id, void *task, const uint64_t *pages, uint32_t count)
+namespace {
+SwitchGpuSurfaceMatch surfacePages(OSObject *surface, const uint64_t *pages, uint32_t count)
 {
-	OSObject *surface = tgm_surface_lookup(id, task);
-	if (!surface)
-		return 0;
 	IOMemoryDescriptor *memory = tegra_vic_ios_memory(surface);
 	const uint64_t base = at<uint64_t>(surface, OriginalIOSurface::baseOffset);
 	const uint64_t bytes = tegra_vic_ios_alloc_size(surface);
-	bool matches = memory && pages && count && !(base & 4095) &&
-		uint64_t(count) <= ((bytes + 4095) >> 12) && base <= memory->getLength() &&
-		bytes <= memory->getLength() - base;
-	const bool prepared = matches && memory->prepare() == kIOReturnSuccess;
-	matches &= prepared;
-	for (uint32_t i = 0; matches && i < count; ++i) {
-		IOByteCount length = 0;
-		const addr64_t pa = memory->getPhysicalSegment(base + (uint64_t(i) << 12), &length, kIOMemoryMapperNone);
-		matches = length && pa == pages[i];
+	if (!memory || memory->prepare() != kIOReturnSuccess)
+		return SwitchGpuSurfaceMatch::Physical;
+	const auto result = switch_gpu_surface_page_vector(memory->getLength(), base, bytes, PAGE_SIZE, pages, count,
+		[&](uint64_t offset, uint64_t &length) {
+			IOByteCount span = 0;
+			const addr64_t pa = memory->getPhysicalSegment(offset, &span, kIOMemoryMapperNone);
+			length = span;
+			return uint64_t(pa);
+		});
+	memory->complete();
+	return result;
+}
+}
+
+extern "C" OSObject *switch_gpu_surface_hold(uint32_t id, void *task, const uint64_t *pages, uint32_t count)
+{
+	OSObject *surface = tgm_surface_lookup(id, task);
+	if (!surface)
+		return nullptr;
+	const auto match = surfacePages(surface, pages, count);
+	if (match != SwitchGpuSurfaceMatch::Match) {
+		auto *memory = tegra_vic_ios_memory(surface);
+		IOLog("SwitchGPU: IOSurface %u import rejected (%u): %u pages, allocation %llu at %llu, descriptor %llu bytes\n",
+			id, unsigned(match), count, tegra_vic_ios_alloc_size(surface),
+			at<uint64_t>(surface, OriginalIOSurface::baseOffset), memory ? memory->getLength() : 0);
 	}
-	if (prepared)
-		memory->complete();
+	if (match != SwitchGpuSurfaceMatch::Match) {
+		surface->release();
+		return nullptr;
+	}
+	return surface;
+}
+
+extern "C" int switch_gpu_surface_pages_match(uint32_t id, void *task, const uint64_t *pages, uint32_t count)
+{
+	auto *surface = switch_gpu_surface_hold(id, task, pages, count);
+	if (!surface)
+		return 0;
 	surface->release();
-	return matches ? 1 : 0;
+	return 1;
+}
+
+extern "C" int switch_gpu_surface_geometry(uint32_t id, void *task, const uint64_t *pages, uint32_t count,
+	SwitchGpuSurfaceGeometry *geometry)
+{
+	OSObject *surface = tgm_surface_lookup(id, task);
+	if (!surface)
+		return -22;
+	const auto match = surfacePages(surface, pages, count);
+	if (match == SwitchGpuSurfaceMatch::Match)
+		*geometry = {tegra_vic_ios_width(surface), tegra_vic_ios_height(surface),
+			tegra_vic_ios_bytes_per_row(surface), tegra_vic_ios_alloc_size(surface),
+			tegra_gm20b_ios_bpe(surface), tegra_gm20b_ios_element_width(surface),
+			tegra_gm20b_ios_element_height(surface), tegra_vic_ios_plane_count(surface),
+			at<uint64_t>(surface, OriginalIOSurface::clientMemory) != 0};
+	surface->release();
+	return match == SwitchGpuSurfaceMatch::Match ? 0 : -22;
+}
+
+extern "C" int switch_gpu_surface_backing(uint32_t id, void *task, switch_gpu_backing **out)
+{
+	*out = nullptr;
+	// A numeric ID can already belong to a new IOSurface while an older allocation retires.
+	auto *hint = switch_gpu_backing_find_surface(id);
+	if (!hint)
+		return 0;
+	switch_gpu_backing_release(hint);
+	OSObject *surface = tgm_surface_lookup(id, task);
+	if (!surface)
+		return 0;
+	auto *memory = tegra_vic_ios_memory(surface);
+	const uint64_t base = at<uint64_t>(surface, OriginalIOSurface::baseOffset);
+	const bool prepared = memory && base < memory->getLength() && memory->prepare() == kIOReturnSuccess;
+	int result = prepared ? 0 : -22;
+	if (prepared) {
+		IOByteCount length = 0;
+		const uint64_t pa = memory->getPhysicalSegment(base, &length, kIOMemoryMapperNone);
+		auto *backing = pa && length ? switch_gpu_backing_find_pa(pa) : nullptr;
+		if (backing) {
+			switch_gpu_backing_info info = {};
+			switch_gpu_backing_describe(backing, &info);
+			if (surfacePages(surface, info.pages, info.page_count) == SwitchGpuSurfaceMatch::Match)
+				*out = backing;
+			else {
+				switch_gpu_backing_release(backing);
+				result = -22;
+			}
+		}
+		memory->complete();
+	}
+	surface->release();
+	return result;
 }
 
 extern "C" void tgm_memory_release(void *memory)

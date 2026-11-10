@@ -5,8 +5,8 @@ from dataclasses import dataclass, field
 MAGIC = b'GM20BPK1'
 # 2: the header's stack key (rawpack.py --stack) after the section table; 3: barrier-form records; 4: programs' shader
 # data and constant buffer types; 6: compute kernels (runtime/raw_pack.h PackKernel); 8: a texture3d entry's Metal
-# index; 9: split fragment programs (PackSplit)
-VERSION = 9
+# index; 9: split fragment programs (PackSplit); 10: dynamic blend push fields
+VERSION = 10
 SECTIONS = 10  # runtime/raw_pack.h PackSectionCount
 KERNEL_ENTRIES = 16  # PackKernel.entry's length
 PROGRAM_CBUFS = 11  # PackProgram.cbufType's length (runtime/raw_pack.h)
@@ -121,6 +121,7 @@ def pipeline_bytes(rec: dict, key_offset: int, blob_off: int) -> bytes:
     vb = rec['vbs'][0] if rec['vbs'] else {'slot': 0xFF, 'stride': 0}
     keyhash = key_hash(rec)
     flags = (1 if rec['fetch'] else 0) | (2 if rec.get('form') == 'barrier' else 0)  # PackPipelineFlags
+    flags |= 4 if rec.get('push_metadata') else 0
     head = struct.pack(
         '<QIHHIIBBBBHHI',
         keyhash,
@@ -137,7 +138,8 @@ def pipeline_bytes(rec: dict, key_offset: int, blob_off: int) -> bytes:
         rec['set_size'],
         flags,
     )
-    return head + entry_bytes(rec['entries']) + push_bytes(rec['push'])
+    dynamic = struct.pack('<BBH', rec.get('blend_color_word', 0), rec.get('half_blend_color_word', 0), 0)
+    return head + entry_bytes(rec['entries']) + push_bytes(rec['push']) + dynamic
 
 
 def kernel_window(e: dict) -> int:

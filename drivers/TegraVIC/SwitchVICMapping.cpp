@@ -6,7 +6,7 @@
 struct SwitchVICMapping {
     switch_gpu_backing *backing = nullptr;
     uint64_t allocation = 0, generation = 0, address = 0, used = 0;
-    uint32_t pages = 0, users = 0;
+    uint32_t firstPage = 0, pages = 0, users = 0;
     bool writable = false;
 };
 
@@ -44,19 +44,23 @@ bool switch_vic_mapping_start()
     return gLock != nullptr;
 }
 
-SwitchVICMapping *switch_vic_mapping_acquire(switch_gpu_backing *backing, bool writable)
+SwitchVICMapping *switch_vic_mapping_acquire_range(switch_gpu_backing *backing, bool writable,
+                                                   uint32_t firstPage, uint32_t pageCount)
 {
     if (!gLock || !backing)
         return nullptr;
     switch_gpu_backing_info info = {};
     switch_gpu_backing_describe(backing, &info);
-    const uint64_t bytes = static_cast<uint64_t>(info.page_count) << 12;
+    if (firstPage > info.page_count || pageCount > info.page_count - firstPage)
+        return nullptr;
+    const uint64_t bytes = static_cast<uint64_t>(pageCount) << 12;
     if (!bytes || bytes > kPinnedBytes)
         return nullptr;
     IOLockLock(gLock);
     for (auto &mapping : gMappings) {
         if (mapping.backing && mapping.allocation == info.allocation_id &&
-            mapping.generation == info.allocation_generation && mapping.writable == writable) {
+            mapping.generation == info.allocation_generation && mapping.writable == writable &&
+            mapping.firstPage == firstPage && mapping.pages == pageCount) {
             ++mapping.users;
             mapping.used = ++gClock;
             IOLockUnlock(gLock);
@@ -72,11 +76,11 @@ SwitchVICMapping *switch_vic_mapping_acquire(switch_gpu_backing *backing, bool w
     SwitchVICMapping *mapping = gBytes + bytes <= kPinnedBytes ? oldest() : nullptr;
     if (mapping) {
         evict(*mapping);
-        const uint64_t address = switch_vic_mapping_create(info.pages, info.page_count, writable);
+        const uint64_t address = switch_vic_mapping_create(info.pages + firstPage, pageCount, writable);
         if (address) {
             switch_gpu_backing_retain(backing);
             *mapping = {backing, info.allocation_id, info.allocation_generation, address, ++gClock,
-                        info.page_count, 1, writable};
+                        firstPage, pageCount, 1, writable};
             gBytes += bytes;
         } else {
             mapping = nullptr;
@@ -84,6 +88,15 @@ SwitchVICMapping *switch_vic_mapping_acquire(switch_gpu_backing *backing, bool w
     }
     IOLockUnlock(gLock);
     return mapping;
+}
+
+SwitchVICMapping *switch_vic_mapping_acquire(switch_gpu_backing *backing, bool writable)
+{
+    if (!backing)
+        return nullptr;
+    switch_gpu_backing_info info = {};
+    switch_gpu_backing_describe(backing, &info);
+    return switch_vic_mapping_acquire_range(backing, writable, 0, info.page_count);
 }
 
 void switch_vic_mapping_release(SwitchVICMapping *mapping)

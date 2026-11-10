@@ -6,6 +6,8 @@
 struct SwitchVICMapping;
 bool switch_vic_mapping_start();
 SwitchVICMapping *switch_vic_mapping_acquire(switch_gpu_backing *backing, bool writable);
+SwitchVICMapping *switch_vic_mapping_acquire_range(switch_gpu_backing *backing, bool writable,
+                                                   uint32_t firstPage, uint32_t pageCount);
 void switch_vic_mapping_release(SwitchVICMapping *mapping);
 uint64_t switch_vic_mapping_address(const SwitchVICMapping *mapping);
 

@@ -54,6 +54,7 @@ bool encodeRaw(RMCommandBuffer *cb, size_t from, size_t to, const char **why)
     raw::RenderEncoder *re = nullptr;
     raw::BlitEncoder *be = nullptr;
     std::optional<raw::ComputeEncoder> ce;
+    bool serialCompute = false;
     raw::StateCursor stateCursor;
 
     auto fail = [&](RMPred p, const char *w, uint64_t a = 0, uint64_t b = 0) {
@@ -65,7 +66,7 @@ bool encodeRaw(RMCommandBuffer *cb, size_t from, size_t to, const char **why)
     // a draw the encoder refused: its predicate and values (raw_gpu.h Refusal)
     auto refused = [&]() {
         static const RMPred map[] = {PredEncPassRender, PredEncIndexedRange, PredEncColorFormats, PredEncUboOffset,
-                                     PredEncNoTic,      PredEncDepthStencil, PredEncSamples};
+                                     PredEncNoTic,      PredEncDepthStencil, PredEncSamples, PredEncGeometry};
         const raw::Refusal &f = rc->refusal;
         hit(cb, f.id < sizeof map / sizeof *map ? map[f.id] : PredEncPassRender, f.a,
             uint64_t(f.b) | uint64_t(f.c) << 32);
@@ -268,7 +269,7 @@ bool encodeRaw(RMCommandBuffer *cb, size_t from, size_t to, const char **why)
             if (!(access & raw::ResourceUse::Sample) || ![object isKindOfClass:[RMTexture class]])
                 return;
             RMTexture *t = (RMTexture *)object;
-            if (!t->_raw.sampled || !fresh.insert(t).second)
+            if (!t->_raw.sampled || (!t->_raw.surfaceView && !fresh.insert(t).second))
                 return;
             const raw::Texture &x = t->_raw;
             raw::BlitEncoder *b = rc->blit();
@@ -318,16 +319,47 @@ bool encodeRaw(RMCommandBuffer *cb, size_t from, size_t to, const char **why)
     };
     for (size_t at = from; at < to; at++) {
         const Cmd c = cb->_plan.legacy(at);
-        encodePlannedState(cb, at, *rc, re, ce ? &*ce : nullptr, stateCursor);
         if (c.op == OpDispatch) {
             const auto &dispatch = cb->_plan.dispatch(at);
+            const auto *kernel = static_cast<const raw::ComputeState *>(dispatch.kernel);
+            const auto &state = cb->_plan.kernelStates[dispatch.state];
+            const auto &textures = cb->_plan.textures[2][state.textures].objects;
+            std::array<RMTexture *, 31> shadows{};
+            size_t count = 0;
+            for (uint32_t slots = dispatch.surfaceSlots; slots; slots &= slots - 1) {
+                RMTexture *texture = (__bridge RMTexture *)textures[__builtin_ctz(slots)];
+                if (texture && std::find(shadows.begin(), shadows.begin() + count, texture) == shadows.begin() + count)
+                    shadows[count++] = texture;
+            }
+            auto copyShadows = [&](bool store) {
+                ce->end();
+                ce.reset();
+                raw::BlitEncoder *copy = rc->blit();
+                for (size_t i = 0; i < count; ++i) {
+                    const raw::Texture &view = shadows[i]->_raw, &image = *view.sampled;
+                    copy->copyTexels(store ? image : view, 0, 0, 0, store ? view : image, 0, 0, 0, view.width,
+                                     view.height);
+                }
+                copy->end();
+                ce.emplace(*rc, d);
+                ce->setSerial(serialCompute);
+                stateCursor.reset();
+            };
+            if (count)
+                copyShadows(false);
+            encodePlannedState(cb, at, *rc, re, &*ce, stateCursor);
             const uint32_t groups[3] = {uint32_t(dispatch.groups[0]), uint32_t(dispatch.groups[1]),
                                         uint32_t(dispatch.groups[2])};
-            ce->setState(static_cast<const raw::ComputeState *>(dispatch.kernel));
+            ce->setState(kernel);
             if (const char *w = nullptr; !ce->dispatch(groups, dispatch.threads.data(), &w))
                 return fail(PredCompute, w, c.op);
+            if (count) {
+                copyShadows(true);
+                fresh.clear();
+            }
             continue;
         }
+        encodePlannedState(cb, at, *rc, re, ce ? &*ce : nullptr, stateCursor);
         if (isKernelCommand(c.op)) {
             if (const char *w = nullptr; !encodeKernel(*ce, *rc, cb, c, &w))
                 return fail(PredCompute, w, c.op);
@@ -336,7 +368,8 @@ bool encodeRaw(RMCommandBuffer *cb, size_t from, size_t to, const char **why)
         switch (c.op) {
         case OpCompute:
             ce.emplace(*rc, d);
-            ce->setSerial(c.a == MTLDispatchTypeSerial);
+            serialCompute = c.a == MTLDispatchTypeSerial;
+            ce->setSerial(serialCompute);
             break;
         case OpRender: {
             const RMPass &pass = cb->_passes[c.x];

@@ -109,12 +109,15 @@ ios_binary(
     out = "build/switch-gpu/fetchform",
     hdrs = [
         ":raw_runtime_headers",
+        "//drivers/NativeMetal:bridge/NativeMetalBlend.h",
         "//drivers/TegraGM20B:TegraGM20BABI.h",
         "//drivers/TegraGM20B:TegraGM20BLayout.h",
     ],
     copts = [
         "-O2",
         "-std=c++17",
+        "-DSWITCH_RAW_HARNESS_MARKS",
+        "-Wl,-U,_switch_nmb_blend_color_words",
         "-Wall",
         "-Wextra",
         "-I",

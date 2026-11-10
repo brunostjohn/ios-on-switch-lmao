@@ -46,6 +46,6 @@ public enum Registry {
     static let compositor: [any HWTest] = UISceneTests.all + PacingTests.all
 
     public static let all: [any HWTest] =
-        gpuScenes + metal + video + images + audio + display + compositor + sensorsAndInput + connectivityAndStorage
+        [CPUAsyncTimersTest()] + gpuScenes + metal + video + images + audio + display + compositor + sensorsAndInput + connectivityAndStorage
         + cpuAndSystem + [RawShareTest()]
 }

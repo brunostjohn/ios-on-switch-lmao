@@ -62,6 +62,8 @@ inline void *current_thread()
 	return &identity;
 }
 
+inline void *current_task() { return current_thread(); }
+
 #define IONew(type, count) (new type[(count)])
 #define IODelete(ptr, type, count) (delete[] (ptr))
 

@@ -14,12 +14,17 @@
 #include <IOKit/IOLib.h>
 #include <IOKit/IOMemoryDescriptor.h>
 #include <IOKit/IOService.h>
+#include <libkern/c++/OSString.h>
+#include <libkern/c++/OSSymbol.h>
 #include <string.h>
 #include "TegraVIC.h"
 #include "TegraVICSurface.h"
+#include "SwitchVICSurfaceRange.h"
+#include "OriginalIOSurface.h"
 #include "../../kits/SwitchDMA/SwitchDMAPages.h"
 
 extern "C" {
+OSObject *switch_surface_copy_value(OSObject *surface, const OSSymbol *key, uint32_t *seed);
 OSObject *tegra_vic_ios_lookup(IOService *root, uint32_t id, task_t task);
 IOMemoryDescriptor *tegra_vic_ios_memory(OSObject *surface);
 uint32_t tegra_vic_ios_format(OSObject *surface);
@@ -41,6 +46,20 @@ int tegra_vic_ios_device_unlock(OSObject *surface, uint32_t options);
 
 namespace {
 IOService *gRoot;
+const OSSymbol *gMatrixKey;
+
+uint32_t colorMatrix(OSObject *surface)
+{
+    if (!gMatrixKey)
+        return SWITCH_VIC_MATRIX_UNSUPPORTED;
+    uint32_t seed = 0;
+    OSObject *value = switch_surface_copy_value(surface, gMatrixKey, &seed);
+    auto *name = OSDynamicCast(OSString, value);
+    const uint32_t matrix = value && !name ? uint32_t(SWITCH_VIC_MATRIX_UNSUPPORTED) :
+                            switch_vic_matrix_tag(name ? name->getCStringNoCopy() : nullptr);
+    OSSafeReleaseNULL(value);
+    return matrix;
+}
 }
 
 extern "C" bool tegra_vic_surface_start(void)
@@ -52,6 +71,13 @@ extern "C" bool tegra_vic_surface_start(void)
         return false;
     IOService *root = IOService::waitForMatchingService(match, 5ULL * 1000 * 1000 * 1000);
     match->release();
+    if (root) {
+        gMatrixKey = OSSymbol::withCStringNoCopy("IOSurfaceYCbCrMatrix");
+        if (!gMatrixKey) {
+            root->release();
+            return false;
+        }
+    }
     gRoot = root;  // kept (waitForMatchingService retained it)
     return gRoot != nullptr;
 }
@@ -72,6 +98,9 @@ extern "C" IOReturn tegra_vic_surface_lookup(uint32_t id, task_t task, TegraVICS
     d->width = (uint32_t)tegra_vic_ios_width(surface);
     d->height = (uint32_t)tegra_vic_ios_height(surface);
     d->planes = tegra_vic_ios_plane_count(surface);
+    const TegraVICFormat *format = tegra_vic_format(d->fourcc);
+    if (format && format->kind != TEGRA_VIC_KIND_RGB)
+        d->colorMatrix = colorMatrix(surface);
     const uint32_t planes = d->planes ? d->planes : 1;
     for (uint32_t p = 0; p < planes && p < 2; p++) {
         d->planeOffset[p] = tegra_vic_ios_plane_offset(surface, p);
@@ -84,13 +113,13 @@ extern "C" IOReturn tegra_vic_surface_lookup(uint32_t id, task_t task, TegraVICS
         d->planeBytesPerRow[0] = tegra_vic_ios_bytes_per_row(surface);
         d->planeHeight[0] = d->height;
     }
-    d->length = out->memory ? out->memory->getLength() : 0;
-    if (tegra_vic_ios_alloc_size(surface) < d->length)
-        d->length = tegra_vic_ios_alloc_size(surface);
+    memcpy(&out->baseOffset, reinterpret_cast<const uint8_t *>(surface) + OriginalIOSurface::baseOffset,
+           sizeof(out->baseOffset));
+    d->length = tegra_vic_ios_alloc_size(surface);
     d->protection = tegra_vic_ios_protection(surface);
-    if (!out->memory) {
+    if (!out->memory || !switch_vic_surface_extent_valid(out->memory->getLength(), out->baseOffset, d->length)) {
         tegra_vic_surface_release(out);
-        return kIOReturnNotReady;
+        return kIOReturnBadArgument;
     }
     return kIOReturnSuccess;
 }
@@ -110,9 +139,11 @@ extern "C" IOReturn tegra_vic_surface_pages(TegraVICSurface *s, uint64_t offset,
                                             uint32_t max, uint32_t *count)
 {
     *count = 0;
+    if (!switch_vic_surface_subrange(s->desc.length, offset, bytes))
+        return kIOReturnBadArgument;
     const uint64_t first = offset >> 12;
     const uint64_t end = (offset + bytes + 0xfff) >> 12;
-    if (!bytes || offset + bytes > s->memory->getLength() || end - first > max)
+    if (end - first > max)
         return kIOReturnBadArgument;
     if (!s->prepared) {
         // IOSurface::prepare keeps the surface's own wire count (and returns 0 even when the descriptor's prepare
@@ -125,7 +156,7 @@ extern "C" IOReturn tegra_vic_surface_pages(TegraVICSurface *s, uint64_t offset,
         }
         s->prepared = true;
     }
-    if (!switch_dma_page_list(s->memory, offset, bytes, pages, max, count)) {
+    if (!switch_dma_page_list(s->memory, s->baseOffset + offset, bytes, pages, max, count)) {
         tegra_vic_surface_complete(s);
         return kIOReturnNotAligned;
     }

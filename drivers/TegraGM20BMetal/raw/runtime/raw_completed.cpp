@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cstring>
 #include "raw_gpu.h"
+#include "raw_dynamic_push.h"
 #include "raw_record.h"
 #include "raw_slm.h"
 
@@ -94,6 +95,10 @@ void Device::addSplit(const RuntimeRecord &r)
 
 Pipeline *Device::addRecord(const RuntimeRecord &r, bool caTransform, std::string &why)
 {
+    if (!usableDynamicPush(r.pipeline, r.keyString.c_str())) {
+        why = "missing or invalid dynamic blend push metadata";
+        return nullptr;
+    }
     std::lock_guard<std::mutex> l(lock_);
     const uint64_t key = r.pipeline.keyHash;
     if (const auto it = completed_.find(key); it != completed_.end())

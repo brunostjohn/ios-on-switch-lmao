@@ -55,6 +55,45 @@ load("//bazel/testing:defs.bzl", "host_library", "host_shims", "host_test")
 
 lint_files()
 
+host_library(
+    name = "switch_gpu_gpfifo",
+    srcs = ["//drivers/TegraGM20B:nouveau/nvif/chan.c"],
+    hdrs = ["gpfifo_include/nvif/chan.h"],
+    includes = ["gpfifo_include"],
+    c_std = "gnu11",
+    copts = ["-Wno-sign-compare"],
+)
+
+host_test(
+    name = "switch_gpu_gpfifo_test",
+    srcs = ["switch_gpu_gpfifo_test.cpp"],
+    deps = [":switch_gpu_gpfifo"],
+)
+
+host_test(
+    name = "switch_gpu_mapping_test",
+    srcs = [
+        "switch_gpu_mapping_test.cpp",
+        "//drivers/TegraGM20B:SwitchGpuMapping.h",
+    ],
+)
+
+host_test(
+    name = "switch_gpu_surface_pages_test",
+    srcs = [
+        "switch_gpu_surface_pages_test.cpp",
+        "//drivers/TegraGM20B:SwitchGpuSurfacePages.h",
+    ],
+)
+
+host_test(
+    name = "switch_gpu_bindings_test",
+    srcs = [
+        "switch_gpu_bindings_test.cpp",
+        "//drivers/TegraGM20B:SwitchGpuBindings.h",
+    ],
+)
+
 host_test(
     name = "gm20b_comp_test",
     srcs = [
@@ -201,11 +240,40 @@ host_shims(
     stubs = "gm20b_coherency_stubs.h",
 )
 
+host_shims(
+    name = "surface_kernel",
+    headers = [
+        "IOKit/IOLib.h", "IOKit/IOMemoryDescriptor.h", "IOKit/IOUserClient.h",
+        "kern/locks.h", "mach/vm_param.h", "OriginalIOSurface.h",
+        "OriginalIOSurfaceClient.h", "OriginalIOSurfaceRootUserClient.h",
+    ],
+    stubs = "gm20b_surface_stubs.h",
+)
+
+host_library(
+    name = "surface_client",
+    srcs = ["//drivers/TegraGM20B:TegraGM20BSurfaceClient.cpp"],
+    hdrs = [
+        "//drivers/TegraGM20B:TegraGM20BGpu.h", "//drivers/TegraGM20B:SwitchGpuBacking.h", "//drivers/TegraGM20B:SwitchGpuSurfacePages.h",
+        "//drivers/TegraGM20B:SwitchGpuSurfaceGeometry.h", "//drivers/TegraGM20B:TegraGM20BViews.h",
+        "//drivers/TegraGM20B:TegraGM20BTiled.h", "//drivers/TegraGM20B:TegraGM20BLayout.h",
+        "//drivers/TegraGM20B:TegraGM20BRelayout.h", "//drivers/TegraGM20B:TegraGM20BABI.h",
+    ],
+    deps = [":surface_kernel"],
+)
+
+host_test(
+    name = "switch_gpu_surface_client_test",
+    srcs = ["switch_gpu_surface_client_test.cpp"],
+    deps = [":surface_client", ":surface_kernel"],
+)
+
 host_library(
     name = "backing",
     srcs = [
         "//drivers/TegraGM20B:SwitchGpuBacking.cpp",
         "//drivers/TegraGM20B:SwitchGpuCpuAccess.cpp",
+        "//drivers/TegraGM20B:SwitchGpuCpuLease.cpp",
         "//drivers/TegraGM20B:SwitchGpuOwnership.cpp",
         "//drivers/TegraGM20B:SwitchGpuSurfaceAccess.cpp",
     ],

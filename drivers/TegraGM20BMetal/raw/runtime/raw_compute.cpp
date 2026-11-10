@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 // See raw_compute.h. Method numbers are NVIDIA's (Mesa src/nouveau/headers/nvidia/classes/clb1c0.h, cla1c0qmd.h, MIT).
 #include "raw_compute.h"
+#include "raw_compute_visibility.h"
 #include "raw_residual.h"
 #include "raw_slm.h"
 #include "raw_view.h"
@@ -21,8 +22,6 @@ enum : uint32_t {
     SEND_SIGNALING_PCAS_B = 0x02bc,
     INVALIDATE_SHADER_CACHES = 0x021c,
     INVALIDATE_TEXTURE_DATA_CACHE_NO_WFI = 0x1288,
-    INVALIDATE_SHADER_CACHES_NO_WFI_3D = 0x0da4,
-    INVALIDATE_TEXTURE_DATA_CACHE_NO_WFI_3D = 0x1338,
     INVALIDATE_SAMPLER_CACHE_NO_WFI = 0x1424,
 };
 
@@ -348,9 +347,7 @@ bool ComputeEncoder::dispatch(const uint32_t groups[3], const uint32_t threads[3
 void ComputeEncoder::end()
 {
     room(8);
-    p_.m(WAIT_FOR_IDLE, 0, SUBC_COMPUTE);
-    p_.m(INVALIDATE_TEXTURE_DATA_CACHE_NO_WFI_3D, 0);
-    p_.m(INVALIDATE_SHADER_CACHES_NO_WFI_3D, kInvalidateData | kInvalidateConstant);
+    computeToGraphics(p_, true);
     cb_.segment(start_, p_.at);
     dev_.push_.head = uint64_t(reinterpret_cast<uint8_t *>(p_.at) - dev_.push_.bo.cpu);
     dev_.stats.pushBytes += uint64_t(p_.at - start_) * 4;

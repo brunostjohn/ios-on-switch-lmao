@@ -25,6 +25,7 @@ filegroup(
         "SwitchFrameTimeline.h",
         "TwoPlaneStandIn.h",
         "bridge/NativeMetalBridge.h",
+        "bridge/NativeMetalBlend.h",
         "bridge/NativeMetalDirect.h",
         "bridge/NativeMetalObjects.h",
         "//kits/SwitchDMA:SwitchDcache.h",

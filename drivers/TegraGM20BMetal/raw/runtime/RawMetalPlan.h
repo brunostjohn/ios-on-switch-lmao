@@ -37,6 +37,7 @@ struct RMPlanDraw {
 
 struct RMPlanDispatch {
     uint32_t state = 0;
+    uint32_t surfaceSlots = 0;
     const void *kernel = nullptr;
     std::array<uint64_t, 3> grid{}, groups{};
     std::array<uint32_t, 3> threads{};

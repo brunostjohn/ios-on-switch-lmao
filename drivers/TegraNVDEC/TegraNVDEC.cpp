@@ -52,7 +52,7 @@
 #include "../TegraHost1x/TegraHost1x.h"
 #include "../TegraSMMU/TegraSMMU.h"
 #include "TegraNVDEC.h"
-#include "TegraNVDECCheck.h"
+#include "SwitchNVDECJobs.h"
 #include "../../kits/SwitchBootArgs/SwitchBootArgs.h"
 #include "../../kits/SwitchCAR/SwitchCAR.h"
 #include "../../kits/SwitchCAR/SwitchPMC.h"
@@ -69,7 +69,6 @@ extern const uint8_t tegra_nvdec_fw_end[] __asm__("_tegra_nvdec_fw_end");
 
 namespace {
 constexpr uint64_t kNvdecPA = 0x54480000, kNvdecSize = 0x40000;
-constexpr uint32_t kThiMethod0 = 0x40;  // THI METHOD0 (offset) then METHOD1 (data), averne nvtegra_host1x.h
 constexpr uint64_t kMcPA = 0x70019000;
 constexpr uint32_t kPartition = 25;    // TEGRA_POWERGATE_NVDEC
 constexpr unsigned kClock = 194;       // TEGRA210_CLK_NVDEC: CAR bank Y bit 2, also its reset
@@ -100,13 +99,10 @@ switch_dma_buffer gFirmware;  // stays: the falcon OS loads its apps from it thr
 switch_falcon_image gImage;
 char gLine[256];
 
-// The job engine (tegra_nvdec_run / tegra_nvdec_wait / sleep).
-// kJobBoundUs: the GP timer's 329 ms plus margin; a wait covers at most kInFlight queued jobs.
-constexpr uint32_t kInFlight = 8, kSetupSlots = 16, kSetupSlotBytes = 1024, kJobBoundUs = 400000;
-constexpr uint32_t kWaitBoundUs = kInFlight * kJobBoundUs;
+constexpr uint32_t kSetupSlots = 16, kSetupSlotBytes = 1024;
 IOLock *gEngineLock;
-uint32_t gSyncpt, gBase, gIssued;  // job n's fence is gBase + n
-bool gUp, gWedged, gSuspended, gPublished;
+uint32_t gSyncpt;
+bool gUp, gWedged, gPublished;
 constexpr uint32_t kCodecs = (1u << TEGRA_NVDEC_CODEC_H264) | (1u << TEGRA_NVDEC_CODEC_VP9) |
                              (1u << TEGRA_NVDEC_CODEC_HEVC) | TEGRA_NVDEC_HEVC_MAIN10;
 switch_dma_buffer gSetup;  // kSetupSlots picture setups, never mapped into a client
@@ -245,15 +241,6 @@ bool proofOfLife(uint64_t *us, uint32_t *id, uint32_t *from)
 void engineSuspend();
 void engineResume();
 
-// A fence past its bound is a hardware fault.
-[[noreturn]] void timedOut(uint32_t fence)
-{
-    char host[200];
-    tegra_host1x_describe(host, sizeof(host));
-    panic("TegraNVDEC: job fence %u not reached in %u ms (syncpoint %u at %u, GP timer bound passed); %s; %s", fence,
-          kWaitBoundUs / 1000, gSyncpt, tegra_host1x_syncpt_read(gSyncpt), falconState(), host);
-}
-
 // Back to reset with the clock off after a failed bring-up: nothing will use the engine this boot. The engine is in
 // reset before its swgroups go back to bypass, where an IOVA would reach the physical address of the same number.
 void park()
@@ -341,8 +328,12 @@ void bringUpStages()
     IOLog("TegraNVDEC: N2 ok host interface and falcon incremented syncpoint %u %u->%u by interrupt in %llu us; %s\n",
           id, from, tegra_host1x_syncpt_read(id), us, falconState());
     gSyncpt = id;
-    gBase = tegra_host1x_syncpt_read(id);
-    gUp = true;
+    if (!switch_nvdec_jobs_start(gSetup, id, tegra_host1x_syncpt_read(id))) {
+        IOLog("SwitchNVDEC: completion worker could not start\n");
+        giveUp(true);
+        return;
+    }
+    __atomic_store_n(&gUp, true, __ATOMIC_RELEASE);
     tegra_host1x_set_sleep_client(engineSuspend, engineResume);
     gPublished = true;
     tegra_host1x_set_strict();
@@ -376,107 +367,15 @@ extern "C" int tegra_nvdec_await(uint32_t timeoutMs)
 
 extern "C" bool tegra_nvdec_ready(void)
 {
-    return gUp && !gWedged;
+    return __atomic_load_n(&gUp, __ATOMIC_ACQUIRE) && !__atomic_load_n(&gWedged, __ATOMIC_ACQUIRE);
 }
 
-extern "C" int tegra_nvdec_run(const TegraNVDECSubmit *s, TegraNVDECResolve resolve, void *context, uint32_t *fence,
-                               const char **why)
+[[noreturn]] void switch_nvdec_job_fault(uint32_t fence, int error, uint64_t elapsedUs)
 {
-    *why = nullptr;
-    if (!gUp)
-        return -19;
-    if (s->entry_count > TEGRA_NVDEC_MAX_ENTRIES || s->clean_count > TEGRA_NVDEC_MAX_RANGES ||
-        s->setup_bytes > kSetupSlotBytes) {
-        *why = "counts";
-        return -22;
-    }
-    TegraNVDECBlock blocks[TEGRA_NVDEC_MAX_ENTRIES];
-    uint64_t avail[TEGRA_NVDEC_MAX_ENTRIES] = {};
-    for (uint32_t i = 0; i < s->entry_count; i++) {
-        const TegraNVDECEntry *e = &s->entries[i];
-        if (e->kind != TEGRA_NVDEC_ENTRY_RELOC)
-            continue;
-        if (!resolve(context, e->value, &blocks[i]) || e->offset > blocks[i].size) {
-            *why = "relocation outside a buffer";
-            return -22;
-        }
-        avail[i] = blocks[i].size - e->offset;
-    }
-    *why = tegra_nvdec_check(s, avail);
-    if (*why)
-        return -22;
-    for (uint32_t i = 0; i < s->clean_count; i++) {
-        const TegraNVDECRange *r = &s->clean[i];
-        TegraNVDECBlock b;
-        if (!resolve(context, r->handle, &b) || (uint64_t)r->offset + r->length > b.size) {
-            *why = "clean range";
-            return -22;
-        }
-        switch_dcache_clean(b.va + r->offset, r->length);
-    }
-
-    // SETCLASS, (INCR METHOD0 x2: method, value) per method with the setup slot before EXECUTE, OP_DONE increment.
-    uint32_t words[1 + 3 * (TEGRA_NVDEC_MAX_ENTRIES + 1) + 1];
-    uint32_t n = 0;
-    words[n++] = tegra_host1x_op_setclass(TEGRA_HOST1X_CLASS_NVDEC, 0, 0);
-    const auto method = [&](uint32_t offset, uint32_t value) {
-        words[n++] = tegra_host1x_op_incr(kThiMethod0 / 4, 2);
-        words[n++] = offset / 4;
-        words[n++] = value;
-    };
-    IOLockLock(gEngineLock);
-    while (gSuspended)
-        IOLockSleep(gEngineLock, &gSuspended, THREAD_UNINT);
-    if (gWedged) {
-        IOLockUnlock(gEngineLock);
-        return -19;
-    }
-    const uint32_t job = gIssued + 1;
-    if (job > kInFlight) {
-        const int ret = tegra_host1x_syncpt_wait(gSyncpt, gBase + job - kInFlight, kWaitBoundUs);
-        if (ret) {
-            if (ret == TEGRA_HOST1X_ETIMEDOUT)
-                timedOut(gBase + job - kInFlight);
-            IOLockUnlock(gEngineLock);
-            return ret;
-        }
-    }
-    const uint32_t slot = job % kSetupSlots;
-    memcpy(gSetup.va + static_cast<size_t>(slot) * kSetupSlotBytes, s->setup, s->setup_bytes);
-    switch_dcache_clean(gSetup.va + static_cast<size_t>(slot) * kSetupSlotBytes, s->setup_bytes);
-    for (uint32_t i = 0; i < s->entry_count; i++) {
-        const TegraNVDECEntry *e = &s->entries[i];
-        if (i == s->entry_count - 1) {  // EXECUTE, last by the check
-            method(NVC5B0_SET_DRV_PIC_SETUP_OFFSET,
-                   static_cast<uint32_t>((gSetup.pa + static_cast<uint64_t>(slot) * kSetupSlotBytes) >> 8));
-        }
-        method(e->method,
-               e->kind == TEGRA_NVDEC_ENTRY_RELOC ? (uint32_t)((blocks[i].iova + e->offset) >> 8) : e->value);
-    }
-    words[n++] = tegra_host1x_op_incr_syncpt(TEGRA_HOST1X_COND_OP_DONE, gSyncpt);
-    const int ret = tegra_host1x_submit(words, n);
-    if (!ret) {
-        __atomic_store_n(&gIssued, job, __ATOMIC_RELEASE);
-        *fence = gBase + job;
-    }
-    IOLockUnlock(gEngineLock);
-    return ret;
-}
-
-extern "C" int tegra_nvdec_wait(uint32_t fence)
-{
-    if (!gUp)
-        return -19;
-    // A fence no job will reach would never be reached: refused, so it cannot pass for an engine fault.
-    if ((int32_t)(fence - (gBase + __atomic_load_n(&gIssued, __ATOMIC_ACQUIRE))) > 0)
-        return -22;
-    const int ret = tegra_host1x_syncpt_wait(gSyncpt, fence, kWaitBoundUs);
-    if (ret == TEGRA_HOST1X_ETIMEDOUT) {
-        IOLockLock(gEngineLock);
-        timedOut(fence);
-        IOLockUnlock(gEngineLock);
-    }
-    return ret;
+    char host[200];
+    tegra_host1x_describe(host, sizeof(host));
+    panic("SwitchNVDEC: fence %u failed (%d) after %llu us, syncpoint %u at %u; %s; %s", fence, error, elapsedUs,
+          gSyncpt, tegra_host1x_syncpt_read(gSyncpt), falconState(), host);
 }
 
 // Sleep (SC7), through tegra_nvdec_suspend/resume in TegraHost1x.cpp. Suspend lets the queued jobs finish
@@ -487,9 +386,7 @@ namespace {
 void engineSuspend()
 {
     IOLockLock(gEngineLock);
-    gSuspended = true;
-    if (!gWedged && tegra_host1x_syncpt_wait(gSyncpt, gBase + gIssued, kWaitBoundUs) == TEGRA_HOST1X_ETIMEDOUT)
-        timedOut(gBase + gIssued);
+    switch_nvdec_jobs_suspend();
     park();
     tegra_nvdec_memory_detach();
     IOLockUnlock(gEngineLock);
@@ -500,7 +397,7 @@ void engineResume()
     IOLockLock(gEngineLock);
     bool wasOn = false;
     gLine[0] = 0;
-    gWedged = true;
+    __atomic_store_n(&gWedged, true, __ATOMIC_RELEASE);
     if (!tegra_nvdec_memory_attach(gLine, sizeof(gLine)) && powerUp(&wasOn) && bootFalcon()) {
         const uint32_t from = tegra_host1x_syncpt_read(gSyncpt);
         const uint32_t stream[] = {
@@ -510,19 +407,17 @@ void engineResume()
         };
         const int ret = tegra_host1x_submit(stream, 3);
         if (!ret && !tegra_host1x_syncpt_wait(gSyncpt, from + 2, 500000)) {
-            gWedged = false;
+            __atomic_store_n(&gWedged, false, __ATOMIC_RELEASE);
         } else {
             snprintf(gLine, sizeof(gLine), "falcon did not answer (%d, syncpoint %u %u->%u); %s", ret, gSyncpt, from,
                      tegra_host1x_syncpt_read(gSyncpt), falconState());
         }
     }
-    if (gWedged)
+    if (gWedged) {
+        park();
         IOLog("TegraNVDEC: resume FAIL %s; NVDEC refuses work\n", gLine[0] ? gLine : "N1");
-    // Jobs lost to a wedge never incremented the syncpoint: number from where it really is.
-    gBase = tegra_host1x_syncpt_read(gSyncpt);
-    __atomic_store_n(&gIssued, 0, __ATOMIC_RELEASE);
-    gSuspended = false;
-    IOLockWakeup(gEngineLock, &gSuspended, false);
+    }
+    switch_nvdec_jobs_resume(!gWedged, tegra_host1x_syncpt_read(gSyncpt));
     IOLockUnlock(gEngineLock);
 }
 }  // namespace

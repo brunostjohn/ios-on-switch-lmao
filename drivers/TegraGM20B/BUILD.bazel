@@ -66,6 +66,7 @@ kernel_driver(
         "SwitchGpuBacking.cpp",
         "SwitchGpuOwnership.cpp",
         "SwitchGpuCpuAccess.cpp",
+        "SwitchGpuCpuLease.cpp",
         "SwitchGpuTimeline.cpp",
         "SwitchGpuPin.cpp",
         "SwitchGpuSurfaceAccess.cpp",

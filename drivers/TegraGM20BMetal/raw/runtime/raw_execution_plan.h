@@ -18,6 +18,26 @@ struct ExecutionRange {
     ExecutionKind kind;
 };
 
+struct ExecutionAttribution {
+    size_t native = 0, compatibility = 0;
+
+    void add(bool raw, bool event)
+    {
+        if (!event)
+            ++(raw ? native : compatibility);
+    }
+
+    bool mixed() const
+    {
+        return native && compatibility;
+    }
+
+    bool onlyCompatibility() const
+    {
+        return !native && compatibility;
+    }
+};
+
 // A range never crosses an event. Adjacent passes of one backend can share a submission, but an event's exact position
 // is retained even when no encoder exists on either side. The caller supplies complete encoder ranges, not draw fragments.
 class ExecutionPlan {

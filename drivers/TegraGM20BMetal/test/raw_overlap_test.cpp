@@ -185,4 +185,171 @@ TEST(RawOverlap, TooManyTrianglesOrABadVertexLeaveTheDrawWhole)
     EXPECT_FALSE(t.split(g, false, runs));
 }
 
+TEST(RawOverlap, BoundsCoverageAndSelfOrderingUseTheSameSnapshot)
+{
+    Mesh m;
+    m.grid(0, 0, {float(kWidth)}, {float(kHeight)});
+    auto g = m.geometry(6);
+    g.strip = false;
+    raw::GeometryCache cache;
+    raw::GeometryBudget budget{6, 1};
+    auto analysis = cache.analysis(g, 1, budget);
+    raw::TriangleRuns triangles;
+    Runs runs;
+    ASSERT_TRUE(triangles.split(analysis, runs));
+    EXPECT_TRUE(runs.empty());
+    ASSERT_TRUE(analysis.covers(true, kWidth, kHeight));
+    EXPECT_EQ(budget.vertices, 0u);
+    EXPECT_EQ(budget.pairs, 0u);
+    // The caller retains ownership; no second read or quadratic comparison is required for identical draws.
+    for (unsigned i = 0; i < 10000; ++i) {
+        auto next = cache.analysis(g, 1, budget);
+        ASSERT_TRUE(triangles.split(next, runs));
+        ASSERT_TRUE(next.covers(true, kWidth, kHeight));
+    }
+}
+
+TEST(RawOverlap, PairBudgetExhaustionRefusesTheProofAndClearsPartialRuns)
+{
+    Mesh m;
+    m.grid(0, 0, {100}, {100});
+    m.grid(10, 10, {100}, {100});
+    auto g = m.geometry(12);
+    g.strip = false;
+    raw::GeometryBudget budget{12, 1};
+    raw::GeometryCache cache;
+    auto analysis = cache.analysis(g, 1, budget);
+    raw::TriangleRuns triangles;
+    Runs runs{{0, 12}};
+    EXPECT_FALSE(triangles.split(analysis, runs));
+    EXPECT_TRUE(runs.empty());
+    EXPECT_EQ(budget.pairs, 0u);
+    EXPECT_FALSE(triangles.split(analysis, runs));
+    EXPECT_EQ(budget.vertices, 0u);
+}
+
+TEST(RawOverlap, OrderedRunBoundsReuseTheWholeIndexedDrawProjection)
+{
+    Mesh m;
+    m.grid(0, 0, {100}, {100});
+    m.grid(50, 50, {100}, {100});
+    auto g = m.geometry(12);
+    g.strip = false;
+    raw::GeometryBudget budget{12, 100};
+    raw::GeometryCache cache;
+    auto whole = cache.analysis(g, 1, budget);
+    raw::TriangleRuns triangles;
+    Runs runs;
+    ASSERT_TRUE(triangles.split(whole, runs));
+    ASSERT_EQ(runs, (Runs{{0, 6}, {6, 12}}));
+    g.indices += 6 * g.indexSize;
+    g.count = 6;
+    auto second = cache.analysis(g, 1, budget);
+    raw::PixelBox box;
+    ASSERT_TRUE(second.bounds(box));
+    EXPECT_GT(box.x0, 40u);
+    EXPECT_GT(box.y0, 40u);
+    EXPECT_LT(box.x1, 160u);
+    EXPECT_EQ(budget.vertices, 0u);
+}
+
+TEST(RawOverlap, ListAllOnesIndexIsNotAStripRestart)
+{
+    Mesh m;
+    m.vertex(0, 0); m.vertex(10, 0); m.vertex(0, 10);
+    m.indices = {0, 1, 0xffff};
+    bool bounded = true;
+    split(m, false, 3, &bounded);
+    EXPECT_FALSE(bounded); // a list really addresses vertex65535, outside this allocation
+    split(m, true, 3, &bounded);
+    EXPECT_TRUE(bounded); // the restart leaves no triangle
+}
+
+TEST(RawOverlap, StripRunKeepsWindingParityAndRestartResetsIt)
+{
+    Mesh m;
+    m.vertex(10, 30); m.vertex(20, 30); m.vertex(20, 50); m.vertex(10, 50);
+    auto g = m.geometry(4);
+    raw::GeometryAnalysis folded(g);
+    raw::TriangleRuns triangles;
+    Runs runs;
+    ASSERT_TRUE(triangles.split(folded, runs));
+    ASSERT_EQ(runs, (Runs{{0, 3}, {1, 4}}));
+    const auto winding = raw::TriangleRuns::winding(folded, runs);
+    EXPECT_FALSE(winding[0]);
+    EXPECT_TRUE(winding[1]);
+    m.indices = {0, 1, 2, 0xffff, 0, 1, 2};
+    raw::GeometryAnalysis restarted(m.geometry(7));
+    ASSERT_TRUE(triangles.split(restarted, runs));
+    ASSERT_EQ(runs, (Runs{{0, 3}, {4, 7}}));
+    EXPECT_FALSE(raw::TriangleRuns::winding(restarted, runs)[1]);
+    raw::GeometryCache cache;
+    raw::GeometryBudget budget;
+    auto full = cache.analysis(g, 1, budget);
+    raw::PixelBox box;
+    ASSERT_TRUE(full.bounds(box));
+    g.first = 1;
+    g.count = 3;
+    auto subrange = cache.analysis(g, 1, budget);
+    EXPECT_FALSE(raw::TriangleRuns::winding(subrange, Runs{{0, 3}})[0]);
+}
+
+TEST(RawOverlap, UnavailableCpuGeometryStillHasOrderedDirectQuadPlan)
+{
+    raw::DrawGeometry g;
+    g.bounded = true;
+    g.count = 6;
+    g.strip = false;
+    // No CPU-accessible input: overlap analysis must fail without touching memory.
+    raw::GeometryAnalysis analysis(g);
+    raw::TriangleRuns triangles;
+    Runs runs;
+    ASSERT_FALSE(triangles.split(analysis, runs));
+    std::array<bool, raw::TriangleRuns::kMaxTriangles> winding;
+    ASSERT_TRUE(raw::TriangleRuns::sequential(3, 6, 1, false, runs, winding));
+    EXPECT_EQ(runs, (Runs{{0, 3}, {3, 6}}));
+    EXPECT_FALSE(winding[0]);
+    EXPECT_FALSE(winding[1]);
+    ASSERT_TRUE(raw::TriangleRuns::sequential(4, 4, 1, false, runs, winding));
+    EXPECT_EQ(runs, (Runs{{0, 3}, {1, 4}}));
+    EXPECT_FALSE(winding[0]);
+    EXPECT_TRUE(winding[1]);
+}
+
+TEST(RawOverlap, SequentialPlanPreservesEveryPrimitiveAndItsProvokingVertex)
+{
+    for (uint32_t primitive : {3u, 4u}) {
+        for (uint32_t count = 0; count <= 290; ++count) {
+            Runs runs;
+            std::array<bool, raw::TriangleRuns::kMaxTriangles> winding;
+            const uint32_t expected = primitive == 3 ? count / 3 : (count > 2 ? count - 2 : 0);
+            const bool admitted = raw::TriangleRuns::sequential(primitive, count, 1, false, runs, winding);
+            ASSERT_EQ(admitted, expected <= raw::TriangleRuns::kMaxTriangles);
+            if (!admitted) {
+                EXPECT_TRUE(runs.empty());
+                continue;
+            }
+            ASSERT_EQ(runs.size(), expected);
+            for (uint32_t i = 0; i < expected; ++i) {
+                const uint32_t first = primitive == 3 ? i * 3 : i;
+                EXPECT_EQ(runs[i].first, first); // same first/provoking vertex; only raster winding changes
+                EXPECT_EQ(runs[i].second, first + 3);
+                EXPECT_EQ(winding[i], primitive == 4 && (i & 1));
+            }
+        }
+    }
+}
+
+TEST(RawOverlap, SequentialPlanRefusesUnknownRestartAndInstanceOrdering)
+{
+    Runs runs{{0, 6}};
+    std::array<bool, raw::TriangleRuns::kMaxTriangles> winding;
+    EXPECT_FALSE(raw::TriangleRuns::sequential(4, 6, 1, true, runs, winding));
+    EXPECT_TRUE(runs.empty());
+    EXPECT_FALSE(raw::TriangleRuns::sequential(3, 6, 2, false, runs, winding));
+    EXPECT_FALSE(raw::TriangleRuns::sequential(2, 6, 1, false, runs, winding));
+    EXPECT_FALSE(raw::TriangleRuns::sequential(4, UINT32_MAX, 1, false, runs, winding));
+    EXPECT_TRUE(runs.empty());
+}
+
 }  // namespace

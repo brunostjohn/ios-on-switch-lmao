@@ -49,6 +49,7 @@ static const char *zetaMemoryRefusal(int asked)
     d[@"split_m2v"] = @(s.splitM2v.load());
     d[@"aborted"] = @(s.aborted.load());
     d[@"reopens"] = @(gRM->raw->stats.reopens.load());
+    d[@"split_prologues"] = @(gRM->raw->stats.splitLaunches.load());
     for (int r = 1; r < WhyCount; r++)
         if (const uint64_t n = s.reasons[r].load())
             d[[NSString stringWithFormat:@"m2v.%s", kReasonNames[r]]] = @(n);

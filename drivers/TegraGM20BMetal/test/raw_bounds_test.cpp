@@ -384,4 +384,91 @@ TEST(RawRegion, ANewDrawAnalysisObservesChangedGeometry)
     EXPECT_TRUE(first.covers(false, kWidth, kHeight));
 }
 
+TEST(RawRegion, TenThousandDrawsReuseOneSnapshotUntilGenerationChanges)
+{
+    std::vector<float> memory;
+    auto g = quad(memory, 0, 0, kWidth, kHeight);
+    raw::GeometryBudget budget{4, 1};
+    raw::GeometryCache cache;
+    auto first = cache.analysis(g, 7, budget);
+    ASSERT_TRUE(first.covers(false, kWidth, kHeight));
+    EXPECT_EQ(budget.vertices, 0u);
+    // The producer may only mutate after the ownership interval. Changing these source bytes here deliberately
+    // verifies that subsequent consumers use the acquired snapshot, rather than rereading an uncached mapping.
+    memory[3] = 0;
+    for (unsigned i = 0; i < 10000; ++i) {
+        auto draw = cache.analysis(g, 7, budget);
+        ASSERT_TRUE(draw.covers(false, kWidth, kHeight));
+    }
+    budget.vertices = 4;
+    auto changed = cache.analysis(g, 8, budget);
+    EXPECT_FALSE(changed.covers(false, kWidth, kHeight));
+    EXPECT_EQ(budget.vertices, 0u);
+}
+
+TEST(RawRegion, CachedProjectionClipsToEachDrawsOwnScissor)
+{
+    std::vector<float> memory;
+    auto g = quad(memory, 0, 0, kWidth, kHeight);
+    raw::GeometryBudget budget{4, 1};
+    raw::GeometryCache cache;
+    auto whole = cache.analysis(g, 1, budget);
+    raw::PixelBox box;
+    ASSERT_TRUE(whole.bounds(box));
+    g.limit = {100, 200, 150, 250};
+    auto clipped = cache.analysis(g, 1, budget);
+    ASSERT_TRUE(clipped.bounds(box));
+    EXPECT_EQ(box.x0, 100u);
+    EXPECT_EQ(box.x1, 150u);
+    EXPECT_EQ(box.y0, 200u);
+    EXPECT_EQ(box.y1, 250u);
+    EXPECT_EQ(budget.vertices, 0u);
+    g.viewport.originX += 1;
+    auto moved = cache.analysis(g, 1, budget);
+    EXPECT_FALSE(moved.bounds(box)); // different viewport needs new projection work; budget is exhausted
+}
+
+TEST(RawRegion, UnavailableAndOverBudgetInputsKeepTheEntireScissorWithoutReading)
+{
+    raw::DrawGeometry unavailable;
+    unavailable.matrix = reinterpret_cast<const uint8_t *>(1);
+    unavailable.positions = {reinterpret_cast<const uint8_t *>(1), 16, 0, 4};
+    unavailable.positionBytes = 1024;
+    unavailable.count = 6;
+    unavailable.limit = {5, 10, 500, 700};
+    raw::GeometryCache cache;
+    raw::GeometryBudget budget{0, 0};
+    raw::PixelBox box;
+    auto missing = cache.analysis(unavailable, 0, budget);
+    EXPECT_FALSE(missing.bounds(box));
+    EXPECT_EQ(missing.cachedBox().x1, 500u);
+    unavailable.bounded = true;
+    auto exhausted = cache.analysis(unavailable, 1, budget);
+    EXPECT_FALSE(exhausted.bounds(box)); // deliberately invalid pointers must never be dereferenced
+    EXPECT_EQ(exhausted.cachedBox().y1, 700u);
+}
+
+TEST(RawRegion, OwnershipAcquisitionIsLazyAndNeverRetriedInsideASnapshot)
+{
+    std::vector<float> memory;
+    auto g = quad(memory, 0, 0, kWidth, kHeight);
+    unsigned attempts = 0;
+    g.owner = &attempts;
+    g.inputs[0] = reinterpret_cast<const void *>(1);
+    g.acquire = [](void *owner, const void *, const uint8_t *, uint64_t) { ++*static_cast<unsigned *>(owner); return false; };
+    g.matrix = reinterpret_cast<const uint8_t *>(1); // failed ownership must prevent reading even one byte
+    raw::GeometryBudget budget;
+    raw::GeometryCache cache;
+    auto first = cache.analysis(g, 1, budget);
+    EXPECT_EQ(attempts, 0u);
+    raw::PixelBox box;
+    EXPECT_FALSE(first.bounds(box));
+    EXPECT_EQ(attempts, 1u);
+    for (unsigned i = 0; i < 10000; ++i) {
+        auto again = cache.analysis(g, 1, budget);
+        ASSERT_FALSE(again.bounds(box));
+    }
+    EXPECT_EQ(attempts, 1u);
+}
+
 }  // namespace

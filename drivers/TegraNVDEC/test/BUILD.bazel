@@ -1,0 +1,13 @@
+load("//bazel/testing:defs.bzl", "host_test")
+
+host_test(
+    name = "switch_nvdec_jobs_test",
+    srcs = [
+        "switch_nvdec_jobs_test.cpp",
+        "//drivers/TegraNVDEC:SwitchNVDECAccess.h",
+        "//drivers/TegraNVDEC:SwitchNVDECQueue.h",
+        "//drivers/TegraNVDEC:TegraNVDECABI.h",
+        "//drivers/TegraNVDEC:nvidia/clc5b0.h",
+        "//drivers/TegraNVDEC:nvidia/nvdec_drv.h",
+    ],
+)

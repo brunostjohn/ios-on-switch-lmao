@@ -202,6 +202,8 @@ struct Texture {
     // through `sampled`, a block-linear pool image of its texels the copy engine refreshes from it before work that samples
     // it, as m2v samples such a surface through a shadow image it copies in. tic is sampled's.
     Texture *sampled = nullptr;
+    bool surfaceView = false;
+    uint32_t surfaceX = 0, surfaceY = 0;
 
     // An extended-range texture's (raw_xr.h): the image a draw samples, its codes' values as RGBA16Float, which a pass of the
     // pack's conversion state draws from the codes (tic) before the work that samples it. Null: not sampled.
@@ -350,6 +352,7 @@ struct Pipeline {
     // its draws may leave a pixel of their triangles unwritten: the fragment program discards (SPH KILLS_PIXELS) or writes
     // the sample mask, or the state tests depth, stencil or alpha to coverage, or rasterizes more than one sample
     bool dropsPixels = true;
+    bool primitiveId = false;  // fragment input observes primitive numbering, which a split BEGIN would reset
     uint8_t samples = 1;  // its key's rasterSampleCount: a pass of attachments of that many samples draws it
     // SET_HYBRID_ANTI_ALIAS_CONTROL's passes: more than one where it shades per sample, whose sample masks differ (raw_samples.h)
     uint8_t samplePasses = 1;
@@ -551,6 +554,7 @@ private:
     Push p_;
     const Pipeline *extrasAtBegin_ = nullptr;  // set back by the pass's prologue, before its clears
     uint32_t *bodyStart_ = nullptr;
+
     struct Body {
         uint32_t *first = nullptr, *second = nullptr;
         uint64_t indirectVa = 0;
@@ -601,6 +605,8 @@ private:
     Raster rasterFor(uint32_t primitive) const;
     uint32_t blendColor_[4] = {};  // Metal's default, (0, 0, 0, 0), until the encoder sets one
     bool blendColorDirty_ = true;
+    uint32_t blendWords_[8] = {};
+    bool blendWordsDirty_ = true;
     uint32_t topology_ = ~0u, restart_ = ~0u, first_ = 0, baseInstance_ = 0, baseVertex_ = 0;
     uint8_t writtenBits_ = 0;         // colors the ROP wrote since the last barrier
     uint8_t storageWrittenBits_ = 0;  // colors a fragment shader may have written as storage since the last barrier
@@ -618,14 +624,18 @@ private:
     // the draws that wrote a color since the last barrier, for the fetch barrier's region test (raw_region.h); the
     // indices of the indexed draw being prepared
     WrittenRegion written_;
+    GeometryCache geometryCache_;
+    std::array<bool, TriangleRuns::kMaxTriangles> runWinding_ = {};
     // colors the pass's first draw overwrites whole and opaquely: their clears inside the render area are not needed
     uint8_t covered_ = 0;
     using Runs = std::vector<std::pair<uint32_t, uint32_t>>;
-    const Runs &selfRuns(const Pipeline &pl, uint32_t primitive, int32_t first, uint32_t count, uint32_t instances);
+    const Runs *selfRuns(const Pipeline &pl, uint32_t primitive, int32_t first, uint32_t count, uint32_t instances,
+                         const char **why);
     const uint8_t *drawIndices_ = nullptr;
+    const Buffer *drawIndexBuffer_ = nullptr;
+    bool drawIndexCpuSafe_ = false;
     uint32_t drawIndexSize_ = 0, drawIndexCount_ = 0;
-    DrawGeometry geometry(const Pipeline &pl, uint32_t primitive, int32_t first, uint32_t count,
-                          const PixelBox &limit) const;
+    DrawGeometry geometry(const Pipeline &pl, uint32_t primitive, int32_t first, uint32_t count, const PixelBox &limit);
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
     // the same draws under two other rules, counted only: one barrier per fetching draw after any color write (the rule
     // before writtenBits_), and the interlocked storage form (a fetched color read and written by the fragment shader inside
@@ -702,7 +712,8 @@ enum RefusalId : uint8_t {
     RefUboOffset,
     RefNoTic,
     RefDepthStencil,  // a: the state's depth format, b: the pass's
-    RefSamples        // a: the state's samples, b: the pass's, c: the state's shading passes
+    RefSamples,       // a: the state's samples, b: the pass's, c: the state's shading passes
+    RefGeometry       // CPU ordering proof unavailable; requires an interlocked native program
 };
 
 struct Refusal {
@@ -733,6 +744,7 @@ public:
         if (i)
             surfaces_.add(i->bo.handle, write);
     }
+
     // Actual GPU addresses resolve through this connection's binding table in the addressed job ABI.
     void useAddress(uint64_t va, bool write);
     void use(const Buffer &buffer, bool write);
@@ -751,6 +763,18 @@ private:
     std::vector<std::pair<uintptr_t, uint64_t>> clean_, flush_;  // CPU ranges to clean / clean+invalidate before Exec
     std::vector<Texture *> backings_;                            // memoryless backings it uses
     SurfaceList surfaces_;
+    GeometryBudget geometryBudget_;
+
+    struct GeometryRead {
+        Bo bo;
+        uint64_t offset, bytes;
+        uint32_t access;
+    };
+
+    std::vector<GeometryRead> geometryReads_;
+    bool acquireGeometry(const Buffer &buffer, const uint8_t *cpu, uint64_t bytes);
+    bool geometryWritable() const;
+    void releaseGeometry();
     RenderEncoder render_;
     BlitEncoder blit_;
     uint64_t pushStart_ = 0, uploadStart_ = 0;
@@ -1143,6 +1167,9 @@ public:
         // compute launches encoded (raw_compute.h)
         std::atomic<uint64_t> dispatches{0};
         std::atomic<uint64_t> splitPrologues{0};  // split draws' prologue launches (raw_split.cpp)
+#if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
+        std::atomic<uint64_t> splitLaunches{0};
+#endif
     } stats;
 
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
@@ -1461,7 +1488,8 @@ private:
     void writeTic(const Texture &t);
     bool poolAlloc(uint64_t bytes, Span &s);
     void poolFree(Span &s);
-    bool tiledSurfaceTexture(uint64_t offset, uint32_t width, uint32_t height, Texture &t);
+    bool tiledSurfaceTexture(uint64_t offset, uint32_t width, uint32_t height, uint32_t pitch, Texture &t,
+                             Texture *sampled);
     Import *importSurface(uint64_t id, void *base, uint64_t bytes, const void *owner, const LayoutAsk *ask = nullptr);
     void release(Import *i);
     // lock_ held (raw_alias.cpp): a hold on a span's lease, made at its first alias; the last drop frees what the lease holds

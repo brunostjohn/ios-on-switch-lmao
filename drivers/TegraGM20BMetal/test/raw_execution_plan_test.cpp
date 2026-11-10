@@ -8,6 +8,45 @@
 namespace {
 using raw::ExecutionKind;
 
+TEST(ExecutionAttribution, NativeRangesStayNativeAcrossEvents)
+{
+    raw::ExecutionAttribution route;
+    route.add(true, false);
+    route.add(false, true);
+    route.add(true, false);
+    EXPECT_EQ(route.native, 2u);
+    EXPECT_EQ(route.compatibility, 0u);
+    EXPECT_FALSE(route.mixed());
+    EXPECT_FALSE(route.onlyCompatibility());
+}
+
+TEST(ExecutionAttribution, CompatibilityRangesStayCompatibilityAcrossEvents)
+{
+    raw::ExecutionAttribution route;
+    route.add(false, false);
+    route.add(false, true);
+    route.add(false, false);
+    EXPECT_EQ(route.native, 0u);
+    EXPECT_EQ(route.compatibility, 2u);
+    EXPECT_FALSE(route.mixed());
+    EXPECT_TRUE(route.onlyCompatibility());
+    route.add(true, false);
+    EXPECT_TRUE(route.mixed());
+    EXPECT_FALSE(route.onlyCompatibility());
+}
+
+TEST(ExecutionAttribution, EmptyAndEventOnlyHaveNoCompatibilityWork)
+{
+    raw::ExecutionAttribution route;
+    for (unsigned count = 0; count != 3; ++count) {
+        EXPECT_EQ(route.native, 0u);
+        EXPECT_EQ(route.compatibility, 0u);
+        EXPECT_FALSE(route.mixed());
+        EXPECT_FALSE(route.onlyCompatibility());
+        route.add(false, true);
+    }
+}
+
 TEST(ExecutionPlan, AdjacentCompatibleEncodersShareOneSubmission)
 {
     raw::ExecutionPlan plan;

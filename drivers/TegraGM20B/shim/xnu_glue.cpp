@@ -17,6 +17,7 @@
 #include <string.h>
 #include <sys/kdebug.h>
 #include "include/nvxnu.h"
+#include "../SwitchGpuBacking.h"
 #include "../../../kits/SwitchDMA/SwitchDcache.h"
 #include "../../../kits/SwitchDMA/SwitchDMABuffer.h"
 #include "../../../kits/SwitchDMA/SwitchHwPage.h"
@@ -436,9 +437,10 @@ extern "C" void nvxnu_dcache_clean_inval_pages(const nvxnu_u64 *pas, nvxnu_u32 c
 }
 
 extern "C" void switch_gpu_backing_cache(const uint64_t *pages, uint32_t count,
-		uint64_t offset, uint64_t bytes, int invalidate)
+		uint64_t offset, uint64_t bytes, int operation)
 {
-	const switch_dcache_op op = invalidate ? SWITCH_DCACHE_INVALIDATE : SWITCH_DCACHE_CLEAN;
+	const switch_dcache_op op = operation == SWITCH_GPU_CACHE_CLEAN_INVALIDATE ? SWITCH_DCACHE_CLEAN_INVALIDATE :
+		operation == SWITCH_GPU_CACHE_INVALIDATE ? SWITCH_DCACHE_INVALIDATE : SWITCH_DCACHE_CLEAN;
 	while (bytes && (offset >> 12) < count) {
 		const uint64_t within = offset & 4095;
 		const uint64_t span = bytes < 4096 - within ? bytes : 4096 - within;

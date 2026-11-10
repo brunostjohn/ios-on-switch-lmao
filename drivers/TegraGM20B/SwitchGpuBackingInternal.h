@@ -32,6 +32,12 @@ struct switch_gpu_backing {
 	bool initial_clean, retiring;
 };
 
+struct switch_gpu_cpu_lease {
+	switch_gpu_backing *backing;
+	uint64_t offset, bytes;
+	uint32_t access;
+};
+
 const switch_gpu_backing_engine *switch_gpu_backing_engine_ops(uint32_t engine);
 bool switch_gpu_backing_same_timeline(const switch_gpu_backing_token &a,
 				     const switch_gpu_backing_token &b);
@@ -40,7 +46,7 @@ bool switch_gpu_backing_later(const switch_gpu_backing_token &a,
 int switch_gpu_backing_prune_locked(switch_gpu_backing *backing);
 void switch_gpu_backing_drop_token(const switch_gpu_backing_token &token);
 extern "C" void switch_gpu_backing_cache(const uint64_t *pages, uint32_t count,
-					 uint64_t offset, uint64_t bytes, int invalidate);
+					 uint64_t offset, uint64_t bytes, int operation);
 extern "C" int switch_gpu_backing_prepare_retirement(void);
 extern "C" void switch_gpu_backing_schedule_retirement(void);
 extern "C" void switch_gpu_backing_retire(void);

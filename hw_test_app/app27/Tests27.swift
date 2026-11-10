@@ -5,7 +5,8 @@ import HWTestKit
 /// reach hardware J181 has and the Switch lacks.
 enum Tests27 {
     static let all: [any HWTest] = [
-        GPUSceneTest(scene: CAGlassScene()), Metal4Test(), BinaryArchiveTest(), UIGlassTest(), PocketStripTest(),
+        GPUSceneTest(scene: CAGlassScene()), CAGlassSplitTest(), Metal4Test(), BinaryArchiveTest(), UIGlassTest(),
+        PocketStripTest(),
         TrueToneDefaultTest(), GlassPacing.over,
         GlassPacing.under, NoCameraTest(), FrameProcessorTest(),
     ]

@@ -30,6 +30,8 @@
 #include "TegraGM20BSchedPolicy.h"
 #include "TegraGM20BSharedWiring.h"
 #include "SwitchGpuPin.h"
+#include "SwitchGpuBindings.h"
+#include "SwitchGpuSurfaceGeometry.h"
 #include "shim/include/switch_tiled_cache.h"
 using tgm_scan::PushCounts;
 using tgm_scan::PushParse;
@@ -777,6 +779,7 @@ class AGXDeviceUserClient : public IOUserClient
 		bool chunked;  // Compressible BOs: pas are pool chunks (tgm_pool_alloc_chunks); no view, never CPU-mapped
 		IOBufferMemoryDescriptor *bmd;  // cached BOs
 		IOMemoryDescriptor *wired;      // imports
+		OSObject *surface;  // Keeps its global ID alive through the import's GPU retirement.
 		IOMemoryDescriptor *view;       // cached clientMemoryForType descriptor
 		bool system;  // a coherent BO from ordinary pages (tgm_pool::FromSystem): a write-combined bmd
 		bool compositorPool;  // a pool BO counted as the compositor's (critical_ when it was made)
@@ -792,7 +795,7 @@ class AGXDeviceUserClient : public IOUserClient
 		uint64_t va, range;
 		Bo *bo;
 		uint64_t bo_offset;
-		uint8_t pageShift;
+		switch_gpu_mapping *mapping;
 	};
 
 	// A mapping method 12 (Map) made into the client's task: what IOKit's io_connect_map_memory_into_task keeps in the
@@ -892,6 +895,8 @@ class AGXDeviceUserClient : public IOUserClient
 	IOReturn order(const TegraGM20BAbiOrder *in, TegraGM20BAbiOrderReply *out);
 	IOReturn surfaceLayout(const TegraGM20BAbiSurfaceLayout *in,
 			       TegraGM20BAbiSurfaceLayoutReply *out);
+	IOReturn surfaceLayoutInfo(const TegraGM20BAbiSurfaceLayout *in,
+		TegraGM20BAbiSurfaceLayoutInfo *out, bool canonical);
 	void applyLevel();
 	IOReturn execSurfaces(const TegraGM20BAbiExecSurfaces *in);
 	IOReturn unmapToken(const TegraGM20BAbiUnmap *in);
@@ -1024,13 +1029,8 @@ AGXDeviceUserClient::Bo *AGXDeviceUserClient::findBo(uint64_t handle)
 
 AGXDeviceUserClient::Bo *AGXDeviceUserClient::findAddress(uint64_t address, uint64_t bytes)
 {
-	for (uint32_t i = 0; i < nbinds_; ++i) {
-		const auto &binding = binds_[i];
-		if (address >= binding.va && address - binding.va < binding.range &&
-		    bytes <= binding.range - (address - binding.va))
-			return binding.bo;
-	}
-	return nullptr;
+	const auto *binding = switch_gpu_binding_find(binds_, nbinds_, address, bytes);
+	return binding ? binding->bo : nullptr;
 }
 
 AGXDeviceUserClient::Bo *AGXDeviceUserClient::findToken(uint32_t token)
@@ -1120,6 +1120,7 @@ void AGXDeviceUserClient::releaseBo(Bo *bo)
 	if (bo->pas)
 		IODelete(bo->pas, uint64_t, bo->backing_pages);
 	switch_gpu_backing_release(bo->backing);
+	OSSafeReleaseNULL(bo->surface);
 	IODelete(bo, Bo, 1);
 }
 
@@ -1234,8 +1235,9 @@ IOReturn AGXDeviceUserClient::boAlloc(const TegraGM20BAbiBoAlloc *in,
 		if (!refused) {
 			// write-combined pool memory: zeroed by the allocator, no cacheable alias (CONTRACT §3). No room: the freed
 			// ranges the thread call has not zeroed yet are zeroed now, and the allocation tried again.
-			const uint64_t align =
-				(in->flags & TegraGM20BBoContiguous) ? 1ULL << in->align_log2 : 0;
+			uint64_t align = (in->flags & TegraGM20BBoContiguous) ? 1ULL << in->align_log2 : 0;
+			if (in->bytes >= kChunkBytes && align < kChunkBytes)
+				align = kChunkBytes;
 			bo->pool_va = tgm_pool_alloc(in->bytes, align, &bo->pool_pa);
 			if (!bo->pool_va && poolZeroNow())
 				bo->pool_va = tgm_pool_alloc(in->bytes, align, &bo->pool_pa);
@@ -1448,6 +1450,11 @@ IOReturn AGXDeviceUserClient::boImport(const TegraGM20BAbiBoImport *in,
 				: kIOReturnBadArgument;
 		lap(1);
 	}
+	if (!ret && in->surface_id) {
+		bo->surface = switch_gpu_surface_hold(in->surface_id, task_, bo->pas, bo->npages);
+		if (!bo->surface)
+			ret = kIOReturnBadArgument;
+	}
 	if (!ret && !bo->wiring) {
 		ret = ioreturn(
 			tgm_mem_new_waited(vm_, bo->pas, bo->npages, &bo->mem, &cost.lock_ns));
@@ -1468,10 +1475,6 @@ IOReturn AGXDeviceUserClient::boImport(const TegraGM20BAbiBoImport *in,
 	}
 	// Registered for the coherency every process's IOSurfaceLock/Unlock of the surface drives (TegraGM20BCoherency.cpp):
 	// writable (the GPU may write it) unless the task maps the pages read-only.
-	if (in->surface_id && !switch_gpu_surface_pages_match(in->surface_id, task_, bo->pas, bo->npages)) {
-		releaseBo(bo);
-		return kIOReturnBadArgument;
-	}
 	int covered = 0;
 	const int gpuWrites =
 		static_cast<int>(!bo->readOnly && (in->flags & TegraGM20BImportGpuReads) == 0u);
@@ -1573,10 +1576,11 @@ IOReturn AGXDeviceUserClient::boFree(const TegraGM20BAbiBoFree *in)
 void AGXDeviceUserClient::unbindOverlaps(uint64_t va, uint64_t range, Bo *only)
 {
 	for (uint32_t i = 0; i < nbinds_;) {
-		const Binding &b = binds_[i];
+		Binding &b = binds_[i];
 		if (b.va < va + range && va < b.va + b.range && (!only || b.bo == only)) {
-			tgm_vm_unmap_pages(vm_, b.va, b.range, b.pageShift);
-			binds_[i] = binds_[--nbinds_];
+			switch_gpu_vm_unmap(vm_, &b.mapping);
+			--nbinds_;
+			memmove(&binds_[i], &binds_[i + 1], sizeof(Binding) * (nbinds_ - i));
 		} else {
 			i++;
 		}
@@ -1617,13 +1621,16 @@ IOReturn AGXDeviceUserClient::vmBind(const TegraGM20BAbiVmBind *in, uint32_t cou
 			binds_ = grown;
 			cap_binds_ = cap;
 		}
-		uint8_t pageShift = 0;
-		const int err = tgm_vm_map_ordered(vm_, op.va, op.range, bo->mem, op.bo_offset,
+		switch_gpu_mapping *mapping = nullptr;
+		const int err = switch_gpu_vm_map(vm_, op.va, op.range, bo->mem, op.bo_offset,
 						   static_cast<uint8_t>(op.kind),
-						   static_cast<int>(bo->readOnly), &pageShift);
+						   static_cast<int>(bo->readOnly), &mapping);
 		if (err)
 			return ioreturn(err);
-		binds_[nbinds_++] = {op.va, op.range, bo, op.bo_offset, pageShift};
+		const uint32_t at = switch_gpu_binding_upper(binds_, nbinds_, op.va);
+		memmove(&binds_[at + 1], &binds_[at], sizeof(Binding) * (nbinds_ - at));
+		binds_[at] = {op.va, op.range, bo, op.bo_offset, mapping};
+		++nbinds_;
 		tgm_stats_bind(1, op.range >> 12, nowNs() - start);
 	}
 	return kIOReturnSuccess;
@@ -1632,22 +1639,51 @@ IOReturn AGXDeviceUserClient::vmBind(const TegraGM20BAbiVmBind *in, uint32_t cou
 // The decision may tile the surface on the copy engine and sleep on its fence; the connection's lock is held meanwhile,
 // as for a BoImport's wiring.
 IOReturn AGXDeviceUserClient::surfaceLayout(const TegraGM20BAbiSurfaceLayout *in,
-					    TegraGM20BAbiSurfaceLayoutReply *out)
+	TegraGM20BAbiSurfaceLayoutReply *out)
+{
+	TegraGM20BAbiSurfaceLayoutInfo info = {};
+	const IOReturn result = surfaceLayoutInfo(in, &info, false);
+	*out = {info.layout, 0};
+	return result;
+}
+
+IOReturn AGXDeviceUserClient::surfaceLayoutInfo(const TegraGM20BAbiSurfaceLayout *in,
+	TegraGM20BAbiSurfaceLayoutInfo *out, bool canonical)
 {
 	const Bo *bo = findBo(in->handle);
 	if (!bo || !bo->wired || !bo->coh)
 		return kIOReturnBadArgument;
-	const bool writes = ((in->flags & TegraGM20BLayoutWrites) != 0u) &&
-			    (tgm_surface_client_memory(tgm_coh_surface_id(bo->coh), task_) == 0);
-	const int layout = tgm_coherency_layout(bo->coh, in->width, in->height, in->bpp,
-						in->bytes_per_row, static_cast<int>(writes));
-	out->layout = 0;
+	SwitchGpuSurfaceGeometry surface = {};
+	if (switch_gpu_surface_geometry(tgm_coh_surface_id(bo->coh), task_, bo->pas, bo->npages, &surface))
+		return kIOReturnBadArgument;
+	const bool packed = switch_gpu_surface_packed(surface);
+	const bool same = switch_gpu_surface_shape_matches(surface, in->width, in->height, in->bpp, in->bytes_per_row);
+	const bool writes = packed && !surface.client_memory && (canonical || same) &&
+		(in->flags & TegraGM20BLayoutWrites);
+	const int layout = packed
+		? tgm_coherency_layout(bo->coh, uint32_t(surface.width), uint32_t(surface.height), surface.bpp,
+			uint32_t(surface.pitch), writes)
+		: tgm_coherency_layout(bo->coh, 0, 0, 0, 0, 0);
+	*out = {};
+	if (surface.width <= UINT32_MAX && surface.height <= UINT32_MAX && surface.pitch <= UINT32_MAX) {
+		out->width = uint32_t(surface.width);
+		out->height = uint32_t(surface.height);
+		out->bpp = surface.bpp;
+		out->pitch = uint32_t(surface.pitch);
+		out->rows = uint32_t(surface.height);
+		out->bytes = surface.bytes;
+		out->align = 4096;
+	}
 	if (layout > 0) {
-		out->layout = TegraGM20BLayoutTiled;
+		tgm_layout tiled = {};
+		if (!tegra_gm20b_surface_layout(bo->pas[0], &tiled))
+			return kIOReturnNotReady;
+		*out = {canonical || same ? uint32_t(TegraGM20BLayoutTiled) : uint32_t(TegraGM20BLayoutOtherShape),
+			tiled.width, tiled.height, tiled.bpp, tiled.row_bytes, tiled.y_log2, tiled.rows, 0,
+			tiled.align, tiled.bytes};
 	} else if (layout < 0) {
 		out->layout = TegraGM20BLayoutOtherShape;
 	}
-	out->reserved = 0;
 	return kIOReturnSuccess;
 }
 
@@ -1735,13 +1771,8 @@ IOReturn AGXDeviceUserClient::channelDestroy(const TegraGM20BAbiChannel *in)
 const uint32_t *AGXDeviceUserClient::pushView(uint64_t va, uint64_t bytes,
 					      const Binding *&hit) const
 {
-	if (!hit || va < hit->va || va + bytes > hit->va + hit->range) {
-		hit = nullptr;
-		for (uint32_t b = 0; b < nbinds_ && !hit; b++) {
-			if (va >= binds_[b].va && va + bytes <= binds_[b].va + binds_[b].range)
-				hit = &binds_[b];
-		}
-	}
+	if (!hit || !switch_gpu_binding_contains(*hit, va, bytes))
+		hit = switch_gpu_binding_find(binds_, nbinds_, va, bytes);
 	const void *base = nullptr;
 	if (hit) {
 		if (hit->bo->pool_va) {
@@ -1920,7 +1951,7 @@ void AGXDeviceUserClient::releaseCpuLeases()
 IOReturn AGXDeviceUserClient::cpuAccess(const TegraGM20BAbiCpuAccess *in, bool release)
 {
 	if (in->reserved || !in->bytes || !(in->access & (TegraGM20BCpuRead | TegraGM20BCpuWrite)) ||
-	    (in->access & ~uint32_t(TegraGM20BCpuRead | TegraGM20BCpuWrite | TegraGM20BCpuAvoidSync | TegraGM20BCpuDiscard)))
+	    (in->access & ~uint32_t(TegraGM20BCpuRead | TegraGM20BCpuWrite | TegraGM20BCpuAvoidSync | TegraGM20BCpuDiscard | TegraGM20BCpuPreserveDirty)))
 		return kIOReturnBadArgument;
 	IOLockLock(lock_);
 	if (release) {
@@ -2080,20 +2111,31 @@ IOReturn AGXDeviceUserClient::exec(uint32_t channel, TegraGM20BAbiPush *input, u
 	switch_gpu_backing_token completion = {};
 	uint32_t dependencies = 0;
 	int error = 0;
-	if (count) {
-		switch_gpu_chan_next_token(chan, &completion);
-		error = switch_gpu_backing_begin(jobUses_, useTotal, &completion, &transaction);
+	bool ownershipBusy = false;
+	switch_gpu_chan_submit_enter(chan);
+	for (;;) {
+		if (count) {
+			switch_gpu_chan_next_token(chan, &completion);
+			error = switch_gpu_backing_begin(jobUses_, useTotal, &completion, &transaction);
+			if (!error)
+				error = switch_gpu_backing_dependencies(&transaction, job_->dependencies, TegraGM20BMaxJobUses, &dependencies);
+		}
+		ownershipBusy = error == -16;
 		if (!error)
-			error = switch_gpu_backing_dependencies(&transaction, job_->dependencies, TegraGM20BMaxJobUses, &dependencies);
+			error = switch_gpu_chan_exec(chan, pushes, count, job_->dependencies, dependencies,
+				&seqno, profiled ? &prof : nullptr);
+		if (error != -11)
+			break;
+		switch_gpu_backing_abort(&transaction);
+		error = switch_gpu_chan_wait_submission_room(chan, pushes, count, dependencies, profiled ? &prof : nullptr);
+		if (error)
+			break;
 	}
-	const bool ownershipBusy = error == -16;
-	if (!error)
-		error = switch_gpu_chan_exec(chan, pushes, count, job_->dependencies, dependencies,
-			&seqno, profiled ? &prof : nullptr);
 	if (count && !error)
 		switch_gpu_backing_commit(&transaction);
 	else
 		switch_gpu_backing_abort(&transaction);
+	switch_gpu_chan_submit_leave();
 	const IOReturn ret = ownershipBusy ? kIOReturnCannotLock : ioreturn(error);
 	reap(false);
 	if (ret)
@@ -2280,7 +2322,8 @@ IOReturn AGXDeviceUserClient::getInfo(TegraGM20BAbiInfo *out)
 		     TegraGM20BInfoOrder | TegraGM20BInfoSurfaceWrites |
 		     TegraGM20BInfoSurfaceLayout | TegraGM20BInfoExecSurfaces |
 		     TegraGM20BInfoPriority | TegraGM20BInfoKillRecord | TegraGM20BInfoSubmit |
-		     TegraGM20BInfoCpuAccess | TegraGM20BInfoSubmitAddress;
+		     TegraGM20BInfoCpuAccess | TegraGM20BInfoSubmitAddress | TegraGM20BInfoCpuPreserveDirty |
+		     TegraGM20BInfoCanonicalSurfaceLayout;
 	if (info.comptag_lines && switch_gpu_compression_on())
 		out->flags |= TegraGM20BInfoCompression;
 	if (switch_tiled_cache_on())
@@ -2415,6 +2458,10 @@ IOReturn AGXDeviceUserClient::run(uint32_t method, const void *in, uint32_t inSi
 	case TegraGM20BMethodSurfaceWrites:
 		wantIn = sizeof(TegraGM20BAbiSurfaceWrites);
 		break;
+	case TegraGM20BMethodSurfaceLayoutInfo:
+		wantIn = sizeof(TegraGM20BAbiSurfaceLayout);
+		wantOut = sizeof(TegraGM20BAbiSurfaceLayoutInfo);
+		break;
 	case TegraGM20BMethodSurfaceLayout:
 		wantIn = sizeof(TegraGM20BAbiSurfaceLayout);
 		wantOut = sizeof(TegraGM20BAbiSurfaceLayoutReply);
@@ -2461,6 +2508,7 @@ IOReturn AGXDeviceUserClient::run(uint32_t method, const void *in, uint32_t inSi
 		if (!reservedZero(static_cast<const TegraGM20BAbiSurfaceWrites *>(in)->reserved))
 			return kIOReturnBadArgument;
 		break;
+	case TegraGM20BMethodSurfaceLayoutInfo:
 	case TegraGM20BMethodSurfaceLayout:
 		if (!reservedZero(static_cast<const TegraGM20BAbiSurfaceLayout *>(in)->reserved) ||
 		    (static_cast<const TegraGM20BAbiSurfaceLayout *>(in)->flags &
@@ -2616,6 +2664,10 @@ IOReturn AGXDeviceUserClient::run(uint32_t method, const void *in, uint32_t inSi
 		tgm_coherency_gpu_writes(
 			static_cast<const TegraGM20BAbiSurfaceWrites *>(in)->surface_id);
 		ret = kIOReturnSuccess;
+		break;
+	case TegraGM20BMethodSurfaceLayoutInfo:
+		ret = surfaceLayoutInfo(static_cast<const TegraGM20BAbiSurfaceLayout *>(in),
+			static_cast<TegraGM20BAbiSurfaceLayoutInfo *>(out), true);
 		break;
 	case TegraGM20BMethodSurfaceLayout:
 		ret = surfaceLayout(static_cast<const TegraGM20BAbiSurfaceLayout *>(in),

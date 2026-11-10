@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <cstring>
 #include "raw_gpu.h"
+#include "raw_compute_visibility.h"
 #include "raw_slm.h"
 
 namespace raw {
@@ -18,7 +19,6 @@ enum : uint32_t {
     INVALIDATE_SKED_CACHES = 0x0298,
     SEND_PCAS_A = 0x02b4,
     SEND_SIGNALING_PCAS_B = 0x02bc,
-    INVALIDATE_SHADER_CACHES_NO_WFI_3D = 0x0da4,
     CB_SELECTOR_A = 0x2380,
     BIND_GROUP_CB = 0x2410,
 };
@@ -209,12 +209,12 @@ void CommandBuffer::launchPrologues()
         p.m(SEND_PCAS_A, uint32_t(qmdVa >> 8), SUBC_COMPUTE);
         p.m(SEND_SIGNALING_PCAS_B, kPcasInvalidateSchedule, SUBC_COMPUTE);
     }
-    p.m(WAIT_FOR_IDLE, 0, SUBC_COMPUTE);
-    p.m(INVALIDATE_SHADER_CACHES_NO_WFI_3D, kInvalidateData | kInvalidateConstant);
+    computeToGraphics(p, false);
     d.stats.uploadBytes += uint64_t(splits_.size()) * sizeof(PackSplit::qmd);
     d.stats.pushBytes += uint64_t(p.at - start) * 4;
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
     d.stats.splitPrologues += splits_.size();
+    d.stats.splitLaunches += splits_.size();
 #endif
     // the submission prologue may share segments_[0] with what followed it in the ring
     const TegraGM20BAbiPush head = segments_[0];

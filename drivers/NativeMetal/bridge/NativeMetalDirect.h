@@ -6,6 +6,7 @@
 #include <stddef.h>
 #include <stdint.h>
 #include "NativeMetalObjects.h"
+#include "NativeMetalBlend.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -56,7 +57,8 @@ typedef struct NmbDirectDraw {
     uint32_t writeCount;
     uint32_t pushMask;  // the push-constant words [0, 128) the draw writes, and their values
     uint32_t push[32];
-    uint32_t pushHoles;   // push words the consumer fills with addresses
+    uint32_t blendColorWord, halfBlendColorWord;  // push word + 1, zero when absent
+    uint32_t pushHoles;                           // push words the consumer fills with addresses
     uint32_t vertexSlot;  // the first fixed-function vertex buffer's Metal slot (UINT32_MAX: none) and stride
     uint32_t vertexStride;
     const char *variant;

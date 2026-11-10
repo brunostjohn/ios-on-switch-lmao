@@ -66,6 +66,7 @@
 #include "TegraGM20BComp.h"
 #include "TegraGM20BGpu.h"
 #include "SwitchGpuTimeline.h"
+#include "SwitchGpuMapping.h"
 #include "TegraGM20BSyncpt.h"
 #include "TegraGM20BFences.h"
 #include "TegraGM20BHangDecode.h"
@@ -857,10 +858,30 @@ struct tgm_import {
 	u32 refs;
 };
 
+struct switch_gpu_memory_view {
+	struct switch_gpu_memory_view *next;
+	struct nvif_mem mem;
+	u64 offset, bytes;
+};
+
 struct tgm_mem {
 	struct nvif_mem mem;
 	u64 bytes;
 	u8 page; /* the largest GMMU page it may be mapped with */
+	const u64 *pages;
+	u32 npages;
+	struct switch_gpu_memory_view *big_views;
+	bool big_views_ready;
+};
+
+struct switch_gpu_mapping_entry {
+	u64 va, offset, bytes;
+	u8 shift;
+};
+
+struct switch_gpu_mapping {
+	u32 count;
+	struct switch_gpu_mapping_entry entries[];
 };
 
 struct tgm_kmap {
@@ -1004,6 +1025,8 @@ static int mem_new(const uint64_t *pas, uint32_t npages, u8 page, struct tgm_mem
 		return -ENOMEM;
 	mem->bytes = (u64)npages << PAGE_SHIFT;
 	mem->page = page;
+	mem->pages = pas;
+	mem->npages = npages;
 	asked = stats_on() && lock_wait_ns ? nvxnu_nanotime() : 0;
 	gpu_lock();
 	if (asked)
@@ -1046,11 +1069,22 @@ int tgm_mem_new_exclusive(struct tgm_vm *vm, const uint64_t *pas, uint32_t npage
 		       NULL);
 }
 
+static void mem_big_views_drop(struct tgm_mem *mem)
+{
+	while (mem->big_views) {
+		struct switch_gpu_memory_view *view = mem->big_views;
+		mem->big_views = view->next;
+		nvif_mem_dtor(&view->mem);
+		kfree(view);
+	}
+}
+
 void tgm_mem_del(struct tgm_mem **pmem)
 {
 	if (!*pmem)
 		return;
 	gpu_lock();
+	mem_big_views_drop(*pmem);
 	nvif_mem_dtor(&(*pmem)->mem);
 	mutex_unlock(&gpu.lock);
 	kfree(*pmem);
@@ -1135,6 +1169,157 @@ int tgm_vm_unmap_pages(struct tgm_vm *vm, uint64_t va, uint64_t range, uint8_t p
 int tgm_vm_unmap(struct tgm_vm *vm, uint64_t va, uint64_t range)
 {
 	return tgm_vm_unmap_pages(vm, va, range, PAGE_SHIFT);
+}
+
+static void mem_prepare_big_views(struct tgm_mem *mem)
+{
+	u32 at = 0;
+	if (mem->big_views_ready)
+		return;
+	mem->big_views_ready = true;
+	if (mem->page >= SWITCH_GPU_BIG_SHIFT)
+		return;
+	while (at <= mem->npages && SWITCH_GPU_BIG_PAGES <= mem->npages - at) {
+		u32 first = at;
+		struct switch_gpu_memory_view *view;
+		struct nvif_mem_ram_v0 args = {.version = 0};
+		int ret;
+		if (!switch_gpu_mapping_big_page(mem->pages, mem->npages, at)) {
+			at += SWITCH_GPU_BIG_PAGES;
+			continue;
+		}
+		do {
+			at += SWITCH_GPU_BIG_PAGES;
+		} while (switch_gpu_mapping_big_page(mem->pages, mem->npages, at));
+		view = kzalloc(sizeof(*view), GFP_KERNEL);
+		if (!view)
+			continue;
+		view->offset = (u64)first << PAGE_SHIFT;
+		view->bytes = (u64)(at - first) << PAGE_SHIFT;
+		args.dma = (dma_addr_t *)(mem->pages + first);
+		ret = nvif_mem_ctor_type(&gpu.mmu, "big-span", NVIF_CLASS_MEM_GF100, gpu.mem_type,
+			SWITCH_GPU_BIG_SHIFT, view->bytes, &args, sizeof(args), &view->mem);
+		if (ret) {
+			kfree(view);
+			continue;
+		}
+		view->next = mem->big_views;
+		mem->big_views = view;
+	}
+}
+
+static struct nvif_mem *mem_mapping_view(struct tgm_mem *mem, struct switch_gpu_mapping_entry *entry,
+	u64 *offset)
+{
+	struct switch_gpu_memory_view *view;
+	*offset = entry->offset;
+	if (entry->shift == PAGE_SHIFT || mem->page >= entry->shift)
+		return &mem->mem;
+	for (view = mem->big_views; view; view = view->next) {
+		if (entry->offset >= view->offset && entry->offset - view->offset <= view->bytes &&
+		    entry->bytes <= view->bytes - (entry->offset - view->offset)) {
+			*offset -= view->offset;
+			return &view->mem;
+		}
+	}
+	entry->shift = PAGE_SHIFT;
+	return &mem->mem;
+}
+
+int switch_gpu_vm_map(struct tgm_vm *vm, u64 va, u64 range, struct tgm_mem *mem,
+	u64 offset, u8 kind, int read_only, struct switch_gpu_mapping **mapping)
+{
+	struct gf100_vmm_map_v0 args = {.version = 0, .vol = !l2_on(), .ro = !!read_only, .kind = kind};
+	struct switch_gpu_mapping_run run;
+	struct switch_gpu_mapping *made;
+	u64 at = 0;
+	u32 count = 0, got = 0, i;
+	int ret = 0, failed_get = 0;
+	bool compressed, needs_big_views = false;
+	if (!mapping || !vm || !mem || !vm->owner || !range || ((va | range | offset) & (PAGE_SIZE - 1)) ||
+	    va < TGM_USER_VA_START || range > TGM_KERNEL_VA || va > TGM_KERNEL_VA - range ||
+	    offset > mem->bytes || range > mem->bytes - offset || !nvif_mmu_kind_valid(&gpu.mmu, kind))
+		return -EINVAL;
+	*mapping = NULL;
+	compressed = gpu.mmu.kind[kind] != kind;
+	if (compressed && !tgm_comp_bind_ok(va, offset, range, mem->page))
+		return -EINVAL;
+	while (at < range) {
+		if (compressed)
+			run = (struct switch_gpu_mapping_run){range, SWITCH_GPU_BIG_SHIFT};
+		else if (!switch_gpu_mapping_next(mem->pages, mem->npages, va + at, offset + at, range - at, &run))
+			return -EINVAL;
+		needs_big_views |= run.shift == SWITCH_GPU_BIG_SHIFT;
+		++count;
+		at += run.bytes;
+	}
+	made = kzalloc(sizeof(*made) + count * sizeof(made->entries[0]), GFP_KERNEL);
+	if (!made)
+		return -ENOMEM;
+	made->count = count;
+	at = 0;
+	for (i = 0; i < count; ++i) {
+		if (compressed)
+			run = (struct switch_gpu_mapping_run){range, SWITCH_GPU_BIG_SHIFT};
+		else
+			switch_gpu_mapping_next(mem->pages, mem->npages, va + at, offset + at, range - at, &run);
+		made->entries[i] = (struct switch_gpu_mapping_entry){va + at, offset + at, run.bytes, run.shift};
+		at += run.bytes;
+	}
+	gpu_lock();
+	if (!compressed && needs_big_views)
+		mem_prepare_big_views(mem);
+	nvxnu_gpu_ordered_begin();
+	for (i = 0; i < count; ++i) {
+		struct switch_gpu_mapping_entry *entry = &made->entries[i];
+		u64 memory_offset;
+		struct nvif_mem *memory = mem_mapping_view(mem, entry, &memory_offset);
+		ret = nvif_vmm_raw_get(&vm->vmm, entry->va, entry->bytes, entry->shift);
+		if (ret) {
+			failed_get = 1;
+			break;
+		}
+		++got;
+		ret = nvif_vmm_raw_map(&vm->vmm, entry->va, entry->bytes, entry->shift,
+			&args, sizeof(args), memory, memory_offset);
+		if (ret)
+			break;
+	}
+	nvxnu_gpu_ordered_end();
+	if (ret) {
+		for (i = 0; i < got; ++i) {
+			const struct switch_gpu_mapping_entry *entry = &made->entries[i];
+			nvif_vmm_raw_unmap(&vm->vmm, entry->va, entry->bytes, entry->shift, false);
+			nvif_vmm_raw_put(&vm->vmm, entry->va, entry->bytes, entry->shift);
+		}
+		if (failed_get)
+			mmu_invalidate_all();
+	} else {
+		tgm_tlb_mapped(&vm->tlb);
+	}
+	mutex_unlock(&gpu.lock);
+	if (ret)
+		kfree(made);
+	else
+		*mapping = made;
+	return ret;
+}
+
+void switch_gpu_vm_unmap(struct tgm_vm *vm, struct switch_gpu_mapping **mapping)
+{
+	struct switch_gpu_mapping *made = *mapping;
+	u32 i;
+	if (!made)
+		return;
+	gpu_lock();
+	for (i = 0; i < made->count; ++i) {
+		const struct switch_gpu_mapping_entry *entry = &made->entries[i];
+		nvif_vmm_raw_unmap(&vm->vmm, entry->va, entry->bytes, entry->shift, false);
+		nvif_vmm_raw_put(&vm->vmm, entry->va, entry->bytes, entry->shift);
+	}
+	mutex_unlock(&gpu.lock);
+	kfree(made);
+	*mapping = NULL;
 }
 
 int tgm_vm_kmap(struct tgm_vm *vm, struct tgm_mem *mem, uint64_t bytes, uint64_t *va)
@@ -1541,7 +1726,7 @@ static int chan_killed(struct nvif_event *event, void *repv, u32 repc)
 	WRITE_ONCE(chan->error, fault_code(report));
 	switch_gpu_timeline_failed(chan->timeline, READ_ONCE(*chan->fence_cpu));
 	fence_kill_record(chan->fence_cpu, chan->submitted, chan->error);
-	WRITE_ONCE(*chan->fence_cpu, chan->submitted);
+	__atomic_store_n(chan->fence_cpu, chan->submitted, __ATOMIC_RELEASE);
 	__asm__ volatile("dsb sy" ::: "memory");
 	nvxnu_log("tegra-gm20b: GPU error in %s (channel %u): channel killed, GPU running: %s\n",
 		  chan->owner, chan->chid, report);
@@ -3400,11 +3585,12 @@ void tgm_chan_on_fence(struct tgm_chan *chan, void (*fenced)(void *arg), void *a
 static void chan_free(struct tgm_chan *chan)
 {
 	int i = 0;
-	switch_gpu_timeline_close(chan->timeline);
 	if (chan->high || chan->tracked)
 		tgm_sched_forget(gpu.device, chan->chid);
 	nvif_event_dtor(&chan->nonstall);
 	nvif_event_dtor(&chan->kill);
+	switch_gpu_timeline_close(chan->timeline);
+	chan->timeline = NULL;
 	for (i = chan->nobj - 1; i >= 0; i--)
 		nvif_object_dtor(&chan->obj[i]);
 	nvif_object_unmap(&chan->user);
@@ -3413,6 +3599,7 @@ static void chan_free(struct tgm_chan *chan)
 	nvif_vmm_put(&chan->vm->vmm, &chan->ring_vma);
 	if (chan->ring_mem) {
 		struct tgm_mem *m = chan->ring_mem;
+		mem_big_views_drop(m);
 		nvif_mem_dtor(&m->mem);
 		kfree(m);
 	}
@@ -4418,7 +4605,7 @@ static int chan_room(struct tgm_chan *chan, u32 gpfifo_nr, u32 push_nr)
 /* Room for gpfifo_nr entries and push_nr dwords, waited for by interrupt: every submission's GET report comes before its
  * fence's nonstall interrupt (chan_fence), whose pass ends in nvxnu_wake(), so nvif's own wait then finds the room at
  * once and never spins. -ETIMEDOUT after 1 s. */
-static int chan_wait_room(struct tgm_chan *chan, u32 gpfifo_nr, u32 push_nr)
+static int chan_wait_ready(struct tgm_chan *chan, u32 gpfifo_nr, u32 push_nr)
 {
 	u64 end = nvxnu_nanotime() + NSEC_PER_SEC;
 	int ret = 0;
@@ -4433,6 +4620,12 @@ static int chan_wait_room(struct tgm_chan *chan, u32 gpfifo_nr, u32 push_nr)
 			break;
 		}
 	}
+	return ret;
+}
+
+static int chan_wait_room(struct tgm_chan *chan, u32 gpfifo_nr, u32 push_nr)
+{
+	int ret = chan_wait_ready(chan, gpfifo_nr, push_nr);
 	return ret ? ret : nvif_chan_gpfifo_wait(&chan->chan, gpfifo_nr, push_nr);
 }
 
@@ -4599,7 +4792,7 @@ static int backing_dependencies(struct tgm_chan *chan, const struct switch_gpu_b
 			   token->engine == SWITCH_GPU_ENGINE_DISPLAY) {
 			u32 words[TGM_SYNCPT_WAIT_DWORDS];
 			u32 n;
-			if (token->queue > 255 || token->value > UINT32_MAX)
+			if (token->queue > 255)
 				return -EINVAL;
 			if (emit) {
 				tgm_syncpt_wait(words, token->queue, (u32)token->value);
@@ -4615,7 +4808,7 @@ static int backing_dependencies(struct tgm_chan *chan, const struct switch_gpu_b
 
 static int chan_exec(struct tgm_chan *chan, const struct tgm_push *pushes, uint32_t count,
 		     uint32_t *seqno, const struct tgm_prof *prof,
-		     const struct switch_gpu_backing_token *dependencies, u32 dependency_count)
+		     const struct switch_gpu_backing_token *dependencies, u32 dependency_count, int may_wait)
 {
 	u64 start = SWITCH_FRAME_TIMELINE ? nvxnu_nanotime() : 0;
 	u32 i = 0;
@@ -4624,6 +4817,10 @@ static int chan_exec(struct tgm_chan *chan, const struct tgm_push *pushes, uint3
 	int ret = 0;
 	int tlb = 0;
 	u32 waits = 0;
+	u32 ring_cur;
+	int ring_free;
+	u32 *push_bgn, *push_cur, *push_end, *push_seg;
+	u32 entries, words;
 
 	if (chan->error)
 		return -EIO;
@@ -4640,8 +4837,10 @@ static int chan_exec(struct tgm_chan *chan, const struct tgm_push *pushes, uint3
 	ret = backing_dependencies(chan, dependencies, dependency_count, 0);
 	if (ret)
 		return ret;
-	idle_wake(); /* the run rate before any of this submission is kicked */
-	chan_timeslice_due(chan);
+	if (may_wait) {
+		idle_wake();
+		chan_timeslice_due(chan);
+	}
 	/* from its first submission: a channel made before its connection's GPU priority came (the compositor's, at boot)
 	 * is never held for the compositor's own frame */
 	if (chan->app && !chan->high && !chan->tracked) {
@@ -4663,18 +4862,34 @@ static int chan_exec(struct tgm_chan *chan, const struct tgm_push *pushes, uint3
 	/* nouveau_exec_job_run(): room for every user entry plus our fence push and, each kicked as its own entry before
 	 * them, a present wait, the task order's acquires and (stats) a start stamp, one more nvif GET semaphore
 	 * with each. A profile's stamps: an entry each, a stamp and a GET semaphore. */
-	ret = chan_wait_room(chan, count + 6 + stamps,
-			     CHAN_FENCE_DWORDS + 32 + 5 * (TGM_ORDER_MAX + dependency_count) + 16 * stamps);
+	entries = count + 6 + stamps;
+	words = CHAN_FENCE_DWORDS + 32 + 5 * (TGM_ORDER_MAX + dependency_count) + 16 * stamps;
+	if (!may_wait && !chan_room(chan, entries, words))
+		return -EAGAIN;
+	ret = may_wait ? chan_wait_ready(chan, entries, words) : 0;
 	if (ret == -ETIMEDOUT && gpu.stage >= 3) {
 		tgm_chan_stalled(chan, "exec: GPFIFO still full after 1 s", chan->submitted,
 				 NSEC_PER_SEC);
 	}
 	if (ret)
 		return READ_ONCE(chan->error) ? -EIO : ret == -ETIMEDOUT ? -EBUSY : ret;
+	ring_cur = chan->chan.gpfifo.cur;
+	ring_free = chan->chan.gpfifo.free;
+	push_bgn = chan->chan.push.bgn;
+	push_cur = chan->chan.push.cur;
+	push_end = chan->chan.push.end;
+	push_seg = chan->chan.push.seg;
 	chan->chan.defer_kick = true;
-	ret = backing_dependencies(chan, dependencies, dependency_count, 1);
+	ret = nvif_chan_gpfifo_wait(&chan->chan, entries, words);
+	if (!ret)
+		ret = backing_dependencies(chan, dependencies, dependency_count, 1);
 	if (ret) {
-		chan->chan.push.cur = chan->chan.push.bgn;
+		chan->chan.gpfifo.cur = ring_cur;
+		chan->chan.gpfifo.free = ring_free;
+		chan->chan.push.bgn = push_bgn;
+		chan->chan.push.cur = push_cur;
+		chan->chan.push.end = push_end;
+		chan->chan.push.seg = push_seg;
 		chan->chan.defer_kick = false;
 		return ret;
 	}
@@ -4750,20 +4965,46 @@ int tgm_chan_exec(struct tgm_chan *chan, const struct tgm_push *pushes, uint32_t
 	int ret = 0;
 
 	gate_enter();
-	ret = chan_exec(chan, pushes, count, seqno, prof, NULL, 0);
+	ret = chan_exec(chan, pushes, count, seqno, prof, NULL, 0, 1);
 	gate_leave();
 	return ret;
+}
+
+void switch_gpu_chan_submit_enter(struct tgm_chan *chan)
+{
+	gate_enter();
+	idle_wake();
+	chan_timeslice_due(chan);
+}
+
+void switch_gpu_chan_submit_leave(void)
+{
+	gate_leave();
+}
+
+int switch_gpu_chan_wait_submission_room(struct tgm_chan *chan, const struct tgm_push *pushes,
+	u32 count, u32 dependency_count, const struct tgm_prof *prof)
+{
+	u32 stamps = 0;
+	u32 i;
+	int ret;
+	if (count > TegraGM20BMaxJobPushes || dependency_count > TegraGM20BMaxJobUses)
+		return -E2BIG;
+	if (prof && stats_on() && !chan->kernel && count <= TGM_PROF_MAX && !READ_ONCE(chan->prof_seqno))
+		for (i = 0; i < count; ++i)
+			stamps += !pushes[i].incomplete && prof->cls[i] != TGM_PC_SKIP;
+	ret = chan_wait_ready(chan, count + 6 + stamps,
+		CHAN_FENCE_DWORDS + 32 + 5 * (TGM_ORDER_MAX + dependency_count) + 16 * stamps);
+	if (ret == -ETIMEDOUT && gpu.stage >= 3)
+		tgm_chan_stalled(chan, "exec: GPFIFO still full after 1 s", chan->submitted, NSEC_PER_SEC);
+	return READ_ONCE(chan->error) ? -EIO : ret == -ETIMEDOUT ? -EBUSY : ret;
 }
 
 int switch_gpu_chan_exec(struct tgm_chan *chan, const struct tgm_push *pushes, uint32_t count,
 	const struct switch_gpu_backing_token *dependencies, uint32_t dependency_count,
 	uint32_t *seqno, const struct tgm_prof *prof)
 {
-	int ret;
-	gate_enter();
-	ret = chan_exec(chan, pushes, count, seqno, prof, dependencies, dependency_count);
-	gate_leave();
-	return ret;
+	return chan_exec(chan, pushes, count, seqno, prof, dependencies, dependency_count, 0);
 }
 
 /* GPU present (TegraDisplayFlip/TegraScanoutCopy.h):

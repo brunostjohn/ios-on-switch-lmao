@@ -249,6 +249,7 @@ TEST(SemanticPlan, KernelDispatchHasTypedGridAndSharedState)
     plan.record(binding(OpKernelBuffer, 3, 0, 99, 16), {});
     plan.record(binding(OpKernelTexture, 3, 2, 100), {});
     Cmd dispatch = cmd(OpDispatch, 3, 1);
+    dispatch.a = 1u << 2;
     dispatch.c = 8 | uint64_t(4) << 16 | uint64_t(2) << 32;
     dispatch.obj2 = object(999);
     plan.record(dispatch, {16, 12, 8, 2, 3, 4});
@@ -258,6 +259,8 @@ TEST(SemanticPlan, KernelDispatchHasTypedGridAndSharedState)
     EXPECT_EQ(plan.dispatch(2).grid, (std::array<uint64_t, 3>{24, 12, 8}));
     EXPECT_EQ(plan.dispatch(1).threads, (std::array<uint32_t, 3>{8, 4, 2}));
     EXPECT_TRUE(plan.dispatch(1).perThread);
+    EXPECT_EQ(plan.dispatch(1).surfaceSlots, 1u << 2);
+    EXPECT_EQ(plan.legacy(1).a, 1u << 2);
     Sink sink;
     raw::StateCursor cursor;
     raw::applyKernelState(plan, plan.dispatch(1).state, cursor, sink);

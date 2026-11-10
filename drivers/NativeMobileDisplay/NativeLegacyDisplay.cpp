@@ -3849,11 +3849,11 @@ public:
         noteFrameInfoTaken(request);
         if (gpuRequest == request) {
             frameInfo->tickets.gpu(seqOf(request), gpuSequence);
-            if (SWITCH_FRAME_TIMELINE) {
-                const auto *ticket = frameInfo->tickets.find(request);
-                KDBG(SWITCH_KDBG_CODE(SWITCH_KDBG_PRESENT), gpuSequence, ticket ? ticket->id : 0,
-                      ticket ? ticket->swapId : 0, seqOf(request));
-            }
+#if SWITCH_FRAME_TIMELINE
+            const auto *ticket = frameInfo->tickets.find(request);
+            KDBG(SWITCH_KDBG_CODE(SWITCH_KDBG_PRESENT), gpuSequence, ticket ? ticket->id : 0,
+                  ticket ? ticket->swapId : 0, seqOf(request));
+#endif
         }
         if (taken.submit && stats)
             stQueue.add(kickAt > taken.submit ? kickAt - taken.submit : 0);
@@ -4495,10 +4495,12 @@ public:
         const uint64_t nowContinuous = mach_continuous_time();
         const uint64_t nowAbsolute = mach_absolute_time();
         const uint64_t continuous = switch_frame_info::continuousTime(shownAt, nowAbsolute, nowContinuous);
+#if SWITCH_FRAME_TIMELINE
         bool first = false;
         const auto ticket = frameInfo->tickets.shown(seq, continuous, vsyncInterval / 2, &first);
-        if (SWITCH_FRAME_TIMELINE && first)
+        if (first)
             KDBG(SWITCH_KDBG_CODE(SWITCH_KDBG_FRAME_TICKET), ticket.id, ticket.swapId, ticket.take, ticket.gpu);
+#endif
         switch_frame_info::Frame frame;
         if (frameInfo->pending.shown(seq, continuous, frame) &&
             frameInfo->clients.any())
@@ -4922,9 +4924,11 @@ public:
             tl.schedPri = static_cast<int8_t>(sched);
             tl.mode = static_cast<int8_t>(mode);
             tl.qos = static_cast<int8_t>(qos);
+#if SWITCH_FRAME_TIMELINE
             const auto *ticket = frameInfo->tickets.find(request);
             KDBG(SWITCH_KDBG_CODE(SWITCH_KDBG_SWAP), ticket ? ticket->id : 0, ticket ? ticket->swapId : 0,
                   ticket ? ticket->requested : 0, frameEnds);
+#endif
             switch_sched_render_swapped();
             return;
         }

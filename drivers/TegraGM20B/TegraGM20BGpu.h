@@ -103,6 +103,10 @@ int tgm_vm_map_ordered(struct tgm_vm *vm, uint64_t va, uint64_t range, struct tg
 		       uint64_t offset, uint8_t kind, int read_only, uint8_t *page_shift);
 int tgm_vm_unmap(struct tgm_vm *vm, uint64_t va, uint64_t range);
 int tgm_vm_unmap_pages(struct tgm_vm *vm, uint64_t va, uint64_t range, uint8_t page_shift);
+struct switch_gpu_mapping;
+int switch_gpu_vm_map(struct tgm_vm *vm, uint64_t va, uint64_t range, struct tgm_mem *mem,
+	uint64_t offset, uint8_t kind, int read_only, struct switch_gpu_mapping **mapping);
+void switch_gpu_vm_unmap(struct tgm_vm *vm, struct switch_gpu_mapping **mapping);
 /* A zero-bandwidth-clear entry (ds, l2 as TegraGM20BAbiZbc has them): its table index, or -EINVAL (format), -ENOSPC
  * (table full), -ENODEV (no compression). */
 int tgm_zbc_add(int depth, uint32_t format, const uint32_t ds[4], const uint32_t l2[4]);
@@ -155,6 +159,11 @@ int tgm_chan_exec(struct tgm_chan *chan, const struct tgm_push *push, uint32_t c
 		  uint32_t *seqno, const struct tgm_prof *prof);
 struct switch_gpu_backing_token;
 void switch_gpu_chan_next_token(struct tgm_chan *chan, struct switch_gpu_backing_token *token);
+/* Enter before taking backing locks; leave after commit/abort. Room waits require those locks released. */
+void switch_gpu_chan_submit_enter(struct tgm_chan *chan);
+void switch_gpu_chan_submit_leave(void);
+int switch_gpu_chan_wait_submission_room(struct tgm_chan *chan, const struct tgm_push *push,
+	uint32_t count, uint32_t dependency_count, const struct tgm_prof *prof);
 int switch_gpu_chan_exec(struct tgm_chan *chan, const struct tgm_push *push, uint32_t count,
 	const struct switch_gpu_backing_token *dependencies, uint32_t dependency_count,
 	uint32_t *seqno, const struct tgm_prof *prof);

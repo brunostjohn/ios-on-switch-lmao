@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #import "RawMetalInternal.h"
+#include "raw_execution_plan.h"
 
 // ---- the device's submission machinery ----
 
@@ -457,14 +458,13 @@ static void giveRecording(RMCommandBuffer *b)
     std::lock_guard<std::mutex> l(_lock);
     if (!_completedSent)
         return @"pending";
-    if (!_segs.empty()) {
-        const auto raw = static_cast<size_t>(std::count_if(_segs.begin(), _segs.end(), [](const RMSegment &s) {
-            return s.raw;
-        }));
-        return [NSString stringWithFormat:@"split:%zu+%zu:%s:%s", raw, _segs.size() - raw, kReasonNames[_reason],
-                                          kPredNames[_pred0]];
-    }
-    if (!_m2v)
+    raw::ExecutionAttribution route;
+    for (const RMSegment &range : _segs)
+        route.add(range.raw, range.event);
+    if (route.mixed())
+        return [NSString stringWithFormat:@"split:%zu+%zu:%s:%s", route.native, route.compatibility,
+                                          kReasonNames[_reason], kPredNames[_pred0]];
+    if (!route.onlyCompatibility() && !_m2v)
         return @"raw";
     return [NSString stringWithFormat:@"m2v:%s:%s", kReasonNames[_reason], kPredNames[_pred0]];
 }

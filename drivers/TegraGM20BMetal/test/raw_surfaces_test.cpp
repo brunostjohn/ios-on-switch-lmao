@@ -70,3 +70,17 @@ TEST(RawSurfaces, BufferRangesFoldThousandsOfInteriorCopiesIntoOneBackingUse)
     uses.addAddress(UINT64_MAX - 16, 32, false);
     EXPECT_FALSE(uses.valid());
 }
+
+TEST(RawSurfaces, GeometryReadChecksTheWholeBackingAndAddressNamespace)
+{
+    raw::SurfaceList uses;
+    uses.addAddress(0x100040, 64, false);
+    EXPECT_FALSE(uses.writesBacking(7, 0x100000, 0x1000));
+    uses.addAddress(0x100800, 64, true); // a different pooled resource, same backing
+    EXPECT_TRUE(uses.writesBacking(7, 0x100000, 0x1000));
+    EXPECT_FALSE(uses.writesBacking(0x100800, 0x200000, 0x1000));
+    uses.add(9, true);
+    EXPECT_TRUE(uses.writesBacking(9, 0x300000, 0x1000));
+    uses.clear();
+    EXPECT_FALSE(uses.writesBacking(9, 0x300000, 0x1000));
+}

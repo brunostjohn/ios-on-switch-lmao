@@ -14,6 +14,7 @@ import unittest
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'raw', 'pack'))
 import kernels
+import directlink
 import layouts
 import mkpack
 import packfile
@@ -24,6 +25,30 @@ def handle(tex: tuple | None) -> dict:
 
 
 class RecordsTest(unittest.TestCase):
+    def test_dynamic_blend_metadata_round_trip(self):
+        rec = dict(key='samples=1 c0=554:15:1:11:0:0:1:0:0', vs=0, fs=1, blob=[], entries=[],
+                   push=[(0x700 + 4 * i, i) for i in range(32)], vbs=[], set_size=0, fetch=True,
+                   form='barrier', push_metadata=True, blend_color_word=5, half_blend_color_word=29)
+        data = packfile.pipeline_bytes(rec, 0, 0)
+        self.assertEqual(len(data), directlink.PIPELINE_BYTES)
+        programs = [dict(image=bytes([i]), data=b'', cbufs=[]) for i in range(2)]
+        ids = {directlink.program_id(p): i for i, p in enumerate(programs)}
+        record = dict(pipeline=data, key=rec['key'], programs=programs, samplers=[],
+                      probe=dict(index=0, form='barrier', records=[dict(regs={})]))
+        back = directlink.pipeline_of(record, [], ids, [])
+        self.assertEqual(packfile.pipeline_bytes(back, 0, 0), data)
+        self.assertTrue(back['push_metadata'])
+        self.assertEqual((back['blend_color_word'], back['half_blend_color_word']), (5, 29))
+        record['pipeline'] = data[:-4]
+        with self.assertRaisesRegex(ValueError, 'obsolete layout'):
+            directlink.pipeline_of(record, [], ids, [])
+
+    def test_legacy_records_do_not_claim_push_metadata(self):
+        rec = dict(key='samples=1', vs=0, fs=1, blob=[], entries=[], push=[], vbs=[], set_size=0, fetch=False)
+        data = packfile.pipeline_bytes(rec, 0, 0)
+        self.assertEqual(directlink.PIPELINE.unpack_from(data)[-1] & 4, 0)
+        self.assertEqual(data[-4:], bytes(4))
+
     def test_only_known_own_shader_pairs_use_alias_keys(self):
         own = 'samples=1 topo=0 ds=0/0 c0=80:15:0:1:0:0:1:0:0 | v resolve_vert  | f resolve_bgra8_frag'
         self.assertEqual(packfile.key_hash({'key': own}), packfile.fnv(b'raw.resolve.resolve_bgra8_frag'))

@@ -9,7 +9,8 @@ use ash::vk as avk;
 use metal2vulkan::Budget;
 use metal2vulkan::bind::{
     BindState, BindingPlan, BoundBuffer, BoundSampler, BoundTexture, DescriptorRange, DrawCall, DrawCommands,
-    ImageSource, NeutralResource, SamplerDescriptor, SamplerSource, StageTable, TextureFacts, WriteSource,
+    FieldLocation, ImageSource, NeutralResource, SamplerDescriptor, SamplerSource, StageTable, TextureFacts,
+    WriteSource,
 };
 use metal2vulkan::cache::VariantKey;
 use metal2vulkan::device::{DeviceDescription, VkExtension, VkFeature};
@@ -19,7 +20,7 @@ use metal2vulkan::metal::{
     TextureUsage,
 };
 use metal2vulkan::pipeline::{
-    PipelineLayout, RenderPipeline, RenderPipelineDescriptor, SlotClass, SlotInterface, SlotRef, Stage,
+    PipelineLayout, PushField, RenderPipeline, RenderPipelineDescriptor, SlotClass, SlotInterface, SlotRef, Stage,
 };
 use std::ffi::{CString, c_char, c_void};
 use std::sync::{Arc, Mutex};
@@ -83,6 +84,8 @@ pub struct NmbDirectDraw {
     pub write_count: u32,
     pub push_mask: u32,
     pub push: [u32; 32],
+    pub blend_color_word: u32,
+    pub half_blend_color_word: u32,
     pub push_holes: u32,
     pub vertex_slot: u32,
     pub vertex_stride: u32,
@@ -564,18 +567,38 @@ fn draw_of(
     layout: &Layout<'_>,
     writes: &[NmbDirectWrite],
     variant: &CString,
-) -> NmbDirectDraw {
+) -> Result<NmbDirectDraw, String> {
     let mut draw = NmbDirectDraw {
         set0: layout.set0(),
         writes: writes.as_ptr(),
         write_count: writes.len() as u32,
         push_mask: 0,
         push: [0; 32],
+        blend_color_word: 0,
+        half_blend_color_word: 0,
         push_holes: run.commands.push_holes.len() as u32,
         vertex_slot: u32::MAX,
         vertex_stride: 0,
         variant: variant.as_ptr(),
     };
+    for field in &run.plan.push.fields {
+        let (word, bytes) = match field.field {
+            PushField::BlendColor => (&mut draw.blend_color_word, 32),
+            PushField::HalfBlendColor => (&mut draw.half_blend_color_word, 16),
+            _ => continue,
+        };
+        let FieldLocation::PushWindow { offset } = field.location else {
+            return Err("blend color outside the root push window".into());
+        };
+        if field.size != bytes || offset % 4 != 0 || offset > 128 - bytes {
+            return Err("invalid blend color push placement".into());
+        }
+        let encoded = offset / 4 + 1;
+        if *word != 0 && *word != encoded {
+            return Err("multiple blend color push placements".into());
+        }
+        *word = encoded;
+    }
     for write in &run.commands.push_constants {
         for (k, word) in write.bytes.chunks(4).enumerate() {
             let at = write.offset as usize / 4 + k;
@@ -605,7 +628,22 @@ fn draw_of(
             None => 0,
         };
     }
-    draw
+    Ok(draw)
+}
+
+/// The words used by Metal extended-range blending for `setBlendColorRed:green:blue:alpha:`.
+///
+/// # Safety
+/// `color` and `words` point to four readable floats and eight writable words.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn switch_nmb_blend_color_words(color: *const f32, words: *mut u32) {
+    // SAFETY: the caller supplies both complete arrays.
+    unsafe {
+        let color = color.cast::<[f32; 4]>().read();
+        words
+            .cast::<[u32; 8]>()
+            .write(metal2vulkan::bind::extended_blend_color_words(color));
+    }
 }
 
 /// `texture_format`, `texture_samples`: the probe's tagged textures' MTLPixelFormat (0: BGRA8Unorm) and sample count, as
@@ -685,7 +723,7 @@ pub unsafe extern "C" fn nmb_render_pipeline_direct(
                     &names[k],
                 )
             })
-            .collect();
+            .collect::<Result<Vec<_>, String>>()?;
 
         let first = &runs[0];
         let pipeline = &variants[first.variant].1;

@@ -27,11 +27,17 @@ void tgm_memory_release(void *memory);
 class OSObject;
 /* IOSurfaceRoot::lookupSurface(id, task): the surface, retained for the caller, or null */
 OSObject *tgm_surface_lookup(uint32_t id, void *task);
+OSObject *switch_gpu_surface_hold(uint32_t id, void *task, const uint64_t *pages, uint32_t count);
 #endif
 /* Whether surface `id` (looked up for `task`) lies in its creator's own memory, or cannot be looked up: such a surface
  * stays pitch */
 int tgm_surface_client_memory(uint32_t id, void *task);
 int switch_gpu_surface_pages_match(uint32_t id, void *task, const uint64_t *pages, uint32_t count);
+struct SwitchGpuSurfaceGeometry;
+struct switch_gpu_backing;
+int switch_gpu_surface_geometry(uint32_t id, void *task, const uint64_t *pages, uint32_t count,
+	struct SwitchGpuSurfaceGeometry *geometry);
+int switch_gpu_surface_backing(uint32_t id, void *task, struct switch_gpu_backing **backing);
 /* Whether the user client behind a view still lives (its task may have died holding the lock) */
 int tgm_cpu_view_live(const struct tgm_cpu_view *view);
 void tgm_cpu_view_hold(struct tgm_cpu_view *view, int hold);

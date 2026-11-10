@@ -78,6 +78,25 @@ public:
         return uses_;
     }
 
+    // Ownership is per backing, including every pooled suballocation. A CPU geometry reader must not coexist
+    // with a write in the same job. Physical aliases under another handle are additionally checked by the kernel.
+    bool writesBacking(uint64_t handle, uint64_t va, uint64_t bytes) const
+    {
+        if (!valid())
+            return true;
+        for (const auto &use : uses_) {
+            if (!(use.access & TegraGM20BSurfaceWrite))
+                continue;
+            if (use.access & TegraGM20BSurfaceGpuAddress) {
+                if (use.handle >= va && use.handle - va < bytes)
+                    return true;
+            } else if (use.handle == handle) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     const TegraGM20BAbiExecSurfaces *legacy(uint32_t channel, size_t &bytes)
     {
         bytes = 0;

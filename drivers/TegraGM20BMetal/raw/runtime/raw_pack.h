@@ -29,7 +29,7 @@ enum PackSectionId {
     PackSectionCount
 };
 
-constexpr uint32_t kPackVersion = 9;
+constexpr uint32_t kPackVersion = 10;
 
 struct PackHeader {
     char magic[8];                                    // "GM20BPK1"
@@ -109,7 +109,8 @@ enum PackPipelineFlags : uint32_t {
     PipelineFetches = 1,
     // metal2vulkan's barrier form of a state whose first record fetches in the storage form (the pixel interlock): its
     // fetches read input attachments, ordered by barriers (pack/rawpack.py's probe with NVK's interlock hidden)
-    PipelineBarrierForm = 2
+    PipelineBarrierForm = 2,
+    PipelinePushMetadata = 4
 };
 
 // Which of a state's records: its first (the storage form where it has both), or its barrier form
@@ -143,6 +144,8 @@ struct PackPipeline {
     uint32_t
         pushMask;  // root-table words [0x700, 0x780) the state's push ranges write (m2v's windows, as NVK wrote them)
     uint32_t pushWords[32];
+    uint8_t blendColorWord, halfBlendColorWord;  // push word + 1, zero when absent
+    uint16_t pushReserved;
 };
 
 // A compute state at one threadgroup shape (runtime/raw_compute.h): NVK's work for the kernel m2v made of it, keyed by
@@ -239,7 +242,7 @@ struct InitAddresses {
 };
 
 uint32_t relocated(const PackInitMethod &m, const InitAddresses &a);
-static_assert(sizeof(PackPipeline) == 36 + kPackEntries * 8 + 4 + 32 * 4, "pack layout");
+static_assert(sizeof(PackPipeline) == 36 + kPackEntries * 8 + 4 + 32 * 4 + 4, "pack layout");
 static_assert(sizeof(PackProgram) == 32, "pack layout");
 static_assert(sizeof(PackKernel) == 16 + 256 + 8 + 128 + 128, "pack layout");
 static_assert(sizeof(PackSplit) == 24 + 256, "pack layout");

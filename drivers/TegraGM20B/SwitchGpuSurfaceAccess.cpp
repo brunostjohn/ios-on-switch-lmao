@@ -161,9 +161,10 @@ extern "C" int switch_gpu_surface_lock_will(void *opaque, uint32_t id, uint32_t 
 	if (!id || !initialize())
 		return id ? -12 : 0;
 	switch_gpu_surface_sweep();
-	auto *backing = switch_gpu_backing_find_surface(id);
-	if (!backing)
-		return 0;
+	switch_gpu_backing *backing = nullptr;
+	const int resolved = switch_gpu_surface_backing(id, current_task(), &backing);
+	if (resolved || !backing)
+		return resolved;
 	switch_gpu_backing_info info = {};
 	switch_gpu_backing_describe(backing, &info);
 	uint32_t flags = SWITCH_GPU_BACKING_CPU_CONCURRENT;

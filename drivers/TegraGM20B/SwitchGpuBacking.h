@@ -20,6 +20,10 @@ enum {
 	SWITCH_GPU_BACKING_CPU_DISCARD = 1u << 3,
 	SWITCH_GPU_BACKING_CPU_NO_CACHE = 1u << 4,
 	SWITCH_GPU_BACKING_CPU_CONCURRENT = 1u << 5,
+	SWITCH_GPU_BACKING_CPU_PRESERVE_DIRTY = 1u << 6,
+	SWITCH_GPU_CACHE_CLEAN = 0,
+	SWITCH_GPU_CACHE_INVALIDATE = 1,
+	SWITCH_GPU_CACHE_CLEAN_INVALIDATE = 2,
 	SWITCH_GPU_BACKING_GPU_DIRTY = 1u << 0,
 	SWITCH_GPU_BACKING_CPU_DIRTY = 1u << 1,
 	SWITCH_GPU_BACKING_PITCH = 0,
@@ -28,6 +32,7 @@ enum {
 };
 
 struct switch_gpu_backing;
+struct switch_gpu_cpu_lease;
 
 struct switch_gpu_backing_token {
 	uint64_t value;
@@ -100,6 +105,12 @@ struct switch_gpu_backing_transaction {
 int switch_gpu_backing_begin(struct switch_gpu_backing_use *uses, uint32_t count,
 			     const struct switch_gpu_backing_token *completion,
 			     struct switch_gpu_backing_transaction *transaction);
+/* Conversion leases cover whole allocations without directly exposing their bytes to the CPU. Keep every supplied
+ * lease held through commit/abort; the view broker must await conversion before exposing the converted CPU view. */
+int switch_gpu_backing_begin_conversion(struct switch_gpu_backing_use *uses, uint32_t count,
+		struct switch_gpu_cpu_lease *const *leases, uint32_t lease_count,
+		const struct switch_gpu_backing_token *completion,
+		struct switch_gpu_backing_transaction *transaction);
 int switch_gpu_backing_dependencies(const struct switch_gpu_backing_transaction *transaction,
 				    struct switch_gpu_backing_token *out, uint32_t capacity,
 				    uint32_t *needed);
@@ -107,11 +118,17 @@ void switch_gpu_backing_commit(struct switch_gpu_backing_transaction *transactio
 void switch_gpu_backing_abort(struct switch_gpu_backing_transaction *transaction);
 
 /* Readers wait for writers; writers wait for all users. DISCARD is valid only for a complete cache-line overwrite.
- * release cleans written lines before advancing content_generation and making the allocation available to engines. */
+ * release cleans written lines before advancing content_generation and making the allocation available to engines.
+ * NO_CACHE is ownership-only: callers that write cached bytes must explicitly publish those ranges.
+ * PRESERVE_DIRTY requires READ|AVOID_SYNC and producers that cleaned CPU aliases before GPU writes. It preserves CPU
+ * stores made after completed GPU work; clients without that producer contract must use ordinary invalidation. */
 int switch_gpu_backing_cpu_acquire(struct switch_gpu_backing *backing, uint64_t offset,
 				   uint64_t bytes, uint32_t access);
 int switch_gpu_backing_cpu_release(struct switch_gpu_backing *backing, uint64_t offset,
 				   uint64_t bytes, uint32_t access);
+int switch_gpu_backing_cpu_acquire_owned(struct switch_gpu_backing *backing, uint64_t offset,
+		uint64_t bytes, uint32_t access, struct switch_gpu_cpu_lease **lease);
+int switch_gpu_backing_cpu_release_owned(struct switch_gpu_cpu_lease **lease, int wrote);
 int switch_gpu_backing_cpu_publish(struct switch_gpu_backing *backing, uint64_t offset, uint64_t bytes);
 void switch_gpu_backing_cpu_cancel(struct switch_gpu_backing *backing, uint32_t access);
 int switch_gpu_backing_wait(struct switch_gpu_backing *backing, uint32_t access);

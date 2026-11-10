@@ -421,7 +421,7 @@ TEST(GM20BPresentSource, TiledSourceIsCopiedBlockLinear)
 	EXPECT_THAT(flat(Between(client(), "IOReturn AGXDeviceUserClient::vmBind(", "\n}\n")),
 		    Not(HasSubstr("tiled")));
 	EXPECT_THAT(
-		flat(Between(client(), "IOReturn AGXDeviceUserClient::surfaceLayout(", "\n}\n")),
+		flat(Between(client(), "IOReturn AGXDeviceUserClient::surfaceLayoutInfo(", "\n}\n")),
 		HasSubstr("tgm_coherency_layout(bo->coh,"));
 }
 
@@ -549,14 +549,29 @@ TEST(GM20BRoomSource, RoomIsWaitedForByInterrupt)
 {
 	EXPECT_EQ(Count(gpu(), "PUSH_WAIT("), 0u);
 	EXPECT_EQ(Count(gpu(), "nvif_chan_gpfifo_wait("),
-		  2u);  // the room check's comment and chan_wait_room
+		  3u);
 	const std::string wait = flat(definition(
 		gpu(),
-		"static int chan_wait_room(struct tgm_chan *chan, u32 gpfifo_nr, u32 push_nr)"));
-	expectBefore(wait, "if (!nvxnu_idle(seq, end)",
+		"static int chan_wait_ready(struct tgm_chan *chan, u32 gpfifo_nr, u32 push_nr)"));
+	EXPECT_THAT(wait, HasSubstr("if (!nvxnu_idle(seq, end)"));
+	const auto reserve = flat(definition(gpu(), "static int chan_wait_room("));
+	expectBefore(reserve, "chan_wait_ready(chan, gpfifo_nr, push_nr)",
 		     "nvif_chan_gpfifo_wait(&chan->chan, gpfifo_nr, push_nr)");
 	expectBefore(flat(definition(gpu(), "static u32 chan_fence(struct tgm_chan *chan)")),
 		     "nvif_chan_gpfifo_post(&chan->chan);", "NON_STALL_INTERRUPT, 0);");
+}
+
+TEST(GM20BRoomSource, NativePublicationNeverSleepsWithBackingLocksHeld)
+{
+	const auto exec = flat(definition(client(), "IOReturn AGXDeviceUserClient::exec("));
+	expectBefore(exec, "switch_gpu_chan_submit_enter(chan);", "switch_gpu_backing_begin(");
+	expectBefore(exec, "switch_gpu_backing_abort(&transaction);",
+		"switch_gpu_chan_wait_submission_room(");
+	expectBefore(exec, "switch_gpu_backing_commit(&transaction);", "switch_gpu_chan_submit_leave();");
+	const auto emit = flat(definition(gpu(), "static int chan_exec("));
+	EXPECT_THAT(emit, HasSubstr("if (!may_wait && !chan_room(chan, entries, words)) return -EAGAIN;"));
+	expectBefore(emit, "chan->chan.defer_kick = true;", "nvif_chan_gpfifo_wait(&chan->chan, entries, words)");
+	EXPECT_THAT(emit, HasSubstr("chan->chan.gpfifo.cur = ring_cur;"));
 }
 
 // The L2 invalidate that makes the CPU's writes visible is ordered on the GPU, in the submission's own stream, ahead of
@@ -688,13 +703,17 @@ TEST(GM20BFencesSource, NvkSendsItsSurfacesBeforeEachExecAndSleepsWhenFull)
 // Only a connection's maps skip the CPU's L2 and TLB maintenance; every removal keeps it (TegraGM20BTlb.h).
 TEST(GM20BTlbSource, MapsOrderedOnTheGpuRemovalsSynchronous)
 {
-	EXPECT_THAT(client(), HasSubstr("tgm_vm_map_ordered(vm_, op.va"));
+	EXPECT_THAT(client(), HasSubstr("switch_gpu_vm_map(vm_, op.va"));
 	EXPECT_EQ(Count(client(), "tgm_vm_map("), 0u);
-	EXPECT_EQ(Count(gpu(), "nvxnu_gpu_ordered_begin();"), 1u);
+	EXPECT_EQ(Count(gpu(), "nvxnu_gpu_ordered_begin();"), 2u);
 	const std::string map = flat(definition(gpu(), "static int vm_map("));
 	expectBefore(map, "nvxnu_gpu_ordered_end();", "nvif_vmm_raw_put(");
-	const std::string unmap = flat(definition(gpu(), "int tgm_vm_unmap_pages("));
+	const std::string mixed = flat(definition(gpu(), "int switch_gpu_vm_map("));
+	expectBefore(mixed, "nvxnu_gpu_ordered_end();", "nvif_vmm_raw_unmap(");
+	EXPECT_THAT(mixed, HasSubstr("entry->va, entry->bytes, entry->shift"));
+	const std::string unmap = flat(definition(gpu(), "void switch_gpu_vm_unmap("));
 	EXPECT_THAT(unmap, Not(HasSubstr("gpu_ordered")));
+	EXPECT_THAT(unmap, HasSubstr("entry->va, entry->bytes, entry->shift"));
 	EXPECT_THAT(flat(definition(gpu(), "void tgm_vm_del(")),
 		    HasSubstr("mmu_invalidate_all();"));
 }
@@ -993,4 +1012,12 @@ TEST(GM20BRelayoutSource, KernelCopiesOrderOnTheGpu)
 			      "TegraGM20BAbiFence);"));
 	EXPECT_THAT(flat(definition(gpu(), "int tgm_writer_fence_va(")),
 		    HasSubstr("off < TGM_FENCE_BYTES"));
+}
+
+TEST(GM20BSurfaceIdentitySource, ImportedSurfaceIdentityOutlivesLegacyCoherency)
+{
+	const auto imported = flat(definition(client(), "IOReturn AGXDeviceUserClient::boImport("));
+	expectBefore(imported, "bo->surface = switch_gpu_surface_hold(", "tgm_coherency_add(");
+	const auto released = flat(definition(client(), "void AGXDeviceUserClient::releaseBo(Bo *bo)"));
+	expectBefore(released, "tgm_coherency_put(bo->coh);", "OSSafeReleaseNULL(bo->surface);");
 }

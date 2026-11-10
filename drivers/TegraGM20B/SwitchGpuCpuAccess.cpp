@@ -9,12 +9,14 @@ constexpr uint32_t kAvoid = SWITCH_GPU_BACKING_CPU_AVOID_SYNC;
 constexpr uint32_t kDiscard = SWITCH_GPU_BACKING_CPU_DISCARD;
 constexpr uint32_t kNoCache = SWITCH_GPU_BACKING_CPU_NO_CACHE;
 constexpr uint32_t kConcurrent = SWITCH_GPU_BACKING_CPU_CONCURRENT;
+constexpr uint32_t kPreserve = SWITCH_GPU_BACKING_CPU_PRESERVE_DIRTY;
 
 bool valid_range(switch_gpu_backing *backing, uint64_t offset, uint64_t bytes, uint32_t access)
 {
 	const uint64_t size = uint64_t(backing->pages->count) << 12;
-	return (access & (kRead | kWrite)) && !(access & ~(kRead | kWrite | kAvoid | kDiscard | kNoCache | kConcurrent)) && bytes &&
+	return (access & (kRead | kWrite)) && !(access & ~(kRead | kWrite | kAvoid | kDiscard | kNoCache | kConcurrent | kPreserve)) && bytes &&
 		offset <= size && bytes <= size - offset &&
+		(!(access & kPreserve) || access == (kRead | kAvoid | kPreserve)) &&
 		(!(access & kConcurrent) || (!offset && bytes == size)) &&
 		(!(access & kDiscard) || ((access & kWrite) && !(access & kRead) && !((offset | bytes) & 63)));
 }
@@ -88,10 +90,11 @@ extern "C" int switch_gpu_backing_cpu_acquire(switch_gpu_backing *backing, uint6
 	if (!result) {
 		const uint64_t size = uint64_t(backing->pages->count) << 12;
 		if ((backing->dirty & SWITCH_GPU_BACKING_GPU_DIRTY) && !(access & (kDiscard | kNoCache)))
-			switch_gpu_backing_cache(backing->pages->addresses, backing->pages->count, offset, bytes, 1);
+			switch_gpu_backing_cache(backing->pages->addresses, backing->pages->count, offset, bytes,
+				access & kPreserve ? SWITCH_GPU_CACHE_CLEAN_INVALIDATE : SWITCH_GPU_CACHE_INVALIDATE);
 		if (!(access & kNoCache) && !offset && bytes == size)
 			backing->dirty &= ~uint32_t(SWITCH_GPU_BACKING_GPU_DIRTY);
-		if (access & kWrite)
+		if ((access & kWrite) && !(access & kNoCache))
 			backing->dirty |= SWITCH_GPU_BACKING_CPU_DIRTY;
 	} else if (held) {
 		release_cpu_locked(backing, access);

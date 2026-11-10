@@ -364,11 +364,18 @@ Compiler::Outcome directRecord(const NmbDirectState &state, const DirectNvk &nvk
         why = std::to_string(draw.pushHoles) + " push words m2v fills with addresses";
         return Compiler::Outcome::Refused;
     }
+    if (!validDynamicPush(state)) {
+        why = "inconsistent blend color push placement";
+        return Compiler::Outcome::Refused;
+    }
     Stages stages(nvk, device);
     if (const Compiler::Outcome compiled = stages.compile(state, halfFloatTargets(key), split, why);
         compiled != Compiler::Outcome::Made)
         return compiled;
     RecordParts parts;
+    parts.pushMetadata = true;
+    parts.blendColorWord = uint8_t(draw.blendColorWord);
+    parts.halfBlendColorWord = uint8_t(draw.halfBlendColorWord);
     parts.programs[0] = &stages.program(0);
     parts.programs[1] = &stages.program(1);
     if (!programsBindable(parts, why) || !layout(nvk, device, draw, parts.layout, why))

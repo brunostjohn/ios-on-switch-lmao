@@ -13,6 +13,7 @@
 #include <map>
 #include <string>
 #include "TegraGM20BABI.h"
+#include "TegraGM20BLayout.h"
 #include "raw_surfaces.h"
 
 namespace raw {
@@ -61,7 +62,7 @@ public:
     // texture renders into or stores to it. TegraGM20BLayoutTiled, TegraGM20BLayoutOtherShape, or 0 (pitch; also without
     // the method).
     uint32_t surfaceLayout(const Bo &bo, uint32_t width, uint32_t height, uint32_t bpp, uint32_t bytesPerRow,
-                           bool writes);
+                           bool writes, tgm_layout *canonical = nullptr);
     bool bindImport(void *addr, Bo &bo, uint32_t kind);
     // BoAlloc Compressible (raw_comp.h), never CPU-mapped; safe beside the other calls (it may zero pages a free left
     // dirty); the kern_return_t.

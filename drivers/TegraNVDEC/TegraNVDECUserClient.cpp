@@ -306,6 +306,7 @@ IOReturn AppleD5500UserClient::run(uint32_t method, const void *in, uint32_t inS
             break;
         }
         TegraVICPicture vic;
+        vic.backing = b->block.backing;
         vic.pages = b->block.pages.pages;
         vic.pageCount = b->block.pages.count;
         vic.bytes = picture;

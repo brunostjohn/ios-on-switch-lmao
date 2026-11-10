@@ -14,6 +14,7 @@ struct TegraVICSurface {
     OSObject *surface;           // retained IOSurface
     IOMemoryDescriptor *memory;  // the surface's (not retained: the surface holds it)
     TegraVICSurfaceDesc desc;
+    uint64_t baseOffset;
     uint32_t id;
     bool prepared;
 };

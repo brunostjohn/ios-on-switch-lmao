@@ -25,6 +25,12 @@ raw::RuntimeRecord madeUp(uint32_t n)
     r.pipeline.entry[1] = {16, raw::EntryTexture, 2, 3, raw::SamplerSlot, 3, 0};
     r.pipeline.pushMask = 1u << (n % 32);
     r.pipeline.pushWords[n % 32] = n;
+    if (n % 2) {
+        r.pipeline.flags |= raw::PipelinePushMetadata;
+        r.pipeline.blendColorWord = 5;
+        r.pipeline.halfBlendColorWord = 29;
+        r.pipeline.pushMask |= 0xf0000ff0u;
+    }
     r.keyString = "samples=1 topo=0 ds=0/0 c0=80:15:0:1:0:0:1:0:0 " + std::to_string(n);
     for (int k = 0; k < 2; k++) {
         r.programs[k].id = std::to_string(n * 2 + k);

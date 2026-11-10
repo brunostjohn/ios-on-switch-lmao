@@ -6,6 +6,8 @@
 // imports, the copies and the abortable command buffer.
 #include "../fx/fx_image.h"
 #include "raw_clear.h"
+#include "raw_dynamic_push.h"
+#include "../../../NativeMetal/bridge/NativeMetalBlend.h"
 #include "raw_follow.h"
 #include "raw_gpu.h"
 #include "raw_mme.h"
@@ -16,6 +18,7 @@
 #include "raw_slm.h"
 #include "raw_srgb_table.h"
 #include "raw_stamps.h"
+#include "raw_surface_view.h"
 #include "raw_target.h"
 #include "raw_tiled_cache.h"
 #include "raw_view.h"
@@ -398,6 +401,7 @@ void Device::retire(Ring &r, uint32_t seqno)
 
 Device::~Device()
 {
+    cb_.releaseGeometry();
     // the render server keeps its device until it exits; a host test's device: the kernel frees what the connection held
     {
         std::lock_guard<std::mutex> l(lock_);
@@ -411,7 +415,8 @@ Device::~Device()
 
 uint32_t Device::contextWords() const
 {
-    return uint32_t(pack_.bytes(PackInit) / sizeof(PackInitMethod)) * 2 + 4096 + kDepthStencilWords + mme::kContextWords;
+    return uint32_t(pack_.bytes(PackInit) / sizeof(PackInitMethod)) * 2 + 4096 + kDepthStencilWords +
+           mme::kContextWords;
 }
 
 // The channel's context: NVK's own init methods with our addresses, then every register Core Animation's states leave the
@@ -719,6 +724,8 @@ static uint8_t bindProgramCbufs(Push &w, const PackProgram &prog, uint32_t group
 Pipeline *Device::pipeline(uint64_t keyHash, PackForm form, bool caTransform)
 {
     const PackPipeline *rec = pack_.find(keyHash, form);
+    if (rec && !usableDynamicPush(*rec, pack_.string(rec->keyString)))
+        rec = nullptr;
     std::lock_guard<std::mutex> l(lock_);
     if (!rec) {
         const auto made = completed_.find(keyHash);
@@ -839,6 +846,7 @@ void Device::build(Pipeline &pl, const PackPipeline &pp, const PlacedProgram &vs
     // SET_ANTI_ALIAS_ALPHA_CONTROL's alpha to coverage in bit 0
     uint32_t sph[20];
     memcpy(sph, fs.header, sizeof sph);
+    pl.primitiveId = (sph[5] >> 24) & 1;  // NVA097_SPHV3T2_IMAP_PRIMITIVE_ID, bit 184
     bool tests = false;
     for (uint32_t k = 0; k < pp.blobDwords; k += 2) {
         const uint32_t m = blob[k], v = blob[k + 1];
@@ -1123,9 +1131,16 @@ Import *Device::importSurface(uint64_t id, void *base, uint64_t bytes, const voi
     }
     const LayoutAsk none = {};
     const LayoutAsk &a = ask ? *ask : none;
-    if (id && k_.surfaceLayout(i->bo, a.width, a.height, a.bpp, a.bytesPerRow, a.writes) == TegraGM20BLayoutTiled &&
-        tgm_layout_tiled(a.width, a.height, a.bpp, &i->layout))
-        i->kind = TGM_LAYOUT_KIND;
+    if (id) {
+        const uint32_t layout = k_.surfaceLayout(i->bo, a.width, a.height, a.bpp, a.bytesPerRow, a.writes, &i->layout);
+        if (layout == TegraGM20BLayoutOtherShape) {
+            k_.free(i->bo);
+            delete i;
+            return nullptr;
+        }
+        if (layout == TegraGM20BLayoutTiled)
+            i->kind = TGM_LAYOUT_KIND;
+    }
     if (!k_.bindImport(base, i->bo, i->kind)) {
         delete i;
         return nullptr;
@@ -1200,8 +1215,8 @@ void Device::writeTic(const Texture &t)
                (t.type == fx::kTexThreeD &&
                 fx::volumeLayout(t.width, t.height, t.depth, 1, t.bpp, !t.blockDepth, one)) ||
                (t.blockLinear && fx::mipChainLayout(t.width, t.height, 1, t.bpp, one))) {  // NIL's header of the image
-        if (t.blockW > 1 || t.blockH > 1)
-            one.yLog2 = t.blockHeight;  // (blockLayout's)
+        if (t.blockLinear || t.blockW > 1 || t.blockH > 1)
+            one.yLog2 = t.blockHeight;
         fx::mipChainTic(one, t.va, f->tic0, f->srgb, 0, 1, w, t.type);
     } else {
         w[0] = f->tic0;
@@ -1419,10 +1434,12 @@ bool Device::createArray(uint32_t width, uint32_t height, uint32_t layers, uint3
 // A texture over a block-linear surface's import: TegraGM20BLayout.h's image from the surface's first byte, at the shape the
 // kernel decided (a view of another format of the same texel size reads it as its own), under the import's
 // TGM_LAYOUT_KIND binding, which the 3D and 2D engines, the copy engine and the texture unit all address so
-bool Device::tiledSurfaceTexture(uint64_t offset, uint32_t width, uint32_t height, Texture &t)
+bool Device::tiledSurfaceTexture(uint64_t offset, uint32_t width, uint32_t height, uint32_t pitch, Texture &t,
+                                 Texture *sampled)
 {
     const tgm_layout &l = t.import->layout;
-    if (offset || width != l.width || height != l.height || t.bpp != l.bpp) {
+    SurfaceView view;
+    if (!surfaceView(l, offset, width, height, t.bpp, pitch, view) || (!view.direct && !sampled)) {
         release(t.import);
         t.import = nullptr;
         return false;
@@ -1433,6 +1450,15 @@ bool Device::tiledSurfaceTexture(uint64_t offset, uint32_t width, uint32_t heigh
     t.blockLinear = true;
     t.blockHeight = l.y_log2;
     t.layerBytes = l.bytes;
+    t.surfaceX = view.x;
+    t.surfaceY = view.y;
+    t.surfaceView = !view.direct;
+    t.shadowTarget = view.x || view.y;
+    if (t.surfaceView) {
+        t.sampled = sampled;
+        t.tic = sampled->tic;
+        return true;
+    }
     if (!(t.tic = allocTic())) {
         release(t.import);
         t.import = nullptr;
@@ -1448,7 +1474,8 @@ bool Device::createSurfaceTexture(uint64_t surfaceId, void *base, uint64_t alloc
 {
     // rows and offset a multiple of 16, as m2v takes a surface (linear_plan.rs); the texture header's 32 through `sampled`
     if (!shape(width, height, format, t) || (pitch & 15) || (offset & 15) || pitch < width * t.bpp ||
-        offset + uint64_t(pitch) * height > allocBytes || (uintptr_t(base) & (pageSize() - 1)))
+        offset > allocBytes || uint64_t(pitch) * (height - 1) + uint64_t(width) * t.bpp > allocBytes - offset ||
+        (uintptr_t(base) & (pageSize() - 1)))
         return false;
     const bool unaligned = (pitch | offset) & 31;
     Texture *sampled = nullptr;
@@ -1462,11 +1489,24 @@ bool Device::createSurfaceTexture(uint64_t surfaceId, void *base, uint64_t alloc
     std::unique_lock<std::mutex> l(lock_);
     t.pitch = pitch;
     const LayoutAsk ask = {width, height, t.bpp, pitch, writes && !offset && !sampled};
-    if (!(t.import = importSurface(surfaceId, base, (allocBytes + pageSize() - 1) & ~uint64_t(pageSize() - 1), surface,
-                                   &ask)) ||
-        (t.import->kind == TGM_LAYOUT_KIND && !tiledSurfaceTexture(offset, width, height, t))) {
+    t.import = importSurface(surfaceId, base, (allocBytes + pageSize() - 1) & ~uint64_t(pageSize() - 1), surface, &ask);
+    if (t.import && t.import->kind == TGM_LAYOUT_KIND) {
+        SurfaceView view;
+        const bool valid = surfaceView(t.import->layout, offset, width, height, t.bpp, pitch, view);
+        if (valid && !view.direct && !sampled) {
+            l.unlock();
+            sampled = new Texture;
+            if (!createTexture(width, height, format, *sampled, false, true)) {
+                delete sampled;
+                sampled = nullptr;
+            }
+            l.lock();
+        }
+        tiledSurfaceTexture(offset, width, height, pitch, t, sampled);
+    }
+    if (!t.import) {
         l.unlock();
-        if (sampled) {
+        if (sampled && sampled != t.sampled) {
             destroyTexture(*sampled);
             delete sampled;
         }
@@ -1474,7 +1514,7 @@ bool Device::createSurfaceTexture(uint64_t surfaceId, void *base, uint64_t alloc
     }
     if (t.blockLinear) {
         l.unlock();
-        if (sampled) {
+        if (sampled && sampled != t.sampled) {
             destroyTexture(*sampled);
             delete sampled;
         }
@@ -2973,6 +3013,7 @@ CommandBuffer *Device::begin()
     cb.prologueDwords_ = uint32_t(p.at - start);
     cb.splits_.clear();
     cb.buffersWritten_ = false;
+    cb.geometryBudget_ = {};
     return &cb;
 }
 
@@ -2982,7 +3023,8 @@ void CommandBuffer::segment(uint32_t *from, uint32_t *to)
         return;
     const uint64_t va = dev_->push_.bo.va + (reinterpret_cast<uint8_t *>(from) - dev_->push_.bo.cpu);
     // contiguous with the last segment: one GPFIFO entry
-    if (!segments_.empty() && !segments_.back().flags && segments_.back().va + uint64_t(segments_.back().dwords) * 4 == va &&
+    if (!segments_.empty() && !segments_.back().flags &&
+        segments_.back().va + uint64_t(segments_.back().dwords) * 4 == va &&
         segments_.back().dwords + uint64_t(to - from) < (1u << 21) - 1) {
         segments_.back().dwords += uint32_t(to - from);
         return;
@@ -3142,6 +3184,7 @@ void CommandBuffer::useAddress(uint64_t va, bool write)
 
 void CommandBuffer::use(const Buffer &buffer, bool write)
 {
+    buffersWritten_ |= write;
     use(buffer.import, write);
     if (buffer.va && buffer.length && dev_->k_.exactJobs())
         surfaces_.addAddress(buffer.va, buffer.length, write);
@@ -3153,8 +3196,99 @@ void CommandBuffer::use(const Texture &texture, bool write)
     useAddress(texture.va, write);
 }
 
+// Read ownership remains held until every consuming GPU job is published. Releasing after the CPU copy alone
+// would allow a producer to replace the vertices between the snapshot and this draw's GPU read.
+bool CommandBuffer::acquireGeometry(const Buffer &buffer, const uint8_t *cpu, uint64_t bytes)
+{
+    Device &d = *dev_;
+    if (!cpu || !buffer.cpu || uintptr_t(cpu) < uintptr_t(buffer.cpu) || !bytes)
+        return false;
+    const uint64_t delta = uintptr_t(cpu) - uintptr_t(buffer.cpu);
+    const uint64_t extent = (buffer.length + 3) & ~uint64_t(3);
+    if (delta > extent || bytes > extent - delta || delta > UINT64_MAX - buffer.va)
+        return false;
+    const uint64_t address = buffer.va + delta;
+    // Imported cached buffers may have producers outside this frontend's completion/cache contract. Until their
+    // transitions are attested, use conservative GPU ordering rather than discarding or cleaning unqualified lines.
+    if (!buffer.wc && (buffer.import || !(d.k_.info().flags & TegraGM20BInfoCpuPreserveDirty)))
+        return false;
+    const uint32_t access =
+        TegraGM20BCpuRead | TegraGM20BCpuAvoidSync | (buffer.wc ? 0u : uint32_t(TegraGM20BCpuPreserveDirty));
+    for (const auto &read : geometryReads_) {
+        const auto &bo = read.bo;
+        const uint64_t base = bo.vaBase ? bo.vaBase : bo.va;
+        const uint64_t start = base + read.offset;
+        if (address >= start && address - start < read.bytes && bytes <= read.bytes - (address - start))
+            return !surfaces_.writesBacking(bo.handle, base, bo.bytes);
+    }
+    std::lock_guard<std::mutex> lock(d.lock_);
+    Bo bo;
+    if (buffer.import) {
+        bo = buffer.import->bo;
+    } else if (buffer.span.valid()) {
+        const auto index = buffer.span.chunk;
+        if (buffer.arena) {
+            if (index >= d.arenas_.size() || d.arenas_[index].purged)
+                return false;
+            bo = d.arenas_[index].bo;
+        } else {
+            const auto &chunks = buffer.wc ? d.wcChunks_ : d.chunks_;
+            if (index >= chunks.size())
+                return false;
+            bo = chunks[index].bo;
+        }
+    }
+    const uint64_t base = bo.vaBase ? bo.vaBase : bo.va;
+    if (!bo.handle || address < base || address - base > bo.bytes || bytes > bo.bytes - (address - base) ||
+        surfaces_.writesBacking(bo.handle, base, bo.bytes))
+        return false;
+    // Small page windows amortize adjacent matrix/vertex/index views while bounding cache-maintenance work.
+    // Ownership remains whole-backing; only visibility maintenance is narrowed to these verified physical bytes.
+    constexpr uint64_t page = 4096;
+    const uint64_t offset = (address - base) & ~(page - 1);
+    const uint64_t end = std::min(bo.bytes, (address - base + bytes + page - 1) & ~(page - 1));
+    const uint64_t maintained = end - offset;
+    if (geometryReads_.size() >= 64 || maintained > geometryBudget_.maintainedBytes ||
+        !d.k_.cpuAccess(bo, offset, maintained, access, true))
+        return false;
+    geometryBudget_.maintainedBytes -= maintained;
+    geometryReads_.push_back({bo, offset, maintained, access});
+    return true;
+}
+
+bool CommandBuffer::geometryWritable() const
+{
+    for (const auto &read : geometryReads_) {
+        const auto &bo = read.bo;
+        if (surfaces_.writesBacking(bo.handle, bo.vaBase ? bo.vaBase : bo.va, bo.bytes))
+            return true;
+    }
+    return false;
+}
+
+void CommandBuffer::releaseGeometry()
+{
+    if (geometryReads_.empty())
+        return;
+    std::lock_guard<std::mutex> lock(dev_->lock_);
+    for (const auto &read : geometryReads_)
+        if (!dev_->k_.cpuAccess(read.bo, read.offset, read.bytes, read.access, false))
+            os_log_error(os_log_create("com.brunostjohn.switch.TegraGM20BMetal", "raw"),
+                         "raw: geometry CPU read release failed for BO %llu", (unsigned long long)read.bo.handle);
+    geometryReads_.clear();
+}
+
 bool CommandBuffer::commit(uint32_t &seqno)
 {
+    struct ReleaseReads {
+        CommandBuffer &cb;
+
+        ~ReleaseReads()
+        {
+            cb.releaseGeometry();
+        }
+    } releaseReads{*this};
+
     Device &d = *dev_;
     launchPrologues();
     if (d.overflowing_) {
@@ -3162,8 +3296,23 @@ bool CommandBuffer::commit(uint32_t &seqno)
                      "raw: a command buffer larger than its ring, with no memory for a larger one: not submitted");
         return false;
     }
-    bool invalidates = false;
+    bool invalidates = false, published = false;
     uint64_t invalidatedBefore = 0;
+
+    struct RollbackInvalidation {
+        Device &device;
+        bool &invalidates, &published;
+        uint64_t &before;
+
+        ~RollbackInvalidation()
+        {
+            if (invalidates && !published) {
+                std::lock_guard<std::mutex> lock(device.lock_);
+                device.heapInvalidated_ = before;
+            }
+        }
+    } rollback{d, invalidates, published, invalidatedBefore};
+
     uint64_t slmGiven = 0, slmVa = 0;
     {
         std::lock_guard<std::mutex> l(d.lock_);
@@ -3234,6 +3383,8 @@ bool CommandBuffer::commit(uint32_t &seqno)
         for (const Bo &bo : d.upload_.outgrown)
             control(bo, true);
     }
+    if (geometryWritable())
+        return false;  // later internal writes invalidate the CPU proof; no prefix may reach the GPU
     uint32_t seq = 0;
     for (size_t at = 0; at < segments_.size();) {
         uint32_t n = uint32_t(std::min<size_t>(d.k_.maxPushes(), segments_.size() - at));
@@ -3243,10 +3394,6 @@ bool CommandBuffer::commit(uint32_t &seqno)
             return false;  // a continuation group must fit one atomic submission
 
         if (!d.k_.exec(d.channel_, segments_.data() + at, n, d.lastSeqno_, seq, &surfaces_)) {
-            if (!at && invalidates) {  // its prologue never reached the GPU: the next submission's invalidates
-                std::lock_guard<std::mutex> l(d.lock_);
-                d.heapInvalidated_ = invalidatedBefore;
-            }
             if (at) {  // its first batches run on: abandon() may give their ring words back only once they completed
                 partial = true;
                 d.wait(d.lastSeqno_);
@@ -3254,6 +3401,7 @@ bool CommandBuffer::commit(uint32_t &seqno)
             }
             return false;
         }
+        published = true;
         d.lastSeqno_ = seq;
         at += n;
     }
@@ -3292,6 +3440,7 @@ bool Device::gpuNanoseconds(uint32_t stamp, uint64_t &ns) const
 
 void CommandBuffer::abandon()
 {
+    releaseGeometry();
     Device &d = *dev_;
     {
         std::lock_guard<std::mutex> l(d.lock_);
@@ -3432,6 +3581,7 @@ void RenderEncoder::setBlendColor(const float rgba[4])
     if (memcmp(v, blendColor_, sizeof v)) {
         memcpy(blendColor_, v, sizeof v);
         blendColorDirty_ = true;
+        blendWordsDirty_ = true;
     }
 }
 
@@ -3476,8 +3626,12 @@ bool RenderEncoder::draw(uint32_t primitive, uint32_t first, uint32_t count, uin
     readBits_ |= pl->fetchBits;
     if (!count || !instances)
         return true;
-    const Runs &runs = selfRuns(*pl, primitive, first, count, instances);
+    const Runs *ordered = selfRuns(*pl, primitive, first, count, instances, why);
+    if (!ordered)
+        return false;
+    const Runs &runs = *ordered;
     if (!runs.empty()) {
+        size_t run = 0;
         for (const auto &[begin, end] : runs) {
 #ifdef SWITCH_RAW_HARNESS_MARKS
             // the host frame harness's builds only: nvdec names this mark SPLIT, and eqcheck folds the run into the one before
@@ -3487,7 +3641,12 @@ bool RenderEncoder::draw(uint32_t primitive, uint32_t first, uint32_t count, uin
                 p_.m(NO_OPERATION, 0x5b1175);
             }
 #endif
-            if (!prepare(pl, primitive, first + begin, first + begin, end - begin, baseInstance, false, why))
+            const bool reverse = runWinding_[run++];
+            raster_.winding ^= reverse;
+            const bool prepared =
+                prepare(pl, primitive, first + begin, first + begin, end - begin, baseInstance, false, why);
+            raster_.winding ^= reverse;
+            if (!prepared)
                 return false;
             p_.m(BEGIN, 0);
             p_.inc(VERTEX_ARRAY_START, {first + begin, end - begin});
@@ -3513,19 +3672,22 @@ bool RenderEncoder::draw(uint32_t primitive, uint32_t first, uint32_t count, uin
 
 // The runs a draw that fetches a color it writes is drawn as, where its own triangles may cover a pixel twice
 // (raw_overlap.h); empty: it is drawn whole. The indexed draw being prepared sets drawIndices_ first
-const RenderEncoder::Runs &RenderEncoder::selfRuns(const Pipeline &pl, uint32_t primitive, int32_t first,
-                                                   uint32_t count, uint32_t instances)
+const RenderEncoder::Runs *RenderEncoder::selfRuns(const Pipeline &pl, uint32_t primitive, int32_t first,
+                                                   uint32_t count, uint32_t instances, const char **why)
 {
     static thread_local Runs runs;
     static thread_local TriangleRuns triangles;
     runs.clear();
-    if (!(pl.fetchBits & pl.writeBits) || (primitive != 3 && primitive != 4) || count <= 3)
-        return runs;
+    runWinding_.fill(false);
+    const uint32_t singlePrimitive = primitive == 0 ? 1 : primitive <= 2 ? 2 : 3;
+    if (!(pl.fetchBits & pl.writeBits & ~pl.storageBits) || (count <= singlePrimitive && instances == 1))
+        return &runs;
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
     const auto start = std::chrono::steady_clock::now();
 #endif
-    const bool told = instances == 1 &&
-                      triangles.split(geometry(pl, primitive, first, count, {0, 0, ~0u, ~0u}), primitive == 4, runs);
+    auto analysis = geometryCache_.analysis(geometry(pl, primitive, first, count, {0, 0, ~0u, ~0u}), bindingRevision_,
+                                            cb_->geometryBudget_);
+    const bool told = instances == 1 && (primitive == 3 || primitive == 4) && triangles.split(analysis, runs);
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
     dev_->stats.selfOverlapNs += uint64_t(
         std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - start).count());
@@ -3538,20 +3700,20 @@ const RenderEncoder::Runs &RenderEncoder::selfRuns(const Pipeline &pl, uint32_t 
 #else
     (void)told;
 #endif
-    return runs;
-}
-
-// The largest index of `count` indices of type T at `at` (any alignment), restarts (all ones) left out; 0 for none.
-template <typename T> static uint32_t largestIndex(const uint8_t *at, uint32_t count)
-{
-    T most = 0;
-    for (uint32_t i = 0; i < count; i++) {
-        T v;
-        memcpy(&v, at + size_t(i) * sizeof(T), sizeof(T));
-        v = v == T(~T(0)) ? T(0) : v;
-        most = v > most ? v : most;
+    if (!told || (pl.primitiveId && !runs.empty())) {
+        // Imported/GPU-owned geometry can be unavailable to the CPU even for an ordinary CA quad. Keep these
+        // small direct draws native: each triangle is ordered by prepare()'s existing framebuffer-fetch barrier.
+        // No position or index bytes are read, and no unproven non-overlap assumption is made.
+        if (pl.caTransform && !pl.primitiveId &&
+            TriangleRuns::sequential(primitive, count, instances, drawIndices_ != nullptr, runs, runWinding_))
+            return &runs;
+        *why = "framebuffer-fetch ordering requires an interlocked program or available bounded geometry";
+        cb_->refusal = {RefGeometry, primitive, count, instances};
+        return nullptr;
     }
-    return most;
+    if (primitive == 4)
+        runWinding_ = TriangleRuns::winding(analysis, runs);
+    return &runs;
 }
 
 // NVK's indexed draw on MAXWELL_B: the index buffer as NVK_MME_BIND_IB sets it (start, last byte, the restart index of the type,
@@ -3582,38 +3744,44 @@ bool RenderEncoder::drawIndexed(uint32_t primitive, uint32_t count, uint32_t ind
     const uint64_t fetchEnd = offset < ib->length ? (ib->length + 3) & ~uint64_t(3) : ib->length,
                    inside = fetchEnd > offset ? (fetchEnd - offset) / indexSize : 0;
     Buffer padded;
+    drawIndexBuffer_ = ib;
+    drawIndexCpuSafe_ = false;
     if (count > inside) {
+        if (inside && !cb_->acquireGeometry(*ib, ib->cpu + offset, inside * indexSize)) {
+            *why = "index padding requires available CPU read ownership";
+            cb_->refusal = {RefIndexedRange, uint32_t(offset), indexSize, count};
+            return false;
+        }
         const uint64_t bytes = uint64_t(count) * indexSize;
         uint8_t *m =
             dev_->alloc(dev_->upload_, (bytes + kUboChunk - 1) & ~uint64_t(kUboChunk - 1), kUboChunk, padded.va);
-        memcpy(m, ib->cpu + offset, inside * indexSize);
+        if (inside)
+            memcpy(m, ib->cpu + offset, inside * indexSize);
         memset(m + inside * indexSize, 0, bytes - inside * indexSize);
         padded.cpu = m;
         padded.length = bytes;
         padded.wc = true;
         dev_->stats.uploadBytes += bytes;
         ib = &padded;
+        drawIndexCpuSafe_ = true;  // immutable upload bytes owned by this command buffer
+        drawIndexBuffer_ = nullptr;
         offset = 0;
     }
     cb_->use(*ib, false);
-    // the vertices it reads: up to its largest index (the indices are CPU-written, as the vertices). A restart (the all-ones
-    // index) reads as 0, which never raises the largest: branch-free per index size, so clang vectorizes it (UMAXV; r9-simd)
-    // (write-combined vertices are cleaned by no one: no largest index wanted; write-combined indices neither cleaned nor read)
+    // Never scan potentially GPU-produced indices to choose a CPU cache range. Cached vertex bindings are
+    // cleaned conservatively below; WC vertices need no clean, and geometry reads have their own read lease.
     const uint8_t *at = ib->cpu + offset;
-    const uint8_t slot = pl->rec->vertexSlot;
-    const Buffer *vb = slot < 31 ? bufs_[1][slot].buffer : nullptr;
-    const uint32_t most = !vb || vb->wc || !pl->rec->vertexStride ? 0
-                          : indexSize == 2                        ? largestIndex<uint16_t>(at, count)
-                                                                  : largestIndex<uint32_t>(at, count);
     if (!ib->wc)
         cb_->clean(at, uint64_t(count) * indexSize);
     drawIndices_ = at;
     drawIndexSize_ = indexSize;
     drawIndexCount_ = count;
-    // the vertices the indices reach from the base vertex, the ones a negative base puts before the stream left out
-    const int64_t vFirst = std::max<int64_t>(0, baseVertex),
-                  vEnd = std::max<int64_t>(0, int64_t(baseVertex) + most + 1);
-    const Runs &runs = selfRuns(*pl, primitive, baseVertex, count, instances);
+    const Runs *ordered = selfRuns(*pl, primitive, baseVertex, count, instances, why);
+    if (!ordered) {
+        drawIndices_ = nullptr;
+        return false;
+    }
+    const Runs &runs = *ordered;
     const uint32_t parts = runs.empty() ? 1 : uint32_t(runs.size());
     for (uint32_t r = 0; r < parts; r++) {
         const uint32_t begin = runs.empty() ? 0 : runs[r].first, end = runs.empty() ? count : runs[r].second;
@@ -3626,8 +3794,10 @@ bool RenderEncoder::drawIndexed(uint32_t primitive, uint32_t count, uint32_t ind
             p_.m(NO_OPERATION, 0x5b1175);
         }
 #endif
-        const bool prepared = prepare(pl, primitive, baseVertex, uint32_t(vFirst),
-                                      uint32_t(std::max<int64_t>(0, vEnd - vFirst)), baseInstance, true, why);
+        const bool reverse = !runs.empty() && runWinding_[r];
+        raster_.winding ^= reverse;
+        const bool prepared = prepare(pl, primitive, baseVertex, 0, 0, baseInstance, true, why);
+        raster_.winding ^= reverse;
         drawIndices_ = nullptr;
         if (!prepared)
             return false;
@@ -3662,6 +3832,11 @@ bool RenderEncoder::indirect(uint32_t primitive, bool indexed, const Buffer *arg
 {
     if (!pipeline_)
         return true;
+    if (pipeline_->fetchBits & pipeline_->writeBits & ~pipeline_->storageBits) {
+        *why = "indirect framebuffer-fetch draws require an interlocked program";
+        cb_->refusal = {RefGeometry, primitive, 0, 0};
+        return false;
+    }
     const uint32_t bytes = indexed ? 20 : 16;
     if (!arguments || !arguments->va || (offset & 3) || offset > arguments->length ||
         arguments->length - offset < bytes) {
@@ -3689,7 +3864,8 @@ bool RenderEncoder::indirect(uint32_t primitive, bool indexed, const Buffer *arg
     dev_->push_.head = uint64_t(reinterpret_cast<uint8_t *>(p_.at) - dev_->push_.bo.cpu);
     bodyStart_ = nullptr;
     reserve();
-    drawParamsUnknown_ = true;  // the macro changed draw root words/base registers; the next direct draw must restore them
+    drawParamsUnknown_ =
+        true;  // the macro changed draw root words/base registers; the next direct draw must restore them
     ++cb_->draws;
     return true;
 }
@@ -3747,7 +3923,7 @@ bool RenderEncoder::prepare(Pipeline *pl, uint32_t primitive, int32_t first, uin
     axis(vp_[0], empty ? 0 : vp_[2], areaW_, sc_[0], sc_[0] + sc_[2], x);
     axis(vp_[1], empty ? 0 : vp_[3], areaH_, sc_[1], sc_[1] + sc_[3], y);
     const DrawGeometry g = geometry(*pl, primitive, first, indexed ? drawIndexCount_ : count, {x[0], y[0], x[1], y[1]});
-    WrittenRegion::Analysis geometryAnalysis(g);
+    auto geometryAnalysis = geometryCache_.analysis(g, bindingRevision_, cb_->geometryBudget_);
     if (!indirectGeometry_)
         pl = splitTwin(pl, geometryAnalysis);
     if (!whole_) {
@@ -3934,9 +4110,10 @@ bool RenderEncoder::prepare(Pipeline *pl, uint32_t primitive, int32_t first, uin
     const uint32_t residualMask = prepared->residualMask;
     const uint64_t setVa = prepared->address;
     writeRaster(p, rasterFor(primitive));
-    if (pl != emitted_ || residualMask || residualsPushed_) {
+    const bool dynamicBlend = r.blendColorWord || r.halfBlendColorWord;
+    if (pl != emitted_ || residualMask || residualsPushed_ || (dynamicBlend && blendColorDirty_)) {
         if (pl != emitted_) {
-            blendColorDirty_ |= pl->constantBlend;
+            blendColorDirty_ |= pl->constantBlend || dynamicBlend;
             if (cb_->extrasLive_ && cb_->extrasLive_ != pl) {
                 p.raw(cb_->extrasLive_->restore.data(), uint32_t(cb_->extrasLive_->restore.size()));
                 cb_->extrasLive_ = nullptr;
@@ -3952,6 +4129,19 @@ bool RenderEncoder::prepare(Pipeline *pl, uint32_t primitive, int32_t first, uin
         memcpy(want, pl->push, sizeof want);
         for (uint32_t m = residualMask; m; m &= m - 1)
             want[__builtin_ctz(m)] = residuals[__builtin_ctz(m)];
+        if (r.blendColorWord && blendWordsDirty_) {
+#if defined(SWITCH_RAW_HARNESS_MARKS)
+            if (!switch_nmb_blend_color_words) {
+                *why = "extended blend color conversion unavailable";
+                return false;
+            }
+#endif
+            float color[4];
+            memcpy(color, blendColor_, sizeof color);
+            switch_nmb_blend_color_words(color, blendWords_);
+            blendWordsDirty_ = false;
+        }
+        patchBlendPush(r, blendColor_, blendWords_, want);
         for (int i = 0; i < 32;) {
             if (!(pl->pushMask >> i & 1) || root[i] == want[i]) {
                 i++;
@@ -3987,7 +4177,7 @@ bool RenderEncoder::prepare(Pipeline *pl, uint32_t primitive, int32_t first, uin
         scissorDirty_ = false;
     }
     // NVK's SET_BLEND_CONST_RED..ALPHA, the floats' bits, written where a draw blends with them
-    if (pl->constantBlend && blendColorDirty_) {
+    if ((pl->constantBlend || dynamicBlend) && blendColorDirty_) {
         p.incArray(BLEND_CONST_RED, blendColor_, 4);
         blendColorDirty_ = false;
     }
@@ -4013,9 +4203,10 @@ bool RenderEncoder::prepare(Pipeline *pl, uint32_t primitive, int32_t first, uin
             vbLimit_ = limit;
         }
         if (b.buffer && !b.buffer->wc && r.vertexStride) {  // the vertices this draw reads, CPU-written (cached memory)
-            const uint64_t from = b.offset + uint64_t(vFirst) * r.vertexStride;
-            const uint64_t bytes = std::min<uint64_t>(uint64_t(count) * r.vertexStride,
-                                                      b.buffer->length - std::min(from, b.buffer->length));
+            const uint64_t from =
+                std::min(b.offset + (indexed ? 0 : uint64_t(vFirst) * r.vertexStride), b.buffer->length);
+            const uint64_t bytes =
+                std::min<uint64_t>(indexed ? b.size : uint64_t(count) * r.vertexStride, b.buffer->length - from);
             cb_->clean(b.buffer->cpu + from, bytes);
         }
     }
@@ -4113,7 +4304,7 @@ bool RenderEncoder::prepare(Pipeline *pl, uint32_t primitive, int32_t first, uin
 // What the region test reads of a draw: Core Animation's transform (Pipeline::caTransform) over a triangle list or strip
 // of one instance, with its matrix, positions and indices where the CPU maps them; anything else is its scissor alone
 DrawGeometry RenderEncoder::geometry(const Pipeline &pl, uint32_t primitive, int32_t first, uint32_t count,
-                                     const PixelBox &limit) const
+                                     const PixelBox &limit)
 {
     DrawGeometry g;
     g.limit = limit;
@@ -4121,11 +4312,18 @@ DrawGeometry RenderEncoder::geometry(const Pipeline &pl, uint32_t primitive, int
     g.first = first;
     g.count = count;
     g.indices = drawIndices_;
-    g.indexSize = drawIndexSize_;
+    g.indexSize = drawIndices_ ? drawIndexSize_ : 0;
+    g.strip = primitive == 4;
     const Bound &m = bufs_[1][2];
     const Bound &v = pl.rec->vertexSlot < 31 ? bufs_[1][pl.rec->vertexSlot] : bufs_[1][0];
-    g.bounded = !indirectGeometry_ && pl.caTransform && pl.positionComponents && (primitive == 3 || primitive == 4) && m.cpu &&
-                m.size >= 64 && v.cpu && pl.rec->vertexSlot < 31;
+    g.bounded = !indirectGeometry_ && pl.caTransform && pl.positionComponents && (primitive == 3 || primitive == 4) &&
+                m.cpu && m.size >= 64 && v.cpu && pl.rec->vertexSlot < 31;
+    g.bounded &= !g.indices || drawIndexCpuSafe_ || drawIndexBuffer_;
+    g.owner = cb_;
+    g.inputs = {m.buffer, v.buffer, g.indices && !drawIndexCpuSafe_ ? drawIndexBuffer_ : nullptr};
+    g.acquire = [](void *owner, const void *input, const uint8_t *cpu, uint64_t bytes) {
+        return static_cast<CommandBuffer *>(owner)->acquireGeometry(*static_cast<const Buffer *>(input), cpu, bytes);
+    };
     if (g.bounded) {
         g.matrix = m.cpu;
         g.positions = {v.cpu, pl.rec->vertexStride, pl.positionOffset, pl.positionComponents};
@@ -4225,6 +4423,9 @@ CopySide sideOf(const Texture &t, uint32_t x, uint32_t y, uint32_t z)
 {
     if (!t.blockLinear)
         return {t.va + uint64_t(y) * t.pitch + uint64_t(x) * t.bpp, t.pitch};
+    if (t.import && t.import->kind == TGM_LAYOUT_KIND)
+        return {t.va, t.pitch,      x + t.surfaceX, y + t.surfaceY, t.pitch / t.bpp, t.import->layout.height,
+                true, t.blockHeight};
     if (t.layers > 1)
         return {t.va + z * t.layerBytes, t.pitch, x, y, t.pitch / t.bpp, t.height, true, t.blockHeight};
     return {t.va, t.pitch, x, y, t.pitch / t.bpp, t.height, true, t.blockHeight, t.depth, z, t.blockDepth};
@@ -4302,7 +4503,7 @@ static void targetWords(Push &p, uint32_t m, const Texture &t)
     ColorTargetDesc d;
     d.va = t.va;
     d.pitch = t.pitch;
-    d.height = sampleRows(t);
+    d.height = t.import && t.import->kind == TGM_LAYOUT_KIND ? t.import->layout.height : sampleRows(t);
     d.bpp = t.bpp;
     d.rtFormat = formatInfo(t.format)->rt;
     d.blockLinear = t.blockLinear;

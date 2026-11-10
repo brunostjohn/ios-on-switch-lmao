@@ -23,8 +23,14 @@ void cacheLines(const uint8_t *from, uint64_t bytes, bool invalidate)
 void cpuTiled(RMTexture *t, MTLRegion r, uint8_t *bytes, NSUInteger row, bool write)
 {
     tgm_layout l;
-    if (!r.size.width || !r.size.height || !tgm_layout_tiled(t->_raw.width, t->_raw.height, t->_raw.bpp, &l))
+    if (!r.size.width || !r.size.height)
         return;
+    if (t->_raw.import && t->_raw.import->kind == TGM_LAYOUT_KIND)
+        l = t->_raw.import->layout;
+    else if (!tgm_layout_tiled(t->_raw.width, t->_raw.height, t->_raw.bpp, &l))
+        return;
+    r.origin.x += t->_raw.surfaceX;
+    r.origin.y += t->_raw.surfaceY;
     const uint64_t blockRow = uint64_t(l.row_bytes) * (8u << l.y_log2);
     const uint64_t from = r.origin.y / (8u << l.y_log2) * blockRow,
                    to = std::min<uint64_t>((r.origin.y + r.size.height + (8u << l.y_log2) - 1) / (8u << l.y_log2) *

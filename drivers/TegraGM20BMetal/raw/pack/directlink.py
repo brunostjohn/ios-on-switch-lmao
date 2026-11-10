@@ -25,7 +25,7 @@ import splits
 PIPELINE = struct.Struct('<QIHHIIBBBBHHI')
 # SET_PIPELINE_PROGRAM(vertex B, pixel): where each program sits in the shader heap, which the probe saw differ by state
 PROGRAM_OFFSETS = (0x2044, 0x2144)
-PIPELINE_BYTES = PIPELINE.size + packfile.PACK_ENTRIES * 8 + 4 + 32 * 4
+PIPELINE_BYTES = PIPELINE.size + packfile.PACK_ENTRIES * 8 + 4 + 32 * 4 + 4
 ENTRY_UBO, ENTRY_COLOR_TABLE = 1, 5
 TEXTURE_KINDS = {2: 'slot', 3: 'fetch', 4: 'tex3d'}
 SAMPLER_SLOT, SAMPLER_CONSTEXPR = 1, 2
@@ -137,10 +137,13 @@ def entries_of(pipeline: bytes, count: int, samplers: list[list[int]], constexpr
 def pipeline_of(rec: dict, varying: list[int], prog_index: dict[str, int], constexpr_tsc: list[list[int]]) -> dict:
     """Give a state's pipeline as mkpack.py's pipeline() gives the probe's."""
     p = rec['pipeline']
+    if len(p) != PIPELINE_BYTES:
+        raise ValueError('pipeline record has an obsolete layout')
     _hash, _key, _vs, _fs, _blob, _dwords, entries, _pushes, slot, _pad, stride, set_bytes, flags = (
         PIPELINE.unpack_from(p)
     )
     mask, *words = struct.unpack_from('<33I', p, PIPELINE.size + packfile.PACK_ENTRIES * 8)
+    blend, half, _reserved = struct.unpack_from('<BBH', p, PIPELINE_BYTES - 4)
     regs = rec['probe']['records'][0]['regs']
     return {
         'index': rec['probe']['index'],
@@ -154,6 +157,9 @@ def pipeline_of(rec: dict, varying: list[int], prog_index: dict[str, int], const
             if m not in PROGRAM_OFFSETS and not mkpack.foreign(m, mkpack.targets(rec['key']))
         ],
         'push': [(0x700 + 4 * i, words[i]) for i in range(32) if mask >> i & 1],
+        'push_metadata': bool(flags & 4),
+        'blend_color_word': blend,
+        'half_blend_color_word': half,
         'set_size': set_bytes,
         'entries': entries_of(p, entries, rec['samplers'], constexpr_tsc),
         'vbs': [{'stream': 0, 'slot': slot, 'stride': stride}] if slot != 0xFF else [],
