@@ -2952,7 +2952,7 @@ bool Device::reopen()
     };
     if (!k_.channel(kEngines, channel_, fence_))
         return refused();
-    RAW_DIAGNOSTIC(stats.reopens++);
+    stats.reopens++;
     push_.inflight.clear();
     upload_.inflight.clear();
     {

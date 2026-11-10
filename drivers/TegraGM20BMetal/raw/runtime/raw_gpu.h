@@ -50,6 +50,7 @@
 #include "raw_fence.h"
 #include "raw_host_access.h"
 #include "raw_heap.h"
+#include "raw_order.h"
 #include "raw_pack.h"
 #include "raw_push.h"
 #include "raw_overlap.h"
@@ -1227,7 +1228,8 @@ public:
     // GPU-side order with the process's other driver (NVK's channels), through the kernel's Order (TegraGM20BInfoOrder; false:
     // it has none). orderAfterOthers: this channel's next submission starts with an acquire on what they submitted so far;
     // orderOthersAfter: their next submissions start with one on everything this channel submitted. The kern_return_t (0:
-    // queued; else the caller orders on the CPU); `waits`: the acquires queued. Called where submissions are (serialised).
+    // queued; kOrderNoChannel: no channel to order; else the kernel refused it and the caller orders on the CPU); `waits`:
+    // the acquires queued. Called where submissions are (serialised).
     bool canOrder() const
     {
         return k_.canOrder();
@@ -1238,13 +1240,15 @@ public:
     int orderAfterOthers(uint32_t &waits)
     {
         if (!ensureChannel())
-            return KERN_FAILURE;
+            return kOrderNoChannel;
         for (int attempt = 0;; attempt++) {
             if ((contextless_ || k_.lost(channel_)) && !reopen())
-                return KERN_FAILURE;
+                return kOrderNoChannel;
             const int kr = k_.order(channel_, TegraGM20BOrderAfterTask, 0, waits);
-            if (kr != kIOReturnNotResponding || attempt)
+            if (kr != kIOReturnNotResponding)
                 return kr;
+            if (attempt)
+                return kOrderNoChannel;
         }
     }
 
@@ -1295,8 +1299,6 @@ public:
         // twice, and the runs; those of more than one triangle it could not tell apart (drawn whole, unordered within);
         // the CPU time telling them (raw_overlap.h)
         std::atomic<uint64_t> selfOverlapSplit{0}, selfOverlapRuns{0}, selfOverlapUnbounded{0}, selfOverlapNs{0};
-        // channels made again after the kernel killed one
-        std::atomic<uint64_t> reopens{0};
         // compressed memory held now (raw_comp.h CompMem and made buffers no backing took) and its bytes, the backings on it
         // now; buffers made and the kernel's refusals since the device opened; full-target clears of compressed targets to a
         // value the boot ZBC table holds (no texels written) and to one it does not
@@ -1312,6 +1314,8 @@ public:
 #else
         std::atomic<uint64_t> heapFull{0};
 #endif
+        // channels made again after the kernel killed one; GPU order returns on one made since a refusal (raw_order.h)
+        std::atomic<uint64_t> reopens{0};
     } stats;
 
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG

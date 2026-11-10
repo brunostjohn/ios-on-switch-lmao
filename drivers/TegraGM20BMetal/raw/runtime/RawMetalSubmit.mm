@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 #import "RawMetalInternal.h"
 #include "RawMetalPlanExecution.h"
+#include "raw_order.h"
 
 // ---- commit: order between the two drivers ----
 // With the kernel's Order (TegraGM20BABI.h method 14), the two drivers' command buffers are ordered on the GPU: before a raw
@@ -19,12 +20,24 @@ bool m2vClear()
     return gRM->gpuOrder ? gRM->m2vUnscheduled == 0 : gRM->m2vPending == 0;
 }
 
-// The kernel refused an Order: from here on the drivers are ordered on the CPU (one line).
+// The kernel refused an Order: the drivers are ordered on the CPU until the kernel makes the raw channel again (one line).
 void orderRefused(const char *what, int kr)
 {
-    once([NSString stringWithFormat:@"CPU-ordered from now on: the kernel refused Order (%s, 0x%x)", what, kr]);
+    once([NSString stringWithFormat:@"CPU-ordered: the kernel refused Order (%s, 0x%x)", what, kr]);
     std::lock_guard<std::mutex> m(gRM->m2vLock);
     gRM->gpuOrder = false;
+    gRM->orderRefusedAt = gRM->raw->stats.reopens.load(std::memory_order_relaxed);
+}
+
+// A raw submission went through on a channel the kernel made since it refused an Order: GPU order again
+static void orderReturned()
+{
+    RawState &r = *gRM;
+    if (!raw::orderReturns(r.gpuOrder, r.raw->canOrder(), r.raw->stats.reopens.load(std::memory_order_relaxed),
+                           r.orderRefusedAt))
+        return;
+    std::lock_guard<std::mutex> m(r.m2vLock);
+    r.gpuOrder = true;
 }
 
 static void countDriver(int driver)
@@ -148,7 +161,15 @@ bool submitRange(RMCommandBuffer *cb)
         if (r.gpuOrder && r.m2vSinceRaw) {
             uint32_t waits = 0;
             const int kr = r.raw->orderAfterOthers(waits);
-            if (kr != KERN_SUCCESS) {
+            const raw::OrderAnswer answer = raw::orderAnswer(kr);
+            if (answer == raw::OrderAnswer::noChannel) {
+                // A channel the next encode made again would run this range unordered after the m2v work before it
+                range.raw = false;
+                cb->_reason = WhyEncode;
+                cb->_why = @"the raw channel is being made again";
+                return false;
+            }
+            if (answer == raw::OrderAnswer::refused) {
                 orderRefused("raw after m2v", kr);
                 return false;
             }
@@ -191,6 +212,8 @@ bool submitRange(RMCommandBuffer *cb)
         }
         RAW_DIAGNOSTIC(r.stats.raw++);
         r.rawSinceM2v = true;
+        if (!r.gpuOrder)
+            orderReturned();
         countDriver(1);
         retireRawRange(cb, range.from, range.to);
         if (last)
