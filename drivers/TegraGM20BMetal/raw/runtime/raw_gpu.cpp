@@ -4942,12 +4942,16 @@ uint32_t Device::levelTic(Texture &t, uint32_t level)
     const FormatInfo *f = formatInfo(t.format);
     if (!t.chain || !f || level >= t.chain->layout.levels)
         return 0;
+    uint32_t &slot = t.chain->levelTic[level];
+    if (const uint32_t made = __atomic_load_n(&slot, __ATOMIC_ACQUIRE))
+        return made;
     std::lock_guard<std::mutex> l(lock_);
-    uint32_t &tic = t.chain->levelTic[level];
+    uint32_t tic = slot;
     if (!tic && (tic = allocTic())) {
         uint32_t w[8];
         fx::mipChainTic(t.chain->layout, t.chain->va, f->tic0, f->srgb, level, 1, w);
         memcpy(tic_.cpu + 32 * tic, w, 32);  // visible at the next submission's header invalidate
+        __atomic_store_n(&slot, tic, __ATOMIC_RELEASE);
     }
     return tic;
 }
