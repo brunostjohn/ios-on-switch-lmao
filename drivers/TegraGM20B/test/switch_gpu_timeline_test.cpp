@@ -6,12 +6,14 @@
 #include "drivers/TegraGM20B/SwitchGpuTimeline.h"
 #include "drivers/TegraGM20B/TegraGM20BGpu.h"
 
-namespace {
+namespace
+{
 switch_gpu_backing_engine operations;
 int fenceRefs;
-} // namespace
+}  // namespace
 
-extern "C" int switch_gpu_backing_register_engine(uint32_t engine, const switch_gpu_backing_engine *ops)
+extern "C" int switch_gpu_backing_register_engine(uint32_t engine,
+						  const switch_gpu_backing_engine *ops)
 {
 	if (engine != SWITCH_GPU_ENGINE_GM20B)
 		return -22;

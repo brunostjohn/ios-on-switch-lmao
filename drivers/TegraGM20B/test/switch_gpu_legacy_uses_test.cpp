@@ -7,9 +7,11 @@
 #include "switch_gpu_backing_fixture.h"
 #include "drivers/TegraGM20B/SwitchGpuLegacyUses.h"
 
-namespace {
+namespace
+{
 constexpr uint32_t kRead = SWITCH_GPU_BACKING_READ, kWrite = SWITCH_GPU_BACKING_WRITE;
-constexpr uint32_t kUnlisted = SWITCH_GPU_BACKING_UNLISTED, kAvoid = SWITCH_GPU_BACKING_CPU_AVOID_SYNC;
+constexpr uint32_t kUnlisted = SWITCH_GPU_BACKING_UNLISTED,
+		   kAvoid = SWITCH_GPU_BACKING_CPU_AVOID_SYNC;
 constexpr uint32_t kBesideCpu = SWITCH_GPU_BACKING_NO_CPU_EXCLUSION;
 
 struct Bo {
@@ -34,26 +36,41 @@ struct Connection {
 		switch_gpu_backing_retain(surface);
 		uses.resize(bos.size());
 	}
+
 	~Connection()
 	{
 		for (auto &bo : bos)
 			switch_gpu_backing_release(bo.backing);
 	}
-	switch_gpu_backing *surface() const { return bos.back().backing; }
-	switch_gpu_backing *own(size_t i) const { return bos[i].backing; }
+
+	switch_gpu_backing *surface() const
+	{
+		return bos.back().backing;
+	}
+
+	switch_gpu_backing *own(size_t i) const
+	{
+		return bos[i].backing;
+	}
 
 	// A legacy Exec on `completion`; listed: its list names the import with `access` (TegraGM20BSurface*).
 	int exec(switch_gpu_backing_token completion, bool listed, uint32_t access = 0)
 	{
-		const uint32_t count = switch_gpu_legacy_uses(&bos[0], listed,
-			[&](uint64_t handle) { return handle == 1000 ? access : 0u; }, uses.data());
+		const uint32_t count = switch_gpu_legacy_uses(
+			&bos[0], listed,
+			[&](uint64_t handle) {
+				return handle == 1000 ? access : 0u;
+			},
+			uses.data());
 		uses.resize(count);
 		switch_gpu_backing_transaction transaction = {};
-		int result = switch_gpu_backing_begin(uses.data(), count, &completion, &transaction);
+		int result =
+			switch_gpu_backing_begin(uses.data(), count, &completion, &transaction);
 		std::array<switch_gpu_backing_token, 8> dependencies = {};
 		uint32_t needed = 0;
 		if (!result)
-			result = switch_gpu_backing_dependencies(&transaction, dependencies.data(), 8, &needed);
+			result = switch_gpu_backing_dependencies(&transaction, dependencies.data(),
+								 8, &needed);
 		if (!result)
 			switch_gpu_backing_commit(&transaction);
 		else if (transaction.locked)
@@ -63,18 +80,20 @@ struct Connection {
 	}
 };
 
-uint32_t dependencies_of(switch_gpu_backing *allocation, uint32_t access, switch_gpu_backing_token completion)
+uint32_t dependencies_of(switch_gpu_backing *allocation, uint32_t access,
+			 switch_gpu_backing_token completion)
 {
 	switch_gpu_backing_use use = {allocation, access, 0};
 	switch_gpu_backing_transaction transaction = {};
 	EXPECT_EQ(switch_gpu_backing_begin(&use, 1, &completion, &transaction), 0);
 	std::array<switch_gpu_backing_token, 4> dependencies = {};
 	uint32_t needed = 0;
-	EXPECT_EQ(switch_gpu_backing_dependencies(&transaction, dependencies.data(), 4, &needed), 0);
+	EXPECT_EQ(switch_gpu_backing_dependencies(&transaction, dependencies.data(), 4, &needed),
+		  0);
 	switch_gpu_backing_abort(&transaction);
 	return needed;
 }
-} // namespace
+}  // namespace
 
 TEST(LegacyAccess, OnlyAListedImportIsAClaim)
 {
@@ -83,11 +102,15 @@ TEST(LegacyAccess, OnlyAListedImportIsAClaim)
 	EXPECT_EQ(switch_gpu_legacy_access(true, false, false, 0), kWrite | kUnlisted);
 	EXPECT_EQ(switch_gpu_legacy_access(true, true, false, 0), kRead | kUnlisted);
 	EXPECT_EQ(switch_gpu_legacy_access(true, false, true, 0), 0u);
-	EXPECT_EQ(switch_gpu_legacy_access(true, false, true, TegraGM20BSurfaceRead), kRead | kBesideCpu);
-	EXPECT_EQ(switch_gpu_legacy_access(true, false, true, TegraGM20BSurfaceWrite), kWrite | kBesideCpu);
-	EXPECT_EQ(switch_gpu_legacy_access(true, true, true, TegraGM20BSurfaceWrite), kRead | kBesideCpu);
-	EXPECT_EQ(switch_gpu_legacy_access(true, false, true, TegraGM20BSurfaceRead | TegraGM20BSurfaceWrite),
-		kRead | kWrite | kBesideCpu);
+	EXPECT_EQ(switch_gpu_legacy_access(true, false, true, TegraGM20BSurfaceRead),
+		  kRead | kBesideCpu);
+	EXPECT_EQ(switch_gpu_legacy_access(true, false, true, TegraGM20BSurfaceWrite),
+		  kWrite | kBesideCpu);
+	EXPECT_EQ(switch_gpu_legacy_access(true, true, true, TegraGM20BSurfaceWrite),
+		  kRead | kBesideCpu);
+	EXPECT_EQ(switch_gpu_legacy_access(true, false, true,
+					   TegraGM20BSurfaceRead | TegraGM20BSurfaceWrite),
+		  kRead | kWrite | kBesideCpu);
 }
 
 TEST_F(Backing, ListedLegacySubmitClaimsOnlyItsListedImport)
@@ -186,11 +209,15 @@ TEST_F(Backing, CpuOwnersNeverRefuseWhatALegacySubmitDidNotList)
 	auto *surface = backing();
 	Connection nvk(surface, 2);
 	ASSERT_EQ(switch_gpu_backing_cpu_acquire(nvk.own(0), 0, 4096, kRead | kAvoid), 0);
-	ASSERT_EQ(switch_gpu_backing_cpu_acquire(surface, 0, 4096, kWrite | SWITCH_GPU_BACKING_CPU_CONCURRENT), 0);
+	ASSERT_EQ(switch_gpu_backing_cpu_acquire(surface, 0, 4096,
+						 kWrite | SWITCH_GPU_BACKING_CPU_CONCURRENT),
+		  0);
 	EXPECT_EQ(nvk.exec(token(1), false), 0);
 	EXPECT_EQ(nvk.exec(token(1, 2), true, 0), 0);
 	EXPECT_EQ(switch_gpu_backing_cpu_release(nvk.own(0), 0, 4096, kRead | kAvoid), 0);
-	EXPECT_EQ(switch_gpu_backing_cpu_release(surface, 0, 4096, kWrite | SWITCH_GPU_BACKING_CPU_CONCURRENT), 0);
+	EXPECT_EQ(switch_gpu_backing_cpu_release(surface, 0, 4096,
+						 kWrite | SWITCH_GPU_BACKING_CPU_CONCURRENT),
+		  0);
 	switch_gpu_backing_release(surface);
 }
 
@@ -253,7 +280,13 @@ TEST_F(Backing, LegacyUsesOfANewestFirstListComeOldestFirst)
 	for (size_t i = 0; i < bos.size(); ++i)
 		bos[i] = {i ? &bos[i - 1] : nullptr, backing(), nullptr, false, i + 1};
 	std::array<switch_gpu_backing_use, 5> uses = {};
-	ASSERT_EQ(switch_gpu_legacy_uses(&bos.back(), false, [](uint64_t) { return 0u; }, uses.data()), 5u);
+	ASSERT_EQ(switch_gpu_legacy_uses(
+			  &bos.back(), false,
+			  [](uint64_t) {
+				  return 0u;
+			  },
+			  uses.data()),
+		  5u);
 	uint64_t previous = 0;
 	for (const auto &use : uses) {
 		switch_gpu_backing_info info = {};
@@ -265,33 +298,39 @@ TEST_F(Backing, LegacyUsesOfANewestFirstListComeOldestFirst)
 		switch_gpu_backing_release(bo.backing);
 }
 
-namespace {
+namespace
+{
 // A native Submit or SubmitAddress on `completion`: every use named, with its TegraGM20BSurface* access.
-int native_submit(switch_gpu_backing_token completion, std::vector<std::pair<switch_gpu_backing *, uint32_t>> named)
+int native_submit(switch_gpu_backing_token completion,
+		  std::vector<std::pair<switch_gpu_backing *, uint32_t>> named)
 {
 	std::vector<switch_gpu_backing_use> uses;
 	for (const auto &[allocation, access] : named)
 		uses.push_back({allocation, switch_gpu_listed_access(access), 0});
 	switch_gpu_backing_transaction transaction = {};
-	int result = switch_gpu_backing_begin(uses.data(), uint32_t(uses.size()), &completion, &transaction);
+	int result = switch_gpu_backing_begin(uses.data(), uint32_t(uses.size()), &completion,
+					      &transaction);
 	std::array<switch_gpu_backing_token, 8> dependencies = {};
 	uint32_t needed = 0;
 	if (!result)
-		result = switch_gpu_backing_dependencies(&transaction, dependencies.data(), 8, &needed);
+		result = switch_gpu_backing_dependencies(&transaction, dependencies.data(), 8,
+							 &needed);
 	if (!result)
 		switch_gpu_backing_commit(&transaction);
 	else if (transaction.locked)
 		switch_gpu_backing_abort(&transaction);
 	return result;
 }
-} // namespace
+}  // namespace
 
 TEST(LegacyAccess, NativeUsesAreClaimsNoCpuOwnerRefuses)
 {
 	EXPECT_EQ(switch_gpu_listed_access(TegraGM20BSurfaceRead), kRead | kBesideCpu);
 	EXPECT_EQ(switch_gpu_listed_access(TegraGM20BSurfaceWrite), kWrite | kBesideCpu);
-	EXPECT_EQ(switch_gpu_listed_access(TegraGM20BSurfaceRead | TegraGM20BSurfaceWrite), kRead | kWrite | kBesideCpu);
-	EXPECT_EQ(switch_gpu_listed_access(TegraGM20BSurfaceGpuAddress | TegraGM20BSurfaceRead), kRead | kBesideCpu);
+	EXPECT_EQ(switch_gpu_listed_access(TegraGM20BSurfaceRead | TegraGM20BSurfaceWrite),
+		  kRead | kWrite | kBesideCpu);
+	EXPECT_EQ(switch_gpu_listed_access(TegraGM20BSurfaceGpuAddress | TegraGM20BSurfaceRead),
+		  kRead | kBesideCpu);
 }
 
 // IOSurfaceLock in another process while backboardd's raw submission names the surface.
@@ -304,7 +343,9 @@ TEST_F(Backing, IOSurfaceLocksNeverRefuseANativeSubmit)
 	ASSERT_EQ(switch_gpu_surface_lock_will(&client, 802, 1), 0);
 	switch_gpu_surface_lock_did(&client, 802, 1);
 	const auto writer = token(1);
-	EXPECT_EQ(native_submit(writer, {{surface, TegraGM20BSurfaceWrite}, {push, TegraGM20BSurfaceRead}}), 0);
+	EXPECT_EQ(native_submit(writer,
+				{{surface, TegraGM20BSurfaceWrite}, {push, TegraGM20BSurfaceRead}}),
+		  0);
 	switch_gpu_surface_unlock_will(&client, 802, 1);
 	switch_gpu_surface_unlock_did(&client, 802, 1);
 	EXPECT_EQ(switch_gpu_surface_lock_will(&client, 802, 1 | 2), -16);
@@ -319,7 +360,9 @@ TEST_F(Backing, IOSurfaceLocksNeverRefuseANativeSubmit)
 	ASSERT_EQ(switch_gpu_surface_lock_will(&client, 802, 0), 0);
 	switch_gpu_surface_lock_did(&client, 802, 0);
 	before = cache.size();
-	EXPECT_EQ(native_submit(token(1, 2), {{surface, TegraGM20BSurfaceRead}, {push, TegraGM20BSurfaceRead}}), 0);
+	EXPECT_EQ(native_submit(token(1, 2),
+				{{surface, TegraGM20BSurfaceRead}, {push, TegraGM20BSurfaceRead}}),
+		  0);
 	EXPECT_EQ(native_submit(token(1, 3), {{surface, TegraGM20BSurfaceRead}}), 0);
 	switch_gpu_surface_unlock_will(&client, 802, 0);
 	switch_gpu_surface_unlock_did(&client, 802, 0);

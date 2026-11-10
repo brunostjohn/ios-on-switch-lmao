@@ -5,7 +5,8 @@
 #include <array>
 #include "switch_gpu_backing_fixture.h"
 
-namespace {
+namespace
+{
 constexpr uint32_t kRead = SWITCH_GPU_BACKING_READ, kWrite = SWITCH_GPU_BACKING_WRITE;
 
 int cpu_read(switch_gpu_backing *allocation)
@@ -23,7 +24,7 @@ int cpu_write(switch_gpu_backing *allocation, uint64_t offset, uint64_t bytes)
 		EXPECT_EQ(switch_gpu_backing_cpu_release(allocation, offset, bytes, kWrite), 0);
 	return result;
 }
-} // namespace
+}  // namespace
 
 TEST_F(Backing, FailedReaderLetsTheNextWriterAndReaderRun)
 {
@@ -102,7 +103,9 @@ TEST_F(Backing, OneKilledProducerOfSeveralInputsIsLoggedOnceAndFailsNoReader)
 		uses[i] = {inputs[i], kRead, 0};
 	switch_gpu_backing_transaction transaction = {};
 	const auto reader = token(2);
-	ASSERT_EQ(switch_gpu_backing_begin(uses.data(), uint32_t(uses.size()), &reader, &transaction), 0);
+	ASSERT_EQ(
+		switch_gpu_backing_begin(uses.data(), uint32_t(uses.size()), &reader, &transaction),
+		0);
 	switch_gpu_backing_commit(&transaction);
 	EXPECT_EQ(refs(writer), 0);
 	EXPECT_EQ(ioLogLines(), logged + 1);
@@ -123,7 +126,8 @@ TEST_F(Backing, ProducerKilledAfterBeginIsNothingToWaitFor)
 	const int logged = ioLogLines();
 	std::array<switch_gpu_backing_token, 4> dependencies = {};
 	uint32_t needed = 0;
-	EXPECT_EQ(switch_gpu_backing_dependencies(&transaction, dependencies.data(), 4, &needed), 0);
+	EXPECT_EQ(switch_gpu_backing_dependencies(&transaction, dependencies.data(), 4, &needed),
+		  0);
 	EXPECT_EQ(needed, 0u);
 	EXPECT_EQ(ioLogLines(), logged + 1);
 	switch_gpu_backing_commit(&transaction);

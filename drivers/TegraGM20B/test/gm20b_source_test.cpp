@@ -493,7 +493,9 @@ TEST(GM20BKillSource, AKilledChannelLeavesItsConnectionWorking)
 	EXPECT_THAT(order, HasSubstr("READ_ONCE(other->error)) continue;"));
 	const std::string killed = flat(definition(
 		gpu(), "static int chan_killed(struct nvif_event *event, void *repv, u32 repc)"));
-	EXPECT_THAT(killed, HasSubstr("__atomic_store_n(chan->fence_cpu, chan->submitted, __ATOMIC_RELEASE);"));
+	EXPECT_THAT(
+		killed,
+		HasSubstr("__atomic_store_n(chan->fence_cpu, chan->submitted, __ATOMIC_RELEASE);"));
 	EXPECT_THAT(killed, HasSubstr("chan->kernel || !tgm_all_clients()"));
 	EXPECT_THAT(flat(definition(client(), "void AGXDeviceUserClient::reap(bool force)")),
 		    HasSubstr("chans_[i] && !tgm_chan_error(chans_[i]) &&"));

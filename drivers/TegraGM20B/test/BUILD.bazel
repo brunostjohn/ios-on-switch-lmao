@@ -298,7 +298,10 @@ host_test(
         "switch_gpu_backing_fixture.h",
         "switch_gpu_backing_test.cpp",
     ],
-    deps = [":backing", ":coherency_kernel"],
+    deps = [
+        ":backing",
+        ":coherency_kernel",
+    ],
 )
 
 host_test(
@@ -307,7 +310,10 @@ host_test(
         "switch_gpu_backing_failure_test.cpp",
         "switch_gpu_backing_fixture.h",
     ],
-    deps = [":backing", ":coherency_kernel"],
+    deps = [
+        ":backing",
+        ":coherency_kernel",
+    ],
 )
 
 host_test(
@@ -316,7 +322,10 @@ host_test(
         "switch_gpu_backing_fixture.h",
         "switch_gpu_legacy_uses_test.cpp",
     ],
-    deps = [":backing", ":coherency_kernel"],
+    deps = [
+        ":backing",
+        ":coherency_kernel",
+    ],
 )
 
 host_shims(

@@ -2101,11 +2101,16 @@ IOReturn AGXDeviceUserClient::exec(uint32_t channel, TegraGM20BAbiPush *input, u
 		const Bo *bo = findAddress(pushes[i].va, uint64_t(pushes[i].dwords) * 4);
 		if (!bo || !bo->backing)
 			return kIOReturnBadArgument;
-		jobUses_[useCount + i] = {bo->backing, switch_gpu_listed_access(TegraGM20BSurfaceRead), 0};
+		jobUses_[useCount + i] = {bo->backing,
+					  switch_gpu_listed_access(TegraGM20BSurfaceRead), 0};
 	}
 	if (!native)
-		useTotal = switch_gpu_legacy_uses(bos_, listed,
-			[this](uint64_t handle) { return surfaces_.listedAccess(handle); }, jobUses_);
+		useTotal = switch_gpu_legacy_uses(
+			bos_, listed,
+			[this](uint64_t handle) {
+				return surfaces_.listedAccess(handle);
+			},
+			jobUses_);
 	switch_gpu_backing_transaction transaction = {};
 	switch_gpu_backing_token completion = {};
 	uint32_t dependencies = 0;

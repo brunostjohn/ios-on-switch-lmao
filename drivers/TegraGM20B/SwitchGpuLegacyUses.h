@@ -22,7 +22,8 @@ static inline uint32_t switch_gpu_listed_access(uint32_t surface_access)
 	return access ? access | SWITCH_GPU_BACKING_NO_CPU_EXCLUSION : 0;
 }
 
-static inline uint32_t switch_gpu_legacy_access(bool listable, bool read_only, bool listed, uint32_t listed_access)
+static inline uint32_t switch_gpu_legacy_access(bool listable, bool read_only, bool listed,
+						uint32_t listed_access)
 {
 	const uint32_t touch = read_only ? SWITCH_GPU_BACKING_READ : SWITCH_GPU_BACKING_WRITE;
 	if (!listable || !listed)
@@ -38,12 +39,14 @@ static inline uint32_t switch_gpu_legacy_access(bool listable, bool read_only, b
 /* bos: the connection's BO list (next, backing, coh, readOnly, handle); listed_access(handle): the TegraGM20BSurface*
  * access the job's list gives an import. Returns the uses written to out, at most one per BO. */
 template <class Bo, class ListedAccess>
-uint32_t switch_gpu_legacy_uses(const Bo *bos, bool listed, ListedAccess listed_access, switch_gpu_backing_use *out)
+uint32_t switch_gpu_legacy_uses(const Bo *bos, bool listed, ListedAccess listed_access,
+				switch_gpu_backing_use *out)
 {
 	uint32_t count = 0;
 	for (const Bo *bo = bos; bo; bo = bo->next) {
 		const bool listable = bo->coh != nullptr;
-		const uint32_t access = switch_gpu_legacy_access(listable, bo->readOnly, listed,
+		const uint32_t access = switch_gpu_legacy_access(
+			listable, bo->readOnly, listed,
 			listable && listed ? listed_access(bo->handle) : 0u);
 		if (access)
 			out[count++] = {bo->backing, access, 0};

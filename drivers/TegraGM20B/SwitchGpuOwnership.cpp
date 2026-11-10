@@ -23,7 +23,8 @@ void switch_gpu_backing_drop_token(const switch_gpu_backing_token &token)
 		ops->release_token(&token);
 }
 
-namespace {
+namespace
+{
 uint64_t logged_producer;
 
 // What a failed write wrote is undefined, and its readers go on with it, as Metal's go on after a failed command buffer:
@@ -32,16 +33,20 @@ void note_failure(const switch_gpu_backing *backing, switch_gpu_backing_access &
 {
 	if (!access.noted && access.access == SWITCH_GPU_BACKING_WRITE) {
 		const auto &token = access.token;
-		const uint64_t producer = (uint64_t(token.engine) << 56) ^ (token.reset_generation << 32) ^ token.queue;
+		const uint64_t producer = (uint64_t(token.engine) << 56) ^
+					  (token.reset_generation << 32) ^ token.queue;
 		if (__atomic_exchange_n(&logged_producer, producer, __ATOMIC_RELAXED) != producer)
-			IOLog("SwitchGpu: surface %u (allocation %llu) holds undefined contents from generation %llu (now "
-			      "%llu): engine %u queue %u reset %llu job %llu failed (%d); its users go on\n",
-			      backing->surface_id, backing->id, access.content, backing->content, token.engine, token.queue,
-			      token.reset_generation, token.value, status);
+			IOLog("SwitchGpu: surface %u (allocation %llu) holds undefined contents "
+			      "from generation %llu (now "
+			      "%llu): engine %u queue %u reset %llu job %llu failed (%d); its "
+			      "users go on\n",
+			      backing->surface_id, backing->id, access.content, backing->content,
+			      token.engine, token.queue, token.reset_generation, token.value,
+			      status);
 	}
 	access.noted = true;
 }
-} // namespace
+}  // namespace
 
 void switch_gpu_backing_prune_locked(switch_gpu_backing *backing)
 {
@@ -69,8 +74,9 @@ constexpr uint32_t kUseMask = kAccessMask | kBesideCpu;
 
 uint32_t access_kind(uint32_t access)
 {
-	return (access & SWITCH_GPU_BACKING_WRITE ? SWITCH_GPU_BACKING_WRITE : SWITCH_GPU_BACKING_READ) |
-		(access & SWITCH_GPU_BACKING_UNLISTED);
+	return (access & SWITCH_GPU_BACKING_WRITE ? SWITCH_GPU_BACKING_WRITE
+						  : SWITCH_GPU_BACKING_READ) |
+	       (access & SWITCH_GPU_BACKING_UNLISTED);
 }
 
 // A backing used both listed and unlisted by one job is ordered by everything it may do, as a listed use.
@@ -151,8 +157,8 @@ static int begin(switch_gpu_backing_use *uses, uint32_t count,
 	if (!ops)
 		return -19;
 	for (uint32_t i = 0; i < count; ++i) {
-		if (!uses[i].backing || !(uses[i].access & kAccessMask) || (uses[i].access & ~kUseMask) ||
-		    uses[i].reserved)
+		if (!uses[i].backing || !(uses[i].access & kAccessMask) ||
+		    (uses[i].access & ~kUseMask) || uses[i].reserved)
 			return -22;
 		for (uint32_t j = i; j && uses[j].backing->id < uses[j - 1].backing->id; --j) {
 			const auto swap = uses[j];
@@ -256,7 +262,8 @@ extern "C" int switch_gpu_backing_dependencies(const switch_gpu_backing_transact
 			const int status = switch_gpu_backing_token_status(&access.token);
 			if (status < 0)
 				note_failure(use.backing, access, status);
-			if (status || switch_gpu_backing_same_timeline(access.token, transaction->completion))
+			if (status ||
+			    switch_gpu_backing_same_timeline(access.token, transaction->completion))
 				continue;
 			uint32_t existing = 0;
 			while (existing < *needed && existing < capacity &&
@@ -292,7 +299,8 @@ extern "C" void switch_gpu_backing_commit(switch_gpu_backing_transaction *transa
 			++backing->content;
 			backing->dirty |= SWITCH_GPU_BACKING_GPU_DIRTY;
 		}
-		backing->accesses[slot] = {transaction->completion, backing->content, access, false};
+		backing->accesses[slot] = {transaction->completion, backing->content, access,
+					   false};
 	}
 	unlock_transaction(transaction);
 }
