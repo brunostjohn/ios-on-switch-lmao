@@ -4,8 +4,8 @@ bool scanoutQualification = false;
 
 void initializeScanout()
 {
-    if (primary)
-        captureDisplayMemory();
+    if (primary && !captureDisplayMemory())
+        IOLog("SwitchDisplay: the display timing cannot be read: no memory admission, overlays off\n");
 #if (defined(DEVELOPMENT) && DEVELOPMENT) || (defined(DEBUG) && DEBUG)
     int qualification = 0;
     PE_parse_boot_argn("switch-display-qualification", &qualification, sizeof(qualification));

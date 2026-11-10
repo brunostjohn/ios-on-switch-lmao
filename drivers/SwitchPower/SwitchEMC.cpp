@@ -176,9 +176,12 @@ bool SwitchEMC::setup(char *why, size_t size)
     mcRegs = SwitchMMIOWords(switch_mmio_map(0x70019000, 0x1000));
     const auto emcProfile = switch_mmio_map(0x7001b000, 0x1000);
     const auto chipProfile = switch_mmio_map(0x70000800, 0x100);
-    memoryQualified =
-        mcRegs && emcProfile && chipProfile &&
-        switch_display::memoryProfile(switch_mmio_read32(chipProfile, 4), switch_mmio_read32(emcProfile, 0x104));
+    const uint32_t hidrev = chipProfile ? switch_mmio_read32(chipProfile, 4) : 0;
+    const uint32_t fbio = emcProfile ? switch_mmio_read32(emcProfile, 0x104) : 0;
+    memoryQualified = mcRegs && emcProfile && chipProfile && switch_display::memoryProfile(hidrev, fbio);
+    if (!memoryQualified)
+        IOLog("SwitchEMC: display memory admission off: HIDREV %#x FBIO_CFG5 %#x is not a T210B01 with LPDDR4\n",
+              hidrev, fbio);
     regs = switch_mmio_map(kActmonPA, 0x400);
     loop = IOWorkLoop::workLoop();
     IOService *nub = switch_interrupt_nub(kActmonIntid, false);
