@@ -6,7 +6,7 @@ import HWTestKit
 enum Tests27 {
     static let all: [any HWTest] = [
         GPUSceneTest(scene: CAGlassScene()), CAGlassSplitTest(), GPUSceneTest(scene: CAFetchRouteScene()),
-        Metal4Test(), BinaryArchiveTest(), UIGlassTest(),
+        Metal4Test(), BinaryArchiveTest(), UIGlassTest(), UIGlassMotionTest(),
         PocketStripTest(),
         TrueToneDefaultTest(), GlassPacing.over,
         GlassPacing.under, NoCameraTest(), FrameProcessorTest(),

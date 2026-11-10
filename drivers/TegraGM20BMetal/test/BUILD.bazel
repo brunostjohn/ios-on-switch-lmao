@@ -70,6 +70,8 @@
 #                     fit (compression tags, never Metal's compression flag), and the refusing keys' tally
 #   raw_fetch_order_test  raw/runtime/raw_fetch_order.h: the fetching draws refused as they are recorded (their encoder
 #                     alone goes to m2v) and those left to the CPU's geometry at submission
+#   raw_record_samplers_test  raw/runtime/raw_record.h: a record's constexpr entries index its own sampler headers whoever
+#                     made it (runtime, native seed), and the device places each header, the pack's first, once
 #   nak_half_round_test  NAK's rewrites of metal2vulkan's half emulation (nak_nir_algebraic.py): its rounding as two
 #                     conversions, the same for every f32 input; half sums and products in f32 as HADD2/HMUL2, the
 #                     same for every pair of halves; and fquantize2f16's widening as HADD2.F32 (nak/from_nir.rs)
@@ -917,6 +919,21 @@ host_test(
         "//drivers/TegraGM20BMetal:raw/pack/probe_bind.h",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_pack.h",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_residual.h",
+    ],
+    cxx_std = "c++17",
+)
+
+host_test(
+    name = "raw_record_samplers_test",
+    srcs = [
+        "raw_record_samplers_test.cpp",
+        "//drivers/TegraGM20BMetal:raw/pack/probe_bind.h",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_owned.h",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_pack.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_pack.h",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_record.h",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_record_parts.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_record_parts.h",
     ],
     cxx_std = "c++17",
 )

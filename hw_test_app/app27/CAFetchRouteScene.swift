@@ -112,8 +112,9 @@ struct CAFetchRouteScene: GPUScene {
             let refused = after.keys.filter { $0.hasPrefix("fetch_record.") || $0.hasPrefix("fetch_encode.") }
                 .reduce(0) { $0 + moved($1) }
             let ordered = moved("fetch_whole") + moved("fetch_sequential")
+            // a pass the raw path refuses as it begins (m2v:pass:...) records no draw, so no fetch counter can move
             result.expect(
-                interlocked + refused + ordered > 0,
+                timing.path.hasPrefix("m2v:pass:") || interlocked + refused + ordered > 0,
                 "\(name): no fetch counter moved: the pipeline did not fetch the colour it writes")
             if interlocked == 0 && refused > 0 {
                 result.expect(!timing.path.hasPrefix("raw"), "\(name): refused, yet drawn raw: \(timing.path)")

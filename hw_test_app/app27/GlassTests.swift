@@ -64,6 +64,67 @@ struct UIGlassTest: HWTest {
     }
 }
 
+/// ui.glass while the stripes under the glass and the glass itself move, so the render server captures and blurs a new
+/// backdrop for each frame. In every one of the composited frames the glass over the grey must not be black.
+struct UIGlassMotionTest: HWTest {
+    let id = "ui.glass_motion"
+    let name = "UIGlassEffect while its backdrop and the glass move"
+    let subsystem = Subsystem.compositor
+    static let frames = 24
+
+    func run(_ context: TestContext) async throws -> Outcome {
+        let (root, stripes, glass) = await context.onStage(fullScreen: true) { stage -> (UIView, UIView, UIView) in
+            let screen = UIScreen.main.bounds
+            let root = UIView(frame: Snapshots.aligned(screen))
+            let stripes = BackdropStripes(
+                frame: CGRect(x: -64, y: 0, width: screen.width / 2 + 64, height: screen.height))
+            root.addSubview(stripes)
+            let grey = UIView(frame: CGRect(x: screen.width / 2, y: 0, width: screen.width / 2, height: screen.height))
+            grey.backgroundColor = UIColor(white: 0.5, alpha: 1)
+            root.addSubview(grey)
+            let glass = UIVisualEffectView(effect: UIGlassEffect(style: .regular))
+            glass.frame = Snapshots.aligned(
+                CGRect(x: 0, y: screen.height / 4, width: screen.width, height: screen.height / 2))
+            root.addSubview(glass)
+            stage.addSubview(root)
+            return (root, stripes, glass)
+        }
+        await Snapshots.settle()
+        var black: [Int] = []
+        var darkest: Float = 3
+        for frame in 0..<Self.frames {
+            let composited = await MainActor.run { () -> Raster in
+                stripes.transform = CGAffineTransform(translationX: CGFloat(frame % 8) * 8, y: 0)
+                glass.transform = CGAffineTransform(translationX: 0, y: CGFloat(frame % 4) * 4)
+                return Snapshots.composited(root)
+            }
+            let inset = composited.height / 16
+            let (top, height, half) =
+                (composited.height / 4 + inset + 16, composited.height / 2 - 2 * inset - 16, composited.width / 2)
+            let grey = Backdrop.overUniform(
+                composited.cropped(x: half + inset, y: top, width: half - 2 * inset, height: height))
+            let level = grey.mean.prefix(3).reduce(0, +)
+            darkest = min(darkest, level)
+            if level <= 0.12 {
+                black.append(frame)
+                if black.count == 1 {
+                    let directory = context.documents.appendingPathComponent("ui").appendingPathComponent(id)
+                    try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+                    try? composited.png()?.write(to: directory.appendingPathComponent("black-\(frame).png"))
+                }
+            }
+        }
+        var metrics = Metrics()
+        metrics.set("frames", Self.frames)
+        metrics.set("black_frames", black.count)
+        metrics.set("first_black", black.first ?? -1)
+        metrics.set("darkest", Int((darkest / 3 * 255).rounded()))
+        return black.isEmpty
+            ? .pass(metrics)
+            : .fail("\(black.count) of \(Self.frames) frames show the glass over the grey black", metrics)
+    }
+}
+
 /// pacing.blur_over and pacing.blur_under with Liquid Glass in the blur's place: iOS 27 draws glass under every bar,
 /// button and sheet, so it must hold 60 Hz like any other scene.
 enum GlassPacing {

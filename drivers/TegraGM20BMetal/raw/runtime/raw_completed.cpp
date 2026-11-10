@@ -133,20 +133,17 @@ Pipeline *Device::addRecord(const RuntimeRecord &r, bool caTransform, std::strin
         why = "missing or invalid ordered storage attachment metadata";
         return nullptr;
     }
-    // its constexpr samplers past the pack's own, numbered among the device's
-    const uint32_t packSamplers = pack_.header()->samplers;
-    for (uint32_t k = 0; k < c.record.entries; k++) {
-        PackEntry &e = c.record.entry[k];
-        if (e.kind == EntryUbo || e.samplerKind != SamplerConstexpr || e.sampler < packSamplers)
-            continue;
-        uint32_t index = 0;
-        if (!constexprSampler(r.samplers.at(e.sampler - packSamplers), index)) {
-            why = "no room for its sampler headers";
-            if (retry)
-                *retry = true;
-            return nullptr;
-        }
-        e.sampler = uint8_t(index);
+    bool unknownSampler = false;
+    if (!placeConstexprSamplers(
+            c.record, r.samplers,
+            [&](const std::array<uint32_t, 8> &words, uint32_t &index) {
+                return constexprSampler(words, index);
+            },
+            unknownSampler)) {
+        why = unknownSampler ? "a constexpr sampler the record holds no header of" : "no room for its sampler headers";
+        if (retry)
+            *retry = !unknownSampler;
+        return nullptr;
     }
     Completed &stored = completedStore_.emplace_back(std::move(c));
     build(stored.pipeline, stored.record, vs, fs, stored.blob.data(), stored.keyString.c_str(), caTransform);
