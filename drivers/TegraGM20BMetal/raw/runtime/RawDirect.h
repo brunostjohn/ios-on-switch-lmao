@@ -8,7 +8,6 @@
 #include <string>
 #include <vector>
 #include "bridge/NativeMetalDirect.h"
-#include "raw_compiler.h"
 #include "raw_compute_record.h"
 #include "raw_cubic.h"
 #include "raw_direct.h"
@@ -51,22 +50,22 @@ public:
 
     // The record of the state `descriptor` (of m2v's functions) describes, whose pack key is `key`; `registers`: as
     // directRecord's; `split`: with its fragment program's split (directRecord)
-    Compiler::Outcome make(MTLRenderPipelineDescriptor *descriptor, const std::string &key, RuntimeRecord &out,
-                           std::string &why, ProbeTextures textures = {},
-                           std::map<uint32_t, uint32_t> *registers = nullptr, bool split = false,
-                           PackForm requested = PackForm::Default);
+    CompileOutcome make(MTLRenderPipelineDescriptor *descriptor, const std::string &key, RuntimeRecord &out,
+                        std::string &why, ProbeTextures textures = {},
+                        std::map<uint32_t, uint32_t> *registers = nullptr, bool split = false,
+                        PackForm requested = PackForm::Default);
     // The record of `descriptor`'s kernel at a dispatch of `dispatch`'s shape and bindings, whose compute key is `key`
     // (raw_direct_compute.h)
-    Compiler::Outcome kernel(MTLComputePipelineDescriptor *descriptor, const NmbDirectDispatch &dispatch,
-                             const std::string &key, ComputeRecord &out, std::string &why);
+    CompileOutcome kernel(MTLComputePipelineDescriptor *descriptor, const NmbDirectDispatch &dispatch,
+                          const std::string &key, ComputeRecord &out, std::string &why);
 
 private:
     PackRules rules_;
     DirectNvk nvk_;
 
-    Compiler::Outcome form(MTLRenderPipelineDescriptor *descriptor, bool barrier, ProbeTextures textures,
-                           const std::string &key, const std::vector<uint32_t> &attributes, RuntimeRecord &out,
-                           std::string &why, std::map<uint32_t, uint32_t> *registers, bool split);
+    CompileOutcome form(MTLRenderPipelineDescriptor *descriptor, bool barrier, ProbeTextures textures,
+                        const std::string &key, const std::vector<uint32_t> &attributes, RuntimeRecord &out,
+                        std::string &why, std::map<uint32_t, uint32_t> *registers, bool split);
 };
 
 }  // namespace raw

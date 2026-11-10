@@ -61,6 +61,19 @@ py_binary(
     srcs = ["raw_stack.py"],
 )
 
+py_test(
+    name = "raw_stack_test",
+    srcs = [
+        "raw_stack.py",
+        "raw_stack_test.py",
+    ],
+    data = [
+        "//drivers/TegraGM20BMetal:raw_stack_sources",
+        "//drivers/TegraGM20BMetal:raw_tree",
+        "//gpu:raw_stack_inputs",
+    ],
+)
+
 py_binary(
     name = "assemble",
     srcs = ["assemble.py"],

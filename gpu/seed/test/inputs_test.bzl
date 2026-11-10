@@ -7,7 +7,7 @@
 - the join reads the buckets' indexes and reports, never their packs or the tools;
 - the bundle check is a validation action, so the GPU bundle is no input of anything that makes the seed;
 - the raw pack's probes read their bucket's states, the probe tools, the twin and QuartzCore's library, and only the
-  stamp reads the tools' manifest (the stack key, which every raw/ edit changes).
+  stamp reads the tools' manifest (the stack key).
 """
 
 load("@bazel_skylib//lib:unittest.bzl", "analysistest", "asserts")

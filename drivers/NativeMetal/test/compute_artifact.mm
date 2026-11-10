@@ -157,7 +157,7 @@ int main(int argc, char **argv)
         raw::ComputeRecord before, after;
         std::string why;
         if (direct.kernel(descriptor, dispatch.dispatch(), "artifact test", before, why) !=
-            raw::Compiler::Outcome::Made) {
+            raw::CompileOutcome::Made) {
             fprintf(stderr, "baseline compile: %s\n", why.c_str());
             return 1;
         }
@@ -202,7 +202,7 @@ int main(int argc, char **argv)
         raw::CacheKey key;
         const auto baseline = raw::encodeKernelEntry(key, &before, "");
         const auto prepared = raw::encodeKernelEntry(key, &after, "");
-        check(made == raw::Compiler::Outcome::Made && baseline == prepared,
+        check(made == raw::CompileOutcome::Made && baseline == prepared,
               "artifact dispatch exactly matches descriptor compile");
         check([[NSData dataWithBytes:baseline.data() length:baseline.size()]
                   writeToFile:[@(argv[2]) stringByAppendingPathComponent:@"descriptor.kernel"]

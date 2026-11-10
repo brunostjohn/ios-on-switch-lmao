@@ -22,8 +22,8 @@ void missing(const char *cls, const char *sel)
     fprintf(stderr, "MISSING -[%s %s]\n", cls, sel);
 }
 
-raw::Compiler::Outcome make(raw::Direct &direct, const probe::Kernel &k, const uint32_t threads[3], std::string &key,
-                            raw::ComputeRecord &rec, std::string &why)
+raw::CompileOutcome make(raw::Direct &direct, const probe::Kernel &k, const uint32_t threads[3], std::string &key,
+                         raw::ComputeRecord &rec, std::string &why)
 {
     probe::Shape shape = k.shape;
     memcpy(shape.threads, threads, sizeof shape.threads);
@@ -72,15 +72,15 @@ void checkShapes(raw::Direct &direct, const probe::Kernel &k, Counts &n)
 {
     std::string key, why;
     raw::ComputeRecord base, same, twice;
-    if (make(direct, k, k.shape.threads, key, base, why) != raw::Compiler::Outcome::Made) {
+    if (make(direct, k, k.shape.threads, key, base, why) != raw::CompileOutcome::Made) {
         n.refused++;
         printf("SHAPE %s refused (%s)\n", k.shape.function.c_str(), why.c_str());
         return;
     }
     uint32_t sameThreads[3], twiceThreads[3];
     otherShapes(k.shape.threads, sameThreads, twiceThreads);
-    const bool madeSame = make(direct, k, sameThreads, key, same, why) == raw::Compiler::Outcome::Made;
-    const bool madeTwice = make(direct, k, twiceThreads, key, twice, why) == raw::Compiler::Outcome::Made;
+    const bool madeSame = make(direct, k, sameThreads, key, same, why) == raw::CompileOutcome::Made;
+    const bool madeTwice = make(direct, k, twiceThreads, key, twice, why) == raw::CompileOutcome::Made;
     const std::string a = madeSame ? programAnswer(base, same) : "refused",
                       b = madeTwice ? programAnswer(base, twice) : "refused";
     n.answers["same threads: " + a]++;
@@ -98,18 +98,18 @@ void checkPack(raw::Direct &direct, const raw::Pack &pack, const probe::Kernel &
     std::string why;
     std::unique_ptr<raw::KernelDispatch> kd;
     probe::dispatchOf(k.shape, k.shape.threads, k.textures, kd);
-    const raw::Compiler::Outcome outcome = direct.kernel(k.descriptor, kd->dispatch(), k.key, rec, why);
+    const raw::CompileOutcome outcome = direct.kernel(k.descriptor, kd->dispatch(), k.key, rec, why);
     const raw::PackKernel *pk = pack.findKernel(raw::computeKeyHash(k.key));
     n.kernels++;
     std::string verdict;
-    if (outcome == raw::Compiler::Outcome::Failed) {
+    if (outcome == raw::CompileOutcome::Failed) {
         verdict = " failed (" + why + ")";
     } else if (pk) {
         n.met++;
-        verdict = outcome == raw::Compiler::Outcome::Made ? kernelcompare::differences(pack, *pk, rec)
-                                                          : " refused (" + why + ")";
+        verdict = outcome == raw::CompileOutcome::Made ? kernelcompare::differences(pack, *pk, rec)
+                                                       : " refused (" + why + ")";
         n.same += verdict.empty();
-    } else if (outcome == raw::Compiler::Outcome::Made) {
+    } else if (outcome == raw::CompileOutcome::Made) {
         verdict = " made, and the pack set it aside";
     } else {
         n.refused++;

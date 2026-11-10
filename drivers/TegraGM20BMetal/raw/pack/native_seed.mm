@@ -52,12 +52,12 @@ bool compile(raw::Direct &direct, raw::RecordCache &cache, const precompile::Ren
     raw::RuntimeRecord record;
     std::string why;
     const auto outcome = direct.make(input.descriptor, result.key.key, record, why, {}, nullptr, true);
-    result.status = outcome == raw::Compiler::Outcome::Made      ? @"made"
-                    : outcome == raw::Compiler::Outcome::Refused ? @"refused"
-                                                                 : @"failed";
+    result.status = outcome == raw::CompileOutcome::Made      ? @"made"
+                    : outcome == raw::CompileOutcome::Refused ? @"refused"
+                                                              : @"failed";
     result.reason = @(why.c_str());
-    if (outcome != raw::Compiler::Outcome::Made)
-        return outcome != raw::Compiler::Outcome::Failed;
+    if (outcome != raw::CompileOutcome::Made)
+        return outcome != raw::CompileOutcome::Failed;
     const std::string relative = "raw-" + hex(result.key.stack) + "/" + hex(result.key.name()) + ".rec";
     raw::RuntimeRecord loaded;
     if (!cache.store(result.key, &record, "") ||

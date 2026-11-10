@@ -117,34 +117,27 @@ rust_artifact(
     kind = "device_mac",
 )
 
-# The raw GM20B path's stack key: compiled into the plugin and stamped into the raw pack (a pack of another build is
-# refused on the device). Hashes NVK, m2v's sources, the bridge sources, the frontend and raw/'s sources.
+# The raw GM20B path's stack key: compiled into the plugin and stamped into the raw pack and the native seed, whose
+# records a plugin of another key refuses, and naming each process's record cache. What a record is made and read by
+# (gpu/defs.bzl raw_stack), so an edit to the rest of the raw runtime keeps every record made.
 raw_stack(
     name = "raw_stack",
-    srcs = [
-        METAL + ":bridge/NativeMetalBridge.rs",
-        METAL + ":bridge/NativeMetalDirect.rs",
-        METAL + ":bridge/NativeMetalDirectCompute.rs",
-        METAL + ":bridge/NativeMetalComputeArtifact.rs",
-        METAL + ":bridge/NativeMetalArtifactCodec.rs",
-        METAL + ":bridge/NativeMetalReflection.rs",
-        METAL + ":bridge/NativeMetalVariants.rs",
-        METAL + ":bridge/NativeMetalFailure.rs",
-        METAL + ":bridge/NativeMetalObjects.rs",
-        METAL + ":bridge/NativeMetalTarget.rs",
-        METAL + ":bridge/NativeMetalBlend.h",
-        METAL + ":bridge/NativeMetalComputeArtifact.h",
-        METAL + ":bridge/NativeMetalDirect.h",
-        METAL + ":NativeBridgeMetalFrontend.mm",
-        GM20B_METAL + ":raw_stack_sources",
+    srcs = [GM20B_METAL + ":raw_stack_sources"],
+    bridge = ":bridge",
+    include_markers = [
+        METAL + ":NativeBridgeMetalFrontend.h",
+        GM20B_ABI,
     ],
-    m2v = [
-        "//third_party/m2v/crates/metal2vulkan:sources",
-        "//third_party/m2v/crates/metal2vulkan-air:sources",
-        "//third_party/m2v/crates/metal2vulkan-runtime:sources",
-    ],
-    m2v_root = "//third_party/m2v:Cargo.toml",
+    metal_abi = METAL_ABI,
     nvk = NVK,
+    readers = [GM20B_METAL + ":raw/runtime/raw_completed.cpp"],
+)
+
+# The paths the stack key hashes (tools/gpu/raw_stack_test.py)
+filegroup(
+    name = "raw_stack_inputs",
+    srcs = [":raw_stack"],
+    output_group = "inputs",
 )
 
 metal_plugin(

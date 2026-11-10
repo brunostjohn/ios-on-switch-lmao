@@ -19,11 +19,7 @@ class CompileSlots;
 // most, each after a wait four times the last's (the first `retryUs`).
 class Compiler {
 public:
-    enum class Outcome : uint8_t {
-        Made,
-        Refused,  // the state's own reason (kept on disk: the same probe would refuse it again)
-        Failed    // the probe could not run (not kept: a later process may)
-    };
+    using Outcome = CompileOutcome;
 
     using Make = std::function<Outcome(const CacheKey &k, RuntimeRecord &record, std::string &why)>;
     // Called on the queue once the state is made (`record` null: refused, `why`)
