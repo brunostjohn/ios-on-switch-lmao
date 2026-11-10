@@ -87,6 +87,7 @@ private:
 TEST(ScheduledWait, OnlyASharedEventWaitHoldsTheQueue)
 {
     EXPECT_TRUE(raw::holds(raw::HeadWait::event));
+    EXPECT_FALSE(raw::holds(raw::HeadWait::promised));
     EXPECT_FALSE(raw::holds(raw::HeadWait::compile));
     EXPECT_FALSE(raw::holds(raw::HeadWait::signal));
     EXPECT_FALSE(raw::holds(raw::HeadWait::order));

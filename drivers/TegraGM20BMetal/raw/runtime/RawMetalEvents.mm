@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #import "RawMetalInternal.h"
+#include "raw_promised_signals.h"
 
 @implementation RMCommandBuffer (Events)
 
@@ -90,6 +91,74 @@ void forgetSignals()
     [gRM->m2vSignals removeAllObjects];
 }
 
+static raw::RangeKind rangeKind(RMCommandBuffer *cb, size_t at)
+{
+    const RMSegment &range = cb->_segs[at];
+    if (!range.event)
+        return range.raw ? raw::RangeKind::native : raw::RangeKind::compatibility;
+    return cb->_plan.operation(range.from).op == OpSignalEvent ? raw::RangeKind::signal : raw::RangeKind::wait;
+}
+
+// The raw range at _segNext was just submitted: the signals right after it are promised, to be published as it completes
+// (raw_promised_signals.h), so they no longer hold its queue's head until then
+std::vector<RMEventSignal> publishRawEventSignals(RMCommandBuffer *cb)
+{
+    std::vector<RMEventSignal> signals;
+    const uint32_t generation = gRM->raw->channelGeneration();
+    if (!cb->_rawGeneration)
+        cb->_rawGeneration = generation;
+    const size_t next = cb->_segNext + 1;
+    if (next >= cb->_segs.size() || rangeKind(cb, next) != raw::RangeKind::signal)
+        return signals;
+    bool failed;
+    {
+        std::lock_guard<std::mutex> l(cb->_lock);
+        failed = cb->_segError != nil;
+    }
+    const size_t end = raw::promisedSignalsEnd(
+        [cb](size_t at) {
+            return rangeKind(cb, at);
+        },
+        cb->_segs.size(), cb->_segNext, cb->_rawGeneration == generation, failed);
+    std::vector<raw::EventTimeline::Key> wake;
+    std::lock_guard<std::mutex> l(gRM->eventValues);
+    for (size_t at = next; at < end; ++at) {
+        RMSegment &range = cb->_segs[at];
+        const Cmd event = cb->_plan.legacy(range.from);
+        auto promise =
+            gRM->events.publish(reinterpret_cast<uintptr_t>(event.obj), event.c, {cb->_seqno, generation}, wake);
+        if (!promise)
+            break;
+        signals.push_back({event.obj, std::move(promise)});
+        range.promised = true;
+    }
+#if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
+    gRM->stats.signalsPublished += signals.size();
+#endif
+    return signals;
+}
+
+// The raw range the signals followed completed: on success each value is written before its promise leaves the
+// registry, so a wait never finds it neither promised nor reached
+void retireEventSignals(const std::vector<RMEventSignal> &signals, bool success)
+{
+    for (const RMEventSignal &signal : signals) {
+        if (success) {
+            id<MTLSharedEvent> event = (__bridge id)signal.event;
+            if (event.signaledValue < signal.promise->value)
+                event.signaledValue = signal.promise->value;
+        }
+        std::lock_guard<std::mutex> l(gRM->eventValues);
+        gRM->events.retire(reinterpret_cast<uintptr_t>(signal.event), signal.promise, success);
+    }
+}
+
+bool promisedEvent(void *event, uint64_t value)
+{
+    std::lock_guard<std::mutex> l(gRM->eventValues);
+    return gRM->events.promised(reinterpret_cast<uintptr_t>(event), value);
+}
+
 void armEventWaits(RMCommandBuffer *cb)
 {
     cb->_eventWaits.clear();
@@ -107,6 +176,8 @@ raw::EventReadiness eventReadiness(RMCommandBuffer *cb, raw::EventDeadline::Time
         return Readiness::ready;
     const Cmd c = cb->_plan.legacy(range.from);
     if (c.op == OpSignalEvent) {
+        if (range.promised)
+            return Readiness::ready;
         std::lock_guard<std::mutex> l(cb->_lock);
         return cb->_segmentPending ? Readiness::blocked : Readiness::ready;
     }
@@ -123,6 +194,10 @@ raw::EventReadiness eventReadiness(RMCommandBuffer *cb, raw::EventDeadline::Time
         cb->_eventArmed = range.from + 1;
         cb->_eventStart = raw::EventDeadline::Clock::now();
         cb->_eventWaits.push_back(range.from);
+#if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
+        if (promisedEvent(c.obj, c.c))
+            gRM->stats.waitsOnPromise++;
+#endif
         // Registration is done outside the scheduler mutex: an already satisfied event may deliver its notification
         // immediately. The callback does not retain a command buffer or scan unrelated dependency lists.
         [event notifyListener:gRM->listener

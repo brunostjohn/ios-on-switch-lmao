@@ -1047,6 +1047,12 @@ public:
         return *fence_;
     }
 
+    // Which channel the device submits on: it changes each time the kernel makes the channel (again), 0 before the first
+    uint32_t channelGeneration() const
+    {
+        return k_.opened();
+    }
+
     // 0 before the channel is made (it may be made on another thread: a client's first mipmapped texture)
     uint32_t submitted() const
     {

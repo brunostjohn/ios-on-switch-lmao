@@ -42,9 +42,10 @@ void retireRawRange(RMCommandBuffer *cb, size_t from, size_t to)
         std::lock_guard<std::mutex> l(cb->_lock);
         ++cb->_segmentPending;
     }
+    std::vector<RMEventSignal> signals = publishRawEventSignals(cb);
     {
         std::lock_guard<std::mutex> l(gRM->doneLock);
-        gRM->inflight.push_back({cb, cb->_seqno, from, to});
+        gRM->inflight.push_back({cb, cb->_seqno, from, to, std::move(signals)});
     }
     gRM->doneChanged.notify_one();
 }
@@ -129,9 +130,18 @@ void scheduled(RMCommandBuffer *cb)
 // for NMB_IDLE_RELEASE_MS (each completion moves the deadline)
 GpuMemoryRelease &gRawRelease = *new GpuMemoryRelease;
 
-void segmentCompleted(RMCommandBuffer *cb, NSError *error, size_t from, size_t to)
+void segmentCompleted(RMCommandBuffer *cb, NSError *error, size_t from, size_t to,
+                      const std::vector<RMEventSignal> &signals)
 {
     markWrittenRange(cb, from, to);
+    if (!signals.empty()) {
+        bool failed;
+        {
+            std::lock_guard<std::mutex> l(cb->_lock);
+            failed = error || cb->_segError;
+        }
+        retireEventSignals(signals, !failed);
+    }
     bool ready;
     {
         std::lock_guard<std::mutex> l(cb->_lock);
@@ -319,7 +329,7 @@ void completionLoop()
                                 : [NSError errorWithDomain:MTLCommandBufferErrorDomain
                                                       code:MTLCommandBufferErrorInternal
                                                   userInfo:nil],
-                             retired.from, retired.to);
+                             retired.from, retired.to, retired.signals);
         }
     }
 }

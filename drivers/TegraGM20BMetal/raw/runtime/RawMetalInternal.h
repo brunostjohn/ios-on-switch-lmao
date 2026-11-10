@@ -29,6 +29,7 @@
 #include "../../../../kits/SwitchRefusal/SwitchRefusalSite.h"
 #include "RawAlias.h"
 #include "RawComplete.h"
+#include "raw_event_timeline.h"
 #include "raw_follow.h"
 #include "raw_gpu.h"
 #include "TegraGM20BLayout.h"
@@ -82,6 +83,9 @@ uint64_t nowUs();
 struct Stats {
     std::atomic<uint64_t> raw{0}, m2v{0}, deferred{0}, aborted{0}, encodeUs{0}, draws{0}, passes{0}, copies{0},
         reasons[WhyCount]{}, switches{0}, cpuOrdered{0}, acquires{0}, eventsReleased{0}, heldReturns{0};
+    // signals published as the raw range before them completed (raw_promised_signals.h); signals the CPU set once its
+    // queue's head had waited for the work before them; event waits armed on a value a submitted command buffer promised
+    std::atomic<uint64_t> signalsPublished{0}, signalsAfterWork{0}, waitsOnPromise{0};
     // diagnostics (r10-rawsweep): the raw encode thrown away by aborted command buffers, the m2v replay's time on the committing
     // thread (replay + commit), and the bytes replay cleans
     std::atomic<uint64_t> abortUs{0}, replayUs{0}, replayClean{0};
@@ -139,10 +143,16 @@ private:
 // subclass of the m2v device's own class (raw_metal_device_open), so it is an _MTLDevice that conforms to Metal's protocols as
 // the m2v device does and answers every selector the facade does not override with the m2v device's own method; it has no
 // instance variables of its own (the base class's ABI is fixed), so its state lives here.
+struct RMEventSignal {
+    void *event;
+    raw::EventTimeline::Promise promise;
+};
+
 struct RMRawRetirement {
     RMCommandBuffer *buffer;
     uint32_t seqno;
     size_t from, to;
+    std::vector<RMEventSignal> signals;  // the signals after it, published as it completes (publishRawEventSignals)
 };
 
 struct RawState {
@@ -152,6 +162,7 @@ struct RawState {
     std::mutex submit;
     std::mutex schedule;
     std::mutex eventValues;
+    raw::EventTimeline events;  // eventValues held
     raw::SubmitQueue<void *, RMCommandBuffer *> waiting;
     std::condition_variable waitingChanged;
     uint64_t scheduleGeneration = 0;
@@ -290,6 +301,10 @@ bool submitLocked(RMCommandBuffer *cb);
 void unhold(RMCommandBuffer *cb);
 uint64_t signalled(NSMapTable *map, void *event);
 void forgetSignals();
+std::vector<RMEventSignal> publishRawEventSignals(RMCommandBuffer *cb);
+void retireEventSignals(const std::vector<RMEventSignal> &signals, bool success);
+// A submitted command buffer signals at least `value` on `event` once its work completes
+bool promisedEvent(void *event, uint64_t value);
 
 // RawMetalFinish.mm
 void forEachWritten(RMCommandBuffer *cb, size_t from, size_t to, void (*written)(void *));
@@ -298,7 +313,8 @@ void scheduled(RMCommandBuffer *cb);
 dispatch_queue_t followingRootQueue();
 dispatch_queue_t followingSerialQueue(const char *label);
 void finish(RMCommandBuffer *cb, NSError *error);
-void segmentCompleted(RMCommandBuffer *cb, NSError *error, size_t from, size_t to);
+void segmentCompleted(RMCommandBuffer *cb, NSError *error, size_t from, size_t to,
+                      const std::vector<RMEventSignal> &signals = {});
 void retireRawRange(RMCommandBuffer *cb, size_t from, size_t to);
 void markWrittenRange(RMCommandBuffer *cb, size_t from, size_t to);
 void completionLoop();

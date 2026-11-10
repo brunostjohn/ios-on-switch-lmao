@@ -79,13 +79,19 @@ static int pipelineReadiness(RMCommandBuffer *cb, const RMSegment &range)
     return pending ? 0 : 1;
 }
 
-// What a head eventReadiness found blocked waits for: a wait's shared event value nothing reached yet, or, for a signal,
-// its own earlier work
+// What a head eventReadiness found blocked waits for: its own earlier work, a value a submitted command buffer promised, or a
+// shared event value nothing reached yet
 static raw::HeadWait eventWait(RMCommandBuffer *cb)
 {
-    const bool wait = cb->_segNext < cb->_segs.size() && cb->_segs[cb->_segNext].event &&
-                      cb->_plan.operation(cb->_segs[cb->_segNext].from).op == OpWaitEvent;
-    return wait ? raw::HeadWait::event : raw::HeadWait::signal;
+    {
+        std::lock_guard<std::mutex> l(cb->_lock);
+        if (cb->_segmentPending)
+            return raw::HeadWait::signal;
+    }
+    const Cmd c = cb->_plan.legacy(cb->_segs[cb->_segNext].from);
+    if (c.op != OpWaitEvent)
+        return raw::HeadWait::signal;
+    return promisedEvent(c.obj, c.c) ? raw::HeadWait::promised : raw::HeadWait::event;
 }
 
 static void park(std::vector<void *> &parked, RMCommandBuffer *cb, raw::HeadWait wait)

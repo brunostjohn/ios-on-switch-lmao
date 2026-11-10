@@ -191,11 +191,14 @@ bool submitLocked(RMCommandBuffer *cb)
     const bool lastWork = onlySignalsAfter(cb, cb->_segNext);
     if (range.event) {
         const Cmd event = cb->_plan.legacy(range.from);
-        if (event.op == OpSignalEvent) {
+        if (event.op == OpSignalEvent && !range.promised) {
             // eventReadiness required all earlier submitted ranges to retire successfully before reaching this position.
             id<MTLSharedEvent> target = (__bridge id)event.obj;
             if (target.signaledValue < event.c)
                 target.signaledValue = event.c;
+#if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
+            r.stats.signalsAfterWork++;
+#endif
         }
         cb->_eventStart = {};
         cb->_eventArmed = 0;

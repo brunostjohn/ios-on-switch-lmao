@@ -6,10 +6,11 @@
 namespace raw {
 
 enum class HeadWait {
-    event,    // a shared event value nothing reached yet
-    compile,  // a pipeline being made at the committers' priority, which waits for nothing its caller does
-    signal,   // its own earlier work, before a signal after it is published
-    order,    // the other driver's work, ordered on the CPU
+    event,     // a shared event value nothing reached yet
+    promised,  // a shared event value a submitted command buffer publishes as its work completes (raw_event_timeline.h)
+    compile,   // a pipeline being made at the committers' priority, which waits for nothing its caller does
+    signal,    // its own earlier work, before a signal or wait after it
+    order,     // the other driver's work, ordered on the CPU
 };
 
 // The kernel orders a present only after the writers it already has, so a command buffer counts as scheduled before its
