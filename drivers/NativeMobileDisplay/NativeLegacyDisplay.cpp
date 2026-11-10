@@ -1037,8 +1037,6 @@ class NativeLegacyDisplay : public IOMobileFramebufferLegacy {
                            kWinOptions};  // WIN_OPTIONS last: the window is enabled once the rest is in place
     uint32_t savedWindow[sizeof(kWindowAState) / sizeof(kWindowAState[0])] = {};
     uint32_t savedDispWinOptions = 0, savedActControl = 0, savedScratchB = 0, savedIntEnable = 0, savedIntMask = 0;
-    // Copy time, for the occasional log line (the probe's counters are never printed).
-    uint64_t copyFrames = 0, copyTicksSum = 0, copyTicksMax = 0;
     static constexpr uint64_t kGpuWaitNs = 100000000ULL;
     // Off-gate copy (hardware rotation only): the kick hands a surface swap's GPU wait, scans and
     // swizzle to copyLoop's thread and returns, so neither the compositor's submitting thread nor the family's gate (and with it the
@@ -1724,8 +1722,9 @@ private:
         span("copy", stCopy);
         span("gpu-copy", stGpuCopy);
         add(" read %llu", static_cast<unsigned long long>(Span::ticksToUs(stRead)));
-        add(") us mean/max; copy fast %u byte %u gpu %u (declined %u); vsync %u sent %llu.%llu/s of %u vblanks,",
-            stFast, stByte, stGpuCopies, stGpuDeclined, stVsyncs, rate(stVsyncs) / 10, rate(stVsyncs) % 10, vblanks);
+        add(") us mean/max; copy fast %u byte %u (cpu-copies %llu since boot) gpu %u (declined %u); vsync %u sent "
+            "%llu.%llu/s of %u vblanks,", stFast, stByte, copyFrames, stGpuCopies, stGpuDeclined, stVsyncs,
+            rate(stVsyncs) / 10, rate(stVsyncs) % 10, vblanks);
         span("late", stVsyncLate);
         add(" us; %u gpu timeouts, %u new maps, %u underflow frames; attr source %#x target %#x", stGpuTimeouts,
             stNewMaps, stUnderflows, stSourceAttr,
@@ -3104,31 +3103,7 @@ private:
         }
     }
 
-    // Copy time of the last swap, with the running maximum and mean, at the 60th swap and every 600th after: the only hardware
-    // measurement of the scanout copy (cntpct_el0, the architected counter at the ADT's timebase frequency).
-    void noteCopy(uint64_t ticks)
-    {
-        copyFrames = copyFrames + 1;
-        copyTicksSum = copyTicksSum + ticks;
-        if (ticks > copyTicksMax)
-            copyTicksMax = ticks;
-        if (copyFrames != 60 && copyFrames % 600)
-            return;
-        const uint64_t hz = gPEClockFrequencyInfo.timebase_frequency_hz;
-        if (!hz)
-            return;
-        // Double-buffered, the copy time is still only the copy: a swap that waits for the previous flip's latch waits before it.
-        if (doubleBuffer) {
-            IOLog("SwitchDisplay: block-linear copy %llu us, max %llu us, mean %llu us over %llu swaps "
-                  "(double-buffered, %llu waited for a flip)\n",
-                  ticks * 1000000 / hz, copyTicksMax * 1000000 / hz, copyTicksSum / copyFrames * 1000000 / hz,
-                  copyFrames, flipWaits);
-        } else {
-            IOLog("SwitchDisplay: %s copy %llu us, max %llu us, mean %llu us over %llu swaps\n",
-                  hwRotate ? "block-linear" : "rotating", ticks * 1000000 / hz, copyTicksMax * 1000000 / hz,
-                  copyTicksSum / copyFrames * 1000000 / hz, copyFrames);
-        }
-    }
+#include "SwitchCpuScanoutCopy.h"
 
 public:
     // Display power (SwitchBrightness; on unless switch-no-sleep), under the work-loop gate. Off, once the panel is asleep: FRAME_END and V_BLANK

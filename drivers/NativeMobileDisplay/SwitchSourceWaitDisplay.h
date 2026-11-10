@@ -54,13 +54,17 @@ bool holdCopySource(OSObject *surface)
     return true;
 }
 
+// 0 once the producer's writes are in DRAM: external_wait answers 1 for that, 0 while it is still pending.
 int waitCopySource()
 {
     const int error = sourceWait->read.lease ? 0 : switch_native_scanout_pitch_wait(sourceWait->surface, &sourceWait->read);
     if (error)
         return error;
     const auto &producer = sourceWait->read.view.producer;
-    return producer.engine ? switch_gpu_backing_token_external_wait(&producer) : 0;
+    if (!producer.engine)
+        return 0;
+    const int visible = switch_gpu_backing_token_external_wait(&producer);
+    return visible == 1 ? 0 : visible < 0 ? visible : -11;
 }
 
 void sourceWaitFinished()

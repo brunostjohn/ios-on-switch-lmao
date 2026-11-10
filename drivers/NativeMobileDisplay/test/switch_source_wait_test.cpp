@@ -12,7 +12,7 @@ class OSObject { public: unsigned refs=1; void retain(){++refs;} void release(){
 struct OriginalLegacySwapRequest {};
 namespace {
 unsigned leases, waits, observations, producerWaits;
-int waitError, producerError;
+int waitError, producerError, producerVisible;
 switch_gpu_backing_token producer;
 std::function<void()> waiting;
 uint64_t mach_absolute_time(){return 100;}
@@ -45,8 +45,9 @@ int switch_native_scanout_pitch_wait(OSObject *,SwitchNativeScanout *out) {
     if(waitError) return waitError;
     out->lease=reinterpret_cast<switch_gpu_cpu_lease *>(1); out->view.producer=producer; ++leases; return 0;
 }
+// As SwitchGpuTimeline.cpp's external_wait: 1 once the writes are DRAM-visible, 0 still pending, negative failed.
 extern "C" int switch_gpu_backing_token_external_wait(const switch_gpu_backing_token *token) {
-    EXPECT_EQ(token->value, producer.value); ++producerWaits; return producerError;
+    EXPECT_EQ(token->value, producer.value); ++producerWaits; return producerError ? producerError : producerVisible;
 }
 void switch_native_scanout_release(SwitchNativeScanout *read) {
     if(read->lease){EXPECT_GT(leases,0u); --leases;} *read={};
@@ -57,7 +58,7 @@ protected:
     NativeLegacyDisplay *display;
     OriginalLegacySwapRequest request,other;
     OSObject surface;
-    void SetUp() override { leases=waits=observations=producerWaits=0; waitError=producerError=0; producer={}; waiting={}; display=new NativeLegacyDisplay; display->request=&request; }
+    void SetUp() override { leases=waits=observations=producerWaits=0; waitError=producerError=0; producerVisible=1; producer={}; waiting={}; display=new NativeLegacyDisplay; display->request=&request; }
     void TearDown() override { delete display; EXPECT_EQ(leases,0u); EXPECT_EQ(surface.refs,1u); }
     void defer(){ASSERT_TRUE(display->deferSource(&request,&surface));}
 };
@@ -104,4 +105,12 @@ TEST_F(SourceWait, OnlyCpuFallbackWaitsTheExactProducerAndRejectsItsFailure) {
     defer(); display->sourceWaitWork(); EXPECT_EQ(producerWaits,0u);
     ASSERT_TRUE(display->holdCopySource(&surface)); producerError=-5;
     EXPECT_EQ(display->waitCopySource(),-5); EXPECT_EQ(producerWaits,1u); EXPECT_EQ(leases,1u);
+}
+
+TEST_F(SourceWait, CpuFallbackReadsAnEngineFrameOnceItsWritesAreVisible) {
+    producer={42,1,SWITCH_GPU_ENGINE_GM20B,3};
+    ASSERT_TRUE(display->holdCopySource(&surface));
+    EXPECT_EQ(display->waitCopySource(),0); EXPECT_EQ(producerWaits,1u);
+    producerVisible=0;
+    EXPECT_NE(display->waitCopySource(),0); EXPECT_EQ(producerWaits,2u);
 }
