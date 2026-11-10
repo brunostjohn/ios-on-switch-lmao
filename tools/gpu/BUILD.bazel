@@ -66,10 +66,19 @@ py_binary(
     srcs = ["assemble.py"],
 )
 
+py_library(
+    name = "seed_pack",
+    srcs = ["seed_pack.py"],
+    visibility = ["//tools/gpu/shaders:__pkg__"],
+)
+
 py_binary(
     name = "stage_manifest",
     srcs = ["stage_manifest.py"],
-    deps = ["//tools/common:hashing"],
+    deps = [
+        ":seed_pack",
+        "//tools/common:hashing",
+    ],
 )
 
 py_test(
@@ -78,5 +87,8 @@ py_test(
         "stage_manifest.py",
         "stage_manifest_test.py",
     ],
-    deps = ["//tools/common:hashing"],
+    deps = [
+        ":seed_pack",
+        "//tools/common:hashing",
+    ],
 )

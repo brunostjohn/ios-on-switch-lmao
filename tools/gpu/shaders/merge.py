@@ -21,9 +21,9 @@ NVK's LC_UUID (nvk_twin.py gives the twin the iOS dylib's), and the bundle's Inf
 (NVK, m2v, the bridge and the frontend); a seed of other tools would never be hit. A validation action: the seed does
 not wait for it.
 tree: ngpu/addons/TegraGM20BMetal.m2v-seed/shared (the join's files and packs/<NNN>, and the packed native seed's
-native-analysis/) and ngpu/addons/TegraGM20BMetal.raw (with the packed native seed's raw-<stack>/ in native/; the
-host's manifest and coverage beside them stay behind), directories 0755 and files 0644 (APFS clones of the sources),
-and size.json (bytes, files, blocks4k: what the tree takes on APFS) beside it.
+native-analysis/) and ngpu/addons/TegraGM20BMetal.raw (with the packed native seed's raw-<stack>/ in native/; of the
+packed native seed, only each index and its observed packs go: tools/gpu/seed_pack.py), directories 0755 and files
+0644 (APFS clones of the sources), and size.json (bytes, files, blocks4k: what the tree takes on APFS) beside it.
 """
 
 import argparse
@@ -39,6 +39,7 @@ import sys
 from collections import Counter
 from pathlib import Path
 
+from tools.gpu import seed_pack
 from tools.gpu.nvk_twin import lc_uuid
 from tools.gpu.shaders import replies as compiler_replies
 
@@ -263,16 +264,24 @@ def clone(source: Path, target: Path) -> None:
 
 
 def native_pairs(native: Path, out: Path) -> list[tuple[Path, Path]]:
-    """Return the packed native seed's files and where they go; the host's manifest and coverage beside them stay."""
+    """Return the packed native seed's staged files and where they go.
+
+    The host's manifest and coverage beside them and the derived entries' packs stay.
+    """
     pairs = []
     for path in sorted(native.rglob('*')):
         relative = path.relative_to(native)
         if not path.is_file() or len(relative.parts) < 2:
             continue
-        if relative.parts[0] == 'native-analysis':
-            pairs.append((path, out / SEED / relative))
-        elif relative.parts[0].startswith('raw-'):
-            pairs.append((path, out / RAW / 'native' / relative))
+        top = relative.parts[0]
+        if top == 'native-analysis':
+            under = out / SEED
+        elif top.startswith('raw-'):
+            under = out / RAW / 'native'
+        else:
+            continue
+        if seed_pack.staged(native / top, relative.relative_to(top).as_posix()):
+            pairs.append((path, under / relative))
     return pairs
 
 

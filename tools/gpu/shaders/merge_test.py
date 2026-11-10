@@ -89,11 +89,16 @@ class JoinTest(unittest.TestCase):
             folder.mkdir(parents=True)
         (seed / 'SEED').write_bytes(b'identity')
         (raw / 'pack.bin').write_bytes(b'raw pack')
+        record_index = struct.pack('<8sIIIIII', b'SWSEEDPK', 1, 8, 0, 2, 1, 0) + bytes(32)
+        analysis_index = struct.pack('<8sIIIIII', b'SWSEEDPK', 1, 32, 0, 3, 2, 0) + bytes(32)
         packed = {
-            'raw-0000000000001234/index': b'record index',
+            'raw-0000000000001234/index': record_index,
             'raw-0000000000001234/packs/000': b'native records',
-            'native-analysis/index': b'analysis index',
+            'raw-0000000000001234/packs/001': b'derived native records',
+            'native-analysis/index': analysis_index,
             'native-analysis/packs/000': b'native compute analyses',
+            'native-analysis/packs/001': b'more native compute analyses',
+            'native-analysis/packs/002': b'derived native compute analyses',
         }
         for relative, data in packed.items():
             (native / relative).write_bytes(data)
@@ -109,10 +114,13 @@ class JoinTest(unittest.TestCase):
         self.assertEqual((out / merge.RAW / 'pack.bin').read_bytes(), b'raw pack')
         analyses = out / merge.SEED / 'native-analysis'
         self.assertEqual((analyses / 'packs' / '000').read_bytes(), b'native compute analyses')
-        self.assertEqual((analyses / 'index').read_bytes(), b'analysis index')
+        self.assertEqual((analyses / 'packs' / '001').read_bytes(), b'more native compute analyses')
+        self.assertEqual((analyses / 'index').read_bytes(), analysis_index)
+        self.assertFalse((records / 'packs' / '001').exists())
+        self.assertFalse((analyses / 'packs' / '002').exists())
         self.assertFalse((out / merge.RAW / 'native' / 'native-analysis').exists())
         self.assertFalse(list(out.rglob('*.json')))
-        self.assertEqual(json.loads(size.read_text())['files'], 6)
+        self.assertEqual(json.loads(size.read_text())['files'], 7)
 
     def test_join_packs_the_buckets(self):
         shared = record(b'one pipeline, made by two buckets')

@@ -18,6 +18,7 @@ import argparse
 from pathlib import Path
 
 from tools.common import hashing
+from tools.gpu import seed_pack
 
 HEADER = '# gpu stage 1 '
 SEED = 'ngpu/addons/TegraGM20BMetal.m2v-seed/shared'
@@ -31,14 +32,19 @@ def line(path: Path, digest: str, target: str, rlocation: str) -> str:
     return f'{target}\t{digest}\t{path.stat().st_size}\t{mode:o}\t{rlocation}'
 
 
-def native_target(relative: str) -> str | None:
-    """Return where a file of the packed native seed goes on the volume; None for the host's files beside it."""
-    top = relative.split('/', 1)[0]
+def native_target(native: Path, relative: str) -> str | None:
+    """Return where a file of the packed native seed goes on the volume.
+
+    None for the host's files beside it and the derived entries' packs.
+    """
+    top, _, below = relative.partition('/')
     if top == 'native-analysis':
-        return SEED + '/' + relative
-    if top.startswith('raw-') and '/' in relative:
-        return RAW + '/native/' + relative
-    return None
+        under = SEED
+    elif top.startswith('raw-'):
+        under = RAW + '/native'
+    else:
+        return None
+    return under + '/' + relative if below and seed_pack.staged(native / top, below) else None
 
 
 def tree(directory: Path, rlocation: str, under: str) -> list[tuple[Path, str, str]]:
@@ -79,7 +85,7 @@ def main() -> None:
     files += [
         (path, target, rlocation)
         for path, relative, rlocation in tree(Path(args.native), args.native_rlocation, '')
-        if (target := native_target(relative))
+        if (target := native_target(Path(args.native), relative))
     ]
     digests = hashing.sha256_files([path for path, _, _ in files])
     lines = [line(path, digest, *where) for (path, *where), digest in zip(files, digests, strict=True)]
