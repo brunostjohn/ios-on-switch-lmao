@@ -43,11 +43,50 @@ class RecordsTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'obsolete layout'):
             directlink.pipeline_of(record, [], ids, [])
 
+    def test_ordered_storage_metadata_round_trip_and_explicit_registers(self):
+        rec = dict(key='samples=1 c0=81:15:0:1:0:0:1:0:0', vs=0, fs=1, blob=[], entries=[handle(('fetch', 0))],
+                   push=[], vbs=[], set_size=256, fetch=True, storage_mask=1, storage_write_mask=1,
+                   storage_samples=1, storage_tests=2, storage_tic=[0x24912] + [0] * 7)
+        data = packfile.pipeline_bytes(rec, 0, 0)
+        programs = [dict(image=bytes([i]), data=b'', cbufs=[]) for i in range(2)]
+        ids = {directlink.program_id(p): i for i, p in enumerate(programs)}
+        record = dict(pipeline=data, key=rec['key'], programs=programs, samplers=[],
+                      probe=dict(index=0, form='', records=[dict(regs={0x0210: 1, 0x0754: 1, 0x1224: 2, 0x1a00: 0})]))
+        back = directlink.pipeline_of(record, [], ids, [])
+        self.assertEqual(back['storage_mask'], 1)
+        self.assertEqual(back['storage_write_mask'], 1)
+        self.assertEqual(back['storage_samples'], 1)
+        self.assertEqual(back['storage_tests'], 2)
+        self.assertEqual(back['storage_tic'], rec['storage_tic'])
+        self.assertEqual(dict(back['blob']), {0x0210: 1, 0x0754: 1, 0x1224: 2, 0x1a00: 0})
+        self.assertEqual(directlink.PIPELINE.unpack_from(packfile.pipeline_bytes(back, 0, 0))[-1] & 8, 8)
+
     def test_legacy_records_do_not_claim_push_metadata(self):
         rec = dict(key='samples=1', vs=0, fs=1, blob=[], entries=[], push=[], vbs=[], set_size=0, fetch=False)
         data = packfile.pipeline_bytes(rec, 0, 0)
         self.assertEqual(directlink.PIPELINE.unpack_from(data)[-1] & 4, 0)
         self.assertEqual(data[-4:], bytes(4))
+
+    def test_shader_test_views_and_push_placements_round_trip(self):
+        rec = dict(key='samples=4 ds=260/260 c0=80:15:0', vs=0, fs=1, blob=[],
+                   entries=[handle(('fetch', 0)), handle(('depth_test', 0)), handle(('stencil_test', 0))],
+                   push=[(0x700 + 4 * i, i) for i in range(8)], vbs=[], set_size=256,
+                   fetch=True, push_metadata=True, storage_mask=1, storage_write_mask=1,
+                   storage_samples=4, storage_tests=4, storage_tic=[0x24912] + [0] * 7,
+                   depth_test_word=1, stencil_test_word=5, test_flags=3, depth_tic=100, stencil_tic=13)
+        data = packfile.pipeline_bytes(rec, 0, 0)
+        programs = [dict(image=bytes([i]), data=b'', cbufs=[]) for i in range(2)]
+        ids = {directlink.program_id(p): i for i, p in enumerate(programs)}
+        record = dict(pipeline=data, key=rec['key'], programs=programs, samplers=[],
+                      probe=dict(index=0, form='', records=[dict(regs={0x0754: 20, 0x1224: 2})]))
+        back = directlink.pipeline_of(record, [], ids, [])
+        self.assertEqual([entry['tex'] for entry in back['entries']],
+                         [('fetch', 0), ('depth_test', 0), ('stencil_test', 0)])
+        for field in ('depth_test_word', 'stencil_test_word', 'test_flags', 'depth_tic', 'stencil_tic',
+                      'storage_samples', 'storage_tests'):
+            self.assertEqual(back[field], rec[field], field)
+        back['blob'] = []
+        self.assertEqual(packfile.pipeline_bytes(back, 0, 0), data)
 
     def test_only_known_own_shader_pairs_use_alias_keys(self):
         own = 'samples=1 topo=0 ds=0/0 c0=80:15:0:1:0:0:1:0:0 | v resolve_vert  | f resolve_bgra8_frag'

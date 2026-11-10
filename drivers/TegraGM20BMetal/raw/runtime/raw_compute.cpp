@@ -44,21 +44,6 @@ constexpr uint32_t qmdCbufLo(uint32_t i)
 std::mutex gStatesLock;
 std::map<std::pair<const Device *, uint64_t>, ComputeState> gStates;
 
-// m2v's DispatchRegion push field (metal2vulkan lower/dispatch.rs region_bytes): the region's first threadgroup, Metal's
-// threadgroup size packed 10 bits an axis (each size - 1), the grid in threads
-bool regionWords(const uint32_t groups[3], const uint32_t threads[3], uint32_t out[8])
-{
-    uint32_t nominal = 0;
-    for (int i = 0; i < 3; i++) {
-        if (!threads[i] || threads[i] > 1024)
-            return false;
-        nominal |= (threads[i] - 1) << (10 * i);
-    }
-    const uint32_t w[8] = {0, 0, 0, nominal, groups[0] * threads[0], groups[1] * threads[1], groups[2] * threads[2], 0};
-    memcpy(out, w, sizeof w);
-    return true;
-}
-
 }  // namespace
 
 const ComputeState *computeState(Device &dev, uint64_t keyHash)
@@ -73,12 +58,13 @@ const ComputeState *computeState(Device &dev, uint64_t keyHash)
     c.rec = k;
     {
         std::lock_guard<std::mutex> l(dev.lock_);
-        if (!dev.place(k->program, c.program, c.data) || !dev.slmNeed(slmPerWarpOfQmd(k->qmd))) {
+        if (!dev.slmNeed(slmPerWarpOfQmd(k->qmd)) || !dev.place(k->program, c.program, c.data)) {
             dev.stats.heapFull++;
             return nullptr;
         }
     }
     const PackProgram &p = dev.pack().section<PackProgram>(PackPrograms)[k->program];
+    c.instructions = std::max(1u, (p.dataBytes ? p.dataOffset : p.bytes) / 8);
     memcpy(c.cbufType, p.cbufType, std::min<size_t>(sizeof c.cbufType, p.cbufs));
     return &gStates.emplace(std::make_pair(&dev, keyHash), c).first->second;
 }
@@ -96,6 +82,7 @@ const ComputeState *placeCompute(Device &dev, const ComputeRecord &r)
         memcpy(slot.data() + dataAt, r.data.data(), r.data.size());
     ComputeState c;
     c.placed = r.kernel;
+    c.instructions = uint32_t(std::max<size_t>(1, r.code.size() / 8));
     uint64_t at = 0;
     {
         std::lock_guard<std::mutex> l(dev.lock_);
@@ -109,12 +96,12 @@ const ComputeState *placeCompute(Device &dev, const ComputeRecord &r)
                 return nullptr;
             e.slot = uint8_t(kConstexprSampler | index);
         }
-        if (!dev.heapPlace(slot.data(), uint32_t(slot.size()), at) || !dev.slmNeed(slmPerWarpOfQmd(r.kernel.qmd))) {
+        if (!dev.slmNeed(slmPerWarpOfQmd(r.kernel.qmd)) || !dev.heapPlace(slot.data(), uint32_t(slot.size()), at)) {
             dev.stats.heapFull++;
             return nullptr;
         }
     }
-    dev.stats.programsPlaced++;
+    RAW_DIAGNOSTIC(dev.stats.programsPlaced++);
     memcpy(c.cbufType, r.cbufType, sizeof c.cbufType);
     c.program = uint32_t(at);
     c.data = r.data.empty() ? 0 : dev.heap_.va + at + dataAt;
@@ -159,14 +146,21 @@ void ComputeEncoder::setBytes(uint32_t slot, const void *bytes, uint32_t length)
     uint8_t *m = dev_.alloc(dev_.upload_, chunk, kUploadChunk, va);
     memcpy(m, bytes, length);
     memset(m + length, 0, chunk - length);
-    bufs_[slot] = {va, length, nullptr, 0, dev_.upload_.bo.va};
-    dev_.stats.uploadBytes += chunk;
+    bindBuffer(slot, {va, length, nullptr, 0, dev_.upload_.bo.va});
+    RAW_DIAGNOSTIC(dev_.stats.uploadBytes += chunk);
 }
 
 void ComputeEncoder::setBytesAt(uint32_t slot, uint64_t va, uint32_t length, const Buffer *allocation)
 {
-    if (slot < 31)
-        bufs_[slot] = {va, length, nullptr, 0, allocation ? allocation->va : va};
+    if (slot < 31) {
+        bindBuffer(slot, {va, length, nullptr, 0, allocation ? allocation->va : va});
+        if (allocation) {
+            cb_.use(*allocation, false);
+            if (allocation->hostVisible && !allocation->wc && allocation->cpu && va >= allocation->va &&
+                va - allocation->va <= allocation->length && length <= allocation->length - (va - allocation->va))
+                cb_.clean(allocation->cpu + (va - allocation->va), length);
+        }
+    }
 }
 
 void ComputeEncoder::setBuffer(uint32_t slot, const Buffer *b, uint64_t offset)
@@ -174,11 +168,11 @@ void ComputeEncoder::setBuffer(uint32_t slot, const Buffer *b, uint64_t offset)
     if (slot >= 31)
         return;
     if (!b) {
-        bufs_[slot] = {};
+        bindBuffer(slot, {});
         return;
     }
-    bufs_[slot] = {b->va + offset, uint32_t(std::min<uint64_t>(b->length - std::min(offset, b->length), 0xffffffffu)),
-                   b, offset};
+    bindBuffer(slot, {b->va + offset, uint32_t(std::min<uint64_t>(b->length - std::min(offset, b->length), 0xffffffffu)),
+                      b, offset});
 }
 
 void ComputeEncoder::setBufferOffset(uint32_t slot, uint64_t offset)
@@ -196,74 +190,76 @@ void ComputeEncoder::barrier()
 
 void ComputeEncoder::setTexture(uint32_t slot, const Texture *t)
 {
-    if (slot < 31)
+    if (slot < 31 && textures_[slot] != t) {
         textures_[slot] = t;
+        ++bindingRevision_;
+    }
 }
 
 void ComputeEncoder::setSampler(uint32_t slot, const Sampler *s)
 {
-    if (slot < 16)
+    if (slot < 16 && samplers_[slot] != s) {
         samplers_[slot] = s;
+        ++bindingRevision_;
+    }
 }
 
-bool ComputeEncoder::dispatch(const uint32_t groups[3], const uint32_t threads[3], const char **why)
+void ComputeEncoder::bindBuffer(uint32_t slot, const Bound &binding)
 {
-    cb_.buffersWritten_ = true;
-    if (!state_) {
-        *why = "a dispatch without a kernel";
-        return false;
+    if (!(bufs_[slot] == binding)) {
+        bufs_[slot] = binding;
+        ++bindingRevision_;
     }
-    if (!groups[0] || !groups[1] || !groups[2])
+}
+
+bool ComputeEncoder::prepareDescriptors(const char **why)
+{
+    if (setVa_ && describedState_ == state_ && describedRevision_ == bindingRevision_)
         return true;
-    if (groups[1] > 0xffff || groups[2] > 0xffff) {
-        *why = "a grid taller or deeper than 65535 threadgroups";
-        return false;
-    }
+    // A refused rebuild may have changed scratch words/residuals. Never let it make the previous cache entry appear valid.
+    setVa_ = rootVa_ = 0;
+    describedState_ = nullptr;
     const PackKernel &r = *state_->rec;
-    uint32_t region[8] = {};
-    if (r.regionWord >= 0 && !regionWords(groups, threads, region)) {
-        *why = "a threadgroup m2v's dispatch region cannot name";
-        return false;
-    }
     const uint32_t setBytes = std::max<uint32_t>((r.setBytes + 255) & ~255u, 256);
-    uint64_t setVa = 0;
-    uint32_t *set = reinterpret_cast<uint32_t *>(dev_.alloc(dev_.upload_, setBytes, 256, setVa));
-    memset(set, 0, setBytes);
-    uint32_t residuals[32] = {}, residualMask = 0;
+    descriptorWords_.assign(setBytes / 4, 0);
+    uint32_t *set = descriptorWords_.data();
+    residuals_.fill(0);
+    residualMask_ = 0;
     for (uint32_t i = 0; i < r.entries; i++) {
         const PackKernelEntry &e = r.entry[i];
+        const bool writes = kernelEntryWrites(r, i);
         uint32_t *at = set + e.offset / 4;
         if (e.kind == KernelBuffer) {
             const Bound &b = bufs_[e.slot];
             if (b.buffer)
-                cb_.use(*b.buffer, true);
+                cb_.use(*b.buffer, writes);
             else
-                cb_.useAddress(b.resourceVa, true);
+                cb_.useAddress(b.va, b.size, writes);
             BufferDescriptor desc;
             if (!bufferDescriptor(e, b.va, b.size, desc)) {
                 *why = "a buffer bound at an offset that is not a multiple of 16";
                 return false;
             }
             if (desc.word >= 0) {
-                residuals[desc.word] = desc.residual;
-                residualMask |= 1u << desc.word;
+                residuals_[desc.word] = desc.residual;
+                residualMask_ |= 1u << desc.word;
             }
-            if (b.buffer && !b.buffer->wc && b.buffer->cpu)
+            if (b.buffer && b.buffer->hostVisible && !b.buffer->wc && b.buffer->cpu)
                 cb_.clean(b.buffer->cpu + b.offset, std::min<uint64_t>(desc.range - desc.residual, b.size));
             at[0] = uint32_t(desc.base);
             at[1] = uint32_t(desc.base >> 32);
             at[2] = b.va ? desc.range : 0;
             at[3] = 0;
         } else if (e.kind == KernelTexture) {
-            const Texture *t = textures_[e.slot];
+            const Texture *t = writes ? textures_[e.slot] : cb_.readTexture(textures_[e.slot]);
             if (t && !t->tic) {
                 *why = "a texture the raw path cannot sample";
                 return false;
             }
             if (t) {
-                cb_.use(*t, true);
+                cb_.use(*t, writes);
                 if (t->sampled)
-                    cb_.use(*t->sampled, true);
+                    cb_.use(*t->sampled, writes);
             }
             uint32_t tic = t ? t->tic : 0;
             if (const FormatInfo *f = t ? formatInfo(t->format) : nullptr) {
@@ -291,23 +287,74 @@ bool ComputeEncoder::dispatch(const uint32_t groups[3], const uint32_t threads[3
             at[0] |= (s ? s->tsc : dev_.neutralTsc_) << 20;
         }
     }
-    uint64_t rootVa = 0;
-    uint32_t *root = reinterpret_cast<uint32_t *>(dev_.alloc(dev_.upload_, kRootBytes, 256, rootVa));
-    memset(root, 0, kRootBytes);
-    root[3] = groups[0];
-    root[4] = groups[1];
-    root[5] = groups[2];
-    root[kRootSets / 4 + 0] = uint32_t(setVa);
-    root[kRootSets / 4 + 1] = uint32_t(setVa >> 32);
-    root[kRootSets / 4 + 2] = r.setBytes;
-    for (uint32_t m = r.pushMask; m; m &= m - 1)
-        root[kRootPush / 4 + __builtin_ctz(m)] = r.pushWords[__builtin_ctz(m)];
-    for (uint32_t m = residualMask; m; m &= m - 1)
-        root[kRootPush / 4 + __builtin_ctz(m)] = residuals[__builtin_ctz(m)];
-    if (r.regionWord >= 0)
-        memcpy(root + kRootPush / 4 + r.regionWord, region, std::min<size_t>(sizeof region, 4 * (32 - r.regionWord)));
+    // All descriptor read/modify/write operations above touch cached CPU scratch, never the WC upload.
+    uint8_t *upload = dev_.alloc(dev_.upload_, setBytes, 256, setVa_);
+    memcpy(upload, set, setBytes);
+    describedState_ = state_;
+    describedRevision_ = bindingRevision_;
+    rootVa_ = 0;
+    RAW_DIAGNOSTIC(dev_.stats.uploadBytes += setBytes);
+    return true;
+}
+
+bool ComputeEncoder::dispatch(const uint32_t groups[3], const uint32_t threads[3], const char **why)
+{
+    const auto plan = computeDispatch({groups[0], groups[1], groups[2]},
+                                      {threads[0], threads[1], threads[2]}, false);
+    if (plan.reason != ComputeDispatch::Ready) {
+        *why = "a dispatch outside the raw grid or local-size limits";
+        return false;
+    }
+    return !plan.count || dispatchRegion(plan.regions[0], plan.grid, plan.nominal, true, true, why);
+}
+
+bool ComputeEncoder::dispatchRegion(const ComputeRegion &part, const std::array<uint32_t, 3> &total,
+                                    const std::array<uint32_t, 3> &nominal, bool first, bool last, const char **why)
+{
+    const auto *groups = part.groups.data();
+    const auto *threads = part.local.data();
+    cb_.buffersWritten_ = true;
+    if (!state_) {
+        *why = "a dispatch without a kernel";
+        return false;
+    }
+    if (!groups[0] || !groups[1] || !groups[2])
+        return true;
+    if (groups[1] > 0xffff || groups[2] > 0xffff) {
+        *why = "a grid taller or deeper than 65535 threadgroups";
+        return false;
+    }
+    const PackKernel &r = *state_->rec;
+    uint32_t region[8] = {};
+    if (r.regionWord >= 0 && !computeRegionWords(part.base, total, nominal, region)) {
+        *why = "a threadgroup m2v's dispatch region cannot name";
+        return false;
+    }
+    if (!prepareDescriptors(why))
+        return false;
+    const std::array<uint32_t, 3> grid{groups[0], groups[1], groups[2]};
+    if (!rootVa_ || grid_ != grid || !std::equal(std::begin(region), std::end(region), region_.begin())) {
+        uint32_t root[kRootBytes / 4] = {};
+        root[3] = groups[0];
+        root[4] = groups[1];
+        root[5] = groups[2];
+        root[kRootSets / 4 + 0] = uint32_t(setVa_);
+        root[kRootSets / 4 + 1] = uint32_t(setVa_ >> 32);
+        root[kRootSets / 4 + 2] = r.setBytes;
+        for (uint32_t m = r.pushMask; m; m &= m - 1)
+            root[kRootPush / 4 + __builtin_ctz(m)] = r.pushWords[__builtin_ctz(m)];
+        for (uint32_t m = residualMask_; m; m &= m - 1)
+            root[kRootPush / 4 + __builtin_ctz(m)] = residuals_[__builtin_ctz(m)];
+        if (r.regionWord >= 0)
+            memcpy(root + kRootPush / 4 + r.regionWord, region, std::min<size_t>(sizeof region, 4 * (32 - r.regionWord)));
+        uint8_t *upload = dev_.alloc(dev_.upload_, kRootBytes, 256, rootVa_);
+        memcpy(upload, root, sizeof root);
+        grid_ = grid;
+        std::copy(std::begin(region), std::end(region), region_.begin());
+        RAW_DIAGNOSTIC(dev_.stats.uploadBytes += kRootBytes);
+    }
     uint64_t qmdVa = 0;
-    uint32_t *qmd = reinterpret_cast<uint32_t *>(dev_.alloc(dev_.upload_, kQmdWords * 4, 256, qmdVa));
+    uint32_t qmd[kQmdWords];
     memcpy(qmd, r.qmd, sizeof r.qmd);
     qmd[kQmdProgramOffset] = state_->program;
     qmd[kQmdRasterWidth] = groups[0];
@@ -318,10 +365,10 @@ bool ComputeEncoder::dispatch(const uint32_t groups[3], const uint32_t threads[3
         uint64_t va = 0;
         switch (cbufKind(state_->cbufType[i])) {
         case CbufRoot:
-            va = rootVa;
+            va = rootVa_;
             break;
         case CbufSet:
-            va = setVa;
+            va = setVa_;
             break;
         case CbufShaderData:
             va = state_->data;
@@ -333,14 +380,26 @@ bool ComputeEncoder::dispatch(const uint32_t groups[3], const uint32_t threads[3
         qmd[qmdCbufLo(i)] = uint32_t(va);
         qmd[qmdCbufLo(i) + 1] = (qmd[qmdCbufLo(i) + 1] & ~0xffu) | uint32_t(va >> 32);
     }
-    dev_.stats.uploadBytes += setBytes + kRootBytes + kQmdWords * 4;
-    if (serial_ && dispatched_)
+    uint8_t *qmdUpload = dev_.alloc(dev_.upload_, sizeof qmd, 256, qmdVa);
+    memcpy(qmdUpload, qmd, sizeof qmd);
+    RAW_DIAGNOSTIC(dev_.stats.uploadBytes += sizeof qmd);
+    if (serial_ && dispatched_ && first)
         barrier();
     dispatched_ = true;
     room(8);
     p_.m(SEND_PCAS_A, uint32_t(qmdVa >> 8), SUBC_COMPUTE);
     p_.m(SEND_SIGNALING_PCAS_B, kPcasInvalidateSchedule, SUBC_COMPUTE);
-    dev_.stats.dispatches++;
+    uint64_t work = state_->instructions;
+    for (uint32_t axis = 0; axis < 3; ++axis)
+        work = BatchWork::product(BatchWork::product(work, groups[axis]), threads[axis]);
+    apiWork_ = std::min(BatchWork::kLimit, (first ? 0 : apiWork_) + work);
+    if (last && cb_.batchWork_.add(apiWork_)) {
+        cb_.segment(start_, p_.at);
+        cb_.segments_.finishBatch();
+        cb_.batchWork_ = {};
+        start_ = p_.at;
+    }
+    RAW_DIAGNOSTIC(dev_.stats.dispatches++);
     return true;
 }
 
@@ -350,7 +409,7 @@ void ComputeEncoder::end()
     computeToGraphics(p_, true);
     cb_.segment(start_, p_.at);
     dev_.push_.head = uint64_t(reinterpret_cast<uint8_t *>(p_.at) - dev_.push_.bo.cpu);
-    dev_.stats.pushBytes += uint64_t(p_.at - start_) * 4;
+    RAW_DIAGNOSTIC(dev_.stats.pushBytes += uint64_t(p_.at - start_) * 4);
 }
 
 }  // namespace raw

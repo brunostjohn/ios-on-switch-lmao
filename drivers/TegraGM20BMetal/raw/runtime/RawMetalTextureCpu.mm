@@ -2,6 +2,34 @@
 #import "RawMetalInternal.h"
 #include "../fx/fx_image.h"
 
+bool transferTexture(RMTexture *texture, MTLRegion region, NSUInteger level, NSUInteger slice,
+                     void *bytes, NSUInteger row, NSUInteger image, bool write)
+{
+    if (!texture->_rawOk || texture->_kind == RMTextureBuffer || texture->_kind == RMTextureView ||
+        (texture->_heap && texture->_heap->_descriptor.storageMode == MTLStorageModeShared))
+        return false;
+    if (!region.size.width || !region.size.height || !region.size.depth)
+        return true;
+    for (const NSUInteger value : {region.origin.x, region.origin.y, region.origin.z,
+                                   region.size.width, region.size.height, region.size.depth, level, slice})
+        if (value > UINT32_MAX)
+            return false;
+    const uint32_t origin[] = {uint32_t(region.origin.x), uint32_t(region.origin.y), uint32_t(region.origin.z)};
+    const uint32_t size[] = {uint32_t(region.size.width), uint32_t(region.size.height), uint32_t(region.size.depth)};
+    if (write)
+        declareGpuWrites(texture);
+    auto owner = std::shared_ptr<void>((__bridge_retained void *)texture, [](void *held) { CFRelease(held); });
+    const auto result = gRM->raw->transferTexture(texture->_raw, uint32_t(level), uint32_t(slice), origin, size,
+                                                 bytes, row, image, write, std::move(owner));
+    if (result == raw::TextureTransferResult::Unsupported)
+        return false;
+    if (result == raw::TextureTransferResult::Failed)
+        [NSException raise:NSInternalInconsistencyException format:@"GPU texture %@ failed", write ? @"upload" : @"readback"];
+    if (write)
+        texture->_gpuDirty.store(true, std::memory_order_release);
+    return true;
+}
+
 void cacheLines(const uint8_t *from, uint64_t bytes, bool invalidate)
 {
 #if defined(__aarch64__)
@@ -18,32 +46,33 @@ void cacheLines(const uint8_t *from, uint64_t bytes, bool invalidate)
 #endif
 }
 
-// A block-linear texture's CPU copies (replaceRegion, getBytes of level 0) through TegraGM20BLayout.h: the block rows they
-// reach are invalidated before a read of what the GPU wrote, cleaned after a write
+const tgm_layout *textureCpuImportLayout(RMTexture *texture)
+{
+    while (texture) {
+        if (texture->_raw.import && texture->_raw.import->kind == TGM_LAYOUT_KIND)
+            return &texture->_raw.import->layout;
+        texture = texture->_kind == RMTextureView ? texture->_parent : nil;
+    }
+    return nullptr;
+}
+
+// The caller holds CPU backing ownership through every read or partial write.
 void cpuTiled(RMTexture *t, MTLRegion r, uint8_t *bytes, NSUInteger row, bool write)
 {
     tgm_layout l;
     if (!r.size.width || !r.size.height)
         return;
-    if (t->_raw.import && t->_raw.import->kind == TGM_LAYOUT_KIND)
-        l = t->_raw.import->layout;
+    if (const auto *import = textureCpuImportLayout(t))
+        l = *import;
     else if (!tgm_layout_tiled(t->_raw.width, t->_raw.height, t->_raw.bpp, &l))
         return;
     r.origin.x += t->_raw.surfaceX;
     r.origin.y += t->_raw.surfaceY;
-    const uint64_t blockRow = uint64_t(l.row_bytes) * (8u << l.y_log2);
-    const uint64_t from = r.origin.y / (8u << l.y_log2) * blockRow,
-                   to = std::min<uint64_t>((r.origin.y + r.size.height + (8u << l.y_log2) - 1) / (8u << l.y_log2) *
-                                               blockRow,
-                                           uint64_t(l.row_bytes) * l.rows);
     if (write) {
         tgm_layout_write(&l, t->_raw.cpu, uint32_t(r.origin.x), uint32_t(r.origin.y), uint32_t(r.size.width),
                          uint32_t(r.size.height), bytes, row);
-        cacheLines(t->_raw.cpu + from, to - from, false);
         return;
     }
-    if (t->_gpuDirty.exchange(false))
-        cacheLines(t->_raw.cpu, l.row_bytes * uint64_t(l.rows), true);
     tgm_layout_read(&l, t->_raw.cpu, uint32_t(r.origin.x), uint32_t(r.origin.y), uint32_t(r.size.width),
                     uint32_t(r.size.height), bytes, row);
 }
@@ -58,13 +87,10 @@ void cpuLevel(RMTexture *t, MTLRegion r, NSUInteger level, uint8_t *bytes, NSUIn
     if (r.origin.x + r.size.width > lv.width || r.origin.y + r.size.height > lv.height)
         return;
     uint8_t *chain = t->_raw.cpu;
-    const uint64_t at = lv.offset, span = uint64_t(lv.rowBytes) * lv.rows;
     if (write) {
         raw::fx::writeLevel(c.layout, chain, uint32_t(level), uint32_t(r.origin.x), uint32_t(r.origin.y),
                             uint32_t(r.size.width), uint32_t(r.size.height), bytes, row);
-        cacheLines(chain + at, span, false);
     } else {
-        cacheLines(chain + at, span, true);
         raw::fx::readLevel(c.layout, chain, uint32_t(level), uint32_t(r.origin.x), uint32_t(r.origin.y),
                            uint32_t(r.size.width), uint32_t(r.size.height), bytes, row);
     }
@@ -82,11 +108,8 @@ void cpuVolume(RMTexture *t, MTLRegion r, uint8_t *bytes, NSUInteger row, NSUInt
     const size_t planeBytes = image ? image : size_t(row) * r.size.height;
     if (write) {
         raw::fx::writeVolume(c, x.cpu, 0, origin, size, bytes, row, planeBytes);
-        cacheLines(x.cpu, c.bytes, false);
         return;
     }
-    if (t->_gpuDirty.exchange(false))
-        cacheLines(x.cpu, c.bytes, true);
     raw::fx::readVolume(c, x.cpu, 0, origin, size, bytes, row, planeBytes);
 }
 
@@ -101,11 +124,8 @@ void cpuLayer(RMTexture *t, MTLRegion r, NSUInteger slice, uint8_t *bytes, NSUIn
     if (write) {
         raw::fx::writeLevel(c, layer, 0, uint32_t(r.origin.x), uint32_t(r.origin.y), uint32_t(r.size.width),
                             uint32_t(r.size.height), bytes, row);
-        cacheLines(layer, c.arrayStride, false);
         return;
     }
-    if (t->_gpuDirty.exchange(false))
-        cacheLines(x.cpu, c.bytes, true);
     raw::fx::readLevel(c, layer, 0, uint32_t(r.origin.x), uint32_t(r.origin.y), uint32_t(r.size.width),
                        uint32_t(r.size.height), bytes, row);
 }

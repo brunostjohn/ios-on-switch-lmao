@@ -36,16 +36,21 @@ bool Device::arenaFootprint(uint32_t width, uint32_t height, uint32_t format, bo
 // The host range's pages wired and bound at the arena's VA, under its kind (lock_ held)
 bool Device::bindArena(Arena &a)
 {
-    if (!k_.importPages(a.cpu, a.bytes, a.bo) || !k_.bindImportAt(a.cpu, a.bo, a.va, a.kind)) {
-        a.bo = {};
+    if (!k_.importPages(a.cpu, a.bytes, a.bo) ||
+        !k_.bindImportAt(a.cpu, a.bo, a.va, a.kind) ||
+        (a.bufferVa != a.va && !k_.bindAlias(a.bo, a.bufferVa, kPteKindPitch))) {
+        k_.free(a.bo);
         return false;
     }
-    stats.poolBytes += a.bytes;
+    RAW_DIAGNOSTIC(stats.poolBytes += a.bytes);
     return true;
 }
 
-bool Device::createArena(uint64_t bytes, bool blockLinear, uint32_t &arena)
+bool Device::createArena(uint64_t bytes, bool blockLinear, uint32_t &arena, bool explicitPlacement)
 {
+    const uint64_t logicalBytes = bytes;
+    if (bytes > UINT64_MAX - (kArenaGranule - 1))
+        return false;
     bytes = (bytes + kArenaGranule - 1) & ~(kArenaGranule - 1);
     vm_address_t cpu = 0;
     if (!bytes || vm_allocate(mach_task_self(), &cpu, bytes, VM_FLAGS_ANYWHERE) != KERN_SUCCESS)
@@ -54,13 +59,17 @@ bool Device::createArena(uint64_t bytes, bool blockLinear, uint32_t &arena)
     a.bytes = bytes;
     a.kind = blockLinear ? TGM_LAYOUT_KIND : kPteKindPitch;
     a.cpu = reinterpret_cast<uint8_t *>(cpu);
-    a.place = HeapPlacement(bytes);
+    a.place = HeapPlacement(logicalBytes, explicitPlacement);
     a.used = true;
     std::lock_guard<std::mutex> l(lock_);
     a.va = k_.reserveVa(bytes);
-    if (!a.va || !bindArena(a)) {
+    // Kind 0xfe changes the sector interpretation inside a GOB. Buffers retain a pitch view of the same BO.
+    a.bufferVa = explicitPlacement && blockLinear ? k_.reserveVa(bytes) : a.va;
+    if (!a.va || !a.bufferVa || !bindArena(a)) {
         if (a.va)
             k_.releaseVa(a.va, bytes);
+        if (a.bufferVa && a.bufferVa != a.va)
+            k_.releaseVa(a.bufferVa, bytes);
         vm_deallocate(mach_task_self(), cpu, bytes);
         return false;
     }
@@ -80,9 +89,11 @@ void Device::freeArena(Arena &a)
         purgedArenas_--;
     } else {
         k_.free(a.bo);
-        stats.poolBytes -= a.bytes;
+        RAW_DIAGNOSTIC(stats.poolBytes -= a.bytes);
     }
     k_.releaseVa(a.va, a.bytes);
+    if (a.bufferVa != a.va)
+        k_.releaseVa(a.bufferVa, a.bytes);
     vm_deallocate(mach_task_self(), vm_address_t(a.cpu), a.bytes);
     a = Arena();
 }
@@ -115,22 +126,23 @@ bool Device::aliasArena(const Span &s, Lease *&lease, Alias &a)
     a.cpu = ar.cpu;
     a.bytes = ar.bytes;
     a.handle = ar.bo.handle;
-    a.va = ar.va;
-    a.kind = ar.kind;
+    a.va = s.va - s.offset;
+    a.kind = a.va == ar.va ? ar.kind : kPteKindPitch;
     a.lease = leaseSpan(lease, s, Memory::Arena);
     return true;
 }
 
-bool Device::arenaTexture(uint32_t arena, uint32_t width, uint32_t height, uint32_t format, Texture &t)
+bool Device::arenaTexture(uint32_t arena, uint32_t width, uint32_t height, uint32_t format, Texture &t,
+                          std::optional<uint64_t> requestedOffset)
 {
     std::lock_guard<std::mutex> l(lock_);
     if (arena >= arenas_.size() || !arenas_[arena].used || arenas_[arena].dying)
         return false;
     Arena &a = arenas_[arena];
     const bool blockLinear = a.kind == TGM_LAYOUT_KIND;
-    uint64_t bytes, align, offset;
+    uint64_t bytes, align, offset = requestedOffset.value_or(0);
     if (!arenaFootprint(width, height, format, blockLinear, bytes, align) || !shape(width, height, format, t) ||
-        !a.place.place(bytes, align, offset))
+        !(requestedOffset ? a.place.placeAt(bytes, align, offset) : a.place.place(bytes, align, offset)))
         return false;
     t.span = {arena, offset, bytes, a.va + offset, a.cpu + offset};
     t.arena = true;
@@ -154,18 +166,21 @@ bool Device::arenaTexture(uint32_t arena, uint32_t width, uint32_t height, uint3
     return true;
 }
 
-bool Device::arenaBuffer(uint32_t arena, uint64_t length, Buffer &b)
+bool Device::arenaBuffer(uint32_t arena, uint64_t length, Buffer &b, std::optional<uint64_t> requestedOffset)
 {
     std::lock_guard<std::mutex> l(lock_);
-    if (arena >= arenas_.size() || !arenas_[arena].used || arenas_[arena].dying || arenas_[arena].kind != kPteKindPitch)
+    if (arena >= arenas_.size() || !arenas_[arena].used || arenas_[arena].dying ||
+        (arenas_[arena].kind != kPteKindPitch && arenas_[arena].bufferVa == arenas_[arena].va) ||
+        length > UINT64_MAX - (kArenaPitchAlign - 1))
         return false;
     Arena &a = arenas_[arena];
     const uint64_t bytes = (std::max<uint64_t>(length, 16) + kArenaPitchAlign - 1) & ~(kArenaPitchAlign - 1);
-    uint64_t offset;
-    if (!a.place.place(bytes, kArenaPitchAlign, offset))
+    uint64_t offset = requestedOffset.value_or(0);
+    if (!(requestedOffset ? a.place.placeAt(bytes, kArenaPitchAlign, offset)
+                          : a.place.place(bytes, kArenaPitchAlign, offset)))
         return false;
     b = {};
-    b.span = {arena, offset, bytes, a.va + offset, a.cpu + offset};
+    b.span = {arena, offset, bytes, a.bufferVa + offset, a.cpu + offset};
     b.arena = true;
     b.va = b.span.va;
     b.cpu = b.span.cpu;
@@ -237,7 +252,7 @@ void Device::purgeArena(uint32_t arena, const std::atomic<uint32_t> &committed)
     k_.free(a.bo);
     vm_address_t at = vm_address_t(a.cpu);
     vm_allocate(mach_task_self(), &at, a.bytes, VM_FLAGS_FIXED | VM_FLAGS_OVERWRITE);
-    stats.poolBytes -= a.bytes;
+    RAW_DIAGNOSTIC(stats.poolBytes -= a.bytes);
     a.purged = true;
 }
 

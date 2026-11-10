@@ -16,6 +16,8 @@ enum class Tex : uint8_t {
     Slot,
     Fetch,
     Texture3D,
+    DepthTest,
+    StencilTest,
     Unknown
 };
 
@@ -53,6 +55,9 @@ struct RecordParts {
     uint16_t setBytes = 0;
     bool pushMetadata = false;
     uint8_t blendColorWord = 0, halfBlendColorWord = 0;
+    uint8_t storageMask = 0, storageWriteMask = 0, storageSamples = 0, storageTests = 0;
+    uint32_t storageTic[8] = {};
+    PackShaderTests shaderTests = {};
 };
 
 // The color attachments a key names (mkpack.py targets)

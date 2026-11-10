@@ -149,6 +149,7 @@ struct RasterState {
     uint32_t set = 0;
     void *pipeline = nullptr;
     void *nativePipeline = nullptr;
+    void *nativeVariant = nullptr;
     void *depthStencil = nullptr;
     std::array<uint32_t, 4> scissor{};
     std::array<uint64_t, 6> viewport{};
@@ -168,6 +169,7 @@ struct KernelState {
 
 struct RenderStateRef {
     uint64_t epoch = 0;
+    uint64_t resourceRevision = 0;
     uint32_t buffers[2]{};
     uint32_t textures[2]{};
     uint32_t samplers[2]{};
@@ -179,6 +181,7 @@ struct RenderStateRef {
 struct KernelStateRef {
     uint32_t buffers = 0, textures = 0, samplers = 0, state = 0, uses = 0;
     uint64_t epoch = 0;
+    uint64_t resourceRevision = 0;
 };
 
 struct ResourceUse {

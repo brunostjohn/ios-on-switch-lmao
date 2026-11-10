@@ -156,7 +156,10 @@ enum RMReason : uint8_t {
 static const char *const kReasonNames[WhyCount] = {"raw",     "state",   "texture", "pass",  "call",
                                                    "compute", "mipmaps", "event",   "encode"};
 
-extern std::atomic<uint64_t> gPredCbs[PredCount], gPredOnly[PredCount], gPredLogged;
+#if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
+extern std::atomic<uint64_t> gPredCbs[PredCount], gPredOnly[PredCount];
+#endif
+extern std::atomic<uint64_t> gPredLogged;
 
 static inline bool predLogged(RMPred p)
 {

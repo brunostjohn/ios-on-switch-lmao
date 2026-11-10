@@ -73,28 +73,41 @@ fragment float4 alpha_fragment(TexturedVertex in [[stage_in]], texture2d<float> 
 /// of half arithmetic reaches the next operation as a half, which is the form the GPU's packed half ALU takes.
 kernel void half_arithmetic(device const half4 *a [[buffer(0)]], device const half4 *b [[buffer(1)]],
                             constant half &one [[buffer(2)]], device half4 *out [[buffer(3)]],
+                            device const half4 *c [[buffer(4)]],
                             uint id [[thread_position_in_grid]])
 {
     const half4 x = a[id], y = b[id];
     const half4 rx = x * one, ry = y * one;
-    out[4 * id] = x + y;
-    out[4 * id + 1] = x * y;
-    out[4 * id + 2] = rx + ry;
-    out[4 * id + 3] = rx * ry;
+    out[5 * id] = x + y;
+    out[5 * id + 1] = x * y;
+    out[5 * id + 2] = rx + ry;
+    out[5 * id + 3] = rx * ry;
+    out[5 * id + 4] = fma(x, y, c[id]);
 }
 
 /// NAK lowers a shader the SM53 probe's way only if it holds this value (nak/opt_sm53_half_probe.rs, debug builds): the
 /// probe kernels compare their thread index with it, which no dispatch reaches
 constant uint SM53_PROBE_MARKER = 0x7fa55353u;
+constant uint SM53_PROOF_MARKER = 0x7fa55354u;
+
+kernel void sm53_probe_io(device const ushort *a [[buffer(0)]], device const ushort *b [[buffer(1)]],
+                          device const ushort *c [[buffer(2)]], device uint4 *out [[buffer(3)]],
+                          uint id [[thread_position_in_grid]])
+{
+    out[id] = uint4(a[id] | (uint(b[id]) << 16), c[id], id, 0x5353494fu);
+}
 
 /// gpu.sm53_probe: each form NAK lowers to SM53's half ALU with an f32 result. The first two hold if the op rounds to
 /// half before it widens, the last three if it rounds the exact result once to f32.
 kernel void sm53_probe(device const half *a [[buffer(0)]], device const half *b [[buffer(1)]],
                        device const half *c [[buffer(2)]], device float *out [[buffer(3)]],
+                       device uint *proof [[buffer(4)]],
                        uint id [[thread_position_in_grid]])
 {
     if (id == SM53_PROBE_MARKER)
         return;
+    if (id == 0)
+        proof[0] = SM53_PROOF_MARKER;
     const half x = a[id], y = b[id], z = c[id];
     const half sum = x + y, product = x * y;
     out[5 * id] = float(sum);
@@ -107,10 +120,13 @@ kernel void sm53_probe(device const half *a [[buffer(0)]], device const half *b 
 /// gpu.sm53_probe: an f32 narrowed to half and its round trip through half, which NAK emits as one HADD2 each, reading
 /// the f32 through HADD2's F32 swizzle
 kernel void sm53_f32_source(device const float *x [[buffer(0)]], device half *narrowed [[buffer(1)]],
-                            device float *roundTrip [[buffer(2)]], uint id [[thread_position_in_grid]])
+                            device float *roundTrip [[buffer(2)]], device uint *proof [[buffer(4)]],
+                            uint id [[thread_position_in_grid]])
 {
     if (id == SM53_PROBE_MARKER)
         return;
+    if (id == 0)
+        proof[0] = SM53_PROOF_MARKER;
     const half h = half(x[id]);
     narrowed[id] = h;
     roundTrip[id] = float(h);

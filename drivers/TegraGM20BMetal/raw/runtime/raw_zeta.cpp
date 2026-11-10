@@ -137,6 +137,13 @@ DepthStencilRegs depthStencilRegs(const DepthStencilDesc &d, uint32_t refFront, 
     return r;
 }
 
+DepthStencilRegs shaderDepthStencilRegs(bool depth)
+{
+    auto regs = depthStencilRegs(DepthStencilDesc{}, 0, 0, depth, false);
+    regs.v[0] = depth;
+    return regs;
+}
+
 void emitDepthStencil(Push &p, const DepthStencilRegs &want, DepthStencilRegs &held)
 {
     for (uint32_t i = 0; i < kDepthStencilRegs; i++)

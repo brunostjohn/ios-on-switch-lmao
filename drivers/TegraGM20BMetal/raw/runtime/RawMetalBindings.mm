@@ -13,7 +13,7 @@ static bool bytesRoom(RMBytes &s, uint32_t padded, uint32_t &chunk, uint32_t &of
     }
     if (s.at == s.chunks.size()) {
         raw::Buffer b;
-        if (!gRM->raw->createBuffer(std::max(padded, kChunk), b, true)) {
+        if (!gRM->raw->createControlBuffer(std::max(padded, kChunk), b)) {
             b = {};
             b.length = std::max(padded, kChunk);
             b.cpu = static_cast<uint8_t *>(malloc(size_t(b.length)));

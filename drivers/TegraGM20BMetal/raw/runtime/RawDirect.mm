@@ -60,10 +60,14 @@ bool madeKernel(const NmbDirectKernel *kernel, void *ctx)
 Direct::Direct(const Pack &pack) : Direct(PackRules::of(pack))
 {}
 
-Direct::Direct(PackRules rules)
+Direct::Direct(PackRules rules, bool rankArtifacts)
     : rules_(std::move(rules)),
       nvk_(native_bridge_metal_nvk_symbol ? DirectNvk::find(native_bridge_metal_nvk_symbol) : DirectNvk{})
-{}
+{
+    if (rankArtifacts)
+        nvk_.compileStage = native_bridge_metal_nvk_symbol ?
+            native_bridge_metal_nvk_symbol("switch_nvk_compile_ranked_stage") : nullptr;
+}
 
 Compiler::Outcome Direct::form(MTLRenderPipelineDescriptor *descriptor, bool barrier, ProbeTextures textures,
                                const std::string &key, const std::vector<uint32_t> &attributes, RuntimeRecord &out,
@@ -76,10 +80,12 @@ Compiler::Outcome Direct::form(MTLRenderPipelineDescriptor *descriptor, bool bar
         cubic.push_back({c.slot, c.s, c.t, c.r, c.border, c.normalized});
     for (const CubicBinds::Texture &t : textures.cubic.textures)
         formats.push_back({t.slot, t.format});
-    const NmbDirectBinds binds = {cubic.data(), uint32_t(cubic.size()), formats.data(), uint32_t(formats.size())};
+    const NmbDirectBinds binds = {cubic.data(), uint32_t(cubic.size()), formats.data(), uint32_t(formats.size()),
+                                  textures.fragmentTests};
     const char *refused = nullptr;
     if (!native_bridge_metal_render_direct(descriptor, barrier, textures.format, textures.samples,
-                                           textures.cubic.empty() ? nullptr : &binds, made, &a, &refused)) {
+                                           textures.cubic.empty() && !textures.fragmentTests ? nullptr : &binds, made,
+                                           &a, &refused)) {
         why = std::string("m2v refused its translation: ") + (refused ? refused : "");
         return refused && !strncmp(refused, "retry: ", 7) ? Compiler::Outcome::Failed : Compiler::Outcome::Refused;
     }
@@ -89,7 +95,7 @@ Compiler::Outcome Direct::form(MTLRenderPipelineDescriptor *descriptor, bool bar
 
 Compiler::Outcome Direct::make(MTLRenderPipelineDescriptor *descriptor, const std::string &key, RuntimeRecord &out,
                                std::string &why, ProbeTextures textures, std::map<uint32_t, uint32_t> *registers,
-                               bool split)
+                               bool split, PackForm requested)
 {
     if (!native_bridge_metal_render_direct || !nvk_.complete()) {
         why = nvk_.compileStage && !nvk_.abiMatches ? "NVK's switch_nvk_compile structs are not raw_direct.cpp's"
@@ -100,6 +106,12 @@ Compiler::Outcome Direct::make(MTLRenderPipelineDescriptor *descriptor, const st
     for (MTLVertexAttribute *a in descriptor.vertexFunction.vertexAttributes)
         if (a.isActive)
             attributes.push_back(uint32_t(a.attributeIndex));
+    if (requested == PackForm::Barrier) {
+        const Compiler::Outcome outcome = form(descriptor, true, textures, key, attributes, out, why, registers, split);
+        if (outcome == Compiler::Outcome::Made)
+            out.pipeline.flags |= PipelineBarrierForm;
+        return outcome;
+    }
     Compiler::Outcome outcome = form(descriptor, false, textures, key, attributes, out, why, registers, split);
     if (outcome != Compiler::Outcome::Refused || why.rfind("storage form", 0) != 0)
         return outcome;
@@ -113,9 +125,10 @@ Compiler::Outcome Direct::make(MTLRenderPipelineDescriptor *descriptor, const st
 
 namespace raw {
 
-KernelDispatch::KernelDispatch(const uint32_t threads[3], const std::map<uint32_t, uint32_t> &memory)
+KernelDispatch::KernelDispatch(const uint32_t threads[3], const std::map<uint32_t, uint32_t> &memory, bool regionMode)
 {
     memcpy(dispatch_.threads, threads, sizeof dispatch_.threads);
+    dispatch_.regionMode = regionMode;
     for (const auto &[index, length] : memory)
         if (index < 31)
             dispatch_.memory[index] = length;

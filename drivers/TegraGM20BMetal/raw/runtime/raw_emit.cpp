@@ -2,6 +2,7 @@
 // See raw_emit.h. The rules are NVK's (nvk_cmd_draw.c: blend, the write-mask macro, viewport clip control; nvk_shader.c: the
 // fragment program's push) applied to what m2v makes of a Metal descriptor.
 #include "raw_emit.h"
+#include "raw_sample_shading.h"
 
 #include <algorithm>
 #include <cstdio>
@@ -252,6 +253,15 @@ bool emitState(const std::string &keyFields, const EmitProgram &vertex, const Em
     const bool floatDepth = depthFormat == 252 || depthFormat == 260;  // Depth32Float, Depth32Float_Stencil8
     out.push_back({kViewportClip, kViewportClipBase | !floatDepth, true});
     out.push_back({kEarlyZ, fragment.earlyFragmentTests, true});
+    out.push_back({0x1224, fragment.interlockControl, true});
+    unsigned samples = 1;
+    if (const size_t field = keyFields.find("samples="); field != std::string::npos)
+        sscanf(keyFields.c_str() + field, "samples=%u", &samples);
+    if (!nativeSamples(samples)) {
+        why = "an unsupported raster sample count";
+        return false;
+    }
+    out.push_back({0x0754, sampleShadingControl(fragment.usesSampleShading ? samples : 1), true});
     out.push_back({kRegisterCount[0], vertex.gprs, true});
     out.push_back({kRegisterCount[1], fragment.gprs, true});
     return true;
@@ -260,7 +270,8 @@ bool emitState(const std::string &keyFields, const EmitProgram &vertex, const Em
 std::set<uint32_t> emittableMethods()
 {
     constexpr uint32_t kTargets = 8, kStreams = 32;
-    std::set<uint32_t> out = {kEarlyZ, kSingleCtWrite, kViewportClip, kRegisterCount[0], kRegisterCount[1]};
+    std::set<uint32_t> out = {kEarlyZ,           kSingleCtWrite, kViewportClip, kRegisterCount[0],
+                              kRegisterCount[1], 0x1224,         0x0754};
     for (uint32_t j = 0; j < kTargets; j++) {
         out.insert({kCtWrite + 4 * j, kBlend + 4 * j});
         for (uint32_t k = j ? 0 : 1; k < 7; k++)

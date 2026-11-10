@@ -117,6 +117,11 @@ bool handleEntry(const LayoutEntry &e, const PackRules &rules, RuntimeRecord &re
         p.kind = EntryTexture3d;
         p.slot = e.texSlot;
         break;
+    case Tex::DepthTest:
+    case Tex::StencilTest:
+        p.kind = e.tex == Tex::DepthTest ? EntryDepthTest : EntryStencilTest;
+        p.slot = 0;
+        break;
     case Tex::Unknown:
         why = "texture unidentified";
         return false;
@@ -256,6 +261,20 @@ bool assembleRecord(const RecordParts &parts, const std::string &key, const Pack
         if (!foreign(m, colors))
             regs[m] = disabledStream(m, v) ? 0 : v;
     registers(regs, colors, rules, out);
+    if (parts.storageMask) {
+        for (uint32_t m :
+             {0x0210u, 0x0754u, 0x1224u, 0x1a00u, 0x1a04u, 0x1a08u, 0x1a0cu, 0x1a10u, 0x1a14u, 0x1a18u, 0x1a1cu}) {
+            if (m >= 0x1a00 && !(parts.storageMask & (1u << ((m - 0x1a00) / 4))))
+                continue;
+            bool found = false;
+            for (size_t i = 0; i < out.blob.size(); i += 2)
+                found |= out.blob[i] == m;
+            if (!found) {
+                out.blob.push_back(m);
+                out.blob.push_back(valueOf(regs, m));
+            }
+        }
+    }
     p.keyHash = packKeyHash(key);
     p.vs = 0;
     p.fs = 1;
@@ -271,6 +290,13 @@ bool assembleRecord(const RecordParts &parts, const std::string &key, const Pack
     p.flags |= parts.pushMetadata ? PipelinePushMetadata : 0;
     p.blendColorWord = parts.blendColorWord;
     p.halfBlendColorWord = parts.halfBlendColorWord;
+    p.flags |= parts.storageMask ? PipelineStorageMetadata : 0;
+    p.storageMask = parts.storageMask;
+    p.storageWriteMask = parts.storageWriteMask;
+    p.storageSamples = parts.storageSamples;
+    p.storageTests = parts.storageTests;
+    p.shaderTests = parts.shaderTests;
+    memcpy(p.storageTic, parts.storageTic, sizeof p.storageTic);
     const size_t bar = key.find(" | ");
     out.keyString = key.substr(0, bar);
     while (!out.keyString.empty() && isspace(static_cast<unsigned char>(out.keyString.back())))

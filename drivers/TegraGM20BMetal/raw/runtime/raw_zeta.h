@@ -100,6 +100,7 @@ struct DepthStencilRegs {
 // under state `d` and stencil references `refFront`/`refBack` (setStencilFrontReferenceValue:backReferenceValue:)
 DepthStencilRegs depthStencilRegs(const DepthStencilDesc &d, uint32_t refFront, uint32_t refBack, bool depth,
                                   bool stencil);
+DepthStencilRegs shaderDepthStencilRegs(bool depth);
 // The methods that take `held` (what the GPU holds) to `want`, then held = want
 constexpr uint32_t kDepthStencilWords = 2 * kDepthStencilRegs;
 void emitDepthStencil(Push &p, const DepthStencilRegs &want, DepthStencilRegs &held);

@@ -32,7 +32,7 @@ filegroup(
 # The raw facade's Objective-C++ units (RawMetal.mm and the RawMetal*.mm beside it, RawAlias.mm, RawComplete.mm, RawDirect.mm)
 filegroup(
     name = "raw_facade_srcs",
-    srcs = glob(["raw/runtime/Raw*.mm"]),
+    srcs = glob(["raw/runtime/Raw*.mm"]) + ["raw/runtime/SwitchSharedEvent.mm"],
 )
 
 # Not a hand run's leftovers: a .pyc of the modules (the host Python's) in a checkout would change the raw pack's action key
@@ -62,9 +62,18 @@ filegroup(
 filegroup(
     name = "raw_direct_sources",
     srcs = [
+        "precompile/PrecompileCompute.h",
+        "precompile/PrecompileInputs.h",
         "raw/runtime/RawDirect.h",
         "raw/runtime/RawDirect.mm",
+        "raw/runtime/RawRenderKey.h",
+        "raw/runtime/RawRenderKey.mm",
+        "raw/runtime/RawPipelineKey.h",
+        "raw/runtime/raw_render_key.h",
+        "raw/runtime/raw_cache.cpp",
         "raw/runtime/raw_cache.h",
+        "raw/runtime/raw_cache_io.h",
+        "raw/runtime/raw_kernel_cache.cpp",
         "raw/runtime/raw_compiler.h",
         "raw/runtime/raw_compute_record.h",
         "raw/runtime/raw_direct.cpp",
@@ -73,8 +82,14 @@ filegroup(
         "raw/runtime/raw_direct_compute.h",
         "raw/runtime/raw_direct_nvk.h",
         "raw/runtime/raw_direct_push.h",
+        "raw/runtime/raw_dynamic_push.h",
+        "raw/runtime/raw_shader_test_push.h",
+        "raw/runtime/raw_direct_storage.h",
+        "raw/runtime/raw_storage.h",
+        "raw/runtime/raw_split_metadata.h",
         "raw/runtime/raw_emit.cpp",
         "raw/runtime/raw_emit.h",
+        "raw/runtime/raw_sample_shading.h",
         "raw/runtime/raw_pack.cpp",
         "raw/runtime/raw_record.h",
         "raw/runtime/raw_record_parts.cpp",
@@ -100,7 +115,9 @@ ios_binary(
         "raw/runtime/raw_arena.cpp",
         "raw/runtime/raw_comp.cpp",
         "raw/runtime/raw_gpu.cpp",
+        "raw/runtime/raw_transfer.cpp",
         "raw/runtime/raw_kernel.cpp",
+        "raw/runtime/raw_shared_events.cpp",
         "raw/runtime/raw_pack.cpp",
         "raw/runtime/raw_split.cpp",
         "raw/runtime/raw_zeta.cpp",
@@ -301,6 +318,7 @@ py_binary(
     name = "harvest",
     srcs = ["precompile/harvest.py"],
     main = "precompile/harvest.py",
+    deps = ["//tools/gpu/shaders:replies"],
 )
 
 py_test(
@@ -310,6 +328,7 @@ py_test(
         "precompile/harvest_test.py",
     ],
     main = "precompile/harvest_test.py",
+    deps = ["//tools/gpu/shaders:replies"],
 )
 
 # The OS volume's library pins (pins), names.json (names: //gpu/seed:crawl) and the corpus's libraries (resolve: the seed).
@@ -317,6 +336,16 @@ py_binary(
     name = "libraries",
     srcs = ["precompile/libraries.py"],
     main = "precompile/libraries.py",
+)
+
+py_test(
+    name = "libraries_test",
+    srcs = [
+        "precompile/libraries.py",
+        "precompile/libraries_test.py",
+    ],
+    imports = ["precompile"],
+    main = "precompile/libraries_test.py",
 )
 
 # `bazel run //drivers/TegraGM20BMetal:ca_names -- <abs path>/precompile/ca-names/<build>.txt <decoded log>...`

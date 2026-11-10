@@ -36,6 +36,7 @@ enum YcbcrOutput : uint8_t {
 
 struct YcbcrPlan {
     YcbcrOutput output = YcbcrConverted;
+    bool nativePlanes = false;
     // Texture::addressMap: 1 the wrapping modes clamp to the edge (4:2:0, 4:2:2), 2 clamps to zero and to the border do
     // (codes), 3 both, 0 neither (a 4:4:4 converted texture)
     uint8_t addressMap = 0;

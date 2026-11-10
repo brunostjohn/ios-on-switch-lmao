@@ -23,6 +23,10 @@ struct NvkStageInfo {
     uint32_t halfTargets;
     uint32_t constPushMask;
     uint32_t constPushWords[32];
+    uint64_t centerFragDepth;
+    const void *semantic;
+    const void *portableContext;
+    bool (*portable)(const void *context, const uint32_t **words, size_t *bytes);
 };
 
 struct NvkStage {
@@ -37,7 +41,17 @@ struct NvkStage {
     bool earlyFragmentTests, writesDepth, postDepthCoverage;
     const void *split;
     void *owner;
+    uint32_t interlockControl;
+    uint64_t usesSampleShading;
+    uint32_t semanticVersion;
 };
+
+struct NvkStageMetrics {
+    uint32_t version, codeBytes, instructions, gprs, maxWarps;
+    uint32_t scratchBytes, memorySpills, memoryFills, registerSpills, registerFills;
+    uint64_t staticCycles;
+};
+static_assert(sizeof(NvkStageMetrics) == 48);
 
 struct NvkSetBinding {
     uint32_t offset, stride, arraySize;

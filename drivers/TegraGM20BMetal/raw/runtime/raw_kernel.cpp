@@ -42,10 +42,23 @@ void *nvkImage()
 
 Kernel::~Kernel()
 {
+    if (events_)
+        events_->shutdown();
     if (release_)
         release_();
     else if (conn_)
         IOServiceClose(conn_);
+}
+
+std::shared_ptr<SharedEvents> Kernel::sharedEvents()
+{
+    constexpr uint32_t required = TegraGM20BInfoSharedEvents | TegraGM20BInfoSemanticFence;
+    if ((info_.flags & required) != required || !exactJobs())
+        return nullptr;
+    std::lock_guard<std::mutex> lock(eventsLock_);
+    if (!events_)
+        events_ = SharedEvents::create(conn_, tunnel_, selector_);
+    return events_;
 }
 
 static std::string failed(const char *what, int kr)
@@ -146,6 +159,7 @@ bool Kernel::openOwn(std::string &err)
 
 uint64_t Kernel::allocVa(uint64_t bytes, uint64_t align)
 {
+    std::lock_guard<std::mutex> lock(vaLock_);
     bytes = (bytes + kVaGranule - 1) & ~(kVaGranule - 1);
     const uint64_t minimumAlignment = bytes >= kBigPageAlignment ? kBigPageAlignment : kVaGranule;
     if (align < minimumAlignment)
@@ -168,6 +182,7 @@ uint64_t Kernel::allocVa(uint64_t bytes, uint64_t align)
 
 void Kernel::freeVa(uint64_t va, uint64_t bytes)
 {
+    std::lock_guard<std::mutex> lock(vaLock_);
     bytes = (bytes + kVaGranule - 1) & ~(kVaGranule - 1);
     if (!va || !bytes)
         return;
@@ -187,27 +202,30 @@ void Kernel::freeVa(uint64_t va, uint64_t bytes)
     vaFree_[va] = bytes;
 }
 
-bool Kernel::bind(uint64_t va, uint64_t handle, uint64_t range, uint32_t kind)
+bool Kernel::bind(uint64_t va, uint64_t handle, uint64_t range, uint32_t kind, bool gpuVolatile)
 {
     TegraGM20BAbiVmBind b = {};
     b.count = 1;
-    b.ops[0] = {TegraGM20BBindMap, kind, handle, 0, va, range};
+    b.ops[0] = {gpuVolatile && jobVisibility() ? TegraGM20BBindMapVolatile : TegraGM20BBindMap,
+                kind, handle, 0, va, range};
     const size_t in = offsetof(TegraGM20BAbiVmBind, ops) + sizeof(b.ops[0]);
     if (call(TegraGM20BMethodVmBind, &b, in, nullptr, 0) != KERN_SUCCESS) {
-        err_ = "VmBind failed";
+        setError("VmBind failed");
         return false;
     }
     return true;
 }
 
-bool Kernel::alloc(uint64_t bytes, bool coherent, Bo &bo, uint32_t kind, uint64_t align)
+bool Kernel::alloc(uint64_t bytes, bool coherent, Bo &bo, uint32_t kind, uint64_t align, bool gpuVolatile)
 {
     bytes = (bytes + info_.page_size - 1) & ~uint64_t(info_.page_size - 1);
     TegraGM20BAbiBoAlloc a = {bytes, 12, coherent ? uint32_t(TegraGM20BBoCoherent) : 0u};
+    if (gpuVolatile && coherent && !kind && (info_.flags & TegraGM20BInfoControlReserve))
+        a.flags |= TegraGM20BBoControl;
     TegraGM20BAbiBoAllocReply r = {};
     bo = {};
     if (call(TegraGM20BMethodBoAlloc, &a, sizeof a, &r, sizeof r) != KERN_SUCCESS) {
-        err_ = "BoAlloc failed";
+        setError("BoAlloc failed");
         return false;
     }
     bo.handle = r.handle;
@@ -215,7 +233,7 @@ bool Kernel::alloc(uint64_t bytes, bool coherent, Bo &bo, uint32_t kind, uint64_
     bo.bytes = bytes;
     uint64_t addr = 0, size = 0;
     if (!map(r.map_token, false, addr, size) || size < bytes) {
-        err_ = "BO map failed";
+        setError("BO map failed");
         free(bo);
         return false;
     }
@@ -223,11 +241,12 @@ bool Kernel::alloc(uint64_t bytes, bool coherent, Bo &bo, uint32_t kind, uint64_
     bo.mapped = size;
     bo.va = bo.vaBase = allocVa(bytes, align);
     if (!bo.va) {
-        err_ = "out of GPU VA";
+        setError("out of GPU VA");
         free(bo);
         return false;
     }
-    if (!bind(bo.va, bo.handle, bytes, kind)) {
+    bo.gpuVolatile = gpuVolatile && jobVisibility();
+    if (!bind(bo.va, bo.handle, bytes, kind, bo.gpuVolatile)) {
         free(bo);
         return false;
     }
@@ -237,7 +256,7 @@ bool Kernel::alloc(uint64_t bytes, bool coherent, Bo &bo, uint32_t kind, uint64_
 bool Kernel::import(void *addr, uint64_t bytes, Bo &bo, uint32_t kind, uint32_t surfaceId)
 {
     if (!importPages(addr, bytes, bo, surfaceId)) {
-        err_ = "BoImport failed";
+        setError("BoImport failed");
         return false;
     }
     return bindImport(addr, bo, kind);
@@ -300,12 +319,29 @@ uint32_t Kernel::surfaceLayout(const Bo &bo, uint32_t width, uint32_t height, ui
     return out.layout;
 }
 
+int Kernel::nativeSurfaceView(const Bo &source, Bo &view, TegraGM20BAbiNativeSurfaceViewReply &layout)
+{
+    layout = {};
+    view = {};
+    if (!(info_.flags & TegraGM20BInfoNativeSurfaceView) || !exactJobs())
+        return KERN_SUCCESS;
+    const TegraGM20BAbiNativeSurfaceView in = {source.handle, 0, 0};
+    const int result = call(TegraGM20BMethodNativeSurfaceView, &in, sizeof in, &layout, sizeof layout);
+    if (result != KERN_SUCCESS || !layout.handle)
+        return result;
+    view.handle = layout.handle;
+    view.bytes = layout.bytes;
+    if (!bindImport(nullptr, view, layout.kind))
+        return kIOReturnNoResources;
+    return KERN_SUCCESS;
+}
+
 bool Kernel::bindImport(void *addr, Bo &bo, uint32_t kind)
 {
     const uintptr_t base = uintptr_t(addr) & ~uintptr_t(info_.page_size - 1);
     bo.vaBase = allocVa(bo.bytes, kVaGranule);
     if (!bo.vaBase) {
-        err_ = "out of GPU VA";
+        setError("out of GPU VA");
         free(bo);
         return false;
     }
@@ -339,6 +375,11 @@ bool Kernel::bindImportAt(void *addr, Bo &bo, uint64_t va, uint32_t kind)
     return true;
 }
 
+bool Kernel::bindAlias(const Bo &bo, uint64_t va, uint32_t kind)
+{
+    return bind(va, bo.handle, bo.bytes, kind);
+}
+
 void Kernel::free(Bo &bo)
 {
     if (bo.token && bo.cpu)
@@ -354,21 +395,34 @@ void Kernel::free(Bo &bo)
 
 bool Kernel::channel(uint32_t engines, uint32_t &channel, const volatile uint32_t *&fence)
 {
+    std::lock_guard<std::mutex> l(lostLock_);
+    if (engines == TegraGM20BEngineCopy && (info_.flags & TegraGM20BInfoLeanCopyChannel))
+        engines |= TegraGM20BEngineCopyOnly;
     TegraGM20BAbiChannelCreate in = {engines, 0};
     TegraGM20BAbiChannelCreateReply r = {};
     if (const int kr = call(TegraGM20BMethodChannelCreate, &in, sizeof in, &r, sizeof r); kr != KERN_SUCCESS) {
-        err_ = failed("ChannelCreate", kr);
+        setError(failed("ChannelCreate", kr));
         return false;
     }
-    uint64_t size = 0;
-    if (!fenceMap_ && !map(r.fence_token, true, fenceMap_, size)) {
+    if (!fenceMap_ && !map(r.fence_token, true, fenceMap_, fenceMapBytes_)) {
         fenceMap_ = 0;
-        err_ = "fence map failed";
+        fenceMapBytes_ = 0;
+        closeChannel(r.channel);
+        setError("fence map failed");
+        return false;
+    }
+    const uint64_t recordBytes = (info_.flags & TegraGM20BInfoCpuComplete)
+        ? sizeof(TegraGM20BAbiFence) + sizeof(TegraGM20BAbiFenceSemantic) + sizeof(TegraGM20BAbiFenceIdentity)
+        : (info_.flags & TegraGM20BInfoSemanticFence)
+            ? sizeof(TegraGM20BAbiFence) + sizeof(TegraGM20BAbiFenceSemantic)
+            : killRecords() ? sizeof(TegraGM20BAbiFence) : sizeof(uint32_t);
+    if ((r.fence_offset & 7) || r.fence_offset > fenceMapBytes_ || recordBytes > fenceMapBytes_ - r.fence_offset) {
+        closeChannel(r.channel);
+        setError("fence record outside mapped range");
         return false;
     }
     channel = r.channel;
     fence = reinterpret_cast<const volatile uint32_t *>(uintptr_t(fenceMap_) + r.fence_offset);
-    std::lock_guard<std::mutex> l(lostLock_);
     opened_.fetch_add(1, std::memory_order_release);
     uint32_t reused = r.channel;
     lostChannel_.compare_exchange_strong(reused, 0, std::memory_order_relaxed);
@@ -429,56 +483,127 @@ int Kernel::order(uint32_t channel, uint32_t flags, uint32_t seqno, uint32_t &wa
 bool Kernel::cpuAccess(const Bo &bo, uint64_t offset, uint64_t bytes, uint32_t access, bool acquire)
 {
     if (!(info_.flags & TegraGM20BInfoCpuAccess) || !bytes || offset > bo.bytes || bytes > bo.bytes - offset) {
-        err_ = "CPU ownership unavailable or invalid range";
+        setError("CPU ownership unavailable or invalid range");
         return false;
     }
     const TegraGM20BAbiCpuAccess in = {bo.handle, offset, bytes, access, 0};
     const int kr = call(acquire ? TegraGM20BMethodCpuAcquire : TegraGM20BMethodCpuRelease, &in, sizeof in, nullptr, 0);
     if (kr != KERN_SUCCESS)
-        err_ = failed(acquire ? "CpuAcquire" : "CpuRelease", kr);
+        setError(failed(acquire ? "CpuAcquire" : "CpuRelease", kr));
     return kr == KERN_SUCCESS;
 }
 
-bool Kernel::exec(uint32_t channel, const TegraGM20BAbiPush *pushes, uint32_t count, uint32_t last, uint32_t &seqno,
-                  SurfaceList *surfaces)
+CpuCompletionResult Kernel::completeCpu(const CpuCompletion &completion)
 {
+    if (completion.supported && !(info_.flags & TegraGM20BInfoCpuComplete))
+        return CpuCompletionResult::Failed;
+    return completeCpuRanges(completion, [&](const auto &request, auto &reply) {
+        const int kr = call(TegraGM20BMethodCpuComplete, &request, sizeof request, &reply, sizeof reply);
+        if (kr != KERN_SUCCESS)
+            setError(failed("CpuComplete", kr));
+        return kr == KERN_SUCCESS;
+    });
+}
+
+bool Kernel::exec(uint32_t channel, const TegraGM20BAbiPush *pushes, uint32_t count, uint32_t last, uint32_t &seqno,
+                  SurfaceList *surfaces, int *result, JobVisibility visibility, const JobEvents &events,
+                  const JobAdmission &admission)
+{
+    if (result)
+        *result = KERN_SUCCESS;
     if (count > maxPushes() || (surfaces && !surfaces->valid())) {
-        err_ = failed("Submit resource capacity", kIOReturnBadArgument);
+        setError(failed("Submit resource capacity", kIOReturnBadArgument));
         return false;
     }
     // Initial context packets retain the legacy path until their control BOs are named.
     const bool addressed = exactJobs() && surfaces;
+    if (surfaces && !rangeUses())
+        for (const auto &use : surfaces->uses())
+            if (use.access & TegraGM20BSurfaceRange) {
+                if (result)
+                    *result = kIOReturnBadArgument;
+                setError("The kernel cannot represent this job's resource ranges");
+                return false;
+            }
+    constexpr uint32_t admissionFlags = TegraGM20BSubmitAdmissionBegin | TegraGM20BSubmitAdmissionContinue |
+        TegraGM20BSubmitAdmissionEnd | TegraGM20BSubmitAdmissionCancel;
+    if (!admission.empty() && (!addressed || !resourceReady() || !admission.cookie ||
+        !(admission.flags & admissionFlags) || (admission.flags & ~admissionFlags))) {
+        if (result)
+            *result = kIOReturnBadArgument;
+        setError("The kernel cannot retain this job's resource admission");
+        return false;
+    }
+    if (!events.empty() && (!addressed || !(info_.flags & TegraGM20BInfoSharedEvents) ||
+        events.waitCount > TegraGM20BMaxJobEvents || events.signalCount > TegraGM20BMaxJobEvents - events.waitCount ||
+        (events.waitCount && !events.waits) || (events.signalCount && !events.signals))) {
+        if (result)
+            *result = kIOReturnBadArgument;
+        setError("The kernel cannot represent this job's shared events");
+        return false;
+    }
+    const bool explicitVisibility = addressed && jobVisibility() && visibility != JobVisibility::Legacy;
     TegraGM20BAbiExec legacyExec = {};
     size_t listBytes = 0;
     const TegraGM20BAbiExecSurfaces *list = nullptr;
     if (!addressed && surfaces && (info_.flags & TegraGM20BInfoExecSurfaces)) {
         list = surfaces->legacy(channel, listBytes);
         if (!list) {
-            err_ = "The kernel cannot represent every resource dependency in this job";
+            setError("The kernel cannot represent every resource dependency in this job");
             return false;
         }
     }
     const uint32_t nuses = addressed ? uint32_t(surfaces->uses().size()) : list ? list->count : 0;
-    const size_t submitBytes =
+    const size_t admissionOffset =
         sizeof(TegraGM20BAbiSubmit) + count * sizeof(pushes[0]) + nuses * sizeof(TegraGM20BAbiSurfaceUse);
+    const size_t eventOffset = admissionOffset + (admission.empty() ? 0 : sizeof(TegraGM20BAbiSubmitAdmission));
+    const size_t submitBytes = eventOffset + (events.empty() ? 0 : sizeof(TegraGM20BAbiSubmitEvents) +
+        (events.waitCount + events.signalCount) * sizeof(TegraGM20BAbiEventUse));
     const bool atomic = addressed || ((info_.flags & TegraGM20BInfoSubmit) && submitBytes <= TegraGM20BMaxSubmitBytes);
     // Reused per submitting thread; no shared scratch lock is held across a channel's fence wait.
     thread_local std::vector<uint64_t> storage;
     if (atomic) {
         storage.resize((submitBytes + sizeof(uint64_t) - 1) / sizeof(uint64_t));
-        const TegraGM20BAbiSubmit header = {channel, count, nuses,
-                                            addressed || list ? 0u : uint32_t(TegraGM20BExecSurfacesAll)};
+        uint32_t flags = addressed || list ? 0u : uint32_t(TegraGM20BExecSurfacesAll);
+        flags |= admission.flags;
+        if (explicitVisibility)
+            flags |= TegraGM20BSubmitVisibilityExplicit |
+                     (visibility == JobVisibility::External ? uint32_t(TegraGM20BSubmitExternalVisibility) : 0u);
+        if (!events.empty())
+            flags |= TegraGM20BSubmitHasEvents;
+        const TegraGM20BAbiSubmit header = {channel, count, nuses, flags};
         auto *data = reinterpret_cast<uint8_t *>(storage.data());
         memcpy(data, &header, sizeof header);
-        memcpy(data + sizeof header, pushes, count * sizeof pushes[0]);
+        if (count)
+            memcpy(data + sizeof header, pushes, count * sizeof pushes[0]);
         if (nuses)
             memcpy(data + sizeof header + count * sizeof pushes[0], addressed ? surfaces->uses().data() : list->uses,
                    nuses * sizeof(TegraGM20BAbiSurfaceUse));
+        if (!explicitVisibility) {
+            auto *uses = reinterpret_cast<TegraGM20BAbiSurfaceUse *>(data + sizeof header + count * sizeof pushes[0]);
+            for (uint32_t i = 0; i < nuses; ++i)
+                uses[i].access &= ~uint32_t(TegraGM20BSurfaceHostWritten);
+        }
         if (count && !addressed && importsWritten_.load(std::memory_order_relaxed))
             reinterpret_cast<TegraGM20BAbiPush *>(data + sizeof header)[0].flags |= TegraGM20BPushImportsWritten;
+        if (!admission.empty()) {
+            const TegraGM20BAbiSubmitAdmission retained{admission.cookie, 0};
+            memcpy(data + admissionOffset, &retained, sizeof retained);
+        }
+        if (!events.empty()) {
+            const TegraGM20BAbiSubmitEvents eventHeader{events.waitCount, events.signalCount, 0};
+            auto *tail = data + eventOffset;
+            memcpy(tail, &eventHeader, sizeof eventHeader);
+            tail += sizeof eventHeader;
+            if (events.waitCount)
+                memcpy(tail, events.waits, events.waitCount * sizeof events.waits[0]);
+            tail += events.waitCount * sizeof events.waits[0];
+            if (events.signalCount)
+                memcpy(tail, events.signals, events.signalCount * sizeof events.signals[0]);
+        }
     } else {
         if (count > TegraGM20BMaxPushes) {
-            err_ = failed("Exec", kIOReturnBadArgument);
+            setError(failed("Exec", kIOReturnBadArgument));
             return false;
         }
         legacyExec.channel = channel;
@@ -501,13 +626,15 @@ bool Kernel::exec(uint32_t channel, const TegraGM20BAbiPush *pushes, uint32_t co
             if (list) {
                 kr = call(TegraGM20BMethodExecSurfaces, list, listBytes, nullptr, 0);
                 if (kr != KERN_SUCCESS) {
-                    err_ = failed("ExecSurfaces", kr);
+                    setError(failed("ExecSurfaces", kr));
                     return false;
                 }
             }
             kr = call(TegraGM20BMethodExec, &legacyExec, offsetof(TegraGM20BAbiExec, pushes) + count * sizeof pushes[0],
                       &reply, sizeof reply);
         }
+        if (result)
+            *result = kr;
         if (kr == KERN_SUCCESS) {
             seqno = reply.seqno;
             return true;
@@ -515,7 +642,7 @@ bool Kernel::exec(uint32_t channel, const TegraGM20BAbiPush *pushes, uint32_t co
         if (kr == kIOReturnNotResponding)
             markLost(channel, at);
         if (kr != kIOReturnBusy || !last) {
-            err_ = failed(addressed ? "SubmitAddress" : atomic ? "Submit" : "Exec", kr);
+            setError(failed(addressed ? "SubmitAddress" : atomic ? "Submit" : "Exec", kr));
             return false;
         }
         if (!wait(channel, last))
@@ -554,7 +681,7 @@ bool Kernel::wait(uint32_t channel, uint32_t seqno, uint64_t timeoutNs)
     if (kr == kIOReturnNotResponding)
         markLost(channel, at);
     if (kr != KERN_SUCCESS) {
-        err_ = "WaitFence failed";
+        setError("WaitFence failed");
         return false;
     }
     return true;

@@ -16,6 +16,8 @@ struct EmitProgram {
     const uint8_t *header = nullptr;  // the 80-byte shader program header
     uint32_t gprs = 0;
     bool earlyFragmentTests = false;
+    uint32_t interlockControl = 0;
+    bool usesSampleShading = false;
 };
 
 struct EmitRegister {

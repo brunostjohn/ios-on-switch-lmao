@@ -141,6 +141,7 @@ Device::Backing *Device::compBacking(const Texture &m, uint32_t tag, uint32_t ki
         comp_.ready.erase(it);
     }
     t.va = mem->bo.va;
+    t.storage = {t.va, bytes, false};
     t.comptags = true;
     if (!m.zeta) {
         const FormatInfo *f = formatInfo(m.format);
@@ -156,12 +157,14 @@ Device::Backing *Device::compBacking(const Texture &m, uint32_t tag, uint32_t ki
     b->comp = mem;
     b->usedNs = compClock();
     mem->views++;
-    stats.compViews++;
+    RAW_DIAGNOSTIC(stats.compViews++);
+#if SWITCH_RAW_DIAGNOSTICS
     if (!comp_.loggedOn) {
         comp_.loggedOn = true;
         os_log(compLog(), "raw: compression on: first backing %ux%u format %u kind 0x%x (%llu KiB)", t.width, t.height,
                t.format, kind, (unsigned long long)(mem->bo.bytes >> 10));
     }
+#endif
     return b;
 }
 
@@ -171,26 +174,30 @@ void Device::compMake(std::unique_lock<std::mutex> &l)
         const CompWant w = comp_.wanted.front();
         Bo bo;
         l.unlock();
+#if SWITCH_RAW_DIAGNOSTICS
         const auto start = std::chrono::steady_clock::now();
+#endif
         int kr = k_.allocCompressible(w.bytes, bo);
         const bool made = kr == KERN_SUCCESS;
+#if SWITCH_RAW_DIAGNOSTICS
         const auto us =
             std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - start).count();
+#endif
         l.lock();
         comp_.wanted.erase(std::find(comp_.wanted.begin(), comp_.wanted.end(), w));
         if (made && (kr = k_.bindCompressed(bo, w.kind)) == KERN_SUCCESS) {
             comp_.made(w);
             comp_.ready.push_back({bo, w.kind, commitCount_, compClock()});
-            stats.compMade++;
-            stats.compHeld++;
-            stats.compHeldBytes += bo.bytes;
-            os_log_debug(compLog(), "raw: compressed memory %llu KiB kind 0x%x made in %lld us",
-                         (unsigned long long)(w.bytes >> 10), w.kind, (long long)us);
+            RAW_DIAGNOSTIC(stats.compMade++);
+            RAW_DIAGNOSTIC(stats.compHeld++);
+            RAW_DIAGNOSTIC(stats.compHeldBytes += bo.bytes);
+            RAW_DIAGNOSTIC(os_log_debug(compLog(), "raw: compressed memory %llu KiB kind 0x%x made in %lld us",
+                                        (unsigned long long)(w.bytes >> 10), w.kind, (long long)us));
             continue;
         }
         if (made)
             k_.free(bo);
-        stats.compFailed++;
+        RAW_DIAGNOSTIC(stats.compFailed++);
         const bool lasting = compLasting(kr);
         if (comp_.refuse(w, commitCount_, lasting))
             os_log_error(compLog(),
@@ -218,13 +225,13 @@ void Device::compFree(Backing &b)
         memset(tic_.cpu + 32 * b.texture.tic, 0, 32);
         freeTic_.push_back(b.texture.tic);
     }
-    stats.compViews--;
+    RAW_DIAGNOSTIC(stats.compViews--);
     CompMem *mem = b.comp;
     b.comp = nullptr;
     if (--mem->views)
         return;
-    stats.compHeld--;
-    stats.compHeldBytes -= mem->bo.bytes;
+    RAW_DIAGNOSTIC(stats.compHeld--);
+    RAW_DIAGNOSTIC(stats.compHeldBytes -= mem->bo.bytes);
     k_.free(mem->bo);
     comp_.mems.erase(std::find_if(comp_.mems.begin(), comp_.mems.end(), [&](const std::unique_ptr<CompMem> &m) {
         return m.get() == mem;
@@ -252,8 +259,8 @@ void Device::compTrim(uint64_t now)
 {
     for (auto it = comp_.ready.begin(); it != comp_.ready.end();) {
         if (readyStale(commitCount_, it->madeAt, now, it->readyNs)) {
-            stats.compHeld--;
-            stats.compHeldBytes -= it->bo.bytes;
+            RAW_DIAGNOSTIC(stats.compHeld--);
+            RAW_DIAGNOSTIC(stats.compHeldBytes -= it->bo.bytes);
             k_.free(it->bo);
             it = comp_.ready.erase(it);
             comp_.freed(commitCount_);
@@ -265,9 +272,15 @@ void Device::compTrim(uint64_t now)
 
 void Device::countZbc(const Texture &t, bool full, bool boot)
 {
+#if SWITCH_RAW_DIAGNOSTICS
     if (!t.comptags)
         return;
     (full && boot ? stats.zbcHits : stats.zbcMisses)++;
+#else
+    (void)t;
+    (void)full;
+    (void)boot;
+#endif
 }
 
 }  // namespace raw

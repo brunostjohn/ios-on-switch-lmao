@@ -6,6 +6,7 @@
 #include "raw_dynamic_push.h"
 #include "raw_record.h"
 #include "raw_slm.h"
+#include "raw_storage.h"
 
 namespace raw {
 
@@ -32,7 +33,7 @@ bool Device::placeCompleted(const CapturedProgram &p, PlacedProgram &out)
     memcpy(placed.header, p.image.data(), sizeof placed.header);
     placed.placed = {&placed.info, uint32_t(at) + info.program, info.dataBytes ? heap_.va + at + info.dataOffset : 0,
                      placed.header};
-    stats.programsPlaced++;
+    RAW_DIAGNOSTIC(stats.programsPlaced++);
     out = placed.placed;
     return true;
 }
@@ -85,7 +86,8 @@ void Device::addSplit(const RuntimeRecord &r)
 {
     std::lock_guard<std::mutex> l(lock_);
     for (Completed &c : completedStore_)
-        if (c.record.keyHash == r.pipeline.keyHash && !c.pipeline.splitSource && !c.pipeline.split && r.split) {
+        if (c.record.keyHash == r.pipeline.keyHash && !c.record.storageMask && !c.pipeline.splitSource &&
+            !c.pipeline.split && r.split) {
             PlacedProgram vs;
             if (placeCompleted(r.programs[0], vs))
                 offerCompletedSplit(c, r, vs, c.pipeline.caTransform);
@@ -93,8 +95,15 @@ void Device::addSplit(const RuntimeRecord &r)
         }
 }
 
-Pipeline *Device::addRecord(const RuntimeRecord &r, bool caTransform, std::string &why)
+Pipeline *Device::addRecord(const RuntimeRecord &r, bool caTransform, std::string &why, bool *retry)
 {
+    if (retry)
+        *retry = false;
+    for (const auto &program : r.programs)
+        if (program.image.size() < sizeof CompletedProgram::header) {
+            why = "missing shader program header";
+            return nullptr;
+        }
     if (!usableDynamicPush(r.pipeline, r.keyString.c_str())) {
         why = "missing or invalid dynamic blend push metadata";
         return nullptr;
@@ -107,6 +116,8 @@ Pipeline *Device::addRecord(const RuntimeRecord &r, bool caTransform, std::strin
     if (!placeCompleted(r.programs[0], vs) || !placeCompleted(r.programs[1], fs)) {
         stats.heapFull++;
         why = "the shader heap is full";
+        if (retry)
+            *retry = true;
         return nullptr;
     }
     Completed c;
@@ -118,6 +129,10 @@ Pipeline *Device::addRecord(const RuntimeRecord &r, bool caTransform, std::strin
         c.blob.push_back(v);
     }
     c.record.blobDwords = uint32_t(c.blob.size());
+    if (!usableStorageMetadata(c.record, c.blob.data(), c.record.blobDwords)) {
+        why = "missing or invalid ordered storage attachment metadata";
+        return nullptr;
+    }
     // its constexpr samplers past the pack's own, numbered among the device's
     const uint32_t packSamplers = pack_.header()->samplers;
     for (uint32_t k = 0; k < c.record.entries; k++) {
@@ -127,6 +142,8 @@ Pipeline *Device::addRecord(const RuntimeRecord &r, bool caTransform, std::strin
         uint32_t index = 0;
         if (!constexprSampler(r.samplers.at(e.sampler - packSamplers), index)) {
             why = "no room for its sampler headers";
+            if (retry)
+                *retry = true;
             return nullptr;
         }
         e.sampler = uint8_t(index);
@@ -138,7 +155,7 @@ Pipeline *Device::addRecord(const RuntimeRecord &r, bool caTransform, std::strin
     for (const auto &[m, v] : r.restore)
         w.m(m, v);
     stored.pipeline.restore.assign(words.data(), w.at);
-    if (r.split)
+    if (r.split && !c.record.storageMask)
         offerCompletedSplit(stored, r, vs, caTransform);
     completed_[key] = &stored.pipeline;
     return &stored.pipeline;

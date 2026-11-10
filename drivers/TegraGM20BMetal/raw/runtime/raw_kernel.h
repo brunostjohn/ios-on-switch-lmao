@@ -5,7 +5,7 @@
 // other's too, and m2v's views of the raw path's memory need no import or bind of their own. VAs come from the quarter NVK leaves
 // out, the top one (a GPU fault address says which path made it), through a first-fit free list (VA is given back when a BO is
 // freed). A process without NVK (a host tool of the raw path alone) gets a connection of its own, the same quarter.
-// Not thread safe: raw::Device calls it under its own lock.
+// VM allocation state is serialized independently of channel submission.
 #pragma once
 #include <atomic>
 #include <mutex>
@@ -15,6 +15,8 @@
 #include "TegraGM20BABI.h"
 #include "TegraGM20BLayout.h"
 #include "raw_surfaces.h"
+#include "raw_shared_events.h"
+#include "raw_cpu_completion.h"
 
 namespace raw {
 
@@ -27,6 +29,13 @@ struct Bo {
     uint32_t token = 0;   // allocations: the map token (unmapped at free)
     uint64_t vaBase = 0;  // the bound range's start (an import's va is inside its first page)
     uint64_t mapped = 0;  // CPU mapping bytes (allocations)
+    bool gpuVolatile = false;
+};
+
+struct JobAdmission {
+    uint64_t cookie = 0;
+    uint32_t flags = 0;
+    bool empty() const { return !cookie && !flags; }
 };
 
 class Kernel {
@@ -45,7 +54,12 @@ public:
         return info_;
     }
 
-    bool alloc(uint64_t bytes, bool coherent, Bo &bo, uint32_t kind = 0, uint64_t align = 0x10000);
+    bool alloc(uint64_t bytes, bool coherent, Bo &bo, uint32_t kind = 0, uint64_t align = 0x10000,
+               bool gpuVolatile = false);
+    bool allocControl(uint64_t bytes, Bo &bo)
+    {
+        return alloc(bytes, true, bo, 0, 0x10000, true);
+    }
     // Wires [addr, addr + bytes) of this task (whole pages) and binds them; bo.va/bo.cpu name addr itself.
     bool import(void *addr, uint64_t bytes, Bo &bo, uint32_t kind = 0, uint32_t surfaceId = 0);
     // The same in two steps, for a caller that serialises the VA list itself: the kernel's BoImport (the wiring: the slow part,
@@ -63,6 +77,7 @@ public:
     // the method).
     uint32_t surfaceLayout(const Bo &bo, uint32_t width, uint32_t height, uint32_t bpp, uint32_t bytesPerRow,
                            bool writes, tgm_layout *canonical = nullptr);
+    int nativeSurfaceView(const Bo &source, Bo &view, TegraGM20BAbiNativeSurfaceViewReply &layout);
     bool bindImport(void *addr, Bo &bo, uint32_t kind);
     // BoAlloc Compressible (raw_comp.h), never CPU-mapped; safe beside the other calls (it may zero pages a free left
     // dirty); the kern_return_t.
@@ -76,6 +91,7 @@ public:
     void releaseVa(uint64_t va, uint64_t bytes);
     // bindImport at `va`, a granule boundary inside a reservation: freeing the BO leaves the VA to the reservation
     bool bindImportAt(void *addr, Bo &bo, uint64_t va, uint32_t kind);
+    bool bindAlias(const Bo &bo, uint64_t va, uint32_t kind);
     // BoFree (the kernel unbinds it at once and releases the pages after the channels complete what they had); the VA goes
     // back to the free list at once: call it only once no submission that uses the BO is still running (raw::Device does).
     void free(Bo &bo);
@@ -120,7 +136,20 @@ public:
     // as a writer of the ones it writes only. Submit (method 20) carries both in one call when the record fits.
     // Older kernels use ExecSurfaces then Exec; refusal of the list prevents submission.
     bool exec(uint32_t channel, const TegraGM20BAbiPush *pushes, uint32_t count, uint32_t last, uint32_t &seqno,
-              SurfaceList *surfaces = nullptr);
+              SurfaceList *surfaces = nullptr, int *result = nullptr, JobVisibility visibility = JobVisibility::Legacy,
+              const JobEvents &events = {}, const JobAdmission &admission = {});
+
+    std::shared_ptr<SharedEvents> sharedEvents();
+
+    bool resourceReady() const
+    {
+        return exactJobs() && (info_.flags & TegraGM20BInfoResourceReady);
+    }
+
+    uint64_t nextAdmission()
+    {
+        return admissionCookie_.fetch_add(1, std::memory_order_relaxed);
+    }
 
     uint32_t maxPushes() const
     {
@@ -132,7 +161,18 @@ public:
         return (info_.flags & TegraGM20BInfoSubmitAddress) != 0;
     }
 
+    bool jobVisibility() const
+    {
+        return exactJobs() && (info_.flags & TegraGM20BInfoJobVisibility);
+    }
+
+    bool rangeUses() const
+    {
+        return jobVisibility() && (info_.flags & TegraGM20BInfoUseRanges);
+    }
+
     bool cpuAccess(const Bo &bo, uint64_t offset, uint64_t bytes, uint32_t access, bool acquire);
+    CpuCompletionResult completeCpu(const CpuCompletion &completion);
     // Blocks in the kernel until the channel's completed seqno passes `seqno` (the kext sleeps on the fence interrupt).
     bool wait(uint32_t channel, uint32_t seqno, uint64_t timeoutNs = ~0ull);
     // Order (method 14, TegraGM20BInfoOrder): GPU-side acquires between `channel` and the task's other channels (NVK's).
@@ -150,21 +190,28 @@ public:
         return (info_.flags & TegraGM20BInfoKillRecord) != 0;
     }
 
-    const std::string &error() const
+    std::string error() const
     {
+        std::lock_guard<std::mutex> lock(errorLock_);
         return err_;
     }
 
     uint64_t vaInUse() const
     {
-        return vaUsed_;
+        return vaUsed_.load(std::memory_order_relaxed);
     }
 
 private:
+    std::atomic<uint64_t> admissionCookie_{1};
+    void setError(std::string error)
+    {
+        std::lock_guard<std::mutex> lock(errorLock_);
+        err_ = std::move(error);
+    }
     int call(uint32_t method, const void *in, size_t inSize, void *out, size_t outSize);
     bool map(uint32_t token, bool readOnly, uint64_t &address, uint64_t &bytes);
     void unmap(uint32_t token, uint64_t address);
-    bool bind(uint64_t va, uint64_t handle, uint64_t range, uint32_t kind);
+    bool bind(uint64_t va, uint64_t handle, uint64_t range, uint32_t kind, bool gpuVolatile = false);
     uint64_t allocVa(uint64_t bytes, uint64_t align);
     void freeVa(uint64_t va, uint64_t bytes);
     bool openOwn(std::string &err);
@@ -179,11 +226,16 @@ private:
     std::mutex lostLock_;  // a channel made, and a channel marked lost, one after the other
     std::atomic<uint64_t> lostFaultVa_{0};
     uint64_t fenceMap_ = 0;  // the connection's fence page, mapped once: every channel's word is in it
+    uint64_t fenceMapBytes_ = 0;
     uint32_t selector_ = 0;
     TegraGM20BAbiInfo info_ = {};
     std::map<uint64_t, uint64_t> vaFree_;  // start -> bytes, coalesced
-    uint64_t vaUsed_ = 0;
+    std::mutex vaLock_;
+    std::mutex eventsLock_;
+    std::shared_ptr<SharedEvents> events_;
+    std::atomic<uint64_t> vaUsed_{0};
     std::string err_;
+    mutable std::mutex errorLock_;
 };
 
 }  // namespace raw

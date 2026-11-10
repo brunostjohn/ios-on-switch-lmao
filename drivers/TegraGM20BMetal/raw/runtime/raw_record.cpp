@@ -224,7 +224,7 @@ bool makeRecord(const ProbeRuns &runs, const PackRules &rules, const ProgramLook
         return false;
     const nvdec::ProbeRecord &r = s.records[0];
     if (valueOf(r.regs, kInterlockControl) & 3) {
-        why = "storage form (its barrier form needs NVK's interlock hidden)";
+        why = "storage form: capture lacks qualified storage attachment metadata";
         return false;
     }
     RecordParts parts;

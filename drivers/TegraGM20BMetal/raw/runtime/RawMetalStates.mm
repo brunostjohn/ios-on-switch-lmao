@@ -401,7 +401,7 @@ static dispatch_queue_t creationQueue()
 {
     MTLComputePipelineDescriptor *d = [MTLComputePipelineDescriptor new];
     d.computeFunction = f;
-    return rmComputeState(self, [gRM->fallback newComputePipelineStateWithFunction:twinOf(f) error:error], f, d);
+    return rmComputeState(self, gRM->fallback, d, MTLPipelineOptionNone, nil, error);
 }
 
 - (id<MTLComputePipelineState>)newComputePipelineStateWithFunction:(id<MTLFunction>)f
@@ -411,8 +411,7 @@ static dispatch_queue_t creationQueue()
 {
     MTLComputePipelineDescriptor *d = [MTLComputePipelineDescriptor new];
     d.computeFunction = f;
-    return rmComputeState(
-        self, [gRM->fallback newComputePipelineStateWithFunction:twinOf(f) options:o reflection:r error:error], f, d);
+    return rmComputeState(self, gRM->fallback, d, o, r, error);
 }
 
 // _MTLDevice's own sends this to [self compiler], which answers nil on a device without Apple's compiler service: Core
@@ -428,11 +427,7 @@ static dispatch_queue_t creationQueue()
                                                           reflection:(MTLAutoreleasedComputePipelineReflection *)r
                                                                error:(NSError **)error
 {
-    MTLComputePipelineDescriptor *t = [d copy];
-    t.computeFunction = twinOf(d.computeFunction);
-    return rmComputeState(self,
-                          [gRM->fallback newComputePipelineStateWithDescriptor:t options:o reflection:r error:error],
-                          d.computeFunction, d);
+    return rmComputeState(self, gRM->fallback, d, o, r, error);
 }
 
 - (id<MTLRenderPipelineState>)newRenderPipelineStateWithTileDescriptor:(MTLTileRenderPipelineDescriptor *)d

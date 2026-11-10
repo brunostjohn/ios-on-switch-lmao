@@ -217,7 +217,7 @@ static bool rawResolve(MTLRenderPassColorAttachmentDescriptor *a, RMTexture *fro
         id<MTLTexture> t = a.texture;
         if (!t)
             continue;
-        facts.color[c] = {t, a.level, a.loadAction, a.storeAction, a.clearColor};
+        facts.color[c] = {t, a.level, a.loadAction, a.storeAction, a.clearColor, a.resolveTexture};
         [self retain:t];
         [self retain:pass.colorAttachments[c].resolveTexture];
         RMTexture *x = (RMTexture *)t;

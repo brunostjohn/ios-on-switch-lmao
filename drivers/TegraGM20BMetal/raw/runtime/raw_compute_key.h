@@ -71,7 +71,7 @@ inline std::string computeSamplers(const BoundSampler *s, size_t count)
 
 inline std::string computeKey(const AirHash &air, const std::string &constants, uint32_t maxThreads,
                               bool multipleOfWidth, const uint32_t threads[3], const std::string &threadgroupMemory,
-                              const std::string &textures, const std::string &samplers)
+                              const std::string &textures, const std::string &samplers, bool regionMode = false)
 {
     std::string key;
     char b[96];
@@ -81,7 +81,8 @@ inline std::string computeKey(const AirHash &air, const std::string &constants, 
     }
     snprintf(b, sizeof b, " | max=%u tgm=%d | tg=%u,%u,%u | tgmem=", maxThreads, multipleOfWidth ? 1 : 0, threads[0],
              threads[1], threads[2]);
-    return key + " | " + constants + b + threadgroupMemory + " | tex=" + textures + " | smp=" + samplers;
+    return key + " | " + constants + b + threadgroupMemory + " | tex=" + textures + " | smp=" + samplers +
+           (regionMode ? " | region=1" : "");
 }
 
 inline uint64_t computeKeyHash(const std::string &key)

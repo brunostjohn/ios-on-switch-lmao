@@ -40,22 +40,22 @@
                                                                        : nil);
 }
 
-// A CPU read after a GPU write: the GPU's bytes, not lines the CPU cached before (clean+invalidate keeps any CPU write)
-- (void)invalidateForCpu
+- (BOOL)invalidateForCpu
 {
-    if (!_gpuDirty.exchange(false) || _raw.wc)
-        return;  // (write-combined: the CPU reads memory itself)
-#if defined(__aarch64__)
-    for (uintptr_t a = uintptr_t(_raw.cpu) & ~uintptr_t(63); a < uintptr_t(_raw.cpu) + _raw.length; a += 64)
-        __asm__ volatile("dc civac, %0" ::"r"(a) : "memory");
-    __asm__ volatile("dsb sy" ::: "memory");
-#endif
+    if ((!_gpuDirty.load(std::memory_order_acquire) && !_raw.import) || _raw.wc)
+        return YES;
+    raw::HostAccess access;
+    if (!gRM->raw->hostAccess(_raw, false, access) || !access.finish())
+        return NO;
+    _gpuDirty.store(false, std::memory_order_release);
+    return YES;
 }
 
 - (void *)contents
 {
-    [self invalidateForCpu];
-    return _raw.cpu;
+    if (!_raw.hostVisible)
+        return nullptr;
+    return [self invalidateForCpu] ? _raw.cpu : nullptr;
 }
 
 - (NSUInteger)length

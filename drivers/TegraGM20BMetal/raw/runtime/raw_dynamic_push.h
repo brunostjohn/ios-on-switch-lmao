@@ -32,8 +32,16 @@ inline bool keyUsesBlendColor(const char *key)
 
 inline bool usableDynamicPush(const PackPipeline &p, const char *key)
 {
+    const auto &tests = p.shaderTests;
+    const uint32_t depth = pushFieldMask(tests.depthWord, 4), stencil = pushFieldMask(tests.stencilWord, 4);
+    const uint32_t blend = pushFieldMask(p.blendColorWord, 8) | pushFieldMask(p.halfBlendColorWord, 4);
+    if (tests.reserved || tests.reservedTail || (tests.flags & ~3u) || bool(tests.flags & 1) != bool(tests.depthWord) ||
+        bool(tests.flags & 2) != bool(tests.stencilWord) || (tests.depthWord && !depth) ||
+        (tests.stencilWord && !stencil) || (depth & stencil) || ((depth | stencil) & blend) ||
+        ((depth | stencil) & ~p.pushMask))
+        return false;
     if (!(p.flags & PipelinePushMetadata))
-        return !p.blendColorWord && !p.halfBlendColorWord && !keyUsesBlendColor(key);
+        return !p.blendColorWord && !p.halfBlendColorWord && !tests.flags && !keyUsesBlendColor(key);
     return validDynamicPush(p.blendColorWord, p.halfBlendColorWord, p.pushMask);
 }
 

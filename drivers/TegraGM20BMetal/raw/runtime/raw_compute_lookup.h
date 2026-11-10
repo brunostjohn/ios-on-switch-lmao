@@ -2,7 +2,6 @@
 #pragma once
 #include <algorithm>
 #include <array>
-#include <condition_variable>
 #include <map>
 #include <memory>
 #include <mutex>
@@ -10,6 +9,8 @@
 #include <utility>
 #include <vector>
 #include "raw_compute_key.h"
+#include "raw_variant.h"
+#include "raw_dispatch_regions.h"
 
 namespace raw {
 
@@ -44,13 +45,15 @@ struct ComputeBindingText {
 
 struct ComputeSpecialization {
     std::array<uint32_t, 3> threads = {};
+    bool regionMode = false;
     std::vector<std::pair<uint32_t, uint32_t>> memory;
     std::vector<BoundTexture> textures;
     std::vector<BoundSampler> samplers;
 
     bool operator<(const ComputeSpecialization &b) const
     {
-        return std::tie(threads, memory, textures, samplers) < std::tie(b.threads, b.memory, b.textures, b.samplers);
+        return std::tie(threads, regionMode, memory, textures, samplers) <
+               std::tie(b.threads, b.regionMode, b.memory, b.textures, b.samplers);
     }
 
     bool operator==(const ComputeSpecialization &b) const
@@ -120,87 +123,183 @@ private:
     }
 };
 
+template <typename Record, typename T> class ComputeKernelBuild {
+public:
+    enum class Outcome { Made, Refused, Failed };
+    struct Result {
+        const T *state = nullptr;
+        bool retry = false;
+        uint64_t retryAtUs = 0;
+    };
+
+    template <typename Clock, typename Produce, typename Place> Result make(Clock now, Produce produce, Place place)
+    {
+        if (state_ || refused_)
+            return {state_, false, 0};
+        if (retryAtUs_ && now() < retryAtUs_)
+            return {nullptr, true, retryAtUs_};
+        if (!record_) {
+            auto record = std::make_unique<Record>();
+            const auto outcome = produce(*record);
+            if (outcome == Outcome::Refused) {
+                refused_ = true;
+                return {};
+            }
+            if (outcome == Outcome::Made)
+                record_ = std::move(record);
+        }
+        if (record_ && (state_ = place(*record_)))
+            return {state_, false, 0};
+        const uint64_t failedUs = now();
+        const uint64_t delayUs = delay_.next();
+        retryAtUs_ = failedUs > UINT64_MAX - delayUs ? UINT64_MAX : failedUs + delayUs;
+        return {nullptr, true, retryAtUs_};
+    }
+
+private:
+    // placeCompute keys placed programs by this record's address, including across placement retries.
+    std::unique_ptr<Record> record_;
+    const T *state_ = nullptr;
+    uint64_t retryAtUs_ = 0;
+    RetryDelay delay_;
+    bool refused_ = false;
+};
+
 template <typename T> struct ComputeKernelResult {
     const T *state = nullptr;
     bool retry = false;
+    bool deferredRetry = false;
+};
+
+template <typename T> class ComputeKernelJob {
+public:
+    using State = typename Variant<const T>::State;
+
+    State state() const
+    {
+        const auto *result = ready_.value();
+        return !result ? State::Pending : result->state ? State::Ready : State::Refused;
+    }
+
+    const T *value() const
+    {
+        const auto *result = ready_.value();
+        return result ? result->state : nullptr;
+    }
+
+    bool retryable() const
+    {
+        const auto *result = ready_.value();
+        return result && result->retry && (!result->deferredRetry || retryReady_.load(std::memory_order_acquire));
+    }
+
+    void allowRetry()
+    {
+        retryReady_.store(true, std::memory_order_release);
+    }
+
+    State observe(std::function<void()> observer)
+    {
+        ready_.observe(std::move(observer));
+        return state();
+    }
+
+    void publish(ComputeKernelResult<T> result)
+    {
+        if (claimed_.test_and_set(std::memory_order_relaxed))
+            return;
+        result_ = result;
+        ready_.publish(&result_);
+    }
+
+    struct Run {
+        std::shared_ptr<ComputeKernelJob> job;
+        ComputeKernelResult<T> result{nullptr, true};
+
+        ~Run()
+        {
+            job->publish(result);
+        }
+    };
+
+private:
+    ComputeKernelResult<T> result_;
+    std::atomic<bool> retryReady_{false};
+    Variant<ComputeKernelResult<T>> ready_;
+    std::atomic_flag claimed_ = ATOMIC_FLAG_INIT;
 };
 
 template <typename T> class ComputeKernelCache {
 public:
-    template <typename Make> ComputeKernelResult<T> get(const ComputeSpecialization &key, Make &&make)
+    using Job = ComputeKernelJob<T>;
+
+    template <typename Start> std::shared_ptr<Job> request(const ComputeSpecialization &key, Start &&start)
     {
-        std::shared_ptr<Entry> entry;
+        std::shared_ptr<Job> job;
         {
-            std::unique_lock<std::mutex> hold(lock_);
+            std::lock_guard<std::mutex> hold(lock_);
             const auto at = entries_.find(key);
-            if (at != entries_.end()) {
-                entry = at->second;
-                entry->changed.wait(hold, [&] {
-                    return !entry->pending;
-                });
-                return entry->result;
-            }
-            entry = std::make_shared<Entry>();
-            entries_.emplace(key, entry);
+            if (at != entries_.end() && !at->second->retryable())
+                return at->second;
+            job = std::make_shared<Job>();
+            entries_[key] = job;
         }
-        Pending pending{*this, key, entry};
-        pending.result = make();
-        return pending.result;
+
+        struct Launch {
+            std::shared_ptr<Job> job;
+            bool started = false;
+
+            ~Launch()
+            {
+                if (!started)
+                    job->publish({nullptr, true});
+            }
+        } launch{job};
+
+        start(job);
+        launch.started = true;
+        return job;
     }
 
 private:
-    struct Entry {
-        std::condition_variable changed;
-        ComputeKernelResult<T> result;
-        bool pending = true;
-    };
-
-    struct Pending {
-        ComputeKernelCache &cache;
-        const ComputeSpecialization &key;
-        const std::shared_ptr<Entry> &entry;
-        ComputeKernelResult<T> result{nullptr, true};
-
-        ~Pending()
-        {
-            {
-                std::lock_guard<std::mutex> hold(cache.lock_);
-                entry->result = result;
-                entry->pending = false;
-                if (result.retry)
-                    cache.entries_.erase(key);
-            }
-            entry->changed.notify_all();
-        }
-    };
-
     std::mutex lock_;
-    std::map<ComputeSpecialization, std::shared_ptr<Entry>> entries_;
+    std::map<ComputeSpecialization, std::shared_ptr<Job>> entries_;
 };
 
-struct ComputeDispatch {
-    enum Reason {
-        Ready,
-        Edge,
-        Range
-    } reason = Ready;
+template <typename T> class ComputeKernelSet {
+public:
+    using Job = ComputeKernelJob<T>;
+    using State = typename Job::State;
+    std::array<std::shared_ptr<Job>, 8> jobs{};
+    uint8_t count = 0;
 
-    std::array<uint64_t, 3> groups;
-    uint8_t axis = 0;
-};
-
-inline ComputeDispatch computeDispatch(std::array<uint64_t, 3> grid, const std::array<uint32_t, 3> &threads,
-                                       bool perThread)
-{
-    ComputeDispatch result{ComputeDispatch::Ready, grid, 0};
-    for (uint8_t i = 0; perThread && i < 3; ++i) {
-        if (!threads[i] || grid[i] % threads[i])
-            return {ComputeDispatch::Edge, result.groups, i};
-        result.groups[i] /= threads[i];
+    State state() const
+    {
+        bool pending = false;
+        for (uint8_t i = 0; i < count; ++i) {
+            const auto result = jobs[i]->state();
+            if (result == State::Refused)
+                return result;
+            pending |= result == State::Pending;
+        }
+        return pending ? State::Pending : State::Ready;
     }
-    if (result.groups[0] > 0x7fffffff || result.groups[1] > 0xffff || result.groups[2] > 0xffff)
-        result.reason = ComputeDispatch::Range;
-    return result;
-}
+
+    bool retryable() const
+    {
+        for (uint8_t i = 0; i < count; ++i)
+            if (jobs[i]->retryable())
+                return true;
+        return false;
+    }
+
+    State observe(const std::function<void()> &observer)
+    {
+        if (observer)
+            for (uint8_t i = 0; i < count; ++i)
+                jobs[i]->observe(observer);
+        return state();
+    }
+};
 
 }  // namespace raw

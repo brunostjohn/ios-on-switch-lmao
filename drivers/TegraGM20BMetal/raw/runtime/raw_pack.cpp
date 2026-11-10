@@ -118,12 +118,20 @@ const PackPipeline *Pack::find(uint64_t keyHash, PackForm form) const
         else
             hi = mid;
     }
+    const PackPipeline *fallback = nullptr;
     for (; lo < n && keyAt(lo) == keyHash; lo++) {
         const PackPipeline *at = p + (index_.empty() ? lo : index_[lo]);
-        if (form == PackForm::Default || (at->flags & PipelineBarrierForm))
-            return at;
+        if (form == PackForm::Barrier) {
+            if (at->flags & PipelineBarrierForm)
+                return at;
+        } else {
+            if (at->flags & PipelineStorageMetadata)
+                return at;
+            if (!fallback)
+                fallback = at;
+        }
     }
-    return nullptr;
+    return fallback;
 }
 
 // mkpack.py writes the kernels in keyHash order

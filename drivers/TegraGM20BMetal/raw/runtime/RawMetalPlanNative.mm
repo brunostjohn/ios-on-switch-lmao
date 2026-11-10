@@ -31,18 +31,18 @@ struct NativePlanSink {
             return;
         }
         RMBuffer *object = (__bridge RMBuffer *)binding.object;
-        useBuffer(&commands, object, stage == 3);
         if (stage == 3)
             compute->setBuffer(slot, object ? &object->_raw : nullptr, binding.offset);
-        else
+        else {
+            useBuffer(&commands, object, false);
             render->setBuffer(stage, slot, object ? &object->_raw : nullptr, binding.offset);
+        }
     }
 
     void texture(uint32_t stage, uint32_t slot, void *value)
     {
         RMTexture *object = (__bridge RMTexture *)value;
         if (stage == 3) {
-            useTexture(&commands, object, true);
             compute->setTexture(slot, object ? &object->_raw : nullptr);
         } else if (stage == 2) {
             useTexture(&commands, object, false);
@@ -67,11 +67,14 @@ struct NativePlanSink {
         using R = raw::RasterState;
         using raw::rasterChanged;
         if (rasterChanged(next, previous, R::Pipeline, &R::pipeline) ||
-            rasterChanged(next, previous, R::Pipeline, &R::nativePipeline)) {
+            rasterChanged(next, previous, R::Pipeline, &R::nativePipeline) ||
+            rasterChanged(next, previous, R::Pipeline, &R::nativeVariant)) {
             RMPipeline *pipeline = (__bridge RMPipeline *)next.pipeline;
-            render->setPipeline(next.nativePipeline ? static_cast<raw::Pipeline *>(next.nativePipeline)
-                                : pipeline          ? pipeline->_raw
-                                                    : nullptr);
+            auto *variant = static_cast<raw::Variant<raw::Pipeline> *>(next.nativeVariant);
+            render->setPipeline(variant               ? variant->value()
+                                : next.nativePipeline ? static_cast<raw::Pipeline *>(next.nativePipeline)
+                                : pipeline            ? pipeline->_raw
+                                                      : nullptr);
         }
         if (rasterChanged(next, previous, R::DepthStencil, &R::depthStencil)) {
             RMDepthStencil *depth = (__bridge RMDepthStencil *)next.depthStencil;

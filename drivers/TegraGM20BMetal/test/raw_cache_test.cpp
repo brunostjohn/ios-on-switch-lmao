@@ -3,6 +3,7 @@
 // same cache checks on a bucket's real records, and the AIR hashes on QuartzCore's own library).
 #include "../raw/runtime/raw_cache.h"
 #include "../raw/runtime/raw_metallib.h"
+#include "../raw/runtime/raw_render_key.h"
 #include "../raw/test/cache_checks.h"
 
 #include <gtest/gtest.h>
@@ -11,8 +12,61 @@
 #include <cstdlib>
 #include <cstring>
 #include <fstream>
+#include <filesystem>
 
 namespace {
+
+TEST(RenderCacheKey, PreservesFrameworkKeyAndFullPrimaryHashes)
+{
+    raw::AirHash vertex{}, fragment{};
+    vertex[0] = 1;
+    fragment[0] = 2;
+    const auto key = raw::renderCacheKey(0x53, "descriptor", vertex, fragment, {}, false);
+    EXPECT_EQ(key.key, "descriptor");
+    EXPECT_EQ(key.stack, 0x53u);
+    EXPECT_EQ(std::memcmp(key.vertexAir, vertex.data(), vertex.size()), 0);
+    EXPECT_EQ(std::memcmp(key.fragmentAir, fragment.data(), fragment.size()), 0);
+    vertex[31] = 7;
+    EXPECT_NE(key.name(), raw::renderCacheKey(0x53, "descriptor", vertex, fragment, {}, false).name());
+}
+
+TEST(RenderCacheKey, PreservesOwnLibrarySuffix)
+{
+    raw::AirHash vertex{}, fragment{};
+    for (unsigned i = 0; i < 32; ++i) {
+        vertex[i] = i;
+        fragment[i] = i + 32;
+    }
+    const auto key = raw::renderCacheKey(0x53, "descriptor", vertex, fragment, {}, true);
+    EXPECT_EQ(key.key, "descriptor | air 0706050403020100 2726252423222120");
+    EXPECT_NE(key.name(), raw::renderCacheKey(0x53, "descriptor", vertex, fragment, {}, false).name());
+}
+
+TEST(RenderCacheKey, LinkedStageAndDescriptorOrderRemainSignificant)
+{
+    raw::AirHash vertex{}, fragment{}, first{}, second{};
+    first[0] = 1;
+    second[0] = 2;
+    const std::vector<raw::LinkedStageAir> linked{{'v', first}, {'f', second}};
+    const auto key = raw::renderCacheKey(0x53, "descriptor", vertex, fragment, linked, false);
+    EXPECT_EQ(key.key, "descriptor | linked v0000000000000001 f0000000000000002");
+    EXPECT_NE(key.name(), raw::renderCacheKey(0x53, "descriptor", vertex, fragment,
+                                              {{'f', second}, {'v', first}}, false).name());
+    EXPECT_NE(key.name(), raw::renderCacheKey(0x53, "descriptor", vertex, fragment,
+                                              {{'f', first}, {'f', second}}, false).name());
+}
+
+TEST(RenderCacheKey, ConstructionDoesNotAppendSuffixesToTheInput)
+{
+    const std::string base = "descriptor";
+    raw::AirHash vertex{}, fragment{};
+    const auto first = raw::renderCacheKey(0x53, base, vertex, fragment, {{'f', vertex}}, true);
+    const auto second = raw::renderCacheKey(0x53, base, vertex, fragment, {{'f', vertex}}, true);
+    EXPECT_EQ(base, "descriptor");
+    EXPECT_EQ(first.key, second.key);
+    EXPECT_EQ(first.name(), second.name());
+    EXPECT_NE(first.name(), raw::renderCacheKey(0x54, base, vertex, fragment, {{'f', vertex}}, true).name());
+}
 
 raw::RuntimeRecord madeUp(uint32_t n)
 {
@@ -55,6 +109,7 @@ raw::RuntimeRecord madeUp(uint32_t n)
         r.splitRecord.uboCbuf[0] = 1;
         r.splitRecord.prologueCbufs = 3;
         r.splitRecord.qmd[n % 64] = n;
+        r.splitRecord.cost = {1, 0, 4000, 4000, 91 + n, 72 + n, 8 + n, 3 + n, 12};
         for (int k = 0; k < 2; k++) {
             r.splitPrograms[k].id = "split" + std::to_string(n * 2 + k);
             r.splitPrograms[k].image.assign(80 + 32 * (n + 1), uint8_t(n + 7 * k));
@@ -196,6 +251,100 @@ TEST(RawCache, KeepsKernelsAndTheirRefusals)
     EXPECT_EQ(cache.load(made, state, why), raw::RecordCache::Found::None);
 }
 
+class NativeSeed : public testing::Test {
+protected:
+    std::filesystem::path root, seed, local;
+    raw::CacheKey key = cachechecks::keyOf(0x123, "native state", 7);
+    raw::RuntimeRecord record = madeUp(4);
+
+    void SetUp() override
+    {
+        std::string pattern = std::string(getenv("TEST_TMPDIR") ?: "/tmp") + "/native-seed-XXXXXX";
+        char *made = mkdtemp(pattern.data());
+        ASSERT_NE(made, nullptr);
+        root = made;
+        seed = root / "seed";
+        local = root / "private";
+        std::filesystem::create_directories(seed);
+        std::filesystem::create_directories(local);
+        raw::RecordCache builder;
+        ASSERT_TRUE(builder.open(seed.string(), key.stack, 0));
+        ASSERT_TRUE(builder.store(key, &record, ""));
+    }
+
+    void TearDown() override
+    {
+        if (!root.empty())
+            std::filesystem::remove_all(root);
+    }
+};
+
+TEST_F(NativeSeed, ReadOnlyConsumerLoadsWithoutPrivateCacheAndCannotStore)
+{
+    raw::RecordCache cache;
+    ASSERT_TRUE(cache.attachSeed(seed.string(), key.stack));
+    raw::RuntimeRecord loaded;
+    std::string why;
+    EXPECT_EQ(cache.load(key, loaded, why), raw::RecordCache::Found::Record);
+    EXPECT_TRUE(cachechecks::same(loaded, record));
+    EXPECT_FALSE(cache.store(key, &record, ""));
+    cache.tidy();
+    EXPECT_EQ(cache.bytes(), 0u);
+    EXPECT_EQ(cache.load(key, loaded, why), raw::RecordCache::Found::Record);
+}
+
+TEST_F(NativeSeed, SeedWinsOverPrivateRecordAndInvalidSeedFallsBack)
+{
+    raw::RecordCache cache;
+    ASSERT_TRUE(cache.open(local.string(), key.stack, 0));
+    const auto privateRecord = madeUp(1);
+    ASSERT_TRUE(cache.store(key, &privateRecord, ""));
+    ASSERT_TRUE(cache.attachSeed(seed.string(), key.stack));
+    raw::RuntimeRecord loaded;
+    std::string why;
+    EXPECT_EQ(cache.load(key, loaded, why), raw::RecordCache::Found::Record);
+    EXPECT_TRUE(cachechecks::same(loaded, record));
+    for (const auto &file : std::filesystem::recursive_directory_iterator(seed))
+        if (file.path().extension() == ".rec")
+            std::ofstream(file.path(), std::ios::binary | std::ios::trunc) << "broken";
+    EXPECT_EQ(cache.load(key, loaded, why), raw::RecordCache::Found::Record);
+    EXPECT_TRUE(cachechecks::same(loaded, privateRecord));
+}
+
+TEST_F(NativeSeed, ExactStackAirAndKeyAreRequired)
+{
+    raw::RecordCache cache;
+    ASSERT_TRUE(cache.attachSeed(seed.string(), key.stack));
+    raw::RuntimeRecord loaded;
+    std::string why;
+    for (auto other : {cachechecks::keyOf(key.stack + 1, key.key, 7),
+                       cachechecks::keyOf(key.stack, key.key, 8),
+                       cachechecks::keyOf(key.stack, key.key + "x", 7)})
+        EXPECT_EQ(cache.load(other, loaded, why), raw::RecordCache::Found::None);
+    ASSERT_TRUE(cache.open(local.string(), key.stack + 1, 0));
+    EXPECT_FALSE(cache.attachSeed(seed.string(), key.stack));
+    EXPECT_EQ(cache.load(key, loaded, why), raw::RecordCache::Found::None);
+}
+
+TEST_F(NativeSeed, ComputeRecordLoadsFromTheSameImmutableLayer)
+{
+    key.key = "kernel | explicit dispatch shape";
+    raw::ComputeRecord original;
+    original.keyString = key.key;
+    original.code.assign(128, 0x42);
+    original.cbufs = 1;
+    raw::RecordCache builder;
+    ASSERT_TRUE(builder.open(seed.string(), key.stack, 0));
+    ASSERT_TRUE(builder.storeKernel(key, &original, ""));
+    raw::RecordCache cache;
+    ASSERT_TRUE(cache.attachSeed(seed.string(), key.stack));
+    raw::ComputeRecord loaded;
+    std::string why;
+    EXPECT_EQ(cache.loadKernel(key, loaded, why), raw::RecordCache::Found::Record);
+    EXPECT_EQ(loaded.code, original.code);
+    EXPECT_EQ(loaded.keyString, original.keyString);
+}
+
 // Cold work is deliberately held at a barrier: unrelated warm work and callbacks must progress before it is released.
 TEST(RawCompiler, IndependentColdKeysOverlapWhileWarmKeysRemainReady)
 {
@@ -281,6 +430,47 @@ TEST(RawCompiler, IndependentColdKeysOverlapWhileWarmKeysRemainReady)
     ASSERT_TRUE(reopened.open(dir, 0x98, 1 << 20));
     for (const auto &key : cold)
         EXPECT_EQ(reopened.load(key, loaded, why), raw::RecordCache::Found::Record);
+}
+
+TEST(RawCompiler, ComputeTasksShareTheRenderWorkerLimitAndDrain)
+{
+    std::mutex lock;
+    std::condition_variable changed;
+    bool release = false;
+    unsigned entered = 0, active = 0, maximum = 0;
+    auto work = [&] {
+        std::unique_lock<std::mutex> guard(lock);
+        maximum = std::max(maximum, ++active);
+        ++entered;
+        changed.notify_all();
+        changed.wait(guard, [&] { return release; });
+        --active;
+    };
+    raw::Compiler compiler(nullptr, [&](const raw::CacheKey &, raw::RuntimeRecord &record, std::string &) {
+        work();
+        record = madeUp(1);
+        return raw::Compiler::Outcome::Made;
+    });
+    compiler.enqueue(work);
+    compiler.enqueue(work);
+    {
+        std::unique_lock<std::mutex> guard(lock);
+        EXPECT_TRUE(changed.wait_for(guard, std::chrono::seconds(5), [&] { return entered == 2; }));
+    }
+    raw::CacheKey key;
+    key.key = "render-after-compute";
+    compiler.ask(key, nullptr);
+    compiler.enqueue(work);
+    {
+        std::unique_lock<std::mutex> guard(lock);
+        EXPECT_FALSE(changed.wait_for(guard, std::chrono::milliseconds(50), [&] { return entered > 2; }));
+        release = true;
+        changed.notify_all();
+    }
+    compiler.drain();
+    EXPECT_EQ(entered, 4u);
+    EXPECT_EQ(active, 0u);
+    EXPECT_EQ(maximum, 2u);
 }
 
 }  // namespace

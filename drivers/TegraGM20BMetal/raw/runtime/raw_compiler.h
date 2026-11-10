@@ -7,6 +7,7 @@
 #include <string>
 #include <vector>
 #include "raw_cache.h"
+#include "raw_stats.h"
 
 namespace raw {
 
@@ -50,10 +51,13 @@ public:
     // A state whose probe failed and may be tried again: true, and in *us how long until an ask tries it
     bool retryAfter(const CacheKey &k, uint64_t &us) const;
     void drain();  // host tests: waits for everything asked so far
+    void enqueue(std::function<void()> work);
 
     struct Stats {
+#if SWITCH_RAW_DIAGNOSTICS
         uint64_t hits = 0, misses = 0, refusals = 0, failures = 0, makeUs = 0;
         uint64_t lookupHits = 0, lookupUs = 0;  // hits found by lookup() at a state's creation, and their cost
+#endif
     };
 
     Stats stats() const;
@@ -70,6 +74,7 @@ private:
 
     struct Job;
     struct Store;
+    struct Task;
 
     RecordCache *cache_;
     Make make_;
@@ -81,9 +86,12 @@ private:
     std::condition_variable idle_;
     uint64_t queued_ = 0;
     std::map<uint64_t, Entry> entries_;
+#if SWITCH_RAW_DIAGNOSTICS
     Stats stats_;
+#endif
     static void run(void *job);
     static void store(void *job);
+    static void runTask(void *task);
     Outcome produce(const CacheKey &k, RuntimeRecord &record, std::string &why, RecordCache::Found &found);
     std::vector<Done> settle(const CacheKey &k, Outcome outcome, RecordCache::Found found,
                              std::unique_ptr<RuntimeRecord> record, const std::string &why, uint64_t began,

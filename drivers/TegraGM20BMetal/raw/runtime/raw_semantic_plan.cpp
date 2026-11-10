@@ -29,9 +29,20 @@ uint32_t RMCommandPlan::saveUses(const std::vector<raw::ResourceUse> &uses)
     if (uses.empty())
         return 0;
     const uint32_t begin = static_cast<uint32_t>(uses_.size());
+    std::unordered_map<void *, uint32_t> positions;
+    if (uses.size() > 32)
+        positions.reserve(uses.size());
     for (const auto &use : uses) {
         if (!use.object)
             continue;
+        if (uses.size() > 32) {
+            const auto [found, inserted] = positions.try_emplace(use.object, static_cast<uint32_t>(uses_.size()));
+            if (inserted)
+                uses_.push_back(use);
+            else
+                uses_[found->second].access |= use.access;
+            continue;
+        }
         auto found = std::find_if(uses_.begin() + begin, uses_.end(), [&](const auto &candidate) {
             return candidate.object == use.object;
         });
@@ -49,15 +60,21 @@ uint32_t RMCommandPlan::captureRender()
         return currentRender_;
     raw::RenderStateRef state;
     state.epoch = stateEpoch_;
-    std::vector<raw::ResourceUse> uses;
+    state.resourceRevision = resourceRevision_[0];
     for (uint32_t stage = 0; stage < 2; ++stage) {
         state.buffers[stage] = buffers[stage].capture();
         state.textures[stage] = textures[stage].capture();
         state.samplers[stage] = samplers[stage].capture();
-        appendBindings(uses, buffers[stage].current(), textures[stage].current(), raw::ResourceUse::Read);
     }
     state.raster = raster.capture();
-    state.uses = saveUses(uses);
+    if (savedResources_[0] != resourceRevision_[0]) {
+        std::vector<raw::ResourceUse> uses;
+        for (uint32_t stage = 0; stage < 2; ++stage)
+            appendBindings(uses, buffers[stage].current(), textures[stage].current(), raw::ResourceUse::Read);
+        resourceUses_[0] = saveUses(uses);
+        savedResources_[0] = resourceRevision_[0];
+    }
+    state.uses = resourceUses_[0];
     currentRender_ = append(renderStates, state);
     savedRender_ = renderGeneration_;
     return currentRender_;
@@ -67,10 +84,14 @@ uint32_t RMCommandPlan::captureKernel()
 {
     if (savedKernel_ == kernelGeneration_)
         return currentKernel_;
-    std::vector<raw::ResourceUse> uses;
-    appendBindings(uses, buffers[2].current(), textures[2].current(), raw::ResourceUse::Read | raw::ResourceUse::Write);
+    if (savedResources_[1] != resourceRevision_[1]) {
+        std::vector<raw::ResourceUse> uses;
+        appendBindings(uses, buffers[2].current(), textures[2].current(), raw::ResourceUse::Read | raw::ResourceUse::Write);
+        resourceUses_[1] = saveUses(uses);
+        savedResources_[1] = resourceRevision_[1];
+    }
     currentKernel_ = append(kernelStates, {buffers[2].capture(), textures[2].capture(), samplers[2].capture(),
-                                           kernel.capture(), saveUses(uses), stateEpoch_});
+                                           kernel.capture(), resourceUses_[1], stateEpoch_, resourceRevision_[1]});
     savedKernel_ = kernelGeneration_;
     return currentKernel_;
 }
@@ -85,10 +106,14 @@ bool RMCommandPlan::record(const Cmd &c, const std::vector<uint64_t> &extra)
     case OpRender:
     case OpBlit:
     case OpCompute:
+        if (encoder_ != OpEnd && recordingError_ == RMPlanError::None)
+            recordingError_ = RMPlanError::NestedEncoder;
         encoder_ = c.op;
         encoderBegin_ = size();
         ++stateEpoch_;
         ++eligibilityGeneration_;
+        ++resourceRevision_[0];
+        ++resourceRevision_[1];
         for (auto &state : buffers)
             state.resetCurrent();
         for (auto &state : textures)
@@ -100,6 +125,9 @@ bool RMCommandPlan::record(const Cmd &c, const std::vector<uint64_t> &extra)
         ++renderGeneration_;
         ++kernelGeneration_;
         operation.payload = append(begins_, {c.obj, uint32_t(c.x), c.a, bool(c.index)});
+        begins_.back().rasterBegin = uint32_t(rasterGroups_.size());
+        rasterGroupIndex_.clear();
+        lastRasterGroup_ = raw::kNoSnapshot;
         break;
     case OpDraw:
     case OpDrawIndexed:
@@ -129,6 +157,18 @@ bool RMCommandPlan::record(const Cmd &c, const std::vector<uint64_t> &extra)
             draw.argumentOffset = c.x;
         }
         operation.uses = renderStates[draw.state].uses;
+        if (encoder_ == OpRender && draw.count && draw.instances) {
+            const uint32_t state = renderStates[draw.state].raster;
+            if (lastRasterGroup_ == raw::kNoSnapshot || rasterGroups_[lastRasterGroup_].state != state) {
+                auto [found, inserted] = rasterGroupIndex_.try_emplace(state, uint32_t(rasterGroups_.size()));
+                if (inserted) {
+                    rasterGroups_.push_back({state, 0});
+                    ++begins_[operations_[encoderBegin_].payload].rasterCount;
+                }
+                lastRasterGroup_ = found->second;
+            }
+            ++rasterGroups_[lastRasterGroup_].draws;
+        }
         operation.payload = append(draws_, draw);
         break;
     }
@@ -137,16 +177,21 @@ bool RMCommandPlan::record(const Cmd &c, const std::vector<uint64_t> &extra)
         dispatch.state = captureKernel();
         dispatch.surfaceSlots = c.a;
         dispatch.kernel = c.obj2;
+        dispatch.pending = c.obj;
+        dispatch.encoderBegin = encoderBegin_;
         dispatch.perThread = c.index;
         dispatch.threads = {uint32_t(c.c & 0xffff), uint32_t((c.c >> 16) & 0xffff), uint32_t(c.c >> 32)};
         std::copy_n(extra.begin() + c.x, 3, dispatch.grid.begin());
         std::copy_n(extra.begin() + c.x + 3, 3, dispatch.groups.begin());
+        dispatch.regions = raw::computeDispatch(dispatch.grid, dispatch.threads, dispatch.perThread);
         operation.uses = kernelStates[dispatch.state].uses;
         operation.payload = append(dispatches_, dispatch);
         break;
     }
     case OpSignalEvent:
     case OpWaitEvent:
+        if (encoder_ != OpEnd && recordingError_ == RMPlanError::None)
+            recordingError_ = RMPlanError::EventInsideEncoder;
         operation.payload = append(events_, {size(), c.obj, c.c, c.a, c.op == OpSignalEvent});
         break;
     case OpCopyTexture:
@@ -195,6 +240,8 @@ bool RMCommandPlan::record(const Cmd &c, const std::vector<uint64_t> &extra)
             ++kernelGeneration_;
             ++stateEpoch_;
             ++eligibilityGeneration_;
+            ++resourceRevision_[0];
+            ++resourceRevision_[1];
         }
         if (c.op == OpUse || c.op == OpKernelUse) {
             const uint32_t usage = c.op == OpUse ? c.a : uint32_t(c.c);
@@ -241,52 +288,17 @@ void RMCommandPlan::addUses(size_t at, const std::vector<raw::ResourceUse> &uses
 
 void RMCommandPlan::setRenderUses(uint32_t state, const std::vector<raw::ResourceUse> &uses)
 {
-    renderStates[state].uses = saveUses(uses);
+    applyRenderUses(state, saveUses(uses));
+}
+
+void RMCommandPlan::applyRenderUses(uint32_t state, uint32_t span)
+{
+    renderStates[state].uses = span;
     renderStates[state].usesFinal = true;
     const auto &last = draw(size() - 1);
     operations_.back().uses = drawUses(renderStates[state].uses, last.indices, last.arguments);
 }
 
-void RMCommandPlan::prepareRange(size_t from, size_t to)
-{
-    if (rangeUses_.count({from, to}))
-        return;
-    std::unordered_set<uint32_t> spans;
-    std::vector<raw::ResourceUse> merged;
-    std::vector<void *> pipelines;
-    auto pipeline = [&](void *object) {
-        if (object && std::find(pipelines.begin(), pipelines.end(), object) == pipelines.end())
-            pipelines.push_back(object);
-    };
-    auto span = [&](uint32_t index) {
-        if (!spans.insert(index).second)
-            return;
-        const UseSpan use = useSpans_[index];
-        merged.insert(merged.end(), uses_.begin() + use.begin, uses_.begin() + use.begin + use.count);
-    };
-    for (size_t at = from; at < std::min(to, size());) {
-        const auto &operation = operations_[at];
-        if (operation.op == OpRender || operation.op == OpCompute || operation.op == OpBlit) {
-            const size_t end = encoderEnd(at);
-            const auto cached = rangeUses_.find({at, end});
-            if (end > at && end <= to && cached != rangeUses_.end()) {
-                span(cached->second);
-                for (void *object : rangePipelines_.at({at, end}))
-                    pipeline(object);
-                at = end;
-                continue;
-            }
-        }
-        span(operation.uses);
-        if (isPlanDraw(operation.op))
-            pipeline(raster[renderStates[draw(at).state].raster].pipeline);
-        else if (operation.op == OpInvocation && control(at).render != raw::kNoSnapshot)
-            pipeline(raster[renderStates[control(at).render].raster].pipeline);
-        ++at;
-    }
-    rangeUses_[{from, to}] = saveUses(merged);
-    rangePipelines_[{from, to}] = std::move(pipelines);
-}
 
 Cmd RMCommandPlan::legacy(size_t at) const
 {
@@ -375,7 +387,9 @@ size_t RMCommandPlan::storageBytes() const
     return snapshots + operations_.capacity() * sizeof(RMPlanOperation) + draws_.capacity() * sizeof(RMPlanDraw) +
            dispatches_.capacity() * sizeof(RMPlanDispatch) + transfers_.capacity() * sizeof(RMPlanTransfer) +
            controls_.capacity() * sizeof(RMPlanControl) + begins_.capacity() * sizeof(RMPlanBegin) +
-           events_.capacity() * sizeof(RMPlanEvent) + uses_.capacity() * sizeof(raw::ResourceUse);
+           events_.capacity() * sizeof(RMPlanEvent) + uses_.capacity() * sizeof(raw::ResourceUse) +
+           useSpans_.capacity() * sizeof(UseSpan) + rasterGroupIndex_.bucket_count() * sizeof(void *) +
+           rasterGroups_.capacity() * sizeof(RMPlanRasterGroup) + rangeStorageBytes();
 }
 
 void RMCommandPlan::clear()
@@ -383,6 +397,9 @@ void RMCommandPlan::clear()
     operations_.clear();
     begins_.clear();
     draws_.clear();
+    rasterGroups_.clear();
+    rasterGroupIndex_.clear();
+    lastRasterGroup_ = raw::kNoSnapshot;
     dispatches_.clear();
     transfers_.clear();
     controls_.clear();
@@ -402,10 +419,18 @@ void RMCommandPlan::clear()
     kernel.clear();
     renderGeneration_ = kernelGeneration_ = stateEpoch_ = eligibilityGeneration_ = 0;
     savedRender_ = savedKernel_ = UINT64_MAX;
+    resourceRevision_[0] = resourceRevision_[1] = 0;
+    savedResources_[0] = savedResources_[1] = UINT64_MAX;
+    resourceUses_[0] = resourceUses_[1] = 0;
+    lastRenderUseKey_ = {UINT64_MAX, 0};
+    lastRenderUses_ = 0;
     currentRender_ = currentKernel_ = raw::kNoSnapshot;
     encoder_ = OpEnd;
+    recordingError_ = RMPlanError::None;
     encoderBegin_ = 0;
-    rangeUses_.clear();
-    rangePipelines_.clear();
+    ranges_.clear();
+    resourceFacts_.clear();
     drawUseSpans_.clear();
+    renderUseSpans_.clear();
+    kernelUseSpans_.clear();
 }

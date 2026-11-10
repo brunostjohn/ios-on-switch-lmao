@@ -20,6 +20,7 @@
 #include <string>
 #include <vector>
 #include "raw_compute_record.h"
+#include "raw_dispatch_regions.h"
 #include "raw_gpu.h"
 
 namespace raw {
@@ -29,6 +30,7 @@ constexpr uint32_t kQmdWords = 64;
 // A kernel ready to dispatch: its record and where its program lies in the heap
 struct ComputeState {
     const PackKernel *rec = nullptr;
+    uint32_t instructions = 1;
     uint8_t cbufType[8] = {};
     uint32_t program = 0;  // QMD PROGRAM_OFFSET: from the program region (the heap's start)
     uint64_t data = 0;     // its shader data's address, 0: none
@@ -68,6 +70,8 @@ public:
     // dispatchThreadgroups: `groups` threadgroups of `threads` threads, the shape the kernel's record was made at. False:
     // refused (*why), nothing encoded
     bool dispatch(const uint32_t groups[3], const uint32_t threads[3], const char **why);
+    bool dispatchRegion(const ComputeRegion &region, const std::array<uint32_t, 3> &grid,
+                        const std::array<uint32_t, 3> &nominal, bool first, bool last, const char **why);
     // memoryBarrier...: the dispatches before have written, and their writes are visible to the ones after
     void barrier();
     void end();
@@ -79,6 +83,11 @@ private:
         const Buffer *buffer = nullptr;
         uint64_t offset = 0;
         uint64_t resourceVa = 0;
+
+        bool operator==(const Bound &b) const
+        {
+            return va == b.va && size == b.size && buffer == b.buffer && offset == b.offset && resourceVa == b.resourceVa;
+        }
     };
 
     CommandBuffer &cb_;
@@ -90,6 +99,17 @@ private:
     const Texture *textures_[31] = {};
     const Sampler *samplers_[16] = {};
     bool serial_ = false, dispatched_ = false;
+    uint64_t apiWork_ = 0;
+    uint64_t bindingRevision_ = 0, describedRevision_ = 0;
+    const ComputeState *describedState_ = nullptr;
+    std::vector<uint32_t> descriptorWords_;
+    std::array<uint32_t, 32> residuals_{};
+    uint32_t residualMask_ = 0;
+    uint64_t setVa_ = 0, rootVa_ = 0;
+    std::array<uint32_t, 3> grid_{};
+    std::array<uint32_t, 8> region_{};
+    void bindBuffer(uint32_t slot, const Bound &binding);
+    bool prepareDescriptors(const char **why);
     void room(uint32_t words);
 };
 

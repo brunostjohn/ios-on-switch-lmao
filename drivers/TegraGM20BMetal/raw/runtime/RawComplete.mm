@@ -6,6 +6,7 @@
 #include "NativeBridgeMetalFrontend.h"
 #include "RawDirect.h"
 #include "RawMetalInternal.h"
+#include "RawRenderKey.h"
 #include "raw_compute.h"
 #include "raw_gpu.h"
 
@@ -26,7 +27,7 @@ std::string constantsLast(const std::string &key)
 
 }  // namespace
 
-Completion::Completion(Device &device, const char *cacheDir, uint64_t stack)
+Completion::Completion(Device &device, const char *cacheDir, uint64_t stack, const char *seedDir)
     : device_(device), stack_(stack),
       queue_(dispatch_queue_create(
           "com.brunostjohn.switch.raw.complete",
@@ -36,14 +37,18 @@ Completion::Completion(Device &device, const char *cacheDir, uint64_t stack)
                                 dispatch_queue_attr_make_with_qos_class(DISPATCH_QUEUE_SERIAL, QOS_CLASS_UTILITY, 0))),
       persistenceQueue_(
           dispatch_queue_create("com.brunostjohn.switch.raw.kernel-cache",
-                                dispatch_queue_attr_make_with_qos_class(DISPATCH_QUEUE_SERIAL, QOS_CLASS_UTILITY, 0)))
+                                dispatch_queue_attr_make_with_qos_class(DISPATCH_QUEUE_SERIAL, QOS_CLASS_UTILITY, 0))),
+      pending_(dispatch_group_create())
 {
+    const bool writable = cacheDir && *cacheDir && cache_.attach(cacheDir, stack_, kCacheCap);
+    if (seedDir && *seedDir)
+        cache_.attachSeed(seedDir, stack_);
     compiler_ = std::make_unique<Compiler>(&cache_, [this](const CacheKey &k, RuntimeRecord &record, std::string &why) {
         return make(k, record, why);
     });
     // the directory taken at once, for the lookups at state creation; its scan (another build's entries removed, the bytes
     // kept counted) on the queue, before any store there
-    if (cacheDir && *cacheDir && cache_.attach(cacheDir, stack_, kCacheCap))
+    if (writable)
         dispatch_async(persistenceQueue_, ^{
             cache_.tidy();
         });
@@ -53,7 +58,9 @@ Completion::Completion(Device &device, const char *cacheDir, uint64_t stack)
 
 Completion::~Completion()
 {
+    stopping_.store(true, std::memory_order_release);
     compiler_->drain();
+    dispatch_group_wait(pending_, DISPATCH_TIME_FOREVER);
     dispatch_sync(splitQueue_, ^{
                   });
     dispatch_sync(persistenceQueue_, ^{
@@ -66,60 +73,44 @@ Completion::~Completion()
 // one's. False: a function the raw path cannot name the AIR of (made from no metallib's bytes, or not one of them)
 bool Completion::keyOf(Ask &a, CacheKey &k)
 {
-    auto air = [](id<MTLFunction> function, uint8_t (&out)[32]) {
-        const void *bytes = nullptr;
-        size_t length = 0;
-        std::map<std::string, AirHash> hashes;
-        id library = native_bridge_metal_function_metallib(function, &bytes, &length);
-        if (!library || !metallibAirHashes(static_cast<const uint8_t *>(bytes), length, hashes))
-            return false;
-        const auto f = hashes.find(native_bridge_metal_function_library_name(function).UTF8String ?: "");
-        if (f == hashes.end())
-            return false;
-        memcpy(out, f->second.data(), sizeof out);
-        return true;
-    };
-    if (!air(a.descriptor.vertexFunction, k.vertexAir) || !air(a.descriptor.fragmentFunction, k.fragmentAir))
+    if (!renderCacheKey(a.descriptor, a.key, a.own, stack_, k))
         return false;
-    // Linked functions: IconRendering's effects each link their own function under one name (custom_fn), so the key takes
-    // each one's AIR besides the names and constants the pack key gives them
-    std::string linked;
-    const std::pair<char, MTLLinkedFunctions *> stages[] = {{'v', a.descriptor.vertexLinkedFunctions},
-                                                            {'f', a.descriptor.fragmentLinkedFunctions}};
-    for (const auto &[stage, l] : stages)
-        for (NSArray *functions : {l.functions, l.privateFunctions})
-            for (id<MTLFunction> f in functions) {
-                uint8_t hash[32];
-                uint64_t h = 0;
-                if (!air(f, hash))
-                    return false;
-                memcpy(&h, hash, sizeof h);
-                char word[24];
-                snprintf(word, sizeof word, " %c%016llx", stage, (unsigned long long)h);
-                linked += word;
-            }
-    if (!linked.empty())
-        a.key += " | linked" + linked;
-    if (a.own) {
-        char tail[48];
-        uint64_t v, f;
-        memcpy(&v, k.vertexAir, sizeof v);
-        memcpy(&f, k.fragmentAir, sizeof f);
-        snprintf(tail, sizeof tail, " | air %016llx %016llx", (unsigned long long)v, (unsigned long long)f);
-        a.key += tail;
-    }
-    k.stack = stack_;
-    k.key = a.key;
+    a.key = k.key;
     return true;
 }
 
+struct Completion::Pending {
+    Pending(dispatch_group_t group, std::function<void(Pipeline *)> ready)
+        : group(group), ready(std::move(ready))
+    {
+        dispatch_group_enter(group);
+    }
+    ~Pending() { dispatch_group_leave(group); }
+    dispatch_group_t group;
+    std::function<void(Pipeline *)> ready;
+    VariantPlacement<Pipeline> placement;
+};
+
 void Completion::ask(Ask asked, std::function<void(Pipeline *)> ready)
 {
+    request(std::move(asked), std::make_shared<Pending>(pending_, std::move(ready)));
+}
+
+void Completion::request(Ask asked, std::shared_ptr<Pending> pending)
+{
     dispatch_async(queue_, ^{
+        if (stopping_.load(std::memory_order_acquire)) {
+            pending->ready(nullptr);
+            return;
+        }
         Ask a = asked;
+        if (a.resolveDescriptor) {
+            a.descriptor = twinDescriptor(a.descriptor);
+            a.resolveDescriptor = false;
+        }
         CacheKey k;
         if (!keyOf(a, k)) {
-            ready(nullptr);
+            pending->ready(nullptr);
             return;
         }
         {
@@ -127,23 +118,18 @@ void Completion::ask(Ask asked, std::function<void(Pipeline *)> ready)
             asked_[k.name()] = a;
         }
         const bool caTransform = a.caTransform;
-        auto done = [this, k, asked, ready, caTransform](const RuntimeRecord *record, const std::string &) {
-            std::string why;
+        auto done = [this, k, asked, pending, caTransform](const RuntimeRecord *record, const std::string &) {
             if (record) {
-                Pipeline *made = device_.addRecord(*record, caTransform, why);
-                if (made)
-                    splitLater(k, *record);
-                ready(made);
+                place(k, record, caTransform, pending);
                 return;
             }
-            // a compile that could not run (NVK or the frontend not up to it yet) is asked again, a bounded number of times
             uint64_t us = 0;
-            if (compiler_->retryAfter(k, us))
+            if (!stopping_.load(std::memory_order_acquire) && compiler_->retryAfter(k, us))
                 dispatch_after(dispatch_time(DISPATCH_TIME_NOW, int64_t(us) * 1000), queue_, ^{
-                    ask(asked, ready);
+                    request(asked, pending);
                 });
             else
-                ready(nullptr);
+                pending->ready(nullptr);
         };
         const RuntimeRecord *made = nullptr;
         const Compiler::State state = compiler_->ask(k, done, &made);
@@ -151,6 +137,30 @@ void Completion::ask(Ask asked, std::function<void(Pipeline *)> ready)
             done(made, std::string());
         else if (state == Compiler::State::Refused || state == Compiler::State::Failed)
             done(nullptr, std::string());
+    });
+}
+
+void Completion::place(const CacheKey &key, const RuntimeRecord *record, bool caTransform,
+                       std::shared_ptr<Pending> pending)
+{
+    const CacheKey keptKey = key;
+    dispatch_async(queue_, ^{
+        if (stopping_.load(std::memory_order_acquire)) {
+            pending->ready(nullptr);
+            return;
+        }
+        const uint64_t delay = pending->placement.attempt([&](bool &retry) {
+            std::string why;
+            return device_.addRecord(*record, caTransform, why, &retry);
+        }, [&](Pipeline *made) {
+            if (made)
+                splitLater(keptKey, *record);
+            pending->ready(made);
+        });
+        if (delay)
+            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, int64_t(delay) * 1000), queue_, ^{
+                place(keptKey, record, caTransform, pending);
+            });
     });
 }
 
@@ -168,7 +178,7 @@ Pipeline *Completion::makeNow(Ask a, bool *retry)
     std::string why;
     const Compiler::State state = compiler_->makeNow(k, record, why);
     *retry = state == Compiler::State::Failed || state == Compiler::State::Pending;
-    Pipeline *made = state == Compiler::State::Ready ? device_.addRecord(record, a.caTransform, why) : nullptr;
+    Pipeline *made = state == Compiler::State::Ready ? device_.addRecord(record, a.caTransform, why, retry) : nullptr;
     if (made)
         splitLater(k, record);
     return made;
@@ -196,6 +206,7 @@ Compiler::Outcome Completion::make(const CacheKey &k, RuntimeRecord &record, std
     }
     ProbeTextures textures;
     textures.cubic = a.cubic;
+    textures.fragmentTests = a.fragmentTests;
     const Compiler::Outcome outcome = direct().make(a.descriptor, a.key, record, why, textures);
     if (outcome != Compiler::Outcome::Made)
         once([NSString stringWithFormat:@"a state the pack lacks %s: %s | %.600s",
@@ -204,11 +215,18 @@ Compiler::Outcome Completion::make(const CacheKey &k, RuntimeRecord &record, std
     return outcome;
 }
 
-const ComputeState *Completion::kernel(MTLComputePipelineDescriptor *descriptor, const NmbDirectDispatch &dispatch,
-                                       const std::string &key, bool *retry)
+void Completion::backgroundKernel(std::function<void()> work)
 {
-    if (retry)
-        *retry = false;
+    compiler_->enqueue([work = std::move(work)] {
+        @autoreleasepool {
+            work();
+        }
+    });
+}
+
+const ComputeState *Completion::kernel(MTLComputePipelineDescriptor *descriptor, const NmbDirectDispatch &dispatch,
+                                       const std::string &key, bool *retry, uint64_t *retryAtUs)
+{
     CacheKey k;
     k.stack = stack_;
     k.key = "kernel | " + key;
@@ -221,54 +239,63 @@ const ComputeState *Completion::kernel(MTLComputePipelineDescriptor *descriptor,
         job = entry;
     }
     std::lock_guard<std::mutex> hold(job->lock);
-    Kernel &made = *job;
-    if (made.state || made.refused || made.failures >= Compiler::kRetries)
-        return made.state;
-    auto record = std::make_unique<ComputeRecord>();
+    using Build = ComputeKernelBuild<ComputeRecord, ComputeState>;
     std::string why;
-    Compiler::Outcome outcome = Compiler::Outcome::Failed;
-    switch (cache_.loadKernel(k, *record, why)) {
-    case RecordCache::Found::Record:
-        outcome = Compiler::Outcome::Made;
-        break;
-    case RecordCache::Found::Refusal:
-        outcome = Compiler::Outcome::Refused;
-        break;
-    case RecordCache::Found::None: {
-        const uint64_t began = nowUs();
-        outcome = direct().kernel(descriptor, dispatch, key, *record, why);
-        if (outcome != Compiler::Outcome::Failed) {
-            const auto saved = outcome == Compiler::Outcome::Made ? std::make_shared<ComputeRecord>(*record) : nullptr;
-            const CacheKey key = k;
-            const std::string refusal = why;
-            dispatch_async(persistenceQueue_, ^{
-                cache_.storeKernel(key, saved.get(), refusal);
-            });
+    bool attempted = false;
+    const auto result = job->build.make([] { return nowUs(); }, [&](ComputeRecord &record) {
+        attempted = true;
+        Compiler::Outcome outcome = Compiler::Outcome::Failed;
+        switch (cache_.loadKernel(k, record, why)) {
+        case RecordCache::Found::Record:
+            outcome = Compiler::Outcome::Made;
+            break;
+        case RecordCache::Found::Refusal:
+            outcome = Compiler::Outcome::Refused;
+            break;
+        case RecordCache::Found::None: {
+#if SWITCH_RAW_DIAGNOSTICS
+            const uint64_t began = nowUs();
+#endif
+            outcome = direct().kernel(descriptor, dispatch, key, record, why);
+            if (outcome != Compiler::Outcome::Failed) {
+                const auto saved = outcome == Compiler::Outcome::Made ? std::make_shared<ComputeRecord>(record) : nullptr;
+                const CacheKey key = k;
+                const std::string refusal = why;
+                dispatch_async(persistenceQueue_, ^{
+                    cache_.storeKernel(key, saved.get(), refusal);
+                });
+            }
+#if SWITCH_RAW_DIAGNOSTICS
+            if (outcome == Compiler::Outcome::Made)
+                once([NSString
+                    stringWithFormat:@"a kernel the pack lacks, made at its first dispatch of %u,%u,%u threads in "
+                                     @"%llu us: %s %s",
+                                     dispatch.threads[0], dispatch.threads[1], dispatch.threads[2],
+                                     (unsigned long long)(nowUs() - began),
+                                     descriptor.computeFunction.name.UTF8String ?: "-", constantsLast(key).c_str()]);
+#endif
+            break;
         }
-        if (outcome == Compiler::Outcome::Made)
-            once([NSString
-                stringWithFormat:@"a kernel the pack lacks, made at its first dispatch of %u,%u,%u threads in "
-                                 @"%llu us: %s %s",
-                                 dispatch.threads[0], dispatch.threads[1], dispatch.threads[2],
-                                 (unsigned long long)(nowUs() - began),
-                                 descriptor.computeFunction.name.UTF8String ?: "-", constantsLast(key).c_str()]);
-        break;
-    }
-    }
-    if (outcome == Compiler::Outcome::Made && (made.state = placeCompute(device_, *record)))
-        made.record = std::move(record);
-    else if (outcome == Compiler::Outcome::Made)
-        why = "no room for its program or samplers";
-    made.refused = outcome == Compiler::Outcome::Refused;
-    made.failures += !made.state && !made.refused;
+        }
+        return outcome == Compiler::Outcome::Made ? Build::Outcome::Made
+               : outcome == Compiler::Outcome::Refused ? Build::Outcome::Refused : Build::Outcome::Failed;
+    }, [&](const ComputeRecord &record) {
+        attempted = true;
+        const auto *state = placeCompute(device_, record);
+        if (!state)
+            why = "no room for its program or samplers";
+        return state;
+    });
     if (retry)
-        *retry = !made.state && !made.refused && made.failures < Compiler::kRetries;
-    if (!made.state)
+        *retry = result.retry;
+    if (retryAtUs)
+        *retryAtUs = result.retryAtUs;
+    if (!result.state && attempted)
         once([NSString stringWithFormat:@"a kernel the pack lacks %s at %u,%u,%u threads: %s | %s %s",
-                                        made.refused ? "is refused" : "was not made", dispatch.threads[0],
+                                        result.retry ? "was not made" : "is refused", dispatch.threads[0],
                                         dispatch.threads[1], dispatch.threads[2], why.c_str(),
                                         descriptor.computeFunction.name.UTF8String ?: "-", constantsLast(key).c_str()]);
-    return made.state;
+    return result.state;
 }
 
 // The state made again with its fragment program's split, which only the same programs take (the record's layout is the
@@ -290,6 +317,7 @@ void Completion::splitLater(const CacheKey &k, const RuntimeRecord &record)
         std::string why;
         ProbeTextures textures;
         textures.cubic = a.cubic;
+        textures.fragmentTests = a.fragmentTests;
         const Compiler::Outcome outcome = direct().make(a.descriptor, a.key, made, why, textures, nullptr, true);
         if (outcome == Compiler::Outcome::Failed)
             return;

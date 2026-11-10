@@ -1,8 +1,6 @@
 // SPDX-License-Identifier: MIT
-// A draw's cubic variant of its state (raw_cubic.h): the binds it is made for, and the variant itself, made at its first draw as
-// the state is at its creation (RawComplete.h: from this process's or an earlier boot's record cache, else compiled), or asked
-// again off the drawing thread where that compile could not run.
 #import "RawMetalInternal.h"
+#include "raw_fragment_tests.h"
 
 raw::CubicBinds cubicBinds(const raw::Pipeline &pl, RMSampler *const samplers[16], RMTexture *const textures[16])
 {
@@ -37,73 +35,65 @@ raw::CubicBinds cubicBinds(const raw::Pipeline &pl, RMSampler *const samplers[16
     return b;
 }
 
-raw::Pipeline *cubicVariant(RMPipeline *p, const raw::CubicBinds &b, bool *making)
+static raw::Variant<raw::Pipeline> *renderVariant(RMPipeline *p, const raw::CubicBinds &binds, uint8_t tests)
 {
-    *making = false;
-    const std::string name = b.key();
+    const std::string suffix = binds.empty() ? std::string() : binds.key();
+    const std::string name = suffix + (tests ? " | tests=" + std::to_string(tests) : std::string());
+    std::shared_ptr<raw::Variant<raw::Pipeline>> variant;
     {
-        std::lock_guard<std::mutex> l(p->_variantLock);
-        if (const auto it = p->_variants.find(name); it != p->_variants.end())
-            return it->second;
-        if (p->_variantsAsked.count(name)) {
-            *making = true;
-            return nullptr;
-        }
+        std::lock_guard<std::mutex> lock(p->_variantLock);
+        if (const auto found = p->_variants.find(name); found != p->_variants.end())
+            return found->second.get();
+        variant = std::make_shared<raw::Variant<raw::Pipeline>>();
+        p->_variants.emplace(name, variant);
     }
-    raw::Completion::Ask a;
-    a.descriptor = p->_madeFrom ? twinDescriptor(p->_madeFrom) : nil;
-    a.key = p->_key + name;
-    a.caTransform = p->_caTransform;
-    a.own = !p->_packable;
-    a.cubic = b;
-    bool retry = false;
-    raw::Pipeline *made = a.descriptor && gRM->completion ? gRM->completion->makeNow(a, &retry) : nullptr;
-    std::lock_guard<std::mutex> l(p->_variantLock);
-    if (made || !retry) {
-        p->_variants[name] = made;
-        return made;
+    raw::Completion::Ask request;
+    request.descriptor = p->_madeFrom;
+    request.key = p->_key + name;
+    request.caTransform = p->_caTransform;
+    request.own = !p->_packable;
+    request.cubic = binds;
+    request.fragmentTests = tests;
+    request.resolveDescriptor = true;
+    raw::Pipeline *base = p->_raw;
+    raw::Completion *completion = gRM->completion.get();
+    if (!request.descriptor || !completion) {
+        variant->publish(binds.empty() ? base : nullptr);
+        return variant.get();
     }
-    *making = true;
-    p->_variantsAsked.insert(name);
-    __weak RMPipeline *weak = p;
-    gRM->completion->ask(std::move(a), [weak, name](raw::Pipeline *pl) {
-        if (RMPipeline *strong = weak) {
-            std::lock_guard<std::mutex> held(strong->_variantLock);
-            strong->_variants[name] = pl;
-            strong->_variantsAsked.erase(name);
+    raw::Completion::Ask fallback = request;
+    fallback.key = p->_key + suffix;
+    fallback.fragmentTests = 0;
+    completion->ask(std::move(request), [variant, base, fallback, tests, completion](raw::Pipeline *made) {
+        if (!made && tests && !fallback.cubic.empty()) {
+            completion->ask(fallback, [variant](raw::Pipeline *cubic) {
+                variant->publish(cubic);
+            });
+        } else {
+            variant->publish(made ? made : fallback.cubic.empty() ? base : nullptr);
         }
     });
-    return nullptr;
+    return variant.get();
 }
 
 @implementation RMRenderEncoder (Cubic)
 
-// The record a draw takes: a cubic variant of the state where a cubic sampler is bound where it samples (raw_cubic.h), else
-// the state's own; recorded where it changes (OpPipeline's c); null where the draw goes to m2v
 - (const raw::Pipeline *)drawnRecord
 {
-    const raw::Pipeline *want = _pipe->_raw;
-    if (_cubicMask) {
-        const raw::CubicBinds b = cubicBinds(*_pipe->_raw, _samp, _tex);
-        if (!b.empty()) {
-            bool making = false;
-            if (!(want = cubicVariant(_pipe, b, &making))) {
-                [_cb takeReason:WhyState
-                            why:making ? @"a cubic sampler's variant of the state, being made"
-                                       : @"a cubic sampler's variant of the state the runtime refused"];
-                hit(_cb, making ? PredStateBeingMade : PredCallSamplerForeign, b.samplers[0].slot);
-                return nullptr;
-            }
-        }
+    raw::Pipeline *base = _pipe->_raw;
+    const raw::CubicBinds binds = _cubicMask ? cubicBinds(*base, _samp, _tex) : raw::CubicBinds();
+    const uint8_t tests =
+        base->fetchBits && base->depthFormat && !base->storageBits ? uint8_t(raw::fragmentTests(_ds, _zeta)) : 0;
+    auto *variant = (!binds.empty() || tests) ? renderVariant(_pipe, binds, tests) : nullptr;
+    if (base != _drawn || variant != _drawnVariant) {
+        Cmd state = cmd(OpPipeline);
+        state.obj = (__bridge void *)_pipe;
+        state.obj2 = variant;
+        [_cb record:state];
+        _drawn = base;
+        _drawnVariant = variant;
     }
-    if (want != _drawn) {
-        Cmd m = cmd(OpPipeline);
-        m.obj = (__bridge void *)_pipe;
-        m.c = want == _pipe->_raw ? 0 : uint64_t(uintptr_t(want));
-        [_cb record:m];
-        _drawn = const_cast<raw::Pipeline *>(want);
-    }
-    return want;
+    return base;
 }
 
 @end

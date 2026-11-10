@@ -193,6 +193,7 @@ const char *planYcbcr(const YcbcrFacts &f, YcbcrPlan &out)
         return "planes past the allocation";
 
     out = {};
+    out.nativePlanes = f.fourcc == fourcc("420v") || f.fourcc == fourcc("420f");
     out.output = outputOf(*format);
     out.addressMap = addressMapOf(*format);
     out.image = imageFormat(out.output);

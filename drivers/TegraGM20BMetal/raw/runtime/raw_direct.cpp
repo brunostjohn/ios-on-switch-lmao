@@ -4,7 +4,9 @@
 #include "raw_direct.h"
 #include "raw_direct_nvk.h"
 #include "raw_direct_push.h"
+#include "raw_direct_storage.h"
 #include "raw_residual.h"
+#include "raw_split_metadata.h"
 
 #include <algorithm>
 #include <cstdio>
@@ -21,6 +23,7 @@ struct NvkSplitLayout {
     uint32_t frontierBytes;
     uint8_t frontierCbuf, prologueCbufs, shaderDataCbuf, uboCount;
     uint8_t uboCbuf[6];
+    uint16_t batchVersion, batchThreads;
     uint32_t frontierValues, prologueInstrs;
 };
 
@@ -29,6 +32,7 @@ struct NvkSplitParts {
     NvkSplitLayout layout;
     uint32_t qmd[64];
     uint32_t thresholdPixels;
+    SplitCost cost;
 };
 
 using SplitParts = void (*)(const void *split, NvkSplitParts *);
@@ -114,20 +118,25 @@ public:
             }
             SubgroupSize subgroup;
             subgroup.size = s.subgroupSize;
-            NvkStageInfo info = {s.spirv,
-                                 s.spirvBytes,
-                                 s.entry,
-                                 s.stage,
-                                 s.specialization,
-                                 handle(state.layout),
-                                 kLibraryBit,
-                                 nullptr,
-                                 s.subgroupSize ? &subgroup : nullptr,
-                                 state.sampleShading,
-                                 split && s.stage == kFragmentBit,
-                                 halfTargets,
-                                 constantPushWords(state),
-                                 {}};
+            NvkStageInfo info = {
+                s.spirv,
+                s.spirvBytes,
+                s.entry,
+                s.stage,
+                s.specialization,
+                handle(state.layout),
+                kLibraryBit,
+                nullptr,
+                s.subgroupSize ? &subgroup : nullptr,
+                state.sampleShading,
+                split && s.stage == kFragmentBit,
+                halfTargets,
+                constantPushWords(state),
+                {},
+                uint64_t(s.stage == kFragmentBit && state.storage.depthFormat && state.storage.samples > 1),
+                nullptr,
+                nullptr,
+                nullptr};
             memcpy(info.constPushWords, state.draws[0].push, sizeof info.constPushWords);
             const int32_t result = nvk::compileStage(nvk_, device_, info, made_[k]);
             if (result != 0) {
@@ -146,7 +155,8 @@ public:
 
     EmitProgram emit(int k) const
     {
-        return {made_[k].header, made_[k].numGprs, made_[k].earlyFragmentTests};
+        return {made_[k].header, made_[k].numGprs, made_[k].earlyFragmentTests, made_[k].interlockControl,
+                bool(made_[k].usesSampleShading)};
     }
 
     const void *split(int k) const
@@ -203,14 +213,18 @@ bool layout(const DirectNvk &nvk, void *device, const NmbDirectDraw &d, std::vec
         // without the interlock m2v reads such an attachment as a storage image, which the probe saw as a fetch of the target;
         // a storage image's word names its texture's header as a sampled image's does
         const bool attachment = w.source == NmbDirectAttachment || w.source == NmbDirectStorageAttachment;
+        const bool testImage = w.source == NmbDirectDepthStandIn || w.source == NmbDirectStencilStandIn;
         if (w.type != Sampler && w.type != CombinedImageSampler && w.type != SampledImage &&
-            w.type != InputAttachment && !(w.type == StorageImage && (attachment || w.source == NmbDirectTexture))) {
+            w.type != InputAttachment &&
+            !(w.type == StorageImage && (attachment || testImage || w.source == NmbDirectTexture))) {
             why = "a set-0 descriptor of type " + std::to_string(w.type) + " (source " + std::to_string(w.source) +
                   ", slot " + std::to_string(w.slot) + ")";
             return false;
         }
         if (w.type != Sampler) {
-            if (attachment) {
+            if (testImage) {
+                e.tex = w.source == NmbDirectDepthStandIn ? Tex::DepthTest : Tex::StencilTest;
+            } else if (attachment) {
                 e.tex = Tex::Fetch;
                 e.texSlot = uint8_t(w.slot);
             } else if ((w.source == NmbDirectTexture || w.source == NmbDirectCombined) && w.stage == 2 &&
@@ -307,7 +321,12 @@ void splitInto(const DirectNvk &nvk, const void *split, RuntimeRecord &out)
     r.shaderDataCbuf = l.shaderDataCbuf;
     r.prologueCbufs = l.prologueCbufs;
     memcpy(r.uboCbuf, l.uboCbuf, l.uboCount);
+    r.batchVersion = l.batchVersion;
+    r.batchThreads = l.batchThreads;
     memcpy(r.qmd, parts.qmd, sizeof r.qmd);
+    r.cost = parts.cost;
+    if (!usableSplitMetadata(r))
+        return;
     out.splitPrograms[0] = programOf(parts.fs);
     out.splitPrograms[1] = programOf(parts.prologue);
     out.split = true;
@@ -356,8 +375,12 @@ Compiler::Outcome directRecord(const NmbDirectState &state, const DirectNvk &nvk
     out = {};
     void *device = handle(state.device);
     const NmbDirectDraw &draw = state.draws[0];
-    if (state.storageForm) {
-        why = "storage form (its barrier form needs NVK's interlock hidden)";
+    PackPipeline storage = {};
+    const auto storageHeader = [&](uint32_t format, uint32_t &word) {
+        return nvk.viewHeaderWord0 && nvk::viewHeaderWord0(nvk, device, format, {0, 0, 0, 0}, true, word);
+    };
+    if (const char *refused = qualifyStorage(state, storageHeader, storage)) {
+        why = refused;
         return Compiler::Outcome::Refused;
     }
     if (draw.pushHoles) {
@@ -365,14 +388,37 @@ Compiler::Outcome directRecord(const NmbDirectState &state, const DirectNvk &nvk
         return Compiler::Outcome::Refused;
     }
     if (!validDynamicPush(state)) {
-        why = "inconsistent blend color push placement";
+        why = "inconsistent dynamic state push placement";
         return Compiler::Outcome::Refused;
     }
     Stages stages(nvk, device);
-    if (const Compiler::Outcome compiled = stages.compile(state, halfFloatTargets(key), split, why);
+    if (const Compiler::Outcome compiled =
+            stages.compile(state, halfFloatTargets(key), split && !storage.storageMask, why);
         compiled != Compiler::Outcome::Made)
         return compiled;
+    const uint32_t interlock = stages.emit(1).interlockControl;
+    if (state.storageForm && !storage.shaderTests.flags &&
+        !storageDepthQualified(key.c_str(), stages.emit(1).earlyFragmentTests, storage.storageTests)) {
+        why = "storage form: depth/stencil requires a draw-qualified shader variant";
+        return Compiler::Outcome::Refused;
+    }
+    if (storage.storageSamples > 1 && !stages.emit(1).usesSampleShading) {
+        why = "storage form: multisampled fetch requires per-sample shader invocations";
+        return Compiler::Outcome::Refused;
+    }
+    if (storage.storageMask ? !orderedStorageControl(interlock) : interlock != 0) {
+        why = "storage form: compiled shader does not match the ordered attachment contract";
+        return Compiler::Outcome::Refused;
+    }
     RecordParts parts;
+    parts.storageMask = storage.storageMask;
+    parts.storageWriteMask = storage.storageWriteMask;
+    parts.storageSamples = storage.storageSamples;
+    parts.storageTests = storage.storageTests;
+    parts.shaderTests = storage.shaderTests;
+    parts.shaderTests.depthWord = uint8_t(draw.depthTestWord);
+    parts.shaderTests.stencilWord = uint8_t(draw.stencilTestWord);
+    memcpy(parts.storageTic, storage.storageTic, sizeof parts.storageTic);
     parts.pushMetadata = true;
     parts.blendColorWord = uint8_t(draw.blendColorWord);
     parts.halfBlendColorWord = uint8_t(draw.halfBlendColorWord);
@@ -395,10 +441,14 @@ Compiler::Outcome directRecord(const NmbDirectState &state, const DirectNvk &nvk
     parts.setBytes = draw.set0 ? uint16_t(nvk::setLayoutSize(nvk, device, draw.set0)) : 0;
     if (!assembleRecord(parts, key, rules, out, why))
         return Compiler::Outcome::Refused;
+    if (!usableStorageMetadata(out.pipeline, out.blob.data(), uint32_t(out.blob.size()))) {
+        why = "storage form: assembled record lost its attachment contract";
+        return Compiler::Outcome::Refused;
+    }
     if (registers)
         *registers = parts.regs;
     out.splitTried = split;
-    if (split)
+    if (split && !storage.storageMask)
         splitInto(nvk, stages.split(1), out);
     return Compiler::Outcome::Made;
 }

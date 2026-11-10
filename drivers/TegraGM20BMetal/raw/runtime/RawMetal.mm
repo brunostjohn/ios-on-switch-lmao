@@ -220,10 +220,16 @@ void raw_metal_prepare(const char *packPath, uint64_t stack)
     });
 }
 
-void raw_metal_complete_states(const char *cacheDir)
+void raw_metal_complete_states(const char *cacheDir, const char *packPath)
 {
-    if (gRM && gRM->fallback && !gRM->completion)
-        gRM->completion = std::make_unique<raw::Completion>(*gRM->raw, cacheDir, gRM->raw->pack().header()->stack);
+    if (gRM && gRM->fallback && !gRM->completion) {
+        std::string nativeSeed;
+        if (packPath)
+            if (const char *slash = strrchr(packPath, '/'))
+                nativeSeed = std::string(packPath, slash - packPath) + "/native";
+        gRM->completion = std::make_unique<raw::Completion>(*gRM->raw, cacheDir, gRM->raw->pack().header()->stack,
+                                                           nativeSeed.c_str());
+    }
 }
 
 // libdispatch SPI (dispatch/private/queue_private.h): a root queue over threads of its own, `configure` run on each as it
@@ -329,6 +335,7 @@ id<MTLDevice> raw_metal_device_open(const char *packPath, uint64_t stack, id<MTL
         class_addProtocol(c, protocol);
     RawState *r = new RawState;
     r->raw = dev;
+    r->sharedEvents = dev->sharedEvents();
     r->fallback = fallback;
     r->device = [cls new];
     // Before the limits fill: RMDevice's answers (name, maxBufferLength) read the kernel's info through gRM
@@ -350,8 +357,6 @@ id<MTLDevice> raw_metal_device_open(const char *packPath, uint64_t stack, id<MTL
         }
     }
     r->handlers = followingSerialQueue("com.brunostjohn.switch.raw.handlers");
-    r->rawSignals = [NSMapTable weakToStrongObjectsMapTable];
-    r->m2vSignals = [NSMapTable weakToStrongObjectsMapTable];
     r->listener = [[MTLSharedEventListener alloc] initWithDispatchQueue:r->handlers];
     r->gpuOrder = dev->canOrder();
     if (!r->gpuOrder && fallback)

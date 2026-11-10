@@ -6,6 +6,7 @@ bool RMCommandPlan::setter(const Cmd &c, const std::vector<uint64_t> &extra)
     const bool compute = c.op >= OpKernelState && c.op <= OpKernelMemory;
     const uint32_t stage = compute ? 2 : c.stage ? c.stage - 1 : 0;
     bool changed = false;
+    bool resourcesChanged = false;
     switch (c.op) {
     case OpBuffer:
     case OpKernelBuffer:
@@ -22,6 +23,10 @@ bool RMCommandPlan::setter(const Cmd &c, const std::vector<uint64_t> &extra)
                 value.length = c.b;
                 if (value.source == raw::BufferBinding::Source::Buffer)
                     value.chunk = 0;
+                const auto resource = [](const auto &binding) {
+                    return binding.source == raw::BufferBinding::Source::Buffer ? binding.object : nullptr;
+                };
+                resourcesChanged = resource(bindings[c.index]) != resource(value);
                 return raw::assignState(bindings[c.index], value);
             });
         break;
@@ -43,6 +48,7 @@ bool RMCommandPlan::setter(const Cmd &c, const std::vector<uint64_t> &extra)
             changed = textures[stage].update([&](auto &bindings) {
                 return bindings.bind(c.index, c.obj);
             });
+        resourcesChanged = changed;
         break;
     case OpSampler:
     case OpKernelSampler:
@@ -50,6 +56,7 @@ bool RMCommandPlan::setter(const Cmd &c, const std::vector<uint64_t> &extra)
             changed = samplers[stage].update([&](auto &bindings) {
                 return bindings.bind(c.index, c.obj);
             });
+        resourcesChanged = changed;
         break;
     case OpKernelState:
         changed = kernel.update([&](auto &state) {
@@ -91,6 +98,7 @@ bool RMCommandPlan::setter(const Cmd &c, const std::vector<uint64_t> &extra)
                 bit = R::Pipeline;
                 difference = raw::assignState(state.pipeline, c.obj);
                 difference |= raw::assignState(state.nativePipeline, reinterpret_cast<void *>(uintptr_t(c.c)));
+                difference |= raw::assignState(state.nativeVariant, c.obj2);
                 break;
             case OpDepthStencil:
                 bit = R::DepthStencil;
@@ -157,6 +165,8 @@ bool RMCommandPlan::setter(const Cmd &c, const std::vector<uint64_t> &extra)
         return false;
     }
     if (changed) {
+        if (resourcesChanged)
+            ++resourceRevision_[compute ? 1 : 0];
         ++(compute ? kernelGeneration_ : renderGeneration_);
         if (!compute && (c.op == OpPipeline || c.op == OpDepthStencil || c.op == OpBuffer || c.op == OpBufferOffset ||
                          c.op == OpBytes || c.op == OpTexture || c.op == OpSampler))

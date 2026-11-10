@@ -29,7 +29,7 @@ enum PackSectionId {
     PackSectionCount
 };
 
-constexpr uint32_t kPackVersion = 10;
+constexpr uint32_t kPackVersion = 14;
 
 struct PackHeader {
     char magic[8];                                    // "GM20BPK1"
@@ -71,7 +71,9 @@ enum PackEntryKind : uint8_t {
     EntryTexture3d = 4,
     // The colour table m2v's program reads to write an 8-bit sRGB colour target as Metal does (raw_srgb_table.h): a storage
     // buffer descriptor of the device's own copy
-    EntryColorTable = 5
+    EntryColorTable = 5,
+    EntryDepthTest = 6,
+    EntryStencilTest = 7
 };
 
 constexpr uint8_t kNoSlot = 0xFF;
@@ -110,7 +112,8 @@ enum PackPipelineFlags : uint32_t {
     // metal2vulkan's barrier form of a state whose first record fetches in the storage form (the pixel interlock): its
     // fetches read input attachments, ordered by barriers (pack/rawpack.py's probe with NVK's interlock hidden)
     PipelineBarrierForm = 2,
-    PipelinePushMetadata = 4
+    PipelinePushMetadata = 4,
+    PipelineStorageMetadata = 8
 };
 
 // Which of a state's records: its first (the storage form where it has both), or its barrier form
@@ -132,6 +135,12 @@ constexpr uint32_t cbufUboOffset(uint8_t type)
 // Set-0 entries a state may have: Core Animation's generic states (the uber shader) take 27
 constexpr uint32_t kPackEntries = 32;
 
+struct PackShaderTests {
+    uint8_t depthWord, stencilWord, flags, reserved;
+    uint32_t depthTic, stencilTic;
+    uint32_t reservedTail;
+};
+
 struct PackPipeline {
     uint64_t keyHash;    // FNV-1a 64 of the state key (the frontend journal's R-line fields but the label)
     uint32_t keyString;  // offset in the strings section: the key's fields before " | v" (attachments, vertex layout)
@@ -146,6 +155,9 @@ struct PackPipeline {
     uint32_t pushWords[32];
     uint8_t blendColorWord, halfBlendColorWord;  // push word + 1, zero when absent
     uint16_t pushReserved;
+    uint8_t storageMask, storageWriteMask, storageSamples, storageTests;
+    uint32_t storageTic[8];
+    PackShaderTests shaderTests;
 };
 
 // A compute state at one threadgroup shape (runtime/raw_compute.h): NVK's work for the kernel m2v made of it, keyed by
@@ -189,24 +201,36 @@ struct PackKernel {
     int8_t regionWord;  // root push word of m2v's DispatchRegion field (two uvec4: base, nominal size, grid), -1: none
     uint32_t qmd[64];   // NVK's QMD (QMDV01_07), its program offset, grid and constant buffer addresses zero
     uint16_t setBytes;  // set 0's size in the root table's set address
-    uint16_t pad;
+    uint16_t readOnlyEntries;  // bit i: entry[i] is proven read-only; old records conservatively leave every bit zero
     uint32_t pushMask;  // root table [0x700, 0x780): the constant words m2v's push ranges write, and which
     uint32_t pushWords[32];
     PackKernelEntry entry[16];
 };
 
-// A fragment program split for the raw path (Mesa nvk_switch_split.h): what `whole` computes from per-draw values alone
-// moved into `prologue`, a compute program (code at its slot's start) a draw launches once, one thread with the draw's
-// constant buffers bound, which writes the values `fs` reads at constant buffer frontierCbuf (the frontier, frontierBytes
-// a draw). The prologue's constant buffers: 0 the draw's root-table push words [0x700, 0x780) at 0 and its frontier's
-// address (u64) at 128; 1 to uboCount the uniform buffers the draw binds at fs's constant buffers uboCbuf; then the
-// shader data at shaderDataCbuf where it is not 0. `fs` saves GPU time on draws of thresholdPixels pixels or more.
+inline bool kernelEntryWrites(const PackKernel &kernel, uint32_t entry)
+{
+    return !(kernel.readOnlyEntries & (1u << entry));
+}
+
+struct SplitCost {
+    uint16_t version, reserved;
+    uint32_t launchCycles, drainCycles;
+    uint32_t prologueWarpCycles, prologueInstructions;
+    uint32_t savedPixelInstructions, savedPixelCycles, frontierValues;
+};
+static_assert(sizeof(SplitCost) == 32);
+
+// A split's prologue writes values the fragment stage reads through frontierCbuf. Version 1 uses SplitBatchHeader/Record:
+// one lane per draw, CB0 the header and CB1 shared shader constants. Version 0 binds each draw separately: CB0 holds push
+// words and frontierVA at 128, CB1..uboCount its UBOs, then shader constants. uboCbuf always names the fragment bindings.
 struct PackSplit {
     uint32_t thresholdPixels;
     uint16_t whole, fs, prologue, frontierBytes;
     uint8_t frontierCbuf, uboCount, shaderDataCbuf, prologueCbufs;
     uint8_t uboCbuf[8];
+    uint16_t batchVersion, batchThreads;
     uint32_t qmd[64];  // the prologue's QMD (QMDV01_07), its program offset and constant buffer addresses zero
+    SplitCost cost;
 };
 
 constexpr uint32_t kSplitParamsBytes = 256, kSplitFrontierAddress = 128;
@@ -242,10 +266,11 @@ struct InitAddresses {
 };
 
 uint32_t relocated(const PackInitMethod &m, const InitAddresses &a);
-static_assert(sizeof(PackPipeline) == 36 + kPackEntries * 8 + 4 + 32 * 4 + 4, "pack layout");
+static_assert(sizeof(PackShaderTests) == 16, "shader test layout");
+static_assert(sizeof(PackPipeline) == 36 + kPackEntries * 8 + 4 + 32 * 4 + 4 + 36 + 16, "pack layout");
 static_assert(sizeof(PackProgram) == 32, "pack layout");
 static_assert(sizeof(PackKernel) == 16 + 256 + 8 + 128 + 128, "pack layout");
-static_assert(sizeof(PackSplit) == 24 + 256, "pack layout");
+static_assert(sizeof(PackSplit) == 28 + 256 + 32, "pack layout");
 
 class Pack {
 public:

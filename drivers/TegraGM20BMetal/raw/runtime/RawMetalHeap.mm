@@ -37,6 +37,50 @@ bool resident(RMHeap *h)
     return false;
 }
 
+bool matchingOptions(RMHeap *h, MTLResourceOptions options)
+{
+    constexpr NSUInteger mask = MTLResourceStorageModeMask | MTLResourceCPUCacheModeMask;
+    return (options & mask) == (h->_descriptor.resourceOptions & mask);
+}
+
+id<MTLBuffer> makeArenaBuffer(RMHeap *h, NSUInteger length, MTLResourceOptions options,
+                              std::optional<uint64_t> offset = {})
+{
+    if (!matchingOptions(h, options) || !resident(h))
+        return nil;
+    RMBuffer *b = [RMBuffer new];
+    b->_device = h->_device;
+    b->_options = options;
+    if (!gRM->raw->arenaBuffer(h->_arena - 1, length, b->_raw, offset))
+        return nil;
+    b->_heap = h;
+    b->_raw.hostVisible = h->_descriptor.storageMode != MTLStorageModePrivate;
+    if (b->_raw.hostVisible && (gRM->raw->kernelInfo().flags & TegraGM20BInfoJobVisibility)) {
+        raw::HostAccess access;
+        if (!gRM->raw->hostAccess(b->_raw, true, access) || !access.finish())
+            return nil;
+    }
+    b->_aliasable = offset.has_value();
+    return (id<MTLBuffer>)b;
+}
+
+id<MTLTexture> makeArenaTexture(RMHeap *h, MTLTextureDescriptor *d, std::optional<uint64_t> offset = {})
+{
+    if (!matchingOptions(h, d.resourceOptions) || !resident(h))
+        return nil;
+    RMTexture *t = [RMTexture new];
+    t->_device = h->_device;
+    t->_descriptor = [d copy];
+    t->_kind = RMTexturePool;
+    if (!gRM->raw->arenaTexture(h->_arena - 1, uint32_t(d.width), uint32_t(d.height), uint32_t(d.pixelFormat),
+                              t->_raw, offset))
+        return nil;
+    t->_rawOk = true;
+    t->_heap = h;
+    t->_aliasable = offset.has_value();
+    return swizzled((id<MTLTexture>)t, d.swizzle);
+}
+
 }  // namespace
 
 bool heapResident(RMHeap *h)
@@ -142,18 +186,11 @@ bool heapResident(RMHeap *h)
 
 - (id<MTLBuffer>)newBufferWithLength:(NSUInteger)length options:(MTLResourceOptions)options
 {
+    if (_descriptor.type == MTLHeapTypePlacement)
+        return nil;
     bool blockLinear;
-    if (_arena && arenaKind(_descriptor.storageMode, blockLinear) && !blockLinear) {
-        if (!resident(self))
-            return nil;
-        RMBuffer *b = [RMBuffer new];
-        b->_device = _device;
-        b->_options = options;
-        if (!gRM->raw->arenaBuffer(_arena - 1, length, b->_raw))
-            return nil;  // the heap is full: Metal answers nil
-        b->_heap = self;
-        return (id<MTLBuffer>)b;
-    }
+    if (_arena && arenaKind(_descriptor.storageMode, blockLinear) && !blockLinear)
+        return makeArenaBuffer(self, length, options);
     const MTLSizeAndAlign need = [(id<MTLDevice>)_device heapBufferSizeAndAlignWithLength:length options:options];
     if (![self rmTake:need.size])
         return nil;
@@ -169,28 +206,19 @@ bool heapResident(RMHeap *h)
 
 - (id<MTLBuffer>)newBufferWithLength:(NSUInteger)length options:(MTLResourceOptions)options offset:(NSUInteger)offset
 {
-    (void)offset;
-    return [self newBufferWithLength:length options:options];
+    if (_descriptor.type != MTLHeapTypePlacement || !_arena)
+        return nil;
+    return makeArenaBuffer(self, length, options, offset);
 }
 
 - (id<MTLTexture>)newTextureWithDescriptor:(MTLTextureDescriptor *)d
 {
+    if (_descriptor.type == MTLHeapTypePlacement)
+        return nil;
     bool blockLinear;
     uint64_t bytes, align;
-    if (_arena && arenaKind(_descriptor.storageMode, blockLinear) && placed(d, blockLinear, bytes, align)) {
-        if (!resident(self))
-            return nil;
-        RMTexture *t = [RMTexture new];
-        t->_device = _device;
-        t->_descriptor = [d copy];
-        t->_kind = RMTexturePool;
-        if (!gRM->raw->arenaTexture(_arena - 1, uint32_t(d.width), uint32_t(d.height), uint32_t(d.pixelFormat),
-                                    t->_raw))
-            return nil;
-        t->_rawOk = true;
-        t->_heap = self;
-        return swizzled((id<MTLTexture>)t, d.swizzle);
-    }
+    if (_arena && arenaKind(_descriptor.storageMode, blockLinear) && placed(d, blockLinear, bytes, align))
+        return makeArenaTexture(self, d);
     const MTLSizeAndAlign need = [(id<MTLDevice>)_device heapTextureSizeAndAlignWithDescriptor:d];
     if (![self rmTake:need.size])
         return nil;
@@ -206,8 +234,12 @@ bool heapResident(RMHeap *h)
 
 - (id<MTLTexture>)newTextureWithDescriptor:(MTLTextureDescriptor *)d offset:(NSUInteger)offset
 {
-    (void)offset;
-    return [self newTextureWithDescriptor:d];
+    bool blockLinear;
+    uint64_t bytes, align;
+    if (_descriptor.type != MTLHeapTypePlacement || !_arena || !arenaKind(_descriptor.storageMode, blockLinear) ||
+        !placed(d, blockLinear, bytes, align))
+        return nil;
+    return makeArenaTexture(self, d, offset);
 }
 
 @end
@@ -216,14 +248,18 @@ bool heapResident(RMHeap *h)
 
 - (id<MTLHeap>)newHeapWithDescriptor:(MTLHeapDescriptor *)d
 {
+    if (d.type != MTLHeapTypeAutomatic && d.type != MTLHeapTypePlacement)
+        return nil;
     RMHeap *h = [RMHeap new];
     h->_device = self;
     h->_descriptor = [d copy];
     bool blockLinear;
     uint32_t arena;
-    if (d.type == MTLHeapTypeAutomatic && arenaKind(d.storageMode, blockLinear) &&
-        gRM->raw->createArena(d.size, blockLinear, arena))
+    if ((d.type == MTLHeapTypeAutomatic || d.type == MTLHeapTypePlacement) && arenaKind(d.storageMode, blockLinear) &&
+        gRM->raw->createArena(d.size, blockLinear, arena, d.type == MTLHeapTypePlacement))
         h->_arena = arena + 1;
+    if (d.type == MTLHeapTypePlacement && !h->_arena)
+        return nil;
     return (id<MTLHeap>)h;
 }
 

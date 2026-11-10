@@ -51,7 +51,7 @@ bool readFile(const std::string &path, std::string &out)
     if (fd < 0)
         return false;
     struct stat st;
-    bool ok = fstat(fd, &st) == 0 && uint64_t(st.st_size) <= kSizeLimit;
+    bool ok = fstat(fd, &st) == 0 && S_ISREG(st.st_mode) && uint64_t(st.st_size) <= kSizeLimit;
     if (ok) {
         out.resize(size_t(st.st_size));
         size_t at = 0;
@@ -248,9 +248,25 @@ bool RecordCache::attach(const std::string &dir, uint64_t stack, uint64_t capByt
         return false;
     parent_ = dir;
     dir_ = mine;
+    if (stack_ != stack)
+        seed_.clear();
     stack_ = stack;
     cap_ = capBytes;
     bytes_ = 0;
+    return true;
+}
+
+bool RecordCache::attachSeed(const std::string &dir, uint64_t stack)
+{
+    std::lock_guard<std::mutex> l(lock_);
+    if (dir.empty() || (!dir_.empty() && stack_ != stack))
+        return false;
+    const std::string path = dir + "/raw-" + hex16(stack);
+    struct stat st;
+    if (stat(path.c_str(), &st) || !S_ISDIR(st.st_mode) || access(path.c_str(), R_OK | X_OK))
+        return false;
+    stack_ = stack;
+    seed_ = path;
     return true;
 }
 
@@ -271,21 +287,29 @@ std::string RecordCache::path(const CacheKey &k) const
     return dir_ + "/" + hex16(k.name()) + ".rec";
 }
 
-bool RecordCache::loadBytes(const CacheKey &k, std::string &bytes)
+bool RecordCache::loadBytes(const std::string &dir, const CacheKey &k, std::string &bytes)
 {
-    return !dir_.empty() && k.stack == stack_ && readFile(path(k), bytes);
+    return !dir.empty() && k.stack == stack_ && readFile(dir + "/" + hex16(k.name()) + ".rec", bytes);
 }
 
 RecordCache::Found RecordCache::load(const CacheKey &k, RuntimeRecord &record, std::string &refusal)
 {
     std::string bytes;
-    return loadBytes(k, bytes) ? decodeEntry(bytes, k, record, refusal) : Found::None;
+    for (const auto *dir : {&seed_, &dir_})
+        if (loadBytes(*dir, k, bytes))
+            if (const Found found = decodeEntry(bytes, k, record, refusal); found != Found::None)
+                return found;
+    return Found::None;
 }
 
 RecordCache::Found RecordCache::loadKernel(const CacheKey &k, ComputeRecord &record, std::string &refusal)
 {
     std::string bytes;
-    return loadBytes(k, bytes) ? decodeKernelEntry(bytes, k, record, refusal) : Found::None;
+    for (const auto *dir : {&seed_, &dir_})
+        if (loadBytes(*dir, k, bytes))
+            if (const Found found = decodeKernelEntry(bytes, k, record, refusal); found != Found::None)
+                return found;
+    return Found::None;
 }
 
 bool RecordCache::store(const CacheKey &k, const RuntimeRecord *record, const std::string &refusal)

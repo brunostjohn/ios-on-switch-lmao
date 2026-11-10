@@ -11,7 +11,10 @@ static constexpr std::array<uint64_t, PredCount> predKeys()
 }
 
 static constexpr std::array<uint64_t, PredCount> kPredKeys = predKeys();
-std::atomic<uint64_t> gPredCbs[PredCount], gPredOnly[PredCount], gPredLogged{0};
+#if SWITCH_RAW_DIAGNOSTICS
+std::atomic<uint64_t> gPredCbs[PredCount], gPredOnly[PredCount];
+#endif
+std::atomic<uint64_t> gPredLogged{0};
 
 // Each predicate's first command buffer this process sends to m2v, through kits/SwitchRefusal (domain raw-metal, the
 // predicate's name as the reason)
@@ -82,7 +85,7 @@ void answerZero(id object, NSInvocation *invocation)
                          sel_getName(invocation.selector));
 #if SWITCH_FRAME_TIMELINE
     if (gRM)
-        gRM->stats.zeroAnswers.fetch_add(1, std::memory_order_relaxed);
+        RAW_DIAGNOSTIC(gRM->stats.zeroAnswers.fetch_add(1, std::memory_order_relaxed));
 #endif
     returnZero(invocation);
 }
@@ -103,7 +106,7 @@ void answerMissing(id object, NSInvocation *invocation)
     }
 #if SWITCH_FRAME_TIMELINE
     if (gRM)
-        gRM->stats.twinForwards.fetch_add(1, std::memory_order_relaxed);
+        RAW_DIAGNOSTIC(gRM->stats.twinForwards.fetch_add(1, std::memory_order_relaxed));
 #endif
     returnZero(invocation);
 }

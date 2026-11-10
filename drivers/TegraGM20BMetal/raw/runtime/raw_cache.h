@@ -36,6 +36,8 @@ public:
     // The directory taken for loads and stores at once (a mkdir); tidy() removes another build's entries and a dead writer's
     // temporaries and counts the bytes kept, which stores need for the cap: it may run later, on another thread
     bool attach(const std::string &dir, uint64_t stack, uint64_t capBytes);
+    // Installed native records are immutable and shared; attach before any compiler worker starts.
+    bool attachSeed(const std::string &dir, uint64_t stack);
     void tidy();
 
     enum class Found : uint8_t {
@@ -58,13 +60,13 @@ public:
     }
 
 private:
-    std::string dir_;
+    std::string dir_, seed_;
     uint64_t stack_ = 0, cap_ = 0, bytes_ = 0;
     mutable std::mutex lock_;
     std::string parent_;
     std::string path(const CacheKey &k) const;
     void evict(uint64_t room);
-    bool loadBytes(const CacheKey &k, std::string &bytes);
+    bool loadBytes(const std::string &dir, const CacheKey &k, std::string &bytes);
     bool storeBytes(const CacheKey &k, const std::string &bytes);
 };
 

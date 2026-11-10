@@ -27,6 +27,38 @@ struct Compiler::Store {
     std::string why;
 };
 
+struct Compiler::Task {
+    Compiler *compiler;
+    std::function<void()> work;
+};
+
+void Compiler::enqueue(std::function<void()> work)
+{
+    std::lock_guard<std::mutex> lock(lock_);
+    ++queued_;
+    dispatch_async_f(static_cast<dispatch_queue_t>(queue_), new Task{this, std::move(work)}, runTask);
+}
+
+void Compiler::runTask(void *context)
+{
+    std::unique_ptr<Task> task(static_cast<Task *>(context));
+    Compiler &compiler = *task->compiler;
+    const auto slots = static_cast<dispatch_semaphore_t>(compiler.slots_);
+    dispatch_semaphore_wait(slots, DISPATCH_TIME_FOREVER);
+    struct Retire {
+        Compiler &compiler;
+        dispatch_semaphore_t slots;
+        ~Retire()
+        {
+            dispatch_semaphore_signal(slots);
+            std::lock_guard<std::mutex> lock(compiler.lock_);
+            --compiler.queued_;
+            compiler.idle_.notify_all();
+        }
+    } retire{compiler, slots};
+    task->work();
+}
+
 Compiler::Compiler(RecordCache *cache, Make make, uint64_t retryUs)
     : cache_(cache), make_(std::move(make)), retryUs_(retryUs),
       queue_(dispatch_queue_create(
@@ -78,7 +110,9 @@ bool Compiler::retryable(const Entry &e, uint64_t &wait) const
 
 RecordCache::Found Compiler::lookup(const CacheKey &k, RuntimeRecord &record, std::string &why)
 {
+#if SWITCH_RAW_DIAGNOSTICS
     const uint64_t began = nowUs();
+#endif
     {
         std::lock_guard<std::mutex> l(lock_);
         const auto it = entries_.find(k.name());
@@ -99,9 +133,9 @@ RecordCache::Found Compiler::lookup(const CacheKey &k, RuntimeRecord &record, st
     if (found == RecordCache::Found::Record)
         record = *loaded;
     std::lock_guard<std::mutex> l(lock_);
-    stats_.hits++;
-    stats_.lookupHits++;
-    stats_.lookupUs += nowUs() - began;
+    RAW_DIAGNOSTIC(stats_.hits++;
+                   stats_.lookupHits++;
+                   stats_.lookupUs += nowUs() - began);
     // an ask that came in since keeps its own entry (its job finds the same entry on disk)
     if (const auto [it, first] = entries_.try_emplace(k.name()); first) {
         it->second.state = found == RecordCache::Found::Record ? State::Ready : State::Refused;
@@ -177,10 +211,15 @@ std::vector<Compiler::Done> Compiler::settle(const CacheKey &k, Outcome outcome,
         e.record = std::move(record);
         *made = e.record.get();
     }
+#if SWITCH_RAW_DIAGNOSTICS
     (found == RecordCache::Found::None ? stats_.misses : stats_.hits)++;
     stats_.refusals += outcome == Outcome::Refused;
     stats_.failures += outcome == Outcome::Failed;
     stats_.makeUs += nowUs() - began;
+#else
+    (void)found;
+    (void)began;
+#endif
     if (outcome == Outcome::Failed) {
         e.failures++;
         e.failedUs = nowUs();
@@ -193,7 +232,8 @@ void Compiler::run(void *context)
 {
     std::unique_ptr<Job> job(static_cast<Job *>(context));
     Compiler &c = *job->compiler;
-    const uint64_t began = nowUs();
+    uint64_t began = 0;
+    RAW_DIAGNOSTIC(began = nowUs());
     auto record = std::make_unique<RuntimeRecord>();
     std::string why;
     RecordCache::Found found;
@@ -228,7 +268,8 @@ Compiler::State Compiler::makeNow(const CacheKey &k, RuntimeRecord &record, std:
         }
         e.state = State::Pending;
     }
-    const uint64_t began = nowUs();
+    uint64_t began = 0;
+    RAW_DIAGNOSTIC(began = nowUs());
     auto made = std::make_unique<RuntimeRecord>();
     RecordCache::Found found;
     const Outcome outcome = produce(k, *made, why, found);
@@ -252,8 +293,12 @@ void Compiler::drain()
 
 Compiler::Stats Compiler::stats() const
 {
+#if SWITCH_RAW_DIAGNOSTICS
     std::lock_guard<std::mutex> l(lock_);
     return stats_;
+#else
+    return {};
+#endif
 }
 
 }  // namespace raw

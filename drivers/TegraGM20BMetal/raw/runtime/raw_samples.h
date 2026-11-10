@@ -6,6 +6,7 @@
 #pragma once
 #include <cstdint>
 #include "raw_gpu.h"
+#include "raw_sample_shading.h"
 
 namespace raw {
 

@@ -124,6 +124,9 @@ private:
         const NmbDirectWrite &w = kw.write;
         const bool slotted =
             w.source == NmbDirectTexture || (w.source == NmbDirectCombined && w.slot != NMB_DIRECT_NEUTRAL);
+        if (w.viewType >= 0 &&
+            (w.source == NmbDirectNeutral || (w.source == NmbDirectCombined && w.slot == NMB_DIRECT_NEUTRAL)))
+            return true;  // Set words stay zero: Device reserves TIC 0 for NIL's null image descriptor.
         uint32_t word0 = 0;
         if (!slotted || !kw.viewFormat) {
             why = "a texture slot the dispatch leaves unbound at " + std::to_string(offset);
@@ -192,7 +195,11 @@ Compiler::Outcome compile(const NmbDirectKernel &k, const DirectNvk &nvk, Compil
                                false,
                                0,
                                0,
-                               {}};
+                               {},
+                               0,
+                               k.stage.semantic,
+                               k.stage.portableContext,
+                               k.stage.portable};
     if (k.stage.stage != kComputeStage) {
         why = "a stage of VkShaderStageFlags " + std::to_string(k.stage.stage);
         return Compiler::Outcome::Refused;
@@ -258,6 +265,15 @@ Compiler::Outcome directKernel(const NmbDirectKernel &k, const DirectNvk &nvk, c
     r.regionWord = int8_t(k.regionWord);
     r.entries = uint8_t(entries.entries.size());
     std::copy(entries.entries.begin(), entries.entries.end(), r.entry);
+    for (size_t i = 0; i < entries.entries.size(); ++i) {
+        const auto &entry = entries.entries[i];
+        if (entry.slot >= 32)
+            continue;
+        const uint32_t bit = 1u << entry.slot;
+        if ((entry.kind == KernelBuffer && (k.bufferReads & bit) && !(k.bufferWrites & bit)) ||
+            (entry.kind == KernelTexture && (k.textureReads & bit) && !(k.textureWrites & bit)))
+            r.readOnlyEntries |= uint16_t(1u << i);
+    }
     for (const auto &[offset, word] : pushWords(k.pushMask, k.push, k.regionWord)) {
         r.pushMask |= 1u << (offset - kRootPush) / 4;
         r.pushWords[(offset - kRootPush) / 4] = word;

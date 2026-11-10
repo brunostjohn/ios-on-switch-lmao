@@ -13,6 +13,7 @@
 #include <cstdint>
 #include "TegraGM20BABI.h"
 #include "raw_push.h"
+#include "raw_stats.h"
 
 namespace raw {
 
@@ -46,11 +47,13 @@ inline void tiledCacheInit(Push &p, const TegraGM20BAbiInfo &info)
     p.m(SET_TILED_CACHE_CONFIG_3, 0x00080001);
     p.m(SET_MUTABLE_METHOD_CONTROL, 0);
     p.m(SET_TILED_CACHE_ENABLE, 1);
+#if SWITCH_RAW_DIAGNOSTICS
     static std::atomic<bool> logged{false};
     if (!logged.exchange(true)) {
         os_log(os_log_create("com.brunostjohn.switch.TegraGM20BMetal", "raw"),
                "raw: tiled cache on, enabled at context init");
     }
+#endif
 }
 
 inline void tiledCacheDrain(Push &p, const TegraGM20BAbiInfo &info)
