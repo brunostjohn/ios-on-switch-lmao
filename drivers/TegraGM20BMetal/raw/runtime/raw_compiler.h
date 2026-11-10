@@ -65,8 +65,10 @@ public:
     };
 
     Stats stats() const;
+#if SWITCH_RAW_DIAGNOSTICS
     // The calling thread's wait for the compile slot of the make it is running (make_ may ask)
     static uint64_t slotWaitUs();
+#endif
 
 private:
     struct Entry {

@@ -15,7 +15,9 @@ uint64_t nowUs()
     return clock_gettime_nsec_np(CLOCK_UPTIME_RAW) / 1000;
 }
 
+#if SWITCH_RAW_DIAGNOSTICS
 thread_local uint64_t tSlotWaitUs;
+#endif
 
 }  // namespace
 
@@ -47,10 +49,12 @@ public:
         size_t index_;
     };
 
-    Held take(uint64_t *waitedUs)
+    Held take()
     {
+#if SWITCH_RAW_DIAGNOSTICS
         const uint64_t began = nowUs();
-        *waitedUs = 0;
+        tSlotWaitUs = 0;
+#endif
         if (tHeld == this)
             return Held(nullptr, 0);
         const qos_class_t mine = qos_class_self();
@@ -60,7 +64,7 @@ public:
                 if (!holders_[i].thread) {
                     holders_[i] = {pthread_self(), qos_class_self()};
                     tHeld = this;
-                    *waitedUs = nowUs() - began;
+                    RAW_DIAGNOSTIC(tSlotWaitUs = nowUs() - began);
                     return Held(this, i);
                 }
             if (mine == QOS_CLASS_UNSPECIFIED)
@@ -140,8 +144,7 @@ void Compiler::runTask(void *context)
         }
     } retire{compiler};
 
-    uint64_t waited = 0;
-    const CompileSlots::Held slot = compiler.slots_->take(&waited);
+    const CompileSlots::Held slot = compiler.slots_->take();
     task->work();
 }
 
@@ -213,7 +216,8 @@ RecordCache::Found Compiler::lookup(const CacheKey &k, RuntimeRecord &record, st
     }
     auto loaded = std::make_unique<RuntimeRecord>();
     bool seeded = false;
-    const RecordCache::Found found = cache_ ? cache_->load(k, *loaded, why, &seeded) : RecordCache::Found::None;
+    const RecordCache::Found found =
+        cache_ ? cache_->load(k, *loaded, why, SWITCH_RAW_DIAGNOSTICS ? &seeded : nullptr) : RecordCache::Found::None;
     if (found == RecordCache::Found::None)
         return found;
     if (found == RecordCache::Found::Record)
@@ -254,10 +258,8 @@ Compiler::Outcome Compiler::produce(const CacheKey &k, RuntimeRecord &record, st
     if (found != RecordCache::Found::None)
         return found == RecordCache::Found::Record ? Outcome::Made : Outcome::Refused;
 
-    uint64_t waited = 0;
-    const CompileSlots::Held slot = slots_->take(&waited);
-    tSlotWaitUs = waited;
-    RAW_DIAGNOSTIC(std::lock_guard<std::mutex> l(lock_); stats_.waitUs += waited);
+    const CompileSlots::Held slot = slots_->take();
+    RAW_DIAGNOSTIC(std::lock_guard<std::mutex> l(lock_); stats_.waitUs += tSlotWaitUs);
     const Outcome outcome = make_(k, record, why);
     if (found == RecordCache::Found::None && outcome != Outcome::Failed && cache_)
         dispatch_async_f(
@@ -368,10 +370,12 @@ void Compiler::drain()
     dispatch_sync_f(static_cast<dispatch_queue_t>(persistence_), nullptr, [](void *) {});
 }
 
+#if SWITCH_RAW_DIAGNOSTICS
 uint64_t Compiler::slotWaitUs()
 {
     return tSlotWaitUs;
 }
+#endif
 
 Compiler::Stats Compiler::stats() const
 {
