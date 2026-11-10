@@ -130,17 +130,20 @@ TEST_F(Backing, KilledLegacyJobFailsNoneOfItsConnectionsBos)
 	switch_gpu_backing_release(surface);
 }
 
-TEST_F(Backing, KilledListedWriterFailsOnlyTheFirstReaderOfThatImport)
+TEST_F(Backing, KilledListedWriterFailsNoReaderOfThatImport)
 {
 	auto *surface = backing();
 	Connection nvk(surface, 4);
 	const auto job = token(1);
 	ASSERT_EQ(nvk.exec(job, true, TegraGM20BSurfaceWrite), 0);
 	kill_channel(job);
+	const int logged = ioLogLines();
 	EXPECT_EQ(publish(nvk.own(0), kRead, token(2)), 0);
+	EXPECT_EQ(ioLogLines(), logged);
 	EXPECT_EQ(nvk.exec(token(3), false), 0);
-	EXPECT_EQ(publish(surface, kRead, token(2, 2)), -5);
-	EXPECT_EQ(publish(surface, kRead, token(2, 3)), 0);
+	EXPECT_EQ(ioLogLines(), logged + 1);
+	EXPECT_EQ(refs(job), 0);
+	EXPECT_EQ(publish(surface, kRead, token(2, 2)), 0);
 	switch_gpu_backing_release(surface);
 }
 

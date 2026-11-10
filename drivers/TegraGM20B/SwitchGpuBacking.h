@@ -104,12 +104,11 @@ struct switch_gpu_backing_transaction {
 
 /* begin sorts/merges the caller's use array and locks its backings in allocation order. Keep those locks only through
  * dependency encoding and publication; every success must end with commit or abort. No token can be lost at commit.
- * A failed reader changes nothing. A failed writer leaves the contents undefined: the next use that reads them (a READ
- * here or in dependencies, a READ CPU acquire or wait) gets its errno once, unless a complete overwrite (a whole-range
- * CPU_DISCARD write) replaced them first. Writers never fail on it.
+ * Failed work fails no later use: its records retire as completed ones do, and what a failed writer wrote is undefined
+ * (logged once). Nothing here, in dependencies, or in a CPU acquire or wait returns its errno.
  * An UNLISTED use is one the engine cannot vouch for (a legacy submission's private BOs and unlisted imports): CPU
  * access and the kernel's other engines still order after the job, as after a writer when WRITE is set, but no GM20B
- * job waits for it, it waits for nothing, CPU owners never refuse it, and its failure reaches nobody.
+ * job waits for it, it waits for nothing and CPU owners never refuse it.
  * NO_CPU_EXCLUSION: CPU owners holding the backing now do not refuse the use (a legacy submission, which its ABI never
  * refused for a CPU lock). An owner ordered itself after earlier work when it acquired; this job orders the next
  * acquire, and begin still cleans what the owner wrote so far. */

@@ -273,17 +273,18 @@ TEST_F(Backing, FailedOwnedAvoidSyncAcquisitionReturnsNoLease)
 
 TEST_F(Backing, FailureAndResetGenerationCannotBeReportedAsCompletion)
 {
-	auto *cpuRead = backing(), *gpuRead = backing();
+	auto *allocation = backing();
 	const auto first = token(1);
-	ASSERT_EQ(publish(cpuRead, SWITCH_GPU_BACKING_WRITE, first), 0);
-	ASSERT_EQ(publish(gpuRead, SWITCH_GPU_BACKING_WRITE, first), 0);
+	ASSERT_EQ(publish(allocation, SWITCH_GPU_BACKING_WRITE, first), 0);
 	timelines[key(&first)].error = -5;
 	const auto reset = token(1, 99, SWITCH_GPU_ENGINE_GM20B, 2);
 	timelines[key(&reset)].completed = 99;
-	EXPECT_EQ(switch_gpu_backing_cpu_acquire(cpuRead, 0, 4096, SWITCH_GPU_BACKING_READ), -5);
-	EXPECT_EQ(publish(gpuRead, SWITCH_GPU_BACKING_READ, token(2)), -5);
-	switch_gpu_backing_release(cpuRead);
-	switch_gpu_backing_release(gpuRead);
+	const int logged = ioLogLines();
+	EXPECT_EQ(switch_gpu_backing_cpu_acquire(allocation, 0, 4096, SWITCH_GPU_BACKING_READ), 0);
+	EXPECT_EQ(ioLogLines(), logged + 1);
+	EXPECT_EQ(switch_gpu_backing_cpu_release(allocation, 0, 4096, SWITCH_GPU_BACKING_READ), 0);
+	EXPECT_EQ(publish(allocation, SWITCH_GPU_BACKING_READ, token(2)), 0);
+	switch_gpu_backing_release(allocation);
 }
 
 TEST_F(Backing, CompletionRecordsAndPinnedOwnerOutliveLastClientLease)

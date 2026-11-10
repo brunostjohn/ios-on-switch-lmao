@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
-// A killed channel's records against later users of the same allocation (SwitchGpuOwnership.cpp): a failed read changes
-// nothing, a failed write fails the first reader of what it wrote and nobody after, and no record outlives its use.
+// A killed channel's records against later users of the same allocation (SwitchGpuOwnership.cpp): no later use fails, a
+// failed write is logged once per producer, and no record or timeline reference outlives its use.
+// A test that counts log lines kills a producer (queue) of its own: the log names each producer once per binary.
 #include <array>
 #include "switch_gpu_backing_fixture.h"
 
@@ -15,11 +16,11 @@ int cpu_read(switch_gpu_backing *allocation)
 	return result;
 }
 
-int cpu_write(switch_gpu_backing *allocation, uint64_t offset, uint64_t bytes, uint32_t flags = 0)
+int cpu_write(switch_gpu_backing *allocation, uint64_t offset, uint64_t bytes)
 {
-	const int result = switch_gpu_backing_cpu_acquire(allocation, offset, bytes, kWrite | flags);
+	const int result = switch_gpu_backing_cpu_acquire(allocation, offset, bytes, kWrite);
 	if (!result)
-		EXPECT_EQ(switch_gpu_backing_cpu_release(allocation, offset, bytes, kWrite | flags), 0);
+		EXPECT_EQ(switch_gpu_backing_cpu_release(allocation, offset, bytes, kWrite), 0);
 	return result;
 }
 } // namespace
@@ -30,34 +31,40 @@ TEST_F(Backing, FailedReaderLetsTheNextWriterAndReaderRun)
 	const auto reader = token(1);
 	ASSERT_EQ(publish(allocation, kRead, reader), 0);
 	kill_channel(reader);
+	const int logged = ioLogLines();
 	EXPECT_EQ(publish(allocation, kWrite, token(2)), 0);
 	EXPECT_EQ(refs(reader), 0);
 	EXPECT_EQ(publish(allocation, kRead, token(3)), 0);
 	EXPECT_EQ(cpu_read(allocation), 0);
+	EXPECT_EQ(ioLogLines(), logged);
 	switch_gpu_backing_release(allocation);
 }
 
-TEST_F(Backing, FailedWriterFailsOnlyItsFirstReader)
+TEST_F(Backing, FailedWriterFailsNoReaderAndIsLoggedOnce)
 {
 	auto *allocation = backing();
-	const auto writer = token(1);
+	const auto writer = token(21);
 	ASSERT_EQ(publish(allocation, kWrite, writer), 0);
 	kill_channel(writer);
-	EXPECT_EQ(publish(allocation, kRead, token(2)), -5);
+	const int logged = ioLogLines();
+	EXPECT_EQ(publish(allocation, kRead, token(2)), 0);
 	EXPECT_EQ(refs(writer), 0);
+	EXPECT_EQ(ioLogLines(), logged + 1);
 	EXPECT_EQ(publish(allocation, kRead, token(3)), 0);
 	EXPECT_EQ(publish(allocation, kRead | kWrite, token(4)), 0);
 	EXPECT_EQ(cpu_read(allocation), 0);
+	EXPECT_EQ(ioLogLines(), logged + 1);
 	switch_gpu_backing_release(allocation);
 }
 
-TEST_F(Backing, FailedWriterFailsTheFirstCpuReaderOnce)
+TEST_F(Backing, FailedWriterFailsNoCpuReader)
 {
 	auto *allocation = backing();
 	const auto writer = token(1);
 	ASSERT_EQ(publish(allocation, kWrite, writer), 0);
 	kill_channel(writer);
-	EXPECT_EQ(cpu_read(allocation), -5);
+	EXPECT_EQ(cpu_read(allocation), 0);
+	EXPECT_EQ(refs(writer), 0);
 	EXPECT_EQ(cpu_read(allocation), 0);
 	EXPECT_EQ(publish(allocation, kRead, token(2)), 0);
 	switch_gpu_backing_info info = {};
@@ -66,7 +73,7 @@ TEST_F(Backing, FailedWriterFailsTheFirstCpuReaderOnce)
 	switch_gpu_backing_release(allocation);
 }
 
-TEST_F(Backing, WritersOfFailedContentsNeverFailAndAPartialWriteLeavesThemUndefined)
+TEST_F(Backing, WritesAfterAFailedWriterRun)
 {
 	auto *gpu = backing(), *cpu = backing();
 	const auto writer = token(1);
@@ -74,69 +81,55 @@ TEST_F(Backing, WritersOfFailedContentsNeverFailAndAPartialWriteLeavesThemUndefi
 	ASSERT_EQ(publish(cpu, kWrite, writer), 0);
 	kill_channel(writer);
 	EXPECT_EQ(publish(gpu, kWrite, token(2)), 0);
-	EXPECT_EQ(cpu_write(cpu, 0, 64, SWITCH_GPU_BACKING_CPU_DISCARD), 0);
 	EXPECT_EQ(cpu_write(cpu, 64, 64), 0);
-	EXPECT_EQ(publish(gpu, kRead, token(3)), -5);
-	EXPECT_EQ(publish(cpu, kRead, token(3)), -5);
-	EXPECT_EQ(publish(gpu, kRead, token(4)), 0);
-	EXPECT_EQ(publish(cpu, kRead, token(4)), 0);
+	EXPECT_EQ(publish(gpu, kRead, token(3)), 0);
+	EXPECT_EQ(publish(cpu, kRead, token(3)), 0);
+	EXPECT_EQ(refs(writer), 0);
 	switch_gpu_backing_release(gpu);
 	switch_gpu_backing_release(cpu);
 }
 
-TEST_F(Backing, CompleteOverwriteStartsCleanContents)
-{
-	auto *allocation = backing(2);
-	const auto writer = token(1);
-	ASSERT_EQ(publish(allocation, kWrite, writer), 0);
-	kill_channel(writer);
-	EXPECT_EQ(cpu_write(allocation, 0, 8192, SWITCH_GPU_BACKING_CPU_DISCARD), 0);
-	EXPECT_EQ(publish(allocation, kRead, token(2)), 0);
-	EXPECT_EQ(cpu_read(allocation), 0);
-	const auto next = token(3);
-	ASSERT_EQ(publish(allocation, kWrite, next), 0);
-	kill_channel(next);
-	EXPECT_EQ(cpu_read(allocation), -5);
-	switch_gpu_backing_release(allocation);
-}
-
-TEST_F(Backing, OneSubmissionAbsorbsEveryFailedInputItReads)
+TEST_F(Backing, OneKilledProducerOfSeveralInputsIsLoggedOnceAndFailsNoReader)
 {
 	std::array<switch_gpu_backing *, 3> inputs = {backing(), backing(), backing()};
-	const auto writer = token(1);
+	const auto writer = token(22);
 	for (auto *input : inputs)
 		ASSERT_EQ(publish(input, kWrite, writer), 0);
 	kill_channel(writer);
+	const int logged = ioLogLines();
 	std::array<switch_gpu_backing_use, 3> uses = {};
 	for (size_t i = 0; i < uses.size(); ++i)
 		uses[i] = {inputs[i], kRead, 0};
 	switch_gpu_backing_transaction transaction = {};
-	const auto first = token(2), second = token(2, 2);
-	EXPECT_EQ(switch_gpu_backing_begin(uses.data(), uint32_t(uses.size()), &first, &transaction), -5);
-	for (size_t i = 0; i < uses.size(); ++i)
-		uses[i] = {inputs[i], kRead, 0};
-	ASSERT_EQ(switch_gpu_backing_begin(uses.data(), uint32_t(uses.size()), &second, &transaction), 0);
+	const auto reader = token(2);
+	ASSERT_EQ(switch_gpu_backing_begin(uses.data(), uint32_t(uses.size()), &reader, &transaction), 0);
 	switch_gpu_backing_commit(&transaction);
 	EXPECT_EQ(refs(writer), 0);
+	EXPECT_EQ(ioLogLines(), logged + 1);
 	for (auto *input : inputs)
 		switch_gpu_backing_release(input);
 }
 
-TEST_F(Backing, ProducerKilledAfterBeginFailsItsReaderInDependencies)
+TEST_F(Backing, ProducerKilledAfterBeginIsNothingToWaitFor)
 {
 	auto *allocation = backing();
-	const auto writer = token(1);
+	const auto writer = token(23);
 	ASSERT_EQ(publish(allocation, kWrite, writer), 0);
 	switch_gpu_backing_use use = {allocation, kRead, 0};
 	switch_gpu_backing_transaction transaction = {};
 	const auto reader = token(2);
 	ASSERT_EQ(switch_gpu_backing_begin(&use, 1, &reader, &transaction), 0);
 	kill_channel(writer);
+	const int logged = ioLogLines();
 	std::array<switch_gpu_backing_token, 4> dependencies = {};
 	uint32_t needed = 0;
-	EXPECT_EQ(switch_gpu_backing_dependencies(&transaction, dependencies.data(), 4, &needed), -5);
-	switch_gpu_backing_abort(&transaction);
+	EXPECT_EQ(switch_gpu_backing_dependencies(&transaction, dependencies.data(), 4, &needed), 0);
+	EXPECT_EQ(needed, 0u);
+	EXPECT_EQ(ioLogLines(), logged + 1);
+	switch_gpu_backing_commit(&transaction);
+	complete(reader);
 	EXPECT_EQ(publish(allocation, kRead, token(2, 2)), 0);
+	EXPECT_EQ(refs(writer), 0);
 	switch_gpu_backing_release(allocation);
 }
 
@@ -159,7 +152,7 @@ TEST_F(Backing, WriterDoesNotWaitForOrFailOnAKilledReader)
 }
 
 // Process A writes `drawn` and samples `shared`; process B samples `shared` too. A's channel dies with both pending.
-TEST_F(Backing, KillInOneProcessFailsOnlyTheOtherProcessesReadsOfWhatItWrote)
+TEST_F(Backing, KillInOneProcessFailsNothingInAnother)
 {
 	auto *drawn = backing(), *shared = backing();
 	const auto a = token(1), b = token(2);
@@ -169,9 +162,10 @@ TEST_F(Backing, KillInOneProcessFailsOnlyTheOtherProcessesReadsOfWhatItWrote)
 	kill_channel(a);
 	EXPECT_EQ(publish(shared, kRead, token(2, 2)), 0);
 	EXPECT_EQ(refs(a), 2);
-	EXPECT_EQ(publish(drawn, kRead, token(2, 3)), -5);
-	EXPECT_EQ(publish(drawn, kRead, token(2, 4)), 0);
-	complete(token(2, 4));
+	EXPECT_EQ(publish(drawn, kRead, token(2, 3)), 0);
+	EXPECT_EQ(refs(a), 1);
+	EXPECT_EQ(cpu_read(drawn), 0);
+	complete(token(2, 3));
 	EXPECT_EQ(publish(shared, kWrite, token(2, 5)), 0);
 	EXPECT_EQ(publish(drawn, kWrite, token(2, 5)), 0);
 	EXPECT_EQ(refs(a), 0);

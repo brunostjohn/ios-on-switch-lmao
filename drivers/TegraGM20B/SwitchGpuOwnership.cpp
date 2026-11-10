@@ -24,12 +24,21 @@ void switch_gpu_backing_drop_token(const switch_gpu_backing_token &token)
 }
 
 namespace {
-// Only a failed write of the current contents leaves them undefined, and only until a complete overwrite replaces them.
-void note_failure(switch_gpu_backing *backing, switch_gpu_backing_access &access, int status)
+uint64_t logged_producer;
+
+// What a failed write wrote is undefined, and its readers go on with it, as Metal's go on after a failed command buffer:
+// the failure is logged, once per producer, and returned to nobody.
+void note_failure(const switch_gpu_backing *backing, switch_gpu_backing_access &access, int status)
 {
-	if (!access.noted && access.access == SWITCH_GPU_BACKING_WRITE && access.content >= backing->replaced &&
-	    !backing->lost)
-		backing->lost = status;
+	if (!access.noted && access.access == SWITCH_GPU_BACKING_WRITE) {
+		const auto &token = access.token;
+		const uint64_t producer = (uint64_t(token.engine) << 56) ^ (token.reset_generation << 32) ^ token.queue;
+		if (__atomic_exchange_n(&logged_producer, producer, __ATOMIC_RELAXED) != producer)
+			IOLog("SwitchGpu: surface %u (allocation %llu) holds undefined contents from generation %llu (now "
+			      "%llu): engine %u queue %u reset %llu job %llu failed (%d); its users go on\n",
+			      backing->surface_id, backing->id, access.content, backing->content, token.engine, token.queue,
+			      token.reset_generation, token.value, status);
+	}
 	access.noted = true;
 }
 } // namespace
@@ -53,13 +62,6 @@ void switch_gpu_backing_prune_locked(switch_gpu_backing *backing)
 	}
 }
 
-int switch_gpu_backing_take_failure_locked(switch_gpu_backing *backing)
-{
-	const int lost = backing->lost;
-	backing->lost = 0;
-	return lost;
-}
-
 namespace {
 constexpr uint32_t kAccessMask = SWITCH_GPU_BACKING_READ | SWITCH_GPU_BACKING_WRITE;
 constexpr uint32_t kBesideCpu = SWITCH_GPU_BACKING_UNLISTED | SWITCH_GPU_BACKING_NO_CPU_EXCLUSION;
@@ -69,11 +71,6 @@ uint32_t access_kind(uint32_t access)
 {
 	return (access & SWITCH_GPU_BACKING_WRITE ? SWITCH_GPU_BACKING_WRITE : SWITCH_GPU_BACKING_READ) |
 		(access & SWITCH_GPU_BACKING_UNLISTED);
-}
-
-bool reads(uint32_t access)
-{
-	return (access & SWITCH_GPU_BACKING_READ) && !(access & SWITCH_GPU_BACKING_UNLISTED);
 }
 
 // A backing used both listed and unlisted by one job is ordered by everything it may do, as a listed use.
@@ -215,15 +212,6 @@ static int begin(switch_gpu_backing_use *uses, uint32_t count,
 			backing->initial_clean = true;
 		}
 	}
-	// One job absorbs every failed input it reads: a kill that wrote several fails one submission, not one each.
-	int lost = 0;
-	for (uint32_t i = 0; !result && i < unique; ++i) {
-		const int failure = reads(uses[i].access) ? switch_gpu_backing_take_failure_locked(uses[i].backing) : 0;
-		if (!lost)
-			lost = failure;
-	}
-	if (!result)
-		result = lost;
 	if (result)
 		switch_gpu_backing_abort(transaction);
 	return result;
@@ -250,7 +238,6 @@ extern "C" int switch_gpu_backing_dependencies(const switch_gpu_backing_transact
 	if (!transaction || !needed || (capacity && !out) || transaction->locked != transaction->count)
 		return -22;
 	*needed = 0;
-	int lost = 0;
 	// The kernel's other engines follow what a GM20B job did not list; GM20B jobs follow only listed work, as
 	// TegraGM20BFences.h orders them.
 	const bool follows_unlisted = transaction->completion.engine != SWITCH_GPU_ENGINE_GM20B;
@@ -282,12 +269,7 @@ extern "C" int switch_gpu_backing_dependencies(const switch_gpu_backing_transact
 				out[*needed] = access.token;
 			++*needed;
 		}
-		const int failure = reads(use.access) ? switch_gpu_backing_take_failure_locked(use.backing) : 0;
-		if (!lost)
-			lost = failure;
 	}
-	if (lost)
-		return lost;
 	return *needed > capacity ? -28 : 0;
 }
 

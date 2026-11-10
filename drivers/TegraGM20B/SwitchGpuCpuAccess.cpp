@@ -39,7 +39,7 @@ int wait_locked(switch_gpu_backing *backing, uint32_t access)
 			}
 		}
 		if (!token.engine)
-			return access & kRead ? switch_gpu_backing_take_failure_locked(backing) : 0;
+			return 0;
 		if (access & kAvoid)
 			return -16;
 		const auto *ops = switch_gpu_backing_engine_ops(token.engine);
@@ -51,7 +51,7 @@ int wait_locked(switch_gpu_backing *backing, uint32_t access)
 		const int settled = result < 0 ? ops->status(&token) : result;
 		ops->release_token(&token);
 		IOLockLock(backing->lock);
-		// A producer that failed while waited for is the next prune's to note; only a reader of what it wrote fails.
+		// A producer that failed while waited for is the next prune's to retire; the waiter goes on.
 		if (!settled)
 			return result < 0 ? result : -110;
 	}
@@ -120,10 +120,6 @@ extern "C" int switch_gpu_backing_cpu_release(switch_gpu_backing *backing, uint6
 		if (!(access & kNoCache))
 			switch_gpu_backing_cache(backing->pages->addresses, backing->pages->count, offset, bytes, 0);
 		++backing->content;
-		if ((access & kDiscard) && !offset && bytes == uint64_t(backing->pages->count) << 12) {
-			backing->replaced = backing->content;
-			backing->lost = 0;
-		}
 		if (backing->initial_clean && backing->cpu_writers == 1)
 			backing->dirty &= ~uint32_t(SWITCH_GPU_BACKING_CPU_DIRTY);
 	}
