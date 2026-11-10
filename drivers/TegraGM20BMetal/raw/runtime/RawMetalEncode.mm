@@ -120,9 +120,9 @@ static bool encodeRawAttempt(RMCommandBuffer *cb, size_t from, size_t to, const 
     };
     // a draw the encoder refused: its predicate and values (raw_gpu.h Refusal)
     auto refused = [&]() {
-        static const RMPred map[] = {PredEncPassRender, PredEncIndexedRange, PredEncColorFormats, PredEncUboOffset,
-                                     PredEncNoTic,      PredEncDepthStencil, PredEncSamples, PredEncGeometry,
-                                     PredEncStorageView};
+        static const RMPred map[] = {PredEncPassRender, PredEncIndexedRange, PredEncColorFormats,
+                                     PredEncUboOffset,  PredEncNoTic,        PredEncDepthStencil,
+                                     PredEncSamples,    PredEncGeometry,     PredEncStorageView};
         const raw::Refusal &f = rc->refusal;
         hit(cb, f.id < sizeof map / sizeof *map ? map[f.id] : PredEncPassRender, f.a,
             uint64_t(f.b) | uint64_t(f.c) << 32);

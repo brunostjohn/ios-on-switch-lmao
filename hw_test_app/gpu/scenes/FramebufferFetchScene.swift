@@ -81,7 +81,8 @@ struct FramebufferFetchScene: GPUScene {
                     result.expect(timing.path == "raw", "\(key) did not execute entirely raw: \(timing.path)")
                     let draws = (after["interlock_draws"] ?? 0) - (before["interlock_draws"] ?? 0)
                     result.metrics.set("interlock_\(key)", draws)
-                    result.expect(draws >= 2, "\(key) has no confirmed native interlock draws; diagnostic counters required")
+                    result.expect(
+                        draws >= 2, "\(key) has no confirmed native interlock draws; diagnostic counters required")
                     let ilk = (after["fetch_interlocked"] ?? 0) - (before["fetch_interlocked"] ?? 0)
                     result.metrics.set("ilk_\(key)", ilk)
                     result.expect(ilk >= 2, "\(key): the fetch line's ilk counted no interlocked fetching draw")

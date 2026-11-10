@@ -8,9 +8,8 @@ static uint64_t gPredRates[PredCount];  // the rates line's last gPredCbs (its t
 static struct {
     uint64_t raw, m2v, encodeUs, draws, passes, copies, deferred, aborted, reasons[WhyCount], ringWaits, lastUs,
         switches, cpuOrdered, acquires, poolStalls, eventsReleased, heldReturns, signalsPublished, signalsAfterWork,
-        waitsOnPromise, scheduledWaits, scheduledWaitUs,
-        completedWaits, completedWaitUs, abortUs, replayUs, replayClean, rtUnaligned, rtMixed, predOnly[PredCount],
-        splits, splitM2v, eventSplits, eventWhole, levelPasses;
+        waitsOnPromise, scheduledWaits, scheduledWaitUs, completedWaits, completedWaitUs, abortUs, replayUs,
+        replayClean, rtUnaligned, rtMixed, predOnly[PredCount], splits, splitM2v, eventSplits, eventWhole, levelPasses;
 } gRates;
 
 #endif

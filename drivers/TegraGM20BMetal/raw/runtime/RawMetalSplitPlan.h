@@ -32,8 +32,8 @@ inline void planSplitPrograms(RMCommandBuffer *cb, size_t begin, raw::RenderEnco
         return;
 #endif
     cb->_plan.forEachRasterGroup(begin, [&](const raw::RasterState &state, uint32_t draws) {
-        encoder.addSplitCandidates(nativeOf(state), draws, raw::rasterPixelLimit(state, encoder.areaWidth(),
-                                                                       encoder.areaHeight()));
+        encoder.addSplitCandidates(nativeOf(state), draws,
+                                   raw::rasterPixelLimit(state, encoder.areaWidth(), encoder.areaHeight()));
     });
     encoder.finishSplitPlan();
 }

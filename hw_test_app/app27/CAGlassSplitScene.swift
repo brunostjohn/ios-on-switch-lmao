@@ -212,7 +212,9 @@ struct CAGlassSplitScene: GPUScene {
         let paths: [String]
     }
 
-    func draw(_ gpu: GPU, _ frame: Frame, tiles: Int, wholePrograms: Bool, _ result: inout SceneResult) async throws -> Half {
+    func draw(
+        _ gpu: GPU, _ frame: Frame, tiles: Int, wholePrograms: Bool, _ result: inout SceneResult
+    ) async throws -> Half {
         if let content = frame.content {
             try await gpu.upload(content, to: frame.target, bytesPerRow: Self.size * 4)
         }

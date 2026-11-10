@@ -27,7 +27,7 @@ def main() -> None:
     parser.add_argument('--m2v', action='append', default=[], help='an m2v source file (below --m2v-root)')
     parser.add_argument('--source', action='append', default=[], help='a bridge or frontend file')
     args = parser.parse_args()
-    drivers, raw, m2v_root = Path(args.drivers), Path(args.raw), Path(args.m2v_root)
+    raw, m2v_root = Path(args.raw), Path(args.m2v_root)
     m2v = sorted(Path(path).relative_to(m2v_root).as_posix() for path in args.m2v)
     sources = sorted((Path(path) for path in args.source), key=lambda path: path.name)
     names = [path.name for path in sources]

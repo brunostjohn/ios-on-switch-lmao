@@ -185,7 +185,7 @@ typedef NS_ENUM(uint8_t, RMTextureKind) {
     // the compiles its head waits for, made one at a time at the committers' priority (raw_follow.h): one urged compile per
     // waiting Metal queue at most
     dispatch_queue_t _urges;
-    std::atomic<void *> _last;   // the command buffer enqueued last, retained until its completed handlers ran
+    std::atomic<void *> _last;  // the command buffer enqueued last, retained until its completed handlers ran
     uint32_t _gpuPriority, _backgroundGpuPriority;  // what it asked for (RawMetalQueuePriority.mm)
     raw::ResidencySets _residency;
 }

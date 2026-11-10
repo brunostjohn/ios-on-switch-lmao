@@ -12,7 +12,7 @@ namespace raw {
 
 enum class StorageFallback : uint8_t {
     None,
-    Metadata,    // the pack's storage record cannot be used (raw_storage.h usableStorageMetadata): its barrier record is
+    Metadata,  // the pack's storage record cannot be used (raw_storage.h usableStorageMetadata): its barrier record is
     TexelBytes,  // an attachment's texel size is not the storage view's
     Samples,     // an attachment's samples are not the form's
     Compressed,  // an attachment's memory carries compression tags

@@ -755,9 +755,9 @@ Pipeline *Device::placePipeline(uint64_t keyHash, PackForm form, bool caTransfor
     };
     const PackPipeline *rec = pack_.find(keyHash, form);
     if (rec && !usable(rec)) {
-        const PackPipeline *barrier =
-            form == PackForm::Default && (rec->flags & PipelineStorageMetadata) ? pack_.find(keyHash, PackForm::Barrier)
-                                                                                 : nullptr;
+        const PackPipeline *barrier = form == PackForm::Default && (rec->flags & PipelineStorageMetadata)
+                                          ? pack_.find(keyHash, PackForm::Barrier)
+                                          : nullptr;
         rec = usable(barrier) ? barrier : nullptr;
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
         if (rec) {
