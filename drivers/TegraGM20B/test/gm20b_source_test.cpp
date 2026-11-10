@@ -1139,6 +1139,15 @@ TEST(GM20BVisibilitySource, ColdGlobalInvalidationPreservesInternalDirtyData)
     expectBefore(body, "ltc->func->invalidate(ltc)", "mutex_unlock(&ltc->mutex)");
 }
 
+// nvkm_runl_chan_get_chid returns with spinlocks held and interrupts off; nvkm_kmap takes ltc->mutex.
+TEST(GM20BChannelSource, TimesliceWritesRamfcOnlyAfterTheChannelLookupUnlocks)
+{
+    const auto body = flat(definition(gpu(), "static void chan_timeslice("));
+    expectBefore(body, "nvkm_runl_chan_get_chid(", "nvkm_chan_put(&nchan, flags)");
+    expectBefore(body, "nvkm_chan_put(&nchan, flags)", "nvkm_kmap(");
+    expectBefore(body, "nvkm_kmap(", "nvkm_done(");
+}
+
 TEST(GM20BChannelSource, CopyChannelCreatesOnlyRequestedObjectsAndKeepsVerifiedRunlist)
 {
     const auto create = flat(definition(gpu(), "static int chan_new("));
