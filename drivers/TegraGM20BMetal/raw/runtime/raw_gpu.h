@@ -979,6 +979,11 @@ public:
         return k_.info();
     }
 
+    bool jobVisibility() const
+    {
+        return k_.jobVisibility();
+    }
+
     std::shared_ptr<SharedEvents> sharedEvents()
     {
         return k_.sharedEvents();

@@ -21,10 +21,9 @@ bool transferTexture(RMTexture *texture, MTLRegion region, NSUInteger level, NSU
     auto owner = std::shared_ptr<void>((__bridge_retained void *)texture, [](void *held) { CFRelease(held); });
     const auto result = gRM->raw->transferTexture(texture->_raw, uint32_t(level), uint32_t(slice), origin, size,
                                                  bytes, row, image, write, std::move(owner));
-    if (result == raw::TextureTransferResult::Unsupported)
+    // A failed write published nothing and a failed read touched only its staging: the CPU paths take either over
+    if (result != raw::TextureTransferResult::Complete)
         return false;
-    if (result == raw::TextureTransferResult::Failed)
-        [NSException raise:NSInternalInconsistencyException format:@"GPU texture %@ failed", write ? @"upload" : @"readback"];
     if (write)
         texture->_gpuDirty.store(true, std::memory_order_release);
     return true;
