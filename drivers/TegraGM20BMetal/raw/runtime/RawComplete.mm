@@ -73,12 +73,9 @@ Completion::Completion(Device &device, const char *cacheDir, uint64_t stack, con
       queue_(dispatch_queue_create(
           "com.brunostjohn.switch.raw.complete",
           dispatch_queue_attr_make_with_qos_class(DISPATCH_QUEUE_SERIAL, QOS_CLASS_USER_INITIATED, 0))),
-      // A split compile makes the whole state again (translation, both stages, the split) for a record that already
-      // draws: at the background class it takes CPU no creation, frame or other process asks for, and its record is
-      // kept, so it is paid once per process and build.
-      splitQueue_(dispatch_queue_create(
-          "com.brunostjohn.switch.raw.split",
-          dispatch_queue_attr_make_with_qos_class(DISPATCH_QUEUE_SERIAL, QOS_CLASS_BACKGROUND, 0))),
+      splitQueue_(
+          dispatch_queue_create("com.brunostjohn.switch.raw.split",
+                                dispatch_queue_attr_make_with_qos_class(DISPATCH_QUEUE_SERIAL, QOS_CLASS_UTILITY, 0))),
       persistenceQueue_(
           dispatch_queue_create("com.brunostjohn.switch.raw.kernel-cache",
                                 dispatch_queue_attr_make_with_qos_class(DISPATCH_QUEUE_SERIAL, QOS_CLASS_UTILITY, 0))),
