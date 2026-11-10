@@ -177,6 +177,7 @@ def _raw_stack_impl(ctx):
     args.add("--drivers", drivers)
     args.add("--m2v-root", m2v_root)
     args.add_all(ctx.files.m2v, before_each = "--m2v")
+    args.add_all([f for f in ctx.files.srcs if "/TegraGM20BMetal/raw/" not in f.path], before_each = "--source")
     args.add("--raw", drivers + "/TegraGM20BMetal/raw")
     args.add("--out", out)
     ctx.actions.run(
