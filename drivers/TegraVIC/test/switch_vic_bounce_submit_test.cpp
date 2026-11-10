@@ -152,3 +152,24 @@ TEST_F(Bounce, FirstStageRefusalLeavesCompletionWithCaller) {
     EXPECT_EQ(switch_vic_bounce_submit(&src,&dst,&p,0,notify,nullptr,nullptr),-5);
     EXPECT_EQ(callbacks,0); EXPECT_TRUE(pending.empty());
 }
+
+// A copy the copy engine accepted and the GPU then failed (a killed channel's jobs report -5 through their timeline)
+// fails the job that depends on it, from that copy's own completion, once everything the job queued has retired. The
+// next job is not touched.
+TEST_F(Bounce, AFillTheGpuFailsFailsItsJobAndNotTheNext) {
+    auto src = makeSurface(true,192), dst = makeSurface(false,192); auto p = plan();
+    ASSERT_EQ(switch_vic_bounce_submit(&src,&dst,&p,0,notify,nullptr,nullptr),1);
+    ASSERT_EQ(stages,(std::vector<std::string>{"source","vic","copyback"}));
+    auto fill = pending.front(); pending.erase(pending.begin()); fill.fn(fill.context,-5);
+    EXPECT_EQ(callbacks,0); EXPECT_TRUE(pool.busy);
+    finish(); EXPECT_EQ(callbacks,1); EXPECT_EQ(result,-5);
+    ASSERT_EQ(switch_vic_bounce_submit(&src,&dst,&p,0,notify,nullptr,nullptr),1);
+    finish(); EXPECT_EQ(callbacks,2); EXPECT_EQ(result,0);
+}
+TEST_F(Bounce, ACopyBackTheGpuFailsFailsItsJob) {
+    auto src = makeSurface(true,192), dst = makeSurface(false,192); auto p = plan();
+    ASSERT_EQ(switch_vic_bounce_submit(&src,&dst,&p,0,notify,nullptr,nullptr),1);
+    auto copyback = pending.back(); pending.pop_back();
+    finish(); EXPECT_EQ(callbacks,0);
+    copyback.fn(copyback.context,-5); EXPECT_EQ(callbacks,1); EXPECT_EQ(result,-5);
+}

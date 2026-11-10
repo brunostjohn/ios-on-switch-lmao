@@ -1,5 +1,5 @@
 // drivers/TegraVIC/TegraVICBounce.h on the host: which surfaces need the copy-engine bounce, the scratch's geometry, and
-// how the copy engine and VIC order each other (the fences each waits for, and VIC's channel wait words).
+// VIC's channel wait words.
 #include <gtest/gtest.h>
 
 #include <cstdint>
@@ -67,43 +67,6 @@ TEST(VicBounce, RowBytesAreThePixelsNotThePitch)
     tegra_vic_bounce_desc(&bgra, 256, &s);
     EXPECT_EQ(s.planeBytesPerRow[0], 3584u);
     EXPECT_EQ(s.length, (3584ull * 600 + 4095) / 4096 * 4096);
-}
-
-TEST(VicBounceOrder, VicWaitsForTheLastFillAndTheCopyBackFinishesTheJob)
-{
-    uint32_t next = 100;
-    const TegraVICBounceOrder both = tegra_vic_bounce_order(1, 1, &next);
-    EXPECT_EQ(both.fills, 2u);
-    EXPECT_TRUE(both.vicWaits);
-    EXPECT_TRUE(both.copiesBack);
-    EXPECT_EQ(both.vicAcquire, 102u) << "only the last fill signals: one release, two increments";
-    EXPECT_EQ(both.done, 104u);
-    EXPECT_EQ(next, 104u);
-
-    const TegraVICBounceOrder source = tegra_vic_bounce_order(1, 0, &next);
-    EXPECT_EQ(source.fills, 1u);
-    EXPECT_TRUE(source.vicWaits);
-    EXPECT_FALSE(source.copiesBack) << "VIC's own fence finishes the job";
-    EXPECT_EQ(source.vicAcquire, 106u);
-    EXPECT_EQ(next, 106u);
-
-    const TegraVICBounceOrder destination = tegra_vic_bounce_order(0, 1, &next);
-    EXPECT_EQ(destination.fills, 1u) << "the destination's own pixels, for those VIC leaves";
-    EXPECT_EQ(destination.vicAcquire, 108u);
-    EXPECT_EQ(destination.done, 110u);
-
-    const TegraVICBounceOrder none = tegra_vic_bounce_order(0, 0, &next);
-    EXPECT_FALSE(none.vicWaits);
-    EXPECT_FALSE(none.copiesBack);
-    EXPECT_EQ(next, 110u) << "a job without a bounce queues no copy and moves no fence";
-}
-
-TEST(VicBounceOrder, FencesWrapWithTheSyncpoint)
-{
-    uint32_t next = 0xfffffffeu;
-    const TegraVICBounceOrder o = tegra_vic_bounce_order(1, 1, &next);
-    EXPECT_EQ(o.vicAcquire, 0u);
-    EXPECT_EQ(o.done, 2u);
 }
 
 TEST(VicBounceOrder, VicChannelWaitPreservesFullThresholdAndExactWordBound)

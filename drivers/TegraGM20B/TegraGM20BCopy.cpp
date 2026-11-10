@@ -389,24 +389,3 @@ extern "C" int tegra_gm20b_ce_copy_plane_checked(
 	IOLockUnlock(queue.lock);
 	return result;
 }
-
-extern "C" int tegra_gm20b_ce_copy_plane(const tegra_gm20b_ce_plane *src,
-					 const tegra_gm20b_ce_plane *dst, uint32_t rowBytes,
-					 uint32_t rows, const tegra_gm20b_ce_wait *wait,
-					 const tegra_gm20b_ce_done *done)
-{
-	if (!src || !dst || !src->memory || !dst->memory)
-		return -22;
-	auto *source = switch_gpu_copy_register(static_cast<IOMemoryDescriptor *>(src->memory));
-	auto *destination =
-		switch_gpu_copy_register(static_cast<IOMemoryDescriptor *>(dst->memory));
-	const int result =
-		source && destination
-			? tegra_gm20b_ce_copy_plane_checked(src, dst, rowBytes, rows, wait, done,
-							    source, src->offset, destination,
-							    dst->offset, nullptr, nullptr)
-			: -12;
-	switch_gpu_backing_release(source);
-	switch_gpu_backing_release(destination);
-	return result;
-}
