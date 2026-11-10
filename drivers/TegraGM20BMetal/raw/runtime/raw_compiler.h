@@ -11,6 +11,8 @@
 
 namespace raw {
 
+class CompileSlots;
+
 // The states this process completes: each asked state made once, by the disk cache or `make` (the probe and record), with per-key exclusion
 // on bounded user-initiated workers, or on the creating thread (makeNow). A later ask of a state answers its result or
 // that it is still being made. A refusal sticks; a probe that could not run is tried again by a later ask, kRetries times at
@@ -81,7 +83,7 @@ private:
     uint64_t retryUs_;
     void *queue_;
     void *persistence_;
-    void *slots_;  // at most two cold compiles; unrelated warm keys never take this semaphore
+    std::unique_ptr<CompileSlots> slots_;  // at most two cold compiles; unrelated warm keys never take a slot
     mutable std::mutex lock_;
     std::condition_variable idle_;
     uint64_t queued_ = 0;

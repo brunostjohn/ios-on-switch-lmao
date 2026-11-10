@@ -8,11 +8,14 @@
 
 #include <gtest/gtest.h>
 
+#include <mach/mach.h>
+#include <pthread/qos.h>
 #include <sys/stat.h>
 #include <cstdlib>
 #include <cstring>
 #include <fstream>
 #include <filesystem>
+#include <thread>
 
 namespace {
 
@@ -471,6 +474,125 @@ TEST(RawCompiler, ComputeTasksShareTheRenderWorkerLimitAndDrain)
     EXPECT_EQ(entered, 4u);
     EXPECT_EQ(active, 0u);
     EXPECT_EQ(maximum, 2u);
+}
+
+int scheduledPriority()
+{
+    thread_extended_info_data_t info = {};
+    mach_msg_type_number_t count = THREAD_EXTENDED_INFO_COUNT;
+    const mach_port_t self = mach_thread_self();
+    const kern_return_t kr = thread_info(self, THREAD_EXTENDED_INFO, reinterpret_cast<thread_info_t>(&info), &count);
+    mach_port_deallocate(mach_task_self(), self);
+    return kr == KERN_SUCCESS ? info.pth_curpri : -1;
+}
+
+// Two utility-class compiles hold both slots; a user-interactive creation that waits for one raises them both until a
+// slot is free, and then makes its own state.
+TEST(RawCompiler, AWaitingCreationLendsItsClassToTheSlotHolders)
+{
+    std::mutex lock;
+    std::condition_variable changed;
+    unsigned holding = 0, raised = 0;
+    std::atomic<bool> waiterMade{false};
+    raw::Compiler compiler(nullptr, [&](const raw::CacheKey &k, raw::RuntimeRecord &record, std::string &) {
+        record = madeUp(3);
+        if (k.key == "waiter")
+            return raw::Compiler::Outcome::Made;
+        pthread_set_qos_class_self_np(QOS_CLASS_UTILITY, 0);
+        const int own = scheduledPriority();
+        {
+            std::lock_guard<std::mutex> guard(lock);
+            ++holding;
+            changed.notify_all();
+        }
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+        while (scheduledPriority() <= own && std::chrono::steady_clock::now() < deadline)
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        std::unique_lock<std::mutex> guard(lock);
+        raised += scheduledPriority() > own;
+        changed.notify_all();
+        // the first to give its slot back ends the lending: both hold theirs until both were raised
+        changed.wait_until(guard, deadline, [&] {
+            return raised == 2;
+        });
+        return raw::Compiler::Outcome::Made;
+    });
+    raw::CacheKey held[2], waiter;
+    for (unsigned i = 0; i < 2; ++i)
+        held[i].key = "held-" + std::to_string(i);
+    waiter.key = "waiter";
+    for (const auto &k : held)
+        compiler.ask(k, nullptr);
+    {
+        std::unique_lock<std::mutex> guard(lock);
+        ASSERT_TRUE(changed.wait_for(guard, std::chrono::seconds(5), [&] {
+            return holding == 2;
+        }));
+    }
+    std::thread creation([&] {
+        pthread_set_qos_class_self_np(QOS_CLASS_USER_INTERACTIVE, 0);
+        raw::RuntimeRecord record;
+        std::string why;
+        waiterMade = compiler.makeNow(waiter, record, why) == raw::Compiler::State::Ready;
+    });
+    creation.join();
+    compiler.drain();
+    EXPECT_TRUE(waiterMade.load());
+    EXPECT_EQ(raised, 2u);
+}
+
+// A creation on a fixed-priority thread with no class (Core Animation's render thread) compiles while both slots are held.
+TEST(RawCompiler, AFixedPriorityCreationDoesNotWaitForASlot)
+{
+    std::mutex lock;
+    std::condition_variable changed;
+    unsigned holding = 0;
+    bool release = false;
+    raw::Compiler compiler(nullptr, [&](const raw::CacheKey &k, raw::RuntimeRecord &record, std::string &) {
+        record = madeUp(4);
+        if (k.key == "fixed")
+            return raw::Compiler::Outcome::Made;
+        std::unique_lock<std::mutex> guard(lock);
+        ++holding;
+        changed.notify_all();
+        changed.wait(guard, [&] {
+            return release;
+        });
+        return raw::Compiler::Outcome::Made;
+    });
+    raw::CacheKey held[2], fixed;
+    for (unsigned i = 0; i < 2; ++i)
+        held[i].key = "held-" + std::to_string(i);
+    fixed.key = "fixed";
+    for (const auto &k : held)
+        compiler.ask(k, nullptr);
+    {
+        std::unique_lock<std::mutex> guard(lock);
+        ASSERT_TRUE(changed.wait_for(guard, std::chrono::seconds(5), [&] {
+            return holding == 2;
+        }));
+    }
+    std::atomic<bool> fixedPriority{false}, made{false};
+    std::thread creation([&] {
+        sched_param param = {};
+        param.sched_priority = 47;
+        fixedPriority = pthread_setschedparam(pthread_self(), SCHED_RR, &param) == 0 &&
+                        qos_class_self() == QOS_CLASS_UNSPECIFIED;
+        if (!fixedPriority)
+            return;
+        raw::RuntimeRecord record;
+        std::string why;
+        made = compiler.makeNow(fixed, record, why) == raw::Compiler::State::Ready;
+    });
+    creation.join();
+    EXPECT_TRUE(fixedPriority.load());
+    EXPECT_TRUE(made.load());
+    {
+        std::lock_guard<std::mutex> guard(lock);
+        release = true;
+        changed.notify_all();
+    }
+    compiler.drain();
 }
 
 }  // namespace
