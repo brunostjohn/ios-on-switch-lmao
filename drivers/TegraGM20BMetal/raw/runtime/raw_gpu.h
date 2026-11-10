@@ -890,6 +890,10 @@ private:
     };
 
     std::vector<GeometryRead> geometryReads_;
+    // the buffers and backings whose CPU read the kernel refused in this command buffer: their draws take their
+    // scissor without asking again
+    std::vector<const Buffer *> geometryRefusedBuffers_;
+    std::vector<uint64_t> geometryRefusedBackings_;
     bool acquireGeometry(const Buffer &buffer, const uint8_t *cpu, uint64_t bytes);
     bool geometryWritable() const;
     void releaseGeometry();

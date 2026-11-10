@@ -3107,6 +3107,8 @@ CommandBuffer *Device::begin()
     cb.splitReuse_.clear();
     cb.buffersWritten_ = false;
     cb.geometryBudget_ = {};
+    cb.geometryRefusedBuffers_.clear();
+    cb.geometryRefusedBackings_.clear();
     return &cb;
 }
 
@@ -3350,6 +3352,9 @@ bool CommandBuffer::acquireGeometry(const Buffer &buffer, const uint8_t *cpu, ui
         if (address >= start && address - start < read.bytes && bytes <= read.bytes - (address - start))
             return !surfaces_.writesBacking(bo.handle, base, bo.bytes);
     }
+    if (std::find(geometryRefusedBuffers_.begin(), geometryRefusedBuffers_.end(), &buffer) !=
+        geometryRefusedBuffers_.end())
+        return false;
     RAW_ENCODE_SPAN(GeometryAcquire);
     std::lock_guard<std::mutex> lock(d.lock_);
     Bo bo;
@@ -3374,15 +3379,24 @@ bool CommandBuffer::acquireGeometry(const Buffer &buffer, const uint8_t *cpu, ui
     if (!bo.handle || address < base || address - base > bo.bytes || bytes > bo.bytes - (address - base) ||
         surfaces_.writesBacking(bo.handle, base, bo.bytes))
         return false;
+    if (std::find(geometryRefusedBackings_.begin(), geometryRefusedBackings_.end(), bo.handle) !=
+        geometryRefusedBackings_.end()) {
+        geometryRefusedBuffers_.push_back(&buffer);
+        return false;
+    }
     // Small page windows amortize adjacent matrix/vertex/index views while bounding cache-maintenance work.
     // Ownership remains whole-backing; only visibility maintenance is narrowed to these verified physical bytes.
     constexpr uint64_t page = 4096;
     const uint64_t offset = (address - base) & ~(page - 1);
     const uint64_t end = std::min(bo.bytes, (address - base + bytes + page - 1) & ~(page - 1));
     const uint64_t maintained = end - offset;
-    if (geometryReads_.size() >= 64 || maintained > geometryBudget_.maintainedBytes ||
-        !d.k_.cpuAccess(bo, offset, maintained, access, true))
+    if (geometryReads_.size() >= 64 || maintained > geometryBudget_.maintainedBytes)
         return false;
+    if (!d.k_.cpuAccess(bo, offset, maintained, access, true)) {
+        geometryRefusedBuffers_.push_back(&buffer);
+        geometryRefusedBackings_.push_back(bo.handle);
+        return false;
+    }
     geometryBudget_.maintainedBytes -= maintained;
     geometryReads_.push_back({bo, offset, maintained, access});
     return true;
