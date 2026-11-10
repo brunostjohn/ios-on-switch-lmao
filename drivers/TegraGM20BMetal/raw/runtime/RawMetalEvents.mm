@@ -143,6 +143,7 @@ raw::EventReadiness eventReadiness(RMCommandBuffer *cb, raw::EventDeadline::Time
                                            gRM->raw->channelGeneration());
         }
         if (promise) {
+            RAW_DIAGNOSTIC(gRM->stats.waitsOnPromise++);
             std::lock_guard<std::mutex> lock(cb->_lock);
             cb->_gpuEventWaits.push_back(std::move(promise));
             return Readiness::ready;

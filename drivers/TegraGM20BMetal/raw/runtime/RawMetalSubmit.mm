@@ -154,6 +154,7 @@ bool submitRange(RMCommandBuffer *cb)
             id<MTLSharedEvent> target = (__bridge id)event.obj;
             if (target.signaledValue < event.c)
                 target.signaledValue = event.c;
+            RAW_DIAGNOSTIC(r.stats.signalsAfterWork++);
         }
         cb->_eventStart = {};
         cb->_eventArmed = 0;

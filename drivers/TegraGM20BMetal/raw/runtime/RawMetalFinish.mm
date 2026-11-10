@@ -73,6 +73,7 @@ void retireRawRange(RMCommandBuffer *cb, size_t from, size_t to)
         ++cb->_segmentPending;
     }
     auto signals = publishRawEventSignals(cb);
+    RAW_DIAGNOSTIC(gRM->stats.signalsPublished += signals.size());
     {
         std::lock_guard<std::mutex> l(gRM->doneLock);
         gRM->inflight.push_back({cb, cb->_seqno, std::move(writes), std::move(signals), cb->_gpuEventWaits,

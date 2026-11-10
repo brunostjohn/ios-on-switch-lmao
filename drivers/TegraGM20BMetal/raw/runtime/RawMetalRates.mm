@@ -7,7 +7,8 @@ static uint64_t gPredRates[PredCount];  // the rates line's last gPredCbs (its t
 // ---- the rates line ----
 static struct {
     uint64_t raw, m2v, encodeUs, draws, passes, copies, deferred, aborted, reasons[WhyCount], ringWaits, lastUs,
-        switches, cpuOrdered, acquires, poolStalls, eventsReleased, heldReturns, scheduledWaits, scheduledWaitUs,
+        switches, cpuOrdered, acquires, poolStalls, eventsReleased, heldReturns, signalsPublished, signalsAfterWork,
+        waitsOnPromise, scheduledWaits, scheduledWaitUs,
         completedWaits, completedWaitUs, abortUs, replayUs, replayClean, rtUnaligned, rtMixed, predOnly[PredCount],
         splits, splitM2v, eventSplits, eventWhole, levelPasses;
 } gRates;
@@ -149,7 +150,7 @@ size_t raw_metal_rates(char *out, size_t size)
         out, size,
         "raw %.0fs c=%llu(%.1f/s) m2v=%llu%s%s%s sw=%llu cpu=%llu acq=%llu enc=%.0fus/c d=%.1f p=%.1f b=%.2f "
         "defer=%llu abort=%llu rw=%llu pool=%lluMB/%llu grow=%llu imp=%llu/%lluMB clean=%.1fKB/c ce=%llu/%.0fKB "
-        "ev=%llu/%llu ws=%llu/%lluus wc=%llu/%lluus%s",
+        "ev=%llu/%llu sig=%llu/%llu/%llu ws=%llu/%lluus wc=%llu/%lluus%s",
         secs, (unsigned long long)c, c / secs, (unsigned long long)f, *reasons ? "(" : "", reasons, *reasons ? ")" : "",
         (unsigned long long)(s.switches.load() - gRates.switches),
         (unsigned long long)(s.cpuOrdered.load() - gRates.cpuOrdered),
@@ -163,6 +164,9 @@ size_t raw_metal_rates(char *out, size_t size)
         k.cleanBytes.exchange(0) / 1024.0 / per, (unsigned long long)k.ceOps.exchange(0),
         k.ceBytes.exchange(0) / 1024.0, (unsigned long long)(s.eventsReleased.load() - gRates.eventsReleased),
         (unsigned long long)(s.heldReturns.load() - gRates.heldReturns),
+        (unsigned long long)(s.signalsPublished.load() - gRates.signalsPublished),
+        (unsigned long long)(s.signalsAfterWork.load() - gRates.signalsAfterWork),
+        (unsigned long long)(s.waitsOnPromise.load() - gRates.waitsOnPromise),
         (unsigned long long)(s.scheduledWaits.load() - gRates.scheduledWaits),
         (unsigned long long)(s.scheduledWaitUs.load() - gRates.scheduledWaitUs),
         (unsigned long long)(s.completedWaits.load() - gRates.completedWaits),
@@ -182,6 +186,9 @@ size_t raw_metal_rates(char *out, size_t size)
     gRates.ringWaits = k.ringWaits.load();
     gRates.eventsReleased = s.eventsReleased.load();
     gRates.heldReturns = s.heldReturns.load();
+    gRates.signalsPublished = s.signalsPublished.load();
+    gRates.signalsAfterWork = s.signalsAfterWork.load();
+    gRates.waitsOnPromise = s.waitsOnPromise.load();
     gRates.scheduledWaits = s.scheduledWaits.load();
     gRates.scheduledWaitUs = s.scheduledWaitUs.load();
     gRates.completedWaits = s.completedWaits.load();

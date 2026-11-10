@@ -84,6 +84,9 @@ struct Stats {
 #if SWITCH_RAW_DIAGNOSTICS
     std::atomic<uint64_t> raw{0}, m2v{0}, deferred{0}, aborted{0}, encodeUs{0}, draws{0}, passes{0}, copies{0},
         reasons[WhyCount]{}, switches{0}, cpuOrdered{0}, acquires{0}, eventsReleased{0}, heldReturns{0};
+    // shared event signals published as their raw work completes (publishRawEventSignals), those the CPU set after the head
+    // waited for its own work, and native event waits that went on a submitted command buffer's promise
+    std::atomic<uint64_t> signalsPublished{0}, signalsAfterWork{0}, waitsOnPromise{0};
     // diagnostics (r10-rawsweep): the raw encode thrown away by aborted command buffers, the m2v replay's time on the committing
     // thread (replay + commit), and the bytes replay cleans
     std::atomic<uint64_t> abortUs{0}, replayUs{0}, replayClean{0};
