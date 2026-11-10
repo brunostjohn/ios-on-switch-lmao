@@ -20,6 +20,7 @@
 #include <string.h>
 #include <sys/systm.h>
 #include "TegraGM20BABI.h"
+#include "TegraGM20BBindHistory.h"
 #include "TegraGM20BExecSurfaces.h"
 #include "TegraGM20BGpu.h"
 #include "TegraGM20BLayout.h"
@@ -913,9 +914,16 @@ class AGXDeviceUserClient : public IOUserClient
     uint32_t channelLevels_[kMaxChannels] = {};
     Bo *bos_ = nullptr, *zombies_ = nullptr, *readyBos_ = nullptr;
     RetiredBinding *retired_ = nullptr, **retiredTail_ = &retired_, *unmapping_ = nullptr;
-    IOLock *unmapLock_ =
-	    nullptr;  // a retired binding's PTEs go under it (retireBatch, takeRetiredOverlaps)
+    // a retired binding's PTEs go under it (retireBatch, takeRetiredOverlaps)
+    IOLock *unmapLock_ = nullptr;
     bool faultLogged_[kMaxChannels] = {};
+#if TGM_STATS
+    // NVK's own heap is the client window's lower half (its replay heap and the raw path's quarter lie above): its maps
+    // and unmaps are kept apart from the raw path's
+    tgm_bind_history *bindHistory_[2] = {};
+#endif
+    void noteBind(uint8_t op, uint64_t va, uint64_t range, const Bo *bo, uint64_t boOffset, uint8_t kind);
+    void describeFault(uint32_t slot, uint64_t va);
     thread_call_t retireCall_ = nullptr;
     uint32_t retiredCount_ = 0, retireRemaining_ = 0, retirementPending_ = 0,
 	     retirementStopped_ = 0;
@@ -1107,6 +1115,11 @@ void AGXDeviceUserClient::free()
 		IOLockFree(unmapLock_);
 		unmapLock_ = nullptr;
 	}
+#if TGM_STATS
+	for (tgm_bind_history *&history : bindHistory_)
+		if (history)
+			IOFree(history, sizeof(*history));
+#endif
 	if (counted_)
 		__atomic_sub_fetch(&gConnections, 1, __ATOMIC_SEQ_CST);
 	IOUserClient::free();
@@ -1673,8 +1686,10 @@ IOReturn AGXDeviceUserClient::vmBind(const TegraGM20BAbiVmBind *in, uint32_t cou
 			return kIOReturnBadArgument;
 		Bo *bo = unmap ? nullptr : findBo(op.handle);
 		if (!unmap &&
-		    (!bo || op.bo_offset > bo->bytes || op.range > bo->bytes - op.bo_offset))
+		    (!bo || op.bo_offset > bo->bytes || op.range > bo->bytes - op.bo_offset)) {
+			noteBind(TGM_BIND_REFUSED, op.va, op.range, bo, op.bo_offset, uint8_t(op.kind));
 			return kIOReturnBadArgument;
+		}
 		const Binding *same = switch_gpu_binding_find(binds_, nbinds_, op.va, op.range);
 		if (!unmap && same && same->va == op.va && same->range == op.range &&
 		    same->bo == bo && same->bo_offset == op.bo_offset &&
@@ -1722,6 +1737,8 @@ IOReturn AGXDeviceUserClient::vmBind(const TegraGM20BAbiVmBind *in, uint32_t cou
 		const int err = switch_gpu_vm_map_volatile(vm_, op.va, op.range, bo->mem, op.bo_offset,
 						   static_cast<uint8_t>(op.kind),
 						   static_cast<int>(bo->readOnly), op.op == TegraGM20BBindMapVolatile, &mapping);
+		noteBind(err ? TGM_BIND_REFUSED : TGM_BIND_MAP, op.va, op.range, bo, op.bo_offset,
+			 uint8_t(op.kind));
 		if (err) {
 			IODelete(record, RetiredBinding, 1);
 			return ioreturn(err);
@@ -1888,6 +1905,7 @@ IOReturn AGXDeviceUserClient::channelDestroy(const TegraGM20BAbiChannel *in)
 {
 	if (!in->channel || in->channel > kMaxChannels || !chans_[in->channel - 1])
 		return kIOReturnBadArgument;
+	logFaultBindings();
 	hangHolder_ = current_thread();
 	tgm_chan_del(&chans_[in->channel - 1]);
     eventChannels_[in->channel - 1].reset();

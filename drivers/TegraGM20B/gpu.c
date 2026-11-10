@@ -1315,6 +1315,13 @@ uint64_t tgm_chan_fault_va(struct tgm_chan *chan)
 	return READ_ONCE(chan->fault_va);
 }
 
+#if TGM_STATS
+uint64_t tgm_chan_killed_ns(struct tgm_chan *chan)
+{
+	return READ_ONCE(chan->killed_ns);
+}
+#endif
+
 uint32_t tgm_chan_waiter(struct tgm_chan *chan)
 {
 	return (uint32_t)(chan->id % TGM_WAITERS);
@@ -1497,6 +1504,9 @@ static int chan_killed(struct nvif_event *event, void *repv, u32 repc)
 	}
 	/* ERRORED is delivered after runlist recovery quiesces the channel. Publish
 	 * its failure before advancing abandoned fences or releasing memory leases. */
+#if TGM_STATS
+	WRITE_ONCE(chan->killed_ns, nvxnu_nanotime());
+#endif
 	if (fault_code(report) == 1)
 		WRITE_ONCE(chan->fault_va, tgm_fault_va(report, (int)chan->chid));
 	WRITE_ONCE(chan->error, fault_code(report));

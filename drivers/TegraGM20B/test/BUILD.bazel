@@ -75,6 +75,7 @@ host_test(
         "switch_gpu_client_retirement_test.cpp",
         "//drivers/TegraGM20B:SwitchGpuClientRetirement.h",
         "//drivers/TegraGM20B:SwitchGpuBindings.h",
+        "//drivers/TegraGM20B:TegraGM20BBindHistory.h",
         "//drivers/TegraGM20B:SwitchGpuBacking.h",
         "//drivers/TegraGM20B:TegraGM20BABI.h",
     ],
@@ -185,6 +186,15 @@ host_test(
         "gm20b_hang_detail_test.cpp",
         "//drivers/TegraGM20B:TegraGM20BGpu.h",
         "//drivers/TegraGM20B:TegraGM20BHangDecode.h",
+    ],
+    cxx_std = "c++17",
+)
+
+host_test(
+    name = "gm20b_bind_history_test",
+    srcs = [
+        "gm20b_bind_history_test.cpp",
+        "//drivers/TegraGM20B:TegraGM20BBindHistory.h",
     ],
     cxx_std = "c++17",
 )

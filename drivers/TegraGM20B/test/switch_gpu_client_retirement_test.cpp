@@ -17,6 +17,7 @@
 #include "drivers/TegraGM20B/SwitchGpuBacking.h"
 #include "drivers/TegraGM20B/TegraGM20BABI.h"
 #include "drivers/TegraGM20B/SwitchGpuBindings.h"
+#include "drivers/TegraGM20B/TegraGM20BBindHistory.h"
 
 using namespace std::chrono_literals;
 constexpr uint32_t kMaxChannels = 8;
@@ -345,6 +346,8 @@ public:
 	void retire(RetiredBinding *);
 	IOReturn cutOverlaps(uint64_t, uint64_t, bool, RetiredBinding **);
 	void logFaultBindings();
+	void noteBind(uint8_t, uint64_t, uint64_t, const Bo *, uint64_t, uint8_t);
+	void describeFault(uint32_t, uint64_t);
 	void reap(bool);
 	void drainResources();
 	IOReturn boFree(const TegraGM20BAbiBoFree *);
