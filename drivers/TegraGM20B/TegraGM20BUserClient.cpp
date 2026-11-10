@@ -2794,7 +2794,14 @@ void AGXDeviceUserClient::releaseMappings()
 
 namespace
 {
-// The raw runtime and NVK at this base read none of these; they turn on with the userspace unit that uses them.
+// What each held bit still needs. JobVisibility: VIC and NVDEC to wait for a GM20B write's external
+// visibility, not for its job's completion (SwitchVICJobs, SwitchNVDECJobs read the physical
+// status), or they read the GPU L2's dirty lines' stale DRAM. UseRanges: JobVisibility (the raw
+// runtime asks for both). CpuComplete: UseRanges; a write without ranges is a writer of its whole
+// backing, so a later write to another buffer of the same chunk makes this one stale and it gets no
+// cache maintenance. SharedEvents and ResourceReady: SemanticFence. SemanticFence: a raw runtime
+// that reads failed_first as the one newest failure, not as a prefix. NativeSurfaceView: the media
+// unit's native surfaces.
 constexpr uint32_t kInfoAwaitingUserspace =
 	TegraGM20BInfoNativeSurfaceView | TegraGM20BInfoJobVisibility |
 	TegraGM20BInfoLeanCopyChannel | TegraGM20BInfoControlReserve | TegraGM20BInfoSharedEvents |
