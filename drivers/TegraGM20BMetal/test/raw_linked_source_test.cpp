@@ -95,11 +95,13 @@ TEST(RawLinkedSource, TheRawRecordIsTheLinkedFunctionsToo)
     EXPECT_THAT(Body(SourceText("../raw/runtime/RawPipelineKey.h"), "inline std::string pipelineKey("),
                 HasSubstr("key += linked;"));
 
-    const std::string key =
-        Body(SourceText("../raw/runtime/RawComplete.mm"), "bool Completion::keyOf(Ask &a, CacheKey &k)");
-    EXPECT_THAT(key, HasSubstr("a.descriptor.vertexLinkedFunctions"));
-    EXPECT_THAT(key, HasSubstr("a.descriptor.fragmentLinkedFunctions"));
-    EXPECT_THAT(key, HasSubstr("a.key += \" | linked\" + linked;"));
+    EXPECT_THAT(Body(SourceText("../raw/runtime/RawComplete.mm"), "bool Completion::keyOf(Ask &a, CacheKey &k)"),
+                HasSubstr("renderCacheKey(a.descriptor, a.key, a.own, stack_, k)"));
+    const std::string key = SourceText("../raw/runtime/RawRenderKey.mm");
+    EXPECT_THAT(key, HasSubstr("descriptor.vertexLinkedFunctions"));
+    EXPECT_THAT(key, HasSubstr("descriptor.fragmentLinkedFunctions"));
+    EXPECT_THAT(Body(SourceText("../raw/runtime/raw_render_key.h"), "inline CacheKey renderCacheKey("),
+                HasSubstr("key += \" | linked\";"));
     // a specialized function's AIR is its library function's entry
     EXPECT_THAT(key, HasSubstr("native_bridge_metal_function_library_name(function)"));
 }

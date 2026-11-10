@@ -146,7 +146,8 @@ size_t at(const std::string &text, const std::string &what)
 TEST(SlmOwned, EveryPlacedProgramGetsTheAreaBeforeItsBind)
 {
     const std::string gpu = SourceText("../raw/runtime/raw_gpu.cpp");
-    const std::string pack = Body(gpu, "Pipeline *Device::pipeline(uint64_t keyHash, PackForm form, bool caTransform)");
+    const std::string pack =
+        Body(gpu, "Pipeline *Device::placePipeline(uint64_t keyHash, PackForm form, bool caTransform)");
     EXPECT_LT(at(pack, "slmNeed(std::max(slmPerWarpOfHeader(vs.header), slmPerWarpOfHeader(fs.header)))"),
               at(pack, "build(pl, pp, vs, fs,"));
     const std::string completed = SourceText("../raw/runtime/raw_completed.cpp");
@@ -162,7 +163,7 @@ TEST(SlmOwned, EveryPlacedProgramGetsTheAreaBeforeItsBind)
     EXPECT_THAT(Body(compute, "const ComputeState *placeCompute(Device &dev, const ComputeRecord &r)"),
                 HasSubstr("dev.slmNeed(slmPerWarpOfQmd(r.kernel.qmd))"));
     const std::string commit = Body(gpu, "bool CommandBuffer::commit(uint32_t &seqno)");
-    EXPECT_THAT(commit, HasSubstr("segments_.insert(segments_.begin(),"));
+    EXPECT_THAT(commit, HasSubstr("segments_.insert(0,"));
     EXPECT_LT(at(commit, "emitSlm(p, slmVa,"), at(commit, "d.k_.exec("));
     const std::string build = Body(gpu, "void Device::build(Pipeline &pl, const PackPipeline &pp,");
     EXPECT_LT(at(build, "if (ownedMethod(m))"), at(build, "w.m(m, v);"));
