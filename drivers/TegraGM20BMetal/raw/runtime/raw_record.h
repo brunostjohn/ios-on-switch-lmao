@@ -30,8 +30,7 @@ struct CapturedProgram {
 struct PackRules {
     std::set<uint32_t> varying;  // the registers the pack's states set apart (their blobs')
     std::map<uint32_t, uint32_t> baseline;
-    std::map<uint32_t, uint32_t> context;           // NVK's 3D registers after its context init that are not 0
-    std::vector<std::array<uint32_t, 8>> samplers;  // the pack's constexpr sampler headers
+    std::map<uint32_t, uint32_t> context;  // NVK's 3D registers after its context init that are not 0
 
     static PackRules of(const Pack &pack, std::map<uint32_t, uint32_t> context);
     // The context the pack's init template leaves: its 3D methods that take no address
@@ -46,7 +45,9 @@ struct RuntimeRecord {
     // Registers outside them the state sets (its draws set them), and what every pack state leaves there (the draws after its
     // set them back)
     std::vector<std::pair<uint32_t, uint32_t>> extras, restore;
-    std::vector<std::array<uint32_t, 8>> samplers;  // constexpr sampler headers the pack lacks, numbered after its own
+    // Its constexpr sampler headers. A constexpr entry's sampler byte indexes them, whichever tool made the record (the
+    // runtime, the native seed, the pack generator), so a record does not depend on the pack's sampler order.
+    std::vector<std::array<uint32_t, 8>> samplers;
     // its fragment program's split (raw_pack.h PackSplit, whose program indices it does not use): the per-pixel program,
     // then the prologue (an 80-byte header of zeros before its code, as programs.bin holds a kernel's). splitTried: the
     // split was compiled for, and is here where it saves time
@@ -71,6 +72,29 @@ using ProgramLookup = std::function<const CapturedProgram *(const std::string &i
 // False: the state is not one the raw path draws from a record (`why`, as mkpack.py sets one aside)
 bool makeRecord(const ProbeRuns &runs, const PackRules &rules, const ProgramLookup &program, RuntimeRecord &out,
                 std::string &why);
+
+// The record's constexpr entries renumbered as the device's samplers: `place(header, index)` gives a header's index (false:
+// no room). False when an entry names no header of the record, with `unknown` set, or when `place` fails.
+template <typename Place>
+bool placeConstexprSamplers(PackPipeline &pipeline, const std::vector<std::array<uint32_t, 8>> &headers, Place place,
+                            bool &unknown)
+{
+    unknown = false;
+    for (uint32_t k = 0; k < pipeline.entries && k < kPackEntries; k++) {
+        PackEntry &e = pipeline.entry[k];
+        if (e.kind == EntryUbo || e.samplerKind != SamplerConstexpr)
+            continue;
+        uint32_t index = 0;
+        if (e.sampler >= headers.size()) {
+            unknown = true;
+            return false;
+        }
+        if (!place(headers[e.sampler], index))
+            return false;
+        e.sampler = uint8_t(index);
+    }
+    return true;
+}
 
 // The hash a state's record is found by (packfile.py pipeline_bytes): its key's, or the raw path's own states' by their name
 uint64_t packKeyHash(const std::string &key);
