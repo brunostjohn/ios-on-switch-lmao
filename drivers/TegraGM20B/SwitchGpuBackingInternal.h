@@ -79,6 +79,12 @@ const switch_gpu_cpu_lease *switch_gpu_backing_find_lease_locked(const switch_gp
 
 void switch_gpu_backing_sort_uses(switch_gpu_backing_use *uses, uint32_t count);
 
+// Threads asleep until a backing's CPU holders leave. A holder whose IOSurface client died leaves only at a sweep
+// (switch_gpu_surface_sweep), which GPU jobs run while any thread or ready watch (switch_gpu_ready_waiting) waits.
+extern uint32_t switch_gpu_cpu_sleepers;
+void switch_gpu_backing_sleep_cpu_locked(switch_gpu_backing *backing);
+extern "C" int switch_gpu_ready_waiting(void);
+
 bool switch_gpu_backing_cpu_current_prepare_locked(switch_gpu_backing *);
 void switch_gpu_backing_cpu_cache_locked(switch_gpu_backing *, uint64_t offset, uint64_t bytes, int operation);
 void switch_gpu_backing_cpu_current_written_locked(switch_gpu_backing *, uint64_t offset, uint64_t bytes);

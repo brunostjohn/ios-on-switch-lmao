@@ -179,6 +179,12 @@ void switch_gpu_ready_cancel(switch_gpu_ready_watch **input)
 	drop(watch);
 }
 
+extern "C" int switch_gpu_ready_waiting(void)
+{
+	auto *owner = __atomic_load_n(&state, __ATOMIC_ACQUIRE);
+	return owner && __atomic_load_n(&owner->count, __ATOMIC_ACQUIRE);
+}
+
 extern "C" void switch_gpu_admission_changed(void)
 {
 	auto *owner = __atomic_load_n(&state, __ATOMIC_ACQUIRE);

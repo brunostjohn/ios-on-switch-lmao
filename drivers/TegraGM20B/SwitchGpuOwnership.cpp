@@ -156,6 +156,19 @@ int reserve_access(switch_gpu_backing *backing)
 	return 0;
 }
 
+// A dead client's IOSurface lease can refuse or slow down only a job that uses its backing, and keep waiting only what
+// waits for CPU holders to leave. With neither, the job takes no global lock for it.
+bool sweep_wanted(const switch_gpu_backing_use *uses, uint32_t count)
+{
+	if (__atomic_load_n(&switch_gpu_cpu_sleepers, __ATOMIC_ACQUIRE) || switch_gpu_ready_waiting())
+		return true;
+	for (uint32_t i = 0; i < count; ++i)
+		if (__atomic_load_n(&uses[i].backing->cpu_readers, __ATOMIC_RELAXED) ||
+		    __atomic_load_n(&uses[i].backing->cpu_writers, __ATOMIC_RELAXED))
+			return true;
+	return false;
+}
+
 void unlock_transaction(switch_gpu_backing_transaction *transaction)
 {
 	while (transaction->locked)
@@ -181,8 +194,6 @@ static int begin(switch_gpu_backing_use *uses, uint32_t count, switch_gpu_cpu_le
 			if (leases[i] == leases[j])
 				return -22;
 	}
-	if (!lease_count && switch_gpu_surface_sweep)
-		switch_gpu_surface_sweep();
 	*transaction = {};
 	const auto *ops = switch_gpu_backing_engine_ops(completion->engine);
 	if (!ops)
@@ -200,6 +211,8 @@ static int begin(switch_gpu_backing_use *uses, uint32_t count, switch_gpu_cpu_le
 		else
 			uses[unique++] = uses[i];
 	}
+	if (!lease_count && switch_gpu_surface_sweep && sweep_wanted(uses, unique))
+		switch_gpu_surface_sweep();
 	for (uint32_t i = 0; i < guard_count; ++i) {
 		if (!guards[i].backing || !guards[i].generation ||
 		    (uintptr_t(guards[i].generation) & 7) || !guards[i].expected)

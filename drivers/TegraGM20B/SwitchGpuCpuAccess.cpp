@@ -68,6 +68,19 @@ int wait_locked(switch_gpu_backing *backing, uint32_t access)
 	}
 }
 
+}  // namespace
+
+uint32_t switch_gpu_cpu_sleepers;
+
+void switch_gpu_backing_sleep_cpu_locked(switch_gpu_backing *backing)
+{
+	__atomic_add_fetch(&switch_gpu_cpu_sleepers, 1u, __ATOMIC_ACQ_REL);
+	IOLockSleep(backing->lock, &backing->cpu_writers, THREAD_UNINT);
+	__atomic_sub_fetch(&switch_gpu_cpu_sleepers, 1u, __ATOMIC_ACQ_REL);
+}
+
+namespace
+{
 bool cpu_conflicts(const switch_gpu_backing *backing, uint32_t access)
 {
 	const bool concurrent = access & kConcurrent;
@@ -111,7 +124,7 @@ extern "C" int switch_gpu_backing_cpu_acquire(switch_gpu_backing *backing, uint6
 		if (access & kAvoid)
 			result = -16;
 		else
-			IOLockSleep(backing->lock, &backing->cpu_writers, THREAD_UNINT);
+			switch_gpu_backing_sleep_cpu_locked(backing);
 	}
 	bool held = false;
 	if (!result) {
