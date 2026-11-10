@@ -40,6 +40,12 @@ enum {
 	TegraGM20BMethodCpuRelease = 22,
 	TegraGM20BMethodSubmitAddress = 23,
 	TegraGM20BMethodSurfaceLayoutInfo = 24,
+    TegraGM20BMethodNativeSurfaceView = 25,
+    TegraGM20BMethodEventImport = 26,
+    TegraGM20BMethodEventRelease = 27,
+    TegraGM20BMethodEventObserve = 28,
+    TegraGM20BMethodResourceObserve = 29,
+    TegraGM20BMethodCpuComplete = 30,
 
 	TegraGM20BMaxBindOps = 100,
 	TegraGM20BMaxPushes = 255,
@@ -47,6 +53,8 @@ enum {
 	TegraGM20BMaxSubmitBytes = 4088, /* leaves room for the tunnel header */
 	TegraGM20BMaxJobPushes = 1024,
 	TegraGM20BMaxJobUses = 1024,
+    TegraGM20BMaxJobEvents = 32,
+    TegraGM20BMaxJobDependencies = TegraGM20BMaxJobUses + TegraGM20BMaxJobEvents,
 };
 
 /* TegraGM20BAbiInfo.flags */
@@ -70,6 +78,107 @@ enum {
 	TegraGM20BInfoSubmitAddress = 1u << 14,
 	TegraGM20BInfoCpuPreserveDirty = 1u << 15,
 	TegraGM20BInfoCanonicalSurfaceLayout = 1u << 16,
+    TegraGM20BInfoNativeSurfaceView = 1u << 17,
+	TegraGM20BInfoJobVisibility = 1u << 18,
+    TegraGM20BInfoLeanCopyChannel = 1u << 19,
+    TegraGM20BInfoControlReserve = 1u << 20,
+    TegraGM20BInfoSharedEvents = 1u << 21,
+    TegraGM20BInfoSemanticFence = 1u << 22,
+    TegraGM20BInfoResourceReady = 1u << 23,
+    TegraGM20BInfoCpuComplete = 1u << 24,
+    TegraGM20BInfoUseRanges = 1u << 25,
+};
+
+/* CpuComplete maintains cached CPU ranges only while the accepted channel prefix still owns their current
+ * GPU content. Stale intervals are not acknowledged. Pending/failed intervals perform no cache maintenance. */
+struct TegraGM20BAbiCpuComplete {
+    uint64_t channel_uid, ranges_address;
+    uint32_t channel, seqno, range_count, reserved;
+};
+
+struct TegraGM20BAbiCpuRange {
+    uint64_t handle, offset, bytes;
+};
+
+struct TegraGM20BAbiCpuCompleteReply {
+    uint32_t current_count, stale, pending, failed;
+    int32_t first_error;
+    uint32_t reserved;
+};
+
+/* With InfoCpuComplete, this follows AbiFenceSemantic in the validated read-only fence mapping. */
+struct TegraGM20BAbiFenceIdentity {
+    uint64_t channel_uid;
+};
+
+struct TegraGM20BAbiEventImport {
+    uint32_t port, reserved;
+};
+
+struct TegraGM20BAbiEventImportReply {
+    uint64_t handle, currentValue;
+};
+
+struct TegraGM20BAbiEventRelease {
+    uint64_t handle;
+};
+
+enum {
+    TegraGM20BEventObserveCancel = 1u << 0,
+    TegraGM20BEventObserveProbe = 1u << 1,
+    TegraGM20BEventObserveTerminal = 1u << 2,
+};
+
+/* Arm uses IOConnectCallAsyncStructMethod, including the ordinary tunnel prefix. Cancel is synchronous and
+ * identifies the original (handle,cookie); its one-shot async callback owns the original reference until delivery.
+ * Callback payload is cookie; result is Success when resolvable, Aborted on producer failure, or Aborted on cancel.
+ * Terminal waits for the selected producer's external semantic result. Probe|Terminal queries that result. */
+struct TegraGM20BAbiEventObserve {
+    uint64_t handle, value, cookie;
+    uint32_t flags, reserved;
+};
+
+enum { TegraGM20BResourceObserveCancel = 1u << 0 };
+
+/* Readiness is one-shot and grants no ownership. Cancel acknowledges through the original async callback.
+ * uses_address names use_count AbiSurfaceUse records, copied once before resolving retained backing identities. */
+struct TegraGM20BAbiResourceObserve {
+    uint64_t cookie, uses_address;
+    uint32_t use_count, flags;
+    uint64_t reserved;
+};
+
+struct TegraGM20BAbiSubmitAdmission {
+    uint64_t cookie, reserved;
+};
+
+struct TegraGM20BAbiEventUse {
+    uint64_t handle, value;
+};
+
+/* With SubmitHasEvents, this follows the addressed job's surface uses, then waits followed by signals. */
+struct TegraGM20BAbiSubmitEvents {
+    uint32_t wait_count, signal_count;
+    uint64_t reserved;
+};
+
+/* Returns an immutable read-only representation of an attested IOSurface BO. handle=0 means this format has no representation view.
+ * A native view's generation mismatch at SubmitAddress returns kIOReturnNotReady before publication. */
+struct TegraGM20BAbiNativeSurfaceView {
+    uint64_t source_handle;
+    uint32_t flags, reserved;
+};
+
+struct TegraGM20BAbiNativeSurfacePlane {
+    uint64_t offset, bytes;
+    uint32_t width, height, pitch, bpe, block_height_log2, reserved;
+};
+
+struct TegraGM20BAbiNativeSurfaceViewReply {
+    uint64_t handle, bytes, representation_generation, allocation_generation;
+    uint32_t format, plane_count, kind, reserved;
+    uint32_t crop_x, crop_y, crop_width, crop_height;
+    struct TegraGM20BAbiNativeSurfacePlane planes[3];
 };
 
 enum {
@@ -129,6 +238,7 @@ enum {
 	 * physically contiguous runs of the kernel's GPU pool under its tiers (kIOReturnNoMemory while they refuse it or no run
 	 * is free), never mapped for the CPU (Map refuses its token) */
 	TegraGM20BBoCompressible = 1u << 2,
+    TegraGM20BBoControl = 1u << 3, /* Coherent command/control allocation; bounded ready-page preference. */
 };
 
 /* Method 2. Zero-filled pages below 4 GiB. map_token is the clientMemoryForType type for IOConnectMapMemory64. */
@@ -217,6 +327,7 @@ struct TegraGM20BAbiBoFree {
  * invalidates at its next submission), and by none of the work already submitted. */
 enum {
 	TegraGM20BBindMap = 1,   /* [va, va+range) -> handle at bo_offset, PTE kind = kind */
+	TegraGM20BBindMapVolatile = 4, /* CPU command/control memory bypasses GPU L2; kind must be 0 */
 	TegraGM20BBindUnmap = 2, /* [va, va+range) -> invalid (GPU access faults) */
 	TegraGM20BBindMapSparse =
 		3, /* [va, va+range) -> sparse (reads 0, writes dropped); needs InfoSparse */
@@ -245,17 +356,18 @@ struct TegraGM20BAbiVmBind {
 	struct TegraGM20BAbiBindOp ops[TegraGM20BMaxBindOps];
 };
 
-/* TegraGM20BAbiChannelCreate.engines: same bits as NVK's enum nvkmd_engines */
+/* TegraGM20BAbiChannelCreate.engines: low bits match NVK's enum nvkmd_engines. */
 enum {
 	TegraGM20BEngineCopy = 1u << 0,
 	TegraGM20BEngine2D = 1u << 1,
 	TegraGM20BEngine3D = 1u << 2,
 	TegraGM20BEngineM2MF = 1u << 3,
 	TegraGM20BEngineCompute = 1u << 4,
+    TegraGM20BEngineCopyOnly = 1u << 31, /* Requires InfoLeanCopyChannel and exactly EngineCopy. */
 };
 
-/* Method 6. A GPFIFO channel on the GR runlist in the connection's VM, with its GR context, and subchannels 0..4 bound to the
- * eng3d, compute, m2mf, eng2d and copy classes. fence_token maps (read-only) a page whose uint32 at fence_offset is the channel's
+/* Method 6. A GPFIFO channel on the GR runlist in the connection's VM. EngineCopyOnly binds only CE on subchannel 4;
+ * legacy channels bind eng3d, compute, m2mf, eng2d and copy on subchannels 0..4. fence_token maps (read-only) a page whose uint32 at fence_offset is the channel's
  * last completed seqno. */
 struct TegraGM20BAbiChannelCreate {
 	uint32_t engines;
@@ -280,6 +392,17 @@ struct TegraGM20BAbiFence {
 	uint32_t killed_first;
 	uint32_t killed_last;
 	uint32_t error;
+};
+
+enum {
+    TegraGM20BFenceSemanticPending = 1u << 0,
+    TegraGM20BFenceSemanticFailed = 1u << 1,
+};
+
+/* With InfoSemanticFence, this immediately follows AbiFence. Read epoch, fields, epoch with acquire ordering;
+ * an odd or changed epoch requires WaitFence. Prefix comparisons use signed32 sequence differences. */
+struct TegraGM20BAbiFenceSemantic {
+    uint32_t epoch, pending_first, failed_first, flags;
 };
 
 /* Method 7. Waits (bounded) for the channel to go idle, then tears it down. */
@@ -320,13 +443,27 @@ struct TegraGM20BAbiExecReply {
 enum {
 	TegraGM20BSurfaceRead = 1u << 0,
 	TegraGM20BSurfaceWrite = 1u << 1, /* renders, blits or stores into it */
+	TegraGM20BSurfaceHostWritten = 1u << 3, /* SubmitAddress explicit visibility: CPU bytes changed since GPU use */
 	TegraGM20BSurfaceGpuAddress = 1u << 2, /* SubmitAddress only: handle is a GPU VA in a live binding */
+    TegraGM20BSurfaceRange = 1u << 4, /* With InfoUseRanges and GpuAddress, reserved is the nonzero byte extent. */
 };
 
 /* TegraGM20BAbiExecSurfaces.flags */
 enum {
 	TegraGM20BExecSurfacesAll = 1u
 		<< 0, /* it touches more imports than it lists: the Exec runs as one with no list */
+};
+
+/* SubmitAddress only. Flags zero preserve the legacy host acquire and external release. Internal execution fences
+ * do not expose GPU writes to the CPU or other engines; request ExternalVisibility at those boundaries. */
+enum {
+	TegraGM20BSubmitVisibilityExplicit = 1u << 1,
+	TegraGM20BSubmitExternalVisibility = 1u << 2,
+    TegraGM20BSubmitHasEvents = 1u << 3,
+    TegraGM20BSubmitAdmissionBegin = 1u << 4,
+    TegraGM20BSubmitAdmissionContinue = 1u << 5,
+    TegraGM20BSubmitAdmissionEnd = 1u << 6,
+    TegraGM20BSubmitAdmissionCancel = 1u << 7,
 };
 
 /* Method 17. The host imports (BoImport handles) the channel's next Exec touches, as an Apple command buffer carries its
@@ -513,6 +650,10 @@ TEGRA_GM20B_ASSERT(TegraGM20BAbiBoFree, 8);
 TEGRA_GM20B_ASSERT(TegraGM20BAbiBindOp, 40);
 TEGRA_GM20B_ASSERT(TegraGM20BAbiVmBind, 4008);
 TEGRA_GM20B_ASSERT(TegraGM20BAbiChannelCreate, 8);
+TEGRA_GM20B_ASSERT(TegraGM20BAbiCpuComplete, 32);
+TEGRA_GM20B_ASSERT(TegraGM20BAbiCpuRange, 24);
+TEGRA_GM20B_ASSERT(TegraGM20BAbiCpuCompleteReply, 24);
+TEGRA_GM20B_ASSERT(TegraGM20BAbiFenceIdentity, 8);
 TEGRA_GM20B_ASSERT(TegraGM20BAbiChannelCreateReply, 16);
 TEGRA_GM20B_ASSERT(TegraGM20BAbiChannel, 8);
 TEGRA_GM20B_ASSERT(TegraGM20BAbiPush, 16);
