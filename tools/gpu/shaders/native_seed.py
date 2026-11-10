@@ -1,4 +1,4 @@
-"""Build native record buckets independently of the runtime stack, then stamp the installed seed."""
+"""Build native record buckets independently of the runtime stack, stamp the seed, then pack it as the device reads it."""
 
 import argparse
 import hashlib
@@ -264,6 +264,51 @@ def stamp(args: argparse.Namespace, work: Path) -> None:
     (args.out / 'coverage.json').write_text(json.dumps(report, sort_keys=True, indent=1) + '\n')
 
 
+def pack_lists(manifest: dict) -> tuple[dict[str, tuple[int, str]], dict[str, tuple[int, str]]]:
+    """Return the made records' and analyses' {name: (tier, path below the stamped seed)}: 0 observed, 1 derived."""
+    records: dict[str, tuple[int, str]] = {}
+    analyses: dict[str, tuple[int, str]] = {}
+    for row in manifest['records']:
+        if row['status'] != 'made':
+            continue
+        if row.get('kind') == 'analysis':
+            table, named = analyses, [(entry['name'][:64], entry['path']) for entry in row['analysis']]
+        else:
+            table, named = records, [(row['name'], row['artifact'])]
+        for name, path in named:
+            tier, known = int(bool(row['derived'])), table.get(name)
+            if known and known[1] != path:
+                raise ValueError(f'native seed has two files named {name}')
+            table[name] = (min(tier, known[0]) if known else tier, path)
+    return records, analyses
+
+
+def pack(args: argparse.Namespace, work: Path) -> None:
+    """Pack the stamped seed as the device reads it: <out>/raw-<stack> and <out>/native-analysis (kits/SwitchSeedPack).
+
+    The records' index names the stack its records were stamped for. The analyses' names the m2v build the join made
+    (its index's build): each analysis key already hashes that build's sources, and the device cannot ask m2v for it.
+    """
+    manifest = json.loads((args.seed / 'manifest.json').read_text())
+    records, analyses = pack_lists(manifest)
+    header = args.m2v_index.read_bytes()[:56]
+    if header[:8] != b'M2VSEED2':
+        raise ValueError('the m2v seed index has another layout')
+    args.out.mkdir(parents=True, exist_ok=True)
+    stack = manifest['stack']
+    for directory, width, identity, table in (
+        (f'raw-{stack}', 8, int(stack, 16).to_bytes(32, 'little'), records),
+        ('native-analysis', 32, header[24:56], analyses),
+    ):
+        listing = work / f'{directory}.list'
+        listing.write_text(
+            ''.join(
+                f'{tier}\t{name}\t{(args.seed / path).absolute()}\n' for name, (tier, path) in sorted(table.items())
+            )
+        )
+        run([args.tool.absolute(), args.out.absolute() / directory, str(width), identity.hex(), listing], work)
+
+
 def check(args: argparse.Namespace) -> None:
     report = json.loads((args.seed / 'coverage.json').read_text())
     if args.strict and not report['complete']:
@@ -279,6 +324,7 @@ def main() -> None:
     for step, names in (
         ('bucket', ('raw', 'nvk', 'root', 'store', 'qc', 'lines', 'out')),
         ('stamp', ('raw', 'manifest', 'out')),
+        ('pack', ('seed', 'm2v-index', 'tool', 'out')),
         ('check', ('seed', 'out')),
     ):
         command = steps.add_parser(step)
@@ -297,7 +343,7 @@ def main() -> None:
         work = Path(directory)
         (work / 'home').mkdir()
         (work / 'tmp').mkdir()
-        {'bucket': bucket, 'stamp': stamp}[args.step](args, work)
+        {'bucket': bucket, 'stamp': stamp, 'pack': pack}[args.step](args, work)
 
 
 if __name__ == '__main__':

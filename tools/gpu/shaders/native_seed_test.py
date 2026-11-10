@@ -8,6 +8,8 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from python.runfiles import runfiles
+
 from tools.gpu.shaders import native_seed
 
 
@@ -230,6 +232,53 @@ class NativeSeedTests(unittest.TestCase):
         for row in rows: row['source'] = 'other'
         with self.assertRaises(ValueError): native_seed.validate_inputs(rows, expected)
 
+
+    def test_pack_lists_keep_each_file_once_in_its_most_observed_tier(self):
+        record = self.manifest['records'][0]
+        guessed = dict(record, derived=True)
+        derived_only = dict(
+            record, name='0000000000000020', artifact=f'raw-{self.stack}/0000000000000020.rec', derived=True
+        )
+        analysis = dict(self.analysis_row(), derived=True)
+        self.manifest['records'] = [guessed, record, derived_only, {'derived': False, 'status': 'refused'}, analysis]
+        records, analyses = native_seed.pack_lists(self.manifest)
+        self.assertEqual(
+            records, {self.name: (0, record['artifact']), '0000000000000020': (1, derived_only['artifact'])}
+        )
+        self.assertEqual(analyses, {entry['name'][:64]: (1, entry['path']) for entry in analysis['analysis']})
+        self.manifest['records'].append(dict(record, artifact=f'raw-{self.stack}/elsewhere.rec'))
+        with self.assertRaises(ValueError):
+            native_seed.pack_lists(self.manifest)
+
+    def test_pack_writes_the_device_layout_the_same_every_time(self):
+        self.manifest['records'].append(self.analysis_row())
+        (self.root / 'manifest.json').write_text(json.dumps(self.manifest))
+        build = bytes(range(32))
+        m2v_index = self.root / 'm2v-index'
+        m2v_index.write_bytes(b'M2VSEED2' + bytes(16) + build + bytes(8))
+        tool = Path(runfiles.Create().Rlocation('_main/kits/SwitchSeedPack/seedpack'))
+        outputs = []
+        for run in ('first', 'second'):
+            work = self.root / ('work-' + run)
+            for folder in ('home', 'tmp'):
+                (work / folder).mkdir(parents=True)
+            out = self.root / ('packed-' + run)
+            native_seed.pack(argparse.Namespace(seed=self.root, m2v_index=m2v_index, tool=tool, out=out), work)
+            outputs.append(
+                {p.relative_to(out).as_posix(): p.read_bytes() for p in sorted(out.rglob('*')) if p.is_file()}
+            )
+        self.assertEqual(outputs[0], outputs[1])
+        self.assertEqual(
+            sorted(outputs[0]),
+            [f'native-analysis/{name}' for name in ('index', 'packs/000')]
+            + [f'raw-{self.stack}/{name}' for name in ('index', 'packs/000')],
+        )
+        records = outputs[0][f'raw-{self.stack}/index']
+        self.assertEqual(records[:8], b'SWSEEDPK')
+        self.assertEqual(struct.unpack('<6I', records[8:32]), (1, 8, 1, 1, 1, 0))
+        self.assertEqual(records[32:64], int(self.stack, 16).to_bytes(32, 'little'))
+        self.assertEqual(outputs[0][f'raw-{self.stack}/packs/000'][:23], b'validated native record')
+        self.assertEqual(outputs[0]['native-analysis/index'][32:64], build)
 
 
 if __name__ == '__main__':

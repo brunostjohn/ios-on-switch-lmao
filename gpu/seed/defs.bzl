@@ -13,14 +13,10 @@ switching --config=ios27 on and off reuses both instead of overwriting one with 
 load("@bazel_skylib//rules:common_settings.bzl", "BuildSettingInfo")
 load("//ipsw:ipsw.bzl", "IpswInfo")
 load(":crawl.bzl", "QUARTZCORE")
+load(":native.bzl", "DARWIN", "bucket_resources", "named", "native_pack", "native_records", "three")
 load(":tools.bzl", "seed_tool_files")
 
-_DARWIN = {"no-remote-exec": "1", "requires-darwin": ""}
-
 _IPSW = {"ipsw": attr.label(default = "//ipsw:current", providers = [IpswInfo])}
-
-def _named(ctx, path):
-    return "{}/{}{}".format(ctx.attr.ipsw[IpswInfo].kind, ctx.attr.name, path)
 
 def _repo_root(files):
     return files[0].owner.workspace_root
@@ -39,7 +35,7 @@ SeedInfo = provider(
     fields = {
         "packs": "one pack per bucket",
         "meta": "SEED, MANIFEST.json, the index and the merged driver records' pack",
-        "native": "immutable native records and per-OS coverage",
+        "native": "the native records and analyses as the device reads them, packed (native.bzl)",
     },
 )
 
@@ -51,8 +47,8 @@ def _shader_crawl_impl(ctx):
     files = depset(ctx.files.tree)
     sources = []
     if ctx.files.applications or ctx.files.embedded:
-        tree = ctx.actions.declare_directory(_named(ctx, "_inputs"))
-        report = ctx.actions.declare_file(_named(ctx, "_inputs.json"))
+        tree = ctx.actions.declare_directory(named(ctx, "_inputs"))
+        report = ctx.actions.declare_file(named(ctx, "_inputs.json"))
         args = ctx.actions.args()
         args.add("--crawl", root)
         args.add_all(ctx.files.applications, before_each = "--application")
@@ -72,7 +68,7 @@ def _shader_crawl_impl(ctx):
         root = tree.path
         files = depset([tree, qc])
         sources = [report]
-    names = ctx.actions.declare_file(_named(ctx, ".names.json"))
+    names = ctx.actions.declare_file(named(ctx, ".names.json"))
     ctx.actions.run(
         executable = ctx.executable._libraries,
         arguments = ["names", root + "/root", names.path],
@@ -104,9 +100,9 @@ shader_crawl = rule(
 def _plan(ctx, crawl, corpus):
     count = ctx.attr.buckets
     input_reports = ctx.attr.crawl[OutputGroupInfo].sources.to_list()
-    buckets = [ctx.actions.declare_file(_named(ctx, "_plan/bucket-{}.log".format(_three(i)))) for i in range(count)]
-    store = ctx.actions.declare_file(_named(ctx, "_plan/store.json"))
-    report = ctx.actions.declare_file(_named(ctx, "_plan/plan.json"))
+    buckets = [ctx.actions.declare_file(named(ctx, "_plan/bucket-{}.log".format(three(i)))) for i in range(count)]
+    store = ctx.actions.declare_file(named(ctx, "_plan/store.json"))
+    report = ctx.actions.declare_file(named(ctx, "_plan/plan.json"))
     args = ctx.actions.args()
     args.add("--corpus", corpus)
     args.add("--root", crawl.root + "/root")
@@ -145,9 +141,9 @@ def _precompile_args(ctx, tools, crawl, store, lines, out):
 
 def _bucket(ctx, number, tools, crawl, store, lines, inputs):
     """One bucket's compile; returns its pack, index and report."""
-    out = ctx.actions.declare_file(_named(ctx, "_buckets/{}.pack".format(_three(number))))
-    index = ctx.actions.declare_file(_named(ctx, "_buckets/{}.index".format(_three(number))))
-    report = ctx.actions.declare_file(_named(ctx, "_buckets/{}.json".format(_three(number))))
+    out = ctx.actions.declare_file(named(ctx, "_buckets/{}.pack".format(three(number))))
+    index = ctx.actions.declare_file(named(ctx, "_buckets/{}.index".format(three(number))))
+    report = ctx.actions.declare_file(named(ctx, "_buckets/{}.json".format(three(number))))
     outputs = [out, index, report]
     args = _precompile_args(ctx, tools, crawl, store, lines, out)
     if ctx.attr.depth[BuildSettingInfo].value == "deep":
@@ -160,7 +156,7 @@ def _bucket(ctx, number, tools, crawl, store, lines, inputs):
     # bytes every NVK edit changes, is an input it reports unused, so an edit outside the compiler reruns no bucket.
     unused = None
     if tools.nvk_identity:
-        unused = ctx.actions.declare_file(_named(ctx, "_buckets/{}.unused".format(_three(number))))
+        unused = ctx.actions.declare_file(named(ctx, "_buckets/{}.unused".format(three(number))))
         args.add("--unused-list", unused)
         args.add("--unused", tools.twin)
         outputs.append(unused)
@@ -172,81 +168,17 @@ def _bucket(ctx, number, tools, crawl, store, lines, inputs):
         unused_inputs_list = unused,
         mnemonic = "MetalSeedBucket",
         progress_message = "Precompiling shader seed bucket {} of {}".format(number + 1, ctx.attr.buckets),
-        execution_requirements = _DARWIN,
-        resource_set = _bucket_resources,
+        execution_requirements = DARWIN,
+        resource_set = bucket_resources,
     )
     return out, index, report
-
-def _native_records(ctx, tools, crawl, store, lines):
-    inputs = depset(
-        tools.raw + [store, tools.twin] + ctx.files.device_libraries + ctx.files.embedded,
-        transitive = [crawl.files],
-    )
-    buckets = []
-    for i, corpus in enumerate(lines):
-        out = ctx.actions.declare_directory(_named(ctx, "_native/bucket-" + _three(i)))
-        args = ctx.actions.args()
-        args.add("bucket")
-        args.add("--raw", tools.raw_dir)
-        args.add("--nvk", tools.twin)
-        args.add("--root", crawl.root + "/root")
-        args.add("--store", store)
-        args.add("--qc", crawl.qc)
-        args.add("--lines", corpus)
-        args.add_all(ctx.files.embedded, before_each = "--embedded")
-        args.add("--out", out.path)
-        ctx.actions.run(
-            executable = ctx.executable._native_seed,
-            arguments = [args],
-            inputs = depset([corpus], transitive = [inputs]),
-            outputs = [out],
-            mnemonic = "MetalNativeBucket",
-            progress_message = "Compiling native shader records {} of {}".format(i + 1, len(lines)),
-            execution_requirements = _DARWIN,
-            resource_set = _bucket_resources,
-        )
-        buckets.append(out)
-    native_records = ctx.actions.declare_directory(_named(ctx, "_native/stamped"))
-    args = ctx.actions.args()
-    args.add("stamp")
-    args.add("--raw", tools.raw_dir)
-    args.add("--manifest", tools.manifest)
-    args.add("--ipsw", ctx.attr.ipsw[IpswInfo].build)
-    args.add_all(lines, before_each = "--lines")
-    args.add_all(buckets, before_each = "--bucket", expand_directories = False)
-    args.add("--out", native_records.path)
-    ctx.actions.run(
-        executable = ctx.executable._native_seed,
-        arguments = [args],
-        inputs = buckets + lines + tools.raw + [tools.manifest],
-        outputs = [native_records],
-        mnemonic = "MetalNativeStamp",
-        progress_message = "Stamping native records for this OS and compiler",
-        execution_requirements = _DARWIN,
-    )
-    checked = ctx.actions.declare_file(_named(ctx, "_native/coverage.json"))
-    args = ctx.actions.args()
-    args.add("check")
-    args.add("--seed", native_records.path)
-    args.add("--out", checked)
-    if ctx.attr._profile[BuildSettingInfo].value == "release":
-        args.add("--strict")
-    ctx.actions.run(
-        executable = ctx.executable._native_seed,
-        arguments = [args],
-        inputs = [native_records],
-        outputs = [checked],
-        mnemonic = "MetalNativeCoverage",
-        progress_message = "Checking native render seed coverage",
-    )
-    return native_records, checked
 
 def _metal_seed_impl(ctx):
     crawl = ctx.attr.crawl[CrawlInfo]
     names = ctx.attr.crawl[OutputGroupInfo].names.to_list()[0]
     inventory = ctx.attr.crawl[OutputGroupInfo].inventory.to_list()[0]
     tools = seed_tool_files(ctx.attr.tools)
-    corpus = ctx.actions.declare_file(_named(ctx, "_plan/corpus.log"))
+    corpus = ctx.actions.declare_file(named(ctx, "_plan/corpus.log"))
     ctx.actions.run(
         executable = ctx.executable._libraries,
         arguments = ["resolve", names.path, ctx.file.corpus.path, corpus.path],
@@ -256,7 +188,7 @@ def _metal_seed_impl(ctx):
         progress_message = "Resolving the shader corpus's libraries",
     )
     lines, store, report = _plan(ctx, crawl, corpus)
-    native_records, native_checked = _native_records(ctx, tools, crawl, store, lines)
+    native_stamped, native_checked = native_records(ctx, tools, crawl, store, lines)
 
     # A bucket's compile reads its lines, the libraries and the three tools that make code (the precompile tool with
     # the frontend and m2v in it, its mock IOKit, the NVK twin): never the plugin, the corpus or the rest of the tools.
@@ -277,7 +209,7 @@ def _metal_seed_impl(ctx):
         indexes.append(index)
         reports.append(bucket_report)
 
-    meta = ctx.actions.declare_directory(_named(ctx, "_meta"))
+    meta = ctx.actions.declare_directory(named(ctx, "_meta"))
     args = ctx.actions.args()
     args.add("join")
     args.add_all(indexes, before_each = "--index")
@@ -301,10 +233,11 @@ def _metal_seed_impl(ctx):
         mnemonic = "MetalSeedJoin",
         progress_message = "Joining the shader seed's bucket indexes",
     )
+    native_packed = native_pack(ctx, native_stamped, meta)
 
     # The tools must be the GPU bundle's, or no key of the seed would ever be hit: checked beside the build, which
     # neither waits for it nor reruns anything when only the bundle changes.
-    checked = ctx.actions.declare_file(_named(ctx, ".tools-match"))
+    checked = ctx.actions.declare_file(named(ctx, ".tools-match"))
     args = ctx.actions.args()
     args.add("check")
     args.add("--tools-manifest", tools.manifest)
@@ -320,9 +253,9 @@ def _metal_seed_impl(ctx):
         progress_message = "Checking the shader tools are the GPU bundle's",
     )
 
-    verify = ctx.actions.declare_file(_named(ctx, "_verify/misses.pack"))
-    verify_index = ctx.actions.declare_file(_named(ctx, "_verify/misses.index"))
-    verify_report = ctx.actions.declare_file(_named(ctx, "_verify/report.json"))
+    verify = ctx.actions.declare_file(named(ctx, "_verify/misses.pack"))
+    verify_index = ctx.actions.declare_file(named(ctx, "_verify/misses.index"))
+    verify_report = ctx.actions.declare_file(named(ctx, "_verify/report.json"))
     args = _precompile_args(ctx, tools, crawl, store, corpus, verify)
     args.add("--index", verify_index)
     args.add("--report", verify_report)
@@ -335,24 +268,19 @@ def _metal_seed_impl(ctx):
         outputs = [verify, verify_index, verify_report],
         mnemonic = "MetalSeedVerify",
         progress_message = "Replaying the shader corpus over the seed",
-        execution_requirements = _DARWIN,
+        execution_requirements = DARWIN,
     )
     return [
-        DefaultInfo(files = depset([meta, native_records] + packs)),
-        SeedInfo(packs = packs, meta = meta, native = native_records),
+        DefaultInfo(files = depset([meta, native_packed] + packs)),
+        SeedInfo(packs = packs, meta = meta, native = native_packed),
         OutputGroupInfo(
             plan = depset([corpus, store, report] + lines),
             buckets = depset(indexes + reports),
             verify = depset([verify_report]),
+            native = depset([native_stamped, native_checked]),
             _validation = depset([checked, native_checked]),
         ),
     ]
-
-def _three(i):
-    return ("00" + str(i))[-3:]
-
-def _bucket_resources(_os, _inputs):
-    return {"cpu": 1, "memory": 1024}
 
 metal_seed = rule(
     implementation = _metal_seed_impl,
@@ -372,6 +300,7 @@ metal_seed = rule(
         "_plan": attr.label(default = "//tools/gpu/shaders:plan", executable = True, cfg = "exec"),
         "_precompile": attr.label(default = "//tools/gpu/shaders:precompile", executable = True, cfg = "exec"),
         "_native_seed": attr.label(default = "//tools/gpu/shaders:native_seed", executable = True, cfg = "exec"),
+        "_seedpack": attr.label(default = "//kits/SwitchSeedPack:seedpack", executable = True, cfg = "exec"),
         "_profile": attr.label(default = "//bazel:profile", providers = [BuildSettingInfo]),
         "_merge": attr.label(default = "//tools/gpu/shaders:merge", executable = True, cfg = "exec"),
     },
@@ -396,7 +325,7 @@ def _seed_raw_pack_impl(ctx):
     tools = seed_tool_files(ctx.attr.tools)
     crawl = ctx.attr.crawl[CrawlInfo]
     qc = [crawl.qc]
-    lines = ctx.actions.declare_file(_named(ctx, "_work/corpus.log"))
+    lines = ctx.actions.declare_file(named(ctx, "_work/corpus.log"))
     kind = ctx.attr.ipsw[IpswInfo].kind
     archives = [f for f in ctx.files.archives if f.basename == kind + ".tsv"]
     ctx.actions.run(
@@ -411,7 +340,7 @@ def _seed_raw_pack_impl(ctx):
 
     # QuartzCore's tables (ca/qc-<build>.json) make Core Animation's states from their names.
     tables = [f for f in ctx.files.srcs if f.dirname.endswith("/ca") and f.extension == "json"]
-    corpora = [ctx.actions.declare_file(_named(ctx, "_work/split/bucket{}.log".format(i))) for i in range(_RAW_BUCKETS)]
+    corpora = [ctx.actions.declare_file(named(ctx, "_work/split/bucket{}.log".format(i))) for i in range(_RAW_BUCKETS)]
     args = ctx.actions.args()
     names = [f for f in ctx.files.ca_names if f.basename == kind + ".txt"]
     args.add("split")
@@ -434,7 +363,7 @@ def _seed_raw_pack_impl(ctx):
     buckets = []
     for i, bucket_corpus in enumerate(corpora):
         # rawpack.py knows a bucket by its directory's name (bucket0 also draws the raw path's own states).
-        bucket = ctx.actions.declare_directory(_named(ctx, "_work/bucket{}".format(i)))
+        bucket = ctx.actions.declare_directory(named(ctx, "_work/bucket{}".format(i)))
         args = ctx.actions.args()
         args.add("probe")
         args.add("--generator", ctx.file.generator)
@@ -452,11 +381,11 @@ def _seed_raw_pack_impl(ctx):
             outputs = [bucket],
             mnemonic = "MetalRawProbe",
             progress_message = "Making the raw pack's bucket {} of {} directly".format(i + 1, _RAW_BUCKETS),
-            execution_requirements = _DARWIN,
+            execution_requirements = DARWIN,
         )
         buckets.append(bucket)
 
-    linked = ctx.actions.declare_directory(_named(ctx, "_work/linked"))
+    linked = ctx.actions.declare_directory(named(ctx, "_work/linked"))
     args = ctx.actions.args()
     args.add("link")
     args.add("--generator", ctx.file.generator)
@@ -471,7 +400,7 @@ def _seed_raw_pack_impl(ctx):
         progress_message = "Linking the raw GM20B path's pipeline pack",
     )
 
-    out = ctx.actions.declare_directory(_named(ctx, ""))
+    out = ctx.actions.declare_directory(named(ctx, ""))
     args = ctx.actions.args()
     args.add("stamp")
     args.add("--generator", ctx.file.generator)
@@ -516,8 +445,8 @@ seed_raw_pack = rule(
 
 def _seed_tree_impl(ctx):
     seed = ctx.attr.seed[SeedInfo]
-    out = ctx.actions.declare_directory(_named(ctx, ""))
-    size = ctx.actions.declare_file(_named(ctx, ".size.json"))
+    out = ctx.actions.declare_directory(named(ctx, ""))
+    size = ctx.actions.declare_file(named(ctx, ".size.json"))
     args = ctx.actions.args()
     args.add("tree")
     args.add("--seed", seed.meta.path)

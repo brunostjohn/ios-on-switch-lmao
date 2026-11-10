@@ -4,7 +4,8 @@ usage: merge.py join --index <bucket index>... --report <bucket report>... [--re
                      [--replies <compile reply store>] --ipsw <build> --plan <plan.json> --inventory <inventory.json>
                      --out <dir>
        merge.py check --tools-manifest <MANIFEST.json> --twin <tools' libvulkan_nouveau.dylib> --base <path>... --out F
-       merge.py tree --seed <join's dir> --pack <bucket pack>... [--raw <raw pack dir>] --out <tree dir> --size F
+       merge.py tree --seed <join's dir> --pack <bucket pack>... [--raw <raw pack dir>] [--native <packed native dir>]
+                     --out <tree dir> --size F
 
 join: the seed is every bucket's cache directory laid over one another (an entry's name is what it holds, so two
 buckets' entries of one name are the same bytes), the device's driver records of the tools' NVK identity beside them,
@@ -19,9 +20,10 @@ check: refuses tools that are not the GPU bundle's (--base: its tree or files): 
 NVK's LC_UUID (nvk_twin.py gives the twin the iOS dylib's), and the bundle's Info.plist must name the tools' stack key
 (NVK, m2v, the bridge and the frontend); a seed of other tools would never be hit. A validation action: the seed does
 not wait for it.
-tree: ngpu/addons/TegraGM20BMetal.m2v-seed/shared (the join's files and packs/<NNN>) and
-ngpu/addons/TegraGM20BMetal.raw, directories 0755 and files 0644 (APFS clones of the sources), and size.json (bytes,
-files, blocks4k: what the tree takes on APFS) beside it.
+tree: ngpu/addons/TegraGM20BMetal.m2v-seed/shared (the join's files and packs/<NNN>, and the packed native seed's
+native-analysis/) and ngpu/addons/TegraGM20BMetal.raw (with the packed native seed's raw-<stack>/ in native/; the
+host's manifest and coverage beside them stay behind), directories 0755 and files 0644 (APFS clones of the sources),
+and size.json (bytes, files, blocks4k: what the tree takes on APFS) beside it.
 """
 
 import argparse
@@ -270,10 +272,13 @@ def tree(args: argparse.Namespace) -> None:
         pairs += [(p, out / RAW / p.relative_to(args.raw)) for p in sorted(args.raw.rglob('*')) if p.is_file()]
     if args.native:
         for path in sorted(args.native.rglob('*')):
-            if path.is_file():
-                relative = path.relative_to(args.native)
-                target = out / SEED if relative.parts[0] == 'native-analysis' else out / RAW / 'native'
-                pairs.append((path, target / relative))
+            relative = path.relative_to(args.native)
+            if not path.is_file() or len(relative.parts) < 2:
+                continue
+            if relative.parts[0] == 'native-analysis':
+                pairs.append((path, out / SEED / relative))
+            elif relative.parts[0].startswith('raw-'):
+                pairs.append((path, out / RAW / 'native' / relative))
     for source, target in pairs:
         target.parent.mkdir(parents=True, exist_ok=True)
         clone(source, target)

@@ -12,7 +12,6 @@
 #include <cstdlib>
 #include <cstring>
 #include <fstream>
-#include <filesystem>
 
 namespace {
 
@@ -249,100 +248,6 @@ TEST(RawCache, KeepsKernelsAndTheirRefusals)
     EXPECT_EQ(why, "a texture slot the dispatch leaves unbound at 0");
     raw::RuntimeRecord state;
     EXPECT_EQ(cache.load(made, state, why), raw::RecordCache::Found::None);
-}
-
-class NativeSeed : public testing::Test {
-protected:
-    std::filesystem::path root, seed, local;
-    raw::CacheKey key = cachechecks::keyOf(0x123, "native state", 7);
-    raw::RuntimeRecord record = madeUp(4);
-
-    void SetUp() override
-    {
-        std::string pattern = std::string(getenv("TEST_TMPDIR") ?: "/tmp") + "/native-seed-XXXXXX";
-        char *made = mkdtemp(pattern.data());
-        ASSERT_NE(made, nullptr);
-        root = made;
-        seed = root / "seed";
-        local = root / "private";
-        std::filesystem::create_directories(seed);
-        std::filesystem::create_directories(local);
-        raw::RecordCache builder;
-        ASSERT_TRUE(builder.open(seed.string(), key.stack, 0));
-        ASSERT_TRUE(builder.store(key, &record, ""));
-    }
-
-    void TearDown() override
-    {
-        if (!root.empty())
-            std::filesystem::remove_all(root);
-    }
-};
-
-TEST_F(NativeSeed, ReadOnlyConsumerLoadsWithoutPrivateCacheAndCannotStore)
-{
-    raw::RecordCache cache;
-    ASSERT_TRUE(cache.attachSeed(seed.string(), key.stack));
-    raw::RuntimeRecord loaded;
-    std::string why;
-    EXPECT_EQ(cache.load(key, loaded, why), raw::RecordCache::Found::Record);
-    EXPECT_TRUE(cachechecks::same(loaded, record));
-    EXPECT_FALSE(cache.store(key, &record, ""));
-    cache.tidy();
-    EXPECT_EQ(cache.bytes(), 0u);
-    EXPECT_EQ(cache.load(key, loaded, why), raw::RecordCache::Found::Record);
-}
-
-TEST_F(NativeSeed, SeedWinsOverPrivateRecordAndInvalidSeedFallsBack)
-{
-    raw::RecordCache cache;
-    ASSERT_TRUE(cache.open(local.string(), key.stack, 0));
-    const auto privateRecord = madeUp(1);
-    ASSERT_TRUE(cache.store(key, &privateRecord, ""));
-    ASSERT_TRUE(cache.attachSeed(seed.string(), key.stack));
-    raw::RuntimeRecord loaded;
-    std::string why;
-    EXPECT_EQ(cache.load(key, loaded, why), raw::RecordCache::Found::Record);
-    EXPECT_TRUE(cachechecks::same(loaded, record));
-    for (const auto &file : std::filesystem::recursive_directory_iterator(seed))
-        if (file.path().extension() == ".rec")
-            std::ofstream(file.path(), std::ios::binary | std::ios::trunc) << "broken";
-    EXPECT_EQ(cache.load(key, loaded, why), raw::RecordCache::Found::Record);
-    EXPECT_TRUE(cachechecks::same(loaded, privateRecord));
-}
-
-TEST_F(NativeSeed, ExactStackAirAndKeyAreRequired)
-{
-    raw::RecordCache cache;
-    ASSERT_TRUE(cache.attachSeed(seed.string(), key.stack));
-    raw::RuntimeRecord loaded;
-    std::string why;
-    for (auto other : {cachechecks::keyOf(key.stack + 1, key.key, 7),
-                       cachechecks::keyOf(key.stack, key.key, 8),
-                       cachechecks::keyOf(key.stack, key.key + "x", 7)})
-        EXPECT_EQ(cache.load(other, loaded, why), raw::RecordCache::Found::None);
-    ASSERT_TRUE(cache.open(local.string(), key.stack + 1, 0));
-    EXPECT_FALSE(cache.attachSeed(seed.string(), key.stack));
-    EXPECT_EQ(cache.load(key, loaded, why), raw::RecordCache::Found::None);
-}
-
-TEST_F(NativeSeed, ComputeRecordLoadsFromTheSameImmutableLayer)
-{
-    key.key = "kernel | explicit dispatch shape";
-    raw::ComputeRecord original;
-    original.keyString = key.key;
-    original.code.assign(128, 0x42);
-    original.cbufs = 1;
-    raw::RecordCache builder;
-    ASSERT_TRUE(builder.open(seed.string(), key.stack, 0));
-    ASSERT_TRUE(builder.storeKernel(key, &original, ""));
-    raw::RecordCache cache;
-    ASSERT_TRUE(cache.attachSeed(seed.string(), key.stack));
-    raw::ComputeRecord loaded;
-    std::string why;
-    EXPECT_EQ(cache.loadKernel(key, loaded, why), raw::RecordCache::Found::Record);
-    EXPECT_EQ(loaded.code, original.code);
-    EXPECT_EQ(loaded.keyString, original.keyString);
 }
 
 // Cold work is deliberately held at a barrier: unrelated warm work and callbacks must progress before it is released.
