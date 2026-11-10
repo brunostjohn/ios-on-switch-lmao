@@ -309,13 +309,16 @@ bool RecordCache::loadBytes(bool seed, const CacheKey &k, std::string &bytes) co
     return true;
 }
 
-RecordCache::Found RecordCache::load(const CacheKey &k, RuntimeRecord &record, std::string &refusal)
+RecordCache::Found RecordCache::load(const CacheKey &k, RuntimeRecord &record, std::string &refusal, bool *seeded)
 {
     std::string bytes;
     for (const bool seed : {true, false})
         if (loadBytes(seed, k, bytes))
-            if (const Found found = decodeEntry(bytes, k, record, refusal); found != Found::None)
+            if (const Found found = decodeEntry(bytes, k, record, refusal); found != Found::None) {
+                if (seeded)
+                    *seeded = seed;
                 return found;
+            }
     return Found::None;
 }
 

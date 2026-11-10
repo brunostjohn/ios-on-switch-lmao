@@ -3,6 +3,8 @@
 #include "raw_compiler.h"
 
 #include <dispatch/dispatch.h>
+#include <pthread.h>
+#include <pthread/qos.h>
 #include <time.h>
 
 namespace raw {
@@ -13,7 +15,90 @@ uint64_t nowUs()
     return clock_gettime_nsec_np(CLOCK_UPTIME_RAW) / 1000;
 }
 
+thread_local uint64_t tSlotWaitUs;
+
 }  // namespace
+
+// A thread waiting for a slot lends its class to every holder below it for as long as it waits (a dispatch semaphore lends
+// nothing). A thread of a fixed priority and no class (Core Animation's render thread) does not wait: a class lent to a
+// daemon's workers stops at user-initiated, below it, so it compiles at once beyond the bound. A thread that holds a slot
+// takes none again.
+class CompileSlots {
+public:
+    explicit CompileSlots(unsigned count) : holders_(count)
+    {}
+
+    class Held {
+    public:
+        Held(CompileSlots *slots, size_t index) : slots_(slots), index_(index)
+        {}
+
+        Held(const Held &) = delete;
+        Held &operator=(const Held &) = delete;
+
+        ~Held()
+        {
+            if (slots_)
+                slots_->give(index_);
+        }
+
+    private:
+        CompileSlots *slots_;
+        size_t index_;
+    };
+
+    Held take(uint64_t *waitedUs)
+    {
+        const uint64_t began = nowUs();
+        *waitedUs = 0;
+        if (tHeld == this)
+            return Held(nullptr, 0);
+        const qos_class_t mine = qos_class_self();
+        std::unique_lock<std::mutex> l(lock_);
+        for (;;) {
+            for (size_t i = 0; i < holders_.size(); ++i)
+                if (!holders_[i].thread) {
+                    holders_[i] = {pthread_self(), qos_class_self()};
+                    tHeld = this;
+                    *waitedUs = nowUs() - began;
+                    return Held(this, i);
+                }
+            if (mine == QOS_CLASS_UNSPECIFIED)
+                return Held(nullptr, 0);
+            std::vector<pthread_override_t> lent;
+            for (const Holder &h : holders_)
+                if (mine > (h.qos == QOS_CLASS_UNSPECIFIED ? QOS_CLASS_DEFAULT : h.qos))
+                    if (pthread_override_t o = pthread_override_qos_class_start_np(h.thread, mine, 0))
+                        lent.push_back(o);
+            freed_.wait(l);
+            for (pthread_override_t o : lent)
+                pthread_override_qos_class_end_np(o);
+        }
+    }
+
+private:
+    struct Holder {
+        pthread_t thread = nullptr;
+        qos_class_t qos = QOS_CLASS_UNSPECIFIED;
+    };
+
+    static thread_local const CompileSlots *tHeld;
+    std::mutex lock_;
+    std::condition_variable freed_;
+    std::vector<Holder> holders_;
+
+    void give(size_t index)
+    {
+        {
+            std::lock_guard<std::mutex> l(lock_);
+            holders_[index] = {};
+            tHeld = nullptr;
+        }
+        freed_.notify_all();
+    }
+};
+
+thread_local const CompileSlots *CompileSlots::tHeld = nullptr;
 
 struct Compiler::Job {
     Compiler *compiler;
@@ -43,19 +128,20 @@ void Compiler::runTask(void *context)
 {
     std::unique_ptr<Task> task(static_cast<Task *>(context));
     Compiler &compiler = *task->compiler;
-    const auto slots = static_cast<dispatch_semaphore_t>(compiler.slots_);
-    dispatch_semaphore_wait(slots, DISPATCH_TIME_FOREVER);
+
     struct Retire {
         Compiler &compiler;
-        dispatch_semaphore_t slots;
+
         ~Retire()
         {
-            dispatch_semaphore_signal(slots);
             std::lock_guard<std::mutex> lock(compiler.lock_);
             --compiler.queued_;
             compiler.idle_.notify_all();
         }
-    } retire{compiler, slots};
+    } retire{compiler};
+
+    uint64_t waited = 0;
+    const CompileSlots::Held slot = compiler.slots_->take(&waited);
     task->work();
 }
 
@@ -67,7 +153,7 @@ Compiler::Compiler(RecordCache *cache, Make make, uint64_t retryUs)
       persistence_(
           dispatch_queue_create("com.brunostjohn.switch.raw.cache",
                                 dispatch_queue_attr_make_with_qos_class(DISPATCH_QUEUE_SERIAL, QOS_CLASS_UTILITY, 0))),
-      slots_(dispatch_semaphore_create(2))
+      slots_(std::make_unique<CompileSlots>(2))
 {}
 
 Compiler::~Compiler()
@@ -75,7 +161,6 @@ Compiler::~Compiler()
     drain();
     dispatch_release(static_cast<dispatch_queue_t>(queue_));
     dispatch_release(static_cast<dispatch_queue_t>(persistence_));
-    dispatch_release(static_cast<dispatch_semaphore_t>(slots_));
 }
 
 Compiler::State Compiler::ask(const CacheKey &k, Done done, const RuntimeRecord **record)
@@ -127,7 +212,8 @@ RecordCache::Found Compiler::lookup(const CacheKey &k, RuntimeRecord &record, st
         }
     }
     auto loaded = std::make_unique<RuntimeRecord>();
-    const RecordCache::Found found = cache_ ? cache_->load(k, *loaded, why) : RecordCache::Found::None;
+    bool seeded = false;
+    const RecordCache::Found found = cache_ ? cache_->load(k, *loaded, why, &seeded) : RecordCache::Found::None;
     if (found == RecordCache::Found::None)
         return found;
     if (found == RecordCache::Found::Record)
@@ -135,6 +221,7 @@ RecordCache::Found Compiler::lookup(const CacheKey &k, RuntimeRecord &record, st
     std::lock_guard<std::mutex> l(lock_);
     RAW_DIAGNOSTIC(stats_.hits++;
                    stats_.lookupHits++;
+                   (seeded ? stats_.seedHits : stats_.ownHits)++;
                    stats_.lookupUs += nowUs() - began);
     // an ask that came in since keeps its own entry (its job finds the same entry on disk)
     if (const auto [it, first] = entries_.try_emplace(k.name()); first) {
@@ -167,20 +254,10 @@ Compiler::Outcome Compiler::produce(const CacheKey &k, RuntimeRecord &record, st
     if (found != RecordCache::Found::None)
         return found == RecordCache::Found::Record ? Outcome::Made : Outcome::Refused;
 
-    struct Slot {
-        dispatch_semaphore_t semaphore;
-
-        explicit Slot(void *value) : semaphore(static_cast<dispatch_semaphore_t>(value))
-        {
-            dispatch_semaphore_wait(semaphore, DISPATCH_TIME_FOREVER);
-        }
-
-        ~Slot()
-        {
-            dispatch_semaphore_signal(semaphore);
-        }
-    } slot(slots_);
-
+    uint64_t waited = 0;
+    const CompileSlots::Held slot = slots_->take(&waited);
+    tSlotWaitUs = waited;
+    RAW_DIAGNOSTIC(std::lock_guard<std::mutex> l(lock_); stats_.waitUs += waited);
     const Outcome outcome = make_(k, record, why);
     if (found == RecordCache::Found::None && outcome != Outcome::Failed && cache_)
         dispatch_async_f(
@@ -289,6 +366,11 @@ void Compiler::drain()
     });
     l.unlock();
     dispatch_sync_f(static_cast<dispatch_queue_t>(persistence_), nullptr, [](void *) {});
+}
+
+uint64_t Compiler::slotWaitUs()
+{
+    return tSlotWaitUs;
 }
 
 Compiler::Stats Compiler::stats() const
