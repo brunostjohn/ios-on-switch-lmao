@@ -29,7 +29,7 @@ struct FramebufferFetchScene: GPUScene {
             }
             for mode in 0..<7 {
                 let steps = mode >= 5 ? Self.stressSteps : Self.steps
-                let key = "\(format.rawValue)_\(mode)"
+                let key = "\(format.rawValue.lowercased())_\(mode)"
                 let before = RawFacade.counters(of: gpu.device)
                 let timing = try await gpu.run { commands in
                     let pass = MTLRenderPassDescriptor()
