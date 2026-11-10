@@ -1464,6 +1464,9 @@ struct tgm_chan {
 	struct tgm_order order[TGM_ORDER_MAX];
 	struct tgm_order waited;
 	struct tgm_hang_log hang;
+#if TGM_STATS
+	u64 killed_ns; /* chan_killed's time, for a fault's line (TegraGM20BUserClient.cpp) */
+#endif
 };
 
 #define CHAN_PRESENT 1 /* the GPU present's channel */
@@ -1538,6 +1541,13 @@ uint64_t tgm_chan_fault_va(struct tgm_chan *chan)
 {
 	return READ_ONCE(chan->fault_va);
 }
+
+#if TGM_STATS
+uint64_t tgm_chan_killed_ns(struct tgm_chan *chan)
+{
+	return READ_ONCE(chan->killed_ns);
+}
+#endif
 
 uint32_t tgm_chan_waiter(struct tgm_chan *chan)
 {
@@ -1721,6 +1731,9 @@ static int chan_killed(struct nvif_event *event, void *repv, u32 repc)
 	}
 	/* the runlist dropped it, so nothing writes its fence any more: release what it will never complete, after the
 	 * record of what that was (TegraGM20BAbiFence), so a client that sees the fence pass sees the record too */
+#if TGM_STATS
+	WRITE_ONCE(chan->killed_ns, nvxnu_nanotime());
+#endif
 	if (fault_code(report) == 1)
 		WRITE_ONCE(chan->fault_va, tgm_fault_va(report, (int)chan->chid));
 	WRITE_ONCE(chan->error, fault_code(report));

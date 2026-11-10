@@ -164,7 +164,8 @@ TEST(GM20BPoolPolicySource, SystemBosNeverUseSpares)
 		    HasSubstr("bmd->getRetainCount() == 1"));
 	const std::string free =
 		flat(definition(client(), "IOReturn AGXDeviceUserClient::boFree("));
-	expectBefore(free, "unbindOverlaps(binds_[i].va, binds_[i].range, bo);", "reap(false);");
+	expectBefore(free, "unbindOverlaps(binds_[i].va, binds_[i].range, bo, TGM_BIND_FREED);",
+		     "reap(false);");
 }
 
 // The import costs (the "imports" and "slow import" lines, the refused import's region) are the debug kernel's alone:

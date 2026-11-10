@@ -20,6 +20,7 @@
 #include <string.h>
 #include <sys/systm.h>
 #include "TegraGM20BABI.h"
+#include "TegraGM20BBindHistory.h"
 #include "TegraGM20BExecSurfaces.h"
 #include "TegraGM20BGpu.h"
 #include "TegraGM20BLayout.h"
@@ -797,6 +798,9 @@ class AGXDeviceUserClient : public IOUserClient
 		Bo *bo;
 		uint64_t bo_offset;
 		switch_gpu_mapping *mapping;
+#if TGM_STATS
+		uint8_t kind;
+#endif
 	};
 
 	// A mapping method 12 (Map) made into the client's task: what IOKit's io_connect_map_memory_into_task keeps in the
@@ -862,13 +866,27 @@ class AGXDeviceUserClient : public IOUserClient
 	// the thread about to take a hang's line while it holds lock_ (tgm_chan_hung, tgm_chan_del), so hungInterlocks
 	// reads the binds without taking it again
 	thread_t hangHolder_ = nullptr;
+#if TGM_STATS
+	// NVK's own heap is the client window's lower half (nvkmd_darwin.c; its replay heap and
+	// the raw path's quarter lie above): its maps and unmaps are kept apart from the raw path's
+	tgm_bind_history *bindHistory_[2] = {};
+	static uint32_t bindHalf(uint64_t va)
+	{
+		return va >= TGM_KERNEL_VA / 2;
+	}
+	// each slot's last killed_last whose fault VA was described
+	uint32_t describedKill_[kMaxChannels] = {};
+	void noteBind(uint8_t op, uint64_t va, uint64_t range, const Bo *bo, uint64_t boOffset,
+		      uint8_t kind);
+	void describeFault(uint32_t slot, uint64_t va);
+#endif
 
 	Bo *findBo(uint64_t handle);
 	Bo *findAddress(uint64_t address, uint64_t bytes = 1);
 	Bo *findToken(uint32_t token);
 	void releaseBo(Bo *bo);
 	void reap(bool force);
-	void unbindOverlaps(uint64_t va, uint64_t range, Bo *only);
+	void unbindOverlaps(uint64_t va, uint64_t range, Bo *only, uint8_t cause = TGM_BIND_UNMAP);
 	void scanPushes(const tgm_push *pushes, uint32_t count, tgm_prof *prof);
 	const uint32_t *pushView(uint64_t va, uint64_t bytes, const Binding *&hit) const;
 	IOReturn run(uint32_t method, const void *in, uint32_t inSize, void *out,
@@ -1000,6 +1018,11 @@ void AGXDeviceUserClient::free()
 		scheduleOrphanRelease();
 		if (binds_)
 			IODelete(binds_, Binding, cap_binds_);
+#if TGM_STATS
+		for (tgm_bind_history *history : bindHistory_)
+			if (history)
+				IODelete(history, tgm_bind_history, 1);
+#endif
 		if (job_) {
 			IODelete(job_->bytes, uint64_t, (kJobBytes + 7) / 8);
 			IODelete(job_->dependencies, switch_gpu_backing_token, TegraGM20BMaxJobUses);
@@ -1558,7 +1581,7 @@ IOReturn AGXDeviceUserClient::boFree(const TegraGM20BAbiBoFree *in)
 	surfaces_.remove(bo->handle);
 	for (uint32_t i = 0; i < nbinds_;) {
 		if (binds_[i].bo == bo) {
-			unbindOverlaps(binds_[i].va, binds_[i].range, bo);
+			unbindOverlaps(binds_[i].va, binds_[i].range, bo, TGM_BIND_FREED);
 		} else {
 			i++;
 		}
@@ -1574,11 +1597,15 @@ IOReturn AGXDeviceUserClient::boFree(const TegraGM20BAbiBoFree *in)
 
 // Binds are tracked whole. A Map or Unmap that overlaps a recorded bind removes that whole bind first (NVK binds and
 // unbinds whole VA ranges); this keeps nvkm's raw get/put page-table references balanced.
-void AGXDeviceUserClient::unbindOverlaps(uint64_t va, uint64_t range, Bo *only)
+void AGXDeviceUserClient::unbindOverlaps(uint64_t va, uint64_t range, Bo *only, uint8_t cause)
 {
+	(void)cause;
 	for (uint32_t i = 0; i < nbinds_;) {
 		Binding &b = binds_[i];
 		if (b.va < va + range && va < b.va + b.range && (!only || b.bo == only)) {
+#if TGM_STATS
+			noteBind(cause, b.va, b.range, b.bo, b.bo_offset, b.kind);
+#endif
 			switch_gpu_vm_unmap(vm_, &b.mapping);
 			--nbinds_;
 			memmove(&binds_[i], &binds_[i + 1], sizeof(Binding) * (nbinds_ - i));
@@ -1607,9 +1634,14 @@ IOReturn AGXDeviceUserClient::vmBind(const TegraGM20BAbiVmBind *in, uint32_t cou
 		if (op.op != TegraGM20BBindMap)
 			return kIOReturnBadArgument;
 		Bo *bo = findBo(op.handle);
-		if (!bo || op.bo_offset > bo->bytes || op.range > bo->bytes - op.bo_offset)
+		if (!bo || op.bo_offset > bo->bytes || op.range > bo->bytes - op.bo_offset) {
+#if TGM_STATS
+			noteBind(TGM_BIND_REFUSED, op.va, op.range, bo, op.bo_offset,
+				 static_cast<uint8_t>(op.kind));
+#endif
 			return kIOReturnBadArgument;
-		unbindOverlaps(op.va, op.range, nullptr);
+		}
+		unbindOverlaps(op.va, op.range, nullptr, TGM_BIND_REPLACED);
 		if (nbinds_ == cap_binds_) {
 			const uint32_t cap = cap_binds_ ? cap_binds_ * 2 : 64;
 			Binding *grown = IONew(Binding, cap);
@@ -1626,11 +1658,19 @@ IOReturn AGXDeviceUserClient::vmBind(const TegraGM20BAbiVmBind *in, uint32_t cou
 		const int err = switch_gpu_vm_map(vm_, op.va, op.range, bo->mem, op.bo_offset,
 						   static_cast<uint8_t>(op.kind),
 						   static_cast<int>(bo->readOnly), &mapping);
+#if TGM_STATS
+		noteBind(err ? TGM_BIND_REFUSED : TGM_BIND_MAP, op.va, op.range, bo, op.bo_offset,
+			 static_cast<uint8_t>(op.kind));
+#endif
 		if (err)
 			return ioreturn(err);
 		const uint32_t at = switch_gpu_binding_upper(binds_, nbinds_, op.va);
 		memmove(&binds_[at + 1], &binds_[at], sizeof(Binding) * (nbinds_ - at));
+#if TGM_STATS
+		binds_[at] = {op.va, op.range, bo, op.bo_offset, mapping, static_cast<uint8_t>(op.kind)};
+#else
 		binds_[at] = {op.va, op.range, bo, op.bo_offset, mapping};
+#endif
 		++nbinds_;
 		tgm_stats_bind(1, op.range >> 12, nowNs() - start);
 	}
@@ -1758,6 +1798,11 @@ IOReturn AGXDeviceUserClient::channelDestroy(const TegraGM20BAbiChannel *in)
 {
 	if (!in->channel || in->channel > kMaxChannels || !chans_[in->channel - 1])
 		return kIOReturnBadArgument;
+#if TGM_STATS
+	tgm_chan *dying = chans_[in->channel - 1];
+	if (tgm_chan_error(dying) == 1 && tgm_chan_fault_va(dying))
+		describeFault(in->channel - 1, tgm_chan_fault_va(dying));
+#endif
 	hangHolder_ = current_thread();
 	tgm_chan_del(&chans_[in->channel - 1]);
 	hangHolder_ = nullptr;
@@ -2234,8 +2279,120 @@ IOReturn AGXDeviceUserClient::getStatus(const TegraGM20BAbiChannel *in, TegraGM2
 	out->submitted = tgm_chan_submitted(chan);
 	out->error = tgm_chan_error(chan);
 	out->fault_va = tgm_chan_fault_va(chan);
+#if TGM_STATS
+	if (out->error == 1 && out->fault_va)
+		describeFault(in->channel - 1, out->fault_va);
+#endif
 	return kIOReturnSuccess;
 }
+
+#if TGM_STATS
+static_assert(kMaxChannels == TGM_BIND_CHANNELS, "a note keeps each slot's submitted seqno");
+
+void AGXDeviceUserClient::noteBind(uint8_t op, uint64_t va, uint64_t range, const Bo *bo,
+				   uint64_t boOffset, uint8_t kind)
+{
+	tgm_bind_history *&history = bindHistory_[bindHalf(va)];
+	if (!history) {
+		history = IONew(tgm_bind_history, 1);
+		if (!history)
+			return;
+		history->written = 0;
+	}
+	tgm_bind_note n = {};
+	n.va = va;
+	n.range = range;
+	n.bo_offset = boOffset;
+	n.ns = nowNs();
+	n.op = op;
+	n.kind = kind;
+	if (bo) {
+		n.handle = bo->handle;
+		n.bo_bytes = bo->bytes;
+		n.origin = bo->wired     ? TGM_BIND_IMPORT
+			   : bo->chunked ? TGM_BIND_COMPRESSIBLE
+			   : bo->pool_va ? TGM_BIND_POOL
+					 : TGM_BIND_ALLOC;
+		n.surface = bo->coh ? tgm_coh_surface_id(bo->coh) : 0;
+	}
+	for (uint32_t i = 0; i < kMaxChannels; i++)
+		n.submitted[i] = chans_[i] ? tgm_chan_submitted(chans_[i]) : 0;
+	tgm_bind_note_add(history, &n);
+}
+
+// A binding beside a fault VA, for describeFault: where it lies and how far from the address.
+static void describeBinding(uint64_t va, uint64_t range, uint64_t handle, uint64_t bytes,
+			    uint64_t offset, uint8_t kind, uint64_t at, char *buf, size_t len)
+{
+	const uint64_t end = va + range;
+	char where[48] = "covering it";
+
+	if (at >= end)
+		snprintf(where, sizeof(where), "ending %llu KiB below it",
+			 (unsigned long long)((at - end) >> 10));
+	else if (at < va)
+		snprintf(where, sizeof(where), "starting %llu KiB above it",
+			 (unsigned long long)((va - at) >> 10));
+	snprintf(buf, len, "0x%llx+0x%llx of BO %llu (%llu bytes at 0x%llx), kind 0x%x, %s",
+		 (unsigned long long)va, (unsigned long long)range, (unsigned long long)handle,
+		 (unsigned long long)bytes, (unsigned long long)offset, kind, where);
+}
+
+// Once per kill of channel slot `slot` by an MMU fault at `va`, at its first GetStatus or its
+// ChannelDestroy (NVK reads the kill from the fence page and makes the channel again): what this
+// address space has around va now, and the maps and unmaps near it among the last TGM_BIND_NOTES.
+void AGXDeviceUserClient::describeFault(uint32_t slot, uint64_t va)
+{
+	const volatile auto *fence = reinterpret_cast<const volatile TegraGM20BAbiFence *>(
+		fence_va_ + static_cast<size_t>(slot) * 4);
+	const uint32_t failed = fence->killed_first, last = fence->killed_last;
+	if (describedKill_[slot] == last)
+		return;
+	describedKill_[slot] = last;
+	const uint32_t after = switch_gpu_binding_upper(binds_, nbinds_, va);
+	char sides[2][160] = {"none", "none"};
+	for (uint32_t side = 0; side < 2; side++) {
+		const Binding *b = side == 0 ? (after ? &binds_[after - 1] : nullptr)
+					     : (after < nbinds_ ? &binds_[after] : nullptr);
+		if (b)
+			describeBinding(b->va, b->range, b->bo->handle, b->bo->bytes, b->bo_offset,
+					b->kind, va, sides[side], sizeof(sides[side]));
+	}
+	IOLog("tegra-gm20b: %s channel %u fault VA 0x%llx (jobs %u-%u failed): %s; below: %s; "
+	      "above: %s\n",
+	      owner_, slot + 1, (unsigned long long)va, failed, last,
+	      switch_gpu_binding_find(binds_, nbinds_, va, 1) ? "bound now"
+							      : "nothing bound there now",
+	      sides[0], sides[1]);
+	const tgm_bind_history *history = bindHistory_[bindHalf(va)];
+	uint32_t near[16];
+	uint32_t n = 0;
+	if (history)
+		n = tgm_bind_history_near(history, va, TGM_BIND_SLACK, near,
+					  sizeof(near) / sizeof(near[0]));
+	// the newest few before the kill, then the first two after it (the driver's cleanup)
+	const uint64_t now = nowNs(), killed = tgm_chan_killed_ns(chans_[slot]);
+	uint32_t shownBefore = 0, shownAfter = 0;
+	for (uint32_t i = 0; i < n; i++) {
+		const tgm_bind_note &note = history->notes[near[i]];
+		const bool late = killed && note.ns > killed;
+		uint32_t &shown = late ? shownAfter : shownBefore;
+		if (shown == (late ? 2u : 6u))
+			continue;
+		shown++;
+		char line[256];
+		tgm_bind_note_format(line, sizeof(line), &note, now, killed, slot, failed);
+		IOLog("tegra-gm20b: fault VA 0x%llx: %s\n", (unsigned long long)va, line);
+	}
+	const uint32_t kept = !history			      ? 0u
+			      : history->written < TGM_BIND_NOTES ? history->written
+								  : TGM_BIND_NOTES;
+	IOLog("tegra-gm20b: fault VA 0x%llx: %u maps and unmaps near it among the last %u of its "
+	      "half of the address space, which go back %llu ms\n",
+	      (unsigned long long)va, n, kept,
+	      (unsigned long long)(history ? tgm_bind_history_span_ns(history, now) / 1000000 : 0));
+}
+#endif
 
 // CPU mappings (methods 12, 13): what io_connect_map_memory_into_task and io_connect_unmap_memory_from_task do for a
 // task mapping its own connection's memory (IOUserClient::mapClientMemory64 over clientMemoryForType, the same options,
