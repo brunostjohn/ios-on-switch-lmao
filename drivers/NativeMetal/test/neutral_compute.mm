@@ -22,7 +22,7 @@ static bool record(const NmbDirectKernel *kernel, void *context)
     auto compiler = raw::DirectNvk::find(native_bridge_metal_nvk_symbol);
     raw::ComputeRecord result;
     std::string why;
-    if (raw::directKernel(*kernel, compiler, test.name, result, why) != raw::Compiler::Outcome::Made) {
+    if (raw::directKernel(*kernel, compiler, test.name, result, why) != raw::CompileOutcome::Made) {
         fprintf(stderr, "%s: %s\n", test.name, why.c_str());
         return false;
     }

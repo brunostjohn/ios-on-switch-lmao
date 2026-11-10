@@ -75,13 +75,13 @@ inline NSMutableDictionary *computeRow(const std::string &line, uint64_t stack, 
     const auto found = cache.loadKernel(key, record, why);
     const auto outcome =
         found == raw::RecordCache::Found::Record
-            ? raw::Compiler::Outcome::Made
+            ? raw::CompileOutcome::Made
             : direct.kernel(probe::descriptor(shape, function), dispatch.dispatch(), dispatchKey, record, why);
-    row[@"status"] = outcome == raw::Compiler::Outcome::Made      ? @"made"
-                     : outcome == raw::Compiler::Outcome::Refused ? @"refused"
-                                                                  : @"failed";
+    row[@"status"] = outcome == raw::CompileOutcome::Made      ? @"made"
+                     : outcome == raw::CompileOutcome::Refused ? @"refused"
+                                                               : @"failed";
     row[@"reason"] = @(why.c_str());
-    if (outcome != raw::Compiler::Outcome::Made)
+    if (outcome != raw::CompileOutcome::Made)
         return row;
     const std::string relative = "raw-" + hex(stack) + "/" + hex(key.name()) + ".rec";
     raw::ComputeRecord loaded;

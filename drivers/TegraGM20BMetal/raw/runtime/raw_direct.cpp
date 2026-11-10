@@ -104,17 +104,17 @@ public:
 
     // Refused: a state the raw path does not draw from a record; Failed: NVK could not compile a stage. `split`: the fragment
     // stage's split too (split())
-    Compiler::Outcome compile(const NmbDirectState &state, uint32_t halfTargets, bool split, std::string &why)
+    CompileOutcome compile(const NmbDirectState &state, uint32_t halfTargets, bool split, std::string &why)
     {
         if (state.stageCount != 2) {
             why = std::to_string(state.stageCount) + " stages";
-            return Compiler::Outcome::Refused;
+            return CompileOutcome::Refused;
         }
         for (uint32_t k = 0; k < 2; k++) {
             const NmbDirectStage &s = state.stages[k];
             if (s.flags) {
                 why = "a stage made with flags " + hex(s.flags);
-                return Compiler::Outcome::Refused;
+                return CompileOutcome::Refused;
             }
             SubgroupSize subgroup;
             subgroup.size = s.subgroupSize;
@@ -141,11 +141,11 @@ public:
             const int32_t result = nvk::compileStage(nvk_, device_, info, made_[k]);
             if (result != 0) {
                 why = "NVK refused stage " + std::to_string(k) + " (VkResult " + std::to_string(result) + ")";
-                return Compiler::Outcome::Failed;
+                return CompileOutcome::Failed;
             }
             programs_[k] = programOf(made_[k]);
         }
-        return Compiler::Outcome::Made;
+        return CompileOutcome::Made;
     }
 
     const CapturedProgram &program(int k) const
@@ -368,9 +368,9 @@ bool DirectNvk::kernelComplete() const
     return complete() && samplerHeader && computeQmd && viewHeaderWord0;
 }
 
-Compiler::Outcome directRecord(const NmbDirectState &state, const DirectNvk &nvk, const PackRules &rules,
-                               const std::string &key, const std::vector<uint32_t> &attributes, RuntimeRecord &out,
-                               std::string &why, std::map<uint32_t, uint32_t> *registers, bool split)
+CompileOutcome directRecord(const NmbDirectState &state, const DirectNvk &nvk, const PackRules &rules,
+                            const std::string &key, const std::vector<uint32_t> &attributes, RuntimeRecord &out,
+                            std::string &why, std::map<uint32_t, uint32_t> *registers, bool split)
 {
     out = {};
     void *device = handle(state.device);
@@ -381,34 +381,34 @@ Compiler::Outcome directRecord(const NmbDirectState &state, const DirectNvk &nvk
     };
     if (const char *refused = qualifyStorage(state, storageHeader, storage)) {
         why = refused;
-        return Compiler::Outcome::Refused;
+        return CompileOutcome::Refused;
     }
     if (draw.pushHoles) {
         why = std::to_string(draw.pushHoles) + " push words m2v fills with addresses";
-        return Compiler::Outcome::Refused;
+        return CompileOutcome::Refused;
     }
     if (!validDynamicPush(state)) {
         why = "inconsistent dynamic state push placement";
-        return Compiler::Outcome::Refused;
+        return CompileOutcome::Refused;
     }
     Stages stages(nvk, device);
-    if (const Compiler::Outcome compiled =
+    if (const CompileOutcome compiled =
             stages.compile(state, halfFloatTargets(key), split && !storage.storageMask, why);
-        compiled != Compiler::Outcome::Made)
+        compiled != CompileOutcome::Made)
         return compiled;
     const uint32_t interlock = stages.emit(1).interlockControl;
     if (state.storageForm && !storage.shaderTests.flags &&
         !storageDepthQualified(key.c_str(), stages.emit(1).earlyFragmentTests, storage.storageTests)) {
         why = "storage form: depth/stencil requires a draw-qualified shader variant";
-        return Compiler::Outcome::Refused;
+        return CompileOutcome::Refused;
     }
     if (storage.storageSamples > 1 && !stages.emit(1).usesSampleShading) {
         why = "storage form: multisampled fetch requires per-sample shader invocations";
-        return Compiler::Outcome::Refused;
+        return CompileOutcome::Refused;
     }
     if (storage.storageMask ? !orderedStorageControl(interlock) : interlock != 0) {
         why = "storage form: compiled shader does not match the ordered attachment contract";
-        return Compiler::Outcome::Refused;
+        return CompileOutcome::Refused;
     }
     RecordParts parts;
     parts.storageMask = storage.storageMask;
@@ -425,7 +425,7 @@ Compiler::Outcome directRecord(const NmbDirectState &state, const DirectNvk &nvk
     parts.programs[0] = &stages.program(0);
     parts.programs[1] = &stages.program(1);
     if (!programsBindable(parts, why) || !layout(nvk, device, draw, parts.layout, why))
-        return Compiler::Outcome::Refused;
+        return CompileOutcome::Refused;
     parts.sizes16 = boundSizes(nvk, device, state.draws[1]);
     parts.sizes4096 = boundSizes(nvk, device, state.draws[2]);
     parts.residuals = residualWords(draw, state.draws[3]);
@@ -434,23 +434,23 @@ Compiler::Outcome directRecord(const NmbDirectState &state, const DirectNvk &nvk
         parts.vertexStride = uint16_t(draw.vertexStride & 0xFFF);
     }
     if (!emitted(key, stages, attributes, state.blended, rules, parts.regs, why))
-        return Compiler::Outcome::Refused;
+        return CompileOutcome::Refused;
     for (uint32_t i = 0; i < 32; i++)
         if (draw.pushMask >> i & 1)
             parts.push[kRootPush + 4 * i] = draw.push[i];
     parts.setBytes = draw.set0 ? uint16_t(nvk::setLayoutSize(nvk, device, draw.set0)) : 0;
     if (!assembleRecord(parts, key, rules, out, why))
-        return Compiler::Outcome::Refused;
+        return CompileOutcome::Refused;
     if (!usableStorageMetadata(out.pipeline, out.blob.data(), uint32_t(out.blob.size()))) {
         why = "storage form: assembled record lost its attachment contract";
-        return Compiler::Outcome::Refused;
+        return CompileOutcome::Refused;
     }
     if (registers)
         *registers = parts.regs;
     out.splitTried = split;
     if (split && !storage.storageMask)
         splitInto(nvk, stages.split(1), out);
-    return Compiler::Outcome::Made;
+    return CompileOutcome::Made;
 }
 
 }  // namespace raw

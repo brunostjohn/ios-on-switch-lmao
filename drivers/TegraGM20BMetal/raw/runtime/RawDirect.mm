@@ -30,7 +30,7 @@ struct Asked {
     std::map<uint32_t, uint32_t> *registers;
     bool split;
     std::string why;
-    Compiler::Outcome outcome = Compiler::Outcome::Failed;
+    CompileOutcome outcome = CompileOutcome::Failed;
 };
 
 bool made(const NmbDirectState *state, void *ctx)
@@ -45,7 +45,7 @@ struct AskedKernel {
     const std::string &key;
     ComputeRecord &out;
     std::string why;
-    Compiler::Outcome outcome = Compiler::Outcome::Failed;
+    CompileOutcome outcome = CompileOutcome::Failed;
 };
 
 bool madeKernel(const NmbDirectKernel *kernel, void *ctx)
@@ -69,9 +69,9 @@ Direct::Direct(PackRules rules, bool rankArtifacts)
             native_bridge_metal_nvk_symbol("switch_nvk_compile_ranked_stage") : nullptr;
 }
 
-Compiler::Outcome Direct::form(MTLRenderPipelineDescriptor *descriptor, bool barrier, ProbeTextures textures,
-                               const std::string &key, const std::vector<uint32_t> &attributes, RuntimeRecord &out,
-                               std::string &why, std::map<uint32_t, uint32_t> *registers, bool split)
+CompileOutcome Direct::form(MTLRenderPipelineDescriptor *descriptor, bool barrier, ProbeTextures textures,
+                            const std::string &key, const std::vector<uint32_t> &attributes, RuntimeRecord &out,
+                            std::string &why, std::map<uint32_t, uint32_t> *registers, bool split)
 {
     Asked a = {nvk_, rules_, key, attributes, out, registers, split, {}};
     std::vector<NmbDirectCubicSampler> cubic;
@@ -87,36 +87,36 @@ Compiler::Outcome Direct::form(MTLRenderPipelineDescriptor *descriptor, bool bar
                                            textures.cubic.empty() && !textures.fragmentTests ? nullptr : &binds, made,
                                            &a, &refused)) {
         why = std::string("m2v refused its translation: ") + (refused ? refused : "");
-        return refused && !strncmp(refused, "retry: ", 7) ? Compiler::Outcome::Failed : Compiler::Outcome::Refused;
+        return refused && !strncmp(refused, "retry: ", 7) ? CompileOutcome::Failed : CompileOutcome::Refused;
     }
     why = a.why;
     return a.outcome;
 }
 
-Compiler::Outcome Direct::make(MTLRenderPipelineDescriptor *descriptor, const std::string &key, RuntimeRecord &out,
-                               std::string &why, ProbeTextures textures, std::map<uint32_t, uint32_t> *registers,
-                               bool split, PackForm requested)
+CompileOutcome Direct::make(MTLRenderPipelineDescriptor *descriptor, const std::string &key, RuntimeRecord &out,
+                            std::string &why, ProbeTextures textures, std::map<uint32_t, uint32_t> *registers,
+                            bool split, PackForm requested)
 {
     if (!native_bridge_metal_render_direct || !nvk_.complete()) {
         why = nvk_.compileStage && !nvk_.abiMatches ? "NVK's switch_nvk_compile structs are not raw_direct.cpp's"
                                                     : "the frontend or NVK has no direct compile";
-        return Compiler::Outcome::Failed;
+        return CompileOutcome::Failed;
     }
     std::vector<uint32_t> attributes;
     for (MTLVertexAttribute *a in descriptor.vertexFunction.vertexAttributes)
         if (a.isActive)
             attributes.push_back(uint32_t(a.attributeIndex));
     if (requested == PackForm::Barrier) {
-        const Compiler::Outcome outcome = form(descriptor, true, textures, key, attributes, out, why, registers, split);
-        if (outcome == Compiler::Outcome::Made)
+        const CompileOutcome outcome = form(descriptor, true, textures, key, attributes, out, why, registers, split);
+        if (outcome == CompileOutcome::Made)
             out.pipeline.flags |= PipelineBarrierForm;
         return outcome;
     }
-    Compiler::Outcome outcome = form(descriptor, false, textures, key, attributes, out, why, registers, split);
-    if (outcome != Compiler::Outcome::Refused || why.rfind("storage form", 0) != 0)
+    CompileOutcome outcome = form(descriptor, false, textures, key, attributes, out, why, registers, split);
+    if (outcome != CompileOutcome::Refused || why.rfind("storage form", 0) != 0)
         return outcome;
     outcome = form(descriptor, true, textures, key, attributes, out, why, registers, split);
-    if (outcome == Compiler::Outcome::Made)
+    if (outcome == CompileOutcome::Made)
         out.pipeline.flags |= PipelineBarrierForm;
     return outcome;
 }
@@ -157,18 +157,18 @@ const NmbDirectDispatch &KernelDispatch::dispatch()
     return dispatch_;
 }
 
-Compiler::Outcome Direct::kernel(MTLComputePipelineDescriptor *descriptor, const NmbDirectDispatch &dispatch,
-                                 const std::string &key, ComputeRecord &out, std::string &why)
+CompileOutcome Direct::kernel(MTLComputePipelineDescriptor *descriptor, const NmbDirectDispatch &dispatch,
+                              const std::string &key, ComputeRecord &out, std::string &why)
 {
     if (!native_bridge_metal_compute_direct || !nvk_.kernelComplete()) {
         why = "the frontend or NVK has no direct compile of kernels";
-        return Compiler::Outcome::Failed;
+        return CompileOutcome::Failed;
     }
     AskedKernel a = {nvk_, key, out, {}};
     const char *refused = nullptr;
     if (!native_bridge_metal_compute_direct(descriptor, &dispatch, madeKernel, &a, &refused)) {
         why = std::string("m2v refused its translation: ") + (refused ? refused : "");
-        return refused && !strncmp(refused, "retry: ", 7) ? Compiler::Outcome::Failed : Compiler::Outcome::Refused;
+        return refused && !strncmp(refused, "retry: ", 7) ? CompileOutcome::Failed : CompileOutcome::Refused;
     }
     why = a.why;
     return a.outcome;

@@ -19,8 +19,8 @@ exports_files(glob(
     exclude = ["BUILD.bazel"],
 ))
 
-# The raw GM20B path: its runtime (compiled into the plugin), its pack generator, and every source its stack key hashes
-# (every .h/.c/.cpp/.mm/.py/.inc/.metal below raw/, the old build's raw_stack()).
+# The raw GM20B path: its runtime (compiled into the plugin), its pack generator, and the sources its stack key hashes
+# (raw_stack_sources).
 filegroup(
     name = "raw_runtime_headers",
     srcs = glob([
@@ -58,7 +58,8 @@ filegroup(
     ],
 )
 
-# The raw runtime's sources the pack generator's directpack.mm makes records with (raw/pack/rawpack.py DIRECT_RUNTIME)
+# The raw runtime's sources the pack generator's directpack.mm and native_seed.mm make records with (raw/pack/rawpack.py
+# DIRECT_RUNTIME), as the plugin makes its own
 filegroup(
     name = "raw_direct_sources",
     srcs = [
@@ -74,8 +75,9 @@ filegroup(
         "raw/runtime/raw_cache.h",
         "raw/runtime/raw_cache_io.h",
         "raw/runtime/raw_kernel_cache.cpp",
-        "raw/runtime/raw_compiler.h",
+        "raw/runtime/raw_compute_key.h",
         "raw/runtime/raw_compute_record.h",
+        "raw/runtime/raw_cubic.h",
         "raw/runtime/raw_direct.cpp",
         "raw/runtime/raw_direct.h",
         "raw/runtime/raw_direct_compute.cpp",
@@ -83,23 +85,73 @@ filegroup(
         "raw/runtime/raw_direct_nvk.h",
         "raw/runtime/raw_direct_push.h",
         "raw/runtime/raw_dynamic_push.h",
-        "raw/runtime/raw_shader_test_push.h",
         "raw/runtime/raw_direct_storage.h",
         "raw/runtime/raw_storage.h",
         "raw/runtime/raw_split_metadata.h",
         "raw/runtime/raw_emit.cpp",
         "raw/runtime/raw_emit.h",
+        "raw/runtime/raw_metallib.cpp",
+        "raw/runtime/raw_metallib.h",
+        "raw/runtime/raw_owned.h",
         "raw/runtime/raw_sample_shading.h",
         "raw/runtime/raw_pack.cpp",
+        "raw/runtime/raw_pack.h",
         "raw/runtime/raw_record.h",
         "raw/runtime/raw_record_parts.cpp",
         "raw/runtime/raw_record_parts.h",
+        "raw/runtime/raw_residual.h",
     ],
 )
 
+# The pack generator but ca/, which only picks the states the pack makes and writes each as a corpus line: a line names
+# its state's key and everything its record is made from, so no ca/ edit changes the bytes behind a key.
+filegroup(
+    name = "raw_pack_records",
+    srcs = glob(
+        ["raw/pack/**"],
+        exclude = [
+            "raw/pack/ca/**",
+            "**/*_test.py",
+            "**/__pycache__/**",
+            "**/*.pyc",
+            "**/.DS_Store",
+            "**/.clang-format",
+        ],
+    ) + [
+        "raw/fx/test/twod_sim.h",  # the 2D engine nvdec executes (pack/nvdec.cpp)
+        "raw/runtime/raw_srgb_table.h",  # the colour table pack/layouts.py recognises
+    ],
+)
+
+# What the raw path's records, pack entries and native seed records are made by, as //gpu:raw_stack hashes it: the shader
+# tools build the raw pack's tools from exactly these files (//gpu/seed:local_tools), and the plugin makes and reads its
+# records with the same units. raw_stack checks that each unit here includes nothing else; tools/gpu/raw_stack_test.py
+# that the generator builds and reads nothing else.
 filegroup(
     name = "raw_stack_sources",
-    srcs = glob(["raw/**/*.%s" % suffix for suffix in ("h", "c", "cpp", "mm", "py", "metal")]),
+    srcs = [
+        ":raw_direct_sources",
+        ":raw_pack_records",
+        "//drivers/NativeMetal:NativeBridgeMetalFrontend.mm",
+        "//drivers/NativeMetal:frontend_headers",
+        "//drivers/TegraGM20B:TegraGM20BABI.h",
+        "//drivers/TegraGM20B:TegraGM20BLayout.h",
+        "//kits/SwitchRefusal:SwitchRefusal.h",
+        "//kits/SwitchRefusal:SwitchRefusalSite.h",
+    ],
+)
+
+# Every file below raw/: what raw_stack_test.py looks the generator's file names up in
+filegroup(
+    name = "raw_tree",
+    srcs = glob(
+        ["raw/**"],
+        exclude = [
+            "**/__pycache__/**",
+            "**/*.pyc",
+            "**/.DS_Store",
+        ],
+    ),
 )
 
 # The GPU context-switch stress and fetch readback (raw/test/fetchform.cpp): debug boot packages stage it at

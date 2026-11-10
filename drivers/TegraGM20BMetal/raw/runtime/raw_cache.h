@@ -18,9 +18,10 @@
 
 namespace raw {
 
-// What a made record depends on: the build (its stack key hashes the pack, m2v, NVK and NAK, the frontend and the raw path's own
-// sources, so a new compiler or pack is a new stack), the functions' AIR (their metallib HASH tags: SHA-256 of each one's bitcode)
-// and the state's key (every descriptor field and function constant the probe draws with)
+// What a made record depends on: the build (its stack key hashes what records are made and read by: the pack generator, m2v, NVK
+// and NAK, the frontend and the raw runtime's direct compile and codecs, so a new compiler or pack generator is a new stack), the
+// functions' AIR (their metallib HASH tags: SHA-256 of each one's bitcode) and the state's key (every descriptor field and function
+// constant the probe draws with)
 struct CacheKey {
     uint64_t stack = 0;
     uint8_t vertexAir[32] = {}, fragmentAir[32] = {};

@@ -157,7 +157,7 @@ int main(int argc, char **argv)
             std::fill(bytes.begin(), bytes.end(), 0);
             const auto b = direct.kernel(descriptor, dispatch.dispatch(), "artifact seed", restored, why);
             raw::CacheKey cacheKey;
-            check(a == raw::Compiler::Outcome::Made && b == raw::Compiler::Outcome::Made &&
+            check(a == raw::CompileOutcome::Made && b == raw::CompileOutcome::Made &&
                       raw::encodeKernelEntry(cacheKey, &compiled, "") == raw::encodeKernelEntry(cacheKey, &restored, ""),
                   "imported native dispatch exact after source payload is overwritten");
             objc_setAssociatedObject(descriptor, &computeArtifactKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);

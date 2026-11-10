@@ -58,16 +58,16 @@ struct Writer {
 };
 
 // The record's head; false: no more follows (it was not made)
-bool head(Writer &w, const char *tag, const std::string &key, raw::Compiler::Outcome outcome, const std::string &why)
+bool head(Writer &w, const char *tag, const std::string &key, raw::CompileOutcome outcome, const std::string &why)
 {
     fwrite(tag, 1, 4, w.f);
-    w.u32(outcome == raw::Compiler::Outcome::Made ? 0 : outcome == raw::Compiler::Outcome::Refused ? 1 : 2);
+    w.u32(outcome == raw::CompileOutcome::Made ? 0 : outcome == raw::CompileOutcome::Refused ? 1 : 2);
     w.text(key);
     w.text(why);
-    return outcome == raw::Compiler::Outcome::Made;
+    return outcome == raw::CompileOutcome::Made;
 }
 
-void record(Writer &w, const std::string &key, raw::Compiler::Outcome outcome, const std::string &why,
+void record(Writer &w, const std::string &key, raw::CompileOutcome outcome, const std::string &why,
             const raw::RuntimeRecord &rec, const std::map<uint32_t, uint32_t> &registers)
 {
     if (!head(w, "DREC", key, outcome, why))
@@ -96,7 +96,7 @@ void record(Writer &w, const std::string &key, raw::Compiler::Outcome outcome, c
     }
 }
 
-void kernel(Writer &w, const std::string &key, raw::Compiler::Outcome outcome, const std::string &why,
+void kernel(Writer &w, const std::string &key, raw::CompileOutcome outcome, const std::string &why,
             const raw::ComputeRecord &rec)
 {
     if (!head(w, "DKRN", key, outcome, why))
@@ -149,10 +149,10 @@ int main(int argc, char **argv)
                              raw::RuntimeRecord rec;
                              std::map<uint32_t, uint32_t> registers;
                              std::string why;
-                             const raw::Compiler::Outcome outcome =
+                             const raw::CompileOutcome outcome =
                                  direct.make(s.d, s.key, rec, why, probe::probeTextures(line, ours), &registers, true);
                              record(w, s.key, outcome, why, rec, registers);
-                             if (outcome == raw::Compiler::Outcome::Made &&
+                             if (outcome == raw::CompileOutcome::Made &&
                                  (rec.pipeline.flags & raw::PipelineStorageMetadata)) {
                                  raw::RuntimeRecord barrier;
                                  std::map<uint32_t, uint32_t> barrierRegisters;
@@ -162,10 +162,10 @@ int main(int argc, char **argv)
                                                  &barrierRegisters, true, raw::PackForm::Barrier);
                                  record(w, s.key, barrierOutcome, barrierWhy, barrier, barrierRegisters);
                              }
-                             split += outcome == raw::Compiler::Outcome::Made && rec.split;
-                             (outcome == raw::Compiler::Outcome::Made      ? made
-                              : outcome == raw::Compiler::Outcome::Refused ? refused
-                                                                           : failed)++;
+                             split += outcome == raw::CompileOutcome::Made && rec.split;
+                             (outcome == raw::CompileOutcome::Made      ? made
+                              : outcome == raw::CompileOutcome::Refused ? refused
+                                                                        : failed)++;
                          });
         uint32_t kernels[3] = {};
         probe::eachKernel(
@@ -175,7 +175,7 @@ int main(int argc, char **argv)
                 probe::dispatchOf(k.shape, k.shape.threads, k.textures, ask);
                 raw::ComputeRecord rec;
                 std::string why;
-                const raw::Compiler::Outcome outcome = direct.kernel(k.descriptor, ask->dispatch(), k.key, rec, why);
+                const raw::CompileOutcome outcome = direct.kernel(k.descriptor, ask->dispatch(), k.key, rec, why);
                 kernel(w, k.key, outcome, why, rec);
                 kernels[uint32_t(outcome)]++;
             },

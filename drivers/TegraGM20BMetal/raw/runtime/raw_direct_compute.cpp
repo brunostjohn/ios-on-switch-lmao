@@ -178,7 +178,7 @@ void attachResiduals(const NmbDirectKernel &k, std::vector<PackKernelEntry> &ent
     }
 }
 
-Compiler::Outcome compile(const NmbDirectKernel &k, const DirectNvk &nvk, Compiled &made, std::string &why)
+CompileOutcome compile(const NmbDirectKernel &k, const DirectNvk &nvk, Compiled &made, std::string &why)
 {
     SubgroupSize subgroup;
     subgroup.size = k.stage.subgroupSize;
@@ -202,17 +202,17 @@ Compiler::Outcome compile(const NmbDirectKernel &k, const DirectNvk &nvk, Compil
                                k.stage.portable};
     if (k.stage.stage != kComputeStage) {
         why = "a stage of VkShaderStageFlags " + std::to_string(k.stage.stage);
-        return Compiler::Outcome::Refused;
+        return CompileOutcome::Refused;
     }
     if (const int32_t result = nvk::compileStage(nvk, handle(k.device), info, made.stage); result != 0) {
         why = "NVK refused the kernel (VkResult " + std::to_string(result) + ")";
-        return Compiler::Outcome::Failed;
+        return CompileOutcome::Failed;
     }
     if (made.stage.cbufCount > kCbufs) {
         why = std::to_string(made.stage.cbufCount) + " constant buffers";
-        return Compiler::Outcome::Refused;
+        return CompileOutcome::Refused;
     }
-    return Compiler::Outcome::Made;
+    return CompileOutcome::Made;
 }
 
 // What sends a kernel's dispatch to no record
@@ -232,33 +232,33 @@ bool recordable(const NmbDirectKernel &k, std::string &why)
 
 }  // namespace
 
-Compiler::Outcome directKernel(const NmbDirectKernel &k, const DirectNvk &nvk, const std::string &key,
-                               ComputeRecord &out, std::string &why)
+CompileOutcome directKernel(const NmbDirectKernel &k, const DirectNvk &nvk, const std::string &key, ComputeRecord &out,
+                            std::string &why)
 {
     out = {};
     if (!recordable(k, why))
-        return Compiler::Outcome::Refused;
+        return CompileOutcome::Refused;
     Compiled made(nvk, handle(k.device));
-    if (const Compiler::Outcome compiled = compile(k, nvk, made, why); compiled != Compiler::Outcome::Made)
+    if (const CompileOutcome compiled = compile(k, nvk, made, why); compiled != CompileOutcome::Made)
         return compiled;
     Entries entries(k, nvk, out);
     for (uint32_t i = 0; i < k.writeCount; i++)
         if (!entries.add(k.writes[i], why))
-            return Compiler::Outcome::Refused;
+            return CompileOutcome::Refused;
     std::stable_sort(entries.entries.begin(), entries.entries.end(),
                      [](const PackKernelEntry &a, const PackKernelEntry &b) {
                          return a.offset < b.offset;
                      });
     if (entries.entries.size() > kEntries) {
         why = std::to_string(entries.entries.size()) + " set-0 entries";
-        return Compiler::Outcome::Refused;
+        return CompileOutcome::Refused;
     }
     attachResiduals(k, entries.entries);
     PackKernel &r = out.kernel;
     r.setBytes = k.set0 ? uint16_t(nvk::setLayoutSize(nvk, handle(k.device), k.set0)) : 0;
     if (!nvk::computeQmd(nvk, handle(k.device), made.stage, r.setBytes, r.qmd)) {
         why = "a kernel reading a constant buffer the raw path does not bind";
-        return Compiler::Outcome::Refused;
+        return CompileOutcome::Refused;
     }
     clearDispatchWords(r.qmd);
     r.keyHash = computeKeyHash(key);
@@ -285,7 +285,7 @@ Compiler::Outcome directKernel(const NmbDirectKernel &k, const DirectNvk &nvk, c
     std::copy(made.stage.cbufTypes, made.stage.cbufTypes + made.stage.cbufCount, out.cbufType);
     out.cbufs = uint8_t(made.stage.cbufCount);
     out.keyString = key;
-    return Compiler::Outcome::Made;
+    return CompileOutcome::Made;
 }
 
 }  // namespace raw

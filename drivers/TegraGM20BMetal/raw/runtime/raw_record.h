@@ -19,6 +19,14 @@ struct ProbeSubmission;
 
 namespace raw {
 
+// What making a state's or a kernel's record came to (Compiler::Outcome). Here and not in raw_compiler.h: the record makers
+// include no part of the compile scheduler, which the raw stack key does not hash.
+enum class CompileOutcome : uint8_t {
+    Made,
+    Refused,  // the state's own reason (kept on disk: the same probe would refuse it again)
+    Failed    // the probe could not run (not kept: a later process may)
+};
+
 // A program as a record holds it
 struct CapturedProgram {
     std::string id;  // nvdec's name: the FNV-1a of its header, code and data

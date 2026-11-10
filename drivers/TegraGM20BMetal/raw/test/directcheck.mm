@@ -78,23 +78,22 @@ int main(int argc, char **argv)
                 raw::RuntimeRecord rec;
                 std::string why;
                 const auto began = std::chrono::steady_clock::now();
-                const raw::Compiler::Outcome outcome = direct.make(s.d, s.key, rec, why, textures, nullptr, true);
+                const raw::CompileOutcome outcome = direct.make(s.d, s.key, rec, why, textures, nullptr, true);
                 ms += std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - began).count();
                 std::string verdict;
-                if (outcome == raw::Compiler::Outcome::Failed) {
+                if (outcome == raw::CompileOutcome::Failed) {
                     verdict = " failed (" + why + ")";
                 } else if (pp) {
-                    verdict = outcome == raw::Compiler::Outcome::Made
-                                  ? recordcompare::differences(pack, *pp, rec) +
-                                        recordcompare::splitDifferences(pack, *pp, rec)
-                                  : " refused (" + why + ")";
+                    verdict = outcome == raw::CompileOutcome::Made ? recordcompare::differences(pack, *pp, rec) +
+                                                                         recordcompare::splitDifferences(pack, *pp, rec)
+                                                                   : " refused (" + why + ")";
                     splits += verdict.empty() && rec.split;
                     (barrier ? barriers : same) += verdict.empty();
                     if (met && verdict.empty())
                         fprintf(met, "%016llx %u\n", (unsigned long long)pp->keyHash,
                                 pp->flags & raw::PipelineBarrierForm);
                 } else {
-                    verdict = outcome == raw::Compiler::Outcome::Made ? " made, and the pack set it aside" : "";
+                    verdict = outcome == raw::CompileOutcome::Made ? " made, and the pack set it aside" : "";
                     refused += verdict.empty();
                     if (verdict.empty()) {
                         reasons[why.substr(0, 90)]++;
