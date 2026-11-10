@@ -17,6 +17,9 @@ static void checkFetch(RMRenderEncoder *e, MTLPrimitiveType type, NSUInteger cou
                           {uint32_t(type), uint32_t(count), uint32_t(instances), indirect});
     if (refusal == raw::FetchRefusal::None)
         return;
+#if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
+    gRM->raw->stats.fetch.refusedAtRecord[size_t(refusal)]++;
+#endif
     [e->_cb takeReason:WhyEncode why:@(raw::fetchRefusalWhy(refusal))];
     hit(e->_cb, PredEncGeometry, type, uint32_t(count) | uint64_t(uint32_t(instances)) << 32);
 }

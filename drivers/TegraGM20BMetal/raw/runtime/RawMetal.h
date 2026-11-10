@@ -34,6 +34,9 @@ bool raw_metal_linked_packable(MTLRenderPipelineDescriptor *descriptor);
 // draws, passes, copies, waits, memory; and the states the runtime made since the device opened (states=<records from the
 // cache>/<probes>/<refused>/<failed>/<ms making them>). The plugin logs it every 5 s with the m2v line (TEGRA_M2V_TELEMETRY).
 size_t raw_metal_rates(char *out, size_t size);
+// Debug builds: one line of the fetching draws since the previous call (0 when there were none), by how each kept raster
+// order (raw_fetch_order.h FetchCounts). The plugin logs it after the rates line.
+size_t raw_metal_fetch_rates(char *out, size_t size);
 // Host tests: the CPU's view of the image the raw path samples for `texture` (a planar texture's converted image), its row pitch
 // in *pitch; null when the raw path holds none.
 const void *raw_metal_texture_image(id<MTLTexture> texture, size_t *pitch);
