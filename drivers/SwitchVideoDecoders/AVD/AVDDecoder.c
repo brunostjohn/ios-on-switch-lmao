@@ -356,9 +356,9 @@ static OSStatus startVP9(Decoder *d, VTVideoDecoderSession session, CMVideoForma
     }
     d->width = (uint32_t)size.width;
     d->height = (uint32_t)size.height;
-    d->matrix = switch_video_color_tag(format, kCMFormatDescriptionExtension_YCbCrMatrix, v ? v[9] : 2, 0);
-    d->primaries = switch_video_color_tag(format, kCMFormatDescriptionExtension_ColorPrimaries, v ? v[7] : 2, 1);
-    d->transfer = switch_video_color_tag(format, kCMFormatDescriptionExtension_TransferFunction, v ? v[8] : 2, 2);
+    d->matrix = switch_video_color_tag(format, kCMFormatDescriptionExtension_YCbCrMatrix, v ? v[9] : 2, 0, d->height);
+    d->primaries = switch_video_color_tag(format, kCMFormatDescriptionExtension_ColorPrimaries, v ? v[7] : 2, 1, 0);
+    d->transfer = switch_video_color_tag(format, kCMFormatDescriptionExtension_TransferFunction, v ? v[8] : 2, 2, 0);
     d->chromaTop = switch_video_chroma_tag(format, kCMFormatDescriptionExtension_ChromaLocationTopField, false, 0);
     d->chromaBottom = switch_video_chroma_tag(format, kCMFormatDescriptionExtension_ChromaLocationBottomField, false, 0);
     OSStatus status;
@@ -422,10 +422,12 @@ static OSStatus startHEVC(Decoder *d, VTVideoDecoderSession session, CMVideoForm
     d->width = (uint32_t)(sps->width - sps->crop_left - sps->crop_right);
     d->height = (uint32_t)(sps->height - sps->crop_top - sps->crop_bottom);
     const bool vui = sps->colour_description;
-    d->matrix = switch_video_color_tag(format, kCMFormatDescriptionExtension_YCbCrMatrix, vui ? sps->matrix : 2, 0);
+    d->matrix =
+        switch_video_color_tag(format, kCMFormatDescriptionExtension_YCbCrMatrix, vui ? sps->matrix : 2, 0, d->height);
     d->primaries =
-        switch_video_color_tag(format, kCMFormatDescriptionExtension_ColorPrimaries, vui ? sps->colour_primaries : 2, 1);
-    d->transfer = switch_video_color_tag(format, kCMFormatDescriptionExtension_TransferFunction, vui ? sps->transfer : 2, 2);
+        switch_video_color_tag(format, kCMFormatDescriptionExtension_ColorPrimaries, vui ? sps->colour_primaries : 2, 1, 0);
+    d->transfer =
+        switch_video_color_tag(format, kCMFormatDescriptionExtension_TransferFunction, vui ? sps->transfer : 2, 2, 0);
     d->chromaTop = switch_video_chroma_tag(format, kCMFormatDescriptionExtension_ChromaLocationTopField,
                                            sps->chroma_location, sps->chroma_top);
     d->chromaBottom = switch_video_chroma_tag(format, kCMFormatDescriptionExtension_ChromaLocationBottomField,
@@ -473,10 +475,12 @@ static OSStatus startSession(VTVideoDecoderRef ref, VTVideoDecoderSession sessio
     const bool vui = sps->colour_description;
     d->pixelFormat = sps->full_range ? kCVPixelFormatType_420YpCbCr8BiPlanarFullRange
                                      : kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange;
-    d->matrix = switch_video_color_tag(format, kCMFormatDescriptionExtension_YCbCrMatrix, vui ? sps->matrix : 2, 0);
+    d->matrix =
+        switch_video_color_tag(format, kCMFormatDescriptionExtension_YCbCrMatrix, vui ? sps->matrix : 2, 0, d->height);
     d->primaries =
-        switch_video_color_tag(format, kCMFormatDescriptionExtension_ColorPrimaries, vui ? sps->colour_primaries : 2, 1);
-    d->transfer = switch_video_color_tag(format, kCMFormatDescriptionExtension_TransferFunction, vui ? sps->transfer : 2, 2);
+        switch_video_color_tag(format, kCMFormatDescriptionExtension_ColorPrimaries, vui ? sps->colour_primaries : 2, 1, 0);
+    d->transfer =
+        switch_video_color_tag(format, kCMFormatDescriptionExtension_TransferFunction, vui ? sps->transfer : 2, 2, 0);
     d->chromaTop = switch_video_chroma_tag(format, kCMFormatDescriptionExtension_ChromaLocationTopField,
                                            sps->chroma_location, sps->chroma_top);
     d->chromaBottom = switch_video_chroma_tag(format, kCMFormatDescriptionExtension_ChromaLocationBottomField,
