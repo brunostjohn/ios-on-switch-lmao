@@ -2250,6 +2250,28 @@ extern "C" int native_bridge_metal_render_pipeline_ready(id pipeline, void (^obs
     return nbasync::observe(making, std::move(notify));
 }
 
+// A committed raw command buffer waits for this state: observed as _ready does, and made on `queue` at once
+extern "C" int native_bridge_metal_render_pipeline_urge(id pipeline, void (^observer)(void), dispatch_queue_t queue)
+{
+    if (![pipeline isKindOfClass:[NBRenderPipeline class]])
+        return -1;
+    NBRenderPipeline *state = pipeline;
+    const auto making = state.making;
+    if (!making)
+        return state.handle ? 1 : -1;
+    std::function<void()> notify;
+    if (observer)
+        notify = [observer] {
+            observer();
+        };
+    const int status = nbasync::claim(making, std::move(notify));
+    if (!status)
+        dispatch_async(queue, ^{
+            nbasync::urge(making);
+        });
+    return status;
+}
+
 // `call` on a global queue of the caller's class (the completion-handler API, which calls back there; not the workers, whose
 // creations would hold it), or here with NMB_ASYNC_PSO_API=0.
 static void asyncCall(void (^call)(void))

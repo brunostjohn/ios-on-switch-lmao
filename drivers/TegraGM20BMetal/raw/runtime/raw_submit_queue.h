@@ -13,15 +13,18 @@ template <typename Key, typename Value> class SubmitQueue {
     struct Entry {
         Value value;
         bool committed = false;
+        bool held = false;
     };
 
     struct Queue {
         Key key;
         std::deque<Entry> entries;
+        bool held = false;
     };
 
     std::list<Queue> queues_;
     size_t size_ = 0;
+    size_t heldQueues_ = 0;
 
 public:
     void reserve(Key key, Value value)
@@ -37,7 +40,9 @@ public:
                 unused = &q;
         }
         if (unused) {
+            heldQueues_ -= unused->held;
             unused->key = key;
+            unused->held = false;
             unused->entries.push_back({value});
         } else {
             queues_.push_back({key, {{value}}});
@@ -90,6 +95,43 @@ public:
             return true;
         }
         return false;
+    }
+
+    // The queue's head waits for what Metal's scheduler never waits for (a shared event its GPU waits for, a pipeline Metal
+    // compiled when it was made): it and every job committed behind it count as scheduled. `held`: those not held before.
+    void hold(Key key, std::vector<Value> &held)
+    {
+        for (Queue &q : queues_)
+            if (q.key == key) {
+                heldQueues_ += !q.held;
+                q.held = true;
+                for (Entry &e : q.entries)
+                    if (e.committed && !e.held) {
+                        e.held = true;
+                        held.push_back(e.value);
+                    }
+                return;
+            }
+    }
+
+    // The queue's head goes on: `released`, the jobs its hold held
+    void release(Key key, std::vector<Value> &released)
+    {
+        if (!heldQueues_)
+            return;
+        for (Queue &q : queues_)
+            if (q.key == key) {
+                if (!q.held)
+                    return;
+                --heldQueues_;
+                q.held = false;
+                for (Entry &e : q.entries)
+                    if (e.held) {
+                        e.held = false;
+                        released.push_back(e.value);
+                    }
+                return;
+            }
     }
 
     // A partially submitted job retains its queue reservation while other queues get a scheduling opportunity.

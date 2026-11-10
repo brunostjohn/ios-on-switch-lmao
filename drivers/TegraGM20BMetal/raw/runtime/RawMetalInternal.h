@@ -58,6 +58,8 @@ extern "C" id native_bridge_metal_render_pipeline_lazy(id device, id descriptor,
     __attribute__((weak_import));
 extern "C" int native_bridge_metal_render_pipeline_ready(id pipeline, void (^observer)(void))
     __attribute__((weak_import));
+extern "C" int native_bridge_metal_render_pipeline_urge(id pipeline, void (^observer)(void), dispatch_queue_t queue)
+    __attribute__((weak_import));
 // Where NVK keeps a texture's texels (a stored depth/stencil texture the raw path renders and copies in place)
 struct switch_nvk_image_memory;
 extern "C" int native_bridge_metal_texture_memory(id texture, struct switch_nvk_image_memory *out)

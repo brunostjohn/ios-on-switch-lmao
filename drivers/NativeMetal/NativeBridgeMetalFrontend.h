@@ -52,6 +52,9 @@ id native_bridge_metal_texture_tiled_in_place(id buffer, id descriptor, NSUInteg
 // state it draws itself.
 id native_bridge_metal_render_pipeline_lazy(id device, id descriptor, NSUInteger options);
 int native_bridge_metal_render_pipeline_ready(id pipeline, void (^observer)(void));
+// As _ready, for a state a committed command buffer waits for: it is made on `queue` at once, ahead of the workers' queue,
+// unless a worker is making it already, which then runs at that queue's class (AsyncPipelines.h claim, urge).
+int native_bridge_metal_render_pipeline_urge(id pipeline, void (^observer)(void), dispatch_queue_t queue);
 // The metallib a function of this device was made from: its library, which keeps `bytes` while it lives; nil when the
 // function has none (the raw path names a function's AIR by its entry there).
 id native_bridge_metal_function_metallib(id function, const void **bytes, size_t *length);

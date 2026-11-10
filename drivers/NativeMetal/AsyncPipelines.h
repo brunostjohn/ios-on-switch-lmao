@@ -1,5 +1,6 @@
 // Render pipeline compilation uses bounded workers and per-state completion observers. The native command scheduler
-// treats a pending pipeline as a dependency; it never submits a pass with missing draws. Direct bridge callers retain
+// treats a pending pipeline as a dependency; it never submits a pass with missing draws, and has the one a committed
+// command buffer waits for made at once at its class (urge). Direct bridge callers retain
 // synchronous set semantics, with an explicit error on failure or timeout. Lazy compatibility states start only on need.
 #pragma once
 #import <Foundation/Foundation.h>
@@ -113,7 +114,8 @@ struct Making {
     uint64_t asked = 0;
     pthread_t runner = nullptr;  // the thread making it, once one does
     qos_class_t runnerClass = QOS_CLASS_UNSPECIFIED;
-    __strong id result = nil;  // the state the synchronous path made
+    pthread_override_t urged = nullptr;  // urge()'s class on the runner, until the state is made
+    __strong id result = nil;            // the state the synchronous path made
     std::function<id(NSString **failure)> work;
     std::string label;
     std::vector<std::function<void()>> observers;
@@ -145,12 +147,17 @@ inline bool run(const std::shared_ptr<Making> &m)
             NSLog(@"native-metal: async pipeline %s refused: %@", m->label.c_str(), failure ?: @"?");
     }
     std::vector<std::function<void()>> observers;
+    pthread_override_t urged;
     {
         std::lock_guard<std::mutex> g(m->lock);
         m->result = made;
         m->state = made ? Making::Made : Making::Failed;
         observers.swap(m->observers);
+        urged = m->urged;
+        m->urged = nullptr;
     }
+    if (urged)
+        pthread_override_qos_class_end_np(urged);
     m->finished.notify_all();
     Counters &c = counters();
     (made ? c.made : c.failed)++;
@@ -243,22 +250,25 @@ inline void wanted(const std::shared_ptr<Making> &m, bool skips)
         });
 }
 
-// While the calling thread waits for `m` (`lock` held, as `m->lock`'s guard), the thread making it runs at least at the
-// caller's class: a render thread (no class: Core Animation's is a fixed priority) lends the user-interactive class.
+// The thread making `m` (m->lock held) at least at the calling thread's class: a render thread (no class: Core Animation's
+// is a fixed priority) lends the user-interactive class. Null where it runs there already.
+inline pthread_override_t lend(const Making &m)
+{
+    if (m.state != Making::Running || !m.runner || pthread_equal(m.runner, pthread_self()))
+        return nullptr;
+    qos_class_t mine = qos_class_self();
+    if (mine == QOS_CLASS_UNSPECIFIED)
+        mine = QOS_CLASS_USER_INTERACTIVE;
+    const qos_class_t runner = m.runnerClass == QOS_CLASS_UNSPECIFIED ? QOS_CLASS_DEFAULT : m.runnerClass;
+    return mine > runner ? pthread_override_qos_class_start_np(m.runner, mine, 0) : nullptr;
+}
+
+// While the calling thread waits for `m` (`lock` held, as `m->lock`'s guard), the thread making it runs at its class.
 struct Lend {
     pthread_override_t override = nullptr;
 
-    Lend(const Making &m)
-    {
-        if (m.state != Making::Running || !m.runner || pthread_equal(m.runner, pthread_self()))
-            return;
-        qos_class_t mine = qos_class_self();
-        if (mine == QOS_CLASS_UNSPECIFIED)
-            mine = QOS_CLASS_USER_INTERACTIVE;
-        const qos_class_t runner = m.runnerClass == QOS_CLASS_UNSPECIFIED ? QOS_CLASS_DEFAULT : m.runnerClass;
-        if (mine > runner)
-            override = pthread_override_qos_class_start_np(m.runner, mine, 0);
-    }
+    Lend(const Making &m) : override(lend(m))
+    {}
 
     ~Lend()
     {
@@ -280,6 +290,44 @@ inline int observe(const std::shared_ptr<Making> &m, std::function<void()> obser
     if (observer)
         m->observers.push_back(std::move(observer));
     return 0;
+}
+
+// observe() for a caller that has urge() make the creation: a lazy one is not handed to the workers as well, where an idle
+// worker would take it first, at its own class
+inline int claim(const std::shared_ptr<Making> &m, std::function<void()> observer = {})
+{
+    std::lock_guard<std::mutex> g(m->lock);
+    if (m->state == Making::Made)
+        return 1;
+    if (m->state == Making::Failed)
+        return -1;
+    wanted(m, false);
+    if (observer)
+        m->observers.push_back(std::move(observer));
+    return 0;
+}
+
+// A creation a committed command buffer waits for, wanted now at the calling thread's class without waiting for it: made here
+// when no worker has started it (ahead of every creation queued before it), else the worker making it runs at this class
+// until it is made. 1 made, 0 being made elsewhere, -1 failed.
+inline int urge(const std::shared_ptr<Making> &m)
+{
+    {
+        std::lock_guard<std::mutex> g(m->lock);
+        if (m->done())
+            return m->state == Making::Made ? 1 : -1;
+        wanted(m, false);
+    }
+    if (!run(m)) {
+        std::lock_guard<std::mutex> g(m->lock);
+        if (m->done())
+            return m->state == Making::Made ? 1 : -1;
+        if (!m->urged)
+            m->urged = lend(*m);
+        return 0;
+    }
+    std::lock_guard<std::mutex> g(m->lock);
+    return m->state == Making::Made ? 1 : -1;
 }
 
 // For direct bridge clients without the native job scheduler. A failed/expired compile fails their command buffer;

@@ -142,6 +142,16 @@ void planSegments(RMCommandBuffer *cb)
     }
 }
 
+// Whether only signals follow range `at`: they are published once the work before them completes, so the command buffer is
+// scheduled with its last work, not with its completion
+static bool onlySignalsAfter(RMCommandBuffer *cb, size_t at)
+{
+    for (size_t i = at + 1; i < cb->_segs.size(); ++i)
+        if (!cb->_segs[i].event || cb->_plan.operation(cb->_segs[i].from).op != OpSignalEvent)
+            return false;
+    return true;
+}
+
 // The raw device's encoding arenas have one CPU owner. This lock is separate from the scheduler; no event or CPU GPU-fence
 // wait happens here. A single visit emits one legal range and yields, retaining the Metal queue's reservation.
 bool submitLocked(RMCommandBuffer *cb)
@@ -162,6 +172,7 @@ bool submitLocked(RMCommandBuffer *cb)
     }
     RMSegment &range = cb->_segs[cb->_segNext];
     const bool last = cb->_segNext + 1 == cb->_segs.size();
+    const bool lastWork = onlySignalsAfter(cb, cb->_segNext);
     if (range.event) {
         const Cmd event = cb->_plan.legacy(range.from);
         if (event.op == OpSignalEvent) {
@@ -221,7 +232,7 @@ bool submitLocked(RMCommandBuffer *cb)
             orderReturned();
         countDriver(1);
         retireRawRange(cb, range.from, range.to);
-        if (last)
+        if (lastWork)
             scheduled(cb);
     } else {
         if (r.gpuOrder && r.rawSinceM2v) {
@@ -268,7 +279,7 @@ bool submitLocked(RMCommandBuffer *cb)
         }
         [m addScheduledHandler:^(id<MTLCommandBuffer>) {
             // before the raw command buffer behind it may be submitted (m2vClear), so its scheduled handlers go first
-            if (last)
+            if (lastWork)
                 scheduled(cb);
             {
                 std::lock_guard<std::mutex> l(gRM->m2vLock);

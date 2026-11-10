@@ -432,11 +432,11 @@ static void giveRecording(RMCommandBuffer *b)
 - (void)waitUntilScheduled
 {
     std::unique_lock<std::mutex> l(_lock);
-    if (!_committed || _scheduledDone)
+    if (!_committed || _scheduledDone || _held)
         return;
     const BlockedWait blocked(gRM->stats.scheduledWaits, gRM->stats.scheduledWaitUs);
     _changed.wait(l, [&] {
-        return _scheduledDone;
+        return _scheduledDone || _held;
     });
 }
 
