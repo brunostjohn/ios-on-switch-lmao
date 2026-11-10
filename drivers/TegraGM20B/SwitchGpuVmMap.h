@@ -184,7 +184,7 @@ int switch_gpu_vm_map_volatile(struct tgm_vm *vm, u64 va, u64 range, struct tgm_
 			switch_gpu_mapping_next(mem->pages, mem->npages, va + at, offset + at,
 						range - at, &run);
 		made->entries[i] = (struct switch_gpu_mapping_entry){va + at, offset + at,
-								     run.bytes, run.shift};
+								     run.bytes, run.shift, 0};
 		at += run.bytes;
 	}
 	gate_enter();
@@ -243,6 +243,8 @@ void switch_gpu_vm_unmap(struct tgm_vm *vm, struct switch_gpu_mapping **mapping)
 	nvkm_ltc_flush(gpu.device->ltc);
 	for (i = 0; i < made->count; ++i) {
 		const struct switch_gpu_mapping_entry *entry = &made->entries[i];
+		if (entry->pending)
+			continue;
 		nvif_vmm_raw_unmap(&vm->vmm, entry->va, entry->bytes, entry->shift, false);
 		nvif_vmm_raw_put(&vm->vmm, entry->va, entry->bytes, entry->shift);
 	}
@@ -266,7 +268,14 @@ static struct switch_gpu_mapping *mapping_alloc(u32 count)
 
 static void mapping_add(struct switch_gpu_mapping *part, u64 va, u64 offset, u64 bytes, u8 shift)
 {
-	part->entries[part->count++] = (struct switch_gpu_mapping_entry){va, offset, bytes, shift};
+	part->entries[part->count++] = (struct switch_gpu_mapping_entry){va, offset, bytes, shift, 0};
+}
+
+static void mapping_add_pending(struct switch_gpu_mapping *part, u64 va, u64 offset, u64 bytes, u8 shift,
+				u8 pending)
+{
+	mapping_add(part, va, offset, bytes, shift);
+	part->entries[part->count - 1].pending = pending;
 }
 
 int switch_gpu_vm_split(struct tgm_vm *vm, struct switch_gpu_mapping **mapping, struct tgm_mem *mem,
@@ -274,14 +283,12 @@ int switch_gpu_vm_split(struct tgm_vm *vm, struct switch_gpu_mapping **mapping, 
 			struct switch_gpu_mapping **below, struct switch_gpu_mapping **taken,
 			struct switch_gpu_mapping **above)
 {
-	struct gf100_vmm_map_v0 args = {
-		.version = 0, .vol = !!vol || !l2_on(), .ro = !!read_only, .kind = kind};
 	struct switch_gpu_mapping *old = mapping ? *mapping : NULL;
 	struct switch_gpu_mapping *parts[3] = {NULL, NULL, NULL};
-	struct switch_gpu_mapping_entry lost[2];
-	u32 counts[3] = {0, 0, 0}, failed[2] = {0, 0}, i, p, ordered_scope;
+	u32 counts[3] = {0, 0, 0}, i, p;
 	const u64 end = va + range;
-	bool cut_big = false;
+	(void)read_only;
+	(void)vol;
 	if (!old || !vm || !mem || !range || ((va | range) & (PAGE_SIZE - 1)) || end < va)
 		return -EINVAL;
 	for (i = 0; i < old->count; ++i) {
@@ -290,10 +297,9 @@ int switch_gpu_vm_split(struct tgm_vm *vm, struct switch_gpu_mapping **mapping, 
 		const bool cut = e->va < end && va < e_end && (e->va < va || e_end > end);
 		if (cut && e->shift != PAGE_SHIFT && gpu.mmu.kind[kind] != kind)
 			return -EINVAL;
-		cut_big |= cut && e->shift != PAGE_SHIFT;
 		counts[0] += e->va < va;
 		counts[2] += e_end > end;
-		counts[1] += e->va < end && va < e_end && (e->shift == PAGE_SHIFT || !cut);
+		counts[1] += e->va < end && va < e_end && !(cut && e->pending && e->shift != PAGE_SHIFT);
 	}
 	for (p = 0; p < 3; ++p) {
 		parts[p] = mapping_alloc(counts[p]);
@@ -307,78 +313,24 @@ int switch_gpu_vm_split(struct tgm_vm *vm, struct switch_gpu_mapping **mapping, 
 		const struct switch_gpu_mapping_entry *e = &old->entries[i];
 		const u64 e_end = e->va + e->bytes;
 		const bool cut = e->va < end && va < e_end && (e->va < va || e_end > end);
-		const u8 kept = cut ? PAGE_SHIFT : e->shift;
+		/* a 128 KiB page an edge cuts keeps its PTE, whole, with the range's part until that retires; what stays
+		 * outside the range waits, as 4 KiB entries, for switch_gpu_vm_install once the big PTE is gone */
+		const bool big = cut && e->shift != PAGE_SHIFT;
+		const u8 kept = big ? PAGE_SHIFT : e->shift, pending = big ? 1 : e->pending;
 		const u64 low = e->va > va ? e->va : va, high = e_end < end ? e_end : end;
 		if (e->va < va)
-			mapping_add(parts[0], e->va, e->offset, (e_end < va ? e_end : va) - e->va,
-				    kept);
-		if (e->va < end && va < e_end && (e->shift == PAGE_SHIFT || !cut))
-			mapping_add(parts[1], low, e->offset + (low - e->va), high - low, e->shift);
+			mapping_add_pending(parts[0], e->va, e->offset, (e_end < va ? e_end : va) - e->va, kept,
+					    pending);
+		if (big && !e->pending)
+			mapping_add_pending(parts[1], e->va, e->offset, e->bytes, e->shift, 0);
+		else if (e->va < end && va < e_end && !big)
+			mapping_add_pending(parts[1], low, e->offset + (low - e->va), high - low, e->shift,
+					    e->pending);
 		if (e_end > end) {
 			const u64 from = e->va > end ? e->va : end;
-			mapping_add(parts[2], from, e->offset + (from - e->va), e_end - from, kept);
+			mapping_add_pending(parts[2], from, e->offset + (from - e->va), e_end - from, kept,
+					    pending);
 		}
-	}
-	if (cut_big) {
-		gate_enter();
-		mutex_lock(&vm->map_lock);
-		nvkm_ltc_flush(gpu.device->ltc);
-		for (i = 0; i < old->count; ++i) {
-			const struct switch_gpu_mapping_entry *e = &old->entries[i];
-			if (e->shift == PAGE_SHIFT || !(e->va < end && va < e->va + e->bytes) ||
-			    (e->va >= va && e->va + e->bytes <= end))
-				continue;
-			nvif_vmm_raw_unmap(&vm->vmm, e->va, e->bytes, e->shift, false);
-			nvif_vmm_raw_put(&vm->vmm, e->va, e->bytes, e->shift);
-		}
-		ordered_scope = nvxnu_gpu_ordered_begin();
-		for (p = 0; p < 3; p += 2) {
-			for (i = 0; parts[p] && i < parts[p]->count; ++i) {
-				struct switch_gpu_mapping_entry *e = &parts[p]->entries[i];
-				const bool edge =
-					(p == 0 ? e->va + e->bytes == va : e->va == end) &&
-					e->shift == PAGE_SHIFT;
-				u32 k;
-				for (k = 0; edge && k < old->count; ++k)
-					if (old->entries[k].shift != PAGE_SHIFT &&
-					    old->entries[k].va <= e->va &&
-					    e->va < old->entries[k].va + old->entries[k].bytes)
-						break;
-				if (!edge || k == old->count)
-					continue;
-				failed[p / 2] =
-					nvif_vmm_raw_get(&vm->vmm, e->va, e->bytes, PAGE_SHIFT) ? 1
-												: 0;
-				if (!failed[p / 2] &&
-				    nvif_vmm_raw_map(&vm->vmm, e->va, e->bytes, PAGE_SHIFT, &args,
-						     sizeof(args), &mem->mem, e->offset))
-					failed[p / 2] = 2;
-				if (failed[p / 2])
-					lost[p / 2] = *e;
-			}
-		}
-		nvxnu_gpu_ordered_end(ordered_scope);
-		/* a remainder that could not be mapped again stays unmapped; its part no longer covers it */
-		for (p = 0; p < 2; ++p) {
-			struct switch_gpu_mapping *part = parts[p * 2];
-			if (!failed[p])
-				continue;
-			if (failed[p] == 2) {
-				nvif_vmm_raw_unmap(&vm->vmm, lost[p].va, lost[p].bytes, PAGE_SHIFT,
-						   false);
-				nvif_vmm_raw_put(&vm->vmm, lost[p].va, lost[p].bytes, PAGE_SHIFT);
-			}
-			for (i = 0; i < part->count; ++i)
-				if (part->entries[i].va == lost[p].va) {
-					memmove(&part->entries[i], &part->entries[i + 1],
-						(part->count - i - 1) * sizeof(part->entries[0]));
-					--part->count;
-					break;
-				}
-		}
-		tgm_tlb_mapped(&vm->tlb);
-		mutex_unlock(&vm->map_lock);
-		gate_leave();
 	}
 	for (p = 0; p < 3; ++p) {
 		if (parts[p] && !parts[p]->count) {
@@ -391,6 +343,113 @@ int switch_gpu_vm_split(struct tgm_vm *vm, struct switch_gpu_mapping **mapping, 
 	*below = parts[0];
 	*taken = parts[1];
 	*above = parts[2];
+	return 0;
+}
+
+int switch_gpu_vm_prepare(struct tgm_vm *vm, u64 va, u64 range, struct tgm_mem *mem, u64 offset, u8 kind,
+			  struct switch_gpu_mapping **mapping)
+{
+	struct switch_gpu_mapping_run run;
+	struct switch_gpu_mapping *made;
+	u64 at = 0;
+	u32 count = 0;
+	if (!mapping || !vm || !mem || !vm->owner || !range ||
+	    ((va | range | offset) & (PAGE_SIZE - 1)) || va < TGM_USER_VA_START ||
+	    range > TGM_KERNEL_VA || va > TGM_KERNEL_VA - range || offset > mem->bytes ||
+	    range > mem->bytes - offset || !nvif_mmu_kind_valid(&gpu.mmu, kind))
+		return -EINVAL;
+	*mapping = NULL;
+	if (gpu.mmu.kind[kind] != kind && !tgm_comp_bind_ok(va, offset, range, mem->page))
+		return -EINVAL;
+	for (at = 0; at < range; at += run.bytes, ++count)
+		if (gpu.mmu.kind[kind] != kind)
+			run = (struct switch_gpu_mapping_run){range, SWITCH_GPU_BIG_SHIFT};
+		else if (!switch_gpu_mapping_next(mem->pages, mem->npages, va + at, offset + at, range - at,
+						  &run))
+			return -EINVAL;
+	made = mapping_alloc(count);
+	if (!made)
+		return -ENOMEM;
+	for (at = 0; at < range; at += run.bytes) {
+		if (gpu.mmu.kind[kind] != kind)
+			run = (struct switch_gpu_mapping_run){range, SWITCH_GPU_BIG_SHIFT};
+		else
+			switch_gpu_mapping_next(mem->pages, mem->npages, va + at, offset + at, range - at,
+						&run);
+		mapping_add_pending(made, va + at, offset + at, run.bytes, run.shift, 1);
+	}
+	*mapping = made;
+	return 0;
+}
+
+int switch_gpu_mapping_pending(const struct switch_gpu_mapping *mapping);
+
+int switch_gpu_vm_install(struct tgm_vm *vm, struct switch_gpu_mapping *mapping, struct tgm_mem *mem, u8 kind,
+			  int read_only, int vol)
+{
+	struct gf100_vmm_map_v0 args = {
+		.version = 0, .vol = !!vol || !l2_on(), .ro = !!read_only, .kind = kind};
+	u32 i, ordered_scope, failed = 0;
+	int ret = 0;
+	if (!switch_gpu_mapping_pending(mapping))
+		return 0;
+	mem_prepare_big_views(mem);
+	gate_enter();
+	mutex_lock(&vm->map_lock);
+	ordered_scope = nvxnu_gpu_ordered_begin();
+	for (i = 0; i < mapping->count; ++i) {
+		struct switch_gpu_mapping_entry *e = &mapping->entries[i];
+		u64 memory_offset;
+		struct nvif_mem *memory;
+		if (!e->pending)
+			continue;
+		memory = mem_mapping_view(mem, e, &memory_offset);
+		ret = nvif_vmm_raw_get(&vm->vmm, e->va, e->bytes, e->shift);
+		if (!ret) {
+			ret = nvif_vmm_raw_map(&vm->vmm, e->va, e->bytes, e->shift, &args, sizeof(args), memory,
+					       memory_offset);
+			if (ret)
+				e->pending = 2; /* got, not mapped: put below, outside the ordered scope */
+		}
+		if (!ret)
+			e->pending = 0;
+		else
+			++failed;
+	}
+	nvxnu_gpu_ordered_end(ordered_scope);
+	tgm_tlb_mapped(&vm->tlb);
+	/* an entry that could not be mapped stays unmapped and leaves the mapping */
+	for (i = 0; failed && i < mapping->count;) {
+		struct switch_gpu_mapping_entry *e = &mapping->entries[i];
+		if (!e->pending) {
+			++i;
+			continue;
+		}
+		if (e->pending == 2)
+			nvif_vmm_raw_put(&vm->vmm, e->va, e->bytes, e->shift);
+		memmove(e, e + 1, (mapping->count - i - 1) * sizeof(*e));
+		--mapping->count;
+	}
+	mutex_unlock(&vm->map_lock);
+	gate_leave();
+	return failed ? -ENOMEM : 0;
+}
+
+int switch_gpu_mapping_installed(const struct switch_gpu_mapping *mapping)
+{
+	u32 i;
+	for (i = 0; mapping && i < mapping->count; ++i)
+		if (!mapping->entries[i].pending)
+			return 1;
+	return 0;
+}
+
+int switch_gpu_mapping_pending(const struct switch_gpu_mapping *mapping)
+{
+	u32 i;
+	for (i = 0; mapping && i < mapping->count; ++i)
+		if (mapping->entries[i].pending)
+			return 1;
 	return 0;
 }
 

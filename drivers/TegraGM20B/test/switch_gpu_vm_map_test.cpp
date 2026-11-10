@@ -301,7 +301,9 @@ TEST_F(VmMap, SplitOfA4KRunKeepsEveryPteOutsideTheRange)
 	switch_gpu_vm_unmap(&a, &above);
 }
 
-TEST_F(VmMap, CutBigPageMapsItsRemainderAgainWith4KPages)
+// A cut 128 KiB page keeps its PTE, whole, with the range's part; what stays outside the range comes back pending as
+// 4 KiB entries, mapped (same pages, same kind) only by switch_gpu_vm_install once that PTE is gone.
+TEST_F(VmMap, CutBigPageKeepsItsPteUntilRetirementAndItsRestWaitsForInstall)
 {
 	mem_prepare_big_views(&memory);
 	switch_gpu_mapping *mapping = nullptr, *below = nullptr, *taken = nullptr, *above = nullptr;
@@ -311,25 +313,37 @@ TEST_F(VmMap, CutBigPageMapsItsRemainderAgainWith4KPages)
 	ASSERT_EQ(switch_gpu_vm_split(&a, &mapping, &memory, 0, 0, 0, 0x40008000, 0x1000, &below,
 				      &taken, &above),
 		  0);
-	EXPECT_EQ(taken, nullptr);
-	ASSERT_EQ(calls.size(), 6u);
+	EXPECT_TRUE(calls.empty());
+	ASSERT_NE(taken, nullptr);
+	ASSERT_EQ(taken->count, 1u);
+	EXPECT_EQ(taken->entries[0].shift, 17);
+	EXPECT_EQ(taken->entries[0].bytes, 0x20000u);
+	ASSERT_EQ(below->count, 1u);
+	EXPECT_TRUE(below->entries[0].pending);
+	EXPECT_EQ(below->entries[0].shift, 12);
+	ASSERT_EQ(above->count, 2u);
+	EXPECT_TRUE(above->entries[0].pending);
+	EXPECT_FALSE(above->entries[1].pending);
+	switch_gpu_vm_unmap(&a, &taken);
+	ASSERT_EQ(calls.size(), 2u);
 	EXPECT_EQ(calls[0].operation, 'u');
 	EXPECT_EQ(calls[0].shift, 17);
-	EXPECT_EQ(calls[1].operation, 'p');
-	const std::vector<std::pair<u64, u64>> remapped = {{0x40000000, 0x8000},
-							   {0x40009000, 0x17000}};
+	calls.clear();
+	ASSERT_EQ(switch_gpu_vm_install(&a, below, &memory, 0, 0, 0), 0);
+	ASSERT_EQ(switch_gpu_vm_install(&a, above, &memory, 0, 0, 0), 0);
+	const std::vector<std::pair<u64, u64>> remapped = {{0x40000000, 0x8000}, {0x40009000, 0x17000}};
+	ASSERT_EQ(calls.size(), 4u);
 	for (size_t i = 0; i < remapped.size(); ++i) {
-		EXPECT_EQ(calls[2 + 2 * i].operation, 'g');
-		EXPECT_EQ(calls[3 + 2 * i].operation, 'm');
-		EXPECT_EQ(calls[3 + 2 * i].va, remapped[i].first);
-		EXPECT_EQ(calls[3 + 2 * i].bytes, remapped[i].second);
-		EXPECT_EQ(calls[3 + 2 * i].shift, 12);
-		EXPECT_EQ(calls[3 + 2 * i].offset, remapped[i].first - 0x40000000);
-		EXPECT_EQ(calls[3 + 2 * i].memory, &memory.mem);
+		EXPECT_EQ(calls[2 * i].operation, 'g');
+		EXPECT_EQ(calls[1 + 2 * i].operation, 'm');
+		EXPECT_EQ(calls[1 + 2 * i].va, remapped[i].first);
+		EXPECT_EQ(calls[1 + 2 * i].bytes, remapped[i].second);
+		EXPECT_EQ(calls[1 + 2 * i].shift, 12);
+		EXPECT_EQ(calls[1 + 2 * i].offset, remapped[i].first - 0x40000000);
+		EXPECT_EQ(calls[1 + 2 * i].memory, &memory.mem);
+		EXPECT_TRUE(calls[1 + 2 * i].deferred);
 	}
-	ASSERT_NE(below, nullptr);
-	ASSERT_EQ(above->count, 2u);
-	EXPECT_EQ(above->entries[1].va, 0x40020000u);
+	EXPECT_FALSE(switch_gpu_mapping_pending(below));
 	char text[128];
 	switch_gpu_mapping_describe(below, text, sizeof(text));
 	EXPECT_STREQ(text, "0x40000000+0x8000/12");
@@ -355,22 +369,17 @@ TEST_F(VmMap, CompressedMappingCutInsideABigPageIsRefusedUntouched)
 	switch_gpu_vm_unmap(&a, &mapping);
 }
 
-TEST_F(VmMap, RemainderThatCannotBeMappedAgainLeavesItsPartAndTheOrderedScope)
+TEST_F(VmMap, PendingEntryThatCannotBeInstalledLeavesItsMappingOutsideTheOrderedScope)
 {
-	mem_prepare_big_views(&memory);
-	switch_gpu_mapping *mapping = nullptr, *below = nullptr, *taken = nullptr, *above = nullptr;
-	ASSERT_EQ(map(a, &mapping), 0);
-	calls.clear();
-	failMap = mapCount + 1;
-	ASSERT_EQ(switch_gpu_vm_split(&a, &mapping, &memory, 0, 0, 0, 0x40008000, 0x1000, &below,
-				      &taken, &above),
-		  0);
-	ASSERT_NE(below, nullptr);
-	ASSERT_EQ(above->count, 1u);
-	EXPECT_EQ(above->entries[0].va, 0x40020000u);
+	switch_gpu_mapping *mapping = nullptr;
+	ASSERT_EQ(switch_gpu_vm_prepare(&a, 0x40000000, 8 * PAGE_SIZE, &memory, 0, 0, &mapping), 0);
+	EXPECT_TRUE(calls.empty());
+	EXPECT_TRUE(switch_gpu_mapping_pending(mapping));
+	EXPECT_FALSE(switch_gpu_mapping_installed(mapping));
+	failMap = mapCount;
+	EXPECT_EQ(switch_gpu_vm_install(&a, mapping, &memory, 0, 0, 0), -ENOMEM);
+	EXPECT_EQ(mapping->count, 0u);
 	EXPECT_EQ(calls.back().operation, 'p');
-	EXPECT_EQ(calls.back().va, 0x40009000u);
 	EXPECT_FALSE(calls.back().deferred);
-	switch_gpu_vm_unmap(&a, &below);
-	switch_gpu_vm_unmap(&a, &above);
+	switch_gpu_vm_unmap(&a, &mapping);
 }

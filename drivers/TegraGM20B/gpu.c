@@ -860,6 +860,11 @@ struct tgm_vm {
 	struct tgm_tlb_space tlb; /* GPU-ordered maps (TegraGM20BTlb.h) */
 	const void *owner;        /* tgm_vm_claim: the connection whose channels alone address it */
 	const void *connection; /* tgm_vm_claim_connection: the client whose pushes a hang reads */
+	/* tgm_vm_bind_wait: the connection's bind epoch word (GPU VA, kernel address) and the epoch its next submissions
+	 * wait for; bind_cpu 0: never set */
+	u64 bind_va;
+	const volatile u32 *bind_cpu;
+	u32 bind_target;
 };
 
 struct tgm_import {
@@ -887,6 +892,7 @@ struct tgm_mem {
 struct switch_gpu_mapping_entry {
 	u64 va, offset, bytes;
 	u8 shift;
+	u8 pending; /* no PTEs yet: switch_gpu_vm_install maps it */
 };
 
 struct switch_gpu_mapping {
@@ -1302,6 +1308,25 @@ uint32_t tgm_chan_completed(struct tgm_chan *chan)
 uint32_t tgm_chan_error(struct tgm_chan *chan)
 {
 	return chan->error;
+}
+
+void tgm_vm_bind_wait(struct tgm_vm *vm, uint64_t va, const volatile uint32_t *cpu, uint32_t target)
+{
+	WRITE_ONCE(vm->bind_va, va);
+	WRITE_ONCE(vm->bind_target, target);
+	__atomic_store_n(&vm->bind_cpu, cpu, __ATOMIC_RELEASE);
+}
+
+/* 1 if the address space has a bind its channels' next submission must wait for (and *target, *va set) */
+static int bind_pending(const struct tgm_vm *vm, u32 *target, u64 *va)
+{
+	const volatile u32 *cpu = __atomic_load_n(&vm->bind_cpu, __ATOMIC_ACQUIRE);
+
+	if (!cpu)
+		return 0;
+	*target = READ_ONCE(vm->bind_target);
+	*va = READ_ONCE(vm->bind_va);
+	return (s32)(__atomic_load_n(cpu, __ATOMIC_ACQUIRE) - *target) < 0;
 }
 
 uint32_t tgm_chan_settled(struct tgm_chan *chan, int *failed)
@@ -4748,6 +4773,9 @@ static int chan_exec(struct tgm_chan *chan, const struct tgm_push *pushes, uint3
 	int ring_free;
 	u32 *push_bgn, *push_cur, *push_end, *push_seg;
 	u32 entries, words;
+	u32 bind_target = 0;
+	u64 bind_va = 0;
+	int bind = 0;
 	int host_written = !(visibility & SWITCH_GPU_SUBMIT_VISIBILITY_EXPLICIT) ||
 		(visibility & SWITCH_GPU_SUBMIT_HOST_WRITTEN);
 	int external = !(visibility & SWITCH_GPU_SUBMIT_VISIBILITY_EXPLICIT) ||
@@ -4794,7 +4822,7 @@ static int chan_exec(struct tgm_chan *chan, const struct tgm_push *pushes, uint3
 	 * them, a present wait, the task order's acquires and (stats) a start stamp, one more nvif GET semaphore
 	 * with each. A profile's stamps: an entry each, a stamp and a GET semaphore. */
 	entries = count + 6 + stamps;
-	words = CHAN_FENCE_DWORDS + 64 + 5 * (TGM_ORDER_MAX + dependency_count) + 16 * stamps;
+	words = CHAN_FENCE_DWORDS + 64 + 5 * (TGM_ORDER_MAX + dependency_count + 1) + 16 * stamps;
 	if (!may_wait && !chan_room(chan, entries, words))
 		return -EAGAIN;
 	ret = may_wait ? chan_wait_ready(chan, entries, words) : 0;
@@ -4814,6 +4842,14 @@ static int chan_exec(struct tgm_chan *chan, const struct tgm_push *pushes, uint3
 	ret = nvif_chan_gpfifo_wait(&chan->chan, entries, words);
 	if (!ret)
 		ret = backing_dependencies(chan, dependencies, dependency_count, 1);
+	/* a VA rebound over work still queued: nothing after the bind runs before retirement switched its PTEs; the TLB
+	 * invalidate below runs after this acquire */
+	bind = !ret && !chan->kernel && bind_pending(chan->vm, &bind_target, &bind_va);
+	if (bind)
+		PUSH_MTHD(&chan->chan.push, NV906F, SEMAPHOREA, upper_32_bits(bind_va), SEMAPHOREB,
+			  lower_32_bits(bind_va), SEMAPHOREC, bind_target, SEMAPHORED,
+			  NVDEF(NV906F, SEMAPHORED, OPERATION, ACQ_GEQ) |
+				  NVDEF(NV906F, SEMAPHORED, ACQUIRE_SWITCH, ENABLED));
 	if (ret) {
 		chan->chan.gpfifo.cur = ring_cur;
 		chan->chan.gpfifo.free = ring_free;
@@ -4855,7 +4891,7 @@ static int chan_exec(struct tgm_chan *chan, const struct tgm_push *pushes, uint3
 			   chan->submitted + 1); /* before the fence that completes it */
 	}
 	/* The L2 first: page-table lines a GPU-ordered map wrote around (TegraGM20BTlb.h) go before the TLB refetches. */
-	tlb = tgm_tlb_take(&chan->tlb, &chan->vm->tlb);
+	tlb = tgm_tlb_take(&chan->tlb, &chan->vm->tlb) || bind;
 	if ((l2_on() && host_written) || tlb) {
 		/* nouveau's NVDEF/NVVAL/PUSH_* macros compute in int and repeat their branches. */
 		/* NOLINTBEGIN(bugprone-signed-bitwise,bugprone-branch-clone) */

@@ -114,16 +114,29 @@ int switch_gpu_vm_map_volatile(struct tgm_vm *vm, uint64_t va, uint64_t range,
 	struct tgm_mem *mem, uint64_t offset, uint8_t kind, int read_only, int vol,
 	struct switch_gpu_mapping **mapping);
 void switch_gpu_vm_unmap(struct tgm_vm *vm, struct switch_gpu_mapping **mapping);
-/* Cuts [va, va + range) out of *mapping, made by switch_gpu_vm_map_volatile of mem with kind, read_only and vol, and
- * consumes it. What stays mapped below and above the range comes back as *below and *above, the range's own entries,
- * still mapped, as *taken (each NULL when empty). PTEs keep their values except in a 128 KiB page an edge cuts: that page
- * is unmapped and its part outside the range mapped again with 4 KiB pages (a GPU access there in between faults; a
- * remainder that cannot be mapped again stays unmapped, out of *below and *above). A compressed mapping cut inside a
- * 128 KiB page is refused, and on any error *mapping is untouched. */
+/* Cuts [va, va + range) out of *mapping, made by switch_gpu_vm_map_volatile or _prepare of mem with kind, and consumes
+ * it, changing no PTE. What stays below and above the range comes back as *below and *above, the range's own entries as
+ * *taken (each NULL when empty). A 128 KiB page an edge cuts goes whole to *taken, keeping its PTE until *taken is
+ * unmapped; its part outside the range comes back in *below or *above as 4 KiB entries pending switch_gpu_vm_install,
+ * which the caller runs once that PTE is gone. A compressed mapping cut inside a 128 KiB page is refused, and on any
+ * error *mapping is untouched. */
 int switch_gpu_vm_split(struct tgm_vm *vm, struct switch_gpu_mapping **mapping, struct tgm_mem *mem,
-			uint8_t kind, int read_only, int vol, uint64_t va, uint64_t range,
-			struct switch_gpu_mapping **below, struct switch_gpu_mapping **taken,
-			struct switch_gpu_mapping **above);
+	uint8_t kind, int read_only, int vol, uint64_t va, uint64_t range,
+	struct switch_gpu_mapping **below, struct switch_gpu_mapping **taken,
+	struct switch_gpu_mapping **above);
+/* switch_gpu_vm_map_volatile's runs, every entry pending: no PTE is written until switch_gpu_vm_install. */
+int switch_gpu_vm_prepare(struct tgm_vm *vm, uint64_t va, uint64_t range, struct tgm_mem *mem, uint64_t offset,
+	uint8_t kind, struct switch_gpu_mapping **mapping);
+/* Maps a mapping's pending entries (GPU-ordered, as switch_gpu_vm_map_volatile). One that cannot be mapped leaves the
+ * mapping, unmapped; -ENOMEM then. switch_gpu_vm_unmap skips pending entries. */
+int switch_gpu_vm_install(struct tgm_vm *vm, struct switch_gpu_mapping *mapping, struct tgm_mem *mem,
+	uint8_t kind, int read_only, int vol);
+int switch_gpu_mapping_pending(const struct switch_gpu_mapping *mapping);
+/* whether any entry has PTEs */
+int switch_gpu_mapping_installed(const struct switch_gpu_mapping *mapping);
+/* The connection's bind epoch: while *cpu is behind target, every submission in vm first acquires (on the GPU) the
+ * word at va until it reaches target, then invalidates the TLB (switch_gpu bind epoch, SwitchGpuClientRetirement.h). */
+void tgm_vm_bind_wait(struct tgm_vm *vm, uint64_t va, const volatile uint32_t *cpu, uint32_t target);
 /* The VA range from a mapping's first entry to the end of its last. */
 int switch_gpu_mapping_span(const struct switch_gpu_mapping *mapping, uint64_t *va,
 			    uint64_t *bytes);

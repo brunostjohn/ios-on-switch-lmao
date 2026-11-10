@@ -18,6 +18,7 @@
 #include "drivers/TegraGM20B/TegraGM20BABI.h"
 #include "drivers/TegraGM20B/SwitchGpuBindings.h"
 #include "drivers/TegraGM20B/TegraGM20BBindHistory.h"
+#include "gm20b_gpu_memory.h"
 
 using namespace std::chrono_literals;
 constexpr uint32_t kMaxChannels = 8;
@@ -131,17 +132,38 @@ uint32_t tgm_chan_completed(tgm_chan *chan)
 	return chan->completed;
 }
 
+uint32_t tgm_chan_submitted(tgm_chan *chan)
+{
+	return chan->submitted;
+}
+
 void tgm_chan_del(tgm_chan **chan)
 {
 	*chan = nullptr;
 }
 
+// One run of PTEs over a test buffer, as the GPU sees it through Memory (gm20b_ce_model.h): a pending one has none yet,
+// a big one is a 128 KiB page an edge may cut.
 struct switch_gpu_mapping {
 	unsigned id;
 	uint64_t va = 0, bytes = 0;
+	std::vector<uint8_t> *buffer = nullptr;
+	uint64_t offset = 0;
+	bool pending = false, big = false;
 };
 
-struct tgm_mem {};
+struct tgm_mem {
+	std::vector<uint8_t> *buffer;
+};
+
+Memory gpuMemory;
+
+void installPtes(switch_gpu_mapping *m)
+{
+	if (m->buffer)
+		gpuMemory.map(m->va, m->buffer->data() + m->offset, m->bytes, false);
+	m->pending = false;
+}
 
 // A mapping cut as SwitchGpuVmMap.h cuts one: the parts below, in and above the range, each NULL when empty.
 std::vector<std::pair<uint64_t, uint64_t>> splits;
@@ -156,9 +178,15 @@ int switch_gpu_vm_split(void *, switch_gpu_mapping **mapping, tgm_mem *, uint8_t
 	const auto *old = *mapping;
 	const uint64_t end = va + range, oldEnd = old->va + old->bytes;
 	const uint64_t low = std::max(old->va, va), high = std::min(oldEnd, end);
-	*below = old->va < va ? new switch_gpu_mapping{old->id, old->va, va - old->va} : nullptr;
-	*taken = new switch_gpu_mapping{old->id, low, high - low};
-	*above = oldEnd > end ? new switch_gpu_mapping{old->id, end, oldEnd - end} : nullptr;
+	const bool keep = old->big && (old->va < va || oldEnd > end);
+	const auto part = [&](uint64_t from, uint64_t to) {
+		return new switch_gpu_mapping{old->id, from, to - from, old->buffer, old->offset + (from - old->va),
+					      old->pending || keep, false};
+	};
+	*below = old->va < va ? part(old->va, va) : nullptr;
+	*taken = keep && !old->pending ? new switch_gpu_mapping(*old) : part(low, high);
+	(*taken)->pending = old->pending;
+	*above = oldEnd > end ? part(end, oldEnd) : nullptr;
 	splits.push_back({va, range});
 	delete *mapping;
 	*mapping = nullptr;
@@ -183,10 +211,59 @@ void switch_gpu_mapping_describe(const switch_gpu_mapping *mapping, char *out, s
 std::function<void(switch_gpu_mapping *)> onUnmap;
 std::vector<unsigned> unmapped;
 
+int switch_gpu_mapping_pending(const switch_gpu_mapping *mapping)
+{
+	return mapping && mapping->pending;
+}
+
+int switch_gpu_mapping_installed(const switch_gpu_mapping *mapping)
+{
+	return mapping && !mapping->pending;
+}
+
+int switch_gpu_vm_install(void *, switch_gpu_mapping *mapping, tgm_mem *, uint8_t, int, int)
+{
+	if (mapping->pending)
+		installPtes(mapping);
+	return 0;
+}
+
+int switch_gpu_vm_prepare(void *, uint64_t va, uint64_t range, tgm_mem *mem, uint64_t offset, uint8_t,
+			  switch_gpu_mapping **out)
+{
+	*out = new switch_gpu_mapping{9000, va, range, mem->buffer, offset, true, false};
+	return 0;
+}
+
+int switch_gpu_vm_map_volatile(void *, uint64_t va, uint64_t range, tgm_mem *mem, uint64_t offset, uint8_t, int,
+			       int, switch_gpu_mapping **out)
+{
+	*out = new switch_gpu_mapping{9000, va, range, mem->buffer, offset, true, false};
+	installPtes(*out);
+	return 0;
+}
+
+const volatile uint32_t *bindWord;
+uint32_t bindTarget;
+
+void tgm_vm_bind_wait(void *, uint64_t, const volatile uint32_t *cpu, uint32_t target)
+{
+	bindWord = cpu;
+	bindTarget = target;
+}
+
+// What a submission made now would wait for on the GPU: the bind epoch not reached yet.
+bool newWorkBlocked()
+{
+	return bindWord && int32_t(*bindWord - bindTarget) < 0;
+}
+
 void switch_gpu_vm_unmap(void *, switch_gpu_mapping **mapping)
 {
 	if (!*mapping)
 		return;
+	if (!(*mapping)->pending)
+		gpuMemory.unmap((*mapping)->va, (*mapping)->bytes);
 	if (onUnmap)
 		onUnmap(*mapping);
 	unmapped.push_back((*mapping)->id);
@@ -295,6 +372,12 @@ public:
 	IOLock unmapStorage;
 	IOLock *unmapLock_ = &unmapStorage;
 	bool faultLogged_[kMaxChannels] = {};
+	static constexpr uint32_t kBindEpochWord = 256;
+	uint32_t bindIssued_ = 0, bindDone_ = 0;
+	uint32_t fencePage[1024] = {};
+	volatile uint32_t *fence_va_ = fencePage;
+	uint64_t fence_gpu_ = 0x1000;
+	char owner_[17] = "test";
 	Call call;
 	thread_call_t retireCall_ = &call;
 	uint32_t retiredCount_ = 0, retireRemaining_ = 0, retirementPending_ = 0,
@@ -344,7 +427,11 @@ public:
 	void retireBatch();
 	void takeRetiredOverlaps(uint64_t, uint64_t);
 	void retire(RetiredBinding *);
-	IOReturn cutOverlaps(uint64_t, uint64_t, bool, RetiredBinding **);
+	IOReturn cutOverlaps(uint64_t, uint64_t, bool, bool, RetiredBinding **);
+	bool workQueued() const;
+	IOReturn mapRange(const TegraGM20BAbiBindOp &, Bo *, RetiredBinding *, bool);
+	void issueBind();
+	void installPendingBinds();
 	void logFaultBindings();
 	void noteBind(uint8_t, uint64_t, uint64_t, const Bo *, uint64_t, uint8_t);
 	void describeFault(uint32_t, uint64_t);
@@ -358,18 +445,44 @@ public:
 		return add(id, va, 4096);
 	}
 
-	Bo *add(unsigned id, uint64_t va, uint64_t bytes)
+	Bo *add(unsigned id, uint64_t va, uint64_t bytes, std::vector<uint8_t> *buffer = nullptr, bool big = false)
 	{
 		auto *bo = new Bo;
 		bo->handle = id;
 		bo->bytes = bytes;
 		bo->bindings = 1;
+		bo->mem = new tgm_mem{buffer};
 		bo->next = bos_;
 		bos_ = bo;
-		auto *record = new RetiredBinding{
-			nullptr, va, bytes, bo, new switch_gpu_mapping{id, va, bytes}, {}, 0, 0};
-		binds_[nbinds_++] = {va, bytes, bo, 0, record};
+		auto *mapping = new switch_gpu_mapping{id, va, bytes, buffer, 0, false, big};
+		installPtes(mapping);
+		auto *record = new RetiredBinding{nullptr, va, bytes, bo, mapping, {}, 0, 0};
+		const uint32_t at = switch_gpu_binding_upper(binds_, nbinds_, va);
+		memmove(&binds_[at + 1], &binds_[at], sizeof(Binding) * (nbinds_ - at));
+		binds_[at] = {va, bytes, bo, 0, record};
+		++nbinds_;
 		return bo;
+	}
+
+	// VmBind's steps for one op (TegraGM20BUserClient.cpp vmBind): a Map of `bo` or, with no BO, an Unmap.
+	IOReturn bind(uint64_t va, uint64_t range, Bo *bo)
+	{
+		RetiredBinding *spare[2] = {new RetiredBinding{}, new RetiredBinding{}};
+		IOLockLock(lock_);
+		const bool queued = workQueued();
+		IOReturn result = cutOverlaps(va, range, !queued, bo != nullptr, spare);
+		if (!result && bo) {
+			TegraGM20BAbiBindOp op = {};
+			op.op = TegraGM20BBindMap;
+			op.handle = bo->handle;
+			op.va = va;
+			op.range = range;
+			result = mapRange(op, bo, new RetiredBinding{}, queued);
+		}
+		IOLockUnlock(lock_);
+		for (auto *each : spare)
+			delete each;
+		return result;
 	}
 };
 
@@ -659,7 +772,7 @@ TEST_F(ClientRetirement, SubRangeUnmapKeepsTheRestOfTheBindingMapped)
 	auto *bo = client.add(20, 0x10000, 0x3000);
 	RetiredBinding *spare[2] = {spareRecord(), spareRecord()};
 	IOLockLock(client.lock_);
-	EXPECT_EQ(client.cutOverlaps(0x11000, 0x1000, false, spare), 0);
+	EXPECT_EQ(client.cutOverlaps(0x11000, 0x1000, false, false, spare), 0);
 	IOLockUnlock(client.lock_);
 	for (auto *each : spare)
 		delete each;
@@ -687,7 +800,7 @@ TEST_F(ClientRetirement, MapOverTheMiddleOfABindingTakesOnlyThatPart)
 	client.add(21, 0x10000, 0x4000);
 	RetiredBinding *spare[2] = {spareRecord(), spareRecord()};
 	IOLockLock(client.lock_);
-	EXPECT_EQ(client.cutOverlaps(0x11000, 0x2000, true, spare), 0);
+	EXPECT_EQ(client.cutOverlaps(0x11000, 0x2000, true, true, spare), 0);
 	IOLockUnlock(client.lock_);
 	EXPECT_EQ(spare[0], nullptr);
 	EXPECT_EQ(spare[1], nullptr);
@@ -702,7 +815,7 @@ TEST_F(ClientRetirement, FailedCutChangesNothing)
 	RetiredBinding *spare[2] = {spareRecord(), spareRecord()};
 	splitError = -22;
 	IOLockLock(client.lock_);
-	EXPECT_EQ(client.cutOverlaps(0x11000, 0x1000, true, spare), -22);
+	EXPECT_EQ(client.cutOverlaps(0x11000, 0x1000, true, true, spare), -22);
 	IOLockUnlock(client.lock_);
 	splitError = 0;
 	for (auto *each : spare)
@@ -727,4 +840,138 @@ TEST_F(ClientRetirement, KilledChannelLogsTheBindingOverItsFaultOnce)
 			       "0x10000+0x3000/12)"),
 		  std::string::npos);
 	chan.error = 0;
+}
+
+namespace
+{
+std::vector<uint8_t> bytesOf(uint8_t value, size_t size = 0x4000)
+{
+	return std::vector<uint8_t>(size, value);
+}
+
+// A job that runs now through the page table: what it reads at va, 0 for a fault.
+uint8_t gpuRead(uint64_t va)
+{
+	const uint8_t *at = gpuMemory.at(va);
+	return at ? *at : 0;
+}
+}  // namespace
+
+// A Map over a range work queued earlier still uses: that work keeps the old pages even when it runs after the Map, work
+// submitted after it waits on the GPU for the bind epoch, and retirement switches the PTEs only once the old work is
+// done, so no job ever meets the range unmapped.
+TEST_F(ClientRetirement, MapOverQueuedWorkSwitchesPtesBehindItAndGatesNewWork)
+{
+	auto oldBytes = bytesOf(0xa1), newBytes = bytesOf(0xb2);
+	client.add(30, 0x40000, 0x4000, &oldBytes);
+	auto *fresh = client.add(31, 0x80000, 0x4000, &newBytes);
+	chan.submitted = 5;
+	chan.completed = 4;
+	ASSERT_EQ(client.bind(0x40000, 0x4000, fresh), 0);
+	EXPECT_EQ(gpuRead(0x40000), 0xa1);
+	EXPECT_EQ(gpuRead(0x43fff), 0xa1);
+	EXPECT_TRUE(newWorkBlocked());
+	onUnmap = [&](auto *) {
+		EXPECT_EQ(chan.completed, chan.submitted);
+		EXPECT_TRUE(newWorkBlocked());
+	};
+	client.retireBatch();
+	EXPECT_EQ(gpuRead(0x40000), 0xa1);
+	chan.completed = chan.submitted;
+	client.retireBatch();
+	EXPECT_FALSE(newWorkBlocked());
+	EXPECT_EQ(gpuRead(0x40000), 0xb2);
+	EXPECT_EQ(gpuRead(0x43fff), 0xb2);
+	onUnmap = {};
+}
+
+TEST_F(ClientRetirement, MapWithNothingQueuedIsImmediate)
+{
+	auto oldBytes = bytesOf(0xa1), newBytes = bytesOf(0xb2);
+	client.add(32, 0x40000, 0x4000, &oldBytes);
+	auto *fresh = client.add(33, 0x80000, 0x4000, &newBytes);
+	chan.completed = chan.submitted;
+	ASSERT_EQ(client.bind(0x40000, 0x4000, fresh), 0);
+	EXPECT_EQ(gpuRead(0x40000), 0xb2);
+	EXPECT_EQ(client.bindIssued_, 0u);
+}
+
+TEST_F(ClientRetirement, ASecondMapOverAPendingMapEndsWithTheLast)
+{
+	auto a = bytesOf(0xa1), b = bytesOf(0xb2), c = bytesOf(0xc3);
+	client.add(34, 0x40000, 0x4000, &a);
+	auto *second = client.add(35, 0x80000, 0x4000, &b);
+	auto *third = client.add(36, 0xc0000, 0x4000, &c);
+	chan.completed = 0;
+	ASSERT_EQ(client.bind(0x40000, 0x4000, second), 0);
+	ASSERT_EQ(client.bind(0x40000, 0x4000, third), 0);
+	EXPECT_EQ(gpuRead(0x40000), 0xa1);
+	chan.completed = chan.submitted;
+	client.retireBatch();
+	EXPECT_FALSE(newWorkBlocked());
+	EXPECT_EQ(gpuRead(0x40000), 0xc3);
+}
+
+TEST_F(ClientRetirement, UnmapOrBoFreeOfAPendingMapInstallsNothing)
+{
+	auto a = bytesOf(0xa1), b = bytesOf(0xb2);
+	client.add(37, 0x40000, 0x4000, &a);
+	auto *second = client.add(38, 0x80000, 0x4000, &b);
+	chan.completed = 0;
+	ASSERT_EQ(client.bind(0x40000, 0x4000, second), 0);
+	ASSERT_EQ(client.bind(0x40000, 0x4000, nullptr), 0);
+	chan.completed = chan.submitted;
+	client.retireBatch();
+	EXPECT_FALSE(newWorkBlocked());
+	EXPECT_EQ(gpuRead(0x40000), 0);
+	chan.completed = 0;
+	auto c = bytesOf(0xc3);
+	auto *third = client.add(39, 0xc0000, 0x4000, &c);
+	ASSERT_EQ(client.bind(0x40000, 0x4000, third), 0);
+	IOLockLock(client.lock_);
+	const TegraGM20BAbiBoFree request{39};
+	ASSERT_EQ(client.boFree(&request), 0);
+	IOLockUnlock(client.lock_);
+	chan.completed = chan.submitted;
+	client.retireBatch();
+	client.retireBatch();
+	EXPECT_FALSE(newWorkBlocked());
+	EXPECT_EQ(gpuRead(0x40000), 0);
+}
+
+TEST_F(ClientRetirement, AKilledChannelReleasesThePendingBind)
+{
+	auto a = bytesOf(0xa1), b = bytesOf(0xb2);
+	client.add(40, 0x40000, 0x4000, &a);
+	auto *second = client.add(41, 0x80000, 0x4000, &b);
+	chan.completed = 0;
+	ASSERT_EQ(client.bind(0x40000, 0x4000, second), 0);
+	EXPECT_TRUE(newWorkBlocked());
+	chan.error = 1;
+	client.retireBatch();
+	EXPECT_FALSE(newWorkBlocked());
+	EXPECT_EQ(gpuRead(0x40000), 0xb2);
+	chan.error = 0;
+}
+
+// A 128 KiB page cut by an Unmap's edge: until the work queued before the cut is done, that work still reaches both the
+// cut pages and the ones that stay; then the cut pages go and the rest are mapped again with 4 KiB pages, while new
+// work waits for the bind epoch.
+TEST_F(ClientRetirement, ACutBigPageKeepsItsPtesUntilRetirementThenItsRestIsMappedAgain)
+{
+	auto big = bytesOf(0x5a, 0x20000);
+	client.add(42, 0x200000, 0x20000, &big, true);
+	chan.completed = 0;
+	ASSERT_EQ(client.bind(0x208000, 0x1000, nullptr), 0);
+	EXPECT_EQ(gpuRead(0x200000), 0x5a);
+	EXPECT_EQ(gpuRead(0x208000), 0x5a);
+	EXPECT_EQ(gpuRead(0x21f000), 0x5a);
+	EXPECT_TRUE(newWorkBlocked());
+	chan.completed = chan.submitted;
+	client.retireBatch();
+	EXPECT_FALSE(newWorkBlocked());
+	EXPECT_EQ(gpuRead(0x200000), 0x5a);
+	EXPECT_EQ(gpuRead(0x208000), 0);
+	EXPECT_EQ(gpuRead(0x209000), 0x5a);
+	EXPECT_EQ(gpuRead(0x21ffff), 0x5a);
 }

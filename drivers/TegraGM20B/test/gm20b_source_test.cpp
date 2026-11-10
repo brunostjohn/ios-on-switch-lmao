@@ -591,8 +591,11 @@ TEST(GM20BL2Source, InvalidateOnTheGpu)
 {
 	EXPECT_EQ(Count(gpu(), "FLUSH_L2_SYSTEM_INVALIDATE"), 0u);
 	const std::string exec = flat(Between(gpu(), "static int chan_exec(", "\n}\n"));
-	expectBefore(exec, "tlb = tgm_tlb_take(&chan->tlb, &chan->vm->tlb);",
+	expectBefore(exec, "tlb = tgm_tlb_take(&chan->tlb, &chan->vm->tlb) || bind;",
 		     "NVB06F_MEM_OP_D_OPERATION_L2_SYSMEM_INVALIDATE);");
+	// a pending bind's acquire comes before the TLB invalidate that makes its new PTEs seen
+	expectBefore(exec, "bind = !ret && !chan->kernel && bind_pending(chan->vm, &bind_target, &bind_va);",
+		     "tlb = tgm_tlb_take(&chan->tlb, &chan->vm->tlb) || bind;");
 	expectBefore(
 		exec, "NVB06F_MEM_OP_D_OPERATION_L2_SYSMEM_INVALIDATE);",
 		"NVB06F_MEM_OP_D_OPERATION_MMU_TLB_INVALIDATE); } PUSH_KICK(&chan->chan.push);");
@@ -746,11 +749,10 @@ TEST(GM20BTlbSource, MapsOrderedOnTheGpuRemovalsSynchronous)
 	EXPECT_THAT(unmap, HasSubstr("entry->va, entry->bytes, entry->shift"));
 	EXPECT_THAT(flat(definition(gpu(), "void tgm_vm_del(")),
 		    HasSubstr("mmu_invalidate_all();"));
-	const std::string split = flat(definition(gpu(), "int switch_gpu_vm_split("));
-	expectBefore(split, "nvif_vmm_raw_put(&vm->vmm, e->va, e->bytes, e->shift);",
-		     "ordered_scope = nvxnu_gpu_ordered_begin();");
-	expectBefore(split, "nvxnu_gpu_ordered_end(ordered_scope);",
-		     "nvif_vmm_raw_put(&vm->vmm, lost[p].va, lost[p].bytes, PAGE_SHIFT);");
+	// a cut changes no PTE; what it leaves pending is installed GPU-ordered, its failures put outside that scope
+	EXPECT_THAT(flat(definition(gpu(), "int switch_gpu_vm_split(")), Not(HasSubstr("nvif_vmm_raw")));
+	const std::string install = flat(definition(gpu(), "int switch_gpu_vm_install("));
+	expectBefore(install, "nvxnu_gpu_ordered_end(ordered_scope);", "nvif_vmm_raw_put(");
 }
 
 // Rail-gating (TegraGM20BRail.h): every other gpu.lock taker goes through gpu_lock(), which wakes a rail-gated GPU in

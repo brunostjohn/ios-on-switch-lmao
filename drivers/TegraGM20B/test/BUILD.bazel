@@ -78,6 +78,7 @@ host_test(
         "//drivers/TegraGM20B:TegraGM20BBindHistory.h",
         "//drivers/TegraGM20B:SwitchGpuBacking.h",
         "//drivers/TegraGM20B:TegraGM20BABI.h",
+        "gm20b_gpu_memory.h",
     ],
 )
 
@@ -471,6 +472,7 @@ host_test(
     size = "medium",
     srcs = [
         "gm20b_ce_model.h",
+        "gm20b_gpu_memory.h",
         "gm20b_relayout_test.cpp",
         "//drivers/TegraGM20B:TegraGM20BABI.h",
         "//drivers/TegraGM20B:TegraGM20BFences.h",
@@ -485,6 +487,7 @@ host_test(
     name = "gm20b_copy_test",
     srcs = [
         "gm20b_ce_model.h",
+        "gm20b_gpu_memory.h",
         "gm20b_copy_test.cpp",
         "//drivers/TegraGM20B:TegraGM20BABI.h",
         "//drivers/TegraGM20B:TegraGM20BCopy.h",
@@ -782,7 +785,11 @@ host_library(
 
 host_test(
     name = "switch_gpu_cached_zero_test",
-    srcs = ["switch_gpu_cached_zero_test.cpp", "gm20b_ce_model.h"],
+    srcs = [
+        "switch_gpu_cached_zero_test.cpp",
+        "gm20b_ce_model.h",
+        "gm20b_gpu_memory.h",
+    ],
     deps = [":cached_zero", ":cached_zero_kernel"],
 )
 
@@ -796,6 +803,7 @@ host_test(
     name = "switch_gpu_relayout_control_test",
     srcs = [
         "switch_gpu_relayout_control_test.cpp", "switch_gpu_copy_stubs.h", "gm20b_ce_model.h",
+        "gm20b_gpu_memory.h",
         "//drivers/TegraGM20B:TegraGM20BRelayout.h",
         "//drivers/TegraGM20B:TegraGM20BFences.h", "//drivers/TegraGM20B:TegraGM20BGpu.h",
         "//drivers/TegraGM20B:TegraGM20BLayout.h", "//drivers/TegraGM20B:TegraGM20BABI.h",

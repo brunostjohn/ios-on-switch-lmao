@@ -917,6 +917,9 @@ class AGXDeviceUserClient : public IOUserClient
     // a retired binding's PTEs go under it (retireBatch, takeRetiredOverlaps)
     IOLock *unmapLock_ = nullptr;
     bool faultLogged_[kMaxChannels] = {};
+    // the bind epoch (issueBind): the last issued and the last whose PTEs are all in place, its word in the fence page
+    static constexpr uint32_t kBindEpochWord = 256;
+    uint32_t bindIssued_ = 0, bindDone_ = 0;
 #if TGM_STATS
     // NVK's own heap is the client window's lower half (its replay heap and the raw path's quarter lie above): its maps
     // and unmaps are kept apart from the raw path's
@@ -974,7 +977,11 @@ class AGXDeviceUserClient : public IOUserClient
 	bool bindingIdle(const RetiredBinding *binding) const;
 	void takeRetiredOverlaps(uint64_t va, uint64_t bytes);
 	void retire(RetiredBinding *record);
-	IOReturn cutOverlaps(uint64_t va, uint64_t range, bool now, RetiredBinding **spare);
+	IOReturn cutOverlaps(uint64_t va, uint64_t range, bool now, bool replace, RetiredBinding **spare);
+	bool workQueued() const;
+	IOReturn mapRange(const TegraGM20BAbiBindOp &op, Bo *bo, RetiredBinding *record, bool queued);
+	void issueBind();
+	void installPendingBinds();
 	void logFaultBindings();
 	static void retirementWork(thread_call_param_t, thread_call_param_t);
 	static void retirementFence(void *owner);
@@ -1722,8 +1729,11 @@ IOReturn AGXDeviceUserClient::vmBind(const TegraGM20BAbiVmBind *in, uint32_t cou
 		};
 		IOReturn cut = !spare[0] || !spare[1] || (!unmap && !record) ? kIOReturnNoMemory
 									     : kIOReturnSuccess;
+		// Work queued now may still use what the range held: its PTEs stay until that work completes, and a Map's
+		// new PTEs wait for retirement behind the bind epoch. With none queued, both happen here.
+		const bool queued = workQueued();
 		if (!cut)
-			cut = cutOverlaps(op.va, op.range, !unmap, spare);
+			cut = cutOverlaps(op.va, op.range, !queued, !unmap, spare);
 		freeSpare();
 		if (unmap || cut) {
 			if (record)
@@ -1734,23 +1744,8 @@ IOReturn AGXDeviceUserClient::vmBind(const TegraGM20BAbiVmBind *in, uint32_t cou
 				return cut;
 			continue;
 		}
-		takeRetiredOverlaps(op.va, op.range);
-		switch_gpu_mapping *mapping = nullptr;
-		const int err = switch_gpu_vm_map_volatile(vm_, op.va, op.range, bo->mem, op.bo_offset,
-						   static_cast<uint8_t>(op.kind),
-						   static_cast<int>(bo->readOnly), op.op == TegraGM20BBindMapVolatile, &mapping);
-		noteBind(err ? TGM_BIND_REFUSED : TGM_BIND_MAP, op.va, op.range, bo, op.bo_offset,
-			 uint8_t(op.kind));
-		if (err) {
-			IODelete(record, RetiredBinding, 1);
-			return ioreturn(err);
-		}
-		*record = {nullptr, op.va, op.range, bo, mapping, {}, uint8_t(op.kind), uint8_t(op.op == TegraGM20BBindMapVolatile)};
-		++bo->bindings;
-		const uint32_t at = switch_gpu_binding_upper(binds_, nbinds_, op.va);
-		memmove(&binds_[at + 1], &binds_[at], sizeof(Binding) * (nbinds_ - at));
-		binds_[at] = {op.va, op.range, bo, op.bo_offset, record};
-		++nbinds_;
+		if (const IOReturn mapped = mapRange(op, bo, record, queued))
+			return mapped;
 		tgm_stats_bind(1, op.range >> 12, statsNowNs() - start);
 	}
 	return kIOReturnSuccess;

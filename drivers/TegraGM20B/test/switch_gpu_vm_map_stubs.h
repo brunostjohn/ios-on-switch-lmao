@@ -115,6 +115,7 @@ struct tgm_mem {
 struct switch_gpu_mapping_entry {
 	u64 va, offset, bytes;
 	u8 shift;
+	u8 pending;
 };
 
 struct switch_gpu_mapping {
