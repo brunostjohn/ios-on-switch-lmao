@@ -44,8 +44,70 @@ TEST(Host1xResults, RetainedFailedTokenSurvivesLegacyHistoryEviction)
     }
     EXPECT_EQ(R::status(&held), -125);
     R::release(&held);
-    EXPECT_EQ(R::status(&held), SWITCH_GPU_BACKING_STALE);
-    EXPECT_EQ(R::waitLegacy(1), SWITCH_GPU_BACKING_STALE);
+    EXPECT_EQ(R::status(&held), -125);
+    EXPECT_EQ(R::wait(&held), -125);
+    EXPECT_EQ(R::waitLegacy(1), -125);
+}
+
+TEST(Host1xResults, JobAgedOutOfHistoryReadsCompleted)
+{
+    using R = TestResults<109>;
+    switch_gpu_backing_token old{}, next{};
+    auto *record = reserve<109>(1, 1, old);
+    R::physical(record, 1);
+    R::complete(&record, 0);
+    for (uint64_t i = 2; i <= 100; ++i) {
+        record = reserve<109>(i, i, next);
+        R::complete(&record, 0);
+    }
+    EXPECT_EQ(R::status(&old), 1);
+    EXPECT_EQ(R::wait(&old), 1);
+    EXPECT_EQ(R::physicalStatus(&old), 1);
+    EXPECT_EQ(R::waitLegacy(1), 0);
+    EXPECT_EQ(R::retain(&old), 0);
+    R::release(&old);
+    EXPECT_EQ(R::status(&old), 1);
+}
+
+TEST(Host1xResults, AgedOutBatchKeepsItsFailureForEveryFence)
+{
+    using R = TestResults<110>;
+    switch_gpu_backing_token batch{}, next{};
+    auto *record = reserve<110>(3, 5, batch);
+    R::physical(record, -5);
+    R::complete(&record, -5);
+    for (uint64_t i = 6; i <= 100; ++i) {
+        record = reserve<110>(i, i, next);
+        R::complete(&record, 0);
+    }
+    EXPECT_EQ(R::status(&batch), -5);
+    EXPECT_EQ(R::physicalStatus(&batch), -5);
+    EXPECT_EQ(R::waitLegacy(3), -5);
+    EXPECT_EQ(R::waitLegacy(4), -5);
+    EXPECT_EQ(R::waitLegacy(6), 0);
+}
+
+TEST(Host1xResults, UnissuedOrForeignWorkStaysStale)
+{
+    using R = TestResults<111>;
+    switch_gpu_backing_token token{};
+    auto *record = reserve<111>(1, 1, token);
+    R::complete(&record, 0);
+    switch_gpu_backing_token future = token, otherGeneration = token, otherQueue = token;
+    future.value = 2;
+    otherGeneration.reset_generation += 1;
+    otherQueue.queue += 1;
+    EXPECT_EQ(R::status(&future), SWITCH_GPU_BACKING_STALE);
+    EXPECT_EQ(R::waitLegacy(2), SWITCH_GPU_BACKING_STALE);
+    for (uint64_t i = 2; i <= 100; ++i) {
+        record = reserve<111>(i, i, future);
+        R::complete(&record, 0);
+    }
+    future.value = 101;
+    EXPECT_EQ(R::status(&future), SWITCH_GPU_BACKING_STALE);
+    EXPECT_EQ(R::status(&otherGeneration), SWITCH_GPU_BACKING_STALE);
+    EXPECT_EQ(R::status(&otherQueue), SWITCH_GPU_BACKING_STALE);
+    EXPECT_EQ(R::retain(&otherQueue), SWITCH_GPU_BACKING_STALE);
 }
 
 TEST(Host1xResults, CancelledEscapedTokenCannotAliasReusedHardwareThreshold)

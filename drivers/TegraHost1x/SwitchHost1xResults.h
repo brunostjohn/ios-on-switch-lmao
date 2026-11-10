@@ -10,7 +10,12 @@ struct SwitchHost1xResult {
     uint64_t first = 0, last = 0, generation = 0;
     uint32_t references = 0;
     int result = 0, physicalResult = 0;
-    bool registered = false;
+    bool registered = false, completed = false;
+};
+
+struct SwitchHost1xFailure {
+    uint64_t first, last, generation;
+    int result, physicalResult;
 };
 
 struct SwitchHost1xResultState {
@@ -18,8 +23,11 @@ struct SwitchHost1xResultState {
     IOLock *lock = nullptr;
     SwitchHost1xResult initial[kRecent] = {};
     SwitchHost1xResult *buckets[kBuckets] = {}, *recent[kRecent] = {}, *free = nullptr;
-    uint32_t syncpoint = 0, allocated = kRecent, nextRecent = 0;
-    uint64_t generation = 1;
+    uint32_t syncpoint = 0, allocated = kRecent, nextRecent = 0, nextFailure = 0;
+    uint64_t generation = 1, retiredThrough = 0;
+    // A completed job whose record is gone reads as completed, or as its failure while it is among the newest
+    // kRecent failures kept here. An older failure pushed out by newer ones reads as completed.
+    SwitchHost1xFailure failures[kRecent] = {};
 };
 
 // Kernel C++ does not coalesce template inline variables across translation units.
@@ -43,10 +51,56 @@ class SwitchHost1xResults {
         return nullptr;
     }
 
+    static void retireRecord(const SwitchHost1xResult &record)
+    {
+        if (record.last > State.retiredThrough)
+            State.retiredThrough = record.last;
+        if (record.result >= 0 && record.physicalResult >= 0)
+            return;
+        State.failures[State.nextFailure] = {record.first, record.last, record.generation, record.result,
+                                             record.physicalResult};
+        State.nextFailure = (State.nextFailure + 1) % kRecent;
+    }
+
+    static const SwitchHost1xFailure *failure(uint64_t sequence, const uint64_t *generation)
+    {
+        const SwitchHost1xFailure *found = nullptr;
+        for (const auto &entry : State.failures)
+            if (entry.generation && entry.first <= sequence && sequence <= entry.last &&
+                (generation ? entry.generation == *generation : !found || found->generation < entry.generation))
+                found = &entry;
+        return found;
+    }
+
+    static bool retired(uint64_t sequence, const uint64_t *generation)
+    {
+        return sequence && sequence <= State.retiredThrough && (!generation || *generation == State.generation);
+    }
+
+    static bool retiredToken(const switch_gpu_backing_token &token)
+    {
+        return token.engine == Engine && token.queue == State.syncpoint &&
+               retired(token.value, &token.reset_generation);
+    }
+
+    static int retiredResult(uint64_t sequence, const uint64_t *generation)
+    {
+        const auto *entry = failure(sequence, generation);
+        return entry && entry->result < 0 ? entry->result : 1;
+    }
+
+    static int retiredPhysical(const switch_gpu_backing_token &token)
+    {
+        const auto *entry = failure(token.value, &token.reset_generation);
+        return entry && entry->physicalResult < 0 ? entry->physicalResult : 1;
+    }
+
     static void drop(SwitchHost1xResult *record)
     {
         if (--record->references)
             return;
+        if (record->completed)
+            retireRecord(*record);
         if (record->registered) {
             auto **at = &State.buckets[record->last % kBuckets];
             while (*at && *at != record)
@@ -143,6 +197,7 @@ public:
         auto *record = *owned;
         *owned = nullptr;
         record->result = result < 0 ? result : 1;
+        record->completed = true;
         if (auto *old = State.recent[State.nextRecent])
             drop(old);
         State.recent[State.nextRecent] = record;
@@ -166,7 +221,9 @@ public:
             return -22;
         IOLockLock(State.lock);
         const auto *record = find(*token);
-        const int result = record ? record->physicalResult : SWITCH_GPU_BACKING_STALE;
+        const int result = record              ? record->physicalResult
+                           : retiredToken(*token) ? retiredPhysical(*token)
+                                                 : SWITCH_GPU_BACKING_STALE;
         IOLockUnlock(State.lock);
         return result;
     }
@@ -187,7 +244,9 @@ public:
             return -22;
         IOLockLock(State.lock);
         const auto *record = find(*token);
-        const int result = record ? record->result : SWITCH_GPU_BACKING_STALE;
+        const int result = record              ? record->result
+                           : retiredToken(*token) ? retiredResult(token->value, &token->reset_generation)
+                                                 : SWITCH_GPU_BACKING_STALE;
         IOLockUnlock(State.lock);
         return result;
     }
@@ -198,7 +257,7 @@ public:
             return -22;
         IOLockLock(State.lock);
         auto *record = find(*token);
-        int result = record ? 0 : SWITCH_GPU_BACKING_STALE;
+        int result = record || retiredToken(*token) ? 0 : SWITCH_GPU_BACKING_STALE;
         if (record) {
             if (record->references == UINT32_MAX)
                 result = -75;
@@ -226,8 +285,10 @@ public:
         IOLockLock(State.lock);
         auto *record = find(*token);
         if (!record) {
+            const int result = retiredToken(*token) ? retiredResult(token->value, &token->reset_generation)
+                                                    : SWITCH_GPU_BACKING_STALE;
             IOLockUnlock(State.lock);
-            return SWITCH_GPU_BACKING_STALE;
+            return result;
         }
         if (record->references == UINT32_MAX) {
             IOLockUnlock(State.lock);
@@ -258,8 +319,9 @@ public:
                         (!found || found->generation < record->generation))
                         found = record;
         if (!found) {
+            const int result = retired(sequence, nullptr) ? retiredResult(sequence, nullptr) : SWITCH_GPU_BACKING_STALE;
             IOLockUnlock(State.lock);
-            return SWITCH_GPU_BACKING_STALE;
+            return result == 1 ? 0 : result;
         }
         if (found->references == UINT32_MAX) {
             IOLockUnlock(State.lock);

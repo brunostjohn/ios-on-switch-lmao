@@ -91,8 +91,8 @@ TEST(SwitchHost1xResultsLinkage, KernelTranslationUnitsShareBothEngineTimelines)
         }
         EXPECT_EQ(switch_host1x_test_status(&first), -5);
         switch_host1x_test_release(&first);
-        EXPECT_EQ(switch_host1x_test_producer_status(&first), SWITCH_GPU_BACKING_STALE);
-        EXPECT_EQ(switch_host1x_test_history(engine, 8), SWITCH_GPU_BACKING_STALE);
+        EXPECT_EQ(switch_host1x_test_producer_status(&first), -5);
+        EXPECT_EQ(switch_host1x_test_history(engine, 8), -5);
     }
     EXPECT_EQ(allocatedLocks, 2u);
 }
