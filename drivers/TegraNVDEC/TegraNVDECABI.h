@@ -43,8 +43,11 @@ enum TegraNVDECMethod {
     TegraNVDECMethodSubmit = 4,       // TegraNVDECSubmit -> TegraNVDECFence
     TegraNVDECMethodWait = 5,         // TegraNVDECWait ->
     TegraNVDECMethodPresent = 6,      // TegraNVDECPresent -> (the picture is in the IOSurface)
+    SwitchNVDECMethodBufferRecycle = 7, // TegraNVDECBuffer -> TegraNVDECBufferReply
+    SwitchNVDECMethodExport = 8,       // TegraNVDECPresent -> (leased native NV12 backing)
 };
 
+#define SWITCH_NVDEC_FEATURE_NATIVE_OUTPUT (1u << 1)
 #define TEGRA_NVDEC_FEATURE_PRESENT (1u << 0)  // TegraNVDECInfo.features: Present is on (VIC reads block linear)
 
 // Service properties, true for each codec in TegraNVDECInfo.codecs: a process that may not open a client finds them by

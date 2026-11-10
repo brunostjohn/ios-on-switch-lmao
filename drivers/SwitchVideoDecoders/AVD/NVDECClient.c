@@ -118,6 +118,31 @@ bool nvdec_can_present(const NVDECClient *c)
     return c->features & TEGRA_NVDEC_FEATURE_PRESENT;
 }
 
+bool switch_nvdec_can_export(const NVDECClient *c)
+{
+    return (c->features & SWITCH_NVDEC_FEATURE_NATIVE_OUTPUT) != 0;
+}
+
+int switch_nvdec_export(NVDECClient *c, const TegraNVDECPresent *picture)
+{
+    return call(c, c->selector, SwitchNVDECMethodExport, picture, sizeof(*picture), NULL, 0);
+}
+
+int switch_nvdec_recycle(void *context, uint32_t handle, uint64_t bytes, void **address)
+{
+    NVDECClient *client = context;
+    if (!switch_nvdec_can_export(client))
+        return 0;
+    const TegraNVDECBuffer request = {handle, 0};
+    TegraNVDECBufferReply reply = {0};
+    const int error = call(client, client->selector, SwitchNVDECMethodBufferRecycle,
+                            &request, sizeof(request), &reply, sizeof(reply));
+    if (error || reply.handle != handle || reply.reserved || reply.size < bytes || !reply.address)
+        return -1;
+    *address = (void *)(uintptr_t)reply.address;
+    return 0;
+}
+
 int nvdec_present(NVDECClient *c, const TegraNVDECPresent *present)
 {
     return call(c, c->selector, TegraNVDECMethodPresent, present, sizeof(*present), NULL, 0);

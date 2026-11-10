@@ -3,11 +3,15 @@
 #include "SwitchVICTransform.h"
 #include "SwitchVICMapping.h"
 #include "SwitchVICJobs.h"
+#include "SwitchVICSurfaceAccess.h"
+#include "SwitchNativeVICImage.h"
 #include "../TegraGM20B/TegraGM20BLayout.h"
 
 namespace {
 struct SwitchVICTransform {
-    switch_gpu_backing *backings[2] = {};
+    uint32_t refs = 1;
+    SwitchVICSurfaceAccess access[2];
+    SwitchNativeSurfaceView native = {};
     SwitchVICMapping *mappings[2] = {};
     TegraVICJob jobs[3] = {};
     void (*completion)(void *, int) = nullptr;
@@ -16,11 +20,13 @@ struct SwitchVICTransform {
 
 void release(SwitchVICTransform *work)
 {
+    if (__atomic_sub_fetch(&work->refs, 1, __ATOMIC_ACQ_REL))
+        return;
     for (uint32_t i = 0; i < 2; ++i) {
         switch_vic_mapping_release(work->mappings[i]);
-        if (work->backings[i])
-            switch_gpu_backing_release(work->backings[i]);
+        switch_vic_surface_release_access(&work->access[i]);
     }
+    switch_native_surface_release(&work->native);
     IODelete(work, SwitchVICTransform, 1);
 }
 
@@ -50,57 +56,97 @@ bool pitchLayout(switch_gpu_backing *backing, uint64_t extent)
 }
 }  // namespace
 
-int switch_vic_transform(const TegraVICSurface *source, const TegraVICSurface *destination,
-                         const TegraVICPlan *plan, uint32_t chromaSite,
-                         void (*completion)(void *, int), void *context)
+int switch_vic_transform(const TegraVICSurface *source, const TegraVICSurface *destination, const TegraVICPlan *plan,
+                         uint32_t chromaSite, void (*completion)(void *, int), void *context, SwitchVICEvents *events)
 {
-    if (!completion || !plan->count || plan->count > 3)
+    if (!completion || !destination || !plan || !plan->count || plan->count > 3 || (plan->readsSource && !source))
         return -22;
+    if (plan->readsSource && source->memory == destination->memory)
+        return 0;
     auto *work = IONewZero(SwitchVICTransform, 1);
     if (!work)
         return -12;
+    work->refs = 1;
     work->completion = completion;
     work->context = context;
-    work->backings[1] = switch_vic_surface_backing(destination);
-    if (plan->readsSource)
-        work->backings[0] = switch_vic_surface_backing(source);
-    if (!work->backings[1] || (plan->readsSource && !work->backings[0])) {
-        release(work);
-        return -12;
+    int error = switch_vic_surface_access(destination, true, &work->access[1]);
+    if (!error && plan->readsSource) {
+        const int native = switch_native_surface_acquire(source, &work->native);
+        if (native == -2 || native == -95 || native == SWITCH_GPU_BACKING_STALE)
+            error = switch_vic_surface_access(source, false, &work->access[0], work->access[1].owned != nullptr);
+        else
+            error = native;
     }
-    if (!pitchLayout(work->backings[1], tegra_vic_surface_extent(&destination->desc)) ||
-        (plan->readsSource && !pitchLayout(work->backings[0], tegra_vic_surface_extent(&source->desc)))) {
+    if (error) {
+        release(work);
+        return error == -16 ? 0 : error;
+    }
+    auto *input = work->native.owner ? work->native.native : work->access[0].backing;
+    auto *output = work->access[1].backing;
+    const uint64_t destinationExtent = tegra_vic_surface_extent(&destination->desc);
+    const uint64_t sourceExtent = plan->readsSource ? tegra_vic_surface_extent(&source->desc) : 0;
+    if (destinationExtent > UINT64_MAX - work->access[1].offset ||
+        !pitchLayout(output, work->access[1].offset + destinationExtent) ||
+        (plan->readsSource && !work->native.owner &&
+         (sourceExtent > UINT64_MAX - work->access[0].offset ||
+          !pitchLayout(input, work->access[0].offset + sourceExtent))) ||
+        (plan->readsSource && (input == output || work->native.logical == output))) {
         release(work);
         return 0;
     }
-    work->mappings[1] = switch_vic_mapping_acquire(work->backings[1], true);
+    work->mappings[1] = switch_vic_mapping_acquire(output, true);
     if (plan->readsSource)
-        work->mappings[0] = switch_vic_mapping_acquire(work->backings[0], false);
+        work->mappings[0] = switch_vic_mapping_acquire(input, false);
     if (!work->mappings[1] || (plan->readsSource && !work->mappings[0])) {
         release(work);
         return -12;
     }
     TegraVICImage src = {}, dst = {};
-    const char *why = tegra_vic_image_from(&destination->desc, switch_vic_mapping_address(work->mappings[1]), &dst);
-    dst.chromaSite = chromaSite;
-    if (!why && plan->readsSource)
-        why = tegra_vic_image_from(&source->desc, switch_vic_mapping_address(work->mappings[0]), &src);
+    const char *why = tegra_vic_image_from(
+        &destination->desc, switch_vic_mapping_address(work->mappings[1]) + work->access[1].offset, &dst);
+    if (chromaSite) dst.chromaSite = chromaSite;
+    if (!why && plan->readsSource) {
+        const uint64_t address = switch_vic_mapping_address(work->mappings[0]);
+        why = work->native.owner ? switch_native_vic_image(work->native, address, &src)
+                                 : tegra_vic_image_from(&source->desc, address + work->access[0].offset, &src);
+    }
     for (uint32_t i = 0; !why && i < plan->count; ++i) {
-        const auto &op = plan->op[i];
-        why = tegra_vic_build(op.fill ? nullptr : &src, &dst, &op, tegra_vic_traits(),
+        auto operation = plan->op[i];
+        if (!operation.fill && work->native.owner && !switch_native_vic_crop(work->native, &operation)) {
+            why = "native source crop";
+            break;
+        }
+        why = tegra_vic_build(operation.fill ? nullptr : &src, &dst, &operation, tegra_vic_traits(),
                               tegra_vic_config_address(), tegra_vic_filter_address(), &work->jobs[i]);
     }
     if (why) {
         release(work);
         return -22;
     }
-    switch_gpu_backing_use uses[2] = {{work->backings[1], SWITCH_GPU_BACKING_WRITE, 0},
-                                       {work->backings[0], SWITCH_GPU_BACKING_READ, 0}};
-    const int error = switch_vic_submit_batch(work->jobs, plan->count, nullptr, uses, plan->readsSource ? 2 : 1,
-                                             completed, work, nullptr);
-    if (error) {
-        release(work);
-        return error;
+    switch_gpu_backing_use uses[3] = {{output, SWITCH_GPU_BACKING_WRITE, 0},
+                                      {input, SWITCH_GPU_BACKING_READ, 0},
+                                      {work->native.logical, SWITCH_GPU_BACKING_READ, 0}};
+    switch_gpu_backing_guard guards[3] = {work->access[1].guard};
+    uint32_t guardCount = 1;
+    if (work->native.owner) {
+        guards[guardCount++] = work->native.guard;
+        guards[guardCount++] = work->native.representation;
+    } else if (plan->readsSource) {
+        guards[guardCount++] = work->access[0].guard;
     }
-    return 1;
+    switch_gpu_cpu_lease *leases[2] = {};
+    uint32_t leaseCount = 0;
+    for (auto &access : work->access)
+        if (access.owned)
+            leases[leaseCount++] = access.owned;
+    const SwitchVICOwnership ownership = {
+        uses, work->native.owner ? 3u : plan->readsSource ? 2u : 1u, guards, guardCount, leases, leaseCount};
+    __atomic_add_fetch(&work->refs, 1, __ATOMIC_RELAXED);
+    error = switch_vic_submit_checked(work->jobs, plan->count, nullptr, ownership, completed, work, nullptr, events);
+    for (auto &access : work->access)
+        switch_vic_surface_unreserve(&access);
+    if (error)
+        release(work);
+    release(work);
+    return error ? error : 1;
 }

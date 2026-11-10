@@ -106,10 +106,13 @@ TEST(VicBounceOrder, FencesWrapWithTheSyncpoint)
     EXPECT_EQ(o.done, 2u);
 }
 
-TEST(VicBounceOrder, VicChannelWaitWords)
+TEST(VicBounceOrder, VicChannelWaitPreservesFullThresholdAndExactWordBound)
 {
-    uint32_t w[2];
-    EXPECT_EQ(tegra_host1x_op_wait_syncpt(w, 37, 0x1234567), 2u);
-    EXPECT_EQ(w[0], tegra_host1x_op_setclass(TEGRA_HOST1X_CLASS_HOST1X, 8, 1)) << "host1x class, WAIT_SYNCPT";
-    EXPECT_EQ(w[1], (37u << 24) | 0x234567u) << "index in 31:24, threshold in 23:0";
+    for (const uint32_t threshold : {0u, 0x00ffffffu, 0x01000000u, 0x81234567u, 0xffffffffu}) {
+        uint32_t words[SWITCH_HOST1X_WAIT_WORDS] = {};
+        EXPECT_EQ(tegra_host1x_op_wait_syncpt(words, 37, threshold), SWITCH_HOST1X_WAIT_WORDS);
+        EXPECT_EQ(words[0], tegra_host1x_op_setclass(TEGRA_HOST1X_CLASS_HOST1X, 0x4e, 5));
+        EXPECT_EQ(words[1], threshold);
+        EXPECT_EQ(words[2], 37u);
+    }
 }

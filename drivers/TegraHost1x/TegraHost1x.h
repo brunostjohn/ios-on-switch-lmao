@@ -59,14 +59,14 @@ static inline uint32_t tegra_host1x_op_imm(uint32_t offset, uint32_t value)
     return (4u << 28) | (offset << 16) | (value & 0xffff);
 }
 
-// WAIT_SYNCPT (host1x class method 8, Linux hw_host1x05_uclass.h host1x_uclass_wait_syncpt_r): the channel stalls until
-// syncpoint `id` reaches `threshold` (low 24 bits), so an engine's stream starts only after another engine's work.
-// Writes two words; the stream's next SETCLASS returns it to its engine.
+// T210 host1x05 methods 0x4e/0x50 load the full threshold and wait on it; the legacy method 8 truncates to 24 bits.
+enum { SWITCH_HOST1X_WAIT_WORDS = 3 };
 static inline uint32_t tegra_host1x_op_wait_syncpt(uint32_t *w, uint32_t id, uint32_t threshold)
 {
-    w[0] = tegra_host1x_op_setclass(TEGRA_HOST1X_CLASS_HOST1X, 8, 1);
-    w[1] = ((id & 0xff) << 24) | (threshold & 0xffffff);
-    return 2;
+    w[0] = tegra_host1x_op_setclass(TEGRA_HOST1X_CLASS_HOST1X, 0x4e, 5);
+    w[1] = threshold;
+    w[2] = id;
+    return SWITCH_HOST1X_WAIT_WORDS;
 }
 
 // INCR_SYNCPT (method 0 of every class: the engine's THI implements the host methods) with a condition.

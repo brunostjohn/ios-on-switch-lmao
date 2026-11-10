@@ -47,6 +47,18 @@ int tegra_vic_ios_device_unlock(OSObject *surface, uint32_t options);
 namespace {
 IOService *gRoot;
 const OSSymbol *gMatrixKey;
+const OSSymbol *gTransferKey, *gPrimariesKey, *gChromaTopKey, *gChromaBottomKey;
+
+uint32_t colorTag(OSObject *surface, const OSSymbol *key, uint32_t (*parse)(const char *))
+{
+    if (!key) return UINT32_MAX;
+    uint32_t seed = 0;
+    OSObject *value = switch_surface_copy_value(surface, key, &seed);
+    auto *name = OSDynamicCast(OSString, value);
+    const uint32_t result = value && !name ? UINT32_MAX : parse(name ? name->getCStringNoCopy() : nullptr);
+    OSSafeReleaseNULL(value);
+    return result;
+}
 
 uint32_t colorMatrix(OSObject *surface)
 {
@@ -62,6 +74,20 @@ uint32_t colorMatrix(OSObject *surface)
 }
 }
 
+extern "C" uint32_t switch_vic_surface_matrix(OSObject *surface)
+{
+    return surface ? colorMatrix(surface) : uint32_t(SWITCH_VIC_MATRIX_UNSUPPORTED);
+}
+
+extern "C" void switch_vic_surface_color(OSObject *surface, TegraVICSurfaceDesc *desc)
+{
+    desc->colorMatrix = colorMatrix(surface);
+    desc->transfer = colorTag(surface, gTransferKey, switch_surface_transfer_tag);
+    desc->primaries = colorTag(surface, gPrimariesKey, switch_surface_primaries_tag);
+    desc->chromaTop = colorTag(surface, gChromaTopKey, switch_surface_chroma_tag);
+    desc->chromaBottom = colorTag(surface, gChromaBottomKey, switch_surface_chroma_tag);
+}
+
 extern "C" bool tegra_vic_surface_start(void)
 {
     if (gRoot)
@@ -73,7 +99,13 @@ extern "C" bool tegra_vic_surface_start(void)
     match->release();
     if (root) {
         gMatrixKey = OSSymbol::withCStringNoCopy("IOSurfaceYCbCrMatrix");
-        if (!gMatrixKey) {
+        gTransferKey = OSSymbol::withCStringNoCopy("IOSurfaceTransferFunction");
+        gPrimariesKey = OSSymbol::withCStringNoCopy("IOSurfaceColorPrimaries");
+        gChromaTopKey = OSSymbol::withCStringNoCopy("IOSurfaceChromaLocationTopField");
+        gChromaBottomKey = OSSymbol::withCStringNoCopy("IOSurfaceChromaLocationBottomField");
+        if (!gMatrixKey || !gTransferKey || !gPrimariesKey || !gChromaTopKey || !gChromaBottomKey) {
+            OSSafeReleaseNULL(gMatrixKey); OSSafeReleaseNULL(gTransferKey); OSSafeReleaseNULL(gPrimariesKey);
+            OSSafeReleaseNULL(gChromaTopKey); OSSafeReleaseNULL(gChromaBottomKey);
             root->release();
             return false;
         }
@@ -90,6 +122,19 @@ extern "C" IOReturn tegra_vic_surface_lookup(uint32_t id, task_t task, TegraVICS
     OSObject *surface = tegra_vic_ios_lookup(gRoot, id, task);
     if (!surface)
         return kIOReturnBadArgument;  // as AppleM2ScalerCSCDriver: not this task's surface
+    const IOReturn result = switch_vic_surface_from_object(surface, id, out);
+    surface->release();
+    return result;
+}
+
+extern "C" IOReturn switch_vic_surface_from_object(OSObject *surface, uint32_t id, TegraVICSurface *out)
+{
+    if (!out)
+        return kIOReturnBadArgument;
+    bzero(out, sizeof(*out));
+    if (!surface)
+        return kIOReturnBadArgument;
+    surface->retain();
     out->surface = surface;
     out->id = id;
     out->memory = tegra_vic_ios_memory(surface);
@@ -98,9 +143,7 @@ extern "C" IOReturn tegra_vic_surface_lookup(uint32_t id, task_t task, TegraVICS
     d->width = (uint32_t)tegra_vic_ios_width(surface);
     d->height = (uint32_t)tegra_vic_ios_height(surface);
     d->planes = tegra_vic_ios_plane_count(surface);
-    const TegraVICFormat *format = tegra_vic_format(d->fourcc);
-    if (format && format->kind != TEGRA_VIC_KIND_RGB)
-        d->colorMatrix = colorMatrix(surface);
+    switch_vic_surface_color(surface, d);
     const uint32_t planes = d->planes ? d->planes : 1;
     for (uint32_t p = 0; p < planes && p < 2; p++) {
         d->planeOffset[p] = tegra_vic_ios_plane_offset(surface, p);

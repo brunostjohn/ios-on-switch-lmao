@@ -1,5 +1,5 @@
 load("//bazel/lint:defs.bzl", "lint_files")
-load("//bazel/testing:defs.bzl", "host_test")
+load("//bazel/testing:defs.bzl", "host_library", "host_shims", "host_test")
 
 lint_files()
 
@@ -9,4 +9,34 @@ host_test(
         "switch_host1x_release_test.cpp",
         "//drivers/TegraHost1x:SwitchHost1xFailureRelease.h",
     ],
+)
+
+host_shims(
+    name = "results_kernel",
+    headers = ["IOKit/IOLib.h", "IOKit/IOLocks.h", "kern/thread.h"],
+    stubs = "switch_host1x_results_stubs.h",
+)
+
+host_library(
+    name = "results_linkage",
+    srcs = [
+        "switch_host1x_results_producer.cpp",
+        "switch_host1x_results_consumer.cpp",
+        "//drivers/TegraHost1x:SwitchHost1xResults.cpp",
+    ],
+    hdrs = [
+        "switch_host1x_results_calls.h",
+        "//drivers/TegraHost1x:SwitchHost1xResults.h",
+        "//drivers/TegraGM20B:SwitchGpuBacking.h",
+    ],
+    copts = ["-fapple-kext", "-mkernel", "-O2", "-fno-common"],
+    sanitize = False,
+    deps = [":results_kernel"],
+)
+
+host_test(
+    name = "switch_host1x_results_linkage_test",
+    srcs = ["switch_host1x_results_linkage_test.cpp"],
+    sanitize = False,
+    deps = [":results_linkage", ":results_kernel"],
 )

@@ -16,7 +16,7 @@
 typedef struct {
     uint8_t *va[64];
     uint64_t size[64];
-    unsigned decoded, failures;
+    unsigned decoded, failures, recycled;
     bool clip, haveFirst;
     TegraNVDECSubmit first;  // the first submit and its relocations' room, for the refusal cases
     uint64_t firstAvail[TEGRA_NVDEC_MAX_ENTRIES];
@@ -36,6 +36,21 @@ static int fakeAlloc(void *ctx, uint64_t size, uint32_t *handle, void **va)
         return f->va[h] ? 0 : -1;
     }
     return -1;
+}
+
+static int switch_fake_recycle(void *ctx, uint32_t handle, uint64_t bytes, void **address)
+{
+    Fake *f = ctx;
+    if (!handle || handle >= 64 || !f->va[handle] || bytes != f->size[handle])
+        return -1;
+    void *next = calloc(1, bytes);
+    if (!next)
+        return -1;
+    free(f->va[handle]);
+    f->va[handle] = next;
+    *address = next;
+    ++f->recycled;
+    return 0;
 }
 
 static void fakeFree(void *ctx, uint32_t handle)
@@ -88,6 +103,8 @@ typedef struct {
 static void *fakeDecoded(void *ctx, const H264Picture *pic)
 {
     Fake *f = ctx;
+    if (pic->luma != f->va[pic->handle])
+        ++f->failures;
     Item *it = malloc(sizeof(*it));
     it->index = (unsigned)(uintptr_t)pic->token;
     it->poc = pic->poc;
@@ -208,7 +225,7 @@ int main(int argc, char **argv)
         fclose(fp);
     }
     const H264Backend backend = {&fake,       fakeAlloc, fakeFree,    fakeSubmit, fakeWait,
-                                 fakeDecoded, fakeEmit,  fakeDiscard, NULL};
+                                 fakeDecoded, fakeEmit,  fakeDiscard, NULL, switch_fake_recycle};
     H264Decoder *d = h264_decoder_create(&backend);
 
     // Split into NAL units, then access units (7.4.1.2.3: a new one starts at an AUD, a parameter set or SEI after
@@ -284,7 +301,7 @@ int main(int argc, char **argv)
             if (fake.order[p] >= (unsigned)kClipFrames || kClipDisplay[fake.order[p]] != (int)p)
                 misordered++;
         const int refused = fake.haveFirst ? refusals(&fake) : 1;
-        const bool pass = !errors && !fake.failures && !misordered && !refused && index == (unsigned)kClipFrames;
+        const bool pass = !errors && !fake.failures && !misordered && !refused && index == (unsigned)kClipFrames && fake.recycled == fake.decoded;
         printf("%s h264 clip: %u access units, %u pictures, %d errors, %u refused by the checker, %d out of display "
                "order, %d refusal cases wrong\n",
                pass ? "PASS" : "FAIL", index, fake.decoded, errors, fake.failures, misordered, refused);

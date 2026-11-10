@@ -3,6 +3,7 @@
 // leave out. The kernel link needs each symbol even where its caller never runs or treats it as absent. They are weak:
 // a linked component that defines a hook (qemu_root_defconfig's display archive defines the first one) replaces it.
 
+#include <stdbool.h>
 #include <stdint.h>
 
 #define STUB __attribute__((weak))
@@ -53,70 +54,21 @@ STUB int boot_progress_pulse_anchor(uintptr_t address, uint64_t bytes, unsigned 
     return 0;
 }
 
-// TegraGM20B calls these weakly and runs its no-export path when they answer as below: TegraVIC's native surface
-// exports (no native representation: the GPU uses the IOSurface's own backing) and the scheduler's render-dependency
-// trace. The components that define them replace these.
-int switch_native_surface_prepare(void *surface, uint32_t id, void *task, uint32_t options, void **logical,
-                                  void **owned);
-
-STUB int switch_native_surface_prepare(void *surface, uint32_t id, void *task, uint32_t options, void **logical,
-                                       void **owned)
-{
-    (void)surface;
-    (void)id;
-    (void)task;
-    (void)options;
-    (void)logical;
-    (void)owned;
-    return 0;
-}
-
-int switch_native_surface_prepare_gpu(void *surface, uint32_t id, void *task, uint32_t options, void **logical,
-                                      void **owned);
-
-STUB int switch_native_surface_prepare_gpu(void *surface, uint32_t id, void *task, uint32_t options, void **logical,
-                                           void **owned)
-{
-    (void)surface;
-    (void)id;
-    (void)task;
-    (void)options;
-    (void)logical;
-    (void)owned;
-    return 0;
-}
-
-int switch_native_surface_gpu_admission(void *surface, uint32_t access, void *expected);
-
-STUB int switch_native_surface_gpu_admission(void *surface, uint32_t access, void *expected)
-{
-    (void)surface;
-    (void)access;
-    (void)expected;
-    return 1;
-}
-
-int switch_native_surface_gpu_acquire(void *surface, void *view);
-
-STUB int switch_native_surface_gpu_acquire(void *surface, void *view)
-{
-    (void)surface;
-    (void)view;
-    return -2;
-}
-
-void switch_native_surface_gpu_release(void *view);
-
-STUB void switch_native_surface_gpu_release(void *view)
-{
-    (void)view;
-}
-
+// Called weakly and answered as the absent component does: the scheduler's render-dependency trace (TegraGM20B: nothing
+// traced) and the display's readiness for NVDEC's native output (TegraNVDEC: not ready, so the capability stays off).
+// The components that define them replace these.
 void switch_sched_render_dependency(int entering);
 
 STUB void switch_sched_render_dependency(int entering)
 {
     (void)entering;
+}
+
+bool switch_native_surface_display_ready(void);
+
+STUB bool switch_native_surface_display_ready(void)
+{
+    return false;
 }
 
 // NOLINTEND(misc-use-internal-linkage, readability-non-const-parameter)

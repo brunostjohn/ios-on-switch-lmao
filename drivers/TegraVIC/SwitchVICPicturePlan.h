@@ -86,6 +86,8 @@ inline void switch_vic_picture_describe(const TegraVICPicture *p, const SwitchVI
     dst->width = pl.width;
     dst->height = pl.height;
     dst->standard = pl.whole.standard;
+    dst->transfer = pl.whole.transfer; dst->primaries = pl.whole.primaries;
+    dst->chromaSite = pl.whole.chromaSite;
     dst->lastRowExact = 1;
     for (uint32_t k = 0; k < 2; k++) {
         dst->pitch[k] = pl.band[k].pitch;
@@ -105,6 +107,8 @@ inline void switch_vic_picture_describe(const TegraVICPicture *p, const SwitchVI
     src->base[1] = srcBase + p->chromaOffset;
     src->span[1] = p->chromaOffset < p->bytes ? p->bytes - p->chromaOffset : 0;
     src->standard = pl.whole.standard;
+    src->transfer = pl.whole.transfer; src->primaries = pl.whole.primaries;
+    src->chromaSite = pl.whole.chromaSite;
     src->blockLinear = 1;
     src->blockHeightLog2 = p->blockHeightLog2;
     *op = {};

@@ -1,37 +1,59 @@
 // SPDX-License-Identifier: BSD-2-Clause-Patent
 #include <IOKit/IOLib.h>
+#include <libkern/c++/OSObject.h>
 #include "TegraVIC.h"
 #include "TegraVICPresent.h"
 #include "TegraVICSurface.h"
 #include "SwitchVICPicturePlan.h"
 #include "SwitchVICMapping.h"
 #include "SwitchVICJobs.h"
+#include "SwitchVICSurfaceAccess.h"
 #include "../../kits/SwitchRefusal/SwitchRefusal.h"
 
 namespace {
 bool gPresentReady;
 
 struct Present {
+    uint32_t references;
     TegraVICSurface surface = {};
     switch_gpu_backing *destination = nullptr;
+    SwitchVICSurfaceAccess access;
     SwitchVICMapping *sourceMap = nullptr, *destinationMaps[2] = {};
     TegraVICJob job = {};
 };
 
 void release(Present *work)
 {
+    if (__atomic_sub_fetch(&work->references, 1, __ATOMIC_ACQ_REL))
+        return;
     switch_vic_mapping_release(work->sourceMap);
     for (auto *mapping : work->destinationMaps)
         switch_vic_mapping_release(mapping);
     if (work->destination)
         switch_gpu_backing_release(work->destination);
+    switch_vic_surface_release_access(&work->access);
     tegra_vic_surface_release(&work->surface);
     IODelete(work, Present, 1);
 }
 
-int place(const TegraVICPicture *picture, task_t task, Present *work, const char **why)
+void completed(void *context, int)
 {
-    if (!picture || !picture->backing || tegra_vic_surface_lookup(picture->surfaceID, task, &work->surface)) {
+    release(static_cast<Present *>(context));
+}
+
+int place(const TegraVICPicture *picture, task_t task, Present *work,
+          switch_gpu_cpu_lease *owned, const TegraVICSurface *surface, bool asynchronous, const char **why)
+{
+    if (!picture || !picture->backing ||
+        (surface && (!surface->surface || !surface->memory || surface->id != picture->surfaceID))) {
+        *why = "picture backing or retained surface is invalid";
+        return -22;
+    }
+    if (surface) {
+        work->surface = *surface;
+        work->surface.prepared = false;
+        work->surface.surface->retain();
+    } else if (tegra_vic_surface_lookup(picture->surfaceID, task, &work->surface)) {
         *why = "picture backing or surface ID not found";
         return -22;
     }
@@ -43,10 +65,35 @@ int place(const TegraVICPicture *picture, task_t task, Present *work, const char
         *why = switch_vic_picture_place(&bytes, &desc, &placement);
     if (*why)
         return -95;
-    work->destination = switch_vic_surface_backing(&work->surface);
+    if (!owned) {
+        const int error = switch_vic_surface_access(&work->surface, true, &work->access);
+        if (error) {
+            *why = "destination representation could not be acquired";
+            return error;
+        }
+        work->destination = work->access.backing;
+        switch_gpu_backing_retain(work->destination);
+    } else {
+        work->destination = switch_vic_surface_backing(&work->surface);
+    }
     if (!work->destination) {
         *why = "the destination could not be retained";
         return -12;
+    }
+    if (work->access.offset) {
+        switch_gpu_backing_info info = {};
+        switch_gpu_backing_describe(work->destination, &info);
+        desc.length = uint64_t(info.page_count) << 12;
+        for (uint32_t plane = 0; plane < 2; ++plane) {
+            if (desc.planeOffset[plane] > UINT64_MAX - work->access.offset) {
+                *why = "destination plane address overflow";
+                return -22;
+            }
+            desc.planeOffset[plane] += work->access.offset;
+        }
+        *why = switch_vic_picture_place(&bytes, &desc, &placement);
+        if (*why)
+            return -95;
     }
     work->sourceMap = switch_vic_mapping_acquire(picture->backing, false);
     for (uint32_t plane = 0; plane < 2; ++plane)
@@ -70,12 +117,21 @@ int place(const TegraVICPicture *picture, task_t task, Present *work, const char
     switch_gpu_backing_use uses[] = {{picture->backing, SWITCH_GPU_BACKING_READ, 0},
                                       {work->destination, SWITCH_GPU_BACKING_WRITE, 0}};
     uint32_t fence = 0;
-    int error = switch_vic_submit_batch(&work->job, 1, nullptr, uses, 2, nullptr, nullptr, &fence);
-    if (!error)
+    auto *lease = owned ? owned : work->access.owned;
+    const SwitchVICOwnership ownership = {uses, 2, owned ? nullptr : &work->access.guard,
+                                          owned ? 0u : 1u, lease ? &lease : nullptr, lease ? 1u : 0u};
+    if (asynchronous)
+        __atomic_add_fetch(&work->references, 1, __ATOMIC_RELAXED);
+    int error = switch_vic_submit_checked(&work->job, 1, nullptr, ownership,
+        asynchronous ? completed : nullptr, asynchronous ? work : nullptr, &fence);
+    if (error && asynchronous)
+        release(work);
+    switch_vic_surface_unreserve(&work->access);
+    if (!error && !asynchronous)
         error = switch_vic_wait(fence);
-    if (!error)
+    if (!error && !owned)
         tegra_vic_surface_written(&work->surface);
-    else
+    if (error)
         *why = "the queued picture transfer failed";
     return error;
 }
@@ -93,7 +149,8 @@ extern "C" void tegra_vic_present_start(void)
         __atomic_store_n(&gPresentReady, true, __ATOMIC_RELEASE);
 }
 
-extern "C" int tegra_vic_present(const TegraVICPicture *picture, task_t task, const char **why)
+static int present(const TegraVICPicture *picture, task_t task, switch_gpu_cpu_lease *owned,
+                   const TegraVICSurface *surface, bool asynchronous, const char **why)
 {
     if (!why)
         return -22;
@@ -105,9 +162,48 @@ extern "C" int tegra_vic_present(const TegraVICPicture *picture, task_t task, co
     auto *work = IONewZero(Present, 1);
     if (!work)
         return -12;
-    const int error = place(picture, task, work, why);
+    work->references = 1;
+    const int error = place(picture, task, work, owned, surface, asynchronous, why);
     release(work);
-    if (error && *why)
+    if (error && *why && !owned)
         switch_refusal("TegraVIC", *why, "decoded picture not placed by VIC, the decoder copies it on the CPU");
     return error;
+}
+
+extern "C" int tegra_vic_present(const TegraVICPicture *picture, task_t task, const char **why)
+{
+    return present(picture, task, nullptr, nullptr, false, why);
+}
+
+extern "C" int switch_vic_present_owned(const TegraVICPicture *picture, task_t task,
+                                        switch_gpu_cpu_lease *destination, const char **why)
+{
+    if (!destination) {
+        if (why)
+            *why = "materialization requires destination ownership";
+        return -22;
+    }
+    return present(picture, task, destination, nullptr, false, why);
+}
+
+extern "C" int switch_vic_present_surface_owned(const TegraVICPicture *picture, const TegraVICSurface *surface,
+                                                switch_gpu_cpu_lease *destination, const char **why)
+{
+    if (!destination || !surface) {
+        if (why)
+            *why = "materialization requires retained surface and destination ownership";
+        return -22;
+    }
+    return present(picture, nullptr, destination, surface, false, why);
+}
+
+extern "C" int switch_vic_present_surface_queue(const TegraVICPicture *picture, const TegraVICSurface *surface,
+                                                switch_gpu_cpu_lease *destination, const char **why)
+{
+    if (!destination || !surface) {
+        if (why)
+            *why = "materialization requires retained surface and destination ownership";
+        return -22;
+    }
+    return present(picture, nullptr, destination, surface, true, why);
 }

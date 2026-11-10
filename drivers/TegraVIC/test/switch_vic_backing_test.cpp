@@ -9,6 +9,17 @@
 
 namespace {
 unsigned registrations = 0, preparations = 0, completions = 0, destroyed = 0;
+std::atomic<unsigned> adoptions{0};
+std::atomic<int> adoptionError{0};
+std::atomic<void *> adoptedDescriptor{nullptr};
+}
+
+extern "C" int switch_gpu_surface_adopt(void *descriptor, switch_gpu_backing *backing)
+{
+    EXPECT_NE(backing, nullptr);
+    adoptedDescriptor = descriptor;
+    ++adoptions;
+    return adoptionError;
 }
 
 extern "C" switch_gpu_backing *switch_gpu_backing_register(const uint64_t *, uint32_t, uint32_t,
@@ -63,7 +74,13 @@ struct Surface {
 };
 
 class SwitchVICBacking : public testing::Test {
-    void SetUp() override { registrations = preparations = completions = destroyed = 0; }
+    void SetUp() override
+    {
+        registrations = preparations = completions = destroyed = 0;
+        adoptions = 0;
+        adoptionError = 0;
+        adoptedDescriptor = nullptr;
+    }
     void TearDown() override
     {
         for (auto &entry : gSurfaces)
@@ -150,5 +167,50 @@ TEST_F(SwitchVICBacking, ConcurrentWarmUsersShareOnePreparedAllocation)
     switch_gpu_backing_release(first);
     for (auto &entry : gSurfaces)
         evict(entry);
+}
+TEST_F(SwitchVICBacking, NewRegistrationAdoptsExistingDescriptorCpuLocks)
+{
+    Surface surface;
+    auto *backing = switch_vic_surface_backing(&surface.value);
+    ASSERT_NE(backing, nullptr);
+    EXPECT_EQ(adoptions, 1u);
+    EXPECT_EQ(adoptedDescriptor, &surface.memory);
+    switch_gpu_backing_release(backing);
+    for (auto &entry : gSurfaces)
+        evict(entry);
+}
+
+TEST_F(SwitchVICBacking, CacheHitRefusesConflictingCpuReservationWithoutLeakingCallerPin)
+{
+    Surface surface;
+    auto *backing = switch_vic_surface_backing(&surface.value);
+    ASSERT_NE(backing, nullptr);
+    switch_gpu_backing_release(backing);
+    adoptionError = -16;
+    EXPECT_EQ(switch_vic_surface_backing(&surface.value), nullptr);
+    EXPECT_EQ(adoptions, 2u);
+    EXPECT_EQ(backing->refs, 1u);
+    adoptionError = 0;
+    auto *retry = switch_vic_surface_backing(&surface.value);
+    EXPECT_EQ(retry, backing);
+    EXPECT_EQ(registrations, 1u);
+    switch_gpu_backing_release(retry);
+    for (auto &entry : gSurfaces)
+        evict(entry);
+}
+
+TEST_F(SwitchVICBacking, FailedColdAdoptionLeavesOnlyBoundedCacheOwnership)
+{
+    Surface surface;
+    adoptionError = -95;
+    EXPECT_EQ(switch_vic_surface_backing(&surface.value), nullptr);
+    EXPECT_EQ(adoptions, 1u);
+    EXPECT_EQ(registrations, 1u);
+    EXPECT_EQ(surface.object.refs, 3u);
+    for (auto &entry : gSurfaces)
+        evict(entry);
+    EXPECT_EQ(destroyed, 1u);
+    EXPECT_EQ(completions, 1u);
+    EXPECT_EQ(surface.object.refs, 1u);
 }
 }  // namespace

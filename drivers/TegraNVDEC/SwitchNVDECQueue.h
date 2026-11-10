@@ -2,30 +2,51 @@
 #pragma once
 #include <stdint.h>
 
+struct SwitchHost1xResult;
+struct switch_gpu_bridge;
+struct switch_gpu_event_waits;
+
 struct SwitchNVDECQueue {
     static constexpr uint32_t kSlots = 8;
+
     struct Job {
         uint64_t sequence = 0;
         uint64_t submittedUs = 0;
+        switch_gpu_bridge *bridge = nullptr;
+        switch_gpu_event_waits *semantics = nullptr;
+        SwitchHost1xResult *outcome = nullptr;
     };
+
     Job jobs[kSlots] = {};
     uint64_t submitted = 0, completed = 0;
     uint32_t head = 0, count = 0;
 
-    uint32_t tail() const { return (head + count) % kSlots; }
-    bool full() const { return count == kSlots; }
-    uint64_t next() const { return submitted + 1; }
+    uint32_t tail() const
+    {
+        return (head + count) % kSlots;
+    }
+
+    bool full() const
+    {
+        return count == kSlots;
+    }
+
+    uint64_t next() const
+    {
+        return submitted + 1;
+    }
 
     static bool reached(uint32_t value, uint32_t threshold)
     {
         return static_cast<int32_t>(value - threshold) >= 0;
     }
 
-    bool publish(uint64_t submittedUs)
+    bool publish(uint64_t submittedUs, switch_gpu_bridge *bridge = nullptr, switch_gpu_event_waits *semantics = nullptr,
+                 SwitchHost1xResult *outcome = nullptr)
     {
         if (full() || submitted == UINT64_MAX)
             return false;
-        jobs[tail()] = {++submitted, submittedUs};
+        jobs[tail()] = {++submitted, submittedUs, bridge, semantics, outcome};
         ++count;
         return true;
     }

@@ -5,6 +5,7 @@
 #include "TegraVICSurface.h"
 #include "TegraVIC.h"
 #include "../TegraGM20B/SwitchGpuBacking.h"
+#include "../TegraGM20B/TegraGM20BViews.h"
 
 namespace {
 constexpr uint32_t kSurfaceCacheCount = 32;
@@ -61,6 +62,15 @@ void releaseSurface(void *context)
     IODelete(surface, TegraVICSurface, 1);
 }
 
+switch_gpu_backing *adopt(const TegraVICSurface *surface, switch_gpu_backing *backing)
+{
+    if (backing && switch_gpu_surface_adopt(surface->memory, backing)) {
+        switch_gpu_backing_release(backing);
+        return nullptr;
+    }
+    return backing;
+}
+
 switch_gpu_backing *cached(const TegraVICSurface *surface)
 {
     for (auto &item : gSurfaces) {
@@ -84,7 +94,7 @@ switch_gpu_backing *switch_vic_surface_backing(const TegraVICSurface *surface)
     auto *backing = cached(surface);
     IOLockUnlock(gLock);
     if (backing)
-        return backing;
+        return adopt(surface, backing);
     const uint32_t count = static_cast<uint32_t>((length + 4095) >> 12);
     auto *owner = IONew(TegraVICSurface, 1);
     uint64_t *pages = IONew(uint64_t, count);
@@ -129,7 +139,7 @@ switch_gpu_backing *switch_vic_surface_backing(const TegraVICSurface *surface)
     IOLockUnlock(gLock);
     if (existing) {
         switch_gpu_backing_release(backing);
-        return existing;
+        backing = existing;
     }
-    return backing;
+    return adopt(surface, backing);
 }

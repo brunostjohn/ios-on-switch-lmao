@@ -2,16 +2,25 @@
 #pragma once
 #include <stdint.h>
 
+struct SwitchHost1xResult;
+struct switch_gpu_bridge;
+struct switch_gpu_event_waits;
+
 struct SwitchVICQueue {
     static constexpr uint32_t kSlots = 16;
     using Completion = void (*)(void *, int);
+
     struct Job {
         uint64_t fence = 0;
         uint32_t boundUs = 0;
         uint64_t submittedUs = 0;
         Completion completion = nullptr;
         void *context = nullptr;
+        switch_gpu_bridge *bridge = nullptr;
+        switch_gpu_event_waits *semantics = nullptr;
+        SwitchHost1xResult *outcome = nullptr;
     };
+
     Job jobs[kSlots] = {};
     uint32_t head = 0, count = 0;
     uint64_t submitted = 0, completed = 0;
@@ -21,10 +30,25 @@ struct SwitchVICQueue {
         return static_cast<int32_t>(value - threshold) >= 0;
     }
 
-    uint32_t tail() const { return (head + count) % kSlots; }
-    bool full() const { return count == kSlots; }
-    bool canPublish(uint32_t amount) const { return amount && amount <= kSlots - count && submitted <= UINT64_MAX - amount; }
-    uint32_t configurationSlot(uint32_t job) const { return (tail() + job) % kSlots; }
+    uint32_t tail() const
+    {
+        return (head + count) % kSlots;
+    }
+
+    bool full() const
+    {
+        return count == kSlots;
+    }
+
+    bool canPublish(uint32_t amount) const
+    {
+        return amount && amount <= kSlots - count && submitted <= UINT64_MAX - amount;
+    }
+
+    uint32_t configurationSlot(uint32_t job) const
+    {
+        return (tail() + job) % kSlots;
+    }
 
     bool publish(Job job)
     {

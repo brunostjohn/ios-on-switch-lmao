@@ -673,12 +673,10 @@ static void requests(void)
         {1, TEGRA_VIC_PLAN_UNSUPPORTED, "histogram (none on VIC)"},
         {2, TEGRA_VIC_PLAN_UNSUPPORTED, "HDR or film grain (capabilities say no)"},
         {3, TEGRA_VIC_PLAN_UNSUPPORTED, "colour remap (capabilities say no)"},
-        {4, TEGRA_VIC_PLAN_UNSUPPORTED, "shared events"},
         {5, TEGRA_VIC_PLAN_UNSUPPORTED, "pixel format the scaler does not take"},
         {6, TEGRA_VIC_PLAN_UNSUPPORTED, "protected source into a less protected destination"},
         {7, TEGRA_VIC_PLAN_UNSUPPORTED, "alpha override into a surface with alpha"},
         {8, TEGRA_VIC_PLAN_UNSUPPORTED, "HDR or film grain (capabilities say no)"},
-        {9, TEGRA_VIC_PLAN_UNSUPPORTED, "shared events"},
     };
 
     for (unsigned i = 0; i < sizeof(cases) / sizeof(cases[0]); i++) {

@@ -189,9 +189,11 @@ are generated in its encoding (`tegra_vic_matrix_*`) and checked on the host aga
   a row stride of `OutLumaHeight` + 1 pixels]. Of the four conventions (rectangles × surface, before or after the
   transpose) the unit copied the card with rectangles and surface before [T]; transposed 4:2:0 output (a BGRA patch
   card into 420f, transforms 4 and 7) matched too [T].
-- Destination sub-rectangles under a flip or quarter turn: VIC mirrors around the whole surface, so a sub-rectangle
-  lands in place only under transforms 0 and 6 (`subRects` 0x41 [T]; test/vic_model.h reproduces the unit's diag lines);
-  under the others the checker allows whole-surface jobs only.
+- Destination subrectangles: VIC mirrors around the complete output surface. The measured unadjusted placement mask
+  is `subRects` 0x41 [T]. For each flipped axis, the builder now places the pre-transpose target at
+  `surface extent - requested origin - rectangle extent`. The same correction applies to the slot destination.
+  All eight transforms pass asymmetric cropped RGB/NV12 model checks with padded rows and scaling; the model
+  reproduces the unit's original placement diagnostics. New physical subrectangle/filter validation remains.
 
 ## 10. NVDEC's pictures (not IOSurfaceAccelerator)
 

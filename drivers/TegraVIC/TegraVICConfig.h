@@ -239,11 +239,11 @@ enum {
     TEGRA_VIC_YCC_2020 = 2
 };
 
-// Luma weights (Kr, Kb) in millionths: BT.601 0.299/0.114, BT.709 0.2126/0.0722.
+// Non-constant-luminance luma weights (Kr, Kb), in millionths.
 static inline void tegra_vic_kr_kb(uint32_t standard, int64_t *kr, int64_t *kb)
 {
-    *kr = standard == TEGRA_VIC_YCC_709 ? 212600 : 299000;
-    *kb = standard == TEGRA_VIC_YCC_709 ? 72200 : 114000;
+    *kr = standard == TEGRA_VIC_YCC_2020 ? 262700 : standard == TEGRA_VIC_YCC_709 ? 212600 : 299000;
+    *kb = standard == TEGRA_VIC_YCC_2020 ? 59300 : standard == TEGRA_VIC_YCC_709 ? 72200 : 114000;
 }
 
 // Which pipeline channel carries Cb and which Cr for the 4:2:0 formats (ch0 is always Y). The unit's self-test found
@@ -374,6 +374,7 @@ typedef struct {
     uint64_t base[2];        // plane addresses
     uint64_t span[2];        // bytes mapped from base[p] (the checker keeps every access inside)
     uint32_t standard;       // TEGRA_VIC_YCC_* for the 4:2:0 formats
+    uint32_t transfer, primaries;
     uint32_t chromaSite;     // IOSurfaceAccelerator siting code 0..6 (0: unspecified)
     // A source in Tegra block linear (16Bx2 sectors in 64Bx8 GOBs, 2^blockHeightLog2 GOBs a block: NVDEC writes
     // blockHeightLog2 1), as averne's FFmpeg nvtegra hands NVDEC's pictures to VIC: pitch a whole number of GOBs, each
@@ -424,13 +425,14 @@ typedef struct {
     uint32_t blockLinearIn;      // 1: a block-linear 4:2:0 source (NVDEC's layout) copies exactly into pitch linear
     uint32_t subRects;           // bit t: under transform t a destination rectangle inside a larger surface lands in
                                  // place (where the flips mirror is measured, not assumed); transform 0 always
+    uint32_t surfaceFlips;       // measured flips precede transpose and mirror around the complete output surface
 } TegraVICTraits;
 
 // VIC 4.0 as the unit measured it with a boot self-test on all 19 boots from 11-05 23:53 to 11-06 23:42, every line
 // the same: Cb in channel 2 both ways, 4:2:0 read to RGB within two steps (samples widened x << 2 | x >> 6) and
 // passed through exactly, the background colour through the output matrix, 2-tap scaling, rows on 256 bytes (144- and
 // 192-byte pitches lost half the copy), all 8 transforms with a transposed job's rectangles and surface given before
-// the transpose, and sub-rectangles in place under transforms 0 and 6 only (the flips mirror around the surface).
+// the transpose, and unadjusted sub-rectangles in place under transforms 0 and 6 only (flips mirror around the surface).
 // The flip table is the transform probe's on test/vic_model.h, whose output reproduces every one of those boots'
 // transpose and sub-rectangle diag lines (tegra_vic_transpose_test pins both).
 static const TegraVICTraits kTegraVICTraits = {
@@ -446,6 +448,7 @@ static const TegraVICTraits kTegraVICTraits = {
     .yccIn = TEGRA_VIC_YCC_IN_RGB | TEGRA_VIC_YCC_IN_COPY,
     .blockLinearIn = 1,
     .subRects = 0x41,
+    .surfaceFlips = 1,
 };
 
 #define TEGRA_VIC_MAX_METHODS 12
@@ -566,7 +569,7 @@ static inline const char *tegra_vic_build(const TegraVICImage *src, const TegraV
     }
     if (dst->format->subsampled && ((op->dstX | op->dstY | op->dstW | op->dstH) & 1))
         return "4:2:0 destination rectangle on odd coordinates";
-    if (!op->fill && op->transform && !(t->subRects & (1u << op->transform)) &&
+    if (!op->fill && op->transform && !t->surfaceFlips && !(t->subRects & (1u << op->transform)) &&
         (op->dstX || op->dstY || op->dstW != dst->width || op->dstH != dst->height))
         return "destination sub-rectangle this transform has not proven";
     if (!op->fill && src->blockLinear && !t->blockLinearIn)
@@ -581,9 +584,15 @@ static inline const char *tegra_vic_build(const TegraVICImage *src, const TegraV
     const bool copyYcc = !op->fill && src->format->kind != TEGRA_VIC_KIND_RGB &&
                          src->format->kind == dst->format->kind && src->standard == dst->standard &&
                          t->in.cbChannel == t->out.cbChannel;
-    if (!copyYcc && ((dst->format->kind != TEGRA_VIC_KIND_RGB && dst->standard > TEGRA_VIC_YCC_709) ||
-                    (!op->fill && src->format->kind != TEGRA_VIC_KIND_RGB && src->standard > TEGRA_VIC_YCC_709)))
+    if (!copyYcc && ((dst->format->kind != TEGRA_VIC_KIND_RGB && dst->standard > TEGRA_VIC_YCC_2020) ||
+                    (!op->fill && src->format->kind != TEGRA_VIC_KIND_RGB && src->standard > TEGRA_VIC_YCC_2020)))
         return "YCbCr matrix requires color conversion outside VIC's contract";
+
+    if (!op->fill && ((src->transfer && dst->transfer && src->transfer != dst->transfer) ||
+                      (src->primaries && dst->primaries && src->primaries != dst->primaries)))
+        return "transfer or gamut conversion requires a color shader";
+    if (!op->fill && ((src->transfer && !dst->transfer) || (src->primaries && !dst->primaries)))
+        return "explicit source encoding requires destination metadata";
 
     memset(job, 0, sizeof(*job));
     uint8_t *c = job->config;
@@ -598,10 +607,16 @@ static inline const char *tegra_vic_build(const TegraVICImage *src, const TegraV
     const bool swapSurface = transpose != 0 && t->preTransposeSurface != 0;
     const uint32_t ow = swapSurface ? dst->height : dst->width;
     const uint32_t oh = swapSurface ? dst->width : dst->height;
-    const uint32_t tx = swap ? op->dstY : op->dstX;
-    const uint32_t ty = swap ? op->dstX : op->dstY;
     const uint32_t tw = swap ? op->dstH : op->dstW;
     const uint32_t th = swap ? op->dstW : op->dstH;
+    uint32_t tx = swap ? op->dstY : op->dstX;
+    uint32_t ty = swap ? op->dstX : op->dstY;
+    if (t->surfaceFlips) {
+        if (t->vicFlips[op->transform][0])
+            tx = ow - tx - tw;
+        if (t->vicFlips[op->transform][1])
+            ty = oh - ty - th;
+    }
     const bool alpha = op->fill == 0 && src->format->alpha != 0 && dst->format->alpha != 0;
     TEGRA_VIC_SET(c, TEGRA_VIC_OUTPUT, OUT_ALPHA_FILL_MODE,
                   alpha ? TEGRA_VIC_ALPHA_SOURCE_STREAM : TEGRA_VIC_ALPHA_OPAQUE);

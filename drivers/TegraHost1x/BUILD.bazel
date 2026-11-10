@@ -33,6 +33,7 @@ kernel_driver(
     name = "TegraHost1x",
     hdr_deps = [
         "drivers/ArmGIC",
+        "drivers/TegraGM20B",
         "kits/SwitchCAR",
         "kits/SwitchDMA",
         "kits/SwitchMMIO",

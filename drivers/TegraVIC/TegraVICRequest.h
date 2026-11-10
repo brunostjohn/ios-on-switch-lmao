@@ -9,6 +9,7 @@
 #include <stdint.h>
 #include <string.h>
 #include "TegraVICConfig.h"
+#include "SwitchSurfaceColor.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -82,7 +83,7 @@ typedef struct {
     uint64_t planeOffset[2], planeBytesPerRow[2], planeWidth[2], planeHeight[2];
     uint64_t length;      // the surface's memory descriptor
     uint64_t protection;  // IOSurface protection options
-    uint32_t colorMatrix;
+    uint32_t colorMatrix, transfer, primaries, chromaTop, chromaBottom;
 } TegraVICSurfaceDesc;
 
 enum {
@@ -149,6 +150,11 @@ static inline const char *tegra_vic_image_from(const TegraVICSurfaceDesc *d, uin
         return "unsupported YCbCr matrix attachment";
     // Untagged surfaces use BT.601; dimensions never override producer color metadata.
     im->standard = d->colorMatrix ? d->colorMatrix - 1 : TEGRA_VIC_YCC_601;
+    im->transfer = d->transfer;
+    im->primaries = d->primaries;
+    if (im->format->kind != TEGRA_VIC_KIND_RGB &&
+        !switch_surface_chroma_site(d->chromaTop, d->chromaBottom, &im->chromaSite))
+        return "unsupported chroma location attachment";
     return NULL;  // NOLINT(modernize-use-nullptr): C too (vic_host.c)
 }
 
@@ -213,8 +219,6 @@ static inline const char *tegra_vic_plan(const TegraVICRequest *r, const TegraVI
         return "HDR or film grain (capabilities say no)";
     if (f & TEGRA_VIC_REQ_COLOR_REMAP)
         return "colour remap (capabilities say no)";
-    if (r->src_event_port || r->dst_event_port)
-        return "shared events";
     const TegraVICFormat *df = tegra_vic_format(dst->fourcc);
     const bool writeOnly = (f & TEGRA_VIC_REQ_WRITE_ONLY) != 0;
     if (!df || (!writeOnly && !tegra_vic_format(src->fourcc)))

@@ -12,8 +12,28 @@ void switch_vic_jobs_suspend();
 void switch_vic_jobs_resume(bool ready, uint32_t completed);
 
 extern "C" int switch_vic_submit_after(const TegraVICJob *job, const TegraVICAcquire *acquire,
-                                        void (*completion)(void *, int), void *context, uint32_t *fence);
+                                       void (*completion)(void *, int), void *context, uint32_t *fence);
 extern "C" int switch_vic_wait(uint32_t fence);
 int switch_vic_submit_batch(const TegraVICJob *jobs, uint32_t count, const TegraVICAcquire *acquire,
-                            switch_gpu_backing_use *uses, uint32_t useCount,
-                            void (*completion)(void *, int), void *context, uint32_t *fence);
+                            switch_gpu_backing_use *uses, uint32_t useCount, void (*completion)(void *, int),
+                            void *context, uint32_t *fence);
+
+// Supplied ownership leases remain held through commit and final completion of the conversion.
+int switch_vic_submit_owned(const TegraVICJob *jobs, uint32_t count, const TegraVICAcquire *acquire,
+                            switch_gpu_backing_use *uses, uint32_t useCount, switch_gpu_cpu_lease *const *leases,
+                            uint32_t leaseCount, void (*completion)(void *, int), void *context, uint32_t *fence);
+
+struct SwitchVICEvents;
+
+struct SwitchVICOwnership {
+    switch_gpu_backing_use *uses;
+    uint32_t useCount;
+    const switch_gpu_backing_guard *guards;
+    uint32_t guardCount;
+    switch_gpu_cpu_lease *const *leases;
+    uint32_t leaseCount;
+};
+
+int switch_vic_submit_checked(const TegraVICJob *jobs, uint32_t count, const TegraVICAcquire *acquire,
+                              const SwitchVICOwnership &ownership, void (*completion)(void *, int), void *context,
+                              uint32_t *fence, SwitchVICEvents *events = nullptr);

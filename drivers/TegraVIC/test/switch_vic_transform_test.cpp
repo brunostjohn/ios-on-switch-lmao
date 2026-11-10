@@ -1,0 +1,224 @@
+// SPDX-License-Identifier: BSD-2-Clause-Patent
+#include <gtest/gtest.h>
+#include <vector>
+#include "switch_vic_backing_stubs.h"
+#include "../SwitchNativePicture.h"
+#include "../SwitchVICTransform.cpp"
+
+struct SwitchVICMapping { uint64_t address; };
+namespace {
+OSObject inputObject, outputObject;
+IOMemoryDescriptor inputMemory, outputMemory;
+switch_gpu_backing inputPitch, inputNative, outputPitch;
+volatile uint64_t inputGeneration = 1, outputGeneration = 1, payloadGeneration = 1;
+bool nativeInput = true, immediate = false;
+int admission = 0, mappings = 0, gates = 0, pitchInputs = 0, notifications = 0;
+void (*pending)(void *, int);
+void *pendingContext;
+TegraVICJob submittedJob;
+std::vector<switch_gpu_backing_use> declaredUses;
+std::vector<switch_gpu_backing_guard> declaredGuards;
+}
+extern "C" const TegraVICTraits *tegra_vic_traits() { return &kTegraVICTraits; }
+extern "C" uint64_t tegra_vic_config_address() { return 0x80001000; }
+extern "C" uint64_t tegra_vic_filter_address() { return 0x80002000; }
+extern "C" int tegra_gm20b_surface_layout(uint64_t, tgm_layout *) { return 0; }
+extern "C" void switch_gpu_backing_describe(switch_gpu_backing *, switch_gpu_backing_info *info)
+{
+    static uint64_t pages[1] = {0x100000};
+    *info = {};
+    info->pages = pages;
+    info->page_count = 1024;
+}
+int switch_vic_surface_access(const TegraVICSurface *surface, bool write, SwitchVICSurfaceAccess *access, bool)
+{
+    ++gates;
+    pitchInputs += !write;
+    access->descriptor = surface->memory;
+    access->backing = write ? &outputPitch : &inputPitch;
+    ++access->backing->refs;
+    access->guard = {access->backing, write ? &outputGeneration : &inputGeneration, 1};
+    return 0;
+}
+void switch_vic_surface_unreserve(SwitchVICSurfaceAccess *access)
+{
+    if (access->descriptor)
+        --gates;
+    access->descriptor = nullptr;
+}
+void switch_vic_surface_release_access(SwitchVICSurfaceAccess *access)
+{
+    switch_vic_surface_unreserve(access);
+    if (access->backing)
+        --access->backing->refs;
+    *access = {};
+}
+int switch_native_surface_acquire(const TegraVICSurface *surface, SwitchNativeSurfaceView *view)
+{
+    if (!nativeInput)
+        return -2;
+    TegraVICPicture picture = {};
+    picture.pitch = 1536;
+    picture.rows = 736;
+    picture.chromaOffset = 1536 * 736;
+    picture.bytes = uint64_t(picture.chromaOffset) * 3 / 2;
+    picture.blockHeightLog2 = 1;
+    picture.width = 1280;
+    picture.height = 720;
+    picture.sampleBytes = 1;
+    EXPECT_EQ(switch_native_picture(picture, surface->desc, view->layout, view->crop), nullptr);
+    view->owner = &inputObject;
+    view->native = &inputNative;
+    view->logical = &inputPitch;
+    view->guard = {&inputPitch, &payloadGeneration, 1};
+    view->representation = {&inputPitch, &inputGeneration, 1};
+    ++inputNative.refs;
+    ++inputPitch.refs;
+    return 0;
+}
+void switch_native_surface_release(SwitchNativeSurfaceView *view)
+{
+    if (view->owner) {
+        --view->native->refs;
+        --view->logical->refs;
+    }
+    *view = {};
+}
+SwitchVICMapping *switch_vic_mapping_acquire(switch_gpu_backing *, bool write)
+{
+    ++mappings;
+    return new SwitchVICMapping{write ? 0x50000000u : 0x40000000u};
+}
+void switch_vic_mapping_release(SwitchVICMapping *mapping)
+{
+    if (mapping) {
+        --mappings;
+        delete mapping;
+    }
+}
+uint64_t switch_vic_mapping_address(const SwitchVICMapping *mapping) { return mapping->address; }
+int switch_vic_submit_checked(const TegraVICJob *jobs, uint32_t count, const TegraVICAcquire *,
+                               const SwitchVICOwnership &ownership,
+                               void (*completion)(void *, int), void *context, uint32_t *, SwitchVICEvents *)
+{
+    EXPECT_EQ(count, 1u);
+    EXPECT_GT(gates, 0);
+    submittedJob = jobs[0];
+    declaredUses.assign(ownership.uses, ownership.uses + ownership.useCount);
+    declaredGuards.assign(ownership.guards, ownership.guards + ownership.guardCount);
+    if (admission)
+        return admission;
+    if (immediate)
+        completion(context, 0);
+    else {
+        pending = completion;
+        pendingContext = context;
+    }
+    return 0;
+}
+namespace {
+class SwitchVICTransformTest : public testing::Test {
+protected:
+    TegraVICSurface source = {}, destination = {};
+    TegraVICPlan plan = {};
+    void SetUp() override
+    {
+        nativeInput = true;
+        immediate = false;
+        admission = mappings = gates = pitchInputs = notifications = 0;
+        pending = nullptr;
+        pendingContext = nullptr;
+        declaredUses.clear();
+        declaredGuards.clear();
+        source.surface = &inputObject;
+        source.memory = &inputMemory;
+        source.desc.fourcc = TEGRA_VIC_FOURCC('4', '2', '0', 'v');
+        source.desc.width = 1280;
+        source.desc.height = 720;
+        source.desc.planes = 2;
+        source.desc.planeBytesPerRow[0] = source.desc.planeBytesPerRow[1] = 1536;
+        source.desc.planeHeight[0] = 720;
+        source.desc.planeHeight[1] = 360;
+        source.desc.planeOffset[1] = 1536 * 720;
+        source.desc.length = 1536 * 720 * 3 / 2;
+        destination.surface = &outputObject;
+        destination.memory = &outputMemory;
+        destination.desc.fourcc = TEGRA_VIC_FOURCC('B', 'G', 'R', 'A');
+        destination.desc.width = 1280;
+        destination.desc.height = 720;
+        destination.desc.planes = 1;
+        destination.desc.planeBytesPerRow[0] = 5120;
+        destination.desc.planeHeight[0] = 720;
+        destination.desc.length = 5120 * 720;
+        plan.count = plan.readsSource = 1;
+        plan.op[0].srcW = uint64_t(1280) << 16;
+        plan.op[0].srcH = uint64_t(720) << 16;
+        plan.op[0].dstW = 1280;
+        plan.op[0].dstH = 720;
+    }
+    static void done(void *, int status) { EXPECT_EQ(status, 0); ++notifications; }
+    int submit() { return switch_vic_transform(&source, &destination, &plan, 0, done, nullptr); }
+    void TearDown() override
+    {
+        EXPECT_EQ(mappings, 0);
+        EXPECT_EQ(gates, 0);
+        EXPECT_EQ(inputPitch.refs, 1u);
+        EXPECT_EQ(inputNative.refs, 1u);
+        EXPECT_EQ(outputPitch.refs, 1u);
+    }
+};
+
+TEST_F(SwitchVICTransformTest, NativeInputQueuesBothReadAuthoritiesWithoutPitchMaterialization)
+{
+    ASSERT_EQ(submit(), 1);
+    ASSERT_NE(pending, nullptr);
+    EXPECT_EQ(notifications, 0);
+    EXPECT_EQ(pitchInputs, 0);
+    EXPECT_EQ(gates, 0);
+    EXPECT_EQ(mappings, 2);
+    ASSERT_EQ(declaredUses.size(), 3u);
+    EXPECT_EQ(declaredUses[0].backing, &outputPitch);
+    EXPECT_EQ(declaredUses[0].access, uint32_t(SWITCH_GPU_BACKING_WRITE));
+    EXPECT_EQ(declaredUses[1].backing, &inputNative);
+    EXPECT_EQ(declaredUses[1].access, uint32_t(SWITCH_GPU_BACKING_READ));
+    EXPECT_EQ(declaredUses[2].backing, &inputPitch);
+    EXPECT_EQ(declaredGuards.size(), 3u);
+    EXPECT_EQ(TEGRA_VIC_GET(submittedJob.config, TEGRA_VIC_SLOTS + TEGRA_VIC_SLOT_SURFACE, SURF_BLK_KIND), 1u);
+    pending(pendingContext, 0);
+    EXPECT_EQ(notifications, 1);
+}
+
+TEST_F(SwitchVICTransformTest, CompletionCanRaceSubmissionReturnWithoutFreeingCallerState)
+{
+    immediate = true;
+    EXPECT_EQ(submit(), 1);
+    EXPECT_EQ(notifications, 1);
+}
+
+TEST_F(SwitchVICTransformTest, StaleAdmissionReleasesReservationsWithoutSignallingCompletion)
+{
+    admission = SWITCH_GPU_BACKING_STALE;
+    EXPECT_EQ(submit(), SWITCH_GPU_BACKING_STALE);
+    EXPECT_EQ(notifications, 0);
+    EXPECT_EQ(pending, nullptr);
+}
+
+TEST_F(SwitchVICTransformTest, PitchSourceRetainsTheOrdinaryTwoBackingRoute)
+{
+    nativeInput = false;
+    immediate = true;
+    EXPECT_EQ(submit(), 1);
+    EXPECT_EQ(pitchInputs, 1);
+    EXPECT_EQ(declaredUses.size(), 2u);
+    EXPECT_EQ(declaredGuards.size(), 2u);
+    EXPECT_EQ(TEGRA_VIC_GET(submittedJob.config, TEGRA_VIC_SLOTS + TEGRA_VIC_SLOT_SURFACE, SURF_BLK_KIND), 0u);
+}
+
+TEST_F(SwitchVICTransformTest, OverlappingDescriptorFallsBackBeforeTakingReservations)
+{
+    source.memory = destination.memory;
+    EXPECT_EQ(submit(), 0);
+    EXPECT_TRUE(declaredUses.empty());
+    EXPECT_EQ(notifications, 0);
+}
+} // namespace

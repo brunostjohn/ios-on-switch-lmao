@@ -18,6 +18,7 @@
 #include <IOKit/IOUserClient.h>
 #include <string.h>
 #include "../TegraVIC/TegraVICPresent.h"
+#include "SwitchNVDECOutput.h"
 #include "TegraNVDEC.h"
 #include "nvidia/nvdec_drv.h"
 #include "../../kits/SwitchDMA/SwitchDcache.h"
@@ -51,11 +52,7 @@ class AppleD5500UserClient : public IOUserClient {
     // NOLINTNEXTLINE(misc-explicit-constructor): IOKit's structors macro declares the metaclass constructor
     OSDeclareDefaultStructors(AppleD5500UserClient)
 
-        struct Buffer {
-        uint32_t handle;  // 0: slot free
-        TegraNVDECBlock block;
-        IOMemoryMap *map;  // the buffer in the task that allocated it
-    };
+    using Buffer = SwitchNVDECBuffer;
 
     IOLock *lock_ = nullptr;
     Buffer buffers_[kMaxBuffers] = {};
@@ -168,9 +165,11 @@ IOReturn AppleD5500UserClient::run(uint32_t method, const void *in, uint32_t inS
         {sizeof(TegraNVDECSubmit), sizeof(TegraNVDECFence)},
         {sizeof(TegraNVDECWait), 0},
         {sizeof(TegraNVDECPresent), 0},
+        {sizeof(TegraNVDECBuffer), sizeof(TegraNVDECBufferReply)},
+        {sizeof(TegraNVDECPresent), 0},
     };
 
-    if (method < TegraNVDECMethodGetInfo || method > TegraNVDECMethodPresent || inSize != kSizes[method].in ||
+    if (method < TegraNVDECMethodGetInfo || method > SwitchNVDECMethodExport || inSize != kSizes[method].in ||
         *outSize < kSizes[method].out || (inSize && !in) || (kSizes[method].out && !out))
         return kIOReturnBadArgument;
     *outSize = kSizes[method].out;
@@ -209,6 +208,8 @@ IOReturn AppleD5500UserClient::run(uint32_t method, const void *in, uint32_t inS
         info->codecs = tegra_nvdec_codecs();
         info->max_width = info->max_height = 4096;
         info->features = tegra_vic_present_ready() ? TEGRA_NVDEC_FEATURE_PRESENT : 0;
+        if (switch_nvdec_native_output_ready())
+            info->features |= SWITCH_NVDEC_FEATURE_NATIVE_OUTPUT;
         tegra_nvdec_memory_usage(&info->memory_limit, &info->memory_free);
         break;
     }
@@ -285,49 +286,39 @@ IOReturn AppleD5500UserClient::run(uint32_t method, const void *in, uint32_t inS
         reply->reserved = 0;
         break;
     }
+    case SwitchNVDECMethodBufferRecycle: {
+        const auto *request = static_cast<const TegraNVDECBuffer *>(in);
+        auto *buffer = find(request->handle);
+        ret = !buffer || request->reserved ? kIOReturnBadArgument :
+            ioreturn(switch_nvdec_output_recycle(buffer, current_task()));
+        if (!ret)
+            *static_cast<TegraNVDECBufferReply *>(out) =
+                {buffer->handle, 0, buffer->block.size, buffer->map->getAddress()};
+        break;
+    }
+    case SwitchNVDECMethodExport: {
+        const auto *request = static_cast<const TegraNVDECPresent *>(in);
+        const auto *buffer = find(request->handle);
+        const int error = buffer ? switch_nvdec_output_export(&buffer->block, request, current_task()) : -22;
+        ret = error == -95 ? kIOReturnUnsupported : ioreturn(error);
+        break;
+    }
     case TegraNVDECMethodPresent: {
-        // Under the connection's lock: the buffer cannot be freed while VIC reads it.
-        const TegraNVDECPresent *p = static_cast<const TegraNVDECPresent *>(in);
-        const Buffer *b = find(p->handle);  // NOLINT(clang-analyzer-core.NullDereference): input size checked above
-        const uint64_t luma = static_cast<uint64_t>(p->pitch) * p->rows;
-        const uint64_t picture = static_cast<uint64_t>(p->chroma_offset) + luma / 2;
-        if (!b) {
-            ret = kIOReturnBadArgument;
+        const auto *request = static_cast<const TegraNVDECPresent *>(in);
+        const auto *buffer = find(request->handle);
+        TegraVICPicture picture = {};
+        const int checked = switch_nvdec_output_picture(buffer ? &buffer->block : nullptr, request, &picture);
+        if (checked) {
+            if (buffer)
+                switch_dcache_clean_invalidate(buffer->block.va, buffer->block.size);
+            ret = ioreturn(checked);
             break;
         }
-        if (!p->pitch || p->pitch % 64 || !p->rows || p->rows % 32 || p->block_height_log2 != 1 ||
-            p->chroma_offset % 256 || p->chroma_offset < luma || picture > b->block.size ||
-            (p->sample_bytes != 1 && p->sample_bytes != 2) || p->reserved ||
-            (static_cast<uint64_t>(p->crop_x) + p->width) * p->sample_bytes > p->pitch ||
-            static_cast<uint64_t>(p->crop_y) + p->height > p->rows) {
-            // As for any refusal: the caller copies on the CPU.
-            switch_dcache_clean_invalidate(b->block.va, b->block.size);
-            ret = kIOReturnBadArgument;
-            break;
-        }
-        TegraVICPicture vic;
-        vic.backing = b->block.backing;
-        vic.pages = b->block.pages.pages;
-        vic.pageCount = b->block.pages.count;
-        vic.bytes = picture;
-        vic.pitch = p->pitch;
-        vic.rows = p->rows;
-        vic.chromaOffset = p->chroma_offset;
-        vic.blockHeightLog2 = p->block_height_log2;
-        vic.cropX = p->crop_x;
-        vic.cropY = p->crop_y;
-        vic.width = p->width;
-        vic.height = p->height;
-        vic.dstX = p->dst_x;
-        vic.dstY = p->dst_y;
-        vic.surfaceID = p->surface_id;
-        vic.sampleBytes = p->sample_bytes;
         const char *why = nullptr;
-        const int err = tegra_vic_present(&vic, current_task(), &why);
-        if (err) {
-            // The caller copies the picture on the CPU now: it must read DRAM (what NVDEC wrote), as after Wait.
-            switch_dcache_clean_invalidate(b->block.va, picture);
-            ret = (err == -22 || err == -12) ? ioreturn(err) : kIOReturnUnsupported;
+        const int error = tegra_vic_present(&picture, current_task(), &why);
+        if (error) {
+            switch_dcache_clean_invalidate(buffer->block.va, picture.bytes);
+            ret = (error == -22 || error == -12) ? ioreturn(error) : kIOReturnUnsupported;
         }
         break;
     }
