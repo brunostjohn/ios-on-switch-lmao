@@ -101,7 +101,10 @@ struct switch_gpu_backing_transaction {
 };
 
 /* begin sorts/merges the caller's use array and locks its backings in allocation order. Keep those locks only through
- * dependency encoding and publication; every success must end with commit or abort. No token can be lost at commit. */
+ * dependency encoding and publication; every success must end with commit or abort. No token can be lost at commit.
+ * A failed reader changes nothing. A failed writer leaves the contents undefined: the next use that reads them (a READ
+ * here or in dependencies, a READ CPU acquire or wait) gets its errno once, unless a complete overwrite (a whole-range
+ * CPU_DISCARD write) replaced them first. Writers never fail on it. */
 int switch_gpu_backing_begin(struct switch_gpu_backing_use *uses, uint32_t count,
 			     const struct switch_gpu_backing_token *completion,
 			     struct switch_gpu_backing_transaction *transaction);

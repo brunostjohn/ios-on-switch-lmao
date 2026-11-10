@@ -23,25 +23,41 @@ void switch_gpu_backing_drop_token(const switch_gpu_backing_token &token)
 		ops->release_token(&token);
 }
 
-int switch_gpu_backing_prune_locked(switch_gpu_backing *backing)
+namespace {
+// Only a failed write of the current contents leaves them undefined, and only until a complete overwrite replaces them.
+void note_failure(switch_gpu_backing *backing, switch_gpu_backing_access &access, int status)
 {
-	int result = 0;
+	if (!access.noted && access.access == SWITCH_GPU_BACKING_WRITE && access.content >= backing->replaced &&
+	    !backing->lost)
+		backing->lost = status;
+	access.noted = true;
+}
+} // namespace
+
+void switch_gpu_backing_prune_locked(switch_gpu_backing *backing)
+{
 	bool pending = false;
 	for (uint32_t i = 0; i < backing->access_count; ++i)
 		pending |= switch_gpu_backing_token_status(&backing->accesses[i].token) == 0;
 	for (uint32_t i = 0; i < backing->access_count;) {
 		const int status = switch_gpu_backing_token_status(&backing->accesses[i].token);
+		if (status < 0)
+			note_failure(backing, backing->accesses[i], status);
 		// Pending consumers may still have a hardware acquire referencing a completed producer's fence allocation.
-		if (status == 1 && !pending) {
+		if (status != 0 && !pending) {
 			switch_gpu_backing_drop_token(backing->accesses[i].token);
 			backing->accesses[i] = backing->accesses[--backing->access_count];
 		} else {
-			if (status < 0)
-				result = status;
 			++i;
 		}
 	}
-	return result;
+}
+
+int switch_gpu_backing_take_failure_locked(switch_gpu_backing *backing)
+{
+	const int lost = backing->lost;
+	backing->lost = 0;
+	return lost;
 }
 
 namespace {
@@ -159,7 +175,7 @@ static int begin(switch_gpu_backing_use *uses, uint32_t count,
 		if (!result && (writers || (readers && (uses[i].access & SWITCH_GPU_BACKING_WRITE))))
 			result = -16;
 		if (!result)
-			result = switch_gpu_backing_prune_locked(backing);
+			switch_gpu_backing_prune_locked(backing);
 		for (uint32_t j = 0; !result && j < backing->access_count; ++j)
 			if (switch_gpu_backing_same_timeline(backing->accesses[j].token, *completion) &&
 			    !switch_gpu_backing_later(*completion, backing->accesses[j].token))
@@ -179,6 +195,16 @@ static int begin(switch_gpu_backing_use *uses, uint32_t count,
 			backing->initial_clean = true;
 		}
 	}
+	// One job absorbs every failed input it reads: a kill that wrote several fails one submission, not one each.
+	int lost = 0;
+	for (uint32_t i = 0; !result && i < unique; ++i) {
+		const int failure = uses[i].access & SWITCH_GPU_BACKING_READ ?
+			switch_gpu_backing_take_failure_locked(uses[i].backing) : 0;
+		if (!lost)
+			lost = failure;
+	}
+	if (!result)
+		result = lost;
 	if (result)
 		switch_gpu_backing_abort(transaction);
 	return result;
@@ -205,16 +231,17 @@ extern "C" int switch_gpu_backing_dependencies(const switch_gpu_backing_transact
 	if (!transaction || !needed || (capacity && !out) || transaction->locked != transaction->count)
 		return -22;
 	*needed = 0;
+	int lost = 0;
 	for (uint32_t i = 0; i < transaction->count; ++i) {
 		const auto &use = transaction->uses[i];
 		for (uint32_t j = 0; j < use.backing->access_count; ++j) {
-			const auto &access = use.backing->accesses[j];
+			auto &access = use.backing->accesses[j];
 			if (!conflicts(access.access, use.access))
 				continue;
 			const int status = switch_gpu_backing_token_status(&access.token);
 			if (status < 0)
-				return status;
-			if (status == 1 || switch_gpu_backing_same_timeline(access.token, transaction->completion))
+				note_failure(use.backing, access, status);
+			if (status || switch_gpu_backing_same_timeline(access.token, transaction->completion))
 				continue;
 			uint32_t existing = 0;
 			while (existing < *needed && existing < capacity &&
@@ -230,7 +257,13 @@ extern "C" int switch_gpu_backing_dependencies(const switch_gpu_backing_transact
 				out[*needed] = access.token;
 			++*needed;
 		}
+		const int failure = use.access & SWITCH_GPU_BACKING_READ ?
+			switch_gpu_backing_take_failure_locked(use.backing) : 0;
+		if (!lost)
+			lost = failure;
 	}
+	if (lost)
+		return lost;
 	return *needed > capacity ? -28 : 0;
 }
 
@@ -246,11 +279,11 @@ extern "C" void switch_gpu_backing_commit(switch_gpu_backing_transaction *transa
 			switch_gpu_backing_drop_token(backing->accesses[slot].token);
 		else
 			++backing->access_count;
-		backing->accesses[slot] = {transaction->completion, access};
 		if (access & SWITCH_GPU_BACKING_WRITE) {
 			++backing->content;
 			backing->dirty |= SWITCH_GPU_BACKING_GPU_DIRTY;
 		}
+		backing->accesses[slot] = {transaction->completion, backing->content, access, false};
 	}
 	unlock_transaction(transaction);
 }

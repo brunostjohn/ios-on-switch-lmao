@@ -12,7 +12,9 @@ struct switch_gpu_backing_pages {
 
 struct switch_gpu_backing_access {
 	switch_gpu_backing_token token;
+	uint64_t content;
 	uint32_t access;
+	bool noted;  // its failure was already accounted for: latched into lost, or found to leave nothing undefined
 };
 
 struct switch_gpu_backing {
@@ -20,6 +22,8 @@ struct switch_gpu_backing {
 	switch_gpu_backing *retiring_next;
 	IOLock *lock;
 	uint64_t id, generation, content;
+	uint64_t replaced;  // the content generation of the last complete overwrite
+	int lost;  // a failed writer left the contents undefined; its errno goes to the next reader only
 	uint64_t clean_start;
 	uint32_t refs, surface_id;
 	switch_gpu_backing_pages *pages;
@@ -43,7 +47,8 @@ bool switch_gpu_backing_same_timeline(const switch_gpu_backing_token &a,
 				     const switch_gpu_backing_token &b);
 bool switch_gpu_backing_later(const switch_gpu_backing_token &a,
 			      const switch_gpu_backing_token &b);
-int switch_gpu_backing_prune_locked(switch_gpu_backing *backing);
+void switch_gpu_backing_prune_locked(switch_gpu_backing *backing);
+int switch_gpu_backing_take_failure_locked(switch_gpu_backing *backing);
 void switch_gpu_backing_drop_token(const switch_gpu_backing_token &token);
 extern "C" void switch_gpu_backing_cache(const uint64_t *pages, uint32_t count,
 					 uint64_t offset, uint64_t bytes, int operation);
