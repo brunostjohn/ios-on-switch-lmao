@@ -29,8 +29,9 @@ struct BatchWork {
     }
 };
 
-// ABI records remain contiguous. Boundaries are local metadata and never enter the kernel push flags. Prefix insertion
-// (SLM setup or hoisted split prologues) preserves every recorded cut; merging cannot erase one.
+// ABI records remain contiguous. Boundaries are local metadata until a submission carries several batches: then each
+// boundary inside it is a TegraGM20BPushFence. Prefix insertion (SLM setup or hoisted split prologues) preserves every
+// recorded cut; merging cannot erase one.
 class PushBatches {
     std::vector<TegraGM20BAbiPush> pushes_;
     std::vector<size_t> ends_;
@@ -96,6 +97,44 @@ public:
         while (end > at && (pushes_[end - 1].flags & TegraGM20BPushIncomplete))
             --end;
         return end - at;
+    }
+
+    // One submission from `at`: consecutive next() spans while they fit maxPushes, at most maxFences + 1 of them. Each
+    // span's end inside it becomes an internal fence (fence()): every span still ends with the channel's fence.
+    size_t submission(size_t at, uint32_t maxPushes, uint32_t maxFences) const
+    {
+        size_t n = next(at, maxPushes);
+        for (uint32_t fences = 0; n && fences < maxFences && at + n < pushes_.size(); ++fences) {
+            const size_t more = next(at + n, maxPushes);
+            if (!more || n + more > maxPushes)
+                break;
+            n += more;
+        }
+        return n;
+    }
+
+    void fence(size_t at, size_t n, uint32_t maxPushes)
+    {
+        for (size_t end = at + next(at, maxPushes); end > at && end < at + n;) {
+            pushes_[end - 1].flags |= TegraGM20BPushFence;
+            const size_t step = next(end, maxPushes);
+            if (!step)
+                return;
+            end += step;
+        }
+    }
+
+    template <class Submit>
+    bool submit(uint32_t maxPushes, uint32_t maxFences, Submit &&submitOne)
+    {
+        for (size_t at = 0; at < pushes_.size();) {
+            const size_t n = submission(at, maxPushes, maxFences);
+            fence(at, n, maxPushes);
+            if (!submitOne(at, n))
+                return false;
+            at += n;
+        }
+        return true;
     }
 
     bool valid(uint32_t maxPushes) const

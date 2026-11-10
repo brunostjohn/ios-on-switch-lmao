@@ -3544,10 +3544,12 @@ bool CommandBuffer::commit(uint32_t &seqno)
         return false;  // later internal writes invalidate the CPU proof; no prefix may reach the GPU
     if (!batchWork_.operations)
         segments_.includeTail();
-    if (!segments_.valid(d.k_.maxPushes()))
+    const uint32_t maxPushes = d.k_.maxPushes(), maxFences = d.k_.maxFences();
+    if (!segments_.valid(maxPushes))
         return false;  // validate all indivisible continuation groups before publishing any prefix
-    const bool multiple = (!segments_.empty() && segments_.next(0, d.k_.maxPushes()) < segments_.size()) ||
-                          sharedWaits_.size() + sharedSignals_.size() > TegraGM20BMaxJobEvents;
+    const bool multiple =
+        (!segments_.empty() && segments_.submission(0, maxPushes, maxFences) < segments_.size()) ||
+        sharedWaits_.size() + sharedSignals_.size() > TegraGM20BMaxJobEvents;
     const uint64_t admissionCookie = multiple && d.k_.resourceReady() ? d.k_.nextAdmission() : 0;
     bool admissionHeld = false;
     uint32_t seq = 0;
@@ -3598,19 +3600,18 @@ bool CommandBuffer::commit(uint32_t &seqno)
             return false;
         waited += count;
     }
-    for (size_t at = 0; at < segments_.size();) {
-        const uint32_t n = uint32_t(segments_.next(at, d.k_.maxPushes()));
-
+    const bool pushed = segments_.submit(maxPushes, maxFences, [&](size_t at, size_t n) {
+        const bool closing = at + n == segments_.size();
         const JobVisibility visibility = visibility_ == JobVisibility::Legacy ? JobVisibility::Legacy :
-            externalWrites_ && at + n == segments_.size() ? JobVisibility::External : JobVisibility::Internal;
+            externalWrites_ && closing ? JobVisibility::External : JobVisibility::Internal;
         const uint32_t waitCount = uint32_t(sharedWaits_.size() - waited);
-        const uint32_t signalCount = at + n == segments_.size() ?
+        const uint32_t signalCount = closing ?
             uint32_t(std::min<size_t>(sharedSignals_.size(), TegraGM20BMaxJobEvents - waitCount)) : 0;
         const JobEvents events{waitCount ? sharedWaits_.data() + waited : nullptr,
                               signalCount ? sharedSignals_.data() : nullptr, waitCount, signalCount};
-        const bool last = at + n == segments_.size() && waited + waitCount == sharedWaits_.size() &&
+        const bool last = closing && waited + waitCount == sharedWaits_.size() &&
                           signaled + signalCount == sharedSignals_.size();
-        if (!submit(segments_.data() + at, n, surfaces_, visibility, events, last))
+        if (!submit(segments_.data() + at, uint32_t(n), surfaces_, visibility, events, last))
             return false;
         waited += waitCount;
         signaled += signalCount;
@@ -3618,8 +3619,10 @@ bool CommandBuffer::commit(uint32_t &seqno)
             surface->lastUse = seq;
             surface->channelGeneration = d.channelGeneration();
         }
-        at += n;
-    }
+        return true;
+    });
+    if (!pushed)
+        return false;
     while (waited < sharedWaits_.size() || signaled < sharedSignals_.size()) {
         const uint32_t waitCount = uint32_t(std::min<size_t>(sharedWaits_.size() - waited, TegraGM20BMaxJobEvents));
         const uint32_t signalCount = uint32_t(std::min<size_t>(sharedSignals_.size() - signaled,

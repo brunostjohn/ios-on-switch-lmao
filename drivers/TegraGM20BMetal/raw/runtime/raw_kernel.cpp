@@ -519,6 +519,13 @@ bool Kernel::exec(uint32_t channel, const TegraGM20BAbiPush *pushes, uint32_t co
     }
     // Initial context packets retain the legacy path until their control BOs are named.
     const bool addressed = exactJobs() && surfaces;
+    for (uint32_t i = 0; i < count; ++i)
+        if ((pushes[i].flags & TegraGM20BPushFence) && (!addressed || !maxFences())) {
+            if (result)
+                *result = kIOReturnBadArgument;
+            setError("The kernel cannot fence inside a job");
+            return false;
+        }
     if (surfaces && !rangeUses())
         for (const auto &use : surfaces->uses())
             if (use.access & TegraGM20BSurfaceRange) {
