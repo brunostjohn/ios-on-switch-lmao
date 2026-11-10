@@ -52,7 +52,11 @@ static int pipelineReadiness(RMCommandBuffer *cb, const RMSegment &range, raw::E
     if (!native_bridge_metal_render_pipeline_ready)
         return 1;  // older host bridge: replay retains its synchronous contract
     bool pending = false;
-    for (void *object : cb->_plan.renderPipelines(range.from, range.to)) {
+    std::vector<void *> pipelines;
+    cb->_plan.forEachRenderPipeline(range.from, range.to, [&](void *object) {
+        pipelines.push_back(object);
+    });
+    for (void *object : pipelines) {
         id state = twinOf((__bridge id)object);
         const bool first = cb->_pipelineObserved.insert(object).second;
         void (^observer)(void) = nil;

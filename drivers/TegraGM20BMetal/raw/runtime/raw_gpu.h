@@ -35,6 +35,7 @@
 #include <mach/kern_return.h>
 #include "raw_comp.h"
 #include "raw_descriptors.h"
+#include "raw_fetch_order.h"
 #include "raw_kernel.h"
 #include "raw_heap.h"
 #include "raw_pack.h"
@@ -631,6 +632,8 @@ private:
     using Runs = std::vector<std::pair<uint32_t, uint32_t>>;
     const Runs *selfRuns(const Pipeline &pl, uint32_t primitive, int32_t first, uint32_t count, uint32_t instances,
                          const char **why);
+    const Runs *refuseFetch(FetchRefusal refusal, uint32_t primitive, uint32_t count, uint32_t instances,
+                            const char **why);
     const uint8_t *drawIndices_ = nullptr;
     const Buffer *drawIndexBuffer_ = nullptr;
     bool drawIndexCpuSafe_ = false;

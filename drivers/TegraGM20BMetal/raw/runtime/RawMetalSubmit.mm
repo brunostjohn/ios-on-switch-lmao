@@ -128,6 +128,22 @@ void planSegments(RMCommandBuffer *cb)
     }
 }
 
+// The raw path refused `encoder` of the native range being submitted (a draw of it, found while encoding): only that
+// encoder goes to m2v, and the encoders around it are submitted raw, each side encoded again as a range of its own. The
+// encoder's own range was prepared as it was recorded; nothing here writes the plan, which completion handlers of this
+// command buffer's earlier ranges may be reading.
+static void isolateRefused(RMCommandBuffer *cb, size_t encoder)
+{
+    const RMSegment range = cb->_segs[cb->_segNext];
+    const size_t end = encoder < range.to ? cb->_plan.encoderEnd(encoder) : range.to;
+    std::vector<RMSegment> parts;
+    for (const raw::ExecutionRange &part :
+         raw::isolate({range.from, range.to, raw::ExecutionKind::native}, encoder, end))
+        parts.push_back({uint32_t(part.from), uint32_t(part.to), part.kind == raw::ExecutionKind::native});
+    cb->_segs.erase(cb->_segs.begin() + ptrdiff_t(cb->_segNext));
+    cb->_segs.insert(cb->_segs.begin() + ptrdiff_t(cb->_segNext), parts.begin(), parts.end());
+}
+
 // The raw device's encoding arenas have one CPU owner. This lock is separate from the scheduler; no event or CPU GPU-fence
 // wait happens here. A single visit emits one legal range and yields, retaining the Metal queue's reservation.
 bool submitLocked(RMCommandBuffer *cb)
@@ -174,7 +190,8 @@ bool submitLocked(RMCommandBuffer *cb)
         const uint64_t began = nowUs();
         cb->_frame.mark(switch_frame::EncodeStart);
 #endif
-        const bool encoded = encodeRaw(cb, range.from, range.to, &why);
+        size_t refusedEncoder = range.to;
+        const bool encoded = encodeRaw(cb, range.from, range.to, &why, &refusedEncoder);
 #if SWITCH_FRAME_TIMELINE
         cb->_frame.mark(switch_frame::EncodeEnd);
         r.stats.encodeUs += nowUs() - began;
@@ -188,9 +205,9 @@ bool submitLocked(RMCommandBuffer *cb)
                                            userInfo:nil]);
                 return true;
             }
-            range.raw = false;
             cb->_reason = WhyEncode;
             cb->_why = [NSString stringWithUTF8String:why ?: "?"];
+            isolateRefused(cb, refusedEncoder);
             return false;
         }
         r.stats.raw++;

@@ -86,6 +86,80 @@ TEST(ExecutionPlan, EmptyAndEventOnlyCommandBuffersKeepExactPositions)
     EXPECT_EQ(empty.ranges()[1].from, 1u);
 }
 
+raw::ExecutionAttribution routeOf(const std::vector<raw::ExecutionRange> &ranges)
+{
+    raw::ExecutionAttribution route;
+    for (const auto &range : ranges)
+        route.add(range.kind == ExecutionKind::native, false);
+    return route;
+}
+
+// Three render encoders recorded raw share one submission; the middle one's draw is refused while it is encoded
+TEST(ExecutionPlan, ARefusedEncoderAloneGoesToCompatibilityAndItsNeighboursStayNative)
+{
+    raw::ExecutionPlan plan;
+    plan.append(0, 5, ExecutionKind::native);
+    plan.append(5, 9, ExecutionKind::native);
+    plan.append(9, 14, ExecutionKind::native);
+    ASSERT_EQ(plan.ranges().size(), 1u);
+    const auto parts = raw::isolate(plan.ranges()[0], 5, 9);
+    ASSERT_EQ(parts.size(), 3u);
+    EXPECT_EQ(parts[0].from, 0u);
+    EXPECT_EQ(parts[0].to, 5u);
+    EXPECT_EQ(parts[0].kind, ExecutionKind::native);
+    EXPECT_EQ(parts[1].from, 5u);
+    EXPECT_EQ(parts[1].to, 9u);
+    EXPECT_EQ(parts[1].kind, ExecutionKind::compatibility);
+    EXPECT_EQ(parts[2].from, 9u);
+    EXPECT_EQ(parts[2].to, 14u);
+    EXPECT_EQ(parts[2].kind, ExecutionKind::native);
+    const auto route = routeOf(parts);
+    EXPECT_EQ(route.native, 2u);
+    EXPECT_EQ(route.compatibility, 1u);
+    EXPECT_TRUE(route.mixed());
+}
+
+TEST(ExecutionPlan, ARefusedFirstOrLastEncoderLeavesOneNativeSide)
+{
+    const raw::ExecutionRange range{0, 14, ExecutionKind::native};
+    const auto first = raw::isolate(range, 0, 5);
+    ASSERT_EQ(first.size(), 2u);
+    EXPECT_EQ(first[0].kind, ExecutionKind::compatibility);
+    EXPECT_EQ(first[0].to, 5u);
+    EXPECT_EQ(first[1].kind, ExecutionKind::native);
+    EXPECT_EQ(first[1].from, 5u);
+    EXPECT_EQ(first[1].to, 14u);
+    const auto last = raw::isolate(range, 9, 14);
+    ASSERT_EQ(last.size(), 2u);
+    EXPECT_EQ(last[0].kind, ExecutionKind::native);
+    EXPECT_EQ(last[0].to, 9u);
+    EXPECT_EQ(last[1].kind, ExecutionKind::compatibility);
+    EXPECT_EQ(last[1].from, 9u);
+}
+
+TEST(ExecutionPlan, ARefusalNoEncoderOwnsSendsTheWholeRangeToCompatibility)
+{
+    const raw::ExecutionRange range{3, 14, ExecutionKind::native};
+    for (const auto &[from, to] : std::vector<std::pair<size_t, size_t>>{{14, 14}, {0, 5}, {9, 20}, {6, 6}}) {
+        const auto parts = raw::isolate(range, from, to);
+        ASSERT_EQ(parts.size(), 1u);
+        EXPECT_EQ(parts[0].from, 3u);
+        EXPECT_EQ(parts[0].to, 14u);
+        EXPECT_EQ(parts[0].kind, ExecutionKind::compatibility);
+        EXPECT_TRUE(routeOf(parts).onlyCompatibility());
+    }
+}
+
+// A refused range that held one encoder is replaced by that encoder alone: nothing native is left to split
+TEST(ExecutionPlan, ARefusedSingleEncoderRangeIsOneCompatibilityRange)
+{
+    const auto parts = raw::isolate({5, 9, ExecutionKind::native}, 5, 9);
+    ASSERT_EQ(parts.size(), 1u);
+    EXPECT_EQ(parts[0].kind, ExecutionKind::compatibility);
+    EXPECT_EQ(parts[0].from, 5u);
+    EXPECT_EQ(parts[0].to, 9u);
+}
+
 // Regression journey: A publishes E then waits F; B (queued later) waits E then publishes F. Preflighting all of A's
 // waits deadlocked for ten seconds. Execute the real range plan through the real per-queue reservation/yield machinery.
 TEST(ExecutionPlan, InteriorWaitDoesNotPreventItsOwnEarlierSignalFromReleasingTheProducer)
