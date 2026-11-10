@@ -10,6 +10,8 @@ struct tgm_mem {};
 
 struct tgm_chan {};
 
+struct switch_gpu_mapping {};
+
 namespace
 {
 std::vector<uint8_t> pushBytes(4096);
@@ -18,6 +20,8 @@ tgm_vm space;
 tgm_mem pushMemory, fenceMemory;
 volatile uint32_t fence;
 unsigned madeMemory, vmFailures, poolFrees;
+bool pushVolatile;
+switch_gpu_mapping pushWindow;
 }
 
 extern "C" void *tgm_pool_alloc(uint64_t bytes, uint64_t, uint64_t *pa)
@@ -79,6 +83,20 @@ extern "C" int tgm_vm_map_ordered(tgm_vm *, uint64_t va, uint64_t bytes, tgm_mem
 	EXPECT_EQ(kind, 0u);
 	memory.map(va, pushBytes, readOnly != 0);
 	return 0;
+}
+
+extern "C" int switch_gpu_vm_map_volatile(tgm_vm *vm, uint64_t va, uint64_t bytes, tgm_mem *mem,
+					  uint64_t offset, uint8_t kind, int readOnly, int vol,
+					  switch_gpu_mapping **out)
+{
+	pushVolatile = vol != 0;
+	*out = &pushWindow;
+	return tgm_vm_map_ordered(vm, va, bytes, mem, offset, kind, readOnly, nullptr);
+}
+
+extern "C" void switch_gpu_vm_unmap(tgm_vm *, switch_gpu_mapping **mapping)
+{
+	*mapping = nullptr;
 }
 
 extern "C" int tgm_vm_kmap(tgm_vm *, tgm_mem *, uint64_t, uint64_t *va)
@@ -215,6 +233,7 @@ TEST_F(RelayoutControl, FailedOpenIsUndoneAndTheNextMoveOpensAgain)
 
 TEST_F(RelayoutControl, ActualMappingAllowsGpuCheckpointWithoutChangingCommands)
 {
+	EXPECT_TRUE(pushVolatile);
 	const uint32_t n =
 		tgm_relayout_checkpoint(gRelayout.pushCpu, kPushVa + uint64_t(kCheckpointWord) * 4);
 	const std::vector<uint8_t> commands(pushBytes.begin(), pushBytes.begin() + n * 4);

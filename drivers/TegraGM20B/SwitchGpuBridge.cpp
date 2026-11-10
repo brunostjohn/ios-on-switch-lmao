@@ -29,6 +29,7 @@ struct BridgeQueue {
     tgm_vm *vm;
     tgm_chan *channel;
     tgm_mem *push, *fence;
+    switch_gpu_mapping *pushMapping;
     uint32_t *words;
     volatile uint32_t *fenceCpu;
     uint64_t fenceGpu, fencePage, pushPa, pages[kSlots];
@@ -196,6 +197,7 @@ bool initialize()
 
 void discardSpace()
 {
+	switch_gpu_vm_unmap(queue.vm, &queue.pushMapping);
 	tgm_vm_del(&queue.vm);
 	tgm_mem_del(&queue.push);
 	tgm_mem_del(&queue.fence);
@@ -220,7 +222,8 @@ bool openSpace()
 		    return false;
     }
     if (tgm_mem_new(queue.vm, queue.pages, kSlots, &queue.push) ||
-        tgm_vm_map_ordered(queue.vm, kPushVa, kPage * kSlots, queue.push, 0, 0, 1, nullptr) ||
+        switch_gpu_vm_map_volatile(queue.vm, kPushVa, kPage * kSlots, queue.push, 0, 0, 1, 1,
+                                   &queue.pushMapping) ||
         tgm_mem_new(queue.vm, &queue.fencePage, 1, &queue.fence) ||
         tgm_vm_kmap(queue.vm, queue.fence, kPage, &queue.fenceGpu))
         return false;
@@ -297,8 +300,12 @@ extern "C" int switch_gpu_bridge_submit(const switch_gpu_backing_token *tokens, 
             tgm_syncpt_incr(queue.words + slot * (kPage / 4), job.syncpoint), 0, 0, 0, 0};
         switch_gpu_chan_submit_enter(queue.channel);
         for (;;) {
-            error = switch_gpu_chan_exec(queue.channel, &push, 1, job.tokens, job.count,
-                                         &job.sequence, nullptr);
+            // No L2 invalidate ahead of it: the job reads no memory, its push slots are volatile, and the push's own
+            // flush (tgm_syncpt_incr) puts the producers' writes in DRAM before host1x sees the increment.
+            error = switch_gpu_chan_exec_visibility(queue.channel, &push, 1, job.tokens, job.count,
+                                                    &job.sequence, nullptr,
+                                                    SWITCH_GPU_SUBMIT_VISIBILITY_EXPLICIT |
+                                                        SWITCH_GPU_SUBMIT_EXTERNAL_VISIBILITY);
             if (error != -11)
                 break;
             error = switch_gpu_chan_wait_submission_room(queue.channel, &push, 1, job.count, nullptr);

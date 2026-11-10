@@ -46,7 +46,8 @@ int mapError;
 bool early;
 // chan_killed landing at the fence read: the error first, then the fence over the abandoned scrub.
 bool killAtFenceRead;
-bool pushReadOnly, destinationReadOnly, destinationVolatile;
+bool pushReadOnly, pushVolatile, destinationReadOnly, destinationVolatile;
+switch_gpu_mapping pushWindow;
 void (*fenceCallback)(void *);
 void *fenceContext;
 
@@ -202,9 +203,20 @@ extern "C" int tgm_vm_kmap(tgm_vm *, tgm_mem *, uint64_t, uint64_t *va)
 	return 0;
 }
 
-extern "C" int switch_gpu_vm_map_volatile(tgm_vm *, uint64_t va, uint64_t, tgm_mem *mem, uint64_t,
-				 uint8_t kind, int readOnly, int vol, switch_gpu_mapping **out)
+extern "C" int switch_gpu_vm_map_volatile(tgm_vm *, uint64_t va, uint64_t bytes, tgm_mem *mem,
+				 uint64_t offset, uint8_t kind, int readOnly, int vol,
+				 switch_gpu_mapping **out)
 {
+	if (mem->pages[0] == 0x100000u) {
+		EXPECT_EQ(offset, 0u);
+		EXPECT_EQ(bytes, sizeof(words));
+		pushReadOnly = readOnly;
+		pushVolatile = vol;
+		memory.map(va, reinterpret_cast<uint8_t *>(words.data()), bytes, readOnly != 0, !vol);
+		pushWindow = {va, bytes};
+		*out = &pushWindow;
+		return 0;
+	}
 	if (mapError)
 		return mapError;
 	EXPECT_EQ(kind, 0);
@@ -224,6 +236,10 @@ extern "C" int switch_gpu_vm_map(tgm_vm *vm, uint64_t va, uint64_t bytes, tgm_me
 
 extern "C" void switch_gpu_vm_unmap(tgm_vm *, switch_gpu_mapping **mapping)
 {
+	if (*mapping == &pushWindow) {
+		memory.unmap(pushWindow.address, pushWindow.bytes);
+		*mapping = nullptr;
+	}
 	if (*mapping) {
 		++unmaps;
 		memory.unmap((*mapping)->address, (*mapping)->bytes);
@@ -311,6 +327,7 @@ TEST_F(CachedZero, ExactClearBecomesReadyOnlyAfterExternalFenceAndDeferredCallba
 	const unsigned clean = cacheOps;
 	ASSERT_EQ(a.submit(), 0);
 	EXPECT_TRUE(pushReadOnly);
+	EXPECT_TRUE(pushVolatile);
 	EXPECT_FALSE(destinationReadOnly);
 	EXPECT_TRUE(destinationVolatile);
 	EXPECT_EQ(a.callbacks, 0u);

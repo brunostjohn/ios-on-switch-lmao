@@ -25,6 +25,7 @@ struct Relayout {
 	tgm_vm *vm;
 	tgm_chan *chan;
 	tgm_mem *push, *fence;
+	switch_gpu_mapping *pushMapping;
 	uint32_t *pushCpu;
 	volatile uint32_t *fenceCpu;
 	uint64_t pushPa, fenceGpu;
@@ -45,7 +46,8 @@ bool openSpace()
 	tgm_vm_claim(r.vm, &gRelayout);
 	// The last word shares this page with commands and receives the GPU's recovery checkpoint.
 	if ((tgm_mem_new(r.vm, &r.pushPa, 1, &r.push) != 0) ||
-	    (tgm_vm_map_ordered(r.vm, kPushVa, kPage, r.push, 0, 0, 0, nullptr) != 0) ||
+	    (switch_gpu_vm_map_volatile(r.vm, kPushVa, kPage, r.push, 0, 0, 0, 1, &r.pushMapping) !=
+	     0) ||
 	    (tgm_mem_new(r.vm, &fencePage, 1, &r.fence) != 0) ||
 	    (tgm_vm_kmap(r.vm, r.fence, kPage, &r.fenceGpu) != 0))
 		return false;
@@ -56,6 +58,7 @@ bool openSpace()
 void discardSpace()
 {
 	Relayout &r = gRelayout;
+	switch_gpu_vm_unmap(r.vm, &r.pushMapping);
 	tgm_vm_del(&r.vm);
 	tgm_mem_del(&r.push);
 	tgm_mem_del(&r.fence);

@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #include <gtest/gtest.h>
+#include <algorithm>
 #include <array>
 #include <atomic>
 #include <functional>
@@ -18,6 +19,7 @@
 struct tgm_vm {};
 struct tgm_mem { const uint64_t *pages; uint32_t count; };
 struct tgm_chan { uint32_t submitted, completed; bool failed; };
+struct switch_gpu_mapping { uint64_t address; };
 namespace {
 using Key = std::tuple<uint32_t, uint64_t, uint64_t>;
 std::map<Key, int> statuses, refs, external;
@@ -32,6 +34,9 @@ volatile uint32_t fence;
 std::vector<switch_gpu_backing_token> submittedTokens;
 uint32_t submittedWords[TGM_SYNCPT_INCR_DWORDS];
 int nextExecError;
+bool pushVolatile;
+uint32_t submittedFlags;
+switch_gpu_mapping pushWindow;
 void (*fenceCallback)(void *);
 void *fenceContext;
 Key key(const switch_gpu_backing_token &token) { return {token.queue, token.reset_generation, token.value}; }
@@ -121,6 +126,11 @@ extern "C" int tgm_mem_new(tgm_vm *, const uint64_t *pages, uint32_t count, tgm_
 extern "C" int tgm_vm_map_ordered(tgm_vm *, uint64_t, uint64_t, tgm_mem *, uint64_t, uint8_t, int, uint8_t *) {
     ++maps; return 0;
 }
+extern "C" int switch_gpu_vm_map_volatile(tgm_vm *, uint64_t va, uint64_t, tgm_mem *, uint64_t, uint8_t, int, int vol,
+                                          switch_gpu_mapping **out) {
+    ++maps; pushVolatile = vol != 0; pushWindow = {va}; *out = &pushWindow; return 0;
+}
+extern "C" void switch_gpu_vm_unmap(tgm_vm *, switch_gpu_mapping **mapping) { *mapping = nullptr; }
 extern "C" int tgm_vm_kmap(tgm_vm *, tgm_mem *, uint64_t, uint64_t *va) { ++maps; *va = 0x400000; return 0; }
 extern "C" int tgm_chan_new_copy(tgm_vm *, const void *, volatile uint32_t *, uint64_t, const char *, int, tgm_chan **out) {
     gpu = {}; *out = &gpu; return 0;
@@ -169,9 +179,11 @@ extern "C" void switch_gpu_chan_submit_leave() {}
 extern "C" int switch_gpu_chan_wait_submission_room(tgm_chan *, const tgm_push *, uint32_t, uint32_t, const tgm_prof *) {
     ++roomWaits; return 0;
 }
-extern "C" int switch_gpu_chan_exec(tgm_chan *chan, const tgm_push *push, uint32_t count,
-    const switch_gpu_backing_token *dependencies, uint32_t dependencyCount, uint32_t *sequence, const tgm_prof *) {
+extern "C" int switch_gpu_chan_exec_visibility(tgm_chan *chan, const tgm_push *push, uint32_t count,
+    const switch_gpu_backing_token *dependencies, uint32_t dependencyCount, uint32_t *sequence, const tgm_prof *,
+    uint32_t flags) {
     ++execs;
+    submittedFlags = flags;
     if (nextExecError) { const int error = nextExecError; nextExecError = 0; return error; }
     EXPECT_EQ(count, 1u);
     EXPECT_EQ(push->dwords, TGM_SYNCPT_INCR_DWORDS);
@@ -179,6 +191,10 @@ extern "C" int switch_gpu_chan_exec(tgm_chan *chan, const tgm_push *push, uint32
     submittedTokens.assign(dependencies, dependencies + dependencyCount);
     *sequence = ++chan->submitted;
     return 0;
+}
+extern "C" int switch_gpu_chan_exec(tgm_chan *chan, const tgm_push *push, uint32_t count,
+    const switch_gpu_backing_token *dependencies, uint32_t dependencyCount, uint32_t *sequence, const tgm_prof *prof) {
+    return switch_gpu_chan_exec_visibility(chan, push, count, dependencies, dependencyCount, sequence, prof, 0);
 }
 extern "C" int switch_gpu_backing_token_retain(const switch_gpu_backing_token *token) { ++refs[key(*token)]; return 0; }
 extern "C" void switch_gpu_backing_token_release(const switch_gpu_backing_token *token) { --refs[key(*token)]; }
@@ -506,4 +522,20 @@ TEST_F(Bridge, ABridgeNobodyWaitsForArmsNoCheck) {
     statuses[key(source)] = 0;
     ASSERT_NE(submit({source}), nullptr);
     EXPECT_EQ(hangCheck()->deadline, 0u);
+}
+
+// A bridge job reads no memory: its volatile push slot needs no L2 invalidate ahead of it, and the flush that puts its
+// producers' writes in DRAM before host1x sees the increment is in the push itself.
+TEST_F(Bridge, AJobNeedsNoL2InvalidateAndItsPushFlushesTheProducers)
+{
+    submit({token(77)});
+    EXPECT_TRUE(pushVolatile);
+    EXPECT_TRUE(submittedFlags & SWITCH_GPU_SUBMIT_VISIBILITY_EXPLICIT);
+    EXPECT_TRUE(submittedFlags & SWITCH_GPU_SUBMIT_EXTERNAL_VISIBILITY);
+    EXPECT_FALSE(submittedFlags & SWITCH_GPU_SUBMIT_HOST_WRITTEN);
+    const uint32_t *begin = submittedWords, *end = begin + TGM_SYNCPT_INCR_DWORDS;
+    const auto *flush = std::find(begin, end, 0x10u << 27);
+    const auto *increment = std::find(begin, end, tgm_syncpt_header(0x0074));
+    ASSERT_NE(flush, end);
+    EXPECT_LT(flush, increment);
 }

@@ -40,6 +40,7 @@ struct Queue {
 	tgm_vm *vm;
 	tgm_chan *channel;
 	tgm_mem *push, *fence;
+	switch_gpu_mapping *pushMapping;
 	uint32_t *words;
 	volatile uint32_t *fenceCpu;
 	uint64_t fenceGpu, fencePage, pushPage, mappedBytes, slots, armed, uses;
@@ -157,7 +158,8 @@ bool openSpace()
 		return false;
 	tgm_vm_claim(queue.vm, &queue);
 	if (tgm_mem_new(queue.vm, &queue.pushPage, 1, &queue.push) ||
-	    tgm_vm_map_ordered(queue.vm, kPushVa, kPage, queue.push, 0, 0, 1, nullptr) ||
+	    switch_gpu_vm_map_volatile(queue.vm, kPushVa, kPage, queue.push, 0, 0, 1, 1,
+				       &queue.pushMapping) ||
 	    tgm_mem_new(queue.vm, &queue.fencePage, 1, &queue.fence) ||
 	    tgm_vm_kmap(queue.vm, queue.fence, kPage, &queue.fenceGpu))
 		return false;
@@ -174,6 +176,7 @@ int channel()
 		tgm_chan_del(&queue.channel);
 	}
 	if (!queue.vm && !openSpace()) {
+		switch_gpu_vm_unmap(queue.vm, &queue.pushMapping);
 		tgm_vm_del(&queue.vm);
 		tgm_mem_del(&queue.push);
 		tgm_mem_del(&queue.fence);
