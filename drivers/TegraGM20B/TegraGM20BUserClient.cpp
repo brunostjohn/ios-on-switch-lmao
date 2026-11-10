@@ -913,7 +913,8 @@ class AGXDeviceUserClient : public IOUserClient
     uint32_t channelLevels_[kMaxChannels] = {};
     Bo *bos_ = nullptr, *zombies_ = nullptr, *readyBos_ = nullptr;
     RetiredBinding *retired_ = nullptr, **retiredTail_ = &retired_, *unmapping_ = nullptr;
-    IOLock *unmapLock_ = nullptr;  // a retired binding's PTEs go under it (retireBatch, takeRetiredOverlaps)
+    IOLock *unmapLock_ =
+	    nullptr;  // a retired binding's PTEs go under it (retireBatch, takeRetiredOverlaps)
     bool faultLogged_[kMaxChannels] = {};
     thread_call_t retireCall_ = nullptr;
     uint32_t retiredCount_ = 0, retireRemaining_ = 0, retirementPending_ = 0,
@@ -1671,11 +1672,13 @@ IOReturn AGXDeviceUserClient::vmBind(const TegraGM20BAbiVmBind *in, uint32_t cou
 		if (!unmap && op.op != TegraGM20BBindMap && op.op != TegraGM20BBindMapVolatile)
 			return kIOReturnBadArgument;
 		Bo *bo = unmap ? nullptr : findBo(op.handle);
-		if (!unmap && (!bo || op.bo_offset > bo->bytes || op.range > bo->bytes - op.bo_offset))
+		if (!unmap &&
+		    (!bo || op.bo_offset > bo->bytes || op.range > bo->bytes - op.bo_offset))
 			return kIOReturnBadArgument;
 		const Binding *same = switch_gpu_binding_find(binds_, nbinds_, op.va, op.range);
-		if (!unmap && same && same->va == op.va && same->range == op.range && same->bo == bo &&
-		    same->bo_offset == op.bo_offset && same->retirement->kind == op.kind &&
+		if (!unmap && same && same->va == op.va && same->range == op.range &&
+		    same->bo == bo && same->bo_offset == op.bo_offset &&
+		    same->retirement->kind == op.kind &&
 		    same->retirement->vol == (op.op == TegraGM20BBindMapVolatile))
 			continue;
 		// Everything a cut and the new binding need, before any binding changes.
@@ -1700,7 +1703,8 @@ IOReturn AGXDeviceUserClient::vmBind(const TegraGM20BAbiVmBind *in, uint32_t cou
 				if (each)
 					IODelete(each, RetiredBinding, 1);
 		};
-		IOReturn cut = !spare[0] || !spare[1] || (!unmap && !record) ? kIOReturnNoMemory : kIOReturnSuccess;
+		IOReturn cut = !spare[0] || !spare[1] || (!unmap && !record) ? kIOReturnNoMemory
+									     : kIOReturnSuccess;
 		if (!cut)
 			cut = cutOverlaps(op.va, op.range, !unmap, spare);
 		freeSpare();
@@ -1766,10 +1770,10 @@ IOReturn AGXDeviceUserClient::surfaceLayoutInfo(const TegraGM20BAbiSurfaceLayout
 	const bool exclusive = switch_gpu_surface_layout_exclusive(object, true) == 0;
 	const bool writes = exclusive && packed && !surface.client_memory && (canonical || same) &&
 		(in->flags & TegraGM20BLayoutWrites);
-	const int layout = packed
-		? tgm_coherency_layout(coh, uint32_t(surface.width), uint32_t(surface.height), surface.bpp,
-			uint32_t(surface.pitch), writes)
-		: tgm_coherency_layout(coh, 0, 0, 0, 0, 0);
+	const int layout = packed ? tgm_coherency_layout(coh, uint32_t(surface.width),
+							 uint32_t(surface.height), surface.bpp,
+							 uint32_t(surface.pitch), writes)
+				  : tgm_coherency_layout(coh, 0, 0, 0, 0, 0);
 	if (exclusive)
 		switch_gpu_surface_layout_exclusive(object, false);
 	tgm_layout tiled = {};
@@ -2381,8 +2385,8 @@ IOReturn AGXDeviceUserClient::exec(uint32_t channel, TegraGM20BAbiPush *input, u
 		if (bo->nativeView) {
 			const uint32_t first = useTotal;
 			const int error = switch_gpu_native_surface_add_read(
-				*bo->nativeView, access, job.uses, job.guards, job.capacity, useTotal,
-				nativeGuardCount);
+				*bo->nativeView, access, job.uses, job.guards, job.capacity,
+				useTotal, nativeGuardCount);
 			for (uint32_t i = first; !error && i < useTotal; ++i)
 				job.uses[i].access |= flags;
 			return error;
@@ -2432,7 +2436,10 @@ IOReturn AGXDeviceUserClient::exec(uint32_t channel, TegraGM20BAbiPush *input, u
 	if (!native) {
 		constexpr uint32_t kAccess = SWITCH_GPU_BACKING_READ | SWITCH_GPU_BACKING_WRITE;
 		const int error = switch_gpu_legacy_uses(
-			bos_, listed, [this](uint64_t handle) { return surfaces_.listedAccess(handle); },
+			bos_, listed,
+			[this](uint64_t handle) {
+				return surfaces_.listedAccess(handle);
+			},
 			[&](const Bo *bo, uint32_t access) {
 				return addUse(bo, access & kAccess, access & ~kAccess);
 			});
@@ -2772,9 +2779,10 @@ namespace
 {
 // The raw runtime and NVK at this base read none of these; they turn on with the userspace unit that uses them.
 constexpr uint32_t kInfoAwaitingUserspace =
-	TegraGM20BInfoNativeSurfaceView | TegraGM20BInfoJobVisibility | TegraGM20BInfoLeanCopyChannel |
-	TegraGM20BInfoControlReserve | TegraGM20BInfoSharedEvents | TegraGM20BInfoSemanticFence |
-	TegraGM20BInfoResourceReady | TegraGM20BInfoCpuComplete | TegraGM20BInfoUseRanges;
+	TegraGM20BInfoNativeSurfaceView | TegraGM20BInfoJobVisibility |
+	TegraGM20BInfoLeanCopyChannel | TegraGM20BInfoControlReserve | TegraGM20BInfoSharedEvents |
+	TegraGM20BInfoSemanticFence | TegraGM20BInfoResourceReady | TegraGM20BInfoCpuComplete |
+	TegraGM20BInfoUseRanges;
 }  // namespace
 
 IOReturn AGXDeviceUserClient::getInfo(TegraGM20BAbiInfo *out)
@@ -3079,7 +3087,8 @@ IOReturn AGXDeviceUserClient::run(uint32_t method, const void *in, uint32_t inSi
 #endif
 	IOLockLock(lock_);
 	// A layout decision holds what it uses itself and drops lock_ while the copy engine may move the surface.
-	const bool mutation = method != TegraGM20BMethodGetInfo && method != TegraGM20BMethodGetStatus &&
+	const bool mutation = method != TegraGM20BMethodGetInfo &&
+			      method != TegraGM20BMethodGetStatus &&
 			      method != TegraGM20BMethodSurfaceLayout &&
 			      method != TegraGM20BMethodSurfaceLayoutInfo;
 	if (submitGate_.closed() || (mutation && !submitGate_.beginMutation(lock_))) {

@@ -214,7 +214,8 @@ bool evictIdle(const switch_gpu_cached_mapping *keep)
 {
 	switch_gpu_cached_mapping *oldest = nullptr;
 	for (auto *owner : queue.owners)
-		if (owner && owner != keep && !owner->pending && (!oldest || owner->used < oldest->used))
+		if (owner && owner != keep && !owner->pending &&
+		    (!oldest || owner->used < oldest->used))
 			oldest = owner;
 	if (oldest)
 		unmapWindow(oldest);

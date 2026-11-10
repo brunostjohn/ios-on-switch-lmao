@@ -171,7 +171,8 @@ void AGXDeviceUserClient::retire(RetiredBinding *record)
 // two more bindings. [va, va + range) leaves every binding: what a binding keeps below and above it stays bound with its
 // PTEs, and its part in the range retires (with now, its PTEs go at once, as a Map replaces them; else after the GPU
 // work that may use them). On an error before any binding changed, that binding and the ones after it are untouched.
-IOReturn AGXDeviceUserClient::cutOverlaps(uint64_t va, uint64_t range, bool now, RetiredBinding **spare)
+IOReturn AGXDeviceUserClient::cutOverlaps(uint64_t va, uint64_t range, bool now,
+					  RetiredBinding **spare)
 {
 	const uint64_t end = va + range;
 	for (uint32_t i = 0; i < nbinds_;) {
@@ -183,9 +184,9 @@ IOReturn AGXDeviceUserClient::cutOverlaps(uint64_t va, uint64_t range, bool now,
 		auto *record = b.retirement;
 		switch_gpu_mapping *below = nullptr, *taken = record->mapping, *above = nullptr;
 		if (b.va < va || b.va + b.range > end) {
-			const int error = switch_gpu_vm_split(vm_, &record->mapping, b.bo->mem, record->kind,
-							      int(b.bo->readOnly), record->vol, va, range,
-							      &below, &taken, &above);
+			const int error = switch_gpu_vm_split(
+				vm_, &record->mapping, b.bo->mem, record->kind, int(b.bo->readOnly),
+				record->vol, va, range, &below, &taken, &above);
 			if (error)
 				return ioreturn(error);
 		}
@@ -335,11 +336,15 @@ void AGXDeviceUserClient::logFaultBindings()
 		const Binding *binding = switch_gpu_binding_find(binds_, nbinds_, fault, 1);
 		char pages[160] = "";
 		if (binding)
-			switch_gpu_mapping_describe(binding->retirement->mapping, pages, sizeof(pages));
+			switch_gpu_mapping_describe(binding->retirement->mapping, pages,
+						    sizeof(pages));
 		if (binding)
-			IOLog("tegra-gm20b: channel %u fault at %#llx: binding %#llx+%#llx (handle %llu, pages %s)\n",
-			      slot + 1, fault, binding->va, binding->range, binding->bo->handle, pages);
+			IOLog("tegra-gm20b: channel %u fault at %#llx: binding %#llx+%#llx (handle "
+			      "%llu, pages %s)\n",
+			      slot + 1, fault, binding->va, binding->range, binding->bo->handle,
+			      pages);
 		else
-			IOLog("tegra-gm20b: channel %u fault at %#llx: binding none\n", slot + 1, fault);
+			IOLog("tegra-gm20b: channel %u fault at %#llx: binding none\n", slot + 1,
+			      fault);
 	}
 }

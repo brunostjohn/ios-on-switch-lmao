@@ -316,7 +316,8 @@ TEST_F(VmMap, CutBigPageMapsItsRemainderAgainWith4KPages)
 	EXPECT_EQ(calls[0].operation, 'u');
 	EXPECT_EQ(calls[0].shift, 17);
 	EXPECT_EQ(calls[1].operation, 'p');
-	const std::vector<std::pair<u64, u64>> remapped = {{0x40000000, 0x8000}, {0x40009000, 0x17000}};
+	const std::vector<std::pair<u64, u64>> remapped = {{0x40000000, 0x8000},
+							   {0x40009000, 0x17000}};
 	for (size_t i = 0; i < remapped.size(); ++i) {
 		EXPECT_EQ(calls[2 + 2 * i].operation, 'g');
 		EXPECT_EQ(calls[3 + 2 * i].operation, 'm');
@@ -343,7 +344,8 @@ TEST_F(VmMap, CompressedMappingCutInsideABigPageIsRefusedUntouched)
 	memory.npages = 32;
 	gpu.mmu.kind[0x42] = 0xfe;
 	switch_gpu_mapping *mapping = nullptr, *below = nullptr, *taken = nullptr, *above = nullptr;
-	ASSERT_EQ(switch_gpu_vm_map(&a, 0x40000000, memory.bytes, &memory, 0, 0x42, 0, &mapping), 0);
+	ASSERT_EQ(switch_gpu_vm_map(&a, 0x40000000, memory.bytes, &memory, 0, 0x42, 0, &mapping),
+		  0);
 	calls.clear();
 	EXPECT_EQ(switch_gpu_vm_split(&a, &mapping, &memory, 0x42, 0, 0, 0x40001000, 0x1000, &below,
 				      &taken, &above),

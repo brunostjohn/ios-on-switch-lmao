@@ -673,7 +673,9 @@ TEST_F(Backing, EngineConversionReservationGoesOnOverFailedContents)
     ASSERT_EQ(publish(allocation, SWITCH_GPU_BACKING_WRITE, writer), 0);
     timelines[key(&writer)].error = -5;
     switch_gpu_cpu_lease *lease = nullptr;
-    EXPECT_EQ(switch_gpu_backing_conversion_reserve(allocation, SWITCH_GPU_BACKING_WRITE, 0, &lease), 0);
+    EXPECT_EQ(
+	    switch_gpu_backing_conversion_reserve(allocation, SWITCH_GPU_BACKING_WRITE, 0, &lease),
+	    0);
     EXPECT_NE(lease, nullptr);
     EXPECT_EQ(switch_gpu_backing_cpu_release_owned(&lease, 0), 0);
     switch_gpu_backing_info info = {};

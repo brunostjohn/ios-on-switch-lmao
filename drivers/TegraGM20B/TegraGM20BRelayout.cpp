@@ -72,7 +72,8 @@ tgm_chan *channel()
 	if (!r.vm && !openSpace()) {
 		discardSpace();
 		if (!r.unavailable)
-			IOLog("tegra-gm20b: block-linear surfaces cannot be moved: no address space\n");
+			IOLog("tegra-gm20b: block-linear surfaces cannot be moved: no address "
+			      "space\n");
 		r.unavailable = true;
 		return nullptr;
 	}
@@ -189,7 +190,8 @@ void countCpuMove(const tgm_relayout_pages &surface)
 {
 	if (TGM_STATS) {
 		__atomic_fetch_add(&cpuMoves, 1, __ATOMIC_RELAXED);
-		__atomic_fetch_add(&cpuMoveBytes, uint64_t(surface.npages) * kPage, __ATOMIC_RELAXED);
+		__atomic_fetch_add(&cpuMoveBytes, uint64_t(surface.npages) * kPage,
+				   __ATOMIC_RELAXED);
 	}
 }
 

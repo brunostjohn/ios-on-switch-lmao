@@ -44,7 +44,8 @@ uint32_t semantic_count;
 
 bool failed_locked(const switch_gpu_timeline *timeline, uint32_t value)
 {
-	const uint32_t kept = timeline->failed_count < kFailedKept ? timeline->failed_count : kFailedKept;
+	const uint32_t kept =
+		timeline->failed_count < kFailedKept ? timeline->failed_count : kFailedKept;
 	for (uint32_t i = 0; i < kept; ++i)
 		if (timeline->failed[i] == value)
 			return true;
@@ -121,8 +122,7 @@ void publish_semantic_locked(switch_gpu_timeline *timeline)
 	auto *state = timeline->semantic_public;
 	if (!state)
 		return;
-	uint32_t pending = 0,
-		 flags = timeline->failed_count ? TegraGM20BFenceSemanticFailed : 0;
+	uint32_t pending = 0, flags = timeline->failed_count ? TegraGM20BFenceSemanticFailed : 0;
 	for (auto *node = timeline->semantics; node; node = node->next) {
 		if (!(flags & TegraGM20BFenceSemanticPending) || int32_t(node->seqno - pending) < 0)
 			pending = node->seqno;
@@ -276,7 +276,8 @@ extern "C" switch_gpu_timeline *switch_gpu_timeline_create(uint64_t uid,
 	IOLockLock(lock);
 	switch_gpu_fence_hold(fence);
 	const uint32_t completed = __atomic_load_n(fence, __ATOMIC_ACQUIRE);
-	*timeline = {timelines, uid, fence, fence, fence, completed, completed, 0, 1, nullptr, nullptr, {}, 0};
+	*timeline = {timelines, uid, fence,   fence,   fence, completed, completed,
+		     0,         1,   nullptr, nullptr, {},    0};
 	timelines = timeline;
 	IOLockUnlock(lock);
 	return timeline;
@@ -377,7 +378,8 @@ extern "C" int switch_gpu_timeline_semantic_snapshot(const switch_gpu_backing_to
 			if (int32_t(uint32_t(token->value) - node->seqno) >= 0) {
 				const int semantic =
 					switch_gpu_event_waits_cached_status(node->authority);
-				if (semantic == 1 || (semantic < 0 && node->seqno != uint32_t(token->value)))
+				if (semantic == 1 ||
+				    (semantic < 0 && node->seqno != uint32_t(token->value)))
 					continue;
 				if (semantic < 0) {
 					result = -5;

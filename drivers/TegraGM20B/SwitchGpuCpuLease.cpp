@@ -117,7 +117,8 @@ static int snapshot_read(switch_gpu_backing *backing, switch_gpu_backing_token *
 	bool failed_writer = false;
 	for (uint32_t i = 0; !result && i < backing->access_count; ++i) {
 		auto &access = backing->accesses[i];
-		if (!(access.access & SWITCH_GPU_BACKING_WRITE) || access.content != backing->content)
+		if (!(access.access & SWITCH_GPU_BACKING_WRITE) ||
+		    access.content != backing->content)
 			continue;
 		// A failed producer leaves undefined bytes and nothing to wait for: the snapshot goes on without it.
 		const int status = switch_gpu_backing_token_status(&access.token);

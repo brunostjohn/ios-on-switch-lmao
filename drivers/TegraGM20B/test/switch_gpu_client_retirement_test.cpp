@@ -363,8 +363,8 @@ public:
 		bo->bindings = 1;
 		bo->next = bos_;
 		bos_ = bo;
-		auto *record = new RetiredBinding{nullptr, va, bytes, bo,
-						  new switch_gpu_mapping{id, va, bytes}, {}, 0, 0};
+		auto *record = new RetiredBinding{
+			nullptr, va, bytes, bo, new switch_gpu_mapping{id, va, bytes}, {}, 0, 0};
 		binds_[nbinds_++] = {va, bytes, bo, 0, record};
 		return bo;
 	}
@@ -720,7 +720,8 @@ TEST_F(ClientRetirement, KilledChannelLogsTheBindingOverItsFaultOnce)
 	client.logFaultBindings();
 	IOLockUnlock(client.lock_);
 	ASSERT_EQ(logs.size(), 1u);
-	EXPECT_NE(logs[0].find("fault at 0x11800: binding 0x10000+0x3000 (handle 23, pages 0x10000+0x3000/12)"),
+	EXPECT_NE(logs[0].find("fault at 0x11800: binding 0x10000+0x3000 (handle 23, pages "
+			       "0x10000+0x3000/12)"),
 		  std::string::npos);
 	chan.error = 0;
 }

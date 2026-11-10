@@ -62,7 +62,7 @@ bool switch_gpu_backing_later(const switch_gpu_backing_token &a,
 			      const switch_gpu_backing_token &b);
 void switch_gpu_backing_prune_locked(switch_gpu_backing *backing);
 void switch_gpu_backing_note_failure_locked(const switch_gpu_backing *backing,
-					   switch_gpu_backing_access &access, int status);
+					    switch_gpu_backing_access &access, int status);
 void switch_gpu_backing_drop_token(const switch_gpu_backing_token &token);
 extern "C" void switch_gpu_backing_cache(const uint64_t *pages, uint32_t count,
 					 uint64_t offset, uint64_t bytes, int operation);

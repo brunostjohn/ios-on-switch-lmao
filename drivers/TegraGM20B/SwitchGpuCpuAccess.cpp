@@ -58,8 +58,8 @@ int wait_locked(switch_gpu_backing *backing, uint32_t access)
 		IOLockUnlock(backing->lock);
 		result = external ? switch_gpu_backing_token_external_wait(&token) : ops->wait(&token);
 		const int settled = result >= 0 ? result
-				    : external ? switch_gpu_backing_token_external_status(&token)
-					       : ops->status(&token);
+				    : external  ? switch_gpu_backing_token_external_status(&token)
+						: ops->status(&token);
 		ops->release_token(&token);
 		IOLockLock(backing->lock);
 		// A producer that failed while waited for is the next prune's to retire; the waiter goes on.

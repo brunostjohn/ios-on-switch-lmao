@@ -5806,8 +5806,8 @@ static void scrub_stats(char *buf, unsigned int len, u64 window_ms)
 		  "scrub %llu (%llu MiB, queued to done mean %llu us max %llu us), %lu KiB dirty, "
 		  "CPU fallbacks: zero %llu (%llu KiB), relayout %llu (%llu KiB)",
 		  n, bytes >> 20, n ? ns / n / 1000 : 0, max / 1000,
-		  nvxnu_pool_dirty_free_pages() << (PAGE_SHIFT - 10u), cpu_n, cpu_bytes >> 10, moves,
-		  move_bytes >> 10);
+		  nvxnu_pool_dirty_free_pages() << (PAGE_SHIFT - 10u), cpu_n, cpu_bytes >> 10,
+		  moves, move_bytes >> 10);
 }
 
 /* PTOP's engine list as nvkm parsed it (gk104_top_parse) and the PBDMAs serving each runlist: a copy engine on GR's

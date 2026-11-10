@@ -121,11 +121,12 @@ void switch_gpu_vm_unmap(struct tgm_vm *vm, struct switch_gpu_mapping **mapping)
  * remainder that cannot be mapped again stays unmapped, out of *below and *above). A compressed mapping cut inside a
  * 128 KiB page is refused, and on any error *mapping is untouched. */
 int switch_gpu_vm_split(struct tgm_vm *vm, struct switch_gpu_mapping **mapping, struct tgm_mem *mem,
-	uint8_t kind, int read_only, int vol, uint64_t va, uint64_t range,
-	struct switch_gpu_mapping **below, struct switch_gpu_mapping **taken,
-	struct switch_gpu_mapping **above);
+			uint8_t kind, int read_only, int vol, uint64_t va, uint64_t range,
+			struct switch_gpu_mapping **below, struct switch_gpu_mapping **taken,
+			struct switch_gpu_mapping **above);
 /* The VA range from a mapping's first entry to the end of its last. */
-int switch_gpu_mapping_span(const struct switch_gpu_mapping *mapping, uint64_t *va, uint64_t *bytes);
+int switch_gpu_mapping_span(const struct switch_gpu_mapping *mapping, uint64_t *va,
+			    uint64_t *bytes);
 /* "va+bytes/page shift" per entry, for a log line. */
 void switch_gpu_mapping_describe(const struct switch_gpu_mapping *mapping, char *out, size_t size);
 /* A zero-bandwidth-clear entry (ds, l2 as TegraGM20BAbiZbc has them): its table index, or -EINVAL (format), -ENOSPC

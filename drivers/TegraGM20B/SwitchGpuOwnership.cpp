@@ -58,10 +58,12 @@ void switch_gpu_backing_note_failure_locked(const switch_gpu_backing *backing,
 					  (token.reset_generation << 32) ^ token.queue;
 		if (__atomic_exchange_n(&logged_producer, producer, __ATOMIC_RELAXED) != producer)
 			IOLog("SwitchGpu: surface %u (allocation %llu) holds undefined contents "
-			      "from generation %llu (now %llu): engine %u queue %u reset %llu job %llu "
+			      "from generation %llu (now %llu): engine %u queue %u reset %llu job "
+			      "%llu "
 			      "failed (%d); its users go on\n",
 			      backing->surface_id, backing->id, access.content, backing->content,
-			      token.engine, token.queue, token.reset_generation, token.value, status);
+			      token.engine, token.queue, token.reset_generation, token.value,
+			      status);
 	}
 	access.noted = true;
 }
@@ -396,7 +398,9 @@ extern "C" void switch_gpu_backing_commit(switch_gpu_backing_transaction *transa
 		else
 			++backing->access_count;
 		backing->accesses[slot] = {transaction->completion,
-			access & SWITCH_GPU_BACKING_WRITE ? backing->content + 1 : 0, access, false};
+					   access & SWITCH_GPU_BACKING_WRITE ? backing->content + 1
+									     : 0,
+					   access, false};
 		if (access & SWITCH_GPU_BACKING_WRITE) {
             switch_gpu_backing_writer_commit_locked(backing, transaction->completion);
 			++backing->content;

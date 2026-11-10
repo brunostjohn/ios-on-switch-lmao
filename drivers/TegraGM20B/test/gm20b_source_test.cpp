@@ -426,9 +426,9 @@ TEST(GM20BPresentSource, TiledSourceIsCopiedBlockLinear)
 	EXPECT_THAT(surface, HasSubstr("s.mem, bytes, static_cast<uint8_t>(kind))"));
 	EXPECT_THAT(flat(Between(client(), "IOReturn AGXDeviceUserClient::vmBind(", "\n}\n")),
 		    Not(HasSubstr("tiled")));
-	EXPECT_THAT(
-		flat(Between(client(), "IOReturn AGXDeviceUserClient::surfaceLayoutInfo(", "\n}\n")),
-		HasSubstr("tgm_coherency_layout(coh,"));
+	EXPECT_THAT(flat(Between(client(), "IOReturn AGXDeviceUserClient::surfaceLayoutInfo(",
+				 "\n}\n")),
+		    HasSubstr("tgm_coherency_layout(coh,"));
 }
 
 // System sleep (gpu.c "system sleep"): every path that touches the GPU outside gpu.lock goes through the gate
@@ -627,7 +627,8 @@ TEST(GM20BFencesSource, ExecQueuesItsWritersAcquiresBeforeItSubmits)
 	expectBefore(exec, "switch_gpu_backing_dependencies(", "error = switch_gpu_chan_exec_visibility(");
 	EXPECT_THAT(exec, HasSubstr("ownershipBusy ? kIOReturnCannotLock : ioreturn(error)"));
 	// Named uses carry no CPU exclusion unless an admission ordered them; a legacy job claims only listed imports.
-	EXPECT_THAT(exec, HasSubstr("const uint32_t claim = switch_gpu_claim_flags(admissionBegin || admissionContinue);"));
+	EXPECT_THAT(exec, HasSubstr("const uint32_t claim = switch_gpu_claim_flags(admissionBegin "
+				    "|| admissionContinue);"));
 	EXPECT_THAT(exec, HasSubstr("addUse(bo, uses[i].access, claim, offset, bytes)"));
 	EXPECT_THAT(exec, HasSubstr("addUse(bo, SWITCH_GPU_BACKING_READ, claim)"));
 	EXPECT_THAT(exec, HasSubstr("switch_gpu_legacy_uses("));
@@ -645,11 +646,14 @@ TEST(GM20BFencesSource, ExecQueuesItsWritersAcquiresBeforeItSubmits)
                                       "TegraGM20BInfoJobVisibility"})
 		EXPECT_THAT(capabilities, HasSubstr(capability));
 	EXPECT_THAT(capabilities, HasSubstr("out->flags &= ~kInfoAwaitingUserspace;"));
-	const auto awaiting = flat(client().substr(client().find("constexpr uint32_t kInfoAwaitingUserspace")));
+	const auto awaiting =
+		flat(client().substr(client().find("constexpr uint32_t kInfoAwaitingUserspace")));
 	for (const char *capability :
-	     {"TegraGM20BInfoNativeSurfaceView", "TegraGM20BInfoJobVisibility", "TegraGM20BInfoLeanCopyChannel",
-	      "TegraGM20BInfoControlReserve", "TegraGM20BInfoSharedEvents", "TegraGM20BInfoSemanticFence",
-	      "TegraGM20BInfoResourceReady", "TegraGM20BInfoCpuComplete", "TegraGM20BInfoUseRanges"})
+	     {"TegraGM20BInfoNativeSurfaceView", "TegraGM20BInfoJobVisibility",
+	      "TegraGM20BInfoLeanCopyChannel", "TegraGM20BInfoControlReserve",
+	      "TegraGM20BInfoSharedEvents", "TegraGM20BInfoSemanticFence",
+	      "TegraGM20BInfoResourceReady", "TegraGM20BInfoCpuComplete",
+	      "TegraGM20BInfoUseRanges"})
 		EXPECT_THAT(awaiting.substr(0, awaiting.find(';')), HasSubstr(capability));
 }
 
@@ -1161,9 +1165,10 @@ TEST(GM20BPoolSource, FreedPoolPagesGoWithTheirLastMapping)
 {
 	EXPECT_THAT(flat(definition(client(), "void AGXDeviceUserClient::releaseBo(Bo *bo)")),
 		    Not(HasSubstr("still mapped by its")));
-	for (const char *signature :
-	     {"IOReturn AGXDeviceUserClient::unmapToken(", "void AGXDeviceUserClient::releaseMappings()"})
-		EXPECT_THAT(flat(definition(client(), signature)), HasSubstr("scheduleOrphanRelease();"));
+	for (const char *signature : {"IOReturn AGXDeviceUserClient::unmapToken(",
+				      "void AGXDeviceUserClient::releaseMappings()"})
+		EXPECT_THAT(flat(definition(client(), signature)),
+			    HasSubstr("scheduleOrphanRelease();"));
 }
 
 // Pool allocations take zeroed pages only (nvxnu_pool_alloc_ready, chunks): the refusal rules count those.

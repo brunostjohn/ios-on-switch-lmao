@@ -184,8 +184,8 @@ extern "C" void tgm_mem_del(tgm_mem **value)
 	*value = nullptr;
 }
 
-extern "C" int tgm_vm_map_ordered(tgm_vm *, uint64_t va, uint64_t bytes, tgm_mem *mem, uint64_t offset,
-				  uint8_t, int readOnly, uint8_t *)
+extern "C" int tgm_vm_map_ordered(tgm_vm *, uint64_t va, uint64_t bytes, tgm_mem *mem,
+				  uint64_t offset, uint8_t, int readOnly, uint8_t *)
 {
 	EXPECT_EQ(mem->pages[0], 0x100000u);
 	EXPECT_EQ(offset, 0u);

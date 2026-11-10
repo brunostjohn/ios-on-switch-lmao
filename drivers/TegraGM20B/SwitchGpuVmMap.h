@@ -310,7 +310,8 @@ int switch_gpu_vm_split(struct tgm_vm *vm, struct switch_gpu_mapping **mapping, 
 		const u8 kept = cut ? PAGE_SHIFT : e->shift;
 		const u64 low = e->va > va ? e->va : va, high = e_end < end ? e_end : end;
 		if (e->va < va)
-			mapping_add(parts[0], e->va, e->offset, (e_end < va ? e_end : va) - e->va, kept);
+			mapping_add(parts[0], e->va, e->offset, (e_end < va ? e_end : va) - e->va,
+				    kept);
 		if (e->va < end && va < e_end && (e->shift == PAGE_SHIFT || !cut))
 			mapping_add(parts[1], low, e->offset + (low - e->va), high - low, e->shift);
 		if (e_end > end) {
@@ -334,8 +335,9 @@ int switch_gpu_vm_split(struct tgm_vm *vm, struct switch_gpu_mapping **mapping, 
 		for (p = 0; p < 3; p += 2) {
 			for (i = 0; parts[p] && i < parts[p]->count; ++i) {
 				struct switch_gpu_mapping_entry *e = &parts[p]->entries[i];
-				const bool edge = (p == 0 ? e->va + e->bytes == va : e->va == end) &&
-						  e->shift == PAGE_SHIFT;
+				const bool edge =
+					(p == 0 ? e->va + e->bytes == va : e->va == end) &&
+					e->shift == PAGE_SHIFT;
 				u32 k;
 				for (k = 0; edge && k < old->count; ++k)
 					if (old->entries[k].shift != PAGE_SHIFT &&
@@ -344,10 +346,12 @@ int switch_gpu_vm_split(struct tgm_vm *vm, struct switch_gpu_mapping **mapping, 
 						break;
 				if (!edge || k == old->count)
 					continue;
-				failed[p / 2] = nvif_vmm_raw_get(&vm->vmm, e->va, e->bytes, PAGE_SHIFT) ? 1 : 0;
+				failed[p / 2] =
+					nvif_vmm_raw_get(&vm->vmm, e->va, e->bytes, PAGE_SHIFT) ? 1
+												: 0;
 				if (!failed[p / 2] &&
-				    nvif_vmm_raw_map(&vm->vmm, e->va, e->bytes, PAGE_SHIFT, &args, sizeof(args),
-						     &mem->mem, e->offset))
+				    nvif_vmm_raw_map(&vm->vmm, e->va, e->bytes, PAGE_SHIFT, &args,
+						     sizeof(args), &mem->mem, e->offset))
 					failed[p / 2] = 2;
 				if (failed[p / 2])
 					lost[p / 2] = *e;
@@ -360,7 +364,8 @@ int switch_gpu_vm_split(struct tgm_vm *vm, struct switch_gpu_mapping **mapping, 
 			if (!failed[p])
 				continue;
 			if (failed[p] == 2) {
-				nvif_vmm_raw_unmap(&vm->vmm, lost[p].va, lost[p].bytes, PAGE_SHIFT, false);
+				nvif_vmm_raw_unmap(&vm->vmm, lost[p].va, lost[p].bytes, PAGE_SHIFT,
+						   false);
 				nvif_vmm_raw_put(&vm->vmm, lost[p].va, lost[p].bytes, PAGE_SHIFT);
 			}
 			for (i = 0; i < part->count; ++i)
@@ -394,8 +399,8 @@ int switch_gpu_mapping_span(const struct switch_gpu_mapping *mapping, u64 *va, u
 	if (!mapping || !mapping->count)
 		return -EINVAL;
 	*va = mapping->entries[0].va;
-	*bytes = mapping->entries[mapping->count - 1].va + mapping->entries[mapping->count - 1].bytes -
-		 *va;
+	*bytes = mapping->entries[mapping->count - 1].va +
+		 mapping->entries[mapping->count - 1].bytes - *va;
 	return 0;
 }
 
@@ -408,8 +413,9 @@ void switch_gpu_mapping_describe(const struct switch_gpu_mapping *mapping, char 
 	out[0] = 0;
 	for (i = 0; mapping && i < mapping->count && at + 1 < size; ++i) {
 		const struct switch_gpu_mapping_entry *e = &mapping->entries[i];
-		const int n = snprintf(out + at, size - at, "%s%#llx+%#llx/%u", i ? " " : "",
-				       (unsigned long long)e->va, (unsigned long long)e->bytes, e->shift);
+		const int n =
+			snprintf(out + at, size - at, "%s%#llx+%#llx/%u", i ? " " : "",
+				 (unsigned long long)e->va, (unsigned long long)e->bytes, e->shift);
 		if (n < 0)
 			break;
 		at += (size_t)n < size - at ? (size_t)n : size - at - 1;

@@ -33,7 +33,9 @@ struct Memory {
 
 		uint64_t valid() const
 		{
-			return buffer ? (buffer->size() > offset ? std::min(kPage, buffer->size() - offset) : 0)
+			return buffer ? (buffer->size() > offset
+						 ? std::min(kPage, buffer->size() - offset)
+						 : 0)
 				      : size;
 		}
 	};
@@ -47,8 +49,8 @@ struct Memory {
 		EXPECT_EQ(va % kPage, 0u) << "a GPU mapping starts on a page";
 		last = nullptr;
 		for (uint64_t at = 0; at < size; at += kPage)
-			ptes[(va + at) / kPage] = {nullptr, bytes + at, 0, std::min(kPage, size - at),
-						   readOnly};
+			ptes[(va + at) / kPage] = {nullptr, bytes + at, 0,
+						   std::min(kPage, size - at), readOnly};
 	}
 
 	void map(uint64_t va, std::vector<uint8_t> &buffer, bool readOnly = false)
