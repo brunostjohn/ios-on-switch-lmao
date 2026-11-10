@@ -29,9 +29,7 @@ bool conflicts(uint32_t recorded, uint32_t access)
 int wait_locked(switch_gpu_backing *backing, uint32_t access)
 {
 	for (;;) {
-		int result = switch_gpu_backing_prune_locked(backing);
-		if (result)
-			return result;
+		switch_gpu_backing_prune_locked(backing);
 		switch_gpu_backing_token token = {};
 		for (uint32_t i = 0; i < backing->access_count; ++i) {
 			if (conflicts(backing->accesses[i].access, access) &&
@@ -45,14 +43,16 @@ int wait_locked(switch_gpu_backing *backing, uint32_t access)
 		if (access & kAvoid)
 			return -16;
 		const auto *ops = switch_gpu_backing_engine_ops(token.engine);
-		result = ops->retain_token(&token);
+		int result = ops->retain_token(&token);
 		if (result)
 			return result;
 		IOLockUnlock(backing->lock);
 		result = ops->wait(&token);
+		const int settled = result < 0 ? ops->status(&token) : result;
 		ops->release_token(&token);
 		IOLockLock(backing->lock);
-		if (result != 1)
+		// A producer that failed while waited for is the next prune's to retire; the waiter goes on.
+		if (!settled)
 			return result < 0 ? result : -110;
 	}
 }

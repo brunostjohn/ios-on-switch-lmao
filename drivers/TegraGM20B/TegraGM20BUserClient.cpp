@@ -31,6 +31,7 @@
 #include "TegraGM20BSharedWiring.h"
 #include "SwitchGpuPin.h"
 #include "SwitchGpuBindings.h"
+#include "SwitchGpuLegacyUses.h"
 #include "SwitchGpuSurfaceGeometry.h"
 #include "shim/include/switch_tiled_cache.h"
 using tgm_scan::PushCounts;
@@ -2094,24 +2095,21 @@ IOReturn AGXDeviceUserClient::exec(uint32_t channel, TegraGM20BAbiPush *input, u
 		const Bo *bo = uses[i].access & TegraGM20BSurfaceGpuAddress ? findAddress(uses[i].handle) : findBo(uses[i].handle);
 		if (!bo || !bo->backing || ((uses[i].access & TegraGM20BSurfaceWrite) && bo->readOnly))
 			return kIOReturnBadArgument;
-		jobUses_[i] = {bo->backing, uses[i].access & ~uint32_t(TegraGM20BSurfaceGpuAddress), 0};
+		jobUses_[i] = {bo->backing, switch_gpu_listed_access(uses[i].access), 0};
 	}
 	for (uint32_t i = 0; native && i < count; ++i) {
 		const Bo *bo = findAddress(pushes[i].va, uint64_t(pushes[i].dwords) * 4);
 		if (!bo || !bo->backing)
 			return kIOReturnBadArgument;
-		jobUses_[useCount + i] = {bo->backing, SWITCH_GPU_BACKING_READ, 0};
+		jobUses_[useCount + i] = {bo->backing, switch_gpu_listed_access(TegraGM20BSurfaceRead), 0};
 	}
-	if (!native) {
-		uint32_t i = 0;
-		for (const Bo *bo = bos_; bo; bo = bo->next)
-			jobUses_[i++] = {bo->backing, uint32_t(bo->readOnly ? SWITCH_GPU_BACKING_READ : SWITCH_GPU_BACKING_WRITE), 0};
-	}
+	if (!native)
+		useTotal = switch_gpu_legacy_uses(bos_, listed,
+			[this](uint64_t handle) { return surfaces_.listedAccess(handle); }, jobUses_);
 	switch_gpu_backing_transaction transaction = {};
 	switch_gpu_backing_token completion = {};
 	uint32_t dependencies = 0;
 	int error = 0;
-	bool ownershipBusy = false;
 	switch_gpu_chan_submit_enter(chan);
 	for (;;) {
 		if (count) {
@@ -2120,7 +2118,6 @@ IOReturn AGXDeviceUserClient::exec(uint32_t channel, TegraGM20BAbiPush *input, u
 			if (!error)
 				error = switch_gpu_backing_dependencies(&transaction, job_->dependencies, TegraGM20BMaxJobUses, &dependencies);
 		}
-		ownershipBusy = error == -16;
 		if (!error)
 			error = switch_gpu_chan_exec(chan, pushes, count, job_->dependencies, dependencies,
 				&seqno, profiled ? &prof : nullptr);
@@ -2136,7 +2133,7 @@ IOReturn AGXDeviceUserClient::exec(uint32_t channel, TegraGM20BAbiPush *input, u
 	else
 		switch_gpu_backing_abort(&transaction);
 	switch_gpu_chan_submit_leave();
-	const IOReturn ret = ownershipBusy ? kIOReturnCannotLock : ioreturn(error);
+	const IOReturn ret = ioreturn(error);
 	reap(false);
 	if (ret)
 		return ret;

@@ -615,7 +615,7 @@ TEST(GM20BFencesSource, ExecQueuesItsWritersAcquiresBeforeItSubmits)
 	expectBefore(exec, "if (followed < 0) return ioreturn(followed);",
 		     "error = switch_gpu_chan_exec(");
 	expectBefore(exec, "switch_gpu_backing_dependencies(", "error = switch_gpu_chan_exec(");
-	EXPECT_THAT(exec, HasSubstr("ownershipBusy ? kIOReturnCannotLock : ioreturn(error)"));
+	EXPECT_THAT(exec, HasSubstr("const IOReturn ret = ioreturn(error);"));
 	for (const char *signature :
 	     {"int tgm_chan_follow(struct tgm_chan *chan,", "int tgm_chan_follow_importers("}) {
 		const std::string follow = flat(definition(gpu(), signature));

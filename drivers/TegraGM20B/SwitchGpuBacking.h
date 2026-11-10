@@ -21,6 +21,8 @@ enum {
 	SWITCH_GPU_BACKING_CPU_NO_CACHE = 1u << 4,
 	SWITCH_GPU_BACKING_CPU_CONCURRENT = 1u << 5,
 	SWITCH_GPU_BACKING_CPU_PRESERVE_DIRTY = 1u << 6,
+	SWITCH_GPU_BACKING_UNLISTED = 1u << 7,
+	SWITCH_GPU_BACKING_NO_CPU_EXCLUSION = 1u << 8,
 	SWITCH_GPU_CACHE_CLEAN = 0,
 	SWITCH_GPU_CACHE_INVALIDATE = 1,
 	SWITCH_GPU_CACHE_CLEAN_INVALIDATE = 2,
@@ -101,7 +103,15 @@ struct switch_gpu_backing_transaction {
 };
 
 /* begin sorts/merges the caller's use array and locks its backings in allocation order. Keep those locks only through
- * dependency encoding and publication; every success must end with commit or abort. No token can be lost at commit. */
+ * dependency encoding and publication; every success must end with commit or abort. No token can be lost at commit.
+ * Failed work fails no later use: its records retire as completed ones do, and what a failed writer wrote is undefined
+ * (logged once). Nothing here, in dependencies, or in a CPU acquire or wait returns its errno.
+ * An UNLISTED use is one the engine cannot vouch for (a legacy submission's private BOs and unlisted imports): CPU
+ * access and the kernel's other engines still order after the job, as after a writer when WRITE is set, but no GM20B
+ * job waits for it, it waits for nothing and CPU owners never refuse it.
+ * NO_CPU_EXCLUSION: CPU owners holding the backing now do not refuse the use (a GM20B user submission: no submission
+ * ABI refuses for a CPU lock). An owner ordered itself after earlier work when it acquired; this job orders the next
+ * acquire. While a CPU writer holds the backing every begin cleans what it wrote so far, and its release the rest. */
 int switch_gpu_backing_begin(struct switch_gpu_backing_use *uses, uint32_t count,
 			     const struct switch_gpu_backing_token *completion,
 			     struct switch_gpu_backing_transaction *transaction);

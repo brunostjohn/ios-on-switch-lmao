@@ -281,6 +281,7 @@ host_library(
         "//drivers/TegraDisplayFlip:TegraScanoutCopy.h",
         "//drivers/TegraGM20B:SwitchGpuBacking.h",
         "//drivers/TegraGM20B:SwitchGpuBackingInternal.h",
+        "//drivers/TegraGM20B:SwitchGpuLegacyUses.h",
         "//drivers/TegraGM20B:TegraGM20BGpu.h",
         "//drivers/TegraGM20B:TegraGM20BViews.h",
         "//drivers/TegraGM20B:TegraGM20BTiled.h",
@@ -293,8 +294,58 @@ host_library(
 
 host_test(
     name = "switch_gpu_backing_test",
-    srcs = ["switch_gpu_backing_test.cpp"],
+    srcs = [
+        "switch_gpu_backing_fixture.h",
+        "switch_gpu_backing_test.cpp",
+    ],
     deps = [":backing", ":coherency_kernel"],
+)
+
+host_test(
+    name = "switch_gpu_backing_failure_test",
+    srcs = [
+        "switch_gpu_backing_failure_test.cpp",
+        "switch_gpu_backing_fixture.h",
+    ],
+    deps = [":backing", ":coherency_kernel"],
+)
+
+host_test(
+    name = "switch_gpu_legacy_uses_test",
+    srcs = [
+        "switch_gpu_backing_fixture.h",
+        "switch_gpu_legacy_uses_test.cpp",
+    ],
+    deps = [":backing", ":coherency_kernel"],
+)
+
+host_shims(
+    name = "timeline_kernel",
+    headers = [
+        "IOKit/IOLib.h",
+        "IOKit/IOLocks.h",
+    ],
+    stubs = "switch_gpu_timeline_stubs.h",
+)
+
+host_library(
+    name = "timeline",
+    srcs = ["//drivers/TegraGM20B:SwitchGpuTimeline.cpp"],
+    hdrs = [
+        "//drivers/TegraGM20B:SwitchGpuBacking.h",
+        "//drivers/TegraGM20B:SwitchGpuTimeline.h",
+        "//drivers/TegraGM20B:TegraGM20BGpu.h",
+    ],
+    deps = [":timeline_kernel"],
+)
+
+host_test(
+    name = "switch_gpu_timeline_test",
+    srcs = ["switch_gpu_timeline_test.cpp"],
+    deps = [
+        ":timeline",
+        ":timeline_kernel",
+    ],
 )
 
 host_library(

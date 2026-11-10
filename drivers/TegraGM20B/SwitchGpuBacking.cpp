@@ -312,8 +312,8 @@ extern "C" int switch_gpu_backing_set_layout(switch_gpu_backing *backing,
 			result = -22;
 	}
 	if (!result && memcmp(layout, &backing->layout, sizeof(*layout))) {
-		result = switch_gpu_backing_prune_locked(backing);
-		if (!result && (backing->access_count || backing->cpu_readers || backing->cpu_writers))
+		switch_gpu_backing_prune_locked(backing);
+		if (backing->access_count || backing->cpu_readers || backing->cpu_writers)
 			result = -16;
 		if (!result)
 			backing->layout = *layout;

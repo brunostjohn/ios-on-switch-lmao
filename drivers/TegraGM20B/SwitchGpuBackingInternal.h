@@ -12,7 +12,9 @@ struct switch_gpu_backing_pages {
 
 struct switch_gpu_backing_access {
 	switch_gpu_backing_token token;
+	uint64_t content;
 	uint32_t access;
+	bool noted;  // its failure was already logged, or needs no log
 };
 
 struct switch_gpu_backing {
@@ -43,7 +45,7 @@ bool switch_gpu_backing_same_timeline(const switch_gpu_backing_token &a,
 				     const switch_gpu_backing_token &b);
 bool switch_gpu_backing_later(const switch_gpu_backing_token &a,
 			      const switch_gpu_backing_token &b);
-int switch_gpu_backing_prune_locked(switch_gpu_backing *backing);
+void switch_gpu_backing_prune_locked(switch_gpu_backing *backing);
 void switch_gpu_backing_drop_token(const switch_gpu_backing_token &token);
 extern "C" void switch_gpu_backing_cache(const uint64_t *pages, uint32_t count,
 					 uint64_t offset, uint64_t bytes, int operation);
