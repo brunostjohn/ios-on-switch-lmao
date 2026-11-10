@@ -99,17 +99,42 @@ static void dispatchScheduledLocked(RMCommandBuffer *cb, NSArray *handlers)
     });
 }
 
+#if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
+// waitUntilScheduled returned for `cb` while its queue waited on a shared event (`returnedUs`), and it is submitted now, or
+// finished without: how far its caller ran ahead of the kernel's writers, at most one line a second, with the returns since
+static void noteHeldReturn(RMCommandBuffer *cb, uint64_t returnedUs, const char *how)
+{
+    static std::atomic<uint64_t> lastUs{0}, since{0};
+    since.fetch_add(1, std::memory_order_relaxed);
+    const uint64_t now = nowUs();
+    uint64_t last = lastUs.load(std::memory_order_relaxed);
+    if (now - last < 1000000 || !lastUs.compare_exchange_strong(last, now, std::memory_order_relaxed))
+        return;
+    os_log(rawLog(),
+           "raw: waitUntilScheduled returned held on a shared event: queue %{public}s, %{public}s %llu us later (%llu "
+           "returns since the last line)",
+           cb->_queue.label.UTF8String ?: "-", how, (unsigned long long)(now - returnedUs),
+           (unsigned long long)since.exchange(0, std::memory_order_relaxed));
+}
+#endif
+
 // A queue's command buffers' scheduled handlers run in its order, on its own serial queue: one that waits for another queue's
 // command buffer holds up none of that queue's handlers.
 void scheduled(RMCommandBuffer *cb)
 {
     unhold(cb);
     NSArray *handlers;
+#if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
+    uint64_t heldReturnUs = 0;
+#endif
     {
         std::lock_guard<std::mutex> l(cb->_lock);
         if (cb->_scheduledSent)
             return;  // once (eventHeld: at its commit; then its submission's)
         cb->_scheduledSent = true;
+#if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
+        std::swap(heldReturnUs, cb->_heldReturnUs);
+#endif
         if (cb->_status == MTLCommandBufferStatusCommitted)
             cb->_status = MTLCommandBufferStatusScheduled;
         handlers = cb->_scheduledHandlers;
@@ -124,6 +149,10 @@ void scheduled(RMCommandBuffer *cb)
     }
     if (!handlers.count)
         cb->_changed.notify_all();
+#if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
+    if (heldReturnUs)
+        noteHeldReturn(cb, heldReturnUs, "submitted");
+#endif
 }
 
 // Completed: CPU-signalled events, written resources marked, handlers (on the queue's completion queue when it has one), the
@@ -177,6 +206,7 @@ static void deliverCompletion(dispatch_block_t run, dispatch_queue_t q, dispatch
 
 void finish(RMCommandBuffer *cb, NSError *error)
 {
+    bool pending;
     {
         std::lock_guard<std::mutex> l(cb->_lock);
         if (cb->_finishing)
@@ -184,10 +214,15 @@ void finish(RMCommandBuffer *cb, NSError *error)
         if (error && !cb->_segError)
             cb->_segError = error;
         cb->_finishReady = true;
-        if (cb->_segmentPending)
-            return;
-        cb->_finishing = true;
+        pending = cb->_segmentPending != 0;
+        cb->_finishing = !pending;
         error = cb->_segError;
+    }
+    if (pending) {
+        // A failed command buffer submits no more: its waitUntilScheduled returns now, not once its earlier work completes
+        if (error)
+            cb->_changed.notify_all();
+        return;
     }
     RAW_DIAGNOSTIC(gRM->stats.finished.fetch_add(1, std::memory_order_relaxed));
     releaseEventWaits(cb);
@@ -198,6 +233,9 @@ void finish(RMCommandBuffer *cb, NSError *error)
     // handler queue.
     NSArray *handlers;
     bool behindScheduled;
+#if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
+    uint64_t heldReturnUs = 0;
+#endif
     {
         std::lock_guard<std::mutex> l(cb->_lock);
         NSArray *scheduledHandlers = nil;
@@ -225,11 +263,18 @@ void finish(RMCommandBuffer *cb, NSError *error)
         cb->_completedHandlers = nil;
         cb->_completedSent = true;
         cb->_scheduledSent = true;  // scheduled() runs no more
+#if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
+        std::swap(heldReturnUs, cb->_heldReturnUs);
+#endif
         if (sendScheduled)
             dispatchScheduledLocked(cb, scheduledHandlers);
         behindScheduled = cb->_handlersQueued;
     }
     cb->_changed.notify_all();
+#if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
+    if (heldReturnUs)
+        noteHeldReturn(cb, heldReturnUs, error ? "failed unsubmitted" : "finished unsubmitted");
+#endif
     void (^run)(void) = ^{
         for (MTLCommandBufferHandler h in handlers)
             h((id<MTLCommandBuffer>)cb);

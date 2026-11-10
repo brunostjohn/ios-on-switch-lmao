@@ -182,6 +182,9 @@ typedef NS_ENUM(uint8_t, RMTextureKind) {
 @public
     dispatch_queue_t _completionQueue;
     dispatch_queue_t _handlers;  // its command buffers' scheduled handlers, in its order
+    // the compiles its head waits for, made one at a time at the committers' priority (raw_follow.h): one urged compile per
+    // waiting Metal queue at most
+    dispatch_queue_t _urges;
     std::atomic<void *> _last;   // the command buffer enqueued last, retained until its completed handlers ran
     uint32_t _gpuPriority, _backgroundGpuPriority;  // what it asked for (RawMetalQueuePriority.mm)
     raw::ResidencySets _residency;
@@ -285,13 +288,17 @@ struct RMSharedEventWait {
     raw::SubmitQueue<void *, RMCommandBuffer *>::Reservation _reservation;
     std::vector<size_t> _eventWaits;
     raw::EventDeadline::Time _eventStart;
-    std::map<void *, raw::EventDeadline::Time> _pipelineStarted;
     std::unordered_set<void *> _pipelineObserved;  // one readiness subscription per compatibility state
-    std::map<void *, raw::EventDeadline::Time> _variantStarted;
     std::unordered_set<void *> _variantObserved;
     std::map<void *, std::shared_ptr<raw::ComputeKernelSet<raw::ComputeState>>> _computeJobs;
     size_t _eventArmed;  // operation position + 1; only the current wait installs a listener
     bool _committed, _scheduledDone, _completedDone, _m2v;
+    // its queue's head waits on a shared event Metal's GPU would wait for: waitUntilScheduled returns, its scheduled
+    // handlers still wait for its submission (raw_scheduled_wait.h)
+    bool _held;
+#if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
+    uint64_t _heldReturnUs;  // when waitUntilScheduled returned for it held, until it was submitted
+#endif
     // its event signals are in m2v work (replayed whole, or in its last segment): finish() makes none
     bool _signalsOnM2v;
     bool

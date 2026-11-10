@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #import "RawMetalInternal.h"
+#include "raw_scheduled_wait.h"
 
 void wakeSubmit(void *queue, uint32_t dependencies)
 {
@@ -38,18 +39,28 @@ void commitBuffer(RMCommandBuffer *cb)
     }
 #endif
     armEventWaits(cb);
+    bool held = false;
     {
         std::lock_guard<std::mutex> l(r.schedule);
-        r.waiting.commit((__bridge void *)cb->_queue, cb, cb->_reservation);
+        r.waiting.commit((__bridge void *)cb->_queue, cb, cb->_reservation, &held);
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
         RAW_DIAGNOSTIC(r.stats.deferred++);
 #endif
     }
+    if (held) {
+        {
+            std::lock_guard<std::mutex> l(cb->_lock);
+            cb->_held = true;
+        }
+        cb->_changed.notify_all();
+    }
     r.waitingChanged.notify_one();
 }
 
-// Return pending only for this queue head. Other queues remain runnable while its pipelines compile.
-static int pipelineReadiness(RMCommandBuffer *cb, const RMSegment &range, raw::EventDeadline::Time &deadline)
+// Return pending only for this queue head. Other queues remain runnable while its pipelines compile. A compile it waits for
+// is urged on its queue's urge queue (one at a time per Metal queue, at the committers' priority, ahead of the workers' queue).
+// A compile either completes or fails: no deadline turns a slow one into an error.
+static int pipelineReadiness(RMCommandBuffer *cb, const RMSegment &range)
 {
     if (!native_bridge_metal_render_pipeline_ready)
         return 1;  // older host bridge: replay retains its synchronous contract
@@ -64,23 +75,20 @@ static int pipelineReadiness(RMCommandBuffer *cb, const RMSegment &range, raw::E
                 wakeSubmit(queue);
             };
         }
-        const int status = native_bridge_metal_render_pipeline_ready(state, observer);
+        const int status = first && native_bridge_metal_render_pipeline_urge
+                               ? native_bridge_metal_render_pipeline_urge(state, observer, cb->_queue->_urges)
+                               : native_bridge_metal_render_pipeline_ready(state, observer);
         if (status < 0)
             return -1;
-        if (!status) {
-            const auto now = std::chrono::steady_clock::now();
-            const auto [start, inserted] = cb->_pipelineStarted.try_emplace(object, now);
-            const auto due = start->second + std::chrono::seconds(60);
-            if (now >= due)
-                return -1;
-            deadline = std::min(deadline, due);
+        if (!status)
             pending = true;
-        }
     }
     return pending ? 0 : 1;
 }
 
-static int variantReadiness(RMCommandBuffer *cb, const RMSegment &range, raw::EventDeadline::Time &deadline)
+// A native variant this queue head waits for, made on the raw compiler's two bounded workers: refused, the range goes to m2v at
+// once. No deadline.
+static int variantReadiness(RMCommandBuffer *cb, const RMSegment &range)
 {
     using Variant = raw::Variant<raw::Pipeline>;
     bool pending = false;
@@ -96,22 +104,47 @@ static int variantReadiness(RMCommandBuffer *cb, const RMSegment &range, raw::Ev
         const auto state = variant->observe(std::move(observer));
         if (state == Variant::State::Refused)
             return -1;
-        if (state == Variant::State::Pending) {
-            const auto now = std::chrono::steady_clock::now();
-            const auto [start, inserted] = cb->_variantStarted.try_emplace(object, now);
-            const auto due = start->second + std::chrono::seconds(60);
-            if (now >= due)
-                return -2;
-            deadline = std::min(deadline, due);
+        if (state == Variant::State::Pending)
             pending = true;
-        }
     }
     return pending ? 0 : 1;
+}
+
+// What a head eventReadiness found blocked waits for: its own earlier work, a value a submitted command buffer promised, or a
+// shared event value nothing reached yet
+static raw::HeadWait eventWait(RMCommandBuffer *cb)
+{
+    {
+        std::lock_guard<std::mutex> l(cb->_lock);
+        if (cb->_segmentPending || cb->_resourceReady)
+            return raw::HeadWait::signal;
+    }
+    if (cb->_segNext >= cb->_segs.size() || !cb->_segs[cb->_segNext].event)
+        return raw::HeadWait::signal;
+    const Cmd c = cb->_plan.legacy(cb->_segs[cb->_segNext].from);
+    if (c.op != OpWaitEvent)
+        return raw::HeadWait::signal;
+    return promisedEvent(c.obj, c.c) ? raw::HeadWait::promised : raw::HeadWait::event;
+}
+
+// waitUntilScheduled of the command buffers a hold took returns; one a release gave back waits for its scheduling again
+static void markHeld(std::vector<RMCommandBuffer *> &buffers, bool held)
+{
+    for (RMCommandBuffer *cb : buffers) {
+        {
+            std::lock_guard<std::mutex> l(cb->_lock);
+            cb->_held = held;
+        }
+        if (held)
+            cb->_changed.notify_all();
+    }
+    buffers.clear();
 }
 
 void submitLoop()
 {
     RawState &r = *gRM;
+    std::vector<RMCommandBuffer *> marked;
     for (;;) {
         @autoreleasepool {
             raw::SubmitQueue<void *, RMCommandBuffer *>::Ticket ticket;
@@ -136,20 +169,17 @@ void submitLoop()
             auto deadline = raw::EventDeadline::Time::max();
             uint32_t dependencies = 0;
             bool blocked = false;
+            raw::HeadWait wait = raw::HeadWait::signal;
             NSError *error;
             {
                 std::lock_guard<std::mutex> l(cb->_lock);
                 error = cb->_segError;
             }
             if (!error) {
-                const auto state = eventReadiness(cb, deadline);
-                blocked = state == raw::EventReadiness::blocked;
-                if (state == raw::EventReadiness::expired)
-                    error = [NSError
-                        errorWithDomain:MTLCommandBufferErrorDomain
-                                   code:MTLCommandBufferErrorTimeout
-                               userInfo:@{NSLocalizedDescriptionKey : @"A command buffer event was not signaled"}];
-                if (!error) {
+                blocked = eventReadiness(cb, deadline) == raw::EventReadiness::blocked;
+                if (blocked)
+                    wait = eventWait(cb);
+                {
                     std::lock_guard<std::mutex> lock(cb->_lock);
                     error = cb->_segError;
                 }
@@ -158,21 +188,20 @@ void submitLoop()
                 RMSegment &range = cb->_segs[cb->_segNext];
                 cb->_plan.prepareRange(range.from, range.to);
                 if (!range.event && range.raw) {
-                    int ready = variantReadiness(cb, range, deadline);
+                    int ready = variantReadiness(cb, range);
                     if (ready > 0)
-                        ready = computeReadiness(cb, range, deadline);
-                    if (ready == -1) {
+                        ready = computeReadiness(cb, range);
+                    if (ready < 0) {
                         range.raw = false;
                         blocked = eventReadiness(cb, deadline) == raw::EventReadiness::blocked;
+                        if (blocked)
+                            wait = eventWait(cb);
                         std::lock_guard<std::mutex> lock(cb->_lock);
                         error = cb->_segError;
-                    } else if (ready == -2)
-                        error = [NSError
-                            errorWithDomain:MTLCommandBufferErrorDomain
-                                       code:MTLCommandBufferErrorTimeout
-                                   userInfo:@{NSLocalizedDescriptionKey : @"A native shader job did not compile"}];
-                    else if (!ready)
+                    } else if (!ready) {
                         blocked = true;
+                        wait = raw::HeadWait::compile;
+                    }
                 }
                 if (!error && !blocked && !range.event && range.raw) {
                     std::lock_guard<std::mutex> m(r.m2vLock);
@@ -181,7 +210,7 @@ void submitLoop()
                         dependencies = RMCompatibilityProgress;
                     }
                 } else if (!error && !blocked && !range.event) {
-                    const int ready = pipelineReadiness(cb, range, deadline);
+                    const int ready = pipelineReadiness(cb, range);
                     if (ready < 0)
                         error = [NSError
                             errorWithDomain:MTLCommandBufferErrorDomain
@@ -203,8 +232,13 @@ void submitLoop()
                 }
             }
             if (blocked) {
-                std::lock_guard<std::mutex> l(r.schedule);
-                r.waiting.park(ticket, dependencies, deadline);
+                {
+                    std::lock_guard<std::mutex> l(r.schedule);
+                    r.waiting.park(ticket, dependencies, deadline);
+                    if (raw::holds(wait))
+                        r.waiting.hold(ticket.key, marked);
+                }
+                markHeld(marked, true);
                 continue;
             }
             bool submitted = true;
@@ -215,11 +249,13 @@ void submitLoop()
             }
             {
                 std::lock_guard<std::mutex> l(r.schedule);
+                r.waiting.release(ticket.key, marked);
                 if (submitted)
                     r.waiting.retire(ticket);
                 else
                     r.waiting.yield(ticket);
             }
+            markHeld(marked, false);
         }
     }
 }

@@ -94,6 +94,18 @@ public:
         return promise;
     }
 
+    // A value a submitted command buffer's signal reaches once its work completes, not settled yet
+    bool promised(Key event, uint64_t value) const
+    {
+        const auto it = events_.find(event);
+        if (it == events_.end())
+            return false;
+        for (auto at = it->second.signals.lower_bound(value); at != it->second.signals.end(); ++at)
+            if (at->second->outcome() == EventOutcome::pending)
+                return true;
+        return false;
+    }
+
     void unobserve(Key event, Key queue)
     {
         const auto it = events_.find(event);

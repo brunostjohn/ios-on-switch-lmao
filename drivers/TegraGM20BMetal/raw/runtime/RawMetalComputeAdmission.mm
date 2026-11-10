@@ -122,7 +122,7 @@ bool admitComputeDispatch(RMCommandBuffer *cb, size_t at, const raw::ComputeKern
     return true;
 }
 
-int computeReadiness(RMCommandBuffer *cb, const RMSegment &range, raw::EventDeadline::Time &deadline)
+int computeReadiness(RMCommandBuffer *cb, const RMSegment &range)
 {
     using Job = raw::ComputeKernelSet<raw::ComputeState>;
     const auto &dispatches = cb->_plan.pendingComputes(range.from, range.to);
@@ -141,15 +141,8 @@ int computeReadiness(RMCommandBuffer *cb, const RMSegment &range, raw::EventDead
         const auto state = job->observe(std::move(observer));
         if (state == Job::State::Refused)
             return -1;
-        if (state == Job::State::Pending) {
-            const auto now = std::chrono::steady_clock::now();
-            const auto [start, inserted] = cb->_variantStarted.try_emplace(job, now);
-            const auto due = start->second + std::chrono::seconds(60);
-            if (now >= due)
-                return -2;
-            deadline = std::min(deadline, due);
+        if (state == Job::State::Pending)
             pending = true;
-        }
     }
     if (pending)
         return 0;

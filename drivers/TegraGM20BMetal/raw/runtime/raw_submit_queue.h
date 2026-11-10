@@ -7,6 +7,7 @@
 #include <list>
 #include <map>
 #include <unordered_map>
+#include <vector>
 
 namespace raw {
 template <class Key, class Value> class SubmitQueue {
@@ -46,6 +47,7 @@ private:
     struct Entry {
         Value value;
         bool committed = false;
+        bool held = false;
     };
 
     struct Queue {
@@ -56,6 +58,7 @@ private:
         uint64_t revision = 0, head = 0;
         uint64_t reservationGeneration = 0, reserved = 0, retired = 0;
         bool visiting = false, timed = false;
+        bool held = false;  // its head waits for what Metal's GPU, not its scheduler, waits for (hold)
     };
 
     std::list<Queue> storage_;
@@ -148,6 +151,7 @@ public:
                 q = &storage_.back();
             }
             q->key = key;
+            q->held = false;
             q->reservationGeneration = ++reservationGeneration_;
             q->reserved = q->retired = 0;
             lookup_.emplace(key, q);
@@ -160,7 +164,8 @@ public:
         return {q->reservationGeneration, ++q->reserved};
     }
 
-    bool commit(Key key, Value value, Reservation reservation)
+    // `held`: the queue is held (hold), so this job counts as scheduled at once
+    bool commit(Key key, Value value, Reservation reservation, bool *held = nullptr)
     {
         auto *q = find(key);
         if (!q || reservation.generation != q->reservationGeneration ||
@@ -170,9 +175,41 @@ public:
         if (entry.value != value)
             return false;
         entry.committed = true;
+        entry.held = q->held;
+        if (held)
+            *held = q->held;
         if (&entry == &q->entries.front())
             activate(*q);
         return true;
+    }
+
+    // The queue's head waits for what Metal's GPU, not its scheduler, waits for (raw_scheduled_wait.h holds): it and every
+    // job committed behind it, now or later, count as scheduled. `held`: those not held before.
+    void hold(Key key, std::vector<Value> &held)
+    {
+        auto *q = find(key);
+        if (!q)
+            return;
+        q->held = true;
+        for (Entry &e : q->entries)
+            if (e.committed && !e.held) {
+                e.held = true;
+                held.push_back(e.value);
+            }
+    }
+
+    // The queue's head goes on: `released`, the jobs its hold held
+    void release(Key key, std::vector<Value> &released)
+    {
+        auto *q = find(key);
+        if (!q || !q->held)
+            return;
+        q->held = false;
+        for (Entry &e : q->entries)
+            if (e.held) {
+                e.held = false;
+                released.push_back(e.value);
+            }
     }
 
     Ticket next()
@@ -283,8 +320,7 @@ public:
 
 enum class EventReadiness {
     ready,
-    blocked,
-    expired
+    blocked
 };
 
 class EventDeadline {
@@ -293,15 +329,15 @@ public:
     using Time = Clock::time_point;
 
     EventDeadline(Time start, uint32_t timeoutMs)
-        : until_(start + (timeoutMs ? std::chrono::milliseconds(timeoutMs) : std::chrono::seconds(10))),
-          timed_(timeoutMs != 0)
+        : until_(timeoutMs ? start + std::chrono::milliseconds(timeoutMs) : Time::max()), timed_(timeoutMs != 0)
     {}
 
+    // An untimed wait waits as long as Metal's GPU would: until the value is reached, or its producer fails
     EventReadiness state(bool covered, Time now) const
     {
         if (covered || (timed_ && now >= until_))
             return EventReadiness::ready;
-        return now < until_ ? EventReadiness::blocked : EventReadiness::expired;
+        return EventReadiness::blocked;
     }
 
     Time until() const

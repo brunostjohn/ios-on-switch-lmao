@@ -175,6 +175,12 @@ raw::EventReadiness eventReadiness(RMCommandBuffer *cb, raw::EventDeadline::Time
     return state;
 }
 
+bool promisedEvent(void *event, uint64_t value)
+{
+    std::lock_guard<std::mutex> lock(gRM->eventValues);
+    return gRM->events.promised(reinterpret_cast<uintptr_t>(event), value);
+}
+
 std::vector<RMNativeEventSignal> publishRawEventSignals(RMCommandBuffer *cb)
 {
     std::vector<RMNativeEventSignal> signals;

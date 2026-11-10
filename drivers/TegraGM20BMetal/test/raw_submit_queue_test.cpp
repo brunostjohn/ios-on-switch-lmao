@@ -227,14 +227,67 @@ TEST(SubmitQueue, ReservationsSurvivePrefixRetirementAndRejectRecycledQueues)
     EXPECT_TRUE(queue.commit(1, 10, reused));
 }
 
-TEST(EventDeadline, UnspecifiedTimeoutNeverManufacturesAnEvent)
+TEST(EventDeadline, AnUntimedWaitWaitsUntilItsValueAndNeverFails)
 {
     using namespace std::chrono_literals;
     const raw::EventDeadline::Time start{};
     raw::EventDeadline wait(start, 0);
     EXPECT_EQ(wait.state(false, start + 9s), raw::EventReadiness::blocked);
-    EXPECT_EQ(wait.state(false, start + 10s), raw::EventReadiness::expired);
-    EXPECT_EQ(wait.state(true, start + 10s), raw::EventReadiness::ready);
+    EXPECT_EQ(wait.state(false, start + 10s), raw::EventReadiness::blocked);
+    EXPECT_EQ(wait.state(false, start + 3600s), raw::EventReadiness::blocked);
+    EXPECT_EQ(wait.until(), raw::EventDeadline::Time::max());
+    EXPECT_EQ(wait.state(true, start + 3600s), raw::EventReadiness::ready);
+}
+
+TEST(SubmitQueue, AHeldQueueCountsItsJobsScheduledAndThoseCommittedBehindIt)
+{
+    raw::SubmitQueue<int, int> queue;
+    const auto head = queue.reserve(1, 10);
+    const auto behind = queue.reserve(1, 11);
+    const auto later = queue.reserve(1, 12);
+    ASSERT_TRUE(queue.commit(1, 10, head));
+    ASSERT_TRUE(queue.commit(1, 11, behind));
+    auto ticket = queue.next();
+    ASSERT_TRUE(ticket);
+    EXPECT_TRUE(queue.park(ticket));
+    std::vector<int> held;
+    queue.hold(1, held);
+    EXPECT_EQ(held, (std::vector<int>{10, 11}));
+    held.clear();
+    queue.hold(1, held);
+    EXPECT_TRUE(held.empty());
+    bool committedHeld = false;
+    ASSERT_TRUE(queue.commit(1, 12, later, &committedHeld));
+    EXPECT_TRUE(committedHeld);
+    queue.wake(1);
+    ticket = queue.next();
+    ASSERT_TRUE(ticket);
+    std::vector<int> released;
+    queue.release(1, released);
+    EXPECT_EQ(released, (std::vector<int>{10, 11, 12}));
+    released.clear();
+    queue.release(1, released);
+    EXPECT_TRUE(released.empty());
+    EXPECT_TRUE(queue.retire(ticket));
+    const auto next = queue.reserve(1, 13);
+    ASSERT_TRUE(queue.commit(1, 13, next, &committedHeld));
+    EXPECT_FALSE(committedHeld);
+}
+
+TEST(SubmitQueue, AHoldOfOneQueueLeavesAnotherQueueUnheld)
+{
+    raw::SubmitQueue<int, int> queue;
+    const auto a = queue.reserve(1, 10);
+    const auto b = queue.reserve(2, 20);
+    ASSERT_TRUE(queue.commit(1, 10, a));
+    std::vector<int> held;
+    queue.hold(1, held);
+    bool committedHeld = true;
+    ASSERT_TRUE(queue.commit(2, 20, b, &committedHeld));
+    EXPECT_FALSE(committedHeld);
+    std::vector<int> released;
+    queue.release(2, released);
+    EXPECT_TRUE(released.empty());
 }
 
 TEST(EventDeadline, ExplicitTimeoutRetainsItsRequestedDuration)

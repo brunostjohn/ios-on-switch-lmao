@@ -59,6 +59,8 @@ extern "C" id native_bridge_metal_render_pipeline_lazy(id device, id descriptor,
     __attribute__((weak_import));
 extern "C" int native_bridge_metal_render_pipeline_ready(id pipeline, void (^observer)(void))
     __attribute__((weak_import));
+extern "C" int native_bridge_metal_render_pipeline_urge(id pipeline, void (^observer)(void), dispatch_queue_t queue)
+    __attribute__((weak_import));
 // Where NVK keeps a texture's texels (a stored depth/stencil texture the raw path renders and copies in place)
 struct switch_nvk_image_memory;
 extern "C" int native_bridge_metal_texture_memory(id texture, struct switch_nvk_image_memory *out)
@@ -294,6 +296,8 @@ extern std::set<RMCommandBuffer *> gHolders;
 bool waitsForEvent(RMCommandBuffer *cb);
 void armEventWaits(RMCommandBuffer *cb);
 raw::EventReadiness eventReadiness(RMCommandBuffer *cb, raw::EventDeadline::Time &nextWake);
+// A value a submitted command buffer's signal reaches once its work completes (raw_event_timeline.h)
+bool promisedEvent(void *event, uint64_t value);
 bool expiredEventWait(RMCommandBuffer *cb, size_t index);
 std::vector<RMNativeEventSignal> publishRawEventSignals(RMCommandBuffer *cb);
 void retireEventSignals(const std::vector<RMNativeEventSignal> &signals, bool success);
@@ -348,7 +352,7 @@ void orderRefused(const char *what, int kr);
 void commitBuffer(RMCommandBuffer *cb);
 void submitLoop();
 bool admitComputeDispatch(RMCommandBuffer *cb, size_t at, const raw::ComputeKernelSet<raw::ComputeState> *kernels, const char **why);
-int computeReadiness(RMCommandBuffer *cb, const RMSegment &range, raw::EventDeadline::Time &deadline);
+int computeReadiness(RMCommandBuffer *cb, const RMSegment &range);
 
 // RawMetalRates.mm
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG

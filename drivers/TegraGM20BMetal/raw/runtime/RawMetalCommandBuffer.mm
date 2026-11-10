@@ -2,6 +2,7 @@
 #import "RawMetalInternal.h"
 #include "raw_execution_plan.h"
 #include "raw_compute.h"
+#include "raw_scheduled_wait.h"
 
 // ---- the device's submission machinery ----
 
@@ -451,14 +452,21 @@ static void giveRecording(RMCommandBuffer *b)
 - (void)waitUntilScheduled
 {
     std::unique_lock<std::mutex> l(_lock);
-    if (!_committed || _scheduledDone)
-        return;
+    auto returns = [&] {
+        return raw::scheduledWaitReturns(_scheduledDone, _held, _segError != nil);
+    };
+    if (_committed && !returns()) {
 #if SWITCH_RAW_DIAGNOSTICS
-    const BlockedWait blocked(gRM->stats.scheduledWaits, gRM->stats.scheduledWaitUs);
+        const BlockedWait blocked(gRM->stats.scheduledWaits, gRM->stats.scheduledWaitUs);
 #endif
-    _changed.wait(l, [&] {
-        return _scheduledDone;
-    });
+        _changed.wait(l, returns);
+    }
+#if SWITCH_RAW_DIAGNOSTICS
+    if (_held && !_scheduledDone && !_heldReturnUs) {
+        _heldReturnUs = nowUs();
+        gRM->stats.heldReturns++;
+    }
+#endif
 }
 
 - (void)waitUntilCompleted
@@ -572,6 +580,7 @@ static void giveRecording(RMCommandBuffer *b)
     if ((self = [super init])) {
         queuePriorityAdd(self);
         _handlers = followingSerialQueue("com.brunostjohn.switch.raw.command.handlers");
+        _urges = followingSerialQueue("com.brunostjohn.switch.raw.command.urge");
     }
     return self;
 }
