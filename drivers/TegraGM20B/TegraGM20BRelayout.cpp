@@ -183,9 +183,20 @@ uint8_t *physical(uint64_t pa)
 	return reinterpret_cast<uint8_t *>(phystokv(pa));
 }
 
+uint64_t cpuMoves, cpuMoveBytes;
+
+void countCpuMove(const tgm_relayout_pages &surface)
+{
+	if (TGM_STATS) {
+		__atomic_fetch_add(&cpuMoves, 1, __ATOMIC_RELAXED);
+		__atomic_fetch_add(&cpuMoveBytes, uint64_t(surface.npages) * kPage, __ATOMIC_RELAXED);
+	}
+}
+
 void tgm_relayout_finish_cpu(const tgm_relayout_pages *surface, const tgm_relayout_pages *rows,
 			     const tgm_layout *layout, uint32_t bytesPerRow, tgm_relayout_op op)
 {
+	countCpuMove(*surface);
 	tgm_cpu_clean_pages(surface->pas, surface->npages);
 	if (op == TGM_RELAYOUT_TILE_IN_PLACE)
 		tgm_relayout_cpu(surface, rows, layout, bytesPerRow, 0, physical);
@@ -204,10 +215,17 @@ extern "C" void tgm_relayout_by_cpu(const struct tgm_relayout_pages *surface,
 		tgm_writer_wait(writers[i].uid, writers[i].seqno);
 	const bool toRows = op == TGM_RELAYOUT_TO_ROWS;
 	const tgm_relayout_pages &to = toRows ? *rows : *surface;
+	countCpuMove(*surface);
 	tgm_cpu_clean_pages(surface->pas, surface->npages);
 	tgm_cpu_clean_pages(rows->pas, rows->npages);
 	tgm_relayout_cpu(surface, rows, layout, bytes_per_row, static_cast<int>(toRows), physical);
 	tgm_cpu_clean_pages(to.pas, to.npages);
+}
+
+extern "C" void tgm_relayout_cpu_stats(uint64_t *moves, uint64_t *bytes)
+{
+	*moves = __atomic_exchange_n(&cpuMoves, 0, __ATOMIC_RELAXED);
+	*bytes = __atomic_exchange_n(&cpuMoveBytes, 0, __ATOMIC_RELAXED);
 }
 
 extern "C" int tgm_relayout_init(void)

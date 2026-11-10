@@ -778,9 +778,16 @@ void *tgm_pool_alloc_ready(uint64_t bytes, uint64_t align, uint64_t reserve, uin
 	return va;
 }
 
+/* stats: freed pool BOs the CPU zeroed for the copy engine (tgm_pool_free_zeroed) */
+static u64 cpu_zeroes, cpu_zero_bytes;
+
 void tgm_pool_free_zeroed(void *va, uint64_t bytes, uint64_t pa)
 {
 	bytes = pool_bo_bytes(bytes); /* the padding too: the owner's mapping covered it */
+	if (TGM_STATS) {
+		__atomic_fetch_add(&cpu_zeroes, 1, __ATOMIC_RELAXED);
+		__atomic_fetch_add(&cpu_zero_bytes, bytes, __ATOMIC_RELAXED);
+	}
 	memset(va, 0, bytes);
 	/* the write-combining buffers drained before the pages are handed out again */
 	__asm__ volatile("dsb sy" ::: "memory");
@@ -2711,7 +2718,7 @@ static void stats_tick(void)
 	u64 lfm = 0;
 	char line[1024];
 	char clk[120];
-	char scrubbed[120];
+	char scrubbed[200];
 	char sched[120];
 	char recov[80];
 
@@ -5790,11 +5797,17 @@ static void scrub_stats(char *buf, unsigned int len, u64 window_ms)
 	u64 bytes = __atomic_exchange_n(&scrub.bytes, 0, __ATOMIC_RELAXED);
 	u64 ns = __atomic_exchange_n(&scrub.ns, 0, __ATOMIC_RELAXED);
 	u64 max = __atomic_exchange_n(&scrub.max_ns, 0, __ATOMIC_RELAXED);
+	u64 cpu_n = __atomic_exchange_n(&cpu_zeroes, 0, __ATOMIC_RELAXED);
+	u64 cpu_bytes = __atomic_exchange_n(&cpu_zero_bytes, 0, __ATOMIC_RELAXED);
+	u64 moves = 0, move_bytes = 0;
 	(void)window_ms;
+	tgm_relayout_cpu_stats(&moves, &move_bytes);
 	scnprintf(buf, len,
-		  "scrub %llu (%llu MiB, queued to done mean %llu us max %llu us), %lu KiB dirty",
+		  "scrub %llu (%llu MiB, queued to done mean %llu us max %llu us), %lu KiB dirty, "
+		  "CPU fallbacks: zero %llu (%llu KiB), relayout %llu (%llu KiB)",
 		  n, bytes >> 20, n ? ns / n / 1000 : 0, max / 1000,
-		  nvxnu_pool_dirty_free_pages() << (PAGE_SHIFT - 10u));
+		  nvxnu_pool_dirty_free_pages() << (PAGE_SHIFT - 10u), cpu_n, cpu_bytes >> 10, moves,
+		  move_bytes >> 10);
 }
 
 /* PTOP's engine list as nvkm parsed it (gk104_top_parse) and the PBDMAs serving each runlist: a copy engine on GR's

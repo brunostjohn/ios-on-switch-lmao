@@ -432,6 +432,9 @@ void tgm_relayout_by_cpu(const struct tgm_relayout_pages *surface,
 			 const struct tgm_relayout_pages *rows, const struct tgm_layout *layout,
 			 uint32_t bytes_per_row, int op, const struct tgm_relayout_writer *writers,
 			 uint32_t nwriters);
+/* With the stats: the moves the CPU made for the copy engine since the last call (tgm_relayout_by_cpu, and a relayout
+ * the CPU finished after a fault), and the surface bytes they covered. */
+void tgm_relayout_cpu_stats(uint64_t *moves, uint64_t *bytes);
 /* tgm_writer_wait for a kernel copy's submission that starts with semaphore acquires on `acquired` (in push order):
  * while one of them has not completed, the wait is late on that writer, which a long wait recovers, not on the copy. */
 void tgm_copy_wait(uint32_t uid, uint32_t seqno, const struct tgm_relayout_writer *acquired,

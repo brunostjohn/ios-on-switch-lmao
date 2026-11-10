@@ -238,3 +238,19 @@ TEST_F(RelayoutControl, ReadOnlyMappingReproducesHostSemaphoreWriteFault)
 	EXPECT_EQ(gRelayout.pushCpu[kCheckpointWord], 0u);
 }
 }  // namespace
+
+namespace
+{
+TEST_F(RelayoutControl, MovesTheCpuFinishesAreCountedWithTheStats)
+{
+	uint64_t moves = 0, bytes = 0;
+	tgm_relayout_cpu_stats(&moves, &bytes);
+	const uint64_t pas[2] = {0x1000, 0x2000};
+	const tgm_relayout_pages surface = {pas, 2};
+	const tgm_layout layout = {};
+	tgm_relayout_finish_cpu(&surface, &surface, &layout, 0, TGM_RELAYOUT_TO_ROWS);
+	tgm_relayout_cpu_stats(&moves, &bytes);
+	EXPECT_EQ(moves, TGM_STATS ? 1u : 0u);
+	EXPECT_EQ(bytes, TGM_STATS ? 2u * 4096u : 0u);
+}
+}  // namespace
