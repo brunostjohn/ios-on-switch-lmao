@@ -57,6 +57,7 @@ extern "C" id native_bridge_metal_texture_tiled_in_place(id buffer, id descripto
     __attribute__((weak_import));
 extern "C" id native_bridge_metal_render_pipeline_lazy(id device, id descriptor, NSUInteger options)
     __attribute__((weak_import));
+extern "C" void native_bridge_metal_journal_render(id descriptor, NSUInteger options) __attribute__((weak_import));
 extern "C" int native_bridge_metal_render_pipeline_ready(id pipeline, void (^observer)(void))
     __attribute__((weak_import));
 extern "C" int native_bridge_metal_render_pipeline_urge(id pipeline, void (^observer)(void), dispatch_queue_t queue)

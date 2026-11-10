@@ -5214,6 +5214,15 @@ static std::string journalComputePipeline(MTLComputePipelineDescriptor *d, NBFun
 }
 
 #endif
+
+extern "C" void native_bridge_metal_journal_render(id descriptor, NSUInteger options)
+{
+    SWITCH_METAL_DIAGNOSTIC(journalRenderPipeline((MTLRenderPipelineDescriptor *)descriptor, (MTLPipelineOption)options,
+                                                  nowUs(), nullptr, std::string()));
+    (void)descriptor;
+    (void)options;
+}
+
 static bool linkedHandles(NSArray *functions, std::vector<NmbFunction *> &out);
 
 // A stage's visible and private linked functions appended to `linked`; false for what the bridge does not represent (binary
