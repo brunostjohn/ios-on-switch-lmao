@@ -56,6 +56,7 @@
 #include "TegraVICSurface.h"
 #include "SwitchVICTransform.h"
 #include "SwitchVICEvents.h"
+#include "SwitchVICRequests.h"
 #include "../TegraGM20B/TegraGM20BLayout.h"
 
 // The kernel's IOService/IOUserClient implementations, called directly (they are the defaults the vtable copies
@@ -93,7 +94,7 @@ void iouc_release_port(mach_port_t) __asm__("__ZN12IOUserClient23releaseNotifica
 }
 
 namespace {
-constexpr uint32_t kQueueMax = 16, kMaxConnections = 64;
+constexpr uint32_t kMaxConnections = 64;
 constexpr uint32_t kVtableSlots = 200;  // both classes have under 192; copying a little more reads only data
 
 // One connection's state, beside Apple's IOSurfaceAcceleratorClient object it belongs to.
@@ -104,6 +105,7 @@ struct Conn {
                        // replies fail harmlessly (the port right is released when replaced)
     IOLock *lock;
     uint32_t pending;  // jobs queued or running
+    uint32_t waiting;  // queued jobs whose events have not fired, under gQueueLock
     bool closing;
 };
 
@@ -159,8 +161,7 @@ IOReturn ioreturn(int err)
 
 struct Job;
 IOLock *gQueueLock;
-Job *gHead, *gTail;
-uint32_t gQueued;
+SwitchVICRequests<Job> gRequests;
 
 #if TEGRA_VIC_STATS
 // Stats for the unified log (one line per 5 s window with work). `pitch`: refusals for a row pitch VIC cannot address,
@@ -211,7 +212,7 @@ void firstBounce(const TegraVICSurfaceDesc *d, const char *side)
 struct Job {
     Job *next;
     SwitchVICEvents *events;
-    bool eventReady;
+    bool eventReady, listed;
     int eventStatus;
     IOUserClient *client;  // retained
     struct Conn *conn;
@@ -223,7 +224,7 @@ struct Job {
     OSAsyncReference64 ref;
     uint64_t info;
     IOReturn status;
-    bool done;
+    bool done, detached;  // detached: its synchronous caller was interrupted and finishJob frees it
     TegraVICJob check;  // the submitting thread's check of each operation
 };
 
@@ -296,9 +297,8 @@ void eventsReady(void *context, int status)
 {
     auto *job = static_cast<Job *>(context);
     IOLockLock(gQueueLock);
-    if (!job->eventStatus) job->eventStatus = status;
-    job->eventReady = true;
-    IOLockWakeup(gQueueLock, &gHead, false);
+    gRequests.ready(job, status);
+    IOLockWakeup(gQueueLock, &gRequests, false);
     IOLockUnlock(gQueueLock);
 }
 
@@ -306,19 +306,10 @@ void engineThread(void *, wait_result_t)
 {
     for (;;) {
         IOLockLock(gQueueLock);
-        Job **at = nullptr, *previous = nullptr;
-        for (;;) {
-            at = &gHead;
-            previous = nullptr;
-            while (*at && !(*at)->eventReady) { previous = *at; at = &(*at)->next; }
-            if (*at) break;
-            IOLockSleep(gQueueLock, &gHead, THREAD_UNINT);
-        }
-        Job *job = *at;
-        *at = job->next;
-        if (gTail == job) gTail = previous;
-        --gQueued;
-        IOLockWakeup(gQueueLock, &gQueued, false);
+        Job *job = nullptr;
+        while (!(job = gRequests.pop()))
+            IOLockSleep(gQueueLock, &gRequests, THREAD_UNINT);
+        IOLockWakeup(gQueueLock, &gRequests, false);
         IOLockUnlock(gQueueLock);
         IOReturn status = kIOReturnSuccess;
         if (runJob(job, &status)) finishJob(job, status);
@@ -351,8 +342,11 @@ void finishJob(Job *job, IOReturn status)
         IOLockLock(conn->lock);
         job->status = status;
         job->done = true;
+        const bool detached = job->detached;
         IOLockWakeup(conn->lock, job, false);
         IOLockUnlock(conn->lock);
+        if (detached)
+            IODelete(job, Job, 1);
     }
     IOLockLock(conn->lock);
     conn->pending--;
@@ -364,25 +358,61 @@ void finishJob(Job *job, IOReturn status)
 }  // namespace
 
 namespace {
-void queueJob(Job *job)
+// Interruptible, so a client stalled behind its own events that never fire can still be killed; its close then fails
+// those jobs.
+bool queueJob(Job *job)
 {
     IOLockLock(gQueueLock);
-    while (gQueued >= kQueueMax)
-        IOLockSleep(gQueueLock, &gQueued, THREAD_UNINT);
-    if (__atomic_load_n(&job->conn->closing, __ATOMIC_ACQUIRE)) {
-        job->eventStatus = -125;
-        job->eventReady = true;
+    bool interrupted = false;
+    while (!__atomic_load_n(&job->conn->closing, __ATOMIC_ACQUIRE) && !gRequests.admits(*job) && !interrupted)
+        interrupted = IOLockSleep(gQueueLock, &gRequests, THREAD_ABORTSAFE) == THREAD_INTERRUPTED;
+    if (!interrupted) {
+        if (__atomic_load_n(&job->conn->closing, __ATOMIC_ACQUIRE))
+            gRequests.fail(job, -125);
+        gRequests.push(job);
+        IOLockWakeup(gQueueLock, &gRequests, false);
     }
-    job->next = nullptr;
-    if (gTail) {
-        gTail->next = job;
-    } else {
-        gHead = job;
-    }
-    gTail = job;
-    gQueued++;
-    IOLockWakeup(gQueueLock, &gHead, false);
     IOLockUnlock(gQueueLock);
+    return !interrupted;
+}
+
+void abandonUnqueued(Job *job)
+{
+    switch_vic_events_release(&job->events);
+    tegra_vic_surface_release(&job->src);
+    tegra_vic_surface_release(&job->dst);
+    IOLockLock(job->conn->lock);
+    job->conn->pending--;
+    IOLockWakeup(job->conn->lock, &job->conn->pending, false);
+    IOLockUnlock(job->conn->lock);
+    job->client->release();
+    IODelete(job, Job, 1);
+}
+
+IOReturn awaitJob(Conn *conn, Job *job)
+{
+    IOLockLock(conn->lock);
+    bool interrupted = false;
+    while (!job->done && !interrupted)
+        interrupted = IOLockSleep(conn->lock, job, THREAD_ABORTSAFE) == THREAD_INTERRUPTED;
+    IOLockUnlock(conn->lock);
+    if (interrupted) {
+        IOLockLock(gQueueLock);
+        if (job->listed) {
+            gRequests.fail(job, -125);
+            IOLockWakeup(gQueueLock, &gRequests, false);
+        }
+        IOLockUnlock(gQueueLock);
+        IOLockLock(conn->lock);
+        job->detached = !job->done;
+        const bool detached = job->detached;
+        IOLockUnlock(conn->lock);
+        if (detached)
+            return kIOReturnAborted;
+    }
+    const IOReturn status = job->status;
+    IODelete(job, Job, 1);
+    return status;
 }
 
 IOReturn transform(Conn *conn, const void *in, uint32_t size)
@@ -477,16 +507,11 @@ IOReturn transform(Conn *conn, const void *in, uint32_t size)
     job->eventReady = job->events == nullptr;
     const bool async = job->async;
     switch_vic_events_arm(job->events);
-    queueJob(job);
-    if (async)
-        return kIOReturnSuccess;
-    IOLockLock(conn->lock);
-    while (!job->done)
-        IOLockSleep(conn->lock, job, THREAD_UNINT);
-    IOLockUnlock(conn->lock);
-    ret = job->status;
-    IODelete(job, Job, 1);
-    return ret;
+    if (!queueJob(job)) {
+        abandonUnqueued(job);
+        return kIOReturnAborted;
+    }
+    return async ? kIOReturnSuccess : awaitJob(conn, job);
 }
 
 // --- The client's vtable slots ------------------------------------------------------------------------------------
@@ -549,12 +574,8 @@ IOReturn tegra_vic_client_close(IOUserClient *self)
     if (Conn *conn = connOf(self)) {
         __atomic_store_n(&conn->closing, true, __ATOMIC_RELEASE);
         IOLockLock(gQueueLock);
-        for (auto *job = gHead; job; job = job->next) {
-            if (job->conn != conn) continue;
-            job->eventStatus = -125;
-            job->eventReady = true;
-        }
-        IOLockWakeup(gQueueLock, &gHead, false);
+        gRequests.cancel(conn, -125);
+        IOLockWakeup(gQueueLock, &gRequests, false);
         IOLockUnlock(gQueueLock);
         IOLockLock(conn->lock);
         while (conn->pending)
