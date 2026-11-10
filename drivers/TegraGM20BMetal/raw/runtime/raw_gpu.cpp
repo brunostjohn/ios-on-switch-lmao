@@ -4352,8 +4352,7 @@ bool RenderEncoder::prepare(Pipeline *pl, uint32_t primitive, int32_t first, uin
                     const bool depth = e.kind == EntryDepthTest;
                     const Texture *t = depth ? shaderDepth_ : shaderStencil_;
                     const uint32_t view = depth ? r.shaderTests.depthTic : r.shaderTests.stencilTic;
-                    if (!t || t->samples != samples_ || texelBytes(view) != t->bpp ||
-                        !(tic = d.viewTic(*t, view))) {
+                    if (!t || t->samples != samples_ || texelBytes(view) != t->bpp || !(tic = passViewTic(*t, view))) {
                         *why = "an unavailable native shader depth/stencil view";
                         cb_->refusal = {RefDepthStencil, e.kind, t ? t->format : 0, samples_};
                         return false;
@@ -4386,7 +4385,7 @@ bool RenderEncoder::prepare(Pipeline *pl, uint32_t primitive, int32_t first, uin
                             cb_->refusal = {RefStorageView, e.slot, t->format, t->width};
                             return false;
                         }
-                        tic = d.viewTic(*t, pl->storageTic[e.slot]);
+                        tic = passViewTic(*t, pl->storageTic[e.slot]);
                         if (!tic) {
                             *why = "no room for the framebuffer storage view";
                             cb_->refusal = {RefStorageView, e.slot, t->format, t->width};
@@ -4950,6 +4949,17 @@ uint32_t Device::levelTic(Texture &t, uint32_t level)
         fx::mipChainTic(t.chain->layout, t.chain->va, f->tic0, f->srgb, level, 1, w);
         memcpy(tic_.cpu + 32 * tic, w, 32);  // visible at the next submission's header invalidate
     }
+    return tic;
+}
+
+uint32_t RenderEncoder::passViewTic(const Texture &t, uint32_t word0)
+{
+    for (uint8_t i = 0; i < passViewCount_; ++i)
+        if (passViews_[i].ownTic == t.tic && passViews_[i].word0 == word0)
+            return passViews_[i].tic;
+    const uint32_t tic = dev_->viewTic(t, word0);
+    if (tic && passViewCount_ < passViews_.size())
+        passViews_[passViewCount_++] = {t.tic, word0, tic};
     return tic;
 }
 

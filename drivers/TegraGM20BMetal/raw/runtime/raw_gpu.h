@@ -728,6 +728,16 @@ private:
     std::vector<Clear> clears() const;
     std::vector<Clear> initialClears_;
     bool clearsSealed_ = false;
+
+    // The pass's other headers of its attachments' memory (Device::viewTic: storage views, shader depth/stencil
+    // copies): asked of the device once a pass, not under its lock at each draw's descriptors
+    struct PassView {
+        uint32_t ownTic, word0, tic;
+    };
+
+    std::array<PassView, 8> passViews_{};
+    uint8_t passViewCount_ = 0;
+    uint32_t passViewTic(const Texture &t, uint32_t word0);
 };
 
 // Copy-engine work between passes (MAXWELL_DMA_COPY_A, as NVK's nouveau_copy_rect does it for pitch memory)
