@@ -1,7 +1,9 @@
+import CoreVideo
 import Foundation
 import HWTestCore
 import HWTestGPU
 import HWTestKit
+import IOSurface
 import Metal
 import simd
 
@@ -26,6 +28,11 @@ struct CAGlassSplitTest: HWTest {
 
 // Scissoring the same quad keeps every vertex output identical; the debug control pins the tiled reference to whole programs.
 // Cumulative launch counts must prove different native programs; image agreement alone cannot establish coverage.
+// The XR variants are the device's glass, glass_background_sdf_minimal over sdf_filter_vert: into 'b3a8' (550) as the
+// corpus has it, and into BGR10_XR (554), which the corpus lacks (the runtime makes its record). They start from a
+// grey clear and bind glass_background_all's material (the sdf state's own inputs are not known here), so raw and m2v
+// judge each other's pixels (hash_b3a8, hash_xr); b3a8 is read back through a compute read of its RGB plane. Each
+// one's route and fetch routes are in its metrics.
 struct CAGlassSplitScene: GPUScene {
     let id = "gpu.ca.glass_split"
     let name = "CA 27 Liquid Glass over content: one draw on its split twin against tiles on its whole program"
@@ -37,10 +44,21 @@ struct CAGlassSplitScene: GPUScene {
         + " c0=80:15:1:1:5:0:1:5:0 c1=115:0:0:1:0:0:1:0:0 c2=55:0:0:1:0:0:1:0:0"
         + " a0=31:0:1:48:1:1 a1=29:16:1:48:1:1 a2=29:24:1:48:1:1 a3=27:32:1:48:1:1"
         + " | v variable_blur_vert_lph  | f glass_background_all_lph  | "
+    static let xrLines = [
+        ("b3a8", CAGlassSplitScene.xrLine("Pb3a8BsovXmw_TgsaA3Xhf_Isrc", format: 550)),
+        ("xr", CAGlassSplitScene.xrLine("Pw30rBsovXmw_TgsaA3Xhf_Isrc", format: 554)),
+    ]
+
+    static func xrLine(_ label: String, format: Int) -> String {
+        "R ok=1 label=com.apple.coreanimation.\(label) samples=1 topo=0 ds=0/0"
+            + " c0=\(format):15:1:1:5:0:1:5:0 c1=115:0:0:1:0:0:1:0:0 c2=55:0:0:1:0:0:1:0:0"
+            + " a0=31:0:1:48:1:1 a1=29:16:1:48:1:1 a2=29:24:1:48:1:1 a3=27:32:1:48:1:1"
+            + " | v sdf_filter_vert_lph  | f glass_background_sdf_minimal_lph  | "
+    }
 
     struct Frame {
         let pipeline: MTLRenderPipelineState
-        let content: [UInt8]
+        let content: [UInt8]?
         let target: MTLTexture
         let scratch: [MTLTexture]
         let pictures: [MTLTexture]
@@ -56,14 +74,20 @@ struct CAGlassSplitScene: GPUScene {
             result.expect(false, "the required QuartzCore glass shader is unavailable")
             return result
         }
-        let frame = try await make(gpu, parsed, library)
+        let size = Self.size
+        let content = Patterns.bytes(
+            Patterns.opaque(Patterns.busy(width: size, height: size, channels: 4, seed: 3)), .bgra8Unorm)
+        let target = try gpu.texture(.bgra8Unorm, size, size, usage: [.renderTarget, .shaderRead])
+        let frame = try await make(gpu, parsed, library, target: target, content: content)
         let onFacade = RawFacade.kind(of: gpu.device) == "raw"
+        let before = RawFacade.counters(of: gpu.device)
         let whole = try await draw(gpu, frame, tiles: Self.tiles, wholePrograms: true, &result)
         let split = try await draw(gpu, frame, tiles: 1, wholePrograms: false, &result)
-        let content = TexelFormat.bgra8Unorm.raster(frame.content, width: Self.size, height: Self.size)
-        result.metrics.set("pixels_split", Self.size * Self.size)
-        result.metrics.set("pixels_tile", (Self.size / Self.tiles) * (Self.size / Self.tiles))
-        for (name, picture) in [("split", split.picture), ("whole", whole.picture), ("content", content)] {
+        result.metrics.set("fetch", RawFacade.fetchRoutes(before: before, after: RawFacade.counters(of: gpu.device)))
+        let reference = TexelFormat.bgra8Unorm.raster(content, width: size, height: size)
+        result.metrics.set("pixels_split", size * size)
+        result.metrics.set("pixels_tile", (size / Self.tiles) * (size / Self.tiles))
+        for (name, picture) in [("split", split.picture), ("whole", whole.picture), ("content", reference)] {
             result.metrics.set("mean_" + name, Self.mean(picture))
         }
         for (name, half) in [("split", split), ("whole", whole)] {
@@ -72,7 +96,7 @@ struct CAGlassSplitScene: GPUScene {
         }
         for (name, half) in [("one draw", split), ("the tiles", whole)] {
             result.expect(
-                RasterDiff.compare(half.picture, content, tolerance: 2.0 / 255).wrong > 0,
+                RasterDiff.compare(half.picture, reference, tolerance: 2.0 / 255).wrong > 0,
                 "\(name) left the content unchanged; no glass output was demonstrated")
             result.expect(!Self.black(half.picture), "\(name) drew black over the content")
         }
@@ -83,15 +107,81 @@ struct CAGlassSplitScene: GPUScene {
             let paths = Set(split.paths + whole.paths)
             result.expect(paths == ["raw"], "the glass drew on \(paths.sorted().joined(separator: ",")), not raw")
         }
+        for (name, text) in Self.xrLines {
+            do {
+                try await runXR(gpu, library, name, text, onFacade: onFacade, &result)
+            } catch {
+                result.expect(false, "\(name): \(error)")
+            }
+        }
         return result
     }
 
-    func make(_ gpu: GPU, _ parsed: PipelineLine, _ library: MTLLibrary) async throws -> Frame {
+    func runXR(
+        _ gpu: GPU, _ library: MTLLibrary, _ name: String, _ text: String, onFacade: Bool, _ result: inout SceneResult
+    ) async throws {
+        guard let parsed = PipelineLine(text), let format = parsed.colors.first?.format,
+            library.makeFunction(name: parsed.fragment.name) != nil
+        else {
+            result.notes.append("\(name): no QuartzCore sdf glass here")
+            return
+        }
+        let target: MTLTexture
+        do {
+            target = try xrTarget(gpu, format: format)
+        } catch {
+            result.notes.append("\(name): no \(format) target (\(error))")
+            return
+        }
+        let frame = try await make(gpu, parsed, library, target: target, content: nil)
+        let before = RawFacade.counters(of: gpu.device)
+        let whole = try await draw(gpu, frame, tiles: Self.tiles, wholePrograms: true, &result)
+        let split = try await draw(gpu, frame, tiles: 1, wholePrograms: false, &result)
+        result.metrics.set(
+            name + "_fetch", RawFacade.fetchRoutes(before: before, after: RawFacade.counters(of: gpu.device)))
+        let paths = Set(split.paths + whole.paths)
+        result.metrics.set(name + "_paths", paths.sorted().joined(separator: ","))
+        result.metrics.set(name + "_mean_split", Self.mean(split.picture))
+        result.metrics.set(name + "_picture_split", Self.coarsePicture(split.picture))
+        result.metrics.set("hash_" + name, Self.coarsePicture(split.picture))
+        if let twins = split.twins { result.metrics.set(name + "_twins_split", twins) }
+        if let twins = whole.twins { result.metrics.set(name + "_twins_whole", twins) }
+        for (drawn, half) in [("one draw", split), ("the tiles", whole)] {
+            result.expect(!Self.black(half.picture), "\(name): \(drawn) drew black over the grey")
+        }
+        result.compare("\(name): one draw against tiles", split.picture, whole.picture, tolerance: 3.0 / 255)
+        if onFacade {
+            result.expect(
+                paths == ["raw"], "\(name): the glass drew on \(paths.sorted().joined(separator: ",")), not raw")
+        }
+    }
+
+    func xrTarget(_ gpu: GPU, format: UInt) throws -> MTLTexture {
+        guard format == 550 else {
+            return try gpu.texture(.bgr10_xr, Self.size, Self.size, usage: [.renderTarget, .shaderRead])
+        }
+        var buffer: CVPixelBuffer?
+        let attributes: [CFString: Any] = [kCVPixelBufferIOSurfacePropertiesKey: [:] as CFDictionary]
+        guard
+            CVPixelBufferCreate(
+                nil, Self.size, Self.size, kCVPixelFormatType_30RGBLE_8A_BiPlanar, attributes as CFDictionary, &buffer)
+                == kCVReturnSuccess, let buffer, let surface = CVPixelBufferGetIOSurface(buffer)?.takeUnretainedValue()
+        else { throw TestFailure("no b3a8 pixel buffer") }
+        let descriptor = MTLTextureDescriptor.texture2DDescriptor(
+            pixelFormat: MTLPixelFormat(rawValue: 550)!, width: Self.size, height: Self.size, mipmapped: false)
+        descriptor.usage = [.renderTarget, .shaderRead]
+        descriptor.storageMode = .shared
+        guard let texture = gpu.device.makeTexture(descriptor: descriptor, iosurface: surface, plane: 0) else {
+            throw TestFailure("no 550 texture over a b3a8 surface")
+        }
+        return texture
+    }
+
+    func make(
+        _ gpu: GPU, _ parsed: PipelineLine, _ library: MTLLibrary, target: MTLTexture, content: [UInt8]?
+    ) async throws -> Frame {
         let pipeline = try CAState.pipeline(parsed, library: library, device: gpu.device)
         let size = Self.size
-        let content = Patterns.bytes(
-            Patterns.opaque(Patterns.busy(width: size, height: size, channels: 4, seed: 3)), .bgra8Unorm)
-        let target = try gpu.texture(.bgra8Unorm, size, size, usage: [.renderTarget, .shaderRead])
         var pictures: [MTLTexture] = []
         for seed in [1, 2] {
             let picture = try gpu.texture(.bgra8Unorm, size, size, usage: [.shaderRead])
@@ -123,7 +213,9 @@ struct CAGlassSplitScene: GPUScene {
     }
 
     func draw(_ gpu: GPU, _ frame: Frame, tiles: Int, wholePrograms: Bool, _ result: inout SceneResult) async throws -> Half {
-        try await gpu.upload(frame.content, to: frame.target, bytesPerRow: Self.size * 4)
+        if let content = frame.content {
+            try await gpu.upload(content, to: frame.target, bytesPerRow: Self.size * 4)
+        }
         let before = RawFacade.counters(of: gpu.device)["split_prologues"]
         let timing = try await gpu.run(tolerateError: true) { commands in
             if wholePrograms && RawFacade.kind(of: gpu.device) == "raw" && !RawFacade.wholePrograms(in: commands) {
@@ -131,7 +223,8 @@ struct CAGlassSplitScene: GPUScene {
             }
             let pass = MTLRenderPassDescriptor()
             pass.colorAttachments[0].texture = frame.target
-            pass.colorAttachments[0].loadAction = .load
+            pass.colorAttachments[0].loadAction = frame.content == nil ? .clear : .load
+            pass.colorAttachments[0].clearColor = MTLClearColor(red: 0.5, green: 0.5, blue: 0.5, alpha: 1)
             pass.colorAttachments[0].storeAction = .store
             for (index, texture) in frame.scratch.enumerated() {
                 pass.colorAttachments[index + 1].texture = texture
@@ -162,7 +255,14 @@ struct CAGlassSplitScene: GPUScene {
         }
         result.expect(!timing.path.hasPrefix("error:"), "\(tiles)x\(tiles) tiles: \(timing.path)")
         let after = RawFacade.counters(of: gpu.device)["split_prologues"]
-        let picture = try await gpu.raster(frame.target, .bgra8Unorm)
+        let picture: Raster
+        if frame.target.pixelFormat == .bgr10_xr {
+            picture = try await gpu.raster(frame.target, .bgr10XR)
+        } else if frame.content == nil {
+            picture = try await gpu.computeRaster(frame.target, .rgba16Float)
+        } else {
+            picture = try await gpu.raster(frame.target, .bgra8Unorm)
+        }
         let twins: Int?
         if let before, let after, after >= before {
             twins = after - before
@@ -191,7 +291,10 @@ struct CAGlassSplitScene: GPUScene {
     static func coarsePicture(_ picture: Raster) -> String {
         let blocks = picture.boxDownsampled(by: 16)
         var hash: UInt64 = 0xcbf2_9ce4_8422_2325
-        for value in blocks.samples { hash = (hash ^ UInt64(min(15, Int(value * 16)))) &* 0x100_0000_01b3 }
+        for value in blocks.samples {
+            let level = value.isFinite ? max(0, min(15, Int(value * 16))) : 0
+            hash = (hash ^ UInt64(level)) &* 0x100_0000_01b3
+        }
         return String(hash, radix: 16)
     }
 
