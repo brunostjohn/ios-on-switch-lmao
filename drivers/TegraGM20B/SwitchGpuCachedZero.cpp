@@ -1,0 +1,299 @@
+// SPDX-License-Identifier: MIT
+#include <IOKit/IOLib.h>
+#include <IOKit/IOLocks.h>
+#include <kern/clock.h>
+#include <kern/thread.h>
+#include <kern/thread_call.h>
+#include <string.h>
+#include "SwitchGpuCachedZero.h"
+#include "TegraGM20BGpu.h"
+#include "TegraGM20BRelayout.h"
+#include "../../kits/SwitchDMA/SwitchDcache.h"
+
+struct switch_gpu_cached_mapping {
+	tgm_mem *memory;
+	switch_gpu_mapping *mapping;
+	uint64_t *pages;
+	uint64_t bytes, address;
+	uint32_t count, slot;
+	bool pending;
+};
+
+namespace
+{
+constexpr uint32_t kJobs = 8;
+constexpr uint64_t kPage = 4096, kPushVa = 1ULL << 20, kWindow = 256ULL << 20;
+constexpr uint64_t kMappedLimit = 128ULL << 20;
+
+struct Job {
+	switch_gpu_cached_mapping *mapping;
+	void (*completed)(void *, int);
+	void *context;
+	void *cpu;
+	uint64_t bytes, deadline;
+	uint32_t sequence;
+};
+
+struct Queue {
+	IOLock *lock;
+	thread_call_t retirement, watchdog;
+	tgm_vm *vm;
+	tgm_chan *channel;
+	tgm_mem *push, *fence;
+	uint32_t *words;
+	volatile uint32_t *fenceCpu;
+	uint64_t fenceGpu, fencePage, pushPage, mappedBytes, slots, armed;
+	Job jobs[kJobs];
+} queue;
+
+uint64_t earliest()
+{
+	uint64_t next = 0;
+	for (const auto &job : queue.jobs)
+		if (job.mapping && (!next || job.deadline < next))
+			next = job.deadline;
+	return next;
+}
+
+void arm()
+{
+	const uint64_t next = earliest();
+	if (next == queue.armed)
+		return;
+	queue.armed = next;
+	if (next)
+		thread_call_enter_delayed(queue.watchdog, next);
+	else
+		thread_call_cancel(queue.watchdog);
+}
+
+void retire(thread_call_param_t, thread_call_param_t)
+{
+	Job finished[kJobs];
+	uint32_t count = 0;
+	IOLockLock(queue.lock);
+	const bool failed = queue.channel && tgm_chan_error(queue.channel);
+	const uint32_t done = queue.channel ? tgm_chan_completed(queue.channel) : 0;
+	for (auto &job : queue.jobs) {
+		if (!job.mapping || (!failed && int32_t(done - job.sequence) < 0))
+			continue;
+		job.mapping->pending = false;
+		finished[count++] = job;
+		job = {};
+	}
+	if (count)
+		IOLockWakeup(queue.lock, &queue.jobs, false);
+	arm();
+	IOLockUnlock(queue.lock);
+	for (uint32_t i = 0; i < count; ++i) {
+		switch_dcache_invalidate(finished[i].cpu, size_t(finished[i].bytes));
+		finished[i].completed(finished[i].context, failed ? -5 : 0);
+	}
+}
+
+void timeout(thread_call_param_t, thread_call_param_t)
+{
+	IOLockLock(queue.lock);
+	queue.armed = 0;
+	const uint64_t now = mach_absolute_time();
+	const uint32_t done = queue.channel ? tgm_chan_completed(queue.channel) : 0;
+	uint32_t late = 0;
+	for (auto &job : queue.jobs)
+		if (job.mapping && job.deadline <= now && int32_t(done - job.sequence) < 0) {
+			if (!late || int32_t(job.sequence - late) < 0)
+				late = job.sequence;
+			clock_interval_to_deadline(1, 1000000000, &job.deadline);
+		}
+	if (late)
+		tgm_chan_check_progress(queue.channel, "cached scrub", late);
+	arm();
+	IOLockUnlock(queue.lock);
+	thread_call_enter(queue.retirement);
+}
+
+void fenced(void *)
+{
+	thread_call_enter(queue.retirement);
+}
+
+bool initialize()
+{
+	if (__atomic_load_n(&queue.lock, __ATOMIC_ACQUIRE))
+		return true;
+	IOLock *lock = IOLockAlloc();
+	auto retirement = thread_call_allocate_with_options(
+		retire, nullptr, THREAD_CALL_PRIORITY_KERNEL, THREAD_CALL_OPTIONS_ONCE);
+	auto watchdog = thread_call_allocate_with_options(
+		timeout, nullptr, THREAD_CALL_PRIORITY_KERNEL, THREAD_CALL_OPTIONS_ONCE);
+	if (!lock || !retirement || !watchdog) {
+		if (lock)
+			IOLockFree(lock);
+		if (retirement)
+			thread_call_free(retirement);
+		if (watchdog)
+			thread_call_free(watchdog);
+		return false;
+	}
+	// The first caller is the single spare worker; the release path only destroys already-created mappings.
+	queue.retirement = retirement;
+	queue.watchdog = watchdog;
+	__atomic_store_n(&queue.lock, lock, __ATOMIC_RELEASE);
+	return true;
+}
+
+bool openSpace()
+{
+	uint32_t offset = 0;
+	queue.words = static_cast<uint32_t *>(tgm_pool_alloc(kPage, 0, &queue.pushPage));
+	if (!queue.words ||
+	    tgm_fence_kernel(TGM_FENCE_KERNEL_CACHED_ZERO, &queue.fenceCpu, &queue.fencePage,
+			     &offset) ||
+	    tgm_vm_new(&queue.vm))
+		return false;
+	tgm_vm_claim(queue.vm, &queue);
+	if (tgm_mem_new(queue.vm, &queue.pushPage, 1, &queue.push) ||
+	    tgm_vm_map_ordered(queue.vm, kPushVa, kPage, queue.push, 0, 0, 1, nullptr) ||
+	    tgm_mem_new(queue.vm, &queue.fencePage, 1, &queue.fence) ||
+	    tgm_vm_kmap(queue.vm, queue.fence, kPage, &queue.fenceGpu))
+		return false;
+	queue.fenceGpu += offset;
+	return true;
+}
+
+int channel()
+{
+	if (queue.channel && tgm_chan_error(queue.channel)) {
+		for (const auto &job : queue.jobs)
+			if (job.mapping)
+				return -16;
+		tgm_chan_del(&queue.channel);
+	}
+	if (!queue.vm && !openSpace()) {
+		tgm_vm_del(&queue.vm);
+		tgm_mem_del(&queue.push);
+		tgm_mem_del(&queue.fence);
+		if (queue.words)
+			tgm_pool_free(queue.words, kPage, queue.pushPage);
+		queue.words = nullptr;
+		queue.fenceCpu = nullptr;
+		queue.fenceGpu = queue.fencePage = queue.pushPage = 0;
+		return -12;
+	}
+	if (!queue.channel) {
+		const int result =
+			tgm_chan_new_copy(queue.vm, &queue, queue.fenceCpu, queue.fenceGpu,
+					  "cached-scrub", 0, &queue.channel);
+		if (result)
+			return result;
+		tgm_chan_on_fence(queue.channel, fenced, nullptr);
+	}
+	return 0;
+}
+
+void drop(switch_gpu_cached_mapping *mapping)
+{
+	switch_gpu_vm_unmap(queue.vm, &mapping->mapping);
+	tgm_mem_del(&mapping->memory);
+	queue.mappedBytes -= mapping->bytes;
+	queue.slots &= ~(1ULL << mapping->slot);
+	IODelete(mapping->pages, uint64_t, mapping->count);
+	IODelete(mapping, switch_gpu_cached_mapping, 1);
+}
+
+int prepare(const uint64_t *pages, uint32_t count, switch_gpu_cached_mapping **out)
+{
+	const uint64_t bytes = uint64_t(count) << 12;
+	if (*out)
+		return (*out)->count == count &&
+				       !memcmp((*out)->pages, pages, size_t(count) * sizeof(*pages))
+			       ? 0
+			       : -22;
+	if (queue.slots == UINT64_MAX || bytes > kMappedLimit - queue.mappedBytes)
+		return -28;
+	auto *mapping = IONew(switch_gpu_cached_mapping, 1);
+	if (!mapping)
+		return -12;
+	*mapping = {};
+	mapping->pages = IONew(uint64_t, count);
+	if (!mapping->pages) {
+		IODelete(mapping, switch_gpu_cached_mapping, 1);
+		return -12;
+	}
+	memcpy(mapping->pages, pages, size_t(count) * sizeof(*pages));
+	mapping->bytes = bytes;
+	mapping->count = count;
+	mapping->slot = uint32_t(__builtin_ctzll(~queue.slots));
+	mapping->address = (1ULL << 32) + uint64_t(mapping->slot) * kWindow;
+	queue.slots |= 1ULL << mapping->slot;
+	queue.mappedBytes += bytes;
+	int result = tgm_mem_new(queue.vm, mapping->pages, count, &mapping->memory);
+	if (!result)
+		result = switch_gpu_vm_map_volatile(queue.vm, mapping->address, bytes, mapping->memory,
+						    0, 0, 0, 1, &mapping->mapping);
+	if (result) {
+		drop(mapping);
+		return result;
+	}
+	*out = mapping;
+	return 0;
+}
+}  // namespace
+
+int switch_gpu_cached_zero(const uint64_t *pages, uint32_t count, void *cpu,
+			   switch_gpu_cached_mapping **mapping, void (*completed)(void *, int),
+			   void *context)
+{
+	if (!pages || !count || uint64_t(count) * kPage > kWindow || !cpu || !mapping || !completed)
+		return -22;
+	if (!initialize())
+		return -12;
+	IOLockLock(queue.lock);
+	int result = channel();
+	if (!result)
+		result = prepare(pages, count, mapping);
+	if (!result && (*mapping)->pending)
+		result = -16;
+	unsigned slot = kJobs;
+	while (!result) {
+		for (slot = 0; slot < kJobs && queue.jobs[slot].mapping; ++slot) {
+		}
+		if (slot != kJobs)
+			break;
+		IOLockSleep(queue.lock, &queue.jobs, THREAD_UNINT);
+		result = channel();
+	}
+	if (!result) {
+		// No task or producer can access this allocation. Discard old cached CPU bytes before CE overwrites it.
+		switch_dcache_invalidate(cpu, size_t(count) * kPage);
+		uint32_t *words = queue.words + slot * 32;
+		const tgm_push push = {
+			kPushVa + slot * 128,
+			tgm_relayout_clear(words, (*mapping)->address, uint64_t(count) * kPage), 0,
+			0, 0};
+		uint32_t sequence = 0;
+		result = tgm_chan_exec(queue.channel, &push, 1, &sequence, nullptr);
+		if (!result) {
+			uint64_t deadline = 0;
+			clock_interval_to_deadline(1, 1000000000, &deadline);
+			(*mapping)->pending = true;
+			queue.jobs[slot] = {
+				*mapping, completed, context, cpu, uint64_t(count) * kPage,
+				deadline, sequence};
+			arm();
+		}
+	}
+	IOLockUnlock(queue.lock);
+	return result;
+}
+
+void switch_gpu_cached_mapping_drop(switch_gpu_cached_mapping **mapping)
+{
+	if (!mapping || !*mapping)
+		return;
+	IOLockLock(queue.lock);
+	if ((*mapping)->pending)
+		panic("SwitchGpu: cached scrub mapping released before retirement");
+	drop(*mapping);
+	*mapping = nullptr;
+	IOLockUnlock(queue.lock);
+}

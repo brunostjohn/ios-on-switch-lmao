@@ -24,6 +24,7 @@ extern "C" {
 
 #define TGM_RELAYOUT_SUBC_COPY 4u
 #define TGM_RELAYOUT_MAX_WAITS 8u
+#define TGM_RELAYOUT_WAIT_FAILED UINT32_MAX
 #define TGM_RELAYOUT_DWORDS (TGM_RELAYOUT_MAX_WAITS * 5u + 64u)
 
 enum tgm_relayout_op {
@@ -51,6 +52,7 @@ struct tgm_relayout_move {
 	enum tgm_relayout_op op;
 	uint64_t
 		rows_bytes; /* the scratch's length (a multiple of 4096): what a move to rows clears */
+	uint64_t checkpoint_va;
 };
 
 static inline uint32_t tgm_relayout_header(uint32_t subc, uint32_t mthd, uint32_t count)
@@ -170,6 +172,29 @@ uint32_t tgm_relayout_waits(struct tgm_vm *vm, uint32_t self,
 			    const struct tgm_relayout_writer *writers, uint32_t nwriters,
 			    struct tgm_relayout_wait *waits, uint32_t nwaits);
 
+/* The checkpoint reaches DRAM before the original allocation can be overwritten. */
+static inline uint32_t tgm_relayout_checkpoint(uint32_t *w, uint64_t address)
+{
+	if (!address)
+		return 0;
+	uint32_t i = 0;
+	w[i++] = tgm_relayout_header(0, 0x78, 1);
+	w[i++] = 0;
+	w[i++] = tgm_relayout_header(0, 0x24, 1);
+	w[i++] = 0;
+	w[i++] = tgm_relayout_header(0, 0x30, 2);
+	w[i++] = 0;
+	w[i++] = 0x10u << 27;
+	w[i++] = tgm_relayout_header(0, 0x24, 1);
+	w[i++] = 0;
+	w[i++] = tgm_relayout_header(0, 0x10, 4);
+	w[i++] = (uint32_t)(address >> 32);
+	w[i++] = (uint32_t)address;
+	w[i++] = 1;
+	w[i++] = 2u | 1u << 24;
+	return i;
+}
+
 // The whole push of one move, at most TGM_RELAYOUT_DWORDS words; `nwaits` at most TGM_RELAYOUT_MAX_WAITS
 static inline uint32_t tgm_relayout_push(uint32_t *w, const struct tgm_layout *l,
 					 const struct tgm_relayout_move *m,
@@ -189,10 +214,12 @@ static inline uint32_t tgm_relayout_push(uint32_t *w, const struct tgm_layout *l
 	case TGM_RELAYOUT_TILE_IN_PLACE:
 		i += tgm_relayout_copy(w + i, l, m->surface_rows_va, 0, m->rows_va, 0,
 				       m->bytes_per_row);
+		i += tgm_relayout_checkpoint(w + i, m->checkpoint_va);
 		return i + tgm_relayout_copy(w + i, l, m->rows_va, 0, m->surface_va, 1,
 					     m->bytes_per_row);
 	case TGM_RELAYOUT_UNTILE_IN_PLACE:
 		i += tgm_relayout_copy(w + i, l, m->surface_va, 1, m->rows_va, 0, m->bytes_per_row);
+		i += tgm_relayout_checkpoint(w + i, m->checkpoint_va);
 		return i + tgm_relayout_copy(w + i, l, m->rows_va, 0, m->surface_rows_va, 0,
 					     m->bytes_per_row);
 	}
@@ -217,6 +244,23 @@ static inline void tgm_relayout_cpu_bytes(const struct tgm_relayout_pages *p, ui
 		at += run;
 		bytes += run;
 		n -= run;
+	}
+}
+
+static inline void tgm_relayout_rows_cpu(const struct tgm_relayout_pages *surface,
+					 const struct tgm_relayout_pages *rows,
+					 const struct tgm_layout *layout, uint32_t pitch,
+					 uint8_t *(*kva)(uint64_t pa))
+{
+	uint8_t run[64];
+	for (uint32_t y = 0; y < layout->height; ++y) {
+		for (uint32_t x = 0; x < layout->width * layout->bpp; x += sizeof(run)) {
+			const uint32_t left = layout->width * layout->bpp - x;
+			const uint32_t bytes = left < sizeof(run) ? left : (uint32_t)sizeof(run);
+			const uint64_t offset = (uint64_t)y * pitch + x;
+			tgm_relayout_cpu_bytes(rows, offset, run, bytes, 0, kva);
+			tgm_relayout_cpu_bytes(surface, offset, run, bytes, 1, kva);
+		}
 	}
 }
 

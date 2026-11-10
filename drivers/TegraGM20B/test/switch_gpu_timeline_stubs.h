@@ -1,6 +1,4 @@
 // SPDX-License-Identifier: MIT
-// IOLock and IONew for SwitchGpuTimeline.cpp on the host. Inside switchTimelineAtomicContext (where gpu.c chan_killed runs:
-// an NVKM event spin lock held, interrupts off) a sleeping lock or an allocation aborts the test.
 #pragma once
 #include <cstdlib>
 #include <mutex>

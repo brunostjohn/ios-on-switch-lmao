@@ -51,6 +51,7 @@ void tgm_coh_lock(struct tgm_coh *c);
 void tgm_coh_unlock(struct tgm_coh *c);
 struct tgm_tiled **tgm_coh_tiled(struct tgm_coh *c);
 int tgm_coh_alone(struct tgm_coh *c);
+int tgm_coh_pinned(const struct tgm_coh *c);
 struct tgm_relayout_pages tgm_coh_pages(const struct tgm_coh *c);
 uint32_t tgm_coh_writers(struct tgm_coh *c, struct tgm_relayout_writer *out, uint32_t max);
 uint32_t tgm_coh_surface_id(const struct tgm_coh *c);
@@ -78,7 +79,7 @@ int tgm_tiled_any(void);
 void tgm_views_sweep(struct tgm_coh *c);
 /* Its last GPU import is going: a block-linear surface's texels go back to rows in place (behind its GPU writers) and it
  * is pitch from then on. Takes the entry lock. */
-void tgm_tiled_untile(struct tgm_coh *c);
+int tgm_tiled_untile(struct tgm_coh *c);
 
 #ifdef __cplusplus
 }

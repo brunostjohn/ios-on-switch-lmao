@@ -25,24 +25,23 @@ static inline int switch_gpu_mapping_big_page(const uint64_t *pages, uint32_t co
 }
 
 static inline int switch_gpu_mapping_next(const uint64_t *pages, uint32_t count, uint64_t va,
-	uint64_t offset, uint64_t bytes, struct switch_gpu_mapping_run *run)
+					  uint64_t offset, uint64_t bytes,
+					  struct switch_gpu_mapping_run *run)
 {
 	const uint64_t size = (uint64_t)count << SWITCH_GPU_SMALL_SHIFT;
-	if (!run || !pages || !bytes || ((va | offset | bytes) & 4095) ||
-	    offset > size || bytes > size - offset || va > UINT64_MAX - bytes)
+	if (!run || !pages || !bytes || ((va | offset | bytes) & 4095) || offset > size ||
+	    bytes > size - offset || va > UINT64_MAX - bytes)
 		return 0;
 	const uint64_t mask = SWITCH_GPU_BIG_BYTES - 1;
-	if ((va ^ offset) & mask) {
-		run->bytes = bytes;
-		run->shift = SWITCH_GPU_SMALL_SHIFT;
-		return 1;
-	}
 	uint64_t at = 0;
 	const int big = !(va & mask) && bytes >= SWITCH_GPU_BIG_BYTES &&
-		switch_gpu_mapping_big_page(pages, count, (uint32_t)(offset >> SWITCH_GPU_SMALL_SHIFT));
+			switch_gpu_mapping_big_page(pages, count,
+						    (uint32_t)(offset >> SWITCH_GPU_SMALL_SHIFT));
 	while (at < bytes) {
-		const int next_big = !((va + at) & mask) && bytes - at >= SWITCH_GPU_BIG_BYTES &&
-			switch_gpu_mapping_big_page(pages, count, (uint32_t)((offset + at) >> SWITCH_GPU_SMALL_SHIFT));
+		const int next_big =
+			!((va + at) & mask) && bytes - at >= SWITCH_GPU_BIG_BYTES &&
+			switch_gpu_mapping_big_page(
+				pages, count, (uint32_t)((offset + at) >> SWITCH_GPU_SMALL_SHIFT));
 		if (next_big != big)
 			break;
 		uint64_t step = SWITCH_GPU_BIG_BYTES - ((va + at) & mask);

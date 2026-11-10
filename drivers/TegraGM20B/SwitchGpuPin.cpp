@@ -3,9 +3,11 @@
 #include <string.h>
 #include "SwitchGpuPin.h"
 #include "TegraGM20BGpu.h"
-extern "C" void switch_gpu_cached_retire(IOMemoryDescriptor *memory, uint64_t *pages, uint32_t count);
+extern "C" void switch_gpu_cached_retire(IOMemoryDescriptor *memory, uint64_t *pages,
+					 uint32_t count, switch_gpu_cached_mapping *mapping);
 
-namespace {
+namespace
+{
 struct Pin {
 	IOMemoryDescriptor *memory;
 	bool prepared;
@@ -26,6 +28,7 @@ struct Chunks {
 };
 
 struct Cached {
+	switch_gpu_cached_mapping *mapping;
 	IOMemoryDescriptor *memory;
 	uint64_t *pages;
 	uint32_t count;
@@ -34,7 +37,7 @@ struct Cached {
 void release_cached(void *owner)
 {
 	auto *cached = static_cast<Cached *>(owner);
-	switch_gpu_cached_retire(cached->memory, cached->pages, cached->count);
+	switch_gpu_cached_retire(cached->memory, cached->pages, cached->count, cached->mapping);
 	IODelete(cached, Cached, 1);
 }
 
@@ -45,10 +48,11 @@ void release_chunks(void *owner)
 	IODelete(chunks->pages, uint64_t, chunks->count);
 	IODelete(chunks, Chunks, 1);
 }
-} // namespace
+}  // namespace
 
-switch_gpu_backing *switch_gpu_pin_memory(const uint64_t *pages, uint32_t count, uint32_t surface_id,
-	IOMemoryDescriptor *memory, bool prepare)
+switch_gpu_backing *switch_gpu_pin_memory(const uint64_t *pages, uint32_t count,
+					  uint32_t surface_id, IOMemoryDescriptor *memory,
+					  bool prepare)
 {
 	if (!memory)
 		return nullptr;
@@ -87,8 +91,9 @@ switch_gpu_backing *switch_gpu_pin_chunks(const uint64_t *pages, uint32_t count)
 	return backing;
 }
 
-switch_gpu_backing *switch_gpu_pin_cached(const uint64_t *pages, uint32_t count, uint32_t visible_count,
-	IOMemoryDescriptor *memory)
+switch_gpu_backing *switch_gpu_pin_cached(const uint64_t *pages, uint32_t count,
+					  uint32_t visible_count, IOMemoryDescriptor *memory,
+					  switch_gpu_cached_mapping *mapping)
 {
 	auto *cached = IONew(Cached, 1);
 	if (!cached)
@@ -100,10 +105,12 @@ switch_gpu_backing *switch_gpu_pin_cached(const uint64_t *pages, uint32_t count,
 		return nullptr;
 	}
 	memcpy(cached->pages, pages, sizeof(*pages) * count);
+	cached->mapping = mapping;
 	cached->count = count;
 	cached->memory = memory;
 	memory->retain();
-	auto *backing = switch_gpu_backing_register(pages, visible_count, 0, cached, release_cached);
+	auto *backing =
+		switch_gpu_backing_register(pages, visible_count, 0, cached, release_cached);
 	if (!backing) {
 		memory->complete();
 		memory->release();

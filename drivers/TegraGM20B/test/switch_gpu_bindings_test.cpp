@@ -37,6 +37,20 @@ TEST(GpuBindings, UpperBoundPreservesInsertionOrder)
 	EXPECT_EQ(switch_gpu_binding_upper(bindings, 3, UINT64_MAX), 3u);
 }
 
+TEST(GpuBindings, ExactAliasExtentResolvesToBackingOffsetWithoutOverflow)
+{
+	struct Bo { uint64_t bytes; } bo{0x8000};
+	struct Alias { uint64_t va, range; Bo *bo; uint64_t bo_offset; } alias{0x100000,0x1000,&bo,0x3000};
+	uint64_t offset=0;
+	EXPECT_TRUE(switch_gpu_binding_offset(alias,0x100080,64,offset));
+	EXPECT_EQ(offset,0x3080u);
+	EXPECT_FALSE(switch_gpu_binding_offset(alias,0x100fff,2,offset));
+	alias.bo_offset=0x7800;
+	EXPECT_FALSE(switch_gpu_binding_offset(alias,0x100800,1,offset));
+	alias.bo_offset=UINT64_MAX;
+	EXPECT_FALSE(switch_gpu_binding_offset(alias,0x100000,1,offset));
+}
+
 TEST(GpuBindings, LargeBindingTableFindsEveryInteriorAndRejectsEveryGap)
 {
 	std::array<Binding, 4096> bindings{};

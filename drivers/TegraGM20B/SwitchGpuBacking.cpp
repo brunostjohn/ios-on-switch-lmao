@@ -1,14 +1,25 @@
 // SPDX-License-Identifier: MIT
 #include <string.h>
 #include "SwitchGpuBackingInternal.h"
+#include "SwitchGpuDependencyTrace.h"
+#include "SwitchGpuBackingMemory.h"
 
 namespace {
 constexpr uint32_t kBuckets = 256;
 IOLock *registry;
 switch_gpu_backing *buckets[kBuckets];
-switch_gpu_backing *retiring;
+switch_gpu_backing *retiring, **retiring_tail = &retiring;
+switch_gpu_backing *expiry_first, *expiry_last;
+uint32_t retirement_pending, retirement_count, scan_remaining;
+uint64_t completion_generation, scan_generation, armed_deadline;
+constexpr uint32_t kRetirementBatch = 64;
+constexpr uint64_t kRetirementTimeoutNs = 10000000000ULL;
 switch_gpu_backing_engine engines[SWITCH_GPU_ENGINE_COUNT];
 uint32_t engine_ready[SWITCH_GPU_ENGINE_COUNT];
+switch_gpu_backing_visibility visibility[SWITCH_GPU_ENGINE_COUNT];
+uint32_t visibility_ready[SWITCH_GPU_ENGINE_COUNT];
+switch_gpu_backing_semantics semantics[SWITCH_GPU_ENGINE_COUNT];
+uint32_t semantics_ready[SWITCH_GPU_ENGINE_COUNT];
 uint64_t next_id, next_generation;
 
 IOLock *registry_lock()
@@ -63,11 +74,74 @@ void free_pages(switch_gpu_backing_pages *pages)
 	}
 }
 
+uint64_t next_deadline()
+{
+	const uint64_t now = switch_gpu_backing_time_ns();
+	return now > UINT64_MAX - kRetirementTimeoutNs ? UINT64_MAX : now + kRetirementTimeoutNs;
+}
+
+void arm_expiry_locked()
+{
+	const uint64_t deadline = expiry_first ? expiry_first->retirement_deadline : 0;
+	if (deadline == armed_deadline)
+		return;
+	armed_deadline = deadline;
+	switch_gpu_backing_arm_expiry(deadline);
+}
+
+void expiry_remove(switch_gpu_backing *backing)
+{
+	if (backing->expiry_prev)
+		backing->expiry_prev->expiry_next = backing->expiry_next;
+	else
+		expiry_first = backing->expiry_next;
+	if (backing->expiry_next)
+		backing->expiry_next->expiry_prev = backing->expiry_prev;
+	else
+		expiry_last = backing->expiry_prev;
+	backing->expiry_next = backing->expiry_prev = nullptr;
+}
+
+void expiry_append(switch_gpu_backing *backing)
+{
+	backing->retirement_deadline = next_deadline();
+	backing->expiry_prev = expiry_last;
+	backing->expiry_next = nullptr;
+	if (expiry_last)
+		expiry_last->expiry_next = backing;
+	else
+		expiry_first = backing;
+	expiry_last = backing;
+}
+
+void retire_append(switch_gpu_backing *backing)
+{
+	backing->retiring_next = nullptr;
+	*retiring_tail = backing;
+	retiring_tail = &backing->retiring_next;
+}
+
+switch_gpu_backing *retire_pop()
+{
+	auto *backing = retiring;
+	retiring = backing->retiring_next;
+	if (!retiring)
+		retiring_tail = &retiring;
+	backing->retiring_next = nullptr;
+	return backing;
+}
+
 void destroy(switch_gpu_backing *backing)
 {
+    switch_gpu_backing_writer_free_locked(backing);
+	if (backing->host_acquire.engine)
+		switch_gpu_backing_drop_token(backing->host_acquire);
 	for (uint32_t i = 0; i < backing->access_count; ++i)
 		switch_gpu_backing_drop_token(backing->accesses[i].token);
 	IODelete(backing->accesses, switch_gpu_backing_access, backing->access_capacity);
+	IODelete(backing->cpu_current, uint64_t, backing->cpu_current_pages);
+	if (backing->gpu_memory)
+		backing->release_gpu_memory(backing->gpu_memory);
 	if (backing->owner && backing->release_owner)
 		backing->release_owner(backing->owner);
 	free_pages(backing->pages);
@@ -114,8 +188,11 @@ extern "C" switch_gpu_backing *switch_gpu_backing_register(const uint64_t *pages
 		IOLockLock(found->lock);
 		const uint32_t common = count < found->pages->count ? count : found->pages->count;
 		if (memcmp(pages, found->pages->addresses, uint64_t(common) * sizeof(*pages)) ||
+		    (count > found->pages->count &&
+		     (found->gpu_memory_flags & SWITCH_GPU_BACKING_MEMORY_FIXED)) ||
 		    (count > found->pages->count && found->owner && !owner) ||
-		    (count > found->pages->count && (found->cpu_readers || found->cpu_writers)) ||
+		    (count > found->pages->count && (found->cpu_readers || found->cpu_writers ||
+                found->gpu_admission_readers || found->gpu_admission_writers)) ||
 		    (surface_id && found->surface_id && surface_id != found->surface_id)) {
 			IOLockUnlock(found->lock);
 			IOLockUnlock(lock);
@@ -133,6 +210,11 @@ extern "C" switch_gpu_backing *switch_gpu_backing_register(const uint64_t *pages
 			found->pages = copy;
 			copy = nullptr;
 			found->generation = ++next_generation;
+            const bool cpu_current = found->cpu_current_content == found->content;
+			++found->content;
+            if (cpu_current)
+                found->cpu_current_content = found->content;
+			++found->host_epoch;
 			found->dirty |= SWITCH_GPU_BACKING_CPU_DIRTY;
 			found->initial_clean = false;
 			old_owner = found->owner;
@@ -167,6 +249,7 @@ extern "C" switch_gpu_backing *switch_gpu_backing_register(const uint64_t *pages
 	made->owner = owner;
 	made->release_owner = release_owner;
 	made->dirty = SWITCH_GPU_BACKING_CPU_DIRTY;
+	made->host_epoch = 1;
 	made->next = buckets[bucket(pages[0])];
 	buckets[bucket(pages[0])] = made;
 	IOLockUnlock(lock);
@@ -223,60 +306,120 @@ extern "C" void switch_gpu_backing_release(switch_gpu_backing *backing)
 	if (last) {
 		backing->refs = 1;
 		backing->retiring = true;
-		backing->retiring_next = retiring;
-		retiring = backing;
+		retire_append(backing);
+		expiry_append(backing);
+		++retirement_count;
+		__atomic_add_fetch(&completion_generation, 1u, __ATOMIC_RELEASE);
+		__atomic_store_n(&retirement_pending, 1u, __ATOMIC_RELEASE);
+		arm_expiry_locked();
 	}
 	IOLockUnlock(registry);
 	if (last)
 		switch_gpu_backing_schedule_retirement();
 }
 
+extern "C" void switch_gpu_bridge_completed(void) __attribute__((weak));
+extern "C" void switch_gpu_events_completed(void) __attribute__((weak));
+extern "C" void switch_gpu_copy_completed(void) __attribute__((weak));
+
+extern "C" void switch_gpu_backing_completed(void)
+{
+	if (switch_gpu_bridge_completed)
+		switch_gpu_bridge_completed();
+	if (switch_gpu_events_completed)
+		switch_gpu_events_completed();
+	if (switch_gpu_copy_completed)
+		switch_gpu_copy_completed();
+	if (__atomic_load_n(&retirement_pending, __ATOMIC_ACQUIRE)) {
+		__atomic_add_fetch(&completion_generation, 1u, __ATOMIC_RELEASE);
+		switch_gpu_backing_schedule_retirement();
+	}
+}
+
 extern "C" void switch_gpu_backing_retire(void)
 {
-	for (;;) {
-		IOLockLock(registry);
-		auto *backing = retiring;
-		if (!backing) {
-			IOLockUnlock(registry);
-			return;
-		}
+	if (!registry)
+		return;
+	switch_gpu_backing *ready = nullptr;
+	IOLockLock(registry);
+	if (!scan_remaining) {
+		scan_remaining = retirement_count;
+		scan_generation = __atomic_load_n(&completion_generation, __ATOMIC_ACQUIRE);
+	}
+	for (uint32_t scanned = 0; retiring && scan_remaining && scanned < kRetirementBatch; ++scanned) {
+		auto *backing = retire_pop();
+		--scan_remaining;
 		IOLockLock(backing->lock);
-		switch_gpu_backing_token wait = {};
-		for (uint32_t i = 0; backing->refs == 1 && i < backing->access_count; ++i) {
-			if (switch_gpu_backing_token_status(&backing->accesses[i].token) == 0) {
-				wait = backing->accesses[i].token;
-				break;
-			}
-		}
-		if (wait.engine) {
-			const auto *ops = switch_gpu_backing_engine_ops(wait.engine);
-			const int retained = ops->retain_token(&wait);
+		bool pending = false;
+		for (uint32_t i = 0; backing->refs == 1 && i < backing->access_count; ++i)
+			pending |= switch_gpu_backing_token_status(&backing->accesses[i].token) == 0;
+		if (pending) {
+			retire_append(backing);
 			IOLockUnlock(backing->lock);
-			IOLockUnlock(registry);
-			if (retained)
-				return;
-			const int status = switch_gpu_backing_token_wait(&wait);
-			ops->release_token(&wait);
-			if (!status)
-				return;
 			continue;
 		}
-		retiring = backing->retiring_next;
-		backing->retiring_next = nullptr;
+		--retirement_count;
+		expiry_remove(backing);
 		backing->retiring = false;
-		const bool last = --backing->refs == 0;
-		if (last) {
-			auto **at = &buckets[bucket(backing->pages->addresses[0])];
-			while (*at && *at != backing)
-				at = &(*at)->next;
-			if (*at)
-				*at = backing->next;
+		if (!--backing->refs) {
+			auto **entry = &buckets[bucket(backing->pages->addresses[0])];
+			while (*entry && *entry != backing)
+				entry = &(*entry)->next;
+			if (*entry)
+				*entry = backing->next;
+			backing->retiring_next = ready;
+			ready = backing;
 		}
 		IOLockUnlock(backing->lock);
-		IOLockUnlock(registry);
-		if (last)
-			destroy(backing);
 	}
+	__atomic_store_n(&retirement_pending, retiring != nullptr, __ATOMIC_RELEASE);
+	const bool again = retiring && (scan_remaining ||
+		scan_generation != __atomic_load_n(&completion_generation, __ATOMIC_ACQUIRE));
+	arm_expiry_locked();
+	IOLockUnlock(registry);
+	while (ready) {
+		auto *next = ready->retiring_next;
+		destroy(ready);
+		ready = next;
+	}
+	if (again)
+		switch_gpu_backing_schedule_retirement();
+}
+
+extern "C" void switch_gpu_backing_expire(void)
+{
+	if (!registry)
+		return;
+	switch_gpu_backing_token expired = {};
+	const uint64_t now = switch_gpu_backing_time_ns();
+	IOLockLock(registry);
+	armed_deadline = 0;
+	for (uint32_t scanned = 0; expiry_first && !expired.engine && scanned < kRetirementBatch; ++scanned) {
+		auto *backing = expiry_first;
+		if (backing->retirement_deadline > now)
+			break;
+		IOLockLock(backing->lock);
+		expiry_remove(backing);
+		expiry_append(backing);
+		for (uint32_t i = 0; backing->refs == 1 && i < backing->access_count; ++i) {
+			const auto &token = backing->accesses[i].token;
+			if (switch_gpu_backing_token_status(&token) != 0)
+				continue;
+			const auto *ops = switch_gpu_backing_engine_ops(token.engine);
+			if (!ops->retain_token(&token))
+				expired = token;
+			break;
+		}
+		IOLockUnlock(backing->lock);
+	}
+	arm_expiry_locked();
+	IOLockUnlock(registry);
+	// Recovery may sleep; its separate call never delays reclamation on other engines.
+	if (expired.engine) {
+		(void)switch_gpu_backing_token_wait(&expired);
+		switch_gpu_backing_drop_token(expired);
+	}
+	switch_gpu_backing_completed();
 }
 
 extern "C" void switch_gpu_backing_describe(switch_gpu_backing *backing, switch_gpu_backing_info *info)
@@ -312,8 +455,9 @@ extern "C" int switch_gpu_backing_set_layout(switch_gpu_backing *backing,
 			result = -22;
 	}
 	if (!result && memcmp(layout, &backing->layout, sizeof(*layout))) {
-		switch_gpu_backing_prune_locked(backing);
-		if (backing->access_count || backing->cpu_readers || backing->cpu_writers)
+		result = switch_gpu_backing_prune_locked(backing);
+		if (!result && (backing->access_count || backing->cpu_readers || backing->cpu_writers ||
+                backing->gpu_admission_readers || backing->gpu_admission_writers))
 			result = -16;
 		if (!result)
 			backing->layout = *layout;
@@ -356,6 +500,105 @@ extern "C" int switch_gpu_backing_token_status(const switch_gpu_backing_token *t
 
 extern "C" int switch_gpu_backing_token_wait(const switch_gpu_backing_token *token)
 {
+	SwitchGpuDependencyTrace dependency;
 	const auto *ops = token ? switch_gpu_backing_engine_ops(token->engine) : nullptr;
 	return ops ? ops->wait(token) : -19;
+}
+
+extern "C" int switch_gpu_backing_token_retain(const switch_gpu_backing_token *token)
+{
+    const auto *ops = token ? switch_gpu_backing_engine_ops(token->engine) : nullptr;
+    return ops ? ops->retain_token(token) : -19;
+}
+
+extern "C" void switch_gpu_backing_token_release(const switch_gpu_backing_token *token)
+{
+    if (const auto *ops = token ? switch_gpu_backing_engine_ops(token->engine) : nullptr)
+        ops->release_token(token);
+}
+
+extern "C" int switch_gpu_backing_register_visibility(uint32_t engine,
+		const switch_gpu_backing_visibility *operations)
+{
+	if (!engine || engine >= SWITCH_GPU_ENGINE_COUNT || !operations ||
+	    !operations->status || !operations->wait)
+		return -22;
+	IOLock *lock = registry_lock();
+	if (!lock)
+		return -12;
+	IOLockLock(lock);
+	const int result = visibility_ready[engine] ? -16 : 0;
+	if (!result) {
+		visibility[engine] = *operations;
+		__atomic_store_n(&visibility_ready[engine], 1u, __ATOMIC_RELEASE);
+	}
+	IOLockUnlock(lock);
+	return result;
+}
+
+extern "C" int switch_gpu_backing_token_external_status(const switch_gpu_backing_token *token)
+{
+	if (token && token->engine < SWITCH_GPU_ENGINE_COUNT &&
+	    __atomic_load_n(&visibility_ready[token->engine], __ATOMIC_ACQUIRE))
+		return visibility[token->engine].status(token);
+	return switch_gpu_backing_token_status(token);
+}
+
+extern "C" int switch_gpu_backing_token_external_wait(const switch_gpu_backing_token *token)
+{
+	SwitchGpuDependencyTrace dependency;
+	if (token && token->engine < SWITCH_GPU_ENGINE_COUNT &&
+	    __atomic_load_n(&visibility_ready[token->engine], __ATOMIC_ACQUIRE))
+		return visibility[token->engine].wait(token);
+	return switch_gpu_backing_token_wait(token);
+}
+
+extern "C" int switch_gpu_backing_register_semantics(uint32_t engine,
+						     const switch_gpu_backing_semantics *operations)
+{
+	if (!engine || engine >= SWITCH_GPU_ENGINE_COUNT || !operations || !operations->snapshot ||
+	    !operations->physical_status || !operations->pending)
+		return -22;
+	IOLock *lock = registry_lock();
+	if (!lock)
+		return -12;
+	IOLockLock(lock);
+	const int result = semantics_ready[engine] ? -16 : 0;
+	if (!result) {
+		semantics[engine] = *operations;
+		__atomic_store_n(&semantics_ready[engine], 1u, __ATOMIC_RELEASE);
+	}
+	IOLockUnlock(lock);
+	return result;
+}
+
+extern "C" int switch_gpu_backing_has_semantics(void)
+{
+	for (uint32_t i = 1; i < SWITCH_GPU_ENGINE_COUNT; ++i)
+		if (__atomic_load_n(&semantics_ready[i], __ATOMIC_ACQUIRE) &&
+		    semantics[i].pending())
+			return 1;
+	return 0;
+}
+
+extern "C" int switch_gpu_backing_semantic_snapshot(const switch_gpu_backing_token *token,
+						    switch_gpu_event_waits **waits)
+{
+	if (!token || !waits)
+		return -22;
+	*waits = nullptr;
+	if (token->engine < SWITCH_GPU_ENGINE_COUNT &&
+	    __atomic_load_n(&semantics_ready[token->engine], __ATOMIC_ACQUIRE))
+		return semantics[token->engine].snapshot(token, waits);
+	return 0;
+}
+
+extern "C" int switch_gpu_backing_token_physical_status(const switch_gpu_backing_token *token,
+							int external)
+{
+	if (token && token->engine < SWITCH_GPU_ENGINE_COUNT &&
+	    __atomic_load_n(&semantics_ready[token->engine], __ATOMIC_ACQUIRE))
+		return semantics[token->engine].physical_status(token, external);
+	return external ? switch_gpu_backing_token_external_status(token)
+			: switch_gpu_backing_token_status(token);
 }

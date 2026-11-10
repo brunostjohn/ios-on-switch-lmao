@@ -6,21 +6,28 @@
 #include "drivers/TegraGM20B/SwitchGpuSurfaceGeometry.h"
 #include "drivers/TegraGM20B/TegraGM20BViews.h"
 
-namespace {
+namespace
+{
 struct Surface : OSObject {
 	IOMemoryDescriptor memory;
 	SwitchGpuSurfaceGeometry geometry = {};
+
 	Surface(uint64_t bytes, uint64_t first)
 	{
 		memory.bytes = bytes;
-		for (uint64_t offset = 0; offset < ((bytes + 16383) & ~uint64_t(16383)); offset += 4096)
+		for (uint64_t offset = 0; offset < ((bytes + 16383) & ~uint64_t(16383));
+		     offset += 4096)
 			memory.pages.push_back(first + offset);
 		geometry = {64, 64, 512, bytes, 8, 1, 1, 0, false};
 	}
 };
+
 std::map<uint32_t, Surface *> visible;
 std::map<uint32_t, switch_gpu_backing *> hints;
 std::map<uint64_t, switch_gpu_backing *> allocations;
+int prepareResult;
+unsigned prepareCalls, prepareOptions;
+OSObject *preparedObject;
 }
 
 struct switch_gpu_backing {
@@ -29,34 +36,120 @@ struct switch_gpu_backing {
 };
 
 extern "C" {
+void switch_gpu_surface_idle(void *)
+{
+}
+
+int switch_gpu_surface_adopt(void *, switch_gpu_backing *)
+{
+	return 0;
+}
+
 OSObject *tegra_gm20b_ios_lookup(IOService *, uint32_t id, task_t)
 {
 	auto *surface = visible[id];
-	if (surface) surface->retain();
+	if (surface)
+		surface->retain();
 	return surface;
 }
-IOMemoryDescriptor *tegra_vic_ios_memory(OSObject *s) { return &static_cast<Surface *>(s)->memory; }
-uint64_t tegra_vic_ios_alloc_size(OSObject *s) { return static_cast<Surface *>(s)->geometry.bytes; }
-uint64_t tegra_vic_ios_width(OSObject *s) { return static_cast<Surface *>(s)->geometry.width; }
-uint64_t tegra_vic_ios_height(OSObject *s) { return static_cast<Surface *>(s)->geometry.height; }
-uint64_t tegra_vic_ios_bytes_per_row(OSObject *s) { return static_cast<Surface *>(s)->geometry.pitch; }
-uint32_t tegra_vic_ios_plane_count(OSObject *s) { return static_cast<Surface *>(s)->geometry.planes; }
-uint32_t tegra_gm20b_ios_bpe(OSObject *s) { return static_cast<Surface *>(s)->geometry.bpp; }
-uint32_t tegra_gm20b_ios_element_width(OSObject *s) { return static_cast<Surface *>(s)->geometry.element_width; }
-uint32_t tegra_gm20b_ios_element_height(OSObject *s) { return static_cast<Surface *>(s)->geometry.element_height; }
+
+IOMemoryDescriptor *tegra_vic_ios_memory(OSObject *s)
+{
+	return &static_cast<Surface *>(s)->memory;
+}
+
+uint64_t tegra_vic_ios_alloc_size(OSObject *s)
+{
+	return static_cast<Surface *>(s)->geometry.bytes;
+}
+
+uint64_t tegra_vic_ios_width(OSObject *s)
+{
+	return static_cast<Surface *>(s)->geometry.width;
+}
+
+uint64_t tegra_vic_ios_height(OSObject *s)
+{
+	return static_cast<Surface *>(s)->geometry.height;
+}
+
+uint64_t tegra_vic_ios_bytes_per_row(OSObject *s)
+{
+	return static_cast<Surface *>(s)->geometry.pitch;
+}
+
+uint32_t tegra_vic_ios_plane_count(OSObject *s)
+{
+	return static_cast<Surface *>(s)->geometry.planes;
+}
+
+uint32_t tegra_gm20b_ios_bpe(OSObject *s)
+{
+	return static_cast<Surface *>(s)->geometry.bpp;
+}
+
+uint32_t tegra_gm20b_ios_element_width(OSObject *s)
+{
+	return static_cast<Surface *>(s)->geometry.element_width;
+}
+
+uint32_t tegra_gm20b_ios_element_height(OSObject *s)
+{
+	return static_cast<Surface *>(s)->geometry.element_height;
+}
+
 switch_gpu_backing *switch_gpu_backing_find_surface(uint32_t id)
 {
 	auto *backing = hints[id];
-	if (backing) ++backing->refs;
+	if (backing)
+		++backing->refs;
 	return backing;
 }
+
 switch_gpu_backing *switch_gpu_backing_find_pa(uint64_t pa)
 {
 	auto *backing = allocations[pa];
-	if (backing) ++backing->refs;
+	if (backing)
+		++backing->refs;
 	return backing;
 }
-void switch_gpu_backing_release(switch_gpu_backing *backing) { --backing->refs; }
+
+void switch_gpu_backing_release(switch_gpu_backing *backing)
+{
+	--backing->refs;
+}
+
+int switch_gpu_backing_cpu_release_owned(switch_gpu_cpu_lease **, int)
+{
+	return -22;
+}
+
+int switch_native_surface_prepare(OSObject *object, uint32_t, void *, uint32_t options,
+				  switch_gpu_backing **backing, switch_gpu_cpu_lease **owned)
+{
+	auto *surface = static_cast<Surface *>(object);
+	EXPECT_GT(surface->memory.cpuUsers, 0u);
+	EXPECT_GT(surface->refs, 1u);
+	++prepareCalls;
+    prepareOptions = options;
+    preparedObject = object;
+	*backing = nullptr;
+	*owned = nullptr;
+	return prepareResult;
+}
+
+int switch_native_surface_gpu_admission(OSObject *object, uint32_t, switch_gpu_backing *)
+{
+    EXPECT_GT(static_cast<Surface *>(object)->memory.cpuUsers, 0u);
+    return 1;
+}
+
+int switch_native_surface_prepare_gpu(OSObject *object, uint32_t id, void *task, uint32_t options,
+        switch_gpu_backing **backing, switch_gpu_cpu_lease **owned)
+{
+    return switch_native_surface_prepare(object, id, task, options, backing, owned);
+}
+
 void switch_gpu_backing_describe(switch_gpu_backing *backing, switch_gpu_backing_info *info)
 {
 	*info = {};
@@ -65,11 +158,88 @@ void switch_gpu_backing_describe(switch_gpu_backing *backing, switch_gpu_backing
 }
 }
 
-namespace {
-class SurfaceClient : public testing::Test {
+namespace
+{
+class SurfaceClient : public testing::Test
+{
 protected:
-	void SetUp() override { visible.clear(); hints.clear(); allocations.clear(); }
+	void SetUp() override
+	{
+		visible.clear();
+		hints.clear();
+		allocations.clear();
+		prepareResult = 0;
+		prepareCalls = 0;
+	}
 };
+
+TEST_F(SurfaceClient, UnimportedCpuLockRetainsDescriptorBeforeCheckingNativeAttachment)
+{
+	Surface surface(32768, 0x90000000);
+	visible[4] = &surface;
+	switch_gpu_backing *backing = nullptr;
+	switch_gpu_cpu_lease *owned = nullptr;
+	void *descriptor = nullptr;
+	ASSERT_EQ(switch_gpu_surface_prepare(4, nullptr, 1, &backing, &owned, &descriptor), 0);
+	EXPECT_EQ(backing, nullptr);
+	EXPECT_EQ(owned, nullptr);
+	EXPECT_EQ(descriptor, &surface.memory);
+	EXPECT_EQ(surface.memory.cpuUsers, 1u);
+	EXPECT_EQ(surface.memory.refs, 2u);
+	EXPECT_EQ(surface.memory.prepared, 0u);
+	EXPECT_EQ(prepareCalls, 1u);
+	EXPECT_EQ(surface.refs, 1u);
+	switch_gpu_surface_finish(descriptor);
+	EXPECT_EQ(surface.memory.cpuUsers, 0u);
+	EXPECT_EQ(surface.memory.refs, 1u);
+}
+
+TEST_F(SurfaceClient, AttachmentPreparationFailureDropsTheDescriptorReservation)
+{
+	Surface surface(32768, 0x90000000);
+	visible[4] = &surface;
+	prepareResult = -116;
+	switch_gpu_backing *backing = nullptr;
+	switch_gpu_cpu_lease *owned = nullptr;
+	void *descriptor = nullptr;
+	EXPECT_EQ(switch_gpu_surface_prepare(4, nullptr, 1, &backing, &owned, &descriptor), -116);
+	EXPECT_EQ(descriptor, nullptr);
+	EXPECT_EQ(surface.memory.cpuUsers, 0u);
+	EXPECT_EQ(surface.memory.refs, 1u);
+	EXPECT_EQ(surface.refs, 1u);
+}
+
+TEST_F(SurfaceClient, AvoidSyncCannotPassAnActiveDescriptorPublication)
+{
+	Surface surface(32768, 0x90000000);
+	visible[4] = &surface;
+	surface.memory.exclusive = true;
+	switch_gpu_backing *backing = nullptr;
+	switch_gpu_cpu_lease *owned = nullptr;
+	void *descriptor = nullptr;
+	EXPECT_EQ(switch_gpu_surface_prepare(4, nullptr, 3, &backing, &owned, &descriptor), -16);
+	EXPECT_EQ(descriptor, nullptr);
+	EXPECT_EQ(prepareCalls, 0u);
+	EXPECT_EQ(surface.memory.cpuUsers, 0u);
+	EXPECT_EQ(surface.memory.refs, 1u);
+	EXPECT_EQ(surface.refs, 1u);
+}
+
+TEST_F(SurfaceClient, LayoutMoveCannotOverlapAnOpenCpuLockOrAdmitOneWhileMoving)
+{
+	Surface surface(32768, 0x90000000);
+	visible[4] = &surface;
+	switch_gpu_backing *backing = nullptr;
+	switch_gpu_cpu_lease *owned = nullptr;
+	void *descriptor = nullptr;
+	ASSERT_EQ(switch_gpu_surface_prepare(4, nullptr, 1, &backing, &owned, &descriptor), 0);
+	EXPECT_EQ(switch_gpu_surface_layout_exclusive(&surface, true), -16);
+	switch_gpu_surface_finish(descriptor);
+	ASSERT_EQ(switch_gpu_surface_layout_exclusive(&surface, true), 0);
+	EXPECT_EQ(switch_gpu_surface_prepare(4, nullptr, 3, &backing, &owned, &descriptor), -16);
+	EXPECT_EQ(switch_gpu_surface_layout_exclusive(&surface, false), 0);
+	EXPECT_EQ(surface.memory.refs, 1u);
+}
 
 TEST_F(SurfaceClient, NativeTailAttestationNeverQueriesBeyondTheDescriptor)
 {
@@ -77,7 +247,9 @@ TEST_F(SurfaceClient, NativeTailAttestationNeverQueriesBeyondTheDescriptor)
 		Surface surface(bytes, 0x80000000);
 		visible[4] = &surface;
 		EXPECT_EQ(switch_gpu_surface_pages_match(4, nullptr, surface.memory.pages.data(),
-			uint32_t(surface.memory.pages.size())), 1) << bytes;
+							 uint32_t(surface.memory.pages.size())),
+			  1)
+			<< bytes;
 		EXPECT_EQ(surface.memory.outside, 0u);
 		EXPECT_EQ(surface.memory.prepared, surface.memory.completed);
 		EXPECT_EQ(surface.refs, 1u);
@@ -150,12 +322,15 @@ TEST_F(SurfaceClient, GeometryIsTheUnderlyingSurfaceRegardlessOfTheFirstTextureV
 	Surface current(32768, 0x90000000);
 	visible[4] = &current;
 	SwitchGpuSurfaceGeometry geometry = {};
-	ASSERT_EQ(switch_gpu_surface_geometry(4, nullptr, current.memory.pages.data(), 8, &geometry), 0);
+	ASSERT_EQ(
+		switch_gpu_surface_geometry(4, nullptr, current.memory.pages.data(), 8, &geometry),
+		0);
 	EXPECT_TRUE(switch_gpu_surface_packed(geometry));
 	EXPECT_FALSE(switch_gpu_surface_shape_matches(geometry, 42, 42, 8, 512));
 	EXPECT_TRUE(switch_gpu_surface_shape_matches(geometry, 64, 64, 8, 512));
 	tgm_layout layout = {};
-	ASSERT_TRUE(tgm_layout_tiled(uint32_t(geometry.width), uint32_t(geometry.height), geometry.bpp, &layout));
+	ASSERT_TRUE(tgm_layout_tiled(uint32_t(geometry.width), uint32_t(geometry.height),
+				     geometry.bpp, &layout));
 	EXPECT_EQ(layout.row_bytes, 512u);
 	EXPECT_EQ(layout.bytes, 32768u);
 }
@@ -184,4 +359,68 @@ TEST_F(SurfaceClient, AnInaccessibleOrUnpreparableSurfaceCannotAttestPages)
 	EXPECT_EQ(current.memory.completed, 0u);
 	EXPECT_EQ(current.refs, 1u);
 }
+}
+
+TEST_F(SurfaceClient, CpuAccessUsesRetainedObjectAndPreservesAvoidSync)
+{
+    Surface actual(16384, 0x100000), unrelated(16384, 0x200000);
+    visible[4] = &unrelated;
+    actual.retain();
+    switch_gpu_backing *backing = nullptr;
+    switch_gpu_cpu_lease *owned = nullptr;
+    void *descriptor = nullptr;
+    ASSERT_EQ(switch_gpu_surface_prepare_cpu(&actual, 4, nullptr,
+        SWITCH_GPU_BACKING_READ | SWITCH_GPU_BACKING_CPU_AVOID_SYNC, &backing, &owned, &descriptor), 0);
+    EXPECT_EQ(preparedObject, &actual);
+    EXPECT_EQ(prepareOptions, 3u);
+    EXPECT_EQ(actual.memory.cpuUsers, 1u);
+    EXPECT_EQ(unrelated.memory.cpuUsers, 0u);
+    switch_gpu_surface_finish(descriptor);
+    EXPECT_EQ(actual.memory.cpuUsers, 0u);
+    actual.release();
+}
+
+TEST_F(SurfaceClient, MutableCpuAccessInvokesNativeDetachmentAndUnwindsFailure)
+{
+    Surface actual(16384, 0x100000);
+    actual.retain();
+    switch_gpu_backing *backing = nullptr;
+    switch_gpu_cpu_lease *owned = nullptr;
+    void *descriptor = nullptr;
+    prepareResult = -5;
+    EXPECT_EQ(switch_gpu_surface_prepare_cpu(&actual, 4, nullptr,
+        SWITCH_GPU_BACKING_WRITE, &backing, &owned, &descriptor), -5);
+    EXPECT_EQ(prepareOptions, 0u);
+    EXPECT_EQ(descriptor, nullptr);
+    EXPECT_EQ(actual.memory.cpuUsers, 0u);
+    actual.release();
+}
+
+TEST_F(SurfaceClient, GpuPrepareAlwaysUsesAvoidSyncAndRetainsDescriptorUntilFinish)
+{
+    Surface actual(32768, 0x44000000);
+    actual.retain();
+    switch_gpu_backing *backing = nullptr;
+    switch_gpu_cpu_lease *owned = nullptr;
+    void *descriptor = nullptr;
+    ASSERT_EQ(switch_gpu_surface_prepare_gpu(&actual, 4, nullptr, SWITCH_GPU_BACKING_READ,
+        &backing, &owned, &descriptor), 0);
+    EXPECT_EQ(prepareOptions, 3u);
+    EXPECT_EQ(actual.memory.cpuUsers, 1u);
+    switch_gpu_surface_finish(descriptor);
+    EXPECT_EQ(actual.memory.cpuUsers, 0u);
+    actual.release();
+}
+
+TEST_F(SurfaceClient, GpuAdmissionChecksPublicationGateWithoutPreparingPixels)
+{
+    Surface actual(32768, 0x44000000);
+    switch_gpu_backing backing;
+    actual.memory.exclusive = true;
+    EXPECT_EQ(switch_gpu_surface_gpu_admission(&actual, &backing, SWITCH_GPU_BACKING_READ), 0);
+    EXPECT_EQ(actual.memory.cpuUsers, 0u);
+    actual.memory.exclusive = false;
+    EXPECT_EQ(switch_gpu_surface_gpu_admission(&actual, &backing, SWITCH_GPU_BACKING_READ), 1);
+    EXPECT_EQ(actual.memory.cpuUsers, 0u);
+    EXPECT_EQ(prepareCalls, 0u);
 }

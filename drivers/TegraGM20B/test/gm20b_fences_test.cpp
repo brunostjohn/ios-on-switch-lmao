@@ -775,3 +775,130 @@ TEST(FenceDecisions, AWaitIsLostOnlyOnASubmissionTheKillLeftUnfinished)
 	EXPECT_TRUE(tgm_fence_lost(&wrapped, 2));
 }
 }  // namespace
+
+TEST_F(Fences, ExplicitVisibilityRequiresAddressedSubmissionAndCoherentFlags)
+{
+	struct { TegraGM20BAbiSubmit job; TegraGM20BAbiPush push; TegraGM20BAbiSurfaceUse use; } input{};
+	input.job = {1, 1, 1, TegraGM20BSubmitVisibilityExplicit};
+	input.use = {1, TegraGM20BSurfaceRead | TegraGM20BSurfaceHostWritten, 0};
+	EXPECT_TRUE(tgm_fences::ExecSurfaces::validSubmit(&input.job, sizeof(input), true));
+	EXPECT_FALSE(tgm_fences::ExecSurfaces::validSubmit(&input.job, sizeof(input), false));
+	input.job.surface_flags |= TegraGM20BSubmitExternalVisibility;
+	EXPECT_TRUE(tgm_fences::ExecSurfaces::validSubmit(&input.job, sizeof(input), true));
+	input.job.surface_flags = TegraGM20BSubmitExternalVisibility;
+	EXPECT_FALSE(tgm_fences::ExecSurfaces::validSubmit(&input.job, sizeof(input), true));
+	input.job.surface_flags = 0;
+	EXPECT_FALSE(tgm_fences::ExecSurfaces::validSubmit(&input.job, sizeof(input), true));
+	input.use.access &= ~uint32_t(TegraGM20BSurfaceHostWritten);
+	EXPECT_TRUE(tgm_fences::ExecSurfaces::validSubmit(&input.job, sizeof(input), true));
+	input.job.surface_flags = uint32_t(TegraGM20BSubmitVisibilityExplicit) | TegraGM20BExecSurfacesAll;
+	EXPECT_FALSE(tgm_fences::ExecSurfaces::validSubmit(&input.job, sizeof(input), true));
+}
+
+TEST_F(Fences, RangeExtentRequiresAddressedGpuVaAndNonzeroLength)
+{
+	struct { TegraGM20BAbiSubmit job; TegraGM20BAbiPush push; TegraGM20BAbiSurfaceUse use; } input{};
+	input.job = {1, 1, 1, TegraGM20BSubmitVisibilityExplicit};
+	input.use = {0x10000, TegraGM20BSurfaceWrite | TegraGM20BSurfaceGpuAddress | TegraGM20BSurfaceRange, 4096};
+	EXPECT_TRUE(tgm_fences::ExecSurfaces::validSubmit(&input.job, sizeof(input), true));
+	EXPECT_FALSE(tgm_fences::ExecSurfaces::validSubmit(&input.job, sizeof(input), false));
+	input.use.reserved = 0;
+	EXPECT_FALSE(tgm_fences::ExecSurfaces::validSubmit(&input.job, sizeof(input), true));
+	input.use.reserved = 4096;
+	input.use.access &= ~uint32_t(TegraGM20BSurfaceGpuAddress);
+	EXPECT_FALSE(tgm_fences::ExecSurfaces::validSubmit(&input.job, sizeof(input), true));
+	input.use.access = TegraGM20BSurfaceWrite | TegraGM20BSurfaceGpuAddress;
+	EXPECT_FALSE(tgm_fences::ExecSurfaces::validSubmit(&input.job, sizeof(input), true));
+	input.use.reserved = 0;
+	EXPECT_TRUE(tgm_fences::ExecSurfaces::validSubmit(&input.job, sizeof(input), true));
+}
+
+
+TEST_F(Fences, AddressedEventOnlyJobCarriesFullWidthWaitsAndSignals)
+{
+    struct {
+        TegraGM20BAbiSubmit job;
+        TegraGM20BAbiSubmitEvents events;
+        TegraGM20BAbiEventUse uses[2];
+    } input = {{1, 0, 0, TegraGM20BSubmitHasEvents}, {1, 1, 0},
+               {{UINT64_C(0x100000001), UINT64_MAX - 1}, {2, UINT64_MAX}}};
+    EXPECT_TRUE(tgm_fences::ExecSurfaces::validSubmit(&input.job, sizeof(input), true));
+    EXPECT_FALSE(tgm_fences::ExecSurfaces::validSubmit(&input.job, sizeof(input), false));
+    EXPECT_FALSE(tgm_fences::ExecSurfaces::validSubmit(&input.job, sizeof(input) - 1, true));
+    EXPECT_FALSE(tgm_fences::ExecSurfaces::validSubmit(&input.job, sizeof(input) + 1, true));
+    input.events.reserved = 1;
+    EXPECT_FALSE(tgm_fences::ExecSurfaces::validSubmit(&input.job, sizeof(input), true));
+    input.events.reserved = 0;
+    input.uses[0].handle = 0;
+    EXPECT_FALSE(tgm_fences::ExecSurfaces::validSubmit(&input.job, sizeof(input), true));
+}
+
+TEST_F(Fences, EventCountsAreBoundedBeforeReadingAnyRecord)
+{
+    struct { TegraGM20BAbiSubmit job; TegraGM20BAbiSubmitEvents events; } input =
+        {{1, 0, 0, TegraGM20BSubmitHasEvents}, {UINT32_MAX, 1, 0}};
+    EXPECT_FALSE(tgm_fences::ExecSurfaces::validSubmit(&input.job, sizeof(input), true));
+    input.events = {1, UINT32_MAX, 0};
+    EXPECT_FALSE(tgm_fences::ExecSurfaces::validSubmit(&input.job, sizeof(input), true));
+    input.events = {16, 17, 0};
+    EXPECT_FALSE(tgm_fences::ExecSurfaces::validSubmit(&input.job, sizeof(input), true));
+    input.events = {0, 0, 0};
+    EXPECT_TRUE(tgm_fences::ExecSurfaces::validSubmit(&input.job, sizeof(input), true));
+    EXPECT_FALSE(tgm_fences::ExecSurfaces::validSubmit(&input.job, sizeof(input.job), true));
+}
+
+TEST_F(Fences, EventTrailerFollowsEveryPushAndResource)
+{
+    struct {
+        TegraGM20BAbiSubmit job;
+        TegraGM20BAbiPush push;
+        TegraGM20BAbiSurfaceUse surface;
+        TegraGM20BAbiSubmitEvents events;
+        TegraGM20BAbiEventUse uses[TegraGM20BMaxJobEvents];
+    } input = {};
+    input.job = {1, 1, 1, TegraGM20BSubmitHasEvents | TegraGM20BSubmitVisibilityExplicit};
+    input.push = {0x1000, 1, 0};
+    input.surface = {1, TegraGM20BSurfaceRead, 0};
+    input.events = {16, 16, 0};
+    for (auto &use : input.uses) use = {1, UINT64_MAX};
+    EXPECT_TRUE(tgm_fences::ExecSurfaces::validSubmit(&input.job, sizeof(input), true));
+    input.job.surface_flags &= ~TegraGM20BSubmitHasEvents;
+    EXPECT_FALSE(tgm_fences::ExecSurfaces::validSubmit(&input.job, sizeof(input), true));
+}
+
+TEST_F(Fences, AdmissionTrailerPrecedesEventsAndRequiresExactFraming)
+{
+    struct { TegraGM20BAbiSubmit job; TegraGM20BAbiSurfaceUse use;
+        TegraGM20BAbiSubmitAdmission admission; TegraGM20BAbiSubmitEvents events;
+        TegraGM20BAbiEventUse wait; } input = {
+        {1, 0, 1, TegraGM20BSubmitAdmissionBegin | TegraGM20BSubmitHasEvents},
+        {1, TegraGM20BSurfaceRead, 0}, {UINT64_MAX, 0}, {1, 0, 0}, {1, 100}};
+    EXPECT_TRUE(tgm_fences::ExecSurfaces::validSubmit(&input.job, sizeof(input), true));
+    EXPECT_FALSE(tgm_fences::ExecSurfaces::validSubmit(&input.job, sizeof(input) - 1, true));
+    EXPECT_FALSE(tgm_fences::ExecSurfaces::validSubmit(&input.job, sizeof(input), false));
+    input.admission.cookie = 0;
+    EXPECT_FALSE(tgm_fences::ExecSurfaces::validSubmit(&input.job, sizeof(input), true));
+    input.admission.cookie = 1; input.admission.reserved = 1;
+    EXPECT_FALSE(tgm_fences::ExecSurfaces::validSubmit(&input.job, sizeof(input), true));
+}
+
+TEST_F(Fences, AdmissionFlagsRejectMixedAndIncompleteSequences)
+{
+    struct { TegraGM20BAbiSubmit job; TegraGM20BAbiSubmitAdmission admission; } input =
+        {{1, 0, 0, 0}, {1, 0}};
+    constexpr uint32_t accepted[] = {TegraGM20BSubmitAdmissionBegin, TegraGM20BSubmitAdmissionContinue,
+        TegraGM20BSubmitAdmissionBegin | TegraGM20BSubmitAdmissionEnd,
+        TegraGM20BSubmitAdmissionContinue | TegraGM20BSubmitAdmissionEnd, TegraGM20BSubmitAdmissionCancel};
+    for (const auto flags : accepted) {
+        input.job.surface_flags = flags;
+        EXPECT_TRUE(tgm_fences::ExecSurfaces::validSubmit(&input.job, sizeof(input), true));
+    }
+    constexpr uint32_t refused[] = {0, TegraGM20BSubmitAdmissionEnd,
+        TegraGM20BSubmitAdmissionBegin | TegraGM20BSubmitAdmissionContinue,
+        TegraGM20BSubmitAdmissionCancel | TegraGM20BSubmitAdmissionBegin,
+        TegraGM20BSubmitAdmissionCancel | TegraGM20BSubmitHasEvents};
+    for (const auto flags : refused) {
+        input.job.surface_flags = flags;
+        EXPECT_FALSE(tgm_fences::ExecSurfaces::validSubmit(&input.job, sizeof(input), true));
+    }
+}

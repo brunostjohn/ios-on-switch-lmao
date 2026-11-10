@@ -1,0 +1,271 @@
+// SPDX-License-Identifier: MIT
+#include "switch_gpu_vm_map_stubs.h"
+
+class VmMap : public testing::Test
+{
+protected:
+	tgm_vm a{}, b{};
+	tgm_mem memory{};
+	std::vector<u64> pages;
+
+	void SetUp() override
+	{
+		for (unsigned i = 0; i < 256; ++i)
+			gpu.mmu.kind[i] = u8(i);
+		a.owner = &a;
+		b.owner = &b;
+		a.vmm.id = 1;
+		b.vmm.id = 2;
+		tgm_tlb_space_init(&a.tlb);
+		tgm_tlb_space_init(&b.tlb);
+		pages.resize(35);
+		for (unsigned i = 0; i < pages.size(); ++i)
+			pages[i] = 0x80000000 + i * PAGE_SIZE;
+		memory = {{12, pages.size() * PAGE_SIZE},
+			  pages.size() * PAGE_SIZE,
+			  12,
+			  pages.data(),
+			  u32(pages.size()),
+			  nullptr,
+			  false};
+		calls.clear();
+		mapHook = {};
+		failGet = failMap = -1;
+		getCount = mapCount = invalidations = constructors = flushes = 0;
+		gateInside = gateWaiting = 0;
+		gateShut = false;
+	}
+
+	void TearDown() override
+	{
+		EXPECT_EQ(gateInside, 0u);
+		EXPECT_FALSE(ordered.active(owner()));
+		while (memory.big_views) {
+			auto *view = memory.big_views;
+			memory.big_views = view->next;
+			free(view);
+		}
+		for (void *node : a.kmaps.nodes)
+			free(node);
+	}
+
+	int map(tgm_vm &vm, switch_gpu_mapping **result)
+	{
+		return switch_gpu_vm_map(&vm, 0x40000000, memory.bytes, &memory, 0, 0, 0, result);
+	}
+};
+
+TEST_F(VmMap, MixedPagesUsePreparedViewsAndRetireSynchronously)
+{
+	mem_prepare_big_views(&memory);
+	ASSERT_EQ(constructors, 1);
+	switch_gpu_mapping *mapping = nullptr;
+	ASSERT_EQ(map(a, &mapping), 0);
+	ASSERT_EQ(mapping->count, 2u);
+	EXPECT_EQ(mapping->entries[0].shift, 17);
+	EXPECT_EQ(mapping->entries[1].shift, 12);
+	EXPECT_EQ(constructors, 1);
+	EXPECT_EQ(a.tlb.gen, 2u);
+	for (const auto &call : calls)
+		EXPECT_TRUE(call.deferred);
+	switch_gpu_vm_unmap(&a, &mapping);
+	EXPECT_EQ(flushes, 1u);
+	EXPECT_EQ(mapping, nullptr);
+	ASSERT_EQ(calls.size(), 8u);
+	for (size_t i = 4; i < calls.size(); ++i)
+		EXPECT_FALSE(calls[i].deferred);
+}
+
+TEST_F(VmMap, MissingBigViewFallsBackWithoutConstructorInMap)
+{
+	memory.big_views_ready = true;
+	switch_gpu_mapping *mapping = nullptr;
+	ASSERT_EQ(map(a, &mapping), 0);
+	ASSERT_EQ(mapping->count, 2u);
+	EXPECT_EQ(mapping->entries[0].shift, 12);
+	EXPECT_EQ(constructors, 0);
+	switch_gpu_vm_unmap(&a, &mapping);
+}
+
+TEST_F(VmMap, FailedMapRollsBackEveryReservationOutsideDeferredScope)
+{
+	mem_prepare_big_views(&memory);
+	failMap = 1;
+	switch_gpu_mapping *mapping = nullptr;
+	EXPECT_EQ(map(a, &mapping), -5);
+	EXPECT_EQ(mapping, nullptr);
+	EXPECT_EQ(a.tlb.gen, 1u);
+	ASSERT_EQ(calls.size(), 8u);
+	for (size_t i = 4; i < calls.size(); ++i)
+		EXPECT_FALSE(calls[i].deferred);
+	EXPECT_EQ(calls[4].operation, 'u');
+	EXPECT_EQ(calls[6].operation, 'u');
+}
+
+TEST_F(VmMap, FailedGetRetiresPrefixAndInvalidatesDroppedPageTables)
+{
+	mem_prepare_big_views(&memory);
+	failGet = 1;
+	switch_gpu_mapping *mapping = nullptr;
+	EXPECT_EQ(map(a, &mapping), -12);
+	EXPECT_EQ(mapping, nullptr);
+	EXPECT_EQ(invalidations, 1);
+	EXPECT_EQ(a.tlb.gen, 1u);
+	ASSERT_EQ(calls.size(), 5u);
+	EXPECT_EQ(calls[3].operation, 'u');
+	EXPECT_EQ(calls[4].operation, 'p');
+}
+
+TEST_F(VmMap, IndependentAddressSpacesMapWhileOneIsBlocked)
+{
+	memory.big_views_ready = true;
+	std::promise<void> entered, leave;
+	auto leaveFuture = leave.get_future().share();
+	std::atomic<bool> first = true;
+	mapHook = [&](unsigned vm) {
+		if (vm == 1 && first.exchange(false)) {
+			entered.set_value();
+			leaveFuture.wait();
+		}
+	};
+	switch_gpu_mapping *firstMap = nullptr, *secondMap = nullptr;
+	auto one = std::async(std::launch::async, [&] {
+		return map(a, &firstMap);
+	});
+	entered.get_future().wait();
+	auto two = std::async(std::launch::async, [&] {
+		return map(b, &secondMap);
+	});
+	EXPECT_EQ(two.wait_for(std::chrono::seconds(1)), std::future_status::ready);
+	leave.set_value();
+	EXPECT_EQ(one.get(), 0);
+	EXPECT_EQ(two.get(), 0);
+	for (const auto &call : calls)
+		EXPECT_TRUE(call.deferred);
+	switch_gpu_vm_unmap(&a, &firstMap);
+	switch_gpu_vm_unmap(&b, &secondMap);
+}
+
+TEST_F(VmMap, SameAddressSpaceSerializesWholeMappingBatch)
+{
+	memory.big_views_ready = true;
+	std::promise<void> entered, leave;
+	auto leaveFuture = leave.get_future().share();
+	std::atomic<bool> first = true;
+	mapHook = [&](unsigned) {
+		if (first.exchange(false)) {
+			entered.set_value();
+			leaveFuture.wait();
+		}
+	};
+	switch_gpu_mapping *firstMap = nullptr, *secondMap = nullptr;
+	auto one = std::async(std::launch::async, [&] {
+		return map(a, &firstMap);
+	});
+	entered.get_future().wait();
+	auto two = std::async(std::launch::async, [&] {
+		return map(a, &secondMap);
+	});
+	EXPECT_EQ(two.wait_for(std::chrono::milliseconds(20)), std::future_status::timeout);
+	leave.set_value();
+	EXPECT_EQ(one.get(), 0);
+	EXPECT_EQ(two.get(), 0);
+	switch_gpu_vm_unmap(&a, &firstMap);
+	switch_gpu_vm_unmap(&a, &secondMap);
+}
+
+TEST_F(VmMap, ClosedSleepGateDoesNotHoldAddressSpaceMutex)
+{
+	gateShut = true;
+	std::promise<void> launched;
+	auto one = std::async(std::launch::async, [&] {
+		launched.set_value();
+		return tgm_vm_unmap(&a, 0x40000000, 4096);
+	});
+	launched.get_future().wait();
+	EXPECT_EQ(one.wait_for(std::chrono::milliseconds(20)), std::future_status::timeout);
+	EXPECT_TRUE(mutex_available(&a.map_lock));
+	{
+		std::lock_guard held(gateMutex);
+		gateShut = false;
+		gateCv.notify_all();
+	}
+	EXPECT_EQ(one.get(), 0);
+}
+
+TEST_F(VmMap, OrdinaryAndKernelMappingsKeepSynchronousVisibility)
+{
+	u8 shift = 0;
+	ASSERT_EQ(tgm_vm_map(&a, 0x40000000, 4096, &memory, 0, 0, 0), 0);
+	EXPECT_FALSE(calls.back().deferred);
+	ASSERT_EQ(tgm_vm_map_ordered(&a, 0x40001000, 4096, &memory, 4096, 0, 0, &shift), 0);
+	EXPECT_EQ(shift, 12);
+	EXPECT_TRUE(calls.back().deferred);
+	u64 va = 0;
+	ASSERT_EQ(tgm_vm_kmap(&a, &memory, 4096, &va), 0);
+	EXPECT_EQ(va, TGM_KERNEL_VA);
+	EXPECT_FALSE(calls.back().deferred);
+	EXPECT_EQ(a.kmaps.nodes.size(), 1u);
+}
+
+TEST_F(VmMap, PhysicalInteriorUsesItsOwnBigViewOffset)
+{
+	pages.resize(64);
+	for (unsigned i = 0; i < pages.size(); ++i)
+		pages[i] = 0x80010000 + i * PAGE_SIZE;
+	memory.pages = pages.data();
+	memory.npages = u32(pages.size());
+	memory.bytes = pages.size() * PAGE_SIZE;
+	memory.mem.bytes = memory.bytes;
+	mem_prepare_big_views(&memory);
+	ASSERT_NE(memory.big_views, nullptr);
+	EXPECT_EQ(memory.big_views->offset, 16 * PAGE_SIZE);
+	switch_gpu_mapping *mapping = nullptr;
+	ASSERT_EQ(switch_gpu_vm_map(&a, 0x40000000, 48 * PAGE_SIZE, &memory, 16 * PAGE_SIZE, 0, 0,
+				    &mapping),
+		  0);
+	ASSERT_EQ(mapping->count, 2u);
+	EXPECT_EQ(mapping->entries[0].shift, 17);
+	ASSERT_EQ(calls.size(), 4u);
+	EXPECT_EQ(calls[1].offset, 0u);
+	EXPECT_EQ(calls[3].offset, 48 * PAGE_SIZE);
+	switch_gpu_vm_unmap(&a, &mapping);
+}
+
+TEST_F(VmMap, CompressedAliasesInDifferentSpacesUseOnlyCanonicalMemory)
+{
+	memory.page = memory.mem.shift = 17;
+	memory.bytes = memory.mem.bytes = 32 * PAGE_SIZE;
+	memory.npages = 32;
+	gpu.mmu.kind[0x42] = 0xfe;
+	mem_prepare_big_views(&memory);
+	EXPECT_EQ(memory.big_views, nullptr);
+	EXPECT_EQ(constructors, 0);
+	switch_gpu_mapping *one = nullptr, *two = nullptr;
+	ASSERT_EQ(switch_gpu_vm_map(&a, 0x40000000, memory.bytes, &memory, 0, 0x42, 0, &one), 0);
+	ASSERT_EQ(switch_gpu_vm_map(&b, 0x60000000, memory.bytes, &memory, 0, 0x42, 0, &two), 0);
+	unsigned maps = 0;
+	for (const auto &call : calls) {
+		if (call.operation == 'm') {
+			EXPECT_EQ(call.memory, &memory.mem);
+			EXPECT_EQ(call.shift, 17);
+			++maps;
+		}
+	}
+	EXPECT_EQ(maps, 2u);
+	switch_gpu_vm_unmap(&a, &one);
+	switch_gpu_vm_unmap(&b, &two);
+}
+
+TEST_F(VmMap, PreparedUncompressedBigViewCannotBecomeIndependentCompressionAuthority)
+{
+	mem_prepare_big_views(&memory);
+	ASSERT_NE(memory.big_views, nullptr);
+	ASSERT_EQ(memory.big_views->mem.shift, 17);
+	gpu.mmu.kind[0x42] = 0xfe;
+	switch_gpu_mapping *mapping = nullptr;
+	EXPECT_EQ(switch_gpu_vm_map(&a, 0x40000000, 32 * PAGE_SIZE, &memory, 0, 0x42, 0, &mapping),
+		  -EINVAL);
+	EXPECT_EQ(mapping, nullptr);
+	EXPECT_TRUE(calls.empty());
+}

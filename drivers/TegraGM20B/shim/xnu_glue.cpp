@@ -18,6 +18,7 @@
 #include <sys/kdebug.h>
 #include "include/nvxnu.h"
 #include "../SwitchGpuBacking.h"
+#include "../SwitchGpuOrdered.h"
 #include "../../../kits/SwitchDMA/SwitchDcache.h"
 #include "../../../kits/SwitchDMA/SwitchDMABuffer.h"
 #include "../../../kits/SwitchDMA/SwitchHwPage.h"
@@ -37,6 +38,7 @@ void IOLogv(const char *format, va_list ap);
 int vsnprintf(char *, size_t, const char *, va_list);
 }
 
+#if DEVELOPMENT || DEBUG
 extern "C" void nvxnu_stats(const char *fmt, ...)
 {
 	char line[768];
@@ -46,6 +48,7 @@ extern "C" void nvxnu_stats(const char *fmt, ...)
 	va_end(ap);
 	os_log(OS_LOG_DEFAULT, "%s", line);
 }
+#endif
 
 // nvkm's interrupt handler runs under spin_lock_irqsave, as in a Linux hard IRQ, and IOLog asserts with interrupts off.
 // With interrupts off os_log is not safe, so XNU only formats the line into the message buffer with the kernel's
@@ -71,7 +74,8 @@ extern "C" void nvxnu_log(const char *fmt, ...)
 // Bring-up step trace (M1/M2/CLK steps): only with kTracePaced, set in source for a bring-up test, which also gives the
 // console time to draw each line before the next step. Without it nothing is printed: the stage results (M1..M4 ok) are TegraGM20B.cpp's own
 // lines, and every GPU failure panics with one line.
-extern "C" void nvxnu_step(const char *fmt, ...)
+#if DEVELOPMENT || DEBUG
+extern "C" void nvxnu_step_impl(const char *fmt, ...)
 {
 	if (!nvxnu_trace_paced())
 		return;
@@ -88,6 +92,7 @@ extern "C" int nvxnu_trace_paced(void)
 {
 	return static_cast<int>(kTracePaced);
 }
+#endif
 
 extern "C" int nvxnu_vsnprintf(char *buf, unsigned long size, const char *fmt, va_list ap)
 {
@@ -116,22 +121,21 @@ volatile int gErrorsFatal;
 int (*gErrorsContained)(const char *errors);
 }
 
-static thread_t gGpuOrderedThread;
+static SwitchGpuOrdered gGpuOrdered;
 
-extern "C" void nvxnu_gpu_ordered_begin(void)
+extern "C" unsigned nvxnu_gpu_ordered_begin(void)
 {
-	__atomic_store_n(&gGpuOrderedThread, current_thread(), __ATOMIC_RELAXED);
+	return gGpuOrdered.enter(reinterpret_cast<uintptr_t>(current_thread()));
 }
 
-extern "C" void nvxnu_gpu_ordered_end(void)
+extern "C" void nvxnu_gpu_ordered_end(unsigned scope)
 {
-	__atomic_store_n(&gGpuOrderedThread, (thread_t) nullptr, __ATOMIC_RELAXED);
+	gGpuOrdered.leave(scope);
 }
 
 extern "C" int nvxnu_gpu_ordered(void)
 {
-	return static_cast<int>(current_thread() ==
-				__atomic_load_n(&gGpuOrderedThread, __ATOMIC_RELAXED));
+	return static_cast<int>(gGpuOrdered.active(reinterpret_cast<uintptr_t>(current_thread())));
 }
 
 extern "C" void nvxnu_error(const char *dev, const char *fmt, ...)
@@ -190,7 +194,9 @@ constexpr uint64_t kCheckNs = 1000000000;  // a quiet wait looks at PMC this oft
 constexpr uint64_t kGraceNs = 50000000;    // for a wake already under way
 constexpr uint32_t kStorm = 1000;          // consecutive interrupts nvkm did not handle
 volatile uint32_t gWakeSeq, gIrqRuns;
+#if DEVELOPMENT || DEBUG
 uint64_t gIrqPasses[2];  // by line: stall, nonstall
+#endif
 volatile int gIrqActive, gGpuOff;
 uint32_t gUnhandled;
 volatile uint8_t *gPmc;
@@ -238,7 +244,11 @@ void gpuInterrupt(OSObject *, IOInterruptEventSource *source, int)
 	if (__atomic_load_n(&gGpuOff, __ATOMIC_ACQUIRE))
 		return;
 	__atomic_fetch_add(&gIrqRuns, 1, __ATOMIC_RELAXED);
-	__atomic_fetch_add(&gIrqPasses[source == gIrqSources[1]], 1, __ATOMIC_RELAXED);
+#if DEVELOPMENT || DEBUG
+    __atomic_fetch_add(&gIrqPasses[source == gIrqSources[1]], 1, __ATOMIC_RELAXED);
+#else
+    (void)source;
+#endif
 	gIrqErrorsLen = 0;
 	gIrqErrors[0] = 0;
 	__atomic_store_n(&gIrqThread, current_thread(), __ATOMIC_RELAXED);
@@ -253,6 +263,7 @@ void gpuInterrupt(OSObject *, IOInterruptEventSource *source, int)
 		gpuPanic("storm", "unhandled", gUnhandled);
 	}
 	nvxnu_wake();
+	switch_gpu_backing_completed();
 }
 
 // Mach's assert-then-check: a wake between the caller's condition test and this sleep moves the word, and one
@@ -333,8 +344,12 @@ extern "C" void nvxnu_kdebug(nvxnu_u32 code, nvxnu_u64 a, nvxnu_u64 b, nvxnu_u64
 
 extern "C" void nvxnu_irq_passes(nvxnu_u64 *stall, nvxnu_u64 *nonstall)
 {
+#if DEVELOPMENT || DEBUG
 	*stall = __atomic_load_n(&gIrqPasses[0], __ATOMIC_RELAXED);
 	*nonstall = __atomic_load_n(&gIrqPasses[1], __ATOMIC_RELAXED);
+#else
+	*stall = *nonstall = 0;
+#endif
 }
 
 extern "C" nvxnu_u32 nvxnu_wake_seq(void)
@@ -454,18 +469,36 @@ extern "C" void switch_gpu_backing_cache(const uint64_t *pages, uint32_t count,
 }
 
 extern "C" void switch_gpu_backing_retire(void);
-static void *switch_backing_retire_work;
+extern "C" void switch_gpu_backing_expire(void);
+static void *switch_backing_retire_work, *switch_backing_expiry_work;
 
 extern "C" int switch_gpu_backing_prepare_retirement(void)
 {
 	if (!switch_backing_retire_work)
 		switch_backing_retire_work = nvxnu_work_alloc([](void *) { switch_gpu_backing_retire(); }, nullptr);
-	return switch_backing_retire_work ? 0 : -12;
+	if (!switch_backing_expiry_work)
+		switch_backing_expiry_work = nvxnu_work_alloc([](void *) { switch_gpu_backing_expire(); }, nullptr);
+	return switch_backing_retire_work && switch_backing_expiry_work ? 0 : -12;
 }
 
 extern "C" void switch_gpu_backing_schedule_retirement(void)
 {
 	nvxnu_work_schedule(switch_backing_retire_work);
+}
+
+extern "C" uint64_t switch_gpu_backing_time_ns(void)
+{
+	return nvxnu_nanotime();
+}
+
+extern "C" void switch_gpu_backing_arm_expiry(uint64_t deadline_ns)
+{
+	if (!deadline_ns) {
+		nvxnu_work_cancel(switch_backing_expiry_work);
+		return;
+	}
+	const uint64_t now = nvxnu_nanotime();
+	nvxnu_work_schedule_after(switch_backing_expiry_work, deadline_ns > now ? deadline_ns - now : 1);
 }
 
 // The system's page faults so far (every vm_fault) and those that zero-filled a page: XNU's own counters, as vm_stat reads

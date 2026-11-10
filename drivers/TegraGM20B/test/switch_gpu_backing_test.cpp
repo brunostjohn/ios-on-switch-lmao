@@ -1,6 +1,4 @@
 // SPDX-License-Identifier: MIT
-#include <array>
-#include <thread>
 #include "switch_gpu_backing_fixture.h"
 
 TEST_F(Backing, TracksEveryWriterAndFailsClosedWhenDependencyArrayIsTooSmall)
@@ -44,21 +42,40 @@ TEST_F(Backing, WritersWaitForReadersButReadersDoNotWaitForEachOther)
 
 TEST_F(Backing, PartialCpuWriteInvalidatesBeforeCleanAndKeepsNeighboringGpuData)
 {
-	auto *allocation = backing();
-	ASSERT_EQ(publish(allocation, SWITCH_GPU_BACKING_WRITE, token(1)), 0);
-	ASSERT_EQ(cache.size(), 1u);
-	EXPECT_EQ(cache[0].invalidate, 0);
-	EXPECT_EQ(switch_gpu_backing_cpu_acquire(allocation, 7, 2, SWITCH_GPU_BACKING_WRITE), 0);
-	ASSERT_EQ(cache.size(), 2u);
-	EXPECT_EQ(cache[1].invalidate, 1);
-	EXPECT_EQ(cache[1].offset, 7u);
-	EXPECT_EQ(cache[1].bytes, 2u);
-	EXPECT_EQ(switch_gpu_backing_cpu_release(allocation, 7, 2, SWITCH_GPU_BACKING_WRITE), 0);
-	ASSERT_EQ(cache.size(), 3u);
-	EXPECT_EQ(cache[2].invalidate, 0);
-	EXPECT_EQ(publish(allocation, SWITCH_GPU_BACKING_READ, token(2)), 0);
-	EXPECT_EQ(cache.size(), 3u);
-	switch_gpu_backing_release(allocation);
+    auto *allocation = backing();
+    ASSERT_EQ(publish(allocation, SWITCH_GPU_BACKING_WRITE, token(1)), 0);
+    ASSERT_EQ(cache.size(), 1u);
+    EXPECT_EQ(cache[0].invalidate, 0);
+    std::array<uint8_t, 128> memory{}, cpu{};
+    for (size_t i = 0; i < memory.size(); ++i)
+        memory[i] = uint8_t(i + 1);
+    cpu.fill(0xee);
+    cache_callback = [&](uint64_t offset, uint64_t bytes, int operation) {
+        const uint64_t begin = offset & ~uint64_t(63), end = (offset + bytes + 63) & ~uint64_t(63);
+        ASSERT_LE(end, memory.size());
+        for (uint64_t at = begin; at < end; ++at) {
+            if (operation == SWITCH_GPU_CACHE_INVALIDATE)
+                cpu[at] = memory[at];
+            else
+                memory[at] = cpu[at];
+        }
+    };
+    EXPECT_EQ(switch_gpu_backing_cpu_acquire(allocation, 7, 2, SWITCH_GPU_BACKING_WRITE), 0);
+    ASSERT_EQ(cache.size(), 2u);
+    EXPECT_EQ(cache[1].invalidate, 1);
+    EXPECT_EQ(cache[1].offset, 0u);
+    EXPECT_EQ(cache[1].bytes, 64u);
+    cpu[7] = 0xa1;
+    cpu[8] = 0xb2;
+    EXPECT_EQ(switch_gpu_backing_cpu_release(allocation, 7, 2, SWITCH_GPU_BACKING_WRITE), 0);
+    ASSERT_EQ(cache.size(), 3u);
+    EXPECT_EQ(cache[2].invalidate, 0);
+    for (size_t i = 0; i < memory.size(); ++i)
+        EXPECT_EQ(memory[i], i == 7 ? 0xa1 : i == 8 ? 0xb2 : uint8_t(i + 1));
+    EXPECT_EQ(publish(allocation, SWITCH_GPU_BACKING_READ, token(2)), 0);
+    EXPECT_EQ(cache.size(), 3u);
+    cache_callback = {};
+    switch_gpu_backing_release(allocation);
 }
 
 TEST_F(Backing, CpuAvoidSyncAndActiveCpuOwnershipRefuseConflictingEngines)
@@ -279,11 +296,60 @@ TEST_F(Backing, FailureAndResetGenerationCannotBeReportedAsCompletion)
 	timelines[key(&first)].error = -5;
 	const auto reset = token(1, 99, SWITCH_GPU_ENGINE_GM20B, 2);
 	timelines[key(&reset)].completed = 99;
-	const int logged = ioLogLines();
+	EXPECT_EQ(switch_gpu_backing_cpu_acquire(allocation, 0, 4096, SWITCH_GPU_BACKING_READ), -5);
+	EXPECT_EQ(publish(allocation, SWITCH_GPU_BACKING_READ, token(2)), -5);
+	switch_gpu_backing_release(allocation);
+}
+
+TEST_F(Backing, FailedReaderDoesNotInvalidateUnchangedContents)
+{
+	auto *allocation = backing();
+	const auto reader = token(1);
+	ASSERT_EQ(publish(allocation, SWITCH_GPU_BACKING_READ, reader), 0);
+	timelines[key(&reader)].error = -5;
 	EXPECT_EQ(switch_gpu_backing_cpu_acquire(allocation, 0, 4096, SWITCH_GPU_BACKING_READ), 0);
-	EXPECT_EQ(ioLogLines(), logged + 1);
 	EXPECT_EQ(switch_gpu_backing_cpu_release(allocation, 0, 4096, SWITCH_GPU_BACKING_READ), 0);
 	EXPECT_EQ(publish(allocation, SWITCH_GPU_BACKING_READ, token(2)), 0);
+	EXPECT_EQ(publish(allocation, SWITCH_GPU_BACKING_WRITE, token(3)), 0);
+	EXPECT_EQ(timelines[key(&reader)].refs, 0);
+	switch_gpu_backing_release(allocation);
+}
+
+TEST_F(Backing, FailedReaderFenceSurvivesPendingAcquiresWithoutPoisoningNewWork)
+{
+	auto *allocation = backing();
+	const auto reader = token(1), pending = token(2), later = token(3);
+	ASSERT_EQ(publish(allocation, SWITCH_GPU_BACKING_READ, reader), 0);
+	ASSERT_EQ(publish(allocation, SWITCH_GPU_BACKING_WRITE, pending), 0);
+	timelines[key(&reader)].error = -5;
+	switch_gpu_backing_use use = {allocation, SWITCH_GPU_BACKING_WRITE, 0};
+	switch_gpu_backing_transaction transaction = {};
+	ASSERT_EQ(switch_gpu_backing_begin(&use, 1, &later, &transaction), 0);
+	switch_gpu_backing_token dependency = {};
+	uint32_t needed = 0;
+	EXPECT_EQ(switch_gpu_backing_dependencies(&transaction, &dependency, 1, &needed), 0);
+	EXPECT_EQ(needed, 1u);
+	EXPECT_EQ(dependency.queue, pending.queue);
+	EXPECT_EQ(timelines[key(&reader)].refs, 1);
+	switch_gpu_backing_abort(&transaction);
+	timelines[key(&pending)].completed = pending.value;
+	EXPECT_EQ(publish(allocation, SWITCH_GPU_BACKING_READ, later), 0);
+	EXPECT_EQ(timelines[key(&reader)].refs, 0);
+	switch_gpu_backing_release(allocation);
+}
+
+TEST_F(Backing, FailedWriterStillRejectsUseAfterFailedReadersAreRetired)
+{
+	auto *allocation = backing();
+	const auto reader = token(1), writer = token(2);
+	ASSERT_EQ(publish(allocation, SWITCH_GPU_BACKING_READ, reader), 0);
+	ASSERT_EQ(publish(allocation, SWITCH_GPU_BACKING_WRITE, writer), 0);
+	timelines[key(&reader)].error = -5;
+	timelines[key(&writer)].error = -5;
+	EXPECT_EQ(publish(allocation, SWITCH_GPU_BACKING_READ, token(3)), -5);
+	EXPECT_EQ(publish(allocation, SWITCH_GPU_BACKING_WRITE, token(3)), -5);
+	EXPECT_EQ(timelines[key(&reader)].refs, 0);
+	EXPECT_EQ(timelines[key(&writer)].refs, 1);
 	switch_gpu_backing_release(allocation);
 }
 
@@ -297,7 +363,11 @@ TEST_F(Backing, CompletionRecordsAndPinnedOwnerOutliveLastClientLease)
 	ASSERT_EQ(publish(allocation, SWITCH_GPU_BACKING_WRITE, completion), 0);
 	switch_gpu_backing_release(allocation);
 	EXPECT_EQ(releases, 0);
-	EXPECT_EQ(timelines[key(&completion)].refs, 1);
+	EXPECT_EQ(timelines[key(&completion)].refs, 2);
+	switch_gpu_backing_retire();
+	EXPECT_EQ(releases, 0);
+	timelines[key(&completion)].completed = completion.value;
+	switch_gpu_backing_completed();
 	switch_gpu_backing_retire();
 	EXPECT_EQ(releases, 1);
 	EXPECT_EQ(timelines[key(&completion)].refs, 0);
@@ -450,5 +520,423 @@ TEST_F(Backing, RefusedTrapCannotCancelAnotherThreadsPendingLock)
 	switch_gpu_surface_unlock_did(&client, 703, 0);
 	EXPECT_EQ(publish(allocation, SWITCH_GPU_BACKING_READ, token(1)), 0);
 	EXPECT_EQ(client.refs, 1u);
+	switch_gpu_backing_release(allocation);
+}
+
+TEST_F(Backing, ImmutableExportPreservesPendingProducerWithoutCpuWait)
+{
+    auto *allocation = backing();
+    const auto writer = token(71, 9);
+    ASSERT_EQ(publish(allocation, SWITCH_GPU_BACKING_WRITE, writer), 0);
+    switch_gpu_cpu_lease *lease = nullptr;
+    switch_gpu_backing_token producer = {};
+    ASSERT_EQ(switch_gpu_backing_export_read(allocation, &producer, &lease), 0);
+    EXPECT_EQ(producer.value, writer.value);
+    EXPECT_EQ(producer.queue, writer.queue);
+    EXPECT_EQ(timelines[key(&writer)].completed, 0u);
+    EXPECT_EQ(timelines[key(&writer)].refs, 3);
+    EXPECT_EQ(publish(allocation, SWITCH_GPU_BACKING_WRITE, token(72)), -16);
+    EXPECT_EQ(switch_gpu_backing_cpu_acquire(allocation, 0, 4096,
+        SWITCH_GPU_BACKING_WRITE | SWITCH_GPU_BACKING_CPU_AVOID_SYNC), -16);
+    switch_gpu_backing_use use = {allocation, SWITCH_GPU_BACKING_READ, 0};
+    switch_gpu_backing_transaction transaction = {};
+    const auto reader = token(73);
+    ASSERT_EQ(switch_gpu_backing_begin(&use, 1, &reader, &transaction), 0);
+    switch_gpu_backing_token dependency = {};
+    uint32_t needed = 0;
+    EXPECT_EQ(switch_gpu_backing_dependencies(&transaction, &dependency, 1, &needed), 0);
+    EXPECT_EQ(needed, 1u);
+    EXPECT_EQ(dependency.queue, writer.queue);
+    switch_gpu_backing_commit(&transaction);
+    ASSERT_EQ(switch_gpu_backing_cpu_release_owned(&lease, 0), 0);
+    EXPECT_EQ(timelines[key(&writer)].refs, 2);
+    EXPECT_EQ(publish(allocation, SWITCH_GPU_BACKING_WRITE, token(74)), 0);
+    switch_gpu_backing_release(allocation);
+}
+
+TEST_F(Backing, CompletedProducerRemainsIdentifiableAfterReaderPruning)
+{
+    auto *allocation = backing();
+    const auto writer = token(75, 3);
+    ASSERT_EQ(publish(allocation, SWITCH_GPU_BACKING_WRITE, writer), 0);
+    timelines[key(&writer)].completed = writer.value;
+    ASSERT_EQ(publish(allocation, SWITCH_GPU_BACKING_READ, token(76)), 0);
+    switch_gpu_cpu_lease *lease = nullptr;
+    switch_gpu_backing_token producer = {};
+    ASSERT_EQ(switch_gpu_backing_export_read(allocation, &producer, &lease), 0);
+    EXPECT_EQ(producer.queue, writer.queue);
+    EXPECT_EQ(producer.value, writer.value);
+    EXPECT_EQ(switch_gpu_backing_cpu_release_owned(&lease, 0), 0);
+    switch_gpu_backing_release(allocation);
+}
+
+TEST_F(Backing, CpuWriteInvalidatesTheOldExportProducer)
+{
+    auto *allocation = backing();
+    ASSERT_EQ(publish(allocation, SWITCH_GPU_BACKING_WRITE, token(77)), 0);
+    ASSERT_EQ(switch_gpu_backing_cpu_acquire(allocation, 0, 4096, SWITCH_GPU_BACKING_WRITE), 0);
+    ASSERT_EQ(switch_gpu_backing_cpu_release(allocation, 0, 4096, SWITCH_GPU_BACKING_WRITE), 0);
+    switch_gpu_cpu_lease *lease = nullptr;
+    switch_gpu_backing_token producer = {};
+    EXPECT_EQ(switch_gpu_backing_export_read(allocation, &producer, &lease), SWITCH_GPU_BACKING_STALE);
+    EXPECT_EQ(lease, nullptr);
+    EXPECT_EQ(publish(allocation, SWITCH_GPU_BACKING_WRITE, token(78)), 0);
+    switch_gpu_backing_release(allocation);
+}
+
+TEST_F(Backing, FailedProducerCannotBecomeAnImmutableExport)
+{
+    auto *allocation = backing();
+    const auto writer = token(79);
+    ASSERT_EQ(publish(allocation, SWITCH_GPU_BACKING_WRITE, writer), 0);
+    timelines[key(&writer)].error = -5;
+    switch_gpu_cpu_lease *lease = nullptr;
+    switch_gpu_backing_token producer = {};
+    EXPECT_EQ(switch_gpu_backing_export_read(allocation, &producer, &lease), -5);
+    EXPECT_EQ(lease, nullptr);
+    EXPECT_EQ(timelines[key(&writer)].refs, 2);
+    switch_gpu_backing_info info = {};
+    switch_gpu_backing_describe(allocation, &info);
+    EXPECT_EQ(info.cpu_locks, 0u);
+    switch_gpu_backing_release(allocation);
+}
+
+TEST_F(Backing, ImmutableExportCannotBeDiscountedToAuthorizeAConversionWrite)
+{
+    auto *allocation = backing();
+    ASSERT_EQ(publish(allocation, SWITCH_GPU_BACKING_WRITE, token(80)), 0);
+    switch_gpu_cpu_lease *lease = nullptr;
+    switch_gpu_backing_token producer = {};
+    ASSERT_EQ(switch_gpu_backing_export_read(allocation, &producer, &lease), 0);
+    switch_gpu_backing_use use = {allocation, SWITCH_GPU_BACKING_WRITE, 0};
+    switch_gpu_backing_transaction transaction = {};
+    const auto conversion = token(81);
+    EXPECT_EQ(switch_gpu_backing_begin_conversion(&use, 1, &lease, 1, &conversion, &transaction), -22);
+    EXPECT_EQ(switch_gpu_backing_cpu_release_owned(&lease, 0), 0);
+    switch_gpu_backing_release(allocation);
+}
+
+TEST_F(Backing, EngineConversionReservationPreservesPendingGpuDependenciesWithoutCpuWait)
+{
+    auto *allocation = backing();
+    const auto writer = token(82), reader = token(83), conversion = token(84);
+    ASSERT_EQ(publish(allocation, SWITCH_GPU_BACKING_WRITE, writer), 0);
+    ASSERT_EQ(publish(allocation, SWITCH_GPU_BACKING_READ, reader), 0);
+    const auto cleans = cache.size();
+    switch_gpu_cpu_lease *lease = nullptr;
+    ASSERT_EQ(switch_gpu_backing_conversion_reserve(allocation, SWITCH_GPU_BACKING_WRITE, 0, &lease), 0);
+    EXPECT_EQ(timelines[key(&writer)].completed, 0u);
+    EXPECT_EQ(timelines[key(&reader)].completed, 0u);
+    EXPECT_EQ(cache.size(), cleans);
+    EXPECT_EQ(publish(allocation, SWITCH_GPU_BACKING_READ, token(85)), -16);
+    switch_gpu_backing_use use = {allocation, SWITCH_GPU_BACKING_WRITE, 0};
+    switch_gpu_backing_transaction transaction = {};
+    ASSERT_EQ(switch_gpu_backing_begin_conversion(&use, 1, &lease, 1, &conversion, &transaction), 0);
+    switch_gpu_backing_token dependencies[2] = {};
+    uint32_t needed = 0;
+    EXPECT_EQ(switch_gpu_backing_dependencies(&transaction, dependencies, 2, &needed), 0);
+    EXPECT_EQ(needed, 2u);
+    switch_gpu_backing_commit(&transaction);
+    EXPECT_EQ(switch_gpu_backing_cpu_release_owned(&lease, 0), 0);
+    EXPECT_EQ(publish(allocation, SWITCH_GPU_BACKING_READ, token(86)), 0);
+    switch_gpu_backing_release(allocation);
+}
+
+TEST_F(Backing, EngineConversionReservationCannotBypassCpuOwnership)
+{
+    auto *allocation = backing();
+    ASSERT_EQ(switch_gpu_backing_cpu_acquire(allocation, 0, 4096, SWITCH_GPU_BACKING_READ), 0);
+    switch_gpu_cpu_lease *lease = nullptr;
+    EXPECT_EQ(switch_gpu_backing_conversion_reserve(allocation, SWITCH_GPU_BACKING_WRITE, 1, &lease), -16);
+    EXPECT_EQ(lease, nullptr);
+    switch_gpu_backing_info info = {};
+    switch_gpu_backing_describe(allocation, &info);
+    EXPECT_EQ(info.cpu_locks, 1u);
+    ASSERT_EQ(switch_gpu_backing_cpu_release(allocation, 0, 4096, SWITCH_GPU_BACKING_READ), 0);
+    ASSERT_EQ(switch_gpu_backing_conversion_reserve(allocation, SWITCH_GPU_BACKING_WRITE, 1, &lease), 0);
+    EXPECT_EQ(switch_gpu_backing_cpu_release_owned(&lease, 0), 0);
+    switch_gpu_backing_release(allocation);
+}
+
+TEST_F(Backing, EngineConversionReservationRejectsFailedContentsWithoutLeakingOwnership)
+{
+    auto *allocation = backing();
+    const auto writer = token(87);
+    ASSERT_EQ(publish(allocation, SWITCH_GPU_BACKING_WRITE, writer), 0);
+    timelines[key(&writer)].error = -5;
+    switch_gpu_cpu_lease *lease = nullptr;
+    EXPECT_EQ(switch_gpu_backing_conversion_reserve(allocation, SWITCH_GPU_BACKING_WRITE, 0, &lease), -5);
+    EXPECT_EQ(lease, nullptr);
+    switch_gpu_backing_info info = {};
+    switch_gpu_backing_describe(allocation, &info);
+    EXPECT_EQ(info.cpu_locks, 0u);
+    switch_gpu_backing_release(allocation);
+}
+
+TEST_F(Backing, EngineOnlyReservationStillWaitsAndInvalidatesBeforeCpuExposure)
+{
+    auto *allocation = backing();
+    const auto writer = token(88);
+    ASSERT_EQ(publish(allocation, SWITCH_GPU_BACKING_WRITE, writer), 0);
+    switch_gpu_cpu_lease *lease = nullptr;
+    ASSERT_EQ(switch_gpu_backing_conversion_reserve(allocation, SWITCH_GPU_BACKING_READ, 0, &lease), 0);
+    EXPECT_EQ(timelines[key(&writer)].completed, 0u);
+    ASSERT_EQ(switch_gpu_backing_cpu_transfer_owned(allocation, &lease, SWITCH_GPU_BACKING_READ), 0);
+    EXPECT_EQ(lease, nullptr);
+    EXPECT_EQ(timelines[key(&writer)].completed, writer.value);
+    ASSERT_FALSE(cache.empty());
+    EXPECT_EQ(cache.back().invalidate, SWITCH_GPU_CACHE_INVALIDATE);
+    EXPECT_EQ(switch_gpu_backing_cpu_release(allocation, 0, 4096, SWITCH_GPU_BACKING_READ), 0);
+    switch_gpu_backing_release(allocation);
+}
+
+TEST_F(Backing, PhysicalSnapshotCleansCpuContentAndExcludesWriters)
+{
+    auto *allocation = backing(2);
+    cache.clear();
+    switch_gpu_cpu_lease *lease = nullptr;
+    switch_gpu_backing_token producer = token(99);
+    ASSERT_EQ(switch_gpu_backing_snapshot_read(allocation, &producer, &lease), 0);
+    EXPECT_EQ(producer.engine, 0u);
+    ASSERT_EQ(cache.size(), 1u);
+    EXPECT_EQ(cache[0].invalidate, SWITCH_GPU_CACHE_CLEAN);
+    EXPECT_EQ(cache[0].bytes, 8192u);
+    EXPECT_EQ(publish(allocation, SWITCH_GPU_BACKING_WRITE, token(99)), -16);
+    EXPECT_EQ(switch_gpu_backing_cpu_release_owned(&lease, 0), 0);
+    cache.clear();
+    ASSERT_EQ(switch_gpu_backing_snapshot_read(allocation, &producer, &lease), 0);
+    EXPECT_TRUE(cache.empty());
+    EXPECT_EQ(switch_gpu_backing_cpu_release_owned(&lease, 0), 0);
+    switch_gpu_backing_release(allocation);
+}
+
+TEST_F(Backing, PhysicalSnapshotRetainsPendingWriterWithoutCpuWait)
+{
+    auto *allocation = backing();
+    const auto writer = token(101, 22);
+    ASSERT_EQ(publish(allocation, SWITCH_GPU_BACKING_WRITE, writer), 0);
+    cache.clear();
+    switch_gpu_cpu_lease *lease = nullptr;
+    switch_gpu_backing_token producer = {};
+    ASSERT_EQ(switch_gpu_backing_snapshot_read(allocation, &producer, &lease), 0);
+    EXPECT_EQ(producer.value, writer.value);
+    EXPECT_EQ(producer.queue, writer.queue);
+    EXPECT_EQ(timelines[key(&writer)].completed, 0u);
+    EXPECT_TRUE(cache.empty());
+    EXPECT_EQ(switch_gpu_backing_cpu_release_owned(&lease, 0), 0);
+    switch_gpu_backing_release(allocation);
+}
+
+TEST_F(Backing, PhysicalSnapshotRefusesCpuAndFailedGpuWriters)
+{
+    auto *allocation = backing();
+    ASSERT_EQ(switch_gpu_backing_cpu_acquire(allocation, 0, 4096, SWITCH_GPU_BACKING_WRITE), 0);
+    switch_gpu_cpu_lease *lease = nullptr;
+    switch_gpu_backing_token producer = {};
+    EXPECT_EQ(switch_gpu_backing_snapshot_read(allocation, &producer, &lease), -16);
+    EXPECT_EQ(lease, nullptr);
+    ASSERT_EQ(switch_gpu_backing_cpu_release(allocation, 0, 4096, SWITCH_GPU_BACKING_WRITE), 0);
+    ASSERT_EQ(switch_gpu_backing_snapshot_read(allocation, &producer, &lease), 0);
+    EXPECT_EQ(producer.engine, 0u);
+    EXPECT_EQ(switch_gpu_backing_cpu_release_owned(&lease, 0), 0);
+    const auto writer = token(102);
+    ASSERT_EQ(publish(allocation, SWITCH_GPU_BACKING_WRITE, writer), 0);
+    timelines[key(&writer)].error = -5;
+    EXPECT_EQ(switch_gpu_backing_snapshot_read(allocation, &producer, &lease), -5);
+    EXPECT_EQ(lease, nullptr);
+    switch_gpu_backing_release(allocation);
+}
+
+TEST_F(Backing, PhysicalSnapshotWaitSleepsOnlyForCpuOwner)
+{
+    auto *allocation = backing();
+    ASSERT_EQ(switch_gpu_backing_cpu_acquire(allocation, 0, 4096, SWITCH_GPU_BACKING_WRITE), 0);
+    switch_gpu_cpu_lease *lease = nullptr;
+    switch_gpu_backing_token producer = {};
+    auto acquire = std::async(std::launch::async, [&] {
+        return switch_gpu_backing_snapshot_read_wait(allocation, &producer, &lease);
+    });
+    EXPECT_EQ(acquire.wait_for(std::chrono::milliseconds(20)), std::future_status::timeout);
+    ASSERT_EQ(switch_gpu_backing_cpu_release(allocation, 0, 4096, SWITCH_GPU_BACKING_WRITE), 0);
+    ASSERT_EQ(acquire.get(), 0);
+    EXPECT_EQ(producer.engine, 0u);
+    EXPECT_EQ(publish(allocation, SWITCH_GPU_BACKING_WRITE, token(103)), -16);
+    EXPECT_EQ(switch_gpu_backing_cpu_release_owned(&lease, 0), 0);
+    switch_gpu_backing_release(allocation);
+}
+
+TEST_F(Backing, NativeViewReadPublishesBothAuthorityAndPhysicalLifetime)
+{
+    auto *logical = backing(), *native = backing();
+    const auto producer = token(104, 7, SWITCH_GPU_ENGINE_NVDEC);
+    ASSERT_EQ(publish(native, SWITCH_GPU_BACKING_WRITE, producer), 0);
+    volatile uint64_t payload = 1, representation = 3;
+    switch_gpu_native_surface_view view = {};
+    view.logical = logical; view.native = native;
+    view.payload = {logical, &payload, 1};
+    view.representation = {logical, &representation, 3};
+    switch_gpu_backing_use uses[2] = {};
+    switch_gpu_backing_guard guards[2] = {};
+    uint32_t useCount = 0, guardCount = 0;
+    ASSERT_EQ(switch_gpu_native_surface_add_read(view, SWITCH_GPU_BACKING_READ,
+        uses, guards, 2, useCount, guardCount), 0);
+    switch_gpu_backing_transaction transaction = {};
+    const auto consumer = token(105);
+    ASSERT_EQ(switch_gpu_backing_begin_checked(uses, useCount, guards, guardCount, &consumer, &transaction), 0);
+    switch_gpu_backing_token dependency = {};
+    uint32_t needed = 0;
+    ASSERT_EQ(switch_gpu_backing_dependencies(&transaction, &dependency, 1, &needed), 0);
+    EXPECT_EQ(needed, 1u); EXPECT_EQ(dependency.queue, producer.queue);
+    switch_gpu_backing_commit(&transaction);
+    EXPECT_EQ(switch_gpu_backing_cpu_acquire(logical, 0, 4096,
+        SWITCH_GPU_BACKING_WRITE | SWITCH_GPU_BACKING_CPU_AVOID_SYNC), -16);
+    EXPECT_EQ(switch_gpu_backing_cpu_acquire(native, 0, 4096,
+        SWITCH_GPU_BACKING_WRITE | SWITCH_GPU_BACKING_CPU_AVOID_SYNC), -16);
+    representation = 4;
+    const auto stale = token(106);
+    EXPECT_EQ(switch_gpu_backing_begin_checked(uses, useCount, guards, guardCount, &stale, &transaction),
+              SWITCH_GPU_BACKING_STALE);
+    EXPECT_EQ(timelines[key(&stale)].refs, 0);
+    switch_gpu_backing_release(logical); switch_gpu_backing_release(native);
+}
+
+TEST_F(Backing, PitchProxyRequiresItsGenerationAndNeverAuthorizesWrites)
+{
+    auto *logical = backing();
+    volatile uint64_t representation = 4;
+    switch_gpu_native_surface_view view = {};
+    view.logical = view.native = logical;
+    view.representation = {logical, &representation, 4};
+    switch_gpu_backing_use uses[2] = {};
+    switch_gpu_backing_guard guards[2] = {};
+    uint32_t useCount = 0, guardCount = 0;
+    EXPECT_EQ(switch_gpu_native_surface_add_read(view, SWITCH_GPU_BACKING_WRITE,
+        uses, guards, 2, useCount, guardCount), -22);
+    EXPECT_EQ(useCount, 0u); EXPECT_EQ(guardCount, 0u);
+    EXPECT_EQ(switch_gpu_native_surface_add_read(view, SWITCH_GPU_BACKING_READ,
+        uses, guards, 1, useCount, guardCount), -28);
+    EXPECT_EQ(useCount, 0u); EXPECT_EQ(guardCount, 0u);
+    ASSERT_EQ(switch_gpu_native_surface_add_read(view, SWITCH_GPU_BACKING_READ,
+        uses, guards, 2, useCount, guardCount), 0);
+    EXPECT_EQ(guardCount, 1u);
+    representation = 5;
+    switch_gpu_backing_transaction transaction = {};
+    const auto consumer = token(107);
+    EXPECT_EQ(switch_gpu_backing_begin_checked(uses, useCount, guards, guardCount, &consumer, &transaction),
+              SWITCH_GPU_BACKING_STALE);
+    switch_gpu_backing_release(logical);
+}
+
+namespace {
+bool hostAcquire(switch_gpu_backing *allocation, switch_gpu_backing_token completion)
+{
+	switch_gpu_backing_use use = {allocation, SWITCH_GPU_BACKING_READ, 0};
+	switch_gpu_backing_transaction transaction{};
+	EXPECT_EQ(switch_gpu_backing_begin(&use, 1, &completion, &transaction), 0);
+	const bool needed = transaction.host_written;
+	switch_gpu_backing_commit(&transaction);
+	return needed;
+}
+void installVisibility()
+{
+	const switch_gpu_backing_visibility ops = {external_status, external_wait};
+	const int result = switch_gpu_backing_register_visibility(SWITCH_GPU_ENGINE_GM20B, &ops);
+	ASSERT_TRUE(result == 0 || result == -16);
+}
+}
+
+TEST_F(Backing, InitialHostEpochWaitsForTheFirstSuccessfulAcquireEvenWithNewerWorkQueued)
+{
+	auto *allocation = backing();
+	const auto first = token(301, 1), second = token(301, 2), third = token(301, 3);
+	EXPECT_TRUE(hostAcquire(allocation, first));
+	EXPECT_TRUE(hostAcquire(allocation, second));
+	timelines[key(&first)].completed = 1;
+	EXPECT_FALSE(hostAcquire(allocation, third));
+	switch_gpu_backing_release(allocation);
+}
+
+TEST_F(Backing, CpuCleanPublicationStillRequiresANewGpuAcquire)
+{
+	auto *allocation = backing();
+	const auto first = token(302, 1);
+	EXPECT_TRUE(hostAcquire(allocation, first));
+	timelines[key(&first)].completed = 1;
+	ASSERT_EQ(switch_gpu_backing_cpu_acquire(allocation, 0, 4096, SWITCH_GPU_BACKING_WRITE), 0);
+	ASSERT_EQ(switch_gpu_backing_cpu_release(allocation, 0, 4096, SWITCH_GPU_BACKING_WRITE), 0);
+	EXPECT_TRUE(hostAcquire(allocation, token(302, 2)));
+	switch_gpu_backing_release(allocation);
+}
+
+TEST_F(Backing, ExternalEngineWriterRequiresGpuCacheAcquire)
+{
+	auto *allocation = backing();
+	const auto first = token(303, 1), vic = token(304, 1, SWITCH_GPU_ENGINE_VIC);
+	EXPECT_TRUE(hostAcquire(allocation, first));
+	timelines[key(&first)].completed = 1;
+	ASSERT_EQ(publish(allocation, SWITCH_GPU_BACKING_WRITE, vic), 0);
+	timelines[key(&vic)].completed = 1;
+	EXPECT_TRUE(hostAcquire(allocation, token(303, 2)));
+	switch_gpu_backing_release(allocation);
+}
+
+TEST_F(Backing, FailedHostAcquireDoesNotAcknowledgeTheMemoryEpoch)
+{
+	auto *allocation = backing();
+	const auto first = token(305, 1);
+	EXPECT_TRUE(hostAcquire(allocation, first));
+	timelines[key(&first)].error = -5;
+	EXPECT_TRUE(hostAcquire(allocation, token(306, 1)));
+	switch_gpu_backing_release(allocation);
+}
+
+TEST_F(Backing, CpuAvoidSyncRejectsExecutedButNotExternallyVisibleWritesWithoutLeaking)
+{
+	installVisibility();
+	auto *allocation = backing();
+	const auto writer = token(307, 1);
+	ASSERT_EQ(publish(allocation, SWITCH_GPU_BACKING_WRITE, writer), 0);
+	timelines[key(&writer)].completed = 1;
+	external_completed[key(&writer)] = 0;
+	EXPECT_EQ(switch_gpu_backing_cpu_acquire(allocation, 0, 4096,
+		SWITCH_GPU_BACKING_READ | SWITCH_GPU_BACKING_CPU_AVOID_SYNC), -16);
+	EXPECT_EQ(publish(allocation, SWITCH_GPU_BACKING_WRITE, token(308)), 0);
+	switch_gpu_backing_release(allocation);
+}
+
+TEST_F(Backing, CpuReadPromotesVisibilityBeforeInvalidating)
+{
+	installVisibility();
+	auto *allocation = backing();
+	const auto writer = token(309, 1);
+	ASSERT_EQ(publish(allocation, SWITCH_GPU_BACKING_WRITE, writer), 0);
+	timelines[key(&writer)].completed = 1;
+	external_completed[key(&writer)] = 0;
+	const auto before = external_waits;
+	ASSERT_EQ(switch_gpu_backing_cpu_acquire(allocation, 0, 4096, SWITCH_GPU_BACKING_READ), 0);
+	EXPECT_EQ(external_waits, before + 1);
+	ASSERT_FALSE(cache.empty());
+	EXPECT_EQ(cache.back().invalidate, SWITCH_GPU_CACHE_INVALIDATE);
+	EXPECT_EQ(switch_gpu_backing_cpu_release(allocation, 0, 4096, SWITCH_GPU_BACKING_READ), 0);
+	switch_gpu_backing_release(allocation);
+}
+
+TEST_F(Backing, VicDependsOnExecutedInternalGpuWritesUntilExternalVisibility)
+{
+	installVisibility();
+	auto *allocation = backing();
+	const auto writer = token(310, 1), vic = token(311, 1, SWITCH_GPU_ENGINE_VIC);
+	ASSERT_EQ(publish(allocation, SWITCH_GPU_BACKING_WRITE, writer), 0);
+	timelines[key(&writer)].completed = 1;
+	external_completed[key(&writer)] = 0;
+	switch_gpu_backing_use use = {allocation, SWITCH_GPU_BACKING_READ, 0};
+	switch_gpu_backing_transaction transaction{};
+	ASSERT_EQ(switch_gpu_backing_begin(&use, 1, &vic, &transaction), 0);
+	switch_gpu_backing_token dependency{};
+	uint32_t count = 0;
+	ASSERT_EQ(switch_gpu_backing_dependencies(&transaction, &dependency, 1, &count), 0);
+	ASSERT_EQ(count, 1u);
+	EXPECT_EQ(dependency.queue, writer.queue);
+	switch_gpu_backing_abort(&transaction);
 	switch_gpu_backing_release(allocation);
 }

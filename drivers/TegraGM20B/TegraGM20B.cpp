@@ -204,7 +204,7 @@ void bringup(void *arg, wait_result_t)
 		}
 		// Bring-up: the text console lags the log, and logd flushes every few seconds; let both catch up so a stage
 		// that hangs the machine still leaves the previous stage's result on screen and on Data.
-		if (nvxnu_trace_paced())
+		if (TGM_STATS && nvxnu_trace_paced())
 			IOSleep(3000);
 	}
 	if (stage >= 4) {
@@ -262,7 +262,8 @@ extern "C" int switch_gpu_compression_on(void)
 	return static_cast<int>(on);
 }
 
-extern "C" void tgm_journal(const char *fmt, ...)
+#if DEVELOPMENT || DEBUG
+extern "C" void tgm_journal_impl(const char *fmt, ...)
 {
 	char line[256];
 	va_list ap;  // NOLINT(cppcoreguidelines-init-variables): va_start initializes it
@@ -271,6 +272,8 @@ extern "C" void tgm_journal(const char *fmt, ...)
 	va_end(ap);
 	switch_power_journal("%s", line);
 }
+
+#endif
 
 extern "C" void tegra_gm20b_suspend(void)
 {

@@ -1208,6 +1208,7 @@ unsigned long nvxnu_pool_used_pages(void);
 /* BO pages in the pool (shim/linux.c): an allocation zeroes only pages a plain free left dirty; a range the caller zeroed
  * goes back clean. */
 void *nvxnu_pool_alloc_clean(unsigned long size, unsigned long align, unsigned long long *pa);
+void *nvxnu_pool_alloc_ready(unsigned long size, unsigned long align, unsigned long reserve, unsigned long long *pa);
 void nvxnu_pool_free_zeroed(unsigned long long pa, unsigned long size);
 /* `count` zeroed 128 KiB chunks for a compressible BO (TegraGM20BComp.h tgm_comp_pick_chunks): the address of each of their
  * 4 KiB pages, chunk by chunk, in `pas`. -ENOMEM, with nothing taken, when the pool has fewer free chunks. */
