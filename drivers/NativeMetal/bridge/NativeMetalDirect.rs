@@ -783,12 +783,14 @@ pub unsafe extern "C" fn nmb_render_pipeline_direct(
         let nmb = get(device)?;
         let runtime = nmb.device();
         let descriptor = render_descriptor(descriptor)?;
-        let barrier_compile = if barrier || binds.fragment_tests != 0 {
-            Some(specialized_device(nmb, barrier)?)
+        // Every raw form of a state (default, storage, ordered, barrier) and every compute kernel lowers half on SM53, so
+        // a storage form and its barrier twin round alike. m2v's own twin stays on the Vulkan target (no float16 below SM70).
+        let compile = if barrier || binds.fragment_tests != 0 {
+            specialized_device(nmb, barrier)?
         } else {
-            None
+            native_compute_device(nmb)?
         };
-        let compile = barrier_compile.as_deref().unwrap_or(runtime.compile_device());
+        let compile = compile.as_ref();
         let format = match texture_format {
             0 => PixelFormat::BGRA8Unorm,
             f => raw::<PixelFormat>(f, "texture format")?,
