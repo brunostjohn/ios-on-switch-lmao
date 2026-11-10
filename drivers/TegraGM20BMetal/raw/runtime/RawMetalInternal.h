@@ -160,6 +160,7 @@ struct RawState {
     // The two drivers' order (submit lock): on the GPU when the kernel has Order (TegraGM20BInfoOrder), else on the CPU (the
     // m2v work before a raw command buffer completes first, and the raw work before an m2v one).
     bool gpuOrder = false;
+    uint64_t orderRefusedAt = 0;  // raw::Device::Stats::reopens when the kernel last refused an Order (raw_order.h)
     bool rawSinceM2v =
         false;  // raw work submitted since the last m2v commit: the next m2v one waits for it (BeforeTask)
     bool m2vSinceRaw =

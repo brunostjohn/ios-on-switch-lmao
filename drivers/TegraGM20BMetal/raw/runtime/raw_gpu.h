@@ -37,6 +37,7 @@
 #include "raw_descriptors.h"
 #include "raw_kernel.h"
 #include "raw_heap.h"
+#include "raw_order.h"
 #include "raw_pack.h"
 #include "raw_push.h"
 #include "raw_overlap.h"
@@ -1091,7 +1092,8 @@ public:
     // GPU-side order with the process's other driver (NVK's channels), through the kernel's Order (TegraGM20BInfoOrder; false:
     // it has none). orderAfterOthers: this channel's next submission starts with an acquire on what they submitted so far;
     // orderOthersAfter: their next submissions start with one on everything this channel submitted. The kern_return_t (0:
-    // queued; else the caller orders on the CPU); `waits`: the acquires queued. Called where submissions are (serialised).
+    // queued; kOrderNoChannel: no channel to order; else the kernel refused it and the caller orders on the CPU); `waits`:
+    // the acquires queued. Called where submissions are (serialised).
     bool canOrder() const
     {
         return k_.canOrder();
@@ -1102,13 +1104,15 @@ public:
     int orderAfterOthers(uint32_t &waits)
     {
         if (!ensureChannel())
-            return KERN_FAILURE;
+            return kOrderNoChannel;
         for (int attempt = 0;; attempt++) {
             if ((contextless_ || k_.lost(channel_)) && !reopen())
-                return KERN_FAILURE;
+                return kOrderNoChannel;
             const int kr = k_.order(channel_, TegraGM20BOrderAfterTask, 0, waits);
-            if (kr != kIOReturnNotResponding || attempt)
+            if (kr != kIOReturnNotResponding)
                 return kr;
+            if (attempt)
+                return kOrderNoChannel;
         }
     }
 
