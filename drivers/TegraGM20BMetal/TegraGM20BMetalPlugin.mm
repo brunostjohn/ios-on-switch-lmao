@@ -58,6 +58,7 @@
 #include <initializer_list>
 #include <mutex>
 #include <dlfcn.h>
+#include <mach-o/dyld.h>
 #include <notify.h>
 #include <errno.h>
 #include <fcntl.h>
@@ -582,6 +583,11 @@ void startRates()
     observeDisplayLinkRates();
     observeRedrawCauses();
     observeRf16Request();
+    // kprof keys a user PC as main+<offset from the process's main header> within 256 MiB of it, else as "other": the
+    // plugin's base beside its main header turns a main+ sample into an offset in this bundle's binary
+    if (Dl_info self = {}; dladdr(reinterpret_cast<const void *>(&startRates), &self) && self.dli_fbase)
+        os_log(logger(), "TegraGM20BMetal: %{public}s image base 0x%lx, main header 0x%lx", processWord(),
+               (unsigned long)(uintptr_t)self.dli_fbase, (unsigned long)(uintptr_t)_dyld_get_image_header(0));
     static dispatch_source_t timer;
     timer = dispatch_source_create(DISPATCH_SOURCE_TYPE_TIMER, 0, 0, dispatch_get_global_queue(QOS_CLASS_UTILITY, 0));
     dispatch_source_set_timer(timer, dispatch_time(DISPATCH_TIME_NOW, 5 * NSEC_PER_SEC), 5 * NSEC_PER_SEC,
