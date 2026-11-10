@@ -78,9 +78,6 @@ extern "C" void native_legacy_client_enter(task_t, uint32_t);
 extern "C" void native_legacy_client_observed(IOReturn, IOUserClient *);
 extern "C" void native_legacy_pm_observed(unsigned, IOReturn, unsigned long);
 extern "C" IOMemoryDescriptor *native_legacy_surface_descriptor(OSObject *);
-// drivers/TegraGM20B gpu.c: waits for every GPU submission, then cleans+invalidates the range. Weak: absent, the copy is unchanged.
-// 0, or -ETIMEDOUT once the deadline passed (the range is invalidated either way); with no GPU channel it returns at once.
-extern "C" int tegra_gm20b_sync_for_cpu(const void *, uint64_t, uint64_t) __attribute__((weak));
 // XNU ipc_kmsg.c (osfmk/ipc/switch_render_senders.h): the mach messages the render server receives, by sender
 extern "C" void switch_render_server_watch(task_t);
 // NOLINTNEXTLINE(readability-redundant-declaration): not every kernel configuration's headers declare it
@@ -1037,7 +1034,6 @@ class NativeLegacyDisplay : public IOMobileFramebufferLegacy {
                            kWinOptions};  // WIN_OPTIONS last: the window is enabled once the rest is in place
     uint32_t savedWindow[sizeof(kWindowAState) / sizeof(kWindowAState[0])] = {};
     uint32_t savedDispWinOptions = 0, savedActControl = 0, savedScratchB = 0, savedIntEnable = 0, savedIntMask = 0;
-    static constexpr uint64_t kGpuWaitNs = 100000000ULL;
     // Off-gate copy (hardware rotation only): the kick hands a surface swap's GPU wait, scans and
     // swizzle to copyLoop's thread and returns, so neither the compositor's submitting thread nor the family's gate (and with it the
     // vblank action: vsync notifications, flip latches) waits for them; copyFinished, back under the gate, presents the frame and
@@ -1054,7 +1050,6 @@ class NativeLegacyDisplay : public IOMobileFramebufferLegacy {
         uint64_t stride, allocation;
         uint32_t width, height;
         IOReturn status;
-        bool timedOut;
         uint64_t gpu, cache, copy, readTicks;
         uint32_t attribute;
         int swizzled;  // the copy thread's results
@@ -3684,6 +3679,7 @@ public:
         const auto releaseSource = [&] {
             if (ownedSource)
                 OSSafeReleaseNULL(source);
+            releaseSourceWait();
         };
         if (!source || !source->getVirtualAddress() || source->getLength() < allocation) {
             releaseSource();
@@ -3704,16 +3700,16 @@ public:
             startCopy(request, source, ownedSource, sourceStride, allocation, width, height, tiled, kickAt);
             return;
         }
-        {
-            uint64_t gpu = 0;
-            uint64_t cache = 0;
-            bool timedOut = false;
-            syncForCpu(sourceAddress, allocation, gpu, cache, timedOut);
-            if (stats && tegra_gm20b_sync_for_cpu) {
-                stGpu.add(gpu);
-                stCache.add(cache);
-                stGpuTimeouts += static_cast<uint32_t>(timedOut);
-            }
+        uint64_t gpu = 0, cache = 0;
+        if (const int error = holdCopySource(surface) ? readyCopySource(sourceAddress, allocation, gpu, cache) : -12) {
+            releaseSource();
+            native_legacy_transfer_observed(error == TEGRA_SCANOUT_SOURCE_LOST ? kIOReturnAborted : kIOReturnNotReady,
+                                            request, 0);
+            return;
+        }
+        if (stats) {
+            stGpu.add(gpu);
+            stCache.add(cache);
         }
         if (hwRotate
                 ? !native_legacy_block_layout(reinterpret_cast<volatile void *>(drawSurface()->getVirtualAddress()),
@@ -3844,30 +3840,6 @@ public:
     {
         owned = true;
         return memory->map(kIOMapAnywhere | kIOMapReadOnly);
-    }
-
-    // With CA on Metal the GPU renders the surface, and CA may swap it before the GPU is done. The GPU is not IO-coherent:
-    // wait for its submitted work (at most kGpuWaitNs; later, the frame shows torn), then drop the mapping's
-    // cache lines (the frame copied from the same surface a few swaps ago is still in them) so every read after sees DRAM. No GPU client:
-    // returns at once, no cache operation. With the stats the two are timed apart: the wait alone (a zero-length range), then the same
-    // clean+invalidate done here (not a second zero-timeout sync: gpu.c panics on any sync timeout, and a submission made in between
-    // would be one). Ticks, 0 without stats.
-    static void syncForCpu(const void *address, uint64_t bytes, uint64_t &gpu, uint64_t &cache, bool &timedOut)
-    {
-        gpu = cache = 0;
-        timedOut = false;
-        if (!tegra_gm20b_sync_for_cpu)
-            return;
-        if (!stats) {
-            tegra_gm20b_sync_for_cpu(address, bytes, kGpuWaitNs);
-            return;
-        }
-        const uint64_t waitAt = mach_absolute_time();
-        timedOut = tegra_gm20b_sync_for_cpu(address, 0, kGpuWaitNs) != 0;
-        const uint64_t cacheAt = mach_absolute_time();
-        switch_dcache_clean_invalidate(address, bytes);
-        gpu = cacheAt - waitAt;
-        cache = mach_absolute_time() - cacheAt;
     }
 
     // The block-linear pass into target: kSwizzleTiled, kSwizzleByte or kSwizzleFailed; native_legacy_block_layout (the
@@ -4084,10 +4056,9 @@ public:
             noteCopy(job.copy);
         }
         if (stats) {
-            if (tegra_gm20b_sync_for_cpu && job.status != kIOReturnAborted) {
+            if (job.status != kIOReturnAborted) {
                 stGpu.add(job.gpu);
                 stCache.add(job.cache);
-                stGpuTimeouts += static_cast<uint32_t>(job.timedOut);
             }
             if (job.read)
                 stRead = job.readTicks;
