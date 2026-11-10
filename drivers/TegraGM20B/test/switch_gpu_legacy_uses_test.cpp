@@ -245,3 +245,21 @@ TEST_F(Backing, ListedSubmitUnderACpuWriterStillCleansEveryCpuWrite)
 	EXPECT_EQ(cache.back().bytes, 4096u);
 	switch_gpu_backing_release(surface);
 }
+
+TEST_F(Backing, LegacyUsesOfANewestFirstListComeOldestFirst)
+{
+	std::array<Bo, 5> bos = {};
+	for (size_t i = 0; i < bos.size(); ++i)
+		bos[i] = {i ? &bos[i - 1] : nullptr, backing(), nullptr, false, i + 1};
+	std::array<switch_gpu_backing_use, 5> uses = {};
+	ASSERT_EQ(switch_gpu_legacy_uses(&bos.back(), false, [](uint64_t) { return 0u; }, uses.data()), 5u);
+	uint64_t previous = 0;
+	for (const auto &use : uses) {
+		switch_gpu_backing_info info = {};
+		switch_gpu_backing_describe(use.backing, &info);
+		EXPECT_GT(info.allocation_id, previous);
+		previous = info.allocation_id;
+	}
+	for (auto &bo : bos)
+		switch_gpu_backing_release(bo.backing);
+}

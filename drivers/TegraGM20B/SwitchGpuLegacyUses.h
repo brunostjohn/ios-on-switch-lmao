@@ -36,5 +36,12 @@ uint32_t switch_gpu_legacy_uses(const Bo *bos, bool listed, ListedAccess listed_
 		if (access)
 			out[count++] = {bo->backing, access, 0};
 	}
+	// A connection lists its BOs newest first, and begin insertion-sorts uses by allocation id: oldest first keeps that
+	// sort linear in the BO count instead of quadratic.
+	for (uint32_t i = 0; i < count / 2; ++i) {
+		const switch_gpu_backing_use swap = out[i];
+		out[i] = out[count - 1 - i];
+		out[count - 1 - i] = swap;
+	}
 	return count;
 }
