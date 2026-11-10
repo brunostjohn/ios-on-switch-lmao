@@ -8,6 +8,8 @@ load("@rules_rust//rust:defs.bzl", "rust_test")
 #   native_artifact_seed_test  NativeComputeArtifactStorage.h: the process's own analyses, then the seed's packed ones
 #                           (SWITCH_SEED_TREE=<an image's ngpu/addons> with --test_env also reads back some of a built seed's)
 #   metallib_entries_test   MetallibEntries.h: a metallib's function list, and which entries Metal answers as extern
+#   journal_source_test     NativeBridgeMetalFrontend.mm: a raw-made state's journal line is written on the persist queue,
+#                           not on its creating thread
 #
 #   bazel test //drivers/NativeMetal/test:all
 load("//bazel/lint:defs.bzl", "lint_files")
@@ -121,5 +123,14 @@ host_test(
     linkopts = [
         "-framework",
         "Foundation",
+    ],
+)
+
+host_test(
+    name = "journal_source_test",
+    srcs = ["journal_source_test.cpp"],
+    data = [
+        "//drivers/NativeMetal:NativeBridgeMetalFrontend.mm",
+        "//drivers/TegraGM20BMetal:raw/runtime/RawMetalStates.mm",
     ],
 )

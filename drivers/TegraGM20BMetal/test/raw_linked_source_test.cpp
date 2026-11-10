@@ -58,7 +58,7 @@ TEST(RawLinkedSource, AFunctionKeepsTheSpecializedNameItWasMadeUnder)
     EXPECT_THAT(made, HasSubstr("function.libraryName = name;"));
     // the journal names the library function, and the specialized name beside it
     EXPECT_THAT(Body(frontend, "static std::string stageText(NBFunction *f)"), HasSubstr("\" as=\""));
-    EXPECT_THAT(Body(frontend, "static void journalRenderPipeline("), HasSubstr("line += linkedText(d);"));
+    EXPECT_THAT(Body(frontend, "static std::string renderPipelineLine("), HasSubstr("line += linkedText(d);"));
 
     const std::string bridge = SourceText("../../NativeMetal/bridge/NativeMetalObjects.rs");
     EXPECT_THAT(Body(bridge, "fn linked_functions("), HasSubstr(".with_link_name(specialized.clone())"));

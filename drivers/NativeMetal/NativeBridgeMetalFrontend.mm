@@ -2125,7 +2125,7 @@ static NSData *functionBitcode(NBFunction *function)
 
 static char computeArtifactKey;
 
-static dispatch_queue_t nativeArtifactQueue()
+static dispatch_queue_t persistQueue()
 {
     static dispatch_queue_t queue;
     static dispatch_once_t once;
@@ -2146,7 +2146,7 @@ static void saveNativeArtifact(NBNativeComputeArtifact *artifact)
         return;
     }
     const std::string directory = gNativeArtifactStorage.cache;
-    dispatch_async(nativeArtifactQueue(), ^{
+    dispatch_async(persistQueue(), ^{
         @autoreleasepool {
             NativeComputeArtifactStorage::save(artifact->_artifact, artifact->_cacheKey, directory);
         }
@@ -5089,12 +5089,11 @@ static std::string linkedText(MTLRenderPipelineDescriptor *d)
 }
 
 // One journal line of a render pipeline creation begun at `began` (microseconds), `refused` its refusal or null. The label is the
-// caller's name for the pipeline (QuartzCore's: its spec's encoded name).
-static void journalRenderPipeline(MTLRenderPipelineDescriptor *d, MTLPipelineOption options, uint64_t began,
-                                  const char *refused, const std::string &cost)
+// caller's name for the pipeline (QuartzCore's: its spec's encoded name). Built on the creating thread: it names that thread
+// and its QuartzCore callers.
+static std::string renderPipelineLine(MTLRenderPipelineDescriptor *d, MTLPipelineOption options, uint64_t began,
+                                      const char *refused, const std::string &cost)
 {
-    if (!journalOn())
-        return;
     const uint64_t ended = nowUs();
     uint64_t tid = 0;
     pthread_threadid_np(nullptr, &tid);
@@ -5146,7 +5145,14 @@ static void journalRenderPipeline(MTLRenderPipelineDescriptor *d, MTLPipelineOpt
     for (char &c : line)
         if (c == '\n')
             c = ' ';
-    journal(line);
+    return line;
+}
+
+static void journalRenderPipeline(MTLRenderPipelineDescriptor *d, MTLPipelineOption options, uint64_t began,
+                                  const char *refused, const std::string &cost)
+{
+    if (journalOn())
+        journal(renderPipelineLine(d, options, began, refused, cost));
 }
 
 // One journal line of a compute pipeline creation begun at `began`, `refused` its refusal or null: made from the function `f` alone
@@ -5198,8 +5204,17 @@ static std::string journalComputePipeline(MTLComputePipelineDescriptor *d, NBFun
 
 extern "C" void native_bridge_metal_journal_render(id descriptor, NSUInteger options)
 {
-    SWITCH_METAL_DIAGNOSTIC(journalRenderPipeline((MTLRenderPipelineDescriptor *)descriptor, (MTLPipelineOption)options,
-                                                  nowUs(), nullptr, std::string()));
+#if SWITCH_FRAME_TIMELINE
+    // The creating thread can be Core Animation's render thread: the journal's lock and write(2) run on the persist
+    // queue, which keeps these lines in their order.
+    if (journalOn()) {
+        const std::string line = renderPipelineLine((MTLRenderPipelineDescriptor *)descriptor,
+                                                    (MTLPipelineOption)options, nowUs(), nullptr, std::string());
+        dispatch_async(persistQueue(), ^{
+            journal(line);
+        });
+    }
+#endif
     (void)descriptor;
     (void)options;
 }

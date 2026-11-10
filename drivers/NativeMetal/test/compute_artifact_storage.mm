@@ -92,7 +92,7 @@ int main(int argc, char **argv)
         const std::string background = std::string(argv[2]) + "/fixture-background";
         gNativeArtifactStorage.cache = background;
         dispatch_semaphore_t permit = dispatch_semaphore_create(0);
-        dispatch_async(nativeArtifactQueue(), ^{ dispatch_semaphore_wait(permit, DISPATCH_TIME_FOREVER); });
+        dispatch_async(persistQueue(), ^{ dispatch_semaphore_wait(permit, DISPATCH_TIME_FOREVER); });
         __weak id retained = nil;
         @autoreleasepool {
             MTLComputePipelineDescriptor *queued = [same copy];
@@ -104,7 +104,7 @@ int main(int argc, char **argv)
               "background persistence retains artifact after caller release without waiting");
         gNativeArtifactStorage.cache.clear();
         dispatch_semaphore_signal(permit);
-        dispatch_sync(nativeArtifactQueue(), ^{});
+        dispatch_sync(persistQueue(), ^{});
         check(gNativeArtifactWrites == 0, "background persistence retires its bounded slot");
         same.maxTotalThreadsPerThreadgroup = 96;
         gNativeArtifactStorage.cache = background;
