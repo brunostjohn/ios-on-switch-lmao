@@ -978,7 +978,7 @@ class AGXDeviceUserClient : public IOUserClient
 	void takeRetiredOverlaps(uint64_t va, uint64_t bytes);
 	void retire(RetiredBinding *record);
 	IOReturn cutOverlaps(uint64_t va, uint64_t range, bool now, bool replace, RetiredBinding **spare);
-	bool workQueued() const;
+	bool workQueued(uint64_t va, uint64_t range) const;
 	IOReturn mapRange(const TegraGM20BAbiBindOp &op, Bo *bo, RetiredBinding *record, bool queued);
 	void issueBind();
 	void installPendingBinds();
@@ -1731,7 +1731,7 @@ IOReturn AGXDeviceUserClient::vmBind(const TegraGM20BAbiVmBind *in, uint32_t cou
 									     : kIOReturnSuccess;
 		// Work queued now may still use what the range held: its PTEs stay until that work completes, and a Map's
 		// new PTEs wait for retirement behind the bind epoch. With none queued, both happen here.
-		const bool queued = workQueued();
+		const bool queued = workQueued(op.va, op.range);
 		if (!cut)
 			cut = cutOverlaps(op.va, op.range, !queued, !unmap, spare);
 		freeSpare();

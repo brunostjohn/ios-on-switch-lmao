@@ -268,10 +268,23 @@ IOReturn AGXDeviceUserClient::mapRange(const TegraGM20BAbiBindOp &op, Bo *bo, Re
 	return kIOReturnSuccess;
 }
 
-// lock_ held. Whether this connection has GPU work queued that a binding could still be in use by (a killed or
-// replaced channel's counts as done, as bindingIdle counts it).
-bool AGXDeviceUserClient::workQueued() const
+// lock_ held. Whether [va, va + range) has PTEs, live or retiring, that work queued now could still use (a killed or
+// replaced channel's work counts as done, as bindingIdle counts it). A range nothing held maps at once.
+bool AGXDeviceUserClient::workQueued(uint64_t va, uint64_t range) const
 {
+	bool held = false;
+	for (uint32_t i = 0; i < nbinds_ && !held; ++i)
+		held = binds_[i].va < va + range && va < binds_[i].va + binds_[i].range;
+	const RetiredBinding *const lists[] = {retired_, unmapping_};
+	for (const auto *list : lists)
+		for (const auto *record = list; record && !held; record = record->next) {
+			uint64_t from = 0, bytes = 0;
+			held = switch_gpu_mapping_installed(record->mapping) &&
+			       !switch_gpu_mapping_span(record->mapping, &from, &bytes) && from < va + range &&
+			       va < from + bytes;
+		}
+	if (!held)
+		return false;
 	for (uint32_t slot = 0; slot < kMaxChannels; ++slot)
 		if (chans_[slot] && !tgm_chan_error(chans_[slot]) &&
 		    int32_t(tgm_chan_completed(chans_[slot]) - tgm_chan_submitted(chans_[slot])) < 0)

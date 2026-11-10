@@ -428,7 +428,7 @@ public:
 	void takeRetiredOverlaps(uint64_t, uint64_t);
 	void retire(RetiredBinding *);
 	IOReturn cutOverlaps(uint64_t, uint64_t, bool, bool, RetiredBinding **);
-	bool workQueued() const;
+	bool workQueued(uint64_t, uint64_t) const;
 	IOReturn mapRange(const TegraGM20BAbiBindOp &, Bo *, RetiredBinding *, bool);
 	void issueBind();
 	void installPendingBinds();
@@ -469,7 +469,7 @@ public:
 	{
 		RetiredBinding *spare[2] = {new RetiredBinding{}, new RetiredBinding{}};
 		IOLockLock(lock_);
-		const bool queued = workQueued();
+		const bool queued = workQueued(va, range);
 		IOReturn result = cutOverlaps(va, range, !queued, bo != nullptr, spare);
 		if (!result && bo) {
 			TegraGM20BAbiBindOp op = {};
@@ -496,6 +496,9 @@ protected:
 
 	void SetUp() override
 	{
+		bindWord = nullptr;
+		bindTarget = 0;
+		gpuMemory = {};
 		unmapped.clear();
 		onUnmap = {};
 		onCallEnter = {};
@@ -974,4 +977,16 @@ TEST_F(ClientRetirement, ACutBigPageKeepsItsPtesUntilRetirementThenItsRestIsMapp
 	EXPECT_EQ(gpuRead(0x208000), 0);
 	EXPECT_EQ(gpuRead(0x209000), 0x5a);
 	EXPECT_EQ(gpuRead(0x21ffff), 0x5a);
+}
+
+// NVK maps new BOs all the time with work queued: a range nothing held maps at once and holds no submission back.
+TEST_F(ClientRetirement, AMapOverNothingHeldIsImmediateEvenWithWorkQueued)
+{
+	auto bytes = bytesOf(0xb2);
+	auto *fresh = client.add(43, 0x80000, 0x4000, &bytes);
+	chan.completed = 0;
+	ASSERT_EQ(client.bind(0x300000, 0x4000, fresh), 0);
+	EXPECT_EQ(gpuRead(0x300000), 0xb2);
+	EXPECT_EQ(client.bindIssued_, 0u);
+	EXPECT_FALSE(newWorkBlocked());
 }
