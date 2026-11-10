@@ -59,13 +59,13 @@ void nested()
     check(calls(raw::EncodePart::Kernel) == 0);
 
     raw::EncodeTotals totals;
-    totals.add(profile, 5, 7);
+    totals.add(profile, 5);
     raw::EncodeProfile shorter;
     shorter.calls[size_t(raw::EncodePart::Kernel)] = 3;
     shorter.ticks[size_t(raw::EncodePart::Kernel)] = 11;
     shorter.longestPrepare = 1;
-    totals.add(shorter, 1, 1);
-    check(totals.encodes.load() == 2 && totals.wallTicks.load() == 6 && totals.cpuNs.load() == 8);
+    totals.add(shorter, 1);
+    check(totals.encodes.load() == 2 && totals.wallTicks.load() == 6);
     check(totals.calls[size_t(raw::EncodePart::Prepare)].load() == 2);
     check(totals.calls[size_t(raw::EncodePart::Kernel)].load() == 3);
     check(totals.ticks[size_t(raw::EncodePart::Kernel)].load() == 11);

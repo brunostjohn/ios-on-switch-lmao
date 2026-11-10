@@ -92,14 +92,13 @@ private:
 
 // The encodes' profiles since the device opened, each folded in once its encode returned (the submit worker's only)
 struct EncodeTotals {
-    std::atomic<uint64_t> encodes{0}, wallTicks{0}, cpuNs{0}, longestPrepare{0}, execUses{0};
+    std::atomic<uint64_t> encodes{0}, wallTicks{0}, longestPrepare{0}, execUses{0};
     std::atomic<uint64_t> ticks[kEncodeParts] = {}, calls[kEncodeParts] = {};
 
-    void add(const EncodeProfile &p, uint64_t wall, uint64_t cpu)
+    void add(const EncodeProfile &p, uint64_t wall)
     {
         encodes.fetch_add(1, std::memory_order_relaxed);
         wallTicks.fetch_add(wall, std::memory_order_relaxed);
-        cpuNs.fetch_add(cpu, std::memory_order_relaxed);
         execUses.fetch_add(p.execUses, std::memory_order_relaxed);
         for (size_t i = 0; i < kEncodeParts; ++i) {
             if (!p.calls[i])
