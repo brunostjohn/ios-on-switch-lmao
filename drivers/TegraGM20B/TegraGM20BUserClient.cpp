@@ -895,6 +895,7 @@ class AGXDeviceUserClient : public IOUserClient
         switch_gpu_backing_guard *guards;
         SwitchGpuSurfaceRefresh *surfaces;
         switch_gpu_cpu_lease **leases;
+		tgm_coh **written; // the listed uses' imports a job writes, as its uses resolved them
 		uint32_t capacity;
         SwitchGpuEventJob *events;
 	};
@@ -2217,12 +2218,14 @@ bool AGXDeviceUserClient::reserveJob(JobScratch &job, uint32_t uses)
 		auto *guards = IONew(switch_gpu_backing_guard, capacity);
 		auto *surfaces = IONew(SwitchGpuSurfaceRefresh, capacity);
 		auto **leases = IONew(switch_gpu_cpu_lease *, capacity);
-		if (!made || !writes || !guards || !surfaces || !leases) {
+		auto **written = IONew(tgm_coh *, capacity);
+		if (!made || !writes || !guards || !surfaces || !leases || !written) {
 			IODelete(made, switch_gpu_backing_use, capacity);
 			IODelete(writes, switch_gpu_backing_write_range, capacity);
 			IODelete(guards, switch_gpu_backing_guard, capacity);
 			IODelete(surfaces, SwitchGpuSurfaceRefresh, capacity);
 			IODelete(leases, switch_gpu_cpu_lease *, capacity);
+			IODelete(written, tgm_coh *, capacity);
 			return false;
 		}
 		IODelete(job.uses, switch_gpu_backing_use, job.capacity);
@@ -2230,8 +2233,10 @@ bool AGXDeviceUserClient::reserveJob(JobScratch &job, uint32_t uses)
 		IODelete(job.guards, switch_gpu_backing_guard, job.capacity);
 		IODelete(job.surfaces, SwitchGpuSurfaceRefresh, job.capacity);
 		IODelete(job.leases, switch_gpu_cpu_lease *, job.capacity);
+		IODelete(job.written, tgm_coh *, job.capacity);
 		job.surfaces = surfaces;
 		job.leases = leases;
+		job.written = written;
 		job.uses = made;
 		job.writes = writes;
 		job.guards = guards;
@@ -2253,6 +2258,7 @@ void AGXDeviceUserClient::freeJob(JobScratch &job)
 	IODelete(job.guards, switch_gpu_backing_guard, job.capacity);
 	IODelete(job.surfaces, SwitchGpuSurfaceRefresh, job.capacity);
 	IODelete(job.leases, switch_gpu_cpu_lease *, job.capacity);
+	IODelete(job.written, tgm_coh *, job.capacity);
 	job = {};
 }
 
@@ -2415,7 +2421,7 @@ IOReturn AGXDeviceUserClient::exec(uint32_t channel, TegraGM20BAbiPush *input, u
 		events = job.events;
 		events->clear();
 	}
-	uint32_t useTotal = 0, writeCount = 0, surfaceCount = 0, nativeGuardCount = 0;
+	uint32_t useTotal = 0, writeCount = 0, surfaceCount = 0, nativeGuardCount = 0, writtenCount = 0;
 	bool hostWritten = !(visibility & TegraGM20BSubmitVisibilityExplicit);
 	const uint32_t claim = switch_gpu_claim_flags(admissionBegin || admissionContinue);
 	// flags: the SWITCH_GPU_BACKING_* ownership flags of the use beside its access
@@ -2463,7 +2469,13 @@ IOReturn AGXDeviceUserClient::exec(uint32_t channel, TegraGM20BAbiPush *input, u
 			return kIOReturnBadArgument;
 		if (const int error = addUse(bo, uses[i].access, claim, offset, bytes))
 			return ioreturn(error);
+		if (uses[i].access & TegraGM20BSurfaceWrite)
+			job.written[writtenCount++] = bo->coh;
 	}
+	// A job's pushes lie in the push ring and its indirect arguments' BOs: past kPushBos of them, a use per push.
+	constexpr uint32_t kPushBos = 8;
+	const Bo *pushed[kPushBos];
+	uint32_t pushedCount = 0;
 	for (uint32_t i = 0; native && i < count; ++i) {
 		const Binding *binding = switch_gpu_binding_find(binds_, nbinds_, pushes[i].va,
 								 uint64_t(pushes[i].dwords) * 4);
@@ -2471,6 +2483,13 @@ IOReturn AGXDeviceUserClient::exec(uint32_t channel, TegraGM20BAbiPush *input, u
 		hostWritten |= binding && !binding->retirement->vol;
 		if (!bo || !bo->backing)
 			return kIOReturnBadArgument;
+		uint32_t seen = 0;
+		while (seen < pushedCount && pushed[seen] != bo)
+			++seen;
+		if (seen < pushedCount)
+			continue;
+		if (pushedCount < kPushBos)
+			pushed[pushedCount++] = bo;
 		if (const int error = addUse(bo, SWITCH_GPU_BACKING_READ, claim))
 			return ioreturn(error);
 	}
@@ -2626,14 +2645,8 @@ refresh:
 		if (!native)
 			surfaces_.after(listed, importsWritten_, tgm_chan_uid(chan), seqno);
 		else
-			for (uint32_t i = 0; i < useCount; ++i)
-				if (uses[i].access & TegraGM20BSurfaceWrite) {
-					const Bo *bo = uses[i].access & TegraGM20BSurfaceGpuAddress
-							       ? findAddress(uses[i].handle)
-							       : findBo(uses[i].handle);
-					tgm_coherency_wrote_listed(bo->coh, tgm_chan_uid(chan),
-								   seqno);
-				}
+			for (uint32_t i = 0; i < writtenCount; ++i)
+				tgm_coherency_wrote_listed(job.written[i], tgm_chan_uid(chan), seqno);
 	}
 	out->seqno = seqno;
 	out->reserved = 0;

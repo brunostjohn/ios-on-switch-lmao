@@ -26,6 +26,11 @@ void switch_gpu_backing_drop_token(const switch_gpu_backing_token &token)
 
 void switch_gpu_backing_sort_uses(switch_gpu_backing_use *uses, uint32_t count)
 {
+    uint32_t sorted = 1;
+    while (sorted < count && uses[sorted - 1].backing->id <= uses[sorted].backing->id)
+        ++sorted;
+    if (sorted >= count)
+        return;
     const auto swap = [&](uint32_t a, uint32_t b) {
         const auto value = uses[a]; uses[a] = uses[b]; uses[b] = value;
     };

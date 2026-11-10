@@ -500,6 +500,34 @@ TEST_F(Backing, DeadSurfaceClientReleasesCpuReservationsBeforeNextEngineSubmissi
 
 extern uint32_t switch_gpu_cpu_sleepers;
 extern int switch_gpu_test_ready_waiting;
+void switch_gpu_backing_sort_uses(switch_gpu_backing_use *uses, uint32_t count);
+
+// Lock order: a job's uses by backing id, in place, whether they came sorted or not.
+TEST_F(Backing, UsesAreOrderedByBackingWhetherOrNotTheyCameSorted)
+{
+	switch_gpu_backing *made[6];
+	for (auto *&allocation : made)
+		allocation = backing();
+	switch_gpu_backing_use uses[6];
+	for (uint32_t i = 0; i < 6; ++i)
+		uses[i] = {made[i], SWITCH_GPU_BACKING_READ, 0};
+	switch_gpu_backing_sort_uses(uses, 6);
+	for (uint32_t i = 0; i < 6; ++i)
+		EXPECT_EQ(uses[i].backing, made[i]);
+	const uint32_t order[6] = {4, 0, 5, 2, 2, 1};
+	for (uint32_t i = 0; i < 6; ++i)
+		uses[i] = {made[order[i]], SWITCH_GPU_BACKING_READ, 0};
+	switch_gpu_backing_sort_uses(uses, 6);
+	const auto id = [](switch_gpu_backing *allocation) {
+		switch_gpu_backing_info info = {};
+		switch_gpu_backing_describe(allocation, &info);
+		return info.allocation_id;
+	};
+	for (uint32_t i = 1; i < 6; ++i)
+		EXPECT_LE(id(uses[i - 1].backing), id(uses[i].backing));
+	for (auto *allocation : made)
+		switch_gpu_backing_release(allocation);
+}
 
 // The sweep a dead client's leases wait for runs only for a job they could refuse or for a waiter they could hold.
 TEST_F(Backing, ADeadClientsLeaseIsSweptByAJobOnItsBackingNotByEveryJob)

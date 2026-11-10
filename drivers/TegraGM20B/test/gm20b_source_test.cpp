@@ -1128,6 +1128,10 @@ TEST(GM20BJobFencesSource, OneJobOwnsItsUsesUntilItsLastFence)
 	EXPECT_THAT(exec, HasSubstr("if (switch_gpu_job_fences(pushes, count, &fences)) return kIOReturnBadArgument;"));
 	EXPECT_THAT(exec, HasSubstr("switch_gpu_chan_job_token(chan, fences, &completion);"));
 	EXPECT_THAT(exec, Not(HasSubstr("switch_gpu_chan_next_token(")));
+	// resolved once: a written import is marked from what the uses resolved, not looked up again
+	EXPECT_THAT(exec, HasSubstr("job.written[writtenCount++] = bo->coh;"));
+	EXPECT_THAT(exec, HasSubstr("tgm_coherency_wrote_listed(job.written[i], tgm_chan_uid(chan), seqno);"));
+	EXPECT_THAT(exec, Not(HasSubstr("findAddress(")));
 	const auto emit = flat(definition(gpu(), "static int chan_exec("));
 	EXPECT_THAT(emit, HasSubstr("entries = count + 6 + stamps + fences;"));
 	EXPECT_THAT(emit, HasSubstr("SWITCH_GPU_FENCE_POINT_DWORDS * fences;"));
