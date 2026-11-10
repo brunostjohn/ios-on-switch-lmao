@@ -183,9 +183,9 @@ static void vui(Reader *r, H264SPS *s)
             s->matrix = (uint8_t)bits(r, 8);
         }
     }
-    if ((s->chroma_location = flag(r))) {
-        s->chroma_top = ue(r);
-        s->chroma_bottom = ue(r);
+    if (flag(r)) {  // chroma_loc_info
+        ue(r);
+        ue(r);
     }
     if (flag(r))
         bits(r, 32), bits(r, 32), flag(r);  // timing_info
@@ -209,7 +209,7 @@ static void vui(Reader *r, H264SPS *s)
         }
     }
     if (r->overrun) {
-        s->full_range = s->colour_description = s->chroma_location = s->bitstream_restriction = false;
+        s->full_range = s->colour_description = s->bitstream_restriction = false;
         r->overrun = false;
     }
 }

@@ -620,12 +620,6 @@ static int decodePicture(H264Decoder *d, const H264Slice *sh, void *token, bool 
         if ((picIdx = freeSurface(d)) < 0)
             return -1;
     }
-    if (d->b.recycle) {
-        void *address = d->surface_va[picIdx];
-        if (d->b.recycle(d->b.ctx, d->surface[picIdx], d->surface_bytes, &address))
-            return -3;
-        d->surface_va[picIdx] = address;
-    }
     static const uint8_t endOfStream[16] = {0, 0, 1, 0x0b, 0, 0, 0, 0, 0, 0, 1, 0x0b, 0, 0, 0, 0};
     memcpy(d->input_va + d->bits_off + d->bits_len, endOfStream, sizeof(endOfStream));
     ((uint32_t *)(d->input_va + d->slices_off))[d->slices] = d->bits_len;

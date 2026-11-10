@@ -30,10 +30,9 @@ struct NVDECClient {
     uint64_t size[64];
 };
 
-static bool gFull, gPresentOn, gNativeOn;
+static bool gFull, gPresentOn;
 static int gOpens, gSubmits, gRefused, gPresents, gPresentBad, gWaitRanges, gWidePresents;
 static uint32_t gLastDstX, gLastDstY;
-static unsigned gNativeExports, gRecycled;
 
 bool nvdec_service_present(void)
 {
@@ -72,32 +71,6 @@ bool nvdec_can_present(const NVDECClient *c)
 // The fake VIC: TegraNVDECUserClient's geometry checks and TegraVICConfig.h's address rules for the destination, then
 // the copy (BlockLinear.c, as VIC's pass-through would leave it). 16-bit samples ('x420') go as bytes, as the kernel
 // sends them to VIC: an 8-bit picture of twice the width.
-bool switch_nvdec_can_export(const NVDECClient *client) { (void)client; return gNativeOn; }
-int switch_nvdec_export(NVDECClient *client, const TegraNVDECPresent *picture)
-{
-    if (!gNativeOn || picture->sample_bytes != 1 || picture->dst_x || picture->dst_y ||
-        picture->handle >= 64 || !client->va[picture->handle])
-        return kIOReturnUnsupported;
-    ++gNativeExports;
-    return 0;
-}
-int switch_nvdec_recycle(void *client, uint32_t handle, uint64_t bytes, void **address)
-{
-    NVDECClient *owner = client;
-    if (!gNativeOn)
-        return 0;
-    if (!handle || handle >= 64 || bytes != owner->size[handle])
-        return -1;
-    void *replacement = calloc(1, bytes);
-    if (!replacement)
-        return -1;
-    free(owner->va[handle]);
-    owner->va[handle] = replacement;
-    *address = replacement;
-    ++gRecycled;
-    return 0;
-}
-
 int nvdec_present(NVDECClient *c, const TegraNVDECPresent *p)
 {
     gPresents++;
@@ -366,6 +339,7 @@ int main(void)
            gWaitRanges - presentWaits);
     gFull = true;
     clip_check(ClipCheckHardware, spec, full, sizeof(full));
+    CFRelease(spec);
     gFull = false;
     char vp9[512];
     const int vp9Submits = gSubmits;
@@ -418,23 +392,11 @@ int main(void)
                         strstr(hevcFull, "A 20/20, V 14/14") && hevc10VicOk;
     printf("engine: %s (opens %d, submits %d, refused %d)\nfull: %s (opens %d)\n", engine, engineOpens, engineSubmits,
            gRefused, full, gOpens - engineOpens);
-    char native[512];
-    gPresentOn = gNativeOn = true;
-    const unsigned exportsBefore = gNativeExports, recycleBefore = gRecycled;
-    const int copiesBefore = gPresents, nativeWaits = gWaitRanges;
-    clip_check(ClipCheckHardware, spec, native, sizeof(native));
-    gPresentOn = gNativeOn = false;
-    CFRelease(spec);
-    const bool nativeOk = strstr(native, "hardware: hardware decoder") && strstr(native, " 30 out (") &&
-        gNativeExports - exportsBefore == 30 && gRecycled - recycleBefore == 30 &&
-        gPresents == copiesBefore && gWaitRanges - nativeWaits == 30;
-    printf("native: %s (exports %u, recycled %u, pitch copies %d)\n", native,
-           gNativeExports - exportsBefore, gRecycled - recycleBefore, gPresents - copiesBefore);
     const bool ok = engineOpens >= 1 && engineSubmits == 30 && !gRefused &&
                     strstr(engine, "hardware: hardware decoder") && strstr(engine, " 30 out (") &&
                     gOpens > engineOpens && strstr(full, "hardware: software decoder, 30/30 frames match x264") &&
                     strstr(vp9, "vp9: hardware decoder") && strstr(vp9, " 16 out (") &&
-                    hevcSubmits - vp9Submits == 18 && presentOk && hevcOk && tilesOk && nativeOk;
+                    hevcSubmits - vp9Submits == 18 && presentOk && hevcOk && tilesOk;
     printf("%s avd: plug-in on VideoToolbox (H.264, VP9 and HEVC on a fake NVDEC, then Apple's software H.264 and "
            "HEVC in the instance)\n",
            ok ? "PASS" : "FAIL");

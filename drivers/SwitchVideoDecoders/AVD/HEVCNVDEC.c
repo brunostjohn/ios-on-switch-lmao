@@ -573,11 +573,6 @@ static int decodePicture(HEVCDecoder *d, const Span *seg, int count, const HEVCS
             return -3;
         }
         e->va = va;
-    } else if (d->b.recycle) {
-        void *address = e->va;
-        if (d->b.recycle(d->b.ctx, e->handle, d->surface_bytes, &address))
-            return -3;
-        e->va = address;
     }
     int scratch = -1;
     const int8_t *sets[3] = {r.before, r.after, r.lt};

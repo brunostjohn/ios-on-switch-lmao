@@ -40,7 +40,6 @@
 #include <string.h>
 #include "BlockLinear.h"
 #include "AVDDecoder.h"
-#include "SwitchVideoColor.h"
 
 os_log_t gAVDLog;
 static const bool kReorder = false;  // see above
@@ -117,10 +116,6 @@ static bool presentPicture(Decoder *d, const H264Picture *picture, CVPixelBuffer
                                  .dst_x = x,
                                  .dst_y = y,
                                  .sample_bytes = picture->wide ? 2 : 1};
-    if (!picture->status && !picture->wide && !x && !y &&
-        width == CVPixelBufferGetWidth(image) && height == CVPixelBufferGetHeight(image) &&
-        switch_nvdec_can_export(d->client) && !switch_nvdec_export(d->client, &p))
-        return true;
     const int err = nvdec_present(d->client, &p);
     if (!err)
         return true;
@@ -163,11 +158,6 @@ void avd_place_picture(Decoder *d, const H264Picture *picture, CVPixelBufferRef 
     d->copyTicks += mach_absolute_time() - began;
 }
 
-static int switch_recycle_output(void *context, uint32_t handle, uint64_t bytes, void **address)
-{
-    return switch_nvdec_recycle(((Decoder *)context)->client, handle, bytes, address);
-}
-
 static bool cpuReads(void *ctx)
 {
     return !((Decoder *)ctx)->present;
@@ -198,10 +188,6 @@ static void *decoded(void *ctx, const H264Picture *picture)
     if (d->transfer)
         CVBufferSetAttachment(out->image, kCVImageBufferTransferFunctionKey, d->transfer,
                               kCVAttachmentMode_ShouldPropagate);
-    if (d->chromaTop)
-        CVBufferSetAttachment(out->image, kCVImageBufferChromaLocationTopFieldKey, d->chromaTop, kCVAttachmentMode_ShouldPropagate);
-    if (d->chromaBottom)
-        CVBufferSetAttachment(out->image, kCVImageBufferChromaLocationBottomFieldKey, d->chromaBottom, kCVAttachmentMode_ShouldPropagate);
     avd_place_picture(d, picture, out->image, 0, 0);
     return out;
 }
@@ -249,6 +235,42 @@ static int jobSubmit(void *ctx, const TegraNVDECSubmit *submit, uint32_t *fence)
 static int jobWait(void *ctx, const TegraNVDECWait *wait)
 {
     return nvdec_wait(((Decoder *)ctx)->client, wait);
+}
+
+// The format description's own tag, else the SPS's VUI (H.273 code points).
+static CFTypeRef colourTag(CMFormatDescriptionRef format, CFStringRef key, int code, int kind, uint32_t height)
+{
+    CFTypeRef tag = CMFormatDescriptionGetExtension(format, key);
+    if (tag)
+        return CFRetain(tag);
+    switch (kind) {
+    case 0:  // matrix_coefficients
+        if (code == 1)
+            return CFRetain(kCVImageBufferYCbCrMatrix_ITU_R_709_2);
+        if (code == 5 || code == 6)
+            return CFRetain(kCVImageBufferYCbCrMatrix_ITU_R_601_4);
+        if (code == 9)
+            return CFRetain(kCVImageBufferYCbCrMatrix_ITU_R_2020);
+        return CFRetain(height >= 720 ? kCVImageBufferYCbCrMatrix_ITU_R_709_2 : kCVImageBufferYCbCrMatrix_ITU_R_601_4);
+    case 1:  // colour_primaries
+        if (code == 1)
+            return CFRetain(kCVImageBufferColorPrimaries_ITU_R_709_2);
+        if (code == 5)
+            return CFRetain(kCVImageBufferColorPrimaries_EBU_3213);
+        if (code == 6)
+            return CFRetain(kCVImageBufferColorPrimaries_SMPTE_C);
+        if (code == 9)
+            return CFRetain(kCVImageBufferColorPrimaries_ITU_R_2020);
+        return NULL;
+    default:  // transfer_characteristics
+        if (code == 1 || code == 6 || code == 14 || code == 15)
+            return CFRetain(kCVImageBufferTransferFunction_ITU_R_709_2);
+        if (code == 16)
+            return CFRetain(kCVImageBufferTransferFunction_SMPTE_ST_2084_PQ);
+        if (code == 18)
+            return CFRetain(kCVImageBufferTransferFunction_ITU_R_2100_HLG);
+        return NULL;
+    }
 }
 
 static CFDataRef copyAvcC(CMVideoFormatDescriptionRef format)
@@ -356,11 +378,9 @@ static OSStatus startVP9(Decoder *d, VTVideoDecoderSession session, CMVideoForma
     }
     d->width = (uint32_t)size.width;
     d->height = (uint32_t)size.height;
-    d->matrix = switch_video_color_tag(format, kCMFormatDescriptionExtension_YCbCrMatrix, v ? v[9] : 2, 0);
-    d->primaries = switch_video_color_tag(format, kCMFormatDescriptionExtension_ColorPrimaries, v ? v[7] : 2, 1);
-    d->transfer = switch_video_color_tag(format, kCMFormatDescriptionExtension_TransferFunction, v ? v[8] : 2, 2);
-    d->chromaTop = switch_video_chroma_tag(format, kCMFormatDescriptionExtension_ChromaLocationTopField, false, 0);
-    d->chromaBottom = switch_video_chroma_tag(format, kCMFormatDescriptionExtension_ChromaLocationBottomField, false, 0);
+    d->matrix = colourTag(format, kCMFormatDescriptionExtension_YCbCrMatrix, v ? v[9] : 2, 0, d->height);
+    d->primaries = colourTag(format, kCMFormatDescriptionExtension_ColorPrimaries, v ? v[7] : 2, 1, 0);
+    d->transfer = colourTag(format, kCMFormatDescriptionExtension_TransferFunction, v ? v[8] : 2, 2, 0);
     OSStatus status;
     setAttributes(d, session, fullRange, false, &status);
     if (!status)
@@ -422,14 +442,10 @@ static OSStatus startHEVC(Decoder *d, VTVideoDecoderSession session, CMVideoForm
     d->width = (uint32_t)(sps->width - sps->crop_left - sps->crop_right);
     d->height = (uint32_t)(sps->height - sps->crop_top - sps->crop_bottom);
     const bool vui = sps->colour_description;
-    d->matrix = switch_video_color_tag(format, kCMFormatDescriptionExtension_YCbCrMatrix, vui ? sps->matrix : 2, 0);
+    d->matrix = colourTag(format, kCMFormatDescriptionExtension_YCbCrMatrix, vui ? sps->matrix : 2, 0, d->height);
     d->primaries =
-        switch_video_color_tag(format, kCMFormatDescriptionExtension_ColorPrimaries, vui ? sps->colour_primaries : 2, 1);
-    d->transfer = switch_video_color_tag(format, kCMFormatDescriptionExtension_TransferFunction, vui ? sps->transfer : 2, 2);
-    d->chromaTop = switch_video_chroma_tag(format, kCMFormatDescriptionExtension_ChromaLocationTopField,
-                                           sps->chroma_location, sps->chroma_top);
-    d->chromaBottom = switch_video_chroma_tag(format, kCMFormatDescriptionExtension_ChromaLocationBottomField,
-                                              sps->chroma_location, sps->chroma_bottom);
+        colourTag(format, kCMFormatDescriptionExtension_ColorPrimaries, vui ? sps->colour_primaries : 2, 1, 0);
+    d->transfer = colourTag(format, kCMFormatDescriptionExtension_TransferFunction, vui ? sps->transfer : 2, 2, 0);
     OSStatus status;
     setAttributes(d, session, sps->full_range, sps->bit_depth == 10, &status);
     static const char *const kProfiles[4] = {"", "Main", "Main 10", "Main Still Picture"};
@@ -473,14 +489,10 @@ static OSStatus startSession(VTVideoDecoderRef ref, VTVideoDecoderSession sessio
     const bool vui = sps->colour_description;
     d->pixelFormat = sps->full_range ? kCVPixelFormatType_420YpCbCr8BiPlanarFullRange
                                      : kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange;
-    d->matrix = switch_video_color_tag(format, kCMFormatDescriptionExtension_YCbCrMatrix, vui ? sps->matrix : 2, 0);
+    d->matrix = colourTag(format, kCMFormatDescriptionExtension_YCbCrMatrix, vui ? sps->matrix : 2, 0, d->height);
     d->primaries =
-        switch_video_color_tag(format, kCMFormatDescriptionExtension_ColorPrimaries, vui ? sps->colour_primaries : 2, 1);
-    d->transfer = switch_video_color_tag(format, kCMFormatDescriptionExtension_TransferFunction, vui ? sps->transfer : 2, 2);
-    d->chromaTop = switch_video_chroma_tag(format, kCMFormatDescriptionExtension_ChromaLocationTopField,
-                                           sps->chroma_location, sps->chroma_top);
-    d->chromaBottom = switch_video_chroma_tag(format, kCMFormatDescriptionExtension_ChromaLocationBottomField,
-                                              sps->chroma_location, sps->chroma_bottom);
+        colourTag(format, kCMFormatDescriptionExtension_ColorPrimaries, vui ? sps->colour_primaries : 2, 1, 0);
+    d->transfer = colourTag(format, kCMFormatDescriptionExtension_TransferFunction, vui ? sps->transfer : 2, 2, 0);
     CFMutableDictionaryRef attributes = CFDictionaryCreateMutable(
         kCFAllocatorDefault, 0, &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks);
     CFDictionaryRef surface = CFDictionaryCreate(kCFAllocatorDefault, NULL, NULL, 0, &kCFTypeDictionaryKeyCallBacks,
@@ -683,8 +695,6 @@ static void finalize(CMBaseObjectRef ref)
         CFRelease(d->primaries);
     if (d->transfer)
         CFRelease(d->transfer);
-    if (d->chromaTop) CFRelease(d->chromaTop);
-    if (d->chromaBottom) CFRelease(d->chromaBottom);
     pthread_mutex_destroy(&d->lock);
 }
 
@@ -770,7 +780,7 @@ OSStatus avd_create_instance(FourCharCode codec, CFAllocatorRef allocator, VTVid
     d->client = client;
     d->codec = codec;
     d->present = nvdec_can_present(client);
-    const H264Backend backend = {d, bufferAlloc, bufferFree, jobSubmit, jobWait, decoded, emit, discard, cpuReads, switch_recycle_output};
+    const H264Backend backend = {d, bufferAlloc, bufferFree, jobSubmit, jobWait, decoded, emit, discard, cpuReads};
     if (codec == kCMVideoCodecType_VP9    ? !(d->vp9 = vp9_decoder_create(&backend))
         : codec == kCMVideoCodecType_HEVC ? !(d->hevc = hevc_decoder_create(&backend))
                                           : !(d->h264 = h264_decoder_create(&backend))) {

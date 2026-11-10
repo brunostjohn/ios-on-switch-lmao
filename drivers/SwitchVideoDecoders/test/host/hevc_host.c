@@ -114,7 +114,6 @@ typedef struct {
     uint8_t *va[MAX_BUFFERS + 1];
     uint64_t bytes[MAX_BUFFERS + 1];
     int out[64], outCount, discarded, jobs;
-    unsigned recycled;
     uint32_t pitch;  // the last picture handed out: bytes a row, as present and the CPU copy read it
     TegraNVDECSubmit last;
 } Fake;
@@ -132,21 +131,6 @@ static int fakeAlloc(void *ctx, uint64_t size, uint32_t *handle, void **va)
         return f->va[h] ? 0 : -1;
     }
     return -1;
-}
-
-static int switch_fake_recycle(void *ctx, uint32_t handle, uint64_t bytes, void **address)
-{
-    Fake *f = ctx;
-    if (!handle || handle >= MAX_BUFFERS + 1 || !f->va[handle] || bytes != f->bytes[handle])
-        return -1;
-    void *next = calloc(1, bytes);
-    if (!next)
-        return -1;
-    free(f->va[handle]);
-    f->va[handle] = next;
-    *address = next;
-    ++f->recycled;
-    return 0;
 }
 
 static void fakeFree(void *ctx, uint32_t handle)
@@ -189,9 +173,7 @@ static int fakeWait(void *ctx, const TegraNVDECWait *w)
 
 static void *fakeDecoded(void *ctx, const H264Picture *p)
 {
-    Fake *f = ctx;
-    CHECK(p->luma == f->va[p->handle], "recycled picture retains old CPU address");
-    f->pitch = p->pitch;
+    ((Fake *)ctx)->pitch = p->pitch;
     return (void *)(intptr_t)((intptr_t)p->token + 1);
 }
 
@@ -244,7 +226,7 @@ static HEVCDecoder *decodeClip(Fake *f, const uint8_t *data, size_t size, int *a
     uint8_t *sample[64];
     size_t sizes[64];
     const H264Backend backend = {f,           fakeAlloc, fakeFree,    fakeSubmit, fakeWait,
-                                 fakeDecoded, fakeEmit,  fakeDiscard, NULL, switch_fake_recycle};
+                                 fakeDecoded, fakeEmit,  fakeDiscard, NULL};
     HEVCDecoder *d = hevc_decoder_create(&backend);
     hevc_decoder_allow_10bit(d, tenBit);
     *aus = samples(data, size, buffer, sample, sizes, 64);
@@ -253,7 +235,6 @@ static HEVCDecoder *decodeClip(Fake *f, const uint8_t *data, size_t size, int *a
         CHECK(ret == 1, "access unit %d: hevc_decoder_decode %d", i, ret);
     }
     hevc_decoder_flush(d);
-    CHECK(f->recycled != 0, "output allocations never recycled");
     return d;
 }
 
@@ -285,7 +266,7 @@ static void testDecode(void)
             Fake g;
             memset(&g, 0, sizeof(g));
             const H264Backend backend = {&g,          fakeAlloc, fakeFree,    fakeSubmit, fakeWait,
-                                         fakeDecoded, fakeEmit,  fakeDiscard, NULL, switch_fake_recycle};
+                                         fakeDecoded, fakeEmit,  fakeDiscard, NULL};
             HEVCDecoder *e = hevc_decoder_create(&backend);
             static uint8_t buffer[64 * 1024];
             uint8_t *sample[64];

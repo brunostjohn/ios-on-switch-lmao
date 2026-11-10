@@ -38,7 +38,6 @@ typedef struct {
     // Whether `decoded` reads the picture on the CPU (else VIC copies it, TegraNVDECPresent): only then does the job's
     // Wait invalidate the surface. NULL: it does.
     bool (*cpu_reads)(void *ctx);
-    int (*recycle)(void *ctx, uint32_t handle, uint64_t bytes, void **va);
 } H264Backend;
 
 typedef struct H264Decoder H264Decoder;
