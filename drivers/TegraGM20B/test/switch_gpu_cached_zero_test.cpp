@@ -5,6 +5,7 @@
 #include <future>
 #include <map>
 #include <stdexcept>
+#include <utility>
 #include "switch_gpu_cached_zero_stubs.h"
 #include "drivers/TegraGM20B/SwitchGpuCachedZero.h"
 #include "drivers/TegraGM20B/TegraGM20BGpu.h"
@@ -273,9 +274,12 @@ extern "C" uint32_t tgm_chan_settled(tgm_chan *chan, int *failed)
 	return done;
 }
 
-extern "C" void tgm_chan_check_progress(tgm_chan *, const char *, uint32_t)
+uint64_t nextCheckNs = 2000000000;
+
+extern "C" uint64_t tgm_chan_check_progress(tgm_chan *, const char *, uint32_t)
 {
 	++progressChecks;
+	return nextCheckNs;
 }
 
 extern "C" int tgm_chan_exec(tgm_chan *, const tgm_push *push, uint32_t count, uint32_t *seq,
@@ -448,22 +452,46 @@ TEST_F(CachedZero, IdleWindowsGoLeastRecentlyUsedFirstWhenEveryWindowIsTaken)
 	EXPECT_EQ(a[1]->result, 0);
 }
 
+// The first check comes a second after the scrub is queued; the next one only when tgm_chan_check_progress says its
+// rule can take the next step, not a second later.
 TEST_F(CachedZero, DeadlineChecksProgressWithoutPublishingAnUnfinishedScrub)
 {
 	Allocation a;
+	const uint64_t queued = switch_zero_now;
 	ASSERT_EQ(a.submit(), 0);
 	const unsigned before = progressChecks;
 	auto watchdog = switch_zero_calls[1];
-	ASSERT_NE(watchdog->deadline, 0u);
+	EXPECT_EQ(watchdog->deadline, queued + 1000000000u);
 	switch_zero_now = watchdog->deadline;
 	watchdog->fn(watchdog->arg, nullptr);
 	pump();
 	EXPECT_EQ(progressChecks, before + 1);
 	EXPECT_EQ(a.callbacks, 0u);
-	EXPECT_GT(watchdog->deadline, switch_zero_now);
+	EXPECT_EQ(watchdog->deadline, switch_zero_now + nextCheckNs);
+	nextCheckNs = 700000000;
+	switch_zero_now = watchdog->deadline;
+	watchdog->fn(watchdog->arg, nullptr);
+	EXPECT_EQ(progressChecks, before + 2);
+	EXPECT_EQ(watchdog->deadline, switch_zero_now + nextCheckNs);
+	nextCheckNs = 2000000000;
 	finish();
 	EXPECT_EQ(a.callbacks, 1u);
 	EXPECT_EQ(watchdog->deadline, 0u);
+}
+
+// A check that finds the channel with nothing pending leaves the timer down: the scrub's retirement is already queued.
+TEST_F(CachedZero, ACheckWithNothingPendingArmsNothingAgain)
+{
+	Allocation a;
+	ASSERT_EQ(a.submit(), 0);
+	auto watchdog = switch_zero_calls[1];
+	nextCheckNs = 0;
+	switch_zero_now = std::exchange(watchdog->deadline, 0);
+	watchdog->fn(watchdog->arg, nullptr);
+	nextCheckNs = 2000000000;
+	EXPECT_EQ(watchdog->deadline, 0u);
+	finish();
+	EXPECT_EQ(a.callbacks, 1u);
 }
 
 TEST_F(CachedZero, ChangedAllocationCannotReuseAnOldPageMapping)

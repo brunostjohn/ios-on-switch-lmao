@@ -12,7 +12,7 @@
 
 struct switch_gpu_bridge {
     switch_gpu_backing_token tokens[SWITCH_GPU_BRIDGE_MAX_TOKENS];
-    uint32_t count, refs, syncpoint, threshold, sequence;
+    uint32_t count, refs, syncpoint, threshold, sequence, waiters;
     bool active;
     int result;
     void (*completed)(void *, int);
@@ -24,7 +24,8 @@ constexpr uint32_t kSlots = 8, kHangCheckNs = 1000000000;
 constexpr uint64_t kPage = 4096, kPushVa = 1ULL << 20;
 struct BridgeQueue {
     IOLock *lock;
-    thread_call_t retirement;
+    thread_call_t retirement, hangCheck;
+    uint64_t checkAt;
     tgm_vm *vm;
     tgm_chan *channel;
     tgm_mem *push, *fence;
@@ -55,6 +56,46 @@ int producers(const switch_gpu_bridge &job)
         pending |= result == 0;
     }
     return pending ? 0 : 1;
+}
+
+switch_gpu_bridge *oldestWaited()
+{
+    switch_gpu_bridge *oldest = nullptr;
+    for (auto &job : queue.jobs)
+        if (job.active && job.waiters && (!oldest || int32_t(job.sequence - oldest->sequence) < 0))
+            oldest = &job;
+    return oldest;
+}
+
+void armHangCheck(uint64_t ns)
+{
+    clock_interval_to_deadline(uint32_t(ns / 1000), 1000, &queue.checkAt);
+    thread_call_enter_delayed(queue.hangCheck, queue.checkAt);
+}
+
+// The GPU's hang recovery runs only when something waits on a channel, and a wait on a bridge is that waiter for the
+// bridge channel: it has recovery look at what a stalled bridge is stuck on, whose kill releases the bridge's acquire.
+// One timer does it, armed when a wait begins, cancelled when no waited bridge is left (retire), and re-armed only for
+// the next step of tgm_chan_check_progress's rule. The reference keeps the channel across the unlocked check.
+void checkHang(thread_call_param_t, thread_call_param_t)
+{
+    IOLockLock(queue.lock);
+    queue.checkAt = 0;
+    switch_gpu_bridge *late = queue.channel ? oldestWaited() : nullptr;
+    if (!late) {
+        IOLockUnlock(queue.lock);
+        return;
+    }
+    ++late->refs;
+    tgm_chan *channel = queue.channel;
+    const uint32_t sequence = late->sequence;
+    IOLockUnlock(queue.lock);
+    const uint64_t next = tgm_chan_check_progress(channel, "host1x bridge", sequence);
+    IOLockLock(queue.lock);
+    if (next && !queue.checkAt && oldestWaited())
+        armHangCheck(next);
+    releaseLocked(*late);
+    IOLockUnlock(queue.lock);
 }
 
 void retire(thread_call_param_t, thread_call_param_t)
@@ -102,6 +143,10 @@ void retire(thread_call_param_t, thread_call_param_t)
             job.completed = nullptr;
         }
     }
+    if (queue.checkAt && !oldestWaited()) {
+        thread_call_cancel(queue.hangCheck);
+        queue.checkAt = 0;
+    }
     __atomic_store_n(&queue.waitingSources, pendingSources, __ATOMIC_RELEASE);
     IOLockUnlock(queue.lock);
     for (uint32_t i = 0; i < count; ++i) {
@@ -124,16 +169,24 @@ bool initialize()
         return true;
     thread_call_t retirement = thread_call_allocate_with_options(retire, nullptr,
         THREAD_CALL_PRIORITY_KERNEL, THREAD_CALL_OPTIONS_ONCE);
-    IOLock *lock = retirement ? IOLockAlloc() : nullptr;
+    thread_call_t hangCheck = thread_call_allocate_with_options(checkHang, nullptr,
+        THREAD_CALL_PRIORITY_KERNEL, THREAD_CALL_OPTIONS_ONCE);
+    IOLock *lock = retirement && hangCheck ? IOLockAlloc() : nullptr;
     if (!lock) {
         if (retirement)
             thread_call_free(retirement);
+        if (hangCheck)
+            thread_call_free(hangCheck);
         return false;
     }
     thread_call_t noCall = nullptr;
     if (!__atomic_compare_exchange_n(&queue.retirement, &noCall, retirement, false,
             __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE))
         thread_call_free(retirement);
+    noCall = nullptr;
+    if (!__atomic_compare_exchange_n(&queue.hangCheck, &noCall, hangCheck, false,
+            __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE))
+        thread_call_free(hangCheck);
     IOLock *noLock = nullptr;
     if (!__atomic_compare_exchange_n(&queue.lock, &noLock, lock, false,
             __ATOMIC_RELEASE, __ATOMIC_ACQUIRE))
@@ -260,6 +313,10 @@ extern "C" int switch_gpu_bridge_submit(const switch_gpu_backing_token *tokens, 
         job.active = true;
         ++job.refs;
         *out = &job;
+        // A check that found the channel idle left the timer down, and a waiter may still be on a bridge whose GPU
+        // work is done: this job is new work on the channel that waiter's checks cover.
+        if (!queue.checkAt && oldestWaited())
+            armHangCheck(kHangCheckNs);
     }
     IOLockUnlock(queue.lock);
     return error;
@@ -310,28 +367,21 @@ extern "C" int switch_gpu_bridge_status(const switch_gpu_bridge *bridge)
     return result;
 }
 
-// A bridge that stops moving waits on a producer nothing else may be waiting for. As the kernel's other waiters do, it
-// has the GPU's hang recovery look at what the GPU is stuck on; that kill releases the bridge's acquire. The caller's
-// reference keeps the channel alive across the unlocked check.
 extern "C" int switch_gpu_bridge_wait(const switch_gpu_bridge *bridge)
 {
     if (!bridge)
         return -22;
+    auto *job = const_cast<switch_gpu_bridge *>(bridge);
     IOLockLock(queue.lock);
-    while (bridge->active) {
-        uint64_t deadline = 0;
-        clock_interval_to_deadline(1, kHangCheckNs, &deadline);
-        if (IOLockSleepDeadline(queue.lock, const_cast<switch_gpu_bridge *>(bridge), deadline, THREAD_UNINT) !=
-                THREAD_TIMED_OUT ||
-            !bridge->active || !queue.channel)
-            continue;
-        tgm_chan *channel = queue.channel;
-        const uint32_t sequence = bridge->sequence;
-        IOLockUnlock(queue.lock);
-        tgm_chan_check_progress(channel, "host1x bridge", sequence);
-        IOLockLock(queue.lock);
+    if (job->active) {
+        ++job->waiters;
+        if (!queue.checkAt)
+            armHangCheck(kHangCheckNs);
+        while (job->active)
+            IOLockSleep(queue.lock, job, THREAD_UNINT);
+        --job->waiters;
     }
-    const int result = bridge->result;
+    const int result = job->result;
     IOLockUnlock(queue.lock);
     return result;
 }

@@ -291,8 +291,10 @@ void tgm_chan_hung(struct tgm_chan *chan, const char *who, uint32_t seqno, uint6
  * the GPU is stuck on a kernel channel or nothing at all progresses. The caller waits again. */
 void tgm_chan_stalled(struct tgm_chan *chan, const char *who, uint32_t seqno, uint64_t waited_ns);
 /* After a wait for `seqno` timed out: tgm_chan_stalled once the channel has completed nothing for 2 s while work is
- * pending; a single submission that runs that long is taken for a hang. */
-void tgm_chan_check_progress(struct tgm_chan *chan, const char *who, uint32_t seqno);
+ * pending; a single submission that runs that long is taken for a hang. Returns the nanoseconds after which the next
+ * check can find the next step of that rule, 0 when the channel has nothing pending: a timer that drives the checks is
+ * armed for that and for nothing sooner. */
+uint64_t tgm_chan_check_progress(struct tgm_chan *chan, const char *who, uint32_t seqno);
 /* A hang's line (TegraGM20BUserClient.cpp): the SET_PIXEL_SHADER_INTERLOCK_CONTROL methods with conflict detection on
  * in the `n` pushes at va[i] (dwords[i] long) of `client`'s connection (its space's tgm_vm_claim_connection). Returns
  * the pushes it read (one in a host import has no kernel view), or -1 when the connection's lock is held by another

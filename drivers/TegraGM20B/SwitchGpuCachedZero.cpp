@@ -51,7 +51,7 @@ uint64_t earliest()
 {
 	uint64_t next = 0;
 	for (const auto &job : queue.jobs)
-		if (job.mapping && (!next || job.deadline < next))
+		if (job.mapping && job.deadline && (!next || job.deadline < next))
 			next = job.deadline;
 	return next;
 }
@@ -90,6 +90,8 @@ void retire(thread_call_param_t, thread_call_param_t)
 	}
 }
 
+// A scrub not back a second after it was queued has the GPU's hang recovery look at its channel; later checks come only
+// when tgm_chan_check_progress's rule can take its next step. A job with no deadline has no check due.
 void timeout(thread_call_param_t, thread_call_param_t)
 {
 	IOLockLock(queue.lock);
@@ -97,14 +99,18 @@ void timeout(thread_call_param_t, thread_call_param_t)
 	const uint64_t now = mach_absolute_time();
 	const uint32_t done = queue.channel ? tgm_chan_completed(queue.channel) : 0;
 	uint32_t late = 0;
+	for (const auto &job : queue.jobs)
+		if (job.mapping && job.deadline && job.deadline <= now &&
+		    int32_t(done - job.sequence) < 0 && (!late || int32_t(job.sequence - late) < 0))
+			late = job.sequence;
+	const uint64_t next =
+		late ? tgm_chan_check_progress(queue.channel, "cached scrub", late) : 0;
+	uint64_t deadline = 0;
+	if (next)
+		clock_interval_to_deadline(uint32_t(next / 1000), 1000, &deadline);
 	for (auto &job : queue.jobs)
-		if (job.mapping && job.deadline <= now && int32_t(done - job.sequence) < 0) {
-			if (!late || int32_t(job.sequence - late) < 0)
-				late = job.sequence;
-			clock_interval_to_deadline(1, 1000000000, &job.deadline);
-		}
-	if (late)
-		tgm_chan_check_progress(queue.channel, "cached scrub", late);
+		if (job.mapping && job.deadline && job.deadline <= now)
+			job.deadline = int32_t(done - job.sequence) < 0 ? deadline : 0;
 	arm();
 	IOLockUnlock(queue.lock);
 	thread_call_enter(queue.retirement);

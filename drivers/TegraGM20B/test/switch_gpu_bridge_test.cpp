@@ -6,6 +6,7 @@
 #include <future>
 #include <chrono>
 #include <map>
+#include <thread>
 #include <tuple>
 #include <vector>
 #include "switch_gpu_bridge_stubs.h"
@@ -17,7 +18,6 @@
 struct tgm_vm {};
 struct tgm_mem { const uint64_t *pages; uint32_t count; };
 struct tgm_chan { uint32_t submitted, completed; bool failed; };
-thread_call_t switch_bridge_call;
 namespace {
 using Key = std::tuple<uint32_t, uint64_t, uint64_t>;
 std::map<Key, int> statuses, refs, external;
@@ -38,10 +38,12 @@ Key key(const switch_gpu_backing_token &token) { return {token.queue, token.rese
 switch_gpu_backing_token token(uint32_t value = 1, uint32_t queue = 1, uint64_t generation = 1) {
     return {value, generation, SWITCH_GPU_ENGINE_GM20B, queue};
 }
+thread_call_t retirement() { return switch_bridge_calls.at(0); }
+thread_call_t hangCheck() { return switch_bridge_calls.at(1); }
 void pump() {
-    if (switch_bridge_call && switch_bridge_call->pending) {
-        switch_bridge_call->pending = false;
-        switch_bridge_call->fn(switch_bridge_call->arg, nullptr);
+    if (!switch_bridge_calls.empty() && retirement()->pending) {
+        retirement()->pending = false;
+        retirement()->fn(retirement()->arg, nullptr);
     }
 }
 void finish(bool failed = false) {
@@ -136,13 +138,17 @@ extern "C" uint32_t tgm_chan_settled(tgm_chan *chan, int *failed)
 }
 extern "C" void tgm_chan_on_fence(tgm_chan *, void (*fn)(void *), void *arg) { fenceCallback = fn; fenceContext = arg; }
 std::atomic<uint32_t> progressChecks;
-std::function<void(uint32_t)> recoverStuckProducer;
-extern "C" void tgm_chan_check_progress(tgm_chan *chan, const char *, uint32_t seqno)
+uint32_t checkedSequence;
+uint64_t nextCheckNs = 2000000000;
+std::function<void()> recoverStuckProducer;
+extern "C" uint64_t tgm_chan_check_progress(tgm_chan *chan, const char *, uint32_t seqno)
 {
     EXPECT_EQ(chan, &gpu);
     ++progressChecks;
+    checkedSequence = seqno;
     if (recoverStuckProducer)
-        std::exchange(recoverStuckProducer, nullptr)(seqno);
+        std::exchange(recoverStuckProducer, nullptr)();
+    return nextCheckNs;
 }
 extern "C" int tegra_host1x_syncpt_alloc(uint32_t *id) { *id = syncpointCount++; return 0; }
 extern "C" uint32_t tegra_host1x_syncpt_read(uint32_t id) { return syncpoints[id]; }
@@ -368,7 +374,7 @@ TEST_F(Bridge, HardwareFenceBeforeMediaRetirementDefersCallbackUntilCompletionNo
     finish();
     EXPECT_EQ(calls, 0);
     EXPECT_EQ(refs[key(source)], 1);
-    EXPECT_FALSE(switch_bridge_call->pending);
+    EXPECT_FALSE(retirement()->pending);
     statuses[key(source)] = 1;
     switch_gpu_bridge_completed();
     pump();
@@ -408,21 +414,96 @@ TEST_F(Bridge, RetainedConsumerWaitJoinsLaggingSemanticProducerWithoutPolling) {
     EXPECT_EQ(refs[key(source)], 0);
 }
 
-TEST_F(Bridge, StalledBridgeHasTheGpuRecoverTheProducerAndReportsItsFailure) {
+// Start a waiter and return once it has armed the hang check, asleep or about to sleep on the bridge.
+std::future<int> waitArmed(switch_gpu_bridge *bridge)
+{
+    using namespace std::chrono_literals;
+    const unsigned arms = switch_bridge_arms;
+    auto waiter = std::async(std::launch::async, [bridge] { return switch_gpu_bridge_wait(bridge); });
+    for (unsigned i = 0; i < 2000 && switch_bridge_arms == arms; ++i)
+        std::this_thread::sleep_for(1ms);
+    EXPECT_NE(switch_bridge_arms.load(), arms);
+    return waiter;
+}
+
+void fireHangCheck(uint64_t at)
+{
+    switch_bridge_now = at;
+    hangCheck()->deadline = 0;
+    hangCheck()->fn(hangCheck()->arg, nullptr);
+}
+
+// The wait arms one timer for the first check, a second after it begins; each check re-arms it only for when
+// tgm_chan_check_progress says its rule can take the next step; the recovery that check starts completes the bridge,
+// which wakes the waiter and cancels the timer.
+TEST_F(Bridge, AStalledBridgeIsCheckedByOneTimerTheHangRuleReArmsUntilRecoveryCompletesIt) {
     auto source = token(95); statuses[key(source)] = 0;
     auto *bridge = submit({source}); ASSERT_NE(bridge, nullptr);
-    uint32_t sequence = 0;
     progressChecks = 0;
-    recoverStuckProducer = [&](uint32_t seqno) {
-        sequence = seqno;
+    switch_bridge_now = 5000;
+    auto waiter = waitArmed(bridge);
+    EXPECT_EQ(hangCheck()->deadline, 5000u + 1000000000u);
+    EXPECT_EQ(progressChecks.load(), 0u);
+    fireHangCheck(1000005000);
+    EXPECT_EQ(progressChecks.load(), 1u);
+    EXPECT_EQ(checkedSequence, gpu.submitted);
+    EXPECT_EQ(hangCheck()->deadline, 1000005000u + nextCheckNs);
+    recoverStuckProducer = [&] {
         statuses[key(source)] = -5;
         releaseSyncpoint(bridge);
         finish();
     };
-    auto waiter = std::async(std::launch::async, [bridge] { return switch_gpu_bridge_wait(bridge); });
+    fireHangCheck(3000005000);
     EXPECT_EQ(waiter.get(), -5);
-    EXPECT_GE(progressChecks.load(), 1u);
-    EXPECT_EQ(sequence, gpu.submitted);
+    EXPECT_EQ(progressChecks.load(), 2u);
+    EXPECT_EQ(hangCheck()->deadline, 0u);
     release(bridge);
     EXPECT_EQ(refs[key(source)], 0);
+}
+
+TEST_F(Bridge, AWaitThatCompletesBeforeItsCheckLeavesNoTimerAndNoCheck) {
+    auto source = token(96); statuses[key(source)] = 0;
+    auto *bridge = submit({source}); ASSERT_NE(bridge, nullptr);
+    EXPECT_EQ(hangCheck()->deadline, 0u);
+    progressChecks = 0;
+    auto waiter = waitArmed(bridge);
+    EXPECT_NE(hangCheck()->deadline, 0u);
+    statuses[key(source)] = 1;
+    releaseSyncpoint(bridge);
+    finish();
+    EXPECT_EQ(waiter.get(), 1);
+    EXPECT_EQ(hangCheck()->deadline, 0u);
+    EXPECT_EQ(progressChecks.load(), 0u);
+}
+
+// A channel with nothing pending has no next step: the timer stays down until another wait begins, or new work goes on
+// the channel while a waiter is still there (here one whose bridge waits on a media producer after its GPU work).
+TEST_F(Bridge, ACheckThatFindsNothingPendingLeavesTheTimerDownUntilNewWorkComes) {
+    auto source = token(97); source.engine = SWITCH_GPU_ENGINE_NVDEC;
+    statuses[key(source)] = 0;
+    auto *bridge = submit({source}); ASSERT_NE(bridge, nullptr);
+    releaseSyncpoint(bridge);
+    finish();
+    auto waiter = waitArmed(bridge);
+    nextCheckNs = 0;
+    fireHangCheck(switch_bridge_now + 1000000000);
+    nextCheckNs = 2000000000;
+    EXPECT_EQ(hangCheck()->deadline, 0u);
+    const auto other = token(98);
+    statuses[key(other)] = 0;
+    ASSERT_NE(submit({other}), nullptr);
+    EXPECT_EQ(hangCheck()->deadline, switch_bridge_now + 1000000000u);
+    statuses[key(source)] = statuses[key(other)] = 1;
+    switch_gpu_bridge_completed();
+    pump();
+    EXPECT_EQ(waiter.get(), 1);
+    finish();
+    EXPECT_EQ(hangCheck()->deadline, 0u);
+}
+
+TEST_F(Bridge, ABridgeNobodyWaitsForArmsNoCheck) {
+    const auto source = token(99);
+    statuses[key(source)] = 0;
+    ASSERT_NE(submit({source}), nullptr);
+    EXPECT_EQ(hangCheck()->deadline, 0u);
 }

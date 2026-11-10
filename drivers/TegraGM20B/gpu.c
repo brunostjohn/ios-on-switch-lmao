@@ -1421,7 +1421,7 @@ void tgm_chan_hung(struct tgm_chan *chan, const char *who, uint32_t seqno, uint6
 #define TGM_HANG_NS (2 * NSEC_PER_SEC)
 
 /* The time the hold kept the channel off the GPU is not the channel's: it never counts toward a stall. */
-void tgm_chan_check_progress(struct tgm_chan *chan, const char *who, uint32_t seqno)
+uint64_t tgm_chan_check_progress(struct tgm_chan *chan, const char *who, uint32_t seqno)
 {
 	u32 done = tgm_chan_completed(chan);
 	u64 now = nvxnu_nanotime();
@@ -1431,18 +1431,21 @@ void tgm_chan_check_progress(struct tgm_chan *chan, const char *who, uint32_t se
 
 	if ((s32)(done - chan->submitted) >= 0) {
 		WRITE_ONCE(chan->stall_ns, 0);
-	} else if (!since || READ_ONCE(chan->stall_done) != done) {
+		return 0;
+	}
+	if (!since || READ_ONCE(chan->stall_done) != done) {
 		WRITE_ONCE(chan->stall_done, done);
 		WRITE_ONCE(chan->stall_held, held);
 		WRITE_ONCE(chan->stall_ns, now);
-	} else {
-		stalled = tgm_unheld_ns(now, since, held, READ_ONCE(chan->stall_held));
-		if (stalled >= TGM_HANG_NS) {
-			tgm_chan_stalled(chan, who, seqno, stalled);
-			WRITE_ONCE(chan->stall_held, held);
-			WRITE_ONCE(chan->stall_ns, now);
-		}
+		return TGM_HANG_NS;
 	}
+	stalled = tgm_unheld_ns(now, since, held, READ_ONCE(chan->stall_held));
+	if (stalled < TGM_HANG_NS)
+		return TGM_HANG_NS - stalled;
+	tgm_chan_stalled(chan, who, seqno, stalled);
+	WRITE_ONCE(chan->stall_held, held);
+	WRITE_ONCE(chan->stall_ns, now);
+	return TGM_HANG_NS;
 }
 
 /* client fault isolation:
