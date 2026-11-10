@@ -1,4 +1,7 @@
+load("//bazel/lint:defs.bzl", "lint_files")
 load("//bazel/testing:defs.bzl", "host_library", "host_shims", "host_test")
+
+lint_files()
 
 host_library(
     name = "interface",
