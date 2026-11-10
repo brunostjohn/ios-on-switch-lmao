@@ -20,17 +20,30 @@ struct Compiler::Job {
     CacheKey key;
 };
 
+struct Compiler::Store {
+    RecordCache *cache;
+    CacheKey key;
+    std::unique_ptr<RuntimeRecord> record;
+    std::string why;
+};
+
 Compiler::Compiler(RecordCache *cache, Make make, uint64_t retryUs)
     : cache_(cache), make_(std::move(make)), retryUs_(retryUs),
       queue_(dispatch_queue_create(
           "com.brunostjohn.switch.raw.compile",
-          dispatch_queue_attr_make_with_qos_class(DISPATCH_QUEUE_SERIAL, QOS_CLASS_USER_INITIATED, 0)))
+          dispatch_queue_attr_make_with_qos_class(DISPATCH_QUEUE_CONCURRENT, QOS_CLASS_USER_INITIATED, 0))),
+      persistence_(
+          dispatch_queue_create("com.brunostjohn.switch.raw.cache",
+                                dispatch_queue_attr_make_with_qos_class(DISPATCH_QUEUE_SERIAL, QOS_CLASS_UTILITY, 0))),
+      slots_(dispatch_semaphore_create(2))
 {}
 
 Compiler::~Compiler()
 {
     drain();
     dispatch_release(static_cast<dispatch_queue_t>(queue_));
+    dispatch_release(static_cast<dispatch_queue_t>(persistence_));
+    dispatch_release(static_cast<dispatch_semaphore_t>(slots_));
 }
 
 Compiler::State Compiler::ask(const CacheKey &k, Done done, const RuntimeRecord **record)
@@ -116,14 +129,37 @@ void Compiler::queue(const CacheKey &k)
 Compiler::Outcome Compiler::produce(const CacheKey &k, RuntimeRecord &record, std::string &why,
                                     RecordCache::Found &found)
 {
-    std::lock_guard<std::mutex> m(making_);
     found = cache_ ? cache_->load(k, record, why) : RecordCache::Found::None;
-    const Outcome outcome = found == RecordCache::Found::Record    ? Outcome::Made
-                            : found == RecordCache::Found::Refusal ? Outcome::Refused
-                                                                   : make_(k, record, why);
+    if (found != RecordCache::Found::None)
+        return found == RecordCache::Found::Record ? Outcome::Made : Outcome::Refused;
+
+    struct Slot {
+        dispatch_semaphore_t semaphore;
+
+        explicit Slot(void *value) : semaphore(static_cast<dispatch_semaphore_t>(value))
+        {
+            dispatch_semaphore_wait(semaphore, DISPATCH_TIME_FOREVER);
+        }
+
+        ~Slot()
+        {
+            dispatch_semaphore_signal(semaphore);
+        }
+    } slot(slots_);
+
+    const Outcome outcome = make_(k, record, why);
     if (found == RecordCache::Found::None && outcome != Outcome::Failed && cache_)
-        cache_->store(k, outcome == Outcome::Made ? &record : nullptr, why);
+        dispatch_async_f(
+            static_cast<dispatch_queue_t>(persistence_),
+            new Store{cache_, k, outcome == Outcome::Made ? std::make_unique<RuntimeRecord>(record) : nullptr, why},
+            store);
     return outcome;
+}
+
+void Compiler::store(void *context)
+{
+    std::unique_ptr<Store> pending(static_cast<Store *>(context));
+    pending->cache->store(pending->key, pending->record.get(), pending->why);
 }
 
 // The state's entry set to `outcome`; the asks that waited for it, and in *made its record (null: none)
@@ -210,6 +246,8 @@ void Compiler::drain()
     idle_.wait(l, [&] {
         return queued_ == 0;
     });
+    l.unlock();
+    dispatch_sync_f(static_cast<dispatch_queue_t>(persistence_), nullptr, [](void *) {});
 }
 
 Compiler::Stats Compiler::stats() const

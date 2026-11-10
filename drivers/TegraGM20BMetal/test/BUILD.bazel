@@ -23,6 +23,9 @@
 #   raw_slm_test      raw/runtime/raw_slm.h: the shader local memory a program's header or a kernel's QMD asks of a
 #                     warp, the area NVK sizes for it, the methods that give it to the raw channel's 3D and compute
 #                     classes (the runtime's, never a record's), ahead of every program of the pack or a record
+#   raw_view_test     raw/runtime/raw_view.h: a kernel's texture slot binds the texture's own header, or a header of its
+#                     memory with the word 0 of m2v's view of it in another format of the same texel size (a half
+#                     texture's unsigned twin), with no sRGB conversion; texels of another size or blocks bind none
 #   raw_tic_words_test  raw/runtime/raw_zeta.h and raw_gpu.cpp's block-compressed rows: each depth/stencil format's
 #                     SET_ZT_FORMAT and texture header word 0, and each compressed format's word 0, rebuilt from NIL's
 #                     row of NVK's format by NIL's generator rules
@@ -70,9 +73,96 @@
 #   bazel test //drivers/TegraGM20BMetal/test:all
 load("@rules_python//python:py_test.bzl", "py_test")
 load("//bazel/lint:defs.bzl", "lint_files")
-load("//bazel/testing:defs.bzl", "host_test")
+load("//bazel/testing:defs.bzl", "host_library", "host_test")
 
 lint_files()
+
+# The same upstream decoder/simulator used by raw/pack's captured-method equivalence checks.
+host_library(
+    name = "raw_mme_simulator",
+    srcs = [
+        "//drivers/TegraGM20BMetal:raw/pack/mesa/mme_fermi.c",
+        "//drivers/TegraGM20BMetal:raw/pack/mesa/mme_fermi_sim.c",
+    ],
+    hdrs = [
+        "//drivers/TegraGM20BMetal:raw/pack/mesa/mme_bitpack_helpers.h",
+        "//drivers/TegraGM20BMetal:raw/pack/mesa/mme_fermi.h",
+        "//drivers/TegraGM20BMetal:raw/pack/mesa/mme_fermi_sim.h",
+        "//drivers/TegraGM20BMetal:raw/pack/mesa/mme_sim.h",
+        "//drivers/TegraGM20BMetal:raw/pack/mesa/nv_device_info.h",
+        "//drivers/TegraGM20BMetal:raw/pack/mesa/nv_push_cl902d.h",
+        "//drivers/TegraGM20BMetal:raw/pack/mesa/nv_push_cl9097.h",
+        "//drivers/TegraGM20BMetal:raw/pack/mesa/util/bitpack_helpers.h",
+        "//drivers/TegraGM20BMetal:raw/pack/mesa/util/macros.h",
+        "//drivers/TegraGM20BMetal:raw/pack/mesa/util/u_math.h",
+    ],
+    copts = ["-Wno-unused-parameter", "-Wno-sign-compare"],
+)
+
+host_test(
+    name = "raw_mme_test",
+    srcs = [
+        "raw_mme_test.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_mme.h",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_push.h",
+    ],
+    deps = [":raw_mme_simulator"],
+    cxx_std = "c++17",
+)
+
+host_test(
+    name = "raw_semantic_plan_test",
+    srcs = [
+        "raw_semantic_plan_test.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/RawMetalArguments.h",
+        "//drivers/TegraGM20BMetal:raw/runtime/RawMetalPlan.h",
+        "//drivers/TegraGM20BMetal:raw/runtime/RawMetalPlanApply.h",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_semantic_state.h",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_semantic_plan.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_semantic_setters.cpp",
+    ],
+    cxx_std = "c++17",
+)
+
+host_test(
+    name = "raw_execution_plan_test",
+    srcs = [
+        "raw_execution_plan_test.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_execution_plan.h",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_submit_queue.h",
+    ],
+    cxx_std = "c++17",
+)
+
+host_test(
+    name = "raw_submit_queue_test",
+    srcs = [
+        "raw_submit_queue_test.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_submit_queue.h",
+    ],
+    cxx_std = "c++17",
+)
+
+host_test(
+    name = "raw_descriptors_test",
+    srcs = [
+        "raw_descriptors_test.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_descriptors.h",
+    ],
+    cxx_std = "c++17",
+)
+
+host_test(
+    name = "raw_compute_lookup_test",
+    srcs = [
+        "raw_compute_lookup_test.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_compute_lookup.h",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_compute_key.h",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_metallib.h",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_pack.h",
+    ],
+    cxx_std = "c++17",
+)
 
 host_test(
     name = "raw_target_test",
@@ -340,6 +430,15 @@ host_test(
 )
 
 host_test(
+    name = "raw_view_test",
+    srcs = [
+        "raw_view_test.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_view.h",
+    ],
+    cxx_std = "c++17",
+)
+
+host_test(
     name = "raw_stamps_test",
     srcs = [
         "raw_stamps_test.cpp",
@@ -488,4 +587,15 @@ host_test(
     ],
     cxx_std = "c++17",
     sanitize = False,
+)
+
+host_test(
+    name = "raw_surfaces_test",
+    srcs = [
+        "raw_surfaces_test.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_surfaces.h",
+        "//drivers/TegraGM20B:TegraGM20BABI.h",
+    ],
+    copts = ["-Idrivers/TegraGM20B"],
+    cxx_std = "c++17",
 )

@@ -344,7 +344,7 @@ TEST(GM20BPushScanSource, KernelUsesTheHeader)
 	EXPECT_THAT(scan, HasSubstr("prof->cls[i] = cls;"));
 	// A stamp only after a push whose class is not SKIP, only on a profiled submission.
 	EXPECT_THAT(Between(gpu(), "static int chan_exec(", "\n}\n"),
-		    HasSubstr("if (prof && prof->cls[i] != TGM_PC_SKIP) {"));
+		    HasSubstr("if (prof && !pushes[i].incomplete && prof->cls[i] != TGM_PC_SKIP) {"));
 }
 
 // Direct scanout's fence-only present (NativeMobileDisplay, TEGRA_SCANOUT_COPY_FENCE_ONLY) launches no copy.
@@ -581,8 +581,9 @@ TEST(GM20BL2Source, InvalidateOnTheGpu)
 TEST(GM20BCoherencySource, ExecNamesTheWriterOnceTheSubmissionHasItsSeqno)
 {
 	const std::string exec = flat(definition(client(), "IOReturn AGXDeviceUserClient::exec("));
-	expectBefore(exec, "ioreturn(tgm_chan_exec(chan, pushes, count, &seqno,",
+	expectBefore(exec, "error = switch_gpu_chan_exec(chan, pushes, count,",
 		     "surfaces_.after(listed, importsWritten_, tgm_chan_uid(chan), seqno);");
+	expectBefore(exec, "error = switch_gpu_chan_exec(chan, pushes, count,", "switch_gpu_backing_commit(&transaction);");
 	const std::string after = flat(definition(SourceText("../TegraGM20BExecSurfaces.cpp"),
 						  "void ExecSurfaces::after("));
 	EXPECT_THAT(after, HasSubstr("tgm_coherency_wrote(refs_[i].coh, always, uid, seqno);"));
@@ -596,9 +597,10 @@ TEST(GM20BCoherencySource, ExecNamesTheWriterOnceTheSubmissionHasItsSeqno)
 TEST(GM20BFencesSource, ExecQueuesItsWritersAcquiresBeforeItSubmits)
 {
 	const std::string exec = flat(definition(client(), "IOReturn AGXDeviceUserClient::exec("));
-	expectBefore(exec, "const bool listed = surfaces_.before(in->channel - 1, chan, count);",
-		     "return kIOReturnBadArgument; if (p.flags & TegraGM20BPushImportsWritten)");
-	expectBefore(exec, "surfaces_.before(", "ioreturn(tgm_chan_exec(");
+	expectBefore(exec, "if (followed < 0) return ioreturn(followed);",
+		     "error = switch_gpu_chan_exec(");
+	expectBefore(exec, "switch_gpu_backing_dependencies(", "error = switch_gpu_chan_exec(");
+	EXPECT_THAT(exec, HasSubstr("ownershipBusy ? kIOReturnCannotLock : ioreturn(error)"));
 	for (const char *signature :
 	     {"int tgm_chan_follow(struct tgm_chan *chan,", "int tgm_chan_follow_importers("}) {
 		const std::string follow = flat(definition(gpu(), signature));
@@ -622,7 +624,7 @@ TEST(GM20BCoherencySource, AFailedSurfaceWritesFallsBackToMarkingEveryImport)
 	const std::string declare = flat(definition(raw, "bool Kernel::surfaceGpuWrites("));
 	EXPECT_THAT(declare, HasSubstr("importsWritten_.store(true"));
 	EXPECT_THAT(flat(definition(raw, "bool Kernel::exec(")),
-		    HasSubstr("e.pushes[0].flags |= TegraGM20BPushImportsWritten;"));
+		    HasSubstr("legacyExec.pushes[0].flags |= TegraGM20BPushImportsWritten;"));
 	EXPECT_THAT(flat(definition(raw, "bool Kernel::importPages(")),
 		    HasSubstr("!importsWritten_.load("));
 	const std::string nvk = SourceText(

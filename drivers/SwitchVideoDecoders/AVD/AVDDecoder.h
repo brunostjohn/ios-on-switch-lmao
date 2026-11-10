@@ -39,7 +39,7 @@ typedef struct {
     CFTypeRef matrix, primaries, transfer;
     uint32_t width, height, frames, errors;
     uint64_t decodeTicks, copyTicks;  // copyTicks: placing pictures in pixel buffers (VIC's or the CPU's copy)
-    bool present;                     // VIC copies the pictures (until it refuses one)
+    bool present;
     uint32_t presented, copied;
 } Decoder;
 

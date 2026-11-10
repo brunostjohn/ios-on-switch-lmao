@@ -11,6 +11,7 @@
 #include <array>
 #include <cstdint>
 #include <cstring>
+#include <optional>
 
 #include "raw_bounds.h"
 
@@ -32,6 +33,62 @@ class WrittenRegion {
 public:
     static constexpr uint32_t kMaxDraws = 16, kMaxVertices = 96;
 
+    class Analysis {
+    public:
+        explicit Analysis(const DrawGeometry &geometry) : geometry_(geometry) {}
+
+        const DrawGeometry &geometry() const
+        {
+            return geometry_;
+        }
+
+        bool evaluated() const
+        {
+            return evaluated_;
+        }
+
+        PixelBox cachedBox() const
+        {
+            return valid_ ? pixels_ : geometry_.limit;
+        }
+
+        bool bounds(PixelBox &out)
+        {
+            if (!evaluated_) {
+                evaluated_ = true;
+                if (geometry_.bounded && geometry_.count <= kMaxVertices) {
+                    float matrix[16];
+                    memcpy(matrix, geometry_.matrix, sizeof(matrix));
+                    bounds_.emplace(matrix, geometry_.viewport);
+                    valid_ = addVertices(geometry_, *bounds_, added_);
+                    if (valid_)
+                        pixels_ = bounds_->pixels(geometry_.limit);
+                }
+            }
+            if (valid_)
+                out = pixels_;
+            return valid_;
+        }
+
+        bool covers(bool list, uint32_t w, uint32_t h)
+        {
+            const DrawGeometry &g = geometry_;
+            if (!g.bounded || g.count != (list ? 6u : 4u) || g.limit.x0 || g.limit.y0 || g.limit.x1 < w ||
+                g.limit.y1 < h)
+                return false;
+            PixelBox box, certain, possible;
+            return bounds(box) && added_ == g.count && bounds_->rectangle(list, certain, possible) &&
+                   !certain.x0 && !certain.y0 && certain.x1 >= w && certain.y1 >= h;
+        }
+
+    private:
+        const DrawGeometry &geometry_;
+        std::optional<DrawBounds> bounds_;
+        PixelBox pixels_;
+        uint32_t added_ = 0;
+        bool evaluated_ = false, valid_ = false;
+    };
+
     void clear()
     {
         count_ = 0;
@@ -40,24 +97,31 @@ public:
 
     void add(const DrawGeometry &g)
     {
-        if (g.limit.empty())
-            return;
-        if (count_ == kMaxDraws) {
-            overflow_ = true;
-            return;
-        }
-        draws_[count_++] = {g, g.limit, !g.bounded};
+        add(g, g.limit, !g.bounded);
+    }
+
+    void add(const Analysis &analysis)
+    {
+        const DrawGeometry &g = analysis.geometry();
+        add(g, analysis.cachedBox(), analysis.evaluated() || !g.bounded);
     }
 
     // Whether `g`'s pixels may meet a pixel written since the last clear
     bool meets(const DrawGeometry &g)
     {
+        Analysis analysis(g);
+        return meets(analysis);
+    }
+
+    bool meets(Analysis &analysis)
+    {
+        const DrawGeometry &g = analysis.geometry();
         if (g.limit.empty())
             return false;
         if (overflow_)
             return true;
         PixelBox box;
-        if (!bounds(g, box))
+        if (!analysis.bounds(box))
             box = g.limit;
         for (uint32_t i = count_; i-- > 0;) {
             Draw &d = draws_[i];
@@ -74,31 +138,16 @@ public:
 
     static bool bounds(const DrawGeometry &g, PixelBox &out)
     {
-        if (!g.bounded || g.count > kMaxVertices)
-            return false;
-        float matrix[16];
-        memcpy(matrix, g.matrix, sizeof matrix);
-        DrawBounds b(matrix, g.viewport);
-        uint32_t added = 0;
-        if (!addVertices(g, b, added))
-            return false;
-        out = b.pixels(g.limit);
-        return true;
+        Analysis analysis(g);
+        return analysis.bounds(out);
     }
 
     // Whether the draw covers every pixel of [0, w) x [0, h) for sure: all its vertices one axis-aligned rectangle (a
     // triangle `list` of 6, or a strip of 4 with no restart), within a scissor and viewport that hold the whole area
     static bool covers(const DrawGeometry &g, bool list, uint32_t w, uint32_t h)
     {
-        if (!g.bounded || g.count != (list ? 6u : 4u) || g.limit.x0 || g.limit.y0 || g.limit.x1 < w || g.limit.y1 < h)
-            return false;
-        float matrix[16];
-        memcpy(matrix, g.matrix, sizeof matrix);
-        DrawBounds b(matrix, g.viewport);
-        uint32_t added = 0;
-        PixelBox certain, possible;
-        return addVertices(g, b, added) && added == g.count && b.rectangle(list, certain, possible) && !certain.x0 &&
-               !certain.y0 && certain.x1 >= w && certain.y1 >= h;
+        Analysis analysis(g);
+        return analysis.covers(list, w, h);
     }
 
     // Every vertex of `g` into `b` but a strip's restarts (`added` counts those taken); false: one past the bound bytes,
@@ -129,6 +178,17 @@ public:
     }
 
 private:
+    void add(const DrawGeometry &g, const PixelBox &box, bool known)
+    {
+        if (g.limit.empty())
+            return;
+        if (count_ == kMaxDraws) {
+            overflow_ = true;
+            return;
+        }
+        draws_[count_++] = {g, box, known};
+    }
+
     struct Draw {
         DrawGeometry geometry;
         PixelBox box;

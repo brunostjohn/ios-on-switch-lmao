@@ -85,6 +85,8 @@ host_test(
     srcs = [
         "switch_frame_info_test.cpp",
         "//drivers/NativeMobileDisplay:SwitchFrameInfo.h",
+        "//drivers/NativeMobileDisplay:SwitchFrameTickets.h",
+        "//drivers/TegraDisplayFlip:SwitchFrameTimeline.h",
     ],
     defines = [
         "SWITCH_IPSW_BUILD=\\\"21H461\\\"",
@@ -97,11 +99,33 @@ host_test(
     srcs = [
         "switch_frame_info_test.cpp",
         "//drivers/NativeMobileDisplay:SwitchFrameInfo.h",
+        "//drivers/NativeMobileDisplay:SwitchFrameTickets.h",
+        "//drivers/TegraDisplayFlip:SwitchFrameTimeline.h",
     ],
     defines = [
         "SWITCH_IPSW_BUILD=\\\"24B119\\\"",
         "SWITCH_IPSW_DEVICE_J181AP=1",
     ],
+)
+
+host_test(
+    name = "switch_frame_tickets_test",
+    srcs = [
+        "switch_frame_tickets_test.cpp",
+        "//drivers/NativeMobileDisplay:SwitchFrameTickets.h",
+        "//drivers/TegraDisplayFlip:SwitchFrameTimeline.h",
+    ],
+    defines = ["DEVELOPMENT=1"],
+)
+
+host_test(
+    name = "switch_frame_tickets_release_test",
+    srcs = [
+        "switch_frame_tickets_test.cpp",
+        "//drivers/NativeMobileDisplay:SwitchFrameTickets.h",
+        "//drivers/TegraDisplayFlip:SwitchFrameTimeline.h",
+    ],
+    copts = ["-UDEVELOPMENT", "-DDEVELOPMENT=0", "-UDEBUG", "-DDEBUG=0"],
 )
 
 host_test(
@@ -148,6 +172,8 @@ host_test(
         "//diagnostics/switch:SwitchDiag.c",
         "//diagnostics/switch:SwitchPanicSave.c",
         "//drivers/NativeMobileDisplay:NativeLegacyDisplay.cpp",
+        "//drivers/NativeMobileDisplay:SwitchScanoutStart.h",
+        "//drivers/NativeMobileDisplay:SwitchScanoutSetup.h",
         "//kits/SwitchABI:kinds/21H461/IOMobileFramebufferLegacy.json",
     ],
 )
@@ -198,6 +224,7 @@ host_test(
     srcs = ["display_planes_source_test.cpp"],
     data = [
         "//drivers/NativeMobileDisplay:NativeLegacyDisplay.cpp",
+        "//drivers/NativeMobileDisplay:SwitchScanoutStart.h",
         "//drivers/NativeMobileDisplay:NativePlaneFenceDisplay.h",
         "//drivers/NativeMobileDisplay:NativePlanesDisplay.h",
         "//drivers/NativeMobileDisplay:NativePlanesTotals.h",
@@ -220,4 +247,14 @@ host_test(
         "//drivers/TegraGM20B:TegraGM20BLayout.h",
     ],
     copts = ["-O1"],
+)
+
+
+host_test(
+    name = "switch_scanout_start_test",
+    srcs = [
+        "switch_scanout_start_test.cpp",
+        "//drivers/NativeMobileDisplay:SwitchScanoutStart.h",
+        "//drivers/TegraDisplayFlip:TegraScanoutRing.h",
+    ],
 )

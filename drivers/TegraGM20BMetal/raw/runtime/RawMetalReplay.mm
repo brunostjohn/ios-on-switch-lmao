@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-#import "RawMetalInternal.h"
+#import "RawMetalPlanAdapters.h"
 
 // ---- object mapping for the m2v replay ----
 #if SWITCH_FRAME_TIMELINE
@@ -65,6 +65,18 @@ id<MTLCommandBuffer> replay(RMCommandBuffer *cb, size_t from, size_t to, bool pa
     // GPU's bytes); a whole buffer only where the tape does not say (a state not in the pack, a compute or other recorded call,
     // a resource it uses)
     std::set<RMBuffer *> buffers;  // whole
+    std::set<RMBuffer *> writtenBuffers;
+    cb->_plan.forEachUse(from, to, [&](void *value, uint8_t access) {
+        RMBuffer *buffer = cpuBufferOfResource((__bridge id)value);
+        if (!buffer || buffer->_raw.wc)
+            return;
+        if (access & raw::ResourceUse::Write) {
+            buffers.insert(buffer);
+            writtenBuffers.insert(buffer);
+        } else if (access & raw::ResourceUse::Explicit) {
+            buffers.insert(buffer);
+        }
+    });
 
     struct Range {
         const uint8_t *at;
@@ -88,6 +100,7 @@ id<MTLCommandBuffer> replay(RMCommandBuffer *cb, size_t from, size_t to, bool pa
     RMBuffer *bound[3][31] = {};
     uint64_t boundOffset[3][31] = {};
     RMPipeline *pipe = nil;
+    raw::StateCursor stateCursor;
     auto drawn = [&](uint32_t first, uint32_t count) {  // the ranges a draw of `count` vertices from `first` reads
         if (!pipe || !pipe->_raw) {                     // not the pack's: every buffer bound, whole
             for (auto &stage : bound)
@@ -118,7 +131,18 @@ id<MTLCommandBuffer> replay(RMCommandBuffer *cb, size_t from, size_t to, bool pa
     };
     std::set<void *> updated;  // fences this part updated
     for (size_t at = from; at < to; at++) {
-        const Cmd &c = cb->_tape[at];
+        const Cmd c = cb->_plan.legacy(at);
+        replayPlannedState(cb, at, enc, stateCursor, buffers, bound, boundOffset, pipe);
+        if (c.op == OpDispatch) {
+            const auto &dispatch = cb->_plan.dispatch(at);
+            const MTLSize grid = MTLSizeMake(dispatch.grid[0], dispatch.grid[1], dispatch.grid[2]);
+            const MTLSize threads = MTLSizeMake(dispatch.threads[0], dispatch.threads[1], dispatch.threads[2]);
+            if (dispatch.perThread)
+                [enc dispatchThreads:grid threadsPerThreadgroup:threads];
+            else
+                [enc dispatchThreadgroups:grid threadsPerThreadgroup:threads];
+            continue;
+        }
         if (isKernelCommand(c.op)) {
             replayKernel(enc, cb, c, buffers);
             continue;
@@ -140,58 +164,6 @@ id<MTLCommandBuffer> replay(RMCommandBuffer *cb, size_t from, size_t to, bool pa
             [enc endEncoding];
             enc = nil;
             break;
-        case OpPipeline:
-            pipe = [(__bridge id)c.obj isKindOfClass:[RMPipeline class]] ? (__bridge RMPipeline *)c.obj : nil;
-            [enc setRenderPipelineState:twinOf((__bridge id)c.obj)];
-            break;
-        case OpBytes:
-            if (c.stage <= 2 && c.index <= 30)
-                bound[c.stage][c.index] = nil;
-            if (c.stage == 1)
-                [enc setVertexBytes:cb->_bytes.chunks[c.c].cpu + c.a length:c.b atIndex:c.index];
-            else
-                [enc setFragmentBytes:cb->_bytes.chunks[c.c].cpu + c.a length:c.b atIndex:c.index];
-            break;
-        case OpBuffer: {
-            id x = (__bridge id)c.obj;
-            if (c.stage <= 2 && c.index <= 30) {
-                bound[c.stage][c.index] = [x isKindOfClass:[RMBuffer class]] ? (RMBuffer *)x : nil;
-                boundOffset[c.stage][c.index] = c.c;
-            }
-            if (c.stage == 1)
-                [enc setVertexBuffer:twinOf(x) offset:c.c atIndex:c.index];
-            else
-                [enc setFragmentBuffer:twinOf(x) offset:c.c atIndex:c.index];
-            break;
-        }
-        case OpBufferOffset:
-            if (c.stage <= 2 && c.index <= 30)
-                boundOffset[c.stage][c.index] = c.c;
-            if (c.stage == 1)
-                [enc setVertexBufferOffset:c.c atIndex:c.index];
-            else
-                [enc setFragmentBufferOffset:c.c atIndex:c.index];
-            break;
-        case OpTexture:
-            if (c.stage == 1)
-                [enc setVertexTexture:twinOf((__bridge id)c.obj) atIndex:c.index];
-            else
-                [enc setFragmentTexture:twinOf((__bridge id)c.obj) atIndex:c.index];
-            break;
-        case OpSampler:
-            if (c.stage == 1)
-                [enc setVertexSamplerState:twinOf((__bridge id)c.obj) atIndex:c.index];
-            else
-                [enc setFragmentSamplerState:twinOf((__bridge id)c.obj) atIndex:c.index];
-            break;
-        case OpScissor:
-            [enc setScissorRect:(MTLScissorRect){c.a, c.b, NSUInteger(c.c >> 32), NSUInteger(uint32_t(c.c))}];
-            break;
-        case OpViewport:
-            [enc setViewport:(MTLViewport){extraDouble(cb, c.x), extraDouble(cb, c.x + 1), extraDouble(cb, c.x + 2),
-                                           extraDouble(cb, c.x + 3), extraDouble(cb, c.x + 4),
-                                           extraDouble(cb, c.x + 5)}];
-            break;
         case OpDraw:
             drawn(c.a, c.b);
             [enc drawPrimitives:MTLPrimitiveType(c.stage)
@@ -199,30 +171,6 @@ id<MTLCommandBuffer> replay(RMCommandBuffer *cb, size_t from, size_t to, bool pa
                     vertexCount:c.b
                   instanceCount:NSUInteger(c.c >> 32)
                    baseInstance:NSUInteger(uint32_t(c.c))];
-            break;
-        case OpCull:
-            [enc setCullMode:MTLCullMode(c.a)];
-            break;
-        case OpWinding:
-            [enc setFrontFacingWinding:MTLWinding(c.a)];
-            break;
-        case OpDepthStencil:
-            [enc setDepthStencilState:twinOf((__bridge id)c.obj)];
-            break;
-        case OpFillMode:
-            [enc setTriangleFillMode:MTLTriangleFillMode(c.a)];
-            break;
-        case OpBlendColor:
-            [enc setBlendColorRed:extraFloat(cb, c.x)
-                            green:extraFloat(cb, c.x + 1)
-                             blue:extraFloat(cb, c.x + 2)
-                            alpha:extraFloat(cb, c.x + 3)];
-            break;
-        case OpStencilRef:
-            [enc setStencilFrontReferenceValue:c.a backReferenceValue:c.b];
-            break;
-        case OpDepthBias:
-            [enc setDepthBias:extraFloat(cb, c.x) slopeScale:extraFloat(cb, c.x + 1) clamp:extraFloat(cb, c.x + 2)];
             break;
         case OpBarrier:
             [enc memoryBarrierWithScope:MTLBarrierScope(c.a)
@@ -328,18 +276,22 @@ id<MTLCommandBuffer> replay(RMCommandBuffer *cb, size_t from, size_t to, bool pa
                     buffers.insert((RMBuffer *)o);
             });
             replayInvocation(inv, c.stage == 0xff ? m : enc);
+            pipe = nil;
             break;
         }
         case OpSignalEvent:
             [m encodeSignalEvent:(__bridge id<MTLEvent>)c.obj value:c.c];
             break;
         case OpWaitEvent:
+            if (expiredEventWait(cb, at))
+                break;
             // a value raw work submitted before signals: the BeforeTask acquire orders this command buffer after it on the
             // GPU (the raw path signals its events from the CPU once complete, which m2v would wait for on the CPU)
             if (!(gRM->gpuOrder && signalled(gRM->rawSignals, c.obj) >= c.c))
                 [m encodeWaitForEvent:(__bridge id<MTLEvent>)c.obj value:c.c];
             break;
         case OpDrawIndexed: {
+            const auto &draw = cb->_plan.draw(at);
             // its indices, and the vertices up to the largest (a restart reads none), as the raw path's indexed draw cleans
             RMBuffer *ib = [(__bridge id)c.obj isKindOfClass:[RMBuffer class]] ? (__bridge RMBuffer *)c.obj : nil;
             const uint32_t size = c.b == MTLIndexTypeUInt16 ? 2 : 4;
@@ -358,7 +310,7 @@ id<MTLCommandBuffer> replay(RMCommandBuffer *cb, size_t from, size_t to, bool pa
                             most = std::max(most, v);
                     }
                 // from the base vertex: those a negative one puts before the stream are none
-                const int64_t base = int64_t(extra(cb, c.x + 1)), from = std::max<int64_t>(0, base);
+                const int64_t base = int64_t(draw.baseVertex), from = std::max<int64_t>(0, base);
                 const int64_t end = c.a ? std::max<int64_t>(from, base + most + 1) : from;
                 drawn(uint32_t(from), uint32_t(end - from));
             } else {
@@ -369,19 +321,37 @@ id<MTLCommandBuffer> replay(RMCommandBuffer *cb, size_t from, size_t to, bool pa
                         if (b)
                             buffers.insert(b);
             }
-        }
             [enc drawIndexedPrimitives:MTLPrimitiveType(c.stage)
                             indexCount:c.a
                              indexType:MTLIndexType(c.b)
                            indexBuffer:twinOf((__bridge id)c.obj)
                      indexBufferOffset:c.c
-                         instanceCount:extra(cb, c.x)
-                            baseVertex:NSInteger(extra(cb, c.x + 1))
-                          baseInstance:extra(cb, c.x + 2)];
+                         instanceCount:draw.instances
+                            baseVertex:NSInteger(draw.baseVertex)
+                          baseInstance:draw.baseInstance];
             break;
-        case OpVisibility:
-            [enc setVisibilityResultMode:MTLVisibilityResultMode(c.a) offset:c.c];
+        }
+        case OpDrawIndirect:
+        case OpDrawIndexedIndirect: {
+            const auto &draw = cb->_plan.draw(at);
+            for (auto &stage : bound)
+                for (RMBuffer *buffer : stage)
+                    if (buffer)
+                        buffers.insert(buffer);
+            id arguments = use(draw.arguments);
+            if (c.op == OpDrawIndirect)
+                [enc drawPrimitives:MTLPrimitiveType(draw.primitive)
+                          indirectBuffer:arguments
+                    indirectBufferOffset:draw.argumentOffset];
+            else
+                [enc drawIndexedPrimitives:MTLPrimitiveType(draw.primitive)
+                                 indexType:MTLIndexType(draw.indexType)
+                               indexBuffer:use(draw.indices)
+                         indexBufferOffset:draw.indexOffset
+                            indirectBuffer:arguments
+                      indirectBufferOffset:draw.argumentOffset];
             break;
+        }
         default:  // a compute encoder's: replayKernel, above
             break;
         }
@@ -405,9 +375,13 @@ id<MTLCommandBuffer> replay(RMCommandBuffer *cb, size_t from, size_t to, bool pa
         if (!b || b->_raw.wc)
             continue;
 #if defined(__aarch64__)
+        const bool written = writtenBuffers.count(b) != 0;
         for (uintptr_t a = uintptr_t(b->_raw.cpu) & ~uintptr_t(63); a < uintptr_t(b->_raw.cpu) + b->_raw.length;
              a += 64)
-            __asm__ volatile("dc cvac, %0" ::"r"(a) : "memory");
+            if (written)
+                __asm__ volatile("dc civac, %0" ::"r"(a) : "memory");
+            else
+                __asm__ volatile("dc cvac, %0" ::"r"(a) : "memory");
 #endif
         cleaned += b->_raw.length;
     }
@@ -416,10 +390,10 @@ id<MTLCommandBuffer> replay(RMCommandBuffer *cb, size_t from, size_t to, bool pa
 #endif
     gRM->stats.replayClean += cleaned;
 #if SWITCH_FRAME_TIMELINE
-    gRM->stats.replayDraws +=
-        uint64_t(std::count_if(cb->_tape.begin() + from, cb->_tape.begin() + to, [](const Cmd &c) {
-            return c.op == OpDraw || c.op == OpDrawIndexed;
-        }));
+    for (size_t at = from; at < to; ++at) {
+        const Op op = cb->_plan.operation(at).op;
+        gRM->stats.replayDraws += isPlanDraw(op);
+    }
 #endif
     noteSurfaceWrites(cb, from, to);
     return m;

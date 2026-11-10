@@ -320,4 +320,68 @@ TEST(RawRegion, AnIndexedDrawReadsItsIndicesFromTheBaseVertex)
     EXPECT_TRUE(written.meets(quad(c, 350, 50, 450, 150)));
 }
 
+TEST(RawRegion, OneAnalysisSuppliesBoundsCoverageAndWrittenPixels)
+{
+    std::vector<float> a, b;
+    raw::DrawGeometry g = quad(a, 0, 0, kWidth, kHeight);
+    raw::WrittenRegion::Analysis analysis(g);
+    EXPECT_FALSE(analysis.evaluated());
+    raw::PixelBox box;
+    ASSERT_TRUE(analysis.bounds(box));
+    EXPECT_TRUE(analysis.evaluated());
+    g.matrix = nullptr;
+    g.positions.base = nullptr;
+    EXPECT_TRUE(analysis.covers(false, kWidth, kHeight));
+    raw::PixelBox again;
+    ASSERT_TRUE(analysis.bounds(again));
+    EXPECT_EQ(again.x0, box.x0);
+    EXPECT_EQ(again.y0, box.y0);
+    EXPECT_EQ(again.x1, box.x1);
+    EXPECT_EQ(again.y1, box.y1);
+    raw::WrittenRegion written;
+    written.add(analysis);
+    EXPECT_TRUE(written.meets(quad(b, 100, 100, 200, 200)));
+}
+
+TEST(RawRegion, FailedAnalysisRetainsTheConservativeScissor)
+{
+    std::vector<float> a, b;
+    raw::DrawGeometry g = quad(a, 0, 0, 100, 100);
+    g.limit = {0, 0, 500, 500};
+    g.positionBytes = 1;
+    raw::WrittenRegion::Analysis analysis(g);
+    raw::PixelBox box;
+    EXPECT_FALSE(analysis.bounds(box));
+    g.matrix = nullptr;
+    g.positions.base = nullptr;
+    EXPECT_FALSE(analysis.bounds(box));
+    EXPECT_FALSE(analysis.covers(false, 500, 500));
+    raw::WrittenRegion written;
+    written.add(analysis);
+    EXPECT_TRUE(written.meets(quad(b, 400, 400, 450, 450)));
+}
+
+TEST(RawRegion, AnUnqueriedAnalysisKeepsWrittenBoundsLazy)
+{
+    std::vector<float> a, b;
+    raw::DrawGeometry g = quad(a, 0, 0, 100, 100);
+    raw::WrittenRegion::Analysis analysis(g);
+    raw::WrittenRegion written;
+    written.add(analysis);
+    EXPECT_FALSE(analysis.evaluated());
+    EXPECT_FALSE(written.meets(quad(b, 200, 200, 300, 300)));
+}
+
+TEST(RawRegion, ANewDrawAnalysisObservesChangedGeometry)
+{
+    std::vector<float> a;
+    raw::DrawGeometry g = quad(a, 0, 0, kWidth, kHeight);
+    raw::WrittenRegion::Analysis first(g);
+    ASSERT_TRUE(first.covers(false, kWidth, kHeight));
+    a[3] = 0;
+    raw::WrittenRegion::Analysis second(g);
+    EXPECT_FALSE(second.covers(false, kWidth, kHeight));
+    EXPECT_TRUE(first.covers(false, kWidth, kHeight));
+}
+
 }  // namespace

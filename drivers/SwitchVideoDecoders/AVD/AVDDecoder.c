@@ -96,8 +96,8 @@ static OSStatus startSoftware(Decoder *d, VTVideoDecoderSession session, CMVideo
     return noErr;
 }
 
-// VIC's copy of the picture into the buffer (TegraNVDECPresent); false when it did not (a refusal turns it off for the
-// session, with one line). The kernel is always asked, even for a shape it will refuse (an odd VP9 size), because a
+// VIC's copy of the picture into the buffer (TegraNVDECPresent). The kernel is always asked, even for a shape it will
+// refuse (an odd VP9 size), because a
 // refusal leaves the picture's range invalidated: this picture's Wait did not, and the CPU copy must read DRAM.
 static bool presentPicture(Decoder *d, const H264Picture *picture, CVPixelBufferRef image, uint32_t x, uint32_t y,
                            uint32_t width, uint32_t height)
@@ -122,10 +122,9 @@ static bool presentPicture(Decoder *d, const H264Picture *picture, CVPixelBuffer
     if (!err)
         return true;
     if (err == kIOReturnUnsupported || err == kIOReturnBadArgument) {
-        d->present = false;
         os_log_error(gAVDLog,
                      "AVD: VIC refused a %ux%u picture at %u,%u in %{public}s (%#x; the kernel line says why): this "
-                     "session copies on the CPU",
+                     "picture copies on the CPU",
                      width, height, x, y, getprogname(), err);
     }
     return false;

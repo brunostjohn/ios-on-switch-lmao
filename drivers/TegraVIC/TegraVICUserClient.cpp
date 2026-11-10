@@ -53,6 +53,7 @@
 #include "TegraVICBounceEngine.h"
 #include "TegraVICPresent.h"
 #include "TegraVICSurface.h"
+#include "SwitchVICTransform.h"
 #include "../TegraGM20B/TegraGM20BLayout.h"
 
 // The kernel's IOService/IOUserClient implementations, called directly (they are the defaults the vtable copies
@@ -255,6 +256,11 @@ const char *staged(const TegraVICSurfaceDesc *d, TegraVICSurfaceDesc *stage, con
 
 void finishJob(Job *job, IOReturn status);
 
+void transformed(void *context, int status)
+{
+    finishJob(static_cast<Job *>(context), ioreturn(status));
+}
+
 // A destination's copy back has landed (the copy engine's completion, a thread call): the job finishes here.
 void copiedBack(void *arg, int err)
 {
@@ -277,6 +283,16 @@ void copiedBack(void *arg, int err)
 // finished by that copy's completion (false), any other here (true, *status).
 bool runJob(Job *job, IOReturn *status)
 {
+    if (!job->bounceSrc && !job->bounceDst) {
+        const int submitted = switch_vic_transform(&job->src, &job->dst, &job->plan, job->chromaSite,
+                                                   transformed, job);
+        if (submitted > 0)
+            return false;
+        if (submitted < 0) {
+            *status = ioreturn(submitted);
+            return true;
+        }
+    }
     static TegraVICJob vj;
     static TegraVICBounce bounce[TEGRA_VIC_WINDOWS];
     [[maybe_unused]] const uint64_t t0 = switch_now_us();

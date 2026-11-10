@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-#import "RawMetalInternal.h"
+#import "RawMetalPlanAdapters.h"
 #include <optional>
 #include "raw_compute.h"
 #include "raw_samples.h"
@@ -15,16 +15,18 @@ void useTexture(raw::CommandBuffer *rc, RMTexture *t, bool write)
         t = t->_parent;
     if (!t)
         return;
-    rc->use(t->_buffer ? t->_buffer->_raw.import : t->_raw.import, write);
+    rc->use(t->_raw, write);
+    if (t->_buffer)
+        rc->use(t->_buffer->_raw, write);
     for (const raw::Texture *plane : {t->_raw.luma, t->_raw.chroma})
         if (plane)
-            rc->use(plane->import, false);
+            rc->use(*plane, false);
 }
 
 void useBuffer(raw::CommandBuffer *rc, RMBuffer *b, bool write)
 {
     if (b)
-        rc->use(b->_raw.import, write);
+        rc->use(b->_raw, write);
 }
 
 bool encodeRaw(RMCommandBuffer *cb, size_t from, size_t to, const char **why)
@@ -38,9 +40,21 @@ bool encodeRaw(RMCommandBuffer *cb, size_t from, size_t to, const char **why)
         hit(cb, PredEncNoChannel);
         return false;
     }
+    cb->_plan.forEachUse(from, to, [&](void *value, uint8_t access) {
+        id object = (__bridge id)value;
+        const bool write = access & raw::ResourceUse::Write;
+        if (RMBuffer *buffer = cpuBufferOfResource(object);
+            buffer && !buffer->_raw.wc && (write || (access & raw::ResourceUse::Explicit)))
+            rc->clean(buffer->_raw.cpu, buffer->_raw.length, write);
+        if ([object isKindOfClass:[RMBuffer class]])
+            useBuffer(rc, (RMBuffer *)object, write);
+        else if ([object isKindOfClass:[RMTexture class]])
+            useTexture(rc, (RMTexture *)object, write);
+    });
     raw::RenderEncoder *re = nullptr;
     raw::BlitEncoder *be = nullptr;
     std::optional<raw::ComputeEncoder> ce;
+    raw::StateCursor stateCursor;
 
     auto fail = [&](RMPred p, const char *w, uint64_t a = 0, uint64_t b = 0) {
         *why = w;
@@ -151,43 +165,18 @@ bool encodeRaw(RMCommandBuffer *cb, size_t from, size_t to, const char **why)
     {
         std::vector<RMTexture *> planar, rendered;
         std::vector<RMSampler *> samplers;
-        auto isPlanar = [](void *o) {
-            return o && ((__bridge RMTexture *)o)->_raw.converted();
-        };
-        RMTexture *bound[16] = {};  // the open render encoder's planar fragment textures
-        RMPipeline *pipe = nil;
-        for (size_t at = from; at < to; at++) {
-            const Cmd &c = cb->_tape[at];
-            // Metal's copies of a planar texture move its planes' bytes, not the image: m2v's
-            if ((c.op == OpCopyTexture && (isPlanar(c.obj) || isPlanar(c.obj2))) ||
-                (c.op == OpCopyBufferToTexture && isPlanar(c.obj2)) ||
-                (c.op == OpCopyTextureToBuffer && isPlanar(c.obj)))
-                return fail(PredEncPlanarCopy, "a copy to or from a planar texture", c.op);
-            if (c.op == OpRender) {
-                std::fill(std::begin(bound), std::end(bound), nil);
-                pipe = nil;
-                const RMPass &pass = cb->_passes[c.x];
-                for (unsigned j = 0; j < 8; j++)
-                    if (RMTexture *t = (RMTexture *)pass.color[j].texture; t && t->_raw.planarStandIn)
-                        rendered.push_back(t);
-            } else if (c.op == OpPipeline) {
-                pipe = [(__bridge id)c.obj isKindOfClass:[RMPipeline class]] ? (__bridge RMPipeline *)c.obj : nil;
-            } else if (c.op == OpTexture && c.stage == 2 && c.index < 16) {
-                bound[c.index] = isPlanar(c.obj) ? (__bridge RMTexture *)c.obj : nil;
-            } else if ((c.op == OpDraw || c.op == OpDrawIndexed) && pipe && pipe->_raw) {
-                const raw::PackPipeline &r = *pipe->_raw->rec;
-                for (uint32_t e = 0; e < r.entries; e++) {
-                    RMTexture *t =
-                        r.entry[e].kind == raw::EntryTexture && r.entry[e].slot < 16 ? bound[r.entry[e].slot] : nil;
-                    if (t && std::find(planar.begin(), planar.end(), t) == planar.end())
-                        planar.push_back(t);
-                }
-            } else if (c.op == OpSampler && c.obj) {
-                RMSampler *sm = (__bridge RMSampler *)c.obj;
-                if (std::find(samplers.begin(), samplers.end(), sm) == samplers.end())
-                    samplers.push_back(sm);
+        cb->_plan.forEachUse(from, to, [&](void *value, uint8_t access) {
+            id object = (__bridge id)value;
+            if ([object isKindOfClass:[RMSampler class]]) {
+                samplers.push_back((RMSampler *)object);
+            } else if ([object isKindOfClass:[RMTexture class]]) {
+                RMTexture *texture = (RMTexture *)object;
+                if ((access & raw::ResourceUse::Sample) && texture->_raw.converted())
+                    planar.push_back(texture);
+                if ((access & raw::ResourceUse::Write) && texture->_raw.planarStandIn)
+                    rendered.push_back(texture);
             }
-        }
+        });
         // its image is converted once, before the passes: one that a pass here also stores into is m2v's
         for (RMTexture *t : rendered)
             if (std::find(planar.begin(), planar.end(), t) != planar.end())
@@ -274,18 +263,18 @@ bool encodeRaw(RMCommandBuffer *cb, size_t from, size_t to, const char **why)
     uint64_t levelPasses = 0;
     static std::atomic<bool> loggedLevel{false};
     auto refresh = [&](size_t pass) {
-        for (size_t at = pass + 1; at < to && cb->_tape[at].op != OpEnd; at++) {
-            const Cmd &c = cb->_tape[at];
-            if (c.op != OpTexture || !c.obj)
-                continue;
-            RMTexture *t = (__bridge RMTexture *)c.obj;
+        cb->_plan.forEachUse(pass, cb->_plan.encoderEnd(pass), [&](void *value, uint8_t access) {
+            id object = (__bridge id)value;
+            if (!(access & raw::ResourceUse::Sample) || ![object isKindOfClass:[RMTexture class]])
+                return;
+            RMTexture *t = (RMTexture *)object;
             if (!t->_raw.sampled || !fresh.insert(t).second)
-                continue;
+                return;
             const raw::Texture &x = t->_raw;
             raw::BlitEncoder *b = rc->blit();
             b->copyTexels(x, 0, 0, 0, *x.sampled, 0, 0, 0, x.width, x.height);
             b->end();
-        }
+        });
     };
     // extended-range textures (raw_xr.h): a draw samples the stand-in, drawn from the codes by the pack's conversion state
     // before the first pass whose draws sample it, and again after work here writes the codes. Their passes' prologue barrier
@@ -294,26 +283,15 @@ bool encodeRaw(RMCommandBuffer *cb, size_t from, size_t to, const char **why)
     std::deque<raw::Texture>
         codes;  // the conversions' sources: the codes' headers (the encoder reads them until its end)
     auto standIns = [&](size_t pass) {
-        RMTexture *bound[16] = {};
-        RMPipeline *pipe = nil;
         std::vector<RMTexture *> stale;
-        for (size_t k = pass + 1; k < to && cb->_tape[k].op != OpEnd; k++) {
-            const Cmd &u = cb->_tape[k];
-            if (u.op == OpPipeline) {
-                pipe = [(__bridge id)u.obj isKindOfClass:[RMPipeline class]] ? (__bridge RMPipeline *)u.obj : nil;
-            } else if (u.op == OpTexture && u.stage == 2 && u.index < 16) {
-                RMTexture *t = (__bridge RMTexture *)u.obj;
-                bound[u.index] = t && t->_raw.standIn ? t : nil;
-            } else if ((u.op == OpDraw || u.op == OpDrawIndexed) && pipe && pipe->_raw) {
-                const raw::PackPipeline &r = *pipe->_raw->rec;
-                for (uint32_t e = 0; e < r.entries; e++) {
-                    RMTexture *t =
-                        r.entry[e].kind == raw::EntryTexture && r.entry[e].slot < 16 ? bound[r.entry[e].slot] : nil;
-                    if (t && !standInFresh.count(t) && std::find(stale.begin(), stale.end(), t) == stale.end())
-                        stale.push_back(t);
-                }
-            }
-        }
+        cb->_plan.forEachUse(pass, cb->_plan.encoderEnd(pass), [&](void *value, uint8_t access) {
+            id object = (__bridge id)value;
+            if (!(access & raw::ResourceUse::Sample) || ![object isKindOfClass:[RMTexture class]])
+                return;
+            RMTexture *texture = (RMTexture *)object;
+            if (texture->_raw.standIn && !standInFresh.count(texture))
+                stale.push_back(texture);
+        });
         for (RMTexture *t : stale) {
             raw::Texture &x = t->_raw;
             raw::PassDesc p;
@@ -339,7 +317,17 @@ bool encodeRaw(RMCommandBuffer *cb, size_t from, size_t to, const char **why)
         return true;
     };
     for (size_t at = from; at < to; at++) {
-        const Cmd &c = cb->_tape[at];
+        const Cmd c = cb->_plan.legacy(at);
+        encodePlannedState(cb, at, *rc, re, ce ? &*ce : nullptr, stateCursor);
+        if (c.op == OpDispatch) {
+            const auto &dispatch = cb->_plan.dispatch(at);
+            const uint32_t groups[3] = {uint32_t(dispatch.groups[0]), uint32_t(dispatch.groups[1]),
+                                        uint32_t(dispatch.groups[2])};
+            ce->setState(static_cast<const raw::ComputeState *>(dispatch.kernel));
+            if (const char *w = nullptr; !ce->dispatch(groups, dispatch.threads.data(), &w))
+                return fail(PredCompute, w, c.op);
+            continue;
+        }
         if (isKernelCommand(c.op)) {
             if (const char *w = nullptr; !encodeKernel(*ce, *rc, cb, c, &w))
                 return fail(PredCompute, w, c.op);
@@ -443,65 +431,6 @@ bool encodeRaw(RMCommandBuffer *cb, size_t from, size_t to, const char **why)
             re = nullptr;
             be = nullptr;
             break;
-        case OpPipeline:  // (c: a cubic variant of the state, raw_cubic.h)
-            re->setPipeline(c.c ? reinterpret_cast<raw::Pipeline *>(uintptr_t(c.c))
-                                : ((__bridge RMPipeline *)c.obj)->_raw);
-            break;
-        case OpBlendColor: {
-            const float rgba[4] = {extraFloat(cb, c.x), extraFloat(cb, c.x + 1), extraFloat(cb, c.x + 2),
-                                   extraFloat(cb, c.x + 3)};
-            re->setBlendColor(rgba);
-            break;
-        }
-        case OpBytes: {
-            const raw::Buffer &k = cb->_bytes.chunks[c.c];
-            if (!k.wc)
-                rc->clean(k.cpu + c.a, std::max<uint32_t>((c.b + 255) & ~255u, 256));
-            re->setBytesAt(c.stage, c.index, k.va + c.a, c.b, k.cpu + c.a);
-            break;
-        }
-        case OpDepthStencil:
-            re->setDepthStencil(c.obj ? &((__bridge RMDepthStencil *)c.obj)->_raw : nullptr);
-            break;
-        case OpStencilRef:
-            re->setStencilReference(c.a, c.b);
-            break;
-        case OpBuffer:
-            useBuffer(rc, (__bridge RMBuffer *)c.obj, false);
-            re->setBuffer(c.stage, c.index, c.obj ? &((__bridge RMBuffer *)c.obj)->_raw : nullptr, c.c);
-            break;
-        case OpBufferOffset:
-            re->setBufferOffset(c.stage, c.index, c.c);
-            break;
-        case OpTexture:
-            if (c.stage == 2) {
-                useTexture(rc, (__bridge RMTexture *)c.obj, false);
-                re->setTexture(c.index, c.obj ? &((__bridge RMTexture *)c.obj)->_raw : nullptr);
-            }
-            break;
-        case OpSampler:
-            if (c.stage == 2)
-                re->setSampler(c.index, c.obj ? &((__bridge RMSampler *)c.obj)->_raw : nullptr);
-            break;
-        case OpScissor:
-            re->setScissor(c.a, c.b, uint32_t(c.c >> 32), uint32_t(c.c));
-            break;
-        case OpCull:
-            re->setCullMode(uint8_t(c.a));
-            break;
-        case OpWinding:
-            re->setWinding(uint8_t(c.a));
-            break;
-        case OpFillMode:
-            re->setFillMode(uint8_t(c.a));
-            break;
-        case OpDepthBias:
-            re->setDepthBias(extraFloat(cb, c.x), extraFloat(cb, c.x + 1), extraFloat(cb, c.x + 2));
-            break;
-        case OpViewport:
-            re->setViewport(extraDouble(cb, c.x), extraDouble(cb, c.x + 1), extraDouble(cb, c.x + 2),
-                            extraDouble(cb, c.x + 3), extraDouble(cb, c.x + 4), extraDouble(cb, c.x + 5));
-            break;
         case OpDraw:
             if (!re->draw(c.stage, c.a, c.b, uint32_t(c.c >> 32), uint32_t(c.c), why))
                 return refused();
@@ -509,13 +438,33 @@ bool encodeRaw(RMCommandBuffer *cb, size_t from, size_t to, const char **why)
         case OpBarrier:
             re->barrier();
             break;
-        case OpDrawIndexed:
-            useBuffer(rc, (__bridge RMBuffer *)c.obj, false);
-            if (!re->drawIndexed(c.stage, c.a, c.b == MTLIndexTypeUInt16 ? 2 : 4, &((__bridge RMBuffer *)c.obj)->_raw,
-                                 c.c, uint32_t(extra(cb, c.x)), int32_t(extra(cb, c.x + 1)),
-                                 uint32_t(extra(cb, c.x + 2)), why))
+        case OpDrawIndexed: {
+            const auto &draw = cb->_plan.draw(at);
+            RMBuffer *indices = (__bridge RMBuffer *)draw.indices;
+            useBuffer(rc, indices, false);
+            if (!re->drawIndexed(draw.primitive, draw.count, draw.indexType == MTLIndexTypeUInt16 ? 2 : 4,
+                                 &indices->_raw, draw.indexOffset, draw.instances, draw.baseVertex, draw.baseInstance,
+                                 why))
                 return refused();
             break;
+        }
+        case OpDrawIndirect:
+        case OpDrawIndexedIndirect: {
+            const auto &draw = cb->_plan.draw(at);
+            RMBuffer *arguments = (__bridge RMBuffer *)draw.arguments;
+            RMBuffer *indices = (__bridge RMBuffer *)draw.indices;
+            useBuffer(rc, arguments, false);
+            useBuffer(rc, indices, false);
+            const bool accepted =
+                c.op == OpDrawIndirect
+                    ? re->drawIndirect(draw.primitive, &arguments->_raw, draw.argumentOffset, why)
+                    : re->drawIndexedIndirect(draw.primitive, draw.indexType == MTLIndexTypeUInt16 ? 2 : 4,
+                                              &indices->_raw, draw.indexOffset, &arguments->_raw, draw.argumentOffset,
+                                              why);
+            if (!accepted)
+                return refused();
+            break;
+        }
         case OpMipmaps:
             if (!((__bridge RMTexture *)c.obj)->_raw.chain->fmt2d) {  // the 3D engine's passes (decided at record)
                 be->end();
@@ -562,7 +511,7 @@ bool encodeRaw(RMCommandBuffer *cb, size_t from, size_t to, const char **why)
     for (RMTexture *t : planesWritten)  // a write the surface's seed does not show: its image is converted again
         t->_imageCurrent = false;
     cb->_seqno = seq;
-    cb->_stamp = cb->_segs.empty() ? rc->stamp : 0;
+    cb->_stamp = cb->_segs.size() == 1 && cb->_segs.front().raw ? rc->stamp : 0;
     d.stats.levelPasses += levelPasses;
     gRM->stats.draws += rc->draws;
     gRM->stats.passes += rc->passes;

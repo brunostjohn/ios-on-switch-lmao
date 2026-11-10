@@ -36,6 +36,7 @@ kernel_driver(
         "firmware.S",
     ],
     hdr_deps = [
+        "drivers/TegraGM20B",
         "drivers/TegraHost1x",
         "drivers/TegraSMMU",
         "drivers/TegraVIC",

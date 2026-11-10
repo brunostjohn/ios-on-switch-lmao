@@ -259,10 +259,10 @@ void RecordCache::tidy()
     if (dir_.empty())
         return;
     removeStale(parent_, "raw-" + hex16(stack_));
+    std::lock_guard<std::mutex> l(lock_);  // background stores cannot race the directory accounting snapshot
     uint64_t bytes = 0;
     for (const File &f : files(dir_, ".rec"))
         bytes += f.bytes;
-    std::lock_guard<std::mutex> l(lock_);
     bytes_ = bytes;
 }
 

@@ -52,105 +52,95 @@
 
 @end
 
-// The committed command buffers that wait for a shared event, until scheduled (heldBehindEvent).
+// The committed command buffers that wait for a shared event, until scheduled.
 std::mutex gHoldersLock;
 std::set<RMCommandBuffer *> gHolders;
 
 bool waitsForEvent(RMCommandBuffer *cb)
 {
-    for (const Cmd &c : cb->_tape)
-        if (c.op == OpWaitEvent)
+    for (const RMPlanEvent &event : cb->_plan.events())
+        if (!event.signal)
             return true;
-    return false;
-}
-
-// Whether a committed command buffer not yet scheduled waits for a shared event value nothing reached yet.
-bool heldBehindEvent()
-{
-    std::lock_guard<std::mutex> l(gHoldersLock);
-    for (RMCommandBuffer *cb : gHolders)
-        for (const Cmd &c : cb->_tape)
-            if (c.op == OpWaitEvent && [(id<MTLSharedEvent>)(__bridge id)c.obj signaledValue] < c.c)
-                return true;
     return false;
 }
 
 void unhold(RMCommandBuffer *cb)
 {
+#if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
     std::lock_guard<std::mutex> l(gHoldersLock);
     gHolders.erase(cb);
+#else
+    (void)cb;
+#endif
 }
 
 uint64_t signalled(NSMapTable *map, void *event)
 {
+    std::lock_guard<std::mutex> l(gRM->eventValues);
     NSNumber *n = [map objectForKey:(__bridge id)event];
     return n ? n.unsignedLongLongValue : 0;
 }
 
-// submit lock held: the event signals `cb` makes, as submitted ones of its driver
-void noteSignals(RMCommandBuffer *cb, NSMapTable *map)
+// Only completed execution ranges publish CPU event values. A later wait cannot observe a signal from an unexecuted
+// suffix, and a failed/cancelled range never manufactures a successful signal.
+void forgetSignals()
 {
-    for (const Cmd &c : cb->_tape)
-        if (c.op == OpSignalEvent && c.c > signalled(map, c.obj))
-            [map setObject:@(c.c) forKey:(__bridge id)c.obj];
+    std::lock_guard<std::mutex> l(gRM->eventValues);
+    [gRM->rawSignals removeAllObjects];
+    [gRM->m2vSignals removeAllObjects];
 }
 
-// Whether the shared event wait `i` of `cb` is covered without a CPU wait: signalled already, earlier in `cb`, or (GPU order)
-// by a command buffer submitted before it - raw: the channel's own order; m2v: scheduled, so behind the AfterTask acquire.
-static bool waitCovered(RMCommandBuffer *cb, size_t i)
+void armEventWaits(RMCommandBuffer *cb)
 {
-    const Cmd &c = cb->_tape[i];
-    for (size_t k = 0; k < i; k++)
-        if (cb->_tape[k].op == OpSignalEvent && cb->_tape[k].obj == c.obj && cb->_tape[k].c >= c.c)
-            return true;
-    if ([(id<MTLSharedEvent>)(__bridge id)c.obj signaledValue] >= c.c)
-        return true;
-    return gRM->gpuOrder && (signalled(gRM->rawSignals, c.obj) >= c.c || signalled(gRM->m2vSignals, c.obj) >= c.c);
+    cb->_eventWaits.clear();
+    cb->_eventStart = {};
+    cb->_eventArmed = 0;
 }
 
-bool eventsReady(RMCommandBuffer *cb)
+raw::EventReadiness eventReadiness(RMCommandBuffer *cb, raw::EventDeadline::Time &nextWake)
 {
-    for (size_t i = 0; i < cb->_tape.size(); i++)
-        if (cb->_tape[i].op == OpWaitEvent && !waitCovered(cb, i))
-            return false;
-    return true;
-}
-
-// How long a command buffer waits for a shared event another process signals (waitEvents).
-static constexpr int64_t kEventLimitNs = 10 * NSEC_PER_SEC;
-
-// The CPU-ordered remainder: each wait nothing submitted covers, until the event's value is reached (notified, no polling).
-void waitEvents(RMCommandBuffer *cb)
-{
-    for (size_t i = 0; i < cb->_tape.size(); i++) {
-        if (cb->_tape[i].op != OpWaitEvent || waitCovered(cb, i))
-            continue;
-        const Cmd &c = cb->_tape[i];
-        once(@"CPU-ordered: a shared event signalled outside this device's submitted work (the host or another "
-             @"process): "
-             @"the command buffer waiting for it is submitted once it is reached");
-        gRM->stats.cpuOrdered++;
-        dispatch_semaphore_t reached = dispatch_semaphore_create(0);
-        id<MTLSharedEvent> event = (__bridge id)c.obj;
+    using Readiness = raw::EventReadiness;
+    if (cb->_segNext >= cb->_segs.size())
+        return Readiness::ready;
+    const RMSegment &range = cb->_segs[cb->_segNext];
+    if (!range.event)
+        return Readiness::ready;
+    const Cmd c = cb->_plan.legacy(range.from);
+    if (c.op == OpSignalEvent) {
+        std::lock_guard<std::mutex> l(cb->_lock);
+        return cb->_segmentPending ? Readiness::blocked : Readiness::ready;
+    }
+    id event = (__bridge id)c.obj;
+    if ([event signaledValue] >= c.c)
+        return Readiness::ready;
+    {
+        std::lock_guard<std::mutex> l(cb->_lock);
+        if (cb->_segmentPending)
+            return Readiness::
+                blocked;  // timeout belongs to execution at this position, not time spent on earlier GPU work
+    }
+    if (cb->_eventArmed != range.from + 1) {
+        cb->_eventArmed = range.from + 1;
+        cb->_eventStart = raw::EventDeadline::Clock::now();
+        cb->_eventWaits.push_back(range.from);
+        // Registration is done outside the scheduler mutex: an already satisfied event may deliver its notification
+        // immediately. The callback does not retain a command buffer or scan unrelated dependency lists.
         [event notifyListener:gRM->listener
                       atValue:c.c
                         block:^(id<MTLSharedEvent>, uint64_t) {
-                            dispatch_semaphore_signal(reached);
+                            wakeSubmit();
                         }];
-        // A signaller that never reaches it (a client killed or suspended mid-frame: Core Animation's per-surface events,
-        // CA::OGL::shared_event_submit) holds no one past kEventLimit: the command buffer goes on as if the event were reached,
-        // as Core Animation's own SharedEvent::force_complete would make it (r7n: AegirPoster died, r7o: PosterKit's scenes
-        // were suspended, and this wait held every later command buffer and the render thread for good). A wait with a
-        // timeout of its own goes on after it, as Metal's does.
-        const int64_t own = int64_t(c.a) * NSEC_PER_MSEC;
-        const bool timed = c.a && own < kEventLimitNs;
-        if (dispatch_semaphore_wait(reached, dispatch_time(DISPATCH_TIME_NOW, timed ? own : kEventLimitNs)) && !timed) {
-            gRM->stats.eventsReleased++;
-            os_log_error(rawLog(),
-                         "raw: shared event %p (%{public}s) not reached %llu after %lld ms (at %llu): its command "
-                         "buffer goes on without it",
-                         (__bridge void *)event, object_getClassName(event), (unsigned long long)c.c,
-                         (long long)(kEventLimitNs / 1000000), (unsigned long long)event.signaledValue);
-        }
     }
+    const raw::EventDeadline deadline(cb->_eventStart, c.a);
+    const Readiness state = deadline.state([event signaledValue] >= c.c, raw::EventDeadline::Clock::now());
+    if (state == Readiness::blocked)
+        nextWake = std::min(nextWake, deadline.until());
+    return state;
+}
+
+bool expiredEventWait(RMCommandBuffer *cb, size_t index)
+{
+    const Cmd c = cb->_plan.legacy(index);
+    return c.a && cb->_eventArmed == index + 1 &&
+           raw::EventDeadline::Clock::now() >= raw::EventDeadline(cb->_eventStart, c.a).until();
 }

@@ -33,6 +33,9 @@ Completion::Completion(Device &device, const char *cacheDir, uint64_t stack)
           dispatch_queue_attr_make_with_qos_class(DISPATCH_QUEUE_SERIAL, QOS_CLASS_USER_INITIATED, 0))),
       splitQueue_(
           dispatch_queue_create("com.brunostjohn.switch.raw.split",
+                                dispatch_queue_attr_make_with_qos_class(DISPATCH_QUEUE_SERIAL, QOS_CLASS_UTILITY, 0))),
+      persistenceQueue_(
+          dispatch_queue_create("com.brunostjohn.switch.raw.kernel-cache",
                                 dispatch_queue_attr_make_with_qos_class(DISPATCH_QUEUE_SERIAL, QOS_CLASS_UTILITY, 0)))
 {
     compiler_ = std::make_unique<Compiler>(&cache_, [this](const CacheKey &k, RuntimeRecord &record, std::string &why) {
@@ -41,7 +44,7 @@ Completion::Completion(Device &device, const char *cacheDir, uint64_t stack)
     // the directory taken at once, for the lookups at state creation; its scan (another build's entries removed, the bytes
     // kept counted) on the queue, before any store there
     if (cacheDir && *cacheDir && cache_.attach(cacheDir, stack_, kCacheCap))
-        dispatch_async(queue_, ^{
+        dispatch_async(persistenceQueue_, ^{
             cache_.tidy();
         });
     else if (cacheDir && *cacheDir)
@@ -52,6 +55,8 @@ Completion::~Completion()
 {
     compiler_->drain();
     dispatch_sync(splitQueue_, ^{
+                  });
+    dispatch_sync(persistenceQueue_, ^{
                   });
     compiler_.reset();
 }
@@ -200,13 +205,23 @@ Compiler::Outcome Completion::make(const CacheKey &k, RuntimeRecord &record, std
 }
 
 const ComputeState *Completion::kernel(MTLComputePipelineDescriptor *descriptor, const NmbDirectDispatch &dispatch,
-                                       const std::string &key)
+                                       const std::string &key, bool *retry)
 {
+    if (retry)
+        *retry = false;
     CacheKey k;
     k.stack = stack_;
     k.key = "kernel | " + key;
-    std::lock_guard<std::mutex> hold(kernelLock_);
-    Kernel &made = kernels_[k.name()];
+    std::shared_ptr<Kernel> job;
+    {
+        std::lock_guard<std::mutex> mapLock(kernelLock_);
+        auto &entry = kernels_[k.name()];
+        if (!entry)
+            entry = std::make_shared<Kernel>();
+        job = entry;
+    }
+    std::lock_guard<std::mutex> hold(job->lock);
+    Kernel &made = *job;
     if (made.state || made.refused || made.failures >= Compiler::kRetries)
         return made.state;
     auto record = std::make_unique<ComputeRecord>();
@@ -222,8 +237,14 @@ const ComputeState *Completion::kernel(MTLComputePipelineDescriptor *descriptor,
     case RecordCache::Found::None: {
         const uint64_t began = nowUs();
         outcome = direct().kernel(descriptor, dispatch, key, *record, why);
-        if (outcome != Compiler::Outcome::Failed)
-            cache_.storeKernel(k, outcome == Compiler::Outcome::Made ? record.get() : nullptr, why);
+        if (outcome != Compiler::Outcome::Failed) {
+            const auto saved = outcome == Compiler::Outcome::Made ? std::make_shared<ComputeRecord>(*record) : nullptr;
+            const CacheKey key = k;
+            const std::string refusal = why;
+            dispatch_async(persistenceQueue_, ^{
+                cache_.storeKernel(key, saved.get(), refusal);
+            });
+        }
         if (outcome == Compiler::Outcome::Made)
             once([NSString
                 stringWithFormat:@"a kernel the pack lacks, made at its first dispatch of %u,%u,%u threads in "
@@ -240,6 +261,8 @@ const ComputeState *Completion::kernel(MTLComputePipelineDescriptor *descriptor,
         why = "no room for its program or samplers";
     made.refused = outcome == Compiler::Outcome::Refused;
     made.failures += !made.state && !made.refused;
+    if (retry)
+        *retry = !made.state && !made.refused && made.failures < Compiler::kRetries;
     if (!made.state)
         once([NSString stringWithFormat:@"a kernel the pack lacks %s at %u,%u,%u threads: %s | %s %s",
                                         made.refused ? "is refused" : "was not made", dispatch.threads[0],
@@ -283,7 +306,9 @@ void Completion::splitLater(const CacheKey &k, const RuntimeRecord &record)
             kept->splitPrograms[1] = std::move(made.splitPrograms[1]);
             device_.addSplit(*kept);
         }
-        cache_.store(key, kept.get(), std::string());
+        dispatch_async(persistenceQueue_, ^{
+            cache_.store(key, kept.get(), std::string());
+        });
     });
 }
 

@@ -34,6 +34,7 @@
 #include <IOKit/IOReturn.h>
 #include <mach/kern_return.h>
 #include "raw_comp.h"
+#include "raw_descriptors.h"
 #include "raw_kernel.h"
 #include "raw_heap.h"
 #include "raw_pack.h"
@@ -451,14 +452,17 @@ public:
 
     void setBytes(int stage, uint32_t slot, const void *bytes, uint32_t length);  // stage 1 vertex, 2 fragment
     // the same for bytes already written at `va` (256-byte aligned, zero to the next 256 bytes; `cpu` the CPU's view)
-    void setBytesAt(int stage, uint32_t slot, uint64_t va, uint32_t length, const uint8_t *cpu);
+    void setBytesAt(int stage, uint32_t slot, uint64_t va, uint32_t length, const uint8_t *cpu,
+                    const Buffer *allocation = nullptr);
     void setBuffer(int stage, uint32_t slot, const Buffer *buffer, uint64_t offset);
     void setBufferOffset(int stage, uint32_t slot, uint64_t offset);
 
     void setTexture(uint32_t slot, const Texture *t)
     {
-        if (slot < 16)
+        if (slot < 16 && textures_[slot] != t) {
             textures_[slot] = t;
+            invalidateDescriptors();
+        }
     }
 
     // what the pass renders color `j` into (a memoryless attachment: its backing) and its render area, kept after end()
@@ -479,8 +483,16 @@ public:
 
     void setSampler(uint32_t slot, const Sampler *s)
     {
-        if (slot < 16)
+        if (slot < 16 && samplers_[slot] != s) {
             samplers_[slot] = s;
+            invalidateDescriptors();
+        }
+    }
+
+    // Materializing a bound texture or sampler header must invalidate this encoder's descriptors.
+    void invalidateDescriptors()
+    {
+        ++bindingRevision_;
     }
 
     void setScissor(uint32_t x, uint32_t y, uint32_t w, uint32_t h);
@@ -516,6 +528,9 @@ public:
     // drawIndexedPrimitives: `count` indices of `indexSize` bytes (2 or 4) at `offset` in `ib`, each `baseVertex` on
     bool drawIndexed(uint32_t primitive, uint32_t count, uint32_t indexSize, const Buffer *ib, uint64_t offset,
                      uint32_t instances, int32_t baseVertex, uint32_t baseInstance, const char **why);
+    bool drawIndirect(uint32_t primitive, const Buffer *arguments, uint64_t offset, const char **why);
+    bool drawIndexedIndirect(uint32_t primitive, uint32_t indexSize, const Buffer *indices, uint64_t indexOffset,
+                             const Buffer *arguments, uint64_t argumentOffset, const char **why);
     void end();
 
 private:
@@ -527,6 +542,7 @@ private:
         const Buffer *buffer = nullptr;
         uint64_t offset = 0;
         const uint8_t *cpu = nullptr;  // the bytes at va, where the CPU maps them
+        uint64_t resourceVa = 0;
     };
 
     CommandBuffer *cb_ = nullptr;
@@ -535,10 +551,22 @@ private:
     Push p_;
     const Pipeline *extrasAtBegin_ = nullptr;  // set back by the pass's prologue, before its clears
     uint32_t *bodyStart_ = nullptr;
-    std::vector<std::pair<uint32_t *, uint32_t *>> bodies_;  // the pass body's push segments, in order
+    struct Body {
+        uint32_t *first = nullptr, *second = nullptr;
+        uint64_t indirectVa = 0;
+        uint32_t indirectWords = 0;
+        bool incomplete = false;
+    };
+
+    std::vector<Body> bodies_;  // ordered CPU streams and GPU-owned argument continuations
+    bool indirectGeometry_ = false, drawParamsUnknown_ = false;
+    bool indirect(uint32_t primitive, bool indexed, const Buffer *arguments, uint64_t offset, const char **why);
     void reserve();
     Pipeline *pipeline_ = nullptr, *emitted_ = nullptr;
     bool residualsPushed_ = false;  // the last draw's push words held SlotBindOffset residuals (RenderEncoder::prepare)
+    PreparedDescriptors descriptors_;
+    uint64_t bindingRevision_ = 0;
+    DescriptorBinding descriptorBinding_;
     Bound bufs_[3][31];
     const Texture *textures_[16] = {};
     const Sampler *samplers_[16] = {};
@@ -549,7 +577,7 @@ private:
     bool prepare(Pipeline *pl, uint32_t primitive, int32_t first, uint32_t vFirst, uint32_t vCount,
                  uint32_t baseInstance, bool indexed, const char **why);
     // `pl`'s split twin where the draw is large enough for it to save time and its prologue can read what the draw binds
-    Pipeline *splitTwin(Pipeline *pl, uint32_t primitive, int32_t first, uint32_t count, const PixelBox &limit) const;
+    Pipeline *splitTwin(Pipeline *pl, WrittenRegion::Analysis &analysis) const;
     // the twin's draw: its frontier bound and its prologue's launch recorded (`set`: the draw's set 0)
     void launchSplit(Push &p, const Pipeline &twin, const uint32_t *set);
     uint32_t scissor_[2] = {}, viewport_[8] = {};
@@ -705,6 +733,10 @@ public:
         if (i)
             surfaces_.add(i->bo.handle, write);
     }
+    // Actual GPU addresses resolve through this connection's binding table in the addressed job ABI.
+    void useAddress(uint64_t va, bool write);
+    void use(const Buffer &buffer, bool write);
+    void use(const Texture &texture, bool write);
 
     uint32_t draws = 0, passes = 0, blits = 0;
     uint32_t stamp = 0;  // its GPU time's slot (raw_stamps.h), for Device::gpuNanoseconds once it completed
@@ -884,6 +916,9 @@ public:
     // The texture header of level `level` of mipmapped texture `t`'s chain alone, as NVK's view of that level (a pass into
     // the level fetches its color through it); 0: none
     uint32_t levelTic(Texture &t, uint32_t level);
+    // A header of plain texture `t`'s memory whose word 0 is `word0` (raw_view.h: m2v's view of it in another format
+    // of the same texel size), made on first use and freed with t's header; 0: no header slot left
+    uint32_t viewTic(const Texture &t, uint32_t word0);
 
     // Whether the connection is NVK's (raw_kernel.h): m2v's views alias this path's memory
     bool shared() const
@@ -1208,6 +1243,8 @@ private:
     // again before it gives out a command buffer. channel_ is 0 while the kernel holds none of this device's.
     bool contextless_ = false;
     std::vector<uint32_t> freeTic_, freeTsc_;
+    // by header: its views' word 0 and header (viewTic)
+    std::unordered_multimap<uint32_t, std::pair<uint32_t, uint32_t>> viewTics_;
     uint32_t nextTic_ = 1, nextTsc_ = 1, neutralTsc_ = 0;
     // the pack's, by record index, each made at its first lookup (a process uses a few of the pack's thousands); a node
     // container, so the pointers pipeline() hands out stay valid

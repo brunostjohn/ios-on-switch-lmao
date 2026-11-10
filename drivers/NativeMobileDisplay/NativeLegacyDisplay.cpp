@@ -683,6 +683,7 @@ class NativeLegacyDisplay : public IOMobileFramebufferLegacy {
 
     void removeValidated(const OriginalLegacySwapRequest *request)
     {
+        frameInfo->tickets.retire(request);
         for (auto &entry : validated) {
             if (entry == request)
                 entry = nullptr;
@@ -705,8 +706,16 @@ class NativeLegacyDisplay : public IOMobileFramebufferLegacy {
             }
             __atomic_fetch_add(&validatedEvicted, 1u, __ATOMIC_RELAXED);
         }
+        if (validated[slot])
+            frameInfo->tickets.retire(validated[slot]);
         validated[slot] = request;
         validatedAt[slot] = now;
+        uint32_t id = 0;
+        uint64_t requested = 0;
+        const auto *bytes = reinterpret_cast<const unsigned char *>(request);
+        memcpy(&id, bytes + swapId, sizeof(id));
+        memcpy(&requested, bytes + swapRequestedPresentation, sizeof(requested));
+        frameInfo->tickets.accept(request, id, requested, now);
         return true;
     }
 
@@ -730,6 +739,7 @@ class NativeLegacyDisplay : public IOMobileFramebufferLegacy {
                 queued = r == entry;
             if (queued)
                 continue;
+            frameInfo->tickets.retire(entry);
             entry = nullptr;
             ++validatedStale;
         }
@@ -1274,6 +1284,14 @@ class NativeLegacyDisplay : public IOMobileFramebufferLegacy {
         os_log(OS_LOG_DEFAULT, "SwitchFrames interaction: %s", line);
         if (switch_frames_latency_line(line, sizeof(line)))
             os_log(OS_LOG_DEFAULT, "SwitchFrames latency: %s", line);
+#if SWITCH_FRAME_TIMELINE
+        const auto &totals = frameInfo->tickets.totals;
+        os_log(OS_LOG_DEFAULT,
+               "SwitchFrames tickets since boot: accepted %llu shown %llu unshown %llu origin-unknown %llu "
+               "deadline-unknown %llu deadline-missed %llu overflow %llu",
+               totals.accepted, totals.shown, totals.unshown, totals.unknownOrigin,
+               totals.unknownDeadline, totals.missedDeadline, totals.overflow);
+#endif
     }
 
     // The vsync a present's swap was drawn for (mach time), or 0 if its timeline has none.
@@ -1297,7 +1315,7 @@ class NativeLegacyDisplay : public IOMobileFramebufferLegacy {
         if (!mark.submit || mark.submit >= due) {
             if (idleSincePresent) {
                 cause = kLongIdle;
-            } else if (mark.submit && phase.paced(Span::ticksToUs(mark.submit))) {
+            } else if (vsyncOf(mark) && phase.paced(Span::ticksToUs(mark.submit))) {
                 cause = kLongRate;
             } else {
                 cause = kLongCa;
@@ -1984,7 +2002,7 @@ private:
     // never-booted check (V_PULSE2 programmed, flips latched, not one V_PULSE2).
     void notePhasePresent(uint64_t stamp, const FrameMark &mark)
     {
-        if (phaseFailed || !mark.submit || !mark.ready)
+        if (phaseFailed || !mark.submit || !mark.ready || !vsyncOf(mark))
             return;
         if (vsyncInterval)
             phase.setPeriod(static_cast<uint32_t>(Span::ticksToUs(vsyncInterval)));
@@ -2553,58 +2571,7 @@ private:
 
     // Under the gate: the frame in ring entry i (a scan buffer just written, or a direct slot whose rendering is done) goes out:
     // it replaces a flip still out only when their window layouts match, else it is held for that flip's latch.
-    void presentEntry(int i)
-    {
-        const bool mayReplace = ring.pending == kNoBuffer || sameLayout(i, ring.pending);
-        const TegraScanoutRing::Ready how = ring.ready(i, mayReplace);
-        entrySeq[i] = seqOf(flipRequest);
-        // r18-planes: the window B change of the swap this frame shows goes out with it (writeFlip), now or at the latch
-        // that releases a held frame.
-        entryPlaneSet[i] = planeNextSet;
-        if (planeNextSet) {
-            entryPlane[i] = planeNext;
-            entryPlane[i].seq = entrySeq[i];
-            planeTarget = entryPlane[i];
-            planeNextSet = false;
-        }
-        markFlip(i);
-        if (how != TegraScanoutRing::kHold)
-            writeFlip(i);
-    }
-
-    // Under the gate: window A to surface i from the next frame boundary (its layout once direct scanout is on, START_ADDR, then
-    // the window and general requests).
-    void writeFlip(int i)
-    {
-        __asm__ volatile("dsb sy" ::: "memory");  // the frame is in memory before the window can fetch it
-        dc[kDcStateAccess] = dc[kDcStateAccess] & ~(kReadMuxActive | kWriteMuxActive);
-        dc[kDcWindowHeader] = kWindowASelect;
-        if (directAttached) {
-            uint32_t kind = 0;
-            uint32_t stride = 0;
-            uint32_t hOffset = 0;
-            layoutOf(i, kind, stride, hOffset);
-            dc[kWinbufSurfaceKind] = kind;
-            dc[kWinLineStride] = stride;
-            dc[kWinbufHOffset] = hOffset;
-        }
-        dc[kWinbufStartAddr] = surfaceAddress(i);
-        // Window B's change for this frame, if any, into its assembly registers: one UPDATE write arms both windows and one
-        // ACT_REQ write latches them at the same boundary (the ARM copy makes a replaced pair whole either way).
-        uint32_t update = kGeneralUpdate | kWinAUpdate;
-        uint32_t request = kGeneralActReq | kWinAActReq;
-        // NOLINTNEXTLINE(clang-analyzer-security.ArrayBound): i is a ring entry, never kNoBuffer
-        if (entryPlaneSet[i]) {
-            entryPlaneSet[i] = false;
-            planeStage(entryPlane[i], update, request);
-        }
-        dc[kDcStateControl] = update;
-        dc[kDcStateControl] = request;
-        if (SWITCH_FRAME_TIMELINE)
-            KDBG(SWITCH_KDBG_CODE(SWITCH_KDBG_FLIP), surfaceAddress(i));
-        flipRequested = frameEnds;  // a replaced flip's boundary is this one's too
-        armFlipDeadline();
-    }
+#include "SwitchScanoutStart.h"
 
     // Under the gate, a request just written: checkFlipDeadline looks at it kFlipDeadlineMS from now, or settles it at once while the
     // scanout is stopped.
@@ -2807,6 +2774,9 @@ private:
     // Every DC A frame end: start the probe once things are quiet, or take its next step.
     void probeFrameEnd()
     {
+#if (defined(DEVELOPMENT) && DEVELOPMENT) || (defined(DEBUG) && DEBUG)
+        if (!scanoutQualification)
+            return;
         if (probeRequest && !(dc[kDcStateControl] & (kGeneralActReq | kWinAActReq))) {
             probeRequest = false;
             if (!probe.active())
@@ -2853,6 +2823,7 @@ private:
         ProbeIo io = {this};
         if (probe.perform(action, io))
             finishProbe();
+#endif
     }
 
     // The probe is over (passed, or failed and undone): its line, and the swaps it held go.
@@ -3019,6 +2990,11 @@ private:
         pitchActControl = dc[kDcRegActControl];
     }
 
+    void scanoutMemoryBarrier()
+    {
+        __asm__ volatile("dsb sy" ::: "memory");
+    }
+
     // From the first change to window A (the console tape or the rotation) on, a panic may have to put hekate's pitch window back
     // over the boot framebuffer (restorePitchOnPanic). The hook is chained once and stays; armed and tape say whether it acts.
     void chainPanicHook()
@@ -3034,138 +3010,6 @@ private:
         __asm__ volatile("dmb ish" ::: "memory");  // a CPU that panics sees the fields before the hook that reads them
         switch_display_panic_hook = restorePitchOnPanic;
         __asm__ volatile("dmb ish" ::: "memory");
-    }
-
-    // Under the gate, right after the first block-linear frame is in memory. Hekate's _di_winA_pitch and _di_winA_block differ in
-    // exactly four window registers; everything else is checked to be hekate's pitch window first (on the console tape, its stride
-    // and start address are the tape's), since the switch reinterprets the same memory.
-    void startRotation()
-    {
-        checkPitchWindow();
-        // Latch window A at the frame boundary: a layout change taken mid-frame would tear across the whole picture.
-        dc[kDcRegActControl] = pitchActControl & ~kWinAActHcntrSel;
-        dc[kDcStateAccess] = dc[kDcStateAccess] & ~(kReadMuxActive | kWriteMuxActive);
-        dc[kDcWindowHeader] = kWindowASelect;
-        dc[kWinLineStride] = kBlockLineStride;
-        dc[kWinbufSurfaceKind] = kBlockSurfaceKind;
-        dc[kWinbufHOffset] = kBlockHOffset;
-        dc[kWinOptions] = pitchOptions | kBlockScan;
-        // Double-buffered, this frame is in surface 1 (ring.target() with surface 0 scanned and nothing asked for): no scrambled
-        // frame through the pitch window at the handover. Single-buffered it is in the boot framebuffer, which window A may not scan
-        // yet (the console tape).
-        const int target = doubleBuffer ? ring.target() : 0;
-        if (target == kNoBuffer) {
-            panic("SwitchDisplay: the first frame has no scanout surface (front %d pending %d replaced %d)", ring.front,
-                  ring.pending, ring.superseded);
-        }
-        dc[kWinbufStartAddr] = surfaceAddress(target);
-        // From here a panic must put the pitch window back (see restorePitchOnPanic); disarmed it only stops this driver's flips.
-        chainPanicHook();
-        gPanicRestore.armed = true;
-        // Underflow latches without raising the line (INT_MASK untouched); checkRotation reads and clears it.
-        dc[kDcIntStatus] = kWinAUnderflowInt;
-        dc[kDcIntEnable] = dc[kDcIntEnable] | kWinAUnderflowInt;
-        __asm__ volatile("dsb sy" ::: "memory");  // the swizzled frame is in memory before the window can fetch it
-        dc[kDcStateControl] = kGeneralUpdate | kWinAUpdate;
-        dc[kDcStateControl] = kGeneralActReq | kWinAActReq;
-        rotated = true;
-        rotationLatched = false;
-        rotationRequested = frameEnds;
-        underflowRun = 0;
-        if (doubleBuffer) {
-            ring.ready(target);
-            // r18-planes: its swap retires at this latch (latchRetire is on from the plane probe).
-            entrySeq[target] = seqOf(flipRequest);
-            flipRequested = frameEnds;
-            flipTimer->setTimeoutMS(kFlipDeadlineMS);
-            markFlip(target);
-        }
-        if (planeNextSet) {  // r18-planes: the first frame's window B change, latched at the same boundary
-            planeNextSet = false;
-            planeFlipOnly(planeNext);
-        }
-        IOLog("SwitchDisplay: window A to block-linear %s surface requested (ACT_CONTROL %#x -> %#x)\n", kBlockScanName,
-              pitchActControl, pitchActControl & ~kWinAActHcntrSel);
-    }
-
-    // Every DC A frame end while rotated, under the gate: the ACT_REQ bits clear when the hardware takes the assembly copy.
-    void checkRotation()
-    {
-        if (!rotationLatched) {
-            const uint32_t control = dc[kDcStateControl];
-            if (control & (kGeneralActReq | kWinAActReq)) {
-                if (frameEnds - rotationRequested < kLatchFrames)
-                    return;
-                panic("SwitchDisplay: window A never latched the rotation in %u frames: STATE_CONTROL %#x "
-                      "ACT_CONTROL %#x OPTIONS %#x "
-                      "STRIDE %#x KIND %#x H %#x",
-                      kLatchFrames, control, static_cast<uint32_t>(dc[kDcRegActControl]), windowActive(kWinOptions),
-                      windowActive(kWinLineStride), windowActive(kWinbufSurfaceKind), windowActive(kWinbufHOffset));
-            }
-            const uint32_t options = windowActive(kWinOptions);
-            const uint32_t stride = windowActive(kWinLineStride);
-            const uint32_t kind = windowActive(kWinbufSurfaceKind);
-            const uint32_t hOffset = windowActive(kWinbufHOffset);
-            const uint32_t start = windowActive(kWinbufStartAddr);
-            uint32_t wantKind = kBlockSurfaceKind;
-            uint32_t wantStride = kBlockLineStride;
-            uint32_t wantH = kBlockHOffset;
-            if (doubleBuffer)
-                layoutOf(ring.pending != kNoBuffer ? ring.pending : ring.front, wantKind, wantStride, wantH);
-            if (options != (pitchOptions | kBlockScan) || (stride & 0xffff) != wantStride || kind != wantKind ||
-                hOffset != wantH || start != expectedStart()) {
-                panic("SwitchDisplay: DC A did not take the block-linear window A: OPTIONS %#x STRIDE %#x KIND %#x "
-                      "H %#x START %#x, wrote %#x %#x %#x %#x %#x",
-                      options, stride, kind, hOffset, start, pitchOptions | kBlockScan, kBlockLineStride,
-                      kBlockSurfaceKind, kBlockHOffset, expectedStart());
-            }
-            rotationLatched = true;
-            underflowRun = 0;
-            dc[kDcIntStatus] = kWinAUnderflowInt;
-            stopConsoleTape();  // window A has left it
-            if (!rotationAnnounced) {
-                rotationAnnounced = true;
-                IOLog("SwitchDisplay: window A does a block-linear %s surface (latched after %llu frame ends)\n",
-                      kBlockScanName, frameEnds - rotationRequested);
-            }
-            if (ring.pending != kNoBuffer) {
-                // start is expectedStart(), the flip asked for last: taken (a replaced one never scanned for long).
-                const int asked = ring.pending;
-                const int replaced = ring.superseded;
-                ring.latch(surfaceIndex(start), false);
-                if (replaced != kNoBuffer)
-                    ++stReplaced;
-                const uint64_t stamp = __atomic_load_n(&feStamp, __ATOMIC_ACQUIRE);
-                notePresent(stamp, frameEnds - flipRequested, marks[asked]);
-                retireThrough(entrySeq[asked], stamp);  // r18-planes: retiring at the latch from the first frame on
-                flipLatched();
-            }
-            return;
-        }
-        if (ring.pending != kNoBuffer)
-            checkFlip(true);
-        const uint32_t underflow = dc[kDcIntStatus] & kWinAUnderflowInt;
-        if (!underflow) {
-            underflowRun = 0;
-            return;
-        }
-        dc[kDcIntStatus] = underflow;
-        if (stats)
-            stUnderflows++;
-        if (probe.active())
-            probeUnderflow = true;
-        if (directOn && ring.front >= kSlot0 && underflowRun + 1 >= kDirectUnderflowFrames) {
-            directOn = false;
-            IOLog("SwitchDisplay: window A underflowed %u frames in a row scanning a surface through the SMMU: direct "
-                  "scanout off, frames are copied again (swaps still retire at their latch)\n",
-                  underflowRun + 1);
-        }
-        if (++underflowRun < kUnderflowFrames)
-            return;
-        panic("SwitchDisplay: window A underflowed %u frames in a row since the rotation: UFLOW_STATUS %#x OPTIONS "
-              "%#x KIND %#x STRIDE %#x",
-              underflowRun, windowActive(kWinbufUnderflow), windowActive(kWinOptions), windowActive(kWinbufSurfaceKind),
-              windowActive(kWinLineStride));
     }
 
     // Under the gate: hekate's pitch window over the boot framebuffer again, from the next frame boundary.
@@ -3533,6 +3377,13 @@ public:
         }
         startCopyLoop();
         startGpuCopy();
+        if (IOWorkLoop *loop = getWorkLoop()) {
+            loop->runAction(
+                [](OSObject *owner, void *, void *, void *, void *) -> IOReturn {
+                    static_cast<NativeLegacyDisplay *>(owner)->initializeScanout();
+                    return kIOReturnSuccess;
+                }, this);
+        }
         if (primary) {
             __atomic_store_n(&primaryDisplay, this, __ATOMIC_RELEASE);
             columnScanRegister();
@@ -3995,8 +3846,15 @@ public:
         flipRequest = request;
         // r6-lows/r14-pacing: carried to the flip of this frame (flip, markFlip), then to its present (notePresent).
         taken = {submittedAt(request), kickAt, 0, 0, timelineOf(request)};
-        if (frameInfo->clients.any())
-            noteFrameInfoTaken(request);
+        noteFrameInfoTaken(request);
+        if (gpuRequest == request) {
+            frameInfo->tickets.gpu(seqOf(request), gpuSequence);
+            if (SWITCH_FRAME_TIMELINE) {
+                const auto *ticket = frameInfo->tickets.find(request);
+                KDBG(SWITCH_KDBG_CODE(SWITCH_KDBG_PRESENT), gpuSequence, ticket ? ticket->id : 0,
+                      ticket ? ticket->swapId : 0, seqOf(request));
+            }
+        }
         if (taken.submit && stats)
             stQueue.add(kickAt > taken.submit ? kickAt - taken.submit : 0);
         if (deferredAt) {
@@ -4627,6 +4485,7 @@ public:
         memcpy(&id, bytes + swapId, sizeof(id));
         memcpy(&requested, bytes + swapRequestedPresentation, sizeof(requested));
         frameInfo->pending.take(seqOf(request), id, requested);
+        frameInfo->tickets.take(request, seqOf(request));
     }
 
     // Under the gate (the family's frameInfo_notify takes it again, recursively): each frame-info client's entry for the swap
@@ -4635,9 +4494,13 @@ public:
     {
         const uint64_t nowContinuous = mach_continuous_time();
         const uint64_t nowAbsolute = mach_absolute_time();
+        const uint64_t continuous = switch_frame_info::continuousTime(shownAt, nowAbsolute, nowContinuous);
+        bool first = false;
+        const auto ticket = frameInfo->tickets.shown(seq, continuous, vsyncInterval / 2, &first);
+        if (SWITCH_FRAME_TIMELINE && first)
+            KDBG(SWITCH_KDBG_CODE(SWITCH_KDBG_FRAME_TICKET), ticket.id, ticket.swapId, ticket.take, ticket.gpu);
         switch_frame_info::Frame frame;
-        if (frameInfo->pending.shown(seq, switch_frame_info::continuousTime(shownAt, nowAbsolute, nowContinuous),
-                                     frame) &&
+        if (frameInfo->pending.shown(seq, continuous, frame) &&
             frameInfo->clients.any())
             native_legacy_frame_info_notify(this, &frame);
     }
@@ -4832,8 +4695,6 @@ public:
         gpuDirect = entry;
         transferred = true;
         noteTaken(request, kickAt);
-        if (SWITCH_FRAME_TIMELINE)
-            KDBG(SWITCH_KDBG_CODE(SWITCH_KDBG_PRESENT), gpuSequence);
         if (stats)
             ++stDirect;
         return true;
@@ -4899,6 +4760,7 @@ public:
     }
 
 #include "NativePlanesDisplay.h"
+#include "SwitchScanoutSetup.h"
 #include "NativePlaneFenceDisplay.h"
 #include "NativePlanesTotals.h"
 #include "NativeColumnScanDisplay.h"
@@ -5030,7 +4892,6 @@ public:
             if (validated[i] != request)
                 continue;
             const uint64_t submitNs = ticksNs(validatedAt[i]);
-            const uint64_t vsync = __atomic_load_n(&vsyncSentAt, __ATOMIC_RELAXED);
             SwitchFrameGpu gpu;
             tegra_gm20b_frame_take(&gpu);
             int base = 0;
@@ -5039,7 +4900,7 @@ public:
             int qos = 0;
             switch_thread_sched(current_thread(), &base, &sched, &mode, &qos);
             FrameTimeline &tl = validatedTl[i];
-            tl.vsyncUs = vsync ? usFrom(submitNs, ticksNs(vsync)) : kNotSeen;
+            tl.vsyncUs = kNotSeen;
             tl.doneUs = kNotSeen;
             tl.firstUs = gpu.firstSubmit ? usFrom(submitNs, gpu.firstSubmit) : kNotSeen;
             tl.lastUs = gpu.lastSubmit ? usFrom(submitNs, gpu.lastSubmit) : kNotSeen;
@@ -5061,7 +4922,9 @@ public:
             tl.schedPri = static_cast<int8_t>(sched);
             tl.mode = static_cast<int8_t>(mode);
             tl.qos = static_cast<int8_t>(qos);
-            KDBG(SWITCH_KDBG_CODE(SWITCH_KDBG_SWAP), frameEnds);
+            const auto *ticket = frameInfo->tickets.find(request);
+            KDBG(SWITCH_KDBG_CODE(SWITCH_KDBG_SWAP), ticket ? ticket->id : 0, ticket ? ticket->swapId : 0,
+                  ticket ? ticket->requested : 0, frameEnds);
             switch_sched_render_swapped();
             return;
         }

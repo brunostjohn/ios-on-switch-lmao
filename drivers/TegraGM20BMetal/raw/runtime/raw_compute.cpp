@@ -3,6 +3,7 @@
 #include "raw_compute.h"
 #include "raw_residual.h"
 #include "raw_slm.h"
+#include "raw_view.h"
 
 #include <algorithm>
 #include <cstring>
@@ -159,14 +160,14 @@ void ComputeEncoder::setBytes(uint32_t slot, const void *bytes, uint32_t length)
     uint8_t *m = dev_.alloc(dev_.upload_, chunk, kUploadChunk, va);
     memcpy(m, bytes, length);
     memset(m + length, 0, chunk - length);
-    bufs_[slot] = {va, length, nullptr, 0};
+    bufs_[slot] = {va, length, nullptr, 0, dev_.upload_.bo.va};
     dev_.stats.uploadBytes += chunk;
 }
 
-void ComputeEncoder::setBytesAt(uint32_t slot, uint64_t va, uint32_t length)
+void ComputeEncoder::setBytesAt(uint32_t slot, uint64_t va, uint32_t length, const Buffer *allocation)
 {
     if (slot < 31)
-        bufs_[slot] = {va, length, nullptr, 0};
+        bufs_[slot] = {va, length, nullptr, 0, allocation ? allocation->va : va};
 }
 
 void ComputeEncoder::setBuffer(uint32_t slot, const Buffer *b, uint64_t offset)
@@ -235,6 +236,10 @@ bool ComputeEncoder::dispatch(const uint32_t groups[3], const uint32_t threads[3
         uint32_t *at = set + e.offset / 4;
         if (e.kind == KernelBuffer) {
             const Bound &b = bufs_[e.slot];
+            if (b.buffer)
+                cb_.use(*b.buffer, true);
+            else
+                cb_.useAddress(b.resourceVa, true);
             BufferDescriptor desc;
             if (!bufferDescriptor(e, b.va, b.size, desc)) {
                 *why = "a buffer bound at an offset that is not a multiple of 16";
@@ -256,12 +261,25 @@ bool ComputeEncoder::dispatch(const uint32_t groups[3], const uint32_t threads[3
                 *why = "a texture the raw path cannot sample";
                 return false;
             }
-            const FormatInfo *f = t ? formatInfo(t->format) : nullptr;
-            if (f && e.window && f->tic0 != e.window) {
-                *why = "a kernel m2v binds a view of another format at a texture slot";
-                return false;
+            if (t) {
+                cb_.use(*t, true);
+                if (t->sampled)
+                    cb_.use(*t->sampled, true);
             }
-            at[0] |= t ? t->tic : 0;
+            uint32_t tic = t ? t->tic : 0;
+            if (const FormatInfo *f = t ? formatInfo(t->format) : nullptr) {
+                const SlotView view =
+                    slotView(e.window, f->tic0, swizzledWord0(f->tic0, t->swizzle), f->bpp, blockCompressed(f));
+                if (view == SlotView::None) {
+                    *why = "a kernel m2v binds a view of another texel size at a texture slot";
+                    return false;
+                }
+                if (view == SlotView::View && !(tic = dev_.viewTic(*t, e.window))) {
+                    *why = "no texture header left for a kernel's view of another format";
+                    return false;
+                }
+            }
+            at[0] |= tic;
         } else if (e.slot & kConstexprSampler) {
             const uint32_t index = e.slot & ~kConstexprSampler;
             if (index >= dev_.constexprCount_) {

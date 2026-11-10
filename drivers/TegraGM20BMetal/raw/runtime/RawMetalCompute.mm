@@ -8,7 +8,11 @@
 #include "RawDirect.h"
 #include "raw_compute.h"
 #include "raw_compute_key.h"
+#include "raw_compute_lookup.h"
 #include "raw_metallib.h"
+#include "raw_view.h"
+
+using RMKernelResult = raw::ComputeKernelResult<raw::ComputeState>;
 
 @interface RMComputeState : RMTwinObject {
 @public
@@ -17,9 +21,7 @@
     std::string _constants;
     uint32_t _maxThreads;
     bool _multipleOfWidth;
-    std::mutex _lock;
-    // by threadgroup shape, memory and bindings: the pack's, one made at its first dispatch, or null
-    std::map<std::string, const raw::ComputeState *> _kernels;
+    raw::ComputeKernelCache<raw::ComputeState> _kernels;
     MTLComputePipelineDescriptor *_direct;  // over m2v's functions: what a kernel the pack lacks is made from
 }
 @end
@@ -42,29 +44,21 @@
     return [(id<MTLComputePipelineState>)_twin staticThreadgroupMemoryLength];
 }
 
-// This state's kernel at `threads` threads a threadgroup, threadgroup memory `memory` and the textures and samplers bound
-// (raw_compute_key.h): the pack's, else `make`'s of `_direct` at its key; null: none
-- (const raw::ComputeState *)kernel:(const uint32_t *)threads
-                             memory:(const std::string &)memory
-                           textures:(const std::string &)textures
-                           samplers:(const std::string &)samplers
-                               make:(const raw::ComputeState * (^)(MTLComputePipelineDescriptor *,
-                                                                   const std::string &))make
+- (RMKernelResult)kernel:(const raw::ComputeSpecialization &)specialization
+                    make:(RMKernelResult (^)(MTLComputePipelineDescriptor *, const std::string &,
+                                             const raw::ComputeBindingText &))make
 {
     if (!_keyed)
-        return nullptr;
-    char shape[48];
-    snprintf(shape, sizeof shape, "%u,%u,%u|", threads[0], threads[1], threads[2]);
-    std::lock_guard<std::mutex> hold(_lock);
-    const auto [at, inserted] = _kernels.emplace(shape + memory + "|" + textures + "|" + samplers, nullptr);
-    if (inserted) {
+        return {};
+    return _kernels.get(specialization, [&] {
+        const raw::ComputeBindingText text = specialization.text();
         const std::string key =
-            raw::computeKey(_air, _constants, _maxThreads, _multipleOfWidth, threads, memory, textures, samplers);
-        at->second = raw::computeState(*gRM->raw, raw::computeKeyHash(key));
-        if (!at->second)
-            at->second = make(_direct, key);
-    }
-    return at->second;
+            raw::computeKey(_air, _constants, _maxThreads, _multipleOfWidth, specialization.threads.data(), text.memory,
+                            text.textures, text.samplers);
+        if (const raw::ComputeState *state = raw::computeState(*gRM->raw, raw::computeKeyHash(key)))
+            return RMKernelResult{state, false};
+        return make(_direct, key, text);
+    });
 }
 
 @end
@@ -106,7 +100,9 @@ id rmComputeState(id device, id twin, id<MTLFunction> function, MTLComputePipeli
 
 @interface RMComputeEncoder () {
     RMComputeState *_state;
-    std::map<uint32_t, uint32_t> _memory;  // threadgroup memory lengths by index, rounded up to 16
+    raw::ComputeSpecialization _specialization;
+    RMKernelResult _kernel;
+    bool _kernelCurrent;
     // what the dispatches' kernels may read (unretained: the command buffer retains them): the textures, and the buffers'
     // addresses (0: setBytes:, which the raw path uploads aligned)
     RMTexture *_textures[31];
@@ -137,7 +133,11 @@ id rmComputeState(id device, id twin, id<MTLFunction> function, MTLComputePipeli
 
 - (void)setComputePipelineState:(id<MTLComputePipelineState>)state
 {
-    _state = [(id)state isKindOfClass:[RMComputeState class]] ? (RMComputeState *)state : nil;
+    RMComputeState *next = [(id)state isKindOfClass:[RMComputeState class]] ? (RMComputeState *)state : nil;
+    if (_state != next) {
+        _state = next;
+        _kernelCurrent = false;
+    }
     setBinding(_cb, OpKernelState, 3, 0, state, 0);
 }
 
@@ -179,8 +179,18 @@ id rmComputeState(id device, id twin, id<MTLFunction> function, MTLComputePipeli
 - (void)setTexture:(id<MTLTexture>)texture atIndex:(NSUInteger)index
 {
     RMTexture *t = [(id)texture isKindOfClass:[RMTexture class]] ? (RMTexture *)texture : nil;
-    if (index < 31)
+    if (index < 31 && _textures[index] != t) {
         _textures[index] = t;
+        raw::BoundTexture bound = {};
+        if (t) {
+            MTLTextureDescriptor *d = t->_descriptor;
+            const MTLTextureSwizzleChannels w = d.swizzle;
+            bound = {uint32_t(index),    d.pixelFormat, d.textureType,
+                     d.mipmapLevelCount, d.arrayLength, {w.red, w.green, w.blue, w.alpha}};
+        }
+        if (_specialization.bindTexture(uint32_t(index), t ? &bound : nullptr))
+            _kernelCurrent = false;
+    }
     if (texture && !t)
         [self refuse:PredCompute value:index why:@"a kernel's texture not made by this device"];
     setBinding(_cb, OpKernelTexture, 3, index, texture, 0);
@@ -196,8 +206,30 @@ id rmComputeState(id device, id twin, id<MTLFunction> function, MTLComputePipeli
 {
     if (sampler && ![(id)sampler isKindOfClass:[RMSampler class]])
         [self refuse:PredCompute value:index why:@"a kernel's sampler not made by this device"];
-    if (index < 16)
-        _samplers[index] = [(id)sampler isKindOfClass:[RMSampler class]] ? (RMSampler *)sampler : nil;
+    RMSampler *s = [(id)sampler isKindOfClass:[RMSampler class]] ? (RMSampler *)sampler : nil;
+    if (index < 16 && _samplers[index] != s) {
+        _samplers[index] = s;
+        raw::BoundSampler bound = {};
+        if (s) {
+            MTLSamplerDescriptor *d = s->_descriptor;
+            bound = {uint32_t(index),
+                     d.minFilter,
+                     d.magFilter,
+                     d.mipFilter,
+                     d.sAddressMode,
+                     d.tAddressMode,
+                     d.rAddressMode,
+                     d.maxAnisotropy,
+                     d.compareFunction,
+                     d.borderColor,
+                     d.lodMinClamp,
+                     d.lodMaxClamp,
+                     bool(d.normalizedCoordinates),
+                     bool(d.lodAverage)};
+        }
+        if (_specialization.bindSampler(uint32_t(index), s ? &bound : nullptr))
+            _kernelCurrent = false;
+    }
     setBinding(_cb, OpKernelSampler, 3, index, sampler, 0);
 }
 
@@ -209,7 +241,8 @@ id rmComputeState(id device, id twin, id<MTLFunction> function, MTLComputePipeli
 
 - (void)setThreadgroupMemoryLength:(NSUInteger)length atIndex:(NSUInteger)index
 {
-    _memory[uint32_t(index)] = uint32_t((length + 15) & ~NSUInteger(15));
+    if (_specialization.bindMemory(uint32_t(index), uint32_t((length + 15) & ~NSUInteger(15))))
+        _kernelCurrent = false;
     Cmd m = cmd(OpKernelMemory, 3, uint16_t(index));
     m.a = uint32_t(length);
     [_cb record:m];
@@ -241,58 +274,6 @@ id rmComputeState(id device, id twin, id<MTLFunction> function, MTLComputePipeli
     [_cb record:cmd(OpKernelBarrier, 3)];
 }
 
-// The textures bound (raw_compute_key.h computeTextures), as the frontend's journal names a dispatch's
-- (std::string)texturesText
-{
-    raw::BoundTexture bound[31];
-    size_t count = 0;
-    for (uint32_t slot = 0; slot < 31; slot++)
-        if (RMTexture *t = _textures[slot]) {
-            MTLTextureDescriptor *d = t->_descriptor;
-            const MTLTextureSwizzleChannels w = d.swizzle;
-            bound[count++] = {slot,          d.pixelFormat,
-                              d.textureType, d.mipmapLevelCount,
-                              d.arrayLength, {w.red, w.green, w.blue, w.alpha}};
-        }
-    return raw::computeTextures(bound, count);
-}
-
-// The samplers bound (raw_compute_key.h computeSamplers)
-- (std::string)samplersText
-{
-    raw::BoundSampler bound[16];
-    size_t count = 0;
-    for (uint32_t slot = 0; slot < 16; slot++)
-        if (RMSampler *s = _samplers[slot]) {
-            MTLSamplerDescriptor *d = s->_descriptor;
-            bound[count++] = {slot,
-                              d.minFilter,
-                              d.magFilter,
-                              d.mipFilter,
-                              d.sAddressMode,
-                              d.tAddressMode,
-                              d.rAddressMode,
-                              d.maxAnisotropy,
-                              d.compareFunction,
-                              d.borderColor,
-                              d.lodMinClamp,
-                              d.lodMaxClamp,
-                              bool(d.normalizedCoordinates),
-                              bool(d.lodAverage)};
-        }
-    return raw::computeSamplers(bound, count);
-}
-
-// "<index>:<length>,..." of the lengths set (raw_compute_key.h)
-- (std::string)memoryText
-{
-    std::string text;
-    for (const auto &[index, length] : _memory)
-        if (length)
-            text += (text.empty() ? "" : ",") + std::to_string(index) + ":" + std::to_string(length);
-    return text;
-}
-
 // A texture a raw kernel samples as it is: no image of its own the raw path would refresh first (a chain's levels, planes
 // converted, an extended-range stand-in, a shadow of rows the texture header cannot take)
 static bool plainTexture(RMTexture *t)
@@ -303,57 +284,74 @@ static bool plainTexture(RMTexture *t)
 
 // The kernel the pack lacks, of `descriptor` at `key`, made for this dispatch (RawComplete.h), and journaled as m2v journals a
 // dispatch it runs, so the next pack holds it
-- (const raw::ComputeState *)make:(MTLComputePipelineDescriptor *)descriptor
-                              key:(const std::string &)key
-                             grid:(MTLSize)grid
-                          threads:(MTLSize)threads
-                        perThread:(bool)perThread
+- (RMKernelResult)make:(MTLComputePipelineDescriptor *)descriptor
+                   key:(const std::string &)key
+                  text:(const raw::ComputeBindingText &)text
+                  grid:(MTLSize)grid
+               threads:(MTLSize)threads
+             perThread:(bool)perThread
 {
     if (!gRM->completion)
-        return nullptr;
+        return {nullptr, true};
     const uint32_t t[3] = {uint32_t(threads.width), uint32_t(threads.height), uint32_t(threads.depth)};
-    raw::KernelDispatch ask(t, _memory);
+    const std::map<uint32_t, uint32_t> memory(_specialization.memory.begin(), _specialization.memory.end());
+    raw::KernelDispatch ask(t, memory);
     for (uint32_t slot = 0; slot < 31; slot++)
         if (_textures[slot])
             ask.texture(slot, _textures[slot]->_descriptor);
     for (uint32_t slot = 0; slot < 16; slot++)
         if (_samplers[slot])
             ask.sampler(slot, _samplers[slot]->_descriptor);
-    const raw::ComputeState *k = gRM->completion->kernel(descriptor, ask.dispatch(), key);
+    bool retry = false;
+    const raw::ComputeState *k = gRM->completion->kernel(descriptor, ask.dispatch(), key, &retry);
     if (k)
-        native_bridge_metal_journal_dispatch(_state->_twin, grid, threads, perThread, [self memoryText].c_str(),
-                                             [self texturesText].c_str(), [self samplersText].c_str());
-    return k;
+        native_bridge_metal_journal_dispatch(_state->_twin, grid, threads, perThread, text.memory.c_str(),
+                                             text.textures.c_str(), text.samplers.c_str());
+    return {k, retry};
 }
 
 - (void)dispatch:(MTLSize)grid threads:(MTLSize)threads perThread:(bool)perThread
 {
-    uint32_t t[3] = {uint32_t(threads.width), uint32_t(threads.height), uint32_t(threads.depth)};
-    uint64_t groups[3] = {grid.width, grid.height, grid.depth};
-    const raw::ComputeState *k =
-        _state ? [_state kernel:t
-                         memory:[self memoryText]
-                       textures:[self texturesText]
-                       samplers:[self samplersText]
-                           make:^(MTLComputePipelineDescriptor *descriptor, const std::string &key) {
-                               return [self make:descriptor key:key grid:grid threads:threads perThread:perThread];
-                           }]
-               : nullptr;
-    bool refused = false;
-    for (int i = 0; perThread && i < 3; i++) {
-        if (!t[i] || groups[i] % t[i]) {
-            k = nullptr;
-            refused = true;
-            [self refuse:PredComputeEdge value:groups[i] why:@"dispatchThreads: of a grid with an edge threadgroup"];
-            break;
+    const std::array<uint32_t, 3> t = {uint32_t(threads.width), uint32_t(threads.height), uint32_t(threads.depth)};
+    const raw::ComputeDispatch dispatch = raw::computeDispatch({grid.width, grid.height, grid.depth}, t, perThread);
+    const auto &groups = dispatch.groups;
+    bool refused = dispatch.reason != raw::ComputeDispatch::Ready;
+    if (dispatch.reason == raw::ComputeDispatch::Edge)
+        [self refuse:PredComputeEdge
+               value:groups[dispatch.axis]
+                 why:@"dispatchThreads: of a grid with an edge threadgroup"];
+    else if (dispatch.reason == raw::ComputeDispatch::Range)
+        [self refuse:PredComputeKernel value:groups[0] why:@"a dispatch whose threadgroups exceed the raw grid limits"];
+    const raw::ComputeState *k = nullptr;
+    bool lookedUp = false;
+    if (!refused && _state) {
+        if (_specialization.threads != t) {
+            _specialization.threads = t;
+            _kernelCurrent = false;
         }
-        groups[i] /= t[i];
+        if (!_kernelCurrent) {
+            lookedUp = true;
+            _kernel = [_state kernel:_specialization
+                                make:^RMKernelResult(MTLComputePipelineDescriptor *descriptor, const std::string &key,
+                                                     const raw::ComputeBindingText &text) {
+                                    return [self make:descriptor
+                                                  key:key
+                                                 text:text
+                                                 grid:grid
+                                              threads:threads
+                                            perThread:perThread];
+                                }];
+            _kernelCurrent = !_kernel.retry;
+        }
+        k = _kernel.state;
     }
-    if (!k && _state)
+    if (lookedUp && !k) {
+        const raw::ComputeBindingText text = _specialization.text();
         SWITCH_REFUSE_DETAIL("raw", "compute.kernel", uint64_t(t[0]) << 32 | t[1] << 16 | t[2],
                              "a kernel the pack lacks (%s, threads %u,%u,%u, threadgroup memory %s, textures %s)",
-                             _state.label.UTF8String ?: "-", t[0], t[1], t[2], [self memoryText].c_str(),
-                             [self texturesText].c_str());
+                             _state.label.UTF8String ?: "-", t[0], t[1], t[2], text.memory.c_str(),
+                             text.textures.c_str());
+    }
     for (uint32_t e = 0; k && e < k->rec->entries; e++) {
         const raw::PackKernelEntry &x = k->rec->entry[e];
         if (x.kind == raw::KernelTexture && x.slot < 31 && _textures[x.slot] && !plainTexture(_textures[x.slot])) {
@@ -363,14 +361,13 @@ static bool plainTexture(RMTexture *t)
             k = nullptr;
             refused = true;
         }
-        // m2v binds its own view of another format there (a half texture's raw bits), which the raw path does not make
-        const raw::FormatInfo *f = x.kind == raw::KernelTexture && x.slot < 31 && _textures[x.slot]
-                                       ? raw::formatInfo(_textures[x.slot]->_raw.format)
-                                       : nullptr;
-        if (f && x.window && f->tic0 != x.window) {
+        RMTexture *viewed = x.kind == raw::KernelTexture && x.slot < 31 ? _textures[x.slot] : nil;
+        const raw::FormatInfo *f = viewed ? raw::formatInfo(viewed->_raw.format) : nullptr;
+        if (f && raw::slotView(x.window, f->tic0, raw::swizzledWord0(f->tic0, viewed->_raw.swizzle), f->bpp,
+                               raw::blockCompressed(f)) == raw::SlotView::None) {
             [self refuse:PredComputeView
                    value:x.slot
-                     why:@"a kernel m2v binds a view of another format at a texture slot"];
+                     why:@"a kernel m2v binds a view of another texel size at a texture slot"];
             k = nullptr;
             refused = true;
         }
@@ -384,7 +381,7 @@ static bool plainTexture(RMTexture *t)
             refused = true;
         }
     }
-    if (!refused && (!k || groups[0] > 0x7fffffff || groups[1] > 0xffff || groups[2] > 0xffff)) {
+    if (!refused && !k) {
         [self refuse:PredComputeKernel value:groups[0] why:@"a dispatch the raw path has no kernel for"];
         k = nullptr;
     }
@@ -474,13 +471,13 @@ bool encodeKernel(raw::ComputeEncoder &e, raw::CommandBuffer &rc, RMCommandBuffe
         const raw::Buffer &k = cb->_bytes.chunks[c.c];
         if (!k.wc)
             rc.clean(k.cpu + c.a, std::max<uint32_t>((c.b + 255) & ~255u, 256));
-        e.setBytesAt(c.index, k.va + c.a, c.b);
+        e.setBytesAt(c.index, k.va + c.a, c.b, &k);
         break;
     }
     case OpKernelBuffer: {
         RMBuffer *b = (RMBuffer *)object;
         if (b)
-            rc.use(b->_raw.import, true);
+            rc.use(b->_raw, true);
         e.setBuffer(c.index, b ? &b->_raw : nullptr, c.c);
         break;
     }
@@ -490,7 +487,7 @@ bool encodeKernel(raw::ComputeEncoder &e, raw::CommandBuffer &rc, RMCommandBuffe
     case OpKernelTexture: {
         RMTexture *t = (RMTexture *)object;
         if (t)
-            rc.use(t->_raw.import, true);
+            rc.use(t->_raw, true);
         e.setTexture(c.index, t ? &t->_raw : nullptr);
         break;
     }

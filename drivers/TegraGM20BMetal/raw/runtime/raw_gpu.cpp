@@ -8,6 +8,7 @@
 #include "raw_clear.h"
 #include "raw_follow.h"
 #include "raw_gpu.h"
+#include "raw_mme.h"
 #include "raw_mip.h"
 #include "raw_owned.h"
 #include "raw_residual.h"
@@ -17,6 +18,7 @@
 #include "raw_stamps.h"
 #include "raw_target.h"
 #include "raw_tiled_cache.h"
+#include "raw_view.h"
 #include "TegraGM20BLayout.h"
 
 #include <CoreFoundation/CoreFoundation.h>
@@ -133,7 +135,6 @@ constexpr uint32_t kInvalidateInstruction = 1u << 0, kFlushData = 1u << 2, kInva
 // constant caches do not see such writes (NVK opens each of m2v's encoders, a command buffer of its own, with a constant
 // invalidate, and its transfer-write to uniform-read barrier has one)
 constexpr uint32_t kBetweenPasses = kFlushData | kInvalidateData | kInvalidateConstant;
-constexpr uint32_t kMaxSegments = TegraGM20BMaxPushes;
 // An instance of a draw: BEGIN with INSTANCE_ID SUBSEQUENT (two words), the first vertex or index and the count (three), END
 constexpr uint32_t kInstanceWords = 6;
 // NVK's copies of pitch memory (nouveau_copy_rect: LAUNCH_DMA PIPELINED, FLUSH_ENABLE, SRC/DST_MEMORY_LAYOUT PITCH, MULTI_LINE_ENABLE)
@@ -410,7 +411,7 @@ Device::~Device()
 
 uint32_t Device::contextWords() const
 {
-    return uint32_t(pack_.bytes(PackInit) / sizeof(PackInitMethod)) * 2 + 4096 + kDepthStencilWords;
+    return uint32_t(pack_.bytes(PackInit) / sizeof(PackInitMethod)) * 2 + 4096 + kDepthStencilWords + mme::kContextWords;
 }
 
 // The channel's context: NVK's own init methods with our addresses, then every register Core Animation's states leave the
@@ -428,6 +429,7 @@ void Device::emitContext(Push &p)
     for (uint64_t i = 0; i < pack_.bytes(PackBaseline) / 8; i++)
         if (!ownedMethod(base[2 * i]))
             p.m(base[2 * i], base[2 * i + 1]);
+    mme::install(p);
     tiledCacheInit(p, k_.info());
     // the depth/stencil registers (the runtime's, as NVK leaves them for Metal's default state in a pass without the attachment)
     {
@@ -589,7 +591,8 @@ bool Device::openChannel(std::string &err)
     fx::emitTwodInit(p);
     TegraGM20BAbiPush seg = {va, uint32_t(p.at - start), 0};
     uint32_t seq = 0;
-    if (!k_.exec(channel_, &seg, 1, 0, seq))
+    SurfaceList resources;
+    if (!k_.exec(channel_, &seg, 1, 0, seq, &resources))
         return undo(true);
     lastSeqno_ = seq;
     retire(push_, seq);
@@ -1171,6 +1174,12 @@ void Device::freeTic(uint32_t tic)
 {
     memcpy(tic_.cpu + 32 * tic, tic_.cpu, 32);
     freeTic_.push_back(tic);
+    const auto views = viewTics_.equal_range(tic);
+    for (auto v = views.first; v != views.second; ++v) {
+        memcpy(tic_.cpu + 32 * v->second.second, tic_.cpu, 32);
+        freeTic_.push_back(v->second.second);
+    }
+    viewTics_.erase(views.first, views.second);
 }
 
 // Texture header of a pitch-linear 2D texture (Mesa NIL nvb097_fill_image_view_desc for a linear image: HEADER_VERSION PITCH,
@@ -2879,7 +2888,10 @@ bool Device::reopen()
     fx::emitTwodInit(p);
     TegraGM20BAbiPush seg = {va, uint32_t(p.at - start), 0};
     uint32_t seq = 0;
-    if (!k_.exec(channel_, &seg, 1, 0, seq))
+    SurfaceList resources;
+    resources.add(zero_.handle, false);
+    resources.add(tickets_.handle, true);
+    if (!k_.exec(channel_, &seg, 1, 0, seq, &resources))
         return refused();
     lastSeqno_ = seq;
     retire(push_, seq);
@@ -2970,7 +2982,7 @@ void CommandBuffer::segment(uint32_t *from, uint32_t *to)
         return;
     const uint64_t va = dev_->push_.bo.va + (reinterpret_cast<uint8_t *>(from) - dev_->push_.bo.cpu);
     // contiguous with the last segment: one GPFIFO entry
-    if (!segments_.empty() && segments_.back().va + uint64_t(segments_.back().dwords) * 4 == va &&
+    if (!segments_.empty() && !segments_.back().flags && segments_.back().va + uint64_t(segments_.back().dwords) * 4 == va &&
         segments_.back().dwords + uint64_t(to - from) < (1u << 21) - 1) {
         segments_.back().dwords += uint32_t(to - from);
         return;
@@ -2996,7 +3008,7 @@ RenderEncoder *CommandBuffer::render(const PassDesc &pass)
 {
     RenderEncoder &e = render_;
     // a pass's lists keep the last one's capacity: no allocation a steady frame
-    std::vector<std::pair<uint32_t *, uint32_t *>> bodies = std::move(e.bodies_);
+    std::vector<RenderEncoder::Body> bodies = std::move(e.bodies_);
     std::vector<std::array<uint32_t, 4>> rects = std::move(e.rects_);
     bodies.clear();
     rects.clear();
@@ -3067,6 +3079,11 @@ RenderEncoder *CommandBuffer::render(const PassDesc &pass)
             backings_.push_back(b);
         }
     }
+    for (uint32_t j = 0; j < e.pass_.count && j < 8; ++j)
+        if (const Texture *texture = e.pass_.color[j].texture)
+            use(*texture, true);
+    if (const Texture *texture = e.pass_.depthStencil.texture)
+        use(*texture, true);
     // the render area: from the origin, the smallest attachment's extent, each axis within the pass's target size where it
     // names one (m2v render_pass.rs `area`); Metal's default viewport and scissor cover it (render_state.rs `metal_defaults`)
     const Texture *extents[9] = {zeta};
@@ -3115,6 +3132,25 @@ BlitEncoder *CommandBuffer::blit()
     e.p_.m(WAIT_FOR_IDLE, 0);
     blits++;
     return &e;
+}
+
+void CommandBuffer::useAddress(uint64_t va, bool write)
+{
+    if (va && dev_->k_.exactJobs())
+        surfaces_.addAddress(va, 1, write);
+}
+
+void CommandBuffer::use(const Buffer &buffer, bool write)
+{
+    use(buffer.import, write);
+    if (buffer.va && buffer.length && dev_->k_.exactJobs())
+        surfaces_.addAddress(buffer.va, buffer.length, write);
+}
+
+void CommandBuffer::use(const Texture &texture, bool write)
+{
+    use(texture.import, write);
+    useAddress(texture.va, write);
 }
 
 bool CommandBuffer::commit(uint32_t &seqno)
@@ -3179,9 +3215,33 @@ bool CommandBuffer::commit(uint32_t &seqno)
         cleaned += r.second;
 #endif
     d.stats.cleanBytes += cleaned;
+    if (d.k_.exactJobs()) {
+        std::lock_guard<std::mutex> lock(d.lock_);
+        auto control = [&](const Bo &bo, bool write) {
+            if (bo.handle)
+                surfaces_.add(bo.handle, write);
+        };
+        for (const Bo *bo : {&d.tic_, &d.tsc_, &d.zero_, &d.colorTable_})
+            control(*bo, false);
+        for (const Bo *bo : {&d.root_, &d.tickets_, &d.stamps_, &d.slm_})
+            control(*bo, true);
+        for (const auto &part : d.heapParts_)
+            control(part.bo, false);
+        for (const Bo &bo : d.slmOutgrown_)
+            control(bo, true);
+        // Split compute writes its frontier into upload storage. Retired chunks remain live through this submission.
+        control(d.upload_.bo, true);
+        for (const Bo &bo : d.upload_.outgrown)
+            control(bo, true);
+    }
     uint32_t seq = 0;
-    for (size_t at = 0; at < segments_.size(); at += kMaxSegments) {
-        const uint32_t n = uint32_t(std::min<size_t>(kMaxSegments, segments_.size() - at));
+    for (size_t at = 0; at < segments_.size();) {
+        uint32_t n = uint32_t(std::min<size_t>(d.k_.maxPushes(), segments_.size() - at));
+        while (n && (segments_[at + n - 1].flags & TegraGM20BPushIncomplete))
+            --n;
+        if (!n)
+            return false;  // a continuation group must fit one atomic submission
+
         if (!d.k_.exec(d.channel_, segments_.data() + at, n, d.lastSeqno_, seq, &surfaces_)) {
             if (!at && invalidates) {  // its prologue never reached the GPU: the next submission's invalidates
                 std::lock_guard<std::mutex> l(d.lock_);
@@ -3195,6 +3255,7 @@ bool CommandBuffer::commit(uint32_t &seqno)
             return false;
         }
         d.lastSeqno_ = seq;
+        at += n;
     }
     seqno = seq;
     if (slmGiven)
@@ -3284,27 +3345,38 @@ void RenderEncoder::setBytes(int stage, uint32_t slot, const void *bytes, uint32
     memset(m + length, 0, (chunk ? chunk : kUboChunk) - length);
     bufs_[stage][slot] = {va, length, nullptr, 0,
                           m};  // m2v binds the Metal length (its upload chunks are 256-byte aligned)
+    bufs_[stage][slot].resourceVa = dev_->upload_.bo.va;
+    invalidateDescriptors();
     dev_->stats.uploadBytes += chunk;
 }
 
-void RenderEncoder::setBytesAt(int stage, uint32_t slot, uint64_t va, uint32_t length, const uint8_t *cpu)
+void RenderEncoder::setBytesAt(int stage, uint32_t slot, uint64_t va, uint32_t length, const uint8_t *cpu,
+                               const Buffer *allocation)
 {
     if (slot >= 31 || stage < 1 || stage > 2)
         return;
-    bufs_[stage][slot] = {va, length, nullptr, 0, cpu};
+    const Bound &old = bufs_[stage][slot];
+    const uint64_t resourceVa = allocation ? allocation->va : va;
+    if (old.va == va && old.size == length && !old.buffer && old.cpu == cpu && old.resourceVa == resourceVa)
+        return;
+    bufs_[stage][slot] = {va, length, nullptr, 0, cpu, resourceVa};
+    invalidateDescriptors();
 }
 
 void RenderEncoder::setBuffer(int stage, uint32_t slot, const Buffer *b, uint64_t offset)
 {
     if (slot >= 31 || stage < 1 || stage > 2)
         return;
-    if (!b) {
-        bufs_[stage][slot] = {};
+    const Bound next =
+        b ? Bound{b->va + offset, uint32_t(std::min<uint64_t>(b->length - std::min(offset, b->length), 0xffffffffu)), b,
+                  offset, b->cpu && offset < b->length ? b->cpu + offset : nullptr}
+          : Bound{};
+    const Bound &old = bufs_[stage][slot];
+    if (old.va == next.va && old.size == next.size && old.buffer == next.buffer && old.offset == next.offset &&
+        old.cpu == next.cpu)
         return;
-    }
-    bufs_[stage][slot] = {b->va + offset,
-                          uint32_t(std::min<uint64_t>(b->length - std::min(offset, b->length), 0xffffffffu)), b, offset,
-                          b->cpu && offset < b->length ? b->cpu + offset : nullptr};
+    bufs_[stage][slot] = next;
+    invalidateDescriptors();
 }
 
 void RenderEncoder::setBufferOffset(int stage, uint32_t slot, uint64_t offset)
@@ -3426,12 +3498,14 @@ bool RenderEncoder::draw(uint32_t primitive, uint32_t first, uint32_t count, uin
     }
     if (!prepare(pl, primitive, first, first, count, baseInstance, false, why))
         return false;
-    for (uint32_t i = 0; i < instances; i++) {
-        if (p_.room() < kInstanceWords)
-            reserve();
-        p_.m(BEGIN, i ? 1u << 26 : 0);  // INSTANCE_ID FIRST, then SUBSEQUENT (Maxwell has no instance count)
+    if (p_.room() < kInstanceWords)
+        reserve();
+    if (instances == 1) {
+        p_.m(BEGIN, 0);
         p_.inc(VERTEX_ARRAY_START, {first, count});
         p_.m(END, 0);
+    } else {
+        mme::draw(p_, false, first, count, instances);
     }
     cb_->draws++;
     return true;
@@ -3521,6 +3595,7 @@ bool RenderEncoder::drawIndexed(uint32_t primitive, uint32_t count, uint32_t ind
         ib = &padded;
         offset = 0;
     }
+    cb_->use(*ib, false);
     // the vertices it reads: up to its largest index (the indices are CPU-written, as the vertices). A restart (the all-ones
     // index) reads as 0, which never raises the largest: branch-free per index size, so clang vectorizes it (UMAXV; r9-simd)
     // (write-combined vertices are cleaned by no one: no largest index wanted; write-combined indices neither cleaned nor read)
@@ -3566,18 +3641,89 @@ bool RenderEncoder::drawIndexed(uint32_t primitive, uint32_t count, uint32_t ind
             ibEnd_ = last;
             ibSize_ = indexSize;
         }
-        // each instance: INSTANCE_ID FIRST, then SUBSEQUENT (nvk_mme_build_draw_indexed_loop); SET_INDEX_BUFFER_F (first
-        // index) and DRAW_INDEX_BUFFER (count)
-        for (uint32_t i = 0; i < instances; i++) {
-            if (p_.room() < kInstanceWords)
-                reserve();
-            p_.m(BEGIN, i ? 1u << 26 : 0);
+        if (p_.room() < kInstanceWords)
+            reserve();
+        if (instances == 1) {
+            p_.m(BEGIN, 0);
             p_.inc(INDEX_BUFFER_F, {begin, end - begin});
             p_.m(END, 0);
+        } else {
+            mme::draw(p_, true, begin, end - begin, instances);
         }
     }
     cb_->draws++;
     return true;
+}
+
+// GPU-owned indirect arguments are fetched by the command streamer after the method header. No argument bytes, indices,
+// or positions are read back to the CPU. Geometry uses the conservative render/scissor extent for this draw.
+bool RenderEncoder::indirect(uint32_t primitive, bool indexed, const Buffer *arguments, uint64_t offset,
+                             const char **why)
+{
+    if (!pipeline_)
+        return true;
+    const uint32_t bytes = indexed ? 20 : 16;
+    if (!arguments || !arguments->va || (offset & 3) || offset > arguments->length ||
+        arguments->length - offset < bytes) {
+        *why = "indirect arguments outside their buffer or not four-byte aligned";
+        return false;
+    }
+    called_ = true;
+    indirectGeometry_ = true;
+    const bool prepared = prepare(pipeline_, primitive, 0, 0, UINT32_MAX, 0, indexed, why);
+    indirectGeometry_ = false;
+    if (!prepared)
+        return false;
+    cb_->use(*arguments, false);
+    if (!arguments->wc && arguments->cpu)
+        cb_->clean(arguments->cpu + offset, bytes);
+    if (p_.room() < 8)
+        reserve();
+    // Prior shader writes must reach the command fetcher; NO_PREFETCH on the argument entry prevents early fetch.
+    p_.m(WAIT_FOR_IDLE, 0);
+    p_.m(INVALIDATE_SHADER_CACHES, kFlushData | kInvalidateConstant);
+    p_.m(0x0050, 0);  // NV906F_SET_REFERENCE: pre-Turing MME command-fetch visibility (NVK indirect-read barrier)
+    mme::indirectHeader(p_, indexed);
+    bodies_.push_back({bodyStart_, p_.at, 0, 0, true});
+    bodies_.push_back({nullptr, nullptr, arguments->va + offset, bytes / 4, false});
+    dev_->push_.head = uint64_t(reinterpret_cast<uint8_t *>(p_.at) - dev_->push_.bo.cpu);
+    bodyStart_ = nullptr;
+    reserve();
+    drawParamsUnknown_ = true;  // the macro changed draw root words/base registers; the next direct draw must restore them
+    ++cb_->draws;
+    return true;
+}
+
+bool RenderEncoder::drawIndirect(uint32_t primitive, const Buffer *arguments, uint64_t offset, const char **why)
+{
+    return indirect(primitive, false, arguments, offset, why);
+}
+
+bool RenderEncoder::drawIndexedIndirect(uint32_t primitive, uint32_t indexSize, const Buffer *indices,
+                                        uint64_t indexOffset, const Buffer *arguments, uint64_t argumentOffset,
+                                        const char **why)
+{
+    if (!pipeline_)
+        return true;
+    if (!indices || !indices->va || (indexSize != 2 && indexSize != 4) || indexOffset > indices->length ||
+        indices->length - indexOffset < indexSize || indexOffset % indexSize) {
+        *why = "an indirect draw has no valid aligned index buffer range";
+        return false;
+    }
+    if (p_.room() < 16)
+        reserve();
+    cb_->use(*indices, false);
+    const uint64_t va = indices->va + indexOffset, last = indices->va + indices->length - 1;
+    p_.inc(INDEX_BUFFER_A, {uint32_t(va >> 32), uint32_t(va), uint32_t(last >> 32), uint32_t(last)});
+    cb_->restart_ = indexSize == 2 ? 0xffffu : 0xffffffffu;
+    p_.m(DA_PRIMITIVE_RESTART_INDEX, cb_->restart_);
+    p_.m(INDEX_BUFFER_E, indexSize == 2 ? 1 : 2);
+    ibVa_ = va;
+    ibEnd_ = last;
+    ibSize_ = indexSize;
+    if (!indices->wc && indices->cpu)
+        cb_->clean(indices->cpu + indexOffset, indices->length - indexOffset);
+    return indirect(primitive, true, arguments, argumentOffset, why);
 }
 
 bool RenderEncoder::prepare(Pipeline *pl, uint32_t primitive, int32_t first, uint32_t vFirst, uint32_t vCount,
@@ -3600,7 +3746,10 @@ bool RenderEncoder::prepare(Pipeline *pl, uint32_t primitive, int32_t first, uin
     const bool empty = vp_[2] == 0 || vp_[3] == 0;
     axis(vp_[0], empty ? 0 : vp_[2], areaW_, sc_[0], sc_[0] + sc_[2], x);
     axis(vp_[1], empty ? 0 : vp_[3], areaH_, sc_[1], sc_[1] + sc_[3], y);
-    pl = splitTwin(pl, primitive, first, indexed ? drawIndexCount_ : count, {x[0], y[0], x[1], y[1]});
+    const DrawGeometry g = geometry(*pl, primitive, first, indexed ? drawIndexCount_ : count, {x[0], y[0], x[1], y[1]});
+    WrittenRegion::Analysis geometryAnalysis(g);
+    if (!indirectGeometry_)
+        pl = splitTwin(pl, geometryAnalysis);
     if (!whole_) {
         if (x[1] > x[0] && y[1] > y[0]) {
             const std::array<uint32_t, 4> r = {x[0], y[0], x[1], y[1]};
@@ -3662,98 +3811,128 @@ bool RenderEncoder::prepare(Pipeline *pl, uint32_t primitive, int32_t first, uin
         cb_->refusal = {};
         return false;
     }
-    uint64_t setVa;
-    uint32_t *set = reinterpret_cast<uint32_t *>(d.alloc(d.upload_, kSetBytes, 256, setVa));
-    uint32_t residuals[32], residualMask = 0;  // the draw's SlotBindOffset residuals by root push word
-    for (uint32_t i = 0; i < r.entries; i++) {
-        const PackEntry &e = r.entry[i];
-        uint32_t *at = set + e.offset / 4;
-        if (e.kind == EntryColorTable) {
-            at[0] = uint32_t(d.colorTable_.va);
-            at[1] = uint32_t(d.colorTable_.va >> 32);
-            at[2] = kColorTableBytes;
-            at[3] = 0;
-            continue;
-        }
-        if (e.kind == EntryUbo) {
-            const Bound &b = bufs_[e.stage][e.slot];
-            cb_->buffersWritten_ |= bufferStorage(e);
-            BufferDescriptor desc;
-            if (!bufferDescriptor(e, b.va, b.size, desc)) {
-                *why = bufferStorage(e) ? "a storage buffer bound at an offset that is not a multiple of 16, with no "
-                                          "residual push word"
-                                        : "a uniform buffer bound at an offset that is not a multiple of 256, with no "
-                                          "residual push word";
-                cb_->refusal = {RefUboOffset, uint32_t(e.stage) << 8 | e.slot, desc.residual,
-                                uint32_t(std::min<uint64_t>(b.offset, ~0u))};
-                return false;
+    const auto *prepared = descriptors_.resolve(
+        pl, bindingRevision_,
+        [&](PreparedDescriptorWords &prepared) {
+            static_assert(sizeof(prepared.words) == kSetBytes);
+            uint32_t *set = prepared.words.data();
+            for (uint32_t i = 0; i < r.entries; i++) {
+                const PackEntry &e = r.entry[i];
+                uint32_t *at = set + e.offset / 4;
+                if (e.kind == EntryColorTable) {
+                    at[0] = uint32_t(d.colorTable_.va);
+                    at[1] = uint32_t(d.colorTable_.va >> 32);
+                    at[2] = kColorTableBytes;
+                    at[3] = 0;
+                    continue;
+                }
+                if (e.kind == EntryUbo) {
+                    const Bound &b = bufs_[e.stage][e.slot];
+                    cb_->buffersWritten_ |= bufferStorage(e);
+                    if (b.buffer)
+                        cb_->use(*b.buffer, bufferStorage(e));
+                    else
+                        cb_->useAddress(b.resourceVa, bufferStorage(e));
+                    BufferDescriptor desc;
+                    if (!bufferDescriptor(e, b.va, b.size, desc)) {
+                        *why = bufferStorage(e)
+                                   ? "a storage buffer bound at an offset that is not a multiple of 16, with no "
+                                     "residual push word"
+                                   : "a uniform buffer bound at an offset that is not a multiple of 256, with no "
+                                     "residual push word";
+                        cb_->refusal = {RefUboOffset, uint32_t(e.stage) << 8 | e.slot, desc.residual,
+                                        uint32_t(std::min<uint64_t>(b.offset, ~0u))};
+                        return false;
+                    }
+                    if (desc.word >= 0) {
+                        prepared.residuals[desc.word] = desc.residual;
+                        prepared.residualMask |= 1u << desc.word;
+                    }
+                    if (b.buffer && !b.buffer->wc)
+                        cb_->clean(b.buffer->cpu + b.offset, std::min<uint64_t>(desc.range - desc.residual, b.size));
+                    at[0] = uint32_t(desc.base);
+                    at[1] = uint32_t(desc.base >> 32);
+                    at[2] = b.va ? desc.range : 0;
+                    at[3] = 0;
+                    continue;
+                }
+                uint32_t tic = 0, tsc = 0;
+                if (e.kind == EntryTexture) {
+                    const Texture *t = textures_[e.slot];
+                    if (t && !t->tic) {
+                        *why = "a texture the raw path cannot sample";
+                        cb_->refusal = {RefNoTic, e.slot, t->format, t->width};
+                        return false;
+                    }
+                    if (t)
+                        cb_->use(t->standIn ? *t->standIn : t->sampled ? *t->sampled : *t, false);
+                    tic = t ? (t->standIn ? t->standIn->tic : t->tic) : 0;
+                } else if (e.kind == EntryFetch) {
+                    const Texture *t = pass_.color[e.slot].texture;
+                    if (t && !t->tic) {
+                        *why = "framebuffer fetch from a target the raw path cannot sample";
+                        cb_->refusal = {RefNoTic, e.slot, t->format, t->width};
+                        return false;
+                    }
+                    // metal2vulkan's storage view of an 8-bit sRGB color is its texel size's unsigned-integer format, not the
+                    // texture's header
+                    const FormatInfo *f = t && (pl->storageBits >> e.slot & 1) ? formatInfo(t->format) : nullptr;
+                    if (f && f->srgb) {
+                        *why = "an sRGB color read and written in the pixel interlock";
+                        cb_->refusal = {RefNoTic, e.slot, t->format, t->width};
+                        return false;
+                    }
+                    if (t)
+                        cb_->use(*t, pl->storageBits >> e.slot & 1);
+                    tic = t ? t->tic : 0;
+                } else if (e.kind == EntryTexture3d) {
+                    // a texture of another type there is no binding of the argument: m2v writes its neutral, raw an empty handle
+                    const Texture *t = e.slot < 16 && textures_[e.slot] && textures_[e.slot]->type == fx::kTexThreeD
+                                           ? textures_[e.slot]
+                                           : nullptr;
+                    if (t && !t->tic) {
+                        *why = "a texture the raw path cannot sample";
+                        cb_->refusal = {RefNoTic, e.slot, t->format, t->width};
+                        return false;
+                    }
+                    if (t)
+                        cb_->use(*t, false);
+                    tic = t ? t->tic : 0;
+                }
+                const uint8_t map = e.kind == EntryTexture && textures_[e.slot] ? textures_[e.slot]->addressMap : 0;
+                if (e.samplerKind == SamplerSlot) {
+                    const Sampler *s = samplers_[e.sampler];
+                    tsc = s ? (map ? s->mapped[map] : s->tsc) : d.neutralTsc_;
+                    if (s && map && !tsc) {
+                        *why = "a planar texture's sampler without its address map";
+                        return false;
+                    }
+                } else if (e.samplerKind == SamplerConstexpr) {
+                    if (map) {  // m2v compiles a variant of the function for it (RuntimeFact::ConstexprSampled)
+                        *why = "a planar texture sampled through a constexpr sampler";
+                        return false;
+                    }
+                    tsc = d.constexprTsc_[e.sampler];
+                }
+                at[0] = tic | tsc << 20;
             }
-            if (desc.word >= 0) {
-                residuals[desc.word] = desc.residual;
-                residualMask |= 1u << desc.word;
-            }
-            if (b.buffer && !b.buffer->wc)
-                cb_->clean(b.buffer->cpu + b.offset, std::min<uint64_t>(desc.range - desc.residual, b.size));
-            at[0] = uint32_t(desc.base);
-            at[1] = uint32_t(desc.base >> 32);
-            at[2] = b.va ? desc.range : 0;
-            at[3] = 0;
-            continue;
-        }
-        uint32_t tic = 0, tsc = 0;
-        if (e.kind == EntryTexture) {
-            const Texture *t = textures_[e.slot];
-            if (t && !t->tic) {
-                *why = "a texture the raw path cannot sample";
-                cb_->refusal = {RefNoTic, e.slot, t->format, t->width};
-                return false;
-            }
-            tic = t ? (t->standIn ? t->standIn->tic : t->tic) : 0;
-        } else if (e.kind == EntryFetch) {
-            const Texture *t = pass_.color[e.slot].texture;
-            if (t && !t->tic) {
-                *why = "framebuffer fetch from a target the raw path cannot sample";
-                cb_->refusal = {RefNoTic, e.slot, t->format, t->width};
-                return false;
-            }
-            // metal2vulkan's storage view of an 8-bit sRGB color is its texel size's unsigned-integer format, not the
-            // texture's header
-            const FormatInfo *f = t && (pl->storageBits >> e.slot & 1) ? formatInfo(t->format) : nullptr;
-            if (f && f->srgb) {
-                *why = "an sRGB color read and written in the pixel interlock";
-                cb_->refusal = {RefNoTic, e.slot, t->format, t->width};
-                return false;
-            }
-            tic = t ? t->tic : 0;
-        } else if (e.kind == EntryTexture3d) {
-            // a texture of another type there is no binding of the argument: m2v writes its neutral, raw an empty handle
-            const Texture *t = e.slot < 16 && textures_[e.slot] && textures_[e.slot]->type == fx::kTexThreeD
-                                   ? textures_[e.slot]
-                                   : nullptr;
-            if (t && !t->tic) {
-                *why = "a texture the raw path cannot sample";
-                cb_->refusal = {RefNoTic, e.slot, t->format, t->width};
-                return false;
-            }
-            tic = t ? t->tic : 0;
-        }
-        const uint8_t map = e.kind == EntryTexture && textures_[e.slot] ? textures_[e.slot]->addressMap : 0;
-        if (e.samplerKind == SamplerSlot) {
-            const Sampler *s = samplers_[e.sampler];
-            tsc = s ? (map ? s->mapped[map] : s->tsc) : d.neutralTsc_;
-            if (s && map && !tsc) {
-                *why = "a planar texture's sampler without its address map";
-                return false;
-            }
-        } else if (e.samplerKind == SamplerConstexpr) {
-            if (map) {  // m2v compiles a variant of the function for it (RuntimeFact::ConstexprSampled)
-                *why = "a planar texture sampled through a constexpr sampler";
-                return false;
-            }
-            tsc = d.constexprTsc_[e.sampler];
-        }
-        at[0] = tic | tsc << 20;
-    }
+            return true;
+        },
+        [&](const DescriptorWords &words) {
+            uint64_t address = 0;
+            uint8_t *upload = d.alloc(d.upload_, sizeof(words), 256, address);
+            memcpy(upload, words.data(), sizeof(words));
+#if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
+            d.stats.uploadBytes += sizeof(words);
+#endif
+            return address;
+        });
+    if (!prepared)
+        return false;
+    const uint32_t *set = prepared->words.data();
+    const auto &residuals = prepared->residuals;
+    const uint32_t residualMask = prepared->residualMask;
+    const uint64_t setVa = prepared->address;
     writeRaster(p, rasterFor(primitive));
     if (pl != emitted_ || residualMask || residualsPushed_) {
         if (pl != emitted_) {
@@ -3824,6 +4003,10 @@ bool RenderEncoder::prepare(Pipeline *pl, uint32_t primitive, int32_t first, uin
         }
         const uint64_t limit = location + bytes - 1;
         if (location != vbVa_ || limit != vbLimit_) {
+            if (b.buffer)
+                cb_->use(*b.buffer, false);
+            else
+                cb_->useAddress(b.resourceVa, false);
             p.inc(VERTEX_STREAM_LOCATION, {uint32_t(location >> 32), uint32_t(location)});
             p.inc(VERTEX_STREAM_LIMIT, {uint32_t(limit >> 32), uint32_t(limit)});
             vbVa_ = location;
@@ -3836,32 +4019,31 @@ bool RenderEncoder::prepare(Pipeline *pl, uint32_t primitive, int32_t first, uin
             cb_->clean(b.buffer->cpu + from, bytes);
         }
     }
-    {
+    if (descriptorBinding_.changed(pl, setVa)) {
         const uint32_t s[4] = {uint32_t(setVa), uint32_t(setVa >> 32), kSetBytes, 0};
         p.m(LOAD_CB_OFFSET, 0x38);
         p.nonInc(LOAD_CB, s, 4);
-    }
-    if (pl->setSlot[0] || pl->setSlot[1]) {
-        p.inc(CB_SELECTOR_A, {kSetBytes, uint32_t(setVa >> 32), uint32_t(setVa)});
-        if (pl->setSlot[0])
-            p.m(BIND_GROUP_CB + 0x20 * 0, 1 | uint32_t(pl->setSlot[0]) << 4);
-        if (pl->setSlot[1])
-            p.m(BIND_GROUP_CB + 0x20 * 4, 1 | uint32_t(pl->setSlot[1]) << 4);
-    }
-    // set 0's uniform buffers the programs read as constant buffers, at the descriptors just written (NVK binds them from the
-    // descriptor: NVK_MME_BIND_CBUF_DESC); one of no bytes is unbound
-    for (uint8_t u = 0; u < pl->uboCount; u++) {
-        const Pipeline::UboCbuf &c = pl->ubos[u];
-        const uint32_t *desc = set + r.entry[c.entry].offset / 4;
-        if (desc[2]) {
-            p.inc(CB_SELECTOR_A, {std::min(desc[2], kMaxCbufBytes), desc[1], desc[0]});
-            p.m(BIND_GROUP_CB + 0x20 * c.group, 1 | uint32_t(c.slot) << 4);
-        } else {
-            p.m(BIND_GROUP_CB + 0x20 * c.group, uint32_t(c.slot) << 4);
+        if (pl->setSlot[0] || pl->setSlot[1]) {
+            p.inc(CB_SELECTOR_A, {kSetBytes, uint32_t(setVa >> 32), uint32_t(setVa)});
+            if (pl->setSlot[0])
+                p.m(BIND_GROUP_CB + 0x20 * 0, 1 | uint32_t(pl->setSlot[0]) << 4);
+            if (pl->setSlot[1])
+                p.m(BIND_GROUP_CB + 0x20 * 4, 1 | uint32_t(pl->setSlot[1]) << 4);
         }
+        // NVK_MME_BIND_CBUF_DESC's bindings, read from cached CPU words rather than the WC upload.
+        for (uint8_t u = 0; u < pl->uboCount; u++) {
+            const Pipeline::UboCbuf &c = pl->ubos[u];
+            const uint32_t *desc = set + r.entry[c.entry].offset / 4;
+            if (desc[2]) {
+                p.inc(CB_SELECTOR_A, {std::min(desc[2], kMaxCbufBytes), desc[1], desc[0]});
+                p.m(BIND_GROUP_CB + 0x20 * c.group, 1 | uint32_t(c.slot) << 4);
+            } else {
+                p.m(BIND_GROUP_CB + 0x20 * c.group, uint32_t(c.slot) << 4);
+            }
+        }
+        if (pl->setSlot[0] || pl->setSlot[1] || pl->uboCount)
+            p.inc(CB_SELECTOR_A, {kRootBytes, uint32_t(d.root_.va >> 32), uint32_t(d.root_.va)});
     }
-    if (pl->setSlot[0] || pl->setSlot[1] || pl->uboCount)
-        p.inc(CB_SELECTOR_A, {kRootBytes, uint32_t(d.root_.va >> 32), uint32_t(d.root_.va)});
     if (pl->splitOf)
         launchSplit(p, *pl, set);
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
@@ -3878,16 +4060,15 @@ bool RenderEncoder::prepare(Pipeline *pl, uint32_t primitive, int32_t first, uin
     // A fetch through the texture unit that meets only ROP writes needs the barrier only where its pixels meet theirs
     // (raw_region.h); nothing bounds a storage access's pixels.
     const uint8_t texFetched = pl->fetchBits & ~pl->storageBits, ropAccessed = pl->writeBits | pl->readBits;
-    const DrawGeometry g = geometry(*pl, primitive, first, indexed ? drawIndexCount_ : count, {x[0], y[0], x[1], y[1]});
-    if (firstDraw && !pl->dropsPixels) {
+    if (firstDraw && !indirectGeometry_ && !pl->dropsPixels) {
         const uint8_t opaque = pl->writeBits & ~(pl->readBits | pl->fetchBits | pl->storageBits);
-        if (opaque && WrittenRegion::covers(g, primitive == 3, areaW_, areaH_))
+        if (opaque && geometryAnalysis.covers(primitive == 3, areaW_, areaH_))
             covered_ = opaque;
     }
     const bool storage =
         (pl->storageBits & writtenBits_) | (ropAccessed & storageWrittenBits_) | (texFetched & storageWrittenBits_);
     if (storage || (texFetched && writtenBits_)) {
-        if (!storage && !written_.meets(g)) {
+        if (!storage && !written_.meets(geometryAnalysis)) {
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
             dev_->stats.fetchBarriersElided++;
 #endif
@@ -3905,7 +4086,7 @@ bool RenderEncoder::prepare(Pipeline *pl, uint32_t primitive, int32_t first, uin
             written_.clear();
         }
     }
-    if (uint32_t(first) != first_ || baseInstance != baseInstance_) {
+    if (drawParamsUnknown_ || uint32_t(first) != first_ || baseInstance != baseInstance_) {
         // nvk_mme_build_set_draw_params: root draw.vs.{base_vertex, base_instance} and the base registers
         const uint32_t v[2] = {uint32_t(first), baseInstance};
         p.m(LOAD_CB_OFFSET, 0);
@@ -3916,15 +4097,16 @@ bool RenderEncoder::prepare(Pipeline *pl, uint32_t primitive, int32_t first, uin
     }
     // the base vertex the hardware adds to an indexed draw's indices (nvk_mme_build_draw_indexed); 0 for a draw of vertices
     const uint32_t baseVertex = indexed ? uint32_t(first) : 0;
-    if (baseVertex != baseVertex_) {
+    if (drawParamsUnknown_ || baseVertex != baseVertex_) {
         p.m(GLOBAL_BASE_VERTEX_INDEX, baseVertex);
         p.m(VERTEX_ID_BASE, baseVertex);
         baseVertex_ = baseVertex;
     }
+    drawParamsUnknown_ = false;
     writtenBits_ |= pl->writeBits;
     storageWrittenBits_ |= pl->storageBits;
     if (pl->writeBits)
-        written_.add(g);
+        written_.add(geometryAnalysis);
     return true;
 }
 
@@ -3942,7 +4124,7 @@ DrawGeometry RenderEncoder::geometry(const Pipeline &pl, uint32_t primitive, int
     g.indexSize = drawIndexSize_;
     const Bound &m = bufs_[1][2];
     const Bound &v = pl.rec->vertexSlot < 31 ? bufs_[1][pl.rec->vertexSlot] : bufs_[1][0];
-    g.bounded = pl.caTransform && pl.positionComponents && (primitive == 3 || primitive == 4) && m.cpu &&
+    g.bounded = !indirectGeometry_ && pl.caTransform && pl.positionComponents && (primitive == 3 || primitive == 4) && m.cpu &&
                 m.size >= 64 && v.cpu && pl.rec->vertexSlot < 31;
     if (g.bounded) {
         g.matrix = m.cpu;
@@ -4146,6 +4328,26 @@ uint32_t Device::levelTic(Texture &t, uint32_t level)
     return tic;
 }
 
+uint32_t Device::viewTic(const Texture &t, uint32_t word0)
+{
+    std::lock_guard<std::mutex> l(lock_);
+    if (!t.tic)
+        return 0;
+    const auto views = viewTics_.equal_range(t.tic);
+    for (auto v = views.first; v != views.second; ++v)
+        if (v->second.first == word0)
+            return v->second.second;
+    const uint32_t tic = allocTic();
+    if (!tic)
+        return 0;
+    uint32_t own[8], w[8];
+    memcpy(own, tic_.cpu + 32 * t.tic, 32);
+    viewHeader(own, word0, w);
+    memcpy(tic_.cpu + 32 * tic, w, 32);  // visible at the next submission's header invalidate
+    viewTics_.emplace(t.tic, std::make_pair(word0, tic));
+    return tic;
+}
+
 static bool chainLevelView(const Texture &t, uint32_t level, uint32_t rtFormat, Texture &out)
 {
     ColorTargetDesc d;
@@ -4250,13 +4452,13 @@ void RenderEncoder::end()
         reserve();
     writeRaster(p_, Raster());
     // the draw parameters the next encoder starts from: the root table's and the base registers, 0
-    if (first_ || baseInstance_) {
+    if (drawParamsUnknown_ || first_ || baseInstance_) {
         const uint32_t zero[2] = {};
         p_.m(LOAD_CB_OFFSET, 0);
         p_.nonInc(LOAD_CB, zero, 2);
         p_.m(GLOBAL_BASE_INSTANCE_INDEX, 0);
     }
-    if (baseVertex_) {
+    if (drawParamsUnknown_ || baseVertex_) {
         p_.m(GLOBAL_BASE_VERTEX_INDEX, 0);
         p_.m(VERTEX_ID_BASE, 0);
     }
@@ -4290,6 +4492,8 @@ void RenderEncoder::end()
         if (const Texture *o = shadowOf_[j]) {
             if (pass_.color[j].load == ColorAttachment::Clear)
                 continue;
+            cb_->use(*o, false);
+            cb_->use(*pass_.color[j].texture, true);
             copySides(p, sideOf(*o, 0, 0, 0), sideOf(*pass_.color[j].texture, 0, 0, 0), areaW_, areaH_, o->bpp,
                       d.stats);
             copied = true;
@@ -4386,8 +4590,14 @@ void RenderEncoder::end()
     cb_->segment(start, p.at);
     d.push_.head = uint64_t(reinterpret_cast<uint8_t *>(p.at) - d.push_.bo.cpu);
     for (auto &b : bodies_) {
-        cb_->segment(b.first, b.second);
-        d.stats.pushBytes += uint64_t(b.second - b.first) * 4;
+        if (b.indirectVa) {
+            cb_->segments_.push_back({b.indirectVa, b.indirectWords, TegraGM20BPushNoPrefetch});
+        } else {
+            cb_->segment(b.first, b.second);
+            if (b.incomplete)
+                cb_->segments_.back().flags |= TegraGM20BPushIncomplete;
+            d.stats.pushBytes += uint64_t(b.second - b.first) * 4;
+        }
     }
     d.stats.pushBytes += uint64_t(p.at - start) * 4;
     bodies_.clear();
@@ -4411,6 +4621,8 @@ void RenderEncoder::end()
                     w = std::max(w, c.x1);
                     h = std::max(h, c.y1);
                 }
+            cb_->use(*pass_.color[j].texture, false);
+            cb_->use(*o, true);
             copySides(q, sideOf(*pass_.color[j].texture, 0, 0, 0), sideOf(*o, 0, 0, 0), w, h, o->bpp, d.stats);
         }
         checkRoom(q, "a pass's shadow stores");
@@ -4542,6 +4754,10 @@ void BlitEncoder::room(uint32_t words)
 
 void BlitEncoder::copyBytes(uint64_t src, uint64_t dst, uint64_t bytes)
 {
+    if (bytes) {
+        cb_->useAddress(src, false);
+        cb_->useAddress(dst, true);
+    }
     cb_->buffersWritten_ = true;
     for (uint64_t done = 0; done < bytes;) {
         room();
@@ -4559,6 +4775,8 @@ void BlitEncoder::copyBytes(uint64_t src, uint64_t dst, uint64_t bytes)
 
 void BlitEncoder::fillBytes(uint64_t dst, uint64_t bytes, uint8_t value)
 {
+    if (bytes)
+        cb_->useAddress(dst, true);
     cb_->buffersWritten_ = true;
     // SET_REMAP_COMPONENTS: DST_X..W CONST_A (4), COMPONENT_SIZE ONE (0) or FOUR (3) bytes, one source and destination
     // component; LAUNCH_DMA: PIPELINED, FLUSH, pitch both sides, REMAP
@@ -4606,6 +4824,8 @@ void BlitEncoder::copyRect(uint64_t src, uint32_t srcPitch, uint64_t dst, uint32
     cb_->buffersWritten_ = true;
     if (!width || !lines || !bpp)
         return;
+    cb_->useAddress(src, false);
+    cb_->useAddress(dst, true);
     room();
     copyRows(p_, src, srcPitch, dst, dstPitch, width, lines, bpp, dev_->stats);
 }
@@ -4613,6 +4833,8 @@ void BlitEncoder::copyRect(uint64_t src, uint32_t srcPitch, uint64_t dst, uint32
 void BlitEncoder::copyTexels(const Texture &src, uint32_t sx, uint32_t sy, uint32_t sz, const Texture &dst, uint32_t dx,
                              uint32_t dy, uint32_t dz, uint32_t w, uint32_t h)
 {
+    cb_->use(src, false);
+    cb_->use(dst, true);
     room(32);
     copySides(p_, sideOf(src, sx, sy, sz), sideOf(dst, dx, dy, dz), w, h, src.bpp, dev_->stats);
 }
@@ -4621,6 +4843,8 @@ void BlitEncoder::copyBufferTexels(uint64_t va, uint32_t pitch, const Texture &t
                                    uint32_t w, uint32_t h, bool toTexture, uint8_t aspect)
 {
     cb_->buffersWritten_ |= !toTexture;
+    cb_->useAddress(va, !toTexture);
+    cb_->use(t, toTexture);
     room(48);
     const CopySide rows{va, pitch}, texels = sideOf(t, x, y, z);
     const CopySide &from = toTexture ? rows : texels, &to = toTexture ? texels : rows;
@@ -4636,6 +4860,7 @@ void BlitEncoder::copyBufferTexels(uint64_t va, uint32_t pitch, const Texture &t
         // its fifth byte, stencil: as the third of its two-byte components to or from the temp's two bytes a texel, and those
         // two bytes' first to or from the buffer's byte
         const Texture &s = *t.stencilTemp;
+        cb_->use(s, true);
         const CopySide temp{s.va + uint64_t(y) * s.pitch + 2ull * x, s.pitch};
         if (toTexture) {
             copyRemapped(p_, rows, temp, w, h, remapOf(0, kRemapNoWrite, kRemapNoWrite, kRemapNoWrite, 1, 1, 2), 1,
@@ -4666,6 +4891,9 @@ void BlitEncoder::convertPlanar(const Texture &t)
 {
     if (!t.planar || !t.width || !t.height)
         return;
+    cb_->useAddress(t.planes.luma, false);
+    cb_->useAddress(t.planes.chroma, false);
+    cb_->use(t, true);
     dev_->stats.ceOps += 2;
     dev_->stats.ceBytes +=
         uint64_t(t.width) * t.height * 4 * 2;  // (each launch writes the image's rows, through NO_WRITE)
@@ -4719,6 +4947,7 @@ void BlitEncoder::generate(Texture &t)
     Texture::Chain *c = t.chain;
     if (!c || !c->fmt2d)  // (the 3D engine's passes take those: mipPasses)
         return;
+    cb_->useAddress(c->va, true);
     const uint32_t last = c->layout.levels - 1;
     room(uint32_t(fx::generateWords(c->layout, 0, last)));
     fx::emitGenerate(p_, c->layout, c->va, nullptr, c->fmt2d, 0, last);

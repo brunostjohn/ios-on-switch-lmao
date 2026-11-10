@@ -190,4 +190,91 @@ TEST(RawCache, KeepsKernelsAndTheirRefusals)
     EXPECT_EQ(cache.load(made, state, why), raw::RecordCache::Found::None);
 }
 
+// Cold work is deliberately held at a barrier: unrelated warm work and callbacks must progress before it is released.
+TEST(RawCompiler, IndependentColdKeysOverlapWhileWarmKeysRemainReady)
+{
+    std::mutex lock;
+    std::condition_variable changed;
+    unsigned entered = 0, active = 0, maximum = 0;
+    bool release = false;
+    std::atomic<unsigned> makes{0}, callbacks{0};
+    const std::string dir = std::string(getenv("TEST_TMPDIR") ?: "/tmp") + "/parallel-cache";
+    mkdir(dir.c_str(), 0700);
+    raw::RecordCache cache;
+    ASSERT_TRUE(cache.open(dir, 0x98, 1 << 20));
+    raw::CacheKey warm;
+    warm.stack = 0x98;
+    warm.key = "warm";
+    auto original = madeUp(1);
+    ASSERT_TRUE(cache.store(warm, &original, ""));
+    raw::Compiler compiler(&cache, [&](const raw::CacheKey &, raw::RuntimeRecord &record, std::string &) {
+        makes++;
+        std::unique_lock<std::mutex> guard(lock);
+        ++entered;
+        maximum = std::max(maximum, ++active);
+        changed.notify_all();
+        changed.wait(guard, [&] {
+            return release;
+        });
+        --active;
+        record = madeUp(2);
+        return raw::Compiler::Outcome::Made;
+    });
+    raw::CacheKey cold[3];
+    for (unsigned i = 0; i < 3; ++i) {
+        cold[i].stack = 0x98;
+        cold[i].key = "cold-" + std::to_string(i);
+    }
+    for (unsigned i = 0; i < 2; ++i)
+        EXPECT_EQ(compiler.ask(cold[i], nullptr), raw::Compiler::State::Pending);
+    {
+        std::unique_lock<std::mutex> guard(lock);
+        EXPECT_TRUE(changed.wait_for(guard, std::chrono::seconds(5), [&] {
+            return entered == 2;
+        }));
+    }
+    // A warm lookup and an asynchronous warm ask both bypass the occupied compile slots.
+    raw::RuntimeRecord loaded;
+    std::string why;
+    EXPECT_EQ(compiler.lookup(warm, loaded, why), raw::RecordCache::Found::Record);
+    EXPECT_EQ(loaded.keyString, original.keyString);
+    raw::CacheKey warmAsync = warm;
+    warmAsync.key = "warm-async";
+    EXPECT_TRUE(cache.store(warmAsync, &original, ""));
+    std::atomic<bool> warmDone{false};
+    compiler.ask(warmAsync, [&](const raw::RuntimeRecord *record, const std::string &) {
+        EXPECT_NE(record, nullptr);
+        std::lock_guard<std::mutex> guard(lock);
+        warmDone = true;
+        changed.notify_all();
+    });
+    {
+        std::unique_lock<std::mutex> guard(lock);
+        EXPECT_TRUE(changed.wait_for(guard, std::chrono::seconds(5), [&] {
+            return warmDone.load();
+        }));
+    }
+    // Repeated requests share the running key, and a third cold key cannot exceed the worker bound.
+    for (unsigned i = 0; i < 32; ++i)
+        compiler.ask(cold[0], [&](const raw::RuntimeRecord *record, const std::string &) {
+            EXPECT_NE(record, nullptr);
+            callbacks++;
+        });
+    compiler.ask(cold[2], nullptr);
+    {
+        std::lock_guard<std::mutex> guard(lock);
+        release = true;
+        changed.notify_all();
+    }
+    compiler.drain();
+    EXPECT_EQ(makes.load(), 3u);
+    EXPECT_EQ(callbacks.load(), 32u);
+    EXPECT_EQ(maximum, 2u);
+    // Drain includes background persistence, not just callback publication.
+    raw::RecordCache reopened;
+    ASSERT_TRUE(reopened.open(dir, 0x98, 1 << 20));
+    for (const auto &key : cold)
+        EXPECT_EQ(reopened.load(key, loaded, why), raw::RecordCache::Found::Record);
+}
+
 }  // namespace

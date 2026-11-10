@@ -2132,16 +2132,6 @@ extern "C" void native_bridge_metal_journal_dispatch(id state, MTLSize grid, MTL
 // A worker's own creation takes the synchronous path (AsyncPipelines.h).
 static thread_local bool tAsyncWorker;
 
-// Whether a render pass skips the draws of a state still being made: the display's (its first color attachment an IOSurface).
-static bool asyncSkips(MTLRenderPassDescriptor *d)
-{
-    if (!nbasync::policy().on)
-        return false;
-    id<MTLTexture> t = d.colorAttachments[0].texture;
-    const bool surface = [(id)t isKindOfClass:[NBTexture class]] && ((NBTexture *)t).surface;
-    return nbasync::onscreen(surface, t ? (uint64_t)t.width * t.height : 0);
-}
-
 static bool archivesOurs(NSArray *list);
 
 // Whether newRenderPipelineStateWithDescriptor: makes `d` on a worker (the policy's, AsyncPipelines.h), unless its archives
@@ -2243,6 +2233,21 @@ extern "C" id native_bridge_metal_render_pipeline_lazy(id device, id descriptor,
                                                                 reflection:nil
                                                                      error:nil];
     return asyncRenderPipeline(device, d, (MTLPipelineOption)options, true);
+}
+
+// The raw scheduler subscribes before compatibility replay; no compile occurs on its submission thread.
+extern "C" int native_bridge_metal_render_pipeline_ready(id pipeline, void (^observer)(void))
+{
+    if (![pipeline isKindOfClass:[NBRenderPipeline class]])
+        return -1;
+    NBRenderPipeline *state = pipeline;
+    const auto making = state.making;
+    if (!making)
+        return state.handle ? 1 : -1;
+    std::function<void()> notify;
+    if (observer)
+        notify = [observer] { observer(); };
+    return nbasync::observe(making, std::move(notify));
 }
 
 // `call` on a global queue of the caller's class (the completion-handler API, which calls back there; not the workers, whose
@@ -3128,7 +3133,6 @@ NB_RESIDENCY_SETS(use)
     MTLWinding _winding;
     MTLTriangleFillMode _fill;
 }
-@property (nonatomic) bool skipsPending;  // the display's pass: a state still being made skips its draws
 @property (nonatomic) bool skipDraws;     // the state set last is being made (or failed): its draws are skipped
 @property (nonatomic, strong) NSArray<NBTwoPlaneStandIn *> *storeBacks;  // stored into their planes at endEncoding
 @end
@@ -3151,12 +3155,12 @@ NB_RESIDENCY_SETS(use)
         [self.commandBuffer refuse:@"foreign render pipeline"];
         return;
     }
-    // A state still being made (AsyncPipelines.h) is set once made, after a bounded wait in the display's pass; until then
-    // nothing is set and this encoder's draws are skipped.
+    // Native queued work reaches this point only once ready. Direct bridge clients wait for a complete state.
     _skipDraws = false;
     if (const std::shared_ptr<nbasync::Making> making = ((NBRenderPipeline *)state).making;
-        making && !nbasync::ready(making, _skipsPending)) {
+        making && !nbasync::ready(making)) {
         _skipDraws = true;
+        [self.commandBuffer refuse:@"render pipeline compilation failed or timed out"];
         return;
     }
     [self check:nmb_render_set_pipeline(self.handle, [(NBRenderPipeline *)state handle]) what:"setRenderPipelineState"];
@@ -4165,7 +4169,6 @@ NB_RESIDENCY_SETS(use)
     [self notePass:d];
     NBRenderEncoder *render = [NBRenderEncoder new];
     render.storeBacks = storeBacks;
-    render.skipsPending = asyncSkips(d);
     return [self encoder:render
                   handle:self.committed ? nullptr : nmb_render_encoder_new(_handle, &pass)
                     what:@"renderCommandEncoder"];

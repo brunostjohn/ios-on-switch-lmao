@@ -65,6 +65,8 @@
 #include "TegraGM20BClkgate.h"
 #include "TegraGM20BComp.h"
 #include "TegraGM20BGpu.h"
+#include "SwitchGpuTimeline.h"
+#include "TegraGM20BSyncpt.h"
 #include "TegraGM20BFences.h"
 #include "TegraGM20BHangDecode.h"
 #include "TegraGM20BRail.h"
@@ -1168,7 +1170,7 @@ static int vm_kmap(struct tgm_vm *vm, struct tgm_mem *mem, uint64_t bytes, int r
 }
 
 #define CHAN_PUSH_BYTES 0x10000  /* nouveau_channel_ctor: plength */
-#define CHAN_GPFIFO_BYTES 0x2000 /* ilength: 1024 entries */
+#define CHAN_GPFIFO_BYTES 0x8000 /* 4096 entries, including a full 1024-entry job and its kernel packets */
 #define CHAN_SEMA_BYTES \
 	0x2000 /* nvif's GET semaphore at +0; stats stamps at CHAN_STAMPS, push profile at CHAN_PROF */
 #define CHAN_BYTES (CHAN_PUSH_BYTES + CHAN_GPFIFO_BYTES + CHAN_SEMA_BYTES)
@@ -1201,6 +1203,7 @@ struct tgm_order {
 };
 
 struct tgm_chan {
+	struct switch_gpu_timeline *timeline;
 	struct tgm_vm *vm;
 	struct tgm_tlb_chan tlb; /* the space's GPU-ordered maps this channel has invalidated for */
 	struct nvif_object user;
@@ -1536,6 +1539,7 @@ static int chan_killed(struct nvif_event *event, void *repv, u32 repc)
 	if (fault_code(report) == 1)
 		WRITE_ONCE(chan->fault_va, tgm_fault_va(report, (int)chan->chid));
 	WRITE_ONCE(chan->error, fault_code(report));
+	switch_gpu_timeline_failed(chan->timeline, READ_ONCE(*chan->fence_cpu));
 	fence_kill_record(chan->fence_cpu, chan->submitted, chan->error);
 	WRITE_ONCE(*chan->fence_cpu, chan->submitted);
 	__asm__ volatile("dsb sy" ::: "memory");
@@ -3396,6 +3400,7 @@ void tgm_chan_on_fence(struct tgm_chan *chan, void (*fenced)(void *arg), void *a
 static void chan_free(struct tgm_chan *chan)
 {
 	int i = 0;
+	switch_gpu_timeline_close(chan->timeline);
 	if (chan->high || chan->tracked)
 		tgm_sched_forget(gpu.device, chan->chid);
 	nvif_event_dtor(&chan->nonstall);
@@ -3670,8 +3675,20 @@ static int chan_new(struct tgm_vm *vm, const void *vm_owner, volatile uint32_t *
 	PUSH_KICK(push);
 	WRITE_ONCE(chan->progress_held, tgm_hold_held_ns(chan->chid, nvxnu_nanotime()));
 	chan->app = vm_owner != NULL;
+	ret = switch_gpu_timeline_init();
+	if (ret) {
+		gpu_lock();
+		goto fail;
+	}
 	mutex_lock(&live_lock);
 	chan->id = ++live_ids;
+	chan->timeline = switch_gpu_timeline_create(chan->id, chan->fence_cpu);
+	if (!chan->timeline) {
+		mutex_unlock(&live_lock);
+		ret = -ENOMEM;
+		gpu_lock();
+		goto fail;
+	}
 	list_add_tail(&chan->live, &live_chans);
 	mutex_unlock(&live_lock);
 	*pchan = chan;
@@ -3782,6 +3799,7 @@ static struct {
 	void *va;
 	u64 pa;
 	u64 used; /* bitmap of pages in use */
+	u32 refs[TGM_FENCE_USER_PAGES];
 	u32 next;
 } fences;
 
@@ -3812,9 +3830,10 @@ int tgm_fence_page_get(volatile uint32_t **va, uint64_t *pa)
 	mutex_lock(&live_lock);
 	for (n = 0; !fences_alloc() && n < TGM_FENCE_USER_PAGES; n++) {
 		i = (fences.next + n) % TGM_FENCE_USER_PAGES;
-		if (fences.used & BIT_ULL(i))
+		if (__atomic_load_n(&fences.used, __ATOMIC_ACQUIRE) & BIT_ULL(i))
 			continue;
-		fences.used |= BIT_ULL(i);
+		__atomic_fetch_or(&fences.used, BIT_ULL(i), __ATOMIC_ACQ_REL);
+		__atomic_store_n(&fences.refs[i], 1, __ATOMIC_RELEASE);
 		fences.next = i + 1;
 		memset((u8 *)fences.va + i * TGM_FENCE_SLOT, 0, PAGE_SIZE);
 		*va = (volatile uint32_t *)((u8 *)fences.va + i * TGM_FENCE_SLOT);
@@ -3828,12 +3847,27 @@ int tgm_fence_page_get(volatile uint32_t **va, uint64_t *pa)
 
 void tgm_fence_page_put(const volatile uint32_t *va)
 {
+	switch_gpu_fence_put(va);
+}
+
+void switch_gpu_fence_hold(const volatile uint32_t *va)
+{
 	uintptr_t off = (uintptr_t)va - (uintptr_t)fences.va;
-	if (!va)
-		return;
-	mutex_lock(&live_lock);
-	fences.used &= ~BIT_ULL(off / TGM_FENCE_SLOT);
-	mutex_unlock(&live_lock);
+	if (va && off / TGM_FENCE_SLOT < TGM_FENCE_USER_PAGES)
+		__atomic_add_fetch(&fences.refs[off / TGM_FENCE_SLOT], 1, __ATOMIC_ACQ_REL);
+}
+
+void switch_gpu_fence_put(const volatile uint32_t *va)
+{
+	uintptr_t off = (uintptr_t)va - (uintptr_t)fences.va;
+	if (va && off / TGM_FENCE_SLOT < TGM_FENCE_USER_PAGES &&
+	    !__atomic_sub_fetch(&fences.refs[off / TGM_FENCE_SLOT], 1, __ATOMIC_ACQ_REL))
+		__atomic_fetch_and(&fences.used, ~BIT_ULL(off / TGM_FENCE_SLOT), __ATOMIC_ACQ_REL);
+}
+
+void switch_gpu_chan_next_token(struct tgm_chan *chan, struct switch_gpu_backing_token *token)
+{
+	switch_gpu_timeline_token(chan->timeline, chan->submitted + 1, token);
 }
 
 int tgm_fence_kernel(unsigned int which, volatile uint32_t **va, uint64_t *page_pa,
@@ -3911,8 +3945,16 @@ static int order_add(struct tgm_chan *waiter, struct tgm_chan *source, u32 seqno
 			waiter->order[i].seqno = seqno;
 		return 0;
 	}
-	if (waiter->norder == TGM_ORDER_MAX)
-		return -ENOSPC;
+	if (waiter->norder == TGM_ORDER_MAX) {
+		for (i = 0; i < waiter->norder;) {
+			if ((s32)(READ_ONCE(*waiter->order[i].cpu) - waiter->order[i].seqno) >= 0)
+				waiter->order[i] = waiter->order[--waiter->norder];
+			else
+				i++;
+		}
+		if (waiter->norder == TGM_ORDER_MAX)
+			return -ENOSPC;
+	}
 	waiter->order[waiter->norder].va = waiter->vm->fences_va + off;
 	waiter->order[waiter->norder].cpu = source->fence_cpu;
 	waiter->order[waiter->norder].id = source->id;
@@ -4458,6 +4500,7 @@ static u32 chan_fence(struct tgm_chan *chan)
 		WRITE_ONCE(chan->queued[next % CHAN_QUEUED].app, 1);
 	}
 	switch_emc_gpu_submit();
+	chan->chan.defer_kick = false;
 	PUSH_KICK(push);
 	if (chan->high) {
 		struct tgm_sched_queued queued;
@@ -4521,8 +4564,58 @@ void tegra_gm20b_frame_take(struct SwitchFrameGpu *out)
  * from its snapshot of the user channels to its kick, so every user submission is either in a present's snapshot (the
  * copy waits for it) or kicked after that present (it waits for the copy). */
 
+static int backing_dependencies(struct tgm_chan *chan, const struct switch_gpu_backing_token *tokens,
+				u32 count, int emit)
+{
+	u32 i;
+	for (i = 0; i < count; ++i) {
+		const struct switch_gpu_backing_token *token = &tokens[i];
+		int status = switch_gpu_backing_token_status(token);
+		if (status < 0)
+			return status;
+		if (status == 1)
+			continue;
+		if (token->engine == SWITCH_GPU_ENGINE_GM20B) {
+			struct tgm_chan *source;
+			u64 va;
+			mutex_lock(&live_lock);
+			source = live_by_uid(token->queue);
+			if (!source || token->reset_generation != (source->id >> 32) + 1 ||
+			    !chan->vm->fences_va || token->value > UINT32_MAX) {
+				mutex_unlock(&live_lock);
+				return -ENODEV;
+			}
+			va = chan->vm->fences_va + ((uintptr_t)source->fence_cpu - (uintptr_t)fences.va);
+			if (emit) {
+				PUSH_MTHD(&chan->chan.push, NV906F, SEMAPHOREA, upper_32_bits(va),
+					SEMAPHOREB, lower_32_bits(va), SEMAPHOREC, (u32)token->value,
+					SEMAPHORED, NVDEF(NV906F, SEMAPHORED, OPERATION, ACQ_GEQ) |
+					NVDEF(NV906F, SEMAPHORED, ACQUIRE_SWITCH, ENABLED));
+				if (chan->high)
+					tgm_hold_need(gpu.device, source->chid);
+			}
+			mutex_unlock(&live_lock);
+		} else if (token->engine == SWITCH_GPU_ENGINE_VIC || token->engine == SWITCH_GPU_ENGINE_NVDEC ||
+			   token->engine == SWITCH_GPU_ENGINE_DISPLAY) {
+			u32 words[TGM_SYNCPT_WAIT_DWORDS];
+			u32 n;
+			if (token->queue > 255 || token->value > UINT32_MAX)
+				return -EINVAL;
+			if (emit) {
+				tgm_syncpt_wait(words, token->queue, (u32)token->value);
+				for (n = 0; n < TGM_SYNCPT_WAIT_DWORDS; ++n)
+					PUSH_DATA(&chan->chan.push, words[n]);
+			}
+		} else {
+			return -EOPNOTSUPP;
+		}
+	}
+	return 0;
+}
+
 static int chan_exec(struct tgm_chan *chan, const struct tgm_push *pushes, uint32_t count,
-		     uint32_t *seqno, const struct tgm_prof *prof)
+		     uint32_t *seqno, const struct tgm_prof *prof,
+		     const struct switch_gpu_backing_token *dependencies, u32 dependency_count)
 {
 	u64 start = SWITCH_FRAME_TIMELINE ? nvxnu_nanotime() : 0;
 	u32 i = 0;
@@ -4534,10 +4627,19 @@ static int chan_exec(struct tgm_chan *chan, const struct tgm_push *pushes, uint3
 
 	if (chan->error)
 		return -EIO;
+	for (i = 0; i < count; ++i)
+		if (pushes[i].reserved || (pushes[i].incomplete &&
+		    (i + 1 == count || !pushes[i + 1].no_prefetch)))
+			return -EINVAL;
 	if (!count) {
 		*seqno = chan->submitted;
 		return 0;
 	}
+	if (count > TegraGM20BMaxJobPushes || dependency_count > TegraGM20BMaxJobUses)
+		return -E2BIG;
+	ret = backing_dependencies(chan, dependencies, dependency_count, 0);
+	if (ret)
+		return ret;
 	idle_wake(); /* the run rate before any of this submission is kicked */
 	chan_timeslice_due(chan);
 	/* from its first submission: a channel made before its connection's GPU priority came (the compositor's, at boot)
@@ -4557,18 +4659,26 @@ static int chan_exec(struct tgm_chan *chan, const struct tgm_push *pushes, uint3
 	    (!stats_on() || chan->kernel || count > TGM_PROF_MAX || READ_ONCE(chan->prof_seqno)))
 		prof = NULL;
 	for (i = 0; prof && i < count; i++)
-		stamps += prof->cls[i] != TGM_PC_SKIP;
+		stamps += !pushes[i].incomplete && prof->cls[i] != TGM_PC_SKIP;
 	/* nouveau_exec_job_run(): room for every user entry plus our fence push and, each kicked as its own entry before
 	 * them, a present wait, the task order's acquires and (stats) a start stamp, one more nvif GET semaphore
 	 * with each. A profile's stamps: an entry each, a stamp and a GET semaphore. */
-	ret = chan_wait_room(chan, count + 5 + stamps,
-			     CHAN_FENCE_DWORDS + 32 + 5 * TGM_ORDER_MAX + 16 * stamps);
+	ret = chan_wait_room(chan, count + 6 + stamps,
+			     CHAN_FENCE_DWORDS + 32 + 5 * (TGM_ORDER_MAX + dependency_count) + 16 * stamps);
 	if (ret == -ETIMEDOUT && gpu.stage >= 3) {
 		tgm_chan_stalled(chan, "exec: GPFIFO still full after 1 s", chan->submitted,
 				 NSEC_PER_SEC);
 	}
 	if (ret)
 		return READ_ONCE(chan->error) ? -EIO : ret == -ETIMEDOUT ? -EBUSY : ret;
+	chan->chan.defer_kick = true;
+	ret = backing_dependencies(chan, dependencies, dependency_count, 1);
+	if (ret) {
+		chan->chan.push.cur = chan->chan.push.bgn;
+		chan->chan.defer_kick = false;
+		return ret;
+	}
+	PUSH_KICK(&chan->chan.push);
 	if (READ_ONCE(chan->norder)) {
 		/* the task's other channels' work it follows (tgm_chan_order), first, so the start stamp below times the work
 		 * itself */
@@ -4589,6 +4699,9 @@ static int chan_exec(struct tgm_chan *chan, const struct tgm_push *pushes, uint3
 	}
 	if (prof) {
 		memcpy(chan->prof_cls, prof->cls, count);
+		for (i = 0; i < count; ++i)
+			if (pushes[i].incomplete)
+				chan->prof_cls[i] = TGM_PC_SKIP;
 		memcpy(chan->prof_draws, prof->draws, count * sizeof(prof->draws[0]));
 		memcpy(chan->prof_sdraws, prof->sampleDraws, count * sizeof(prof->sampleDraws[0]));
 		WRITE_ONCE(chan->prof_count, count);
@@ -4614,7 +4727,7 @@ static int chan_exec(struct tgm_chan *chan, const struct tgm_push *pushes, uint3
 	for (i = 0; i < count; i++) {
 		nvif_chan_gpfifo_push(&chan->chan, pushes[i].va, pushes[i].dwords << 2,
 				      pushes[i].no_prefetch || ((l2_on() || tlb) && !i));
-		if (prof && prof->cls[i] != TGM_PC_SKIP) {
+		if (prof && !pushes[i].incomplete && prof->cls[i] != TGM_PC_SKIP) {
 			push_stamp(&chan->chan.push,
 				   chan->ring_va + CHAN_PROF + i * sizeof(struct tgm_stamp),
 				   chan->submitted + 1);
@@ -4637,7 +4750,18 @@ int tgm_chan_exec(struct tgm_chan *chan, const struct tgm_push *pushes, uint32_t
 	int ret = 0;
 
 	gate_enter();
-	ret = chan_exec(chan, pushes, count, seqno, prof);
+	ret = chan_exec(chan, pushes, count, seqno, prof, NULL, 0);
+	gate_leave();
+	return ret;
+}
+
+int switch_gpu_chan_exec(struct tgm_chan *chan, const struct tgm_push *pushes, uint32_t count,
+	const struct switch_gpu_backing_token *dependencies, uint32_t dependency_count,
+	uint32_t *seqno, const struct tgm_prof *prof)
+{
+	int ret;
+	gate_enter();
+	ret = chan_exec(chan, pushes, count, seqno, prof, dependencies, dependency_count);
 	gate_leave();
 	return ret;
 }

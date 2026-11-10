@@ -35,6 +35,19 @@
 #include "../../../../kits/SwitchRefusal/SwitchRefusal.h"
 #include "RawMetalObjects.h"
 
+// Buffer-backed texture views share the caller's cached CPU pointer with their parent buffer.
+static inline RMBuffer *cpuBufferOfResource(id object)
+{
+    if ([object isKindOfClass:[RMBuffer class]])
+        return (RMBuffer *)object;
+    if (![object isKindOfClass:[RMTexture class]])
+        return nil;
+    RMTexture *texture = (RMTexture *)object;
+    while (texture->_kind == RMTextureView && texture->_parent)
+        texture = texture->_parent;
+    return texture->_buffer;
+}
+
 // The m2v frontend's in-place textures over a buffer, of rows or the device's optimal layout (NativeBridgeMetalFrontend.mm):
 // weak, so the host benchmark links without them.
 extern "C" id native_bridge_metal_texture_in_place(id buffer, id descriptor, NSUInteger offset, NSUInteger bytesPerRow)
@@ -42,6 +55,8 @@ extern "C" id native_bridge_metal_texture_in_place(id buffer, id descriptor, NSU
 extern "C" id native_bridge_metal_texture_tiled_in_place(id buffer, id descriptor, NSUInteger offset)
     __attribute__((weak_import));
 extern "C" id native_bridge_metal_render_pipeline_lazy(id device, id descriptor, NSUInteger options)
+    __attribute__((weak_import));
+extern "C" int native_bridge_metal_render_pipeline_ready(id pipeline, void (^observer)(void))
     __attribute__((weak_import));
 // Where NVK keeps a texture's texels (a stored depth/stencil texture the raw path renders and copies in place)
 struct switch_nvk_image_memory;
@@ -56,9 +71,6 @@ extern "C" const char *nmb_last_error(void) __attribute__((weak_import));
 // kills the channel a GPU wait is stuck on (or panics).
 static constexpr auto kWaitLimit = std::chrono::seconds(20);
 [[noreturn]] void waitTooLong(const char *what, const void *object);
-
-// How long waitUntilScheduled waits before it asks whether a shared event holds the command buffer (waitUntilScheduled).
-static constexpr auto kHeldGrace = std::chrono::milliseconds(500);
 
 os_log_t rawLog();
 void once(NSString *text);
@@ -125,13 +137,22 @@ private:
 // subclass of the m2v device's own class (raw_metal_device_open), so it is an _MTLDevice that conforms to Metal's protocols as
 // the m2v device does and answers every selector the facade does not override with the m2v device's own method; it has no
 // instance variables of its own (the base class's ABI is fixed), so its state lives here.
+struct RMRawRetirement {
+    RMCommandBuffer *buffer;
+    uint32_t seqno;
+    size_t from, to;
+};
+
 struct RawState {
     raw::Device *raw = nullptr;
-    id<MTLDevice> fallback;                 // the m2v device
-    id device;                              // the raw device object
-    std::mutex submit;                      // one command buffer encodes and submits at a time, in commit order
-    std::deque<RMCommandBuffer *> waiting;  // committed, not yet submitted
+    id<MTLDevice> fallback;  // the m2v device
+    id device;               // the raw device object
+    std::mutex submit;
+    std::mutex schedule;
+    std::mutex eventValues;
+    raw::SubmitQueue<void *, RMCommandBuffer *> waiting;
     std::condition_variable waitingChanged;
+    uint64_t scheduleGeneration = 0;
     std::mutex m2vLock;
     std::condition_variable m2vChanged;
     uint32_t m2vPending = 0;      // m2v command buffers committed and not completed
@@ -149,9 +170,9 @@ struct RawState {
     MTLSharedEventListener *listener;  // the CPU-ordered remainder's event waits
     std::mutex doneLock;
     std::condition_variable doneChanged;
-    std::deque<RMCommandBuffer *> inflight;  // raw command buffers submitted, in seqno order
-    dispatch_queue_t handlers;               // where scheduled handlers run (in order, never inside commit)
-    std::atomic<uint32_t> committed{0};      // command buffers committed and not finished (gRawRelease's drain)
+    std::deque<RMRawRetirement> inflight;  // immutable range fences; later submissions never change an earlier wait
+    dispatch_queue_t handlers;             // where scheduled handlers run (in order, never inside commit)
+    std::atomic<uint32_t> committed{0};    // command buffers committed and not finished (gRawRelease's drain)
     Stats stats;
     std::unique_ptr<raw::Completion> completion;  // the states the pack lacks (raw_metal_complete_states)
 };
@@ -255,18 +276,29 @@ bool encodeRaw(RMCommandBuffer *cb, size_t from, size_t to, const char **why);
 extern std::mutex gHoldersLock;
 extern std::set<RMCommandBuffer *> gHolders;
 bool waitsForEvent(RMCommandBuffer *cb);
-bool heldBehindEvent();
+void armEventWaits(RMCommandBuffer *cb);
+raw::EventReadiness eventReadiness(RMCommandBuffer *cb, raw::EventDeadline::Time &nextWake);
+bool expiredEventWait(RMCommandBuffer *cb, size_t index);
+void enqueueBuffer(RMCommandBuffer *cb);
+void wakeSubmit();
+bool m2vClear();
+void planSegments(RMCommandBuffer *cb);
+bool submitLocked(RMCommandBuffer *cb);
 void unhold(RMCommandBuffer *cb);
 uint64_t signalled(NSMapTable *map, void *event);
-void noteSignals(RMCommandBuffer *cb, NSMapTable *map);
-bool eventsReady(RMCommandBuffer *cb);
-void waitEvents(RMCommandBuffer *cb);
+void forgetSignals();
 
 // RawMetalFinish.mm
 void forEachWritten(RMCommandBuffer *cb, size_t from, size_t to, void (*written)(void *));
 extern GpuMemoryRelease &gRawRelease;
 void scheduled(RMCommandBuffer *cb);
+dispatch_queue_t scheduledQueueLocked(RMCommandBuffer *cb);
+dispatch_queue_t followingRootQueue();
+dispatch_queue_t followingSerialQueue(const char *label);
 void finish(RMCommandBuffer *cb, NSError *error);
+void segmentCompleted(RMCommandBuffer *cb, NSError *error, size_t from, size_t to);
+void retireRawRange(RMCommandBuffer *cb, size_t from, size_t to);
+void markWrittenRange(RMCommandBuffer *cb, size_t from, size_t to);
 void completionLoop();
 
 // RawMetalSurfaceWrites.mm

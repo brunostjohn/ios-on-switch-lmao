@@ -8,11 +8,13 @@
 
 class OSObject;
 class IOMemoryDescriptor;
+struct switch_gpu_backing;
 
 struct TegraVICSurface {
     OSObject *surface;           // retained IOSurface
     IOMemoryDescriptor *memory;  // the surface's (not retained: the surface holds it)
     TegraVICSurfaceDesc desc;
+    uint32_t id;
     bool prepared;
 };
 
@@ -26,4 +28,6 @@ IOReturn tegra_vic_surface_pages(TegraVICSurface *s, uint64_t offset, uint64_t b
 void tegra_vic_surface_complete(TegraVICSurface *s);
 void tegra_vic_surface_written(const TegraVICSurface *s);  // VIC wrote it: the seed moves (r18-planes)
 }
+
+switch_gpu_backing *switch_vic_surface_backing(const TegraVICSurface *surface);
 #endif

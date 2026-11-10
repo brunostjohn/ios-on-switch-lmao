@@ -34,6 +34,7 @@
 #include <string.h>
 #include "TegraGM20BGpu.h"
 #include "TegraGM20BTiled.h"
+#include "SwitchGpuBacking.h"
 #if TGM_STATS
 #include <os/log.h>
 #endif
@@ -245,12 +246,15 @@ void surfaceTrapped(uint32_t surfaceId, bool unlock, bool readOnly)
 			if (tiledNow(found[i]))
 				continue;
 			const bool maintained =
-				unlock || (__atomic_exchange_n(&found[i]->gpuDirty, 0,
+				(unlock && !readOnly) || (!unlock && __atomic_exchange_n(&found[i]->gpuDirty, 0,
 							       __ATOMIC_ACQ_REL) != 0);
-			if (maintained) {
+			auto *backing = switch_gpu_backing_find_pa(found[i]->pa);
+			if (maintained && !backing) {
 				bytes += maintain(found[i]);
 				done++;
 			}
+			if (backing)
+				switch_gpu_backing_release(backing);
 #if TGM_STATS
 			trace(found[i], surfaceId, unlock, readOnly, maintained);
 #else
@@ -724,7 +728,7 @@ extern "C" void tegra_gm20b_iosurface_trap(uint32_t index, uint32_t surface_id, 
 		return;
 	if (index == kTrapLock) {
 		surfaceTrapped(surface_id, false, (options & kLockReadOnly) != 0u);
-	} else if (index == kTrapUnlock && !(options & kLockReadOnly)) {
-		surfaceTrapped(surface_id, true, false);
+	} else if (index == kTrapUnlock) {
+		surfaceTrapped(surface_id, true, (options & kLockReadOnly) != 0u);
 	}
 }

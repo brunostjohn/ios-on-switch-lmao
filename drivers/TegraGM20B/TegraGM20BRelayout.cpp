@@ -107,7 +107,7 @@ int move(const tgm_relayout_pages &surface, const tgm_relayout_pages &rows, cons
 		const tgm_relayout_move m = {kSurfaceVa, kSurfaceRowsVa, kRowsVa, bytesPerRow,
 					     op,         rowsBytes};
 		const tgm_push push = {kPushVa, tgm_relayout_push(r.pushCpu, &l, &m, waits, nwaits),
-				       0};
+				       0, 0, 0};
 		uint32_t seqno = 0;
 		ret = tgm_chan_exec(chan, &push, 1, &seqno, nullptr);
 		if (!ret) {

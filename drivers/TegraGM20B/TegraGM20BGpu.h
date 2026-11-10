@@ -141,7 +141,9 @@ void tgm_chan_del(struct tgm_chan **pchan);
 struct tgm_push {
 	uint64_t va;
 	uint32_t dwords;
-	uint32_t no_prefetch;
+	uint8_t no_prefetch;
+	uint8_t incomplete;
+	uint16_t reserved;
 };
 /* Append the pushes, then the fence (WFI semaphore release of the next seqno), then kick. User mappings are
  * L2-cacheable: the L2's clean lines are invalidated on the GPU before the pushes are fetched and its dirty lines
@@ -151,6 +153,13 @@ struct tgm_push {
 struct tgm_prof;
 int tgm_chan_exec(struct tgm_chan *chan, const struct tgm_push *push, uint32_t count,
 		  uint32_t *seqno, const struct tgm_prof *prof);
+struct switch_gpu_backing_token;
+void switch_gpu_chan_next_token(struct tgm_chan *chan, struct switch_gpu_backing_token *token);
+int switch_gpu_chan_exec(struct tgm_chan *chan, const struct tgm_push *push, uint32_t count,
+	const struct switch_gpu_backing_token *dependencies, uint32_t dependency_count,
+	uint32_t *seqno, const struct tgm_prof *prof);
+void switch_gpu_fence_hold(const volatile uint32_t *fence);
+void switch_gpu_fence_put(const volatile uint32_t *fence);
 /* The stats' push profile (gpu.c "push profile"): `prof` (or NULL) names each push of a sampled submission by what it
  * asks of the GPU (TegraGM20BUserClient.cpp scanPushes); the submission then stamps the GPU's time after each push whose
  * class is not TGM_PC_SKIP, and each window's "gpuprof" line gives every process's GPU time by class. Draws and clears

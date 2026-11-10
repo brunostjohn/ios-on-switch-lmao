@@ -10,8 +10,8 @@
 
 namespace raw {
 
-// The states this process completes: each asked state made once, by the disk cache or `make` (the probe and record), one at a
-// time: on a user-initiated serial queue, or on the creating thread (makeNow). A later ask of a state answers its result or
+// The states this process completes: each asked state made once, by the disk cache or `make` (the probe and record), with per-key exclusion
+// on bounded user-initiated workers, or on the creating thread (makeNow). A later ask of a state answers its result or
 // that it is still being made. A refusal sticks; a probe that could not run is tried again by a later ask, kRetries times at
 // most, each after a wait four times the last's (the first `retryUs`).
 class Compiler {
@@ -44,7 +44,7 @@ public:
     // The state's record or refusal if it is made or on disk, on the caller's thread: what a state's creation takes at once (the
     // disk's entry is kept as the state's result). None: not made yet (being made, or never asked)
     RecordCache::Found lookup(const CacheKey &k, RuntimeRecord &record, std::string &why);
-    // The state made now, on the caller's thread (one make at a time, the queue's among them), as a queued ask would: Ready with
+    // The state made now, on the caller's thread (sharing the bounded compile slots with queued work), as a queued ask would: Ready with
     // its record, Refused, Failed (a later ask tries again), or Pending (the queue is making it)
     State makeNow(const CacheKey &k, RuntimeRecord &record, std::string &why);
     // A state whose probe failed and may be tried again: true, and in *us how long until an ask tries it
@@ -69,18 +69,21 @@ private:
     };
 
     struct Job;
+    struct Store;
 
     RecordCache *cache_;
     Make make_;
-    std::mutex making_;  // make_ runs one state at a time
     uint64_t retryUs_;
     void *queue_;
+    void *persistence_;
+    void *slots_;  // at most two cold compiles; unrelated warm keys never take this semaphore
     mutable std::mutex lock_;
     std::condition_variable idle_;
     uint64_t queued_ = 0;
     std::map<uint64_t, Entry> entries_;
     Stats stats_;
     static void run(void *job);
+    static void store(void *job);
     Outcome produce(const CacheKey &k, RuntimeRecord &record, std::string &why, RecordCache::Found &found);
     std::vector<Done> settle(const CacheKey &k, Outcome outcome, RecordCache::Found found,
                              std::unique_ptr<RuntimeRecord> record, const std::string &why, uint64_t began,

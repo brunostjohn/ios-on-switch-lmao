@@ -6,11 +6,12 @@
 // A finished command buffer's recording storage, kept for the next one (its capacity a frame's): Core Animation's steady frames
 // allocate none of it
 struct RMRecording {
-    std::vector<Cmd> tape;
+    RMCommandPlan plan;
     std::vector<RMPass> passes;
     RMBytes bytes;
     std::vector<uint64_t> extra;
     std::vector<id> owners;
+    std::unordered_set<void *> ownerKeys;
 };
 
 static std::mutex gRecordingsLock;
@@ -22,16 +23,16 @@ static void takeRecording(RMCommandBuffer *b)
         std::lock_guard<std::mutex> l(gRecordingsLock);
         if (!gRecordings.empty()) {
             RMRecording &r = gRecordings.back();
-            b->_tape.swap(r.tape);
+            std::swap(b->_plan, r.plan);
             b->_passes.swap(r.passes);
             std::swap(b->_bytes, r.bytes);
             b->_extra.swap(r.extra);
             b->_owners.swap(r.owners);
+            b->_ownerKeys.swap(r.ownerKeys);
             gRecordings.pop_back();
             return;
         }
     }
-    b->_tape.reserve(512);
     b->_owners.reserve(256);
 }
 
@@ -52,22 +53,24 @@ static void giveRecording(RMCommandBuffer *b)
     uint64_t bytes = 0;
     for (const raw::Buffer &k : b->_bytes.chunks)
         bytes += k.va ? k.length : kKeptBytes;  // (heap chunks are not kept)
-    if (bytes + b->_tape.capacity() * sizeof(Cmd) + b->_extra.capacity() * 8 > kKeptBytes) {
+    if (bytes + b->_plan.storageBytes() + b->_extra.capacity() * 8 > kKeptBytes) {
         dropBytes(b->_bytes);
         return;
     }
     RMRecording r;
-    r.tape.swap(b->_tape);
+    std::swap(r.plan, b->_plan);
     r.passes.swap(b->_passes);
     std::swap(r.bytes, b->_bytes);
     r.extra.swap(b->_extra);
     r.owners.swap(b->_owners);
-    r.tape.clear();
+    r.ownerKeys.swap(b->_ownerKeys);
+    r.plan.clear();
     r.passes.clear();
     r.bytes.at = 0;
     r.bytes.used = 0;
     r.extra.clear();
     r.owners.clear();
+    r.ownerKeys.clear();
     {
         std::lock_guard<std::mutex> l(gRecordingsLock);
         if (gRecordings.size() < kKept) {
@@ -87,21 +90,96 @@ static void giveRecording(RMCommandBuffer *b)
 
 - (void)retain:(id)object
 {
-    if (!object || (!_owners.empty() && _owners.back() == object))
+    if (!object || !_ownerKeys.insert((__bridge void *)object).second)
         return;
     _owners.push_back(object);
 }
 
 - (void)record:(const Cmd &)cmd
 {
-    _tape.push_back(cmd);
+    if (_plan.record(cmd, _extra)) {
+        std::vector<raw::ResourceUse> uses;
+        if (isPlanDraw(cmd.op)) {
+            const uint32_t index = _plan.draw(_plan.size() - 1).state;
+            const auto &state = _plan.renderStates[index];
+            if (!state.usesFinal) {
+                const auto &raster = _plan.raster[state.raster];
+                RMPipeline *pipeline = (__bridge RMPipeline *)raster.pipeline;
+                const raw::Pipeline *native = static_cast<const raw::Pipeline *>(raster.nativePipeline);
+                if (!native && [(id)pipeline isKindOfClass:[RMPipeline class]])
+                    native = pipeline->_raw;
+                if (native && native->rec) {
+                    const auto &record = *native->rec;
+                    for (uint32_t i = 0; i < record.entries; ++i) {
+                        const auto &entry = record.entry[i];
+                        if (entry.kind == raw::EntryUbo && entry.stage >= 1 && entry.stage <= 2 && entry.slot < 31) {
+                            const auto &binding =
+                                _plan.buffers[entry.stage - 1][state.buffers[entry.stage - 1]][entry.slot];
+                            if (binding.source == raw::BufferBinding::Source::Buffer)
+                                uses.push_back({binding.object,
+                                                uint8_t(raw::ResourceUse::Read |
+                                                        (raw::bufferStorage(entry) ? raw::ResourceUse::Write : 0))});
+                        } else if ((entry.kind == raw::EntryTexture || entry.kind == raw::EntryTexture3d) &&
+                                   entry.slot < 31) {
+                            uses.push_back({_plan.textures[1][state.textures[1]].objects[entry.slot],
+                                            raw::ResourceUse::Read | raw::ResourceUse::Sample});
+                        }
+                        if ((entry.kind == raw::EntryTexture || entry.kind == raw::EntryTexture3d ||
+                             entry.kind == raw::EntrySamplerOnly) &&
+                            entry.samplerKind == raw::SamplerSlot && entry.sampler < 16)
+                            uses.push_back(
+                                {_plan.samplers[1][state.samplers[1]].objects[entry.sampler], raw::ResourceUse::Read});
+                    }
+                    if (record.vertexSlot < 31 && record.vertexStride) {
+                        const auto &binding = _plan.buffers[0][state.buffers[0]][record.vertexSlot];
+                        if (binding.source == raw::BufferBinding::Source::Buffer)
+                            uses.push_back({binding.object, raw::ResourceUse::Read});
+                    }
+                    _plan.setRenderUses(index, uses);
+                    uses.clear();
+                }
+            }
+        } else if (cmd.op == OpRender) {
+            const RMPass &pass = _passes[cmd.x];
+            for (const RMPass::Color &a : pass.color)
+                if (a.texture)
+                    uses.push_back({(__bridge void *)a.texture,
+                                    uint8_t(raw::ResourceUse::Write |
+                                            (a.load == MTLLoadActionLoad ? raw::ResourceUse::Read : 0))});
+            MTLRenderPassDescriptor *descriptor = (__bridge MTLRenderPassDescriptor *)cmd.obj;
+            if (pass.depth)
+                uses.push_back({(__bridge void *)pass.depth,
+                                uint8_t(raw::ResourceUse::Write |
+                                        (pass.depthLoad == MTLLoadActionLoad || pass.stencilLoad == MTLLoadActionLoad
+                                             ? raw::ResourceUse::Read
+                                             : 0))});
+            for (NSUInteger i = 0; i < 8; ++i)
+                if (id texture = descriptor.colorAttachments[i].resolveTexture)
+                    uses.push_back({(__bridge void *)texture, raw::ResourceUse::Write});
+        } else if (cmd.op == OpInvocation) {
+            raw::forEachObject((__bridge NSInvocation *)cmd.obj, [&](id object) {
+                uses.push_back({(__bridge void *)object, raw::ResourceUse::Read | raw::ResourceUse::Write});
+                [self retain:object];
+            });
+        }
+        if (!uses.empty())
+            _plan.addUses(_plan.size() - 1, uses);
+        if (cmd.op == OpEnd && _encOpen)
+            _plan.prepareRange(_encAt, _plan.size());
+    }
+    const size_t consumed = cmd.op == OpViewport || cmd.op == OpDispatch       ? 6
+                            : cmd.op == OpBlendColor                           ? 4
+                            : cmd.op == OpDepthBias || cmd.op == OpDrawIndexed ? 3
+                                                                               : 0;
+    if (consumed && cmd.x + consumed == _extra.size())
+        _extra.resize(cmd.x);
 }
 
 // The encoder recorded last: whether it goes to m2v, into its first command
 - (void)closeEncoder
 {
-    if (_encOpen && _encAt < _tape.size())
-        _tape[_encAt].index = _encRefused ? 1 : 0;
+    if (_encOpen && _encAt < _plan.size())
+        _plan.setRefused(_encAt, _encRefused);
     _encOpen = false;
 }
 
@@ -254,22 +332,20 @@ static void giveRecording(RMCommandBuffer *b)
 {
     if (!block)
         return;
-    bool now;
     {
         std::lock_guard<std::mutex> l(_lock);
         // once scheduled() took the handlers, one added is run behind them (was: until they ran, it joined a list no one read
         // again, and a presentDrawable added then never presented)
-        now = _scheduledSent;
-        if (!now) {
+        if (!_scheduledSent) {
             if (!_scheduledHandlers)
                 _scheduledHandlers = [NSMutableArray array];
             [_scheduledHandlers addObject:[block copy]];
+        } else {
+            dispatch_async(scheduledQueueLocked(self), ^{
+                block((id<MTLCommandBuffer>)self);
+            });
         }
     }
-    if (now)
-        dispatch_async(gRM->handlers, ^{
-            block((id<MTLCommandBuffer>)self);
-        });
 }
 
 - (void)addCompletedHandler:(MTLCommandBufferHandler)block
@@ -312,10 +388,13 @@ static void giveRecording(RMCommandBuffer *b)
 }
 
 - (void)enqueue
-{}
+{
+    enqueueBuffer(self);
+}
 
 - (void)commit
 {
+    [self enqueue];
     {
         std::lock_guard<std::mutex> l(_lock);
         if (_committed)
@@ -354,28 +433,9 @@ static void giveRecording(RMCommandBuffer *b)
     if (!_committed || _scheduledDone)
         return;
     const BlockedWait blocked(gRM->stats.scheduledWaits, gRM->stats.scheduledWaitUs);
-    if (_changed.wait_for(l, kHeldGrace, [&] {
-            return _scheduledDone;
-        }))
-        return;
-    // Behind a shared event no one reached yet (its own wait, or an earlier command buffer's that holds it in order): Metal's
-    // command buffer is scheduled there, its GPU waiting for the event, so this returns. Core Animation's render thread flushes
-    // with waitUntilScheduled every frame, and forces the per-surface event of a client that died or was suspended after 5 s
-    // (CA::WindowServer::SharedEvent::is_complete_with_timeout): blocked here it never could (r7n: AegirPoster died, r7o:
-    // PosterKit's scenes were suspended; the display froze for good).
-    l.unlock();
-    if (heldBehindEvent()) {
-        gRM->stats.heldReturns++;
-        once(@"waitUntilScheduled of a command buffer behind a shared event not reached yet: returns after 500 ms, as "
-             @"Metal's "
-             @"(its GPU waits for the event)");
-        return;
-    }
-    l.lock();
-    if (!_changed.wait_for(l, kWaitLimit, [&] {
-            return _scheduledDone;
-        }))
-        waitTooLong("waitUntilScheduled of command buffer", (__bridge void *)self);
+    _changed.wait(l, [&] {
+        return _scheduledDone;
+    });
 }
 
 - (void)waitUntilCompleted
@@ -384,10 +444,9 @@ static void giveRecording(RMCommandBuffer *b)
     if (!_committed || _completedDone)
         return;
     const BlockedWait blocked(gRM->stats.completedWaits, gRM->stats.completedWaitUs);
-    if (!_changed.wait_for(l, kWaitLimit, [&] {
-            return _completedDone;
-        }))
-        waitTooLong("waitUntilCompleted of command buffer", (__bridge void *)self);
+    _changed.wait(l, [&] {
+        return _completedDone;
+    });
 }
 
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG

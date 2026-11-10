@@ -55,14 +55,16 @@ public:
 
     // The kernel of compute key `key` (raw_compute_key.h) for `descriptor` (over m2v's functions) at `dispatch`, placed:
     // this process's, the disk's, or made now on the caller's thread, the dispatch that first needs it. Null: refused (named
-    // once in the raw log), its compile failed past its retries, or no room for it
+    // once in the raw log), its compile failed past its retries, or no room for it. retry names a transient failure with
+    // attempts remaining.
     const ComputeState *kernel(MTLComputePipelineDescriptor *descriptor, const NmbDirectDispatch &dispatch,
-                               const std::string &key);
+                               const std::string &key, bool *retry = nullptr);
 
     Compiler::Stats stats() const;
 
 private:
     struct Kernel {
+        std::mutex lock;
         std::unique_ptr<ComputeRecord> record;  // placeCompute names its state by the record's address: kept for good
         const ComputeState *state = nullptr;
         bool refused = false;
@@ -75,11 +77,11 @@ private:
     std::unique_ptr<Direct> direct_;
     std::once_flag directMade_;  // make() runs on the compile queue and on creating threads at once
     uint64_t stack_;
-    dispatch_queue_t queue_, splitQueue_;
+    dispatch_queue_t queue_, splitQueue_, persistenceQueue_;
     std::mutex lock_;
     std::map<uint64_t, Ask> asked_;  // by CacheKey::name, what make() makes
-    std::mutex kernelLock_;          // one kernel made at a time: a second dispatch of it waits for the first's
-    std::map<uint64_t, Kernel> kernels_;
+    std::mutex kernelLock_;          // map membership only; each kernel owns its single-flight lock
+    std::map<uint64_t, std::shared_ptr<Kernel>> kernels_;
     std::set<uint64_t> splitAsked_;  // by CacheKey::name, the states whose split splitLater made or is making
 
     bool keyOf(Ask &a, CacheKey &k);

@@ -53,13 +53,14 @@ public:
 
     uint64_t bytes() const
     {
+        std::lock_guard<std::mutex> l(lock_);
         return bytes_;
     }
 
 private:
     std::string dir_;
     uint64_t stack_ = 0, cap_ = 0, bytes_ = 0;
-    std::mutex lock_;
+    mutable std::mutex lock_;
     std::string parent_;
     std::string path(const CacheKey &k) const;
     void evict(uint64_t room);

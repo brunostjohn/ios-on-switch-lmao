@@ -209,18 +209,10 @@ void rawStallTick()
         return;
     }
     long waiting = -1, inflight = -1, m2vPending = -1, m2vUnscheduled = -1;
-    unsigned segNext = 0, segs = 0, reason = 0;
     {
-        std::unique_lock<std::mutex> a(r.submit, std::try_to_lock);
-        if (a.owns_lock()) {
+        std::unique_lock<std::mutex> a(r.schedule, std::try_to_lock);
+        if (a.owns_lock())
             waiting = long(r.waiting.size());
-            if (!r.waiting.empty()) {
-                RMCommandBuffer *f = r.waiting.front();
-                segNext = unsigned(f->_segNext);
-                segs = unsigned(f->_segs.size());
-                reason = unsigned(f->_reason);
-            }
-        }
     }
     {
         std::unique_lock<std::mutex> b(r.doneLock, std::try_to_lock);
@@ -251,11 +243,11 @@ void rawStallTick()
         return;
     said = true;
     os_log_error(rawLog(),
-                 "raw: stall: nothing committed or completed for 10 s with work pending: waiting %ld (front segment "
-                 "%u/%u reason %u), inflight %ld, m2v pending %ld unscheduled %ld (-1: its lock held), locks free: "
+                 "raw: stall: nothing committed or completed for 10 s with work pending: waiting %ld, "
+                 "inflight %ld, m2v pending %ld unscheduled %ld (-1: its lock held), locks free: "
                  "holders %d device %d, seqno submitted %u completed %u, commits %llu completed %llu",
-                 waiting, segNext, segs, reason, inflight, m2vPending, m2vUnscheduled, int(holders), int(device),
-                 submitted, completed, (unsigned long long)commits, (unsigned long long)done);
+                 waiting, inflight, m2vPending, m2vUnscheduled, int(holders), int(device), submitted, completed,
+                 (unsigned long long)commits, (unsigned long long)done);
 }
 #endif
 

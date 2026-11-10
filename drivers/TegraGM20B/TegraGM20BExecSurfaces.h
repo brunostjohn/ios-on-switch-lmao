@@ -26,11 +26,14 @@ public:
 
 	// Method 17's record, apart from its channel: well formed, with `count` uses.
 	static bool valid(const TegraGM20BAbiExecSurfaces *in);
+	static bool validSubmit(const TegraGM20BAbiSubmit *in, uint32_t bytes, bool addressed = false);
 	// The list for slot's channel's next Exec. False: no memory.
 	bool set(uint32_t slot, const TegraGM20BAbiExecSurfaces *in);
+	bool set(uint32_t slot, const TegraGM20BAbiSurfaceUse *uses, uint32_t count,
+		 uint32_t flags);
 	// Exec of slot's channel `chan`, before tgm_chan_exec: takes the slot's list and, when the Exec follows it, queues the
-	// acquires on the listed surfaces' writers of other channels. Whether the Exec follows a list.
-	bool before(uint32_t slot, tgm_chan *chan, uint32_t pushes);
+	// acquires on the listed surfaces' writers of other channels. 1 when listed, 0 unlisted, negative errno if any dependency could not be queued.
+	int before(uint32_t slot, tgm_chan *chan, uint32_t pushes, bool dependencies = true);
 	// Once it submitted `seqno` on channel `uid`: the imports it counts as a writer of.
 	void after(bool listed, bool importsWritten, uint32_t uid, uint32_t seqno);
 

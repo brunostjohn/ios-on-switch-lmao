@@ -435,6 +435,37 @@ extern "C" void nvxnu_dcache_clean_inval_pages(const nvxnu_u64 *pas, nvxnu_u32 c
 	switch_dcache_sync();
 }
 
+extern "C" void switch_gpu_backing_cache(const uint64_t *pages, uint32_t count,
+		uint64_t offset, uint64_t bytes, int invalidate)
+{
+	const switch_dcache_op op = invalidate ? SWITCH_DCACHE_INVALIDATE : SWITCH_DCACHE_CLEAN;
+	while (bytes && (offset >> 12) < count) {
+		const uint64_t within = offset & 4095;
+		const uint64_t span = bytes < 4096 - within ? bytes : 4096 - within;
+		const uint64_t pa = pages[offset >> 12] + within;
+		if (switch_dma_pa_managed(pa))
+			switch_dcache_phys_lines(op, pa, span);
+		offset += span;
+		bytes -= span;
+	}
+	switch_dcache_sync();
+}
+
+extern "C" void switch_gpu_backing_retire(void);
+static void *switch_backing_retire_work;
+
+extern "C" int switch_gpu_backing_prepare_retirement(void)
+{
+	if (!switch_backing_retire_work)
+		switch_backing_retire_work = nvxnu_work_alloc([](void *) { switch_gpu_backing_retire(); }, nullptr);
+	return switch_backing_retire_work ? 0 : -12;
+}
+
+extern "C" void switch_gpu_backing_schedule_retirement(void)
+{
+	nvxnu_work_schedule(switch_backing_retire_work);
+}
+
 // The system's page faults so far (every vm_fault) and those that zero-filled a page: XNU's own counters, as vm_stat reads
 // them (the stats' "mem" line takes the window's deltas). user_* stay 0: they need user-fault timing, which this
 // kernel's XNU does not carry.

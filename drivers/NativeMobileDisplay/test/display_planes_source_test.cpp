@@ -77,7 +77,7 @@ TEST(DisplayPlanesSource, PlaneAccessorsAreTegraVics)
 
 TEST(DisplayPlanesSource, DriverFollowsTheRules)
 {
-    const std::string source = SourceText("../NativeLegacyDisplay.cpp");
+    const std::string source = (SourceText("../NativeLegacyDisplay.cpp") + SourceText("../SwitchScanoutStart.h"));
     const std::string planes = SourceText("../NativePlanesDisplay.h");
     EXPECT_THAT(source, HasSubstr("#include \"NativePlanesDisplay.h\""));
     // validateSwap mirrors the published limits through checkUpdated; the UI's memory is still bounded.
@@ -106,7 +106,7 @@ TEST(DisplayPlanesSource, DriverFollowsTheRules)
     EXPECT_THAT(frame, HasSubstr("planesOff("));
     EXPECT_THAT(source, HasSubstr("if (status & kFrameEndInt)\n            planeFrameEnd();"));
     // The first client frame's swap retires at its own latch (latchRetire is on from the plane probe, before it).
-    EXPECT_THAT(Method(source, "    void startRotation()\n"), HasSubstr("entrySeq[target] = seqOf(flipRequest);"));
+    EXPECT_THAT(Method(source, "    void startRotation(int target = kNoBuffer)\n"), HasSubstr("entrySeq[target] = seqOf(flipRequest);"));
     EXPECT_THAT(Method(source, "    void checkRotation()\n"), HasSubstr("retireThrough(entrySeq[asked], stamp);"));
     // Swaps wait while the plane probe covers the screen; a window B set out after planes went off never panics.
     EXPECT_THAT(kick, HasSubstr("if (planeProbe.active()) {"));
@@ -153,7 +153,7 @@ TEST(DisplayPlanesSource, DriverFollowsTheRules)
 // a flip or window B).
 TEST(DisplayPlanesSource, TheConsoleHoldKeepsTheScreen)
 {
-    const std::string source = SourceText("../NativeLegacyDisplay.cpp");
+    const std::string source = (SourceText("../NativeLegacyDisplay.cpp") + SourceText("../SwitchScanoutStart.h"));
     const std::string planes = SourceText("../NativePlanesDisplay.h");
     EXPECT_EQ(Count(source, "switch_console_hold"), 4u);  // the declaration, consoleHolds and its comment
     const std::string holds = Method(source, "    bool consoleHolds() const\n");
@@ -242,7 +242,7 @@ TEST(DisplayPlanesSource, Ios27CoreVideoMakesNoCompressedSurfaces)
 // A detached layer refused for its format or layout is logged with its surface's geometry on debug kernels only.
 TEST(DisplayPlanesSource, RefusedLayoutsLoggedOnlyByDebugKernels)
 {
-    const std::string source = SourceText("../NativeLegacyDisplay.cpp");
+    const std::string source = (SourceText("../NativeLegacyDisplay.cpp") + SourceText("../SwitchScanoutStart.h"));
     const std::string totals = SourceText("../NativePlanesTotals.h");
     ExpectBefore(source,
                  "reason = native_planes::checkUpdated(updated, background, hasSurface, layers, width, height);",
@@ -260,7 +260,7 @@ TEST(DisplayPlanesSource, RefusedLayoutsLoggedOnlyByDebugKernels)
 // present carries drops such a change; nothing writes them from the kick.
 TEST(DisplayPlanesSource, WindowBWaitsForTheGpuOnSurfacesItRenders)
 {
-    const std::string source = SourceText("../NativeLegacyDisplay.cpp");
+    const std::string source = (SourceText("../NativeLegacyDisplay.cpp") + SourceText("../SwitchScanoutStart.h"));
     const std::string planes = SourceText("../NativePlanesDisplay.h");
     const std::string fence = SourceText("../NativePlaneFenceDisplay.h");
     for (const char *offer : {"    bool offerGpuCopy(", "    bool offerDirect("}) {

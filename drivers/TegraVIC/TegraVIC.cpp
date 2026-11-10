@@ -48,7 +48,10 @@
 #include "../TegraHost1x/TegraHost1x.h"
 #include "../TegraSMMU/TegraSMMU.h"
 #include "../TegraSMMU/TegraSMMUDomain.h"
+#include "../TegraSMMU/TegraSMMUSpace.h"
 #include "TegraVIC.h"
+#include "SwitchVICJobs.h"
+#include "SwitchVICMapping.h"
 #include "../../kits/SwitchCAR/SwitchCAR.h"
 #include "../../kits/SwitchCAR/SwitchPMC.h"
 #include "../../kits/SwitchDMA/SwitchDMABuffer.h"
@@ -71,7 +74,7 @@ constexpr uint32_t kThiMethod0 = 0x40;  // THI METHOD0 (offset) then METHOD1 (da
 constexpr uint64_t kMcPA = 0x70019000;
 constexpr uint32_t kPartition = 23;                           // TEGRA_POWERGATE_VIC
 constexpr unsigned kClock = 178;                              // TEGRA210_CLK_VIC03: CAR bank X bit 18, also its reset
-constexpr uint64_t kArenaBytes = 4ULL * SWITCH_HW_PAGE_SIZE;  // the configuration slot and the filter (0x3000)
+constexpr uint64_t kArenaBytes = kSwitchVICConfigBytes + 0x3000;
 constexpr uint32_t kAsid = TEGRA_SMMU_ASID_VIC;
 
 enum : uint32_t {  // clock and reset controller
@@ -115,25 +118,18 @@ char gLine[256];
 // SMMU domain: one page directory, the identity tables of the kernel buffers and the windows' tables.
 constexpr uint32_t kWindowTables = static_cast<uint32_t>(kTegraVICWindowBytes >> 22);  // 4 MiB per table
 constexpr uint32_t kIdentityTables = 4;  // the arena and the firmware: at most two 4 MiB sections each
-constexpr uint32_t kTables = 1 + TEGRA_VIC_WINDOWS * kWindowTables + kIdentityTables;
+constexpr uint64_t kMappingBase = 0x40000000, kMappingBytes = 1ULL << 30;
+constexpr uint32_t kTables = 1 + TEGRA_VIC_WINDOWS * kWindowTables + kIdentityTables + (kMappingBytes >> 22);
 TegraSMMUDomain gDomain;  // directory = page 0, the windows' tables pages 1.., then the identity tables
 uint32_t gWindowMapped[TEGRA_VIC_WINDOWS];  // pages mapped from each window's start
-
-// The job engine. A job's wait is bounded by kQueueUs plus one microsecond per 8 pixels read and written (VIC does
-// several per clock at 408 MHz), at most kMaxBoundUs: only a hung engine gets there. A job that first waits for the
-// copy engine (an acquire) gets kAcquireBoundUs more, a whole 128 MiB window's copy several times over.
-constexpr uint64_t kQueueUs = 2000000, kMaxBoundUs = 30000000, kAcquireBoundUs = 2000000;
-
-inline uint32_t jobBoundUs(const TegraVICJob *job)
-{
-    const uint64_t us = kQueueUs + job->pixels / 8;
-    return static_cast<uint32_t>(us < kMaxBoundUs ? us : kMaxBoundUs);
-}
+TegraSMMUSpace gMappingSpace;
+uint32_t gMappingBitmap[TegraSMMUSpace::bitmapWords(kMappingBytes)];
+IOLock *gMappingLock;
 
 IOLock *gJobLock;    // one job at a time: map, run, unmap
 IOLock *gStateLock;  // suspend/resume against jobs
-uint32_t gSyncpt, gNext;
-bool gUp, gWedged, gSuspended;
+uint32_t gSyncpt;
+bool gUp, gWedged;
 TegraVICBuffer gConfig, gFilter;
 
 const char *falconState()
@@ -196,6 +192,10 @@ bool smmuSetUp()
             return false;
         }
     }
+    if (!gDomain.reserve(kMappingBase, kMappingBytes) ||
+        !gMappingSpace.init(kMappingBase, kMappingBytes, gMappingBitmap,
+                            TegraSMMUSpace::bitmapWords(kMappingBytes)))
+        return false;
     const bool identities = identity(gFirmware, false) && identity(gArena, true);
     switch_dcache_clean(gTables.va, gTables.size);
     uintptr_t low = 0;
@@ -332,14 +332,6 @@ void park()
     switch_car_clock_disable(kClock);
 }
 
-[[noreturn]] void timedOut(uint32_t fence, uint64_t us)
-{
-    char host[200];
-    tegra_host1x_describe_channel(TEGRA_HOST1X_CHANNEL_VIC, host, sizeof(host));
-    panic("TegraVIC: job fence %u not reached in %llu ms (syncpoint %u at %u); %s; %s", fence, us / 1000, gSyncpt,
-          tegra_host1x_syncpt_read(gSyncpt), falconState(), host);
-}
-
 void engineSuspend();
 void engineResume();
 
@@ -360,7 +352,7 @@ bool allocate()
     }
     memcpy(gFirmware.va, tegra_vic_fw_start, gImage.size);
     switch_dcache_clean(gFirmware.va, gImage.size);
-    return tegra_vic_buffer(SWITCH_HW_PAGE_SIZE, &gConfig) == 0 && tegra_vic_buffer(0x3000, &gFilter) == 0;
+    return tegra_vic_buffer(kSwitchVICConfigBytes, &gConfig) == 0 && tegra_vic_buffer(0x3000, &gFilter) == 0;
 }
 
 void giveBack()
@@ -380,7 +372,8 @@ void bringUp(void *, wait_result_t)
     gMc = switch_mmio_map(kMcPA, 0x1000);
     gJobLock = IOLockAlloc();
     gStateLock = IOLockAlloc();
-    if (!gVic || !gMc || !gJobLock || !gStateLock) {
+    gMappingLock = IOLockAlloc();
+    if (!gVic || !gMc || !gJobLock || !gStateLock || !gMappingLock || !switch_vic_mapping_start()) {
         IOLog("TegraVIC: V0 FAIL no mapping\n");
         return;
     }
@@ -432,7 +425,12 @@ void bringUp(void *, wait_result_t)
         "us; %s\n",
         gFceSize, id, from, tegra_host1x_syncpt_read(id), switch_now_us() - start, falconState());
     gSyncpt = id;
-    gNext = tegra_host1x_syncpt_read(id);
+    if (!switch_vic_jobs_start(gConfig, id, tegra_host1x_syncpt_read(id))) {
+        IOLog("TegraVIC: V2 FAIL no completion worker\n");
+        park();
+        giveBack();
+        return;
+    }
     gUp = true;
     tegra_host1x_set_sleep_client(engineSuspend, engineResume);
     tegra_host1x_set_strict();
@@ -519,48 +517,60 @@ extern "C" void tegra_vic_window_clear(uint32_t window)
     smmuFlush();
 }
 
-// Job lock held. The configuration slot is the kernel's (no client maps it); the stream is SETCLASS, the job's methods
-// through THI METHOD0/METHOD1, then an OP_DONE increment of VIC's syncpoint, waited for by interrupt. With an acquire,
-// VIC's channel first waits on the hardware for another engine's syncpoint (the copy engine filling a bounce scratch).
+extern "C" uint64_t switch_vic_mapping_create(const uint64_t *pages, uint32_t count, bool writable)
+{
+    if (!gUp || !pages || !count || count > kMappingBytes / SWITCH_HW_PAGE_SIZE)
+        return 0;
+    for (uint32_t i = 0; i < count; ++i) {
+        if ((pages[i] & (SWITCH_HW_PAGE_SIZE - 1)) || pages[i] >= (1ULL << 34))
+            return 0;
+    }
+    const uint64_t bytes = static_cast<uint64_t>(count) * SWITCH_HW_PAGE_SIZE;
+    IOLockLock(gMappingLock);
+    uint64_t address = gMappingSpace.alloc(bytes);
+    if (address && !gDomain.map(address, pages, count, writable)) {
+        gDomain.unmap(address, count);
+        gMappingSpace.release(address, bytes);
+        address = 0;
+    }
+    uintptr_t low = 0, high = 0;
+    if (gDomain.takeDirty(&low, &high)) {
+        switch_dcache_clean(reinterpret_cast<void *>(low), high - low);
+        smmuFlush();
+    }
+    IOLockUnlock(gMappingLock);
+    return address;
+}
+
+extern "C" void switch_vic_mapping_destroy(uint64_t address, uint32_t count)
+{
+    IOLockLock(gMappingLock);
+    if (gMappingSpace.release(address, static_cast<uint64_t>(count) * SWITCH_HW_PAGE_SIZE)) {
+        gDomain.unmap(address, count);
+        uintptr_t low = 0, high = 0;
+        if (gDomain.takeDirty(&low, &high)) {
+            switch_dcache_clean(reinterpret_cast<void *>(low), high - low);
+            smmuFlush();
+        }
+    }
+    IOLockUnlock(gMappingLock);
+}
+
 extern "C" int tegra_vic_run_after(const TegraVICJob *job, const TegraVICAcquire *acquire, uint64_t *busyUs,
                                    uint32_t *fence)
 {
-    if (!gUp || job->count > TEGRA_VIC_MAX_METHODS)
+    if (!gUp)
         return -19;
-    IOLockLock(gStateLock);
-    while (gSuspended)
-        IOLockSleep(gStateLock, &gSuspended, THREAD_UNINT);
-    if (gWedged) {
-        IOLockUnlock(gStateLock);
-        return -19;
-    }
-    memcpy(gConfig.va, job->config, TEGRA_VIC_CONFIG_BYTES);
-    switch_dcache_clean(gConfig.va, TEGRA_VIC_CONFIG_BYTES);
-    uint32_t words[2 + 1 + 3 * TEGRA_VIC_MAX_METHODS + 1];
-    uint32_t n = 0;
-    if (acquire)
-        n += tegra_host1x_op_wait_syncpt(words, acquire->syncpt, acquire->threshold);
-    words[n++] = tegra_host1x_op_setclass(kClass, 0, 0);
-    for (uint32_t i = 0; i < job->count; i++) {
-        words[n++] = tegra_host1x_op_incr(kThiMethod0 / 4, 2);
-        words[n++] = job->method[i] / 4;
-        words[n++] = job->value[i];
-    }
-    words[n++] = tegra_host1x_op_incr_syncpt(TEGRA_HOST1X_COND_OP_DONE, gSyncpt);
-    const uint32_t next = gNext + 1;
     const uint64_t start = switch_now_us();
-    int ret = tegra_host1x_submit_on(TEGRA_HOST1X_CHANNEL_VIC, words, n);
+    uint32_t next = 0;
+    int ret = switch_vic_submit_after(job, acquire, nullptr, nullptr, &next);
     if (!ret) {
-        gNext = next;
-        ret = tegra_host1x_syncpt_wait(gSyncpt, next, (uint32_t)(jobBoundUs(job) + (acquire ? kAcquireBoundUs : 0)));
-        if (ret == TEGRA_HOST1X_ETIMEDOUT)
-            timedOut(next, switch_now_us() - start);
+        ret = switch_vic_wait(next);
+        if (fence)
+            *fence = next;
     }
     if (busyUs)
         *busyUs = switch_now_us() - start;
-    if (fence)
-        *fence = next;
-    IOLockUnlock(gStateLock);
     return ret;
 }
 
@@ -583,7 +593,7 @@ void engineSuspend()
 {
     IOLockLock(gJobLock);
     IOLockLock(gStateLock);
-    gSuspended = true;
+    switch_vic_jobs_suspend();
     smmuDetach();
     switch_car_reset_assert(kClock);
     IODelay(2);
@@ -611,9 +621,7 @@ void engineResume()
     }
     if (gWedged)
         IOLog("TegraVIC: resume FAIL %s; VIC refuses work\n", gLine[0] ? gLine : "V1");
-    gNext = tegra_host1x_syncpt_read(gSyncpt);
-    gSuspended = false;
-    IOLockWakeup(gStateLock, &gSuspended, false);
+    switch_vic_jobs_resume(!gWedged, tegra_host1x_syncpt_read(gSyncpt));
     IOLockUnlock(gStateLock);
 }
 }  // namespace

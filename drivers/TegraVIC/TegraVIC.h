@@ -45,9 +45,8 @@ int tegra_vic_buffer(uint64_t size, TegraVICBuffer *out);  // from the kernel ar
 // `writable` 0 maps them read-only for the engine. Returns the window's address.
 uint64_t tegra_vic_window_map(uint32_t window, const uint64_t *pages, uint32_t count, bool writable);
 void tegra_vic_window_clear(uint32_t window);
-// Writes the job's configuration to the kernel slot, queues its methods on VIC's host1x channel behind an OP_DONE
-// increment of VIC's syncpoint, and sleeps until that increment's interrupt (bounded: a job past the bound panics).
-// Serialised: one job runs at a time.
+// The synchronous entry point uses the configuration ring and sleeps on its completion worker.
+// Legacy window callers hold tegra_vic_lock across map, submission, completion and unmap.
 int tegra_vic_run(const TegraVICJob *job, uint64_t *busyUs);
 
 // Another engine's syncpoint threshold VIC's channel waits for on the hardware before the job starts.

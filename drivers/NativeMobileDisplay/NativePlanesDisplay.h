@@ -697,6 +697,9 @@ void planeProbeWritePixel(uint32_t value)
 // framebuffer), so the CRC depends on window B alone and the console seems to pause for about 20 frames.
 bool planeProbeTick()
 {
+#if (defined(DEVELOPMENT) && DEVELOPMENT) || (defined(DEBUG) && DEBUG)
+    if (!scanoutQualification)
+        return false;
     if (planeProbe.active()) {
         const uint32_t underflow = dc[kDcIntStatus] & kWinBUnderflowInt;
         if (underflow)
@@ -721,6 +724,9 @@ bool planeProbeTick()
     planeProbeRan = true;
     planeProbeStart();
     return planeProbe.active();
+#else
+    return false;
+#endif
 }
 
 void planeProbeStart()

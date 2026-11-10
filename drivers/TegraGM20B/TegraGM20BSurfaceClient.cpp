@@ -19,6 +19,8 @@
 
 // IOSurfaceRoot::lookupSurface(id, task), by address (kits/SwitchABI IOSurface, bound through TegraVIC's bindings)
 extern "C" OSObject *tegra_gm20b_ios_lookup(IOService *root, uint32_t id, task_t task);
+extern "C" IOMemoryDescriptor *tegra_vic_ios_memory(OSObject *surface);
+extern "C" uint64_t tegra_vic_ios_alloc_size(OSObject *surface);
 
 namespace
 {
@@ -132,6 +134,30 @@ extern "C" int tgm_surface_client_memory(uint32_t id, void *task)
 		static_cast<int>(at<uint64_t>(surface, OriginalIOSurface::clientMemory) != 0);
 	surface->release();
 	return client;
+}
+
+extern "C" int switch_gpu_surface_pages_match(uint32_t id, void *task, const uint64_t *pages, uint32_t count)
+{
+	OSObject *surface = tgm_surface_lookup(id, task);
+	if (!surface)
+		return 0;
+	IOMemoryDescriptor *memory = tegra_vic_ios_memory(surface);
+	const uint64_t base = at<uint64_t>(surface, OriginalIOSurface::baseOffset);
+	const uint64_t bytes = tegra_vic_ios_alloc_size(surface);
+	bool matches = memory && pages && count && !(base & 4095) &&
+		uint64_t(count) <= ((bytes + 4095) >> 12) && base <= memory->getLength() &&
+		bytes <= memory->getLength() - base;
+	const bool prepared = matches && memory->prepare() == kIOReturnSuccess;
+	matches &= prepared;
+	for (uint32_t i = 0; matches && i < count; ++i) {
+		IOByteCount length = 0;
+		const addr64_t pa = memory->getPhysicalSegment(base + (uint64_t(i) << 12), &length, kIOMemoryMapperNone);
+		matches = length && pa == pages[i];
+	}
+	if (prepared)
+		memory->complete();
+	surface->release();
+	return matches ? 1 : 0;
 }
 
 extern "C" void tgm_memory_release(void *memory)

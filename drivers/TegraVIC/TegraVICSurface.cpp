@@ -65,6 +65,7 @@ extern "C" IOReturn tegra_vic_surface_lookup(uint32_t id, task_t task, TegraVICS
     if (!surface)
         return kIOReturnBadArgument;  // as AppleM2ScalerCSCDriver: not this task's surface
     out->surface = surface;
+    out->id = id;
     out->memory = tegra_vic_ios_memory(surface);
     TegraVICSurfaceDesc *d = &out->desc;
     d->fourcc = tegra_vic_ios_format(surface);

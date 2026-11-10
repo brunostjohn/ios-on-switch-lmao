@@ -12,6 +12,7 @@
 #include "../../kits/SwitchDMA/SwitchDMAPages.h"
 
 struct switch_dma_buffer;
+struct switch_gpu_backing;
 
 // One buffer NVDEC reads or writes: any RAM pages, mapped at `iova` in NVDEC's address space, 64 KiB granular, zeroed
 // and clean in the caches when allocated.
@@ -19,6 +20,7 @@ struct TegraNVDECBlock {
     uint64_t iova, size;
     uint8_t *va;
     switch_dma_pages pages;  // the memory a client maps, and its page list (VIC maps a picture's)
+    switch_gpu_backing *backing;
 };
 
 // Resolves a submit's buffer handle; every user client supplies its own.

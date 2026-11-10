@@ -411,37 +411,98 @@ int Kernel::order(uint32_t channel, uint32_t flags, uint32_t seqno, uint32_t &wa
     return kr;
 }
 
+bool Kernel::cpuAccess(const Bo &bo, uint64_t offset, uint64_t bytes, uint32_t access, bool acquire)
+{
+    if (!(info_.flags & TegraGM20BInfoCpuAccess) || !bytes || offset > bo.bytes || bytes > bo.bytes - offset) {
+        err_ = "CPU ownership unavailable or invalid range";
+        return false;
+    }
+    const TegraGM20BAbiCpuAccess in = {bo.handle, offset, bytes, access, 0};
+    const int kr = call(acquire ? TegraGM20BMethodCpuAcquire : TegraGM20BMethodCpuRelease, &in, sizeof in, nullptr, 0);
+    if (kr != KERN_SUCCESS)
+        err_ = failed(acquire ? "CpuAcquire" : "CpuRelease", kr);
+    return kr == KERN_SUCCESS;
+}
+
 bool Kernel::exec(uint32_t channel, const TegraGM20BAbiPush *pushes, uint32_t count, uint32_t last, uint32_t &seqno,
                   SurfaceList *surfaces)
 {
-    TegraGM20BAbiExec e;
-    e.channel = channel;
-    e.count = count;
-    memcpy(e.pushes, pushes, count * sizeof pushes[0]);
-    if (count && importsWritten_.load(std::memory_order_relaxed))
-        e.pushes[0].flags |= TegraGM20BPushImportsWritten;
-    const size_t in = offsetof(TegraGM20BAbiExec, pushes) + count * sizeof pushes[0];
-    TegraGM20BAbiExecReply r = {};
-    const bool listed = surfaces && (info_.flags & TegraGM20BInfoExecSurfaces);
+    if (count > maxPushes() || (surfaces && !surfaces->valid())) {
+        err_ = failed("Submit resource capacity", kIOReturnBadArgument);
+        return false;
+    }
+    // Initial context packets retain the legacy path until their control BOs are named.
+    const bool addressed = exactJobs() && surfaces;
+    TegraGM20BAbiExec legacyExec = {};
+    size_t listBytes = 0;
+    const TegraGM20BAbiExecSurfaces *list = nullptr;
+    if (!addressed && surfaces && (info_.flags & TegraGM20BInfoExecSurfaces)) {
+        list = surfaces->legacy(channel, listBytes);
+        if (!list) {
+            err_ = "The kernel cannot represent every resource dependency in this job";
+            return false;
+        }
+    }
+    const uint32_t nuses = addressed ? uint32_t(surfaces->uses().size()) : list ? list->count : 0;
+    const size_t submitBytes =
+        sizeof(TegraGM20BAbiSubmit) + count * sizeof(pushes[0]) + nuses * sizeof(TegraGM20BAbiSurfaceUse);
+    const bool atomic = addressed || ((info_.flags & TegraGM20BInfoSubmit) && submitBytes <= TegraGM20BMaxSubmitBytes);
+    // Reused per submitting thread; no shared scratch lock is held across a channel's fence wait.
+    thread_local std::vector<uint64_t> storage;
+    if (atomic) {
+        storage.resize((submitBytes + sizeof(uint64_t) - 1) / sizeof(uint64_t));
+        const TegraGM20BAbiSubmit header = {channel, count, nuses,
+                                            addressed || list ? 0u : uint32_t(TegraGM20BExecSurfacesAll)};
+        auto *data = reinterpret_cast<uint8_t *>(storage.data());
+        memcpy(data, &header, sizeof header);
+        memcpy(data + sizeof header, pushes, count * sizeof pushes[0]);
+        if (nuses)
+            memcpy(data + sizeof header + count * sizeof pushes[0], addressed ? surfaces->uses().data() : list->uses,
+                   nuses * sizeof(TegraGM20BAbiSurfaceUse));
+        if (count && !addressed && importsWritten_.load(std::memory_order_relaxed))
+            reinterpret_cast<TegraGM20BAbiPush *>(data + sizeof header)[0].flags |= TegraGM20BPushImportsWritten;
+    } else {
+        if (count > TegraGM20BMaxPushes) {
+            err_ = failed("Exec", kIOReturnBadArgument);
+            return false;
+        }
+        legacyExec.channel = channel;
+        legacyExec.count = count;
+        memcpy(legacyExec.pushes, pushes, count * sizeof pushes[0]);
+        if (count && importsWritten_.load(std::memory_order_relaxed))
+            legacyExec.pushes[0].flags |= TegraGM20BPushImportsWritten;
+    }
+    const TegraGM20BAbiSubmitAddress address = {uint64_t(reinterpret_cast<uintptr_t>(storage.data())),
+                                                uint32_t(submitBytes), 0};
+    TegraGM20BAbiExecReply reply = {};
     const uint32_t at = opened();
     for (;;) {
-        if (listed) {
-            size_t bytes = 0;
-            const TegraGM20BAbiExecSurfaces &list = surfaces->record(channel, bytes);
-            call(TegraGM20BMethodExecSurfaces, &list, bytes, nullptr, 0);
+        int kr;
+        if (addressed)
+            kr = call(TegraGM20BMethodSubmitAddress, &address, sizeof address, &reply, sizeof reply);
+        else if (atomic)
+            kr = call(TegraGM20BMethodSubmit, storage.data(), submitBytes, &reply, sizeof reply);
+        else {
+            if (list) {
+                kr = call(TegraGM20BMethodExecSurfaces, list, listBytes, nullptr, 0);
+                if (kr != KERN_SUCCESS) {
+                    err_ = failed("ExecSurfaces", kr);
+                    return false;
+                }
+            }
+            kr = call(TegraGM20BMethodExec, &legacyExec, offsetof(TegraGM20BAbiExec, pushes) + count * sizeof pushes[0],
+                      &reply, sizeof reply);
         }
-        const int kr = call(TegraGM20BMethodExec, &e, in, &r, sizeof r);
         if (kr == KERN_SUCCESS) {
-            seqno = r.seqno;
+            seqno = reply.seqno;
             return true;
         }
         if (kr == kIOReturnNotResponding)
             markLost(channel, at);
         if (kr != kIOReturnBusy || !last) {
-            err_ = failed("Exec", kr);
+            err_ = failed(addressed ? "SubmitAddress" : atomic ? "Submit" : "Exec", kr);
             return false;
         }
-        // GPFIFO full: block on the last submission's fence (interrupt-driven in the kext), never spin
         if (!wait(channel, last))
             return false;
     }

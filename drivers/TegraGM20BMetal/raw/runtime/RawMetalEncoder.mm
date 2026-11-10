@@ -196,7 +196,7 @@ static bool rawResolve(MTLRenderPassColorAttachmentDescriptor *a, RMTexture *fro
     e->_cb = self;
     _active = e;
     [self closeEncoder];
-    _encAt = _tape.size();  // its first command is the next one recorded
+    _encAt = _plan.size();  // its first command is the next one recorded
     _encOpen = true;
     _encRefused = false;
 }

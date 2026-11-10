@@ -58,7 +58,8 @@ public:
     }
 
     void setBytes(uint32_t slot, const void *bytes, uint32_t length);
-    void setBytesAt(uint32_t slot, uint64_t va, uint32_t length);  // bytes already where the GPU reads them
+    void setBytesAt(uint32_t slot, uint64_t va, uint32_t length,
+                    const Buffer *allocation = nullptr);  // bytes already where the GPU reads them
     void setBuffer(uint32_t slot, const Buffer *buffer, uint64_t offset);
     void setBufferOffset(uint32_t slot, uint64_t offset);
     void setTexture(uint32_t slot, const Texture *t);
@@ -77,6 +78,7 @@ private:
         uint32_t size = 0;
         const Buffer *buffer = nullptr;
         uint64_t offset = 0;
+        uint64_t resourceVa = 0;
     };
 
     CommandBuffer &cb_;

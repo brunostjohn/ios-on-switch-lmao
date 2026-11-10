@@ -9,65 +9,71 @@
 static void markDirty(void *o)
 {
     id object = (__bridge id)o;
-    if ([object isKindOfClass:[RMBuffer class]])
-        ((RMBuffer *)object)->_gpuDirty = true;
-    else if ([object isKindOfClass:[RMTexture class]])
+    if (RMBuffer *buffer = cpuBufferOfResource(object)) {
+        // No-copy clients may keep their original pointer forever. Publish GPU writes before completion or its event,
+        // without requiring a new -contents call. The submission flushed dirty CPU lines before any GPU write.
+        if (!buffer->_raw.wc && buffer->_raw.cpu) {
+#if defined(__aarch64__)
+            for (uintptr_t at = uintptr_t(buffer->_raw.cpu) & ~uintptr_t(63);
+                 at < uintptr_t(buffer->_raw.cpu) + buffer->_raw.length; at += 64)
+                __asm__ volatile("dc civac, %0" ::"r"(at) : "memory");
+            __asm__ volatile("dsb sy" ::: "memory");
+#endif
+        }
+        buffer->_gpuDirty = false;
+    }
+    if ([object isKindOfClass:[RMTexture class]])
         ((RMTexture *)object)->_gpuDirty = true;
 }
 
 void forEachWritten(RMCommandBuffer *cb, size_t from, size_t to, void (*written)(void *))
 {
-    bool compute = false;
-    for (size_t at = from; at < to; at++) {
-        const Cmd &c = cb->_tape[at];
-        switch (c.op) {
-        case OpRender:
-            for (const RMPass::Color &a : cb->_passes[c.x].color)
-                if (a.texture)
-                    written((__bridge void *)a.texture);
-            break;
-        case OpCompute:
-            compute = true;
-            break;
-        case OpBlit:
-            compute = false;
-            break;
-        case OpEnd:
-            compute = false;
-            break;
-        case OpCopyTexture:
-        case OpCopyBufferToTexture:
-        case OpMipmaps:
-            written(c.op == OpMipmaps ? c.obj : c.obj2);
-            break;
-        case OpCopyBuffer:
-        case OpCopyTextureToBuffer:
-            written(c.obj2);
-            break;
-        case OpFillBuffer:
-            written(c.obj);
-            break;
-        case OpBuffer:
-        case OpTexture:
-            if (compute)
-                written(c.obj);
-            break;
-        case OpKernelBuffer:
-        case OpKernelTexture:
-            written(c.obj);
-            break;
-        case OpInvocation:  // compute and other recorded calls: every buffer and texture they name
-            raw::forEachObject((__bridge NSInvocation *)c.obj, [written](id o) {
-                written((__bridge void *)o);
-            });
-            break;
-        default:
-            break;
-        }
-    }
+    cb->_plan.forEachWritten(from, to, written);
 }
 
-// Scheduled: handlers in order on the device's handler queue (never inside commit), then waitUntilScheduled returns.
+void markWrittenRange(RMCommandBuffer *cb, size_t from, size_t to)
+{
+    forEachWritten(cb, from, to, markDirty);
+}
+
+void retireRawRange(RMCommandBuffer *cb, size_t from, size_t to)
+{
+    {
+        std::lock_guard<std::mutex> l(cb->_lock);
+        ++cb->_segmentPending;
+    }
+    {
+        std::lock_guard<std::mutex> l(gRM->doneLock);
+        gRM->inflight.push_back({cb, cb->_seqno, from, to});
+    }
+    gRM->doneChanged.notify_one();
+}
+
+dispatch_queue_t scheduledQueueLocked(RMCommandBuffer *cb)
+{
+    if (!cb->_scheduledQueue)
+        cb->_scheduledQueue = followingSerialQueue("com.brunostjohn.switch.raw.command.handlers");
+    return cb->_scheduledQueue;
+}
+
+static void dispatchScheduledLocked(RMCommandBuffer *cb, NSArray *handlers)
+{
+    if (!handlers.count) {
+        cb->_scheduledDone = true;
+        return;
+    }
+    dispatch_async(scheduledQueueLocked(cb), ^{
+        for (MTLCommandBufferHandler h in handlers)
+            h((id<MTLCommandBuffer>)cb);
+        {
+            std::lock_guard<std::mutex> l(cb->_lock);
+            cb->_scheduledDone = true;
+        }
+        cb->_changed.notify_all();
+    });
+}
+
+// A command buffer's handlers stay ordered without holding up handlers for another command buffer it waits for.
 void scheduled(RMCommandBuffer *cb)
 {
     unhold(cb);
@@ -86,17 +92,8 @@ void scheduled(RMCommandBuffer *cb)
         // the handler queue
         if (!handlers.count)
             cb->_scheduledDone = true;
-        else  // queued under the lock: a finish() that finds them not done queues its handlers behind them
-            dispatch_async(gRM->handlers, ^{
-                for (MTLCommandBufferHandler h in handlers)
-                    h((id<MTLCommandBuffer>)cb);
-                {
-                    std::lock_guard<std::mutex> g(cb->_lock);
-                    cb->_scheduledDone = true;
-                    // a handler added meanwhile ran at once (addScheduledHandler)
-                }
-                cb->_changed.notify_all();
-            });
+        else
+            dispatchScheduledLocked(cb, handlers);
     }
     if (!handlers.count)
         cb->_changed.notify_all();
@@ -108,32 +105,56 @@ void scheduled(RMCommandBuffer *cb)
 // for NMB_IDLE_RELEASE_MS (each completion moves the deadline)
 GpuMemoryRelease &gRawRelease = *new GpuMemoryRelease;
 
+void segmentCompleted(RMCommandBuffer *cb, NSError *error, size_t from, size_t to)
+{
+    markWrittenRange(cb, from, to);
+    bool ready;
+    {
+        std::lock_guard<std::mutex> l(cb->_lock);
+        if (error && !cb->_segError)
+            cb->_segError = error;
+        --cb->_segmentPending;
+        ready = cb->_finishReady && !cb->_segmentPending;
+    }
+    wakeSubmit();
+    if (ready)
+        finish(cb, nil);
+}
+
 void finish(RMCommandBuffer *cb, NSError *error)
 {
+    {
+        std::lock_guard<std::mutex> l(cb->_lock);
+        if (cb->_finishing)
+            return;
+        if (error && !cb->_segError)
+            cb->_segError = error;
+        cb->_finishReady = true;
+        if (cb->_segmentPending)
+            return;
+        cb->_finishing = true;
+        error = cb->_segError;
+    }
     gRM->stats.finished.fetch_add(1, std::memory_order_relaxed);
     unhold(cb);
-    forEachWritten(cb, 0, cb->_tape.size(), markDirty);
-    if (!cb->_signalsOnM2v)
-        for (const Cmd &c : cb->_tape)
-            if (c.op == OpSignalEvent)
-                [(id<MTLSharedEvent>)(__bridge id)c.obj setSignaledValue:c.c];
+    if (error)
+        forgetSignals();
     // A completed command buffer is scheduled. Its scheduled handlers scheduled() never took run here, before the completed ones:
     // one whose fence passed before its submitting thread's scheduled() (the completion thread wakes on work it was just handed),
     // one that never reached a GPU. Ones scheduled() already queued run first, the completed ones queued behind them on the
     // handler queue.
-    NSArray *handlers, *scheduledHandlers = nil;
-    bool behindScheduled = false;
+    NSArray *handlers;
     {
         std::lock_guard<std::mutex> l(cb->_lock);
-        if (!cb->_scheduledSent) {
+        NSArray *scheduledHandlers = nil;
+        const bool sendScheduled = !cb->_scheduledSent;
+        if (sendScheduled) {
             scheduledHandlers = cb->_scheduledHandlers;
             cb->_scheduledHandlers = nil;
             cb->_kernelEnd = hostSeconds();
 #if SWITCH_FRAME_TIMELINE
             gRM->stats.scheduledByFinish++;
 #endif
-        } else {
-            behindScheduled = !cb->_scheduledDone;
         }
         cb->_status = error ? MTLCommandBufferStatusError : MTLCommandBufferStatusCompleted;
         cb->_error = error;
@@ -150,10 +171,11 @@ void finish(RMCommandBuffer *cb, NSError *error)
         cb->_completedHandlers = nil;
         cb->_completedSent = true;
         cb->_scheduledSent = true;  // scheduled() runs no more
+        if (sendScheduled)
+            dispatchScheduledLocked(cb, scheduledHandlers);
     }
+    cb->_changed.notify_all();
     void (^run)(void) = ^{
-        for (MTLCommandBufferHandler h in scheduledHandlers)
-            h((id<MTLCommandBuffer>)cb);
         for (MTLCommandBufferHandler h in handlers)
             h((id<MTLCommandBuffer>)cb);
         {
@@ -169,17 +191,25 @@ void finish(RMCommandBuffer *cb, NSError *error)
         switch_frame::finished(cb->_frame);
 #endif
     };
-    dispatch_queue_t q = cb->_queue ? cb->_queue->_completionQueue : nil;
-    if (behindScheduled)
-        dispatch_async(gRM->handlers, ^{
-            if (q)
-                dispatch_async(q, run);
+    // A handler may submit and wait for another command buffer. Neither GPU worker nor the serial scheduled-handler queue
+    // can run it inline without preventing that work from completing.
+    bool inlineCompletion;
+    {
+        std::lock_guard<std::mutex> l(cb->_lock);
+        dispatch_queue_t q = cb->_queue ? cb->_queue->_completionQueue : nil;
+        inlineCompletion = !q && !cb->_scheduledQueue && !handlers.count;
+        if (!inlineCompletion) {
+            if (!q)
+                q = followingRootQueue();
+            if (cb->_scheduledQueue)
+                dispatch_async(cb->_scheduledQueue, ^{
+                    dispatch_async(q, run);
+                });
             else
-                run();
-        });
-    else if (q)
-        dispatch_async(q, run);
-    else
+                dispatch_async(q, run);
+        }
+    }
+    if (inlineCompletion)
         run();
 }
 
@@ -188,40 +218,46 @@ void completionLoop()
 {
     RawState &r = *gRM;
     for (;;) {
-        RMCommandBuffer *cb;
-        {
-            std::unique_lock<std::mutex> l(r.doneLock);
-            r.doneChanged.wait(l, [&] {
-                return !r.inflight.empty();
-            });
-            cb = r.inflight.front();
-        }
-        // false: the kernel killed the channel with it in flight (a GPU fault or hang); the next command buffer gets a new one
-        const bool ok = r.raw->wait(cb->_seqno);
-        if (!ok && r.raw->lostError() == raw::Device::kWaitRefused) {
-            os_log_error(
-                rawLog(),
-                "raw: command buffer %u failed: the kernel kept refusing to wait for it on a channel it called "
-                "healthy, so the channel was taken as killed",
-                cb->_seqno);
-        } else if (!ok) {
-            const uint64_t va = r.raw->lostFaultVa();
-            os_log_error(rawLog(),
-                         "raw: command buffer %u failed: the kernel killed its channel (error %u, fault VA 0x%llx%s%s)",
-                         cb->_seqno, r.raw->lostError(), (unsigned long long)va, va ? ": " : "",
-                         va ? r.raw->vaOwner(va).c_str() : "");
-        }
+        @autoreleasepool {
+            RMRawRetirement retired;
+            {
+                std::unique_lock<std::mutex> l(r.doneLock);
+                r.doneChanged.wait(l, [&] {
+                    return !r.inflight.empty();
+                });
+                retired = r.inflight.front();
+            }
+            RMCommandBuffer *cb = retired.buffer;
+            // false: the kernel killed the channel with it in flight (a GPU fault or hang); the next command buffer gets a new one
+            const bool ok = r.raw->wait(retired.seqno);
+            if (!ok && r.raw->lostError() == raw::Device::kWaitRefused) {
+                os_log_error(
+                    rawLog(),
+                    "raw: command buffer %u failed: the kernel kept refusing to wait for it on a channel it called "
+                    "healthy, so the channel was taken as killed",
+                    retired.seqno);
+            } else if (!ok) {
+                const uint64_t va = r.raw->lostFaultVa();
+                os_log_error(
+                    rawLog(),
+                    "raw: command buffer %u failed: the kernel killed its channel (error %u, fault VA 0x%llx%s%s)",
+                    retired.seqno, r.raw->lostError(), (unsigned long long)va, va ? ": " : "",
+                    va ? r.raw->vaOwner(va).c_str() : "");
+            }
 #if SWITCH_FRAME_TIMELINE
-        cb->_frame.mark(switch_frame::Fence);
-        switch_frame::trace(switch_frame::kFence, switch_frame::kPoint, cb->_frame.seq);
+            cb->_frame.mark(switch_frame::Fence);
+            switch_frame::trace(switch_frame::kFence, switch_frame::kPoint, cb->_frame.seq);
 #endif
-        {
-            std::lock_guard<std::mutex> l(r.doneLock);
-            r.inflight.pop_front();
+            {
+                std::lock_guard<std::mutex> l(r.doneLock);
+                r.inflight.pop_front();
+            }
+            segmentCompleted(cb,
+                             ok ? nil
+                                : [NSError errorWithDomain:MTLCommandBufferErrorDomain
+                                                      code:MTLCommandBufferErrorInternal
+                                                  userInfo:nil],
+                             retired.from, retired.to);
         }
-        finish(cb, ok ? nil
-                      : [NSError errorWithDomain:MTLCommandBufferErrorDomain
-                                            code:MTLCommandBufferErrorInternal
-                                        userInfo:nil]);
     }
 }

@@ -185,9 +185,13 @@ static void forwardCall(RMEncoder *e, SEL selector, const void *argument)
     // formats are not recorded, and every draw would hit enc.colorfmt for nothing, r7p5's "a=0 b=0")
     if (!_pipe || !_pipe->_raw || _cb->_encRefused)
         return;
+    if (_checkedGeneration == _cb->_plan.eligibilityGeneration() && _checkedPipeline == _pipe->_raw)
+        return;
     const raw::Pipeline *drawn = [self drawnRecord];
     if (!drawn)
         return;
+    _checkedGeneration = _cb->_plan.eligibilityGeneration();
+    _checkedPipeline = _pipe->_raw;
     const raw::Pipeline &pl = *drawn;
     for (uint32_t j = 0; j < 8; j++) {
         const uint32_t f = j < _count ? _formats[j] : 0;
@@ -383,6 +387,65 @@ static void forwardCall(RMEncoder *e, SEL selector, const void *argument)
 - (void)drawPrimitives:(MTLPrimitiveType)type vertexStart:(NSUInteger)start vertexCount:(NSUInteger)count
 {
     [self drawPrimitives:type vertexStart:start vertexCount:count instanceCount:1 baseInstance:0];
+}
+
+- (void)drawPrimitives:(MTLPrimitiveType)type
+          indirectBuffer:(id<MTLBuffer>)arguments
+    indirectBufferOffset:(NSUInteger)offset
+{
+    [self drawIndirect:type
+               indexed:NO
+             indexType:MTLIndexTypeUInt16
+           indexBuffer:nil
+           indexOffset:0
+             arguments:arguments
+                offset:offset];
+}
+
+- (void)drawIndexedPrimitives:(MTLPrimitiveType)type
+                    indexType:(MTLIndexType)indexType
+                  indexBuffer:(id<MTLBuffer>)indices
+            indexBufferOffset:(NSUInteger)indexOffset
+               indirectBuffer:(id<MTLBuffer>)arguments
+         indirectBufferOffset:(NSUInteger)offset
+{
+    [self drawIndirect:type
+               indexed:YES
+             indexType:indexType
+           indexBuffer:indices
+           indexOffset:indexOffset
+             arguments:arguments
+                offset:offset];
+}
+
+- (void)drawIndirect:(MTLPrimitiveType)type
+             indexed:(BOOL)indexed
+           indexType:(MTLIndexType)indexType
+         indexBuffer:(id<MTLBuffer>)indices
+         indexOffset:(NSUInteger)indexOffset
+           arguments:(id<MTLBuffer>)arguments
+              offset:(NSUInteger)offset
+{
+    SWITCH_API(ApiDraw);
+    const uint64_t bytes = indexed ? 20 : 16;
+    RMBuffer *buffer = [(id)arguments isKindOfClass:[RMBuffer class]] ? (RMBuffer *)arguments : nil;
+    RMBuffer *index = [(id)indices isKindOfClass:[RMBuffer class]] ? (RMBuffer *)indices : nil;
+    if (!buffer || (offset & 3) || offset > buffer->_raw.length || bytes > buffer->_raw.length - offset ||
+        (indexed && (!index || (indexType != MTLIndexTypeUInt16 && indexType != MTLIndexTypeUInt32) ||
+                     indexOffset > index->_raw.length || indexOffset % (indexType == MTLIndexTypeUInt16 ? 2 : 4)))) {
+        [_cb takeReason:WhyEncode why:@"indirect draw arguments or indices outside the buffer"];
+        hit(_cb, PredEncIndexedRange, offset, bytes);
+    }
+    [self checkDraw];
+    [_cb retain:arguments];
+    [_cb retain:indices];
+    Cmd operation = cmd(indexed ? OpDrawIndexedIndirect : OpDrawIndirect, uint8_t(type));
+    operation.obj = (__bridge void *)indices;
+    operation.obj2 = (__bridge void *)arguments;
+    operation.a = uint32_t(indexType);
+    operation.c = indexOffset;
+    operation.x = offset;
+    [_cb record:operation];
 }
 
 - (void)memoryBarrierWithScope:(MTLBarrierScope)scope

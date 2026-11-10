@@ -127,15 +127,14 @@ SplitState *Device::makeSplit(Pipeline &pl)
     return &s;
 }
 
-Pipeline *RenderEncoder::splitTwin(Pipeline *pl, uint32_t primitive, int32_t first, uint32_t count,
-                                   const PixelBox &limit) const
+Pipeline *RenderEncoder::splitTwin(Pipeline *pl, WrittenRegion::Analysis &analysis) const
 {
     const SplitSource *source = __atomic_load_n(&pl->splitSource, __ATOMIC_ACQUIRE);
     if (!source)
         return pl;
     PixelBox box;
-    if (!WrittenRegion::bounds(geometry(*pl, primitive, first, count, limit), box))
-        box = limit;
+    if (!analysis.bounds(box))
+        box = analysis.geometry().limit;
     if (box.empty() || uint64_t(box.x1 - box.x0) * (box.y1 - box.y0) < source->rec.thresholdPixels)
         return pl;
     for (uint8_t k = 0; k < source->rec.uboCount; k++) {
@@ -165,6 +164,7 @@ void RenderEncoder::launchSplit(Push &p, const Pipeline &twin, const uint32_t *s
     memset(params, 0, kSplitParamsBytes);
     memcpy(params, cb_->rootPush_, sizeof cb_->rootPush_);
     memcpy(params + kSplitFrontierAddress, &frontier, sizeof frontier);
+    cb_->useAddress(d.upload_.bo.va, true);
     l.cbufBytes[0] = kSplitParamsBytes;
     for (uint8_t k = 0; k < s.rec.uboCount; k++) {
         const uint32_t *desc = set + twin.rec->entry[pixelUboEntry(twin, s.rec.uboCbuf[k])].offset / 4;

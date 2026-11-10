@@ -301,7 +301,7 @@ extern "C" int tegra_gm20b_ce_copy_plane(const struct tegra_gm20b_ce_plane *src,
 					  done ? done->syncpt : TEGRA_GM20B_CE_NO_SYNCPT};
 		uint32_t *words = c.pushCpu + slot * (kPage / 4);
 		const tgm_push push = {kPushVa + slot * kPage,
-				       tgm_copy_push(words, &job, waits, nwaits), 0};
+				       tgm_copy_push(words, &job, waits, nwaits), 0, 0, 0};
 		ret = tgm_chan_exec(chan, &push, 1, &seqno, nullptr);
 	}
 	if (ret) {

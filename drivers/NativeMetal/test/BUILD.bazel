@@ -37,3 +37,14 @@ host_test(
     ],
     cxx_std = "c++17",
 )
+
+host_test(
+    name = "async_pipelines_test",
+    srcs = [
+        "async_pipelines_test.cpp",
+        "//drivers/NativeMetal:AsyncPipelines.h",
+    ],
+    copts = ["-x", "objective-c++", "-fobjc-arc"],
+    cxx_std = "c++17",
+    linkopts = ["-framework", "Foundation"],
+)

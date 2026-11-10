@@ -1,0 +1,149 @@
+// SPDX-License-Identifier: MIT
+#pragma once
+#include <chrono>
+#include <cstddef>
+#include <cstdint>
+#include <deque>
+#include <list>
+#include <vector>
+
+namespace raw {
+
+template <typename Key, typename Value> class SubmitQueue {
+    struct Entry {
+        Value value;
+        bool committed = false;
+    };
+
+    struct Queue {
+        Key key;
+        std::deque<Entry> entries;
+    };
+
+    std::list<Queue> queues_;
+    size_t size_ = 0;
+
+public:
+    void reserve(Key key, Value value)
+    {
+        Queue *unused = nullptr;
+        for (Queue &q : queues_) {
+            if (q.key == key) {
+                q.entries.push_back({value});
+                ++size_;
+                return;
+            }
+            if (q.entries.empty())
+                unused = &q;
+        }
+        if (unused) {
+            unused->key = key;
+            unused->entries.push_back({value});
+        } else {
+            queues_.push_back({key, {{value}}});
+        }
+        ++size_;
+    }
+
+    bool commit(Key key, Value value)
+    {
+        for (Queue &q : queues_)
+            if (q.key == key)
+                for (Entry &e : q.entries)
+                    if (e.value == value) {
+                        e.committed = true;
+                        return true;
+                    }
+        return false;
+    }
+
+    template <typename Ready> Value ready(Ready eligible) const
+    {
+        for (const Queue &q : queues_) {
+            if (q.entries.empty())
+                continue;
+            const Entry &e = q.entries.front();
+            if (e.committed && eligible(e.value))
+                return e.value;
+        }
+        return {};
+    }
+
+    void heads(std::vector<Value> &out) const
+    {
+        out.clear();
+        for (const Queue &q : queues_)
+            if (!q.entries.empty() && q.entries.front().committed)
+                out.push_back(q.entries.front().value);
+    }
+
+    bool retire(Key key, Value value)
+    {
+        for (auto at = queues_.begin(); at != queues_.end(); ++at) {
+            if (at->key != key)
+                continue;
+            if (at->entries.empty() || at->entries.front().value != value)
+                return false;
+            at->entries.pop_front();
+            --size_;
+            queues_.splice(queues_.end(), queues_, at);
+            return true;
+        }
+        return false;
+    }
+
+    // A partially submitted job retains its queue reservation while other queues get a scheduling opportunity.
+    void yield(Key key)
+    {
+        for (auto at = queues_.begin(); at != queues_.end(); ++at)
+            if (at->key == key) {
+                queues_.splice(queues_.end(), queues_, at);
+                return;
+            }
+    }
+
+    size_t size() const
+    {
+        return size_;
+    }
+
+    bool empty() const
+    {
+        return size_ == 0;
+    }
+};
+
+enum class EventReadiness {
+    ready,
+    blocked,
+    expired
+};
+
+class EventDeadline {
+public:
+    using Clock = std::chrono::steady_clock;
+    using Time = Clock::time_point;
+
+    EventDeadline(Time start, uint32_t timeoutMs)
+        : until_(start + (timeoutMs ? std::chrono::milliseconds(timeoutMs) : std::chrono::seconds(10))),
+          timed_(timeoutMs != 0)
+    {}
+
+    EventReadiness state(bool covered, Time now) const
+    {
+        if (covered || (timed_ && now >= until_))
+            return EventReadiness::ready;
+        return now < until_ ? EventReadiness::blocked : EventReadiness::expired;
+    }
+
+    Time until() const
+    {
+        return until_;
+    }
+
+private:
+    Time until_;
+    bool timed_;
+};
+
+}  // namespace raw

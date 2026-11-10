@@ -6,10 +6,21 @@
 #include <cstdint>
 #include <cstring>
 #include <mutex>
+#include <condition_variable>
 #include <vector>
+
+class IOUserClient {
+public:
+	bool inactive = false;
+	unsigned refs = 1;
+	bool isInactive() const { return inactive; }
+	void retain() { ++refs; }
+	void release() { --refs; }
+};
 
 struct IOLock {
 	std::mutex m;
+	std::condition_variable condition;
 };
 
 inline IOLock *IOLockAlloc()
@@ -30,6 +41,25 @@ inline void IOLockLock(IOLock *lock) __attribute__((no_thread_safety_analysis))
 inline void IOLockUnlock(IOLock *lock) __attribute__((no_thread_safety_analysis))
 {
 	lock->m.unlock();
+}
+
+inline void IOLockSleep(IOLock *lock, void *, int) __attribute__((no_thread_safety_analysis))
+{
+	std::unique_lock<std::mutex> held(lock->m, std::adopt_lock);
+	lock->condition.wait(held);
+	held.release();
+}
+
+inline void IOLockWakeup(IOLock *lock, void *, bool)
+{
+	lock->condition.notify_all();
+}
+
+#define THREAD_UNINT 0
+inline void *current_thread()
+{
+	static thread_local int identity;
+	return &identity;
 }
 
 #define IONew(type, count) (new type[(count)])

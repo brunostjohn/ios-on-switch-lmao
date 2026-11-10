@@ -17,7 +17,7 @@ using testing::Not;
 namespace {
 const std::string &display()
 {
-    static const std::string source = SourceText("../NativeLegacyDisplay.cpp");
+    static const std::string source = (SourceText("../NativeLegacyDisplay.cpp") + SourceText("../SwitchScanoutStart.h"));
     return source;
 }
 
@@ -48,15 +48,22 @@ void expectBefore(const std::string &text, const char *first, const char *second
 }
 }  // namespace
 
-// Direct scanout (r14-direct) follows the policy TegraDisplayFlip/test:direct_policy_test proves safe: direct frames
-// only after the SMMU probe passed, a fence-only GPU present per frame, retirement at the latch in queue order never
+// Direct scanout follows the policy TegraDisplayFlip/test:direct_policy_test proves safe: a fence-only GPU present
+// per frame, retirement at the latch in queue order never
 // past the frame in flight, no early retire or collapse once direct scanout is on, layouts never replaced across pitch
 // and block-linear.
-TEST(DirectScanoutSource, OnlyAfterTheProbePassed)
+TEST(DirectScanoutSource, ProductionInitializesBeforeEnablingScanout)
 {
-    EXPECT_THAT(method(display(), "    bool startDirect()\n"),
-                HasSubstr("directAttached = directOn = latchRetire = true"));
-    EXPECT_THAT(display(), HasSubstr("d->probe.stage == DisplaySmmuProbe::kDone && d->startDirect()"));
+    const std::string setup = SourceText("../SwitchScanoutSetup.h");
+    expectBefore(display(), "        startGpuCopy();", "->initializeScanout();");
+    expectBefore(setup, "otherWindowEnabled()", "tegra_smmu_attach(");
+    expectBefore(setup, "probeDomain.identity(", "tegra_smmu_attach(");
+    expectBefore(setup, "probeDomain.reserve(kPlaneSlot0", "tegra_smmu_attach(");
+    expectBefore(setup, "tegra_smmu_attach(", "directAttached = planesAttached = latchRetire = true;");
+    EXPECT_THAT(setup, HasSubstr("probeRan = planeProbeRan = true;"));
+    EXPECT_THAT(setup, Not(HasSubstr("probe.start()")));
+    EXPECT_THAT(method(display(), "    void probeFrameEnd()\n"),
+                HasSubstr("#if (defined(DEVELOPMENT) && DEVELOPMENT) || (defined(DEBUG) && DEBUG)"));
 }
 
 TEST(DirectScanoutSource, FenceOnlyPresentNoRetireAtTheOffer)
@@ -257,8 +264,10 @@ TEST(DisplayProbeSource, ProbeRequestUnderTheFlipDeadline)
 TEST(PanicRestoreSource, EveryKernelConfig)
 {
     EXPECT_THAT(display(), Not(HasSubstr("PE_arm_debug_panic_hook")));
-    EXPECT_THAT(display(), Not(HasSubstr("DEVELOPMENT")));
+    EXPECT_THAT(Between(display(), "PanicRestore gPanicRestore;", "inline uint64_t counterNow()"),
+                Not(HasSubstr("DEVELOPMENT")));
     const std::string chain = method(display(), "    void chainPanicHook()\n");
+    EXPECT_THAT(chain, Not(HasSubstr("DEVELOPMENT")));
     expectBefore(chain, "gPanicRestore.start = surfaceAddress(0);", "dmb ish");
     expectBefore(chain, "dmb ish", "switch_display_panic_hook = restorePitchOnPanic;");
     static const std::string diag = SourceText("../../../diagnostics/switch/SwitchDiag.c");
@@ -344,7 +353,7 @@ TEST(LegacyFramebufferTable, ContractSlotsOverridden)
          {"\"211\": \"changeFrameInfo\"", "\"213\": \"supportedFrameInfo\"", "\"274\": \"setDisplayTemperature\"",
           "\"306\": \"platformFrameInfoNotify\"", "\"307\": \"sendFrameInfo\""})
         EXPECT_THAT(layout, HasSubstr(entry));
-    const std::string source = SourceText("../NativeLegacyDisplay.cpp");
+    const std::string source = (SourceText("../NativeLegacyDisplay.cpp") + SourceText("../SwitchScanoutStart.h"));
     for (const char *method : {"    IOReturn changeFrameInfo(uint32_t type, void *client, uint32_t mask) override",
                                "    IOReturn sendFrameInfo(void *client, const void *frame) override",
                                "    IOReturn setDisplayTemperature(const uint32_t *temperatures) override"})

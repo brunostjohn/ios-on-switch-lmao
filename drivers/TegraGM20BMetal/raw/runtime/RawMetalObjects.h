@@ -10,10 +10,12 @@
 #include <string>
 #include <utility>
 #include <vector>
+#include <unordered_set>
 #include "SwitchFrameTimeline.h"
 #include "raw_gpu.h"
 #include "RawMetalPredicates.h"
 #include "RawResidency.h"
+#include "raw_submit_queue.h"
 
 @class RMDevice, RMCommandBuffer;
 
@@ -166,74 +168,7 @@ typedef NS_ENUM(uint8_t, RMTextureKind) {
 }
 @end
 
-// ---- the tape ----
-enum Op : uint8_t {
-    OpRender,
-    OpBlit,
-    OpCompute,
-    OpEnd,
-    OpPipeline,
-    OpBytes,
-    OpBuffer,
-    OpBufferOffset,
-    OpTexture,
-    OpSampler,
-    OpScissor,
-    OpViewport,
-    OpDraw,
-    OpCull,
-    OpWinding,
-    OpDepthStencil,
-    OpFillMode,
-    OpBlendColor,
-    OpStencilRef,
-    OpDepthBias,
-    OpBarrier,
-    OpUse,
-    OpUpdateFence,
-    OpWaitFence,
-    OpCopyTexture,
-    OpCopyBuffer,
-    OpCopyBufferToTexture,
-    OpCopyTextureToBuffer,
-    OpMipmaps,
-    OpInvocation,
-    OpSignalEvent,
-    OpWaitEvent,
-    OpDrawIndexed,
-    OpVisibility,
-    OpFillBuffer,
-    // a compute encoder's (RawMetalCompute.mm)
-    OpKernelState,
-    OpKernelBytes,
-    OpKernelBuffer,
-    OpKernelBufferOffset,
-    OpKernelTexture,
-    OpKernelSampler,
-    OpKernelMemory,
-    OpKernelUse,
-    OpKernelBarrier,
-    OpDispatch,
-};
-
-// one record: `stage` 1 vertex, 2 fragment; `obj` unretained (the command buffer keeps it); `x` into the extras
-struct Cmd {
-    Op op;
-    uint8_t stage;
-    uint16_t index;
-    uint32_t a, b;
-    uint64_t c, x;
-    void *obj, *obj2;
-};
-
-inline Cmd cmd(Op op, uint8_t stage = 0, uint16_t index = 0)
-{
-    Cmd c = {};
-    c.op = op;
-    c.stage = stage;
-    c.index = index;
-    return c;
-}
+#include "RawMetalPlan.h"
 
 @interface RMQueue : RMObject {
 @public
@@ -275,6 +210,7 @@ struct RMBytes {
 struct RMSegment {
     uint32_t from, to;
     bool raw;
+    bool event = false;
 };
 
 @interface RMCommandBuffer : RMObject {
@@ -294,20 +230,30 @@ struct RMSegment {
     std::vector<RMSegment> _segs;
     size_t _segNext;
     NSError *_segError;  // an m2v segment's error, reported at completion
+    uint32_t _segmentPending;
+    bool _finishReady, _finishing, _submittedM2v;
     bool
         _sampledShadows;  // it binds a texture sampled through a pool image (raw::Texture::sampled): encodeRaw refreshes them
     bool _standIns;  // it binds an extended-range texture (raw::Texture::standIn): encodeRaw draws its stand-in
-    std::vector<Cmd> _tape;
+    RMCommandPlan _plan;
     std::vector<RMPass> _passes;  // OpRender's (Cmd::x)
     RMBytes _bytes;               // OpBytes': chunk Cmd::c, offset Cmd::a, length Cmd::b
     std::vector<uint64_t> _extra;
-    std::vector<id> _owners;  // everything the tape names, retained until completion
+    std::vector<id> _owners;
+    std::unordered_set<void *> _ownerKeys;  // everything the tape names, retained until completion
     RMReason _reason;
     NSString *_why;
     NSMutableArray *_scheduledHandlers, *_completedHandlers;
+    dispatch_queue_t _scheduledQueue;
     MTLCommandBufferStatus _status;
     NSError *_error;
     RMQueue *_queue;
+    bool _enqueued;
+    std::vector<size_t> _eventWaits;
+    raw::EventDeadline::Time _eventStart;
+    std::map<void *, raw::EventDeadline::Time> _pipelineStarted;
+    std::unordered_set<void *> _pipelineObserved;  // one readiness subscription per compatibility state
+    size_t _eventArmed;  // operation position + 1; only the current wait installs a listener
     bool _committed, _scheduledDone, _completedDone, _m2v;
     // its event signals are in m2v work (replayed whole, or in its last segment): finish() makes none
     bool _signalsOnM2v;
@@ -375,6 +321,8 @@ uint64_t nextTraceId();
     RMTexture *_tex[16];   // fragment textures (unretained: the command buffer retains what it binds)
     RMSampler *_samp[16];  // fragment samplers, alike; `_cubicMask`: the slots of those that are cubic (raw_cubic.h)
     uint16_t _cubicMask;
+    uint64_t _checkedGeneration;
+    const raw::Pipeline *_checkedPipeline;
     raw::Pipeline *_drawn;  // the record its draws are recorded with: the state's, or a cubic variant of it
     uint32_t _formats[8];   // the pass's color attachments' formats as the raw path holds them (0: none)
     uint32_t _count;        // its attachment count (the last attachment's index + 1)

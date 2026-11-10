@@ -51,6 +51,7 @@ id native_bridge_metal_texture_tiled_in_place(id buffer, id descriptor, NSUInteg
 // A render pipeline state of this device made at its first set (AsyncPipelines.h startLazy): the raw path's m2v twin of a
 // state it draws itself.
 id native_bridge_metal_render_pipeline_lazy(id device, id descriptor, NSUInteger options);
+int native_bridge_metal_render_pipeline_ready(id pipeline, void (^observer)(void));
 // The metallib a function of this device was made from: its library, which keeps `bytes` while it lives; nil when the
 // function has none (the raw path names a function's AIR by its entry there).
 id native_bridge_metal_function_metallib(id function, const void **bytes, size_t *length);

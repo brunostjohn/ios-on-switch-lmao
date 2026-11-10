@@ -1,0 +1,122 @@
+// SPDX-License-Identifier: MIT
+#include <gtest/gtest.h>
+#include "../raw/runtime/raw_execution_plan.h"
+#include "../raw/runtime/raw_submit_queue.h"
+#include <array>
+#include <map>
+
+namespace {
+using raw::ExecutionKind;
+
+TEST(ExecutionPlan, AdjacentCompatibleEncodersShareOneSubmission)
+{
+    raw::ExecutionPlan plan;
+    plan.append(0, 8, ExecutionKind::native);
+    plan.append(8, 12, ExecutionKind::native);
+    plan.append(12, 18, ExecutionKind::compatibility);
+    plan.append(18, 24, ExecutionKind::native);
+    const auto &ranges = plan.ranges();
+    ASSERT_EQ(ranges.size(), 3u);
+    EXPECT_EQ(ranges[0].from, 0u);
+    EXPECT_EQ(ranges[0].to, 12u);
+    EXPECT_EQ(ranges[1].kind, ExecutionKind::compatibility);
+    EXPECT_EQ(ranges[2].from, 18u);
+}
+
+TEST(ExecutionPlan, EventsNeverMergeWithWorkOrEachOther)
+{
+    raw::ExecutionPlan plan;
+    plan.append(0, 4, ExecutionKind::native);
+    plan.append(4, 5, ExecutionKind::signal);
+    plan.append(5, 6, ExecutionKind::wait);
+    plan.append(6, 10, ExecutionKind::native);
+    plan.append(10, 11, ExecutionKind::signal);
+    ASSERT_EQ(plan.ranges().size(), 5u);
+    for (size_t i = 1; i < plan.ranges().size(); ++i)
+        EXPECT_EQ(plan.ranges()[i - 1].to, plan.ranges()[i].from);
+}
+
+TEST(ExecutionPlan, EmptyAndEventOnlyCommandBuffersKeepExactPositions)
+{
+    raw::ExecutionPlan empty;
+    empty.append(0, 0, ExecutionKind::native);
+    EXPECT_TRUE(empty.ranges().empty());
+    empty.append(0, 1, ExecutionKind::signal);
+    empty.append(1, 2, ExecutionKind::signal);
+    ASSERT_EQ(empty.ranges().size(), 2u);
+    EXPECT_EQ(empty.ranges()[1].from, 1u);
+}
+
+// Regression journey: A publishes E then waits F; B (queued later) waits E then publishes F. Preflighting all of A's
+// waits deadlocked for ten seconds. Execute the real range plan through the real per-queue reservation/yield machinery.
+TEST(ExecutionPlan, InteriorWaitDoesNotPreventItsOwnEarlierSignalFromReleasingTheProducer)
+{
+    raw::ExecutionPlan a, b;
+    a.append(0, 4, ExecutionKind::native);
+    a.append(4, 5, ExecutionKind::signal);
+    a.append(5, 6, ExecutionKind::wait);
+    a.append(6, 9, ExecutionKind::native);
+    b.append(0, 1, ExecutionKind::wait);
+    b.append(1, 4, ExecutionKind::compatibility);
+    b.append(4, 5, ExecutionKind::signal);
+    std::array<const raw::ExecutionPlan *, 3> plans{{nullptr, &a, &b}};
+    std::array<size_t, 3> cursors{};
+    std::array<unsigned, 3> pending{};
+    std::map<unsigned, bool> signals;
+    raw::SubmitQueue<int, int> queue;
+    for (int job : {1, 2}) {
+        queue.reserve(job, job);
+        queue.commit(job, job);
+    }
+    std::vector<int> submitted;
+    for (unsigned step = 0; !queue.empty() && step < 20; ++step) {
+        const int job = queue.ready([&](int id) {
+            const auto kind = plans[id]->ranges()[cursors[id]].kind;
+            if (kind == ExecutionKind::wait)
+                return signals[id == 1 ? 2 : 1];
+            if (kind == ExecutionKind::signal)
+                return pending[id] == 0;
+            return true;
+        });
+        if (!job) {
+            // Fence completion is independent of selection. No blocked queue owns the submission worker.
+            pending = {};
+            continue;
+        }
+        const auto kind = plans[job]->ranges()[cursors[job]].kind;
+        if (kind == ExecutionKind::signal)
+            signals[job] = true;
+        else if (kind != ExecutionKind::wait) {
+            ++pending[job];
+            submitted.push_back(job);
+        }
+        if (++cursors[job] == plans[job]->ranges().size())
+            ASSERT_TRUE(queue.retire(job, job));
+        else
+            queue.yield(job);
+    }
+    EXPECT_TRUE(queue.empty());
+    EXPECT_EQ(submitted, (std::vector<int>{1, 2, 1}));
+    EXPECT_TRUE(signals[1]);
+    EXPECT_TRUE(signals[2]);
+}
+
+TEST(SubmitQueue, PartialSubmissionYieldsWithoutReleasingItsReservation)
+{
+    raw::SubmitQueue<int, int> queue;
+    for (int job : {11, 12, 21}) {
+        queue.reserve(job / 10, job);
+        queue.commit(job / 10, job);
+    }
+    queue.yield(1);
+    EXPECT_EQ(queue.ready([](int) {
+        return true;
+    }),
+              21);
+    EXPECT_FALSE(queue.retire(1, 12));
+    std::vector<int> heads;
+    queue.heads(heads);
+    EXPECT_EQ(heads, (std::vector<int>{21, 11}));
+    EXPECT_EQ(queue.size(), 3u);
+}
+}  // namespace

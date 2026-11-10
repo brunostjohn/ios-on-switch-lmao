@@ -35,10 +35,17 @@ enum {
 	TegraGM20BMethodExecSurfaces = 17,  /* with TegraGM20BInfoExecSurfaces */
 	TegraGM20BMethodPriority = 18,      /* with TegraGM20BInfoPriority */
 	TegraGM20BMethodZbc = 19,           /* with TegraGM20BInfoCompression */
+	TegraGM20BMethodSubmit = 20,        /* with TegraGM20BInfoSubmit */
+	TegraGM20BMethodCpuAcquire = 21,
+	TegraGM20BMethodCpuRelease = 22,
+	TegraGM20BMethodSubmitAddress = 23,
 
 	TegraGM20BMaxBindOps = 100,
 	TegraGM20BMaxPushes = 255,
 	TegraGM20BMaxExecSurfaces = 64,
+	TegraGM20BMaxSubmitBytes = 4088, /* leaves room for the tunnel header */
+	TegraGM20BMaxJobPushes = 1024,
+	TegraGM20BMaxJobUses = 1024,
 };
 
 /* TegraGM20BAbiInfo.flags */
@@ -57,6 +64,28 @@ enum {
 	TegraGM20BInfoKillRecord = 1u << 10, /* a channel's fence word is a TegraGM20BAbiFence */
 	TegraGM20BInfoTiledCache = 1u
 		<< 11, /* every GR context holds the tile coalescer's table: a client may enable the tiled cache */
+	TegraGM20BInfoSubmit = 1u << 12, /* atomic surface uses and pushes (method 20) */
+	TegraGM20BInfoCpuAccess = 1u << 13,
+	TegraGM20BInfoSubmitAddress = 1u << 14,
+};
+
+enum {
+	TegraGM20BCpuRead = 1u << 0,
+	TegraGM20BCpuWrite = 1u << 1,
+	TegraGM20BCpuAvoidSync = 1u << 2,
+	TegraGM20BCpuDiscard = 1u << 3,
+};
+
+struct TegraGM20BAbiCpuAccess {
+	uint64_t handle, offset, bytes;
+	uint32_t access, reserved;
+};
+
+/* The addressed record is a TegraGM20BAbiSubmit followed by its pushes and uses. The kernel copies it once before
+ * validation. A job's final entry must complete its method packet; the entire job is published together. */
+struct TegraGM20BAbiSubmitAddress {
+	uint64_t address;
+	uint32_t bytes, reserved;
 };
 
 /* Method 1, output only. Everything NVK's struct nv_device_info needs that the client cannot derive. */
@@ -257,6 +286,7 @@ enum {
 	/* From this submission on, every writable import of the connection counts as GPU-written, TegraGM20BImportGpuReads
 	 * or not: the client could not deliver a SurfaceWrites. Carried by a real push, so it takes effect with the work. */
 	TegraGM20BPushImportsWritten = 1u << 1,
+	TegraGM20BPushIncomplete = 1u << 2,
 };
 
 struct TegraGM20BAbiPush {
@@ -280,6 +310,7 @@ struct TegraGM20BAbiExecReply {
 enum {
 	TegraGM20BSurfaceRead = 1u << 0,
 	TegraGM20BSurfaceWrite = 1u << 1, /* renders, blits or stores into it */
+	TegraGM20BSurfaceGpuAddress = 1u << 2, /* SubmitAddress only: handle is a GPU VA in a live binding */
 };
 
 /* TegraGM20BAbiExecSurfaces.flags */
@@ -297,7 +328,7 @@ enum {
  * IOSurfaceLock wait alone: no Exec waits for it on the GPU. A client's surfaces are fenced from the point it sends lists.
  * The channel's next Exec takes the list whether it succeeds or not: a retry after kIOReturnBusy sends it again. The record
  * may end after its `count` uses, as Exec's after its pushes. A handle that is not a live import is passed over. A channel
- * queues at most TegraGM20BMaxOrderWaits acquires: the writers of more channels than that go unwaited for (logged once). */
+ * queues at most TegraGM20BMaxOrderWaits acquires: an Exec that cannot queue all required waits fails before submitting. */
 struct TegraGM20BAbiSurfaceUse {
 	uint64_t handle;
 	uint32_t access; /* TegraGM20BSurface* */
@@ -310,6 +341,17 @@ struct TegraGM20BAbiExecSurfaces {
 	uint32_t flags; /* TegraGM20BExecSurfaces* */
 	uint32_t reserved;
 	struct TegraGM20BAbiSurfaceUse uses[TegraGM20BMaxExecSurfaces];
+};
+
+/* Method 20, reply TegraGM20BAbiExecReply. The header is followed by push_count AbiPush records, then surface_count
+ * AbiSurfaceUse records. The exact byte count must fit MaxSubmitBytes. The surface list and pushes are consumed together,
+ * under the connection lock; malformed records or unresolved dependencies publish no GPU work. No pending method 17 list
+ * is used. surface_flags has ExecSurfaces semantics (All for an unlisted submission). */
+struct TegraGM20BAbiSubmit {
+	uint32_t channel;
+	uint32_t push_count;
+	uint32_t surface_count;
+	uint32_t surface_flags;
 };
 
 /* Method 9. Returns kIOReturnSuccess once completed seqno has passed `seqno`, kIOReturnTimeout after timeout_ns (0 = poll once),

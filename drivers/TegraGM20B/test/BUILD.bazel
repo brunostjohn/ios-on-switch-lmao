@@ -195,8 +195,38 @@ host_shims(
     headers = [
         "IOKit/IOLib.h",
         "IOKit/IOLocks.h",
+        "IOKit/IOUserClient.h",
+        "kern/thread.h",
     ],
     stubs = "gm20b_coherency_stubs.h",
+)
+
+host_library(
+    name = "backing",
+    srcs = [
+        "//drivers/TegraGM20B:SwitchGpuBacking.cpp",
+        "//drivers/TegraGM20B:SwitchGpuCpuAccess.cpp",
+        "//drivers/TegraGM20B:SwitchGpuOwnership.cpp",
+        "//drivers/TegraGM20B:SwitchGpuSurfaceAccess.cpp",
+    ],
+    hdrs = [
+        "//drivers/TegraDisplayFlip:TegraScanoutCopy.h",
+        "//drivers/TegraGM20B:SwitchGpuBacking.h",
+        "//drivers/TegraGM20B:SwitchGpuBackingInternal.h",
+        "//drivers/TegraGM20B:TegraGM20BGpu.h",
+        "//drivers/TegraGM20B:TegraGM20BViews.h",
+        "//drivers/TegraGM20B:TegraGM20BTiled.h",
+        "//drivers/TegraGM20B:TegraGM20BLayout.h",
+        "//drivers/TegraGM20B:TegraGM20BRelayout.h",
+        "//drivers/TegraGM20B:TegraGM20BABI.h",
+    ],
+    deps = [":coherency_kernel"],
+)
+
+host_test(
+    name = "switch_gpu_backing_test",
+    srcs = ["switch_gpu_backing_test.cpp"],
+    deps = [":backing", ":coherency_kernel"],
 )
 
 host_library(
@@ -207,6 +237,7 @@ host_library(
         "//drivers/TegraGM20B:TegraGM20BViews.cpp",
     ],
     hdrs = [
+        "//drivers/TegraGM20B:SwitchGpuBacking.h",
         "//drivers/TegraDisplayFlip:TegraScanoutCopy.h",
         "//drivers/TegraGM20B:TegraGM20BABI.h",
         "//drivers/TegraGM20B:TegraGM20BFences.h",
@@ -224,6 +255,7 @@ host_test(
     name = "gm20b_coherency_test",
     srcs = [
         "gm20b_coherency_test.cpp",
+        "gm20b_backing_stubs.cpp",
         "gm20b_tiled_model.h",
         "gm20b_views_test.cpp",
     ],
@@ -249,6 +281,7 @@ host_test(
     name = "gm20b_fences_test",
     srcs = [
         "gm20b_fences_test.cpp",
+        "gm20b_backing_stubs.cpp",
         "gm20b_tiled_stubs.cpp",
     ],
     deps = [
