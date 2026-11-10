@@ -25,6 +25,7 @@ STILLS = ('jpeg_420', 'jpeg_422', 'jpeg_444', 'png', 'heic', 'heic_grid')
 TESTS: dict[str, bool] = {
     **dict.fromkeys(
         [
+            'cpu.async_timers',
             'gpu.ca.first_tiled_surface',
             'gpu.ca.blur_chain',
             'gpu.blur_chain_nan',
@@ -59,6 +60,7 @@ TESTS: dict[str, bool] = {
             'gpu.raw.memoryless_burst',
             'gpu.raw.kernel_direct',
             'gpu.raw.kernel_view',
+            'gpu.shared.retained_pointer',
             'gpu.heap.m2v_target',
             'metal.device',
             'metal.compute',
