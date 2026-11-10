@@ -208,7 +208,10 @@ static int begin(switch_gpu_backing_use *uses, uint32_t count,
 			switch_gpu_backing_cache(backing->pages->addresses, backing->pages->count, backing->clean_start,
 				(uint64_t(backing->pages->count) << 12) - backing->clean_start, 0);
 			backing->clean_start = 0;
-			backing->dirty &= ~uint32_t(SWITCH_GPU_BACKING_CPU_DIRTY);
+			// A CPU writer still holding the backing (a submission proceeds beside it) may write more before the
+			// next job reads it: that job cleans again.
+			if (!backing->cpu_writers)
+				backing->dirty &= ~uint32_t(SWITCH_GPU_BACKING_CPU_DIRTY);
 			backing->initial_clean = true;
 		}
 	}

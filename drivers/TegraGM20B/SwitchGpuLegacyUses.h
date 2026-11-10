@@ -1,14 +1,26 @@
 /* SPDX-License-Identifier: MIT */
-/* What a legacy submission (Exec, or Submit with ExecSurfaces semantics) tells the ownership layer about each BO of its
- * connection. Only a listed import is a claim: the job's list says it reads or writes it, and a listed job touches no
- * import it did not list (TegraGM20BABI.h method 17). No CPU owner refuses a claim: the legacy ABI has no such
- * refusal, NVK takes one as fatal, and Busy would make it abort or spin. Everything else the job may touch is UNLISTED:
- * CPU access still orders after the job. An import is listable once it has a coherency entry, as in ExecSurfaces'
- * index. */
+/* What a submission tells the ownership layer about the BOs it uses. A use it names is a claim: a native Submit or
+ * SubmitAddress names every use, a legacy one (Exec, or Submit with ExecSurfaces semantics) only the imports its list
+ * names, and a listed legacy job touches no import it did not list (TegraGM20BABI.h method 17). No CPU owner refuses a
+ * claim: no submission ABI has such a refusal, NVK and raw take one as fatal, Busy would make NVK abort or spin and raw
+ * fail, and nothing at this base can order the job behind the holder instead. Everything else a legacy job may touch
+ * is UNLISTED: CPU access still orders after the job. An import is listable once it has a coherency entry, as in
+ * ExecSurfaces' index. */
 #pragma once
 #include <stdint.h>
 #include "SwitchGpuBacking.h"
 #include "TegraGM20BABI.h"
+
+/* A use a native submission names (TegraGM20BSurface*). */
+static inline uint32_t switch_gpu_listed_access(uint32_t surface_access)
+{
+	uint32_t access = 0;
+	if (surface_access & TegraGM20BSurfaceRead)
+		access |= SWITCH_GPU_BACKING_READ;
+	if (surface_access & TegraGM20BSurfaceWrite)
+		access |= SWITCH_GPU_BACKING_WRITE;
+	return access ? access | SWITCH_GPU_BACKING_NO_CPU_EXCLUSION : 0;
+}
 
 static inline uint32_t switch_gpu_legacy_access(bool listable, bool read_only, bool listed, uint32_t listed_access)
 {

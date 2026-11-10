@@ -109,9 +109,9 @@ struct switch_gpu_backing_transaction {
  * An UNLISTED use is one the engine cannot vouch for (a legacy submission's private BOs and unlisted imports): CPU
  * access and the kernel's other engines still order after the job, as after a writer when WRITE is set, but no GM20B
  * job waits for it, it waits for nothing and CPU owners never refuse it.
- * NO_CPU_EXCLUSION: CPU owners holding the backing now do not refuse the use (a legacy submission, which its ABI never
- * refused for a CPU lock). An owner ordered itself after earlier work when it acquired; this job orders the next
- * acquire, and begin still cleans what the owner wrote so far. */
+ * NO_CPU_EXCLUSION: CPU owners holding the backing now do not refuse the use (a GM20B user submission: no submission
+ * ABI refuses for a CPU lock). An owner ordered itself after earlier work when it acquired; this job orders the next
+ * acquire. While a CPU writer holds the backing every begin cleans what it wrote so far, and its release the rest. */
 int switch_gpu_backing_begin(struct switch_gpu_backing_use *uses, uint32_t count,
 			     const struct switch_gpu_backing_token *completion,
 			     struct switch_gpu_backing_transaction *transaction);
