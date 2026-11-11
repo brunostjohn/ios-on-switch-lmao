@@ -64,9 +64,10 @@ uint64_t tgm_timestamp_ns(void);
  * waiter = tgm_chan_waiter(chan) and seq = tgm_waiter_seq(waiter), publish the seqno (tgm_chan_want), then test the
  * fence; tgm_waiter_idle() sleeps until that channel's fence reaches the lowest seqno published, it is killed or
  * destroyed (1), or deadline_ns (the absolutetime_to_nanoseconds(mach_absolute_time()) clock) passes (0). The waiter
- * stays valid after the channel is gone. Only a job's own fence interrupts: a seqno is announced once the fence passes
- * its job's end (tgm_chan_announced). One found announced after tgm_waiter_idle() returned 0 was not woken by its
- * interrupt: tgm_waiter_unwoken() allows 50 ms for the wake, then panics. */
+ * stays valid after the channel is gone. Only a job's own fence interrupts, and a quiet job's only once tgm_chan_want
+ * asked for it: a seqno is announced once the fence passes the end of the first job at or after it that interrupts
+ * (tgm_chan_announced). One found announced after tgm_waiter_idle() returned 0 was not woken by its interrupt:
+ * tgm_waiter_unwoken() allows 50 ms for the wake, then panics. */
 uint32_t tgm_chan_waiter(struct tgm_chan *chan);
 void tgm_chan_want(struct tgm_chan *chan, uint32_t seqno);
 int tgm_chan_announced(struct tgm_chan *chan, uint32_t seqno);
@@ -225,6 +226,9 @@ enum {
 	SWITCH_GPU_SUBMIT_HOST_WRITTEN = 1u << 1,
 	SWITCH_GPU_SUBMIT_EXTERNAL_VISIBILITY = 1u << 2,
     SWITCH_GPU_SUBMIT_FORCE_FENCE = 1u << 3,
+	/* the job's end raises no interrupt unless a waiter asked for one (SwitchGpuQuiet.h); only on a channel with an owner
+	 * that pushes wake entries (tgm_chan_on_wake) */
+	SWITCH_GPU_SUBMIT_QUIET = 1u << 4,
 };
 int switch_gpu_chan_exec_visibility(struct tgm_chan *chan, const struct tgm_push *push, uint32_t count,
 	const struct switch_gpu_backing_token *dependencies, uint32_t dependency_count,
@@ -282,6 +286,16 @@ uint32_t tgm_chan_completed(struct tgm_chan *chan);
 /* `fenced(arg)` from the interrupt pass whenever the channel's fence may have moved, and once when it is killed (its
  * fence then released): under nvkm's event lock, so it must not block (a thread call does the work). */
 void tgm_chan_on_fence(struct tgm_chan *chan, void (*fenced)(void *arg), void *arg);
+/* Quiet job ends (SwitchGpuQuiet.h). on_wake: the channel's owner takes asks for wake entries; `wake(arg, tag)` must not
+ * block (it schedules a thread call that runs tgm_chan_quiet_wake under the owner's submission order). need: anything
+ * that will sleep until the channel reaches `seqno` asks first, then tests the fence (any context a thread call may be
+ * entered from). need_uid: the same for the channel a backing token names (tgm_live_lock taken). quiet_wake: the owner,
+ * with no submission of its on the channel under way, outside the gate. */
+void tgm_chan_on_wake(struct tgm_chan *chan, void (*wake)(void *arg, uint32_t tag), void *arg,
+		      uint32_t tag);
+void tgm_chan_need(struct tgm_chan *chan, uint32_t seqno);
+void tgm_chan_need_uid(uint32_t uid, uint32_t seqno);
+void tgm_chan_quiet_wake(struct tgm_chan *chan);
 /* The group a channel belongs to (its connection's task): tgm_chan_order relates the channels of one group. */
 void tgm_chan_set_group(struct tgm_chan *chan, const void *group);
 /* GPU-side order between the channels of chan's group (TegraGM20BABI.h method 14), no CPU wait: semaphore acquires the

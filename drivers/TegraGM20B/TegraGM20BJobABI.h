@@ -62,7 +62,9 @@ enum {
 	TegraGM20BJobExternal = 1u << 0,    /* the job's writes reach DRAM before its fence (CPU, display, other engines) */
 	TegraGM20BJobHostWritten = 1u << 1, /* the CPU wrote memory the job reads through the GPU L2 since the last job */
 	TegraGM20BJobHasEvents = 1u << 2,   /* a TegraGM20BAbiSubmitEvents and its uses follow the shared uses */
-	TegraGM20BJobQuiet = 1u << 3,       /* accepted and not yet honoured: the job still raises its interrupt */
+	/* the job's end raises no interrupt unless a waiter asks for one: a wait then gets it at or after the seqno, behind
+	 * the channel's newest job. Ignored with HasEvents. */
+	TegraGM20BJobQuiet = 1u << 3,
 	/* A command buffer of several jobs holds its shared uses' admission from its first job to its last, so a CPU lock of
 	 * any of them orders after the whole command buffer: Begin with the first job's uses, Continue (uses covered by
 	 * Begin's), End with the last; Cancel (no pushes, no uses) gives it back after a refused job. A

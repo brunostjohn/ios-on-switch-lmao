@@ -44,7 +44,9 @@ OSDefineMetaClassAndStructors(AGXDeviceUserClient, IOUserClient)
 			return false;
 	retireCall_ = thread_call_allocate_with_options(
 		retirementWork, this, THREAD_CALL_PRIORITY_KERNEL, THREAD_CALL_OPTIONS_ONCE);
-	if (!retireCall_)
+	wakeCall_ = thread_call_allocate_with_options(wakeWork, this, THREAD_CALL_PRIORITY_KERNEL,
+						      THREAD_CALL_OPTIONS_ONCE);
+	if (!retireCall_ || !wakeCall_)
 		return false;
 	if (tgm_vm_new(&vm_))
 		return false;
@@ -78,6 +80,8 @@ void AGXDeviceUserClient::free()
 		drainResources();
 		if (retireCall_)
 			thread_call_free(retireCall_);
+		if (wakeCall_)
+			thread_call_free(wakeCall_);
 		if (binds_)
 			IODelete(binds_, Binding, cap_binds_);
 		freeJob(job_);

@@ -427,6 +427,9 @@ class AGXDeviceUserClient : public IOUserClient
 		  uint8_t kind);
     void describeFault(uint32_t slot, uint64_t va);
     thread_call_t retireCall_ = nullptr;
+    // quiet job ends (SwitchGpuQuiet.h): the channel slots a waiter asked a wake entry for, pushed by wakeCall_
+    thread_call_t wakeCall_ = nullptr;
+    uint32_t wakeSlots_ = 0;
     uint32_t retiredCount_ = 0, retireRemaining_ = 0, retirementPending_ = 0,
 	     retirementStopped_ = 0;
     uint64_t retirementEpoch_ = 0, retireScanEpoch_ = 0;
@@ -486,6 +489,9 @@ class AGXDeviceUserClient : public IOUserClient
 	void logFaultBindings();
 	static void retirementWork(thread_call_param_t, thread_call_param_t);
 	static void retirementFence(void *owner);
+	static void wakeAsked(void *owner, uint32_t slot);
+	static void wakeWork(thread_call_param_t owner, thread_call_param_t);
+	void pushWakes();
 	void unbindOverlaps(uint64_t va, uint64_t range, Bo *only);
 	void scanPushes(const tgm_push *pushes, uint32_t count, tgm_prof *prof);
 	const uint32_t *pushView(uint64_t va, uint64_t bytes, const Binding *&hit) const;

@@ -25,13 +25,15 @@ static void chan_wake_waiters(struct tgm_chan *chan)
 void tgm_chan_want(struct tgm_chan *chan, uint32_t seqno)
 {
 	switch_gpu_waiter_want(&chan->wanted, seqno);
+	tgm_chan_need(chan, seqno);
 }
 
 int tgm_chan_announced(struct tgm_chan *chan, uint32_t seqno)
 {
-	const u32 end = switch_gpu_jobs_announcing(&chan->jobs, seqno);
+	int announced = 0;
+	const u32 end = switch_gpu_jobs_announced_by(&chan->jobs, seqno, &announced);
 
-	return (s32)(tgm_chan_completed(chan) - end) >= 0;
+	return announced && (s32)(tgm_chan_completed(chan) - end) >= 0;
 }
 
 #include "SwitchGpuChannelCompletion.h"
@@ -192,6 +194,7 @@ static int chan_new(struct tgm_vm *vm, const void *vm_owner, volatile uint32_t *
 	 * acquire on the old seqno (the GPU present) is never left waiting for a word that went back to 0 */
 	chan->submitted = READ_ONCE(*fence_cpu);
 	switch_gpu_jobs_init(&chan->jobs, chan->submitted);
+	switch_gpu_quiet_init(&chan->quiet, chan->submitted);
 	chan->stat_done = chan->submitted;
 	chan->woken_done = chan->submitted;
 	chan->gov_done = chan->submitted;
@@ -397,14 +400,18 @@ void tgm_chan_del(struct tgm_chan **pchan)
 	waiter = tgm_chan_waiter(chan);
 	if (chan->tracked)
 		tgm_hold_track(tgm_gpu.device, chan->chid, 0);
-	/* bounded wait for idle (CONTRACT.md: <= 1 s), then nvkm tears the channel down (preempt + runlist) */
+	/* bounded wait for idle (CONTRACT.md: <= 1 s), then nvkm tears the channel down (preempt + runlist). The caller owns
+	 * the channel's submissions: a quiet last job gets its wake entry here. */
 	end = nvxnu_nanotime() + NSEC_PER_SEC;
+	if ((s32)(tgm_chan_completed(chan) - chan->submitted) < 0 &&
+	    switch_gpu_quiet_need(&chan->quiet, chan->submitted))
+		tgm_chan_quiet_wake(chan);
 	for (;;) {
 		u32 seq = nvxnu_wake_seq();
 		if (chan->error || (s32)(tgm_chan_completed(chan) - chan->submitted) >= 0 ||
 		    nvxnu_nanotime() >= end)
 			break;
-		if (!nvxnu_idle(seq, end) && (s32)(tgm_chan_completed(chan) - chan->submitted) >= 0)
+		if (!nvxnu_idle(seq, end) && tgm_chan_announced(chan, chan->submitted))
 			nvxnu_wake_due(seq, "fence", chan->submitted);
 	}
 	/* tearing down a channel that still runs would free pages the GPU is using: its owner is gone, so it is killed

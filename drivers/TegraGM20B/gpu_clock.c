@@ -441,7 +441,8 @@ void tgm_idle_start(void)
 	tgm_idle.clk = nvxnu_mutex_alloc();
 	tgm_idle.drop_w = nvxnu_work_alloc(idle_drop, NULL);
 	tgm_idle.raise_w = nvxnu_work_alloc(idle_hint_raise, NULL);
-	if (!tgm_idle.clk || !tgm_idle.drop_w || !tgm_idle.raise_w) {
+	tgm_idle.settle_w = nvxnu_work_alloc(tgm_idle_settle, NULL);
+	if (!tgm_idle.clk || !tgm_idle.drop_w || !tgm_idle.raise_w || !tgm_idle.settle_w) {
 		nvxnu_log("tegra-gm20b: idle clock not used: no memory; the GPU stays at %d kHz\n",
 			  run);
 		return;

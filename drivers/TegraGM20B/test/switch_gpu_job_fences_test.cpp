@@ -117,7 +117,7 @@ switch_gpu_jobs kicked(uint32_t submitted, std::initializer_list<uint32_t> sizes
 	switch_gpu_jobs_init(&jobs, submitted);
 	uint64_t kick_ns = 1000;
 	for (uint32_t size : sizes) {
-		switch_gpu_jobs_kick(&jobs, submitted + 1, submitted + size, kick_ns);
+		switch_gpu_jobs_kick(&jobs, submitted + 1, submitted + size, kick_ns, 0);
 		submitted += size;
 		kick_ns += 1000;
 	}

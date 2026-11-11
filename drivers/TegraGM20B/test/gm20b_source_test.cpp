@@ -660,8 +660,8 @@ TEST(GM20BRoomSource, RoomIsWaitedForByInterrupt)
 	const auto reserve = flat(definition(gpu(), "static inline int chan_wait_room("));
 	expectBefore(reserve, "chan_wait_ready(chan, gpfifo_nr, push_nr)",
 		     "nvif_chan_gpfifo_wait(&chan->chan, gpfifo_nr, push_nr)");
-	expectBefore(flat(definition(gpu(), "u32 tgm_chan_fence_job(struct tgm_chan *chan, int "
-					    "external, u32 first, u32 next)")),
+	expectBefore(flat(definition(gpu(), "static u32 chan_fence_job(struct tgm_chan *chan, int "
+					    "external, u32 first, u32 next, int quiet)")),
 		     "nvif_chan_gpfifo_post(&chan->chan);", "NON_STALL_INTERRUPT, 0);");
 }
 
@@ -1479,8 +1479,12 @@ TEST(GM20BJobFencesSource, OneJobOwnsItsUsesUntilItsLastFence)
 	EXPECT_THAT(exec, Not(HasSubstr("findAddress(")));
 	const auto emit = flat(definition(gpu(), "int chan_exec_body("));
 	const auto room = flat(definition(gpu(), "static void chan_submission_room("));
-	EXPECT_THAT(room, HasSubstr("*entries = count + 6 + stamps + job_fences;"));
-	EXPECT_THAT(room, HasSubstr("SWITCH_GPU_FENCE_POINT_DWORDS * job_fences;"));
+	EXPECT_THAT(
+		room,
+		HasSubstr("*entries = count + 6 + stamps + job_fences + CHAN_WAKE_ENTRIES + 1;"));
+	EXPECT_THAT(
+		room,
+		HasSubstr("SWITCH_GPU_FENCE_POINT_DWORDS * job_fences + CHAN_WAKE_DWORDS + 16;"));
 	EXPECT_THAT(emit, HasSubstr("last = switch_gpu_job_emit(pushes, count, chan->submitted, &emitter);"));
 	EXPECT_THAT(flat(definition(client(), "uint32_t switch_gpu_info_flags(void)")),
 		    HasSubstr("TegraGM20BInfoPushFences;"));
@@ -1502,7 +1506,7 @@ TEST(GM20BBoIndexSource, EveryBoListChangeKeepsTheIndex)
 
 TEST(GM20BVisibilitySource, InternalFenceKeepsExecutionOrderAndExternalFencePublishesVisibleFirst)
 {
-	const auto fence = flat(definition(gpu(), "u32 tgm_chan_fence_job("));
+	const auto fence = flat(definition(gpu(), "static u32 chan_fence_job("));
 	EXPECT_THAT(fence, HasSubstr("if (external && (l2_on() || chan->kernel))"));
 	expectBefore(fence, "NVB06F_MEM_OP_D_OPERATION_L2_FLUSH_DIRTY", "if (external && chan->visible_cpu)");
 	expectBefore(fence, "lower_32_bits(chan->visible_gpu)", "lower_32_bits(chan->fence_gpu)");
@@ -1510,10 +1514,8 @@ TEST(GM20BVisibilitySource, InternalFenceKeepsExecutionOrderAndExternalFencePubl
 	const auto exec = flat(definition(gpu(), "int chan_exec_body("));
 	EXPECT_THAT(exec, HasSubstr("if ((l2_on() && host_written) || tlb)"));
 	expectBefore(exec, "NVB06F_MEM_OP_D_OPERATION_L2_FLUSH_DIRTY", "NVB06F_MEM_OP_D_OPERATION_L2_SYSMEM_INVALIDATE");
-	EXPECT_THAT(
-		exec,
-		HasSubstr(
-			"*seqno = tgm_chan_fence_job(chan, external, chan->submitted + 1, last);"));
+	EXPECT_THAT(exec, HasSubstr("*seqno = chan_fence_job(chan, external, chan->submitted + 1, "
+				    "last, quiet);"));
 	// A batch's internal fence orders execution only: no L2 flush, no visible release, no interrupt. Its kick is the
 	// GPFIFO entry that keeps it between the batches; the job's own kick writes GP_PUT.
 	const auto internal = flat(definition(gpu(), "static void chan_job_fence("));
@@ -1525,9 +1527,10 @@ TEST(GM20BVisibilitySource, InternalFenceKeepsExecutionOrderAndExternalFencePubl
 	expectBefore(internal, "RELEASE_SIZE, 4BYTE));", "PUSH_KICK(push);");
 	expectBefore(exec, "chan->chan.defer_kick = true;", "last = switch_gpu_job_emit(");
 	expectBefore(fence, "chan->chan.defer_kick = false;", "PUSH_KICK(push);");
-	expectBefore(fence,
-		     "job = switch_gpu_jobs_kick(&chan->jobs, first, next, chan->submit_ns);",
-		     "PUSH_KICK(push);");
+	expectBefore(
+		fence,
+		"job = switch_gpu_jobs_kick(&chan->jobs, first, next, chan->submit_ns, !announce);",
+		"PUSH_KICK(push);");
 	for (const char *signature : {"int tgm_vm_unmap_pages(", "void switch_gpu_vm_unmap("}) {
 		const auto unmap = flat(definition(gpu(), signature));
 		expectBefore(unmap, "nvkm_ltc_flush(tgm_gpu.device->ltc)", "nvif_vmm_raw_unmap(");

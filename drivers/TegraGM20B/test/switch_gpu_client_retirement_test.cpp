@@ -138,6 +138,14 @@ uint32_t tgm_chan_submitted(tgm_chan *chan)
 	return chan->submitted;
 }
 
+// The seqnos a retiring binding asked its channels' interrupts for (quiet job ends, SwitchGpuQuiet.h)
+std::vector<uint32_t> asked;
+
+void tgm_chan_need(tgm_chan *, uint32_t seqno)
+{
+	asked.push_back(seqno);
+}
+
 void tgm_chan_del(tgm_chan **chan)
 {
 	*chan = nullptr;
@@ -426,6 +434,8 @@ public:
 	char owner_[17] = "test";
 	Call call;
 	thread_call_t retireCall_ = &call;
+	Call wakeStorage;
+	thread_call_t wakeCall_ = &wakeStorage;
 	uint32_t retiredCount_ = 0, retireRemaining_ = 0, retirementPending_ = 0,
 		 retirementStopped_ = 0;
 	uint64_t retirementEpoch_ = 0, retireScanEpoch_ = 0, pool_bytes_ = 0, control_bytes_ = 0;
@@ -593,6 +603,16 @@ TEST_F(ClientRetirement, FreeKeepsMappingAndPagesUntilExactFenceCompletes)
 	client.retireBatch();
 	EXPECT_EQ(unmapped, (std::vector<unsigned>{1}));
 	EXPECT_EQ(client.releases, 1u);
+}
+
+// A quiet job may be the last one a binding waits for: its retirement asks for that job's interrupt, so the bind epoch
+// behind it is never left waiting for an interrupt nothing raises.
+TEST_F(ClientRetirement, ARetiredBindingAsksForItsLastJobsInterrupt)
+{
+	client.add(1);
+	asked.clear();
+	free(1);
+	EXPECT_EQ(asked, (std::vector<uint32_t>{chan.submitted}));
 }
 
 TEST_F(ClientRetirement, ChannelReplacementCannotHoldAnOldMappingForever)

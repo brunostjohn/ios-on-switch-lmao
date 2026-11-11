@@ -70,6 +70,7 @@
 #include "TegraGM20BCopyEmit.h"
 #include "TegraGM20BGpu.h"
 #include "SwitchGpuJobFences.h"
+#include "SwitchGpuQuiet.h"
 #include "SwitchGpuJobTiming.h"
 #include "SwitchGpuProfileSequence.h"
 #include "SwitchGpuTimeline.h"
@@ -131,6 +132,8 @@ extern u64 tgm_waiter_woken_ns[];
 struct wstat_state {
 	u32 wakes, slept, woken, other, deadline;
 	u32 jobs; /* kicked (tgm_chan_fence_job), every channel */
+	/* quiet job ends; waiters' asks, wake entries pushed, idle settles (gpu_quiet.c) */
+	u32 quiet, asked, pushed, settled;
 	u64 lat_sum, lat_max;
 	u64 stall, nonstall; /* the interrupt passes at the window's start */
 };
@@ -293,6 +296,10 @@ struct tgm_chan {
 	u32 gov_done;   /* idle clock: last seqno counted retired (idle_retire) */
 	u32 woken_done; /* the completed seqno chan_wake_waiters last looked at */
 	u64 wanted;     /* the lowest seqno a fence waiter sleeps for (switch_gpu_waiter_want) */
+	struct switch_gpu_quiet quiet;
+	void (*wake)(void *arg, u32 tag); /* tgm_chan_on_wake: the owner's ask for a wake entry */
+	void *wake_arg;
+	u32 wake_tag;
 	void (*fenced)(void *arg); /* tgm_chan_on_fence */
 	void *fenced_arg;
 	u32 stat_done; /* stats: last seqno whose latency was counted, submit times by seqno */
@@ -477,7 +484,8 @@ struct idle_state {
 	int low;      /* the GPCPLL runs the idle divider (atomic; changed under clk) */
 	int dropping; /* a drop is queued or running (atomic) */
 	void *clk;    /* mutex: every divider change */
-	void *drop_w, *raise_w;
+	void *drop_w, *raise_w, *settle_w;
+	int settling; /* a settle is queued or running (atomic, gpu_quiet.c) */
 	u32 run_pl, idle_pl, run_khz, idle_khz;
 	u32 vco_coeff, vco_khz, maximum_khz, requested_khz;
 	int clock_available;
@@ -549,6 +557,10 @@ int tgm_order_waits(struct tgm_chan *chan);
 
 /* Push dwords chan_fence() may write, at most */
 #define CHAN_FENCE_DWORDS 48
+/* A wake entry (gpu_quiet.c): its NON_STALL_INTERRUPT, as nvif counts an entry of its own. Every submission leaves room
+ * for one, so a quiet job's waiter never waits for room to be told it can stop waiting. */
+#define CHAN_WAKE_ENTRIES 1
+#define CHAN_WAKE_DWORDS 2
 int tgm_chan_wait_ready(struct tgm_chan *chan, u32 gpfifo_nr, u32 push_nr);
 /* external: TGM_FENCE_VOLATILE_WRITES when every write the fence covers went around the L2: the engines idle and their
  * writes committed, no L2 flush */
@@ -559,6 +571,13 @@ void tgm_fault_publish(struct tgm_chan *chan);
 void tgm_fault_unpublish(struct tgm_chan *chan);
 void tgm_fence_kill_record(volatile u32 *fence_cpu, u32 first, u32 last, u32 error);
 u32 tgm_chan_fence_job(struct tgm_chan *chan, int external, u32 first, u32 next);
+int tgm_chan_room(struct tgm_chan *chan, u32 gpfifo_nr, u32 push_nr);
+/* gpu_quiet.c: a wake entry behind the newest job, by the submission's owner inside the gate; the idle clock's settle */
+void tgm_chan_wake_push(struct tgm_chan *chan);
+void tgm_idle_settle(void *arg);
+void tgm_chan_need_id(u64 id, u32 seqno);
+int tgm_chan_announced_id(u64 id, u32 seqno);
+int tgm_chan_announced_uid(u32 uid, u32 seqno);
 int tgm_backing_dependencies(struct tgm_chan *chan, const struct switch_gpu_backing_token *tokens,
 			     u32 count, int emit);
 

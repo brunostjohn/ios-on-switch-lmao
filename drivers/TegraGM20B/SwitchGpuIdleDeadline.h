@@ -10,10 +10,17 @@ void tegra_gm20b_idle_tick(void)
 	u64 now = 0;
 	int expected = 0;
 
-	if (!READ_ONCE(tgm_idle.on) || READ_ONCE(tgm_idle.low) || READ_ONCE(tgm_idle.dropping) ||
-	    idle_in_flight())
+	if (!READ_ONCE(tgm_idle.on) || READ_ONCE(tgm_idle.low) || READ_ONCE(tgm_idle.dropping))
 		return;
 	now = nvxnu_nanotime();
+	/* seqnos in flight with no kick for the drop time: a quiet job's end may have come with no interrupt to count it */
+	if (idle_in_flight()) {
+		if (now - __atomic_load_n(&tgm_idle.last_busy, __ATOMIC_SEQ_CST) >= IDLE_DROP_NS &&
+		    __atomic_compare_exchange_n(&tgm_idle.settling, &expected, 1, false,
+						__ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST))
+			nvxnu_work_schedule(tgm_idle.settle_w);
+		return;
+	}
 	if (now < __atomic_load_n(&tgm_idle.service_until, __ATOMIC_SEQ_CST) ||
 	    now - __atomic_load_n(&tgm_idle.last_busy, __ATOMIC_SEQ_CST) < IDLE_DROP_NS ||
 	    now - native_display_last_swap_ns() < IDLE_DROP_NS)

@@ -24,7 +24,8 @@ struct {
 	int on, low, dropping;
 	uint64_t service_until, last_busy;
 	u64 kicked, retired;
-	void *drop_w, *raise_w;
+	void *drop_w, *raise_w, *settle_w;
+	int settling;
 } tgm_idle;
 
 uint64_t now, last_swap;
@@ -141,20 +142,28 @@ TEST_F(GpuDeadline, ACompletionSeenOnlyAtTheJobsEndRetiresEveryFence)
 	EXPECT_EQ(scheduled, 1u);
 }
 
+// Work in flight keeps the run clock; with no kick for the drop time the tick settles it once (a quiet job's end may have
+// raised no interrupt to count it), and drops nothing.
 TEST_F(GpuDeadline, WorkInFlightOrARecentSwapKeepsTheRunClock)
 {
 	tgm_chan chan = {0, 0};
 	kick(0, 3);
 	chan.completed = 2;
 	idle_fenced(&chan);
-	idleFor(IDLE_DROP_NS);
+	idleFor(IDLE_DROP_NS / 2);
 	tegra_gm20b_idle_tick();
 	EXPECT_EQ(scheduled, 0u);
+	idleFor(IDLE_DROP_NS);
+	tegra_gm20b_idle_tick();
+	tegra_gm20b_idle_tick();
+	EXPECT_EQ(scheduled, 1u);
+	EXPECT_EQ(tgm_idle.settling, 1);
+	EXPECT_EQ(tgm_idle.dropping, 0);
 	chan.completed = 3;
 	idle_fenced(&chan);
 	last_swap = now - IDLE_DROP_NS / 2;
 	tegra_gm20b_idle_tick();
-	EXPECT_EQ(scheduled, 0u);
+	EXPECT_EQ(scheduled, 1u);
 }
 
 TEST_F(GpuDeadline, TeardownAndALatePassRetireADeadChannelOnce)

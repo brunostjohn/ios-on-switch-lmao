@@ -94,12 +94,15 @@ static void sleep_fences(void)
 			busy = 1;
 			id = chan->id;
 			seqno = chan->submitted;
+			/* the gate is drained, so no owner's submission or wake entry is under way */
+			if (switch_gpu_quiet_need(&chan->quiet, seqno))
+				tgm_chan_wake_push(chan);
 		}
 		mutex_unlock(&tgm_live_lock);
 		if (!busy)
 			break;
 		waits++;
-		if (!nvxnu_idle(seq, end) && sync_done(id, seqno))
+		if (!nvxnu_idle(seq, end) && tgm_chan_announced_id(id, seqno))
 			nvxnu_wake_due(seq, "fence", seqno);
 	}
 	tgm_journal("tegra-gm20b: sleep: %u channels idle (%u fence waits): %llu us", chans, waits,

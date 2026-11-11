@@ -323,8 +323,12 @@ void tgm_stats_waits(u64 ms)
 	u32 other = 0;
 	u32 deadline = 0;
 	u32 jobs = 0;
+	u32 quiet = 0;
+	u32 asked = 0;
+	u32 pushed = 0;
+	u32 settled = 0;
 	u32 per = ms ? (u32)ms : 1;
-	char line[320];
+	char line[400];
 
 	nvxnu_irq_passes(&stall, &nonstall);
 	ds = stall - tgm_wstat.stall;
@@ -337,6 +341,10 @@ void tgm_stats_waits(u64 ms)
 	other = __atomic_exchange_n(&tgm_wstat.other, 0, __ATOMIC_RELAXED);
 	deadline = __atomic_exchange_n(&tgm_wstat.deadline, 0, __ATOMIC_RELAXED);
 	jobs = __atomic_exchange_n(&tgm_wstat.jobs, 0, __ATOMIC_RELAXED);
+	quiet = __atomic_exchange_n(&tgm_wstat.quiet, 0, __ATOMIC_RELAXED);
+	asked = __atomic_exchange_n(&tgm_wstat.asked, 0, __ATOMIC_RELAXED);
+	pushed = __atomic_exchange_n(&tgm_wstat.pushed, 0, __ATOMIC_RELAXED);
+	settled = __atomic_exchange_n(&tgm_wstat.settled, 0, __ATOMIC_RELAXED);
 	sum = __atomic_exchange_n(&tgm_wstat.lat_sum, 0, __ATOMIC_RELAXED);
 	max = __atomic_exchange_n(&tgm_wstat.lat_max, 0, __ATOMIC_RELAXED);
 	per_job = jobs ? (ds + dn) * 100 / jobs : 0;
@@ -344,10 +352,12 @@ void tgm_stats_waits(u64 ms)
 		line, sizeof(line),
 		"%llu ms: interrupt passes %llu/s stall, %llu/s nonstall, %llu.%02llu per job "
 		"(%u jobs); channel wakes %llu/s; fence waits slept %llu/s: %u woken, %u at their "
-		"seqno (wake to waiter mean %llu us max %llu us), %u at their deadline",
+		"seqno (wake to waiter mean %llu us max %llu us), %u at their deadline; %u quiet "
+		"jobs, %u wake asks, %u wake entries, %u idle settles",
 		ms, ds * 1000 / per, dn * 1000 / per, per_job / 100, per_job % 100, jobs,
 		(u64)wakes * 1000 / per, (u64)slept * 1000 / per, woken, woken - other,
-		woken > other ? sum / (woken - other) / 1000 : 0, max / 1000, deadline);
+		woken > other ? sum / (woken - other) / 1000 : 0, max / 1000, deadline, quiet,
+		asked, pushed, settled);
 	nvxnu_stats("tegra-gm20b: waits %s", line);
 }
 

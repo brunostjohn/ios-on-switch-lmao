@@ -225,6 +225,7 @@ IOReturn AGXDeviceUserClient::channelCreate(const TegraGM20BAbiChannelCreate *in
 	leanChannels_[slot] = copyOnly != 0;
 	faultLogged_[slot] = false;
 	tgm_chan_on_fence(chans_[slot], retirementFence, this);
+	tgm_chan_on_wake(chans_[slot], wakeAsked, this, slot);
 	out->channel = slot + 1;
 	out->fence_token = kFenceToken;
 	out->fence_offset = slot * 64;

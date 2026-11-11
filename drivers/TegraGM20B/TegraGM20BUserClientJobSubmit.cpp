@@ -211,6 +211,9 @@ IOReturn AGXDeviceUserClient::runJobUses(const SwitchGpuJobRecord &record, JobSc
 	int error = events->sequence(eventChannels_[slot]);
 	if (error)
 		return error == -5 ? kIOReturnAborted : ioreturn(error);
+	// an event's waiters are woken by the interrupt at its signal
+	const bool quiet =
+		(head.flags & TegraGM20BJobQuiet) && !(head.flags & TegraGM20BJobHasEvents);
 	const uint32_t submit = TegraGM20BSubmitVisibilityExplicit |
 				((head.flags & TegraGM20BJobExternal) ? uint32_t(TegraGM20BSubmitExternalVisibility) : 0u) |
 				((head.flags & TegraGM20BJobHasEvents) ? uint32_t(TegraGM20BSubmitHasEvents) : 0u);
@@ -280,9 +283,10 @@ refresh:
 			error = -28;
 		if (!error) {
 			job.phases.end(TGM_SUBMIT_LOCK);
-			jobVisibility = switch_gpu_job_visibility(submit, events->signals(),
-								  unlockedWrites || scanoutWrites,
-								  hostWritten || transaction.host_written);
+			jobVisibility =
+				switch_gpu_job_visibility(submit, events->signals(), unlockedWrites || scanoutWrites,
+							  hostWritten || transaction.host_written) |
+				(quiet ? uint32_t(SWITCH_GPU_SUBMIT_QUIET) : 0u);
 			error = switch_gpu_chan_exec_job(chan, pushes, count, job.dependencies, dependencies,
 							 siblings, siblingCount, &seqno, jobVisibility);
 			job.phases.end(TGM_SUBMIT_EXEC);
@@ -332,6 +336,7 @@ refresh:
 	switch_gpu_path_taken(SWITCH_GPU_PATH_SUBMIT_JOB, 1);
 	switch_gpu_path_taken(SWITCH_GPU_PATH_SET_JOB, set ? 1 : 0);
 	switch_gpu_path_taken(SWITCH_GPU_PATH_SHARED_USE, head.shared_count);
+	switch_gpu_path_taken(SWITCH_GPU_PATH_QUIET_JOB, quiet && count ? 1 : 0);
 	out->seqno = seqno;
 	out->reserved = 0;
 	return kIOReturnSuccess;

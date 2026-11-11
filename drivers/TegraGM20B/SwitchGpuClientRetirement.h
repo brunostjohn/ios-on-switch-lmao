@@ -165,6 +165,8 @@ void AGXDeviceUserClient::retire(RetiredBinding *record)
 		if (chans_[slot]) {
 			switch_gpu_chan_next_token(chans_[slot], &record->snapshots[slot]);
 			record->snapshots[slot].value = uint32_t(record->snapshots[slot].value - 1);
+			// its retirement (and the bind epoch behind it) waits for that seqno's interrupt
+			tgm_chan_need(chans_[slot], uint32_t(record->snapshots[slot].value));
 		}
 	}
 	record->next = nullptr;
@@ -421,6 +423,8 @@ void AGXDeviceUserClient::drainResources()
 	// Channel destruction drains the callbacks before their preallocated work is cancelled.
 	if (retireCall_)
 		thread_call_cancel_wait(retireCall_);
+	if (wakeCall_)
+		thread_call_cancel_wait(wakeCall_);
 	IOLockLock(lock_);
 	while (nbinds_)
 		unbindOverlaps(binds_[0].va, binds_[0].range, nullptr);

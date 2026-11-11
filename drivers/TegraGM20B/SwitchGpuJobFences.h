@@ -15,14 +15,15 @@
 
 /* A channel's last jobs by the seqnos each released (`first` .. `last`), with what its kick found (high channels,
  * gpu_fenced.h high_fenced). The interrupt pass covers whole jobs and a fence waiter's seqno is announced by the end of its job,
- * so both find a seqno's job here. A record being refilled is empty (`first` past `last`) until `last` is published. */
+ * so both find a seqno's job here. A record being refilled is empty (`first` past `last`) until `last` is published. A
+ * quiet job's end announces nothing until a wake entry follows it (SwitchGpuQuiet.h). */
 #define SWITCH_GPU_JOBS 8
 
 struct switch_gpu_kicked_job {
 	uint64_t kick_ns, asked_pt;
 	uint32_t first, last;
 	int16_t behind;
-	uint8_t app, waits;
+	uint8_t app, waits, quiet;
 };
 
 struct switch_gpu_jobs {
@@ -36,6 +37,7 @@ static inline void switch_gpu_jobs_init(struct switch_gpu_jobs *jobs, uint32_t s
 		jobs->job[i].first = submitted + 1;
 		jobs->job[i].last = submitted;
 		jobs->job[i].behind = -1;
+		jobs->job[i].quiet = 0;
 	}
 }
 
@@ -46,8 +48,9 @@ static inline struct switch_gpu_kicked_job *switch_gpu_jobs_next(struct switch_g
 }
 
 /* Before the kick: the job releasing first .. last, as kicked behind an app until the kick's result says otherwise. */
-static inline struct switch_gpu_kicked_job *
-switch_gpu_jobs_kick(struct switch_gpu_jobs *jobs, uint32_t first, uint32_t last, uint64_t kick_ns)
+static inline struct switch_gpu_kicked_job *switch_gpu_jobs_kick(struct switch_gpu_jobs *jobs,
+								 uint32_t first, uint32_t last,
+								 uint64_t kick_ns, int quiet)
 {
 	struct switch_gpu_kicked_job *job = switch_gpu_jobs_next(jobs);
 
@@ -56,6 +59,7 @@ switch_gpu_jobs_kick(struct switch_gpu_jobs *jobs, uint32_t first, uint32_t last
 	__atomic_store_n(&job->kick_ns, kick_ns, __ATOMIC_RELAXED);
 	__atomic_store_n(&job->behind, -1, __ATOMIC_RELAXED);
 	__atomic_store_n(&job->app, 1, __ATOMIC_RELAXED);
+	__atomic_store_n(&job->quiet, quiet ? 1 : 0, __ATOMIC_RELAXED);
 	__atomic_store_n(&job->first, first, __ATOMIC_RELEASE);
 	__atomic_store_n(&job->last, last, __ATOMIC_RELEASE);
 	jobs->kicked++;
@@ -78,6 +82,7 @@ static inline int switch_gpu_jobs_find(const struct switch_gpu_jobs *jobs, uint3
 		out->behind = __atomic_load_n(&job->behind, __ATOMIC_RELAXED);
 		out->app = __atomic_load_n(&job->app, __ATOMIC_RELAXED);
 		out->waits = __atomic_load_n(&job->waits, __ATOMIC_RELAXED);
+		out->quiet = __atomic_load_n(&job->quiet, __ATOMIC_RELAXED);
 		__atomic_thread_fence(__ATOMIC_ACQUIRE);
 		if (__atomic_load_n(&job->first, __ATOMIC_RELAXED) != first)
 			continue;
@@ -104,12 +109,13 @@ static inline uint32_t switch_gpu_jobs_span(const struct switch_gpu_jobs *jobs, 
 }
 
 /* The seqno whose fence interrupts for `seqno`: the end of the recorded job holding it, else of a later recorded job
- * (which ends after it too), else `seqno` itself (not kicked yet). */
-static inline uint32_t switch_gpu_jobs_announcing(const struct switch_gpu_jobs *jobs,
-						  uint32_t seqno)
+ * (which ends after it too), else `seqno` itself (not kicked yet). A quiet job's end is passed over: *announced is 0 when
+ * every recorded end at or after `seqno` is quiet. */
+static inline uint32_t switch_gpu_jobs_announced_by(const struct switch_gpu_jobs *jobs,
+						    uint32_t seqno, int *announced)
 {
 	uint32_t best = seqno;
-	int found = 0;
+	int found = 0, kicked = 0;
 
 	for (uint32_t i = 0; i < SWITCH_GPU_JOBS; ++i) {
 		const uint32_t last = __atomic_load_n(&jobs->job[i].last, __ATOMIC_ACQUIRE);
@@ -117,11 +123,31 @@ static inline uint32_t switch_gpu_jobs_announcing(const struct switch_gpu_jobs *
 
 		if ((int32_t)(last - first) < 0 || (int32_t)(last - seqno) < 0)
 			continue;
+		kicked = 1;
+		if (__atomic_load_n(&jobs->job[i].quiet, __ATOMIC_ACQUIRE))
+			continue;
 		if (!found || (int32_t)(last - best) < 0)
 			best = last;
 		found = 1;
 	}
+	*announced = found || !kicked;
 	return best;
+}
+
+static inline uint32_t switch_gpu_jobs_announcing(const struct switch_gpu_jobs *jobs,
+						  uint32_t seqno)
+{
+	int announced = 0;
+
+	return switch_gpu_jobs_announced_by(jobs, seqno, &announced);
+}
+
+/* A wake entry pushed behind the newest job (the submission's owner): its end announces from now on. */
+static inline void switch_gpu_jobs_announce_newest(struct switch_gpu_jobs *jobs)
+{
+	struct switch_gpu_kicked_job *job = &jobs->job[(jobs->kicked - 1) % SWITCH_GPU_JOBS];
+
+	__atomic_store_n(&job->quiet, 0, __ATOMIC_RELEASE);
 }
 
 /* 0 and the count, or -22 for a fence after an incomplete push or the job's last, -7 for more than the ABI allows. */

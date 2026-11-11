@@ -35,6 +35,8 @@ enum switch_gpu_path {
 	SWITCH_GPU_PATH_RELAYOUT_LAZY,     /* a CPU lock that untiled a deferred surface */
 	SWITCH_GPU_PATH_RELAYOUT_NEVER,    /* a deferred surface whose memory went before anything asked for rows */
 	SWITCH_GPU_PATH_RELAYOUT_MOVED,    /* a tiling or untiling move in place */
+	SWITCH_GPU_PATH_QUIET_JOB,      /* SubmitJob: a job ending with no interrupt unless asked (SwitchGpuQuiet.h) */
+	SWITCH_GPU_PATH_WAKE_ASK,       /* a wait that asked for a wake entry behind a quiet job */
 	SWITCH_GPU_PATH_COUNT
 };
 

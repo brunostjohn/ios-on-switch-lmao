@@ -37,9 +37,15 @@ static int chan_room(struct tgm_chan *chan, u32 gpfifo_nr, u32 push_nr)
 	return (u32)free >= gpfifo_nr;
 }
 
+int tgm_chan_room(struct tgm_chan *chan, u32 gpfifo_nr, u32 push_nr)
+{
+	return chan_room(chan, gpfifo_nr, push_nr);
+}
+
 /* Room for gpfifo_nr entries and push_nr dwords, waited for by interrupt: every submission's GET report comes before its
  * fence's nonstall interrupt (chan_fence), whose pass ends in nvxnu_wake(), so nvif's own wait then finds the room at
- * once and never spins. -ETIMEDOUT after 1 s. */
+ * once and never spins; a quiet newest job gets its wake entry first. The caller owns the channel's submissions and is
+ * inside the gate. -ETIMEDOUT after 1 s. */
 int tgm_chan_wait_ready(struct tgm_chan *chan, u32 gpfifo_nr, u32 push_nr)
 {
 	u64 end = nvxnu_nanotime() + NSEC_PER_SEC;
@@ -50,6 +56,8 @@ int tgm_chan_wait_ready(struct tgm_chan *chan, u32 gpfifo_nr, u32 push_nr)
 
 		if (chan_room(chan, gpfifo_nr, push_nr))
 			break;
+		if (switch_gpu_quiet_need(&chan->quiet, chan->submitted))
+			tgm_chan_wake_push(chan);
 		if (!nvxnu_idle(seq, end) && !chan_room(chan, gpfifo_nr, push_nr)) {
 			ret = -ETIMEDOUT;
 			break;
@@ -59,16 +67,17 @@ int tgm_chan_wait_ready(struct tgm_chan *chan, u32 gpfifo_nr, u32 push_nr)
 }
 
 /* Fence push: semaphore release of the next 32-bit seqno after wait-for-idle, then nvif's GET report, then a nonstall
- * interrupt (nouveau nvc0_fence_emit32), then kick. The L2's dirty lines go to DRAM first, and the end of the submission
+ * interrupt (nouveau nvc0_fence_emit32) unless the job is quiet and nobody asked for it (SwitchGpuQuiet.h), then kick. The L2's dirty lines go to DRAM first, and the end of the submission
  * is stamped for the stats. The GET report comes before the interrupt so that a wait for room (chan_room) finds the room
  * this submission frees once its interrupt has woken it; nvif's own report at the kick lands after the interrupt. Space
  * was reserved by the caller (chan_wait_room / chan_push_wait): CHAN_FENCE_DWORDS. A job's internal fences
  * (chan_job_fence) released first .. next - 1 ahead of it, in the same kick, and raise no interrupt: this one announces
  * them all (the job's record says which). */
-u32 tgm_chan_fence_job(struct tgm_chan *chan, int external, u32 first, u32 next)
+static u32 chan_fence_job(struct tgm_chan *chan, int external, u32 first, u32 next, int quiet)
 {
 	struct nvif_push *push = &chan->chan.push;
 	struct switch_gpu_kicked_job *job = NULL;
+	const int announce = switch_gpu_quiet_announces(&chan->quiet, quiet);
 	u32 s = 0;
 	idle_wake(); /* backstop: tgm_chan_exec and tgm_present_copy_dependencies raise it before their first kick */
 	if (external && (l2_on() || chan->kernel)) {
@@ -107,8 +116,10 @@ u32 tgm_chan_fence_job(struct tgm_chan *chan, int external, u32 first, u32 next)
 			  NVDEF(NV906F, SEMAPHORED, RELEASE_SIZE, 4BYTE));
 	/* NOLINTEND(bugprone-signed-bitwise,bugprone-branch-clone) */
 	nvif_chan_gpfifo_post(&chan->chan);
-	/* NOLINTNEXTLINE(bugprone-signed-bitwise): nouveau's PUSH_MTHD computes in int */
-	PUSH_MTHD(push, NV906F, NON_STALL_INTERRUPT, 0);
+	if (announce) {
+		/* NOLINTNEXTLINE(bugprone-signed-bitwise): nouveau's PUSH_MTHD computes in int */
+		PUSH_MTHD(push, NV906F, NON_STALL_INTERRUPT, 0);
+	}
 	__asm__ volatile(
 		"dsb sy" ::
 			: "memory"); /* client WC writes and our push reach DRAM before GP_PUT */
@@ -120,9 +131,14 @@ u32 tgm_chan_fence_job(struct tgm_chan *chan, int external, u32 first, u32 next)
 		WRITE_ONCE(chan->progress_held, tgm_hold_held_ns(chan->chid, chan->submit_ns));
 		WRITE_ONCE(chan->busy_ns, chan->submit_ns);
 	}
-	job = switch_gpu_jobs_kick(&chan->jobs, first, next, chan->submit_ns);
-	if (stats_on())
+	job = switch_gpu_jobs_kick(&chan->jobs, first, next, chan->submit_ns, !announce);
+	if (announce)
+		switch_gpu_quiet_announce(&chan->quiet, next);
+	if (stats_on()) {
 		__atomic_fetch_add(&tgm_wstat.jobs, 1, __ATOMIC_RELAXED);
+		if (!announce)
+			__atomic_fetch_add(&tgm_wstat.quiet, 1, __ATOMIC_RELAXED);
+	}
     if (switch_gpu_irq_arm(&chan->irq_state, next) && nvif_event_allow(&chan->nonstall))
         nvxnu_panic("SwitchGpu: cannot arm channel completion");
     WRITE_ONCE(chan->submitted, next);
@@ -145,6 +161,11 @@ u32 tgm_chan_fence_job(struct tgm_chan *chan, int external, u32 first, u32 next)
 	if (stats_on())
 		idle_stats();
 	return next;
+}
+
+u32 tgm_chan_fence_job(struct tgm_chan *chan, int external, u32 first, u32 next)
+{
+	return chan_fence_job(chan, external, first, next, 0);
 }
 
 void switch_gpu_chan_semantic_visibility(struct tgm_chan *chan, volatile struct TegraGM20BAbiFenceSemantic *state)
@@ -332,9 +353,9 @@ static void chan_submission_room(struct tgm_chan *chan, const struct tgm_push *p
 		*prof = NULL;
 	for (i = 0; *prof && i < count; i++)
 		stamps += !pushes[i].incomplete && (*prof)->cls[i] != TGM_PC_SKIP;
-	*entries = count + 6 + stamps + job_fences;
+	*entries = count + 6 + stamps + job_fences + CHAN_WAKE_ENTRIES + 1;
 	*words = CHAN_FENCE_DWORDS + 64 + 5 * (TGM_ORDER_MAX + dependency_count + 1) + 16 * stamps +
-		 SWITCH_GPU_FENCE_POINT_DWORDS * job_fences;
+		 SWITCH_GPU_FENCE_POINT_DWORDS * job_fences + CHAN_WAKE_DWORDS + 16;
 }
 
 /* SubmitJob's acquires on the latest set job of the connection's other channels, in the same entry as the dependencies:
@@ -384,6 +405,8 @@ static inline __attribute__((always_inline)) int chan_exec_body(struct tgm_chan 
 		(visibility & SWITCH_GPU_SUBMIT_HOST_WRITTEN);
 	int external = !(visibility & SWITCH_GPU_SUBMIT_VISIBILITY_EXPLICIT) ||
 		(visibility & SWITCH_GPU_SUBMIT_EXTERNAL_VISIBILITY) || !chan->visible_cpu;
+	int quiet = (visibility & SWITCH_GPU_SUBMIT_QUIET) &&
+		    __atomic_load_n(&chan->wake, __ATOMIC_ACQUIRE);
 
 	if (chan->error)
 		return -EIO;
@@ -527,7 +550,7 @@ static inline __attribute__((always_inline)) int chan_exec_body(struct tgm_chan 
 	last = switch_gpu_job_emit(pushes, count, chan->submitted, &emitter);
 	tgm_hang_log_submit(&chan->hang, last, job.first, chan->chan.gpfifo.cur);
 
-	*seqno = tgm_chan_fence_job(chan, external, chan->submitted + 1, last);
+	*seqno = chan_fence_job(chan, external, chan->submitted + 1, last, quiet);
 	if (SWITCH_FRAME_TIMELINE && !chan->kernel)
 		frame_submitted(chan, *seqno, start);
 	if (stats_on())

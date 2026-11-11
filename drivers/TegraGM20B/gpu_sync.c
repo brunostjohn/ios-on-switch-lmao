@@ -169,13 +169,14 @@ int tgm_order_waits(struct tgm_chan *chan)
 
 static int sync_wait(u64 id, u32 seqno, u64 end)
 {
+	tgm_chan_need_id(id, seqno);
 	for (;;) {
 		u32 seq = nvxnu_wake_seq();
 		if (sync_done(id, seqno))
 			return 0;
 		if (nvxnu_nanotime() >= end)
 			return -ETIMEDOUT;
-		if (!nvxnu_idle(seq, end) && sync_done(id, seqno))
+		if (!nvxnu_idle(seq, end) && tgm_chan_announced_id(id, seqno))
 			nvxnu_wake_due(seq, "fence", seqno);
 	}
 }
@@ -285,6 +286,7 @@ static void writer_wait(u32 uid, u32 seqno, const struct tgm_relayout_writer *ac
 	enum tgm_hang verdict = TGM_HANG_STUCK;
 	u32 late = 0;
 
+	tgm_chan_need_uid(uid, seqno);
 	for (;;) {
 		const u64 end = nvxnu_nanotime() + TGM_WRITER_HANG_NS;
 
@@ -295,7 +297,7 @@ static void writer_wait(u32 uid, u32 seqno, const struct tgm_relayout_writer *ac
 				return;
 			if (nvxnu_nanotime() >= end)
 				break;
-			if (!nvxnu_idle(seq, end) && tgm_writer_done(uid, seqno))
+			if (!nvxnu_idle(seq, end) && tgm_chan_announced_uid(uid, seqno))
 				nvxnu_wake_due(seq, "fence", seqno);
 		}
 		if (tgm_gpu.stage < 3)
