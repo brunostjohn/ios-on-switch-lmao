@@ -525,8 +525,7 @@ static kern_return_t mock_call(mach_port_t c, uint32_t sel, const void *in, size
                                                (getenv("MOCK_TILED_CACHE") ? TegraGM20BInfoTiledCache : 0) |
                                                (getenv("MOCK_COMPRESSION") ? TegraGM20BInfoCompression : 0) |
                                                (getenv("MOCK_NO_PRIORITY") ? 0 : TegraGM20BInfoPriority) |
-                                               (getenv("MOCK_NATIVE_JOBS") ? TegraGM20BInfoSubmitAddress |
-                                                TegraGM20BInfoResourceReady : 0),
+                                               (getenv("MOCK_NATIVE_JOBS") ? TegraGM20BInfoSubmitAddress : 0),
                                       .chipset = 0x12e,
                                       .gpc_count = 1,
                                       .tpc_count = 2,

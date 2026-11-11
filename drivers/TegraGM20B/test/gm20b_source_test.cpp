@@ -691,14 +691,11 @@ TEST(GM20BFencesSource, ExecQueuesItsWritersAcquiresBeforeItSubmits)
 	}
 	const auto capabilities = flat(definition(client(), "uint32_t switch_gpu_info_flags(void)"));
 	for (const char *capability : {"TegraGM20BInfoExecSurfaces", "TegraGM20BInfoSubmitAddress",
-				      "TegraGM20BInfoResourceReady", "TegraGM20BInfoCpuAccess"})
+				      "TegraGM20BInfoCpuAccess"})
 		EXPECT_THAT(capabilities, HasSubstr(capability));
 	EXPECT_THAT(flat(definition(client(), "IOReturn AGXDeviceUserClient::getInfo(")),
 		    HasSubstr("out->flags = switch_gpu_info_flags();"));
 	EXPECT_THAT(client(), Not(HasSubstr("kInfoAwaitingUserspace")));
-	for (const char *capability :
-	     {"TegraGM20BInfoResourceReady"})
-		EXPECT_THAT(capabilities, HasSubstr(capability));
 }
 
 // The flags exec hands chan_exec are SwitchGpuJobVisibility.h's (switch_gpu_job_visibility_test), with a write into an

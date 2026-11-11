@@ -429,7 +429,6 @@ struct SharedEventsPathTest: GPUPathTest {
 struct ResourceReadyPathTest: GPUPathTest {
     let id = "gpu.path.resource_ready"
     let name = "A render into a CPU-locked IOSurface waits for the unlock instead of failing"
-    let bit: Int? = 23
     let counters = ["ready_arms"]
 
     func exercise(_ gpu: GPU, _: TestContext, _ metrics: inout Metrics) async throws -> [String] {

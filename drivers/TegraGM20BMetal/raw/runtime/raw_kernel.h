@@ -141,11 +141,6 @@ public:
 
     std::shared_ptr<SharedEvents> sharedEvents();
 
-    bool resourceReady() const
-    {
-        return exactJobs() && (info_.flags & TegraGM20BInfoResourceReady);
-    }
-
     uint64_t nextAdmission()
     {
         return admissionCookie_.fetch_add(1, std::memory_order_relaxed);

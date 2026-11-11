@@ -3493,7 +3493,7 @@ void CommandBuffer::releaseGeometry()
 
 std::shared_ptr<ResourceReadyCompletion> CommandBuffer::resourceReadiness(std::function<void()> ready, int &result)
 {
-    auto events = dev_->k_.resourceReady() ? dev_->k_.sharedEvents() : nullptr;
+    auto events = dev_->k_.sharedEvents();
     result = kIOReturnUnsupported;
     return events ? events->resources(surfaces_.uses(), std::move(ready), result) : nullptr;
 }
@@ -3616,7 +3616,7 @@ bool CommandBuffer::commit(uint32_t &seqno)
     const bool multiple =
         (!segments_.empty() && segments_.submission(0, maxPushes, maxFences) < segments_.size()) ||
         sharedWaits_.size() + sharedSignals_.size() > TegraGM20BMaxJobEvents;
-    const uint64_t admissionCookie = multiple && d.k_.resourceReady() ? d.k_.nextAdmission() : 0;
+    const uint64_t admissionCookie = multiple && d.k_.exactJobs() ? d.k_.nextAdmission() : 0;
     bool admissionHeld = false;
     uint32_t seq = 0;
     auto submit = [&](const TegraGM20BAbiPush *pushes, uint32_t count, SurfaceList &resources,
@@ -3632,7 +3632,7 @@ bool CommandBuffer::commit(uint32_t &seqno)
             d.k_.exec(d.channel_, pushes, count, d.lastSeqno_, seq, uses, &result, visibility, events, admission);
         RAW_ENCODE_END(execSpan);
         if (!executed) {
-            admissionBlocked = !published && result == kIOReturnCannotLock && d.k_.resourceReady();
+            admissionBlocked = !published && result == kIOReturnCannotLock && d.k_.exactJobs();
             if (admissionHeld) {
                 SurfaceList empty;
                 uint32_t cancelled = 0;

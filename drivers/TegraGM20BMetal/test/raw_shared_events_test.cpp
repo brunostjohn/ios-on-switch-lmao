@@ -29,7 +29,6 @@ struct Notification {
 };
 struct Model {
     bool tunnel = false;
-    bool shared = true;
     uint32_t selector = 7;
     uint64_t nextHandle = 1;
     int probeResult = kIOReturnNotReady, armResult = 0;
@@ -93,8 +92,7 @@ extern "C" kern_return_t IOConnectCallStructMethod(mach_port_t connection, uint3
         info = {};
         info.abi_version = TegraGM20BAbiVersion;
         info.flags = TegraGM20BInfoSubmitAddress |
-                     (model.pushFences ? uint32_t(TegraGM20BInfoPushFences) : 0u) |
-                     (model.shared ? uint32_t(TegraGM20BInfoResourceReady) : 0u);
+                     (model.pushFences ? uint32_t(TegraGM20BInfoPushFences) : 0u);
         info.va_start = 0x1000000;
         info.va_end = 0x100000000;
         info.page_size = 4096;
@@ -493,11 +491,10 @@ static void resourceReadiness(bool tunnel)
     check(wakes == 2 && model.destroyed == 1, "late resource notification cannot access closed transport");
 }
 
-static void admission(bool tunnel, bool supported)
+static void admission(bool tunnel)
 {
     model = {};
     model.tunnel = tunnel;
-    model.shared = supported;
     raw::Kernel kernel;
     std::string error;
     check(kernel.open(error), "admission Kernel opens");
@@ -512,11 +509,6 @@ static void admission(bool tunnel, bool supported)
     const bool accepted = kernel.exec(3, &push, 1, 0, sequence, &resources, &result,
         raw::JobVisibility::Internal, {nullptr, &signal, 0, 1},
         {cookie, TegraGM20BSubmitAdmissionBegin | TegraGM20BSubmitAdmissionEnd});
-    if (!supported) {
-        check(!accepted && result == kIOReturnBadArgument && !model.submissions,
-              "admission capability is required before publication");
-        return;
-    }
     check(accepted && model.submissions == 1, "admission and work share one submission");
     const auto &header = *reinterpret_cast<const TegraGM20BAbiSubmit *>(model.submitted.data());
     const size_t offset = sizeof header + sizeof push + sizeof(TegraGM20BAbiSurfaceUse);
@@ -580,9 +572,8 @@ int main()
     batchSubmission(false, false);
     rangeSubmission(false);
     rangeSubmission(true);
-    admission(false, true);
-    admission(true, true);
-    admission(false, false);
+    admission(false);
+    admission(true);
     cpuCompletion(false);
     cpuCompletion(true);
     printf("PASS: %u shared-event transport checks\n", checks);
