@@ -16,6 +16,7 @@ uint32_t allocations, frees, releases, lookups, surfaceReleases, publishes;
 uint32_t requestedId;
 task_t requestedTask;
 TegraVICPicture exportedPicture;
+IOMemoryDescriptor surfaceMemory;
 }
 
 extern "C" bool tegra_vic_present_ready() { return vicReady; }
@@ -68,14 +69,19 @@ extern "C" IOReturn tegra_vic_surface_lookup(uint32_t id, task_t task, TegraVICS
     requestedTask = task;
     *surface = {};
     surface->id = id;
+    surface->memory = &surfaceMemory;
+    surface->desc.length = 1695744;
+    surface->baseOffset = 0;
     return lookupError;
 }
 extern "C" void tegra_vic_surface_release(TegraVICSurface *) { ++surfaceReleases; }
-int switch_native_surface_publish(const TegraVICSurface *surface, const TegraVICPicture *picture, const char **)
+int switch_native_surface_publish(const TegraVICSurface *surface, const TegraVICPicture *picture, const char **why)
 {
     ++publishes;
     EXPECT_EQ(surface->id, picture->surfaceID);
     exportedPicture = *picture;
+    if (publishError && why)
+        *why = "native export into a surface whose allocation is not its descriptor's length";
     return publishError;
 }
 
@@ -219,6 +225,26 @@ TEST_F(SwitchNVDECOutputTest, FailedPublishReleasesLookupAndPreservesBuffer)
     EXPECT_EQ(switch_nvdec_output_export(&buffer.block, &request, task), -16);
     EXPECT_EQ(surfaceReleases, 1u);
     unchanged();
+}
+
+TEST_F(SwitchNVDECOutputTest, AFailedExportNamesItsRefusalAndTheSurfacesSizes)
+{
+    SwitchNVDECExportRefusal refusal = {};
+    vicReady = false;
+    EXPECT_EQ(switch_nvdec_output_export(&buffer.block, &request, task, &refusal), -95);
+    EXPECT_STREQ(refusal.why, "native output while VIC, the GPU or the display cannot read it");
+    vicReady = true;
+    request.dst_x = 2;
+    EXPECT_EQ(switch_nvdec_output_export(&buffer.block, &request, task, &refusal), -95);
+    EXPECT_STREQ(refusal.why, "native output of a placed or 16-bit picture");
+    request.dst_x = 0;
+    publishError = -22;
+    surfaceMemory.length = 1703936;
+    EXPECT_EQ(switch_nvdec_output_export(&buffer.block, &request, task, &refusal), -22);
+    EXPECT_STREQ(refusal.why, "native export into a surface whose allocation is not its descriptor's length");
+    EXPECT_EQ(refusal.allocationBytes, 1695744u);
+    EXPECT_EQ(refusal.descriptorBytes, 1703936u);
+    EXPECT_EQ(refusal.baseOffset, 0u);
 }
 
 TEST_F(SwitchNVDECOutputTest, UnsupportedPlacementAndWideSamplesDoNotPublish)

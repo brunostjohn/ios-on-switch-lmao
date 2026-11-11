@@ -17,6 +17,8 @@ public:
     IOMemoryMap *mapping = nullptr;
     task_t mappedTask = nullptr;
     IOOptionBits mappedOptions = 0;
+    uint64_t length = 0;
+    uint64_t getLength() const { return length; }
     IOMemoryMap *createMappingInTask(task_t task, uint64_t, IOOptionBits options)
     {
         mappedTask = task;

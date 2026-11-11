@@ -459,12 +459,16 @@ TEST_F(NativeSurface, RefusesPartialDescriptorAndUnsupportedLazyConversion)
 {
     auto alias = surface;
     alias.baseOffset = 4096;
-    EXPECT_EQ(switch_native_surface_publish(&alias, &picture), -22);
+    const char *why = nullptr;
+    EXPECT_EQ(switch_native_surface_publish(&alias, &picture, &why), -22);
+    EXPECT_STREQ(why, "native export into a surface at a base offset");
     alias = surface;
     alias.desc.length -= 4096;
-    EXPECT_EQ(switch_native_surface_publish(&alias, &picture), -22);
+    EXPECT_EQ(switch_native_surface_publish(&alias, &picture, &why), -22);
+    EXPECT_STREQ(why, "native export into a surface whose allocation is not its descriptor's length");
     ready = false;
-    EXPECT_EQ(switch_native_surface_publish(&surface, &picture), -95);
+    EXPECT_EQ(switch_native_surface_publish(&surface, &picture, &why), -95);
+    EXPECT_STREQ(why, "native export without VIC to materialize it");
     EXPECT_EQ(seeds, 0u);
     EXPECT_EQ(native.readers, 0u);
 }
