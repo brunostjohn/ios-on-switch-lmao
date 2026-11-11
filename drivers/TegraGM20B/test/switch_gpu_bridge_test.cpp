@@ -539,3 +539,48 @@ TEST_F(Bridge, AJobNeedsNoL2InvalidateAndItsPushFlushesTheProducers)
     ASSERT_NE(flush, end);
     EXPECT_LT(flush, increment);
 }
+
+// VIC and NVDEC retire without a thread: the bridge their job acquires reports to them from its own retirement.
+TEST_F(Bridge, ANotifiedConsumerHearsFromRetirementOnceAndIsAWaiterForTheHangCheck)
+{
+    auto source = token(160);
+    statuses[key(source)] = 0;
+    auto *bridge = submit({source});
+    ASSERT_NE(bridge, nullptr);
+    std::vector<int> heard;
+    const auto record = [](void *context, int status) { static_cast<std::vector<int> *>(context)->push_back(status); };
+    ASSERT_EQ(switch_gpu_bridge_notify(bridge, record, &heard), 0);
+    EXPECT_NE(hangCheck()->deadline, 0u);
+    EXPECT_EQ(switch_gpu_bridge_notify(bridge, record, &heard), -16);
+    pump();
+    EXPECT_TRUE(heard.empty());
+    statuses[key(source)] = 1;
+    releaseSyncpoint(bridge);
+    finish();
+    EXPECT_EQ(heard, std::vector<int>{0});
+    EXPECT_EQ(hangCheck()->deadline, 0u);
+    finish();
+    EXPECT_EQ(heard.size(), 1u);
+    release(bridge);
+    EXPECT_EQ(refs[key(source)], 0);
+}
+
+TEST_F(Bridge, ANotifyOnAFinishedBridgeIsDeliveredByRetirementNotInline)
+{
+    auto source = token(161);
+    statuses[key(source)] = 0;
+    auto *bridge = submit({source});
+    ASSERT_NE(bridge, nullptr);
+    statuses[key(source)] = -5;
+    releaseSyncpoint(bridge);
+    finish();
+    int heard = 1;
+    ASSERT_EQ(switch_gpu_bridge_notify(bridge, [](void *context, int status) { *static_cast<int *>(context) = status; },
+                                       &heard),
+              0);
+    EXPECT_EQ(heard, 1);
+    EXPECT_TRUE(retirement()->pending);
+    pump();
+    EXPECT_EQ(heard, -5);
+    release(bridge);
+}

@@ -21,6 +21,10 @@ void switch_gpu_bridge_completed(void);
 int switch_gpu_bridge_status(const struct switch_gpu_bridge *bridge);
 /* Retained consumer completion only; the handle remains owned by the caller. */
 int switch_gpu_bridge_wait(const struct switch_gpu_bridge *bridge);
+/* The same completion without a CPU wait: completed(context, 0 or the producers' failure) runs once, in retirement
+ * thread context, never inside this call. It counts as a waiter, so the hang check covers a stalled producer as it does
+ * for switch_gpu_bridge_wait. One per bridge (-16 for a second); the caller keeps its own reference. */
+int switch_gpu_bridge_notify(const struct switch_gpu_bridge *bridge, void (*completed)(void *, int), void *context);
 void switch_gpu_bridge_release(struct switch_gpu_bridge **bridge);
 int switch_gpu_bridge_wait_room(void);
 /* Explicit CPU acquisition only; waits on the bridge interrupt, never polls a producer. */

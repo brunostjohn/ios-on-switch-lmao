@@ -14,7 +14,7 @@
 struct switch_gpu_bridge {
     switch_gpu_backing_token tokens[SWITCH_GPU_BRIDGE_MAX_TOKENS];
     uint32_t count, refs, syncpoint, threshold, sequence, waiters;
-    bool active;
+    bool active, notified;
     int result;
     void (*completed)(void *, int);
     void *context;
@@ -132,6 +132,10 @@ void retire(thread_call_param_t, thread_call_param_t)
                 if (job.tokens[i].engine == SWITCH_GPU_ENGINE_GM20B)
                     (void)switch_gpu_timeline_promote(&job.tokens[i]);
         job.active = false;
+        if (job.notified) {
+            job.notified = false;
+            --job.waiters;
+        }
         IOLockWakeup(queue.lock, &job, false);
         releaseLocked(job);
     }
@@ -354,6 +358,31 @@ extern "C" int switch_gpu_bridge_wait(const switch_gpu_bridge *bridge)
     const int result = job->result;
     IOLockUnlock(queue.lock);
     return result;
+}
+
+extern "C" int switch_gpu_bridge_notify(const switch_gpu_bridge *bridge, void (*completed)(void *, int), void *context)
+{
+    if (!bridge || !completed)
+        return -22;
+    auto *job = const_cast<switch_gpu_bridge *>(bridge);
+    IOLockLock(queue.lock);
+    if (job->completed) {
+        IOLockUnlock(queue.lock);
+        return -16;
+    }
+    job->completed = completed;
+    job->context = context;
+    ++job->refs;
+    if (job->active) {
+        ++job->waiters;
+        job->notified = true;
+        if (!queue.checkAt)
+            armHangCheck(kHangCheckNs);
+    } else {
+        thread_call_enter(queue.retirement);
+    }
+    IOLockUnlock(queue.lock);
+    return 0;
 }
 
 extern "C" void switch_gpu_bridge_release(switch_gpu_bridge **bridge)
