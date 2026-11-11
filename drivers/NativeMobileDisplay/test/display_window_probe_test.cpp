@@ -73,7 +73,8 @@ struct Model {
         const uint32_t xStep = column ? line : pixel, yStep = column ? pixel : line;
         const int64_t x0 = w.hOffset / bpp;
         const int64_t x = (w.options & native_column_scan::kHDirection) ? x0 - xStep : x0 + xStep;
-        const int64_t y = static_cast<int64_t>(w.vOffset) + yStep;
+        const int64_t y = (w.options & native_column_scan::kVDirection) ? static_cast<int64_t>(w.vOffset) - yStep
+                                                                        : static_cast<int64_t>(w.vOffset) + yStep;
         const uint32_t lines = w.prescaled >> 16, bytes = w.prescaled & 0xffff;
         if (x < 0 || y < 0 || x >= s->width || y >= s->height || (column ? xStep >= lines : yStep >= lines) ||
             (column ? yStep * bpp >= bytes : xStep * bpp >= bytes)) {
@@ -179,8 +180,6 @@ TEST(WindowProbePlans, ClaimStepsShowTheirReferencePixelForPixel)
         SCOPED_TRACE(probeName(plan.probe));
         const std::vector<uint8_t> memory = filled(plan);
         for (const bool interpolate : {false, true}) {
-            if (interpolate && plan.probe == kColumnScanYuv)
-                continue;  // a column scan may interpolate across other neighbours: reported, not claimed
             Model model{plan, memory, interpolate};
             std::vector<std::vector<uint32_t>> panels;
             for (unsigned i = 0; i < plan.steps; ++i)

@@ -4,10 +4,11 @@
 // compares DC A's CRC of the two frames (the CRC unit is the only read-back of what DC A scanned, DisplaySmmuProbe.h):
 //  V5a  NV12 in 2-GOB (NVDEC's) and 16-GOB blocks on window B against the same picture pitch linear, which window B
 //       shows for every video today. L4T window.c sets BL_16B2 for any format; nothing had run it on an overlay.
-//  V3   window A column-scanning landscape NV12 in NVDEC's blocks (SCAN_COLUMN | H_DIRECTION at 1:1,
-//       NativeColumnScan.h's rules) against the picture turned in memory and scanned row by row, on window B (the
-//       known-good route) and on window A; the UI's own 16-GOB BGRA on window B against window A, the other half of a
-//       landscape video under the UI.
+//  V3   window A column-scanning landscape NV12 in NVDEC's blocks at 1:1, both quarter turns a landscape video takes
+//       (SCAN_COLUMN | H_DIRECTION, IOSurfaceAccelerator transform 7; SCAN_COLUMN | V_DIRECTION, transform 4:
+//       SwitchLandscape.h), against the picture turned in memory and scanned row by row, on window B (the known-good
+//       route) and on window A; the UI's own 16-GOB BGRA on window B against window A, the other half of a landscape
+//       video under the UI.
 //  V5c  a 2-GOB NV12 picture cropped through ADDR_H_OFFSET (bytes) and ADDR_V_OFFSET (lines) with START on the plane
 //       bases, as L4T window.c programs a buffer's source rectangle, against the crop copied out in memory; H and V
 //       alone too.
@@ -91,7 +92,8 @@ inline uint16_t chromaAt(uint32_t cx, uint32_t cy, uint8_t cell)
 
 enum class Content : uint8_t {
     Image,    // the base picture from its origin
-    Turned,   // the landscape picture as the column scan shows it on the portrait panel
+    Turned,   // the landscape picture turned by transform 7 (SCAN_COLUMN | H_DIRECTION) onto the portrait panel
+    TurnedV,  // the landscape picture turned by transform 4 (SCAN_COLUMN | V_DIRECTION)
     Cropped,  // the base picture from (cropX, cropY), both even
 };
 
@@ -151,7 +153,7 @@ inline Surface bgra(uint32_t width, uint32_t height, uint8_t yLog2)
 }
 
 // The base picture's luma pixel (bx, by) that surface pixel (x, y) shows. A turned surface's pixel (x, y) is panel line
-// y, pixel x: landscape column width - 1 - y, row x (SCAN_COLUMN | H_DIRECTION).
+// y, pixel x: landscape column width - 1 - y, row x (H_DIRECTION), or column y, row height - 1 - x (V_DIRECTION).
 inline void sourceOf(const Surface &s, uint32_t x, uint32_t y, uint32_t &bx, uint32_t &by)
 {
     bx = x;
@@ -159,13 +161,16 @@ inline void sourceOf(const Surface &s, uint32_t x, uint32_t y, uint32_t &bx, uin
     if (s.content == Content::Turned) {
         bx = kLandscapeWidth - 1 - y;
         by = x;
+    } else if (s.content == Content::TurnedV) {
+        bx = y;
+        by = kLandscapeHeight - 1 - x;
     } else if (s.content == Content::Cropped) {
         bx = s.cropX + x;
         by = s.cropY + y;
     }
 }
 
-// The same for a 4:2:0 chroma sample: the turn keeps 2x2 cells whole because the landscape width is even.
+// The same for a 4:2:0 chroma sample: a turn keeps 2x2 cells whole because the landscape sides are even.
 inline void chromaSourceOf(const Surface &s, uint32_t cx, uint32_t cy, uint32_t &bx, uint32_t &by)
 {
     bx = cx;
@@ -173,6 +178,9 @@ inline void chromaSourceOf(const Surface &s, uint32_t cx, uint32_t cy, uint32_t 
     if (s.content == Content::Turned) {
         bx = kLandscapeWidth / 2 - 1 - cy;
         by = cx;
+    } else if (s.content == Content::TurnedV) {
+        bx = cy;
+        by = kLandscapeHeight / 2 - 1 - cx;
     } else if (s.content == Content::Cropped) {
         bx = s.cropX / 2 + cx;
         by = s.cropY / 2 + cy;
@@ -262,15 +270,16 @@ inline Window rowWindow(const Surface &s, uint32_t x = 0, uint32_t y = 0)
     return w;
 }
 
-// Landscape NV12 `s` column-scanned onto the panel at 1:1: PRESCALED V is the source width, H its height in bytes, and
-// H_DIRECTION starts at the line's last byte (L4T window.c: (x + w) * Bpp - 1).
-inline Window columnWindow(const Surface &s, bool hDirection)
+// Landscape NV12 `s` column-scanned onto the panel at 1:1: PRESCALED V is the source width, H its height in bytes;
+// H_DIRECTION starts at the line's last byte, V_DIRECTION at the last line (L4T window.c: (x + w) * Bpp - 1, y + h - 1).
+inline Window columnWindow(const Surface &s, bool hDirection, bool vDirection = false)
 {
     Window w = rowWindow(s);
     w.options = native_planes::kWinEnable | native_planes::kCscEnable | native_column_scan::kScanColumn |
-                (hDirection ? native_column_scan::kHDirection : 0);
+                (hDirection ? native_column_scan::kHDirection : 0) | (vDirection ? native_column_scan::kVDirection : 0);
     w.prescaled = s.width << 16 | s.height;
     w.hOffset = hDirection ? s.width - 1 : 0;
+    w.vOffset = vDirection ? s.height - 1 : 0;
     return w;
 }
 
@@ -348,17 +357,16 @@ inline Plan columnScanYuvPlan()
     Surface turned = nv12(kPanelWidth, kPanelHeight, kPitch, 0);
     turned.content = Content::Turned;
     turned = p.surface[addSurface(p, turned)];
-    const Surface landCells = p.surface[addSurface(p, nv12(kLandscapeWidth, kLandscapeHeight, 1, 4))];
-    Surface turnedCells = nv12(kPanelWidth, kPanelHeight, kPitch, 4);
-    turnedCells.content = Content::Turned;
-    turnedCells = p.surface[addSurface(p, turnedCells)];
+    Surface turnedV = nv12(kPanelWidth, kPanelHeight, kPitch, 0);
+    turnedV.content = Content::TurnedV;
+    turnedV = p.surface[addSurface(p, turnedV)];
     const Surface ui = p.surface[addSurface(p, bgra(kPanelWidth, kPanelHeight, 4))];
     addStep(p, "turned_b", off, rowWindow(turned));
     addStep(p, "turned_a", rowWindow(turned), off, kEqual, 0);
     addStep(p, "scan", columnWindow(land, true), off, kEqual, 1);
     addStep(p, "control", columnWindow(land, false), off, kDiffer, 2);
-    addStep(p, "cells_turned", rowWindow(turnedCells), off);
-    addStep(p, "cells_scan", columnWindow(landCells, true), off, kReport, 4);
+    addStep(p, "turned_v", rowWindow(turnedV), off);
+    addStep(p, "scan_v", columnWindow(land, false, true), off, kEqual, 4);
     addStep(p, "ui_a", rowWindow(ui), off);
     addStep(p, "ui_b", off, rowWindow(ui), kEqual, 6);
     return p;

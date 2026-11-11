@@ -16,6 +16,11 @@ load("//bazel/testing:defs.bzl", "host_library", "host_shims", "host_test")
 # libdrm/ is NVIDIA's (MIT), kept as upstream has it.
 lint_files(exclude = ["libdrm/**"])
 
+exports_files([
+    "TegraVICProbe.h",
+    "vic_model.h",
+])
+
 host_test(
     name = "switch_vic_queue_test",
     srcs = [

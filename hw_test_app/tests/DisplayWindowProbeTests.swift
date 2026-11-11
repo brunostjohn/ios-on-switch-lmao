@@ -58,7 +58,8 @@ struct DisplayWindowProbeTest: HWTest {
             probe: "V5a", number: 1),
         DisplayWindowProbeTest(
             id: "display.x1.column_scan_yuv",
-            name: "Window A column-scanning NVDEC's landscape NV12, and the UI's BGRA on window B (CRC)", probe: "V3",
+            name: "Window A column-scanning NVDEC's landscape NV12 both ways, and the UI's BGRA on window B (CRC)",
+            probe: "V3",
             number: 2),
         DisplayWindowProbeTest(
             id: "display.x1.offset_crop", name: "A block-linear NV12 crop through window B's H/V offsets (CRC)",

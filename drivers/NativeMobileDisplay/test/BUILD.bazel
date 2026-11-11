@@ -35,6 +35,9 @@
 #                                       panel pixel for pixel through a fetch model of windows A and B (also with
 #                                       chroma interpolated at the crops' edges), its control another; the run's
 #                                       decisions for a pass and each failure, and the reply HW Test reads
+#   switch_landscape_test               SwitchLandscape.h: window A's column scan of a decoder's picture shows each
+#                                       IOSurfaceAccelerator quarter turn as TegraVIC lands it, pixel for pixel at 1:1
+#                                       through a fetch model, inside the source rectangle scaled
 #   display_plane_fence_test            NativePlaneFence.h: window B never writes a surface the GPU renders before its
 #                                       writers' work is done, nor later than the present that orders it, against a
 #                                       model of the GPU present
@@ -272,6 +275,25 @@ host_test(
         "//drivers/NativeMobileDisplay:NativePlanes.h",
         "//drivers/TegraVIC:SwitchSurfaceColor.h",
         "//drivers/TegraGM20B:TegraGM20BLayout.h",
+    ],
+    copts = ["-O1"],
+)
+
+host_test(
+    name = "switch_landscape_test",
+    srcs = [
+        "switch_landscape_test.cpp",
+        "//drivers/TegraVIC/test:TegraVICProbe.h",
+        "//drivers/TegraVIC:TegraVICConfig.h",
+        "//drivers/TegraVIC:TegraVICFormats.h",
+        "//drivers/NativeMobileDisplay:NativeColumnScan.h",
+        "//drivers/NativeMobileDisplay:NativePlanes.h",
+        "//drivers/NativeMobileDisplay:SwitchDisplayTraits.h",
+        "//drivers/NativeMobileDisplay:SwitchLandscape.h",
+        "//drivers/NativeMobileDisplay:SwitchNativePlane.h",
+        "//drivers/TegraGM20B:SwitchGpuBacking.h",
+        "//drivers/TegraGM20B:TegraGM20BLayout.h",
+        "//drivers/TegraVIC:SwitchSurfaceColor.h",
     ],
     copts = ["-O1"],
 )
