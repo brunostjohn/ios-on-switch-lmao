@@ -36,6 +36,12 @@ chmod 600 "$home/cache.token" "$home/worker.token"
 
 plist() {
     role=$1
+    # The runner and the worker stay up; the floor check runs every minute.
+    if [ "$role" = floor ]; then
+        schedule='<key>StartInterval</key><integer>60</integer>'
+    else
+        schedule='<key>KeepAlive</key><true/>'
+    fi
     cat >"$agents/com.brunostjohn.switch.bazel-$role.plist" <<EOF
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -66,8 +72,7 @@ plist() {
 	</dict>
 	<key>RunAtLoad</key>
 	<true/>
-	<key>KeepAlive</key>
-	<true/>
+	$schedule
 	<key>Nice</key>
 	<integer>5</integer>
 	<key>StandardErrorPath</key>
@@ -84,6 +89,7 @@ EOF
 }
 
 mkdir -p "$work"
+plist floor
 plist runner
 plist worker
 echo "worker installed: $home; build directory and cache: $work"

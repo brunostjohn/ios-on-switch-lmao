@@ -1,7 +1,9 @@
-// bb_worker on a Mac: takes darwin actions from the scheduler, runs them through bb_runner in a native build directory,
-// and keeps their inputs in a bounded cache. Every host value comes from the LaunchAgent's environment (install.sh);
-// the two tokens sit beside this file, chmod 600.
+// bb_worker on a Mac: takes darwin actions from the scheduler and runs them through bb_runner in a build directory it
+// serves itself over NFSv4 (macOS mounts it for the user, no root): an action's inputs appear without being copied,
+// and only the files it reads are fetched, into a capped local CAS. Every host value comes from the LaunchAgent's
+// environment (install.sh); the two tokens sit beside this file, chmod 600.
 local dir = std.extVar('SWITCH_WORKER_DIR');
+local cacheGiB = std.parseInt(std.extVar('SWITCH_WORKER_CACHE_GIB'));
 local cacheToken = std.stripChars(importstr 'cache.token', '\n');
 local workerToken = std.stripChars(importstr 'worker.token', '\n');
 local frontend = {
@@ -14,13 +16,40 @@ local frontend = {
     enableCompression: false,
   },
 };
+local lru = { cacheReplacementPolicy: 'LEAST_RECENTLY_USED' };
 
 {
   blobstore: {
     contentAddressableStorage: {
-      chunkStorage: frontend,
+      chunkStorage: {
+        readCaching: {
+          slow: frontend,
+          fast: {
+            'local': {
+              keyLocationMap: {
+                onBlockDevice: { file: { path: dir + '/cas/key_location_map', sizeBytes: 256 * 1024 * 1024 } },
+                maximumGetAttempts: 16,
+                maximumPutAttempts: 64,
+              },
+              oldBlocks: 8,
+              currentBlocks: 24,
+              newBlocks: 3,
+              // The worker's whole lasting disk use: a sparse file that grows to this size.
+              blocksOnBlockDevice: {
+                source: { file: { path: dir + '/cas/blocks', sizeBytes: cacheGiB * 1024 * 1024 * 1024 } },
+                spareBlocks: 3,
+              },
+              persistent: { stateDirectoryPath: dir + '/cas/persistent_state', minimumEpochInterval: '300s' },
+            },
+          },
+          replicator: { deduplicating: { 'local': {} } },
+        },
+      },
       chunkMappingStorage: { chunkMappingValidating: { backend: frontend } },
-      cdcParameterCache: { cacheSize: 1000, cacheDuration: '60s', cacheReplacementPolicy: 'LEAST_RECENTLY_USED' },
+      cdcParameterCache: lru { cacheSize: 1000, cacheDuration: '60s' },
+      // A virtual build directory reads the same blobs again at random offsets.
+      chunkMappingCache: lru { cacheSize: 100000, cacheDuration: '600s' },
+      chunkCache: lru { cacheSize: 10000, cacheDuration: '60s' },
     },
     actionCache: frontend,
   },
@@ -36,13 +65,17 @@ local frontend = {
     },
   },
   buildDirectories: [{
-    native: {
-      buildDirectoryPath: dir + '/build',
-      // Every input is hard-linked from here into an action's directory: the worker's only lasting disk use.
-      cacheDirectoryPath: dir + '/cache',
-      maximumCacheFileCount: 400000,
-      maximumCacheSizeBytes: std.parseInt(std.extVar('SWITCH_WORKER_CACHE_GIB')) * 1024 * 1024 * 1024,
-      cacheReplacementPolicy: 'LEAST_RECENTLY_USED',
+    virtual: {
+      mount: {
+        mountPath: dir + '/build',
+        nfsv4: {
+          darwin: { socketPath: dir + '/nfs.sock' },
+          enforcedLeaseTime: '120s',
+          announcedLeaseTime: '60s',
+        },
+      },
+      maximumExecutionTimeoutCompensation: '3600s',
+      maximumWritableFileUploadDelay: '60s',
     },
     runners: [{
       endpoint: { address: 'unix://' + dir + '/runner.sock' },
@@ -55,20 +88,14 @@ local frontend = {
           { name: 'xcode', value: std.extVar('SWITCH_WORKER_XCODE_BUILD') },
         ],
       },
-      maximumFilePoolFileCount: 100000,
-      maximumFilePoolSizeBytes: 2 * 1024 * 1024 * 1024,
+      maximumFilePoolFileCount: 1000000,
+      maximumFilePoolSizeBytes: 8 * 1024 * 1024 * 1024,
       workerId: { host: std.extVar('SWITCH_WORKER_HOST') },
     }],
   }],
-  filePool: { blockDevice: { file: { path: dir + '/filepool', sizeBytes: 2 * 1024 * 1024 * 1024 } } },
-  // An action waits on its inputs' round trips far more than it runs (10 s fetching to 1 s running, cold): many at once.
+  // What actions write lives here until it is uploaded.
+  filePool: { blockDevice: { file: { path: dir + '/filepool', sizeBytes: 8 * 1024 * 1024 * 1024 } } },
   inputDownloadConcurrency: 128,
   outputUploadConcurrency: 64,
-  // An input root is fetched directory by directory, one round trip each: XNU's tree and the toolchains alone have
-  // more than the 10,000 directories this held.
-  directoryCache: {
-    maximumCount: 1000000,
-    maximumSizeBytes: 1024 * 1024 * 1024,
-    cacheReplacementPolicy: 'LEAST_RECENTLY_USED',
-  },
+  directoryCache: lru { maximumCount: 1000000, maximumSizeBytes: 1024 * 1024 * 1024 },
 }

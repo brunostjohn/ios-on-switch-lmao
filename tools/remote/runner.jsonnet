@@ -7,6 +7,8 @@ local dir = std.extVar('SWITCH_WORKER_DIR');
   global: {},
   // TMPDIR inside the action's directory, removed with it (xcrun and clang keep caches there).
   setTmpdirEnvironmentVariable: true,
+  // switch-worker floor removes it while the disk is below the floor: the worker then takes no work.
+  readinessCheckingPathnames: [dir + '/disk-ok'],
   // Bazel sends XCODE_VERSION_OVERRIDE, not a path, for rules_apple's and apple_support's actions; the runner sets
   // DEVELOPER_DIR and SDKROOT from it, as Bazel's local runner does.
   appleXcodeDeveloperDirectories: {
