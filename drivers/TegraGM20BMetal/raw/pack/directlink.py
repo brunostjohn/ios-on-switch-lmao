@@ -148,7 +148,7 @@ def pipeline_of(rec: dict, varying: list[int], prog_index: dict[str, int], const
     )
     mask, *words = struct.unpack_from('<33I', p, PIPELINE.size + packfile.PACK_ENTRIES * 8)
     tail = PIPELINE_BYTES - packfile.PIPELINE_V15.size
-    blend, half, _reserved = struct.unpack_from('<BBH', p, tail - 56)
+    blend, half, storage_blend_mask, storage_blend_model = struct.unpack_from('<BBBB', p, tail - 56)
     storage_mask, storage_write_mask, storage_samples, storage_tests, *storage_tic = struct.unpack_from(
         '<BBBB8I', p, tail - 52
     )
@@ -183,6 +183,8 @@ def pipeline_of(rec: dict, varying: list[int], prog_index: dict[str, int], const
         'storage_write_mask': storage_write_mask,
         'storage_samples': storage_samples,
         'storage_tests': storage_tests,
+        'storage_blend_mask': storage_blend_mask,
+        'storage_blend_model': storage_blend_model,
         'depth_test_word': depth_word,
         'stencil_test_word': stencil_word,
         'test_flags': test_flags,

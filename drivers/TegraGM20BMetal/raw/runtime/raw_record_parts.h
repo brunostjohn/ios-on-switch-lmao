@@ -56,6 +56,7 @@ struct RecordParts {
     bool pushMetadata = false;
     uint8_t blendColorWord = 0, halfBlendColorWord = 0;
     uint8_t storageMask = 0, storageWriteMask = 0, storageSamples = 0, storageTests = 0;
+    uint8_t storageBlendMask = 0, storageBlendModel = 0;
     uint32_t storageTic[8] = {};
     PackShaderTests shaderTests = {};
 };

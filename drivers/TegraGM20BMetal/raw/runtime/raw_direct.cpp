@@ -480,6 +480,8 @@ CompileOutcome directRecord(const NmbDirectState &state, const DirectNvk &nvk, c
     parts.storageWriteMask = storage.storageWriteMask;
     parts.storageSamples = storage.storageSamples;
     parts.storageTests = storage.storageTests;
+    parts.storageBlendMask = storage.storageBlendMask;
+    parts.storageBlendModel = storage.storageBlendModel;
     parts.shaderTests = storage.shaderTests;
     parts.shaderTests.depthWord = uint8_t(draw.depthTestWord);
     parts.shaderTests.stencilWord = uint8_t(draw.stencilTestWord);

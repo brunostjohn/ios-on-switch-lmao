@@ -18,7 +18,8 @@ inline bool storageDepthQualified(const char *key, bool earlyTests = false, uint
 template <class Header> const char *qualifyStorage(const NmbDirectState &state, Header header, PackPipeline &out)
 {
     const NmbDirectStorage &s = state.storage;
-    if (state.storageForm != bool(s.mask) || (s.mask & ~255u) || (s.writes & ~s.mask))
+    if (state.storageForm != bool(s.mask) || (s.mask & ~255u) || (s.writes & ~s.mask) || (s.blendMask & ~s.writes) ||
+        (s.blendModel & ~255u))
         return "storage form: inconsistent attachment masks";
     if (!s.mask)
         return nullptr;
@@ -69,6 +70,8 @@ template <class Header> const char *qualifyStorage(const NmbDirectState &state, 
     out.flags |= PipelineStorageMetadata;
     out.storageMask = uint8_t(s.mask);
     out.storageWriteMask = uint8_t(s.writes);
+    out.storageBlendMask = uint8_t(s.blendMask);
+    out.storageBlendModel = uint8_t(s.blendModel);
     out.storageSamples = uint8_t(s.samples);
     out.storageTests = uint8_t(s.fragmentTests);
     out.shaderTests = tests;

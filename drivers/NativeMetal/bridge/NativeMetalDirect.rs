@@ -192,6 +192,8 @@ pub struct NmbDirectStorage {
     pub stencil_format: u32,
     pub test_samples: u32,
     pub test_planes: u32,
+    pub blend_mask: u32,
+    pub blend_model: u32,
 }
 
 fn storage_of(graphics: &GraphicsState) -> Result<NmbDirectStorage, String> {
@@ -219,6 +221,8 @@ fn storage_of(graphics: &GraphicsState) -> Result<NmbDirectStorage, String> {
             u32::from(matches!(attachment.view, StorageAttachmentView::SamplePlanes { .. })) << index;
         storage.samples = graphics.rasterization_samples.as_raw();
         storage.formats[index] = attachment.uint_view.unwrap_or(attachment.format).as_raw() as u32;
+        storage.blend_mask |= u32::from(attachment.blend_model != 0) << index;
+        storage.blend_model |= u32::from(attachment.blend_model);
     }
     Ok(storage)
 }

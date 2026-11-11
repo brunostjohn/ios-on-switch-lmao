@@ -79,11 +79,15 @@ void dumpRecord(const char *dir, const std::string &key, const raw::RuntimeRecor
     }
     fprintf(f,
             "{\"key\": %s, \"vs\": \"%s\", \"fs\": \"%s\", \"fs_gprs\": %u, \"fs_bound_textures\": %u, \"blob\": [%s], "
-            "\"split_fs\": \"%s\", \"split_prologue\": \"%s\", \"residual_words\": [%s], \"variants\": [%s]}\n",
+            "\"split_fs\": \"%s\", \"split_prologue\": \"%s\", \"residual_words\": [%s], \"variants\": [%s], "
+            "\"storage_mask\": %u, \"storage_blend_mask\": %u, \"storage_blend_model\": %u, "
+            "\"half_blend_color_word\": %u}\n",
             jsonString(key).c_str(), hexOf(rec.programs[0].image).c_str(), hexOf(rec.programs[1].image).c_str(),
             rec.programs[1].gprs, rec.programs[1].boundTextures, blob.c_str(),
             rec.split ? hexOf(rec.splitPrograms[0].image).c_str() : "",
-            rec.split ? hexOf(rec.splitPrograms[1].image).c_str() : "", residuals.c_str(), variants.c_str());
+            rec.split ? hexOf(rec.splitPrograms[1].image).c_str() : "", residuals.c_str(), variants.c_str(),
+            rec.pipeline.storageMask, rec.pipeline.storageBlendMask, rec.pipeline.storageBlendModel,
+            rec.pipeline.halfBlendColorWord);
     fclose(f);
 }
 
@@ -132,7 +136,11 @@ int main(int argc, char **argv)
             dev, qc, own, standIn, probe::corpusLines(text, own != nil),
             [&](const std::string &line, bool ours, probe::State &s) {
                 states++;
-                const raw::ProbeTextures textures = probe::probeTextures(line, ours);
+                raw::ProbeTextures textures = probe::probeTextures(line, ours);
+                // DIRECTCHECK_TESTS=<n>: each state as the runtime asks for it beside depth or stencil tests of
+                // class n (raw_fragment_tests.h FragmentTests), the variant a fetch without a storage form takes
+                if (const char *tests = getenv("DIRECTCHECK_TESTS"); tests && *tests)
+                    textures.fragmentTests = uint8_t(atoi(tests));
                 const raw::PackPipeline *pp = pack.find(raw::packKeyHash(s.key));
                 const bool barrier = pp && (pp->flags & raw::PipelineBarrierForm);
                 raw::RuntimeRecord rec;

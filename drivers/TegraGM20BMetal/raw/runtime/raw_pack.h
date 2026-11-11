@@ -206,7 +206,10 @@ struct PackPipeline {
         pushMask;  // root-table words [0x700, 0x780) the state's push ranges write (m2v's windows, as NVK wrote them)
     uint32_t pushWords[32];
     uint8_t blendColorWord, halfBlendColorWord;  // push word + 1, zero when absent
-    uint16_t pushReserved;
+    // the storage attachments whose fixed-function blend the fragment program computes inside the interlock, and the
+    // assumptions its model makes of the ROP it stands in for (m2v StorageAttachmentUse::blend_model bits): what a ROP
+    // probe would have to confirm for these records
+    uint8_t storageBlendMask, storageBlendModel;
     uint8_t storageMask, storageWriteMask, storageSamples, storageTests;
     uint32_t storageTic[8];
     PackShaderTests shaderTests;

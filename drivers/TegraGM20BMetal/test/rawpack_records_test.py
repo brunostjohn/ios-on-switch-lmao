@@ -67,7 +67,8 @@ class RecordsTest(unittest.TestCase):
     def test_ordered_storage_metadata_round_trip_and_explicit_registers(self):
         rec = dict(key='samples=1 c0=81:15:0:1:0:0:1:0:0', vs=0, fs=1, blob=[], entries=[handle(('fetch', 0))],
                    push=[], vbs=[], set_size=256, fetch=True, storage_mask=1, storage_write_mask=1,
-                   storage_samples=1, storage_tests=2, storage_tic=[0x24912] + [0] * 7)
+                   storage_samples=1, storage_tests=2, storage_tic=[0x24912] + [0] * 7, storage_blend_mask=1,
+                   storage_blend_model=71)
         data = packfile.pipeline_bytes(rec, 0, 0)
         programs = [dict(image=bytes([i]), data=b'', cbufs=[]) for i in range(2)]
         ids = {directlink.program_id(p): i for i, p in enumerate(programs)}
@@ -78,6 +79,7 @@ class RecordsTest(unittest.TestCase):
         self.assertEqual(back['storage_write_mask'], 1)
         self.assertEqual(back['storage_samples'], 1)
         self.assertEqual(back['storage_tests'], 2)
+        self.assertEqual((back['storage_blend_mask'], back['storage_blend_model']), (1, 71))
         self.assertEqual(back['storage_tic'], rec['storage_tic'])
         self.assertEqual(dict(back['blob']), {0x0210: 1, 0x0754: 1, 0x1224: 2, 0x1a00: 0})
         self.assertEqual(directlink.PIPELINE.unpack_from(packfile.pipeline_bytes(back, 0, 0))[-1] & 8, 8)

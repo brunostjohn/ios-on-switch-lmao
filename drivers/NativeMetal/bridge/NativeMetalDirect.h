@@ -75,6 +75,9 @@ typedef struct NmbDirectStorage {
     uint32_t formats[8];  // actual identity-mapped storage view, including sRGB's integer view
     uint32_t fragmentTests;
     uint32_t depthFormat, stencilFormat, testSamples, testPlanes;
+    // the attachments whose fixed-function blend the shader computes, and the union of their blend models' assumptions
+    // (m2v StorageAttachmentUse::blend_model)
+    uint32_t blendMask, blendModel;
 } NmbDirectStorage;
 
 typedef struct NmbDirectState {

@@ -155,7 +155,8 @@ def pipeline_bytes(rec: dict, key_offset: int, blob_off: int, variants_off: int 
         rec['set_size'],
         flags,
     )
-    dynamic = struct.pack('<BBH', rec.get('blend_color_word', 0), rec.get('half_blend_color_word', 0), 0)
+    dynamic = struct.pack('<BBBB', rec.get('blend_color_word', 0), rec.get('half_blend_color_word', 0),
+                          rec.get('storage_blend_mask', 0), rec.get('storage_blend_model', 0))
     storage = struct.pack('<BBBB8I', rec.get('storage_mask', 0), rec.get('storage_write_mask', 0),
                           rec.get('storage_samples', 0), rec.get('storage_tests', 0), *rec.get('storage_tic', [0] * 8))
     tests = struct.pack('<BBBBIII', rec.get('depth_test_word', 0), rec.get('stencil_test_word', 0),

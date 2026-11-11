@@ -325,6 +325,8 @@ bool assembleRecord(const RecordParts &parts, const std::string &key, const Pack
     p.storageWriteMask = parts.storageWriteMask;
     p.storageSamples = parts.storageSamples;
     p.storageTests = parts.storageTests;
+    p.storageBlendMask = parts.storageBlendMask;
+    p.storageBlendModel = parts.storageBlendModel;
     p.shaderTests = parts.shaderTests;
     memcpy(p.storageTic, parts.storageTic, sizeof p.storageTic);
     describeReads(out);
