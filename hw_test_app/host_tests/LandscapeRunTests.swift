@@ -26,7 +26,8 @@ final class LandscapeRunTests: XCTestCase {
     }
 
     func sample(
-        _ crc: [UInt32], _ mode: [UInt8], switches: Int = 0, vicJobs: [Int] = [0, 0, 0], latches: Int = 0
+        _ crc: [UInt32], _ mode: [UInt8], switches: Int = 0, vicJobs: [Int] = [0, 0, 0],
+        vicTurns: [Int] = [0, 0, 0], latches: Int = 0
     )
         -> LandscapeSample
     {
@@ -36,6 +37,7 @@ final class LandscapeRunTests: XCTestCase {
         s.mode = mode
         s.switches = switches
         s.vicJobs = vicJobs
+        s.vicTurns = vicTurns
         s.overlayLatches = latches
         return s
     }
@@ -59,14 +61,16 @@ final class LandscapeRunTests: XCTestCase {
         XCTAssertNil(LandscapeSample([UInt8](repeating: 0, count: LandscapeSample.size)))
     }
 
-    func samples(enter: [UInt32]? = nil, vicJobs: [Int] = [0, 0, 0]) -> LandscapeJudge.Samples {
+    func samples(
+        enter: [UInt32]? = nil, vicJobs: [Int] = [0, 0, 0], vicTurns: [Int] = [90, 0, 0]
+    ) -> LandscapeJudge.Samples {
         var s = LandscapeJudge.Samples()
         s.vicHeld = sample(Array(repeating: 0xaaaa, count: 30), Array(repeating: 0, count: 30))
         let entering = enter ?? Array(repeating: 0xaaaa, count: 20) + Array(repeating: 0xbbbb, count: 70)
         s.enter = sample(entering, Array(repeating: 0, count: 22) + Array(repeating: 1, count: 68), switches: 1)
         s.playing = sample(
             Array(0..<180).map { UInt32($0 + 1) }, Array(repeating: 1, count: 180), vicJobs: vicJobs,
-            latches: 90)
+            vicTurns: vicTurns, latches: 90)
         s.landscapeHeld = sample(Array(repeating: 0xbbbb, count: 30), Array(repeating: 1, count: 30))
         s.leave = sample(
             Array(repeating: 0xbbbb, count: 20) + Array(repeating: 0xaaaa, count: 70),
@@ -102,6 +106,13 @@ final class LandscapeRunTests: XCTestCase {
         XCTAssertEqual(checks.filter { !$0.1 }.map(\.0), [])
         XCTAssertEqual(metrics["vic_jobs_test"], .integer(12))
         XCTAssertEqual(metrics["vic_jobs_other"], .integer(40))
+    }
+
+    func testTurnsFromAnotherProcessDoNotPassTheRoute() {
+        let (checks, _) = LandscapeJudge.judge(samples(vicTurns: [0, 0, 90]), dropped: 0)
+        XCTAssertEqual(
+            checks.filter { !$0.1 }.map(\.0),
+            ["the display server's requests were recorded as quarter turns (vic_turns)"])
     }
 
     func testZeroReadingsAreNotFrames() {

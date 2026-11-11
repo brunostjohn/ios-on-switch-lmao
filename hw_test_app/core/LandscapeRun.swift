@@ -142,6 +142,10 @@ public enum LandscapeJudge {
                 s.playing.overlayLatches > 0 && s.playing.vicJobs[server] == 0
             ),
             (
+                "the display server's requests were recorded as quarter turns (vic_turns)",
+                s.playing.vicTurns[server] > 0
+            ),
+            (
                 "the held frame scans the same in landscape again",
                 column != nil && s.landscapeHeld.settled() == column && s.landscapeHeld.allLandscape
             ),
