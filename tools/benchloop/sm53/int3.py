@@ -131,7 +131,7 @@ def mul_experiments() -> list[dict]:
             }
             x = {
                 'id': f'xmadmul.{name}.{part // MUL_COLUMNS}',
-                'kind': 'fragment',
+                'kind': 'readback',
                 'target': {'format': 'rgba32float', 'width': len(chunk), 'height': 1},
                 'program': p,
                 'readback': 'full',
