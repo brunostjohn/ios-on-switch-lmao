@@ -328,6 +328,7 @@ id<MTLDevice> raw_metal_device_open(const char *packPath, uint64_t stack, id<MTL
         {[RMCommandBuffer class], @protocol(MTLCommandBuffer)},
         {[RMEncoder class], @protocol(MTLCommandEncoder)},
         {[RMRenderEncoder class], @protocol(MTLRenderCommandEncoder)},
+        {[RMParallelRenderEncoder class], @protocol(MTLParallelRenderCommandEncoder)},
         {[RMBlitEncoder class], @protocol(MTLBlitCommandEncoder)},
         {[RMComputeEncoder class], @protocol(MTLComputeCommandEncoder)},
     };

@@ -386,7 +386,7 @@ __attribute__((objc_externally_retained)) static bool encodeRawAttempt(RMCommand
     RAW_ENCODE_BEGIN(loopSpan, Loop);
     for (size_t at = from; at < to; at++) {
         const Cmd c = cb->_plan.legacy(at);
-        if (c.op == OpRender || c.op == OpCompute || c.op == OpBlit)
+        if ((c.op == OpRender && !rmContinuesPass(cb, at)) || c.op == OpCompute || c.op == OpBlit)
             encoder = at;
         if (c.op == OpDispatch) {
             RAW_ENCODE_SPAN(Compute);
@@ -465,11 +465,15 @@ __attribute__((objc_externally_retained)) static bool encodeRawAttempt(RMCommand
                 planSplitPrograms(cb, at, *re);
                 break;
             }
-            if (cb->_sampledShadows)
-                refresh(at);
-            if (cb->_standIns && !standIns(at))
-                return false;
             raw::PassDesc p;
+            for (size_t sub = at; sub == at || (sub < to && rmContinuesPass(cb, sub));
+                 sub = cb->_plan.encoderEnd(sub)) {
+                if (cb->_sampledShadows)
+                    refresh(sub);
+                if (cb->_standIns && !standIns(sub))
+                    return false;
+                p.storageMask |= passStorageMask(cb, sub);
+            }
             for (unsigned j = 0; j < 8; j++) {
                 const RMPass::Color &a = pass.color[j];
                 __unsafe_unretained RMTexture *t = (RMTexture *)a.texture;
@@ -532,7 +536,6 @@ __attribute__((objc_externally_retained)) static bool encodeRawAttempt(RMCommand
             }
             p.width = uint32_t(std::min<NSUInteger>(pass.width, UINT32_MAX));
             p.height = uint32_t(std::min<NSUInteger>(pass.height, UINT32_MAX));
-            p.storageMask = passStorageMask(cb, at);
             p.positions = pass.positions;
             for (__unsafe_unretained RMTexture *t : standInLoads)
                 if (standInPass(t, false))
@@ -555,11 +558,15 @@ __attribute__((objc_externally_retained)) static bool encodeRawAttempt(RMCommand
             if (re)
                 re->finishVisibility();
             if (re && at + 1 < to && cb->_plan.operation(at + 1).op == OpRender) {
+                if (rmContinuesPass(cb, at + 1)) {
+                    continuing = true;
+                    break;
+                }
                 // the next pass's facts are the next boundary's first pass's
                 const raw::FusionPass first = fusedAt == renderBegin ? fused : fusionPass(cb, renderBegin);
                 fused = fusionPass(cb, at + 1);
                 fusedAt = at + 1;
-                if (raw::canFusePasses(first, fused)) {
+                if (!rmGroupedPass(cb, renderBegin) && !rmGroupedPass(cb, at + 1) && raw::canFusePasses(first, fused)) {
                     continuing = true;
                     break;
                 }

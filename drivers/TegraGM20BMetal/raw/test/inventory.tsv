@@ -1,7 +1,7 @@
 # raw's API inventory, written by raw/test/selcover (SELCOVER_WRITE=1; selcover_inventory.h says what each
 # column holds): container, item, selector, m2v, sent by, raw
 # m2v's items: base 3 m2v 4 none 65 raw 291 read 292 refused 163 unread 201 zero 38
-# sent selectors: base 79 m2v 13 m2vobj 2 none 8 raw 514 refused 56 zero 143
+# sent selectors: base 79 m2v 13 m2vobj 2 none 8 raw 515 refused 56 zero 142
 MTLArgument	access	access	I	-	read
 MTLArgument	active	isActive	I	-	unread
 MTLArgument	arrayLength	arrayLength	I	-	read
@@ -202,7 +202,7 @@ MTLCommandBuffer	-	globalTraceObjectID	-	21H461,24B119	raw
 MTLCommandBuffer	-	isProfilingEnabled	-	24B119	raw
 MTLCommandBuffer	-	label	-	21H461,24B119	raw
 MTLCommandBuffer	-	logs	-	21H461,24B119	raw
-MTLCommandBuffer	-	parallelRenderCommandEncoderWithDescriptor:	-	21H461,24B119	zero
+MTLCommandBuffer	-	parallelRenderCommandEncoderWithDescriptor:	-	21H461,24B119	raw
 MTLCommandBuffer	-	popDebugGroup	-	21H461,24B119	raw
 MTLCommandBuffer	-	presentDrawable:	-	21H461,24B119	raw
 MTLCommandBuffer	-	presentDrawable:afterMinimumDuration:	-	21H461,24B119	raw

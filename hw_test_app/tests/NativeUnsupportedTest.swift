@@ -17,7 +17,8 @@ struct NativeUnsupportedTest: NativeObjectTest {
         struct ControlPoint { float4 position [[attribute(0)]]; };
         struct Patch { patch_control_point<ControlPoint> points; };
         [[patch(triangle, 3)]] vertex float4 tri_post(Patch patch [[stage_in]], float3 uvw [[position_in_patch]]) {
-            return patch.points[0].position * uvw.x + patch.points[1].position * uvw.y + patch.points[2].position * uvw.z;
+            return patch.points[0].position * uvw.x + patch.points[1].position * uvw.y +
+                   patch.points[2].position * uvw.z;
         }
         fragment float4 tri_fragment() { return float4(1); }
         """

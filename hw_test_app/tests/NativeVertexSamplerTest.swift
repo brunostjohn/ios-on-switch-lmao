@@ -3,9 +3,9 @@ import HWTestCore
 import HWTestGPU
 import Metal
 
-/// Vertex samplers bound by range (with and without LOD clamps) and singly, beside a state whose vertex function samples
-/// nothing: the command buffer stays raw and draws its colour. A state whose vertex function samples a texture draws its
-/// texel's position wherever the facade sends it (its path is a metric).
+/// Vertex samplers bound by range (with and without LOD clamps) and singly, beside a state whose vertex function
+/// samples nothing: the command buffer stays raw and draws its colour. A state whose vertex function samples a texture
+/// draws its texel's position wherever the facade sends it (its path is a metric).
 struct NativeVertexSamplerTest: NativeObjectTest {
     let id = "metal.native.vertex_samplers"
     let name = "Vertex samplers bound by range keep a command buffer raw; a vertex-sampling state draws its texel"
@@ -49,7 +49,7 @@ struct NativeVertexSamplerTest: NativeObjectTest {
 
     func exercise(_ gpu: GPU, _ metrics: inout Metrics) async throws -> NativeWork {
         let device = gpu.device
-        let samplers = try [Self.sampler(device, .nearest), Self.sampler(device, .linear), Self.sampler(device, .nearest)]
+        let samplers = try [MTLSamplerMinMagFilter.nearest, .linear, .nearest].map { try Self.sampler(device, $0) }
         var work = NativeWork(objects: samplers)
         let size = 32
         let target = try gpu.texture(.rgba8Unorm, size, size)
