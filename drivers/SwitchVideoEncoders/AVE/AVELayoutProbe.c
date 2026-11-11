@@ -1,11 +1,11 @@
 // SPDX-License-Identifier: BSD-2-Clause-Patent
 // SwitchEncoderLayoutProbe (debug builds, H.264 frame sessions that do not reorder; HW Test encode.nvenc_input_layouts):
 // the session's last picture coded again as one IDR from each input layout NVENC 5.0 might read, each in a buffer of
-// its own written by the CPU (and one written by VIC, the route the plug-in ships), returned as {layout: the IDR's AVCC
-// sample} or {layout: the failure} for the test to decode back against its picture. The firmware gives block_height 0
-// and 2 the same code (TegraNVENC/nvidia/SOURCE), so exactly one of "pitch" and "bl2" can come back right, and NVIDIA's
-// driver says "bl2". The probe leaves the session's next picture an IDR, since its pictures overwrote the
-// reconstructions.
+// its own written by the CPU (and two written by VIC: BL2, the route the plug-in ships, and BL16), returned as {layout:
+// the IDR's AVCC sample} or {layout: the failure} for the test to decode back against its picture. The firmware gives
+// block_height 0 and 2 the same code (TegraNVENC/nvidia/SOURCE), so exactly one of "pitch" and "bl2" can come back
+// right, and NVIDIA's driver says "bl2". The probe leaves the session's next picture an IDR, since its pictures
+// overwrote the reconstructions.
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
 #include <CoreVideo/CoreVideo.h>
 #include <IOSurface/IOSurfaceRef.h>
@@ -32,7 +32,7 @@ static const ProbeCase kCases[] = {
     {"tiled16", TEGRA_NVENC_LAYOUT_TILED16, false}, {"pitch", TEGRA_NVENC_LAYOUT_PITCH, false},
     {"bl2", TEGRA_NVENC_LAYOUT_BL2, false},         {"bl4", TEGRA_NVENC_LAYOUT_BL4, false},
     {"bl8", TEGRA_NVENC_LAYOUT_BL8, false},         {"bl16", TEGRA_NVENC_LAYOUT_BL16, false},
-    {"vic_bl16", TEGRA_NVENC_LAYOUT_BL16, true},
+    {"vic_bl2", TEGRA_NVENC_LAYOUT_BL2, true},      {"vic_bl16", TEGRA_NVENC_LAYOUT_BL16, true},
 };
 
 static CFTypeRef failure(int32_t code)

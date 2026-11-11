@@ -25,7 +25,7 @@
 // pixel transfer converts anything else (BGRA screen captures) before EncodeFrame.
 //
 // Per picture (synchronous, on VideoToolbox's encode thread): the submit names the picture's IOSurface and VIC writes it
-// into the session's input buffer in the layout NVENC reads (AVEInput.c; the CPU copies only what VIC cannot read),
+// into the session's input buffer in the layout NVENC reads (AVEInput.c; no CPU copy in a session with surface input),
 // the setup built (H264NVENC.c) with the QP the rate control picked (RateControl.h), the job queued on host1x channel 0,
 // and the thread sleeps on the syncpoint interrupt; then NVENC's Annex B slice becomes a length-prefixed sample with
 // the format description of this plug-in's own SPS/PPS, and goes out at once unless the session reorders

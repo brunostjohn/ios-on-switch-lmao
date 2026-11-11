@@ -834,7 +834,7 @@ int main(void)
                                               &kCFTypeDictionaryValueCallBacks);
 
     // The CPU copy into the layout the kernel states (a kernel without surface input), VIC writing the surface into
-    // BL16 (from the session's pool, and from rows off VIC's grid: VideoToolbox moves a frame session's onto the grid
+    // BL2 (from the session's pool, and from rows off VIC's grid: VideoToolbox moves a frame session's onto the grid
     // the plug-in asked for, a tile session hands them over and the kernel bounces them), and a kernel refusing every
     // surface or every other one: those frames fail, none is copied.
     static const struct {

@@ -6,7 +6,7 @@ import VideoToolbox
 
 /// Which input layouts NVENC 5.0 reads, decided on the unit: the AVE plug-in's SwitchEncoderLayoutProbe (debug builds)
 /// codes one 720p pattern picture again as an IDR from each layout (the CPU writing it in that layout, and VIC writing
-/// BL16, the route the encoder ships), and each IDR is decoded back here against the pattern. The firmware turns
+/// BL2, the route the encoder ships, and BL16), and each IDR is decoded back here against the pattern. The firmware turns
 /// block_height into a code (TegraNVENC/nvidia/SOURCE): 4, 8, 16 GOBs are codes 1-3, while 0 (pitch) and 2 GOBs share
 /// code 0, so exactly one of "pitch" and "bl2" can decode back. NVIDIA's driver sends its own 2-GOB surfaces as code 0,
 /// so "bl2" is expected; "pitch" reading would mean NVENC can take an IOSurface without VIC.
@@ -16,7 +16,7 @@ struct NVENCInputLayoutTest: HWTest {
     let subsystem = Subsystem.encode
     var timeout: TimeInterval { 60 }
 
-    static let layouts = ["tiled16", "pitch", "bl2", "bl4", "bl8", "bl16", "vic_bl16"]
+    static let layouts = ["tiled16", "pitch", "bl2", "bl4", "bl8", "bl16", "vic_bl2", "vic_bl16"]
 
     func run(_ context: TestContext) async throws -> Outcome {
         let (width, height, fps) = (1280, 720, 30)
@@ -58,7 +58,8 @@ struct NVENCInputLayoutTest: HWTest {
                     "4, 8 and 16 GOBs a block (codes 1-3) decode back",
                     ["bl4", "bl8", "bl16"].allSatisfy { reads[$0] == true }
                 ),
-                ("VIC's BL16, the encoder's input route, decodes back", reads["vic_bl16"] == true),
+                ("VIC's BL2, the encoder's input route, decodes back", reads["vic_bl2"] == true),
+                ("VIC's BL16 decodes back", reads["vic_bl16"] == true),
             ], metrics, proof: "code0=\(codeZero)")
     }
 

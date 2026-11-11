@@ -12,7 +12,7 @@ enum {
     H = 240,
 };
 
-static const char *const kLayouts[] = {"tiled16", "pitch", "bl2", "bl4", "bl8", "bl16", "vic_bl16"};
+static const char *const kLayouts[] = {"tiled16", "pitch", "bl2", "bl4", "bl8", "bl16", "vic_bl2", "vic_bl16"};
 
 typedef struct {
     CMSampleBufferRef sample;

@@ -8,7 +8,7 @@
 #include <stdbool.h>
 #include <stddef.h>
 
-// One result line ("ok layout probe: 7 of 7 layouts, 7 decode back exactly"); `spec` names the encoder.
+// One result line ("ok layout probe: 8 of 8 layouts, 8 decode back exactly"); `spec` names the encoder.
 bool probe_check(CFDictionaryRef spec, char *line, size_t size);
 
 #endif

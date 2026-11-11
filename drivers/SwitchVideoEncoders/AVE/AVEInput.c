@@ -1,9 +1,10 @@
 // SPDX-License-Identifier: BSD-2-Clause-Patent
 // How a picture reaches NVENC's input buffer. NVENC 5.0 reads 16x16 tiles or block linear, never the pitch rows an
 // IOSurface holds (TegraNVENC/nvidia/SOURCE), so with TEGRA_NVENC_FEATURE_SURFACE_INPUT the session's input buffer is
-// BL16 (block_height 16, a code the firmware's table names outright, 0x8643-0x8664) and every submit names the
-// picture's IOSurface: the kernel has VIC write the region into the buffer and NVENC's job waits for VIC's on the
-// hardware. The CPU touches no sample. Rows off the grid VIC reads (VideoToolbox is asked to keep to it; a client's own
+// BL2 and every submit names the picture's IOSurface: the kernel has VIC write the region into the buffer and NVENC's
+// job waits for VIC's on the hardware. BL2 is the block-linear layout both ends were seen with: NVIDIA's T210 driver
+// hands NVENC its default 2-GOB surfaces (libnvtvmr 0x43a4, 0x2d4f0), and it is NVDEC's layout, the NV12 case of VIC's
+// block-linear output probe (gpu.x1.vic_block_linear). The CPU touches no sample. Rows off the grid VIC reads (VideoToolbox is asked to keep to it; a client's own
 // pool may not) go through the GPU's copy engine in the kernel first (input_bounced). A picture VIC cannot take at all
 // (no IOSurface, a surface the kernel refuses) fails its frame with one line per reason and counts in input_refused:
 // there is no CPU route beside VIC's. The CPU copy (16-byte runs into the buffer's layout) is a session's whole route
@@ -20,7 +21,7 @@ enum {
 
 uint32_t ave_input_layout(const Encoder *e)
 {
-    return e->info.features & TEGRA_NVENC_FEATURE_SURFACE_INPUT ? TEGRA_NVENC_LAYOUT_BL16 : e->info.input_layout;
+    return e->info.features & TEGRA_NVENC_FEATURE_SURFACE_INPUT ? TEGRA_NVENC_LAYOUT_BL2 : e->info.input_layout;
 }
 
 static void setNumber(CFMutableDictionaryRef dict, CFStringRef key, int32_t value)
