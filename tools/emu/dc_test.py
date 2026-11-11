@@ -199,6 +199,58 @@ class DcTest(unittest.TestCase):
         self.dc.commit('A', 'B')
         self.assertEqual(self.dc.frames(4)[-1], want)
 
+    def ui_with_a_hole(self) -> bytes:
+        """Return the composited UI, premultiplied: opaque but for a transparent hole the video shows through."""
+        out = bytearray(image(5))
+        for y in range(HEIGHT):
+            for x in range(WIDTH):
+                at = y * STRIDE + x * 4
+                if 8 <= x < 56 and 4 <= y < 28:
+                    out[at : at + 4] = b'\0\0\0\0'
+                else:
+                    out[at + 3] = 0xFF
+        return bytes(out)
+
+    def column_scan(self, start: int, columns: int, rows: int) -> None:
+        win, buf = WIN['A']
+        self.dc.window('A', start, blend=BYPASS | 1)
+        self.dc.w(win + 0x06, columns << 16 | rows * 4)
+        self.dc.w(win + 0x0A, columns * 4)
+        self.dc.w(win, 1 << 30 | 1 << 4 | 1 << 0)
+        self.dc.w(buf + 0x06, columns * 4 - 1)
+
+    def test_landscape_change_latches_both_windows_at_one_boundary(self) -> None:
+        # Portrait: the UI on A in front of the video's turned copy on B. Landscape (SwitchLandscapeDisplay.h): the
+        # same UI on B in front of the video column-scanned on A, both windows in one request. The two show the same
+        # picture, so every frame across the change must have its CRC; a half-taken change would not.
+        columns, rows = HEIGHT, WIDTH
+        source = image(3)[: columns * rows * 4]
+        turned = bytearray(STRIDE * HEIGHT)
+        for line in range(HEIGHT):
+            for pixel in range(WIDTH):
+                at = (pixel * columns + columns - 1 - line) * 4
+                turned[line * STRIDE + pixel * 4 : line * STRIDE + pixel * 4 + 4] = source[at : at + 4]
+        ui, video = PITCH_A + 0x20000, BLOCK_A
+        self.q.write(ui, self.ui_with_a_hole())
+        self.q.write(PITCH_B, bytes(turned))
+        self.q.write(video, source)
+        over = {'blend': 0x00FFFF00 | 0, 'factors': 0x262}
+        self.dc.window('A', ui, **over)
+        self.dc.window('B', PITCH_B, blend=BYPASS | 1)
+        self.dc.commit('A', 'B')
+        want = self.crc_on()
+        self.dc.window('B', ui, **over)
+        self.column_scan(video, columns, rows)
+        self.dc.commit('A', 'B')
+        self.assertEqual(self.dc.frames(6), [want] * 6)
+        # The control: window A taken alone shows the UI over itself, not the picture.
+        self.dc.window('A', ui, **over)
+        self.dc.window('B', PITCH_B, blend=BYPASS | 1)
+        self.dc.commit('A')
+        self.assertNotEqual(self.dc.frames(3)[-1], want)
+        self.dc.commit('B')
+        self.assertEqual(self.dc.frames(3)[-1], want)
+
     def test_window_b_reads_through_the_smmu(self) -> None:
         self.q.write(PITCH_B, image(2))
         self.dc.window('B', PITCH_B, blend=BYPASS | 0)
