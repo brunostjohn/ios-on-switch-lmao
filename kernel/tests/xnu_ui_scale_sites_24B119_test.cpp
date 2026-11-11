@@ -485,13 +485,14 @@ TEST(XnuUiScaleSites24B119, ScrollEdgeKeylineTakesThe2xRowAtEveryScaleBut3)
     }
 }
 
-TEST(XnuUiScaleSites24B119, OnlyTheGridAndWidgetKitApplyAtScaleOne)
+TEST(XnuUiScaleSites24B119, OnlyTheGridWidgetKitAndTheTimebaseApplyAtScaleOne)
 {
     for (size_t i = 0; i < kCache.count; i++) {
         const std::string name = switch_ui_scale_sites::NameOf(kCache.sites[i]);
         const bool every_scale = name == "SpringBoardHome home screen grid 3x5" ||
                                  name == "WidgetKit placeholder batch deadline (n + 10) x 5 s" ||
-                                 name == "WidgetKit archived image limit of a 2x screen";
+                                 name == "WidgetKit archived image limit of a 2x screen" ||
+                                 name == "SampleAnalysis mach timebase of a 19.2 MHz counter";
         EXPECT_EQ(kCache.sites[i].every_scale, every_scale) << name;
     }
 }
