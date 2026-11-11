@@ -114,7 +114,7 @@ TEST(PushBatches, ManyCutsAndCapacitySplitsPreserveEveryWordExactlyOnce)
 TEST(BatchWork, OverflowAndZeroDimensionsCannotWrapTheBudget)
 {
     using W = raw::BatchWork;
-    EXPECT_EQ(W::product(UINT64_MAX, UINT64_MAX), W::kLimit);
+    EXPECT_EQ(W::product(UINT64_MAX, UINT64_MAX), W::kSaturated);
     EXPECT_EQ(W::product(UINT64_MAX, 0), 0u);
     EXPECT_EQ(W::product(0, UINT64_MAX), 0u);
     EXPECT_EQ(W::product(1024, 1024), 1024u * 1024);
@@ -125,6 +125,22 @@ TEST(BatchWork, OverflowAndZeroDimensionsCannotWrapTheBudget)
     for (uint32_t i = 1; i < W::kOperations; ++i)
         EXPECT_FALSE(work.add(1));
     EXPECT_TRUE(work.add(1));
+}
+
+// A glass frame's draws as admission sees them: full-screen scissors at ~70 fragment instructions. A client's batch ends
+// at each; the render server's holds sixteen, and a saturated estimate (an indirect draw) still ends it.
+TEST(BatchWork, TheRenderServerCutsSixteenTimesLessOften)
+{
+    using W = raw::BatchWork;
+    const uint64_t fullScreen = W::product(1280 * 720, 73);
+    W client, server;
+    EXPECT_TRUE(client.add(fullScreen));
+    uint32_t draws = 0;
+    while (!server.add(fullScreen, W::kRenderServerLimit))
+        ++draws;
+    EXPECT_EQ(draws, 15u);
+    W indirect;
+    EXPECT_TRUE(indirect.add(W::kSaturated, W::kRenderServerLimit));
 }
 
 namespace {

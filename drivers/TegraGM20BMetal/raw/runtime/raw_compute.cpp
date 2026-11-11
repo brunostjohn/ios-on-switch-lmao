@@ -392,8 +392,8 @@ bool ComputeEncoder::dispatchRegion(const ComputeRegion &part, const std::array<
     uint64_t work = state_->instructions;
     for (uint32_t axis = 0; axis < 3; ++axis)
         work = BatchWork::product(BatchWork::product(work, groups[axis]), threads[axis]);
-    apiWork_ = std::min(BatchWork::kLimit, (first ? 0 : apiWork_) + work);
-    if (last && cb_.batchWork_.add(apiWork_)) {
+    apiWork_ = std::min(BatchWork::kSaturated, (first ? 0 : apiWork_) + work);
+    if (last && cb_.batchWork_.add(apiWork_, cb_.batchLimit())) {
         cb_.segment(start_, p_.at);
         cb_.segments_.finishBatch();
         cb_.batchWork_ = {};

@@ -875,6 +875,7 @@ private:
     Device *dev_ = nullptr;
     PushBatches segments_;
     BatchWork batchWork_;
+    uint64_t batchLimit() const;
     DirtyRanges dirty_;
     std::vector<Texture *> backings_;                            // memoryless backings it uses
     SurfaceList surfaces_;

@@ -3301,6 +3301,11 @@ void CommandBuffer::useAddress(uint64_t va, uint64_t bytes, bool write)
                              bytes && bytes <= UINT32_MAX && dev_->k_.rangeUses() ? TegraGM20BSurfaceRange : 0u);
 }
 
+uint64_t CommandBuffer::batchLimit() const
+{
+    return dev_->role() == Device::Role::RenderServer ? BatchWork::kRenderServerLimit : BatchWork::kLimit;
+}
+
 void CommandBuffer::use(const Buffer &buffer, bool write)
 {
     buffersWritten_ |= write;
@@ -3723,7 +3728,7 @@ void RenderEncoder::finishDraw(uint32_t vertices, uint32_t instances, bool indir
     const uint64_t vertexWork = BatchWork::product(BatchWork::product(vertices, instances), pl.vertexInstructions);
     const uint64_t fragmentWork = BatchWork::product(BatchWork::product(drawPixels_, instances),
                                                     uint64_t(pl.fragmentInstructions) * pl.samplePasses);
-    if (!cb_->batchWork_.add(indirect ? BatchWork::kLimit : vertexWork + fragmentWork))
+    if (!cb_->batchWork_.add(indirect ? BatchWork::kSaturated : vertexWork + fragmentWork, cb_->batchLimit()))
         return;
     if (p_.at > bodyStart_) {
         bodies_.push_back({bodyStart_, p_.at, 0, 0, false, true});

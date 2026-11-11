@@ -134,6 +134,8 @@ int main()
     expect(repeated(1000, 8), "1000 draws survive eight bounded submissions");
     expect(repeated(256, 2), "exact boundary includes final stores without an extra submission");
     pipeline.fragmentInstructions = raw::BatchWork::kLimit;
+    expect(repeated(3, 1), "the render server keeps a client's preemption-sized draws in one batch");
+    pipeline.fragmentInstructions = raw::BatchWork::kRenderServerLimit;
     expect(repeated(3, 3), "expensive draws each expose a legal preemption boundary");
     pipeline.fragmentInstructions = 1;
 
