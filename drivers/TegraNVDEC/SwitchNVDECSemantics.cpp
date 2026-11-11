@@ -4,9 +4,9 @@
 #include "../TegraHost1x/SwitchHost1xSemantics.h"
 using Timeline = SwitchHost1xSemantics<SWITCH_GPU_ENGINE_NVDEC, SwitchNVDECQueue::kSlots>;
 
-bool switch_nvdec_semantics_start(uint32_t id)
+bool switch_nvdec_semantics_start(uint32_t id, void (*retired)(switch_gpu_event_waits *))
 {
-    return Timeline::start(id, nullptr);
+    return Timeline::start(id, retired);
 }
 
 bool switch_nvdec_semantics_pending()
@@ -31,9 +31,4 @@ void switch_nvdec_semantics_commit(SwitchNVDECSemantic *node)
 void switch_nvdec_semantics_physical(uint64_t)
 {
     switch_gpu_events_completed();
-}
-
-void switch_nvdec_semantics_retire(switch_gpu_event_waits *batch)
-{
-    Timeline::retire(batch);
 }
