@@ -86,8 +86,9 @@ uint32_t tegra_host1x_syncpt_read(uint32_t id);
 // Only after the exclusive producer stopped and retained completion records say failed; this never publishes success.
 int tegra_host1x_syncpt_release_failed(uint32_t id, uint32_t threshold, uint32_t max_increments);
 
-// Sleeps until syncpoint `id` reaches `threshold` (wrapping compare) or `timeoutUs` pass. A threshold interrupt that
-// is pending at the controller but never reaches the CPU panics (one line, with the GIC's state) once a client has
+// Sleeps until syncpoint `id` reaches `threshold` (wrapping compare) or `timeoutUs` pass, on a fence of the
+// syncpoint's list (SwitchHost1xFence.h), so any number of waiters and fences share a syncpoint. A threshold the
+// syncpoint reached whose interrupt never reaches the CPU panics (one line, with the GIC's state) once a client has
 // proven its engine (tegra_host1x_set_strict); before that it returns TEGRA_HOST1X_ELOST, so a probe that meets a
 // missing interrupt logs its own failure line and leaves its engine unpublished instead of stopping the boot.
 int tegra_host1x_syncpt_wait(uint32_t id, uint32_t threshold, uint32_t timeoutUs);
