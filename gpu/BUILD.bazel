@@ -186,6 +186,8 @@ metal_plugin(
         GM20B_METAL + ":raw/runtime/raw_kernel.cpp",
         GM20B_METAL + ":raw/runtime/raw_kernel_job.cpp",
         GM20B_METAL + ":raw/runtime/raw_resource_set.cpp",
+        GM20B_METAL + ":raw/runtime/raw_encoder_state.cpp",
+        GM20B_METAL + ":raw/runtime/raw_state_segment.cpp",
         GM20B_METAL + ":raw/runtime/raw_shared_events.cpp",
         GM20B_METAL + ":raw/runtime/raw_pack.cpp",
         GM20B_METAL + ":raw/runtime/raw_ycbcr.cpp",

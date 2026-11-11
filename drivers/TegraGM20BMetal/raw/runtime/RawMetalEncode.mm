@@ -67,6 +67,7 @@ static bool encodeRawAttempt(RMCommandBuffer *cb, size_t from, size_t to, const 
     rc->internalCompletion();
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
     rc->forceWholePrograms(cb->_forceWholePrograms || rmWholePrograms());
+    rc->inlineStates(cb->_inlineStates);
 #endif
     if (validateNativeEventWaits(cb, generation) != raw::EventDependencyState::ready) {
         rc->abandon();

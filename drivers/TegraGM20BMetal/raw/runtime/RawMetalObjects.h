@@ -265,7 +265,7 @@ struct RMSharedEventWait {
     size_t _encAt;
     bool _encOpen, _encRefused, _whole;
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
-    bool _forceWholePrograms;
+    bool _forceWholePrograms, _inlineStates;
     // hw_test_app's probes (RawMetalProbe.mm): its barriers' forms, where they took effect, and its 2D-engine work, each
     // at the blit encoder whose first command is at `at`
     raw::ProbeForms _probeForms;

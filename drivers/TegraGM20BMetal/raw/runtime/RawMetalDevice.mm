@@ -80,6 +80,10 @@ static const char *zetaMemoryRefusal(int asked)
     d[@"private_compressed"] = @(gRM->raw->privateMade());
     d[@"private_moves"] = @(gRM->raw->privateTransitions());
     d[@"compiled_here"] = @(gRM->completion ? gRM->completion->compiledHere() : 0);
+    d[@"state_segment_binds"] = @(gRM->raw->stats.segmentBinds.load());
+    d[@"state_segment_words"] = @(gRM->raw->stats.segmentWords.load());
+    d[@"state_segment_skips"] = @(gRM->raw->stats.segmentSkips.load());
+    d[@"state_segment_extras_losses"] = @(gRM->raw->stats.segmentExtrasLosses.load());
     const raw::FetchCounts &fetch = gRM->raw->stats.fetch;
     d[@"fetch_sequential"] = @(fetch.sequential.load());
     d[@"fetch_triangles"] = @(fetch.sequentialTriangles.load());

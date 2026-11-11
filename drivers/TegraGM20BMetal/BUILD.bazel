@@ -229,6 +229,8 @@ ios_binary(
         "raw/runtime/raw_kernel.cpp",
         "raw/runtime/raw_kernel_job.cpp",
         "raw/runtime/raw_resource_set.cpp",
+        "raw/runtime/raw_encoder_state.cpp",
+        "raw/runtime/raw_state_segment.cpp",
         "raw/runtime/raw_shared_events.cpp",
         "raw/runtime/raw_pack.cpp",
         "raw/runtime/raw_split.cpp",

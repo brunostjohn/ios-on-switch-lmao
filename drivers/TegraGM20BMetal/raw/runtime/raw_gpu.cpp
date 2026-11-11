@@ -66,17 +66,6 @@ enum : uint32_t {
     INVALIDATE_SHADER_CACHES_NO_WFI = NVB197_INVALIDATE_SHADER_CACHES_NO_WFI,
     PIXEL_SHADER_BARRIER = NVB197_PIXEL_SHADER_BARRIER,
     NO_OPERATION = NVB197_NO_OPERATION,
-    SET_FRONT_POLYGON_MODE = NVB197_SET_FRONT_POLYGON_MODE,
-    SET_BACK_POLYGON_MODE = NVB197_SET_BACK_POLYGON_MODE,
-    SET_POLY_OFFSET_POINT = NVB197_SET_POLY_OFFSET_POINT,
-    SET_POLY_OFFSET_LINE = NVB197_SET_POLY_OFFSET_LINE,
-    SET_POLY_OFFSET_FILL = NVB197_SET_POLY_OFFSET_FILL,
-    SET_SLOPE_SCALE_DEPTH_BIAS = NVB197_SET_SLOPE_SCALE_DEPTH_BIAS,
-    SET_DEPTH_BIAS = NVB197_SET_DEPTH_BIAS,
-    SET_DEPTH_BIAS_CLAMP = NVB197_SET_DEPTH_BIAS_CLAMP,
-    OGL_SET_CULL = NVB197_OGL_SET_CULL,
-    OGL_SET_FRONT_FACE = NVB197_OGL_SET_FRONT_FACE,
-    OGL_SET_CULL_FACE = NVB197_OGL_SET_CULL_FACE,
     PIXEL_SHADER_INTERLOCK_CONTROL = NVB197_SET_PIXEL_SHADER_INTERLOCK_CONTROL,
     PIPELINE_REGISTER_COUNT_VERTEX = NVB197_SET_PIPELINE_REGISTER_COUNT(NVB197_SET_PIPELINE_SHADER_TYPE_VERTEX),
     PIPELINE_REGISTER_COUNT_PIXEL = NVB197_SET_PIPELINE_REGISTER_COUNT(NVB197_SET_PIPELINE_SHADER_TYPE_PIXEL),
@@ -479,6 +468,7 @@ void Device::emitContext(Push &p)
         emitDepthStencil(p, depthStencilRegs(DepthStencilDesc(), 0, 0, false, false), unknown);
         ds_ = unknown;
     }
+    heldSegment_.lose();
     // root table selected for LOAD_CONSTANT_BUFFER from here on (draws reselect it after binding set 0 as a cbuf); NVK's init
     // above zeroed it, so one sample's layout goes in now, as every pass but a multisampled one leaves it
     sampleWords(p, 1, root_.va);
@@ -591,6 +581,14 @@ bool Device::init(std::string &err)
         if (base[2 * i] >= CT_WRITE && base[2 * i] < CT_WRITE + 32)
             ctWrite_[(base[2 * i] - CT_WRITE) / 4] = base[2 * i + 1];
     placed_.assign(pack_.header()->programs, ~0u);
+    segmentHeap_.setGrow([this](uint64_t bytes, SegmentChunk &chunk) {
+        Bo bo;
+        if (!k_.allocControl(bytes, bo, ControlUse::StateSegments))
+            return false;
+        set_.add(k_, bo, TegraGM20BSurfaceRead);
+        chunk = {bo.cpu, bo.va, bo.bytes};
+        return true;
+    });
     if (role_ == Role::Client)
         return true;
     if (!ensureChannel()) {
@@ -950,6 +948,7 @@ void Device::build(Pipeline &pl, const PackPipeline &pp, const PlacedProgram &vs
                 pl.ubos[pl.uboCount++] = {group, c, entry};
         }
     pl.methods.assign(words.data(), w.at);
+    pl.segment = segmentHeap_.place(pl.methods.data(), uint32_t(pl.methods.size()));
     memcpy(pl.push, pp.pushWords, sizeof pl.push);
     pl.pushMask = pp.pushMask;
     // the color formats of its key ("c<i>=<format>:<writeMask>:<blending>:..."), and which colors its draws read as they
@@ -3235,7 +3234,7 @@ CommandBuffer *Device::begin()
     cb.visibility_ = JobVisibility::Legacy;
     cb.externalWrites_ = false;
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
-    cb.forceWholePrograms_ = false;
+    cb.forceWholePrograms_ = cb.inlineStates_ = false;
 #endif
     cb.draws = cb.passes = cb.blits = cb.bands = 0;
     cb.refusal = {};
@@ -3256,6 +3255,8 @@ CommandBuffer *Device::begin()
     cb.restart_ = restart_;
     cb.ds_ = ds_;
     cb.extrasLive_ = extrasLive_;
+    cb.heldSegment_ = heldSegment_;
+    cb.segmentBinds_ = 0;
     cb.drawn_ = false;
     {
         std::lock_guard<std::mutex> l(lock_);
@@ -3438,6 +3439,12 @@ RenderEncoder *CommandBuffer::render(const PassDesc &pass)
     e.setViewport(0, 0, e.areaW_, e.areaH_, 0, 1);
     e.setScissor(0, 0, e.areaW_, e.areaH_);
     e.extrasAtBegin_ = extrasLive_;
+    if (extrasLive_) {
+        heldSegment_.lose();
+        RAW_DIAGNOSTIC(dev_->stats.segmentExtrasLosses++);
+    } else {
+        heldSegment_.passBoundary();
+    }
     extrasLive_ = nullptr;
     passes++;
     return &e;
@@ -3447,6 +3454,7 @@ BlitEncoder *CommandBuffer::blit()
 {
     BlitEncoder &e = blit_;
     e = BlitEncoder();
+    heldSegment_.lose();
     e.cb_ = this;
     e.dev_ = dev_;
     uint64_t va;
@@ -3673,6 +3681,8 @@ bool CommandBuffer::commit(uint32_t &seqno)
     } releaseReads{*this};
 
     Device &d = *dev_;
+    // a commit that fails after some of its jobs ran leaves the channel holding a segment the device cannot name
+    d.heldSegment_.lose();
     launchPrologues();
     if (d.overflowing_) {
         os_log_error(os_log_create("com.brunostjohn.switch.TegraGM20BMetal", "raw"),
@@ -3859,6 +3869,7 @@ bool CommandBuffer::commit(uint32_t &seqno)
     d.restart_ = restart_;
     d.ds_ = ds_;
     d.extrasLive_ = extrasLive_;
+    d.heldSegment_ = heldSegment_;
     const uint64_t now = compClock();
     for (Texture *b : backings_) {
         Device::Backing &k = Device::backingOf(*b);
@@ -4362,7 +4373,7 @@ bool RenderEncoder::indirect(uint32_t primitive, bool indexed, const Buffer *arg
     p_.m(0x0050, 0);  // NV906F_SET_REFERENCE: pre-Turing MME command-fetch visibility (NVK indirect-read barrier)
     mme::indirectHeader(p_, indexed);
     bodies_.push_back({bodyStart_, p_.at, 0, 0, true});
-    bodies_.push_back({nullptr, nullptr, arguments->va + offset, bytes / 4, false});
+    bodies_.push_back(PushBody::resident(arguments->va + offset, bytes / 4, TegraGM20BPushNoPrefetch));
     dev_->push_.head = uint64_t(reinterpret_cast<uint8_t *>(p_.at) - dev_->push_.bo.cpu);
     bodyStart_ = nullptr;
     reserve();
@@ -4826,10 +4837,13 @@ bool RenderEncoder::prepare(Pipeline *pl, uint32_t primitive, int32_t first, uin
     const bool dsChanged = dsDirty_;
     if (dsDirty_) {
         const bool depth = zeta && zetaHasDepth(zeta->format), stencil = zeta && zetaHasStencil(zeta->format);
-        emitDepthStencil(p,
-                         shaderTestsActive_ ? shaderDepthStencilRegs(depth)
-                                            : dsState_->regs(depth, stencil, stencilRef_[0], stencilRef_[1]),
-                         cb_->ds_);
+        if (shaderTestsActive_)
+            emitDepthStencil(p, shaderDepthStencilRegs(depth), cb_->ds_);
+        else if (bindDepthStencil(p, bodies_, bodyStart_, dsState_->regs(depth, stencil, stencilRef_[0], stencilRef_[1]),
+                                  cb_->ds_, bindsBySegment() ? dsState_->segment(depth, stencil) : StateSegment())) {
+            cb_->segmentBinds_++;
+            RAW_DIAGNOSTIC(d.stats.segmentBinds++);
+        }
         dsDirty_ = false;
     }
     if (zcull_.candidate && (dsChanged || pl != zcullProgram_)) {
@@ -5002,8 +5016,9 @@ bool RenderEncoder::prepare(Pipeline *pl, uint32_t primitive, int32_t first, uin
             if (cb_->extrasLive_ && cb_->extrasLive_ != pl) {
                 p.raw(cb_->extrasLive_->restore.data(), uint32_t(cb_->extrasLive_->restore.size()));
                 cb_->extrasLive_ = nullptr;
+                cb_->heldSegment_.lose();
             }
-            p.raw(pl->methods.data(), uint32_t(pl->methods.size()));
+            bindState(p, *pl);
             RAW_DIAGNOSTIC(d.stats.blendKillBinds += pl->blendKill);
             if (!pl->restore.empty())
                 cb_->extrasLive_ = pl;
@@ -5824,41 +5839,6 @@ RenderEncoder::Raster RenderEncoder::rasterFor(uint32_t primitive) const
 // NVK's nvk_flush_rs_state for the state m2v makes of Metal's (render_state.rs `fixed`, `vk_depth_bias`): culling on and
 // the face culled, the front face, the polygon mode of both faces, the polygon offset and the depth bias factors (in the
 // depth format's units: the pack's SET_DEPTH_BIAS_CONTROL); a register already holding its value is not written
-void RenderEncoder::writeRaster(Push &p, const Raster &want)
-{
-    if (want.bias != rasterHeld_.bias) {
-        p.m(SET_POLY_OFFSET_POINT, want.bias);
-        p.m(SET_POLY_OFFSET_LINE, want.bias);
-        p.m(SET_POLY_OFFSET_FILL, want.bias);
-        rasterHeld_.bias = want.bias;
-    }
-    if (want.biasConstant != rasterHeld_.biasConstant || want.biasSlope != rasterHeld_.biasSlope ||
-        want.biasClamp != rasterHeld_.biasClamp) {
-        p.m(SET_DEPTH_BIAS, want.biasConstant);
-        p.m(SET_SLOPE_SCALE_DEPTH_BIAS, want.biasSlope);
-        p.m(SET_DEPTH_BIAS_CLAMP, want.biasClamp);
-        rasterHeld_.biasConstant = want.biasConstant;
-        rasterHeld_.biasSlope = want.biasSlope;
-        rasterHeld_.biasClamp = want.biasClamp;
-    }
-    if (want.cull != rasterHeld_.cull) {
-        p.m(OGL_SET_CULL, want.cull != 0);
-        if (want.cull)
-            p.m(OGL_SET_CULL_FACE, want.cull == 1 ? 0x404 : 0x405);  // FRONT, BACK
-        rasterHeld_.cull = want.cull;
-    }
-    if (want.winding != rasterHeld_.winding) {
-        p.m(OGL_SET_FRONT_FACE, want.winding ? 0x901 : 0x900);  // CCW, CW
-        rasterHeld_.winding = want.winding;
-    }
-    if (want.fill != rasterHeld_.fill) {
-        const uint32_t mode = want.fill ? 0x1b01 : 0x1b02;  // LINE, FILL
-        p.m(SET_FRONT_POLYGON_MODE, mode);
-        p.m(SET_BACK_POLYGON_MODE, mode);
-        rasterHeld_.fill = want.fill;
-    }
-}
-
 void RenderEncoder::emitSwizzle(Push &p, uint32_t word)
 {
     kit(p, switch_gm20b_viewport_swizzle, 0u, word);
@@ -6075,19 +6055,8 @@ void RenderEncoder::end()
     checkRoom(p, "a pass prologue");
     cb_->segment(start, p.at);
     d.push_.head = uint64_t(reinterpret_cast<uint8_t *>(p.at) - d.push_.bo.cpu);
-    for (auto &b : bodies_) {
-        if (b.indirectVa) {
-            cb_->segments_.append({b.indirectVa, b.indirectWords, TegraGM20BPushNoPrefetch}, false);
-        } else {
-            cb_->segment(b.first, b.second);
-            if (b.incomplete)
-                cb_->segments_.back().flags |= TegraGM20BPushIncomplete;
-            RAW_DIAGNOSTIC(d.stats.pushBytes += uint64_t(b.second - b.first) * 4);
-        }
-        if (b.batchEnd)
-            cb_->segments_.finishBatch();
-    }
-    RAW_DIAGNOSTIC(d.stats.pushBytes += uint64_t(p.at - start) * 4);
+    [[maybe_unused]] const uint64_t bodyWords = appendBodies(cb_->segments_, bodies_, d.push_.bo.cpu, d.push_.bo.va);
+    RAW_DIAGNOSTIC(d.stats.pushBytes += (bodyWords + uint64_t(p.at - start)) * 4);
     bodies_.clear();
     // shadow targets the pass stores: their pool images back over what it rendered (the render area; a Clear's reach past it),
     // after the 3D engine is done with them

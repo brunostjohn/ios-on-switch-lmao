@@ -23,25 +23,6 @@ enum : uint32_t {
     Z_COMPRESSION = NVB197_SET_Z_COMPRESSION,
 };
 
-constexpr uint32_t kDepthStencilMethods[kDepthStencilRegs] = {NVB197_SET_DEPTH_TEST,
-                                                              NVB197_SET_DEPTH_WRITE,
-                                                              NVB197_SET_DEPTH_FUNC,
-                                                              NVB197_SET_STENCIL_TEST,
-                                                              NVB197_SET_STENCIL_OP_FAIL,
-                                                              NVB197_SET_STENCIL_OP_ZFAIL,
-                                                              NVB197_SET_STENCIL_OP_ZPASS,
-                                                              NVB197_SET_STENCIL_FUNC,
-                                                              NVB197_SET_STENCIL_FUNC_REF,
-                                                              NVB197_SET_STENCIL_FUNC_MASK,
-                                                              NVB197_SET_STENCIL_MASK,
-                                                              NVB197_SET_BACK_STENCIL_OP_FAIL,
-                                                              NVB197_SET_BACK_STENCIL_OP_ZFAIL,
-                                                              NVB197_SET_BACK_STENCIL_OP_ZPASS,
-                                                              NVB197_SET_BACK_STENCIL_FUNC,
-                                                              NVB197_SET_BACK_STENCIL_FUNC_REF,
-                                                              NVB197_SET_BACK_STENCIL_MASK,
-                                                              NVB197_SET_BACK_STENCIL_FUNC_MASK};
-
 uint32_t floatBits(float f)
 {
     uint32_t u;
@@ -103,14 +84,6 @@ bool DepthStencilDesc::active() const
 bool DepthStencilRegs::operator==(const DepthStencilRegs &o) const
 {
     return !memcmp(v, o.v, sizeof v);
-}
-
-void emitDepthStencil(Push &p, const DepthStencilRegs &want, DepthStencilRegs &held)
-{
-    for (uint32_t i = 0; i < kDepthStencilRegs; i++)
-        if (want.v[i] != held.v[i])
-            p.m(kDepthStencilMethods[i], want.v[i]);
-    held = want;
 }
 
 void zetaClearValues(Push &p, bool depth, float clearDepth, bool stencil, uint32_t clearStencil)
