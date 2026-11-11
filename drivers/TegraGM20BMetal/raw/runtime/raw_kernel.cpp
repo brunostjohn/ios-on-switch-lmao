@@ -53,8 +53,7 @@ Kernel::~Kernel()
 
 std::shared_ptr<SharedEvents> Kernel::sharedEvents()
 {
-    constexpr uint32_t required = TegraGM20BInfoSharedEvents;
-    if ((info_.flags & required) != required || !exactJobs())
+    if (!exactJobs())
         return nullptr;
     std::lock_guard<std::mutex> lock(eventsLock_);
     if (!events_)
@@ -536,7 +535,7 @@ bool Kernel::exec(uint32_t channel, const TegraGM20BAbiPush *pushes, uint32_t co
         setError("The kernel cannot retain this job's resource admission");
         return false;
     }
-    if (!events.empty() && (!addressed || !(info_.flags & TegraGM20BInfoSharedEvents) ||
+    if (!events.empty() && (!addressed ||
         events.waitCount > TegraGM20BMaxJobEvents || events.signalCount > TegraGM20BMaxJobEvents - events.waitCount ||
         (events.waitCount && !events.waits) || (events.signalCount && !events.signals))) {
         if (result)

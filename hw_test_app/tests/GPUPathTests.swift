@@ -390,7 +390,6 @@ struct SemanticFencePathTest: GPUPathTest {
 struct SharedEventsPathTest: GPUPathTest {
     let id = "gpu.path.shared_events"
     let name = "A GPU wait on a shared event orders a copy after another queue's GPU signal"
-    let bit: Int? = 21
     let counters = ["event_jobs"]
 
     func exercise(_ gpu: GPU, _: TestContext, _ metrics: inout Metrics) async throws -> [String] {

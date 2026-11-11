@@ -94,8 +94,7 @@ extern "C" kern_return_t IOConnectCallStructMethod(mach_port_t connection, uint3
         info.abi_version = TegraGM20BAbiVersion;
         info.flags = TegraGM20BInfoSubmitAddress |
                      (model.pushFences ? uint32_t(TegraGM20BInfoPushFences) : 0u) |
-                     (model.shared ? uint32_t(TegraGM20BInfoSharedEvents |
-                                              TegraGM20BInfoResourceReady) : 0u);
+                     (model.shared ? uint32_t(TegraGM20BInfoResourceReady) : 0u);
         info.va_start = 0x1000000;
         info.va_end = 0x100000000;
         info.page_size = 4096;
@@ -327,11 +326,10 @@ static void terminal(bool tunnel)
     check(wakes == 2, "failed registration cannot wake consumer");
 }
 
-static void submit(bool tunnel, bool shared)
+static void submit(bool tunnel)
 {
     model = {};
     model.tunnel = tunnel;
-    model.shared = shared;
     raw::Kernel kernel;
     std::string error;
     check(kernel.open(error), "actual Kernel opens test connection");
@@ -345,11 +343,6 @@ static void submit(bool tunnel, bool shared)
     int result = 0;
     const bool accepted = kernel.exec(3, &push, 1, 0, sequence, &resources, &result,
                                       raw::JobVisibility::Internal, events);
-    if (!shared) {
-        check(!accepted && result == kIOReturnBadArgument && !model.submissions,
-              "unadvertised event capability refuses before publication");
-        return;
-    }
     check(accepted && sequence == 1 && model.submissions == 1, "pushes and events publish in one call");
     const auto &header = *reinterpret_cast<const TegraGM20BAbiSubmit *>(model.submitted.data());
     check(header.channel == 3 && header.push_count == 1 && header.surface_count == 1 &&
@@ -580,9 +573,8 @@ int main()
     terminal(true);
     resourceReadiness(false);
     resourceReadiness(true);
-    submit(false, true);
-    submit(true, true);
-    submit(false, false);
+    submit(false);
+    submit(true);
     batchSubmission(false, true);
     batchSubmission(true, true);
     batchSubmission(false, false);

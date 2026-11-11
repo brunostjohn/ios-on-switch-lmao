@@ -697,7 +697,7 @@ TEST(GM20BFencesSource, ExecQueuesItsWritersAcquiresBeforeItSubmits)
 		    HasSubstr("out->flags = switch_gpu_info_flags();"));
 	EXPECT_THAT(client(), Not(HasSubstr("kInfoAwaitingUserspace")));
 	for (const char *capability :
-	     {"TegraGM20BInfoResourceReady", "TegraGM20BInfoSharedEvents"})
+	     {"TegraGM20BInfoResourceReady"})
 		EXPECT_THAT(capabilities, HasSubstr(capability));
 }
 
