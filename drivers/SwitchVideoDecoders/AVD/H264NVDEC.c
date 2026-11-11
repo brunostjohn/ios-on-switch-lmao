@@ -32,9 +32,10 @@ struct H264Decoder {
     NVDECRing ring;  // each picture's status record, slice offsets and bitstream
     H264DPB dpb;
     uint8_t last_pic_idx;
-    // A first field's sample and the engine's word on it, until its frame goes out.
+    // A first field's sample and its job, until its frame goes out; refused: its second field's job was refused.
     void *held_token;
-    int held_status;
+    uint32_t held_job;
+    bool held_refused;
     // Display order
     Pending pending[MAX_PENDING];
     uint32_t pending_count, reorder;
@@ -253,8 +254,9 @@ static uint8_t fieldOrder(const H264Decoder *d, uint8_t firstField, int32_t top,
     return top < bottom ? AVD_FIELDS_TOP_FIRST : top > bottom ? AVD_FIELDS_BOTTOM_FIRST : AVD_FIELDS_PROGRESSIVE;
 }
 
-// The frame in surface picIdx to `decoded`, then into the display queue.
-static void output(H264Decoder *d, uint8_t picIdx, void *token, int32_t poc, int status, uint8_t fields)
+// The frame in surface picIdx to `decoded`, then into the display queue: decoded by `job` (and `firstField`'s job).
+static void output(H264Decoder *d, uint8_t picIdx, void *token, int32_t poc, uint8_t fields, uint32_t job,
+                   uint32_t firstField, bool refused)
 {
     const H264Picture picture = {
         .luma = d->surface_va[picIdx],
@@ -271,7 +273,9 @@ static void output(H264Decoder *d, uint8_t picIdx, void *token, int32_t poc, int
         .height = d->height_mbs * 16 - d->sps.crop_top - d->sps.crop_bottom,
         .fields = fields,
         .poc = poc,
-        .status = status,
+        .job = job,
+        .first_field_job = firstField,
+        .refused = refused,
         .token = token,
     };
     void *item = d->b.decoded(d->b.ctx, &picture);
@@ -289,8 +293,8 @@ static void finishUnpaired(H264Decoder *d)
     if (!dpb->pairing)
         return;
     dpb->pairing = false;
-    output(d, dpb->pair_idx, d->held_token, dpb->pair_poc, d->held_status,
-           fieldOrder(d, dpb->pair_parity, dpb->pair_poc, dpb->pair_poc));
+    output(d, dpb->pair_idx, d->held_token, dpb->pair_poc, fieldOrder(d, dpb->pair_parity, dpb->pair_poc, dpb->pair_poc),
+           d->held_job, 0, d->held_refused);
 }
 
 void h264_decoder_flush(H264Decoder *d)
@@ -441,32 +445,28 @@ static int decodePicture(H264Decoder *d, const H264Slice *sh, void *token, bool 
     memset(&submit, 0, sizeof(submit));
     fillSetup(d, (nvdec_h264_pic_s *)submit.setup, sh, &cur);
     fillSubmit(d, &submit, (uint8_t)picIdx);
-    TegraNVDECWait wait = {.timeout_us = 1000000, .invalidate_count = 1};
-    wait.invalidate[0] = (TegraNVDECRange){input->handle, 0, sizeof(nvdec_status_s), 0};
-    if (!d->b.cpu_reads || d->b.cpu_reads(d->b.ctx))
-        wait.invalidate[wait.invalidate_count++] = (TegraNVDECRange){d->surface[picIdx], 0, d->surface_bytes, 0};
-    if (d->b.submit(d->b.ctx, &submit, &wait.fence) || d->b.wait(d->b.ctx, &wait)) {
+    uint32_t fence = 0;
+    if (d->b.submit(d->b.ctx, &submit, &fence)) {
         if (second) {  // the first field's frame goes out marked bad, so its sample is answered
-            d->held_status = -2;
+            d->held_refused = true;
             finishUnpaired(d);
         }
         return -2;
     }
-    const nvdec_status_s *status = (const nvdec_status_s *)input->va;
     nvdec_ring_advance(&d->ring);
-    const int engine = status->error_status && !status->mbs_correctly_decoded ? (int)status->error_status : 0;
     d->last_pic_idx = (uint8_t)picIdx;
     if (h264_dpb_finish(dpb, sh, &cur))
         bump(d, 0);  // C.4.4: memory_management_control_operation 5 infers no_output_of_prior_pics_flag 0
     if (dpb->pairing) {
         d->held_token = token;
-        d->held_status = engine;
+        d->held_job = fence;
+        d->held_refused = false;
         return 1;
     }
     const int32_t poc = cur.poc[0] < cur.poc[1] ? cur.poc[0] : cur.poc[1];
     const uint8_t first = second ? (uint8_t)(H264_FRAME ^ cur.structure) : H264_FRAME;
-    output(d, (uint8_t)picIdx, second ? d->held_token : token, poc, second && d->held_status ? d->held_status : engine,
-           fieldOrder(d, first, cur.poc[0], cur.poc[1]));
+    output(d, (uint8_t)picIdx, second ? d->held_token : token, poc, fieldOrder(d, first, cur.poc[0], cur.poc[1]),
+           fence, second ? d->held_job : 0, false);
     bump(d, reorder ? d->reorder : 0);
     return !second;
 }

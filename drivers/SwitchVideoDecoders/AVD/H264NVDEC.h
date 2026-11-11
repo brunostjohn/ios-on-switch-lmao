@@ -32,7 +32,10 @@ typedef struct {
     bool wide;                               // 16-bit samples (HEVC Main 10: P010, laid out as 'x420')
     uint8_t fields;                          // AVD_FIELDS_*
     int32_t poc;
-    int status;  // 0, or the engine's error_status when nothing decoded
+    // The fence of the NVDEC job that decoded it in this call (its status goes with it), 0: none; and of a field
+    // pair's first field, whose failure marks the frame too.
+    uint32_t job, first_field_job;
+    bool refused;  // a job of the frame was refused: it goes out marked bad
     void *token;
 } H264Picture;
 
@@ -41,13 +44,13 @@ typedef struct {
     int (*alloc)(void *ctx, uint64_t size, uint32_t *handle, void **va);
     void (*free)(void *ctx, uint32_t handle);
     int (*submit)(void *ctx, const TegraNVDECSubmit *submit, uint32_t *fence);
+    // Only for an output of the job the decoder itself must read (VP9's entropy counts): pictures never wait.
     int (*wait)(void *ctx, const TegraNVDECWait *wait);
-    void *(*decoded)(void *ctx, const H264Picture *picture);  // an output item for `emit`, or NULL to drop it
-    void (*emit)(void *ctx, void *item);                      // display order
-    void (*discard)(void *ctx, void *item);                   // dropped without output (no_output_of_prior_pics)
-    // Whether `decoded` reads the picture on the CPU (else VIC copies it, TegraNVDECPresent): only then does the job's
-    // Wait invalidate the surface. NULL: it does.
-    bool (*cpu_reads)(void *ctx);
+    // An output item for `emit` made as soon as the picture's job is submitted, or NULL to drop it. Whoever reads the
+    // picture waits for the job (the AVD plug-in's emitter); it is ordered after every job submitted before it.
+    void *(*decoded)(void *ctx, const H264Picture *picture);
+    void (*emit)(void *ctx, void *item);     // display order
+    void (*discard)(void *ctx, void *item);  // dropped without output (no_output_of_prior_pics)
     int (*recycle)(void *ctx, uint32_t handle, uint64_t bytes, void **va);
     uint32_t inputs;  // input buffers to cycle (NVDECRing.h); 0 as 1
 } H264Backend;
@@ -64,11 +67,11 @@ int h264_decoder_configure(H264Decoder *decoder);
 const H264SPS *h264_decoder_sps(const H264Decoder *decoder);  // the configured SPS (after configure)
 
 // One sample of length-prefixed NAL units (avcC lengthSizeMinusOne + 1 bytes each): a frame, or a field pair, or one
-// field of a pair split over two samples. Returns 1 when the sample's token went to a frame: it reaches `decoded`
-// before this returns, or (a first field) when its second field or the next picture is decoded or at the flush, and
-// `emit` when its turn comes. 0 when the sample started no frame (parameter sets, or only the second field of the
-// previous sample's frame), -1 for bad or unsupported data, -2 when the NVDEC job failed, -3 when buffers for a new
-// geometry failed.
+// field of a pair split over two samples. Returns 1 when the sample's token went to a frame whose jobs were submitted:
+// it reaches `decoded` before this returns, or (a first field) when its second field or the next picture is
+// submitted or at the flush, and `emit` when its turn comes. 0 when the sample started no frame (parameter sets, or
+// only the second field of the previous sample's frame), -1 for bad or unsupported data, -2 when an NVDEC job was
+// refused, -3 when buffers for a new geometry failed.
 // `reorder` false puts every picture out as soon as it is decoded (no temporal processing).
 int h264_decoder_decode(H264Decoder *decoder, const uint8_t *data, size_t size, unsigned lengthSize, void *token,
                         bool reorder);

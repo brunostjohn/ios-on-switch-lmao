@@ -3,7 +3,6 @@
 #include "MPEGFrames.h"
 #include <string.h>
 #include "../../TegraNVDEC/nvidia/clc5b0.h"
-#include "../../TegraNVDEC/nvidia/nvdec_drv.h"
 
 #define ALIGN(v, a) (((v) + (a) - 1) / (a) * (a))
 
@@ -110,25 +109,21 @@ void mpeg_frames_bind(MPEGFrames *f, TegraNVDECSubmit *s, int current, int past,
     }
 }
 
-int mpeg_frames_run(MPEGFrames *f, TegraNVDECSubmit *s, int current, TegraNVDECRange clean)
+int64_t mpeg_frames_run(MPEGFrames *f, TegraNVDECSubmit *s, TegraNVDECRange clean)
 {
     mpeg_frames_entry(s, NVC5B0_EXECUTE, TEGRA_NVDEC_ENTRY_VALUE, 1u << 8 /* AWAKEN */, 0);
     const NVDECInput *input = mpeg_frames_input(f);
     s->clean[s->clean_count++] = (TegraNVDECRange){input->handle, f->bits_off, f->bits_len, 0};
     if (clean.length)
         s->clean[s->clean_count++] = clean;
-    TegraNVDECWait wait = {.invalidate_count = 1};
-    wait.invalidate[0] = (TegraNVDECRange){input->handle, 0, sizeof(nvdec_status_s), 0};
-    if (!f->b.cpu_reads || f->b.cpu_reads(f->b.ctx))
-        wait.invalidate[wait.invalidate_count++] = (TegraNVDECRange){f->handle[current], 0, f->bytes, 0};
-    if (f->b.submit(f->b.ctx, s, &wait.fence) || f->b.wait(f->b.ctx, &wait))
+    uint32_t fence = 0;
+    if (f->b.submit(f->b.ctx, s, &fence))
         return -2;
-    const nvdec_status_s *status = (const nvdec_status_s *)input->va;
     nvdec_ring_advance(&f->ring);
-    return status->error_status && !status->mbs_correctly_decoded ? (int)status->error_status : 0;
+    return fence;
 }
 
-void mpeg_frames_output(MPEGFrames *f, int index, uint32_t width, uint32_t height, uint8_t fields, int status,
+void mpeg_frames_output(MPEGFrames *f, int index, uint32_t width, uint32_t height, uint8_t fields, uint32_t job,
                         void *token)
 {
     const H264Picture picture = {
@@ -143,7 +138,7 @@ void mpeg_frames_output(MPEGFrames *f, int index, uint32_t width, uint32_t heigh
         .width = width,
         .height = height,
         .fields = fields,
-        .status = status,
+        .job = job,
         .token = token,
     };
     void *item = f->b.decoded(f->b.ctx, &picture);

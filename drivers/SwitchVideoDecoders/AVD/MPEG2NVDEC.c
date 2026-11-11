@@ -109,7 +109,7 @@ static void fillSetup(const MPEG2Decoder *d, nvdec_mpeg2_pic_s *p, const MPEG2Pi
     memcpy(p->quant_mat_8x8nonintra, d->seq.inter_matrix, 64);
 }
 
-static int run(MPEG2Decoder *d, const MPEG2Picture *pic, int current, int past, int future, bool second)
+static int64_t run(MPEG2Decoder *d, const MPEG2Picture *pic, int current, int past, int future, bool second)
 {
     MPEGFrames *f = &d->frames;
     ((uint32_t *)(mpeg_frames_input(f)->va + MPEG_FRAMES_TABLES))[d->slices] = f->bits_len;
@@ -130,14 +130,13 @@ static int run(MPEG2Decoder *d, const MPEG2Picture *pic, int current, int past, 
     const uint32_t input = mpeg_frames_input(f)->handle;
     mpeg_frames_entry(&submit, NVC5B0_SET_SLICE_OFFSETS_BUF_OFFSET, TEGRA_NVDEC_ENTRY_RELOC, input,
                       MPEG_FRAMES_TABLES);
-    return mpeg_frames_run(f, &submit, current,
-                           (TegraNVDECRange){input, MPEG_FRAMES_TABLES, (d->slices + 1) * 4, 0});
+    return mpeg_frames_run(f, &submit, (TegraNVDECRange){input, MPEG_FRAMES_TABLES, (d->slices + 1) * 4, 0});
 }
 
 // The picture whose slices were collected: decoded into a new surface, or as the second field into its first's.
 // Returns the surface of a frame it completed (*fields says how its rows interleave), -4 when it completed none, or
 // -1, -2, -3.
-static int finishPicture(MPEG2Decoder *d, const MPEG2Picture *pic, int *status, uint8_t *fields)
+static int finishPicture(MPEG2Decoder *d, const MPEG2Picture *pic, uint32_t *job, uint8_t *fields)
 {
     MPEGFrames *f = &d->frames;
     if (pic->coding_type < MPEG2_I || pic->coding_type > MPEG2_B || !pic->structure)
@@ -163,10 +162,10 @@ static int finishPicture(MPEG2Decoder *d, const MPEG2Picture *pic, int *status, 
     const int newest = f->future >= 0 ? f->future : current;
     const int past = pic->coding_type == MPEG2_I ? current : pic->coding_type == MPEG2_P ? newest : f->past;
     const int future = pic->coding_type == MPEG2_B ? f->future : current;
-    const int result = run(d, pic, current, past, future, second);
-    if (result < 0)
-        return result;
-    *status = result;
+    const int64_t fence = run(d, pic, current, past, future, second);
+    if (fence < 0)
+        return (int)fence;
+    *job = (uint32_t)fence;
     if (field && !second) {
         *first = (FirstField){
             .waiting = true, .surface = (int8_t)current, .structure = pic->structure, .type = pic->coding_type};
@@ -195,7 +194,8 @@ int mpeg2_decoder_decode(MPEG2Decoder *d, const uint8_t *data, size_t size, void
         return -3;
     MPEG2Picture pic;
     bool picture = false;
-    int shown = -1, shownStatus = 0;
+    int shown = -1;
+    uint32_t shownJob = 0;
     uint8_t shownFields = AVD_FIELDS_PROGRESSIVE;
     size_t at = avd_next_start_code(data, size, 0);
     for (;;) {
@@ -204,13 +204,13 @@ int mpeg2_decoder_decode(MPEG2Decoder *d, const uint8_t *data, size_t size, void
         const size_t next = end ? size : avd_next_start_code(data, size, at + 4);
         const bool slice = code >= MPEG2_START_SLICE_FIRST && code <= MPEG2_START_SLICE_LAST;
         if (picture && d->slices && !slice) {  // the picture's slices end at the next start code of another kind
-            int status = 0;
+            uint32_t job = 0;
             uint8_t fields = AVD_FIELDS_PROGRESSIVE;
-            const int index = finishPicture(d, &pic, &status, &fields);
+            const int index = finishPicture(d, &pic, &job, &fields);
             picture = false;
             if (index >= 0) {
                 shown = index;
-                shownStatus = status;
+                shownJob = job;
                 shownFields = fields;
             } else if (index != -4) {
                 return index;
@@ -244,6 +244,6 @@ int mpeg2_decoder_decode(MPEG2Decoder *d, const uint8_t *data, size_t size, void
     if (shown < 0)
         return 0;
     mpeg_frames_output(&d->frames, shown, d->seq.width, d->seq.height,
-                       d->seq.mpeg2 ? shownFields : AVD_FIELDS_PROGRESSIVE, shownStatus, token);
+                       d->seq.mpeg2 ? shownFields : AVD_FIELDS_PROGRESSIVE, shownJob, token);
     return 1;
 }

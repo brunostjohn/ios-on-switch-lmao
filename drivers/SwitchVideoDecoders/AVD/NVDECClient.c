@@ -8,7 +8,6 @@
 #include <stdlib.h>
 #include <string.h>
 #include "NVDECListener.h"
-#include "../../TegraNVDEC/nvidia/clc5b0.h"
 
 enum {
     kBuffers = 64,  // TegraNVDECUserClient's kMaxBuffers
@@ -247,18 +246,6 @@ void nvdec_free(void *ctx, uint32_t handle)
     const TegraNVDECBuffer b = {handle, 0};
     call(c, c->selector, TegraNVDECMethodBufferFree, &b, sizeof(b), NULL, 0);  // the kernel unmaps it from this task
     forget(c, handle);
-}
-
-bool nvdec_status_range(const TegraNVDECSubmit *submit, TegraNVDECRange *range)
-{
-    for (uint32_t i = 0; i < submit->entry_count && i < TEGRA_NVDEC_MAX_ENTRIES; i++) {
-        const TegraNVDECEntry *e = &submit->entries[i];
-        if (e->method == NVC5B0_SET_NVDEC_STATUS_OFFSET && e->kind == TEGRA_NVDEC_ENTRY_RELOC) {
-            *range = (TegraNVDECRange){e->value, e->offset, NVDEC_STATUS_BYTES, 0};
-            return true;
-        }
-    }
-    return false;
 }
 
 int nvdec_submit(void *ctx, const TegraNVDECSubmit *submit, TegraNVDECFence *reply)

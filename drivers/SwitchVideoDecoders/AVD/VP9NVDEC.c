@@ -32,7 +32,9 @@ struct VP9Decoder {
     NVDECRing ring;  // each frame's status record, probability table and tile data
     uint32_t aux, aux_bytes;
     uint8_t *aux_va;
-    uint32_t seg_off[2], colmv_off[2], counters_off, filter_off, seg_bytes, filter_rows;
+    // seg_off[kSegClear] is never written: the map a frame that resets past state reads (no CPU write into a buffer a
+    // queued job may still be using).
+    uint32_t seg_off[3], colmv_off[2], counters_off, filter_off, seg_bytes, filter_rows;
     uint8_t seg_read, colmv_write;
     // The previous decoded frame (libvpx last_*)
     bool have_last, last_show, last_key;
@@ -43,9 +45,10 @@ struct VP9Decoder {
 enum {
     kStatusOff = 0,
     kProbOff = 256,  // sizeof(nvdec_status_s) fits below
-    kBitsOff = kProbOff + ALIGN(sizeof(nvdec_vp9EntropyProbs_t), 256),
-    kTilesOff = 0,  // in the aux buffer: tile sizes, 0x700 bytes
+    kTilesOff = kProbOff + ALIGN(sizeof(nvdec_vp9EntropyProbs_t), 256),
     kTilesBytes = 0x700,
+    kBitsOff = kTilesOff + kTilesBytes,
+    kSegClear = 2,
 };
 
 VP9Decoder *vp9_decoder_create(const H264Backend *backend)
@@ -105,6 +108,13 @@ static uint32_t superblocks(uint32_t w, uint32_t h)
     return ((ALIGN(w, 16) + 63) / 64) * ((ALIGN(h, 16) + 63) / 64);
 }
 
+// The tile size table's tail entries as averne's driver sets them (meaning undocumented); a frame's table is shorter.
+static void tileTail(uint8_t *input)
+{
+    ((uint16_t *)(input + kTilesOff))[0x37a] = 9;
+    ((uint16_t *)(input + kTilesOff))[0x37b] = 1;
+}
+
 int vp9_decoder_configure(VP9Decoder *d, uint32_t width, uint32_t height)
 {
     if (width <= d->max_width && height <= d->max_height && d->aux)
@@ -118,9 +128,10 @@ int vp9_decoder_configure(VP9Decoder *d, uint32_t width, uint32_t height)
     d->seg_bytes = ALIGN(sb * 32, 256);
     const uint32_t colmv = ALIGN(sb * 1024, 256);
     d->filter_rows = ALIGN(height, 64);
-    d->seg_off[0] = ALIGN(kTilesBytes, 256);
-    d->seg_off[1] = d->seg_off[0] + d->seg_bytes;
-    d->counters_off = d->seg_off[1] + d->seg_bytes;
+    d->seg_off[0] = 0;
+    d->seg_off[1] = d->seg_bytes;
+    d->seg_off[kSegClear] = 2 * d->seg_bytes;
+    d->counters_off = 3 * d->seg_bytes;
     d->colmv_off[0] = d->counters_off + ALIGN(sizeof(nvdec_vp9EntropyCounts_t), 256);
     d->colmv_off[1] = d->colmv_off[0] + colmv;
     d->filter_off = d->colmv_off[1] + colmv;
@@ -129,16 +140,16 @@ int vp9_decoder_configure(VP9Decoder *d, uint32_t width, uint32_t height)
     if (d->b.alloc(d->b.ctx, d->aux_bytes, &d->aux, &va))
         return -3;
     d->aux_va = va;  // zeroed: segmentation maps, motion vectors and counters start clear
-    // The tile size table's tail entries as averne's driver sets them (meaning undocumented).
-    ((uint16_t *)(d->aux_va + kTilesOff))[0x37a] = 9;
-    ((uint16_t *)(d->aux_va + kTilesOff))[0x37b] = 1;
     if (nvdec_ring_alloc(&d->ring, &d->b, kBitsOff + ALIGN((uint64_t)width * height / 2 + 0x10000, 0x10000))) {
         releaseBuffers(d);
         return -3;
     }
+    for (uint32_t i = 0; i < d->ring.count; i++)
+        tileTail(d->ring.input[i].va);
     d->max_width = width;
     d->max_height = height;
-    d->seg_read = d->colmv_write = 0;
+    d->seg_read = kSegClear;
+    d->colmv_write = 0;
     return 0;
 }
 
@@ -374,7 +385,7 @@ static void entry(TegraNVDECSubmit *s, uint16_t method, uint16_t kind, uint32_t 
     e->offset = offset;
 }
 
-static void output(VP9Decoder *d, const Surface *s, int status, void *token)
+static void output(VP9Decoder *d, const Surface *s, uint32_t job, void *token)
 {
     const H264Picture picture = {
         .luma = s->va,
@@ -387,7 +398,7 @@ static void output(VP9Decoder *d, const Surface *s, int status, void *token)
         .coded_height = s->height,
         .width = s->width,
         .height = s->height,
-        .status = status,
+        .job = job,
         .token = token,
     };
     void *item = d->b.decoded(d->b.ctx, &picture);
@@ -430,24 +441,23 @@ static int decodeFrame(VP9Decoder *d, const uint8_t *data, size_t size, void *to
         refs[i] = intra ? cur : &d->surf[d->slot[h.ref_idx[i]]];
 
     // vp9_setup_past_independence clears the segmentation map; NVDEC reads it from the read buffer.
-    const bool clearMaps = h.key_frame || h.intra_only || h.error_resilient;
-    if (clearMaps)
-        memset(d->aux_va + d->seg_off[0], 0, 2 * d->seg_bytes);
+    if (h.key_frame || h.intra_only || h.error_resilient)
+        d->seg_read = kSegClear;
     if (kBitsOff + tileBytes + 64 > nvdec_ring_current(&d->ring)->bytes &&
-        nvdec_ring_grow(&d->ring, &d->b, kBitsOff + tileBytes + 64, 0))
+        nvdec_ring_grow(&d->ring, &d->b, kBitsOff + tileBytes + 64, kBitsOff))
         return -3;
     const NVDECInput *input = nvdec_ring_current(&d->ring);
     memcpy(input->va + kBitsOff, tiles, tileBytes);
     memset(input->va + kBitsOff + tileBytes, 0, 64);
     fillProbs((nvdec_vp9EntropyProbs_t *)(input->va + kProbOff), &fc, st);
-    tileSizes((uint16_t *)(d->aux_va + kTilesOff), &h);
+    tileSizes((uint16_t *)(input->va + kTilesOff), &h);
 
     TegraNVDECSubmit submit;
     memset(&submit, 0, sizeof(submit));
     submit.codec = TEGRA_NVDEC_CODEC_VP9;
     submit.setup_bytes = sizeof(nvdec_vp9_pic_s);
     fillSetup(d, (nvdec_vp9_pic_s *)submit.setup, &h, cur, refs, (uint32_t)tileBytes);
-    const uint8_t segWrite = d->seg_read ^ 1, colmvRead = d->colmv_write ^ 1;
+    const uint8_t segWrite = d->seg_read == 0 ? 1 : 0, colmvRead = d->colmv_write ^ 1;
     entry(&submit, NVC5B0_SET_APPLICATION_ID, TEGRA_NVDEC_ENTRY_VALUE, NVC5B0_SET_APPLICATION_ID_ID_VP9, 0);
     entry(&submit, NVC5B0_SET_CONTROL_PARAMS, TEGRA_NVDEC_ENTRY_VALUE,
           NVC5B0_SET_CONTROL_PARAMS_CODEC_TYPE_VP9 | (1u << 4) /* GPTIMER_ON */ | (1u << 6) /* ERR_CONCEAL_ON */, 0);
@@ -456,7 +466,7 @@ static int decodeFrame(VP9Decoder *d, const uint8_t *data, size_t size, void *to
     entry(&submit, NVC5B0_SET_NVDEC_STATUS_OFFSET, TEGRA_NVDEC_ENTRY_RELOC, input->handle, kStatusOff);
     entry(&submit, NVC5B0_VP9_SET_PROB_TAB_BUF_OFFSET, TEGRA_NVDEC_ENTRY_RELOC, input->handle, kProbOff);
     entry(&submit, NVC5B0_VP9_SET_CTX_COUNTER_BUF_OFFSET, TEGRA_NVDEC_ENTRY_RELOC, d->aux, d->counters_off);
-    entry(&submit, NVC5B0_VP9_SET_TILE_SIZE_BUF_OFFSET, TEGRA_NVDEC_ENTRY_RELOC, d->aux, kTilesOff);
+    entry(&submit, NVC5B0_VP9_SET_TILE_SIZE_BUF_OFFSET, TEGRA_NVDEC_ENTRY_RELOC, input->handle, kTilesOff);
     entry(&submit, NVC5B0_VP9_SET_COL_MVWRITE_BUF_OFFSET, TEGRA_NVDEC_ENTRY_RELOC, d->aux,
           d->colmv_off[d->colmv_write]);
     entry(&submit, NVC5B0_VP9_SET_COL_MVREAD_BUF_OFFSET, TEGRA_NVDEC_ENTRY_RELOC, d->aux, d->colmv_off[colmvRead]);
@@ -471,25 +481,22 @@ static int decodeFrame(VP9Decoder *d, const uint8_t *data, size_t size, void *to
               pics[i]->luma_bytes);
     }
     entry(&submit, NVC5B0_EXECUTE, TEGRA_NVDEC_ENTRY_VALUE, 1u << 8 /* AWAKEN */, 0);
-    // The CPU wrote the probability table and the tile data (one range), and the tile sizes and maybe the maps.
+    // The CPU wrote the probability table, the tile sizes and the tile data: one range of the input buffer.
     submit.clean[0] =
         (TegraNVDECRange){input->handle, kProbOff, (uint32_t)(kBitsOff - kProbOff + tileBytes + 64), 0};
-    submit.clean[1] =
-        (TegraNVDECRange){d->aux, kTilesOff, clearMaps ? d->seg_off[1] + d->seg_bytes : (uint32_t)kTilesBytes, 0};
-    submit.clean_count = 2;
-    TegraNVDECWait wait = {.invalidate_count = 2};
-    wait.invalidate[0] = (TegraNVDECRange){input->handle, kStatusOff, sizeof(nvdec_status_s), 0};
-    wait.invalidate[1] = (TegraNVDECRange){d->aux, d->counters_off, sizeof(nvdec_vp9EntropyCounts_t), 0};
-    if (!d->b.cpu_reads || d->b.cpu_reads(d->b.ctx))  // hidden frames too: show_existing_frame reads them later
-        wait.invalidate[wait.invalidate_count++] = (TegraNVDECRange){cur->handle, 0, cur->bytes, 0};
-    if (d->b.submit(d->b.ctx, &submit, &wait.fence) || d->b.wait(d->b.ctx, &wait))
+    submit.clean_count = 1;
+    uint32_t fence = 0;
+    if (d->b.submit(d->b.ctx, &submit, &fence))
         return -2;
-    const nvdec_status_s *status = (const nvdec_status_s *)(input->va + kStatusOff);
     nvdec_ring_advance(&d->ring);
-    const int error = status->error_status && !status->mbs_correctly_decoded ? (int)status->error_status : 0;
 
-    // Backward adaptation from the engine's counts (vp9_decode_frame's tail), then the context refresh.
+    // Backward adaptation from the engine's counts (vp9_decode_frame's tail), then the context refresh: the CPU needs
+    // what NVDEC counted before the next frame's probabilities exist.
     if (!h.error_resilient && !h.frame_parallel) {
+        TegraNVDECWait wait = {.fence = fence, .invalidate_count = 1};
+        wait.invalidate[0] = (TegraNVDECRange){d->aux, d->counters_off, sizeof(nvdec_vp9EntropyCounts_t), 0};
+        if (d->b.wait(d->b.ctx, &wait))
+            return -2;
         VP9Counts counts;
         readCounts(&counts, (const nvdec_vp9EntropyCounts_t *)(d->aux_va + d->counters_off));
         vp9_adapt_coef_probs(&fc, &pre, &counts, intra, d->have_last && d->last_key);
@@ -524,7 +531,7 @@ static int decodeFrame(VP9Decoder *d, const uint8_t *data, size_t size, void *to
     d->last_height = h.height;
     if (h.show_frame) {
         if (!*shown)
-            output(d, cur, error, token);
+            output(d, cur, fence, token);
         *shown = true;
     }
     return 0;

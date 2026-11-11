@@ -45,13 +45,13 @@ int mpeg_frames_append(MPEGFrames *f, const uint8_t *data, size_t size, bool res
 void mpeg_frames_entry(TegraNVDECSubmit *s, uint16_t method, uint16_t kind, uint32_t value, uint32_t offset);
 // The input relocations (bitstream, status) and the three picture slots.
 void mpeg_frames_bind(MPEGFrames *f, TegraNVDECSubmit *s, int current, int past, int future);
-// Submits with AWAKEN last, waits on the fence, then reads the status: 0, the engine's error when no macroblock
-// decoded right, or -2 when the job failed. `clean` names an extra range the CPU wrote (or has length 0).
-int mpeg_frames_run(MPEGFrames *f, TegraNVDECSubmit *s, int current, TegraNVDECRange clean);
+// Submits with AWAKEN last: the job's fence, or -2 when it was refused. `clean` names an extra range the CPU wrote (or
+// has length 0).
+int64_t mpeg_frames_run(MPEGFrames *f, TegraNVDECSubmit *s, TegraNVDECRange clean);
 
-// The picture in surface `index`, width x height from its top left (fields: AVD_FIELDS_*), to `decoded` and then
-// `emit`.
-void mpeg_frames_output(MPEGFrames *f, int index, uint32_t width, uint32_t height, uint8_t fields, int status,
+// The picture in surface `index`, width x height from its top left (fields: AVD_FIELDS_*), decoded by job `job` in this
+// call (0: none), to `decoded` and then `emit`.
+void mpeg_frames_output(MPEGFrames *f, int index, uint32_t width, uint32_t height, uint8_t fields, uint32_t job,
                         void *token);
 
 #endif

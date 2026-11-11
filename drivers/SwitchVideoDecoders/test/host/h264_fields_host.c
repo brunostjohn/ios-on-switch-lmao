@@ -13,6 +13,7 @@
 #include <string.h>
 #include "../../AVD/H264NVDEC.h"
 #include "../../../TegraNVDEC/TegraNVDECCheck.h"
+#include "fake_engine.h"
 #include "h264_fields_scenarios.h"
 
 enum {
@@ -30,6 +31,8 @@ typedef struct {
     uint64_t first_avail[TEGRA_NVDEC_MAX_ENTRIES];
     unsigned emitted[64], emits, decoded;
     uint8_t fields[64];
+    FakeEngine engine;
+    unsigned pairJobsWrong;  // a frame whose first field's job is not the job before its second field's
 } Fake;
 
 static int fakeAlloc(void *ctx, uint64_t size, uint32_t *handle, void **va)
@@ -40,6 +43,7 @@ static int fakeAlloc(void *ctx, uint64_t size, uint32_t *handle, void **va)
             continue;
         f->va[h] = calloc(1, size);
         f->size[h] = size;
+        fake_engine_allocated(&f->engine, h);
         *handle = h;
         *va = f->va[h];
         return f->va[h] ? 0 : -1;
@@ -73,13 +77,13 @@ static int fakeSubmit(void *ctx, const TegraNVDECSubmit *s, uint32_t *fence)
         memcpy(f->first_avail, avail, sizeof(avail));
     }
     f->jobs[f->job_count++] = *p;
-    *fence = 0;
+    *fence = fake_engine_submit(&f->engine, s);
     return 0;
 }
 
 static int fakeWait(void *ctx, const TegraNVDECWait *w)
 {
-    (void)ctx, (void)w;
+    fake_engine_wait(&((Fake *)ctx)->engine, w->fence);
     return 0;
 }
 
@@ -89,6 +93,7 @@ static void *fakeDecoded(void *ctx, const H264Picture *pic)
     const unsigned sample = (unsigned)(uintptr_t)pic->token;
     if (sample < 64)
         f->fields[sample] = pic->fields;
+    f->pairJobsWrong += pic->first_field_job && pic->first_field_job + 1 != pic->job;
     f->decoded++;
     return (void *)(uintptr_t)(sample + 1);
 }
@@ -240,8 +245,15 @@ static int runCase(const FieldsCase *c, unsigned *pictures, unsigned *frames)
     if (fields_stream_write(&s, &stream))
         return 1;
     Fake fake = {0};
-    const H264Backend backend = {&fake,       fakeAlloc, fakeFree,    fakeSubmit, fakeWait,
-                                 fakeDecoded, fakeEmit,  fakeDiscard, NULL,       NULL};
+    const H264Backend backend = {.ctx = &fake,
+                                 .alloc = fakeAlloc,
+                                 .free = fakeFree,
+                                 .submit = fakeSubmit,
+                                 .wait = fakeWait,
+                                 .decoded = fakeDecoded,
+                                 .emit = fakeEmit,
+                                 .discard = fakeDiscard,
+                                 .inputs = FAKE_ENGINE_DEPTH + 1};
     H264Decoder *d = h264_decoder_create(&backend);
     int bad = 0;
     if (!d || h264_decoder_parameter_set(d, stream.sps, stream.sps_size) ||
@@ -313,6 +325,13 @@ static int runCase(const FieldsCase *c, unsigned *pictures, unsigned *frames)
         next++;
     }
     bad += fake.emits != expectFrames;
+    // Asynchronous decoding: no wait, no CPU write into an input a queued job still reads, and a field pair's frame
+    // waits for both its jobs.
+    if (fake.engine.waits || fake.engine.busyWrites || fake.pairJobsWrong) {
+        fprintf(stderr, "%s: %u waits, %u CPU writes into a buffer a queued job uses, %u field pairs' jobs wrong\n",
+                c->name, fake.engine.waits, fake.engine.busyWrites, fake.pairJobsWrong);
+        bad++;
+    }
     // A frame's rows interleave as its first field's parity says (a frame picture's top field is the earlier).
     for (unsigned j = 0, sample = 0; j < c->count && j < fake.job_count; j++) {
         sample += j && c->steps[j].picture.new_sample;
@@ -469,8 +488,15 @@ int main(int argc, char **argv)
     const FieldsScenario s = scenario(&kFieldsCases[0], pics);
     FieldsStream stream;
     Fake fake = {0};
-    const H264Backend backend = {&fake,       fakeAlloc, fakeFree,    fakeSubmit, fakeWait,
-                                 fakeDecoded, fakeEmit,  fakeDiscard, NULL,       NULL};
+    const H264Backend backend = {.ctx = &fake,
+                                 .alloc = fakeAlloc,
+                                 .free = fakeFree,
+                                 .submit = fakeSubmit,
+                                 .wait = fakeWait,
+                                 .decoded = fakeDecoded,
+                                 .emit = fakeEmit,
+                                 .discard = fakeDiscard,
+                                 .inputs = FAKE_ENGINE_DEPTH + 1};
     H264Decoder *d = h264_decoder_create(&backend);
     if (fields_stream_write(&s, &stream) || !d || h264_decoder_parameter_set(d, stream.sps, stream.sps_size) ||
         h264_decoder_parameter_set(d, stream.pps, stream.pps_size) || h264_decoder_configure(d) ||

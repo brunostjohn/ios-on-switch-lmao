@@ -193,6 +193,7 @@ host_library(
     name = "h264_host",
     srcs = [
         "h264_host.c",
+        "fake_engine.h",
         "//drivers/SwitchVideoDecoders:test/H264MbaffClip.h",
         "//drivers/SwitchVideoDecoders:test/VDECClip.h",
     ],
@@ -204,6 +205,7 @@ host_library(
 host_library(
     name = "h264_fields_host",
     srcs = [
+        "fake_engine.h",
         "h264_fields_host.c",
         "h264_fields_scenarios.h",
         "h264_fields_stream.c",
@@ -218,6 +220,7 @@ host_library(
     name = "vp9_host",
     srcs = [
         "vp9_host.c",
+        "fake_engine.h",
         "//drivers/SwitchVideoDecoders:test/VP9Clip.h",
         "//drivers/SwitchVideoDecoders:test/VP9Trace.h",
     ],
@@ -231,6 +234,7 @@ host_library(
     name = "hevc_host",
     srcs = [
         "hevc_host.c",
+        "fake_engine.h",
         "//drivers/SwitchVideoDecoders:test/HEVCClip.h",
         "//drivers/SwitchVideoDecoders:test/HEVCTrace.h",
     ],
@@ -243,6 +247,7 @@ host_library(
     name = "mpeg2_host",
     srcs = [
         "mpeg2_host.c",
+        "fake_engine.h",
         "//drivers/SwitchVideoDecoders:test/MPEG2Clip.h",
         "//drivers/SwitchVideoDecoders:test/MPEG2Trace.h",
     ],
@@ -255,6 +260,7 @@ host_library(
     name = "mpeg4_host",
     srcs = [
         "mpeg4_host.c",
+        "fake_engine.h",
         "//drivers/SwitchVideoDecoders:test/MPEG4Clip.h",
         "//drivers/SwitchVideoDecoders:test/MPEG4Trace.h",
     ],
@@ -274,9 +280,12 @@ host_library(
         "//drivers/SwitchVideoDecoders:test/MPEG4Clip.h",
         "//drivers/SwitchVideoDecoders:AVD/AVDAlpha.c",
         "//drivers/SwitchVideoDecoders:AVD/AVDDecoder.h",
+        "//drivers/SwitchVideoDecoders:AVD/AVDEmitter.c",
+        "//drivers/SwitchVideoDecoders:AVD/AVDEmitter.h",
         "//drivers/SwitchVideoDecoders:AVD/AVDFrameTiming.h",
         "//drivers/SwitchVideoDecoders:AVD/SwitchVideoColor.h",
         "//drivers/SwitchVideoDecoders:AVD/AVDMPEG.c",
+        "//drivers/SwitchVideoDecoders:AVD/AVDRoutes.c",
         "//drivers/SwitchVideoDecoders:AVD/AVDTiles.c",
         "//drivers/SwitchVideoDecoders:AVD/NVDECClient.h",
         "//drivers/SwitchVideoDecoders:AVD/VTDecoderSPI.h",
@@ -302,6 +311,7 @@ host_library(
     srcs = [
         "avd_register_host.c",
         "//drivers/SwitchVideoDecoders:AVD/AVDDecoder.h",
+        "//drivers/SwitchVideoDecoders:AVD/AVDEmitter.h",
         "//drivers/SwitchVideoDecoders:AVD/AVDFrameTiming.h",
         "//drivers/SwitchVideoDecoders:AVD/SwitchVideoColor.h",
         "//drivers/SwitchVideoDecoders:AVD/AVDRegister.c",

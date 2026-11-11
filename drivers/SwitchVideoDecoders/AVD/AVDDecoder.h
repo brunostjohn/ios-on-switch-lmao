@@ -7,6 +7,7 @@
 #include <pthread.h>
 #include <stdbool.h>
 #include <stdint.h>
+#include "AVDEmitter.h"
 #include "AVDFrameTiming.h"
 #include "H264NVDEC.h"
 #include "HEVCNVDEC.h"
@@ -31,6 +32,7 @@ typedef struct {
     VTTileDecoderSession tileSession;  // a tile session (grid images) instead of a frame session
     AVDTile tile;
     NVDECClient *client;
+    AVDEmitter *emitter;
     FourCharCode codec;  // 'avc1', 'vp09', 'hvc1', 'mp4v', 'mp2v' or 'mp1v'
     H264Decoder *h264;
     VP9Decoder *vp9;
@@ -42,7 +44,7 @@ typedef struct {
     unsigned lengthSize;
     OSType pixelFormat;
     CFTypeRef matrix, primaries, transfer, chromaTop, chromaBottom;
-    uint32_t width, height, frames, errors;
+    uint32_t width, height, frames;
     uint64_t decodeTicks, copyTicks;  // copyTicks: placing pictures in pixel buffers (VIC's or the CPU's copy)
     bool present;
     uint32_t presented, exported, copied;
@@ -56,12 +58,6 @@ typedef struct {
     AVDFrameTiming timing;
 #endif
 } Decoder;
-
-typedef struct {
-    CVPixelBufferRef image;
-    VTVideoDecoderFrame frame;
-    OSStatus status;
-} Output;
 
 extern os_log_t gAVDLog;
 
@@ -84,8 +80,10 @@ Boolean avd_mpeg2_accepts(const Decoder *d, CMVideoFormatDescriptionRef format);
 void avd_tag_fields(CVPixelBufferRef image, uint8_t fields);
 // The sample's bytes, contiguous: *data points into the sample or at *copy (the caller frees it).
 bool avd_sample_bytes(CMSampleBufferRef sample, const uint8_t **data, size_t *size, uint8_t **copy);
-// The picture into `image` with its top-left at (x, y), by VIC, else by the CPU; clipped to the image.
-void avd_place_picture(Decoder *d, const H264Picture *picture, CVPixelBufferRef image, uint32_t x, uint32_t y);
+// The picture into `image` with its top-left at (x, y), by VIC, else by the CPU once `out`'s jobs are done; clipped to
+// the image.
+void avd_place_picture(Decoder *d, Output *out, const H264Picture *picture, CVPixelBufferRef image, uint32_t x,
+                       uint32_t y);
 
 // AVDTiles.c: the decoder class's version 3 slots.
 OSStatus avd_start_tile_session(VTVideoDecoderRef ref, VTTileDecoderSession session,
@@ -93,7 +91,8 @@ OSStatus avd_start_tile_session(VTVideoDecoderRef ref, VTTileDecoderSession sess
 OSStatus avd_decode_tile(VTVideoDecoderRef ref, int64_t frameID, CMSampleBufferRef sample, VTInt32Point tile,
                          VTInt32Size size, CVPixelBufferRef canvas, VTInt32Point offset, VTDecodeFrameFlags flags,
                          VTDecodeInfoFlags *info);
-// A decoded tile picture into its canvas, and its answer (both on the decoding thread, inside avd_decode_tile).
+// A decoded tile picture into its canvas, and its answer once its job is done (both on the decoding thread, inside
+// avd_decode_tile).
 void *avd_tile_decoded(Decoder *d, const H264Picture *picture);
 void avd_tile_emit(Decoder *d, Output *out);
 
@@ -111,6 +110,9 @@ void avd_alpha_count(const Decoder *d, bool byVIC);
 // The session's first plane (-1: not into a target), its pictures into targets, and the process's alpha-plane pictures
 // by VIC and by the CPU.
 void avd_alpha_routes(const Decoder *d, int32_t counts[4]);
+// AVDRoutes.c: the SwitchPictureRoutes and SwitchDisplayBufferProbe properties.
+CFDictionaryRef avd_copy_picture_routes(const Decoder *d);
+CFDictionaryRef avd_copy_display_buffer_probe(const Decoder *d);
 #endif
 
 #endif

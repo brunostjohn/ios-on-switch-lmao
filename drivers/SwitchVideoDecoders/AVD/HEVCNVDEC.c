@@ -261,6 +261,19 @@ typedef struct {
     size_t size;
 } Span;
 
+#if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
+// The display-buffer probe's precondition, read on the decode thread: the probe compares against this picture.
+static bool decodedCleanly(const HEVCDecoder *d, const NVDECInput *input, uint32_t fence)
+{
+    TegraNVDECWait wait = {.fence = fence, .invalidate_count = 1};
+    wait.invalidate[0] = (TegraNVDECRange){input->handle, kStatusOff, sizeof(nvdec_status_s), 0};
+    if (d->b.wait(d->b.ctx, &wait))
+        return false;
+    const nvdec_status_s *status = (const nvdec_status_s *)(input->va + kStatusOff);
+    return !status->error_status || status->mbs_correctly_decoded;
+}
+#endif
+
 static int findRef(const HEVCDecoder *d, int32_t poc, bool lsbOnly, int32_t mask, bool shortOnly, const bool *taken)
 {
     for (int i = 0; i < SLOTS; i++) {
@@ -448,19 +461,11 @@ static int decodePicture(HEVCDecoder *d, const Span *seg, int count, const HEVCS
     submit.clean[0] =
         (TegraNVDECRange){input->handle, kTilesOff, (uint32_t)(kBitsOff - kTilesOff + length + 64), 0};
     submit.clean_count = 1;
-    TegraNVDECWait wait = {.invalidate_count = 1};
-    wait.invalidate[0] = (TegraNVDECRange){input->handle, kStatusOff, sizeof(nvdec_status_s), 0};
-    if ((!d->b.cpu_reads || d->b.cpu_reads(d->b.ctx)) && hevc_display_buffer(d))
-        wait.invalidate[wait.invalidate_count++] = (TegraNVDECRange){e->display, 0, d->luma_bytes, 0};
-    else if (!d->b.cpu_reads || d->b.cpu_reads(d->b.ctx))
-        wait.invalidate[wait.invalidate_count++] = (TegraNVDECRange){e->handle, 0, d->surface_bytes, 0};
-    if (d->b.submit(d->b.ctx, &submit, &wait.fence) || d->b.wait(d->b.ctx, &wait))
+    uint32_t fence = 0;
+    if (d->b.submit(d->b.ctx, &submit, &fence))
         return -2;
-    const nvdec_status_s *status = (const nvdec_status_s *)(input->va + kStatusOff);
-    nvdec_ring_advance(&d->ring);
-    const int error = status->error_status && !status->mbs_correctly_decoded ? (int)status->error_status : 0;
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
-    if (d->probe_wanted && !d->probe_ran && idr && !error && d->sample_bytes == 2) {
+    if (d->probe_wanted && !d->probe_ran && idr && d->sample_bytes == 2 && decodedCleanly(d, input, fence)) {
         TegraNVDECWait probeWait = {.invalidate_count = 1};
         probeWait.invalidate[0] = (TegraNVDECRange){e->handle, 0, d->luma_bytes, 0};
         for (uint32_t mode = 2; mode <= 3; mode++)
@@ -469,6 +474,7 @@ static int decodePicture(HEVCDecoder *d, const Span *seg, int count, const HEVCS
         d->probe_ran = true;
     }
 #endif
+    nvdec_ring_advance(&d->ring);
 
     // 8.3.1's prevTid0Pic; the current picture becomes a short-term reference (8.3.2).
     if (sh->temporal_id == 0 && !(nal >= HEVC_NAL_RADL_N && nal <= HEVC_NAL_RASL_R) && !(nal <= 14 && !(nal & 1)))
@@ -499,7 +505,7 @@ static int decodePicture(HEVCDecoder *d, const Span *seg, int count, const HEVCS
             .width = (uint32_t)(sps->width - sps->crop_left - sps->crop_right),
             .height = (uint32_t)(sps->height - sps->crop_top - sps->crop_bottom),
             .poc = poc,
-            .status = error,
+            .job = fence,
             .token = token,
         };
         e->item = d->b.decoded(d->b.ctx, &picture);

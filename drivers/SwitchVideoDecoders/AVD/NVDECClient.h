@@ -7,6 +7,7 @@
 #include <stdbool.h>
 #include <stdint.h>
 #include "../../TegraNVDEC/TegraNVDECABI.h"
+#include "../../TegraNVDEC/nvidia/clc5b0.h"
 
 #define NVDEC_STATUS_BYTES 56  // sizeof(nvdec_status_s)
 
@@ -27,7 +28,17 @@ uint32_t nvdec_jobs_in_flight(const NVDECClient *client);
 // The buffer's address in this task, NULL for a handle the client does not hold.
 void *nvdec_buffer_va(const NVDECClient *client, uint32_t handle);
 // The submit's status record (its SET_NVDEC_STATUS_OFFSET relocation).
-bool nvdec_status_range(const TegraNVDECSubmit *submit, TegraNVDECRange *range);
+static inline bool nvdec_status_range(const TegraNVDECSubmit *submit, TegraNVDECRange *range)
+{
+    for (uint32_t i = 0; i < submit->entry_count && i < TEGRA_NVDEC_MAX_ENTRIES; i++) {
+        const TegraNVDECEntry *e = &submit->entries[i];
+        if (e->method == NVC5B0_SET_NVDEC_STATUS_OFFSET && e->kind == TEGRA_NVDEC_ENTRY_RELOC) {
+            *range = (TegraNVDECRange){e->value, e->offset, NVDEC_STATUS_BYTES, 0};
+            return true;
+        }
+    }
+    return false;
+}
 // From now on each job this client submits reports to `done` on the serial `queue` (NVDECListener.h); false where the
 // kernel has no completions (an older ABI) or the client listens already.
 bool nvdec_listen(NVDECClient *client, dispatch_queue_t queue, NVDECDone done, void *context);

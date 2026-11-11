@@ -31,18 +31,31 @@
 // Prints "PASS avd ..." when all hold (avd_host_test).
 #include "../../AVD/AVDDecoder.c"
 #include "../../AVD/ClipCheck.h"
+#include <stdatomic.h>
 #include <stdio.h>
 #include "../HEVCClip.h"
 #include "mpeg_session.h"
 #include "../../../TegraNVDEC/TegraNVDECCheck.h"
 
+// The fake engine's completions: each job's, on the session's queue a little after its Submit, as NVDEC reports a job
+// it finished while the decode thread went on. Held by every completion still to come, so a client closed meanwhile
+// is not touched.
+typedef struct {
+    atomic_int references;
+    atomic_bool stopped;
+    dispatch_queue_t queue;
+    NVDECDone done;
+    void *context;
+} FakeListener;
+
 struct NVDECClient {
     uint8_t *va[64];
     uint64_t size[64];
+    FakeListener *listener;
 };
 
-static bool gFull, gPresentOn, gNativeOn;
-static int gOpens, gSubmits, gRefused, gPresents, gPresentBad, gWaitRanges, gWidePresents;
+static bool gFull, gPresentOn, gNativeOn, gEarlyCompletions;
+static int gOpens, gSubmits, gRefused, gPresents, gPresentBad, gWaitRanges, gWidePresents, gWaits, gSurfaceWaits;
 static uint32_t gLastDstX, gLastDstY;
 static unsigned gNativeExports, gRecycled, gAlphaPresents[2];
 
@@ -58,10 +71,70 @@ NVDECClient *nvdec_open(int *error)
     return calloc(1, sizeof(NVDECClient));
 }
 
+static const char kOnQueue = 0;
+
+static void listenerRelease(FakeListener *l)
+{
+    if (atomic_fetch_sub(&l->references, 1) != 1)
+        return;
+    dispatch_release(l->queue);
+    free(l);
+}
+
+typedef struct {
+    FakeListener *listener;
+    uint32_t fence;
+} FakeCompletion;
+
+static void fakeCompleted(void *context)
+{
+    FakeCompletion *c = context;
+    if (!atomic_load(&c->listener->stopped))
+        c->listener->done(c->listener->context, c->fence, 0, 0, 0);
+    listenerRelease(c->listener);
+    free(c);
+}
+
+static void nothing(void *context)
+{
+    (void)context;
+}
+
+bool nvdec_listen(NVDECClient *c, dispatch_queue_t queue, NVDECDone done, void *context)
+{
+    FakeListener *l = calloc(1, sizeof(*l));
+    if (!l)
+        return false;
+    dispatch_retain(queue);
+    *l = (FakeListener){.queue = queue, .done = done, .context = context};
+    atomic_init(&l->references, 1);
+    dispatch_queue_set_specific(queue, &kOnQueue, l, NULL);
+    c->listener = l;
+    return true;
+}
+
+void nvdec_stop_listening(NVDECClient *c)
+{
+    FakeListener *l = c->listener;
+    if (!l)
+        return;
+    c->listener = NULL;
+    atomic_store(&l->stopped, true);
+    if (dispatch_get_specific(&kOnQueue) != l)
+        dispatch_sync_f(l->queue, NULL, nothing);
+    listenerRelease(l);
+}
+
+void *nvdec_buffer_va(const NVDECClient *c, uint32_t handle)
+{
+    return handle < 64 ? c->va[handle] : NULL;
+}
+
 void nvdec_close(NVDECClient *c)
 {
     if (!c)
         return;
+    nvdec_stop_listening(c);
     for (int i = 0; i < 64; i++)
         free(c->va[i]);
     free(c);
@@ -233,13 +306,26 @@ int nvdec_submit(void *ctx, const TegraNVDECSubmit *s, TegraNVDECFence *reply)
         return -1;
     }
     *reply = (TegraNVDECFence){(uint32_t)++gSubmits, 0};
+    FakeCompletion *completion = c->listener ? malloc(sizeof(*completion)) : NULL;
+    if (completion) {
+        *completion = (FakeCompletion){c->listener, reply->fence};
+        atomic_fetch_add(&c->listener->references, 1);
+        if (gEarlyCompletions)  // the job retires before its Submit returns to the plug-in
+            dispatch_sync_f(c->listener->queue, completion, fakeCompleted);
+        else
+            dispatch_after_f(dispatch_time(DISPATCH_TIME_NOW, 20 * NSEC_PER_MSEC), c->listener->queue, completion,
+                             fakeCompleted);
+    }
     return 0;
 }
 
 int nvdec_wait(void *ctx, const TegraNVDECWait *w)
 {
     (void)ctx;
+    gWaits++;
     gWaitRanges += (int)w->invalidate_count;
+    for (uint32_t i = 0; i < w->invalidate_count; i++)
+        gSurfaceWaits += w->invalidate[i].length > NVDEC_STATUS_BYTES;
     return 0;
 }
 
@@ -471,12 +557,13 @@ int main(void)
     const int engineOpens = gOpens, engineSubmits = gSubmits;
     // VIC's present: the same session with the feature on.
     gPresentOn = true;
-    const int presentSubmits = gSubmits, presentWaits = gWaitRanges;
+    const int presentSubmits = gSubmits, presentWaits = gWaitRanges, presentSurfaceWaits = gSurfaceWaits;
     clip_check(ClipCheckHardware, spec, present, sizeof(present));
     gPresentOn = false;
+    // ClipCheck decodes synchronously: each frame's status waited for, never its surface.
     const bool presentOk = strstr(present, "hardware: hardware decoder") && strstr(present, " 30 out (") &&
                            gSubmits - presentSubmits == 30 && gPresents == 30 && !gPresentBad &&
-                           gWaitRanges - presentWaits == 30;  // the status alone, no surface
+                           gWaitRanges - presentWaits <= 30 && gSurfaceWaits == presentSurfaceWaits;
     printf("present: %s (presents %d, refused %d, wait ranges %d)\n", present, gPresents, gPresentBad,
            gWaitRanges - presentWaits);
     gFull = true;
@@ -564,19 +651,42 @@ int main(void)
     const bool mpeg2Engine = mpeg2_session_check(mp2vSpec, false, mp2v, sizeof(mp2v)) &&
                              mpeg2_session_check(mp1vSpec, true, mp1v, sizeof(mp1v)) &&
                              gSubmits - mp2vSubmits == 18 + 15 && gRefused == mp4vRefused;
+    // Asynchronous decode with VIC placing every picture: the fake engine reports each job 20 ms after its Submit, and
+    // the decode thread never waits; every frame comes out of the completions, in decode order.
+    static const char *const kAsyncKeys[] = {"picture_waits", "sync_waits", "in_flight_max", "frames"};
+    int32_t asyncRoutes[4];
+    char async[256];
+    const int asyncWaits = gWaits;
+    gPresentOn = true;
+    const bool asyncRun = mpeg2_session_order(mp2vSpec, kVTDecodeFrame_EnableAsynchronousDecompression, kAsyncKeys,
+                                              asyncRoutes, 4, async, sizeof(async));
+    gPresentOn = false;
+    // Again with each completion delivered before the plug-in's Submit call returns, ahead of the job's registration.
+    char early[256];
+    int32_t earlyRoutes[4];
+    gPresentOn = gEarlyCompletions = true;
+    const bool earlyRun = mpeg2_session_order(mp2vSpec, kVTDecodeFrame_EnableAsynchronousDecompression, kAsyncKeys,
+                                              earlyRoutes, 4, early, sizeof(early));
+    gPresentOn = gEarlyCompletions = false;
+    const bool asyncOk = asyncRun && earlyRun && gWaits == asyncWaits && !asyncRoutes[0] && !asyncRoutes[1] &&
+                         asyncRoutes[2] >= 2 && asyncRoutes[3] == 18 && !earlyRoutes[0] && !earlyRoutes[1] &&
+                         earlyRoutes[3] == 18;
+    printf("async %s (decode-thread waits %d; SwitchPictureRoutes picture_waits %d, sync_waits %d, in_flight_max %d, "
+           "frames %d)\nasync, completions before Submit returns: %s\n",
+           async, gWaits - asyncWaits, asyncRoutes[0], asyncRoutes[1], asyncRoutes[2], asyncRoutes[3], early);
     CFRelease(mp2vSpec);
     CFRelease(mp1vSpec);
     printf("%s\n%s (submits %d)\n", mp2v, mp1v, gSubmits - mp2vSubmits);
     char native[512];
     gPresentOn = gNativeOn = true;
     const unsigned exportsBefore = gNativeExports, recycleBefore = gRecycled;
-    const int copiesBefore = gPresents, nativeWaits = gWaitRanges;
+    const int copiesBefore = gPresents, nativeWaits = gWaitRanges, nativeSurfaceWaits = gSurfaceWaits;
     clip_check(ClipCheckHardware, spec, native, sizeof(native));
     gPresentOn = gNativeOn = false;
     CFRelease(spec);
     const bool nativeOk = strstr(native, "hardware: hardware decoder") && strstr(native, " 30 out (") &&
         gNativeExports - exportsBefore == 30 && gRecycled - recycleBefore == 30 &&
-        gPresents == copiesBefore && gWaitRanges - nativeWaits == 30;
+        gPresents == copiesBefore && gWaitRanges - nativeWaits <= 30 && gSurfaceWaits == nativeSurfaceWaits;
     printf("native: %s (exports %u, recycled %u, pitch copies %d)\n", native,
            gNativeExports - exportsBefore, gRecycled - recycleBefore, gPresents - copiesBefore);
     const bool ok = engineOpens >= 1 && engineSubmits == 30 && !gRefused &&
@@ -584,7 +694,7 @@ int main(void)
                     gOpens > engineOpens && strstr(full, "hardware: software decoder, 30/30 frames match x264") &&
                     strstr(vp9, "vp9: hardware decoder") && strstr(vp9, " 16 out (") &&
                     hevcSubmits - vp9Submits == 18 && presentOk && hevcOk && tilesOk && alphaOk && nativeOk &&
-                    mp4vEngine && mp4vSoftware && mpeg2Engine;
+                    mp4vEngine && mp4vSoftware && mpeg2Engine && asyncOk;
     printf("%s avd: plug-in on VideoToolbox (H.264, VP9, HEVC, HEVC with alpha, MPEG-4 Part 2 and MPEG-1/2 on a fake "
            "NVDEC, then Apple's software H.264, HEVC and MPEG-4 Part 2 in the instance)\n",
            ok ? "PASS" : "FAIL");

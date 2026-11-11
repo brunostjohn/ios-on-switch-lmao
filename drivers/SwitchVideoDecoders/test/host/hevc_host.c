@@ -11,6 +11,7 @@
 #include "../../AVD/HEVCNVDEC.h"
 #include "../../AVD/HEVCSyntax.h"
 #include "../../../TegraNVDEC/TegraNVDECCheck.h"
+#include "fake_engine.h"
 #include "../HEVCClip.h"
 #include "../HEVCTrace.h"
 
@@ -107,7 +108,7 @@ static void testSyntax(void)
 }
 
 enum {
-    MAX_BUFFERS = 40
+    MAX_BUFFERS = 64
 };
 
 typedef struct {
@@ -117,6 +118,7 @@ typedef struct {
     unsigned recycled;
     uint32_t pitch;  // the last picture handed out: bytes a row, as present and the CPU copy read it
     TegraNVDECSubmit last;
+    FakeEngine engine;
 } Fake;
 
 static int fakeAlloc(void *ctx, uint64_t size, uint32_t *handle, void **va)
@@ -127,6 +129,7 @@ static int fakeAlloc(void *ctx, uint64_t size, uint32_t *handle, void **va)
             continue;
         f->va[h] = calloc(1, size);
         f->bytes[h] = size;
+        fake_engine_allocated(&f->engine, h);
         *handle = h;
         *va = f->va[h];
         return f->va[h] ? 0 : -1;
@@ -177,13 +180,14 @@ static int fakeSubmit(void *ctx, const TegraNVDECSubmit *s, uint32_t *fence)
     const char *why = fakeCheck(f, s);
     CHECK(!why, "job %d refused by the kernel checker: %s", f->jobs, why ? why : "");
     f->last = *s;
-    *fence = (uint32_t)++f->jobs;
+    f->jobs++;
+    *fence = fake_engine_submit(&f->engine, s);
     return why ? -1 : 0;
 }
 
 static int fakeWait(void *ctx, const TegraNVDECWait *w)
 {
-    (void)ctx, (void)w;
+    fake_engine_wait(&((Fake *)ctx)->engine, w->fence);
     return 0;
 }
 
@@ -243,8 +247,16 @@ static HEVCDecoder *decodeClip(Fake *f, const uint8_t *data, size_t size, int *a
     static uint8_t buffer[64 * 1024];
     uint8_t *sample[64];
     size_t sizes[64];
-    const H264Backend backend = {f,           fakeAlloc, fakeFree,    fakeSubmit, fakeWait,
-                                 fakeDecoded, fakeEmit,  fakeDiscard, NULL, switch_fake_recycle};
+    const H264Backend backend = {.ctx = f,
+                                 .alloc = fakeAlloc,
+                                 .free = fakeFree,
+                                 .submit = fakeSubmit,
+                                 .wait = fakeWait,
+                                 .decoded = fakeDecoded,
+                                 .emit = fakeEmit,
+                                 .discard = fakeDiscard,
+                                 .recycle = switch_fake_recycle,
+                                 .inputs = FAKE_ENGINE_DEPTH + 1};
     HEVCDecoder *d = hevc_decoder_create(&backend);
     hevc_decoder_allow_10bit(d, tenBit);
     *aus = samples(data, size, buffer, sample, sizes, 64);
@@ -274,6 +286,8 @@ static void testDecode(void)
         CHECK(order, "clip %c: output order differs from FFmpeg's", clip->name);
         CHECK(!hevc_decoder_missing_refs(d), "clip %c: %u references missing", clip->name,
               hevc_decoder_missing_refs(d));
+        CHECK(!f.engine.waits && !f.engine.busyWrites, "clip %c: %u waits, %u CPU writes into a buffer a job uses",
+              clip->name, f.engine.waits, f.engine.busyWrites);
         // framestride counts samples and mode 1 writes two bytes each (averne's nvtegra_hevc.c): the engine's rows
         // must be the rows the picture is read with.
         const nvdec_hevc_pic_s *setup = (const nvdec_hevc_pic_s *)f.last.setup;
@@ -284,8 +298,16 @@ static void testDecode(void)
         if (clip->depth == 10) {
             Fake g;
             memset(&g, 0, sizeof(g));
-            const H264Backend backend = {&g,          fakeAlloc, fakeFree,    fakeSubmit, fakeWait,
-                                         fakeDecoded, fakeEmit,  fakeDiscard, NULL, switch_fake_recycle};
+            const H264Backend backend = {.ctx = &g,
+                                         .alloc = fakeAlloc,
+                                         .free = fakeFree,
+                                         .submit = fakeSubmit,
+                                         .wait = fakeWait,
+                                         .decoded = fakeDecoded,
+                                         .emit = fakeEmit,
+                                         .discard = fakeDiscard,
+                                         .recycle = switch_fake_recycle,
+                                         .inputs = FAKE_ENGINE_DEPTH + 1};
             HEVCDecoder *e = hevc_decoder_create(&backend);
             static uint8_t buffer[64 * 1024];
             uint8_t *sample[64];
@@ -401,8 +423,16 @@ static void testDecodeOrder(void)
     const HEVCClip *clip = &kHEVCClips[0];
     Fake f;
     memset(&f, 0, sizeof(f));
-    const H264Backend backend = {&f,          fakeAlloc, fakeFree,    fakeSubmit, fakeWait,
-                                 fakeDecoded, fakeEmit,  fakeDiscard, NULL, switch_fake_recycle};
+    const H264Backend backend = {.ctx = &f,
+                                 .alloc = fakeAlloc,
+                                 .free = fakeFree,
+                                 .submit = fakeSubmit,
+                                 .wait = fakeWait,
+                                 .decoded = fakeDecoded,
+                                 .emit = fakeEmit,
+                                 .discard = fakeDiscard,
+                                 .recycle = switch_fake_recycle,
+                                 .inputs = FAKE_ENGINE_DEPTH + 1};
     HEVCDecoder *d = hevc_decoder_create(&backend);
     static uint8_t buffer[64 * 1024];
     uint8_t *sample[64];
