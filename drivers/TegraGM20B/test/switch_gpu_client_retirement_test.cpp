@@ -251,11 +251,14 @@ int switch_gpu_vm_map_volatile(void *, uint64_t va, uint64_t range, tgm_mem *mem
 
 const volatile uint32_t *bindWord;
 uint32_t bindTarget;
+std::function<void()> onBindPublished;
 
 void tgm_vm_bind_wait(void *, uint64_t, const volatile uint32_t *cpu, uint32_t target)
 {
 	bindWord = cpu;
 	bindTarget = target;
+	if (onBindPublished)
+		onBindPublished();
 }
 
 // What a submission made now would wait for on the GPU: the bind epoch not reached yet.
@@ -317,6 +320,7 @@ public:
 		switch_gpu_mapping *mapping;
 		switch_gpu_backing_token snapshots[kMaxChannels];
 		uint8_t kind, vol;
+		uint32_t epoch;
 	};
 
 	struct Binding {
@@ -445,7 +449,7 @@ public:
 	IOReturn cutOverlaps(uint64_t, uint64_t, bool, bool, RetiredBinding **);
 	bool workQueued(uint64_t, uint64_t) const;
 	IOReturn mapRange(const TegraGM20BAbiBindOp &, Bo *, RetiredBinding *, bool);
-	void issueBind();
+	uint32_t issueBind();
 	void installPendingBinds();
 	void logFaultBindings();
 	void noteBind(uint8_t, uint64_t, uint64_t, const Bo *, uint64_t, uint8_t);
@@ -472,7 +476,7 @@ public:
 		bos_ = bo;
 		auto *mapping = new switch_gpu_mapping{id, va, bytes, buffer, 0, false, big};
 		installPtes(mapping);
-		auto *record = new RetiredBinding{nullptr, va, bytes, bo, mapping, {}, 0, 0};
+		auto *record = new RetiredBinding{nullptr, va, bytes, bo, mapping, {}, 0, 0, 0};
 		const uint32_t at = switch_gpu_binding_upper(binds_, nbinds_, va);
 		memmove(&binds_[at + 1], &binds_[at], sizeof(Binding) * (nbinds_ - at));
 		binds_[at] = {va, bytes, bo, 0, record};
@@ -514,6 +518,7 @@ protected:
 	{
 		bindWord = nullptr;
 		bindTarget = 0;
+		onBindPublished = {};
 		gpuMemory = {};
 		unmapped.clear();
 		onUnmap = {};
@@ -523,6 +528,7 @@ protected:
 
 	void TearDown() override
 	{
+		onBindPublished = {};
 		onUnmap = {};
 		onCallEnter = {};
 		client.onRelease = {};
@@ -577,7 +583,7 @@ TEST_F(ClientRetirement, MultipleBindingsKeepTheirBoUntilLastRetirement)
 {
 	auto *bo = client.add(4);
 	auto *record = new AGXDeviceUserClient::RetiredBinding{
-		nullptr, 0x20000, 4096, bo, new switch_gpu_mapping{5, 0x20000, 4096}, {}, 0, 0};
+		nullptr, 0x20000, 4096, bo, new switch_gpu_mapping{5, 0x20000, 4096}, {}, 0, 0, 0};
 	client.binds_[client.nbinds_++] = {0x20000, 4096, bo, 0, record};
 	++bo->bindings;
 	free(4);
@@ -1005,4 +1011,58 @@ TEST_F(ClientRetirement, AMapOverNothingHeldIsImmediateEvenWithWorkQueued)
 	EXPECT_EQ(gpuRead(0x300000), 0xb2);
 	EXPECT_EQ(client.bindIssued_, 0u);
 	EXPECT_FALSE(newWorkBlocked());
+}
+
+// sliceV boot 2, HW Test ui.glass_motion: backboardd frees a snapshot surface's BO and imports the next one at the same
+// VA (first fit) while its work is queued, submits, then does the same for the next surface. The submission waits on the
+// GPU for the first surface's bind; the second bind waits for that submission to complete. The first bind's epoch must
+// not wait for the second, or backboardd's channel stops at that acquire until the hang rule kills it.
+TEST_F(ClientRetirement, ASubmissionWaitsOnlyForBindsIssuedBeforeIt)
+{
+	auto firstOld = bytesOf(0xa1), firstNew = bytesOf(0xa2), secondOld = bytesOf(0xb1),
+	     secondNew = bytesOf(0xb2);
+	client.add(50, 0x40000, 0x4000, &firstOld);
+	client.add(51, 0x80000, 0x4000, &secondOld);
+	auto *firstNext = client.add(52, 0x100000, 0x4000, &firstNew);
+	auto *secondNext = client.add(53, 0x140000, 0x4000, &secondNew);
+	chan.completed = 4;
+	chan.submitted = 5;
+	free(50);
+	ASSERT_EQ(client.bind(0x40000, 0x4000, firstNext), 0);
+	ASSERT_TRUE(newWorkBlocked());
+	const uint32_t waitedFor = bindTarget;
+	chan.submitted = 6;
+	free(51);
+	ASSERT_EQ(client.bind(0x80000, 0x4000, secondNext), 0);
+	chan.completed = 5;
+	client.retireBatch();
+	EXPECT_GE(int32_t(client.fencePage[AGXDeviceUserClient::kBindEpochWord] - waitedFor), 0);
+	EXPECT_EQ(gpuRead(0x40000), 0xa2);
+	EXPECT_EQ(gpuRead(0x80000), 0xb1);
+	EXPECT_TRUE(newWorkBlocked());
+	chan.completed = 6;
+	client.retireBatch();
+	EXPECT_FALSE(newWorkBlocked());
+	EXPECT_EQ(gpuRead(0x80000), 0xb2);
+}
+
+// The epoch of a cut's kept pages is published only once the cut's snapshot of queued work is taken: a submission that
+// acquires it is never counted among the work that holds those pages back.
+TEST_F(ClientRetirement, ACutsSnapshotIsTakenBeforeItsEpochIsPublished)
+{
+	auto big = bytesOf(0x5a, 0x20000);
+	client.add(54, 0x200000, 0x20000, &big, true);
+	chan.completed = 0;
+	bool published = false;
+	onBindPublished = [&] {
+		published = true;
+		ASSERT_NE(client.retired_, nullptr);
+		EXPECT_EQ(client.retired_->snapshots[0].value, chan.submitted);
+	};
+	ASSERT_EQ(client.bind(0x208000, 0x1000, nullptr), 0);
+	EXPECT_TRUE(published);
+	chan.completed = chan.submitted;
+	client.retireBatch();
+	EXPECT_FALSE(newWorkBlocked());
+	EXPECT_EQ(gpuRead(0x209000), 0x5a);
 }

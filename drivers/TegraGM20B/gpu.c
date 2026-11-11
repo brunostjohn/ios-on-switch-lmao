@@ -1311,10 +1311,12 @@ uint32_t tgm_chan_error(struct tgm_chan *chan)
 	return chan->error;
 }
 
+/* The target is released after the caller's snapshot of each channel's submitted seqno and acquired before
+ * chan_exec moves its channel's: a submission that waits for this epoch is never in that snapshot. */
 void tgm_vm_bind_wait(struct tgm_vm *vm, uint64_t va, const volatile uint32_t *cpu, uint32_t target)
 {
 	WRITE_ONCE(vm->bind_va, va);
-	WRITE_ONCE(vm->bind_target, target);
+	__atomic_store_n(&vm->bind_target, target, __ATOMIC_RELEASE);
 	__atomic_store_n(&vm->bind_cpu, cpu, __ATOMIC_RELEASE);
 }
 
@@ -1325,7 +1327,7 @@ static int bind_pending(const struct tgm_vm *vm, u32 *target, u64 *va)
 
 	if (!cpu)
 		return 0;
-	*target = READ_ONCE(vm->bind_target);
+	*target = __atomic_load_n(&vm->bind_target, __ATOMIC_ACQUIRE);
 	*va = READ_ONCE(vm->bind_va);
 	return (s32)(__atomic_load_n(cpu, __ATOMIC_ACQUIRE) - *target) < 0;
 }

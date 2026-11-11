@@ -191,6 +191,7 @@ IOReturn AGXDeviceUserClient::cutOverlaps(uint64_t va, uint64_t range, bool now,
 			continue;
 		}
 		auto *record = b.retirement;
+		const bool wasPending = switch_gpu_mapping_pending(record->mapping);
 		switch_gpu_mapping *below = nullptr, *taken = record->mapping, *above = nullptr;
 		if (b.va < va || b.va + b.range > end) {
 			const int error = switch_gpu_vm_split(
@@ -201,38 +202,43 @@ IOReturn AGXDeviceUserClient::cutOverlaps(uint64_t va, uint64_t range, bool now,
 		}
 		--nbinds_;
 		memmove(&binds_[i], &binds_[i + 1], sizeof(Binding) * (nbinds_ - i));
-		const auto keep = [&](switch_gpu_mapping *part) {
+		const auto keep = [&](switch_gpu_mapping *part) -> RetiredBinding * {
 			uint64_t from = 0, bytes = 0;
 			if (switch_gpu_mapping_span(part, &from, &bytes))
-				return;
+				return nullptr;
 			auto *kept = *spare;
 			*spare++ = nullptr;
-			*kept = {nullptr, from, bytes, b.bo, part, {}, record->kind, record->vol};
+			*kept = {nullptr, from, bytes, b.bo, part, {}, record->kind, record->vol, 0};
 			++b.bo->bindings;
 			const uint32_t at = switch_gpu_binding_upper(binds_, nbinds_, from);
 			memmove(&binds_[at + 1], &binds_[at], sizeof(Binding) * (nbinds_ - at));
 			binds_[at] = {from, bytes, b.bo, b.bo_offset + (from - b.va), kept};
 			++nbinds_;
 			i = at + 1;
+			return kept;
 		};
-		keep(below);
-		keep(above);
+		RetiredBinding *const kept[] = {keep(below), keep(above)};
 		record->va = b.va > va ? b.va : va;
 		record->range = (b.va + b.range < end ? b.va + b.range : end) - record->va;
 		noteBind(replace ? TGM_BIND_REPLACED : TGM_BIND_UNMAP, record->va, record->range,
 			 b.bo, b.bo_offset + (record->va - b.va), record->kind);
 		record->mapping = taken;
+		// The snapshot of the work that may still use the cut PTEs is taken before a bind epoch for what they hold
+		// up is published: a submission that reads the new epoch is then never in it, so never waits on itself.
+		retire(record);
 		if (now) {
 			switch_gpu_vm_unmap(vm_, &record->mapping);
-			switch_gpu_mapping *const kept[] = {below, above};
-			for (auto *part : kept)
+			switch_gpu_mapping *const parts[] = {below, above};
+			for (auto *part : parts)
 				if (switch_gpu_mapping_pending(part))
 					switch_gpu_vm_install(vm_, part, b.bo->mem, record->kind,
 							      int(b.bo->readOnly), record->vol);
 		} else if (switch_gpu_mapping_pending(below) || switch_gpu_mapping_pending(above)) {
-			issueBind();
+			const uint32_t epoch = issueBind();
+			for (auto *part : kept)
+				if (part && switch_gpu_mapping_pending(part->mapping))
+					part->epoch = wasPending ? record->epoch : epoch;
 		}
-		retire(record);
 	}
 	scheduleRetirement();
 	return kIOReturnSuccess;
@@ -258,14 +264,14 @@ IOReturn AGXDeviceUserClient::mapRange(const TegraGM20BAbiBindOp &op, Bo *bo,
 		IODelete(record, RetiredBinding, 1);
 		return ioreturn(err);
 	}
-	*record = {nullptr, op.va, op.range, bo, mapping, {}, kind, vol};
+	*record = {nullptr, op.va, op.range, bo, mapping, {}, kind, vol, 0};
 	++bo->bindings;
 	const uint32_t at = switch_gpu_binding_upper(binds_, nbinds_, op.va);
 	memmove(&binds_[at + 1], &binds_[at], sizeof(Binding) * (nbinds_ - at));
 	binds_[at] = {op.va, op.range, bo, op.bo_offset, record};
 	++nbinds_;
 	if (queued) {
-		issueBind();
+		record->epoch = issueBind();
 		scheduleRetirement();
 	}
 	return kIOReturnSuccess;
@@ -297,22 +303,26 @@ bool AGXDeviceUserClient::workQueued(uint64_t va, uint64_t range) const
 }
 
 // lock_ held. A bind whose PTEs wait for retirement: this connection's submissions from now on acquire, on the GPU, the
-// bind epoch it gets, which installPendingBinds releases once every pending PTE is in place.
-void AGXDeviceUserClient::issueBind()
+// bind epoch it returns, which installPendingBinds releases once every pending PTE of that epoch and the ones before it
+// is in place.
+uint32_t AGXDeviceUserClient::issueBind()
 {
 	++bindIssued_;
 	tgm_vm_bind_wait(vm_, fence_gpu_ + kBindEpochWord * 4, fence_va_ + kBindEpochWord,
 			 bindIssued_);
 	__atomic_store_n(&retirementPending_, 1u, __ATOMIC_RELEASE);
+	return bindIssued_;
 }
 
 // lock_ held. Pending PTEs go in once no retired binding over their range keeps PTEs (the work before the bind is done:
-// retireBatch removed them); when none waits, the bind epoch moves to the last issued.
+// retireBatch removed them). The bind epoch moves to the one before the oldest that still waits. It never waits for a
+// later epoch: a binding issued after a submission read its epoch can be held up by that very submission (its BO freed
+// and the VA mapped again while it is queued), and the submission's acquire would then never pass.
 void AGXDeviceUserClient::installPendingBinds()
 {
 	if (bindDone_ == bindIssued_)
 		return;
-	bool waiting = false;
+	uint32_t done = bindIssued_;
 	for (uint32_t i = 0; i < nbinds_; ++i) {
 		const Binding &b = binds_[i];
 		auto *mapping = b.retirement->mapping;
@@ -331,7 +341,8 @@ void AGXDeviceUserClient::installPendingBinds()
 			for (const auto *record = list; record && !held; record = record->next)
 				held = holds(record);
 		if (held) {
-			waiting = true;
+			if (int32_t(b.retirement->epoch - 1 - done) < 0)
+				done = b.retirement->epoch - 1;
 			continue;
 		}
 		if (switch_gpu_vm_install(vm_, mapping, b.bo->mem, b.retirement->kind,
@@ -340,9 +351,9 @@ void AGXDeviceUserClient::installPendingBinds()
 			      "unmapped\n",
 			      owner_, b.va, b.range);
 	}
-	if (waiting)
+	if (int32_t(done - bindDone_) <= 0)
 		return;
-	bindDone_ = bindIssued_;
+	bindDone_ = done;
 	__atomic_store_n(fence_va_ + kBindEpochWord, bindDone_, __ATOMIC_RELEASE);
 	__asm__ volatile("dsb sy" ::: "memory");
 }

@@ -864,6 +864,7 @@ class AGXDeviceUserClient : public IOUserClient
 		switch_gpu_mapping *mapping;
 		switch_gpu_backing_token snapshots[kMaxChannels];
 		uint8_t kind, vol;
+		uint32_t epoch;  // a pending binding's: the bind epoch released once its PTEs are in
 	};
 
 	struct Binding {
@@ -936,7 +937,8 @@ class AGXDeviceUserClient : public IOUserClient
     // a retired binding's PTEs go under it (retireBatch, takeRetiredOverlaps)
     IOLock *unmapLock_ = nullptr;
     bool faultLogged_[kMaxChannels] = {};
-    // the bind epoch (issueBind): the last issued and the last whose PTEs are all in place, its word in the fence page
+    // the bind epoch (issueBind): the last issued and the last up to which every pending binding's PTEs are in place,
+    // its word in the fence page
     static constexpr uint32_t kBindEpochWord = 256;
     uint32_t bindIssued_ = 0, bindDone_ = 0;
 #if TGM_STATS
@@ -1001,7 +1003,7 @@ class AGXDeviceUserClient : public IOUserClient
 	bool workQueued(uint64_t va, uint64_t range) const;
 	IOReturn mapRange(const TegraGM20BAbiBindOp &op, Bo *bo, RetiredBinding *record,
 			  bool queued);
-	void issueBind();
+	uint32_t issueBind();
 	void installPendingBinds();
 	void logFaultBindings();
 	static void retirementWork(thread_call_param_t, thread_call_param_t);
