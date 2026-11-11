@@ -565,6 +565,11 @@ public:
         return j < 8 ? pass_.color[j].texture : nullptr;
     }
 
+    const Texture *depthTarget() const
+    {
+        return pass_.depthStencil.texture;
+    }
+
     uint32_t areaWidth() const
     {
         return areaW_;
@@ -1126,6 +1131,7 @@ public:
     Pipeline *resolvePipeline(uint32_t format);
     // The pack's state that draws a chain level of `format` from the level above (raw_mip.h mipState), null if the pack has none
     Pipeline *mipPipeline(uint32_t format);
+    Pipeline *depthResolvePipeline(uint32_t format, uint32_t filter);  // raw_samples.h depthResolveState
     // s's header under address map `map` (Texture::addressMap), made now if it is not yet
     bool samplerVariant(Sampler &s, uint8_t map);
     // A two-plane 4:4:4 surface's texture of RGB8_444_2P (542): its planes at `luma`/`chroma` (offsets in the allocation,
@@ -1168,10 +1174,10 @@ public:
     // A stored multisampled colour texture (raw_multisample.cpp): the persistent form of a memoryless one's block-linear
     // backing, in memory of its own, which m2v's twin (NVK's image of the same descriptor) lies over in place
     bool createStoredMultisample(uint32_t width, uint32_t height, uint32_t format, uint32_t samples, Texture &t);
-    // A stored multisampled depth/stencil texture in zeta memory of its own (raw_multisample.cpp), with a header where
-    // `sampled`. It has no m2v twin: NVK neither views zeta memory it did not make nor answers where a multisampled
-    // image's is.
-    bool createOwnedZeta(uint32_t width, uint32_t height, uint32_t format, uint32_t samples, bool sampled, Texture &t);
+    // A stored multisampled depth/stencil texture in zeta memory of its own (raw_multisample.cpp), with a header (texture2d_ms
+    // reads it, and a depth resolve's pass samples it). It has no m2v twin: NVK neither views zeta memory it did not make nor
+    // answers where a multisampled image's is.
+    bool createOwnedZeta(uint32_t width, uint32_t height, uint32_t format, uint32_t samples, Texture &t);
     // A Depth32Float_Stencil8 texture's stencil temp (Texture::stencilTemp), made on its first stencil copy
     bool stencilTemp(Texture &t);
     // A 1D texture: NIL's 1D image, one block-linear row (y_log2 0) under a ONE_D header, in block-linear memory the CPU

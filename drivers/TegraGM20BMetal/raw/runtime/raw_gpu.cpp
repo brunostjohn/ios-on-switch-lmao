@@ -2644,6 +2644,12 @@ Pipeline *Device::resolvePipeline(uint32_t format)
     return name ? pipeline(Pack::fnv(name, strlen(name))) : nullptr;
 }
 
+Pipeline *Device::depthResolvePipeline(uint32_t format, uint32_t filter)
+{
+    const char *name = depthResolveState(format, filter);
+    return name ? pipeline(Pack::fnv(name, strlen(name))) : nullptr;
+}
+
 Pipeline *Device::mipPipeline(uint32_t format)
 {
     const char *name = mipState(format);
@@ -2778,6 +2784,15 @@ Device::Backing *Device::plainBacking(const Texture &m, uint32_t tag, bool block
     t.va = mem->span.va;
     t.storage = {t.va, bytes, false};
     t.cpu = memory == kPlainPool ? mem->span.cpu : nullptr;
+    if (m.zeta && m.samples > 1) {  // a resolve's source (RawMetalEncode.mm depth resolves) samples it
+        if (!(t.tic = allocTic())) {
+            if (!mem->views)
+                dropPlain(mem);
+            return nullptr;
+        }
+        t.samples = m.samples;
+        writeTic(t);
+    }
     if (!m.zeta) {
         if (!(t.tic = allocTic())) {
             if (!mem->views)

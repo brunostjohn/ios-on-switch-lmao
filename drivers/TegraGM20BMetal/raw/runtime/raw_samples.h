@@ -84,6 +84,21 @@ inline const char *resolveState(uint32_t format)
     }
 }
 
+// The pack's depth resolve state into a depth/stencil target of MTLPixelFormat `format` under MTLMultisampleDepthResolveFilter
+// `filter` (pack/resolve.metal: sample 0, the minimum, the maximum), keyed as resolveState's; null for none
+inline const char *depthResolveState(uint32_t format, uint32_t filter)
+{
+    static const char *const names[3][3] = {
+        {"raw.resolve.resolve_depth16_sample0_frag", "raw.resolve.resolve_depth16_min_frag",
+         "raw.resolve.resolve_depth16_max_frag"},
+        {"raw.resolve.resolve_depth32f_sample0_frag", "raw.resolve.resolve_depth32f_min_frag",
+         "raw.resolve.resolve_depth32f_max_frag"},
+        {"raw.resolve.resolve_depth32fs8_sample0_frag", "raw.resolve.resolve_depth32fs8_min_frag",
+         "raw.resolve.resolve_depth32fs8_max_frag"}};
+    const int row = format == 250 ? 0 : format == 252 ? 1 : format == 260 ? 2 : -1;
+    return row < 0 || filter > 2 ? nullptr : names[row][filter];
+}
+
 // The rows of a multisampled target's sample grid (NIL's px_extent_sa: two down for 4 and 8 samples), as NVK's HEIGHT counts
 template <class Image> inline uint32_t sampleRows(const Image &t)
 {

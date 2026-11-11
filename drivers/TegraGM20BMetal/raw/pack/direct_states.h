@@ -14,9 +14,11 @@
 namespace probe {
 
 // probe.mm's tagged textures: BGRA8, but for the raw path's own states that read codes (pack/xr.metal), the two-plane stand-in
-// and, for its own resolves alone (pack/resolve.metal), multisampled colours
+// and, for its own resolves alone (pack/resolve.metal), multisampled colours or depth
 inline raw::ProbeTextures probeTextures(const std::string &line, bool ours)
 {
+    if (ours && line.find("| v resolve_vert | f resolve_depth") != std::string::npos)
+        return {MTLPixelFormatDepth32Float, 4};
     if (ours && line.find("| v resolve_vert | f resolve_") != std::string::npos)
         return {MTLPixelFormatBGRA8Unorm, 4};
     const std::pair<const char *, raw::ProbeTextures> sets[] = {{"f xr_bgr10_frag", {MTLPixelFormatR32Uint, 1}},

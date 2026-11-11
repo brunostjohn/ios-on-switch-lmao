@@ -215,10 +215,23 @@ static bool encodeRawAttempt(RMCommandBuffer *cb, size_t from, size_t to, const 
 
     std::vector<Resolve> resolves;
     std::deque<raw::Texture> resolveTargets;  // the encoder reads them until its end()
+    // A depth attachment's resolve (raw_samples.h depthResolveState): a pass of the depth resolve state of its format and filter
+    // into the resolve texture, writing each pixel's depth whatever it held
+    struct DepthResolve {
+        RMTexture *into = nil;
+        uint32_t filter = 0;
+    } depthResolve;
+    static const raw::DepthStencilState depthWrites = [] {
+        raw::DepthStencilDesc desc;
+        desc.depthCompare = 7;  // MTLCompareFunctionAlways
+        desc.depthWrite = true;
+        return raw::DepthStencilState(desc);
+    }();
     auto resolvePasses = [&]() -> bool {
         const raw::Texture *from[8] = {};
         for (const Resolve &r : resolves)
             from[r.attachment] = re->target(r.attachment);
+        const raw::Texture *depthFrom = depthResolve.into ? re->depthTarget() : nullptr;
         const uint32_t width = re->areaWidth(), height = re->areaHeight();
         for (const Resolve &r : resolves) {
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
@@ -253,6 +266,25 @@ static bool encodeRawAttempt(RMCommandBuffer *cb, size_t from, size_t to, const 
             e->end();
         }
         resolves.clear();
+        if (RMTexture *into = depthResolve.into) {
+            raw::PassDesc p;
+            p.depthStencil.texture = &into->_raw;
+            p.width = width;
+            p.height = height;
+            useTexture(rc, into, true);
+            raw::RenderEncoder *e = depthFrom ? rc->render(p) : nullptr;
+            if (!e)
+                return fail(PredEncDepthStencil, "a depth resolve texture the raw path cannot render", into->_raw.format);
+            const uint32_t samples = depthFrom->samples;
+            e->setPipeline(d.depthResolvePipeline(into->_raw.format, depthResolve.filter));
+            e->setDepthStencil(&depthWrites);
+            e->setTexture(0, depthFrom);
+            e->setBytes(2, 0, &samples, sizeof samples);
+            if (!e->draw(4 /* MTLPrimitiveTypeTriangleStrip */, 0, 4, 1, 0, why))
+                return refused();
+            e->end();
+            depthResolve = {};
+        }
         return true;
     };
 
@@ -561,6 +593,8 @@ static bool encodeRawAttempt(RMCommandBuffer *cb, size_t from, size_t to, const 
                         c = float(_Float16(c));
                 p.count = j + 1;
             }
+            if (RMTexture *r = (RMTexture *)pass.depthResolve)
+                depthResolve = {r, pass.depthFilter};
             if (RMTexture *z = (RMTexture *)pass.depth) {  // (rawDepthStencil: decided at record)
                 p.depthStencil.texture = &z->_raw;
                 p.depthStencil.clearDepth = pass.depthLoad == MTLLoadActionClear;

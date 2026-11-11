@@ -209,7 +209,9 @@ struct RMPass {
 
     __unsafe_unretained id depth;
     MTLLoadAction depthLoad, stencilLoad;
-    MTLStoreAction depthStore, stencilStore;
+    MTLStoreAction depthStore, stencilStore;  // a resolve's (MultisampleResolve, StoreAndMultisampleResolve) as DontCare, Store
+    __unsafe_unretained id depthResolve;      // its depth resolve's texture, nil for none
+    uint32_t depthFilter;                     // and MTLMultisampleDepthResolveFilter
     double clearDepth;
     uint32_t clearStencil;
     NSUInteger width, height;

@@ -154,6 +154,23 @@ static id<MTLTexture> zetaAttachment(MTLRenderPassDescriptor *pass)
 // format has and no other (Stencil8 a stencil attachment alone), whole (level, slice and depth plane 0, no resolve), a clear
 // depth that is a number (metal2vulkan refuses a NaN); a memoryless one cleared or not loaded and not stored, a stored one
 // loaded and stored as asked
+static bool resolves(MTLStoreAction a)
+{
+    return a == MTLStoreActionMultisampleResolve || a == MTLStoreActionStoreAndMultisampleResolve;
+}
+
+// A depth resolve the raw path draws after the pass (the pack's depth resolve state of its format and filter): into level,
+// slice and depth plane 0 of a one-sample texture of the attachment's format. A stencil resolve is not: the GM20B's pixel
+// programs write no stencil (no stencil export) and no other engine reads a sample's stencil out of a zeta sample grid.
+static bool rawDepthResolve(MTLRenderPassDepthAttachmentDescriptor *d, RMTexture *from)
+{
+    RMTexture *r = (RMTexture *)d.resolveTexture;
+    return from->_raw.samples > 1 && [(id)r isKindOfClass:[RMTexture class]] && r->_rawOk && r->_raw.zeta &&
+           r->_raw.samples == 1 && !r->_raw.memoryless && r->_raw.format == from->_raw.format && !d.resolveLevel &&
+           !d.resolveSlice && !d.resolveDepthPlane &&
+           gRM->raw->depthResolvePipeline(from->_raw.format, uint32_t(d.depthResolveFilter));
+}
+
 static bool rawDepthStencil(MTLRenderPassDescriptor *pass)
 {
     MTLRenderPassDepthAttachmentDescriptor *d = pass.depthAttachment;
@@ -165,14 +182,20 @@ static bool rawDepthStencil(MTLRenderPassDescriptor *pass)
     if ((RMTexture *)d.texture != (depth ? t : nil) || (RMTexture *)s.texture != (stencil ? t : nil) ||
         (depth && std::isnan(d.clearDepth)))
         return false;
+    if (depth && (d.resolveTexture || resolves(d.storeAction)) && !rawDepthResolve(d, t))
+        return false;
     MTLRenderPassAttachmentDescriptor *aspects[2] = {depth ? d : nil, stencil ? s : nil};
-    for (MTLRenderPassAttachmentDescriptor *a : aspects)
-        if (a &&
-            (a.level || a.slice || a.depthPlane || a.resolveTexture ||
-             (t->_raw.memoryless && (a.storeAction != MTLStoreActionDontCare ||
-                                     (a.loadAction != MTLLoadActionClear && a.loadAction != MTLLoadActionDontCare))) ||
-             (a.storeAction != MTLStoreActionDontCare && a.storeAction != MTLStoreActionStore)))
+    for (MTLRenderPassAttachmentDescriptor *a : aspects) {
+        const MTLStoreAction kept = a == d && resolves(a.storeAction)
+                                        ? (a.storeAction == MTLStoreActionMultisampleResolve ? MTLStoreActionDontCare
+                                                                                            : MTLStoreActionStore)
+                                        : a.storeAction;
+        if (a && (a.level || a.slice || a.depthPlane || (a == s && a.resolveTexture) ||
+                  (t->_raw.memoryless && (kept != MTLStoreActionDontCare || (a.loadAction != MTLLoadActionClear &&
+                                                                            a.loadAction != MTLLoadActionDontCare))) ||
+                  (kept != MTLStoreActionDontCare && kept != MTLStoreActionStore)))
             return false;
+    }
     return true;
 }
 
@@ -286,6 +309,15 @@ static bool rawResolve(RMCommandBuffer *cb, MTLRenderPassColorAttachmentDescript
     facts.stencilLoad = pass.stencilAttachment.loadAction;
     facts.depthStore = pass.depthAttachment.storeAction;
     facts.stencilStore = pass.stencilAttachment.storeAction;
+    if (resolves(facts.depthStore) && pass.depthAttachment.resolveTexture) {
+        facts.depthResolve = pass.depthAttachment.resolveTexture;
+        facts.depthFilter = uint32_t(pass.depthAttachment.depthResolveFilter);
+        facts.depthStore = facts.depthStore == MTLStoreActionMultisampleResolve ? MTLStoreActionDontCare
+                                                                                : MTLStoreActionStore;
+        [self retain:facts.depthResolve];
+        if (RMTexture *r = (RMTexture *)facts.depthResolve; [(id)r isKindOfClass:[RMTexture class]])
+            declareGpuWrites(r);
+    }
     facts.clearDepth = pass.depthAttachment.clearDepth;
     facts.clearStencil = pass.stencilAttachment.clearStencil;
     facts.width = pass.renderTargetWidth;

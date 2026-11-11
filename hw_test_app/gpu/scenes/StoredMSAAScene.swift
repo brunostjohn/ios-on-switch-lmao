@@ -5,7 +5,8 @@ import Metal
 /// Stored (private) multisampled colour and depth at 2 and 4 samples, in three parts that fail on their own. Colour: a pass
 /// draws a full-target quad and a triangle over it, and resolves (storeAndMultisampleResolve); a later pass loads the samples
 /// and only resolves them (multisampleResolve). Depth: a depth-only pass of the triangle, then a pass that loads that depth
-/// and draws the triangle and, behind it, the quad. Positions: a pass at sample positions of its own. Each sample's colour
+/// and draws the triangle and, behind it, the quad, resolving the depth to each pixel's minimum, then two passes that load
+/// it and resolve its maximum and sample 0. Positions: a pass at sample positions of its own. Each sample's colour
 /// and depth is read back through texture2d_ms and depth2d_ms, and every reference is the triangle's coverage at the
 /// samples' positions, worked out on the CPU. On the raw facade every command buffer must run on the raw path.
 struct StoredMSAAScene: GPUScene {
@@ -123,6 +124,8 @@ struct StoredMSAAScene: GPUScene {
             throw TestFailure("makeDepthStencilState returned nil")
         }
         let triangle = Self.clip(Self.triangle, z: 0.5)
+        let filters: [MTLMultisampleDepthResolveFilter] = [.min, .max, .sample0]
+        let resolved = try filters.map { _ in try gpu.texture(.depth32Float, size, size, usage: [.renderTarget]) }
         try await gpu.run { commands in
             let first = MTLRenderPassDescriptor()
             first.depthAttachment.texture = depth
@@ -141,13 +144,34 @@ struct StoredMSAAScene: GPUScene {
             second.colorAttachments[0].storeAction = .store
             second.depthAttachment.texture = depth
             second.depthAttachment.loadAction = .load
-            second.depthAttachment.storeAction = .store
+            second.depthAttachment.storeAction = .storeAndMultisampleResolve
+            second.depthAttachment.resolveTexture = resolved[0]
+            second.depthAttachment.depthResolveFilter = filters[0]
             let f = commands.makeRenderCommandEncoder(descriptor: second)!
             f.setRenderPipelineState(drawn)
             f.setDepthStencilState(lessEqual)
             Self.draw(f, triangle, Self.red)
             Self.draw(f, GPU.quad(x0: -1, y0: -1, x1: 1, y1: 1, z: 0.75), Self.blue)
             f.endEncoding()
+            for k in 1..<filters.count {
+                let again = MTLRenderPassDescriptor()
+                again.depthAttachment.texture = depth
+                again.depthAttachment.loadAction = .load
+                again.depthAttachment.storeAction = .storeAndMultisampleResolve
+                again.depthAttachment.resolveTexture = resolved[k]
+                again.depthAttachment.depthResolveFilter = filters[k]
+                commands.makeRenderCommandEncoder(descriptor: again)!.endEncoding()
+            }
+        }
+        for (k, filter) in filters.enumerated() {
+            let name = ["sample 0", "minimum", "maximum"][Int(filter.rawValue)]
+            result.compare(
+                "\(samples)x depth resolved to the \(name)", try await gpu.raster(resolved[k], .r32Float),
+                Raster(width: size, height: size, channels: 1, levels: 1) { x, y, _ in
+                    guard let s = cover[y * size + x] else { return .nan }
+                    let depths = s.map { Float($0 ? 0.5 : 0.75) }
+                    return filter == .min ? depths.min()! : filter == .max ? depths.max()! : depths[0]
+                }, tolerance: 0)
         }
         result.compare(
             "\(samples)x depth-tested samples", try await Self.unpack(gpu, color, samples, .rgba8Unorm),

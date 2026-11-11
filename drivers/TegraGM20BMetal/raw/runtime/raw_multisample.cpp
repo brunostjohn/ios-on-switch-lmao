@@ -31,8 +31,7 @@ bool Device::createStoredMultisample(uint32_t width, uint32_t height, uint32_t f
     return true;
 }
 
-bool Device::createOwnedZeta(uint32_t width, uint32_t height, uint32_t format, uint32_t samples, bool sampled,
-                             Texture &t)
+bool Device::createOwnedZeta(uint32_t width, uint32_t height, uint32_t format, uint32_t samples, Texture &t)
 {
     uint64_t bytes = 0, align = 0;
     if (samples < 2 || !zetaShape(width, height, format, samples, t, bytes, align))
@@ -42,15 +41,14 @@ bool Device::createOwnedZeta(uint32_t width, uint32_t height, uint32_t format, u
     Span span;
     if (!tiledAlloc(zChunks_[z], kZetaFormatInfo[z].kind, bytes, std::max(align, kBlAlign), span))
         return false;
-    if (sampled && !(t.tic = allocTic())) {
+    if (!(t.tic = allocTic())) {
         tiledFree(zChunks_[z], span);
         return false;
     }
     t.va = span.va;
     t.storage = {span.va, bytes, false};
     ownedZeta_[span.va] = {z, span};
-    if (t.tic)
-        writeTic(t);
+    writeTic(t);
     return true;
 }
 

@@ -159,8 +159,11 @@ int main(int argc, char **argv)
             {"f xr_planes_frag", tagged(MTLPixelFormatRG32Uint)},
             {"f two_plane_store", tagged(MTLPixelFormatRGBA16Float)},
             {"f ycbcr_store_", tagged(MTLPixelFormatRGBA32Float)}};
-        const std::vector<id<MTLTexture>> multisampled = tagged(MTLPixelFormatBGRA8Unorm, 4);
+        const std::vector<id<MTLTexture>> multisampled = tagged(MTLPixelFormatBGRA8Unorm, 4),
+                                          multisampledDepth = tagged(MTLPixelFormatDepth32Float, 4);
         auto texturesOf = [&](const std::string &line, bool ours) -> const std::vector<id<MTLTexture>> & {
+            if (ours && line.find("| v resolve_vert | f resolve_depth") != std::string::npos)
+                return multisampledDepth;
             if (ours && line.find("| v resolve_vert | f resolve_") != std::string::npos)
                 return multisampled;
             for (const auto &[fragment, set] : codeTextures)
