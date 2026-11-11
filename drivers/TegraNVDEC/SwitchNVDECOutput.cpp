@@ -62,20 +62,31 @@ int switch_nvdec_output_picture(const TegraNVDECBlock *block, const TegraNVDECPr
     return 0;
 }
 
-int switch_nvdec_output_export(const TegraNVDECBlock *block, const TegraNVDECPresent *request, task_t task)
+int switch_nvdec_output_export(const TegraNVDECBlock *block, const TegraNVDECPresent *request, task_t task,
+                               SwitchNVDECExportRefusal *refusal)
 {
+    SwitchNVDECExportRefusal unused = {};
+    if (!refusal)
+        refusal = &unused;
+    *refusal = {"native output while VIC, the GPU or the display cannot read it", 0, 0, 0};
     if (!switch_nvdec_native_output_ready())
         return -95;
     TegraVICPicture picture = {};
+    refusal->why = "native output of a picture the request does not describe";
     const int checked = switch_nvdec_output_picture(block, request, &picture);
     if (checked)
         return checked;
+    refusal->why = "native output of a placed or 16-bit picture";
     if (request->sample_bytes != 1 || request->dst_x || request->dst_y)
         return -95;
     TegraVICSurface surface = {};
+    refusal->why = "native output into a surface the caller does not hold";
     if (tegra_vic_surface_lookup(request->surface_id, task, &surface))
         return -22;
-    const int result = switch_native_surface_publish(&surface, &picture);
+    refusal->allocationBytes = surface.desc.length;
+    refusal->descriptorBytes = surface.memory ? surface.memory->getLength() : 0;
+    refusal->baseOffset = surface.baseOffset;
+    const int result = switch_native_surface_publish(&surface, &picture, &refusal->why);
     tegra_vic_surface_release(&surface);
     return result;
 }

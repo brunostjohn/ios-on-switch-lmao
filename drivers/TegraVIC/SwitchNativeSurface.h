@@ -24,7 +24,9 @@ struct SwitchNativeSurfaceView {
 // avoid: -16 instead of waiting for a publication in progress, which may itself wait for leases the caller holds.
 int switch_native_surface_acquire(const TegraVICSurface *surface, SwitchNativeSurfaceView *view, bool avoid);
 void switch_native_surface_release(SwitchNativeSurfaceView *view);
-int switch_native_surface_publish(const TegraVICSurface *surface, const TegraVICPicture *picture);
+// why: on an error, the refusal (a literal) for the caller's one line.
+int switch_native_surface_publish(const TegraVICSurface *surface, const TegraVICPicture *picture,
+                                  const char **why = nullptr);
 
 // The caller holds a descriptor CPU reservation through the ensuing IOSurface CPU lock and unlock.
 extern "C" int switch_native_surface_prepare(OSObject *surface, uint32_t id, void *task, uint32_t options,

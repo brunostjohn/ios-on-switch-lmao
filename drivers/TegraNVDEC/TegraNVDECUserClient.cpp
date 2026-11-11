@@ -22,6 +22,7 @@
 #include "TegraNVDEC.h"
 #include "nvidia/nvdec_drv.h"
 #include "../../kits/SwitchDMA/SwitchDcache.h"
+#include "../../kits/SwitchRefusal/SwitchRefusal.h"
 
 namespace {
 constexpr uint32_t kMaxBuffers = 64, kMaxConnections = 16;
@@ -299,7 +300,17 @@ IOReturn AppleD5500UserClient::run(uint32_t method, const void *in, uint32_t inS
     case SwitchNVDECMethodExport: {
         const auto *request = static_cast<const TegraNVDECPresent *>(in);
         const auto *buffer = find(request->handle);
-        const int error = buffer ? switch_nvdec_output_export(&buffer->block, request, current_task()) : -22;
+        SwitchNVDECExportRefusal refusal = {"native export of a buffer the connection does not hold", 0, 0, 0};
+        const int error = buffer ? switch_nvdec_output_export(&buffer->block, request, current_task(), &refusal) : -22;
+        if (error) {
+            const uint64_t key =
+                switch_refusal_key_with(switch_refusal_key("TegraNVDEC", refusal.why), uint32_t(error));
+            switch_refusal_k(key, "TegraNVDEC", refusal.why,
+                             "a %ux%u %u-bit picture stays VIC's copy into surface %u (%d): allocation %llu bytes, "
+                             "descriptor %llu, base offset %llu",
+                             request->width, request->height, request->sample_bytes * 8, request->surface_id, error,
+                             refusal.allocationBytes, refusal.descriptorBytes, refusal.baseOffset);
+        }
         ret = error == -95 ? kIOReturnUnsupported : ioreturn(error);
         break;
     }

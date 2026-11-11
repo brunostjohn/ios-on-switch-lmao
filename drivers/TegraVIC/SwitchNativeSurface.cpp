@@ -232,27 +232,42 @@ void switch_native_surface_release(SwitchNativeSurfaceView *view)
     *view = {};
 }
 
-int switch_native_surface_publish(const TegraVICSurface *surface, const TegraVICPicture *picture)
+int switch_native_surface_publish(const TegraVICSurface *surface, const TegraVICPicture *picture, const char **why)
 {
-    if (!surface || !surface->surface || !surface->memory || !picture || !picture->backing ||
-        surface->baseOffset || surface->desc.length != surface->memory->getLength() ||
-        surface->id != picture->surfaceID)
+    const char *unused = nullptr;
+    if (!why)
+        why = &unused;
+    *why = "native export into a surface or of a picture without memory";
+    if (!surface || !surface->surface || !surface->memory || !picture || !picture->backing)
+        return -22;
+    *why = "native export into a surface at a base offset";
+    if (surface->baseOffset)
+        return -22;
+    *why = "native export into a surface whose allocation is not its descriptor's length";
+    if (surface->desc.length != surface->memory->getLength())
+        return -22;
+    *why = "native export of another surface's picture";
+    if (surface->id != picture->surfaceID)
         return -22;
     switch_gpu_backing_layout layout = {};
     SwitchNativeSurfaceCrop crop = {};
-    if (switch_native_picture(*picture, surface->desc, layout, crop))
+    if ((*why = switch_native_picture(*picture, surface->desc, layout, crop)))
         return -95;
     TegraVICPicture bytePicture = {};
     TegraVICSurfaceDesc byteTarget = {};
     SwitchVICPlacement placement = {};
-    if (!tegra_vic_present_ready() ||
-        switch_vic_picture_bytes(picture, &surface->desc, &bytePicture, &byteTarget) ||
-        switch_vic_picture_place(&bytePicture, &byteTarget, &placement))
+    *why = "native export without VIC to materialize it";
+    if (!tegra_vic_present_ready())
+        return -95;
+    if ((*why = switch_vic_picture_bytes(picture, &surface->desc, &bytePicture, &byteTarget)) ||
+        (*why = switch_vic_picture_place(&bytePicture, &byteTarget, &placement)))
         return -95;
     switch_gpu_backing_info info = {};
     switch_gpu_backing_describe(picture->backing, &info);
+    *why = "native export of a picture its backing cannot hold";
     if (!picture->bytes || picture->bytes > (uint64_t(info.page_count) << 12))
         return -22;
+    *why = "native export without memory for its surface object";
     auto *next = new SwitchNativeSurface;
     if (!next || !next->initialize()) {
         if (next)
@@ -272,16 +287,19 @@ int switch_native_surface_publish(const TegraVICSurface *surface, const TegraVIC
     next->pitch = surface->desc;
     next->layout = layout;
     next->crop = crop;
+    *why = "native export the GPU backing would not lease for reading";
     int error = switch_gpu_backing_export_read(next->native, &next->producer, &next->readLease);
     if (error) {
         next->release();
         return error;
     }
+    *why = "native export into a surface another publication holds";
     error = SwitchMemoryAttachment::enterExclusive(surface->memory, false);
     if (error) {
         next->release();
         return error;
     }
+    *why = "native export into a surface whose representation would not change";
     auto *logical = switch_vic_surface_backing(surface);
     switch_gpu_cpu_lease *owned = nullptr;
     error = !logical ? -12 : logical == next->native ? -22

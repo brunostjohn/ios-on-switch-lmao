@@ -14,4 +14,11 @@ bool switch_nvdec_native_output_ready();
 int switch_nvdec_output_recycle(SwitchNVDECBuffer *buffer, task_t task);
 int switch_nvdec_output_picture(const TegraNVDECBlock *block, const TegraNVDECPresent *request,
                                  TegraVICPicture *picture);
-int switch_nvdec_output_export(const TegraNVDECBlock *block, const TegraNVDECPresent *request, task_t task);
+// Why an export left a picture to VIC's copy, and the sizes of the surface it was for (zero before the lookup).
+struct SwitchNVDECExportRefusal {
+    const char *why;
+    uint64_t allocationBytes, descriptorBytes, baseOffset;
+};
+
+int switch_nvdec_output_export(const TegraNVDECBlock *block, const TegraNVDECPresent *request, task_t task,
+                               SwitchNVDECExportRefusal *refusal = nullptr);

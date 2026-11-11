@@ -71,7 +71,7 @@ extern "C" IOReturn tegra_vic_surface_lookup(uint32_t id, task_t task, TegraVICS
     return lookupError;
 }
 extern "C" void tegra_vic_surface_release(TegraVICSurface *) { ++surfaceReleases; }
-int switch_native_surface_publish(const TegraVICSurface *surface, const TegraVICPicture *picture)
+int switch_native_surface_publish(const TegraVICSurface *surface, const TegraVICPicture *picture, const char **)
 {
     ++publishes;
     EXPECT_EQ(surface->id, picture->surfaceID);
