@@ -89,6 +89,7 @@ py_library(
     srcs = [
         "icache.py",
         "int3.py",
+        "overlap.py",
     ],
     deps = [
         ":encode",
@@ -121,6 +122,7 @@ py_library(
         "icache_test",
         "int3_test",
         "intops_test",
+        "overlap_test",
     ]
 ]
 
