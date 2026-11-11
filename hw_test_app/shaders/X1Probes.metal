@@ -178,3 +178,19 @@ kernel void x1_texture_codes_half(texture2d<half, access::read> src [[texture(0)
     if (id.x < src.get_width() && id.y < src.get_height())
         out[id.y * src.get_width() + id.x] = as_type<uint2>(src.read(id));
 }
+
+/// gpu.x1.twod_scale: the 3D route's scaled copy, as Core Animation and MPS scale: a sample of the source at the
+/// destination pixel's centre in normalized coordinates, through `s` (nearest or linear, clamped to the edge)
+fragment float4 x1_scale_fragment(float4 position [[position]], texture2d<float> src [[texture(0)]],
+                                  sampler s [[sampler(0)]], constant float2 &size [[buffer(0)]])
+{
+    return src.sample(s, position.xy / size, level(0));
+}
+
+/// gpu.x1.twod_resolve: sample `id`'s colour of `colors` (shaded per sample)
+fragment float4 x1_sample_fragment(float4 position [[position]], uint id [[sample_id]],
+                                   constant float4 *colors [[buffer(0)]])
+{
+    const uint2 p = uint2(position.xy);
+    return colors[((p.x + p.y * 3u) % 4u) * 4u + id];
+}
