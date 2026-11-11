@@ -49,8 +49,9 @@ public enum BenchProtocol {
     public static let methodRanges: [(UInt32, UInt32)] = [
         (0x02E0, 0x02E4), (0x02F4, 0x02F8), (0x0754, 0x0758), (0x0D9C, 0x0DA0), (0x0DD0, 0x0DD8), (0x0DF0, 0x0DF8),
         (0x0F40, 0x0F54), (0x0F90, 0x0F94), (0x0FAC, 0x0FB0), (0x0FDC, 0x0FE0), (0x10CC, 0x10D0), (0x10E0, 0x10F4),
-        (0x113C, 0x1140), (0x1140, 0x1144), (0x1220, 0x1224), (0x12E0, 0x12E8), (0x131C, 0x132C), (0x133C, 0x1360), (0x1360, 0x1380), (0x13A8, 0x13AC),
-        (0x1480, 0x1500), (0x15B8, 0x15BC), (0x19C0, 0x19C4), (0x1A00, 0x1A20), (0x1E00, 0x1F00), (0x2600, 0x2604),
+        (0x113C, 0x1140), (0x1140, 0x1144), (0x1220, 0x1224), (0x12E0, 0x12E8), (0x131C, 0x132C), (0x133C, 0x1360),
+        (0x1360, 0x1380), (0x13A8, 0x13AC), (0x1480, 0x1500), (0x15B8, 0x15BC), (0x19C0, 0x19C4), (0x1A00, 0x1A20),
+        (0x1E00, 0x1F00), (0x2600, 0x2604),
     ]
 
     public static func methodAllowed(_ method: UInt32) -> Bool {
@@ -151,8 +152,12 @@ public struct BenchBatch: Sendable {
         guard let top = try? JSONSerialization.jsonObject(with: bytes) as? [String: Any] else {
             throw BenchInvalid("not a JSON object")
         }
-        guard top["protocol"] as? String == BenchProtocol.version else { throw BenchInvalid("protocol is not benchloop/1") }
-        guard let name = top["batch"] as? String, BenchProtocol.validName(name) else { throw BenchInvalid("batch name") }
+        guard top["protocol"] as? String == BenchProtocol.version else {
+            throw BenchInvalid("protocol is not benchloop/1")
+        }
+        guard let name = top["batch"] as? String, BenchProtocol.validName(name) else {
+            throw BenchInvalid("batch name")
+        }
         guard let list = top["experiments"] as? [Any], (1...BenchProtocol.maxExperiments).contains(list.count) else {
             throw BenchInvalid("1...\(BenchProtocol.maxExperiments) experiments a batch")
         }

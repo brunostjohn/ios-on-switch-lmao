@@ -1,6 +1,7 @@
-// bench_records.cpp over a pack holding the template state the Switch's pack gave the bench (iOS 27, stack
-// 19bc973b66d63deb): colour 0 of BGR10_XR, which its pixel program packs into one word, so its register words write R alone.
-// Since pack v15 a program's register count is its own (PackProgram::gprs), not a blob word.
+// bench_records.cpp over a pack holding the template state the Switch's pack gave the bench (iOS 27, 1b1ae4ebb482e4d1
+// in pack v14 19bc973b66d63deb and v15 c7fe25c8f16ed0bf): colour 0 of BGR10_XR, which its pixel program packs into one
+// word, so its register words write R alone. Since v15 a program's register count is its own (PackProgram::gprs), not
+// a blob word.
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
@@ -159,8 +160,9 @@ TEST_F(BenchRecords, ATemplateIsTakenByItsKeyOnlyWhenPlain)
 
 TEST_F(BenchRecords, FirstColourOnlyDropsTheOtherColours)
 {
-    EXPECT_EQ(bench::withoutOtherColours("samples=1 topo=0 ds=0/0 c0=554:15:0:1:0:0:1:0:0 c1=115:0:0:1:0:0:1:0:0 a0=31"),
-              "samples=1 topo=0 ds=0/0 c0=554:15:0:1:0:0:1:0:0 a0=31");
+    EXPECT_EQ(
+        bench::withoutOtherColours("samples=1 topo=0 ds=0/0 c0=554:15:0:1:0:0:1:0:0 c1=115:0:0:1:0:0:1:0:0 a0=31"),
+        "samples=1 topo=0 ds=0/0 c0=554:15:0:1:0:0:1:0:0 a0=31");
     EXPECT_EQ(bench::withoutOtherColours("c0=80:15:0 c1=115:0:0 c2=55:0:0"), "c0=80:15:0");
     raw::RuntimeRecord r;
     std::string why;
