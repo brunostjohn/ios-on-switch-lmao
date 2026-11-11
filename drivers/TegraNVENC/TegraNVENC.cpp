@@ -292,7 +292,7 @@ int answer(uint32_t id, uint32_t from, const char **stage)
         tegra_host1x_op_incr_syncpt(TEGRA_HOST1X_COND_IMMEDIATE, id),
         tegra_host1x_op_incr_syncpt(TEGRA_HOST1X_COND_OP_DONE, id),
     };
-    int ret = tegra_host1x_submit(stream, 3);
+    int ret = tegra_host1x_submit_on(TEGRA_HOST1X_CHANNEL_NVENC, stream, 3);
     *stage = "submit";
     if (!ret) {
         *stage = "host interface (IMMEDIATE)";
@@ -318,7 +318,7 @@ bool proofOfLife(uint64_t *us, uint32_t *id, uint32_t *from)
     *us = switch_now_us() - began;
     if (ret) {
         char host[200];
-        tegra_host1x_describe(host, sizeof(host));
+        tegra_host1x_describe_channel(TEGRA_HOST1X_CHANNEL_NVENC, host, sizeof(host));
         snprintf(gLine, sizeof(gLine), "E2 FAIL %s %s syncpoint %u (%u->%u, %d); %s; %s", stage,
                  ret == TEGRA_HOST1X_ELOST ? "incremented, but no interrupt came for" : "did not increment", *id, *from,
                  tegra_host1x_syncpt_read(*id), ret, falconState(), host);
@@ -334,7 +334,7 @@ void engineResume();
 [[noreturn]] void timedOut(uint32_t fence)
 {
     char host[200];
-    tegra_host1x_describe(host, sizeof(host));
+    tegra_host1x_describe_channel(TEGRA_HOST1X_CHANNEL_NVENC, host, sizeof(host));
     panic("TegraNVENC: job fence %u not reached in %u ms (syncpoint %u at %u, GP timer bound passed); %s; %s; %s",
           fence, kWaitBoundUs / 1000, gSyncpt, tegra_host1x_syncpt_read(gSyncpt), appDump(), falconDump(), host);
 }
@@ -508,7 +508,7 @@ int run(const TegraNVENCSubmit *s, TegraNVENCResolve resolve, void *context, uin
                                                              : e->value);
     }
     words[n++] = tegra_host1x_op_incr_syncpt(TEGRA_HOST1X_COND_OP_DONE, gSyncpt);
-    const int ret = tegra_host1x_submit(words, n);
+    const int ret = tegra_host1x_submit_on(TEGRA_HOST1X_CHANNEL_NVENC, words, n);
     if (!ret) {
         __atomic_store_n(&gIssued, job, __ATOMIC_RELEASE);
         *fence = gBase + job;

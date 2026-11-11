@@ -302,7 +302,7 @@ int answer(uint32_t id, uint32_t from, const char **stage)
         tegra_host1x_op_incr_syncpt(TEGRA_HOST1X_COND_IMMEDIATE, id),
         tegra_host1x_op_incr_syncpt(TEGRA_HOST1X_COND_OP_DONE, id),
     };
-    int ret = tegra_host1x_submit(stream, sizeof(stream) / sizeof(stream[0]));
+    int ret = tegra_host1x_submit_on(TEGRA_HOST1X_CHANNEL_NVJPG, stream, sizeof(stream) / sizeof(stream[0]));
     *stage = "submit";
     if (!ret) {
         *stage = "host interface (IMMEDIATE)";
@@ -332,7 +332,7 @@ void park()
 [[noreturn]] void timedOut(uint32_t fence, uint64_t us)
 {
     char host[200];
-    tegra_host1x_describe(host, sizeof(host));
+    tegra_host1x_describe_channel(TEGRA_HOST1X_CHANNEL_NVJPG, host, sizeof(host));
     panic("TegraNVJPG: job fence %u not reached in %llu ms (syncpoint %u at %u); %s; %s", fence, us / 1000, gSyncpt,
           tegra_host1x_syncpt_read(gSyncpt), falconState(), host);
 }
@@ -422,7 +422,7 @@ void bringUp(void *, wait_result_t)
     const int ret = answer(id, from, &stage);
     if (ret) {
         char host[200];
-        tegra_host1x_describe(host, sizeof(host));
+        tegra_host1x_describe_channel(TEGRA_HOST1X_CHANNEL_NVJPG, host, sizeof(host));
         IOLog("TegraNVJPG: J2 FAIL %s %s syncpoint %u (%u->%u, %d); %s; %s\n", stage,
               ret == TEGRA_HOST1X_ELOST ? "incremented, but no interrupt came for" : "did not increment", id, from,
               tegra_host1x_syncpt_read(id), ret, falconState(), host);
@@ -546,7 +546,7 @@ extern "C" int tegra_nvjpg_run(const TegraNVJPGJob *job, nvjpg_dec_status *statu
     words[n++] = tegra_host1x_op_incr_syncpt(TEGRA_HOST1X_COND_OP_DONE, gSyncpt);
     const uint32_t fence = gNext + 1;
     const uint64_t start = switch_now_us();
-    int ret = tegra_host1x_submit(words, n);
+    int ret = tegra_host1x_submit_on(TEGRA_HOST1X_CHANNEL_NVJPG, words, n);
     if (!ret) {
         gNext = fence;
         ret = tegra_host1x_syncpt_wait(gSyncpt, fence, jobBoundUs(job->pixels));

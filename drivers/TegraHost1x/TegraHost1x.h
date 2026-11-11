@@ -93,12 +93,15 @@ int tegra_host1x_syncpt_release_failed(uint32_t id, uint32_t threshold, uint32_t
 int tegra_host1x_syncpt_wait(uint32_t id, uint32_t threshold, uint32_t timeoutUs);
 void tegra_host1x_set_strict(void);
 
-// Command DMA channels: VIC has its own, so a stream that waits for another engine (WAIT_SYNCPT) holds up only VIC;
-// the other engines share the default one.
+// Command DMA channels, one per engine as mainline gives every client its own (vic.c, nvdec.c, nvjpg.c
+// host1x_channel_request; T210 has 14): a stream that waits for another engine (WAIT_SYNCPT) holds up only its own
+// engine. NVDEC keeps channel 0.
 enum {
     TEGRA_HOST1X_CHANNEL_DEFAULT = 0,
     TEGRA_HOST1X_CHANNEL_VIC = 1,
-    TEGRA_HOST1X_CHANNELS = 2
+    TEGRA_HOST1X_CHANNEL_NVENC = 2,
+    TEGRA_HOST1X_CHANNEL_NVJPG = 3,
+    TEGRA_HOST1X_CHANNELS = 4
 };
 
 // Copies `count` opcode words into a channel's push buffer and starts them. The stream must leave its syncpoint
@@ -108,8 +111,8 @@ int tegra_host1x_submit_on(uint32_t channel, const uint32_t *words, uint32_t cou
 int tegra_host1x_submit(const uint32_t *words, uint32_t count);
 
 // Sleep (called through tegra_nvdec_suspend/resume below, after NVDEC has quiesced). Suspend saves the
-// handed-out syncpoint values and stops channel 0; resume re-adopts the clock, reconfigures the sync unit, restores
-// the values and restarts channel 0. Both are no-ops unless host1x is up.
+// handed-out syncpoint values and stops every channel; resume re-adopts the clock, reconfigures the sync unit, restores
+// the values and restarts the channels. Both are no-ops unless host1x is up.
 void tegra_host1x_suspend(void);
 void tegra_host1x_resume(void);
 
