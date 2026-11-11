@@ -10,6 +10,7 @@
 #include <optional>
 #include "raw_compute.h"
 #include "raw_compute_lookup.h"
+#include "raw_clear.h"
 #include "raw_samples.h"
 
 // ---- the tape onto the raw path ----
@@ -568,10 +569,10 @@ __attribute__((objc_externally_retained)) static bool encodeRawAttempt(RMCommand
                     if (__unsafe_unretained RMTexture *r = (RMTexture *)a.resolve)
                         resolves.push_back({j, r, a.store == MTLStoreActionStoreAndMultisampleResolve});
                 const MTLClearColor k = a.clear;
-                p.color[j].clear[0] = float(k.red);
-                p.color[j].clear[1] = float(k.green);
-                p.color[j].clear[2] = float(k.blue);
-                p.color[j].clear[3] = float(k.alpha);
+                const double exact[4] = {k.red, k.green, k.blue, k.alpha};
+                if (!raw::integerClearSlots(t->_raw.format, exact, p.color[j].clear))
+                    for (int c = 0; c < 4; c++)
+                        p.color[j].clear[c] = float(exact[c]);
                 p.count = j + 1;
             }
             if (__unsafe_unretained RMTexture *z = (RMTexture *)pass.depth) {  // (rawDepthStencil: decided at record)

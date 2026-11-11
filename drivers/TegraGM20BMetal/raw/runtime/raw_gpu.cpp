@@ -207,33 +207,51 @@ void sampleWords(Push &p, uint32_t samples, uint64_t root, const SamplePositions
 
 // Texture header word 0 per MTLPixelFormat as NVK writes it (pack/mkformats.py over the twin, 11-04), and the color target format
 // NVK writes for a target of it (raw/test/targetcheck.py over the probe's PROBE_TARGETS run; 0 where m2v's NVK renders none).
+// The integer formats' are NIL's rows (nil_formats.csv: the class's RU*/RS* target, UINT or SINT components, alpha ONE_INT).
 const FormatInfo kFormats[] = {
     {1, 0xf7, 0x2002491d, 1, false},     // A8Unorm
     {10, 0xf3, 0x7012491d, 1, false},    // R8Unorm
     {11, 0, 0x7012491d, 1, true},        // R8Unorm_sRGB
-    {13, 0, 0x6014921d, 1, false},       // R8Uint, storage/sampled
+    {13, 0xf6, 0x6014921d, 1, false},    // R8Uint (NIL's R8_UINT: UINT components, alpha ONE_INT)
+    {14, 0xf5, 0x60136d9d, 1, false},    // R8Sint
     {20, 0xee, 0x7012491b, 2, false},    // R16Unorm
-    {23, 0, 0x6014921b, 2, false},       // R16Uint (NIL's R16_UINT: UINT components, alpha ONE_INT; sampled only)
+    {23, 0xf1, 0x6014921b, 2, false},    // R16Uint
+    {24, 0xf0, 0x60136d9b, 2, false},    // R16Sint
     {25, 0xf2, 0x7017ff9b, 2, false},    // R16Float
     {30, 0xea, 0x70d24918, 2, false},    // RG8Unorm
+    {33, 0xed, 0x60d49218, 2, false},    // RG8Uint
+    {34, 0xec, 0x60d36d98, 2, false},    // RG8Sint
     {40, 0xe8, 0x74e24915, 2, false},    // B5G6R5Unorm
     {41, 0, 0x272a4913, 2, false},       // A1BGR5Unorm
     {42, 0, 0x272a4912, 2, false},       // ABGR4Unorm
     {43, 0xe9, 0x54e24914, 2, false},    // BGR5A1Unorm
+    {53, 0xe4, 0x6014920f, 4, false},    // R32Uint
+    {54, 0xe3, 0x60136d8f, 4, false},    // R32Sint
     {55, 0xe5, 0x7017ff8f, 4, false},    // R32Float
     {60, 0xda, 0x70d2490c, 4, false},    // RG16Unorm
+    {63, 0xdd, 0x60d4920c, 4, false},    // RG16Uint
+    {64, 0xdc, 0x60d36d8c, 4, false},    // RG16Sint
     {65, 0xde, 0x70d7ff8c, 4, false},    // RG16Float
     {70, 0xd5, 0x58d24908, 4, false},    // RGBA8Unorm (rendered: a 4:2:0 code texture's image)
     {71, 0xd6, 0x58d24908, 4, true},     // RGBA8Unorm_sRGB
+    {73, 0xd9, 0x58d49208, 4, false},    // RGBA8Uint
+    {74, 0xd8, 0x58d36d88, 4, false},    // RGBA8Sint
     {80, 0xcf, 0x54e24908, 4, false},    // BGRA8Unorm
     {81, 0xd0, 0x54e24908, 4, true},     // BGRA8Unorm_sRGB
     {90, 0xd1, 0x58d24909, 4, false},    // RGB10A2Unorm (rendered: a 10-bit code texture's image)
+    {91, 0xd2, 0x58d49209, 4, false},    // RGB10A2Uint
     {92, 0xe0, 0x78d7ffa1, 4, false},    // RG11B10Float
     {93, 0, 0x78d7ffa0, 4, false},       // RGB9E5Float
     {94, 0xdf, 0x54e24909, 4, false},    // BGR10A2Unorm
+    {103, 0xcd, 0x60d49204, 8, false},   // RG32Uint
+    {104, 0xcc, 0x60d36d84, 8, false},   // RG32Sint
     {105, 0xcb, 0x70d7ff84, 8, false},   // RG32Float
     {110, 0xc6, 0x58d24903, 8, false},   // RGBA16Unorm
+    {113, 0xc9, 0x58d49203, 8, false},   // RGBA16Uint
+    {114, 0xc8, 0x58d36d83, 8, false},   // RGBA16Sint
     {115, 0xca, 0x58d7ff83, 8, false},   // RGBA16Float (rendered: a 4:2:0 texture's converted image)
+    {123, 0xc2, 0x58d49201, 16, false},  // RGBA32Uint
+    {124, 0xc1, 0x58d36d81, 16, false},  // RGBA32Sint
     {125, 0xc0, 0x58d7ff81, 16, false},  // RGBA32Float (rendered: an sRGB 4:2:0 texture's image)
     // block-compressed (sampled only: Metal's copies move whole blocks), word 0 NIL's row of NVK's format; ETC2 and EAC
     // NIL's MaxwellA rows, which the texture unit decodes as m2v's NVK twin does
