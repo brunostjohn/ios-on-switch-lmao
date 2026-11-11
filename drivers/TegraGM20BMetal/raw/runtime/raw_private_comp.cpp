@@ -102,7 +102,7 @@ void Device::releasePrivateCompressed(const Texture &t)
         freeTic(it->second.staleTic);
     RAW_DIAGNOSTIC(stats.compHeld--);
     RAW_DIAGNOSTIC(stats.compHeldBytes -= it->second.bo.bytes);
-    k_.free(it->second.bo);
+    set_.free(k_, it->second.bo);
     privateComp_.erase(it);
     comp_.freed(commitCount_);
 }
