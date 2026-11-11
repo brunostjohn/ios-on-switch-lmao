@@ -227,8 +227,12 @@ int switch_gpu_mapping_installed(const switch_gpu_mapping *mapping)
 	return mapping && !mapping->pending;
 }
 
+int installError;
+
 int switch_gpu_vm_install(void *, switch_gpu_mapping *mapping, tgm_mem *, uint8_t, int, int vol)
 {
+	if (installError)
+		return installError;
 	mapping->vol = vol != 0;
 	if (mapping->pending)
 		installPtes(mapping);
@@ -330,6 +334,7 @@ public:
 		switch_gpu_backing_token snapshots[kMaxChannels];
 		uint8_t kind, vol;
 		uint32_t epoch;
+		bool unmapped;
 	};
 
 	struct Binding {
@@ -387,15 +392,26 @@ public:
 	void *vm_ = nullptr;
 	tgm_chan *chans_[kMaxChannels] = {};
 	Bo *bos_ = nullptr, *zombies_ = nullptr, *readyBos_ = nullptr;
+
 	struct HostMemory {
-		template <typename T>
-		static T *allocate(uint32_t count) { return static_cast<T *>(malloc(sizeof(T) * count)); }
-		template <typename T>
-		static void release(T *items, uint32_t) { free(items); }
+		template <typename T> static T *allocate(uint32_t count)
+		{
+			return static_cast<T *>(malloc(sizeof(T) * count));
+		}
+
+		template <typename T> static void release(T *items, uint32_t)
+		{
+			free(items);
+		}
 	};
+
 	struct Index : SwitchGpuBoIndex<Bo, HostMemory> {
-		~Index() { destroy(); }
+		~Index()
+		{
+			destroy();
+		}
 	} boIndex_;
+
 	RetiredBinding *retired_ = nullptr, **retiredTail_ = &retired_, *unmapping_ = nullptr;
 	IOLock unmapStorage;
 	IOLock *unmapLock_ = &unmapStorage;
@@ -489,7 +505,7 @@ public:
 		bos_ = bo;
 		auto *mapping = new switch_gpu_mapping{id, va, bytes, buffer, 0, false, big};
 		installPtes(mapping);
-		auto *record = new RetiredBinding{nullptr, va, bytes, bo, mapping, {}, 0, 0, 0};
+		auto *record = new RetiredBinding{nullptr, va, bytes, bo, mapping, {}, 0, 0, 0, false};
 		const uint32_t at = switch_gpu_binding_upper(binds_, nbinds_, va);
 		memmove(&binds_[at + 1], &binds_[at], sizeof(Binding) * (nbinds_ - at));
 		binds_[at] = {va, bytes, bo, 0, record};
@@ -536,6 +552,8 @@ protected:
 		unmapped.clear();
 		onUnmap = {};
 		onCallEnter = {};
+		installError = 0;
+		logs.clear();
 		client.chans_[0] = &chan;
 	}
 
@@ -598,7 +616,7 @@ TEST_F(ClientRetirement, MultipleBindingsKeepTheirBoUntilLastRetirement)
 {
 	auto *bo = client.add(4);
 	auto *record = new AGXDeviceUserClient::RetiredBinding{
-		nullptr, 0x20000, 4096, bo, new switch_gpu_mapping{5, 0x20000, 4096}, {}, 0, 0, 0};
+		nullptr, 0x20000, 4096, bo, new switch_gpu_mapping{5, 0x20000, 4096}, {}, 0, 0, 0, false};
 	client.binds_[client.nbinds_++] = {0x20000, 4096, bo, 0, record};
 	++bo->bindings;
 	free(4);
@@ -785,15 +803,15 @@ TEST_F(ClientRetirement, CloseJoinsAnUnmapOutsideTheConnectionLock)
 
 TEST(ClientControlRetirement, ControlQuotaRetiresWithActualPoolOwnership)
 {
-    AGXDeviceUserClient client;
-    AGXDeviceUserClient::Bo bo;
-    bo.pool_va = reinterpret_cast<void *>(1);
-    bo.flags = TegraGM20BBoControl;
-    client.pool_bytes_ = bo.bytes;
-    client.control_bytes_ = bo.controlCharge = 16384;
-    client.accountRelease(&bo);
-    EXPECT_EQ(client.pool_bytes_, 0u);
-    EXPECT_EQ(client.control_bytes_, 0u);
+	AGXDeviceUserClient client;
+	AGXDeviceUserClient::Bo bo;
+	bo.pool_va = reinterpret_cast<void *>(1);
+	bo.flags = TegraGM20BBoControl;
+	client.pool_bytes_ = bo.bytes;
+	client.control_bytes_ = bo.controlCharge = 16384;
+	client.accountRelease(&bo);
+	EXPECT_EQ(client.pool_bytes_, 0u);
+	EXPECT_EQ(client.control_bytes_, 0u);
 }
 
 namespace
@@ -1052,6 +1070,36 @@ TEST_F(ClientRetirement, AMapOverNothingHeldIsImmediateEvenWithWorkQueued)
 	ASSERT_EQ(client.bind(0x300000, 0x4000, fresh), 0);
 	EXPECT_EQ(gpuRead(0x300000), 0xb2);
 	EXPECT_EQ(client.bindIssued_, 0u);
+	EXPECT_FALSE(newWorkBlocked());
+}
+
+// x1-glassmem audit: a Map over a VA queued work still holds is installed at a later retirement; if that install fails
+// (no page tables, no comptag lines), the work waiting for the bind must not be let go onto a VA with no PTEs.
+TEST_F(ClientRetirement, ABindThatCouldNotBeMappedHoldsItsWorkUntilItIs)
+{
+	auto oldBytes = bytesOf(0xc1), newBytes = bytesOf(0xc2);
+	client.add(60, 0x40000, 0x4000, &oldBytes);
+	auto *next = client.add(61, 0x100000, 0x4000, &newBytes);
+	chan.completed = 4;
+	chan.submitted = 5;
+	free(60);
+	ASSERT_EQ(client.bind(0x40000, 0x4000, next), 0);
+	ASSERT_TRUE(newWorkBlocked());
+	const uint32_t waitedFor = bindTarget;
+	installError = -12;
+	chan.completed = 5;
+	client.retireBatch();
+	EXPECT_LT(int32_t(client.fencePage[AGXDeviceUserClient::kBindEpochWord] - waitedFor), 0)
+		<< "the epoch stays short of the unmapped bind";
+	EXPECT_TRUE(newWorkBlocked());
+	ASSERT_EQ(logs.size(), 1u);
+	EXPECT_NE(logs[0].find("could not be mapped yet"), std::string::npos);
+	client.retireBatch();
+	EXPECT_EQ(logs.size(), 1u) << "logged once";
+	installError = 0;
+	client.retireBatch();
+	EXPECT_GE(int32_t(client.fencePage[AGXDeviceUserClient::kBindEpochWord] - waitedFor), 0);
+	EXPECT_EQ(gpuRead(0x40000), 0xc2);
 	EXPECT_FALSE(newWorkBlocked());
 }
 

@@ -299,6 +299,7 @@ class AGXDeviceUserClient : public IOUserClient
 		switch_gpu_backing_token snapshots[kMaxChannels];
 		uint8_t kind, vol;
 		uint32_t epoch;  // a pending binding's: the bind epoch released once its PTEs are in
+		bool unmapped;   // its install failed: logged once, tried again at each retirement
 	};
 
 	struct Binding {
