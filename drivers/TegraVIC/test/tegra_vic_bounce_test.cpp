@@ -34,6 +34,15 @@ TEST(VicBounce, OnlyRowsVicCannotAddressBounce)
     EXPECT_EQ(tegra_vic_bounce_needed(&odd, 256), -1) << "a plane offset the copy engine cannot take";
 }
 
+TEST(VicBounce, PlanesVicCannotAddressBounce)
+{
+    TegraVICSurfaceDesc d = nv12(300, 534, 320);
+    d.planeOffset[1] = 320 * 534;
+    EXPECT_EQ(tegra_vic_bounce_needed(&d, 64), 0) << "a chroma plane off 256 bytes";
+    d.planeOffset[1] = 320 * 536;
+    EXPECT_EQ(tegra_vic_bounce_needed(&d, 64), 1);
+}
+
 TEST(VicBounce, ScratchIsTheSamePixelsAtVicPitches)
 {
     const TegraVICSurfaceDesc d = nv12(1080, 1920, 1088);

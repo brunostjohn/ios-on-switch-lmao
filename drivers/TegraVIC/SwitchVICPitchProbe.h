@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: BSD-2-Clause-Patent
 // The row-pitch probe, debug kernels only: IOSurfaceAcceleratorClient selector 6 (Apple's kernel-test selector, which
 // a release kernel refuses with kIOReturnNotPermitted), struct in SwitchVICPitchProbeRequest, struct out
-// SwitchVICPitchProbeReply. kTegraVICTraits.pitchAlign is 256 because the deleted boot self-test lost half of a 1:1 copy
-// at 144- and 192-byte source pitches, so every surface whose rows are not whole multiples of 256 bytes goes through the
-// copy engine's bounce (TegraVICBounce.h) and VIC never runs at such a pitch. Here VIC copies a BGRA card of 32 rows
+// SwitchVICPitchProbeReply. The deleted boot self-test lost half of a 1:1 copy at 144- and 192-byte source pitches, so
+// kTegraVICTraits.sourcePitchAlign is 256 and every source whose rows are not whole multiples of 256 bytes goes through
+// the copy engine's bounce (TegraVICBounce.h). Here VIC copies a BGRA card of 32 rows
 // 1:1 at 320, 576 and 2880 bytes a row (2880: a 720-pixel row), on the source and then on the destination with the
 // other side at the next multiple of 256; 256, 512 and 3072 on both sides are the controls. Every pixel names its own
 // column and row, so the first wrong one says which source pixel the engine fetched. The destination is poisoned,

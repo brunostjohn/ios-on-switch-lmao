@@ -58,7 +58,7 @@ int runCase(const Case &c, const SwitchVICBounceSlot &slot, SwitchVICPitchResult
     if (!error)
         error = cpuWrite(destination, poison, 0, 0);
     TegraVICTraits traits = *tegra_vic_traits();
-    traits.pitchAlign = 64;
+    traits.sourcePitchAlign = 64;
     const TegraVICImage in = bgra(source, pixels, c.sourcePitch), out = bgra(destination, pixels, c.destinationPitch);
     TegraVICOp op = {};
     op.srcW = uint64_t(pixels) << 16;

@@ -260,7 +260,7 @@ static TegraVICTraits traits(void)
     t.rotations = 0xff;
     t.subRects = 0xff;
     t.bilinear = 1;
-    t.pitchAlign = 64;
+    t.sourcePitchAlign = t.destinationPitchAlign = 64;
     t.fillThroughMatrix = 1;
     t.yccIn = TEGRA_VIC_YCC_IN_RGB | TEGRA_VIC_YCC_IN_COPY;
     return t;
@@ -604,10 +604,9 @@ static void requests(void)
               TEGRA_VIC_GET(job.config, TEGRA_VIC_OUTPUT_SURFACE, SURF_CHROMA_LOC_VERT) == 1 &&
               TEGRA_VIC_GET(job.config, TEGRA_VIC_OUTPUT_SURFACE, SURF_LUMA_WIDTH) == 767,
           "recording jobs: chroma siting Left, 768-byte luma rows");
-    // The same with a 256-byte pitch rule (a unit that did not prove 64-byte pitches): the 2880-byte LCD rows are
-    // refused as unsupported, so Core Animation falls back.
+    // The same with VIC's 256-byte source pitch rule: the LCD's 2880-byte rows are refused unless they are bounced.
     TegraVICTraits strict = t;
-    strict.pitchAlign = 256;
+    strict.sourcePitchAlign = 256;
     why = buildAll(&plan, &lcd, &wb, &strict, 1, &job);
     CHECK(why && !strcmp(why, "row pitch the engine cannot address"), "256-byte pitch rule: %s", why ? why : "ok");
 

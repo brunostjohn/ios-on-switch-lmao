@@ -3,11 +3,11 @@ import Foundation
 import HWTestCore
 import HWTestGPU
 
-/// LIMITS V9: VIC rows on multiples of 256 bytes (kTegraVICTraits.pitchAlign), from a deleted boot self-test where
-/// 144- and 192-byte rows lost half the copy. Every public path bounces other pitches through a GPU copy first, so the
-/// probe is TegraVIC's DEVELOPMENT kernel-test selector (drivers/TegraVIC/SwitchVICPitchProbe.h): nine 1:1 BGRA
-/// copies with no bounce at 320, 576 and 2880 bytes a row against 256-multiple controls, each compared in the kernel.
-/// A VIC job that hangs panics the kernel, so it runs last.
+/// LIMITS V9: VIC source rows on multiples of 256 bytes (kTegraVICTraits.sourcePitchAlign), from a deleted boot
+/// self-test where 144- and 192-byte rows lost half the copy. Every public path bounces other source pitches through a
+/// GPU copy first, so the probe is TegraVIC's DEVELOPMENT kernel-test selector
+/// (drivers/TegraVIC/SwitchVICPitchProbe.h): nine 1:1 BGRA copies with no bounce at 320, 576 and 2880 bytes a row
+/// against 256-multiple controls, each compared in the kernel. A VIC job that hangs panics the kernel, so it runs last.
 enum X1VICPitchProbe {
     typealias Matching = @convention(c) (UnsafePointer<CChar>) -> CFMutableDictionary?
     typealias Service = @convention(c) (mach_port_t, CFDictionary?) -> mach_port_t

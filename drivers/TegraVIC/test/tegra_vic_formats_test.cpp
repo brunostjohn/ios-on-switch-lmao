@@ -220,15 +220,27 @@ TEST(VicFormats, BlockLinearOutputIsGeneric16Bx2InWholeBlocks)
     EXPECT_EQ(OUT(build(src, dst).job, SURF_BLK_KIND), uint64_t(TEGRA_VIC_BLK_PITCH));
 }
 
-TEST(VicFormats, PitchRuleIsTheOneTrait)
+TEST(VicFormats, OnlySourcePitchesRoundTo256)
+{
+    for (const uint32_t pitch : {320u, 576u, 2880u}) {
+        const TegraVICSurfaceDesc tight = surface(kBgra, pitch / 4, 32, pitch);
+        const TegraVICSurfaceDesc wide = surface(kBgra, pitch / 4, 32, (pitch + 255) & ~255u);
+        EXPECT_EQ(build(wide, tight).why, nullptr) << pitch;
+        EXPECT_STREQ(build(tight, wide).why, "row pitch the engine cannot address") << pitch;
+    }
+}
+
+TEST(VicFormats, PitchRuleIsATraitPerSide)
 {
     const TegraVICSurfaceDesc bgra = surface(kBgra, 80, 64, 320);
     TegraVICImage im;
     ASSERT_EQ(tegra_vic_image_from(&bgra, kDstIova, &im), nullptr);
-    EXPECT_STREQ(tegra_vic_check_image(&im, nullptr, "x"), "row pitch the engine cannot address");
+    EXPECT_STREQ(tegra_vic_check_image(&im, tegra_vic_pitch_align(&kTegraVICTraits, true)),
+                 "row pitch the engine cannot address");
+    EXPECT_EQ(tegra_vic_check_image(&im, tegra_vic_pitch_align(&kTegraVICTraits, false)), nullptr);
     TegraVICTraits measured = kTegraVICTraits;
-    measured.pitchAlign = 64;
-    EXPECT_EQ(tegra_vic_check_image(&im, &measured, "x"), nullptr);
+    measured.sourcePitchAlign = 64;
+    EXPECT_EQ(tegra_vic_check_image(&im, tegra_vic_pitch_align(&measured, true)), nullptr);
 }
 
 }  // namespace

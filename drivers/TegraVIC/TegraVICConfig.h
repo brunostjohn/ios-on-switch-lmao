@@ -385,7 +385,8 @@ typedef struct {
                                    // apart from the rectangles
     uint32_t rotations;            // bit t: transform t proven (a whole-surface copy lands as that transform)
     uint32_t bilinear;             // 2-tap filtering proven (else every job is 1-tap)
-    uint32_t pitchAlign;           // smallest pitch alignment proven (64 or 256 bytes)
+    uint32_t sourcePitchAlign;     // a source row pitch VIC reads exactly is a multiple of this (bytes)
+    uint32_t destinationPitchAlign;  // and a destination row pitch it writes exactly
     uint32_t fillThroughMatrix;  // 1: the background colour goes through the output matrix (else it is converted here)
     uint32_t yccIn;              // what reading a 4:2:0 source was proven to do: TEGRA_VIC_YCC_IN_*
     uint32_t blockLinearIn;      // 1: a block-linear 4:2:0 source (NVDEC's layout) copies exactly into pitch linear
@@ -411,7 +412,10 @@ static const TegraVICTraits kTegraVICTraits = {
     .preTransposeSurface = 1,
     .rotations = 0xff,
     .bilinear = 1,
-    .pitchAlign = 256,  // the hardware's rule or the deleted self-test's: probe gpu.x1.vic_pitch (LIMITS V9) decides
+    // Probe gpu.x1.vic_pitch (LIMITS V9): rows of 320, 576 and 2880 bytes (multiples of 64, none of 128) are read as if
+    // rounded down to 256 bytes as a source and written exactly as a destination.
+    .sourcePitchAlign = 256,
+    .destinationPitchAlign = 64,
     .fillThroughMatrix = 1,
     .yccIn = TEGRA_VIC_YCC_IN_RGB | TEGRA_VIC_YCC_IN_COPY,
     .blockLinearIn = 1,
@@ -438,10 +442,14 @@ enum {
     TEGRA_VIC_MAX_DOWNSCALE = 16,  // source / destination, per axis
 };
 
-// Validates an image: geometry the engine can address and every plane's extent inside its mapping.
-static inline const char *tegra_vic_check_image(const TegraVICImage *im, const TegraVICTraits *t, const char *which)
+static inline uint32_t tegra_vic_pitch_align(const TegraVICTraits *t, bool source)
 {
-    (void)which;
+    return source ? t->sourcePitchAlign : t->destinationPitchAlign;
+}
+
+// Validates an image: geometry the engine can address and every plane's extent inside its mapping.
+static inline const char *tegra_vic_check_image(const TegraVICImage *im, uint32_t pitchAlign)
+{
     const TegraVICFormat *f = im->format;
     if (!f)
         return "pixel format the scaler does not take";
@@ -460,7 +468,7 @@ static inline const char *tegra_vic_check_image(const TegraVICImage *im, const T
     for (uint32_t p = 0; p < f->planes; p++) {
         const uint32_t w = tegra_vic_plane_width(f, im->width, p);
         const uint32_t h = tegra_vic_plane_rows(f, im->height, p);
-        uint32_t align = t ? t->pitchAlign : kTegraVICTraits.pitchAlign;
+        uint32_t align = pitchAlign;
         if (im->blockLinear)
             align = 64;  // GOBs are 64 wide
         if (im->base[p] & 0xff)
@@ -500,9 +508,9 @@ static inline const char *tegra_vic_build(const TegraVICImage *src, const TegraV
     if ((dst->format && dst->format->packed && !t->packedYcc) ||
         (!op->fill && src->format && src->format->packed && !t->packedYcc))
         return "packed 4:2:2 this engine has not proven";
-    const char *why = tegra_vic_check_image(dst, t, "destination");
+    const char *why = tegra_vic_check_image(dst, tegra_vic_pitch_align(t, false));
     if (!why && !op->fill)
-        why = tegra_vic_check_image(src, t, "source");
+        why = tegra_vic_check_image(src, tegra_vic_pitch_align(t, true));
     if (why)
         return why;
     if (op->transform > 7)

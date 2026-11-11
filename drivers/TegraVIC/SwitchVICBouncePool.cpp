@@ -3,6 +3,7 @@
 #include <IOKit/IOLocks.h>
 #include <kern/thread.h>
 #include "SwitchVICBouncePool.h"
+#include "TegraVIC.h"
 #include "../../kits/SwitchDMA/SwitchDMAPages.h"
 namespace {
 constexpr uint64_t kBudget = 256ull << 20;
@@ -58,8 +59,9 @@ int switch_vic_bounce_acquire(const TegraVICSurfaceDesc *source, const TegraVICS
 {
     *out = nullptr;
     TegraVICSurfaceDesc requested[2] = {};
-    if (source) tegra_vic_bounce_desc(source, 256, &requested[0]);
-    if (destination) tegra_vic_bounce_desc(destination, 256, &requested[1]);
+    const TegraVICTraits *traits = tegra_vic_traits();
+    if (source) tegra_vic_bounce_desc(source, tegra_vic_pitch_align(traits, true), &requested[0]);
+    if (destination) tegra_vic_bounce_desc(destination, tegra_vic_pitch_align(traits, false), &requested[1]);
     if (requested[0].length > kBudget || requested[1].length > kBudget - requested[0].length) return -12;
     if (!initialize()) return -12;
     IOLockLock(gLock);

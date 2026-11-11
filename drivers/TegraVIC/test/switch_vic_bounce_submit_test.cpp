@@ -111,23 +111,31 @@ int switch_vic_submit_checked(const TegraVICJob *, uint32_t, const TegraVICAcqui
     accept(done,context); return 0;
 }
 TEST_F(Bounce, FullOverwriteQueuesSourceVicAndCopybackWithoutPreservingDestination) {
-    auto src = makeSurface(true,192), dst = makeSurface(false,192); auto p = plan();
+    auto src = makeSurface(true,192), dst = makeSurface(false,160); auto p = plan();
     ASSERT_EQ(switch_vic_bounce_submit(&src,&dst,&p,0,notify,nullptr,nullptr),1);
     EXPECT_EQ(stages,(std::vector<std::string>{"source","vic","copyback"}));
     EXPECT_EQ(callbacks,0); EXPECT_TRUE(pool.busy); finish(); EXPECT_EQ(callbacks,1);
 }
+TEST_F(Bounce, OnlyTheSourceBouncesAtA64ByteMultiplePitch) {
+    auto src = makeSurface(true,192), dst = makeSurface(false,256); auto p = plan();
+    ASSERT_EQ(switch_vic_bounce_submit(&src,&dst,&p,0,notify,nullptr,nullptr),1);
+    EXPECT_EQ(stages,(std::vector<std::string>{"source","vic"})); finish();
+    stages.clear(); src = makeSurface(true,256); dst = makeSurface(false,192);
+    ASSERT_EQ(switch_vic_bounce_submit(&src,&dst,&p,0,notify,nullptr,nullptr),1);
+    EXPECT_EQ(stages,(std::vector<std::string>{"vic"})); finish();
+}
 TEST_F(Bounce, PartialWritePreservesDestinationBeforeVic) {
-    auto src = makeSurface(true,192), dst = makeSurface(false,192); auto p = plan(false);
+    auto src = makeSurface(true,192), dst = makeSurface(false,160); auto p = plan(false);
     ASSERT_EQ(switch_vic_bounce_submit(&src,&dst,&p,0,notify,nullptr,nullptr),1);
     EXPECT_EQ(stages,(std::vector<std::string>{"source","preserve","vic","copyback"})); finish();
 }
 TEST_F(Bounce, FastFinalCallbackRunsAfterAllAdmissionOwnershipIsReleased) {
-    immediate = true; auto src = makeSurface(true,192), dst = makeSurface(false,192); auto p = plan();
+    immediate = true; auto src = makeSurface(true,192), dst = makeSurface(false,160); auto p = plan();
     ASSERT_EQ(switch_vic_bounce_submit(&src,&dst,&p,0,notify,nullptr,nullptr),1);
     EXPECT_EQ(callbacks,1); EXPECT_EQ(unreservesAtCallback,0);
 }
 TEST_F(Bounce, FailedAcceptedPrefixRetiresBeforeReportingFailure) {
-    failStage = 2; auto src = makeSurface(true,192), dst = makeSurface(false,192); auto p = plan();
+    failStage = 2; auto src = makeSurface(true,192), dst = makeSurface(false,160); auto p = plan();
     ASSERT_EQ(switch_vic_bounce_submit(&src,&dst,&p,0,notify,nullptr,nullptr),1);
     EXPECT_EQ(callbacks,0); EXPECT_TRUE(pool.busy); finish(); EXPECT_EQ(callbacks,1); EXPECT_EQ(result,-5);
 }
@@ -137,7 +145,7 @@ TEST_F(Bounce, InPlaceRequestSnapshotsSourceBeforeWritingOriginal) {
     EXPECT_EQ(stages,(std::vector<std::string>{"source","vic"})); finish();
 }
 TEST_F(Bounce, FinalCopyAdmissionFailureJoinsEarlierVicAndCopy) {
-    failStage = 3; auto src = makeSurface(true,192), dst = makeSurface(false,192); auto p = plan();
+    failStage = 3; auto src = makeSurface(true,192), dst = makeSurface(false,160); auto p = plan();
     ASSERT_EQ(switch_vic_bounce_submit(&src,&dst,&p,0,notify,nullptr,nullptr),1);
     EXPECT_EQ(callbacks,0); ASSERT_EQ(pending.size(),2u);
     auto vic = pending.back(); pending.pop_back(); vic.fn(vic.context,0);
@@ -145,13 +153,13 @@ TEST_F(Bounce, FinalCopyAdmissionFailureJoinsEarlierVicAndCopy) {
     finish(); EXPECT_EQ(callbacks,1); EXPECT_EQ(result,-5);
 }
 TEST_F(Bounce, FullFillSkipsAllReadsAndDestinationPreservation) {
-    auto dst = makeSurface(false,192); auto p = plan(); p.readsSource = 0; p.op[0].fill = 1;
+    auto dst = makeSurface(false,160); auto p = plan(); p.readsSource = 0; p.op[0].fill = 1;
     ASSERT_EQ(switch_vic_bounce_submit(nullptr,&dst,&p,0,notify,nullptr,nullptr),1);
     EXPECT_EQ(stages,(std::vector<std::string>{"vic","copyback"})); finish();
 }
 
 TEST_F(Bounce, FirstStageRefusalLeavesCompletionWithCaller) {
-    failStage = 1; auto src = makeSurface(true,192), dst = makeSurface(false,192); auto p = plan();
+    failStage = 1; auto src = makeSurface(true,192), dst = makeSurface(false,160); auto p = plan();
     EXPECT_EQ(switch_vic_bounce_submit(&src,&dst,&p,0,notify,nullptr,nullptr),-5);
     EXPECT_EQ(callbacks,0); EXPECT_TRUE(pending.empty());
 }
@@ -160,7 +168,7 @@ TEST_F(Bounce, FirstStageRefusalLeavesCompletionWithCaller) {
 // fails the job that depends on it, from that copy's own completion, once everything the job queued has retired. The
 // next job is not touched.
 TEST_F(Bounce, AFillTheGpuFailsFailsItsJobAndNotTheNext) {
-    auto src = makeSurface(true,192), dst = makeSurface(false,192); auto p = plan();
+    auto src = makeSurface(true,192), dst = makeSurface(false,160); auto p = plan();
     ASSERT_EQ(switch_vic_bounce_submit(&src,&dst,&p,0,notify,nullptr,nullptr),1);
     ASSERT_EQ(stages,(std::vector<std::string>{"source","vic","copyback"}));
     auto fill = pending.front(); pending.erase(pending.begin()); fill.fn(fill.context,-5);
@@ -170,7 +178,7 @@ TEST_F(Bounce, AFillTheGpuFailsFailsItsJobAndNotTheNext) {
     finish(); EXPECT_EQ(callbacks,2); EXPECT_EQ(result,0);
 }
 TEST_F(Bounce, ACopyBackTheGpuFailsFailsItsJob) {
-    auto src = makeSurface(true,192), dst = makeSurface(false,192); auto p = plan();
+    auto src = makeSurface(true,192), dst = makeSurface(false,160); auto p = plan();
     ASSERT_EQ(switch_vic_bounce_submit(&src,&dst,&p,0,notify,nullptr,nullptr),1);
     auto copyback = pending.back(); pending.pop_back();
     finish(); EXPECT_EQ(callbacks,0);

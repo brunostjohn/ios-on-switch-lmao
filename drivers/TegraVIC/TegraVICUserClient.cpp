@@ -207,8 +207,8 @@ extern "C" void proc_selfname(char *buf, int size);
 extern "C" int proc_selfpid(void);
 
 // Who allocates surfaces VIC cannot address, once a boot: each one costs the copy engine two copies a job, and the
-// fix is that allocator's row alignment.
-void firstBounce(const TegraVICSurfaceDesc *d, const char *side)
+// fix is that allocator's row or plane alignment.
+void firstBounce(const TegraVICSurfaceDesc *d, bool source)
 {
     static int logged;
     if (__atomic_exchange_n(&logged, 1, __ATOMIC_RELAXED))
@@ -216,10 +216,12 @@ void firstBounce(const TegraVICSurfaceDesc *d, const char *side)
     char name[32];
     proc_selfname(name, sizeof(name));
     os_log(OS_LOG_DEFAULT,
-           "TegraVIC: first bounce this boot: %s[%d] %s '%c%c%c%c' %ux%u, row pitch %llu (VIC takes multiples of %u)",
-           name, proc_selfpid(), side, static_cast<char>(d->fourcc >> 24), static_cast<char>(d->fourcc >> 16),
-           static_cast<char>(d->fourcc >> 8), static_cast<char>(d->fourcc), d->width, d->height,
-           static_cast<unsigned long long>(d->planeBytesPerRow[0]), tegra_vic_traits()->pitchAlign);
+           "TegraVIC: first bounce this boot: %s[%d] %s '%c%c%c%c' %ux%u, row pitch %llu, chroma at %llu (VIC takes "
+           "rows on multiples of %u, planes on 256)",
+           name, proc_selfpid(), source ? "source" : "destination", static_cast<char>(d->fourcc >> 24),
+           static_cast<char>(d->fourcc >> 16), static_cast<char>(d->fourcc >> 8), static_cast<char>(d->fourcc),
+           d->width, d->height, static_cast<unsigned long long>(d->planeBytesPerRow[0]),
+           static_cast<unsigned long long>(d->planeOffset[1]), tegra_vic_pitch_align(tegra_vic_traits(), source));
 }
 #endif
 
@@ -245,16 +247,11 @@ struct Job {
 #endif
 };
 
-uint32_t pitchAlign()
+// How VIC will see a surface: as it is, or (rows or planes it cannot address) as its bounce scratch.
+const char *staged(const TegraVICSurfaceDesc *d, bool source, TegraVICSurfaceDesc *stage,
+                   const TegraVICSurfaceDesc **as, bool *bounced)
 {
-    return tegra_vic_traits()->pitchAlign;
-}
-
-// How VIC will see a surface: as it is, or (rows it cannot address) as its bounce scratch.
-const char *staged(const TegraVICSurfaceDesc *d, TegraVICSurfaceDesc *stage, const TegraVICSurfaceDesc **as,
-                   bool *bounced)
-{
-    const uint32_t align = pitchAlign();
+    const uint32_t align = tegra_vic_pitch_align(tegra_vic_traits(), source);
     const int needed = tegra_vic_bounce_needed(d, align);
     *bounced = needed == 0;
     if (needed < 0)
@@ -464,12 +461,12 @@ IOReturn transform(Conn *conn, const void *in, uint32_t size)
         TegraVICSurfaceDesc dstStage;
         const TegraVICSurfaceDesc *srcAs = &job->src.desc;
         const TegraVICSurfaceDesc *dstAs = &job->dst.desc;
-        why = staged(&job->dst.desc, &dstStage, &dstAs, &job->bounceDst);
+        why = staged(&job->dst.desc, false, &dstStage, &dstAs, &job->bounceDst);
         if (!why && job->plan.readsSource)
-            why = staged(&job->src.desc, &srcStage, &srcAs, &job->bounceSrc);
+            why = staged(&job->src.desc, true, &srcStage, &srcAs, &job->bounceSrc);
 #if TEGRA_VIC_STATS
         if (!why && (job->bounceSrc || job->bounceDst))
-            firstBounce(job->bounceSrc ? &job->src.desc : &job->dst.desc, job->bounceSrc ? "source" : "destination");
+            firstBounce(job->bounceSrc ? &job->src.desc : &job->dst.desc, job->bounceSrc);
 #endif
         if (!why)
             why = tegra_vic_image_from(dstAs, kTegraVICWindowBase + TEGRA_VIC_WINDOW_DST * kTegraVICWindowBytes, &dst);
@@ -834,7 +831,9 @@ extern "C" int tegra_vic_publish(void)
     service->setProperty("NativeSandboxGrantProcess",
                          "backboardd,mediaserverd,replayd,videocodecd,mediaplaybackd,cameracaptured,com.apple.WebKit");
     service->setProperty("TegraVICTraitRotations", (unsigned long long)tegra_vic_traits()->rotations, 32);
-    service->setProperty("TegraVICTraitPitchAlign", (unsigned long long)tegra_vic_traits()->pitchAlign, 32);
+    service->setProperty("TegraVICTraitSourcePitchAlign", (unsigned long long)tegra_vic_traits()->sourcePitchAlign, 32);
+    service->setProperty("TegraVICTraitDestinationPitchAlign",
+                         (unsigned long long)tegra_vic_traits()->destinationPitchAlign, 32);
     IOService *resources = IOService::getResourceService();
     if (!resources || !service->attach(resources)) {
         IOLog("TegraVIC: V3 FAIL could not attach the service\n");

@@ -25,6 +25,7 @@ protected:
     }
 };
 }
+extern "C" const TegraVICTraits *tegra_vic_traits() { return &kTegraVICTraits; }
 bool switch_dma_pages_alloc(switch_dma_pages *out, size_t bytes, IOOptionBits) {
     if (failAllocation) return false;
     ++allocations;

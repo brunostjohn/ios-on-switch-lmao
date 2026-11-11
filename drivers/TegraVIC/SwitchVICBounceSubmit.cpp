@@ -121,9 +121,12 @@ int switch_vic_bounce_submit(const TegraVICSurface *source, const TegraVICSurfac
     }
     if (error) { release(work); return error; }
     auto &sourceAccess = work->access[alias ? 1 : 0];
+    const TegraVICTraits *traits = tegra_vic_traits();
     const bool bounceSrc = plan->readsSource && !work->native.owner &&
-        (sharedDescriptor || tegra_vic_bounce_needed(&source->desc, 256) == 0 || tiled(sourceAccess.backing));
-    const bool bounceDst = tegra_vic_bounce_needed(&destination->desc, 256) == 0 || tiled(work->access[1].backing);
+        (sharedDescriptor || tegra_vic_bounce_needed(&source->desc, tegra_vic_pitch_align(traits, true)) == 0 ||
+         tiled(sourceAccess.backing));
+    const bool bounceDst = tegra_vic_bounce_needed(&destination->desc, tegra_vic_pitch_align(traits, false)) == 0 ||
+                           tiled(work->access[1].backing);
     error = switch_vic_bounce_acquire(bounceSrc ? &source->desc : nullptr, bounceDst ? &destination->desc : nullptr,
                                      &work->slot);
     if (error) { release(work); return error; }
@@ -152,8 +155,8 @@ int switch_vic_bounce_submit(const TegraVICSurface *source, const TegraVICSurfac
         if (!operation.fill && work->native.owner && !switch_native_vic_crop(work->native, &operation)) {
             why = "native source crop"; break;
         }
-        why = tegra_vic_build(operation.fill ? nullptr : &src, &dst, &operation, tegra_vic_traits(),
-                              tegra_vic_config_address(), tegra_vic_filter_address(), &work->jobs[i]);
+        why = tegra_vic_build(operation.fill ? nullptr : &src, &dst, &operation, traits, tegra_vic_config_address(),
+                              tegra_vic_filter_address(), &work->jobs[i]);
     }
     if (why) { release(work); return -22; }
     switch_gpu_cpu_lease *leases[2] = {};

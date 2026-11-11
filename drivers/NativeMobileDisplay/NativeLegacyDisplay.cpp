@@ -5364,7 +5364,7 @@ extern "C" bool native_legacy_detach_ready(void)
     const TegraVICTraits *vic = tegra_vic_ready() ? tegra_vic_traits() : nullptr;
     const bool turns =
         (vic != nullptr) && (vic->rotations & 0x90) == 0x90 && ((vic->yccIn & TEGRA_VIC_YCC_IN_RGB) != 0u);
-    const uint32_t pitch = vic ? vic->pitchAlign : 0;
+    const uint32_t pitch = vic ? vic->sourcePitchAlign : 0;
     const bool pitched =
         (pitch != 0u) && pitch <= native_planes::kPublishedRowAlignment && ((pitch & (pitch - 1)) == 0u);
     const bool ok = planes && turns && pitched;
