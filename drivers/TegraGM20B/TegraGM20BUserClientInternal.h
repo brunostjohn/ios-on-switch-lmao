@@ -70,7 +70,8 @@ namespace tgm_uc
 {
 constexpr uint32_t kMaxChannels = 8;  // fence slots: 16 bytes each in the connection's fence page
 constexpr uint32_t kJobBytes =
-	sizeof(TegraGM20BAbiSubmit) + TegraGM20BMaxJobPushes * sizeof(TegraGM20BAbiPush) +
+	(sizeof(TegraGM20BAbiJob) > sizeof(TegraGM20BAbiSubmit) ? sizeof(TegraGM20BAbiJob) : sizeof(TegraGM20BAbiSubmit)) +
+	TegraGM20BMaxJobPushes * sizeof(TegraGM20BAbiPush) +
 	TegraGM20BMaxJobUses * sizeof(TegraGM20BAbiSurfaceUse) + sizeof(TegraGM20BAbiSubmitEvents) +
 	TegraGM20BMaxJobEvents * sizeof(TegraGM20BAbiEventUse) +
 	sizeof(TegraGM20BAbiSubmitAdmission);

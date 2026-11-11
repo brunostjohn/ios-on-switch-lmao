@@ -24,6 +24,21 @@ IOReturn AGXDeviceUserClient::submitJob(const TegraGM20BAbiSubmitAddress *in, Te
 		const auto record = copyin(in->address, job.bytes, in->bytes)
 					    ? SwitchGpuJobRecord{}
 					    : SwitchGpuJobRecord::parse(job.bytes, in->bytes);
+		if (record.valid() && record.job->channel == header.channel &&
+		    (record.job->flags & TegraGM20BJobAdmissionCancel)) {
+			IOLockLock(lock_);
+			result = admissionCookies_[slot] && admissionCookies_[slot] != record.admission ? kIOReturnBadArgument
+												       : kIOReturnSuccess;
+			if (!result) {
+				admissions_[slot].end();
+				admissionCookies_[slot] = 0;
+				*out = {};
+			}
+			IOLockUnlock(lock_);
+			job.events->clear();
+			IOLockUnlock(submitLocks_[slot]);
+			return result;
+		}
 		if (record.valid() && record.job->channel == header.channel) {
 			const int prepared = job.events->prepare(events_, record.events);
 			result = prepared == -5 ? kIOReturnAborted : ioreturn(prepared);
@@ -104,6 +119,13 @@ IOReturn AGXDeviceUserClient::runJobUses(const SwitchGpuJobRecord &record, JobSc
 	const TegraGM20BAbiJob &head = *record.job;
 	const uint32_t slot = head.channel - 1, count = head.push_count;
 	tgm_chan *chan = chans_[slot];
+	auto &admission = admissions_[slot];
+	const bool admissionBegin = head.flags & TegraGM20BJobAdmissionBegin;
+	const bool admissionContinue = head.flags & TegraGM20BJobAdmissionContinue;
+	if (admissionBegin ? (admission.active() || record.admission <= lastAdmissionCookies_[slot])
+	    : admissionContinue ? (!admission.active() || admissionCookies_[slot] != record.admission)
+				: admission.active())
+		return kIOReturnBadArgument;
 	static_assert(sizeof(tgm_push) == sizeof(TegraGM20BAbiPush) &&
 			      offsetof(tgm_push, no_prefetch) == offsetof(TegraGM20BAbiPush, flags),
 		      "push layouts");
@@ -132,7 +154,7 @@ IOReturn AGXDeviceUserClient::runJobUses(const SwitchGpuJobRecord &record, JobSc
 	constexpr uint32_t kUseAccess = TegraGM20BSurfaceRead | TegraGM20BSurfaceWrite;
 	constexpr uint32_t kUseFlags = kUseAccess | TegraGM20BSurfaceHostWritten | TegraGM20BSurfaceGpuAddress |
 				       TegraGM20BSurfaceRange;
-	const uint32_t claim = switch_gpu_claim_flags(false);
+	const uint32_t claim = switch_gpu_claim_flags(admissionBegin || admissionContinue);
 	for (uint32_t i = 0; i < head.shared_count; ++i) {
 		const TegraGM20BAbiSurfaceUse &use = record.uses[i];
 		const bool addressed = use.access & TegraGM20BSurfaceGpuAddress;
@@ -182,6 +204,8 @@ IOReturn AGXDeviceUserClient::runJobUses(const SwitchGpuJobRecord &record, JobSc
 							nullptr};
 	}
 	const uint32_t guardCount = surfaceCount + nativeGuardCount;
+	if (admissionContinue && !admission.covers(job.uses, useTotal))
+		return kIOReturnBadArgument;
 	job.phases.end(TGM_SUBMIT_RESOLVE);
 	SwitchGpuEventJob *events = job.events;
 	int error = events->sequence(eventChannels_[slot]);
@@ -195,9 +219,24 @@ IOReturn AGXDeviceUserClient::runJobUses(const SwitchGpuJobRecord &record, JobSc
 	uint32_t seqno = 0, dependencies = 0, jobVisibility = 0, leaseCount = 0;
 	bool ownershipBusy = false, ownershipFailed = false;
 refresh:
-	error = count ? SwitchGpuSurfaceRefresh::prepare(job.surfaces, surfaceCount, task_,
-							 job.guards + nativeGuardCount, job.leases, &leaseCount)
-		      : 0;
+	if (admissionContinue) {
+		for (uint32_t i = 0; i < surfaceCount; ++i)
+			job.guards[nativeGuardCount + i] = {job.surfaces[i].backing, job.surfaces[i].generation,
+							    __atomic_load_n(job.surfaces[i].cached, __ATOMIC_ACQUIRE)};
+		error = 0;
+	} else {
+		error = count || admissionBegin ? SwitchGpuSurfaceRefresh::prepare(job.surfaces, surfaceCount, task_,
+										   job.guards + nativeGuardCount,
+										   job.leases, &leaseCount)
+						: 0;
+	}
+	if (!error && admissionBegin) {
+		error = admission.begin(job.uses, useTotal, job.guards, guardCount, job.leases, leaseCount);
+		if (!error) {
+			admissionCookies_[slot] = record.admission;
+			lastAdmissionCookies_[slot] = record.admission;
+		}
+	}
 	ownershipBusy = error == -16;
 	ownershipFailed = error == -5;
 	switch_gpu_chan_submit_enter(chan);
@@ -267,8 +306,13 @@ refresh:
 	}
 	switch_gpu_chan_submit_leave();
 	SwitchGpuSurfaceRefresh::release(job.surfaces, surfaceCount);
-	if (error == SWITCH_GPU_BACKING_STALE && !nativeGuardCount)
+	if (error == SWITCH_GPU_BACKING_STALE && !nativeGuardCount && !admission.active())
 		goto refresh;
+	if (admission.active() && admissionCookies_[slot] == record.admission &&
+	    (error || (head.flags & TegraGM20BJobAdmissionEnd))) {
+		admission.end();
+		admissionCookies_[slot] = 0;
+	}
 	if (ownershipFailed)
 		return kIOReturnAborted;
 	if (ownershipBusy)

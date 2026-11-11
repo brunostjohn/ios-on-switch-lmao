@@ -710,6 +710,20 @@ TEST(GM20BRoomSource, SubmissionMethodsCountTheirPaths)
 		EXPECT_THAT(paths, HasSubstr(name));
 }
 
+// A SubmitJob command buffer of several jobs holds its shared uses' CPU-lock admission from Begin to End, as SubmitAddress
+// did: a Continue job takes the admission's guards instead of refreshing its surfaces, and a refused job ends it.
+TEST(GM20BRoomSource, SubmitJobHoldsACommandBuffersAdmission)
+{
+	const auto job = flat(definition(client(), "IOReturn AGXDeviceUserClient::runJobUses("));
+	EXPECT_THAT(job, HasSubstr("switch_gpu_claim_flags(admissionBegin || admissionContinue)"));
+	expectBefore(job, "if (admissionContinue && !admission.covers(job.uses, useTotal))", "refresh:");
+	expectBefore(job, "error = admission.begin(job.uses, useTotal, job.guards, guardCount, job.leases, leaseCount);",
+		     "switch_gpu_chan_submit_enter(chan);");
+	expectBefore(job, "switch_gpu_chan_submit_leave();", "admission.end();");
+	const auto submit = flat(definition(client(), "IOReturn AGXDeviceUserClient::submitJob("));
+	expectBefore(submit, "(record.job->flags & TegraGM20BJobAdmissionCancel)", "runJob(record, job, out)");
+}
+
 // A fence wait woken at its seqno decides from the fence page alone; the connection lock is for publishing, errors and
 // timeouts.
 TEST(GM20BRoomSource, AWokenFenceWaitTakesNoConnectionLock)

@@ -63,6 +63,16 @@ enum {
 	TegraGM20BJobHostWritten = 1u << 1, /* the CPU wrote memory the job reads through the GPU L2 since the last job */
 	TegraGM20BJobHasEvents = 1u << 2,   /* a TegraGM20BAbiSubmitEvents and its uses follow the shared uses */
 	TegraGM20BJobQuiet = 1u << 3,       /* accepted and not yet honoured: the job still raises its interrupt */
+	/* A command buffer of several jobs holds its shared uses' admission from its first job to its last, so a CPU lock of
+	 * any of them orders after the whole command buffer: Begin with the first job's uses, Continue (uses covered by
+	 * Begin's), End with the last; Cancel (no pushes, no uses) gives it back after a refused job. A
+	 * TegraGM20BAbiSubmitAdmission (its cookie: larger than the channel's last) follows the shared uses. */
+	TegraGM20BJobAdmissionBegin = 1u << 4,
+	TegraGM20BJobAdmissionContinue = 1u << 5,
+	TegraGM20BJobAdmissionEnd = 1u << 6,
+	TegraGM20BJobAdmissionCancel = 1u << 7,
+	TegraGM20BJobAdmission = TegraGM20BJobAdmissionBegin | TegraGM20BJobAdmissionContinue |
+				 TegraGM20BJobAdmissionEnd | TegraGM20BJobAdmissionCancel,
 };
 
 /* Method 33, reply TegraGM20BAbiExecReply. Pushes and shared uses are as SubmitAddress's (TegraGM20BPushFence allowed);
