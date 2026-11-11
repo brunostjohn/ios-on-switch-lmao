@@ -17,6 +17,8 @@ namespace {
 constexpr const char *kPack = "/System/Library/Extensions/TegraGM20BMetal.raw/pack.bin";
 constexpr uint32_t kTriangleStrip = 4, kBgra8 = 80;
 constexpr uint64_t kKeyBase = 0xbe7c000000000000ull;
+// Placed programs stay in the device's shader heap for its life: a long session starts a fresh device now and then
+constexpr uint64_t kRecordsPerDevice = 4096;
 
 // placeCompute caches a placed kernel by its record's address for the device's life, so a record's address must never
 // name another kernel: the records outlive every device the bench opens
@@ -50,19 +52,24 @@ struct switch_bench {
     const raw::PackKernel *kernel = nullptr;
     raw::Texture image;
     raw::Sampler sampler;
+    bool imageMade = false, samplerMade = false;
     uint64_t records = 0;
     std::string error;
 
     bool open()
     {
-        device = std::make_unique<raw::Device>();
-        if (!device->open(kPack, 0, error, raw::Device::Role::Client))
+        auto opened = std::make_unique<raw::Device>();
+        if (!opened->open(kPack, 0, error, raw::Device::Role::Client))
             return false;
+        device = std::move(opened);
         fragment = bench::fragmentTemplate(device->pack());
         kernel = bench::kernelTemplate(device->pack());
         raw::SamplerDesc nearest;
-        if (!device->createTexture(64, 64, kBgra8, image, true) || !device->createSampler(nearest, sampler)) {
+        imageMade = device->createTexture(64, 64, kBgra8, image, true);
+        samplerMade = imageMade && device->createSampler(nearest, sampler);
+        if (!samplerMade) {
             error = "no memory for the template's texture and sampler";
+            close();
             return false;
         }
         for (uint32_t i = 0; i < 64 * 64; i++)
@@ -79,10 +86,11 @@ struct switch_bench {
 
     void close()
     {
-        if (device) {
+        if (device && samplerMade)
             device->destroySampler(sampler);
+        if (device && imageMade)
             device->destroyTexture(image);
-        }
+        imageMade = samplerMade = false;
         device.reset();
         fragment = nullptr;
         kernel = nullptr;
@@ -335,7 +343,7 @@ bool timeDraws(switch_bench &b, const switch_bench_experiment &x, Target &t, raw
             uint64_t gpu = 0, wall = 0;
             if (x.fill)
                 fill(t.color, x, bpp);
-            if (!s.render(t, pipeline, x.draws[c], gpu, wall))
+            if (!s.render(t, pipeline, pipeline ? x.draws[c] : 0, gpu, wall))
                 return false;
             if (k >= x.warmup) {
                 r.gpu_ns[c * x.repeats + k - x.warmup] = gpu;
@@ -367,16 +375,19 @@ void runRender(switch_bench &b, const switch_bench_experiment &x, switch_bench_r
     std::vector<uint32_t> others =
         b.fragment ? otherFormats(d.pack().string(b.fragment->keyString)) : std::vector<uint32_t>();
     t.others.resize(x.kind == SWITCH_BENCH_NOOP ? 0 : others.size());
-    bool made = d.createTexture(x.width, x.height, x.format, t.color, true);
-    for (size_t i = 0; made && i < t.others.size(); i++)
-        made = d.createMemoryless(x.width, x.height, others[i], t.others[i]);
-    if (!made)
+    const bool colorMade = d.createTexture(x.width, x.height, x.format, t.color, true);
+    size_t othersMade = 0;
+    while (colorMade && othersMade < t.others.size() &&
+           d.createMemoryless(x.width, x.height, others[othersMade], t.others[othersMade]))
+        othersMade++;
+    if (!colorMade || othersMade < t.others.size())
         fail(r, SWITCH_BENCH_ERROR, "no memory for the target");
     else if (timeDraws(b, x, t, pipeline, r))
         readBack(t.color, x, bpp, r);
-    for (raw::Texture &other : t.others)
-        d.destroyTexture(other);
-    d.destroyTexture(t.color);
+    for (size_t i = 0; i < othersMade; i++)
+        d.destroyTexture(t.others[i]);
+    if (colorMade)
+        d.destroyTexture(t.color);
 }
 
 void runCompute(switch_bench &b, const switch_bench_experiment &x, switch_bench_result &r)
@@ -463,6 +474,10 @@ void switch_bench_run(struct switch_bench *b, const struct switch_bench_experime
 {
     r->status = SWITCH_BENCH_OK;
     r->why[0] = 0;
+    if (b->records >= kRecordsPerDevice) {
+        b->records = 0;
+        b->reopen();
+    }
     if (!b->device && !b->open())
         return fail(*r, SWITCH_BENCH_ERROR, "no raw device: " + b->error);
     if (!valid(*x, *r))
