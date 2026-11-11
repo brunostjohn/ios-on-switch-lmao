@@ -1,6 +1,6 @@
 H.265 on NVENC 5.0 (T210 nvenc.bin, app id 3): what the firmware reads, and the values NVIDIA's T210 driver gives it.
-Used by TegraNVENCCheckH265.h and SwitchVideoEncoders/AVE/HEVCNVENC.c; test/hevcnvenc_host.c checks the setup byte
-for byte against the driver's at three sizes. IDR pictures only: P pictures are not established (below).
+Used by TegraNVENCCheckH265.h and SwitchVideoEncoders/AVE/HEVCNVENC.c; test/hevcnvenc_host.c checks the IDR and P
+setups byte for byte against the driver's at three sizes.
 
 Firmware (TegraNVENC/firmware/nvidia/tegra210/nvenc.bin, read with tools/falcon; addresses are image offsets = falcon
 code addresses). The OS (0x0-0x500, overlay 0x500-0xc00) picks app 3 from SET_APPLICATION_ID at 0x619: code
@@ -64,13 +64,36 @@ The NVENC magic is built three times (movk #0xd0b7): 0x31128 (TVMR codec 0, H.26
     byte NVENC 5.0's H.264 app reads except fields the configuration sets (8x8 transform and profile, MV limits from
     the level, sub-8x8 partitions).
 
-HEVCNVENC.c differs from the driver's IDR setup where it says: its own control offsets and buffers, the GP timer on,
-wp_control_offset 0 and gpTimer_timeout_val set (both unread), the rate control QPs from the picture's (the driver's
-I, I + 2, I + 5).
+P pictures (the driver's DPB, fn 0x45490, an HM-style reference picture manager, evaluated with memset and memcpy
+modelled, for the IDR then two P pictures at the three sizes):
+  - DPB: two slots at the default of one reference (ctx+0x2ec + 1, 0x46160); picture POC n is reconstructed in slot
+    n & 1 (OUT_REF_PIC_LUMA, 0x4066c) and a P picture's list is its predecessor's slot (ctx+0x121a8, 0x45cd0-0x45d0c).
+  - Setup (only these bytes differ from the IDR's, at every size; the ME, MD and quant controls do not): l0[0] =
+    slot << 1, temp_dist_l0[0] = POC difference 1 (0x3fa9c-0x3fb34); dist_scale_factor 256 in every entry (0x402b8:
+    (16384 + |td| / 2) / td x td); POC LSB; pic_type 0 with ref_pic_flag (0x3e638-0x3e658); NAL type 1, TRAIL_R
+    (ctx+0x10d54, 0x455d8-0x455e8); short_term_ref_pic_set_sps_flag 1, index 0 (0x3e6e0-0x3e6ec), the slice's own RPS
+    left 0 (0x3e780); NumPocTotalCurr 1 (0x3e950-0x3e984); the slice control's QP the P QP (I + 2, 0x3f510),
+    num_ref_idx_active_override_flag 0 (the PPS default's count, 0x40524) and slice_type 0.
+  - slice_type: the driver gives 0 for P and 1 for B (0x3eb9c-0x3ebd4, 0x3f510), its pic_type numbering, which its DPB
+    code uses throughout (ctx+0x10d70: 0 P, 1 B, 2 I, 3 IDR; list 1 built for 1 only, 0x45d10). nvenc_drv.h numbers
+    the field as H.265 does (0 B, 1 P). App 3 passes it to I[0xa28] bits 6-7 unread (0x10bc4, 0x1041b). Which slice
+    type NVENC writes into the stream is not established; with this SPS and PPS either decodes (a B slice's list 1 is
+    the same one-picture RPS, num_ref_idx_l1_default 1).
+  - Methods: per list-0 entry IN_REF_PIC<slot>_LUMA only on chip 6 (0x3fd28, 0x3fedc, 0x3fe0c); the ME predictor pair
+    in k, out k ^ 1, k flipped each P picture (0x403d4-0x40410, 0x403c4); PICTURE_INDEX pictures since the session began
+    (ctx+0x10a1c, incremented after the submit, 0x3f978). The driver's predictor buffers: (width/16 + 3 & ~3) x
+    (height/16 + 1) x 4 bytes, 256-aligned (0x3a558-0x3a5e0); the RC process buffer 256 bytes (0x3a694).
+  - NVENC writes the slice segment header itself: I[0x1800] picture type, IDR bit, NAL type and temporal id
+    (0x13c7d-0x13cc8), I[0x1810] POC LSB and picture index (0x13e36-0x13e4d), I[0x180c] POC LSB length (0x146ee),
+    I[0x181c] num_ref_idx override and counts (0x10b9f-0x10bbd), I[0x1978] RPS flag, index and NumPocTotalCurr
+    (0x14540-0x145a6), I[0x1ae4] and I[0x1b28-0x1b3c] the slice's RPS, long-term and list-modification tables
+    (0x145ad-0x146e7). AVEEncoder.c sends NVENC's bitstream as it is; HEVCEncSyntax.c's slice header is its model,
+    checked against the setup in test/hevcnvenc_host.c, not written to the stream.
 
-P pictures (not built): NvMedia type 1 gives pic_type 0 and a slice_type 0, B, slice control (0x3f510); the lists come
-from the driver's DPB state, which the evaluation did not populate. HEVCEncSyntax.c's P slice header is not known to
-be what this path codes.
+HEVCNVENC.c differs from the driver where it says: its own control offsets and buffers, the GP timer on,
+wp_control_offset 0 and gpTimer_timeout_val set (both unread), the rate control QPs from the picture's (the driver's
+I, I + 2, I + 5; app 3 reads the block only under rate control, 0x1493d), the DPB slot and ME predictor buffer taken
+from the POC (the driver's predictor index runs on through IDRs), one reference always.
 
 github.com/mickys/nvenc (MIT) src/hevcenctmpl.h, NVIDIA's desktop driver's HEVC blocks for NVENC 7 and later, agrees
 with this driver's chip > 7 branch (0x3cabc: shape 0 0xff0c0c00/0x0c0c) and has T210's quant bytes (6b 05 ff aa aa ff
