@@ -49,13 +49,13 @@ enum X1PrecisionProbe {
         var metrics = Metrics()
         var lines: [String] = []
         var base: [String] = []
-        var changed: [String] = []
+        var changed: [String] = [], refused: [String] = [], silent: [String] = []
         var paths: [String] = []
-        var emitted = 0
         for arm in arms {
             journal.starting(
                 "\(arm.name) set=\(arm.set.map { String(format: "%04x=%x", $0.0, $0.1) }.joined(separator: ","))")
             var fields: [String] = []
+            var emitted = 0
             do {
                 for (format, bits, state) in stores {
                     let target = try gpu.texture(format, 256, 256, usage: [.renderTarget, .shaderRead])
@@ -81,24 +81,37 @@ enum X1PrecisionProbe {
                     fields.append("\(pair.name):\(counts.chip)/\(counts.separate)")
                 }
             } catch {
-                fields.append("refused")
+                fields = ["refused"]
                 metrics.set("\(arm.name)_why", LogLine.sanitized(String(String(describing: error).prefix(80))))
             }
-            if arm.name == "base" { base = fields } else if fields != base { changed.append(arm.name) }
+            if arm.set.isEmpty {
+                base = fields
+            } else if fields == ["refused"] {
+                refused.append(arm.name)
+            } else if emitted == 0 {
+                fields = ["not_emitted"]
+                silent.append(arm.name)
+            } else if fields != base {
+                changed.append(arm.name)
+            }
             lines.append("\(arm.name)=\(fields.joined(separator: "+"))")
         }
-        metrics.set("rule", "rop.store")
+        metrics.set("rule", "fetch.blend")
         metrics.set("changed_arms", changed.isEmpty ? "-" : changed.joined(separator: ","))
+        metrics.set("refused_arms", refused.isEmpty ? "-" : refused.joined(separator: ","))
+        metrics.set("not_emitted_arms", silent.isEmpty ? "-" : silent.joined(separator: ","))
         metrics.set("base", base.joined(separator: "+"))
         metrics.set("arms", lines.joined(separator: ","))
         let offPath = paths.filter { $0 != "raw" }
+        let judged = arms.count - 1 - refused.count - silent.count
         let verdict: ClaimVerdict =
-            !offPath.isEmpty || base.contains("refused") ? .inconclusive : changed.isEmpty ? .pass : .fail
+            !offPath.isEmpty || base == ["refused"] || judged == 0 ? .inconclusive : changed.isEmpty ? .pass : .fail
         let note =
             !offPath.isEmpty
             ? "not on the raw path: \(offPath.joined(separator: ","))"
-            : changed.isEmpty ? "" : "a control moved the ROP: see arms"
-        return ProbeFinding(verdict, metrics, note: note).emitting(emitted)
+            : judged == 0
+                ? "no arm's controls reached a draw" : changed.isEmpty ? "" : "a control moved the ROP: see arms"
+        return ProbeFinding(verdict, metrics, note: note)
     }
 
     /// One command buffer with the arm's controls set around its draws; the base arm arms nothing
@@ -107,7 +120,7 @@ enum X1PrecisionProbe {
     ) async throws
         -> (path: String, emitted: Int)
     {
-        if arm.set.isEmpty { return (try await gpu.run(encode).path, 1) }
+        if arm.set.isEmpty { return (try await gpu.run(encode).path, 0) }
         let drawn = try await RawMethods.draw(gpu, before: arm.set, after: arm.restore, encode)
         return (drawn.path, drawn.emitted)
     }

@@ -28,6 +28,9 @@ enum X1IteratedBlendProbe {
         var constants: [UInt16] = []
         var perTargetOff = true
         var separate: UInt32 = 1
+        /// Whether the claim rests on this arm: its words decoded field by field against clb197.h here (overlay's and
+        /// plus-clamped's are Ryujinx's words with formulas of ours: reported, not judged)
+        var judged = true
         /// RGB of a premultiplied source over a premultiplied destination, (s, sa, d, da) per channel; nil: refusal
         /// expected, no picture judged
         let rgb: ((Double, Double, Double, Double) -> Double)?
@@ -52,13 +55,13 @@ enum X1IteratedBlendProbe {
                 0x3000_0421, 0x2000_c001, 0x3000_0621, 0x1000_c201, 0x8068_c031, 0x0056_ac05, 0x0050_1036,
                 0x3058_1036, 0x3064_c806, 0x0060_1036, 0x1021_7001, 0x3000_6401, 0x000d_c801,
             ],
-            constants: [0x3800, 0x3800, 0x3800],
+            constants: [0x3800, 0x3800, 0x3800], judged: false,
             rgb: { s, sa, d, da in
                 (2 * d <= da ? 2 * s * d : sa * da - 2 * (da - d) * (sa - s)) + s * (1 - da) + d * (1 - sa)
             }),
         Arm(
             name: "plus_clamped_rgba", program: [0x3010_5029, 0x0000_1e11, 0x3030_3029, 0x1280_1e11, 0x0000_9029],
-            enable: 3, rgb: { s, _, d, _ in min(s + d, 1) }, alpha: { sa, da in min(sa + da, 1) }),
+            enable: 3, judged: false, rgb: { s, _, d, _ in min(s + d, 1) }, alpha: { sa, da in min(sa + da, 1) }),
         Arm(
             name: "multiply_two", program: [0x0038_5001, 0x000c_4201],
             rgb: { s, sa, d, da in s * d + s * (1 - da) + d * (1 - sa) }),
@@ -143,7 +146,7 @@ enum X1IteratedBlendProbe {
                 "\(arm.name) words=\(words(arm).map { String(format: "%04x=%x", $0.0, $0.1) }.joined(separator: ","))")
             let target = try gpu.texture(.bgra8Unorm, size, size, usage: [.renderTarget, .shaderRead])
             try await gpu.upload(initial, to: target, bytesPerRow: size * 4)
-            let isNVN = !arm.program.isEmpty && arm.rgb != nil
+            let isNVN = !arm.program.isEmpty && arm.rgb != nil && arm.judged
             if isNVN { nvnRun += 1 }
             do {
                 let drawn = try await RawMethods.draw(gpu, before: words(arm), after: restore) { commands in
