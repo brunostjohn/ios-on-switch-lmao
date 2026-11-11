@@ -191,7 +191,6 @@ struct ControlReservePathTest: GPUPathTest {
 struct CpuCompletePathTest: GPUPathTest {
     let id = "gpu.path.cpu_complete"
     let name = "The kernel maintains a GPU write's cached range at completion"
-    let bit: Int? = 24
     let counters = ["cpu_completes"]
 
     func exercise(_ gpu: GPU, _: TestContext, _ metrics: inout Metrics) async throws -> [String] {

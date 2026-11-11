@@ -419,11 +419,8 @@ bool Kernel::channel(uint32_t engines, uint32_t &channel, const volatile uint32_
         setError("fence map failed");
         return false;
     }
-    const uint64_t recordBytes = (info_.flags & TegraGM20BInfoCpuComplete)
-        ? sizeof(TegraGM20BAbiFence) + sizeof(TegraGM20BAbiFenceSemantic) + sizeof(TegraGM20BAbiFenceIdentity)
-        : (info_.flags & TegraGM20BInfoSemanticFence)
-            ? sizeof(TegraGM20BAbiFence) + sizeof(TegraGM20BAbiFenceSemantic)
-            : killRecords() ? sizeof(TegraGM20BAbiFence) : sizeof(uint32_t);
+    const uint64_t recordBytes =
+        sizeof(TegraGM20BAbiFence) + sizeof(TegraGM20BAbiFenceSemantic) + sizeof(TegraGM20BAbiFenceIdentity);
     if ((r.fence_offset & 7) || r.fence_offset > fenceMapBytes_ || recordBytes > fenceMapBytes_ - r.fence_offset) {
         closeChannel(r.channel);
         setError("fence record outside mapped range");
@@ -503,8 +500,6 @@ bool Kernel::cpuAccess(const Bo &bo, uint64_t offset, uint64_t bytes, uint32_t a
 
 CpuCompletionResult Kernel::completeCpu(const CpuCompletion &completion)
 {
-    if (completion.supported && !(info_.flags & TegraGM20BInfoCpuComplete))
-        return CpuCompletionResult::Failed;
     return completeCpuRanges(completion, [&](const auto &request, auto &reply) {
         const int kr = call(TegraGM20BMethodCpuComplete, &request, sizeof request, &reply, sizeof reply);
         if (kr != KERN_SUCCESS)

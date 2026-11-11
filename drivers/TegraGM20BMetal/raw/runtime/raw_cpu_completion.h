@@ -10,7 +10,7 @@ namespace raw {
 enum class CpuCompletionResult { Legacy, Current, Stale, Failed };
 
 struct CpuCompletion {
-    bool supported = false, valid = true;
+    bool valid = true;
     uint64_t channelUid = 0;
     uint32_t channel = 0, seqno = 0;
     std::vector<TegraGM20BAbiCpuRange> ranges;
@@ -40,8 +40,6 @@ struct CpuCompletion {
 
 template <class Submit> CpuCompletionResult completeCpuRanges(const CpuCompletion &completion, Submit submit)
 {
-    if (!completion.supported)
-        return CpuCompletionResult::Legacy;
     if (!completion.valid)
         return CpuCompletionResult::Failed;
     if (completion.ranges.empty())

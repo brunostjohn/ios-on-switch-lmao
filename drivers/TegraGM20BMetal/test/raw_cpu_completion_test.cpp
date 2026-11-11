@@ -6,22 +6,18 @@ namespace {
 raw::CpuCompletion completion()
 {
     raw::CpuCompletion result;
-    result.supported = true;
     result.channelUid = (uint64_t(7) << 48) | 2;
     result.channel = 9;
     result.seqno = 0;
     return result;
 }
 
-TEST(CpuCompletion, GpuOnlyAndLegacyWritesMakeNoCall)
+TEST(CpuCompletion, GpuOnlyWritesMakeNoCall)
 {
     unsigned calls = 0;
     auto submit = [&](const auto &, auto &) { ++calls; return false; };
     auto batch = completion();
     EXPECT_EQ(raw::completeCpuRanges(batch, submit), raw::CpuCompletionResult::Current);
-    batch.supported = false;
-    batch.ranges.push_back({1, 0, 64});
-    EXPECT_EQ(raw::completeCpuRanges(batch, submit), raw::CpuCompletionResult::Legacy);
     EXPECT_EQ(calls, 0u);
 }
 

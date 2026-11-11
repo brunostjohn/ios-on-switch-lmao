@@ -31,8 +31,7 @@ CpuCompletion Device::captureCpuCompletion(uint32_t seqno, uint64_t generation,
                                            const std::vector<const Buffer *> &buffers)
 {
     CpuCompletion result;
-    result.supported = (k_.info().flags & TegraGM20BInfoCpuComplete) != 0;
-    if (!result.supported || buffers.empty())
+    if (buffers.empty())
         return result;
     std::lock_guard<std::mutex> lock(lock_);
     if (generation != channelGeneration() || !channelReady_.load(std::memory_order_acquire) || fence_ == &kNoFence) {

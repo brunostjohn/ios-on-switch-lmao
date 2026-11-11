@@ -39,7 +39,6 @@ struct Model {
     std::vector<TegraGM20BAbiSurfaceUse> resourceUses;
     std::vector<uint8_t> submitted;
     unsigned submissions = 0;
-    bool cpuComplete = true;
     bool rangeUses = false;
     bool pushFences = false;
     std::vector<std::vector<uint8_t>> records;
@@ -97,7 +96,6 @@ extern "C" kern_return_t IOConnectCallStructMethod(mach_port_t connection, uint3
         info.flags = TegraGM20BInfoSubmitAddress |
                      (model.rangeUses ? uint32_t(TegraGM20BInfoUseRanges) : 0u) |
                      (model.pushFences ? uint32_t(TegraGM20BInfoPushFences) : 0u) |
-                     (model.cpuComplete ? uint32_t(TegraGM20BInfoCpuComplete) : 0u) |
                      (model.shared ? uint32_t(TegraGM20BInfoSharedEvents | TegraGM20BInfoSemanticFence |
                                               TegraGM20BInfoResourceReady) : 0u);
         info.va_start = 0x1000000;
@@ -553,26 +551,19 @@ static void admission(bool tunnel, bool supported)
           "cancellation has no push, resource or event payload");
 }
 
-static void cpuCompletion(bool tunnel, bool supported)
+static void cpuCompletion(bool tunnel)
 {
     model = {};
     model.tunnel = tunnel;
-    model.cpuComplete = supported;
     raw::Kernel kernel;
     std::string error;
     check(kernel.open(error), "actual CPU completion connection opens");
     raw::CpuCompletion batch;
-    batch.supported = true;
     batch.channelUid = (uint64_t(9) << 48) | 7;
     batch.channel = 3;
     batch.seqno = 0;
     batch.ranges = {{19, 17, 128}, {20, 0, 64}};
     const auto result = kernel.completeCpu(batch);
-    if (!supported) {
-        check(result == raw::CpuCompletionResult::Failed && !model.cpuCalls,
-              "unadvertised CPU completion cannot issue a call");
-        return;
-    }
     check(result == raw::CpuCompletionResult::Current && model.cpuCalls == 1,
           "cached ranges publish through one completion call");
     check(model.cpuRequest.channel_uid == batch.channelUid && model.cpuRequest.channel == 3 &&
@@ -610,8 +601,7 @@ int main()
     admission(false, true);
     admission(true, true);
     admission(false, false);
-    cpuCompletion(false, true);
-    cpuCompletion(true, true);
-    cpuCompletion(false, false);
+    cpuCompletion(false);
+    cpuCompletion(true);
     printf("PASS: %u shared-event transport checks\n", checks);
 }

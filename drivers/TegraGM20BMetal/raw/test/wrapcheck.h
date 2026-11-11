@@ -109,7 +109,6 @@ struct DeviceHarness {
         Buffer cached, wc;
         if (!device.createBuffer(256, cached, false) || !device.createBuffer(64, wc, true))
             std::abort();
-        flags |= TegraGM20BInfoCpuComplete;
         Buffer alias = cached;
         alias.cpu += 64;
         alias.va += 64;
@@ -117,7 +116,7 @@ struct DeviceHarness {
         Buffer hidden = cached;
         hidden.hostVisible = false;
         const auto snapshot = device.captureCpuCompletion(0, device.channelGeneration(), {&alias, &cached, &wc, &hidden});
-        expect(snapshot.supported && snapshot.valid && snapshot.channelUid == state.identity.channel_uid &&
+        expect(snapshot.valid && snapshot.channelUid == state.identity.channel_uid &&
                snapshot.channel == device.channel_ && snapshot.seqno == 0,
                "accepted cached snapshot retains full kernel identity and valid zero prefix");
         expect(snapshot.ranges.size() == 1 && snapshot.ranges[0].bytes == cached.length,
@@ -138,9 +137,6 @@ struct DeviceHarness {
                "cached range outside its BO cannot reach completion maintenance");
         expect(device.captureCpuCompletion(0, device.channelGeneration(), {&wc, &hidden}).ranges.empty(),
                "GPU-only buffers need no CPU completion ranges");
-        flags &= ~uint32_t(TegraGM20BInfoCpuComplete);
-        expect(!device.captureCpuCompletion(0, device.channelGeneration(), {&cached}).supported,
-               "CPU completion capability is required before reading the extended fence record");
         device.fence_ = originalFence;
         flags = originalFlags;
         device.destroyBuffer(cached);

@@ -82,7 +82,6 @@ enum {
     TegraGM20BInfoSharedEvents = 1u << 21,
     TegraGM20BInfoSemanticFence = 1u << 22,
     TegraGM20BInfoResourceReady = 1u << 23,
-    TegraGM20BInfoCpuComplete = 1u << 24,
     TegraGM20BInfoUseRanges = 1u << 25,
     TegraGM20BInfoPushFences = 1u << 26, /* SubmitAddress takes TegraGM20BPushFence */
 };
@@ -104,7 +103,7 @@ struct TegraGM20BAbiCpuCompleteReply {
     uint32_t reserved;
 };
 
-/* With InfoCpuComplete, this follows AbiFenceSemantic in the validated read-only fence mapping. */
+/* This follows AbiFenceSemantic in the validated read-only fence mapping. */
 struct TegraGM20BAbiFenceIdentity {
     uint64_t channel_uid;
 };
