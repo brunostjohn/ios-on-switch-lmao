@@ -11,13 +11,17 @@ import VideoToolbox
 /// decode.native_export_main10 is the same count for HEVC Main 10: the decoder's P010 picture goes out as the 'x420'
 /// surface's two 16-bit planes (LIMITS V12), where every Main 10 picture used to be a VIC copy.
 struct NativeExportTest: HWTest {
-    var id = "decode.native_export"
-    var name = "H.264 720p: pictures exported natively against VIC copies, by the decoder's count"
-    var codec = VideoCodec.h264
-    var probe = "V1"
+    let id: String
+    let name: String
+    let codec: VideoCodec
+    let probe: String
     let subsystem = Subsystem.decode
     var timeout: TimeInterval { 60 }
 
+    static let h264 = NativeExportTest(
+        id: "decode.native_export",
+        name: "H.264 720p: pictures exported natively against VIC copies, by the decoder's count", codec: .h264,
+        probe: "V1")
     static let main10 = NativeExportTest(
         id: "decode.native_export_main10",
         name: "HEVC Main 10 720p: P010 pictures exported natively against VIC copies, by the decoder's count",

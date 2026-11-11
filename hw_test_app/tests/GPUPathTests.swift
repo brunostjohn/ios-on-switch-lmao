@@ -294,11 +294,14 @@ struct UseRangesPathTest: GPUPathTest {
 /// gpu.path.native_surface_view_p010 does the same with HEVC Main 10's first picture: 'x420' planes as r16Unorm and
 /// rg16Unorm over the decoder's 16-bit block-linear picture, each sample's 16 bits against the CPU's rows.
 struct NativeSurfaceViewPathTest: GPUPathTest {
-    var id = "gpu.path.native_surface_view"
-    var name = "Draws sample a decoded picture where the decoder put it, matching its CPU rows"
-    var codec = VideoCodec.h264
+    let id: String
+    let name: String
+    let codec: VideoCodec
     let counters = ["native_tiled_views", "native_reads"]
 
+    static let nv12 = NativeSurfaceViewPathTest(
+        id: "gpu.path.native_surface_view",
+        name: "Draws sample a decoded picture where the decoder put it, matching its CPU rows", codec: .h264)
     static let p010 = NativeSurfaceViewPathTest(
         id: "gpu.path.native_surface_view_p010",
         name: "Draws sample a decoded Main 10 picture's 16-bit planes where the decoder put them, matching its CPU rows",
@@ -525,7 +528,7 @@ struct ResourceReadyPathTest: GPUPathTest {
 enum GPUPathTests {
     static let all: [any HWTest] = [
         JobVisibilityPathTest(), LeanCopyPathTest(), ControlReservePathTest(), CpuCompletePathTest(),
-        UseRangesPathTest(), NativeSurfaceViewPathTest(), NativeSurfaceViewPathTest.p010, SemanticFencePathTest(),
+        UseRangesPathTest(), NativeSurfaceViewPathTest.nv12, NativeSurfaceViewPathTest.p010, SemanticFencePathTest(),
         SharedEventsPathTest(),
         ResourceReadyPathTest(),
     ]
