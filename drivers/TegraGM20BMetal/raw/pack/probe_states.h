@@ -313,6 +313,11 @@ inline std::vector<std::string> corpusLines(NSString *text, bool own)
                             "20 | v ycbcr_store_vert | f ycbcr_store_luma16_frag",
                             "30 | v ycbcr_store_vert | f ycbcr_store_chroma8_frag",
                             "60 | v ycbcr_store_vert | f ycbcr_store_chroma16_frag",
+                            "13 | v turn_vert | f turn_copy8_frag",
+                            "23 | v turn_vert | f turn_copy16_frag",
+                            "53 | v turn_vert | f turn_copy32_frag",
+                            "103 | v turn_vert | f turn_copy64_frag",
+                            "123 | v turn_vert | f turn_copy128_frag",
                             "115 | v xr_vert | f xr_bgr10_frag",
                             "115 | v xr_vert | f xr_bgra10_frag",
                             "115 | v xr_vert | f xr_planes_frag",
@@ -347,6 +352,8 @@ inline std::vector<std::string> corpusLines(NSString *text, bool own)
                               "260/260 | v resolve_vert | f resolve_depth32fs8_"})
         for (const char *filter : {"sample0_frag", "min_frag", "max_frag"})
             lines.push_back(std::string("@O R ok=1 label=raw.own samples=1 topo=0 ds=") + depth + filter);
+    for (const char *depth : {"250/0 | v turn_vert | f turn_depth16_frag", "252/0 | v turn_vert | f turn_depth32f_frag"})
+        lines.push_back(std::string("@O R ok=1 label=raw.own samples=1 topo=0 ds=") + depth);
     for (const char *out : {"c0=115:15:0:1:0:0:1:0:0 | v two_plane_cover | f two_plane_load",
                             "c0=10:15:0:1:0:0:1:0:0 c1=30:15:0:1:0:0:1:0:0 | v two_plane_cover | f two_plane_store"})
         lines.push_back(std::string("@O R ok=1 label=raw.own samples=1 topo=0 ds=0/0 ") + out);

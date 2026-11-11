@@ -2784,13 +2784,12 @@ Device::Backing *Device::plainBacking(const Texture &m, uint32_t tag, bool block
     t.va = mem->span.va;
     t.storage = {t.va, bytes, false};
     t.cpu = memory == kPlainPool ? mem->span.cpu : nullptr;
-    if (m.zeta && m.samples > 1) {  // a resolve's source (RawMetalEncode.mm depth resolves) samples it
+    if (m.zeta) {  // a depth resolve's or a turn copy's source samples it
         if (!(t.tic = allocTic())) {
             if (!mem->views)
                 dropPlain(mem);
             return nullptr;
         }
-        t.samples = m.samples;
         writeTic(t);
     }
     if (!m.zeta) {

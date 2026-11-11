@@ -158,7 +158,9 @@ int main(int argc, char **argv)
             {"f xr_bgra10_frag", tagged(MTLPixelFormatRGBA16Uint)},
             {"f xr_planes_frag", tagged(MTLPixelFormatRG32Uint)},
             {"f two_plane_store", tagged(MTLPixelFormatRGBA16Float)},
-            {"f ycbcr_store_", tagged(MTLPixelFormatRGBA32Float)}};
+            {"f ycbcr_store_", tagged(MTLPixelFormatRGBA32Float)},
+            {"f turn_copy", tagged(MTLPixelFormatR32Uint)},
+            {"f turn_depth", tagged(MTLPixelFormatDepth32Float)}};
         const std::vector<id<MTLTexture>> multisampled = tagged(MTLPixelFormatBGRA8Unorm, 4),
                                           multisampledDepth = tagged(MTLPixelFormatDepth32Float, 4);
         auto texturesOf = [&](const std::string &line, bool ours) -> const std::vector<id<MTLTexture>> & {

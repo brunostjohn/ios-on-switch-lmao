@@ -67,6 +67,7 @@
 #include "raw_xr.h"
 #include "raw_ycbcr.h"
 #include "raw_rotation.h"
+#include "raw_turn_copy.h"
 #include "../fx/fx_mip.h"
 
 namespace raw {
@@ -525,7 +526,7 @@ struct ColorAttachment {
 struct DepthStencilAttachment {
     Texture *texture = nullptr;
     bool clearDepth = false, clearStencil = false;  // the aspect's load is Clear (else DontCare)
-    bool kept = true;  // an aspect is loaded or stored: its contents outside the pass matter
+    bool loaded = true, stored = true;  // an aspect is loaded, or stored: its contents outside the pass matter
     float depth = 1;
     uint32_t stencil = 0;
 };
@@ -568,6 +569,11 @@ public:
     const Texture *depthTarget() const
     {
         return pass_.depthStencil.texture;
+    }
+
+    bool turned() const
+    {
+        return rot_.turned();
     }
 
     uint32_t areaWidth() const
@@ -903,6 +909,12 @@ class CommandBuffer {
 public:
     Refusal refusal;                              // the last refused draw's predicate and its values
     RenderEncoder *render(const PassDesc &pass);  // null: an attachment the raw path cannot render to
+    // raw_turn_copy.h: each texel of `dst` from `src`'s at `map`, both of one texel size or depth format (a pass of the pack's
+    // turn copy state; `src` given a texture header where it has none); false: *why
+    bool turnCopy(const Texture &dst, Texture &src, const TurnMap &map, const char **why);
+    // A block-linear image of `width` x `height` texels of `format` (turnCopyFormat's, or a depth format), the device's backing
+    // of tag `tag` for this command buffer: what a turn copy moves texels through; null where none can be had
+    Texture *turnScratch(uint32_t format, uint32_t width, uint32_t height, uint32_t tag);
     BlitEncoder *blit();
     // CPU lines the GPU reads in this submission (CPU-written cached memory): cleaned to memory before it is submitted.
     // `invalidate`: also dropped from the CPU's caches (memory the GPU writes, so no dirty line lands on it later).
@@ -1204,6 +1216,9 @@ public:
     // A header of plain texture `t`'s memory whose word 0 is `word0` (raw_view.h: m2v's view of it in another format
     // of the same texel size), made on first use and freed with t's header; 0: no header slot left
     uint32_t viewTic(const Texture &t, uint32_t word0);
+    // `t` with a texture header (a depth/stencil texture made only to be rendered gets one, a turn copy reading it); false: no
+    // header slot left
+    bool sampleable(Texture &t);
 
     // Whether the connection is NVK's (raw_kernel.h): m2v's views alias this path's memory
     bool shared() const

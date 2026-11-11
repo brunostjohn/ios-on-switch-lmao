@@ -107,6 +107,12 @@ def key_hash(rec: dict) -> int:
     for family, vertex, fragments in (
         ('ycbcr', 'ycbcr_vert', ('converted_frag', 'srgb_frag', 'codes_frag', 'codes10_frag')),
         ('ycbcr_store', 'ycbcr_store_vert', ('luma8_frag', 'luma16_frag', 'chroma8_frag', 'chroma16_frag')),
+        (
+            'turn',
+            'turn_vert',
+            tuple(f'copy{bits}_frag' for bits in (8, 16, 32, 64, 128))
+            + ('depth16_frag', 'depth32f_frag'),
+        ),
         ('xr', 'xr_vert', ('bgr10_frag', 'bgra10_frag', 'planes_frag')),
         ('two_plane', 'two_plane_cover', ('load', 'store')),
         (

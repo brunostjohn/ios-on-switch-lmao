@@ -25,7 +25,9 @@ inline raw::ProbeTextures probeTextures(const std::string &line, bool ours)
                                                                 {"f xr_bgra10_frag", {MTLPixelFormatRGBA16Uint, 1}},
                                                                 {"f xr_planes_frag", {MTLPixelFormatRG32Uint, 1}},
                                                                 {"f two_plane_store", {MTLPixelFormatRGBA16Float, 1}},
-                                                                {"f ycbcr_store_", {MTLPixelFormatRGBA32Float, 1}}};
+                                                                {"f ycbcr_store_", {MTLPixelFormatRGBA32Float, 1}},
+                                                                {"f turn_copy", {MTLPixelFormatR32Uint, 1}},
+                                                                {"f turn_depth", {MTLPixelFormatDepth32Float, 1}}};
     for (const auto &[fragment, textures] : sets)
         if (line.find(std::string("| ") + fragment) != std::string::npos)
             return textures;

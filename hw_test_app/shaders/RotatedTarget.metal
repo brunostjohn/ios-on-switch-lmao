@@ -43,3 +43,14 @@ fragment float4 rotated_fwidth_fragment(RotatedVertex in [[stage_in]])
 {
     return float4(fwidth(in.uv.x) > 1.0f / 96.0f ? 1.0f : 0.0f, fwidth(in.uv.y) > 1.0f / 64.0f ? 1.0f : 0.0f, 0.0f, 1.0f);
 }
+
+/// Its colour into a turned attachment and its inverse into an unturned one beside it
+struct RotatedPair {
+    float4 turned [[color(0)]];
+    float4 beside [[color(1)]];
+};
+
+fragment RotatedPair rotated_pair_fragment(RotatedVertex in [[stage_in]])
+{
+    return {in.color, float4(1.0f - in.color.rgb, 1.0f)};
+}

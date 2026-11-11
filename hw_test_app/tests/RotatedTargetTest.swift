@@ -8,9 +8,11 @@ import Metal
 /// CAMetalLayer drawable on the turned display), rotations 1 to 4, against the same draws into a plain texture turned by
 /// Metal's measured store map (metal2vulkan-runtime rotated.rs). The raw path draws straight into the plane through the
 /// viewport coordinate swizzle, a state that reads the plane's axes through its turned variant (its position, one axis's
-/// derivative), a private depth texture neither loaded nor stored through a backing laid out as the plane, and a 4x
-/// resolve into the plane through the resolve state's turned variant: those cells FAIL when they run anywhere else
-/// (path= other than raw). Rotation 4's transposed load is reported, not required (residual_paths=, r4_<shape>_load_path=).
+/// derivative), a private depth texture neither loaded nor stored through a backing laid out as the plane, a 4x resolve
+/// into the plane through the resolve state's turned variant, a private colour texture stored beside the plane and a
+/// private depth texture loaded beside it (each through a stand-in laid out as the plane, turned in and back by the
+/// pack's turn copies), and rotation 4's load, which Metal makes transposed (its expected bytes the reference pass
+/// loading pass 1's frame flipped top to bottom): those cells FAIL when they run anywhere else (path= other than raw).
 /// native_cells / native_raw count the required cells and those that ran raw; tie_wrong counts the pixels the plane's
 /// rasteriser decides apart from the frame's where an edge runs through pixel centres (its tie rule turns too).
 struct RotatedTargetTest: HWTest {
@@ -33,7 +35,7 @@ struct RotatedTargetTest: HWTest {
         let states = try RotatedStates(gpu)
         var metrics = Metrics()
         var failures: [String] = []
-        var residual = PathTally()
+        var r4Load = PathTally()
         var native = 0, nativeRaw = 0, tieWrong = 0
         for turn in 1...4 {
             for shape in Self.shapes {
@@ -45,13 +47,8 @@ struct RotatedTargetTest: HWTest {
                 }
                 for cell in shape.cells {
                     let name = "r\(turn)_\(shape.name)_\(cell.rawValue)"
-                    if cell == .load && turn == 4 {
-                        let result = try await cells.run(.load, into: plane, checked: false)
-                        residual.add(result.path)
-                        metrics.set("r4_\(shape.name)_load_path", result.path)
-                        continue
-                    }
                     let result = try await cells.run(cell, into: plane)
+                    if cell == .load && turn == 4 { r4Load.add(result.path) }
                     switch cell.kind {
                     case .native:
                         let required = raw && (cell != .fetch || result.referencePath == "raw")
@@ -69,7 +66,7 @@ struct RotatedTargetTest: HWTest {
         metrics.set("native_cells", native)
         metrics.set("native_raw", nativeRaw)
         metrics.set("tie_wrong", tieWrong)
-        metrics.set("residual_paths", residual.isEmpty ? "-" : residual.text)
+        metrics.set("r4_load_paths", r4Load.isEmpty ? "-" : r4Load.text)
         metrics.set("paths", gpu.paths.text)
         return failures.isEmpty
             ? .pass(metrics, proof: gpu.proof) : .fail(failures.joined(separator: "; "), metrics, proof: gpu.proof)
@@ -77,7 +74,7 @@ struct RotatedTargetTest: HWTest {
 }
 
 enum RotatedCell: String, CaseIterable {
-    case clear, draw, load, points, fetch, position, derivative, fwidth, depth, resolve, tie
+    case clear, draw, load, points, fetch, position, derivative, fwidth, depth, resolve, beside, keptDepth, tie
 
     enum Kind { case native, informational }
 
@@ -85,7 +82,7 @@ enum RotatedCell: String, CaseIterable {
 }
 
 struct RotatedStates {
-    let plain, position, derivative, fwidth, fetch, depthTested, multisampled: MTLRenderPipelineState
+    let plain, position, derivative, fwidth, fetch, depthTested, multisampled, pair: MTLRenderPipelineState
     let lessEqual: MTLDepthStencilState
 
     init(_ gpu: GPU) throws {
@@ -101,6 +98,9 @@ struct RotatedStates {
             vertex: "rotated_vertex", fragment: "rotated_fragment", format: .bgra8Unorm, depth: .depth32Float)
         multisampled = try gpu.render(
             vertex: "rotated_vertex", fragment: "rotated_fragment", format: .bgra8Unorm, samples: 4)
+        pair = try gpu.render(vertex: "rotated_vertex", fragment: "rotated_pair_fragment", format: .bgra8Unorm) {
+            $0.colorAttachments[1].pixelFormat = .bgra8Unorm
+        }
         let d = MTLDepthStencilDescriptor()
         d.depthCompareFunction = .lessEqual
         d.isDepthWriteEnabled = true
@@ -113,9 +113,15 @@ struct RotatedStates {
 
 /// One rotation's cells: each encodes its draws into the turned texture and into a plain one of the frame, and compares
 /// the plane's bytes with the plain texture's turned by Metal's store map
+/// The private textures a cell's runs drew beside the target, in run order
+final class BesideTextures {
+    var textures: [MTLTexture] = []
+}
+
 struct RotatedCells {
     let gpu: GPU
     let states: RotatedStates
+    let beside = BesideTextures()
     let turn: Int
     let width, height: Int
     let aligned: Bool
@@ -175,13 +181,26 @@ struct RotatedCells {
         try await gpu.upload([UInt8](repeating: 0x5a, count: w * h * 4), to: reference, bytesPerRow: w * 4)
         var referencePath = ""
         var path = ""
-        for pass in passes(cell) {
+        beside.textures.removeAll()
+        for (n, pass) in passes(cell).enumerated() {
+            if n == 1 && cell == .load && turn == 4 {
+                // Metal loads a rotation-4 plane transposed: the reference loads pass 1's frame flipped top to bottom
+                let first = try await gpu.read(reference, bytesPerPixel: 4)
+                let flipped = (0..<h).flatMap { y in first[((h - 1 - y) * w * 4)..<((h - y) * w * 4)] }
+                try await gpu.upload(Array(flipped), to: reference, bytesPerRow: w * 4)
+            }
             let plain = try await gpu.run { pass($0, reference) }.path
             let turned = try await gpu.run { pass($0, plane.texture) }.path
             if referencePath.isEmpty || referencePath == "raw" { referencePath = plain }
             if path.isEmpty || path == "raw" { path = turned }
         }
         guard checked else { return Result(path: path, referencePath: referencePath, wrong: 0) }
+        var wrongBeside = 0
+        if beside.textures.count == 2 {
+            let a = try await gpu.read(beside.textures[0], bytesPerPixel: 4)
+            let b = try await gpu.read(beside.textures[1], bytesPerPixel: 4)
+            wrongBeside = zip(a, b).filter { $0 != $1 }.count
+        }
         let expected = try await gpu.read(reference, bytesPerPixel: 4)
         guard plane.surface.lock(options: .readOnly, seed: nil) == 0 else {
             throw TestFailure("IOSurfaceLock for the readback failed")
@@ -196,7 +215,7 @@ struct RotatedCells {
                 if !zip(got, expected.pixel(x, y, width: w)).allSatisfy({ $0 == $1 }) { wrong += 1 }
             }
         }
-        return Result(path: path, referencePath: referencePath, wrong: wrong)
+        return Result(path: path, referencePath: referencePath, wrong: wrong + wrongBeside)
     }
 
     private func fill(_ plane: Plane, _ byte: UInt8) throws {
@@ -247,6 +266,10 @@ struct RotatedCells {
             return [depthTested]
         case .resolve:
             return [resolved]
+        case .beside:
+            return [besideStored]
+        case .keptDepth:
+            return [keptDepth]
         case .tie:
             return [encode(load: .clear) { e in shapes(e, halfPixelRect(10.5, 5.5, 30.5, 20.5), [1, 1, 1, 1], states.plain) }]
         }
@@ -285,6 +308,55 @@ struct RotatedCells {
         shapes(e, at(rect(30, 20, 90, 60), 0.3), [0, 0, 1, 1], states.depthTested)
         shapes(e, at(rect(20, 10, 70, 50), 0.5), [0, 1, 0, 1], states.depthTested)
         e.endEncoding()
+    }
+
+    /// The draws into the target and, inverted, into a private texture of the frame beside it, stored: both runs' private
+    /// textures must agree byte for byte
+    private func besideStored(_ commands: MTLCommandBuffer, _ target: MTLTexture) {
+        guard let beside = try? gpu.texture(.bgra8Unorm, width, height) else { return }
+        self.beside.textures.append(beside)
+        let pass = MTLRenderPassDescriptor()
+        for (i, texture) in [target, beside].enumerated() {
+            pass.colorAttachments[i].texture = texture
+            pass.colorAttachments[i].loadAction = .clear
+            pass.colorAttachments[i].clearColor = MTLClearColor(red: 0.2, green: 0.4, blue: 0.6, alpha: 1)
+            pass.colorAttachments[i].storeAction = .store
+        }
+        let e = commands.makeRenderCommandEncoder(descriptor: pass)!
+        shapes(e, rect(4, 2, 60, 40), [1, 0, 0, 1], states.pair)
+        shapes(e, rect(30, 20, 90, 60), [0, 1, 0, 1], states.pair)
+        e.endEncoding()
+    }
+
+    /// A depth-only pass of the frame's private depth texture, stored, then a pass into the target loading it: the nearer
+    /// rectangle of the first pass hides the second's where they overlap
+    private func keptDepth(_ commands: MTLCommandBuffer, _ target: MTLTexture) {
+        guard let depth = try? gpu.texture(.depth32Float, width, height, usage: .renderTarget),
+            let depthOnly = try? gpu.render(
+                vertex: "rotated_vertex", fragment: "rotated_fragment", format: .invalid, depth: .depth32Float)
+        else { return }
+        let at = { (r: [SIMD4<Float>], z: Float) in r.map { SIMD4<Float>($0.x, $0.y, z, 1) } }
+        let first = MTLRenderPassDescriptor()
+        first.depthAttachment.texture = depth
+        first.depthAttachment.loadAction = .clear
+        first.depthAttachment.clearDepth = 1
+        first.depthAttachment.storeAction = .store
+        let e = commands.makeRenderCommandEncoder(descriptor: first)!
+        e.setDepthStencilState(states.lessEqual)
+        shapes(e, at(rect(10, 5, 50, 45), 0.25), [0, 0, 0, 1], depthOnly)
+        e.endEncoding()
+        let second = MTLRenderPassDescriptor()
+        second.colorAttachments[0].texture = target
+        second.colorAttachments[0].loadAction = .clear
+        second.colorAttachments[0].clearColor = MTLClearColor(red: 0.2, green: 0.4, blue: 0.6, alpha: 1)
+        second.colorAttachments[0].storeAction = .store
+        second.depthAttachment.texture = depth
+        second.depthAttachment.loadAction = .load
+        second.depthAttachment.storeAction = .dontCare
+        let f = commands.makeRenderCommandEncoder(descriptor: second)!
+        f.setDepthStencilState(states.lessEqual)
+        shapes(f, at(rect(20, 10, 80, 55), 0.5), [1, 1, 0, 1], states.depthTested)
+        f.endEncoding()
     }
 
     /// The draws into a 4x private texture of the frame, resolved into the target

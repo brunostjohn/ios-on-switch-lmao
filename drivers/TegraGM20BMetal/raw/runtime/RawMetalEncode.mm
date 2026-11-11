@@ -9,6 +9,7 @@
 #include "raw_compute_lookup.h"
 #include "raw_clear.h"
 #include "raw_samples.h"
+#include "raw_turned_pass.h"
 
 // ---- the tape onto the raw path ----
 // false: something in it the raw path cannot do after all (*why); nothing of it was submitted then. A refusal inside one
@@ -215,6 +216,7 @@ static bool encodeRawAttempt(RMCommandBuffer *cb, size_t from, size_t to, const 
 
     std::vector<Resolve> resolves;
     std::deque<raw::Texture> resolveTargets;  // the encoder reads them until its end()
+    raw::TurnedPass turned;  // the open pass's turn copies (raw_turned_pass.h)
     // A depth attachment's resolve (raw_samples.h depthResolveState): a pass of the depth resolve state of its format and filter
     // into the resolve texture, writing each pixel's depth whatever it held
     struct DepthResolve {
@@ -599,9 +601,9 @@ static bool encodeRawAttempt(RMCommandBuffer *cb, size_t from, size_t to, const 
                 p.depthStencil.texture = &z->_raw;
                 p.depthStencil.clearDepth = pass.depthLoad == MTLLoadActionClear;
                 p.depthStencil.clearStencil = pass.stencilLoad == MTLLoadActionClear;
-                p.depthStencil.kept = pass.depthLoad == MTLLoadActionLoad || pass.stencilLoad == MTLLoadActionLoad ||
-                                      pass.depthStore != MTLStoreActionDontCare ||
-                                      pass.stencilStore != MTLStoreActionDontCare;
+                p.depthStencil.loaded = pass.depthLoad == MTLLoadActionLoad || pass.stencilLoad == MTLLoadActionLoad;
+                p.depthStencil.stored =
+                    pass.depthStore != MTLStoreActionDontCare || pass.stencilStore != MTLStoreActionDontCare;
                 p.depthStencil.depth = float(std::clamp(pass.clearDepth, 0.0, 1.0));
                 p.depthStencil.stencil = pass.clearStencil;
             }
@@ -613,6 +615,8 @@ static bool encodeRawAttempt(RMCommandBuffer *cb, size_t from, size_t to, const 
                 if (standInPass(t, false))
                     return false;
             standInLoads.clear();
+            if (!turned.begin(*rc, p, why))
+                return fail(PredPassRotated, *why);
             if (!(re = rc->render(p)))
                 return fail(PredEncPassRender, "a pass the raw path cannot render to", p.count);
             planSplitPrograms(cb, at, *re);
@@ -627,7 +631,7 @@ static bool encodeRawAttempt(RMCommandBuffer *cb, size_t from, size_t to, const 
 #endif
             break;
         case OpEnd:
-            if (re && at + 1 < to && cb->_plan.operation(at + 1).op == OpRender &&
+            if (re && at + 1 < to && cb->_plan.operation(at + 1).op == OpRender && !re->turned() &&
                 raw::canFusePasses(fusionPass(cb, renderBegin), fusionPass(cb, at + 1))) {
                 continuing = true;
                 break;
@@ -643,6 +647,8 @@ static bool encodeRawAttempt(RMCommandBuffer *cb, size_t from, size_t to, const 
                 ce->end();
                 ce.reset();
             }
+            if (!turned.end(*rc, why))
+                return fail(PredPassRotated, *why);
             if (!storeStandIns())
                 return false;
             re = nullptr;
@@ -713,6 +719,8 @@ static bool encodeRawAttempt(RMCommandBuffer *cb, size_t from, size_t to, const 
         be->end();
     if (ce)
         ce->end();
+    if (!turned.end(*rc, why))
+        return fail(PredPassRotated, *why);
     if (!storeStandIns())
         return false;
     xrPlanes.flush();

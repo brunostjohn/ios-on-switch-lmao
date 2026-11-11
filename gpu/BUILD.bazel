@@ -182,6 +182,8 @@ metal_plugin(
         GM20B_METAL + ":raw/runtime/raw_xr_planes.cpp",
         GM20B_METAL + ":raw/runtime/raw_zeta.cpp",
         GM20B_METAL + ":raw/runtime/raw_multisample.cpp",
+        GM20B_METAL + ":raw/runtime/raw_turn_copy.cpp",
+        GM20B_METAL + ":raw/runtime/raw_turned_pass.cpp",
         GM20B_METAL + ":raw/runtime/raw_comp.cpp",
         GM20B_METAL + ":raw/runtime/raw_record_parts.cpp",
         GM20B_METAL + ":raw/runtime/raw_direct.cpp",

@@ -270,7 +270,7 @@ def build(work: Path, bridge: Path, metal_abi: Path) -> None:
         [HERE / 'native_seed.mm', RAW / 'runtime/RawDirect.mm', RAW / 'runtime/RawRenderKey.mm'],
         tuple(RAW / f'runtime/{name}.cpp' for name in (*DIRECT_RUNTIME, 'raw_cache', 'raw_kernel_cache')),
     )
-    own = ('ycbcr', 'ycbcr_store', 'xr', 'resolve', 'mip')
+    own = ('ycbcr', 'ycbcr_store', 'xr', 'resolve', 'mip', 'turn')
     # resolve.metal's sums in sample order and its NaN tests kept; ycbcr_store.metal's NaN tests and half rounding
     exact = {'resolve': ['-fno-fast-math'], 'ycbcr_store': ['-fno-fast-math']}
     for name in own:

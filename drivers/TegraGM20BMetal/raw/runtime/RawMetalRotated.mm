@@ -72,12 +72,12 @@ raw::RotatedRefusal rotatedPassRefusal(MTLRenderPassDescriptor *pass)
     if (!any)
         return raw::RotatedRefusal::None;
     p.depthStencil.texture = rawOf(pass.depthAttachment.texture ?: pass.stencilAttachment.texture);
-    p.depthStencil.kept = pass.depthAttachment.loadAction == MTLLoadActionLoad ||
-                          pass.stencilAttachment.loadAction == MTLLoadActionLoad ||
-                          (pass.depthAttachment.texture && pass.depthAttachment.storeAction != MTLStoreActionDontCare) ||
-                          (pass.stencilAttachment.texture && pass.stencilAttachment.storeAction != MTLStoreActionDontCare);
-    raw::Rotation r;
-    return raw::passRotation(p, r);
+    p.depthStencil.loaded = pass.depthAttachment.loadAction == MTLLoadActionLoad ||
+                            pass.stencilAttachment.loadAction == MTLLoadActionLoad;
+    p.depthStencil.stored =
+        (pass.depthAttachment.texture && pass.depthAttachment.storeAction != MTLStoreActionDontCare) ||
+        (pass.stencilAttachment.texture && pass.stencilAttachment.storeAction != MTLStoreActionDontCare);
+    return raw::turnablePass(p);
 }
 
 uint8_t passTurn(MTLRenderPassDescriptor *pass)
