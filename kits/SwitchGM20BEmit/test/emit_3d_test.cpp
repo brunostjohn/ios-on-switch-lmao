@@ -212,10 +212,9 @@ TEST(Emit3D, RenderTargetsAsRawWritesThem)
 
 TEST(Emit3D, BarriersAsRawWritesThem)
 {
-    expectRawSays(
-        "tiledCacheDrain(p_, dev_->k_.info());\n    p_.m(WAIT_FOR_IDLE, 0);\n    p_.m(INVALIDATE_SHADER_CACHES, "
-        "kBetweenPasses);\n    p_.m(INVALIDATE_TEXTURE_DATA_CACHE_NO_WFI, 0);");
-    expectRawSays("p.m(PIXEL_SHADER_BARRIER, 0);\n    p.m(INVALIDATE_TEXTURE_DATA_CACHE_PIXEL_ORDERED, 0);\n}");
+    expectRawSays("kit(p_, switch_gm20b_pass_barrier, tiledCache(dev_->k_.info()));");
+    expectRawSays("kit(p, switch_gm20b_pass_barrier, false);");
+    expectRawSays("kit(p, switch_gm20b_pixel_shader_barrier);\n}");
     for (const bool tiled : {false, true}) {
         EXPECT_EQ(Words(ours([&](nv_push *p) {
                       switch_gm20b_pass_barrier(p, tiled);
@@ -224,7 +223,8 @@ TEST(Emit3D, BarriersAsRawWritesThem)
                       if (tiled)
                           p.m(uint32_t(driver::raw_tiled_cache_h::c_TILED_CACHE_FLUSH), 0);
                       p.m(uint32_t(g::c_WAIT_FOR_IDLE), 0);
-                      p.m(uint32_t(g::c_INVALIDATE_SHADER_CACHES), uint32_t(g::c_kBetweenPasses));
+                      p.m(uint32_t(g::c_INVALIDATE_SHADER_CACHES),
+                          uint32_t(g::c_kFlushData | g::c_kInvalidateData | g::c_kInvalidateConstant));
                       p.m(uint32_t(g::c_INVALIDATE_TEXTURE_DATA_CACHE_NO_WFI), 0);
                   })));
     }

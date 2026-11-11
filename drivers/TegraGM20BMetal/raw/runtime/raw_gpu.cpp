@@ -143,11 +143,6 @@ constexpr uint32_t kInvalidateInstruction = NVDEF(NVB197, INVALIDATE_SHADER_CACH
                    kFlushData = NVDEF(NVB197, INVALIDATE_SHADER_CACHES, FLUSH_DATA, TRUE),
                    kInvalidateData = NVDEF(NVB197, INVALIDATE_SHADER_CACHES, DATA, TRUE),
                    kInvalidateConstant = NVDEF(NVB197, INVALIDATE_SHADER_CACHES, CONSTANT, TRUE);
-// Between passes: the shaders' data writes flushed, their data caches invalidated, and the constant caches too: bytes the copy
-// engine, the 2D engine or a shader wrote since the submission's prologue may be bound as a constant buffer after, and the SMs'
-// constant caches do not see such writes (NVK opens each of m2v's encoders, a command buffer of its own, with a constant
-// invalidate, and its transfer-write to uniform-read barrier has one)
-constexpr uint32_t kBetweenPasses = kFlushData | kInvalidateData | kInvalidateConstant;
 // An instance of a draw: BEGIN with INSTANCE_ID SUBSEQUENT (two words), the first vertex or index and the count (three), END
 constexpr uint32_t kInstanceWords = 6;
 // NVK's copies of pitch memory (nouveau_copy_rect)
@@ -3873,10 +3868,7 @@ void RenderEncoder::barrier()
 {
     if (p_.room() < 64)
         reserve();
-    tiledCacheDrain(p_, dev_->k_.info());
-    p_.m(WAIT_FOR_IDLE, 0);
-    p_.m(INVALIDATE_SHADER_CACHES, kBetweenPasses);
-    p_.m(INVALIDATE_TEXTURE_DATA_CACHE_NO_WFI, 0);
+    kit(p_, switch_gm20b_pass_barrier, tiledCache(dev_->k_.info()));
     attachmentWrites_ = {};
     written_.clear();
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
@@ -4821,8 +4813,7 @@ void RenderEncoder::fetchBarrier(Push &p)
         break;
     }
 #endif
-    p.m(PIXEL_SHADER_BARRIER, 0);
-    p.m(INVALIDATE_TEXTURE_DATA_CACHE_PIXEL_ORDERED, 0);
+    kit(p, switch_gm20b_pixel_shader_barrier);
 }
 
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
@@ -5303,9 +5294,7 @@ void RenderEncoder::end()
     uint32_t *start = reinterpret_cast<uint32_t *>(d.alloc(d.push_, room * 4, 256, va));
     Push p{start, start + room};
     p.raw(restore.data(), uint32_t(restore.size()));
-    p.m(WAIT_FOR_IDLE, 0);
-    p.m(INVALIDATE_SHADER_CACHES, kBetweenPasses);
-    p.m(INVALIDATE_TEXTURE_DATA_CACHE_NO_WFI, 0);
+    kit(p, switch_gm20b_pass_barrier, false);
     // ahead of the clears: a clear reaches every sample of its rectangle's pixels through it
     if (samples_ > 1)
         sampleWords(p, samples_, d.root_.va);
@@ -5345,9 +5334,7 @@ void RenderEncoder::end()
         own = true;
     }
     if (own) {
-        p.m(WAIT_FOR_IDLE, 0);
-        p.m(INVALIDATE_SHADER_CACHES, kBetweenPasses);
-        p.m(INVALIDATE_TEXTURE_DATA_CACHE_NO_WFI, 0);
+        kit(p, switch_gm20b_pass_barrier, false);
     }
     uint32_t count = 0;
     for (uint32_t j = 0; j < pass_.count && j < 8; j++)
