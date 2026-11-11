@@ -38,6 +38,8 @@ final class ProbeArmsTests: XCTestCase {
         XCTAssertEqual(CellVerdict.of(relaxed: dirty, unguarded: dirty), .fails)
         XCTAssertEqual(CellVerdict.claim([.holds, .holds]), .pass)
         XCTAssertEqual(CellVerdict.claim([.holds, .blind]), .inconclusive)
+        XCTAssertEqual(CellVerdict.claim([.holds, .holds, .blind]), .pass)
+        XCTAssertEqual(CellVerdict.claim([.blind, .blind, .holds]), .inconclusive)
         XCTAssertEqual(CellVerdict.claim([.holds, .fails, .blind]), .fail)
         XCTAssertEqual(CellVerdict.claim([]), .inconclusive)
     }
