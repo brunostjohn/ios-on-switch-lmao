@@ -4,9 +4,9 @@ import HWTestGPU
 import Metal
 
 /// Event waits no raw work follows go to the GPU, not the scheduler: a command buffer of a wait then a signal relays one
-/// queue's producer to a second event in a job of no work, a command buffer that ends in a wait completes only after its
-/// producer (its job's completion), and a third queue's copy waits for the relayed value before reading the producer's
-/// bytes. The producer runs two 64 MiB fills, so it is still on the GPU as the waits are submitted; no wait holds its
+/// queue's producer to a second event in a job of no work, a command buffer that ends in a wait completes (where its
+/// producer stood then is logged: two queues' completions are not ordered), and a third queue's copy waits for the relayed
+/// value before reading the producer's bytes. The producer runs two 64 MiB fills, so it is still on the GPU as the waits are submitted; no wait holds its
 /// queue on the CPU and no signal's value is set by the CPU.
 struct NativeEventWaitTest: NativeObjectTest {
     let id = "metal.native.event_waits"
@@ -65,7 +65,6 @@ struct NativeEventWaitTest: NativeObjectTest {
             work.failures.append("the \(name) command buffer never completed")
         }
         metrics.set("producer_at_tail", producerAtTail.value == .completed ? "completed" : "\(producerAtTail.value.rawValue)")
-        if producerAtTail.value != .completed { work.failures.append("a command buffer ending in a wait beat its producer") }
         let wrong = (0..<4096).filter { check.contents().load(fromByteOffset: $0, as: UInt8.self) != 0x5a }.count
         metrics.set("wrong_bytes", wrong)
         if wrong != 0 { work.failures.append("\(wrong) bytes the relayed wait let through early") }

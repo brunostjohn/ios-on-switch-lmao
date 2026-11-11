@@ -539,7 +539,7 @@ static bool encodeRawAttempt(RMCommandBuffer *cb, size_t from, size_t to, const 
                 p.depthStencil.depth = float(std::clamp(pass.clearDepth, 0.0, 1.0));
                 p.depthStencil.stencil = pass.clearStencil;
             } else {
-                p.hiddenZeta = passTestsHiddenZeta(cb, at);
+                p.hiddenZeta = pass.testsHiddenZeta;
             }
             p.width = uint32_t(std::min<NSUInteger>(pass.width, UINT32_MAX));
             p.height = uint32_t(std::min<NSUInteger>(pass.height, UINT32_MAX));
