@@ -42,4 +42,5 @@ const char *switch_vic_probe_running();
 
 int switch_vic_pitch_probe_run(void *reply);
 int switch_vic_layout_probe_run(void *reply);
+int switch_vic_fraction_probe_run(void *reply);
 #endif

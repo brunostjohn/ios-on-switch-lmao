@@ -81,6 +81,7 @@ enum {
     TEGRA_VIC_FILTER_1TAP = 0,
     TEGRA_VIC_FILTER_2TAP = 1,
     TEGRA_VIC_ALPHA_OPAQUE = 0,
+    TEGRA_VIC_ALPHA_BACKGROUND = 1,  // every pixel's alpha the background's (OUT_BACKGROUND_ALPHA)
     TEGRA_VIC_ALPHA_SOURCE_STREAM = 3,
 };
 

@@ -257,6 +257,7 @@ BY_IOS: dict[str, dict[str, bool]] = {
         'gpu.x1.fill_bbox': False,
         'gpu.m2v.msaa_fetch': False,
         'gpu.x1.vic_block_linear': False,
+        'gpu.x1.vic_fractional': False,
     },
 }
 
