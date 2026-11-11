@@ -283,6 +283,7 @@ IOReturn AppleD5500UserClient::run(uint32_t method, const void *in, uint32_t inS
     }
     case TegraNVDECMethodSubmit: {
         uint32_t fence = 0;
+        bool waitedForRoom = false;
         const char *why = nullptr;
         const TegraNVDECSubmit *submit = static_cast<const TegraNVDECSubmit *>(in);
         int err = -22;
@@ -298,13 +299,13 @@ IOReturn AppleD5500UserClient::run(uint32_t method, const void *in, uint32_t inS
         if (submit->codec < 32 && (codecs & (1u << submit->codec)) && (!tenBit || (codecs & TEGRA_NVDEC_HEVC_MAIN10))) {
 #if SWITCH_NVDEC_PROBES
             if (probe) {
-                err = switch_nvdec_run_display_probe(submit, resolve, this, &fence, &why);
+                err = switch_nvdec_run_display_probe(submit, resolve, this, nullptr, &fence, &waitedForRoom, &why);
                 IOLog("TegraNVDEC: display-buffer probe: mode %u submit %s (%d)\n",
                       reinterpret_cast<const nvdec_hevc_pic_s *>(submit->setup)->disp_output_mode,
                       err ? (why ? why : "failed") : "queued", err);
             } else
 #endif
-                err = tegra_nvdec_run(submit, resolve, this, &fence, &why);
+                err = tegra_nvdec_run(submit, resolve, this, nullptr, &fence, &waitedForRoom, &why);
         } else {
             why = "codec not decoded on NVDEC";
         }

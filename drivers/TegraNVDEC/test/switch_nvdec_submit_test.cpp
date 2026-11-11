@@ -386,10 +386,13 @@ protected:
         switch_test_queue_lock = nullptr;
     }
 
-    int submit()
+    int submit(const SwitchNVDECCompletion &completion = {})
     {
-        return publish(request, work, &fence);
+        waitedForRoom = false;
+        return publish(request, work, completion, &fence, &waitedForRoom);
     }
+
+    bool waitedForRoom = false;
 
     void gpu(uint32_t count = 1)
     {
@@ -599,12 +602,12 @@ TEST_F(SwitchNVDECSubmitTest, EveryRunHoldsThePowerOnceAndReleasesIt)
         return nullptr;
     };
     const char *why = nullptr;
-    ASSERT_EQ(run(&request, resolve, nullptr, check, &fence, &why), 0);
+    ASSERT_EQ(run(&request, resolve, nullptr, check, nullptr, &fence, &waitedForRoom, &why), 0);
     EXPECT_EQ(powerUses, 1u);
     EXPECT_EQ(powerDones, 1u);
     powerError = -19;
     const uint32_t before = submits;
-    EXPECT_EQ(run(&request, resolve, nullptr, check, &fence, &why), -19);
+    EXPECT_EQ(run(&request, resolve, nullptr, check, nullptr, &fence, &waitedForRoom, &why), -19);
     EXPECT_EQ(submits, before);
     EXPECT_EQ(powerDones, 1u);
 }
@@ -625,4 +628,72 @@ TEST_F(SwitchNVDECSubmitTest, AParkedQueueHoldsTheNextJobUntilAResumeRebasesIt)
     EXPECT_FALSE(gSuspended);
     ASSERT_EQ(submit(), 0);
     EXPECT_EQ(fence, static_cast<uint32_t>(nextTestSequence + 3));
+}
+
+namespace {
+struct Completed {
+    uint32_t fence;
+    int result, recordStatus;
+    bool queueLocked;
+};
+
+std::vector<Completed> completed;
+
+void recordCompletion(void *context, uint32_t fence, int result)
+{
+    const switch_gpu_backing_token token = {*static_cast<uint64_t *>(context), switch_nvdec_result_state.generation,
+                                            SWITCH_GPU_ENGINE_NVDEC, gSyncpt};
+    completed.push_back({fence, result, status(&token), switch_test_queue_locked});
+}
+}  // namespace
+
+// The AVD plug-in's emission hangs off this: a job's completion runs once from its fence-driven retirement, off the
+// queue lock, while a Wait on the job would still sleep (its Results record not yet complete).
+TEST_F(SwitchNVDECSubmitTest, ACompletionRunsOnceFromRetirementBeforeItsRecordCompletes)
+{
+    completed.clear();
+    uint64_t sequence = nextTestSequence + 1;
+    ASSERT_EQ(submit({recordCompletion, &sequence}), 0);
+    interrupt(0);
+    EXPECT_TRUE(completed.empty()) << "the semantic outcome is not in yet";
+    semantic(sequence);
+    ASSERT_EQ(completed.size(), 1u);
+    EXPECT_EQ(completed[0].fence, fence);
+    EXPECT_EQ(completed[0].result, 0);
+    EXPECT_EQ(completed[0].recordStatus, 0) << "the record completes after the completion";
+    EXPECT_FALSE(completed[0].queueLocked);
+    EXPECT_EQ(waitSequence(sequence), 0);
+    EXPECT_EQ(gQueue.jobs[0].completion.done, nullptr);
+}
+
+TEST_F(SwitchNVDECSubmitTest, AFailedProducersJobCompletesWithItsError)
+{
+    completed.clear();
+    gpu();
+    uint64_t sequence = nextTestSequence + 1;
+    ASSERT_EQ(submit({recordCompletion, &sequence}), 0);
+    bridged(0, -5);
+    interrupt(0);
+    semantic(sequence);
+    ASSERT_EQ(completed.size(), 1u);
+    EXPECT_EQ(completed[0].result, -5);
+}
+
+// A client whose ring of input buffers is one deeper than the queue never writes one a job still reads: the submit that
+// finds the queue full sleeps until the oldest job retires, and says so.
+TEST_F(SwitchNVDECSubmitTest, ASubmitIntoAFullQueueSleepsUntilTheOldestRetiresAndSaysSo)
+{
+    for (uint32_t i = 0; i < SwitchNVDECQueue::kSlots; ++i) {
+        ASSERT_EQ(submit(), 0);
+        EXPECT_FALSE(waitedForRoom);
+    }
+    ASSERT_TRUE(gQueue.full());
+    switch_test_while_asleep = [] {
+        interrupt(0);
+        semantic(nextTestSequence + 1);
+    };
+    ASSERT_EQ(submit(), 0);
+    EXPECT_TRUE(waitedForRoom);
+    EXPECT_EQ(gQueue.completed, nextTestSequence + 1);
+    EXPECT_EQ(fence, nextTestSequence + SwitchNVDECQueue::kSlots + 1);
 }
