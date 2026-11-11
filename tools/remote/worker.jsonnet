@@ -10,7 +10,8 @@ local frontend = {
       address: std.extVar('SWITCH_WORKER_FRONTEND'),
       addMetadata: [{ header: 'authorization', values: ['Bearer ' + cacheToken] }],
     },
-    enableCompression: true,
+    // On the LAN, zstd only costs the worker and the frontend CPU.
+    enableCompression: false,
   },
 };
 
