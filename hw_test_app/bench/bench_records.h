@@ -23,8 +23,8 @@ const raw::PackPipeline *fragmentTemplate(const raw::Pack &pack);
 // A pack kernel whose program's constant buffer 0 is the root table: its QMD is the one patched.
 const raw::PackKernel *kernelTemplate(const raw::Pack &pack);
 
-// `tpl` with `fs` as its pixel program, its first colour of `format`, `methods` set with its registers and `restore`
-// set when the next state is drawn; keyed `key`, which no pack state has. False: `why`.
+// `tpl` with `fs` as its pixel program, its first colour of `format` with all four channels written, `methods` set with
+// its registers and `restore` set when the next state is drawn; keyed `key`, which no pack state has. False: `why`.
 bool fragmentRecord(const raw::Pack &pack, const raw::PackPipeline &tpl, const Program &fs, uint32_t format,
                     uint64_t key, const Methods &methods, const Methods &restore, raw::RuntimeRecord &r,
                     std::string &why);

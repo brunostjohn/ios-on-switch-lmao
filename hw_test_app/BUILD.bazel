@@ -8,6 +8,7 @@ load("@rules_swift//swift:swift_interop_hint.bzl", "swift_interop_hint")
 load("@rules_swift//swift:swift_library.bzl", "swift_library")
 load("@rules_swift//swift:swift_test.bzl", "swift_test")
 load("//bazel/lint:defs.bzl", "lint_files")
+load("//bazel/testing:defs.bzl", "host_test")
 load(":apps.bzl", "hwtest_app", "ios_arm64e")
 
 package(default_visibility = ["//visibility:public"])
@@ -408,6 +409,24 @@ cc_library(
         "//kits/SwitchGM20BEmit:emit_ndebug",
         "//kits/SwitchGM20BEmit:macros_h",
     ],
+)
+
+# The bench's records on the host, over a pack with the template state the Switch's pack gave it
+host_test(
+    name = "bench_records_test",
+    srcs = [
+        "bench/bench_known.h",
+        "bench/bench_records.cpp",
+        "bench/bench_records.h",
+        "bench/bench_records_test.cpp",
+        "//drivers/TegraGM20BMetal:raw/pack/probe_bind.h",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_compute_record.h",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_owned.h",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_pack.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_pack.h",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_record.h",
+    ],
+    cxx_std = "c++17",
 )
 
 # Every test every iOS version runs, the runner, the list, the log lines and the run reports. UIKit: built only under an

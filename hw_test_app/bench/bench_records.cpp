@@ -10,6 +10,8 @@ namespace bench {
 namespace {
 
 constexpr uint32_t kSetPixelRegisterCount = 0x214c;  // SET_PIPELINE_REGISTER_COUNT(PIXEL)
+constexpr uint32_t kSetCtWrite0 = 0x1a00;            // SET_CT_WRITE(0)
+constexpr uint32_t kCtWriteRgba = 0x1111;            // its R, G, B and A enables
 constexpr uint32_t kFloat4 = 31;                     // MTLVertexFormatFloat4
 
 // tools/benchloop/protocol.py METHOD_RANGES
@@ -107,6 +109,18 @@ std::vector<uint8_t> padded(std::vector<uint8_t> data)
     return data;
 }
 
+void setWord(std::vector<uint32_t> &blob, uint32_t method, uint32_t value)
+{
+    bool found = false;
+    for (size_t k = 0; k + 1 < blob.size(); k += 2)
+        if (blob[k] == method) {
+            blob[k + 1] = value;
+            found = true;
+        }
+    if (!found)
+        blob.insert(blob.end(), {method, value});
+}
+
 void setQmd(uint32_t *qmd, unsigned hi, unsigned lo, uint32_t v)
 {
     for (unsigned b = lo; b <= hi; b++, v >>= 1)
@@ -177,14 +191,10 @@ bool fragmentRecord(const raw::Pack &pack, const raw::PackPipeline &tpl, const P
         p.cbufTypes.push_back(raw::CbufShaderData);
     const uint32_t *blob = pack.section<uint32_t>(raw::PackBlob) + tpl.blob;
     r.blob.assign(blob, blob + tpl.blobDwords);
-    bool counted = false;
-    for (size_t k = 0; k + 1 < r.blob.size(); k += 2)
-        if (r.blob[k] == kSetPixelRegisterCount) {
-            r.blob[k + 1] = fs.gprs;
-            counted = true;
-        }
-    if (!counted)
-        r.blob.insert(r.blob.end(), {kSetPixelRegisterCount, fs.gprs});
+    setWord(r.blob, kSetPixelRegisterCount, fs.gprs);
+    // The key's write mask is Metal's: a state whose format its pixel program packs into one word (BGR10_XR, the
+    // device's template) has the hardware write R alone
+    setWord(r.blob, kSetCtWrite0, kCtWriteRgba);
     r.pipeline.blobDwords = uint32_t(r.blob.size());
     for (const Methods *list : {&methods, &restore})
         for (const auto &[m, v] : *list)
