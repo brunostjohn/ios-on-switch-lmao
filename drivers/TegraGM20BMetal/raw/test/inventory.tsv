@@ -1,7 +1,7 @@
 # raw's API inventory, written by raw/test/selcover (SELCOVER_WRITE=1; selcover_inventory.h says what each
 # column holds): container, item, selector, m2v, sent by, raw
-# m2v's items: base 3 m2v 4 none 65 raw 289 read 292 refused 163 unread 201 zero 40
-# sent selectors: base 79 m2v 13 m2vobj 2 none 8 raw 512 refused 56 zero 145
+# m2v's items: base 3 m2v 4 none 65 raw 291 read 292 refused 163 unread 201 zero 38
+# sent selectors: base 79 m2v 13 m2vobj 2 none 8 raw 514 refused 56 zero 143
 MTLArgument	access	access	I	-	read
 MTLArgument	active	isActive	I	-	unread
 MTLArgument	arrayLength	arrayLength	I	-	read
@@ -1030,8 +1030,8 @@ MTLRenderCommandEncoder	setVertexBytes:length:atIndex:	setVertexBytes:length:atI
 MTLRenderCommandEncoder	setVertexBytes:length:attributeStride:atIndex:	setVertexBytes:length:attributeStride:atIndex:	I	24B119	zero
 MTLRenderCommandEncoder	setVertexSamplerState:atIndex:	setVertexSamplerState:atIndex:	I	21H461,24B119	raw
 MTLRenderCommandEncoder	setVertexSamplerState:lodMinClamp:lodMaxClamp:atIndex:	setVertexSamplerState:lodMinClamp:lodMaxClamp:atIndex:	I	21H461,24B119	raw
-MTLRenderCommandEncoder	setVertexSamplerStates:lodMinClamps:lodMaxClamps:withRange:	setVertexSamplerStates:lodMinClamps:lodMaxClamps:withRange:	I	21H461,24B119	zero
-MTLRenderCommandEncoder	setVertexSamplerStates:withRange:	setVertexSamplerStates:withRange:	I	21H461,24B119	zero
+MTLRenderCommandEncoder	setVertexSamplerStates:lodMinClamps:lodMaxClamps:withRange:	setVertexSamplerStates:lodMinClamps:lodMaxClamps:withRange:	I	21H461,24B119	raw
+MTLRenderCommandEncoder	setVertexSamplerStates:withRange:	setVertexSamplerStates:withRange:	I	21H461,24B119	raw
 MTLRenderCommandEncoder	setVertexTexture:atIndex:	setVertexTexture:atIndex:	I	21H461,24B119	raw
 MTLRenderCommandEncoder	setVertexTextures:withRange:	setVertexTextures:withRange:	I	21H461,24B119	raw
 MTLRenderCommandEncoder	setVertexVisibleFunctionTable:atBufferIndex:	setVertexVisibleFunctionTable:atBufferIndex:	I	24B119	refused
