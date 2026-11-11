@@ -12,6 +12,8 @@ py_library(
     name = "encode",
     srcs = [
         "encode.py",
+        "intops.py",
+        "memops.py",
         "operands.py",
     ],
     deps = ["//tools/gpu/maxwell:isa"],
@@ -35,10 +37,7 @@ py_library(
 
 py_library(
     name = "interlock",
-    srcs = [
-        "interlock.py",
-        "memops.py",
-    ],
+    srcs = ["interlock.py"],
     deps = [
         ":encode",
         ":program",
@@ -81,6 +80,17 @@ py_library(
         ":program",
         ":timing_sim",
         "//tools/benchloop:protocol",
+    ],
+)
+
+py_test(
+    name = "intops_test",
+    size = "small",
+    srcs = ["intops_test.py"],
+    deps = [
+        ":encode",
+        "//tools/gpu/maxwell:interp",
+        "//tools/gpu/maxwell:isa",
     ],
 )
 
