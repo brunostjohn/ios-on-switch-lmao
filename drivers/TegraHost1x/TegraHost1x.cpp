@@ -67,6 +67,7 @@ enum : uint32_t {  // channel registers, channel 0 at the start of the aperture
 
 enum : uint32_t {  // sync unit, relative to kSyncOffset
     SYNC_CMDPROC_STOP = 0x0ac,
+    SYNC_CH_TEARDOWN = 0x0b0,
     SYNC_USEC_CLK = 0x1a4,
     SYNC_CTXSW_TIMEOUT_CFG = 0x1a8,
     SYNC_IP_BUSY_TIMEOUT = 0x1bc,
@@ -432,6 +433,34 @@ extern "C" void tegra_host1x_describe_channel(uint32_t channel, char *buffer, si
 extern "C" void tegra_host1x_describe(char *buffer, size_t size)
 {
     tegra_host1x_describe_channel(TEGRA_HOST1X_CHANNEL_DEFAULT, buffer, size);
+}
+
+// Linux cdma_freeze: the channel's command processor stops and the channel is torn down, so the methods it was
+// feeding an engine that stopped taking them are dropped. The engine is reset before tegra_host1x_channel_restart.
+extern "C" void tegra_host1x_channel_teardown(uint32_t channel)
+{
+    if (gState != 1 || channel >= TEGRA_HOST1X_CHANNELS)
+        return;
+    IOLockLock(gSubmitLock);
+    syncWrite(SYNC_CMDPROC_STOP, sync(SYNC_CMDPROC_STOP) | 1u << channel);
+    channelWrite(channel, CH_DMACTRL, DMACTRL_STOP);
+    syncWrite(SYNC_CH_TEARDOWN, 1u << channel);
+    IOLockUnlock(gSubmitLock);
+}
+
+// Linux cdma_resume with nothing left to run: GET is set to PUT (INITGET loads it from PUT), so the torn-down stream
+// is skipped and the next submit runs first.
+extern "C" void tegra_host1x_channel_restart(uint32_t channel)
+{
+    if (gState != 1 || channel >= TEGRA_HOST1X_CHANNELS)
+        return;
+    IOLockLock(gSubmitLock);
+    channelWrite(channel, CH_DMACTRL, DMACTRL_STOP);
+    channelWrite(channel, CH_DMAPUT, gChannels[channel].put);
+    channelWrite(channel, CH_DMACTRL, DMACTRL_STOP | DMACTRL_GETRST | DMACTRL_INITGET);
+    syncWrite(SYNC_CMDPROC_STOP, sync(SYNC_CMDPROC_STOP) & ~(1u << channel));
+    channelWrite(channel, CH_DMACTRL, 0);
+    IOLockUnlock(gSubmitLock);
 }
 
 // Clients have quiesced (their last fences reached) before this. SC7 powers the sync unit and channels down, so the

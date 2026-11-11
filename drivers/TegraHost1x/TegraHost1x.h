@@ -109,6 +109,10 @@ enum {
 int tegra_host1x_submit_on(uint32_t channel, const uint32_t *words, uint32_t count);
 // The same on the default channel.
 int tegra_host1x_submit(const uint32_t *words, uint32_t count);
+// A job its engine stopped making progress on: teardown drops the channel's pending methods (its engine is reset next),
+// restart resumes it empty at its PUT. The caller holds off its own submits in between.
+void tegra_host1x_channel_teardown(uint32_t channel);
+void tegra_host1x_channel_restart(uint32_t channel);
 
 // Sleep (called through tegra_nvdec_suspend/resume below, after NVDEC has quiesced). Suspend saves the
 // handed-out syncpoint values and stops every channel; resume re-adopts the clock, reconfigures the sync unit, restores
