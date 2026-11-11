@@ -19,6 +19,12 @@ fragment float4 rop_frag(float4 d [[color(0)]], texture2d<float> t [[texture(0)]
     return d.x == 12345.0f ? d : source;
 }
 
+fragment float4 rop_frag_const(float4 d [[color(0)]], texture2d<float> t [[texture(0)]], sampler s [[sampler(0)]])
+{
+    const float4 read = d.x == 12345.0f ? d : t.sample(s, float2(0.25f, 0.5f));
+    return float4(read.x, 0.0f, read.z, read.w);
+}
+
 fragment float rop_frag_r(float d [[color(0)]], texture2d<float> t [[texture(0)]], sampler s [[sampler(0)]])
 {
     const float source = t.sample(s, float2(0.25f, 0.5f)).x;

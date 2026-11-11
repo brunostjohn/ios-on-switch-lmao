@@ -116,6 +116,9 @@ STATES = (
 )
 # Functions that declare the color they write but never read it: the device keeps their blend, no storage form.
 UNREAD = [(80, 'sov', 15), (115, 'mul', 15)]
+# A function whose output's green is the constant 0 (rop_frag_const) on float targets, where a product of it with an
+# infinity or a NaN, and its sum with a -0, are the model's only if the compiler keeps them
+CONSTANT = [(115, 'sep', 15), (115, 'sov', 15), (65, 'sep', 15)]
 
 
 def corpus() -> list[str]:
@@ -127,6 +130,9 @@ def corpus() -> list[str]:
     for fmt, name, mask in UNREAD:
         f = [FACTOR[x] if x in FACTOR else OP[x] for x in BLENDS[name]]
         lines.append(line(fmt, f'{name}_unread', mask, f, 'rop_frag_unread'))
+    for fmt, name, mask in CONSTANT:
+        f = [FACTOR[x] if x in FACTOR else OP[x] for x in BLENDS[name]]
+        lines.append(line(fmt, f'{name}_const', mask, f, 'rop_frag_const'))
     return lines
 
 
@@ -171,6 +177,13 @@ class Model:
         self.factors = c0[3:]
         self.components, self.bits, self.half = FORMATS[self.fmt]
         self.vector = 'rop_frag_r' not in key
+        self.constant_green = 'rop_frag_const' in key
+
+    def source(self, sampled: list[int]) -> list[int]:
+        """Give the output the function computes of its sample (the blend's source)."""
+        if self.constant_green:
+            return [sampled[0], ZERO, sampled[2], sampled[3]]
+        return sampled if self.vector else [sampled[0], ZERO, ZERO, ONE]
 
     def blend(self, s: list[int], s1: list[int], d: list[int], c: list[int]) -> list[int]:  # noqa: C901  one closure per factor rule
         if self.bits:
@@ -285,7 +298,7 @@ def check(fs: bytes, key: str, push: dict[int, int], n: int, seed: int, bound: i
     for i in range(n):
         sampled = [word(rng, bool(m.bits)) for _ in range(4)]
         s1 = [word(rng, bool(m.bits)) for _ in range(4)]
-        s = sampled if m.vector else [sampled[0], ZERO, ZERO, ONE]
+        s = m.source(sampled)
         c = [word(rng, bool(m.bits)) for _ in range(4)]
         loaded, d = destination(rng, m)
         kept = sum(1 << k for k in m.kept())

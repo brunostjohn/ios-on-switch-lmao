@@ -1408,6 +1408,14 @@ pub fn select_output(
         return Err(cx.invariant("a storage-form output of an attachment of another form"));
     };
     class_of(form, sc.view.read_class(), color, true)?;
+    // The device's blend of a float attachment, computed by its model in `f32`, keeps a product
+    // with a zero and a sum with one as IEEE has them: a lane the output (or its widening to four
+    // lanes) holds constant would otherwise fold away a `0 * inf` or a `-0 + 0` the ROP keeps.
+    if rop::rop_of(&sc.view)
+        .is_some_and(|b| matches!(b.channels, super::rop_blend::Channels::Float { .. }))
+    {
+        cx.families.arith.preserve.insert(32);
+    }
     // An extended-range attachment's blend is of a `half4` output, or of a `float4` one where
     // the blend takes it ([`plan`]), and an `_sRGB` one's encodes through Metal's table.
     let output4 = (form.lanes == 4).then(|| form.float_fmt()).flatten();
