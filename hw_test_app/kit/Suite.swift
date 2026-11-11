@@ -177,7 +177,7 @@ public final class Suite: ObservableObject {
             for test in batch {
                 guard let self else { return }
                 let record: TestRecord
-                if let wedged = await self.begin(test.id), test.drawsWithGPU {
+                if let wedged = await self.begin(test.id), test.drawsWithGPU, !test.runsWhenGPUWedged {
                     record = Suite.record(test, .skip("the app's GPU stopped answering after \(wedged) timed out"), 0)
                 } else {
                     let executed = await Suite.execute(test, context)

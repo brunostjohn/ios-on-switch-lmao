@@ -177,6 +177,17 @@ BY_IOS: dict[str, dict[str, bool]] = {
         'pacing.glass_under': False,
         'system.no_camera': False,
         'video.frame_processor': False,
+        'gpu.x1.buffer_zero': False,
+        'gpu.x1.linear_align': False,
+        'gpu.x1.rop_conversion': False,
+        'gpu.x1.sampler_conversion': False,
+        'gpu.x1.blend_exact': False,
+        'gpu.x1.f32_filter': False,
+        'gpu.x1.mip_filter': False,
+        'gpu.x1.visibility': False,
+        'gpu.x1.blend_kills': False,
+        'gpu.x1.viewport_swizzle': False,
+        'gpu.x1.iterated_blend': False,
     },
 }
 
