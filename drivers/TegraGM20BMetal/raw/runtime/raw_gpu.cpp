@@ -5,6 +5,7 @@
 // first version (render encoder, pack replay) and checked it against NVK's stream; r8-rawca added the lifetimes, the pool, the
 // imports, the copies and the abortable command buffer.
 #include "../fx/fx_image.h"
+#include "raw_nonfinite.h"
 #include "raw_clear.h"
 #include "raw_attachment_lifetime.h"
 #include "raw_dynamic_push.h"
@@ -32,6 +33,7 @@
 
 #include <CoreFoundation/CoreFoundation.h>
 #include <mach/mach.h>
+#include <mach/mach_time.h>
 #include <os/log.h>
 #include <pthread.h>
 #include <time.h>
@@ -4219,6 +4221,28 @@ bool RenderEncoder::drawIndexedIndirect(uint32_t primitive, uint32_t indexSize, 
     return indirect(primitive, true, arguments, argumentOffset, why);
 }
 
+#if SWITCH_RAW_DIAGNOSTICS
+static void probeUniforms(Pipeline &pl, uint32_t stage, uint32_t slot, const uint8_t *bytes, uint64_t length)
+{
+    const NonFiniteUniforms found = nonFiniteUniforms(bytes, length);
+    if (!found.words && (!found.halves || pl.uniformHalvesReported))
+        return;
+    char hex[3 * 32 + 1] = "";
+    const uint64_t from = found.first & ~uint64_t(15);
+    for (uint64_t at = from, n = 0; at < length && n < 32; ++at, ++n)
+        snprintf(hex + 3 * n, 4, "%02x ", bytes[at]);
+    os_log(os_log_create("com.brunostjohn.switch.TegraGM20BMetal", "raw"),
+           "raw: uniform probe %{public}s stage %u slot %u: %u non-finite floats and %u halves in %llu bytes, first at +%llu; "
+           "+%llu: %{public}s(mach %llu)",
+           pl.uniformProbe, stage, slot, found.words, found.halves, (unsigned long long)length,
+           (unsigned long long)found.first, (unsigned long long)from, hex, (unsigned long long)mach_absolute_time());
+    if (found.words)
+        pl.uniformProbe = nullptr;
+    else
+        pl.uniformHalvesReported = true;
+}
+#endif
+
 bool RenderEncoder::prepare(Pipeline *pl, uint32_t primitive, int32_t first, uint32_t vFirst, uint32_t vCount,
                             uint32_t baseInstance, bool indexed, const char **why)
 {
@@ -4363,6 +4387,11 @@ bool RenderEncoder::prepare(Pipeline *pl, uint32_t primitive, int32_t first, uin
                     }
                     if (b.buffer && b.buffer->hostVisible && !b.buffer->wc)
                         cb_->clean(b.buffer->cpu + b.offset, std::min<uint64_t>(desc.range - desc.residual, b.size));
+#if SWITCH_RAW_DIAGNOSTICS
+                    if (pl->uniformProbe && b.cpu)
+                        probeUniforms(*pl, e.stage, e.slot, b.cpu,
+                                      std::min<uint64_t>(desc.range - desc.residual, b.size));
+#endif
                     at[0] = uint32_t(desc.base);
                     at[1] = uint32_t(desc.base >> 32);
                     at[2] = b.va ? desc.range : 0;

@@ -215,6 +215,24 @@ MTLRenderPipelineDescriptor *twinDescriptor(MTLRenderPipelineDescriptor *d)
     return t;
 }
 
+#if SWITCH_RAW_DIAGNOSTICS
+// Core Animation's glass background (Tgs*, Tgb*) and generic merge (..Xghfc) states: the draw path checks their uniforms for
+// NaN and infinity (raw_gpu.cpp probeUniforms), its barrier form's too
+static void markUniformProbe(raw::Pipeline *pl, NSString *label)
+{
+    static NSString *const prefix = @"com.apple.coreanimation.";
+    if (!pl || pl->uniformProbe || ![label hasPrefix:prefix])
+        return;
+    NSString *name = [label substringFromIndex:prefix.length];
+    if (![name containsString:@"_Tgs"] && ![name containsString:@"_Tgb"] && ![name hasSuffix:@"Xghfc"])
+        return;
+    const char *kept = strdup(name.UTF8String);  // one per glass state, for the process's life
+    pl->uniformProbe = kept;
+    if (pl->barrierTwin && !pl->barrierTwin->uniformProbe)
+        pl->barrierTwin->uniformProbe = kept;
+}
+#endif
+
 // A state the pack lacks, of any library's functions: its record from this process or an earlier boot, else made at its
 // creation, as Metal makes a state (RawComplete.h), and the raw path draws it from its first draw. A compile that could not
 // run is asked again off this thread; m2v draws the state until then.
@@ -233,12 +251,19 @@ static void makeRecord(RMPipeline *p, MTLRenderPipelineDescriptor *d)
     if (p->_raw && native_bridge_metal_journal_render)
         native_bridge_metal_journal_render(a.descriptor, 0);
 #endif
+#if SWITCH_RAW_DIAGNOSTICS
+    markUniformProbe(p->_raw, d.label);
+#endif
     if (p->_raw || !retry)
         return;
     p->_asked = true;
     __weak RMPipeline *weak = p;
     gRM->completion->ask(std::move(a), [weak](raw::Pipeline *pl) {
         RMPipeline *strong = weak;
+#if SWITCH_RAW_DIAGNOSTICS
+        if (strong)
+            markUniformProbe(pl, strong.label);
+#endif
         if (strong && pl)
             __atomic_store_n(&strong->_raw, pl, __ATOMIC_RELEASE);
         else if (strong)
@@ -267,6 +292,9 @@ static void makeRecord(RMPipeline *p, MTLRenderPipelineDescriptor *d)
             vf->_framework == "QuartzCore" && [vf.name hasPrefix:@"fixed_vert_"] && [vf.name hasSuffix:@"_spc"];
         p->_raw =
             gRM->raw->pipeline(raw::Pack::fnv(p->_key.data(), p->_key.size()), raw::PackForm::Default, p->_caTransform);
+#if SWITCH_RAW_DIAGNOSTICS
+        markUniformProbe(p->_raw, d.label);
+#endif
     }
     makeRecord(p, d);
     if (!p->_raw) {

@@ -35,3 +35,19 @@ TEST(RawNonFinite, InfinityCountsAndFiniteExtremesDoNot)
                                     [](const uint8_t *) {}),
               2u);
 }
+
+// Glass uniforms: a NaN float is counted as a word at its offset; a NaN half inside a finite float's low half only as a half
+TEST(RawNonFinite, UniformWordsAndHalvesAreCountedApart)
+{
+    uint32_t words[8] = {0x3f800000, 0x00007e00, 0x7fc00000, 0x40000000};
+    const auto found = raw::nonFiniteUniforms(reinterpret_cast<const uint8_t *>(words), sizeof words);
+    EXPECT_EQ(found.words, 1u);
+    EXPECT_EQ(found.first, 8u);
+    EXPECT_EQ(found.halves, 2u);  // the low half of word 1, and the high half of word 2 (0x7fc0)
+    uint16_t halves[4] = {0x3c00, 0x7c00};
+    const auto half = raw::nonFiniteUniforms(reinterpret_cast<const uint8_t *>(halves), sizeof halves);
+    EXPECT_EQ(half.words, 0u);
+    EXPECT_EQ(half.halves, 1u);
+    EXPECT_EQ(half.first, 2u);
+    EXPECT_EQ(raw::nonFiniteUniforms(reinterpret_cast<const uint8_t *>(halves), 1).first, UINT64_MAX);
+}

@@ -410,6 +410,10 @@ struct Pipeline {
     const SplitSource *splitSource = nullptr;
     SplitState *split = nullptr;
     const SplitState *splitOf = nullptr;
+    // DEVELOPMENT: a glass background or generic merge state's name until its uniforms show a non-finite float (one such
+    // value makes the whole glass band black), and whether non-finite halves alone were reported
+    const char *uniformProbe = nullptr;
+    bool uniformHalvesReported = false;
 };
 
 // A state's fragment program split (raw_pack.h PackSplit): the twin that draws of rec.thresholdPixels pixels or more take, and

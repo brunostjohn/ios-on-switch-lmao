@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #pragma once
+#include <algorithm>
 #include <cstdint>
 #include <cstring>
 
@@ -46,6 +47,32 @@ uint32_t sampledNonFinite(const uint8_t *memory, uint64_t bytes, uint32_t compon
         for (uint32_t c = 0; c < 64; c += componentBytes)
             found += nonFiniteComponent(memory + at + c, componentBytes);
     }
+    return found;
+}
+
+// A glass state's uniform bytes: their 4-byte-aligned words that are non-finite floats, their 2-byte-aligned halves that are
+// non-finite (a float's low half can be one by chance), and the offset of the first non-finite word, else of the first half
+struct NonFiniteUniforms {
+    uint32_t words = 0, halves = 0;
+    uint64_t first = UINT64_MAX;
+};
+
+inline NonFiniteUniforms nonFiniteUniforms(const uint8_t *bytes, uint64_t length)
+{
+    NonFiniteUniforms found;
+    uint64_t firstHalf = UINT64_MAX;
+    for (uint64_t at = 0; at + 2 <= length; at += 2) {
+        if (nonFiniteComponent(bytes + at, 2)) {
+            found.halves++;
+            firstHalf = std::min(firstHalf, at);
+        }
+        if (at % 4 == 0 && at + 4 <= length && nonFiniteComponent(bytes + at, 4)) {
+            found.words++;
+            found.first = std::min(found.first, at);
+        }
+    }
+    if (!found.words)
+        found.first = firstHalf;
     return found;
 }
 
