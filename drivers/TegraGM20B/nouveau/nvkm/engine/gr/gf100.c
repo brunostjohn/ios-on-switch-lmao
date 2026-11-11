@@ -32,6 +32,8 @@
 #include <subdev/fb.h>
 #include <subdev/mc.h>
 #include <subdev/pmu.h>
+
+#include "TegraGM20BTexTrap.h"
 #include <subdev/therm.h>
 #include <subdev/timer.h>
 #include <engine/fifo.h>
@@ -1630,6 +1632,59 @@ gf100_gr_ctxctl_isr(struct gf100_gr *gr)
 	}
 }
 
+/* A trap whose only cause is TEX exceptions, as nvgpu takes it: each TEX ESR reported and written back, the channel left
+ * to go on. False, with nothing written, for any other trap. dev_warn, not nvkm_warn: the device's "error" debug level
+ * drops warnings, and nvkm_error would be a kill. */
+static bool
+gf100_gr_trap_tex(struct gf100_gr *gr, int chid, const char *name)
+{
+	static struct tgm_tex_reports reports;
+	struct nvkm_subdev *subdev = &gr->base.engine.subdev;
+	struct nvkm_device *device = subdev->device;
+	struct tgm_gr_trap_snapshot s = {0};
+	char text[64];
+	u32 count = 0;
+	int gpc, tpc;
+
+	s.trap = nvkm_rd32(device, 0x400108);
+	s.gpcs = nvkm_rd32(device, 0x400118);
+	for (gpc = 0; gpc < gr->gpc_nr && gpc < TGM_TRAP_GPCS; gpc++) {
+		if (!(s.gpcs & (1 << gpc)))
+			continue;
+		s.gpc[gpc] = nvkm_rd32(device, GPC_UNIT(gpc, 0x2c90));
+		for (tpc = 0; tpc < gr->tpc_nr[gpc] && tpc < TGM_TRAP_TPCS; tpc++) {
+			if (s.gpc[gpc] & (0x00010000 << tpc))
+				s.tpc[gpc][tpc] = nvkm_rd32(device, TPC_UNIT(gpc, tpc, 0x0508));
+		}
+	}
+	if (!tgm_gr_trap_tex_only(&s, gr->gpc_nr, gr->tpc_nr))
+		return false;
+
+	for (gpc = 0; gpc < gr->gpc_nr; gpc++) {
+		if (!(s.gpcs & (1 << gpc)))
+			continue;
+		for (tpc = 0; tpc < gr->tpc_nr[gpc]; tpc++) {
+			u32 esr;
+
+			if (!(s.gpc[gpc] & (0x00010000 << tpc)))
+				continue;
+			esr = nvkm_rd32(device, TPC_UNIT(gpc, tpc, 0x0224));
+			if (tgm_tex_report_due(&reports, chid, esr, &count)) {
+				tgm_tex_esr_describe(esr, text, sizeof(text));
+				dev_warn(device->dev,
+					 "gr: TEX exception %u of ch %d [%s] with this ESR, GPC%d/TPC%d: "
+					 "TEX_M_HWW_ESR %08x [%s]; cleared, the channel goes on\n",
+					 count, chid, name, gpc, tpc, esr, text);
+			}
+			nvkm_wr32(device, TPC_UNIT(gpc, tpc, 0x0224), esr);
+			nvkm_wr32(device, GPC_UNIT(gpc, 0x2c90), 0x00010000 << tpc);
+		}
+		nvkm_wr32(device, 0x400118, 1 << gpc);
+	}
+	nvkm_wr32(device, 0x400108, TGM_TRAP_GPC);
+	return true;
+}
+
 static irqreturn_t
 gf100_gr_intr(struct nvkm_inth *inth)
 {
@@ -1700,9 +1755,11 @@ gf100_gr_intr(struct nvkm_inth *inth)
 	}
 
 	if (stat & 0x00200000) {
-		nvkm_error(subdev, "TRAP ch %d [%010llx %s]\n",
-			   chid, inst << 12, name);
-		gf100_gr_trap_intr(gr);
+		if (!gf100_gr_trap_tex(gr, chid, name)) {
+			nvkm_error(subdev, "TRAP ch %d [%010llx %s]\n",
+				   chid, inst << 12, name);
+			gf100_gr_trap_intr(gr);
+		}
 		nvkm_wr32(device, 0x400100, 0x00200000);
 		stat &= ~0x00200000;
 	}

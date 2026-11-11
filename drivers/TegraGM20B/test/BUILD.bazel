@@ -56,6 +56,8 @@
 #                            BLCG writes are nvgpu's prod lists in its load order; ELCG's gate control; where gpu_bringup.c
 #                            applies them; GR's reset in a recovery with gating off; TegraGM20BTherm.h's slowdown arming
 #                            against L4T's captured THERM registers
+#   gm20b_tex_trap_test      TegraGM20BTexTrap.h: GR traps that are TEX exceptions alone, their ESR line and repeats; nouveau's
+#                            handler reports them as nvgpu does and leaves the channel running, other traps as before
 #   gm20b_regdump_test       TegraGM20BRegDump.h against regs_gm20b.txt, the L4T capture's register list: same offsets,
 #                            order and list id; the dump's lines are the capture's form, one value per register; the
 #                            kernel log's lines carry every value once, in order, under a count and sum
@@ -356,6 +358,22 @@ host_test(
         'GPU_POWER_C=\\"$(rootpath //drivers/TegraGM20B:gpu_power.c)\\"',
         'GR_BASE_C=\\"$(rootpath //drivers/TegraGM20B:nouveau/nvkm/engine/gr/base.c)\\"',
         'REGLIST=\\"$(rootpath //drivers/TegraGM20B:nvidia/gm20b_gating_reglist.c)\\"',
+    ],
+)
+
+host_test(
+    name = "gm20b_tex_trap_test",
+    srcs = [
+        "gm20b_tex_trap_test.cpp",
+        "//drivers/TegraGM20B:TegraGM20BTexTrap.h",
+    ],
+    data = [
+        "//drivers/TegraGM20B:nouveau/nvkm/engine/gr/gf100.c",
+        "//drivers/TegraGM20B:nouveau/nvkm/engine/gr/gk20a.c",
+    ],
+    defines = [
+        'GF100_C=\\"$(rootpath //drivers/TegraGM20B:nouveau/nvkm/engine/gr/gf100.c)\\"',
+        'GK20A_C=\\"$(rootpath //drivers/TegraGM20B:nouveau/nvkm/engine/gr/gk20a.c)\\"',
     ],
 )
 
