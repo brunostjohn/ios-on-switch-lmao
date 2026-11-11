@@ -170,6 +170,7 @@ BY_IOS: dict[str, dict[str, bool]] = {
         'metal.archive.framework': False,
         'ui.glass': False,
         'ui.glass_motion': False,
+        'ui.glass_first': False,
         'display.pocket_strip': False,
         'display.true_tone_default': False,
         'pacing.glass_over': False,

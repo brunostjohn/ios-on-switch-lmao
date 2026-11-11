@@ -65,7 +65,9 @@ struct UIGlassTest: HWTest {
 }
 
 /// ui.glass while the stripes under the glass and the glass itself move, so the render server captures and blurs a new
-/// backdrop for each frame. In every one of the composited frames the glass over the grey must not be black.
+/// backdrop for each frame. In every one of the composited frames the glass over the grey must not be black. Each black
+/// frame is listed (black=) with its time from the first frame's snapshot (black_at_ms=, frames_ms= the last one's), so
+/// it can be found among the render server's command buffers, and saved as black-<frame>.png.
 struct UIGlassMotionTest: HWTest {
     let id = "ui.glass_motion"
     let name = "UIGlassEffect while its backdrop and the glass move"
@@ -91,7 +93,10 @@ struct UIGlassMotionTest: HWTest {
         }
         await Snapshots.settle()
         var black: [Int] = []
+        var blackAt: [Int] = []
         var darkest: Float = 3
+        let started = Date()
+        let directory = context.documents.appendingPathComponent("ui").appendingPathComponent(id)
         for frame in 0..<Self.frames {
             let composited = await MainActor.run { () -> Raster in
                 stripes.transform = CGAffineTransform(translationX: CGFloat(frame % 8) * 8, y: 0)
@@ -107,21 +112,79 @@ struct UIGlassMotionTest: HWTest {
             darkest = min(darkest, level)
             if level <= 0.12 {
                 black.append(frame)
-                if black.count == 1 {
-                    let directory = context.documents.appendingPathComponent("ui").appendingPathComponent(id)
-                    try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-                    try? composited.png()?.write(to: directory.appendingPathComponent("black-\(frame).png"))
-                }
+                blackAt.append(Int(Date().timeIntervalSince(started) * 1000))
+                try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+                try? composited.png()?.write(to: directory.appendingPathComponent("black-\(frame).png"))
             }
         }
         var metrics = Metrics()
         metrics.set("frames", Self.frames)
         metrics.set("black_frames", black.count)
         metrics.set("first_black", black.first ?? -1)
+        metrics.set("black", black.isEmpty ? "-" : black.map(String.init).joined(separator: ","))
+        metrics.set("black_at_ms", blackAt.isEmpty ? "-" : blackAt.map(String.init).joined(separator: ","))
+        metrics.set("frames_ms", Int(Date().timeIntervalSince(started) * 1000))
         metrics.set("darkest", Int((darkest / 3 * 255).rounded()))
         return black.isEmpty
             ? .pass(metrics)
             : .fail("\(black.count) of \(Self.frames) frames show the glass over the grey black", metrics)
+    }
+}
+
+/// ui.glass_motion's black frames came first after the stage was built: each round here builds a new glass hierarchy,
+/// waits as ui.glass_motion does and composites it once. Black in every round makes the first frame of a new glass layer
+/// the trigger; black in none puts it on what moves.
+struct UIGlassFirstFrameTest: HWTest {
+    let id = "ui.glass_first"
+    let name = "UIGlassEffect's first composited frame, over a newly built hierarchy each round"
+    let subsystem = Subsystem.compositor
+    static let rounds = 6
+
+    func run(_ context: TestContext) async throws -> Outcome {
+        var black: [Int] = []
+        var darkest: Float = 3
+        let directory = context.documents.appendingPathComponent("ui").appendingPathComponent(id)
+        for round in 0..<Self.rounds {
+            let root = await context.onStage(fullScreen: true) { stage -> UIView in
+                let screen = UIScreen.main.bounds
+                let root = UIView(frame: Snapshots.aligned(screen))
+                root.addSubview(
+                    BackdropStripes(frame: CGRect(x: -64, y: 0, width: screen.width / 2 + 64, height: screen.height)))
+                let grey = UIView(
+                    frame: CGRect(x: screen.width / 2, y: 0, width: screen.width / 2, height: screen.height))
+                grey.backgroundColor = UIColor(white: 0.5, alpha: 1)
+                root.addSubview(grey)
+                let glass = UIVisualEffectView(effect: UIGlassEffect(style: .regular))
+                glass.frame = Snapshots.aligned(
+                    CGRect(x: 0, y: screen.height / 4, width: screen.width, height: screen.height / 2))
+                root.addSubview(glass)
+                stage.addSubview(root)
+                return root
+            }
+            await Snapshots.settle()
+            let composited = await MainActor.run { Snapshots.composited(root) }
+            await context.clearStage()
+            let inset = composited.height / 16
+            let (top, height, half) =
+                (composited.height / 4 + inset + 16, composited.height / 2 - 2 * inset - 16, composited.width / 2)
+            let level = Backdrop.overUniform(
+                composited.cropped(x: half + inset, y: top, width: half - 2 * inset, height: height)
+            ).mean.prefix(3).reduce(0, +)
+            darkest = min(darkest, level)
+            if level <= 0.12 {
+                black.append(round)
+                try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+                try? composited.png()?.write(to: directory.appendingPathComponent("black-\(round).png"))
+            }
+        }
+        var metrics = Metrics()
+        metrics.set("rounds", Self.rounds)
+        metrics.set("black_rounds", black.count)
+        metrics.set("black", black.isEmpty ? "-" : black.map(String.init).joined(separator: ","))
+        metrics.set("darkest", Int((darkest / 3 * 255).rounded()))
+        return black.isEmpty
+            ? .pass(metrics)
+            : .fail("\(black.count) of \(Self.rounds) first frames show the glass over the grey black", metrics)
     }
 }
 
