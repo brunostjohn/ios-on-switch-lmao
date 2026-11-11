@@ -18,13 +18,17 @@ enum FFmpegWriter {
     }
 
     static let intraMatrix = [
-        8, 16, 19, 22, 26, 27, 29, 34, 16, 16, 22, 24, 27, 29, 34, 37, 19, 22, 26, 27, 29, 34, 34, 38, 22, 22, 26, 27, 29,
-        34, 37, 40, 22, 26, 27, 29, 32, 35, 40, 48, 26, 27, 29, 32, 35, 40, 48, 58, 26, 27, 29, 34, 38, 46, 56, 69, 27, 29,
+        8, 16, 19, 22, 26, 27, 29, 34, 16, 16, 22, 24, 27, 29, 34, 37, 19, 22, 26, 27, 29, 34, 34, 38, 22, 22, 26, 27,
+        29,
+        34, 37, 40, 22, 26, 27, 29, 32, 35, 40, 48, 26, 27, 29, 32, 35, 40, 48, 58, 26, 27, 29, 34, 38, 46, 56, 69, 27,
+        29,
         35, 38, 46, 56, 69, 83,
     ]
     static let interMatrix = [
-        16, 17, 18, 19, 20, 21, 22, 23, 17, 18, 19, 20, 21, 22, 23, 24, 18, 19, 20, 21, 22, 23, 24, 25, 19, 20, 21, 22, 23,
-        24, 26, 27, 20, 21, 22, 23, 25, 26, 27, 28, 21, 22, 23, 24, 26, 27, 28, 30, 22, 23, 24, 26, 27, 28, 30, 31, 23, 24,
+        16, 17, 18, 19, 20, 21, 22, 23, 17, 18, 19, 20, 21, 22, 23, 24, 18, 19, 20, 21, 22, 23, 24, 25, 19, 20, 21, 22,
+        23,
+        24, 26, 27, 20, 21, 22, 23, 25, 26, 27, 28, 21, 22, 23, 24, 26, 27, 28, 30, 22, 23, 24, 26, 27, 28, 30, 31, 23,
+        24,
         25, 27, 28, 30, 31, 40,
     ]
 
@@ -35,14 +39,18 @@ enum FFmpegWriter {
         case .mpeg4 where clip.height <= 720:
             return ["-c:v", "mpeg4", "-bf", "0"] + rate
         case .mpeg4:
-            return ["-c:v", "mpeg4", "-bf", "2", "-flags", "+qpel", "-mpeg_quant", "1", "-intra_matrix",
-                    matrix(intraMatrix), "-inter_matrix", matrix(interMatrix)] + rate
+            return [
+                "-c:v", "mpeg4", "-bf", "2", "-flags", "+qpel", "-mpeg_quant", "1", "-intra_matrix",
+                matrix(intraMatrix), "-inter_matrix", matrix(interMatrix),
+            ] + rate
         case .mpeg2 where clip.height <= 720:
             return ["-c:v", "mpeg2video", "-bf", "2"] + rate
         case .mpeg2:
-            return ["-c:v", "mpeg2video", "-bf", "2", "-flags", "+ildct+ilme", "-intra_matrix", matrix(intraMatrix),
-                    "-inter_matrix", matrix(interMatrix), "-alternate_scan", "1", "-intra_vlc", "1",
-                    "-non_linear_quant", "1", "-qmax", "28", "-dc", "10"] + rate
+            return [
+                "-c:v", "mpeg2video", "-bf", "2", "-flags", "+ildct+ilme", "-intra_matrix", matrix(intraMatrix),
+                "-inter_matrix", matrix(interMatrix), "-alternate_scan", "1", "-intra_vlc", "1",
+                "-non_linear_quant", "1", "-qmax", "28", "-dc", "10",
+            ] + rate
         case .mpeg1:
             return ["-c:v", "mpeg1video", "-bf", "2", "-intra_matrix", matrix(interMatrix)] + rate
         default:
@@ -56,7 +64,8 @@ enum FFmpegWriter {
         let ffmpeg = ProcessInfo.processInfo.environment["FFMPEG"] ?? "ffmpeg"
         process.arguments =
             [
-                ffmpeg, "-v", "error", "-y", "-f", "rawvideo", "-pix_fmt", "yuv420p", "-s", "\(clip.width)x\(clip.height)",
+                ffmpeg, "-v", "error", "-y", "-f", "rawvideo", "-pix_fmt", "yuv420p", "-s",
+                "\(clip.width)x\(clip.height)",
                 "-r", "\(clip.fps)", "-i", "-",
             ] + (try encoder(clip)) + ["-f", "mp4", url.path]
         let input = Pipe()

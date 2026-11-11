@@ -21,7 +21,8 @@ CODECS = ('h264', 'hevc', 'hevc_main10', 'vp9')
 SIZES = ('720p', '1080p', '4k')
 # hw_test_app/core/Media.swift's Clip.all: every codec at every size; MPEG-4 Part 2 and MPEG-2 without 4K, MPEG-1 at
 # 720p only
-CLIPS = tuple(f'{codec}_{size}' for codec in CODECS for size in SIZES) + (
+CLIPS = (
+    *(f'{codec}_{size}' for codec in CODECS for size in SIZES),
     'mpeg4_720p',
     'mpeg4_1080p',
     'mpeg2_720p',

@@ -68,10 +68,14 @@ struct VideoDecodeTest: HWTest {
         var proof = result.usingHardware ? "UsingHardwareAcceleratedVideoDecoder=1" : ""
         // Debug builds of the AVD plug-in count the pictures its NVDEC jobs put out and how each reached the client.
         if let routes = result.routes {
-            for key in ["frames", "exported", "vic", "cpu", "errors"] { metrics.set("decoder_" + key, routes[key] ?? 0) }
+            for key in ["frames", "exported", "vic", "cpu", "errors"] {
+                metrics.set("decoder_" + key, routes[key] ?? 0)
+            }
             checks.append(
-                ("every frame an NVDEC picture (SwitchPictureRoutes)",
-                 routes["frames"] == clip.frames && routes["errors"] == 0))
+                (
+                    "every frame an NVDEC picture (SwitchPictureRoutes)",
+                    routes["frames"] == clip.frames && routes["errors"] == 0
+                ))
             proof += " SwitchPictureRoutes frames=\(routes["frames"] ?? 0)"
         }
         return .judged(checks, metrics, proof: proof)
