@@ -421,7 +421,7 @@ static const TegraVICTraits kTegraVICTraits = {
     .yccIn = TEGRA_VIC_YCC_IN_RGB | TEGRA_VIC_YCC_IN_COPY,
     .blockLinearIn = 1,
     .blockLinearOut = 1,  // averne's nvtegra writes T210 VIC output in GENERIC_16Bx2: probe gpu.x1.vic_block_linear
-    .packedYcc = 0,       // the element size of a packed 4:2:2 row is undocumented: probe vic.packed422 (design only)
+    .packedYcc = 0,       // a packed 4:2:2 row's element size and byte order: probe gpu.x1.vic_packed422
     .subRects = 0x41,
     .surfaceFlips = 1,
 };

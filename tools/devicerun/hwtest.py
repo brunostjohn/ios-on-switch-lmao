@@ -234,6 +234,7 @@ BY_IOS: dict[str, dict[str, bool]] = {
         'gpu.x1.vic_pitch': False,
         'gpu.x1.vic_block_linear': False,
         'gpu.x1.vic_fractional': False,
+        'gpu.x1.vic_packed422': False,
     },
 }
 
