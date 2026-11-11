@@ -4,7 +4,8 @@ import Metal
 
 /// Decides raw_chip_facts.h AssumeTexsF16: TEXS.F16 against round-to-nearest-even of TEXS's F32 result, over every
 /// unorm8 code and every half, point sampled and bilinear between neighbours. It also holds bound TEXS's F32 form to
-/// TEX.B's (a compute kernel's textures stay bindless), since bound textures had not run on GM20B before.
+/// TEX.B's (a compute kernel's textures stay bindless), since bound textures had not run on GM20B before. Every target is
+/// a float format the raw path renders: the F16 form's bits arrive as whole floats, the proof word as a float's bits.
 struct TexsF16Scene: GPUScene {
     let id = "gpu.raw.texs_f16"
     let name = "TEXS.F16 against round-to-nearest-even of its F32 form; bound TEXS against TEX.B"
@@ -59,12 +60,12 @@ struct TexsF16Scene: GPUScene {
         let bindless = try gpu.compute("texs_f16_bindless")
         for (sampling, linear, offset) in Self.samplings {
             let pipeline = try gpu.render(fragment: linear == 1 ? "texs_f16_linear" : "texs_f16_point", format: .rgba32Float) {
-                $0.colorAttachments[1].pixelFormat = .rgba16Uint
-                $0.colorAttachments[2].pixelFormat = .r32Uint
+                $0.colorAttachments[1].pixelFormat = .rgba32Float
+                $0.colorAttachments[2].pixelFormat = .r32Float
             }
             let f32 = try gpu.texture(.rgba32Float, width, height, usage: [.renderTarget])
-            let f16 = try gpu.texture(.rgba16Uint, width, height, usage: [.renderTarget])
-            let proof = try gpu.texture(.r32Uint, width, height, usage: [.renderTarget])
+            let f16 = try gpu.texture(.rgba32Float, width, height, usage: [.renderTarget])
+            let proof = try gpu.texture(.r32Float, width, height, usage: [.renderTarget])
             let reference = try gpu.buffer(width * height * 16)
             var at = offset, filter = linear
             let timing = try await gpu.run { commands in
@@ -97,7 +98,7 @@ struct TexsF16Scene: GPUScene {
             let name = "\(label)_\(sampling)"
             result.metrics.set("\(name)_path", timing.path)
             let floats = try await gpu.read(f32, bytesPerPixel: 16)
-            let halves = try await gpu.read(f16, bytesPerPixel: 8)
+            let halves = try await gpu.read(f16, bytesPerPixel: 16)
             let stamp = try await gpu.read(proof, bytesPerPixel: 4)
             let proofWord = stamp.withUnsafeBytes { $0.load(as: UInt32.self) }
             let bindlessFloats = UnsafeBufferPointer(
@@ -109,8 +110,11 @@ struct TexsF16Scene: GPUScene {
                 halves.withUnsafeBytes { h in
                     for i in 0..<(width * height * 4) {
                         let bits = f.load(fromByteOffset: 4 * i, as: UInt32.self)
-                        let half = h.load(fromByteOffset: 2 * i, as: UInt16.self)
                         if bits != bindlessFloats[i] { boundWrong += 1 }
+                        guard let half = UInt16(exactly: h.load(fromByteOffset: 4 * i, as: Float.self)) else {
+                            f16Wrong += 1
+                            continue
+                        }
                         let want = Float16(Float(bitPattern: bits)).bitPattern
                         if half == want { continue }
                         if Float16(bitPattern: half).isNaN && Float(bitPattern: bits).isNaN {
@@ -128,7 +132,9 @@ struct TexsF16Scene: GPUScene {
             result.metrics.set("\(name)_bound_wrong", boundWrong)
             if let firstWrong { result.notes.append("\(name) first: \(firstWrong)") }
             let stamped = proofWord >> 16 == 0x5346 && proofWord & 0xFFFF > 0
-            result.expect(stamped || proofWord == 0x7FA5_5347, "\(name): the proof output was not written")
+            // an unstamped marker is a signalling NaN's bits, which a store may quiet
+            let marker = proofWord & ~0x0040_0000 == 0x7FA5_5347
+            result.expect(stamped || marker, "\(name): the proof output was not written")
             if !RawFacade.counters(of: gpu.device).isEmpty {
                 result.expect(stamped, "\(name): NAK did not fold the F16 fetch")
                 result.expect(timing.path == "raw", "\(name) left raw: \(timing.path)")
