@@ -197,6 +197,7 @@ TESTS: dict[str, bool] = {
     'input.controllers': False,
     'input.joycon': False,
     'input.focus_idle': False,
+    'input.focus_search': True,
     'input.rail': False,
     'input.joycon_idle': False,
     'input.joycon_probe': True,
