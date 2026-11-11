@@ -25,11 +25,13 @@ struct Rail {
         switch_joycon_cadence_reset(&c, 0);
     }
 
+    bool woke = false;  // the last request's reply woke a quiet cadence: the rail's clock comes back in 15 ms
+
     bool tick(uint64_t now, const Report &state, bool busy = false)
     {
         if (!switch_joycon_cadence_due(&c, busy, now))
             return false;
-        switch_joycon_cadence_input(&c, switch_joycon_cadence_engaged(&stick, last.data(), state.data()), now);
+        woke = switch_joycon_cadence_input(&c, switch_joycon_cadence_engaged(&stick, last.data(), state.data()), now);
         last = state;
         return true;
     }
@@ -86,6 +88,31 @@ TEST(SwitchJoyConCadence, AFirstPressWaitsAtMost15msLongerThanWhenActive)
     }
     EXPECT_LE(worst, uint64_t{SWITCH_JOYCON_CADENCE_QUIET_MS});
     EXPECT_LE(worst - SWITCH_JOYCON_CADENCE_ACTIVE_MS, 15u);
+}
+
+TEST(SwitchJoyConCadence, WithBothRailsQuietTheClockComesBack15msAfterAPress)
+{
+    // The rail's clock at 30 ms (both Joy-Cons quiet), re-armed at 15 ms by the reply that wakes one, as runningReport
+    // does; the reply comes back 6 ms after its request (deku: 5.64 ms median).
+    constexpr uint64_t kReply = 6;
+    for (uint64_t pressAt = 3000; pressAt < 3060; ++pressAt) {
+        Rail rail;
+        std::vector<uint64_t> sent;
+        for (uint64_t now = 30; now < 3400;) {
+            Report state = report(true, 1841, 2088);
+            if (now >= pressAt)
+                state[3] = 0x08;
+            const bool asked = rail.tick(now, state);
+            if (asked && now >= pressAt)
+                sent.push_back(now);
+            now +=
+                asked && rail.woke ? kReply + SWITCH_JOYCON_CADENCE_ACTIVE_MS : switch_joycon_cadence_interval(&rail.c);
+        }
+        ASSERT_GE(sent.size(), 3u);
+        EXPECT_LE(sent[0] - pressAt, uint64_t{SWITCH_JOYCON_CADENCE_QUIET_MS}) << pressAt;
+        EXPECT_EQ(sent[1] - sent[0], kReply + SWITCH_JOYCON_CADENCE_ACTIVE_MS) << pressAt;
+        EXPECT_EQ(sent[2] - sent[1], uint64_t{SWITCH_JOYCON_CADENCE_ACTIVE_MS}) << pressAt;
+    }
 }
 
 TEST(SwitchJoyConCadence, HeldButtonsAndADeflectedStickKeepTheActiveCadence)

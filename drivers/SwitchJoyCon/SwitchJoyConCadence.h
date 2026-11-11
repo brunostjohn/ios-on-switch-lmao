@@ -9,7 +9,9 @@
 // supported"; 311: a wrong rate answers status 1) and the Joy-Con's own HID timeout is 2 s (hekate joycon.c 1255-1257).
 // So a Joy-Con is quiet, asked every 30 ms, once a second has passed without input that changed, a button held or its
 // stick out of its dead zone, and while nothing else needs the 15 ms cadence: output reports queued, rumble that is
-// moving (L4T refreshes it every 50 ms, joycon-serdev.c 470, 1845-1851), or motion that a client asked for.
+// moving (L4T refreshes it every 50 ms, joycon-serdev.c 470, 1845-1851), or motion that a client asked for. A quiet
+// Joy-Con that is engaged again is active at once: the rail's clock, at 30 ms while both are quiet, comes back 15 ms
+// after the reply that showed it, so a release after a first press is seen as soon as before.
 #pragma once
 #include <stdbool.h>
 #include <stddef.h>
@@ -46,10 +48,15 @@ static inline bool switch_joycon_cadence_engaged(const struct switch_joycon_stic
            !switch_joycon_stick_within(s, now, s->centre, s->dead_zone);
 }
 
-static inline void switch_joycon_cadence_input(struct switch_joycon_cadence *c, bool engaged, uint64_t now)
+// True: a quiet Joy-Con is engaged again (the rail's clock is due in 15 ms).
+static inline bool switch_joycon_cadence_input(struct switch_joycon_cadence *c, bool engaged, uint64_t now)
 {
-    if (engaged)
-        c->engaged_until = now + SWITCH_JOYCON_CADENCE_HOLD_MS;
+    if (!engaged)
+        return false;
+    c->engaged_until = now + SWITCH_JOYCON_CADENCE_HOLD_MS;
+    const bool woke = c->quiet;
+    c->quiet = false;
+    return woke;
 }
 
 // A rumble report asks this Joy-Con for a non-zero amplitude (L4T joycon_send_rumble_data: the left half of the 8 rumble

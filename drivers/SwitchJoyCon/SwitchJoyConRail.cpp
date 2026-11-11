@@ -68,7 +68,7 @@
 // tegra_gpio_check_delivery() (as SwitchButtons) looks at that pin when the display goes off, not on a timer. Until the
 // session runs, every packet also takes one THR-empty interrupt, so the interrupt count proves the UART's line reaches
 // the CPU even when nothing comes back; a running Joy-Con's replies prove it, and its requests, which fit the TX FIFO,
-// take none: one interrupt per request, the reply's.
+// take none. Its replies take two each by RX DMA (below).
 // Silence is counted in requests the Joy-Con left unanswered, not in time since its last reply, so a clock that fired
 // late cannot pass for a Joy-Con that stopped. A running Joy-Con is gone after 1.5 s of them, not L4T's 500 ms
 // (J:1793): it runs on its own battery, so a rail contact that bounces while the console is handled leaves it at
@@ -86,23 +86,24 @@
 // every 15 ms per rail) takes about eight interrupts, around 1000 a second on CPU0 for two rails. While a rail runs,
 // the UART is in DMA mode (FCR DMA select, RX trigger 1, IER RLSI | RTOIE | EORD and no RDI), and channel 0 (UART-B) /
 // 1 (UART-C) is the RX FIFO's only reader, as SwitchBluetooth's: one 32-bit read of RBR per byte, one word a byte, into
-// a 16 KiB ring, continuously (tegra_apbdma_start_rx_words_ring). The reply takes one interrupt, EORD or RX timeout
-// once the line has been idle for 4 characters, and the filter takes the words that moved (cache lines invalidated
-// first) into the same ring and framing as PIO and wakes the action once. Nothing reads the FIFO by PIO while the
-// channel runs: on the console the channel can fall a whole reply behind (the FIFO full, RTS holding the Joy-Con,
-// EORD with nothing in the ring), and a PIO read of the 1-3 bytes below a 4-byte burst, as serial-tegra does it, then
-// raced the channel for the FIFO: it took the 0 that is a reply's length high byte, so the cmd byte 0x92 became it and
-// the parser saw a 37437-byte packet. A channel that is behind is now only late: a take that leaves bytes in the FIFO
-// or ends inside a packet leaves the tail to the next request's tick (the Joy-Con says nothing more until then) and
-// masks RX timeout until then, so a slow channel cannot storm the line; `dmaLate` counts those takes. TX stays PIO (a
-// request fits the FIFO: one THR-empty interrupt). Handshake and pairing keep PIO, so their give-up lines see every
-// byte. The DMA's end-of-count at every wrap is counted: more wraps than the words taken account for means the ring
-// was overrun, data lost, and the action panics with one line; words in the ring that no interrupt took and no tail
-// was expected, after 50 ms, are a lost interrupt (checkDelivery). Non-fatal checks, each a channel that does not
-// work: one that does not open, a first reply that does not start with the reply magic, or bytes in the FIFO across a
-// whole request interval with the channel not moving. Each turns DMA off for that rail with one log line (DMA select
-// off first and a read in flight let land, so PIO sees every byte in order); it keeps working by interrupt per FIFO
-// trigger.
+// a 16 KiB ring, continuously (tegra_apbdma_start_rx_words_ring). The reply takes two interrupts, EORD (or RX timeout)
+// each time the line has been idle for 4 characters: a Joy-Con pauses 19-263 us after a reply's first 4 bytes (deku
+// packet_parse/joycon2consolegrey.csv, every one of 330 replies) and the reply ends; the filter takes the words that
+// moved (cache lines invalidated first) into the same ring and framing as PIO and wakes the action once, at the end.
+// Nothing reads the FIFO by PIO while the channel runs: on the console the channel can fall a whole reply behind (the
+// FIFO full, RTS holding the Joy-Con, EORD with nothing in the ring), and a PIO read of the 1-3 bytes below a 4-byte
+// burst, as serial-tegra does it, then raced the channel for the FIFO: it took the 0 that is a reply's length high
+// byte, so the cmd byte 0x92 became it and the parser saw a 37437-byte packet. A channel that is behind is now only
+// late: a take that leaves bytes in the FIFO or ends inside a packet leaves the tail to the next EORD (the rest of a
+// reply after its header's pause) or at the latest the next request's tick, and masks RX timeout until then, so a slow
+// channel cannot storm the line; `dmaLate` counts those takes. TX stays PIO (a request fits the FIFO). Handshake and
+// pairing keep PIO, so their give-up lines see every byte. The DMA's end-of-count at every wrap is counted: more wraps
+// than the words taken account for means the ring was overrun, data lost, and the action panics with one line; words in
+// the ring that no interrupt took and no tail was expected, after 50 ms, are a lost interrupt (checkDelivery).
+// Non-fatal checks, each a channel that does not work: one that does not open, a first reply that does not start with
+// the reply magic, or bytes in the FIFO across a whole request interval with the channel not moving. Each turns DMA off
+// for that rail with one log line (DMA select off first and a read in flight let land, so PIO sees every byte in
+// order); it keeps working by interrupt per FIFO trigger.
 //
 // Pairing (unless switch-no-bt): the address to pair to is the one SwitchBluetooth programs
 // into the controller for bluetoothd: the unit's own (fuses, as switchroot's U-Boot derives it) or, when deploy staged
@@ -595,7 +596,8 @@ OSDefineMetaClassAndStructors(SwitchJoyConPairing, IOService)
     };
 
     IOWorkLoop *loop = nullptr;
-    IOTimerEventSource *poll = nullptr;          // the 15 ms clock of every running Joy-Con; armed only while one runs
+    IOTimerEventSource *poll = nullptr;          // the clock of every running Joy-Con; armed only while one runs
+    uint32_t pollInterval = 0;                   // what it was last armed at (SwitchJoyConCadence.h)
     IOInterruptEventSource *sessions = nullptr;  // software interrupt: a device's backboardd session ended
     volatile uint8_t *car = nullptr, *gpio = nullptr, *apbMisc = nullptr, *pinmux = nullptr, *uarts = nullptr,
                      *pmc = nullptr;
@@ -1931,6 +1933,7 @@ void SwitchJoyConRail::armPoll()
         if (probing(s) || switch_joycon_cadence_interval(&s.cadence) < interval)
             interval = SWITCH_JOYCON_CADENCE_ACTIVE_MS;
     }
+    pollInterval = interval;
     if (polling)
         poll->setTimeoutMS(interval);
 }
@@ -2061,8 +2064,12 @@ void SwitchJoyConRail::runningReport(Side &s, const uint8_t *report, size_t leng
     rumbleAfterReply(s);
     switch_joycon_hid_buttons(s.cfg->left, report, length);
     if (length >= sizeof(s.state) && report[0] != kReportReply) {
-        switch_joycon_cadence_input(
-            &s.cadence, !s.stateKnown || switch_joycon_cadence_engaged(&s.stick, s.state, report), switch_now_ms());
+        const bool engaged = !s.stateKnown || switch_joycon_cadence_engaged(&s.stick, s.state, report);
+        if (switch_joycon_cadence_input(&s.cadence, engaged, switch_now_ms()) &&
+            pollInterval > SWITCH_JOYCON_CADENCE_ACTIVE_MS) {
+            pollInterval = SWITCH_JOYCON_CADENCE_ACTIVE_MS;
+            poll->setTimeoutMS(pollInterval);
+        }
         memcpy(s.state, report, sizeof(s.state));
         s.stateKnown = true;
     }

@@ -4,17 +4,19 @@ import GameController
 import HWTestCore
 
 /// The Joy-Con rails left alone, from the rail driver's counters (kern.switch_joycon, debug kernels): a Joy-Con with
-/// no input for a second is asked every 30 ms instead of 15 (SwitchJoyConCadence.h), each request costs one UART
-/// interrupt (its reply's: the request fits the TX FIFO and takes no THR-empty interrupt), the RX DMA channel keeps up
-/// with every reply, and no report reaches its HID device (SwitchJoyConForward.h). Nobody may touch the pads.
+/// no input for a second is asked every 30 ms instead of 15 (SwitchJoyConCadence.h), each request costs two UART
+/// interrupts, its reply's EORDs after the reply's header pause and at its end (the request fits the TX FIFO and takes
+/// no THR-empty interrupt), the RX DMA channel keeps up with every reply, and no report reaches its HID device
+/// (SwitchJoyConForward.h). Nobody may touch the pads.
 struct JoyConIdleTest: HWTest {
     let id = "input.joycon_idle"
-    let name = "Joy-Con rails left alone: a request every 30 ms, one interrupt each, nothing forwarded"
+    let name = "Joy-Con rails left alone: a request every 30 ms, two interrupts each, nothing forwarded"
     let subsystem = Subsystem.input
 
     static let settle = 1.5
     static let seconds = 5.0
     static let requestsPerSecond = 1000.0 / 30.0
+    static let interruptsPerRequest = 2.0
 
     func run(_ context: TestContext) async throws -> Outcome {
         let first = RailTest.read()
@@ -63,7 +65,7 @@ struct JoyConIdleTest: HWTest {
             metrics.set("\(rail)_calibrated", now.counters["calibrated"] ?? 0)
             metrics.set("\(rail)_gamepad", now.counters["gamepad"] ?? 0)
             paced = paced && abs(rate - Self.requestsPerSecond) <= 0.15 * Self.requestsPerSecond
-            single = single && perRequest <= 1.1
+            single = single && perRequest <= Self.interruptsPerRequest + 0.1
             forwarded += now.delta("forwarded", since: then)
             tails += now.delta("tails", since: then)
             quiet = quiet && now.counters["quiet"] == 1
@@ -72,7 +74,7 @@ struct JoyConIdleTest: HWTest {
         return .judged(
             [
                 ("each rail was asked about every 30 ms", paced),
-                ("one UART interrupt per request", single),
+                ("at most two UART interrupts per request", single),
                 ("no report reached a HID device", forwarded == 0),
                 ("every reply was whole at its interrupt (no tail left to a tick)", tails == 0),
                 ("each rail stayed quiet", quiet),
