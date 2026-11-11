@@ -117,4 +117,60 @@ TEST(PbdmaIntr, ChannelErrorsBesideItStillGoToNvkm)
 	EXPECT_EQ(tgm_pbdma_for_nvkm(0x01200000u), 0x00200000u);  // METHOD
 	EXPECT_EQ(tgm_pbdma_for_nvkm(0x00040000u), 0x00040000u);  // PBENTRY
 }
+
+// gpu.c's checks of a channel whose job's internal fences move its fence word with no interrupt: its progress time
+// moves when the interrupt pass or a check sees the word move (chan_progress_ns), and a check blames it as
+// tgm_ctxsw_decide and hang_recover do (stuck, confirmed by the next check).
+struct SilentJob {
+	uint32_t completed, submitted, irq_done, seen;
+	uint64_t progress_ns;
+	uint32_t strikes = 0, confirmed = 0;
+
+	bool check(uint64_t now)
+	{
+		if (tgm_progress_seen(completed, irq_done, &seen))
+			progress_ns = now;
+		const int stuck = tgm_stuck(0, completed, submitted, now, progress_ns);
+
+		return tgm_hang_confirm(stuck, completed, &strikes, &confirmed) != 0;
+	}
+};
+
+TEST(SilentFences, ALongJobWhoseBatchesKeepEndingIsNeverBlamed)
+{
+	// 3 s of 27 batches, one ending every 110 ms, checked at every context-switch timeout tick
+	SilentJob job = {100, 128, 100, 100, 0};
+	for (uint64_t now = kTick; now < 3000 * kMs; now += kTick) {
+		job.completed = 100 + uint32_t(now / (110 * kMs));
+		EXPECT_FALSE(job.check(now)) << now / kMs;
+	}
+}
+
+// The batch end a check finds counts from that check, not from when the GPU released it: a stop just after a silent
+// fence is blamed up to one check period later than one after an interrupt.
+TEST(SilentFences, AJobStoppedInABatchIsBlamedOnceTwoChecksFindItStill)
+{
+	SilentJob job = {105, 128, 100, 100, 0};
+	EXPECT_FALSE(job.check(1 * kTick));
+	EXPECT_EQ(job.progress_ns, kTick);
+	EXPECT_FALSE(job.check(2 * kTick));
+	EXPECT_FALSE(job.check(3 * kTick));
+	EXPECT_TRUE(job.check(4 * kTick));
+}
+
+TEST(SilentFences, AMoveTheInterruptPassCountedKeepsItsTime)
+{
+	SilentJob job = {110, 128, 110, 100, 10 * kMs};
+	EXPECT_FALSE(job.check(400 * kMs));
+	EXPECT_EQ(job.progress_ns, 10 * kMs);
+	EXPECT_FALSE(job.check(600 * kMs));
+	EXPECT_TRUE(job.check(856 * kMs));
+}
+
+TEST(SilentFences, AnIdleChannelIsNeverStuck)
+{
+	SilentJob job = {128, 128, 120, 120, 0};
+	EXPECT_FALSE(job.check(10 * kTick));
+	EXPECT_FALSE(job.check(20 * kTick));
+}
 }  // namespace

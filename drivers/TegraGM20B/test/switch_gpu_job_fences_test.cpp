@@ -107,3 +107,98 @@ TEST(JobFences, AFaultInAnyBatchFailsTheWholeJob)
 		EXPECT_EQ(tgm_fence_lost(&fence, submitted), 0) << completed;
 	}
 }
+
+namespace
+{
+// Jobs kicked as chan_fence_job kicks them: `sizes` seqnos each, after `submitted`.
+switch_gpu_jobs kicked(uint32_t submitted, std::initializer_list<uint32_t> sizes)
+{
+	switch_gpu_jobs jobs = {};
+	switch_gpu_jobs_init(&jobs, submitted);
+	uint64_t kick_ns = 1000;
+	for (uint32_t size : sizes) {
+		switch_gpu_jobs_kick(&jobs, submitted + 1, submitted + size, kick_ns);
+		submitted += size;
+		kick_ns += 1000;
+	}
+	return jobs;
+}
+}  // namespace
+
+// A fresh channel's records hold nothing, the slot's earlier seqnos included.
+TEST(JobRecords, ANewChannelHasNoJobs)
+{
+	const auto jobs = kicked(500, {});
+	switch_gpu_kicked_job job = {};
+	for (uint32_t seqno : {0u, 499u, 500u, 501u})
+		EXPECT_EQ(switch_gpu_jobs_find(&jobs, seqno, &job), 0) << seqno;
+	EXPECT_EQ(switch_gpu_jobs_announcing(&jobs, 500), 500u);
+}
+
+// The compositor's frame as one job of 28 seqnos (27 internal fences): one interrupt pass covers all of it.
+TEST(JobRecords, APassOverAWholeJobFindsItsKickAndStart)
+{
+	const auto jobs = kicked(40, {3, 28});
+	switch_gpu_kicked_job span[SWITCH_GPU_JOBS];
+	ASSERT_EQ(switch_gpu_jobs_span(&jobs, 44, 71, span), 1u);
+	EXPECT_EQ(span[0].first, 44u);
+	EXPECT_EQ(span[0].last, 71u);
+	EXPECT_EQ(span[0].kick_ns, 2000u);
+	EXPECT_EQ(span[0].app, 1);
+	EXPECT_EQ(span[0].behind, -1);
+	ASSERT_EQ(switch_gpu_jobs_span(&jobs, 41, 71, span), 2u);
+	EXPECT_EQ(span[0].last, 43u);
+	EXPECT_EQ(span[1].first, 44u);
+}
+
+// Another channel's interrupt can run the pass while this channel is mid-job: the next pass starts inside the job.
+TEST(JobRecords, APassFromInsideAJobFindsThatJob)
+{
+	const auto jobs = kicked(40, {28, 2});
+	switch_gpu_kicked_job span[SWITCH_GPU_JOBS];
+	ASSERT_EQ(switch_gpu_jobs_span(&jobs, 41, 55, span), 1u);
+	ASSERT_EQ(switch_gpu_jobs_span(&jobs, 56, 70, span), 2u);
+	EXPECT_EQ(span[0].first, 41u);
+	EXPECT_EQ(span[0].kick_ns, 1000u);
+	EXPECT_EQ(span[1].first, 69u);
+}
+
+TEST(JobRecords, ARefilledRecordIsGone)
+{
+	const auto jobs = kicked(0, {2, 1, 1, 1, 1, 1, 1, 1, 1});
+	switch_gpu_kicked_job job = {};
+	EXPECT_EQ(switch_gpu_jobs_find(&jobs, 1, &job), 0);
+	EXPECT_EQ(switch_gpu_jobs_find(&jobs, 3, &job), 1);
+	switch_gpu_kicked_job span[SWITCH_GPU_JOBS];
+	EXPECT_EQ(switch_gpu_jobs_span(&jobs, 2, 4, span), 0u);
+	EXPECT_EQ(switch_gpu_jobs_span(&jobs, 3, 10, span), 8u);
+}
+
+// WaitFence's lost-wake check: a seqno is announced by the end of the job holding it, not when the fence passes it.
+TEST(JobRecords, AnInternalSeqnoIsAnnouncedByItsJobsEnd)
+{
+	const auto jobs = kicked(40, {3, 28, 1});
+	EXPECT_EQ(switch_gpu_jobs_announcing(&jobs, 41), 43u);
+	EXPECT_EQ(switch_gpu_jobs_announcing(&jobs, 43), 43u);
+	EXPECT_EQ(switch_gpu_jobs_announcing(&jobs, 50), 71u);
+	EXPECT_EQ(switch_gpu_jobs_announcing(&jobs, 72), 72u);
+	EXPECT_EQ(switch_gpu_jobs_announcing(&jobs, 73), 73u);
+}
+
+// A job whose record was refilled is announced no earlier than a later job's end, never before its own.
+TEST(JobRecords, AnOldSeqnoFallsToTheEarliestRecordedEnd)
+{
+	const auto jobs = kicked(0, {5, 1, 1, 1, 1, 1, 1, 1, 1});
+	EXPECT_EQ(switch_gpu_jobs_announcing(&jobs, 3), 6u);
+}
+
+TEST(JobRecords, RecordsWrapWithTheChannelsFence)
+{
+	const auto jobs = kicked(0xfffffffdu, {3, 2});
+	switch_gpu_kicked_job span[SWITCH_GPU_JOBS];
+	ASSERT_EQ(switch_gpu_jobs_span(&jobs, 0xfffffffeu, 2, span), 2u);
+	EXPECT_EQ(span[0].last, 0u);
+	EXPECT_EQ(span[1].first, 1u);
+	EXPECT_EQ(switch_gpu_jobs_announcing(&jobs, 0xffffffffu), 0u);
+	EXPECT_EQ(switch_gpu_jobs_announcing(&jobs, 1), 2u);
+}

@@ -158,6 +158,16 @@ static inline int tgm_stuck(int dead, uint32_t completed, uint32_t submitted, ui
 	return !dead && (int32_t)(completed - submitted) < 0 && now - progress_ns >= TGM_STUCK_NS;
 }
 
+/* A job's internal fences move its channel's fence word with no interrupt, so a check reads the word itself: a value
+ * neither the interrupt pass (irq_done) nor an earlier check (*seen) accounted for is progress at the check's time. */
+static inline int tgm_progress_seen(uint32_t completed, uint32_t irq_done, uint32_t *seen)
+{
+	if (completed == irq_done || completed == *seen)
+		return 0;
+	*seen = completed;
+	return 1;
+}
+
 /* What a wait that ran out with no GPU error reported found (gpu.c hang_recover). */
 enum tgm_hang {
 	TGM_HANG_STUCK, /* nothing to recover: the GPU is stuck on a kernel channel, or nothing progresses: panic */

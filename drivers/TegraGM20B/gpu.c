@@ -9,9 +9,10 @@
  *   channels      nouveau_chan.c nouveau_channel_ctor()/_init() + nvif/chan906f.c GPFIFO/pushbuf helpers
  *   submission    nouveau_exec.c (one GPFIFO entry per push) + nv84/gf100 fence semaphore release
  * Interrupts, no polled mode: from the end of M1 the GPU's stall/nonstall SPIs drive nvkm_intr from a work loop
- * (nvxnu_irq_start, shim/xnu_glue.cpp) and every wait sleeps in nvxnu_idle(); each fence also raises a nonstall
+ * (nvxnu_irq_start, shim/xnu_glue.cpp) and every wait sleeps in nvxnu_idle(); each job's fence also raises a nonstall
  * interrupt (NON_STALL_INTERRUPT after the semaphore release, as nouveau's nvc0_fence_emit32) that a per-channel
- * NON_STALL_INTR event turns into a wake. A fence found complete with no wake panics (nvxnu_wake_due).
+ * NON_STALL_INTR event turns into a wake (a job's internal fences raise none: SwitchGpuJobFences.h). A fence found
+ * complete with no wake panics (nvxnu_wake_due).
  * GPU L2: user mappings are L2-cacheable instead of volatile, as nvgpu maps
  * the buffers its clients ask to be cacheable (gk20a/mm_gk20a.c __update_pte: VOL only for !cacheable); see l2_on().
  * GPU present: the display's frames are swizzled into its block-linear scanout by the copy
@@ -1133,7 +1134,6 @@ void tgm_mem_del(struct tgm_mem **pmem)
 #define CHAN_PROF                              \
 	(CHAN_PUSH_BYTES + CHAN_GPFIFO_BYTES + \
 	 0x1000) /* one 16-byte stamp per push, TGM_PROF_MAX */
-#define CHAN_QUEUED 8
 #define CHAN_NSTAMPS \
 	64 /* by seqno; one record = two 16-byte semaphore releases (payload, 0, PTIMER ns) */
 
@@ -1192,23 +1192,20 @@ struct tgm_chan {
 	u64 fault_va;    /* error 1: the VA its MMU fault report names */
 	u64 submit_ns;   /* when the last fence was kicked */
 	u64 busy_ns;     /* hang_recover: when it last went from idle to work pending */
-	u64 progress_ns; /* and when its fence last moved, to progress_done */
+	u64 progress_ns; /* and when its fence was last seen moving: by the interrupt pass (to progress_done) or a check */
 	/* the hold's time on it (tgm_hold_held_ns) at the later of those two */
 	u64 progress_held;
 	u32 progress_done;
+	u32 seen_done; /* a hang check's last look at the fence word (chan_progress_ns; live_lock) */
 	u32 stall_done; /* tgm_chan_check_progress: completed seqno first seen stalled, and when */
 	u64 stall_ns, stall_held;
 	int app;     /* a user channel: the hold may take it from its first submission */
 	int tracked; /* the hold may take it (tgm_hold_track) */
 	u32 timeslice_due; /* RAMFC timeslice for a level change, written once the host holds the channel no more */
 
-	/* high channels, by seqno: each submission's kick, the app channel it was queued behind and when that one was asked
-	 * to leave the GPU (PTIMER), whether an app held the GPU at its kick, whether acquires came before its start stamp */
-	struct {
-		u64 kick_ns, asked_pt;
-		s16 behind;
-		u8 app, waits;
-	} queued[CHAN_QUEUED];
+	/* its last jobs; high channels': each job's kick, the app channel it was queued behind and when that one was asked to
+	 * leave the GPU (PTIMER), whether an app held the GPU at its kick, whether acquires came before its start stamp */
+	struct switch_gpu_jobs jobs;
 
 	u32 gov_done;   /* idle clock: last seqno counted retired (idle_retire) */
 	u32 woken_done; /* the completed seqno chan_wake_waiters last looked at */
@@ -1752,15 +1749,23 @@ static void iso_deadline(void *arg)
 	mutex_unlock(&live_lock);
 }
 
-static u64 chan_progress_ns(struct tgm_chan *chan)
+/* live_lock held. Internal fences move the fence word without an interrupt: a move the interrupt pass has not seen
+ * counts as progress now, when a check first sees it. */
+static u64 chan_progress_ns(struct tgm_chan *chan, u64 now)
 {
+	const u32 done = tgm_chan_completed(chan);
+
+	if (tgm_progress_seen(done, READ_ONCE(chan->progress_done), &chan->seen_done)) {
+		WRITE_ONCE(chan->progress_held, tgm_hold_held_ns(chan->chid, now));
+		WRITE_ONCE(chan->progress_ns, now);
+	}
 	return max(READ_ONCE(chan->progress_ns), READ_ONCE(chan->busy_ns));
 }
 
 /* The hold's time since the channel's last progress is left out, as tgm_chan_check_progress leaves it out. */
 static int chan_stuck(struct tgm_chan *chan, u64 now)
 {
-	u64 since = chan_progress_ns(chan);
+	u64 since = chan_progress_ns(chan, now);
 	u64 unheld = tgm_unheld_ns(now, since, tgm_hold_held_ns(chan->chid, now),
 				   READ_ONCE(chan->progress_held));
 
@@ -1781,7 +1786,7 @@ static int chan_moving(struct tgm_chan *chan, u64 now)
 		chan->get_seen = get;
 		chan->get_ns = now;
 	}
-	return now - max(chan_progress_ns(chan), chan->get_ns) < TGM_STUCK_NS;
+	return now - max(chan_progress_ns(chan, now), chan->get_ns) < TGM_STUCK_NS;
 }
 
 /* live_lock held; by id, else (id 0) by hardware channel */
@@ -1814,7 +1819,7 @@ static void hang_detail(struct tgm_chan *blame, struct tgm_chan *late, u64 now)
 	char line[TGM_HANG_LINE];
 
 	d.chid = blame->chid;
-	d.stalled_ms = (now - chan_progress_ns(blame)) / 1000000;
+	d.stalled_ms = (now - chan_progress_ns(blame, now)) / 1000000;
 	if (w->cpu && (s32)(READ_ONCE(*w->cpu) - w->seqno) < 0) {
 		d.waits = 1;
 		d.wait_chid = w->chid;
@@ -1826,12 +1831,12 @@ static void hang_detail(struct tgm_chan *blame, struct tgm_chan *late, u64 now)
 		d.source_live = 1;
 		d.source_done = tgm_chan_completed(source);
 		d.source_submitted = READ_ONCE(source->submitted);
-		d.source_ms = (now - chan_progress_ns(source)) / 1000000;
+		d.source_ms = (now - chan_progress_ns(source, now)) / 1000000;
 	}
 	d.late_chid = late->chid;
 	d.late_done = tgm_chan_completed(late);
 	d.late_submitted = READ_ONCE(late->submitted);
-	d.late_ms = (now - chan_progress_ns(late)) / 1000000;
+	d.late_ms = (now - chan_progress_ns(late, now)) / 1000000;
 	tgm_hang_detail_format(line, sizeof(line), &d);
 	bind = blame->vm ? __atomic_load_n(&blame->vm->bind_cpu, __ATOMIC_ACQUIRE) : NULL;
 	nvxnu_log("tegra-gm20b: GPU hang detail: %s; bind epoch %u of %u\n", line,
@@ -1904,7 +1909,7 @@ static enum tgm_hang hang_recover(struct tgm_chan *late, const char *who, u32 se
 	}
 	list_for_each_entry(chan, &live_chans, live)
 	{
-		if (now - chan_progress_ns(chan) < TGM_STUCK_NS)
+		if (now - chan_progress_ns(chan, now) < TGM_STUCK_NS)
 			progress = 1;
 	}
 	verdict = tgm_hang_blame(c, n + 1, READ_ONCE(late->error) != 0, late->kernel, progress, &b);
@@ -3453,46 +3458,42 @@ static u64 high_end_ns, high_end_pt;
 
 /* A high channel's fence moved from `from` to `done` (interrupt pass): the GPU time of what completed, for the
  * compositor's time per frame (deadline.c): from its start stamp to its end stamp (debug kernels) or now, or for the
- * present (no stamp outside debug kernels) from its kick, then biased by any app on the GPU at its kicks. And each submission's start stamp after an app channel
- * it was queued behind: the time that app took to leave the GPU (its preemption latency, hold.c). A submission with
- * acquires before its stamp started late for its own reasons. */
+ * present (no stamp outside debug kernels) from its kick, then biased by any app on the GPU at its kicks. And each job's
+ * start stamp after an app channel it was queued behind: the time that app took to leave the GPU (its preemption
+ * latency, hold.c). A job with acquires before its stamp started late for its own reasons. A pass covers whole jobs (only
+ * a job's own fence interrupts) unless another channel's interrupt ran it mid-job. */
 static void high_fenced(struct tgm_chan *chan, u32 from, u32 done)
 {
 	volatile struct tgm_stamps *st = chan_stamps(chan, from + 1);
 	volatile struct tgm_stamps *last = chan_stamps(chan, done);
+	struct switch_gpu_kicked_job jobs[SWITCH_GPU_JOBS];
 	u64 now = nvxnu_nanotime();
 	u64 now_pt = nvkm_timer_read(gpu.device->timer);
 	u64 sample = 0;
 	u64 end_pt = 0;
-	int fit = (s32)(done - from) <= CHAN_QUEUED;
-	int biased = !fit;
-	u32 s = 0;
+	u32 n = switch_gpu_jobs_span(&chan->jobs, from + 1, done, jobs);
+	int biased = !n;
+	u32 i = 0;
 
 	tgm_deadline_clock(now, now_pt);
 	end_pt = stats_on() && last->end.payload == done ? last->end.ns : now_pt;
-	if (!chan->kernel && fit && st->start.payload == from + 1)
+	if (!chan->kernel && n && st->start.payload == from + 1)
 		sample = tgm_deadline_pt_ns(tgm_gpu_span(end_pt, st->start.ns, high_end_pt));
 	if (!sample) {
-		for (s = from + 1; !biased && (s32)(done - s) >= 0; s++)
-			biased = READ_ONCE(chan->queued[s % CHAN_QUEUED].app);
-		sample =
-			tgm_gpu_span(now, READ_ONCE(chan->queued[(from + 1) % CHAN_QUEUED].kick_ns),
-				     high_end_ns);
+		for (i = 0; !biased && i < n; i++)
+			biased = jobs[i].app;
+		sample = tgm_gpu_span(now, n ? jobs[0].kick_ns : 0, high_end_ns);
 	}
 	high_end_ns = now;
 	high_end_pt = end_pt;
 	tgm_deadline_progress(sample, biased);
-	if (chan->kernel || !fit)
+	if (chan->kernel)
 		return;
-	for (s = from + 1; (s32)(done - s) >= 0; s++) {
-		int behind = READ_ONCE(chan->queued[s % CHAN_QUEUED].behind);
-
-		st = chan_stamps(chan, s);
-		if (behind >= 0 && !READ_ONCE(chan->queued[s % CHAN_QUEUED].waits) &&
-		    st->start.payload == s) {
-			tgm_hold_sampled(behind, READ_ONCE(chan->queued[s % CHAN_QUEUED].asked_pt),
-					 st->start.ns);
-		}
+	for (i = 0; i < n; i++) {
+		st = chan_stamps(chan, jobs[i].first);
+		if ((s32)(jobs[i].first - from) > 0 && jobs[i].behind >= 0 && !jobs[i].waits &&
+		    st->start.payload == jobs[i].first)
+			tgm_hold_sampled(jobs[i].behind, jobs[i].asked_pt, st->start.ns);
 	}
 }
 
@@ -3521,6 +3522,13 @@ static void chan_wake_waiters(struct tgm_chan *chan)
 void tgm_chan_want(struct tgm_chan *chan, uint32_t seqno)
 {
 	switch_gpu_waiter_want(&chan->wanted, seqno);
+}
+
+int tgm_chan_announced(struct tgm_chan *chan, uint32_t seqno)
+{
+	const u32 end = switch_gpu_jobs_announcing(&chan->jobs, seqno);
+
+	return (s32)(tgm_chan_completed(chan) - end) >= 0;
 }
 
 #include "SwitchGpuChannelCompletion.h"
@@ -3620,15 +3628,15 @@ void tgm_chan_set_level(struct tgm_chan *chan, unsigned int level)
 	}
 	if (high) {
 		/* work kicked before the change found no preempt: none of it is timed as the compositor's */
-		for (i = 0; i < CHAN_QUEUED; i++) {
-			WRITE_ONCE(chan->queued[i].kick_ns, now);
-			WRITE_ONCE(chan->queued[i].behind, -1);
-			WRITE_ONCE(chan->queued[i].app, 1);
-			WRITE_ONCE(chan->queued[i].waits, 1);
+		for (i = 0; i < SWITCH_GPU_JOBS; i++) {
+			WRITE_ONCE(chan->jobs.job[i].kick_ns, now);
+			WRITE_ONCE(chan->jobs.job[i].behind, -1);
+			WRITE_ONCE(chan->jobs.job[i].app, 1);
+			WRITE_ONCE(chan->jobs.job[i].waits, 1);
 		}
 		WRITE_ONCE(chan->tracked, 0);
 		chan->critical = 1;
-		/* chan_nonstall reads queued[] once it sees high */
+		/* chan_nonstall reads the job records once it sees high */
 		__atomic_store_n(&chan->high, 1, __ATOMIC_RELEASE);
 		tgm_sched_level(gpu.device, chan->chid, TGM_LEVEL_HIGH);
 	} else {
@@ -3692,8 +3700,6 @@ static int chan_new(struct tgm_vm *vm, const void *vm_owner, volatile uint32_t *
 	if (!chan)
 		return -ENOMEM;
 	chan->vm = vm;
-	for (i = 0; i < CHAN_QUEUED; i++)
-		chan->queued[i].behind = -1;
 	tgm_tlb_chan_init(&chan->tlb);
 	chan->fence_cpu = fence_cpu;
 	chan->fence_gpu = fence_gpu_va;
@@ -3702,10 +3708,12 @@ static int chan_new(struct tgm_vm *vm, const void *vm_owner, volatile uint32_t *
 	/* a fence word only moves forward: a channel made in a slot continues its predecessor's sequence, so a semaphore
 	 * acquire on the old seqno (the GPU present) is never left waiting for a word that went back to 0 */
 	chan->submitted = READ_ONCE(*fence_cpu);
+	switch_gpu_jobs_init(&chan->jobs, chan->submitted);
 	chan->stat_done = chan->submitted;
 	chan->woken_done = chan->submitted;
 	chan->gov_done = chan->submitted;
 	chan->progress_done = chan->submitted;
+	chan->seen_done = chan->submitted;
 	chan->ring = dma_alloc_attrs(&gpu_pdev.dev, CHAN_BYTES, &chan->ring_pa, GFP_KERNEL,
 				     DMA_ATTR_WRITE_COMBINE);
 	chan->ring_pas = kcalloc(npages, sizeof(u64), GFP_KERNEL);
@@ -4624,10 +4632,12 @@ static int chan_push_wait(struct tgm_chan *chan, u32 push_nr)
  * is stamped for the stats. The GET report comes before the interrupt so that a wait for room (chan_room) finds the room
  * this submission frees once its interrupt has woken it; nvif's own report at the kick lands after the interrupt. Space
  * was reserved by the caller (chan_wait_room / chan_push_wait): CHAN_FENCE_DWORDS. A job's internal fences
- * (chan_job_fence) released first .. next - 1 ahead of it, in the same kick. */
+ * (chan_job_fence) released first .. next - 1 ahead of it, in the same kick, and raise no interrupt: this one announces
+ * them all (the job's record says which). */
 static u32 chan_fence_job(struct tgm_chan *chan, int external, u32 first, u32 next)
 {
 	struct nvif_push *push = &chan->chan.push;
+	struct switch_gpu_kicked_job *job = NULL;
 	u32 s = 0;
 	idle_wake(); /* backstop: tgm_chan_exec and tgm_present_copy raise it before their first kick */
 	if (external && (l2_on() || chan->kernel)) {
@@ -4677,16 +4687,7 @@ static u32 chan_fence_job(struct tgm_chan *chan, int external, u32 first, u32 ne
 		WRITE_ONCE(chan->progress_held, tgm_hold_held_ns(chan->chid, chan->submit_ns));
 		WRITE_ONCE(chan->busy_ns, chan->submit_ns);
 	}
-	/* `first` is written last: only it has a start stamp, so the preemption latency high_fenced learns stays its,
-	 * whichever of the job's seqnos shares its slot. */
-	if (chan->high) {
-		/* its fence may pass before tgm_sched_kicked returns: taken as kicked behind an app until it has */
-		for (s = next; (s32)(s - first) >= 0; s--) {
-			WRITE_ONCE(chan->queued[s % CHAN_QUEUED].kick_ns, chan->submit_ns);
-			WRITE_ONCE(chan->queued[s % CHAN_QUEUED].behind, -1);
-			WRITE_ONCE(chan->queued[s % CHAN_QUEUED].app, 1);
-		}
-	}
+	job = switch_gpu_jobs_kick(&chan->jobs, first, next, chan->submit_ns);
     if (switch_gpu_irq_arm(&chan->irq_state, next) && nvif_event_allow(&chan->nonstall))
         nvxnu_panic("SwitchGpu: cannot arm channel completion");
     WRITE_ONCE(chan->submitted, next);
@@ -4698,13 +4699,12 @@ static u32 chan_fence_job(struct tgm_chan *chan, int external, u32 first, u32 ne
 		struct tgm_sched_queued queued;
 		enum tgm_sched_kick kick = tgm_sched_kicked(gpu.device, chan->chid, &queued);
 
-		for (s = next; (s32)(s - first) >= 0; s--) {
-			WRITE_ONCE(chan->queued[s % CHAN_QUEUED].app, kick != TGM_KICK_CLEAR);
-			if (stats_on())
+		WRITE_ONCE(job->app, kick != TGM_KICK_CLEAR);
+		if (stats_on())
+			for (s = next; (s32)(s - first) >= 0; s--)
 				WRITE_ONCE(chan->stat_kick[s % CHAN_NSTAMPS], kick);
-		}
-		WRITE_ONCE(chan->queued[first % CHAN_QUEUED].asked_pt, queued.asked_pt);
-		WRITE_ONCE(chan->queued[first % CHAN_QUEUED].behind, queued.behind);
+		WRITE_ONCE(job->asked_pt, queued.asked_pt);
+		WRITE_ONCE(job->behind, queued.behind);
 		tgm_deadline_kicked(!chan->kernel, kick != TGM_KICK_CLEAR);
 	}
 	if (stats_on())
@@ -4858,8 +4858,9 @@ static void chan_job_entry(void *context, u32 i)
 	}
 }
 
-/* A batch's end inside a job: its fence as chan_fence_job emits an internal one, as an entry of the job's kick. Its
- * interrupt moves the channel's progress (the stuck rule) as the batch's own submission's did. */
+/* A batch's end inside a job: the WFI release of its seqno, as an entry of the job's kick (deferred: no GP_PUT write; the
+ * entry keeps it between the batches). No interrupt: nothing waits on a batch alone. The job's own fence announces it,
+ * and the stuck rule reads it from the fence word (chan_progress_ns). */
 static void chan_job_fence(void *context, u32 seqno)
 {
 	struct chan_job *job = context;
@@ -4878,9 +4879,6 @@ static void chan_job_fence(void *context, u32 seqno)
 			  NVDEF(NV906F, SEMAPHORED, RELEASE_WFI, EN) |
 			  NVDEF(NV906F, SEMAPHORED, RELEASE_SIZE, 4BYTE));
 	/* NOLINTEND(bugprone-signed-bitwise,bugprone-branch-clone) */
-	nvif_chan_gpfifo_post(&chan->chan);
-	/* NOLINTNEXTLINE(bugprone-signed-bitwise): nouveau's PUSH_MTHD computes in int */
-	PUSH_MTHD(push, NV906F, NON_STALL_INTERRUPT, 0);
 	PUSH_KICK(push);
 	job->first = chan->chan.gpfifo.cur;
 }
@@ -5022,7 +5020,7 @@ static int chan_exec(struct tgm_chan *chan, const struct tgm_push *pushes, uint3
 				   nvkm_timer_read(gpu.device->timer));
 		}
 		if (chan->high)
-			WRITE_ONCE(chan->queued[next % CHAN_QUEUED].waits, waits);
+			WRITE_ONCE(switch_gpu_jobs_next(&chan->jobs)->waits, waits);
 		push_stamp(&chan->chan.push,
 			   chan_stamps_va(chan, next) + offsetof(struct tgm_stamps, start), next);
 		PUSH_KICK(&chan->chan.push);

@@ -2726,9 +2726,8 @@ IOReturn AGXDeviceUserClient::waitFence(const TegraGM20BAbiWaitFence *in)
 		if (!woken) {
 			IOLockLock(lock_);
 			chan = chans_[in->channel - 1];
-			const bool unwoken =
-				(chan != nullptr) && tgm_chan_waiter(chan) == waiter &&
-				static_cast<int32_t>(tgm_chan_completed(chan) - in->seqno) >= 0;
+			const bool unwoken = (chan != nullptr) && tgm_chan_waiter(chan) == waiter &&
+					     tgm_chan_announced(chan, in->seqno);
 			IOLockUnlock(lock_);
 			if (unwoken)
 				tgm_waiter_unwoken(waiter, seq, in->seqno);
