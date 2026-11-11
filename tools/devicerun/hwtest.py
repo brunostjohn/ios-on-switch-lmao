@@ -98,6 +98,7 @@ TESTS: dict[str, bool] = {
             'gpu.raw.compressed_targets',
             'gpu.raw.zcull',
             'gpu.raw.visibility',
+            'gpu.raw.fixed_blend_rule',
             'gpu.path.job_visibility',
             'gpu.path.lean_copy',
             'gpu.path.control_reserve',
