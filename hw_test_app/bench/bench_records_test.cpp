@@ -1,5 +1,6 @@
 // bench_records.cpp over a pack holding the template state the Switch's pack gave the bench (iOS 27, stack
 // 19bc973b66d63deb): colour 0 of BGR10_XR, which its pixel program packs into one word, so its register words write R alone.
+// Since pack v15 a program's register count is its own (PackProgram::gprs), not a blob word.
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
@@ -16,14 +17,16 @@ constexpr uint64_t kTemplateKey = 0x1b1ae4ebb482e4d1ull;
 constexpr char kTemplateKeyString[] =
     "samples=1 topo=0 ds=0/0 c0=554:15:0:1:0:0:1:0:0 c1=115:0:0:1:0:0:1:0:0 a0=31:0:1:48:1:1 a1=29:16:1:48:1:1 "
     "a2=29:24:1:48:1:1 a3=27:32:1:48:1:1";
-// Its register words in the device's pack: SET_CT_WRITE(0) (0x1a00) R alone, SET_PIPELINE_REGISTER_COUNT(PIXEL) 0x18
+// Its register words in the device's pack: SET_CT_WRITE(0) (0x1a00) R alone
 constexpr uint32_t kTemplateBlob[] = {
     0x0210, 0,          0x0754, 1,          0x0f90, 0,      0x1160, 0x38200000, 0x1164, 0x38601000, 0x1168, 0x38200040,
     0x116c, 0x38200040, 0x1170, 0x38200040, 0x1224, 0,      0x1360, 0,          0x1364, 0,          0x193c, 0x181d,
     0x1a00, 1,          0x1a04, 0,          0x1c00, 0x1030, 0x1c10, 0,          0x1e04, 0x8006,     0x1e08, 0x4000,
     0x1e0c, 0x4000,     0x1e10, 0x8006,     0x1e14, 0x4000, 0x1e18, 0x4000,     0x1e24, 0x8006,     0x1e28, 0x4000,
-    0x1e2c, 0x4000,     0x1e30, 0x8006,     0x1e34, 0x4000, 0x1e38, 0x4000,     0x204c, 0x20,       0x214c, 0x18,
+    0x1e2c, 0x4000,     0x1e30, 0x8006,     0x1e34, 0x4000, 0x1e38, 0x4000,
 };
+// The template's programs' register counts and the vertex program's bound-texture slot
+constexpr uint8_t kTemplateGprs[2] = {0x20, 0x18}, kVertexBoundTextures = 3;
 constexpr uint32_t kSetCtWrite0 = 0x1a00, kSetPixelRegisterCount = 0x214c;
 constexpr uint32_t kRgbaFloat32 = 125;
 
@@ -52,7 +55,9 @@ protected:
             programs[i].bytes = 0x100;
             programs[i].cbufs = 1;
             programs[i].cbufType[0] = raw::CbufRoot;
+            programs[i].gprs = kTemplateGprs[i];
         }
+        programs[0].boundTextures = kVertexBoundTextures;
         raw::PackPipeline pipeline = {};
         pipeline.keyHash = kTemplateKey;
         pipeline.vs = 0;
@@ -122,9 +127,28 @@ TEST_F(BenchRecords, ColourZeroIsWrittenWholeWhateverTheTemplateWrote)
                                       0xbe7c000000000001ull, {}, {}, r, why))
         << why;
     EXPECT_EQ(words(r, kSetCtWrite0), std::vector<uint32_t>{0x1111});
-    EXPECT_EQ(words(r, kSetPixelRegisterCount), std::vector<uint32_t>{bench::kKnownGprs});
+    EXPECT_TRUE(words(r, kSetPixelRegisterCount).empty());
     EXPECT_EQ(r.pipeline.blobDwords, r.blob.size());
     EXPECT_NE(r.keyString.find(" c0=125:15:"), std::string::npos) << r.keyString;
+}
+
+// The runtime writes SET_PIPELINE_REGISTER_COUNT from the PackProgram a record's program is placed as (programSlot); a count
+// of 0 is ILLEGAL_SHADER_REGISTER_COUNT at the draw (class error 0xb5 for the vertex program)
+TEST_F(BenchRecords, BothProgramsCarryTheirRegisterCounts)
+{
+    raw::RuntimeRecord r;
+    std::string why;
+    ASSERT_TRUE(bench::fragmentRecord(pack_, *bench::fragmentTemplate(pack_), known(), kRgbaFloat32,
+                                      0xbe7c000000000003ull, {}, {}, r, why))
+        << why;
+    raw::PackProgram vertex, pixel;
+    raw::programSlot(r.programs[0], vertex);
+    raw::programSlot(r.programs[1], pixel);
+    EXPECT_EQ(vertex.gprs, kTemplateGprs[0]);
+    EXPECT_EQ(vertex.boundTextures, kVertexBoundTextures);
+    EXPECT_EQ(pixel.gprs, bench::kKnownGprs);
+    EXPECT_NE(pixel.gprs, 0);
+    EXPECT_EQ(pixel.boundTextures, 0);
 }
 
 TEST_F(BenchRecords, ATemplateIsTakenByItsKeyOnlyWhenPlain)
