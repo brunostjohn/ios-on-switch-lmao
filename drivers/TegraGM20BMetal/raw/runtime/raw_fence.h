@@ -6,7 +6,9 @@
 
 namespace raw {
 
-enum class SemanticFenceStatus : uint8_t { Clear, Pending, Failed };
+// Superseded: physically complete, and the record names a newer failure, so it cannot say whether this job failed too
+// (the kernel publishes only its newest); the kernel's WaitFence answers that.
+enum class SemanticFenceStatus : uint8_t { Clear, Pending, Failed, Superseded };
 
 struct SemanticFenceRead {
     SemanticFenceStatus status = SemanticFenceStatus::Clear;
@@ -23,10 +25,13 @@ template<class Read> SemanticFenceRead readSemanticFence(uint32_t seqno, Read re
     std::atomic_thread_fence(std::memory_order_acquire);
     if (read(0) != before || flags & ~(TegraGM20BFenceSemanticPending | TegraGM20BFenceSemanticFailed))
         return {SemanticFenceStatus::Pending, 0};
-    if ((flags & TegraGM20BFenceSemanticFailed) && int32_t(seqno - failed) >= 0)
+    // A failure is its own job's alone: the jobs after it do not depend on its wait.
+    if ((flags & TegraGM20BFenceSemanticFailed) && seqno == failed)
         return {SemanticFenceStatus::Failed, failed};
     if ((flags & TegraGM20BFenceSemanticPending) && int32_t(seqno - pending) >= 0)
         return {SemanticFenceStatus::Pending, pending};
+    if ((flags & TegraGM20BFenceSemanticFailed) && int32_t(seqno - failed) < 0)
+        return {SemanticFenceStatus::Superseded, failed};
     return {};
 }
 

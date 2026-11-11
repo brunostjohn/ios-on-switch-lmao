@@ -2893,13 +2893,10 @@ void AGXDeviceUserClient::releaseMappings()
 
 namespace
 {
-// What each held bit still needs. SemanticFence: a raw runtime that reads failed_first as the one newest
-// failure, not as a prefix of failed seqnos (raw_fence.h readSemanticFence, raw_gpu.cpp liveKill), or one
-// failed event wait fails every later command buffer on its channel. SharedEvents: SemanticFence (the
-// runtime takes neither alone). ResourceReady: SharedEvents (its readiness notification is an event; without
-// one a refused admission fails the command buffer).
-constexpr uint32_t kInfoAwaitingUserspace =
-	TegraGM20BInfoSharedEvents | TegraGM20BInfoSemanticFence | TegraGM20BInfoResourceReady;
+// What each held bit still needs. SharedEvents: its own unmask (the runtime also needs SemanticFence).
+// ResourceReady: SharedEvents (its readiness notification is an event; without one a refused admission fails
+// the command buffer).
+constexpr uint32_t kInfoAwaitingUserspace = TegraGM20BInfoSharedEvents | TegraGM20BInfoResourceReady;
 }  // namespace
 
 extern "C" uint32_t switch_gpu_info_flags(void)

@@ -346,10 +346,50 @@ struct NativeSurfaceViewPathTest: GPUPathTest {
     }
 }
 
+/// SemanticFence (bit 22): the runtime reads every command buffer's completion through the fence record's semantic half
+/// as well as its seqno; 48 command buffers back to back each fill their own slice and complete, and none reads as failed
+/// or makes the raw channel again, as a failure misread as a prefix of later work would.
+struct SemanticFencePathTest: GPUPathTest {
+    let id = "gpu.path.semantic_fence"
+    let name = "Completions read the fence record's semantic state, and no failure spills onto later work"
+    let bit = 22
+    let counters: [String] = []
+    static let count = 48, slice = 256
+
+    func exercise(_ gpu: GPU, _: TestContext, _ metrics: inout Metrics) async throws -> [String] {
+        let buffer = try gpu.buffer(Self.count * Self.slice)
+        let before = RawFacade.counters(of: gpu.device)
+        var committed: [MTLCommandBuffer] = []
+        for index in 0..<Self.count {
+            committed.append(
+                try gpu.commit { commands in
+                    let blit = commands.makeBlitCommandEncoder()!
+                    blit.fill(
+                        buffer: buffer, range: (index * Self.slice)..<((index + 1) * Self.slice),
+                        value: UInt8(index + 1))
+                    blit.endEncoding()
+                })
+        }
+        try gpu.finish(committed)
+        let reopens = (RawFacade.counters(of: gpu.device)["reopens"] ?? 0) - (before["reopens"] ?? 0)
+        let bytes = UnsafeRawBufferPointer(start: buffer.contents(), count: Self.count * Self.slice)
+        var wrong = 0
+        for (offset, byte) in bytes.enumerated() where byte != UInt8(offset / Self.slice + 1) {
+            wrong += 1
+        }
+        metrics.set("reopens", reopens)
+        metrics.set("wrong_bytes", wrong)
+        var failures: [String] = []
+        if reopens != 0 { failures.append("the raw channel was made again \(reopens) times") }
+        if wrong != 0 { failures.append("\(wrong) bytes wrong") }
+        return failures
+    }
+}
+
 enum GPUPathTests {
     static let all: [any HWTest] = [
         JobVisibilityPathTest(), LeanCopyPathTest(), ControlReservePathTest(), CpuCompletePathTest(),
-        UseRangesPathTest(), NativeSurfaceViewPathTest(),
+        UseRangesPathTest(), NativeSurfaceViewPathTest(), SemanticFencePathTest(),
     ]
 }
 

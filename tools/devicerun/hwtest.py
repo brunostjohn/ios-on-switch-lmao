@@ -90,6 +90,7 @@ TESTS: dict[str, bool] = {
             'gpu.path.cpu_complete',
             'gpu.path.use_ranges',
             'gpu.path.native_surface_view',
+            'gpu.path.semantic_fence',
         ],
         False,
     ),

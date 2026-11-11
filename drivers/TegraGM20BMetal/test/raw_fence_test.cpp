@@ -13,7 +13,9 @@ void check(bool value)
     ++checks;
 }
 
-void prefixes()
+// The kernel publishes its newest failure alone: that job failed, the jobs after it did not, and one before it may have
+// failed too without the record saying so any more (Superseded: the kernel's WaitFence answers).
+void newestFailure()
 {
     using S = raw::SemanticFenceStatus;
     TegraGM20BAbiFenceSemantic record{};
@@ -23,12 +25,16 @@ void prefixes()
     check(raw::readSemanticFence(&record, 50).status == S::Pending);
     check(raw::readSemanticFence(&record, 51).status == S::Pending);
     record = {4, 50, 52, TegraGM20BFenceSemanticPending | TegraGM20BFenceSemanticFailed};
+    check(raw::readSemanticFence(&record, 49).status == S::Superseded);
     check(raw::readSemanticFence(&record, 51).status == S::Pending);
     check(raw::readSemanticFence(&record, 52).status == S::Failed);
-    check(raw::readSemanticFence(&record, 90).first == 52);
+    check(raw::readSemanticFence(&record, 52).first == 52);
+    check(raw::readSemanticFence(&record, 90).status == S::Pending);
     record = {6, 0, 52, TegraGM20BFenceSemanticFailed};
-    check(raw::readSemanticFence(&record, 51).status == S::Clear);
-    check(raw::readSemanticFence(&record, 0).status == S::Clear);
+    check(raw::readSemanticFence(&record, 51).status == S::Superseded);
+    check(raw::readSemanticFence(&record, 52).status == S::Failed);
+    check(raw::readSemanticFence(&record, 53).status == S::Clear);
+    check(raw::readSemanticFence(&record, 90).status == S::Clear);
     record = {8, 52, 52, 0};
     check(raw::readSemanticFence(&record, 90).status == S::Clear);
     record = {10, 0, 0, 4};
@@ -44,16 +50,19 @@ void wrapping()
     check(raw::readSemanticFence(&record, 0).status == S::Pending);
     check(raw::readSemanticFence(&record, 1).status == S::Pending);
     record.flags |= TegraGM20BFenceSemanticFailed;
+    check(raw::readSemanticFence(&record, 0xfffffffd).status == S::Superseded);
     check(raw::readSemanticFence(&record, 1).status == S::Pending);
     check(raw::readSemanticFence(&record, 2).status == S::Failed);
     record = {0, 2, 0xfffffffe, TegraGM20BFenceSemanticFailed};
-    check(raw::readSemanticFence(&record, 0xfffffffd).status == S::Clear);
-    check(raw::readSemanticFence(&record, 0).status == S::Failed);
-    check(raw::readSemanticFence(&record, 1).status == S::Failed);
+    check(raw::readSemanticFence(&record, 0xfffffffd).status == S::Superseded);
+    check(raw::readSemanticFence(&record, 0xfffffffe).status == S::Failed);
+    check(raw::readSemanticFence(&record, 0).status == S::Clear);
+    check(raw::readSemanticFence(&record, 1).status == S::Clear);
     record = {2, 0, 0, TegraGM20BFenceSemanticPending};
     check(raw::readSemanticFence(&record, 0).status == S::Pending);
     record.flags = TegraGM20BFenceSemanticFailed;
     check(raw::readSemanticFence(&record, 0).status == S::Failed);
+    check(raw::readSemanticFence(&record, 1).status == S::Clear);
 }
 
 void interruptedPublication()
@@ -84,7 +93,7 @@ void interruptedPublication()
 
 int main()
 {
-    prefixes();
+    newestFailure();
     wrapping();
     interruptedPublication();
     printf("mapped semantic fence: %u checks passed\n", checks);

@@ -2827,6 +2827,15 @@ bool Device::waitFence(uint32_t seqno, uint64_t generation)
 {
     constexpr unsigned kRefusals = 3;
     const uint32_t ch = channel_, opened = k_.opened();
+    if (done(seqno) && semanticFence(seqno).status == SemanticFenceStatus::Superseded) {
+        int result = KERN_SUCCESS;
+        if (k_.wait(ch, seqno, ~0ull, &result))
+            return !lost(seqno);
+        if (result == kIOReturnAborted) {
+            keepFailure(seqno);
+            return false;
+        }
+    }
     for (unsigned refused = 0; !done(seqno);) {
         if (channelGeneration() != generation)
             return false;
@@ -2865,6 +2874,17 @@ bool Device::waitFence(uint32_t seqno, uint64_t generation)
     return !lost(seqno);
 }
 
+// A job the kernel says its own event wait failed, which the fence record no longer names
+void Device::keepFailure(uint32_t seqno)
+{
+    std::lock_guard<std::mutex> l(killedLock_);
+    killedKept_[killedNext_++ % killedKept_.size()] = {seqno, seqno, kDependencyFailed};
+    const uint32_t through = keptThrough_.load(std::memory_order_relaxed);
+    if (!keptKills_.load(std::memory_order_relaxed) || int32_t(seqno - through) > 0)
+        keptThrough_.store(seqno, std::memory_order_relaxed);
+    keptKills_.store(true, std::memory_order_release);
+}
+
 void Device::noteLost()
 {
     lostThrough_.store(__atomic_load_n(&lastSeqno_, __ATOMIC_RELAXED), std::memory_order_relaxed);
@@ -2889,12 +2909,7 @@ bool Device::liveKill(Killed &k) const
             return true;
         }
     }
-    const uint32_t last = __atomic_load_n(&lastSeqno_, __ATOMIC_RELAXED);
-    const auto semantic = semanticFence(last);
-    if (semantic.status != SemanticFenceStatus::Failed)
-        return false;
-    k = {semantic.first, last, kDependencyFailed};
-    return true;
+    return false;
 }
 
 bool Device::killed(uint32_t seqno) const
@@ -2905,6 +2920,10 @@ bool Device::killed(uint32_t seqno) const
     Killed live = {};
     if (liveKill(live) && covers(live)) {
         killedError_.store(live.error, std::memory_order_relaxed);
+        return true;
+    }
+    if (semanticFence(seqno).status == SemanticFenceStatus::Failed) {
+        killedError_.store(kDependencyFailed, std::memory_order_relaxed);
         return true;
     }
     if (!keptKills_.load(std::memory_order_acquire) ||

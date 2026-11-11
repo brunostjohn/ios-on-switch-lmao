@@ -688,11 +688,13 @@ void Kernel::markLost(uint32_t channel, uint32_t opened)
     lostChannel_.store(channel, std::memory_order_relaxed);
 }
 
-bool Kernel::wait(uint32_t channel, uint32_t seqno, uint64_t timeoutNs)
+bool Kernel::wait(uint32_t channel, uint32_t seqno, uint64_t timeoutNs, int *result)
 {
     TegraGM20BAbiWaitFence w = {channel, seqno, timeoutNs};
     const uint32_t at = opened();
     const int kr = call(TegraGM20BMethodWaitFence, &w, sizeof w, nullptr, 0);
+    if (result)
+        *result = kr;
     if (kr == kIOReturnNotResponding)
         markLost(channel, at);
     if (kr != KERN_SUCCESS) {

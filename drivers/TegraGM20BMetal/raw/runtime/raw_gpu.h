@@ -1219,6 +1219,7 @@ public:
     }
 
     // In the kernel, on the fence interrupt. False: the submission failed, the channel died with it in flight (reopen).
+    void keepFailure(uint32_t seqno);
     bool wait(uint32_t seqno)
     {
         return wait(seqno, channelGeneration());
@@ -1229,7 +1230,8 @@ public:
             waitGenerationRetired(generation);
             return false;
         }
-        const bool success = done(seqno) ? !lost(seqno) : waitFence(seqno, generation);
+        const bool success = done(seqno) && semanticFence(seqno).status != SemanticFenceStatus::Superseded
+            ? !lost(seqno) : waitFence(seqno, generation);
         if (channelGeneration() == generation)
             return success;
         waitGenerationRetired(generation);

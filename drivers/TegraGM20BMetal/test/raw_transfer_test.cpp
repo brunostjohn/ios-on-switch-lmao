@@ -160,7 +160,7 @@ bool Kernel::exec(uint32_t channel, const TegraGM20BAbiPush *pushes, uint32_t co
         fake->complete(sequence);
     return true;
 }
-bool Kernel::wait(uint32_t, uint32_t sequence, uint64_t)
+bool Kernel::wait(uint32_t, uint32_t sequence, uint64_t, int *result)
 {
     ++fake->waits;
     if (fake->onWait)
@@ -168,9 +168,11 @@ bool Kernel::wait(uint32_t, uint32_t sequence, uint64_t)
     if (fake->fence.error || fake->refuseWait)
         return false;
     fake->complete(sequence);
-    if ((fake->semantic.flags & TegraGM20BFenceSemanticFailed) &&
-        int32_t(sequence - fake->semantic.failed_first) >= 0)
+    if ((fake->semantic.flags & TegraGM20BFenceSemanticFailed) && sequence == fake->semantic.failed_first) {
+        if (result)
+            *result = int(0xe00002eb);
         return false;
+    }
     fake->semantic = {};
     return true;
 }

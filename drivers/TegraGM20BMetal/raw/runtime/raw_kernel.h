@@ -185,7 +185,8 @@ public:
     bool cpuAccess(const Bo &bo, uint64_t offset, uint64_t bytes, uint32_t access, bool acquire);
     CpuCompletionResult completeCpu(const CpuCompletion &completion);
     // Blocks in the kernel until the channel's completed seqno passes `seqno` (the kext sleeps on the fence interrupt).
-    bool wait(uint32_t channel, uint32_t seqno, uint64_t timeoutNs = ~0ull);
+    // `result` (null: not wanted): WaitFence's kern_return_t; kIOReturnAborted is that job's own event wait failing.
+    bool wait(uint32_t channel, uint32_t seqno, uint64_t timeoutNs = ~0ull, int *result = nullptr);
     // Order (method 14, TegraGM20BInfoOrder): GPU-side acquires between `channel` and the task's other channels (NVK's).
     // The kern_return_t; `waits`: the acquires queued.
     int order(uint32_t channel, uint32_t flags, uint32_t seqno, uint32_t &waits);
