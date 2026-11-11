@@ -9,7 +9,8 @@ OUT=$(cd "$1" && pwd)
 HERE=$(cd "$(dirname "$0")" && pwd)
 RAW=$(cd "$HERE/.." && pwd)
 TREE=$(cd "$HERE/../../../.." && pwd)
-FLAGS=(-O1 -g -Wall -Wextra -std=c++17 -DSWITCH_RAW_HARNESS_MARKS -fsanitize=address,undefined -fno-sanitize-recover=all -I "$TREE/third_party/mesa/src/nouveau/headers")
+FLAGS=(-O1 -g -Wall -Wextra -std=c++17 -DSWITCH_RAW_HARNESS_MARKS -fsanitize=address,undefined -fno-sanitize-recover=all
+       -I "$TREE/kits/SwitchGM20BEmit/mesa" -I "$TREE/third_party/mesa/src/nouveau/headers")
 for source in mme_fermi mme_fermi_sim; do
     xcrun clang -O1 -std=c11 -w -I "$RAW/pack/mesa" -c "$RAW/pack/mesa/$source.c" -o "$OUT/$source.o"
 done
@@ -20,8 +21,14 @@ for source in cap nvdec nvdec_compute; do
         -c "$RAW/pack/$source.cpp" -o "$OUT/$source.o"
 done
 xcrun clang++ "${FLAGS[@]}" -c "$RAW/fx/test/twod_sim.cpp" -o "$OUT/twod_sim.o"
+# kits/SwitchGM20BEmit's emitters, which raw_gpu.cpp and raw_transfer.cpp call, in the mock library every harness links (their
+# generated headers: bazel build //kits/SwitchGM20BEmit:push_headers)
+for f in SwitchGM20BEmit3D SwitchGM20BEmitBarrier mesa/nouveau_copy_rect; do
+    xcrun clang -O2 -std=c11 -DNDEBUG -I "$TREE/kits/SwitchGM20BEmit/mesa" -I "$TREE/bazel-bin/kits/SwitchGM20BEmit/gen" \
+        -I "$TREE/third_party/mesa/src/nouveau/headers" -c "$TREE/kits/SwitchGM20BEmit/$f.c" -o "$OUT/kit_${f##*/}.o"
+done
 xcrun clang++ -dynamiclib -fsanitize=address,undefined "$OUT/mock_iokit.o" "$OUT/cap.o" "$OUT/nvdec.o" \
-    "$OUT/nvdec_compute.o" "$OUT/twod_sim.o" "$OUT/mme_fermi.o" "$OUT/mme_fermi_sim.o" \
+    "$OUT/nvdec_compute.o" "$OUT/twod_sim.o" "$OUT/mme_fermi.o" "$OUT/mme_fermi_sim.o" "$OUT"/kit_*.o \
     -framework IOKit -framework CoreFoundation -install_name @rpath/libmock_iokit.dylib -o "$OUT/libmock_iokit.dylib"
 SOURCES=()
 for source in gpu transfer split kernel shared_events alias arena pack ycbcr zeta comp completed compute \
