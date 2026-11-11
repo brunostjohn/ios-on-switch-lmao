@@ -27,7 +27,7 @@ switch_gpu_mapping pushWindow;
 constexpr uint64_t kSurfacePa = 0x10000000, kRowsPa = 0x20000000, kSurfaceGpuVa = 0x40000000;
 tgm_chan channels[4];
 unsigned channelsMade, channelsDeleted, flushJobs, cpuReads, cpuReadsBehindL2;
-bool channelsOpen, faultMoves;
+bool channelsOpen, faultMoves, beforeCheckpoint;
 tgm_chan *faulted, *flushedOn;
 uint32_t flushVisibility;
 std::vector<uint8_t> surfaceBytes(16 * 4096), rowsBytes(16 * 4096);
@@ -148,7 +148,7 @@ extern "C" int tgm_chan_exec(tgm_chan *chan, const tgm_push *, uint32_t, uint32_
 	if (faultMoves) {
 		const std::vector<uint8_t> partial(512, 0xc5);
 		EXPECT_TRUE(memory.store(kSurfaceGpuVa + 4096, partial.data(), partial.size()));
-		gRelayout.pushCpu[kCheckpointWord] = 1;
+		gRelayout.pushCpu[kCheckpointWord] = beforeCheckpoint ? 0 : 1;
 		faulted = chan;
 		*seqno = 1;
 		return 0;
@@ -375,6 +375,34 @@ TEST_F(RelayoutControl, AFaultedMoveFlushesTheL2BeforeTheCpuFinishesIt)
 	EXPECT_GT(cpuReads, 0u);
 	EXPECT_EQ(cpuReadsBehindL2, 0u);
 	channelsOpen = faultMoves = false;
+	faulted = flushedOn = nullptr;
+}
+}  // namespace
+
+namespace
+{
+// A copy that faults before its checkpoint returns the failure, and its caller moves the texels on the CPU: the L2 is
+// flushed before that too.
+TEST_F(RelayoutControl, AFaultBeforeTheCheckpointFlushesTheL2ForTheCallersCpuMove)
+{
+	channelsOpen = faultMoves = beforeCheckpoint = true;
+	flushJobs = cpuReads = 0;
+	memory.map(kSurfaceGpuVa, surfaceBytes, false, true);
+	tgm_layout l = {};
+	ASSERT_TRUE(tgm_layout_tiled(64, 64, 4, &l));
+	std::vector<uint64_t> surfacePas, rowsPas;
+	for (uint64_t at = 0; at < surfaceBytes.size(); at += 4096) {
+		surfacePas.push_back(kSurfacePa + at);
+		rowsPas.push_back(kRowsPa + at);
+	}
+	const tgm_relayout_pages surface = {surfacePas.data(), uint32_t(surfacePas.size())};
+	const tgm_relayout_pages rows = {rowsPas.data(), uint32_t(rowsPas.size())};
+	EXPECT_EQ(move(surface, rows, l, 256, TGM_RELAYOUT_TO_ROWS, nullptr, 0), -5);
+	EXPECT_EQ(flushJobs, 1u);
+	EXPECT_NE(flushedOn, faulted);
+	EXPECT_TRUE(memory.dirty.empty());
+	EXPECT_EQ(cpuReads, 0u);
+	channelsOpen = faultMoves = beforeCheckpoint = false;
 	faulted = flushedOn = nullptr;
 }
 }  // namespace

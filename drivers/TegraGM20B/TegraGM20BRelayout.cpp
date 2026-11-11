@@ -90,7 +90,7 @@ void tgm_relayout_finish_cpu(const tgm_relayout_pages *, const tgm_relayout_page
 			     const tgm_layout *, uint32_t, tgm_relayout_op);
 
 // A copy that faulted leaves its own partial writes, and its writers' (complete, an Internal job's possibly still there),
-// in the GPU's L2, behind which the CPU's finish would read and write. The faulted channel is gone: a new one's empty
+// in the GPU's L2, behind which the CPU would read and write: this move's finish, or the caller's tgm_relayout_by_cpu. The faulted channel is gone: a new one's empty
 // External job flushes the whole L2. Without a channel only the LTC's MMIO flush could, which polls.
 bool flushForCpu()
 {
@@ -167,13 +167,14 @@ int move(const tgm_relayout_pages &surface, const tgm_relayout_pages &rows, cons
 	}
 	switch_gpu_relayout_mapping_put(rowsMap);
 	switch_gpu_relayout_mapping_put(surfaceMap);
-	if (ret && tgm_chan_error(chan))
+	if (ret && tgm_chan_error(chan)) {
 		switch_gpu_relayout_cache_clear(r.vm, &gRelayout.mappings);
-	if (finish) {
 		if (!flushForCpu())
-			switch_refusal("iosurface-layout", "finish-unflushed",
-				       "a faulted relayout finishes on the CPU with the GPU's L2 unflushed: "
+			switch_refusal("iosurface-layout", "fault-unflushed",
+				       "a faulted relayout leaves the GPU's L2 unflushed for the CPU's move: "
 				       "no copy channel");
+	}
+	if (finish) {
 		tgm_cpu_clean_pages(rows.pas, rows.npages);
 		tgm_relayout_finish_cpu(&surface, &rows, &l, bytesPerRow, op);
 		ret = 0;
