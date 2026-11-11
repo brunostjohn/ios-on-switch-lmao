@@ -12,7 +12,6 @@ struct SwitchVICQueue {
 
     struct Job {
         uint64_t fence = 0;
-        uint32_t boundUs = 0;
         uint64_t submittedUs = 0;
         Completion completion = nullptr;
         void *context = nullptr;
@@ -46,9 +45,14 @@ struct SwitchVICQueue {
         return amount && amount <= kSlots - count && submitted <= UINT64_MAX - amount;
     }
 
-    const Job &batchEnd() const
+    uint32_t batchEnd() const
     {
-        return jobs[(head + jobs[head].toBatchEnd) % kSlots];
+        return (head + jobs[head].toBatchEnd) % kSlots;
+    }
+
+    uint32_t last() const
+    {
+        return (tail() + kSlots - 1) % kSlots;
     }
 
     uint32_t configurationSlot(uint32_t job) const

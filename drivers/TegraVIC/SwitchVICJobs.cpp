@@ -8,6 +8,7 @@
 #include "SwitchVICEvents.h"
 #include "SwitchVICSemantics.h"
 #include "../TegraHost1x/SwitchHost1xResults.h"
+#include "../TegraHost1x/SwitchHost1xStages.h"
 #include "../TegraHost1x/TegraHost1x.h"
 
 #if (defined(DEVELOPMENT) && DEVELOPMENT) || (defined(DEBUG) && DEBUG)
@@ -31,6 +32,7 @@ TegraVICBuffer gConfigs;
 uint32_t gSyncpt;
 bool gSuspended, gFailed;
 uint64_t gCompleted;
+int gResults[SwitchVICQueue::kSlots];
 constexpr uint32_t kThiMethod0 = 0x40;
 constexpr uint64_t kQueueUs = 2000000, kMaxBoundUs = 30000000, kAcquireUs = 2000000;
 constexpr uint32_t kBatchMax = 3;
@@ -70,47 +72,64 @@ uint32_t bound(const TegraVICJob &job, bool acquire)
     return static_cast<uint32_t>((us < kMaxBoundUs ? us : kMaxBoundUs) + (acquire ? kAcquireUs : 0));
 }
 
-int completeJob(SwitchVICQueue::Job &job)
-{
-    int result = job.bridge ? switch_gpu_bridge_wait(job.bridge) : 1;
-    switch_gpu_bridge_release(&job.bridge);
-    Results::physical(job.outcome, result);
-    switch_vic_semantics_physical(0);
-    if (job.semantics) {
-        const int semantic = switch_gpu_event_waits_wait(job.semantics, 0);
-        if (semantic < 0)
-            result = semantic;
-        switch_vic_semantics_retire(job.semantics);
-        switch_gpu_event_waits_release(&job.semantics);
-    }
-    Results::complete(&job.outcome, result);
-    return result < 0 ? result : 0;
-}
+struct Retirement;
+using Stages = SwitchHost1xStages<Retirement, SwitchVICQueue::kSlots>;
 
-void retireThread(void *, wait_result_t)
-{
-    for (;;) {
+struct Completed {
+    SwitchVICQueue::Completion completion;
+    void *context;
+    int result;
+};
+
+// The batch's last job carries its bridge, outcome, semantic batch and completion; the jobs before it retire with it.
+struct Retirement {
+    [[noreturn]] static void fault(uint32_t slot, int status, int producers)
+    {
+        const auto &job = gQueue.jobs[slot];
+        char engine[256], host[200];
+        tegra_vic_describe(engine, sizeof(engine));
+        tegra_host1x_describe_channel(TEGRA_HOST1X_CHANNEL_VIC, host, sizeof(host));
+        panic("TegraVIC: fence %llu failed (%d) after %llu us, GPU producers %d; %s; %s", job.fence, status,
+              switch_now_us() - job.submittedUs, producers, engine, host);
+    }
+
+    static void physical(uint32_t slot, int result)
+    {
+        auto &job = gQueue.jobs[slot];
+        switch_gpu_bridge_release(&job.bridge);
+        Results::physical(job.outcome, result);
+        switch_vic_semantics_physical(0);
+    }
+
+    static void ended(uint32_t slot, int result)
+    {
         IOLockLock(gLock);
-        while (!gQueue.count)
-            IOLockSleep(gLock, &gQueue.count, THREAD_UNINT);
-        SwitchVICQueue::Job job = gQueue.jobs[gQueue.head];
-        const switch_gpu_bridge *bridge = gQueue.batchEnd().bridge;
+        auto *semantics = gQueue.jobs[slot].semantics;
+        auto *outcome = gQueue.jobs[slot].outcome;
+        gQueue.jobs[slot].semantics = nullptr;
+        gQueue.jobs[slot].outcome = nullptr;
         IOLockUnlock(gLock);
-        // The bound is VIC's own work: a GPU producer the stream waits for, slow or killed (its recovery advances the
-        // fence the bridge acquires), is waited for first, on the bridge's completion.
-        const int producers = bridge ? switch_gpu_bridge_wait(bridge) : 1;
-        // This thread is the only threshold waiter on VIC's syncpoint. Other waiters sleep on completed below.
-        const int status = tegra_host1x_syncpt_wait(gSyncpt, static_cast<uint32_t>(job.fence), job.boundUs);
-        if (status) {
-            char engine[256], host[200];
-            tegra_vic_describe(engine, sizeof(engine));
-            tegra_host1x_describe_channel(TEGRA_HOST1X_CHANNEL_VIC, host, sizeof(host));
-            panic("TegraVIC: fence %llu failed (%d) after %llu us, GPU producers %d; %s; %s", job.fence, status,
-                  switch_now_us() - job.submittedUs, producers, engine, host);
+        if (semantics) {
+            const int semantic = switch_gpu_event_waits_cached_status(semantics);
+            if (semantic < 0)
+                result = semantic;
+            switch_gpu_event_waits_release(&semantics);
         }
-        const int result = completeJob(job);
+        Results::complete(&outcome, result);
+        Completed completed[SwitchVICQueue::kSlots];
+        uint32_t count = 0;
         IOLockLock(gLock);
-        gQueue.retire(static_cast<uint32_t>(job.fence));
+        Stages::stages[slot].ended = true;
+        gResults[slot] = result;
+        while (gQueue.count) {
+            const auto &head = gQueue.jobs[gQueue.head];
+            const uint32_t end = gQueue.batchEnd();
+            if (!Stages::stages[end].ended)
+                break;
+            if (head.completion)
+                completed[count++] = {head.completion, head.context, gResults[end]};
+            gQueue.retire(static_cast<uint32_t>(head.fence));
+        }
         if (!gQueue.count)
             switch_vic_power_idle();
         __atomic_store_n(&gCompleted, gQueue.completed, __ATOMIC_RELEASE);
@@ -118,9 +137,23 @@ void retireThread(void *, wait_result_t)
         IOLockWakeup(gLock, &gQueue.completed, false);
         IOLockUnlock(gLock);
         switch_gpu_backing_completed();
-        if (job.completion)
-            job.completion(job.context, result < 0 ? result : 0);
+        for (uint32_t i = 0; i < count; ++i)
+            completed[i].completion(completed[i].context, completed[i].result < 0 ? completed[i].result : 0);
     }
+};
+
+void semanticRetired(switch_gpu_event_waits *batch)
+{
+    uint32_t slot = SwitchVICQueue::kSlots;
+    IOLockLock(gLock);
+    for (uint32_t i = 0; i < gQueue.count && slot == SwitchVICQueue::kSlots; ++i) {
+        const uint32_t at = (gQueue.head + i) % SwitchVICQueue::kSlots;
+        if (gQueue.jobs[at].semantics == batch)
+            slot = at;
+    }
+    IOLockUnlock(gLock);
+    if (slot < SwitchVICQueue::kSlots)
+        Stages::semantic(slot);
 }
 }  // namespace
 
@@ -133,16 +166,10 @@ bool switch_vic_jobs_start(const TegraVICBuffer &configs, uint32_t syncpt, uint3
     gQueue.reset(completed);
     __atomic_store_n(&gCompleted, completed, __ATOMIC_RELEASE);
     const switch_gpu_backing_engine operations = {tokenStatus, tokenWait, tokenRetain, tokenRelease, 64};
-    if (switch_gpu_backing_register_engine(SWITCH_GPU_ENGINE_VIC, &operations) || !switch_vic_semantics_start(syncpt))
+    if (switch_gpu_backing_register_engine(SWITCH_GPU_ENGINE_VIC, &operations) ||
+        !switch_vic_semantics_start(syncpt, semanticRetired))
         return false;
     switch_vic_semantics_physical(completed);
-    thread_t thread = THREAD_NULL;
-    if (kernel_thread_start(retireThread, nullptr, &thread) != KERN_SUCCESS) {
-        IOLockFree(gLock);
-        gLock = nullptr;
-        return false;
-    }
-    thread_deallocate(thread);
     return true;
 }
 
@@ -371,13 +398,17 @@ retry:
     }
     const uint64_t started = switch_now_us();
     const int status = tegra_host1x_submit_on(TEGRA_HOST1X_CHANNEL_VIC, words, n);
+    uint32_t end = 0;
+    const switch_gpu_bridge *bridge = nullptr;
     if (!status) {
-        for (uint32_t j = 0; j < count; ++j)
-            gQueue.publish({0, bound(jobs[j], acquire != nullptr || needed != 0), started,
-                            j + 1 == count ? completion : nullptr, context,
+        uint32_t boundUs = 0;
+        for (uint32_t j = 0; j < count; ++j) {
+            boundUs += bound(jobs[j], acquire != nullptr || needed != 0);
+            gQueue.publish({0, started, j + 1 == count ? completion : nullptr, context,
                             j + 1 == count ? dependencies.takeBridge() : nullptr,
                             j + 1 == count ? batch.value : nullptr, j + 1 == count ? outcome.take() : nullptr,
                             count - 1 - j});
+        }
         if (batch.value)
             switch_gpu_event_waits_retain(batch.value);
         if (useCount)
@@ -387,11 +418,20 @@ retry:
         switch_vic_events_commit(events);
         if (fence)
             *fence = static_cast<uint32_t>(gQueue.submitted);
+        end = gQueue.last();
+        const auto &last = gQueue.jobs[end];
+        bridge = last.bridge;
+        if (const int error = Stages::start(end, gSyncpt, static_cast<uint32_t>(last.fence), bridge != nullptr,
+                                            last.semantics != nullptr, boundUs))
+            Retirement::fault(end, error, 1);
         IOLockWakeup(gLock, &gQueue.count, false);
     } else if (useCount) {
         switch_gpu_backing_abort(&transaction);
     }
     IOLockUnlock(gLock);
+    if (bridge)
+        if (const int error = Stages::notify(end, bridge))
+            Retirement::fault(end, error, 1);
     return status;
 }
 

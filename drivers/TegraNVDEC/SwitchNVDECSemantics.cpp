@@ -6,7 +6,7 @@ using Timeline = SwitchHost1xSemantics<SWITCH_GPU_ENGINE_NVDEC, SwitchNVDECQueue
 
 bool switch_nvdec_semantics_start(uint32_t id)
 {
-    return Timeline::start(id);
+    return Timeline::start(id, nullptr);
 }
 
 bool switch_nvdec_semantics_pending()

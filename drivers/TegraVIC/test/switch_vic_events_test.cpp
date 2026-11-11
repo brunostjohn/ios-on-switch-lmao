@@ -1,4 +1,7 @@
 // SPDX-License-Identifier: BSD-2-Clause-Patent
+#include <algorithm>
+#include <functional>
+#include <vector>
 #include "drivers/TegraGM20B/test/switch_gpu_event_fixture.h"
 #include "drivers/TegraVIC/SwitchVICEvents.h"
 #include "drivers/TegraVIC/SwitchVICSemantics.h"
@@ -6,6 +9,16 @@
 
 namespace {
 switch_gpu_backing_semantics registered;
+std::vector<switch_gpu_event_waits *> retired;
+std::function<void(switch_gpu_event_waits *)> onRetired;
+
+void recordRetired(switch_gpu_event_waits *batch)
+{
+    retired.push_back(batch);
+    if (onRetired)
+        onRetired(batch);
+}
+
 void ready(void *context, int status)
 {
     auto &notice = *static_cast<Notices *>(context);
@@ -151,7 +164,7 @@ TEST_F(Events, VicProducerFailureDoesNotPublishSuccessfulNativeSignal)
 
 TEST_F(Events, VicSemanticAdapterKeepsIndependentJobOutcomes)
 {
-    ASSERT_TRUE(switch_vic_semantics_start(161));
+    ASSERT_TRUE(switch_vic_semantics_start(161, recordRetired));
     switch_gpu_backing_token first{1, 1, SWITCH_GPU_ENGINE_VIC, 161};
     switch_gpu_backing_token second{2, 1, SWITCH_GPU_ENGINE_VIC, 161};
     using Results = SwitchHost1xResults<SWITCH_GPU_ENGINE_VIC>;
@@ -179,8 +192,8 @@ TEST_F(Events, VicSemanticAdapterKeepsIndependentJobOutcomes)
     EXPECT_TRUE(registered.pending());
     finish(first);
     EXPECT_EQ(switch_gpu_event_waits_status(b), 1);
-    switch_vic_semantics_retire(a);
-    switch_vic_semantics_retire(b);
+    EXPECT_EQ(std::count(retired.begin(), retired.end(), a), 1);
+    EXPECT_EQ(std::count(retired.begin(), retired.end(), b), 1);
     EXPECT_FALSE(registered.pending());
     EXPECT_EQ(registered.snapshot(&second, &captured), 0);
     Results::complete(&ra, 0); Results::complete(&rb, 0);
@@ -224,5 +237,55 @@ TEST_F(Events, IntermediateVicStageWaitsWithoutPublishingFinalRequestSignal)
     EXPECT_EQ(native->value, 4u);
     switch_gpu_event_waits_release(&final);
     switch_vic_events_release(&work);
+    pump();
+}
+
+// A VIC job ends from the events' retirement when its semantic outcome comes last (SwitchVICJobs.cpp ended()): its
+// batch reference and its request's events are released there, with the events' lock dropped and no thread of VIC's.
+TEST_F(Events, AVicJobEndingInTheEventsRetirementReleasesItsRequestThere)
+{
+    ASSERT_TRUE(switch_vic_semantics_start(161, recordRetired));
+    auto source = token();
+    signal(3, source);
+    TegraVICRequest request = {};
+    request.src_event_port = port;
+    request.src_wait = 3;
+    request.src_signal = 4;
+    auto &notices = makeNotices();
+    SwitchVICEvents *work = nullptr;
+    ASSERT_EQ(switch_vic_events_create(this, request, ready, &notices, &work), 0);
+    switch_vic_events_arm(work);
+    pump();
+    ASSERT_EQ(switch_vic_events_prepare(work), 0);
+    using Results = SwitchHost1xResults<SWITCH_GPU_ENGINE_VIC>;
+    switch_gpu_backing_token consumer{};
+    auto *record = Results::allocate();
+    ASSERT_EQ(Results::prepare(record, 40, 40, &consumer), 0);
+    tokens[key(consumer)] = {};
+    auto *batch = switch_vic_events_batch(work);
+    switch_gpu_event_waits_retain(batch);
+    SwitchVICSemantic *node = nullptr;
+    ASSERT_EQ(switch_vic_semantics_bind(batch, &consumer, &node), 0);
+    ASSERT_EQ(switch_vic_events_bind(work, &consumer), 0);
+    switch_vic_semantics_commit(node);
+    commit(batch);
+    switch_vic_events_commit(work);
+    int ended = 0;
+    onRetired = [&](switch_gpu_event_waits *done) {
+        EXPECT_EQ(done, batch);
+        switch_gpu_event_waits_release(&done);
+        switch_vic_events_release(&work);
+        ++ended;
+    };
+    Results::physical(record, 1);
+    switch_vic_semantics_physical(40);
+    finish(consumer);
+    finish(source);
+    pump();
+    onRetired = nullptr;
+    EXPECT_EQ(ended, 1);
+    EXPECT_EQ(work, nullptr);
+    EXPECT_EQ(native->value, 4u);
+    Results::complete(&record, 0);
     pump();
 }
