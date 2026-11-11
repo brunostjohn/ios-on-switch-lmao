@@ -20,6 +20,7 @@
 #include "../AVE/AVEEncoder.c"
 #include <stdio.h>
 #include "EncodeCheck.h"
+#include "ReorderCheck.h"
 #include "TileCheck.h"
 #include "../../SwitchVideoDecoders/AVD/H264Syntax.h"
 #include "../../TegraNVENC/TegraNVENCCheck.h"
@@ -36,7 +37,8 @@ struct NVENCClient {
 };
 
 static uint32_t gLayout = TEGRA_NVENC_LAYOUT_PITCH, gChroma = TEGRA_NVENC_CHROMA_OFFSET;
-static int gOpens, gSubmits, gRefused, gSkipped, gPcm, gIdr, gP;
+static int gOpens, gSubmits, gRefused, gSkipped, gPcm, gIdr, gP, gB;
+static bool gRefuseB;  // the engine answers every B picture with an error, as NVENC would one it cannot code
 static const char *gRefusal;
 static TegraNVENCSubmit gFirstP;  // a good P submit, for the refusal cases
 static uint64_t gFirstPAvail[TEGRA_NVENC_MAX_ENTRIES];
@@ -149,10 +151,20 @@ static int engine(NVENCClient *c, const TegraNVENCSubmit *s)
     const uint32_t width = p->input_cfg.frame_width_minus1 + 1u, height = p->input_cfg.frame_height_minus1 + 1u;
     const uint32_t wmbs = (width + 15) / 16, hmbs = (height + 15) / 16;
     const bool pPicture = pc->pic_type == H264ENC_P, idr = pc->pic_type == H264ENC_IDR;
+    const bool bPicture = pc->pic_type == H264ENC_B;
     if (p->pps_data.entropy_coding_mode_flag)
         return -1;  // CAVLC only (see above)
+    if (bPicture && gRefuseB) {
+        const TegraNVENCEntry *record = find(s, NVC5B7_SET_OUT_ENC_STATUS);
+        nvenc_pic_stat_s *refusal = (nvenc_pic_stat_s *)(c->va[record->value] + record->offset);
+        memset(refusal, 0, sizeof(*refusal));
+        refusal->error_status = 2;
+        refusal->ucode_error_status = 0xe2640180u & 0x3fffffffu;  // the app's error, in the record's 30 bits
+        return 0;
+    }
     const TegraNVENCEntry *in = find(s, NVC5B7_SET_IN_CUR_PIC), *out = find(s, NVC5B7_SET_OUT_REF_PIC_LUMA);
-    const TegraNVENCEntry *ref = find(s, NVC5B7_SET_IN_REF_PIC0_LUMA), *bits = find(s, NVC5B7_SET_OUT_BITSTREAM);
+    const TegraNVENCEntry *ref = find(s, NVC5B7_SET_IN_REF_PIC0_LUMA + 4 * (((unsigned char)pc->l0[0] >> 1) & 15));
+    const TegraNVENCEntry *bits = find(s, NVC5B7_SET_OUT_BITSTREAM);
     const TegraNVENCEntry *status = find(s, NVC5B7_SET_OUT_ENC_STATUS);
     const TegraNVENCEntry *inChroma = find(s, NVC5B7_SET_IN_CUR_PIC_CHROMA_U);
     // Where chroma is, under the chroma mode the fake was told the hardware proved.
@@ -174,6 +186,7 @@ static int engine(NVENCClient *c, const TegraNVENCSubmit *s)
         .frame_num = pc->frame_num,
         .idr_pic_id = pc->idr_pic_id,
         .poc_lsb = pc->pic_order_cnt_lsb,
+        .unreferenced = !pc->ref_pic_flag,
     };
     const size_t cap = (size_t)wmbs * hmbs * 400 + 4096;
     uint8_t *rbsp = malloc(cap);
@@ -194,8 +207,10 @@ static int engine(NVENCClient *c, const TegraNVENCSubmit *s)
                 }
                 h264bits_ue(&b, skip);  // mb_skip_run
                 skip = 0;
+            } else if (bPicture) {
+                h264bits_ue(&b, 0);  // mb_skip_run: no B_Skip, every macroblock I_PCM
             }
-            h264bits_ue(&b, pPicture ? 30 : 25);  // mb_type I_PCM (5 + 25 in a P slice)
+            h264bits_ue(&b, pPicture ? 30 : bPicture ? 48 : 25);  // mb_type I_PCM (5 + 25 in a P slice, 23 + 25 in a B)
             h264bits_align_zero(&b);
             for (int i = 0; i < 384; i++)
                 h264bits_u(&b, mb[i], 8);
@@ -232,7 +247,10 @@ static int engine(NVENCClient *c, const TegraNVENCSubmit *s)
     uint8_t *bs = c->va[bits->value] + bits->offset;
     bs[0] = bs[1] = bs[2] = 0;
     bs[3] = 1;
-    const size_t n = h264enc_nal(idr ? 0x65 : 0x61, rbsp, h264bits_size(&b), bs + 4, pc->bitstream_buf_size - 4);
+    const size_t n = h264enc_nal(!pc->ref_pic_flag ? 0x01
+                                 : idr             ? 0x65
+                                                   : 0x61,
+                                 rbsp, h264bits_size(&b), bs + 4, pc->bitstream_buf_size - 4);
     free(rbsp);
     if (!n)
         return -1;
@@ -246,6 +264,8 @@ static int engine(NVENCClient *c, const TegraNVENCSubmit *s)
         gIdr++;
     if (pPicture)
         gP++;
+    if (bPicture)
+        gB++;
     return 0;
 }
 
@@ -762,6 +782,24 @@ int main(void)
                gRefused - refused, gRefusal ? ": " : "", gRefusal ? gRefusal : "");
         EXPECT(ok && gSubmits - submits == 30 && gRefused == refused, "encode check, layout %u", gLayout);
     }
+    // AllowFrameReordering unset (true), MaxFrameDelayCount 1, AllowFrameReordering false.
+    static const int kReorder[3][3] = {{-1, -1, 2}, {-1, 1, 1}, {0, -1, 0}};
+    gLayout = TEGRA_NVENC_LAYOUT_TILED16;
+    gChroma = TEGRA_NVENC_CHROMA_OFFSET;
+    for (unsigned r = 0; r < 3; r++) {
+        const int refused = gRefused;
+        char line[512];
+        const bool ok = reorder_check(spec, kReorder[r][0], kReorder[r][1], kReorder[r][2], line, sizeof(line));
+        printf("reordering %d, frame delay %d: %s (refused %d%s%s)\n", kReorder[r][0], kReorder[r][1], line,
+               gRefused - refused, gRefusal ? ": " : "", gRefusal ? gRefusal : "");
+        EXPECT(ok && gRefused == refused, "reorder check, %d B pictures", kReorder[r][2]);
+    }
+    gRefuseB = true;
+    char refusalLine[256];
+    const bool refusalOk = reorder_refusal_check(spec, refusalLine, sizeof(refusalLine));
+    gRefuseB = false;
+    printf("B pictures refused: %s\n", refusalLine);
+    EXPECT(refusalOk, "a refused B picture is coded as an I picture, B pictures turn off and the session goes on");
     CFRelease(spec);
     for (unsigned r = 0; r < sizeof(runs) / sizeof(runs[0]); r++) {
         gLayout = runs[r].layout;
@@ -774,8 +812,8 @@ int main(void)
         EXPECT(ok && gRefused == refused, "tile check, layout %u", gLayout);
     }
     refusals();
-    printf("I_PCM macroblocks %d, skipped %d, IDR %d, P %d, opens %d\n", gPcm, gSkipped, gIdr, gP, gOpens);
-    EXPECT(gSkipped > 0 && gP > 0 && gIdr >= 12, "the clip exercised P_Skip and key frames");
+    printf("I_PCM macroblocks %d, skipped %d, IDR %d, P %d, B %d, opens %d\n", gPcm, gSkipped, gIdr, gP, gB, gOpens);
+    EXPECT(gSkipped > 0 && gP > 0 && gB > 0 && gIdr >= 12, "the clip exercised P_Skip, B pictures and key frames");
     printf("%s ave: plug-in on VideoToolbox over a lossless fake NVENC (%d failures)\n", failures ? "FAIL" : "PASS",
            failures);
     return failures ? 1 : 0;

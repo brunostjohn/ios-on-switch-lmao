@@ -56,7 +56,7 @@ static void chromaAt(int i, int x, int y, uint8_t *u, uint8_t *v)  // x, y in ch
     *v = (uint8_t)(square ? 240 : 64 + ((y * 2) & 127));
 }
 
-static CVPixelBufferRef makeFrame(int i)
+CVPixelBufferRef encode_check_frame(int i)
 {
     const void *keys[] = {kCVPixelBufferIOSurfacePropertiesKey};
     CFDictionaryRef empty =
@@ -101,16 +101,8 @@ static double psnr(double sse, double n)
     return sse > 0 ? 10 * log10(255.0 * 255.0 * n / sse) : 99;
 }
 
-static void decoded(void *refcon, void *frameRefcon, OSStatus status, VTDecodeInfoFlags flags, CVImageBufferRef image,
-                    CMTime pts, CMTime duration)
+void encode_check_psnr(CVImageBufferRef image, int i, double out[3])
 {
-    (void)frameRefcon, (void)flags, (void)duration;
-    Decoded *d = refcon;
-    const int i = (int)pts.value;
-    if (status || !image || i < 0 || i >= FRAMES || CVPixelBufferGetPlaneCount(image) != 2) {
-        d->errors++;
-        return;
-    }
     CVPixelBufferLockBaseAddress(image, kCVPixelBufferLock_ReadOnly);
     const uint8_t *y = CVPixelBufferGetBaseAddressOfPlane(image, 0), *c = CVPixelBufferGetBaseAddressOfPlane(image, 1);
     const size_t ys = CVPixelBufferGetBytesPerRowOfPlane(image, 0), cs = CVPixelBufferGetBytesPerRowOfPlane(image, 1);
@@ -129,8 +121,24 @@ static void decoded(void *refcon, void *frameRefcon, OSStatus status, VTDecodeIn
             sse[2] += ev * ev;
         }
     CVPixelBufferUnlockBaseAddress(image, kCVPixelBufferLock_ReadOnly);
+    for (int p = 0; p < 3; p++)
+        out[p] = psnr(sse[p], p ? W * H / 4.0 : (double)W * H);
+}
+
+static void decoded(void *refcon, void *frameRefcon, OSStatus status, VTDecodeInfoFlags flags, CVImageBufferRef image,
+                    CMTime pts, CMTime duration)
+{
+    (void)frameRefcon, (void)flags, (void)duration;
+    Decoded *d = refcon;
+    const int i = (int)pts.value;
+    if (status || !image || i < 0 || i >= FRAMES || CVPixelBufferGetPlaneCount(image) != 2) {
+        d->errors++;
+        return;
+    }
+    double planes[3];
+    encode_check_psnr(image, i, planes);
     for (int p = 0; p < 3; p++) {
-        const double q = psnr(sse[p], p ? W * H / 4.0 : (double)W * H);
+        const double q = planes[p];
         if (!d->count || q < d->minPsnr[p])
             d->minPsnr[p] = q;
         d->sumPsnr[p] += q;
@@ -189,7 +197,7 @@ bool encode_check(CFDictionaryRef spec, CFStringRef entropy, double minPsnr, cha
     clock_gettime(CLOCK_MONOTONIC, &t0);
     int failed = 0;
     for (int i = 0; i < FRAMES; i++) {
-        CVPixelBufferRef image = makeFrame(i);
+        CVPixelBufferRef image = encode_check_frame(i);
         if (!image) {
             failed++;
             continue;

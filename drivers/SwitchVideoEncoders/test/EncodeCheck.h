@@ -10,6 +10,7 @@
 #ifndef ENCODE_CHECK_H
 #define ENCODE_CHECK_H
 #include <CoreFoundation/CoreFoundation.h>
+#include <CoreVideo/CoreVideo.h>
 #include <stdbool.h>
 #include <stddef.h>
 
@@ -18,5 +19,8 @@
 // the session said hardware. `spec` (NULL: RequireHardwareAcceleratedVideoEncoder) is the encoder specification;
 // `entropy` (NULL: the encoder's choice) sets H264EntropyMode.
 bool encode_check(CFDictionaryRef spec, CFStringRef entropy, double minPsnr, char *line, size_t size);
+// Frame i of that clip (320x240 NV12), and a decoded picture's PSNR against it (Y, U, V; 99 when exact).
+CVPixelBufferRef encode_check_frame(int i);
+void encode_check_psnr(CVImageBufferRef image, int i, double psnr[3]);
 
 #endif

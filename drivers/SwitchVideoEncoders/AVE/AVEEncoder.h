@@ -8,6 +8,7 @@
 #include "H264NVENC.h"
 #include "HEVCNVENC.h"
 #include "NVENCClient.h"
+#include "AVEReorder.h"
 #include "RateControl.h"
 #include "VTEncoderSPI.h"
 
@@ -25,19 +26,21 @@ typedef struct {
     H264EncLayout layout;
     H264EncHandles handles;
     uint8_t *inputVA, *bitstreamVA, *auxVA;
-    uint32_t buffers[sizeof(H264EncHandles) / sizeof(uint32_t)];  // one per handle
+    uint32_t buffers[12];  // every buffer allocated, reordering's frames among them
     unsigned bufferCount;
     CMVideoFormatDescriptionRef format;
     uint8_t *avcc;  // AVCC scratch for one picture
     size_t avccCap;
     int32_t maxKeyInterval, averageBitRate, constantBitRate;
     double maxKeyDuration, quality, expectedFrameRate, limitBytes, limitSeconds;
-    bool allowTemporal, realTime;
+    bool allowTemporal, realTime, allowReordering;
+    int32_t maxFrameDelay;  // MaxFrameDelayCount: frames held at most, -1 unlimited
     CFStringRef profileLevel, entropy, primaries, transfer, matrix;
     bool haveRef, keyPending;
     uint32_t frameNum, idrPicId, pictureIndex, pocCount, sinceKey;
     CMTime lastKeyTime;
     RateControl rc;
+    AVEReorder reorder;
     uint32_t frames, keyFrames, tiles, errors;
     uint64_t bytes, copyTicks, encodeTicks;
 } Encoder;
@@ -50,6 +53,33 @@ OSStatus ave_open_engine(Encoder *e);
 // The stream the first picture fixes (full range or not and its colour tags): buffers, parameter sets, the format
 // description every sample carries, the rate control.
 OSStatus ave_configure(Encoder *e, CVPixelBufferRef image);
+
+// One picture of a reordering session (AVEReorder.c), its type, references, frame number and POC stated: coded,
+// then emitted with `dts`. NVENC refusing it sets `refused` and emits nothing; any other failure returns an error and
+// emits nothing either.
+typedef struct {
+    VTVideoEncoderFrame frame;
+    CVPixelBufferRef image;
+    CMTime pts, duration, dts;
+    H264EncPicture picture;
+    H264EncHandles handles;
+    bool refused;
+} AVEPlan;
+
+OSStatus ave_encode_planned(Encoder *e, AVEPlan *plan);
+// Whether the next picture is a key frame: `since` pictures in display order since the last one.
+bool ave_wants_key(const Encoder *e, CMTime pts, CFDictionaryRef options, uint32_t since);
+int ave_alloc_buffer(Encoder *e, uint64_t size, uint32_t *handle);
+
+// AVEReorder.c: B pictures for H.264 frame sessions that allow reordering.
+bool ave_reorder_wanted(const Encoder *e);
+OSStatus ave_reorder_start(Encoder *e);
+// Holds, codes and emits the frame (and those it completes); returns an error only for a frame it neither held nor
+// answered, which the caller then drops.
+OSStatus ave_reorder_frame(Encoder *e, VTVideoEncoderFrame frame, CVPixelBufferRef image, CMTime pts, CMTime duration,
+                           CFDictionaryRef options);
+void ave_reorder_flush(Encoder *e);
+void ave_reorder_release(Encoder *e);
 
 // AVETiles.c: the encoder class's version 3 slots.
 OSStatus ave_start_tile_session(VTVideoEncoderRef ref, VTTileEncoderSession session, CFDictionaryRef specification,
