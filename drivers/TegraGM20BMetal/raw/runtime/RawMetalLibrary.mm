@@ -65,6 +65,8 @@
     f->_twin = twin;
     f->_constants = raw::constantsText(values);
     f->_framework = _framework;
+    f->_source = _source;
+    f->_specialized = values != nil;
     f.name = name;
     return f;
 }
@@ -158,14 +160,13 @@ RMLibrary *wrapLibrary(id device, id<MTLLibrary> twin, NSString *path)
     RMLibrary *l = [RMLibrary new];
     l->_device = device;
     l->_twin = twin;
-    if ([path hasSuffix:@".framework/default.metallib"])
-        l->_framework =
-            path.stringByDeletingLastPathComponent.lastPathComponent.stringByDeletingPathExtension.UTF8String;
+    l->_source = std::make_shared<raw::LibrarySource>(path.UTF8String ?: "");
+    l->_framework = raw::frameworkOf(l->_source->path);
     return l;
 }
 
 // The library function a function of this facade was made from, which the journal names (its name is a specialized one's)
-static std::string libraryName(RMFunction *f)
+std::string libraryName(RMFunction *f)
 {
     NSString *name = native_bridge_metal_function_library_name(f->_twin) ?: f.name;
     return name.UTF8String ?: "?";

@@ -242,6 +242,7 @@ uint64_t bufferRow(const BufferRows &r, uint64_t offset, uint64_t bytesPerRow, u
 
 // RawMetalLibrary.mm
 RMLibrary *wrapLibrary(id device, id<MTLLibrary> twin, NSString *path);
+std::string libraryName(RMFunction *f);
 
 // RawMetalStates.mm: a descriptor whose functions are this device's, over their m2v twins
 MTLRenderPipelineDescriptor *twinDescriptor(MTLRenderPipelineDescriptor *d);
