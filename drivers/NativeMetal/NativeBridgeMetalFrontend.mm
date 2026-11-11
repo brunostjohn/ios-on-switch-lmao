@@ -47,6 +47,7 @@
 #include "LimitsTable.h"
 #include "MetalABI.h"
 #include "MetallibEntries.h"
+#include "MetallibSlice.h"
 #include "QueuePriority.h"
 #include "SurfaceLayout.h"
 #include "SwitchFrameTimeline.h"
@@ -7102,24 +7103,43 @@ static uint64_t askAnswer(SEL cmd, NSUInteger arg);
     return (id<MTLTexture>)texture;
 }
 
+// A library of a metallib's AIR slice, the one this IPSW's Metal takes (MetallibSlice.h): its functions, and the bytes their
+// bitcode and extern entries are read from. `storage` keeps the file's bytes.
+static NBLibrary *metallibLibrary(id storage, const uint8_t *file, size_t length, NSError **error)
+{
+    size_t offset = 0, size = 0;
+    if (!switch_metal::airSlice(file, length, offset, size)) {
+        if (error)
+            *error = [NSError errorWithDomain:MTLLibraryErrorDomain
+                                         code:MTLLibraryErrorUnsupported
+                                     userInfo:@{
+                                         NSLocalizedDescriptionKey :
+                                             @"This library does not have a compatible AIR slice for this device"
+                                     }];
+        return nil;
+    }
+    SWITCH_METAL_DIAGNOSTIC(const uint64_t libraryBegan = nowUs());
+    NmbLibrary *handle = nmb_library_new(gDevice, file + offset, size, false);
+    SWITCH_METAL_DIAGNOSTIC(gTimeLibrary.add(libraryBegan));
+    if (!handle)
+        return failWith<NBLibrary *>(error, @"library", nil);
+    NBLibrary *library = [NBLibrary new];
+    library.handle = handle;
+    library.storage = storage;
+    library.bytes = file + offset;
+    library.length = size;
+    if (error)
+        *error = nil;
+    return library;
+}
+
 - (id<MTLLibrary>)newLibraryWithData:(dispatch_data_t)data error:(NSError **)error
 {
     const void *bytes = nullptr;
     size_t size = 0;
     dispatch_data_t mapped = dispatch_data_create_map(data, &bytes, &size);
-    SWITCH_METAL_DIAGNOSTIC(const uint64_t libraryBegan = nowUs());
-    NmbLibrary *handle = nmb_library_new(gDevice, bytes, size, false);
-    SWITCH_METAL_DIAGNOSTIC(gTimeLibrary.add(libraryBegan));
-    if (!handle)
-        return failWith<id<MTLLibrary>>(error, @"library", nil);
-    NBLibrary *library = [NBLibrary new];
-    library.handle = handle;
-    library.storage = mapped;
-    library.bytes = (const uint8_t *)bytes;
-    library.length = size;
-    SWITCH_METAL_DIAGNOSTIC(library.journalId = libraryJournalId(bytes, size));
-    if (error)
-        *error = nil;
+    NBLibrary *library = metallibLibrary(mapped, (const uint8_t *)bytes, size, error);
+    SWITCH_METAL_DIAGNOSTIC(if (library) library.journalId = libraryJournalId(bytes, size));
     return (id<MTLLibrary>)library;
 }
 
@@ -7128,20 +7148,9 @@ static uint64_t askAnswer(SEL cmd, NSUInteger arg);
     NSData *bytes = path ? [NSData dataWithContentsOfFile:path options:NSDataReadingMappedIfSafe error:error] : nil;
     if (!bytes)
         return nil;
-    SWITCH_METAL_DIAGNOSTIC(const uint64_t libraryBegan = nowUs());
-    NmbLibrary *handle = nmb_library_new(gDevice, bytes.bytes, bytes.length, false);
-    SWITCH_METAL_DIAGNOSTIC(gTimeLibrary.add(libraryBegan));
-    if (!handle)
-        return failWith<id<MTLLibrary>>(error, @"library", nil);
-    NBLibrary *library = [NBLibrary new];
-    library.handle = handle;
-    library.storage = bytes;
-    library.bytes = (const uint8_t *)bytes.bytes;
-    library.length = bytes.length;
-    if (journalOn())
+    NBLibrary *library = metallibLibrary(bytes, (const uint8_t *)bytes.bytes, bytes.length, error);
+    if (library && journalOn())
         library.journalId = journalToken(path.UTF8String);
-    if (error)
-        *error = nil;
     return (id<MTLLibrary>)library;
 }
 

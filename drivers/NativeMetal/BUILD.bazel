@@ -20,6 +20,7 @@ filegroup(
         "ImageFilterLink.h",
         "LimitsTable.h",
         "MetallibEntries.h",
+        "MetallibSlice.h",
         "NativeBridgeMetalFrontend.h",
         "NativeMetalArtifactCache.h",
         "NativeComputeArtifactStorage.h",
