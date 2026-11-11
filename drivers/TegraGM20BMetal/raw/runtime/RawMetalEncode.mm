@@ -555,6 +555,8 @@ static bool encodeRawAttempt(RMCommandBuffer *cb, size_t from, size_t to, const 
 #endif
             break;
         case OpEnd:
+            if (re)
+                re->finishVisibility();
             if (re && at + 1 < to && cb->_plan.operation(at + 1).op == OpRender &&
                 raw::canFusePasses(fusionPass(cb, renderBegin), fusionPass(cb, at + 1))) {
                 continuing = true;
@@ -583,6 +585,13 @@ static bool encodeRawAttempt(RMCommandBuffer *cb, size_t from, size_t to, const 
             break;
         case OpBarrier:
             re->barrier();
+            break;
+        case OpVisibility:
+            if (!re->setVisibility(c.a,
+                                   [(__bridge id)c.obj isKindOfClass:[RMBuffer class]] ? &((__bridge RMBuffer *)c.obj)->_raw
+                                                                                         : nullptr,
+                                   c.c))
+                return fail(PredCallVisibility, "a visibility offset the raw path cannot take", c.a, c.c);
             break;
         case OpDrawIndexed: {
             const auto &draw = cb->_plan.draw(at);
