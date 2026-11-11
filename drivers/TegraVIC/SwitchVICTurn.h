@@ -17,9 +17,12 @@ static inline const char *switch_vic_turn_of(const TegraVICOp &op, const TegraVI
 {
     if (op.fill || op.transform > 7 || !(op.transform & TEGRA_VIC_ROT90))
         return "not a quarter turn";
+    // Core Animation's destinations for the display are '422v' on iPadOS 27 (TegraVIC's refusal lines before VIC took
+    // them); window A scans the picture, the destination's format only matters to the rows a reader makes.
     if (d.planes != 2 ||
-        (d.fourcc != TEGRA_VIC_FOURCC('4', '2', '0', 'v') && d.fourcc != TEGRA_VIC_FOURCC('4', '2', '0', 'f')))
-        return "a destination window A does not scan";
+        (d.fourcc != TEGRA_VIC_FOURCC('4', '2', '0', 'v') && d.fourcc != TEGRA_VIC_FOURCC('4', '2', '0', 'f') &&
+         d.fourcc != TEGRA_VIC_FOURCC('4', '2', '2', 'v') && d.fourcc != TEGRA_VIC_FOURCC('4', '2', '2', 'f')))
+        return "not a two-plane 8-bit YUV destination";
     if (op.dstX || op.dstY || op.dstW != d.width || op.dstH != d.height)
         return "a turn onto part of the destination";
     if ((op.srcX | op.srcY | op.srcW | op.srcH) & 0xffff)
@@ -43,6 +46,9 @@ int switch_vic_turn_surface(const SwitchNativeSurfaceView &source, const TegraVI
 void switch_display_traits_force(uint32_t traits, const void *client);
 void switch_display_traits_release(const void *client);
 #endif
+
+// The display's answer (NativeMobileDisplay): whether window A could scan a turned picture now.
+extern "C" bool switch_display_landscape_ready(void);
 
 // TegraVIC's transform worker, before it copies: 1 when the job is recorded on its destination instead (nothing to
 // submit, the caller completes it), 0 to copy as before. A job with events copies: the events wait for VIC's work.

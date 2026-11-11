@@ -60,6 +60,8 @@
 #include "SwitchVICRequests.h"
 #include "../NativeMobileDisplay/DisplayWindowProbeABI.h"
 #include "SwitchVICStats.h"
+#include "SwitchVICTurn.h"
+#include "SwitchVICTurnRun.h"
 #include "../TegraGM20B/TegraGM20BLayout.h"
 
 // The kernel's IOService/IOUserClient implementations, called directly (they are the defaults the vtable copies
@@ -296,6 +298,21 @@ bool runJob(Job *job, IOReturn *status)
         *status = ioreturn(prepared);
         return true;
     }
+#if TEGRA_VIC_STATS
+    const uint64_t entered = mach_absolute_time();
+    const bool eventTurn = job->events && job->plan.count == 1 && (job->plan.op[0].transform & TEGRA_VIC_ROT90);
+#endif
+    // A quarter turn of a decoder's picture window A scans itself: recorded on the destination, nothing to submit.
+    SwitchDisplayTraits traits = switch_display_traits();
+    traits.columnScanYuv = traits.columnScanYuv && switch_display_landscape_ready();
+    if (!job->bounceSrc && !job->bounceDst &&
+        switch_vic_turn_defer(&job->src, &job->dst, &job->plan, job->chromaSite, job->events != nullptr, traits)) {
+#if TEGRA_VIC_STATS
+        switch_vic_turn_count(false, true, false, mach_absolute_time() - entered);
+#endif
+        *status = kIOReturnSuccess;
+        return true;
+    }
     int submitted = 0;
 #if TEGRA_VIC_STATS
     // Read before submitting: the job may complete and be freed before the submission returns.
@@ -321,6 +338,7 @@ bool runJob(Job *job, IOReturn *status)
     }
 #if TEGRA_VIC_STATS
     gStats.submission(operations, bounced, switch_now_us() - began, addressed);
+    switch_vic_turn_count(true, false, eventTurn, mach_absolute_time() - entered);
 #endif
     return false;
 }
@@ -457,6 +475,18 @@ IOReturn awaitJob(Conn *conn, Job *job)
 
 IOReturn transform(Conn *conn, const void *in, uint32_t size)
 {
+#if TEGRA_VIC_STATS
+    struct Charge {
+        uint64_t at = mach_absolute_time();
+        void stop()
+        {
+            if (at)
+                switch_vic_turn_count(false, false, false, mach_absolute_time() - at);
+            at = 0;
+        }
+        ~Charge() { stop(); }
+    } charge;
+#endif
     if (size != sizeof(TegraVICRequest))
         return kIOReturnBadArgument;
     if (!tegra_vic_ready())
@@ -480,6 +510,10 @@ IOReturn transform(Conn *conn, const void *in, uint32_t size)
         why = tegra_vic_plan(&r, &job->src.desc, &job->dst.desc, &job->plan, &kind);
         if (why)
             ret = kind == TEGRA_VIC_PLAN_UNSUPPORTED ? kIOReturnUnsupported : kIOReturnBadArgument;
+#if TEGRA_VIC_STATS
+        else
+            switch_vic_turn_request_seen(r, job->src.desc, job->dst.desc, job->pid);
+#endif
     }
     // Every job checked now, against the surfaces as they will be mapped (window addresses are page-aligned, like the
     // real ones), so a refusal is this call's result and the caller can fall back at once.
@@ -554,6 +588,9 @@ IOReturn transform(Conn *conn, const void *in, uint32_t size)
         abandonUnqueued(job);
         return kIOReturnAborted;
     }
+#if TEGRA_VIC_STATS
+    charge.stop();
+#endif
     return async ? kIOReturnSuccess : awaitJob(conn, job);
 }
 
@@ -634,6 +671,9 @@ IOReturn tegra_vic_register_port(const IOUserClient *self, mach_port_t port, UIn
 IOReturn tegra_vic_client_close(IOUserClient *self)
 {
     if (Conn *conn = connOf(self)) {
+#if TEGRA_VIC_STATS
+        switch_display_traits_release(conn);
+#endif
         __atomic_store_n(&conn->closing, true, __ATOMIC_RELEASE);
         IOLockLock(gQueueLock);
         gRequests.cancel(conn, -125);

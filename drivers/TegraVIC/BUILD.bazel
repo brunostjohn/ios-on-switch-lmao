@@ -42,6 +42,7 @@ kernel_driver(
         "SwitchVICSurfaceBacking.cpp",
         "SwitchVICTransform.cpp",
         "SwitchVICTurn.cpp",
+        "SwitchVICTurnRun.cpp",
         "SwitchVICSurfaceAccess.cpp",
         "SwitchVICBouncePool.cpp",
         "SwitchVICBounceSubmit.cpp",

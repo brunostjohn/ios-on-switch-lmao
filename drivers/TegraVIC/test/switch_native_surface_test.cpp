@@ -487,7 +487,7 @@ TEST_F(TurnedSurface, AGpuReaderQueuesTheTurn)
     finishCpu(turnedObject, backing, &owned);
 }
 
-TEST_F(TurnedSurface, OnlyAQuarterTurnOntoAWholeNv12DestinationIsRecorded)
+TEST_F(TurnedSurface, OnlyAQuarterTurnOntoAWholeYuvDestinationIsRecorded)
 {
     SwitchNativeSurfaceTurn turn = {};
     const SwitchNativeSurfaceCrop crop = {0, 0, 1280, 720};
@@ -513,6 +513,11 @@ TEST_F(TurnedSurface, OnlyAQuarterTurnOntoAWholeNv12DestinationIsRecorded)
     bgra.fourcc = TEGRA_VIC_FOURCC('B', 'G', 'R', 'A');
     bgra.planes = 0;
     EXPECT_NE(switch_vic_turn_of(op, bgra, crop, turn), nullptr);
+    TegraVICSurfaceDesc nv16 = turned.desc;  // Core Animation's detached-video destination on iPadOS 27
+    nv16.fourcc = TEGRA_VIC_FOURCC('4', '2', '2', 'v');
+    EXPECT_EQ(switch_vic_turn_of(op, nv16, crop, turn), nullptr);
+    nv16.fourcc = TEGRA_VIC_FOURCC('x', '4', '2', '0');
+    EXPECT_NE(switch_vic_turn_of(op, nv16, crop, turn), nullptr);
 }
 
 TEST_F(NativeSurface, ReadOnlyRowsMaterializeOnceAndReturnContinuousOwnership)

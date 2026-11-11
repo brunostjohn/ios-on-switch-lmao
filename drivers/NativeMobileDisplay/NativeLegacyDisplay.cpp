@@ -5442,6 +5442,13 @@ extern "C" bool switch_native_surface_display_ready(void)
     return display && display->planesReady();
 }
 
+// TegraVIC's engine thread, before it records a quarter turn instead of copying it (SwitchVICTurn.h). Any context.
+extern "C" bool switch_display_landscape_ready(void)
+{
+    const auto *display = __atomic_load_n(&NativeLegacyDisplay::primaryDisplay, __ATOMIC_ACQUIRE);
+    return display && display->landscapeReady();
+}
+
 extern "C" bool native_legacy_detach_ready(void)
 {
     const NativeLegacyDisplay *display = __atomic_load_n(&NativeLegacyDisplay::primaryDisplay, __ATOMIC_ACQUIRE);
