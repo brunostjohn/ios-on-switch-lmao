@@ -362,6 +362,30 @@ static void checkRefusals(void)
     }
 }
 
+// A P picture's reference is bounded as a reference surface: one byte short of its chroma, it is refused.
+static void checkReferenceBound(void)
+{
+    HEVCEncConfig c = {.width = 1280, .height = 720};
+    hevcnvenc_configure(&c);
+    H264EncLayout l;
+    hevcnvenc_layout(&c, &l);
+    const HEVCEncPicture p = {.poc = 1, .qp = 30, .picture_index = 1};
+    static TegraNVENCSubmit s;
+    hevcnvenc_fill_submit(&c, TEGRA_NVENC_LAYOUT_TILED16, TEGRA_NVENC_CHROMA_OFFSET, &l, &p, &kHandles, &s);
+    uint64_t avail[TEGRA_NVENC_MAX_ENTRIES];
+    for (uint32_t i = 0; i < TEGRA_NVENC_MAX_ENTRIES; i++) {
+        const bool ref = i < s.entry_count && s.entries[i].method == NVC5B7_SET_IN_REF_PIC0_LUMA;
+        avail[i] = ref ? l.recon.bytes : 64u << 20;
+    }
+    const char *why = tegra_nvenc_check(&s, avail);
+    CHECK(!why, "a reference of recon.bytes: %s", why ? why : "");
+    for (uint32_t i = 0; i < s.entry_count; i++) {
+        if (s.entries[i].method == NVC5B7_SET_IN_REF_PIC0_LUMA)
+            avail[i] = l.recon.bytes - 1;
+    }
+    CHECK(tegra_nvenc_check(&s, avail) != NULL, "the checker took a reference one byte short");
+}
+
 // With the input's chroma by method, the reconstruction's is still at its config offset: app 3 reads no other.
 static void checkChromaMethodInput(void)
 {
@@ -463,6 +487,7 @@ int main(void)
     checkSize(1920, 1080, kHeader1920, kSlice1920);
     checkSize(640, 360, kHeader640, kSlice640);
     checkRefusals();
+    checkReferenceBound();
     checkChromaMethodInput();
     checkSyntax();
     if (gFailures) {
