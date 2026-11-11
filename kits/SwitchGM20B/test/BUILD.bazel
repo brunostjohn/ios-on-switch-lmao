@@ -43,12 +43,16 @@ genrule(
     name = "driver_constants_h",
     srcs = ["driver_constants.tsv"] + DRIVER_SOURCES.values(),
     outs = ["driver_constants.h"],
-    visibility = ["//kits/SwitchGM20BEmit/test:__pkg__"],
     cmd = "$(execpath :driver_constants) --rows $(execpath driver_constants.tsv) --out $@ " + " ".join([
-        "--source {}=$(execpath {}){}".format(short, label, ":" + DEFINE_PREFIXES[short] if short in DEFINE_PREFIXES else "")
+        "--source {}=$(execpath {}){}".format(
+            short,
+            label,
+            ":" + DEFINE_PREFIXES[short] if short in DEFINE_PREFIXES else "",
+        )
         for short, label in DRIVER_SOURCES.items()
     ]),
     tools = [":driver_constants"],
+    visibility = ["//kits/SwitchGM20BEmit/test:__pkg__"],
 )
 
 host_test(
@@ -87,7 +91,7 @@ host_test(
 kernel_driver(
     name = "SwitchGM20BKernelCheck",
     srcs = ["kernel_check.c"],
+    hdrs = ["//kits/SwitchGM20B:SwitchGM20BCaps.h"],
     c_copts = SWITCH_GM20B_INCLUDES + ["-I$(GENDIR)/kits/SwitchGM20B"],
     hdr_deps = ["kits/SwitchGM20B"],
-    hdrs = ["//kits/SwitchGM20B:SwitchGM20BCaps.h"],
 )

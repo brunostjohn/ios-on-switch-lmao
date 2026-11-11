@@ -1,8 +1,10 @@
-"""The correctness backlog of the capability table: rows graded below chip, and every place the current device answers
-(raw_device_answers.h, per iOS kind) or the raw path's format tables (raw_gpu.cpp kFormats, raw_zeta.h) disagree with
-it. Disagreements are ordered by how wrong the current answer is: an over-claim (the device promises what the hardware
-lacks) first, then a wrong value, then an under-claim (the hardware does it, the device says no or sends it to m2v),
-then a format the raw path lowers to another format's codes. Within a class, the larger mismatch first.
+"""The capability table's correctness backlog.
+
+The rows graded below chip, and every place the current device answers (raw_device_answers.h, per iOS kind) or the raw
+path's format tables (raw_gpu.cpp kFormats, raw_zeta.h) disagree with the table. Disagreements are ordered by how wrong
+the current answer is: an over-claim (the device promises what the hardware lacks) first, then a wrong value, then an
+under-claim (the hardware does it, the device says no or sends it to m2v), then a format the raw path lowers to another
+format's codes. Within a class, the larger mismatch first.
 
     bazel run //kits/SwitchGM20B:caps_report
 """
@@ -15,31 +17,34 @@ import sys
 import caps
 import gen_caps
 
-ORDER = ["over-claim", "wrong value", "under-claim", "lowered"]
-RAW = "drivers/TegraGM20BMetal/raw/runtime/"
+ORDER = ['over-claim', 'wrong value', 'under-claim', 'lowered']
+RAW = 'drivers/TegraGM20BMetal/raw/runtime/'
 
 
 def answers(text: str) -> dict:
     kinds = {}
-    for m in re.finditer(r"kCounts(\w+)\[\] = \{(.*?)\};", text, re.S):
+    for m in re.finditer(r'kCounts(\w+)\[\] = \{(.*?)\};', text, re.DOTALL):
         counts = {s: int(v) for s, v in re.findall(r'\{"([\w:]+)", (\d+), (?:true|false)\}', m.group(2))}
-        kinds.setdefault(m.group(1), {})["counts"] = counts
-    for m in re.finditer(r"kArgs(\w+)\[\] = \{(.*?)\};", text, re.S):
-        ranges = [(s, int(a), int(b), int(v)) for s, a, b, v in
-                  re.findall(r'\{"([\w:]+)", (?:true|false), (\d+), (\d+), (\d+)\}', m.group(2))]
-        kinds.setdefault(m.group(1), {})["args"] = ranges
+        kinds.setdefault(m.group(1), {})['counts'] = counts
+    for m in re.finditer(r'kArgs(\w+)\[\] = \{(.*?)\};', text, re.DOTALL):
+        ranges = [
+            (s, int(a), int(b), int(v))
+            for s, a, b, v in re.findall(r'\{"([\w:]+)", (?:true|false), (\d+), (\d+), (\d+)\}', m.group(2))
+        ]
+        kinds.setdefault(m.group(1), {})['args'] = ranges
     return kinds
 
 
 def raw_formats(gpu_cpp: str, zeta_h: str) -> dict:
     rows = {}
-    body = gpu_cpp[gpu_cpp.index("kFormats[] = {"):]
-    body = body[:body.index("};")]
-    for m in re.finditer(r"\{(\d+), (0x[0-9a-f]+|0), (0x[0-9a-f]+), (\d+), (?:true|false)", body):
-        rows[int(m.group(1))] = {"ct": int(m.group(2), 0), "tic0": int(m.group(3), 16), "bytes": int(m.group(4))}
-    for m in re.finditer(r"\{(\d+), (0x[0-9a-f]+), (\d+), (0x[0-9a-f]+), (?:true|false), (?:true|false), (0x[0-9a-f]+)\}",
-                         zeta_h):
-        rows[int(m.group(1))] = {"zt": int(m.group(2), 16), "tic0": int(m.group(5), 16), "bytes": int(m.group(3))}
+    body = gpu_cpp[gpu_cpp.index('kFormats[] = {') :]
+    body = body[: body.index('};')]
+    for m in re.finditer(r'\{(\d+), (0x[0-9a-f]+|0), (0x[0-9a-f]+), (\d+), (?:true|false)', body):
+        rows[int(m.group(1))] = {'ct': int(m.group(2), 0), 'tic0': int(m.group(3), 16), 'bytes': int(m.group(4))}
+    for m in re.finditer(
+        r'\{(\d+), (0x[0-9a-f]+), (\d+), (0x[0-9a-f]+), (?:true|false), (?:true|false), (0x[0-9a-f]+)\}', zeta_h
+    ):
+        rows[int(m.group(1))] = {'zt': int(m.group(2), 16), 'tic0': int(m.group(5), 16), 'bytes': int(m.group(3))}
     return rows
 
 
@@ -49,108 +54,160 @@ def size(answer: float, hw: float) -> float:
     return abs(math.log2(answer / hw))
 
 
-def compare_limits(table, kind: str, ans: dict, out: list) -> None:
-    counts, ranges = ans.get("counts", {}), ans.get("args", [])
+def compare_limits(table: caps.Caps, kind: str, ans: dict, out: list) -> None:
+    counts, ranges = ans.get('counts', {}), ans.get('args', [])
     for row in table.limits:
         c = row.cols
-        for sel in [s for s in c["metal"].split(",") if s != "-"]:
-            if c["bound"] == "set":
-                hw = {int(v) for v in c["value"].split(",")}
+        for sel in [s for s in c['metal'].split(',') if s != '-']:
+            if c['bound'] == 'set':
+                hw = {int(v) for v in c['value'].split(',')}
                 got = {n for s, a, b, v in ranges if s == sel and v for n in range(a, b + 1)} & set(range(1, 17))
                 if not got:
                     continue
                 if got - hw:
-                    out.append(("over-claim", 9, kind, f"{sel} answers {sorted(got)}, the hardware {sorted(hw)}"))
+                    out.append(('over-claim', 9, kind, f'{sel} answers {sorted(got)}, the hardware {sorted(hw)}'))
                 if hw - got:
-                    out.append(("under-claim", len(hw - got), kind,
-                                f"{sel} answers {sorted(got)}, the hardware renders {sorted(hw)} ({c['grade']})"))
+                    out.append(
+                        (
+                            'under-claim',
+                            len(hw - got),
+                            kind,
+                            f'{sel} answers {sorted(got)}, the hardware renders {sorted(hw)} ({c["grade"]})',
+                        )
+                    )
                 continue
             values = [v for s, a, b, v in ranges if s == sel] or ([counts[sel]] if sel in counts else [])
             if not values:
                 continue
-            hw = int(c["value"])
-            answer = min(values) if c["bound"] == "min" else max(values)
-            over = answer < hw if c["bound"] == "min" else answer > hw
+            hw = int(c['value'])
+            answer = min(values) if c['bound'] == 'min' else max(values)
+            over = answer < hw if c['bound'] == 'min' else answer > hw
             if answer == hw:
                 continue
-            label = "over-claim" if over else "under-claim"
-            out.append((label, size(answer, hw), kind,
-                        f"{sel} answers {answer}, the hardware's {c['name']} is {hw} ({c['grade']}, {c['hwtest']})"))
+            label = 'over-claim' if over else 'under-claim'
+            out.append(
+                (
+                    label,
+                    size(answer, hw),
+                    kind,
+                    f"{sel} answers {answer}, the hardware's {c['name']} is {hw} ({c['grade']}, {c['hwtest']})",
+                )
+            )
 
 
-def compare_features(table, kind: str, ans: dict, out: list) -> None:
-    counts = ans.get("counts", {})
+def compare_features(table: caps.Caps, kind: str, ans: dict, out: list) -> None:
+    counts = ans.get('counts', {})
     for row in table.features:
         c = row.cols
-        if c["metal"] == "-":
+        if c['metal'] == '-':
             continue
-        sel, _, want = c["metal"].partition("=")
-        hw = c["present"] == "yes" and want == "1"
+        sel, _, want = c['metal'].partition('=')
+        hw = c['present'] == 'yes' and want == '1'
         got = counts.get(sel)
         if got is None:
-            out.append(("under-claim", 0.5, kind, f"{sel} has no raw answer (m2v's): the hardware has it ({c['id']}, "
-                                                   f"{c['grade']}, {c['hwtest']})"))
+            out.append(
+                (
+                    'under-claim',
+                    0.5,
+                    kind,
+                    f"{sel} has no raw answer (m2v's): the hardware has it ({c['id']}, {c['grade']}, {c['hwtest']})",
+                )
+            )
         elif got and not hw:
-            out.append(("over-claim", 9, kind, f"{sel} answers yes, the hardware has no {c['id']}"))
+            out.append(('over-claim', 9, kind, f'{sel} answers yes, the hardware has no {c["id"]}'))
         elif not got and hw:
-            out.append(("under-claim", 1, kind, f"{sel} answers no, the hardware has it ({c['id']}, {c['grade']}, "
-                                                 f"{c['hwtest']})"))
+            out.append(
+                (
+                    'under-claim',
+                    1,
+                    kind,
+                    f'{sel} answers no, the hardware has it ({c["id"]}, {c["grade"]}, {c["hwtest"]})',
+                )
+            )
 
 
 def compare_formats(rows: list[dict], raw: dict, out: list) -> None:
-    by_mtl = {r["mtl"]: r for r in rows}
+    by_mtl = {r['mtl']: r for r in rows}
     for mtl, r in sorted(raw.items()):
         cap = by_mtl.get(mtl)
-        name = cap["name"] if cap else str(mtl)
+        name = cap['name'] if cap else str(mtl)
         if cap is None:
-            out.append(("wrong value", 1, "raw", f"format {mtl} is in raw's table, not in formats.tsv"))
+            out.append(('wrong value', 1, 'raw', f"format {mtl} is in raw's table, not in formats.tsv"))
             continue
-        if cap["pipe"] == "-":
-            out.append(("lowered", 1, "raw", f"{name}: no native target or texture header; raw stores and samples "
-                                              f"another format's codes (target 0x{r.get('ct', 0):02x})"))
+        if cap['pipe'] == '-':
+            out.append(
+                (
+                    'lowered',
+                    1,
+                    'raw',
+                    (
+                        f'{name}: no native target or texture header; raw stores and samples '
+                        f"another format's codes (target 0x{r.get('ct', 0):02x})"
+                    ),
+                )
+            )
             continue
-        target = "zt" if "zt" in r else "ct"
+        target = 'zt' if 'zt' in r else 'ct'
         if r.get(target) and r[target] != cap[target]:
-            out.append(("wrong value", 2, "raw", f"{name}: raw's {target} 0x{r[target]:02x}, the hardware's "
-                                                  f"0x{cap[target]:02x}"))
-        if target == "ct" and r["ct"] and "render" not in cap["flags"]:
-            out.append(("over-claim", 9, "raw", f"{name}: raw renders it, the hardware has no target for it"))
-        if target == "ct" and not r["ct"] and "render" in cap["flags"]:
-            out.append(("under-claim", 1, "raw", f"{name}: raw samples it only, the hardware renders and "
-                                                  f"{'blends' if 'blend' in cap['flags'] else 'stores'} it"))
-        if r["tic0"] != cap["tic0"]:
-            out.append(("wrong value", 2, "raw", f"{name}: raw's texture header word 0 0x{r['tic0']:08x}, NIL's "
-                                                  f"0x{cap['tic0']:08x}"))
+            out.append(
+                (
+                    'wrong value',
+                    2,
+                    'raw',
+                    f"{name}: raw's {target} 0x{r[target]:02x}, the hardware's 0x{cap[target]:02x}",
+                )
+            )
+        if target == 'ct' and r['ct'] and 'render' not in cap['flags']:
+            out.append(('over-claim', 9, 'raw', f'{name}: raw renders it, the hardware has no target for it'))
+        if target == 'ct' and not r['ct'] and 'render' in cap['flags']:
+            out.append(
+                (
+                    'under-claim',
+                    1,
+                    'raw',
+                    (
+                        f'{name}: raw samples it only, the hardware renders and '
+                        f'{"blends" if "blend" in cap["flags"] else "stores"} it'
+                    ),
+                )
+            )
+        if r['tic0'] != cap['tic0']:
+            out.append(
+                (
+                    'wrong value',
+                    2,
+                    'raw',
+                    f"{name}: raw's texture header word 0 0x{r['tic0']:08x}, NIL's 0x{cap['tic0']:08x}",
+                )
+            )
     for cap in rows:
-        if cap["mtl"] not in raw and ("texture" in cap["flags"] or "render" in cap["flags"]):
-            what = "renders and samples" if "render" in cap["flags"] else "samples"
-            out.append(("under-claim", 0.75, "raw", f"{cap['name']}: the hardware {what} it, raw has no row (m2v)"))
+        if cap['mtl'] not in raw and ('texture' in cap['flags'] or 'render' in cap['flags']):
+            what = 'renders and samples' if 'render' in cap['flags'] else 'samples'
+            out.append(('under-claim', 0.75, 'raw', f'{cap["name"]}: the hardware {what} it, raw has no row (m2v)'))
 
 
-def below_chip(table) -> list[str]:
+def below_chip(table: caps.Caps) -> list[str]:
     lines = []
-    for name in ("formats", "limits", "features"):
+    for name in ('formats', 'limits', 'features'):
         rows = getattr(table, name)
-        key = {"formats": "name", "limits": "name", "features": "id"}[name]
-        by = {g: [r.cols[key] for r in rows if r.cols["grade"] == g] for g in caps.GRADES}
-        lines.append(f"{name}.tsv: {len(rows)} rows: " + ", ".join(f"{g} {len(by[g])}" for g in reversed(caps.GRADES)))
-        for g in ("host", "source"):
-            if by[g]:
-                lines.append(f"  {g}: " + ", ".join(by[g]))
-    lines.append(f"methods.tsv: {len(table.methods)} class methods and QMD fields, each under a feature row")
+        key = {'formats': 'name', 'limits': 'name', 'features': 'id'}[name]
+        by = {g: [r.cols[key] for r in rows if r.cols['grade'] == g] for g in caps.GRADES}
+        lines.append(f'{name}.tsv: {len(rows)} rows: ' + ', '.join(f'{g} {len(by[g])}' for g in reversed(caps.GRADES)))
+        lines.extend(f'  {g}: ' + ', '.join(by[g]) for g in ('host', 'source') if by[g])
+    lines.append(f'methods.tsv: {len(table.methods)} class methods and QMD fields, each under a feature row')
     return lines
 
 
 def main() -> None:
-    root = os.environ.get("BUILD_WORKSPACE_DIRECTORY")
+    root = os.environ.get('BUILD_WORKSPACE_DIRECTORY')
     args = gen_caps.runfiles_args(root)
     try:
         table, rows = gen_caps.build(args)
     except caps.CapsError as e:
         caps.fail(e)
-    with open(RAW + "raw_device_answers.h", encoding="utf-8") as f:
+    with open(RAW + 'raw_device_answers.h', encoding='utf-8') as f:
         kinds = answers(f.read())
-    with open(RAW + "raw_gpu.cpp", encoding="utf-8") as f, open(RAW + "raw_zeta.h", encoding="utf-8") as z:
+    with open(RAW + 'raw_gpu.cpp', encoding='utf-8') as f, open(RAW + 'raw_zeta.h', encoding='utf-8') as z:
         raw = raw_formats(f.read(), z.read())
     found = []
     for kind, ans in sorted(kinds.items()):
@@ -158,13 +215,13 @@ def main() -> None:
         compare_features(table, kind, ans, found)
     compare_formats(rows, raw, found)
     found.sort(key=lambda d: (ORDER.index(d[0]), -d[1], d[2], d[3]))
-    out = ["# GM20B capability table", ""] + below_chip(table)
-    out += ["", f"# Disagreements with the current device ({len(found)})", ""]
-    out += [f"{label:12} {kind:7} {text}" for label, _, kind, text in found]
+    out = ['# GM20B capability table', '', *below_chip(table)]
+    out += ['', f'# Disagreements with the current device ({len(found)})', '']
+    out += [f'{label:12} {kind:7} {text}' for label, _, kind, text in found]
     if root:
-        out += ["", "Every cited file and line exists."]
-    sys.stdout.write("\n".join(out) + "\n")
+        out += ['', 'Every cited file and line exists.']
+    sys.stdout.write('\n'.join(out) + '\n')
 
 
-if __name__ == "__main__":
+if __name__ == '__main__':
     main()

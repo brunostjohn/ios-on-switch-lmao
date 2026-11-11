@@ -95,9 +95,9 @@ TEST(EmitMme, IndirectDrawsAsRawMacrosDrawThem)
                       run(raw::mme::kIndirectProgram.words.data(), raw::mme::kIndirectProgram.size, draw))
                 << vertices << " " << instances;
             const std::vector<uint32_t> indexed = {vertices, instances, 11, 0xfffffff0u, 4};
-            EXPECT_EQ(run(switch_gm20b_macro_indexed_indirect, count(switch_gm20b_macro_indexed_indirect), indexed),
-                      run(raw::mme::kIndexedIndirectProgram.words.data(), raw::mme::kIndexedIndirectProgram.size,
-                          indexed))
+            EXPECT_EQ(
+                run(switch_gm20b_macro_indexed_indirect, count(switch_gm20b_macro_indexed_indirect), indexed),
+                run(raw::mme::kIndexedIndirectProgram.words.data(), raw::mme::kIndexedIndirectProgram.size, indexed))
                 << vertices << " " << instances;
         }
     }

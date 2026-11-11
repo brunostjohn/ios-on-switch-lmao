@@ -84,10 +84,10 @@ struct Case {
 const Case kCases[] = {
     {"pitch to pitch", pitch(0x1000000, 1024), pitch(0x2000040, 2048), 4, 256, 64, false},
     {"pitch to block-linear", pitch(0x1000000, 512), tiled(0x40000000, 256, 128, 1, 0, 8, 16, 4, 0), 4, 64, 32, true},
-    {"block-linear to pitch, 8-byte texels", tiled(0x3400000000, 128, 64, 1, 0, 0, 8, 3, 0), pitch(0x5000, 1024), 8, 128,
-     8, false},
-    {"block-linear to block-linear, 3D", tiled(0x10000, 64, 64, 8, 3, 4, 4, 2, 1), tiled(0x20000, 64, 64, 8, 5, 0, 0, 2, 1),
-     16, 32, 32, true},
+    {"block-linear to pitch, 8-byte texels", tiled(0x3400000000, 128, 64, 1, 0, 0, 8, 3, 0), pitch(0x5000, 1024), 8,
+     128, 8, false},
+    {"block-linear to block-linear, 3D", tiled(0x10000, 64, 64, 8, 3, 4, 4, 2, 1),
+     tiled(0x20000, 64, 64, 8, 5, 0, 0, 2, 1), 16, 32, 32, true},
     {"one-byte texels", pitch(0x7000, 4096), tiled(0x8000, 4096, 16, 1, 0, 0, 0, 1, 0), 1, 4096, 16, false},
     {"two-byte texels", tiled(0x9000, 640, 480, 1, 0, 32, 32, 4, 0), pitch(0xa000, 1280), 2, 320, 240, true},
 };
@@ -113,7 +113,8 @@ TEST(EmitCopy, WordForWordTheRawPathsCopy)
         ours.resize(nv_push_dw_count(&p));
 
         raw::Push r{theirs.data(), theirs.data() + theirs.size()};
-        raw::emitCopy(r, rawSide(c.src, c.bpp), rawSide(c.dst, c.bpp), c.width, c.height, raw::copyTexelRemap(c.bpp), c.ordered);
+        raw::emitCopy(r, rawSide(c.src, c.bpp), rawSide(c.dst, c.bpp), c.width, c.height, raw::copyTexelRemap(c.bpp),
+                      c.ordered);
         theirs.resize(size_t(r.at - theirs.data()));
 
         EXPECT_EQ(Words(ours), Words(theirs)) << c.name;
