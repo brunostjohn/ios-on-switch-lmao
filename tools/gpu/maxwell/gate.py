@@ -1,0 +1,128 @@
+#!/usr/bin/env python3
+"""The codegen gate: two directcheck dumps' fragment programs run on the same inputs, outputs compared bit for bit.
+
+usage: gate.py <before dump> <after dump> --corpus <R lines>... [--invocations N] [--seed S]
+
+Every state of the corpora in both dumps runs N quads of each program (quad.py over interp.py's lanes) on the same
+seeded attributes, constant buffers, texture and storage-image results (specials included: NaNs with payloads,
+infinities, signed zeros, f32 denormals, values past half's range). A state passes when every lane writes the same
+output registers and storage stores and kills alike; it is unsupported when either program uses an instruction the
+interpreter does not run.
+"""
+
+import argparse
+import json
+import random
+import struct
+import sys
+from pathlib import Path
+
+if __package__ in (None, ''):
+    sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
+
+from tools.gpu.maxwell import isa, nakstat
+from tools.gpu.maxwell.interp import Inputs, UnsupportedError
+from tools.gpu.maxwell.quad import LANES, run_quad
+
+SPECIALS = [
+    0x7FC00000,
+    0x7FC12345,
+    0xFFC00001,
+    0x7F800000,
+    0xFF800000,
+    0x80000000,
+    0x00000001,
+    0x807FFFFF,
+    0x477FF000,
+    0x47800000,
+    0xC7800000,
+    0x3F800000,
+    0x00800000,
+    0x387FFFFF,
+]
+OMAP_TARGET_BYTE = 576 // 8
+
+
+def word(rng: random.Random, nice: float) -> int:
+    r = rng.random()
+    if r < nice:
+        return struct.unpack('<I', struct.pack('<f', rng.uniform(-0.25, 1.25)))[0]
+    if r < nice + 0.15:
+        return rng.choice(SPECIALS)
+    if r < nice + 0.2:
+        return rng.randrange(0, 64) * 4
+    return rng.getrandbits(32)
+
+
+class Seeded:
+    """Inputs as pure functions of (seed, invocation, operands): the same for both programs."""
+
+    def __init__(self, seed: int, invocation: int):
+        self.base = (seed, invocation)
+
+    def rng(self, *key: object) -> random.Random:
+        return random.Random(hash((self.base, key)) & 0xFFFFFFFFFFFF)
+
+    def inputs(self, lane: int = 0) -> Inputs:
+        def attribute(addr: int) -> int:
+            return 0x3F800000 if addr == 0x7C else word(self.rng('a', addr, lane), 0.9)
+
+        def cbuf(bank: int, offset: int) -> int:
+            return word(self.rng('c', bank, offset & 0xFFFFFFFF), 0.6)
+
+        def texture(operands: tuple) -> list[int]:
+            r = self.rng('t', operands)
+            return [word(r, 0.85) for _ in range(4)]
+
+        return Inputs(attribute, cbuf, texture)
+
+
+def outputs(image: bytes) -> int:
+    return struct.unpack_from('<I', image, OMAP_TARGET_BYTE)[0].bit_count()
+
+
+def compare(before: bytes, after: bytes, n: int, seed: int) -> str:
+    count = outputs(before)
+    if count != outputs(after):
+        return 'different: output maps'
+    for i in range(n):
+        try:
+            quad = [Seeded(seed, i).inputs(lane) for lane in range(LANES)]
+            a = run_quad(before[isa.HEADER_BYTES :], quad, count)
+            b = run_quad(after[isa.HEADER_BYTES :], quad, count)
+        except UnsupportedError as e:
+            return f'unsupported: {e}'
+        if a != b:
+            lane = next(k for k in range(LANES) if a[k] != b[k])
+            return f'different: quad {i} lane {lane}: {[hex(x) for x in a[lane][0]]} vs {[hex(x) for x in b[lane][0]]}'
+    return 'identical'
+
+
+def main() -> None:
+    ap = argparse.ArgumentParser(description=__doc__.split('\n')[0])
+    ap.add_argument('before', type=Path)
+    ap.add_argument('after', type=Path)
+    ap.add_argument('--corpus', type=Path, action='append', default=[])
+    ap.add_argument('--invocations', type=int, default=200)
+    ap.add_argument('--seed', type=int, default=1)
+    a = ap.parse_args()
+
+    def load(d: Path) -> dict:
+        return {
+            json.loads(f.read_text())['key']: bytes.fromhex(json.loads(f.read_text())['fs']) for f in d.glob('*.json')
+        }
+
+    before, after = load(a.before), load(a.after)
+    failed = False
+    for label, key in nakstat.labelled(a.corpus):
+        if key not in before or key not in after:
+            print(f'{label}: missing from a dump')
+            continue
+        verdict = compare(before[key], after[key], a.invocations, a.seed)
+        failed |= verdict.startswith('different')
+        print(f'{label}: {verdict}')
+    sys.exit(1 if failed else 0)
+
+
+if __name__ == '__main__':
+    main()

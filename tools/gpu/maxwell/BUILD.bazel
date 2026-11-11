@@ -1,7 +1,9 @@
-# Maxwell machine-code tools: nakstat, the raw path's shader scoreboard.
+# Maxwell machine-code tools: nakstat, the raw path's shader scoreboard, and gate, which runs two compilers' programs
+# of the same states on the host (interp.py) and compares their outputs bit for bit.
 #
 #   bazel run //tools/gpu/maxwell:nakstat -- --pack <pack.bin> --corpus $PWD/tools/gpu/maxwell/scoreboard.log
 #   bazel run //tools/gpu/maxwell:nakstat -- --dump <dir> --corpus ...   (directcheck's DIRECTCHECK_DUMP)
+#   bazel run //tools/gpu/maxwell:gate -- <before dump> <after dump> --corpus $PWD/tools/gpu/maxwell/scoreboard.log
 #
 # opcodes.txt is yuzu's maxwell.inc, verbatim (GPL-2.0-or-later, its notice kept).
 load("@rules_python//python:py_binary.bzl", "py_binary")
@@ -34,5 +36,40 @@ py_test(
     deps = [
         ":isa",
         ":nakstat",
+    ],
+)
+
+py_library(
+    name = "interp",
+    srcs = [
+        "execute.py",
+        "floats.py",
+        "interp.py",
+        "quad.py",
+    ],
+    deps = [":isa"],
+)
+
+py_binary(
+    name = "gate",
+    srcs = ["gate.py"],
+    data = ["scoreboard.log"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":interp",
+        ":isa",
+        ":nakstat",
+    ],
+)
+
+py_test(
+    name = "interp_test",
+    size = "small",
+    srcs = ["interp_test.py"],
+    data = ["testdata/image_draw_fragment.hex"],
+    deps = [
+        ":gate",
+        ":interp",
+        ":isa",
     ],
 )
