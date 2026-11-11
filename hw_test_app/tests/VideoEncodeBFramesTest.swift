@@ -9,7 +9,8 @@ import VideoToolbox
 /// non-reference B slices and decode timestamps the presentation times in order; fed in that order to the hardware
 /// decoder, every frame must come back matching the pattern at its presentation time. display_order says whether the
 /// decoder put them out in display order: AVD puts frames out as they are decoded and clients order them by
-/// presentation time (AVDDecoder.c kReorder), as Apple's decoders do on a Mac with this test's flags.
+/// presentation time (AVDDecoder.c kReorder), as Apple's decoders do on a Mac with this test's flags. A held frame is
+/// coded from its own IOSurface when its turn comes, by VIC like every other (SwitchEncoderRoutes).
 struct VideoEncodeBFramesTest: HWTest {
     let id = "encode.h264_bframes"
     let name = "H.264 encode with B pictures (frame reordering)"
@@ -84,6 +85,10 @@ struct VideoEncodeBFramesTest: HWTest {
         metrics.set("decoded_match", decoded.matched)
         metrics.set("display_order", decoded.displayOrdered)
         metrics.set("luma_err", decoded.worstLumaError, digits: 1)
+        metrics.set("input_vic", encoded.routes?["input_vic"] ?? -1)
+        metrics.set("input_bounced", encoded.routes?["input_bounced"] ?? -1)
+        metrics.set("input_cpu_copies", encoded.routes?["input_cpu_copies"] ?? -1)
+        metrics.set("input_refused", encoded.routes?["input_refused"] ?? -1)
         return .judged(
             [
                 ("UsingHardwareAcceleratedVideoEncoder", encoded.usingHardware),
@@ -92,6 +97,10 @@ struct VideoEncodeBFramesTest: HWTest {
                 ("decode times rise and are the presentation times in order", rising && decodeTimes == shown),
                 ("decode and presentation times differ", reordered > 0),
                 ("decodes back to the pattern (\(decoded.firstMismatch ?? "ok"))", decoded.matched == Self.frames),
+                (
+                    "every input, held frames' too, written by VIC from its own surface, none copied or refused",
+                    VideoEncodeTest.allByVIC(encoded.routes, Self.frames)
+                ),
             ], metrics, proof: encoded.usingHardware ? "encoder=\(encoded.encoderID)" : "")
     }
 }
