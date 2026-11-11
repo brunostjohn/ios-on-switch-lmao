@@ -1,4 +1,9 @@
-// SPDX-License-Identifier: BSD-2-Clause-Patent
+// SPDX-License-Identifier: GPL-2.0-only
+// Copyright (c) 2018 naehrwert
+// Copyright (c) 2018-2025 CTCaer
+// The register tables are taken from hekate (github.com/CTCaer/hekate, GPL-2.0-only): bdk/display/di.inl, with the
+// register names of bdk/display/di.h.
+//
 // Cold power-up and power-down of the Switch OLED display pipeline around SC7; see TegraDisplayPower.h.
 // Register indices are 32-bit word indices as in hekate bdk/display/di.h (DISPLAY_A, DSI and MIPI_CAL are base + index * 4);
 // CAR, PMC and APB_MISC offsets are bytes (hekate bdk/soc/clock.h, pmc_t210.h, t210.h, pinmux.h). Tables are hekate's
