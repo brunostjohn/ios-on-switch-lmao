@@ -365,6 +365,7 @@ cc_library(
         "IOKit",
     ],
     target_compatible_with = ["@platforms//os:ios"],
+    deps = ["//kits/SwitchGM20B:classes"],
 )
 
 # Every test every iOS version runs, the runner, the list, the log lines and the run reports. UIKit: built only under an

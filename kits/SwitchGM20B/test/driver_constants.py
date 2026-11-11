@@ -7,7 +7,9 @@ array, a `#define` with a listed prefix) must have a row in driver_constants.tsv
 
 `nv` and `tegra` rows must equal their expression over kits/SwitchGM20B's headers; `mismatch` rows must differ from it
 (a driver bug, named in the note: fixing it fails the test until the row says `nv`); `policy` rows are the driver's own
-numbers. The output is a C++ header of static_asserts: a stale row, a changed value or a new constant fails the build.
+numbers. A constant that takes its value from the headers (class names and drf.h macros, and other such constants, no
+number of its own) has no row: a row for one is stale. The output is a C++ header of static_asserts: a stale row, a
+changed value or a new constant fails the build.
 """
 
 import argparse
@@ -20,6 +22,11 @@ CONSTEXPR = re.compile(
     r'^constexpr\s+(?:uint32_t|uint64_t|uint8_t|uint16_t|int|unsigned)\s+(.*?);', re.MULTILINE | re.DOTALL
 )
 ENUM = re.compile(r'enum\s*:\s*uint32_t\s*\{(.*?)\};', re.DOTALL)
+IDENT = re.compile(r'\b[A-Za-z_]\w*\b')
+NUMBER = re.compile(r'\d')
+CLASS_NAME = re.compile(r'^((SWITCH_)?NV[0-9A-F]{4}_\w+|NVDEF)$')
+INDEXED = re.compile(r'\b((?:SWITCH_)?NV[0-9A-F]{4}_\w+)\s*\(\s*\d+\s*\)')
+DRF = re.compile(r'\bNV(?:DEF|VAL)\s*\([^()]*\)')
 
 
 @dataclass
@@ -95,7 +102,15 @@ def read_rows(path: str) -> dict[tuple[str, str], list[str]]:
 
 
 def renamed(value: str, names: set[str]) -> str:
-    return re.sub(r'\b[A-Za-z_]\w*\b', lambda m: 'c_' + m.group(0) if m.group(0) in names else m.group(0), value)
+    def one(text: str) -> str:
+        return re.sub(r'\b[A-Za-z_]\w*\b', lambda m: 'c_' + m.group(0) if m.group(0) in names else m.group(0), text)
+
+    # A drf.h macro's arguments are class and field names, never the driver's own
+    parts, at = [], 0
+    for m in DRF.finditer(value):
+        parts += [one(value[at : m.start()]), m.group(0)]
+        at = m.end()
+    return ''.join([*parts, one(value[at:])])
 
 
 SAME = """namespace switch_gm20b_test {
@@ -113,11 +128,37 @@ template <unsigned long N> constexpr bool same(const uint64_t (&ours)[N], std::i
 """
 
 
+def from_headers(constants: list[Constant]) -> set[str]:
+    """Return the constants that take their value from the class headers.
+
+    Such a value is class names (an array method's by its index), drf.h macros over them and other such constants, with
+    no number of its own.
+    """
+    found: set[str] = set()
+    while True:
+        more = set()
+        for c in constants:
+            value = DRF.sub('NVDEF', INDEXED.sub(r'\1', c.value))
+            names = IDENT.findall(value)
+            if c.name in found or not names or NUMBER.search(IDENT.sub('', value)):
+                continue
+            if all(CLASS_NAME.match(n) or n in found for n in names):
+                more.add(c.name)
+        if not more:
+            return found
+        found |= more
+
+
 def checked_constants(short: str, constants: list[Constant], rows: dict, errors: list[str]) -> list:
     checked = []
+    headers = from_headers(constants)
     for c in constants:
         row = rows.get((short, c.name))
-        if row is None:
+        if c.name in headers:
+            if row is not None:
+                errors.append(f'{short}: {c.name} takes its value from the class headers: delete its row')
+            checked.append((c, None))
+        elif row is None:
             errors.append(f'{short}: {c.name} = {c.value} has no row in driver_constants.tsv')
         elif row[2] != 'policy':
             checked.append((c, row))
@@ -135,6 +176,8 @@ def file_block(short: str, checked: list) -> list[str]:
         )
     out.append('}')
     for c, row in checked:
+        if row is None:
+            continue
         ours, theirs = f'driver::{ns}::c_{c.name}', row[3]
         equal = f'switch_gm20b_test::same({ours}, {theirs})' if c.array else f'{ours} == uint64_t({theirs})'
         if row[2] == 'mismatch':

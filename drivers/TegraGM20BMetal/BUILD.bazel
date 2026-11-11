@@ -181,6 +181,7 @@ ios_binary(
         "//drivers/NativeMetal:bridge/NativeMetalBlend.h",
         "//drivers/TegraGM20B:TegraGM20BABI.h",
         "//drivers/TegraGM20B:TegraGM20BLayout.h",
+        "//kits/SwitchGM20B:class_headers",
     ],
     copts = [
         "-O2",
@@ -191,6 +192,8 @@ ios_binary(
         "-Wextra",
         "-I",
         "drivers/TegraGM20B",
+        "-I",
+        "third_party/mesa/src/nouveau/headers",
         "-lc++",
         "-framework",
         "CoreFoundation",

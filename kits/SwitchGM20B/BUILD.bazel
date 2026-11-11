@@ -36,6 +36,13 @@ cc_library(
     includes = ["../../third_party/mesa/src/nouveau/headers"],
 )
 
+# :classes' headers as files, for rules that take headers and -I directories of their own (the Metal plugin, ios_binary):
+# they add -I third_party/mesa/src/nouveau/headers, where NVIDIA's headers find "nvtypes.h".
+filegroup(
+    name = "class_headers",
+    srcs = glob(["SwitchGM20B*.h"]) + SWITCH_GM20B_MESA_HEADERS,
+)
+
 py_library(
     name = "caps_lib",
     srcs = [

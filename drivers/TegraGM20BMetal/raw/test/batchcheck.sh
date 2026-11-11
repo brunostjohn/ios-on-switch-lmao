@@ -9,7 +9,7 @@ OUT=$(cd "$1" && pwd)
 HERE=$(cd "$(dirname "$0")" && pwd)
 RAW=$(cd "$HERE/.." && pwd)
 TREE=$(cd "$HERE/../../../.." && pwd)
-FLAGS=(-O1 -g -Wall -Wextra -std=c++17 -DSWITCH_RAW_HARNESS_MARKS -fsanitize=address,undefined -fno-sanitize-recover=all)
+FLAGS=(-O1 -g -Wall -Wextra -std=c++17 -DSWITCH_RAW_HARNESS_MARKS -fsanitize=address,undefined -fno-sanitize-recover=all -I "$TREE/third_party/mesa/src/nouveau/headers")
 for source in mme_fermi mme_fermi_sim; do
     xcrun clang -O1 -std=c11 -w -I "$RAW/pack/mesa" -c "$RAW/pack/mesa/$source.c" -o "$OUT/$source.o"
 done
