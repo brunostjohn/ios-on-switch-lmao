@@ -100,6 +100,7 @@ TESTS: dict[str, bool] = {
             'gpu.raw.mip_twod',
             'gpu.raw.mip_twod_candidates',
             'gpu.raw.visibility',
+            'gpu.raw.fixed_blend_rule',
             'gpu.path.job_visibility',
             'gpu.path.lean_copy',
             'gpu.path.control_reserve',
