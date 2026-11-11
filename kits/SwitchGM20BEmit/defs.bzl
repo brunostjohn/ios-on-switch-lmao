@@ -9,6 +9,7 @@ _MESA_HEADERS = "//third_party/mesa/src/nouveau/headers"
 
 # The kit's sources, for user space (:emit) and the kernel's compile check alike.
 EMIT_SOURCES = [
+    "SwitchGM20BEmit2D.c",
     "SwitchGM20BEmit3D.c",
     "SwitchGM20BEmitBarrier.c",
     "SwitchGM20BEmitIterated.c",
