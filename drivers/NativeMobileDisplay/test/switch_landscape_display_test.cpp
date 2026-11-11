@@ -127,6 +127,7 @@ struct Display {
     char uiName() const { return landscapeOn() ? 'B' : 'A'; }
     static bool columnScanBusy() { return false; }
     static bool windowProbeHolds() { return false; }
+    static bool planeWindowIdle() { return false; }
     void scanoutMemoryBarrier() {}
     void planeReleaseIdle() {}
     void chainPanicHook() {}

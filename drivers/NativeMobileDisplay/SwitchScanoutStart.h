@@ -159,7 +159,7 @@
             return;
         panic("SwitchDisplay: window %c underflowed %u frames in a row since the rotation: UFLOW_STATUS %#x OPTIONS "
               "%#x KIND %#x STRIDE %#x",
-              uiName(), underflowRun, underflowCounts[uiWindow()], uiActive(kWinOptions),
+              uiName(), underflowRun, underflowCounts[uiName() - 'A'], uiActive(kWinOptions),
               uiActive(kWinbufSurfaceKind), uiActive(kWinLineStride));
     }
 
