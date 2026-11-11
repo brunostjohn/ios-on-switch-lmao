@@ -213,6 +213,7 @@ struct RMPass {
     uint32_t clearStencil;
     NSUInteger width, height;
     raw::SamplePositions positions;
+    bool continues = false;  // a parallel encoder's sub-encoder after its first: the pass before it goes on (raw_parallel.h)
 };
 
 // A command buffer's setBytes data, written once where the GPU reads it: write-combined pool chunks the raw encode binds in place
@@ -398,6 +399,8 @@ uint64_t nextTraceId();
 @end
 @interface RMBlitEncoder : RMEncoder
 @end
+@interface RMParallelRenderEncoder : RMEncoder  // (RawMetalParallel.mm)
+@end
 @interface RMComputeEncoder : RMEncoder {
 @public
     MTLDispatchType _type;
@@ -424,6 +427,12 @@ static inline void setBinding(RMCommandBuffer *cb, Op op, int stage, NSUInteger 
     m.c = c;
     [cb record:m];
 }
+
+// The encoder `e` records into this command buffer from now on, the one before it ended (RawMetalEncoder.mm)
+@interface RMCommandBuffer (Encoders)
+- (void)begin:(RMEncoder *)e;
+- (id<MTLRenderCommandEncoder>)renderCommandEncoderWithDescriptor:(MTLRenderPassDescriptor *)d;
+@end
 
 @interface RMEncoder ()
 - (void)endEncoding;

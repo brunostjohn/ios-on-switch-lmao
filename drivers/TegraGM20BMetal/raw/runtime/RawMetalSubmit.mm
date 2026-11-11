@@ -133,7 +133,7 @@ void planSegments(RMCommandBuffer *cb)
 static void isolateRefused(RMCommandBuffer *cb, size_t encoder)
 {
     const RMSegment range = cb->_segs[cb->_segNext];
-    const size_t end = encoder < range.to ? cb->_plan.encoderEnd(encoder) : range.to;
+    const size_t end = encoder < range.to ? rmPassGroupEnd(cb, encoder) : range.to;
     std::vector<RMSegment> parts;
     for (const raw::ExecutionRange &part :
          raw::isolate({range.from, range.to, raw::ExecutionKind::native}, encoder, end))
