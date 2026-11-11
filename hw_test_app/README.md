@@ -33,8 +33,9 @@ disk. `bazel build //hw_test_app:SwitchHWTest17` (or `:SwitchHWTest27`,
 The test clips and images are pinned in `bazel/pinned/hw_test_app/media`; every frame carries a barcode with its frame
 number and a CRC, so the app checks lossy decoder output exactly.
 `bazel run //hw_test_app:media_tool -- <dir>` remakes them and prints the SHA256SUMS lines to pin. It encodes H.264
-and HEVC with the Mac's VideoToolbox, VP9 with libvpx, the JPEGs with libjpeg-turbo, and MPEG-4 Part 2, MPEG-2 and
-MPEG-1 with the `ffmpeg` on PATH or in `$FFMPEG`; the Mac's 4K encodes differ from run to run,
+and HEVC with the Mac's VideoToolbox, VP9 with libvpx, the JPEGs with libjpeg-turbo, MPEG-4 Part 2, MPEG-2, MPEG-1 and
+MBAFF H.264 with the `ffmpeg` on PATH or in `$FFMPEG` (built with libx264), and writes the field-coded (PAFF) H.264
+clip itself, since no encoder here codes field pictures; the Mac's 4K encodes differ from run to run,
 which is why the files are pinned rather than built. Each test logs one `HWTEST <id> <PASS|FAIL|SKIP> <k=v ...>` line
 to os_log under `com.brunostjohn.switch.hwtest` (`//tools/devicerun` checks them) and lands in the run's report. The
 summary line at the end of a run names the app's iOS version (`ios=`); devicerun reports

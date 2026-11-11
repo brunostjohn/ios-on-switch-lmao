@@ -20,7 +20,7 @@ LITERAL = 'HWTEST '
 CODECS = ('h264', 'hevc', 'hevc_main10', 'vp9')
 SIZES = ('720p', '1080p', '4k')
 # hw_test_app/core/Media.swift's Clip.all: every codec at every size; MPEG-4 Part 2 and MPEG-2 without 4K, MPEG-1 at
-# 720p only
+# 720p only, interlaced H.264 in field pictures (PAFF) and in MBAFF frames at one size each
 CLIPS = (
     *(f'{codec}_{size}' for codec in CODECS for size in SIZES),
     'mpeg4_720p',
@@ -28,6 +28,8 @@ CLIPS = (
     'mpeg2_720p',
     'mpeg2_1080p',
     'mpeg1_720p',
+    'h264_paff_256p',
+    'h264_mbaff_1080p',
 )
 STILLS = ('jpeg_420', 'jpeg_422', 'jpeg_444', 'png', 'heic', 'heic_grid')
 

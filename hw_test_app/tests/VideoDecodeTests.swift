@@ -22,12 +22,14 @@ struct VideoDecodeTest: HWTest {
         case .mpeg4: return "MPEG-4 Part 2"
         case .mpeg2: return "MPEG-2"
         case .mpeg1: return "MPEG-1"
+        case .h264Paff: return "H.264 PAFF"
+        case .h264Mbaff: return "H.264 MBAFF"
         }
     }
 
     var codecType: CMVideoCodecType {
         switch clip.codec {
-        case .h264: return kCMVideoCodecType_H264
+        case .h264, .h264Paff, .h264Mbaff: return kCMVideoCodecType_H264
         case .hevc, .hevc10: return kCMVideoCodecType_HEVC
         case .vp9: return kCMVideoCodecType_VP9
         case .mpeg4: return kCMVideoCodecType_MPEG4Video

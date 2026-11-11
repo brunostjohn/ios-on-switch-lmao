@@ -21,8 +21,10 @@ func run(_ arguments: [String]) async throws {
         let url = out.appendingPathComponent(clip.file)
         if clip.codec == .vp9 {
             try VP9Writer.write(clip, to: url)
-        } else if [.mpeg4, .mpeg2, .mpeg1].contains(clip.codec) {
+        } else if [.mpeg4, .mpeg2, .mpeg1, .h264Mbaff].contains(clip.codec) {
             try FFmpegWriter.write(clip, to: url)
+        } else if clip.codec == .h264Paff {
+            try H264FieldWriter.write(clip, to: url)
         } else {
             // The Mac's hardware encoder spreads a 4K frame over however many encode engines are free, so a 4K clip's
             // bytes differ from run to run; the frames it decodes to do not. That is why the clips are pinned.
