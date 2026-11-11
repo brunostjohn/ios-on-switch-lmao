@@ -7,7 +7,8 @@
 #                  H264Syntax.c; the checker refusing each kind of bad submit; the rate control on a synthetic encoder;
 #                  the HEVC tile slots through VTTileCompressionSession as CMPhoto drives them (TileCheck.c)
 #   h264nvenc_host_test  H264NVENC.c's surfaces at the coded size where it is not the display size (1080p), the
-#                  kernel's checker taking those submits and refusing the display size
+#                  kernel's checker taking those submits and refusing the display size; a reordering session's P and B
+#                  setups against NVIDIA's T210 driver's, the checker's B rules, the SPS and B slice header parsed back
 #   nvenclatch_host_test  what TegraNVENC writes in the colocated and reference slot methods a job leaves out
 #   hevcnvenc_host_test  HEVCNVENC.c's H.265 IDR and P setups byte for byte against NVIDIA's T210 driver's (three
 #                  sizes), the kernel's H.265 checker taking them and refusing each kind of bad submit, the SPS/PPS

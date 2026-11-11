@@ -448,7 +448,7 @@ static void driverControls(void)
     H264EncLayout l;
     h264enc_layout(&c, &l);
     EXPECT(l.history_bytes == 706560, "history at 1280x720 is %u bytes, NVIDIA's driver gives 706560", l.history_bytes);
-    const H264EncHandles h = {1, 2, 3, 4, 5, {6, 7}};
+    const H264EncHandles h = {.input = 1, .recon = 2, .ref = 3, .bitstream = 4, .aux = 5, .mepred = {6, 7}};
     const uint64_t sizes[8] = {0,           l.input.bytes,  l.recon.bytes, l.recon.bytes, l.bitstream_bytes,
                                l.aux_bytes, l.mepred_bytes, l.mepred_bytes};
     for (int k = 0; k < 2; k++) {

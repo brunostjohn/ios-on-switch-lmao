@@ -5,10 +5,14 @@
 // length-prefixed samples CoreMedia carries. Plain C with no Apple dependency: the host tests and the generator of
 // the kernel's E3 vectors build it too.
 //
-// The stream it describes: progressive 4:2:0 8-bit, one slice per picture, no B pictures (output order = decode
-// order), one reference frame (each P picture predicts from the previous picture), IDR at every key frame,
+// The stream it describes: progressive 4:2:0 8-bit, one slice per picture, IDR at every key frame,
 // pic_order_cnt_type 0 with frame_num and POC LSB of 16 bits. Baseline (constrained), Main or High profile; CAVLC or
-// CABAC (not with Baseline); the 8x8 transform with High.
+// CABAC (not with Baseline); the 8x8 transform with High. Without reordering every picture is a reference and each P
+// picture predicts from the one before (output order = decode order). With it (H264EncConfig.reorder, not Baseline),
+// as NVIDIA's T210 driver codes B pictures (TegraNVENC/nvidia/SOURCE): anchors (IDR, P) are references, each P
+// predicting from the anchor before; the B pictures between two anchors in display order follow the later one in
+// decode order, are not references, and predict from both (spatial direct, the later anchor's colocated motion), so
+// two reference frames and one picture of reordering.
 #ifndef H264_NVENC_H
 #define H264_NVENC_H
 #include <stdbool.h>
@@ -25,6 +29,7 @@ enum {
 enum {
     H264ENC_IDR = 3,
     H264ENC_I = 2,
+    H264ENC_B = 1,
     H264ENC_P = 0
 };  // nvenc_h264_pic_control_s pic_type
 
@@ -36,6 +41,7 @@ typedef struct {
     uint8_t colour_primaries, transfer, matrix;  // H.273 code points
     uint32_t fps_num, fps_den;                   // 0/0: no timing information in the VUI
     uint32_t input_layout, chroma_mode;          // TegraNVENCInfo: what E3 proved
+    bool reorder;                                // B pictures (not with Baseline)
 } H264EncConfig;
 
 // One picture buffer: luma at offset 0, chroma `chroma_offset` bytes in (TegraNVENCCheck.h's bounds).
@@ -50,18 +56,26 @@ typedef struct {
     uint32_t history_bytes, status_bytes;
     uint32_t aux_bytes, history_offset;  // status at 0 of the aux buffer, then history
     uint32_t mepred_bytes;               // each of the two ME predictor buffers
+    uint32_t coloc_bytes;                // a picture's colocated motion (reordering sessions)
 } H264EncLayout;
 
 typedef struct {
-    uint8_t type;  // H264ENC_IDR, H264ENC_I or H264ENC_P
+    uint8_t type;  // H264ENC_IDR, H264ENC_I, H264ENC_P or H264ENC_B
     uint8_t qp;    // 0..51 (constant QP: the plug-in's rate control picks it per picture)
     uint32_t frame_num, idr_pic_id, poc_lsb, picture_index;
+    // The reference slots of list 0 and list 1 (a B picture's both), and how many pictures lie between this one and
+    // each in display order (0: adjacent).
+    uint8_t ref_slot[2], gap[2];
+    bool unreferenced;  // an I picture no other predicts from, as a B picture never is a reference
 } H264EncPicture;
 
-// Handles of a session's buffers. A P picture reads `ref` and writes `recon`; the next swaps them. The ME predictors
-// alternate the same way, by picture index: a picture reads what the one before it wrote.
+// Handles of the buffers a picture uses. Without reordering a P picture reads `ref` (slot 0) and writes `recon`, and
+// the next swaps them. With it `ref` and `ref1` are slots 0 and 1 (0: not named), every picture writes its colocated
+// motion to `coloc_out`, and a B picture reads its list-1 reference's from `coloc_in`. The ME predictors alternate by
+// picture index: a picture reads what the one before it wrote.
 typedef struct {
     uint32_t input, recon, ref, bitstream, aux, mepred[2];
+    uint32_t ref1, coloc_out, coloc_in;
 } H264EncHandles;
 
 // An RBSP bit writer (no emulation prevention: h264enc_nal adds it).
@@ -97,7 +111,7 @@ size_t h264enc_write_pps(const H264EncConfig *config, uint8_t *out, size_t cap);
 // ISO/IEC 14496-15 AVCDecoderConfigurationRecord with that SPS and PPS (4-byte NAL lengths).
 size_t h264enc_write_avcc(const H264EncConfig *config, uint8_t *out, size_t cap);
 // The slice header the setup asks NVENC for (7.3.3 with these parameter sets), as RBSP bits; nal_unit_type is 5 for
-// an IDR, else 1, and nal_ref_idc 3 for every picture (each is a reference).
+// an IDR, else 1, and nal_ref_idc 3 for every picture but a B or an unreferenced I (0: not a reference).
 void h264enc_slice_header(const H264EncConfig *config, const H264EncPicture *picture, H264Bits *b);
 
 // The submit for one picture (TegraNVENCCheck.h accepts it): methods, relocations, the setup and its controls, the
