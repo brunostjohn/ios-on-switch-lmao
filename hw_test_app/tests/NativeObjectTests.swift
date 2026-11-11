@@ -166,6 +166,68 @@ struct NativeDepthStencilTest: NativeObjectTest {
     }
 }
 
+/// Fences: a blit's copy into a private buffer updates a fence that a render encoder of the same command buffer waits
+/// for before its fragments read the buffer, and a second command buffer's pass waits for a fence the first one's blit
+/// updated. The colours are the copied ones.
+struct NativeFenceTest: NativeObjectTest {
+    let id = "metal.native.fence"
+    let name = "Fences are the device's own and order a blit's writes before a later pass's reads"
+
+    static func copy(_ commands: MTLCommandBuffer, _ source: MTLBuffer, _ target: MTLBuffer, _ fence: MTLFence) {
+        let blit = commands.makeBlitCommandEncoder()!
+        blit.copy(from: source, sourceOffset: 0, to: target, destinationOffset: 0, size: 16)
+        blit.updateFence(fence)
+        blit.endEncoding()
+    }
+
+    static func draw(
+        _ commands: MTLCommandBuffer, _ pipeline: MTLRenderPipelineState, into texture: MTLTexture,
+        colour: MTLBuffer, after fence: MTLFence
+    ) {
+        let pass = MTLRenderPassDescriptor()
+        pass.colorAttachments[0].texture = texture
+        pass.colorAttachments[0].loadAction = .clear
+        pass.colorAttachments[0].clearColor = MTLClearColor(red: 0, green: 0, blue: 0, alpha: 1)
+        let encoder = commands.makeRenderCommandEncoder(descriptor: pass)!
+        encoder.waitForFence(fence, before: .fragment)
+        encoder.setRenderPipelineState(pipeline)
+        var corners = GPU.fullScreen
+        encoder.setVertexBytes(&corners, length: MemoryLayout<SIMD4<Float>>.stride * corners.count, index: 0)
+        encoder.setFragmentBuffer(colour, offset: 0, index: 0)
+        encoder.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4)
+        encoder.endEncoding()
+    }
+
+    func exercise(_ gpu: GPU, _ metrics: inout Metrics) async throws -> NativeWork {
+        let size = 32
+        guard let inside = gpu.device.makeFence(), let across = gpu.device.makeFence(),
+            let colour = gpu.device.makeBuffer(length: 16, options: .storageModePrivate)
+        else { throw TestFailure("no fence or private buffer") }
+        var work = NativeWork(objects: [inside, across])
+        let magenta = try gpu.buffer([SIMD4<Float>(1, 0, 1, 1)]), green = try gpu.buffer([SIMD4<Float>(0, 1, 0, 1)])
+        let pipeline = try gpu.render(fragment: "solid_fragment", format: .rgba8Unorm)
+        let first = try gpu.texture(.rgba8Unorm, size, size), second = try gpu.texture(.rgba8Unorm, size, size)
+        let one = try await gpu.run { commands in
+            Self.copy(commands, magenta, colour, inside)
+            Self.draw(commands, pipeline, into: first, colour: colour, after: inside)
+        }
+        let copied = try gpu.commit { Self.copy($0, green, colour, across) }
+        let drawn = try gpu.commit { Self.draw($0, pipeline, into: second, colour: colour, after: across) }
+        try gpu.finish([copied, drawn])
+        work.paths += [one.path, RawFacade.path(of: copied), RawFacade.path(of: drawn)]
+        var wrong = 0
+        for (texture, want) in [(first, [UInt8](arrayLiteral: 255, 0, 255, 255)), (second, [0, 255, 0, 255])] {
+            let pixels = try await gpu.read(texture, bytesPerPixel: 4)
+            for y in 0..<size {
+                for x in 0..<size where Array(pixels.pixel(x, y, width: size)) != want { wrong += 1 }
+            }
+        }
+        metrics.set("wrong_pixels", wrong)
+        if wrong != 0 { work.failures.append("\(wrong) pixels miss the colour the fence ordered") }
+        return work
+    }
+}
+
 enum NativeObjectTests {
-    static let all: [any HWTest] = [NativeDepthStencilTest(), NativeSharedEventTest()]
+    static let all: [any HWTest] = [NativeDepthStencilTest(), NativeSharedEventTest(), NativeFenceTest()]
 }

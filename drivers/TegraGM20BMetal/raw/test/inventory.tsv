@@ -1,7 +1,7 @@
 # raw's API inventory, written by raw/test/selcover (SELCOVER_WRITE=1; selcover_inventory.h says what each
 # column holds): container, item, selector, m2v, sent by, raw
-# m2v's items: base 5 m2v 8 m2vobj 30 none 65 raw 247 read 292 refused 163 unread 201 zero 46
-# sent selectors: base 86 m2v 17 m2vobj 34 none 8 raw 463 refused 56 zero 151
+# m2v's items: base 5 m2v 7 m2vobj 27 none 65 raw 251 read 292 refused 163 unread 201 zero 46
+# sent selectors: base 86 m2v 16 m2vobj 31 none 8 raw 467 refused 56 zero 151
 MTLArgument	access	access	I	-	read
 MTLArgument	active	isActive	I	-	unread
 MTLArgument	arrayLength	arrayLength	I	-	read
@@ -601,7 +601,7 @@ MTLDevice	newDepthStencilStateWithDescriptor:	newDepthStencilStateWithDescriptor
 MTLDevice	newDynamicLibrary:error:	newDynamicLibrary:error:	I	-	refused
 MTLDevice	newDynamicLibraryWithURL:error:	newDynamicLibraryWithURL:error:	I	24B119	refused
 MTLDevice	newEvent	newEvent	I	21H461,24B119	raw
-MTLDevice	newFence	newFence	I	21H461,24B119	m2v
+MTLDevice	newFence	newFence	I	21H461,24B119	raw
 MTLDevice	newHeapWithDescriptor:	newHeapWithDescriptor:	I	21H461,24B119	raw
 MTLDevice	newIndirectCommandBufferWithDescriptor:maxCommandCount:options:	newIndirectCommandBufferWithDescriptor:maxCommandCount:options:	I	21H461,24B119	none
 MTLDevice	newLibraryWithData:error:	newLibraryWithData:error:	I	21H461,24B119	raw
@@ -641,9 +641,9 @@ MTLDynamicLibrary	serializeToURL:error:	serializeToURL:error:	I	-	refused
 MTLEvent	device	device	I	-	none
 MTLEvent	label	label	I	-	none
 MTLEvent	label	setLabel:	I	-	none
-MTLFence	device	device	I	21H461,24B119	m2vobj
-MTLFence	label	label	I	21H461,24B119	m2vobj
-MTLFence	label	setLabel:	I	21H461,24B119	m2vobj
+MTLFence	device	device	I	21H461,24B119	raw
+MTLFence	label	label	I	21H461,24B119	raw
+MTLFence	label	setLabel:	I	21H461,24B119	raw
 MTLFunction	-	arguments	-	21H461,24B119	zero
 MTLFunction	-	bindings	-	21H461,24B119	zero
 MTLFunction	-	bitCodeHash	-	21H461,24B119	zero

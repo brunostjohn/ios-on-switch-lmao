@@ -235,11 +235,11 @@ id<MTLCommandBuffer> replay(RMCommandBuffer *cb, size_t from, size_t to, bool pa
             break;
         case OpUpdateFence:
             updated.insert(c.obj);
-            [enc updateFence:(__bridge id<MTLFence>)c.obj];
+            [enc updateFence:twinOf((__bridge id)c.obj)];
             break;
         case OpWaitFence:
             if (!part || updated.count(c.obj))
-                [enc waitForFence:(__bridge id<MTLFence>)c.obj];
+                [enc waitForFence:twinOf((__bridge id)c.obj)];
             break;
         case OpCopyTexture: {
             const uint64_t x = c.x, o = extra(cb, x + 10);
