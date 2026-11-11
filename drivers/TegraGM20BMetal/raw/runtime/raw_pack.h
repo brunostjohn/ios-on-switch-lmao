@@ -36,7 +36,8 @@ enum PackSectionId {
 constexpr uint32_t kPackVersion = 15;
 
 // What a record or a program variant (PackVariant) assumes, as bits of a mask: a draw takes a variant only where all of them
-// hold. Bits 0-15 are facts of the draw's bindings, bit 16 of its pipeline, bits 17-25 of the chip (kChipAssumptions): 17 and
+// hold. Bits 0-15 are facts of the draw's bindings, bit 16 of its pipeline, bit 26 of its pass, bits 17-25 of the chip
+// (kChipAssumptions): 17 and
 // 18 of the code a variant runs, 19-25 of the ROP blend a storage form computes in its program (PackPipeline::storageBlendModel
 // holds them shifted down by kRopBlendShift, m2v rop_blend::Assumption's bits). A record is drawn whatever its ROP bits: they
 // name what a device probe has to confirm before the program's blend can be called the ROP's.
@@ -56,6 +57,9 @@ enum PackAssumption : uint32_t {
     AssumeRopSrgbTables = 1u << 23,    // sRGB decoded and encoded by Metal's tables
     AssumeRopMinMaxNumber = 1u << 24,  // Min and Max answer the operand that is not a NaN
     AssumeRopDenormals = 1u << 25,     // f32 denormals flushed to zero
+    // The pass draws into a turned plane (raw_rotation.h): the fragment program reads the frame through the root table's turn
+    // words. Such a variant is its stage's first, so a turned draw takes it before any other.
+    AssumeTurned = 1u << 26,
 };
 
 constexpr uint32_t kUniformRanges = 8, kTextureFacts = 8;
@@ -207,7 +211,10 @@ enum PackPipelineFlags : uint32_t {
     PipelineStorageMetadata = 8,
     // one of the state's records for a variant its draws pick (the depth and stencil tests' class, the cubic samplers'
     // binds), made by the pack builder: under the state's keyHash, named by variantName; Pack::find passes over it
-    PipelineVariantRecord = 16
+    PipelineVariantRecord = 16,
+    // its fragment program reads a turned plane's axes and no turned variant (AssumeTurned) could be made of it: a turned pass
+    // does not draw it
+    PipelineTurnRefused = 32
 };
 
 // Where a key's variant name starts (" | cubic ...", then " | tests=<n>": the runtime's names, RawMetalCubic.mm), its size

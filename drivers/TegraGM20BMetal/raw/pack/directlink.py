@@ -179,6 +179,7 @@ def pipeline_of(rec: dict, varying: list[int], prog_index: dict[str, int], const
         ],
         'push': [(0x700 + 4 * i, words[i]) for i in range(32) if mask >> i & 1],
         'push_metadata': bool(flags & 4),
+        'turn_refused': bool(flags & 32),
         'blend_color_word': blend,
         'half_blend_color_word': half,
         'storage_mask': storage_mask,

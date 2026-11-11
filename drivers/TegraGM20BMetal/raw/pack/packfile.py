@@ -154,6 +154,7 @@ def pipeline_bytes(rec: dict, key_offset: int, blob_off: int, variants_off: int 
     flags |= 4 if rec.get('push_metadata') else 0
     flags |= 8 if rec.get('storage_mask') else 0
     flags |= 16 if variant_name(rec['key']) else 0
+    flags |= 32 if rec.get('turn_refused') else 0  # PipelineTurnRefused
     head = struct.pack(
         '<QIHHIIBBBBHHI',
         keyhash,

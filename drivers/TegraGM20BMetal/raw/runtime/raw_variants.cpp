@@ -25,6 +25,7 @@ void Device::offerVariants(Pipeline &pl, const PackPipeline &pp)
         return;
     pl.variantCount[0] = uint8_t(count[0]);
     pl.variantCount[1] = uint8_t(count[1]);
+    pl.turnedVariant = count[1] && (pl.variants[1][0].assume & AssumeTurned);
     pl.chosen.assign((count[0] + 1) * (count[1] + 1), nullptr);
     pl.chosen.back() = &pl;
 }

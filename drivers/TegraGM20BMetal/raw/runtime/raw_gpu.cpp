@@ -206,6 +206,18 @@ void sampleWords(Push &p, uint32_t samples, uint64_t root, const SamplePositions
     sampleLayoutMethods(p, l, kRootBytes, root);
 }
 
+// A turned pass's turn words into the root table (raw_rotation.h kRootTurn), which its fragment programs' turned variants read
+constexpr uint32_t kTurnWordsMethods = 16;
+
+void turnWordsInto(Push &p, uint64_t root, const Rotation &r)
+{
+    uint32_t w[kTurnWords];
+    turnWords(r, w);
+    p.inc(NVB197_SET_CONSTANT_BUFFER_SELECTOR_A, {kRootBytes, uint32_t(root >> 32), uint32_t(root)});
+    p.m(NVB197_LOAD_CONSTANT_BUFFER_OFFSET, kRootTurn);
+    p.nonInc(NVB197_LOAD_CONSTANT_BUFFER(0), w, kTurnWords);
+}
+
 // Texture header word 0 per MTLPixelFormat as NVK writes it (pack/mkformats.py over the twin, 11-04), and the color target format
 // NVK writes for a target of it (raw/test/targetcheck.py over the probe's PROBE_TARGETS run; 0 where m2v's NVK renders none).
 // The integer formats' are NIL's rows (nil_formats.csv: the class's RU*/RS* target, UINT or SINT components, alpha ONE_INT).
@@ -1012,11 +1024,7 @@ void Device::build(Pipeline &pl, const PackPipeline &pp, const PlacedProgram &vs
         memcpy(pl.storageTic, pp.storageTic, sizeof pl.storageTic);
         pl.readBits &= ~pl.storageBits;
     }
-    const uint32_t codeBytes = (fs.record->dataBytes ? fs.record->dataOffset : fs.record->bytes) - 0x80;
-    const HeapPart *code = heapPartAt(fs.program + 0x50);
-    pl.turnSensitive =
-        !code || turnSensitive(sph, reinterpret_cast<const uint32_t *>(code->cpu + (fs.program + 0x50 - code->offset)),
-                               codeBytes / 4, pl.fetchBits || pl.storageBits);
+    pl.turnRefused = pp.flags & PipelineTurnRefused;
     pl.rec = &pp;
 }
 
@@ -3332,16 +3340,20 @@ RenderEncoder *CommandBuffer::render(const PassDesc &pass)
     e.samples_ = std::max<uint8_t>(samples, 1);
     if (passRotation(pass, e.rot_) != RotatedRefusal::None)
         return nullptr;
+    // a turned pass's attachment that is not turned is transient (passRotation): a backing laid out as the plane stands in
+    const auto backed = [&](const Texture &t) {
+        return t.memoryless || standsInTurned(t, e.rot_);
+    };
     bool blockLinear = zeta != nullptr, pitchTarget = false;
     for (uint32_t j = 0; j < pass.count && j < 8; j++)
-        if (const Texture *t = pass.color[j].texture; t && !t->memoryless) {
+        if (const Texture *t = pass.color[j].texture; t && !backed(*t)) {
             if (t->blockLinear || t->shadowTarget)
                 blockLinear = true;
             else
                 pitchTarget = true;
         }
     blockLinear |= !pitchTarget;
-    if (zeta && zeta->memoryless) {
+    if (zeta && backed(*zeta)) {
         std::lock_guard<std::mutex> l(dev_->lock_);
         Texture *b = dev_->backing(planeShaped(*zeta, e.rot_));
         if (!b)
@@ -3352,7 +3364,7 @@ RenderEncoder *CommandBuffer::render(const PassDesc &pass)
     uint8_t scratchMask = 0;
     for (uint32_t j = 0; j < pass.count && j < 8; ++j)
         if (const Texture *t = pass.color[j].texture;
-            t && (t->memoryless || t->shadowTarget || (blockLinear && !t->blockLinear)))
+            t && (backed(*t) || t->shadowTarget || (blockLinear && !t->blockLinear)))
             scratchMask |= uint8_t(1u << j);
     const auto scratchTags = transientColorTags(scratchMask);
     for (uint32_t j = 0; j < pass.count && j < 8; j++) {
@@ -3361,8 +3373,8 @@ RenderEncoder *CommandBuffer::render(const PassDesc &pass)
             continue;
         if (!t->renderable && !t->shadowTarget)
             return nullptr;
-        const bool mixed = blockLinear && !t->blockLinear && !t->memoryless;
-        if (t->shadowTarget || mixed) {  // rendered through a pool image (end(): copied in before, back after)
+        const bool mixed = blockLinear && !t->blockLinear && !backed(*t);
+        if ((t->shadowTarget && !backed(*t)) || mixed) {  // rendered through a pool image (end(): copied in before, back after)
             if (mixed) {
                 RAW_DIAGNOSTIC(dev_->stats.rtMixed++);
             } else {
@@ -3379,7 +3391,7 @@ RenderEncoder *CommandBuffer::render(const PassDesc &pass)
             backings_.push_back(b);
             continue;
         }
-        if (t->memoryless) {  // back it for this pass
+        if (backed(*t)) {  // back it for this pass
             std::lock_guard<std::mutex> l(dev_->lock_);
             Texture *b =
                 dev_->backing(planeShaped(*t, e.rot_), scratchTags[j], blockLinear, !(pass.storageMask >> j & 1));
@@ -4717,11 +4729,14 @@ bool RenderEncoder::prepare(Pipeline *pl, uint32_t primitive, int32_t first, uin
     else
         g = geometry(*pl, primitive, first, indexed ? drawIndexCount_ : count, {x[0], y[0], x[1], y[1]});
     auto geometryAnalysis = geometryCache_.analysis(g, bindingRevision_, cb_->geometryBudget_);
-    if (!indirectGeometry_)
+    // a turned draw of a turned variant's state takes the variant over the generic program's split twin
+    if (!indirectGeometry_ && !(rot_.turned() && pl->turnedVariant))
         pl = splitTwin(pl, geometryAnalysis);
     // a variant has no split of its own: a draw large enough for the generic program's split twin keeps the twin
-    if (!pl->splitOf)
-        pl = dev_->variant(*pl, bindingFacts(*pl));
+    if (rot_.turned() && pl->turnedTwin)
+        pl = pl->turnedTwin;
+    else if (!pl->splitOf)
+        pl = dev_->variant(*pl, bindingFacts(*pl) | (rot_.turned() ? AssumeTurned : 0u));
     if (!whole_) {
         if (x[1] > x[0] && y[1] > y[0]) {
             const std::array<uint32_t, 4> r = {x[0], y[0], x[1], y[1]};
@@ -4761,7 +4776,7 @@ bool RenderEncoder::prepare(Pipeline *pl, uint32_t primitive, int32_t first, uin
             cb_->refusal = {RefSamples, pl->samples, samples_, pl->samplePasses};
             return false;
         }
-        if (rot_.turned() && pl->turnSensitive) {
+        if (rot_.turned() && pl->turnRefused) {
             *why = rotatedRefusalText(RotatedRefusal::Variant);
             cb_->refusal = {RefRotated, uint32_t(RotatedRefusal::Variant), rot_.turn};
             return false;
@@ -5771,7 +5786,7 @@ void RenderEncoder::end()
 #endif
     const std::vector<uint32_t> &restore = extrasAtBegin_ ? extrasAtBegin_->restore : std::vector<uint32_t>();
     const uint32_t room = 160 + 8 * 32 + uint32_t(cl.size()) * 48 + kZetaTargetWords + kZcullRegionWords +
-                          kZetaClearWords + 16 + kSampleWords + uint32_t(restore.size());
+                          kZetaClearWords + 16 + kSampleWords + kTurnWordsMethods + uint32_t(restore.size());
     uint64_t va;
     uint32_t *start = reinterpret_cast<uint32_t *>(d.alloc(d.push_, room * 4, 256, va));
     Push p{start, start + room};
@@ -5782,8 +5797,10 @@ void RenderEncoder::end()
 #else
     kit(p, switch_gm20b_pass_barrier, false);
 #endif
-    if (rot_.turned())
+    if (rot_.turned()) {
         emitSwizzle(p, rot_.swizzle());
+        turnWordsInto(p, d.root_.va, rot_);
+    }
     // ahead of the clears: a clear reaches every sample of its rectangle's pixels through it
     if (samples_ > 1)
         sampleWords(p, samples_, d.root_.va, pass_.positions, rot_);

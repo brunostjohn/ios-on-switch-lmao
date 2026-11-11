@@ -28,6 +28,7 @@ struct NvkStageInfo {
     const void *portableContext;
     bool (*portable)(const void *context, const uint32_t **words, size_t *bytes);
     bool texsF16 = false;
+    bool turned = false;
 };
 
 struct NvkStage {

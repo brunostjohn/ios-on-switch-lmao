@@ -7,6 +7,7 @@
 #include "raw_chip_facts.h"
 #include "raw_direct_storage.h"
 #include "raw_residual.h"
+#include "raw_rotation.h"
 #include "raw_split_metadata.h"
 
 #include <algorithm>
@@ -106,15 +107,16 @@ public:
     }
 
     // Refused: a state the raw path does not draw from a record; Failed: NVK could not compile a stage. `split`: the fragment
-    // stage's split too (split()). `zeroPush`: root push words compiled as the constant 0 besides the state's constant ones
+    // stage's split too (split()). `zeroPush`: root push words compiled as the constant 0 besides the state's constant ones.
+    // `turned`: the fragment stage alone, as a turned plane's (NVK's nvk_switch_turn.h)
     CompileOutcome compile(const NmbDirectState &state, uint32_t halfTargets, bool split, std::string &why,
-                           uint32_t zeroPush = 0, bool texsF16 = false)
+                           uint32_t zeroPush = 0, bool texsF16 = false, bool turned = false)
     {
         if (state.stageCount != 2) {
             why = std::to_string(state.stageCount) + " stages";
             return CompileOutcome::Refused;
         }
-        for (uint32_t k = 0; k < 2; k++) {
+        for (uint32_t k = turned ? 1 : 0; k < 2; k++) {
             const NmbDirectStage &s = state.stages[k];
             if (s.flags) {
                 why = "a stage made with flags " + hex(s.flags);
@@ -143,6 +145,7 @@ public:
                 nullptr};
             memcpy(info.constPushWords, state.draws[0].push, sizeof info.constPushWords);
             info.texsF16 = texsF16 && s.stage == kFragmentBit;
+            info.turned = turned;
             info.constPushMask |= zeroPush;
             for (uint32_t i = 0; i < 32; i++)
                 if (zeroPush >> i & 1)
@@ -368,6 +371,41 @@ void programVariants(const NmbDirectState &state, const DirectNvk &nvk, void *de
     }
 }
 
+// The fragment program's turned variant (AssumeTurned), first of its stage's: compiled where the generic program's code may read
+// a turned plane's axes (turnSensitive) and kept where its code differs, the turn then being the program's to undo. Where it
+// would be needed and cannot be made, the record says so (PipelineTurnRefused).
+void turnedVariant(const NmbDirectState &state, const DirectNvk &nvk, void *device, uint32_t halfTargets,
+                   const Stages &generic, RuntimeRecord &out)
+{
+    const CapturedProgram &fs = generic.program(1);
+    if (fs.image.size() <= 80)
+        return;
+    uint32_t sph[20];
+    memcpy(sph, fs.image.data(), sizeof sph);
+    std::vector<uint32_t> code((fs.image.size() - 80) / 4);
+    memcpy(code.data(), fs.image.data() + 80, code.size() * 4);
+    if (!turnSensitive(sph, code.data(), uint32_t(code.size()), false))
+        return;
+    Stages stages(nvk, device);
+    std::string why;
+    const EmitProgram a = generic.emit(1);
+    if (stages.compile(state, halfTargets, false, why, 0, false, true) != CompileOutcome::Made) {
+        out.pipeline.flags |= PipelineTurnRefused;
+        return;
+    }
+    const CapturedProgram &program = stages.program(1);
+    const EmitProgram b = stages.emit(1);
+    if (program.image == fs.image)
+        return;
+    if (program.cbufTypes != fs.cbufTypes || a.earlyFragmentTests != b.earlyFragmentTests ||
+        a.interlockControl != b.interlockControl || a.usesSampleShading != b.usesSampleShading) {
+        out.pipeline.flags |= PipelineTurnRefused;
+        return;
+    }
+    out.variants.insert(out.variants.begin() + out.pipeline.variantCount[0], {AssumeTurned, program});
+    out.pipeline.variantCount[1]++;
+}
+
 // The fragment program's split as a record holds it (NVK made none where it saves nothing)
 void splitInto(const DirectNvk &nvk, const void *split, RuntimeRecord &out)
 {
@@ -519,6 +557,7 @@ CompileOutcome directRecord(const NmbDirectState &state, const DirectNvk &nvk, c
         splitInto(nvk, stages.split(1), out);
     if (variants)
         programVariants(state, nvk, device, halfFloatTargets(key), stages, out);
+    turnedVariant(state, nvk, device, halfFloatTargets(key), stages, out);
     return CompileOutcome::Made;
 }
 

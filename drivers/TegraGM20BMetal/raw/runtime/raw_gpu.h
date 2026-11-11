@@ -455,7 +455,10 @@ struct Pipeline {
     bool fillState = false;
     uint32_t probeGeneration = 0;
     uint8_t probeLines = 0, probeThinLines = 0;
-    bool turnSensitive = false;  // raw_rotation.h: its pixel program sees a turned plane's axes
+    // raw_rotation.h: its fragment program has a turned variant (AssumeTurned), or reads a turned plane's axes with none; a
+    // runtime record's turned variant's pipeline (a pack record's is one of `chosen`)
+    bool turnedVariant = false, turnRefused = false;
+    Pipeline *turnedTwin = nullptr;
 };
 
 // A state's fragment program split (raw_pack.h PackSplit): the twin that draws of rec.thresholdPixels pixels or more take, and
@@ -522,6 +525,7 @@ struct ColorAttachment {
 struct DepthStencilAttachment {
     Texture *texture = nullptr;
     bool clearDepth = false, clearStencil = false;  // the aspect's load is Clear (else DontCare)
+    bool kept = true;  // an aspect is loaded or stored: its contents outside the pass matter
     float depth = 1;
     uint32_t stencil = 0;
 };
@@ -1700,7 +1704,7 @@ private:
         std::string keyString;
         std::vector<uint32_t> blob;
         PackProgram programs[2];
-        Pipeline pipeline;
+        Pipeline pipeline, turned;
     };
 
     std::deque<Completed> completedStore_;

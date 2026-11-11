@@ -208,10 +208,12 @@ struct FakeAttachment {
         Load,
         Clear
     } load = DontCare;
+    bool store = true;
 };
 
 struct FakeZeta {
     const FakeTexture *texture = nullptr;
+    bool kept = true;
 };
 
 struct FakePass {
@@ -245,11 +247,20 @@ TEST(RawRotation, WhichPassesDrawIntoThePlane)
     EXPECT_EQ(backing.height, 1280u);
     p.color[1].texture = &stored;
     EXPECT_EQ(raw::passRotation(p, r), raw::RotatedRefusal::Mixed);
+    p.color[1].store = false;
+    EXPECT_EQ(raw::passRotation(p, r), raw::RotatedRefusal::None);  // transient: a plane-shaped backing stands in
+    EXPECT_TRUE(raw::standsInTurned(stored, r));
+    EXPECT_FALSE(raw::standsInTurned(drawable, r));
+    p.color[1].load = FakeAttachment::Load;
+    EXPECT_EQ(raw::passRotation(p, r), raw::RotatedRefusal::Mixed);
+    p.color[1] = {};
     p.color[1].texture = &other;
     EXPECT_EQ(raw::passRotation(p, r), raw::RotatedRefusal::Mixed);
     p.color[1].texture = nullptr;
     p.depthStencil.texture = &storedDepth;
     EXPECT_EQ(raw::passRotation(p, r), raw::RotatedRefusal::Mixed);
+    p.depthStencil.kept = false;
+    EXPECT_EQ(raw::passRotation(p, r), raw::RotatedRefusal::None);
     p.depthStencil.texture = nullptr;
     const FakeTexture fourth{4, 720, 1280};
     p.color[0].texture = &fourth;
@@ -260,6 +271,32 @@ TEST(RawRotation, WhichPassesDrawIntoThePlane)
     p.color[0].texture = &stored;
     EXPECT_EQ(raw::passRotation(p, r), raw::RotatedRefusal::None);
     EXPECT_FALSE(r.turned());
+}
+
+// The root table's turn words map each plane pixel's centre to the frame pixel Metal stores there
+TEST(RawRotation, TurnWordsMapThePlaneOntoTheFrame)
+{
+    const auto value = [](uint32_t u) {
+        float f;
+        memcpy(&f, &u, 4);
+        return f;
+    };
+    for (uint8_t turn = 1; turn <= 4; turn++) {
+        const Rotation r = turned(turn, 96, 64);
+        uint32_t w[raw::kTurnWords];
+        raw::turnWords(r, w);
+        for (uint32_t px = 0; px < r.planeWidth(); px += 5)
+            for (uint32_t py = 0; py < r.planeHeight(); py += 3) {
+                const float x = px + 0.5f, y = py + 0.5f;
+                const float fx = value(w[1]) * (w[0] ? y : x) + value(w[3]);
+                const float fy = value(w[2]) * (w[0] ? x : y) + value(w[4]);
+                // the frame texel whose store lands at (px, py)
+                const raw::Rect at = r.rect({uint32_t(fx), uint32_t(fy), uint32_t(fx) + 1, uint32_t(fy) + 1});
+                EXPECT_EQ(at, (raw::Rect{px, py, px + 1, py + 1})) << int(turn) << " " << px << " " << py;
+                EXPECT_EQ(fx - std::floor(fx), 0.5f);
+                EXPECT_EQ(fy - std::floor(fy), 0.5f);
+            }
+    }
 }
 
 // The words a turned pass's draw state is: the swizzle, the viewport and the scissor through the kit, read back as methods

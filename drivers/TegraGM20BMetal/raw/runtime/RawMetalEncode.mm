@@ -565,6 +565,9 @@ static bool encodeRawAttempt(RMCommandBuffer *cb, size_t from, size_t to, const 
                 p.depthStencil.texture = &z->_raw;
                 p.depthStencil.clearDepth = pass.depthLoad == MTLLoadActionClear;
                 p.depthStencil.clearStencil = pass.stencilLoad == MTLLoadActionClear;
+                p.depthStencil.kept = pass.depthLoad == MTLLoadActionLoad || pass.stencilLoad == MTLLoadActionLoad ||
+                                      pass.depthStore != MTLStoreActionDontCare ||
+                                      pass.stencilStore != MTLStoreActionDontCare;
                 p.depthStencil.depth = float(std::clamp(pass.clearDepth, 0.0, 1.0));
                 p.depthStencil.stencil = pass.clearStencil;
             }

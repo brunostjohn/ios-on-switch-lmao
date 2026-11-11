@@ -24,7 +24,7 @@ pass.level	record	layer	L3	slices, depth planes and levels of chainless textures
 pass.rtsize	record	client	render_target_size	-
 pass.ds	record	gap	stored_multisample	a stored depth/stencil attachment (zetaDescriptor keeps one-sample depth only)
 pass.other	record	query	layered_rendering,rasterization_rate_map,sample_positions	the device answers no for all three at the claimed family
-pass.rotated	record	gap	rotated_target	R1's remainder, also at encode for a turn-sensitive state: mixed turned and unturned stored attachments, a resolve into a turned texture, a rotation-4 Load, and pixel programs that see the plane's axes (position X/Y without fetch, point sprites, FSWZADD) until a turned pixel-program variant exists (key-changing)
+pass.rotated	record	gap	rotated_target	a turned attachment beside one of another rotation or size or a loaded or stored one not turned, a rotation-4 Load, and at encode a state whose turned variant could not be made (PipelineTurnRefused)
 state.foreign	record	m2v	-	an m2v pipeline state
 state.notpack	record	m2v	-	functions from another device's library: with one backend every function is this device's
 state.pack	record	layer	L4	a state the pack lacks: made at creation (compiler daemon) or the archive-miss error FailOnBinaryArchiveMiss asks for

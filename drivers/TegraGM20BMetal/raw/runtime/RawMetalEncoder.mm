@@ -284,6 +284,8 @@ static bool rawResolve(RMCommandBuffer *cb, MTLRenderPassColorAttachmentDescript
     facts.depth = zetaAttachment(pass);
     facts.depthLoad = pass.depthAttachment.loadAction;
     facts.stencilLoad = pass.stencilAttachment.loadAction;
+    facts.depthStore = pass.depthAttachment.storeAction;
+    facts.stencilStore = pass.stencilAttachment.storeAction;
     facts.clearDepth = pass.depthAttachment.clearDepth;
     facts.clearStencil = pass.stencilAttachment.clearStencil;
     facts.width = pass.renderTargetWidth;

@@ -9,6 +9,7 @@
  */
 
 #include "nvk_switch_compile.h"
+#include "nvk_switch_turn.h"
 
 #include "nvk_descriptor_set_layout.h"
 #include "nvk_descriptor_types.h"
@@ -113,6 +114,7 @@ switch_nvk_compile_stage(VkDevice _device,
    switch_nvk_split_current = info->split;
    switch_nvk_center_frag_depth_current = info->center_frag_depth != 0;
    switch_nvk_texs_f16_current = info->texs_f16;
+   switch_nvk_turned_current = info->turned;
    bool native_used = false;
    VkResult result =
       vk_pipeline_compile_native_stage(&dev->vk, info->pipeline_flags,
@@ -137,6 +139,7 @@ switch_nvk_compile_stage(VkDevice _device,
    switch_nvk_split_current = false;
    switch_nvk_center_frag_depth_current = false;
    switch_nvk_texs_f16_current = false;
+   switch_nvk_turned_current = false;
    if (result != VK_SUCCESS)
       return result;
 

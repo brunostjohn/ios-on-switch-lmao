@@ -225,7 +225,7 @@ static void forwardCall(RMEncoder *e, SEL selector, const void *argument)
         [_cb takeReason:WhyEncode why:@"a depth/stencil state or format the pass's attachment does not take"];
         return hit(_cb, PredEncDepthStencil, pl.depthFormat, _zeta | uint64_t(_ds.active()) << 32);
     }
-    if (_turn && pl.turnSensitive) {
+    if (_turn && pl.turnRefused) {
         [_cb takeReason:WhyEncode why:@(raw::rotatedRefusalText(raw::RotatedRefusal::Variant))];
         return hit(_cb, PredPassRotated, uint64_t(raw::RotatedRefusal::Variant), _turn);
     }

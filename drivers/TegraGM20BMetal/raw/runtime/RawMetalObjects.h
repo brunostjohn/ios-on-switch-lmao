@@ -209,6 +209,7 @@ struct RMPass {
 
     __unsafe_unretained id depth;
     MTLLoadAction depthLoad, stencilLoad;
+    MTLStoreAction depthStore, stencilStore;
     double clearDepth;
     uint32_t clearStencil;
     NSUInteger width, height;

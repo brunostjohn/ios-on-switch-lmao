@@ -15,6 +15,7 @@ raw_gpu.cpp	kClientFirstShare	policy	allocation policy
 raw_gpu.cpp	kClientHeapFirstShare	policy	allocation policy
 raw_gpu.cpp	kInstanceWords	policy	push words per instance
 raw_gpu.cpp	kSampleWords	policy	push words of a sample layout
+raw_gpu.cpp	kTurnWordsMethods	policy	push words of a turned pass's root-table turn words
 raw_compute.cpp	kRootBytes	policy	NVK's root descriptor table size (nvk_cmd_buffer.h)
 raw_compute.cpp	kRootSets	policy	NVK root table offset
 raw_compute.cpp	kRootPush	policy	NVK root table offset
