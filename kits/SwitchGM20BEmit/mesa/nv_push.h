@@ -5,7 +5,8 @@
  *  - P_IMMD takes the one-word form whenever the value fits its 13 bits, as raw::Push::m does, instead of only when the
  *    compiler proves it fits: the stream does not change with the optimisation level;
  *  - the subchannels of GM20B's copy (b0b5), inline-to-memory (a140) and host (b06f) classes, as the kernel binds them;
- *  - a system header to its users, as Mesa's own build includes it: the kernel's stricter warnings stay on our code.
+ *  - a system header to its users, as Mesa's own build includes it: the kernel's stricter warnings stay on our code;
+ *  - subc_mask in every build: struct nv_push crosses C function boundaries, so its layout cannot follow NDEBUG.
  */
 #ifndef NV_PUSH_H
 #define NV_PUSH_H
@@ -30,10 +31,8 @@ struct nv_push {
    /* The value in the last method header, used to avoid read-back */
    uint32_t last_hdr_dw;
 
-#ifndef NDEBUG
    /* A mask of valid subchannels */
    uint8_t subc_mask;
-#endif
 };
 
 #define SUBC_MASK_ALL 0xff
@@ -48,9 +47,7 @@ nv_push_init(struct nv_push *push, uint32_t *start,
    push->last_hdr = NULL;
    push->last_hdr_dw = 0;
 
-#ifndef NDEBUG
    push->subc_mask = subc_mask;
-#endif
 }
 
 static inline size_t

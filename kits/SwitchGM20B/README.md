@@ -32,6 +32,10 @@ Every row carries a mechanism, a grade, a citation and a HW Test:
   exists.
 - hwtest: an id in `hw_test_app`, or `planned:<id>` for a probe still to be written.
 
+A format is `chip` when raw's format tables (`kFormats`, `raw_zeta.h`) have it and the device's format checks
+(`metal.formats`, `gpu.clear.formats`, `metal.compressed`) run raw over it; BC formats stay `source`, since raw never
+reaches them. `planned:gpu.x1.<row>` stands in until a probe has a real id.
+
 `formats.tsv` names the Mesa pipe format, and its colour/zeta target, texture header word 0 and support bits come from
 NIL's `nil_formats.csv`, read through NIL's own generator. `methods.tsv` files every class method and QMD field under a
 `features.tsv` row. `limits.tsv` says whether a device answer above (`max`) or below (`min`) the value over-claims.

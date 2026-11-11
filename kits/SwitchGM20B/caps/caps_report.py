@@ -198,6 +198,41 @@ def below_chip(table: caps.Caps) -> list[str]:
     return lines
 
 
+def mapped_selectors(table: caps.Caps) -> set[str]:
+    names = {s for r in table.limits for s in r.cols['metal'].split(',') if s != '-'}
+    return names | {r.cols['metal'].partition('=')[0] for r in table.features if r.cols['metal'] != '-'}
+
+
+def unmapped(table: caps.Caps, kinds: dict) -> list[str]:
+    """List the device's answers no row speaks for, per kind: they are not compared."""
+    mapped = mapped_selectors(table)
+    lines = []
+    for kind, ans in sorted(kinds.items()):
+        selectors = set(ans.get('counts', {})) | {s for s, *_ in ans.get('args', [])}
+        left = sorted(selectors - mapped)
+        lines.append(f'{kind}: {len(selectors) - len(left)} of {len(selectors)} answers compared; not compared: ')
+        lines[-1] += ', '.join(left)
+    return lines
+
+
+def compare_amplification(kind: str, ans: dict, out: list) -> None:
+    """supportsVertexAmplificationCount: past maxVertexAmplificationCount promises counts the device itself denies."""
+    count = ans.get('counts', {}).get('maxVertexAmplificationCount')
+    ranges = [b for s, a, b, v in ans.get('args', []) if s == 'supportsVertexAmplificationCount:' and v]
+    if count is not None and ranges and max(ranges) > count:
+        out.append(
+            (
+                'over-claim',
+                2,
+                kind,
+                (
+                    f'supportsVertexAmplificationCount: answers yes up to {max(ranges)}, '
+                    f'maxVertexAmplificationCount is {count}'
+                ),
+            )
+        )
+
+
 def main() -> None:
     root = os.environ.get('BUILD_WORKSPACE_DIRECTORY')
     args = gen_caps.runfiles_args(root)
@@ -213,11 +248,13 @@ def main() -> None:
     for kind, ans in sorted(kinds.items()):
         compare_limits(table, kind, ans, found)
         compare_features(table, kind, ans, found)
+        compare_amplification(kind, ans, found)
     compare_formats(rows, raw, found)
     found.sort(key=lambda d: (ORDER.index(d[0]), -d[1], d[2], d[3]))
     out = ['# GM20B capability table', '', *below_chip(table)]
     out += ['', f'# Disagreements with the current device ({len(found)})', '']
     out += [f'{label:12} {kind:7} {text}' for label, _, kind, text in found]
+    out += ['', '# Device answers no row compares', '', *unmapped(table, kinds)]
     if root:
         out += ['', 'Every cited file and line exists.']
     sys.stdout.write('\n'.join(out) + '\n')
