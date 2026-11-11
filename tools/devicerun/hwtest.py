@@ -91,6 +91,7 @@ TESTS: dict[str, bool] = {
             'gpu.path.use_ranges',
             'gpu.path.native_surface_view',
             'gpu.path.semantic_fence',
+            'gpu.path.shared_events',
         ],
         False,
     ),

@@ -386,10 +386,51 @@ struct SemanticFencePathTest: GPUPathTest {
     }
 }
 
+/// SharedEvents (bit 21): one queue's command buffer waits for a shared event on the GPU before it copies a buffer,
+/// another's fills that buffer and signals the event on the GPU; the copy sees the fill, and both jobs carry the event
+/// to the kernel.
+struct SharedEventsPathTest: GPUPathTest {
+    let id = "gpu.path.shared_events"
+    let name = "A GPU wait on a shared event orders a copy after another queue's GPU signal"
+    let bit = 21
+    let counters = ["event_jobs"]
+
+    func exercise(_ gpu: GPU, _: TestContext, _ metrics: inout Metrics) async throws -> [String] {
+        guard let event = gpu.device.makeSharedEvent(), let other = gpu.device.makeCommandQueue(),
+            let waiter = other.makeCommandBuffer()
+        else { throw TestFailure("no shared event or second queue") }
+        let length = 4096
+        let source = try gpu.buffer(length), target = try gpu.buffer(length)
+        waiter.encodeWaitForEvent(event, value: 1)
+        let copy = waiter.makeBlitCommandEncoder()!
+        copy.copy(from: source, sourceOffset: 0, to: target, destinationOffset: 0, size: length)
+        copy.endEncoding()
+        waiter.commit()
+        let producer = try gpu.commit { commands in
+            let fill = commands.makeBlitCommandEncoder()!
+            fill.fill(buffer: source, range: 0..<length, value: 0x3c)
+            fill.endEncoding()
+            commands.encodeSignalEvent(event, value: 1)
+        }
+        try gpu.finish([producer])
+        waiter.waitUntilCompleted()
+        var failures: [String] = []
+        let waiterPath = RawFacade.path(of: waiter)
+        metrics.set("waiter_path", waiterPath)
+        if waiterPath != "raw" && waiterPath != "device" { failures.append("the waiting command buffer went \(waiterPath)") }
+        if waiter.status != .completed { failures.append("the waiting command buffer ended \(waiter.status.rawValue)") }
+        let wrong = UnsafeRawBufferPointer(start: target.contents(), count: length).filter { $0 != 0x3c }.count
+        metrics.set("wrong_bytes", wrong)
+        if wrong != 0 { failures.append("\(wrong) copied bytes miss the signalled fill") }
+        metrics.set("signaled", Int(event.signaledValue))
+        return failures
+    }
+}
+
 enum GPUPathTests {
     static let all: [any HWTest] = [
         JobVisibilityPathTest(), LeanCopyPathTest(), ControlReservePathTest(), CpuCompletePathTest(),
-        UseRangesPathTest(), NativeSurfaceViewPathTest(), SemanticFencePathTest(),
+        UseRangesPathTest(), NativeSurfaceViewPathTest(), SemanticFencePathTest(), SharedEventsPathTest(),
     ]
 }
 

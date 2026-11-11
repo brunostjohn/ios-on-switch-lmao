@@ -17,7 +17,7 @@ namespace
 const char *const kNames[SWITCH_GPU_PATH_COUNT] = {
 	"internal_jobs", "external_jobs", "unlocked_writes", "volatile_binds", "lean_copy_jobs",
 	"control_bos",   "cpu_completes", "ranged_uses",     "visible_waits",  "native_views",
-	"native_reads",  "native_tiled_views",
+	"native_reads",  "native_tiled_views", "event_jobs",
 };
 
 // Every path is taken in the syscall or trap of the process it is for, so each process counts its own: a reader of
@@ -122,6 +122,8 @@ extern "C" void switch_gpu_path_job(uint32_t visibility, int unlocked_writes, in
 	switch_gpu_path_taken(SWITCH_GPU_PATH_UNLOCKED_WRITE, unlocked_writes ? 1 : 0);
 	switch_gpu_path_taken(SWITCH_GPU_PATH_LEAN_COPY_JOB, lean_copy ? 1 : 0);
 	switch_gpu_path_taken(SWITCH_GPU_PATH_RANGED_USE, ranged_uses);
+	switch_gpu_path_taken(SWITCH_GPU_PATH_EVENT_JOB,
+			      (visibility & SWITCH_GPU_SUBMIT_FORCE_FENCE) ? 1 : 0);
 }
 
 extern "C" void switch_gpu_path_window(char *line, size_t size)

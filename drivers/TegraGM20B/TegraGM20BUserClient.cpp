@@ -2893,10 +2893,8 @@ void AGXDeviceUserClient::releaseMappings()
 
 namespace
 {
-// What each held bit still needs. SharedEvents: its own unmask (the runtime also needs SemanticFence).
-// ResourceReady: SharedEvents (its readiness notification is an event; without one a refused admission fails
-// the command buffer).
-constexpr uint32_t kInfoAwaitingUserspace = TegraGM20BInfoSharedEvents | TegraGM20BInfoResourceReady;
+// What the held bit still needs. ResourceReady: its own unmask (its readiness notification is a shared event).
+constexpr uint32_t kInfoAwaitingUserspace = TegraGM20BInfoResourceReady;
 }  // namespace
 
 extern "C" uint32_t switch_gpu_info_flags(void)
