@@ -2,12 +2,13 @@
 # sequences, the barrier vocabulary and the macro (MME) programs, one set for the kernel and user space.
 #
 #   bazel test //kits/SwitchGM20BEmit/...
+load("@rules_cc//cc:cc_binary.bzl", "cc_binary")
 load("@rules_cc//cc:cc_library.bzl", "cc_library")
 load("@rules_python//python:py_binary.bzl", "py_binary")
 load("//bazel/lint:defs.bzl", "lint_files")
 load("//kernel/rules:kernel.bzl", "kernel_headers")
 load("//kits/SwitchGM20B:defs.bzl", "SWITCH_GM20B_MESA_HEADERS")
-load(":defs.bzl", "EMIT_SOURCES", "push_headers")
+load(":defs.bzl", "EMIT_SOURCES", "MESA_MME_COPTS", "MESA_MME_HEADERS", "MESA_MME_SOURCES", "push_headers")
 
 package(default_visibility = ["//visibility:public"])
 
@@ -34,8 +35,25 @@ py_binary(
 
 push_headers(name = "push_headers")
 
+# The method names Mesa's MME simulator prints with (its nv_push_cl9097.c, class_parser.py's), for host tools only.
+genrule(
+    name = "nv_push_cl9097_dump",
+    srcs = ["//third_party/mesa/src/nouveau/headers:nvidia/classes/cl9097.h"],
+    outs = [
+        "mesa_gen/dump/nv_push_cl9097.c",
+        "mesa_gen/dump/nv_push_cl9097.h",
+    ],
+    cmd = "$(execpath //third_party/mesa/src/nouveau/headers:class_parser) --in-h $(execpath " +
+          "//third_party/mesa/src/nouveau/headers:nvidia/classes/cl9097.h) --out-h $(execpath " +
+          "mesa_gen/dump/nv_push_cl9097.h) --out-c $(execpath mesa_gen/dump/nv_push_cl9097.c)",
+    tools = ["//third_party/mesa/src/nouveau/headers:class_parser"],
+)
+
 # Kernel drivers: hdr_deps "kits/SwitchGM20BEmit" and "kits/SwitchGM20B", SWITCH_GM20B_EMIT_INCLUDES in their flags.
-kernel_headers(extra = SWITCH_GM20B_MESA_HEADERS + [":push_headers"])
+kernel_headers(extra = SWITCH_GM20B_MESA_HEADERS + [
+    ":macros",
+    ":push_headers",
+])
 
 cc_library(
     name = "push",
@@ -68,4 +86,28 @@ cc_library(
         ":copy_rect",
         ":push",
     ],
+)
+
+# The raw path's draw macros, built with Mesa's MME builder (mme/switch_gm20b_macros.c): gen/SwitchGM20BMacros.h.
+cc_binary(
+    name = "gen_macros",
+    srcs = MESA_MME_SOURCES + MESA_MME_HEADERS + SWITCH_GM20B_MESA_HEADERS + [
+        "mme/switch_gm20b_macros.c",
+        ":push_headers_mesa",
+    ],
+    copts = MESA_MME_COPTS,
+    tags = ["no-lint"],
+)
+
+genrule(
+    name = "macros",
+    outs = ["gen/SwitchGM20BMacros.h"],
+    cmd = "$(execpath :gen_macros) $@",
+    tools = [":gen_macros"],
+)
+
+cc_library(
+    name = "macros_h",
+    hdrs = [":macros"],
+    includes = ["gen"],
 )
