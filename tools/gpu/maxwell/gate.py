@@ -5,12 +5,13 @@ usage: gate.py <before dump> <after dump> --corpus <R lines>... [--invocations N
 
 Every state of the corpora in both dumps runs N quads of each program (quad.py over interp.py's lanes) on the same
 seeded attributes, constant buffers, texture and storage-image results (specials included: NaNs with payloads,
-infinities, signed zeros, f32 denormals, values past half's range). A state passes when every lane writes the same
-output registers and storage stores and kills alike; it is unsupported when either program uses an instruction the
-interpreter does not run.
+infinities, signed zeros, f32 denormals, values past half's range). A state passes when every lane kills alike and makes
+the same storage stores, and every lane that is not killed writes the same output registers (a discarded pixel's
+registers are written nowhere); it is unsupported when either program uses an instruction the interpreter does not run.
 """
 
 import argparse
+import hashlib
 import json
 import random
 import struct
@@ -61,7 +62,9 @@ class Seeded:
         self.base = (seed, invocation)
 
     def rng(self, *key: object) -> random.Random:
-        return random.Random(hash((self.base, key)) & 0xFFFFFFFFFFFF)
+        # repr, not hash(): Python salts a str's hash per process, which would make a quad's number name other inputs
+        # in every run
+        return random.Random(int.from_bytes(hashlib.blake2b(repr((self.base, key)).encode(), digest_size=8).digest()))
 
     def inputs(self, lane: int = 0) -> Inputs:
         def attribute(addr: int) -> int:
@@ -81,6 +84,11 @@ def outputs(image: bytes) -> int:
     return struct.unpack_from('<I', image, OMAP_TARGET_BYTE)[0].bit_count()
 
 
+def lane_result(result: tuple) -> tuple:
+    _, killed, stores = result
+    return (killed, stores) if killed else result
+
+
 def compare(before: bytes, after: bytes, n: int, seed: int) -> str:
     count = outputs(before)
     if count != outputs(after):
@@ -88,14 +96,18 @@ def compare(before: bytes, after: bytes, n: int, seed: int) -> str:
     for i in range(n):
         try:
             quad = [Seeded(seed, i).inputs(lane) for lane in range(LANES)]
-            a = run_quad(before[isa.HEADER_BYTES :], quad, count)
-            b = run_quad(after[isa.HEADER_BYTES :], quad, count)
+            a = [lane_result(r) for r in run_quad(before[isa.HEADER_BYTES :], quad, count)]
+            b = [lane_result(r) for r in run_quad(after[isa.HEADER_BYTES :], quad, count)]
         except UnsupportedError as e:
             return f'unsupported: {e}'
         if a != b:
             lane = next(k for k in range(LANES) if a[k] != b[k])
-            return f'different: quad {i} lane {lane}: {[hex(x) for x in a[lane][0]]} vs {[hex(x) for x in b[lane][0]]}'
+            return f'different: quad {i} lane {lane}: {describe(a[lane])} vs {describe(b[lane])}'
     return 'identical'
+
+
+def describe(result: tuple) -> str:
+    return 'killed' if result[0] is True else str([hex(x) for x in result[0]])
 
 
 def main() -> None:
