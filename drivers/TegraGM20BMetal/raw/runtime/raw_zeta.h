@@ -11,7 +11,9 @@
 //  - Target: nvk_CmdBeginRendering's SET_ZT_* for one layer; its zcull region, or none, raw_zcull.h's.
 //  - State: its register values are raw_depth_stencil_state.h's.
 #pragma once
+#include <algorithm>
 #include <cstdint>
+#include "../../../../kits/SwitchGM20B/SwitchGM20B.h"
 #include "raw_push.h"
 
 namespace raw {
@@ -91,6 +93,25 @@ struct DepthStencilDesc {
 // The depth/stencil registers' values (kDepthStencilMethods order)
 constexpr uint32_t kDepthStencilRegs = 18;
 
+inline constexpr uint32_t kDepthStencilMethods[kDepthStencilRegs] = {NVB197_SET_DEPTH_TEST,
+                                                              NVB197_SET_DEPTH_WRITE,
+                                                              NVB197_SET_DEPTH_FUNC,
+                                                              NVB197_SET_STENCIL_TEST,
+                                                              NVB197_SET_STENCIL_OP_FAIL,
+                                                              NVB197_SET_STENCIL_OP_ZFAIL,
+                                                              NVB197_SET_STENCIL_OP_ZPASS,
+                                                              NVB197_SET_STENCIL_FUNC,
+                                                              NVB197_SET_STENCIL_FUNC_REF,
+                                                              NVB197_SET_STENCIL_FUNC_MASK,
+                                                              NVB197_SET_STENCIL_MASK,
+                                                              NVB197_SET_BACK_STENCIL_OP_FAIL,
+                                                              NVB197_SET_BACK_STENCIL_OP_ZFAIL,
+                                                              NVB197_SET_BACK_STENCIL_OP_ZPASS,
+                                                              NVB197_SET_BACK_STENCIL_FUNC,
+                                                              NVB197_SET_BACK_STENCIL_FUNC_REF,
+                                                              NVB197_SET_BACK_STENCIL_MASK,
+                                                              NVB197_SET_BACK_STENCIL_FUNC_MASK};
+
 struct DepthStencilRegs {
     uint32_t v[kDepthStencilRegs] = {};
 
@@ -99,6 +120,29 @@ struct DepthStencilRegs {
 
 // The most words emitDepthStencil (raw_depth_stencil_state.h) writes
 constexpr uint32_t kDepthStencilWords = 2 * kDepthStencilRegs;
+
+// The registers of `regs` but the two stencil references as one absolute method stream, kDepthStencilMethods order: what a
+// GPU-resident state segment holds whole. Every value fits an immediate method. The references are a draw's own
+// (setStencilFrontReferenceValue:backReferenceValue:), set by stencilReferenceWords.
+constexpr uint32_t kDepthStencilBlockWords = kDepthStencilRegs - 2;
+using DepthStencilBlock = uint32_t[kDepthStencilBlockWords];
+
+inline void depthStencilBlock(const DepthStencilRegs &regs, DepthStencilBlock &out)
+{
+    uint32_t n = 0;
+    for (uint32_t i = 0; i < kDepthStencilRegs; i++)
+        if (kDepthStencilMethods[i] != NVB197_SET_STENCIL_FUNC_REF &&
+            kDepthStencilMethods[i] != NVB197_SET_BACK_STENCIL_FUNC_REF)
+            out[n++] = Push::hdr(4, SUBC_3D, kDepthStencilMethods[i], regs.v[i] & 0x1fff);
+}
+
+constexpr uint32_t kStencilReferenceWords = 2;
+
+inline void stencilReferenceWords(Push &p, uint32_t front, uint32_t back)
+{
+    *p.at++ = Push::hdr(4, SUBC_3D, NVB197_SET_STENCIL_FUNC_REF, std::min(front, 0xffu));
+    *p.at++ = Push::hdr(4, SUBC_3D, NVB197_SET_BACK_STENCIL_FUNC_REF, std::min(back, 0xffu));
+}
 
 // A depth/stencil clear before a pass's draws (nvk_CmdClearAttachments): its values, then the CLEAR_SURFACE bits of its aspects
 constexpr uint32_t kZetaClearWords = 4;

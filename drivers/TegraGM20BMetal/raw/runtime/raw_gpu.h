@@ -549,6 +549,9 @@ struct PassDesc {
     // compression, which the surface unit cannot read through
     uint8_t storageMask = 0;
     SamplePositions positions;
+    // no depth/stencil attachment, and a draw's state tests depth or stencil (testsHiddenZeta): the pass renders over a hidden
+    // Depth32Float_Stencil8 backing of its own, cleared to 1.0 and 0, as plain Metal tests such a draw
+    bool hiddenZeta = false;
 };
 
 class RenderEncoder {
@@ -752,6 +755,9 @@ private:
     uint32_t samplePasses_ = 1;
     AttachmentWrites attachmentWrites_;
     bool memoryless_[8] = {};
+    bool hiddenZeta_ = false;  // pass_.depthStencil.texture is PassDesc::hiddenZeta's backing: the pass declares none
+    // At begin, after the colors' backings: the hidden zeta over the plane they cover, of the pass's samples
+    bool hideZeta(const PassDesc &pass);
     const Texture *shadowOf_[8] =
         {};  // a shadow target's texture, where pass_ holds its pool image (CommandBuffer::render)
     // what m2v's DontCare loads answer (metal2vulkan clear_reach.rs: dont_care_loads, DrawnArea): whether the pass has a draw
