@@ -155,15 +155,16 @@ inline bool isYuv(Kind k)
 }
 
 // --- What the display publishes (and so what Core Animation can send) ------------------------------------------------------
-// A10X's own values where the DC can do as much (IOMFBScalingLimits 4/4/4/4 [V]); MaxSrcRectWidth 1920 (CA's own default)
-// because the V filter's line buffer on T210 is not documented in any source, so wider sources are scaled by the IOSA copy
-// first, and buffers up to 2048 x 2048 (a 1080p frame; anything bigger is copied by it too); plane bases 64-byte aligned (the DC's pitch alignment, mainline pitch_align); rows 128-byte aligned (what the GPU
-// renders in place, already published; video pool rows are 256). Three windows: the UI and two independently fenced detached layers.
+// A10X's own scaling where the DC can do as much (IOMFBScalingLimits 4/4/4/4 [V]), YUV down to SwitchWindowCaps.h's
+// fraction; sources and buffers up to its 4096 x 2304; plane bases 64-byte aligned (the DC's pitch alignment, mainline
+// pitch_align); rows 128-byte aligned (what the GPU renders in place, already published; video pool rows are 256).
+// Three windows: the UI and two independently fenced detached layers.
 struct Limits {
     uint32_t minScaleFraction = 4, maxScale = 4;  // 1/4 .. 4x on each axis
-    uint32_t maxSrcRectWidth = 1920;
-    uint64_t maxSrcRectTotal = 1920ULL * 1088;
-    uint32_t maxSrcBuffer = 2048;  // so rows x stride of any source fits one 20 MiB slot (8 KiB x 2048 = 16 MiB)
+    uint32_t yuvMinScaleFraction = switch_window_caps::kYuvMinScaleFraction;
+    uint32_t maxSrcRectWidth = switch_window_caps::kSourceWidth;
+    uint64_t maxSrcRectTotal = switch_window_caps::kSourcePixels;
+    uint32_t maxSrcBuffer = switch_window_caps::kSourceWidth, maxSrcBufferHeight = switch_window_caps::kSourceHeight;
     uint32_t planeBaseAlignment = 64, strideAlignment = 128;
     uint32_t maxLayers = 3;
     bool packedYuvUnsupported = false;    // published as IOMFBYUVPackedUnSupported (24B119 only, see kLimits24B119)
@@ -474,13 +475,13 @@ inline unsigned checkDetached(const Layer &l, uint32_t width, uint32_t height, c
     if (s.x < 0 || s.y < 0 || s.w <= 0 || s.h <= 0 || d.w <= 0 || d.h <= 0 ||
         static_cast<uint64_t>(s.x) + static_cast<uint64_t>(s.w) > l.surface.width ||
         static_cast<uint64_t>(s.y) + static_cast<uint64_t>(s.h) > l.surface.height ||
-        l.surface.width > limits.maxSrcBuffer || l.surface.height > limits.maxSrcBuffer)
+        l.surface.width > limits.maxSrcBuffer || l.surface.height > limits.maxSrcBufferHeight)
         return kGeometry;
     // Window coordinates are 13 bits; a layer wholly off the screen is accepted and shown as nothing.
     if (static_cast<int64_t>(d.x) + d.w > 8191 || static_cast<int64_t>(d.y) + d.h > 8191 || d.x < -8191 || d.y < -8191)
         return kGeometry;
     const uint64_t up = limits.maxScale;
-    const uint64_t down = limits.minScaleFraction;
+    const uint64_t down = isYuv(l.kind) ? limits.yuvMinScaleFraction : limits.minScaleFraction;
     if (static_cast<uint64_t>(d.w) > static_cast<uint64_t>(s.w) * up ||
         static_cast<uint64_t>(d.h) > static_cast<uint64_t>(s.h) * up ||
         static_cast<uint64_t>(s.w) > static_cast<uint64_t>(d.w) * down ||

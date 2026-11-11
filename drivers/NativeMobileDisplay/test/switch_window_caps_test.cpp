@@ -1,9 +1,10 @@
 // SPDX-License-Identifier: BSD-2-Clause-Patent
 // SwitchWindowCaps.h through NativePlanes.h: NV24 and packed 4:2:2 layers get the window registers L4T's window.c and
 // mainline's plane.c program for them, and a model of window B's fetch reads every pixel's Y', Cb and Cr from the bytes
-// that hold them.
+// that hold them; every layer Core Animation may send within the limits fits one plane slot and its tables.
 #include <gtest/gtest.h>
 
+#include <cstdio>
 #include <vector>
 
 #include "../NativePlanes.h"
@@ -171,10 +172,64 @@ TEST(SwitchWindowCaps, SurfaceRules)
     l = layer(fourcc('2', 'v', 'u', 'y'), 1280, 720, {0, 0, 1280, 720}, {0, 0, 720, 405});
     l.surface.allocation -= 4096;
     EXPECT_EQ(checkDetached(l, W, H), kSurface);
-    l = layer(fourcc('y', 'u', 'v', 's'), 1920, 1080, {0, 0, 1920, 1080}, {0, 437, 720, 405});
+    l = layer(fourcc('y', 'u', 'v', 's'), 3840, 2160, {0, 0, 3840, 2160}, {0, 437, 720, 405});
     EXPECT_EQ(checkDetached(l, W, H), kAccepted);
-    l.dst = {0, 0, 400, 200};  // 4.8x across
+    l.dst = {0, 0, 600, 300};  // 6.4x across
     EXPECT_EQ(checkDetached(l, W, H), kScale);
+}
+
+// Every layer within the published limits, at the extremes of its source and buffer: its window reads fit one plane
+// slot, and the plane slots plus the other mappings fit the domain's tables.
+TEST(SwitchWindowCaps, EveryAcceptedLayerFitsOnePlaneSlot)
+{
+    const Limits limits;
+    const uint32_t formats[] = {fourcc('B', 'G', 'R', 'A'), fourcc('4', '2', '0', 'v'), fourcc('4', '2', '2', 'v'),
+                                fourcc('4', '4', '4', 'v'), fourcc('2', 'v', 'u', 'y')};
+    uint64_t largest = 0;
+    for (const uint32_t format : formats) {
+        const bool rgb = format == fourcc('B', 'G', 'R', 'A');
+        const bool nv = (format >> 8 & 0xff) == '2' || (format >> 8 & 0xff) == '0';
+        Layer l;
+        l.surface.format = format;
+        l.surface.width = limits.maxSrcBuffer;
+        l.surface.height = limits.maxSrcBufferHeight;
+        if (rgb) {
+            l.surface.stride[0] = limits.maxSrcBuffer * 4;
+            l.surface.allocation = static_cast<uint64_t>(l.surface.stride[0]) * l.surface.height;
+        } else if (nv) {
+            l.surface = surface(fourcc('4', '4', '4', 'v'), limits.maxSrcBuffer, limits.maxSrcBufferHeight);
+            l.surface.format = format;
+            l.surface.stride[1] = l.surface.stride[0];
+            l.surface.planeHeight[1] = (format >> 8 & 0xff) == '0' ? l.surface.height / 2 : l.surface.height;
+            l.surface.allocation = l.surface.offset[1] + uint64_t(l.surface.stride[1]) * l.surface.planeHeight[1];
+        } else {
+            l.surface = surface(format, limits.maxSrcBuffer, limits.maxSrcBufferHeight);
+        }
+        l.surface.descriptorBytes = (l.surface.allocation + 16383) & ~16383ULL;
+        l.kind = kindOf(l.surface.format, l.surface.planes);
+        ASSERT_NE(l.kind, kKindNone) << format;
+        const uint32_t down = rgb ? limits.minScaleFraction : limits.yuvMinScaleFraction;
+        const int32_t sw = int32_t(limits.maxSrcBuffer), sh = int32_t(limits.maxSrcBufferHeight);
+        const Rect sources[] = {{0, 0, sw, sh}, {0, 0, 1, sh}, {sw - 2, 0, 2, sh}};
+        for (const Rect &src : sources) {
+            l.src = src;
+            l.dst = {0, 0, int32_t((src.w + down - 1) / down), int32_t((src.h + down - 1) / down)};
+            if (static_cast<uint64_t>(src.w) * src.h > limits.maxSrcRectTotal)
+                continue;
+            ASSERT_EQ(checkDetached(l, W, H, limits), kAccepted) << format << " " << src.w;
+            Image m;
+            ASSERT_TRUE(imageOf(l, W, H, m));
+            const uint64_t span = m.readHigh - m.readLow + 4096;  // a page either side of an unaligned start
+            largest = span > largest ? span : largest;
+            EXPECT_LE(span, switch_window_caps::kPlaneSlotSpan) << format << " " << src.w;
+        }
+    }
+    std::printf("largest plane read: %llu MiB of a %llu MiB slot\n", static_cast<unsigned long long>(largest >> 20),
+                static_cast<unsigned long long>(switch_window_caps::kPlaneSlotSpan >> 20));
+    const uint64_t tablesPerSlot = switch_window_caps::kPlaneSlotSpan / (4ULL << 20);
+    // 8 plane slots, 5 direct slots and the probe's, the directory, and identity maps of 3 scan buffers and the tape.
+    EXPECT_LE(8 * tablesPerSlot + 6 + 1 + 8, switch_window_caps::kDomainTables);
+    EXPECT_EQ(switch_window_caps::kPlaneSlotSpan % (4ULL << 20), 0u);
 }
 
 }  // namespace

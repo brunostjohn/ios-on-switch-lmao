@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: BSD-2-Clause-Patent
-// What T210 DC A's windows B and C scan beyond NativePlanes.h's NV12, NV16 and 32-bit RGB. Plain C++, no dependencies;
-// NativePlanes.h reads it.
+// What T210 DC A's windows B and C scan beyond NativePlanes.h's NV12, NV16 and 32-bit RGB, and the largest source they
+// take. Plain C++, no dependencies; NativePlanes.h reads both.
 //
 // COLOR_DEPTH codes. L4T writes its tegra_dc_ext.h format number straight into DC_WIN_COLOR_DEPTH (window.c,
 // tegra_dc_fmt) and names it by the components of a little-endian word from the top: 12 A8R8G8B8 is the bytes B, G, R,
@@ -12,10 +12,27 @@
 // Y1 Cr) with BYTE_SWAP SWAP2, the bytes of each 16-bit half exchanged (plane.c DRM_FORMAT_UYVY / DRM_FORMAT_YUYV). All
 // are in T210 windows A-C's format masks (dc_config.c t210_feature_entries_a) and mainline's tegra210 overlay list
 // (dc.c tegra114_overlay_formats).
+//
+// Source size. L4T gives windows A-C TEGRA_DC_FEATURE_MAXIMUM_SIZE {4096, 1, 4096, 1} with both filters
+// (dc_config.c t210_feature_entries_a), and window.c bounds only the DDA increments: H 4.0 at 4 bytes a pixel, 8.0 at
+// 1-2 (a 4:2:0 or 4:2:2 window counts as 2), V 15.0 (compute_dda_inc); mainline's T210 max_width is 4096. A YUV layer is
+// published down to 1/6 (a 4096-wide picture across the 720-pixel panel is 5.7x), not the DDA's 1/8: one 4:2:0 or 4:2:2
+// window at 1/6 on both axes fetches 78 MHz x 2 bytes x 36 = 5.6 GB/s, and two with the UI are the 1600 MHz EMC rate's
+// isochronous ceiling (SwitchDisplayBandwidth.h floorKhz: 11.5 GB/s at 45%), where 1/8 would need twice the rate. RGB
+// stays at the 4.0 H limit. Sources stop at 2304 rows so that the largest 32-bit one, 4096 x 2304 at 16 KiB a row
+// (36 MiB), fits one plane slot.
 #pragma once
 #include <stdint.h>
 
 namespace switch_window_caps {
+
+constexpr uint32_t kSourceWidth = 4096, kSourceHeight = 2304;
+constexpr uint64_t kSourcePixels = static_cast<uint64_t>(kSourceWidth) * kSourceHeight;
+constexpr uint32_t kYuvMinScaleFraction = 6;
+// The IOVA span of one plane slot: the largest source's rows plus a page either side, in whole 4 MiB SMMU tables.
+constexpr uint64_t kPlaneSlotSpan = 40ULL << 20;
+// The display domain's tables: 8 plane slots of 10 tables, the direct-scanout and probe slots, and the identity maps.
+constexpr unsigned kDomainTables = 128;
 
 constexpr uint32_t kByteSwapNone = 0, kByteSwap2 = 1;
 

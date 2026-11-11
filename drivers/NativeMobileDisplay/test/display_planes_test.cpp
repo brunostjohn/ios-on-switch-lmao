@@ -97,7 +97,7 @@ Layer randomDetached()
     const Limits limits;
     Layer l;
     l.kind = kinds[rnd(6)];
-    const uint32_t sw = 32 + rnd(limits.maxSrcBuffer - 32), sh = 32 + rnd(limits.maxSrcBuffer - 32);
+    const uint32_t sw = 32 + rnd(limits.maxSrcBuffer - 32), sh = 32 + rnd(limits.maxSrcBufferHeight - 32);
     l.surface = makeSurface(l.kind, sw, sh);
     int32_t w = 1 + (int32_t)rnd(limits.maxSrcRectWidth < sw ? limits.maxSrcRectWidth : sw);
     int32_t h = 1 + (int32_t)rnd(sh);
@@ -164,7 +164,7 @@ void testAcceptance()
         CHECK(image.readHigh <= ((d.surface.allocation + 4095) & ~4095ull) && image.readLow < image.readHigh,
               "read range %#llx-%#llx outside %#llx", (unsigned long long)image.readLow,
               (unsigned long long)image.readHigh, (unsigned long long)d.surface.allocation);
-        CHECK(image.readHigh - image.readLow <= (20ull << 20), "read range %llu bytes exceeds a slot",
+        CHECK(image.readHigh - image.readLow <= switch_window_caps::kPlaneSlotSpan, "read range %llu bytes exceeds a slot",
               (unsigned long long)(image.readHigh - image.readLow));
         CHECK(!(image.start[0] % 64) && (!image.yuv || !(image.start[1] % 64)), "plane start not 64-aligned");
         CHECK(!image.yuv || !(image.hOffset & 1), "4:2:0 window starts on an odd column");
@@ -199,15 +199,19 @@ void testRefusals()
     CHECK(checkUpdated(6, 0, has, layers, W, H) == kAlignment, "a row not 128-aligned");
     d = keep;
     d.dst = {0, 0, 200, 100};  // 6.4x / 7.2x down
-    CHECK(checkUpdated(6, 0, has, layers, W, H) == kScale, "a scale past 1/4");
+    CHECK(checkUpdated(6, 0, has, layers, W, H) == kScale, "a YUV scale past 1/6");
     d = keep;
-    d.surface = makeSurface(kKindNv12Video, 2048, 1152);
-    d.src = {0, 0, 2048, 1152};
-    d.dst = {0, 0, 720, 405};
-    CHECK(checkUpdated(6, 0, has, layers, W, H) == kScale, "a source wider than MaxSrcRectWidth");
     d.surface = makeSurface(kKindNv12Video, 3840, 2160);
+    d.src = {0, 0, 3840, 2160};
+    d.dst = {0, 437, 720, 405};
+    CHECK(checkUpdated(6, 0, has, layers, W, H) == kAccepted, "a 4K picture across the panel, 5.3x down");
+    d.kind = kKindBgra;
+    d.surface = makeSurface(kKindBgra, 3840, 2160);
+    CHECK(checkUpdated(6, 0, has, layers, W, H) == kScale, "an RGB scale past 1/4");
+    d.kind = kKindNv12Video;
+    d.surface = makeSurface(kKindNv12Video, 3840, 2400);
     d.src = {0, 0, 1920, 1080};
-    CHECK(checkUpdated(6, 0, has, layers, W, H) == kGeometry, "a buffer past MaxSrcBufferWidth/Height");
+    CHECK(checkUpdated(6, 0, has, layers, W, H) == kGeometry, "a buffer past MaxSrcBufferHeight");
     d = keep;
     CHECK(checkUpdated(6, 0x00ff0000u, has, layers, W, H) == kLayerState, "a coloured background");
     CHECK(checkUpdated(6 | 0x100, 0, has, layers, W, H) == kLayerState, "an unknown mask bit");
@@ -493,6 +497,8 @@ TEST(DisplayPlanes, Limits24B119AreIos17sWithoutPackedOrCompressed)
     EXPECT_EQ(ios27.maxSrcRectWidth, ios17.maxSrcRectWidth);
     EXPECT_EQ(ios27.maxSrcRectTotal, ios17.maxSrcRectTotal);
     EXPECT_EQ(ios27.maxSrcBuffer, ios17.maxSrcBuffer);
+    EXPECT_EQ(ios27.maxSrcBufferHeight, ios17.maxSrcBufferHeight);
+    EXPECT_EQ(ios27.yuvMinScaleFraction, ios17.yuvMinScaleFraction);
     EXPECT_EQ(ios27.planeBaseAlignment, ios17.planeBaseAlignment);
     EXPECT_EQ(ios27.strideAlignment, ios17.strideAlignment);
     EXPECT_EQ(ios27.maxLayers, ios17.maxLayers);

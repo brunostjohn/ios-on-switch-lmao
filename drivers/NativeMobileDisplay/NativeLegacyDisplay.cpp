@@ -903,7 +903,7 @@ class NativeLegacyDisplay : public IOMobileFramebufferLegacy {
     static constexpr uint32_t kDcCrcControl = 0x300, kDcCrcLatched = 0x329, kCrcOn = (1u << 3) | (1u << 2) | (1u << 0);
     static constexpr uint32_t kDisplay0aTranslation = 1u << 1;  // client display0a (id 1) in TRANSLATION_ENABLE_0
     static constexpr uint64_t kProbeSlot = 0x10000000ULL;  // below DRAM (0x80000000): only a translation reaches it
-    static constexpr unsigned kProbeTables = 64, kProbeAfterFrames = 600;  // r18-planes: 40 tables for the plane slots
+    static constexpr unsigned kProbeTables = switch_window_caps::kDomainTables, kProbeAfterFrames = 600;
     switch_dma_buffer probeTables = {};
     uint64_t probeAt = 0;
     TegraSMMUDomain probeDomain;
@@ -969,7 +969,7 @@ class NativeLegacyDisplay : public IOMobileFramebufferLegacy {
     // (native_legacy_detach_ready below). Window B's register sets move through DC A as native_planes::PlaneLatch follows them;
     // a set is a slot index (kOff: window off). A swap retires when the latch that shows it (or a newer one) is seen.
     static constexpr unsigned kPlaneSlots = 8;
-    static constexpr uint64_t kPlaneSlotSpan = 20ULL << 20,
+    static constexpr uint64_t kPlaneSlotSpan = switch_window_caps::kPlaneSlotSpan,
                               kPlaneSlot0 = kProbeSlot + static_cast<uint64_t>(kSlots) * kSlotSpan;
     static constexpr unsigned kPlaneUnderflowFrames = 3;
 
@@ -5051,7 +5051,7 @@ public:
         };
         const Entry scaling[] = {{"RGBLayer_MinScaleFraction", limits.minScaleFraction},
                                  {"RGBLayer_MaxScale", limits.maxScale},
-                                 {"YUVLayer_MinScaleFraction", limits.minScaleFraction},
+                                 {"YUVLayer_MinScaleFraction", limits.yuvMinScaleFraction},
                                  {"YUVLayer_MaxScale", limits.maxScale}};
         publish("IOMFBScalingLimits", scaling, 4, 32);
         // The panel's pixel clock (TegraDisplayPower.cpp: PLLD 468 MHz, 78 MHz for 60 Hz) as both clocks [I: what
@@ -5059,7 +5059,7 @@ public:
         const Entry source[] = {{"MaxSrcRectWidth", limits.maxSrcRectWidth},
                                 {"MaxSrcRectTotal", limits.maxSrcRectTotal},
                                 {"MaxSrcBufferWidth", limits.maxSrcBuffer},
-                                {"MaxSrcBufferHeight", limits.maxSrcBuffer},
+                                {"MaxSrcBufferHeight", limits.maxSrcBufferHeight},
                                 {"MaxVideoSrcDownscalingWidth", limits.maxSrcRectWidth},
                                 {"VideoClock", 78000000},
                                 {"PixelClock", 78000000},
