@@ -518,7 +518,7 @@ class AGXDeviceUserClient : public IOUserClient
 	IOReturn execSurfaces(const TegraGM20BAbiExecSurfaces *in);
 	IOReturn resourceSetCreate(const TegraGM20BAbiResourceSetCreate *in,
 				   TegraGM20BAbiResourceSetCreateReply *out);
-	IOReturn attachSet(const TegraGM20BAbiResourceSetCreate *in, const TegraGM20BAbiSurfaceUse *uses,
+	IOReturn attachSet(const TegraGM20BAbiResourceSetCreate *in, TegraGM20BAbiSurfaceUse *uses,
 			   switch_gpu_set_member *members, TegraGM20BAbiResourceSetCreateReply *out);
 	IOReturn resourceSetRelease(const TegraGM20BAbiResourceSetRelease *in);
 	IOReturn submitJob(const TegraGM20BAbiSubmitAddress *in, TegraGM20BAbiExecReply *out);

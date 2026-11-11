@@ -19,7 +19,8 @@ enum {
 	SWITCH_GPU_SET_CAUSE_SHARED = 2,
 	SWITCH_GPU_SET_CAUSE_KILL = 3,
 	SWITCH_GPU_SET_CAUSE_REPLACE = 4,
-	SWITCH_GPU_SET_CAUSES = 5,
+	SWITCH_GPU_SET_CAUSE_CPU = 5,
+	SWITCH_GPU_SET_CAUSES = 6,
 };
 
 struct switch_gpu_resource_set;
@@ -33,10 +34,11 @@ struct switch_gpu_set_member {
 /* mirror: where the generation is published for the client (the fence page), or NULL */
 int switch_gpu_set_create(volatile uint32_t *mirror, struct switch_gpu_resource_set **set);
 /* Setup only, with every submission naming the set excluded. Members must be private (no surface, never reached from
- * outside, no CPU completion tracking, in no other set); on success the set has exactly these members and a new
- * generation. -EBUSY: a member is in another set; -EINVAL: one is not private. */
+ * outside or by the CPU, in no other set); on success the set has exactly these members and a new generation, and a
+ * member it no longer lists keeps the set's pending jobs as its users. -EBUSY: a member is in another set; -EINVAL: one
+ * is not private; either way `refused` (if given) names it and the set is as it was. */
 int switch_gpu_set_attach(struct switch_gpu_resource_set *set, const struct switch_gpu_set_member *members,
-			  uint32_t count, uint32_t *generation);
+			  uint32_t count, uint32_t *generation, struct switch_gpu_backing **refused);
 void switch_gpu_set_destroy(struct switch_gpu_resource_set *set);
 
 uint32_t switch_gpu_set_generation(const struct switch_gpu_resource_set *set);
@@ -68,8 +70,9 @@ void switch_gpu_set_host_written(struct switch_gpu_resource_set *set);
 int switch_gpu_set_take_host_written(struct switch_gpu_resource_set *set);
 
 struct switch_gpu_resource_set *switch_gpu_backing_set(struct switch_gpu_backing *backing);
-/* Before a CPU lease of `access` on a member: the set's pending jobs become the member's recorded users. */
-int switch_gpu_backing_member_lease(struct switch_gpu_backing *backing, uint32_t access);
+/* Before a CPU lease or CpuComplete names the backing: it is never a member again, and a member leaves its set with the
+ * set's pending jobs as its users (writers over the whole backing where the set may write it). */
+void switch_gpu_backing_member_cpu(struct switch_gpu_backing *backing);
 /* The member's BO is gone (setup only, with the set's submissions excluded): its pending set jobs stay its users, it
  * leaves the set and its list, and the generation ends. */
 void switch_gpu_backing_member_freed(struct switch_gpu_backing *backing);
