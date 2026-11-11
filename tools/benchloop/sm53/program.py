@@ -69,6 +69,16 @@ def epilogue(results: tuple[int, int]) -> list[Instr]:
     return _scheduled(split) + _scheduled(mark)
 
 
+def settled(body: list[Instr]) -> list[Instr]:
+    """Give `body` with its last instruction held until a barrier it sets can be waited on by what follows."""
+    if not body:
+        return body
+    last = body[-1].control
+    if (last.wr_bar, last.rd_bar) != (encode.NO_BAR, encode.NO_BAR) and last.delay < encode.BARRIER_SET_CYCLES:
+        return [*body[:-1], body[-1].sched(delay=encode.BARRIER_SET_CYCLES)]
+    return body
+
+
 def _gprs(code: bytes) -> int:
     return max(OUTPUT_REGISTERS, operands.highest_register(code) + 1)
 
@@ -77,13 +87,13 @@ def fragment(
     body: list[Instr], init: dict[int, int], results: tuple[int, int], preds: dict[int, bool] | None = None
 ) -> Program:
     """Give a fragment program: load `init` and `preds`, run `body`, write `results` to render target 0."""
-    code = encode.bundle(encode.finish([*prologue(init, preds), *body, SEPARATOR, *epilogue(results)]))
+    code = encode.bundle(encode.finish([*prologue(init, preds), *settled(body), SEPARATOR, *epilogue(results)]))
     return Program(code, data_of(init), _gprs(code), sph.pixel(operands.attributes(code)))
 
 
 def compute(body: list[Instr], init: dict[int, int], preds: dict[int, bool] | None = None) -> Program:
     """Give the compute form of a body: the same prologue, no outputs."""
-    code = encode.bundle(encode.finish([*prologue(init, preds), *body, SEPARATOR]))
+    code = encode.bundle(encode.finish([*prologue(init, preds), *settled(body), SEPARATOR]))
     return Program(code, data_of(init), _gprs(code))
 
 

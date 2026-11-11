@@ -17,6 +17,10 @@ RZ = 255
 PT = 7
 NO_BAR = 7
 ALL_BARRIERS = 0x3F
+# A barrier an instruction sets is not up until this many cycles after it issues: a wait on it sooner passes at once
+# and reads the register before the write lands (measured: IPA then a waiting MOV, FADD or F2I at delay 1; NAK's
+# calc_instr_deps keeps the same two cycles)
+BARRIER_SET_CYCLES = 2
 MASK32 = 0xFFFFFFFF
 OPCODES = {p.name: p.value for p in isa.PATTERNS}
 ROUND = {'rn': 0, 'rm': 1, 'rp': 2, 'rz': 3}
@@ -403,8 +407,21 @@ def finish(instrs: list[Instr]) -> list[Instr]:
     return [*instrs, exit_().sched(delay=13, wait=ALL_BARRIERS), nop().sched(delay=2)]
 
 
+def barrier_hazards(instrs: list[Instr]) -> list[int]:
+    """Give the indices of instructions that wait on a barrier the instruction just before set too recently."""
+    out = []
+    for k in range(1, len(instrs)):
+        before, c = instrs[k - 1].control, instrs[k].control
+        set_bars = {b for b in (before.wr_bar, before.rd_bar) if b != NO_BAR}
+        if before.delay < BARRIER_SET_CYCLES and any(c.wait >> b & 1 for b in set_bars):
+            out.append(k)
+    return out
+
+
 def bundle(instrs: list[Instr]) -> bytes:
     """Give `instrs` as machine code: a scheduling word ahead of each three, NOPs filling the last bundle."""
+    if hazards := barrier_hazards(instrs):
+        raise ValueError(f'instructions {hazards} wait on a barrier set less than {BARRIER_SET_CYCLES} cycles before')
     padded = list(instrs) + [nop()] * (-len(instrs) % 3)
     words = []
     for i in range(0, len(padded), 3):

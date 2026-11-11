@@ -34,7 +34,10 @@ class TimingSimTest(unittest.TestCase):
 
     def test_a_barrier_wait_holds_the_consumer_until_the_result_lands(self):
         def chain(k: int) -> list[e.Instr]:
-            return [e.mufu(8, 8, 'rcp').sched(wr_bar=j % 2, wait=1 << (1 - j % 2) if j else 0) for j in range(k)]
+            return [
+                e.mufu(8, 8, 'rcp').sched(wr_bar=j % 2, wait=1 << (1 - j % 2) if j else 0, delay=e.BARRIER_SET_CYCLES)
+                for j in range(k)
+            ]
 
         (x4, c4), (_, c8) = _run(chain(4), {8: f32(4.0)}), _run(chain(8), {8: f32(4.0)})
         self.assertEqual(c8 - c4, 4 * 20)

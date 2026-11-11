@@ -3,7 +3,8 @@
 ladder      dependent FADDs at delays 6..15 in one warp: time against k * delay gives the clock.
 stall       dependent chains of each fixed-latency op at delays 1..15: the smallest delay whose texel is right is
             the op's latency (fixed-latency results are not interlocked, so a shorter delay reads a stale register).
-chain       k dependent variable-latency ops through alternating barriers: time against k gives the latency.
+chain       k dependent variable-latency ops through alternating barriers: time against k gives the latency (each
+            link issued two cycles after the last, the soonest a barrier it set can be waited on).
 throughput  independent streams of each op over the whole target: time against k gives issue cycles per warp.
 dual        independent pairs (X, Y) in one warp, X at delay 0 and at delay 1.
 reuse       FFMA streams whose operands share a register bank, with and without reuse flags, and spread over banks.
@@ -113,7 +114,9 @@ def stall(recipes: Iterable[Recipe] = FIXED) -> list[dict]:
 
 
 def _chain_link(r: Recipe, j: int) -> e.Instr:
-    return r.link(CHAIN0, CHAIN0).sched(wr_bar=j % 2, wait=1 << (1 - j % 2) if j else 0)
+    return r.link(CHAIN0, CHAIN0).sched(
+        wr_bar=j % 2, wait=1 << (1 - j % 2) if j else 0, delay=e.BARRIER_SET_CYCLES
+    )
 
 
 def chain(recipes: Iterable[Recipe] = VARIABLE_OPS) -> list[dict]:

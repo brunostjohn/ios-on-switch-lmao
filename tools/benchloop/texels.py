@@ -18,13 +18,59 @@ def round_half_even(x: Fraction) -> int:
     return floor + (rest > Fraction(1, 2) or (rest == Fraction(1, 2) and floor % 2 == 1))
 
 
+def ties_down(x: Fraction) -> int:
+    return math.ceil(x - Fraction(1, 2))
+
+
+def gm20b(v: float, top: int) -> int:
+    """GM20B's store (measured): v truncated to n + 4 fractional bits, then rounded to nearest with ties down."""
+    shift = top.bit_length() + 4
+    u = math.floor(Fraction(v) * (1 << shift))
+    return (u * top + (1 << (shift - 1)) - 1) >> shift
+
+
 # float -> unorm code models the ROP experiments tell apart: each takes the f32's exact value and the code's maximum.
-# Nearest needs no tie rule: with 2^n - 1 codes the only exact tie is 0.5, where even and away agree.
+# Exactly, v * top only ties at v = 0.5; the f32_mul_ models round the product to f32 first, which makes more ties.
 ROUNDING: dict[str, Callable[[float, int], int]] = {
     'nearest': lambda v, top: round_half_even(Fraction(v) * top),
+    'nearest_ties_down': lambda v, top: ties_down(Fraction(v) * top),
     'truncate': lambda v, top: math.floor(Fraction(v) * top),
     'f32_mul_add_half': lambda v, top: math.floor(f32(f32(v * top) + 0.5)),
+    'f32_mul_even': lambda v, top: round_half_even(Fraction(f32(v * top))),
+    'f32_mul_ties_down': lambda v, top: ties_down(Fraction(f32(v * top))),
+    'gm20b': gm20b,
 }
+# RGB10A2's 2-bit alpha is the top two bits of the 10-bit code
+NARROW_FROM = {2: 10}
+
+
+def _half_rne(v: float) -> int:
+    try:
+        return struct.unpack('<H', struct.pack('<e', v))[0]
+    except OverflowError:
+        return 0xFC00 if v < 0 else 0x7C00
+
+
+def _half_rtz(v: float) -> int:
+    h = _half_rne(v)
+    if h & 0x7FFF >= 0x7C00:
+        return (h & 0x8000) | 0x7BFF
+    if abs(struct.unpack('<e', struct.pack('<H', h))[0]) > abs(v):
+        h -= 1
+    return h
+
+
+# f32 -> half models for an RGBA16F target: round to nearest even, or toward zero (largest finite on overflow)
+HALF_ROUNDING: dict[str, Callable[[float], int]] = {'rne': _half_rne, 'rtz': _half_rtz}
+
+
+def half_bits(value: float, model: str) -> int:
+    v = f32(value)
+    if math.isnan(v):
+        return 0x7E00
+    if math.isinf(v):
+        return 0xFC00 if v < 0 else 0x7C00
+    return HALF_ROUNDING[model](v)
 
 
 def f32(x: float) -> float:
@@ -37,6 +83,9 @@ def unorm(v: float, bits: int, rounding: str = 'nearest') -> int:
         return 0
     if v >= 1:
         return top
+    if rounding == 'gm20b' and bits in NARROW_FROM:
+        wide = NARROW_FROM[bits]
+        return unorm(v, wide, rounding) >> (wide - bits)
     return min(top, ROUNDING[rounding](f32(v), top))
 
 
