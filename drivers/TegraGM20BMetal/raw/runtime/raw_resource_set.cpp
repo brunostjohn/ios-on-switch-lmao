@@ -109,6 +109,20 @@ bool ResourceSet::add(Kernel &k, std::initializer_list<Candidate> candidates, bo
     return true;
 }
 
+void ResourceSet::promote(Kernel &k, uint64_t handle)
+{
+    std::lock_guard<std::mutex> l(lock_);
+    bool changed = false;
+    for (SetMember &m : members_)
+        if (m.handle == handle && !(m.access & TegraGM20BSurfaceWrite)) {
+            m.access |= TegraGM20BSurfaceWrite;
+            changed = true;
+        }
+    if (changed && !registerLocked(k))
+        os_log_error(setLog(), "raw: the resource set was not made again for a written member (%{public}s)",
+                     k.error().c_str());
+}
+
 void ResourceSet::free(Kernel &k, Bo &bo)
 {
     std::lock_guard<std::mutex> l(lock_);

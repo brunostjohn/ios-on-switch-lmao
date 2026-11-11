@@ -45,7 +45,7 @@ bool Device::bindArena(Arena &a)
     }
     Bo alias = a.bo;
     alias.va = alias.vaBase = a.bufferVa;
-    set_.add(k_, {{&a.bo, TegraGM20BSurfaceWrite}, {&alias, TegraGM20BSurfaceWrite}});
+    set_.add(k_, {{&a.bo, TegraGM20BSurfaceRead}, {&alias, TegraGM20BSurfaceRead}});
     RAW_DIAGNOSTIC(stats.poolBytes += a.bytes);
     return true;
 }

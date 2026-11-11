@@ -69,6 +69,10 @@ public:
         return add(k, {{&bo, access}}, always);
     }
 
+    // A read member a job is about to write becomes a written one (the set made again). Members start as read where the CPU
+    // may lease them, so a CPU read lease of a member the GPU never wrote does not wait for the set's jobs.
+    void promote(Kernel &k, uint64_t handle);
+
     // Kernel::free of `bo`, a member or not; a member leaves the set first.
     void free(Kernel &k, Bo &bo);
 

@@ -1071,7 +1071,7 @@ bool Device::newChunk(uint64_t size, bool dedicated, std::unique_lock<std::mutex
         ch.free[0] = size;
         poolFree_ += size;
     }
-    set_.add(k_, ch.bo, TegraGM20BSurfaceWrite);
+    set_.add(k_, ch.bo, TegraGM20BSurfaceRead);
     chunks_[c] = std::move(ch);
     RAW_DIAGNOSTIC(stats.poolBytes += size);
     RAW_DIAGNOSTIC(stats.poolChunks++);
@@ -2338,7 +2338,7 @@ bool Device::wcAlloc(uint64_t bytes, Span &s)
         Chunk ch;
         if (!k_.alloc(size, true, ch.bo))
             return false;  // the GPU pool is full: pool memory instead (createBuffer)
-        set_.add(k_, ch.bo, TegraGM20BSurfaceWrite);
+        set_.add(k_, ch.bo, TegraGM20BSurfaceRead);
         ch.memory = ch.bo.cpu;
         ch.bytes = size;
         ch.dedicated = dedicated;
@@ -3496,6 +3496,8 @@ bool CommandBuffer::useMember(uint64_t va, uint64_t bytes, bool write, bool host
     const SetMember *m = dev_->member(va, bytes);
     if (!m)
         return false;
+    if (write && !(m->access & TegraGM20BSurfaceWrite))
+        dev_->set_.promote(dev_->k_, m->handle);
     memberUses_.push_back({m->handle, write ? uint32_t(TegraGM20BSurfaceWrite) : uint32_t(TegraGM20BSurfaceRead)});
     memberHostWritten_ |= hostWritten;
     return true;
