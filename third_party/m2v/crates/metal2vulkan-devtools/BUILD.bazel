@@ -1,6 +1,10 @@
 load("@rules_rust//rust:defs.bzl", "rust_library")
+load("//bazel/lint:defs.bzl", "lint_files")
+load("//bazel/rust:defs.bzl", "THIRD_PARTY_LINT_EXCLUDE")
 
 package(default_visibility = ["//visibility:public"])
+
+lint_files(exclude = THIRD_PARTY_LINT_EXCLUDE)
 
 rust_library(
     name = "metal2vulkan-devtools",
