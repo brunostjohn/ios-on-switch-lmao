@@ -41,6 +41,8 @@ struct ExecutionAttribution {
 
 // A range never crosses an event. Adjacent passes of one backend can share a submission, but an event's exact position
 // is retained even when no encoder exists on either side. The caller supplies complete encoder ranges, not draw fragments.
+// Every wait is one the GPU may take (gpuWait): the next raw range's job carries it, or a job of its own does before
+// signals, m2v work or the command buffer's end (RawMetalEventJobs.h submitWaitJob).
 class ExecutionPlan {
     std::vector<ExecutionRange> ranges_;
 
@@ -52,12 +54,8 @@ public:
         const bool work = kind == ExecutionKind::native || kind == ExecutionKind::compatibility;
         if (work && !ranges_.empty() && ranges_.back().kind == kind && ranges_.back().to == from)
             ranges_.back().to = to;
-        else {
-            ranges_.push_back({from, to, kind});
-            if (kind == ExecutionKind::native)
-                for (size_t at = ranges_.size() - 1; at && ranges_[at - 1].kind == ExecutionKind::wait; --at)
-                    ranges_[at - 1].gpuWait = true;
-        }
+        else
+            ranges_.push_back({from, to, kind, kind == ExecutionKind::wait});
     }
 
     const std::vector<ExecutionRange> &ranges() const

@@ -5,11 +5,21 @@
 #include "raw_order.h"
 
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
-static std::atomic<uint64_t> gSignalJobs{0};
+static std::atomic<uint64_t> gSignalJobs{0}, gWaitJobs{0}, gPromiseWaits{0};
 
 uint64_t eventJobsSubmitted()
 {
     return gSignalJobs.load(std::memory_order_relaxed);
+}
+
+uint64_t waitJobsSubmitted()
+{
+    return gWaitJobs.load(std::memory_order_relaxed);
+}
+
+uint64_t promiseWaitsRetired()
+{
+    return gPromiseWaits.load(std::memory_order_relaxed);
 }
 #endif
 
@@ -52,23 +62,29 @@ static void eventJobFailure(RMCommandBuffer *cb, int result)
                    }];
 }
 
-RMEventJob submitEventJobs(RMCommandBuffer *cb)
+// The leasable signals no job carries from `at` (raw::signalJobRanges), with their events
+static std::vector<size_t> carriedSignals(RMCommandBuffer *cb, size_t at, std::vector<TegraGM20BAbiEventUse> &signals,
+                                          std::vector<std::shared_ptr<raw::SharedEventLease>> &leases)
 {
-    RawState &r = *gRM;
-    const size_t head = cb->_segNext;
-    std::vector<raw::EventRangeView> views(head);
-    for (size_t at = head; at < cb->_segs.size() && cb->_segs[at].event; at++)
-        views.push_back(viewOf(cb, at));
-    const std::vector<size_t> carried = raw::signalJobRanges(views, head);
-    if (carried.empty())
-        return RMEventJob::None;
-    std::vector<std::shared_ptr<raw::SharedEventLease>> leases;
-    std::vector<TegraGM20BAbiEventUse> signals;
-    for (size_t at : carried) {
-        const Cmd c = cb->_plan.legacy(cb->_segs[at].from);
+    std::vector<raw::EventRangeView> views(at);
+    for (size_t i = at; i < cb->_segs.size() && cb->_segs[i].event; i++)
+        views.push_back(viewOf(cb, i));
+    const std::vector<size_t> carried = raw::signalJobRanges(views, at);
+    for (size_t i : carried) {
+        const Cmd c = cb->_plan.legacy(cb->_segs[i].from);
         leases.push_back(sharedEventLease((__bridge id)c.obj));
         signals.push_back({leases.back()->handle(), c.c});
     }
+    return carried;
+}
+
+// `waits` then `signals` in jobs of no pushes, ordered after the m2v work committed before them and checked against this
+// channel's producers; the head range then retires with the last job
+static RMEventJob submitJobs(RMCommandBuffer *cb, const std::vector<TegraGM20BAbiEventUse> &waits,
+                             const std::vector<TegraGM20BAbiEventUse> &signals, const std::vector<size_t> &carried)
+{
+    RawState &r = *gRM;
+    const size_t head = cb->_segNext;
     const bool ordering = r.gpuOrder && r.m2vSinceRaw;
     if (ordering) {
         uint32_t acquires = 0;
@@ -77,7 +93,7 @@ RMEventJob submitEventJobs(RMCommandBuffer *cb)
         case raw::OrderAnswer::ordered:
             break;
         case raw::OrderAnswer::refused:
-            orderRefused("event signal after m2v", kr);
+            orderRefused("event job after m2v", kr);
             return RMEventJob::Retry;
         case raw::OrderAnswer::noChannel:
             eventJobFailure(cb, kr);
@@ -88,11 +104,13 @@ RMEventJob submitEventJobs(RMCommandBuffer *cb)
     const uint64_t generation = r.raw->channelGeneration();
     if (validateNativeEventWaits(cb, generation) != raw::EventDependencyState::ready)
         return RMEventJob::Retry;
-    uint32_t seqno = 0;
-    for (size_t from = 0; from < signals.size(); from += TegraGM20BMaxJobEvents) {
-        const uint32_t count = uint32_t(std::min<size_t>(signals.size() - from, TegraGM20BMaxJobEvents));
+    uint32_t seqno = r.raw->submitted();
+    for (const raw::EventJobSlice &slice : raw::eventJobSlices(waits.size(), signals.size(), TegraGM20BMaxJobEvents)) {
         int result = KERN_SUCCESS;
-        if (!r.raw->eventJob({nullptr, signals.data() + from, 0, count}, seqno, &result, generation)) {
+        const raw::JobEvents events{slice.waits ? waits.data() + slice.firstWait : nullptr,
+                                    slice.signals ? signals.data() + slice.firstSignal : nullptr, slice.waits,
+                                    slice.signals};
+        if (!r.raw->eventJob(events, seqno, &result, generation)) {
             if (raw::eventJobAnswer(result) != raw::EventJobAnswer::reordered)
                 eventJobFailure(cb, result);
             return RMEventJob::Retry;
@@ -108,7 +126,35 @@ RMEventJob submitEventJobs(RMCommandBuffer *cb)
     cb->_rangeQuiet = false;
     retireRawRange(cb, cb->_segs[head].from, cb->_segs[head].to);
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
-    gSignalJobs.fetch_add(1, std::memory_order_relaxed);
+    gSignalJobs.fetch_add(!signals.empty(), std::memory_order_relaxed);
+    gWaitJobs.fetch_add(!waits.empty(), std::memory_order_relaxed);
+    gPromiseWaits.fetch_add(waits.empty() && signals.empty(), std::memory_order_relaxed);
 #endif
     return RMEventJob::Submitted;
+}
+
+RMEventJob submitEventJobs(RMCommandBuffer *cb)
+{
+    std::vector<TegraGM20BAbiEventUse> signals;
+    std::vector<std::shared_ptr<raw::SharedEventLease>> leases;
+    const std::vector<size_t> carried = carriedSignals(cb, cb->_segNext, signals, leases);
+    if (carried.empty())
+        return RMEventJob::None;
+    return submitJobs(cb, {}, signals, carried);
+}
+
+RMEventJob submitWaitJob(RMCommandBuffer *cb)
+{
+    const size_t next = cb->_segNext + 1;
+    if (next < cb->_segs.size() &&
+        (cb->_segs[next].raw || (cb->_segs[next].event && cb->_plan.legacy(cb->_segs[next].from).op == OpWaitEvent)))
+        return RMEventJob::None;
+    std::vector<TegraGM20BAbiEventUse> waits, signals;
+    for (const auto &wait : cb->_sharedEventWaits)
+        waits.push_back({wait.lease->handle(), wait.value});
+    std::vector<std::shared_ptr<raw::SharedEventLease>> leases;
+    const std::vector<size_t> carried = carriedSignals(cb, next, signals, leases);
+    if (waits.empty() && cb->_gpuEventWaits.empty())
+        return RMEventJob::None;
+    return submitJobs(cb, waits, signals, carried);
 }
