@@ -190,6 +190,7 @@ TESTS: dict[str, bool] = {
     'input.focus_idle': False,
     'input.rail': False,
     'input.joycon_idle': False,
+    'input.joycon_probe': True,
     'gpu.texture.kinds': False,
     'system.union_readdir': False,
     'system.overlay_apps': False,

@@ -175,6 +175,7 @@
 #include "SwitchJoyConCadence.h"
 #include "SwitchJoyConForward.h"
 #include "SwitchJoyConPairingSlot.h"
+#include "SwitchJoyConProbe.h"
 #include "SwitchJoyConRailPacket.h"
 #include "SwitchJoyConRxRing.h"
 #include "SwitchJoyConSession.h"
@@ -581,6 +582,9 @@ OSDefineMetaClassAndStructors(SwitchJoyConPairing, IOService)
         // the subcommand of the rail's own whose reply is not the HID device's.
         bool imuOff;
         uint8_t ownReply;
+#if DEVELOPMENT || DEBUG
+        switch_joycon_probe probe;  // HW Test's (SwitchJoyConProbe.h): it holds the requests while it runs
+#endif
         // Work loop: the last packet sent was a rumble report (the next reply does not send another), and when the last
         // rumble report went out.
         bool rumbleSent;
@@ -701,6 +705,11 @@ OSDefineMetaClassAndStructors(SwitchJoyConPairing, IOService)
     void armPoll();
     void tick(Side &s);
     static bool ownReplyTaken(Side &s, const uint8_t *report, size_t length);
+    static bool probing(const Side &s);
+#if DEVELOPMENT || DEBUG
+    static bool probeTick(Side &s);
+    static bool probePacket(Side &s, const uint8_t *packet, size_t length, uint64_t now);
+#endif
     static void rumbleAfterReply(Side &s);
     void detach(Side &s);
     static void pause(Side &s);
@@ -722,6 +731,12 @@ public:
     void bluetoothAddress(const uint8_t address[6]);
     // kern.switch_joycon (debug kernels): each rail's state and counters since boot, for hw_test_app's input.rail.
     void statsLine(char *buffer, size_t size) const;
+#if DEVELOPMENT || DEBUG
+    // debug.switch_joycon_probe (SwitchJoyConProbe.h): start it on every running Joy-Con (0, EBUSY or ENODEV), and its
+    // state: "idle", "running" with each rail's stage, or "done" with each rail's results.
+    int probeStart();
+    void probeState(char *buffer, size_t size);
+#endif
 };
 
 OSDefineMetaClassAndStructors(SwitchJoyConRail, IOService)
@@ -1141,7 +1156,7 @@ void SwitchJoyConRail::uartAction(OSObject *owner, IOInterruptEventSource *sende
 void SwitchJoyConRail::received(Side &s, const uint8_t *packet, size_t length)
 {
     const uint64_t now = switch_now_ms();
-    if (s.phase == kRunning && s.unanswered == 0 && !s.rumbleSent)
+    if (s.phase == kRunning && s.unanswered == 0 && !s.rumbleSent && !probing(s))
         ++s.unsolicited;
     if (s.phase == kRunning && s.silentMs > kQuietMS) {
         IOLog("SwitchJoyCon: Joy-Con (%c) on the rail answered again after %u requests unanswered over %llu ms (line "
@@ -1169,6 +1184,10 @@ void SwitchJoyConRail::received(Side &s, const uint8_t *packet, size_t length)
             calibrationReply(s, packet + kHeader, length - kHeader);
         break;
     case kRunning:
+#if DEVELOPMENT || DEBUG
+        if (probePacket(s, packet, length, now))
+            break;
+#endif
         if (cmd == kCmdExtRet && length > kHeader)
             runningReport(s, packet + kHeader, length - kHeader);
         break;
@@ -1896,7 +1915,7 @@ void SwitchJoyConRail::armPoll()
         if (s.phase != kRunning)
             continue;
         polling = true;
-        if (switch_joycon_cadence_interval(&s.cadence) < interval)
+        if (probing(s) || switch_joycon_cadence_interval(&s.cadence) < interval)
             interval = SWITCH_JOYCON_CADENCE_ACTIVE_MS;
     }
     if (polling)
@@ -1922,6 +1941,10 @@ void SwitchJoyConRail::tick(Side &s)
     takeTail(s);
     if (s.phase != kRunning)
         return;
+#if DEVELOPMENT || DEBUG
+    if (probeTick(s))
+        return;
+#endif
     if (s.silentMs >= kSilentMS) {
         checkDelivery(s, "no reply to the requests of a whole silence");
         // Pulled off the rail, or the HID phase does not work (0 reports): either way it is handshaken again if seated.
@@ -2064,6 +2087,60 @@ bool SwitchJoyConRail::ownReplyTaken(Side &s, const uint8_t *report, size_t leng
     s.ownReply = 0;
     return true;
 }
+
+bool SwitchJoyConRail::probing(const Side &s)
+{
+#if DEVELOPMENT || DEBUG
+    return s.probe.active;
+#else
+    (void)s;
+    return false;
+#endif
+}
+
+#if DEVELOPMENT || DEBUG
+// A stage the tick moved past is one log line, the decider of its question (SwitchJoyConProbe.h).
+bool SwitchJoyConRail::probeTick(Side &s)
+{
+    const switch_joycon_probe_stage *stage = nullptr;
+    const unsigned at = s.probe.stage;
+    const uint8_t action = switch_joycon_probe_tick(&s.probe, switch_now_ms(), &stage);
+    if (s.probe.stage != at) {
+        char line[320];
+        (void)switch_joycon_probe_format(&s.probe, at, line, sizeof(line));
+        os_log(OS_LOG_DEFAULT, "SwitchJoyCon: probe Joy-Con (%c) %s", s.cfg->letter, line);
+    }
+    switch (action) {
+    case SWITCH_JOYCON_PROBE_OFF:
+        return false;
+    case SWITCH_JOYCON_PROBE_REQUEST: {
+        const uint8_t request = kRequestInput;
+        sendReport(s, &request, 1);
+        break;
+    }
+    case SWITCH_JOYCON_PROBE_INIT: {
+        const uint8_t rate[4] = {stage->argument, 0, 0, 0};
+        sendCommand(s, stage->command, stage->command == kInitHidRate ? rate : nullptr,
+                    stage->command == kInitHidRate ? sizeof(rate) : 0);
+        break;
+    }
+    case SWITCH_JOYCON_PROBE_MODE:
+        sendSubcommand(s, stage->command, &stage->argument, 1);
+        break;
+    default:
+        break;
+    }
+    return true;
+}
+
+bool SwitchJoyConRail::probePacket(Side &s, const uint8_t *packet, size_t length, uint64_t now)
+{
+    if (!s.probe.active)
+        return false;
+    switch_joycon_probe_packet(&s.probe, packet, length, now);
+    return true;
+}
+#endif
 
 void SwitchJoyConRail::detach(Side &s)
 {
@@ -2509,6 +2586,44 @@ void SwitchJoyConRail::statsLine(char *buffer, size_t size) const
     }
 }
 
+#if DEVELOPMENT || DEBUG
+int SwitchJoyConRail::probeStart()
+{
+    int result = ENODEV;
+    loop->runAction(
+        [](OSObject *owner, void *out, void *, void *, void *) -> IOReturn {
+            auto *self = static_cast<SwitchJoyConRail *>(owner);
+            int &result = *static_cast<int *>(out);
+            for (const Side &s : self->sides) {
+                if (s.probe.active)
+                    result = EBUSY;
+            }
+            for (Side &s : self->sides) {
+                if (result != EBUSY && s.phase == kRunning) {
+                    switch_joycon_probe_start(&s.probe);
+                    result = 0;
+                }
+            }
+            return kIOReturnSuccess;
+        },
+        this, &result);
+    return result;
+}
+
+void SwitchJoyConRail::probeState(char *buffer, size_t size)
+{
+    loop->runAction(
+        [](OSObject *owner, void *out, void *room, void *, void *) -> IOReturn {
+            auto *self = static_cast<SwitchJoyConRail *>(owner);
+            const switch_joycon_probe *probes[2] = {&self->sides[0].probe, &self->sides[1].probe};
+            const char letters[2] = {self->sides[0].cfg->letter, self->sides[1].cfg->letter};
+            switch_joycon_probe_state(probes, letters, 2, static_cast<char *>(out), *static_cast<size_t *>(room));
+            return kIOReturnSuccess;
+        },
+        this, buffer, &size);
+}
+#endif
+
 static SwitchJoyConRail *gRail;  // set once at start, for switch_joycon_suspend/resume
 
 #if DEVELOPMENT || DEBUG
@@ -2520,8 +2635,35 @@ static int statsSysctl(struct sysctl_oid *, void *, int, struct sysctl_req *req)
     return SYSCTL_OUT(req, line, strlen(line) + 1);
 }
 
+// Any write starts the probe; a read is its state (SwitchJoyConRail::probeState).
+static int probeSysctl(struct sysctl_oid *, void *, int, struct sysctl_req *req)
+{
+    constexpr size_t kSize = 8192;
+    SwitchJoyConRail *rail = __atomic_load_n(&gRail, __ATOMIC_ACQUIRE);
+    if (!rail)
+        return ENODEV;
+    if (req->newptr) {
+        if (const int error = rail->probeStart())
+            return error;
+    }
+    auto *line = static_cast<char *>(IOMallocData(kSize));
+    if (!line)
+        return ENOMEM;
+    rail->probeState(line, kSize);
+    const int error = SYSCTL_OUT(req, line, strlen(line) + 1);
+    IOFreeData(line, kSize);
+    return error;
+}
+
 static void registerStats()
 {
+    static struct sysctl_oid probe;
+    if (!probe.oid_name) {
+        switch_sysctl_oid(&probe, &sysctl__debug_children, "switch_joycon_probe",
+                          static_cast<int>(CTLTYPE_STRING | CTLFLAG_RW | CTLFLAG_ANYBODY | CTLFLAG_LOCKED), probeSysctl,
+                          "A", "rail Joy-Con protocol probe: write to start, read for its state and results");
+        sysctl_register_oid(&probe);
+    }
     static struct sysctl_oid oid;
     if (oid.oid_name)
         return;

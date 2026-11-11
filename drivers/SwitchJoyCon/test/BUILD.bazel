@@ -7,8 +7,8 @@
 # (SwitchJoyConPairingSlot.h); the rail's packets and pairing request against Horizon's captured attach
 # (SwitchJoyConRailPacket.h); that the pairing opens every rail session and joyconpaird hands each rail key on
 # (SwitchJoyConRail.cpp, helper/joyconpaird.c); which game-controller personalities each kernel's build adds
-# (SwitchJoyConHID.cpp); and joyconpaird's rules for importing Horizon's staged pairing dump
-# (helper/joycon_pairing_import.h).
+# (SwitchJoyConHID.cpp); joyconpaird's rules for importing Horizon's staged pairing dump
+# (helper/joycon_pairing_import.h); and the rail probe's stages against model Joy-Cons (SwitchJoyConProbe.h).
 #
 #   bazel test //drivers/SwitchJoyCon/test:all
 load("//bazel/lint:defs.bzl", "lint_files")
@@ -58,6 +58,17 @@ host_library(
     "stick",
     "use",
 ]]
+
+host_library(
+    name = "probe",
+    hdrs = ["//drivers/SwitchJoyCon:SwitchJoyConProbe.h"],
+)
+
+host_test(
+    name = "switch_joycon_probe_test",
+    srcs = ["switch_joycon_probe_test.cpp"],
+    deps = [":probe"],
+)
 
 host_library(
     name = "pairing_slot",
