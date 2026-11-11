@@ -7,14 +7,15 @@
 
 // What raw::RenderEncoder::selfRuns refuses of a draw that fetches a color it writes before it reads any geometry
 // (raw_fetch_order.h), decided as the draw is recorded: its encoder goes to m2v, the command buffer's others stay raw
-static void checkFetch(RMRenderEncoder *e, MTLPrimitiveType type, NSUInteger count, NSUInteger instances, bool indirect)
+static void checkFetch(RMRenderEncoder *e, MTLPrimitiveType type, NSUInteger count, NSUInteger instances, bool indirect,
+                       bool indexed)
 {
     const raw::Pipeline *pl = e->_drawn;
     if (!pl || !e->_pipe || !e->_pipe->_raw || e->_cb->_encRefused)
         return;
     const raw::FetchRefusal refusal =
         raw::fetchRefusal(raw::fetchesOwnColor(pl->fetchBits, pl->writeBits, pl->storageBits), pl->caTransform,
-                          {uint32_t(type), uint32_t(count), uint32_t(instances), indirect});
+                          pl->primitiveId, {uint32_t(type), uint32_t(count), uint32_t(instances), indirect, indexed});
     if (refusal == raw::FetchRefusal::None)
         return;
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
@@ -135,7 +136,7 @@ static void forwardCall(RMEncoder *e, SEL selector, const void *argument)
         hit(_cb, PredEncIndexedRange, offset, indexType == MTLIndexTypeUInt16 ? 2 : 4);
     }
     [self checkDraw];
-    checkFetch(self, type, count, instances, false);
+    checkFetch(self, type, count, instances, false, true);
     if (buffer)
         [_cb retain:buffer];
     Cmd m = cmd(OpDrawIndexed, uint8_t(type));
@@ -391,7 +392,7 @@ static void forwardCall(RMEncoder *e, SEL selector, const void *argument)
 {
     SWITCH_API(ApiDraw);
     [self checkDraw];
-    checkFetch(self, type, count, instances, false);
+    checkFetch(self, type, count, instances, false, false);
     Cmd m = cmd(OpDraw, uint8_t(type));
     m.a = uint32_t(start);
     m.b = uint32_t(count);
@@ -461,7 +462,7 @@ static void forwardCall(RMEncoder *e, SEL selector, const void *argument)
         hit(_cb, PredEncIndexedRange, offset, bytes);
     }
     [self checkDraw];
-    checkFetch(self, type, 0, 1, true);
+    checkFetch(self, type, 0, 1, true, indexed);
     [_cb retain:arguments];
     [_cb retain:indices];
     Cmd operation = cmd(indexed ? OpDrawIndexedIndirect : OpDrawIndirect, uint8_t(type));

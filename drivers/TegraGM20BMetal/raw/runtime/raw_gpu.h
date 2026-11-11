@@ -706,6 +706,7 @@ private:
     Pipeline *formFor(Pipeline *pl);
     const Runs *selfRuns(const Pipeline &pl, uint32_t primitive, int32_t first, uint32_t count, uint32_t instances,
                          const char **why);
+    const Runs *sequentialRuns(const Pipeline &pl, const FetchDraw &shape, Runs &runs, const char **why);
     const Runs *refuseFetch(const Pipeline &pl, FetchRefusal refusal, uint32_t primitive, uint32_t count,
                             uint32_t instances, const char **why);
     const uint8_t *drawIndices_ = nullptr;

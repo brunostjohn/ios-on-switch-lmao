@@ -855,9 +855,12 @@ host_test(
     srcs = [
         "raw_overlap_test.cpp",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_bounds.h",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_fetch_order.h",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_key_tally.h",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_overlap.h",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_region.h",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_geometry.h",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_storage_form.h",
     ],
     cxx_std = "c++17",
 )

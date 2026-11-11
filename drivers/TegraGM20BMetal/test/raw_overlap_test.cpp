@@ -346,6 +346,8 @@ TEST(RawOverlap, SequentialPlanRefusesUnknownRestartAndInstanceOrdering)
     std::array<bool, raw::TriangleRuns::kMaxTriangles> winding;
     EXPECT_FALSE(raw::TriangleRuns::sequential(4, 6, 1, true, runs, winding));
     EXPECT_TRUE(runs.empty());
+    ASSERT_TRUE(raw::TriangleRuns::sequential(3, 9, 1, true, runs, winding));
+    EXPECT_EQ(runs, (Runs{{0, 3}, {3, 6}, {6, 9}}));
     EXPECT_FALSE(raw::TriangleRuns::sequential(3, 6, 2, false, runs, winding));
     EXPECT_FALSE(raw::TriangleRuns::sequential(2, 6, 1, false, runs, winding));
     EXPECT_FALSE(raw::TriangleRuns::sequential(4, UINT32_MAX, 1, false, runs, winding));

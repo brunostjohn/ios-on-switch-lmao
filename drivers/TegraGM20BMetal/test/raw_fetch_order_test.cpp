@@ -8,9 +8,9 @@ using raw::FetchRefusal;
 
 constexpr uint32_t kPoint = 0, kLine = 1, kLineStrip = 2, kTriangle = 3, kStrip = 4;
 
-FetchRefusal refusal(bool fetchesOwn, bool caTransform, FetchDraw draw)
+FetchRefusal refusal(bool fetchesOwn, bool caTransform, FetchDraw draw, bool primitiveId = false)
 {
-    return raw::fetchRefusal(fetchesOwn, caTransform, draw);
+    return raw::fetchRefusal(fetchesOwn, caTransform, primitiveId, draw);
 }
 
 TEST(FetchOrder, OnlyAColorFetchedAndWrittenOutsideTheInterlockCounts)
@@ -41,14 +41,29 @@ TEST(FetchOrder, OnePrimitiveIsDrawnWholeWhateverItsTransform)
     EXPECT_EQ(refusal(true, false, {kTriangle, 6, 0}), FetchRefusal::None);
 }
 
-// The device's refused shape: a list of six, one instance. Core Animation's transform leaves it to submission, where the
-// CPU reads its vertices if it can; anything else has nothing the CPU can bound.
-TEST(FetchOrder, AQuadIsRefusedAsRecordedOnlyWithoutCoreAnimationsTransform)
+// The device's refused shapes (backboardd's list of six, SpringBoard's and iconservicesagent's strips of four, HW Test's
+// list of 36): drawn a triangle at a time whatever their transform, no vertex read
+TEST(FetchOrder, ListsAndStripsAreDrawnATriangleAtATimeWhateverTheirTransform)
 {
-    EXPECT_EQ(refusal(true, false, {kTriangle, 6, 1}), FetchRefusal::Transform);
-    EXPECT_EQ(refusal(true, true, {kTriangle, 6, 1}), FetchRefusal::None);
-    EXPECT_EQ(refusal(true, false, {kStrip, 4, 1}), FetchRefusal::Transform);
-    EXPECT_EQ(refusal(true, true, {kStrip, 4, 1}), FetchRefusal::None);
+    for (bool ca : {false, true}) {
+        EXPECT_EQ(refusal(true, ca, {kTriangle, 6, 1}), FetchRefusal::None);
+        EXPECT_EQ(refusal(true, ca, {kStrip, 4, 1}), FetchRefusal::None);
+        EXPECT_EQ(refusal(true, ca, {kTriangle, 36, 1}), FetchRefusal::None);
+        EXPECT_EQ(refusal(true, ca, {kTriangle, 6, 1, false, true}), FetchRefusal::None);
+    }
+}
+
+TEST(FetchOrder, WithoutCoreAnimationsTransformOnlyWhatOneTriangleADrawCannotKeepIsRefused)
+{
+    EXPECT_EQ(refusal(true, false, {kStrip, 4, 1, false, true}), FetchRefusal::Restart);
+    EXPECT_EQ(refusal(true, false, {kTriangle, 3 * raw::kSequentialTriangles, 1}), FetchRefusal::None);
+    EXPECT_EQ(refusal(true, false, {kTriangle, 3 * raw::kSequentialTriangles + 3, 1}), FetchRefusal::Long);
+    EXPECT_EQ(refusal(true, false, {kStrip, raw::kSequentialTriangles + 3, 1}), FetchRefusal::Long);
+    EXPECT_EQ(refusal(true, false, {kTriangle, 6, 1}, true), FetchRefusal::PrimitiveId);
+    EXPECT_EQ(refusal(true, false, {kTriangle, 3, 1}, true), FetchRefusal::None);
+    // Core Animation's transform is left to submission, where its runs may be proven longer than one triangle
+    EXPECT_EQ(refusal(true, true, {kStrip, 4, 1, false, true}), FetchRefusal::None);
+    EXPECT_EQ(refusal(true, true, {kTriangle, 6, 1}, true), FetchRefusal::None);
 }
 
 TEST(FetchOrder, InstancesTopologyAndIndirectCountsAreRefusedAsRecorded)
@@ -68,10 +83,18 @@ TEST(FetchOrder, TheReasonsKeepTheEncodeLinesWording)
 {
     EXPECT_STREQ(raw::fetchRefusalWhy(FetchRefusal::Indirect),
                  "indirect framebuffer-fetch draws require an interlocked program");
-    for (FetchRefusal r :
-         {FetchRefusal::Topology, FetchRefusal::Instances, FetchRefusal::Transform, FetchRefusal::Geometry})
+    for (FetchRefusal r : {FetchRefusal::Topology, FetchRefusal::Instances, FetchRefusal::Restart, FetchRefusal::Long,
+                           FetchRefusal::PrimitiveId, FetchRefusal::Geometry})
         EXPECT_STREQ(raw::fetchRefusalWhy(r),
                      "framebuffer-fetch ordering requires an interlocked program or available bounded geometry");
+}
+
+TEST(FetchOrder, EveryReasonHasALogName)
+{
+    for (size_t r = 0; r < raw::kFetchRefusals; r++)
+        EXPECT_NE(raw::kFetchRefusalNames[r], nullptr);
+    EXPECT_STREQ(raw::kFetchRefusalNames[size_t(FetchRefusal::Restart)], "restart");
+    EXPECT_STREQ(raw::kFetchRefusalNames[size_t(FetchRefusal::Geometry)], "geometry");
 }
 
 }  // namespace

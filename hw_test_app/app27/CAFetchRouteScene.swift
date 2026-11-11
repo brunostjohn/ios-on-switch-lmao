@@ -9,7 +9,8 @@ import Metal
 /// overlapping triangles in one draw over a depth attachment and into four samples. Each pass must match the result of
 /// its triangles applied in order, and on the facade the fetch counters must show how the raw path took them: inside the
 /// pixel interlock (fetch_interlocked), or refused as recorded or at encoding (its encoder then on m2v), or ordered on the
-/// CPU (whole, sequential). A pass that moves none of them did not fetch its own colour.
+/// GPU a triangle a draw (sequential) or on the CPU's proof (whole). A pass that moves none of them did not fetch its own
+/// colour.
 struct CAFetchRouteScene: GPUScene {
     let id = "gpu.ca.fetch_routes"
     let name = "Draws fetching their own colour: instanced, folded strip, depth and multisample routes and pixels"
@@ -118,6 +119,12 @@ struct CAFetchRouteScene: GPUScene {
                 "\(name): no fetch counter moved: the pipeline did not fetch the colour it writes")
             if interlocked == 0 && refused > 0 {
                 result.expect(!timing.path.hasPrefix("raw"), "\(name): refused, yet drawn raw: \(timing.path)")
+            }
+            // twelve overlapping triangles over a depth attachment: one draw each behind the fetch barrier, no vertex read
+            if pass == .depth {
+                result.expect(
+                    timing.path == "raw" && interlocked + moved("fetch_sequential") > 0,
+                    "depth: not ordered on the raw path: \(timing.path) \(RawFacade.fetchRoutes(before: before, after: after))")
             }
             if pass == .instanced && moved("fetch_record.instances") > 0 {
                 result.expect(

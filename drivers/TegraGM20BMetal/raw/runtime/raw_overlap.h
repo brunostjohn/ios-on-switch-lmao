@@ -20,26 +20,28 @@
 #include <utility>
 #include <vector>
 
+#include "raw_fetch_order.h"
 #include "raw_region.h"
 
 namespace raw {
 
 class TriangleRuns {
 public:
-    static constexpr uint32_t kMaxTriangles = 96;
+    static constexpr uint32_t kMaxTriangles = kSequentialTriangles;
 
-    // A direct draw needs no CPU geometry to preserve raster order one triangle at a time. Indexed strips need
-    // their restart positions, and instanced draws need a separate instance-order plan, so neither is admitted here.
-    // Runs retain the original vertex IDs and provoking vertex; restarting an odd strip triangle reverses winding.
+    // A list or strip needs no CPU geometry to preserve raster order one triangle at a time. An indexed strip needs
+    // its restart positions, and instanced draws need a separate instance-order plan, so neither is admitted here.
+    // An indexed list's runs are index ranges. Runs retain the original vertex IDs and provoking vertex; restarting
+    // an odd strip triangle reverses winding.
     static bool sequential(uint32_t primitive, uint32_t count, uint32_t instances, bool indexed,
                            std::vector<std::pair<uint32_t, uint32_t>> &runs,
                            std::array<bool, kMaxTriangles> &winding)
     {
         runs.clear();
         winding.fill(false);
-        if (indexed || instances != 1 || (primitive != 3 && primitive != 4))
-            return false;
         const bool strip = primitive == 4;
+        if ((indexed && strip) || instances != 1 || (primitive != 3 && !strip))
+            return false;
         const uint32_t triangles = strip ? (count > 2 ? count - 2 : 0) : count / 3;
         if (triangles > kMaxTriangles)
             return false;

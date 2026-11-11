@@ -3962,12 +3962,16 @@ const RenderEncoder::Runs *RenderEncoder::selfRuns(const Pipeline &pl, uint32_t 
     static thread_local TriangleRuns triangles;
     runs.clear();
     runWinding_.fill(false);
-    const FetchDraw shape = {primitive, count, instances};
+    const bool indexed = drawIndices_ != nullptr;
+    const FetchDraw shape = {primitive, count, instances, false, indexed};
     const bool fetchesOwn = fetchesOwnColor(pl.fetchBits, pl.writeBits, pl.storageBits);
     if (!fetchesOwn || singlePrimitive(shape))
         return &runs;
-    if (const FetchRefusal refusal = fetchRefusal(fetchesOwn, pl.caTransform, shape); refusal != FetchRefusal::None)
+    if (const FetchRefusal refusal = fetchRefusal(fetchesOwn, pl.caTransform, pl.primitiveId, shape);
+        refusal != FetchRefusal::None)
         return refuseFetch(pl, refusal, primitive, count, instances, why);
+    if (!pl.caTransform)
+        return sequentialRuns(pl, shape, runs, why);
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
     const auto start = std::chrono::steady_clock::now();
 #endif
@@ -3998,22 +4002,27 @@ const RenderEncoder::Runs *RenderEncoder::selfRuns(const Pipeline &pl, uint32_t 
 #else
     (void)told;
 #endif
-    if (!told || (pl.primitiveId && !runs.empty())) {
-        // Imported/GPU-owned geometry can be unavailable to the CPU even for an ordinary CA quad. Keep these
-        // small direct draws native: each triangle is ordered by prepare()'s existing framebuffer-fetch barrier.
-        // No position or index bytes are read, and no unproven non-overlap assumption is made.
-        if (pl.caTransform && !pl.primitiveId &&
-            TriangleRuns::sequential(primitive, count, instances, drawIndices_ != nullptr, runs, runWinding_)) {
-#if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
-            dev_->stats.fetch.sequential++;
-            dev_->stats.fetch.sequentialTriangles += runs.size();
-#endif
-            return &runs;
-        }
-        return refuseFetch(pl, FetchRefusal::Geometry, primitive, count, instances, why);
-    }
+    if (!told || (pl.primitiveId && !runs.empty()))
+        return sequentialRuns(pl, shape, runs, why);
     if (primitive == 4)
         runWinding_ = TriangleRuns::winding(analysis, runs);
+    return &runs;
+}
+
+// A draw whose own triangles may cover a pixel twice, one triangle a run: each is ordered after the one before by
+// prepare()'s framebuffer-fetch barrier, and no position or index byte is read
+const RenderEncoder::Runs *RenderEncoder::sequentialRuns(const Pipeline &pl, const FetchDraw &shape, Runs &runs,
+                                                         const char **why)
+{
+    const FetchRefusal refusal = sequentialRefusal(pl.primitiveId, shape);
+    if (refusal != FetchRefusal::None ||
+        !TriangleRuns::sequential(shape.primitive, shape.count, shape.instances, shape.indexed, runs, runWinding_))
+        return refuseFetch(pl, refusal != FetchRefusal::None ? refusal : FetchRefusal::Geometry, shape.primitive,
+                           shape.count, shape.instances, why);
+#if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
+    dev_->stats.fetch.sequential++;
+    dev_->stats.fetch.sequentialTriangles += runs.size();
+#endif
     return &runs;
 }
 
@@ -4174,7 +4183,7 @@ bool RenderEncoder::indirect(uint32_t primitive, bool indexed, const Buffer *arg
     Pipeline *form = formFor(pipeline_);
     const Pipeline &pl = *form;
     const bool fetchesOwn = fetchesOwnColor(pl.fetchBits, pl.writeBits, pl.storageBits);
-    if (const FetchRefusal refusal = fetchRefusal(fetchesOwn, pl.caTransform, {primitive, 0, 1, true});
+    if (const FetchRefusal refusal = fetchRefusal(fetchesOwn, pl.caTransform, pl.primitiveId, {primitive, 0, 1, true});
         refusal != FetchRefusal::None) {
         refuseFetch(pl, refusal, primitive, 0, 0, why);
         return false;
