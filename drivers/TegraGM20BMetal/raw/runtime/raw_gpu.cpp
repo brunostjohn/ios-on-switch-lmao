@@ -4613,10 +4613,16 @@ void RenderEncoder::probeGlassDraw(const Pipeline &bound, const Pipeline &drawn,
             const int n = glassProbeUniform(uniforms + at, sizeof uniforms - at, e.stage, e.slot, b.cpu, b.size);
             at += std::min(sizeof uniforms - at - 1, size_t(std::max(n, 0)));
         }
-    char line[900];
-    snprintf(line, sizeof line, "%s k%016llx %s att %s tex %s uni %s box %u,%u-%u,%u", bound.caName,
+    char taps[160] = "";
+    if (glassProbeBlurState(bound.caName)) {
+        const Bound &u = bufs_[2][1];
+        taps[0] = ' ';
+        glassProbeTaps(taps + 1, sizeof taps - 1, u.cpu, u.size);
+    }
+    char line[1000];
+    snprintf(line, sizeof line, "%s k%016llx %s att %s tex %s uni %s box %u,%u-%u,%u%s", bound.caName,
              (unsigned long long)rec.keyHash, form, attachments, sampled, uniforms, limit.x0, limit.y0, limit.x1,
-             limit.y1);
+             limit.y1, taps);
     if (!glassProbeFirst(cb_, line) || gGlassProbeLines.fetch_sub(1, std::memory_order_relaxed) <= 0)
         return;
     os_log(os_log_create("com.brunostjohn.switch.TegraGM20BMetal", "raw"), "raw: glass draw g%u cb %06llx %{public}s",

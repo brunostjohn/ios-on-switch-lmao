@@ -95,3 +95,21 @@ TEST(RawGlassProbe, EachLineOnceACommandBufferAndGeneration)
     raw::disarmGlassProbe();
     EXPECT_FALSE(raw::glassProbeArmed());
 }
+
+TEST(RawGlassProbe, BlurPassesNameTheirWeightedTaps)
+{
+    EXPECT_TRUE(raw::glassProbeBlurState("PRGhAXm_Tds4A2Xhf_Isrc"));
+    EXPECT_TRUE(raw::glassProbeBlurState("PRGhAXm_Tdb2A2Xhf_Isrc"));
+    EXPECT_FALSE(raw::glassProbeBlurState("PBGRAXmw_TimgA3S1Xhfu_IsrcM0"));
+    EXPECT_FALSE(raw::glassProbeBlurState(nullptr));
+    uint8_t u[80] = {};
+    const float offsets[4] = {-0.5f, 0.25f, 0.5f, 0.25f};
+    const _Float16 weights[2] = {_Float16(0.5f), _Float16(0.5f)};
+    memcpy(u, offsets, sizeof offsets);
+    memcpy(u + 64, weights, sizeof weights);
+    char out[160];
+    raw::glassProbeTaps(out, sizeof out, u, sizeof u);
+    EXPECT_STREQ(out, "taps -0.5,0.25:0.5 0.5,0.25:0.5");
+    raw::glassProbeTaps(out, sizeof out, nullptr, 80);
+    EXPECT_STREQ(out, "taps -");
+}
