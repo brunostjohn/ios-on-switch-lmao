@@ -162,3 +162,19 @@ kernel void x1_constant_copy(constant uint *in [[buffer(0)]], device uint *out [
 {
     out[i] = in[i];
 }
+
+/// gpu.x1.subchannel_switch_drain: a BGRA8 texture's codes (red lowest), read by a compute kernel
+kernel void x1_texture_codes_unorm(texture2d<float, access::read> src [[texture(0)]], device uint *out [[buffer(0)]],
+                                   uint2 id [[thread_position_in_grid]])
+{
+    if (id.x < src.get_width() && id.y < src.get_height())
+        out[id.y * src.get_width() + id.x] = pack_float_to_unorm4x8(src.read(id));
+}
+
+/// An RGBA16F texture's halves' bits
+kernel void x1_texture_codes_half(texture2d<half, access::read> src [[texture(0)]], device uint2 *out [[buffer(0)]],
+                                  uint2 id [[thread_position_in_grid]])
+{
+    if (id.x < src.get_width() && id.y < src.get_height())
+        out[id.y * src.get_width() + id.x] = as_type<uint2>(src.read(id));
+}

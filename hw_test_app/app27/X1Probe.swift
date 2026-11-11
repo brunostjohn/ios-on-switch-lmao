@@ -135,7 +135,7 @@ enum X1Probes {
         X1Probe(
             id: "gpu.x1.visibility", name: "Visibility results: counting within and across passes, boolean",
             probe: "d17", body: X1PassProbes.visibility),
-        X1PassBarrierProbe.probe, X1JobBoundaryProbe.probe,
+        X1PassBarrierProbe.probe, X1JobBoundaryProbe.probe, X1SwitchDrainProbe.probe,
         X1RawProbes.blendKills, X1RawProbes.viewportSwizzle, X1IteratedBlendProbe.probe,
         X1VICPitchProbe.probe,
     ]

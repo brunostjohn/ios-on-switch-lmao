@@ -206,6 +206,7 @@ BY_IOS: dict[str, dict[str, bool]] = {
         'gpu.x1.visibility': False,
         'gpu.x1.pass_pixel_barrier': False,
         'gpu.x1.job_boundary_idle': False,
+        'gpu.x1.subchannel_switch_drain': False,
         'gpu.x1.blend_kills': False,
         'gpu.x1.viewport_swizzle': False,
         'gpu.x1.iterated_blend': False,
