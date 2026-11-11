@@ -1,4 +1,7 @@
-// SPDX-License-Identifier: BSD-2-Clause-Patent
+// SPDX-License-Identifier: GPL-2.0-only
+// floorKhz's conversion and ISO efficiency table are NVIDIA's (L4T drivers/platform/tegra/mc/emc_bwmgr-t21x.c):
+// Copyright (c) 2016-2019, NVIDIA CORPORATION. All rights reserved. Licensed under the GNU General Public License
+// version 2, as published by the Free Software Foundation.
 #pragma once
 #include <stdint.h>
 
@@ -49,12 +52,29 @@ inline uint64_t peak(const Demand *planes, unsigned count)
     return maximum;
 }
 
-// BPMP reports the LPDDR4 root clock (twice EMC): 8 bytes per root cycle, with 60% reserved for other traffic.
+// The display's isochronous floor as L4T's T21x bandwidth manager sets it (emc_bwmgr-t21x.c, GPL-2.0, NVIDIA): the rate
+// is the DRAM clock (twice EMC), LPDDR4 is two channels moving 16 bytes per DRAM clock (bw_to_freq), and an isochronous
+// request is divided by the efficiency of the bucket its own clock falls in (bwmgr_t210_lpddr4_iso_eff). Its 70% total
+// efficiency covers non-isochronous traffic, which the ACTMON governor follows instead.
+inline uint32_t isoEfficiencyPercent(uint64_t khz)
+{
+    constexpr uint16_t bucketMhz[] = {5,   10,  20,  30,  40,  60,  80,  100, 120, 140, 160, 180, 200,
+                                      250, 300, 350, 360, 370, 380, 400, 450, 500, 550, 600, 650, 700};
+    constexpr uint8_t lpddr4[] = {56, 56, 56, 56, 56, 56, 56, 56, 56, 56, 56, 56, 56,
+                                  56, 56, 56, 56, 56, 56, 56, 56, 56, 56, 56, 49, 45};
+    unsigned bucket = sizeof(bucketMhz) / sizeof(bucketMhz[0]) - 1;
+    while (bucket && bucketMhz[bucket] > khz / 1000)
+        --bucket;
+    return lpddr4[bucket];
+}
+
 inline uint32_t floorKhz(uint64_t bytesPerSecond)
 {
-    constexpr uint64_t bytesPerKhz = 3200;
+    constexpr uint64_t bytesPerKhz = 16000;
     const uint64_t khz = bytesPerSecond / bytesPerKhz + (bytesPerSecond % bytesPerKhz != 0);
-    return khz > UINT32_MAX ? UINT32_MAX : uint32_t(khz);
+    const uint64_t efficiency = isoEfficiencyPercent(khz);
+    const uint64_t floor = khz > UINT64_MAX / 100 ? UINT64_MAX : (khz * 100 + efficiency - 1) / efficiency;
+    return floor > UINT32_MAX ? UINT32_MAX : uint32_t(floor);
 }
 
 inline unsigned row(const uint32_t *rates, unsigned count, uint64_t bytesPerSecond)

@@ -25,14 +25,26 @@ TEST(DisplayBandwidth, ScalingAndOverflowAreConservative) {
     Demand d[]={{0,0,1,1,UINT64_MAX},{0,0,1,1,1}};
     EXPECT_EQ(peak(d,2),UINT64_MAX);
 }
+TEST(DisplayBandwidth, FloorIsL4TsLpddr4IsochronousRequest) {
+    EXPECT_EQ(floorKhz(312000000),34822u);
+    EXPECT_EQ(floorKhz(1),2u);
+    EXPECT_EQ(isoEfficiencyPercent(4999),56u);
+    EXPECT_EQ(isoEfficiencyPercent(649999),56u);
+    EXPECT_EQ(isoEfficiencyPercent(650000),49u);
+    EXPECT_EQ(isoEfficiencyPercent(700000),45u);
+    EXPECT_EQ(floorKhz(10400000000ULL),1326531u);
+    EXPECT_EQ(floorKhz(11200000000ULL),1555556u);
+    EXPECT_EQ(floorKhz(UINT64_MAX),UINT32_MAX);
+}
 TEST(DisplayBandwidth, FloorFitsVerifiedRatesAndRefusesOvercommit) {
     const uint32_t rates[]={204000,1331200,1600000};
-    EXPECT_EQ(floorKhz(312000000),97500u);
-    EXPECT_EQ(floorKhz(1),1u);
     EXPECT_EQ(row(rates,3,312000000),0u);
-    EXPECT_EQ(row(rates,3,1600000000),1u);
-    EXPECT_EQ(row(rates,3,5120000000ULL),2u);
-    EXPECT_EQ(row(rates,3,5120000001ULL),3u);
+    EXPECT_EQ(row(rates,3,1600000000),0u);
+    EXPECT_EQ(row(rates,3,1827840000),0u);
+    EXPECT_EQ(row(rates,3,1827840001),1u);
+    EXPECT_EQ(row(rates,3,10400000000ULL),1u);
+    EXPECT_EQ(row(rates,3,11520000000ULL),2u);
+    EXPECT_EQ(row(rates,3,11520000001ULL),3u);
     EXPECT_EQ(row(rates,3,UINT64_MAX),3u);
 }
 
