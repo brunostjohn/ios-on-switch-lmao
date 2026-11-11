@@ -15,7 +15,7 @@ constexpr uint32_t kMappings = 32;
 constexpr uint64_t kPinnedBytes = 128ULL << 20;
 SwitchVICMapping gMappings[kMappings];
 IOLock *gLock;
-uint64_t gClock, gBytes;
+uint64_t gClock, gBytes, gMade;
 
 void evict(SwitchVICMapping &mapping)
 {
@@ -79,6 +79,7 @@ SwitchVICMapping *switch_vic_mapping_acquire_range(switch_gpu_backing *backing, 
         const uint64_t address = switch_vic_mapping_create(info.pages + firstPage, pageCount, writable);
         if (address) {
             switch_gpu_backing_retain(backing);
+            __atomic_add_fetch(&gMade, uint64_t(1), __ATOMIC_RELAXED);
             *mapping = {backing, info.allocation_id, info.allocation_generation, address, ++gClock,
                         firstPage, pageCount, 1, writable};
             gBytes += bytes;
@@ -109,6 +110,11 @@ void switch_vic_mapping_release(SwitchVICMapping *mapping)
     --mapping->users;
     mapping->used = ++gClock;
     IOLockUnlock(gLock);
+}
+
+uint64_t switch_vic_mapping_take_made()
+{
+    return __atomic_exchange_n(&gMade, uint64_t(0), __ATOMIC_RELAXED);
 }
 
 uint64_t switch_vic_mapping_address(const SwitchVICMapping *mapping)
