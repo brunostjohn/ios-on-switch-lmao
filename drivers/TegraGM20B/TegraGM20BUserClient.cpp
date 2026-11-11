@@ -2487,7 +2487,8 @@ IOReturn AGXDeviceUserClient::exec(uint32_t channel, TegraGM20BAbiPush *input, u
 		hostWritten |= (access & TegraGM20BSurfaceHostWritten) != 0;
 		access &= ~uint32_t(TegraGM20BSurfaceGpuAddress | TegraGM20BSurfaceHostWritten | TegraGM20BSurfaceRange);
 		if (bo->nativeView) {
-			++nativeReads;
+			if (TGM_STATS)
+				++nativeReads;
 			const uint32_t first = useTotal;
 			const int error = switch_gpu_native_surface_add_read(
 				*bo->nativeView, access, job.uses, job.guards, job.capacity,
@@ -2518,7 +2519,8 @@ IOReturn AGXDeviceUserClient::exec(uint32_t channel, TegraGM20BAbiPush *input, u
 	for (uint32_t i = 0; native && i < useCount; ++i) {
 		const bool addressed = uses[i].access & TegraGM20BSurfaceGpuAddress;
 		const uint64_t bytes = uses[i].access & TegraGM20BSurfaceRange ? uses[i].reserved : 0;
-		rangedUses += bytes != 0;
+		if (TGM_STATS)
+			rangedUses += bytes != 0;
 		const Binding *binding = addressed
 			? switch_gpu_binding_find(binds_, nbinds_, uses[i].handle, bytes ? bytes : 1)
 			: nullptr;

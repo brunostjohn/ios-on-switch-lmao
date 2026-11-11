@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 #include "SwitchGpuPathStats.h"
 #include "TegraGM20BGpu.h"
-#if TGM_STATS
+#if SWITCH_GPU_PATH_STATS
 #include <IOKit/IOLib.h>
 #include <IOKit/IOLocks.h>
 #include <kern/clock.h>
@@ -141,19 +141,5 @@ extern "C" void switch_gpu_path_register(void)
 			  pathsSysctl, "A",
 			  "GM20B capability flags, and the paths behind them the reading process took");
 	sysctl_register_oid(&gPathsOid);
-}
-#else
-extern "C" void switch_gpu_path_taken(enum switch_gpu_path, uint32_t)
-{
-}
-
-extern "C" void switch_gpu_path_job(uint32_t, int, int, uint32_t)
-{
-}
-
-extern "C" void switch_gpu_path_window(char *line, size_t size)
-{
-	if (size)
-		line[0] = 0;
 }
 #endif

@@ -37,7 +37,9 @@ public:
 };
 #include "drivers/TegraGM20B/SwitchGpuUserCpuComplete.h"
 
+#if SWITCH_GPU_PATH_STATS
 extern "C" void switch_gpu_path_taken(enum switch_gpu_path, uint32_t) {}
+#endif
 
 namespace {
 constexpr uint32_t read = SWITCH_GPU_BACKING_READ | SWITCH_GPU_BACKING_CPU_AVOID_SYNC;

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 // The paths behind the capability bits GM20B clients take (debug kernels): counted per process for the HW Test's
 // gpu.path.* cases (kern.switch_gpu_paths: the flags GetInfo advertises and the reader's own counts) and per stats window,
-// every process together, for the periodic "paths" line. A release kernel's are empty.
+// every process together, for the periodic "paths" line. A release kernel has the calls only, empty.
 #pragma once
 #include <stddef.h>
 #include <stdint.h>
@@ -25,12 +25,37 @@ enum switch_gpu_path {
 	SWITCH_GPU_PATH_COUNT
 };
 
+#if (defined(DEVELOPMENT) && DEVELOPMENT) || (defined(DEBUG) && DEBUG)
+#define SWITCH_GPU_PATH_STATS 1
 void switch_gpu_path_taken(enum switch_gpu_path path, uint32_t count);
 void switch_gpu_path_job(uint32_t visibility, int unlocked_writes, int lean_copy, uint32_t ranged_uses);
 /* The window's counts as "name=N ...", zeroed for the next window */
 void switch_gpu_path_window(char *line, size_t size);
 /* kern.switch_gpu_paths: "flags=0x... pid=N name=N ...", the reading process's counts */
 void switch_gpu_path_register(void);
+#else
+#define SWITCH_GPU_PATH_STATS 0
+static inline void switch_gpu_path_taken(enum switch_gpu_path path, uint32_t count)
+{
+	(void)path;
+	(void)count;
+}
+
+static inline void switch_gpu_path_job(uint32_t visibility, int unlocked_writes, int lean_copy,
+				       uint32_t ranged_uses)
+{
+	(void)visibility;
+	(void)unlocked_writes;
+	(void)lean_copy;
+	(void)ranged_uses;
+}
+
+static inline void switch_gpu_path_window(char *line, size_t size)
+{
+	if (size)
+		line[0] = 0;
+}
+#endif
 
 /* TegraGM20BUserClient.cpp: what GetInfo advertises */
 uint32_t switch_gpu_info_flags(void);
