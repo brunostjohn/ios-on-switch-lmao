@@ -49,6 +49,12 @@ class Spec:
         return re.sub(r'\{(\w)\}', repl, value)
 
 
+def copy_writable(source: str, target: str) -> None:
+    """Copy a file with its mode, writable by its owner: a remote worker's inputs are read-only, the sandbox's not."""
+    shutil.copyfile(source, target)
+    os.chmod(target, (os.stat(source).st_mode & 0o777) | 0o200)
+
+
 def fail(message: str) -> None:
     sys.exit('xnu_ops: ' + message)
 
@@ -368,7 +374,7 @@ def install_base(
             out / 'System/Library/Frameworks/Kernel.framework/Versions/A/PrivateHeaders/platform',
         ),
     ):
-        shutil.copytree(source, target, symlinks=False, dirs_exist_ok=True)
+        shutil.copytree(source, target, symlinks=False, dirs_exist_ok=True, copy_function=copy_writable)
     os_dir = out / 'usr/local/include/os'
     os_dir.mkdir(parents=True, exist_ok=True)
     unifdef = env['DEVELOPER_DIR'] + '/Toolchains/XcodeDefault.xctoolchain/usr/bin/unifdef'
