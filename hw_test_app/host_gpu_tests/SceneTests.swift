@@ -45,6 +45,13 @@ final class SceneTests: XCTestCase {
         XCTAssertEqual(result.checks.count, [1, 2, 4, 8].filter(gpu.device.supportsTextureSampleCount).count * 4)
     }
 
+    func testFetchBlendOrderOnThisMac() async throws {
+        let scene = try XCTUnwrap(Scenes.all.first { $0.id == "gpu.raw.fetch_blend_order" })
+        let result = try await scene.run(makeGPU())
+        XCTAssertTrue(result.passed, result.reasons(limit: 8).joined(separator: "; "))
+        XCTAssertEqual(result.checks.count, 24)
+    }
+
     func testPassFusionOnThisMac() async throws {
         let scene = try XCTUnwrap(Scenes.all.first { $0.id == "gpu.raw.pass_fusion" })
         let result = try await scene.run(makeGPU())

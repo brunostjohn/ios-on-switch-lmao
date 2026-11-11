@@ -35,6 +35,7 @@ TESTS: dict[str, bool] = {
             'gpu.ca.generic_texture3d',
             'gpu.raw.framebuffer_fetch',
             'gpu.raw.framebuffer_fetch_depth',
+            'gpu.raw.fetch_blend_order',
             'gpu.raw.pass_fusion',
             'gpu.upload.glyph_atlas',
             'gpu.upload.replace_region',
