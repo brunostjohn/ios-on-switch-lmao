@@ -175,10 +175,20 @@ class NativeSeedTests(unittest.TestCase):
     def region_rows(self):
         line = 'D ok=1 tg=8,5,3 edge=3,1,1 threads=1 | form=f | k test lib=data:hash |'
         prototype = self.manifest['records'][0]
-        return [dict(prototype, kind='compute', source='capture', line=4, input=line,
-                     region=mask, local=shape, regionMode=mode,
-                     key=f'kernel | hash | tg={shape[0]},{shape[1]},{shape[2]} | tgmem= | region=1')
-                for mask, (shape, mode) in native_seed.region_signatures(line).items()]
+        return [
+            dict(
+                prototype,
+                kind='compute',
+                source='capture',
+                line=4,
+                input=line,
+                region=mask,
+                local=shape,
+                regionMode=mode,
+                key=f'kernel | hash | tg={shape[0]},{shape[1]},{shape[2]} | tgmem= | region=1',
+            )
+            for mask, (shape, mode) in native_seed.region_signatures(line).items()
+        ]
 
     def test_all_regions_count_as_one_original_operation(self):
         self.manifest['records'] = self.region_rows()
@@ -198,15 +208,23 @@ class NativeSeedTests(unittest.TestCase):
         for change in ('missing', 'duplicate', 'shape', 'mode', 'mask', 'key', 'input'):
             with self.subTest(change=change):
                 rows = copy.deepcopy(original)
-                if change == 'missing': rows.pop()
-                elif change == 'duplicate': rows.append(copy.deepcopy(rows[0]))
-                elif change == 'shape': rows[1]['local'][0] = 4
-                elif change == 'mode': rows[1]['regionMode'] = False
-                elif change == 'mask': rows[1]['region'] = 15
-                elif change == 'key': rows[1]['key'] = rows[0]['key']
-                else: rows[1]['input'] += ' different'
+                if change == 'missing':
+                    rows.pop()
+                elif change == 'duplicate':
+                    rows.append(copy.deepcopy(rows[0]))
+                elif change == 'shape':
+                    rows[1]['local'][0] = 4
+                elif change == 'mode':
+                    rows[1]['regionMode'] = False
+                elif change == 'mask':
+                    rows[1]['region'] = 15
+                elif change == 'key':
+                    rows[1]['key'] = rows[0]['key']
+                else:
+                    rows[1]['input'] += ' different'
                 self.manifest['records'] = rows
-                with self.assertRaises(ValueError): self.report()
+                with self.assertRaises(ValueError):
+                    self.report()
 
     def test_whole_dispatch_refusal_is_accounted_but_never_complete(self):
         row = self.region_rows()[0]
@@ -219,19 +237,22 @@ class NativeSeedTests(unittest.TestCase):
     def test_repeated_original_inputs_keep_separate_provenance(self):
         rows = self.region_rows()
         repeat = copy.deepcopy(rows)
-        for row in repeat: row['line'] = 5
+        for row in repeat:
+            row['line'] = 5
         self.manifest['records'] = rows + repeat
         self.assertTrue(self.report(2)['complete'])
         self.assertEqual(self.report(2)['variants']['observed'], {'made': 16})
 
     def test_equal_count_cannot_substitute_another_original_input(self):
         rows = self.region_rows()
-        for row in rows: row['line'] = 1
+        for row in rows:
+            row['line'] = 1
         expected = [('capture', [rows[0]['input']], [])]
         native_seed.validate_inputs(rows, expected)
-        for row in rows: row['source'] = 'other'
-        with self.assertRaises(ValueError): native_seed.validate_inputs(rows, expected)
-
+        for row in rows:
+            row['source'] = 'other'
+        with self.assertRaises(ValueError):
+            native_seed.validate_inputs(rows, expected)
 
     def test_pack_lists_keep_each_file_once_in_its_most_observed_tier(self):
         record = self.manifest['records'][0]

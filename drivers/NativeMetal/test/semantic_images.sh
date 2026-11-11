@@ -23,5 +23,5 @@ xcrun clang++ -O1 -g -std=c++17 -fobjc-arc -Wno-deprecated-declarations -DSWITCH
     -framework Foundation -framework Metal -framework IOSurface -framework IOKit -framework CoreVideo \
     -o "$OUT/semantic_images"
 NAK_DEBUG=print "$OUT/semantic_images" "$TOOLS/libvulkan_nouveau.dylib" "$OUT/cache" "$OUT/fixture.metallib" "$OUT" \
-    > "$OUT/compiled.log" 2>&1
+    >"$OUT/compiled.log" 2>&1
 grep '^PASS\|^FAIL' "$OUT/compiled.log"

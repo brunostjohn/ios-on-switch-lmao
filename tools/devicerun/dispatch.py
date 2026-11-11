@@ -38,7 +38,7 @@ DISPATCH = [
         regex=r'SwitchWL: (?P<who>\S+\[\d+\]) thread .* woken for (?P<waiter>this|another) thread',
         show=('who', 'waiter'),
         source='kernel/switch/diag/workloop.c',
-        note='a sync waiter given ownership by an earlier wait\'s wake; before a locationd SwitchCrash, the kernel side',
+        note="a sync waiter given ownership by an earlier wait's wake; before a locationd SwitchCrash, the kernel side",
     ),
     Check(
         'dispatch.cpu-hog',

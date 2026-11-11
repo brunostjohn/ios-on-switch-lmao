@@ -27,7 +27,7 @@ if [[ -z ${SWITCH_IR_CASE:-} ]]; then
     for CASE in vector private extended unpack_half convert texture; do
         SWITCH_IR_CASE="semantic_$CASE" NAK_DEBUG=print "$OUT/semantic_ir" \
             "$TOOLS/libvulkan_nouveau.dylib" "$OUT/cache" "$OUT/fixture.metallib" "$OUT" \
-            > "$OUT/$CASE-nir.txt" 2>&1
+            >"$OUT/$CASE-nir.txt" 2>&1
     done
     python3 "$HERE/semantic_execution.py" "$OUT"
 fi

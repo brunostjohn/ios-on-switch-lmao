@@ -198,5 +198,10 @@ host_test(
         "sd_release_dma_test.cpp",
         "//drivers/NativeSwitchBlock:SwitchAdma.h",
     ],
-    copts = ["-UDEVELOPMENT", "-DDEVELOPMENT=0", "-UDEBUG", "-DDEBUG=0"],
+    copts = [
+        "-UDEVELOPMENT",
+        "-DDEVELOPMENT=0",
+        "-UDEBUG",
+        "-DDEBUG=0",
+    ],
 )

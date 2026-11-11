@@ -32,7 +32,7 @@ xcrun clang++ -dynamiclib -fsanitize=address,undefined "$OUT/mock_iokit.o" "$OUT
     -framework IOKit -framework CoreFoundation -install_name @rpath/libmock_iokit.dylib -o "$OUT/libmock_iokit.dylib"
 SOURCES=()
 for source in gpu transfer split kernel shared_events alias arena pack ycbcr zeta comp completed compute \
-              record_parts direct direct_compute emit cache kernel_cache compiler metallib; do
+    record_parts direct direct_compute emit cache kernel_cache compiler metallib; do
     SOURCES+=("$RAW/runtime/raw_$source.cpp")
 done
 xcrun clang++ "${FLAGS[@]}" -I "$TREE/drivers/TegraGM20B" -I "$TREE/drivers/NativeMetal" \
@@ -42,6 +42,6 @@ xcrun clang++ "${FLAGS[@]}" -I "$TREE/drivers/TegraGM20B" -I "$TREE/drivers/Nati
 for mode in legacy native; do
     if [[ $mode == native ]]; then export MOCK_NATIVE_JOBS=1; else unset MOCK_NATIVE_JOBS; fi
     for delay in 0 100; do
-        MOCK_GPU_US=$delay "$OUT/batchcheck" > "$OUT/$mode-$delay.log" 2>&1
+        MOCK_GPU_US=$delay "$OUT/batchcheck" >"$OUT/$mode-$delay.log" 2>&1
     done
 done

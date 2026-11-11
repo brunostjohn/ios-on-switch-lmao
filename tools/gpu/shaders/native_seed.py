@@ -85,16 +85,19 @@ def region_signatures(line: str) -> dict[int, tuple[list[int], bool]] | None:
         return None
     return {
         mask: ([edge[i] if mask & (1 << i) else local[i] for i in range(3)], any(edge))
-        for mask in range(8) if all(not mask & (1 << i) or edge[i] for i in range(3))
+        for mask in range(8)
+        if all(not mask & (1 << i) or edge[i] for i in range(3))
     }
 
 
 def operation_rows(records: list[dict]) -> list[tuple[dict, str]]:
     groups = {}
     for index, row in enumerate(records):
-        identity = (row['source'], row['line'], row['input'], row['derived']) if all(
-            key in row for key in ('source', 'line', 'input', 'derived')
-        ) else ('legacy', index)
+        identity = (
+            (row['source'], row['line'], row['input'], row['derived'])
+            if all(key in row for key in ('source', 'line', 'input', 'derived'))
+            else ('legacy', index)
+        )
         groups.setdefault(identity, []).append(row)
     operations = []
     for rows in groups.values():
@@ -119,8 +122,7 @@ def operation_rows(records: list[dict]) -> list[tuple[dict, str]]:
                         raise ValueError('compute region shape differs from the original dispatch')
                     key = row.get('key')
                     if key is not None and (
-                        f' | tg={shape[0]},{shape[1]},{shape[2]} |' not in key or
-                        key.endswith(' | region=1') != mode
+                        f' | tg={shape[0]},{shape[1]},{shape[2]} |' not in key or key.endswith(' | region=1') != mode
                     ):
                         raise ValueError('compute artifact key differs from its region specialization')
                     actual[mask] = row
@@ -129,8 +131,13 @@ def operation_rows(records: list[dict]) -> list[tuple[dict, str]]:
             elif len(rows) != 1 or ('input' in first and first['status'] == 'made'):
                 raise ValueError('invalid native dispatch provenance')
         statuses = {row['status'] for row in rows}
-        status = 'made' if statuses == {'made'} else next(
-            (value for value in ('failed', 'missing-library', 'missing-function', 'refused') if value in statuses), None
+        status = (
+            'made'
+            if statuses == {'made'}
+            else next(
+                (value for value in ('failed', 'missing-library', 'missing-function', 'refused') if value in statuses),
+                None,
+            )
         )
         if status is None:
             raise ValueError('invalid native operation status')
@@ -139,12 +146,13 @@ def operation_rows(records: list[dict]) -> list[tuple[dict, str]]:
 
 
 def validate_inputs(records: list[dict], inputs: list[tuple[str, list[str], list[str]]]) -> None:
-    expected = Counter((source, line, text, derived)
-                       for source, observed, guesses in inputs
-                       for derived, lines in ((False, observed), (True, guesses))
-                       for line, text in enumerate(lines, 1))
-    actual = Counter((row['source'], row['line'], row['input'], row['derived'])
-                     for row, _ in operation_rows(records))
+    expected = Counter(
+        (source, line, text, derived)
+        for source, observed, guesses in inputs
+        for derived, lines in ((False, observed), (True, guesses))
+        for line, text in enumerate(lines, 1)
+    )
+    actual = Counter((row['source'], row['line'], row['input'], row['derived']) for row, _ in operation_rows(records))
     if actual != expected:
         raise ValueError('native seed operation provenance differs from its input lines')
 
@@ -221,8 +229,9 @@ def bucket(args: argparse.Namespace, work: Path) -> None:
     )
     path = args.out / 'manifest.json'
     manifest = json.loads(path.read_text())
-    validate_inputs(manifest['records'], [(str(work / 'observed.log'), observed, []),
-                                           (str(work / 'derived.log'), [], derived)])
+    validate_inputs(
+        manifest['records'], [(str(work / 'observed.log'), observed, []), (str(work / 'derived.log'), [], derived)]
+    )
     for row in manifest['records']:
         row['source'] = args.lines.name
     path.write_text(json.dumps(manifest, sort_keys=True) + '\n')
