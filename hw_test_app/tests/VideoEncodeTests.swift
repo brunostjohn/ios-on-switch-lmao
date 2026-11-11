@@ -7,13 +7,23 @@ import VideoToolbox
 /// 1080p60 pattern frames through a hardware-only VTCompressionSession (P pictures, no reordering), then decoded
 /// again on the hardware decoder and checked frame by frame. The frames come from the session's pool, and every
 /// picture's input must reach NVENC without a CPU copy: VIC writes it from the frame's IOSurface (SwitchEncoderRoutes).
+/// encode.h264_client_pool hands over frames from a pool of CoreVideo's defaults instead (1920-byte rows at 1080p, off
+/// VIC's 256-byte grid), as a client with buffers of its own does: how those reach NVENC (VIC after VideoToolbox's own
+/// transfer, or the plug-in's CPU copy) is reported, not judged.
 struct VideoEncodeTest: HWTest {
     let codec: VideoCodec
     let realTime: Bool
+    var clientPool = false
     let subsystem = Subsystem.encode
     static let frames = 60
-    var id: String { "encode.\(codec.rawValue)_\(realTime ? "realtime" : "quality")" }
-    var name: String { "\(VideoDecodeTest.codecName(codec)) encode, \(realTime ? "real-time" : "quality") preset" }
+    var id: String {
+        clientPool
+            ? "encode.\(codec.rawValue)_client_pool" : "encode.\(codec.rawValue)_\(realTime ? "realtime" : "quality")"
+    }
+    var name: String {
+        let input = clientPool ? "the client's own buffers" : realTime ? "real-time preset" : "quality preset"
+        return "\(VideoDecodeTest.codecName(codec)) encode, \(input)"
+    }
     var timeout: TimeInterval { 90 }
 
     static func hardwareEncoders() -> [[String: Any]] {
@@ -36,7 +46,7 @@ struct VideoEncodeTest: HWTest {
             realTime: realTime, requireHardware: true)
         let encoded: CompressedClip
         do {
-            encoded = try Compressor.encode(settings, pattern: pattern, frames: Self.frames)
+            encoded = try Compressor.encode(settings, pattern: pattern, frames: Self.frames, clientPool: clientPool)
         } catch VideoError.status(let call, let status) where codec == .hevc && listed.isEmpty {
             return .skip("no hardware HEVC encoder: none listed, and \(call) returned \(status)")
         }
@@ -61,7 +71,10 @@ struct VideoEncodeTest: HWTest {
                 ("P pictures after the first key frame", encoded.predictedFrames >= Self.frames - 2),
                 ("decodes back to the pattern (\(decoded.firstMismatch ?? "ok"))", decoded.matched == Self.frames),
                 ("real time keeps up with 60 fps", !realTime || Double(Self.frames) / encoded.seconds >= Double(fps)),
-                ("every input written by VIC, none copied by the CPU", Self.noCopies(encoded.routes, Self.frames)),
+                (
+                    "every input written by VIC, none copied by the CPU",
+                    clientPool || Self.noCopies(encoded.routes, Self.frames)
+                ),
             ], metrics, proof: encoded.usingHardware ? "encoder=\(encoded.encoderID)" : "")
     }
 
@@ -73,5 +86,6 @@ struct VideoEncodeTest: HWTest {
 
     static var all: [VideoEncodeTest] {
         [VideoCodec.h264, .hevc].flatMap { codec in [true, false].map { VideoEncodeTest(codec: codec, realTime: $0) } }
+            + [VideoEncodeTest(codec: .h264, realTime: false, clientPool: true)]
     }
 }

@@ -65,16 +65,18 @@ public struct CompressorSettings {
 
 public enum Compressor {
     /// `pause`: the encoder sits idle for that many seconds after that frame, then the clip goes on. The pictures come
-    /// from the session's pixel buffer pool, laid out as the encoder asked, as a client should take them. `inspect` sees
-    /// the session after the last frame, before it goes.
+    /// from the session's pixel buffer pool, laid out as the encoder asked, as a client should take them, or with
+    /// `clientPool` from a pool of CoreVideo's defaults, as a client with its own buffers hands them over. `inspect`
+    /// sees the session after the last frame, before it goes.
     public static func encode(
         _ settings: CompressorSettings, pattern: Pattern, frames: Int, pause: (after: Int, seconds: Double)? = nil,
-        inspect: ((VTCompressionSession) throws -> Void)? = nil
+        clientPool: Bool = false, inspect: ((VTCompressionSession) throws -> Void)? = nil
     ) throws -> CompressedClip {
         let session = try makeSession(settings)
         defer { VTCompressionSessionInvalidate(session) }
+        let sessionPool = clientPool ? nil : VTCompressionSessionGetPixelBufferPool(session)
         let pool =
-            try VTCompressionSessionGetPixelBufferPool(session)
+            try sessionPool
             ?? PatternPixels.pool(
                 width: settings.width, height: settings.height,
                 format: PatternPixels.format(bitDepth: settings.codec.bitDepth))
