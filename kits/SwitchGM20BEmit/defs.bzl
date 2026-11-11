@@ -12,6 +12,7 @@ EMIT_SOURCES = [
     "SwitchGM20BEmit2D.c",
     "SwitchGM20BEmit3D.c",
     "SwitchGM20BEmitBarrier.c",
+    "SwitchGM20BEmitDecompress.c",
     "SwitchGM20BEmitIterated.c",
     "SwitchGM20BEmitRaster.c",
     "SwitchGM20BEmitReport.c",
