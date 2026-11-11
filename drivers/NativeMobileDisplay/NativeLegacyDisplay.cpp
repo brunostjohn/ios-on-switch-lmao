@@ -3368,6 +3368,7 @@ public:
         if (color == nullptr || !color->init()) {
             return false;
         }
+        setEdrScalingEnabled(true);
         intMaskLock = IOSimpleLockAlloc();
         if (intMaskLock == nullptr) {
             return false;
@@ -5184,6 +5185,8 @@ public:
     {
         return color->setAccessibilityScale(scale);
     }
+
+    void setEdrFactor(float factor) override { color->setEdrFactor(factor); }
 
 #if SWITCH_IPSW_KIND_24B119
     IOReturn setProperties(OSObject *properties) override

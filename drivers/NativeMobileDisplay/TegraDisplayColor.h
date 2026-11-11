@@ -36,6 +36,8 @@ public:
     IOReturn setBrightnessCorrection(uint32_t correction);
     IOReturn swapSetColorMatrix(const void *matrix, uint32_t location, uint32_t flags);
     IOReturn setAccessibilityScale(uint32_t scale);
+    // The family's SetParameter 6 (EDRDisplayFactor.h): the whole output times `factor` from the next frame end.
+    void setEdrFactor(float factor);
 
     // Under the gate: a blank swap's black, from the next frame on, and its end at the first flip latched after it.
     void setBlank(bool blank);
