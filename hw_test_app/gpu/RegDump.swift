@@ -1,9 +1,9 @@
 import Darwin
 import HWTestCore
 
-/// A debug kernel's GM20B register dump (drivers/TegraGM20B/TegraGM20BRegDumpABI.h): the kernel reads the registers
-/// L4T's capture reads and logs them as `tegra-gm20b: regdump v1` lines, which the log pull keeps. Each tag dumps once a
-/// boot. The call makes no command buffer.
+/// A debug kernel's GM20B register dump (drivers/TegraGM20B/TegraGM20BRegDumpABI.h): the kernel reads the
+/// registers L4T's capture reads and logs them as `tegra-gm20b: regdump v1` lines, which the log pull keeps. Each tag
+/// dumps once a boot. The call makes no command buffer.
 public enum RegDump {
     public enum Tag: UInt32 {
         case quiet = 0
@@ -19,9 +19,10 @@ public enum RegDump {
 
     /// regdump=<tag>:<ok|already|not_ready|no_memory|release_kernel|no_connection|...>; for a dump the kernel logged,
     /// regdump_badf= (registers that read a PRI error) and regdump_gr= (GR busy or idle before/after the reads).
-    public static func capture(_ tag: Tag) -> Metrics {
+    /// `connection` is opened beforehand by a caller that times the call against its GPU work.
+    public static func capture(_ tag: Tag, on connection: GPUConnection? = GPUConnection()) -> Metrics {
         var metrics = Metrics()
-        guard let gpu = GPUConnection() else {
+        guard let gpu = connection else {
             metrics.set("regdump", tag.name + ":no_connection")
             return metrics
         }
@@ -32,7 +33,8 @@ public enum RegDump {
             return metrics
         }
         let status = Int(GPUConnection.int32(reply, 0))
-        metrics.set("regdump", tag.name + ":" + (statuses.indices.contains(status) ? statuses[status] : "status\(status)"))
+        let answer = statuses.indices.contains(status) ? statuses[status] : "status\(status)"
+        metrics.set("regdump", tag.name + ":" + answer)
         guard status == 0 else { return metrics }
         let gr = [GPUConnection.uint32(reply, 20), GPUConnection.uint32(reply, 24)].map {
             $0 & engineBusy != 0 ? "busy" : "idle"

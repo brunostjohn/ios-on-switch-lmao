@@ -1,9 +1,9 @@
 import HWTestCore
 import HWTestGPU
 
-/// A debug kernel's GM20B register dump before the first GPU scene draws (gpu/RegDump.swift), for the diff against L4T's
-/// nvgpu at idle. Not a .metal test: a GPU test that times out gets GPUProbe's fill, which would then be the process's
-/// first command buffer instead of the first scene's.
+/// A debug kernel's GM20B register dump before the first GPU scene draws (gpu/RegDump.swift), for the diff against
+/// L4T's nvgpu at idle. Not a .metal test: a GPU test that times out gets GPUProbe's fill, which would then be the
+/// process's first command buffer instead of the first scene's.
 struct RegDumpQuietTest: HWTest {
     let id = "gpu.regdump_quiet"
     let name = "GPU registers at a quiet point, into the kernel log"
