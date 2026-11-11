@@ -10,6 +10,7 @@ load(":inputs_test.bzl", "seed_inputs_tests")
 lint_files()
 
 RAW = [
+    "archives.py",
     "rawpack.py",
     "directlink.py",
     "mkpack.py",

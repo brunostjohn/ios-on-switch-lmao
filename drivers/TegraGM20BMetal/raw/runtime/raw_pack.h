@@ -29,6 +29,7 @@ enum PackSectionId {
     PackKernels,
     PackSplits,
     PackVariants,
+    PackArchives,
     PackSectionCount
 };
 
@@ -114,6 +115,18 @@ struct PackVariant {
     uint16_t program;
     uint16_t reserved;
 };
+
+// A binary archive the IPSW's frameworks ship that declares states for the identity's GPU (pack/archives.py), so a creation
+// under MTLPipelineOptionFailOnBinaryArchiveMiss misses where Metal's does. The PackArchives section: u32 archive count, u32 key
+// count, the archives in pathHash order, then the keys, each archive's ascending: Pack::fnv of a render state's key
+// (RawPipelineKey.h) or of a compute state's archive key (raw_compute_key.h computeArchiveKey).
+struct PackArchive {
+    uint64_t pathHash;  // Pack::fnv of the archive file's path on the device (rmArchivePath)
+    uint32_t first, count;
+};
+
+// The PackArchive whose keys are the compute states the pack holds kernels for, at any dispatch shape (computeStateKey)
+constexpr uint64_t kPackHeldKernels = 0;
 
 // The rung of the fetch ladder a color attachment's framebuffer fetch needs: FetchNone where it is not fetched
 enum PackFetchRung : uint8_t {
@@ -370,6 +383,7 @@ static_assert(offsetof(PackPipeline, storageBlendMask) == 486 && offsetof(PackPi
               "pack layout: packfile.py PIPELINE_V15");
 static_assert(sizeof(PackProgram) == 36, "pack layout");
 static_assert(sizeof(PackVariant) == 8, "pack layout");
+static_assert(sizeof(PackArchive) == 16, "pack layout");
 static_assert(sizeof(PackKernel) == 16 + 256 + 8 + 128 + 128, "pack layout");
 static_assert(sizeof(PackSplit) == 28 + 256 + 32, "pack layout");
 
@@ -402,6 +416,8 @@ public:
     const PackSplit *split(uint16_t wholeProgram) const;   // nullptr: not split
     // `pp`'s variants of stage `stage` (0 vertex, 1 fragment), `count` of them; nullptr: none
     const PackVariant *variants(const PackPipeline &pp, uint32_t stage, uint32_t &count) const;
+    const PackArchive *archive(uint64_t pathHash) const;  // nullptr: the pack lists no such archive
+    bool declares(const PackArchive &archive, uint64_t keyHash) const;
 
     const char *string(uint32_t off) const
     {

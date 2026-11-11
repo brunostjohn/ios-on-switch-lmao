@@ -9,7 +9,7 @@ One action per step (gpu/seed/tools.bzl seed_tools builds, gpu/seed/defs.bzl see
         GM20B, the raw path's own.metallib) into <dir>
     rawpack.py corpus --corpus corpus.log --build <IPSW build> [--archives <build>.tsv] --out <file> --report <file>
         the corpus lines the probe makes (raw/pack/probe.mm: Core Animation's render states, without lib=, and every
-        other framework's the runtime looks up in the pack, framework_line), so an edit to any other line leaves the
+        other library's the runtime looks up in the pack, framework_line), so an edit to any other line leaves the
         run's input as it was; with the render states Apple's archives declare for the
         device (precompile/archives/<build>.tsv) whose functions are one framework's default.metallib. A line journaled
         under another build (os=<build> in its head) is left out; one with no os= is taken, and both are counted in
@@ -22,8 +22,10 @@ One action per step (gpu/seed/tools.bzl seed_tools builds, gpu/seed/defs.bzl see
                      --lines <bucket corpus> --out <dir named bucket<i>>
         one bucket's states and kernels made directly through the shader tools (raw/ holds directpack, the probe, the
         mock and own.metallib; the NVK twin), with bucket 0's warm-up draw over the mock GM20B
-    rawpack.py link --generator <rawpack.py> --out <dir> [--corpus-report <file>] <bucket dir>...
-        the pack made from the buckets' records, unstamped: <out>/pack.bin and report.txt
+    rawpack.py link --generator <rawpack.py> --out <dir> [--corpus-report <file>] [--archives <build>.tsv]
+                    <bucket dir>...
+        the pack made from the buckets' records, unstamped: <out>/pack.bin and report.txt, with the archive
+        inventory's per-archive declared states (raw/pack/archives.py)
     rawpack.py stamp --generator <rawpack.py> --pack <pack.bin> --manifest <MANIFEST.json> --out <dir>
         <out>/pack.bin with the tools' stack key in its header
 
@@ -50,26 +52,31 @@ LINKED_LIBRARY = re.compile(r'( \| [vf][lp] \S+) lib=\S+')
 # What the link reads of a bucket (directlink.py)
 KEPT = ('records.bin', 'warm.out', 'warm.log')
 FRAMEWORK_LIBRARY = re.compile(r' lib=/System/Library/(?:Private)?Frameworks/(\w+)\.framework/default\.metallib')
+# A bundle's library or a framework's resource library (VideoProcessors' *.bundle, AppleCVAPhoto's Resources/): the
+# runtime keys its states by their functions' AIR
+OS_LIBRARY = re.compile(r' lib=/System/Library/\S+?\.(?:bundle|framework/Resources)/\S+\.metallib')
+QUARTZCORE = '/QuartzCore.framework/'
 STAGE_LIBRARY = re.compile(r' \| [vf] \S+( lib=\S+)')
 # The OS build a line was journaled under, in its head: an R line's (before " | v ") or a D line's
 OS_BUILD = re.compile(r' os=(\S+)')
 
 
 def framework_line(line: str) -> bool:
-    """Whether the runtime looks the line's state up in the pack under its framework (RawMetalStates.mm _packable).
+    """Whether the runtime looks the line's state up in the pack (RawMetalStates.mm pipelineFor).
 
     A vertex and a fragment function of one framework's default.metallib, and every function it links a framework
-    library's; not QuartzCore's, whose states the pack makes from their names (rawpack.py ca_states).
+    library's: under its framework; or of one bundle or framework resource library (OS_LIBRARY), linking none: under
+    its functions' AIR (RawRenderKey.h). Not QuartzCore's, whose states the pack makes from their names
+    (rawpack.py ca_states).
     """
     stages = STAGE_LIBRARY.findall(line)
     frameworks = {m.group(1) for lib in stages if (m := FRAMEWORK_LIBRARY.fullmatch(lib))}
     linked = [lib for lib in LIBRARY.findall(line) if lib not in stages]
-    return (
-        len(stages) == 2
-        and len(set(stages)) == len(frameworks) == 1
-        and frameworks != {'QuartzCore'}
-        and all(FRAMEWORK_LIBRARY.fullmatch(lib) for lib in linked)
-    )
+    if len(stages) != 2 or len(set(stages)) != 1:
+        return False
+    if not frameworks:
+        return not LINKED_LIBRARY.search(line) and bool(OS_LIBRARY.fullmatch(stages[0])) and QUARTZCORE not in stages[0]
+    return frameworks != {'QuartzCore'} and all(FRAMEWORK_LIBRARY.fullmatch(lib) for lib in linked)
 
 
 def probe_lines(corpus: str) -> list[str]:
@@ -105,7 +112,8 @@ def own_build(lines: list[str], build: str) -> tuple[list[str], list[str]]:
 def archive_lines(inventory: str) -> list[str]:
     """Return the render states an archive inventory (corpus/tools/archives/declared.py) has the pack make.
 
-    Those declared for the raw device's GPU families that the runtime looks up in the pack (framework_line);
+    Those declared for the raw device's GPU families that the runtime looks up in the pack (framework_line: a
+    framework's default.metallib's, or a bundle's by its functions' AIR);
     QuartzCore's archive is its offline compilation manifest (raw/pack/ca/caset.py's manifest tier). They keep lib=,
     which the probe loads them from.
     """
@@ -183,7 +191,9 @@ def library_view(libraries: list[Path], destination: Path) -> Path:
 
 def link(args: argparse.Namespace, generator: list[str], env: dict[str, str], work: Path) -> None:
     linked = fresh(work / 'linked')
-    report = generate(generator, ['--link', '--out', linked, *[Path(b).resolve() for b in args.buckets]], env, 'link')
+    inventory = ['--archives', Path(args.archives).resolve()] if args.archives else []
+    arguments = ['--link', '--out', linked, *inventory, *[Path(b).resolve() for b in args.buckets]]
+    report = generate(generator, arguments, env, 'link')
     if args.corpus_report:
         corpus = Path(args.corpus_report).read_text()
         report += corpus
@@ -235,6 +245,7 @@ def main() -> None:
     steps.choices['probe'].add_argument('--data', action='append', default=[])
     steps.choices['link'].add_argument('buckets', nargs='+')
     steps.choices['link'].add_argument('--corpus-report')
+    steps.choices['link'].add_argument('--archives')
     args = parser.parse_args()
     if args.step == 'corpus':
         lines, report = own_build(probe_lines(Path(args.corpus).read_text()), args.build)

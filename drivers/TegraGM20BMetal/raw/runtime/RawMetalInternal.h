@@ -246,10 +246,27 @@ RMLibrary *wrapLibrary(id device, id<MTLLibrary> twin, NSString *path);
 // RawMetalStates.mm: a descriptor whose functions are this device's, over their m2v twins
 MTLRenderPipelineDescriptor *twinDescriptor(MTLRenderPipelineDescriptor *d);
 
+// RawMetalArchive.mm: what the archives a creation under MTLPipelineOptionFailOnBinaryArchiveMiss lists answer for a state, by
+// its key's hash (a render state's RawPipelineKey.h key, a compute state's raw_compute_key.h computeArchiveKey): NotAsked
+// without the option or archives; Declared where an Apple archive declares it; M2V where none does and one is m2v's own,
+// which m2v answers for at the twin; Missed where every one is Apple's and none declares it.
+enum class RMArchiveAnswer {
+    NotAsked,
+    Declared,
+    M2V,
+    Missed
+};
+RMArchiveAnswer rmArchiveAnswer(NSArray *archives, MTLPipelineOption options, uint64_t keyHash);
+// Whether the pack holds kernels of the compute state (raw_compute_key.h computeStateKey), at any dispatch shape
+bool rmPackHoldsKernels(const std::string &stateKey);
+// Metal's answer to a miss: nil, and this error in the target driver's domain
+NSError *rmArchiveMissError(NSString *function, const char *pipeline);
+
 // RawMetalCubic.mm: the cubic binds (raw_cubic.h) of a draw of `pl` with these fragment samplers and textures bound (empty: no
-// cubic sampler where it samples), and a packed state's variants, the pack's records of them placed at its creation
+// cubic sampler where it samples), and a packed state's variants, the pack's records of them (under its pack key's hash)
+// placed at its creation
 raw::CubicBinds cubicBinds(const raw::Pipeline &pl, RMSampler *const samplers[16], RMTexture *const textures[16]);
-void packedVariants(RMPipeline *p);
+void packedVariants(RMPipeline *p, uint64_t keyHash);
 
 // RawMetalHeap.mm: the purged heaps a committed command buffer's resources lie in, given their pages back before it is encoded
 // (it counts as committed already, so no purge runs meanwhile)

@@ -89,7 +89,7 @@ TEST(RawLinkedSource, TheRawRecordIsTheLinkedFunctionsToo)
     const std::string twin = Body(states, "MTLRenderPipelineDescriptor *twinDescriptor(");
     EXPECT_THAT(twin, HasSubstr("t.vertexLinkedFunctions = twinLinked(d.vertexLinkedFunctions);"));
     EXPECT_THAT(twin, HasSubstr("t.fragmentLinkedFunctions = twinLinked(d.fragmentLinkedFunctions);"));
-    EXPECT_THAT(Body(states, "- (RMPipeline *)pipelineFor:"), HasSubstr("raw_metal_linked_packable(d)"));
+    EXPECT_THAT(Body(states, "static RMPipeline *pipelineFor("), HasSubstr("raw_metal_linked_packable(d)"));
     EXPECT_THAT(Body(SourceText("../raw/runtime/RawMetalLibrary.mm"), "NSString *raw_metal_pipeline_key("),
                 HasSubstr("raw::pipelineKey(d, vf ? &vertex : nullptr, ff ? &fragment : nullptr, linkedKey(d),"));
     EXPECT_THAT(Body(SourceText("../raw/runtime/RawPipelineKey.h"), "inline std::string pipelineKey("),
@@ -132,8 +132,9 @@ TEST(RawLinkedSource, APackedStatesTwinNeverFailsOnTheArchive)
                 HasSubstr("o & ~MTLPipelineOptionFailOnBinaryArchiveMiss"));
     EXPECT_THAT(Body(states, "static id<MTLRenderPipelineState> pipelineTwin("),
                 HasSubstr("packedTwinOptions(o, true)"));
-    const std::string reflected = Between(states, "    if (reflection) {", "\n    }\n");
-    EXPECT_THAT(reflected, HasSubstr("packedTwinOptions(o, packed)"));
+    const std::string made = Body(states, "static id<MTLRenderPipelineState> makeState(");
+    EXPECT_THAT(made, HasSubstr("packedTwinOptions(o, packed)"));
+    EXPECT_THAT(made, HasSubstr("pipelineTwin(d, o, packed, error)"));
     for (const char *handlerType : {"(MTLNewRenderPipelineStateCompletionHandler)handler",
                                     "(MTLNewRenderPipelineStateWithReflectionCompletionHandler)handler"}) {
         const std::string handler = Between(states, std::string("completionHandler:") + handlerType, "\n}\n");

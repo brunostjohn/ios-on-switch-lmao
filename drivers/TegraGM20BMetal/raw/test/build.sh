@@ -97,7 +97,7 @@ xcrun clang++ -O1 -g -std=c++17 -fobjc-arc -Wall -Wextra "$HERE/invocationcheck.
 xcrun clang++ "${FLAGS[@]}" -I "$FRONT" -I "$METAL_ABI" "$HERE/cachecheck.cpp" "$RAW/runtime/raw_cache.cpp" "$RAW/runtime/raw_kernel_cache.cpp" "$RAW/runtime/raw_compiler.cpp" "$RAW/runtime/raw_metallib.cpp" "$RAW/runtime/raw_record.cpp" "$RAW/runtime/raw_record_parts.cpp" \
     "$RAW/runtime/raw_pack.cpp" -o "$OUT/cachecheck"
 # directcheck: the direct compile of every state of a corpus (runtime/raw_direct.h), its records against the pack
-xcrun clang++ "${OBJC[@]}" -Wall -Wextra -x objective-c++ "$HERE/directcheck.mm" "$RAW/runtime/RawDirect.mm" "$FRONT/NativeBridgeMetalFrontend.mm" \
+xcrun clang++ "${OBJC[@]}" -Wall -Wextra -x objective-c++ "$HERE/directcheck.mm" "$RAW/runtime/RawDirect.mm" "$RAW/runtime/RawRenderKey.mm" "$FRONT/NativeBridgeMetalFrontend.mm" \
     -x c++ "$RAW/runtime/raw_pack.cpp" "${COMPLETION[@]}" -x none "$BRIDGE" "${LIBS[@]}" \
     -o "$OUT/directcheck" 2>&1 | awk '!/duplicate libraries/'
 xcrun clang++ "${FLAGS[@]}" -I "$TREE/drivers/TegraGM20B" "$HERE/edgecheck.cpp" \

@@ -6,8 +6,9 @@ warm-up draw's registers (one probe draw: the context init and what NVK writes a
 state's own are laid as the probe saw them. mkpack.py's split_registers then tells the per-pipeline registers from the
 baseline, and the programs, constexpr samplers and records are laid out as mkpack.py lays out the probe's.
 
-usage: directlink.py <out dir> <bucket dir>...
-(rawpack.py's buckets: records.bin holds states and kernels; bucket 0 holds warm.out and warm.log)
+usage: directlink.py <out dir> [--archives <inventory.tsv>] <bucket dir>...
+(rawpack.py's buckets: records.bin holds states and kernels; bucket 0 holds warm.out and warm.log; the inventory gives
+the binary archives' declared states, archives.py)
 writes <out dir>/pack.bin, pack.json, layouts.txt, programs.bin (every render program, for nvdec) and report.txt
 """
 
@@ -16,6 +17,7 @@ import struct
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import archives
 import kernels
 import mkpack
 import packfile
@@ -320,6 +322,12 @@ def write_programs(path: str, programs: dict[str, dict]) -> None:
 
 def main() -> None:
     out_dir, *buckets = sys.argv[1:]
+    inventory = ''
+    if '--archives' in buckets:
+        at = buckets.index('--archives')
+        with open(buckets[at + 1]) as f:
+            inventory = f.read()
+        del buckets[at : at + 2]
     warm = next(d for d in buckets if os.path.exists(os.path.join(d, 'warm.log')))
     warm_log = os.path.join(warm, 'warm.log')
     init, post = mkpack.load_init(warm_log)
@@ -345,7 +353,12 @@ def main() -> None:
     used = list(dict.fromkeys(prog_recs[rec['fs']]['id'] for rec in pipes))
     split = splits.lay_out(used, found, programs, laid, report)
     init_recs = [(sc, m, d, mkpack.RELOC_CODE.get(mkpack.RELOC.get((sc, m)), 0)) for sc, m, d in init]
-    pack = packfile.Pack(pipes, prog_recs, constexpr_tsc, baseline, init_recs, heap, computes, split)
+    declared, kinds = archives.declared(inventory)
+    held = archives.held_kernels([k['key'] for k in computes])
+    report.append(archives.report(declared, kinds, held))
+    pack = packfile.Pack(
+        pipes, prog_recs, constexpr_tsc, baseline, init_recs, heap, computes, split, archives.section(declared, held)
+    )
     data, blob = packfile.pack_bytes(pack)
     os.makedirs(out_dir, exist_ok=True)
     with open(os.path.join(out_dir, 'pack.bin'), 'wb') as f:

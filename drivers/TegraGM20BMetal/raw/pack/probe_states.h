@@ -219,22 +219,33 @@ inline bool parseState(id<MTLLibrary> qc, const std::string &line, State &s, con
     return true;
 }
 
-// A line's library (its vertex function's lib= path) where it is a framework's default.metallib other than QuartzCore's
+inline bool endsWith(const std::string &s, const std::string &suffix)
+{
+    return s.size() >= suffix.size() && !s.compare(s.size() - suffix.size(), suffix.size(), suffix);
+}
+
+// A line's library (its vertex function's lib= path) where it is another framework's default.metallib than QuartzCore's, or a
+// bundle's or a framework resource library of the OS (tools/gpu/rawpack.py OS_LIBRARY)
 inline std::string libraryPath(const std::string &line)
 {
     const size_t at = line.find(" lib=");
     if (at == std::string::npos)
         return "";
     const std::string path = line.substr(at + 5, line.find(' ', at + 5) - at - 5);
-    const std::string suffix = ".framework/default.metallib";
-    if (path.size() < suffix.size() || path.compare(path.size() - suffix.size(), suffix.size(), suffix) ||
-        path.find("/QuartzCore.framework/") != std::string::npos)
+    const bool framework = endsWith(path, ".framework/default.metallib");
+    const bool resources =
+        path.find(".bundle/") != std::string::npos || path.find(".framework/Resources/") != std::string::npos;
+    const bool bundle = path.rfind("/System/Library/", 0) == 0 && endsWith(path, ".metallib") && resources;
+    if ((!framework && !bundle) || path.find("/QuartzCore.framework/") != std::string::npos)
         return "";
     return path;
 }
 
+// The framework a library is the default library of, "" for a bundle's (its states are keyed by their functions' AIR)
 inline std::string frameworkName(const std::string &path)
 {
+    if (!endsWith(path, ".framework/default.metallib"))
+        return "";
     const size_t end = path.rfind(".framework/"), begin = path.rfind('/', end) + 1;
     return path.substr(begin, end - begin);
 }

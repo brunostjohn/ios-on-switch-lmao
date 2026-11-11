@@ -312,7 +312,17 @@ _RAW_BUCKETS = 16
 # The generator's modules each step runs (rawpack.py imports or runs them by path, beside it).
 _RAW_SPLIT = ["rawpack.py", "ca/caset.py", "ca/caspec.py", "ca/caspec27.py"]
 _RAW_PROBE = ["rawpack.py"]
-_RAW_LINK = ["rawpack.py", "directlink.py", "mkpack.py", "kernels.py", "layouts.py", "packfile.py", "probelog.py", "splits.py"]
+_RAW_LINK = [
+    "rawpack.py",
+    "directlink.py",
+    "mkpack.py",
+    "kernels.py",
+    "layouts.py",
+    "packfile.py",
+    "probelog.py",
+    "splits.py",
+    "archives.py",
+]
 
 def _generator_files(ctx, names):
     here = ctx.file.generator.dirname + "/"
@@ -392,11 +402,12 @@ def _seed_raw_pack_impl(ctx):
     args.add("--generator", ctx.file.generator)
     args.add("--out", linked.path)
     args.add("--corpus-report", corpus_report)
+    args.add_all(archives, before_each = "--archives")
     args.add_all(buckets, expand_directories = False)
     ctx.actions.run(
         executable = ctx.executable._tool,
         arguments = [args],
-        inputs = depset([corpus_report] + buckets + _generator_files(ctx, _RAW_LINK)),
+        inputs = depset([corpus_report] + archives + buckets + _generator_files(ctx, _RAW_LINK)),
         outputs = [linked],
         mnemonic = "MetalRawLink",
         progress_message = "Linking the raw GM20B path's pipeline pack",

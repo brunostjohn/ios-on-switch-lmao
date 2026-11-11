@@ -2,6 +2,7 @@
 #import "RawMetalInternal.h"
 #import "RawMetalComputeState.h"
 #include "NativeBridgeMetalFrontend.h"
+#include "raw_compute_key.h"
 #include "raw_metallib.h"
 
 @implementation RMComputeState
@@ -80,6 +81,34 @@ static bool airOf(id<MTLFunction> function, raw::AirHash &out)
     return true;
 }
 
+// The archives a creation under MTLPipelineOptionFailOnBinaryArchiveMiss lists, as Metal's answer: false (and Metal's error)
+// where every one is Apple's, none declares the state and the pack holds no kernel of it, never compiled. Where one declares
+// it or the pack holds it, m2v's state goes without them (it reads an Apple archive as holding nothing); m2v answers for its
+// own.
+static bool archivesAnswer(RMComputeState *s, RMFunction *f, MTLPipelineOption &options, NSError **error)
+{
+    if (!f)
+        return true;
+    NSString *name = native_bridge_metal_function_library_name(s->_direct.computeFunction) ?: f.name;
+    const std::string key =
+        raw::computeArchiveKey(name.UTF8String ?: "", s->_constants, s->_maxThreads, s->_multipleOfWidth);
+    const RMArchiveAnswer answer =
+        rmArchiveAnswer(s->_direct.binaryArchives, options, raw::Pack::fnv(key.data(), key.size()));
+    const bool held =
+        answer == RMArchiveAnswer::Missed && s->_keyed &&
+        rmPackHoldsKernels(raw::computeStateKey(s->_air, s->_constants, s->_maxThreads, s->_multipleOfWidth));
+    if (answer == RMArchiveAnswer::Missed && !held) {
+        if (error)
+            *error = rmArchiveMissError(f.name, "compute");
+        return false;
+    }
+    if (answer == RMArchiveAnswer::Declared || held) {
+        options &= ~MTLPipelineOptionFailOnBinaryArchiveMiss;
+        s->_direct.binaryArchives = nil;
+    }
+    return true;
+}
+
 id rmComputeState(id device, id<MTLDevice> fallback, MTLComputePipelineDescriptor *descriptor,
                   MTLPipelineOption options, MTLAutoreleasedComputePipelineReflection *reflection, NSError **error)
 {
@@ -96,6 +125,8 @@ id rmComputeState(id device, id<MTLDevice> fallback, MTLComputePipelineDescripto
     s->_multipleOfWidth = descriptor.threadGroupSizeIsMultipleOfThreadExecutionWidth;
     s->_direct = [descriptor copy];
     s->_direct.computeFunction = twinOf(function);
+    if (!archivesAnswer(s, f, options, error))
+        return nil;
     id nativeReflection = nil;
     NSError *nativeError = nil;
     if (s->_keyed)

@@ -53,7 +53,8 @@
 #   raw_sampler_test  raw/runtime/raw_sampler.h: the Metal samplers the raw path takes, as m2v samples them on NVK
 #                     (raw/test/samplercheck: their headers against NVK's)
 #   raw_archive_test  raw/runtime/raw_archive.h: the binary archive files the device opens where m2v's reader does not
-#                     (iOS 27's thin Apple GPU binaries), as Metal opens a file of another GPU's binaries
+#                     (iOS 27's thin Apple GPU binaries), as Metal opens a file of another GPU's binaries; which archive
+#                     files are m2v's own, and the path an archive inventory names a file by
 #   raw_device_identity_test  raw/runtime/raw_device_answers.h: the identity's GPU subtype (MTLDevice.architecture) is
 #                     the one the selected IPSW ships AGX binaries for, its QuartzCore's
 #   raw_heap_test     raw/runtime/raw_heap.h: an MTLHeap's placements in its one span, Metal's contract (a full heap
@@ -63,7 +64,8 @@
 #                     push word raw/pack/probe_bind.h's bind-offset run names
 #   raw_pack_test     raw/runtime/raw_pack.h: a pack of another version is refused before anything else is read; a
 #                     stage's variants come out of their section in order, none past its end, and a draw takes the
-#                     first whose assumptions its facts hold (raw_variants.h)
+#                     first whose assumptions its facts hold (raw_variants.h); an archive declares its own keys alone
+#   rawpack_archives_test  raw/pack/archives.py: the archive key lists, keyed as the runtime keys a creation
 #   raw_cache_test    raw/runtime/raw_cache.h: the records the runtime makes for states and kernels the pack lacks, kept
 #                     on disk and made once per process (raw/test/cachecheck: the same checks on a bucket's real records),
 #                     and raw_metallib.h: the functions' AIR hashes that key them
@@ -572,6 +574,12 @@ py_test(
 py_test(
     name = "rawpack_split_test",
     srcs = ["rawpack_split_test.py"],
+    deps = ["//drivers/TegraGM20BMetal:raw_pack"],
+)
+
+py_test(
+    name = "rawpack_archives_test",
+    srcs = ["rawpack_archives_test.py"],
     deps = ["//drivers/TegraGM20BMetal:raw_pack"],
 )
 

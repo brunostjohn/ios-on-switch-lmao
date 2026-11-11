@@ -25,5 +25,6 @@ public enum Scenes {
         SharedPointerScene(),
         HeapTwinScene(),
         PlacementHeapScene(),
+        ArchiveMissScene(),
     ]
 }

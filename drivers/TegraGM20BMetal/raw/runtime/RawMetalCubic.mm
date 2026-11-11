@@ -35,9 +35,8 @@ raw::CubicBinds cubicBinds(const raw::Pipeline &pl, RMSampler *const samplers[16
     return b;
 }
 
-void packedVariants(RMPipeline *p)
+void packedVariants(RMPipeline *p, uint64_t keyHash)
 {
-    const uint64_t keyHash = raw::Pack::fnv(p->_key.data(), p->_key.size());
     std::lock_guard<std::mutex> lock(p->_variantLock);
     for (const auto &[name, pl] : gRM->raw->variantPipelines(keyHash, p->_caTransform)) {
         auto variant = std::make_shared<raw::Variant<raw::Pipeline>>();

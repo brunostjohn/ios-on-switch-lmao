@@ -8,6 +8,7 @@
 #include <string>
 #include <vector>
 #include "../runtime/RawDirect.h"
+#include "../runtime/RawRenderKey.h"
 #include "probe_states.h"
 
 namespace probe {
@@ -29,8 +30,9 @@ inline raw::ProbeTextures probeTextures(const std::string &line, bool ours)
 }
 
 // Each state of `lines` (corpusLines') once, made with its functions' library: Core Animation's `qc`, another framework's
-// default.metallib under PROBE_LIB_ROOT, the raw path's own `own` (`standIn` for the two-plane moves). `each(line, ours, state)`
-// gets the line without its mark and the state keyed as the raw path keys it.
+// default.metallib or a bundle's library under PROBE_LIB_ROOT, the raw path's own `own` (`standIn` for the two-plane moves).
+// `each(line, ours, state)` gets the line without its mark and the state keyed as the raw path keys it: a bundle's under its
+// functions' AIR too (RawRenderKey.h, as RawMetalStates.mm looks it up).
 template <typename Each>
 void eachState(id<MTLDevice> dev, id<MTLLibrary> qc, id<MTLLibrary> own, id<MTLLibrary> standIn,
                const std::vector<std::string> &lines, Each each)
@@ -44,8 +46,16 @@ void eachState(id<MTLDevice> dev, id<MTLLibrary> qc, id<MTLLibrary> own, id<MTLL
         id<MTLLibrary> library = !ours ? qc : line.find("| f two_plane_") != std::string::npos ? standIn : own;
         if (framework && !(library = frameworkLibrary(dev, marked.substr(3, pathEnd - 3))))
             continue;
-        if (!parseState(library, line, s, framework ? frameworkName(marked.substr(3, pathEnd - 3)) : ""))
+        const std::string name = framework ? frameworkName(marked.substr(3, pathEnd - 3)) : "";
+        if (!parseState(library, line, s, name))
             continue;
+        raw::CacheKey airKeyed;
+        if (framework && name.empty()) {
+            const std::string cubic = s.cubic.empty() ? std::string() : s.cubic.key();
+            if (!raw::renderCacheKey(s.d, s.key.substr(0, s.key.size() - cubic.size()), true, 0, airKeyed))
+                continue;
+            s.key = airKeyed.key + cubic;
+        }
         if (seen.insert(s.key).second)
             each(line, ours, s);
     }

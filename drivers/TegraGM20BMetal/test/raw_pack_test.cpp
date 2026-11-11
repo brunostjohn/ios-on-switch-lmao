@@ -142,4 +142,55 @@ TEST(RawVariants, FloatAndExtendedRangeTexelsAreNotFixedPoint)
     EXPECT_FALSE(raw::fixedPointTexels(0));
 }
 
+// A pack listing two archives (keys {3, 9} and {5}) and the compute states it holds kernels of ({11})
+std::string writeArchivePack(const char *name)
+{
+    std::vector<uint8_t> file(0x400, 0);
+    raw::PackHeader h = {};
+    memcpy(h.magic, "GM20BPK1", 8);
+    h.version = raw::kPackVersion;
+    const uint32_t counts[2] = {3, 4};
+    const raw::PackArchive archives[3] = {{raw::kPackHeldKernels, 0, 1}, {0x20, 1, 2}, {0x40, 3, 1}};
+    const uint64_t keys[4] = {11, 3, 9, 5};
+    h.section[raw::PackArchives] = {0x100, sizeof counts + sizeof archives + sizeof keys};
+    memcpy(file.data(), &h, sizeof h);
+    memcpy(file.data() + 0x100, counts, sizeof counts);
+    memcpy(file.data() + 0x100 + sizeof counts, archives, sizeof archives);
+    memcpy(file.data() + 0x100 + sizeof counts + sizeof archives, keys, sizeof keys);
+    const std::string path = std::string(getenv("TEST_TMPDIR") ?: "/tmp") + "/" + name;
+    FILE *f = fopen(path.c_str(), "wb");
+    fwrite(file.data(), 1, file.size(), f);
+    fclose(f);
+    return path;
+}
+
+TEST(RawPack, AnArchiveDeclaresItsOwnKeysAlone)
+{
+    raw::Pack pack;
+    std::string err;
+    ASSERT_TRUE(pack.load(writeArchivePack("archives.bin").c_str(), 0, err)) << err;
+    const raw::PackArchive *first = pack.archive(0x20), *second = pack.archive(0x40);
+    ASSERT_NE(first, nullptr);
+    ASSERT_NE(second, nullptr);
+    EXPECT_EQ(pack.archive(0x30), nullptr) << "an archive the pack does not list";
+    EXPECT_TRUE(pack.declares(*first, 3));
+    EXPECT_TRUE(pack.declares(*first, 9));
+    EXPECT_FALSE(pack.declares(*first, 5)) << "the next archive's key";
+    EXPECT_FALSE(pack.declares(*first, 11)) << "a held kernel's key";
+    EXPECT_TRUE(pack.declares(*second, 5));
+    const raw::PackArchive *held = pack.archive(raw::kPackHeldKernels);
+    ASSERT_NE(held, nullptr);
+    EXPECT_TRUE(pack.declares(*held, 11));
+    EXPECT_FALSE(pack.declares(*held, 3));
+}
+
+TEST(RawPack, APackWithoutArchiveListsListsNone)
+{
+    raw::Pack pack;
+    std::string err;
+    ASSERT_TRUE(pack.load(writeVariantPack("no-archives.bin").c_str(), 0, err)) << err;
+    EXPECT_EQ(pack.archive(raw::kPackHeldKernels), nullptr);
+    EXPECT_EQ(pack.archive(0x20), nullptr);
+}
+
 }  // namespace

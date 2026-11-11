@@ -198,4 +198,27 @@ const PackVariant *Pack::variants(const PackPipeline &pp, uint32_t stage, uint32
     return section<PackVariant>(PackVariants) + first;
 }
 
+const PackArchive *Pack::archive(uint64_t pathHash) const
+{
+    if (bytes(PackArchives) < 8)
+        return nullptr;
+    const uint32_t *counts = section<uint32_t>(PackArchives);
+    if (8 + uint64_t(counts[0]) * sizeof(PackArchive) + uint64_t(counts[1]) * 8 > bytes(PackArchives))
+        return nullptr;
+    const PackArchive *a = reinterpret_cast<const PackArchive *>(counts + 2), *end = a + counts[0];
+    const PackArchive *at = std::lower_bound(a, end, pathHash, [](const PackArchive &x, uint64_t h) {
+        return x.pathHash < h;
+    });
+    return at != end && at->pathHash == pathHash && uint64_t(at->first) + at->count <= counts[1] ? at : nullptr;
+}
+
+bool Pack::declares(const PackArchive &archive, uint64_t keyHash) const
+{
+    const uint32_t *counts = section<uint32_t>(PackArchives);
+    const uint64_t *keys =
+        reinterpret_cast<const uint64_t *>(reinterpret_cast<const PackArchive *>(counts + 2) + counts[0]) +
+        archive.first;
+    return std::binary_search(keys, keys + archive.count, keyHash);
+}
+
 }  // namespace raw

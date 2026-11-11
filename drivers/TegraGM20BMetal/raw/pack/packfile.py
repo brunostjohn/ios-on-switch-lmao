@@ -8,9 +8,10 @@ MAGIC = b'GM20BPK1'
 # 2: the header's stack key (rawpack.py --stack) after the section table; 3: barrier-form records; 4: programs' shader
 # data and constant buffer types; 6: compute kernels (runtime/raw_pack.h PackKernel); 8: a texture3d entry's Metal
 # index; 9: split fragment programs (PackSplit); 10: dynamic blend push fields; 11: qualified ordered storage views;
-# 15: program variants, programs' register counts and bound-texture slots, the uniform table, fetch rungs, chip facts
+# 15: program variants, programs' register counts and bound-texture slots, the uniform table, fetch rungs, chip facts,
+# binary archives' declared states
 VERSION = 15
-SECTIONS = 11  # runtime/raw_pack.h PackSectionCount
+SECTIONS = 12  # runtime/raw_pack.h PackSectionCount
 KERNEL_ENTRIES = 16  # PackKernel.entry's length
 PROGRAM_CBUFS = 11  # PackProgram.cbufType's length (runtime/raw_pack.h)
 # PackPipeline's record-v15 tail: variants, variantCount[2], storageBlendMask, storageBlendModel, boundEntries,
@@ -290,6 +291,7 @@ class Pack:
     heap: bytearray
     kernels: list[dict]
     splits: list[dict] = field(default_factory=list)
+    archives: bytes = b''  # the PackArchives section (archives.py)
 
 
 def pipeline_sections(pipes: list[dict]) -> tuple[bytearray, list[int], bytearray, bytearray]:
@@ -358,6 +360,7 @@ def pack_bytes(pack: Pack) -> tuple[bytes, list[int]]:
         bytes(kernel_bin),
         split_bytes(pack.splits),
         bytes(variant_bin),
+        pack.archives,
     ]
     assert len(sections) == SECTIONS
     header_size = 8 + 4 * 4 + 8 * 2 * len(sections)

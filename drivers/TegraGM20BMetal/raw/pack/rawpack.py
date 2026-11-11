@@ -35,8 +35,9 @@ tools alone):
            writes <dir>/work/bucket0 .. bucket15, each a corpus.log of its states
        rawpack.py --probe-bucket <bucket dir> --prebuilt <dir> --nvk <host twin dylib> --qc <default.metallib>
            makes one bucket in place: records.bin (its states' and kernels' records) and bucket 0's warm.{out,log}
-       rawpack.py --link --out <dir> [--stack <hex key>] <bucket dir>...
-           directlink.py over the buckets: <dir>/pack.bin and the rest, as the one-step form writes them
+       rawpack.py --link --out <dir> [--stack <hex key>] [--archives <inventory.tsv>] <bucket dir>...
+           directlink.py over the buckets: <dir>/pack.bin and the rest, as the one-step form writes them, with the
+           archive inventory's declared states (archives.py)
        rawpack.py --stamp <pack.bin> --stack <hex key>
            the stack key into a linked pack's header, so a build stamps a pack it linked without one
 """
@@ -91,9 +92,12 @@ def option(name: str, required: bool = True) -> str | None:
 
 
 BUILT = ('probe', 'directpack', 'native-seed', 'libmock_iokit.dylib', 'own.metallib')
-# Another framework's states (their lines keep lib=, tools/gpu/rawpack.py): the probe loads that library from the
-# crawl's root
-FRAMEWORK = re.compile(r' lib=/System/Library/(?:Private)?Frameworks/\w+\.framework/default\.metallib ')
+# Another framework's states, and a bundle's or a framework resource library's (their lines keep lib=,
+# tools/gpu/rawpack.py framework_line): the probe loads that library from the crawl's root
+FRAMEWORK = re.compile(
+    r' lib=/System/Library/(?:(?:Private)?Frameworks/\w+\.framework/default|\S+?\.(?:bundle|framework/Resources)/\S+)'
+    r'\.metallib '
+)
 QC_PATH = 'System/Library/Frameworks/QuartzCore.framework/default.metallib'
 LIBRARY = re.compile(r' lib=(\S+)')
 # A function a state links (" | <vl|vp|fl|fp> <function> lib=<library> ..."): its library is not the state's
@@ -257,7 +261,7 @@ def build(work: Path, bridge: Path, metal_abi: Path) -> None:
     tool('probe', [HERE / 'probe.mm'])
     tool(
         'directpack',
-        [HERE / 'directpack.mm', RAW / 'runtime/RawDirect.mm'],
+        [HERE / 'directpack.mm', RAW / 'runtime/RawDirect.mm', RAW / 'runtime/RawRenderKey.mm'],
         tuple(RAW / f'runtime/{name}.cpp' for name in DIRECT_RUNTIME),
     )
     tool(
@@ -424,10 +428,14 @@ def stamp(pack_bin: Path, stack: int) -> None:
     pack_bin.write_bytes(pack)
 
 
-def link(out: Path, buckets: list[Path], stack: int) -> None:
-    """directlink.py over the buckets' records: out/pack.bin, stamped with the stack key."""
+def link(out: Path, buckets: list[Path], stack: int, inventory: Path | None = None) -> None:
+    """directlink.py over the buckets' records: out/pack.bin, stamped with the stack key.
+
+    `inventory`: the IPSW's archive inventory, whose archives' declared states the pack lists (archives.py).
+    """
     out.mkdir(parents=True, exist_ok=True)
-    report = run([sys.executable, HERE / 'directlink.py', out, *buckets])
+    archives = ['--archives', inventory] if inventory else []
+    report = run([sys.executable, HERE / 'directlink.py', out, *archives, *buckets])
     if stack:
         stamp(out / 'pack.bin', stack)
     print(report.rstrip())
@@ -438,11 +446,12 @@ def stamp_or_link(stack: int) -> bool:
     if '--stamp' in sys.argv[1:]:  # --stamp <pack.bin> --stack <key>
         stamp(Path(option('--stamp')), stack)
         return True
-    if '--link' in sys.argv[1:]:  # --link --out <dir> [--stack <key>] <bucket dir>...
+    if '--link' in sys.argv[1:]:  # --link --out <dir> [--stack <key>] [--archives <inventory.tsv>] <bucket dir>...
         out = Path(option('--out')).resolve()
         buckets = [Path(a).resolve() for a in sys.argv[sys.argv.index('--link') + 1 :] if Path(a).is_dir()]
         buckets = [b for b in buckets if b != out]
-        link(out, buckets, stack)
+        inventory = option('--archives', False)
+        link(out, buckets, stack, Path(inventory).resolve() if inventory else None)
         return True
     return False
 

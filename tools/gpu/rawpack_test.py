@@ -2,7 +2,8 @@ import hashlib
 import tempfile
 import unittest
 from pathlib import Path
-from tools.gpu.rawpack import library_view, own_build
+
+from tools.gpu.rawpack import framework_line, library_view, own_build
 
 
 class NativeLibraries(unittest.TestCase):
@@ -50,6 +51,36 @@ class BuildTags(unittest.TestCase):
     def test_a_functions_constants_are_not_a_build_tag(self):
         line = 'R ok=1 label=x samples=1 topo=0 ds=0/0 | v a os=1  | f b | '
         self.assertEqual(own_build([line], '24B119')[0], [line])
+
+
+def lines_of(vertex: str, fragment: str, linked: str = '') -> str:
+    return f'R ok=1 label=- samples=1 topo=0 ds=0/0 | v a lib={vertex}  | f b lib={fragment} {linked}| '
+
+
+class Lookups(unittest.TestCase):
+    FRAMEWORK = '/System/Library/PrivateFrameworks/RenderBox.framework/default.metallib'
+    BUNDLE = '/System/Library/VideoProcessors/NRFV1.bundle/default.metallib'
+    RESOURCES = '/System/Library/PrivateFrameworks/AppleCVAPhoto.framework/Resources/default.metallib'
+
+    def test_a_framework_library_and_a_bundles_are_looked_up(self):
+        for library in (self.FRAMEWORK, self.BUNDLE, self.RESOURCES):
+            self.assertTrue(framework_line(lines_of(library, library)), library)
+
+    def test_quartzcore_an_apps_and_mixed_libraries_are_not(self):
+        quartzcore = '/System/Library/Frameworks/QuartzCore.framework/default.metallib'
+        app = '/Applications/SwitchHWTest.app/default.metallib'
+        realitykit = '/System/Library/PrivateFrameworks/CoreRE.framework/mxi.metallib'
+        for vertex, fragment in [
+            (quartzcore, quartzcore),
+            (app, app),
+            (realitykit, realitykit),
+            (self.BUNDLE, self.RESOURCES),
+        ]:
+            self.assertFalse(framework_line(lines_of(vertex, fragment)), (vertex, fragment))
+
+    def test_a_bundle_state_links_nothing(self):
+        linked = f'| fl c lib={self.BUNDLE} '
+        self.assertFalse(framework_line(lines_of(self.BUNDLE, self.BUNDLE, linked)))
 
 
 if __name__ == '__main__':

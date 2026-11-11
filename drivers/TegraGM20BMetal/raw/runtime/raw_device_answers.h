@@ -37,6 +37,9 @@ struct Kind {
     uint32_t gpuSubtype;
     // Its AGX driver's vendorName, familyName and productName (MPSCore matches the joined name, "Apple A13 GPU")
     std::string_view gpuVendor, gpuFamily, gpuProduct;
+    // the target's Metal driver (NativeMetalTarget.rs), the domain its errors take: a creation's binary archive miss is code 3
+    // in it (an M4 answers AGXMetalG16X)
+    const char *driver;
 };
 
 inline constexpr Count kCounts21H461[] = {
@@ -309,9 +312,9 @@ inline constexpr ArgRange kArgs24B119[] = {
 
 inline constexpr Kind kKinds[] = {
     {"21H461", kCounts21H461, std::size(kCounts21H461), kArgs21H461, std::size(kArgs21H461), 0x61, "Apple", "A10X",
-     "GPU"},
+     "GPU", "AGXMetalA10"},
     {"24B119", kCounts24B119, std::size(kCounts24B119), kArgs24B119, std::size(kArgs24B119), 0xd2, "Apple", "A13",
-     "GPU"},
+     "GPU", "AGXMetalA13"},
 };
 
 // The kind this build is for (MetalABI.h): its table's index, or the table count when it has none

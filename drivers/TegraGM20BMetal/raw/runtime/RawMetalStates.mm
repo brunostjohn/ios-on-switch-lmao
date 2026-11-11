@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #import "RawMetalInternal.h"
+#import "RawRenderKey.h"
 
 // The m2v device's Core Image filter-function linking (_MTLDevice's newLibraryWithImageFilterFunctionsSPI: sends it here)
 @protocol RMImageFilterLinking
@@ -275,11 +276,13 @@ static void makeRecord(RMPipeline *p, MTLRenderPipelineDescriptor *d)
     });
 }
 
-- (RMPipeline *)pipelineFor:(MTLRenderPipelineDescriptor *)d twin:(id<MTLRenderPipelineState>)twin
+// The state of `d` as the pack and the archives it lists answer: nil where it is Metal's binary archive miss (`*error`), never
+// compiled; `m2vAnswers` where an archive is m2v's own, whose answer is the twin's, made before the record
+static RMPipeline *pipelineFor(RMDevice *device, MTLRenderPipelineDescriptor *d, MTLPipelineOption o, bool &m2vAnswers,
+                               NSError **error)
 {
     RMPipeline *p = [RMPipeline new];
-    p->_device = self;
-    p->_twin = twin;
+    p->_device = device;
     p.label = d.label;
     RMFunction *vf = [(id)d.vertexFunction isKindOfClass:[RMFunction class]] ? (RMFunction *)d.vertexFunction : nil;
     RMFunction *ff = [(id)d.fragmentFunction isKindOfClass:[RMFunction class]] ? (RMFunction *)d.fragmentFunction : nil;
@@ -291,31 +294,53 @@ static void makeRecord(RMPipeline *p, MTLRenderPipelineDescriptor *d)
         p->_key = raw_metal_pipeline_key(d).UTF8String;
         p->_madeFrom = [d copy];
     }
+    const uint64_t keyHash = raw::Pack::fnv(p->_key.data(), p->_key.size());
+    uint64_t packKey = keyHash;
+    raw::CacheKey own;
+    bool lookedUp = p->_packable;
     if (p->_packable) {
         p->_caTransform =
             vf->_framework == "QuartzCore" && [vf.name hasPrefix:@"fixed_vert_"] && [vf.name hasSuffix:@"_spc"];
-        p->_raw =
-            gRM->raw->pipeline(raw::Pack::fnv(p->_key.data(), p->_key.size()), raw::PackForm::Default, p->_caTransform);
+    } else if (p->_completable && raw::renderCacheKey(twinDescriptor(d), p->_key, true, 0, own)) {
+        packKey = raw::Pack::fnv(own.key.data(), own.key.size());  // another library's: under its functions' AIR too
+        lookedUp = true;
+    }
+    if (lookedUp) {
+        p->_raw = gRM->raw->pipeline(packKey, raw::PackForm::Default, p->_caTransform);
 #if SWITCH_RAW_DIAGNOSTICS
         markUniformProbe(p->_raw, d.label);
 #endif
         p->_packed = p->_raw != nullptr;
         if (p->_packed)
-            packedVariants(p);
+            packedVariants(p, packKey);
     }
-    makeRecord(p, d);
-    if (!p->_raw) {
-        const char *label = d.label.UTF8String ?: "-";
-        SWITCH_REFUSE_DETAIL("raw", "state.unpacked", raw::Pack::fnv(label, strlen(label)),
-                             "state neither in the pack nor made at its creation: m2v draws it%s: %s (functions %s, %s)",
-                             !p->_completable           ? " (a function not this device's: never made)"
-                             : p->_asked                ? " until its compile, asked again, makes it"
-                             : gRM->raw->stats.heapFull ? " (or the shader heap is full)"
-                                                        : " (the raw log names why it was refused)",
-                             label, d.vertexFunction ? object_getClassName(d.vertexFunction) : "nil",
-                             d.fragmentFunction ? object_getClassName(d.fragmentFunction) : "nil");
+    const RMArchiveAnswer answer =
+        p->_raw || !p->_completable ? RMArchiveAnswer::NotAsked : rmArchiveAnswer(d.binaryArchives, o, keyHash);
+    if (answer == RMArchiveAnswer::Missed) {
+        if (error)
+            *error = rmArchiveMissError((d.fragmentFunction ?: d.vertexFunction).name, "render");
+        return nil;
     }
+    p->_archived = answer == RMArchiveAnswer::Declared;
+    m2vAnswers = answer == RMArchiveAnswer::M2V;
+    if (!m2vAnswers)
+        makeRecord(p, d);
     return p;
+}
+
+static void refuseUnmade(RMPipeline *p, MTLRenderPipelineDescriptor *d)
+{
+    if (p->_raw)
+        return;
+    const char *label = d.label.UTF8String ?: "-";
+    SWITCH_REFUSE_DETAIL("raw", "state.unpacked", raw::Pack::fnv(label, strlen(label)),
+                         "state neither in the pack nor made at its creation: m2v draws it%s: %s (functions %s, %s)",
+                         !p->_completable           ? " (a function not this device's: never made)"
+                         : p->_asked                ? " until its compile, asked again, makes it"
+                         : gRM->raw->stats.heapFull ? " (or the shader heap is full)"
+                                                    : " (the raw log names why it was refused)",
+                         label, d.vertexFunction ? object_getClassName(d.vertexFunction) : "nil",
+                         d.fragmentFunction ? object_getClassName(d.fragmentFunction) : "nil");
 }
 
 // m2v's state over the twins, for a command buffer that has to go to m2v (made asynchronously in the render server:
@@ -351,17 +376,39 @@ static id<MTLRenderPipelineState> pipelineTwin(MTLRenderPipelineDescriptor *d, M
     return [gRM->fallback newRenderPipelineStateWithDescriptor:twinDescriptor(d) options:o reflection:nil error:error];
 }
 
+// A state of `d` under `o`: its record the pack's, or made at once, unless the archives it lists miss it as Metal's would; its
+// m2v twin made as a packed state's where the pack or an archive holds it (packedTwinDescriptor)
+static id<MTLRenderPipelineState> makeState(RMDevice *device, MTLRenderPipelineDescriptor *d, MTLPipelineOption o,
+                                            MTLAutoreleasedRenderPipelineReflection *reflection, NSError **error)
+{
+    bool m2vAnswers = false;
+    RMPipeline *p = pipelineFor(device, d, o, m2vAnswers, error);
+    if (!p)
+        return nil;
+    const bool packed = p->_raw || p->_archived;
+    if (reflection)
+        p->_twin = [gRM->fallback newRenderPipelineStateWithDescriptor:packedTwinDescriptor(d, packed)
+                                                               options:packedTwinOptions(o, packed)
+                                                            reflection:reflection
+                                                                 error:error];
+    else
+        p->_twin = pipelineTwin(d, o, packed, error);
+    if (m2vAnswers) {
+        if (!p->_twin)
+            return nil;
+        makeRecord(p, d);
+    }
+    refuseUnmade(p, d);
+    if (error && p->_raw)
+        *error = nil;
+    return !p->_twin && !p->_raw ? nil : (id<MTLRenderPipelineState>)p;
+}
+
 - (id<MTLRenderPipelineState>)newRenderPipelineStateWithDescriptor:(MTLRenderPipelineDescriptor *)d
                                                              error:(NSError **)error
 {
     SWITCH_API(ApiObject);
-    RMPipeline *p = [self pipelineFor:d twin:nil];
-    p->_twin = pipelineTwin(d, MTLPipelineOptionNone, p->_raw, error);
-    if (!p->_twin && !p->_raw)
-        return nil;
-    if (error && p->_raw)
-        *error = nil;
-    return (id<MTLRenderPipelineState>)p;
+    return makeState(self, d, MTLPipelineOptionNone, nil, error);
 }
 
 - (id<MTLRenderPipelineState>)newRenderPipelineStateWithDescriptor:(MTLRenderPipelineDescriptor *)d
@@ -370,22 +417,7 @@ static id<MTLRenderPipelineState> pipelineTwin(MTLRenderPipelineDescriptor *d, M
                                                              error:(NSError **)error
 {
     SWITCH_API(ApiObject);
-    if (reflection) {
-        RMPipeline *p = [self pipelineFor:d twin:nil];
-        const bool packed = p->_raw != nullptr;
-        p->_twin = [gRM->fallback newRenderPipelineStateWithDescriptor:packedTwinDescriptor(d, packed)
-                                                               options:packedTwinOptions(o, packed)
-                                                            reflection:reflection
-                                                                 error:error];
-        if (error && p->_raw)
-            *error = nil;
-        return !p->_twin && !p->_raw ? nil : (id<MTLRenderPipelineState>)p;
-    }
-    RMPipeline *p = [self pipelineFor:d twin:nil];
-    p->_twin = pipelineTwin(d, o, p->_raw, error);
-    if (error && p->_raw)
-        *error = nil;
-    return !p->_twin && !p->_raw ? nil : (id<MTLRenderPipelineState>)p;
+    return makeState(self, d, o, reflection, error);
 }
 
 // Made as the synchronous calls make a state (its record at its creation, its m2v twin at its first fallback), on a global queue

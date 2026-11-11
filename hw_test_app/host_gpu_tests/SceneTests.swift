@@ -52,6 +52,12 @@ final class SceneTests: XCTestCase {
         XCTAssertEqual(result.checks.count, 24)
     }
 
+    func testArchiveMissOnThisMac() async throws {
+        let scene = try XCTUnwrap(Scenes.all.first { $0.id == "gpu.raw.archive_miss" })
+        let result = try await scene.run(makeGPU())
+        XCTAssertTrue(result.passed, result.reasons(limit: 8).joined(separator: "; "))
+    }
+
     func testPassFusionOnThisMac() async throws {
         let scene = try XCTUnwrap(Scenes.all.first { $0.id == "gpu.raw.pass_fusion" })
         let result = try await scene.run(makeGPU())
