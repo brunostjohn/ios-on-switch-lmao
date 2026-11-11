@@ -4,10 +4,13 @@ import Metal
 import QuartzCore
 import UIKit
 
-/// Another raw client drawing while gpu.recover.kill_one kills this process's channel: the bench's raw device, over a
-/// connection and channel of its own, runs the app's known-answer draw back to back on a thread of its own and keeps its
-/// failures and the longest wait between two finished runs.
+/// Another raw client working while gpu.recover.kill_one kills this process's channel: the bench's raw device, over a
+/// connection and channel of its own, fills a target on the 2D engine back to back on a thread of its own (no program and no
+/// pack record, so nothing of the bench's own draws), reads every texel back against the fill, and keeps its failures and
+/// the longest wait between two finished runs.
 final class RecoverBystander: @unchecked Sendable {
+    /// The same byte in every channel, whichever order the solid colour's format packs them in
+    static let fill = 0x8080_8080
     private let runner: BenchRunner
     private let experiment: BenchExperiment
     private let lock = NSLock()
@@ -22,8 +25,9 @@ final class RecoverBystander: @unchecked Sendable {
             "protocol": BenchProtocol.version, "batch": "bystander",
             "experiments": [
                 [
-                    "id": "bystander", "kind": "known", "readback": "none", "repeats": 4,
-                    "target": ["format": "rgba32float", "width": 64, "height": 64],
+                    "id": "bystander", "kind": "twod", "readback": "full", "repeats": 4,
+                    "target": ["format": "rgba8unorm", "width": 64, "height": 64],
+                    "twod": ["op": "fill", "color": [Self.fill, 0, 0, 0]],
                 ]
             ],
         ]
@@ -42,9 +46,12 @@ final class RecoverBystander: @unchecked Sendable {
                 let now = DispatchTime.now().uptimeNanoseconds
                 self.locked {
                     self.runs += 1
-                    if outcome.status != "ok" {
+                    let wrong = outcome.status == "ok" && !(outcome.texels.map(Self.filled) ?? false)
+                    if outcome.status != "ok" || wrong {
                         self.errors += 1
-                        if self.firstError.isEmpty { self.firstError = "\(outcome.status):\(outcome.why)" }
+                        if self.firstError.isEmpty {
+                            self.firstError = wrong ? "texels:not the fill" : "\(outcome.status):\(outcome.why)"
+                        }
                     }
                     self.longestNs = max(self.longestNs, now - self.lastNs)
                     self.lastNs = now
@@ -52,6 +59,10 @@ final class RecoverBystander: @unchecked Sendable {
             }
             self.ended.signal()
         }.start()
+    }
+
+    static func filled(_ texels: Data) -> Bool {
+        texels.count == 64 * 64 * 4 && texels.allSatisfy { $0 == 0x80 }
     }
 
     /// From now on: the runs, failures and waits before (the first, cold run among them) are not counted.
