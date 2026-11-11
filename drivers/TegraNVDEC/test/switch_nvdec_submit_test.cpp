@@ -13,8 +13,8 @@ struct switch_gpu_bridge {
 namespace {
 std::vector<switch_gpu_backing_token> sourceTokens;
 std::vector<uint32_t> publishedWords;
-uint32_t begins, aborts, commits, retained, bridges, released, roomWaits, submits;
-int bridgeError, submitError, retainError, statusError;
+uint32_t begins, aborts, commits, retained, bridges, released, roomWaits, submits, powerUses, powerDones;
+int bridgeError, submitError, retainError, statusError, powerError;
 int bridgeResult = 1;
 uint64_t nextTestSequence = 0;
 bool transactionLocked, changeProducer, busyOnce;
@@ -205,6 +205,20 @@ void tegra_host1x_describe_channel(uint32_t, char *, size_t)
     throw std::runtime_error("decode fault");
 }
 
+int switch_nvdec_power_use()
+{
+    ++powerUses;
+    return powerError;
+}
+
+void switch_nvdec_power_done()
+{
+    ++powerDones;
+}
+
+void switch_nvdec_power_idle()
+{}
+
 bool switch_nvdec_semantics_start(uint32_t)
 {
     return true;
@@ -294,7 +308,8 @@ protected:
     void SetUp() override
     {
         begins = aborts = commits = retained = bridges = released = roomWaits = submits = preparedBatches = 0;
-        bridgeError = submitError = retainError = statusError = 0;
+        powerUses = powerDones = 0;
+        bridgeError = submitError = retainError = statusError = powerError = 0;
         bridgeResult = 1;
         transactionLocked = changeProducer = busyOnce = semanticCapture = false;
         sourceTokens.clear();
@@ -476,4 +491,43 @@ TEST_F(SwitchNVDECSubmitTest, CompletedHardwareWithFailedProducerRetiresOnlyItsO
     ASSERT_TRUE(gQueue.retire(static_cast<uint32_t>(independent.sequence)));
     EXPECT_EQ(waitSequence(independent.sequence), 0);
     EXPECT_EQ(waitSequence(failed.sequence), -5);
+}
+
+// Idle power gating (TegraNVDEC.cpp, SwitchEngineGate.h): a run holds the powered engine across its publication, an
+// idle power-off parks only an empty queue, and the power-on's proof stream moves the syncpoint the queue rebases on.
+TEST_F(SwitchNVDECSubmitTest, EveryRunHoldsThePowerOnceAndReleasesIt)
+{
+    const TegraNVDECResolve resolve = [](void *, uint32_t, TegraNVDECBlock *) {
+        return false;
+    };
+    const Check check = [](const TegraNVDECSubmit *, const uint64_t *) -> const char * {
+        return nullptr;
+    };
+    const char *why = nullptr;
+    ASSERT_EQ(run(&request, resolve, nullptr, check, &fence, &why), 0);
+    EXPECT_EQ(powerUses, 1u);
+    EXPECT_EQ(powerDones, 1u);
+    powerError = -19;
+    const uint32_t before = submits;
+    EXPECT_EQ(run(&request, resolve, nullptr, check, &fence, &why), -19);
+    EXPECT_EQ(submits, before);
+    EXPECT_EQ(powerDones, 1u);
+}
+
+TEST_F(SwitchNVDECSubmitTest, AnIdlePowerOffParksOnlyAnEmptyQueue)
+{
+    ASSERT_EQ(submit(), 0);
+    EXPECT_FALSE(switch_nvdec_jobs_park(false));
+    EXPECT_FALSE(gSuspended);
+}
+
+TEST_F(SwitchNVDECSubmitTest, AParkedQueueHoldsTheNextJobUntilAResumeRebasesIt)
+{
+    ASSERT_TRUE(switch_nvdec_jobs_park(false));
+    EXPECT_THROW(submit(), std::runtime_error) << "the job sleeps until resume";
+    IOLockUnlock(gLock);
+    switch_nvdec_jobs_resume(true, static_cast<uint32_t>(nextTestSequence) + 2);
+    EXPECT_FALSE(gSuspended);
+    ASSERT_EQ(submit(), 0);
+    EXPECT_EQ(fence, static_cast<uint32_t>(nextTestSequence + 3));
 }

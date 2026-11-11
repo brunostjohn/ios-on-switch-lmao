@@ -102,6 +102,8 @@ void retireThread(void *, wait_result_t)
         completeJob(job);
         IOLockLock(gLock);
         gQueue.retire(fence);
+        if (!gQueue.count)
+            switch_nvdec_power_idle();
         __atomic_store_n(&gCompleted, gQueue.completed, __ATOMIC_RELEASE);
         IOLockWakeup(gLock, &gQueue.count, false);
         IOLockWakeup(gLock, &gQueue.completed, false);
@@ -392,7 +394,11 @@ int run(const TegraNVDECSubmit *submit, TegraNVDECResolve resolve, void *context
         return -12;
     int error = prepare(*submit, resolve, context, check, *work, why);
     if (!error)
+        error = switch_nvdec_power_use();
+    if (!error) {
         error = publish(*submit, *work, fence);
+        switch_nvdec_power_done();
+    }
     if (work->words)
         IODelete(work->words, uint32_t, work->wordCapacity);
     IODelete(work, Submission, 1);
@@ -442,13 +448,16 @@ extern "C" int tegra_nvdec_wait(uint32_t fence)
     return valid ? waitSequence(sequence) : -22;
 }
 
-void switch_nvdec_jobs_suspend()
+bool switch_nvdec_jobs_park(bool drain)
 {
     IOLockLock(gLock);
-    gSuspended = true;
-    while (gQueue.count)
+    const bool parked = drain || !gQueue.count;
+    if (parked)
+        gSuspended = true;
+    while (parked && gQueue.count)
         IOLockSleep(gLock, &gQueue.count, THREAD_UNINT);
     IOLockUnlock(gLock);
+    return parked;
 }
 
 void switch_nvdec_jobs_resume(bool ready, uint32_t completed)
