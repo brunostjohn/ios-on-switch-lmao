@@ -182,7 +182,11 @@ struct nak_shader_info {
     */
    uint8_t num_control_barriers;
 
-   uint8_t _pad0;
+   /**
+    * Maxwell: the constant buffer slot + 1 its bound texture instructions
+    * read handles from (SET_BINDLESS_TEXTURE); 0: none
+    */
+   uint8_t bound_textures;
 
    /** Maximum number of warps per SM based on static information */
    uint32_t max_warps_per_sm;

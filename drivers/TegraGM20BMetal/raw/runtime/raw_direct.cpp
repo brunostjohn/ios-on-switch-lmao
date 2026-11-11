@@ -72,6 +72,7 @@ CapturedProgram programOf(const NvkStage &s)
     p.data.assign(data, data + s.dataBytes);
     p.cbufTypes.assign(s.cbufTypes, s.cbufTypes + std::min<uint32_t>(s.cbufCount, 16));
     p.gprs = uint8_t(s.numGprs);
+    p.boundTextures = s.boundTextures;
     p.id = hex(fnv(p.data.data(), p.data.size(), fnv(p.image.data(), p.image.size())));
     return p;
 }

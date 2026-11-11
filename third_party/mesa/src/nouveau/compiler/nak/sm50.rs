@@ -10,6 +10,9 @@ use mesa_util::bitview::*;
 use rustc_hash::FxHashMap;
 use std::ops::Range;
 
+mod texs;
+pub use texs::bound_texture_cbuf;
+
 pub fn instr_latency(_sm: u8, op: &Op, dst_idx: usize) -> u32 {
     let file = match &op.dsts_as_slice()[dst_idx] {
         Dst::None => return 0,
@@ -2280,15 +2283,17 @@ impl SM50Op for OpTex {
     }
 
     fn encode(&self, e: &mut SM50Encoder<'_>) {
+        if self.scalar {
+            e.encode_texs(self, false);
+            return;
+        }
         match self.tex {
-            TexRef::Bound(idx) => {
-                e.set_opcode(0x0380);
-                e.set_field(36..49, idx);
+            TexRef::Bound(_) | TexRef::CBuf { .. } => {
+                // TEX's bound form, its sparse predicate PT (bits 51-53)
+                e.set_opcode(0xc038);
+                e.set_field(36..49, texs::bound_index(&self.tex));
                 e.set_bit(54, self.offset_mode == TexOffsetMode::AddOffI);
                 e.set_tex_lod_mode(55..57, self.lod_mode);
-            }
-            TexRef::CBuf { .. } => {
-                panic!("SM50 doesn't have CBuf textures");
             }
             TexRef::Bindless => {
                 e.set_opcode(0xdeb8);
@@ -2317,13 +2322,14 @@ impl SM50Op for OpTld {
     }
 
     fn encode(&self, e: &mut SM50Encoder<'_>) {
+        if self.scalar {
+            e.encode_tlds(self, false);
+            return;
+        }
         match self.tex {
-            TexRef::Bound(idx) => {
+            TexRef::Bound(_) | TexRef::CBuf { .. } => {
                 e.set_opcode(0xdc38);
-                e.set_field(36..49, idx);
-            }
-            TexRef::CBuf { .. } => {
-                panic!("SM50 doesn't have CBuf textures");
+                e.set_field(36..49, texs::bound_index(&self.tex));
             }
             TexRef::Bindless => {
                 e.set_opcode(0xdd38);
@@ -2361,15 +2367,16 @@ impl SM50Op for OpTld4 {
             TexOffsetMode::AddOffI => 1_u8,
             TexOffsetMode::PerPx => 2_u8,
         };
+        if self.scalar {
+            e.encode_tld4s(self, false);
+            return;
+        }
         match self.tex {
-            TexRef::Bound(idx) => {
+            TexRef::Bound(_) | TexRef::CBuf { .. } => {
                 e.set_opcode(0xc838);
-                e.set_field(36..49, idx);
+                e.set_field(36..49, texs::bound_index(&self.tex));
                 e.set_field(54..56, offset_mode);
                 e.set_field(56..58, self.comp);
-            }
-            TexRef::CBuf { .. } => {
-                panic!("SM50 doesn't have CBuf textures");
             }
             TexRef::Bindless => {
                 e.set_opcode(0xdef8);
@@ -2399,12 +2406,9 @@ impl SM50Op for OpTmml {
 
     fn encode(&self, e: &mut SM50Encoder<'_>) {
         match self.tex {
-            TexRef::Bound(idx) => {
+            TexRef::Bound(_) | TexRef::CBuf { .. } => {
                 e.set_opcode(0xdf58);
-                e.set_field(36..49, idx);
-            }
-            TexRef::CBuf { .. } => {
-                panic!("SM50 doesn't have CBuf textures");
+                e.set_field(36..49, texs::bound_index(&self.tex));
             }
             TexRef::Bindless => {
                 e.set_opcode(0xdf60);
@@ -2430,12 +2434,9 @@ impl SM50Op for OpTxd {
 
     fn encode(&self, e: &mut SM50Encoder<'_>) {
         match self.tex {
-            TexRef::Bound(idx) => {
+            TexRef::Bound(_) | TexRef::CBuf { .. } => {
                 e.set_opcode(0xde38);
-                e.set_field(36..49, idx);
-            }
-            TexRef::CBuf { .. } => {
-                panic!("SM50 doesn't have CBuf textures");
+                e.set_field(36..49, texs::bound_index(&self.tex));
             }
             TexRef::Bindless => {
                 e.set_opcode(0xde78);
@@ -2462,12 +2463,9 @@ impl SM50Op for OpTxq {
 
     fn encode(&self, e: &mut SM50Encoder<'_>) {
         match self.tex {
-            TexRef::Bound(idx) => {
+            TexRef::Bound(_) | TexRef::CBuf { .. } => {
                 e.set_opcode(0xdf48);
-                e.set_field(36..49, idx);
-            }
-            TexRef::CBuf { .. } => {
-                panic!("SM50 doesn't have CBuf textures");
+                e.set_field(36..49, texs::bound_index(&self.tex));
             }
             TexRef::Bindless => {
                 e.set_opcode(0xdf50);

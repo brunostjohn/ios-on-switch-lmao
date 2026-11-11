@@ -141,6 +141,7 @@ mesa_cc_library(
         "nak_nir_lower_scan_reduce.c",
         "nak_nir_lower_shared_atomics.c",
         "nak_nir_lower_tex.c",
+        "nak_nir_lower_tex_sm50.c",
         "nak_nir_lower_vtg_io.c",
         "nak_nir_mark_lcssa_invariants.c",
         "nak_nir_rematerialize_load_const.c",
@@ -306,6 +307,19 @@ py_test(
     args = [
         "$(rootpath :nak_sm53_half_test_bin)",
         "sm53_half_tests",
+    ],
+    data = [":nak_sm53_half_test_bin"],
+    main = "run_host_test.py",
+)
+
+# ios-on-switch-lmao: NAK's SM50 TEXS/TLDS/TLD4S and bound TEX encodings (nak/sm50/texs.rs sm53_texs_tests), from the same binary
+py_test(
+    name = "sm53_texs_test",
+    size = "small",
+    srcs = ["run_host_test.py"],
+    args = [
+        "$(rootpath :nak_sm53_half_test_bin)",
+        "sm53_texs_tests",
     ],
     data = [":nak_sm53_half_test_bin"],
     main = "run_host_test.py",

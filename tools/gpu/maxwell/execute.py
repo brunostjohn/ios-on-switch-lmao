@@ -3,7 +3,7 @@
 import math
 from fractions import Fraction
 
-from tools.gpu.maxwell import isa
+from tools.gpu.maxwell import isa, texture
 from tools.gpu.maxwell.floats import F16, F32, RN, arith, convert, encode, flush, is_inf, is_nan, value
 from tools.gpu.maxwell.interp import (
     MAX_STEPS,
@@ -25,8 +25,6 @@ from tools.gpu.maxwell.interp import (
 from tools.gpu.maxwell.isa import field as bits
 
 LANE_OPS = ('SHFL', 'FSWZADD', 'VOTE', 'ATOMS', 'STG', 'BAR')
-LOD_OPERANDS = {0: 0, 1: 0, 2: 1, 3: 1}  # auto, zero, bias, level
-DIM_COORDS = {0: 1, 1: 2, 2: 2, 3: 3, 4: 3, 6: 3, 7: 4}
 FORMATS = {0: None, 1: F16, 2: F32}
 
 
@@ -201,8 +199,10 @@ def alu(name: str, w: int, lane: Lane, inputs: Inputs) -> None:  # noqa: C901, P
             lane.w(d + k, inputs.cbuf(bits(w, 36, 5), offset + 4 * k))
     elif base == 'IPA':
         ipa(w, lane, inputs, d)
-    elif base in ('TEX', 'TLD', 'TLD4'):
-        tex(name, w, lane, inputs, d)
+    elif base == 'TEX':
+        texture.tex(name, w, lane, inputs, d)
+    elif base == 'TEXS':
+        texture.texs(w, lane, inputs)
     elif name == 'TXQ_b':
         result = inputs.texture(('txq', lane.r(bits(w, 8, 8)), bits(w, 22, 6)))
         mask = bits(w, 31, 4)
@@ -347,22 +347,6 @@ def ipa(w: int, lane: Lane, inputs: Inputs, d: int) -> None:
     elif freq not in (0, 2):
         raise UnsupportedError('IPA state')
     lane.w(d, v)
-
-
-def tex(name: str, w: int, lane: Lane, inputs: Inputs, d: int) -> None:
-    if name != 'TEX_b':
-        raise UnsupportedError(name)
-    dim, mask, lod = bits(w, 28, 3), bits(w, 31, 4), bits(w, 37, 2)
-    ra, rb = bits(w, 8, 8), bits(w, 20, 8)
-    extra = 1 + LOD_OPERANDS[lod] + bits(w, 36, 1) + bits(w, 50, 1)
-    coords = tuple(lane.r(ra + k) if ra != 255 else 0 for k in range(DIM_COORDS[dim]))
-    handle = tuple(lane.r(rb + k) if rb != 255 else 0 for k in range(extra))
-    result = inputs.texture((handle, coords, lod, dim))
-    out = 0
-    for c in range(4):
-        if mask >> c & 1:
-            lane.w(d + out, result[c])
-            out += 1
 
 
 def branch_target(pc: int, w: int) -> int:

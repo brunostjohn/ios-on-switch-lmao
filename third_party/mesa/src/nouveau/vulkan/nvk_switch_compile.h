@@ -86,6 +86,7 @@ struct switch_nvk_stage {
    uint32_t interlock_control; /* SET_PIXEL_SHADER_INTERLOCK_CONTROL */
    uint64_t uses_sample_shading;
    uint32_t semantic_version;
+   uint8_t bound_textures; /* nak_shader_info's: SET_BINDLESS_TEXTURE + 1, 0 none */
 };
 
 VkResult switch_nvk_compile_stage(VkDevice device,

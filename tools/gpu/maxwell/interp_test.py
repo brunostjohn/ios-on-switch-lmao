@@ -6,8 +6,9 @@ import struct
 import unittest
 from pathlib import Path
 
-from tools.gpu.maxwell import floats, gate, isa
+from tools.gpu.maxwell import floats, gate, isa, texture
 from tools.gpu.maxwell.execute import run
+from tools.gpu.maxwell.interp import Lane
 
 FIXTURE = Path(__file__).with_name('testdata') / 'image_draw_fragment.hex'
 F2F_NEG = 1 << 45
@@ -76,7 +77,7 @@ class GateTest(unittest.TestCase):
 
     def test_identical_to_itself(self):
         header = ONE_TARGET_RGBA
-        self.assertEqual(gate.compare(header + self.code, header + self.code, 30, 1), 'identical')
+        self.assertEqual(gate.compare((header + self.code, -1), (header + self.code, -1), 30, 1), 'identical')
 
     def test_sees_one_flipped_bit(self):
         words = list(struct.unpack(f'<{len(self.code) // 8}Q', self.code))
@@ -84,7 +85,34 @@ class GateTest(unittest.TestCase):
         words[at] ^= F2F_NEG
         mutated = struct.pack(f'<{len(words)}Q', *words)
         header = ONE_TARGET_RGBA
-        self.assertTrue(gate.compare(header + self.code, header + mutated, 50, 1).startswith('different'))
+        self.assertTrue(gate.compare((header + self.code, -1), (header + mutated, -1), 50, 1).startswith('different'))
+
+
+class TextureTest(unittest.TestCase):
+    # TEX_b r4, r0 (x, y), r2 (the handle) .2d rgba; TEXS r8:r10, r0 (x), r1 (y) .2d rgba at bound index 16
+    TEX_B = 0xDE80_0000_0000_0000 | 0xF << 31 | 2 << 28 | 2 << 20 | 0 << 8 | 4
+    TEXS = 0xD800_0000_0000_0000 | 1 << 53 | 4 << 50 | 16 << 36 | 10 << 28 | 1 << 20 | 0 << 8 | 8
+
+    def lanes(self) -> tuple:
+        inputs = gate.Seeded(3, 0).inputs(0, bound_cbuf=1)
+        lane = Lane()
+        lane.w(0, 0x3E800000)
+        lane.w(1, 0x3F400000)
+        lane.w(2, inputs.cbuf(1, 64))
+        return inputs, lane
+
+    def test_bound_scalar_and_bindless_forms_fetch_the_same_texel(self):
+        inputs, lane = self.lanes()
+        texture.tex('TEX_b', self.TEX_B, lane, inputs, 4)
+        texture.texs(self.TEXS, lane, inputs)
+        self.assertEqual([lane.r(r) for r in (4, 5, 6, 7)], [lane.r(r) for r in (8, 9, 10, 11)])
+
+    def test_texs_f16_packs_round_to_nearest_even_halves(self):
+        inputs, lane = self.lanes()
+        texture.tex('TEX_b', self.TEX_B, lane, inputs, 4)
+        texture.texs(self.TEXS & ~(1 << 59), lane, inputs)
+        want = [floats.convert(lane.r(r), floats.F32, floats.F16) for r in (4, 5, 6, 7)]
+        self.assertEqual((lane.r(8), lane.r(10)), (want[0] | want[1] << 16, want[2] | want[3] << 16))
 
 
 if __name__ == '__main__':

@@ -44,6 +44,7 @@ struct NvkStage {
     uint32_t interlockControl;
     uint64_t usesSampleShading;
     uint32_t semanticVersion;
+    uint8_t boundTextures;
 };
 
 struct NvkStageMetrics {

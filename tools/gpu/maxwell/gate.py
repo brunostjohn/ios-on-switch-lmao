@@ -68,7 +68,7 @@ class Seeded:
         # in every run
         return random.Random(int.from_bytes(hashlib.blake2b(repr((self.base, key)).encode(), digest_size=8).digest()))
 
-    def inputs(self, lane: int = 0) -> Inputs:
+    def inputs(self, lane: int = 0, bound_cbuf: int = -1) -> Inputs:
         def attribute(addr: int) -> int:
             return 0x3F800000 if addr == 0x7C else word(self.rng('a', addr, lane), 0.9)
 
@@ -81,7 +81,7 @@ class Seeded:
             r = self.rng('t', operands)
             return [word(r, 0.85) for _ in range(4)]
 
-        return Inputs(attribute, cbuf, texture)
+        return Inputs(attribute, cbuf, texture, bound_cbuf)
 
 
 def outputs(image: bytes) -> int:
@@ -93,15 +93,19 @@ def lane_result(result: tuple) -> tuple:
     return (killed, stores) if killed else result
 
 
-def compare(before: bytes, after: bytes, n: int, seed: int, pinned: dict | None = None) -> str:
-    count = outputs(before)
-    if count != outputs(after):
+def compare(before: tuple, after: tuple, n: int, seed: int, pinned: dict | None = None) -> str:
+    """Compare two programs, each (image, the constant buffer its bound textures read handles from or -1)."""
+    count = outputs(before[0])
+    if count != outputs(after[0]):
         return 'different: output maps'
+
+    def run(program: tuple, i: int) -> list:
+        quad = [Seeded(seed, i, pinned).inputs(lane, program[1]) for lane in range(LANES)]
+        return [lane_result(r) for r in run_quad(program[0][isa.HEADER_BYTES :], quad, count)]
+
     for i in range(n):
         try:
-            quad = [Seeded(seed, i, pinned).inputs(lane) for lane in range(LANES)]
-            a = [lane_result(r) for r in run_quad(before[isa.HEADER_BYTES :], quad, count)]
-            b = [lane_result(r) for r in run_quad(after[isa.HEADER_BYTES :], quad, count)]
+            a, b = run(before, i), run(after, i)
         except UnsupportedError as e:
             return f'unsupported: {e}'
         if a != b:
@@ -135,10 +139,11 @@ def main() -> None:
         for f in d.glob('*.json'):
             j = json.loads(f.read_text())
             residuals[j['key']] = {(0, offset): 0 for offset in j.get('residual_words', [])}
+            bound = j.get('fs_bound_textures', 0) - 1
             if variant is None:
-                out[j['key']] = bytes.fromhex(j['fs'])
+                out[j['key']] = (bytes.fromhex(j['fs']), bound)
             elif (v := nakstat.fragment_variant(j, variant)) is not None:
-                out[j['key']] = bytes.fromhex(v['code'])
+                out[j['key']] = (bytes.fromhex(v['code']), v.get('bound_textures', 0) - 1)
         return out
 
     pinned = {}

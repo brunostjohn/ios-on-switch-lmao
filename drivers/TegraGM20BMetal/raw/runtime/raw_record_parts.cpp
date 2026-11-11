@@ -227,7 +227,8 @@ static uint8_t uniformBank(const CapturedProgram &program, const PackEntry &e)
     return kNoUniform;
 }
 
-// The uniform entries the programs read (the assumption bits they are named by: PackPipeline::uniform) and each color's rung
+// The uniform entries the programs read (the assumption bits they are named by: PackPipeline::uniform), each color's rung, and
+// the set-0 handle words the fragment program's bound textures read
 static void describeReads(RuntimeRecord &out)
 {
     PackPipeline &p = out.pipeline;
@@ -243,6 +244,12 @@ static void describeReads(RuntimeRecord &out)
         if (bank != kNoUniform)
             p.uniform[n++] = {uint8_t(k), bank, 0, 0};
     }
+    const CapturedProgram &fs = out.programs[1];
+    if (!fs.boundTextures || fs.boundTextures > fs.cbufTypes.size() || fs.cbufTypes[fs.boundTextures - 1] != CbufSet)
+        return;
+    for (uint32_t k = 0; k < p.entries; k++)
+        if (p.entry[k].kind != EntryUbo && p.entry[k].kind != EntryColorTable)
+            p.boundEntries |= 1u << k;
 }
 
 bool assembleRecord(const RecordParts &parts, const std::string &key, const PackRules &rules, RuntimeRecord &out,

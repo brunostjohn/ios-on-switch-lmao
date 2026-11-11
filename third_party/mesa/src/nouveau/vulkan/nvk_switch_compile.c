@@ -54,6 +54,7 @@ switch_nvk_stage_of(const struct nvk_shader *shader,
    for (uint32_t c = 0; c < out->cbuf_count; c++)
       out->cbuf_types[c] = switch_nvk_cbuf_code(&shader->cbuf_map.cbufs[c]);
    out->num_gprs = shader->info.num_gprs;
+   out->bound_textures = shader->info.bound_textures;
    out->split = shader->switch_split;
    if (shader->info.stage == MESA_SHADER_FRAGMENT) {
       out->early_fragment_tests = shader->info.fs.early_fragment_tests;
@@ -161,6 +162,7 @@ split_program(const struct switch_nvk_program *p, struct switch_nvk_stage *out)
    out->cbuf_count = MIN2(p->cbuf_count, 16);
    memcpy(out->cbuf_types, p->cbuf_types, sizeof(out->cbuf_types));
    out->num_gprs = p->info.num_gprs;
+   out->bound_textures = p->info.bound_textures;
 }
 
 SWITCH_EXPORT void

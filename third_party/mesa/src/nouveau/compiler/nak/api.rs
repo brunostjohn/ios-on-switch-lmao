@@ -254,6 +254,7 @@ impl ShaderBin {
         fs_key: Option<&nak_fs_key>,
         code: Vec<u32>,
         asm: &str,
+        bound_textures: u8,
     ) -> ShaderBin {
         let asm = CString::new(asm)
             .expect("NAK assembly has unexpected null characters");
@@ -277,7 +278,7 @@ impl ShaderBin {
                     .unwrap()
             },
             num_control_barriers: info.num_control_barriers,
-            _pad0: Default::default(),
+            bound_textures,
             _pad1: Default::default(),
             max_warps_per_sm: info.max_warps_per_sm,
             num_instrs: info.num_instrs,
@@ -571,8 +572,20 @@ fn nak_compile_shader_internal(
         write!(asm, "{}", s).expect("Failed to dump assembly");
     }
 
+    let bound_textures = if nak.sm < 70 {
+        crate::sm50::bound_texture_cbuf(&s)
+    } else {
+        0
+    };
     let code = sm.encode_shader(&s);
-    let bin = Box::new(ShaderBin::new(&sm, &s.info, fs_key, code, &asm));
+    let bin = Box::new(ShaderBin::new(
+        &sm,
+        &s.info,
+        fs_key,
+        code,
+        &asm,
+        bound_textures,
+    ));
     Box::into_raw(bin) as *mut nak_shader_bin
 }
 

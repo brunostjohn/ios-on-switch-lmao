@@ -189,11 +189,19 @@ struct nak_nir_tex_flags {
    bool is_sparse:1;
    bool nodep:1;
    bool scalar:1;
-   uint32_t pad:21;
+   bool f16:1;
+   uint32_t pad:20;
 };
 PRAGMA_DIAGNOSTIC_POP
 static_assert(sizeof(struct nak_nir_tex_flags) == 4,
               "nak_nir_tex_flags has no holes");
+
+bool nak_nir_sm50_bound_texture(const nir_tex_instr *tex, nir_def *tex_h,
+                                nir_def *samp_h, int cbuf, uint32_t *index);
+bool nak_nir_sm50_scalarize_tex(nir_tex_instr *tex, enum nak_nir_lod_mode lod,
+                                enum nak_nir_offset_mode offset, bool array,
+                                nir_def **src0, unsigned *src0_comps,
+                                nir_def **src1, unsigned *src1_comps);
 
 #define NAK_AS_U32(x) ({\
    static_assert(sizeof(x) == 4, "x must be 4 bytes"); \
@@ -204,6 +212,7 @@ static_assert(sizeof(struct nak_nir_tex_flags) == 4,
 
 bool nak_nir_lower_scan_reduce(nir_shader *shader, const struct nak_compiler *nak);
 bool nak_nir_lower_tex(nir_shader *nir, const struct nak_compiler *nak);
+int nak_nir_sm50_bound_texture_cbuf(nir_shader *nir, const struct nak_compiler *nak);
 bool nak_nir_lower_gs_intrinsics(nir_shader *shader);
 bool nak_nir_lower_algebraic_late(nir_shader *nir, const struct nak_compiler *nak);
 bool nak_nir_lower_kepler_shared_atomics(nir_shader *shader);

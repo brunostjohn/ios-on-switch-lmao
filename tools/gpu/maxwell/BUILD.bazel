@@ -51,6 +51,7 @@ py_library(
         "floats.py",
         "interp.py",
         "quad.py",
+        "texture.py",
     ],
     visibility = ["//tools:__subpackages__"],
     deps = [":isa"],

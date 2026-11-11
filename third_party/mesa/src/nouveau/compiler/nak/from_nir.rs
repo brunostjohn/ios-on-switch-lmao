@@ -1970,6 +1970,14 @@ impl<'a> ShaderFromNir<'a> {
 
         let mask = tex.def.components_read();
         let mut mask = u8::try_from(mask).unwrap();
+        // ios-on-switch-lmao: SM50's TEXS/TLDS have no R+B or G+B mask, and
+        // TLD4S writes all four components
+        let sm50_scalar = flags.scalar() && b.sm() < 70;
+        if sm50_scalar && tex.op == nir_texop_tg4 {
+            mask = 0xf;
+        } else if sm50_scalar && (mask == 0x5 || mask == 0x6) {
+            mask = 0x7;
+        }
         if flags.is_sparse() {
             mask &= !(1 << (tex.def.num_components - 1));
             if mask == 0 {
@@ -1985,9 +1993,10 @@ impl<'a> ShaderFromNir<'a> {
         let dst_comps = u8::try_from(mask.count_ones()).unwrap();
         let dst = b.alloc_ssa_vec(RegFile::GPR, dst_comps);
 
-        // On Volta and later, the destination is split in two
+        // On Volta and later, and for SM50's scalar forms, the destination is
+        // split in two
         let mut dsts = [Dst::None, Dst::None];
-        if dst_comps > 2 && b.sm() >= 70 {
+        if dst_comps > 2 && (b.sm() >= 70 || sm50_scalar) {
             dsts[0] = SSARef::try_from(&dst[0..2]).unwrap().into();
             dsts[1] = SSARef::try_from(&dst[2..]).unwrap().into();
         } else {
