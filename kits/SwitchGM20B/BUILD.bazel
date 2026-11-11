@@ -1,0 +1,35 @@
+# GM20B as the hardware describes it: NVIDIA's class headers (Mesa's vendored copy, in place) behind one umbrella header
+# per engine class, and the capability table generated from caps/*.tsv.
+#
+#   bazel test //kits/SwitchGM20B/...
+#   bazel run //kits/SwitchGM20B:caps_report
+load("@rules_cc//cc:cc_library.bzl", "cc_library")
+load("//bazel/lint:defs.bzl", "lint_files")
+load("//kernel/rules:kernel.bzl", "kernel_headers")
+load(":defs.bzl", "SWITCH_GM20B_MESA_HEADERS")
+
+package(default_visibility = ["//visibility:public"])
+
+lint_files()
+
+exports_files(glob(
+    ["**"],
+    exclude = ["BUILD.bazel"],
+))
+
+filegroup(
+    name = "all_files",
+    srcs = glob(
+        ["**"],
+        exclude = ["BUILD.bazel"],
+    ),
+)
+
+# Kernel drivers: hdr_deps "kits/SwitchGM20B" and SWITCH_GM20B_INCLUDES in their flags.
+kernel_headers(extra = SWITCH_GM20B_MESA_HEADERS)
+
+cc_library(
+    name = "classes",
+    hdrs = glob(["SwitchGM20B*.h"]) + SWITCH_GM20B_MESA_HEADERS,
+    includes = ["../../third_party/mesa/src/nouveau/headers"],
+)

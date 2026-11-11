@@ -1,0 +1,57 @@
+# kits/SwitchGM20B on the host.
+#
+#   bazel test //kits/SwitchGM20B/test:all
+load("@rules_python//python:py_binary.bzl", "py_binary")
+load("//bazel/lint:defs.bzl", "lint_files")
+load("//bazel/testing:defs.bzl", "host_test")
+
+lint_files()
+
+host_test(
+    name = "classes_compile_test",
+    srcs = ["classes_compile_test.cpp"],
+    deps = ["//kits/SwitchGM20B:classes"],
+)
+
+py_binary(
+    name = "driver_constants",
+    srcs = ["driver_constants.py"],
+)
+
+# The drivers' hand-written method numbers and fields (STRUCTURE.md D4/D5), read as text: none of these files is
+# compiled or edited here. A define prefix limits a C file to its class constants.
+DRIVER_SOURCES = {
+    "raw_gpu.cpp": "//drivers/TegraGM20BMetal:raw/runtime/raw_gpu.cpp",
+    "raw_compute.cpp": "//drivers/TegraGM20BMetal:raw/runtime/raw_compute.cpp",
+    "raw_split.cpp": "//drivers/TegraGM20BMetal:raw/runtime/raw_split.cpp",
+    "raw_zeta.cpp": "//drivers/TegraGM20BMetal:raw/runtime/raw_zeta.cpp",
+    "raw_emit.cpp": "//drivers/TegraGM20BMetal:raw/runtime/raw_emit.cpp",
+    "raw_tiled_cache.h": "//drivers/TegraGM20BMetal:raw/runtime/raw_tiled_cache.h",
+    "raw_stamps.h": "//drivers/TegraGM20BMetal:raw/runtime/raw_stamps.h",
+    "raw_mme.h": "//drivers/TegraGM20BMetal:raw/runtime/raw_mme.h",
+    "fx_mip.cpp": "//drivers/TegraGM20BMetal:raw/fx/fx_mip.cpp",
+    "nvdec.cpp": "//drivers/TegraGM20BMetal:raw/pack/nvdec.cpp",
+    "gpu.c": "//drivers/TegraGM20B:gpu.c",
+}
+
+DEFINE_PREFIXES = {"gpu.c": "NVB0B5_"}
+
+genrule(
+    name = "driver_constants_h",
+    srcs = ["driver_constants.tsv"] + DRIVER_SOURCES.values(),
+    outs = ["driver_constants.h"],
+    cmd = "$(execpath :driver_constants) --rows $(execpath driver_constants.tsv) --out $@ " + " ".join([
+        "--source {}=$(execpath {}){}".format(short, label, ":" + DEFINE_PREFIXES[short] if short in DEFINE_PREFIXES else "")
+        for short, label in DRIVER_SOURCES.items()
+    ]),
+    tools = [":driver_constants"],
+)
+
+host_test(
+    name = "driver_constants_test",
+    srcs = [
+        "driver_constants_test.cpp",
+        ":driver_constants_h",
+    ],
+    deps = ["//kits/SwitchGM20B:classes"],
+)
