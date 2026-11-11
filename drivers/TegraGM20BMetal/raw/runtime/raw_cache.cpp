@@ -34,6 +34,8 @@ void writeProgram(Writer &w, const CapturedProgram &p)
     w.list(p.image);
     w.list(p.data);
     w.list(p.cbufTypes);
+    w.value(p.gprs);
+    w.value(p.boundTextures);
 }
 
 CapturedProgram readProgram(Reader &r)
@@ -43,6 +45,8 @@ CapturedProgram readProgram(Reader &r)
     p.image = r.list<uint8_t>();
     p.data = r.list<uint8_t>();
     p.cbufTypes = r.list<uint8_t>();
+    p.gprs = r.value<uint8_t>();
+    p.boundTextures = r.value<uint8_t>();
     return p;
 }
 
@@ -191,6 +195,11 @@ std::string encodeEntry(const CacheKey &k, const RuntimeRecord *record, const st
             writeProgram(w, record->splitPrograms[0]);
             writeProgram(w, record->splitPrograms[1]);
         }
+        w.value(uint32_t(record->variants.size()));
+        for (const RuntimeRecord::Variant &v : record->variants) {
+            w.value(v.assume);
+            writeProgram(w, v.program);
+        }
     } else {
         w.text(refusal);
     }
@@ -227,6 +236,14 @@ RecordCache::Found decodeEntry(const std::string &bytes, const CacheKey &k, Runt
         rec.splitPrograms[0] = readProgram(r);
         rec.splitPrograms[1] = readProgram(r);
     }
+    const uint32_t variants = r.value<uint32_t>();
+    for (uint32_t i = 0; r.ok() && i < variants && i < 2u * 255; i++) {
+        RuntimeRecord::Variant &v = rec.variants.emplace_back();
+        v.assume = r.value<uint32_t>();
+        v.program = readProgram(r);
+    }
+    if (rec.variants.size() != variants || variants != 0u + rec.pipeline.variantCount[0] + rec.pipeline.variantCount[1])
+        return RecordCache::Found::None;
     if (!r.ok() || r.at() != bytes.size() - 8)
         return RecordCache::Found::None;
     record = std::move(rec);

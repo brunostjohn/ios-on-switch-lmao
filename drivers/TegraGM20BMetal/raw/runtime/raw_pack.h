@@ -26,16 +26,35 @@ enum PackSectionId {
     PackHeap,
     PackKernels,
     PackSplits,
+    PackVariants,
     PackSectionCount
 };
 
-constexpr uint32_t kPackVersion = 14;
+constexpr uint32_t kPackVersion = 15;
+
+// What a program variant (PackVariant) assumed of its draws, as bits of a mask: a draw takes a variant only where all of them
+// hold. Bits 0-15 are facts of the draw's bindings; bits 16 and up, facts of its pipeline or of the chip.
+enum PackAssumption : uint32_t {
+    AssumeUniformAligned = 1u << 0,  // bits 0-7: bit k, PackPipeline::uniform[k]'s bind residual is 0
+    AssumeTextureUnorm = 1u << 8,  // bits 8-15: bit k, the k-th EntryTexture entry's texel format is not a float format
+    AssumePositionW1 = 1u << 16,   // the vertex stage writes position.w = 1
+    // The chip's: the ROP converts an exact half to each target format's code as Metal does (an output left unrounded)
+    AssumeRopRounding = 1u << 17,
+    // The chip's: TEXS/TLDS/TLD4S.F16 give round-to-nearest-even of the f32 result their F32 forms give
+    AssumeTexsF16 = 1u << 18,
+};
+
+constexpr uint32_t kUniformRanges = 8, kTextureFacts = 8;
+constexpr uint32_t kChipAssumptions = AssumeRopRounding | AssumeTexsF16;
 
 struct PackHeader {
     char magic[8];                                    // "GM20BPK1"
     uint32_t version, programs, pipelines, samplers;  // kPackVersion
     PackSection section[PackSectionCount];
     uint64_t stack;  // the build's stack key (build-tegra-gm20b-metal.py: the plugin is compiled with the same one)
+    // the chip facts (kChipAssumptions) the pack's builder took as proven on the device: a draw's facts always hold them
+    uint32_t chipFacts;
+    uint32_t reserved;
 };
 
 // A program's constant buffer as the pack and the runtime's capture name it: its nvk_cbuf_type in bits 0-2, and for a uniform
@@ -59,7 +78,40 @@ struct PackProgram {
     uint32_t dataOffset, dataBytes;
     uint8_t cbufs;         // constant buffer slots it uses
     uint8_t cbufType[11];  // each slot's PackCbufType: the root table at 0
+    uint8_t gprs;          // SET_PIPELINE_REGISTER_COUNT: a graphics program's registers (a kernel's are its QMD's)
+    // SET_BINDLESS_TEXTURE's constant buffer slot + 1: where its bound texture instructions read their handles (word
+    // index x 4, the handles' set-0 entries: PackPipeline::boundEntries); 0: it has none
+    uint8_t boundTextures;
+    uint16_t reserved;
 };
+
+// One of a stage's programs compiled under assumptions about its draws (PackAssumption). A stage's variants are tried in order
+// and the first whose assumptions all hold is drawn; its generic program (PackPipeline::vs, fs) is the last, assuming nothing.
+// A variant differs from the generic in code and register count only: the same constant buffers, early fragment tests,
+// interlock and sample shading.
+struct PackVariant {
+    uint32_t assume;
+    uint16_t program;
+    uint16_t reserved;
+};
+
+// How a color attachment's framebuffer fetch is drawn (the fetch ladder): FetchNone where it is not fetched
+enum PackFetchRung : uint8_t {
+    FetchNone,
+    FetchBarrier,        // a texture read behind a pixel barrier
+    FetchBlend,          // fixed-function blend state, the program fetching nothing
+    FetchIteratedBlend,  // the ROP's iterated blend
+    FetchInterlock       // a storage image inside the pixel interlock, blended in the program
+};
+
+// The bytes of a uniform buffer entry a pipeline's programs read: from its bind offset, in 16-byte units
+struct PackUniformRange {
+    uint8_t entry;       // PackPipeline::entry index; kNoUniform: none
+    uint8_t bank;        // the constant buffer slot the reading stage's programs bind it at
+    uint8_t first, end;  // [first, end); end 0: unbounded (a read at an offset the program computes)
+};
+
+constexpr uint8_t kNoUniform = 0xFF;
 
 enum PackEntryKind : uint8_t {
     EntrySamplerOnly = 0,
@@ -158,6 +210,13 @@ struct PackPipeline {
     uint8_t storageMask, storageWriteMask, storageSamples, storageTests;
     uint32_t storageTic[8];
     PackShaderTests shaderTests;
+    uint32_t variants;        // the first of its stages' variants in the variants section
+    uint8_t variantCount[2];  // vertex, then fragment: the vertex stage's first
+    uint16_t reservedV15;
+    uint32_t boundEntries;                     // bit k: entry[k]'s handle word is read by a bound texture instruction
+    PackUniformRange uniform[kUniformRanges];  // assumption bits 0-7
+    uint8_t fetchRung[8];                      // per color attachment: PackFetchRung
+    uint32_t reservedV15Tail;
 };
 
 // A compute state at one threadgroup shape (runtime/raw_compute.h): NVK's work for the kernel m2v made of it, keyed by
@@ -202,7 +261,7 @@ struct PackKernel {
     uint32_t qmd[64];   // NVK's QMD (QMDV01_07), its program offset, grid and constant buffer addresses zero
     uint16_t setBytes;  // set 0's size in the root table's set address
     uint16_t readOnlyEntries;  // bit i: entry[i] is proven read-only; old records conservatively leave every bit zero
-    uint32_t pushMask;  // root table [0x700, 0x780): the constant words m2v's push ranges write, and which
+    uint32_t pushMask;         // root table [0x700, 0x780): the constant words m2v's push ranges write, and which
     uint32_t pushWords[32];
     PackKernelEntry entry[16];
 };
@@ -218,6 +277,7 @@ struct SplitCost {
     uint32_t prologueWarpCycles, prologueInstructions;
     uint32_t savedPixelInstructions, savedPixelCycles, frontierValues;
 };
+
 static_assert(sizeof(SplitCost) == 32);
 
 // A split's prologue writes values the fragment stage reads through frontierCbuf. Version 1 uses SplitBatchHeader/Record:
@@ -267,8 +327,9 @@ struct InitAddresses {
 
 uint32_t relocated(const PackInitMethod &m, const InitAddresses &a);
 static_assert(sizeof(PackShaderTests) == 16, "shader test layout");
-static_assert(sizeof(PackPipeline) == 36 + kPackEntries * 8 + 4 + 32 * 4 + 4 + 36 + 16, "pack layout");
-static_assert(sizeof(PackProgram) == 32, "pack layout");
+static_assert(sizeof(PackPipeline) == 36 + kPackEntries * 8 + 4 + 32 * 4 + 4 + 36 + 16 + 56, "pack layout");
+static_assert(sizeof(PackProgram) == 36, "pack layout");
+static_assert(sizeof(PackVariant) == 8, "pack layout");
 static_assert(sizeof(PackKernel) == 16 + 256 + 8 + 128 + 128, "pack layout");
 static_assert(sizeof(PackSplit) == 28 + 256 + 32, "pack layout");
 
@@ -296,6 +357,8 @@ public:
     const PackPipeline *find(uint64_t keyHash, PackForm form = PackForm::Default) const;  // nullptr: not in the pack
     const PackKernel *findKernel(uint64_t keyHash) const;                                 // nullptr: not in the pack
     const PackSplit *split(uint16_t wholeProgram) const;                                  // nullptr: not split
+    // `pp`'s variants of stage `stage` (0 vertex, 1 fragment), `count` of them; nullptr: none
+    const PackVariant *variants(const PackPipeline &pp, uint32_t stage, uint32_t &count) const;
 
     const char *string(uint32_t off) const
     {

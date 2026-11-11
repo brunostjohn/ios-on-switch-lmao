@@ -155,4 +155,15 @@ const PackSplit *Pack::split(uint16_t wholeProgram) const
     return at != end && at->whole == wholeProgram ? at : nullptr;
 }
 
+const PackVariant *Pack::variants(const PackPipeline &pp, uint32_t stage, uint32_t &count) const
+{
+    count = pp.variantCount[stage];
+    const uint64_t first = uint64_t(pp.variants) + (stage ? pp.variantCount[0] : 0);
+    if (!count || (first + count) * sizeof(PackVariant) > bytes(PackVariants)) {
+        count = 0;
+        return nullptr;
+    }
+    return section<PackVariant>(PackVariants) + first;
+}
+
 }  // namespace raw

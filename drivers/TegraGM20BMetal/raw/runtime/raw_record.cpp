@@ -13,9 +13,10 @@
 namespace raw {
 namespace {
 
-constexpr uint32_t kInterlockControl = 0x1224;  // SET_PIXEL_SHADER_INTERLOCK_CONTROL
-constexpr uint32_t kTextureType3D = 2;          // TEXHEAD's TEXTURE_TYPE (word 4 bits 26:23)
-constexpr uint32_t kTagBuffer = 0xC0DE;         // pack/probe.mm's payload tag
+constexpr uint32_t kInterlockControl = 0x1224;                                   // SET_PIXEL_SHADER_INTERLOCK_CONTROL
+constexpr uint32_t kRegisterCountVertex = 0x204c, kRegisterCountPixel = 0x214c;  // SET_PIPELINE_REGISTER_COUNT
+constexpr uint32_t kTextureType3D = 2;   // TEXHEAD's TEXTURE_TYPE (word 4 bits 26:23)
+constexpr uint32_t kTagBuffer = 0xC0DE;  // pack/probe.mm's payload tag
 
 std::string hex(uint64_t v)
 {
@@ -247,6 +248,8 @@ bool makeRecord(const ProbeRuns &runs, const PackRules &rules, const ProgramLook
     parts.setBytes = r.sets[0].words.empty() || root.size() <= 0x38 / 4 + 2 ? 0 : uint16_t(root[0x38 / 4 + 2]);
     if (!assembleRecord(parts, runs.key, rules, out, why))
         return false;
+    out.programs[0].gprs = uint8_t(valueOf(r.regs, kRegisterCountVertex));
+    out.programs[1].gprs = uint8_t(valueOf(r.regs, kRegisterCountPixel));
     if (!streams) {
         why = streamWhy;
         return false;

@@ -64,12 +64,20 @@ void dumpRecord(const char *dir, const std::string &key, const raw::RuntimeRecor
     std::string blob;
     for (size_t i = 0; i < rec.blob.size(); i++)
         blob += (i ? "," : "") + std::to_string(rec.blob[i]);
+    std::string variants;
+    for (size_t i = 0; i < rec.variants.size(); i++) {
+        const raw::RuntimeRecord::Variant &v = rec.variants[i];
+        variants += std::string(i ? ", " : "") + "{\"stage\": " + (i < rec.pipeline.variantCount[0] ? "0" : "1") +
+                    ", \"assume\": " + std::to_string(v.assume) + ", \"gprs\": " + std::to_string(v.program.gprs) +
+                    ", \"code\": \"" + hexOf(v.program.image) + "\"}";
+    }
     fprintf(f,
-            "{\"key\": %s, \"vs\": \"%s\", \"fs\": \"%s\", \"blob\": [%s], \"split_fs\": \"%s\", \"split_prologue\": "
-            "\"%s\"}\n",
+            "{\"key\": %s, \"vs\": \"%s\", \"fs\": \"%s\", \"fs_gprs\": %u, \"fs_bound_textures\": %u, \"blob\": [%s], "
+            "\"split_fs\": \"%s\", \"split_prologue\": \"%s\", \"variants\": [%s]}\n",
             jsonString(key).c_str(), hexOf(rec.programs[0].image).c_str(), hexOf(rec.programs[1].image).c_str(),
-            blob.c_str(), rec.split ? hexOf(rec.splitPrograms[0].image).c_str() : "",
-            rec.split ? hexOf(rec.splitPrograms[1].image).c_str() : "");
+            rec.programs[1].gprs, rec.programs[1].boundTextures, blob.c_str(),
+            rec.split ? hexOf(rec.splitPrograms[0].image).c_str() : "",
+            rec.split ? hexOf(rec.splitPrograms[1].image).c_str() : "", variants.c_str());
     fclose(f);
 }
 

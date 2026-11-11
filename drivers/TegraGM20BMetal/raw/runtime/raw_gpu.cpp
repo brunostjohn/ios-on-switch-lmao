@@ -72,6 +72,9 @@ enum : uint32_t {
     OGL_SET_FRONT_FACE = NVB197_OGL_SET_FRONT_FACE,
     OGL_SET_CULL_FACE = NVB197_OGL_SET_CULL_FACE,
     PIXEL_SHADER_INTERLOCK_CONTROL = NVB197_SET_PIXEL_SHADER_INTERLOCK_CONTROL,
+    PIPELINE_REGISTER_COUNT_VERTEX = NVB197_SET_PIPELINE_REGISTER_COUNT(NVB197_SET_PIPELINE_SHADER_TYPE_VERTEX),
+    PIPELINE_REGISTER_COUNT_PIXEL = NVB197_SET_PIPELINE_REGISTER_COUNT(NVB197_SET_PIPELINE_SHADER_TYPE_PIXEL),
+    BINDLESS_TEXTURE = NVB197_SET_BINDLESS_TEXTURE,
     DEPTH_TEST = NVB197_SET_DEPTH_TEST,
     STENCIL_TEST = NVB197_SET_STENCIL_TEST,
     ANTI_ALIAS_ALPHA_CONTROL = NVB197_SET_ANTI_ALIAS_ALPHA_CONTROL,
@@ -859,6 +862,10 @@ void Device::build(Pipeline &pl, const PackPipeline &pp, const PlacedProgram &vs
             pl.writeBits |= uint8_t(1u << c);
     w.m(0x2044, vs.program);  // SET_PIPELINE_PROGRAM(VERTEX)
     w.m(0x2144, fs.program);  // SET_PIPELINE_PROGRAM(PIXEL)
+    w.m(PIPELINE_REGISTER_COUNT_VERTEX, vs.record->gprs);
+    w.m(PIPELINE_REGISTER_COUNT_PIXEL, fs.record->gprs);
+    if (fs.record->boundTextures)
+        w.m(BINDLESS_TEXTURE, fs.record->boundTextures - 1u);
     pl.setSlot[0] = bindProgramCbufs(w, *vs.record, 0, vs.data, root_.va);
     pl.setSlot[1] = bindProgramCbufs(w, *fs.record, 4, fs.data, root_.va);
     for (const auto &[prog, group] : {std::pair{vs.record, uint8_t(0)}, std::pair{fs.record, uint8_t(4)}})

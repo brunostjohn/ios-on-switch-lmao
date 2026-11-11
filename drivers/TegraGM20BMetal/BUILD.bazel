@@ -78,6 +78,7 @@ filegroup(
         "raw/runtime/raw_kernel_cache.cpp",
         "raw/runtime/raw_compute_key.h",
         "raw/runtime/raw_compute_record.h",
+        "raw/runtime/raw_chip_facts.h",
         "raw/runtime/raw_cubic.h",
         "raw/runtime/raw_direct.cpp",
         "raw/runtime/raw_direct.h",

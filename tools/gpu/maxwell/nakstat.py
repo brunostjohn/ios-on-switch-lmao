@@ -140,25 +140,34 @@ def state_key(line: str) -> str:
     return (' '.join(fields) + ' ' + line[bar1 : bar3 if bar3 >= 0 else len(line)]).strip()
 
 
-class Pack:
-    PIPELINE_BYTES = 480
+# raw_pack.h by version: PackPipeline and PackProgram sizes, sections. From 15 a program's register count is its own.
+LAYOUTS = {14: (480, 32, 10), 15: (536, 36, 11)}
 
+
+class Pack:
     def __init__(self, path: Path):
         self.p = path.read_bytes()
         if self.p[:8] != b'GM20BPK1':
             raise SystemExit(f'{path}: not a raw pack')
-        _, self.nprog, self.npipe, _ = struct.unpack_from('<4I', self.p, 8)
-        self.sec = [struct.unpack_from('<QQ', self.p, 24 + 16 * i) for i in range(10)]
+        self.version, self.nprog, self.npipe, _ = struct.unpack_from('<4I', self.p, 8)
+        if self.version not in LAYOUTS:
+            raise SystemExit(f'{path}: a version-{self.version} pack')
+        pipeline_bytes, self.program_bytes, sections = LAYOUTS[self.version]
+        self.sec = [struct.unpack_from('<QQ', self.p, 24 + 16 * i) for i in range(sections)]
         self.pipelines = {}
         for i in range(self.npipe):
-            at = self.sec[1][0] + self.PIPELINE_BYTES * i
+            at = self.sec[1][0] + pipeline_bytes * i
             key, _, _, fs, blob, dwords = struct.unpack_from('<QIHHII', self.p, at)
             self.pipelines.setdefault(key, (fs, blob, dwords))
 
     def code(self, program: int) -> bytes:
-        heap_offset, _, size, data_offset, _ = struct.unpack_from('<5I', self.p, self.sec[0][0] + 32 * program)
+        at = self.sec[0][0] + self.program_bytes * program
+        heap_offset, _, size, data_offset, _ = struct.unpack_from('<5I', self.p, at)
         start = self.sec[7][0] + heap_offset + isa.HEADER_BYTES + 0x30
         return self.p[start : self.sec[7][0] + heap_offset + (data_offset or size)]
+
+    def gprs(self, program: int) -> int:
+        return self.p[self.sec[0][0] + self.program_bytes * program + 32]
 
     def blob(self, at: int, dwords: int) -> list[int]:
         return list(struct.unpack_from(f'<{dwords}I', self.p, self.sec[5][0] + 4 * at))
@@ -168,7 +177,8 @@ class Pack:
         if not found:
             return None
         fs, blob, dwords = found
-        return self.code(fs), register_count(self.blob(blob, dwords))
+        gprs = self.gprs(fs) if self.version >= 15 else register_count(self.blob(blob, dwords))
+        return self.code(fs), gprs
 
 
 def register_count(blob: list[int]) -> int:
@@ -181,7 +191,8 @@ class Dump:
         self.states = {}
         for f in sorted(path.glob('*.json')):
             d = json.loads(f.read_text())
-            self.states[d['key']] = (bytes.fromhex(d['fs'])[isa.HEADER_BYTES :], register_count(d['blob']))
+            gprs = d['fs_gprs'] if 'fs_gprs' in d else register_count(d['blob'])
+            self.states[d['key']] = (bytes.fromhex(d['fs'])[isa.HEADER_BYTES :], gprs)
 
     def state(self, key: str) -> tuple[bytes, int] | None:
         return self.states.get(key)

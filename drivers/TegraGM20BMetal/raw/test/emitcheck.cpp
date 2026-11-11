@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 // emitcheck: runtime/raw_emit.h's registers against every record of a pack, the ones NVK emitted when the pack was probed. A
-// program's register count and early-fragment-tests (what NAK's shader info will give a direct compile) are read off the
-// records that name it, and must agree among them. Every register the hardware reads must be the pack's; one it doesn't
+// program's register count is its PackProgram's; its early-fragment-tests (what NAK's shader info will give a direct compile)
+// are read off the records that name it, and must agree among them. Every register the hardware reads must be the pack's; one it doesn't
 // read may hold what the probe left there.
 // usage: emitcheck <pack.bin>
 #include <cstdio>
@@ -14,7 +14,7 @@
 
 namespace {
 
-constexpr uint32_t kEarlyZ = 0x0210, kVertexCount = 0x204c, kPixelCount = 0x214c;
+constexpr uint32_t kEarlyZ = 0x0210;
 
 std::map<uint32_t, uint32_t> registers(const raw::Pack &pack, const raw::PackPipeline &pp)
 {
@@ -62,9 +62,9 @@ int main(int argc, char **argv)
     };
     for (uint32_t i = 0; i < count; i++) {
         const std::map<uint32_t, uint32_t> regs = registers(pack, pipes[i]);
-        learn(pipes[i].vs, regs.count(kVertexCount) ? regs.at(kVertexCount) : 0, false, false, 0, false);
-        learn(pipes[i].fs, regs.count(kPixelCount) ? regs.at(kPixelCount) : 0, regs.count(kEarlyZ) && regs.at(kEarlyZ),
-              true, regs.count(0x1224) ? regs.at(0x1224) : 0, regs.count(0x0754) && (regs.at(0x0754) & 15) > 1);
+        learn(pipes[i].vs, programs[pipes[i].vs].gprs, false, false, 0, false);
+        learn(pipes[i].fs, programs[pipes[i].fs].gprs, regs.count(kEarlyZ) && regs.at(kEarlyZ), true,
+              regs.count(0x1224) ? regs.at(0x1224) : 0, regs.count(0x0754) && (regs.at(0x0754) & 15) > 1);
     }
 
     uint64_t compared = 0, read = 0, unread = 0, unparsed = 0;

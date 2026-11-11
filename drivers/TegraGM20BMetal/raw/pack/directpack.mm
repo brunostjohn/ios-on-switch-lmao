@@ -84,6 +84,7 @@ void record(Writer &w, const std::string &key, raw::CompileOutcome outcome, cons
         w.list(p.image);
         w.list(p.data);
         w.list(p.cbufTypes);
+        w.u32(p.gprs | uint32_t(p.boundTextures) << 8);
     };
     for (const raw::CapturedProgram &p : rec.programs)
         program(p);
@@ -93,6 +94,11 @@ void record(Writer &w, const std::string &key, raw::CompileOutcome outcome, cons
         w.bytes(&rec.splitRecord, sizeof rec.splitRecord);
         program(rec.splitPrograms[0]);
         program(rec.splitPrograms[1]);
+    }
+    w.u32(uint32_t(rec.variants.size()));
+    for (const raw::RuntimeRecord::Variant &v : rec.variants) {
+        w.u32(v.assume);
+        program(v.program);
     }
 }
 

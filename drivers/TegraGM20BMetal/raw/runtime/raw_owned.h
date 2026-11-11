@@ -68,6 +68,11 @@ constexpr MethodRange kOwnedMethods[] = {
     // attachments' sample count
     {0x11E0, 0x11F0},
     {0x15D0, 0x15D4},
+    // a program's register count and the slot its bound textures read handles from: its record's (PackProgram), set with the
+    // program, so a state's methods hold no program's
+    {0x204C, 0x2050},
+    {0x214C, 0x2150},
+    {0x2608, 0x260C},
 };
 // clang-format on
 

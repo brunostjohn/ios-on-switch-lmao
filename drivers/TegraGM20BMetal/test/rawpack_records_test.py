@@ -43,6 +43,27 @@ class RecordsTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'obsolete layout'):
             directlink.pipeline_of(record, [], ids, [])
 
+    def test_record_v15_tail_round_trip(self):
+        uniform = bytes([0, 1, 2, 9]) + b'\xff\x00\x00\x00' * 7
+        rec = dict(key='samples=1 c0=80:15:0', vs=0, fs=1, blob=[], entries=[handle(('fetch', 0))], push=[], vbs=[],
+                   set_size=256, fetch=True, bound_entries=1, uniform=uniform, fetch_rung=[1, 0, 0, 0, 0, 0, 0, 0])
+        programs = [dict(image=bytes([i]), data=b'', cbufs=[], gprs=24, bound_textures=0) for i in range(3)]
+        ids = {directlink.program_id(p): i for i, p in enumerate(programs)}
+        data = packfile.pipeline_bytes(dict(rec, variants=[dict(stage=1, assume=1, program=2)]), 0, 0, 5)
+        self.assertEqual(len(data), directlink.PIPELINE_BYTES)
+        record = dict(pipeline=data, key=rec['key'], programs=programs[:2], samplers=[],
+                      variants=[dict(assume=1, program=programs[2])],
+                      probe=dict(index=0, form='', records=[dict(regs={})]))
+        back = directlink.pipeline_of(record, [], ids, [])
+        self.assertEqual(back['variants'], [dict(stage=1, assume=1, program=2)])
+        self.assertEqual((back['bound_entries'], back['uniform'], back['fetch_rung']),
+                         (1, uniform, rec['fetch_rung']))
+        self.assertEqual(packfile.pipeline_bytes(back, 0, 0, 5), data)
+        pipes, _, _, variants = packfile.pipeline_sections([dict(back, key=rec['key']), dict(back, key=rec['key'])])
+        self.assertEqual(len(variants), 16)
+        self.assertEqual(struct.unpack_from('<I', pipes, directlink.PIPELINE_BYTES * 2 - packfile.PIPELINE_V15.size),
+                         (1,))
+
     def test_ordered_storage_metadata_round_trip_and_explicit_registers(self):
         rec = dict(key='samples=1 c0=81:15:0:1:0:0:1:0:0', vs=0, fs=1, blob=[], entries=[handle(('fetch', 0))],
                    push=[], vbs=[], set_size=256, fetch=True, storage_mask=1, storage_write_mask=1,

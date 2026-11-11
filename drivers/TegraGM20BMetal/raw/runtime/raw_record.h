@@ -32,6 +32,7 @@ struct CapturedProgram {
     std::string id;  // nvdec's name: the FNV-1a of its header, code and data
     // header + code, NAK's shader data, each constant buffer's nvk_cbuf_type
     std::vector<uint8_t> image, data, cbufTypes;
+    uint8_t gprs = 0, boundTextures = 0;  // PackProgram's
 };
 
 // What every record of a pack shares
@@ -63,6 +64,14 @@ struct RuntimeRecord {
     bool split = false;
     PackSplit splitRecord = {};
     CapturedProgram splitPrograms[2];
+
+    // pipeline.variantCount[0] vertex then pipeline.variantCount[1] fragment variants (raw_pack.h PackVariant)
+    struct Variant {
+        uint32_t assume = 0;
+        CapturedProgram program;
+    };
+
+    std::vector<Variant> variants;
 };
 
 // One state's probe: its submissions with tagged payloads of 256, 16 and 4096 bytes, the index its payloads are tagged with, and

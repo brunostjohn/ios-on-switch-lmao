@@ -218,6 +218,33 @@ bool programsBindable(const RecordParts &parts, std::string &why)
     return true;
 }
 
+// The constant buffer slot `program` reads uniform entry `e` at; kNoUniform: none
+static uint8_t uniformBank(const CapturedProgram &program, const PackEntry &e)
+{
+    for (size_t c = 1; c < program.cbufTypes.size(); c++)
+        if (cbufKind(program.cbufTypes[c]) == CbufUbo && cbufUboOffset(program.cbufTypes[c]) == e.offset)
+            return uint8_t(c);
+    return kNoUniform;
+}
+
+// The uniform entries the programs read (the assumption bits they are named by: PackPipeline::uniform) and each color's rung
+static void describeReads(RuntimeRecord &out)
+{
+    PackPipeline &p = out.pipeline;
+    memset(p.uniform, kNoUniform, sizeof p.uniform);
+    uint32_t n = 0;
+    for (uint32_t k = 0; k < p.entries; k++) {
+        const PackEntry &e = p.entry[k];
+        if (e.kind == EntryFetch && e.slot < 8)
+            p.fetchRung[e.slot] = p.storageMask >> e.slot & 1 ? FetchInterlock : FetchBarrier;
+        if (e.kind != EntryUbo || bufferStorage(e) || n == kUniformRanges)
+            continue;
+        const uint8_t bank = uniformBank(out.programs[e.stage == 1 ? 0 : 1], e);
+        if (bank != kNoUniform)
+            p.uniform[n++] = {uint8_t(k), bank, 0, 0};
+    }
+}
+
 bool assembleRecord(const RecordParts &parts, const std::string &key, const PackRules &rules, RuntimeRecord &out,
                     std::string &why)
 {
@@ -293,6 +320,7 @@ bool assembleRecord(const RecordParts &parts, const std::string &key, const Pack
     p.storageTests = parts.storageTests;
     p.shaderTests = parts.shaderTests;
     memcpy(p.storageTic, parts.storageTic, sizeof p.storageTic);
+    describeReads(out);
     const size_t bar = key.find(" | ");
     out.keyString = key.substr(0, bar);
     while (!out.keyString.empty() && isspace(static_cast<unsigned char>(out.keyString.back())))
@@ -391,6 +419,8 @@ std::vector<uint8_t> programSlot(const CapturedProgram &p, PackProgram &info)
     info.bytes = uint32_t(slot.size());
     info.cbufs = uint8_t(std::min<size_t>(p.cbufTypes.size(), sizeof info.cbufType));
     memcpy(info.cbufType, p.cbufTypes.data(), info.cbufs);
+    info.gprs = p.gprs;
+    info.boundTextures = p.boundTextures;
     return slot;
 }
 

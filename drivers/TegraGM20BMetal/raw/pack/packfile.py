@@ -1,15 +1,27 @@
 import json
+import os
+import re
 import struct
 from dataclasses import dataclass, field
 
 MAGIC = b'GM20BPK1'
 # 2: the header's stack key (rawpack.py --stack) after the section table; 3: barrier-form records; 4: programs' shader
 # data and constant buffer types; 6: compute kernels (runtime/raw_pack.h PackKernel); 8: a texture3d entry's Metal
-# index; 9: split fragment programs (PackSplit); 10: dynamic blend push fields; 11: qualified ordered storage views
-VERSION = 14
-SECTIONS = 10  # runtime/raw_pack.h PackSectionCount
+# index; 9: split fragment programs (PackSplit); 10: dynamic blend push fields; 11: qualified ordered storage views;
+# 15: program variants, programs' register counts and bound-texture slots, the uniform table, fetch rungs, chip facts
+VERSION = 15
+SECTIONS = 11  # runtime/raw_pack.h PackSectionCount
 KERNEL_ENTRIES = 16  # PackKernel.entry's length
 PROGRAM_CBUFS = 11  # PackProgram.cbufType's length (runtime/raw_pack.h)
+# PackPipeline's record-v15 tail: variants, variantCount[2], reserved, boundEntries, uniform[8], fetchRung[8], reserved
+PIPELINE_V15 = struct.Struct('<IBBHI32s8sI')
+NO_UNIFORM = b'\xff\x00\x00\x00' * 8
+
+
+def chip_facts() -> int:
+    """Give runtime/raw_chip_facts.h kProvenChipFacts: the chip facts device probes proved, stamped into the header."""
+    with open(os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'runtime', 'raw_chip_facts.h')) as header:
+        return int(re.search(r'kProvenChipFacts = (0x[0-9A-Fa-f]+|\d+)', header.read())[1], 0)
 
 
 # PackSplit (runtime/raw_pack.h)
@@ -121,7 +133,7 @@ def key_hash(rec: dict) -> int:
     return fnv(rec['key'].encode())
 
 
-def pipeline_bytes(rec: dict, key_offset: int, blob_off: int) -> bytes:
+def pipeline_bytes(rec: dict, key_offset: int, blob_off: int, variants_off: int = 0) -> bytes:
     vb = rec['vbs'][0] if rec['vbs'] else {'slot': 0xFF, 'stride': 0}
     keyhash = key_hash(rec)
     flags = (1 if rec['fetch'] else 0) | (2 if rec.get('form') == 'barrier' else 0)  # PackPipelineFlags
@@ -148,7 +160,17 @@ def pipeline_bytes(rec: dict, key_offset: int, blob_off: int) -> bytes:
                           rec.get('storage_samples', 0), rec.get('storage_tests', 0), *rec.get('storage_tic', [0] * 8))
     tests = struct.pack('<BBBBIII', rec.get('depth_test_word', 0), rec.get('stencil_test_word', 0),
                         rec.get('test_flags', 0), 0, rec.get('depth_tic', 0), rec.get('stencil_tic', 0), 0)
-    return head + entry_bytes(rec['entries']) + push_bytes(rec['push']) + dynamic + storage + tests
+    counts = [sum(1 for v in rec.get('variants', []) if v['stage'] == stage) for stage in (0, 1)]
+    v15 = PIPELINE_V15.pack(
+        variants_off if any(counts) else 0,
+        *counts,
+        0,
+        rec.get('bound_entries', 0),
+        rec.get('uniform', NO_UNIFORM),
+        bytes(rec.get('fetch_rung', [0] * 8)),
+        0,
+    )
+    return head + entry_bytes(rec['entries']) + push_bytes(rec['push']) + dynamic + storage + tests + v15
 
 
 def kernel_window(e: dict) -> int:
@@ -215,6 +237,8 @@ def place_graphics(
             'cbufs': pr['cbufs'],
             'data_offset': data_offset,
             'data_bytes': len(pr['data']),
+            'gprs': pr.get('gprs', 0),
+            'bound_textures': pr.get('bound_textures', 0),
         }
     )
 
@@ -254,7 +278,8 @@ class Pack:
     splits: list[dict] = field(default_factory=list)
 
 
-def pipeline_sections(pipes: list[dict]) -> tuple[bytearray, list[int], bytearray]:
+def pipeline_sections(pipes: list[dict]) -> tuple[bytearray, list[int], bytearray, bytearray]:
+    """Give the pipelines, their state programs (one copy of each distinct one), the strings and the variants."""
     strings = bytearray()
 
     def string(s: str) -> int:
@@ -262,20 +287,25 @@ def pipeline_sections(pipes: list[dict]) -> tuple[bytearray, list[int], bytearra
         strings.extend(s.encode() + b'\0')
         return off
 
-    blob = []
-    pipe_bin = bytearray()
+    blob, blobs = [], {}
+    pipe_bin, variant_bin = bytearray(), bytearray()
     for rec in pipes:
-        blob_off = len(blob)
-        for m, v in rec['blob']:
-            blob += [m, v]
+        pairs = tuple(rec['blob'])
+        if pairs not in blobs:
+            blobs[pairs] = len(blob)
+            for m, v in pairs:
+                blob += [m, v]
+        variants_off = len(variant_bin) // 8
+        for v in sorted(rec.get('variants', []), key=lambda v: v['stage']):
+            variant_bin += struct.pack('<IHH', v['assume'], v['program'], 0)
         # the key's attachment and vertex fields (what the runtime reads of it: raw_gpu.cpp Device::pipeline), not the
         # functions' constants (some 1.5 KB a fixed-function state; pack.json has the whole key)
-        pipe_bin += pipeline_bytes(rec, string(rec['key'].split(' | ')[0].rstrip()), blob_off)
-    return pipe_bin, blob, strings
+        pipe_bin += pipeline_bytes(rec, string(rec['key'].split(' | ')[0].rstrip()), blobs[pairs], variants_off)
+    return pipe_bin, blob, strings, variant_bin
 
 
 def pack_bytes(pack: Pack) -> tuple[bytes, list[int]]:
-    pipe_bin, blob, strings = pipeline_sections(pack.pipes)
+    pipe_bin, blob, strings, variant_bin = pipeline_sections(pack.pipes)
     kernel_bin = bytearray()
     for k in sorted(pack.kernels, key=lambda k: fnv(k['key'].encode())):
         kernel_bin += kernel_bytes(k, len(strings))
@@ -294,6 +324,7 @@ def pack_bytes(pack: Pack) -> tuple[bytes, list[int]]:
                 len(pr['cbufs']),
             )
             + types
+            + struct.pack('<BBH', pr.get('gprs', 0), pr.get('bound_textures', 0), 0)
         )
     tsc_bin = b''.join(struct.pack('<8I', *w) for w in pack.constexpr_tsc)
     base_bin = b''.join(struct.pack('<II', m, v) for m, v in sorted(pack.baseline.items()))
@@ -310,6 +341,7 @@ def pack_bytes(pack: Pack) -> tuple[bytes, list[int]]:
         bytes(pack.heap),
         bytes(kernel_bin),
         split_bytes(pack.splits),
+        bytes(variant_bin),
     ]
     assert len(sections) == SECTIONS
     header_size = 8 + 4 * 4 + 8 * 2 * len(sections)
@@ -322,6 +354,7 @@ def pack_bytes(pack: Pack) -> tuple[bytes, list[int]]:
         body += s
     hdr = MAGIC + struct.pack('<IIII', VERSION, len(pack.programs), len(pack.pipes), len(pack.constexpr_tsc))
     hdr += struct.pack(f'<{2 * len(sections)}Q', *[x for o in offs for x in o])
+    hdr += struct.pack('<QII', 0, chip_facts(), 0)  # the stack key (rawpack.py stamps it), chip facts, reserved
     return hdr + bytes((header_size + 255) // 256 * 256 - len(hdr)) + body, blob
 
 

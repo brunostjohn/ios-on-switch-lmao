@@ -86,6 +86,11 @@ inline std::string differences(const raw::Pack &pack, const raw::PackPipeline &p
         why += " key";
     if (!r.extras.empty())
         why += " extras";
+    if (pp.boundEntries != rp.boundEntries || memcmp(pp.uniform, rp.uniform, sizeof pp.uniform) ||
+        memcmp(pp.fetchRung, rp.fetchRung, sizeof pp.fetchRung))
+        why += " reads";
+    if (pp.variantCount[0] != rp.variantCount[0] || pp.variantCount[1] != rp.variantCount[1])
+        why += " variants";
     for (int k = 0; k < 2; k++) {
         const raw::PackProgram &packed = pack.section<raw::PackProgram>(raw::PackPrograms)[k ? pp.fs : pp.vs];
         raw::PackProgram made;
@@ -94,7 +99,8 @@ inline std::string differences(const raw::Pack &pack, const raw::PackPipeline &p
         if (packed.bytes != made.bytes || memcmp(heap, slot.data(), slot.size()) ||
             packed.program - packed.heapOffset != made.program || packed.dataOffset != made.dataOffset ||
             packed.dataBytes != made.dataBytes || packed.cbufs != made.cbufs ||
-            memcmp(packed.cbufType, made.cbufType, sizeof made.cbufType))
+            memcmp(packed.cbufType, made.cbufType, sizeof made.cbufType) || packed.gprs != made.gprs ||
+            packed.boundTextures != made.boundTextures)
             why += k ? " pixel-program" : " vertex-program";
     }
     return why;

@@ -389,6 +389,19 @@ def lay_out_programs(
     return heap, prog_index, prog_recs
 
 
+# SET_PIPELINE_REGISTER_COUNT(vertex B, pixel): the probe's register count of each program it bound
+REGISTER_COUNTS = {1: 0x204C, 5: 0x214C}
+
+
+def probed_register_counts(simple: list[dict], programs: dict[str, dict]) -> dict[str, dict]:
+    """Give each program the register count its states' draws set (PackProgram.gprs: owned, so in no blob)."""
+    for p in simple:
+        record = p['records'][0]
+        for stage, method in REGISTER_COUNTS.items():
+            programs[record['prog'][stage][0]]['gprs'] = record['regs'].get(method, 0)
+    return programs
+
+
 FRAGMENT_CODES = (1, 2, 3, 5, 6, 7, 9, 10, 11, 13, 14, 15)
 
 
@@ -594,7 +607,7 @@ def main() -> None:
     names = ' '.join(f'{m:x}' for m in varying)
     report.append(f'{len(varying)} per-pipeline registers: {names}')
     report.append(f'{len(baseline)} baseline registers over post-init')
-    heap, prog_index, prog_recs = lay_out_programs(simple, programs, report)
+    heap, prog_index, prog_recs = lay_out_programs(simple, probed_register_counts(simple, programs), report)
     # pipelines
     pipes, constexpr_tsc = [], []
     for p in simple:

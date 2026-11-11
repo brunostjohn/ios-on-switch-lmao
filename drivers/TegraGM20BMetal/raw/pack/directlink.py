@@ -25,7 +25,7 @@ import splits
 PIPELINE = struct.Struct('<QIHHIIBBBBHHI')
 # SET_PIPELINE_PROGRAM(vertex B, pixel): where each program sits in the shader heap, which the probe saw differ by state
 PROGRAM_OFFSETS = (0x2044, 0x2144)
-PIPELINE_BYTES = PIPELINE.size + packfile.PACK_ENTRIES * 8 + 4 + 32 * 4 + 4 + 36 + 16
+PIPELINE_BYTES = PIPELINE.size + packfile.PACK_ENTRIES * 8 + 4 + 32 * 4 + 4 + 36 + 16 + packfile.PIPELINE_V15.size
 ENTRY_UBO, ENTRY_COLOR_TABLE = 1, 5
 TEXTURE_KINDS = {2: 'slot', 3: 'fetch', 4: 'tex3d', 6: 'depth_test', 7: 'stencil_test'}
 SAMPLER_SLOT, SAMPLER_CONSTEXPR = 1, 2
@@ -50,7 +50,10 @@ class Reader:
 
 
 def program(r: Reader) -> dict:
-    return {'image': r.blob(), 'data': r.blob(), 'cbufs': list(r.blob())}
+    out = {'image': r.blob(), 'data': r.blob(), 'cbufs': list(r.blob())}
+    words = r.u32()
+    out['gprs'], out['bound_textures'] = words & 0xFF, words >> 8 & 0xFF
+    return out
 
 
 def headers(blob: bytes) -> list[list[int]]:
@@ -84,6 +87,7 @@ def load_records(path: str) -> tuple[list[dict], list[dict]]:
             rec['samplers'] = headers(r.blob())
             if r.u32():
                 rec['split'] = {'record': r.blob(), 'programs': [program(r) for _ in range(2)]}
+            rec['variants'] = [{'assume': r.u32(), 'program': program(r)} for _ in range(r.u32())]
         states.append(rec)
     return states, kernel_recs
 
@@ -143,9 +147,17 @@ def pipeline_of(rec: dict, varying: list[int], prog_index: dict[str, int], const
         PIPELINE.unpack_from(p)
     )
     mask, *words = struct.unpack_from('<33I', p, PIPELINE.size + packfile.PACK_ENTRIES * 8)
-    blend, half, _reserved = struct.unpack_from('<BBH', p, PIPELINE_BYTES - 56)
-    storage_mask, storage_write_mask, storage_samples, storage_tests, *storage_tic = struct.unpack_from('<BBBB8I', p, PIPELINE_BYTES - 52)
-    depth_word, stencil_word, test_flags, _reserved, depth_tic, stencil_tic, _reserved = struct.unpack_from('<BBBBIII', p, PIPELINE_BYTES - 16)
+    tail = PIPELINE_BYTES - packfile.PIPELINE_V15.size
+    blend, half, _reserved = struct.unpack_from('<BBH', p, tail - 56)
+    storage_mask, storage_write_mask, storage_samples, storage_tests, *storage_tic = struct.unpack_from(
+        '<BBBB8I', p, tail - 52
+    )
+    depth_word, stencil_word, test_flags, _reserved, depth_tic, stencil_tic, _reserved = struct.unpack_from(
+        '<BBBBIII', p, tail - 16
+    )
+    _variants, vertex_variants, _fragment_variants, _reserved, bound_entries, uniform, fetch_rung, _reserved = (
+        packfile.PIPELINE_V15.unpack_from(p, tail)
+    )
     regs = rec['probe']['records'][0]['regs']
     varying = list(varying)
     if storage_mask:
@@ -183,6 +195,17 @@ def pipeline_of(rec: dict, varying: list[int], prog_index: dict[str, int], const
         'fetch': bool(flags & 1),
         'clears': 0,
         'problems': [],
+        'bound_entries': bound_entries,
+        'uniform': uniform,
+        'fetch_rung': list(fetch_rung),
+        'variants': [
+            {
+                'stage': 0 if i < vertex_variants else 1,
+                'assume': v['assume'],
+                'program': prog_index[program_id(v['program'])],
+            }
+            for i, v in enumerate(rec.get('variants', []))
+        ],
     }
 
 
@@ -273,6 +296,18 @@ def split_programs(states: list[dict], programs: dict[str, dict]) -> dict[str, d
     return found
 
 
+def lay_out_variants(states: list[dict], programs: dict[str, dict], laid: tuple, report: list[str]) -> None:
+    """Append the states' variant programs to the heap image `laid` holds, after every generic program."""
+    count = 0
+    for rec in states:
+        for v in rec.get('variants', []):
+            pid = program_id(v['program'])
+            programs.setdefault(pid, v['program'])
+            packfile.place_graphics(pid, programs, *laid)
+            count += 1
+    report.append(f'{count} program variants')
+
+
 def write_programs(path: str, programs: dict[str, dict]) -> None:
     """Write the programs as mkprograms.py does (nvdec names a bound program by them: test/eq.sh RAWCAP_PROGRAMS)."""
     with open(path, 'wb') as f:
@@ -296,6 +331,7 @@ def main() -> None:
     report.append(f'{len(baseline)} baseline registers over post-init')
     laid = mkpack.lay_out_programs(simple, programs, report)
     heap, prog_index, prog_recs = laid
+    lay_out_variants(states, programs, laid, report)
     constexpr_tsc: list[list[int]] = []
     pipes = sorted((pipeline_of(rec, varying, prog_index, constexpr_tsc) for rec in states), key=packfile.key_hash)
     computes = compute_kernels(buckets, constexpr_tsc, laid, report)
@@ -310,10 +346,11 @@ def main() -> None:
     packfile.write_json(os.path.join(out_dir, 'pack.json'), pack, varying)
     packfile.write_layouts(os.path.join(out_dir, 'layouts.txt'), pack)
     write_programs(os.path.join(out_dir, 'programs.bin'), programs)
+    unshared = sum(len(p['blob']) * 2 for p in pipes)
     report.append(
         f'pack.bin {len(data) // 1024} KiB: {len(pipes)} pipelines, {len(computes)} kernels, '
         f'{len(prog_recs)} programs, {len(split)} splits, {len(constexpr_tsc)} constexpr samplers, '
-        f'{len(blob)} blob dwords, {len(baseline)} baseline regs'
+        f'{len(blob)} blob dwords ({unshared} unshared), {len(baseline)} baseline regs'
     )
     report += [f'  refused ({rec["why"]}): {rec["key"][:150]}' for rec in refused]
     with open(os.path.join(out_dir, 'report.txt'), 'w') as f:

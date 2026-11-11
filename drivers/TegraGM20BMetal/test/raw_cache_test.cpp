@@ -92,6 +92,18 @@ raw::RuntimeRecord madeUp(uint32_t n)
         r.programs[k].id = std::to_string(n * 2 + k);
         r.programs[k].image.assign(80 + 64 * (n + 1), uint8_t(n + k));
         r.programs[k].cbufTypes = {1, 3};
+        r.programs[k].gprs = uint8_t(24 + 8 * k);
+    }
+    r.programs[1].boundTextures = 2;
+    if (n % 2 == 0) {
+        r.pipeline.variantCount[1] = 1;
+        r.pipeline.uniform[0] = {0, 1, 0, 4};
+        r.pipeline.fetchRung[0] = raw::FetchInterlock;
+        raw::RuntimeRecord::Variant &v = r.variants.emplace_back();
+        v.assume = raw::AssumeUniformAligned;
+        v.program = r.programs[1];
+        v.program.id += "-aligned";
+        v.program.gprs = 16;
     }
     r.programs[1].data.assign(256, 0x5A);
     r.programs[1].cbufTypes = {1, 2, 3};
