@@ -51,6 +51,11 @@
  *   with opaque sRGB magenta, Int(scale) pixels tall: every bar with a hard edge effect drew a purple line at 1.25 and
  *   1.6. Each ladder's last b.ne (dark 0x185f5f25c, light 0x185f5f2b8) goes to its own 1x/2x row instead, so every
  *   scale but 3 draws J181's keyline. Slot 2: .01's slot 0 is the keyboard table's, slot 1 SwitchTimebase's.
+ * - SampleAnalysis (.30), the mach timebases -[SATimestamp guessMissingTimesBasedOnTimestamp:] knows: it measures the
+ *   tick rate from two timestamps and takes 1/1 within 1e-7 of 1 GHz or 125/3 of 24 MHz, Apple's counters; X1's
+ *   counter is the 19.2 MHz oscillator's (625/12), which no clock divides to 24 MHz. Unknown, it logs a fault per
+ *   timestamp of every hang analysis watchdogd runs and leaves the times unconverted. The 24 MHz row becomes 19.2 MHz
+ *   and 625/12; the block is the only reader of both. At every scale.
  * 21H461's other sites are not here. 27's -[_UIBatteryView _fillLayerFrame:cornerRadius:] fills the body's own
  * frame (no inset), so SpringBoard's and Control Center's batteries have no gap to even out. +[PKIconImageCache
  * settingsIconCacheWithScale:] returns nil at every scale and 24B119 ships no iconCache artwork. Control Center's
@@ -222,6 +227,21 @@ static const struct switch_us_site switch_us_sites_24B119[] = {
 			  { 0xc1, 0x02, 0x00, 0x54 } },
 		},
 		"UIKitCore", "scroll edge keyline of a 2x screen", false,
+	},
+	{   /* .30 */
+		{ 0xff, 0x9f, 0xc5, 0x5c, 0xee, 0x05, 0x3e, 0x45, 0xba, 0x2d, 0x82, 0x65, 0xba, 0xb4, 0x57, 0xee },
+		0x209208000ULL, 0xe08000ULL, 0x1000ULL, 0, 2,
+		{
+			/* 0x209209510: knownMachTimebases {1, 1}, {125, 3} -> {625, 12} */
+			{ 0xe09510ULL, 16, 8, 8, SWITCH_US_FIXED,
+			  { 0x01, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x7d, 0x00, 0x00, 0x00, 0x03, 0x00, 0x00, 0x00 },
+			  { 0x71, 0x02, 0x00, 0x00, 0x0c, 0x00, 0x00, 0x00 } },
+			/* 0x2092096e0: the match tolerance 1e-7, then 24e6 -> 19.2e6 */
+			{ 0xe096e0ULL, 16, 8, 8, SWITCH_US_FIXED,
+			  { 0x48, 0xaf, 0xbc, 0x9a, 0xf2, 0xd7, 0x7a, 0x3e, 0x00, 0x00, 0x00, 0x00, 0x60, 0xe3, 0x76, 0x41 },
+			  { 0x00, 0x00, 0x00, 0x00, 0x80, 0x4f, 0x72, 0x41 } },
+		},
+		"SampleAnalysis", "mach timebase of a 19.2 MHz counter", true,
 	},
 };
 
