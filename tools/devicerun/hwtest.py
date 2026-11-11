@@ -168,6 +168,7 @@ TESTS: dict[str, bool] = {
     'ui.list': False,
     'ui.renderbox': False,
     'ui.compressed_image': False,
+    'ui.video_alpha': False,
     'pacing.metal_layer': False,
     'pacing.text': False,
     'pacing.blur_over': False,
