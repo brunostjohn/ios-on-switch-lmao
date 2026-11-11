@@ -402,6 +402,7 @@ bool Device::outgrow(Ring &r, uint32_t bytes, uint64_t &at)
     Bo larger;
     if (!k_.allocControl(std::max<uint64_t>(r.bo.bytes * 2, uint64_t(bytes) * 2), larger, ControlUse::Ring))
         return false;
+    set_.add(k_, larger, &r == &upload_ ? TegraGM20BSurfaceWrite : TegraGM20BSurfaceRead);
     RAW_DIAGNOSTIC(stats.ringsOutgrown++);
     r.outgrown.push_back(r.bo);
     r.bo = larger;
@@ -526,6 +527,13 @@ bool Device::init(std::string &err)
         err = k_.error();
         return false;
     }
+    set_.add(k_, {{&tic_, TegraGM20BSurfaceRead},
+                  {&tsc_, TegraGM20BSurfaceRead},
+                  {&root_, TegraGM20BSurfaceWrite},
+                  {&zero_, TegraGM20BSurfaceRead},
+                  {&tickets_, TegraGM20BSurfaceWrite},
+                  {&colorTable_, TegraGM20BSurfaceRead},
+                  {&stamps_, TegraGM20BSurfaceWrite}});
 #if SWITCH_RAW_DIAGNOSTICS
     static std::once_flag ticketsLogged;
     std::call_once(ticketsLogged, [this] {
@@ -632,8 +640,8 @@ bool Device::openChannel(std::string &err)
         err = k_.error();
         if (created)
             k_.closeChannel(channel_);
-        k_.free(push_.bo);
-        k_.free(upload_.bo);
+        set_.free(k_, push_.bo);
+        set_.free(k_, upload_.bo);
         push_ = Ring();
         upload_ = Ring();
         channel_ = 0;
@@ -643,6 +651,7 @@ bool Device::openChannel(std::string &err)
     if (!k_.allocControl(sizes_.push, push_.bo, ControlUse::Ring) ||
         !k_.allocControl(sizes_.upload, upload_.bo, ControlUse::Ring) || !k_.channel(kEngines, channel_, fence_))
         return undo(false);
+    set_.add(k_, {{&push_.bo, TegraGM20BSurfaceRead}, {&upload_.bo, TegraGM20BSurfaceWrite}});
     const uint32_t words = contextWords() + uint32_t(fx::twodInitWords());
     uint64_t va;
     uint32_t *start = reinterpret_cast<uint32_t *>(alloc(push_, words * 4, 256, va));
@@ -652,7 +661,8 @@ bool Device::openChannel(std::string &err)
     TegraGM20BAbiPush seg = {va, uint32_t(p.at - start), 0};
     uint32_t seq = 0;
     SurfaceList resources;
-    if (!k_.exec(channel_, &seg, 1, 0, seq, &resources))
+    SetView view;
+    if (!job(view, channel_, &seg, 1, resources, JobVisibility::External, seq))
         return undo(true);
     lastSeqno_ = seq;
     retire(push_, seq);
@@ -3155,9 +3165,11 @@ bool Device::newContext(uint32_t channel, uint32_t &seq)
     fx::emitTwodInit(p);
     TegraGM20BAbiPush seg = {va, uint32_t(p.at - start), 0};
     SurfaceList resources;
-    resources.add(zero_.handle, false);
-    resources.add(tickets_.handle, true);
-    if (!k_.exec(channel, &seg, 1, 0, seq, &resources))
+    if (!member(zero_))
+        resources.add(zero_.handle, false);
+    if (!member(tickets_))
+        resources.add(tickets_.handle, true);
+    if (!job(setView_, channel, &seg, 1, resources, JobVisibility::External, seq))
         return false;
     retire(push_, seq);
     return true;
@@ -3172,6 +3184,7 @@ void Device::growRing(Ring &r, uint64_t most)
     Bo larger;
     if (!grow || !k_.allocControl(std::min(r.bo.bytes * 2, most), larger, ControlUse::Ring))
         return;
+    set_.add(k_, larger, &r == &upload_ ? TegraGM20BSurfaceWrite : TegraGM20BSurfaceRead);
     grownOut_.push_back({r.bo, lastSeqno_});
     r.bo = larger;
     r.head = r.since = r.clear = 0;
@@ -3187,7 +3200,7 @@ CommandBuffer *Device::begin()
         return nullptr;
     for (auto it = grownOut_.begin(); it != grownOut_.end();)
         if (done(it->second)) {
-            k_.free(it->first);
+            set_.free(k_, it->first);
             it = grownOut_.erase(it);
         } else {
             ++it;
@@ -3468,7 +3481,7 @@ static uint64_t rowStorageBytes(uint32_t pitch, uint32_t width, uint32_t height,
 
 void CommandBuffer::useAddress(uint64_t va, uint64_t bytes, bool write)
 {
-    if (va && dev_->k_.exactJobs())
+    if (va && dev_->k_.exactJobs() && !dev_->member(va, bytes ? bytes : 1))
         surfaces_.addAddress(va, bytes ? bytes : 1, write,
                              bytes && bytes <= UINT32_MAX ? TegraGM20BSurfaceRange : 0u);
 }
@@ -3485,7 +3498,7 @@ void CommandBuffer::use(const Buffer &buffer, bool write)
     const bool ranged = dev_->k_.exactJobs() && buffer.length && buffer.length <= UINT32_MAX;
     if (!ranged || !importContains(buffer.import, buffer.va, buffer.length))
         use(buffer.import, write);
-    if (buffer.va && buffer.length && dev_->k_.exactJobs())
+    if (buffer.va && buffer.length && dev_->k_.exactJobs() && !dev_->member(buffer.va, buffer.length))
         surfaces_.addAddress(buffer.va, buffer.length, write,
                              (buffer.hostVisible ? TegraGM20BSurfaceHostWritten : 0u) |
                              (ranged ? TegraGM20BSurfaceRange : 0u));
@@ -3505,7 +3518,8 @@ void CommandBuffer::use(const Texture &texture, bool write)
         dev_->glassMem->wrote(storage.va ? storage.va : view->va, dev_->commitCount_,
                               dev_->stats.memEvents.load(std::memory_order_relaxed));
 #endif
-    if (view->va && dev_->k_.exactJobs())
+    if (view->va && dev_->k_.exactJobs() &&
+        !dev_->member(storage.bytes ? storage.va : view->va, storage.bytes ? storage.bytes : 1))
         surfaces_.addAddress(storage.bytes ? storage.va : view->va, storage.bytes ? storage.bytes : 1, write,
                              (hostVisible ? TegraGM20BSurfaceHostWritten : 0u) |
                              (ranged ? TegraGM20BSurfaceRange : 0u));
@@ -3708,7 +3722,7 @@ bool CommandBuffer::commit(uint32_t &seqno)
     if (d.k_.exactJobs()) {
         std::lock_guard<std::mutex> lock(d.lock_);
         auto control = [&](const Bo &bo, bool write) {
-            if (bo.handle)
+            if (bo.handle && !d.member(bo))
                 surfaces_.add(bo.handle, write);
         };
         for (const Bo *bo : {&d.tic_, &d.tsc_, &d.zero_, &d.colorTable_})
@@ -3735,33 +3749,16 @@ bool CommandBuffer::commit(uint32_t &seqno)
     const uint32_t maxPushes = d.k_.maxPushes(), maxFences = d.k_.maxFences();
     if (!segments_.valid(maxPushes))
         return false;  // validate all indivisible continuation groups before publishing any prefix
-    const bool multiple =
-        (!segments_.empty() && segments_.submission(0, maxPushes, maxFences) < segments_.size()) ||
-        sharedWaits_.size() + sharedSignals_.size() > TegraGM20BMaxJobEvents;
-    const uint64_t admissionCookie = multiple && d.k_.exactJobs() ? d.k_.nextAdmission() : 0;
-    bool admissionHeld = false;
     uint32_t seq = 0;
-    auto submit = [&](const TegraGM20BAbiPush *pushes, uint32_t count, SurfaceList &resources,
-                      JobVisibility visibility, const JobEvents &events, bool last) {
+    auto submit = [&](const TegraGM20BAbiPush *pushes, uint32_t count, SurfaceList &uses, JobVisibility visibility,
+                      const JobEvents &events) {
         int result = KERN_SUCCESS;
-        const JobAdmission admission{admissionCookie, admissionCookie ?
-            (published ? uint32_t(TegraGM20BSubmitAdmissionContinue) : uint32_t(TegraGM20BSubmitAdmissionBegin)) |
-            (last ? uint32_t(TegraGM20BSubmitAdmissionEnd) : 0u) : 0u};
-        SurfaceList *const uses = admissionCookie ? &surfaces_ : &resources;
-        RAW_DIAGNOSTIC(noteExecUses(uses->uses().size()));
+        RAW_DIAGNOSTIC(noteExecUses(uses.uses().size()));
         RAW_ENCODE_BEGIN(execSpan, Exec);
-        const bool executed =
-            d.k_.exec(d.channel_, pushes, count, d.lastSeqno_, seq, uses, &result, visibility, events, admission);
+        const bool executed = d.job(d.setView_, d.channel_, pushes, count, uses, visibility, seq, &result, events);
         RAW_ENCODE_END(execSpan);
         if (!executed) {
-            admissionBlocked = !published && result == kIOReturnCannotLock && d.k_.exactJobs();
-            if (admissionHeld) {
-                SurfaceList empty;
-                uint32_t cancelled = 0;
-                (void)d.k_.exec(d.channel_, nullptr, 0, 0, cancelled, &empty, nullptr, JobVisibility::Internal,
-                               {}, {admissionCookie, TegraGM20BSubmitAdmissionCancel});
-                admissionHeld = false;
-            }
+            admissionBlocked = !published && result == kIOReturnCannotLock;
             if ((!nativeSurfaces_.empty() || !sharedWaits_.empty() || !sharedSignals_.empty()) &&
                 (result == kIOReturnNotReady || result == kIOReturnAborted))
                 nativeError = result;
@@ -3773,7 +3770,6 @@ bool CommandBuffer::commit(uint32_t &seqno)
             return false;
         }
         published = true;
-        admissionHeld = admissionCookie && !last;
         d.lastSeqno_ = seq;
         return true;
     };
@@ -3784,7 +3780,7 @@ bool CommandBuffer::commit(uint32_t &seqno)
            TegraGM20BMaxJobEvents) {
         const uint32_t count = uint32_t(std::min<size_t>(sharedWaits_.size() - waited, TegraGM20BMaxJobEvents));
         const JobEvents events{sharedWaits_.data() + waited, nullptr, count, 0};
-        if (!submit(nullptr, 0, eventResources, JobVisibility::Internal, events, false))
+        if (!submit(nullptr, 0, eventResources, JobVisibility::Internal, events))
             return false;
         waited += count;
     }
@@ -3797,9 +3793,7 @@ bool CommandBuffer::commit(uint32_t &seqno)
             uint32_t(std::min<size_t>(sharedSignals_.size(), TegraGM20BMaxJobEvents - waitCount)) : 0;
         const JobEvents events{waitCount ? sharedWaits_.data() + waited : nullptr,
                               signalCount ? sharedSignals_.data() : nullptr, waitCount, signalCount};
-        const bool last = closing && waited + waitCount == sharedWaits_.size() &&
-                          signaled + signalCount == sharedSignals_.size();
-        if (!submit(segments_.data() + at, uint32_t(n), surfaces_, visibility, events, last))
+        if (!submit(segments_.data() + at, uint32_t(n), surfaces_, visibility, events))
             return false;
         waited += waitCount;
         signaled += signalCount;
@@ -3817,8 +3811,7 @@ bool CommandBuffer::commit(uint32_t &seqno)
                                                              TegraGM20BMaxJobEvents - waitCount));
         const JobEvents events{waitCount ? sharedWaits_.data() + waited : nullptr,
                               signalCount ? sharedSignals_.data() + signaled : nullptr, waitCount, signalCount};
-        const bool last = waited + waitCount == sharedWaits_.size() && signaled + signalCount == sharedSignals_.size();
-        if (!submit(nullptr, 0, eventResources, JobVisibility::External, events, last))
+        if (!submit(nullptr, 0, eventResources, JobVisibility::External, events))
             return false;
         waited += waitCount;
         signaled += signalCount;
@@ -5812,7 +5805,7 @@ TextureTransferResult Device::transferTexture(const Texture &texture, uint32_t l
     region.height = size[1];
     region.planes = size[2];
     region.bpp = t.bpp;
-    if (!transfers_.copy(k_, lock_, region, bytes, row, image, write, std::move(owner)))
+    if (!transfers_.copy(k_, set_, lock_, region, bytes, row, image, write, std::move(owner)))
         return TextureTransferResult::Failed;
     RAW_DIAGNOSTIC((write ? stats.textureUploads : stats.textureReadbacks).fetch_add(1, std::memory_order_relaxed));
 #if SWITCH_RAW_DIAGNOSTICS

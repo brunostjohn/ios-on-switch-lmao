@@ -67,7 +67,6 @@ TEST_F(ResourceSetTest, MembersGoWithTheSetNotAsUses)
     ASSERT_TRUE(job({{0x5000, kRead, 0}}));
     EXPECT_EQ(model.setJobs, 2u);
     EXPECT_EQ(model.staleSets, 0u);
-    EXPECT_EQ(set.renewals(), 0u);
 }
 
 // An import, a cached BO and a BO of another set are refused as members: they stay uses, the rest join
@@ -118,9 +117,10 @@ TEST_F(ResourceSetTest, AKilledChannelsSetIsMadeAgainForTheNextJob)
     kernel.closeChannel(channel);
     model.inFlight = false;
     ASSERT_TRUE(kernel.channel(kEngines, channel, fence));
+    const uint32_t ended = model.sets[0].generation;
     ASSERT_TRUE(job());
     EXPECT_EQ(model.staleSets, 1u);
-    EXPECT_EQ(set.renewals(), 1u);
+    EXPECT_EQ(model.sets[0].generation, ended + 1) << "the set was not made again once, for the refused job";
     EXPECT_EQ(model.undefined.count(tickets.handle), 0u);
     ASSERT_TRUE(job());
     EXPECT_EQ(model.staleSets, 1u);
@@ -132,10 +132,11 @@ TEST_F(ResourceSetTest, ANotReadyTheMirrorDoesNotExplainIsTheJobs)
 {
     ASSERT_TRUE(set.add(kernel, root, kWrite));
     model.staleViews = 1;
+    const uint32_t generation = model.sets[0].generation;
     int result = KERN_SUCCESS;
     EXPECT_FALSE(job({}, &result));
     EXPECT_EQ(result, kIOReturnNotReady);
-    EXPECT_EQ(set.renewals(), 0u);
+    EXPECT_EQ(model.sets[0].generation, generation) << "a stale native view made the set again";
     EXPECT_TRUE(job());
 }
 

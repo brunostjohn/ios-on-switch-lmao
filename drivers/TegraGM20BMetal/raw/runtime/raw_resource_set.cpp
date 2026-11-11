@@ -112,7 +112,6 @@ bool ResourceSet::renew(Kernel &k, uint32_t generation)
         return true;
     if (!mirror_ || *mirror_ == generation_)
         return false;
-    renewals_.fetch_add(1, std::memory_order_relaxed);
     if (registerLocked(k))
         return true;
     os_log_error(setLog(), "raw: the resource set's generation ended and it was not made again (%{public}s)",
