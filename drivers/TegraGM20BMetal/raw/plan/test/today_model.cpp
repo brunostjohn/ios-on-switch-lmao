@@ -104,9 +104,10 @@ Counts todayCounts(const WorkGraph &g, const Recording &r, bool tiledCache)
             blitEncoder = kNone;
             computeOpen = false;
         } else if (node.engine == Engine::Copy || node.engine == Engine::TwoD) {
-            const uint32_t encoder = node.source != kNone && node.rule != Rule::Recorded && node.kind != NodeKind::Convert
-                                         ? encoderOf[node.source]
-                                         : kNone;
+            const uint32_t encoder =
+                node.source != kNone && node.rule != Rule::Recorded && node.kind != NodeKind::Convert
+                    ? encoderOf[node.source]
+                    : kNone;
             if (encoder == kNone || encoder != blitEncoder) {
                 ++c.wfi;
                 ++c.drains;

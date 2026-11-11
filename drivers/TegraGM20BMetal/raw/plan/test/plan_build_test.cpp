@@ -65,9 +65,9 @@ TEST(Build, SampledShadowRefreshedOnceASurfaceViewEachPass)
     f.samplingPass(view);
     f.samplingPass(view);
     const Built b = build(f.rec.r, chipCaps());
-    EXPECT_EQ(rules(b.graph), (std::vector<Rule>{Rule::ShadowRefresh, Rule::Recorded, Rule::Recorded,
-                                                 Rule::ShadowRefresh, Rule::Recorded, Rule::ShadowRefresh,
-                                                 Rule::Recorded}));
+    EXPECT_EQ(rules(b.graph),
+              (std::vector<Rule>{Rule::ShadowRefresh, Rule::Recorded, Rule::Recorded, Rule::ShadowRefresh,
+                                 Rule::Recorded, Rule::ShadowRefresh, Rule::Recorded}));
     EXPECT_EQ(b.graph.nodes[0].engine, Engine::Copy);
 }
 

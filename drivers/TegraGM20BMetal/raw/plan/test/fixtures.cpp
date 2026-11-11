@@ -248,7 +248,8 @@ struct Glass {
 
     Glass()
     {
-        drawable = rec.texture(80, 1280, 720, ResourceFacts::Drawable | ResourceFacts::Surface | ResourceFacts::Rendered);
+        drawable =
+            rec.texture(80, 1280, 720, ResourceFacts::Drawable | ResourceFacts::Surface | ResourceFacts::Rendered);
         c1 = rec.texture(115, 1280, 720, ResourceFacts::Memoryless | ResourceFacts::Compressed, 1, 1, 100);
         c2 = rec.texture(55, 1280, 720, ResourceFacts::Memoryless | ResourceFacts::Compressed, 1, 1, 101);
         vb = rec.buffer(1 << 16);
@@ -277,8 +278,8 @@ struct Glass {
         const uint32_t merge = rec.program(caState(0x6e46, {80, 115, 55}, 7, Rung::Interlock));
         const uint32_t one = rec.texture(80, 1, 1), white = rec.texture(80, 1, 1), noise = rec.texture(80, 32, 32);
         const uint32_t s0 = rec.state(background, {vertices(vb), constants(ub), texture(pyramid, 1, 3)});
-        const uint32_t s1 = rec.state(merge, {vertices(vb), constants(ub), texture(one, 1, 3),
-                                              texture(white, 1, 12), texture(noise, 1, 9)});
+        const uint32_t s1 = rec.state(
+            merge, {vertices(vb), constants(ub), texture(one, 1, 3), texture(white, 1, 12), texture(noise, 1, 9)});
         rec.draw(s0, 24, 0);
         rec.draw(s0, 96, 2, ib);
         rec.draw(s0, 30, 0);
@@ -294,30 +295,32 @@ Recording glassFrame0()
     Glass g;
     Rec &rec = g.rec;
     const uint32_t capture = rec.texture(80, 320, 128, ResourceFacts::Rendered);
-    const uint32_t capture1 = rec.texture(115, 320, 128, ResourceFacts::Memoryless | ResourceFacts::Compressed, 1, 1, 100);
+    const uint32_t capture1 =
+        rec.texture(115, 320, 128, ResourceFacts::Memoryless | ResourceFacts::Compressed, 1, 1, 100);
     const uint32_t pyramid = rec.texture(80, 384, 128, ResourceFacts::Rendered, 3);
-    const uint32_t pyramid1 = rec.texture(115, 384, 128, ResourceFacts::Memoryless | ResourceFacts::Compressed, 1, 1, 100);
+    const uint32_t pyramid1 =
+        rec.texture(115, 384, 128, ResourceFacts::Memoryless | ResourceFacts::Compressed, 1, 1, 100);
     rec.render(g.drawablePass());
     g.contentDraws();
     rec.end();
     const uint32_t ds4 = rec.program(caState(0x7d54, {80, 115}));
-    rec.render(pass({colour(capture, Load::Clear, Store::Store), colour(capture1, Load::DontCare, Store::DontCare)}, 320,
-                    124));
+    rec.render(pass({colour(capture, Load::Clear, Store::Store), colour(capture1, Load::DontCare, Store::DontCare)},
+                    320, 124));
     const uint32_t s = rec.state(ds4, {vertices(g.vb), constants(g.ub), texture(g.drawable, 1, 3)});
     rec.draw(s, 48, 2, g.ib);
     rec.draw(s, 18, 2, g.ib);
     rec.end();
     const uint32_t img = rec.program(caState(0x1309, {80, 115}));
-    rec.render(pass({colour(pyramid, Load::Clear, Store::Store), colour(pyramid1, Load::DontCare, Store::DontCare)}, 384,
-                    128));
+    rec.render(pass({colour(pyramid, Load::Clear, Store::Store), colour(pyramid1, Load::DontCare, Store::DontCare)},
+                    384, 128));
     rec.draw(rec.state(img, {vertices(g.vb), constants(g.ub), texture(capture, 1, 3)}), 6, 2, g.ib);
     rec.end();
     const uint32_t vrd = rec.program(caState(0x7a7d, {80, 115}));
     const uint32_t vs = rec.state(vrd, {vertices(g.vb), constants(g.ub), texture(pyramid, 1, 3)});
     for (uint16_t level = 1; level < 3; ++level) {
-        rec.render(pass({colour(pyramid, Load::Clear, Store::Store, level),
-                         colour(pyramid1, Load::DontCare, Store::DontCare)},
-                        384u >> level, 128u >> level));
+        rec.render(
+            pass({colour(pyramid, Load::Clear, Store::Store, level), colour(pyramid1, Load::DontCare, Store::DontCare)},
+                 384u >> level, 128u >> level));
         rec.draw(vs, 6, 2, g.ib);
         rec.end();
     }
@@ -369,8 +372,8 @@ Recording scrollFrame(bool aliasedScratch)
                          colour(c2, Load::DontCare, Store::DontCare)},
                         1280, 720));
         for (uint32_t i = 0; i < count; ++i)
-            rec.draw(rec.state(screenState, {vertices(vb), constants(ub), texture(layers[i % layers.size()], 1, 0)}),
-                     6, 2, ib);
+            rec.draw(rec.state(screenState, {vertices(vb), constants(ub), texture(layers[i % layers.size()], 1, 0)}), 6,
+                     2, ib);
         rec.end();
     };
     std::vector<uint32_t> first, second;
@@ -381,9 +384,10 @@ Recording scrollFrame(bool aliasedScratch)
         second.push_back(offscreen(3, atlas));
     onscreen(20, second);
     const uint32_t pocket = rec.texture(80, 320, 32, ResourceFacts::Rendered);
-    const uint32_t pocket1 = rec.texture(115, 320, 32, ResourceFacts::Memoryless | ResourceFacts::Compressed, 1, 1, 100);
-    rec.render(pass({colour(pocket, Load::Clear, Store::Store), colour(pocket1, Load::DontCare, Store::DontCare)}, 320,
-                    32));
+    const uint32_t pocket1 =
+        rec.texture(115, 320, 32, ResourceFacts::Memoryless | ResourceFacts::Compressed, 1, 1, 100);
+    rec.render(
+        pass({colour(pocket, Load::Clear, Store::Store), colour(pocket1, Load::DontCare, Store::DontCare)}, 320, 32));
     rec.draw(rec.state(layerState, {vertices(vb), constants(ub), texture(drawable, 1, 0)}), 6, 2, ib);
     rec.draw(rec.state(layerState, {vertices(vb), constants(ub), texture(drawable, 1, 0)}), 6, 2, ib);
     rec.end();
@@ -394,8 +398,8 @@ Recording scrollFrame(bool aliasedScratch)
 
 std::string describe(const WorkGraph &g)
 {
-    static const char *const bits[] = {"tiled", "wfi",  "flush",   "data",  "const", "instr", "tex",
-                                       "ps",    "tic",  "tsc",     "setref", "ce_np", "switch"};
+    static const char *const bits[] = {"tiled", "wfi", "flush", "data",   "const", "instr", "tex",
+                                       "ps",    "tic", "tsc",   "setref", "ce_np", "switch"};
     const auto names = [](Barriers b) {
         std::string out;
         for (uint32_t i = 0; i < 13; ++i)

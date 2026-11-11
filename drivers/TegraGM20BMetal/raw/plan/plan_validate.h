@@ -8,10 +8,10 @@ namespace raw::plan {
 
 enum class Verdict : uint8_t {
     Plannable,
-    ClientError,   // Metal's validation layer rejects it and defines no NSError: the command is dropped, logged once
-    QueryGated,    // the device answers that it lacks the feature: a client error the client was expected to avoid
+    ClientError,  // Metal's validation layer rejects it and defines no NSError: the command is dropped, logged once
+    QueryGated,   // the device answers that it lacks the feature: a client error the client was expected to avoid
     CommandBufferError,  // the command buffer fails with an MTLCommandBufferErrorDomain code
-    NoGpuRung,     // Metal allows it and the planner has no GPU-side rung yet: the remaining work
+    NoGpuRung,           // Metal allows it and the planner has no GPU-side rung yet: the remaining work
 };
 
 enum class Problem : uint8_t {

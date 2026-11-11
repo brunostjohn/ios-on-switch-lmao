@@ -28,7 +28,16 @@ struct Handle {
 
 // The engine a node runs on. Every class but VIC and the display is a subchannel of the one GPU channel (gpu.c binds
 // all five per channel), so the engine picks the barrier vocabulary, not a queue.
-enum class Engine : uint8_t { None, ThreeD, TwoD, Copy, Compute, Inline, Vic, Display };
+enum class Engine : uint8_t {
+    None,
+    ThreeD,
+    TwoD,
+    Copy,
+    Compute,
+    Inline,
+    Vic,
+    Display
+};
 
 // The way an access reaches memory, which decides the flush its write needs and the cache its read must drop
 enum class Path : uint8_t {
@@ -48,7 +57,12 @@ enum class Path : uint8_t {
 
 constexpr uint32_t kPathCount = uint32_t(Path::Count);
 
-enum class Stage : uint8_t { Vertex, Fragment, Compute, Transfer };
+enum class Stage : uint8_t {
+    Vertex,
+    Fragment,
+    Compute,
+    Transfer
+};
 
 // Levels [level, level + levels) and layers [layer, layer + layers); the defaults name the whole resource
 struct SubRange {

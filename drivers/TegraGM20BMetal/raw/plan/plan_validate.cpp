@@ -115,7 +115,8 @@ Finding checkTransfer(const Recording &r, const Transfer &t, uint32_t index)
         const ResourceFacts &f = r.resources[slot];
         return f.kind == ResourceFacts::Buffer && f.bytes && t.bytes && offset + t.bytes > f.bytes;
     };
-    if ((t.kind == Transfer::CopyBuffer && (past(t.source, t.sourceOffset) || past(t.destination, t.destinationOffset))) ||
+    if ((t.kind == Transfer::CopyBuffer &&
+         (past(t.source, t.sourceOffset) || past(t.destination, t.destinationOffset))) ||
         (t.kind == Transfer::FillBuffer && past(t.destination, t.destinationOffset)))
         return found(Verdict::ClientError, Problem::BufferRange, index);
     if (t.kind == Transfer::CopyTexture && Caps::format(r.resources[t.source].format) &&

@@ -7,7 +7,11 @@
 
 namespace raw::plan {
 
-enum class Grade : uint8_t { Source = SWITCH_GM20B_GRADE_SOURCE, Host = SWITCH_GM20B_GRADE_HOST, Chip = SWITCH_GM20B_GRADE_CHIP };
+enum class Grade : uint8_t {
+    Source = SWITCH_GM20B_GRADE_SOURCE,
+    Host = SWITCH_GM20B_GRADE_HOST,
+    Chip = SWITCH_GM20B_GRADE_CHIP
+};
 
 enum class Probe : uint8_t {
     None,

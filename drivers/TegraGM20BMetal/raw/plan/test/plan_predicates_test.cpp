@@ -61,8 +61,9 @@ std::vector<std::string> split(const std::string &s)
 
 template <size_t N> bool named(const char *const (&names)[N], const std::string &name)
 {
-    return std::find_if(std::begin(names), std::end(names), [&](const char *n) { return name == n; }) !=
-           std::end(names);
+    return std::find_if(std::begin(names), std::end(names), [&](const char *n) {
+               return name == n;
+           }) != std::end(names);
 }
 
 TEST(Predicates, EveryPredicateOnce)

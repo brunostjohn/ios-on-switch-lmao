@@ -15,7 +15,8 @@ constexpr ClauseInfo kClauses[] = {
      ".flush_data, itself a WFI)",
      "raw_gpu.cpp:5315-5316 pass end after storage writes; :4732 in-pass storage barrier"},
     {Clause::TiledCache, "binned colour writes leave the tiled cache",
-     "nvk_tiled_cache.h:65-72, nvk_cmd_buffer.c:431, nvk_event.c:184 (this fork's 7c0b96132, not upstream: at a release "
+     "nvk_tiled_cache.h:65-72, nvk_cmd_buffer.c:431, nvk_event.c:184 (this fork's 7c0b96132, not upstream: at a "
+     "release "
      "and at a command buffer's end)",
      "raw_gpu.cpp:5313-5314 every pass end that drew; raw_tiled_cache.h:61"},
     {Clause::TextureRead, "a texture-unit read of written memory",
@@ -23,7 +24,8 @@ constexpr ClauseInfo kClauses[] = {
      "resolve reads); :818-829 (INVALIDATE_TEXTURE_DATA_CACHE_NO_WFI)",
      "raw_gpu.cpp:3330 every pass prologue"},
     {Clause::StorageRead, "a storage read of written memory",
-     "nvk_cmd_buffer.c:569-570 (SHADER_STORAGE_READ: INVALIDATE_SHADER_DATA); :851-863 (INVALIDATE_SHADER_CACHES_NO_WFI "
+     "nvk_cmd_buffer.c:569-570 (SHADER_STORAGE_READ: INVALIDATE_SHADER_DATA); :851-863 "
+     "(INVALIDATE_SHADER_CACHES_NO_WFI "
      ".global_data)",
      "raw_gpu.cpp:3330 every pass prologue"},
     {Clause::ConstantRead, "a GPU-written buffer read as constants",
@@ -109,8 +111,8 @@ Requirement hazard(const Access &earlier, const Access &later, Scope scope, bool
     const Barriers tiled = tiledCache && colour(earlier.path) && earlier.write ? TiledCacheFlush : 0;
     if (scope == Scope::InPass) {
         if (earlier.path == Path::Storage || later.path == Path::Storage)
-            add(Clause::InPassStorage, (tiledCache ? TiledCacheFlush : 0) | FlushShaderData | InvalidateShaderData |
-                                           InvalidateTextureData);
+            add(Clause::InPassStorage,
+                (tiledCache ? TiledCacheFlush : 0) | FlushShaderData | InvalidateShaderData | InvalidateTextureData);
         else if (earlier.write && colour(earlier.path) && later.path == Path::Texture)
             add(Clause::PixelOrdered, PixelShaderBarrier);
         return r;

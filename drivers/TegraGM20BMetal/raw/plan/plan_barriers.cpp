@@ -10,8 +10,8 @@ namespace raw::plan {
 namespace {
 
 constexpr uint32_t kBits = 13;
-constexpr Barriers kInvalidates = InvalidateShaderData | InvalidateConstants | InvalidateInstructions |
-                                  InvalidateTextureData | SetReference;
+constexpr Barriers kInvalidates =
+    InvalidateShaderData | InvalidateConstants | InvalidateInstructions | InvalidateTextureData | SetReference;
 
 struct Region {
     uint32_t memory = kNone;
@@ -112,8 +112,8 @@ Barriers Placer::unsatisfied(Barriers b, uint32_t node) const
     }
     if ((b & WaitForIdle) && !drained)
         out |= WaitForIdle;
-    for (Barrier x : {InvalidateShaderData, InvalidateConstants, InvalidateInstructions, InvalidateTextureData,
-                      SetReference})
+    for (Barrier x :
+         {InvalidateShaderData, InvalidateConstants, InvalidateInstructions, InvalidateTextureData, SetReference})
         if ((b & x) && !(drained && last(x) >= drain))
             out |= x;
     if ((b & PixelShaderBarrier) && last(PixelShaderBarrier) <= int64_t(node) &&
@@ -227,11 +227,14 @@ void Placer::inPass(uint32_t head, uint32_t end)
             const raw::AttachmentAccess access{ropRead, ropWrite, sampled, storage};
             const raw::AttachmentBarrier needed = access.after(writes.rop, writes.storage);
             if (needed == raw::AttachmentBarrier::Shader)
-                run.before |= hazard({Path::Rop, true}, {Path::Storage, true}, Scope::InPass, caps_.tiledCache).barriers;
+                run.before |=
+                    hazard({Path::Rop, true}, {Path::Storage, true}, Scope::InPass, caps_.tiledCache).barriers;
             else if (needed == raw::AttachmentBarrier::Pixel)
                 run.before |= PixelShaderBarrier;
             if (run.before & (FlushShaderData | WaitForIdle))
                 writes.synchronized(raw::AttachmentBarrier::Shader);
+            else if (run.before & PixelShaderBarrier)
+                writes.synchronized(raw::AttachmentBarrier::Pixel);
             else
                 writes.synchronized(needed);
             if (run.before)

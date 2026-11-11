@@ -9,7 +9,19 @@
 namespace raw::plan {
 
 enum class NodeKind : uint8_t {
-    RenderPass, Clear, Copy, Fill, Blit, Resolve, MipChain, Convert, Dispatch, Present, Wait, Signal, Count
+    RenderPass,
+    Clear,
+    Copy,
+    Fill,
+    Blit,
+    Resolve,
+    MipChain,
+    Convert,
+    Dispatch,
+    Present,
+    Wait,
+    Signal,
+    Count
 };
 
 enum class Rule : uint8_t {
@@ -42,13 +54,32 @@ enum class Rule : uint8_t {
     Count
 };
 
-constexpr const char *kRuleNames[] = {
-    "recorded",           "copy.ce",           "copy.ce_compressed",  "copy.twod",        "fill.ce",
-    "clear.3d",          "clear.twod",          "resolve.draw",     "resolve.twod",
-    "mip.twod",           "mip.twod_probed",   "mip.draw",            "planar.codes",     "planar.standin_load",
-    "planar.standin_store", "ycbcr.plane_fill", "ycbcr.image",        "shadow.refresh",   "xr.standin",
-    "compute.shadow_load", "compute.shadow_store", "fetch.barrier",   "fetch.blend",      "fetch.iterated",
-    "fetch.interlock",    "barrier.pass_pixel"};
+constexpr const char *kRuleNames[] = {"recorded",
+                                      "copy.ce",
+                                      "copy.ce_compressed",
+                                      "copy.twod",
+                                      "fill.ce",
+                                      "clear.3d",
+                                      "clear.twod",
+                                      "resolve.draw",
+                                      "resolve.twod",
+                                      "mip.twod",
+                                      "mip.twod_probed",
+                                      "mip.draw",
+                                      "planar.codes",
+                                      "planar.standin_load",
+                                      "planar.standin_store",
+                                      "ycbcr.plane_fill",
+                                      "ycbcr.image",
+                                      "shadow.refresh",
+                                      "xr.standin",
+                                      "compute.shadow_load",
+                                      "compute.shadow_store",
+                                      "fetch.barrier",
+                                      "fetch.blend",
+                                      "fetch.iterated",
+                                      "fetch.interlock",
+                                      "barrier.pass_pixel"};
 static_assert(sizeof kRuleNames / sizeof *kRuleNames == size_t(Rule::Count), "a name for each rule");
 
 // The barrier vocabulary, one bit per kit sequence (kits/SwitchGM20BEmit/SwitchGM20BEmitBarrier.h). EngineSwitch is
@@ -72,14 +103,34 @@ enum Barrier : uint16_t {
 using Barriers = uint16_t;
 
 constexpr Barriers kDrains = WaitForIdle | FlushShaderData | EngineSwitch;
-constexpr Barriers kShaderCaches = FlushShaderData | InvalidateShaderData | InvalidateConstants | InvalidateInstructions;
+constexpr Barriers kShaderCaches =
+    FlushShaderData | InvalidateShaderData | InvalidateConstants | InvalidateInstructions;
 
 // The program form a run draws with (raw_pack.h PackForm), and the fetch ladder's rung per colour (PackFetchRung)
-enum class Variant : uint8_t { Whole, Split, Storage, Barrier };
-enum class Rung : uint8_t { None, Barrier, Blend, Iterated, Interlock };
+enum class Variant : uint8_t {
+    Whole,
+    Split,
+    Storage,
+    Barrier
+};
+enum class Rung : uint8_t {
+    None,
+    Barrier,
+    Blend,
+    Iterated,
+    Interlock
+};
 
 // The pack's own states the implicit passes draw with (raw::Device standIn/resolve/ycbcr/xr/mip pipelines)
-enum class OwnState : uint8_t { None, Resolve, Mip, ExtendedRange, Ycbcr, StandInLoad, StandInStore };
+enum class OwnState : uint8_t {
+    None,
+    Resolve,
+    Mip,
+    ExtendedRange,
+    Ycbcr,
+    StandInLoad,
+    StandInStore
+};
 
 struct DrawRun {
     uint32_t state = kNone;
@@ -115,8 +166,8 @@ struct WorkGraph {
     Barriers entry = 0, exit = 0;
 };
 
-constexpr const char *kNodeKindNames[] = {"RenderPass", "Clear", "Copy",     "Fill",    "Blit",   "Resolve",
-                                          "MipChain",   "Convert", "Dispatch", "Present", "Wait",   "Signal"};
+constexpr const char *kNodeKindNames[] = {"RenderPass", "Clear",   "Copy",     "Fill",    "Blit", "Resolve",
+                                          "MipChain",   "Convert", "Dispatch", "Present", "Wait", "Signal"};
 static_assert(sizeof kNodeKindNames / sizeof *kNodeKindNames == size_t(NodeKind::Count), "a name for each kind");
 
 }  // namespace raw::plan

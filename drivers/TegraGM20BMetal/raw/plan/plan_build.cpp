@@ -92,9 +92,9 @@ void startRun(Builder &b, const Draw &d, Barriers pending, uint32_t first)
             storage |= run.rung[c] == Rung::Interlock;
             barrier |= run.rung[c] == Rung::Barrier;
         }
-        run.variant = storage ? Variant::Storage
+        run.variant = storage                                            ? Variant::Storage
                       : barrier && (p.forms & ProgramFacts::BarrierForm) ? Variant::Barrier
-                                                                           : Variant::Whole;
+                                                                         : Variant::Whole;
     }
     stateUses(b, s.bindings);
 }

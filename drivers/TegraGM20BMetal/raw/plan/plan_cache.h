@@ -19,8 +19,7 @@ struct Plan {
 class PlanCache {
 public:
     explicit PlanCache(size_t capacity = 32) : capacity_(capacity)
-    {
-    }
+    {}
 
     // The plan of this recording's structure, planned and validated the first time the structure is seen
     const Plan &get(const Recording &r, const Caps &caps, const Answers &answers);

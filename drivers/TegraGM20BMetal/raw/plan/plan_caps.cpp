@@ -43,6 +43,7 @@ constexpr bool ordered()
             return false;
     return true;
 }
+
 static_assert(ordered(), "evidence in Rule order");
 
 }  // namespace

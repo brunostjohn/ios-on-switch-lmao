@@ -13,8 +13,8 @@ namespace {
 
 void print(const char *name, const Counts &c)
 {
-    std::printf("%-26s drains %2u (switch %u)  wfi %2u  shinv %2u  shinv_nowfi %u  texinv %2u  ps %u  tiled %2u\n", name,
-                c.drains, c.switchDrains, c.wfi, c.shaderInval, c.shaderInvalNoWfi, c.texInval, c.psBarriers,
+    std::printf("%-26s drains %2u (switch %u)  wfi %2u  shinv %2u  shinv_nowfi %u  texinv %2u  ps %u  tiled %2u\n",
+                name, c.drains, c.switchDrains, c.wfi, c.shaderInval, c.shaderInvalNoWfi, c.texInval, c.psBarriers,
                 c.tiledFlushes);
 }
 

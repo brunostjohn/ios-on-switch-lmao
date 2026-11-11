@@ -40,7 +40,10 @@ struct ClauseInfo {
 
 const ClauseInfo &clauseInfo(Clause c);
 
-enum class Scope : uint8_t { InPass, AcrossNodes };
+enum class Scope : uint8_t {
+    InPass,
+    AcrossNodes
+};
 
 struct Requirement {
     Barriers barriers = 0;  // what the selectable rules need

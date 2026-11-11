@@ -12,8 +12,7 @@ public:
     Builder(const Recording &r, const Caps &caps, WorkGraph &g)
         : r(r), caps(caps), g(g), fresh(r.resources.size()), standInFresh(r.resources.size()),
           converted(r.resources.size()), codes(r.resources.size())
-    {
-    }
+    {}
 
     const Recording &r;
     const Caps &caps;

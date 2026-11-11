@@ -95,7 +95,8 @@ void afterPass(Builder &b, const Encoder &e)
     const PassDesc &pass = b.r.passes[e.pass];
     // RawMetalEncode.mm:182-211 resolvePasses: each resolved attachment into its resolve texture
     for (const Attachment &a : pass.color) {
-        if (a.texture == kNone || a.resolve == kNone || (a.store != Store::Resolve && a.store != Store::StoreAndResolve))
+        if (a.texture == kNone || a.resolve == kNone ||
+            (a.store != Store::Resolve && a.store != Store::StoreAndResolve))
             continue;
         const Choice c = resolveEngine(b.facts(a.texture), b.facts(a.resolve), b.caps);
         SubRange into;
@@ -172,8 +173,8 @@ void mipChain(Builder &b, const Transfer &t, uint32_t source)
             b.g.nodes[n].source = source;
         }
     } else {
-        const uint32_t n = b.open(NodeKind::MipChain, c.valid() ? c.engine : Engine::TwoD,
-                                  c.valid() ? c.rule : Rule::MipTwoD, source);
+        const uint32_t n =
+            b.open(NodeKind::MipChain, c.valid() ? c.engine : Engine::TwoD, c.valid() ? c.rule : Rule::MipTwoD, source);
         SubRange from, to;
         from.levels = uint16_t(f.levels > 1 ? f.levels - 1 : 1);
         to.level = 1;
