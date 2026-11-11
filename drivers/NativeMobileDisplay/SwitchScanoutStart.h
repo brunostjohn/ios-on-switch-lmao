@@ -138,6 +138,7 @@
         if (ring.pending != kNoBuffer)
             checkFlip(true);
         const uint32_t underflow = dc[kDcIntStatus] & uiUnderflow();
+        landscapeRunUnderflow(underflow);
         if (!underflow) {
             underflowRun = 0;
             return;

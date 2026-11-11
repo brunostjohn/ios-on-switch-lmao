@@ -6,8 +6,10 @@
 #include <os/log.h>
 #include <string.h>
 #include "SwitchVICTurn.h"
+#include "../NativeMobileDisplay/SwitchLandscapeRunABI.h"
 
 extern "C" void proc_selfname(char *buf, int size);
+extern "C" IOReturn switch_display_landscape_run_call(const IOExternalMethodArguments *) __attribute__((weak));
 
 namespace {
 SwitchVICTurnCounters gCounters;
@@ -86,4 +88,24 @@ extern "C" void switch_vic_turn_counters(SwitchVICTurnCounters *out)
     out->ticks = __atomic_load_n(&gCounters.ticks, __ATOMIC_RELAXED);
 }
 
+// FORCE is held for the calling connection (TegraVIC drops it when that connection closes); SAMPLE and QUERY are the
+// display's.
+IOReturn switch_vic_landscape_call(const void *client, const IOExternalMethodArguments *a)
+{
+    const auto *request = static_cast<const SwitchDisplayLandscapeRequest *>(a->structureInput);
+    if (a->scalarInputCount || a->scalarOutputCount || a->structureInputSize != sizeof(*request) || !request ||
+        request->magic != SWITCH_DISPLAY_LANDSCAPE_RUN_MAGIC || request->reserved)
+        return kIOReturnBadArgument;
+    if (request->op == SWITCH_DISPLAY_LANDSCAPE_FORCE) {
+        if (request->value & ~(SWITCH_DISPLAY_TRAIT_OVERLAY_BLOCK_YUV | SWITCH_DISPLAY_TRAIT_COLUMN_SCAN_YUV |
+                               SWITCH_DISPLAY_TRAIT_OFFSET_CROP))
+            return kIOReturnBadArgument;
+        if (request->value)
+            switch_display_traits_force(request->value, client);
+        else
+            switch_display_traits_release(client);
+        return kIOReturnSuccess;
+    }
+    return switch_display_landscape_run_call ? switch_display_landscape_run_call(a) : kIOReturnUnsupported;
+}
 #endif

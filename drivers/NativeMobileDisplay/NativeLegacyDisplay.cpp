@@ -68,6 +68,8 @@
 #include <sys/sysctl.h>
 #include "NativeColumnScan.h"
 #include "DisplayWindowProbeRun.h"
+#include "SwitchLandscapeRunABI.h"
+#include "../TegraVIC/SwitchVICTurnRun.h"
 extern "C" void native_legacy_frame_end_hold(void);
 extern "C" void native_legacy_frame_end_release(void);
 #endif
@@ -1622,6 +1624,7 @@ private:
         const uint32_t status = __atomic_exchange_n(&dcPending, 0u, __ATOMIC_ACQUIRE);
         if (hwSuspended)
             return;  // a status taken just before the SC7 power-down: the registers are unclocked now
+        const uint64_t tickFrom = landscapeRunClock();
         // r17-touch: V_PULSE2 first: it belongs to the frame whose end may be in this same action (a folded one), so its
         // vsync must count against that frame, not the next.
         if (status & kVpulse2Int)
@@ -1663,6 +1666,7 @@ private:
         if (status & kFrameEndInt) {
             planeFrameEnd();
             landscapeFrameEnd();
+            landscapeRunFrameEnd();
         }
         if (status & kFrameEndInt)
             underflowFrameEnd();
@@ -1678,6 +1682,7 @@ private:
         }
         if (status & kFrameEndInt)
             kickAtIdleFrameEnd();
+        landscapeRunCharge(tickFrom);
         if ((status & kFrameEndInt) && !frameEndNeeded() && tegra_panel_holds_frame_end())
             maskIdleFrameEnd();
     }
@@ -2684,6 +2689,7 @@ private:
             recoverFlip(start, control, asked, replaced, scanned);
             return;
         case TegraScanoutRing::kTaken:
+            landscapeRunLatched(false, false);
             if (SWITCH_FRAME_TIMELINE)
                 KDBG(SWITCH_KDBG_CODE(SWITCH_KDBG_LATCH), surfaceAddress(asked), frameEnds - flipRequested);
             if (replaced != kNoBuffer)
@@ -3097,6 +3103,7 @@ private:
     {
         columnScanAbort("the display stopped");
         windowProbeAbort("the display stopped");
+        landscapeRunAbort();
         abortProbe("the display stopped");
         if (dc && !hwSuspended)
             landscapeLeaveNow("the display stopped");
@@ -3152,6 +3159,7 @@ public:
         if (!on && !hwSuspended) {
             columnScanAbort("the display went off");
             windowProbeAbort("the display went off");
+            landscapeRunAbort();
         }
         if (!on && !hwSuspended && planeProbe.active()) {  // r18-planes: no frame end comes once the scan stops
             PlaneProbeIo io = {this};
@@ -3220,6 +3228,7 @@ public:
     {
         columnScanAbort("the display suspended (SC7)");
         windowProbeAbort("the display suspended (SC7)");
+        landscapeRunAbort();
         abortProbe("the display suspended (SC7)");
         planesQuiesce();  // r18-planes
         resumeLit = !scanoutStopped;
@@ -3491,11 +3500,13 @@ public:
             return;
         }
         kicking = true;
+        const uint64_t kickFrom = landscapeRunClock();
         do {
             rekick = false;
             kickOnce();
             gpuBypass = false;
         } while (rekick && !transferred);
+        landscapeRunCharge(kickFrom);
         kicking = false;
     }
 
@@ -4735,6 +4746,7 @@ public:
 #include "NativePlanesTotals.h"
 #include "NativeColumnScanDisplay.h"
 #include "DisplayWindowProbeDisplay.h"
+#include "SwitchLandscapeRunDisplay.h"
 
     IOReturn collectCompletionReports(uint32_t, void *, uint32_t *count, uint32_t) override
     {
@@ -5294,6 +5306,24 @@ constinit NativeLegacyDisplay::LandscapeState NativeLegacyDisplay::landscapeStat
 constinit NativeLegacyDisplay::ColumnScanState NativeLegacyDisplay::columnScan;
 constinit struct sysctl_oid NativeLegacyDisplay::columnScanOid = {};
 constinit NativeLegacyDisplay::WindowProbeState NativeLegacyDisplay::windowProbe;
+constinit NativeLegacyDisplay::LandscapeRunState NativeLegacyDisplay::landscapeRun = {};
+
+// HW Test's landscape run (SwitchLandscapeRunABI.h): its SAMPLE and QUERY requests, from TegraVIC's kernel-test
+// selector (which holds a FORCE itself, for the calling connection).
+extern "C" IOReturn switch_display_landscape_run_call(const IOExternalMethodArguments *a)
+{
+    const auto *request = static_cast<const SwitchDisplayLandscapeRequest *>(a->structureInput);
+    if (a->scalarInputCount || a->scalarOutputCount || a->structureInputSize != sizeof(*request) || !request ||
+        request->magic != SWITCH_DISPLAY_LANDSCAPE_RUN_MAGIC || request->reserved ||
+        a->structureOutputSize != sizeof(SwitchDisplayLandscapeReply) || !a->structureOutput)
+        return kIOReturnBadArgument;
+    NativeLegacyDisplay *display = __atomic_load_n(&NativeLegacyDisplay::primaryDisplay, __ATOMIC_ACQUIRE);
+    if (!display)
+        return kIOReturnNotReady;
+    const IOReturn status =
+        display->landscapeRunCall(*request, *static_cast<SwitchDisplayLandscapeReply *>(a->structureOutput));
+    return status;
+}
 
 // HW Test's window probes (DisplayWindowProbe.h), from TegraVIC's kernel-test selector: the request and reply are
 // DisplayWindowProbeABI.h's.

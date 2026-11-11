@@ -140,6 +140,7 @@ struct Display {
     uint32_t uiRequest() const { return uiOnB ? kWinBActReq : kWinAActReq; }
     uint32_t uiUnderflow() const { return uiOnB ? kWinBUnderflowInt : kWinAUnderflowInt; }
     char uiName() const { return uiOnB ? 'B' : 'A'; }
+    void landscapeRunUnderflow(uint32_t) {}
     void stopConsoleTape() { ++tapeStops; }
     void notePresent(uint64_t, uint64_t, uint64_t) { ++presents; }
     void retireThrough(uint64_t seq, uint64_t stamp) { retired = seq; retiredAt = stamp; }

@@ -297,6 +297,7 @@ void planeFrameEnd()
         if (planeLatch.latched(out, planeScannedSet())) {
             if (stats)
                 ++stPlaneLatched;
+            landscapeRunLatched(true, landscapeState.switching);
             landscapeLatched();
             const PlaneSet now = planeSetOf(planeLatch.active);
             retireThrough(now.seq, __atomic_load_n(&feStamp, __ATOMIC_ACQUIRE));
@@ -316,6 +317,7 @@ void planeFrameEnd()
         }
     }
     const uint32_t underflow = dc[kDcIntStatus] & switch_landscape::overlayUnderflows(landscapeOn());
+    landscapeRunUnderflow(underflow);
     if (!underflow) {
         planeUnderflowRun = 0;
         return;

@@ -149,6 +149,7 @@ TESTS: dict[str, bool] = {
     'display.x1.overlay_block_yuv': False,
     'display.x1.column_scan_yuv': False,
     'display.x1.offset_crop': False,
+    'display.x1.landscape_video': False,
     'ui.text': False,
     'ui.blur': False,
     'ui.list': False,

@@ -62,6 +62,7 @@
 #include "SwitchVICStats.h"
 #include "SwitchVICTurn.h"
 #include "SwitchVICTurnRun.h"
+#include "../NativeMobileDisplay/SwitchLandscapeRunABI.h"
 #include "../TegraGM20B/TegraGM20BLayout.h"
 
 // The kernel's IOService/IOUserClient implementations, called directly (they are the defaults the vtable copies
@@ -598,11 +599,13 @@ IOReturn transform(Conn *conn, const void *in, uint32_t size)
 // The display's window probes come through here too: the app's sandbox admits this client, not the display's.
 extern "C" IOReturn switch_display_window_probe_call(const IOExternalMethodArguments *) __attribute__((weak));
 
-static IOReturn kernelTest(const IOExternalMethodArguments *a)
+static IOReturn kernelTest(const Conn *conn, const IOExternalMethodArguments *a)
 {
     uint32_t magic = 0;
     if (a->structureInput && a->structureInputSize >= sizeof(magic))
         memcpy(&magic, a->structureInput, sizeof(magic));
+    if (magic == SWITCH_DISPLAY_LANDSCAPE_RUN_MAGIC)
+        return switch_vic_landscape_call(conn, a);
     if (magic == SWITCH_DISPLAY_WINDOW_PROBE_MAGIC)
         return switch_display_window_probe_call ? switch_display_window_probe_call(a) : kIOReturnUnsupported;
     return switch_vic_pitch_probe_call(a);
@@ -635,7 +638,7 @@ IOReturn tegra_vic_external_method(const IOUserClient *self, uint32_t selector, 
         return a->structureInputSize == 0x20 ? kIOReturnSuccess : kIOReturnBadArgument;
     case 6:  // kernel tests (Apple's: release kernels refuse)
 #if TEGRA_VIC_STATS
-        return kernelTest(a);
+        return kernelTest(conn, a);
 #else
         return kIOReturnNotPermitted;
 #endif

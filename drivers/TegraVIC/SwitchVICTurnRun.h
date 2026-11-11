@@ -1,12 +1,13 @@
 // SPDX-License-Identifier: BSD-2-Clause-Patent
 // What HW Test's display.x1.landscape_video reads of TegraVIC (debug kernels only): each IOSurfaceAccelerator request
 // shape once (who asks, the transform, the formats and sizes, whether it carries events or a callback), the jobs and
-// recorded quarter turns, and TegraVIC's CPU time.
+// recorded quarter turns, and TegraVIC's CPU time; and the run's kernel-test requests (SwitchLandscapeRunABI.h).
 #pragma once
 #include <stdint.h>
 #include "TegraVIC.h"
 
 #if TEGRA_VIC_STATS
+#include <IOKit/IOUserClient.h>
 #include "TegraVICRequest.h"
 #include "TegraVICSurface.h"
 
@@ -21,4 +22,5 @@ void switch_vic_turn_request_seen(const TegraVICRequest &request, const TegraVIC
                                   const TegraVICSurfaceDesc &destination, int pid);
 void switch_vic_turn_count(bool submitted, bool turned, bool eventTurn, uint64_t ticks);
 extern "C" void switch_vic_turn_counters(SwitchVICTurnCounters *out);
+IOReturn switch_vic_landscape_call(const void *client, const IOExternalMethodArguments *a);
 #endif

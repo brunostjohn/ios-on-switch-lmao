@@ -49,7 +49,7 @@ typedef struct {
     uint32_t underflows[3];   // frame ends with windows A, B, C underflowing
     uint32_t vicJobs;         // VIC jobs submitted
     uint32_t vicTurns;        // quarter turns recorded instead of copied
-    uint32_t reserved;
+    uint32_t vicEventTurns;   // quarter turns copied because their request carries events
     uint64_t displayNs;  // CPU in the display's kicks and frame ends
     uint64_t vicNs;      // CPU in TegraVIC's requests and engine thread
     uint32_t crc[SWITCH_DISPLAY_LANDSCAPE_RUN_FRAMES];
