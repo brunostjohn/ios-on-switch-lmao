@@ -15,6 +15,8 @@ import Metal
 ///   wait for the GPU and the completion's latency), where the GPU time is in nanoseconds.
 /// On the raw facade a state the pack lacks is drawn by m2v until the runtime makes its record: the scene waits for it
 /// (warm_<label> runs) and leaves out a state that never reaches the raw path, naming its path.
+/// On the process's default device the wide blur (narrow_blur_27) also draws one untimed command buffer of
+/// `dumpDraws`, during which a debug kernel dumps the GPU's registers into its log (gpu/RegDump.swift): regdump=.
 struct CAHotStatesScene: GPUScene {
     let id = "gpu.ca.hot_states"
     let name = "Core Animation's costliest states: GPU and host time per full-screen draw"
@@ -24,6 +26,8 @@ struct CAHotStatesScene: GPUScene {
     static let draws = 8
     static let runs = 5
     static let warmups = 20
+    static let wideBlur = "narrow_blur_27_frag_lph"
+    static let dumpDraws = 64
 
     func run(_ gpu: GPU) async throws -> SceneResult {
         var result = SceneResult()
@@ -43,6 +47,8 @@ struct CAHotStatesScene: GPUScene {
             [Patterns.bytes(Patterns.busy(width: Self.width, height: Self.height, channels: 4), .bgra8Unorm)],
             into: source, texel: 4)
         var timed = 0
+        var dumped = Metrics()
+        dumped.set("regdump", "hot_states:no_state")
         for line in CAHotCorpus.states {
             let pipeline: MTLRenderPipelineState
             do {
@@ -56,7 +62,7 @@ struct CAHotStatesScene: GPUScene {
                     ? gpu.texture(format, Self.width, Self.height)
                     : gpu.texture(format, Self.width, Self.height, usage: [.renderTarget], storage: .memoryless)
             }
-            let draw = { (commands: MTLCommandBuffer) in
+            let encode = { (commands: MTLCommandBuffer, draws: Int) in
                 let pass = MTLRenderPassDescriptor()
                 for (color, texture) in zip(line.colors, attachments) {
                     pass.colorAttachments[color.index].texture = texture
@@ -68,11 +74,12 @@ struct CAHotStatesScene: GPUScene {
                 CAState.bind(
                     encoder, vertices: CAState.rectangle(x0: -1, y0: -1, x1: 1, y1: 1, color: SIMD4(1, 1, 1, 1)),
                     source: source)
-                for _ in 0..<Self.draws {
+                for _ in 0..<draws {
                     encoder.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4)
                 }
                 encoder.endEncoding()
             }
+            let draw = { (commands: MTLCommandBuffer) in encode(commands, Self.draws) }
             let label = line.shortLabel.lowercased()
             var warm = 0
             if kind == "raw" {
@@ -84,6 +91,15 @@ struct CAHotStatesScene: GPUScene {
             var runs: [GPU.Timing] = []
             for _ in 0..<Self.runs {
                 runs.append(try await gpu.run(tolerateError: true, draw))
+            }
+            if kind != "m2v" && line.fragment.name == Self.wideBlur {
+                let buffer = try gpu.commit { encode($0, Self.dumpDraws) }
+                dumped = RegDump.capture(.hotStates)
+                do {
+                    try gpu.finish([buffer])
+                } catch {
+                    result.notes.append("\(line.shortLabel)'s register dump draw: \(error)")
+                }
             }
             let paths = Set(runs.map(\.path))
             let named = paths.sorted().joined(separator: ",")
@@ -108,6 +124,7 @@ struct CAHotStatesScene: GPUScene {
             if warm > 0 { result.metrics.set("warm_" + label, warm) }
         }
         if timed == 0 { result.notes.append("no hot state made from this QuartzCore") }
+        if kind != "m2v" { result.metrics.merge(dumped) }
         return result
     }
 }

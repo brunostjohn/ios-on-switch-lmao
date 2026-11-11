@@ -1,6 +1,7 @@
 import Darwin
 import Foundation
 import HWTestCore
+import HWTestGPU
 
 /// What the display shows, read back by the GPU through a debug kernel's TegraGM20B read-back
 /// (drivers/TegraGM20B/TegraGM20BReadbackABI.h): for the next frame the display presents through the GPU, the
@@ -32,36 +33,36 @@ public enum ScanoutReadback {
     static let armed: Int32 = 1
     static let inFlight: Int32 = 2
     static let done: Int32 = 3
-    static let kIOReturnUnsupported = kern_return_t(bitPattern: 0xe000_02c7)
 
     public static func capture(nudge: @escaping @MainActor () -> Void) async -> Result {
         guard let gpu = GPUConnection() else { return .unavailable("no_connection") }
-        let (kr, _) = gpu.readback(arm)
+        let (kr, _) = readback(gpu, arm)
         guard kr == KERN_SUCCESS else {
-            return .unavailable(kr == kIOReturnUnsupported ? "release_kernel" : "arm_" + hex(kr))
+            return .unavailable(
+                kr == GPUConnection.kIOReturnUnsupported ? "release_kernel" : "arm_" + GPUConnection.hex(kr))
         }
-        defer { _ = gpu.readback(disarm) }
+        defer { _ = readback(gpu, disarm) }
         var reply: [UInt8] = []
         for _ in 0..<30 {
             await MainActor.run { nudge() }
             try? await Task.sleep(nanoseconds: 100_000_000)
-            let (kr, answer) = gpu.readback(query)
-            guard kr == KERN_SUCCESS else { return .unavailable("query_" + hex(kr)) }
+            let (kr, answer) = readback(gpu, query)
+            guard kr == KERN_SUCCESS else { return .unavailable("query_" + GPUConnection.hex(kr)) }
             reply = answer
-            let state = int32(reply, 0)
+            let state = GPUConnection.int32(reply, 0)
             if state != armed && state != inFlight { break }
         }
-        switch int32(reply, 0) {
+        switch GPUConnection.int32(reply, 0) {
         case done: break
         case armed, inFlight: return .unavailable("no_gpu_present")
-        default: return .unavailable("failed_\(int32(reply, 4))")
+        default: return .unavailable("failed_\(GPUConnection.int32(reply, 4))")
         }
-        let (width, height) = (Int(uint32(reply, 8)), Int(uint32(reply, 12)))
-        guard let framebuffer = gpu.map(uint32(reply, 20), bytes: width * height * 4) else {
+        let (width, height) = (Int(GPUConnection.uint32(reply, 8)), Int(GPUConnection.uint32(reply, 12)))
+        guard let framebuffer = gpu.map(GPUConnection.uint32(reply, 20), bytes: width * height * 4) else {
             return .unavailable("map_refused")
         }
         defer { gpu.unmap(framebuffer) }
-        guard let scanout = gpu.map(uint32(reply, 24), bytes: width * height * 4) else {
+        guard let scanout = gpu.map(GPUConnection.uint32(reply, 24), bytes: width * height * 4) else {
             return .unavailable("map_refused")
         }
         defer { gpu.unmap(scanout) }
@@ -73,7 +74,12 @@ public enum ScanoutReadback {
             Frame(
                 framebuffer: raster(framebuffer.base, width: width, height: height),
                 scanout: raster(scanout.base, width: width, height: height),
-                direct: uint32(reply, 16) & 1 != 0, copyRows: copyRows, sequence: Int(uint64(reply, 32))))
+                direct: GPUConnection.uint32(reply, 16) & 1 != 0, copyRows: copyRows,
+                sequence: Int(GPUConnection.uint64(reply, 32))))
+    }
+
+    static func readback(_ gpu: GPUConnection, _ op: UInt32) -> (kern_return_t, [UInt8]) {
+        gpu.call(method, GPUConnection.words([op, 0]), outputSize: 40)
     }
 
     static func raster(_ base: UnsafeRawPointer, width: Int, height: Int) -> Raster {
@@ -85,20 +91,5 @@ public enum ScanoutReadback {
             samples[i * 3 + 2] = Float(bytes[i * 4]) / 255
         }
         return Raster(width: width, height: height, channels: 3, samples: samples)
-    }
-
-    static func hex(_ kr: kern_return_t) -> String { "0x" + String(UInt32(bitPattern: kr), radix: 16) }
-    static func int32(_ b: [UInt8], _ at: Int) -> Int32 { Int32(bitPattern: uint32(b, at)) }
-    static func uint32(_ b: [UInt8], _ at: Int) -> UInt32 {
-        b.withUnsafeBytes { $0.loadUnaligned(fromByteOffset: at, as: UInt32.self) }
-    }
-    static func uint64(_ b: [UInt8], _ at: Int) -> UInt64 {
-        b.withUnsafeBytes { $0.loadUnaligned(fromByteOffset: at, as: UInt64.self) }
-    }
-}
-
-extension GPUConnection {
-    fileprivate func readback(_ op: UInt32) -> (kern_return_t, [UInt8]) {
-        call(ScanoutReadback.method, words([op, 0]), outputSize: 40)
     }
 }

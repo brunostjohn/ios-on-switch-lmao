@@ -38,7 +38,7 @@ struct SurfaceTiledDefaultTest: HWTest {
                 commands.makeRenderCommandEncoder(descriptor: pass)!.endEncoding()
             }
             let (kr, layout) = connection.surfaceLayout(surface)
-            let answer = kr == KERN_SUCCESS ? String(layout) : ScanoutReadback.hex(kr)
+            let answer = kr == KERN_SUCCESS ? String(layout) : GPUConnection.hex(kr)
             metrics.set("layout_\(label)", answer)
             checks.append(("\(label) block-linear (kernel said \(answer))", answer == "1"))
             surface.lock(options: .readOnly, seed: nil)
@@ -85,13 +85,14 @@ extension GPUConnection {
         let bytes = UInt64((surface.allocationSize + page - 1) / page * page)
         let id = IOSurfaceGetID(unsafeBitCast(surface, to: IOSurfaceRef.self))
         let (imported, reply) = call(
-            Self.boImportMethod, words(split(address) + split(bytes) + [id, Self.importGpuReads]), outputSize: 16)
+            Self.boImportMethod, Self.words(split(address) + split(bytes) + [id, Self.importGpuReads]), outputSize: 16)
         guard imported == KERN_SUCCESS else { return (imported, 0) }
-        let handle = ScanoutReadback.uint64(reply, 0)
-        defer { _ = call(Self.boFreeMethod, words(split(handle)), outputSize: 0) }
+        let handle = Self.uint64(reply, 0)
+        defer { _ = call(Self.boFreeMethod, Self.words(split(handle)), outputSize: 0) }
         let shape = [surface.width, surface.height, surface.bytesPerElement, surface.bytesPerRow].map { UInt32($0) }
-        let (asked, info) = call(Self.surfaceLayoutInfoMethod, words(split(handle) + shape + [0, 0]), outputSize: 48)
-        return (asked, asked == KERN_SUCCESS ? ScanoutReadback.uint32(info, 0) : 0)
+        let (asked, info) = call(
+            Self.surfaceLayoutInfoMethod, Self.words(split(handle) + shape + [0, 0]), outputSize: 48)
+        return (asked, asked == KERN_SUCCESS ? Self.uint32(info, 0) : 0)
     }
 
     private func split(_ value: UInt64) -> [UInt32] { [UInt32(truncatingIfNeeded: value), UInt32(value >> 32)] }

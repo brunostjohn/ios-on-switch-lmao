@@ -2,12 +2,13 @@ import Darwin
 import Foundation
 
 /// A TegraGM20B connection of the test's own (drivers/TegraGM20B/TegraGM20BABI.h's wire form): IOKit through dlsym,
-/// which the iOS SDK has no headers for.
-final class GPUConnection {
-    struct Mapping {
-        let token: UInt32
-        let address: UInt64
-        var base: UnsafeRawPointer { UnsafeRawPointer(bitPattern: UInt(address))! }
+/// which the iOS SDK has no headers for. Debug kernels answer the methods kept out of that header (the scanout
+/// read-back, the register dump) on it; a release kernel answers them kIOReturnUnsupported.
+public final class GPUConnection {
+    public struct Mapping {
+        public let token: UInt32
+        public let address: UInt64
+        public var base: UnsafeRawPointer { UnsafeRawPointer(bitPattern: UInt(address))! }
     }
 
     typealias Matching = @convention(c) (UnsafePointer<CChar>) -> UnsafeMutableRawPointer?
@@ -21,6 +22,7 @@ final class GPUConnection {
             mach_port_t, UInt32, UnsafeRawPointer?, Int, UnsafeMutableRawPointer?, UnsafeMutablePointer<Int>?
         ) -> kern_return_t
 
+    public static let kIOReturnUnsupported = kern_return_t(bitPattern: 0xe000_02c7)
     static let openType: UInt32 = 0x4e56
     static let tunnelMagic: UInt32 = 0x4e56_544e
     static let tunnelProbe: UInt32 = 0xffff_ffff
@@ -35,7 +37,7 @@ final class GPUConnection {
     /// the probe, and each method goes by its own selector.
     var tunnel: UInt32?
 
-    init?() {
+    public init?() {
         guard let iokit = dlopen("/System/Library/Frameworks/IOKit.framework/IOKit", RTLD_NOW),
             let matching = dlsym(iokit, "IOServiceMatching"), let service = dlsym(iokit, "IOServiceGetMatchingService"),
             let open = dlsym(iokit, "IOServiceOpen"), let release = dlsym(iokit, "IOObjectRelease"),
@@ -51,33 +53,33 @@ final class GPUConnection {
         self.connection = connection
         callStruct = unsafeBitCast(call, to: Call.self)
         self.close = unsafeBitCast(close, to: Release.self)
-        let probe = words([Self.tunnelMagic, Self.tunnelProbe])
+        let probe = Self.words([Self.tunnelMagic, Self.tunnelProbe])
         tunnel = (0..<256).map(UInt32.init).first { send($0, probe, 0).0 == KERN_SUCCESS }
     }
 
     deinit { _ = close(connection) }
 
-    func map(_ token: UInt32, bytes: Int) -> Mapping? {
-        let (kr, reply) = call(Self.mapMethod, words([token, Self.mapReadOnly, 0, 0]), outputSize: 16)
+    public func map(_ token: UInt32, bytes: Int) -> Mapping? {
+        let (kr, reply) = call(Self.mapMethod, Self.words([token, Self.mapReadOnly, 0, 0]), outputSize: 16)
         guard kr == KERN_SUCCESS else { return nil }
-        let mapping = Mapping(token: token, address: ScanoutReadback.uint64(reply, 0))
-        guard Int(ScanoutReadback.uint64(reply, 8)) >= bytes else {
+        let mapping = Mapping(token: token, address: Self.uint64(reply, 0))
+        guard Int(Self.uint64(reply, 8)) >= bytes else {
             unmap(mapping)
             return nil
         }
         return mapping
     }
 
-    func unmap(_ mapping: Mapping) {
+    public func unmap(_ mapping: Mapping) {
         let address = mapping.address
         _ = call(
-            Self.unmapMethod, words([mapping.token, 0, UInt32(address & 0xffff_ffff), UInt32(address >> 32)]),
+            Self.unmapMethod, Self.words([mapping.token, 0, UInt32(address & 0xffff_ffff), UInt32(address >> 32)]),
             outputSize: 0)
     }
 
-    func call(_ method: UInt32, _ input: [UInt8], outputSize: Int) -> (kern_return_t, [UInt8]) {
+    public func call(_ method: UInt32, _ input: [UInt8], outputSize: Int) -> (kern_return_t, [UInt8]) {
         guard let tunnel else { return send(method, input, outputSize) }
-        return send(tunnel, words([Self.tunnelMagic, method]) + input, outputSize)
+        return send(tunnel, Self.words([Self.tunnelMagic, method]) + input, outputSize)
     }
 
     func send(_ selector: UInt32, _ input: [UInt8], _ outputSize: Int) -> (kern_return_t, [UInt8]) {
@@ -91,5 +93,16 @@ final class GPUConnection {
         return (kr, output)
     }
 
-    func words(_ values: [UInt32]) -> [UInt8] { values.flatMap { withUnsafeBytes(of: $0.littleEndian, Array.init) } }
+    public static func words(_ values: [UInt32]) -> [UInt8] {
+        values.flatMap { withUnsafeBytes(of: $0.littleEndian, Array.init) }
+    }
+
+    public static func hex(_ kr: kern_return_t) -> String { "0x" + String(UInt32(bitPattern: kr), radix: 16) }
+    public static func int32(_ b: [UInt8], _ at: Int) -> Int32 { Int32(bitPattern: uint32(b, at)) }
+    public static func uint32(_ b: [UInt8], _ at: Int) -> UInt32 {
+        b.withUnsafeBytes { $0.loadUnaligned(fromByteOffset: at, as: UInt32.self) }
+    }
+    public static func uint64(_ b: [UInt8], _ at: Int) -> UInt64 {
+        b.withUnsafeBytes { $0.loadUnaligned(fromByteOffset: at, as: UInt64.self) }
+    }
 }

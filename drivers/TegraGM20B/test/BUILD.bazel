@@ -49,7 +49,8 @@
 #                            BLCG writes are nvgpu's prod lists in its load order; ELCG's gate control; where gpu.c
 #                            applies them; GR's reset in a recovery with gating off
 #   gm20b_regdump_test       TegraGM20BRegDump.h against regs_gm20b.txt, the L4T capture's register list: same offsets,
-#                            order and list id; the dump's lines are the capture's form, one value per register
+#                            order and list id; the dump's lines are the capture's form, one value per register; the
+#                            kernel log's lines carry every value once, in order, under a count and sum
 #
 #   bazel test //drivers/TegraGM20B/test:all
 load("//bazel/lint:defs.bzl", "lint_files")

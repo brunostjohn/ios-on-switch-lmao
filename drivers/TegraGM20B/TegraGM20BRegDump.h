@@ -53,4 +53,51 @@ static inline size_t tgm_regdump_format(char *buf, size_t cap, const uint32_t *v
 	return len;
 }
 
+/* The kernel log's form (regdump.c): the values alone, in list order, TGM_REGDUMP_CHUNK a line, each line naming the
+ * list, the tag, its chunk and the list index of its first value; then a done line with the count and an FNV-1a sum of
+ * the values' bytes, so a reader can tell a lost or cut line. Each line fits nvxnu_stats's TGM_REGDUMP_LOG_LINE bytes,
+ * well inside the kernel's 1 KiB os_log message. */
+#define TGM_REGDUMP_CHUNK 64u
+#define TGM_REGDUMP_CHUNKS ((TGM_REGDUMP_COUNT + TGM_REGDUMP_CHUNK - 1) / TGM_REGDUMP_CHUNK)
+#define TGM_REGDUMP_LOG_LINE 768u
+
+static inline uint32_t tgm_regdump_sum(const uint32_t *values)
+{
+	uint32_t h = 0x811c9dc5u;
+
+	for (size_t i = 0; i < TGM_REGDUMP_COUNT; i++) {
+		for (unsigned shift = 0; shift < 32; shift += 8)
+			h = (h ^ ((values[i] >> shift) & 0xffu)) * 0x01000193u;
+	}
+	return h;
+}
+
+/* Chunk `chunk` (< TGM_REGDUMP_CHUNKS) into buf, NUL-terminated; snprintf's length. */
+static inline size_t tgm_regdump_chunk_line(char *buf, size_t cap, const uint32_t *values, const char *tag,
+					    size_t chunk)
+{
+	const size_t first = chunk * TGM_REGDUMP_CHUNK;
+	const size_t left = TGM_REGDUMP_COUNT - first;
+	const size_t n = left < TGM_REGDUMP_CHUNK ? left : TGM_REGDUMP_CHUNK;
+	size_t len = (size_t)snprintf(buf, cap,
+				      "tegra-gm20b: regdump v1 list=%016llx tag=%s chunk=%u/%u first=%u n=%u",
+				      (unsigned long long)TGM_REGDUMP_LIST_ID, tag, (unsigned)chunk,
+				      (unsigned)TGM_REGDUMP_CHUNKS, (unsigned)first, (unsigned)n);
+
+	for (size_t i = 0; i < n && len < cap; i++)
+		len += (size_t)snprintf(buf + len, cap - len, " %08x", values[first + i]);
+	return len;
+}
+
+static inline size_t tgm_regdump_done_line(char *buf, size_t cap, const uint32_t *values, const char *tag,
+					   const struct tgm_regdump_how *how)
+{
+	return (size_t)snprintf(buf, cap,
+				"tegra-gm20b: regdump v1 list=%016llx tag=%s done count=%u chunks=%u sum=%08x badf=%u "
+				"bus_fault=%06x engine0=%08x/%08x fecs_ctx=%08x/%08x read_us=%u",
+				(unsigned long long)TGM_REGDUMP_LIST_ID, tag, (unsigned)TGM_REGDUMP_COUNT,
+				(unsigned)TGM_REGDUMP_CHUNKS, tgm_regdump_sum(values), how->badf, how->bus_fault,
+				how->engine_before, how->engine_after, how->ctx_before, how->ctx_after, how->read_us);
+}
+
 #endif

@@ -26,6 +26,7 @@ TESTS: dict[str, bool] = {
     **dict.fromkeys(
         [
             'cpu.async_timers',
+            'gpu.regdump_quiet',
             'gpu.ca.first_tiled_surface',
             'gpu.ca.blur_chain',
             'gpu.blur_chain_nan',

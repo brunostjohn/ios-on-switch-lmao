@@ -515,6 +515,11 @@ int tgm_gpu_held(void (*fn)(struct nvkm_device *device, void *arg), void *arg);
 size_t tgm_regdump_bytes(void);
 int tgm_regdump(char *buf, size_t cap, size_t *len);
 
+struct TegraGM20BAbiRegdump;
+struct TegraGM20BAbiRegdumpReply;
+/* Debug kernels: TegraGM20BRegDumpABI.h's call, its answer in reply. 0, or -EINVAL for a bad tag or reserved word. */
+int tgm_regdump_log(const struct TegraGM20BAbiRegdump *in, struct TegraGM20BAbiRegdumpReply *reply);
+
 int tgm_present_copy_read(uint64_t src_va, uint64_t src_pa, uint64_t also_pa, uint64_t stride,
 			  int src_block, uint32_t width, uint32_t height, uint64_t dst_va,
 			  uint32_t dst_pitch, uint32_t block_height_log2, void (*done)(void *, int),

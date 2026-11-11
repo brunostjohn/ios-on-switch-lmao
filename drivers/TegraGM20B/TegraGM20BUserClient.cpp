@@ -28,6 +28,7 @@
 #include "TegraGM20BViews.h"
 #include "TegraGM20BPushScan.h"
 #include "TegraGM20BReadback.h"
+#include "TegraGM20BRegDumpABI.h"
 #include "TegraGM20BSchedPolicy.h"
 #include "TegraGM20BSharedWiring.h"
 #include "SwitchGpuPin.h"
@@ -3093,6 +3094,10 @@ IOReturn AGXDeviceUserClient::run(uint32_t method, const void *in, uint32_t inSi
 		wantIn = sizeof(TegraGM20BAbiReadback);
 		wantOut = sizeof(TegraGM20BAbiReadbackReply);
 		break;
+	case TegraGM20BMethodRegdump:
+		wantIn = sizeof(TegraGM20BAbiRegdump);
+		wantOut = sizeof(TegraGM20BAbiRegdumpReply);
+		break;
 #endif
 	default:
 		return kIOReturnUnsupported;
@@ -3196,6 +3201,12 @@ IOReturn AGXDeviceUserClient::run(uint32_t method, const void *in, uint32_t inSi
 	if (method == TegraGM20BMethodReadback) {
 		return tgm_readback_call(this, static_cast<const TegraGM20BAbiReadback *>(in),
 					 static_cast<TegraGM20BAbiReadbackReply *>(out));
+	}
+	if (method == TegraGM20BMethodRegdump) {
+		return tgm_regdump_log(static_cast<const TegraGM20BAbiRegdump *>(in),
+				       static_cast<TegraGM20BAbiRegdumpReply *>(out))
+			       ? kIOReturnBadArgument
+			       : kIOReturnSuccess;
 	}
 #endif
 	IOLockLock(lock_);

@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: MIT
-/* Debug kernels: the register dump of TegraGM20BRegDump.h. Every register is read once, in list order, into an array
- * with the GPU held still (tgm_gpu_held) and its runlists locked, so no engine reset (recover.c, nvkm's recovery) falls
- * among the reads; the text is made after the locks are let go. */
+/* Debug kernels: the register dump of TegraGM20BRegDump.h, as debug.switch_gpu_regdump's text or into the kernel log
+ * (TegraGM20BRegDumpABI.h). Every register is read once, in list order, into an array with the GPU held still
+ * (tgm_gpu_held) and its runlists locked, so no engine reset (recover.c, nvkm's recovery) falls among the reads; the
+ * text is made after the locks are let go. */
 #include <core/device.h>
 #include <engine/fifo.h>
 #include <engine/fifo/runl.h>
@@ -9,6 +10,7 @@
 
 #if TGM_STATS
 #include "TegraGM20BRegDump.h"
+#include "TegraGM20BRegDumpABI.h"
 
 #define FIFO_ENGINE_STATUS0 0x002640
 #define BUS_INTR_0 0x001100
@@ -134,5 +136,61 @@ int tgm_regdump(char *buf, size_t cap, size_t *len)
 		*len = tgm_regdump_format(buf, cap, values, &how);
 	kfree(values);
 	return ret;
+}
+
+/* The kernel's log queue (32 KiB a slot) drops what a burst writes faster than logd drains it, and a dump is ~42 KiB of
+ * lines, so they go out a few at a time. */
+#define REGDUMP_BURST 8
+
+static const char *const regdump_tags[TegraGM20BRegdumpTags] = {"quiet", "hot_states"};
+static u32 regdump_logged; /* atomic: the tags whose dump is in this boot's log */
+
+static void regdump_emit(const u32 *values, const char *tag, const struct tgm_regdump_how *how, char *line)
+{
+	for (size_t chunk = 0; chunk < TGM_REGDUMP_CHUNKS; chunk++) {
+		tgm_regdump_chunk_line(line, TGM_REGDUMP_LOG_LINE, values, tag, chunk);
+		nvxnu_stats("%s", line);
+		if (chunk % REGDUMP_BURST == REGDUMP_BURST - 1)
+			nvxnu_usleep(1000);
+	}
+	tgm_regdump_done_line(line, TGM_REGDUMP_LOG_LINE, values, tag, how);
+	nvxnu_stats("%s", line);
+}
+
+int tgm_regdump_log(const struct TegraGM20BAbiRegdump *in, struct TegraGM20BAbiRegdumpReply *reply)
+{
+	struct tgm_regdump_how how;
+	u32 *values = NULL;
+	char *line = NULL;
+	u32 bit = 0;
+	int ret = 0;
+
+	if (in->tag >= TegraGM20BRegdumpTags || in->reserved)
+		return -EINVAL;
+	*reply = (struct TegraGM20BAbiRegdumpReply){.list_id = TGM_REGDUMP_LIST_ID};
+	bit = 1u << in->tag;
+	if (__atomic_fetch_or(&regdump_logged, bit, __ATOMIC_SEQ_CST) & bit) {
+		reply->status = TegraGM20BRegdumpAlready;
+		return 0;
+	}
+	values = kcalloc(TGM_REGDUMP_COUNT, sizeof(*values), GFP_KERNEL);
+	line = kmalloc(TGM_REGDUMP_LOG_LINE, GFP_KERNEL);
+	ret = values && line ? regdump_read_all(values, &how) : -ENOMEM;
+	if (ret) {
+		__atomic_fetch_and(&regdump_logged, ~bit, __ATOMIC_SEQ_CST);
+		reply->status = ret == -EBUSY ? TegraGM20BRegdumpNotReady : TegraGM20BRegdumpNoMemory;
+	} else {
+		regdump_emit(values, regdump_tags[in->tag], &how, line);
+		reply->count = TGM_REGDUMP_COUNT;
+		reply->lines = TGM_REGDUMP_CHUNKS + 1;
+		reply->badf = how.badf;
+		reply->bus_fault = how.bus_fault;
+		reply->engine_before = how.engine_before;
+		reply->engine_after = how.engine_after;
+		reply->read_us = how.read_us;
+	}
+	kfree(line);
+	kfree(values);
+	return 0;
 }
 #endif
