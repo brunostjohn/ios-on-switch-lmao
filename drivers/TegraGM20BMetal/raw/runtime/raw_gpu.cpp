@@ -3302,7 +3302,8 @@ RenderEncoder *CommandBuffer::render(const PassDesc &pass)
     e.samples_ = std::max<uint8_t>(samples, 1);
     if (passRotation(pass, e.rot_) != RotatedRefusal::None)
         return nullptr;
-    bool blockLinear = zeta != nullptr;
+    const bool hidden = !zeta && pass.hiddenZeta;
+    bool blockLinear = zeta != nullptr || hidden;
     for (uint32_t j = 0; j < pass.count && j < 8; j++)
         if (const Texture *t = pass.color[j].texture; t && !t->memoryless && (t->blockLinear || t->shadowTarget))
             blockLinear = true;
@@ -3355,6 +3356,8 @@ RenderEncoder *CommandBuffer::render(const PassDesc &pass)
             backings_.push_back(b);
         }
     }
+    if (hidden && !e.hideZeta(pass))
+        return nullptr;
     for (uint32_t j = 0; j < e.pass_.count && j < 8; ++j)
         if (const Texture *texture = e.pass_.color[j].texture)
             use(*texture, true);
@@ -4677,11 +4680,12 @@ bool RenderEncoder::prepare(Pipeline *pl, uint32_t primitive, int32_t first, uin
             cb_->refusal = {RefDepthStencil, pl->rec->storageTests, uint8_t(fragmentTests(ds_, zeta ? zeta->format : 0)), 0};
             return false;
         }
-        // Metal tests a state's depth and stencil against the pass's hidden attachments where it has none (metal2vulkan
-        // depth_stencil.rs depth_without_attachment), which NVK's gating does not give
-        if (pl->depthFormat != (zeta ? zeta->format : 0) || (!zeta && ds_.active())) {
+        // A pass that declares no attachment tests depth and stencil against its hidden one (PassDesc::hiddenZeta), which the
+        // pass is given when its recorded states need it; the pipeline was made for the attachment the pass declares
+        const Texture *declared = hiddenZeta_ ? nullptr : zeta;
+        if (pl->depthFormat != (declared ? declared->format : 0) || (!zeta && testsHiddenZeta(ds_))) {
             *why = "a depth/stencil state or format the pass's depth/stencil attachment does not take";
-            cb_->refusal = {RefDepthStencil, pl->depthFormat, zeta ? zeta->format : 0, ds_.active()};
+            cb_->refusal = {RefDepthStencil, pl->depthFormat, declared ? declared->format : 0, ds_.active()};
             return false;
         }
         if (pl->samples != samples_ || !sampleShadingMasks(samples_, pl->samplePasses, compatibleSampleMasks_)) {

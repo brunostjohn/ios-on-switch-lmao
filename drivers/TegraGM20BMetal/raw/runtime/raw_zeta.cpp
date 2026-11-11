@@ -3,10 +3,12 @@
 // Mesa NVK nvk_CmdBeginRendering, the state's emission nvk_flush_ds_state, the clears nvk_CmdClearAttachments (all MIT).
 #include "raw_zeta.h"
 
+#include <algorithm>
 #include <cstring>
 #include "../../../../kits/SwitchGM20B/SwitchGM20B.h"
 #include "../fx/fx_image.h"
 #include "raw_gpu.h"
+#include "raw_rotated_pass.h"
 #include "raw_samples.h"
 
 namespace raw {
@@ -22,25 +24,6 @@ enum : uint32_t {
     ZT_LAYER = NVB197_SET_ZT_LAYER,
     Z_COMPRESSION = NVB197_SET_Z_COMPRESSION,
 };
-
-constexpr uint32_t kDepthStencilMethods[kDepthStencilRegs] = {NVB197_SET_DEPTH_TEST,
-                                                              NVB197_SET_DEPTH_WRITE,
-                                                              NVB197_SET_DEPTH_FUNC,
-                                                              NVB197_SET_STENCIL_TEST,
-                                                              NVB197_SET_STENCIL_OP_FAIL,
-                                                              NVB197_SET_STENCIL_OP_ZFAIL,
-                                                              NVB197_SET_STENCIL_OP_ZPASS,
-                                                              NVB197_SET_STENCIL_FUNC,
-                                                              NVB197_SET_STENCIL_FUNC_REF,
-                                                              NVB197_SET_STENCIL_FUNC_MASK,
-                                                              NVB197_SET_STENCIL_MASK,
-                                                              NVB197_SET_BACK_STENCIL_OP_FAIL,
-                                                              NVB197_SET_BACK_STENCIL_OP_ZFAIL,
-                                                              NVB197_SET_BACK_STENCIL_OP_ZPASS,
-                                                              NVB197_SET_BACK_STENCIL_FUNC,
-                                                              NVB197_SET_BACK_STENCIL_FUNC_REF,
-                                                              NVB197_SET_BACK_STENCIL_MASK,
-                                                              NVB197_SET_BACK_STENCIL_FUNC_MASK};
 
 uint32_t floatBits(float f)
 {
@@ -111,6 +94,33 @@ void emitDepthStencil(Push &p, const DepthStencilRegs &want, DepthStencilRegs &h
         if (want.v[i] != held.v[i])
             p.m(kDepthStencilMethods[i], want.v[i]);
     held = want;
+}
+
+bool RenderEncoder::hideZeta(const PassDesc &pass)
+{
+    Texture shape;
+    shape.width = pass.width;
+    shape.height = pass.height;
+    for (uint32_t j = 0; j < pass_.count && j < 8; j++)
+        if (const Texture *t = pass_.color[j].texture) {
+            shape.width = shape.width ? std::min(shape.width, t->width) : t->width;
+            shape.height = shape.height ? std::min(shape.height, t->height) : t->height;
+        }
+    shape = planeShaped(shape, rot_);
+    shape.format = kZetaFormat;
+    shape.samples = samples_;
+    shape.zeta = shape.memoryless = true;
+    Texture *b;
+    {
+        std::lock_guard<std::mutex> l(dev_->lock_);
+        b = dev_->backing(shape);
+    }
+    if (!b)
+        return false;
+    pass_.depthStencil = {b, true, true, 1.0f, 0};
+    hiddenZeta_ = true;
+    cb_->backings_.push_back(b);
+    return true;
 }
 
 void zetaClearValues(Push &p, bool depth, float clearDepth, bool stencil, uint32_t clearStencil)

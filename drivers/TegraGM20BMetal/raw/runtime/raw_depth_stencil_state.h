@@ -56,6 +56,14 @@ inline DepthStencilRegs depthStencilRegs(const DepthStencilDesc &d, uint32_t ref
     return r;
 }
 
+// In a pass without a depth/stencil attachment plain Metal tests a depth compare other than Always (Never: every fragment
+// fails) and a stencil test against hidden ones, depth 1.0 and stencil 0 at the pass's start, kept through the pass for its
+// later draws (metal2vulkan depth_stencil.rs depth_without_attachment, measured); Always with no stencil test tests nothing
+inline bool testsHiddenZeta(const DepthStencilDesc &d)
+{
+    return d.depthCompare != 7 || !(stencilNoop(d.front) && stencilNoop(d.back));
+}
+
 // A draw whose depth/stencil tests run in its program (raw_shader_tests.h): the hardware tests nothing, depth only kept on
 inline DepthStencilRegs shaderDepthStencilRegs(bool depth)
 {
@@ -73,8 +81,10 @@ public:
 
     explicit DepthStencilState(const DepthStencilDesc &d) : desc_(d)
     {
-        for (uint32_t aspects = 0; aspects < 4; aspects++)
+        for (uint32_t aspects = 0; aspects < 4; aspects++) {
             byAspects_[aspects] = depthStencilRegs(d, 0, 0, aspects & 1, aspects & 2);
+            depthStencilBlock(byAspects_[aspects], blocks_[aspects]);
+        }
     }
 
     const DepthStencilDesc &desc() const
@@ -90,6 +100,12 @@ public:
         return r;
     }
 
+    // The words a state segment holds for a pass of these aspects; a draw adds its references (stencilReferenceWords)
+    const DepthStencilBlock &block(bool depth, bool stencil) const
+    {
+        return blocks_[uint32_t(depth) | uint32_t(stencil) << 1];
+    }
+
     // Metal's default state: a render encoder's until it sets one
     static const DepthStencilState &metalDefault()
     {
@@ -100,6 +116,7 @@ public:
 private:
     DepthStencilDesc desc_;
     DepthStencilRegs byAspects_[4];
+    DepthStencilBlock blocks_[4];
 };
 
 }  // namespace raw

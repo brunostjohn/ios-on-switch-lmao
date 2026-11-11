@@ -24,6 +24,17 @@ inline uint8_t passStorageMask(RMCommandBuffer *cb, size_t begin)
     return mask;
 }
 
+// Whether a draw of the pass tests depth or stencil a pass without an attachment holds hidden (raw::PassDesc::hiddenZeta)
+inline bool passTestsHiddenZeta(RMCommandBuffer *cb, size_t begin)
+{
+    bool hidden = false;
+    cb->_plan.forEachRasterGroup(begin, [&](const raw::RasterState &state, uint32_t) {
+        if (RMDepthStencil *ds = (__bridge RMDepthStencil *)state.depthStencil)
+            hidden |= raw::testsHiddenZeta(ds->_raw.desc());
+    });
+    return hidden;
+}
+
 inline void planSplitPrograms(RMCommandBuffer *cb, size_t begin, raw::RenderEncoder &encoder)
 {
     RAW_ENCODE_SPAN(SplitPlan);

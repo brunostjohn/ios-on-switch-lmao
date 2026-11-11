@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 #pragma once
 #import "RawMetalInternal.h"
+#import "RawMetalSplitPlan.h"
 #include "raw_pass_fusion.h"
 #include "raw_attachment_lifetime.h"
 
@@ -13,8 +14,9 @@ inline raw::FusionPass fusionPass(RMCommandBuffer *cb, size_t begin)
     raw::FusionPass result;
     result.width = pass.width;
     result.height = pass.height;
-    // a fused pass's draws take the first pass's sample layout
-    result.bodySafe = !cb->_sampledShadows && !cb->_standIns && !pass.positions.count;
+    // a fused pass's draws take the first pass's sample layout; each Metal pass's hidden depth starts at 1.0
+    result.bodySafe = !cb->_sampledShadows && !cb->_standIns && !pass.positions.count &&
+                      (pass.depth || !passTestsHiddenZeta(cb, begin));
     std::array<RMTexture *, 10> targets{};
     auto attachment = [&](size_t slot, id object, NSUInteger level, MTLLoadAction load, MTLStoreAction store,
                           bool resolve) {
