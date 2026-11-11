@@ -7,6 +7,7 @@
 #include "SwitchNativePicture.h"
 #include "TegraVICPresent.h"
 #include "SwitchVICPicturePlan.h"
+#include "SwitchVICSurfaceRange.h"
 #include "../TegraGM20B/TegraGM20BViews.h"
 #include "../TegraGM20B/SwitchGpuAdmission.h"
 
@@ -244,7 +245,8 @@ int switch_native_surface_publish(const TegraVICSurface *surface, const TegraVIC
     if (surface->baseOffset)
         return -22;
     *why = "native export into a surface whose allocation is not its descriptor's length";
-    if (surface->desc.length != surface->memory->getLength())
+    if (!switch_vic_surface_owns_descriptor(surface->memory->getLength(), surface->baseOffset, surface->desc.length,
+                                            PAGE_SIZE))
         return -22;
     *why = "native export of another surface's picture";
     if (surface->id != picture->surfaceID)

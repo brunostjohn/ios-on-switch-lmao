@@ -10,6 +10,9 @@
 #include <switch/memory_attachment.h>
 
 using IOReturn = int32_t;
+#ifndef PAGE_SIZE
+#define PAGE_SIZE 16384
+#endif
 using task_t = void *;
 constexpr IOReturn kIOReturnSuccess = 0;
 constexpr int THREAD_UNINT = 0;

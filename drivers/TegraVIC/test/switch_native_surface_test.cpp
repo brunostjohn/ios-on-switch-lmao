@@ -463,7 +463,7 @@ TEST_F(NativeSurface, RefusesPartialDescriptorAndUnsupportedLazyConversion)
     EXPECT_EQ(switch_native_surface_publish(&alias, &picture, &why), -22);
     EXPECT_STREQ(why, "native export into a surface at a base offset");
     alias = surface;
-    alias.desc.length -= 4096;
+    alias.desc.length -= PAGE_SIZE;
     EXPECT_EQ(switch_native_surface_publish(&alias, &picture, &why), -22);
     EXPECT_STREQ(why, "native export into a surface whose allocation is not its descriptor's length");
     ready = false;
@@ -471,6 +471,19 @@ TEST_F(NativeSurface, RefusesPartialDescriptorAndUnsupportedLazyConversion)
     EXPECT_STREQ(why, "native export without VIC to materialize it");
     EXPECT_EQ(seeds, 0u);
     EXPECT_EQ(native.readers, 0u);
+}
+
+// The decoder's pool surfaces: an allocation that is no whole number of pages in a descriptor IOSurface rounded up.
+TEST_F(NativeSurface, PublishesIntoPageRoundedDescriptor)
+{
+    memory->length += 2560;
+    const char *why = "unset";
+    ASSERT_EQ(switch_native_surface_publish(&surface, &picture, &why), 0) << why;
+    EXPECT_EQ(seeds, 1u);
+    SwitchNativeSurfaceView view = {};
+    ASSERT_EQ(switch_native_surface_acquire(&surface, &view, false), 0);
+    EXPECT_EQ(view.native, &native);
+    switch_native_surface_release(&view);
 }
 TEST_F(NativeSurface, ConcurrentCpuViewsShareOneMaterializationAndContinuousReadReservations)
 {

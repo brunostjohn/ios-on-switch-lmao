@@ -159,6 +159,25 @@ TEST(SwitchVICSurfaceRange, DescriptorBaseAndAllocationMustBothFit)
     EXPECT_FALSE(switch_vic_surface_extent_valid(0x9000, 0, 0));
 }
 
+// Decoder pool surfaces: NV12 at 256-byte rows, whose allocation is not a whole number of pages.
+TEST(SwitchVICSurfaceRange, SurfaceOwnsItsPageRoundedDescriptor)
+{
+    constexpr uint64_t k720p = 1280 * 720 * 3 / 2, k1080p = 1920 * 1080 * 3 / 2, k4k = 3840 * 2160 * 3 / 2;
+    for (const uint64_t page : {uint64_t(4096), uint64_t(16384)}) {
+        for (const uint64_t bytes : {k720p, k1080p, k4k}) {
+            const uint64_t rounded = (bytes + page - 1) & ~(page - 1);
+            EXPECT_TRUE(switch_vic_surface_owns_descriptor(rounded, 0, bytes, page));
+            EXPECT_TRUE(switch_vic_surface_owns_descriptor(bytes, 0, bytes, page));
+            EXPECT_FALSE(switch_vic_surface_owns_descriptor(rounded + page, 0, bytes, page));
+            EXPECT_FALSE(switch_vic_surface_owns_descriptor(rounded, page, bytes, page));
+            EXPECT_FALSE(switch_vic_surface_owns_descriptor(bytes - 1, 0, bytes, page));
+        }
+    }
+    EXPECT_TRUE(switch_vic_surface_owns_descriptor(512 * 512 * 3 / 2, 0, 512 * 512 * 3 / 2, 16384));
+    EXPECT_FALSE(switch_vic_surface_owns_descriptor(0x8000, 0, 0, 16384));
+    EXPECT_FALSE(switch_vic_surface_owns_descriptor(0x8000, 0, 0x8000, 0));
+}
+
 TEST(SwitchVICSurfaceRange, SubrangesRejectOverflowAndRespectSurfaceExtent)
 {
     EXPECT_TRUE(switch_vic_surface_subrange(0x8000, 0x7000, 0x1000));
