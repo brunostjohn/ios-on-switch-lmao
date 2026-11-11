@@ -75,7 +75,8 @@
 #                     push word raw/pack/probe_bind.h's bind-offset run names
 #   raw_pack_test     raw/runtime/raw_pack.h: a pack of another version is refused before anything else is read; a
 #                     stage's variants come out of their section in order, none past its end, and a draw takes the
-#                     first whose assumptions its facts hold (raw_variants.h); an archive declares its own keys alone
+#                     first whose assumptions its facts hold (raw_variants.h); an archive declares its own keys alone;
+#                     program indices past 65,535 read back as the pack writer wrote them (wide_index_pack.py)
 #   rawpack_archives_test  raw/pack/archives.py: the archive key lists, keyed as the runtime keys a creation
 #   raw_cache_test    raw/runtime/raw_cache.h: the records the runtime makes for states and kernels the pack lacks, kept
 #                     on disk and made once per process (raw/test/cachecheck: the same checks on a bucket's real records),
@@ -117,6 +118,7 @@
 #                     own, rounded as Metal samples them, as the methods NVK writes
 #
 #   bazel test //drivers/TegraGM20BMetal/test:all
+load("@rules_python//python:py_binary.bzl", "py_binary")
 load("@rules_python//python:py_test.bzl", "py_test")
 load("@rules_rust//rust:defs.bzl", "rust_test")
 load("//bazel/lint:defs.bzl", "lint_files")
@@ -1252,6 +1254,20 @@ host_test(
     cxx_std = "c++17",
 )
 
+py_binary(
+    name = "wide_index_pack",
+    srcs = ["wide_index_pack.py"],
+    data = ["//drivers/TegraGM20BMetal:raw/runtime/raw_chip_facts.h"],  # packfile.py stamps its chip facts
+    deps = ["//drivers/TegraGM20BMetal:raw_pack"],
+)
+
+genrule(
+    name = "wide_index",
+    outs = ["wide_index.bin"],
+    cmd = "$(location :wide_index_pack) $@",
+    tools = [":wide_index_pack"],
+)
+
 host_test(
     name = "raw_pack_test",
     srcs = [
@@ -1261,6 +1277,7 @@ host_test(
         "//drivers/TegraGM20BMetal:raw/runtime/raw_variants.h",
     ],
     cxx_std = "c++17",
+    data = [":wide_index"],
 )
 
 host_test(

@@ -1662,7 +1662,7 @@ private:
     // lock_ held: `pl`'s split offered, its twin made when a draw first takes it (makeSplit)
     void offerSplit(Pipeline &pl, SplitSource &&source);
     void offerVariants(Pipeline &pl, const PackPipeline &pp);
-    bool placePackProgram(uint16_t index, PlacedProgram &out);
+    bool placePackProgram(uint32_t index, PlacedProgram &out);
     std::deque<Pipeline> variantPipelines_;
     SplitState *makeSplit(Pipeline &pl);
     bool placeSplitPrograms(const SplitSource &source, PlacedProgram &fs, uint32_t &prologue, uint64_t &prologueData,

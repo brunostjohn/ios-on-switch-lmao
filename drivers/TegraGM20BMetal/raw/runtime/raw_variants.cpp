@@ -44,7 +44,7 @@ Pipeline *Device::variant(Pipeline &pl, uint32_t facts)
     if (pl.chosen[at])
         return pl.chosen[at];
     const PackPipeline &pp = *pl.rec;
-    const uint16_t index[2] = {v < pl.variantCount[0] ? pl.variants[0][v].program : pp.vs,
+    const uint32_t index[2] = {v < pl.variantCount[0] ? pl.variants[0][v].program : pp.vs,
                                f < pl.variantCount[1] ? pl.variants[1][f].program : pp.fs};
     PlacedProgram placed[2];
     bool placedBoth = placePackProgram(index[0], placed[0]) && placePackProgram(index[1], placed[1]);
@@ -77,7 +77,7 @@ Pipeline *Device::variant(Pipeline &pl, uint32_t facts)
 }
 
 // lock_ held: pack program `index` placed in the heap; false: the heap is full
-bool Device::placePackProgram(uint16_t index, PlacedProgram &out)
+bool Device::placePackProgram(uint32_t index, PlacedProgram &out)
 {
     if (!place(index, out.program, out.data)) {
         stats.heapFull++;

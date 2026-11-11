@@ -9,8 +9,8 @@ MAGIC = b'GM20BPK1'
 # data and constant buffer types; 6: compute kernels (runtime/raw_pack.h PackKernel); 8: a texture3d entry's Metal
 # index; 9: split fragment programs (PackSplit); 10: dynamic blend push fields; 11: qualified ordered storage views;
 # 15: program variants, programs' register counts and bound-texture slots, the uniform table, fetch rungs, chip facts,
-# binary archives' declared states
-VERSION = 15
+# binary archives' declared states; 16: 32-bit program indices (pipelines, variants, kernels, splits)
+VERSION = 16
 SECTIONS = 12  # runtime/raw_pack.h PackSectionCount
 KERNEL_ENTRIES = 16  # PackKernel.entry's length
 PROGRAM_CBUFS = 11  # PackProgram.cbufType's length (runtime/raw_pack.h)
@@ -27,7 +27,7 @@ def chip_facts() -> int:
 
 
 # PackSplit (runtime/raw_pack.h)
-PACK_SPLIT = struct.Struct('<IHHHHBBBB8sHH64IHH7I')
+PACK_SPLIT = struct.Struct('<IIIIHBBBB8sHH64IHH7I')
 SPLIT_COST_FIELDS = (
     'version', 'reserved', 'launch_cycles', 'drain_cycles', 'prologue_warp_cycles',
     'prologue_instructions', 'saved_pixel_instructions', 'saved_pixel_cycles', 'frontier_values',
@@ -154,7 +154,7 @@ def pipeline_bytes(rec: dict, key_offset: int, blob_off: int, variants_off: int 
     flags |= 8 if rec.get('storage_mask') else 0
     flags |= 16 if variant_name(rec['key']) else 0
     head = struct.pack(
-        '<QIHHIIBBBBHHI',
+        '<QIIIIIBBBBHHI',
         keyhash,
         key_offset,
         rec['vs'],
@@ -203,7 +203,7 @@ def kernel_bytes(k: dict, key_offset: int) -> bytes:
     entries = b''.join(struct.pack('<HBBI', e['off'], e['kind'], e['slot'], kernel_window(e)) for e in k['entries'])
     entries += bytes(8 * (KERNEL_ENTRIES - len(k['entries'])))
     return (
-        struct.pack('<QIHBb', fnv(k['key'].encode()), key_offset, k['program'], len(k['entries']), k['region'])
+        struct.pack('<QIIBb', fnv(k['key'].encode()), key_offset, k['program'], len(k['entries']), k['region'])
         + struct.pack('<64I', *k['qmd'])
         + struct.pack('<HHI', k['set_bytes'], k.get('read_only_entries', 0), mask)
         + struct.pack('<32I', *words)
@@ -313,7 +313,7 @@ def pipeline_sections(pipes: list[dict]) -> tuple[bytearray, list[int], bytearra
                 blob += [m, v]
         variants_off = len(variant_bin) // 8
         for v in sorted(rec.get('variants', []), key=lambda v: v['stage']):
-            variant_bin += struct.pack('<IHH', v['assume'], v['program'], 0)
+            variant_bin += struct.pack('<II', v['assume'], v['program'])
         # the key's attachment and vertex fields (what the runtime reads of it: raw_gpu.cpp Device::pipeline), not the
         # functions' constants (some 1.5 KB a fixed-function state; pack.json has the whole key)
         name = variant_name(rec['key'])

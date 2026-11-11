@@ -140,8 +140,14 @@ def state_key(line: str) -> str:
     return (' '.join(fields) + ' ' + line[bar1 : bar3 if bar3 >= 0 else len(line)]).strip()
 
 
-# raw_pack.h by version: PackPipeline and PackProgram sizes, sections. From 15 a program's register count is its own.
-LAYOUTS = {14: (480, 32, 10), 15: (536, 36, 12)}
+# raw_pack.h by version: PackPipeline and PackProgram sizes, sections, and the pipeline's head (key hash, key string,
+# vs, fs, blob, blob dwords, ..., flags). From 15 a program's register count is its own; from 16 program indices are
+# 32-bit.
+LAYOUTS = {
+    14: (480, 32, 10, struct.Struct('<QIHHIIBBBBHHI')),
+    15: (536, 36, 12, struct.Struct('<QIHHIIBBBBHHI')),
+    16: (540, 36, 12, struct.Struct('<QIIIIIBBBBHHI')),
+}
 VARIANT_RECORD = 16  # PackPipelineFlags PipelineVariantRecord: a variant's record under its state's key
 
 
@@ -153,13 +159,13 @@ class Pack:
         self.version, self.nprog, self.npipe, _ = struct.unpack_from('<4I', self.p, 8)
         if self.version not in LAYOUTS:
             raise SystemExit(f'{path}: a version-{self.version} pack')
-        pipeline_bytes, self.program_bytes, sections = LAYOUTS[self.version]
+        pipeline_bytes, self.program_bytes, sections, head = LAYOUTS[self.version]
         self.sec = [struct.unpack_from('<QQ', self.p, 24 + 16 * i) for i in range(sections)]
         self.pipelines = {}
         for i in range(self.npipe):
             at = self.sec[1][0] + pipeline_bytes * i
-            key, _, _, fs, blob, dwords = struct.unpack_from('<QIHHII', self.p, at)
-            if struct.unpack_from('<I', self.p, at + 32)[0] & VARIANT_RECORD:
+            key, _, _, fs, blob, dwords, *_, flags = head.unpack_from(self.p, at)
+            if flags & VARIANT_RECORD:
                 continue
             self.pipelines.setdefault(key, (fs, blob, dwords))
 

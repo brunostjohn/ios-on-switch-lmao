@@ -24,7 +24,7 @@ import packfile
 import probelog
 import splits
 
-PIPELINE = struct.Struct('<QIHHIIBBBBHHI')
+PIPELINE = struct.Struct('<QIIIIIBBBBHHI')
 # SET_PIPELINE_PROGRAM(vertex B, pixel): where each program sits in the shader heap, which the probe saw differ by state
 PROGRAM_OFFSETS = (0x2044, 0x2144)
 PIPELINE_BYTES = PIPELINE.size + packfile.PACK_ENTRIES * 8 + 4 + 32 * 4 + 4 + 36 + 16 + packfile.PIPELINE_V15.size
