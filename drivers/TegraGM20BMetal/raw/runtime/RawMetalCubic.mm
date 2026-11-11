@@ -48,17 +48,22 @@ void packedVariants(RMPipeline *p)
 
 // A packed state's variant the pack does not hold: a draw that needs one of its cubic samplers' binds is refused (neither its
 // own program nor another binds' filters them as Metal does), and one of a test class the pack builder could not make draws
-// the state's own record, as the device's compile, refused alike, would have left it
+// the record without it (the state's own, or its cubic variant's), as a refused device compile left it, and says so
 static raw::Pipeline *unpackedVariant(RMPipeline *p, const std::string &suffix, const std::string &name)
 {
-    if (suffix.empty())
-        return p->_raw;
-    if (suffix != name) {
-        std::lock_guard<std::mutex> lock(p->_variantLock);
-        if (const auto found = p->_variants.find(suffix); found != p->_variants.end())
-            return found->second->value();
-    }
     const std::string key = p->_key + name;
+    raw::Pipeline *untested = p->_raw;
+    if (!suffix.empty()) {
+        std::lock_guard<std::mutex> lock(p->_variantLock);
+        const auto found = p->_variants.find(suffix);
+        untested = suffix != name && found != p->_variants.end() ? found->second->value() : nullptr;
+    }
+    if (untested) {
+        SWITCH_REFUSE_DETAIL("raw", "state.tests_unpacked", raw::Pack::fnv(key.data(), key.size()),
+                             "a packed state's test class the pack builder could not make: drawn without it: %s",
+                             key.c_str());
+        return untested;
+    }
     SWITCH_REFUSE_DETAIL("raw", "state.variant_unpacked", raw::Pack::fnv(key.data(), key.size()),
                          "a packed state's variant the pack lacks: its draws are refused: %s", key.c_str());
     return nullptr;
