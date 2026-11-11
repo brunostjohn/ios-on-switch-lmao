@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: BSD-2-Clause-Patent
 static bool planeSame(const PlaneSet &a, const PlaneSet &b)
 {
+    if (a.landscape != b.landscape)
+        return false;
     for (unsigned window = 0; window != 2; ++window) {
         const auto &first = a.window[window];
         const auto &second = b.window[window];
@@ -115,7 +117,8 @@ void planeDecide(const OriginalLegacySwapRequest *request, PlaneDecision &d)
         overlay.depth = index + 1;
         planeBuildingSlots |= 1u << unsigned(slot);
     }
-    const switch_display::WindowState windows[2] = {planeWindowState(0), planeWindowState(1)};
+    const switch_display::WindowState windows[2] = {planeWindowState(switch_landscape::kB),
+                                                    planeWindowState(switch_landscape::kC)};
     const auto assignment = switch_display::assign(wanted, windows);
     for (unsigned index = 0; index != 2; ++index) {
         auto &overlay = wanted[index];

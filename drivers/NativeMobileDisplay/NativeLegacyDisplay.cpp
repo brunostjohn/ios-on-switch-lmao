@@ -62,6 +62,7 @@
 #include "../SwitchPower/SwitchEMC.h"
 #include "../SwitchPower/SwitchDisplayBandwidth.h"
 #include "../../kits/SwitchRefusal/SwitchRefusal.h"
+#include "SwitchLandscapeWindows.h"
 #if SWITCH_FRAME_TIMELINE
 #include <sys/sysctl.h>
 #include "NativeColumnScan.h"
@@ -376,8 +377,8 @@ static constexpr uint32_t kHDirection = 1u << 0, kVDirection = 1u << 2, kScanCol
 // so window A's flips, the console tape and the panic hook never find WINDOW_HEADER moved under them. STATE_CONTROL
 // WIN_B_ACT_REQ bit 2 / WIN_B_UPDATE bit 10; REG_ACT_CONTROL WIN_B_ACT_HCNTR_SEL bit 4 and window C's bit 6 (hekate sets both:
 // line-counter latching, which tears); INT_STATUS WIN_B_UF_INT bit 9; MC TRANSLATION_ENABLE_0 display0b bit 3 (swgroup dc).
-static constexpr uint32_t kWinBBase = 0xd80, kWinbufBBase = 0xdc0, kWincBBase = 0xc00, kWinABase = 0xb80;
-static constexpr uint32_t kWinCBase = 0xf80, kWinbufCBase = 0xfc0, kWincCBase = 0xe00;
+static constexpr uint32_t kWinBBase = 0xd80, kWinbufBBase = 0xdc0, kWinABase = 0xb80;
+static constexpr uint32_t kWinCBase = 0xf80;
 static constexpr uint32_t kWinCActReq = 1u << 3, kWinCUpdate = 1u << 11,
                           kWinCUnderflowInt = 1u << 10, kDisplay0cTranslation = 1u << 5;
 static constexpr uint32_t kWinBActReq = 1u << 2, kWinBUpdate = 1u << 10, kWinBActHcntrSel = 1u << 4,
@@ -982,6 +983,7 @@ class NativeLegacyDisplay : public IOMobileFramebufferLegacy {
     uint32_t planeSlotUses = 0;
 
     using PlaneSet = switch_display::Composition;
+    using Window = switch_landscape::Window;
 
     using PlaneCommits = switch_display::Compositions<PlaneSet>;
     PlaneSet *planeSets = nullptr;
@@ -2646,27 +2648,28 @@ private:
     void checkFlip(bool atFrameEnd)
     {
         const uint32_t control = dc[kDcStateControl];
-        const uint32_t start = windowActive(kWinbufStartAddr);
+        const uint32_t start = uiActive(kWinbufStartAddr);
         const int asked = ring.pending;
         const int replaced = ring.superseded;
         const int scanned = ring.front;
         const uint64_t stamp = atFrameEnd ? __atomic_load_n(&feStamp, __ATOMIC_ACQUIRE) : vblankTime;
-        const auto latch = ring.latch(surfaceIndex(start), (control & (kGeneralActReq | kWinAActReq)) != 0u);
+        const auto latch = ring.latch(surfaceIndex(start), (control & (kGeneralActReq | uiRequest())) != 0u);
         if (latch == TegraScanoutRing::kTaken || latch == TegraScanoutRing::kTakenReplaced)
             releaseIdleDirectReads();
         switch (latch) {
         case TegraScanoutRing::kWaiting:
             if (!atFrameEnd || frameEnds - flipRequested < kLatchFrames)
                 return;
-            panic("SwitchDisplay: window A never latched the flip to %#x in %u frames: STATE_CONTROL %#x "
+            panic("SwitchDisplay: window %c never latched the flip to %#x in %u frames: STATE_CONTROL %#x "
                   "ACT_CONTROL %#x START %#x",
-                  surfaceAddress(asked), kLatchFrames, control, static_cast<uint32_t>(dc[kDcRegActControl]), start);
+                  uiName(), surfaceAddress(asked), kLatchFrames, control, static_cast<uint32_t>(dc[kDcRegActControl]),
+                  start);
         case TegraScanoutRing::kInconsistent:
             // Double-buffered already, this is the check the path had before r14: window A does not show the flip asked for.
             if (!ring.replace) {
-                panic("SwitchDisplay: window A latched START_ADDR %#x, not the flip to %#x (front %#x; STATE_CONTROL "
-                      "%#x)",
-                      start, surfaceAddress(asked), surfaceAddress(scanned), control);
+                panic("SwitchDisplay: window %c latched START_ADDR %#x, not the flip to %#x (front %#x; "
+                      "STATE_CONTROL %#x)",
+                      uiName(), start, surfaceAddress(asked), surfaceAddress(scanned), control);
             }
             recoverFlip(start, control, asked, replaced, scanned);
             return;
@@ -4699,6 +4702,8 @@ public:
         return true;
     }
 
+#include "SwitchLandscapeState.h"
+#include "SwitchLandscapeUi.h"
 #include "SwitchDisplayBandwidthDisplay.h"
 #include "NativePlanesDisplay.h"
 #include "SwitchUnderflowDisplay.h"
@@ -5264,6 +5269,7 @@ OSDefineMetaClassWithInit(NativeLegacyDisplay, IOMobileFramebufferLegacy, ) Nati
 OSDefineDefaultStructors(NativeLegacyDisplay,
                          IOMobileFramebufferLegacy) NativeLegacyDisplay *NativeLegacyDisplay::primaryDisplay;
 constinit uint32_t NativeLegacyDisplay::stPlaneNative = 0;
+constinit NativeLegacyDisplay::LandscapeState NativeLegacyDisplay::landscapeState;
 #if SWITCH_FRAME_TIMELINE
 constinit NativeLegacyDisplay::ColumnScanState NativeLegacyDisplay::columnScan;
 constinit struct sysctl_oid NativeLegacyDisplay::columnScanOid = {};

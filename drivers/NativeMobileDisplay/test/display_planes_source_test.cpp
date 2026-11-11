@@ -196,7 +196,8 @@ TEST(DisplayPlanesSource, PlaneSlotsHoldTheSurfaceTheyScan)
     EXPECT_THAT(native, HasSubstr("surfaceLayout(surface, block)"));
     EXPECT_THAT(Function(planes, "static const tgm_layout *surfaceLayout("),
                 HasSubstr("tegra_gm20b_surface_layout(pa & ~0xfffULL, &block) == 1"));
-    const std::string write = Function(planes, "void planeWriteWindowRegisters(unsigned window, const switch_display::Overlay &p, bool live)");
+    const std::string write =
+        Function(planes, "void planeWriteWindowRegisters(Window w, const switch_display::Overlay &p, bool live)");
     EXPECT_THAT(write, HasSubstr("buf[kSurfaceKind] = m.surfaceKind;"));
     EXPECT_THAT(write, HasSubstr("buf[kVOffset] = m.vOffset;"));
     EXPECT_THAT(Function(planes, "static bool planeSame("), HasSubstr("x.surfaceKind != y.surfaceKind"));

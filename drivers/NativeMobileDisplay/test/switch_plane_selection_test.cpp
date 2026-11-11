@@ -2,6 +2,7 @@
 #include <gtest/gtest.h>
 #include <array>
 #include "../SwitchDisplayComposition.h"
+#include "../SwitchLandscapeWindows.h"
 #include "../../TegraGM20B/SwitchGpuBacking.h"
 
 namespace {
@@ -23,7 +24,8 @@ struct Display {
     void getDisplayDimensions(uint32_t *w, uint32_t *h) { *w = 720; *h = 1280; }
     native_planes::Layer planeLayerOf(const unsigned char *, unsigned i, OSObject *) { return planeLayers[i].layer; }
     native_planes::Surface planeSurfaceOf(OSObject *) { return {}; }
-    switch_display::WindowState planeWindowState(unsigned w) const { return live[w]; }
+    using Window = switch_landscape::Window;
+    switch_display::WindowState planeWindowState(Window w) const { return live[w - 1]; }
     int planeNativeSlotFor(OSObject *surface, const native_planes::Layer &, uint32_t, uint32_t,
                           native_planes::Image &image, bool &resolved)
     {

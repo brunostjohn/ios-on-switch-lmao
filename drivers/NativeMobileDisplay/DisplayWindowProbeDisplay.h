@@ -196,7 +196,7 @@ void windowProbeSave()
             s.savedBBuffer[i] = dc[0x800 + kOverlayBufferState[i]];
     });
     s.savedCrcControl = dc[kDcCrcControl];
-    const uint32_t winc[2] = {kWinc, kWincBBase};
+    const uint32_t winc[2] = {kWinc, switch_landscape::controlBase(switch_landscape::kB)};
     for (unsigned w = 0; w < 2; ++w) {
         for (unsigned i = 0; i < 8; ++i)
             s.savedCsc[w][i] = dc[winc[w] + native_planes::kCscYof + i];
@@ -211,7 +211,7 @@ void windowProbeSave()
 // The CSC and filter taps have one copy, read live: written only while window A scans RGB and window B is off.
 void windowProbeWriteUnshadowed(const uint32_t (*csc)[8], const uint32_t (*hTaps)[16], const uint32_t (*vTaps)[16])
 {
-    const uint32_t winc[2] = {kWinc, kWincBBase};
+    const uint32_t winc[2] = {kWinc, switch_landscape::controlBase(switch_landscape::kB)};
     for (unsigned w = 0; w < 2; ++w) {
         for (unsigned i = 0; i < 8; ++i)
             dc[winc[w] + native_planes::kCscYof + i] = csc[w][i];

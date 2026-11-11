@@ -293,7 +293,7 @@ void planeFrameEnd()
     if (planeRecoveryFrameEnd())
         return;
     if (planeLatch.requested()) {
-        const bool out = (dc[kDcStateControl] & (kWinBActReq | kWinCActReq)) != 0u;
+        const bool out = (dc[kDcStateControl] & switch_landscape::overlayRequests(landscapeOn())) != 0u;
         if (planeLatch.latched(out, planeScannedSet())) {
             if (stats)
                 ++stPlaneLatched;
@@ -314,7 +314,7 @@ void planeFrameEnd()
             return;
         }
     }
-    const uint32_t underflow = dc[kDcIntStatus] & (kWinBUnderflowInt | kWinCUnderflowInt);
+    const uint32_t underflow = dc[kDcIntStatus] & switch_landscape::overlayUnderflows(landscapeOn());
     if (!underflow) {
         planeUnderflowRun = 0;
         return;
@@ -371,10 +371,7 @@ void planesQuiesce()
         planeProbeFinish();
     }
     planeLatch.settle();
-    for (unsigned window = 0; window != 2; ++window) {
-        planeCsc[window][0] = planeCsc[window][1] = -1;
-        planeFiltersWritten[window] = false;
-    }
+    planeForgetUnshadowed();
 }
 
 #include "SwitchPlanesResume.h"

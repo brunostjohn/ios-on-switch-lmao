@@ -25,7 +25,7 @@ void planesResume()
     }
     planeStartRegisters();
     for (unsigned window = 0; window != 2; ++window)
-        planeWriteWindowRegisters(window, now.window[window], false);
+        planeWriteWindowRegisters(planeWindowOf(now, window), now.window[window], false);
     const bool over = now.on();
     planeBlending = !over;  // force the write: the cold init put hekate's values back
     planeBlendA(over, update, request);

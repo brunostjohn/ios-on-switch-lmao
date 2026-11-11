@@ -394,6 +394,7 @@ host_test(
 host_test(
     name = "switch_display_admission_test",
     srcs = [
+        "//drivers/NativeMobileDisplay:SwitchLandscapeWindows.h",
         "switch_display_admission_test.cpp",
         "//drivers/NativeMobileDisplay:SwitchDisplayBandwidthDisplay.h",
         "//drivers/NativeMobileDisplay:SwitchDisplayMemoryEnvelope.h",
@@ -442,6 +443,7 @@ host_test(
 host_test(
     name = "switch_composition_registers_test",
     srcs = [
+        "//drivers/NativeMobileDisplay:SwitchLandscapeWindows.h",
         "switch_composition_registers_test.cpp",
         "//drivers/NativeMobileDisplay:SwitchDisplayComposition.h",
         "//drivers/NativeMobileDisplay:SwitchCompositionRegisters.h",
@@ -499,6 +501,8 @@ host_test(
 host_test(
     name = "switch_overlay_registers_test",
     srcs = [
+        "//drivers/NativeMobileDisplay:SwitchLandscapeWindows.h",
+        "//drivers/NativeMobileDisplay:SwitchLandscapeState.h",
         "switch_overlay_registers_test.cpp",
         "//drivers/NativeMobileDisplay:SwitchPlanesResume.h",
         "//drivers/NativeMobileDisplay:SwitchOverlayRegisters.h",
@@ -519,6 +523,7 @@ host_test(
 host_test(
     name = "switch_plane_selection_test",
     srcs = [
+        "//drivers/NativeMobileDisplay:SwitchLandscapeWindows.h",
         "switch_plane_selection_test.cpp",
         "//drivers/NativeMobileDisplay:SwitchPlaneSelection.h",
         "//drivers/TegraGM20B:SwitchGpuBacking.h",

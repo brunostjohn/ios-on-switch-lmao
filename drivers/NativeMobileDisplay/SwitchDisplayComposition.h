@@ -14,6 +14,8 @@ struct Overlay {
 struct Composition {
     Overlay window[2] = {};
     uint64_t seq = 0, pendingSeq = 0;
+    // SwitchLandscapeWindows.h: overlay 0 is on window A and the UI on B.
+    bool landscape = false;
 
     bool on() const { return window[0].on || window[1].on; }
 

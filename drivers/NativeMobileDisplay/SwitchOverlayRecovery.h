@@ -73,10 +73,7 @@ bool planeRecoveryFrameEnd()
     }
     // Only observed inactive windows permit replacing their live CSC/filter state or releasing old snapshots.
     planeLatch.reset();
-    for (unsigned window = 0; window != 2; ++window) {
-        planeCsc[window][0] = planeCsc[window][1] = -1;
-        planeFiltersWritten[window] = false;
-    }
+    planeForgetUnshadowed();
     planeUnderflowRun = 0;
     planeRecovering = false;
     PlaneSet restore = planeRecoveryTarget;

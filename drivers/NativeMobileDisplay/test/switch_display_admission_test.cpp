@@ -4,6 +4,7 @@
 #include <vector>
 #include "../SwitchDisplayComposition.h"
 #include "../SwitchDisplayMemoryEnvelope.h"
+#include "../SwitchLandscapeWindows.h"
 #include "../../SwitchPower/SwitchDisplayBandwidth.h"
 
 namespace {
@@ -77,6 +78,18 @@ struct Display {
     const PlaneSet &planeSetOf(int)
     {
         return active;
+    }
+
+    using Window = switch_landscape::Window;
+
+    static Window planeWindowOf(const PlaneSet &set, unsigned index)
+    {
+        return switch_landscape::windowsOf(set.landscape).overlay[index];
+    }
+
+    bool landscapeOn() const
+    {
+        return active.landscape;
     }
 
 #include "../SwitchDisplayBandwidthDisplay.h"

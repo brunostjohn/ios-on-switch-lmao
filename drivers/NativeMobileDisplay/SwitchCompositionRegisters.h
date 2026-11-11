@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: BSD-2-Clause-Patent
-bool planeWindowRegistersMatch(unsigned window, const switch_display::Overlay &p)
+bool planeWindowRegistersMatch(Window w, const switch_display::Overlay &p)
 {
     using namespace native_planes;
-    const auto win = dc + planeWindowBase(window);
-    const auto buf = dc + planeBufferBase(window);
+    const auto win = dc + switch_landscape::windowBase(w);
+    const auto buf = dc + switch_landscape::bufferBase(w);
     if (!p.on)
         return !(win[kOptions] & native_planes::kWinEnable);
     const auto &m = p.image;
@@ -22,7 +22,8 @@ bool planeWindowRegistersMatch(unsigned window, const switch_display::Overlay &p
 
 bool planeRegistersMatch(const PlaneSet &p)
 {
-    return planeWindowRegistersMatch(0, p.window[0]) && planeWindowRegistersMatch(1, p.window[1]);
+    return planeWindowRegistersMatch(planeWindowOf(p, 0), p.window[0]) &&
+           planeWindowRegistersMatch(planeWindowOf(p, 1), p.window[1]);
 }
 
 int planeScannedSet()
