@@ -19,6 +19,8 @@ LITERAL = 'HWTEST '
 
 CODECS = ('h264', 'hevc', 'hevc_main10', 'vp9')
 SIZES = ('720p', '1080p', '4k')
+# hw_test_app/core/Media.swift's Clip.all: every codec at every size, MPEG-4 Part 2 without 4K (NVDEC's 2032x2032)
+CLIPS = tuple(f'{codec}_{size}' for codec in CODECS for size in SIZES) + ('mpeg4_720p', 'mpeg4_1080p')
 STILLS = ('jpeg_420', 'jpeg_422', 'jpeg_444', 'png', 'heic', 'heic_grid')
 
 # The app's test IDs in its run order; True marks the interactive ones (a person plugs, presses or picks something).
@@ -121,7 +123,7 @@ TESTS: dict[str, bool] = {
         ],
         False,
     ),
-    **{f'decode.{codec}_{size}': False for codec in CODECS for size in SIZES},
+    **{f'decode.{clip}': False for clip in CLIPS},
     'decode.native_export': False,
     'decode.native_export_main10': False,
     'decode.native_export_main10_8bit': False,

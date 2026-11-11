@@ -36,6 +36,12 @@ inline uint32_t switch_nvdec_entry_access(const TegraNVDECSubmit &submit, uint32
         current = 3;
         slots = 4;
         break;
+    case TEGRA_NVDEC_CODEC_MPEG4:
+        if (submit.setup_bytes != sizeof(nvdec_mpeg4_pic_s))
+            return 0;
+        current = 0;
+        slots = 3;
+        break;
     default:
         return 0;
     }
@@ -68,6 +74,7 @@ inline uint32_t switch_nvdec_entry_access(const TegraNVDECSubmit &submit, uint32
     case NVC5B0_SET_HISTORY_OFFSET:
     case NVC5B0_VP9_SET_FILTER_BUFFER_OFFSET:
     case NVC5B0_HEVC_SET_FILTER_BUFFER_OFFSET:
+    case NVC5B0_SET_PIC_SCRATCH_BUF_OFFSET:
         return SWITCH_NVDEC_READ | SWITCH_NVDEC_WRITE;
     default:
         return 0;

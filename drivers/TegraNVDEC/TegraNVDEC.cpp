@@ -16,7 +16,8 @@
 // The codecs are those the unit decoded right: on every boot of 11-06 an H.264 picture, a VP9 key frame and an HEVC IDR
 // matched x264, libvpx and FFmpeg, and VP9 and HEVC Main clips matched through VideoToolbox
 // (drivers/SwitchVideoDecoders/test/vdectest.c). HEVC Main 10 written as 8 bits did not match FFmpeg's there, so Main
-// 10 is decoded into 16-bit samples instead (TEGRA_NVDEC_HEVC_MAIN10).
+// 10 is decoded into 16-bit samples instead (TEGRA_NVDEC_HEVC_MAIN10). MPEG-4 Part 2 is on from host proof alone
+// (drivers/SwitchVideoDecoders/test/host mpeg4_host); hw_test_app's decode.mpeg4_* clips are its first device run.
 //
 // Jobs (tegra_nvdec_run): host1x channel 0 in NVDEC's class, each method written through the engine's THI
 // METHOD0/METHOD1 pair (averne's av_nvtegra_cmdbuf_push_value; L4T nvhost), the picture setup from a kernel-only slot,
@@ -106,7 +107,7 @@ SwitchEngineGate<SwitchEngineGateKernel> gGate;
 uint32_t gSyncpt;
 bool gUp, gWedged, gPublished;
 constexpr uint32_t kCodecs = (1u << TEGRA_NVDEC_CODEC_H264) | (1u << TEGRA_NVDEC_CODEC_VP9) |
-                             (1u << TEGRA_NVDEC_CODEC_HEVC) | TEGRA_NVDEC_HEVC_MAIN10;
+                             (1u << TEGRA_NVDEC_CODEC_HEVC) | TEGRA_NVDEC_HEVC_MAIN10 | (1u << TEGRA_NVDEC_CODEC_MPEG4);
 switch_dma_buffer gSetup;  // kSetupSlots picture setups, never mapped into a client
 
 const char *falconState()

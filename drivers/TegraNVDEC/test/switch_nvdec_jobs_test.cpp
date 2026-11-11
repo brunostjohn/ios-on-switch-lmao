@@ -73,7 +73,8 @@ TEST(SwitchNVDECAccess, EveryCodecSeparatesCurrentPictureWritesFromReferenceRead
     TegraNVDECSubmit submit = {};
     submit.entry_count = 1;
     submit.entries[0].kind = TEGRA_NVDEC_ENTRY_RELOC;
-    const uint32_t codecs[] = {TEGRA_NVDEC_CODEC_H264, TEGRA_NVDEC_CODEC_HEVC, TEGRA_NVDEC_CODEC_VP9};
+    const uint32_t codecs[] = {TEGRA_NVDEC_CODEC_H264, TEGRA_NVDEC_CODEC_HEVC, TEGRA_NVDEC_CODEC_VP9,
+                               TEGRA_NVDEC_CODEC_MPEG4};
     for (uint32_t codec : codecs) {
         submit.codec = codec;
         uint32_t slots = 4, current = 3;
@@ -83,6 +84,10 @@ TEST(SwitchNVDECAccess, EveryCodecSeparatesCurrentPictureWritesFromReferenceRead
         } else if (codec == TEGRA_NVDEC_CODEC_HEVC) {
             submit.setup_bytes = sizeof(nvdec_hevc_pic_s);
             slots = 16;
+        } else if (codec == TEGRA_NVDEC_CODEC_MPEG4) {
+            submit.setup_bytes = sizeof(nvdec_mpeg4_pic_s);
+            slots = 3;
+            current = 0;
         } else {
             submit.setup_bytes = sizeof(nvdec_vp9_pic_s);
         }
@@ -115,6 +120,8 @@ TEST(SwitchNVDECAccess, InputsStatusAndAuxiliaryHistoryHaveDifferentOwnership)
     submit.entries[0].method = NVC5B0_SET_NVDEC_STATUS_OFFSET;
     EXPECT_EQ(switch_nvdec_entry_access(submit, 0), SWITCH_NVDEC_WRITE);
     submit.entries[0].method = NVC5B0_SET_COLOC_DATA_OFFSET;
+    EXPECT_EQ(switch_nvdec_entry_access(submit, 0), SWITCH_NVDEC_READ | SWITCH_NVDEC_WRITE);
+    submit.entries[0].method = NVC5B0_SET_PIC_SCRATCH_BUF_OFFSET;
     EXPECT_EQ(switch_nvdec_entry_access(submit, 0), SWITCH_NVDEC_READ | SWITCH_NVDEC_WRITE);
     submit.entries[0].method = 0xffff;
     EXPECT_EQ(switch_nvdec_entry_access(submit, 0), 0u);

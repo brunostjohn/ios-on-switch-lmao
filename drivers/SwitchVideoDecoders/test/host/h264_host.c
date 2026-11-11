@@ -154,7 +154,7 @@ static int refusals(const Fake *f)
         case 0:
             break;  // as decoded: accepted
         case 1:
-            s.codec = 4, expected = "codec";
+            s.codec = 2, expected = "codec";  // VC-1, which NVDEC is not given
             break;
         case 2:
             s.entries[control].value &= ~0x10u, expected = "control params";

@@ -86,6 +86,9 @@ MEDIA = [
         "4k",
     ]
 ] + [
+    "mpeg4_720p.mp4",
+    "mpeg4_1080p.mp4",
+] + [
     "jpeg_420.jpg",
     "jpeg_422.jpg",
     "jpeg_444.jpg",

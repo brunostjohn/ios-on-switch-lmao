@@ -10,6 +10,7 @@
 #include "AVDFrameTiming.h"
 #include "H264NVDEC.h"
 #include "HEVCNVDEC.h"
+#include "MPEG4NVDEC.h"
 #include "NVDECClient.h"
 #include "VP9NVDEC.h"
 #include "VTDecoderSPI.h"
@@ -29,12 +30,13 @@ typedef struct {
     VTTileDecoderSession tileSession;  // a tile session (grid images) instead of a frame session
     AVDTile tile;
     NVDECClient *client;
-    FourCharCode codec;  // 'avc1', 'vp09' or 'hvc1'
+    FourCharCode codec;  // 'avc1', 'vp09', 'hvc1' or 'mp4v'
     H264Decoder *h264;
     VP9Decoder *vp9;
     HEVCDecoder *hevc;
+    MPEG4Decoder *mpeg4;
     VTVideoDecoderRef software;  // the session runs on Apple's software decoder (AVDDecoder.c)
-    CFDataRef avcC;              // or vpcC, hvcC
+    CFDataRef avcC;              // or vpcC, hvcC, esds
     unsigned lengthSize;
     OSType pixelFormat;
     CFTypeRef matrix, primaries, transfer, chromaTop, chromaBottom;
@@ -61,6 +63,14 @@ OSStatus avd_create_instance(FourCharCode codec, CFAllocatorRef allocator, VTVid
 void avd_set_number(CFMutableDictionaryRef dict, CFStringRef key, int32_t value);
 CFDataRef avd_copy_atom(CMVideoFormatDescriptionRef format, CFStringRef name);
 int avd_load_hvcc(Decoder *d, CFDataRef hvcC);
+const char *avd_codec_name(FourCharCode codec);
+// The session's NV12 pool at d->width x d->height ('x420'/'xf20' when tenBit), rows aligned for VIC.
+void avd_set_attributes(Decoder *d, VTVideoDecoderSession session, bool fullRange, bool tenBit, OSStatus *status);
+// The session on Apple's software decoder for d->codec, `why` logged once; NVDEC's state must be gone already.
+OSStatus avd_start_software(Decoder *d, VTVideoDecoderSession session, CMVideoFormatDescriptionRef format,
+                            const char *why);
+// AVDMPEG.c: an 'mp4v' session.
+OSStatus avd_start_mpeg4(Decoder *d, VTVideoDecoderSession session, CMVideoFormatDescriptionRef format);
 // The sample's bytes, contiguous: *data points into the sample or at *copy (the caller frees it).
 bool avd_sample_bytes(CMSampleBufferRef sample, const uint8_t **data, size_t *size, uint8_t **copy);
 // The picture into `image` with its top-left at (x, y), by VIC, else by the CPU; clipped to the image.
