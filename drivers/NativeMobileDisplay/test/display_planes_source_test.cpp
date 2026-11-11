@@ -218,16 +218,12 @@ TEST(DisplayPlanesSource, BackboarddDetachesOnlyWhenTheDisplaySaysSo)
     EXPECT_THAT(exec, Not(HasSubstr("if (vbl && single_layer) {")));
 }
 
-// Debug iOS 27 kernels have backboardd log why each layer was or was not detached; release kernels and iOS 17 do not.
-TEST(DisplayPlanesSource, DetachReasonsLoggedOnlyByDebugIos27Kernels)
+// No kernel has backboardd log why each layer was or was not detached: QuartzCore 24B119's CA_PRINT_DETACHING
+// (ca_debug_options[32]) logs four lines a composited frame on the render thread ("ClearUI detach fail", "[CA]",
+// "[Server]" and "[Display] Surface ID ... detach result").
+TEST(DisplayPlanesSource, NoKernelHasTheRenderServerLogItsDetachReasons)
 {
-    const std::string xnu27 = Runfile(XNU27_KERN_EXEC);
-    const std::string print =
-        Between(xnu27, "#if DEVELOPMENT || DEBUG\n#define NATIVE_SWITCH_CA_PRINT_DETACHING", "#endif");
-    EXPECT_THAT(print, HasSubstr("\"CA_PRINT_DETACHING=1\","));
-    EXPECT_THAT(print, HasSubstr("#else\n#define NATIVE_SWITCH_CA_PRINT_DETACHING\n"));
-    EXPECT_EQ(Count(xnu27, "CA_PRINT_DETACHING=1"), 1u);
-    EXPECT_EQ(Count(xnu27, "NATIVE_SWITCH_CA_PRINT_DETACHING NULL"), 2u);
+    EXPECT_THAT(Runfile(XNU27_KERN_EXEC), Not(HasSubstr("CA_PRINT_DETACHING")));
     EXPECT_THAT(XnuKernExec(), Not(HasSubstr("CA_PRINT_DETACHING")));
 }
 
