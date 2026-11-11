@@ -20,6 +20,8 @@ struct VideoDecodeTest: HWTest {
         case .hevc10: return "HEVC Main10"
         case .vp9: return "VP9"
         case .mpeg4: return "MPEG-4 Part 2"
+        case .mpeg2: return "MPEG-2"
+        case .mpeg1: return "MPEG-1"
         }
     }
 
@@ -29,6 +31,8 @@ struct VideoDecodeTest: HWTest {
         case .hevc, .hevc10: return kCMVideoCodecType_HEVC
         case .vp9: return kCMVideoCodecType_VP9
         case .mpeg4: return kCMVideoCodecType_MPEG4Video
+        case .mpeg2: return kCMVideoCodecType_MPEG2Video
+        case .mpeg1: return kCMVideoCodecType_MPEG1Video
         }
     }
 
@@ -64,10 +68,14 @@ struct VideoDecodeTest: HWTest {
         var proof = result.usingHardware ? "UsingHardwareAcceleratedVideoDecoder=1" : ""
         // Debug builds of the AVD plug-in count the pictures its NVDEC jobs put out and how each reached the client.
         if let routes = result.routes {
-            for key in ["frames", "exported", "vic", "cpu", "errors"] { metrics.set("decoder_" + key, routes[key] ?? 0) }
+            for key in ["frames", "exported", "vic", "cpu", "errors"] {
+                metrics.set("decoder_" + key, routes[key] ?? 0)
+            }
             checks.append(
-                ("every frame an NVDEC picture (SwitchPictureRoutes)",
-                 routes["frames"] == clip.frames && routes["errors"] == 0))
+                (
+                    "every frame an NVDEC picture (SwitchPictureRoutes)",
+                    routes["frames"] == clip.frames && routes["errors"] == 0
+                ))
             proof += " SwitchPictureRoutes frames=\(routes["frames"] ?? 0)"
         }
         return .judged(checks, metrics, proof: proof)

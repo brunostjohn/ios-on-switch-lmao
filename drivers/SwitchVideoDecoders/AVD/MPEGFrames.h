@@ -2,14 +2,15 @@
 // What MPEG-1/2 and MPEG-4 Part 2 on NVDEC share: four NV12 block-linear surfaces of one size (the picture being
 // decoded, the past and future references, one spare while a reference changes hands), NVDEC's three picture slots
 // (0 current, 1 past, 2 future, as averne's nvtegra_mpeg12.c and nvtegra_mpeg4.c bind them), the input buffer
-// (status record, then the bitstream), one job at a time, and the picture out through the backend.
+// (status record, the codec's own tables such as MPEG-2's slice offsets, then the bitstream), one job at a time, and the
+// picture out through the backend.
 #ifndef MPEG_FRAMES_H
 #define MPEG_FRAMES_H
 #include "H264NVDEC.h"
 
 enum {
     MPEG_FRAMES_SURFACES = 4,
-    MPEG_FRAMES_BITS_OFFSET = 256,  // the bitstream in the input buffer, past the status record
+    MPEG_FRAMES_TABLES = 256,  // the codec's tables in the input buffer, past the status record
 };
 
 typedef struct {
@@ -21,13 +22,15 @@ typedef struct {
     uint32_t input;
     uint8_t *input_va;
     uint64_t input_bytes;
-    uint32_t bits_len;  // the bitstream's bytes, end sequence included
+    uint32_t bits_off;  // the bitstream in the input buffer
+    uint32_t bits_len;  // its bytes, end sequence included
     uint32_t picture_index;
 } MPEGFrames;
 
 // Surfaces for width_mbs x height_mbs macroblocks (pitch 64-aligned, rows to whole 32-row macroblock pairs) and an
-// input buffer; the references are dropped. 0, or -3 when NVDEC buffers could not be had.
-int mpeg_frames_configure(MPEGFrames *f, uint32_t width_mbs, uint32_t height_mbs);
+// input buffer with `tables` bytes after the status record; the references are dropped. 0, or -3 when NVDEC buffers
+// could not be had.
+int mpeg_frames_configure(MPEGFrames *f, uint32_t width_mbs, uint32_t height_mbs, uint32_t tables);
 void mpeg_frames_release(MPEGFrames *f);
 
 // A surface no reference holds, its backing renewed when the backend recycles (an exported picture keeps the old one).
@@ -45,7 +48,9 @@ void mpeg_frames_bind(MPEGFrames *f, TegraNVDECSubmit *s, int current, int past,
 // decoded right, or -2 when the job failed. `clean` names an extra range the CPU wrote (or has length 0).
 int mpeg_frames_run(MPEGFrames *f, TegraNVDECSubmit *s, int current, TegraNVDECRange clean);
 
-// The picture in surface `index`, width x height from its top left, to `decoded` and then `emit`.
-void mpeg_frames_output(MPEGFrames *f, int index, uint32_t width, uint32_t height, int status, void *token);
+// The picture in surface `index`, width x height from its top left (fields: AVD_FIELDS_*), to `decoded` and then
+// `emit`.
+void mpeg_frames_output(MPEGFrames *f, int index, uint32_t width, uint32_t height, uint8_t fields, int status,
+                        void *token);
 
 #endif

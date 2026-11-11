@@ -3,9 +3,10 @@
 // and CoreMedia's answers to "do this process's sessions decode in videocodecd" are defined here: AVDRegister finds
 // them by dlsym, which searches the executable first. Each case counts the anonymous entries VTCopyVideoDecoderList
 // gains per codec, and whether VideoToolbox lists them as hardware:
-//   decodes here, may open:        'avc1', 'vp09', 'hvc1', 'mp4v' as hardware, after one probe connection
+//   decodes here, may open:        'avc1', 'vp09', 'hvc1', 'mp4v', 'mp2v', 'mp1v' as hardware, after one probe
+//                                  connection
 //   decodes here, refused:         nothing
-//   sessions run in videocodecd:   the four published codecs as hardware, with no connection opened
+//   sessions run in videocodecd:   the published codecs as hardware, with no connection opened
 //   is videocodecd, refused:       nothing
 //   sessions in videocodecd, no codec matched:   nothing
 // Prints "PASS avd-register" when all hold (avd_register_host_test).
@@ -38,7 +39,8 @@ __attribute__((visibility("default"), used)) Boolean FigServer_IsVideocodecd(voi
 }
 
 static const uint32_t kCodecs = 1u << TEGRA_NVDEC_CODEC_H264 | 1u << TEGRA_NVDEC_CODEC_VP9 |
-                                1u << TEGRA_NVDEC_CODEC_HEVC | 1u << TEGRA_NVDEC_CODEC_MPEG4;
+                                1u << TEGRA_NVDEC_CODEC_HEVC | 1u << TEGRA_NVDEC_CODEC_MPEG4 |
+                                1u << TEGRA_NVDEC_CODEC_MPEG12;
 
 bool nvdec_service_present(void)
 {
@@ -106,8 +108,10 @@ static Entries entries(FourCharCode codec)
     return counted;
 }
 
-static const FourCharCode kRegistered[] = {kCMVideoCodecType_H264, kCMVideoCodecType_VP9, kCMVideoCodecType_HEVC,
-                                           kCMVideoCodecType_MPEG4Video};
+static const FourCharCode kRegistered[] = {kCMVideoCodecType_H264,       kCMVideoCodecType_VP9,
+                                           kCMVideoCodecType_HEVC,       kCMVideoCodecType_MPEG4Video,
+                                           kCMVideoCodecType_MPEG2Video, kCMVideoCodecType_MPEG1Video};
+
 enum {
     kCount = sizeof(kRegistered) / sizeof(kRegistered[0])
 };

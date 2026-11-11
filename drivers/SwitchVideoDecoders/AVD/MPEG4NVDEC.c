@@ -61,7 +61,7 @@ const MPEG4VOL *mpeg4_decoder_vol(const MPEG4Decoder *d)
 static int allocate(MPEG4Decoder *d, uint32_t wmbs, uint32_t hmbs)
 {
     releaseAux(d);
-    if (mpeg_frames_configure(&d->frames, wmbs, hmbs))
+    if (mpeg_frames_configure(&d->frames, wmbs, hmbs, 0))
         return -3;
     const uint32_t coloc = ALIGN(ALIGN(hmbs, 2) * wmbs * 64 - 63, 256);
     d->history_bytes = ALIGN(wmbs * 256 + 0x1100, 256);
@@ -243,6 +243,6 @@ int mpeg4_decoder_decode(MPEG4Decoder *d, const uint8_t *data, size_t size, void
     }
     if (shown < 0)
         return 0;
-    mpeg_frames_output(&d->frames, shown, d->vol.width, d->vol.height, shownStatus, token);
+    mpeg_frames_output(&d->frames, shown, d->vol.width, d->vol.height, AVD_FIELDS_UNSAID, shownStatus, token);
     return 1;
 }

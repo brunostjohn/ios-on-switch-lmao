@@ -56,10 +56,12 @@ enum TegraNVDECMethod {
 #define TEGRA_NVDEC_DECODES_VP9   "TegraNVDECDecodesVP9"
 #define TEGRA_NVDEC_DECODES_HEVC  "TegraNVDECDecodesHEVC"
 #define TEGRA_NVDEC_DECODES_MPEG4 "TegraNVDECDecodesMPEG4"
+#define TEGRA_NVDEC_DECODES_MPEG2 "TegraNVDECDecodesMPEG2"  // MPEG-1 too
 
 // NVDEC application ids (clc5b0.h NVC5B0_SET_APPLICATION_ID_ID_*). TegraNVDECInfo.codecs has bit n set for each
 // codec NVDEC decodes; Submit refuses the others.
 enum {
+    TEGRA_NVDEC_CODEC_MPEG12 = 1,  // CONTROL_PARAMS codec type MPEG1 (0) or MPEG2 (1)
     TEGRA_NVDEC_CODEC_H264 = 3,
     TEGRA_NVDEC_CODEC_MPEG4 = 4,
     TEGRA_NVDEC_CODEC_HEVC = 7,

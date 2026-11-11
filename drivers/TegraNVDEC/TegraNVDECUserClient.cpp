@@ -481,6 +481,7 @@ extern "C" int tegra_nvdec_publish(void)
     service->setProperty(TEGRA_NVDEC_DECODES_VP9, (codecs & (1u << TEGRA_NVDEC_CODEC_VP9)) != 0);
     service->setProperty(TEGRA_NVDEC_DECODES_HEVC, (codecs & (1u << TEGRA_NVDEC_CODEC_HEVC)) != 0);
     service->setProperty(TEGRA_NVDEC_DECODES_MPEG4, (codecs & (1u << TEGRA_NVDEC_CODEC_MPEG4)) != 0);
+    service->setProperty(TEGRA_NVDEC_DECODES_MPEG2, (codecs & (1u << TEGRA_NVDEC_CODEC_MPEG12)) != 0);
     if (!service->attach(resources)) {
         service->release();
         IOLog("TegraNVDEC: N3 FAIL could not attach the service\n");

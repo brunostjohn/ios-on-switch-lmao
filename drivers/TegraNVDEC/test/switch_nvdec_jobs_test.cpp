@@ -74,7 +74,7 @@ TEST(SwitchNVDECAccess, EveryCodecSeparatesCurrentPictureWritesFromReferenceRead
     submit.entry_count = 1;
     submit.entries[0].kind = TEGRA_NVDEC_ENTRY_RELOC;
     const uint32_t codecs[] = {TEGRA_NVDEC_CODEC_H264, TEGRA_NVDEC_CODEC_HEVC, TEGRA_NVDEC_CODEC_VP9,
-                               TEGRA_NVDEC_CODEC_MPEG4};
+                               TEGRA_NVDEC_CODEC_MPEG4, TEGRA_NVDEC_CODEC_MPEG12};
     for (uint32_t codec : codecs) {
         submit.codec = codec;
         uint32_t slots = 4, current = 3;
@@ -84,8 +84,9 @@ TEST(SwitchNVDECAccess, EveryCodecSeparatesCurrentPictureWritesFromReferenceRead
         } else if (codec == TEGRA_NVDEC_CODEC_HEVC) {
             submit.setup_bytes = sizeof(nvdec_hevc_pic_s);
             slots = 16;
-        } else if (codec == TEGRA_NVDEC_CODEC_MPEG4) {
-            submit.setup_bytes = sizeof(nvdec_mpeg4_pic_s);
+        } else if (codec == TEGRA_NVDEC_CODEC_MPEG4 || codec == TEGRA_NVDEC_CODEC_MPEG12) {
+            submit.setup_bytes =
+                codec == TEGRA_NVDEC_CODEC_MPEG4 ? sizeof(nvdec_mpeg4_pic_s) : sizeof(nvdec_mpeg2_pic_s);
             slots = 3;
             current = 0;
         } else {

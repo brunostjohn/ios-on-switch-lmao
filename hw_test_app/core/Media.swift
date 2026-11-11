@@ -5,7 +5,10 @@ public enum VideoCodec: String, CaseIterable, Sendable {
     case hevc
     case hevc10 = "hevc_main10"
     case vp9
-    case mpeg4  // last: clipID numbers codecs in this order
+    // New codecs go last: clipID numbers codecs in this order.
+    case mpeg4
+    case mpeg2
+    case mpeg1
 
     public var bitDepth: Int { self == .hevc10 ? 10 : 8 }
     public var container: String { self == .vp9 ? "ivf" : "mp4" }
@@ -37,18 +40,24 @@ public struct Clip: Equatable, Sendable {
 
     public var pattern: Pattern { Pattern(width: width, height: height, clip: clipID) }
 
-    public static let all: [Clip] = VideoCodec.allCases.flatMap { codec in
-        codec == .mpeg4
-            // NVDEC 2.0 decodes MPEG-4 Part 2 up to 2032x2032: no 4K clip.
-            ? [
-                Clip(codec: codec, width: 1280, height: 720, fps: 60, frames: 60, bitrate: 4_000_000),
-                Clip(codec: codec, width: 1920, height: 1080, fps: 60, frames: 60, bitrate: 8_000_000),
+    public static let all: [Clip] = VideoCodec.allCases.flatMap { codec -> [Clip] in
+        switch codec {
+        case .mpeg4, .mpeg2:
+            // NVDEC 2.0 decodes MPEG-4 Part 2 up to 2032x2032, and MPEG-2 content stops at 1080: no 4K clip.
+            let bitrate = codec == .mpeg2 ? 6_000_000 : 4_000_000
+            return [
+                Clip(codec: codec, width: 1280, height: 720, fps: 60, frames: 60, bitrate: bitrate),
+                Clip(codec: codec, width: 1920, height: 1080, fps: 60, frames: 60, bitrate: bitrate * 2),
             ]
-            : [
+        case .mpeg1:
+            return [Clip(codec: codec, width: 1280, height: 720, fps: 60, frames: 60, bitrate: 8_000_000)]
+        default:
+            return [
                 Clip(codec: codec, width: 1280, height: 720, fps: 60, frames: 60, bitrate: 1_000_000),
                 Clip(codec: codec, width: 1920, height: 1080, fps: 60, frames: 60, bitrate: 2_000_000),
                 Clip(codec: codec, width: 3840, height: 2160, fps: 30, frames: 30, bitrate: 4_000_000),
             ]
+        }
     }
 
     public static func named(_ file: String) -> Clip? { all.first { $0.file == file } }
