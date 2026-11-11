@@ -4,7 +4,10 @@
  * THERM slows the GPC clock only while one of its EXT_THERM inputs is asserted: _0 by 2, _1 by 4, _2 by 8, stepping
  * down through the gradual table. The inputs come from outside the GPU (on Tegra, SOC_THERM's GPU throttle; which of
  * its levels drives which input is not documented here), and no input asserted leaves the clock alone. Each write is
- * nvgpu's, in its order, with its fields from hw_therm_gm20b.h:
+ * nvgpu's, in its order, with its fields from hw_therm_gm20b.h. CLK_SLOWDOWN_0's idle factor (0x020160 bits 21:16, the
+ * GPC clock divided while GR idles: 4 is FPDIV_BY3 in gpmuif_pg.h) is not part of it: nvgpu's and nouveau's GM20B clock
+ * init clear it (gm20b_init_clk_setup_hw, gm20b_clk_init) and nvgpu clears it again around every clock count. Nothing in
+ * nvgpu's GM20B code writes L4T's 4, so it comes from its PMU firmware (inferred: ELPG runs there):
  *
  * Copyright (c) 2015-2018, NVIDIA CORPORATION.  All rights reserved.
  *
