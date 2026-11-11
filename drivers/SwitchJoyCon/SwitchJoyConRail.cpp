@@ -39,16 +39,17 @@
 //   then cmd 92 carries Bluetooth HID reports both ways: the host sends output reports (01 subcommand, 10 rumble) or
 //   the "request input" payload 1F (J:1525-1543), the Joy-Con answers with input reports (21, 30). The Joy-Con only
 //   speaks when spoken to (91/12 sets the interval it expects, it does not make it push: hekate and L4T keep asking)
-//   and drops HID mode after ~2 s without host packets (hekate 1257-1261), so the host asks every 15 ms (J:1809;
-//   hekate 1059-1074): the next queued output report, else 1F. That clock is the protocol, not a poll of hardware
-//   state: every reply is taken by interrupt. One clock (`poll`) serves both rails, so two seated Joy-Cons cost one
-//   wakeup per 15 ms, and it runs only while a Joy-Con is running: an empty rail, or a rail paused with the display,
-//   has no timer at all. A Joy-Con's stick calibration and dead zone are read from its SPI flash before its session
-//   runs (calibrate, SwitchJoyConStick.h), and a 0x30 report reaches the HID device only when it says something new
-//   (SwitchJoyConForward.h). Rumble (output report 0x10) goes out on the reply, as L4T's rumble worker does (J:1132-1138,
+//   and drops HID mode after ~2 s without host packets (hekate 1257-1261), so the host asks at the Joy-Con's cadence,
+//   every 15 ms (J:1809; hekate 1059-1074) or 30 ms while it is quiet (SwitchJoyConCadence.h): the next queued output
+//   report, else 1F. That clock is the protocol, not a poll of hardware state: every reply is taken by interrupt. One
+//   clock (`poll`) serves both rails, so two seated Joy-Cons cost one wakeup per tick, and it runs only while a
+//   Joy-Con is running: an empty rail, or a rail paused with the display, has no timer at all. A Joy-Con's stick
+//   calibration and dead zone are read from its SPI flash before its session runs (calibrate, SwitchJoyConStick.h), and
+//   a 0x30 report reaches the HID device only when it says something new (SwitchJoyConForward.h). Rumble (output
+//   report 0x10) goes out on the reply, as L4T's rumble worker does (J:1132-1138,
 //   1871-1905): right after the Joy-Con answers a request, the newest rumble report is sent if there is one it has not
 //   had, or again every 50 ms while it asks for a non-zero amplitude (L4T's keep-alive, J:1845-1851: a Joy-Con stops
-//   a vibration that is not refreshed). The request stays every 15 ms, so input never depends on whether the Joy-Con
+//   a vibration that is not refreshed). The request keeps its cadence, so input never depends on whether the Joy-Con
 //   answers a rumble report. Every output report the rail sends carries the rail's own packet counter (byte 1, mod 16:
 //   deku bluetooth_hid_notes.md "global packet number"), so a repeated rumble report is a new packet. The rail stays
 //   in input report mode 0x30, as the console and L4T keep it: JoyConHIDServicePlugin asks for 0x3F ("simple HID",
@@ -64,11 +65,12 @@
 // interrupt. A missing reply is either the Joy-Con gone (the line is silent) or a lost interrupt (bytes sit in the FIFO
 // with RX interrupts enabled, or the TX FIFO is empty with THRI enabled): that panics in one line with the UART
 // registers and the GIC state. A rail waiting for an attach arms nothing but the detect pin's interrupt;
-// tegra_gpio_check_delivery() (as SwitchButtons) looks at that pin when the display goes off, not on a timer. Every
-// packet also takes one THR-empty interrupt, so the interrupt count proves the UART's line reaches the CPU even when
-// nothing comes back.
+// tegra_gpio_check_delivery() (as SwitchButtons) looks at that pin when the display goes off, not on a timer. Until the
+// session runs, every packet also takes one THR-empty interrupt, so the interrupt count proves the UART's line reaches
+// the CPU even when nothing comes back; a running Joy-Con's replies prove it, and its requests, which fit the TX FIFO,
+// take none: one interrupt per request, the reply's.
 // Silence is counted in requests the Joy-Con left unanswered, not in time since its last reply, so a clock that fired
-// late cannot pass for a Joy-Con that stopped. A running Joy-Con is gone after 100 of them (1.5 s), not L4T's 500 ms
+// late cannot pass for a Joy-Con that stopped. A running Joy-Con is gone after 1.5 s of them, not L4T's 500 ms
 // (J:1793): it runs on its own battery, so a rail contact that bounces while the console is handled leaves it at
 // 3 Mbaud in HID mode with its input mode, IMU, lights and vibration as the plugin set them, and it answers the next
 // request once the contact is back. Detached at 500 ms it would ignore the 1 Mbaud wake until its own 2 s HID timeout
@@ -170,6 +172,7 @@
 #include "../TegraGPIO/TegraGPIO.h"
 #include "SwitchJoyCon.h"
 #include "SwitchJoyConHID.h"
+#include "SwitchJoyConCadence.h"
 #include "SwitchJoyConForward.h"
 #include "SwitchJoyConPairingSlot.h"
 #include "SwitchJoyConRailPacket.h"
@@ -400,10 +403,10 @@ constexpr uint8_t kReplyMagic[3] = {0x19, 0x81, 0x03};
 
 // Timing (J: 1709 retries, 1748 settle, 1793 silence, 1809 interval; hekate 1257 handshake reply).
 constexpr uint32_t kSettleMS = 64, kHandshakeMS = 100, kCommandMS = 250, kRetryMS = 100, kAttempts = 30;
-constexpr uint32_t kSubcommandMS = 1000, kIntervalMS = 15;
-// Unanswered requests (see the header): a running Joy-Con is gone after kSilentRequests; one that answers again after
-// kQuietRequests or more is logged.
-constexpr uint32_t kSilentRequests = 1500 / kIntervalMS, kQuietRequests = 500 / kIntervalMS;
+constexpr uint32_t kSubcommandMS = 1000;
+// Unanswered requests (see the header), in the intervals they were sent at: a running Joy-Con is gone after kSilentMS;
+// one that answers again after kQuietMS or more is logged.
+constexpr uint32_t kSilentMS = 1500, kQuietMS = 500;
 // A non-zero rumble is sent again this often (L4T JC_RUMBLE_PERIOD_MS, J:470).
 constexpr uint32_t kRumbleKeepAliveMS = 50;
 // After the 3 Mbaud switch: 91/11 every 5 ms for up to 200 ms (hekate 1325-1341: ten sends 5 ms apart; L4T's retry
@@ -523,12 +526,13 @@ OSDefineMetaClassAndStructors(SwitchJoyConPairing, IOService)
         uint64_t lastReply;
         uint32_t reports;     // input reports since the handshake completed
         uint32_t unanswered;  // requests sent since the last reply (header: silence)
+        uint32_t silentMs;    // the intervals they were sent at, summed
         uint32_t errorsAtReply, breaksAtReply;
         // Since boot, for kern.switch_joycon (debug kernels): input reports, packets dropped for a length no Joy-Con
-        // sends, silences that detached it, silences of kQuietRequests or more it answered after, devices republished;
-        // input reports handed to the HID device and held back (SwitchJoyConForward.h).
+        // sends, silences that detached it, silences of kQuietMS or more it answered after, devices republished; requests
+        // sent, packets that answered none, input reports handed to the HID device and held back (SwitchJoyConForward.h).
         uint32_t replies, dropped, silences, recoveries, republished;
-        uint32_t forwarded, suppressed;
+        uint32_t requests, unsolicited, forwarded, suppressed;
         uint8_t packet[kMaxRx];
         size_t packetLength;
         bool oversizeLogged;
@@ -565,10 +569,14 @@ OSDefineMetaClassAndStructors(SwitchJoyConPairing, IOService)
         bool rumbleFresh;
         switch_joycon_forward forward;
         switch_joycon_use use;
-        // The stick as this session's Joy-Con describes it (calibrate), kept for the boot by BD_ADDR.
+        // The stick as this session's Joy-Con describes it (calibrate), kept for the boot by BD_ADDR; the cadence and
+        // the last report it was judged by (SwitchJoyConCadence.h).
         switch_joycon_stick stick;
         uint8_t stickMac[6];
         bool stickKnown;
+        switch_joycon_cadence cadence;
+        uint8_t state[12];
+        bool stateKnown;
         // Work loop: the Joy-Con's IMU is to be turned off at the next tick (its HID client wanted motion and went), and
         // the subcommand of the rail's own whose reply is not the HID device's.
         bool imuOff;
@@ -1133,7 +1141,9 @@ void SwitchJoyConRail::uartAction(OSObject *owner, IOInterruptEventSource *sende
 void SwitchJoyConRail::received(Side &s, const uint8_t *packet, size_t length)
 {
     const uint64_t now = switch_now_ms();
-    if (s.phase == kRunning && s.unanswered > kQuietRequests) {
+    if (s.phase == kRunning && s.unanswered == 0 && !s.rumbleSent)
+        ++s.unsolicited;
+    if (s.phase == kRunning && s.silentMs > kQuietMS) {
         IOLog("SwitchJoyCon: Joy-Con (%c) on the rail answered again after %u requests unanswered over %llu ms (line "
               "errors %u, breaks %u in between)\n",
               s.cfg->letter, s.unanswered - 1, now - s.lastReply, s.lineErrors - s.errorsAtReply,
@@ -1142,6 +1152,7 @@ void SwitchJoyConRail::received(Side &s, const uint8_t *packet, size_t length)
     }
     s.lastReply = now;
     s.unanswered = 0;
+    s.silentMs = 0;
     s.errorsAtReply = s.lineErrors;
     s.breaksAtReply = s.breaks;
     const uint8_t cmd = packet[5];
@@ -1183,10 +1194,13 @@ void SwitchJoyConRail::send(Side &s, const uint8_t *bytes, size_t length)
         s.txLength = static_cast<uint32_t>(length);
         s.txPosition = 0;
         fillTx(s);
-        // THR-empty armed even when the packet fit: its interrupt (fillTx disarms it) is the proof, counted in
-        // `interrupts`, that this UART's line reaches the CPU while the Joy-Con says nothing.
-        s.ier |= IER_THRI;
-        wr(s, IER, s.ier);
+        // THR-empty armed for the rest of a packet the FIFO did not take, and before the session runs even when it fit:
+        // there its interrupt (fillTx disarms it) is the proof, counted in `interrupts`, that this UART's line reaches
+        // the CPU while the Joy-Con says nothing. A running Joy-Con's every reply proves it, so its requests take none.
+        if (s.txPosition < s.txLength || s.phase != kRunning) {
+            s.ier |= IER_THRI;
+            wr(s, IER, s.ier);
+        }
     }
     IOSimpleLockUnlockEnableInterrupt(s.lock, state);
     if (busy)
@@ -1738,8 +1752,11 @@ void SwitchJoyConRail::run(Side &s)
     s.phase = kRunning;
     s.lastReply = switch_now_ms();
     s.unanswered = 0;
+    s.silentMs = 0;
     s.imuOff = false;
     s.ownReply = 0;
+    s.stateKnown = false;
+    switch_joycon_cadence_reset(&s.cadence, s.lastReply);
     s.errorsAtReply = s.lineErrors;
     s.breaksAtReply = s.breaks;
     s.reports = 0;
@@ -1868,15 +1885,22 @@ void SwitchJoyConRail::republish(Side &s)
     }
 }
 
-// The shared 15 ms clock: armed while any Joy-Con runs, left to lapse when none does (see the header). Sides that stop
-// running elsewhere (detach, pause, pairing) need nothing: the next fire finds them gone and does not re-arm.
+// The shared clock, at the shortest cadence of the running Joy-Cons (SwitchJoyConCadence.h): armed while any Joy-Con
+// runs, left to lapse when none does (see the header). Sides that stop running elsewhere (detach, pause, pairing) need
+// nothing: the next fire finds them gone and does not re-arm.
 void SwitchJoyConRail::armPoll()
 {
     polling = false;
-    for (const Side &s : sides)
-        polling |= s.phase == kRunning;
+    uint32_t interval = SWITCH_JOYCON_CADENCE_QUIET_MS;
+    for (const Side &s : sides) {
+        if (s.phase != kRunning)
+            continue;
+        polling = true;
+        if (switch_joycon_cadence_interval(&s.cadence) < interval)
+            interval = SWITCH_JOYCON_CADENCE_ACTIVE_MS;
+    }
     if (polling)
-        poll->setTimeoutMS(kIntervalMS);
+        poll->setTimeoutMS(interval);
 }
 
 void SwitchJoyConRail::pollAction(OSObject *owner, IOTimerEventSource *)
@@ -1890,15 +1914,15 @@ void SwitchJoyConRail::pollAction(OSObject *owner, IOTimerEventSource *)
     self->armPoll();
 }
 
-// One request per 15 ms: the IMU off its HID client left on, else the oldest queued output report (subcommands keep
-// their order), else the input request, after the tail of the last reply a late RX channel left. A Joy-Con that left
-// kSilentRequests unanswered is gone (header).
+// A request at the Joy-Con's cadence (SwitchJoyConCadence.h): the IMU off its HID client left on, else the oldest
+// queued output report (subcommands keep their order), else the input request, after the tail of the last reply a late
+// RX channel left. A Joy-Con that left kSilentMS of requests unanswered is gone (header).
 void SwitchJoyConRail::tick(Side &s)
 {
     takeTail(s);
     if (s.phase != kRunning)
         return;
-    if (s.unanswered >= kSilentRequests) {
+    if (s.silentMs >= kSilentMS) {
         checkDelivery(s, "no reply to the requests of a whole silence");
         // Pulled off the rail, or the HID phase does not work (0 reports): either way it is handshaken again if seated.
         const char *rxDma = s.dma && !s.dmaOff ? "idle" : "off";
@@ -1921,7 +1945,15 @@ void SwitchJoyConRail::tick(Side &s)
         endSession(s);
         return;
     }
+    IOLockLock(s.outLock);
+    const bool busy = s.queueHead != s.queueTail || s.rumbleFresh || s.forward.imu ||
+                      switch_joycon_rumble_moving(s.cfg->left, s.rumble, s.rumbleLength);
+    IOLockUnlock(s.outLock);
+    if (!switch_joycon_cadence_due(&s.cadence, busy || s.imuOff, switch_now_ms()))
+        return;
     ++s.unanswered;
+    ++s.requests;
+    s.silentMs += switch_joycon_cadence_interval(&s.cadence);
     s.rumbleSent = false;
     s.ownReply = 0;
     if (s.imuOff) {
@@ -1949,9 +1981,8 @@ void SwitchJoyConRail::tick(Side &s)
 }
 
 // After a reply to a request: the newest rumble report if the Joy-Con has not had it, or the last one again every 50 ms
-// while it asks for a non-zero amplitude on this Joy-Con (L4T joycon_send_rumble_data: the left half of the 8 rumble
-// bytes drives a Joy-Con (L), the right half a Joy-Con (R); zero amplitude is 0x40000000 under mask 0xFF80FE00, LE).
-// A reply to the rumble report itself sends nothing.
+// while it asks for a non-zero amplitude on this Joy-Con (switch_joycon_rumble_moving). A reply to the rumble report
+// itself sends nothing.
 void SwitchJoyConRail::rumbleAfterReply(Side &s)
 {
     if (s.rumbleSent || !txIdle(s))
@@ -1961,10 +1992,7 @@ void SwitchJoyConRail::rumbleAfterReply(Side &s)
     const uint64_t now = switch_now_ms();
     IOLockLock(s.outLock);
     if (s.rumbleLength >= 10) {
-        const uint8_t *half = s.rumble + (s.cfg->left ? 2 : 6);
-        const uint32_t word = half[0] | static_cast<uint32_t>(half[1]) << 8 | static_cast<uint32_t>(half[2]) << 16 |
-                              static_cast<uint32_t>(half[3]) << 24;
-        const bool moving = (word & 0xff80fe00u) != 0x40000000u;
+        const bool moving = switch_joycon_rumble_moving(s.cfg->left, s.rumble, s.rumbleLength);
         if (s.rumbleFresh || (moving && now - s.rumbleAt >= kRumbleKeepAliveMS)) {
             length = s.rumbleLength;
             memcpy(report, s.rumble, length);
@@ -1976,6 +2004,7 @@ void SwitchJoyConRail::rumbleAfterReply(Side &s)
         return;
     s.rumbleSent = true;
     s.rumbleAt = now;
+    ++s.requests;
     sendOutput(s, report, length);
 }
 
@@ -1995,6 +2024,12 @@ void SwitchJoyConRail::runningReport(Side &s, const uint8_t *report, size_t leng
     ++s.replies;
     rumbleAfterReply(s);
     switch_joycon_hid_buttons(s.cfg->left, report, length);
+    if (length >= sizeof(s.state) && report[0] != kReportReply) {
+        switch_joycon_cadence_input(
+            &s.cadence, !s.stateKnown || switch_joycon_cadence_engaged(&s.stick, s.state, report), switch_now_ms());
+        memcpy(s.state, report, sizeof(s.state));
+        s.stateKnown = true;
+    }
 #if XNU_12377_121_6
     if (switch_joycon_use_report(&s.use, &s.stick, report, length))
         noteUse();
@@ -2461,11 +2496,13 @@ void SwitchJoyConRail::statsLine(char *buffer, size_t size) const
         const int n = snprintf(buffer + used, size - used,
                                "%s%c running=%d dma=%s replies=%u late=%u tails=%u errors=%u breaks=%u overflows=%u "
                                "dropped=%u silences=%u recoveries=%u republished=%u gamepad=%d published=%u idled=%u "
-                               "forwarded=%u suppressed=%u deadzone=%u calibrated=%d",
+                               "requests=%u interrupts=%u unsolicited=%u forwarded=%u suppressed=%u quiet=%d "
+                               "deadzone=%u calibrated=%d",
                                used ? "; " : "", s.cfg->letter, s.phase == kRunning ? 1 : 0, s.dmaOn ? "on" : "off",
                                s.replies, s.dmaLate, s.dmaTails, s.lineErrors, s.breaks, s.overflows, s.dropped,
                                s.silences, s.recoveries, s.republished, s.hid ? 1 : 0, gamepadsPublished, gamepadsIdled,
-                               s.forwarded, s.suppressed, s.stick.dead_zone, s.stickKnown ? 1 : 0);
+                               s.requests, s.interrupts, s.unsolicited, s.forwarded, s.suppressed,
+                               s.cadence.quiet ? 1 : 0, s.stick.dead_zone, s.stickKnown ? 1 : 0);
         if (n < 0 || static_cast<size_t>(n) >= size - used)
             break;
         used += static_cast<size_t>(n);
@@ -2488,11 +2525,13 @@ static void registerStats()
     static struct sysctl_oid oid;
     if (oid.oid_name)
         return;
-    switch_sysctl_oid(&oid, &sysctl__kern_children, "switch_joycon",
-                      static_cast<int>(CTLTYPE_STRING | CTLFLAG_RD | CTLFLAG_LOCKED), statsSysctl, "A",
-                      "each rail: running, RX DMA, and since boot its replies, late and tail takes, "
-                      "line errors, breaks, overflows, dropped packets, silences, recoveries, republished devices, "
-                      "reports forwarded and held back; its stick dead zone");
+    switch_sysctl_oid(
+        &oid, &sysctl__kern_children, "switch_joycon", static_cast<int>(CTLTYPE_STRING | CTLFLAG_RD | CTLFLAG_LOCKED),
+        statsSysctl, "A",
+        "each rail: running, RX DMA, and since boot its replies, late and tail takes, "
+        "line errors, breaks, overflows, dropped packets, silences, recoveries, republished devices, "
+        "requests, UART interrupts, unsolicited packets, reports forwarded and held back; its cadence and "
+        "stick dead zone");
     sysctl_register_oid(&oid);
 }
 #endif

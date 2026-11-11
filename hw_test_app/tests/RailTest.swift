@@ -4,16 +4,16 @@ import GameController
 import HWTestCore
 
 /// The Joy-Con rails' transport for a few seconds with nobody touching anything, from the rail driver's counters
-/// (kern.switch_joycon, debug kernels). Each running rail asks its Joy-Con for a report every 15 ms, so its replies
-/// show how many requests went unanswered; in the window no packet may be dropped, no Joy-Con may fall silent or be
-/// published again, RX DMA has to stay on, and no game controller may disconnect.
+/// (kern.switch_joycon, debug kernels). Each running rail asks its Joy-Con for a report every 15 or 30 ms
+/// (SwitchJoyConCadence.h), so its replies against its requests show how many went unanswered; in the window no packet
+/// may be dropped, no Joy-Con may fall silent or be published again, RX DMA has to stay on, and no game controller may
+/// disconnect.
 struct RailTest: HWTest {
     let id = "input.rail"
     let name = "Joy-Con rails: replies, drops and resets over 5 s"
     let subsystem = Subsystem.input
 
     static let seconds = 5.0
-    static let requestsPerSecond = 1000.0 / 15.0
     static let resets = ["silences", "recoveries", "republished"]
 
     struct Rail {
@@ -78,12 +78,14 @@ struct RailTest: HWTest {
         var answered = true, dropped = 0, resets = 0, dmaOn = true
         for letter in rails {
             guard let now = after[letter], let then = before[letter] else { continue }
-            let rate = Double(now.delta("replies", since: then)) / elapsed
-            metrics.set("\(letter)_replies_hz", rate, digits: 1)
+            let rail = letter.lowercased()
+            let replies = now.delta("replies", since: then), requests = now.delta("requests", since: then)
+            metrics.set("\(rail)_replies_hz", Double(replies) / elapsed, digits: 1)
+            metrics.set("\(rail)_requests_hz", Double(requests) / elapsed, digits: 1)
             for name in ["late", "tails", "errors", "breaks", "overflows", "dropped"] + Self.resets {
-                metrics.set("\(letter)_\(name)", now.delta(name, since: then))
+                metrics.set("\(rail)_\(name)", now.delta(name, since: then))
             }
-            answered = answered && rate >= 0.9 * Self.requestsPerSecond
+            answered = answered && requests > 0 && Double(replies) >= 0.9 * Double(requests)
             dropped += now.delta("dropped", since: then) + now.delta("overflows", since: then)
             resets += Self.resets.map { now.delta($0, since: then) }.reduce(0, +)
             dmaOn = dmaOn && now.dma

@@ -189,6 +189,7 @@ TESTS: dict[str, bool] = {
     'input.joycon': False,
     'input.focus_idle': False,
     'input.rail': False,
+    'input.joycon_idle': False,
     'gpu.texture.kinds': False,
     'system.union_readdir': False,
     'system.overlay_apps': False,

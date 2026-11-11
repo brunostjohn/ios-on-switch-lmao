@@ -2,7 +2,8 @@
 // Which of a rail Joy-Con's reports reach its HID device (SwitchJoyConRail.cpp runningReport; the host test
 // test/switch_joycon_forward_test.cpp drives this header).
 //
-// The rail asks for a report every 15 ms because a rail Joy-Con only speaks when spoken to, and each report handed to the HID device wakes backboardd's HID event system and JoyConHIDServicePlugin. So a
+// The rail asks for a report every 15 or 30 ms (SwitchJoyConCadence.h) because a rail Joy-Con only speaks when spoken
+// to, and each report handed to the HID device wakes backboardd's HID event system and JoyConHIDServicePlugin. So a
 // 0x30 report goes on only when it says something new: its buttons, its battery level or charging, or its stick moved
 // from where it was in the last one handed on, by the Joy-Con's own dead zone (SwitchJoyConStick.h) over 16 while it is
 // out of the dead zone (10 counts for 0xAE, about L4T's stick fuzz: joycon-serdev.c 140, 250 of 32767 is 10 counts of a
