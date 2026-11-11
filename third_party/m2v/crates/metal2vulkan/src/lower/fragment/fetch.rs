@@ -62,7 +62,9 @@
 //!   `unorm4x8_srgb`; EV XRR2-srgb1-m4 on the M4: every byte read, a texel an earlier draw of the
 //!   pass wrote read as the decode of its stored byte, every encode threshold, 4, 194, 304 floats
 //!   and every half written). The one- and two-channel sRGB formats are not measured, and stay
-//!   refused.
+//!   refused. `BGR5A1Unorm`, where the device grants `A1R5G5B5_UNORM_PACK16` no storage access
+//!   (NVK), is viewed in `R16_UINT` alike, its channels unpacked and packed by the function
+//!   (`packed`).
 //!
 //! **Per sample**. Metal runs a function that reads a color attachment of a multisampled pass once
 //! per covered sample, reading its own sample, in draw order per sample, with `[[position]]`'s x
@@ -361,10 +363,10 @@ pub struct StorageView {
     /// [`blend`](Self::blend) is the device's fixed-function blend, computed in the shader by its
     /// model (`rop_blend`), the attachment's device blend off.
     pub rop: bool,
-    /// The unsigned-integer format of the texel size an sRGB attachment is viewed in
-    /// (`StorageAttachmentUse::uint_view`): the declaration's texels are its `uint`s, which a
-    /// read unpacks and decodes and a write encodes and packs, by Metal's measured conversions.
-    /// `None` for another format.
+    /// The unsigned-integer format of the texel size an sRGB or `BGR5A1Unorm` attachment is
+    /// viewed in (`StorageAttachmentUse::uint_view`): the declaration's texels are its `uint`s,
+    /// which a read unpacks and decodes and a write encodes and packs, by Metal's measured
+    /// conversions. `None` for another format.
     pub uint_view: Option<vk::Format>,
 }
 
@@ -537,8 +539,11 @@ pub(crate) fn storage_form(
     // twelve-bit decode of the stored byte, `math::unpack`'s, even after an earlier draw of the
     // pass wrote it, and a write stores `math::pack`'s encode). The one- and two-channel sRGB
     // formats are not measured, nor is a blend into one.
+    // A `BGR5A1Unorm` attachment, which NVK grants no storage access, is viewed in `R16_UINT`, its
+    // channels unpacked and packed by the function (`packed`).
     let uint_view = StorageAttachmentUse::uint_view_of(format).filter(|&u| {
-        srgb && u == vk::Format::R32_UINT && mapping.emulation == FormatEmulation::Direct
+        mapping.emulation == FormatEmulation::Direct
+            && ((srgb && u == vk::Format::R32_UINT) || format == packed::FORMAT)
     });
     let viewed = uint_view.unwrap_or(format);
     let writes = use_.writes;
@@ -1323,7 +1328,7 @@ pub(super) fn select_read(cx: &mut SelectCx<'_>, c: ColorInput) -> Result<(), Er
         cx.families.arith.converts(e);
     }
     // An sRGB texel decodes through Metal's twelve-bit table.
-    if sc.view.uint_view.is_some() {
+    if sc.view.uint_view.is_some() && sc.view.format != packed::FORMAT {
         cx.families.arith.srgb.get_or_insert(PackDir::Unpack);
     }
     plan_sample(cx)?;
@@ -1458,7 +1463,9 @@ pub fn select_output(
         if !measured || form.lanes != 4 {
             return Err(Unsupported::not_implemented(Feature::Format).into());
         }
-        cx.families.arith.srgb.get_or_insert(PackDir::Pack);
+        if sc.view.format != packed::FORMAT {
+            cx.families.arith.srgb.get_or_insert(PackDir::Pack);
+        }
         if let Some(rules) = cx.inputs.color_writes.get(&color).copied() {
             cx.families
                 .stage_io
@@ -1807,6 +1814,10 @@ pub(super) fn value(
             let table = crate::lower::texture::extended_table(cx, form)?;
             extended_range::tile_value(fb, form, texel, table)?
         }
+        (None, Some(_)) if sc.view.format == packed::FORMAT => {
+            let word = fb.composite_extract(texel, &[0])?;
+            packed::decode(fb, word)?
+        }
         (None, Some(_)) => {
             let Some(table) = cx.decl.families.arith.srgb else {
                 return Err(cx.fail("an sRGB storage read without Metal's table"));
@@ -1889,7 +1900,10 @@ pub(super) fn emit_return(
                     true => rop_blended(cx, fb, color, &sc, (form, part), second)?,
                     false => (form, part),
                 };
-                srgb_texel(cx, fb, color, &sc, form, part)?
+                match sc.view.format {
+                    packed::FORMAT => packed::texel(cx, fb, color, &sc, form, part)?,
+                    _ => srgb_texel(cx, fb, color, &sc, form, part)?,
+                }
             }
             (None, _) => {
                 // Metal's 16-bit float blend of a `half4` output, or the device's blend by its
@@ -2423,6 +2437,7 @@ fn texel_of(
     fb.convert(ConvOp::Bitcast, texel, ivec4)
 }
 
+mod packed;
 mod rop;
 
 use rop::{rop_blended, rop_of};

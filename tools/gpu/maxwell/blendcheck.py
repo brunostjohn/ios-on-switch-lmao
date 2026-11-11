@@ -60,7 +60,11 @@ FORMATS = {
     115: (4, None, True),
     65: (2, None, True),
     55: (1, None, False),
+    43: (4, (5, 5, 5, 1), False),
 }
+# BGR5A1Unorm, which the storage form views in R16_UINT (m2v lower/fragment/fetch/packed.rs): each channel's offset in
+# the texel, red first. Its program stores the texel's word, of each blended channel's nearest code.
+PACKED = {43: (10, 5, 0, 15)}
 SOURCE_SAMPLE, SECOND_SAMPLE = 0x3E800000, 0x3F400000  # the sample coordinates' x: 0.25 and 0.75
 PUSH_BASE = 0x700
 
@@ -113,12 +117,16 @@ STATES = (
     + [(65, b, 15) for b in ('sov', 'min', 'const')]
     + [(65, 'sov', 4)]
     + [(55, b, 15) for b in ('sov', 'sub', 'max', 'mul')]
+    + [(43, b, 15) for b in ('sov', 'const', 'mul', 'sub')]
+    + [(43, 'sov', 14), (43, 'ca_da', 9)]
 )
 # Functions that declare the color they write but never read it: the device keeps their blend, no storage form.
 UNREAD = [(80, 'sov', 15), (115, 'mul', 15)]
 # A function whose output's green is the constant 0 (rop_frag_const) on float targets, where a product of it with an
 # infinity or a NaN, and its sum with a -0, are the model's only if the compiler keeps them
 CONSTANT = [(115, 'sep', 15), (115, 'sov', 15), (65, 'sep', 15)]
+# Unblended writes of a packed format, which its storage form packs as Metal writes the output: through a half first
+UNBLENDED = [(43, 15), (43, 14)]
 
 
 def corpus() -> list[str]:
@@ -133,11 +141,13 @@ def corpus() -> list[str]:
     for fmt, name, mask in CONSTANT:
         f = [FACTOR[x] if x in FACTOR else OP[x] for x in BLENDS[name]]
         lines.append(line(fmt, f'{name}_const', mask, f, 'rop_frag_const'))
+    for fmt, mask in UNBLENDED:
+        lines.append(line(fmt, 'none', mask, [1, 0, 0, 1, 0, 0], 'rop_frag', blending=0))
     return lines
 
 
-def line(fmt: int, name: str, mask: int, f: list[int], fragment: str) -> str:
-    c0 = ':'.join(str(v) for v in [fmt, mask, 1, *f])
+def line(fmt: int, name: str, mask: int, f: list[int], fragment: str, blending: int = 1) -> str:  # noqa: PLR0913, PLR0917  a state's fields
+    c0 = ':'.join(str(v) for v in [fmt, mask, blending, *f])
     return f'R ok=1 label=ropcheck.{fmt}_{name}_{mask} samples=1 topo=0 ds=0/0 c0={c0} | v rop_vert  | f {fragment}  | '
 
 
@@ -178,6 +188,8 @@ class Model:
         self.components, self.bits, self.half = FORMATS[self.fmt]
         self.vector = 'rop_frag_r' not in key
         self.constant_green = 'rop_frag_const' in key
+        self.packed = PACKED.get(self.fmt)
+        self.blending = bool(c0[2])
 
     def source(self, sampled: list[int]) -> list[int]:
         """Give the output the function computes of its sample (the blend's source)."""
@@ -236,6 +248,16 @@ class Model:
     def stored(self) -> list[int]:
         return [k for k in range(self.components) if self.mask >> (3 - k) & 1]
 
+    def packed_word(self, want: list[int], loaded: int) -> int:
+        """Give the texel a packed format's program stores: each stored channel's nearest code, the kept ones'."""
+        out = 0
+        for k, (at, bits) in enumerate(zip(self.packed, self.bits, strict=True)):
+            top = (1 << bits) - 1
+            stored = want[k] if self.blending else convert(convert(want[k], F32, F16), F16, F32)
+            code = nearest_code(stored, top) if k in self.stored() else loaded >> at & top
+            out |= code << at
+        return out
+
     def kept(self) -> list[int]:
         """Give the format's channels the write mask keeps, which the draw's push word names."""
         return [k for k in range(self.components) if not self.mask >> (3 - k) & 1]
@@ -250,6 +272,16 @@ def word(rng: random.Random, normalized: bool) -> int:
     return struct.unpack('<I', struct.pack('<f', rng.uniform(-0.25, 1.25)))[0]
 
 
+def nearest_code(x: int, top: int) -> int:
+    """Give the code of `x` (an f32's bits) in a channel of largest code `top`.
+
+    The value is clamped to [0, 1] (NaN 0) and its exact product with `top` rounded to nearest even.
+    """
+    v = struct.unpack('<f', struct.pack('<I', x))[0]
+    v = 0.0 if math.isnan(v) else min(max(v, 0.0), 1.0)
+    return round(Fraction(v) * top)
+
+
 def destination(rng: random.Random, m: Model) -> tuple[list[int], list[int]]:
     """Give a destination texel as the surface load gives it and its exact value.
 
@@ -259,6 +291,8 @@ def destination(rng: random.Random, m: Model) -> tuple[list[int], list[int]]:
         codes = [rng.randrange(1 << b) for b in m.bits] + [0] * (4 - len(m.bits))
         tops = [(1 << b) - 1 for b in m.bits] + [1] * (4 - len(m.bits))
         exact_d = [exact(c, t) for c, t in zip(codes, tops, strict=True)]
+        if m.packed:
+            return [sum(c << at for c, at in zip(codes, m.packed, strict=True)), 0, 0, 0], exact_d
         if rng.random() < 0.5:
             return exact_d, exact_d
         loaded = [
@@ -308,6 +342,10 @@ def check(fs: bytes, key: str, push: dict[int, int], n: int, seed: int, bound: i
             if killed or len(stores) != 1:
                 return f'different: quad {i} lane {lane}: {len(stores)} stores, killed {killed}'
             got = list(stores[0][2])
+            if m.packed:
+                if got[:1] != [m.packed_word(want, loaded[0])]:
+                    return f'different: quad {i} lane {lane}: {got[:1]} vs {m.packed_word(want, loaded[0]):#x}'
+                continue
             for k in m.kept():
                 if k >= len(got) or got[k] != loaded[k]:
                     seen = hex(got[k]) if k < len(got) else None

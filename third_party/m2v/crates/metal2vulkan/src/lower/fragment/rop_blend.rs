@@ -110,6 +110,7 @@ fn unorm_steps(format: vk::Format, bits: Option<u32>) -> Option<[u32; 4]> {
         (vk::Format::A2B10G10R10_UNORM_PACK32 | vk::Format::A2R10G10B10_UNORM_PACK32, _) => {
             Some([1023, 1023, 1023, 3])
         }
+        (vk::Format::A1R5G5B5_UNORM_PACK16, _) => Some([31, 31, 31, 1]),
         _ => None,
     }
 }
@@ -218,9 +219,20 @@ fn unit(fb: &mut FunctionBuilder<'_>, x: Value) -> BResult<Value> {
 /// the quotient, which is exact for every code of up to 16 bits.
 fn exact_unorm(fb: &mut FunctionBuilder<'_>, d: Value, steps: [u32; 4]) -> BResult<Value> {
     let m = per_lane(fb, steps.map(|s| s as f32))?;
-    let r = per_lane(fb, steps.map(|s| 1.0 / s as f32))?;
     let scaled = fb.binary_no_contraction(BinOp::FMul, d, m)?;
     let code = fb.glsl(GlslOp::RoundEven, &[scaled])?;
+    exact_quotient(fb, code, steps)
+}
+
+/// The `f32` nearest `c / m` for each lane's code `c` (a `vec4` of `f32`) and largest code `m`:
+/// the product with `m`'s reciprocal and one Newton step, exact for every code of up to 16 bits.
+pub(crate) fn exact_quotient(
+    fb: &mut FunctionBuilder<'_>,
+    code: Value,
+    steps: [u32; 4],
+) -> BResult<Value> {
+    let m = per_lane(fb, steps.map(|s| s as f32))?;
+    let r = per_lane(fb, steps.map(|s| 1.0 / s as f32))?;
     let q = fb.binary_no_contraction(BinOp::FMul, code, r)?;
     let negq = fb.unary(crate::spirv::ir::UnOp::FNegate, q)?;
     let e = fb.glsl(GlslOp::Fma, &[negq, m, code])?;
