@@ -17,3 +17,8 @@ void switch_gm20b_constant_color_off(struct nv_push *p)
 {
     P_IMMD(p, NVB197, SET_CONSTANT_COLOR_RENDERING, ENABLE_FALSE);
 }
+
+void switch_gm20b_fill_via_triangle(struct nv_push *p, uint32_t mode)
+{
+    P_IMMD(p, NVB197, SET_FILL_VIA_TRIANGLE, mode);
+}
