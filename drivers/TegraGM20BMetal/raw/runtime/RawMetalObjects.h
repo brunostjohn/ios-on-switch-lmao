@@ -3,6 +3,7 @@
 #import <Foundation/Foundation.h>
 #import <Metal/Metal.h>
 #include <atomic>
+#include <bitset>
 #include <condition_variable>
 #include <map>
 #include <mutex>
@@ -383,6 +384,8 @@ uint64_t nextTraceId();
     RMTexture *_tex[16];   // fragment textures (unretained: the command buffer retains what it binds)
     RMSampler *_samp[16];  // fragment samplers, alike; `_cubicMask`: the slots of those that are cubic (raw_cubic.h)
     uint16_t _cubicMask;
+    std::bitset<128> _vertexTextures;  // the vertex slots a texture is bound at
+    std::bitset<16> _vertexSamplers;   // and a sampler
     uint64_t _checkedGeneration;
     const raw::Pipeline *_checkedPipeline;
     raw::Pipeline *_drawn;

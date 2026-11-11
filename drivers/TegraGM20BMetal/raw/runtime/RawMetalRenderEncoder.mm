@@ -211,6 +211,13 @@ static void forwardCall(RMEncoder *e, SEL selector, const void *argument)
     // formats are not recorded, and every draw would hit enc.colorfmt for nothing, r7p5's "a=0 b=0")
     if (!_pipe || !_pipe->_raw || _cb->_encRefused)
         return;
+    // No raw record binds a vertex-stage texture or sampler: one made at run time is refused at its making where its vertex
+    // function samples (raw_direct.cpp takes stage 2's alone), but the pack's probe binds none at the vertex stage, so a pack
+    // record cannot tell a vertex function that samples from one that does not
+    if (_pipe->_packed && (_vertexTextures.any() || _vertexSamplers.any())) {
+        [_cb takeReason:WhyCall why:@"a vertex texture or sampler beside a pack state"];
+        return hit(_cb, PredCallVertexSampler, _vertexTextures.count(), _vertexSamplers.count());
+    }
     if (_checkedGeneration == _cb->_plan.eligibilityGeneration() && _checkedPipeline == _pipe->_raw)
         return;
     const raw::Pipeline &pl = *_pipe->_raw;
