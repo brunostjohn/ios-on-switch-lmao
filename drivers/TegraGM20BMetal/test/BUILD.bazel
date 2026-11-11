@@ -37,6 +37,9 @@
 #                     buffers as its whole program does
 #   raw_tiled_cache_test  raw/runtime/raw_tiled_cache.h: with the kernel's tiled-cache bit, deko3d's configuration then the
 #                     enable at context init and one flush per pass and per command buffer; nothing without it
+#   raw_probe_forms_test  raw/runtime/raw_probe_forms.h and raw_probe_ops.h (hw_test_app's barrier and 2D-engine probes,
+#                     debug builds): today's forms are the words the runtime sent before, the relaxed ones never idle and
+#                     are the planner's, the 2D work copies and resolves as the 2D engine model does
 #   raw_comp_test     raw/runtime/raw_comp.h: the compressible kinds the raw path binds are the kernel kind table's (nouveau
 #                     gm200_mmu_kind) and demote as it says; the boot ZBC values read alike by Metal and NV format
 #   stage_test        stage-tegra-gm20b-metal.py on a directory standing in for the Data volume
@@ -553,6 +556,30 @@ host_test(
     ],
     cxx_std = "c++17",
     deps = ["//kits/SwitchGM20B:classes"],
+)
+
+host_test(
+    name = "raw_probe_forms_test",
+    srcs = [
+        "raw_probe_forms_test.cpp",
+        "//drivers/TegraGM20B:TegraGM20BLayout.h",
+        "//drivers/TegraGM20BMetal:raw/fx/fx_mip.cpp",
+        "//drivers/TegraGM20BMetal:raw/fx/fx_mip.h",
+        "//drivers/TegraGM20BMetal:raw/fx/test/twod_sim.cpp",
+        "//drivers/TegraGM20BMetal:raw/fx/test/twod_sim.h",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_probe_forms.h",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_probe_ops.h",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_push.h",
+    ],
+    copts = [
+        "-I",
+        "drivers/TegraGM20B",
+    ],
+    cxx_std = "c++17",
+    deps = [
+        "//kits/SwitchGM20B:classes",
+        "//kits/SwitchGM20BEmit:emit",
+    ],
 )
 
 host_test(

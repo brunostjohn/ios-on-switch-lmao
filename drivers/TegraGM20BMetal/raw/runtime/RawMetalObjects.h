@@ -254,6 +254,16 @@ struct RMSharedEventWait {
     bool _encOpen, _encRefused, _whole;
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
     bool _forceWholePrograms;
+    // hw_test_app's probes (RawMetalProbe.mm): its barriers' forms, where they took effect, and its 2D-engine work, each
+    // at the blit encoder whose first command is at `at`
+    raw::ProbeForms _probeForms;
+    raw::ProbeTaken _probeTaken;
+    struct ProbeOp {
+        size_t at;
+        raw::ProbeOp op;
+        RMTexture *read, *written;
+    };
+    std::vector<ProbeOp> _probeOps;
 #endif
     std::vector<RMSegment> _segs;
     size_t _segNext;

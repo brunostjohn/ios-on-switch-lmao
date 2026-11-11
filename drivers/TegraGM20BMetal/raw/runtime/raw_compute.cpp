@@ -125,12 +125,17 @@ ComputeEncoder::ComputeEncoder(CommandBuffer &cb, Device &dev) : cb_(cb), dev_(d
     // what the render and copy work before wrote, out of the SMs' data, constant and texture caches; the scheduler's cached
     // QMDs (the upload ring reuses their addresses) and the compute class's header caches, as NVK opens a command buffer's
     // compute work (nvk_cmd_buffer_begin_compute)
+#if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
+    probeComputeOpening(p_, cb.forms_, cb.lastEngine_, cb.taken_);
+    cb.lastEngine_ = ProbeEngine::Compute;
+#else
     p_.m(WAIT_FOR_IDLE, 0);
     p_.m(INVALIDATE_SHADER_CACHES, kInvalidateData | kFlushData | kInvalidateConstant, SUBC_COMPUTE);
     p_.m(INVALIDATE_TEXTURE_DATA_CACHE_NO_WFI, 0, SUBC_COMPUTE);
     p_.m(INVALIDATE_SKED_CACHES, 0, SUBC_COMPUTE);
     p_.m(INVALIDATE_SAMPLER_CACHE_NO_WFI, 0, SUBC_COMPUTE);
     p_.m(INVALIDATE_TEXTURE_HEADER_CACHE_NO_WFI, 0, SUBC_COMPUTE);
+#endif
 }
 
 void ComputeEncoder::room(uint32_t words)

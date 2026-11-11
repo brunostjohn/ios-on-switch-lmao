@@ -1454,6 +1454,10 @@ bool Device::createTexture(uint32_t width, uint32_t height, uint32_t format, Tex
     const bool laid = tiled && !wc && (t.renderable || blocks) && tgm_layout_tiled(t.width, t.height, t.bpp, &bl);
     if (laid && blocks)
         blockLayout(t, bl);
+#if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
+    if (laid && !blocks && compressedKind(t.bpp, false) && probeCompressNext.exchange(false))
+        return probeCompressible(bl, t);
+#endif
     if (laid && blAlloc(bl.bytes, bl.align, t.span)) {
         t.pitch = bl.row_bytes;
         t.blockLinear = true;
@@ -2187,6 +2191,12 @@ void Device::destroyTexture(Texture &t)
     }
     if (t.import)
         release(t.import);
+#if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
+    if (auto it = probeCompressed.find(t.va); t.comptags && !t.span.valid() && it != probeCompressed.end()) {
+        k_.free(it->second);
+        probeCompressed.erase(it);
+    }
+#endif
     freeSpan(t.span, memoryOf(t), t.lease);
     t = {};
 }
@@ -3168,13 +3178,24 @@ CommandBuffer *Device::begin()
     uint32_t *start = reinterpret_cast<uint32_t *>(alloc(push_, 64 * 4, 256, va));
     Push p{start, start + 64};
     emitStartStamp(p, stamps_.va, cb.stamp);
-    p.m(INVALIDATE_SAMPLER_CACHE_NO_WFI, 0);
-    p.m(INVALIDATE_TEXTURE_HEADER_CACHE_NO_WFI, 0);
-    p.inc(INVALIDATE_SHADER_CACHES_NO_WFI, {kInvalidateConstant});
-    cb.shaderInvalidate_ = p.at - 1;
-    p.m(INVALIDATE_SHADER_CACHES, kFlushData | kInvalidateData);
-    p.m(INVALIDATE_TEXTURE_DATA_CACHE_NO_WFI, 0);
-    p.m(INVALIDATE_SHADER_CACHES_NO_WFI, kInvalidateData);
+#if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
+    cb.forms_ = nextForms;
+    nextForms = {};
+    cb.taken_ = {};
+    cb.lastEngine_ = ProbeEngine::None;
+    if (cb.forms_.entry != EntryForm::Today) {
+        cb.shaderInvalidate_ = probeEntry(p, cb.forms_.entry, cb.taken_);
+    } else
+#endif
+    {
+        p.m(INVALIDATE_SAMPLER_CACHE_NO_WFI, 0);
+        p.m(INVALIDATE_TEXTURE_HEADER_CACHE_NO_WFI, 0);
+        p.inc(INVALIDATE_SHADER_CACHES_NO_WFI, {kInvalidateConstant});
+        cb.shaderInvalidate_ = p.at - 1;
+        p.m(INVALIDATE_SHADER_CACHES, kFlushData | kInvalidateData);
+        p.m(INVALIDATE_TEXTURE_DATA_CACHE_NO_WFI, 0);
+        p.m(INVALIDATE_SHADER_CACHES_NO_WFI, kInvalidateData);
+    }
     checkRoom(p, "a submission prologue");
     cb.segment(start, p.at);
     cb.prologueDwords_ = uint32_t(p.at - start);
@@ -3334,7 +3355,12 @@ BlitEncoder *CommandBuffer::blit()
     e.p_ = Push{e.start_, e.start_ + (1 << 12)};
     // what the render work before wrote is complete before the copy engine reads it (NVK: a WFI on the 3D subchannel; the
     // switch to the copy subchannel then waits for the 3D engine anyway)
+#if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
+    probeBlitOpening(e.p_, forms_, lastEngine_, taken_);
+    lastEngine_ = ProbeEngine::Copy;
+#else
     e.p_.m(WAIT_FOR_IDLE, 0);
+#endif
     blits++;
     return &e;
 }
@@ -3555,7 +3581,7 @@ bool CommandBuffer::commit(uint32_t &seqno)
     {
         std::lock_guard<std::mutex> l(d.lock_);
         if (shaderInvalidate_ && d.heapPlaced_ != d.heapInvalidated_) {
-            *shaderInvalidate_ = kInvalidateConstant | kInvalidateInstruction;
+            *shaderInvalidate_ |= kInvalidateInstruction;
             invalidates = true;
             invalidatedBefore = d.heapInvalidated_;
             d.heapInvalidated_ = d.heapPlaced_;
@@ -5562,7 +5588,14 @@ void RenderEncoder::end()
     }
     if (samples_ > 1)
         sampleWords(p_, 1, d.root_.va);
-    if (drew_)
+#if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
+    const bool flush = cb_->forms_.keepsTiledFlush();
+    if (drew_ && !flush && tiledCache(d.k_.info()))
+        cb_->taken_.flushes++;
+#else
+    constexpr bool flush = true;
+#endif
+    if (drew_ && flush)
         tiledCacheDrain(p_, d.k_.info());
     if (attachmentWrites_.storage)
         p_.m(INVALIDATE_SHADER_CACHES, kFlushData | kInvalidateData);
@@ -5582,7 +5615,12 @@ void RenderEncoder::end()
     uint32_t *start = reinterpret_cast<uint32_t *>(d.alloc(d.push_, room * 4, 256, va));
     Push p{start, start + room};
     p.raw(restore.data(), uint32_t(restore.size()));
+#if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
+    probePassPrologue(p, cb_->forms_, cb_->lastEngine_, cb_->taken_);
+    cb_->lastEngine_ = ProbeEngine::ThreeD;
+#else
     kit(p, switch_gm20b_pass_barrier, false);
+#endif
     // ahead of the clears: a clear reaches every sample of its rectangle's pixels through it
     if (samples_ > 1)
         sampleWords(p, samples_, d.root_.va);
@@ -6053,5 +6091,72 @@ void BlitEncoder::end()
     dev_->push_.head = uint64_t(reinterpret_cast<uint8_t *>(p_.at) - dev_->push_.bo.cpu);
     RAW_DIAGNOSTIC(dev_->stats.pushBytes += uint64_t(p_.at - start_) * 4);
 }
+
+#if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
+bool Device::probeCompressible(const tgm_layout &bl, Texture &t)
+{
+    const uint32_t kind = compressedKind(t.bpp, false);
+    Bo bo;
+    if (k_.allocCompressible(compBytes(bl.bytes), bo) != KERN_SUCCESS)
+        return false;
+    if (k_.bindCompressed(bo, kind) != KERN_SUCCESS) {
+        k_.free(bo);
+        return false;
+    }
+    t.va = bo.va;
+    t.pitch = bl.row_bytes;
+    t.blockLinear = true;
+    t.blockHeight = bl.y_log2;
+    t.layerBytes = bl.bytes;
+    t.comptags = true;
+    if (!(t.tic = allocTic())) {
+        k_.free(bo);
+        return false;
+    }
+    probeCompressed[bo.va] = bo;
+    writeTic(t);
+    return true;
+}
+
+static ProbeSurface probeSurface(const Texture &t, uint32_t fmt2d, uint32_t width, uint32_t height)
+{
+    ProbeSurface s;
+    s.va = t.va;
+    s.fmt2d = fmt2d;
+    s.pitch = t.pitch;
+    s.width = width;
+    s.height = height;
+    s.blockLinear = t.blockLinear;
+    s.blockHeight = t.blockHeight;
+    return s;
+}
+
+void BlitEncoder::probe(const ProbeOp &op, const Texture *read, const Texture &written)
+{
+    room(uint32_t(probeOpWords(op)));
+    if (read)
+        cb_->use(*read, false);
+    cb_->use(written, true);
+    emitProbeOp(p_, op);
+    cb_->taken_.ops++;
+}
+
+bool CommandBuffer::probeResolve(const Texture &multisampled, const Texture &into)
+{
+    fx::MipChain grid;
+    const uint32_t fmt2d = probeTwodFormat(into.format);
+    ProbeOp op;
+    if (!fmt2d || !fx::msLayout(multisampled.width, multisampled.height, multisampled.samples, multisampled.bpp, grid) ||
+        !probeResolveOp(probeSurface(multisampled, fmt2d, multisampled.width << grid.sxLog2,
+                                     multisampled.height << grid.syLog2),
+                        grid.sxLog2, grid.syLog2, probeSurface(into, fmt2d, into.width, into.height), op))
+        return false;
+    BlitEncoder *b = blit();
+    b->probe(op, &multisampled, into);
+    b->end();
+    taken_.resolves++;
+    return true;
+}
+#endif
 
 }  // namespace raw

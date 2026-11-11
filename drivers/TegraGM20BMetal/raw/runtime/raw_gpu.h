@@ -25,6 +25,8 @@
 #include "raw_split_batch.h"
 #include "raw_split_cost.h"
 #include "raw_attachment_order.h"
+#include "raw_probe_forms.h"
+#include "raw_probe_ops.h"
 #include <array>
 #include <atomic>
 #include <thread>
@@ -811,6 +813,10 @@ public:
     // Every copy and 2D blit before it completes before any after it starts: NVK's wait between transfers
     // (nvk_cmd_flush_wait_dep), as the copy engine starts a PIPELINED launch before the ones before it have landed
     void barrier();
+#if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
+    // hw_test_app's 2D-engine probes (raw_probe_ops.h): `op` reading `read` and writing `written`
+    void probe(const ProbeOp &op, const Texture *read, const Texture &written);
+#endif
     void end();
 
 private:
@@ -877,6 +883,16 @@ public:
     {
         forceWholePrograms_ = force;
     }
+    const ProbeForms &probeForms() const
+    {
+        return forms_;
+    }
+    const ProbeTaken &probeTaken() const
+    {
+        return taken_;
+    }
+    // a multisampled attachment's resolve by the 2D engine (raw_probe_ops.h); false: none for its format or grid
+    bool probeResolve(const Texture &multisampled, const Texture &into);
 #endif
     // Nothing of it is on the GPU any more: the rings get back what it took, the root table's shadow what it was.
     void abandon();
@@ -915,6 +931,9 @@ private:
     bool externalWrites_ = false;
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
     bool forceWholePrograms_ = false;
+    ProbeForms forms_;
+    ProbeTaken taken_;
+    ProbeEngine lastEngine_ = ProbeEngine::None;  // the engine of the work encoded last, for forms_
 #endif
     std::map<const Texture *, const Texture *> nativeReads_;
     std::vector<NativeSurface *> nativeSurfaces_;
@@ -1013,6 +1032,10 @@ public:
     // CPU never touches
     bool createTexture(uint32_t width, uint32_t height, uint32_t format, Texture &t, bool wc = false,
                        bool tiled = false);
+#if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
+    // createTexture's block-linear target over compressible memory of its own (probeCompressNext), under lock_
+    bool probeCompressible(const tgm_layout &bl, Texture &t);
+#endif
 
     // Before the GPU first renders or stores into the IOSurface (Kernel::surfaceGpuWrites).
     bool surfaceGpuWrites(uint64_t id)
@@ -1407,6 +1430,12 @@ public:
         std::lock_guard<std::mutex> hold(probeLock);
         return probeWords;
     }
+    // the barrier forms of the command buffer begin() starts next (raw_probe_forms.h), set by its encoder
+    ProbeForms nextForms;
+    // the next createTexture of a block-linear target binds compressible memory of its own (raw_comp.h kinds), which
+    // probeCompressed holds until destroyTexture
+    std::atomic<bool> probeCompressNext{false};
+    std::map<uint64_t, Bo> probeCompressed;  // lock_
 #endif
 
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG

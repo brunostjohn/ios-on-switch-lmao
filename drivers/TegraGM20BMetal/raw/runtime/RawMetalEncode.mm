@@ -38,6 +38,9 @@ static bool encodeRawAttempt(RMCommandBuffer *cb, size_t from, size_t to, const 
                              size_t *refusedEncoder)
 {
     raw::Device &d = *gRM->raw;
+#if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
+    d.nextForms = cb->_probeForms;
+#endif
     raw::CommandBuffer *rc = d.begin();
     if (!rc) {
         *why = "the kernel gave the raw path no channel";
@@ -185,6 +188,13 @@ static bool encodeRawAttempt(RMCommandBuffer *cb, size_t from, size_t to, const 
             from[r.attachment] = re->target(r.attachment);
         const uint32_t width = re->areaWidth(), height = re->areaHeight();
         for (const Resolve &r : resolves) {
+#if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
+            if (rc->probeForms().resolveTwoD) {
+                useTexture(rc, r.into, true);
+                if (rc->probeResolve(*from[r.attachment], r.into->_raw))
+                    continue;
+            }
+#endif
             resolveTargets.push_back(r.into->_raw);
             resolveTargets.back().format = raw::resolveTargetFormat(r.into->_raw.format);
             raw::PassDesc p;
@@ -530,6 +540,11 @@ static bool encodeRawAttempt(RMCommandBuffer *cb, size_t from, size_t to, const 
         }
         case OpBlit:
             be = rc->blit();
+#if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
+            for (const auto &o : cb->_probeOps)
+                if (o.at == at)
+                    be->probe(o.op, o.read ? &o.read->_raw : nullptr, o.written->_raw);
+#endif
             break;
         case OpEnd:
             if (re && at + 1 < to && cb->_plan.operation(at + 1).op == OpRender &&
@@ -656,6 +671,9 @@ static bool encodeRawAttempt(RMCommandBuffer *cb, size_t from, size_t to, const 
         return fail(PredEncKernel, "the kernel refused the submission");
     }
     publishSharedEvents(cb);
+#if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
+    cb->_probeTaken.add(rc->probeTaken());
+#endif
     for (const Conversion &c : converted) {  // (submitted: their images hold the surfaces at these seeds)
         c.t->_imageSeed = c.seed;
         c.t->_imageWrites = c.writes;

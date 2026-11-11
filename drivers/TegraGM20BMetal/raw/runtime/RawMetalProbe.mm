@@ -23,6 +23,31 @@ static bool appendMethods(NSData *pairs, std::vector<uint32_t> &words)
     return true;
 }
 
+static RMTexture *rawTexture(id object)
+{
+    RMTexture *t = [object isKindOfClass:[RMTexture class]] ? (RMTexture *)object : nil;
+    return t && t->_rawOk && !t->_raw.memoryless && t->_raw.va && t->_kind != RMTextureView ? t : nil;
+}
+
+static uint64_t number(NSDictionary *op, NSString *key, uint64_t otherwise = 0)
+{
+    id value = op[key];
+    return [value isKindOfClass:[NSNumber class]] ? [(NSNumber *)value unsignedLongLongValue] : otherwise;
+}
+
+static raw::ProbeSurface probeSurface(const raw::Texture &t, uint32_t fmt2d)
+{
+    raw::ProbeSurface s;
+    s.va = t.va;
+    s.fmt2d = fmt2d ? fmt2d : raw::probeTwodFormat(t.format);
+    s.pitch = t.pitch;
+    s.width = t.width;
+    s.height = t.height;
+    s.blockLinear = t.blockLinear;
+    s.blockHeight = t.blockHeight;
+    return s;
+}
+
 @implementation RMDevice (Probe)
 
 // Arming: nil, else why not. Disarming: the draws that emitted them, as a decimal string.
@@ -46,6 +71,88 @@ static bool appendMethods(NSData *pairs, std::vector<uint32_t> &words)
         d.probeEmitted.store(0, std::memory_order_relaxed);
     }
     d.probeArmed.store(true, std::memory_order_release);
+    return nil;
+}
+
+// The next private render target the device makes binds compressible memory of its own (raw_comp.h kinds)
+- (NSString *)switchRawProbeCompressNext
+{
+    gRM->raw->probeCompressNext.store(true, std::memory_order_release);
+    return nil;
+}
+
+// What a probe's line says of a texture and the device: "raw=1 comptags=1 block_linear=1 pitch=N tiled_cache=1
+// compression=1", raw=0 where the raw path does not hold it
+- (NSString *)switchRawProbeFacts:(id<MTLTexture>)texture
+{
+    const uint32_t flags = gRM->raw->kernelInfo().flags;
+    RMTexture *t = rawTexture(texture);
+    return [NSString stringWithFormat:@"raw=%d comptags=%d block_linear=%d pitch=%u tiled_cache=%d compression=%d",
+                                      t != nil, t && t->_raw.comptags, t && t->_raw.blockLinear, t ? t->_raw.pitch : 0,
+                                      (flags & TegraGM20BInfoTiledCache) != 0,
+                                      (flags & TegraGM20BInfoCompression) != 0];
+}
+
+@end
+
+@implementation RMCommandBuffer (Probe)
+
+// Its barriers' forms (raw_probe_forms.h parseProbeForms), set before it commits: nil, else why not
+- (NSString *)switchRawProbeForms:(NSString *)forms
+{
+    raw::ProbeForms f;
+    if (!raw::parseProbeForms(forms.UTF8String, f))
+        return [NSString stringWithFormat:@"forms not understood: %@", forms];
+    std::lock_guard<std::mutex> lock(_lock);
+    if (_committed)
+        return @"committed already";
+    _probeForms = f;
+    return nil;
+}
+
+// Where its barriers took the forms, once it completed (raw_probe_forms.h ProbeTaken)
+- (NSString *)switchRawProbeTaken
+{
+    std::lock_guard<std::mutex> lock(_lock);
+    return @(_probeTaken.text().c_str());
+}
+
+// 2D-engine work at the open blit encoder (raw_probe_ops.h): {kind: "scale"|"fill", read, written: textures, dx, dy, dw,
+// dh, and for scale du, dv, sx, sy (32.32), bilinear, corner, fmt2d (0: each texture's own); for fill colorFormat,
+// color0..color3}. nil, else why not
+- (NSString *)switchRawProbeEngine:(NSDictionary *)op
+{
+    RMTexture *written = rawTexture(op[@"written"]), *read = rawTexture(op[@"read"]);
+    const bool fill = [op[@"kind"] isEqual:@"fill"];
+    if (!written || (!fill && !read))
+        return @"a texture the raw path does not hold (memoryless, a view, or refused)";
+    std::lock_guard<std::mutex> lock(_lock);
+    if (_committed || !_encOpen || ![_active isKindOfClass:[RMBlitEncoder class]])
+        return @"no blit encoder open";
+    raw::ProbeOp o;
+    o.kind = fill ? raw::ProbeOpKind::Fill : raw::ProbeOpKind::Scale;
+    const uint32_t fmt2d = uint32_t(number(op, @"fmt2d"));
+    o.dst = probeSurface(written->_raw, fmt2d);
+    if (read)
+        o.src = probeSurface(read->_raw, fmt2d);
+    o.dx = uint32_t(number(op, @"dx"));
+    o.dy = uint32_t(number(op, @"dy"));
+    o.dw = uint32_t(number(op, @"dw", written->_raw.width));
+    o.dh = uint32_t(number(op, @"dh", written->_raw.height));
+    o.du = number(op, @"du", 1ull << 32);
+    o.dv = number(op, @"dv", 1ull << 32);
+    o.sx = number(op, @"sx");
+    o.sy = number(op, @"sy");
+    o.bilinear = number(op, @"bilinear") != 0;
+    o.corner = number(op, @"corner") != 0;
+    o.colorFormat = uint32_t(number(op, @"colorFormat"));
+    for (int c = 0; c < 4; ++c)
+        o.color[c] = uint32_t(number(op, [NSString stringWithFormat:@"color%d", c]));
+    if (!o.dst.fmt2d || (read && !o.src.fmt2d))
+        return @"a format the 2D engine names none of";
+    if (o.dx + o.dw > o.dst.width || o.dy + o.dh > o.dst.height)
+        return @"a rectangle outside the written texture";
+    _probeOps.push_back({_encAt, o, read, written});
     return nil;
 }
 
