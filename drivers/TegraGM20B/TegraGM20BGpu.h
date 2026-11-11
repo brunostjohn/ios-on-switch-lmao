@@ -351,29 +351,23 @@ int tgm_fence_kernel(unsigned int which, volatile uint32_t **va, uint64_t *page_
 void tgm_fence_kill_clear(volatile uint32_t *fence);
 
 /* GPU present (gpu_present.c "GPU present"): a kernel channel and address space, made at the first call (from the self-test on).
- * Mappings in it are volatile, at addresses the caller picks in [TGM_USER_VA_START, TGM_KERNEL_VA). tgm_present_copy
- * queues one copy engine copy, pitch source (stride; src_block_log2 >= 0: block-linear, width x 4 bytes across, blocks of
- * 2^src_block_log2 GOBs) to a block-linear destination (dst_pitch bytes across, blocks one
- * GOB wide and 2^block_height_log2 GOBs high, 8-line GOBs), after the work submitted so far by the channels whose address
- * spaces import the source or also_pa's surface (window B's; 0: none) (every user channel's when none does), and
- * returns at once: 0, or -EBUSY (one in flight), -EINVAL, -ENODEV. done(arg, status) runs exactly once for an accepted
- * copy, from the GPU interrupt pass, when its bytes are in DRAM: status 0, or TEGRA_SCANOUT_SOURCE_LOST when a writer it
- * waited for was killed before that work ended. One not done in 1 s is the present's deadline's (gpu_present.c present_deadline).
+ * Mappings in it are volatile, at addresses the caller picks in [TGM_USER_VA_START, TGM_KERNEL_VA).
+ * tgm_present_copy_dependencies queues one copy engine copy, pitch source (stride; src_block_log2 >= 0: block-linear,
+ * width x 4 bytes across, blocks of 2^src_block_log2 GOBs) to a block-linear destination (dst_pitch bytes across, blocks
+ * one GOB wide and 2^block_height_log2 GOBs high, 8-line GOBs; dst_va 0: no copy), after exactly the producer tokens
+ * given, and returns at once: 0, or -EBUSY (one in flight), -EINVAL, -ENODEV. done(arg, status) runs exactly once for an
+ * accepted present, from its completion work item, when its bytes are in DRAM: status 0, or the producers' failure.
+ * One not done in 1 s is the present's deadline's (gpu_present.c present_deadline).
  * tgm_present_outstanding: whether the copy accepted with `arg` is not completed yet (its callback not returned). */
 int tgm_present_open(struct tgm_vm **pvm);
 int tgm_present_map(uint64_t va, struct tgm_mem *mem, uint64_t bytes, uint8_t kind);
 int tgm_present_unmap(uint64_t va, uint64_t bytes);
-int tgm_present_copy(uint64_t src_va, uint64_t src_pa, uint64_t also_pa, uint64_t stride,
-		     int32_t src_block_log2, uint32_t width, uint32_t height, uint64_t dst_va,
-		     uint32_t dst_pitch, uint32_t block_height_log2, void (*done)(void *, int),
-		     void *arg);
-int tgm_present_copy_dependencies(uint64_t src_va, uint64_t src_pa, uint64_t also_pa, uint64_t stride,
-    int32_t src_block_log2, uint32_t width, uint32_t height, uint64_t dst_va, uint32_t dst_pitch,
+int tgm_present_copy_dependencies(uint64_t src_va, uint64_t stride, int32_t src_block_log2,
+    uint32_t width, uint32_t height, uint64_t dst_va, uint32_t dst_pitch,
     uint32_t block_height_log2, void (*done)(void *, int), void *arg,
     const struct switch_gpu_backing_token *dependencies, uint32_t dependency_count);
 int tgm_present_outstanding(const void *arg);
-/* Host import bookkeeping for the present: `pa` is the import's first page; add 1 when made, 0 when released. The
- * present waits only for address spaces that import its surface (src_pa, the surface's first page), when any does. */
+/* Host import bookkeeping: `pa` is the import's first page; add 1 when made, 0 when released (gpu_sync.c vm_imports). */
 void tgm_vm_import_note(struct tgm_vm *vm, uint64_t pa, int add);
 
 /* Clean+invalidate the CPU caches over pages of ordinary RAM (by physical address), so the GPU, which does not snoop
@@ -512,7 +506,8 @@ void tgm_coherency_tiled_bind(struct tgm_coh *c, int add);
 /* Debug kernels: copies a present runs after its frame's copy and before its fence (TegraGM20BReadback.cpp), each into a
  * pitch-linear destination dst_pitch bytes across, width x 4 bytes of height lines, from a pitch source (src_block_log2
  * < 0: src_pitch bytes per row) or a block-linear one (8-line GOBs, blocks one GOB wide and 2^src_block_log2 high,
- * src_pitch bytes across). tgm_present_copy_read is tgm_present_copy with them. A release kernel has the type only. */
+ * src_pitch bytes across). tgm_present_copy_read_dependencies is tgm_present_copy_dependencies with them. A release
+ * kernel has the type only. */
 struct tgm_present_read {
 	uint64_t src_va, dst_va;
 	uint32_t src_pitch, dst_pitch, width, height;
@@ -539,13 +534,9 @@ struct TegraGM20BAbiRegdumpReply;
 /* Debug kernels: TegraGM20BRegDumpABI.h's call, its answer in reply. 0, or -EINVAL for a bad tag or reserved word. */
 int tgm_regdump_log(const struct TegraGM20BAbiRegdump *in, struct TegraGM20BAbiRegdumpReply *reply);
 
-int tgm_present_copy_read(uint64_t src_va, uint64_t src_pa, uint64_t also_pa, uint64_t stride,
-			  int32_t src_block_log2, uint32_t width, uint32_t height, uint64_t dst_va,
-			  uint32_t dst_pitch, uint32_t block_height_log2, void (*done)(void *, int),
-			  void *arg, const struct tgm_present_read *reads, uint32_t nreads);
-int tgm_present_copy_read_dependencies(uint64_t src_va, uint64_t src_pa, uint64_t also_pa,
-    uint64_t stride, int32_t src_block_log2, uint32_t width, uint32_t height, uint64_t dst_va,
-    uint32_t dst_pitch, uint32_t block_height_log2, void (*done)(void *, int), void *arg,
+int tgm_present_copy_read_dependencies(uint64_t src_va, uint64_t stride,
+    int32_t src_block_log2, uint32_t width, uint32_t height, uint64_t dst_va, uint32_t dst_pitch,
+    uint32_t block_height_log2, void (*done)(void *, int), void *arg,
     const struct tgm_present_read *reads, uint32_t nreads,
     const struct switch_gpu_backing_token *dependencies, uint32_t dependency_count);
 

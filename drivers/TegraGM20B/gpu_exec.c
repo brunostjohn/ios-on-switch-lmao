@@ -70,7 +70,7 @@ u32 tgm_chan_fence_job(struct tgm_chan *chan, int external, u32 first, u32 next)
 	struct nvif_push *push = &chan->chan.push;
 	struct switch_gpu_kicked_job *job = NULL;
 	u32 s = 0;
-	idle_wake(); /* backstop: tgm_chan_exec and tgm_present_copy raise it before their first kick */
+	idle_wake(); /* backstop: tgm_chan_exec and tgm_present_copy_dependencies raise it before their first kick */
 	if (external && (l2_on() || chan->kernel)) {
 		/* engines idle, their writes committed to the L2 (FB flush: nvgpu gk20a_mm_fb_flush), the L2's dirty lines
 		 * written to DRAM, and those writes committed before the release below. Always on the present channel: its

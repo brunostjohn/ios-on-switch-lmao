@@ -14,9 +14,8 @@ static void present_typed_complete(void *unused)
 	mutex_lock(&tgm_present.lock);
 	done = tgm_present.done;
 	arg = tgm_present.arg;
-	status = tgm_present.completion_status;
 	mutex_unlock(&tgm_present.lock);
-	status = switch_gpu_present_tokens_finish_visible(&tgm_present.tokens, status,
+	status = switch_gpu_present_tokens_finish_visible(&tgm_present.tokens, 0,
 							  switch_gpu_timeline_promote);
 	mutex_lock(&tgm_present.lock);
 	__atomic_store_n(&tgm_present.typed_pending, 0, __ATOMIC_RELEASE);
@@ -52,7 +51,6 @@ static void present_deadline(void *arg)
 	char state[TGM_HANG_LINE];
 	char what[96], current_owner[96], next_owner[96];
 	u64 age = 0;
-	u32 i = 0;
 	u32 seqno = 0;
 	u32 eng;
 
@@ -86,17 +84,6 @@ static void present_deadline(void *arg)
 			seqno = (u32)pending.token.value;
 		}
 	}
-	for (i = 0; i < tgm_present.waits && !waited; i++) {
-		list_for_each_entry(chan, &tgm_live_chans, live)
-		{
-			if (chan->id == tgm_present.wait[i].id &&
-			    (s32)(tgm_chan_completed(chan) - tgm_present.wait[i].seqno) < 0) {
-				waited = chan;
-				seqno = tgm_present.wait[i].seqno;
-				break;
-			}
-		}
-	}
 	if (tgm_hang_recover(waited ? waited : tgm_present.chan, "present",
 			     waited ? seqno : tgm_present.pending, age) != TGM_HANG_STUCK) {
 		mutex_unlock(&tgm_live_lock);
@@ -108,8 +95,7 @@ static void present_deadline(void *arg)
 	if (waited) {
 		present_channel_brief(waited, waited->chid, what, sizeof(what));
 	} else {
-		scnprintf(what, sizeof(what), "no pending GPU producer; legacy waits %u",
-			  tgm_present.waits);
+		scnprintf(what, sizeof(what), "no pending GPU producer");
 	}
 	eng = nvkm_rd32(tgm_gpu.device, PFIFO_ENG_STATUS(0));
 	present_channel_brief(eng & PFIFO_ENG_ID_TSG ? NULL : live_by(0, PFIFO_ENG_ID(eng)),
@@ -207,18 +193,6 @@ int tgm_present_unmap(uint64_t va, uint64_t bytes)
 	return tgm_present.vm ? tgm_vm_unmap(tgm_present.vm, va, bytes) : -ENODEV;
 }
 
-/* A present waits only for the address spaces that import its surface; a surface no address space imports by its first
- * page is the all-channel wait. */
-static int present_writer_on(void)
-{
-	return 1;
-}
-
-/* Whether user's address space imports the present's source or its other surface (also_pa, 0: none). */
-static int present_imports(const struct tgm_chan *user, uint64_t src_pa, uint64_t also_pa)
-{
-	return vm_imports(user->vm, src_pa) || (also_pa && vm_imports(user->vm, also_pa));
-}
 #if TGM_STATS
 /* Each read-back waits for the copies before it (NON_PIPELINED: the scanout buffer is read after the frame's copy wrote
  * it); the fence after them flushes their writes past the L2. */
@@ -236,22 +210,16 @@ static void present_push_reads(struct nvif_push *push, const struct tgm_present_
 }
 
 #endif
-static int present_copy(uint64_t src_va, uint64_t src_pa, uint64_t also_pa, uint64_t stride,
-			int32_t src_block_log2, uint32_t width, uint32_t height, uint64_t dst_va,
-			uint32_t dst_pitch, uint32_t block_height_log2, void (*done)(void *, int),
-			void *arg, const struct tgm_present_read *reads, u32 nreads,
-			const struct switch_gpu_backing_token *dependencies, u32 dependency_count,
-			int exact)
+static int present_copy(uint64_t src_va, uint64_t stride, int32_t src_block_log2, uint32_t width,
+			uint32_t height, uint64_t dst_va, uint32_t dst_pitch, uint32_t block_height_log2,
+			void (*done)(void *, int), void *arg, const struct tgm_present_read *reads,
+			u32 nreads, const struct switch_gpu_backing_token *dependencies,
+			u32 dependency_count)
 {
 	struct tgm_chan *chan = tgm_present.chan;
-	struct tgm_chan *user = NULL;
 	struct nvif_push *push = NULL;
 	u32 *push_start = NULL;
-	u64 va = 0;
-	u32 n = 0;
-	u32 room = 0;
 	int ret = 0;
-	int matched = 0;
 
 	if (!chan || chan->error)
 		return -ENODEV;
@@ -276,16 +244,9 @@ static int present_copy(uint64_t src_va, uint64_t src_pa, uint64_t also_pa, uint
 		mutex_unlock(&tgm_present.lock);
 		return ret;
 	}
-	/* push room for an acquire per user channel there is now (one made meanwhile has nothing for this frame) */
-	if (!exact) {
-		mutex_lock(&tgm_live_lock);
-		list_for_each_entry(user, &tgm_live_chans, live) room +=
-			room < TGM_SYNC_MAX && !user->kernel;
-		mutex_unlock(&tgm_live_lock);
-	}
 	push = &chan->chan.push;
 	ret = chan_push_wait(chan,
-			     (room + dependency_count) * 5 + 57 + nreads * TGM_COPY_RECT_DWORDS +
+			     dependency_count * 5 + 57 + nreads * TGM_COPY_RECT_DWORDS +
 				     CHAN_FENCE_DWORDS); /* acquires, a start stamp, the copy, the
 								  read-backs, the fence */
 	if (ret == -ETIMEDOUT) {
@@ -305,46 +266,6 @@ static int present_copy(uint64_t src_va, uint64_t src_pa, uint64_t also_pa, uint
 		mutex_unlock(&tgm_present.lock);
 		return ret;
 	}
-	/* what the surface's writers (or, with none found, every user channel) have submitted so far and not completed yet */
-	if (!exact) {
-		mutex_lock(&tgm_live_lock);
-		list_for_each_entry(user, &tgm_live_chans, live)
-		{
-			if (present_writer_on() && !user->kernel &&
-			    present_imports(user, src_pa, also_pa))
-				matched = 1;
-		}
-		list_for_each_entry(user, &tgm_live_chans, live)
-		{
-			uintptr_t off = (uintptr_t)user->fence_cpu - (uintptr_t)tgm_fence_pages.va;
-			if (user->kernel || READ_ONCE(user->error) || off >= TGM_FENCE_BYTES ||
-			    n == room || (matched && !present_imports(user, src_pa, also_pa)) ||
-			    (s32)(tgm_chan_completed(user) - user->submitted) >= 0)
-				continue;
-			tgm_present.wait[n].id = user->id;
-			tgm_present.wait[n].seqno = READ_ONCE(user->submitted);
-			tgm_present.wait[n].fence =
-				(const volatile struct TegraGM20BAbiFence *)user->fence_cpu;
-			tgm_hold_need(tgm_gpu.device, user->chid);
-			tgm_present.wait_end[n] =
-				stats_on() ? &chan_stamps(user, tgm_present.wait[n].seqno)->end
-					   : NULL;
-			va = tgm_present.fences_gpu + off;
-			/* nouveau's NVDEF/NVVAL/PUSH_* macros compute in int and repeat their branches. */
-			/* NOLINTBEGIN(bugprone-signed-bitwise,bugprone-branch-clone) */
-			PUSH_MTHD(push, NV906F, SEMAPHOREA,
-				  NVVAL(NV906F, SEMAPHOREA, OFFSET_UPPER, upper_32_bits(va)),
-				  SEMAPHOREB, lower_32_bits(va), SEMAPHOREC,
-				  tgm_present.wait[n].seqno, SEMAPHORED,
-				  NVDEF(NV906F, SEMAPHORED, OPERATION, ACQ_GEQ) |
-					  NVDEF(NV906F, SEMAPHORED, ACQUIRE_SWITCH, ENABLED));
-			/* NOLINTEND(bugprone-signed-bitwise,bugprone-branch-clone) */
-			n++;
-		}
-		mutex_unlock(&tgm_live_lock);
-	}
-	tgm_present.waits = n;
-	tgm_present.writers = matched;
 	if (stats_on()) { /* the copy's start, after the acquires: stats_fences times the copy and the gap before it */
 		tgm_present.stamped = chan->submitted + 1;
 		push_stamp(push,
@@ -372,39 +293,22 @@ static int present_copy(uint64_t src_va, uint64_t src_pa, uint64_t also_pa, uint
 	tgm_present.done = done;
 	tgm_present.arg = arg;
 	tgm_present.queued = nvxnu_nanotime();
-	__atomic_store_n(&tgm_present.typed_pending, exact != 0, __ATOMIC_RELEASE);
+	__atomic_store_n(&tgm_present.typed_pending, 1, __ATOMIC_RELEASE);
 	__atomic_store_n(&tgm_present.pending, chan->submitted + 1, __ATOMIC_RELEASE);
 	nvxnu_work_schedule_after(
 		tgm_present.deadline_work,
 		TGM_PRESENT_NS); /* before the kick, so the completion cancels it */
 	chan_fence(chan);
-	if (matched && stats_on())
-		__atomic_fetch_add(&tgm_stats.writer, 1, __ATOMIC_RELAXED);
-	if (!n && stats_on())
-		__atomic_fetch_add(&tgm_stats.idle, 1, __ATOMIC_RELAXED);
+	if (stats_on())
+		__atomic_fetch_add(dependency_count ? &tgm_stats.writer : &tgm_stats.idle, 1,
+				   __ATOMIC_RELAXED);
 	mutex_unlock(&tgm_present.lock);
 	return 0;
 }
 
 /* Refused while the gate is shut: the display copies that frame on the CPU. */
-int tgm_present_copy(uint64_t src_va, uint64_t src_pa, uint64_t also_pa, uint64_t stride,
-		     int32_t src_block_log2, uint32_t width, uint32_t height, uint64_t dst_va,
-		     uint32_t dst_pitch, uint32_t block_height_log2, void (*done)(void *, int),
-		     void *arg)
-{
-	int ret = 0;
-
-	if (!gate_try())
-		return -EBUSY;
-	ret = present_copy(src_va, src_pa, also_pa, stride, src_block_log2, width, height, dst_va,
-			   dst_pitch, block_height_log2, done, arg, NULL, 0, NULL, 0, 0);
-	gate_leave();
-	return ret;
-}
-
-int tgm_present_copy_dependencies(uint64_t src_va, uint64_t src_pa, uint64_t also_pa,
-				  uint64_t stride, int32_t src_block_log2, uint32_t width,
-				  uint32_t height, uint64_t dst_va, uint32_t dst_pitch,
+int tgm_present_copy_dependencies(uint64_t src_va, uint64_t stride, int32_t src_block_log2,
+				  uint32_t width, uint32_t height, uint64_t dst_va, uint32_t dst_pitch,
 				  uint32_t block_height_log2, void (*done)(void *, int), void *arg,
 				  const struct switch_gpu_backing_token *dependencies,
 				  uint32_t dependency_count)
@@ -412,36 +316,18 @@ int tgm_present_copy_dependencies(uint64_t src_va, uint64_t src_pa, uint64_t als
 	int ret;
 	if (!gate_try())
 		return -EBUSY;
-	ret = present_copy(src_va, src_pa, also_pa, stride, src_block_log2, width, height, dst_va,
+	ret = present_copy(src_va, stride, src_block_log2, width, height, dst_va,
 			   dst_pitch, block_height_log2, done, arg, NULL, 0, dependencies,
-			   dependency_count, 1);
+			   dependency_count);
 	gate_leave();
 	return ret;
 }
 #if TGM_STATS
-int tgm_present_copy_read(uint64_t src_va, uint64_t src_pa, uint64_t also_pa, uint64_t stride,
-			  int32_t src_block_log2, uint32_t width, uint32_t height, uint64_t dst_va,
-			  uint32_t dst_pitch, uint32_t block_height_log2, void (*done)(void *, int),
-			  void *arg, const struct tgm_present_read *reads, uint32_t nreads)
-{
-	int ret = 0;
-
-	if (nreads > TGM_PRESENT_READS)
-		return -EINVAL;
-	if (!gate_try())
-		return -EBUSY;
-	ret = present_copy(src_va, src_pa, also_pa, stride, src_block_log2, width, height, dst_va,
-			   dst_pitch, block_height_log2, done, arg, reads, nreads, NULL, 0, 0);
-	gate_leave();
-	return ret;
-}
-
-int tgm_present_copy_read_dependencies(uint64_t src_va, uint64_t src_pa, uint64_t also_pa,
-				       uint64_t stride, int32_t src_block_log2, uint32_t width,
-				       uint32_t height, uint64_t dst_va, uint32_t dst_pitch,
-				       uint32_t block_height_log2, void (*done)(void *, int),
-				       void *arg, const struct tgm_present_read *reads,
-				       uint32_t nreads,
+int tgm_present_copy_read_dependencies(uint64_t src_va, uint64_t stride,
+				       int32_t src_block_log2, uint32_t width, uint32_t height,
+				       uint64_t dst_va, uint32_t dst_pitch, uint32_t block_height_log2,
+				       void (*done)(void *, int), void *arg,
+				       const struct tgm_present_read *reads, uint32_t nreads,
 				       const struct switch_gpu_backing_token *dependencies,
 				       uint32_t dependency_count)
 {
@@ -450,9 +336,9 @@ int tgm_present_copy_read_dependencies(uint64_t src_va, uint64_t src_pa, uint64_
 		return -EINVAL;
 	if (!gate_try())
 		return -EBUSY;
-	ret = present_copy(src_va, src_pa, also_pa, stride, src_block_log2, width, height, dst_va,
+	ret = present_copy(src_va, stride, src_block_log2, width, height, dst_va,
 			   dst_pitch, block_height_log2, done, arg, reads, nreads, dependencies,
-			   dependency_count, 1);
+			   dependency_count);
 	gate_leave();
 	return ret;
 }

@@ -303,7 +303,6 @@ void tgm_stats_tick(void)
 	u32 mc_err = 0;
 	u32 mc_adr = 0;
 	u32 copies = 0;
-	u32 gaps = 0;
 	u32 comp = 0;
 	u32 behind = 0;
 	u32 lnew = 0;
@@ -315,8 +314,6 @@ void tgm_stats_tick(void)
 	u64 rate = 0;
 	u64 cs = 0;
 	u64 cm = 0;
-	u64 gs = 0;
-	u64 gm = 0;
 	u64 busy = 0;
 	u64 cos = 0;
 	u64 com = 0;
@@ -369,9 +366,6 @@ void tgm_stats_tick(void)
 	copies = __atomic_exchange_n(&tgm_stats.copies, 0, __ATOMIC_RELAXED);
 	cs = __atomic_exchange_n(&tgm_stats.copy_sum, 0, __ATOMIC_RELAXED);
 	cm = __atomic_exchange_n(&tgm_stats.copy_max, 0, __ATOMIC_RELAXED);
-	gaps = __atomic_exchange_n(&tgm_stats.gaps, 0, __ATOMIC_RELAXED);
-	gs = __atomic_exchange_n(&tgm_stats.gap_sum, 0, __ATOMIC_RELAXED);
-	gm = __atomic_exchange_n(&tgm_stats.gap_max, 0, __ATOMIC_RELAXED);
 	comp = __atomic_exchange_n(&tgm_stats.comp, 0, __ATOMIC_RELAXED);
 	cos = __atomic_exchange_n(&tgm_stats.comp_sum, 0, __ATOMIC_RELAXED);
 	com = __atomic_exchange_n(&tgm_stats.comp_max, 0, __ATOMIC_RELAXED);
@@ -429,8 +423,7 @@ void tgm_stats_tick(void)
 			   &pool_comps, &pool_system_bytes, &pool_systems);
 	scnprintf(
 		line, sizeof(line),
-		"copy mean %llu us max %llu us (%u), after user work mean %llu us max %llu us "
-		"(%u); "
+		"copy mean %llu us max %llu us (%u); "
 		"%u offers idle; %u imports "
 		"(%llu/s), %lld KiB live in "
 		"%d, %u BoAllocs (%llu KiB, %llu us), pool %lu/%llu MiB (compositor %llu, clients "
@@ -442,7 +435,7 @@ void tgm_stats_tick(void)
 		"%08x at %08x; gpu.lock held by channel setup mean %llu us max %llu us (%u), "
 		"teardown mean %llu us max %llu us (%u)",
 		copies ? PT_NS(cs) / copies / 1000 : 0, PT_NS(cm) / 1000, copies,
-		gaps ? PT_NS(gs) / gaps / 1000 : 0, PT_NS(gm) / 1000, gaps, idle, imports,
+		idle, imports,
 		imports * 1000ULL / (ms ? ms : 1),
 		/* live_bytes is signed: an arithmetic shift keeps its sign. */
 		/* NOLINTNEXTLINE(bugprone-signed-bitwise) */

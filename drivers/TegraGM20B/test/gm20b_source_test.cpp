@@ -379,22 +379,25 @@ TEST(GM20BPresentSource, FenceOnlyPresentHasNoCopy)
 		     "tgm_copy_texels(");
 }
 
-// A present waits for the writers of window B's surface too (TegraScanoutCopy alsoWritten), so the display writes window
-// B's registers for a surface the GPU renders only after that work; window B's own fence maps nothing and copies nothing.
-TEST(GM20BPresentSource, PresentWaitsForWindowBsWritersToo)
+// A present waits for exactly the producers its surfaces' backings name (TegraScanoutCopy alsoWritten: window B's too),
+// never for every channel whose address space maps them; window B's own fence maps nothing and copies nothing.
+TEST(GM20BPresentSource, PresentWaitsForTheSurfacesProducersOnly)
 {
 	const std::string copy = flat(Between(gpu(), "static int present_copy(", "\n}\n"));
-	EXPECT_THAT(copy, HasSubstr("present_imports(user, src_pa, also_pa)"));
-	EXPECT_THAT(copy, HasSubstr("(matched && !present_imports(user, src_pa, also_pa))"));
-	EXPECT_THAT(flat(Between(gpu(), "static int present_imports(", "\n}\n")),
-		    HasSubstr("vm_imports(user->vm, src_pa) || (also_pa && vm_imports(user->vm, "
-			      "also_pa))"));
+	EXPECT_THAT(copy, Not(HasSubstr("tgm_live_chans")));
+	EXPECT_THAT(copy, Not(HasSubstr("vm_imports")));
+	EXPECT_THAT(gpu(), Not(HasSubstr("int tgm_present_copy(")));
+	EXPECT_THAT(gpu(), Not(HasSubstr("int tgm_present_copy_read(")));
 	EXPECT_THAT(flat(Between(client(), "extern \"C\" int tegra_gm20b_scanout_copy(", "\n}\n")),
-		    HasSubstr("copy->alsoWritten & ~0xfffULL"));
+		    HasSubstr("switch_gpu_backing_find_pa(copy->alsoWritten & ~0xfffULL)"));
 	const std::string fence =
 		flat(Between(client(), "extern \"C\" int tegra_gm20b_scanout_fence(", "\n}\n"));
-	EXPECT_THAT(fence, HasSubstr("tgm_present_copy(0, pa & ~0xfffULL, 0, 0, -1, 1, 1, 0, 0, 0, "
-				     "presentDone, display)"));
+	expectBefore(fence, "switch_gpu_backing_find_pa(pa & ~0xfffULL)", "gPresentSnapshot.add(backing)");
+	expectBefore(fence, "gPresentSnapshot.add(backing)", "tgm_present_copy_dependencies(0, 0, -1, 1, 1, 0, 0, 0, "
+							      "SwitchGpuScanoutSnapshot::complete, &gPresentSnapshot, "
+							      "gPresentSnapshot.tokens, gPresentSnapshot.count)");
+	EXPECT_THAT(fence, HasSubstr("if (ret && !presentBusy) gPresentSnapshot.cancel();"));
+	EXPECT_THAT(fence, HasSubstr("switch_gpu_backing_release(backing);"));
 	EXPECT_THAT(fence, Not(HasSubstr("presentSurface(")));
 }
 
@@ -475,7 +478,8 @@ TEST(GM20BSleepSource, GpuTouchingPathsGoThroughTheGate)
 		const std::string body = flat(definition(gpu(), waits));
 		expectBefore(body, "gate_enter();", "gate_leave();");
 	}
-	for (const char *refused : {"int tgm_present_copy(", "int tgm_present_copy_read(",
+	for (const char *refused : {"int tgm_present_copy_dependencies(",
+				    "int tgm_present_copy_read_dependencies(",
 				    "int tgm_pool_scrub(uint64_t pa, uint64_t bytes)",
 				    "static void scrub_work(void *arg)"}) {
 		const std::string body = flat(definition(gpu(), refused));
@@ -1180,17 +1184,18 @@ TEST(GM20BPresentSource, TypedProducerValidationAndReleaseNeverRunUnderTheIrqEve
 		copy,
 		"tgm_backing_dependencies(chan, tgm_present.tokens.tokens, dependency_count, 1)",
 		"if (dst_va) {");
-	expectBefore(copy, "&tgm_present.typed_pending, exact != 0", "chan_fence(chan);");
-	EXPECT_THAT(copy, HasSubstr("(room + dependency_count) * 5"));
+	expectBefore(copy, "&tgm_present.typed_pending, 1", "chan_fence(chan);");
+	EXPECT_THAT(copy, HasSubstr("dependency_count * 5"));
 	EXPECT_THAT(copy, HasSubstr("push->cur = push_start"));
 }
 
 TEST(GM20BPresentSource, ExactFrameSkipsLiveChannelEnumerationEvenWithoutGpuTokens)
 {
     const auto copy = flat(definition(gpu(), "static int present_copy("));
-    EXPECT_EQ(Count(copy, "if (!exact) {"), 2u);
+    EXPECT_THAT(copy, Not(HasSubstr("exact")));
+    EXPECT_THAT(copy, Not(HasSubstr("list_for_each_entry")));
     const auto exact = flat(definition(gpu(), "int tgm_present_copy_dependencies("));
-    EXPECT_THAT(exact, HasSubstr("dependencies, dependency_count, 1)"));
+    EXPECT_THAT(exact, HasSubstr("dependencies, dependency_count);"));
     const auto scanout = flat(definition(client(), "extern \"C\" int tegra_gm20b_scanout_copy("));
     EXPECT_THAT(scanout, HasSubstr("gPresentSnapshot.add(sourceBacking)"));
     EXPECT_THAT(scanout, HasSubstr("gPresentSnapshot.tokens, gPresentSnapshot.count"));

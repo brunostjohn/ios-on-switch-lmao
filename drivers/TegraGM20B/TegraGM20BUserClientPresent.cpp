@@ -173,6 +173,19 @@ uint64_t presentSurface(IOMemoryDescriptor *memory, uint64_t bytes, bool blockLi
 	return kPresentSurface + slot * kPresentSurfaceSpan;
 }
 
+IOLock *presentLock()
+{
+	if (!gPresentLock) {
+		IOLock *fresh = IOLockAlloc();
+		// NOLINTNEXTLINE(misc-const-correctness): the compare-and-swap writes the current value back into it
+		IOLock *expected = nullptr;
+		if (!__atomic_compare_exchange_n(&gPresentLock, &expected, fresh, false,
+						 __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE))
+			IOLockFree(fresh);
+	}
+	return gPresentLock;
+}
+
 }  // namespace
 
 extern "C" int tegra_gm20b_scanout_copy(const struct TegraScanoutCopy *copy)
@@ -204,16 +217,8 @@ extern "C" int tegra_gm20b_scanout_copy(const struct TegraScanoutCopy *copy)
 	if (!fenceOnly && copy->targetBytes < (copy->height + blockLines - 1) / blockLines *
 						      blockLines * copy->targetPitch)
 		return kIOReturnBadArgument;
-	if (!gPresentLock) {
-		IOLock *fresh = IOLockAlloc();
-		// NOLINTNEXTLINE(misc-const-correctness): the compare-and-swap writes the current value back into it
-		IOLock *expected = nullptr;
-		if (!__atomic_compare_exchange_n(&gPresentLock, &expected, fresh, false,
-						 __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE))
-			IOLockFree(fresh);
-		if (!gPresentLock)
-			return kIOReturnNoMemory;
-	}
+	if (!presentLock())
+		return kIOReturnNoMemory;
 	IOLockLock(gPresentLock);
 	if (tgm_present_outstanding(copy->display) ||
 	    __atomic_load_n(&gPresentSnapshot.active, __ATOMIC_ACQUIRE)) {
@@ -247,9 +252,8 @@ extern "C" int tegra_gm20b_scanout_copy(const struct TegraScanoutCopy *copy)
 		const uint32_t nreads = tgm_readback_take(copy, source, blockLog2, target, reads);
 		gPresentSnapshot.done = nreads ? tgm_readback_done : presentDone;
 		ret = tgm_present_copy_read_dependencies(
-			source, sourcePa, copy->alsoWritten & ~0xfffULL, copy->sourceStride,
-			blockLog2, copy->width, copy->height, target, copy->targetPitch,
-			copy->blockHeightLog2, SwitchGpuScanoutSnapshot::complete,
+			source, copy->sourceStride, blockLog2, copy->width, copy->height, target,
+			copy->targetPitch, copy->blockHeightLog2, SwitchGpuScanoutSnapshot::complete,
 			&gPresentSnapshot, reads, nreads, gPresentSnapshot.tokens,
 			gPresentSnapshot.count);
 		if (ret && nreads)
@@ -257,9 +261,8 @@ extern "C" int tegra_gm20b_scanout_copy(const struct TegraScanoutCopy *copy)
 #else
 		gPresentSnapshot.done = presentDone;
 		ret = tgm_present_copy_dependencies(
-			source, sourcePa, copy->alsoWritten & ~0xfffULL, copy->sourceStride,
-			blockLog2, copy->width, copy->height, target, copy->targetPitch,
-			copy->blockHeightLog2, SwitchGpuScanoutSnapshot::complete,
+			source, copy->sourceStride, blockLog2, copy->width, copy->height, target,
+			copy->targetPitch, copy->blockHeightLog2, SwitchGpuScanoutSnapshot::complete,
 			&gPresentSnapshot, gPresentSnapshot.tokens, gPresentSnapshot.count);
 #endif
 	}
@@ -281,10 +284,41 @@ extern "C" int tegra_gm20b_scanout_fence(void *display, uint64_t pa)
 	tgm_vm *vm = nullptr;
 	if (tgm_present_open(&vm))
 		return kIOReturnNotReady;
-	// No copy (dst_va 0): only the acquires on the surface's writers and the fence; nothing of it is mapped.
-	const int ret =
-		tgm_present_copy(0, pa & ~0xfffULL, 0, 0, -1, 1, 1, 0, 0, 0, presentDone, display);
-	return ret ? ioreturn(ret) : 0;
+	if (!presentLock())
+		return kIOReturnNoMemory;
+	auto *backing = switch_gpu_backing_find_pa(pa & ~0xfffULL);
+	if (!backing)
+		return kIOReturnNotFound;
+	IOLockLock(gPresentLock);
+	int ret = tgm_present_outstanding(display) ||
+				  __atomic_load_n(&gPresentSnapshot.active, __ATOMIC_ACQUIRE)
+			  ? -16
+			  : gPresentSnapshot.begin(nullptr, 0);
+	const bool presentBusy = ret == -16;
+	if (!ret)
+		ret = gPresentSnapshot.add(backing);
+	const bool ownershipBusy = !presentBusy && ret == -16;
+	if (!ret) {
+		gPresentSnapshot.display = display;
+		gPresentSnapshot.done = presentDone;
+		// No copy (dst_va 0): only the acquires on the surface's producer and the fence; nothing of it is mapped.
+		ret = tgm_present_copy_dependencies(0, 0, -1, 1, 1, 0, 0, 0,
+						    SwitchGpuScanoutSnapshot::complete,
+						    &gPresentSnapshot, gPresentSnapshot.tokens,
+						    gPresentSnapshot.count);
+	}
+	if (ret && !presentBusy)
+		gPresentSnapshot.cancel();
+	IOLockUnlock(gPresentLock);
+	switch_gpu_backing_release(backing);
+	if (presentBusy)
+		return kIOReturnBusy;
+	if (ownershipBusy)
+		return kIOReturnCannotLock;
+	return (ret == SWITCH_GPU_BACKING_DEPENDENCY_FAILED || ret == -5)
+		       ? TEGRA_SCANOUT_SOURCE_LOST
+	       : ret ? ioreturn(ret)
+		     : 0;
 }
 
 extern "C" int tegra_gm20b_scanout_outstanding(const void *display)
