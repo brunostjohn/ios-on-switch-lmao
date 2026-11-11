@@ -47,6 +47,11 @@ The NVENC magic is built three times (movk #0xd0b7): 0x31128 (TVMR codec 0, H.26
     controls (0x3e4f8-0x3f530); quality presets 0x3ca20 (T210 0x3cc54, quality level 0 at 0x3ce5c); level 0x37b98;
     CONTROL_PARAMS 0x3f12c-0x3f1a4 (codec type 3 | FORCE_OUTPIC | SLICE_STAT_ON | rc mode << 24); lists
     0x3e504-0x3e520 (IDR) and 0x3fb1c-0x3fb28 (slot << 1, temporal distance = POC difference).
+  - Methods per picture (0x3f12c-0x3f8b0): CONTROL_PARAMS, PICTURE_INDEX, APPLICATION_ID 3, DRV_PIC_SETUP,
+    ENC_STATUS, BITSTREAM, IOHISTORY, IO_RC_PROCESS (a 256-byte buffer, 0x3a694), IN_CUR_PIC, CHROMA_U, CHROMA_V, then
+    for P and B only (NvMedia type <= 2, 0x3f370) the ME predictor pair and the references, then OUT_REF_PIC_LUMA and
+    EXECUTE. An IDR has no ME predictors; app 3 turns predictor input and output off for a 0 address (I[0x910],
+    I[0x984] at 0x114e9-0x11521), which is what TegraNVENC writes when a submit names none.
   - The values: those functions followed with a zeroed configuration (no feature flags, quality level 0, rate control
     mode 0, which a zero bitrate forces to constant QP, NvMedia picture type 0 = automatic, chip version 6) for the
     first (IDR) picture at 1280x720, 1920x1080 and 640x360, 30 fps, by static symbolic evaluation of the disassembly

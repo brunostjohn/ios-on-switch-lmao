@@ -161,6 +161,10 @@ static void checkSize(uint32_t width, uint32_t height, const char *header, const
     differ += compare("quant", kQuant, s.setup + pc->q_control_offset, 16, false);
     CHECK(!differ, "%ux%u: %d bytes differ from the driver's setup", width, height, differ);
 
+    for (uint32_t i = 0; i < s.entry_count; i++) {
+        CHECK(s.entries[i].method != NVC5B7_SET_IN_MEPRED_DATA && s.entries[i].method != NVC5B7_SET_OUT_MEPRED_DATA,
+              "%ux%u: ME predictors on an IDR (the driver gives none, libnvtvmr 0x3f370)", width, height);
+    }
     uint64_t avail[TEGRA_NVENC_MAX_ENTRIES] = {0};
     for (uint32_t i = 0; i < s.entry_count; i++)
         avail[i] = 64u << 20;

@@ -223,8 +223,6 @@ void hevcnvenc_fill_submit(const HEVCEncConfig *c, uint32_t inputLayout, uint32_
     RELOC(NVC5B7_SET_IN_CUR_PIC, h->input, 0);
     RELOC(NVC5B7_SET_IN_CUR_PIC_CHROMA_U, h->input, method ? l->input.chroma_offset : 0);
     RELOC(NVC5B7_SET_OUT_REF_PIC_LUMA, h->recon, 0);
-    RELOC(NVC5B7_SET_IN_MEPRED_DATA, h->mepred[0], 0);
-    RELOC(NVC5B7_SET_OUT_MEPRED_DATA, h->mepred[1], 0);
     RELOC(NVC5B7_SET_OUT_BITSTREAM, h->bitstream, 0);
     RELOC(NVC5B7_SET_OUT_ENC_STATUS, h->aux, 0);
     RELOC(NVC5B7_SET_IOHISTORY, h->aux, l->history_offset);
