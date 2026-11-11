@@ -10,6 +10,7 @@
 #pragma once
 #include <algorithm>
 #include <atomic>
+#include <cstddef>
 #include <cstdint>
 #include "../../../../kits/SwitchGM20B/SwitchGM20B.h"
 #include "raw_push.h"
@@ -50,6 +51,18 @@ inline uint64_t stampOffset(uint32_t stamp)
 inline void emitStamp(Push &p, uint64_t va, uint32_t stamp)
 {
     p.inc(HOST_SEMAPHORE_A, {uint32_t(va >> 32) & 0xff, uint32_t(va), stamp, HOST_SEMAPHORE_RELEASE_16_WFI});
+}
+
+// A command buffer's two releases into its slot of the stamp page at `slots`: the first ahead of its prologue, the last
+// after its final work
+inline void emitStartStamp(Push &p, uint64_t slots, uint32_t stamp)
+{
+    emitStamp(p, slots + stampOffset(stamp) + offsetof(StampSlot, start), stamp);
+}
+
+inline void emitEndStamp(Push &p, uint64_t slots, uint32_t stamp)
+{
+    emitStamp(p, slots + stampOffset(stamp) + offsetof(StampSlot, end), stamp);
 }
 
 inline uint64_t ptimerNanoseconds(uint64_t units)

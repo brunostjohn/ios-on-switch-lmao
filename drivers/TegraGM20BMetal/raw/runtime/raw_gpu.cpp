@@ -3165,7 +3165,7 @@ CommandBuffer *Device::begin()
     uint64_t va;
     uint32_t *start = reinterpret_cast<uint32_t *>(alloc(push_, 64 * 4, 256, va));
     Push p{start, start + 64};
-    emitStamp(p, stamps_.va + stampOffset(cb.stamp), cb.stamp);
+    emitStartStamp(p, stamps_.va, cb.stamp);
     p.m(INVALIDATE_SAMPLER_CACHE_NO_WFI, 0);
     p.m(INVALIDATE_TEXTURE_HEADER_CACHE_NO_WFI, 0);
     p.inc(INVALIDATE_SHADER_CACHES_NO_WFI, {kInvalidateConstant});
@@ -3577,7 +3577,7 @@ bool CommandBuffer::commit(uint32_t &seqno)
         Push p{tail, tail + kTiledCacheFlushWords + kStampWords};
         if (tiledCache(d.k_.info()))
             p.at = tiledCacheFlush(p.at);
-        emitStamp(p, d.stamps_.va + stampOffset(stamp), stamp);
+        emitEndStamp(p, d.stamps_.va, stamp);
         segment(tail, p.at);
     }
     for (const auto &range : dirty_.merged()) {

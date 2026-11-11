@@ -3,6 +3,7 @@
 // PTIMER that counts 32 a tick of the 19.2 MHz oscillator; and the guards that keep its last release from waiting longer than
 // the kernel's own end of the submission does.
 #include <cstdint>
+#include <cstring>
 #include <string>
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
@@ -28,6 +29,39 @@ TEST(RawStamps, TheReleaseIsTheKernelsStatsStamp)
     // SEMAPHORED: OPERATION 3:0, RELEASE_WFI 20:20, RELEASE_SIZE 24:24 (cl906f.h)
     EXPECT_EQ(words[4], NV906F_SEMAPHORED_OPERATION_RELEASE | NV906F_SEMAPHORED_RELEASE_WFI_EN << 20 |
                             NV906F_SEMAPHORED_RELEASE_SIZE_16BYTE << 24);
+}
+
+// What the GPU does with one release: payload and PTIMER at the semaphore's address, here a page standing in for the stamps
+void release(const uint32_t (&words)[kStampWords], uint64_t pageVa, uint8_t *page, uint64_t ptimer)
+{
+    const uint64_t at = (uint64_t(words[1]) << 32 | words[2]) - pageVa;
+    ASSERT_LE(at + sizeof(StampRelease), 0x1000u);
+    const StampRelease r{words[3], 0, ptimer};
+    memcpy(page + at, &r, sizeof r);
+}
+
+// A command buffer's start and end releases, as begin() and commit() emit them, time it: both on the slot's start would
+// leave its end unwritten and every command buffer unstamped
+TEST(RawStamps, ACommandBuffersTwoReleasesTimeIt)
+{
+    const uint64_t pageVa = 0xc0'0000'0000ull;
+    alignas(StampSlot) uint8_t page[0x1000] = {};
+    for (const uint32_t stamp : {1u, 2u, kStampSlots, kStampSlots + 5}) {
+        uint32_t start[kStampWords], end[kStampWords];
+        Push ps{start, start + kStampWords}, pe{end, end + kStampWords};
+        emitStartStamp(ps, pageVa, stamp);
+        emitEndStamp(pe, pageVa, stamp);
+        release(start, pageVa, page, 1'000'000);
+        release(end, pageVa, page, 1'000'000 + 614'400);
+        const auto &slot = *reinterpret_cast<const StampSlot *>(page + stampOffset(stamp));
+        uint64_t ns = 0;
+        ASSERT_TRUE(stampedNanoseconds(slot, stamp, ns)) << stamp;
+        EXPECT_EQ(ns, 1'000'000u) << stamp;
+    }
+    const std::string raw = SourceText("../raw/runtime/raw_gpu.cpp");
+    EXPECT_THAT(Body(raw, "CommandBuffer *Device::begin()"), HasSubstr("emitStartStamp(p, stamps_.va, cb.stamp);"));
+    EXPECT_THAT(Body(raw, "bool CommandBuffer::commit(uint32_t &seqno)"),
+                HasSubstr("emitEndStamp(p, d.stamps_.va, stamp);"));
 }
 
 TEST(RawStamps, OneSecondOfTheOscillatorIsOneSecond)
@@ -121,12 +155,11 @@ TEST(RawStamps, TheEndReleaseWaitsNoLongerThanTheKernelsFence)
     EXPECT_THAT(fence, HasSubstr("NVDEF(NV906F, SEMAPHORED, RELEASE_WFI, EN)"));
     const std::string raw = SourceText("../raw/runtime/raw_gpu.cpp");
     const std::string commit = Body(raw, "bool CommandBuffer::commit(uint32_t &seqno)");
-    const size_t flush = commit.find("tiledCacheFlush(p.at)"), stamp = commit.find("emitStamp(");
+    const size_t flush = commit.find("tiledCacheFlush(p.at)"), stamp = commit.find("emitEndStamp(");
     ASSERT_NE(flush, std::string::npos);
     ASSERT_NE(stamp, std::string::npos);
     EXPECT_LT(flush, stamp);
-    EXPECT_THAT(Body(raw, "CommandBuffer *Device::begin()"),
-                HasSubstr("emitStamp(p, stamps_.va + stampOffset(cb.stamp)"));
+    EXPECT_THAT(Body(raw, "CommandBuffer *Device::begin()"), HasSubstr("emitStartStamp(p, stamps_.va, cb.stamp)"));
 }
 
 }  // namespace
