@@ -12,6 +12,7 @@
 #include <cstdint>
 #include <map>
 #include <string>
+#include <vector>
 #include "TegraGM20BABI.h"
 #include "TegraGM20BLayout.h"
 #include "raw_surfaces.h"
@@ -53,6 +54,19 @@ struct JobAdmission {
     uint64_t cookie = 0;
     uint32_t flags = 0;
     bool empty() const { return !cookie && !flags; }
+};
+
+// One SubmitJob (drivers/TegraGM20B/TegraGM20BJobABI.h, method 33): its pushes, the uses no resource set holds, and the
+// set by id and generation (set 0: none)
+struct KernelJob {
+    uint32_t channel = 0;
+    const TegraGM20BAbiPush *pushes = nullptr;
+    uint32_t pushCount = 0;
+    const TegraGM20BAbiSurfaceUse *uses = nullptr;
+    uint32_t useCount = 0;
+    uint32_t set = 0, generation = 0;
+    JobVisibility visibility = JobVisibility::External;
+    JobEvents events;
 };
 
 class Kernel {
@@ -161,6 +175,13 @@ public:
     bool exec(uint32_t channel, const TegraGM20BAbiPush *pushes, uint32_t count, uint32_t last, uint32_t &seqno,
               SurfaceList *surfaces = nullptr, int *result = nullptr, JobVisibility visibility = JobVisibility::Legacy,
               const JobEvents &events = {}, const JobAdmission &admission = {});
+
+    // Method 33. kIOReturnNotReady (in `result`) is the set's ended generation or a stale native view: no error is kept.
+    bool submitJob(const KernelJob &job, uint32_t &seqno, int *result = nullptr);
+    // Method 31: `set` (0: a new one) made with exactly `members`, its id and generation; `mirror`, the generation's word in the
+    // fence page. The kern_return_t.
+    int resourceSet(const std::vector<TegraGM20BAbiSurfaceUse> &members, uint32_t &set, uint32_t &generation,
+                    const volatile uint32_t *&mirror);
 
     std::shared_ptr<SharedEvents> sharedEvents();
 
