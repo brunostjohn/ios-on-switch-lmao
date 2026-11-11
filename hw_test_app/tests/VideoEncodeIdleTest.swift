@@ -23,8 +23,15 @@ struct VideoEncodeIdleTest: HWTest {
         let settings = CompressorSettings(
             codec: codec, width: width, height: height, fps: fps, bitrate: 4_000_000, realTime: false,
             requireHardware: true)
-        let encoded = try Compressor.encode(
-            settings, pattern: pattern, frames: Self.frames, pause: (Self.pauseAfter, Self.pauseSeconds))
+        let encoded: CompressedClip
+        do {
+            encoded = try Compressor.encode(
+                settings, pattern: pattern, frames: Self.frames, pause: (Self.pauseAfter, Self.pauseSeconds))
+        } catch VideoError.status(let call, let status) where codec == .hevc && VideoEncodeTest.hardwareEncoders()
+            .allSatisfy({ ($0[kVTVideoEncoderList_CodecType as String] as? UInt32) != kCMVideoCodecType_HEVC })
+        {
+            return .skip("no hardware HEVC encoder: none listed, and \(call) returned \(status)")
+        }
         let decoded = try Decompressor.decode(
             encoded.samples, format: encoded.format, pattern: pattern, bitDepth: 8, fps: fps)
         let afterPause = encoded.samples[(Self.pauseAfter + 1)...]
