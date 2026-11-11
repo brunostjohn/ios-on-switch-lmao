@@ -6,7 +6,7 @@ import struct
 import unittest
 from pathlib import Path
 
-from tools.gpu.maxwell import floats, gate, isa, texture
+from tools.gpu.maxwell import execute, floats, gate, isa, texture
 from tools.gpu.maxwell.execute import run
 from tools.gpu.maxwell.interp import Lane
 
@@ -64,6 +64,24 @@ class FloatsTest(unittest.TestCase):
     def test_half_fma_rounds_once(self):
         a, b, c = 0x3C01, 0x3C01, 0x8000 | 0x3C02  # (1+u)^2 - (1+2u) = u^2: lost by two roundings
         self.assertNotEqual(floats.arith('fma', [a, b, c], floats.F16), 0)
+
+
+class ImmediateTest(unittest.TestCase):
+    def test_f2f_immediate_is_a_floats_top_bits(self):
+        # F2F.F16.F32 r2, 1.0 and -2.0 (nv50_ir emitF2F: imm20 is the f32's top 20 bits, its sign at bit 56)
+        for value, half in ((0x3F800000, 0x3C00), (0xC0000000, 0xC000)):
+            w = 0x38A8 << 48 | (value >> 31) << 56 | (value >> 12 & 0x7FFFF) << 20 | 2 << 10 | 1 << 8 | 2
+            lane = Lane()
+            execute.alu(isa.name(w), w, lane, gate.Seeded(1, 0).inputs())
+            self.assertEqual(lane.r(2), half)
+
+    def test_fadd_saturates_where_32i_cannot(self):
+        # FADD.SAT r2, r1, 2.0 (imm20) clamps to 1.0; FADD32I has no SAT bit, so NAK must not choose it
+        w = 0x3858 << 48 | 1 << 50 | (0x40000000 >> 12 & 0x7FFFF) << 20 | 1 << 8 | 2
+        lane = Lane()
+        lane.w(1, 0x3F000000)
+        execute.alu(isa.name(w), w, lane, gate.Seeded(1, 0).inputs())
+        self.assertEqual(lane.r(2), 0x3F800000)
 
 
 class GateTest(unittest.TestCase):

@@ -37,7 +37,7 @@ def width_format(code: int) -> object:
 
 def f2f(w: int, lane: Lane, name: str, inputs: Inputs) -> int:
     dst, src = width_format(bits(w, 8, 2)), width_format(bits(w, 10, 2))
-    v = operand_b(lane, w, name, inputs, i20)
+    v = operand_b(lane, w, name, inputs, f20)
     if src is F16:
         v = (v >> 16) if bits(w, 41, 1) else v & 0xFFFF
     v = fmod(v, bits(w, 49, 1), bits(w, 45, 1), 16 if src is F16 else 32)
