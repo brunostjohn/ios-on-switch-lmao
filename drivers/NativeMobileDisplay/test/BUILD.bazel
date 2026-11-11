@@ -578,3 +578,18 @@ host_test(
         "//drivers/NativeMobileDisplay:SwitchTimedPresentDisplay.h",
     ],
 )
+
+# SwitchConsoleReleaseDisplay.h: the compositor's current frame goes to the screen when the migration's console hold drops.
+host_test(
+    name = "switch_console_release_test",
+    srcs = [
+        "switch_console_release_test.cpp",
+        "//drivers/NativeMobileDisplay:SwitchConsoleReleaseDisplay.h",
+    ],
+    data = [
+        "//drivers/NativeMobileDisplay:NativeLegacyDisplay.cpp",
+        "//drivers/NativeMobileDisplay:SwitchConsoleRelease.h",
+        "//kernel/xnu-10063.141.1/bsd:kern/kern_exec.c",
+        "//kernel/xnu-12377.121.6/bsd:kern/kern_exec.c",
+    ],
+)

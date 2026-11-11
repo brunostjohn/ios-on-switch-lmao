@@ -8755,6 +8755,12 @@ native_switch_mkdir(proc_t p, user_addr_t scratch, const char *path, uid_t owner
  * switch_console_hold keeps the console on screen instead of backboardd's progress bar (drivers/NativeMobileDisplay retires
  * the UI's frames undrawn), for at most an hour; the migration itself carries on either way. */
 volatile int switch_console_hold = 0;
+/* drivers/NativeMobileDisplay shows the compositor's current frame once the hold drops (SwitchConsoleRelease.h); weak for a
+ * kernel without the display. */
+__attribute__((weak)) void
+native_legacy_console_released(void)
+{
+}
 #define NATIVE_MIGRATION_TICK_S 15
 #define NATIVE_MIGRATION_HOLD_S 3600
 static struct {
@@ -8783,6 +8789,7 @@ native_migration_tick(thread_call_param_t p0 __unused, thread_call_param_t p1 __
 	if (!present) {
 		native_migration.active = 0;
 		switch_console_hold = 0;
+		native_legacy_console_released();
 		printf("SwitchMigration: FINISHED after %llum%02llus (%u plugin runs, %u failed): the home screen comes next\n",
 		    s / 60, s % 60, native_migration.plugins_done, native_migration.plugins_failed);
 		return;
@@ -8791,6 +8798,7 @@ native_migration_tick(thread_call_param_t p0 __unused, thread_call_param_t p1 __
 	    s / 60, s % 60, native_migration.plugins_started, native_migration.plugins_done, native_migration.plugins_failed);
 	if (switch_console_hold && s >= NATIVE_MIGRATION_HOLD_S) {
 		switch_console_hold = 0;
+		native_legacy_console_released();
 		printf("SwitchMigration: still running after %u min: the screen goes to the UI (the migration carries on)\n",
 		    NATIVE_MIGRATION_HOLD_S / 60);
 	}

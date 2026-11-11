@@ -3459,7 +3459,8 @@ public:
         if (transferred || !logicalPM || !bootMapping || !primary)
             return;
         // Retiring at the latch, the head may be a swap already on screen or asked for: the next one not yet taken goes.
-        const OriginalLegacySwapRequest *request = latchRetire ? firstUntaken() : pendingSwapRequest();
+        const OriginalLegacySwapRequest *request =
+            consoleReleasedFrame(latchRetire ? firstUntaken() : pendingSwapRequest());
         if (!request || !isValidated(request))
             return;
         if (presentNotDue(request))
@@ -4541,6 +4542,7 @@ public:
 
 #include "SwitchRetireDisplay.h"
 #include "SwitchTimedPresentDisplay.h"
+#include "SwitchConsoleReleaseDisplay.h"
 
     // A swap window A can scan in place: one full-frame BGRA surface (validateSwap's single layer), its rows a multiple of 64
     // bytes, at most one slot. The portrait-native layout only: window A then scans rows unrotated, as hekate's pitch window does.
@@ -5398,3 +5400,5 @@ extern "C" uint64_t native_display_last_swap_ns(void)
         absolutetime_to_nanoseconds(abs, &ns);
     return ns;
 }
+
+#include "SwitchConsoleRelease.h"
