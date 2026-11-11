@@ -2,16 +2,13 @@
 #import "RawMetalInternal.h"
 #include "raw_compute.h"
 #include "raw_compute_lookup.h"
+#include "raw_kernel_texture.h"
 #include "raw_surface_view.h"
 #include "raw_view.h"
 
-// A texture a raw kernel samples as it is: no image of its own the raw path would refresh first (a chain's levels, planes
-// converted, an extended-range stand-in, a shadow of rows the texture header cannot take)
 static bool plainTexture(RMTexture *t)
 {
-    const raw::Texture &x = t->_raw;
-    return t->_rawOk && x.tic && !x.chain && !x.converted() && !x.standIn && (!x.sampled || x.surfaceView) &&
-           !x.memoryless;
+    return t->_rawOk && raw::kernelSamplesInPlace(t->_raw);
 }
 
 bool admitComputeDispatch(RMCommandBuffer *cb, size_t at, const raw::ComputeKernelSet<raw::ComputeState> *kernels,
