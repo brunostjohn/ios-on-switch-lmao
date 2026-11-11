@@ -69,7 +69,8 @@ RMEventJob submitEventJobs(RMCommandBuffer *cb)
         leases.push_back(sharedEventLease((__bridge id)c.obj));
         signals.push_back({leases.back()->handle(), c.c});
     }
-    if (r.gpuOrder && r.m2vSinceRaw) {
+    const bool ordering = r.gpuOrder && r.m2vSinceRaw;
+    if (ordering) {
         uint32_t acquires = 0;
         const int kr = r.raw->orderAfterOthers(acquires);
         switch (raw::orderAnswer(kr)) {
@@ -82,20 +83,23 @@ RMEventJob submitEventJobs(RMCommandBuffer *cb)
             eventJobFailure(cb, kr);
             return RMEventJob::Retry;
         }
-        r.m2vSinceRaw = false;
         RAW_DIAGNOSTIC(r.stats.acquires += acquires);
     }
-    if (validateNativeEventWaits(cb, r.raw->channelGeneration()) != raw::EventDependencyState::ready)
+    const uint64_t generation = r.raw->channelGeneration();
+    if (validateNativeEventWaits(cb, generation) != raw::EventDependencyState::ready)
         return RMEventJob::Retry;
     uint32_t seqno = 0;
     for (size_t from = 0; from < signals.size(); from += TegraGM20BMaxJobEvents) {
         const uint32_t count = uint32_t(std::min<size_t>(signals.size() - from, TegraGM20BMaxJobEvents));
         int result = KERN_SUCCESS;
-        if (!r.raw->eventJob({nullptr, signals.data() + from, 0, count}, seqno, &result)) {
-            eventJobFailure(cb, result);
+        if (!r.raw->eventJob({nullptr, signals.data() + from, 0, count}, seqno, &result, generation)) {
+            if (raw::eventJobAnswer(result) != raw::EventJobAnswer::reordered)
+                eventJobFailure(cb, result);
             return RMEventJob::Retry;
         }
     }
+    if (ordering)
+        r.m2vSinceRaw = false;
     cb->_sharedSignalRanges = carried;
     publishSharedEvents(cb);
     cb->_seqno = seqno;

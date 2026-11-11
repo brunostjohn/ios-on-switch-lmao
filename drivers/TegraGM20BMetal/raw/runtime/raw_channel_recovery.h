@@ -98,6 +98,20 @@ private:
     size_t next_ = 0;
 };
 
+// A ring a larger one replaced, freed once nothing reads it: the work of its channel up to `seqno` completed, or that
+// channel is gone (a later generation's runs; the dead channel's work never runs again, and its seqnos are not the new
+// channel's, whose slot's fence may be behind them)
+struct OutgrownRing {
+    Bo bo;
+    uint32_t seqno = 0;
+    uint64_t generation = 0;
+
+    template <class Done> bool unused(uint64_t current, Done done) const
+    {
+        return generation != current || done(seqno);
+    }
+};
+
 // The next channel of `engines`, its context submitted by `context(channel, seqno)` before anything else runs on it. False:
 // the kernel made none, or refused its context, and no channel is left: `fence` is `none`, which every seqno has passed, so
 // nothing waits for `last` (a seqno of the dead channel) on a channel that never runs, whose slot's fence may be behind.

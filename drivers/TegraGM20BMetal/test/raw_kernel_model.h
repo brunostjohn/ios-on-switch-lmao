@@ -42,6 +42,7 @@ struct Model {
     unsigned notResponding = 0;  // WaitFences answered kIOReturnNotResponding while GetStatus calls the channel healthy
     bool foreignTakesFreedSlot = false;
     unsigned creates = 0, destroys = 0, staleReads = 0;
+    std::vector<uint64_t> freed;  // BoFree's handles, in order
     std::map<uint64_t, uint64_t> undefined;  // handle: the killed channel whose job wrote it last
 
     TegraGM20BAbiFence &fence(uint32_t slot)
@@ -161,11 +162,12 @@ extern "C" kern_return_t IOConnectCallStructMethod(mach_port_t, uint32_t method,
         auto &info = *static_cast<TegraGM20BAbiInfo *>(output);
         info = {};
         info.abi_version = TegraGM20BAbiVersion;
-        info.flags = TegraGM20BInfoKernelMap | TegraGM20BInfoSubmitAddress | TegraGM20BInfoKillRecord;
+        info.flags = TegraGM20BInfoKernelMap | TegraGM20BInfoSubmitAddress | TegraGM20BInfoKillRecord |
+                     TegraGM20BInfoCpuAccess;
         info.cls_copy = 0xb0b5;
         info.cls_eng3d = 0xb197;
         info.va_start = 0x1000000;
-        info.va_end = 0x100000000;
+        info.va_end = uint64_t(1) << 40;
         info.page_size = 4096;
         return KERN_SUCCESS;
     }
@@ -176,6 +178,9 @@ extern "C" kern_return_t IOConnectCallStructMethod(mach_port_t, uint32_t method,
         *static_cast<TegraGM20BAbiBoAllocReply *>(output) = {model.nextHandle++, token, 0};
         return KERN_SUCCESS;
     }
+    case TegraGM20BMethodBoImport:
+        *static_cast<TegraGM20BAbiBoAllocReply *>(output) = {model.nextHandle++, 0, 0};
+        return KERN_SUCCESS;
     case TegraGM20BMethodMap: {
         const auto &in = *static_cast<const TegraGM20BAbiMap *>(input);
         auto &reply = *static_cast<TegraGM20BAbiMapReply *>(output);
@@ -206,9 +211,18 @@ extern "C" kern_return_t IOConnectCallStructMethod(mach_port_t, uint32_t method,
     case TegraGM20BMethodGetStatus:
         return model.status(*static_cast<const TegraGM20BAbiChannel *>(input),
                             *static_cast<TegraGM20BAbiStatus *>(output));
-    case TegraGM20BMethodVmBind:
     case TegraGM20BMethodBoFree:
+        model.freed.push_back(static_cast<const TegraGM20BAbiBoFree *>(input)->handle);
+        return KERN_SUCCESS;
+    case TegraGM20BMethodCpuComplete: {
+        const auto &in = *static_cast<const TegraGM20BAbiCpuComplete *>(input);
+        *static_cast<TegraGM20BAbiCpuCompleteReply *>(output) = {in.range_count, 0, 0, 0, 0, 0};
+        return KERN_SUCCESS;
+    }
+    case TegraGM20BMethodVmBind:
     case TegraGM20BMethodUnmap:
+    case TegraGM20BMethodCpuAcquire:
+    case TegraGM20BMethodCpuRelease:
         return KERN_SUCCESS;
     default:
         return kIOReturnUnsupported;

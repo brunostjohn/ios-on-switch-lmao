@@ -1426,13 +1426,21 @@ public:
 
     // A job of no pushes that carries event waits and signals (at most TegraGM20BMaxJobEvents together): the kernel makes the
     // channel acquire each wait's producer, and releases the signals once every earlier submission of this channel and what
-    // orderAfterOthers queued for it completed. Called where submissions are (serialised).
-    bool eventJob(const JobEvents &events, uint32_t &seqno, int *result = nullptr)
+    // orderAfterOthers queued for it completed. Called where submissions are (serialised). `generation`: the channel the
+    // caller ordered the job after (orderAfterOthers) and checked its waits' producers on, 0 for none. A channel made again
+    // since has neither, so the job is not submitted: false with kIOReturnNotResponding, and the caller orders again.
+    bool eventJob(const JobEvents &events, uint32_t &seqno, int *result = nullptr, uint64_t generation = 0)
     {
         if (events.empty() || events.waitCount + events.signalCount > TegraGM20BMaxJobEvents || !ensureChannel())
             return false;
-        if ((contextless_ || k_.lost(channel_)) && !reopen())
+        Killed live = {};
+        if ((contextless_ || k_.lost(channel_) || liveKill(live)) && !reopen())
             return false;
+        if (generation && generation != channelGeneration()) {
+            if (result)
+                *result = kIOReturnNotResponding;
+            return false;
+        }
         SurfaceList none;
         uint32_t seq = 0;
         if (!k_.exec(channel_, nullptr, 0, lastSeqno_, seq, &none, result, JobVisibility::External, events))
@@ -1623,7 +1631,7 @@ private:
     uint64_t heapBound_ = 0;
     Ring push_, upload_;
     // rings replaced by larger ones, freed once the GPU passed the seqno
-    std::vector<std::pair<Bo, uint32_t>> grownOut_;
+    std::vector<OutgrownRing> grownOut_;
     bool overflowing_ = false;  // the open command buffer outgrew a ring with no memory for a larger one
     std::deque<std::vector<uint8_t>> overflow_;  // where it is written then (never submitted)
     uint32_t channel_ = 0, lastSeqno_ = 0;
