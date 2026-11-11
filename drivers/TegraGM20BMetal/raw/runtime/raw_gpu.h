@@ -964,6 +964,7 @@ public:
 
     // Actual GPU addresses resolve through this connection's binding table in the addressed job ABI.
     void useAddress(uint64_t va, uint64_t bytes, bool write);
+    bool useMember(uint64_t va, uint64_t bytes, bool write, bool hostWritten);
     void use(const Buffer &buffer, bool write);
     void use(const Texture &texture, bool write);
 
@@ -984,6 +985,9 @@ private:
     DirtyRanges dirty_;
     std::vector<Texture *> backings_;                            // memoryless backings it uses
     SurfaceList surfaces_;
+    std::vector<SetUse> memberUses_;
+    uint32_t memberRemovals_ = 0;
+    bool memberHostWritten_ = false;
     JobVisibility visibility_ = JobVisibility::Legacy;
     bool externalWrites_ = false;
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
@@ -1656,25 +1660,21 @@ private:
     SetView setView_;
     TextureTransfers transfers_;
 
-    // One job of `channel` naming the set; `uses`, the job's uses no member holds
-    bool job(SetView &view, uint32_t channel, const TegraGM20BAbiPush *pushes, uint32_t count, const SurfaceList &uses,
-             JobVisibility visibility, uint32_t &seqno, int *result = nullptr, const JobEvents &events = {})
+    // One job of `channel` naming the set; `uses`, the job's uses no member holds; `recorded`, the members its command
+    // buffer used (raw_resource_set.h submitInSet)
+    bool job(SetView &view, uint32_t channel, const TegraGM20BAbiPush *pushes, uint32_t count, SurfaceList &uses,
+             JobVisibility visibility, uint32_t &seqno, int *result = nullptr, const JobEvents &events = {},
+             const std::vector<SetUse> *recorded = nullptr, uint32_t removals = 0, bool hostWritten = false)
     {
-        if (!uses.valid()) {
-            if (result)
-                *result = kIOReturnBadArgument;
-            return false;
-        }
-        const KernelJob made = {channel, pushes, count, uses.uses().data(), uint32_t(uses.uses().size()), 0, 0,
-                                visibility, events};
-        return submitInSet(k_, set_, view, true, made, seqno, result);
+        const KernelJob made = {channel, pushes, count, nullptr, 0, 0, 0, visibility, events, hostWritten};
+        return submitInSet(k_, set_, view, true, made, seqno, result, &uses, recorded, removals);
     }
 
-    // [va, va + bytes) is in a member, so no job names it: as the submitting thread sees the set
-    bool member(uint64_t va, uint64_t bytes)
+    // The member [va, va + bytes) is in, so no job names it, as the submitting thread sees the set; else null
+    const SetMember *member(uint64_t va, uint64_t bytes)
     {
         set_.view(setView_);
-        return setView_.holds(va, bytes);
+        return setView_.find(va, bytes);
     }
 
     bool member(const Bo &bo)
@@ -1736,14 +1736,14 @@ private:
     // container, so the pointers pipeline() hands out stay valid
     std::unordered_map<uint32_t, Pipeline> pipelines_;
     std::vector<uint32_t> placed_;  // each pack program's heap offset, ~0u: not placed
-    uint64_t heapPlaced_ = 0;
+    std::atomic<uint64_t> heapPlaced_{0};
     // heapPlaced_ as of the last submission whose prologue invalidated the SMs' instruction caches, ~0: none on this channel.
     // The instruction cache prefetches past a program's end, where heapPlace puts the next program.
     uint64_t heapInvalidated_ = ~0ull;
     // Shader local memory (raw_slm.h), under lock_: the area and the most a placed program or kernel asks of a warp. An area
     // it outgrew is kept: a submission already made may still use it.
     Bo slm_;
-    uint64_t slmPerWarp_ = 0;
+    std::atomic<uint64_t> slmPerWarp_{0}, slmVa_{0};
     std::vector<Bo> slmOutgrown_;
     // the per-warp size the channel was last given (commit; 0 on a new channel): the submitting thread's
     uint64_t slmChannel_ = 0;
@@ -1893,10 +1893,10 @@ private:
     struct Backing {
         Texture texture;
         uint32_t tag = 0;
-        uint32_t lastUse = 0;
-        bool submitted = false;
+        std::atomic<uint32_t> lastUse{0};
+        std::atomic<bool> submitted{false};
         uint64_t lastCommit = 0, lastClosed = 0;  // commitCount_ and closedCount_ when a pass last asked for it
-        uint64_t usedNs = 0;        // compClock() when made, and at each commit of a command buffer that used it
+        std::atomic<uint64_t> usedNs{0};  // compClock() when made, and at each commit of a command buffer that used it
         CompMem *comp = nullptr;    // the compressed memory it is a view of (raw_comp.h), else none
         PlainMem *plain = nullptr;  // or the plain memory (a memoryless one's)
         // a compressed backing of its shape, or one on larger memory of its tag, replaced it: no pass takes it again,
@@ -1941,8 +1941,10 @@ private:
     std::thread grower_;
     bool newChunk(uint64_t size, bool dedicated, std::unique_lock<std::mutex> *unlocked, uint32_t &index);
     void growLoop();
-    uint64_t commitCount_ = 0;
-    uint64_t closedCount_ = 0;  // command buffers committed or abandoned (lock_)
+    // Written by the submitting thread alone; a command buffer's backings are marked used before closedCount_ moves
+    std::atomic<uint64_t> commitCount_{0};
+    std::atomic<uint64_t> closedCount_{0};  // command buffers committed or abandoned
+
 #if SWITCH_RAW_DIAGNOSTICS
     // the probe's ring of rows (raw_glass_mem.h) and the records of the command buffers whose rows it holds, read at a
     // begin() once their fences passed
@@ -1955,6 +1957,12 @@ private:
     void glassMemFrame();
     void glassMemRead(uint64_t now);
 #endif
+
+    // A pass's backing texture (Device::backing) is its Backing's first member
+    static Backing &backingOf(Texture &t)
+    {
+        return *reinterpret_cast<Backing *>(&t);
+    }
 
     bool init(std::string &err);
     bool openChannel(std::string &err);

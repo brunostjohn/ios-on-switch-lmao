@@ -160,7 +160,7 @@ bool Kernel::submitJob(const KernelJob &job, uint32_t &sequence, int *)
         fake->complete(sequence);
     return true;
 }
-int Kernel::resourceSet(const std::vector<TegraGM20BAbiSurfaceUse> &, uint32_t &, uint32_t &, const volatile uint32_t *&)
+int Kernel::resourceSet(std::vector<TegraGM20BAbiSurfaceUse> &, uint32_t &, uint32_t &, const volatile uint32_t *&)
 {
     return kIOReturnUnsupported;
 }

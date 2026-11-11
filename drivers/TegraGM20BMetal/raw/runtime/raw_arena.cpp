@@ -43,6 +43,9 @@ bool Device::bindArena(Arena &a)
         k_.free(a.bo);
         return false;
     }
+    Bo alias = a.bo;
+    alias.va = alias.vaBase = a.bufferVa;
+    set_.add(k_, {{&a.bo, TegraGM20BSurfaceWrite}, {&alias, TegraGM20BSurfaceWrite}});
     RAW_DIAGNOSTIC(stats.poolBytes += a.bytes);
     return true;
 }
@@ -89,7 +92,7 @@ void Device::freeArena(Arena &a)
     if (a.purged) {
         purgedArenas_--;
     } else {
-        k_.free(a.bo);
+        set_.free(k_, a.bo);
         RAW_DIAGNOSTIC(stats.poolBytes -= a.bytes);
     }
     k_.releaseVa(a.va, a.bytes);
@@ -249,7 +252,7 @@ void Device::purgeLocked(Arena &a, const std::atomic<uint32_t> &committed)
         purgedArenas_--;
         return;
     }
-    k_.free(a.bo);
+    set_.free(k_, a.bo);
     vm_address_t at = vm_address_t(a.cpu);
     vm_allocate(mach_task_self(), &at, a.bytes, VM_FLAGS_FIXED | VM_FLAGS_OVERWRITE);
     RAW_DIAGNOSTIC(stats.poolBytes -= a.bytes);

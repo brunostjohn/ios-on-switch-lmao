@@ -61,6 +61,7 @@ struct KernelJob {
     uint32_t set = 0, generation = 0;
     JobVisibility visibility = JobVisibility::External;
     JobEvents events;
+    bool hostWritten = false;  // the CPU wrote a member the job reads through the GPU L2 since the last job
 };
 
 class Kernel {
@@ -163,9 +164,9 @@ public:
 
     // Method 33. kIOReturnNotReady (in `result`) is the set's ended generation or a stale native view: no error is kept.
     bool submitJob(const KernelJob &job, uint32_t &seqno, int *result = nullptr);
-    // Method 31: `set` (0: a new one) made with exactly `members`, its id and generation; `mirror`, the generation's word in the
-    // fence page. The kern_return_t.
-    int resourceSet(const std::vector<TegraGM20BAbiSurfaceUse> &members, uint32_t &set, uint32_t &generation,
+    // Method 31: `set` (0: a new one) made with `members`, but each the kernel refused, which comes back with access 0; its
+    // id and generation; `mirror`, the generation's word in the fence page. The kern_return_t.
+    int resourceSet(std::vector<TegraGM20BAbiSurfaceUse> &members, uint32_t &set, uint32_t &generation,
                     const volatile uint32_t *&mirror);
 
     std::shared_ptr<SharedEvents> sharedEvents();

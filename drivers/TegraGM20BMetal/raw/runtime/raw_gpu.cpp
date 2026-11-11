@@ -701,8 +701,10 @@ bool Device::slmNeed(uint64_t perWarp)
         return false;
     if (slm_.bytes)
         slmOutgrown_.push_back(slm_);
+    set_.add(k_, area, TegraGM20BSurfaceWrite, true);
     slm_ = area;
-    slmPerWarp_ = perWarp;
+    slmVa_.store(area.va, std::memory_order_relaxed);
+    slmPerWarp_.store(perWarp, std::memory_order_release);
     os_log(os_log_create("com.brunostjohn.switch.TegraGM20BMetal", "raw"),
            "raw: shader local memory: %llu bytes a warp, %llu KiB", (unsigned long long)perWarp,
            (unsigned long long)(a.bytes >> 10));
@@ -732,6 +734,7 @@ bool Device::heapGrow(uint64_t end)
         vm_deallocate(mach_task_self(), cpu, part.bytes);
         return false;
     }
+    set_.add(k_, part.bo, TegraGM20BSurfaceRead, true);
     heapParts_.push_back(part);
     heapBound_ += part.bytes;
     return true;
@@ -1068,6 +1071,7 @@ bool Device::newChunk(uint64_t size, bool dedicated, std::unique_lock<std::mutex
         ch.free[0] = size;
         poolFree_ += size;
     }
+    set_.add(k_, ch.bo, TegraGM20BSurfaceWrite);
     chunks_[c] = std::move(ch);
     RAW_DIAGNOSTIC(stats.poolBytes += size);
     RAW_DIAGNOSTIC(stats.poolChunks++);
@@ -1233,7 +1237,7 @@ void Device::freeChunk(Chunk &ch)
     RAW_DIAGNOSTIC(stats.poolBytes -= ch.bytes);
     RAW_DIAGNOSTIC(stats.poolChunks--);
     RAW_DIAGNOSTIC(glassMemEvent("chunk freed", ch.bytes));
-    k_.free(ch.bo);
+    set_.free(k_, ch.bo);
     vm_deallocate(mach_task_self(), vm_address_t(ch.memory), ch.bytes);
     ch = Chunk();
 }
@@ -1986,6 +1990,7 @@ bool Device::newTiledChunk(std::vector<Chunk> &chunks, uint32_t kind, uint64_t s
         chunks.emplace_back();
     if (!dedicated)
         ch.free[0] = size;
+    set_.add(k_, ch.bo, TegraGM20BSurfaceWrite);
     chunks[c] = std::move(ch);
     RAW_DIAGNOSTIC(stats.poolBytes += size);
     RAW_DIAGNOSTIC(stats.poolChunks++);
@@ -2282,6 +2287,7 @@ bool Device::createControlBuffer(uint64_t length, Buffer &buffer)
     Chunk chunk;
     if (!k_.allocControl(length, chunk.bo, ControlUse::Bytes))
         return false;
+    set_.add(k_, chunk.bo, TegraGM20BSurfaceRead);
     chunk.memory = chunk.bo.cpu;
     chunk.bytes = chunk.used = chunk.bo.bytes;
     chunk.dedicated = true;
@@ -2332,6 +2338,7 @@ bool Device::wcAlloc(uint64_t bytes, Span &s)
         Chunk ch;
         if (!k_.alloc(size, true, ch.bo))
             return false;  // the GPU pool is full: pool memory instead (createBuffer)
+        set_.add(k_, ch.bo, TegraGM20BSurfaceWrite);
         ch.memory = ch.bo.cpu;
         ch.bytes = size;
         ch.dedicated = dedicated;
@@ -2361,7 +2368,7 @@ void Device::wcFree(Span &s)
     ch.used -= s.bytes;
     RAW_DIAGNOSTIC(stats.wcBytes -= s.bytes);
     if (ch.dedicated) {
-        k_.free(ch.bo);
+        set_.free(k_, ch.bo);
         ch = Chunk();
         s = {};
         return;
@@ -2389,7 +2396,7 @@ void Device::wcFree(Span &s)
     if (!ch.used) {
         for (const Chunk &other : wcChunks_)
             if (&other != &ch && other.bo.handle && !other.dedicated && !other.used) {
-                k_.free(ch.bo);  // (the kernel keeps the pages until the work submitted before has completed)
+                set_.free(k_, ch.bo);  // (the kernel keeps the pages until the work submitted before has completed)
                 ch = Chunk();
                 break;
             }
@@ -3219,6 +3226,10 @@ CommandBuffer *Device::begin()
     cb.dirty_.clear();
     cb.backings_.clear();
     cb.surfaces_.clear();
+    set_.view(setView_);
+    cb.memberUses_.clear();
+    cb.memberRemovals_ = setView_.removals;
+    cb.memberHostWritten_ = false;
     cb.sharedWaits_.clear();
     cb.sharedSignals_.clear();
     cb.visibility_ = JobVisibility::Legacy;
@@ -3479,9 +3490,20 @@ static uint64_t rowStorageBytes(uint32_t pitch, uint32_t width, uint32_t height,
     return last <= UINT64_MAX - rows ? rows + last : 0;
 }
 
+// A use of a member goes with the set and is only recorded, should the member leave the set before the job is submitted
+bool CommandBuffer::useMember(uint64_t va, uint64_t bytes, bool write, bool hostWritten)
+{
+    const SetMember *m = dev_->member(va, bytes);
+    if (!m)
+        return false;
+    memberUses_.push_back({m->handle, write ? uint32_t(TegraGM20BSurfaceWrite) : uint32_t(TegraGM20BSurfaceRead)});
+    memberHostWritten_ |= hostWritten;
+    return true;
+}
+
 void CommandBuffer::useAddress(uint64_t va, uint64_t bytes, bool write)
 {
-    if (va && dev_->k_.exactJobs() && !dev_->member(va, bytes ? bytes : 1))
+    if (va && dev_->k_.exactJobs() && !useMember(va, bytes ? bytes : 1, write, false))
         surfaces_.addAddress(va, bytes ? bytes : 1, write,
                              bytes && bytes <= UINT32_MAX ? TegraGM20BSurfaceRange : 0u);
 }
@@ -3498,7 +3520,8 @@ void CommandBuffer::use(const Buffer &buffer, bool write)
     const bool ranged = dev_->k_.exactJobs() && buffer.length && buffer.length <= UINT32_MAX;
     if (!ranged || !importContains(buffer.import, buffer.va, buffer.length))
         use(buffer.import, write);
-    if (buffer.va && buffer.length && dev_->k_.exactJobs() && !dev_->member(buffer.va, buffer.length))
+    if (buffer.va && buffer.length && dev_->k_.exactJobs() &&
+        !useMember(buffer.va, buffer.length, write, buffer.hostVisible))
         surfaces_.addAddress(buffer.va, buffer.length, write,
                              (buffer.hostVisible ? TegraGM20BSurfaceHostWritten : 0u) |
                              (ranged ? TegraGM20BSurfaceRange : 0u));
@@ -3519,7 +3542,7 @@ void CommandBuffer::use(const Texture &texture, bool write)
                               dev_->stats.memEvents.load(std::memory_order_relaxed));
 #endif
     if (view->va && dev_->k_.exactJobs() &&
-        !dev_->member(storage.bytes ? storage.va : view->va, storage.bytes ? storage.bytes : 1))
+        !useMember(storage.bytes ? storage.va : view->va, storage.bytes ? storage.bytes : 1, write, hostVisible))
         surfaces_.addAddress(storage.bytes ? storage.va : view->va, storage.bytes ? storage.bytes : 1, write,
                              (hostVisible ? TegraGM20BSurfaceHostWritten : 0u) |
                              (ranged ? TegraGM20BSurfaceRange : 0u));
@@ -3661,26 +3684,22 @@ bool CommandBuffer::commit(uint32_t &seqno)
 
         ~RollbackInvalidation()
         {
-            if (invalidates && !published) {
-                std::lock_guard<std::mutex> lock(device.lock_);
+            if (invalidates && !published)
                 device.heapInvalidated_ = before;
-            }
         }
     } rollback{d, invalidates, published, invalidatedBefore};
 
     uint64_t slmGiven = 0, slmVa = 0;
-    {
-        std::lock_guard<std::mutex> l(d.lock_);
-        if (shaderInvalidate_ && d.heapPlaced_ != d.heapInvalidated_) {
-            *shaderInvalidate_ |= kInvalidateInstruction;
-            invalidates = true;
-            invalidatedBefore = d.heapInvalidated_;
-            d.heapInvalidated_ = d.heapPlaced_;
-        }
-        if (d.slmPerWarp_ != d.slmChannel_) {
-            slmGiven = d.slmPerWarp_;
-            slmVa = d.slm_.va;
-        }
+    const uint64_t placed = d.heapPlaced_.load(std::memory_order_acquire);
+    if (shaderInvalidate_ && placed != d.heapInvalidated_) {
+        *shaderInvalidate_ |= kInvalidateInstruction;
+        invalidates = true;
+        invalidatedBefore = d.heapInvalidated_;
+        d.heapInvalidated_ = placed;
+    }
+    if (const uint64_t perWarp = d.slmPerWarp_.load(std::memory_order_acquire); perWarp != d.slmChannel_) {
+        slmGiven = perWarp;
+        slmVa = d.slmVa_.load(std::memory_order_relaxed);
     }
     // ahead of everything in it: a program placed after begin() may ask for more than the channel has
     if (slmGiven && !segments_.empty()) {
@@ -3719,29 +3738,6 @@ bool CommandBuffer::commit(uint32_t &seqno)
     // The cleans and WC ring writes complete before the kernel rings GP_PUT.
     __asm__ volatile("dsb sy" ::: "memory");
 #endif
-    if (d.k_.exactJobs()) {
-        std::lock_guard<std::mutex> lock(d.lock_);
-        auto control = [&](const Bo &bo, bool write) {
-            if (bo.handle && !d.member(bo))
-                surfaces_.add(bo.handle, write);
-        };
-        for (const Bo *bo : {&d.tic_, &d.tsc_, &d.zero_, &d.colorTable_})
-            control(*bo, false);
-        for (const Bo *bo : {&d.root_, &d.tickets_, &d.stamps_, &d.slm_})
-            control(*bo, true);
-        for (const auto &part : d.heapParts_)
-            surfaces_.addAccess(part.bo.handle, TegraGM20BSurfaceRead |
-                (invalidates ? uint32_t(TegraGM20BSurfaceHostWritten) : 0u));
-        for (const Bo &bo : d.slmOutgrown_)
-            control(bo, true);
-        // Split compute writes its frontier into upload storage. Retired chunks remain live through this submission.
-        control(d.upload_.bo, true);
-        for (const Bo &bo : d.upload_.outgrown)
-            control(bo, true);
-        control(d.push_.bo, false);
-        for (const Bo &bo : d.push_.outgrown)
-            control(bo, false);
-    }
     if (geometryWritable())
         return false;  // later internal writes invalidate the CPU proof; no prefix may reach the GPU
     if (!batchWork_.operations)
@@ -3755,7 +3751,8 @@ bool CommandBuffer::commit(uint32_t &seqno)
         int result = KERN_SUCCESS;
         RAW_DIAGNOSTIC(noteExecUses(uses.uses().size()));
         RAW_ENCODE_BEGIN(execSpan, Exec);
-        const bool executed = d.job(d.setView_, d.channel_, pushes, count, uses, visibility, seq, &result, events);
+        const bool executed = d.job(d.setView_, d.channel_, pushes, count, uses, visibility, seq, &result, events,
+                                    &memberUses_, memberRemovals_, invalidates || memberHostWritten_);
         RAW_ENCODE_END(execSpan);
         if (!executed) {
             admissionBlocked = !published && result == kIOReturnCannotLock;
@@ -3833,19 +3830,15 @@ bool CommandBuffer::commit(uint32_t &seqno)
     d.restart_ = restart_;
     d.ds_ = ds_;
     d.extrasLive_ = extrasLive_;
-    {
-        std::lock_guard<std::mutex> l(d.lock_);
-        const uint64_t now = compClock();
-        for (Texture *b : backings_)
-            for (Device::Backing *k : d.backings_)
-                if (&k->texture == b) {
-                    k->lastUse = seq;
-                    k->submitted = true;
-                    k->usedNs = now;
-                }
-        d.commitCount_++;
-        d.closedCount_++;
+    const uint64_t now = compClock();
+    for (Texture *b : backings_) {
+        Device::Backing &k = Device::backingOf(*b);
+        k.lastUse.store(seq, std::memory_order_relaxed);
+        k.submitted.store(true, std::memory_order_relaxed);
+        k.usedNs.store(now, std::memory_order_relaxed);
     }
+    d.commitCount_.fetch_add(1, std::memory_order_relaxed);
+    d.closedCount_.fetch_add(1, std::memory_order_release);
     releaseNativeReads();
     RAW_DIAGNOSTIC(d.stats.commits++);
     return true;
@@ -3864,10 +3857,7 @@ void CommandBuffer::abandon()
     releaseGeometry();
     releaseNativeReads();
     Device &d = *dev_;
-    {
-        std::lock_guard<std::mutex> l(d.lock_);
-        d.closedCount_++;
-    }
+    d.closedCount_.fetch_add(1, std::memory_order_release);
     d.overflowing_ = false;
     d.overflow_.clear();
     for (Device::Ring *r : {&d.push_, &d.upload_}) {
@@ -5811,7 +5801,7 @@ TextureTransferResult Device::transferTexture(const Texture &texture, uint32_t l
 #if SWITCH_RAW_DIAGNOSTICS
     if (write && glassMemOn.load(std::memory_order_relaxed))
         glassMem->wrote(texture.storageRange().va ? texture.storageRange().va : texture.va,
-                        __atomic_load_n(&commitCount_, __ATOMIC_RELAXED),
+                        commitCount_.load(std::memory_order_relaxed),
                         stats.memEvents.load(std::memory_order_relaxed));
 #endif
     return TextureTransferResult::Complete;
