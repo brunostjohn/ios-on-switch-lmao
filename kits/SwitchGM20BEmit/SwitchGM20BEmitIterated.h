@@ -33,6 +33,11 @@ struct switch_gm20b_iterated_program {
 // enable. The caller binds colour target 0 alone for the draws that follow.
 void switch_gm20b_iterated_blend(struct nv_push *p, const struct switch_gm20b_iterated_program *b);
 
+// Its first part: per-target blend off and the common block programmed, where the program, its constants, its pass count
+// and the enable come from elsewhere (SWITCH_GM20B_MACRO_VCM_CONSTANTS, each draw)
+#define SWITCH_GM20B_ITERATED_BLEND_COMMON_WORDS 10u
+void switch_gm20b_iterated_blend_common(struct nv_push *p, const struct switch_gm20b_blend_state *common);
+
 // Iterated blend off and per-target blend back on, the state NVK's context init leaves (the pass count stays: 0 is not a
 // legal value)
 void switch_gm20b_iterated_blend_off(struct nv_push *p);

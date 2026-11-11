@@ -69,6 +69,8 @@ static const char *zetaMemoryRefusal(int asked)
     d[@"fetch_sequential"] = @(fetch.sequential.load());
     d[@"fetch_triangles"] = @(fetch.sequentialTriangles.load());
     d[@"fetch_interlocked"] = @(fetch.interlocked.load());
+    d[@"fetch_rung2"] = @(fetch.fetchFree[0].load());
+    d[@"fetch_rung3"] = @(fetch.fetchFree[1].load());
     for (size_t r = 1; r < raw::kFetchRefusals; r++) {
         if (const uint64_t n = fetch.refusedAtRecord[r].load())
             d[[NSString stringWithFormat:@"fetch_record.%s", raw::kFetchRefusalNames[r]]] = @(n);

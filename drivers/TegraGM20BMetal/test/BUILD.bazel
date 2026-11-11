@@ -43,6 +43,7 @@
 #                     debug builds): today's forms are the words the runtime sent before, the relaxed ones never idle and
 #                     are the planner's, the 2D work copies and resolves as the 2D engine model does
 #   raw_constant_colour_test  raw/runtime/raw_constant_colour.h: which fills the ROP's constant colour may draw
+#   raw_fetch_free_test   raw/runtime/raw_fetch_free.h: a fetch-free form's rung and words, and the draws that take it
 #   raw_fetch_rungs_test  raw/runtime/raw_fetch_rungs.h: where the ROP's blend and iterated blend may stand for an
 #                     in-shader blend
 #   raw_quad_fill_test  raw/runtime/raw_quad_fill.h: which quads one bounding-box triangle can draw
@@ -1165,9 +1166,24 @@ host_test(
 )
 
 host_test(
+    name = "raw_fetch_free_test",
+    srcs = [
+        "raw_fetch_free_test.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_chip_facts.h",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_fetch_free.h",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_fetch_rungs.h",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_pack.h",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_push.h",
+    ],
+    cxx_std = "c++17",
+    deps = ["//kits/SwitchGM20BEmit:emit"],
+)
+
+host_test(
     name = "raw_fetch_rungs_test",
     srcs = [
         "raw_fetch_rungs_test.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_chip_facts.h",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_fetch_rungs.h",
     ],
     cxx_std = "c++17",

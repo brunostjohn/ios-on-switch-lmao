@@ -50,6 +50,7 @@
 #include "raw_descriptors.h"
 #include "raw_encode_profile.h"
 #include "raw_transfer.h"
+#include "raw_fetch_free.h"
 #include "raw_fetch_order.h"
 #include "raw_kernel.h"
 #include "raw_fence.h"
@@ -405,6 +406,10 @@ struct Pipeline {
     // the same state's barrier form, which orders its fetches with barriers where a pass's attachments cannot be viewed as
     // the storage images of this one (raw_storage_form.h); resolved with the state, null where the pack has none
     Pipeline *barrierTwin = nullptr;
+    // the same state's fetch-free form (raw_fetch_free.h), which a draw takes where its rung's rule holds; null where the
+    // pack has none. On that form: the rung it draws on and the colour it blends
+    Pipeline *fetchFree = nullptr;
+    FetchFreeForm freeForm;
     bool constantBlend = false;     // a blend factor of a blended color is the encoder's blend color
     bool blendKill = false;         // its SET_ITERATED_BLEND_OPTIMIZATION drops zero-source pixels (raw_blend_kill.h)
     bool fragmentDepth = false;     // its fragment program writes depth (SPH OMAP_DEPTH)
@@ -739,6 +744,10 @@ private:
     // call and one that draws, the colors its draws read, and the pixels they may write (scissor within viewport, each draw)
     bool called_ = false, drew_ = false, whole_ = false;
     uint32_t readBits_ = 0, areaW_ = 0, areaH_ = 0;
+    // rung-2 forms' ROP blends over each colour so far (rule fetch.blend's layers), and whether SET_CT_SELECT holds a rung-3
+    // form's one target in place of the pass's
+    std::array<uint8_t, 8> ropLayers_ = {};
+    bool narrowed_ = false;
     uint64_t drawPixels_ = 0;
     uint8_t samples_ = 1;  // its attachments' samples a pixel
     double vp_[4] = {};
@@ -754,6 +763,9 @@ private:
     using Runs = std::vector<std::pair<uint32_t, uint32_t>>;
     // `pl`, or its barrier twin where an attachment of this pass cannot be viewed as one of its storage images
     Pipeline *formFor(Pipeline *pl);
+    Pipeline *fetchFreeFor(const Pipeline &pl);
+    bool matrixConstants(const Pipeline &pl, const char **why);
+    uint32_t colorTargets() const;
     StorageFallback storageFallback(const Pipeline &pl) const;
 #if SWITCH_RAW_DIAGNOSTICS
     void probeEdges() const;
@@ -1060,6 +1072,7 @@ public:
     // A pack pipeline by its state key's FNV-1a (RawMetal.mm rawPipelineKey); null: not in the pack.
     // caTransform: its vertex function is Core Animation's fixed_vert_l?h_spc (Pipeline::caTransform)
     Pipeline *pipeline(uint64_t keyHash, PackForm form = PackForm::Default, bool caTransform = false);
+    bool fetchFreeReachable(uint64_t keyHash) const;
     Pipeline *placePipeline(uint64_t keyHash, PackForm form, bool caTransform);
     // The state's pack records for the variants its draws pick (PipelineVariantRecord), each placed, by name: null where it
     // cannot be (its programs find no room in the heap, or its storage or push metadata is not this runtime's)
@@ -1518,6 +1531,9 @@ public:
     std::atomic<bool> probeCompressNext{false};
     // Boolean visibility results take the copy-engine lowering before rule vis.boolean holds (raw_visibility.h)
     std::atomic<bool> probeBooleanVisibility{false};
+    // A fetching draw whose state has a fetch-free form of this rung takes it whatever its rule (2, 3), or keeps the storage
+    // form (4); 0: the rules decide (raw_fetch_free.h fetchFreeTaken)
+    std::atomic<uint8_t> probeFetchRung{0};
     std::map<uint64_t, Bo> probeCompressed;  // lock_
 #endif
 

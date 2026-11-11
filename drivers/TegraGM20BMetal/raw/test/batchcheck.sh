@@ -23,7 +23,7 @@ done
 xcrun clang++ "${FLAGS[@]}" -c "$RAW/fx/test/twod_sim.cpp" -o "$OUT/twod_sim.o"
 # kits/SwitchGM20BEmit's emitters, which raw_gpu.cpp and raw_transfer.cpp call, in the mock library every harness links (their
 # generated headers: bazel build //kits/SwitchGM20BEmit:push_headers)
-for f in SwitchGM20BEmit3D SwitchGM20BEmitBarrier mesa/nouveau_copy_rect; do
+for f in SwitchGM20BEmit3D SwitchGM20BEmitBarrier SwitchGM20BEmitIterated mesa/nouveau_copy_rect; do
     xcrun clang -O2 -std=c11 -DNDEBUG -I "$TREE/kits/SwitchGM20BEmit/mesa" -I "$TREE/bazel-bin/kits/SwitchGM20BEmit/gen" \
         -I "$TREE/third_party/mesa/src/nouveau/headers" -c "$TREE/kits/SwitchGM20BEmit/$f.c" -o "$OUT/kit_${f##*/}.o"
 done

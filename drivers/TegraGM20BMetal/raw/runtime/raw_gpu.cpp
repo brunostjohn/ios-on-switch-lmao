@@ -776,6 +776,12 @@ static uint8_t bindProgramCbufs(Push &w, const PackProgram &prog, uint32_t group
 Pipeline *Device::pipeline(uint64_t keyHash, PackForm form, bool caTransform)
 {
     Pipeline *pl = placePipeline(keyHash, form, caTransform);
+    if (form == PackForm::Default && pl && pl->fetchBits && fetchFreeReachable(keyHash)) {
+        Pipeline *free = placePipeline(keyHash, PackForm::FetchFree, caTransform);
+        std::lock_guard<std::mutex> l(lock_);
+        if (free && free != pl && free->freeForm.rung != FetchNone)
+            pl->fetchFree = free;
+    }
     if (form != PackForm::Default || !pl || !pl->storageBits || pl->storageBlendBits)
         return pl;
     Pipeline *twin = placePipeline(keyHash, PackForm::Barrier, caTransform);
@@ -783,6 +789,23 @@ Pipeline *Device::pipeline(uint64_t keyHash, PackForm form, bool caTransform)
     if (twin && twin != pl && !twin->storageBits)
         pl->barrierTwin = twin;
     return pl;
+}
+
+// Whether the state's fetch-free form, where the pack holds one, is a form a draw can take: its rung's unit proven, or a
+// debug build, whose probe channel forces a rung (its programs are placed in the heap only then)
+bool Device::fetchFreeReachable(uint64_t keyHash) const
+{
+    const PackPipeline *rec = pack_.find(keyHash, PackForm::FetchFree);
+    if (!rec)
+        return false;
+    const FetchFreeForm f = fetchFreeForm(*rec, pack_.iterated(*rec));
+    const bool proven =
+        f.rung == FetchBlend ? fixedBlendProven() : f.rung == FetchIteratedBlend && iteratedPassesProven(f);
+#if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
+    return proven || f.rung != FetchNone;
+#else
+    return proven;
+#endif
 }
 
 bool Device::usableRecord(const PackPipeline *rec) const
@@ -991,6 +1014,14 @@ void Device::build(Pipeline &pl, const PackPipeline &pp, const PlacedProgram &vs
         pl.storageBlendBits = pp.storageBlendMask & pp.storageWriteMask;
         memcpy(pl.storageTic, pp.storageTic, sizeof pl.storageTic);
         pl.readBits &= ~pl.storageBits;
+    }
+    pl.freeForm = (pp.flags & PipelineFetchFreeForm) ? fetchFreeForm(pp, pack_.iterated(pp)) : FetchFreeForm();
+    if (pl.freeForm.rung != FetchNone) {
+        pl.readBits |= uint8_t(1u << pl.freeForm.colour);
+        if (pl.freeForm.rung == FetchIteratedBlend) {
+            pl.restore.clear();
+            iteratedBlendWords(*pack_.iterated(pp), pl.freeForm.colour, pl.methods, pl.restore);
+        }
     }
     const uint32_t codeBytes = (fs.record->dataBytes ? fs.record->dataOffset : fs.record->bytes) - 0x80;
     const HeapPart *code = heapPartAt(fs.program + 0x50);
@@ -4164,8 +4195,47 @@ StorageFallback RenderEncoder::storageFallback(const Pipeline &pl) const
     return reason;
 }
 
+// The colour targets the pass binds: through its last attachment (CommandBuffer::render's targets)
+uint32_t RenderEncoder::colorTargets() const
+{
+    uint32_t count = 0;
+    for (uint32_t j = 0; j < pass_.count && j < 8; j++)
+        if (pass_.color[j].texture)
+            count = j + 1;
+    return count;
+}
+
+// The state's fetch-free form where this draw takes it (raw_fetch_free.h): the blended colour's target in the pass,
+// CPU-visible memory that is not a surface, and the rung-2 blends already over it decide rule fetch.blend
+Pipeline *RenderEncoder::fetchFreeFor(const Pipeline &pl)
+{
+    Pipeline *free = pl.fetchFree;
+    if (!free)
+        return nullptr;
+    const FetchFreeForm &f = free->freeForm;
+    const Texture *t = f.colour < pass_.count ? pass_.color[f.colour].texture : nullptr;
+    if (t && f.colour < 8 && shadowOf_[f.colour])
+        t = shadowOf_[f.colour];  // the texture the client holds, not the pool image the pass renders it through
+    if (!t)
+        return nullptr;
+    const FetchFreeDraw draw = {t->format, t->storage.hostVisible && !t->import, ropLayers_[f.colour]};
+    uint8_t forced = 0;
+#if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
+    forced = dev_->probeFetchRung.load(std::memory_order_relaxed);
+#endif
+    if (!fetchFreeTaken(f, draw, forced))
+        return nullptr;
+    if (f.rung == FetchBlend && ropLayers_[f.colour] < 255)
+        ropLayers_[f.colour]++;
+    RAW_DIAGNOSTIC(dev_->stats.fetch.fetchFree[f.rung == FetchBlend ? 0 : 1]++);
+    return free;
+}
+
 Pipeline *RenderEncoder::formFor(Pipeline *pl)
 {
+    if (pl)
+        if (Pipeline *free = fetchFreeFor(*pl))
+            return free;
     if (!pl || !pl->storageBits)
         return pl;
     const StorageFallback reason = storageFallback(*pl);
@@ -4853,6 +4923,13 @@ bool RenderEncoder::prepare(Pipeline *pl, uint32_t primitive, int32_t first, uin
                 p.raw(cb_->extrasLive_->restore.data(), uint32_t(cb_->extrasLive_->restore.size()));
                 cb_->extrasLive_ = nullptr;
             }
+            // the iterated blend unit refuses a draw binding more than one colour target (class error 0x59)
+            const uint32_t targets = colorTargets();
+            const bool narrow = pl->freeForm.rung == FetchIteratedBlend && targets > 1;
+            if (narrow != narrowed_) {
+                p.m(CT_SELECT, targetSelect(narrow ? 1 : targets));
+                narrowed_ = narrow;
+            }
             p.raw(pl->methods.data(), uint32_t(pl->methods.size()));
             RAW_DIAGNOSTIC(d.stats.blendKillBinds += pl->blendKill);
             if (!pl->restore.empty())
@@ -5068,6 +5145,28 @@ bool RenderEncoder::prepare(Pipeline *pl, uint32_t primitive, int32_t first, uin
     // reads; unknown geometry uses the clipped viewport/scissor extent rather than the whole render target.
     const PixelBox costBox = geometryAnalysis.cachedBox();
     drawPixels_ = costBox.empty() ? 0 : uint64_t(costBox.x1 - costBox.x0) * (costBox.y1 - costBox.y0);
+    return pl->freeForm.matrixSlot == kNoUniform || matrixConstants(*pl, why);
+}
+
+// A colour matrix form's draw: its iterated blend program and constants from the matrix uniform the draw binds, which
+// the GPU's macro reads through a non-prefetched GPFIFO entry over the uniform's bytes (the CPU reads none of them)
+bool RenderEncoder::matrixConstants(const Pipeline &pl, const char **why)
+{
+    const Bound &b = bufs_[2][pl.freeForm.matrixSlot];
+    constexpr uint32_t kWords = SWITCH_GM20B_MACRO_VCM_ARGUMENTS;
+    if (!b.va || uint64_t(pl.freeForm.matrixOffset) + 4 * kWords > b.size || ((b.va + pl.freeForm.matrixOffset) & 3)) {
+        *why = "a colour matrix form's draw binds no uniform buffer that holds the matrix";
+        cb_->refusal = {};
+        return false;
+    }
+    if (b.buffer && b.buffer->hostVisible && !b.buffer->wc && b.cpu)
+        cb_->clean(b.cpu + pl.freeForm.matrixOffset, 4 * kWords);
+    mme::matrixHeader(p_);
+    bodies_.push_back({bodyStart_, p_.at, 0, 0, true});
+    bodies_.push_back({nullptr, nullptr, b.va + pl.freeForm.matrixOffset, kWords, false});
+    dev_->push_.head = uint64_t(reinterpret_cast<uint8_t *>(p_.at) - dev_->push_.bo.cpu);
+    bodyStart_ = nullptr;
+    reserve();
     return true;
 }
 
@@ -5637,6 +5736,15 @@ void RenderEncoder::end()
     }
     if (samples_ > 1)
         sampleWords(p_, 1, d.root_.va);
+    // the 3D engine's work outside the pass (the blit encoder's draws) meets no iterated blend and the pass's targets
+    if (const Pipeline *live = cb_->extrasLive_; live && live->freeForm.rung == FetchIteratedBlend) {
+        p_.raw(live->restore.data(), uint32_t(live->restore.size()));
+        cb_->extrasLive_ = nullptr;
+    }
+    if (narrowed_) {
+        p_.m(CT_SELECT, targetSelect(colorTargets()));
+        narrowed_ = false;
+    }
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
     const bool flush = cb_->forms_.keepsTiledFlush();
     if (drew_ && !flush && tiledCache(d.k_.info()))

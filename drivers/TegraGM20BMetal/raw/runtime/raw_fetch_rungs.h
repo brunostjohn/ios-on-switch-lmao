@@ -1,12 +1,17 @@
 // SPDX-License-Identifier: MIT
 // The fetch ladder's fixed-function rungs (raw_pack.h PackFetchRung): where a state that blends by fetching its own
-// colour may instead draw through the ROP. Both need a pack record whose program writes the source and fetches nothing
-// (a key-changing pack variant the pack does not hold yet: PackPipeline::fetchRung marks the candidates only), so no draw
-// takes them until the pack does.
+// colour may instead draw through the ROP, with its fetch-free form (raw_fetch_free.h) where the pack holds one. Each
+// rung is taken only once its unit is proven on the chip (raw_chip_facts.h kProvenUnits, kIteratedBlendPasses).
 #pragma once
 #include <cstdint>
+#include "raw_chip_facts.h"
 
 namespace raw {
+
+constexpr bool fixedBlendProven()
+{
+    return kProvenUnits & ProvenFixedBlend;
+}
 
 // Rung 2, rule fetch.blend: the ROP's blend. GM20B's blender is exact integer arithmetic on the source and source alpha
 // quantised to 8-bit codes by the store rule, divided by 255 and rounded once (x1-units UNITS.md, fitted to every device
@@ -25,28 +30,24 @@ struct FixedBlendAsk {
 constexpr bool fixedBlendAcceptable(const FixedBlendAsk &a)
 {
     const bool unorm8 = a.format == 70 || a.format == 80;  // RGBA8Unorm, BGRA8Unorm
-    return unorm8 && !a.readable && !a.accumulates && a.standardFactors && (a.eightBitSources || a.computedLayers <= 2);
+    return fixedBlendProven() && unorm8 && !a.readable && !a.accumulates && a.standardFactors &&
+           (a.eightBitSources || a.computedLayers <= 2);
 }
 
 // Rung 3, rule fetch.iterated: the ROP's iterated blend (kits/SwitchGM20BEmit/SwitchGM20BEmitIterated.h) for blends with
-// no fixed-function equation (Core Animation's colour-matrix group and separable modes). Its setup is the one x1-units
-// derived from the class errors; it is taken once gpu.x1.iterated_blend reads nvn_accepted=nvn_run and
-// nvn_within_one=nvn_run on the chip.
-constexpr bool iteratedBlendProven()
-{
-    return false;
-}
-
+// no fixed-function equation (Core Animation's separable, non-separable and luminosity modes). Its setup is the one
+// x1-units derived from the class errors (on T-v2 the chip ran 5 of 5 of NVN's programs under it, 4 within one code).
 struct IteratedAsk {
-    bool candidate = false;      // PackPipeline::fetchRung carries kFetchCandidateIterated for the colour
-    uint32_t colourTargets = 0;  // targets the pass binds (the unit refuses a draw with more than one: 0x59)
-    uint32_t programWords = 0;   // its microcode, which ends in a write of TEMP0
-    uint32_t constants = 0;      // half-float constants it reads
+    bool candidate = false;  // the colour's fetch-free form is on rung 3
+    uint32_t colourTargets =
+        0;  // targets its draw binds (the unit refuses more than one: 0x59; the draw narrows to one)
+    uint32_t programWords = 0;  // its microcode, which ends in a write of TEMP0: one pass a word
+    uint32_t constants = 0;     // half-float constants it reads
 };
 
 constexpr bool iteratedBlendUsable(const IteratedAsk &a)
 {
-    return iteratedBlendProven() && a.candidate && a.colourTargets == 1 && a.programWords >= 1 &&
+    return a.candidate && a.colourTargets == 1 && a.programWords >= 1 && a.programWords <= kIteratedBlendPasses &&
            a.programWords <= 128 && a.constants <= 24;
 }
 

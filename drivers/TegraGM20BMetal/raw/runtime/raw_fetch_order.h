@@ -40,6 +40,8 @@ constexpr uint32_t kSequentialTriangles = 96;
 struct FetchCounts {
     std::atomic<uint64_t> provenWhole{0}, proofVertices{0}, proofBytes{0}, sequential{0}, sequentialTriangles{0},
         interlocked{0}, interlockedBlends{0};
+    // drawn by their state's fetch-free form instead: through the ROP's blend (rung 2), its iterated blend (rung 3)
+    std::atomic<uint64_t> fetchFree[2]{};
     std::atomic<uint64_t> refusedAtRecord[kFetchRefusals]{}, refusedAtEncode[kFetchRefusals]{};
     std::atomic<uint64_t> storageFallback[kStorageFallbacks]{};
     // the pipeline key hashes behind refusedAtRecord, refusedAtEncode and storageFallback; and those of every draw in the

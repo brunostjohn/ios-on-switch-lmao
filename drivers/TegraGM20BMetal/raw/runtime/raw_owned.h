@@ -73,6 +73,14 @@ constexpr MethodRange kOwnedMethods[] = {
     {0x204C, 0x2050},
     {0x214C, 0x2150},
     {0x2608, 0x260C},
+    // the iterated blend (raw_fetch_free.h): SET_ITERATED_BLEND and its pass count, the program's loads, its constants, the
+    // per-target blend switch and the common blend block it takes alpha from, a rung-3 fetch-free form's
+    {0x0DD0, 0x0DD8},
+    {0x0DF0, 0x0DF8},
+    {0x1480, 0x1500},
+    {0x12E4, 0x12E8},
+    {0x133C, 0x1354},
+    {0x1358, 0x135C},
 };
 // clang-format on
 

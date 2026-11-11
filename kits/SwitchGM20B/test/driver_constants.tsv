@@ -48,6 +48,7 @@ raw_mme.h	kDraw	policy	raw macro slot
 raw_mme.h	kDrawIndexed	policy	raw macro slot
 raw_mme.h	kIndirect	policy	raw macro slot
 raw_mme.h	kIndexedIndirect	policy	raw macro slot
+raw_mme.h	kMatrix	policy	raw macro slot
 fx_mip.cpp	kSubc2D	policy	raw::SUBC_2D, the kernel binding of FERMI_TWOD_A (gpu_chan.c)
 fx_mip.cpp	kSubc3D	policy	raw::SUBC_3D, the kernel binding of MAXWELL_B (gpu_chan.c)
 nvdec.cpp	kListedIndices	policy	decoder table size

@@ -107,6 +107,135 @@ static void build_indirect(struct mme_builder *b, bool indexed)
     }
 }
 
+/* Core Animation's colour matrix blend (vcm) on the iterated blend unit, fetch rung 3
+ * (drivers/TegraGM20BMetal/raw/pack/iterated/programs_long.py vcm): the program's words, whose 21-word head and 5-word
+ * tail its three forms share. The form is the matrix uniform's clamp pair's: none (p3 <= 0), clip (p4 <= 0), scale. */
+static const uint32_t vcm_head[] = {
+    0x3200d799, 0x30000e21, 0x0000c201, 0x31009029, 0x1000de01, 0x31809029, 0x100dde41,
+    0x32009029, 0x100dde81, 0x100dd6c1, 0x1068a129, 0x3100d941, 0x318fd941, 0x320fd941,
+    0x310fd781, 0x31e8c1a9, 0x30000e19, 0x20001e11, 0x1000ba01, 0x10003a01, 0x20003c01,
+};
+static const uint32_t vcm_clamp_head[] = {0x3200dd99, 0x30000e21, 0x1000ca01};
+static const uint32_t vcm_clip[] = {0x3180d1e9, 0x1000ca19, 0x3100d1e9, 0x1000ca11, 0x1000ba01};
+static const uint32_t vcm_scale[] = {
+    0x3080a029, 0x3080ae19, 0x0080ae19, 0xb16891f1, 0x00000826, 0x3100d1ee, 0x0000c806, 0x10009a06, 0x1000ba01,
+};
+static const uint32_t vcm_tail[] = {0x30581031, 0x000d5e01, 0x30581031, 0x128e6e01, 0x00009029};
+
+#define VCM_GUARD       0x068e /* half 1.0e-4: QuartzCore's max(Da, e) */
+#define HALF_MINUS_HALF 0xb800
+
+static void emit_words(struct mme_builder *b, const uint32_t *words, size_t count)
+{
+    for (size_t i = 0; i < count; i++) {
+        mme_mthd(b, NVB197_LOAD_ITERATED_BLEND_INSTRUCTION);
+        mme_emit(b, mme_imm(words[i]));
+    }
+}
+
+static void emit_constant(struct mme_builder *b, uint32_t j, uint32_t lane, struct mme_value half)
+{
+    mme_mthd(b, NVB197_SET_ITERATED_BLEND_CONSTANT_RED(j) + 4 * lane);
+    mme_emit(b, half);
+}
+
+/* 1 where a half's bits are above zero (an infinity too, not a NaN), else 0: Fermi's MME compares for equality only */
+static struct mme_value positive_half(struct mme_builder *b, struct mme_value h)
+{
+    struct mme_value out = mme_mov(b, mme_zero());
+    struct mme_value t = mme_and(b, h, mme_imm(0x8000));
+    mme_if(b, ieq, t, mme_zero())
+    {
+        mme_if(b, ine, h, mme_zero())
+        {
+            mme_and_to(b, t, h, mme_imm(0x7c00));
+            mme_if(b, ine, t, mme_imm(0x7c00))
+            {
+                mme_mov_to(b, out, mme_imm(1));
+            }
+            mme_if(b, ieq, t, mme_imm(0x7c00))
+            {
+                mme_and_to(b, t, h, mme_imm(0x3ff));
+                mme_if(b, ieq, t, mme_zero())
+                {
+                    mme_mov_to(b, out, mme_imm(1));
+                }
+            }
+        }
+    }
+    mme_free_reg(b, t);
+    return out;
+}
+
+static struct mme_value high_half(struct mme_builder *b, struct mme_value word)
+{
+    return mme_merge(b, mme_zero(), word, 0, 16, 16);
+}
+
+/* Its 11 arguments are the colour matrix uniform's words, QuartzCore's five half4 rows M0..M4 then the clamp pair
+ * (p3, p4), which a non-prefetched GPFIFO entry over the uniform buffer feeds it: the constants become
+ * K0..K4 = the rows' rgb, K5 = (M0.a, M1.a, M2.a), K6 = (M3.a, M4.a, e), K7 = (p3, -0.5, 0), then the program the
+ * clamp pair picks is loaded and enabled with its alpha. No CPU reads or writes a uniform for it. */
+static void build_vcm_constants(struct mme_builder *b, bool unused)
+{
+    (void)unused;
+    static const uint8_t alpha_slot[5][2] = {{5, 0}, {5, 1}, {5, 2}, {6, 0}, {6, 1}};
+    for (uint32_t row = 0; row < 5; row++) {
+        struct mme_value rg = mme_load(b);
+        struct mme_value half = mme_and(b, rg, mme_imm(0xffff));
+        emit_constant(b, row, 0, half);
+        mme_free_reg(b, half);
+        half = high_half(b, rg);
+        emit_constant(b, row, 1, half);
+        mme_free_reg(b, half);
+        mme_free_reg(b, rg);
+        struct mme_value ba = mme_load(b);
+        half = mme_and(b, ba, mme_imm(0xffff));
+        emit_constant(b, row, 2, half);
+        mme_free_reg(b, half);
+        half = high_half(b, ba);
+        emit_constant(b, alpha_slot[row][0], alpha_slot[row][1], half);
+        mme_free_reg(b, half);
+        mme_free_reg(b, ba);
+    }
+    emit_constant(b, 6, 2, mme_imm(VCM_GUARD));
+    struct mme_value clamp = mme_load(b);
+    struct mme_value p3 = mme_and(b, clamp, mme_imm(0xffff));
+    emit_constant(b, 7, 0, p3);
+    emit_constant(b, 7, 1, mme_imm(HALF_MINUS_HALF));
+    emit_constant(b, 7, 2, mme_zero());
+    struct mme_value clips = positive_half(b, p3);
+    mme_free_reg(b, p3);
+    struct mme_value p4 = high_half(b, clamp);
+    mme_free_reg(b, clamp);
+    struct mme_value scales = positive_half(b, p4);
+    mme_free_reg(b, p4);
+
+    mme_mthd(b, NVB197_LOAD_ITERATED_BLEND_INSTRUCTION_POINTER);
+    mme_emit(b, mme_zero());
+    emit_words(b, vcm_head, ARRAY_SIZE(vcm_head));
+    struct mme_value passes = mme_mov(b, mme_imm(ARRAY_SIZE(vcm_head) + ARRAY_SIZE(vcm_tail)));
+    mme_if(b, ine, clips, mme_zero())
+    {
+        emit_words(b, vcm_clamp_head, ARRAY_SIZE(vcm_clamp_head));
+        mme_if(b, ieq, scales, mme_zero())
+        {
+            emit_words(b, vcm_clip, ARRAY_SIZE(vcm_clip));
+            mme_add_to(b, passes, passes, mme_imm(ARRAY_SIZE(vcm_clamp_head) + ARRAY_SIZE(vcm_clip)));
+        }
+        mme_if(b, ine, scales, mme_zero())
+        {
+            emit_words(b, vcm_scale, ARRAY_SIZE(vcm_scale));
+            mme_add_to(b, passes, passes, mme_imm(ARRAY_SIZE(vcm_clamp_head) + ARRAY_SIZE(vcm_scale)));
+        }
+    }
+    emit_words(b, vcm_tail, ARRAY_SIZE(vcm_tail));
+    mme_mthd(b, NVB197_SET_ITERATED_BLEND_PASS);
+    mme_emit(b, passes);
+    mme_mthd(b, NVB197_SET_ITERATED_BLEND);
+    mme_emit(b, mme_imm(3));
+}
+
 static void write_macro(FILE *out, const char *name, void (*build)(struct mme_builder *, bool), bool indexed,
                         const struct nv_device_info *dev)
 {
@@ -144,11 +273,14 @@ int main(int argc, char **argv)
             "#ifndef SWITCH_GM20B_MACROS_H\n#define SWITCH_GM20B_MACROS_H\n\n#include <stdint.h>\n\n"
             "// The raw path's macro slots (ABI v1)\nenum {\n    SWITCH_GM20B_MACRO_DRAW,\n"
             "    SWITCH_GM20B_MACRO_DRAW_INDEXED,\n    SWITCH_GM20B_MACRO_INDIRECT,\n"
-            "    SWITCH_GM20B_MACRO_INDEXED_INDIRECT,\n};\n");
+            "    SWITCH_GM20B_MACRO_INDEXED_INDIRECT,\n    SWITCH_GM20B_MACRO_VCM_CONSTANTS,\n};\n"
+            "\n// SWITCH_GM20B_MACRO_VCM_CONSTANTS's arguments: the colour matrix uniform's words\n"
+            "#define SWITCH_GM20B_MACRO_VCM_ARGUMENTS 11u\n");
     write_macro(out, "draw", draw, false, &dev);
     write_macro(out, "draw_indexed", draw, true, &dev);
     write_macro(out, "indirect", build_indirect, false, &dev);
     write_macro(out, "indexed_indirect", build_indirect, true, &dev);
+    write_macro(out, "vcm_constants", build_vcm_constants, false, &dev);
     fprintf(out, "\n#endif\n");
     return fclose(out) ? 1 : 0;
 }

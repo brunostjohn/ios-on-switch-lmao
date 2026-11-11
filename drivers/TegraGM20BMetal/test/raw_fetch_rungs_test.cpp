@@ -51,15 +51,18 @@ TEST(RawFetchRungs, DataTargetsKeepTheExactBlend)
     EXPECT_FALSE(raw::fixedBlendAcceptable(a));
 }
 
-TEST(RawFetchRungs, IteratedBlendWaitsForTheDeviceAndOneTarget)
+TEST(RawFetchRungs, IteratedBlendTakesProgramsNoLongerThanTheDeviceShowedAndOneTarget)
 {
     raw::IteratedAsk a;
     a.candidate = true;
     a.colourTargets = 1;
     a.programWords = 13;
     a.constants = 3;
-    EXPECT_EQ(raw::iteratedBlendUsable(a), raw::iteratedBlendProven());
-    EXPECT_FALSE(raw::iteratedBlendProven()) << "gpu.x1.iterated_blend has not passed on the chip";
+    EXPECT_EQ(raw::iteratedBlendUsable(a), a.programWords <= raw::kIteratedBlendPasses);
+    EXPECT_EQ(raw::kIteratedBlendPasses, 0u) << "gpu.raw.fetch_rung3 has not passed on the chip";
+    a.programWords = raw::kIteratedBlendPasses + 1;
+    EXPECT_FALSE(raw::iteratedBlendUsable(a));
+    a.programWords = 1;
     a.colourTargets = 2;
     EXPECT_FALSE(raw::iteratedBlendUsable(a));
 }
