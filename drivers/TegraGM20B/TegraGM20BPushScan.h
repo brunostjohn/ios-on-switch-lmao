@@ -183,10 +183,14 @@ inline void pushParse(PushCounts &c, PushParse &p, const uint32_t *w, uint64_t n
 
 // The push profile's class of one push (TegraGM20BGpu.h TGM_PC_*): what its methods asked of the GPU (before -> after),
 // draws and clears by the pass state the parser holds.
+inline uint64_t targetPixels(const PushParse &p)
+{
+	return static_cast<uint64_t>(p.rtPitch ? p.rtWidth / 4 : p.rtWidth) * p.rtHeight;
+}
+
 inline uint8_t pushClass(const PushCounts &before, const PushCounts &after, const PushParse &p)
 {
-	const uint64_t pixels =
-		static_cast<uint64_t>(p.rtPitch ? p.rtWidth / 4 : p.rtWidth) * p.rtHeight;
+	const uint64_t pixels = targetPixels(p);
 	uint8_t area = 2;
 	if (pixels >= 600000) {
 		area = 0;

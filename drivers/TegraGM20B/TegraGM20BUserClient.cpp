@@ -2009,7 +2009,8 @@ void AGXDeviceUserClient::scanPushes(const tgm_push *pushes, uint32_t count, tgm
 	for (uint32_t i = 0; i < count; i++) {
 		if (prof && i < TGM_PROF_MAX) {
 			prof->cls[i] = TGM_PC_SKIP;
-			prof->draws[i] = prof->sampleDraws[i] = 0;
+			prof->draws[i] = prof->sampleDraws[i] = prof->kpx[i] = 0;
+			prof->interlocks[i] = 0;
 		}
 		const uint64_t va = pushes[i].va;
 		const uint64_t bytes = static_cast<uint64_t>(pushes[i].dwords) * 4;
@@ -2023,6 +2024,7 @@ void AGXDeviceUserClient::scanPushes(const tgm_push *pushes, uint32_t count, tgm
 		c.readBytes += bytes;
 		const uint64_t drawsBefore = c.draws;
 		const uint64_t sampleBefore = c.sampleDraws;
+		const uint64_t interlocksBefore = c.interlocks;
 		const uint8_t cls = scanPush(c, p, whole, words, bytes / 4);
 		if (prof && i < TGM_PROF_MAX) {
 			prof->cls[i] = cls;
@@ -2031,6 +2033,10 @@ void AGXDeviceUserClient::scanPushes(const tgm_push *pushes, uint32_t count, tgm
 			prof->draws[i] = static_cast<uint16_t>(draws > 0xffff ? 0xffff : draws);
 			prof->sampleDraws[i] =
 				static_cast<uint16_t>(sample > 0xffff ? 0xffff : sample);
+			const uint64_t kpx = tgm_scan::targetPixels(p) / 1000;
+			const uint64_t interlocks = c.interlocks - interlocksBefore;
+			prof->kpx[i] = static_cast<uint16_t>(kpx > 0xffff ? 0xffff : kpx);
+			prof->interlocks[i] = static_cast<uint8_t>(interlocks > 0xff ? 0xff : interlocks);
 		}
 	}
 	c.scanned = 1;
@@ -2408,7 +2414,7 @@ IOReturn AGXDeviceUserClient::exec(uint32_t channel, TegraGM20BAbiPush *input, u
 	tgm_prof prof;
 	bool profiled = false;
 	if (count && pushScanOn() && pushSubmits_++ % kScanEvery == 0) {
-		profiled = count <= TGM_PROF_MAX && !fences && pushScans_++ % kProfileEvery == 0;
+		profiled = count <= TGM_PROF_MAX && pushScans_++ % kProfileEvery == 0;
 		scanPushes(pushes, count, profiled ? &prof : nullptr);
 	}
 	uint32_t seqno = 0;

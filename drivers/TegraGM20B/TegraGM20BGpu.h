@@ -251,6 +251,9 @@ struct tgm_prof {
 	uint8_t cls[TGM_PROF_MAX];
 	/* each push's draws, and those shaded per sample (PushCounts::sampleDraws) */
 	uint16_t draws[TGM_PROF_MAX], sampleDraws[TGM_PROF_MAX];
+	/* its pass's colour target 0 in thousands of pixels, and its interlock enables (SwitchGpuProfileSequence.h) */
+	uint16_t kpx[TGM_PROF_MAX];
+	uint8_t interlocks[TGM_PROF_MAX];
 };
 
 uint32_t tgm_chan_submitted(struct tgm_chan *chan);

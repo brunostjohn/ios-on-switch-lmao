@@ -66,6 +66,8 @@
 #include "TegraGM20BComp.h"
 #include "TegraGM20BGpu.h"
 #include "SwitchGpuJobFences.h"
+#include "SwitchGpuJobTiming.h"
+#include "SwitchGpuProfileSequence.h"
 #include "SwitchGpuTimeline.h"
 #include "SwitchGpuChannelPolicy.h"
 #include "SwitchGpuPresentTokens.h"
@@ -1219,11 +1221,18 @@ struct tgm_chan {
 	u64 stat_exec,
 		stat_exec_max; /* stats: this window's stamped exec time (PTIMER units), for its owner */
 	u32 stat_exec_n;
+	/* stats: each job's seqnos by its first, the job being timed, and this window's jobs (SwitchGpuJobTiming.h) */
+	struct {
+		u32 first, last;
+	} stat_job[CHAN_NSTAMPS];
+	struct switch_gpu_job_run stat_run;
+	struct switch_gpu_job_window stat_jobs;
 	/* push profile: the profiled submission in flight (0: none), its pushes' classes, and this window's GPU time by
 	 * class (PTIMER units) and the pushes counted, for its owner */
-	u32 prof_seqno, prof_count, prof_subs;
-	u8 prof_cls[TGM_PROF_MAX];
-	u16 prof_draws[TGM_PROF_MAX], prof_sdraws[TGM_PROF_MAX];
+	u32 prof_seqno, prof_first, prof_count, prof_subs; /* prof_seqno: the job's last, prof_first its first */
+	u8 prof_cls[TGM_PROF_MAX], prof_ilk[TGM_PROF_MAX];
+	u16 prof_draws[TGM_PROF_MAX], prof_sdraws[TGM_PROF_MAX], prof_kpx[TGM_PROF_MAX];
+	struct switch_gpu_prof_seq prof_run, prof_slow; /* the profile being read, the window's slowest */
 	u64 prof_ns[TGM_PC_COUNT];
 	u32 prof_n[TGM_PC_COUNT];
 	u64 prof_dn[TGM_PC_COUNT],
@@ -2488,8 +2497,9 @@ static u64 present_gap(u32 seqno, u64 start);
  * fence push (WFI, L2 flush) takes the rest up to the end stamp; a push not stamped (TGM_PC_SKIP: a method may continue
  * into the next push, or the method stream was not read) has its time counted with the next one stamped. The stamps' wait
  * for idle keeps pushes from overlapping in a profiled submission, so those run slightly longer than others: one in 16
- * per connection, no more than one in flight per channel, and none with more than TGM_PROF_MAX pushes. Each window, the
- * "gpuprof" line gives every process's time by class (stats_exec_owners). */
+ * per connection, no more than one in flight per channel, and none with more than TGM_PROF_MAX pushes. A job with internal
+ * fences is read once its last seqno completes, against its first seqno's start stamp. Each window, the "gpuprof" line
+ * gives every process's time by class (stats_exec_owners), and "gpuprof sequence" its slowest profile push by push. */
 static void prof_collect(struct tgm_chan *chan, u32 seqno, u64 start, u64 end)
 {
 	volatile struct tgm_stamp *slot =
@@ -2500,13 +2510,21 @@ static void prof_collect(struct tgm_chan *chan, u32 seqno, u64 start, u64 end)
 	u32 n = min_t(u32, READ_ONCE(chan->prof_count), TGM_PROF_MAX);
 	u32 draws = 0;
 	u32 sdraws = 0;
+	u32 ilk = 0;
+	struct switch_gpu_prof_seq *run = &chan->prof_run;
+	struct switch_gpu_prof_push *at = NULL;
 
+	run->first = seqno;
+	run->last = READ_ONCE(chan->prof_seqno);
+	run->n = run->pushes = 0;
+	run->ns = 0;
 	for (i = 0; i < n; i++) {
 		u8 c = chan->prof_cls[i];
 		draws +=
 			chan->prof_draws
 				[i]; /* a push not stamped: its draws ran in the next stamped one's time */
 		sdraws += chan->prof_sdraws[i];
+		ilk += chan->prof_ilk[i];
 		if (c == TGM_PC_SKIP)
 			continue;
 		if (c >= TGM_PC_COUNT || slot[i].payload != seqno)
@@ -2518,12 +2536,23 @@ static void prof_collect(struct tgm_chan *chan, u32 seqno, u64 start, u64 end)
 		__atomic_fetch_add(&chan->prof_n[c], 1, __ATOMIC_RELAXED);
 		__atomic_fetch_add(&chan->prof_dn[c], draws, __ATOMIC_RELAXED);
 		__atomic_fetch_add(&chan->prof_sdn[c], sdraws, __ATOMIC_RELAXED);
-		draws = sdraws = 0;
+		if (run->n < SWITCH_GPU_PROF_SEQ) {
+			at = &run->push[run->n++];
+			at->cls = c;
+			at->ilk = (u8)min_t(u32, ilk, 0xff);
+			at->draws = (u16)min_t(u32, draws, 0xffff);
+			at->kpx = chan->prof_kpx[i];
+			at->us = (u32)(tgm_deadline_pt_ns(t - prev) / 1000);
+		}
+		run->pushes++;
+		draws = sdraws = ilk = 0;
 		prev = t;
 	}
 	if (end >= prev) {
 		__atomic_fetch_add(&chan->prof_ns[TGM_PC_FENCE], end - prev, __ATOMIC_RELAXED);
 		__atomic_fetch_add(&chan->prof_n[TGM_PC_FENCE], 1, __ATOMIC_RELAXED);
+		run->ns = tgm_deadline_pt_ns(end - start);
+		switch_gpu_prof_seq_offer(&chan->prof_slow, run);
 	}
 	__atomic_fetch_add(&chan->prof_subs, 1, __ATOMIC_RELAXED);
 }
@@ -2542,6 +2571,35 @@ static const char *prof_name(unsigned int c, char *buf, unsigned int len)
 	return buf;
 }
 
+/* A user channel's completed seqno for the job timing: a job's first begins it, each of its seqnos ends a batch, its last
+ * ends it and counts its whole time (first start to last end) as the window's exec time. */
+static void stats_job_seqno(struct tgm_chan *chan, u32 seqno)
+{
+	volatile struct tgm_stamps *st = chan_stamps(chan, seqno);
+	struct switch_gpu_job_run *run = &chan->stat_run;
+	u32 i = seqno % CHAN_NSTAMPS;
+	u64 span = 0;
+
+	if (READ_ONCE(chan->stat_job[i].first) == seqno) {
+		switch_gpu_job_begin(run, seqno, READ_ONCE(chan->stat_job[i].last), st->start.ns);
+		run->live = st->start.payload == seqno;
+	}
+	if (!run->live || (s32)(seqno - run->first) < 0 || (s32)(run->last - seqno) < 0)
+		return;
+	if (st->end.payload != seqno || st->end.ns < run->prev_pt) {
+		run->live = 0;
+		return;
+	}
+	switch_gpu_job_batch(&chan->stat_jobs, run, st->end.ns, tgm_deadline_pt_ns(st->end.ns - run->prev_pt));
+	if (seqno != run->last)
+		return;
+	span = st->end.ns - run->start_pt;
+	stats_add(&stats.exec_sum, &stats.exec_max, span);
+	__atomic_fetch_add(&chan->stat_exec_n, 1, __ATOMIC_RELAXED);
+	stats_add(&chan->stat_exec, &chan->stat_exec_max, span);
+	switch_gpu_job_end(&chan->stat_jobs, run);
+}
+
 static void stats_fences(struct tgm_chan *chan)
 {
 	u32 done = tgm_chan_completed(chan);
@@ -2553,19 +2611,25 @@ static void stats_fences(struct tgm_chan *chan)
 	u64 gap = 0;
 	volatile struct tgm_stamps *st = NULL;
 
-	if ((s32)(done - s) > CHAN_NSTAMPS)
+	if ((s32)(done - s) > CHAN_NSTAMPS) {
 		s = done - CHAN_NSTAMPS;
+		chan->stat_run.live = 0;
+	}
 	for (; (s32)(done - s) > 0; s++) {
 		i = (s + 1) % CHAN_NSTAMPS;
 		if (!chan->kernel) {
 			__atomic_fetch_add(&stats.fences, 1, __ATOMIC_RELAXED);
 			stats_add(&stats.lat_sum, &stats.lat_max,
 				  now - READ_ONCE(chan->stat_sub_ns[i]));
+			stats_job_seqno(chan, s + 1);
 		}
 		st = chan_stamps(chan, s + 1);
 		if (!chan->kernel && s + 1 == READ_ONCE(chan->prof_seqno)) {
-			if (st->start.payload == s + 1 && st->end.payload == s + 1)
-				prof_collect(chan, s + 1, st->start.ns, st->end.ns);
+			u32 first = READ_ONCE(chan->prof_first);
+			volatile struct tgm_stamps *fs = chan_stamps(chan, first);
+
+			if (fs->start.payload == first && st->end.payload == s + 1)
+				prof_collect(chan, first, fs->start.ns, st->end.ns);
 			WRITE_ONCE(chan->prof_seqno, 0);
 		}
 		if (st->start.payload != s + 1 || st->end.payload != s + 1)
@@ -2595,9 +2659,6 @@ static void stats_fences(struct tgm_chan *chan)
 					  start - READ_ONCE(chan->stat_sub_ptimer[i]));
 			}
 		}
-		stats_add(&stats.exec_sum, &stats.exec_max, end - start);
-		__atomic_fetch_add(&chan->stat_exec_n, 1, __ATOMIC_RELAXED);
-		stats_add(&chan->stat_exec, &chan->stat_exec_max, end - start);
 	}
 	chan->stat_done = done;
 }
@@ -2670,7 +2731,11 @@ static void stats_exec_owners(char *line, unsigned int len, u64 rate)
 		u64 prof_ns[TGM_PC_COUNT];
 		u32 prof_n[TGM_PC_COUNT];
 		u64 prof_dn[TGM_PC_COUNT], prof_sdn[TGM_PC_COUNT];
+		struct switch_gpu_job_window jobs;
+		struct switch_gpu_prof_seq seq;
 	} o[EXEC_OWNERS];
+	struct switch_gpu_job_window taken;
+	static struct switch_gpu_prof_seq seq; /* one caller at a time, as o */
 	struct tgm_chan *chan = NULL;
 	unsigned int used = 0;
 	unsigned int i = 0;
@@ -2701,6 +2766,11 @@ static void stats_exec_owners(char *line, unsigned int len, u64 rate)
 		if (max > o[i].max)
 			o[i].max = max;
 		o[i].subs += subs;
+		switch_gpu_job_take(&chan->stat_jobs, &taken);
+		switch_gpu_job_merge(&o[i].jobs, &taken);
+		switch_gpu_prof_seq_take(&chan->prof_slow, &seq);
+		if (seq.n && seq.ns > o[i].seq.ns)
+			o[i].seq = seq;
 		for (c = 0; c < TGM_PC_COUNT; c++) {
 			o[i].prof_ns[c] +=
 				__atomic_exchange_n(&chan->prof_ns[c], 0, __ATOMIC_RELAXED);
@@ -2724,6 +2794,10 @@ static void stats_exec_owners(char *line, unsigned int len, u64 rate)
 	}
 	if (at)
 		nvxnu_stats("tegra-gm20b: exec by process: %s", line);
+	for (i = 0; i < EXEC_OWNERS; i++)
+		if (o[i].jobs.batches > o[i].jobs.jobs &&
+		    switch_gpu_job_format(line, len, o[i].name, &o[i].jobs))
+			nvxnu_stats("tegra-gm20b: jobs %s", line);
 	/* each process's profiled submissions: their GPU time by push class, the largest first, per submission */
 	for (i = 0; i < EXEC_OWNERS; i++) {
 		u64 total = 0;
@@ -2764,6 +2838,8 @@ static void stats_exec_owners(char *line, unsigned int len, u64 rate)
 			shown++;
 		}
 		nvxnu_stats("tegra-gm20b: gpuprof %s", line);
+		if (switch_gpu_prof_seq_format(line, len, o[i].name, &o[i].seq))
+			nvxnu_stats("tegra-gm20b: gpuprof sequence %s", line);
 	}
 }
 
@@ -4861,7 +4937,7 @@ static void chan_submission_room(struct tgm_chan *chan, const struct tgm_push *p
 
 	if (profiled && (s32)(tgm_chan_completed(chan) - profiled) > CHAN_NSTAMPS)
 		profiled = 0;
-	if (*prof && (!stats_on() || chan->kernel || count > TGM_PROF_MAX || job_fences || profiled))
+	if (*prof && (!stats_on() || chan->kernel || count > TGM_PROF_MAX || profiled))
 		*prof = NULL;
 	for (i = 0; *prof && i < count; i++)
 		stamps += !pushes[i].incomplete && (*prof)->cls[i] != TGM_PC_SKIP;
@@ -4994,9 +5070,12 @@ static int chan_exec(struct tgm_chan *chan, const struct tgm_push *pushes, uint3
 				chan->prof_cls[i] = TGM_PC_SKIP;
 		memcpy(chan->prof_draws, prof->draws, count * sizeof(prof->draws[0]));
 		memcpy(chan->prof_sdraws, prof->sampleDraws, count * sizeof(prof->sampleDraws[0]));
+		memcpy(chan->prof_kpx, prof->kpx, count * sizeof(prof->kpx[0]));
+		memcpy(chan->prof_ilk, prof->interlocks, count);
 		WRITE_ONCE(chan->prof_count, count);
+		WRITE_ONCE(chan->prof_first, chan->submitted + 1);
 		WRITE_ONCE(chan->prof_seqno,
-			   chan->submitted + 1); /* before the fence that completes it */
+			   chan->submitted + 1 + fences); /* before the fence that completes it */
 	}
 	/* The L2 first: page-table lines a GPU-ordered map wrote around (TegraGM20BTlb.h) go before the TLB refetches. */
 	tlb = tgm_tlb_take(&chan->tlb, &chan->vm->tlb) || bind;
@@ -5023,6 +5102,10 @@ static int chan_exec(struct tgm_chan *chan, const struct tgm_push *pushes, uint3
 	job.prof = prof;
 	job.first = chan->chan.gpfifo.cur;
 	job.unprefetched = (l2_on() && host_written) || tlb;
+	if (stats_on()) {
+		WRITE_ONCE(chan->stat_job[(chan->submitted + 1) % CHAN_NSTAMPS].last, chan->submitted + 1 + fences);
+		WRITE_ONCE(chan->stat_job[(chan->submitted + 1) % CHAN_NSTAMPS].first, chan->submitted + 1);
+	}
 	last = switch_gpu_job_emit(pushes, count, chan->submitted, &emitter);
 	tgm_hang_log_submit(&chan->hang, last, job.first, chan->chan.gpfifo.cur);
 

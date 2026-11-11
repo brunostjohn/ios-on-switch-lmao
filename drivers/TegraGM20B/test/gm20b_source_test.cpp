@@ -351,8 +351,12 @@ TEST(GM20BPushScanSource, KernelUsesTheHeader)
 	// A stamp only after a push whose class is not SKIP, only on a profiled submission.
 	EXPECT_THAT(Between(gpu(), "static void chan_job_entry(", "\n}\n"),
 		    HasSubstr("if (prof && !pushes[i].incomplete && prof->cls[i] != TGM_PC_SKIP) {"));
+	// A job with internal fences is profiled whole: read at its last seqno, against its first's start stamp.
 	EXPECT_THAT(Between(gpu(), "static void chan_submission_room(", "\n}\n"),
-		    HasSubstr("|| job_fences || profiled))"));
+		    HasSubstr("|| count > TGM_PROF_MAX || profiled))"));
+	EXPECT_THAT(Between(gpu(), "static int chan_exec(", "\n}\n"), HasSubstr("chan->submitted + 1 + fences); /*"));
+	EXPECT_THAT(Between(gpu(), "static void stats_fences(", "\n}\n"),
+		    HasSubstr("prof_collect(chan, first, fs->start.ns, st->end.ns)"));
 }
 
 // Direct scanout's fence-only present (NativeMobileDisplay, TEGRA_SCANOUT_COPY_FENCE_ONLY) launches no copy.
