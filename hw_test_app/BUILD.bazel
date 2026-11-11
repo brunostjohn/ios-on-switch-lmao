@@ -41,6 +41,7 @@ swift_library(
     srcs = glob([
         "gpu/*.swift",
         "gpu/scenes/*.swift",
+        "gpu/x1/*.swift",
     ]),
     copts = SWIFT_COPTS,
     module_name = "HWTestGPU",
@@ -225,6 +226,7 @@ filegroup(
         "core/*.swift",
         "gpu/*.swift",
         "gpu/scenes/*.swift",
+        "gpu/x1/*.swift",
         "kit/*.swift",
         "tests/*.swift",
     ]),

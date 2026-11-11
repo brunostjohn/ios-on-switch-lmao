@@ -5,8 +5,8 @@
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
 // GM20B methods Metal cannot reach, for hw_test_app's hardware probes (app27/X1RawProbes.swift): each NSData holds
 // (method, value) uint32 pairs of the 3D class. Every draw of one instance this process encodes emits `before` after
-// its state and `after` once it ended, until a call with `before` nil disarms them. The probe's command buffers must
-// complete before it disarms: their encoding may run after commit returns.
+// its state and `after` once it ended, until a call with `before` nil disarms them and answers how many draws emitted
+// them. The probe's command buffers must complete before it disarms: their encoding may run after commit returns.
 static bool appendMethods(NSData *pairs, std::vector<uint32_t> &words)
 {
     if (!pairs)
@@ -25,7 +25,7 @@ static bool appendMethods(NSData *pairs, std::vector<uint32_t> &words)
 
 @implementation RMDevice (Probe)
 
-// nil when armed or disarmed, else why not
+// Arming: nil, else why not. Disarming: the draws that emitted them, as a decimal string.
 - (NSString *)switchRawProbeBefore:(NSData *)before after:(NSData *)after
 {
     raw::Device &d = *gRM->raw;
@@ -33,7 +33,7 @@ static bool appendMethods(NSData *pairs, std::vector<uint32_t> &words)
         d.probeArmed.store(false, std::memory_order_release);
         std::lock_guard<std::mutex> hold(d.probeLock);
         d.probeWords.reset();
-        return nil;
+        return [NSString stringWithFormat:@"%llu", (unsigned long long)d.probeEmitted.exchange(0)];
     }
     auto words = std::make_shared<raw::Device::ProbeWords>();
     if (!appendMethods(before, words->before) || !appendMethods(after, words->after))
@@ -43,6 +43,7 @@ static bool appendMethods(NSData *pairs, std::vector<uint32_t> &words)
     {
         std::lock_guard<std::mutex> hold(d.probeLock);
         d.probeWords = std::move(words);
+        d.probeEmitted.store(0, std::memory_order_relaxed);
     }
     d.probeArmed.store(true, std::memory_order_release);
     return nil;

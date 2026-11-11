@@ -1,13 +1,13 @@
 import Foundation
 import HWTestCore
-import HWTestGPU
 import Metal
 
 /// COMPILER.md E4: GM20B's ROP blend on BGRA8 against Metal's half arithmetic, per factor pair, over the domain Core
 /// Animation feeds it: premultiplied s <= sa, each one of the 256 halves nearest k / 255 (32,896 pairs), over every
 /// destination code. One 4096 x 2056 draw a pair: pixel p is pair p / 256 over code p % 256 (red and alpha; green and
-/// blue over two other codes). The half-FMA model is the claim's; the others say which arithmetic the ROP does.
-enum X1BlendProbes {
+/// blue over two other codes). The reference is the model an M-series Mac matches in every case (X1ProbeTests): each
+/// product rounded to half, then their sum; a fused multiply-add misses it for dov, sat and xor.
+public enum X1BlendProbes {
     static let width = 4096
     static let height = 2056
 
@@ -39,10 +39,7 @@ enum X1BlendProbes {
         return (255 - d, (d * 7 + 3) & 255, d, d)
     }
 
-    static let exact = X1Probe(
-        id: "gpu.x1.blend_exact", name: "ROP blend on BGRA8 against Metal's half arithmetic, 8.4 M cases a pair",
-        probe: "E4", timeout: 300
-    ) { gpu in
+    public static func exact(_ gpu: GPU) async throws -> ProbeFinding {
         var wrong: [String: Int] = [:]
         var metrics = Metrics()
         var paths: [String] = []
@@ -91,9 +88,9 @@ enum X1BlendProbes {
                 }.path)
             let bytes = try await gpu.read(target, bytesPerPixel: 4)
             let counts = compare(pair, bytes)
-            wrong[pair.name + "_wrong"] = counts.fma
-            metrics.set(pair.name + "_separate_wrong", counts.separate)
-            metrics.set(pair.name + "_exact_wrong", counts.exact)
+            wrong[pair.name + "_wrong"] = counts.separate
+            metrics.set(pair.name + "_fma_misses", counts.fma)
+            metrics.set(pair.name + "_exact_misses", counts.exact)
             metrics.set(pair.name + "_max_diff", counts.maxDiff)
             if let first = counts.first { metrics.set(pair.name + "_first", first) }
         }
@@ -105,14 +102,14 @@ enum X1BlendProbes {
         var first: String?
 
         mutating func add(_ have: Int, _ s: Double, _ fs: Double, _ d: Double, _ fd: Double, at p: Int, channel: Int) {
-            let fma = X1Reference.unorm(X1Reference.halfFMA(s, fs, d, fd), top: 255)
-            if have != fma {
-                self.fma += 1
-                if first == nil { first = "\(p).\(channel):\(have),want_\(fma)" }
+            let want = X1Reference.unorm(X1Reference.halfSeparate(s, fs, d, fd), top: 255)
+            if have != want {
+                separate += 1
+                if first == nil { first = "\(p).\(channel):\(have),want_\(want)" }
             }
-            if have != X1Reference.unorm(X1Reference.halfSeparate(s, fs, d, fd), top: 255) { separate += 1 }
+            if have != X1Reference.unorm(X1Reference.halfFMA(s, fs, d, fd), top: 255) { fma += 1 }
             if have != X1Reference.unorm(X1Reference.exact(s, fs, d, fd), top: 255) { exact += 1 }
-            maxDiff = max(maxDiff, abs(have - fma))
+            maxDiff = max(maxDiff, abs(have - want))
         }
     }
 

@@ -47,6 +47,7 @@ enum X1RawProbes {
         var wrong: [String: Int] = [:]
         var metrics = Metrics()
         var paths: [String] = []
+        var emitted = 0
         for (mode, words) in [("plain", [(UInt32, UInt32)]()), ("noop", [(setIteratedBlendOptimization, UInt32(1))])] {
             for half in [true, false] {
                 let format: MTLPixelFormat = half ? .rgba16Float : .bgra8Unorm
@@ -67,8 +68,10 @@ enum X1RawProbes {
                 if words.isEmpty {
                     paths.append(try await gpu.run(draw).path)
                 } else {
-                    paths.append(
-                        try await RawMethods.draw(gpu, before: words, after: [(setIteratedBlendOptimization, 0)], draw))
+                    let drawn = try await RawMethods.draw(
+                        gpu, before: words, after: [(setIteratedBlendOptimization, 0)], draw)
+                    paths.append(drawn.path)
+                    emitted += drawn.emitted
                 }
                 let after = try await gpu.read(target, bytesPerPixel: half ? 8 : 4)
                 let changed = zip(after, initial).filter { $0 != $1 }.count
@@ -79,7 +82,7 @@ enum X1RawProbes {
                 }
             }
         }
-        return ProbeFinding.counted(wrong, paths: paths, metrics: metrics)
+        return ProbeFinding.counted(wrong, paths: paths, metrics: metrics).emitting(emitted)
     }
 
     /// The six vertices of each rectangle [x0, x1) x [y0, y1) of a size x size target, in clip space.
@@ -103,6 +106,7 @@ enum X1RawProbes {
         let state = try gpu.render(vertex: "x1_colored_vertex", fragment: "x1_colored_fragment", format: .bgra8Unorm)
         var pictures: [[UInt8]] = []
         var paths: [String] = []
+        var emitted = 0
         for swizzled in [false, true] {
             let target = try gpu.texture(.bgra8Unorm, size, size, usage: [.renderTarget, .shaderRead])
             let draw = { (commands: MTLCommandBuffer) in
@@ -114,10 +118,11 @@ enum X1RawProbes {
                 encoder.endEncoding()
             }
             if swizzled {
-                paths.append(
-                    try await RawMethods.draw(
-                        gpu, before: [(setViewportCoordinateSwizzle0, 0x6402)],
-                        after: [(setViewportCoordinateSwizzle0, 0x6420)], draw))
+                let drawn = try await RawMethods.draw(
+                    gpu, before: [(setViewportCoordinateSwizzle0, 0x6402)],
+                    after: [(setViewportCoordinateSwizzle0, 0x6420)], draw)
+                paths.append(drawn.path)
+                emitted += drawn.emitted
             } else {
                 paths.append(try await gpu.run(draw).path)
             }
@@ -142,5 +147,6 @@ enum X1RawProbes {
         metrics.set("matched", matched)
         let exchanged = matched == "transpose" || matched == "anti_transpose"
         return ProbeFinding.counted(["swizzle_wrong": exchanged ? 0 : 1], paths: paths, metrics: metrics)
+            .emitting(emitted)
     }
 }

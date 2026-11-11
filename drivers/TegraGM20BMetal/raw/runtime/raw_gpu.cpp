@@ -3930,6 +3930,8 @@ bool RenderEncoder::draw(uint32_t primitive, uint32_t first, uint32_t count, uin
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
         if (probe && !probe->before.empty())
             p_.raw(probe->before.data(), uint32_t(probe->before.size()));
+        if (probe)
+            dev_->probeEmitted.fetch_add(1, std::memory_order_relaxed);
 #endif
         p_.m(BEGIN, 0);
         p_.inc(VERTEX_ARRAY_START, {first, count});

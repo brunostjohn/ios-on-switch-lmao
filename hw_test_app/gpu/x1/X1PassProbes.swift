@@ -1,16 +1,12 @@
 import Foundation
 import HWTestCore
-import HWTestGPU
 import Metal
 
 /// METALMAP d17: visibility results. A 100 x 100 quad drawn twice under Counting at offset 0 and once under Boolean at
-/// offset 8 in one pass, then once under Counting at offset 0 in a second pass. Within a pass Metal adds the samples of
-/// every draw at an offset (20,000); whether a later pass adds to or replaces it is Apple's to answer, so that number
-/// is printed for comparison with an Apple GPU's run and decides nothing here.
-enum X1PassProbes {
-    static let visibility = X1Probe(
-        id: "gpu.x1.visibility", name: "Visibility results: counting within and across passes, boolean", probe: "d17"
-    ) { gpu in
+/// offset 8 in one pass, then once under Counting at offset 0 in a second pass. Metal adds the samples of every draw at
+/// an offset within a pass (20,000), and a later pass replaces it (10,000 on an M-series Mac, X1ProbeTests).
+public enum X1PassProbes {
+    public static func visibility(_ gpu: GPU) async throws -> ProbeFinding {
         let size = 128
         let target = try gpu.texture(.bgra8Unorm, size, size, usage: [.renderTarget, .shaderRead])
         let results = try gpu.buffer(16)
@@ -45,10 +41,10 @@ enum X1PassProbes {
         metrics.set("pass1_count", Int(reads[0]))
         metrics.set("pass1_boolean", Int(reads[1]))
         metrics.set("pass2_count", Int(reads[2]))
-        let within = ProbeFinding.counted(
-            ["pass1_count_wrong": reads[0] == 20_000 ? 0 : 1, "boolean_wrong": reads[1] != 0 ? 0 : 1], paths: paths,
-            metrics: metrics)
-        guard within.verdict == .pass else { return within }
-        return ProbeFinding(.inconclusive, within.metrics, note: "across passes needs an Apple GPU's run")
+        let wrong = [
+            "pass1_count_wrong": reads[0] == 20_000 ? 0 : 1, "boolean_wrong": reads[1] != 0 ? 0 : 1,
+            "pass2_count_wrong": reads[2] == 10_000 ? 0 : 1,
+        ]
+        return ProbeFinding.counted(wrong, paths: paths, metrics: metrics)
     }
 }

@@ -1,15 +1,12 @@
 import Foundation
 import HWTestCore
-import HWTestGPU
 import Metal
 
 /// METALMAP d1 (F11) and d24: what new buffers hold, and textures over buffers at offsets and rows 16 mod 32.
-enum X1MemoryProbes {
+public enum X1MemoryProbes {
     /// Metal's contract: a new MTLBuffer reads zero. Each size is made, checked, filled with 0xAB and freed 64 times,
     /// so the raw path's pool and write-combined spans are handed out again; pattern bytes are 0xAB found in a new one.
-    static let bufferZero = X1Probe(
-        id: "gpu.x1.buffer_zero", name: "New MTLBuffers read zero after freed ones held 0xAB", probe: "d1/F11"
-    ) { gpu in
+    public static func bufferZero(_ gpu: GPU) async throws -> ProbeFinding {
         var wrong: [String: Int] = [:]
         var metrics = Metrics()
         let modes: [(String, MTLResourceOptions)] = [
@@ -46,9 +43,7 @@ enum X1MemoryProbes {
 
     /// RGBA8 textures over a buffer, sampled at each texel's centre: one at offset 48 with rows of 48 bytes (16 mod
     /// 32, which the raw path's texture header cannot address, LIMITS row), one at 64 with rows of 64 as the control.
-    static let linearAlign = X1Probe(
-        id: "gpu.x1.linear_align", name: "Textures over buffers at offsets and rows 16 mod 32", probe: "d24"
-    ) { gpu in
+    public static func linearAlign(_ gpu: GPU) async throws -> ProbeFinding {
         var wrong: [String: Int] = [:]
         var metrics = Metrics()
         var paths: [String] = []

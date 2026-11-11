@@ -1,14 +1,12 @@
 import Foundation
 import HWTestCore
-import HWTestGPU
 import Metal
 
 /// METALMAP d7 and LIMITS G13: the texture unit's 32-bit float filtering, and the 2D engine's mip downsample (the raw
-/// path's generateMipmaps for BGRA8, RGBA8, RGBA16F, R8 and RG8) against an exact 2x2 box.
-enum X1FilterProbes {
-    static let f32Filter = X1Probe(
-        id: "gpu.x1.f32_filter", name: "RGBA32F linear filtering: {0, 1e6} sampled a quarter of the way", probe: "d7"
-    ) { gpu in
+/// path's generateMipmaps for BGRA8, RGBA8, RGBA16F, R8 and RG8) against an exact 2x2 box. An M-series Mac's own
+/// downsample is off the box by up to one code (X1ProbeTests), so only a code further off counts against it.
+public enum X1FilterProbes {
+    public static func f32Filter(_ gpu: GPU) async throws -> ProbeFinding {
         let texture = try gpu.texture(.rgba32Float, 2, 1, usage: [.shaderRead])
         let texels: [Float] = [0, 0, 0, 0, 1e6, 1e6, 1e6, 1e6]
         try await gpu.upload(texels.withUnsafeBytes { Array($0) }, to: texture, bytesPerRow: 32)
@@ -58,10 +56,7 @@ enum X1FilterProbes {
         }
     }
 
-    static let mipFilter = X1Probe(
-        id: "gpu.x1.mip_filter", name: "generateMipmaps' first level against an exact 2x2 box, five formats",
-        probe: "G13/d4"
-    ) { gpu in
+    public static func mipFilter(_ gpu: GPU) async throws -> ProbeFinding {
         let size = 256
         var wrong: [String: Int] = [:]
         var metrics = Metrics()
@@ -121,8 +116,8 @@ enum X1FilterProbes {
                     }
                 }
             }
-            wrong[f.name + "_wrong"] = exact
-            metrics.set(f.name + "_beyond_one", beyondOne)
+            wrong[f.name + "_wrong"] = beyondOne
+            metrics.set(f.name + "_inexact", exact)
             metrics.set(f.name + "_max_diff", maxDiff, digits: 3)
         }
         return ProbeFinding.counted(wrong, paths: paths, metrics: metrics)

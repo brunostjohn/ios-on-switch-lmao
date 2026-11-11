@@ -23,13 +23,25 @@ struct X1Probe: HWTest {
     func run(_ context: TestContext) async throws -> Outcome {
         let gpu = try GPU.make()
         let before = RawFacade.counters(of: gpu.device)
-        let finding = try await body(gpu)
+        var finding: ProbeFinding?
+        var failure: String?
+        do {
+            finding = try await body(gpu)
+        } catch {
+            failure = String(describing: error)
+        }
         let after = RawFacade.counters(of: gpu.device)
         var base = Metrics()
         base.set("dev", RawFacade.kind(of: gpu.device))
         base.set("paths", gpu.paths.isEmpty ? "-" : gpu.paths.text)
         base.set("reopens", (after["reopens"] ?? 0) - (before["reopens"] ?? 0))
         if risky { base.set("gpu_after", await GPUProbe.answers()) }
+        guard let finding else {
+            var metrics = Metrics()
+            metrics.set("probe", probe)
+            metrics.merge(base)
+            return .fail(failure ?? "no finding", metrics, proof: gpu.proof)
+        }
         return finding.outcome(probe: probe, base: base, proof: gpu.proof)
     }
 }
@@ -49,9 +61,11 @@ enum RawMethods {
         return refusal?.takeUnretainedValue() as? String
     }
 
-    static func disarm(_ device: MTLDevice) {
-        guard let object = device as? NSObject, object.responds(to: selector) else { return }
-        _ = object.perform(selector, with: nil, with: nil)
+    /// The draws that emitted the methods since they were armed.
+    static func disarm(_ device: MTLDevice) -> Int {
+        guard let object = device as? NSObject, object.responds(to: selector) else { return 0 }
+        let emitted = object.perform(selector, with: nil, with: nil)?.takeUnretainedValue() as? String
+        return emitted.flatMap { Int($0) } ?? 0
     }
 
     static func data(_ pairs: [(UInt32, UInt32)]) -> NSData {
@@ -59,21 +73,63 @@ enum RawMethods {
         return words.withUnsafeBytes { NSData(bytes: $0.baseAddress, length: $0.count) }
     }
 
-    /// One command buffer drawn with the methods armed; its path on the facade.
+    /// One command buffer drawn with the methods armed: its path on the facade, and the draws that emitted them
+    /// (0: the methods never reached the GPU, whatever the picture shows).
     static func draw(
         _ gpu: GPU, before: [(UInt32, UInt32)], after: [(UInt32, UInt32)], _ encode: (MTLCommandBuffer) throws -> Void
-    ) async throws -> String {
+    ) async throws -> (path: String, emitted: Int) {
         if let refusal = arm(gpu.device, before: before, after: after) { throw TestFailure(refusal) }
-        defer { disarm(gpu.device) }
-        return try await gpu.run(encode).path
+        do {
+            let path = try await gpu.run(encode).path
+            return (path, disarm(gpu.device))
+        } catch {
+            _ = disarm(gpu.device)
+            throw error
+        }
     }
 }
 
-/// The probes in the order they run: the ones that only use Metal first, then the risky ones one at a time.
+extension ProbeFinding {
+    /// emitted= on the line; INCONCLUSIVE when the armed methods reached no draw, whatever the pictures show.
+    func emitting(_ draws: Int) -> ProbeFinding {
+        var finding = self
+        finding.metrics.set("emitted", draws)
+        if draws == 0 {
+            finding.verdict = .inconclusive
+            finding.note = "the probe's methods reached no draw"
+        }
+        return finding
+    }
+}
+
+/// The probes in the order they run: the ones that only use Metal first (their bodies in gpu/x1, which the host GPU
+/// test runs on a Mac), then the risky ones one at a time.
 enum X1Probes {
     static let all: [any HWTest] = [
-        X1MemoryProbes.bufferZero, X1MemoryProbes.linearAlign, X1ConversionProbes.rop, X1ConversionProbes.sampler,
-        X1BlendProbes.exact, X1FilterProbes.f32Filter, X1FilterProbes.mipFilter, X1PassProbes.visibility,
+        X1Probe(
+            id: "gpu.x1.buffer_zero", name: "New MTLBuffers read zero after freed ones held 0xAB", probe: "d1/F11",
+            body: X1MemoryProbes.bufferZero),
+        X1Probe(
+            id: "gpu.x1.linear_align", name: "Textures over buffers at offsets and rows 16 mod 32", probe: "d24",
+            body: X1MemoryProbes.linearAlign),
+        X1Probe(
+            id: "gpu.x1.rop_conversion", name: "ROP float to unorm, sRGB, 10-bit and half: all 65,536 halves",
+            probe: "E3/d23", body: X1ConversionProbes.rop),
+        X1Probe(
+            id: "gpu.x1.sampler_conversion", name: "Sampler unorm8 and unorm16 texels as half: every code",
+            probe: "E3b", body: X1ConversionProbes.sampler),
+        X1Probe(
+            id: "gpu.x1.blend_exact", name: "ROP blend on BGRA8 against Metal's half arithmetic, 8.4 M cases a pair",
+            probe: "E4", timeout: 300, body: X1BlendProbes.exact),
+        X1Probe(
+            id: "gpu.x1.f32_filter", name: "RGBA32F linear filtering: {0, 1e6} sampled a quarter of the way",
+            probe: "d7", body: X1FilterProbes.f32Filter),
+        X1Probe(
+            id: "gpu.x1.mip_filter", name: "generateMipmaps' first level against an exact 2x2 box, five formats",
+            probe: "G13/d4", body: X1FilterProbes.mipFilter),
+        X1Probe(
+            id: "gpu.x1.visibility", name: "Visibility results: counting within and across passes, boolean",
+            probe: "d17", body: X1PassProbes.visibility),
         X1RawProbes.blendKills, X1RawProbes.viewportSwizzle, X1IteratedBlendProbe.probe,
     ]
 }

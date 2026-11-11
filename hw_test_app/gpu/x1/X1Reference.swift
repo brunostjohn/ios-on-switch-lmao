@@ -2,10 +2,10 @@ import Foundation
 
 /// Metal's float conversions and blend arithmetic, the references the X1 probes compare the GPU with. Halves are
 /// widened to Double, where a product of two halves is exact, and rounded once.
-enum X1Reference {
+public enum X1Reference {
     /// A store into a `levels - 1`-code unorm channel: NaN is 0, the value clamped to [0, 1], its product with the top
     /// code rounded to nearest, ties away from zero.
-    static func unorm(_ value: Double, top: Double) -> Int {
+    public static func unorm(_ value: Double, top: Double) -> Int {
         if value.isNaN { return 0 }
         return Int((min(max(value, 0), 1) * top).rounded(.toNearestOrAwayFromZero))
     }

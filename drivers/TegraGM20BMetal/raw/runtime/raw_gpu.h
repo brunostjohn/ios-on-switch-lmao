@@ -1367,6 +1367,7 @@ public:
         std::vector<uint32_t> before, after;
     };
     std::atomic<bool> probeArmed{false};
+    std::atomic<uint64_t> probeEmitted{0};  // draws that emitted them since they were armed
     std::mutex probeLock;
     std::shared_ptr<const ProbeWords> probeWords;
     std::shared_ptr<const ProbeWords> armedProbe()

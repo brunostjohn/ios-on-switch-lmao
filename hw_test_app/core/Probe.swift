@@ -30,9 +30,8 @@ public struct ProbeFinding: Sendable {
             return ProbeFinding(.inconclusive, metrics, note: "not on the raw path: \(offPath.joined(separator: ","))")
         }
         let failed = wrong.filter { $0.value != 0 }.keys.sorted()
-        return ProbeFinding(
-            failed.isEmpty ? .pass : .fail, metrics, note: failed.isEmpty ? "" : "wrong: \(failed.joined(separator: ","))"
-        )
+        let note = failed.isEmpty ? "" : "wrong: \(failed.joined(separator: ","))"
+        return ProbeFinding(failed.isEmpty ? .pass : .fail, metrics, note: note)
     }
 
     /// The probe's fields in front of its own: probe=<id> claim_verdict=<verdict>.

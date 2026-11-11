@@ -1,12 +1,11 @@
 import Foundation
 import HWTestCore
-import HWTestGPU
 import Metal
 
-/// COMPILER.md E3, METALMAP d23, LIMITS G3: GM20B's float conversions against Metal's. m2v rounds every unblended colour
-/// write in the shader, so the ROP's own conversion is reachable only through a blend that keeps it (max over zero,
-/// as gpu.sm53_probe's unorm8 sweep does); the unblended store is a keyed build's probe.
-enum X1ConversionProbes {
+/// COMPILER.md E3, METALMAP d23, LIMITS G3: GM20B's float conversions against Metal's. m2v rounds every unblended
+/// colour write in the shader, so the ROP's own conversion is reachable only through a blend that keeps it (max over
+/// zero, as gpu.sm53_probe's unorm8 sweep does); the unblended store is a keyed build's probe.
+public enum X1ConversionProbes {
     struct Target {
         let name: String
         let format: MTLPixelFormat
@@ -15,6 +14,9 @@ enum X1ConversionProbes {
         let stored: ([UInt8], Int) -> Int
         let want: (Float16) -> Int
         let tie: (Float16) -> Bool
+        /// Codes off the reference that still count as its: the sRGB formula's, which an M-series Mac's own encode
+        /// misses by one at 1,643 of the halves (X1ProbeTests).
+        var tolerance = 0
     }
 
     static func u16(_ bytes: [UInt8], _ at: Int) -> Int { Int(bytes[at]) | Int(bytes[at + 1]) << 8 }
@@ -28,7 +30,7 @@ enum X1ConversionProbes {
             want: { X1Reference.unorm(Double($0), top: 65535) }, tie: { X1Reference.tie(Double($0), top: 65535) }),
         Target(
             name: "srgb8", format: .bgra8Unorm_srgb, bytesPerPixel: 4, stored: { Int($0[$1 * 4]) },
-            want: { X1Reference.srgb8(Double($0)) }, tie: { _ in false }),
+            want: { X1Reference.srgb8(Double($0)) }, tie: { _ in false }, tolerance: 1),
         Target(
             name: "rgb10a2", format: .rgb10a2Unorm, bytesPerPixel: 4, stored: { u16($0, $1 * 4) & 0x3ff },
             want: { X1Reference.unorm(Double($0), top: 1023) }, tie: { X1Reference.tie(Double($0), top: 1023) }),
@@ -37,9 +39,7 @@ enum X1ConversionProbes {
             want: { $0.isNaN || $0 <= 0 ? 0 : Int($0.bitPattern) }, tie: { _ in false }),
     ]
 
-    static let rop = X1Probe(
-        id: "gpu.x1.rop_conversion", name: "ROP float to unorm, sRGB, 10-bit and half: all 65,536 halves", probe: "E3/d23"
-    ) { gpu in
+    public static func rop(_ gpu: GPU) async throws -> ProbeFinding {
         var wrong: [String: Int] = [:]
         var metrics = Metrics()
         var paths: [String] = []
@@ -77,9 +77,10 @@ enum X1ConversionProbes {
                 let h = Float16(bitPattern: UInt16(i))
                 let (have, want) = (target.stored(bytes, i), target.want(h))
                 guard have != want else { continue }
-                count += 1
                 if target.tie(h) { ties += 1 }
                 if abs(have - want) == 1 { byOne += 1 }
+                guard abs(have - want) > target.tolerance else { continue }
+                count += 1
                 if first == nil { first = "\(String(i, radix: 16)):\(have),want_\(want)" }
             }
             wrong[target.name + "_wrong"] = count
@@ -92,9 +93,7 @@ enum X1ConversionProbes {
 
     /// Each unorm code sampled as half, against the half nearest code / top (ties to even); a toward-zero count beside
     /// it tells which rounding the lowered sample does. TEXS.F16's own rounding needs the compiler to emit it (keyed).
-    static let sampler = X1Probe(
-        id: "gpu.x1.sampler_conversion", name: "Sampler unorm8 and unorm16 texels as half: every code", probe: "E3b"
-    ) { gpu in
+    public static func sampler(_ gpu: GPU) async throws -> ProbeFinding {
         var wrong: [String: Int] = [:]
         var metrics = Metrics()
         var paths: [String] = []
@@ -137,7 +136,7 @@ enum X1ConversionProbes {
                 if have != rz.bitPattern { towardZero += 1 }
             }
             wrong[name + "_wrong"] = nearest
-            metrics.set(name + "_toward_zero_wrong", towardZero)
+            metrics.set(name + "_toward_zero_misses", towardZero)
             if let first { metrics.set(name + "_first", first) }
         }
         return ProbeFinding.counted(wrong, paths: paths, metrics: metrics)

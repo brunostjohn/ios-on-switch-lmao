@@ -60,6 +60,7 @@ enum X1IteratedBlendProbe {
         var wrong: [String: Int] = [:]
         var metrics = Metrics()
         var paths: [String] = []
+        var emitted = 0
         var results: [String: [UInt8]] = [:]
         for (name, program) in [("plain", [UInt32]()), ("pass", passThrough), ("multiply", multiply)] {
             let target = try gpu.texture(.bgra8Unorm, size, size, usage: [.renderTarget, .shaderRead])
@@ -75,7 +76,9 @@ enum X1IteratedBlendProbe {
             if program.isEmpty {
                 paths.append(try await gpu.run(draw).path)
             } else {
-                paths.append(try await RawMethods.draw(gpu, before: words(program), after: restore, draw))
+                let drawn = try await RawMethods.draw(gpu, before: words(program), after: restore, draw)
+                paths.append(drawn.path)
+                emitted += drawn.emitted
             }
             results[name] = try await gpu.read(target, bytesPerPixel: 4)
         }
@@ -109,6 +112,6 @@ enum X1IteratedBlendProbe {
             metrics.set(name + "_same_as_source_over", got == results["plain"]!)
             metrics.set(name + "_first_pixel", got.prefix(4).map { String($0) }.joined(separator: ","))
         }
-        return ProbeFinding.counted(wrong, paths: paths, metrics: metrics)
+        return ProbeFinding.counted(wrong, paths: paths, metrics: metrics).emitting(emitted)
     }
 }
