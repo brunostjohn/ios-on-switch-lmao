@@ -186,13 +186,24 @@ def register_count(blob: list[int]) -> int:
     return pairs.get(FRAGMENT_REGISTER_COUNT, 0)
 
 
+def fragment_variant(d: dict, n: int) -> dict | None:
+    """Give a dumped record's fragment variant `n` (its stage's order), None where it has fewer."""
+    found = [v for v in d.get('variants', []) if v['stage'] == 1]
+    return found[n] if n < len(found) else None
+
+
 class Dump:
-    def __init__(self, path: Path):
+    def __init__(self, path: Path, variant: int | None = None):
         self.states = {}
         for f in sorted(path.glob('*.json')):
             d = json.loads(f.read_text())
-            gprs = d['fs_gprs'] if 'fs_gprs' in d else register_count(d['blob'])
-            self.states[d['key']] = (bytes.fromhex(d['fs'])[isa.HEADER_BYTES :], gprs)
+            code, gprs = d['fs'], d['fs_gprs'] if 'fs_gprs' in d else register_count(d['blob'])
+            if variant is not None:
+                v = fragment_variant(d, variant)
+                if v is None:
+                    continue
+                code, gprs = v['code'], v['gprs']
+            self.states[d['key']] = (bytes.fromhex(code)[isa.HEADER_BYTES :], gprs)
 
     def state(self, key: str) -> tuple[bytes, int] | None:
         return self.states.get(key)
@@ -214,9 +225,10 @@ def main() -> None:
     src.add_argument('--pack', type=Path)
     src.add_argument('--dump', type=Path)
     ap.add_argument('--corpus', type=Path, action='append', default=[])
+    ap.add_argument('--variant', type=int, help="a dump's fragment variant N instead of the record's generic program")
     ap.add_argument('--json', action='store_true')
     a = ap.parse_args()
-    source = Pack(a.pack) if a.pack else Dump(a.dump)
+    source = Pack(a.pack) if a.pack else Dump(a.dump, a.variant)
     rows, missing = [], []
     for label, key in labelled(a.corpus):
         state = source.state(key)

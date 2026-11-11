@@ -149,6 +149,7 @@ int main(int argc, char **argv)
         raw::PackRules rules;
         rules.varying = raw::emittableMethods();
         raw::Direct direct(std::move(rules));
+        direct.makeVariants(true);
         uint32_t made = 0, refused = 0, failed = 0, split = 0;
         probe::eachState(dev, qc, own, standIn, probe::corpusLines(text, own != nil),
                          [&](const std::string &line, bool ours, probe::State &s) {

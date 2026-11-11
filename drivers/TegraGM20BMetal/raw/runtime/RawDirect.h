@@ -54,6 +54,13 @@ public:
                         std::string &why, ProbeTextures textures = {},
                         std::map<uint32_t, uint32_t> *registers = nullptr, bool split = false,
                         PackForm requested = PackForm::Default);
+
+    // The pack generator's: records also hold the program variants directRecord makes (`variants`)
+    void makeVariants(bool on)
+    {
+        variants_ = on;
+    }
+
     // The record of `descriptor`'s kernel at a dispatch of `dispatch`'s shape and bindings, whose compute key is `key`
     // (raw_direct_compute.h)
     CompileOutcome kernel(MTLComputePipelineDescriptor *descriptor, const NmbDirectDispatch &dispatch,
@@ -62,6 +69,7 @@ public:
 private:
     PackRules rules_;
     DirectNvk nvk_;
+    bool variants_ = false;
 
     CompileOutcome form(MTLRenderPipelineDescriptor *descriptor, bool barrier, ProbeTextures textures,
                         const std::string &key, const std::vector<uint32_t> &attributes, RuntimeRecord &out,

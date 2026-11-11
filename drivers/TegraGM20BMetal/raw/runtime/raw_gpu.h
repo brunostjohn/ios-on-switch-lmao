@@ -415,6 +415,11 @@ struct Pipeline {
     const char *uniformProbe = nullptr;
     bool uniformHalvesReported = false;
     bool genericState = false;  // DEVELOPMENT: Core Animation's generic merge state (..Xghfc), for the fetch keys line
+    // its stages' program variants (raw_variants.cpp), and the pipeline drawn for each choice, vertex choice major (the
+    // last: this one), each made the first time a draw selects it
+    const PackVariant *variants[2] = {};
+    uint8_t variantCount[2] = {};
+    std::vector<Pipeline *> chosen;
 };
 
 // A state's fragment program split (raw_pack.h PackSplit): the twin that draws of rec.thresholdPixels pixels or more take, and
@@ -648,6 +653,10 @@ private:
                  uint32_t baseInstance, bool indexed, const char **why);
     // `pl`'s split twin where the draw is large enough for it to save time and its prologue can read what the draw binds
     Pipeline *splitTwin(Pipeline *pl, WrittenRegion::Analysis &analysis) const;
+    uint32_t bindingFacts(const Pipeline &pl);
+    const Pipeline *factsPipeline_ = nullptr;
+    uint64_t factsRevision_ = 0;
+    uint32_t facts_ = 0;
     // the twin's draw: its frontier bound and its prologue's launch recorded (`set`: the draw's set 0)
     void launchSplit(Push &p, const Pipeline &twin, const uint32_t *set);
     uint32_t scissor_[2] = {}, viewport_[8] = {};
@@ -957,6 +966,8 @@ public:
         return channelError_;
     }
 
+    // the pipeline a draw of `pl` with binding facts `facts` (raw_pack.h PackAssumption) draws with (raw_variants.cpp)
+    Pipeline *variant(Pipeline &pl, uint32_t facts);
     const Pack &pack() const
     {
         return pack_;
@@ -1527,6 +1538,9 @@ private:
                const uint32_t *blob, const char *keyString, bool caTransform);
     // lock_ held: `pl`'s split offered, its twin made when a draw first takes it (makeSplit)
     void offerSplit(Pipeline &pl, SplitSource &&source);
+    void offerVariants(Pipeline &pl, const PackPipeline &pp);
+    bool placePackProgram(uint16_t index, PlacedProgram &out);
+    std::deque<Pipeline> variantPipelines_;
     SplitState *makeSplit(Pipeline &pl);
     bool placeSplitPrograms(const SplitSource &source, PlacedProgram &fs, uint32_t &prologue, uint64_t &prologueData,
                             uint32_t &prologueDataBytes);

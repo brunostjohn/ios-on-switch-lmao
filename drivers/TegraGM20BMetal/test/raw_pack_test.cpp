@@ -7,6 +7,7 @@
 #include <string>
 #include <vector>
 #include "../raw/runtime/raw_pack.h"
+#include "../raw/runtime/raw_variants.h"
 
 namespace {
 
@@ -72,6 +73,25 @@ TEST(RawPack, RefusesVariantsPastTheirSection)
     uint32_t count = 1;
     EXPECT_EQ(pack.variants(pp, 1, count), nullptr);
     EXPECT_EQ(count, 0u);
+}
+
+TEST(RawVariants, TheFirstVariantWhoseAssumptionsHoldIsDrawn)
+{
+    const raw::PackVariant v[2] = {{raw::AssumeUniformAligned | raw::AssumeTexsF16, 1, 0},
+                                   {raw::AssumeUniformAligned, 2, 0}};
+    EXPECT_EQ(raw::chooseVariant(v, 2, raw::AssumeUniformAligned | raw::AssumeTexsF16), 0u);
+    EXPECT_EQ(raw::chooseVariant(v, 2, raw::AssumeUniformAligned | raw::AssumeUniformAligned << 1), 1u);
+    EXPECT_EQ(raw::chooseVariant(v, 2, raw::AssumeUniformAligned << 1), 2u);
+    EXPECT_EQ(raw::chooseVariant(nullptr, 0, ~0u), 0u);
+}
+
+TEST(RawVariants, FloatAndExtendedRangeTexelsAreNotFixedPoint)
+{
+    EXPECT_TRUE(raw::fixedPointTexels(80));    // BGRA8Unorm
+    EXPECT_TRUE(raw::fixedPointTexels(71));    // RGBA8Unorm_sRGB
+    EXPECT_FALSE(raw::fixedPointTexels(115));  // RGBA16Float
+    EXPECT_FALSE(raw::fixedPointTexels(552));  // BGRA10_XR
+    EXPECT_FALSE(raw::fixedPointTexels(0));
 }
 
 }  // namespace

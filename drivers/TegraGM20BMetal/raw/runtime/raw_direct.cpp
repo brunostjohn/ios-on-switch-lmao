@@ -104,8 +104,9 @@ public:
     }
 
     // Refused: a state the raw path does not draw from a record; Failed: NVK could not compile a stage. `split`: the fragment
-    // stage's split too (split())
-    CompileOutcome compile(const NmbDirectState &state, uint32_t halfTargets, bool split, std::string &why)
+    // stage's split too (split()). `zeroPush`: root push words compiled as the constant 0 besides the state's constant ones
+    CompileOutcome compile(const NmbDirectState &state, uint32_t halfTargets, bool split, std::string &why,
+                           uint32_t zeroPush = 0)
     {
         if (state.stageCount != 2) {
             why = std::to_string(state.stageCount) + " stages";
@@ -139,6 +140,10 @@ public:
                 nullptr,
                 nullptr};
             memcpy(info.constPushWords, state.draws[0].push, sizeof info.constPushWords);
+            info.constPushMask |= zeroPush;
+            for (uint32_t i = 0; i < 32; i++)
+                if (zeroPush >> i & 1)
+                    info.constPushWords[i] = 0;
             const int32_t result = nvk::compileStage(nvk_, device_, info, made_[k]);
             if (result != 0) {
                 why = "NVK refused stage " + std::to_string(k) + " (VkResult " + std::to_string(result) + ")";
@@ -304,6 +309,42 @@ bool emitted(const std::string &key, const Stages &stages, const std::vector<uin
     return true;
 }
 
+// A residual-0 variant of each stage whose uniform reads go through a bind residual (raw_residual.h): compiled with those root
+// push words as the constant 0, so a uniform read is a constant-buffer operand at an immediate offset rather than an LDC at
+// the residual. Its assumption bits are the uniform[] entries of its stage; a stage the fold leaves as it was has none.
+void residualZeroVariants(const NmbDirectState &state, const DirectNvk &nvk, void *device, uint32_t halfTargets,
+                          const Stages &generic, RuntimeRecord &out)
+{
+    uint32_t assume[2] = {}, zeroPush = 0;
+    const PackPipeline &p = out.pipeline;
+    for (uint32_t k = 0; k < kUniformRanges; k++) {
+        if (p.uniform[k].entry >= p.entries)
+            continue;
+        const PackEntry &e = p.entry[p.uniform[k].entry];
+        const int word = bufferResidualWord(e);
+        if (word < 0 || word >= 32)
+            continue;
+        assume[e.stage == 1 ? 0 : 1] |= AssumeUniformAligned << k;
+        zeroPush |= 1u << word;
+    }
+    if (!zeroPush)
+        return;
+    Stages stages(nvk, device);
+    std::string why;
+    if (stages.compile(state, halfTargets, false, why, zeroPush) != CompileOutcome::Made)
+        return;
+    for (uint32_t k = 0; k < 2; k++) {
+        const EmitProgram a = generic.emit(int(k)), b = stages.emit(int(k));
+        const CapturedProgram &program = stages.program(int(k));
+        if (!assume[k] || program.image == out.programs[k].image || program.cbufTypes != out.programs[k].cbufTypes ||
+            a.earlyFragmentTests != b.earlyFragmentTests || a.interlockControl != b.interlockControl ||
+            a.usesSampleShading != b.usesSampleShading)
+            continue;
+        out.variants.push_back({assume[k], program});
+        out.pipeline.variantCount[k]++;
+    }
+}
+
 // The fragment program's split as a record holds it (NVK made none where it saves nothing)
 void splitInto(const DirectNvk &nvk, const void *split, RuntimeRecord &out)
 {
@@ -371,7 +412,7 @@ bool DirectNvk::kernelComplete() const
 
 CompileOutcome directRecord(const NmbDirectState &state, const DirectNvk &nvk, const PackRules &rules,
                             const std::string &key, const std::vector<uint32_t> &attributes, RuntimeRecord &out,
-                            std::string &why, std::map<uint32_t, uint32_t> *registers, bool split)
+                            std::string &why, std::map<uint32_t, uint32_t> *registers, bool split, bool variants)
 {
     out = {};
     void *device = handle(state.device);
@@ -451,6 +492,8 @@ CompileOutcome directRecord(const NmbDirectState &state, const DirectNvk &nvk, c
     out.splitTried = split;
     if (split && !storage.storageMask)
         splitInto(nvk, stages.split(1), out);
+    if (variants)
+        residualZeroVariants(state, nvk, device, halfFloatTargets(key), stages, out);
     return CompileOutcome::Made;
 }
 

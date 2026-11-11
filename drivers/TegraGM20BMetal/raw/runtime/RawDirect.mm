@@ -29,6 +29,7 @@ struct Asked {
     RuntimeRecord &out;
     std::map<uint32_t, uint32_t> *registers;
     bool split;
+    bool variants;
     std::string why;
     CompileOutcome outcome = CompileOutcome::Failed;
 };
@@ -36,7 +37,8 @@ struct Asked {
 bool made(const NmbDirectState *state, void *ctx)
 {
     Asked &a = *static_cast<Asked *>(ctx);
-    a.outcome = directRecord(*state, a.nvk, a.rules, a.key, a.attributes, a.out, a.why, a.registers, a.split);
+    a.outcome =
+        directRecord(*state, a.nvk, a.rules, a.key, a.attributes, a.out, a.why, a.registers, a.split, a.variants);
     return true;
 }
 
@@ -65,15 +67,16 @@ Direct::Direct(PackRules rules, bool rankArtifacts)
       nvk_(native_bridge_metal_nvk_symbol ? DirectNvk::find(native_bridge_metal_nvk_symbol) : DirectNvk{})
 {
     if (rankArtifacts)
-        nvk_.compileStage = native_bridge_metal_nvk_symbol ?
-            native_bridge_metal_nvk_symbol("switch_nvk_compile_ranked_stage") : nullptr;
+        nvk_.compileStage = native_bridge_metal_nvk_symbol
+                                ? native_bridge_metal_nvk_symbol("switch_nvk_compile_ranked_stage")
+                                : nullptr;
 }
 
 CompileOutcome Direct::form(MTLRenderPipelineDescriptor *descriptor, bool barrier, ProbeTextures textures,
                             const std::string &key, const std::vector<uint32_t> &attributes, RuntimeRecord &out,
                             std::string &why, std::map<uint32_t, uint32_t> *registers, bool split)
 {
-    Asked a = {nvk_, rules_, key, attributes, out, registers, split, {}};
+    Asked a = {nvk_, rules_, key, attributes, out, registers, split, variants_, {}};
     std::vector<NmbDirectCubicSampler> cubic;
     std::vector<NmbDirectTextureFormat> formats;
     for (const CubicBinds::Sampler &c : textures.cubic.samplers)

@@ -808,6 +808,7 @@ Pipeline *Device::placePipeline(uint64_t keyHash, PackForm form, bool caTransfor
         return nullptr;
     }
     build(pl, pp, vs, fs, pack_.section<uint32_t>(PackBlob) + pp.blob, pack_.string(pp.keyString), caTransform);
+    offerVariants(pl, pp);
     if (const PackSplit *split = pack_.split(pp.fs); split && !pl.storageBits) {
         SplitSource source;
         source.rec = *split;
@@ -4342,6 +4343,9 @@ bool RenderEncoder::prepare(Pipeline *pl, uint32_t primitive, int32_t first, uin
     auto geometryAnalysis = geometryCache_.analysis(g, bindingRevision_, cb_->geometryBudget_);
     if (!indirectGeometry_)
         pl = splitTwin(pl, geometryAnalysis);
+    // a variant has no split of its own: a draw large enough for the generic program's split twin keeps the twin
+    if (!pl->splitOf)
+        pl = dev_->variant(*pl, bindingFacts(*pl));
     if (!whole_) {
         if (x[1] > x[0] && y[1] > y[0]) {
             const std::array<uint32_t, 4> r = {x[0], y[0], x[1], y[1]};

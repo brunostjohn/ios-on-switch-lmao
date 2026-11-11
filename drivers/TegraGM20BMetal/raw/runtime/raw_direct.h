@@ -28,9 +28,11 @@ struct DirectNvk {
 // The record of the state `state` describes, of pack key `key`; `attributes`: its vertex function's [[attribute(n)]] inputs
 // (the reflection's active vertexAttributes). Refused: a state the raw path does not draw from a record (`why`); Failed: NVK
 // could not compile it. `registers`: the 3D registers the record is made from (raw_emit's over the rules' baseline and context).
-// `split`: with its fragment program's split (RuntimeRecord::splitTried), which costs about one more compile of that stage
+// `split`: with its fragment program's split (RuntimeRecord::splitTried), which costs about one more compile of that stage.
+// `variants`: with its program variants (RuntimeRecord::variants), one more compile of both stages each: the pack builder's only
 CompileOutcome directRecord(const NmbDirectState &state, const DirectNvk &nvk, const PackRules &rules,
                             const std::string &key, const std::vector<uint32_t> &attributes, RuntimeRecord &out,
-                            std::string &why, std::map<uint32_t, uint32_t> *registers = nullptr, bool split = false);
+                            std::string &why, std::map<uint32_t, uint32_t> *registers = nullptr, bool split = false,
+                            bool variants = false);
 
 }  // namespace raw

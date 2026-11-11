@@ -380,6 +380,7 @@ cc_library(
         "//drivers/TegraGM20BMetal:raw/runtime/raw_shared_events.cpp",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_split.cpp",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_transfer.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_variants.cpp",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_zeta.cpp",
         "//drivers/TegraGM20BMetal:raw_runtime_headers",
     ],

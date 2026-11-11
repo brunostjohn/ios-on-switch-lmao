@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """The codegen gate: two directcheck dumps' fragment programs run on the same inputs, outputs compared bit for bit.
 
-usage: gate.py <before dump> <after dump> --corpus <R lines>... [--invocations N] [--seed S]
+usage: gate.py <before dump> <after dump> --corpus <R lines>... [--invocations N] [--seed S] [--after-variant N]
+               [--zero bank:first-last]...
 
 Every state of the corpora in both dumps runs N quads of each program (quad.py over interp.py's lanes) on the same
 seeded attributes, constant buffers, texture and storage-image results (specials included: NaNs with payloads,
@@ -58,8 +59,9 @@ def word(rng: random.Random, nice: float) -> int:
 class Seeded:
     """Inputs as pure functions of (seed, invocation, operands): the same for both programs."""
 
-    def __init__(self, seed: int, invocation: int):
+    def __init__(self, seed: int, invocation: int, pinned: dict | None = None):
         self.base = (seed, invocation)
+        self.pinned = pinned or {}
 
     def rng(self, *key: object) -> random.Random:
         # repr, not hash(): Python salts a str's hash per process, which would make a quad's number name other inputs
@@ -71,6 +73,8 @@ class Seeded:
             return 0x3F800000 if addr == 0x7C else word(self.rng('a', addr, lane), 0.9)
 
         def cbuf(bank: int, offset: int) -> int:
+            if (bank, offset) in self.pinned:
+                return self.pinned[bank, offset]
             return word(self.rng('c', bank, offset & 0xFFFFFFFF), 0.6)
 
         def texture(operands: tuple) -> list[int]:
@@ -89,13 +93,13 @@ def lane_result(result: tuple) -> tuple:
     return (killed, stores) if killed else result
 
 
-def compare(before: bytes, after: bytes, n: int, seed: int) -> str:
+def compare(before: bytes, after: bytes, n: int, seed: int, pinned: dict | None = None) -> str:
     count = outputs(before)
     if count != outputs(after):
         return 'different: output maps'
     for i in range(n):
         try:
-            quad = [Seeded(seed, i).inputs(lane) for lane in range(LANES)]
+            quad = [Seeded(seed, i, pinned).inputs(lane) for lane in range(LANES)]
             a = [lane_result(r) for r in run_quad(before[isa.HEADER_BYTES :], quad, count)]
             b = [lane_result(r) for r in run_quad(after[isa.HEADER_BYTES :], quad, count)]
         except UnsupportedError as e:
@@ -117,20 +121,39 @@ def main() -> None:
     ap.add_argument('--corpus', type=Path, action='append', default=[])
     ap.add_argument('--invocations', type=int, default=200)
     ap.add_argument('--seed', type=int, default=1)
+    ap.add_argument('--after-variant', type=int, help="compare against the after dump's fragment variant N")
+    ap.add_argument('--zero', action='append', default=[], help='bank:first-last, constant-buffer bytes read as 0')
+    ap.add_argument(
+        '--zero-residuals', action='store_true', help="read the after dump's uniform bind residual push words as 0"
+    )
     a = ap.parse_args()
 
-    def load(d: Path) -> dict:
-        return {
-            json.loads(f.read_text())['key']: bytes.fromhex(json.loads(f.read_text())['fs']) for f in d.glob('*.json')
-        }
+    residuals = {}
 
-    before, after = load(a.before), load(a.after)
+    def load(d: Path, variant: int | None = None) -> dict:
+        out = {}
+        for f in d.glob('*.json'):
+            j = json.loads(f.read_text())
+            residuals[j['key']] = {(0, offset): 0 for offset in j.get('residual_words', [])}
+            if variant is None:
+                out[j['key']] = bytes.fromhex(j['fs'])
+            elif (v := nakstat.fragment_variant(j, variant)) is not None:
+                out[j['key']] = bytes.fromhex(v['code'])
+        return out
+
+    pinned = {}
+    for z in a.zero:
+        bank, span = z.split(':')
+        first, last = (int(x, 0) for x in span.split('-'))
+        pinned.update({(int(bank), offset): 0 for offset in range(first, last + 1, 4)})
+    before, after = load(a.before), load(a.after, a.after_variant)
     failed = False
     for label, key in nakstat.labelled(a.corpus):
         if key not in before or key not in after:
             print(f'{label}: missing from a dump')
             continue
-        verdict = compare(before[key], after[key], a.invocations, a.seed)
+        pins = pinned | residuals[key] if a.zero_residuals else pinned
+        verdict = compare(before[key], after[key], a.invocations, a.seed, pins)
         failed |= verdict.startswith('different')
         print(f'{label}: {verdict}')
     sys.exit(1 if failed else 0)

@@ -64,6 +64,11 @@ void dumpRecord(const char *dir, const std::string &key, const raw::RuntimeRecor
     std::string blob;
     for (size_t i = 0; i < rec.blob.size(); i++)
         blob += (i ? "," : "") + std::to_string(rec.blob[i]);
+    std::string residuals;
+    for (const raw::PackUniformRange &u : rec.pipeline.uniform)
+        if (u.entry < rec.pipeline.entries && raw::bufferResidualWord(rec.pipeline.entry[u.entry]) >= 0)
+            residuals += std::string(residuals.empty() ? "" : ", ") +
+                         std::to_string(0x700 + 4 * raw::bufferResidualWord(rec.pipeline.entry[u.entry]));
     std::string variants;
     for (size_t i = 0; i < rec.variants.size(); i++) {
         const raw::RuntimeRecord::Variant &v = rec.variants[i];
@@ -73,11 +78,11 @@ void dumpRecord(const char *dir, const std::string &key, const raw::RuntimeRecor
     }
     fprintf(f,
             "{\"key\": %s, \"vs\": \"%s\", \"fs\": \"%s\", \"fs_gprs\": %u, \"fs_bound_textures\": %u, \"blob\": [%s], "
-            "\"split_fs\": \"%s\", \"split_prologue\": \"%s\", \"variants\": [%s]}\n",
+            "\"split_fs\": \"%s\", \"split_prologue\": \"%s\", \"residual_words\": [%s], \"variants\": [%s]}\n",
             jsonString(key).c_str(), hexOf(rec.programs[0].image).c_str(), hexOf(rec.programs[1].image).c_str(),
             rec.programs[1].gprs, rec.programs[1].boundTextures, blob.c_str(),
             rec.split ? hexOf(rec.splitPrograms[0].image).c_str() : "",
-            rec.split ? hexOf(rec.splitPrograms[1].image).c_str() : "", variants.c_str());
+            rec.split ? hexOf(rec.splitPrograms[1].image).c_str() : "", residuals.c_str(), variants.c_str());
     fclose(f);
 }
 
@@ -117,6 +122,7 @@ int main(int argc, char **argv)
             }
         }
         raw::Direct direct(pack);
+        direct.makeVariants(true);
         FILE *met = getenv("DIRECTCHECK_MET") ? fopen(getenv("DIRECTCHECK_MET"), "a") : nullptr;
         uint32_t states = 0, same = 0, barriers = 0, refused = 0, bad = 0, splits = 0;
         double ms = 0;
