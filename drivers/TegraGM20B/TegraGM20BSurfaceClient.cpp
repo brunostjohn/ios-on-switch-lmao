@@ -121,11 +121,8 @@ extern "C" void *tgm_surface_memory(void *client, uint32_t id)
 	return md;
 }
 
-// A BO's surface id is 0 when no IOSurface backs it; IOSurfaceRoot logs every lookup of 0 as an error.
 extern "C" OSObject *tgm_surface_lookup(uint32_t id, void *task)
 {
-	if (!id)
-		return nullptr;
 	static IOService *root;  // kept
 	if (!__atomic_load_n(&root, __ATOMIC_ACQUIRE)) {
 		OSDictionary *match = IOService::nameMatching("IOCoreSurfaceRoot");
