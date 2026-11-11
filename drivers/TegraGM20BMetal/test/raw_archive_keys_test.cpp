@@ -89,19 +89,21 @@ TEST(ArchiveAnswer, OnlyAskedUnderTheOptionWithArchivesListed)
     const auto none = [](size_t) {
         return false;
     };
-    EXPECT_EQ(raw::archiveAnswer(false, 2, false, none), ArchiveAnswer::NotAsked);
-    EXPECT_EQ(raw::archiveAnswer(true, 0, false, none), ArchiveAnswer::NotAsked);
-    EXPECT_EQ(raw::archiveAnswer(true, 2, false, none), ArchiveAnswer::Missed);
+    EXPECT_EQ(raw::archiveAnswer(false, 2, none), ArchiveAnswer::NotAsked);
+    EXPECT_EQ(raw::archiveAnswer(true, 0, none), ArchiveAnswer::NotAsked);
+    EXPECT_EQ(raw::archiveAnswer(true, 2, none), ArchiveAnswer::Missed);
 }
 
-TEST(ArchiveAnswer, ThePackOrAnyListedArchiveHoldingTheStateIsAHit)
+// gpu.raw.archive_miss on T-v1: HW Test's own state, held by the device, was made under an empty archive, where Metal
+// (and an M4 Max's AGX driver) answers nil with its error
+TEST(ArchiveAnswer, OnlyAListedArchiveHoldingTheStateIsAHit)
 {
-    EXPECT_EQ(raw::archiveAnswer(true, 1, true,
+    EXPECT_EQ(raw::archiveAnswer(true, 1,
                                  [](size_t) {
                                      return false;
                                  }),
-              ArchiveAnswer::Declared);
-    EXPECT_EQ(raw::archiveAnswer(true, 3, false,
+              ArchiveAnswer::Missed);
+    EXPECT_EQ(raw::archiveAnswer(true, 3,
                                  [](size_t i) {
                                      return i == 2;
                                  }),
@@ -157,7 +159,7 @@ TEST(ArchiveKeys, AnAppleArchiveHoldsWhatThePackDeclaresForItsFile)
         raw::declaredBy(pack, "/System/Cryptexes/OS/System/Library/Frameworks/QuartzCore.framework/default.metallib");
     ASSERT_NE(declared, nullptr);
     const auto answer = [&](const std::string &key) {
-        return raw::archiveAnswer(true, 1, false, [&](size_t) {
+        return raw::archiveAnswer(true, 1, [&](size_t) {
             return pack.declares(*declared, fnv(key));
         });
     };

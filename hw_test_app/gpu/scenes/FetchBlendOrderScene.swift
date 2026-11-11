@@ -8,7 +8,9 @@ import Metal
 /// in primitive order (FetchBlendState): a lost fragment shortens the count, a reordered one changes the tag fold. The
 /// shapes: indexed strips with restarts, 16- and 32-bit (0xFFFF a vertex in the latter); a 300-triangle list; 8
 /// instances; a fragment that folds [[primitive_id]] in; a memoryless second attachment blended across four draws and
-/// copied into the first by the pass's last draw; indirect draws, plain and indexed strips.
+/// copied into the first by the pass's last draw; indirect draws, plain and indexed strips; and RenderBox's quads, one
+/// indexed strip of four vertices a draw. The indexed strips and the quads draw into BGR10A2Unorm as well, the format a
+/// RenderBox state fetches whose storage form needs a packed view.
 ///
 /// <shape>=ok|bad each; a bad shape adds <shape>_wrong (pixels, its three formats together) and <shape>_first
 /// (format:x,y:got:r/g/b/a:want:r/g/b/a in steps). On the raw facade fetch_<shape> is how the fetch counters say it
@@ -24,7 +26,7 @@ struct FetchBlendOrderScene: GPUScene {
     static let wideBase = 65_530
 
     enum Shape: String, CaseIterable {
-        case strip16, strip32, list300, instanced
+        case strip16, strip32, list300, instanced, quad4
         case primitiveID = "primitive_id"
         case memoryless, indirect
         case indirectStrip = "indirect_strip"
@@ -75,6 +77,15 @@ struct FetchBlendOrderScene: GPUScene {
             return Plan(mesh: mesh, draws: draws)
         case .indirect:
             return Plan(mesh: .list(FetchBlendMesh.pieces(triangles: 120, seed: 11)))
+        case .quad4:
+            return Plan(mesh: .quads(24))
+        }
+    }
+
+    static func formats(_ shape: Shape) -> [TexelFormat] {
+        switch shape {
+        case .strip16, .quad4: return formats + [.bgr10a2Unorm]
+        default: return formats
         }
     }
 
@@ -82,6 +93,7 @@ struct FetchBlendOrderScene: GPUScene {
         switch format {
         case .rgba8Unorm: return "rgba8"
         case .bgra8Unorm: return "bgra8"
+        case .bgr10a2Unorm: return "bgr10a2"
         default: return "rgba16f"
         }
     }
@@ -102,11 +114,11 @@ struct FetchBlendOrderScene: GPUScene {
         }
         for shape in Shape.allCases {
             let plan = Self.plan(shape)
-            let want = FetchBlendState.replay(plan.layers, size: Self.size)
-            result.expect(want.allSatisfy { $0.max() <= 255 }, "\(shape.rawValue): the replay saturates")
             let before = RawFacade.counters(of: gpu.device)
             var tally = Tally()
-            for format in Self.formats {
+            for format in Self.formats(shape) {
+                let want = FetchBlendState.replay(plan.layers, size: Self.size, format: format)
+                result.expect(want.allSatisfy { $0.max() <= 255 }, "\(shape.rawValue): the replay saturates")
                 do {
                     try await check(shape, plan, want, format, gpu, &result, &tally)
                 } catch {
@@ -205,7 +217,7 @@ extension FetchBlendOrderScene {
             instances = try gpu.buffer(plan.shifts.map { $0.clip(size: size) })
             whole = try gpu.buffer(FetchBlendMesh.whole.map { SIMD4<Float>($0.x, $0.y, 0, 0) })
             switch shape {
-            case .strip16, .indirectStrip: indices = try gpu.buffer(mesh.indices16)
+            case .strip16, .indirectStrip, .quad4: indices = try gpu.buffer(mesh.indices16)
             case .strip32: indices = try gpu.buffer(mesh.indices)
             default: indices = nil
             }
@@ -263,6 +275,12 @@ extension FetchBlendOrderScene {
             encoder.drawIndexedPrimitives(
                 type: .triangleStrip, indexType: .uint16, indexBuffer: resources.indices!, indexBufferOffset: 0,
                 indirectBuffer: resources.arguments!, indirectBufferOffset: 0)
+        case .quad4:
+            for quad in 0..<(plan.mesh.indices.count / 4) {
+                encoder.drawIndexedPrimitives(
+                    type: .triangleStrip, indexCount: 4, indexType: .uint16, indexBuffer: resources.indices!,
+                    indexBufferOffset: quad * 8)
+            }
         }
         encoder.endEncoding()
     }

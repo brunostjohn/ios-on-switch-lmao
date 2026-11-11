@@ -42,10 +42,10 @@ public enum RawFacade {
         return compression.mapValues(\.intValue)
     }
 
-    /// How the fetching draws between two counter reads kept raster order (raw_fetch_order.h FetchCounts): "whole:1,
-    /// record.restart:2" and so on, "-" where no fetching draw was counted (or off the facade).
+    /// How the fetching draws between two counter reads kept raster order (raw_fetch_order.h FetchCounts):
+    /// "interlocked:1,record.restart:2" and so on, "-" where no fetching draw was counted (or off the facade).
     public static func fetchRoutes(before: [String: Int], after: [String: Int]) -> String {
-        let changed = after.filter { $0.key.hasPrefix("fetch_") && $0.key != "fetch_proof_vertices" }
+        let changed = after.filter { $0.key.hasPrefix("fetch_") }
             .map { ($0.key, $0.value - (before[$0.key] ?? 0)) }
             .filter { $0.1 != 0 }
             .map { "\($0.0.dropFirst("fetch_".count)):\($0.1)" }

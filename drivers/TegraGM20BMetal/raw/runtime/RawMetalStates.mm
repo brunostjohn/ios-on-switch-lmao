@@ -273,7 +273,7 @@ static void makeRecord(RMPipeline *p, MTLRenderPipelineDescriptor *d)
 static raw::ArchiveAnswer renderArchiveAnswer(MTLRenderPipelineDescriptor *d, MTLPipelineOption o, uint64_t keyHash,
                                               NSError **error)
 {
-    const raw::ArchiveAnswer answer = rmArchiveAnswer(d.binaryArchives, o, false, keyHash);
+    const raw::ArchiveAnswer answer = rmArchiveAnswer(d.binaryArchives, o, keyHash);
     if (answer == raw::ArchiveAnswer::Missed && error)
         *error = rmArchiveMissError((d.fragmentFunction ?: d.vertexFunction).name, "render");
     return answer;
@@ -323,8 +323,11 @@ RMPipeline *rmPipelineFor(RMDevice *device, MTLRenderPipelineDescriptor *d, MTLP
         if (p->_packed)
             packedVariants(p, packKey);
     }
-    const raw::ArchiveAnswer answer = p->_raw || !p->_completable ? raw::ArchiveAnswer::NotAsked
-                                                                   : renderArchiveAnswer(d, o, keyHash, error);
+    // A framework's state the pack holds is the device's archive hit, as Apple's own archives hold its states for Apple's
+    // GPUs; any other state is answered by the archives the creation lists alone, as Metal answers it
+    const bool deviceArchive = p->_packable && p->_raw;
+    const raw::ArchiveAnswer answer = p->_completable && !deviceArchive ? renderArchiveAnswer(d, o, keyHash, error)
+                                                                        : raw::ArchiveAnswer::NotAsked;
     if (answer == raw::ArchiveAnswer::Missed)
         return nil;
     p->_archived = answer == raw::ArchiveAnswer::Declared;

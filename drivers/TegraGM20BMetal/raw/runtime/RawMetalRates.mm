@@ -118,7 +118,7 @@ size_t raw_metal_rates(char *out, size_t size)
         const size_t used = strlen(diag);
         snprintf(diag + used, sizeof diag - used,
                  " rsplit=%.0f/%.0f/%.0fus/m rmax=%lluus rdraw=%.1f/m tw=t%llu/%lluus/b%llu/o%llu/f%llu sbf=%llu"
-                 " fb=%llu/%llu/%llu/%llu(%s) clr=%llu/%llu so=%llu/%llu/%llu/%lluus zero=%llu",
+                 " fb=%llu/%llu/%llu/%llu(%s) clr=%llu/%llu zero=%llu",
                  (s.replaySlotUs.exchange(0) / double(m2vs)), (s.replayTwinUs.exchange(0) / double(m2vs)),
                  (s.replayCommitUs.exchange(0) / double(m2vs)), (unsigned long long)s.replayMaxUs.exchange(0),
                  s.replayDraws.exchange(0) / double(m2vs), (unsigned long long)s.twinTextures.exchange(0),
@@ -130,9 +130,6 @@ size_t raw_metal_rates(char *out, size_t size)
                  (unsigned long long)k.fetchBarriersInterlocked.exchange(0),
                  raw::Device::fetchBarrierName(gRM->raw->fetchBarrier.load(std::memory_order_relaxed)),
                  (unsigned long long)k.clears.exchange(0), (unsigned long long)k.clearsElided.exchange(0),
-                 (unsigned long long)k.selfOverlapSplit.exchange(0), (unsigned long long)k.selfOverlapRuns.exchange(0),
-                 (unsigned long long)k.selfOverlapUnbounded.exchange(0),
-                 (unsigned long long)(k.selfOverlapNs.exchange(0) / 1000),
                  (unsigned long long)s.zeroAnswers.exchange(0));
     }
 #endif
@@ -203,19 +200,18 @@ size_t raw_metal_rates(char *out, size_t size)
 }
 
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
-// "fetch whole=W/Vv/BB seq=S/Tt ilk=I/Bb rec=<reason>:n,... enc=<reason>:n,...": drawn whole on the CPU's proof (the
-// vertices and bytes it read for it), a triangle at a time (the triangles), inside the pixel interlock (B of them with
-// the fixed-function blend computed in the shader), and refused as recorded and at encoding by reason ("-" for none).
+// "fetch seq=S/Tt ilk=I/Bb rec=<reason>:n,... enc=<reason>:n,... sto=<reason>:n,...": drawn a triangle at a time (the
+// triangles), inside the pixel interlock (B of them with the fixed-function blend computed in the shader), refused as
+// recorded and at encoding by reason, and storage forms left for their barrier form by reason ("-" for none).
 // The plugin's rates timer only (its 5 s windows).
 size_t raw_metal_fetch_rates(char *out, size_t size)
 {
     if (!gRM || !size)
         return 0;
     const raw::FetchCounts &k = gRM->raw->stats.fetch;
-    constexpr size_t kTotals = 7, kAll = kTotals + 2 * raw::kFetchRefusals + raw::kStorageFallbacks;
+    constexpr size_t kTotals = 4, kAll = kTotals + 2 * raw::kFetchRefusals + raw::kStorageFallbacks;
     static uint64_t last[kAll];
-    uint64_t now[kAll] = {k.provenWhole.load(),      k.proofVertices.load(),       k.proofBytes.load(),
-                          k.sequential.load(),       k.sequentialTriangles.load(), k.interlocked.load(),
+    uint64_t now[kAll] = {k.sequential.load(), k.sequentialTriangles.load(), k.interlocked.load(),
                           k.interlockedBlends.load()};
     for (size_t r = 0; r < raw::kFetchRefusals; ++r) {
         now[kTotals + r] = k.refusedAtRecord[r].load();
@@ -228,7 +224,7 @@ size_t raw_metal_fetch_rates(char *out, size_t size)
     for (size_t i = 0; i < kAll; ++i) {
         d[i] = now[i] - last[i];
         last[i] = now[i];
-        any |= d[i] && i != 1 && i != 2;
+        any |= d[i] != 0;
     }
     if (!any)
         return 0;
@@ -247,9 +243,8 @@ size_t raw_metal_fetch_rates(char *out, size_t size)
     reasons(d + kTotals + 2 * raw::kFetchRefusals, raw::kStorageFallbacks, raw::kStorageFallbackNames, storage,
             sizeof storage);
     const int n =
-        snprintf(out, size, "fetch whole=%llu/%lluv/%lluB seq=%llu/%llut ilk=%llu/%llub rec=%s enc=%s sto=%s",
-                 (unsigned long long)d[0], (unsigned long long)d[1], (unsigned long long)d[2], (unsigned long long)d[3],
-                 (unsigned long long)d[4], (unsigned long long)d[5], (unsigned long long)d[6], record, encode, storage);
+        snprintf(out, size, "fetch seq=%llu/%llut ilk=%llu/%llub rec=%s enc=%s sto=%s", (unsigned long long)d[0],
+                 (unsigned long long)d[1], (unsigned long long)d[2], (unsigned long long)d[3], record, encode, storage);
     return n > 0 ? std::min(size_t(n), size - 1) : 0;
 }
 

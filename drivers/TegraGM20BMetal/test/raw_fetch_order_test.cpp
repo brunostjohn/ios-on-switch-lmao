@@ -8,9 +8,9 @@ using raw::FetchRefusal;
 
 constexpr uint32_t kPoint = 0, kLine = 1, kLineStrip = 2, kTriangle = 3, kStrip = 4;
 
-FetchRefusal refusal(bool fetchesOwn, bool caTransform, FetchDraw draw, bool primitiveId = false)
+FetchRefusal refusal(bool fetchesOwn, FetchDraw draw, bool primitiveId = false)
 {
-    return raw::fetchRefusal(fetchesOwn, caTransform, primitiveId, draw);
+    return raw::fetchRefusal(fetchesOwn, primitiveId, draw);
 }
 
 TEST(FetchOrder, OnlyAColorFetchedAndWrittenOutsideTheInterlockCounts)
@@ -24,59 +24,54 @@ TEST(FetchOrder, OnlyAColorFetchedAndWrittenOutsideTheInterlockCounts)
 
 TEST(FetchOrder, ADrawThatFetchesNoColorItWritesIsNeverRefused)
 {
-    for (bool ca : {false, true})
-        for (uint32_t primitive : {kPoint, kLine, kLineStrip, kTriangle, kStrip})
-            for (bool indirect : {false, true})
-                EXPECT_EQ(refusal(false, ca, {primitive, 600, 7, indirect}), FetchRefusal::None);
+    for (uint32_t primitive : {kPoint, kLine, kLineStrip, kTriangle, kStrip})
+        for (bool indirect : {false, true})
+            for (bool indexed : {false, true})
+                EXPECT_EQ(refusal(false, {primitive, 600, 7, indirect, indexed}), FetchRefusal::None);
 }
 
-TEST(FetchOrder, OnePrimitiveIsDrawnWholeWhateverItsTransform)
+TEST(FetchOrder, OnePrimitiveIsDrawnWhole)
 {
-    EXPECT_EQ(refusal(true, false, {kTriangle, 3, 1}), FetchRefusal::None);
-    EXPECT_EQ(refusal(true, false, {kStrip, 3, 1}), FetchRefusal::None);
-    EXPECT_EQ(refusal(true, false, {kPoint, 1, 1}), FetchRefusal::None);
-    EXPECT_EQ(refusal(true, false, {kLine, 2, 1}), FetchRefusal::None);
-    EXPECT_EQ(refusal(true, false, {kLineStrip, 2, 1}), FetchRefusal::None);
-    EXPECT_EQ(refusal(true, false, {kTriangle, 0, 1}), FetchRefusal::None);
-    EXPECT_EQ(refusal(true, false, {kTriangle, 6, 0}), FetchRefusal::None);
+    EXPECT_EQ(refusal(true, {kTriangle, 3, 1}), FetchRefusal::None);
+    EXPECT_EQ(refusal(true, {kStrip, 3, 1}), FetchRefusal::None);
+    EXPECT_EQ(refusal(true, {kPoint, 1, 1}), FetchRefusal::None);
+    EXPECT_EQ(refusal(true, {kLine, 2, 1}), FetchRefusal::None);
+    EXPECT_EQ(refusal(true, {kLineStrip, 2, 1}), FetchRefusal::None);
+    EXPECT_EQ(refusal(true, {kTriangle, 0, 1}), FetchRefusal::None);
+    EXPECT_EQ(refusal(true, {kTriangle, 6, 0}), FetchRefusal::None);
 }
 
-// The device's refused shapes (backboardd's list of six, SpringBoard's and iconservicesagent's strips of four, HW Test's
-// list of 36): drawn a triangle at a time whatever their transform, no vertex read
-TEST(FetchOrder, ListsAndStripsAreDrawnATriangleAtATimeWhateverTheirTransform)
+// A state with no storage form: lists and strips drawn a triangle at a time, no vertex read
+TEST(FetchOrder, ListsAndStripsAreDrawnATriangleAtATime)
 {
-    for (bool ca : {false, true}) {
-        EXPECT_EQ(refusal(true, ca, {kTriangle, 6, 1}), FetchRefusal::None);
-        EXPECT_EQ(refusal(true, ca, {kStrip, 4, 1}), FetchRefusal::None);
-        EXPECT_EQ(refusal(true, ca, {kTriangle, 36, 1}), FetchRefusal::None);
-        EXPECT_EQ(refusal(true, ca, {kTriangle, 6, 1, false, true}), FetchRefusal::None);
-    }
+    EXPECT_EQ(refusal(true, {kTriangle, 6, 1}), FetchRefusal::None);
+    EXPECT_EQ(refusal(true, {kStrip, 4, 1}), FetchRefusal::None);
+    EXPECT_EQ(refusal(true, {kTriangle, 36, 1}), FetchRefusal::None);
+    EXPECT_EQ(refusal(true, {kTriangle, 6, 1, false, true}), FetchRefusal::None);
 }
 
-TEST(FetchOrder, WithoutCoreAnimationsTransformOnlyWhatOneTriangleADrawCannotKeepIsRefused)
+// RenderBox's quad, an indexed strip of four vertices, is refused only where its state has no storage form: a
+// state drawn inside the pixel interlock (fetchesOwnColor false) takes any shape whole
+TEST(FetchOrder, OnlyWhatOneTriangleADrawCannotKeepIsRefused)
 {
-    EXPECT_EQ(refusal(true, false, {kStrip, 4, 1, false, true}), FetchRefusal::Restart);
-    EXPECT_EQ(refusal(true, false, {kTriangle, 3 * raw::kSequentialTriangles, 1}), FetchRefusal::None);
-    EXPECT_EQ(refusal(true, false, {kTriangle, 3 * raw::kSequentialTriangles + 3, 1}), FetchRefusal::Long);
-    EXPECT_EQ(refusal(true, false, {kStrip, raw::kSequentialTriangles + 3, 1}), FetchRefusal::Long);
-    EXPECT_EQ(refusal(true, false, {kTriangle, 6, 1}, true), FetchRefusal::PrimitiveId);
-    EXPECT_EQ(refusal(true, false, {kTriangle, 3, 1}, true), FetchRefusal::None);
-    // Core Animation's transform is left to submission, where its runs may be proven longer than one triangle
-    EXPECT_EQ(refusal(true, true, {kStrip, 4, 1, false, true}), FetchRefusal::None);
-    EXPECT_EQ(refusal(true, true, {kTriangle, 6, 1}, true), FetchRefusal::None);
+    EXPECT_EQ(refusal(true, {kStrip, 4, 1, false, true}), FetchRefusal::Restart);
+    EXPECT_EQ(refusal(raw::fetchesOwnColor(1, 1, 1), {kStrip, 4, 1, false, true}), FetchRefusal::None);
+    EXPECT_EQ(refusal(true, {kTriangle, 3 * raw::kSequentialTriangles, 1}), FetchRefusal::None);
+    EXPECT_EQ(refusal(true, {kTriangle, 3 * raw::kSequentialTriangles + 3, 1}), FetchRefusal::Long);
+    EXPECT_EQ(refusal(true, {kStrip, raw::kSequentialTriangles + 3, 1}), FetchRefusal::Long);
+    EXPECT_EQ(refusal(true, {kTriangle, 6, 1}, true), FetchRefusal::PrimitiveId);
+    EXPECT_EQ(refusal(true, {kTriangle, 3, 1}, true), FetchRefusal::None);
 }
 
 TEST(FetchOrder, InstancesTopologyAndIndirectCountsAreRefusedAsRecorded)
 {
-    for (bool ca : {false, true}) {
-        EXPECT_EQ(refusal(true, ca, {kTriangle, 6, 2}), FetchRefusal::Instances);
-        EXPECT_EQ(refusal(true, ca, {kTriangle, 3, 2}), FetchRefusal::Instances);
-        EXPECT_EQ(refusal(true, ca, {kPoint, 2, 1}), FetchRefusal::Topology);
-        EXPECT_EQ(refusal(true, ca, {kLine, 4, 1}), FetchRefusal::Topology);
-        EXPECT_EQ(refusal(true, ca, {kLineStrip, 3, 1}), FetchRefusal::Topology);
-        EXPECT_EQ(refusal(true, ca, {kTriangle, 0, 1, true}), FetchRefusal::Indirect);
-        EXPECT_EQ(refusal(true, ca, {kPoint, 0, 1, true}), FetchRefusal::Indirect);
-    }
+    EXPECT_EQ(refusal(true, {kTriangle, 6, 2}), FetchRefusal::Instances);
+    EXPECT_EQ(refusal(true, {kTriangle, 3, 2}), FetchRefusal::Instances);
+    EXPECT_EQ(refusal(true, {kPoint, 2, 1}), FetchRefusal::Topology);
+    EXPECT_EQ(refusal(true, {kLine, 4, 1}), FetchRefusal::Topology);
+    EXPECT_EQ(refusal(true, {kLineStrip, 3, 1}), FetchRefusal::Topology);
+    EXPECT_EQ(refusal(true, {kTriangle, 0, 1, true}), FetchRefusal::Indirect);
+    EXPECT_EQ(refusal(true, {kPoint, 0, 1, true}), FetchRefusal::Indirect);
 }
 
 TEST(FetchOrder, TheReasonsKeepTheEncodeLinesWording)
