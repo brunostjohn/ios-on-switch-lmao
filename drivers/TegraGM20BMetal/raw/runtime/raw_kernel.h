@@ -50,12 +50,6 @@ inline bool boCpuOffset(const Bo &bo, const void *cpu, uint64_t bytes, uint64_t 
     return true;
 }
 
-struct JobAdmission {
-    uint64_t cookie = 0;
-    uint32_t flags = 0;
-    bool empty() const { return !cookie && !flags; }
-};
-
 // One SubmitJob (drivers/TegraGM20B/TegraGM20BJobABI.h, method 33): its pushes, the uses no resource set holds, and the
 // set by id and generation (set 0: none)
 struct KernelJob {
@@ -135,7 +129,7 @@ public:
     bool channel(uint32_t engines, uint32_t &channel, const volatile uint32_t *&fence);
     void closeChannel(uint32_t channel);
 
-    // An Exec or WaitFence found `channel` dead (the kernel killed it for a GPU fault or hang; its fence was released, and
+    // A SubmitJob or WaitFence found `channel` dead (the kernel killed it for a GPU fault or hang; its fence was released, and
     // the connection's other channels, BOs and binds go on)
     bool lost(uint32_t channel) const
     {
@@ -161,20 +155,11 @@ public:
         return opened_.load(std::memory_order_acquire);
     }
 
-    // `channel`, as it was when `opened` channels had been made, is dead (an Exec or WaitFence answered so, or its kill record
+    // `channel`, as it was when `opened` channels had been made, is dead (a SubmitJob or WaitFence answered so, or its kill record
     // says so): lost() and the cause from GetStatus. Nothing when a channel was made since: that one is not it.
     void markLost(uint32_t channel, uint32_t opened);
     // GetStatus: false when the kernel has no such channel (destroyed) or refused the call
     bool status(uint32_t channel, TegraGM20BAbiStatus &st);
-
-    // `last`: the channel's last submitted seqno (0 if none), waited on when the GPFIFO is full
-    // `surfaces` (null: none): the host imports the submission touches, named to the kernel (ExecSurfaces, method 17,
-    // TegraGM20BInfoExecSurfaces) before each Exec of it: it waits on the GPU for other channels' writes to them, and counts
-    // as a writer of the ones it writes only. Submit (method 20) carries both in one call when the record fits.
-    // Older kernels use ExecSurfaces then Exec; refusal of the list prevents submission.
-    bool exec(uint32_t channel, const TegraGM20BAbiPush *pushes, uint32_t count, uint32_t last, uint32_t &seqno,
-              SurfaceList *surfaces = nullptr, int *result = nullptr, JobVisibility visibility = JobVisibility::Legacy,
-              const JobEvents &events = {}, const JobAdmission &admission = {});
 
     // Method 33. kIOReturnNotReady (in `result`) is the set's ended generation or a stale native view: no error is kept.
     bool submitJob(const KernelJob &job, uint32_t &seqno, int *result = nullptr);
@@ -184,11 +169,6 @@ public:
                     const volatile uint32_t *&mirror);
 
     std::shared_ptr<SharedEvents> sharedEvents();
-
-    uint64_t nextAdmission()
-    {
-        return admissionCookie_.fetch_add(1, std::memory_order_relaxed);
-    }
 
     uint32_t maxPushes() const
     {
@@ -200,7 +180,7 @@ public:
         return (info_.flags & TegraGM20BInfoSubmitAddress) != 0;
     }
 
-    // Internal fences a SubmitAddress may carry (TegraGM20BPushFence); 0: each fence is a submission of its own.
+    // Internal fences a job may carry (TegraGM20BPushFence); 0: each fence is a submission of its own.
     uint32_t maxFences() const
     {
         return exactJobs() && (info_.flags & TegraGM20BInfoPushFences) ? TegraGM20BMaxJobFences : 0;
@@ -238,7 +218,6 @@ public:
     }
 
 private:
-    std::atomic<uint64_t> admissionCookie_{1};
     void setError(std::string error)
     {
         std::lock_guard<std::mutex> lock(errorLock_);
@@ -256,8 +235,7 @@ private:
     bool tunnel_ = false;
     bool shared_ = false;
     void (*release_)() = nullptr;  // NVK's switch_nvk_connection_release
-    // A SurfaceWrites failed: imports stop saying the GPU only samples them, and every Exec carries
-    // TegraGM20BPushImportsWritten.
+    // A SurfaceWrites failed: imports stop saying the GPU only samples them.
     std::atomic<bool> importsWritten_{false};
     std::atomic<uint32_t> lostChannel_{0}, lostError_{0}, opened_{0};
     std::mutex lostLock_;  // a channel made, and a channel marked lost, one after the other

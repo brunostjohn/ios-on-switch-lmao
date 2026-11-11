@@ -2,6 +2,7 @@
 #include "../raw/runtime/raw_shared_events.h"
 #include "../raw/runtime/raw_batch.h"
 #include "../raw/runtime/raw_kernel.h"
+#include "TegraGM20BJobABI.h"
 #include <IOKit/IOKitLib.h>
 #include <array>
 #include <atomic>
@@ -98,7 +99,7 @@ extern "C" kern_return_t IOConnectCallStructMethod(mach_port_t connection, uint3
         info.page_size = 4096;
         return KERN_SUCCESS;
     }
-    case TegraGM20BMethodSubmitAddress: {
+    case TegraGM20BMethodSubmitJob: {
         const auto &address = request<TegraGM20BAbiSubmitAddress>(input, size);
         check(!address.reserved && outputSize && *outputSize == sizeof(TegraGM20BAbiExecReply), "addressed reply ABI");
         const auto *bytes = reinterpret_cast<const uint8_t *>(uintptr_t(address.address));
@@ -324,6 +325,20 @@ static void terminal(bool tunnel)
     check(wakes == 2, "failed registration cannot wake consumer");
 }
 
+static bool submitJob(raw::Kernel &kernel, const TegraGM20BAbiPush *pushes, uint32_t count, const raw::SurfaceList &uses,
+                      uint32_t &sequence, int *result, raw::JobVisibility visibility, const raw::JobEvents &events = {})
+{
+    raw::KernelJob job;
+    job.channel = 3;
+    job.pushes = pushes;
+    job.pushCount = count;
+    job.uses = uses.uses().data();
+    job.useCount = uint32_t(uses.uses().size());
+    job.visibility = visibility;
+    job.events = events;
+    return kernel.submitJob(job, sequence, result);
+}
+
 static void submit(bool tunnel)
 {
     model = {};
@@ -339,13 +354,11 @@ static void submit(bool tunnel)
     const raw::JobEvents events{&wait, &signal, 1, 1};
     uint32_t sequence = 0;
     int result = 0;
-    const bool accepted = kernel.exec(3, &push, 1, 0, sequence, &resources, &result,
-                                      raw::JobVisibility::Internal, events);
+    const bool accepted = submitJob(kernel, &push, 1, resources, sequence, &result, raw::JobVisibility::Internal, events);
     check(accepted && sequence == 1 && model.submissions == 1, "pushes and events publish in one call");
-    const auto &header = *reinterpret_cast<const TegraGM20BAbiSubmit *>(model.submitted.data());
-    check(header.channel == 3 && header.push_count == 1 && header.surface_count == 1 &&
-          (header.surface_flags & TegraGM20BSubmitHasEvents) &&
-          (header.surface_flags & TegraGM20BSubmitVisibilityExplicit), "event and visibility flags coexist");
+    const auto &header = *reinterpret_cast<const TegraGM20BAbiJob *>(model.submitted.data());
+    check(header.channel == 3 && header.push_count == 1 && header.shared_count == 1 && !header.set &&
+          !header.set_generation && header.flags == TegraGM20BJobHasEvents, "event and visibility flags coexist");
     const size_t offset = sizeof header + sizeof push + sizeof(TegraGM20BAbiSurfaceUse);
     const auto &trailer = *reinterpret_cast<const TegraGM20BAbiSubmitEvents *>(model.submitted.data() + offset);
     check(model.submitted.size() == offset + sizeof trailer + 2 * sizeof wait &&
@@ -354,15 +367,19 @@ static void submit(bool tunnel)
           !memcmp(model.submitted.data() + offset + sizeof trailer + sizeof wait, &signal, sizeof signal),
           "full-width waits precede full-width signals");
     raw::SurfaceList empty;
-    check(kernel.exec(3, nullptr, 0, 0, sequence, &empty, &result, raw::JobVisibility::External,
-                      {nullptr, &signal, 0, 1}) && sequence == 2, "zero-push event-only job is atomic");
-    check(!kernel.exec(3, &push, 1, 0, sequence, &resources, &result, raw::JobVisibility::Internal,
-                       {&wait, &signal, 32, 1}) && model.submissions == 2, "oversized event list cannot publish");
-    check(!kernel.exec(3, &push, 1, 0, sequence, &resources, &result, raw::JobVisibility::Internal,
-                       {nullptr, nullptr, 1, 0}) && model.submissions == 2, "missing event array cannot publish");
+    check(submitJob(kernel, nullptr, 0, empty, sequence, &result, raw::JobVisibility::External,
+                    {nullptr, &signal, 0, 1}) &&
+              sequence == 2 &&
+              reinterpret_cast<const TegraGM20BAbiJob *>(model.submitted.data())->flags ==
+                  (TegraGM20BJobExternal | TegraGM20BJobHasEvents),
+          "zero-push event-only job is atomic");
+    check(!submitJob(kernel, &push, 1, resources, sequence, &result, raw::JobVisibility::Internal,
+                     {&wait, &signal, 32, 1}) && model.submissions == 2, "oversized event list cannot publish");
+    check(!submitJob(kernel, &push, 1, resources, sequence, &result, raw::JobVisibility::Internal,
+                     {nullptr, nullptr, 1, 0}) && model.submissions == 2, "missing event array cannot publish");
 }
 
-// A command buffer's work batches, submitted as CommandBuffer::commit submits them: one SubmitAddress carrying every
+// A command buffer's work batches, submitted as CommandBuffer::commit submits them: one SubmitJob carrying every
 // push and the use list once, its batch ends marked as internal fences, or, from a kernel without them, one per batch.
 static void batchSubmission(bool tunnel, bool supported)
 {
@@ -384,15 +401,15 @@ static void batchSubmission(bool tunnel, bool supported)
     }
     uint32_t sequence = 0;
     const bool sent = plan.submit(kernel.maxPushes(), kernel.maxFences(), [&](size_t at, size_t n) {
-        return kernel.exec(3, plan.data() + at, uint32_t(n), 0, sequence, &resources, nullptr,
-                           raw::JobVisibility::Internal);
+        return submitJob(kernel, plan.data() + at, uint32_t(n), resources, sequence, nullptr,
+                         raw::JobVisibility::Internal);
     });
     check(sent, "every batch submitted");
     check(model.submissions == (supported ? 1u : 4u), "one kernel call per command buffer with internal fences");
     unsigned pushes = 0, fences = 0;
     for (const auto &record : model.records) {
-        const auto &header = *reinterpret_cast<const TegraGM20BAbiSubmit *>(record.data());
-        check(header.surface_count == 2, "each call carries the use list once");
+        const auto &header = *reinterpret_cast<const TegraGM20BAbiJob *>(record.data());
+        check(header.shared_count == 2, "each call carries the use list once");
         const auto *submitted = reinterpret_cast<const TegraGM20BAbiPush *>(record.data() + sizeof header);
         for (uint32_t i = 0; i < header.push_count; ++i) {
             const bool fenced = submitted[i].flags & TegraGM20BPushFence;
@@ -406,7 +423,7 @@ static void batchSubmission(bool tunnel, bool supported)
         return;
     TegraGM20BAbiPush fenced[2] = {{0x10000, 24, TegraGM20BPushFence}, {0x10800, 8, 0}};
     int result = 0;
-    check(!kernel.exec(3, fenced, 2, 0, sequence, &resources, &result, raw::JobVisibility::Internal) &&
+    check(!submitJob(kernel, fenced, 2, resources, sequence, &result, raw::JobVisibility::Internal) &&
           result == kIOReturnBadArgument && model.submissions == 4, "a kernel without fences is never sent one");
 }
 
@@ -424,9 +441,8 @@ static void rangeSubmission(bool tunnel)
     const TegraGM20BAbiPush push{0x10000, 24, 0};
     uint32_t sequence = 0;
     int result = 0;
-    const bool accepted = kernel.exec(3, &push, 1, 0, sequence, &resources, &result,
-                                      raw::JobVisibility::Internal);
-    const size_t offset = sizeof(TegraGM20BAbiSubmit) + sizeof push;
+    const bool accepted = submitJob(kernel, &push, 1, resources, sequence, &result, raw::JobVisibility::Internal);
+    const size_t offset = sizeof(TegraGM20BAbiJob) + sizeof push;
     check(accepted && !result && sequence == 1 && model.submissions == 1 &&
           model.submitted.size() == offset + 3 * sizeof(TegraGM20BAbiSurfaceUse),
           "exact byte ranges and pushes publish atomically");
@@ -491,43 +507,6 @@ static void resourceReadiness(bool tunnel)
     check(wakes == 2 && model.destroyed == 1, "late resource notification cannot access closed transport");
 }
 
-static void admission(bool tunnel)
-{
-    model = {};
-    model.tunnel = tunnel;
-    raw::Kernel kernel;
-    std::string error;
-    check(kernel.open(error), "admission Kernel opens");
-    raw::SurfaceList resources;
-    resources.add(9, false);
-    const TegraGM20BAbiPush push{0x10000, 24, 0};
-    const TegraGM20BAbiEventUse signal{99, (uint64_t(1) << 48) + 19};
-    const uint64_t cookie = kernel.nextAdmission();
-    check(cookie && kernel.nextAdmission() != cookie, "logical jobs receive distinct admission cookies");
-    uint32_t sequence = 0;
-    int result = 0;
-    const bool accepted = kernel.exec(3, &push, 1, 0, sequence, &resources, &result,
-        raw::JobVisibility::Internal, {nullptr, &signal, 0, 1},
-        {cookie, TegraGM20BSubmitAdmissionBegin | TegraGM20BSubmitAdmissionEnd});
-    check(accepted && model.submissions == 1, "admission and work share one submission");
-    const auto &header = *reinterpret_cast<const TegraGM20BAbiSubmit *>(model.submitted.data());
-    const size_t offset = sizeof header + sizeof push + sizeof(TegraGM20BAbiSurfaceUse);
-    const auto &lease = *reinterpret_cast<const TegraGM20BAbiSubmitAdmission *>(model.submitted.data() + offset);
-    const auto &events = *reinterpret_cast<const TegraGM20BAbiSubmitEvents *>(model.submitted.data() + offset + sizeof lease);
-    check((header.surface_flags & TegraGM20BSubmitAdmissionBegin) &&
-          (header.surface_flags & TegraGM20BSubmitAdmissionEnd) && lease.cookie == cookie && !lease.reserved,
-          "admission record follows exact resource uses");
-    check(events.signal_count == 1 && !events.wait_count && !events.reserved &&
-          model.submitted.size() == offset + sizeof lease + sizeof events + sizeof signal &&
-          !memcmp(model.submitted.data() + offset + sizeof lease + sizeof events, &signal, sizeof signal),
-          "event record follows admission without losing timeline bits");
-    raw::SurfaceList empty;
-    check(kernel.exec(3, nullptr, 0, 0, sequence, &empty, &result, raw::JobVisibility::Internal, {},
-                      {cookie, TegraGM20BSubmitAdmissionCancel}), "zero-work admission cancellation");
-    check(model.submitted.size() == sizeof(TegraGM20BAbiSubmit) + sizeof(TegraGM20BAbiSubmitAdmission),
-          "cancellation has no push, resource or event payload");
-}
-
 static void cpuCompletion(bool tunnel)
 {
     model = {};
@@ -572,8 +551,6 @@ int main()
     batchSubmission(false, false);
     rangeSubmission(false);
     rangeSubmission(true);
-    admission(false);
-    admission(true);
     cpuCompletion(false);
     cpuCompletion(true);
     printf("PASS: %u shared-event transport checks\n", checks);

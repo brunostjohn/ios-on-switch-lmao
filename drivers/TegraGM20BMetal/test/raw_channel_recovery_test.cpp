@@ -31,6 +31,15 @@ protected:
         ASSERT_TRUE(kernel.allocControl(0x1000, root, raw::ControlUse::RootTable));
     }
 
+    bool submit(uint32_t on, const raw::SurfaceList &uses, uint32_t &seqno)
+    {
+        raw::KernelJob job;
+        job.channel = on;
+        job.uses = uses.uses().data();
+        job.useCount = uint32_t(uses.uses().size());
+        return kernel.submitJob(job, seqno);
+    }
+
     bool make()
     {
         return raw::makeChannel(kernel, kEngines, channel, fence, last, &kNoFence,
@@ -38,7 +47,7 @@ protected:
                                     raw::SurfaceList uses;
                                     uses.add(zero.handle, false);
                                     uses.add(tickets.handle, true);
-                                    return kernel.exec(made, nullptr, 0, 0, seqno, &uses);
+                                    return submit(made, uses, seqno);
                                 });
     }
 
@@ -50,7 +59,7 @@ protected:
         uses.add(root.handle, true);
         uses.add(tickets.handle, true);
         uint32_t seqno = 0;
-        EXPECT_TRUE(kernel.exec(channel, nullptr, 0, last, seqno, &uses));
+        EXPECT_TRUE(submit(channel, uses, seqno));
         last = seqno;
         return seqno;
     }
@@ -143,7 +152,7 @@ TEST_F(ChannelRecovery, NotRespondingMarksLostOnlyAChannelTheKernelKilled)
     model.refusal = kIOReturnNotResponding;
     uint32_t refused = 0;
     raw::SurfaceList uses;
-    EXPECT_FALSE(kernel.exec(channel, nullptr, 0, last, refused, &uses));
+    EXPECT_FALSE(submit(channel, uses, refused));
     EXPECT_FALSE(kernel.lost(channel)) << "a submission's NotResponding marked a healthy channel lost";
     EXPECT_TRUE(kernel.wait(channel, seqno));
     model.kill(channel, kGrException);
