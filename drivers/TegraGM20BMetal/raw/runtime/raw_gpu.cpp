@@ -5011,6 +5011,24 @@ void RenderEncoder::endShaderTests()
     dsDirty_ = true;
 }
 
+// Clear [x0, x1) x [y0, y1) of target `target` to `v` (its format's clear words), with depth (bit 0) and stencil (bit 1)
+// of `zsBits`, whatever the render enable says
+static void clearRect(Push &p, uint32_t x0, uint32_t y0, uint32_t x1, uint32_t y1, const uint32_t v[4], uint32_t target,
+                      uint32_t zsBits)
+{
+    switch_gm20b_clear_state s = {};
+    for (uint32_t i = 0; i < 4; i++)
+        s.value[i] = v[i];
+    s.xmin = uint16_t(x0);
+    s.xmax = uint16_t(x1);
+    s.ymin = uint16_t(y0);
+    s.ymax = uint16_t(y1);
+    s.target = target;
+    s.depth = zsBits & 1;
+    s.stencil = zsBits & 2;
+    kit(p, switch_gm20b_clear, &s);
+}
+
 static void colorTarget(Push &p, uint32_t index, const Texture &t)
 {
     ColorTargetDesc d;
@@ -5023,7 +5041,7 @@ static void colorTarget(Push &p, uint32_t index, const Texture &t)
     d.blockHeight = t.blockHeight;
     d.layerBytes = t.layerBytes;
     const switch_gm20b_target k = kitTarget(d);
-    kitEmit(p, [&](nv_push *n) { switch_gm20b_color_target(n, index, &k, t.comptags); });
+    kit(p, switch_gm20b_color_target, index, &k, t.comptags);
 }
 
 // A slot with no target below the pass's last one, as NVK writes it: FORMAT DISABLED, VA 0, compressed. Left as it was,
@@ -5033,7 +5051,7 @@ static void disabledTarget(Push &p, uint32_t index)
     switch_gm20b_target k = {};
     k.width = 64;
     k.layers = 1;
-    kitEmit(p, [&](nv_push *n) { switch_gm20b_color_target(n, index, &k, true); });
+    kit(p, switch_gm20b_color_target, index, &k, true);
 }
 
 uint32_t Device::levelTic(Texture &t, uint32_t level)
@@ -5316,19 +5334,14 @@ void RenderEncoder::end()
             continue;
         const Texture *t = pass_.color[c.target].texture;
         colorTarget(p, 0, *t);
-        kitEmit(p, [&](nv_push *n) { switch_gm20b_render_area(n, 1, c.x1, c.y1); });
+        kit(p, switch_gm20b_render_area, 1u, c.x1, c.y1);
         p.m(ZT_SELECT, 0);
         uint32_t v[4] = {};
         clearWords(pass_.color[c.target].texture->format, c.value, v,
                    !called_ && pass_.color[c.target].texture->compressed);
         RAW_DIAGNOSTIC(d.countZbc(*t, !c.x0 && !c.y0 && c.x1 >= t->width && c.y1 >= t->height,
                                   zbcBootColor(t->format, v)));
-        p.inc(COLOR_CLEAR_VALUE, {v[0], v[1], v[2], v[3]});
-        p.inc(CLEAR_RECT_H, {c.x1 << 16 | c.x0, c.y1 << 16 | c.y0});
-        p.m(CLEAR_SURFACE_CONTROL, 0x10);  // USE_CLEAR_RECT
-        p.m(RENDER_ENABLE_OVERRIDE, 1);
-        p.m(CLEAR_SURFACE, 0x3c);
-        p.m(RENDER_ENABLE_OVERRIDE, 0);
+        clearRect(p, c.x0, c.y0, c.x1, c.y1, v, 0, 0);
         own = true;
     }
     if (own) {
@@ -5348,7 +5361,7 @@ void RenderEncoder::end()
     }
     // targets map to themselves (NVK writes all eight slots of the map; the hardware reads the first `count`), drawn from
     // (0, 0) over the render area
-    kitEmit(p, [&](nv_push *n) { switch_gm20b_render_area(n, count, areaW_, areaH_); });
+    kit(p, switch_gm20b_render_area, count, areaW_, areaH_);
     const DepthStencilAttachment &zs = pass_.depthStencil;
     zetaTargetWords(p, zs.texture);
     // NVK clears depth and stencil with the first color the pass clears over its render area, else on their own
@@ -5367,12 +5380,7 @@ void RenderEncoder::end()
         RAW_DIAGNOSTIC(d.countZbc(*t, !c.x0 && !c.y0 && c.x1 >= t->width && c.y1 >= t->height,
                                   zbcBootColor(t->format, v)));
         const bool area = !c.x0 && !c.y0 && c.x1 == areaW_ && c.y1 == areaH_;
-        p.inc(COLOR_CLEAR_VALUE, {v[0], v[1], v[2], v[3]});
-        p.inc(CLEAR_RECT_H, {c.x1 << 16 | c.x0, c.y1 << 16 | c.y0});
-        p.m(CLEAR_SURFACE_CONTROL, 0x10);  // USE_CLEAR_RECT
-        p.m(RENDER_ENABLE_OVERRIDE, 1);
-        p.m(CLEAR_SURFACE, 0x3c | c.target << 6 | (area ? zsBits : 0));
-        p.m(RENDER_ENABLE_OVERRIDE, 0);
+        clearRect(p, c.x0, c.y0, c.x1, c.y1, v, c.target, area ? zsBits : 0);
         zsBits = area ? 0 : zsBits;
     }
     if (zsBits) {

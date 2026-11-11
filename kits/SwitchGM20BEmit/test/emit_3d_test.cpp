@@ -102,11 +102,8 @@ TEST(Emit3D, BlendConstantAsRawWritesIt)
 
 TEST(Emit3D, ClearAsRawWritesIt)
 {
-    expectRawSays(
-        "p.inc(COLOR_CLEAR_VALUE, {v[0], v[1], v[2], v[3]});\n        p.inc(CLEAR_RECT_H, {c.x1 << 16 | c.x0, "
-        "c.y1 << 16 | c.y0});\n        p.m(CLEAR_SURFACE_CONTROL, 0x10);  // USE_CLEAR_RECT\n        "
-        "p.m(RENDER_ENABLE_OVERRIDE, 1);\n        p.m(CLEAR_SURFACE, 0x3c | c.target << 6 | (area ? zsBits : "
-        "0));\n        p.m(RENDER_ENABLE_OVERRIDE, 0);");
+    expectRawSays("kit(p, switch_gm20b_clear, &s);");
+    expectRawSays("clearRect(p, c.x0, c.y0, c.x1, c.y1, v, c.target, area ? zsBits : 0);");
     for (const bool depth : {false, true}) {
         const switch_gm20b_clear_state c = {{0x3f800000, 0, 0x3f000000, 0x3f800000}, 4, 1280, 8, 720, 2, depth, depth};
         const uint32_t zsBits = depth ? 3 : 0;
@@ -157,10 +154,10 @@ void handDisabledTargetWords(uint32_t w[kColorTargetWords])
 
 TEST(Emit3D, RenderTargetsAsRawWritesThem)
 {
-    expectRawSays("const switch_gm20b_target k = kitTarget(d);\n    kitEmit(p, [&](nv_push *n) { "
-                  "switch_gm20b_color_target(n, index, &k, t.comptags); });");
-    expectRawSays("kitEmit(p, [&](nv_push *n) { switch_gm20b_color_target(n, index, &k, true); });");
-    expectRawSays("kitEmit(p, [&](nv_push *n) { switch_gm20b_render_area(n, count, areaW_, areaH_); });");
+    expectRawSays("const switch_gm20b_target k = kitTarget(d);\n    kit(p, switch_gm20b_color_target, index, &k, "
+                  "t.comptags);");
+    expectRawSays("kit(p, switch_gm20b_color_target, index, &k, true);");
+    expectRawSays("kit(p, switch_gm20b_render_area, count, areaW_, areaH_);");
     raw::ColorTargetDesc pitch;
     pitch.va = 0x1234560000;
     pitch.pitch = 5120;

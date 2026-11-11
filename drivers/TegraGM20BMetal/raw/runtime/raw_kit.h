@@ -12,11 +12,12 @@
 
 namespace raw {
 
-template <typename Emit> void kitEmit(Push &p, Emit emit)
+// One of the kit's emitters, emit(push, args...)
+template <typename Emit, typename... Args> void kit(Push &p, Emit emit, Args &&...args)
 {
     nv_push n;
     nv_push_init(&n, p.at, size_t(p.end - p.at), SUBC_MASK_ALL);
-    emit(&n);
+    emit(&n, static_cast<Args &&>(args)...);
     p.at = n.end;
 }
 
@@ -62,11 +63,9 @@ inline void emitCopy(Push &p, const CopySurface &source, const CopySurface &dest
     c.extent_el.width = width;
     c.extent_el.height = height;
     c.extent_el.depth = c.extent_el.array_len = 1;
-    kitEmit(p, [&](nv_push *n) {
-        switch_gm20b_copy_rect(n, &c,
-                               ordered ? NVB0B5_LAUNCH_DMA_DATA_TRANSFER_TYPE_NON_PIPELINED
-                                       : NVB0B5_LAUNCH_DMA_DATA_TRANSFER_TYPE_PIPELINED);
-    });
+    const uint8_t type =
+        ordered ? NVB0B5_LAUNCH_DMA_DATA_TRANSFER_TYPE_NON_PIPELINED : NVB0B5_LAUNCH_DMA_DATA_TRANSFER_TYPE_PIPELINED;
+    kit(p, switch_gm20b_copy_rect, &c, type);
 }
 
 }  // namespace raw
