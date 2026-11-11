@@ -138,6 +138,8 @@ void recordBytes(RMCommandBuffer *cb, Cmd m, const void *bytes, NSUInteger lengt
             hit(_cb, RMPred(x->_pred ?: (x->_rawOk && !x->_raw.rotation ? PredEncNoTic : PredTexShape)),
                 x->_descriptor.pixelFormat, x->_kind);
     }
+    if (stage == 1 && index < _vertexTextures.size())
+        _vertexTextures[index] = t != nil;
     if (stage == 2 && index < 16)
         _tex[index] = x;
     if (x && x->_raw.sampled)
@@ -176,10 +178,8 @@ void recordBytes(RMCommandBuffer *cb, Cmd m, const void *bytes, NSUInteger lengt
         [_cb takeReason:WhyCall why:@"a sampler not made by this device"];
         hit(_cb, PredCallSamplerForeign, index);
     }
-    if (stage == 1 && s) {
-        [_cb takeReason:WhyCall why:@"a vertex sampler"];
-        hit(_cb, PredCallVertexSampler, index);
-    }
+    if (stage == 1 && index < _vertexSamplers.size())
+        _vertexSamplers[index] = s != nil;
     if (stage == 2 && index < 16) {
         RMSampler *r = [(id)s isKindOfClass:[RMSampler class]] ? (RMSampler *)s : nil;
         _samp[index] = r;
@@ -202,6 +202,12 @@ void recordBytes(RMCommandBuffer *cb, Cmd m, const void *bytes, NSUInteger lengt
 {
     for (NSUInteger k = 0; k < r.length; k++)
         [self sampler:2 object:s[k] index:r.location + k];
+}
+
+- (void)setVertexSamplerStates:(const id<MTLSamplerState> __unsafe_unretained[])s withRange:(NSRange)r
+{
+    for (NSUInteger k = 0; k < r.length; k++)
+        [self sampler:1 object:s[k] index:r.location + k];
 }
 
 // A bind's LOD clamps replace the state's (Metal's rule): the state of its descriptor with those clamps, made once per state and
@@ -251,6 +257,15 @@ id<MTLSamplerState> clampedSampler(id<MTLSamplerState> s, float lodMin, float lo
 {
     for (NSUInteger k = 0; k < r.length; k++)
         [self sampler:2 object:clampedSampler(s[k], lodMin[k], lodMax[k]) index:r.location + k];
+}
+
+- (void)setVertexSamplerStates:(const id<MTLSamplerState> __unsafe_unretained[])s
+                  lodMinClamps:(const float[])lodMin
+                  lodMaxClamps:(const float[])lodMax
+                     withRange:(NSRange)r
+{
+    for (NSUInteger k = 0; k < r.length; k++)
+        [self sampler:1 object:clampedSampler(s[k], lodMin[k], lodMax[k]) index:r.location + k];
 }
 
 @end

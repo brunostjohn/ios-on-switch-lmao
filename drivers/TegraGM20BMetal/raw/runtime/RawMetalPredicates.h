@@ -40,7 +40,7 @@ enum RMPred : uint8_t {
     PredCallVisibility,
     PredCallBufForeign,      // a = stage << 8 | index (0xffff: an index buffer)
     PredCallSamplerForeign,  // a sampler the raw path does not express (its reason logged when it was made)
-    PredCallVertexSampler,
+    PredCallVertexSampler,   // a vertex texture or sampler beside a pack state: a = textures, b = samplers bound
     PredCallDepthBias,     // a = bias, b = slope (float bits)
     PredCallInvocation,    // an encoder selector recorded as an invocation (each selector logged once)
     PredCallCBInvocation,  // a command buffer selector recorded as an invocation

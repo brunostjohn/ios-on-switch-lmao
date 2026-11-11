@@ -1,7 +1,7 @@
 # raw's API inventory, written by raw/test/selcover (SELCOVER_WRITE=1; selcover_inventory.h says what each
 # column holds): container, item, selector, m2v, sent by, raw
-# m2v's items: base 5 m2v 4 none 65 raw 283 read 292 refused 163 unread 201 zero 44
-# sent selectors: base 86 m2v 13 m2vobj 2 none 8 raw 501 refused 56 zero 149
+# m2v's items: base 3 m2v 4 none 65 raw 293 read 292 refused 163 unread 201 zero 36
+# sent selectors: base 79 m2v 13 m2vobj 2 none 8 raw 517 refused 56 zero 140
 MTLArgument	access	access	I	-	read
 MTLArgument	active	isActive	I	-	unread
 MTLArgument	arrayLength	arrayLength	I	-	read
@@ -202,7 +202,7 @@ MTLCommandBuffer	-	globalTraceObjectID	-	21H461,24B119	raw
 MTLCommandBuffer	-	isProfilingEnabled	-	24B119	raw
 MTLCommandBuffer	-	label	-	21H461,24B119	raw
 MTLCommandBuffer	-	logs	-	21H461,24B119	raw
-MTLCommandBuffer	-	parallelRenderCommandEncoderWithDescriptor:	-	21H461,24B119	zero
+MTLCommandBuffer	-	parallelRenderCommandEncoderWithDescriptor:	-	21H461,24B119	raw
 MTLCommandBuffer	-	popDebugGroup	-	21H461,24B119	raw
 MTLCommandBuffer	-	presentDrawable:	-	21H461,24B119	raw
 MTLCommandBuffer	-	presentDrawable:afterMinimumDuration:	-	21H461,24B119	raw
@@ -410,7 +410,7 @@ MTLDevice	-	allowLibrariesFromOtherPlatforms	-	24B119	base
 MTLDevice	-	architecture	-	21H461,24B119	raw
 MTLDevice	-	areBarycentricCoordsSupported	-	21H461,24B119	base
 MTLDevice	-	copyShaderCacheToPath:	-	21H461,24B119	base
-MTLDevice	-	counterSets	-	21H461,24B119	base
+MTLDevice	-	counterSets	-	21H461,24B119	raw
 MTLDevice	-	currentAllocatedSize	-	21H461,24B119	m2v
 MTLDevice	-	dedicatedMemorySize	-	21H461,24B119	raw
 MTLDevice	-	deviceLinearReadOnlyTextureAlignmentBytes	-	21H461,24B119	raw
@@ -442,7 +442,7 @@ MTLDevice	-	maxFragmentTextures	-	21H461,24B119	raw
 MTLDevice	-	maxFramebufferStorageBits	-	21H461,24B119	raw
 MTLDevice	-	maxLineWidth	-	21H461,24B119	base
 MTLDevice	-	maxPointSize	-	21H461,24B119	base
-MTLDevice	-	maxTessellationFactor	-	21H461,24B119	base
+MTLDevice	-	maxTessellationFactor	-	21H461,24B119	raw
 MTLDevice	-	maxTextureDepth3D	-	21H461,24B119	raw
 MTLDevice	-	maxTextureDimensionCube	-	21H461,24B119	raw
 MTLDevice	-	maxTextureHeight2D	-	21H461,24B119	raw
@@ -468,7 +468,7 @@ MTLDevice	-	newCommandQueueWithDescriptor:	-	21H461,24B119	raw
 MTLDevice	-	newCompilerWithDescriptor:error:	-	24B119	base
 MTLDevice	-	newComputePipelineStateWithDescriptor:error:	-	21H461,24B119	raw
 MTLDevice	-	newCounterHeapWithDescriptor:error:	-	24B119	base
-MTLDevice	-	newCounterSampleBufferWithDescriptor:error:	-	21H461,24B119	base
+MTLDevice	-	newCounterSampleBufferWithDescriptor:error:	-	21H461,24B119	raw
 MTLDevice	-	newDagStringWithGraphs:	-	21H461,24B119	base
 MTLDevice	-	newDefaultLibrary	-	21H461,24B119	raw
 MTLDevice	-	newDefaultLibraryWithBundle:error:	-	21H461,24B119	raw
@@ -520,7 +520,7 @@ MTLDevice	-	supportsCMPIndirectCommandBuffers	-	24B119	base
 MTLDevice	-	supportsCommandBufferJump	-	21H461,24B119	raw
 MTLDevice	-	supportsComputeCompressedTextureWrite	-	21H461,24B119	raw
 MTLDevice	-	supportsConditionalLoadStore	-	21H461,24B119	raw
-MTLDevice	-	supportsCounterSampling:	-	21H461,24B119	base
+MTLDevice	-	supportsCounterSampling:	-	21H461,24B119	raw
 MTLDevice	-	supportsDepthClipMode	-	21H461,24B119	base
 MTLDevice	-	supportsDynamicAttributeStride	-	24B119	raw
 MTLDevice	-	supportsDynamicLibraries	-	21H461,24B119	raw
@@ -556,7 +556,7 @@ MTLDevice	-	supportsSIMDShufflesAndBroadcast	-	21H461,24B119	base
 MTLDevice	-	supportsSeparateDepthStencil	-	24B119	base
 MTLDevice	-	supportsShaderBarycentricCoordinates	-	24B119	base
 MTLDevice	-	supportsSharedTextureHandles	-	24B119	raw
-MTLDevice	-	supportsTessellation	-	21H461,24B119	base
+MTLDevice	-	supportsTessellation	-	21H461,24B119	raw
 MTLDevice	-	supportsTexture2DMultisampleArray	-	21H461,24B119	raw
 MTLDevice	-	supportsTextureCubeArray	-	21H461,24B119	base
 MTLDevice	-	supportsTextureMultifetch	-	24B119	base
@@ -617,8 +617,8 @@ MTLDevice	newRenderPipelineStateWithTileDescriptor:options:reflection:error:	new
 MTLDevice	newSamplerStateWithDescriptor:	newSamplerStateWithDescriptor:	I	21H461,24B119	raw
 MTLDevice	newSharedEvent	newSharedEvent	I	21H461,24B119	raw
 MTLDevice	newSharedEventWithHandle:	newSharedEventWithHandle:	I	24B119	raw
-MTLDevice	newSharedTextureWithDescriptor:	newSharedTextureWithDescriptor:	I	21H461,24B119	base
-MTLDevice	newSharedTextureWithHandle:	newSharedTextureWithHandle:	I	21H461,24B119	base
+MTLDevice	newSharedTextureWithDescriptor:	newSharedTextureWithDescriptor:	I	21H461,24B119	raw
+MTLDevice	newSharedTextureWithHandle:	newSharedTextureWithHandle:	I	21H461,24B119	raw
 MTLDevice	newTextureWithDescriptor:	newTextureWithDescriptor:	I	21H461,24B119	raw
 MTLDevice	programmableSamplePositionsSupported	areProgrammableSamplePositionsSupported	I	21H461,24B119	raw
 MTLDevice	rasterOrderGroupsSupported	areRasterOrderGroupsSupported	I	21H461,24B119	raw
@@ -663,8 +663,8 @@ MTLFunction	name	name	I	21H461,24B119	raw
 MTLFunction	newArgumentEncoderWithBufferIndex:	newArgumentEncoderWithBufferIndex:	I	21H461,24B119	raw
 MTLFunction	newArgumentEncoderWithBufferIndex:reflection:	newArgumentEncoderWithBufferIndex:reflection:	I	-	raw
 MTLFunction	options	options	I	21H461,24B119	raw
-MTLFunction	patchControlPointCount	patchControlPointCount	I	21H461,24B119	zero
-MTLFunction	patchType	patchType	I	21H461,24B119	zero
+MTLFunction	patchControlPointCount	patchControlPointCount	I	21H461,24B119	raw
+MTLFunction	patchType	patchType	I	21H461,24B119	raw
 MTLFunction	stageInputAttributes	stageInputAttributes	I	21H461,24B119	raw
 MTLFunction	vertexAttributes	vertexAttributes	I	21H461,24B119	raw
 MTLFunctionConstant	index	index	I	-	read
@@ -940,13 +940,13 @@ MTLRenderCommandEncoder	drawIndexedPatches:patchStart:patchCount:patchIndexBuffe
 MTLRenderCommandEncoder	drawIndexedPrimitives:indexCount:indexType:indexBuffer:indexBufferOffset:	drawIndexedPrimitives:indexCount:indexType:indexBuffer:indexBufferOffset:	I	21H461,24B119	raw
 MTLRenderCommandEncoder	drawIndexedPrimitives:indexCount:indexType:indexBuffer:indexBufferOffset:instanceCount:	drawIndexedPrimitives:indexCount:indexType:indexBuffer:indexBufferOffset:instanceCount:	I	21H461,24B119	raw
 MTLRenderCommandEncoder	drawIndexedPrimitives:indexCount:indexType:indexBuffer:indexBufferOffset:instanceCount:baseVertex:baseInstance:	drawIndexedPrimitives:indexCount:indexType:indexBuffer:indexBufferOffset:instanceCount:baseVertex:baseInstance:	I	21H461,24B119	raw
-MTLRenderCommandEncoder	drawIndexedPrimitives:indexType:indexBuffer:indexBufferOffset:indirectBuffer:indirectBufferOffset:	drawIndexedPrimitives:indexType:indexBuffer:indexBufferOffset:indirectBuffer:indirectBufferOffset:	I	21H461,24B119	zero
+MTLRenderCommandEncoder	drawIndexedPrimitives:indexType:indexBuffer:indexBufferOffset:indirectBuffer:indirectBufferOffset:	drawIndexedPrimitives:indexType:indexBuffer:indexBufferOffset:indirectBuffer:indirectBufferOffset:	I	21H461,24B119	raw
 MTLRenderCommandEncoder	drawMeshThreadgroups:threadsPerObjectThreadgroup:threadsPerMeshThreadgroup:	drawMeshThreadgroups:threadsPerObjectThreadgroup:threadsPerMeshThreadgroup:	I	24B119	refused
 MTLRenderCommandEncoder	drawMeshThreadgroupsWithIndirectBuffer:indirectBufferOffset:threadsPerObjectThreadgroup:threadsPerMeshThreadgroup:	drawMeshThreadgroupsWithIndirectBuffer:indirectBufferOffset:threadsPerObjectThreadgroup:threadsPerMeshThreadgroup:	I	24B119	refused
 MTLRenderCommandEncoder	drawMeshThreads:threadsPerObjectThreadgroup:threadsPerMeshThreadgroup:	drawMeshThreads:threadsPerObjectThreadgroup:threadsPerMeshThreadgroup:	I	24B119	refused
 MTLRenderCommandEncoder	drawPatches:patchIndexBuffer:patchIndexBufferOffset:indirectBuffer:indirectBufferOffset:	drawPatches:patchIndexBuffer:patchIndexBufferOffset:indirectBuffer:indirectBufferOffset:	I	24B119	zero
 MTLRenderCommandEncoder	drawPatches:patchStart:patchCount:patchIndexBuffer:patchIndexBufferOffset:instanceCount:baseInstance:	drawPatches:patchStart:patchCount:patchIndexBuffer:patchIndexBufferOffset:instanceCount:baseInstance:	I	21H461,24B119	zero
-MTLRenderCommandEncoder	drawPrimitives:indirectBuffer:indirectBufferOffset:	drawPrimitives:indirectBuffer:indirectBufferOffset:	I	21H461,24B119	zero
+MTLRenderCommandEncoder	drawPrimitives:indirectBuffer:indirectBufferOffset:	drawPrimitives:indirectBuffer:indirectBufferOffset:	I	21H461,24B119	raw
 MTLRenderCommandEncoder	drawPrimitives:vertexStart:vertexCount:	drawPrimitives:vertexStart:vertexCount:	I	21H461,24B119	raw
 MTLRenderCommandEncoder	drawPrimitives:vertexStart:vertexCount:instanceCount:	drawPrimitives:vertexStart:vertexCount:instanceCount:	I	21H461,24B119	raw
 MTLRenderCommandEncoder	drawPrimitives:vertexStart:vertexCount:instanceCount:baseInstance:	drawPrimitives:vertexStart:vertexCount:instanceCount:baseInstance:	I	21H461,24B119	raw
@@ -1019,7 +1019,7 @@ MTLRenderCommandEncoder	setTileTextures:withRange:	setTileTextures:withRange:	I	
 MTLRenderCommandEncoder	setTileVisibleFunctionTable:atBufferIndex:	setTileVisibleFunctionTable:atBufferIndex:	I	24B119	refused
 MTLRenderCommandEncoder	setTileVisibleFunctionTables:withBufferRange:	setTileVisibleFunctionTables:withBufferRange:	I	21H461,24B119	refused
 MTLRenderCommandEncoder	setTriangleFillMode:	setTriangleFillMode:	I	21H461,24B119	raw
-MTLRenderCommandEncoder	setVertexAmplificationCount:viewMappings:	setVertexAmplificationCount:viewMappings:	I	21H461,24B119	zero
+MTLRenderCommandEncoder	setVertexAmplificationCount:viewMappings:	setVertexAmplificationCount:viewMappings:	I	21H461,24B119	raw
 MTLRenderCommandEncoder	setVertexBuffer:offset:atIndex:	setVertexBuffer:offset:atIndex:	I	21H461,24B119	raw
 MTLRenderCommandEncoder	setVertexBuffer:offset:attributeStride:atIndex:	setVertexBuffer:offset:attributeStride:atIndex:	I	24B119	zero
 MTLRenderCommandEncoder	setVertexBufferOffset:atIndex:	setVertexBufferOffset:atIndex:	I	21H461,24B119	raw
@@ -1030,8 +1030,8 @@ MTLRenderCommandEncoder	setVertexBytes:length:atIndex:	setVertexBytes:length:atI
 MTLRenderCommandEncoder	setVertexBytes:length:attributeStride:atIndex:	setVertexBytes:length:attributeStride:atIndex:	I	24B119	zero
 MTLRenderCommandEncoder	setVertexSamplerState:atIndex:	setVertexSamplerState:atIndex:	I	21H461,24B119	raw
 MTLRenderCommandEncoder	setVertexSamplerState:lodMinClamp:lodMaxClamp:atIndex:	setVertexSamplerState:lodMinClamp:lodMaxClamp:atIndex:	I	21H461,24B119	raw
-MTLRenderCommandEncoder	setVertexSamplerStates:lodMinClamps:lodMaxClamps:withRange:	setVertexSamplerStates:lodMinClamps:lodMaxClamps:withRange:	I	21H461,24B119	zero
-MTLRenderCommandEncoder	setVertexSamplerStates:withRange:	setVertexSamplerStates:withRange:	I	21H461,24B119	zero
+MTLRenderCommandEncoder	setVertexSamplerStates:lodMinClamps:lodMaxClamps:withRange:	setVertexSamplerStates:lodMinClamps:lodMaxClamps:withRange:	I	21H461,24B119	raw
+MTLRenderCommandEncoder	setVertexSamplerStates:withRange:	setVertexSamplerStates:withRange:	I	21H461,24B119	raw
 MTLRenderCommandEncoder	setVertexTexture:atIndex:	setVertexTexture:atIndex:	I	21H461,24B119	raw
 MTLRenderCommandEncoder	setVertexTextures:withRange:	setVertexTextures:withRange:	I	21H461,24B119	raw
 MTLRenderCommandEncoder	setVertexVisibleFunctionTable:atBufferIndex:	setVertexVisibleFunctionTable:atBufferIndex:	I	24B119	refused
@@ -1377,7 +1377,7 @@ MTLTexture	gpuResourceID	gpuResourceID	I	24B119	raw
 MTLTexture	height	height	I	21H461,24B119	raw
 MTLTexture	isSparse	isSparse	I	-	refused
 MTLTexture	mipmapLevelCount	mipmapLevelCount	I	21H461,24B119	raw
-MTLTexture	newSharedTextureHandle	newSharedTextureHandle	I	21H461,24B119	zero
+MTLTexture	newSharedTextureHandle	newSharedTextureHandle	I	21H461,24B119	raw
 MTLTexture	newTextureViewWithDescriptor:	newTextureViewWithDescriptor:	I	-	zero
 MTLTexture	newTextureViewWithPixelFormat:	newTextureViewWithPixelFormat:	I	21H461,24B119	raw
 MTLTexture	newTextureViewWithPixelFormat:textureType:levels:slices:	newTextureViewWithPixelFormat:textureType:levels:slices:	I	21H461,24B119	raw

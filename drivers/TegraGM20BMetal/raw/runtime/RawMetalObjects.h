@@ -3,6 +3,7 @@
 #import <Foundation/Foundation.h>
 #import <Metal/Metal.h>
 #include <atomic>
+#include <bitset>
 #include <condition_variable>
 #include <map>
 #include <mutex>
@@ -214,6 +215,7 @@ struct RMPass {
     NSUInteger width, height;
     raw::SamplePositions positions;
     bool testsHiddenZeta = false;  // a depth/stencil state set in it tests depth or stencil (raw::testsHiddenZeta)
+    bool continues = false;  // a parallel encoder's sub-encoder after its first: the pass before it goes on (raw_parallel.h)
 };
 
 // A command buffer's setBytes data, written once where the GPU reads it: write-combined pool chunks the raw encode binds in place
@@ -383,6 +385,8 @@ uint64_t nextTraceId();
     RMTexture *_tex[16];   // fragment textures (unretained: the command buffer retains what it binds)
     RMSampler *_samp[16];  // fragment samplers, alike; `_cubicMask`: the slots of those that are cubic (raw_cubic.h)
     uint16_t _cubicMask;
+    std::bitset<128> _vertexTextures;  // the vertex slots a texture is bound at
+    std::bitset<16> _vertexSamplers;   // and a sampler
     uint64_t _checkedGeneration;
     const raw::Pipeline *_checkedPipeline;
     raw::Pipeline *_drawn;
@@ -398,6 +402,8 @@ uint64_t nextTraceId();
 }
 @end
 @interface RMBlitEncoder : RMEncoder
+@end
+@interface RMParallelRenderEncoder : RMEncoder  // (RawMetalParallel.mm)
 @end
 @interface RMComputeEncoder : RMEncoder {
 @public
@@ -425,6 +431,12 @@ static inline void setBinding(RMCommandBuffer *cb, Op op, int stage, NSUInteger 
     m.c = c;
     [cb record:m];
 }
+
+// The encoder `e` records into this command buffer from now on, the one before it ended (RawMetalEncoder.mm)
+@interface RMCommandBuffer (Encoders)
+- (void)begin:(RMEncoder *)e;
+- (id<MTLRenderCommandEncoder>)renderCommandEncoderWithDescriptor:(MTLRenderPassDescriptor *)d;
+@end
 
 @interface RMEncoder ()
 - (void)endEncoding;

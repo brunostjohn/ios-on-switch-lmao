@@ -32,7 +32,7 @@ state.making	record	growth	-	the record completes before the command buffer's fi
 call.vis	record	gap	-	visibility results: REPORT_SEMAPHORE with reduction ADD (probe gpu.x1.visibility, d17); no planner node yet
 call.buf	record	m2v	-	an m2v buffer, or setBytes with no pool memory (growth)
 call.sampler	record	gap	sampler_address_mode	mirror-clamp-to-edge and opaque borders: an address-lowering program variant (L4)
-call.vsampler	record	layer	L4	vertex-stage samplers: the binding ABI's vertex sampler table
+call.vsampler	record	layer	L4	vertex-stage textures and samplers beside a pack state, whose probe binds none there: the binding ABI's vertex tables
 call.dbias	record	layer	L4	an infinite or NaN depth bias: the state program's viewport Z offset, as m2v's render_state.rs does
 call.inv	record	layer	L6	an encoder selector raw does not implement: implemented, or failed at creation per Metal
 call.cbinv	record	layer	L6	a command buffer selector raw does not implement: as call.inv

@@ -70,6 +70,12 @@
 #                     files are m2v's own, and the path an archive inventory names a file by
 #   raw_device_identity_test  raw/runtime/raw_device_answers.h: the identity's GPU subtype (MTLDevice.architecture) is
 #                     the one the selected IPSW ships AGX binaries for, its QuartzCore's
+#   raw_device_answers_test  raw/runtime/raw_device_answers.h, every kind: no amplification above one view, and NO
+#                     for predication, dynamic attribute stride, shared texture handles and tessellation
+#   raw_function_tess_test  raw/runtime/raw_function_tess.h: a function's patch type and control points from its
+#                     metallib entry's TESS tag, Xcode's bytes for them
+#   raw_parallel_test  raw/runtime/raw_parallel.h: a parallel encoder's sub-encoders as the passes m2v replays, and
+#                     their commands recorded again with the parallel encoder's passes, setBytes chunks and extra words
 #   raw_heap_test     raw/runtime/raw_heap.h: an MTLHeap's placements in its one span, Metal's contract (a full heap
 #                     answers nil, aliasable ranges are taken again, usedSize and maxAvailableSizeWithAlignment)
 #   raw_residual_test raw/runtime/raw_residual.h: a buffer bound off m2v's descriptor base alignment (16 bytes for a
@@ -1411,6 +1417,42 @@ host_test(
         "//drivers/NativeMetal/abi:metal_abi",
         "//kits/SwitchGM20B:caps",
     ],
+)
+
+host_test(
+    name = "raw_device_answers_test",
+    srcs = [
+        "raw_device_answers_test.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_device_answers.h",
+    ],
+    copts = ["-I$(GENDIR)/kits/SwitchGM20B"],
+    cxx_std = "c++17",
+    deps = [
+        "//drivers/NativeMetal/abi:metal_abi",
+        "//kits/SwitchGM20B:caps",
+    ],
+)
+
+host_test(
+    name = "raw_function_tess_test",
+    srcs = [
+        "raw_function_tess_test.cpp",
+        "//drivers/NativeMetal:MetallibSlice.h",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_function_tess.h",
+    ],
+    copts = ["-Idrivers/NativeMetal"],
+    cxx_std = "c++17",
+    deps = ["//drivers/NativeMetal/abi:metal_abi"],
+)
+
+host_test(
+    name = "raw_parallel_test",
+    srcs = [
+        "raw_parallel_test.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/RawMetalArguments.h",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_parallel.h",
+    ],
+    cxx_std = "c++17",
 )
 
 host_test(

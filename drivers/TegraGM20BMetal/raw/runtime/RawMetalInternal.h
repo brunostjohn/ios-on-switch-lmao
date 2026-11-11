@@ -294,6 +294,12 @@ void cpuLayer(RMTexture *t, MTLRegion r, NSUInteger slice, uint8_t *bytes, NSUIn
 // RawMetalDevice.mm
 const char *ycbcrPlan(MTLTextureDescriptor *d, IOSurfaceRef s, NSUInteger plane, raw::YcbcrPlan &out);
 
+// RawMetalUnsupported.mm: why the device has no form of a state of `d` (null: it has), and that refusal as a creation answers
+// it (nil, its error)
+const char *rmUnsupportedRenderState(MTLRenderPipelineDescriptor *d);
+const char *rmUnsupportedComputeState(MTLComputePipelineDescriptor *d);
+id rmRefuseUnsupported(const char *why, NSError **error);
+
 // RawMetalStates.mm: the state of `d` as the pack and the archives it lists answer, nil where it is Metal's binary archive
 // miss (`*error`), never compiled; and whether the archives miss the state of `d` (its functions this device's)
 RMPipeline *rmPipelineFor(RMDevice *device, MTLRenderPipelineDescriptor *d, MTLPipelineOption o, NSError **error);
@@ -313,6 +319,13 @@ uint32_t ycbcrTargetFormat(MTLRenderPipelineDescriptor *d);
                                     reflection:(MTLAutoreleasedRenderPipelineReflection *)reflection
                                          error:(NSError **)error;
 @end
+
+// RawMetalParallel.mm: the command at `at` is a pass that continues the one before it (a parallel encoder's sub-encoder after
+// its first); the pass at `begin` is one of such a group (pass fusion's body checks see one pass of it, not the group); and
+// where the passes that continue the one at `begin` end (its own end if none does)
+bool rmContinuesPass(RMCommandBuffer *cb, size_t at);
+bool rmGroupedPass(RMCommandBuffer *cb, size_t begin);
+size_t rmPassGroupEnd(RMCommandBuffer *cb, size_t begin);
 
 // RawMetalReplay.mm
 id<MTLCommandBuffer> replay(RMCommandBuffer *cb, size_t from, size_t to, bool part);
