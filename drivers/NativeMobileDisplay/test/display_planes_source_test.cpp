@@ -200,7 +200,7 @@ TEST(DisplayPlanesSource, PlaneSlotsHoldTheSurfaceTheyScan)
     EXPECT_THAT(write, HasSubstr("buf[kSurfaceKind] = m.surfaceKind;"));
     EXPECT_THAT(write, HasSubstr("buf[kVOffset] = m.vOffset;"));
     EXPECT_THAT(Function(planes, "static bool planeSame("), HasSubstr("x.surfaceKind != y.surfaceKind"));
-    const std::string drop = Function(planes, "void planeDropSlot(unsigned k)");
+    const std::string drop = Function(SourceText("../SwitchPlaneSlots.h"), "void planeDropSlot(unsigned k)");
     ExpectBefore(drop, "probeDomain.unmap(", "tegra_gm20b_surface_unhold(slot.layout);");
     ExpectBefore(drop, "tegra_gm20b_surface_unhold(slot.layout);", "slot.memory->release();");
     ExpectBefore(drop, "slot.memory->release();", "OSSafeReleaseNULL(slot.surface);");

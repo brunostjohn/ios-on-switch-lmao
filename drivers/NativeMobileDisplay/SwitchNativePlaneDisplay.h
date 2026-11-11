@@ -50,22 +50,34 @@ int planeMapSnapshot(SwitchNativeScanout &scanout, const native_planes::Image &i
         switch_native_scanout_release(&scanout);
         return -95;
     }
-    int victim = -1;
+    int victim = -1, mapped = -1;
     for (unsigned k = 0; k < kPlaneSlots; ++k) {
         if (int(k) == avoid)
             continue;
         auto &slot = planeSlots[k];
-        const auto *held = slot.native ? &slot.native->allocation : nullptr;
-        if (slot.native && slot.native->lease && held->allocation_id == allocation.allocation_id &&
-            held->allocation_generation == allocation.allocation_generation &&
-            held->content_generation == allocation.content_generation &&
-            slot.low == image.readLow && slot.high == image.readHigh) {
+        const bool samePages = slot.native && slot.mappedAllocation == allocation.allocation_id &&
+                               slot.mappedGeneration == allocation.allocation_generation &&
+                               slot.low == image.readLow && slot.high == image.readHigh;
+        if (samePages && slot.native->lease &&
+            slot.native->allocation.content_generation == allocation.content_generation) {
             slot.used = ++planeSlotUses;
             switch_native_scanout_release(&scanout);
             return int(k);
         }
-        if (!planeSlotBusy(int(k)) && (victim < 0 || slot.used < planeSlots[victim].used))
+        const bool busy = planeSlotBusy(int(k));
+        if (samePages && !busy && mapped < 0)
+            mapped = int(k);
+        if (!busy && (victim < 0 || slot.used < planeSlots[victim].used))
             victim = int(k);
+    }
+    if (mapped >= 0) {
+        auto &slot = planeSlots[mapped];
+        switch_native_scanout_release(slot.native);
+        *slot.native = scanout;
+        scanout = {};
+        slot.tiled = image.surfaceKind != 0;
+        slot.used = ++planeSlotUses;
+        return mapped;
     }
     if (victim < 0) {
         switch_native_scanout_release(&scanout);
@@ -86,6 +98,8 @@ int planeMapSnapshot(SwitchNativeScanout &scanout, const native_planes::Image &i
         switch_native_scanout_release(&scanout);
         return -1;
     }
+    slot.mappedAllocation = allocation.allocation_id;
+    slot.mappedGeneration = allocation.allocation_generation;
     *slot.native = scanout;
     scanout = {};
     slot.low = image.readLow;

@@ -101,7 +101,7 @@ void convertedReleaseIdle(switch_gpu_backing *backing)
 {
     for (unsigned slot = 0; slot < kPlaneSlots; ++slot)
         if (planeSlots[slot].native && planeSlots[slot].native->view.native == backing && !planeSlotBusy(int(slot)))
-            planeDropSlot(slot);
+            planeReleaseLease(slot);
 }
 
 void convertedStop()

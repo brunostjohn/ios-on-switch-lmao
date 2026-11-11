@@ -2,6 +2,21 @@
 #include <gtest/gtest.h>
 #include <array>
 #define IONewZero(type, count) new (std::nothrow) type[count]()
+class OSObject {
+public:
+    unsigned refs = 1;
+    void release() { --refs; }
+};
+class IOMemoryDescriptor : public OSObject {
+public:
+    unsigned completes = 0;
+    void complete(int) { ++completes; }
+};
+constexpr int kIODirectionOut = 2;
+#define OSSafeReleaseNULL(object) do { if (object) (object)->release(); (object) = nullptr; } while (0)
+unsigned unholds;
+extern "C" void tegra_gm20b_surface_unhold(void *) { ++unholds; }
+#include "../SwitchPlaneSlot.h"
 #include "../SwitchNativePlane.h"
 #include "../SwitchDisplayComposition.h"
 #include "../../TegraVIC/SwitchNativeScanout.h"
@@ -19,32 +34,25 @@ struct Mapping {
     { EXPECT_FALSE(write); ++maps; count = n; first = pages[0]; return !fail; }
     void unmap(uint64_t, uint32_t) { ++unmaps; }
 };
+template <unsigned Slots>
 struct Display {
-    static constexpr unsigned kPlaneSlots = 2;
+    static constexpr unsigned kPlaneSlots = Slots;
     static constexpr uint64_t kPlaneSlotSpan = 20ULL << 20;
-    struct Slot { uint64_t low = 0, high = 0; uint32_t used = 0; bool tiled = false; SwitchNativeScanout *native = nullptr; };
-    Slot planeSlots[kPlaneSlots];
+    using PlaneSlot = switch_display::PlaneSlot;
+    PlaneSlot planeSlots[kPlaneSlots] = {};
     using PlaneSet = switch_display::Composition;
     PlaneSet planeNext;
-    bool planeNextSet = false, stats = true;
+    bool planeNextSet = false, stats = true, windowIdle = false;
     uint32_t planeSlotUses = 0, stPlaneMaps = 0, flushes = 0;
     bool busy[kPlaneSlots] = {};
     Mapping probeDomain;
     bool planeSlotBusy(int slot) const { return busy[slot]; }
+    bool planeWindowIdle() const { return windowIdle; }
     static const tgm_layout *surfaceLayout(OSObject *, tgm_layout &) { return nullptr; }
     static uint64_t planeSlotIova(int slot) { return 0x10000000ULL + uint64_t(slot) * kPlaneSlotSpan; }
     void cleanDomain() { ++flushes; }
-    void planeDropSlot(unsigned slot)
-    {
-        if (planeSlots[slot].native && planeSlots[slot].native->lease) {
-            probeDomain.unmap(planeSlotIova(int(slot)), uint32_t((planeSlots[slot].high - planeSlots[slot].low) >> 12));
-            switch_native_scanout_release(planeSlots[slot].native);
-        }
-        auto *storage = planeSlots[slot].native;
-        planeSlots[slot] = {};
-        planeSlots[slot].native = storage;
-    }
     ~Display() { for (unsigned i = 0; i < kPlaneSlots; ++i) { planeDropSlot(i); delete[] planeSlots[i].native; } }
+#include "../SwitchPlaneSlots.h"
 #include "../SwitchNativePlaneDisplay.h"
 };
 }
@@ -73,7 +81,7 @@ protected:
     native_planes::Layer layer;
     native_planes::Image image;
     std::array<uint64_t, 1024> pages;
-    Display *display;
+    Display<2> *display;
     bool resolved;
     void SetUp() override
     {
@@ -101,7 +109,7 @@ protected:
         nextPitch = nextNative;
         nextPitch.allocation.allocation_id = 2;
         nextPitch.view.producer = {92, 1, SWITCH_GPU_ENGINE_VIC, 164};
-        display = new Display;
+        display = new Display<2>;
         resolved = false;
     }
     void TearDown() override { delete display; EXPECT_EQ(leases, 0u); }
@@ -137,6 +145,64 @@ TEST_F(NativeScanoutMapping, ContentGenerationChangeCannotReuseLiveImageMapping)
     display->busy[0] = false;
     display->planeDropSlot(0);
     EXPECT_EQ(leases, 1u);
+}
+// A decoder pool cycling through three buffers: each is mapped once, and at every latch only the frame window B shows
+// keeps its lease, so the producer can write the others again.
+TEST_F(NativeScanoutMapping, SteadyPlaybackMapsEachPoolBufferOnce)
+{
+    Display<4> pool;
+    for (uint64_t frame = 0; frame < 30; ++frame) {
+        nextNative.allocation.allocation_id = 10 + frame % 3;
+        nextNative.allocation.content_generation = frame + 1;
+        const int slot = pool.planeNativeSlotFor(nullptr, layer, 720, 1280, image, resolved);
+        ASSERT_GE(slot, 0);
+        EXPECT_EQ(pool.planeSlots[slot].native->allocation.content_generation, frame + 1);
+        for (bool &busy : pool.busy)
+            busy = false;
+        pool.busy[slot] = true;
+        pool.planeReleaseIdle();
+        EXPECT_EQ(leases, 1u);
+    }
+    EXPECT_EQ(pool.probeDomain.maps, 3u);
+    EXPECT_EQ(pool.stPlaneMaps, 3u);
+    EXPECT_EQ(pool.probeDomain.unmaps, 0u);
+    EXPECT_EQ(pool.flushes, 3u);
+}
+TEST_F(NativeScanoutMapping, IdleWindowReturnsSurfacesAndKeepsEngineMappings)
+{
+    ASSERT_EQ(admit(), 0);
+    IOMemoryDescriptor memory;
+    memory.refs = 2;
+    display->planeSlots[1].memory = &memory;
+    display->planeSlots[1].low = 0;
+    display->planeSlots[1].high = 4096;
+    display->planeReleaseIdle();
+    EXPECT_EQ(leases, 0u);
+    EXPECT_EQ(memory.completes, 0u);
+    display->windowIdle = true;
+    display->planeReleaseIdle();
+    EXPECT_EQ(memory.completes, 1u);
+    EXPECT_EQ(memory.refs, 1u);
+    EXPECT_EQ(display->probeDomain.unmaps, 1u);
+    EXPECT_EQ(display->planeSlots[0].mappedAllocation, 1u);
+    ++nextNative.allocation.content_generation;
+    EXPECT_EQ(admit(), 0);
+    EXPECT_EQ(display->probeDomain.maps, 1u);
+    EXPECT_EQ(leases, 1u);
+}
+TEST_F(NativeScanoutMapping, EvictedMappingIsUnmappedAndNewPagesAreMappedAgain)
+{
+    for (uint64_t allocation : {10, 11, 12, 10}) {
+        nextNative.allocation.allocation_id = allocation;
+        ASSERT_GE(admit(), 0);
+        display->planeReleaseIdle();
+    }
+    EXPECT_EQ(display->probeDomain.maps, 4u);
+    EXPECT_EQ(display->probeDomain.unmaps, 2u);
+    EXPECT_EQ(leases, 0u);
+    ++nextNative.allocation.allocation_generation;
+    ASSERT_GE(admit(), 0);
+    EXPECT_EQ(display->probeDomain.maps, 5u);
 }
 TEST_F(NativeScanoutMapping, UnsupportedCropUsesQueuedPitchAllocationAndAliasOffset)
 {

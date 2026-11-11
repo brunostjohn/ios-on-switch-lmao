@@ -200,37 +200,12 @@ int planeSlotFor(IOMemoryDescriptor *memory, uint64_t low, uint64_t high, bool c
     return victim;
 }
 
-void planeDropSlot(unsigned k)
+bool planeWindowIdle() const
 {
-    PlaneSlot &slot = planeSlots[k];
-    if (slot.memory || (slot.native && slot.native->lease)) {
-        probeDomain.unmap(planeSlotIova(static_cast<int>(k)), static_cast<uint32_t>((slot.high - slot.low) / 4096));
-        if (slot.layout)
-            tegra_gm20b_surface_unhold(slot.layout);
-        if (slot.memory) {
-            slot.memory->complete(kIODirectionOut);
-            slot.memory->release();
-        }
-        if (slot.native)
-            switch_native_scanout_release(slot.native);
-        cleanDomain();
-    }
-    OSSafeReleaseNULL(slot.surface);
-    auto *storage = slot.native;
-    slot = {};
-    slot.native = storage;
+    return !planeSetOf(planeLatch.active).on() && !planeLatch.requested() && !planeTarget.on() && !planeHeldSet;
 }
 
-// Window B is off and nothing about it is pending: the surfaces it showed go back to their owners.
-void planeReleaseIdle()
-{
-    const bool idle = !planeSetOf(planeLatch.active).on() && !planeLatch.requested() &&
-                      !planeTarget.on() && !planeHeldSet;
-    for (unsigned k = 0; k < kPlaneSlots; ++k) {
-        if ((idle || (planeSlots[k].native && planeSlots[k].native->lease)) && !planeSlotBusy(static_cast<int>(k)))
-            planeDropSlot(k);
-    }
-}
+#include "SwitchPlaneSlots.h"
 
 // --- Window B's registers ------------------------------------------------------------------------------------------------
 // Window B is (or may be) scanning: the live registers (CSC, filters) must not change now.

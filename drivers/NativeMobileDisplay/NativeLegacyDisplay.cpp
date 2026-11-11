@@ -53,6 +53,7 @@
 #include "../TegraVIC/SwitchNativeScanout.h"
 #include "../TegraGM20B/SwitchGpuBridge.h"
 #include "SwitchNativePlane.h"
+#include "SwitchPlaneSlot.h"
 #include "TegraDisplayColor.h"
 #include "TegraDisplayPower.h"
 #include "VsyncPhase.h"
@@ -969,16 +970,7 @@ class NativeLegacyDisplay : public IOMobileFramebufferLegacy {
                               kPlaneSlot0 = kProbeSlot + static_cast<uint64_t>(kSlots) * kSlotSpan;
     static constexpr unsigned kPlaneUnderflowFrames = 3;
 
-    // As a DirectSlot: the surface retained, its memory prepared and its layout held while mapped.
-    struct PlaneSlot {
-        IOMemoryDescriptor *memory;
-        OSObject *surface;
-        void *layout;
-        uint64_t low, high;  // the surface bytes mapped (page-aligned) at the slot's IOVA
-        uint32_t used;
-        bool tiled;  // the GPU renders the surface block-linear: window B scans it so
-        SwitchNativeScanout *native = nullptr;
-    };
+    using PlaneSlot = switch_display::PlaneSlot;
 
     PlaneSlot planeSlots[kPlaneSlots] = {};
     uint32_t planeSlotUses = 0;

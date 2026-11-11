@@ -141,6 +141,7 @@ struct NativeLegacyDisplay : OSObject {
     }
     bool planeSlotBusy(int slot) const { return busy[slot] || planeConversionUses(slot); }
     void planeDropSlot(unsigned slot) { switch_native_scanout_release(&snapshots[slot]); }
+    void planeReleaseLease(unsigned slot) { switch_native_scanout_release(&snapshots[slot]); }
     int planeMapSnapshot(SwitchNativeScanout &snapshot, const native_planes::Image &, int avoid)
     {
         for (unsigned slot = 0; slot < kPlaneSlots; ++slot) {
