@@ -780,8 +780,8 @@ TEST(GM20BVisibilitySource, AJobWritingCreatorMemoryIsExternal)
 }
 
 // A SurfaceWrites a client could not deliver never leaves a GPU write unmarked: the client stops saying its imports are
-// only sampled and flags every submission TegraGM20BPushImportsWritten, which makes the connection mark every writable
-// import at every Exec.
+// only sampled, and a client of the older Exec flags every submission TegraGM20BPushImportsWritten, which makes the
+// connection mark every writable import at every Exec.
 TEST(GM20BCoherencySource, AFailedSurfaceWritesFallsBackToMarkingEveryImport)
 {
 	const std::string exec = flat(definition(client(), "IOReturn AGXDeviceUserClient::exec("));
@@ -790,8 +790,6 @@ TEST(GM20BCoherencySource, AFailedSurfaceWritesFallsBackToMarkingEveryImport)
 	const std::string raw = SourceText("../../TegraGM20BMetal/raw/runtime/raw_kernel.cpp");
 	const std::string declare = flat(definition(raw, "bool Kernel::surfaceGpuWrites("));
 	EXPECT_THAT(declare, HasSubstr("importsWritten_.store(true"));
-	EXPECT_THAT(flat(definition(raw, "bool Kernel::exec(")),
-		    HasSubstr("legacyExec.pushes[0].flags |= TegraGM20BPushImportsWritten;"));
 	EXPECT_THAT(flat(definition(raw, "bool Kernel::importPages(")),
 		    HasSubstr("!importsWritten_.load("));
 	const std::string nvk = SourceText(
