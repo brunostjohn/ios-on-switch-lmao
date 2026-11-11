@@ -216,6 +216,7 @@ IOReturn AppleAVE2UserClient::run(uint32_t method, const void *in, uint32_t inSi
         info->chroma_mode = TEGRA_NVENC_CHROMA_OFFSET;
         info->p_frames = 1;
         info->features = tegra_nvenc_source_ready() ? TEGRA_NVENC_FEATURE_SURFACE_INPUT : 0;
+        info->surface_row_align = info->features ? tegra_nvenc_source_row_align() : 0;
         tegra_nvenc_memory_usage(&info->memory_limit, &info->memory_free);
         break;
     }
@@ -269,15 +270,16 @@ IOReturn AppleAVE2UserClient::run(uint32_t method, const void *in, uint32_t inSi
         TegraNVENCAfter after = {};
         const bool sourced = submit->source.surface_id != 0;
         if (sourced) {
-            int err = tegra_nvenc_check_submit(submit, resolve, this, &why);
-            if (!err)
-                err = tegra_nvenc_source(submit, resolve, this, current_task(), submitted_ ? &lastFence_ : nullptr,
-                                         &after, &why);
+            if (const int err = tegra_nvenc_check_submit(submit, resolve, this, &why)) {
+                ret = ioreturn(err);
+                break;
+            }
+            const int err = tegra_nvenc_source(submit, resolve, this, current_task(),
+                                               submitted_ ? &lastFence_ : nullptr, &after, &why);
             if (err) {
-                // The client copies the picture itself on any refusal here; the reason is its line too.
                 switch_refusal("TegraNVENC", why ? why : "source surface", "the input picture is not VIC's: %s",
                                why ? why : "refused");
-                ret = kIOReturnUnsupported;
+                ret = err == -95 ? kIOReturnUnsupported : kIOReturnNotReady;
                 break;
             }
         }

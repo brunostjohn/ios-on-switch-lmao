@@ -36,6 +36,11 @@ bool tegra_nvenc_source_ready(void)
     return switch_vic_encode_input_ready(true);
 }
 
+uint32_t tegra_nvenc_source_row_align(void)
+{
+    return tegra_vic_pitch_align(tegra_vic_traits(), true);
+}
+
 int tegra_nvenc_source(const TegraNVENCSubmit *s, TegraNVENCResolve resolve, void *context, task_t task,
                        const uint32_t *last, TegraNVENCAfter *after, const char **why)
 {

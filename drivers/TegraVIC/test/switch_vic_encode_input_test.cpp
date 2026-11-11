@@ -3,7 +3,8 @@
 // ownership, mappings and queue. A 1920x1080 NV12 surface with 2048-byte rows into NVENC's BL16 input buffer of the
 // coded 1920x1088 picture: the output surface is block linear with sixteen-GOB blocks at the buffer's luma and chroma
 // offsets, the region lands at the origin 1:1, the source is a checked read and the buffer a recorded write, and the
-// job waits for the encoder's last job first.
+// job waits for the encoder's last job first; the coded rows past the picture get its last two rows stretched over
+// them in the same batch, the columns past a narrower one its last two columns, both before the picture itself.
 #include <gtest/gtest.h>
 #include <vector>
 #include "switch_vic_backing_stubs.h"
@@ -27,6 +28,7 @@ int mappings = 0, accesses = 0, lookups = 0;
 void (*pending)(void *, int);
 void *pendingContext;
 TegraVICJob submittedJob;
+std::vector<TegraVICJob> submittedJobs;
 TegraVICAcquire submittedAfter;
 bool hadAfter;
 std::vector<switch_gpu_backing_use> declaredUses;
@@ -151,8 +153,8 @@ int switch_vic_submit_checked(const TegraVICJob *jobs, uint32_t count, const Teg
                               const SwitchVICOwnership &ownership, void (*completion)(void *, int), void *context,
                               uint32_t *fence, SwitchVICEvents *)
 {
-    EXPECT_EQ(count, 1u);
-    submittedJob = jobs[0];
+    submittedJob = jobs[count - 1];
+    submittedJobs.assign(jobs, jobs + count);
     hadAfter = after != nullptr;
     if (after)
         submittedAfter = *after;
@@ -180,6 +182,7 @@ protected:
         pending = nullptr;
         hadAfter = false;
         declaredUses.clear();
+        submittedJobs.clear();
         input.destination = &buffer;
         input.lumaOffset = 0;
         input.chromaOffset = kChroma;
@@ -249,6 +252,34 @@ TEST_F(SwitchVICEncodeInputTest, WritesTheRegionBlockLinearAtTheBufferOriginAfte
     EXPECT_EQ(method(TEGRA_VIC_M_OUTPUT_CHROMA_U), uint32_t((0x50000000u + kChroma) >> 8));
     EXPECT_EQ(method(TEGRA_VIC_M_SURFACE0_SLOT0_LUMA), 0x40000000u >> 8);
     EXPECT_EQ(mappings, 2);
+
+    ASSERT_EQ(submittedJobs.size(), 2u);
+    const uint8_t *below = submittedJobs[0].config;
+    EXPECT_EQ(tegra_vic_get(below, TEGRA_VIC_SLOTS, SLOT_SOURCE_TOP_BIT, SLOT_SOURCE_TOP_WIDTH), uint64_t(1078) << 16);
+    EXPECT_EQ(tegra_vic_get(below, TEGRA_VIC_SLOTS, SLOT_SOURCE_BOTTOM_BIT, SLOT_SOURCE_BOTTOM_WIDTH), uint64_t(1079)
+                                                                                                           << 16);
+    EXPECT_EQ(tegra_vic_get(below, TEGRA_VIC_OUTPUT, OUT_TARGET_TOP_BIT, OUT_TARGET_TOP_WIDTH), 1080u);
+    EXPECT_EQ(tegra_vic_get(below, TEGRA_VIC_OUTPUT, OUT_TARGET_BOTTOM_BIT, OUT_TARGET_BOTTOM_WIDTH), 1087u);
+    EXPECT_EQ(tegra_vic_get(below, TEGRA_VIC_OUTPUT, OUT_TARGET_RIGHT_BIT, OUT_TARGET_RIGHT_WIDTH), 1919u);
+}
+
+TEST_F(SwitchVICEncodeInputTest, ANarrowerPictureGetsItsLastColumnsStretchedRight)
+{
+    input.w = 1900;
+    input.h = 1088;
+    input.height = 1088;
+    uint32_t fence = 0;
+    const char *why = nullptr;
+    ASSERT_EQ(switch_vic_encode_input(77, nullptr, &input, &fence, &why), -95);  // 1088 rows of a 1080-row surface
+    input.h = 1080;
+    ASSERT_EQ(switch_vic_encode_input(77, nullptr, &input, &fence, &why), 0) << why;
+    ASSERT_EQ(submittedJobs.size(), 3u);
+    const uint8_t *right = submittedJobs[1].config;
+    EXPECT_EQ(tegra_vic_get(right, TEGRA_VIC_SLOTS, SLOT_SOURCE_LEFT_BIT, SLOT_SOURCE_LEFT_WIDTH), uint64_t(1898)
+                                                                                                       << 16);
+    EXPECT_EQ(tegra_vic_get(right, TEGRA_VIC_OUTPUT, OUT_TARGET_LEFT_BIT, OUT_TARGET_LEFT_WIDTH), 1900u);
+    EXPECT_EQ(tegra_vic_get(right, TEGRA_VIC_OUTPUT, OUT_TARGET_RIGHT_BIT, OUT_TARGET_RIGHT_WIDTH), 1919u);
+    EXPECT_EQ(tegra_vic_get(right, TEGRA_VIC_OUTPUT, OUT_TARGET_BOTTOM_BIT, OUT_TARGET_BOTTOM_WIDTH), 1079u);
 }
 
 TEST_F(SwitchVICEncodeInputTest, ATileRegionIsReadFromItsOriginInTheSurface)
@@ -265,6 +296,7 @@ TEST_F(SwitchVICEncodeInputTest, ATileRegionIsReadFromItsOriginInTheSurface)
     const char *why = nullptr;
     ASSERT_EQ(switch_vic_encode_input(77, nullptr, &input, &fence, &why), 0) << why;
     EXPECT_FALSE(hadAfter);
+    EXPECT_EQ(submittedJobs.size(), 1u);
     EXPECT_EQ(TEGRA_VIC_GET(submittedJob.config, TEGRA_VIC_SLOTS, SLOT_SOURCE_LEFT), uint64_t(1024) << 16);
     EXPECT_EQ(TEGRA_VIC_GET(submittedJob.config, TEGRA_VIC_SLOTS, SLOT_SOURCE_TOP), uint64_t(512) << 16);
     EXPECT_EQ(TEGRA_VIC_GET(submittedJob.config, TEGRA_VIC_SLOTS, SLOT_DEST_LEFT), 0u);

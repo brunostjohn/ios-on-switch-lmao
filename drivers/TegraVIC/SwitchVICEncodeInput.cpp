@@ -1,7 +1,9 @@
 // SPDX-License-Identifier: BSD-2-Clause-Patent
 // See SwitchVICEncodeInput.h. The source is read as switch_vic_transform reads one (a decoder's native picture, else the
 // surface's pitch rows under a checked read), the destination is the engine's buffer as a recorded write, and the job
-// waits on the hardware for the engine's last read of that buffer before it overwrites it.
+// waits on the hardware for the engine's last read of that buffer before it overwrites it. The coded picture past the
+// region (H.264's macroblocks, H.265's CTBs) gets the region's last two rows and columns stretched over it 1-tap in the
+// same batch, as the copy replicated the edge, where that is within VIC's 16x upscale.
 #include <IOKit/IOLib.h>
 #include "SwitchVICEncodeInput.h"
 #include "SwitchVICJobs.h"
@@ -17,7 +19,7 @@ struct EncodeInput {
     SwitchVICSurfaceAccess access;
     SwitchNativeSurfaceView native = {};
     SwitchVICMapping *mappings[2] = {};
-    TegraVICJob job = {};
+    TegraVICJob jobs[3] = {};
 };
 
 void release(EncodeInput *work)
@@ -76,6 +78,40 @@ const char *destinationImage(const SwitchVICEncodeInput *in, uint64_t address, c
     return nullptr;
 }
 
+TegraVICOp copyOp(uint32_t sx, uint32_t sy, uint32_t sw, uint32_t sh, uint32_t dx, uint32_t dy, uint32_t dw,
+                  uint32_t dh)
+{
+    TegraVICOp op = {};
+    op.srcX = uint64_t(sx) << 16;
+    op.srcY = uint64_t(sy) << 16;
+    op.srcW = uint64_t(sw) << 16;
+    op.srcH = uint64_t(sh) << 16;
+    op.dstX = dx;
+    op.dstY = dy;
+    op.dstW = dw;
+    op.dstH = dh;
+    op.nearest = 1;
+    return op;
+}
+
+// The bottom and right of the coded picture from the region's last two rows and columns (two: a 4:2:0 source
+// rectangle covers whole chroma samples), then the region 1:1. The region goes last: a strip's rows share GOBs with the
+// picture's (chroma rows 536-543 at 1080p), and whether VIC writes a block-linear sub-rectangle by the sample or by the
+// GOB is not measured. The corner past both, at most 30x30, keeps what it held.
+uint32_t edgeOps(const SwitchVICEncodeInput *in, TegraVICOp *ops)
+{
+    constexpr uint32_t kEdge = 2, kStretch = kEdge * TEGRA_VIC_MAX_UPSCALE;
+    uint32_t count = 0;
+    const uint32_t below = in->height > in->h ? in->height - in->h : 0;
+    const uint32_t right = in->width > in->w ? in->width - in->w : 0;
+    if (below && below <= kStretch && in->h >= kEdge)
+        ops[count++] = copyOp(in->x, in->y + in->h - kEdge, in->w, kEdge, 0, in->h, in->w, below);
+    if (right && right <= kStretch && in->w >= kEdge)
+        ops[count++] = copyOp(in->x + in->w - kEdge, in->y, kEdge, in->h, in->w, 0, right, in->h);
+    ops[count++] = copyOp(in->x, in->y, in->w, in->h, 0, 0, in->w, in->h);
+    return count;
+}
+
 int place(EncodeInput *work, uint32_t surfaceID, task_t task, const SwitchVICEncodeInput *in, uint32_t *fence,
           const char **why)
 {
@@ -110,19 +146,15 @@ int place(EncodeInput *work, uint32_t surfaceID, task_t task, const SwitchVICEnc
                               : tegra_vic_image_from(&work->surface.desc, address + work->access.offset, &src);
     if (!*why)
         *why = destinationImage(in, switch_vic_mapping_address(work->mappings[1]), src, &dst);
-    TegraVICOp op = {};
-    op.srcX = uint64_t(in->x) << 16;
-    op.srcY = uint64_t(in->y) << 16;
-    op.srcW = uint64_t(in->w) << 16;
-    op.srcH = uint64_t(in->h) << 16;
-    op.dstW = in->w;
-    op.dstH = in->h;
-    op.nearest = 1;
-    if (!*why && work->native.owner && !switch_native_vic_crop(work->native, &op))
-        *why = "native source crop";
-    if (!*why)
-        *why = tegra_vic_build(&src, &dst, &op, tegra_vic_traits(), tegra_vic_config_address(),
-                               tegra_vic_filter_address(), &work->job);
+    TegraVICOp ops[3] = {};
+    const uint32_t count = edgeOps(in, ops);
+    for (uint32_t i = 0; !*why && i < count; ++i) {
+        if (work->native.owner && !switch_native_vic_crop(work->native, &ops[i]))
+            *why = "native source crop";
+        else
+            *why = tegra_vic_build(&src, &dst, &ops[i], tegra_vic_traits(), tegra_vic_config_address(),
+                                   tegra_vic_filter_address(), &work->jobs[i]);
+    }
     if (*why)
         return -95;
     switch_gpu_backing_use uses[3] = {
@@ -141,7 +173,7 @@ int place(EncodeInput *work, uint32_t surfaceID, task_t task, const SwitchVICEnc
     const SwitchVICOwnership ownership = {uses,       work->native.owner ? 3u : 2u, guards,
                                           guardCount, lease ? &lease : nullptr,     lease ? 1u : 0u};
     __atomic_add_fetch(&work->refs, 1, __ATOMIC_RELAXED);
-    error = switch_vic_submit_checked(&work->job, 1, in->after, ownership, completed, work, fence);
+    error = switch_vic_submit_checked(work->jobs, count, in->after, ownership, completed, work, fence);
     switch_vic_surface_unreserve(&work->access);
     if (error) {
         release(work);

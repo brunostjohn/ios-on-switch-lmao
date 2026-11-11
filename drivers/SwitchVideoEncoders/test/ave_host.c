@@ -43,7 +43,8 @@ struct NVENCClient {
 };
 
 static uint32_t gLayout = TEGRA_NVENC_LAYOUT_PITCH, gChroma = TEGRA_NVENC_CHROMA_OFFSET;
-static bool gSurfaceInput, gRefuseSurfaces;
+static bool gSurfaceInput;
+static int gRefuseSurfaces;  // 1: every surface (kIOReturnUnsupported); 2: every other one, for now (NotReady)
 static int gOpens, gSubmits, gRefused, gSkipped, gPcm, gIdr, gP, gB, gVIC;
 static bool gRefuseB;  // the engine answers every B picture with an error, as NVENC would one it cannot code
 static const char *gRefusal;
@@ -84,6 +85,7 @@ bool nvenc_info(NVENCClient *c, TegraNVENCInfo *info)
     info->chroma_mode = gChroma;
     info->p_frames = 1;
     info->features = gSurfaceInput ? TEGRA_NVENC_FEATURE_SURFACE_INPUT : 0;
+    info->surface_row_align = gSurfaceInput ? 256 : 0;
     return true;
 }
 
@@ -328,7 +330,10 @@ int nvenc_submit(void *ctx, const TegraNVENCSubmit *s, uint32_t *fence)
         gRefusal = why;
         return -1;
     }
-    if (s->source.surface_id && (!gSurfaceInput || gRefuseSurfaces || fakeVIC(c, s)))
+    static int sourced;
+    if (s->source.surface_id && gRefuseSurfaces == 2 && sourced++ % 2)
+        return kIOReturnNotReady;
+    if (s->source.surface_id && (!gSurfaceInput || gRefuseSurfaces == 1 || fakeVIC(c, s)))
         return kIOReturnUnsupported;
     if (s->codec == TEGRA_NVENC_CODEC_H265) {
         if (tile_check_engine(s, c->va, gChroma))
@@ -823,13 +828,22 @@ int main(void)
     // the surface (the session goes on with CPU copies into the BL16 buffer).
     static const struct {
         uint32_t layout, chroma;
-        bool surfaceInput, refuse;
+        bool surfaceInput;
+        int refuse;
+        const char *frames, *tiles;  // the routes each check must report
     } runs[] = {
-        {TEGRA_NVENC_LAYOUT_PITCH, TEGRA_NVENC_CHROMA_OFFSET, false, false},
-        {TEGRA_NVENC_LAYOUT_BL2, TEGRA_NVENC_CHROMA_METHOD, false, false},
-        {TEGRA_NVENC_LAYOUT_TILED16, TEGRA_NVENC_CHROMA_OFFSET, false, false},
-        {TEGRA_NVENC_LAYOUT_TILED16, TEGRA_NVENC_CHROMA_OFFSET, true, false},
-        {TEGRA_NVENC_LAYOUT_TILED16, TEGRA_NVENC_CHROMA_OFFSET, true, true},
+        {TEGRA_NVENC_LAYOUT_PITCH, TEGRA_NVENC_CHROMA_OFFSET, false, 0, "inputs 0 by VIC 30 copied",
+         "inputs 0 by VIC 4 copied"},
+        {TEGRA_NVENC_LAYOUT_BL2, TEGRA_NVENC_CHROMA_METHOD, false, 0, "inputs 0 by VIC 30 copied",
+         "inputs 0 by VIC 4 copied"},
+        {TEGRA_NVENC_LAYOUT_TILED16, TEGRA_NVENC_CHROMA_OFFSET, false, 0, "inputs 0 by VIC 30 copied",
+         "inputs 0 by VIC 4 copied"},
+        {TEGRA_NVENC_LAYOUT_TILED16, TEGRA_NVENC_CHROMA_OFFSET, true, 0, "inputs 30 by VIC 0 copied",
+         "inputs 4 by VIC 0 copied"},
+        {TEGRA_NVENC_LAYOUT_TILED16, TEGRA_NVENC_CHROMA_OFFSET, true, 1, "inputs 0 by VIC 30 copied",
+         "inputs 0 by VIC 4 copied"},
+        {TEGRA_NVENC_LAYOUT_TILED16, TEGRA_NVENC_CHROMA_OFFSET, true, 2, "inputs 15 by VIC 15 copied",
+         "inputs 2 by VIC 2 copied"},
     };
 
     for (unsigned r = 0; r < sizeof(runs) / sizeof(runs[0]); r++) {
@@ -843,10 +857,8 @@ int main(void)
         printf("layout %u chroma %u%s: %s (submits %d, refused %d%s%s)\n", gLayout, gChroma,
                gSurfaceInput ? (gRefuseSurfaces ? " surfaces refused" : " surfaces") : "", line, gSubmits - submits,
                gRefused - refused, gRefusal ? ": " : "", gRefusal ? gRefusal : "");
-        const char *routes =
-            !gSurfaceInput || gRefuseSurfaces ? "inputs 0 by VIC 30 copied" : "inputs 30 by VIC 0 copied";
-        EXPECT(ok && gSubmits - submits == 30 && gRefused == refused && strstr(line, routes) &&
-                   gVIC - vic == (gSurfaceInput && !gRefuseSurfaces ? 30 : 0),
+        EXPECT(ok && gSubmits - submits == 30 && gRefused == refused && strstr(line, runs[r].frames) &&
+                   (gVIC - vic == 30 || !strstr(runs[r].frames, "inputs 30 by VIC")),
                "encode check, layout %u, surfaces %d refused %d", gLayout, gSurfaceInput, gRefuseSurfaces);
     }
     // AllowFrameReordering unset (true), MaxFrameDelayCount 1, AllowFrameReordering false.
@@ -868,7 +880,7 @@ int main(void)
     printf("B pictures refused: %s\n", refusalLine);
     EXPECT(refusalOk, "a refused B picture is coded as an I picture, B pictures turn off and the session goes on");
     gSurfaceInput = true;
-    gRefuseSurfaces = false;
+    gRefuseSurfaces = 0;
     char probeLine[256];
     const bool probed = probe_check(spec, probeLine, sizeof(probeLine));
     printf("%s\n", probeLine);
@@ -885,12 +897,11 @@ int main(void)
         printf("tiles, layout %u chroma %u%s: %s (refused %d%s%s)\n", gLayout, gChroma,
                gSurfaceInput ? (gRefuseSurfaces ? " surfaces refused" : " surfaces") : "", line, gRefused - refused,
                gRefusal ? ": " : "", gRefusal ? gRefusal : "");
-        const char *routes =
-            !gSurfaceInput || gRefuseSurfaces ? "inputs 0 by VIC 4 copied" : "inputs 4 by VIC 0 copied";
-        EXPECT(ok && gRefused == refused && strstr(line, routes), "tile check, layout %u, surfaces %d refused %d",
-               gLayout, gSurfaceInput, gRefuseSurfaces);
+        EXPECT(ok && gRefused == refused && strstr(line, runs[r].tiles),
+               "tile check, layout %u, surfaces %d refused %d", gLayout, gSurfaceInput, gRefuseSurfaces);
     }
-    gSurfaceInput = gRefuseSurfaces = false;
+    gSurfaceInput = false;
+    gRefuseSurfaces = 0;
     refusals();
     printf("I_PCM macroblocks %d, skipped %d, IDR %d, P %d, B %d, opens %d\n", gPcm, gSkipped, gIdr, gP, gB, gOpens);
     EXPECT(gSkipped > 0 && gP > 0 && gB > 0 && gIdr >= 12, "the clip exercised P_Skip, B pictures and key frames");

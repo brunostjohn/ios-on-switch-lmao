@@ -82,10 +82,12 @@ typedef struct {
     uint32_t abi_version, nvenc_version;  // nvenc_version 0x50: NVENC 5.0 (T210)
     uint32_t codecs;                      // bit n: TEGRA_NVENC_CODEC_* n is accepted by Submit
     uint32_t max_width, max_height, max_mbs;
-    uint32_t input_layout;               // TEGRA_NVENC_LAYOUT_*
-    uint32_t chroma_mode;                // TEGRA_NVENC_CHROMA_*
-    uint32_t p_frames;                   // 1: P pictures predicted from NVENC's own reconstruction; 0: intra only
-    uint32_t features;                   // TEGRA_NVENC_FEATURE_*
+    uint32_t input_layout;       // TEGRA_NVENC_LAYOUT_*
+    uint32_t chroma_mode;        // TEGRA_NVENC_CHROMA_*
+    uint32_t p_frames;           // 1: P pictures predicted from NVENC's own reconstruction; 0: intra only
+    uint32_t features;           // TEGRA_NVENC_FEATURE_*
+    uint32_t surface_row_align;  // SURFACE_INPUT: a surface's rows VIC reads are multiples of this (bytes)
+    uint32_t reserved;
     uint64_t memory_limit, memory_free;  // what every session's buffers together may wire, and what is left
 } TegraNVENCInfo;
 
@@ -133,7 +135,8 @@ enum {
 // The input picture from an IOSurface of the calling task: its region at (x, y), width x height pixels, written by VIC
 // at the origin of the buffer IN_CUR_PIC and CHROMA_U relocate into (both the same buffer), as NV12 laid out as
 // input_cfg states (block linear or pitch, not 16x16 tiles). The rest of the coded picture keeps what the buffer holds.
-// surface_id 0: the input is what the CPU wrote.
+// surface_id 0: the input is what the CPU wrote. Submit answers kIOReturnUnsupported for a surface VIC cannot take
+// (its layout or geometry), kIOReturnNotReady for one it cannot take now; the client copies that picture itself.
 typedef struct {
     uint32_t surface_id;
     uint32_t x, y, width, height;
