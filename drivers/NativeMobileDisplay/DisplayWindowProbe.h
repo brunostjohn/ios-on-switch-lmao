@@ -307,6 +307,30 @@ struct Plan {
     uint64_t bytes = 0;
 };
 
+// The plan's heaviest window B step (32-bit RGB over NV12) as the planes' bandwidth and memory admission take a layer:
+// what the run reserves for window B. False when no step shows window B.
+inline bool heaviestOverlay(const Step *steps, unsigned count, native_planes::Image &image)
+{
+    bool found = false;
+    for (unsigned i = 0; i < count; ++i) {
+        const Window &w = steps[i].b;
+        const bool yuv = w.depth == native_planes::kDepthYCbCr420SP;
+        if (!w.on() || (found && (yuv || !image.yuv)))
+            continue;
+        image = native_planes::Image();
+        image.visible = true;
+        image.yuv = yuv;
+        image.colorDepth = w.depth;
+        image.position = w.position;
+        image.size = w.size;
+        image.prescaled = w.prescaled;
+        image.dda = w.dda;
+        image.surfaceKind = static_cast<uint8_t>(w.kind);
+        found = true;
+    }
+    return found;
+}
+
 inline unsigned addSurface(Plan &p, Surface s)
 {
     s.offset = p.bytes;

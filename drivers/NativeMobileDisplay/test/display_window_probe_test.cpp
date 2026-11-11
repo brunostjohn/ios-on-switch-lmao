@@ -12,6 +12,7 @@
 #include <vector>
 
 #include "../DisplayWindowProbeRun.h"
+#include "../../SwitchPower/SwitchDisplayMemory.h"
 
 namespace {
 using namespace display_window_probe;
@@ -229,6 +230,23 @@ TEST(WindowProbePlans, ReferencesShowTheIntendedPictures)
             ASSERT_EQ(panel[y * kPanelWidth + x],
                       lumaAt(kCropX + x, kCropY + y) |
                           static_cast<uint32_t>(chromaAt((kCropX + x) / 2, (kCropY + y) / 2, 4)) << 8);
+}
+
+// The run reserves window B as the planes reserve a layer: the memory math must take each plan's heaviest step.
+TEST(WindowProbePlans, WindowBsHeaviestStepPassesTheMemoryMath)
+{
+    for (const Plan &plan : allPlans()) {
+        SCOPED_TRACE(probeName(plan.probe));
+        native_planes::Image image;
+        ASSERT_TRUE(heaviestOverlay(plan.step, plan.steps, image));
+        EXPECT_EQ(image.yuv, plan.probe != kColumnScanYuv);  // V3's is the UI's BGRA
+        const uint32_t bpp = image.yuv ? 1 : 4;
+        switch_display_memory_window out = {};
+        EXPECT_TRUE(switch_display::memoryWindow(
+            out, 78000000ULL * (image.yuv ? 2 : 4), (image.prescaled & 0xffff) / bpp, image.prescaled >> 16,
+            image.size & 0xffff, image.size >> 16, image.yuv, !image.surfaceKind, false));
+        EXPECT_TRUE(out.active);
+    }
 }
 
 TEST(WindowProbePlans, CropOffsetsSitInsideAGobAndABlock)

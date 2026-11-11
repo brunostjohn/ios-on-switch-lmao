@@ -171,6 +171,12 @@ void planeRetireBandwidth()
     for (bool pending : entryPlaneSet)
         if (pending)
             return;
+    planeRetireBandwidthTo();
+}
+
+// Down to what the latched windows B and C scan now.
+void planeRetireBandwidthTo()
+{
     const auto &active = planeSetOf(planeLatch.active);
     switch_display_memory_window memory[2] = {};
     for (unsigned window = 0; window != 2; ++window)

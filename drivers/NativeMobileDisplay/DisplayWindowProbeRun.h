@@ -41,6 +41,7 @@ struct Run {
     // the wait is a second at most.
     static constexpr unsigned kWaitFrames = 60, kLatchFrames = 4, kTransitionFrames = 2, kHoldFrames = 1;
     static constexpr unsigned kZeroReads = 8, kSettleReads = 6;
+    static constexpr const char *kNeverQuiet = "the display never went quiet";
 
     Stage stage = kIdle, failedAt = kIdle;
     const char *why = nullptr;
@@ -80,7 +81,7 @@ struct Run {
                 latchFrames = 0;
                 return kStart;
             }
-            return frames >= kWaitFrames ? fail("the display never went quiet") : kNothing;
+            return frames >= kWaitFrames ? fail(kNeverQuiet) : kNothing;
         case kLatch:
             r.underflows += static_cast<unsigned>(underflow);
             if (requestOut)

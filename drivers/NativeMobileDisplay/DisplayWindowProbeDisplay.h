@@ -27,8 +27,9 @@ struct WindowProbeState {
     display_window_probe::Plan plan;
     IOBufferMemoryDescriptor *buffer = nullptr;
     int slot = -1;
-    bool claimed = false, holding = false, saved = false;
+    bool claimed = false, holding = false, saved = false, reserved = false;
     const char *busyReason = nullptr;
+    char why[64] = {};
     uint32_t savedA[kWindowAWords] = {}, savedAU = 0, savedAHiU = 0, savedASwap = 0;
     uint32_t savedB[kOverlayWords] = {}, savedBBuffer[kOverlayBufferWords] = {};
     uint32_t savedCrcControl = 0, savedCsc[2][8] = {}, savedHTaps[2][16] = {}, savedVTaps[2][16] = {};
@@ -135,8 +136,6 @@ int windowProbePost(const display_window_probe::Plan &plan, const char *&why)
         why = "planes are off: no IOVA slot to map the pictures into";
     } else if (hwSuspended || scanoutStopped) {
         why = "the display is off";
-    } else if (!windowProbeReserve(plan)) {
-        why = "the display's memory admission refused window B's pictures";
     } else if ((s.slot = planeSlotFor(s.buffer, 0, plan.bytes, false)) < 0) {
         why = "no free plane slot";
     }
@@ -146,6 +145,15 @@ int windowProbePost(const display_window_probe::Plan &plan, const char *&why)
     }
     s.plan = plan;
     s.busyReason = nullptr;
+    native_planes::Image heaviest;
+    PlaneSet set = {};
+    set.window[0].on = display_window_probe::heaviestOverlay(plan.step, plan.steps, heaviest);
+    set.window[0].image = heaviest;
+    s.reserved = set.window[0].on && planeReserveBandwidth(set);
+    if (set.window[0].on && !s.reserved)
+        IOLog("SwitchDisplay: window probe %s: window B's memory not reserved, the run goes on (an underflow is not "
+              "a verdict)\n",
+              display_window_probe::probeName(plan.probe));
     s.run.begin(plan.steps);
     s.holding = true;
     native_legacy_frame_end_hold();
@@ -153,30 +161,6 @@ int windowProbePost(const display_window_probe::Plan &plan, const char *&why)
           display_window_probe::probeName(plan.probe), plan.steps, static_cast<unsigned long long>(plan.bytes >> 10),
           planeSlotIova(s.slot));
     return 0;
-}
-
-// Window B's memory as the planes take it, for the plan's heaviest window B step (window A keeps the UI's), retired by
-// the planes' next latch.
-bool windowProbeReserve(const display_window_probe::Plan &plan)
-{
-    PlaneSet set = {};
-    for (unsigned i = 0; i < plan.steps; ++i) {
-        const display_window_probe::Window &w = plan.step[i].b;
-        const bool yuv = w.depth == native_planes::kDepthYCbCr420SP;
-        if (!w.on() || (set.window[0].on && (yuv || !set.window[0].image.yuv)))
-            continue;
-        native_planes::Image &image = set.window[0].image;
-        image.visible = true;
-        image.yuv = yuv;
-        image.colorDepth = w.depth;
-        image.position = w.position;
-        image.size = w.size;
-        image.prescaled = w.prescaled;
-        image.dda = w.dda;
-        image.surfaceKind = static_cast<uint8_t>(w.kind);
-        set.window[0].on = true;
-    }
-    return planeReserveBandwidth(set);
 }
 
 uint32_t windowProbeIova(uint64_t offset) const
@@ -451,6 +435,14 @@ void windowProbeFinish()
     if (s.saved) {
         windowProbeWriteUnshadowed(s.savedCsc, s.savedHTaps, s.savedVTaps);
         s.saved = false;
+    }
+    if (s.reserved) {  // window B is off again: the planes' latched set is the whole demand
+        planeRetireBandwidthTo();
+        s.reserved = false;
+    }
+    if (s.run.why == display_window_probe::Run::kNeverQuiet && s.busyReason) {
+        snprintf(s.why, sizeof(s.why), "never quiet: %s", s.busyReason);
+        s.run.why = s.why;
     }
     gPanicRestore.columnScan = false;
     windowProbeSummary();
