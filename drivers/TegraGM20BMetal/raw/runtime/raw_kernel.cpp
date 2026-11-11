@@ -483,7 +483,7 @@ int Kernel::order(uint32_t channel, uint32_t flags, uint32_t seqno, uint32_t &wa
     const uint32_t at = opened();
     const int kr = call(TegraGM20BMethodOrder, &in, sizeof in, &r, sizeof r);
     if (kr == kIOReturnNotResponding)
-        markLost(channel, at);
+        notResponding(channel, at);
     waits = kr == KERN_SUCCESS ? r.waits : 0;
     return kr;
 }
@@ -645,7 +645,7 @@ bool Kernel::exec(uint32_t channel, const TegraGM20BAbiPush *pushes, uint32_t co
             return true;
         }
         if (kr == kIOReturnNotResponding)
-            markLost(channel, at);
+            notResponding(channel, at);
         if (kr != kIOReturnBusy || !last) {
             setError(failed(addressed ? "SubmitAddress" : atomic ? "Submit" : "Exec", kr));
             return false;
@@ -664,6 +664,15 @@ bool Kernel::status(uint32_t channel, TegraGM20BAbiStatus &st)
         return true;
     st = {};
     return false;
+}
+
+// kIOReturnNotResponding is the kernel's answer for a channel it killed: one GetStatus still calls healthy is not lost
+void Kernel::notResponding(uint32_t channel, uint32_t opened)
+{
+    TegraGM20BAbiStatus st;
+    if (status(channel, st) && !st.error)
+        return;
+    markLost(channel, opened);
 }
 
 void Kernel::markLost(uint32_t channel, uint32_t opened)
@@ -686,7 +695,7 @@ bool Kernel::wait(uint32_t channel, uint32_t seqno, uint64_t timeoutNs, int *res
     if (result)
         *result = kr;
     if (kr == kIOReturnNotResponding)
-        markLost(channel, at);
+        notResponding(channel, at);
     if (kr != KERN_SUCCESS) {
         setError("WaitFence failed");
         return false;

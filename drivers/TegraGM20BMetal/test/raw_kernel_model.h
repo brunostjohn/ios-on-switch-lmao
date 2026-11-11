@@ -152,8 +152,8 @@ inline Model model;
 
 }  // namespace kernel_model
 
-extern "C" kern_return_t IOConnectCallStructMethod(mach_port_t, uint32_t method, const void *input, size_t, void *output,
-                                                   size_t *)
+extern "C" kern_return_t IOConnectCallStructMethod(mach_port_t, uint32_t method, const void *input, size_t,
+                                                   void *output, size_t *)
 {
     using kernel_model::model;
     switch (method) {
@@ -204,7 +204,8 @@ extern "C" kern_return_t IOConnectCallStructMethod(mach_port_t, uint32_t method,
     case TegraGM20BMethodWaitFence:
         return model.wait(*static_cast<const TegraGM20BAbiWaitFence *>(input));
     case TegraGM20BMethodGetStatus:
-        return model.status(*static_cast<const TegraGM20BAbiChannel *>(input), *static_cast<TegraGM20BAbiStatus *>(output));
+        return model.status(*static_cast<const TegraGM20BAbiChannel *>(input),
+                            *static_cast<TegraGM20BAbiStatus *>(output));
     case TegraGM20BMethodVmBind:
     case TegraGM20BMethodBoFree:
     case TegraGM20BMethodUnmap:

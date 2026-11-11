@@ -221,7 +221,7 @@ bool submitRange(RMCommandBuffer *cb)
                 finish(cb, priorError);
                 return true;
             }
-            if (cb->_resourceReady)
+            if (cb->_resourceReady || waitsOnRetiredProducer(cb))
                 return false;
             if (cb->_partial) {
                 // raw::CommandBuffer::commit drains its published prefix before reporting a partial failure.

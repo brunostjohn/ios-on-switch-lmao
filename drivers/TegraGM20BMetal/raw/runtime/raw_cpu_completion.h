@@ -11,7 +11,7 @@ enum class CpuCompletionResult { Legacy, Current, Stale, Failed };
 
 struct CpuCompletion {
     bool valid = true;
-    uint64_t channelUid = 0;
+    uint64_t channelUid = 0, generation = 0;
     uint32_t channel = 0, seqno = 0;
     std::vector<TegraGM20BAbiCpuRange> ranges;
 

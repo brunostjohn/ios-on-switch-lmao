@@ -3,6 +3,7 @@
 // gave out a seqno (its generation), how a channel the device gave up ended the seqnos it gave out, and the making of the
 // next channel with its context.
 #pragma once
+#include <array>
 #include <atomic>
 #include <condition_variable>
 #include <cstdint>
@@ -35,11 +36,16 @@ public:
     }
 
     // The current channel is given up, before its slot can name another channel: `failed`, the seqnos of it that failed (its
-    // kill record and those the device counted failed itself). The generation it was.
+    // kill record and those the device counted failed itself). The generation it was. One thread retires.
     uint64_t retire(const std::vector<KillRange> &failed)
     {
-        (void)failed;
-        return current_.fetch_add(1, std::memory_order_release);
+        const uint64_t generation = current();
+        {
+            std::lock_guard<std::mutex> l(lock_);
+            retired_[next_++ % retired_.size()] = {generation, failed};
+        }
+        current_.fetch_add(1, std::memory_order_release);
+        return generation;
     }
 
     // `generation`'s channel is destroyed: nothing of it runs any more
@@ -52,28 +58,50 @@ public:
         changed_.notify_all();
     }
 
-    // A seqno `generation` gave out, that generation retired: whether it completed. Once its channel is destroyed.
-    bool completed(uint64_t generation, uint32_t seqno)
+    // A seqno `generation` gave out, that generation retired: whether it completed, else `error` its failure's. Once its
+    // channel is destroyed. Every seqno of a retired channel is final by then (the kernel killed it and released its fence
+    // past them, or it ran out), so the answer is what it failed as retire() kept it; a generation retired too long ago to
+    // be kept reads as failed (error 0).
+    bool completed(uint64_t generation, uint32_t seqno, uint32_t *error = nullptr)
     {
-        (void)seqno;
         std::unique_lock<std::mutex> l(lock_);
         changed_.wait(l, [&] {
             return closed_ >= generation;
         });
+        for (const Retired &r : retired_) {
+            if (r.generation != generation)
+                continue;
+            for (const KillRange &k : r.failed)
+                if (k.covers(seqno)) {
+                    if (error)
+                        *error = k.error;
+                    return false;
+                }
+            return true;
+        }
+        if (error)
+            *error = 0;
         return false;
     }
 
 private:
+    struct Retired {
+        uint64_t generation = 0;
+        std::vector<KillRange> failed;
+    };
+
     std::atomic<uint64_t> current_{0};
     std::mutex lock_;
     std::condition_variable changed_;
     uint64_t closed_ = 0;
+    std::array<Retired, 8> retired_{};
+    size_t next_ = 0;
 };
 
 // The next channel of `engines`, its context submitted by `context(channel, seqno)` before anything else runs on it. False:
-// the kernel made none, or refused its context, and no channel is left: `fence` is `none`, which every seqno has passed,
-// so nothing waits for `last` (a seqno of the dead channel) on a channel that never runs, whose slot's fence may be behind it.
-template<class Context>
+// the kernel made none, or refused its context, and no channel is left: `fence` is `none`, which every seqno has passed, so
+// nothing waits for `last` (a seqno of the dead channel) on a channel that never runs, whose slot's fence may be behind.
+template <class Context>
 bool makeChannel(Kernel &k, uint32_t engines, uint32_t &channel, const volatile uint32_t *&fence, uint32_t &last,
                  const volatile uint32_t *none, Context &&context)
 {

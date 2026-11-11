@@ -224,6 +224,7 @@ private:
         err_ = std::move(error);
     }
     int call(uint32_t method, const void *in, size_t inSize, void *out, size_t outSize);
+    void notResponding(uint32_t channel, uint32_t opened);
     bool map(uint32_t token, bool readOnly, uint64_t &address, uint64_t &bytes);
     void unmap(uint32_t token, uint64_t address);
     bool bind(uint64_t va, uint64_t handle, uint64_t range, uint32_t kind, bool gpuVolatile = false);
