@@ -171,6 +171,10 @@ nvk_compile_nir_shader(struct nvk_device *dev, nir_shader *nir,
                        const VkAllocationCallbacks *alloc,
                        struct nvk_shader **shader_out);
 
+VkResult
+nvk_shader_fill_push(struct nvk_device *dev, struct nvk_shader *shader,
+                     const VkAllocationCallbacks *pAllocator);
+
 uint32_t mesa_to_nv9097_shader_type(mesa_shader_stage stage, bool has_task_shader);
 uint32_t nvk_pipeline_bind_group(mesa_shader_stage stage, bool has_task_shader);
 

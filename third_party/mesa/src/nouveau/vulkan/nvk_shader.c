@@ -840,7 +840,7 @@ nvk_max_shader_push_dw(const struct nvk_physical_device *pdev,
       max_dw_count += 2;
 
    if (stage == MESA_SHADER_FRAGMENT)
-      max_dw_count += 15;
+      max_dw_count += 17;
 
    if (stage == MESA_SHADER_TASK)
       max_dw_count += 2;
@@ -856,7 +856,7 @@ nvk_max_shader_push_dw(const struct nvk_physical_device *pdev,
    return max_dw_count;
 }
 
-static VkResult
+VkResult
 nvk_shader_fill_push(struct nvk_device *dev,
                      struct nvk_shader *shader,
                      const VkAllocationCallbacks* pAllocator)
@@ -1015,6 +1015,16 @@ nvk_shader_fill_push(struct nvk_device *dev,
          .z_min_unbounded_enable = shader->info.fs.writes_depth,
          .z_max_unbounded_enable = shader->info.fs.writes_depth,
       });
+
+      /* NAK's SM50 bound textures read their handles from the constant
+       * buffer this names, one for every stage, so only fragment shaders
+       * take them
+       */
+      max_dw_count += 2;
+      if (shader->info.bound_textures) {
+         P_IMMD(p, NVB197, SET_BINDLESS_TEXTURE,
+                shader->info.bound_textures - 1);
+      }
 
       if (pdev->info.cls_eng3d >= MAXWELL_B &&
           nvk_device_fragment_interlock(dev)) {

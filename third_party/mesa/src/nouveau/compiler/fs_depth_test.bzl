@@ -26,6 +26,7 @@ def _fs_depth_test_binary_impl(ctx):
     args.add_all(["-o", output])
     args.add_all(archives)
     args.add_all(["-lc++", "-lz"])
+    args.add_all(ctx.attr.linkopts)
     ctx.actions.run(
         executable = cc_common.get_tool_for_action(feature_configuration = features, action_name = action),
         arguments = [args],
@@ -39,7 +40,10 @@ def _fs_depth_test_binary_impl(ctx):
 
 fs_depth_test_binary = rule(
     implementation = _fs_depth_test_binary_impl,
-    attrs = {"archives": attr.label_list(mandatory = True)},
+    attrs = {
+        "archives": attr.label_list(mandatory = True),
+        "linkopts": attr.string_list(),
+    },
     executable = True,
     fragments = ["cpp"],
     toolchains = use_cc_toolchain(),

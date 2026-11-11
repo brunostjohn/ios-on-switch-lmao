@@ -845,3 +845,46 @@ py_test(
     data = [":split_batch_test_host"],
     main = "//third_party/mesa/src/nouveau/compiler:run_host_test.py",
 )
+
+mesa_cc_library(
+    name = "bound_textures_test_objects",
+    testonly = True,
+    c_args = NVK_C_ARGS,
+    sources = ["nvk_switch_bound_textures_test.c"],
+)
+
+fs_depth_test_binary(
+    name = "bound_textures_test_bin",
+    testonly = True,
+    archives = [
+        ":bound_textures_test_objects",
+        ":nvk",
+    ] + NVK_ARCHIVES,
+    # the entry-point tables' weak references nothing defines, as the dylib's first link leaves them (bazel/link.bzl)
+    linkopts = [
+        "-Wl,-undefined,dynamic_lookup",
+        "-framework",
+        "IOKit",
+        "-framework",
+        "CoreFoundation",
+    ],
+)
+
+mesa_files(
+    name = "bound_textures_test_host",
+    testonly = True,
+    srcs = [":bound_textures_test_bin"],
+    platform = "macos",
+)
+
+py_test(
+    name = "bound_textures_test",
+    size = "small",
+    srcs = ["//third_party/mesa/src/nouveau/compiler:run_host_test.py"],
+    args = [
+        "$(rootpath :bound_textures_test_host)",
+        "bound-textures",
+    ],
+    data = [":bound_textures_test_host"],
+    main = "//third_party/mesa/src/nouveau/compiler:run_host_test.py",
+)
