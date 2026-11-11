@@ -41,11 +41,7 @@
 #include <pthread.h>
 #include <stdlib.h>
 #include <string.h>
-#include "H264NVENC.h"
-#include "HEVCNVENC.h"
-#include "NVENCClient.h"
-#include "RateControl.h"
-#include "VTEncoderSPI.h"
+#include "AVEEncoder.h"
 #include "../../../kits/SwitchRefusal/SwitchRefusal.h"
 #pragma clang diagnostic push
 #pragma clang diagnostic ignored "-Wunused-const-variable"
@@ -59,37 +55,7 @@
 #define AVE_ENCODER_ID      "com.apple.videotoolbox.videoencoder.h264"
 #define AVE_HEVC_ENCODER_ID "com.apple.videotoolbox.videoencoder.hevc"
 
-typedef struct {
-    pthread_mutex_t lock;
-    VTVideoEncoderSession session;
-    NVENCClient *client;
-    TegraNVENCInfo info;
-    CMVideoDimensions size;
-    CMVideoCodecType codec;  // 'avc1', or 'hvc1': every picture an IDR (HEVCNVENC.h has no P pictures)
-    bool configured, failed;
-    HEVCEncConfig hevc;
-    H264EncConfig config;
-    H264EncLayout layout;
-    H264EncHandles handles;
-    uint8_t *inputVA, *bitstreamVA, *auxVA;
-    uint32_t buffers[sizeof(H264EncHandles) / sizeof(uint32_t)];  // one per handle
-    unsigned bufferCount;
-    CMVideoFormatDescriptionRef format;
-    uint8_t *avcc;  // AVCC scratch for one picture
-    size_t avccCap;
-    int32_t maxKeyInterval, averageBitRate, constantBitRate;
-    double maxKeyDuration, quality, expectedFrameRate, limitBytes, limitSeconds;
-    bool allowTemporal, realTime;
-    CFStringRef profileLevel, entropy, primaries, transfer, matrix;
-    bool haveRef, keyPending;
-    uint32_t frameNum, idrPicId, pictureIndex, pocCount, sinceKey;
-    CMTime lastKeyTime;
-    RateControl rc;
-    uint32_t frames, keyFrames, errors;
-    uint64_t bytes, copyTicks, encodeTicks;
-} Encoder;
-
-static os_log_t gLog;
+os_log_t gLog;
 
 static Encoder *storage(CMBaseObjectRef object)
 {
@@ -186,8 +152,8 @@ static int allocBuffer(Encoder *e, uint64_t size, uint32_t *handle, uint8_t **va
 
 static OSStatus startStream(Encoder *e, CFTypeRef primaries, CFTypeRef transfer, CFTypeRef matrix);
 
-// The first picture fixes the stream: its pixel format (full range or not) and colour tags go into the SPS.
-static OSStatus configure(Encoder *e, CVPixelBufferRef image)
+// The first picture's pixel format (full range or not) and colour tags go into the SPS.
+OSStatus ave_configure(Encoder *e, CVPixelBufferRef image)
 {
     H264EncConfig *c = &e->config;
     memset(c, 0, sizeof(*c));
@@ -465,6 +431,30 @@ static OSStatus encodePicture(Encoder *e, VTVideoEncoderFrame frame, CVPixelBuff
     return emitSample(e, frame, size, key, pts, duration);
 }
 
+OSStatus ave_open_engine(Encoder *e)
+{
+    const CMVideoDimensions size = e->size;
+    H264EncConfig probe = {
+        .width = (uint32_t)size.width, .height = (uint32_t)size.height, .profile_idc = H264_PROFILE_HIGH};
+    int error = 0;
+    if (h264enc_configure(&probe)) {
+        switch_refusal_k(switch_refusal_key_with(switch_refusal_key("AVE", "size outside NVENC's range"),
+                                                 (uint64_t)(uint32_t)size.width << 32 | (uint32_t)size.height),
+                         "AVE", "size outside NVENC's range",
+                         "%dx%d: NVENC encodes 32..4096 a side, even sizes, up to 4096x2304", size.width, size.height);
+        return kVTCouldNotFindVideoEncoderErr;
+    }
+    if (!(e->client = nvenc_open(&error)) || !nvenc_info(e->client, &e->info)) {
+        switch_refusal("AVE", "TegraNVENC refused the process", "error %#x: no H.264 encoder here", error);
+        return kVTCouldNotFindVideoEncoderErr;
+    }
+    if (e->codec == kCMVideoCodecType_HEVC && !(e->info.codecs & 1u << TEGRA_NVENC_CODEC_H265)) {
+        switch_refusal("AVE", "this kernel's NVENC has no H.265", "no HEVC encoder here");
+        return kVTCouldNotFindVideoEncoderErr;
+    }
+    return noErr;
+}
+
 static OSStatus startSession(VTVideoEncoderRef ref, VTVideoEncoderSession session, CMVideoDimensions size,
                              CFTypeRef unused)
 {
@@ -473,23 +463,7 @@ static OSStatus startSession(VTVideoEncoderRef ref, VTVideoEncoderSession sessio
     pthread_mutex_lock(&e->lock);
     e->session = session;
     e->size = size;
-    H264EncConfig probe = {
-        .width = (uint32_t)size.width, .height = (uint32_t)size.height, .profile_idc = H264_PROFILE_HIGH};
-    OSStatus status = noErr;
-    int error = 0;
-    if (h264enc_configure(&probe)) {
-        switch_refusal_k(switch_refusal_key_with(switch_refusal_key("AVE", "size outside NVENC's range"),
-                                                 (uint64_t)(uint32_t)size.width << 32 | (uint32_t)size.height),
-                         "AVE", "size outside NVENC's range",
-                         "%dx%d: NVENC encodes 32..4096 a side, even sizes, up to 4096x2304", size.width, size.height);
-        status = kVTCouldNotFindVideoEncoderErr;
-    } else if (!(e->client = nvenc_open(&error)) || !nvenc_info(e->client, &e->info)) {
-        switch_refusal("AVE", "TegraNVENC refused the process", "error %#x: no H.264 encoder here", error);
-        status = kVTCouldNotFindVideoEncoderErr;
-    } else if (e->codec == kCMVideoCodecType_HEVC && !(e->info.codecs & 1u << TEGRA_NVENC_CODEC_H265)) {
-        switch_refusal("AVE", "this kernel's NVENC has no H.265", "no HEVC encoder here");
-        status = kVTCouldNotFindVideoEncoderErr;
-    }
+    OSStatus status = ave_open_engine(e);
     if (!status) {
         const int32_t formats[] = {kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange,
                                    kCVPixelFormatType_420YpCbCr8BiPlanarFullRange};
@@ -527,7 +501,7 @@ static OSStatus encodeFrame(VTVideoEncoderRef ref, VTVideoEncoderFrame frame, CV
         *info = 0;
     pthread_mutex_lock(&e->lock);
     OSStatus status = e->failed ? kVTVideoEncoderMalfunctionErr : noErr;
-    if (!status && !e->configured && (status = configure(e, image))) {
+    if (!status && !e->configured && (status = ave_configure(e, image))) {
         e->failed = true;
         os_log_error(gLog, "AVE: session %dx%d in %{public}s could not start on NVENC (%d)", e->size.width,
                      e->size.height, getprogname(), (int)status);
