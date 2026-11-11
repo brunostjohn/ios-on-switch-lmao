@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: MIT
-// The device's answers to Metal's capability queries, per kind: the target's identity (iPad7,1's A10X on 21H461, iPad12,1's
-// A13 on 24B119: drivers/NativeMetal/bridge/NativeMetalTarget.rs) bounded by what GM20B takes, as m2v's device answers them
-// today. raw/test/selcover holds every one equal to the m2v device's on the host, for the kind its bridge was built for.
+// The device's answers to Metal's capability and identity queries, per kind: the target's identity (iPad7,1's A10X on
+// 21H461, iPad12,1's A13 on 24B119: drivers/NativeMetal/bridge/NativeMetalTarget.rs) bounded by what GM20B takes, as m2v's
+// device answers them today. raw/test/selcover holds every capability equal to the m2v device's on the host, for the kind
+// its bridge was built for.
 // An argument answer holds `value` for every argument in [first, last] and 0 elsewhere.
 #pragma once
 #include <cstddef>
@@ -34,6 +35,8 @@ struct Kind {
     // newArchitectureNameString: 0x61 applegpu_g9g, 0xd2 applegpu_g12p), and frameworks open their per-GPU archives by
     // that name (CMImaging's -[FigMetalContext _identifyGPU]: <bundle>/binaryArchive.g12p on 24B119)
     uint32_t gpuSubtype;
+    // Its AGX driver's vendorName, familyName and productName (MPSCore matches the joined name, "Apple A13 GPU")
+    std::string_view gpuVendor, gpuFamily, gpuProduct;
 };
 
 inline constexpr Count kCounts21H461[] = {
@@ -305,8 +308,10 @@ inline constexpr ArgRange kArgs24B119[] = {
 };
 
 inline constexpr Kind kKinds[] = {
-    {"21H461", kCounts21H461, std::size(kCounts21H461), kArgs21H461, std::size(kArgs21H461), 0x61},
-    {"24B119", kCounts24B119, std::size(kCounts24B119), kArgs24B119, std::size(kArgs24B119), 0xd2},
+    {"21H461", kCounts21H461, std::size(kCounts21H461), kArgs21H461, std::size(kArgs21H461), 0x61, "Apple", "A10X",
+     "GPU"},
+    {"24B119", kCounts24B119, std::size(kCounts24B119), kArgs24B119, std::size(kArgs24B119), 0xd2, "Apple", "A13",
+     "GPU"},
 };
 
 // The kind this build is for (MetalABI.h): its table's index, or the table count when it has none

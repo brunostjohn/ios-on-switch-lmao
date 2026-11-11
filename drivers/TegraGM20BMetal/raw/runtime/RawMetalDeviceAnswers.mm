@@ -111,21 +111,37 @@ void installDeviceAnswers(Class cls)
     return architecture;
 }
 
-// NVK's form of the kernel's names (nvk_physical_device.c), the name the device has had
+// The identity's GPU name, its vendor, family and product names joined as -[_MTLDevice name] joins them. Frameworks key
+// Apple's per-GPU data on it: CMImaging opens its per-GPU archives only for a name containing Apple, MPSCore's
+// GetMPSDevice takes its tuning by the exact name within the families supportsFamily: answers.
 - (NSString *)name
 {
-    const TegraGM20BAbiInfo &info = gRM->raw->kernelInfo();
-    return [NSString stringWithFormat:@"%s (NVK %s)", info.device_name, info.chip_name];
-}
-
-- (NSString *)productName
-{
-    return [self name];
+    static NSString *const name = [NSString
+        stringWithFormat:@"%.*s %.*s %.*s", int(kKind.gpuVendor.size()), kKind.gpuVendor.data(),
+                         int(kKind.gpuFamily.size()), kKind.gpuFamily.data(), int(kKind.gpuProduct.size()),
+                         kKind.gpuProduct.data()];
+    return name;
 }
 
 - (NSString *)vendorName
 {
-    return @"NVIDIA";
+    return [[NSString alloc] initWithBytes:kKind.gpuVendor.data()
+                                    length:kKind.gpuVendor.size()
+                                  encoding:NSUTF8StringEncoding];
+}
+
+- (NSString *)familyName
+{
+    return [[NSString alloc] initWithBytes:kKind.gpuFamily.data()
+                                    length:kKind.gpuFamily.size()
+                                  encoding:NSUTF8StringEncoding];
+}
+
+- (NSString *)productName
+{
+    return [[NSString alloc] initWithBytes:kKind.gpuProduct.data()
+                                    length:kKind.gpuProduct.size()
+                                  encoding:NSUTF8StringEncoding];
 }
 
 // The kernel's largest buffer object: MPS and MPSGraph size their tiles and scratch from it

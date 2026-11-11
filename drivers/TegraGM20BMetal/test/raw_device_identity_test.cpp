@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 // raw/runtime/raw_device_answers.h: the identity's GPU subtype is the one the selected IPSW ships AGX binaries for, its
-// QuartzCore's default.metallib slice beside the AIR one (24B119: 0xd2, J181's A13; 21H461: 0x61, J120's A10X).
+// QuartzCore's default.metallib slice beside the AIR one (24B119: 0xd2, J181's A13; 21H461: 0x61, J120's A10X), and its
+// name is an Apple GPU's, which frameworks open that GPU's archives for.
 #include "../raw/runtime/raw_archive.h"
 #include "../raw/runtime/raw_device_answers.h"
 
@@ -41,6 +42,14 @@ TEST(RawDeviceIdentity, TheGpuIsTheOneTheIpswShipsBinariesFor)
     const std::vector<uint32_t> shipped = appleGpuSubtypes(quartzCore);
     ASSERT_EQ(shipped.size(), 1u) << quartzCore;
     EXPECT_EQ(raw::answers::kThisKind.gpuSubtype, shipped[0]) << raw::answers::kThisKind.kind;
+}
+
+TEST(RawDeviceIdentity, TheNameIsAnAppleGpusAsMetalJoinsIt)
+{
+    const raw::answers::Kind &k = raw::answers::kThisKind;
+    EXPECT_EQ(k.gpuVendor, "Apple") << "CMImaging's _identifyGPU opens per-GPU archives only for an Apple name";
+    EXPECT_FALSE(k.gpuFamily.empty());
+    EXPECT_EQ(k.gpuProduct, "GPU");
 }
 
 }  // namespace
