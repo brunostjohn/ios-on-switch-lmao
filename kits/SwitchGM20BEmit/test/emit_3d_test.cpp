@@ -70,8 +70,10 @@ template <typename F> std::vector<uint32_t> theirs(F emit)
 TEST(Emit3D, ViewportAndScissorAsRawWritesThem)
 {
     expectRawSays(
-        "p.incArray(VIEWPORT_SCALE_X, viewport_, 6);\n        p.inc(VIEWPORT_CLIP_H, {viewport_[6], viewport_[7]});");
-    expectRawSays("p.inc(SCISSOR_ENABLE, {1, scissor_[0], scissor_[1]});");
+        "const switch_gm20b_viewport_state v = viewportState(viewport_);\n        kit(p, switch_gm20b_viewport, "
+        "0u, &v);");
+    expectRawSays("kit(p, switch_gm20b_scissor, 0u, uint16_t(scissor_[0]), uint16_t(scissor_[0] >> 16), "
+                  "uint16_t(scissor_[1]),");
     const switch_gm20b_viewport_state v = {{640.0f, -360.0f, 1.0f}, {640.0f, 360.0f, 0.0f}, 0, 1280, 0, 720};
     const uint32_t viewport[8] = {bits(640.0f), bits(-360.0f), bits(1.0f),  bits(640.0f),
                                   bits(360.0f), bits(0.0f),    1280u << 16, 720u << 16};

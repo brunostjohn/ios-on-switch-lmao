@@ -172,6 +172,19 @@ uint32_t fbits(float f)
     return u;
 }
 
+// The viewport's words (scale X Y Z, offset X Y Z as floats' bits, then each clip's x | width << 16) as the kit's state
+switch_gm20b_viewport_state viewportState(const uint32_t w[8])
+{
+    switch_gm20b_viewport_state v = {};
+    memcpy(v.scale, w, sizeof v.scale);
+    memcpy(v.offset, w + 3, sizeof v.offset);
+    v.clip_x = uint16_t(w[6]);
+    v.clip_width = uint16_t(w[6] >> 16);
+    v.clip_y = uint16_t(w[7]);
+    v.clip_height = uint16_t(w[7] >> 16);
+    return v;
+}
+
 // A pass's sample layout (raw_samples.h): its registers and the root table's sample words, the root table left selected
 constexpr uint32_t kSampleWords = 20;
 
@@ -4588,12 +4601,13 @@ bool RenderEncoder::prepare(Pipeline *pl, uint32_t primitive, int32_t first, uin
         restart_ = restart;
     }
     if (viewportDirty_) {
-        p.incArray(VIEWPORT_SCALE_X, viewport_, 6);
-        p.inc(VIEWPORT_CLIP_H, {viewport_[6], viewport_[7]});
+        const switch_gm20b_viewport_state v = viewportState(viewport_);
+        kit(p, switch_gm20b_viewport, 0u, &v);
         viewportDirty_ = false;
     }
     if (scissorDirty_) {
-        p.inc(SCISSOR_ENABLE, {1, scissor_[0], scissor_[1]});
+        kit(p, switch_gm20b_scissor, 0u, uint16_t(scissor_[0]), uint16_t(scissor_[0] >> 16), uint16_t(scissor_[1]),
+            uint16_t(scissor_[1] >> 16));
         scissorDirty_ = false;
     }
     // NVK's SET_BLEND_CONST_RED..ALPHA, the floats' bits, written where a draw blends with them
