@@ -1,7 +1,7 @@
 # raw's API inventory, written by raw/test/selcover (SELCOVER_WRITE=1; selcover_inventory.h says what each
 # column holds): container, item, selector, m2v, sent by, raw
-# m2v's items: base 3 m2v 4 none 65 raw 291 read 292 refused 163 unread 201 zero 38
-# sent selectors: base 79 m2v 13 m2vobj 2 none 8 raw 515 refused 56 zero 142
+# m2v's items: base 3 m2v 4 none 65 raw 293 read 292 refused 163 unread 201 zero 36
+# sent selectors: base 79 m2v 13 m2vobj 2 none 8 raw 517 refused 56 zero 140
 MTLArgument	access	access	I	-	read
 MTLArgument	active	isActive	I	-	unread
 MTLArgument	arrayLength	arrayLength	I	-	read
@@ -940,13 +940,13 @@ MTLRenderCommandEncoder	drawIndexedPatches:patchStart:patchCount:patchIndexBuffe
 MTLRenderCommandEncoder	drawIndexedPrimitives:indexCount:indexType:indexBuffer:indexBufferOffset:	drawIndexedPrimitives:indexCount:indexType:indexBuffer:indexBufferOffset:	I	21H461,24B119	raw
 MTLRenderCommandEncoder	drawIndexedPrimitives:indexCount:indexType:indexBuffer:indexBufferOffset:instanceCount:	drawIndexedPrimitives:indexCount:indexType:indexBuffer:indexBufferOffset:instanceCount:	I	21H461,24B119	raw
 MTLRenderCommandEncoder	drawIndexedPrimitives:indexCount:indexType:indexBuffer:indexBufferOffset:instanceCount:baseVertex:baseInstance:	drawIndexedPrimitives:indexCount:indexType:indexBuffer:indexBufferOffset:instanceCount:baseVertex:baseInstance:	I	21H461,24B119	raw
-MTLRenderCommandEncoder	drawIndexedPrimitives:indexType:indexBuffer:indexBufferOffset:indirectBuffer:indirectBufferOffset:	drawIndexedPrimitives:indexType:indexBuffer:indexBufferOffset:indirectBuffer:indirectBufferOffset:	I	21H461,24B119	zero
+MTLRenderCommandEncoder	drawIndexedPrimitives:indexType:indexBuffer:indexBufferOffset:indirectBuffer:indirectBufferOffset:	drawIndexedPrimitives:indexType:indexBuffer:indexBufferOffset:indirectBuffer:indirectBufferOffset:	I	21H461,24B119	raw
 MTLRenderCommandEncoder	drawMeshThreadgroups:threadsPerObjectThreadgroup:threadsPerMeshThreadgroup:	drawMeshThreadgroups:threadsPerObjectThreadgroup:threadsPerMeshThreadgroup:	I	24B119	refused
 MTLRenderCommandEncoder	drawMeshThreadgroupsWithIndirectBuffer:indirectBufferOffset:threadsPerObjectThreadgroup:threadsPerMeshThreadgroup:	drawMeshThreadgroupsWithIndirectBuffer:indirectBufferOffset:threadsPerObjectThreadgroup:threadsPerMeshThreadgroup:	I	24B119	refused
 MTLRenderCommandEncoder	drawMeshThreads:threadsPerObjectThreadgroup:threadsPerMeshThreadgroup:	drawMeshThreads:threadsPerObjectThreadgroup:threadsPerMeshThreadgroup:	I	24B119	refused
 MTLRenderCommandEncoder	drawPatches:patchIndexBuffer:patchIndexBufferOffset:indirectBuffer:indirectBufferOffset:	drawPatches:patchIndexBuffer:patchIndexBufferOffset:indirectBuffer:indirectBufferOffset:	I	24B119	zero
 MTLRenderCommandEncoder	drawPatches:patchStart:patchCount:patchIndexBuffer:patchIndexBufferOffset:instanceCount:baseInstance:	drawPatches:patchStart:patchCount:patchIndexBuffer:patchIndexBufferOffset:instanceCount:baseInstance:	I	21H461,24B119	zero
-MTLRenderCommandEncoder	drawPrimitives:indirectBuffer:indirectBufferOffset:	drawPrimitives:indirectBuffer:indirectBufferOffset:	I	21H461,24B119	zero
+MTLRenderCommandEncoder	drawPrimitives:indirectBuffer:indirectBufferOffset:	drawPrimitives:indirectBuffer:indirectBufferOffset:	I	21H461,24B119	raw
 MTLRenderCommandEncoder	drawPrimitives:vertexStart:vertexCount:	drawPrimitives:vertexStart:vertexCount:	I	21H461,24B119	raw
 MTLRenderCommandEncoder	drawPrimitives:vertexStart:vertexCount:instanceCount:	drawPrimitives:vertexStart:vertexCount:instanceCount:	I	21H461,24B119	raw
 MTLRenderCommandEncoder	drawPrimitives:vertexStart:vertexCount:instanceCount:baseInstance:	drawPrimitives:vertexStart:vertexCount:instanceCount:baseInstance:	I	21H461,24B119	raw

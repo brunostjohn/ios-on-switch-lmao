@@ -108,6 +108,8 @@ static bool archivesAnswer(RMComputeState *s, RMFunction *f, MTLPipelineOption &
 id rmComputeState(id device, id<MTLDevice> fallback, MTLComputePipelineDescriptor *descriptor,
                   MTLPipelineOption options, MTLAutoreleasedComputePipelineReflection *reflection, NSError **error)
 {
+    if (const char *why = rmUnsupportedComputeState(descriptor))
+        return rmRefuseUnsupported(why, error);
     id<MTLFunction> function = descriptor.computeFunction;
     RMComputeState *s = [RMComputeState new];
     s->_device = device;

@@ -19,9 +19,21 @@ const char *rmUnsupportedRenderState(MTLRenderPipelineDescriptor *d)
     return nullptr;
 }
 
+const char *rmUnsupportedComputeState(MTLComputePipelineDescriptor *d)
+{
+    if (MTLStageInputOutputDescriptor *in = d.stageInputDescriptor)
+        for (NSUInteger i = 0; i < 31; i++) {
+            MTLAttributeDescriptor *a = in.attributes[i];
+            if (a.format != MTLAttributeFormatInvalid && a.bufferIndex < 31 &&
+                in.layouts[a.bufferIndex].stride == MTLBufferLayoutStrideDynamic)
+                return "a dynamic attribute stride: supportsDynamicAttributeStride answers NO";
+        }
+    return nullptr;
+}
+
 id rmRefuseUnsupported(const char *why, NSError **error)
 {
-    SWITCH_REFUSE_DETAIL("raw", "state.unsupported", uintptr_t(why), "render state refused at creation: %s", why);
+    SWITCH_REFUSE_DETAIL("raw", "state.unsupported", uintptr_t(why), "state refused at creation: %s", why);
     if (error)
         *error = [NSError errorWithDomain:MTLLibraryErrorDomain
                                      code:MTLLibraryErrorUnsupported

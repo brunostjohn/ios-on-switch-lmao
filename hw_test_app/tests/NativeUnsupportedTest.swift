@@ -4,9 +4,10 @@ import HWTestGPU
 import Metal
 
 /// The features the device has no form of are NO wherever Metal lets a caller ask, and every creation past a NO fails:
-/// one view of amplification, no predication, no dynamic attribute stride, no shared texture handles, no counter sets,
-/// no tessellation (a post-tessellation vertex function reads as one, and its state is refused). The amplification
-/// count Metal defaults to, 1, draws on the raw path.
+/// one view of amplification, no predication, no dynamic attribute stride (render or compute stage-in), no shared
+/// texture handles, no counter sets, no tessellation (a post-tessellation vertex function reads as one, and its state
+/// is refused). Linear textures align to the pitch texture header's 32 bytes. The amplification count Metal defaults
+/// to, 1, draws on the raw path.
 struct NativeUnsupportedTest: NativeObjectTest {
     let id = "metal.native.unsupported"
     let name = "Features the device has no form of answer NO and refuse their creations; amplification 1 draws raw"
@@ -99,7 +100,27 @@ struct NativeUnsupportedTest: NativeObjectTest {
                 work.failures.append("a \(what) state was made")
             }
         }
+        let compute = MTLComputePipelineDescriptor()
+        compute.computeFunction = gpu.library.makeFunction(name: "fma_loop")
+        let stageIn = MTLStageInputOutputDescriptor()
+        stageIn.attributes[0].format = .float4
+        stageIn.attributes[0].bufferIndex = 2
+        stageIn.layouts[2].stride = Int(bitPattern: UInt.max)
+        compute.stageInputDescriptor = stageIn
+        if let error = Self.refused({ _ = try device.makeComputePipelineState(descriptor: compute, options: []) }) {
+            refusals.append("stage_in")
+            metrics.set("stage_in_error", error)
+        } else {
+            work.failures.append("a dynamic-stride stage-in state was made")
+        }
         metrics.set("refused", refusals.joined(separator: ","))
+        let alignments = [MTLPixelFormat.r8Unorm, .rgba8Unorm, .bgra8Unorm, .rgba16Float].map {
+            device.minimumLinearTextureAlignment(for: $0)
+        }
+        metrics.set("linear_alignment", alignments.map(String.init).joined(separator: ","))
+        if alignments.contains(where: { $0 < 32 }) {
+            work.failures.append("a linear texture alignment below the pitch texture header's 32 bytes")
+        }
 
         let size = 32
         let target = try gpu.texture(.rgba8Unorm, size, size)
