@@ -43,6 +43,9 @@ struct ProbeOp {
     // cache drained and the 3D engine idle before; the 2D engine, then the 3D engine idle and the texture cache
     // invalidated after. The first boots' fills ran without them, as the last GR work after clear-only passes
     bool bracketed = true;
+    // Fill and Scale: the 2D engine's clip rectangle [x, x + w) x [y, y + h) around the operation, cleared after it; w 0:
+    // none (the reference fill's surface clip stays)
+    uint32_t clip[4] = {};
     uint32_t method = 0, value = 0;
 };
 
@@ -61,6 +64,15 @@ namespace probe_ops_detail {
 
 constexpr uint32_t kSurfaceWords = 1 + 4 + 2 + 1 + 4;
 constexpr uint32_t kReferenceFillWords = 2 + 2 + 2 + 5 + 2 + 2;
+constexpr uint32_t kClipWords = 5 + 2 + 2;
+
+inline void clipOn(Push &p, const ProbeOp &op)
+{
+    if (!op.clip[2])
+        return;
+    p.inc(NV902D_SET_CLIP_X0, {op.clip[0], op.clip[1], op.clip[2], op.clip[3]}, SUBC_2D);
+    p.m(NV902D_SET_CLIP_ENABLE, NV902D_SET_CLIP_ENABLE_V_TRUE, SUBC_2D);
+}
 
 inline void surface(Push &p, uint32_t base, const ProbeSurface &s)
 {
@@ -124,8 +136,9 @@ inline size_t probeOpWords(const ProbeOp &op)
     if (op.kind == ProbeOpKind::Method)
         return 2;
     if (op.kind == ProbeOpKind::Fill)
-        return 2 + probe_ops_detail::kSurfaceWords + 2 + 5 + 4 + 5 + probe_ops_detail::kReferenceFillWords;
-    return 2 + 2 * probe_ops_detail::kSurfaceWords + 2 + 2 + 3 * 5;
+        return 2 + probe_ops_detail::kSurfaceWords + 2 + 5 + 4 + 5 + probe_ops_detail::kReferenceFillWords +
+               probe_ops_detail::kClipWords;
+    return 2 + 2 * probe_ops_detail::kSurfaceWords + 2 + 2 + 3 * 5 + probe_ops_detail::kClipWords;
 }
 
 inline void emitProbeOp(Push &p, const ProbeOp &op)
@@ -144,13 +157,14 @@ inline void emitProbeOp(Push &p, const ProbeOp &op)
             p.inc(NV902D_SET_CLIP_X0, {0, 0, op.dst.width, op.dst.height}, SUBC_2D);
             p.m(NV902D_SET_CLIP_ENABLE, NV902D_SET_CLIP_ENABLE_V_TRUE, SUBC_2D);
         }
+        probe_ops_detail::clipOn(p, op);
         if (op.colorFormat == kTwodColorF32x4)
             p.inc(NV902D_SET_RENDER_SOLID_PRIM_COLOR0, {op.color[0], op.color[1], op.color[2], op.color[3]}, SUBC_2D);
         p.inc(NV902D_RENDER_SOLID_PRIM_MODE,
               {NV902D_RENDER_SOLID_PRIM_MODE_V_RECTS, op.colorFormat, op.colorFormat == kTwodColorF32x4 ? 0 : op.color[0]},
               SUBC_2D);
         p.inc(NV902D_RENDER_SOLID_PRIM_POINT_SET_X(0), {op.dx, op.dy, op.dx + op.dw, op.dy + op.dh}, SUBC_2D);
-        if (op.referenceFill)
+        if (op.referenceFill || op.clip[2])
             p.m(NV902D_SET_CLIP_ENABLE, NV902D_SET_CLIP_ENABLE_V_FALSE, SUBC_2D);
         return;
     }
@@ -165,8 +179,11 @@ inline void emitProbeOp(Push &p, const ProbeOp &op)
     p.inc(NV902D_SET_PIXELS_FROM_MEMORY_DST_X0, {op.dx, op.dy, op.dw, op.dh}, SUBC_2D);
     p.inc(NV902D_SET_PIXELS_FROM_MEMORY_DU_DX_FRAC,
           {uint32_t(op.du), uint32_t(op.du >> 32), uint32_t(op.dv), uint32_t(op.dv >> 32)}, SUBC_2D);
+    probe_ops_detail::clipOn(p, op);
     p.inc(NV902D_SET_PIXELS_FROM_MEMORY_SRC_X0_FRAC,
           {uint32_t(op.sx), uint32_t(op.sx >> 32), uint32_t(op.sy), uint32_t(op.sy >> 32)}, SUBC_2D);
+    if (op.clip[2])
+        p.m(NV902D_SET_CLIP_ENABLE, NV902D_SET_CLIP_ENABLE_V_FALSE, SUBC_2D);
 }
 
 }  // namespace raw
