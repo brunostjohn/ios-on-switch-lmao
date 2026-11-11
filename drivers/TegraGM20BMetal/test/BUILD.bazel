@@ -42,8 +42,9 @@
 #   raw_probe_forms_test  raw/runtime/raw_probe_forms.h and raw_probe_ops.h (hw_test_app's barrier and 2D-engine probes,
 #                     debug builds): today's forms are the words the runtime sent before, the relaxed ones never idle and
 #                     are the planner's, the 2D work copies and resolves as the 2D engine model does
-#   raw_comp_test     raw/runtime/raw_comp.h: the compressible kinds the raw path binds are the kernel kind table's (nouveau
-#                     gm200_mmu_kind) and demote as it says; the boot ZBC values read alike by Metal and NV format
+#   raw_comp_test     raw/runtime/raw_comp.h: the compressible kinds the raw path binds (every sample count, every depth
+#                     format with one) are the kernel kind table's (nouveau gm200_mmu_kind) and demote as it says; the boot
+#                     ZBC values read alike by Metal and NV format; raw_zbc.h: the entries a clear adds hold the ROP's texel
 #   stage_test        stage-tegra-gm20b-metal.py on a directory standing in for the Data volume
 #   inventory_test    raw/test/inventory.tsv, selgaps.txt and refused.txt still describe the kinds' sent tables (selcover,
 #                     over the host harness, writes them from the raw device's objects)
@@ -647,6 +648,7 @@ host_test(
         "//drivers/TegraGM20BMetal:raw/pack/nvdec_comp.h",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_comp.h",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_control_memory.h",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_zbc.h",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_kernel.h",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_cpu_completion.h",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_shared_events.h",

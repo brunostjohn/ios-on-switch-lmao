@@ -8,6 +8,7 @@
 #include <chrono>
 #include <cstddef>
 #include <cstring>
+#include "../fx/fx_image.h"
 #include "raw_follow.h"
 #include "raw_gpu.h"
 #include "raw_zeta.h"
@@ -21,7 +22,8 @@ os_log_t compLog()
     return log;
 }
 
-// A memoryless attachment's backing layout as Device::backing makes it: the zeta's, or one block-linear level of colour
+// A memoryless attachment's backing layout as Device::backing makes it: the zeta's, or one block-linear level of colour at
+// its sample count (plainBacking's)
 bool backingLayout(const Texture &m, Texture &t, fx::MipChain &c, uint64_t &bytes)
 {
     t = Texture();
@@ -30,12 +32,14 @@ bool backingLayout(const Texture &m, Texture &t, fx::MipChain &c, uint64_t &byte
         return zetaShape(m.width, m.height, m.format, m.samples, t, bytes, align);
     }
     const FormatInfo *f = formatInfo(m.format);
-    if (!f || !fx::mipChainLayout(m.width, m.height, 1, m.bpp, c))
+    if (!f || !(m.samples > 1 ? fx::msLayout(m.width, m.height, m.samples, m.bpp, c)
+                              : fx::mipChainLayout(m.width, m.height, 1, m.bpp, c)))
         return false;
     t.width = m.width;
     t.height = m.height;
     t.format = m.format;
     t.bpp = m.bpp;
+    t.samples = m.samples;
     t.renderable = f->rt != 0;
     t.pitch = c.level[0].rowBytes;
     t.blockLinear = true;
@@ -80,10 +84,8 @@ int Kernel::bindCompressed(Bo &bo, uint32_t kind)
 
 uint32_t Device::compKind(const Texture &m, uint32_t tag, bool blockLinear) const
 {
-    if (m.zeta && m.format != kZetaFormat)  // ZF32_X24S8_2CSZV is D32S8's layout alone
-        return 0;
-    return backingKind((k_.info().flags & TegraGM20BInfoCompression) != 0, blockLinear, m.zeta, m.bpp, m.samples, tag,
-                       kMemorylessTag);
+    return backingKind((k_.info().flags & TegraGM20BInfoCompression) != 0, blockLinear, m.zeta ? m.format : 0, m.bpp,
+                       std::max<uint32_t>(m.samples, 1), tag, kMemorylessTag);
 }
 
 void Device::compAsk(const CompWant &w)
@@ -103,7 +105,7 @@ void Device::compStart()
             followers().join();  // it binds under lock_, which the committer's render thread waits for
             std::unique_lock<std::mutex> l(lock_);
             const auto asked = [&] {
-                return stopping_ || !comp_.wanted.empty() || compRearm_;
+                return stopping_ || !comp_.wanted.empty() || compRearm_ || zbc_.pending();
             };
             for (;;) {
                 // what a process that commits nothing stopped using goes when it turns stale, not at its next commit
@@ -115,6 +117,7 @@ void Device::compStart()
                     return;
                 compRearm_ = false;
                 compMake(l);
+                zbcMake(l);
                 trimBackings();
             }
         });
@@ -268,17 +271,66 @@ void Device::compTrim(uint64_t now)
     }
 }
 
-void Device::countZbc(const Texture &t, bool full, bool boot)
+int Kernel::zbcAdd(const TegraGM20BAbiZbc &entry)
 {
-#if SWITCH_RAW_DIAGNOSTICS
+    TegraGM20BAbiZbcReply r = {};
+    return call(TegraGM20BMethodZbc, &entry, sizeof entry, &r, sizeof r);
+}
+
+bool Device::zbcHeld(const TegraGM20BAbiZbc &e)
+{
+    bool wanted = false;
+    const bool held = zbc_.lookup(e, wanted);
+    if (wanted) {
+        std::lock_guard<std::mutex> l(lock_);
+        compStart();
+    }
+    return held;
+}
+
+void Device::clearZbc(const Texture &t, bool full, const uint32_t v[4])
+{
     if (!t.comptags)
         return;
-    (full && boot ? stats.zbcHits : stats.zbcMisses)++;
-#else
-    (void)t;
-    (void)full;
-    (void)boot;
-#endif
+    bool held = zbcBootColor(t.format, v);
+    TegraGM20BAbiZbc e;
+    if (!held && full) {
+        if (zbcColorEntry(t.format, v, e))
+            held = zbcHeld(e);
+        else
+            RAW_DIAGNOSTIC(stats.zbcInexact++);
+    }
+    RAW_DIAGNOSTIC((full && held ? stats.zbcHits : stats.zbcMisses)++);
+}
+
+void Device::clearZbcDepth(const Texture &t, bool full, float depth)
+{
+    if (!t.comptags)
+        return;
+    bool held = zbcBootDepth(depth);
+    TegraGM20BAbiZbc e;
+    if (!held && full) {
+        if (zbcDepthEntry(t.format, depth, e))
+            held = zbcHeld(e);
+        else
+            RAW_DIAGNOSTIC(stats.zbcInexact++);
+    }
+    RAW_DIAGNOSTIC((full && held ? stats.zbcHits : stats.zbcMisses)++);
+}
+
+void Device::zbcMake(std::unique_lock<std::mutex> &l)
+{
+    TegraGM20BAbiZbc e;
+    while (!stopping_ && zbc_.next(e)) {
+        l.unlock();
+        const int kr = k_.zbcAdd(e);
+        l.lock();
+        zbc_.answer(e, kr == KERN_SUCCESS);
+        RAW_DIAGNOSTIC((kr == KERN_SUCCESS ? stats.zbcAdded : stats.zbcFull)++);
+        if (kr != KERN_SUCCESS && kr != kIOReturnNoResources)
+            os_log_error(compLog(), "raw: ZBC entry format 0x%x not added (0x%x): those clears write their texels",
+                         e.format, unsigned(kr));
+    }
 }
 
 }  // namespace raw

@@ -1469,7 +1469,7 @@ bool Device::createTexture(uint32_t width, uint32_t height, uint32_t format, Tex
     if (laid && blocks)
         blockLayout(t, bl);
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
-    if (probeCompressNext.exchange(false) && laid && !blocks && compressedKind(t.bpp, false))
+    if (probeCompressNext.exchange(false) && laid && !blocks && compressedKind(t.bpp, 0))
         return probeCompressible(bl, t);
 #endif
     if (laid && blAlloc(bl.bytes, bl.align, t.span)) {
@@ -3306,7 +3306,7 @@ RenderEncoder *CommandBuffer::render(const PassDesc &pass)
                 RAW_DIAGNOSTIC(dev_->stats.rtUnalignedVa = uint32_t(t->va & 255));
             }
             std::lock_guard<std::mutex> l(dev_->lock_);
-            Texture *b = dev_->backing(*t, scratchTags[j], blockLinear, false);
+            Texture *b = dev_->backing(*t, scratchTags[j], blockLinear, kCopyEngineReadsCompressed);
             if (!b || !b->renderable)
                 return nullptr;
             e.pass_.color[j].texture = b;
@@ -5693,8 +5693,7 @@ void RenderEncoder::end()
         uint32_t v[4] = {};
         clearWords(pass_.color[c.target].texture->format, c.value, v,
                    !called_ && pass_.color[c.target].texture->compressed);
-        RAW_DIAGNOSTIC(d.countZbc(*t, !c.x0 && !c.y0 && c.x1 >= t->width && c.y1 >= t->height,
-                                  zbcBootColor(t->format, v)));
+        d.clearZbc(*t, !r.x0 && !r.y0 && r.x1 >= t->width && r.y1 >= t->height, v);
         clearRect(p, r.x0, r.y0, r.x1, r.y1, v, 0, 0);
         own = true;
     }
@@ -5721,18 +5720,17 @@ void RenderEncoder::end()
                                                  zs.clearStencil && zetaHasStencil(zs.texture->format))
                                  : 0;
     zetaClearValues(p, zsBits & 1, zs.depth, zsBits & 2, zs.stencil);
-    RAW_DIAGNOSTIC(if (zsBits & 1) d.countZbc(*zs.texture, areaW_ >= zs.texture->width && areaH_ >= zs.texture->height,
-                                            zbcBootDepth(zs.depth)));
+    if (zsBits & 1)
+        d.clearZbcDepth(*zs.texture, areaW_ >= zs.texture->width && areaH_ >= zs.texture->height, zs.depth);
     for (const Clear &c : cl) {
         if (c.own)
             continue;
         uint32_t v[4] = {};
         const Texture *t = pass_.color[c.target].texture;
         clearWords(t->format, c.value, v, !called_ && t->compressed);
-        RAW_DIAGNOSTIC(d.countZbc(*t, !c.x0 && !c.y0 && c.x1 >= t->width && c.y1 >= t->height,
-                                  zbcBootColor(t->format, v)));
-        const bool area = !c.x0 && !c.y0 && c.x1 == areaW_ && c.y1 == areaH_;
         const Rect r = planeRect(c.x0, c.y0, c.x1, c.y1);
+        d.clearZbc(*t, !r.x0 && !r.y0 && r.x1 >= t->width && r.y1 >= t->height, v);
+        const bool area = !c.x0 && !c.y0 && c.x1 == areaW_ && c.y1 == areaH_;
         clearRect(p, r.x0, r.y0, r.x1, r.y1, v, c.target, area ? zsBits : 0);
         zsBits = area ? 0 : zsBits;
     }
@@ -6148,7 +6146,7 @@ void BlitEncoder::end()
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
 bool Device::probeCompressible(const tgm_layout &bl, Texture &t)
 {
-    const uint32_t kind = compressedKind(t.bpp, false);
+    const uint32_t kind = compressedKind(t.bpp, 0);
     Bo bo;
     if (k_.allocCompressible(compBytes(bl.bytes), bo) != KERN_SUCCESS)
         return false;

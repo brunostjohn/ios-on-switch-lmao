@@ -1463,6 +1463,9 @@ public:
         // value the boot ZBC table holds (no texels written) and to one it does not
         std::atomic<uint64_t> compHeld{0}, compHeldBytes{0}, compViews{0}, compMade{0}, compFailed{0}, zbcHits{0},
             zbcMisses{0};
+        // ZBC entries this process added, those a full table refused, and full clears of compressed targets to a value no
+        // entry can hold (raw_zbc.h)
+        std::atomic<uint64_t> zbcAdded{0}, zbcFull{0}, zbcInexact{0};
         // compute launches encoded (raw_compute.h)
         std::atomic<uint64_t> dispatches{0};
         // states made with the zero-source pixel kill on (raw_blend_kill.h), and their binds encoded
@@ -1912,8 +1915,15 @@ private:
     // When compressed or shared plain memory, a made buffer or a retired backing next turns stale (compClock()), 0 with
     // none held
     uint64_t compDeadline() const;
-    // A clear of target t (counted only when compressed): `full` it covers t whole, `boot` its value is the boot ZBC table's
-    void countZbc(const Texture &t, bool full, bool boot);
+    // A clear of target t to SET_COLOR_CLEAR_VALUE words `v` (or depth `depth`), `full` it covers t whole: on a compressed
+    // target, a value the ZBC table lacks is asked for (raw_zbc.h); hits and misses counted
+    void clearZbc(const Texture &t, bool full, const uint32_t v[4]);
+    void clearZbcDepth(const Texture &t, bool full, float depth);
+    ZbcTable zbc_;
+    // Whether a full clear to `e` writes comptags only; one this process never asked for is asked for
+    bool zbcHeld(const TegraGM20BAbiZbc &e);
+    // compThread_ asks the kernel for the ZBC entries wanted, `l` dropped around each call
+    void zbcMake(std::unique_lock<std::mutex> &l);
 };
 
 // NV topology for an MTLPrimitiveType (point, line, lineStrip, triangle, triangleStrip)

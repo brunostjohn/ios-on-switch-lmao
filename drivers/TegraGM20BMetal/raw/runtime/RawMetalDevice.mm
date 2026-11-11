@@ -100,8 +100,9 @@ static const char *zetaMemoryRefusal(int asked)
     };
 }
 
-// hw_test_app's gpu.compression_churn: the raw device's compressed memory (raw_comp.h). held, held_bytes and views are now;
-// made and refused count since the device opened.
+// hw_test_app's gpu.compression_churn and gpu.raw.compressed_targets: the raw device's compressed memory (raw_comp.h).
+// held, held_bytes and views are now; made and refused count since the device opened, and so do the clears of compressed
+// targets the ZBC table held or not and the entries this process added (raw_zbc.h).
 - (NSDictionary<NSString *, NSNumber *> *)switchRawCompression
 {
     const auto &s = gRM->raw->stats;
@@ -110,7 +111,12 @@ static const char *zetaMemoryRefusal(int asked)
         @"held_bytes" : @(s.compHeldBytes.load()),
         @"views" : @(s.compViews.load()),
         @"made" : @(s.compMade.load()),
-        @"refused" : @(s.compFailed.load())
+        @"refused" : @(s.compFailed.load()),
+        @"zbc_hits" : @(s.zbcHits.load()),
+        @"zbc_misses" : @(s.zbcMisses.load()),
+        @"zbc_added" : @(s.zbcAdded.load()),
+        @"zbc_full" : @(s.zbcFull.load()),
+        @"zbc_inexact" : @(s.zbcInexact.load())
     };
 }
 

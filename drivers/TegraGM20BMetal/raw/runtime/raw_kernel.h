@@ -102,6 +102,9 @@ public:
     // the kernel had no comptags left for it), or kIOReturnNoSpace with no VA left; refused, the BO is left unbound. Under the
     // caller's lock (the VA list).
     int bindCompressed(Bo &bo, uint32_t kind);
+    // Method 19: adds a zero-bandwidth-clear entry to the GPU's table (raw_zbc.h); the kern_return_t (kIOReturnNoResources:
+    // the table is full)
+    int zbcAdd(const TegraGM20BAbiZbc &entry);
     // GPU VA held for binds made into it later (bindImportAt), whole granules; 0: none left. releaseVa gives it back.
     uint64_t reserveVa(uint64_t bytes);
     void releaseVa(uint64_t va, uint64_t bytes);
