@@ -15,7 +15,7 @@ METAL_ABI=${METAL_ABI:-$TREE/bazel-bin/drivers/NativeMetal/abi}
 mkdir -p "$OUT"
 # SWITCH_RAW_HARNESS_MARKS: raw_gpu.cpp marks each fetch barrier it leaves out and each draw it splits, for pack/eqcheck.py
 FLAGS=(-O2 -g -Wall -Wextra -std=c++17 -DSWITCH_RAW_HARNESS_MARKS -I "$TREE/kits/SwitchGM20BEmit/mesa"
-       -I "$TREE/bazel-bin/kits/SwitchGM20BEmit/gen" -I "$TREE/third_party/mesa/src/nouveau/headers")
+    -I "$TREE/bazel-bin/kits/SwitchGM20BEmit/gen" -I "$TREE/third_party/mesa/src/nouveau/headers")
 for f in mme_fermi mme_fermi_sim; do xcrun clang -O2 -std=c11 -w -I "$RAW/pack/mesa" -c "$RAW/pack/mesa/$f.c" -o "$OUT/$f.o"; done
 xcrun clang -O1 -Wall -c -I "$TREE/drivers/TegraGM20B" "$RAW/pack/mock_iokit.c" -o "$OUT/mock_iokit.o"
 xcrun clang++ "${FLAGS[@]}" -c -I "$TREE/drivers/TegraGM20B" "$RAW/pack/cap.cpp" -o "$OUT/cap.o"
