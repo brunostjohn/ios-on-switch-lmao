@@ -1619,6 +1619,10 @@ private:
             notePhaseFrameEnd();
         if (status & kVblankInt)
             vblankNotify();
+        // QuartzCore 24B119 never registers for vsync (its frame clock is a CADisplayTimer): the frame end stands in for
+        // the compositor's vsync so the GPU deadline's window still opens.
+        if ((status & kFrameEndInt) && !vsyncArmed)
+            tegra_gm20b_compositor_vsync(__atomic_load_n(&feStamp, __ATOMIC_ACQUIRE), 0, refreshTicks());
         watchVsync(status);
         if (status & kFrameEndInt)
             columnScanFrameEnd();

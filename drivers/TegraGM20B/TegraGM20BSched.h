@@ -71,6 +71,8 @@ void tgm_hold_sampled(unsigned int chid, uint64_t asked_pt, uint64_t start_pt);
 /* Half its preemption latency after a preempt: if `chid` has left the GPU, the latency comes down. */
 void tgm_hold_check(struct nvkm_device *device, unsigned int chid);
 uint64_t tgm_hold_latency(unsigned int chid);
+/* Whether any tracked app channel is slow enough to be held (tgm_hold_worth); lockless, for opening a window. */
+int tgm_hold_wanted(void);
 /* The window ends (the present completed, or it expired): every held channel is released. */
 void tgm_hold_release(struct nvkm_device *device, uint64_t now);
 /* The channel's cumulative time held, for the stuck timers (tgm_unheld_ns). */

@@ -3,9 +3,11 @@
  * The compositor's deadline (TegraGM20BSched.h). The display sends Core Animation a vsync only while CA has vsync on (it
  * turns it on when it schedules an update, off after an idle countdown: QuartzCore IOMFBServer::set_vsync_enabled and
  * vsync_callback), and CA starts a frame at it for the vblank after the one it came with; the display passes each one on
- * here with its real vblank (tegra_gm20b_compositor_vsync). A window then holds each app channel from its own preemption
- * latency before the compositor's latest start (that vblank less the compositor's GPU time per frame) until the frame's
- * present completes (hold.c). The GPU time per frame is learned from the high channels' completions (gpu_fenced.h
+ * here with its real vblank (tegra_gm20b_compositor_vsync). 24B119's CA never turns it on (IOMFBServer's use-VBL bit is
+ * cleared at construction and nothing sets it; its frame clock is a CADisplayTimer), so there the display passes each
+ * frame end on instead. A window then holds each app channel slow enough to be worth it (tgm_hold_worth) from its own
+ * preemption latency before the compositor's latest start (that vblank less the compositor's GPU time per frame) until the
+ * frame's present completes (hold.c); with no such channel no window opens. The GPU time per frame is learned from the high channels' completions (gpu_fenced.h
  * high_fenced), summed per present. QuartzCore's own hint (tegra_gm20b_display_deadline) comes once a second
  * (hint_agx_timing::next_agx_hint), too seldom to start a window from. Every decision is made at a vsync, a kick, a
  * fence interrupt or a host-time callout; nothing waits or polls.
@@ -122,7 +124,8 @@ void tegra_gm20b_compositor_vsync(uint64_t stamp, uint32_t lead_us, uint64_t int
 	dl.vsync_last = now;
 	dl.interval = step;
 	dl.next_target = vblank + step;
-	if (!dl.target && !dl.suspended && step && step <= TGM_INTERVAL_MAX_NS && drawing(now)) {
+	if (!dl.target && !dl.suspended && step && step <= TGM_INTERVAL_MAX_NS && drawing(now) &&
+	    tgm_hold_wanted()) {
 		window_open(dl.next_target, now);
 		target = dl.target;
 	}
@@ -301,7 +304,7 @@ void tgm_deadline_presented(uint64_t queued)
 
 		window_close(now);
 		if (!dl.suspended && dl.next_target > closed && dl.next_target > now &&
-		    drawing(now)) {
+		    drawing(now) && tgm_hold_wanted()) {
 			window_open(dl.next_target, now);
 			target = dl.target;
 		}

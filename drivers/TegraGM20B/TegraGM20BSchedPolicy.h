@@ -238,6 +238,16 @@ static inline uint64_t tgm_gpu_span(uint64_t end, uint64_t start, uint64_t last_
 	return end > from ? end - from : 0;
 }
 
+/* A channel whose preemption latency stays within this is left to the compositor's kick, whose preempt then costs the
+ * compositor at most this: holding it every frame would only take GPU time from it. Only slower channels are held, and
+ * with none tracked no window opens. */
+#define TGM_HOLD_SLACK_NS (1000ull * 1000)
+
+static inline int tgm_hold_worth(uint64_t preempt)
+{
+	return preempt > TGM_HOLD_SLACK_NS ? 1 : 0;
+}
+
 /* The one-period bound: a channel held in the last window that has not had its preemption latency's worth of GPU time
  * since that window closed is left alone this window, so an app whose draws outlast the compositor's slack still gets a
  * turn every other frame. */

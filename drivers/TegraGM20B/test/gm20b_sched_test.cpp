@@ -29,6 +29,17 @@ TEST(KickVictim, GrMidSwitchIsLeftToTheHost)
 	EXPECT_EQ(tgm_kick_victim(kHangEng0, 0, 1, 26, 0), TGM_VICTIM_SWITCHING);
 }
 
+// The measured preemption latencies of F-v1's widget visit (deadline lines, "latency by channel"): the compositor's kick
+// alone serves a channel within a millisecond; the poster, widget and icon renderers are held.
+TEST(HoldWorth, OnlyChannelsSlowerThanTheSlackAreHeld)
+{
+	EXPECT_FALSE(tgm_hold_worth(TGM_PREEMPT_MIN_NS));
+	EXPECT_FALSE(tgm_hold_worth(TGM_HOLD_SLACK_NS));
+	EXPECT_TRUE(tgm_hold_worth(TGM_HOLD_SLACK_NS + 1));
+	for (const uint64_t us : {7836u, 7035u, 4480u})
+		EXPECT_TRUE(tgm_hold_worth(us * 1000)) << us;
+}
+
 TEST(KickVictim, AppOnGrIsPreempted)
 {
 	EXPECT_EQ(tgm_kick_victim(resident(26), 0, 1, 26, 0), 26);
