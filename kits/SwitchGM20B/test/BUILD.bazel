@@ -2,8 +2,11 @@
 #
 #   bazel test //kits/SwitchGM20B/test:all
 load("@rules_python//python:py_binary.bzl", "py_binary")
+load("@rules_python//python:py_test.bzl", "py_test")
 load("//bazel/lint:defs.bzl", "lint_files")
-load("//bazel/testing:defs.bzl", "host_test")
+load("//bazel/testing:defs.bzl", "host_library", "host_test")
+load("//kernel/rules:kernel.bzl", "kernel_driver")
+load("//kits/SwitchGM20B:defs.bzl", "SWITCH_GM20B_CAPS_INPUTS", "SWITCH_GM20B_INCLUDES")
 
 lint_files()
 
@@ -54,4 +57,36 @@ host_test(
         ":driver_constants_h",
     ],
     deps = ["//kits/SwitchGM20B:classes"],
+)
+
+py_test(
+    name = "caps_test",
+    srcs = ["caps_test.py"],
+    data = SWITCH_GM20B_CAPS_INPUTS + ["//kits/SwitchGM20B:caps_gen"],
+    deps = ["//kits/SwitchGM20B:caps_lib"],
+)
+
+host_library(
+    name = "caps_header_c",
+    srcs = ["caps_header_c.c"],
+    deps = ["//kits/SwitchGM20B:caps"],
+)
+
+host_test(
+    name = "caps_header_test",
+    srcs = ["caps_header_test.cpp"],
+    deps = [
+        ":caps_header_c",
+        "//kits/SwitchGM20B:caps",
+        "//kits/SwitchGM20B:classes",
+    ],
+)
+
+# The class headers and the capability table compiled by the kernel toolchain: never linked.
+kernel_driver(
+    name = "SwitchGM20BKernelCheck",
+    srcs = ["kernel_check.c"],
+    c_copts = SWITCH_GM20B_INCLUDES + ["-I$(GENDIR)/kits/SwitchGM20B"],
+    hdr_deps = ["kits/SwitchGM20B"],
+    hdrs = ["//kits/SwitchGM20B:SwitchGM20BCaps.h"],
 )

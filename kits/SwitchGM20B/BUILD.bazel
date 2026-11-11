@@ -4,9 +4,11 @@
 #   bazel test //kits/SwitchGM20B/...
 #   bazel run //kits/SwitchGM20B:caps_report
 load("@rules_cc//cc:cc_library.bzl", "cc_library")
+load("@rules_python//python:py_binary.bzl", "py_binary")
+load("@rules_python//python:py_library.bzl", "py_library")
 load("//bazel/lint:defs.bzl", "lint_files")
 load("//kernel/rules:kernel.bzl", "kernel_headers")
-load(":defs.bzl", "SWITCH_GM20B_MESA_HEADERS")
+load(":defs.bzl", "SWITCH_GM20B_CAPS_INPUTS", "SWITCH_GM20B_MESA_HEADERS", "caps_args")
 
 package(default_visibility = ["//visibility:public"])
 
@@ -32,4 +34,56 @@ cc_library(
     name = "classes",
     hdrs = glob(["SwitchGM20B*.h"]) + SWITCH_GM20B_MESA_HEADERS,
     includes = ["../../third_party/mesa/src/nouveau/headers"],
+)
+
+py_library(
+    name = "caps_lib",
+    srcs = [
+        "caps/caps.py",
+        "caps/formats.py",
+        "caps/gen_caps.py",
+    ],
+    imports = ["caps"],
+    deps = [
+        "@switch_pypi//mako",
+        "@switch_pypi//pyyaml",
+    ],
+)
+
+py_binary(
+    name = "gen_caps",
+    srcs = ["caps/gen_caps.py"],
+    main = "caps/gen_caps.py",
+    deps = [":caps_lib"],
+)
+
+genrule(
+    name = "caps_gen",
+    srcs = SWITCH_GM20B_CAPS_INPUTS,
+    outs = [
+        "SwitchGM20BCaps.h",
+        "gm20b_caps.json",
+    ],
+    cmd = "$(execpath :gen_caps) " + caps_args() + " --out-h $(execpath SwitchGM20BCaps.h) --out-json $(execpath gm20b_caps.json)",
+    tools = [":gen_caps"],
+)
+
+# The capability table: #include "kits/SwitchGM20B/SwitchGM20BCaps.h" (a kernel driver adds -I$(GENDIR)).
+cc_library(
+    name = "caps",
+    hdrs = [":SwitchGM20BCaps.h"],
+)
+
+# Rows graded below chip, and where the device's answers and the raw path's format table disagree with the table. Run
+# from the workspace, it also checks that every cited file and line exists.
+py_binary(
+    name = "caps_report",
+    srcs = ["caps/caps_report.py"],
+    data = SWITCH_GM20B_CAPS_INPUTS + [
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_device_answers.h",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_gpu.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_zeta.h",
+    ],
+    main = "caps/caps_report.py",
+    deps = [":caps_lib"],
 )
