@@ -15,6 +15,7 @@ import Metal
 ///   wait for the GPU and the completion's latency), where the GPU time is in nanoseconds.
 /// - ilk_<label> (raw): the timed runs' draws that took the pixel interlock, which InterlockBound holds to about m2v's
 ///   time for the same state.
+/// - gpu_clock_<label>=host (raw, debug builds): a timed run's GPU time was the host's window, for want of a GPU stamp.
 /// On the raw facade a state the pack lacks is drawn by m2v until the runtime makes its record: the scene waits for it
 /// (warm_<label> runs) and leaves out a state that never reaches the raw path, naming its path.
 /// On the process's default device the wide blur (narrow_blur_27) also draws `dumpBuffers` untimed command buffers
@@ -131,6 +132,7 @@ struct CAHotStatesScene: GPUScene {
             if let interlocked = after["interlock_draws"] {
                 result.metrics.set("ilk_" + label, interlocked - (before["interlock_draws"] ?? 0))
             }
+            if runs.contains(where: { $0.gpuClock == "host" }) { result.metrics.set("gpu_clock_" + label, "host") }
         }
         if timed == 0 { result.notes.append("no hot state made from this QuartzCore") }
         if processDefault { result.metrics.merge(dumped) }

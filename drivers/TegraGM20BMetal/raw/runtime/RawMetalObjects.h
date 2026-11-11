@@ -313,6 +313,9 @@ struct RMSharedEventWait {
     uint32_t _seqno;
     uint32_t _stamp;  // its raw submission's GPU time stamps (raw::CommandBuffer::stamp), 0 for any other
     double _kernelStart, _kernelEnd, _gpuStart, _gpuEnd;
+#if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
+    bool _gpuStamped;  // GPUStartTime/GPUEndTime are its submission's GPU stamps, not the host's window
+#endif
     __weak id _active;        // the encoder being recorded (weak: it holds the command buffer, its caller holds it)
     uint64_t _preds;          // every refusal predicate it hit (1 << RMPred)
     uint64_t _predA, _predB;  // the first one's values

@@ -12,6 +12,7 @@ public final class GPU: @unchecked Sendable {
     private let lock = NSLock()
     private var recorded = PathTally()
     private var failures: [String] = []
+    private var hostClocked = 0
 
     /// The app's precompiled default.metallib; the host tests compile the shaders' sources instead.
     nonisolated(unsafe) public static var makeLibrary: (MTLDevice) throws -> MTLLibrary = {
@@ -40,6 +41,8 @@ public final class GPU: @unchecked Sendable {
         /// The CPU's part: the encode closure, and the commit call (the raw path encodes and submits inside it).
         public var encodeMilliseconds = 0.0
         public var commitMilliseconds = 0.0
+        /// The raw facade's clock of gpuMilliseconds (RawFacade.gpuClock); nil off the facade.
+        public var gpuClock: String?
 
         /// GPU timestamps that advance prove the work ran on the GPU's clock, not a CPU fallback.
         public var gpuTimed: Bool { gpuMilliseconds > 0 }
@@ -47,6 +50,9 @@ public final class GPU: @unchecked Sendable {
 
     /// Every command buffer `run` committed, by the path the raw facade reports for it ("device" elsewhere).
     public var paths: PathTally { locked { recorded } }
+
+    /// Runs whose GPU time on the raw facade is the host's window, for want of a GPU stamp (RawFacade.gpuClock).
+    public var hostClockedRuns: Int { locked { hostClocked } }
 
     /// Command buffers that completed with an error, in order (their error's domain, code and text).
     public var commandBufferErrors: [String] { locked { failures } }
@@ -99,9 +105,11 @@ public final class GPU: @unchecked Sendable {
                 gpuMilliseconds: 0, wallMilliseconds: wall, path: "error:" + error, encodeMilliseconds: encodeMs,
                 commitMilliseconds: commitMs)
         }
+        let clock = RawFacade.gpuClock(of: buffer)
+        if clock == "host" { locked { hostClocked += 1 } }
         return Timing(
             gpuMilliseconds: max(0, buffer.gpuEndTime - buffer.gpuStartTime) * 1000, wallMilliseconds: wall, path: path,
-            encodeMilliseconds: encodeMs, commitMilliseconds: commitMs)
+            encodeMilliseconds: encodeMs, commitMilliseconds: commitMs, gpuClock: clock)
     }
 
     /// Commits one command buffer without waiting: `finish` waits for a batch of them, so work queued back to back

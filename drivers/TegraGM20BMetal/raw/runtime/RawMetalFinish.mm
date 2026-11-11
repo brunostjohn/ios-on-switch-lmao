@@ -271,6 +271,7 @@ void finish(RMCommandBuffer *cb, NSError *error)
         // the GPU's own time, its end where this thread saw it complete: the duration exact, both late by that latency
         uint64_t ns = 0;
         const bool stamped = !error && !cb->_m2v && gRM->raw->gpuNanoseconds(cb->_stamp, ns);
+        RAW_DIAGNOSTIC(cb->_gpuStamped = stamped);
         const raw::CommandBufferTimes t =
             raw::orderedTimes(cb->_kernelStart, cb->_kernelEnd, hostSeconds(), stamped, ns);
         cb->_kernelStart = t.kernelStart;

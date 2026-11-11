@@ -57,6 +57,12 @@ public enum RawFacade {
         ask(buffer, "switchRawPath") as? String ?? "device"
     }
 
+    /// The clock of the buffer's GPUStartTime/GPUEndTime on the facade (debug builds): "ns", its GPU stamps, or "host",
+    /// the host's window from submission to completion standing in for them; nil elsewhere.
+    public static func gpuClock(of buffer: MTLCommandBuffer) -> String? {
+        ask(buffer, "switchGpuClock") as? String
+    }
+
     public static func wholePrograms(in buffer: MTLCommandBuffer) -> Bool {
         (ask(buffer, "switchRawWholePrograms") as? NSNumber)?.boolValue ?? false
     }

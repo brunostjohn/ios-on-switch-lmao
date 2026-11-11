@@ -492,6 +492,16 @@ static void giveRecording(RMCommandBuffer *b)
     return @YES;
 }
 
+// hw_test_app's clock of GPUStartTime/GPUEndTime, final once the command buffer completed: "ns" (its submission's GPU
+// stamps) or "host" (the host's window from submission to completion, which stands in where no stamp was read)
+- (NSString *)switchGpuClock
+{
+    std::lock_guard<std::mutex> l(_lock);
+    if (!_completedSent)
+        return @"pending";
+    return _gpuStamped ? @"ns" : @"host";
+}
+
 // hw_test_app's attribution, final once the command buffer completed (its completed handlers may ask): "raw",
 // "m2v:<reason>:<first predicate>" or "split:<raw segments>+<m2v segments>:<reason>:<first predicate>"
 - (NSString *)switchRawPath

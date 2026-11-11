@@ -7,7 +7,8 @@ import Metal
 /// on the m2v device it wraps. Each run's fields carry its device's prefix (raw_, m2v_): checks, failed, wrong pixels,
 /// the scene's own measurements, and paths= (every command buffer's path as the facade reported it). raw_cbs=,
 /// m2v_cbs=, split_cbs= and m2v_why= are the facade's process-wide counters over its run, framework command buffers
-/// included. A hash_* field the two runs disagree on fails the test: the two paths drew different pixels. Failed
+/// included. <prefix>_gpu_clock=host: some of that run's GPU times are the host's window, the facade having read no
+/// GPU stamp for them. A hash_* field the two runs disagree on fails the test: the two paths drew different pixels. Failed
 /// comparisons leave got, want and diff PNGs in Documents/gpu/<id>/.
 public struct GPUSceneTest: HWTest {
     let scene: any GPUScene
@@ -45,6 +46,7 @@ public struct GPUSceneTest: HWTest {
             metrics.set(prefix + "_failed", result.failed.count + result.problems.count)
             metrics.set(prefix + "_wrong", result.wrongPixels)
             metrics.merge(result.metrics, prefix: prefix + "_")
+            if gpu.hostClockedRuns > 0 { metrics.set(prefix + "_gpu_clock", "host") }
             metrics.set(prefix + "_paths", gpu.paths.isEmpty ? "-" : gpu.paths.text)
             if !after.isEmpty { metrics.merge(PathTally.counterMetrics(before: before, after: after)) }
             for key in result.metrics.keys where key.hasPrefix("hash_") {

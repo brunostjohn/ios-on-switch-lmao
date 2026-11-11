@@ -1,8 +1,8 @@
 import HWTestCore
 import XCTest
 
-/// InterlockBound against gpu.ca.hot_states' two interlocked states on device: probe-v1 within the bound,
-/// stack-S-v2 (the ticket buffer bypassing the GPU's L2) past it.
+/// InterlockBound against the kernel's per-draw GPU times of gpu.ca.hot_states' two interlocked states: probe-v1 within
+/// the bound, stack-S-v2 (the ticket buffer bypassing the GPU's L2) past it.
 final class InterlockBoundTests: XCTestCase {
     func run(rawBvcm: Double, rawGlass: Double) -> (Metrics, [String]) {
         var metrics = Metrics()
@@ -24,6 +24,17 @@ final class InterlockBoundTests: XCTestCase {
         XCTAssertEqual(reasons, [])
         XCTAssertEqual(metrics["raw_ilk_x_timgbvcm"], .number(2380 / (1812.5 * 1.6276), digits: 2))
         XCTAssertNil(metrics["raw_ilk_x_tn27"])
+    }
+
+    func testAHostWindowIsNoGpuTime() {
+        var metrics = Metrics()
+        metrics.set("raw_us_timgbvcm", 2380.0, digits: 1)
+        metrics.set("m2v_us_timgbvcm", 1812.5, digits: 1)
+        metrics.set("raw_ilk_timgbvcm", 40)
+        metrics.set("raw_gpu_clock_timgbvcm", "host")
+        let reasons = InterlockBound.judge(&metrics)
+        XCTAssertEqual(reasons, ["timgbvcm: the raw interlocked draw's time is the host's window, not the GPU's"])
+        XCTAssertNil(metrics["raw_ilk_x_timgbvcm"])
     }
 
     func testUncachedTicketsFailTheBound() {
