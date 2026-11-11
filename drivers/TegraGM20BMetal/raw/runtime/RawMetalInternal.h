@@ -292,6 +292,11 @@ void cpuLayer(RMTexture *t, MTLRegion r, NSUInteger slice, uint8_t *bytes, NSUIn
 // RawMetalDevice.mm
 const char *ycbcrPlan(MTLTextureDescriptor *d, IOSurfaceRef s, NSUInteger plane, raw::YcbcrPlan &out);
 
+// RawMetalUnsupported.mm: why the device has no form of a render state of `d` (null: it has), and that refusal as a creation
+// answers it (nil, its error)
+const char *rmUnsupportedRenderState(MTLRenderPipelineDescriptor *d);
+id rmRefuseUnsupported(const char *why, NSError **error);
+
 // RawMetalStates.mm: the state of `d` as the pack and the archives it lists answer, nil where it is Metal's binary archive
 // miss (`*error`), never compiled; and whether the archives miss the state of `d` (its functions this device's)
 RMPipeline *rmPipelineFor(RMDevice *device, MTLRenderPipelineDescriptor *d, MTLPipelineOption o, NSError **error);
