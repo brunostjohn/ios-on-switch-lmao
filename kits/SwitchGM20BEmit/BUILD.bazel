@@ -55,6 +55,16 @@ kernel_headers(extra = SWITCH_GM20B_MESA_HEADERS + [
     ":push_headers",
 ])
 
+# The emitters' headers and the push builder's, with the generated class helpers their sources include, as files: for
+# rules that take headers and -I directories of their own (the Metal plugin, ios_binary). They add -I mesa and gen.
+filegroup(
+    name = "emit_headers",
+    srcs = glob([
+        "SwitchGM20B*.h",
+        "mesa/*.h",
+    ]) + [":push_headers"],
+)
+
 cc_library(
     name = "push",
     hdrs = [

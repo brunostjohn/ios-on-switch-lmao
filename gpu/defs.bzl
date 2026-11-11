@@ -106,7 +106,9 @@ def _metal_plugin_impl(ctx):
         cflags = [f for f in _PLUGIN_CFLAGS if language == "objective-c++" or f != "-fno-objc-msgsend-selector-stubs"]
         compiler = "clang++"
         if language == "c":
-            cflags = [f for f in cflags if f not in ("-std=c++17", "-fobjc-arc")] + ["-std=c11"]
+            # The C units are kits/SwitchGM20BEmit's emitters: their asserts are Mesa's debug checks, off as in Mesa's
+            # release builds rather than new ways for a render server to abort.
+            cflags = [f for f in cflags if f not in ("-std=c++17", "-fobjc-arc")] + ["-std=c11", "-DNDEBUG"]
             compiler = "clang"
         for src in sources:
             obj = ctx.actions.declare_file("%s_objs/%s.o" % (ctx.attr.name, src.basename))

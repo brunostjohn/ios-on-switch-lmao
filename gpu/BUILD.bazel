@@ -154,6 +154,7 @@ metal_plugin(
         GM20B_ABI,
         GM20B_LAYOUT,
         "//kits/SwitchGM20B:class_headers",
+        "//kits/SwitchGM20BEmit:emit_headers",
         "//kits/SwitchRefusal:SwitchRefusal.h",
         "//kits/SwitchRefusal:SwitchRefusalSite.h",
     ],
@@ -198,6 +199,9 @@ metal_plugin(
         GM20B_METAL + ":raw/runtime/RawMetal.h",
         GM20B_ABI,
         "//kits/SwitchRefusal:SwitchRefusal.h",
+        # the kit's nv_push.h ahead of Mesa's own, in the directory NVIDIA's headers find "nvtypes.h" in
+        "//kits/SwitchGM20BEmit:mesa/nv_push.h",
+        "//kits/SwitchGM20BEmit:gen/nv_push_clb197.h",
         "//third_party/mesa/src/nouveau/headers:nvtypes.h",
     ],
     linkopts = a64x_target_linkopts(),
