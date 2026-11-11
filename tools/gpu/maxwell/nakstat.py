@@ -140,8 +140,9 @@ def state_key(line: str) -> str:
     return (' '.join(fields) + ' ' + line[bar1 : bar3 if bar3 >= 0 else len(line)]).strip()
 
 
-# raw_pack.h by version: PackPipeline and PackProgram sizes, sections, and the pipeline's head (key hash, key string, vs,
-# fs, blob, blob dwords, ..., flags). From 15 a program's register count is its own; from 16 program indices are 32-bit.
+# raw_pack.h by version: PackPipeline and PackProgram sizes, sections, and the pipeline's head (key hash, key string,
+# vs, fs, blob, blob dwords, ..., flags). From 15 a program's register count is its own; from 16 program indices are
+# 32-bit.
 LAYOUTS = {
     14: (480, 32, 10, struct.Struct('<QIHHIIBBBBHHI')),
     15: (536, 36, 12, struct.Struct('<QIHHIIBBBBHHI')),
