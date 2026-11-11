@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #import "RawMetalInternal.h"
+#include "raw_nonfinite.h"
 #include "NativeBridgeMetalFrontend.h"
 #import "SwitchSharedEvent.h"
 
@@ -271,6 +272,29 @@ static const char *zetaMemoryRefusal(int asked)
     return swizzled([self rmNewTexture:d tiled:d.storageMode == MTLStorageModePrivate], d.swizzle);
 }
 
+#if SWITCH_RAW_DIAGNOSTICS
+// A new render target of a float format laid over memory holding NaN or infinity: what a pass reads of it before
+// writing it (outside its render area, a level not rendered yet) is then non-finite. Each line is sampled from memory
+// (the GPU may have written it last), one in sixteen.
+static void reportNonFiniteStart(RMTexture *t, MTLTextureDescriptor *d)
+{
+    const uint32_t component = raw::floatComponentBytes(uint32_t(d.pixelFormat));
+    const uint8_t *memory = t->_raw.cpu;
+    const uint64_t bytes = t->_raw.chain ? t->_raw.chain->layout.bytes : t->_raw.span.bytes;
+    if (!component || !memory || !(d.usage & MTLTextureUsageRenderTarget))
+        return;
+    const uint32_t found = raw::sampledNonFinite(memory, bytes, component, 1024,
+                                                 [](const uint8_t *line) { cacheLines(line, 64, true); });
+    static std::atomic<uint32_t> seen{0};
+    const uint32_t n = found ? seen.fetch_add(1, std::memory_order_relaxed) + 1 : 0;
+    if (found && (n <= 32 || n % 64 == 0))
+        os_log(rawLog(), "raw: new %lux%lu format %lu texture (%lu levels, %llu bytes) starts on non-finite values: %u "
+                         "components in its sampled lines (#%u)",
+               (unsigned long)d.width, (unsigned long)d.height, (unsigned long)d.pixelFormat,
+               (unsigned long)d.mipmapLevelCount, (unsigned long long)bytes, found, n);
+}
+#endif
+
 - (id<MTLTexture>)rmNewTexture:(MTLTextureDescriptor *)d tiled:(bool)tiled
 {
     if (chainShape(d)) {  // mipmapped: level 0 of a block-linear chain of its levels (raw/fx)
@@ -281,6 +305,9 @@ static const char *zetaMemoryRefusal(int asked)
         t->_rawOk = gRM->raw->createMipTexture(uint32_t(d.width), uint32_t(d.height), uint32_t(d.pixelFormat),
                                                uint32_t(d.mipmapLevelCount), t->_raw);
         if (t->_rawOk) {
+#if SWITCH_RAW_DIAGNOSTICS
+            reportNonFiniteStart(t, d);
+#endif
             static std::atomic<bool> said{false};
             if (!said.exchange(true))
                 os_log(rawLog(), "raw: mip chain on (%u levels of %ux%u, %llu bytes)", unsigned(d.mipmapLevelCount),
@@ -351,6 +378,10 @@ static const char *zetaMemoryRefusal(int asked)
                                             d.storageMode == MTLStorageModeShared, tiled);
         if (t->_rawOk)
             keepExtendedRange(d, t->_raw, false);
+#if SWITCH_RAW_DIAGNOSTICS
+        if (t->_rawOk && tiled)
+            reportNonFiniteStart(t, d);
+#endif
     }
     if (!t->_rawOk) {
         RMTexture *w = (RMTexture *)[self wrapTwin:t->_twin ?: [gRM->fallback newTextureWithDescriptor:d] descriptor:d];

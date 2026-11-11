@@ -253,6 +253,15 @@ host_test(
 )
 
 host_test(
+    name = "raw_nonfinite_test",
+    srcs = [
+        "raw_nonfinite_test.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_nonfinite.h",
+    ],
+    cxx_std = "c++17",
+)
+
+host_test(
     name = "raw_execution_plan_test",
     srcs = [
         "raw_execution_plan_test.cpp",
