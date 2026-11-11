@@ -420,6 +420,7 @@ enum tgm_hang tgm_hang_recover(struct tgm_chan *late, const char *who, u32 seqno
 	chans[n] = late;
 	for (i = 0; i <= n; i++) {
 		c[i].live = chans[i] != NULL;
+		c[i].dead = !chans[i] || READ_ONCE(chans[i]->error) != 0;
 		c[i].kernel = chans[i] && chans[i]->kernel;
 		c[i].resident = i < resident;
 		c[i].moving = chans[i] && chan_moving(chans[i], now);
@@ -451,6 +452,18 @@ enum tgm_hang tgm_hang_recover(struct tgm_chan *late, const char *who, u32 seqno
 			progress = 1;
 	}
 	verdict = tgm_hang_blame(c, n + 1, READ_ONCE(late->error) != 0, late->kernel, progress, &b);
+	if (verdict == TGM_HANG_RESIDUE) {
+		if (tgm_recover_residue(tgm_gpu.device, suspects[b])) {
+			nvxnu_log("tegra-gm20b: GPU hang: %s waited %llu ms for %s fence %u behind "
+				  "dead channel %d: its engine reset, nothing killed\n",
+				  who, waited_ns / 1000000, late->owner, seqno, suspects[b]);
+			return TGM_HANG_RECOVERING;
+		}
+		for (i = 0; i <= n; i++)
+			c[i].dead = 0;
+		verdict = tgm_hang_blame(c, n + 1, READ_ONCE(late->error) != 0, late->kernel,
+					 progress, &b);
+	}
 	if (b < 0 || chans[b]->isolating)
 		return verdict;
 	blame = chans[b];

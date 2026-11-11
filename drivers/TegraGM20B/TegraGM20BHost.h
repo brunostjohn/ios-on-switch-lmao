@@ -22,6 +22,8 @@
 #define PBDMA_METHOD0(i) (0x0400c0 + (i) * 0x2000)
 #define PBDMA_DATA0(i) (0x0400c4 + (i) * 0x2000)
 #define PBDMA_METHOD_ADDR(v) ((v) & 0x3ffc)
+/* what gf100_runq_intr writes over a PBDMA's method: VALID, NV906F 0x0008 (NOP) */
+#define PBDMA_METHOD_NOP 0x80600008u
 #define PBDMA_INTR_0(i) (0x040108 + (i) * 0x2000)
 #define PBDMA_INTR_EN_0(i) (0x04010c + (i) * 0x2000)
 #define PBDMA_INTR_1(i) (0x040148 + (i) * 0x2000)

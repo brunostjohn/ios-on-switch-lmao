@@ -193,4 +193,22 @@ TEST(Gm20bGrFault, EveryChannelErrorIsChargedBeforeGrGoesOn)
 		<< "out of the table before nvkm drops the channel";
 }
 
+// T-v2 19:26:17-20: the PBDMA kept killed channel 20's method across GR's reset and GR loaded that context for 3 s
+TEST(Gm20bGrFault, AKilledChannelsMethodIsDroppedAtEngReset)
+{
+	const std::string intr =
+		Body(Text(RECOVER_C),
+		     "static bool runq_intr(struct nvkm_runq *runq, struct nvkm_runl *runl)\n{");
+	const size_t nop =
+		intr.find("nvkm_wr32(device, PBDMA_METHOD0(runq->id), PBDMA_METHOD_NOP);");
+	ASSERT_NE(nop, std::string::npos);
+	EXPECT_LT(intr.find("const bool dead = !chan_alive(runq, chid);"), nop);
+	EXPECT_LT(nop,
+		  intr.find("nvkm_wr32(device, PBDMA_INTR_0(runq->id), TGM_PBDMA_ENG_RESET);"));
+	const std::string hang = Body(Text(GPU_HANG_C), "enum tgm_hang tgm_hang_recover(");
+	EXPECT_LT(hang.find("if (verdict == TGM_HANG_RESIDUE) {"),
+		  hang.find("if (b < 0 || chans[b]->isolating)"));
+	EXPECT_NE(hang.find("tgm_recover_residue(tgm_gpu.device, suspects[b])"), std::string::npos);
+}
+
 }  // namespace

@@ -403,7 +403,7 @@ struct Candidates {
 };
 
 // live, stuck, kernel, resident (an engine or PBDMA is on it), moving (fence or GET), waits (1 + the source's index),
-// victim
+// victim, dead (no live channel, or a killed one)
 constexpr tgm_hang_candidate kStuckClient = {1, 1, 0, 0, 0, 0, 0}, kBusyClient = {1, 0, 0, 0, 0, 0, 0},
 			     kNone = {0, 0, 0, 0, 0, 0, 0}, kStuckResident = {1, 1, 0, 1, 0, 0, 0},
 			     kMovingResident = {1, 1, 0, 1, 1, 0, 0},
@@ -420,6 +420,31 @@ TEST(HangBlame, Deploy2045KillsTheContextGrCannotSwitch)
 {
 	// the present waited for backboardd; GR's switch blames Maps (restoring 26), PBDMA0 is on 26 too
 	Candidates k{{kStuckResident, kNone, kStuckClient}};
+	int blame;
+	EXPECT_EQ(k.verdict(blame), TGM_HANG_RECOVERING);
+	EXPECT_EQ(blame, 0);
+}
+
+// T-v2 19:26:20: GR loading killed channel 20's context (a suspect that is no live channel), backboardd stuck behind it
+TEST(HangBlame, AnEngineLeftOnAKilledChannelIsResetNotTheCompositorBehindIt)
+{
+	tgm_hang_candidate killed = kNone;
+	killed.resident = killed.dead = 1;
+	Candidates k{{killed, kStuckClient}};
+	int blame;
+	EXPECT_EQ(k.verdict(blame), TGM_HANG_RESIDUE);
+	EXPECT_EQ(blame, 0);
+	k.c[0].dead = 0;
+	EXPECT_EQ(k.verdict(blame), TGM_HANG_RECOVERING) << "what T-v2 did: the compositor killed";
+	EXPECT_EQ(blame, 1);
+}
+
+TEST(HangBlame, ADeadChannelNoEngineIsOnIsNoResidue)
+{
+	tgm_hang_candidate gone = kStuckClient;
+	gone.dead = 1;
+	Candidates k{{gone}};
+	k.late_dead = 1;
 	int blame;
 	EXPECT_EQ(k.verdict(blame), TGM_HANG_RECOVERING);
 	EXPECT_EQ(blame, 0);
