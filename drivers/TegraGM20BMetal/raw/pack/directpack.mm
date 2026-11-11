@@ -142,8 +142,9 @@ struct Counts {
     uint32_t made = 0, refused = 0, failed = 0, split = 0, variants = 0;
 };
 
-// A state's records: its own, its barrier form where its own is the storage form, and one per test class its draws can ask
-// for (named " | tests=<class>" after its key, as the runtime names them)
+// A state's records: its own, its barrier form where its own is the storage form and leaves the blend to the ROP (the runtime
+// gives one that computes it none: raw_gpu.cpp Device::pipeline), and one per test class its draws can ask for (named
+// " | tests=<class>" after its key, as the runtime names them)
 void makeState(raw::Direct &direct, Writer &w, const std::string &line, raw::ProbeTextures textures,
                const probe::State &s, Counts &n)
 {
@@ -161,7 +162,7 @@ void makeState(raw::Direct &direct, Writer &w, const std::string &line, raw::Pro
     if (outcome != raw::CompileOutcome::Made)
         return;
     n.split += rec.split;
-    if (rec.pipeline.flags & raw::PipelineStorageMetadata) {
+    if ((rec.pipeline.flags & raw::PipelineStorageMetadata) && !rec.pipeline.storageBlendMask) {
         raw::RuntimeRecord barrier;
         make(s.key, raw::PackForm::Barrier, barrier);
     }

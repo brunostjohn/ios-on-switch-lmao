@@ -752,11 +752,14 @@ static uint8_t bindProgramCbufs(Push &w, const PackProgram &prog, uint32_t group
 }
 
 // A state of the pack, made the first time it is looked up (most of the pack's states never are in a process): its registers
-// as push words with its programs placed in the heap. Else one the runtime made (addRecord).
+// as push words with its programs placed in the heap. Else one the runtime made (addRecord). A storage form that computes
+// the pipeline's blend has no barrier twin: its barrier form would leave the blend to the ROP after a fetch outside the
+// interlock, which keeps Metal's result only drawn a triangle at a time from the CPU. A pass it cannot view as its storage
+// images refuses its draws (RenderEncoder::prepare), as Metal fails a state drawn into attachments it was not made for.
 Pipeline *Device::pipeline(uint64_t keyHash, PackForm form, bool caTransform)
 {
     Pipeline *pl = placePipeline(keyHash, form, caTransform);
-    if (form != PackForm::Default || !pl || !pl->storageBits)
+    if (form != PackForm::Default || !pl || !pl->storageBits || pl->storageBlendBits)
         return pl;
     Pipeline *twin = placePipeline(keyHash, PackForm::Barrier, caTransform);
     std::lock_guard<std::mutex> l(lock_);
@@ -789,10 +792,15 @@ Pipeline *Device::placePipeline(uint64_t keyHash, PackForm form, bool caTransfor
 {
     const PackPipeline *rec = pack_.find(keyHash, form);
     if (rec && !usableRecord(rec)) {
-        const PackPipeline *barrier = form == PackForm::Default && (rec->flags & PipelineStorageMetadata)
+        const bool blends = rec->storageBlendMask;
+        const PackPipeline *barrier = form == PackForm::Default && (rec->flags & PipelineStorageMetadata) && !blends
                                           ? pack_.find(keyHash, PackForm::Barrier)
                                           : nullptr;
         rec = usableRecord(barrier) ? barrier : nullptr;
+        if (blends)
+            os_log_error(os_log_create("com.brunostjohn.switch.TegraGM20BMetal", "raw"),
+                         "raw: pack state %016llx computes its blend in a storage form this runtime cannot read: refused",
+                         (unsigned long long)keyHash);
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
         if (rec) {
             stats.fetch.storageFallback[size_t(StorageFallback::Metadata)]++;
