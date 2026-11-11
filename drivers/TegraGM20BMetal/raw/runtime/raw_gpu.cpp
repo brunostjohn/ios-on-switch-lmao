@@ -8,6 +8,7 @@
 #include "raw_nonfinite.h"
 #include "raw_clear.h"
 #include "raw_attachment_lifetime.h"
+#include "raw_blend_kill.h"
 #include "raw_dynamic_push.h"
 #include "raw_keyline_probe.h"
 #include "../../../NativeMetal/bridge/NativeMetalBlend.h"
@@ -900,6 +901,10 @@ void Device::build(Pipeline &pl, const PackPipeline &pp, const PlacedProgram &vs
     }
     w.m(PIXEL_SHADER_INTERLOCK_CONTROL, interlockControl);
     w.m(HYBRID_ANTI_ALIAS_CONTROL, sampleControl);
+    pl.blendKill = iteratedBlendNoop(blob, pp.blobDwords, writes, keyString,
+                                     (pp.flags & PipelineStorageMetadata) ? pp.storageMask : 0) == kNoopSourceRgba0000;
+    w.m(kIteratedBlendOptimization, pl.blendKill ? kNoopSourceRgba0000 : kNoopNever);
+    RAW_DIAGNOSTIC(stats.blendKillStates += pl.blendKill);
     for (uint32_t c = 0; c < 8; c++)
         if (writes[c] & 0x1111)  // R_ENABLE, G_ENABLE, B_ENABLE, A_ENABLE
             pl.writeBits |= uint8_t(1u << c);
@@ -4835,6 +4840,7 @@ bool RenderEncoder::prepare(Pipeline *pl, uint32_t primitive, int32_t first, uin
                 cb_->extrasLive_ = nullptr;
             }
             p.raw(pl->methods.data(), uint32_t(pl->methods.size()));
+            RAW_DIAGNOSTIC(d.stats.blendKillBinds += pl->blendKill);
             if (!pl->restore.empty())
                 cb_->extrasLive_ = pl;
         }

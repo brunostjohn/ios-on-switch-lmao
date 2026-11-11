@@ -59,6 +59,8 @@ static const char *zetaMemoryRefusal(int asked)
     d[@"texture_uploads"] = @(gRM->raw->stats.textureUploads.load());
     d[@"fused_passes"] = @(gRM->raw->stats.fusedPasses.load());
     d[@"texture_readbacks"] = @(gRM->raw->stats.textureReadbacks.load());
+    d[@"blend_kill_states"] = @(gRM->raw->stats.blendKillStates.load());
+    d[@"blend_kill_binds"] = @(gRM->raw->stats.blendKillBinds.load());
     const raw::FetchCounts &fetch = gRM->raw->stats.fetch;
     d[@"fetch_whole"] = @(fetch.provenWhole.load());
     d[@"fetch_proof_vertices"] = @(fetch.proofVertices.load());

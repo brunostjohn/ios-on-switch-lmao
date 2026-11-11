@@ -404,6 +404,7 @@ struct Pipeline {
     // the storage images of this one (raw_storage_form.h); resolved with the state, null where the pack has none
     Pipeline *barrierTwin = nullptr;
     bool constantBlend = false;     // a blend factor of a blended color is the encoder's blend color
+    bool blendKill = false;         // its SET_ITERATED_BLEND_OPTIMIZATION drops zero-source pixels (raw_blend_kill.h)
     uint32_t colorFormats[8] = {};  // MTLPixelFormat of each color attachment the state was made for (0: none)
     // its vertex function is Core Animation's fixed_vert_l?h_spc (raw_bounds.h), and attribute 0 (the position) as its key
     // gives it: floats from the stream's vertex start (0: no float position)
@@ -1464,6 +1465,8 @@ public:
             zbcMisses{0};
         // compute launches encoded (raw_compute.h)
         std::atomic<uint64_t> dispatches{0};
+        // states made with the zero-source pixel kill on (raw_blend_kill.h), and their binds encoded
+        std::atomic<uint64_t> blendKillStates{0}, blendKillBinds{0};
         std::atomic<uint64_t> splitPrologues{0};  // split draws' prologue launches (raw_split.cpp)
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
         std::atomic<uint64_t> splitLaunches{0};
