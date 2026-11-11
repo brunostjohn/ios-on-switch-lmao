@@ -61,3 +61,83 @@ fragment float4 x1_colored_fragment(X1ColoredVertex in [[stage_in]])
 {
     return in.color;
 }
+
+/// The barrier probes' texel hash (HWTestCore probeHash)
+static uint x1_hash(uint x, uint y, uint seed)
+{
+    uint v = (x * 73856093u) ^ (y * 19349663u) ^ (seed * 83492791u);
+    v ^= v >> 13;
+    v *= 0x5bd1e995u;
+    v ^= v >> 15;
+    return v;
+}
+
+struct X1Seeded {
+    uint seed, spin;
+    float zero;
+    uint pad;
+};
+
+/// `spin` rounds of work that come to a runtime zero, so a seeded draw takes as long as the probe asks
+static float x1_spin(uint2 p, constant X1Seeded &s)
+{
+    uint h = p.x ^ (p.y << 16);
+    float acc = 0;
+    for (uint i = 0; i < s.spin; i++) {
+        h = h * 1664525u + 1013904223u;
+        acc += float(h >> 20);
+    }
+    return acc * s.zero;
+}
+
+/// gpu.x1 barrier probes: pass A's texel for seed `seed`, unorm8 codes of the hash
+fragment float4 x1_seeded_unorm(float4 position [[position]], constant X1Seeded &s [[buffer(0)]])
+{
+    const uint2 p = uint2(position.xy);
+    const uint v = x1_hash(p.x, p.y, s.seed);
+    return float4(float(v & 255), float((v >> 8) & 255), float((v >> 16) & 255), float(v >> 24)) / 255.0f +
+           x1_spin(p, s);
+}
+
+/// The same as halves in [1, 2): ten bits of the hash a component
+fragment half4 x1_seeded_half(float4 position [[position]], constant X1Seeded &s [[buffer(0)]])
+{
+    const uint2 p = uint2(position.xy);
+    const uint v = x1_hash(p.x, p.y, s.seed);
+    const ushort4 bits = ushort4(0x3c00) | ushort4(v & 0x3ff, (v >> 10) & 0x3ff, (v >> 20) & 0x3ff, (v >> 22) & 0x3ff);
+    return as_type<half4>(bits) + half(x1_spin(p, s));
+}
+
+struct X1Tap {
+    int2 base, step, tile, size;
+};
+
+/// Pass B: texel base + (x, y) * step of the source (clamped to it) at pixel (x, y) of the atlas tile at `tile`
+fragment float4 x1_tap_unorm(float4 position [[position]], texture2d<float, access::read> src [[texture(0)]],
+                             constant X1Tap &t [[buffer(0)]])
+{
+    const int2 at = clamp(t.base + (int2(position.xy) - t.tile) * t.step, int2(0), t.size - 1);
+    return src.read(uint2(at));
+}
+
+fragment half4 x1_tap_half(float4 position [[position]], texture2d<half, access::read> src [[texture(0)]],
+                           constant X1Tap &t [[buffer(0)]])
+{
+    const int2 at = clamp(t.base + (int2(position.xy) - t.tile) * t.step, int2(0), t.size - 1);
+    return src.read(uint2(at));
+}
+
+/// A pyramid level: the 2 x 2 box of the level above
+fragment float4 x1_box_unorm(float4 position [[position]], texture2d<float, access::read> src [[texture(0)]])
+{
+    const uint2 p = uint2(position.xy) * 2, last = uint2(src.get_width(), src.get_height()) - 1;
+    return (src.read(min(p, last)) + src.read(min(p + uint2(1, 0), last)) + src.read(min(p + uint2(0, 1), last)) +
+            src.read(min(p + 1, last))) * 0.25f;
+}
+
+fragment half4 x1_box_half(float4 position [[position]], texture2d<half, access::read> src [[texture(0)]])
+{
+    const uint2 p = uint2(position.xy) * 2, last = uint2(src.get_width(), src.get_height()) - 1;
+    return (src.read(min(p, last)) + src.read(min(p + uint2(1, 0), last)) + src.read(min(p + uint2(0, 1), last)) +
+            src.read(min(p + 1, last))) * 0.25h;
+}
