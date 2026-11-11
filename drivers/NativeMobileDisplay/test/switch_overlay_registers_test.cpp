@@ -466,31 +466,14 @@ TEST(OverlayRecovery, NeverDisabledHardwareTurnsOverlaysOffForTheBootAndKeepsThe
     EXPECT_EQ(d.registers, before);
 }
 
-TEST(OverlayRecovery, UnderflowBeforeTheFirstCleanSecondTurnsOverlaysOffForTheBoot)
+TEST(OverlayRecovery, UnderflowOnTheFirstOverlayRecoversItAndKeepsOverlaysOn)
 {
     Display d;
     ASSERT_TRUE(d.stage(video(native_planes::kBt601)));
     d.latch();
-    d.notePlaneFrame(true, true);
-    d.overlayUnderflowed();
-    EXPECT_FALSE(d.planesOn);
-    EXPECT_TRUE(d.planeRecovering);
-    d.dc[Display::kDcStateControl] = 0;
-    ASSERT_TRUE(d.planeRecoveryFrameEnd());
-    ASSERT_TRUE(d.planeLatch.requested());
-    EXPECT_FALSE(d.planeSetOf(d.planeLatch.armed).on());
-}
-
-TEST(OverlayRecovery, UnderflowAfterOverlaysScannedCleanlyRecoversThem)
-{
-    Display d;
-    ASSERT_TRUE(d.stage(video(native_planes::kBt601)));
-    d.latch();
-    for (unsigned i = 0; i != Display::kPlaneProvenFrames; ++i)
-        d.notePlaneFrame(true, false);
-    EXPECT_TRUE(d.planesProven);
-    d.overlayUnderflowed();
+    d.beginPlaneRecovery("overlay underflowed 3 frames in a row");
     EXPECT_TRUE(d.planesOn);
+    EXPECT_TRUE(d.planeRecovering);
     d.dc[Display::kDcStateControl] = 0;
     ASSERT_TRUE(d.planeRecoveryFrameEnd());
     EXPECT_TRUE(d.planeSetOf(d.planeLatch.armed).on());

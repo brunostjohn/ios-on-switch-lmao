@@ -57,37 +57,6 @@ void abandonPlanes()
     planeHeldSet = false;
 }
 
-// The overlay path's bring-up check is its first use: windows that underflow before an overlay ever scanned cleanly
-// for kPlaneProvenFrames are turned off for the boot, through a recovery whose target has no overlay.
-static constexpr unsigned kPlaneProvenFrames = 60;
-bool planesProven = false;
-unsigned planeCleanFrames = 0;
-
-void notePlaneFrame(bool overlaid, bool underflowed)
-{
-    if (!overlaid || planesProven)
-        return;
-    if (underflowed) {
-        planeCleanFrames = 0;
-        return;
-    }
-    if (++planeCleanFrames < kPlaneProvenFrames)
-        return;
-    planesProven = true;
-    if (stats)
-        IOLog("SwitchDisplay: overlay windows scanned %u frames cleanly through the SMMU\n", kPlaneProvenFrames);
-}
-
-void overlayUnderflowed()
-{
-    if (planesProven) {
-        beginPlaneRecovery("overlay underflowed 3 frames in a row");
-        return;
-    }
-    __atomic_store_n(&planesOn, false, __ATOMIC_RELEASE);
-    beginPlaneRecovery("overlay underflowed before it ever scanned cleanly: overlays off for this boot");
-}
-
 bool planeRecoveryFrameEnd()
 {
     if (!planeRecovering)

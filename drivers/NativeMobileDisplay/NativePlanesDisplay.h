@@ -315,8 +315,6 @@ void planeFrameEnd()
         }
     }
     const uint32_t underflow = dc[kDcIntStatus] & (kWinBUnderflowInt | kWinCUnderflowInt);
-    const bool overlaid = planeSetOf(planeLatch.active).on();
-    notePlaneFrame(overlaid, underflow != 0);
     if (!underflow) {
         planeUnderflowRun = 0;
         return;
@@ -324,8 +322,8 @@ void planeFrameEnd()
     dc[kDcIntStatus] = underflow;
     if (stats)
         ++stPlaneUnderflows;
-    if (overlaid && ++planeUnderflowRun >= kPlaneUnderflowFrames)
-        overlayUnderflowed();
+    if (planeSetOf(planeLatch.active).on() && ++planeUnderflowRun >= kPlaneUnderflowFrames)
+        beginPlaneRecovery("overlay underflowed 3 frames in a row");
 }
 
 // The display stops: window B off, every slot given back (the caller detaches the domain).
