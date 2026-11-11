@@ -233,8 +233,8 @@ gk20a_gr_init(struct gf100_gr *gr)
 	if (gr->func->set_hww_esr_report_mask)
 		gr->func->set_hww_esr_report_mask(gr);
 
-	/* Enable TPC exceptions per GPC */
-	nvkm_wr32(device, 0x419d0c, 0x2);
+	/* Enable TPC exceptions per GPC: TEX and SM, as nvgpu's gk20a_gr_enable_gpc_exceptions */
+	nvkm_wr32(device, 0x419d0c, 0x3);
 	nvkm_wr32(device, 0x41ac94, (((1 << gr->tpc_total) - 1) & 0xff) << 16);
 
 	/* Reset and enable all exceptions */
