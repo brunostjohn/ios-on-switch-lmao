@@ -106,6 +106,14 @@ rust_test(
 )
 
 rust_test(
+    name = "store_code_test",
+    args = ["lower::arith::tests::store_code::"],
+    compile_data = glob(["tests/**"]),
+    crate = ":metal2vulkan",
+    deps = ["//third_party/m2v/crates/metal2vulkan-devtools"],
+)
+
+rust_test(
     name = "native_artifact_test",
     args = ["pipeline::compile::tests::native::"],
     compile_data = glob(["tests/**"]),

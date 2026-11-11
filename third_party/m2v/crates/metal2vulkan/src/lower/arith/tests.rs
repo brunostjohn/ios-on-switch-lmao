@@ -4113,6 +4113,7 @@ mod narrow;
 mod norm_write;
 mod round_texel;
 mod specials;
+mod store_code;
 mod texel_round;
 mod wide;
 
