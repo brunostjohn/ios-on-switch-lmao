@@ -157,6 +157,7 @@ metal_plugin(
         GM20B_ABI,
         GM20B_LAYOUT,
         "//kits/SwitchGM20B:class_headers",
+        "//kits/SwitchGM20B:SwitchGM20BCaps.h",
         "//kits/SwitchGM20BEmit:emit_headers",
         "//kits/SwitchGM20BEmit:macros",
         "//kits/SwitchRefusal:SwitchRefusal.h",
@@ -211,6 +212,8 @@ metal_plugin(
         "//kits/SwitchGM20BEmit:mesa/nv_push.h",
         "//kits/SwitchGM20BEmit:gen/nv_push_clb197.h",
         "//third_party/mesa/src/nouveau/headers:nvtypes.h",
+        # the generated capability table (raw_device_answers.h chipFeature)
+        "//kits/SwitchGM20B:SwitchGM20BCaps.h",
     ],
     linkopts = a64x_target_linkopts(),
     stack = ":raw_stack",

@@ -1128,10 +1128,14 @@ host_test(
         "//drivers/TegraGM20BMetal:raw/runtime/raw_archive.h",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_device_answers.h",
     ],
+    copts = ["-I$(GENDIR)/kits/SwitchGM20B"],
     cxx_std = "c++17",
     data = ["@ipsw//:crawl_qc"],
     env = {"SWITCH_QUARTZCORE": "$(rootpath @ipsw//:crawl_qc)"},
-    deps = ["//drivers/NativeMetal/abi:metal_abi"],
+    deps = [
+        "//drivers/NativeMetal/abi:metal_abi",
+        "//kits/SwitchGM20B:caps",
+    ],
 )
 
 host_test(

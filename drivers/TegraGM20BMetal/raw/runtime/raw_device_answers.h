@@ -10,8 +10,16 @@
 #include <iterator>
 #include <string_view>
 #include "MetalABI.h"
+#include "SwitchGM20BCaps.h"
 
 namespace raw::answers {
+
+// A feature row of kits/SwitchGM20B/caps/features.tsv as a Metal flag: 1 where the hardware has it and a device run proved
+// it (grade chip), so the answer moves with the row
+constexpr uint64_t chipFeature(switch_gm20b_feature f)
+{
+    return switch_gm20b_features[f].present && switch_gm20b_features[f].grade == SWITCH_GM20B_GRADE_CHIP;
+}
 
 struct Count {
     const char *selector;
@@ -104,7 +112,7 @@ inline constexpr Count kCounts21H461[] = {
     {"supportsRasterOrderGroups", 0, true},
     {"isDepth24Stencil8PixelFormatSupported", 0, true},
     {"areProgrammableSamplePositionsSupported", 1, true},
-    {"supports32BitFloatFiltering", 0, true},
+    {"supports32BitFloatFiltering", chipFeature(SWITCH_GM20B_FEATURE_3D_H9), true},
     {"supportsMemorylessRenderTargets", 1, true},
     {"supportsSamplerReductionMode", 0, true},
     {"supportsYCBCRFormats12", 0, true},
@@ -238,7 +246,7 @@ inline constexpr Count kCounts24B119[] = {
     {"supportsRasterOrderGroups", 1, true},
     {"isDepth24Stencil8PixelFormatSupported", 0, true},
     {"areProgrammableSamplePositionsSupported", 1, true},
-    {"supports32BitFloatFiltering", 0, true},
+    {"supports32BitFloatFiltering", chipFeature(SWITCH_GM20B_FEATURE_3D_H9), true},
     {"supportsMemorylessRenderTargets", 1, true},
     {"supportsSamplerReductionMode", 0, true},
     {"supportsYCBCRFormats12", 0, true},

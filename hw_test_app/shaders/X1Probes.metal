@@ -45,6 +45,14 @@ kernel void x1_sample_linear(texture2d<float> texture [[texture(0)]], constant f
     out[0] = texture.sample(linear, uv, level(0));
 }
 
+/// metal.float32_filtering: linear samples of a 32-bit float texture at (u, v, lod) triples, mip levels blended linearly
+kernel void float32_filter_sample(texture2d<float> texture [[texture(0)]], constant float4 *points [[buffer(0)]],
+                                  device float4 *out [[buffer(1)]], uint i [[thread_position_in_grid]])
+{
+    constexpr sampler trilinear(filter::linear, mip_filter::linear, address::clamp_to_edge);
+    out[i] = texture.sample(trilinear, points[i].xy, level(points[i].z));
+}
+
 struct X1ColoredVertex {
     float4 position [[position]];
     float4 color;

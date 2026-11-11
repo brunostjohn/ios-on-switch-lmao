@@ -21,10 +21,15 @@ ORDER = ['over-claim', 'wrong value', 'under-claim', 'lowered']
 RAW = 'drivers/TegraGM20BMetal/raw/runtime/'
 
 
-def answers(text: str) -> dict:
+def answers(text: str, chip_features: dict | None = None) -> dict:
+    """The answers per kind; an answer given as chipFeature(SWITCH_GM20B_FEATURE_<id>) reads `chip_features`."""
     kinds = {}
     for m in re.finditer(r'kCounts(\w+)\[\] = \{(.*?)\};', text, re.DOTALL):
         counts = {s: int(v) for s, v in re.findall(r'\{"([\w:]+)", (\d+), (?:true|false)\}', m.group(2))}
+        for s, row in re.findall(
+            r'\{"([\w:]+)", chipFeature\(SWITCH_GM20B_FEATURE_(\w+)\), (?:true|false)\}', m.group(2)
+        ):
+            counts[s] = (chip_features or {}).get(row, 0)
         kinds.setdefault(m.group(1), {})['counts'] = counts
     for m in re.finditer(r'kArgs(\w+)\[\] = \{(.*?)\};', text, re.DOTALL):
         ranges = [
@@ -33,6 +38,14 @@ def answers(text: str) -> dict:
         ]
         kinds.setdefault(m.group(1), {})['args'] = ranges
     return kinds
+
+
+def chip_feature_answers(table: caps.Caps) -> dict:
+    """raw_device_answers.h chipFeature's value of each feature row, by its SWITCH_GM20B_FEATURE_ name."""
+    return {
+        gen_caps.ident(r.cols['id']): int(r.cols['present'] == 'yes' and r.cols['grade'] == 'chip')
+        for r in table.features
+    }
 
 
 def raw_formats(gpu_cpp: str, zeta_h: str) -> dict:
@@ -241,7 +254,7 @@ def main() -> None:
     except caps.CapsError as e:
         caps.fail(e)
     with open(RAW + 'raw_device_answers.h', encoding='utf-8') as f:
-        kinds = answers(f.read())
+        kinds = answers(f.read(), chip_feature_answers(table))
     with open(RAW + 'raw_gpu.cpp', encoding='utf-8') as f, open(RAW + 'raw_zeta.h', encoding='utf-8') as z:
         raw = raw_formats(f.read(), z.read())
     found = []
