@@ -162,8 +162,15 @@ static inline const char *tegra_nvenc_check_h265(const TegraNVENCSubmit *s, cons
         return "ME predictors in without out, or out without in";
     if (r.colocOut)
         return "colocated output";
+    // App 3 copies method words 0-0x12 only (nvenc.bin 0xf41a-0xf4bb): a reconstruction's or reference's chroma is at
+    // its luma address plus the surface config's offset (0x142da-0x142fe, 0x14267-0x142a4), never a chroma method. The
+    // OS keeps IN_REF_PIC0_CHROMA in the word that marks methods written (nvidia/SOURCE).
+    if (r.outChroma)
+        return "reconstruction chroma method";
     for (uint32_t i = 0; i < TEGRA_NVENC_REFS; i++) {
-        if (r.refLuma[i] || r.refChroma[i])
+        if (r.refChroma[i])
+            return "reference chroma method";
+        if (r.refLuma[i])
             return "reference picture";  // IDR only
     }
 
@@ -177,11 +184,10 @@ static inline const char *tegra_nvenc_check_h265(const TegraNVENCSubmit *s, cons
         return "dimensions";
     const uint32_t ctbs = (width / TEGRA_NVENC_H265_CTB) * (height / TEGRA_NVENC_H265_CTB);
     why = tegra_nvenc_h265_surface(&p->input_cfg, width, height, r.cur, r.curChroma, false);
-    if (!why && !r.outChroma && !p->outputpic_cfg.chroma_top_frm_offset)
+    if (!why && (!p->outputpic_cfg.chroma_top_frm_offset || !p->refpic_cfg.chroma_top_frm_offset))
         why = "reconstruction chroma";
-    const uint64_t outChroma = r.outChroma ? r.outChroma : r.out;
     if (!why)
-        why = tegra_nvenc_h265_surface(&p->outputpic_cfg, width, height, r.out, outChroma, true);
+        why = tegra_nvenc_h265_surface(&p->outputpic_cfg, width, height, r.out, r.out, true);
     if (!why)
         why = tegra_nvenc_h265_surface(&p->refpic_cfg, width, height, ~0ULL, ~0ULL, true);
     if (why)

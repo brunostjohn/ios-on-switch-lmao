@@ -97,7 +97,9 @@ static void surfaceConfig(const HEVCEncConfig *c, uint32_t layout, uint32_t chro
     cfg->frame_width_minus1 = (unsigned short)(hevcenc_coded_width(c) - 1);
     cfg->frame_height_minus1 = (unsigned short)(hevcenc_coded_height(c) - 1);
     cfg->sfc_pitch = cfg->sfc_pitch_chroma = (unsigned short)s->pitch;
-    cfg->chroma_top_frm_offset = chromaMode == TEGRA_NVENC_CHROMA_OFFSET ? s->chroma_offset / 256 : 0;
+    // Only the input has a chroma method app 3 reads: it finds reconstructions and references at their luma address
+    // plus this offset (SOURCE-H265).
+    cfg->chroma_top_frm_offset = chromaMode == TEGRA_NVENC_CHROMA_OFFSET || !input ? s->chroma_offset / 256 : 0;
     if (!input) {
         cfg->tiled_16x16 = 1;  // references are always 16x16 tiled (nvenc_drv.h 1.5)
         return;
@@ -221,8 +223,6 @@ void hevcnvenc_fill_submit(const HEVCEncConfig *c, uint32_t inputLayout, uint32_
     RELOC(NVC5B7_SET_IN_CUR_PIC, h->input, 0);
     RELOC(NVC5B7_SET_IN_CUR_PIC_CHROMA_U, h->input, method ? l->input.chroma_offset : 0);
     RELOC(NVC5B7_SET_OUT_REF_PIC_LUMA, h->recon, 0);
-    if (method)
-        RELOC(NVC5B7_SET_OUT_REF_PIC_CHROMA, h->recon, l->recon.chroma_offset);
     RELOC(NVC5B7_SET_IN_MEPRED_DATA, h->mepred[0], 0);
     RELOC(NVC5B7_SET_OUT_MEPRED_DATA, h->mepred[1], 0);
     RELOC(NVC5B7_SET_OUT_BITSTREAM, h->bitstream, 0);

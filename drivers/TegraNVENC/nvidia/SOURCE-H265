@@ -28,6 +28,12 @@ method values to DMEM 0x3b8 (method 0x700 + 4k at 0x3b8 + 4k, 0xf400-0xf4a0; SET
     to the picture (0x38f7-0x390e; SOURCE).
   - Reference lists: l0[0..3] go to I/O 0x1884 as entry bit 0 and entry bits 1-4 per byte (0x143dd-0x1442e): an entry
     is DPB slot << 1, the driver's -2 (0xfe) unused. pic_type: (pic_type + 2) & 3 > 1 is inter (0x14208).
+  - Surfaces: the app copies method words 0-0x12 only (0xf41a-0xf4bb, DMEM 0x3b8 + 4 x (word - 1) from word 3; 0x400
+    cleared). The input is IN_CUR_PIC and CHROMA_U plus input_cfg's offsets (0x141a2-0x141cd); the reconstruction is
+    OUT_REF_PIC_LUMA plus outputpic_cfg's luma and chroma offsets (I[0x1878], I[0x1880], 0x142da-0x142fe); references
+    are the 16 IN_REF_PIC<n>_LUMA words (0x13-0x22, all to I[0x1040-0x107c] at 0x13c5f-0x13c74) plus refpic_cfg's
+    offsets (0x14267-0x142a4). OUT_REF_PIC_CHROMA and IN_REF_PIC<n>_CHROMA are never read, so a reconstruction's chroma
+    is always at its config offset.
 
 Driver: L4T 32.7.6 nvidia-l4t-multimedia for t210 (repo.download.nvidia.com/jetson/t210,
 nvidia-l4t-multimedia_32.7.6-20241104234540_arm64.deb, sha256
