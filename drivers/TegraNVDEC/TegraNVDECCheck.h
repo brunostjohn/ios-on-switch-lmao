@@ -168,9 +168,9 @@ static inline const char *tegra_nvdec_check_h264(const TegraNVDECSubmit *s, cons
     const uint32_t h = (uint32_t)p->FrameHeightInMbs;
     if (p->PicWidthInMbs < 3 || w > 256 || p->FrameHeightInMbs < 1 || h > 256)
         return "dimensions";
-    // Interlaced: FrameHeightInMbs counts frame rows (two map units each); a field picture or an MBAFF frame writes
-    // its rows within the frame's surface, both fields of a frame into one (libnvtvmr's NV12 setups keep every
-    // top/bottom/frame offset 0 and frame_surfaces clear for field pictures: 0x19770-0x197a4, 0x1a23c, 0x19850).
+    // Interlaced: FrameHeightInMbs counts the frame's macroblock rows, two a map unit; a field picture or an MBAFF
+    // frame writes its rows within the frame's surface, both fields of a frame into one (libnvtvmr's NV12 setups keep
+    // every top/bottom/frame offset 0 and frame_surfaces clear for field pictures: 0x19770-0x197a4, 0x1a23c, 0x19850).
     const bool interlaced = !p->frame_mbs_only_flag;
     if ((p->field_pic_flag && !interlaced) || (p->MbaffFrameFlag && (!interlaced || p->field_pic_flag)) ||
         ((p->bottom_field_flag || p->second_field) && !p->field_pic_flag) || (interlaced && (h & 1)))
