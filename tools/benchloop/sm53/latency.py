@@ -14,6 +14,7 @@ Each experiment carries a host-only `meta` (what fit.py groups by) and `expect` 
 """
 
 from collections.abc import Callable, Iterable
+from dataclasses import dataclass
 
 from tools.benchloop import protocol
 from tools.benchloop.sm53 import encode as e, operands, program
@@ -101,14 +102,35 @@ def ladder() -> list[dict]:
     return out
 
 
-def _stall_gprs(r: Recipe, delay: int) -> Program:
+@dataclass(frozen=True)
+class Stall:
+    """A stall chain's parts, drawn (fragment: the results as a texel) or dispatched (kernel: stored to its output)."""
+
+    body: list
+    init: dict[int, int]
+    results: tuple[int, int]
+    preds: dict[int, bool] | None = None
+
+    def fragment(self) -> Program:
+        return program.fragment(self.body, self.init, self.results, self.preds)
+
+    def kernel(self) -> Program:
+        return program.compute_out(self.body, self.init, self.results, self.preds)
+
+    def expected(self) -> tuple[int, int]:
+        """Give the two results the interpreter says the chain ends with (its fragment form's texel, unpacked)."""
+        p = self.fragment()
+        return program.unpack(program.expected_texel(p.code, p.data))
+
+
+def _stall_gprs(r: Recipe, delay: int) -> Stall:
     regs = chain_registers(STALL_K + 1)
     body = [r.link(regs[j + 1], regs[j]).sched(delay=delay) for j in range(STALL_K)]
     init = {regs[0]: r.seed} | {regs[j]: r.poison + r.step * j for j in range(1, STALL_K + 1)} | r.constants()
-    return program.fragment(body, init, (regs[-1], regs[STALL_K // 2]))
+    return Stall(body, init, (regs[-1], regs[STALL_K // 2]))
 
 
-def _stall_preds(r: Recipe, delay: int) -> Program:
+def _stall_preds(r: Recipe, delay: int) -> Stall:
     """Give a chain P0 -> P6 of `p = (K1 < K2) xor accum`, each P starting as the complement of its true value."""
     truth = [bool(r.seed)]
     for _ in range(PRED_LINKS):
@@ -116,7 +138,7 @@ def _stall_preds(r: Recipe, delay: int) -> Program:
     preds = {0: truth[0]} | {j: not truth[j] for j in range(1, PRED_LINKS + 1)}
     body = [r.link(j + 1, j).sched(delay=delay) for j in range(PRED_LINKS)]
     body += [SEPARATOR, e.sel(CHAIN0, K1, K2, PRED_LINKS), e.sel(CHAIN0 + 4, K1, K2, PRED_LINKS // 2)]
-    return program.fragment(body, r.constants(), (CHAIN0, CHAIN0 + 4), preds)
+    return Stall(body, r.constants(), (CHAIN0, CHAIN0 + 4), preds)
 
 
 def stall(recipes: Iterable[Recipe] = FIXED) -> list[dict]:
@@ -125,9 +147,34 @@ def stall(recipes: Iterable[Recipe] = FIXED) -> list[dict]:
         build = _stall_preds if r.pred else _stall_gprs
         for d in STALL_DELAYS:
             meta = {'family': 'stall', 'op': r.key, 'nak': r.nak, 'delay': d, 'pred': r.pred}
-            e = experiment(f'stall.{r.slug}.d{d:02d}', build(r, d), ONE_WARP, meta)
+            e = experiment(f'stall.{r.slug}.d{d:02d}', build(r, d).fragment(), ONE_WARP, meta)
             # the texel is the answer: one draw, once
             out.append(e | {'draws': [1], 'repeats': 1, 'warmup': 0})
+    return out
+
+
+def compute_stall(recipes: Iterable[Recipe] = FIXED, threads: int = 32) -> list[dict]:
+    """Give the stall family as kernels storing their results: one warp, no target, the results as buffer words."""
+    out = []
+    for r in recipes:
+        build = _stall_preds if r.pred else _stall_gprs
+        for d in STALL_DELAYS:
+            chain = build(r, d)
+            k = chain.kernel()
+            x, y = chain.expected()
+            compute = k.wire() | {'threads': [threads, 1, 1], 'groups': [1, 1, 1]}
+            out.append(
+                {
+                    'id': f'cstall.{r.slug}.d{d:02d}',
+                    'kind': 'compute',
+                    'target': {'format': 'rgba32float', 'width': 1, 'height': 1},
+                    'compute': compute | {'output': threads * program.OUTPUT_STRIDE},
+                    'readback': 'full',
+                    'meta': {'family': 'compute-stall', 'op': r.key, 'nak': r.nak, 'delay': d, 'pred': r.pred},
+                    'expect': {'words': [x, y] * threads},
+                }
+            )
+            protocol.validate_experiment(out[-1])
     return out
 
 

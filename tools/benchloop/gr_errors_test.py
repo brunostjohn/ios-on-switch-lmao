@@ -1,9 +1,11 @@
 """Kernel GR lines decoded, given to the experiment that died of them, and a dead bench said in one line."""
 
+import tempfile
 import unittest
+from pathlib import Path
 from types import SimpleNamespace
 
-from tools.benchloop import doctor, gr_errors, loop
+from tools.benchloop import doctor, gr_errors, loop, transport
 
 # Lines the device logged on 11 Nov 19:34:57 while the calibration batch's `known` experiment ran on pack v15
 REGISTER_COUNT = (
@@ -59,6 +61,21 @@ class GrErrorsTest(unittest.TestCase):
         self.assertTrue(lines[0].startswith('BENCH DEAD:'), lines)
         self.assertIn('ILLEGAL_SHADER_REGISTER_COUNT1', lines[0])
         self.assertIsNone(doctor.dead_bench({'status': 'ok'}))
+
+    def test_the_apps_protocol_is_read_before_any_batch(self) -> None:
+        with tempfile.TemporaryDirectory() as scratch:
+            (Path(scratch) / 'status.json').write_text('{"protocol": "benchloop/1"}')
+            self.assertEqual(doctor.app_protocol(transport.Local(Path(scratch))), 'benchloop/1')
+            self.assertIsNone(doctor.app_protocol(transport.Local(Path(scratch) / 'none')))
+
+    def test_the_output_kernel_informs_without_deciding(self) -> None:
+        texels = {'distinct': [{'value': doctor.KNOWN_TEXEL}]}
+        ok_result = {'status': 'ok', 'runs': [{'gpu_ns': [5000]}], 'texels': texels}
+        results = {e['id']: ok_result for e in doctor.calibration()}
+        results['output-kernel'] = {'status': 'killed', 'runs': []}
+        ok, lines = doctor.judge(results)
+        self.assertTrue(ok, lines)
+        self.assertTrue(any(line.startswith('output-kernel: FAIL (informative') for line in lines), lines)
 
 
 if __name__ == '__main__':

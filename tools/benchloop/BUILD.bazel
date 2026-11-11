@@ -29,6 +29,7 @@ py_library(
         "fakedevice.py",
         "fakegpu.py",
         "formula.py",
+        "generators.py",
         "golden.py",
         "gr_errors.py",
         "known.py",
@@ -39,6 +40,8 @@ py_library(
         "sweeps.py",
         "texels.py",
         "transport.py",
+        "twod.py",
+        "units.py",
     ],
     data = ["gr_class_errors.txt"],
     deps = [
@@ -58,6 +61,21 @@ py_binary(
     name = "benchloop",
     srcs = ["benchloop.py"],
     deps = [":lib"],
+)
+
+py_binary(
+    name = "emit_batches",
+    srcs = ["emit_batches.py"],
+    deps = [":lib"],
+)
+
+# Every generated command's batches, for the app's decoder to hold to (hw_test_app:core_test)
+genrule(
+    name = "generated_batches",
+    outs = ["generated_batches.json"],
+    cmd = "$(execpath :emit_batches) > $@",
+    tools = [":emit_batches"],
+    visibility = ["//hw_test_app:__pkg__"],
 )
 
 # The app's side of the format: its decoder's limits (Swift), its GPU side's method ranges (C++), its known program
@@ -90,5 +108,7 @@ APP_SOURCES = [
         "rop_test",
         "sweeps_test",
         "transport_test",
+        "twod_test",
+        "units_test",
     ]
 ]

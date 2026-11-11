@@ -4,7 +4,7 @@ import Foundation
 /// tools/benchloop/protocol.py's batch as the bench loop decodes it: every limit and allowed method range is the
 /// same (tools/benchloop/agreement_test.py compares them), so the host's and the app's checks agree.
 public enum BenchProtocol {
-    public static let version = "benchloop/1"
+    public static let version = "benchloop/2"
     public static let maxExperiments = 256
     public static let maxSide = 2048
     public static let maxDrawCounts = 16
@@ -54,6 +54,30 @@ public enum BenchProtocol {
         (0x1E00, 0x1F00), (0x2600, 0x2604),
     ]
 
+    /// Every field an experiment and its parts may carry (tools/benchloop/protocol.py EXPERIMENT_KEYS and the rest)
+    public static let experimentKeys: Set<String> = [
+        "id", "kind", "target", "rect", "draws", "repeats", "warmup", "clear", "readback", "template", "fill",
+        "program",
+        "compute", "twod", "methods", "restore", "targets", "source", "compare", "compressed",
+    ]
+    public static let targetKeys: Set<String> = ["format", "width", "height"]
+    public static let programKeys: Set<String> = ["code", "data", "sph", "gprs"]
+    public static let computeKeys: Set<String> = ["code", "data", "gprs", "threads", "groups", "output"]
+    public static let twodKeys: Set<String> = [
+        "op", "fmt2d", "colorFormat", "color", "du", "dv", "sx", "sy", "bilinear", "corner", "reference", "bracketed",
+        "samples",
+    ]
+    public static let sourceKeys: Set<String> = ["format", "width", "height", "data"]
+    /// Target formats the 2D engine names a surface format for (raw_probe_ops.h probeTwodFormat)
+    public static let twodFormats: Set<UInt32> = [10, 20, 25, 30, 60, 65, 70, 71, 80, 81, 90, 92, 110, 115, 125]
+    /// A multisampled image's samples across and down, log2 (fx_image.cpp msLayout)
+    public static let sampleGrids: [Int: (Int, Int)] = [2: (1, 0), 4: (1, 1)]
+    public static let picture = (format: "bgra8unorm", width: 64, height: 64)
+    public static let compares: [BenchKind: [String]] = [
+        .twod: ["program", "copy", "resolve3d"], .readback: ["plain"],
+    ]
+    public static let maxOutput = 64 * 1024
+
     public static func methodAllowed(_ method: UInt32) -> Bool {
         method % 4 == 0 && methodRanges.contains { $0.0 <= method && method < $0.1 }
     }
@@ -69,15 +93,32 @@ public enum BenchKind: String, Sendable {
     case noop, known, fragment, compute, readback, twod
 }
 
+public enum BenchTwodOp: String, Sendable {
+    case fill, scale, resolve
+}
+
 /// One 2D-engine operation (hw_test_app/bench/switch_bench.h switch_bench_twod)
 public struct BenchTwod: Equatable, Sendable {
-    public let scale: Bool
+    public let op: BenchTwodOp
     public let fmt2d: UInt32
     public let colorFormat: UInt32
     public let color: [UInt32]
     /// 32.32: the source step per destination texel (du, dv) and the source origin (sx, sy)
     public let du: UInt64, dv: UInt64, sx: UInt64, sy: UInt64
     public let bilinear: Bool, corner: Bool
+    /// The reference fill (nouveau's EXA solid: SRCCOPY, clip at the surface); `bracketed`: between the waits the
+    /// production 2D path puts around 2D work; `samples`: a resolve's source's samples a pixel
+    public let reference: Bool, bracketed: Bool
+    public let samples: UInt32
+}
+
+/// What a scale, resolve or copy reads: texels the experiment gives, else the app's own picture
+public struct BenchSource: Equatable, Sendable {
+    public let format: String
+    public let formatRaw: UInt32
+    public let width: UInt32
+    public let height: UInt32
+    public let data: Data
 }
 
 public enum BenchReadback: String, Sendable {
@@ -127,6 +168,13 @@ public struct BenchExperiment: Equatable, Sendable {
     /// The pack state to draw with, by key hash; 0: the bench's own choice
     public let templateKey: UInt64
     public let twod: BenchTwod?
+    public let source: BenchSource?
+    /// The same operation again through another unit (BenchProtocol.compares), both results and their difference
+    public let compare: String?
+    /// A readback's target in compressible memory, its texels in and out through the copy engine
+    public let compressed: Bool
+    /// Bytes of the buffer a kernel writes, whose address is the first 8 bytes of its shader data; 0: none
+    public let outputBytes: Int
 
     public var commandBuffers: Int { draws.count * Int(repeats + warmup) }
 }
@@ -153,7 +201,7 @@ public struct BenchBatch: Sendable {
             throw BenchInvalid("not a JSON object")
         }
         guard top["protocol"] as? String == BenchProtocol.version else {
-            throw BenchInvalid("protocol is not benchloop/1")
+            throw BenchInvalid("protocol is not \(BenchProtocol.version)")
         }
         guard let name = top["batch"] as? String, BenchProtocol.validName(name) else {
             throw BenchInvalid("batch name")

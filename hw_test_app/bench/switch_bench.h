@@ -17,21 +17,40 @@ enum switch_bench_kind {
     SWITCH_BENCH_FRAGMENT,  // the caller's pixel program on a quad
     SWITCH_BENCH_COMPUTE,   // the caller's kernel
     SWITCH_BENCH_READBACK,  // the caller's pixel program with the caller's methods around its draw
-    SWITCH_BENCH_TWOD,      // one 2D-engine solid fill or scaled copy into the target (raw_probe_ops.h), no program
+    SWITCH_BENCH_TWOD,      // one 2D-engine fill, scaled copy or resolve into the target (raw_probe_ops.h), no program
 };
 
 enum switch_bench_twod_op {
     SWITCH_BENCH_TWOD_FILL,
-    SWITCH_BENCH_TWOD_SCALE,  // from the bench's own 64x64 BGRA8 picture
+    SWITCH_BENCH_TWOD_SCALE,    // from the source
+    SWITCH_BENCH_TWOD_RESOLVE,  // the source's corner copied 1:1 into a multisampled image's sample grid, resolved
+};
+
+// The same operation again through another unit, into a second target with the same fill
+enum switch_bench_compare {
+    SWITCH_BENCH_COMPARE_NONE,
+    SWITCH_BENCH_COMPARE_PROGRAM,    // twod fill or scale: the caller's pixel program drawn over the rect
+    SWITCH_BENCH_COMPARE_COPY,       // twod 1:1 point scale: the copy engine copying the source
+    SWITCH_BENCH_COMPARE_RESOLVE3D,  // twod resolve: the pack's resolve state (raw_samples.h), as Metal's resolve draws
+    SWITCH_BENCH_COMPARE_PLAIN,      // a compressed readback: the same draws into a plain target
 };
 
 struct switch_bench_twod {
     uint32_t op;
-    uint32_t fmt2d;         // the destination's 2D surface format; 0: the target format's (raw::probeTwodFormat)
-    uint32_t color_format;  // SET_RENDER_SOLID_PRIM_COLOR_FORMAT
-    uint32_t color[4];      // one packed word, or four floats' bits for RF32_GF32_BF32_AF32
+    uint32_t fmt2d;           // the destination's 2D surface format; 0: the target format's (raw::probeTwodFormat)
+    uint32_t color_format;    // SET_RENDER_SOLID_PRIM_COLOR_FORMAT
+    uint32_t color[4];        // one packed word, or four floats' bits for RF32_GF32_BF32_AF32
     uint64_t du, dv, sx, sy;  // 32.32 source step per destination texel and source origin
     uint32_t bilinear, corner;
+    uint32_t reference;  // the reference fill: SRCCOPY, no colour key, clip at the surface (ProbeOp::referenceFill)
+    uint32_t bracketed;  // between the production 2D path's waits (ProbeOp::bracketed)
+    uint32_t samples;    // a resolve's: the multisampled image's samples a pixel
+};
+
+// What a scale, resolve or copy reads: rows packed (null: the bench's own 64x64 BGRA8 picture)
+struct switch_bench_source {
+    uint32_t format, width, height;
+    const uint8_t *data;
 };
 
 enum switch_bench_status {
@@ -67,8 +86,19 @@ struct switch_bench_experiment {
     const uint32_t *restore;
     uint32_t restore_pairs;
     uint32_t single_target;  // readback: colour 0 bound alone, the template's other colours left out
-    uint64_t template_key;   // the pack state to draw with (bench_records.h fragmentTemplate); 0: the bench's own choice
+    uint64_t template_key;  // the pack state to draw with (bench_records.h fragmentTemplate); 0: the bench's own choice
     struct switch_bench_twod twod;
+    struct switch_bench_source source;
+    uint32_t compare;       // switch_bench_compare
+    uint32_t compressed;    // readback: colour 0 in compressible memory, its texels in and out through the copy engine
+    uint32_t output_bytes;  // compute: a buffer of this size, its address the shader data's first 8 bytes
+};
+
+// What the app did, so a result proves its own form
+struct switch_bench_form {
+    uint32_t set;
+    uint32_t comptags, block_linear;  // the written target's
+    uint32_t bracketed, reference, samples;
 };
 
 struct switch_bench_result {
@@ -81,6 +111,12 @@ struct switch_bench_result {
     uint32_t lost_error;
     uint64_t fault_va;
     uint64_t template_key;  // the pack state whose vertex program and registers the draw took
+    uint8_t *output;        // the kernel's output buffer after the last dispatch, the caller's (null: none)
+    size_t output_bytes;
+    uint8_t *compare_texels;  // the compare form's target, as texels (null: none)
+    uint32_t compare_status;  // the compare form's own status and why: its failure leaves the experiment's result
+    char compare_why[160];
+    struct switch_bench_form form;
 };
 
 struct switch_bench;

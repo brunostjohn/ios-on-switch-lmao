@@ -36,11 +36,15 @@ final class BenchProtocolTests: XCTestCase {
 
     func testAnExperimentTheRawPathMayNotTakeIsKeptAsInvalid() throws {
         let batch: [String: Any] = [
-            "protocol": "benchloop/1", "batch": "b",
+            "protocol": BenchProtocol.version, "batch": "b",
             "experiments": [
-                ["id": "owned", "kind": "readback", "target": ["format": "bgra8unorm", "width": 4, "height": 4],
-                 "program": ["sph": Data(count: 80).base64EncodedString(), "code": Data(count: 32).base64EncodedString(),
-                             "gprs": 4], "methods": [[0x0200, 1]]],
+                [
+                    "id": "owned", "kind": "readback", "target": ["format": "bgra8unorm", "width": 4, "height": 4],
+                    "program": [
+                        "sph": Data(count: 80).base64EncodedString(), "code": Data(count: 32).base64EncodedString(),
+                        "gprs": 4,
+                    ], "methods": [[0x0200, 1]],
+                ],
                 ["id": "big", "kind": "noop", "target": ["format": "rgba16float", "width": 4096, "height": 4]],
                 ["id": "ok", "kind": "noop", "target": ["format": "rgba16float", "width": 64, "height": 4]],
             ],
@@ -58,10 +62,12 @@ final class BenchProtocolTests: XCTestCase {
         ]
         let target: [String: Any] = ["format": "bgra8unorm_srgb", "width": 4, "height": 4]
         let batch: [String: Any] = [
-            "protocol": "benchloop/1", "batch": "b",
+            "protocol": BenchProtocol.version, "batch": "b",
             "experiments": [
-                ["id": "one", "kind": "readback", "target": target, "program": program, "targets": 1,
-                 "template": "1b1ae4ebb482e4d1"],
+                [
+                    "id": "one", "kind": "readback", "target": target, "program": program, "targets": 1,
+                    "template": "1b1ae4ebb482e4d1",
+                ],
                 ["id": "two", "kind": "readback", "target": target, "program": program, "targets": 2],
                 ["id": "frag", "kind": "fragment", "target": target, "program": program, "targets": 1],
             ],
@@ -77,22 +83,30 @@ final class BenchProtocolTests: XCTestCase {
 
     func testATwodExperimentCarriesItsOperation() throws {
         let batch: [String: Any] = [
-            "protocol": "benchloop/1", "batch": "b",
+            "protocol": BenchProtocol.version, "batch": "b",
             "experiments": [
-                ["id": "fill", "kind": "twod", "target": ["format": "bgra8unorm", "width": 8, "height": 8],
-                 "rect": [1, 1, 7, 7], "twod": ["op": "fill", "colorFormat": 0xCF, "color": [0xFF00_80FF, 0, 0, 0]]],
-                ["id": "half", "kind": "twod", "target": ["format": "bgra8unorm", "width": 8, "height": 8],
-                 "twod": ["op": "scale", "du": 1 << 33, "dv": 1 << 33, "bilinear": true]],
+                [
+                    "id": "fill", "kind": "twod", "target": ["format": "bgra8unorm", "width": 8, "height": 8],
+                    "rect": [1, 1, 7, 7],
+                    "twod": ["op": "fill", "colorFormat": 0xCF, "color": [0xFF00_80FF, 0, 0, 0]],
+                ],
+                [
+                    "id": "half", "kind": "twod", "target": ["format": "bgra8unorm", "width": 8, "height": 8],
+                    "twod": ["op": "scale", "du": 1 << 33, "dv": 1 << 33, "bilinear": true],
+                ],
                 ["id": "none", "kind": "twod", "target": ["format": "bgra8unorm", "width": 8, "height": 8]],
             ],
         ]
         let decoded = try BenchBatch.decode(try JSONSerialization.data(withJSONObject: batch))
         guard case .experiment(let fill) = decoded.entries[0], let f = fill.twod else { return XCTFail("fill refused") }
         XCTAssertEqual([f.colorFormat, f.color[0]], [0xCF, 0xFF00_80FF])
-        XCTAssertFalse(f.scale)
-        guard case .experiment(let half) = decoded.entries[1], let h = half.twod else { return XCTFail("scale refused") }
+        XCTAssertEqual(f.op, .fill)
+        XCTAssertTrue(f.bracketed)
+        guard case .experiment(let half) = decoded.entries[1], let h = half.twod else {
+            return XCTFail("scale refused")
+        }
         XCTAssertEqual(h.du, 1 << 33)
-        XCTAssertTrue(h.scale && h.bilinear)
+        XCTAssertTrue(h.op == .scale && h.bilinear)
         guard case .invalid = decoded.entries[2] else { return XCTFail("a twod experiment without its operation ran") }
     }
 
@@ -103,7 +117,7 @@ final class BenchProtocolTests: XCTestCase {
         outcome.texels = Data([1, 2, 3, 4, 1, 2, 3, 4, 9, 9, 9, 9, 1, 2, 3, 4]) + Data(count: 4 * 2 * 4 - 16)
         let bytes = BenchResult.encode(batch: "golden", entry: batch.entries[4], outcome: outcome)
         let top = try XCTUnwrap(JSONSerialization.jsonObject(with: bytes) as? [String: Any])
-        XCTAssertEqual(top["protocol"] as? String, "benchloop/1")
+        XCTAssertEqual(top["protocol"] as? String, BenchProtocol.version)
         XCTAssertEqual(top["status"] as? String, "ok")
         let texels = try XCTUnwrap(top["texels"] as? [String: Any])
         let distinct = try XCTUnwrap(texels["distinct"] as? [[String: Any]])

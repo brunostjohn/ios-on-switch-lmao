@@ -104,11 +104,13 @@ def unorm(v: float, bits: int, rounding: str = 'nearest') -> int:
 def encode(colour: Colour, fmt: str, rounding: str = 'nearest') -> bytes:
     if fmt in UNORM_BITS:
         bits = UNORM_BITS[fmt]
-        codes = [unorm(c, n, rounding) for c, n in zip(colour, bits, strict=True)]
+        codes = [unorm(c, n, rounding) for c, n in zip(colour[: len(bits)], bits, strict=True)]
         if fmt == 'bgra8unorm':
             return bytes([codes[2], codes[1], codes[0], codes[3]])
-        if fmt == 'rgba8unorm':
+        if fmt in ('rgba8unorm', 'r8unorm', 'rg8unorm'):
             return bytes(codes)
+        if bits[0] == 16:
+            return struct.pack(f'<{len(codes)}H', *codes)
         return struct.pack('<I', codes[0] | codes[1] << 10 | codes[2] << 20 | codes[3] << 30)
     lanes, layout = FLOATS[fmt]
     return struct.pack(layout, *colour[:lanes])

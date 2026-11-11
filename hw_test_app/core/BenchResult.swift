@@ -12,6 +12,13 @@ public struct BenchOutcome: Sendable {
     public var faultVA: UInt64 = 0
     public var templateKey: UInt64 = 0
     public var milliseconds = 0.0
+    /// The bytes a kernel wrote to its output buffer (BenchExperiment.outputBytes)
+    public var output: Data?
+    /// The compare form's other result (BenchExperiment.compare), or its status and why where it did not run
+    public var compareTexels: Data?
+    public var compareFailure: (status: String, why: String)?
+    /// What the app did, as it did it: the target's compression, the 2D operation's waits, a resolve's samples
+    public var form: [String: Int] = [:]
 
     public init(status: String = "ok", why: String = "") {
         self.status = status
@@ -26,7 +33,9 @@ public enum BenchResult {
         var top: [String: Any] = [
             "protocol": BenchProtocol.version, "batch": batch, "id": entry.id, "status": outcome.status,
             "why": outcome.why, "elapsed_ms": (outcome.milliseconds * 1000).rounded() / 1000,
-            "runs": outcome.runs.map { ["draws": $0.draws, "gpu_ns": $0.gpuNs, "wall_ns": $0.wallNs] as [String: Any] },
+            "runs": outcome.runs.map {
+                ["draws": $0.draws, "gpu_ns": $0.gpuNs, "wall_ns": $0.wallNs] as [String: Any]
+            },
         ]
         switch entry {
         case .experiment(let e):
@@ -34,6 +43,23 @@ public enum BenchResult {
             if let texels = outcome.texels, e.readback != .none {
                 top["texels"] = texelFields(texels, e)
             }
+            if let other = outcome.compareTexels, let texels = outcome.texels, e.readback != .none {
+                top["compare"] = [
+                    "with": e.compare ?? "", "status": "ok", "texels": texelFields(other, e),
+                    "histogram": BenchDifference.histogram(texels, other, format: e.format, texelBytes: e.texelBytes),
+                ]
+            } else if let failure = outcome.compareFailure {
+                top["compare"] = ["with": e.compare ?? "", "status": failure.status, "why": failure.why]
+            }
+            if let output = outcome.output, e.readback != .none {
+                var fields: [String: Any] = [
+                    "bytes": output.count, "crc32": hex(UInt64(crc32(output)), digits: 8),
+                    "distinct": distinct(output, width: output.count / 4, texelBytes: 4),
+                ]
+                if e.readback == .full { fields["data"] = output.base64EncodedString() }
+                top["output"] = fields
+            }
+            if !outcome.form.isEmpty { top["form"] = outcome.form }
         case .invalid(_, let kind, _):
             top["kind"] = kind
         }

@@ -54,6 +54,27 @@ class AgreementTest(unittest.TestCase):
         self.assertEqual(ranges(SWIFT.read_text(), '(', ')'), list(protocol.METHOD_RANGES))
         self.assertEqual(ranges(RECORDS.read_text(), '{', '}'), list(protocol.METHOD_RANGES))
 
+    def test_field_names_and_forms(self) -> None:
+        text = SWIFT.read_text()
+        sets = {
+            'experimentKeys': protocol.EXPERIMENT_KEYS - {'meta', 'expect'},
+            'targetKeys': protocol.TARGET_KEYS,
+            'programKeys': protocol.PROGRAM_KEYS,
+            'computeKeys': protocol.COMPUTE_KEYS,
+            'twodKeys': protocol.TWOD_KEYS,
+            'sourceKeys': protocol.SOURCE_KEYS,
+        }
+        for swift, python in sets.items():
+            match = re.search(rf'static let {swift}: Set<String> = \[(.*?)\]', text, re.DOTALL)
+            self.assertIsNotNone(match, swift)
+            self.assertEqual(set(re.findall(r'"(\w+)"', match.group(1))), python, swift)
+        formats = re.search(r'static let twodFormats: Set<UInt32> = \[(.*?)\]', text, re.DOTALL)
+        self.assertEqual({int(n) for n in re.findall(r'\d+', formats.group(1))}, protocol.TWOD_FORMATS)
+        grids = re.search(r'static let sampleGrids: \[Int: \(Int, Int\)\] = \[(.*?)\]', text, re.DOTALL)
+        found = re.findall(r'(\d+): \((\d+), (\d+)\)', grids.group(1))
+        self.assertEqual({int(n): (int(x), int(y)) for n, x, y in found}, protocol.SAMPLE_GRIDS)
+        self.assertIn(f'static let maxOutput = {protocol.MAX_OUTPUT // 1024} * 1024', text)
+
     def test_protocol_version(self) -> None:
         self.assertIn(f'static let version = "{protocol.PROTOCOL}"', SWIFT.read_text())
 

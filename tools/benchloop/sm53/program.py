@@ -26,6 +26,12 @@ FIXED_LATENCY = 6
 BRANCH_DELAY = 13
 POSITION = (0x70, 0x74)
 SEPARATOR = encode.nop().sched(delay=SAFE_DELAY, wait=ALL_BARRIERS)
+# A kernel's output: its buffer's address is the shader data's first 8 bytes (the app writes it), the registers it
+# loads follow from OUTPUT_DATA; each thread stores its two results at its thread index x OUTPUT_STRIDE
+OUTPUT_DATA = 16
+OUTPUT_STRIDE = 8
+SR_TID_X = 0x21
+STG_32 = 4
 
 
 @dataclass(frozen=True)
@@ -48,8 +54,8 @@ def _scheduled(instrs: list[Instr]) -> list[Instr]:
     return [i.sched(delay=SAFE_DELAY if k == len(instrs) - 1 else 1) for k, i in enumerate(instrs)]
 
 
-def prologue(init: dict[int, int], preds: dict[int, bool] | None = None) -> list[Instr]:
-    moves = [encode.mov(r, Cbuf(DATA_BANK, 4 * k)) for k, r in enumerate(sorted(init))]
+def prologue(init: dict[int, int], preds: dict[int, bool] | None = None, offset: int = 0) -> list[Instr]:
+    moves = [encode.mov(r, Cbuf(DATA_BANK, offset + 4 * k)) for k, r in enumerate(sorted(init))]
     setps = [encode.isetp(p, RZ, RZ, 'eq' if v else 'ne') for p, v in sorted((preds or {}).items())]
     return _scheduled(moves + setps)
 
@@ -123,6 +129,41 @@ def compute(body: list[Instr], init: dict[int, int], preds: dict[int, bool] | No
     """Give the compute form of a body: the same prologue, no outputs."""
     code = encode.bundle(encode.finish([*prologue(init, preds), *settled(body), SEPARATOR]))
     return Program(code, data_of(init), _gprs(code))
+
+
+def s2r(d: int, sr: int) -> Instr:
+    return encode._Word('S2R').reg(0, d).put(20, 8, sr).instr()
+
+
+def stg(addr: int, data: int, offset: int = 0) -> Instr:
+    """Give STG.E.32 [addr + offset], data; the address the register pair addr, addr + 1."""
+    w = encode._Word('STG').reg(0, data).reg(8, addr).put(20, 24, offset)
+    return w.flag(45, True).put(48, 3, STG_32).instr()
+
+
+def store_epilogue(results: tuple[int, int]) -> list[Instr]:
+    """Give the stores of `results` to this thread's 8 bytes of the output buffer (R0..R3 are the address's)."""
+    if set(results) & set(range(OUTPUT_REGISTERS)):
+        raise ValueError(f'results {results} would be overwritten by the address R0..R3')
+    carry_in, carry_out = 1 << 43, 1 << 47  # IADD's .X and .CC
+    address = [
+        s2r(2, SR_TID_X).sched(wr_bar=0, delay=encode.BARRIER_SET_CYCLES),
+        encode.mov(0, Cbuf(DATA_BANK, 0)).sched(delay=1),
+        encode.mov(1, Cbuf(DATA_BANK, 4)).sched(delay=SAFE_DELAY),
+        encode.shl(3, 2, encode.Imm(3)).sched(wait=1, delay=SAFE_DELAY),
+        Instr(encode.iadd(0, 0, 3).word | carry_out).sched(delay=SAFE_DELAY),
+        Instr(encode.iadd(1, 1, RZ).word | carry_in).sched(delay=SAFE_DELAY),
+    ]
+    return [*address, stg(0, results[0]).sched(delay=1), stg(0, results[1], 4).sched(delay=1)]
+
+
+def compute_out(
+    body: list[Instr], init: dict[int, int], results: tuple[int, int], preds: dict[int, bool] | None = None
+) -> Program:
+    """Give a kernel that runs `body` as fragment() does and stores `results` to the output buffer, not a texel."""
+    head = prologue(init, preds, OUTPUT_DATA)
+    code = encode.bundle(encode.finish([*head, *settled(body), SEPARATOR, *store_epilogue(results)]))
+    return Program(code, bytes(OUTPUT_DATA) + data_of(init), _gprs(code))
 
 
 def inputs(data: bytes, position: tuple[int, int] | None = None) -> Inputs:

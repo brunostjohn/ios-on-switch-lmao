@@ -54,6 +54,14 @@ def encode_result(batch: str, e: dict, outcome: fakegpu.Outcome) -> bytes:
     }
     if outcome.texels is not None and e.get('readback', 'summary') != 'none':
         top['texels'] = texel_fields(e, outcome.texels)
+    if outcome.output is not None and e.get('readback', 'summary') != 'none':
+        top['output'] = {
+            'bytes': len(outcome.output),
+            'crc32': f'{zlib.crc32(outcome.output):08x}',
+            'distinct': distinct(outcome.output, len(outcome.output) // 4, 4),
+        }
+        if e.get('readback') == 'full':
+            top['output']['data'] = protocol.b64(outcome.output)
     return (json.dumps(top, sort_keys=True, separators=(',', ':')) + '\n').encode()
 
 
