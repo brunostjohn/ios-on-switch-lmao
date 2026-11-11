@@ -82,19 +82,6 @@ void Device::offerCompletedSplit(Completed &c, const RuntimeRecord &r, const Pla
     offerSplit(c.pipeline, std::move(source));
 }
 
-void Device::addSplit(const RuntimeRecord &r)
-{
-    std::lock_guard<std::mutex> l(lock_);
-    for (Completed &c : completedStore_)
-        if (c.record.keyHash == r.pipeline.keyHash && !c.record.storageMask && !c.pipeline.splitSource &&
-            !c.pipeline.split && r.split) {
-            PlacedProgram vs;
-            if (placeCompleted(r.programs[0], vs))
-                offerCompletedSplit(c, r, vs, c.pipeline.caTransform);
-            return;
-        }
-}
-
 Pipeline *Device::addRecord(const RuntimeRecord &r, bool caTransform, std::string &why, bool *retry)
 {
     if (retry)

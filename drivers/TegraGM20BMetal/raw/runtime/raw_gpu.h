@@ -980,8 +980,6 @@ public:
     // A state the runtime made a record of (raw_record.h), drawn from then on as the pack's are; null: its programs find no room
     // in the heap or its samplers none in the header pool (`why`)
     Pipeline *addRecord(const RuntimeRecord &r, bool caTransform, std::string &why, bool *retry = nullptr);
-    // A runtime record's split made after its state (RuntimeRecord::split): its draws may take it from then on
-    void addSplit(const RuntimeRecord &r);
 
     // Resources (thread safe). All textures are 2D, one level, one sample, pitch-linear.
     // pool memory, rows 256-byte aligned; `wc`: write-combined GPU-pool memory (a texture the CPU writes with replaceRegion:

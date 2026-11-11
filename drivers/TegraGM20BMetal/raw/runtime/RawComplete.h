@@ -82,19 +82,17 @@ private:
     std::unique_ptr<Direct> direct_;
     std::once_flag directMade_;  // make() runs on the compile queue and on creating threads at once
     uint64_t stack_;
-    dispatch_queue_t queue_, splitQueue_, persistenceQueue_;
+    dispatch_queue_t queue_, persistenceQueue_;
     dispatch_group_t pending_;
     std::atomic<bool> stopping_{false};
     std::mutex lock_;
     std::map<uint64_t, Ask> asked_;  // by CacheKey::name, what make() makes
     std::mutex kernelLock_;          // map membership only; each kernel owns its single-flight lock
     std::map<uint64_t, std::shared_ptr<Kernel>> kernels_;
-    std::set<uint64_t> splitAsked_;  // by CacheKey::name, the states whose split splitLater made or is making
 
     bool keyOf(Ask &a, CacheKey &k);
     Direct &direct();
     Compiler::Outcome make(const CacheKey &k, RuntimeRecord &record, std::string &why);
-    void splitLater(const CacheKey &k, const RuntimeRecord &record);
 };
 
 }  // namespace raw

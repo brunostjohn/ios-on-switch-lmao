@@ -62,9 +62,6 @@ Completion::Completion(Device &device, const char *cacheDir, uint64_t stack, con
       queue_(dispatch_queue_create(
           "com.brunostjohn.switch.raw.complete",
           dispatch_queue_attr_make_with_qos_class(DISPATCH_QUEUE_SERIAL, QOS_CLASS_USER_INITIATED, 0))),
-      splitQueue_(
-          dispatch_queue_create("com.brunostjohn.switch.raw.split",
-                                dispatch_queue_attr_make_with_qos_class(DISPATCH_QUEUE_SERIAL, QOS_CLASS_UTILITY, 0))),
       persistenceQueue_(
           dispatch_queue_create("com.brunostjohn.switch.raw.kernel-cache",
                                 dispatch_queue_attr_make_with_qos_class(DISPATCH_QUEUE_SERIAL, QOS_CLASS_UTILITY, 0))),
@@ -91,8 +88,6 @@ Completion::~Completion()
     stopping_.store(true, std::memory_order_release);
     compiler_->drain();
     dispatch_group_wait(pending_, DISPATCH_TIME_FOREVER);
-    dispatch_sync(splitQueue_, ^{
-                  });
     dispatch_sync(persistenceQueue_, ^{
                   });
     compiler_.reset();
@@ -183,8 +178,6 @@ void Completion::place(const CacheKey &key, const RuntimeRecord *record, bool ca
             std::string why;
             return device_.addRecord(*record, caTransform, why, &retry);
         }, [&](Pipeline *made) {
-            if (made)
-                splitLater(keptKey, *record);
             pending->ready(made);
         });
         if (delay)
@@ -208,10 +201,7 @@ Pipeline *Completion::makeNow(Ask a, bool *retry)
     std::string why;
     const Compiler::State state = compiler_->makeNow(k, record, why);
     *retry = state == Compiler::State::Failed || state == Compiler::State::Pending;
-    Pipeline *made = state == Compiler::State::Ready ? device_.addRecord(record, a.caTransform, why, retry) : nullptr;
-    if (made)
-        splitLater(k, record);
-    return made;
+    return state == Compiler::State::Ready ? device_.addRecord(record, a.caTransform, why, retry) : nullptr;
 }
 
 Direct &Completion::direct()
@@ -339,56 +329,6 @@ const ComputeState *Completion::kernel(MTLComputePipelineDescriptor *descriptor,
                                         dispatch.threads[1], dispatch.threads[2], why.c_str(),
                                         descriptor.computeFunction.name.UTF8String ?: "-", constantsLast(key).c_str()]);
     return result.state;
-}
-
-// The state made again with its fragment program's split, which only the same programs take (the record's layout is the
-// whole program's). Kept on disk unless the compile could not run, so a later boot offers it at the state's creation.
-void Completion::splitLater(const CacheKey &k, const RuntimeRecord &record)
-{
-    Ask a;
-    {
-        std::lock_guard<std::mutex> l(lock_);
-        const auto it = asked_.find(k.name());
-        if (record.splitTried || it == asked_.end() || !splitAsked_.insert(k.name()).second)
-            return;
-        a = it->second;
-    }
-    auto kept = std::make_shared<RuntimeRecord>(record);
-    const CacheKey key = k;  // a block holds a reference parameter as the reference
-    dispatch_async(splitQueue_, ^{
-        RuntimeRecord made;
-        std::string why;
-        ProbeTextures textures;
-        textures.cubic = a.cubic;
-        textures.fragmentTests = a.fragmentTests;
-#if SWITCH_RAW_DIAGNOSTICS
-        const CompileCost cost;
-#endif
-        const Compiler::Outcome outcome = direct().make(a.descriptor, a.key, made, why, textures, nullptr, true);
-#if SWITCH_RAW_DIAGNOSTICS
-        os_log(rawLog(), "raw: a state's split compile %{public}s in %{public}s: %016llx",
-               outcome == Compiler::Outcome::Made ? (made.split ? "split it" : "found no split") : "failed",
-               cost.text().c_str(), (unsigned long long)key.name());
-#endif
-        if (outcome == Compiler::Outcome::Failed)
-            return;
-        const bool same = outcome == Compiler::Outcome::Made && made.programs[0].id == kept->programs[0].id &&
-                          made.programs[1].id == kept->programs[1].id;
-        if (outcome == Compiler::Outcome::Made && !same)
-            once([NSString
-                stringWithFormat:@"a state's split compile made other programs than its own: %.600s", a.key.c_str()]);
-        kept->splitTried = true;
-        if (same && made.split) {
-            kept->split = true;
-            kept->splitRecord = made.splitRecord;
-            kept->splitPrograms[0] = std::move(made.splitPrograms[0]);
-            kept->splitPrograms[1] = std::move(made.splitPrograms[1]);
-            device_.addSplit(*kept);
-        }
-        dispatch_async(persistenceQueue_, ^{
-            cache_.store(key, kept.get(), std::string());
-        });
-    });
 }
 
 Compiler::Stats Completion::stats() const
