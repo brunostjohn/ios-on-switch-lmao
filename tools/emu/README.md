@@ -9,16 +9,21 @@ device's.
 bazel run //tools/emu:boot -- --kind=ios27                   # build //:boot for iOS 27, boot it for 120 s
 bazel run //tools/emu:boot -- --kind=ios17 --sd none --seconds 60 --bootargs -v
 bazel run //tools/emu:check -- --kind=ios17 --until launchd  # a gate: 0 milestone, 1 panic, 2 timeout, 3 no kernel log
+bazel run //tools/emu:check -- --kind=ios27 --until gpu --sd none  # 4: the GPU kext or its kernel channels failed
 bazel run //tools/emu:build                                  # only the emulator: prints its path
 bazel test //tools/emu:dc_test                               # the display controller and SMMU under qtest
 ```
 
 `check` watches the live kernel log and the panic record every 3 s and stops at the first of the milestone (`cores`,
-`display`, `sd`, `root`, `launchd`, `early-boot`), a panic or `--timeout`. It prints the panic line or the last kernel
-lines, and keeps the run directory. `launchd` is reached at the first kernel line that names a process other than `init`
-(pid 1 before its exec) or `kernel_task`, such as launchd's dyld asking for the shared region (`[1(launchd)]`) or a
-mount requested by a job launchd spawned. If the kernel runs for 10 polls and no log line comes out, `check` stops with
-exit 3 and prints what the reader found: no msgbuf header, or one whose ring is still empty.
+`display`, `gpu`, `sd`, `root`, `launchd`, `early-boot`), a panic or `--timeout`. It prints the panic line or the last
+kernel lines, and keeps the run directory. `launchd` is reached at the first kernel line that names a process other than
+`init` (pid 1 before its exec) or `kernel_task`, such as launchd's dyld asking for the shared region (`[1(launchd)]`) or
+a mount requested by a job launchd spawned. `gpu` is reached when the GPU kext's M3 and M4 have passed and its boot pool
+scrub is queued, by which time the self-test's copy-engine fill and fence and the scrubber's pool fills have run on the
+model. Exit 4 means a bring-up FAIL line, a GPU error report from nvkm or the kext, a fault or stopped channel in
+`gpu-events.log`, or no GPU method executed at all. It needs no card (`--sd none`) and takes about 10 s of wall time. If
+the kernel runs for 10 polls and no log line comes out, `check` stops with exit 3 and prints what the reader found: no
+msgbuf header, or one whose ring is still empty.
 
 `--kind` builds `//:boot` with `--//ipsw:kind` in the output base `bazel run` itself uses. `--bazel-flag` passes flags
 to that build (for example `--bazel-flag=--config=agent`). `--package DIR` boots an existing `//:boot` output instead,

@@ -35,6 +35,7 @@ py_library(
     name = "emu_lib",
     srcs = [
         "cache.py",
+        "gpucheck.py",
         "gpulog.py",
         "hekate.py",
         "machine.py",
@@ -71,6 +72,12 @@ filegroup(
 )
 
 py_test(
+    name = "gpucheck_test",
+    srcs = ["gpucheck_test.py"],
+    deps = [":emu_lib"],
+)
+
+py_test(
     name = "gpulog_test",
     srcs = ["gpulog_test.py"],
     deps = [":emu_lib"],
@@ -83,7 +90,8 @@ py_binary(
     deps = [":emu_lib"],
 )
 
-# bazel run //tools/emu:check -- --kind=ios17|ios27 [--until launchd]: boot to a milestone, nonzero on a panic or timeout.
+# bazel run //tools/emu:check -- --kind=ios17|ios27 [--until launchd|gpu]: boot to a milestone, nonzero on a panic, a
+# timeout or a failed GPU check.
 py_binary(
     name = "check",
     srcs = ["check.py"],
