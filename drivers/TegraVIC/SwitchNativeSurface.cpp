@@ -9,6 +9,7 @@
 #include "SwitchVICPicturePlan.h"
 #include "SwitchVICSurfaceRange.h"
 #include "SwitchVICTurn.h"
+#include "SwitchVICEvents.h"
 #include "../TegraGM20B/TegraGM20BViews.h"
 #include "../TegraGM20B/SwitchGpuAdmission.h"
 
@@ -28,6 +29,8 @@ public:
     SwitchNativeSurfaceTurn turn = {};
     TegraVICOp turnOp = {};
     uint32_t chromaSite = 0;
+    SwitchVICEvents *events = nullptr;  // a recorded turn's request events
+    uint32_t delivered = 0;             // its signals went (a reader's VIC job, the display, or at once)
     alignas(8) volatile uint64_t generation = 1;
     bool pitchValid = false;
     bool preparing = false;
@@ -35,13 +38,40 @@ public:
 };
 OSDefineMetaClassAndStructors(SwitchNativeSurface, OSObject)
 
+static void deliverSignals(SwitchNativeSurface *native);
+
 void SwitchNativeSurface::free()
 {
+    deliverSignals(this);
+    switch_vic_events_release(&events);
     if (readLease)
         switch_gpu_backing_cpu_release_owned(&readLease, 0);
     if (native)
         switch_gpu_backing_release(native);
     OSObject::free();
+}
+
+// The record's signals, claimed once: whoever claims them binds and commits them.
+static bool claimSignals(SwitchNativeSurface *native)
+{
+    return native->events && !__atomic_exchange_n(&native->delivered, 1u, __ATOMIC_ACQ_REL);
+}
+
+// Bound to the picture's own completion and after the request's waits: they fire once both have.
+static void deliverClaimed(SwitchNativeSurface *native)
+{
+    const int error = switch_vic_events_bind(native->events, &native->producer);
+    if (error) {
+        IOLog("SwitchSurface: a recorded turn's signal events could not be bound to its picture (%d)\n", error);
+        return;
+    }
+    switch_vic_events_commit(native->events);
+}
+
+static void deliverSignals(SwitchNativeSurface *native)
+{
+    if (claimSignals(native))
+        deliverClaimed(native);
 }
 
 namespace {
@@ -181,7 +211,17 @@ int prepare(const TegraVICSurface *surface, SwitchNativeSurface *native, uint32_
                 source.native = native->native;
                 source.layout = native->layout;
                 source.crop = native->crop;
-                error = switch_vic_turn_surface(source, native->turnOp, native->chromaSite, &pitch, *owned, gpu, &why);
+                // The rows' VIC job waits for the request's waits; the first reader also takes its signals.
+                const bool signals = claimSignals(native);
+                SwitchVICEvents *staged = nullptr;
+                if (!signals && native->events)
+                    error = switch_vic_events_stage(native->events, &staged);
+                if (!error)
+                    error = switch_vic_turn_surface(source, native->turnOp, native->chromaSite, &pitch, *owned, gpu,
+                                                    &why, signals ? native->events : staged);
+                switch_vic_events_release(&staged);
+                if (error && signals)
+                    deliverClaimed(native);
             } else {
                 error = gpu ? switch_vic_present_surface_queue(&picture, &pitch, *owned, &why)
                             : switch_vic_present_surface_owned(&picture, &pitch, *owned, &why);
@@ -236,12 +276,16 @@ int switch_native_surface_acquire(const TegraVICSurface *surface, SwitchNativeSu
     }
     switch_gpu_backing_retain(native->native);
     surface->memory->retain();
+    const switch_gpu_backing_token *waits = nullptr;
+    const uint32_t waitCount = switch_vic_events_tokens(native->events, &waits);
     *view = {native, surface->memory, logical, native->native, {logical, &native->generation, 1},
              {logical, representation, __atomic_load_n(representation, __ATOMIC_ACQUIRE)},
              native->producer,
              native->layout,
              native->crop,
-             native->turn};
+             native->turn,
+             waits,
+             waitCount};
     view->layout.color_matrix = surface->desc.colorMatrix;
     view->layout.transfer = surface->desc.transfer; view->layout.primaries = surface->desc.primaries;
     view->layout.chroma_top = surface->desc.chromaTop; view->layout.chroma_bottom = surface->desc.chromaBottom;
@@ -293,8 +337,11 @@ static int install(const TegraVICSurface *surface, SwitchNativeSurface *next, co
     }
     if (error && installed && !SwitchMemoryAttachment::replace(surface->memory, next, old))
         panic("SwitchSurface: native publication rollback lost attachment");
-    if (old)
+    if (old) {
+        if (!error)
+            deliverSignals(old);  // a recorded turn replaced before it was shown or read: its frame was dropped
         old->release();
+    }
     if (!error)
         tegra_vic_surface_written(surface);
     if (owned)
@@ -375,7 +422,8 @@ int switch_native_surface_publish(const TegraVICSurface *surface, const TegraVIC
 }
 
 int switch_native_surface_publish_turned(const TegraVICSurface *destination, const SwitchNativeSurfaceView &source,
-                                         const TegraVICOp &op, uint32_t chromaSite, const char **why)
+                                         const TegraVICOp &op, uint32_t chromaSite, const char **why,
+                                         SwitchVICEvents *events)
 {
     const char *unused = nullptr;
     if (!why)
@@ -412,10 +460,19 @@ int switch_native_surface_publish_turned(const TegraVICSurface *destination, con
         *why = "turned export of a picture the decoder has replaced";
         error = SWITCH_GPU_BACKING_STALE;
     }
+    next->events = events;
     if (!error)
         error = install(destination, next, why);
+    if (error)
+        next->events = nullptr;  // the caller keeps them
     next->release();
     return error;
+}
+
+void switch_native_surface_deliver(const SwitchNativeSurfaceView &view)
+{
+    if (auto *native = OSDynamicCast(SwitchNativeSurface, view.owner))
+        deliverSignals(native);
 }
 
 static int prepareSurface(OSObject *object, uint32_t id, uint32_t options, bool gpu,

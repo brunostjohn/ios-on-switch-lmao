@@ -14,7 +14,7 @@ bool planeFenced(const PlaneSet &p) const
             continue;
         const auto *native = planeSlots[overlay.slot].native;
         if (native && native->lease) {
-            if (native->view.producer.engine && switch_gpu_backing_token_external_status(&native->view.producer) != 1)
+            if (planeOverlayWaits(*native))
                 return true;
         } else if (overlay.image.surfaceKind) {
             return true;

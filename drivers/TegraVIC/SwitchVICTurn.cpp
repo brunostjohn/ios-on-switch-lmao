@@ -60,7 +60,7 @@ const char *buildTurn(const SwitchNativeSurfaceView &source, const TegraVICOp &o
 
 int switch_vic_turn_surface(const SwitchNativeSurfaceView &source, const TegraVICOp &op, uint32_t chromaSite,
                             const TegraVICSurface *destination, switch_gpu_cpu_lease *owned, bool queue,
-                            const char **why)
+                            const char **why, SwitchVICEvents *events)
 {
     *why = "a turn without its picture, destination or write lease";
     if (!source.native || !destination || destination->baseOffset || !owned)
@@ -91,7 +91,7 @@ int switch_vic_turn_surface(const SwitchNativeSurfaceView &source, const TegraVI
     const SwitchVICOwnership ownership = {uses, 2, nullptr, 0, &owned, 1};
     uint32_t fence = 0;
     __atomic_add_fetch(&turn->refs, 1, __ATOMIC_RELAXED);
-    int error = switch_vic_submit_checked(&turn->job, 1, nullptr, ownership, turnCompleted, turn, &fence);
+    int error = switch_vic_submit_checked(&turn->job, 1, nullptr, ownership, turnCompleted, turn, &fence, events);
     if (error)
         releaseTurn(turn);
     releaseTurn(turn);
@@ -102,9 +102,9 @@ int switch_vic_turn_surface(const SwitchNativeSurfaceView &source, const TegraVI
 }
 
 int switch_vic_turn_defer(const TegraVICSurface *source, const TegraVICSurface *destination, const TegraVICPlan *plan,
-                          uint32_t chromaSite, bool events, const SwitchDisplayTraits &traits)
+                          uint32_t chromaSite, SwitchVICEvents **events, const SwitchDisplayTraits &traits)
 {
-    if (!traits.columnScanYuv || events || !source || !destination || !plan || plan->count != 1 || !plan->readsSource ||
+    if (!traits.columnScanYuv || !source || !destination || !plan || plan->count != 1 || !plan->readsSource ||
         source->memory == destination->memory)
         return 0;
     SwitchNativeSurfaceView picture = {};
@@ -118,9 +118,16 @@ int switch_vic_turn_defer(const TegraVICSurface *source, const TegraVICSurface *
     if (!why)
         why = buildTurn(picture, plan->op[0], chromaSite, destination, kTegraVICWindowBase,
                         kTegraVICWindowBase + TEGRA_VIC_WINDOW_DST * kTegraVICWindowBytes, &check);
-    const int error = why ? -95 : switch_native_surface_publish_turned(destination, picture, plan->op[0], chromaSite);
+    SwitchVICEvents *taken = events ? *events : nullptr;
+    const int error = why ? -95
+                          : switch_native_surface_publish_turned(destination, picture, plan->op[0], chromaSite, nullptr,
+                                                                 taken);
     switch_native_surface_release(&picture);
-    return error ? 0 : 1;
+    if (error)
+        return 0;
+    if (events)
+        *events = nullptr;
+    return 1;
 }
 
 #if TEGRA_VIC_STATS

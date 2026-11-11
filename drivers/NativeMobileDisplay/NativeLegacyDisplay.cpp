@@ -986,6 +986,8 @@ class NativeLegacyDisplay : public IOMobileFramebufferLegacy {
     static constexpr uint64_t kPlaneSlotSpan = 20ULL << 20,
                               kPlaneSlot0 = kProbeSlot + static_cast<uint64_t>(kSlots) * kSlotSpan;
     static constexpr unsigned kPlaneUnderflowFrames = 3;
+    // An overlay's picture producer and a recorded turn's request waits (src and dst), for each of two overlays.
+    static constexpr unsigned kPlaneOverlayDependencies = 3, kPlaneDependencies = 2 * kPlaneOverlayDependencies;
 
     using PlaneSlot = switch_display::PlaneSlot;
 
@@ -4292,7 +4294,7 @@ public:
         copy.flags = blockLog2 >= 0 ? TEGRA_SCANOUT_COPY_SOURCE_BLOCK : 0;
         copy.sourceBlockHeightLog2 = blockLog2 >= 0 ? static_cast<uint32_t>(blockLog2) : 0;
         copy.alsoWritten = planeNextAlsoWritten();
-        switch_gpu_backing_token planeTokens[2] = {};
+        switch_gpu_backing_token planeTokens[kPlaneDependencies] = {};
         planeNextDependencies(copy, planeTokens);
         memory->retain();
         const int offered = tegra_gm20b_scanout_copy(&copy);
@@ -4648,7 +4650,7 @@ public:
         copy.sourceBytes = allocation;
         copy.flags = TEGRA_SCANOUT_COPY_FENCE_ONLY;
         copy.alsoWritten = planeNextAlsoWritten();
-        switch_gpu_backing_token planeTokens[2] = {};
+        switch_gpu_backing_token planeTokens[kPlaneDependencies] = {};
         planeNextDependencies(copy, planeTokens);
         memory->retain();
         const int offered = tegra_gm20b_scanout_copy(&copy);

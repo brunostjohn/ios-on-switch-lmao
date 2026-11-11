@@ -300,6 +300,7 @@ void planeFrameEnd()
             landscapeRunLatched(true, landscapeState.switching);
             landscapeLatched();
             const PlaneSet now = planeSetOf(planeLatch.active);
+            planeDeliver(now);
             retireThrough(now.seq, __atomic_load_n(&feStamp, __ATOMIC_ACQUIRE));
             if (planeHeldSet && planeLatch.mayWrite()) {
                 planeHeldSet = false;

@@ -4,6 +4,8 @@
 #include "TegraVICSurface.h"
 #include "../TegraGM20B/SwitchGpuBacking.h"
 
+struct SwitchVICEvents;
+
 struct SwitchNativeSurfaceCrop {
     uint32_t x, y, width, height;
 };
@@ -26,6 +28,9 @@ struct SwitchNativeSurfaceView {
     switch_gpu_backing_layout layout;
     SwitchNativeSurfaceCrop crop;
     SwitchNativeSurfaceTurn turn;  // transform 0: the picture as it is
+    // A recorded turn's request waits, resolved to their producers: every reader of the picture orders after them.
+    const switch_gpu_backing_token *waits;
+    uint32_t waitCount;
 };
 
 // A view retains both backings. Every engine read submits both uses and both guards in one checked ownership transaction.
@@ -38,9 +43,15 @@ void switch_native_surface_release(SwitchNativeSurfaceView *view);
 int switch_native_surface_publish(const TegraVICSurface *surface, const TegraVICPicture *picture,
                                   const char **why = nullptr);
 // `destination` (a whole NV12 surface) is `source`'s picture turned by `op` (a quarter turn of a source rectangle onto
-// the whole destination): its rows are made by VIC only when something other than the display reads them.
+// the whole destination): its rows are made by VIC only when something other than the display reads them. `events`
+// (the request's, prepared): taken by the record when it is published, its waits ordered before every reader and its
+// signals delivered once (switch_native_surface_deliver, a reader's VIC job, or the record replaced or freed).
 int switch_native_surface_publish_turned(const TegraVICSurface *destination, const SwitchNativeSurfaceView &source,
-                                         const TegraVICOp &op, uint32_t chromaSite, const char **why = nullptr);
+                                         const TegraVICOp &op, uint32_t chromaSite, const char **why = nullptr,
+                                         SwitchVICEvents *events = nullptr);
+// The display latched (or dropped) the frame `view` shows: a recorded turn's signals go now, bound to its picture's
+// completion, unless something delivered them already.
+void switch_native_surface_deliver(const SwitchNativeSurfaceView &view);
 
 // The caller holds a descriptor CPU reservation through the ensuing IOSurface CPU lock and unlock.
 extern "C" int switch_native_surface_prepare(OSObject *surface, uint32_t id, void *task, uint32_t options,

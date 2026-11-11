@@ -121,12 +121,15 @@ namespace {
 unsigned publishedTurns = 0;
 }
 
+SwitchVICEvents *publishedEvents = nullptr;
+
 int switch_native_surface_publish_turned(const TegraVICSurface *, const SwitchNativeSurfaceView &source,
-                                         const TegraVICOp &op, uint32_t, const char **)
+                                         const TegraVICOp &op, uint32_t, const char **, SwitchVICEvents *events)
 {
     EXPECT_EQ(source.native, &inputNative);
     EXPECT_EQ(op.transform, 7u);
     ++publishedTurns;
+    publishedEvents = events;
     return 0;
 }
 
@@ -302,6 +305,7 @@ protected:
     {
         SwitchVICTransformTest::SetUp();
         publishedTurns = 0;
+        publishedEvents = nullptr;
         auto &d = destination.desc;
         d.fourcc = TEGRA_VIC_FOURCC('4', '2', '0', 'v');
         d.width = 720;
@@ -317,7 +321,7 @@ protected:
         plan.op[0].transform = 7;
     }
 
-    int defer(bool events, const SwitchDisplayTraits &traits = kProven)
+    int defer(SwitchVICEvents **events, const SwitchDisplayTraits &traits = kProven)
     {
         return switch_vic_turn_defer(&source, &destination, &plan, 0, events, traits);
     }
@@ -325,33 +329,48 @@ protected:
 
 TEST_F(TurnDefer, AProvenTurnIsRecordedAndNothingIsSubmitted)
 {
-    EXPECT_EQ(defer(false), 1);
+    EXPECT_EQ(defer(nullptr), 1);
     EXPECT_EQ(publishedTurns, 1u);
     EXPECT_EQ(pending, nullptr);
 }
 
 TEST_F(TurnDefer, BeforeV3PassesEveryTurnIsCopied)
 {
-    EXPECT_EQ(defer(false, kSwitchDisplayTraits), 0);
+    EXPECT_EQ(defer(nullptr, kSwitchDisplayTraits), 0);
     EXPECT_EQ(publishedTurns, 0u);
 }
 
-TEST_F(TurnDefer, ARequestWithEventsIsCopied)
+// The record takes the request's events (its waits order every reader, its signals go once): the job keeps none.
+TEST_F(TurnDefer, ARequestWithEventsIsRecordedWithThem)
 {
-    EXPECT_EQ(defer(true), 0);
-    EXPECT_EQ(publishedTurns, 0u);
+    auto *requested = reinterpret_cast<SwitchVICEvents *>(0x5e7);
+    SwitchVICEvents *events = requested;
+    EXPECT_EQ(defer(&events), 1);
+    EXPECT_EQ(publishedTurns, 1u);
+    EXPECT_EQ(publishedEvents, requested);
+    EXPECT_EQ(events, nullptr);
+    EXPECT_EQ(pending, nullptr);
+}
+
+TEST_F(TurnDefer, ARequestCopiedKeepsItsEvents)
+{
+    auto *requested = reinterpret_cast<SwitchVICEvents *>(0x5e7);
+    SwitchVICEvents *events = requested;
+    plan.op[0].transform = 0;
+    EXPECT_EQ(defer(&events), 0);
+    EXPECT_EQ(events, requested);
 }
 
 TEST_F(TurnDefer, APitchSourcePartOfTheDestinationOrNoTurnIsCopied)
 {
     nativeInput = false;
-    EXPECT_EQ(defer(false), 0);
+    EXPECT_EQ(defer(nullptr), 0);
     nativeInput = true;
     plan.op[0].dstH = 1000;
-    EXPECT_EQ(defer(false), 0);
+    EXPECT_EQ(defer(nullptr), 0);
     plan.op[0].dstH = 1280;
     plan.op[0].transform = 0;
-    EXPECT_EQ(defer(false), 0);
+    EXPECT_EQ(defer(nullptr), 0);
     EXPECT_EQ(publishedTurns, 0u);
 }
 }  // namespace

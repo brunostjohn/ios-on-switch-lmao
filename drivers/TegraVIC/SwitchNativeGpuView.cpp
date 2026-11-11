@@ -92,7 +92,9 @@ extern "C" void switch_native_surface_gpu_release(switch_gpu_native_surface_view
                                     view->producer,
                                     view->layout,
                                     {view->crop_x, view->crop_y, view->crop_width, view->crop_height},
-                                    {}};
+                                    {},
+                                    nullptr,
+                                    0};
     *view = {};
     switch_native_surface_release(&held);
 }

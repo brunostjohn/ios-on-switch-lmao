@@ -284,7 +284,8 @@ TEST(DisplayPlanesSource, WindowBWaitsForTheGpuOnSurfacesItRenders)
     const std::string worker = SourceText("../SwitchPlaneFenceAdmission.h");
     EXPECT_THAT(worker, HasSubstr("switch_gpu_bridge_fence(producers, count"));
     EXPECT_THAT(worker, HasSubstr("switch_gpu_bridge_wait_room()"));
-    EXPECT_THAT(Function(fence, "bool planeFenced(const PlaneSet &p) const"),
+    EXPECT_THAT(Function(fence, "bool planeFenced(const PlaneSet &p) const"), HasSubstr("planeOverlayWaits(*native)"));
+    EXPECT_THAT(Function(SourceText("../SwitchNativePlaneDisplay.h"), "static bool planeOverlayWaits("),
                 HasSubstr("switch_gpu_backing_token_external_status"));
     const std::string done = Function(fence, "void finishPlaneFence(int status)");
     ExpectBefore(done, "if (status || !planesOn) {", "planeOut(planeFencing);");

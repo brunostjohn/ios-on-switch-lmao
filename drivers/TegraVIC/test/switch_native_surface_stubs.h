@@ -22,6 +22,7 @@ inline void panic(const char *) { std::abort(); }
 #define OSDynamicCast(type, object) dynamic_cast<type *>(object)
 #define IOMallocType(type) new (std::nothrow) type()
 #define IOFreeType(object, type) delete object
+inline void IOLog(const char *, ...) {}
 
 class OSObject {
 public:

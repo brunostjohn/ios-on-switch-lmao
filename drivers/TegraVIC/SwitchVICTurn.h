@@ -36,9 +36,10 @@ static inline const char *switch_vic_turn_of(const TegraVICOp &op, const TegraVI
 
 // VIC's turn of `source` (a decoder's picture) into `destination`'s rows under the caller's write lease `owned`: queued
 // (the destination's producer published before returning, for a GPU reader) or completed before returning (a CPU one).
+// `events`: the recorded request's, its waits before the job and any signals still with them after it.
 int switch_vic_turn_surface(const SwitchNativeSurfaceView &source, const TegraVICOp &op, uint32_t chromaSite,
                             const TegraVICSurface *destination, switch_gpu_cpu_lease *owned, bool queue,
-                            const char **why);
+                            const char **why, SwitchVICEvents *events = nullptr);
 
 #if (defined(DEVELOPMENT) && DEVELOPMENT) || (defined(DEBUG) && DEBUG)
 // A HW Test run's own traits (SwitchLandscapeRunABI.h's SWITCH_DISPLAY_TRAIT_*), held for its TegraVIC connection
@@ -51,6 +52,8 @@ void switch_display_traits_release(const void *client);
 extern "C" bool switch_display_landscape_ready(void);
 
 // TegraVIC's transform worker, before it copies: 1 when the job is recorded on its destination instead (nothing to
-// submit, the caller completes it), 0 to copy as before. A job with events copies: the events wait for VIC's work.
+// submit, the caller completes it), 0 to copy as before. `events` (the job's, prepared, or null): a recorded job's go
+// with the record (*events nulled), which orders every reader after their waits and delivers their signals once.
 int switch_vic_turn_defer(const TegraVICSurface *source, const TegraVICSurface *destination, const TegraVICPlan *plan,
-                          uint32_t chromaSite, bool events, const SwitchDisplayTraits &traits = kSwitchDisplayTraits);
+                          uint32_t chromaSite, SwitchVICEvents **events,
+                          const SwitchDisplayTraits &traits = kSwitchDisplayTraits);

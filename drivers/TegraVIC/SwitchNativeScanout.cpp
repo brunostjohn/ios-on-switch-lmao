@@ -12,6 +12,12 @@ void switch_native_scanout_release(SwitchNativeScanout *scanout)
     *scanout = {};
 }
 
+void switch_native_scanout_deliver(SwitchNativeScanout *scanout)
+{
+    if (scanout && scanout->view.owner)
+        switch_native_surface_deliver(scanout->view);
+}
+
 int switch_native_scanout_acquire(OSObject *object, SwitchNativeScanout *scanout, bool turns)
 {
     if (!scanout)

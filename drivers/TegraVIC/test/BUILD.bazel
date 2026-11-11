@@ -295,6 +295,8 @@ host_test(
         "switch_native_picture_test.cpp",
         "//drivers/NativeMobileDisplay:SwitchDisplayTraits.h",
         "//drivers/TegraVIC:SwitchNativeSurface.h",
+        "//drivers/TegraVIC:SwitchVICEvents.h",
+        "//drivers/TegraGM20B:SwitchGpuSharedEvent.h",
         "//drivers/TegraVIC:SwitchVICTurn.h",
         "//drivers/TegraVIC:SwitchNativeScanout.h",
         "//drivers/TegraVIC:SwitchVICSurfaceAccess.h",
