@@ -18,6 +18,7 @@ private:
     inline static IOLock *lock = nullptr;
     inline static Node nodes[Slots] = {};
     inline static uint32_t syncpoint = 0, pending = 0;
+    inline static void (*retired)(switch_gpu_event_waits *batch) = nullptr;
 
     static int snapshot(const switch_gpu_backing_token *token, switch_gpu_event_waits **out)
     {
@@ -59,11 +60,15 @@ private:
         IOLockWakeup(lock, &pending, false);
         IOLockUnlock(lock);
         switch_gpu_events_completed();
+        if (retired)
+            retired(batch);
         switch_gpu_event_waits_release(&batch);
     }
 
 public:
-    static bool start(uint32_t id)
+    // onRetired: the engine's step for a job whose batch's semantic outcome is known and whose node is free again; it
+    // runs in the events' retirement and must not sleep.
+    static bool start(uint32_t id, void (*onRetired)(switch_gpu_event_waits *batch))
     {
         if (lock)
             return syncpoint == id;
@@ -73,6 +78,7 @@ public:
         if (!lock)
             return false;
         syncpoint = id;
+        retired = onRetired;
         const switch_gpu_backing_semantics adapter = {snapshot, physicalStatus, hasPending};
         if (!switch_gpu_backing_register_semantics(Engine, &adapter))
             return true;

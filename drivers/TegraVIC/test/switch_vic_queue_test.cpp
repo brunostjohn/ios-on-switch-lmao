@@ -9,7 +9,7 @@ TEST(SwitchVICQueue, ConfigurationsAreNotReusedUntilTheirFenceRetires)
     ASSERT_TRUE(queue.reset(40));
     for (uint32_t i = 0; i < queue.kSlots; ++i) {
         EXPECT_EQ(queue.tail(), i);
-        ASSERT_TRUE(queue.publish({0, 2000000, i, nullptr, nullptr}));
+        ASSERT_TRUE(queue.publish({0, i, nullptr, nullptr}));
     }
     EXPECT_FALSE(queue.publish({}));
     EXPECT_FALSE(queue.retire(40));
@@ -51,8 +51,8 @@ TEST(SwitchVICQueue, PublishedCallbacksStayWithTheirOwnFence)
     SwitchVICQueue queue;
     int first = 0, second = 0;
     auto completion = [](void *p, int value) { *static_cast<int *>(p) = value; };
-    ASSERT_TRUE(queue.publish({0, 20, 10, completion, &first}));
-    ASSERT_TRUE(queue.publish({0, 40, 30, completion, &second}));
+    ASSERT_TRUE(queue.publish({0, 10, completion, &first}));
+    ASSERT_TRUE(queue.publish({0, 30, completion, &second}));
     const auto job = queue.jobs[queue.head];
     ASSERT_TRUE(queue.retire(1));
     job.completion(job.context, 7);
@@ -96,7 +96,7 @@ TEST(SwitchVICQueue, MixedBatchAdmissionAndRetirementPreserveEveryLiveConfigurat
                 slots[i] = queue.configurationSlot(i);
             for (uint32_t i = 0; i < batch; ++i) {
                 ASSERT_EQ(queue.tail(), slots[i]);
-                ASSERT_TRUE(queue.publish({0, 1, ++sequence, nullptr, nullptr}));
+                ASSERT_TRUE(queue.publish({0, ++sequence, nullptr, nullptr}));
                 expected.push_back(sequence);
             }
         } else if (queue.count) {
@@ -163,11 +163,12 @@ TEST(SwitchVICQueue, EveryJobOfABatchFindsTheBridgeItsStreamWaitsOn)
     ASSERT_TRUE(queue.publish({}));
     auto *bridge = reinterpret_cast<switch_gpu_bridge *>(uintptr_t(0x40));
     for (uint32_t j = 0; j < 3; ++j)
-        ASSERT_TRUE(queue.publish({0, 1, 1, nullptr, nullptr, j == 2 ? bridge : nullptr, nullptr, nullptr, 2 - j}));
-    EXPECT_EQ(queue.batchEnd().bridge, nullptr);
+        ASSERT_TRUE(queue.publish({0, 1, nullptr, nullptr, j == 2 ? bridge : nullptr, nullptr, nullptr, 2 - j}));
+    EXPECT_EQ(queue.jobs[queue.batchEnd()].bridge, nullptr);
+    EXPECT_EQ(queue.jobs[queue.last()].bridge, bridge);
     ASSERT_TRUE(queue.retire(31));
     for (uint32_t fence = 32; fence <= 34; ++fence) {
-        EXPECT_EQ(queue.batchEnd().bridge, bridge);
+        EXPECT_EQ(queue.jobs[queue.batchEnd()].bridge, bridge);
         ASSERT_TRUE(queue.retire(fence));
     }
 }
