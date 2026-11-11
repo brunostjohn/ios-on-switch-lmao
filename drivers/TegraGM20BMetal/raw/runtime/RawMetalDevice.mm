@@ -107,7 +107,8 @@ static const char *zetaMemoryRefusal(int asked)
 
 // hw_test_app's gpu.compression_churn and gpu.raw.compressed_targets: the raw device's compressed memory (raw_comp.h).
 // held, held_bytes and views are now; made and refused count since the device opened, and so do the clears of compressed
-// targets the ZBC table held or not and the entries this process added (raw_zbc.h).
+// targets the ZBC table held or not and the entries this process added (raw_zbc.h); ce_copies: a shadow's fills and stores
+// through compressed memory; storage_fallback_compressed: draws whose storage form a compressed attachment turned away.
 - (NSDictionary<NSString *, NSNumber *> *)switchRawCompression
 {
     const auto &s = gRM->raw->stats;
@@ -121,7 +122,9 @@ static const char *zetaMemoryRefusal(int asked)
         @"zbc_misses" : @(s.zbcMisses.load()),
         @"zbc_added" : @(s.zbcAdded.load()),
         @"zbc_full" : @(s.zbcFull.load()),
-        @"zbc_inexact" : @(s.zbcInexact.load())
+        @"zbc_inexact" : @(s.zbcInexact.load()),
+        @"ce_copies" : @(s.compCopies.load()),
+        @"storage_fallback_compressed" : @(s.fetch.storageFallback[size_t(raw::StorageFallback::Compressed)].load())
     };
 }
 

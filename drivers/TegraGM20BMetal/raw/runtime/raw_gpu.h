@@ -1473,6 +1473,8 @@ public:
         // ZBC entries this process added, those a full table refused, and full clears of compressed targets to a value no
         // entry can hold (raw_zbc.h)
         std::atomic<uint64_t> zbcAdded{0}, zbcFull{0}, zbcInexact{0};
+        // a shadow's fills and stores whose image was compressed memory (the copy engine through a compressible kind)
+        std::atomic<uint64_t> compCopies{0};
         // compute launches encoded (raw_compute.h)
         std::atomic<uint64_t> dispatches{0};
         // states made with the zero-source pixel kill on (raw_blend_kill.h), and their binds encoded
@@ -1897,7 +1899,9 @@ private:
 
     // Scratch colors occupy distinct tags within a pass and reuse them after its GPU boundary. Depth and shader-test
     // scratch remain separate. Plain and compressed views keep their own backing and retire after their final fence.
-    Texture *backing(const Texture &memoryless, uint32_t tag = 0, bool blockLinear = false, bool compression = true);
+    // `copied`: the copy engine fills or drains it (a shadow), so it compresses only where raw_comp.h proves that safe.
+    Texture *backing(const Texture &memoryless, uint32_t tag = 0, bool blockLinear = false, bool compression = true,
+                     bool copied = false);
     void trimBackings();
 
     // Compressed backings (raw_comp.cpp), lock_ held: the compressible kind a backing of this shape takes (0: none or
@@ -1908,7 +1912,7 @@ private:
     // pool's grower included, which a render thread may wait for) waits behind it
     std::thread compThread_;
     std::condition_variable compWake_;
-    uint32_t compKind(const Texture &m, uint32_t tag, bool blockLinear) const;
+    uint32_t compKind(const Texture &m, bool blockLinear, bool copied) const;
     Backing *compBacking(const Texture &m, uint32_t tag, uint32_t kind);
     // What was asked for, made, `l` dropped around each kernel allocation
     void compMake(std::unique_lock<std::mutex> &l);

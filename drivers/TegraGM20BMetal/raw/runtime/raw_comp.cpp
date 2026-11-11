@@ -82,10 +82,10 @@ int Kernel::bindCompressed(Bo &bo, uint32_t kind)
     return KERN_SUCCESS;
 }
 
-uint32_t Device::compKind(const Texture &m, uint32_t tag, bool blockLinear) const
+uint32_t Device::compKind(const Texture &m, bool blockLinear, bool copied) const
 {
     return backingKind((k_.info().flags & TegraGM20BInfoCompression) != 0, blockLinear, m.zeta ? m.format : 0, m.bpp,
-                       std::max<uint32_t>(m.samples, 1), tag, kMemorylessTag);
+                       std::max<uint32_t>(m.samples, 1), copied);
 }
 
 void Device::compAsk(const CompWant &w)

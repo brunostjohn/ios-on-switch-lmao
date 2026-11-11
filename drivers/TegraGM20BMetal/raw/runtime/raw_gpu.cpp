@@ -2795,10 +2795,10 @@ void Device::plainFree(Backing &b)
         dropPlain(mem);
 }
 
-Texture *Device::backing(const Texture &m, uint32_t tag, bool blockLinear, bool compression)
+Texture *Device::backing(const Texture &m, uint32_t tag, bool blockLinear, bool compression, bool copied)
 {
     blockLinear |= m.zeta;
-    const uint32_t kind = compression ? compKind(m, tag, blockLinear) : 0;
+    const uint32_t kind = compression ? compKind(m, blockLinear, copied) : 0;
     const CompMem *mem = kind ? comp_.largest(tag, kind) : nullptr;
     Backing *plain = nullptr;
     blockLinear |= m.samples > 1;
@@ -3310,7 +3310,7 @@ RenderEncoder *CommandBuffer::render(const PassDesc &pass)
                 RAW_DIAGNOSTIC(dev_->stats.rtUnalignedVa = uint32_t(t->va & 255));
             }
             std::lock_guard<std::mutex> l(dev_->lock_);
-            Texture *b = dev_->backing(*t, scratchTags[j], blockLinear, kCopyEngineReadsCompressed);
+            Texture *b = dev_->backing(*t, scratchTags[j], blockLinear, !(pass.storageMask >> j & 1), true);
             if (!b || !b->renderable)
                 return nullptr;
             e.pass_.color[j].texture = b;
@@ -5688,6 +5688,7 @@ void RenderEncoder::end()
             const Rect a = planeArea();
             copySides(p, sideOf(*o, a.x0, a.y0, 0), sideOf(*pass_.color[j].texture, a.x0, a.y0, 0), a.x1 - a.x0,
                       a.y1 - a.y0, o->bpp, d.stats);
+            RAW_DIAGNOSTIC(d.stats.compCopies += pass_.color[j].texture->comptags);
             copied = true;
         }
     if (copied) {
@@ -5808,6 +5809,7 @@ void RenderEncoder::end()
             const Rect r = planeRect(0, 0, w, h);
             copySides(q, sideOf(*pass_.color[j].texture, r.x0, r.y0, 0), sideOf(*o, r.x0, r.y0, 0), r.x1 - r.x0,
                       r.y1 - r.y0, o->bpp, d.stats);
+            RAW_DIAGNOSTIC(d.stats.compCopies += pass_.color[j].texture->comptags);
         }
         checkRoom(q, "a pass's shadow stores");
         cb_->segment(at, q.at);
