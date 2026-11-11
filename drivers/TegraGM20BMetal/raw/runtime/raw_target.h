@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 // MAXWELL_B SET_COLOR_TARGET_A .. SET_COLOR_TARGET_LAYER for one target, the nine words NVK's nvk_CmdBeginRendering writes
-// (nvk_cmd_draw.c), in the two layouts the raw path renders:
+// (nvk_cmd_draw.c; kits/SwitchGM20BEmit's switch_gm20b_color_target), in the two layouts the raw path renders:
 //  - pitch (pool and surface textures): WIDTH the row's bytes, MEMORY LAYOUT_PITCH, one layer;
 //  - block-linear (a later level of a mipmapped texture's chain, raw/fx): the level where NIL puts it (fx::mipChainLayout: its
 //    offset, its block height clamped to the level as the hardware does, its rows aligned to one GOB's 64 bytes). WIDTH is
@@ -10,6 +10,7 @@
 //    emitGenerate) address the same level by the same base and block height.
 #pragma once
 #include <cstdint>
+#include "../../../../kits/SwitchGM20BEmit/SwitchGM20BEmit3D.h"
 #include "../fx/fx_mip.h"
 
 namespace raw {
@@ -23,36 +24,18 @@ struct ColorTargetDesc {
     uint64_t layerBytes = 0;  // the image's layer size (block-linear: ARRAY_PITCH)
 };
 
-constexpr uint32_t kColorTargetWords = 9;
-constexpr uint32_t kTargetLayoutPitch = 0x1000;  // SET_COLOR_TARGET_MEMORY LAYOUT_PITCH (bit 12); 0 is BLOCKLINEAR
-
-inline void colorTargetWords(const ColorTargetDesc &d, uint32_t w[kColorTargetWords])
+inline switch_gm20b_target kitTarget(const ColorTargetDesc &d)
 {
-    w[0] = uint32_t(d.va >> 32);
-    w[1] = uint32_t(d.va);
-    w[3] = d.height;
-    w[4] = d.rtFormat;
-    w[6] = 1;  // THIRD_DIMENSION: one layer
-    w[8] = 0;  // LAYER
-    if (!d.blockLinear) {
-        w[2] = d.pitch;
-        w[5] = kTargetLayoutPitch;
-        w[7] = 0;
-        return;
-    }
-    w[2] = d.bpp ? d.pitch / d.bpp : 0;
-    w[5] = uint32_t(d.blockHeight & 0xf) << 4;  // BLOCK_WIDTH ONE_GOB, BLOCK_DEPTH ONE_GOB, BLOCKLINEAR, ARRAY_SIZE
-    w[7] = uint32_t(d.layerBytes >> 2);
-}
-
-// A slot with no target below the pass's last one, as NVK writes it (nvk_CmdBeginRendering): FORMAT DISABLED, VA 0. Left as it
-// was, the slot would still name the target of an earlier pass, which CT_SELECT's count makes the hardware render to.
-inline void disabledTargetWords(uint32_t w[kColorTargetWords])
-{
-    for (uint32_t i = 0; i < kColorTargetWords; i++)
-        w[i] = 0;
-    w[2] = 64;  // WIDTH
-    w[6] = 1;   // THIRD_DIMENSION
+    switch_gm20b_target k = {};
+    k.address = d.va;
+    k.width = d.blockLinear ? (d.bpp ? d.pitch / d.bpp : 0) : d.pitch;
+    k.height = d.height;
+    k.format = uint8_t(d.rtFormat);
+    k.pitch = !d.blockLinear;
+    k.block_height_log2 = uint8_t(d.blockHeight & 0xf);
+    k.layers = 1;
+    k.array_pitch = d.blockLinear ? uint32_t(d.layerBytes >> 2) : 0;
+    return k;
 }
 
 // Level `level` (1 .. levels - 1) of the chain at `chainVa` as a block-linear target; false: not a level of it

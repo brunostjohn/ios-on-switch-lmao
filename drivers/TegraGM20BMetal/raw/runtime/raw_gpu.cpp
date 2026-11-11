@@ -5011,7 +5011,7 @@ void RenderEncoder::endShaderTests()
     dsDirty_ = true;
 }
 
-static void targetWords(Push &p, uint32_t m, const Texture &t)
+static void colorTarget(Push &p, uint32_t index, const Texture &t)
 {
     ColorTargetDesc d;
     d.va = t.va;
@@ -5022,9 +5022,18 @@ static void targetWords(Push &p, uint32_t m, const Texture &t)
     d.blockLinear = t.blockLinear;
     d.blockHeight = t.blockHeight;
     d.layerBytes = t.layerBytes;
-    uint32_t w[kColorTargetWords];
-    colorTargetWords(d, w);
-    p.incArray(m, w, kColorTargetWords);
+    const switch_gm20b_target k = kitTarget(d);
+    kitEmit(p, [&](nv_push *n) { switch_gm20b_color_target(n, index, &k, t.comptags); });
+}
+
+// A slot with no target below the pass's last one, as NVK writes it: FORMAT DISABLED, VA 0, compressed. Left as it was,
+// the slot would still name the target of an earlier pass, which CT_SELECT's count makes the hardware render to.
+static void disabledTarget(Push &p, uint32_t index)
+{
+    switch_gm20b_target k = {};
+    k.width = 64;
+    k.layers = 1;
+    kitEmit(p, [&](nv_push *n) { switch_gm20b_color_target(n, index, &k, true); });
 }
 
 uint32_t Device::levelTic(Texture &t, uint32_t level)
@@ -5306,13 +5315,8 @@ void RenderEncoder::end()
         if (!c.own)
             continue;
         const Texture *t = pass_.color[c.target].texture;
-        targetWords(p, COLOR_TARGET, *t);
-        p.m(COLOR_COMPRESSION, t->comptags);
-        uint32_t map = 0;
-        for (uint32_t k = 0; k < 8; k++)
-            map |= k << (4 + 3 * k);
-        p.m(CT_SELECT, map | 1);
-        p.inc(SURFACE_CLIP_H, {c.x1 << 16, c.y1 << 16});
+        colorTarget(p, 0, *t);
+        kitEmit(p, [&](nv_push *n) { switch_gm20b_render_area(n, 1, c.x1, c.y1); });
         p.m(ZT_SELECT, 0);
         uint32_t v[4] = {};
         clearWords(pass_.color[c.target].texture->format, c.value, v,
@@ -5332,26 +5336,19 @@ void RenderEncoder::end()
         p.m(INVALIDATE_SHADER_CACHES, kBetweenPasses);
         p.m(INVALIDATE_TEXTURE_DATA_CACHE_NO_WFI, 0);
     }
-    uint32_t ct = 0, count = 0;
+    uint32_t count = 0;
     for (uint32_t j = 0; j < pass_.count && j < 8; j++)
         if (pass_.color[j].texture)
             count = j + 1;
     for (uint32_t j = 0; j < count; j++) {
-        if (const Texture *t = pass_.color[j].texture) {
-            targetWords(p, COLOR_TARGET + 0x40 * j, *t);
-            p.m(COLOR_COMPRESSION + 4 * j, t->comptags);
-        } else {
-            uint32_t w[kColorTargetWords];
-            disabledTargetWords(w);
-            p.incArray(COLOR_TARGET + 0x40 * j, w, kColorTargetWords);
-            p.m(COLOR_COMPRESSION + 4 * j, 1);
-        }
+        if (const Texture *t = pass_.color[j].texture)
+            colorTarget(p, j, *t);
+        else
+            disabledTarget(p, j);
     }
-    // targets map to themselves (NVK writes all eight slots of the map; the hardware reads the first `count`)
-    for (uint32_t k = 0; k < 8; k++)
-        ct |= k << (4 + 3 * k);
-    p.m(CT_SELECT, ct | count);
-    p.inc(SURFACE_CLIP_H, {areaW_ << 16, areaH_ << 16});  // the render area (nvk_CmdBeginRendering)
+    // targets map to themselves (NVK writes all eight slots of the map; the hardware reads the first `count`), drawn from
+    // (0, 0) over the render area
+    kitEmit(p, [&](nv_push *n) { switch_gm20b_render_area(n, count, areaW_, areaH_); });
     const DepthStencilAttachment &zs = pass_.depthStencil;
     zetaTargetWords(p, zs.texture);
     // NVK clears depth and stencil with the first color the pass clears over its render area, else on their own

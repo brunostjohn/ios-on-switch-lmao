@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: MIT
-// The kit's 3D state sequences and barriers against the raw path's, for the same inputs. Pure raw code is driven
-// directly (raw_target.h's target words, raw_emit.cpp's blend registers). The sequences raw_gpu.cpp writes inline are
-// replayed through raw::Push with raw_gpu.cpp's own constants (driver_constants.h reads them from its text), and the
-// replayed lines are checked to still be raw_gpu.cpp's: a change there fails here until the replay follows it.
+// The kit's 3D state sequences and barriers against the raw path's, for the same inputs. raw_emit.cpp's blend
+// registers are driven directly. The sequences raw_gpu.cpp wrote inline before it moved onto the kit (and raw_target.h's
+// target words) are kept here as replays through raw::Push with raw_gpu.cpp's constants (driver_constants.h reads
+// them from its text); raw_gpu.cpp is checked to call the kit where it wrote them.
 #include <array>
 #include <cstdint>
 #include <cstring>
@@ -125,13 +125,42 @@ TEST(Emit3D, ClearAsRawWritesIt)
     }
 }
 
+// raw_target.h's colorTargetWords and disabledTargetWords, the raw path's target words before the kit's
+constexpr uint32_t kColorTargetWords = 9;
+
+void handTargetWords(const raw::ColorTargetDesc &d, uint32_t w[kColorTargetWords])
+{
+    w[0] = uint32_t(d.va >> 32);
+    w[1] = uint32_t(d.va);
+    w[3] = d.height;
+    w[4] = d.rtFormat;
+    w[6] = 1;
+    w[8] = 0;
+    if (!d.blockLinear) {
+        w[2] = d.pitch;
+        w[5] = 0x1000;
+        w[7] = 0;
+        return;
+    }
+    w[2] = d.bpp ? d.pitch / d.bpp : 0;
+    w[5] = uint32_t(d.blockHeight & 0xf) << 4;
+    w[7] = uint32_t(d.layerBytes >> 2);
+}
+
+void handDisabledTargetWords(uint32_t w[kColorTargetWords])
+{
+    for (uint32_t i = 0; i < kColorTargetWords; i++)
+        w[i] = 0;
+    w[2] = 64;
+    w[6] = 1;
+}
+
 TEST(Emit3D, RenderTargetsAsRawWritesThem)
 {
-    expectRawSays(
-        "targetWords(p, COLOR_TARGET + 0x40 * j, *t);\n            p.m(COLOR_COMPRESSION + 4 * j, t->comptags);");
-    expectRawSays("disabledTargetWords(w);\n            p.incArray(COLOR_TARGET + 0x40 * j, w, kColorTargetWords);\n"
-                  "            p.m(COLOR_COMPRESSION + 4 * j, 1);");
-    expectRawSays("p.m(CT_SELECT, ct | count);\n    p.inc(SURFACE_CLIP_H, {areaW_ << 16, areaH_ << 16});");
+    expectRawSays("const switch_gm20b_target k = kitTarget(d);\n    kitEmit(p, [&](nv_push *n) { "
+                  "switch_gm20b_color_target(n, index, &k, t.comptags); });");
+    expectRawSays("kitEmit(p, [&](nv_push *n) { switch_gm20b_color_target(n, index, &k, true); });");
+    expectRawSays("kitEmit(p, [&](nv_push *n) { switch_gm20b_render_area(n, count, areaW_, areaH_); });");
     raw::ColorTargetDesc pitch;
     pitch.va = 0x1234560000;
     pitch.pitch = 5120;
@@ -146,35 +175,27 @@ TEST(Emit3D, RenderTargetsAsRawWritesThem)
     level.layerBytes = 0x500000;
     for (uint32_t j : {0u, 3u}) {
         for (const raw::ColorTargetDesc &d : {pitch, level}) {
-            switch_gm20b_target t = {};
-            t.address = d.va;
-            t.width = d.blockLinear ? d.pitch / d.bpp : d.pitch;
-            t.height = d.height;
-            t.format = uint8_t(d.rtFormat);
-            t.pitch = !d.blockLinear;
-            t.block_height_log2 = d.blockHeight;
-            t.layers = 1;
-            t.array_pitch = d.blockLinear ? uint32_t(d.layerBytes >> 2) : 0;
-            uint32_t w[raw::kColorTargetWords];
-            raw::colorTargetWords(d, w);
+            const switch_gm20b_target t = raw::kitTarget(d);
+            uint32_t w[kColorTargetWords];
+            handTargetWords(d, w);
             EXPECT_EQ(Words(ours([&](nv_push *p) {
                           switch_gm20b_color_target(p, j, &t, false);
                       })),
                       Words(theirs([&](raw::Push &p) {
-                          p.incArray(uint32_t(g::c_COLOR_TARGET) + 0x40 * j, w, raw::kColorTargetWords);
+                          p.incArray(uint32_t(g::c_COLOR_TARGET) + 0x40 * j, w, kColorTargetWords);
                           p.m(uint32_t(g::c_COLOR_COMPRESSION) + 4 * j, 0);
                       })));
         }
         switch_gm20b_target off = {};
         off.width = 64;
         off.layers = 1;
-        uint32_t w[raw::kColorTargetWords];
-        raw::disabledTargetWords(w);
+        uint32_t w[kColorTargetWords];
+        handDisabledTargetWords(w);
         EXPECT_EQ(Words(ours([&](nv_push *p) {
                       switch_gm20b_color_target(p, j, &off, true);
                   })),
                   Words(theirs([&](raw::Push &p) {
-                      p.incArray(uint32_t(g::c_COLOR_TARGET) + 0x40 * j, w, raw::kColorTargetWords);
+                      p.incArray(uint32_t(g::c_COLOR_TARGET) + 0x40 * j, w, kColorTargetWords);
                       p.m(uint32_t(g::c_COLOR_COMPRESSION) + 4 * j, 1);
                   })));
     }
