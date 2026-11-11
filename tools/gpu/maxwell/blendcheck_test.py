@@ -13,10 +13,18 @@ class BlendCheckTest(unittest.TestCase):
         states = blendcheck.records(STATES)
         self.assertEqual(len(states), len(blendcheck.corpus()))
         for r in states:
+            if 'rop_frag_unread' in r['key']:
+                continue
             words = blendcheck.blend_color_words(r)
             with self.subTest(key=r['key'].split(' | ')[0]):
                 verdict = blendcheck.check(bytes.fromhex(r['fs']), r['key'], words, 60, 7, blendcheck.bound_cbuf(r))
                 self.assertEqual(verdict, 'identical')
+
+    def test_a_color_written_but_never_read_keeps_the_device_blend(self):
+        unread = [r for r in blendcheck.records(STATES) if 'rop_frag_unread' in r['key']]
+        self.assertEqual(len(unread), len(blendcheck.UNREAD))
+        for r in unread:
+            self.assertEqual((r['storage_mask'], r['storage_blend_mask']), (0, 0), r['key'])
 
     def test_another_blend_is_seen(self):
         r = next(r for r in blendcheck.records(STATES) if 'c0=80:15:1:1:5:0:1:5:0 ' in r['key'])

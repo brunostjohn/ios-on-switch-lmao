@@ -968,7 +968,8 @@ pub(super) fn plan(cx: &mut SelectCx<'_>) -> Result<(), Error> {
         let refused = Unsupported::not_implemented(Feature::Format);
         return Err(refused.at_attachment(Attachment::Color(color)).into());
     }
-    let mut read = colors_read(cx, &body.used)?;
+    let fetched = colors_read(cx, &body.used)?;
+    let mut read = fetched.clone();
     read.extend(blended.iter().map(|&(color, _)| color));
     let blends: BTreeSet<u32> = blended.iter().map(|&(color, _)| color).collect();
     // Every other attachment the pipeline's state names that the function writes through its
@@ -1088,6 +1089,12 @@ pub(super) fn plan(cx: &mut SelectCx<'_>) -> Result<(), Error> {
         let tied = |e: Error| e.at_attachment(Attachment::Color(color));
         let form =
             storage_form(color, &inputs, cx.inputs.multisampled, use_, cx.profile).map_err(tied)?;
+        // The device blends a color the function writes but never reads: its blend stays the
+        // device's, outside the interlock.
+        let form = match form {
+            Ok(view) if view.rop && !fetched.contains(&color) => Err(not_implemented()),
+            form => form,
+        };
         let form = match form {
             // Metal's 16-bit float blend, modelled for a `half4` output alone.
             Ok(view) if view.rop => match rop_of(&view).is_some_and(|b| b.reads_second()) {

@@ -35,3 +35,8 @@ fragment Dual rop_frag_dual(float4 d [[color(0)]], texture2d<float> t [[texture(
     const float4 source = t.sample(s, float2(0.25f, 0.5f));
     return {d.x == 12345.0f ? d : source, t.sample(s, float2(0.75f, 0.5f))};
 }
+
+fragment float4 rop_frag_unread(float4 d [[color(0)]], texture2d<float> t [[texture(0)]], sampler s [[sampler(0)]])
+{
+    return t.sample(s, float2(0.25f, 0.5f));
+}

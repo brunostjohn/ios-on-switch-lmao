@@ -114,6 +114,8 @@ STATES = (
     + [(65, 'sov', 4)]
     + [(55, b, 15) for b in ('sov', 'sub', 'max', 'mul')]
 )
+# Functions that declare the color they write but never read it: the device keeps their blend, no storage form.
+UNREAD = [(80, 'sov', 15), (115, 'mul', 15)]
 
 
 def corpus() -> list[str]:
@@ -121,12 +123,16 @@ def corpus() -> list[str]:
     for fmt, name, mask in STATES:
         f = [FACTOR[x] if x in FACTOR else OP[x] for x in {**BLENDS, **DUAL}[name]]
         fragment = 'rop_frag_dual' if name == 'dual' else 'rop_frag_r' if FORMATS[fmt][0] == 1 else 'rop_frag'
-        c0 = ':'.join(str(v) for v in [fmt, mask, 1, *f])
-        lines.append(
-            f'R ok=1 label=ropcheck.{fmt}_{name}_{mask} samples=1 topo=0 ds=0/0 c0={c0} | v rop_vert  | '
-            f'f {fragment}  | '
-        )
+        lines.append(line(fmt, name, mask, f, fragment))
+    for fmt, name, mask in UNREAD:
+        f = [FACTOR[x] if x in FACTOR else OP[x] for x in BLENDS[name]]
+        lines.append(line(fmt, f'{name}_unread', mask, f, 'rop_frag_unread'))
     return lines
+
+
+def line(fmt: int, name: str, mask: int, f: list[int], fragment: str) -> str:
+    c0 = ':'.join(str(v) for v in [fmt, mask, 1, *f])
+    return f'R ok=1 label=ropcheck.{fmt}_{name}_{mask} samples=1 topo=0 ds=0/0 c0={c0} | v rop_vert  | f {fragment}  | '
 
 
 def neg(x: int) -> int:
@@ -217,6 +223,10 @@ class Model:
     def stored(self) -> list[int]:
         return [k for k in range(self.components) if self.mask >> (3 - k) & 1]
 
+    def kept(self) -> list[int]:
+        """Give the format's channels the write mask keeps, which the draw's push word names."""
+        return [k for k in range(self.components) if not self.mask >> (3 - k) & 1]
+
 
 def word(rng: random.Random, normalized: bool) -> int:
     r = rng.random()
@@ -249,7 +259,7 @@ def destination(rng: random.Random, m: Model) -> tuple[list[int], list[int]]:
 
 
 def lane_inputs(  # noqa: PLR0913, PLR0917  one lane's every input
-    sampled: list[int], s1: list[int], c: list[int], loaded: list[int], push: dict[int, int], bound: int
+    sampled: list[int], s1: list[int], c: list[int], loaded: list[int], push: dict[int, int], kept: int, bound: int
 ) -> Inputs:
     def texture(op: tuple) -> list[int]:
         """Give a fetch's result by its canonical key (texture.py): the sample at x 0.75 is the second source's."""
@@ -260,6 +270,8 @@ def lane_inputs(  # noqa: PLR0913, PLR0917  one lane's every input
     def cbuf(bank: int, offset: int) -> int:
         if bank == 0 and offset - PUSH_BASE in push:
             return c[push[offset - PUSH_BASE]]
+        if bank == 0 and PUSH_BASE <= offset < PUSH_BASE + 0x80:
+            return kept
         return 0
 
     return Inputs(lambda a: 0x3F800000 if a == 0x7C else 0, cbuf, texture, bound)
@@ -276,12 +288,17 @@ def check(fs: bytes, key: str, push: dict[int, int], n: int, seed: int, bound: i
         s = sampled if m.vector else [sampled[0], ZERO, ZERO, ONE]
         c = [word(rng, bool(m.bits)) for _ in range(4)]
         loaded, d = destination(rng, m)
-        quad = [lane_inputs(sampled, s1, c, loaded, push, bound) for _ in range(LANES)]
+        kept = sum(1 << k for k in m.kept())
+        quad = [lane_inputs(sampled, s1, c, loaded, push, kept, bound) for _ in range(LANES)]
         want = m.blend(s, s1, d, c)
         for lane, (_, killed, stores) in enumerate(run_quad(code, quad, 0)):
             if killed or len(stores) != 1:
                 return f'different: quad {i} lane {lane}: {len(stores)} stores, killed {killed}'
             got = list(stores[0][2])
+            for k in m.kept():
+                if k >= len(got) or got[k] != loaded[k]:
+                    seen = hex(got[k]) if k < len(got) else None
+                    return f'different: quad {i} kept lane {k}: {seen} vs {hex(loaded[k])}'
             for k in m.stored():
                 if k >= len(got) or got[k] != want[k]:
                     return (
@@ -321,6 +338,11 @@ def main() -> None:
         return
     failed = False
     for record in records(a.dumps):
+        if 'rop_frag_unread' in record['key']:
+            kept_device = (record.get('storage_mask'), record.get('storage_blend_mask')) == (0, 0)
+            failed |= not kept_device
+            print(f'{record["key"].split(" | ")[0]}: {"device blend" if kept_device else "storage form"}')
+            continue
         verdict = check(
             bytes.fromhex(record['fs']),
             record['key'],
