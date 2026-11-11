@@ -131,7 +131,7 @@ TEST(Host1xSubmit, EveryEngineSubmitsThroughHost1x)
     EXPECT_THAT(SourceText("../../TegraVIC/SwitchVICJobs.cpp"),
                 testing::HasSubstr("tegra_host1x_submit_on(TEGRA_HOST1X_CHANNEL_VIC, words, n)"));
     EXPECT_THAT(SourceText("../../TegraNVENC/TegraNVENC.cpp"),
-                testing::HasSubstr("tegra_host1x_submit_on(TEGRA_HOST1X_CHANNEL_NVENC, words, n)"));
+                testing::HasSubstr("tegra_host1x_submit_on(TEGRA_HOST1X_CHANNEL_NVENC, words + first, n - first)"));
     EXPECT_THAT(SourceText("../../TegraNVJPG/TegraNVJPG.cpp"),
                 testing::HasSubstr("tegra_host1x_submit_on(TEGRA_HOST1X_CHANNEL_NVJPG, words, n)"));
 }
