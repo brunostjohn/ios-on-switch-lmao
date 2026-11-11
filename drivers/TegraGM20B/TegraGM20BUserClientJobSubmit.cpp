@@ -73,6 +73,7 @@ IOReturn AGXDeviceUserClient::runJob(const SwitchGpuJobRecord &record, JobScratc
 		return kIOReturnBadArgument;
 	if (set && !switch_gpu_set_enter(set, head.set_generation)) {
 		switch_gpu_job_stale();
+		switch_gpu_path_taken(SWITCH_GPU_PATH_STALE_SET, 1);
 		return kIOReturnNotReady;
 	}
 	switch_gpu_sibling_wait siblings[SWITCH_GPU_SET_SLOTS];
@@ -282,6 +283,8 @@ refresh:
 #if TGM_STATS
 	switch_gpu_job_submitted(job.phases.ns, set != nullptr, head.shared_count, siblingCount);
 #endif
+	switch_gpu_path_taken(SWITCH_GPU_PATH_SUBMIT_JOB, 1);
+	switch_gpu_path_taken(SWITCH_GPU_PATH_SET_JOB, set ? 1 : 0);
 	out->seqno = seqno;
 	out->reserved = 0;
 	return kIOReturnSuccess;
