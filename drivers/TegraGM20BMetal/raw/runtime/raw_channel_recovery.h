@@ -71,7 +71,8 @@ private:
 };
 
 // The next channel of `engines`, its context submitted by `context(channel, seqno)` before anything else runs on it. False:
-// the kernel made none, or refused its context.
+// the kernel made none, or refused its context, and no channel is left: `fence` is `none`, which every seqno has passed,
+// so nothing waits for `last` (a seqno of the dead channel) on a channel that never runs, whose slot's fence may be behind it.
 template<class Context>
 bool makeChannel(Kernel &k, uint32_t engines, uint32_t &channel, const volatile uint32_t *&fence, uint32_t &last,
                  const volatile uint32_t *none, Context &&context)
@@ -81,8 +82,12 @@ bool makeChannel(Kernel &k, uint32_t engines, uint32_t &channel, const volatile 
     if (!k.channel(engines, channel, fence))
         return false;
     uint32_t seqno = 0;
-    if (!context(channel, seqno))
+    if (!context(channel, seqno)) {
+        k.closeChannel(channel);
+        channel = 0;
+        fence = none;
         return false;
+    }
     last = seqno;
     return true;
 }

@@ -186,6 +186,37 @@ host_test(
     ],
 )
 
+# raw/runtime/raw_channel_recovery.h over a model of the kernel's channels (raw_kernel_model.h): a channel killed mid-stream,
+# a reopen the kernel refuses, a kill record's seqnos read after the channel was made again, NotResponding on a healthy
+# channel, and memory a killed job wrote
+host_test(
+    name = "raw_channel_recovery_test",
+    srcs = [
+        "raw_channel_recovery_test.cpp",
+        "raw_kernel_model.h",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_batch.h",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_channel_recovery.h",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_control_memory.h",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_cpu_completion.h",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_encode_profile.h",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_kernel.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_kernel.h",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_shared_events.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_shared_events.h",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_surfaces.h",
+        "//drivers/TegraGM20B:TegraGM20BABI.h",
+        "//drivers/TegraGM20B:TegraGM20BLayout.h",
+    ],
+    copts = ["-Idrivers/TegraGM20B"],
+    cxx_std = "c++17",
+    linkopts = [
+        "-framework",
+        "IOKit",
+        "-framework",
+        "CoreFoundation",
+    ],
+)
+
 host_test(
     name = "raw_shared_events_test",
     srcs = [
