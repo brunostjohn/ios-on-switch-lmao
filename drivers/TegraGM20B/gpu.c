@@ -3382,6 +3382,27 @@ static void idle_hint_raise(void *arg)
 	}
 }
 
+#if TGM_STATS
+/* Debug kernels: fn on a GPU held still, once the bring-up has reached M3: up and kept up under gpu.lock (no rail-down,
+ * rail-up or system sleep), its GPCPLL divider fixed under idle.clk (taken inside gpu.lock, as sleep_idle_off takes it).
+ * 0, or -EBUSY before M3. */
+int tgm_gpu_held(void (*fn)(struct nvkm_device *device, void *arg), void *arg)
+{
+	gpu_lock();
+	if (gpu.stage < 3) {
+		mutex_unlock(&gpu.lock);
+		return -EBUSY;
+	}
+	if (idle.clk)
+		nvxnu_mutex_lock(idle.clk);
+	fn(gpu.device, arg);
+	if (idle.clk)
+		nvxnu_mutex_unlock(idle.clk);
+	mutex_unlock(&gpu.lock);
+	return 0;
+}
+#endif
+
 /* drivers/SwitchPower switch_perf_hint (touch, missed frame, launch): busy now, and back up at once if low. */
 void tegra_gm20b_perf_hint(unsigned int hint)
 {

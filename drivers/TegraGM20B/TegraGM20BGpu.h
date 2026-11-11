@@ -507,6 +507,14 @@ struct tgm_present_read {
 /* Debug kernels: clock gating on (1) or off (0), for the A/B (TegraGM20B.cpp's debug.switch_gpu_clkgate). 0 or -EBUSY. */
 int tgm_clkgate_switch(int on);
 
+struct nvkm_device;
+int tgm_gpu_held(void (*fn)(struct nvkm_device *device, void *arg), void *arg);
+
+/* Debug kernels: the GM20B registers L4T's capture reads (TegraGM20BRegDump.h, regdump.c), as text into buf; *len its
+ * length. 0, -EBUSY before M3, -ENOMEM, -ENOSPC when cap is short of tgm_regdump_bytes(). */
+size_t tgm_regdump_bytes(void);
+int tgm_regdump(char *buf, size_t cap, size_t *len);
+
 int tgm_present_copy_read(uint64_t src_va, uint64_t src_pa, uint64_t also_pa, uint64_t stride,
 			  int src_block, uint32_t width, uint32_t height, uint64_t dst_va,
 			  uint32_t dst_pitch, uint32_t block_height_log2, void (*done)(void *, int),

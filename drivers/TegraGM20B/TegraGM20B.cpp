@@ -182,6 +182,27 @@ int clkgateSysctl SYSCTL_HANDLER_ARGS
 
 struct sysctl_oid gClkgateOid;
 
+// debug.switch_gpu_regdump (debug kernels, read-only): the registers L4T's capture.sh reads, as text for diff_regs.py
+// (TegraGM20BRegDump.h). Reading it wakes the GPU if it is rail-gated.
+int regdumpSysctl SYSCTL_HANDLER_ARGS
+{
+	if (req->newptr)
+		return EPERM;
+	const size_t cap = tgm_regdump_bytes();
+	if (!req->oldptr)
+		return SYSCTL_OUT(req, nullptr, cap);
+	auto *buf = static_cast<char *>(IOMallocData(cap));
+	if (!buf)
+		return ENOMEM;
+	size_t len = 0;
+	const int ret = tgm_regdump(buf, cap, &len);
+	const int error = ret ? -ret : SYSCTL_OUT(req, buf, len);
+	IOFreeData(buf, cap);
+	return error;
+}
+
+struct sysctl_oid gRegdumpOid;
+
 void registerClkgateSysctl()
 {
 	switch_sysctl_oid(
@@ -189,6 +210,10 @@ void registerClkgateSysctl()
 		static_cast<int>(CTLTYPE_INT | CTLFLAG_RW | CTLFLAG_KERN | CTLFLAG_LOCKED),
 		clkgateSysctl, "I", "GPU clock gating on (1) or off (0), debug A/B");
 	sysctl_register_oid(&gClkgateOid);
+	switch_sysctl_oid(&gRegdumpOid, &sysctl__debug_children, "switch_gpu_regdump",
+			  static_cast<int>(CTLTYPE_STRING | CTLFLAG_RD | CTLFLAG_KERN | CTLFLAG_LOCKED), regdumpSysctl,
+			  "A", "GM20B registers for the L4T diff");
+	sysctl_register_oid(&gRegdumpOid);
 }
 #endif
 

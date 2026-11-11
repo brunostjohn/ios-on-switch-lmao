@@ -75,6 +75,7 @@ kernel_driver(
         "sched.c",
         "hold.c",
         "deadline.c",
+        "regdump.c",
         "shim/xnu_glue.cpp",
         "TegraGM20B.cpp",
         "TegraGM20BUserClient.cpp",
