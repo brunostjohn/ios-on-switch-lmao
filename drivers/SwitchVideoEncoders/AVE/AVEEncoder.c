@@ -31,6 +31,8 @@
 // picture predicts from the previous picture's reconstruction (two buffers in turn); a key frame is an IDR. A P picture
 // NVENC refuses (its status says why, one error line) leaves the session intra only, so the stream goes on.
 //
+// Tile sessions (HEIC grids through VTTileCompressionSession): AVETiles.c, on the same stream setup.
+//
 // Log (subsystem com.brunostjohn.switch.ave, category encoder): per session, one line when it starts and one when it ends
 // (frames, bytes, mean copy and encode time). Refusals (a size, TegraNVENC refusing the process, a property) are
 // kits/SwitchRefusal's, category AVE: one error line per process and reason.
@@ -54,6 +56,8 @@
 
 #define AVE_ENCODER_ID      "com.apple.videotoolbox.videoencoder.h264"
 #define AVE_HEVC_ENCODER_ID "com.apple.videotoolbox.videoencoder.hevc"
+
+#define kSwitchEncoderRoutesKey CFSTR("SwitchEncoderRoutes")
 
 os_log_t gLog;
 
@@ -260,8 +264,11 @@ static OSStatus startStream(Encoder *e, CFTypeRef primaries, CFTypeRef transfer,
         CFDictionarySetValue(extensions, kCMFormatDescriptionExtension_TransferFunction, transfer);
     if (matrix)
         CFDictionarySetValue(extensions, kCMFormatDescriptionExtension_YCbCrMatrix, matrix);
-    OSStatus status = VTEncoderSessionCreateVideoFormatDescription(
-        e->session, e->codec, (int32_t)c->width, (int32_t)c->height, extensions, &e->format);
+    OSStatus status =
+        e->tileSession ? VTTileEncoderSessionCreateVideoFormatDescription(e->tileSession, e->codec, (int32_t)c->width,
+                                                                          (int32_t)c->height, extensions, &e->format)
+                       : VTEncoderSessionCreateVideoFormatDescription(e->session, e->codec, (int32_t)c->width,
+                                                                      (int32_t)c->height, extensions, &e->format);
     CFRelease(extensions);
     CFRelease(atoms);
     CFRelease(atom);
@@ -274,10 +281,10 @@ static OSStatus startStream(Encoder *e, CFTypeRef primaries, CFTypeRef transfer,
     rc_set_limit(&e->rc, e->limitBytes, e->limitSeconds);
     e->configured = true;
     os_log(gLog,
-           "AVE: session %ux%u in %{public}s on NVENC (%{public}s profile %u level %u, %{public}s, %{public}s, input "
-           "layout %u, %{public}s)",
-           c->width, c->height, getprogname(), hevc ? "HEVC" : "H.264", hevc ? 1 : c->profile_idc,
-           hevc ? e->hevc.level_idc : c->level_idc, hevc || c->cabac ? "CABAC" : "CAVLC",
+           "AVE: %{public}s %ux%u in %{public}s on NVENC (%{public}s profile %u level %u, %{public}s, %{public}s, "
+           "input layout %u, %{public}s)",
+           e->tileSession ? "tile session" : "session", c->width, c->height, getprogname(), hevc ? "HEVC" : "H.264",
+           hevc ? 1 : c->profile_idc, hevc ? e->hevc.level_idc : c->level_idc, hevc || c->cabac ? "CABAC" : "CAVLC",
            e->rc.constQP >= 0 ? "constant quality"
            : cbr              ? "CBR"
                               : "VBR",
@@ -589,6 +596,9 @@ static OSStatus copySupportedPropertyDictionary(VTVideoEncoderRef ref, CFDiction
         describe(s, metadata[i], NULL, false);
     describe(s, kVTCompressionPropertyKey_DataRateLimits, kVTPropertyType_Number, false);
     describe(s, kVTCompressionPropertyKey_UsingHardwareAcceleratedVideoEncoder, kVTPropertyType_Boolean, true);
+#if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
+    describe(s, kSwitchEncoderRoutesKey, NULL, true);
+#endif
     *out = s;
     return noErr;
 }
@@ -704,6 +714,14 @@ static OSStatus copyProperty(CMBaseObjectRef ref, CFStringRef key, CFAllocatorRe
         *(CFTypeRef *)value = CFRetain(e->profileLevel);
         return noErr;
     }
+#if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
+    if (CFEqual(key, kSwitchEncoderRoutesKey)) {
+        pthread_mutex_lock(&e->lock);
+        *(CFTypeRef *)value = ave_copy_routes(e);
+        pthread_mutex_unlock(&e->lock);
+        return *(CFTypeRef *)value ? noErr : kVTAllocationFailedErr;
+    }
+#endif
     return -12783;  // kCMBaseObjectError_ValueNotAvailable
 }
 
@@ -712,6 +730,7 @@ static OSStatus invalidate(CMBaseObjectRef ref)
     Encoder *e = storage(ref);
     pthread_mutex_lock(&e->lock);
     e->session = NULL;
+    e->tileSession = NULL;
     pthread_mutex_unlock(&e->lock);
     return noErr;
 }
@@ -755,13 +774,18 @@ static const VTPluginBaseClass kBaseClass = {
     .setProperty = setProperty,
 };
 
-// Version 1: the slots VideoToolbox reads from every encoder (its own MuxedAlpha encoder declares the same).
+// Version 3 for the tile slots (VTEncoderSPI.h). VideoToolbox checks every version 2 and 3 slot left empty here for
+// NULL before calling it, and reads +0xa8 from version 4 only (vtCompressionSessionCompressionWork, 21H461 and 24B119).
 static const VTPluginEncoderClass kEncoderClass = {
-    .version = 1,
+    .version = 3,
     .startSession = startSession,
     .encodeFrame = encodeFrame,
     .completeFrames = completeFrames,
     .copySupportedPropertyDictionary = copySupportedPropertyDictionary,
+    .startTileSession = ave_start_tile_session,
+    .prepareToEncodeTiles = ave_prepare_to_encode_tiles,
+    .encodeTile = ave_encode_tile,
+    .completeTiles = ave_complete_tiles,
 };
 
 static const VTPluginEncoderVTable kVTable = {NULL, &kBaseClass, &kEncoderClass};

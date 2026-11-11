@@ -109,6 +109,11 @@ void h264enc_fill_submit(const H264EncConfig *config, const H264EncLayout *layou
 // layout, padding the coded area by edge replication.
 void h264enc_put_input(const H264EncConfig *config, const H264EncLayout *layout, uint8_t *buffer, const uint8_t *luma,
                        size_t lumaStride, const uint8_t *chroma, size_t chromaStride);
+// The same for `width` x `height` samples from the planes given (a region of a larger picture), edge-replicated to
+// `coded_width` x `coded_height` (whole 16-sample runs) in an input surface laid out as `input_layout`.
+void h264enc_put_region(uint32_t input_layout, const H264EncSurface *input, uint8_t *buffer, const uint8_t *luma,
+                        size_t lumaStride, const uint8_t *chroma, size_t chromaStride, uint32_t width, uint32_t height,
+                        uint32_t coded_width, uint32_t coded_height);
 // Byte offset of sample (x, y) of a plane laid out as `layout_id` (TEGRA_NVENC_LAYOUT_*) with `pitch` bytes per row.
 size_t h264enc_surface_offset(uint32_t layout_id, uint32_t pitch, uint32_t x, uint32_t y);
 
