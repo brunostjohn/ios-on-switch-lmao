@@ -244,6 +244,7 @@ struct Job {
     TegraVICJob check;  // the submitting thread's check of each operation
 #if TEGRA_VIC_STATS
     uint64_t submittedUs;
+    int pid;  // the transform caller's (the job runs on the engine thread)
 #endif
 };
 
@@ -265,15 +266,34 @@ const char *staged(const TegraVICSurfaceDesc *d, bool source, TegraVICSurfaceDes
 
 void finishJob(Job *job, IOReturn status);
 
+#if TEGRA_VIC_STATS
+void firstFailure(const Job *job, const char *stage, int status)
+{
+    char line[160];
+    if (gStats.firstFailure(stage, status, job->src.desc.fourcc, job->dst.desc.fourcc, job->pid, line, sizeof(line)))
+        os_log(OS_LOG_DEFAULT, "%s", line);
+}
+#endif
+
 void transformed(void *context, int status)
 {
-    finishJob(static_cast<Job *>(context), ioreturn(status));
+    auto *job = static_cast<Job *>(context);
+#if TEGRA_VIC_STATS
+    firstFailure(job, "completion", status);
+#endif
+    finishJob(job, ioreturn(status));
 }
 
 bool runJob(Job *job, IOReturn *status)
 {
     const int prepared = job->eventStatus ? job->eventStatus : switch_vic_events_prepare(job->events);
-    if (prepared) { *status = ioreturn(prepared); return true; }
+    if (prepared) {
+#if TEGRA_VIC_STATS
+        firstFailure(job, "events", prepared);
+#endif
+        *status = ioreturn(prepared);
+        return true;
+    }
     int submitted = 0;
 #if TEGRA_VIC_STATS
     // Read before submitting: the job may complete and be freed before the submission returns.
@@ -291,6 +311,9 @@ bool runJob(Job *job, IOReturn *status)
         submitted = switch_vic_bounce_submit(&job->src, &job->dst, &job->plan, job->chromaSite,
                                               transformed, job, job->events);
     if (submitted <= 0) {
+#if TEGRA_VIC_STATS
+        firstFailure(job, bounced ? "bounce submission" : "direct submission", submitted);
+#endif
         *status = ioreturn(submitted);
         return true;
     }
@@ -440,6 +463,9 @@ IOReturn transform(Conn *conn, const void *in, uint32_t size)
     Job *job = IONewZero(Job, 1);
     if (!job)
         return kIOReturnNoMemory;
+#if TEGRA_VIC_STATS
+    job->pid = proc_selfpid();
+#endif
     // Surfaces in the caller's task, as Apple's driver looks them up (not the task that opened the connection).
     IOReturn ret = tegra_vic_surface_lookup(r.dst_id, current_task(), &job->dst);
     const bool writeOnly = (r.flags & TEGRA_VIC_REQ_WRITE_ONLY) != 0;

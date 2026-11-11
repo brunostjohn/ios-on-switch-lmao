@@ -250,12 +250,21 @@ static void bufferFree(void *ctx, uint32_t handle)
 
 static int jobSubmit(void *ctx, const TegraNVDECSubmit *submit, uint32_t *fence)
 {
-    return nvdec_submit(((Decoder *)ctx)->client, submit, fence);
+    Decoder *d = ctx;
+#if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
+    avd_frame_lap(&d->timing, AVD_BEFORE_SUBMIT, mach_absolute_time());
+#endif
+    return nvdec_submit(d->client, submit, fence);
 }
 
 static int jobWait(void *ctx, const TegraNVDECWait *wait)
 {
-    return nvdec_wait(((Decoder *)ctx)->client, wait);
+    Decoder *d = ctx;
+    const int error = nvdec_wait(d->client, wait);
+#if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
+    avd_frame_lap(&d->timing, AVD_SUBMIT_TO_FENCE, mach_absolute_time());
+#endif
+    return error;
 }
 
 static CFDataRef copyAvcC(CMVideoFormatDescriptionRef format)
@@ -551,6 +560,9 @@ static OSStatus decodeFrame(VTVideoDecoderRef ref, VTVideoDecoderFrame frame, CM
         return size ? kVTVideoDecoderMalfunctionErr : kVTVideoDecoderBadDataErr;
     pthread_mutex_lock(&d->lock);
     const uint64_t began = mach_absolute_time(), copied = d->copyTicks;
+#if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
+    avd_frame_begin(&d->timing, began);
+#endif
     // VP9: a superframe's hidden frames and its shown one; 0 when the sample showed none (answered like H.264's
     // parameter-set-only units).
     const int ret = d->vp9    ? vp9_decoder_decode(d->vp9, data, size, frame)
@@ -560,6 +572,9 @@ static OSStatus decodeFrame(VTVideoDecoderRef ref, VTVideoDecoderFrame frame, CM
     if (ret == 1) {
         d->frames++;
         d->decodeTicks += mach_absolute_time() - began - (d->copyTicks - copied);
+#if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
+        avd_frame_end(&d->timing, mach_absolute_time());
+#endif
     }
     if (!ret && d->session)  // parameter sets only: answered at once, without a picture
         VTDecoderSessionEmitDecodedFrame(d->session, frame, noErr, kVTDecodeInfo_FrameDropped, NULL);
@@ -692,6 +707,17 @@ static void finalize(CMBaseObjectRef ref)
                "CPU)",
                d->width, d->height, getprogname(), d->frames, d->errors, ticksToMs(d->decodeTicks) / d->frames,
                ticksToMs(d->copyTicks) / d->frames, d->exported, d->presented - d->exported, d->copied);
+#if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
+    if (d->frames) {
+        const uint64_t *slowest = d->timing.slowest;
+        os_log(gAVDLog,
+               "AVD: session %ux%u in %{public}s slowest frame %.2f ms: %.2f ms before submit, %.2f ms submit to "
+               "fence, %.2f ms fence to output",
+               d->width, d->height, getprogname(), ticksToMs(avd_frame_total(slowest)),
+               ticksToMs(slowest[AVD_BEFORE_SUBMIT]), ticksToMs(slowest[AVD_SUBMIT_TO_FENCE]),
+               ticksToMs(slowest[AVD_FENCE_TO_OUTPUT]));
+    }
+#endif
     if (d->software)
         CFRelease(d->software);
     h264_decoder_destroy(d->h264);  // frees its buffers through the client, so before closing it

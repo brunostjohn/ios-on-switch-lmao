@@ -147,6 +147,9 @@ OSStatus avd_decode_tile(VTVideoDecoderRef ref, int64_t frameID, CMSampleBufferR
     d->tile =
         (AVDTile){frameID, canvas, offset.x < 0 ? 0 : (uint32_t)offset.x, offset.y < 0 ? 0 : (uint32_t)offset.y, false};
     const uint64_t began = mach_absolute_time(), placed = d->copyTicks;
+#if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
+    avd_frame_begin(&d->timing, began);
+#endif
     const int ret = readable && offset.x >= 0 && offset.y >= 0
                         ? hevc_decoder_decode(d->hevc, data, bytes, d->lengthSize, (void *)(intptr_t)frameID)
                         : -1;
@@ -154,6 +157,9 @@ OSStatus avd_decode_tile(VTVideoDecoderRef ref, int64_t frameID, CMSampleBufferR
         hevc_decoder_flush(d->hevc);
         d->frames++;
         d->decodeTicks += mach_absolute_time() - began - (d->copyTicks - placed);
+#if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
+        avd_frame_end(&d->timing, mach_absolute_time());
+#endif
     }
     if (!d->tile.answered) {
         const OSStatus status = ret <= -2 ? kVTVideoDecoderMalfunctionErr : ret < 0 ? kVTVideoDecoderBadDataErr : noErr;

@@ -1,13 +1,19 @@
 // SPDX-License-Identifier: BSD-2-Clause-Patent
 
-unsigned SwitchEMC::memoryFloor(unsigned first) const
+// The display's bandwidth demand: the reservation or its first head's plan, and the second head's.
+uint64_t SwitchEMC::floorBytes() const
 {
     uint64_t bytes = __atomic_load_n(&gDisplayBytes, __ATOMIC_ACQUIRE);
     if (memoryState.owned[0])
         bytes = switch_display::memoryMax(bytes, memoryState.heads[0].peak_bytes_per_second);
     if (memoryState.owned[1])
         bytes = switch_display::add(bytes, memoryState.heads[1].peak_bytes_per_second);
-    const unsigned bandwidth = switch_display::row(khz, count, bytes);
+    return bytes;
+}
+
+unsigned SwitchEMC::memoryFloor(unsigned first) const
+{
+    const unsigned bandwidth = switch_display::row(khz, count, floorBytes());
     if (first < bandwidth)
         first = bandwidth;
     return memoryState.floor(khz, count, first, khz[cur]);
@@ -49,7 +55,7 @@ IOReturn SwitchEMC::memoryAction(OSObject *owner, void *argument, void *result, 
                 break;
             ++floor;
         }
-        if (floor >= self->count || (floor > self->cur && !self->moveTo(floor))) {
+        if (floor >= self->count || (floor > self->cur && !self->moveTo(floor, SWITCH_EMC_REASON_DISPLAY_MEMORY))) {
             error = -28;
         } else {
             self->memoryState = next;

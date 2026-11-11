@@ -1,8 +1,10 @@
 // SPDX-License-Identifier: BSD-2-Clause-Patent
 #include <gtest/gtest.h>
 #include <array>
+#include <cstdio>
 #include <deque>
 #include <stdexcept>
+#include <string>
 #include <vector>
 #include "../SwitchDisplayBandwidth.h"
 #include "../SwitchDisplayMemoryState.h"
@@ -21,6 +23,15 @@ constexpr int OS_LOG_DEFAULT = 0;
 
 template <class... T> void os_log_error(T...)
 {}
+
+std::vector<std::string> gLines;
+
+template <class... T> void os_log(int, const char *format, T... args)
+{
+    char line[256];
+    snprintf(line, sizeof(line), format, args...);
+    gLines.emplace_back(line);
+}
 
 template <class... T> [[noreturn]] void panic(const char *, T...)
 {
@@ -74,6 +85,7 @@ public:
     uint64_t residency[3] = {}, since = 0;
     unsigned moves = 0;
     bool governing = false, refusalLogged = false;
+    uint64_t floorBytes() const;
     unsigned memoryFloor(unsigned) const;
     void dropDisplayMemory(const char *);
     bool displayMemoryReady() const
@@ -84,7 +96,8 @@ public:
     static IOReturn memoryAction(OSObject *, void *, void *, void *, void *);
     static IOReturn governAction(OSObject *, void *, void *, void *, void *);
     unsigned reconcileRate(uint32_t, bool = false);
-    bool moveTo(unsigned);
+    bool moveTo(unsigned, switch_emc_reason);
+    void logMove(unsigned, unsigned, unsigned, switch_emc_reason) const;
     int reserveMemory(const switch_display_memory_head &);
     bool useFixedRate(unsigned);
     IOReturn holdFixedRate();
@@ -166,6 +179,7 @@ protected:
         setResults.clear();
         requestedRates.clear();
         activeDemandsAtSet.clear();
+        gLines.clear();
         getResult = 0;
         getRate = 204000;
     }
@@ -199,6 +213,15 @@ TEST_F(MemoryAdapter, RaisesForNewDemandBeforePublishingIt)
     EXPECT_EQ(emc.cur, 1u);
     EXPECT_EQ(emc.memoryFloor(0), 1u);
     EXPECT_EQ(gDisplayBytes, 2000000000u);
+}
+
+TEST_F(MemoryAdapter, EachRateMoveLogsOneLine)
+{
+    ASSERT_EQ(emc.reserveMemory(request()), 0);
+    ASSERT_EQ(emc.reserveMemory(request(2000000000)), 0);
+    ASSERT_EQ(gLines.size(), 1u);
+    EXPECT_EQ(gLines[0], "SwitchEMC: 204000 -> 1331200 kHz, display memory asked 1331200 kHz; display floor 204000 kHz "
+                         "for 312 MB/s");
 }
 
 TEST_F(MemoryAdapter, WarmIdenticalAdmissionDoesNoRegisterOrClockWork)

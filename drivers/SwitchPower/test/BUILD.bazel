@@ -157,4 +157,5 @@ host_test(
         "//drivers/SwitchPower:SwitchEMCClock.h",
         "//drivers/SwitchPower:SwitchEMCFixed.h",
     ],
+    defines = ["DEVELOPMENT=1"],
 )

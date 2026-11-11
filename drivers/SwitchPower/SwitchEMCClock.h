@@ -20,8 +20,9 @@ unsigned SwitchEMC::reconcileRate(uint32_t observed, bool quiesced)
     return now;
 }
 
-bool SwitchEMC::moveTo(unsigned index)
+bool SwitchEMC::moveTo(unsigned asked, switch_emc_reason reason)
 {
+    unsigned index = asked;
     const unsigned floor = switch_display::row(khz, count, __atomic_load_n(&gDisplayBytes, __ATOMIC_ACQUIRE));
     if (floor >= count)
         index = count - 1;
@@ -49,12 +50,25 @@ bool SwitchEMC::moveTo(unsigned index)
     residency[cur] += t - since;
     since = t;
     moves++;
+    logMove(cur, actual, asked, reason);
 #endif
     cur = actual;
     if (!programMemory(khz[cur], khz[cur], true))
         dropDisplayMemory("its plan does not cover the rate the BPMP set");
     return cur >= index;
 }
+
+#if DEVELOPMENT || DEBUG
+void SwitchEMC::logMove(unsigned from, unsigned to, unsigned asked, switch_emc_reason reason) const
+{
+    static const char *const kReasons[] = {"ACTMON", "a hint or submit", "display bandwidth", "display memory",
+                                           "governor start"};
+    const unsigned floor = memoryFloor(0);
+    os_log(OS_LOG_DEFAULT, "SwitchEMC: %u -> %u kHz, %s asked %u kHz; display floor %u kHz for %llu MB/s", khz[from],
+           khz[to], kReasons[reason], asked < count ? khz[asked] : 0, floor < count ? khz[floor] : 0,
+           static_cast<unsigned long long>(floorBytes() / 1000000));
+}
+#endif
 
 IOReturn SwitchEMC::governAction(OSObject *owner, void *resume, void *, void *, void *)
 {
@@ -74,7 +88,7 @@ IOReturn SwitchEMC::governAction(OSObject *owner, void *resume, void *, void *, 
     self->since = mach_absolute_time();
 #endif
     self->memoryDirty = true;
-    if (!self->moveTo(self->cur))
+    if (!self->moveTo(self->cur, SWITCH_EMC_REASON_GOVERN))
         return kIOReturnError;
     self->governing = true;
     self->startActmon();

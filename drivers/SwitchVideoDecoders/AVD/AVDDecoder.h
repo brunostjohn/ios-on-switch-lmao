@@ -7,6 +7,7 @@
 #include <pthread.h>
 #include <stdbool.h>
 #include <stdint.h>
+#include "AVDFrameTiming.h"
 #include "H264NVDEC.h"
 #include "HEVCNVDEC.h"
 #include "NVDECClient.h"
@@ -41,6 +42,9 @@ typedef struct {
     uint64_t decodeTicks, copyTicks;  // copyTicks: placing pictures in pixel buffers (VIC's or the CPU's copy)
     bool present;
     uint32_t presented, exported, copied;
+#if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
+    AVDFrameTiming timing;
+#endif
 } Decoder;
 
 typedef struct {

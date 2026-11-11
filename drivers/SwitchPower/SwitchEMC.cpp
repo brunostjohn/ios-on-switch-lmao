@@ -75,7 +75,7 @@ class SwitchEMC : public OSObject {
     bool held(uint64_t now);
     void armHoldEnd(uint64_t now);
     void program();
-    bool moveTo(unsigned index);
+    bool moveTo(unsigned asked, switch_emc_reason reason);
     unsigned reconcileRate(uint32_t observed, bool quiesced = false);
     bool useFixedRate(unsigned now);
     IOReturn holdFixedRate();
@@ -83,6 +83,8 @@ class SwitchEMC : public OSObject {
     {
         return car ? switchclk::readEmc(car).kHz : 0;
     }
+
+    uint64_t floorBytes() const;
     unsigned memoryFloor(unsigned first) const;
     void dropDisplayMemory(const char *why);
     bool programMemory(uint32_t before, uint32_t after, bool force = false);
@@ -111,6 +113,7 @@ public:
 #if DEVELOPMENT || DEBUG
     static IOReturn statsAction(OSObject *owner, void *line, void *size, void *written, void *);
     size_t stats(char *line, size_t size);
+    void logMove(unsigned from, unsigned to, unsigned asked, switch_emc_reason reason) const;
 
     void runStats(char *line, size_t size, size_t *written)
     {
@@ -261,7 +264,7 @@ IOReturn SwitchEMC::displayAction(OSObject *owner, void *bytes, void *result, vo
     const uint64_t demand = *static_cast<uint64_t *>(bytes);
     const unsigned floor = switch_display::row(self->khz, self->count, demand);
     int error = floor >= self->count ? -28 : 0;
-    if (!error && floor > self->cur && !self->moveTo(floor))
+    if (!error && floor > self->cur && !self->moveTo(floor, SWITCH_EMC_REASON_DISPLAY))
         error = -5;
     if (!error) {
         __atomic_store_n(&gDisplayBytes, demand, __ATOMIC_RELEASE);
@@ -290,7 +293,8 @@ void SwitchEMC::actmonFired(OSObject *owner, IOInterruptEventSource *, int)
     switch_mmio_write32(self->regs, kMcAll + kIntrStatus, status);
     const uint32_t events =
         (status & kIntrUp ? SWITCH_EMC_EVENT_UP : 0) | (status & kIntrDown ? SWITCH_EMC_EVENT_DOWN : 0);
-    self->moveTo(switch_emc_next(self->count, self->cur, events, self->held(mach_absolute_time())));
+    self->moveTo(switch_emc_next(self->count, self->cur, events, self->held(mach_absolute_time())),
+                 SWITCH_EMC_REASON_ACTMON);
     self->program();
 }
 
@@ -303,7 +307,7 @@ void SwitchEMC::signalFired(OSObject *owner, IOInterruptEventSource *, int)
     const unsigned before = self->cur;
     const uint64_t bpmp = mach_absolute_time();
 #endif
-    self->moveTo(self->count - 1);
+    self->moveTo(self->count - 1, SWITCH_EMC_REASON_HINT);
 #if DEVELOPMENT || DEBUG
     const uint64_t asked = __atomic_exchange_n(&self->raiseAsked, 0, __ATOMIC_RELAXED);
     if (before != self->cur && asked) {

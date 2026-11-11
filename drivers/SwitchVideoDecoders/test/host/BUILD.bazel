@@ -176,6 +176,7 @@ host_library(
     srcs = [
         "avd_host.c",
         "//drivers/SwitchVideoDecoders:AVD/AVDDecoder.h",
+        "//drivers/SwitchVideoDecoders:AVD/AVDFrameTiming.h",
         "//drivers/SwitchVideoDecoders:AVD/SwitchVideoColor.h",
         "//drivers/SwitchVideoDecoders:AVD/AVDTiles.c",
         "//drivers/SwitchVideoDecoders:AVD/NVDECClient.h",
@@ -201,6 +202,7 @@ host_library(
     srcs = [
         "avd_register_host.c",
         "//drivers/SwitchVideoDecoders:AVD/AVDDecoder.h",
+        "//drivers/SwitchVideoDecoders:AVD/AVDFrameTiming.h",
         "//drivers/SwitchVideoDecoders:AVD/SwitchVideoColor.h",
         "//drivers/SwitchVideoDecoders:AVD/AVDRegister.c",
         "//drivers/SwitchVideoDecoders:AVD/NVDECClient.h",
@@ -256,4 +258,13 @@ host_test(
     name = "switch_video_vui_test",
     srcs = ["switch_video_vui_test.cpp"],
     deps = [":h264", ":hevc"],
+)
+
+host_test(
+    name = "avd_frame_timing_test",
+    srcs = [
+        "avd_frame_timing_test.cpp",
+        "//drivers/SwitchVideoDecoders:AVD/AVDFrameTiming.h",
+    ],
+    data = ["//drivers/SwitchVideoDecoders:AVD/AVDDecoder.c"],
 )

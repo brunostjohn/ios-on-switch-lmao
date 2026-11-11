@@ -43,3 +43,19 @@ TEST(SwitchVICStats, EachWindowStartsFromZeroAndKeepsTheDeviceCheckFormat)
     const std::regex check(R"(TegraVIC: \d+s jobs=(\d+) ops=\d+ refused=(\d+))");
     EXPECT_TRUE(std::regex_search(std::string(line), check));
 }
+
+TEST(SwitchVICStats, OnlyTheFirstFailedJobABootIsNamed)
+{
+    SwitchVICStats stats = {};
+    char line[160] = {};
+    EXPECT_FALSE(stats.firstFailure("completion", 0, 0x34323076, 0x42475241, 77, line, sizeof(line)));
+    EXPECT_FALSE(stats.firstFailure("events", -125, 0x34323076, 0x42475241, 77, line, sizeof(line)))
+        << "a job cancelled with its caller";
+    ASSERT_TRUE(stats.firstFailure("direct submission", -12, 0x34323076, 0x42475241, 77, line, sizeof(line)));
+    EXPECT_STREQ(line, "TegraVIC: first failed job this boot: direct submission, status -12, '420v' to 'BGRA', pid 77");
+    EXPECT_FALSE(stats.firstFailure("completion", -5, 0, 0x42475241, 78, line, sizeof(line)));
+
+    SwitchVICStats fill = {};
+    ASSERT_TRUE(fill.firstFailure("bounce submission", -22, 0, 0x34323276, 9, line, sizeof(line)));
+    EXPECT_STREQ(line, "TegraVIC: first failed job this boot: bounce submission, status -22, 'none' to '422v', pid 9");
+}

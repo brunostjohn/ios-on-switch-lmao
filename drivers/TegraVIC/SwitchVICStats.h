@@ -17,6 +17,7 @@ struct SwitchVICStats {
     static constexpr uint64_t kWindowUs = 5000000;
     uint64_t windowStart, jobs, ops, refused, pitch, failed, submitted, bounced, engineUs, cpuUs, bytes;
     uint64_t presents, presentWaits;  // decoded pictures VIC placed, and those a CPU thread waited for
+    bool failureLogged;
 
     void present(bool waited)
     {
@@ -45,6 +46,20 @@ struct SwitchVICStats {
         add(engineUs, elapsedUs);
     }
 
+    // The first job a boot fails after its call accepted it, which otherwise shows only as failed=: the stage that
+    // failed, its status, the surfaces' formats (none for a fill's source) and the caller's pid. A job cancelled with
+    // its caller (-125) is not a failure.
+    bool firstFailure(const char *stage, int status, uint32_t source, uint32_t destination, int pid, char *out,
+                      size_t size)
+    {
+        if (!status || status == -125 || __atomic_exchange_n(&failureLogged, true, __ATOMIC_RELAXED))
+            return false;
+        char from[5], to[5];
+        snprintf(out, size, "TegraVIC: first failed job this boot: %s, status %d, '%s' to '%s', pid %d", stage, status,
+                 fourcc(source, from), fourcc(destination, to), pid);
+        return true;
+    }
+
     // The line once the window has run its 5 s, written by one caller only; false otherwise.
     bool line(uint64_t now, char *out, size_t size)
     {
@@ -69,6 +84,18 @@ struct SwitchVICStats {
     }
 
 private:
+    static const char *fourcc(uint32_t code, char out[5])
+    {
+        if (!code)
+            return "none";
+        for (unsigned i = 0; i < 4; i++) {
+            const char c = static_cast<char>(code >> (24 - 8 * i));
+            out[i] = c >= ' ' && c <= '~' ? c : '?';
+        }
+        out[4] = 0;
+        return out;
+    }
+
     static uint64_t take(uint64_t &counter)
     {
         return __atomic_exchange_n(&counter, uint64_t(0), __ATOMIC_RELAXED);

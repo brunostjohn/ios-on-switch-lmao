@@ -543,3 +543,9 @@ host_test(
         "//drivers/TegraVIC:TegraVICFormats.h",
     ],
 )
+
+host_test(
+    name = "switch_vic_first_failure_source_test",
+    srcs = ["switch_vic_first_failure_source_test.cpp"],
+    data = ["//drivers/TegraVIC:TegraVICUserClient.cpp"],
+)
