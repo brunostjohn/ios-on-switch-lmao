@@ -11,6 +11,7 @@ _MESA_HEADERS = "//third_party/mesa/src/nouveau/headers"
 EMIT_SOURCES = [
     "SwitchGM20BEmit3D.c",
     "SwitchGM20BEmitBarrier.c",
+    "SwitchGM20BEmitRaster.c",
     "SwitchGM20BEmitReport.c",
     "mesa/nouveau_copy_rect.c",
 ]
