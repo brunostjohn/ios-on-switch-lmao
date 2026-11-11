@@ -55,7 +55,8 @@ mkdir -p "$GPU"
 for f in mme_fermi mme_fermi_sim; do xcrun clang -O2 -std=c11 -w -I "$RAW/pack/mesa" -c "$RAW/pack/mesa/$f.c" -o "$GPU/$f.o"; done
 xcrun clang -O1 -Wall -c -I "$TREE/drivers/TegraGM20B" "$RAW/pack/mock_iokit.c" -o "$GPU/mock_iokit.o"
 xcrun clang++ -O2 -std=c++17 -c -I "$TREE/drivers/TegraGM20B" "$RAW/pack/cap.cpp" -o "$GPU/cap.o"
-xcrun clang++ -O2 -std=c++17 -DNVDEC_TWOD -I "$TREE/drivers/TegraGM20B" -c "$RAW/pack/nvdec.cpp" -o "$GPU/nvdec.o"
+xcrun clang++ -O2 -std=c++17 -DNVDEC_TWOD -I "$TREE/drivers/TegraGM20B" -I "$TREE/third_party/mesa/src/nouveau/headers" \
+    -c "$RAW/pack/nvdec.cpp" -o "$GPU/nvdec.o"
 xcrun clang++ -O2 -std=c++17 -I "$TREE/drivers/TegraGM20B" -c "$RAW/pack/nvdec_compute.cpp" -o "$GPU/nvdec_compute.o"
 xcrun clang++ -O2 -std=c++17 -c "$RAW/fx/test/twod_sim.cpp" -o "$GPU/twod_sim.o"
 xcrun clang++ -O2 -std=c++17 -c "$RAW/runtime/raw_capture.cpp" -o "$GPU/raw_capture.o"

@@ -49,6 +49,7 @@ filegroup(
         ],
     ) + [
         "raw/runtime/raw_owned.h",  # the methods the raw path owns (pack/mkpack.py reads them)
+        "//kits/SwitchGM20B:class_headers",  # pack/nvdec.cpp's method numbers
         "raw/runtime/raw_srgb_table.h",  # the colour table pack/layouts.py recognises
         # a kernel's key (pack/kernel_shapes.h)
         "raw/runtime/raw_compute_key.h",
@@ -122,6 +123,7 @@ filegroup(
     ) + [
         "raw/fx/test/twod_sim.h",  # the 2D engine nvdec executes (pack/nvdec.cpp)
         "raw/runtime/raw_srgb_table.h",  # the colour table pack/layouts.py recognises
+        "//kits/SwitchGM20B:class_headers",  # pack/nvdec.cpp's method numbers
     ],
 )
 

@@ -63,6 +63,7 @@ RAW = HERE.parent
 TREE = Path(os.environ.get('RAWPACK_TREE', RAW.parents[2]))  # tree/ (drivers/TegraGM20BMetal/raw -> tree)
 METAL = TREE / 'drivers/NativeMetal'
 ABI = TREE / 'drivers/TegraGM20B'
+CLASSES = TREE / 'third_party/mesa/src/nouveau/headers'  # NVIDIA's class headers find nvtypes.h here (nvdec.cpp)
 
 
 def run(cmd: list[str | Path], env: dict[str, str] | None = None, out: Path | None = None) -> str:
@@ -186,7 +187,7 @@ def build(work: Path, bridge: Path, metal_abi: Path) -> None:
     # Source paths (Mesa's asserts' __FILE__) as /switch-ios/..., whichever checkout or sandbox this runs in: the probe
     # and the mock are an action's outputs, and the run's cache key is their bytes.
     maps = [f'-ffile-prefix-map={RAW.parents[2]}=/switch-ios/tree', f'-ffile-prefix-map={Path.cwd()}=/switch-ios']
-    cflags = ['-O2', '-Wall', *maps, '-I', ABI]
+    cflags = ['-O2', '-Wall', *maps, '-I', ABI, '-I', CLASSES]
     objs = []
     for src in ('mesa/mme_fermi.c', 'mesa/mme_fermi_sim.c'):
         obj = work / (Path(src).stem + '.o')
