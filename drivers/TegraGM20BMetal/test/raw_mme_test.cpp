@@ -3,6 +3,7 @@
 #include "../raw/runtime/raw_mme.h"
 #include "../raw/pack/mesa/mme_fermi.h"
 #include "../raw/pack/mesa/mme_fermi_sim.h"
+#include <map>
 #include <utility>
 #include <vector>
 
@@ -113,7 +114,7 @@ TEST(RawMme, CallsHaveConstantCpuSizeAndUseTheCorrectArgumentMethod)
             raw::Push push{words.data(), words.data() + words.size()};
             raw::mme::draw(push, indexed, 12, 65537, instances);
             EXPECT_EQ(push.at, push.end);
-            EXPECT_EQ(words[0], raw::Push::hdr(5, raw::SUBC_3D, 0x3800 + (indexed ? 8 : 0), 3));
+            EXPECT_EQ(words[0], raw::Push::hdr(5, raw::SUBC_3D, 0x3800 + 8 * (indexed ? 12 : 11), 3));
             EXPECT_EQ(words[1], instances);
             EXPECT_EQ(words[2], 12u);
             EXPECT_EQ(words[3], 65537u);
@@ -152,7 +153,7 @@ TEST(RawMme, IndirectHeaderDeclaresExactlyTheMetalArgumentWords)
         raw::Push push{&word, &word + 1};
         raw::mme::indirectHeader(push, indexed);
         EXPECT_EQ(push.at, push.end);
-        EXPECT_EQ(word, raw::Push::hdr(5, raw::SUBC_3D, 0x3800 + (indexed ? 24 : 16), indexed ? 5 : 4));
+        EXPECT_EQ(word, raw::Push::hdr(5, raw::SUBC_3D, 0x3800 + 8 * (indexed ? 14 : 13), indexed ? 5 : 4));
     }
 }
 
@@ -167,5 +168,135 @@ TEST(RawMme, ContextReservationCoversEveryProgram)
     const size_t second = 5 + raw::mme::kDrawProgram.size;
     EXPECT_EQ(words[second + 1], raw::mme::kDrawIndexed);
     EXPECT_EQ(words[second + 2], raw::mme::kDrawProgram.size);
+}
+
+// The words the encoder wrote per draw before the macros took every draw: the draw parameters where they changed
+// (nvk_mme_build_set_draw_params's methods), then BEGIN, the first and count, END; a macro call for instances
+struct DirectDraws {
+    uint32_t root = 0, baseInstance = 0, baseVertex = 0;
+
+    void draw(raw::Push &p, bool indexed, uint32_t first, uint32_t count, uint32_t instances, uint32_t root_,
+              uint32_t baseInstance_)
+    {
+        if (root_ != root || baseInstance_ != baseInstance) {
+            const uint32_t v[2] = {root_, baseInstance_};
+            p.m(NVB197_LOAD_CONSTANT_BUFFER_OFFSET, 0);
+            p.nonInc(NVB197_LOAD_CONSTANT_BUFFER(0), v, 2);
+            p.m(NVB197_SET_GLOBAL_BASE_INSTANCE_INDEX, baseInstance_);
+            root = root_;
+            baseInstance = baseInstance_;
+        }
+        const uint32_t baseVertex_ = indexed ? root_ : 0;
+        if (baseVertex_ != baseVertex) {
+            p.m(NVB197_SET_GLOBAL_BASE_VERTEX_INDEX, baseVertex_);
+            p.m(NVB197_SET_VERTEX_ID_BASE, baseVertex_);
+            baseVertex = baseVertex_;
+        }
+        if (instances == 1) {
+            p.m(NVB197_BEGIN, 0);
+            p.inc(indexed ? kIndexFirst : kVertexFirst, {first, count});
+            p.m(NVB197_END, 0);
+        } else {
+            raw::mme::draw(p, indexed, first, count, instances);
+        }
+    }
+};
+
+struct DrawCase {
+    bool indexed;
+    uint32_t first, count, instances, root, baseInstance;
+};
+
+// Core Animation's shapes: quads from one stream at moving first vertices, text runs indexed at a base vertex, a few
+// instanced draws, draws at the same first vertex
+const std::vector<DrawCase> kFrame = {
+    {false, 0, 4, 1, 0, 0},     {false, 4, 4, 1, 4, 0},     {false, 8, 4, 1, 8, 0},     {false, 8, 4, 1, 8, 0},
+    {true, 0, 6, 1, 0, 0},      {true, 6, 6, 1, 0, 0},      {true, 0, 6, 1, 64, 0},     {false, 0, 4, 3, 0, 0},
+    {false, 0, 4, 3, 0, 2},     {false, 12, 4, 1, 12, 0},   {true, 0, 12, 1, 128, 0},   {false, 0, 4, 1, 0, 0},
+    {false, 0x3000, 4, 1, 0x3000, 0},
+};
+
+// What both forms leave the GPU doing, through the MME simulator: the same methods with the same values
+std::vector<Method> methodsOf(const std::vector<uint32_t> &words)
+{
+    std::vector<Method> out;
+    const raw::mme::Program programs[] = {raw::mme::kDrawProgram,      raw::mme::kIndexedProgram,
+                                          raw::mme::kIndirectProgram,  raw::mme::kIndexedIndirectProgram,
+                                          raw::mme::kDrawParamsProgram, raw::mme::kIndexedParamsProgram};
+    for (size_t i = 0; i < words.size();) {
+        const uint32_t hdr = words[i++], op = hdr >> 29, count = (hdr >> 16) & 0x1fff;
+        const uint16_t method = uint16_t((hdr & 0xfff) << 2);
+        if (op == 4) {
+            out.emplace_back(method, count);
+            continue;
+        }
+        if (method >= 0x3800 && method < 0x3c00) {
+            Simulation simulation;
+            const uint32_t slot = (method - 0x3800) / 8;
+            const raw::mme::Program &code = programs[slot - raw::mme::kDraw];
+            simulation.runEncoded(code.words, code.size, std::vector<uint32_t>(&words[i], &words[i] + count));
+            for (auto [m, v] : simulation.methods)
+                out.emplace_back(m >= 0x2390 && m < 0x23d0 ? uint16_t(0x2390) : m, v);
+            i += count;
+            continue;
+        }
+        for (uint32_t k = 0; k < count; ++k)
+            out.emplace_back(op == 1 ? uint16_t(method + 4 * k) : method, words[i++]);
+    }
+    return out;
+}
+
+TEST(RawMme, EveryDrawAsOneCallLeavesTheMethodsTheDirectWordsDid)
+{
+    std::vector<uint32_t> before(1024), after(1024);
+    raw::Push p{before.data(), before.data() + before.size()}, q{after.data(), after.data() + after.size()};
+    DirectDraws direct;
+    raw::mme::DrawParams held;
+    for (const DrawCase &c : kFrame) {
+        direct.draw(p, c.indexed, c.first, c.count, c.instances, c.root, c.baseInstance);
+        raw::mme::draw(q, held, c.indexed, c.first, c.count, c.instances, c.root, c.baseInstance);
+    }
+    before.resize(size_t(p.at - before.data()));
+    after.resize(size_t(q.at - after.data()));
+    // the parameter macros write the base vertex registers with every parameter change, the direct words where they
+    // changed: the same registers and root table words at every BEGIN, from the zeros a pass starts with
+    auto last = [](const std::vector<Method> &methods) {
+        std::map<uint32_t, uint32_t> state = {{NVB197_SET_GLOBAL_BASE_INSTANCE_INDEX, 0},
+                                              {NVB197_SET_GLOBAL_BASE_VERTEX_INDEX, 0},
+                                              {NVB197_SET_VERTEX_ID_BASE, 0},
+                                              {0x10000, 0},
+                                              {0x10004, 0}};
+        std::vector<std::map<uint32_t, uint32_t>> draws;
+        uint32_t offset = 0;
+        for (const Method &m : methods) {
+            if (m.first == NVB197_LOAD_CONSTANT_BUFFER_OFFSET)
+                offset = m.second;
+            else if (m.first == 0x2390)
+                state[0x10000 + std::exchange(offset, offset + 4)] = m.second;
+            else
+                state[m.first] = m.second;
+            if (m.first == kBegin)
+                draws.push_back(state);
+        }
+        return draws;
+    };
+    EXPECT_EQ(last(methodsOf(after)), last(methodsOf(before)));
+    printf("words per draw over %zu draws: direct %.2f, macro calls %.2f\n", kFrame.size(),
+           double(before.size()) / kFrame.size(), double(after.size()) / kFrame.size());
+    EXPECT_LT(after.size(), before.size());
+}
+
+TEST(RawMme, AnIndirectDrawLeavesTheParametersUnknown)
+{
+    std::array<uint32_t, 16> words{};
+    raw::Push push{words.data(), words.data() + words.size()};
+    raw::mme::DrawParams held;
+    held.unknown = true;
+    raw::mme::draw(push, held, false, 0, 4, 1, 0, 0);
+    EXPECT_EQ(words[0], raw::Push::hdr(5, raw::SUBC_3D, 0x3800 + 8 * raw::mme::kDrawParams, 4));
+    EXPECT_FALSE(held.unknown);
+    const uint32_t *before = push.at;
+    raw::mme::draw(push, held, false, 0, 4, 1, 0, 0);
+    EXPECT_EQ(push.at - before, ptrdiff_t(raw::mme::kCallWords));
 }
 }  // namespace

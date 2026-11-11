@@ -18,17 +18,10 @@ uint32_t RenderEncoder::drawBands(uint32_t vertices, uint32_t instances) const
     return bandCount(d, dev_->bandBudgetNs(), kBandsPerCommandBuffer - cb_->bands);
 }
 
-void RenderEncoder::emitDraw(bool indexed, uint32_t first, uint32_t count, uint32_t instances)
+void RenderEncoder::emitDraw(bool indexed, uint32_t first, uint32_t count, uint32_t instances, uint32_t root,
+                             uint32_t baseInstance)
 {
-    const auto words = [&](Push &p) {
-        if (instances == 1) {
-            p.m(NVB197_BEGIN, 0);
-            p.inc(indexed ? NVB197_SET_INDEX_BUFFER_F : NVB197_SET_VERTEX_ARRAY_START, {first, count});
-            p.m(NVB197_END, 0);
-        } else {
-            mme::draw(p, indexed, first, count, instances);
-        }
-    };
+    const auto words = [&](Push &p) { mme::draw(p, params_, indexed, first, count, instances, root, baseInstance); };
     const uint32_t bands = drawBands(count, instances);
     if (bands < 2) {
         if (p_.room() < kBandWords)
