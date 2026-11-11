@@ -176,6 +176,11 @@ struct Limits {
 //    IOMFBCompressionSupport is 0.
 // Window B scans neither, so 24B119 publishes both. 10-bit biplanar ('x420') and 'RGhA' have no such key: 24B119 gates
 // the first by IOMFBYUVSupportKey alone (all YUV) and the second by chip id and the surface's transfer function.
+// IOMFBYUVPackedUnSupported also makes every scaler copy of a 4:2:0 detached layer 4:2:2 ('422v', '422f'): detach_layer
+// (0x18443c44c) converts the copy's format when detachable_layer_impl asks for a copy (mode 2) and supports_packed_yuv
+// (display+0x75d6, update_display_limits 0x1844e9844) is false; backboardd logs it as "CADisplay 1 Packed YUV Support
+// Enabled: NO". Window B and VIC take 4:2:2 for that. The display+0x6bf4 chroma mode that detach_layer also reads
+// (0x18443ba04) comes from the chip id alone (update_display_limits 0x1844e9828: 2, 4:4:4, on 0x7000; otherwise 0).
 constexpr Limits kLimits24B119 = {.packedYuvUnsupported = true, .compressionUnsupported = true};
 
 // The row and plane-base alignment published for every surface iPadOS sizes for this display (Core Animation's
