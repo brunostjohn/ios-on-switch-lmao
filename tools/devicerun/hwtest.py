@@ -117,6 +117,7 @@ TESTS: dict[str, bool] = {
             'gpu.raw.alpha_to_coverage',
             'gpu.compile.shared',
             'gpu.sched.long_draw_bands',
+            'gpu.sched.long_dispatch_pieces',
             'gpu.poster_targets',
             'gpu.msaa.resolve_cost',
             'gpu.path.job_visibility',

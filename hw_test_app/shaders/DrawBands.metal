@@ -51,3 +51,16 @@ fragment float4 bands_memory_fragment(BandsVertex v [[stage_in]], texture2d<floa
     }
     return float4(fract(sum.rgb), 1.0f);
 }
+
+// gpu.sched.long_dispatch_pieces: a loop whose length is an argument (a few dozen instructions of code, milliseconds of
+// work), each thread writing what its grid builtins say and a value of its position, so a threadgroup a piece launched
+// twice, never, or at another base shows.
+kernel void pieces_kernel(device uint4 *out [[buffer(0)]], constant uint &steps [[buffer(1)]],
+                          uint gid [[thread_position_in_grid]], uint group [[threadgroup_position_in_grid]],
+                          uint groups [[threadgroups_per_grid]], uint threads [[threads_per_grid]])
+{
+    float v = float(gid & 1023u) * 0.000977f;
+    for (uint i = 0; i < steps; i++)
+        v = fract(fma(v, 1.618034f, 0.1f));
+    out[gid] = uint4(group, groups, threads, as_type<uint>(v));
+}

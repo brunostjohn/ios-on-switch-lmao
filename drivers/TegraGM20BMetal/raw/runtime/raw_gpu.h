@@ -1659,6 +1659,7 @@ public:
         std::atomic<uint64_t> reopenTicks{0};     // the last reopen that made a channel, mach_absolute_time
         std::atomic<uint64_t> bandedDraws{0}, bands{0};  // raw_draw_bands.h
         std::atomic<uint64_t> learnedDraws{0};           // raw_band_rates.h
+        std::atomic<uint64_t> bandedDispatches{0};       // raw_dispatch_bands.h
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
         std::atomic<uint64_t> splitLaunches{0};
         std::atomic<uint64_t> interlockDraws{0}, storageBarriers{0};

@@ -3,6 +3,8 @@
 #include "raw_compute.h"
 #include "../../../../kits/SwitchGM20B/SwitchGM20B.h"
 #include "raw_compute_visibility.h"
+#include "raw_dispatch_bands.h"
+#include "raw_stamps.h"
 #include "raw_residual.h"
 #include "raw_slm.h"
 #include "raw_view.h"
@@ -338,19 +340,68 @@ bool ComputeEncoder::dispatchRegion(const ComputeRegion &part, const std::array<
         return false;
     }
     const PackKernel &r = *state_->rec;
-    uint32_t region[8] = {};
-    if (r.regionWord >= 0 && !computeRegionWords(part.base, total, nominal, region)) {
+    std::array<uint32_t, 8> region{};
+    if (r.regionWord >= 0 && !computeRegionWords(part.base, total, nominal, region.data())) {
         *why = "a threadgroup m2v's dispatch region cannot name";
         return false;
     }
     if (!prepareDescriptors(why))
         return false;
     const std::array<uint32_t, 3> grid{groups[0], groups[1], groups[2]};
-    if (!rootVa_ || grid_ != grid || !std::equal(std::begin(region), std::end(region), region_.begin())) {
+    uint64_t units = 1;
+    for (uint32_t axis = 0; axis < 3; ++axis)
+        units = laneWork(laneWork(units, groups[axis]), threads[axis]);
+    const uint8_t axis = pieceAxis(grid);
+    const uint32_t pieces =
+        dev_.compositorClass()
+            ? 1
+            : pieceCount(estimatedNs(state_->rate, units, workNs(laneWork(units, state_->instructions))),
+                         dev_.bandBudgetNs(), grid[axis], kBandsPerCommandBuffer - cb_.bands);
+    if (serial_ && dispatched_ && first)
+        barrier();
+    dispatched_ = true;
+    if (pieces > 1 && cb_.batchWork_.operations)
+        cutBatch();
+    DrawTiming timing;
+    const bool measured = measureDispatch(pieces > 1 ? units / pieces : units, timing);
+    for (uint32_t i = 0; i < pieces; i++) {
+        if (measured && i == 0)
+            stampDispatch(timing, false);
+        if (!launch(grid, dispatchPiece(grid, axis, i, pieces), region, why))
+            return false;
+        if (measured && i == 0) {
+            stampDispatch(timing, true);
+            cb_.timings.push_back(timing);
+        }
+        if (pieces > 1)
+            cutBatch();
+    }
+    if (pieces > 1) {
+        cb_.bands += pieces;
+        RAW_DIAGNOSTIC(dev_.stats.bandedDispatches++; dev_.stats.bands += pieces);
+    }
+    uint64_t work = state_->instructions;
+    for (uint32_t a = 0; a < 3; ++a)
+        work = BatchWork::product(BatchWork::product(work, groups[a]), threads[a]);
+    apiWork_ = std::min(BatchWork::kSaturated, (first ? 0 : apiWork_) + work);
+    if (pieces < 2 && last && cb_.batchWork_.add(apiWork_, cb_.batchLimit()))
+        cutBatch();
+    RAW_DIAGNOSTIC(dev_.stats.dispatches++);
+    return true;
+}
+
+// One launch of the bound kernel over `piece` of `grid`: its root table (the whole grid's cs.group_count, the piece's
+// cs.base_group, raw_dispatch_bands.h), the QMD with the piece's raster
+bool ComputeEncoder::launch(const std::array<uint32_t, 3> &grid, const DispatchPiece &piece,
+                            const std::array<uint32_t, 8> &region, const char **why)
+{
+    const PackKernel &r = *state_->rec;
+    if (!rootVa_ || grid_ != grid || base_ != piece.base || region_ != region) {
         uint32_t root[kRootBytes / 4] = {};
-        root[3] = groups[0];
-        root[4] = groups[1];
-        root[5] = groups[2];
+        for (uint32_t a = 0; a < 3; ++a) {
+            root[a] = piece.base[a];
+            root[3 + a] = grid[a];
+        }
         root[kRootSets / 4 + 0] = uint32_t(setVa_);
         root[kRootSets / 4 + 1] = uint32_t(setVa_ >> 32);
         root[kRootSets / 4 + 2] = r.setBytes;
@@ -359,19 +410,21 @@ bool ComputeEncoder::dispatchRegion(const ComputeRegion &part, const std::array<
         for (uint32_t m = residualMask_; m; m &= m - 1)
             root[kRootPush / 4 + __builtin_ctz(m)] = residuals_[__builtin_ctz(m)];
         if (r.regionWord >= 0)
-            memcpy(root + kRootPush / 4 + r.regionWord, region, std::min<size_t>(sizeof region, 4 * (32 - r.regionWord)));
+            memcpy(root + kRootPush / 4 + r.regionWord, region.data(),
+                   std::min<size_t>(sizeof(uint32_t) * region.size(), 4 * (32 - r.regionWord)));
         uint8_t *upload = dev_.alloc(dev_.upload_, kRootBytes, 256, rootVa_);
         memcpy(upload, root, sizeof root);
         grid_ = grid;
-        std::copy(std::begin(region), std::end(region), region_.begin());
+        base_ = piece.base;
+        region_ = region;
         RAW_DIAGNOSTIC(dev_.stats.uploadBytes += kRootBytes);
     }
     uint64_t qmdVa = 0;
     uint32_t qmd[kQmdWords];
     memcpy(qmd, r.qmd, sizeof r.qmd);
     qmd[kQmdProgramOffset] = state_->program;
-    qmd[kQmdRasterWidth] = groups[0];
-    qmd[kQmdRasterHeightDepth] = groups[1] | groups[2] << 16;
+    qmd[kQmdRasterWidth] = piece.groups[0];
+    qmd[kQmdRasterHeightDepth] = piece.groups[1] | piece.groups[2] << 16;
     for (uint32_t i = 0; i < 8; i++) {
         if (!(qmd[kQmdCbufValid] >> i & 1))
             continue;
@@ -396,24 +449,35 @@ bool ComputeEncoder::dispatchRegion(const ComputeRegion &part, const std::array<
     uint8_t *qmdUpload = dev_.alloc(dev_.upload_, sizeof qmd, 256, qmdVa);
     memcpy(qmdUpload, qmd, sizeof qmd);
     RAW_DIAGNOSTIC(dev_.stats.uploadBytes += sizeof qmd);
-    if (serial_ && dispatched_ && first)
-        barrier();
-    dispatched_ = true;
     room(8);
     p_.m(SEND_PCAS_A, uint32_t(qmdVa >> 8), SUBC_COMPUTE);
     p_.m(SEND_SIGNALING_PCAS_B, kPcasInvalidateSchedule, SUBC_COMPUTE);
-    uint64_t work = state_->instructions;
-    for (uint32_t axis = 0; axis < 3; ++axis)
-        work = BatchWork::product(BatchWork::product(work, groups[axis]), threads[axis]);
-    apiWork_ = std::min(BatchWork::kSaturated, (first ? 0 : apiWork_) + work);
-    if (last && cb_.batchWork_.add(apiWork_, cb_.batchLimit())) {
-        cb_.segment(start_, p_.at);
-        cb_.segments_.finishBatch();
-        cb_.batchWork_ = {};
-        start_ = p_.at;
-    }
-    RAW_DIAGNOSTIC(dev_.stats.dispatches++);
     return true;
+}
+
+void ComputeEncoder::cutBatch()
+{
+    cb_.segment(start_, p_.at);
+    cb_.segments_.finishBatch();
+    cb_.batchWork_ = {};
+    start_ = p_.at;
+}
+
+// As a draw is measured (raw_band_rates.h), but with the host's semaphore after a wait for idle: the compute class's own
+// release has no pipeline location to wait at
+bool ComputeEncoder::measureDispatch(uint64_t units, DrawTiming &t)
+{
+    if (dev_.compositorClass() || cb_.timings.size() >= kMeasuredPerCommandBuffer || !measure(state_->rate, units))
+        return false;
+    const uint32_t n = dev_.drawStamps_.fetch_add(1, std::memory_order_relaxed);
+    t = {&state_->rate, units, n % kDrawStampSlots, n + 1 ? n + 1 : 1, state_->rec->keyHash, state_->instructions};
+    return true;
+}
+
+void ComputeEncoder::stampDispatch(const DrawTiming &t, bool end)
+{
+    room(kStampWords);
+    emitStamp(p_, dev_.stamps_.va + drawStampOffset(t.slot, end), t.payload);
 }
 
 void ComputeEncoder::end()

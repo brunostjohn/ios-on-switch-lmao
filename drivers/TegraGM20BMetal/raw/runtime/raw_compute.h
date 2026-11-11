@@ -19,7 +19,9 @@
 #include <cstdint>
 #include <string>
 #include <vector>
+#include "raw_band_rates.h"
 #include "raw_compute_record.h"
+#include "raw_dispatch_bands.h"
 #include "raw_dispatch_regions.h"
 #include "raw_gpu.h"
 
@@ -36,6 +38,7 @@ struct ComputeState {
     uint64_t data = 0;     // its shader data's address, 0: none
     PackKernel placed =
         {};  // a runtime record's, its samplers numbered among the device's (placeCompute): rec points here
+    mutable BandRate rate;  // what its dispatches cost the GPU, learned from its measured ones (raw_band_rates.h)
 };
 
 // The pack's kernel of key `keyHash` (computeKeyHash), its program placed at its first use; null: not in the pack, or no
@@ -106,11 +109,16 @@ private:
     std::array<uint32_t, 32> residuals_{};
     uint32_t residualMask_ = 0;
     uint64_t setVa_ = 0, rootVa_ = 0;
-    std::array<uint32_t, 3> grid_{};
+    std::array<uint32_t, 3> grid_{}, base_{};
     std::array<uint32_t, 8> region_{};
     void bindBuffer(uint32_t slot, const Bound &binding);
     bool prepareDescriptors(const char **why);
     void room(uint32_t words);
+    bool launch(const std::array<uint32_t, 3> &grid, const DispatchPiece &piece, const std::array<uint32_t, 8> &region,
+                const char **why);
+    void cutBatch();
+    bool measureDispatch(uint64_t units, DrawTiming &t);
+    void stampDispatch(const DrawTiming &t, bool end);
 };
 
 }  // namespace raw
