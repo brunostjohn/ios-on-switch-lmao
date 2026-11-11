@@ -354,6 +354,9 @@ host_test(
         "//third_party/mesa/src/nouveau/vulkan:nvk_queue.c",
         "//third_party/mesa/src/vulkan/runtime:vk_queue.c",
         "//drivers/TegraGM20B:TegraGM20BCopy.cpp",
+        "//drivers/TegraGM20B:SwitchGpuKqueue.h",
+        "//drivers/TegraGM20B:SwitchGpuCachedZero.cpp",
+        "//drivers/TegraGM20B:SwitchGpuBridge.cpp",
         "//drivers/TegraGM20B:TegraGM20BDeviceClient.cpp",
         "//drivers/TegraGM20B:TegraGM20BExecSurfaces.cpp",
         "//drivers/TegraGM20B:TegraGM20BGpu.h",
@@ -750,6 +753,7 @@ host_library(
     srcs = ["//drivers/TegraGM20B:SwitchGpuBridge.cpp"],
     hdrs = [
         "//drivers/TegraGM20B:SwitchGpuBridge.h",
+        "//drivers/TegraGM20B:SwitchGpuKqueue.h",
         "//drivers/TegraGM20B:SwitchGpuTimeline.h",
         "//drivers/TegraGM20B:SwitchGpuBacking.h",
         "//drivers/TegraGM20B:TegraGM20BGpu.h",
@@ -927,6 +931,7 @@ host_library(
     srcs = ["//drivers/TegraGM20B:SwitchGpuCachedZero.cpp"],
     hdrs = [
         "//drivers/TegraGM20B:SwitchGpuCachedZero.h",
+        "//drivers/TegraGM20B:SwitchGpuKqueue.h",
         "//drivers/TegraGM20B:TegraGM20BGpu.h",
         "//drivers/TegraGM20B:TegraGM20BRelayout.h",
         "//drivers/TegraGM20B:TegraGM20BFences.h",
@@ -967,7 +972,7 @@ host_test(
         "//drivers/TegraGM20B:TegraGM20BTiled.h", "//drivers/TegraGM20B:SwitchGpuPin.h",
         "//drivers/TegraGM20B:SwitchGpuBacking.h", "//drivers/TegraGM20B:SwitchGpuCachedZero.h",
         "//drivers/TegraGM20B:SwitchGpuRelayoutCache.h", "//kits/SwitchRefusal:SwitchRefusal.h",
-        "//kits/SwitchScratch:SwitchScratch.h",
+        "//kits/SwitchScratch:SwitchScratch.h", "//drivers/TegraGM20B:SwitchGpuKqueue.h",
     ],
     additional_compiler_inputs = ["//drivers/TegraGM20B:TegraGM20BRelayout.cpp"],
     deps = [
@@ -1117,6 +1122,7 @@ host_test(
     additional_compiler_inputs = [
         "//drivers/TegraGM20B:TegraGM20BLayout.h",
         "//drivers/TegraGM20B:TegraGM20BCopy.cpp", "//drivers/TegraGM20B:TegraGM20BCopy.h",
+        "//drivers/TegraGM20B:SwitchGpuKqueue.h",
         "//drivers/TegraGM20B:TegraGM20BCopyPush.h", "//drivers/TegraGM20B:TegraGM20BRelayout.h",
         "//drivers/TegraGM20B:TegraGM20BTiled.h", "//drivers/TegraGM20B:TegraGM20BSyncpt.h",
         "//drivers/TegraGM20B:TegraGM20BFences.h", "//drivers/TegraGM20B:TegraGM20BABI.h",

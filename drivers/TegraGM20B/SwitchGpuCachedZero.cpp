@@ -8,6 +8,7 @@
 #include "SwitchGpuCachedZero.h"
 #include "TegraGM20BGpu.h"
 #include "TegraGM20BRelayout.h"
+#include "SwitchGpuKqueue.h"
 #include "../../kits/SwitchDMA/SwitchDcache.h"
 
 struct switch_gpu_cached_mapping {
@@ -34,16 +35,13 @@ struct Job {
 	uint32_t sequence;
 };
 
+constexpr SwitchGpuKqueueShape kShape = {"cached-scrub", TGM_FENCE_KERNEL_CACHED_ZERO, 1, kPushVa, 1, 0};
+
 struct Queue {
 	IOLock *lock;
 	thread_call_t retirement, watchdog;
-	tgm_vm *vm;
-	tgm_chan *channel;
-	tgm_mem *push, *fence;
-	switch_gpu_mapping *pushMapping;
-	uint32_t *words;
-	volatile uint32_t *fenceCpu;
-	uint64_t fenceGpu, fencePage, pushPage, mappedBytes, slots, armed, uses;
+	SwitchGpuKqueue space;
+	uint64_t mappedBytes, slots, armed, uses;
 	switch_gpu_cached_mapping *owners[64];  // by slot: what each mapped window holds
 	Job jobs[kJobs];
 } queue;
@@ -75,7 +73,7 @@ void retire(thread_call_param_t, thread_call_param_t)
 	uint32_t count = 0;
 	IOLockLock(queue.lock);
 	int failed = 0;
-	const uint32_t done = queue.channel ? tgm_chan_settled(queue.channel, &failed) : 0;
+	const uint32_t done = queue.space.channel ? tgm_chan_settled(queue.space.channel, &failed) : 0;
 	for (auto &job : queue.jobs) {
 		if (!job.mapping || (!failed && int32_t(done - job.sequence) < 0))
 			continue;
@@ -98,14 +96,14 @@ void timeout(thread_call_param_t, thread_call_param_t)
 	IOLockLock(queue.lock);
 	queue.armed = 0;
 	const uint64_t now = mach_absolute_time();
-	const uint32_t done = queue.channel ? tgm_chan_completed(queue.channel) : 0;
+	const uint32_t done = queue.space.channel ? tgm_chan_completed(queue.space.channel) : 0;
 	uint32_t late = 0;
 	for (const auto &job : queue.jobs)
 		if (job.mapping && job.deadline && job.deadline <= now &&
 		    int32_t(done - job.sequence) < 0 && (!late || int32_t(job.sequence - late) < 0))
 			late = job.sequence;
 	const uint64_t next =
-		late ? tgm_chan_check_progress(queue.channel, "cached scrub", late) : 0;
+		late ? tgm_chan_check_progress(queue.space.channel, "cached scrub", late) : 0;
 	uint64_t deadline = 0;
 	if (next)
 		clock_interval_to_deadline(uint32_t(next / 1000), 1000, &deadline);
@@ -147,62 +145,28 @@ bool initialize()
 	return true;
 }
 
-bool openSpace()
-{
-	uint32_t offset = 0;
-	queue.words = static_cast<uint32_t *>(tgm_pool_alloc(kPage, 0, &queue.pushPage));
-	if (!queue.words ||
-	    tgm_fence_kernel(TGM_FENCE_KERNEL_CACHED_ZERO, &queue.fenceCpu, &queue.fencePage,
-			     &offset) ||
-	    tgm_vm_new(&queue.vm))
-		return false;
-	tgm_vm_claim(queue.vm, &queue);
-	if (tgm_mem_new(queue.vm, &queue.pushPage, 1, &queue.push) ||
-	    switch_gpu_vm_map_volatile(queue.vm, kPushVa, kPage, queue.push, 0, 0, 1, 1,
-				       &queue.pushMapping) ||
-	    tgm_mem_new(queue.vm, &queue.fencePage, 1, &queue.fence) ||
-	    tgm_vm_kmap(queue.vm, queue.fence, kPage, &queue.fenceGpu))
-		return false;
-	queue.fenceGpu += offset;
-	return true;
-}
-
 int channel()
 {
-	if (queue.channel && tgm_chan_error(queue.channel)) {
+	if (queue.space.channel && tgm_chan_error(queue.space.channel)) {
 		for (const auto &job : queue.jobs)
 			if (job.mapping)
 				return -16;
-		tgm_chan_del(&queue.channel);
+		tgm_chan_del(&queue.space.channel);
 	}
-	if (!queue.vm && !openSpace()) {
-		switch_gpu_vm_unmap(queue.vm, &queue.pushMapping);
-		tgm_vm_del(&queue.vm);
-		tgm_mem_del(&queue.push);
-		tgm_mem_del(&queue.fence);
-		if (queue.words)
-			tgm_pool_free(queue.words, kPage, queue.pushPage);
-		queue.words = nullptr;
-		queue.fenceCpu = nullptr;
-		queue.fenceGpu = queue.fencePage = queue.pushPage = 0;
+	if (!queue.space.vm && !queue.space.openSpace(kShape, &queue)) {
+		queue.space.discardSpace(kShape);
+		queue.space.fenceCpu = nullptr;
+		queue.space.fenceGpu = queue.space.fencePage = queue.space.pushPa = 0;
 		return -12;
 	}
-	if (!queue.channel) {
-		const int result =
-			tgm_chan_new_copy(queue.vm, &queue, queue.fenceCpu, queue.fenceGpu,
-					  "cached-scrub", 0, &queue.channel);
-		if (result)
-			return result;
-		tgm_chan_on_fence(queue.channel, fenced, nullptr);
-	}
-	return 0;
+	return queue.space.openChannel(kShape, &queue, fenced);
 }
 
 void unmapWindow(switch_gpu_cached_mapping *mapping)
 {
 	if (!mapping->mapped)
 		return;
-	switch_gpu_vm_unmap(queue.vm, &mapping->mapping);
+	switch_gpu_vm_unmap(queue.space.vm, &mapping->mapping);
 	tgm_mem_del(&mapping->memory);
 	queue.mappedBytes -= mapping->bytes;
 	queue.slots &= ~(1ULL << mapping->slot);
@@ -242,9 +206,9 @@ int mapWindow(switch_gpu_cached_mapping *mapping)
 	queue.owners[mapping->slot] = mapping;
 	queue.mappedBytes += mapping->bytes;
 	mapping->mapped = true;
-	int result = tgm_mem_new(queue.vm, mapping->pages, mapping->count, &mapping->memory);
+	int result = tgm_mem_new(queue.space.vm, mapping->pages, mapping->count, &mapping->memory);
 	if (!result)
-		result = switch_gpu_vm_map_volatile(queue.vm, mapping->address, mapping->bytes,
+		result = switch_gpu_vm_map_volatile(queue.space.vm, mapping->address, mapping->bytes,
 						    mapping->memory, 0, 0, 0, 1, &mapping->mapping);
 	if (result)
 		unmapWindow(mapping);
@@ -309,13 +273,13 @@ int switch_gpu_cached_zero(const uint64_t *pages, uint32_t count, void *cpu,
 	if (!result) {
 		// No task or producer can access this allocation. Discard old cached CPU bytes before CE overwrites it.
 		switch_dcache_invalidate(cpu, size_t(count) * kPage);
-		uint32_t *words = queue.words + slot * 32;
+		uint32_t *words = queue.space.words + slot * 32;
 		const tgm_push push = {
 			kPushVa + slot * 128,
 			tgm_relayout_clear(words, (*mapping)->address, uint64_t(count) * kPage), 0,
 			0, 0, 0};
 		uint32_t sequence = 0;
-		result = tgm_chan_exec(queue.channel, &push, 1, &sequence, nullptr);
+		result = tgm_chan_exec(queue.space.channel, &push, 1, &sequence, nullptr);
 		if (!result) {
 			uint64_t deadline = 0;
 			clock_interval_to_deadline(1, 1000000000, &deadline);
