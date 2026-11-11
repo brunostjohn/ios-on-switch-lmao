@@ -26,7 +26,7 @@ bool TextureTransfers::retire(Kernel &kernel, Slot &slot)
         return true;
     const auto *fence = reinterpret_cast<const volatile TegraGM20BAbiFence *>(fence_);
     bool wait = int32_t(*fence_ - slot.sequence) < 0;
-    if (!wait && (kernel.info().flags & TegraGM20BInfoSemanticFence)) {
+    if (!wait) {
         const auto *semantic = reinterpret_cast<const volatile TegraGM20BAbiFenceSemantic *>(fence + 1);
         const auto status = readSemanticFence(semantic, slot.sequence).status;
         if (status == SemanticFenceStatus::Failed)

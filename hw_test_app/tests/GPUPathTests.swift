@@ -351,7 +351,6 @@ struct NativeSurfaceViewPathTest: GPUPathTest {
 struct SemanticFencePathTest: GPUPathTest {
     let id = "gpu.path.semantic_fence"
     let name = "Completions read the fence record's semantic state, and no failure spills onto later work"
-    let bit: Int? = 22
     let counters: [String] = []
     static let count = 48, slice = 256
 

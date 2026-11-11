@@ -98,7 +98,7 @@ namespace raw {
 Kernel::~Kernel() = default;
 bool Kernel::open(std::string &)
 {
-    info_.flags = TegraGM20BInfoSubmitAddress | TegraGM20BInfoKillRecord | TegraGM20BInfoSemanticFence;
+    info_.flags = TegraGM20BInfoSubmitAddress | TegraGM20BInfoKillRecord;
     return true;
 }
 bool Kernel::alloc(uint64_t bytes, bool coherent, Bo &bo, uint32_t, uint64_t, bool gpuVolatile)

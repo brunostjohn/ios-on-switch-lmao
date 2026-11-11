@@ -1252,10 +1252,7 @@ public:
 
     bool lost(uint32_t seqno) const
     {
-        if (k_.killRecords() || (k_.info().flags & TegraGM20BInfoSemanticFence))
-            return killed(seqno);
-        return lostAny_.load(std::memory_order_acquire) &&
-               int32_t(lostThrough_.load(std::memory_order_relaxed) - seqno) >= 0;
+        return killed(seqno);
     }
 
     // A kill record's error the device writes itself (waitFence): the kernel kept refusing to wait on a channel it called
@@ -1489,7 +1486,7 @@ private:
     SemanticFenceRead semanticFence(uint32_t seqno) const
     {
         const volatile uint32_t *fence = fence_;
-        if (fence == &kNoFence || !(k_.info().flags & TegraGM20BInfoSemanticFence))
+        if (fence == &kNoFence)
             return {};
         const auto *record = reinterpret_cast<const volatile TegraGM20BAbiFence *>(fence);
         return readSemanticFence(reinterpret_cast<const volatile TegraGM20BAbiFenceSemantic *>(record + 1), seqno);
@@ -1717,11 +1714,8 @@ private:
     void emitContext(Push &p);
     bool reopen();
     bool waitFence(uint32_t seqno, uint64_t generation);
-    void noteLost();
     // the last seqno of a channel that died: it and every one before it failed (or completed before; not told apart),
     // where the kernel writes no kill records
-    std::atomic<uint32_t> lostThrough_{0};
-    std::atomic<bool> lostAny_{false};
 
     // The seqnos a kill took (TegraGM20BAbiFence): the live channel's record, then the ones the channels it replaced left,
     // kept until reopen made the record's slot over (a slot's seqnos continue, so a kept record names its channel's alone).

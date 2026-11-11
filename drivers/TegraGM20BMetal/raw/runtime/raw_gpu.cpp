@@ -2882,12 +2882,10 @@ bool Device::waitFence(uint32_t seqno, uint64_t generation)
             return false;
         TegraGM20BAbiStatus st;
         if (k_.lost(ch) || !k_.status(ch, st)) {  // killed, or destroyed by a reopen that kept its kill record
-            noteLost();
             break;
         }
         if (st.error) {
             k_.markLost(ch, opened);
-            noteLost();
             break;
         }
         if (done(seqno))
@@ -2904,7 +2902,6 @@ bool Device::waitFence(uint32_t seqno, uint64_t generation)
                 keptKills_.store(true, std::memory_order_release);
             }
             k_.markLost(ch, opened);  // begin() makes it again
-            noteLost();
             return false;
         }
     }
@@ -2920,12 +2917,6 @@ void Device::keepFailure(uint32_t seqno)
     if (!keptKills_.load(std::memory_order_relaxed) || int32_t(seqno - through) > 0)
         keptThrough_.store(seqno, std::memory_order_relaxed);
     keptKills_.store(true, std::memory_order_release);
-}
-
-void Device::noteLost()
-{
-    lostThrough_.store(__atomic_load_n(&lastSeqno_, __ATOMIC_RELAXED), std::memory_order_relaxed);
-    lostAny_.store(true, std::memory_order_release);
 }
 
 // The barriers order the record after the caller's read of the fence word, and its range after its error: the kernel
@@ -3020,7 +3011,6 @@ bool Device::reopen()
     // Invalidate consumers before a destroyed slot can name another channel.
     const uint64_t retiring = channelGeneration_.fetch_add(1, std::memory_order_release);
     if (!contextless_) {  // the first try for this death: what the channel had failed, its kill record is kept
-        noteLost();
         Killed live = {};
         if (liveKill(live)) {
             k_.markLost(channel_, k_.opened());

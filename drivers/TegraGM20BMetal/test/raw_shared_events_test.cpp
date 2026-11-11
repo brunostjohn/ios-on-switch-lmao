@@ -94,7 +94,7 @@ extern "C" kern_return_t IOConnectCallStructMethod(mach_port_t connection, uint3
         info.abi_version = TegraGM20BAbiVersion;
         info.flags = TegraGM20BInfoSubmitAddress |
                      (model.pushFences ? uint32_t(TegraGM20BInfoPushFences) : 0u) |
-                     (model.shared ? uint32_t(TegraGM20BInfoSharedEvents | TegraGM20BInfoSemanticFence |
+                     (model.shared ? uint32_t(TegraGM20BInfoSharedEvents |
                                               TegraGM20BInfoResourceReady) : 0u);
         info.va_start = 0x1000000;
         info.va_end = 0x100000000;

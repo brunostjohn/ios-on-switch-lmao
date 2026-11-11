@@ -80,7 +80,6 @@ enum {
 	TegraGM20BInfoCpuPreserveDirty = 1u << 15,
 	TegraGM20BInfoCanonicalSurfaceLayout = 1u << 16,
     TegraGM20BInfoSharedEvents = 1u << 21,
-    TegraGM20BInfoSemanticFence = 1u << 22,
     TegraGM20BInfoResourceReady = 1u << 23,
     TegraGM20BInfoPushFences = 1u << 26, /* SubmitAddress takes TegraGM20BPushFence */
 };
@@ -395,7 +394,7 @@ enum {
     TegraGM20BFenceSemanticFailed = 1u << 1,
 };
 
-/* With InfoSemanticFence, this immediately follows AbiFence. Read epoch, fields, epoch with acquire ordering;
+/* This immediately follows AbiFence. Read epoch, fields, epoch with acquire ordering;
  * an odd or changed epoch requires WaitFence. Prefix comparisons use signed32 sequence differences. */
 struct TegraGM20BAbiFenceSemantic {
     uint32_t epoch, pending_first, failed_first, flags;

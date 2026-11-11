@@ -53,7 +53,7 @@ Kernel::~Kernel()
 
 std::shared_ptr<SharedEvents> Kernel::sharedEvents()
 {
-    constexpr uint32_t required = TegraGM20BInfoSharedEvents | TegraGM20BInfoSemanticFence;
+    constexpr uint32_t required = TegraGM20BInfoSharedEvents;
     if ((info_.flags & required) != required || !exactJobs())
         return nullptr;
     std::lock_guard<std::mutex> lock(eventsLock_);

@@ -97,7 +97,6 @@ struct DeviceHarness {
         const auto *originalFence = device.fence_;
         auto &flags = const_cast<TegraGM20BAbiInfo &>(device.k_.info()).flags;
         const auto originalFlags = flags;
-        flags |= TegraGM20BInfoSemanticFence;
         device.fence_ = &state.physical.completed;
         expect(!device.done(0), "zero semantic state cannot bypass physical retirement");
         state.physical.completed = 0;

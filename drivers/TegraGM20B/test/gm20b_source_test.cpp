@@ -691,14 +691,13 @@ TEST(GM20BFencesSource, ExecQueuesItsWritersAcquiresBeforeItSubmits)
 	}
 	const auto capabilities = flat(definition(client(), "uint32_t switch_gpu_info_flags(void)"));
 	for (const char *capability : {"TegraGM20BInfoExecSurfaces", "TegraGM20BInfoSubmitAddress",
-				      "TegraGM20BInfoResourceReady", "TegraGM20BInfoSemanticFence",
-                                      "TegraGM20BInfoCpuAccess"})
+				      "TegraGM20BInfoResourceReady", "TegraGM20BInfoCpuAccess"})
 		EXPECT_THAT(capabilities, HasSubstr(capability));
 	EXPECT_THAT(flat(definition(client(), "IOReturn AGXDeviceUserClient::getInfo(")),
 		    HasSubstr("out->flags = switch_gpu_info_flags();"));
 	EXPECT_THAT(client(), Not(HasSubstr("kInfoAwaitingUserspace")));
 	for (const char *capability :
-	     {"TegraGM20BInfoResourceReady", "TegraGM20BInfoSharedEvents", "TegraGM20BInfoSemanticFence"})
+	     {"TegraGM20BInfoResourceReady", "TegraGM20BInfoSharedEvents"})
 		EXPECT_THAT(capabilities, HasSubstr(capability));
 }
 

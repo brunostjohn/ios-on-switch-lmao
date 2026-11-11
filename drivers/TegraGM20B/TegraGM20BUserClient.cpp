@@ -394,7 +394,7 @@ extern "C" uint32_t switch_gpu_info_flags(void)
 		     TegraGM20BInfoPriority | TegraGM20BInfoKillRecord | TegraGM20BInfoSubmit |
 		     TegraGM20BInfoCpuAccess | TegraGM20BInfoSubmitAddress | TegraGM20BInfoCpuPreserveDirty |
 		     TegraGM20BInfoCanonicalSurfaceLayout |
-		     TegraGM20BInfoSharedEvents | TegraGM20BInfoSemanticFence | TegraGM20BInfoResourceReady |
+		     TegraGM20BInfoSharedEvents | TegraGM20BInfoResourceReady |
 		     TegraGM20BInfoPushFences;
 	if (info.comptag_lines && switch_gpu_compression_on())
 		flags |= TegraGM20BInfoCompression;
