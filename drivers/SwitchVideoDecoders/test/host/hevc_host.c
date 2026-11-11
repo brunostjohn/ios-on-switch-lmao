@@ -374,9 +374,9 @@ static void testDecode(void)
                     small.entries[k].offset = (uint32_t)(f.bytes[small.entries[k].value] - columns * rows / 2);
             ((nvdec_hevc_pic_s *)eight.setup)->disp_output_mode = 2;
             ((nvdec_hevc_pic_s *)deblock.setup)->HevcSaoBufferOffset = 480 * rows / 256;
-            CHECK(fakeCheck(&f, &narrow) && fakeCheck(&f, &bytes) && fakeCheck(&f, &small) && fakeCheck(&f, &eight) &&
-                      fakeCheck(&f, &deblock),
+            CHECK(fakeCheck(&f, &narrow) && fakeCheck(&f, &bytes) && fakeCheck(&f, &small) && fakeCheck(&f, &deblock),
                   "clip %c: the checker took a Main 10 submit the engine would write past", clip->name);
+            CHECK(!fakeCheck(&f, &eight), "clip %c: mode 2 into 16-bit-sized pictures refused", clip->name);
             printf("checker: Main 10 at %u samples a row (%u bytes); byte strides, 8-bit-sized planes and filter rows "
                    "refused\n",
                    columns, 2 * columns);

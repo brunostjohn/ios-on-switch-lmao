@@ -65,8 +65,10 @@ enum {
 };
 
 // Not an application id: TegraNVDECInfo.codecs bit 16, HEVC Main 10 is decoded, into 16-bit samples
-// (disp_output_mode 1, the 10 bits high: P010). The 10-to-8-bit modes 2 and 3 are refused: on the unit (11-06) clip
-// T's first picture came out with luma CRC 0xeeb22512 where FFmpeg's samples >> 2 give 0xfe5d343b.
+// (disp_output_mode 1, the 10 bits high: P010). Submit also takes the 10-to-8-bit modes 2 and 3, with or without
+// NVDEC's display buffer, every surface bounded as 16-bit; the AVD plug-in uses them only once the display-buffer probe
+// says what they write (on the unit, 11-06, mode 2 without a display buffer gave clip T's first picture luma CRC
+// 0xeeb22512 where FFmpeg's samples >> 2 give 0xfe5d343b).
 #define TEGRA_NVDEC_HEVC_MAIN10 (1u << 16)
 
 typedef struct {

@@ -381,12 +381,15 @@ static inline const char *tegra_nvdec_check_hevc(const TegraNVDECSubmit *s, cons
         TILES,
         FILTER,
         COLOC,
-        BUFFERS
+        BUFFERS,
+        DISPLAY_LUMA = BUFFERS,
+        DISPLAY_CHROMA,
+        ALL_BUFFERS
     };
 
     if (s->setup_bytes != sizeof(nvdec_hevc_pic_s))
         return "setup size";
-    uint64_t buf[BUFFERS] = {0};
+    uint64_t buf[ALL_BUFFERS] = {0};
     uint64_t luma[SLOTS] = {0};
     uint64_t chroma[SLOTS] = {0};
     uint32_t seen = 0;
@@ -423,6 +426,12 @@ static inline const char *tegra_nvdec_check_hevc(const TegraNVDECSubmit *s, cons
         case NVC5B0_SET_COLOC_DATA_OFFSET:
             slot = &buf[COLOC];
             break;
+        case NVC5B0_SET_DISPLAY_BUF_LUMA_OFFSET:
+            slot = &buf[DISPLAY_LUMA];
+            break;
+        case NVC5B0_SET_DISPLAY_BUF_CHROMA_OFFSET:
+            slot = &buf[DISPLAY_CHROMA];
+            break;
         default:
             if (m >= LUMA && m < LUMA + 4 * SLOTS && !(m & 3)) {
                 slot = &luma[(m - LUMA) / 4];
@@ -436,6 +445,9 @@ static inline const char *tegra_nvdec_check_hevc(const TegraNVDECSubmit *s, cons
             return "repeated relocation";
         *slot = avail[i] ? avail[i] : 1;
     }
+    const bool display = buf[DISPLAY_LUMA] || buf[DISPLAY_CHROMA];
+    if (display && (!buf[DISPLAY_LUMA] || !buf[DISPLAY_CHROMA]))
+        return "half a display buffer";
     if ((seen & 0x13) != 0x13)
         return "missing application id, control params or execute";
     for (uint32_t i = 0; i < BUFFERS; i++) {  // NOLINT(modernize-loop-convert): C too
@@ -477,11 +489,15 @@ static inline const char *tegra_nvdec_check_hevc(const TegraNVDECSubmit *s, cons
     if (p->chroma_format_idc != 1 || p->bit_depth_luma != p->bit_depth_chroma)
         return "chroma format";
     // Mode 0 writes 8-bit samples; mode 1, Main 10's only, writes 16-bit ones, so its surfaces and the pixel rows of
-    // the filter buffer are twice as wide.
+    // the filter buffer are twice as wide. Modes 2 and 3 take Main 10 to 8 bits (nvdec_drv.h: Rec.709, Rec.2020), into
+    // the pictures (averne's nvtegra_hevc.c, without a display buffer) or into the display buffer (NVDEC's
+    // DISPLAY_BUF, which no open driver binds); which, and how wide, is unknown, so both are bounded as 16-bit.
     const bool eightBit = p->bit_depth_luma == 8 && p->disp_output_mode == 0;
-    const bool tenBit = p->bit_depth_luma == 10 && p->disp_output_mode == 1;
+    const bool tenBit = p->bit_depth_luma == 10 && p->disp_output_mode >= 1 && p->disp_output_mode <= 3;
     if (!eightBit && !tenBit)
         return "output mode";
+    if (display && p->disp_output_mode < 2)
+        return "display buffer outside modes 2 and 3";
     const uint64_t sampleBytes = tenBit ? 2 : 1;
     if (p->log2_min_luma_coding_block_size < 3 || p->log2_max_luma_coding_block_size > 6 ||
         p->log2_min_luma_coding_block_size > p->log2_max_luma_coding_block_size ||
@@ -502,6 +518,9 @@ static inline const char *tegra_nvdec_check_hevc(const TegraNVDECSubmit *s, cons
         if (luma[i] < lumaBytes || chroma[i] < lumaBytes / 2)
             return "surface too small";
     }
+    // SET_DISPLAY_BUF_SIZE stays refused ("value method"): its unit is undocumented, so no bound on it can be proven.
+    if (display && (buf[DISPLAY_LUMA] < lumaBytes || buf[DISPLAY_CHROMA] < lumaBytes / 2))
+        return "display buffer too small";
     // Colocated motion: 17 slots of colMvBuffersize x 256 bytes, each at least (64-aligned width x height) / 16.
     const uint64_t colmv = (uint64_t)p->colMvBuffersize * 256;
     if (colmv < ((w + 63) & ~63u) * rows / 16 || buf[COLOC] < 17 * colmv)

@@ -92,10 +92,47 @@ TEST(SwitchNVDECDisplayProbe, TakesModesTwoAndThreeWithSixteenBitBuffers)
     EXPECT_EQ(j.setup().disp_output_mode, 3) << "the job NVDEC runs keeps its mode";
 }
 
-TEST(SwitchNVDECDisplayProbe, TheOrdinaryCheckStillRefusesTheSameJob)
+std::string ordinary(Job &j)
+{
+    const char *why = tegra_nvdec_check(&j.submit, j.avail);
+    return why ? why : "";
+}
+
+void insertBeforeExecute(Job &j, uint16_t method, uint16_t kind, uint32_t value, uint64_t bytes)
+{
+    const TegraNVDECEntry execute = j.submit.entries[--j.submit.entry_count];
+    j.add(method, kind, value, bytes);
+    j.add(execute.method, execute.kind, execute.value, 0);
+}
+
+TEST(SwitchNVDECDisplayProbe, TheOrdinaryCheckTakesModesTwoAndThreeWithOrWithoutTheDisplayBuffer)
 {
     Job j = mainTen();
-    EXPECT_NE(tegra_nvdec_check(&j.submit, j.avail), nullptr);
+    EXPECT_EQ(ordinary(j), "");
+    j.setup().disp_output_mode = 3;
+    EXPECT_EQ(ordinary(j), "");
+    j = mainTen();
+    j.submit.entries[indexOf(j, NVC5B0_SET_DISPLAY_BUF_LUMA_OFFSET)].method = NVC5B0_SET_HISTORY_OFFSET;
+    EXPECT_EQ(ordinary(j), "relocated method");
+    Job bare = mainTen();
+    bare.submit.entry_count -= 3;
+    bare.add(NVC5B0_EXECUTE, TEGRA_NVDEC_ENTRY_VALUE, 0x100, 0);
+    EXPECT_EQ(ordinary(bare), "");
+}
+
+TEST(SwitchNVDECDisplayProbe, TheOrdinaryCheckBoundsTheDisplayBufferAndItsSize)
+{
+    Job j = mainTen(kSlotLuma, kSlotLuma / 2 - 1);
+    EXPECT_EQ(ordinary(j), "display buffer too small");
+    j = mainTen();
+    j.setup().disp_output_mode = 1;
+    EXPECT_EQ(ordinary(j), "display buffer outside modes 2 and 3");
+    j = mainTen();
+    j.submit.entries[indexOf(j, NVC5B0_SET_DISPLAY_BUF_CHROMA_OFFSET)].method = NVC5B0_SET_DISPLAY_BUF_LUMA_OFFSET;
+    EXPECT_EQ(ordinary(j), "repeated relocation");
+    j = mainTen();
+    insertBeforeExecute(j, NVC5B0_SET_DISPLAY_BUF_SIZE, TEGRA_NVDEC_ENTRY_VALUE, uint32_t(kSlotLuma / 2), 0);
+    EXPECT_EQ(ordinary(j), "value method");
 }
 
 TEST(SwitchNVDECDisplayProbe, RefusesWhatIsNotAMainTenProbe)
@@ -152,6 +189,7 @@ TEST(SwitchNVDECDisplayProbe, DisplayBufferSizeStaysRefused)
     j.submit.entries[execute] = {NVC5B0_SET_DISPLAY_BUF_SIZE, TEGRA_NVDEC_ENTRY_VALUE, 1, 0};
     j.add(NVC5B0_EXECUTE, TEGRA_NVDEC_ENTRY_VALUE, 0x100, 0);
     EXPECT_EQ(check(j), "value method");
+    EXPECT_EQ(ordinary(j), "value method");
 }
 
 TEST(SwitchNVDECAccess, TheDisplayBufferIsWritten)
