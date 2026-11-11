@@ -74,9 +74,9 @@ fn destination(
     if sc.view.uint_view.is_none() {
         return as_held(fb, texel, sc.view.numeric);
     }
-    if sc.view.format == super::packed::FORMAT {
+    if super::packed::is_packed(sc.view.format) {
         let word = fb.composite_extract(texel, &[0])?;
-        return super::packed::decode(fb, word);
+        return super::packed::decode(fb, sc.view.format, word);
     }
     let Some(table) = cx.decl.families.arith.srgb else {
         return Err(cx.fail("an sRGB blend without Metal's table"));

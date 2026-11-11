@@ -1,10 +1,11 @@
-//! The storage form of a `BGR5A1Unorm` attachment (`A1R5G5B5_UNORM_PACK16`), to which a device
-//! without its storage access (NVK) gives the view `R16_UINT` (`StorageView::uint_view`): the
-//! function reads and writes the texel's bits. A read is each channel's exact value, `c / (2^b -
-//! 1)` correctly rounded, as Metal reads one texel of a packed format (`metal::texel_format`,
-//! `PackedTexels::Rgb5A1`); a write packs each channel's code as Metal's write of the output
-//! rounds it (`color_write::round` by the attachment's rules, else the nearest code), and takes
-//! the channels it keeps from the texel read first, inside the interlock.
+//! The storage form of a packed unsigned normalized attachment a device grants no storage access
+//! (NVK): `BGR5A1Unorm` (`A1R5G5B5_UNORM_PACK16`), viewed in `R16_UINT`, and `BGR10A2Unorm`
+//! (`A2R10G10B10_UNORM_PACK32`), viewed in `R32_UINT` (`StorageView::uint_view`): the function
+//! reads and writes the texel's bits. A read is each channel's exact value, `c / (2^b - 1)`
+//! correctly rounded, as Metal reads one texel of a packed format (`metal::texel_format`,
+//! `PackedTexels`); a write packs each channel's code as Metal's write of the output rounds it
+//! (`color_write::round` by the attachment's rules, else the nearest code), and takes the channels
+//! it keeps from the texel read first, inside the interlock.
 
 use super::{image_and_texel, StorageColor};
 use crate::lower::arith::color_write;
@@ -21,18 +22,49 @@ use crate::spirv::ids::Value as SValue;
 use crate::spirv::ir::{BinOp, ConvOp, GlslOp, Type as SType};
 use crate::vk;
 
-pub(super) const FORMAT: vk::Format = vk::Format::A1R5G5B5_UNORM_PACK16;
+/// One packed format: each channel's bit offset in the texel and its bits, red to alpha.
+struct Packed {
+    format: vk::Format,
+    fields: [(u32, u8); 4],
+}
 
-/// Each channel's bit offset in the texel and its largest code, red to alpha.
-const FIELDS: [(u32, u32); 4] = [(10, 31), (5, 31), (0, 31), (15, 1)];
+const PACKED: [Packed; 2] = [
+    Packed {
+        format: vk::Format::A1R5G5B5_UNORM_PACK16,
+        fields: [(10, 5), (5, 5), (0, 5), (15, 1)],
+    },
+    Packed {
+        format: vk::Format::A2R10G10B10_UNORM_PACK32,
+        fields: [(20, 10), (10, 10), (0, 10), (30, 2)],
+    },
+];
+
+/// Whether `format` is held in the storage form through this module's packing.
+pub(super) fn is_packed(format: vk::Format) -> bool {
+    PACKED.iter().any(|p| p.format == format)
+}
+
+/// The packing of `format`, one [`is_packed`] holds.
+fn packing(format: vk::Format) -> &'static Packed {
+    PACKED
+        .iter()
+        .find(|p| p.format == format)
+        .unwrap_or(&PACKED[0])
+}
+
+/// Each channel's bit offset and largest code in `format`'s texel, red to alpha.
+fn fields(format: vk::Format) -> [(u32, u32); 4] {
+    packing(format)
+        .fields
+        .map(|(at, bits)| (at, (1u32 << bits) - 1))
+}
 
 /// How a write rounds each channel where the pipeline names no rule: to the nearest code.
-const NEAREST: [Option<ChannelWrite>; 4] = [
-    Some(ChannelWrite::Unorm { bits: 5 }),
-    Some(ChannelWrite::Unorm { bits: 5 }),
-    Some(ChannelWrite::Unorm { bits: 5 }),
-    Some(ChannelWrite::Unorm { bits: 1 }),
-];
+fn nearest(format: vk::Format) -> [Option<ChannelWrite>; 4] {
+    packing(format)
+        .fields
+        .map(|(_, bits)| Some(ChannelWrite::Unorm { bits }))
+}
 
 fn u32_const(fb: &mut FunctionBuilder<'_>, v: u32) -> BResult<SValue> {
     let c = fb.u32_const(v)?;
@@ -51,10 +83,16 @@ fn u32_type() -> SType {
     }
 }
 
-/// The `vec4` a fetch reads from texel `word` (a `u32` of the view): each channel's exact value.
-pub(super) fn decode(fb: &mut FunctionBuilder<'_>, word: SValue) -> BResult<SValue> {
+/// The `vec4` a fetch reads from texel `word` (a `u32` of the view of a `format` attachment): each
+/// channel's exact value.
+pub(super) fn decode(
+    fb: &mut FunctionBuilder<'_>,
+    format: vk::Format,
+    word: SValue,
+) -> BResult<SValue> {
+    let fields = fields(format);
     let mut codes = Vec::with_capacity(4);
-    for (at, top) in FIELDS {
+    for (at, top) in fields {
         let shift = u32_const(fb, at)?;
         let mask = u32_const(fb, top)?;
         let field = fb.binary(BinOp::ShiftRightLogical, word, shift)?;
@@ -64,7 +102,7 @@ pub(super) fn decode(fb: &mut FunctionBuilder<'_>, word: SValue) -> BResult<SVal
     let codes = fb.composite_construct(uvec4, &codes)?;
     let fvec4 = vec4(fb, SType::Float { width: 32 })?;
     let codes = fb.convert(ConvOp::ConvertUToF, codes, fvec4)?;
-    exact_quotient(fb, codes, FIELDS.map(|(_, top)| top))
+    exact_quotient(fb, codes, fields.map(|(_, top)| top))
 }
 
 /// The `uvec4` texel (its first lane the view's `u32`) a write of output `part` (four `float` or
@@ -94,11 +132,11 @@ pub(super) fn texel(
     let recorded = cx.plan.families.stage_io.interface.color_writes.get(&color);
     let rules = match (sc.view.rop, recorded) {
         (false, Some(rules)) => *rules,
-        _ => NEAREST,
+        _ => nearest(sc.view.format),
     };
     let rounded = color_write::round(fb, f4, x, &rules, None)?;
     let mut word = None;
-    for (lane, (at, top)) in FIELDS.into_iter().enumerate() {
+    for (lane, (at, top)) in fields(sc.view.format).into_iter().enumerate() {
         let one = Form { lanes: 1, ..f4 };
         let v = fb.composite_extract(rounded, &[lane as u32])?;
         let m = fsplat(fb, one, f64::from(top))?;
@@ -150,7 +188,7 @@ fn kept_bits(
     if !sc.view.kept_at_draw {
         let mask = channels
             .iter()
-            .zip(FIELDS)
+            .zip(fields(sc.view.format))
             .filter(|(c, _)| sc.view.kept.contains(**c))
             .fold(0u32, |m, (_, (at, top))| m | top << at);
         return u32_const(fb, mask);
@@ -160,7 +198,7 @@ fn kept_bits(
     let draw = fb.binary(BinOp::ShiftRightLogical, word, shift)?;
     let zero = u32_const(fb, 0)?;
     let mut mask = zero;
-    for (lane, (at, top)) in FIELDS.into_iter().enumerate() {
+    for (lane, (at, top)) in fields(sc.view.format).into_iter().enumerate() {
         let bit = u32_const(fb, 1 << lane)?;
         let set = fb.binary(BinOp::BitwiseAnd, draw, bit)?;
         let set = fb.binary(BinOp::INotEqual, set, zero)?;
@@ -169,4 +207,46 @@ fn kept_bits(
         mask = fb.binary(BinOp::BitwiseOr, mask, field)?;
     }
     Ok(mask)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Each packed format's fields tile its texel exactly, red to alpha as Vulkan packs it.
+    #[test]
+    fn the_packed_formats_tile_their_texels() {
+        for (format, bits, want) in [
+            (
+                vk::Format::A1R5G5B5_UNORM_PACK16,
+                16,
+                [(10, 31), (5, 31), (0, 31), (15, 1)],
+            ),
+            (
+                vk::Format::A2R10G10B10_UNORM_PACK32,
+                32,
+                [(20, 1023), (10, 1023), (0, 1023), (30, 3)],
+            ),
+        ] {
+            assert!(is_packed(format), "{format:?}");
+            let view = if bits == 16 {
+                vk::Format::R16_UINT
+            } else {
+                vk::Format::R32_UINT
+            };
+            assert_eq!(
+                crate::pipeline::StorageAttachmentUse::uint_view_of(format),
+                Some(view),
+                "{format:?}"
+            );
+            assert_eq!(fields(format), want, "{format:?}");
+            let used = want.iter().fold(0u64, |m, (at, top)| {
+                assert_eq!(m & (u64::from(*top) << at), 0, "{format:?} overlaps");
+                m | u64::from(*top) << at
+            });
+            assert_eq!(used, (1u64 << bits) - 1, "{format:?}");
+        }
+        assert!(!is_packed(vk::Format::A2B10G10R10_UNORM_PACK32));
+        assert!(!is_packed(vk::Format::B8G8R8A8_SRGB));
+    }
 }

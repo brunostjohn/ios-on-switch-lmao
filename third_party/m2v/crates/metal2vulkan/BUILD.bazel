@@ -98,6 +98,14 @@ rust_test(
 )
 
 rust_test(
+    name = "packed_storage_test",
+    args = ["lower::fragment::fetch::packed::"],
+    compile_data = glob(["tests/**"]),
+    crate = ":metal2vulkan",
+    deps = ["//third_party/m2v/crates/metal2vulkan-devtools"],
+)
+
+rust_test(
     name = "native_sm53_test",
     args = ["native_sm53"],
     compile_data = glob(["tests/**"]),

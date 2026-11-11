@@ -62,9 +62,9 @@
 //!   `unorm4x8_srgb`; EV XRR2-srgb1-m4 on the M4: every byte read, a texel an earlier draw of the
 //!   pass wrote read as the decode of its stored byte, every encode threshold, 4, 194, 304 floats
 //!   and every half written). The one- and two-channel sRGB formats are not measured, and stay
-//!   refused. `BGR5A1Unorm`, where the device grants `A1R5G5B5_UNORM_PACK16` no storage access
-//!   (NVK), is viewed in `R16_UINT` alike, its channels unpacked and packed by the function
-//!   (`packed`).
+//!   refused. `BGR5A1Unorm` and `BGR10A2Unorm`, where the device grants `A1R5G5B5_UNORM_PACK16`
+//!   and `A2R10G10B10_UNORM_PACK32` no storage access (NVK), are viewed in `R16_UINT` and
+//!   `R32_UINT` alike, their channels unpacked and packed by the function (`packed`).
 //!
 //! **Per sample**. Metal runs a function that reads a color attachment of a multisampled pass once
 //! per covered sample, reading its own sample, in draw order per sample, with `[[position]]`'s x
@@ -539,11 +539,11 @@ pub(crate) fn storage_form(
     // twelve-bit decode of the stored byte, `math::unpack`'s, even after an earlier draw of the
     // pass wrote it, and a write stores `math::pack`'s encode). The one- and two-channel sRGB
     // formats are not measured, nor is a blend into one.
-    // A `BGR5A1Unorm` attachment, which NVK grants no storage access, is viewed in `R16_UINT`, its
-    // channels unpacked and packed by the function (`packed`).
+    // A `BGR5A1Unorm` or `BGR10A2Unorm` attachment, which NVK grants no storage access, is viewed
+    // in `R16_UINT` or `R32_UINT`, its channels unpacked and packed by the function (`packed`).
     let uint_view = StorageAttachmentUse::uint_view_of(format).filter(|&u| {
         mapping.emulation == FormatEmulation::Direct
-            && ((srgb && u == vk::Format::R32_UINT) || format == packed::FORMAT)
+            && ((srgb && u == vk::Format::R32_UINT) || packed::is_packed(format))
     });
     let viewed = uint_view.unwrap_or(format);
     let writes = use_.writes;
@@ -1328,7 +1328,7 @@ pub(super) fn select_read(cx: &mut SelectCx<'_>, c: ColorInput) -> Result<(), Er
         cx.families.arith.converts(e);
     }
     // An sRGB texel decodes through Metal's twelve-bit table.
-    if sc.view.uint_view.is_some() && sc.view.format != packed::FORMAT {
+    if sc.view.uint_view.is_some() && !packed::is_packed(sc.view.format) {
         cx.families.arith.srgb.get_or_insert(PackDir::Unpack);
     }
     plan_sample(cx)?;
@@ -1463,7 +1463,7 @@ pub fn select_output(
         if !measured || form.lanes != 4 {
             return Err(Unsupported::not_implemented(Feature::Format).into());
         }
-        if sc.view.format != packed::FORMAT {
+        if !packed::is_packed(sc.view.format) {
             cx.families.arith.srgb.get_or_insert(PackDir::Pack);
         }
         if let Some(rules) = cx.inputs.color_writes.get(&color).copied() {
@@ -1814,9 +1814,9 @@ pub(super) fn value(
             let table = crate::lower::texture::extended_table(cx, form)?;
             extended_range::tile_value(fb, form, texel, table)?
         }
-        (None, Some(_)) if sc.view.format == packed::FORMAT => {
+        (None, Some(_)) if packed::is_packed(sc.view.format) => {
             let word = fb.composite_extract(texel, &[0])?;
-            packed::decode(fb, word)?
+            packed::decode(fb, sc.view.format, word)?
         }
         (None, Some(_)) => {
             let Some(table) = cx.decl.families.arith.srgb else {
@@ -1900,9 +1900,10 @@ pub(super) fn emit_return(
                     true => rop_blended(cx, fb, color, &sc, (form, part), second)?,
                     false => (form, part),
                 };
-                match sc.view.format {
-                    packed::FORMAT => packed::texel(cx, fb, color, &sc, form, part)?,
-                    _ => srgb_texel(cx, fb, color, &sc, form, part)?,
+                if packed::is_packed(sc.view.format) {
+                    packed::texel(cx, fb, color, &sc, form, part)?
+                } else {
+                    srgb_texel(cx, fb, color, &sc, form, part)?
                 }
             }
             (None, _) => {
