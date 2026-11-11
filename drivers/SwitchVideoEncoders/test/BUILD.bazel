@@ -57,6 +57,7 @@ host_library(
         "ave_host.c",
         "EncodeCheck.c",
         "EncodeCheck.h",
+        "//drivers/SwitchVideoEncoders:AVE/AVEEncoder.h",
         "//drivers/SwitchVideoEncoders:AVE/HEVCEncSyntax.c",
         "//drivers/SwitchVideoEncoders:AVE/HEVCEncSyntax.h",
         "//drivers/SwitchVideoEncoders:AVE/HEVCNVENC.c",
