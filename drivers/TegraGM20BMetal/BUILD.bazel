@@ -184,6 +184,7 @@ ios_binary(
         "//drivers/TegraGM20B:TegraGM20BLayout.h",
         "//kits/SwitchGM20B:class_headers",
         "//kits/SwitchGM20BEmit:emit_headers",
+        "//kits/SwitchGM20BEmit:macros",
     ],
     copts = [
         "-O2",

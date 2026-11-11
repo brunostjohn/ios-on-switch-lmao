@@ -105,8 +105,6 @@ host_test(
     name = "emit_mme_test",
     srcs = [
         "emit_mme_test.cpp",
-        "//drivers/TegraGM20BMetal:raw/runtime/raw_mme.h",
-        "//drivers/TegraGM20BMetal:raw/runtime/raw_push.h",
     ] + MESA_MME_HEADERS,
     copts = MESA_MME_COPTS,
     deps = [

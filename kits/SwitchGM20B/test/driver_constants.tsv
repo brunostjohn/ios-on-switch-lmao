@@ -48,15 +48,6 @@ raw_mme.h	kDraw	policy	raw macro slot
 raw_mme.h	kDrawIndexed	policy	raw macro slot
 raw_mme.h	kIndirect	policy	raw macro slot
 raw_mme.h	kIndexedIndirect	policy	raw macro slot
-raw_mme.h	kBegin	nv	NVB197_BEGIN
-raw_mme.h	kEnd	nv	NVB197_END
-raw_mme.h	kVertexFirst	nv	NVB197_SET_VERTEX_ARRAY_START
-raw_mme.h	kIndexFirst	nv	NVB197_SET_INDEX_BUFFER_F
-raw_mme.h	kMacroCall	nv	NVB197_CALL_MME_MACRO(0)
-raw_mme.h	kRamPointer	nv	NVB197_LOAD_MME_INSTRUCTION_RAM_POINTER
-raw_mme.h	kRam	nv	NVB197_LOAD_MME_INSTRUCTION_RAM
-raw_mme.h	kStartPointer	nv	NVB197_LOAD_MME_START_ADDRESS_RAM_POINTER
-raw_mme.h	kStart	nv	NVB197_LOAD_MME_START_ADDRESS_RAM
 fx_mip.cpp	kSubc2D	policy	raw::SUBC_2D, the kernel binding of FERMI_TWOD_A (gpu.c)
 fx_mip.cpp	kSubc3D	policy	raw::SUBC_3D, the kernel binding of MAXWELL_B (gpu.c)
 nvdec.cpp	WAIT_FOR_IDLE	nv	NVB197_WAIT_FOR_IDLE

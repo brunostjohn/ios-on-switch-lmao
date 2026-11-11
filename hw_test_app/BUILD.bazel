@@ -368,6 +368,7 @@ cc_library(
     deps = [
         "//kits/SwitchGM20B:classes",
         "//kits/SwitchGM20BEmit:emit_ndebug",
+        "//kits/SwitchGM20BEmit:macros_h",
     ],
 )
 

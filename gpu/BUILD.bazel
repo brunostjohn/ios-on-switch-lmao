@@ -156,6 +156,7 @@ metal_plugin(
         GM20B_LAYOUT,
         "//kits/SwitchGM20B:class_headers",
         "//kits/SwitchGM20BEmit:emit_headers",
+        "//kits/SwitchGM20BEmit:macros",
         "//kits/SwitchRefusal:SwitchRefusal.h",
         "//kits/SwitchRefusal:SwitchRefusalSite.h",
     ],
