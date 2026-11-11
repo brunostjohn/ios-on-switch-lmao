@@ -148,17 +148,13 @@ static const char *zetaMemoryRefusal(int asked)
 //  refuses every surface whose rows miss it, "Row bytes (N) not 128 aligned", and the layer draws nothing (r7p5: 3347 refusals
 //  in backboardd, Safari images and widgets blank). The m2v device's answer, 16, stands; rows the raw path cannot take stay
 //  m2v's: its texture header takes rows of 32, a pitch render target rows of 128.)
-//  - the image memory it samples in place (CA::OGL::MetalContext::copy_image_to_texture: offset and rows a multiple of this,
-//    else it copies them into a texture of its own): the texture header's 32;
+//  - the image memory it samples in place (CA::OGL::MetalContext::copy_image_to_texture: offset and rows a multiple of
+//    deviceLinearReadOnlyTextureAlignmentBytes, else it copies them into a texture of its own): the texture header's 32,
+//    raw_device_answers.h's row;
 //  - the rows of its CPU readbacks (CAMetalTextureGetBytesPerRow).
 - (NSUInteger)minConstantBufferAlignmentBytes
 {
     return 4;
-}
-
-- (NSUInteger)deviceLinearReadOnlyTextureAlignmentBytes
-{
-    return 32;
 }
 
 - (NSUInteger)minimumLinearTextureAlignmentForPixelFormat:(MTLPixelFormat)format
