@@ -85,6 +85,7 @@ kernel_driver(
         "gpu_acquire.c",
         "gpu_stats.c",
         "gpu_stats_tick.c",
+        "gpu_stats_clock.c",
         "gpu_chan.c",
         "gpu_sync.c",
         "gpu_exec.c",

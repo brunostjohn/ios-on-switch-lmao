@@ -13,40 +13,6 @@
  * line prints ("PTIMER xR"). */
 #define STATS_WINDOW_NS (5 * NSEC_PER_SEC)
 
-static void clk_measure(char *buf, unsigned int len)
-{
-	static int started;
-	struct nvkm_device *device = tgm_gpu.device;
-	u32 cnt = nvkm_rd32(device, TRIM_GPC0_NCGPCCLK_CNT);
-	u32 ref_khz = gk20a_clk(device->clk)->parent_rate / 1000;
-	u32 vco = nvkm_rd32(device, 0x137100);
-	u32 out = nvkm_rd32(device, 0x137250);
-	u32 slow = nvkm_rd32(device, 0x020160);
-	u32 gate = nvkm_rd32(device, 0x020200);
-	int pll = nvkm_clk_read(device->clk, nv_clk_src_gpc);
-	char meas[40] = "-";
-
-	if (started && !badf(cnt)) {
-		scnprintf(meas, sizeof(meas), "%llu kHz",
-			  (unsigned long long)ref_khz * (cnt & 0xfffff) / NCGPCCLK_CYCLES);
-	} else if (started) {
-		scnprintf(meas, sizeof(meas), "unread (%08x)", cnt);
-	}
-	nvkm_wr32(device, TRIM_GPC0_NCGPCCLK_CFG, NCGPCCLK_CFG_RESET);
-	nvkm_wr32(device, TRIM_GPC0_NCGPCCLK_CFG,
-		  NCGPCCLK_CFG_ENABLE | NCGPCCLK_CFG_WRITE_EN | NCGPCCLK_CYCLES);
-	started = 1;
-	const char *divider = "";
-
-	if (!(vco & 1)) {
-		divider = " BYPASSED";
-	} else if (out & 0x3f00) {
-		divider = " DIVIDED";
-	}
-	scnprintf(buf, len, "GPU clock %d kHz%s, measured %s (slowdown %u, ELCG %u)", pll, divider,
-		  meas, (slow >> 16) & 0x3f, gate & 3);
-}
-
 /* A process's SubmitAddress calls over the window, by phase (ns), with the longest call */
 struct stats_submits {
 	u64 ns[TGM_SUBMIT_PHASES], total, max;
@@ -386,7 +352,7 @@ void tgm_stats_tick(void)
 	tegra_gm20b_mc_errors(&mc_int, &mc_err, &mc_adr);
 	/* the GPU's share of the window spent on stamped user submissions and copies */
 	busy = PT_NS(es + cs) * 100 / (now - since);
-	clk_measure(clk, sizeof(clk));
+	tgm_clk_measure(clk, sizeof(clk));
 	tgm_scrub_stats(scrubbed, sizeof(scrubbed), ms);
 	/* formatted here and logged as one string: os_log drops a message whose scalar arguments outgrow its 256-byte buffer
 	 * (libkern/os/log.h OS_LOG_BUFFER_MAX_SIZE), which a string argument does not count against */

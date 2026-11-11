@@ -456,6 +456,7 @@ void tgm_scrub_stats(char *buf, unsigned int len, u64 window_ms);
 #define NCGPCCLK_CFG_ENABLE 0x00100000u
 #define NCGPCCLK_CFG_WRITE_EN 0x00010000u
 #define NCGPCCLK_CYCLES 800u
+void tgm_clk_measure(char *buf, unsigned int len);
 void tgm_stats_tick(void);
 #define IDLE_LOG_NS (10ULL * 1000000000ULL)
 #define GPCPLL_COEFF_R 0x137004 /* M 7:0, N 15:8, PL 21:16 */
