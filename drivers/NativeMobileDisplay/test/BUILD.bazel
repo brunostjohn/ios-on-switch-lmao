@@ -304,6 +304,7 @@ host_test(
     name = "switch_native_plane_test",
     srcs = [
         "switch_native_plane_test.cpp",
+        "//drivers/NativeMobileDisplay:SwitchDisplayTraits.h",
         "//drivers/NativeMobileDisplay:SwitchNativePlane.h",
         "//drivers/TegraVIC:SwitchSurfaceColor.h",
         "//drivers/NativeMobileDisplay:NativePlanes.h",
@@ -328,6 +329,7 @@ host_test(
         "//drivers/NativeMobileDisplay:SwitchPlaneSlot.h",
         "//drivers/NativeMobileDisplay:SwitchPlaneSlots.h",
         "//drivers/SwitchPower:SwitchDisplayBandwidth.h",
+        "//drivers/NativeMobileDisplay:SwitchDisplayTraits.h",
         "//drivers/NativeMobileDisplay:SwitchNativePlane.h",
         "//drivers/TegraVIC:SwitchSurfaceColor.h",
         "//drivers/NativeMobileDisplay:NativePlanes.h",
