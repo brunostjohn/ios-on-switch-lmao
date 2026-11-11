@@ -43,6 +43,8 @@
 #                     debug builds): today's forms are the words the runtime sent before, the relaxed ones never idle and
 #                     are the planner's, the 2D work copies and resolves as the 2D engine model does
 #   raw_constant_colour_test  raw/runtime/raw_constant_colour.h: which fills the ROP's constant colour may draw
+#   raw_fetch_rungs_test  raw/runtime/raw_fetch_rungs.h: where the ROP's blend and iterated blend may stand for an
+#                     in-shader blend
 #   raw_quad_fill_test  raw/runtime/raw_quad_fill.h: which quads one bounding-box triangle can draw
 #   raw_visibility_test  raw/runtime/raw_visibility.h: which visibility results the raw path writes, and the counter,
 #                     report and copy-engine words an encoder's mode sets and end emit
@@ -1156,6 +1158,15 @@ host_test(
     srcs = [
         "raw_quad_fill_test.cpp",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_quad_fill.h",
+    ],
+    cxx_std = "c++17",
+)
+
+host_test(
+    name = "raw_fetch_rungs_test",
+    srcs = [
+        "raw_fetch_rungs_test.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_fetch_rungs.h",
     ],
     cxx_std = "c++17",
 )
