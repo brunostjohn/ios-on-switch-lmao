@@ -26,7 +26,6 @@ public:
     SwitchNativeSurfaceCrop crop = {};
     alignas(8) volatile uint64_t generation = 1;
     bool pitchValid = false;
-    IOLock *prepareLock = nullptr;
     bool preparing = false;
     void free() override;
 };
@@ -38,8 +37,6 @@ void SwitchNativeSurface::free()
         switch_gpu_backing_cpu_release_owned(&readLease, 0);
     if (native)
         switch_gpu_backing_release(native);
-    if (prepareLock)
-        IOLockFree(prepareLock);
     OSObject::free();
 }
 
@@ -47,6 +44,23 @@ namespace {
 constexpr uint32_t kRead = SWITCH_GPU_BACKING_READ, kWrite = SWITCH_GPU_BACKING_WRITE;
 constexpr uint32_t kNoCache = SWITCH_GPU_BACKING_CPU_NO_CACHE, kAvoidSync = SWITCH_GPU_BACKING_CPU_AVOID_SYNC;
 constexpr uint32_t kConcurrent = SWITCH_GPU_BACKING_CPU_CONCURRENT;
+
+// One lock for every surface's `preparing` flag, each surface its own sleep event: a publication per decoded picture
+// allocates no lock.
+IOLock *gPrepareLock;
+
+IOLock *prepareLock()
+{
+    IOLock *lock = __atomic_load_n(&gPrepareLock, __ATOMIC_ACQUIRE);
+    if (lock)
+        return lock;
+    IOLock *made = IOLockAlloc();
+    if (made && !__atomic_compare_exchange_n(&gPrepareLock, &lock, made, false, __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE)) {
+        IOLockFree(made);
+        return lock;
+    }
+    return made;
+}
 
 SwitchNativeSurface *copy(IOMemoryDescriptor *memory)
 {
@@ -113,22 +127,22 @@ int invalidate(SwitchNativeSurface *native, switch_gpu_backing *logical, switch_
 
 int beginPrepare(SwitchNativeSurface *native, bool avoid)
 {
-    IOLockLock(native->prepareLock);
+    IOLockLock(gPrepareLock);
     while (native->preparing && !avoid)
-        IOLockSleep(native->prepareLock, native, THREAD_UNINT);
+        IOLockSleep(gPrepareLock, native, THREAD_UNINT);
     const bool admitted = !native->preparing;
     if (admitted)
         native->preparing = true;
-    IOLockUnlock(native->prepareLock);
+    IOLockUnlock(gPrepareLock);
     return admitted ? 0 : -16;
 }
 
 void endPrepare(SwitchNativeSurface *native)
 {
-    IOLockLock(native->prepareLock);
+    IOLockLock(gPrepareLock);
     native->preparing = false;
-    IOLockWakeup(native->prepareLock, native, false);
-    IOLockUnlock(native->prepareLock);
+    IOLockWakeup(gPrepareLock, native, false);
+    IOLockUnlock(gPrepareLock);
     switch_gpu_admission_changed();
 }
 
@@ -270,15 +284,12 @@ int switch_native_surface_publish(const TegraVICSurface *surface, const TegraVIC
     if (!picture->bytes || picture->bytes > (uint64_t(info.page_count) << 12))
         return -22;
     *why = "native export without memory for its surface object";
+    if (!prepareLock())
+        return -12;
     auto *next = new SwitchNativeSurface;
     if (!next || !next->initialize()) {
         if (next)
             next->release();
-        return -12;
-    }
-    next->prepareLock = IOLockAlloc();
-    if (!next->prepareLock) {
-        next->release();
         return -12;
     }
     next->native = picture->backing;
@@ -382,11 +393,11 @@ extern "C" int switch_native_surface_gpu_admission(OSObject *object, uint32_t ac
     if (!result && logical != expected)
         result = logical ? SWITCH_GPU_BACKING_STALE : -12;
     if (!result) {
-        IOLockLock(native->prepareLock);
+        IOLockLock(gPrepareLock);
         const bool write = (access & kWrite) ||
             (active(native) && !__atomic_load_n(&native->pitchValid, __ATOMIC_ACQUIRE));
         result = native->preparing ? 0 : switch_gpu_backing_conversion_ready(logical, write ? kWrite : kRead);
-        IOLockUnlock(native->prepareLock);
+        IOLockUnlock(gPrepareLock);
     }
     if (logical)
         switch_gpu_backing_release(logical);
