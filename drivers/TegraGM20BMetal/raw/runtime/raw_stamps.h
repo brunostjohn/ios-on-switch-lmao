@@ -11,13 +11,15 @@
 #include <algorithm>
 #include <atomic>
 #include <cstdint>
+#include "../../../../kits/SwitchGM20B/SwitchGM20B.h"
 #include "raw_push.h"
 
 namespace raw {
 
 enum : uint32_t {
-    HOST_SEMAPHORE_A = 0x0010,
-    HOST_SEMAPHORE_RELEASE_16_WFI = 0x2,  // OPERATION RELEASE, RELEASE_WFI EN (0), RELEASE_SIZE 16BYTE (0)
+    HOST_SEMAPHORE_A = NVB06F_SEMAPHOREA,
+    HOST_SEMAPHORE_RELEASE_16_WFI = NVDEF(NVB06F, SEMAPHORED, OPERATION, RELEASE) |
+        NVDEF(NVB06F, SEMAPHORED, RELEASE_WFI, EN) | NVDEF(NVB06F, SEMAPHORED, RELEASE_SIZE, 16BYTE),
 };
 
 constexpr uint32_t kStampWords = 5;

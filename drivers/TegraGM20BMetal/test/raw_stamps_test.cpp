@@ -7,7 +7,6 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 #include "bazel/testing/source_text.h"
-#include "drivers/TegraGM20B/nouveau/include/nvhw/class/cl906f.h"
 #include "drivers/TegraGM20BMetal/raw/runtime/raw_stamps.h"
 
 namespace {
