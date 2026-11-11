@@ -691,11 +691,12 @@ TEST(GM20BRoomSource, SubmissionMethodsCountTheirPaths)
 	const auto job = flat(definition(client(), "IOReturn AGXDeviceUserClient::runJobUses("));
 	expectBefore(job, "switch_gpu_path_taken(SWITCH_GPU_PATH_SUBMIT_JOB, 1);", "return kIOReturnSuccess;");
 	expectBefore(job, "switch_gpu_path_taken(SWITCH_GPU_PATH_SET_JOB, set ? 1 : 0);", "return kIOReturnSuccess;");
+	expectBefore(job, "switch_gpu_path_taken(SWITCH_GPU_PATH_SHARED_USE, head.shared_count);", "return kIOReturnSuccess;");
 	const auto address = flat(definition(client(), "IOReturn AGXDeviceUserClient::submitAddress("));
 	expectBefore(address, "result = exec(submit->channel,",
 		     "switch_gpu_path_taken(SWITCH_GPU_PATH_ADDRESS_JOB, result ? 0 : 1);");
 	const std::string paths = SourceText("../SwitchGpuPathStats.cpp");
-	for (const char *name : {"\"submit_jobs\"", "\"set_jobs\"", "\"stale_sets\"", "\"address_jobs\""})
+	for (const char *name : {"\"submit_jobs\"", "\"set_jobs\"", "\"stale_sets\"", "\"address_jobs\"", "\"shared_uses\""})
 		EXPECT_THAT(paths, HasSubstr(name));
 }
 
