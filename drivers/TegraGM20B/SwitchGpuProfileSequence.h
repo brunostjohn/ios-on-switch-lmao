@@ -1,6 +1,6 @@
 /* SPDX-License-Identifier: MIT */
 /* The push profile's slowest submission of a window, push by push in order (gpu_fenced.h "push profile"): each push's class,
- * its pass's colour target 0 in thousands of pixels, its draws and interlock enables, and its GPU time. With the jobs
+ * its pass's colour target 0 in thousands of samples, its draws and interlock enables, and its GPU time. With the jobs
  * line's batches it attributes a frame's GPU time pass by pass. */
 #ifndef SWITCH_GPU_PROFILE_SEQUENCE_H
 #define SWITCH_GPU_PROFILE_SEQUENCE_H
@@ -56,8 +56,8 @@ static inline void switch_gpu_prof_seq_take(struct switch_gpu_prof_seq *slow, st
 }
 
 /* A push: D draw, C clear, P pass, S sync, X compute, Y copy, 2 2D engine, T state; then for draws and clears its
- * target's kilopixels, p if pitch-linear, m if multisampled, /draws, i and the interlock enables (conflict detection
- * on); then its microseconds. */
+ * target's thousands of samples (a multisampled target counts its sample grid: 720x1280 at 4x is 3686k), p if
+ * pitch-linear, m if multisampled, /draws, i and the interlock enables (conflict detection on); then its microseconds. */
 static inline int switch_gpu_prof_push_format(char *buf, unsigned long len, const struct switch_gpu_prof_push *p)
 {
 	static const char other[] = "PSXY2T";

@@ -245,7 +245,7 @@ void switch_gpu_fence_put(const volatile uint32_t *fence);
 /* The stats' push profile (gpu_fenced.h "push profile"): `prof` (or NULL) names each push of a sampled submission by what it
  * asks of the GPU (TegraGM20BUserClient.cpp scanPushes); the submission then stamps the GPU's time after each push whose
  * class is not TGM_PC_SKIP, and each window's "gpuprof" line gives every process's GPU time by class. Draws and clears
- * are split by their pass's first color target: its size (full >= 600k pixels, mid >= 100k, small), pitch-linear or
+ * are split by their pass's first color target: its size (full >= 600k samples, mid >= 100k, small), pitch-linear or
  * block-linear, multisampled or not. */
 #define TGM_PROF_MAX 128
 
@@ -268,7 +268,7 @@ struct tgm_prof {
 	uint8_t cls[TGM_PROF_MAX];
 	/* each push's draws, and those shaded per sample (PushCounts::sampleDraws) */
 	uint16_t draws[TGM_PROF_MAX], sampleDraws[TGM_PROF_MAX];
-	/* its pass's colour target 0 in thousands of pixels, and its interlock enables (SwitchGpuProfileSequence.h) */
+	/* its pass's colour target 0 in thousands of samples, and its interlock enables (SwitchGpuProfileSequence.h) */
 	uint16_t kpx[TGM_PROF_MAX];
 	uint8_t interlocks[TGM_PROF_MAX];
 };
