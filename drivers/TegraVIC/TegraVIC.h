@@ -14,8 +14,8 @@
 
 class IOMemoryDescriptor;
 
-// The periodic job and present lines and the pitch probe (SwitchVICPitchProbe.h): debug kernels only, so a release
-// kernel has none of their code or strings.
+// The periodic job and present lines and the probes (SwitchVICKernelTest.h): debug kernels only, so a release kernel
+// has none of their code or strings.
 #if (defined(DEVELOPMENT) && DEVELOPMENT) || (defined(DEBUG) && DEBUG)
 #define TEGRA_VIC_STATS 1
 #else
@@ -60,7 +60,7 @@ int tegra_vic_publish(void);
 
 #if TEGRA_VIC_STATS
 struct IOExternalMethodArguments;
-int switch_vic_pitch_probe_call(const IOExternalMethodArguments *arguments);  // an IOReturn
+int switch_vic_kernel_test_call(const IOExternalMethodArguments *arguments);  // an IOReturn
 #endif
 
 #endif
