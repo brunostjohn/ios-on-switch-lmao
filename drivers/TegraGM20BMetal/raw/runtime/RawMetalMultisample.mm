@@ -37,16 +37,17 @@ bool makeStoredMultisample(MTLTextureDescriptor *d, RMStoredSamples kind, raw::T
     return made;
 }
 
-bool passSamplePositions(MTLRenderPassDescriptor *pass, uint32_t samples, raw::SamplePositions &out)
+bool passSamplePositions(MTLRenderPassDescriptor *pass, NSUInteger count, uint32_t samples, raw::SamplePositions &out)
 {
-    MTLSamplePosition at[8];
-    const NSUInteger count = [pass getSamplePositions:at count:8];
-    float xy[16] = {};
-    for (NSUInteger i = 0; i < count && i < 8; i++) {
-        xy[2 * i] = at[i].x;
-        xy[2 * i + 1] = at[i].y;
-    }
-    if (!raw::takeSamplePositions(xy, uint32_t(std::min<NSUInteger>(count, 9)), samples, out))
+    const auto read = [pass](float *xy, uint32_t n) {
+        MTLSamplePosition at[8];
+        [pass getSamplePositions:at count:n];
+        for (uint32_t i = 0; i < n; i++) {
+            xy[2 * i] = at[i].x;
+            xy[2 * i + 1] = at[i].y;
+        }
+    };
+    if (!raw::readSamplePositions(uint32_t(std::min<NSUInteger>(count, 9)), samples, read, out))
         return false;
     static std::atomic<bool> said{false};
     if (!said.exchange(true))
