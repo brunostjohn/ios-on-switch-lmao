@@ -120,7 +120,7 @@ def encode(colour: Colour, fmt: str, rounding: str = 'nearest') -> bytes:
         return _unorm_texel([unorm(c, n, rounding) for c, n in zip(colour[: len(bits)], bits, strict=True)], fmt)
     lanes, layout = FLOATS[fmt]
     if layout.endswith('e'):
-        return struct.pack(f'<{lanes}H', *(half_bits(c, 'rne') for c in colour[:lanes]))
+        return struct.pack(f'<{lanes}H', *(half_bits(c, 'rtz') for c in colour[:lanes]))
     return struct.pack(layout, *colour[:lanes])
 
 

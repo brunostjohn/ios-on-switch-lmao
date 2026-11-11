@@ -15,9 +15,13 @@ def metal(v: float, bits: int) -> int:
 
 
 class RopTest(unittest.TestCase):
-    def test_halves_past_the_range_store_as_infinities(self) -> None:
-        stored = texels.encode((65520.0, -1e30, float('nan'), 65504.0), 'rgba16float')
-        self.assertEqual(struct.unpack('<4H', stored), (0x7C00, 0xFC00, 0x7E00, 0x7BFF))
+    def test_halves_store_as_the_chip_does(self) -> None:
+        # bench loop rop1: toward zero, a finite value past the range as 65504, infinities kept, NaN 0x7e00
+        stored = texels.encode((65520.0, -1e30, float('nan'), float('-inf')), 'rgba16float')
+        self.assertEqual(struct.unpack('<4H', stored), (0x7BFF, 0xFBFF, 0x7E00, 0xFC00))
+        below = struct.unpack('<f', struct.pack('<I', 0x3F801FFF))[0]
+        stored = texels.encode((below, 2.0**-25, -0.0, 65504.0), 'rgba16float')
+        self.assertEqual(struct.unpack('<4H', stored), (0x3C00, 0x0000, 0x8000, 0x7BFF))
 
     def test_every_unorm_format_encodes_and_decodes(self) -> None:
         colour = (0.0, 0.25, 0.5, 1.0)
