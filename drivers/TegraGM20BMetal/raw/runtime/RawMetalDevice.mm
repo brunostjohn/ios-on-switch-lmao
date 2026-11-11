@@ -64,6 +64,8 @@ static const char *zetaMemoryRefusal(int asked)
     d[@"cpu_ordered"] = @(s.cpuOrdered.load());
     d[@"split_prologues"] = @(gRM->raw->stats.splitLaunches.load());
     d[@"interlock_draws"] = @(gRM->raw->stats.interlockDraws.load());
+    d[@"banded_draws"] = @(gRM->raw->stats.bandedDraws.load());
+    d[@"bands"] = @(gRM->raw->stats.bands.load());
     d[@"storage_barriers"] = @(gRM->raw->stats.storageBarriers.load());
     d[@"texture_uploads"] = @(gRM->raw->stats.textureUploads.load());
     d[@"fused_passes"] = @(gRM->raw->stats.fusedPasses.load());

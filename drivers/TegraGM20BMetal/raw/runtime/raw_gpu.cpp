@@ -898,6 +898,7 @@ void Device::build(Pipeline &pl, const PackPipeline &pp, const PlacedProgram &vs
     };
     pl.vertexInstructions = instructions(*vs.record);
     pl.fragmentInstructions = instructions(*fs.record);
+    pl.vertexStores = writesMemory(vs.header);
     std::vector<uint32_t> words(64 + 16 + pp.blobDwords * 2);
     Push w{words.data(), words.data() + words.size()};
     uint32_t writes[8];
@@ -3237,7 +3238,7 @@ CommandBuffer *Device::begin()
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
     cb.forceWholePrograms_ = false;
 #endif
-    cb.draws = cb.passes = cb.blits = 0;
+    cb.draws = cb.passes = cb.blits = cb.bands = 0;
     cb.refusal = {};
     cb.partial = false;
     cb.admissionBlocked = false;
@@ -3902,8 +3903,12 @@ void RenderEncoder::finishDraw(uint32_t vertices, uint32_t instances, bool indir
     const uint64_t vertexWork = BatchWork::product(BatchWork::product(vertices, instances), pl.vertexInstructions);
     const uint64_t fragmentWork = BatchWork::product(BatchWork::product(drawPixels_, instances),
                                                     uint64_t(pl.fragmentInstructions) * pl.samplePasses);
-    if (!cb_->batchWork_.add(indirect ? BatchWork::kSaturated : vertexWork + fragmentWork, cb_->batchLimit()))
-        return;
+    if (cb_->batchWork_.add(indirect ? BatchWork::kSaturated : vertexWork + fragmentWork, cb_->batchLimit()))
+        cutBatch();
+}
+
+void RenderEncoder::cutBatch()
+{
     if (p_.at > bodyStart_) {
         bodies_.push_back({bodyStart_, p_.at, 0, 0, false, true});
         bodyStart_ = p_.at;
@@ -4085,43 +4090,31 @@ bool RenderEncoder::draw(uint32_t primitive, uint32_t first, uint32_t count, uin
             raster_.winding ^= reverse;
             if (!prepared)
                 return false;
-            p_.m(BEGIN, 0);
-            p_.inc(VERTEX_ARRAY_START, {first + begin, end - begin});
-            p_.m(END, 0);
-            finishDraw(end - begin, 1);
+            emitDraw(false, first + begin, end - begin, 1);
         }
         cb_->draws++;
         return true;
     }
     if (!prepare(pl, primitive, first, first, count, baseInstance, false, why))
         return false;
+    cb_->draws++;
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
-    const auto probe = instances == 1 ? dev_->armedProbe() : nullptr;
-    const size_t probeWords = probe ? probe->before.size() + probe->after.size() : 0;
-#else
-    constexpr size_t probeWords = 0;
-#endif
-    if (p_.room() < kInstanceWords + probeWords)
-        reserve();
-    if (instances == 1) {
-#if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
-        if (probe && !probe->before.empty())
+    if (const auto probe = instances == 1 ? dev_->armedProbe() : nullptr) {
+        if (p_.room() < kInstanceWords + probe->before.size() + probe->after.size())
+            reserve();
+        if (!probe->before.empty())
             p_.raw(probe->before.data(), uint32_t(probe->before.size()));
-        if (probe)
-            dev_->probeEmitted.fetch_add(1, std::memory_order_relaxed);
-#endif
+        dev_->probeEmitted.fetch_add(1, std::memory_order_relaxed);
         p_.m(BEGIN, 0);
         p_.inc(VERTEX_ARRAY_START, {first, count});
         p_.m(END, 0);
-#if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
-        if (probe && !probe->after.empty())
+        if (!probe->after.empty())
             p_.raw(probe->after.data(), uint32_t(probe->after.size()));
-#endif
-    } else {
-        mme::draw(p_, false, first, count, instances);
+        finishDraw(count, instances);
+        return true;
     }
-    cb_->draws++;
-    finishDraw(count, instances);
+#endif
+    emitDraw(false, first, count, instances);
     return true;
 }
 
@@ -4300,16 +4293,7 @@ bool RenderEncoder::drawIndexed(uint32_t primitive, uint32_t count, uint32_t ind
             ibEnd_ = last;
             ibSize_ = indexSize;
         }
-        if (p_.room() < kInstanceWords)
-            reserve();
-        if (instances == 1) {
-            p_.m(BEGIN, 0);
-            p_.inc(INDEX_BUFFER_F, {begin, end - begin});
-            p_.m(END, 0);
-        } else {
-            mme::draw(p_, true, begin, end - begin, instances);
-        }
-        finishDraw(end - begin, instances);
+        emitDraw(true, begin, end - begin, instances);
     }
     cb_->draws++;
     return true;
@@ -5209,8 +5193,8 @@ bool RenderEncoder::prepare(Pipeline *pl, uint32_t primitive, int32_t first, uin
         written_.add(geometryAnalysis);
     // Reuse a bound already established for split/coverage/fetch decisions. Admission never triggers new CPU geometry
     // reads; unknown geometry uses the clipped viewport/scissor extent rather than the whole render target.
-    const PixelBox costBox = geometryAnalysis.cachedBox();
-    drawPixels_ = costBox.empty() ? 0 : uint64_t(costBox.x1 - costBox.x0) * (costBox.y1 - costBox.y0);
+    drawBox_ = geometryAnalysis.cachedBox();
+    drawPixels_ = drawBox_.empty() ? 0 : uint64_t(drawBox_.x1 - drawBox_.x0) * (drawBox_.y1 - drawBox_.y0);
     return true;
 }
 

@@ -72,6 +72,7 @@
 #include "raw_xr.h"
 #include "raw_ycbcr.h"
 #include "raw_rotation.h"
+#include "raw_draw_bands.h"
 #include "../fx/fx_mip.h"
 
 namespace raw {
@@ -427,6 +428,7 @@ struct Pipeline {
     // the sample mask, or the state tests depth, stencil or alpha to coverage, or rasterizes more than one sample
     bool dropsPixels = true;
     bool primitiveId = false;  // fragment input observes primitive numbering, which a split BEGIN would reset
+    bool vertexStores = true;  // its vertex program writes memory (SPH DOES_GLOBAL_STORE), which bands would repeat
     uint8_t samples = 1;  // its key's rasterSampleCount: a pass of attachments of that many samples draws it
     // SET_HYBRID_ANTI_ALIAS_CONTROL's passes: more than one where it shades per sample, whose sample masks differ (raw_samples.h)
     uint8_t samplePasses = 1;
@@ -681,6 +683,10 @@ private:
     bool indirect(uint32_t primitive, bool indexed, const Buffer *arguments, uint64_t offset, const char **why);
     void reserve();
     void finishDraw(uint32_t vertices, uint32_t instances, bool indirect = false);
+    void cutBatch();
+    // the prepared draw's words, whole or in scissor bands (raw_draw_bands.h)
+    void emitDraw(bool indexed, uint32_t first, uint32_t count, uint32_t instances);
+    uint32_t drawBands(uint32_t vertices, uint32_t instances) const;
     Pipeline *pipeline_ = nullptr, *emitted_ = nullptr;
     const Pipeline *compatible_ = nullptr;
     uint32_t compatibleSampleMasks_[4]{};
@@ -749,6 +755,7 @@ private:
     bool called_ = false, drew_ = false, whole_ = false;
     uint32_t readBits_ = 0, areaW_ = 0, areaH_ = 0;
     uint64_t drawPixels_ = 0;
+    PixelBox drawBox_;
     uint8_t samples_ = 1;  // its attachments' samples a pixel
     double vp_[4] = {};
     uint32_t sc_[4] = {};
@@ -968,7 +975,7 @@ public:
     void use(const Buffer &buffer, bool write);
     void use(const Texture &texture, bool write);
 
-    uint32_t draws = 0, passes = 0, blits = 0;
+    uint32_t draws = 0, passes = 0, blits = 0, bands = 0;
     uint32_t stamp = 0;  // its GPU time's slot (raw_stamps.h), for Device::gpuNanoseconds once it completed
 
 private:
@@ -1117,7 +1124,26 @@ public:
 
     bool gpuPriority(uint32_t priority, uint32_t background)
     {
-        return k_.priority(priority, background);
+        if (!k_.priority(priority, background))
+            return false;
+        highPriority_.store(priority == 0, std::memory_order_relaxed);
+        return true;
+    }
+
+    // Its channel is the kernel's high level (TegraGM20BSchedPolicy.h tgm_priority_level): the render server's, or a
+    // process whose queues asked for GPU priority 0. Nothing preempts it, so its draws are never banded.
+    bool compositorClass() const
+    {
+        return role_ == Role::RenderServer || highPriority_.load(std::memory_order_relaxed);
+    }
+
+    uint64_t bandBudgetNs() const
+    {
+#if SWITCH_RAW_DIAGNOSTICS
+        return bandBudgetNs_.load(std::memory_order_relaxed);
+#else
+        return TGM_APP_BAND_NS;
+#endif
     }
 
     bool hasGpuPriority() const
@@ -1536,6 +1562,7 @@ public:
         std::atomic<uint64_t> zcullPasses{0}, zcullInvalidations{0};
         std::atomic<uint64_t> splitPrologues{0};  // split draws' prologue launches (raw_split.cpp)
         std::atomic<uint64_t> reopenTicks{0};     // the last reopen that made a channel, mach_absolute_time
+        std::atomic<uint64_t> bandedDraws{0}, bands{0};  // raw_draw_bands.h
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
         std::atomic<uint64_t> splitLaunches{0};
         std::atomic<uint64_t> interlockDraws{0}, storageBarriers{0};
@@ -1559,6 +1586,8 @@ public:
     // memoryless zetas the copy engine fills and drains for the shader's depth tests take their compressible kind (raw_comp.h)
     std::atomic<bool> probeZetaKinds{false};
     std::atomic<uint64_t> probeEmitted{0};  // draws that emitted them since they were armed
+    // hw_test_app's gpu.sched.long_draw_bands: the band budget its unbanded arm sets to 0 (RawMetalProbe.mm)
+    std::atomic<uint64_t> bandBudgetNs_{TGM_APP_BAND_NS};
     std::mutex probeLock;
     std::shared_ptr<const ProbeWords> probeWords;
     std::shared_ptr<const ProbeWords> armedProbe()
@@ -1657,6 +1686,7 @@ private:
 
     static const Sizes kSizes[2];
     Role role_ = Role::RenderServer;
+    std::atomic<bool> highPriority_{false};
     Sizes sizes_ = kSizes[0];
     std::mutex lock_;
     Kernel k_;

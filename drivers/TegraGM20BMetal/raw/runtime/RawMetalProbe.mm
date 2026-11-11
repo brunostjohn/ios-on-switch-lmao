@@ -97,6 +97,13 @@ static raw::ProbeSurface probeSurface(const raw::Texture &t, uint32_t fmt2d)
     return nil;
 }
 
+// The longest a draw this process encodes from now on is estimated to keep GR before it goes in scissor bands
+// (raw_draw_bands.h), in nanoseconds; 0: never banded. Answers the budget it replaced.
+- (NSString *)switchRawBandBudget:(NSNumber *)ns
+{
+    return [NSString stringWithFormat:@"%llu", (unsigned long long)gRM->raw->bandBudgetNs_.exchange(ns.unsignedLongLongValue)];
+}
+
 // What a probe's line says of a texture and the device: "raw=1 comptags=1 block_linear=1 pitch=N tiled_cache=1
 // compression=1", raw=0 where the raw path does not hold it
 - (NSString *)switchRawProbeFacts:(id<MTLTexture>)texture
