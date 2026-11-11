@@ -107,12 +107,16 @@ inline uint64_t compBytes(uint64_t bytes)
 // Metal format `zeta`, or a colour target's. The copy engine fills and drains a shadow (`copied`) and the zeta of a pass
 // whose draws test in the shader (Depth32Float and multisampled Depth32Float_Stencil8: raw_shader_tests.h), so those
 // compress only where copyEngineReadsCompressed holds for their kind. A pitch backing has no compressible kind.
-inline uint32_t backingKind(bool compression, bool blockLinear, uint32_t zeta, uint32_t bpp, uint32_t samples, bool copied)
+// `zetaProbe`: a debug build's probe of those zetas (gpu.x1.ce_compressed_depth) gives them their kind.
+inline uint32_t backingKind(bool compression, bool blockLinear, uint32_t zeta, uint32_t bpp, uint32_t samples, bool copied,
+                            bool zetaProbe = false)
 {
     if (!compression || !blockLinear)
         return 0;
     const uint32_t kind = compressedKind(bpp, zeta, samples);
     const bool shaderTestCopied = zeta == 252 || (zeta == 260 && samples > 1);
+    if (shaderTestCopied && zetaProbe)
+        return kind;
     return (copied || shaderTestCopied) && !copyEngineReadsCompressed(kind) ? 0 : kind;
 }
 

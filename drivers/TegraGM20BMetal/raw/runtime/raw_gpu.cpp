@@ -5317,6 +5317,7 @@ void RenderEncoder::copyShaderTests(uint8_t flags, bool toAttachment)
         copyRemapped(p_, image(copy.source), image(copy.destination), shape.width, shape.height,
                      copy.remap, copy.bytes, dev_->stats, copy.ordered);
     }
+    RAW_DIAGNOSTIC(dev_->stats.compZetaCopies += zeta.comptags);
     p_.inc(CE_LINE_LENGTH_IN, {0, 0}, SUBC_COPY);
     p_.m(CE_LAUNCH_DMA, (kLaunchPitch & ~3u) | 2u | (1u << 10), SUBC_COPY);
     p_.m(INVALIDATE_SHADER_CACHES, kInvalidateData);
@@ -6140,14 +6141,14 @@ void BlitEncoder::barrier()
     p_.m(CE_LAUNCH_DMA, kNonPipelined | kFlush | kPitchToPitch | kRemap, SUBC_COPY);
 }
 
-void BlitEncoder::generate(Texture &t, uint32_t first, uint32_t last, [[maybe_unused]] uint32_t unproven)
+void BlitEncoder::generate(Texture &t, uint32_t fmt2d, uint32_t first, uint32_t last, [[maybe_unused]] uint32_t unproven)
 {
     Texture::Chain *c = t.chain;
-    if (!c || !c->fmt2d || first >= last || last >= c->layout.levels)
+    if (!c || !fmt2d || first >= last || last >= c->layout.levels)
         return;
     cb_->useAddress(c->va, c->layout.bytes, true);
     room(uint32_t(fx::generateLayersWords(c->layout, first, last)));
-    fx::emitGenerateLayers(p_, c->layout, c->va, c->fmt2d, first, last);
+    fx::emitGenerateLayers(p_, c->layout, c->va, fmt2d, first, last);
     RAW_DIAGNOSTIC(dev_->stats.chainGenerates++);
     RAW_DIAGNOSTIC(dev_->stats.mipTwodLevels += last - first);
     RAW_DIAGNOSTIC(dev_->stats.mipTwodUnproven += unproven);

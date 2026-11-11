@@ -195,20 +195,22 @@ bool mipPasses(raw::CommandBuffer *rc, RMTexture *t, uint32_t first, uint32_t la
 }
 
 // generateMipmapsForTexture: each run of the chain's steps on its engine (fx_mip_route.h, decided at record), the blit
-// encoder ended around 3D runs and `be` the one encoding goes on with
-bool encodeMipmaps(raw::CommandBuffer *rc, RMTexture *t, raw::BlitEncoder *&be, const char **why)
+// encoder ended around 3D runs and `be` the one encoding goes on with. `probe2d`: a debug build's probe of a format no probe
+// covered yet, every step on the 2D engine as that surface format (fx_mip_probe.h)
+bool encodeMipmaps(raw::CommandBuffer *rc, RMTexture *t, uint32_t probe2d, raw::BlitEncoder *&be, const char **why)
 {
     const raw::Texture::Chain &chain = *t->_raw.chain;
+    const uint32_t fmt2d = probe2d ? probe2d : chain.fmt2d;
     bool ok = true;
     const bool routed = raw::fx::eachMipRun(
-        chain.layout, chain.fmt2d != 0, gRM->raw->mipPipeline(t->_raw.format) != nullptr,
+        chain.layout, fmt2d != 0, !probe2d && gRM->raw->mipPipeline(t->_raw.format) != nullptr,
         [&](const raw::fx::MipRun &run) {
             if (!ok)
                 return;
             if (run.engine == raw::fx::MipEngine::TwoD) {
                 useTexture(rc, t, true);
                 be->access(memoryOf(t), memoryOf(t));
-                be->generate(t->_raw, run.first, run.last, run.unproven);
+                be->generate(t->_raw, fmt2d, run.first, run.last, run.unproven);
                 return;
             }
             be->end();

@@ -84,8 +84,12 @@ int Kernel::bindCompressed(Bo &bo, uint32_t kind)
 
 uint32_t Device::compKind(const Texture &m, bool blockLinear, bool copied) const
 {
+    bool zetaProbe = false;
+#if SWITCH_RAW_DIAGNOSTICS
+    zetaProbe = probeZetaKinds.load(std::memory_order_relaxed);
+#endif
     return backingKind((k_.info().flags & TegraGM20BInfoCompression) != 0, blockLinear, m.zeta ? m.format : 0, m.bpp,
-                       std::max<uint32_t>(m.samples, 1), copied);
+                       std::max<uint32_t>(m.samples, 1), copied, zetaProbe);
 }
 
 void Device::compAsk(const CompWant &w)

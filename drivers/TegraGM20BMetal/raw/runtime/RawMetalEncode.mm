@@ -616,7 +616,7 @@ static bool encodeRawAttempt(RMCommandBuffer *cb, size_t from, size_t to, const 
         }
         case OpMipmaps: {
             RAW_ENCODE_SPAN(Blit);
-            if (!encodeMipmaps(rc, (__bridge RMTexture *)c.obj, be, why))
+            if (!encodeMipmaps(rc, (__bridge RMTexture *)c.obj, uint32_t(c.c), be, why))
                 return refused();
             break;
         }

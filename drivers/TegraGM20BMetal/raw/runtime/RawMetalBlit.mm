@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 #import "RawMetalInternal.h"
 #import "RawMetalXrPlanes.h"
+#include "../fx/fx_mip_probe.h"
 
 bool bufferRows(uint64_t offset, uint64_t bytesPerRow, uint32_t rows, uint32_t rowBytes, uint32_t bpp, bool intoTexture,
                 BufferRows &out)
@@ -441,7 +442,13 @@ static bool sameSizeLevels(id<MTLTexture> s, id<MTLTexture> d, NSUInteger &sl, N
         [_cb takeReason:WhyMipmaps why:@"generateMipmapsForTexture of a format neither engine filters"];
         hit(_cb, PredMipmapsFormat, t.pixelFormat, t.mipmapLevelCount);
     }
-    setBinding(_cb, OpMipmaps, 0, 0, t, 0);
+    uint64_t probe2d = 0;
+#if SWITCH_RAW_DIAGNOSTICS
+    if (x && x->_rawOk && x->_raw.chain && !x->_raw.chain->fmt2d &&
+        gRM->raw->probeMipCandidates.load(std::memory_order_acquire))
+        probe2d = raw::fx::twodCandidateFormat(x->_raw.format);
+#endif
+    setBinding(_cb, OpMipmaps, 0, 0, t, probe2d);
 }
 
 - (void)synchronizeResource:(id<MTLResource>)r

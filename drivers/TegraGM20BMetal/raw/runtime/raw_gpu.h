@@ -837,9 +837,9 @@ public:
     void convertPlanar(const Texture &t);
     // An RGB10A8_2P_XR10 surface texture's image from its planes, or (`split`) its planes from its image (raw_xr_planes.h)
     void xrPlanes(const Texture &t, bool split);
-    // generateMipmaps of a mipmapped texture (Texture::chain) on the 2D engine: levels first + 1 .. last from the one above, in
-    // place (fx_mip_route.h MipRun; `unproven` of its steps)
-    void generate(Texture &t, uint32_t first, uint32_t last, uint32_t unproven);
+    // generateMipmaps of a mipmapped texture (Texture::chain) on the 2D engine as surface format `fmt2d`: levels first + 1 ..
+    // last from the one above, in place (fx_mip_route.h MipRun; `unproven` of its steps)
+    void generate(Texture &t, uint32_t fmt2d, uint32_t first, uint32_t last, uint32_t unproven);
     // A YCbCr code target's chroma blocks on the 2D engine: `codes` (pitch) halved across, and down where `halved` is half its
     // height, into `halved` (block-linear), each code the rounded mean of its block's (Texture::chromaCodes)
     void halveChroma(const Texture &codes, const Texture &halved);
@@ -1473,8 +1473,9 @@ public:
         // ZBC entries this process added, those a full table refused, and full clears of compressed targets to a value no
         // entry can hold (raw_zbc.h)
         std::atomic<uint64_t> zbcAdded{0}, zbcFull{0}, zbcInexact{0};
-        // a shadow's fills and stores whose image was compressed memory (the copy engine through a compressible kind)
-        std::atomic<uint64_t> compCopies{0};
+        // a shadow's fills and stores whose image was compressed memory (the copy engine through a compressible kind), and
+        // the shader depth tests' copies of a compressed zeta
+        std::atomic<uint64_t> compCopies{0}, compZetaCopies{0};
         // compute launches encoded (raw_compute.h)
         std::atomic<uint64_t> dispatches{0};
         // states made with the zero-source pixel kill on (raw_blend_kill.h), and their binds encoded
@@ -1500,6 +1501,10 @@ public:
         std::vector<uint32_t> before, after;
     };
     std::atomic<bool> probeArmed{false};
+    // generateMipmaps of a format no probe covered on the 2D engine as fx_mip_probe.h's surface format, recorded from now
+    std::atomic<bool> probeMipCandidates{false};
+    // memoryless zetas the copy engine fills and drains for the shader's depth tests take their compressible kind (raw_comp.h)
+    std::atomic<bool> probeZetaKinds{false};
     std::atomic<uint64_t> probeEmitted{0};  // draws that emitted them since they were armed
     std::mutex probeLock;
     std::shared_ptr<const ProbeWords> probeWords;

@@ -141,6 +141,12 @@ TEST(RawComp, CopiedBackingsCompressOnlyAtProvenKinds)
     EXPECT_EQ(raw::backingKind(true, true, 260, 8, 2, false), 0u);
     EXPECT_EQ(raw::backingKind(true, true, 260, 8, 1, true), 0u);
 
+    // a debug build's gpu.x1.ce_compressed_depth probe gives those zetas their kinds, and nothing else
+    EXPECT_EQ(raw::backingKind(true, true, 252, 4, 1, false, true), 0x86u);
+    EXPECT_EQ(raw::backingKind(true, true, 260, 8, 2, false, true), 0xcfu);
+    EXPECT_EQ(raw::backingKind(true, true, 0, 16, 1, true, true), 0u);
+    EXPECT_EQ(raw::backingKind(true, true, 0, 4, 2, true, true), 0u);
+
     EXPECT_EQ(raw::backingKind(true, false, 0, 4, 1, false), 0u);   // pitch
     EXPECT_EQ(raw::backingKind(false, true, 260, 8, 1, false), 0u);  // compression off
     EXPECT_EQ(raw::backingKind(true, true, 0, 2, 1, false), 0u);    // no compressible kind
