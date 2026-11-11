@@ -1,8 +1,9 @@
 // SPDX-License-Identifier: MIT
-// raw/runtime/raw_icb.h: an indirect command buffer's command words, run through the host FIFO's method decoding and the
-// Fermi MME simulator with the draw macros the channel loads: each command sets its topology, restart and index buffer,
-// then draws as an indirect draw of its arguments does (root draw parameters, base registers, the instance loop); every
-// word past it, and every word of a command with nothing encoded, is a no-op; a command fits its slot.
+// raw/runtime/raw_icb.h and raw_mme.h's indirect command buffer macros: command words, run through the host FIFO's method
+// decoding and the Fermi MME simulator with the macros the channel loads, after the range an execute writes (the CPU's
+// scratch words, or kIcbRange reading a range from memory): each command inside the range sets its topology, restart and
+// index buffer, then draws as an indirect draw of its arguments does (root draw parameters, base registers, the instance
+// loop); one outside it sets the same and draws nothing; every other word is a no-op; the call sits at kCallWord.
 #include <gtest/gtest.h>
 #include "../raw/runtime/raw_icb.h"
 #include "../raw/pack/mesa/mme_fermi.h"
@@ -17,6 +18,7 @@ struct Fifo {
     std::vector<Method> methods;
     std::vector<uint32_t> arguments;
     size_t consumed = 0, nops = 0;
+    uint32_t scratch[256] = {};
 
     static uint32_t load(void *opaque)
     {
@@ -24,15 +26,29 @@ struct Fifo {
         return f.consumed < f.arguments.size() ? f.arguments[f.consumed++] : 0;
     }
 
-    static uint32_t state(void *, uint16_t)
+    static bool isScratch(uint16_t method)
     {
-        ADD_FAILURE() << "a draw macro reads no state";
-        return 0;
+        return method >= NVB197_SET_MME_SHADOW_SCRATCH(0) && method < NVB197_CALL_MME_MACRO(0);
     }
 
-    static void emit(void *opaque, uint16_t method, uint32_t value)
+    static uint32_t state(void *opaque, uint16_t method)
     {
-        static_cast<Fifo *>(opaque)->methods.emplace_back(method, value);
+        EXPECT_TRUE(isScratch(method)) << "a draw macro reads no state but its scratch";
+        return isScratch(method) ? static_cast<Fifo *>(opaque)->scratch[(method - NVB197_SET_MME_SHADOW_SCRATCH(0)) / 4]
+                                 : 0;
+    }
+
+    void method(uint16_t m, uint32_t value)
+    {
+        if (isScratch(m))
+            scratch[(m - NVB197_SET_MME_SHADOW_SCRATCH(0)) / 4] = value;
+        else
+            methods.emplace_back(m, value);
+    }
+
+    static void emit(void *opaque, uint16_t m, uint32_t value)
+    {
+        static_cast<Fifo *>(opaque)->method(m, value);
     }
 
     static void barrier(void *)
@@ -45,7 +61,10 @@ struct Fifo {
 
     void macro(uint32_t slot)
     {
-        const raw::mme::Program &p = slot == raw::mme::kIndirect          ? raw::mme::kIndirectProgram
+        const raw::mme::Program &p = slot == raw::mme::kIcbRange          ? raw::mme::kIcbRangeProgram
+                                     : slot == raw::mme::kIcbDraw         ? raw::mme::kIcbDrawProgram
+                                     : slot == raw::mme::kIcbDrawIndexed  ? raw::mme::kIcbDrawIndexedProgram
+                                     : slot == raw::mme::kIndirect        ? raw::mme::kIndirectProgram
                                      : slot == raw::mme::kIndexedIndirect ? raw::mme::kIndexedIndirectProgram
                                      : slot == raw::mme::kDraw            ? raw::mme::kDrawProgram
                                                                           : raw::mme::kIndexedProgram;
@@ -78,16 +97,26 @@ struct Fifo {
                 if (method == NVB197_NO_OPERATION)
                     nops++;
                 else
-                    methods.emplace_back(uint16_t(method), count);
+                    this->method(uint16_t(method), count);
                 continue;
             }
             ASSERT_TRUE(op == 1 || op == 3);
             ASSERT_LE(i + count, n);
             for (uint32_t k = 0; k < count; k++)
-                methods.emplace_back(uint16_t(op == 1 ? method + 4 * k : method), w[i++]);
+                this->method(uint16_t(op == 1 ? method + 4 * k : method), w[i++]);
         }
     }
 };
+
+// What an execute of commands [location, location + length) sends before them: the range as scratch words
+void cpuRange(Fifo &f, uint32_t location, uint32_t length)
+{
+    uint32_t words[3];
+    raw::Push p{words, words + 3};
+    raw::mme::icbRange(p, location, length);
+    EXPECT_EQ(p.at, p.end);
+    f.run(words, 3);
+}
 
 std::vector<Method> drawn(uint16_t first, uint32_t start, uint32_t count, uint32_t instances)
 {
@@ -105,8 +134,10 @@ TEST(RawIcb, ADrawSetsItsTopologyThenDrawsAsAnIndirectDraw)
 {
     for (uint32_t primitive : {0u, 2u, 3u, 4u}) {
         uint32_t slot[raw::icb::kSlotWords];
-        raw::icb::draw(slot, {primitive, 6, 3, 10, 7});
+        raw::icb::draw(slot, 5, {primitive, 6, 3, 10, 7});
+        EXPECT_EQ(slot[raw::icb::kIndexWord], 5u);
         Fifo f;
+        cpuRange(f, 5, 1);
         f.run(slot, raw::icb::kSlotWords);
         std::vector<Method> want = {{NVB197_SET_PRIMITIVE_TOPOLOGY, raw::icb::topology(primitive)},
                                     {NVB197_SET_DA_PRIMITIVE_RESTART, primitive == 2 || primitive == 4},
@@ -119,7 +150,7 @@ TEST(RawIcb, ADrawSetsItsTopologyThenDrawsAsAnIndirectDraw)
         const auto loop = drawn(NVB197_SET_VERTEX_ARRAY_START, 10, 6, 3);
         want.insert(want.end(), loop.begin(), loop.end());
         EXPECT_EQ(f.methods, want) << primitive;
-        EXPECT_EQ(f.nops, raw::icb::kSlotWords - 7);
+        EXPECT_EQ(f.nops, raw::icb::kSlotWords - 8);
     }
 }
 
@@ -128,8 +159,9 @@ TEST(RawIcb, AnIndexedDrawBindsItsIndicesThenDrawsAsAnIndexedIndirectDraw)
     for (uint32_t size : {2u, 4u}) {
         uint32_t slot[raw::icb::kSlotWords];
         const uint64_t va = 0x1234567800ull, last = va + 0xfff;
-        raw::icb::indexed(slot, {4, size, va, last, 9, 2, 0, -5, 3});
+        raw::icb::indexed(slot, 0, {4, size, va, last, 9, 2, 0, -5, 3});
         Fifo f;
+        cpuRange(f, 0, 1);
         f.run(slot, raw::icb::kSlotWords);
         std::vector<Method> want = {{NVB197_SET_INDEX_BUFFER_A, uint32_t(va >> 32)},
                                     {NVB197_SET_INDEX_BUFFER_B, uint32_t(va)},
@@ -148,7 +180,9 @@ TEST(RawIcb, AnIndexedDrawBindsItsIndicesThenDrawsAsAnIndexedIndirectDraw)
         const auto loop = drawn(NVB197_SET_INDEX_BUFFER_F, 0, 9, 2);
         want.insert(want.end(), loop.begin(), loop.end());
         EXPECT_EQ(f.methods, want) << size;
-        EXPECT_EQ(f.nops, 0u) << "an indexed draw fills its slot";
+        EXPECT_EQ(f.nops, raw::icb::kSlotWords - raw::icb::kCallWord - 7);
+        EXPECT_EQ(slot[raw::icb::kCallWord],
+                  raw::Push::hdr(5, raw::SUBC_3D, 0x3800 + 8 * raw::mme::kIcbDrawIndexed, 6));
     }
 }
 
@@ -156,7 +190,7 @@ TEST(RawIcb, AnEmptyCommandAndARangeOfThemDoNothing)
 {
     std::vector<uint32_t> range(3 * raw::icb::kSlotWords);
     raw::icb::empty(range.data());
-    raw::icb::draw(range.data() + raw::icb::kSlotWords, {3, 3, 1, 0, 0});
+    raw::icb::draw(range.data() + raw::icb::kSlotWords, 1, {3, 3, 1, 0, 0});
     raw::icb::empty(range.data() + raw::icb::kSlotWords);
     raw::icb::empty(range.data() + 2 * raw::icb::kSlotWords);
     Fifo f;
@@ -168,15 +202,76 @@ TEST(RawIcb, AnEmptyCommandAndARangeOfThemDoNothing)
 TEST(RawIcb, CommandsRunBackToBackInOneRange)
 {
     std::vector<uint32_t> range(2 * raw::icb::kSlotWords);
-    raw::icb::draw(range.data(), {3, 3, 1, 0, 0});
-    raw::icb::draw(range.data() + raw::icb::kSlotWords, {1, 4, 2, 8, 0});
+    raw::icb::draw(range.data(), 0, {3, 3, 1, 0, 0});
+    raw::icb::draw(range.data() + raw::icb::kSlotWords, 1, {1, 4, 2, 8, 0});
     Fifo f;
+    cpuRange(f, 0, 2);
     f.run(range.data(), range.size());
     size_t begins = 0;
     for (const Method &m : f.methods)
         begins += m.first == NVB197_BEGIN;
     EXPECT_EQ(begins, 3u) << "one instance of the first, two of the second";
     EXPECT_EQ(f.methods.back(), Method(NVB197_END, 0));
+}
+
+std::vector<uint32_t> fourCommands()
+{
+    std::vector<uint32_t> words(4 * raw::icb::kSlotWords);
+    for (uint32_t i = 0; i < 4; i++)
+        raw::icb::draw(words.data() + i * raw::icb::kSlotWords, i, {3, 3, 1, 3 * i, 0});
+    return words;
+}
+
+std::vector<uint32_t> firstVertices(const std::vector<Method> &methods)
+{
+    std::vector<uint32_t> out;
+    for (const Method &m : methods)
+        if (m.first == NVB197_SET_VERTEX_ARRAY_START)
+            out.push_back(m.second);
+    return out;
+}
+
+TEST(RawIcb, ARangeTheGpuReadsDrawsItsCommandsAlone)
+{
+    const std::vector<uint32_t> words = fourCommands();
+    const std::vector<std::pair<uint32_t, uint32_t>> ranges = {{0, 4}, {1, 2}, {3, 1}, {2, 0}, {4, 3}, {3, 9}};
+    for (const auto &[location, length] : ranges) {
+        Fifo f;
+        uint32_t call[1];
+        raw::Push p{call, call + 1};
+        raw::mme::icbRangeHeader(p);
+        const uint32_t memory[] = {location, length};
+        std::vector<uint32_t> stream(call, call + 1);
+        stream.insert(stream.end(), memory, memory + 2);
+        f.run(stream.data(), stream.size());
+        EXPECT_EQ(f.scratch[raw::mme::kScratchLocation], location);
+        EXPECT_EQ(f.scratch[raw::mme::kScratchLength], length);
+        f.run(words.data(), words.size());
+        std::vector<uint32_t> want;
+        for (uint32_t i = 0; i < 4; i++)
+            if (i >= location && i - location < length)
+                want.push_back(3 * i);
+        EXPECT_EQ(firstVertices(f.methods), want) << location << "+" << length;
+    }
+}
+
+TEST(RawIcb, ACommandOutsideTheCpuRangeDrawsNothing)
+{
+    const std::vector<uint32_t> words = fourCommands();
+    Fifo f;
+    cpuRange(f, 2, 1);
+    f.run(words.data(), words.size());
+    EXPECT_EQ(firstVertices(f.methods), std::vector<uint32_t>{6});
+}
+
+TEST(RawIcb, ACopyRewritesTheIndexWordAlone)
+{
+    std::vector<uint32_t> a(raw::icb::kSlotWords), b(raw::icb::kSlotWords);
+    raw::icb::draw(a.data(), 3, {3, 3, 1, 9, 0});
+    raw::icb::draw(b.data(), 0, {3, 3, 1, 9, 0});
+    for (uint32_t i = 0; i < raw::icb::kSlotWords; i++)
+        if (i != raw::icb::kIndexWord)
+            EXPECT_EQ(a[i], b[i]) << i;
 }
 
 }  // namespace

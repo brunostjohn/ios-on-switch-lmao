@@ -2,8 +2,10 @@
 // An indirect command buffer of draws that inherit their pipeline and buffers: each command is kSlotWords push words in GPU
 // memory, written once as the CPU encodes the command, and a range of commands is one run of words the channel fetches by
 // reference (RenderEncoder::executeSlots), after the encoder prepared the state they inherit. A command is its topology,
-// its index buffer, and the indirect draw macro (raw_mme.h ABI v1) called with Metal's indirect arguments inline, which sets
-// the root draw parameters and base registers as an indirect draw does. A command with nothing encoded is no-ops.
+// its index buffer, and the gated draw macro (raw_mme.h) called with its index and Metal's indirect arguments inline: it
+// draws as an indirect draw does (root draw parameters, base registers) where its index is in the range the execute put in
+// the macros' scratch, and draws nothing elsewhere. A command with nothing encoded is no-ops. The macro call is at the
+// same words in every command, so a copy to another index rewrites one word (kIndexWord).
 #pragma once
 #include <cstdint>
 #include "raw_mme.h"
@@ -11,7 +13,7 @@
 
 namespace raw::icb {
 
-constexpr uint32_t kSlotWords = 16;
+constexpr uint32_t kSlotWords = 18, kCallWord = 10, kIndexWord = kCallWord + 1;
 constexpr uint32_t kNop = Push::hdr(4, SUBC_3D, NVB197_NO_OPERATION, 0);
 
 struct Draw {
@@ -51,19 +53,27 @@ inline void empty(uint32_t *slot)
         slot[i] = kNop;
 }
 
-inline void draw(uint32_t *slot, const Draw &d)
+// The words before the call (`p` at the slot's first) padded to it
+inline void padToCall(uint32_t *slot, Push &p)
+{
+    while (p.at < slot + kCallWord)
+        *p.at++ = kNop;
+}
+
+inline void draw(uint32_t *slot, uint32_t index, const Draw &d)
 {
     Push p{slot, slot + kSlotWords};
     p.m(NVB197_SET_PRIMITIVE_TOPOLOGY, topology(d.primitive));
     p.m(NVB197_SET_DA_PRIMITIVE_RESTART, restarts(d.primitive));
-    mme::indirectHeader(p, false);
-    const uint32_t arguments[] = {d.count, d.instances, d.first, d.baseInstance};
-    p.raw(arguments, 4);
+    padToCall(slot, p);
+    mme::icbDrawHeader(p, false);
+    const uint32_t arguments[] = {index, d.count, d.instances, d.first, d.baseInstance};
+    p.raw(arguments, 5);
     while (p.at < p.end)
         *p.at++ = kNop;
 }
 
-inline void indexed(uint32_t *slot, const IndexedDraw &d)
+inline void indexed(uint32_t *slot, uint32_t index, const IndexedDraw &d)
 {
     Push p{slot, slot + kSlotWords};
     p.inc(NVB197_SET_INDEX_BUFFER_A,
@@ -73,9 +83,10 @@ inline void indexed(uint32_t *slot, const IndexedDraw &d)
     p.m(NVB197_SET_INDEX_BUFFER_E, d.indexSize == 2 ? 1 : 2);
     p.m(NVB197_SET_PRIMITIVE_TOPOLOGY, topology(d.primitive));
     p.m(NVB197_SET_DA_PRIMITIVE_RESTART, restarts(d.primitive));
-    mme::indirectHeader(p, true);
-    const uint32_t arguments[] = {d.count, d.instances, d.firstIndex, uint32_t(d.baseVertex), d.baseInstance};
-    p.raw(arguments, 5);
+    padToCall(slot, p);
+    mme::icbDrawHeader(p, true);
+    const uint32_t arguments[] = {index, d.count, d.instances, d.firstIndex, uint32_t(d.baseVertex), d.baseInstance};
+    p.raw(arguments, 6);
     while (p.at < p.end)
         *p.at++ = kNop;
 }

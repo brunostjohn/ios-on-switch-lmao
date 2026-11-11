@@ -156,6 +156,8 @@ bool RMCommandPlan::record(const Cmd &c, const std::vector<uint64_t> &extra)
             draw.indexOffset = c.c;
             draw.arguments = c.obj2;
             draw.argumentOffset = c.x;
+            if (c.op == OpExecuteCommands)
+                draw.first = c.b;  // the range buffer's offset (RawMetalIndirect.mm)
         }
         operation.uses = renderStates[draw.state].uses;
         if (encoder_ == OpRender && draw.count && draw.instances) {

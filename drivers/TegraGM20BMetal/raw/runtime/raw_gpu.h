@@ -621,11 +621,21 @@ public:
     bool drawIndirect(uint32_t primitive, const Buffer *arguments, uint64_t offset, const char **why);
     bool drawIndexedIndirect(uint32_t primitive, uint32_t indexSize, const Buffer *indices, uint64_t indexOffset,
                              const Buffer *arguments, uint64_t argumentOffset, const char **why);
-    // An indirect command buffer's commands (raw_icb.h): `words` at `offset` in `slots`, drawn with the state they inherit
-    // (`primitive` one of theirs; `indexed`: some draw indices, from `indexBuffers`)
-    // (`written`: the GPU wrote some of the words, which the channel fetches after those writes land)
-    bool executeSlots(const Buffer &slots, uint64_t offset, uint32_t words, uint32_t primitive, bool indexed,
-                      bool written, const Buffer *const *indexBuffers, size_t indexBufferCount, const char **why);
+    // An indirect command buffer's commands (raw_icb.h) [first, first + count) of `slots`, drawn with the state they inherit
+    // (`primitive` one of theirs; `indexed`: some draw indices, from `indexBuffers`), or with `range` the commands of the
+    // MTLIndirectCommandBufferExecutionRange the GPU reads there (`count` the buffer's). `written`: the GPU wrote some of the
+    // words, which the channel fetches after those writes land
+    struct IcbExecute {
+        const Buffer *slots;
+        uint32_t first, count;
+        const Buffer *range;
+        uint64_t rangeOffset;
+        uint32_t primitive;
+        bool indexed, written;
+        const Buffer *const *indexBuffers;
+        size_t indexBufferCount;
+    };
+    bool executeSlots(const IcbExecute &x, const char **why);
     void end();
 
     void continuePass(uint8_t stores);

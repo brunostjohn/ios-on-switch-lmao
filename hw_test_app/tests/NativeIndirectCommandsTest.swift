@@ -7,8 +7,10 @@ import Metal
 /// of the first quarter, an indexed draw of the second, a third reset to nothing, an instanced draw of the fourth.
 /// Executed whole in one pass and the second alone in another, by reference to the commands' words; both command
 /// buffers stay raw. Then, in one command buffer, a blit encoder resets the first command and copies the fourth over
-/// the third on the GPU (and optimizes the range, which changes nothing), and a pass executes them all after it. A
-/// descriptor of commands that set their own pipeline has no form here (its creation is a metric).
+/// the third on the GPU (and optimizes the range, which changes nothing), and a pass executes them all after it. Last,
+/// the range is in a private buffer a blit copy wrote in the same command buffer ({1, 2}: the second and third
+/// commands), which the GPU reads; the CPU never does. A descriptor of commands that set their own pipeline has no form
+/// here (its creation is a metric).
 struct NativeIndirectCommandsTest: NativeObjectTest {
     let id = "metal.native.indirect_commands"
     let name = "Indirect command buffers of inherited state: encoded once, executed by range on the raw path"
@@ -65,6 +67,7 @@ struct NativeIndirectCommandsTest: NativeObjectTest {
         let whole = try gpu.texture(.rgba8Unorm, Self.size, Self.size)
         let second = try gpu.texture(.rgba8Unorm, Self.size, Self.size)
         let edited = try gpu.texture(.rgba8Unorm, Self.size, Self.size)
+        let ranged = try gpu.texture(.rgba8Unorm, Self.size, Self.size)
         for (target, range, edit) in [(whole, 0..<4, false), (second, 1..<2, false), (edited, 0..<4, true)] {
             let timing = try await gpu.run { buffer in
                 if edit {
@@ -87,6 +90,33 @@ struct NativeIndirectCommandsTest: NativeObjectTest {
             }
             work.paths.append(timing.path)
         }
+        let fresh = try device.makeIndirectCommandBuffer(descriptor: descriptor, maxCommandCount: 4, options: [])!
+        work.objects.append(fresh)
+        for q in 0..<4 {
+            fresh.indirectRenderCommandAt(q).drawPrimitives(
+                .triangleStrip, vertexStart: 4 * q, vertexCount: 4, instanceCount: 1, baseInstance: 0)
+        }
+        let staged = try gpu.buffer([UInt32](arrayLiteral: 1, 2))
+        guard let rangeBuffer = device.makeBuffer(length: 8, options: .storageModePrivate) else {
+            throw TestFailure("no private range buffer")
+        }
+        let gpuRange = try await gpu.run { buffer in
+            let blit = buffer.makeBlitCommandEncoder()!
+            blit.copy(from: staged, sourceOffset: 0, to: rangeBuffer, destinationOffset: 0, size: 8)
+            blit.endEncoding()
+            let encoder = buffer.makeRenderCommandEncoder(descriptor: Self.pass(ranged))!
+            encoder.setRenderPipelineState(pipeline)
+            var corners = Self.quarters
+            encoder.setVertexBytes(&corners, length: MemoryLayout<SIMD4<Float>>.stride * corners.count, index: 0)
+            var green = SIMD4<Float>(0, 1, 0, 1)
+            encoder.setFragmentBytes(&green, length: MemoryLayout<SIMD4<Float>>.stride, index: 0)
+            encoder.executeCommandsInBuffer(fresh, indirectBuffer: rangeBuffer, offset: 0)
+            encoder.endEncoding()
+        }
+        work.paths.append(gpuRange.path)
+        let wrongRanged = Self.wrong(try await gpu.read(ranged, bytesPerPixel: 4), drawn: [1, 2])
+        metrics.set("wrong_gpu_range", wrongRanged)
+        if wrongRanged != 0 { work.failures.append("\(wrongRanged) pixels wrong after the range the GPU wrote") }
         let wrongWhole = Self.wrong(try await gpu.read(whole, bytesPerPixel: 4), drawn: [0, 1, 3])
         let wrongSecond = Self.wrong(try await gpu.read(second, bytesPerPixel: 4), drawn: [1])
         let wrongEdited = Self.wrong(try await gpu.read(edited, bytesPerPixel: 4), drawn: [1, 3])

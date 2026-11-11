@@ -1,7 +1,7 @@
 # raw's API inventory, written by raw/test/selcover (SELCOVER_WRITE=1; selcover_inventory.h says what each
 # column holds): container, item, selector, m2v, sent by, raw
-# m2v's items: base 3 m2v 4 none 42 raw 312 read 332 refused 163 unread 161 zero 40
-# sent selectors: base 79 m2v 11 none 7 raw 527 refused 56 zero 135
+# m2v's items: base 3 m2v 4 none 42 raw 313 read 332 refused 163 unread 161 zero 39
+# sent selectors: base 79 m2v 11 none 7 raw 528 refused 56 zero 134
 MTLArgument	access	access	I	-	read
 MTLArgument	active	isActive	I	-	read
 MTLArgument	arrayLength	arrayLength	I	-	read
@@ -950,7 +950,7 @@ MTLRenderCommandEncoder	drawPrimitives:indirectBuffer:indirectBufferOffset:	draw
 MTLRenderCommandEncoder	drawPrimitives:vertexStart:vertexCount:	drawPrimitives:vertexStart:vertexCount:	I	21H461,24B119	raw
 MTLRenderCommandEncoder	drawPrimitives:vertexStart:vertexCount:instanceCount:	drawPrimitives:vertexStart:vertexCount:instanceCount:	I	21H461,24B119	raw
 MTLRenderCommandEncoder	drawPrimitives:vertexStart:vertexCount:instanceCount:baseInstance:	drawPrimitives:vertexStart:vertexCount:instanceCount:baseInstance:	I	21H461,24B119	raw
-MTLRenderCommandEncoder	executeCommandsInBuffer:indirectBuffer:indirectBufferOffset:	executeCommandsInBuffer:indirectBuffer:indirectBufferOffset:	I	24B119	zero
+MTLRenderCommandEncoder	executeCommandsInBuffer:indirectBuffer:indirectBufferOffset:	executeCommandsInBuffer:indirectBuffer:indirectBufferOffset:	I	24B119	raw
 MTLRenderCommandEncoder	executeCommandsInBuffer:withRange:	executeCommandsInBuffer:withRange:	I	21H461,24B119	raw
 MTLRenderCommandEncoder	memoryBarrierWithResources:count:afterStages:beforeStages:	memoryBarrierWithResources:count:afterStages:beforeStages:	I	21H461,24B119	raw
 MTLRenderCommandEncoder	memoryBarrierWithScope:afterStages:beforeStages:	memoryBarrierWithScope:afterStages:beforeStages:	I	24B119	raw
