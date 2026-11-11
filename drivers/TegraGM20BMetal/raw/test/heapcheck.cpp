@@ -109,6 +109,9 @@ int main(int argc, char **argv)
         const raw::PackForm form =
             records[i].flags & raw::PipelineBarrierForm ? raw::PackForm::Barrier : raw::PackForm::Default;
         const raw::Pipeline *pl = dev.pipeline(records[i].keyHash, form);
+        if (records[i].flags & raw::PipelineVariantRecord)
+            for (const auto &[name, variant] : dev.variantPipelines(records[i].keyHash, false))
+                pl = name == pack.string(records[i].variantName) ? variant : pl;
         if (!pl)
             continue;
         made++;

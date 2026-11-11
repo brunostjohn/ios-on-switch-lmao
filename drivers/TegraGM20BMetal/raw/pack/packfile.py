@@ -14,7 +14,7 @@ SECTIONS = 11  # runtime/raw_pack.h PackSectionCount
 KERNEL_ENTRIES = 16  # PackKernel.entry's length
 PROGRAM_CBUFS = 11  # PackProgram.cbufType's length (runtime/raw_pack.h)
 # PackPipeline's record-v15 tail: variants, variantCount[2], storageBlendMask, storageBlendModel, boundEntries,
-# uniform[8], fetchRung[8], reserved
+# uniform[8], fetchRung[8], variantName
 PIPELINE_V15 = struct.Struct('<IBBBBI32s8sI')
 NO_UNIFORM = b'\xff\x00\x00\x00' * 8
 
@@ -87,10 +87,21 @@ def push_bytes(push: list[tuple[int, int]]) -> bytes:
     return struct.pack('<I32I', mask, *words)
 
 
+# A key's variant name (runtime/raw_pack.h variantNameAt): " | cubic ..." then " | tests=<n>" at its end
+VARIANT_NAME = re.compile(r'( \| cubic [^|]*?)?( \| tests=\d+)?$')
+
+
+def variant_name(key: str) -> str:
+    """Give the name of the variant a record's key names after its state's key, '' for the state's own records."""
+    return VARIANT_NAME.search(key).group(0)
+
+
 def key_hash(rec: dict) -> int:
+    """Give the hash the runtime looks a record up by: its state's key's, a variant's too (PipelineVariantRecord)."""
     # the raw path's own states (probe.mm PROBE_OWN_LIB) by the name the runtime asks for (raw_gpu.cpp ycbcrPipeline and
     # standInPipeline, runtime/raw_xr.h xrConversion, runtime/raw_samples.h resolveState, runtime/raw_mip.h mipState)
-    parts = rec['key'].split(' | ')
+    key = rec['key'][: len(rec['key']) - len(variant_name(rec['key']))]
+    parts = key.split(' | ')
     pair = f'{parts[1].rstrip()} | {parts[2]}' if len(parts) == 3 else ''
     for family, vertex, fragments in (
         ('ycbcr', 'ycbcr_vert', ('converted_frag', 'srgb_frag', 'codes_frag', 'codes10_frag')),
@@ -131,15 +142,16 @@ def key_hash(rec: dict) -> int:
             name = f'{family}_{fragment}'
             if pair == f'v {vertex} | f {name}':
                 return fnv(f'raw.{family}.{name}'.encode())
-    return fnv(rec['key'].encode())
+    return fnv(key.encode())
 
 
-def pipeline_bytes(rec: dict, key_offset: int, blob_off: int, variants_off: int = 0) -> bytes:
+def pipeline_bytes(rec: dict, key_offset: int, blob_off: int, variants_off: int = 0, name_offset: int = 0) -> bytes:
     vb = rec['vbs'][0] if rec['vbs'] else {'slot': 0xFF, 'stride': 0}
     keyhash = key_hash(rec)
     flags = (1 if rec['fetch'] else 0) | (2 if rec.get('form') == 'barrier' else 0)  # PackPipelineFlags
     flags |= 4 if rec.get('push_metadata') else 0
     flags |= 8 if rec.get('storage_mask') else 0
+    flags |= 16 if variant_name(rec['key']) else 0
     head = struct.pack(
         '<QIHHIIBBBBHHI',
         keyhash,
@@ -170,7 +182,7 @@ def pipeline_bytes(rec: dict, key_offset: int, blob_off: int, variants_off: int 
         rec.get('bound_entries', 0),
         rec.get('uniform', NO_UNIFORM),
         bytes(rec.get('fetch_rung', [0] * 8)),
-        0,
+        name_offset,
     )
     return head + entry_bytes(rec['entries']) + push_bytes(rec['push']) + dynamic + storage + tests + v15
 
@@ -302,7 +314,9 @@ def pipeline_sections(pipes: list[dict]) -> tuple[bytearray, list[int], bytearra
             variant_bin += struct.pack('<IHH', v['assume'], v['program'], 0)
         # the key's attachment and vertex fields (what the runtime reads of it: raw_gpu.cpp Device::pipeline), not the
         # functions' constants (some 1.5 KB a fixed-function state; pack.json has the whole key)
-        pipe_bin += pipeline_bytes(rec, string(rec['key'].split(' | ')[0].rstrip()), blobs[pairs], variants_off)
+        name = variant_name(rec['key'])
+        key_off = string(rec['key'].split(' | ')[0].rstrip())
+        pipe_bin += pipeline_bytes(rec, key_off, blobs[pairs], variants_off, string(name) if name else 0)
     return pipe_bin, blob, strings, variant_bin
 
 

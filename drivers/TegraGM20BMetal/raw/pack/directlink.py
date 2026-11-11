@@ -157,7 +157,7 @@ def pipeline_of(rec: dict, varying: list[int], prog_index: dict[str, int], const
     )
     v15 = packfile.PIPELINE_V15.unpack_from(p, tail)
     _variants, vertex_variants, _fragment_variants, storage_blend_mask, storage_blend_model = v15[:5]
-    bound_entries, uniform, fetch_rung, _reserved = v15[5:]
+    bound_entries, uniform, fetch_rung, _variant_name = v15[5:]
     regs = rec['probe']['records'][0]['regs']
     varying = list(varying)
     if storage_mask:
@@ -328,6 +328,11 @@ def main() -> None:
     found = split_programs(states, programs)
     simple = [rec['probe'] for rec in states]
     report = [f'{len(states) + len(refused)} states made directly, {len(states)} records, {len(refused)} refused']
+    named = [packfile.variant_name(rec['key']) for rec in states]
+    report.append(
+        f'{sum(1 for n in named if n)} variant records: {sum(1 for n in named if "tests=" in n)} of a test class, '
+        f'{sum(1 for n in named if "cubic" in n)} of cubic samplers'
+    )
     varying, baseline = mkpack.split_registers(simple, post)
     report.append(f'{len(varying)} per-pipeline registers: ' + ' '.join(f'{m:x}' for m in varying))
     report.append(f'{len(baseline)} baseline registers over post-init')

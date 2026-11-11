@@ -121,6 +121,8 @@ const PackPipeline *Pack::find(uint64_t keyHash, PackForm form) const
     const PackPipeline *fallback = nullptr;
     for (; lo < n && keyAt(lo) == keyHash; lo++) {
         const PackPipeline *at = p + (index_.empty() ? lo : index_[lo]);
+        if (at->flags & PipelineVariantRecord)
+            continue;
         if (form == PackForm::Barrier) {
             if (at->flags & PipelineBarrierForm)
                 return at;
@@ -132,6 +134,36 @@ const PackPipeline *Pack::find(uint64_t keyHash, PackForm form) const
         }
     }
     return fallback;
+}
+
+std::vector<const PackPipeline *> Pack::variantRecords(uint64_t keyHash) const
+{
+    const PackPipeline *p = section<PackPipeline>(PackPipelines);
+    const uint32_t n = hdr_->pipelines;
+    const auto at = [&](uint32_t i) {
+        return p + (index_.empty() ? i : index_[i]);
+    };
+    uint32_t lo = 0, hi = n;
+    while (lo < hi) {
+        const uint32_t mid = lo + (hi - lo) / 2;
+        if (at(mid)->keyHash < keyHash)
+            lo = mid + 1;
+        else
+            hi = mid;
+    }
+    std::vector<const PackPipeline *> out;
+    for (; lo < n && at(lo)->keyHash == keyHash; lo++)
+        if (at(lo)->flags & PipelineVariantRecord)
+            out.push_back(at(lo));
+    return out;
+}
+
+const PackPipeline *Pack::variantRecord(uint64_t keyHash, const std::string &name) const
+{
+    for (const PackPipeline *rec : variantRecords(keyHash))
+        if (name == string(rec->variantName))
+            return rec;
+    return nullptr;
 }
 
 // mkpack.py writes the kernels in keyHash order

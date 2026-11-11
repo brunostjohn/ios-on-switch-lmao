@@ -64,6 +64,18 @@ class RecordsTest(unittest.TestCase):
         self.assertEqual(struct.unpack_from('<I', pipes, directlink.PIPELINE_BYTES * 2 - packfile.PIPELINE_V15.size),
                          (1,))
 
+    def test_a_variant_record_lies_under_its_states_key_and_is_named(self):
+        own = {'key': 'samples=1 ds=260/260 c0=80:15:0 | v a | f b', 'vs': 0, 'fs': 1, 'blob': [], 'entries': [],
+               'push': [], 'vbs': [], 'set_size': 0, 'fetch': True}
+        tests = {**own, 'key': own['key'] + ' | tests=3'}
+        self.assertEqual(packfile.key_hash(tests), packfile.key_hash(own))
+        pipes, _, strings, _ = packfile.pipeline_sections([own, tests])
+        records = [pipes[i * directlink.PIPELINE_BYTES : (i + 1) * directlink.PIPELINE_BYTES] for i in range(2)]
+        flags = [directlink.PIPELINE.unpack_from(r)[-1] for r in records]
+        self.assertEqual((flags[0] & 16, flags[1] & 16), (0, 16))
+        name = struct.unpack_from('<I', records[1], directlink.PIPELINE_BYTES - 4)[0]
+        self.assertEqual(strings[name:].split(b'\0')[0], b' | tests=3')
+
     def test_ordered_storage_metadata_round_trip_and_explicit_registers(self):
         rec = dict(key='samples=1 c0=81:15:0:1:0:0:1:0:0', vs=0, fs=1, blob=[], entries=[handle(('fetch', 0))],
                    push=[], vbs=[], set_size=256, fetch=True, storage_mask=1, storage_write_mask=1,
@@ -116,10 +128,11 @@ class RecordsTest(unittest.TestCase):
         self.assertEqual(packfile.key_hash({'key': own}), packfile.fnv(b'raw.resolve.resolve_bgra8_frag'))
         mip = 'samples=1 topo=0 ds=0/0 c0=43:15:0:1:0:0:1:0:0 | v mip_vert  | f mip_bgr5a1_frag'
         self.assertEqual(packfile.key_hash({'key': mip}), packfile.fnv(b'raw.mip.mip_bgr5a1_frag'))
+        variant = {'key': own + ' | tests=1'}
+        self.assertEqual(packfile.key_hash(variant), packfile.fnv(b'raw.resolve.resolve_bgra8_frag'))
         for key in (
             own + ' | l RenderBox',
             own + ' | air 1234',
-            own + ' | cubic 1',
             own.replace('resolve_bgra8_frag', 'resolve_sample_fragment #0:36:01'),
             own.replace('resolve_vert', 'plane__vertex'),
         ):

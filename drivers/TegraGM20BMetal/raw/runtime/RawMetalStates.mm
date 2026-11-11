@@ -299,6 +299,9 @@ static void makeRecord(RMPipeline *p, MTLRenderPipelineDescriptor *d)
 #if SWITCH_RAW_DIAGNOSTICS
         markUniformProbe(p->_raw, d.label);
 #endif
+        p->_packed = p->_raw != nullptr;
+        if (p->_packed)
+            packedVariants(p);
     }
     makeRecord(p, d);
     if (!p->_raw) {

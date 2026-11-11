@@ -4,6 +4,7 @@
 // so every process reads the same page-cache pages. Its pipelines are in keyHash order (Pack::find searches them in place).
 #pragma once
 #include <cstddef>
+#include <algorithm>
 #include <cstdint>
 #include <string>
 #include <vector>
@@ -190,8 +191,18 @@ enum PackPipelineFlags : uint32_t {
     // fetches read input attachments, ordered by barriers (pack/rawpack.py's probe with NVK's interlock hidden)
     PipelineBarrierForm = 2,
     PipelinePushMetadata = 4,
-    PipelineStorageMetadata = 8
+    PipelineStorageMetadata = 8,
+    // one of the state's records for a variant its draws pick (the depth and stencil tests' class, the cubic samplers'
+    // binds), made by the pack builder: under the state's keyHash, named by variantName; Pack::find passes over it
+    PipelineVariantRecord = 16
 };
+
+// Where a key's variant name starts (" | cubic ...", then " | tests=<n>": the runtime's names, RawMetalCubic.mm), its size
+// where it names none
+inline size_t variantNameAt(const std::string &key)
+{
+    return std::min({key.find(" | cubic "), key.find(" | tests="), key.size()});
+}
 
 // Which of a state's records: its first (the storage form where it has both), or its barrier form
 enum class PackForm : uint8_t {
@@ -243,7 +254,7 @@ struct PackPipeline {
     uint32_t boundEntries;                     // bit k: entry[k]'s handle word is read by a bound texture instruction
     PackUniformRange uniform[kUniformRanges];  // assumption bits 0-7
     uint8_t fetchRung[8];                      // per color attachment: PackFetchRung, candidate rungs (kFetchRungMask)
-    uint32_t reservedV15Tail;
+    uint32_t variantName;                      // a PipelineVariantRecord's name: its offset in the strings section
 };
 
 // A compute state at one threadgroup shape (runtime/raw_compute.h): NVK's work for the kernel m2v made of it, keyed by
@@ -384,8 +395,11 @@ public:
     }
 
     const PackPipeline *find(uint64_t keyHash, PackForm form = PackForm::Default) const;  // nullptr: not in the pack
-    const PackKernel *findKernel(uint64_t keyHash) const;                                 // nullptr: not in the pack
-    const PackSplit *split(uint16_t wholeProgram) const;                                  // nullptr: not split
+    // the state's PipelineVariantRecords, and the one named `name` (variantNameAt); nullptr: not in the pack
+    std::vector<const PackPipeline *> variantRecords(uint64_t keyHash) const;
+    const PackPipeline *variantRecord(uint64_t keyHash, const std::string &name) const;
+    const PackKernel *findKernel(uint64_t keyHash) const;  // nullptr: not in the pack
+    const PackSplit *split(uint16_t wholeProgram) const;   // nullptr: not split
     // `pp`'s variants of stage `stage` (0 vertex, 1 fragment), `count` of them; nullptr: none
     const PackVariant *variants(const PackPipeline &pp, uint32_t stage, uint32_t &count) const;
 

@@ -765,18 +765,34 @@ Pipeline *Device::pipeline(uint64_t keyHash, PackForm form, bool caTransform)
     return pl;
 }
 
+bool Device::usableRecord(const PackPipeline *rec) const
+{
+    return rec && usableDynamicPush(*rec, pack_.string(rec->keyString)) &&
+           usableStorageMetadata(*rec, pack_.section<uint32_t>(PackBlob) + rec->blob, rec->blobDwords);
+}
+
+std::vector<std::pair<std::string, Pipeline *>> Device::variantPipelines(uint64_t keyHash, bool caTransform)
+{
+    std::vector<std::pair<std::string, Pipeline *>> out;
+    for (const PackPipeline *rec : pack_.variantRecords(keyHash)) {
+        Pipeline *pl = nullptr;
+        if (usableRecord(rec)) {
+            std::lock_guard<std::mutex> l(lock_);
+            pl = placeRecord(*rec, caTransform);
+        }
+        out.emplace_back(pack_.string(rec->variantName), pl);
+    }
+    return out;
+}
+
 Pipeline *Device::placePipeline(uint64_t keyHash, PackForm form, bool caTransform)
 {
-    const auto usable = [&](const PackPipeline *rec) {
-        return rec && usableDynamicPush(*rec, pack_.string(rec->keyString)) &&
-               usableStorageMetadata(*rec, pack_.section<uint32_t>(PackBlob) + rec->blob, rec->blobDwords);
-    };
     const PackPipeline *rec = pack_.find(keyHash, form);
-    if (rec && !usable(rec)) {
+    if (rec && !usableRecord(rec)) {
         const PackPipeline *barrier = form == PackForm::Default && (rec->flags & PipelineStorageMetadata)
                                           ? pack_.find(keyHash, PackForm::Barrier)
                                           : nullptr;
-        rec = usable(barrier) ? barrier : nullptr;
+        rec = usableRecord(barrier) ? barrier : nullptr;
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
         if (rec) {
             stats.fetch.storageFallback[size_t(StorageFallback::Metadata)]++;
@@ -789,10 +805,14 @@ Pipeline *Device::placePipeline(uint64_t keyHash, PackForm form, bool caTransfor
         const auto made = completed_.find(keyHash);
         return form == PackForm::Default && made != completed_.end() ? made->second : nullptr;
     }
-    Pipeline &pl = pipelines_[rec - pack_.section<PackPipeline>(PackPipelines)];
+    return placeRecord(*rec, caTransform);
+}
+
+Pipeline *Device::placeRecord(const PackPipeline &pp, bool caTransform)
+{
+    Pipeline &pl = pipelines_[&pp - pack_.section<PackPipeline>(PackPipelines)];
     if (pl.rec)
         return &pl;
-    const PackPipeline &pp = *rec;
     const PackProgram *progs = pack_.section<PackProgram>(PackPrograms);
     PlacedProgram vs, fs;
     if (!place(pp.vs, vs.program, vs.data) || !place(pp.fs, fs.program, fs.data)) {

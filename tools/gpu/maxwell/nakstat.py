@@ -142,6 +142,7 @@ def state_key(line: str) -> str:
 
 # raw_pack.h by version: PackPipeline and PackProgram sizes, sections. From 15 a program's register count is its own.
 LAYOUTS = {14: (480, 32, 10), 15: (536, 36, 11)}
+VARIANT_RECORD = 16  # PackPipelineFlags PipelineVariantRecord: a variant's record under its state's key
 
 
 class Pack:
@@ -158,6 +159,8 @@ class Pack:
         for i in range(self.npipe):
             at = self.sec[1][0] + pipeline_bytes * i
             key, _, _, fs, blob, dwords = struct.unpack_from('<QIHHII', self.p, at)
+            if struct.unpack_from('<I', self.p, at + 32)[0] & VARIANT_RECORD:
+                continue
             self.pipelines.setdefault(key, (fs, blob, dwords))
 
     def code(self, program: int) -> bytes:

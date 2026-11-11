@@ -247,9 +247,9 @@ RMLibrary *wrapLibrary(id device, id<MTLLibrary> twin, NSString *path);
 MTLRenderPipelineDescriptor *twinDescriptor(MTLRenderPipelineDescriptor *d);
 
 // RawMetalCubic.mm: the cubic binds (raw_cubic.h) of a draw of `pl` with these fragment samplers and textures bound (empty: no
-// cubic sampler where it samples), and `p`'s variant for them: null where it is refused, or not made yet (*making: asked)
+// cubic sampler where it samples), and a packed state's variants, the pack's records of them placed at its creation
 raw::CubicBinds cubicBinds(const raw::Pipeline &pl, RMSampler *const samplers[16], RMTexture *const textures[16]);
-raw::Pipeline *cubicVariant(RMPipeline *p, const raw::CubicBinds &b, bool *making);
+void packedVariants(RMPipeline *p);
 
 // RawMetalHeap.mm: the purged heaps a committed command buffer's resources lie in, given their pages back before it is encoded
 // (it counts as committed already, so no purge runs meanwhile)

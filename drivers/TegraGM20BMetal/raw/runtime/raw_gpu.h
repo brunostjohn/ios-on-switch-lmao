@@ -979,6 +979,9 @@ public:
     // caTransform: its vertex function is Core Animation's fixed_vert_l?h_spc (Pipeline::caTransform)
     Pipeline *pipeline(uint64_t keyHash, PackForm form = PackForm::Default, bool caTransform = false);
     Pipeline *placePipeline(uint64_t keyHash, PackForm form, bool caTransform);
+    // The state's pack records for the variants its draws pick (PipelineVariantRecord), each placed, by name: null where it
+    // cannot be (its programs find no room in the heap, or its storage or push metadata is not this runtime's)
+    std::vector<std::pair<std::string, Pipeline *>> variantPipelines(uint64_t keyHash, bool caTransform);
     // A state the runtime made a record of (raw_record.h), drawn from then on as the pack's are; null: its programs find no room
     // in the heap or its samplers none in the header pool (`why`)
     Pipeline *addRecord(const RuntimeRecord &r, bool caTransform, std::string &why, bool *retry = nullptr);
@@ -1536,6 +1539,10 @@ private:
     bool heapPlace(const uint8_t *bytes, uint32_t size, uint64_t &offset);
     void build(Pipeline &pl, const PackPipeline &pp, const PlacedProgram &vs, const PlacedProgram &fs,
                const uint32_t *blob, const char *keyString, bool caTransform);
+    // whether this runtime can draw pack record `rec`: its push and storage metadata are ones it reads
+    bool usableRecord(const PackPipeline *rec) const;
+    // lock_ held: pack record `pp` placed (its programs in the heap) and built, once; null where the heap has no room
+    Pipeline *placeRecord(const PackPipeline &pp, bool caTransform);
     // lock_ held: `pl`'s split offered, its twin made when a draw first takes it (makeSplit)
     void offerSplit(Pipeline &pl, SplitSource &&source);
     void offerVariants(Pipeline &pl, const PackPipeline &pp);

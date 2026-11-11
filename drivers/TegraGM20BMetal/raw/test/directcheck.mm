@@ -137,19 +137,30 @@ int main(int argc, char **argv)
             [&](const std::string &line, bool ours, probe::State &s) {
                 states++;
                 raw::ProbeTextures textures = probe::probeTextures(line, ours);
-                // DIRECTCHECK_TESTS=<n>: each state as the runtime asks for it beside depth or stencil tests of
-                // class n (raw_fragment_tests.h FragmentTests), the variant a fetch without a storage form takes
-                if (const char *tests = getenv("DIRECTCHECK_TESTS"); tests && *tests)
+                // DIRECTCHECK_TESTS=<n>: each state's variant beside depth or stencil tests of class n
+                // (raw_fragment_tests.h FragmentTests), the one a fetch without a storage form takes, against the
+                // pack's record of it (PipelineVariantRecord)
+                std::string key = s.key;
+                if (const char *tests = getenv("DIRECTCHECK_TESTS"); tests && *tests) {
                     textures.fragmentTests = uint8_t(atoi(tests));
-                const raw::PackPipeline *pp = pack.find(raw::packKeyHash(s.key));
+                    key += " | tests=" + std::to_string(textures.fragmentTests);
+                }
+                const size_t named = raw::variantNameAt(key);
+                const uint64_t keyHash = raw::packKeyHash(key.substr(0, named));
+                const raw::PackPipeline *pp =
+                    named < key.size() ? pack.variantRecord(keyHash, key.substr(named)) : pack.find(keyHash);
                 const bool barrier = pp && (pp->flags & raw::PipelineBarrierForm);
                 raw::RuntimeRecord rec;
                 std::string why;
                 const auto began = std::chrono::steady_clock::now();
-                const raw::CompileOutcome outcome = direct.make(s.d, s.key, rec, why, textures, nullptr, true);
+                const raw::CompileOutcome outcome = direct.make(s.d, key, rec, why, textures, nullptr, true);
+                if (pp && named < key.size()) {
+                    rec.pipeline.keyHash = keyHash;
+                    rec.pipeline.flags |= raw::PipelineVariantRecord;
+                }
                 ms += std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - began).count();
                 if (const char *dir = getenv("DIRECTCHECK_DUMP"); dir && *dir && outcome == raw::CompileOutcome::Made)
-                    dumpRecord(dir, s.key, rec);
+                    dumpRecord(dir, key, rec);
                 std::string verdict;
                 if (outcome == raw::CompileOutcome::Failed) {
                     verdict = " failed (" + why + ")";

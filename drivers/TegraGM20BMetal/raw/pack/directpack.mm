@@ -10,7 +10,8 @@
 // method and value pairs: raw_emit's), its vertex and fragment programs (header + code, shader data, constant buffer types:
 // each a u32 length and bytes), its constexpr sampler headers (u32 count, eight words each), which its entries number from 0,
 // and its fragment program's split: u32 0, or 1 and its PackSplit (no program indices), its per-pixel program and its prologue
-// (as the programs above; the prologue's header 80 bytes of zeros).
+// (as the programs above; the prologue's header 80 bytes of zeros). A record of one of a state's variants has the variant's name
+// after its key (runtime/raw_pack.h variantNameAt).
 // Then per compute dispatch shape (the corpus's D lines, as the kernel probe read them: kernel_shapes.h): "DKRN", the outcome,
 // its raw_compute_key.h key and the reason, then for a made kernel its PackKernel (raw_direct_compute.h; program 0), its code,
 // shader data and constant buffer types, and its sampler headers, which its sampler entries number from 0 (slot 0x80 | n).
@@ -124,6 +125,54 @@ void markCandidates(const std::string &line, raw::PackPipeline &p)
     }
 }
 
+// The depth and stencil test classes a state's draws ask its variant for (RawMetalCubic.mm drawnRecord): a state that fetches
+// beside a depth or stencil attachment without the storage form, each class raw_fragment_tests.h FragmentTests names above Any
+// (Pass, ReadOnly, DepthWrite, StencilWrite: 1-4)
+std::vector<uint8_t> testClasses(const raw::PackPipeline &p, const std::string &key)
+{
+    unsigned depth = 0, stencil = 0;
+    const size_t ds = key.find("ds=");
+    if (!(p.flags & raw::PipelineFetches) || (p.flags & raw::PipelineStorageMetadata) || ds == std::string::npos ||
+        sscanf(key.c_str() + ds, "ds=%u/%u", &depth, &stencil) != 2 || !(depth || stencil))
+        return {};
+    return {1, 2, 3, 4};
+}
+
+struct Counts {
+    uint32_t made = 0, refused = 0, failed = 0, split = 0, variants = 0;
+};
+
+// A state's records: its own, its barrier form where its own is the storage form, and one per test class its draws can ask
+// for (named " | tests=<class>" after its key, as the runtime names them)
+void makeState(raw::Direct &direct, Writer &w, const std::string &line, raw::ProbeTextures textures,
+               const probe::State &s, Counts &n)
+{
+    const auto make = [&](const std::string &key, raw::PackForm form, raw::RuntimeRecord &rec) {
+        std::map<uint32_t, uint32_t> registers;
+        std::string why;
+        const raw::CompileOutcome outcome = direct.make(s.d, key, rec, why, textures, &registers, true, form);
+        markCandidates(line, rec.pipeline);
+        record(w, key, outcome, why, rec, registers);
+        return outcome;
+    };
+    raw::RuntimeRecord rec;
+    const raw::CompileOutcome outcome = make(s.key, raw::PackForm::Default, rec);
+    (outcome == raw::CompileOutcome::Made ? n.made : outcome == raw::CompileOutcome::Refused ? n.refused : n.failed)++;
+    if (outcome != raw::CompileOutcome::Made)
+        return;
+    n.split += rec.split;
+    if (rec.pipeline.flags & raw::PipelineStorageMetadata) {
+        raw::RuntimeRecord barrier;
+        make(s.key, raw::PackForm::Barrier, barrier);
+    }
+    for (const uint8_t tests : testClasses(rec.pipeline, s.key)) {
+        raw::RuntimeRecord variant;
+        textures.fragmentTests = tests;
+        n.variants += make(s.key + " | tests=" + std::to_string(tests), raw::PackForm::Default, variant) ==
+                      raw::CompileOutcome::Made;
+    }
+}
+
 void kernel(Writer &w, const std::string &key, raw::CompileOutcome outcome, const std::string &why,
             const raw::ComputeRecord &rec)
 {
@@ -172,31 +221,10 @@ int main(int argc, char **argv)
         rules.varying = raw::emittableMethods();
         raw::Direct direct(std::move(rules));
         direct.makeVariants(true);
-        uint32_t made = 0, refused = 0, failed = 0, split = 0;
+        Counts counts;
         probe::eachState(dev, qc, own, standIn, probe::corpusLines(text, own != nil),
                          [&](const std::string &line, bool ours, probe::State &s) {
-                             raw::RuntimeRecord rec;
-                             std::map<uint32_t, uint32_t> registers;
-                             std::string why;
-                             const raw::CompileOutcome outcome =
-                                 direct.make(s.d, s.key, rec, why, probe::probeTextures(line, ours), &registers, true);
-                             markCandidates(line, rec.pipeline);
-                             record(w, s.key, outcome, why, rec, registers);
-                             if (outcome == raw::CompileOutcome::Made &&
-                                 (rec.pipeline.flags & raw::PipelineStorageMetadata)) {
-                                 raw::RuntimeRecord barrier;
-                                 std::map<uint32_t, uint32_t> barrierRegisters;
-                                 std::string barrierWhy;
-                                 const auto barrierOutcome =
-                                     direct.make(s.d, s.key, barrier, barrierWhy, probe::probeTextures(line, ours),
-                                                 &barrierRegisters, true, raw::PackForm::Barrier);
-                                 markCandidates(line, barrier.pipeline);
-                                 record(w, s.key, barrierOutcome, barrierWhy, barrier, barrierRegisters);
-                             }
-                             split += outcome == raw::CompileOutcome::Made && rec.split;
-                             (outcome == raw::CompileOutcome::Made      ? made
-                              : outcome == raw::CompileOutcome::Refused ? refused
-                                                                        : failed)++;
+                             makeState(direct, w, line, probe::probeTextures(line, ours), s, counts);
                          });
         uint32_t kernels[3] = {};
         probe::eachKernel(
@@ -212,10 +240,12 @@ int main(int argc, char **argv)
             },
             [](const std::string &, const std::string &) {});
         fclose(w.f);
-        fprintf(
-            stderr,
-            "directpack: %u states made (%u split), %u refused, %u failed; %u kernels made, %u refused, %u failed\n",
-            made, split, refused, failed, kernels[0], kernels[1], kernels[2]);
+        fprintf(stderr,
+                "directpack: %u states made (%u split, %u test variants), %u refused, %u failed; %u kernels made, %u "
+                "refused, "
+                "%u failed\n",
+                counts.made, counts.split, counts.variants, counts.refused, counts.failed, kernels[0], kernels[1],
+                kernels[2]);
         return 0;
     }
 }

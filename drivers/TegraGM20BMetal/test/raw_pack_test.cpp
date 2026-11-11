@@ -38,6 +38,54 @@ std::string writePack(uint32_t version, uint32_t variants, const char *name)
     return path;
 }
 
+// A pack of a state's own record and two of its variants' (" | tests=2" and a cubic one), under one key
+std::string writeVariantPack(const char *name)
+{
+    std::vector<uint8_t> file(0x1000, 0);
+    raw::PackHeader h = {};
+    memcpy(h.magic, "GM20BPK1", 8);
+    h.version = raw::kPackVersion;
+    h.pipelines = 3;
+    h.section[raw::PackPipelines] = {0x100, 3 * sizeof(raw::PackPipeline)};
+    const char strings[] = "\0 | tests=2\0 | cubic s0:0000n t0:80";
+    h.section[raw::PackStrings] = {0xc00, sizeof strings};
+    memcpy(file.data(), &h, sizeof h);
+    memcpy(file.data() + 0xc00, strings, sizeof strings);
+    raw::PackPipeline pp[3] = {};
+    for (uint32_t i = 0; i < 3; i++) {
+        pp[i].keyHash = 7;
+        pp[i].vs = uint16_t(i);
+        pp[i].flags = i ? raw::PipelineVariantRecord : 0;
+    }
+    pp[1].variantName = 1;
+    pp[2].variantName = 12;
+    memcpy(file.data() + 0x100, pp, sizeof pp);
+    const std::string path = std::string(getenv("TEST_TMPDIR") ?: "/tmp") + "/" + name;
+    FILE *f = fopen(path.c_str(), "wb");
+    fwrite(file.data(), 1, file.size(), f);
+    fclose(f);
+    return path;
+}
+
+TEST(RawPack, AStatesVariantRecordsAreFoundByNameNeverAsTheState)
+{
+    raw::Pack pack;
+    std::string err;
+    ASSERT_TRUE(pack.load(writeVariantPack("variants.bin").c_str(), 0, err)) << err;
+    ASSERT_NE(pack.find(7), nullptr);
+    EXPECT_EQ(pack.find(7)->vs, 0);
+    EXPECT_EQ(pack.find(7, raw::PackForm::Barrier), nullptr);
+    EXPECT_EQ(pack.variantRecords(7).size(), 2u);
+    ASSERT_NE(pack.variantRecord(7, " | tests=2"), nullptr);
+    EXPECT_EQ(pack.variantRecord(7, " | tests=2")->vs, 1);
+    EXPECT_EQ(pack.variantRecord(7, " | cubic s0:0000n t0:80")->vs, 2);
+    EXPECT_EQ(pack.variantRecord(7, " | tests=3"), nullptr);
+    EXPECT_EQ(pack.variantRecord(8, " | tests=2"), nullptr);
+    const std::string key = "c0=80:15:0:1:0:0:1:0:0 | v a | f b | l RenderBox | cubic s0:0000n t0:80 | tests=4";
+    EXPECT_EQ(key.substr(raw::variantNameAt(key)), " | cubic s0:0000n t0:80 | tests=4");
+    EXPECT_EQ(raw::variantNameAt("c0=80 | v a | f b"), 17u);
+}
+
 TEST(RawPack, RefusesAPackOfAnotherVersion)
 {
     raw::Pack pack;

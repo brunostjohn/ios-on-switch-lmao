@@ -35,6 +35,35 @@ raw::CubicBinds cubicBinds(const raw::Pipeline &pl, RMSampler *const samplers[16
     return b;
 }
 
+void packedVariants(RMPipeline *p)
+{
+    const uint64_t keyHash = raw::Pack::fnv(p->_key.data(), p->_key.size());
+    std::lock_guard<std::mutex> lock(p->_variantLock);
+    for (const auto &[name, pl] : gRM->raw->variantPipelines(keyHash, p->_caTransform)) {
+        auto variant = std::make_shared<raw::Variant<raw::Pipeline>>();
+        variant->publish(pl);
+        p->_variants.emplace(name, std::move(variant));
+    }
+}
+
+// A packed state's variant the pack does not hold: a draw that needs one of its cubic samplers' binds is refused (neither its
+// own program nor another binds' filters them as Metal does), and one of a test class the pack builder could not make draws
+// the state's own record, as the device's compile, refused alike, would have left it
+static raw::Pipeline *unpackedVariant(RMPipeline *p, const std::string &suffix, const std::string &name)
+{
+    if (suffix.empty())
+        return p->_raw;
+    if (suffix != name) {
+        std::lock_guard<std::mutex> lock(p->_variantLock);
+        if (const auto found = p->_variants.find(suffix); found != p->_variants.end())
+            return found->second->value();
+    }
+    const std::string key = p->_key + name;
+    SWITCH_REFUSE_DETAIL("raw", "state.variant_unpacked", raw::Pack::fnv(key.data(), key.size()),
+                         "a packed state's variant the pack lacks: its draws are refused: %s", key.c_str());
+    return nullptr;
+}
+
 static raw::Variant<raw::Pipeline> *renderVariant(RMPipeline *p, const raw::CubicBinds &binds, uint8_t tests)
 {
     const std::string suffix = binds.empty() ? std::string() : binds.key();
@@ -46,6 +75,10 @@ static raw::Variant<raw::Pipeline> *renderVariant(RMPipeline *p, const raw::Cubi
             return found->second.get();
         variant = std::make_shared<raw::Variant<raw::Pipeline>>();
         p->_variants.emplace(name, variant);
+    }
+    if (p->_packed) {
+        variant->publish(unpackedVariant(p, suffix, name));
+        return variant.get();
     }
     raw::Completion::Ask request;
     request.descriptor = p->_madeFrom;
