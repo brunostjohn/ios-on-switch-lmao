@@ -395,6 +395,7 @@ static void giveRecording(RMCommandBuffer *b)
 
 - (void)presentDrawable:(id<MTLDrawable>)drawable
 {
+    _presents = true;
     [self addScheduledHandler:^(id<MTLCommandBuffer>) {
         [drawable present];
     }];
@@ -402,6 +403,7 @@ static void giveRecording(RMCommandBuffer *b)
 
 - (void)presentDrawable:(id<MTLDrawable>)drawable atTime:(CFTimeInterval)t
 {
+    _presents = true;
     [self addScheduledHandler:^(id<MTLCommandBuffer>) {
         [drawable presentAtTime:t];
     }];
@@ -409,6 +411,7 @@ static void giveRecording(RMCommandBuffer *b)
 
 - (void)presentDrawable:(id<MTLDrawable>)drawable afterMinimumDuration:(CFTimeInterval)d
 {
+    _presents = true;
     [self addScheduledHandler:^(id<MTLCommandBuffer>) {
         [drawable presentAfterMinimumDuration:d];
     }];
@@ -485,9 +488,16 @@ static void giveRecording(RMCommandBuffer *b)
 #if SWITCH_RAW_DIAGNOSTICS
     const BlockedWait blocked(gRM->stats.completedWaits, gRM->stats.completedWaitUs);
 #endif
+    {
+        // a range of it in flight may have ended quiet: the completion thread waits for the newest one
+        std::lock_guard<std::mutex> d(gRM->doneLock);
+        gRM->completionWaiters.fetch_add(1, std::memory_order_relaxed);
+    }
+    gRM->doneChanged.notify_one();
     _changed.wait(l, [&] {
         return _completedDone;
     });
+    gRM->completionWaiters.fetch_sub(1, std::memory_order_relaxed);
 }
 
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG

@@ -101,6 +101,7 @@ RMEventJob submitEventJobs(RMCommandBuffer *cb)
     cb->_seqno = seqno;
     cb->_channelGeneration = r.raw->channelGeneration();  // the job's: eventJob makes a channel the kernel killed again
     r.rawSinceM2v = true;
+    cb->_rangeQuiet = false;
     retireRawRange(cb, cb->_segs[head].from, cb->_segs[head].to);
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
     gSignalJobs.fetch_add(1, std::memory_order_relaxed);

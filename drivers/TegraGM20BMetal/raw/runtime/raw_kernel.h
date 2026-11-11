@@ -65,6 +65,7 @@ struct KernelJob {
     // A command buffer of several jobs: its cookie (Kernel::nextAdmission) and TegraGM20BJobAdmission* flags
     uint64_t admission = 0;
     uint32_t admissionFlags = 0;
+    bool quiet = false;  // its end raises no interrupt unless a wait asks for one (TegraGM20BJobQuiet)
 };
 
 class Kernel {

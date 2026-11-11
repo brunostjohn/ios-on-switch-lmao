@@ -932,6 +932,8 @@ public:
     }
     bool partial = false;
     bool admissionBlocked = false;
+    // the commit's last job is quiet too (raw_completion_source.h quietEnd); every job before it always is
+    bool quietEnd = false;
     int nativeError = 0;
     std::shared_ptr<ResourceReadyCompletion> resourceReadiness(std::function<void()> ready, int &result);
     const Texture *readTexture(const Texture *texture);
@@ -1710,10 +1712,10 @@ private:
     bool job(SetView &view, uint32_t channel, const TegraGM20BAbiPush *pushes, uint32_t count, SurfaceList &uses,
              JobVisibility visibility, uint32_t &seqno, int *result = nullptr, const JobEvents &events = {},
              const std::vector<SetUse> *recorded = nullptr, uint32_t removals = 0, bool hostWritten = false,
-             uint64_t admission = 0, uint32_t admissionFlags = 0)
+             uint64_t admission = 0, uint32_t admissionFlags = 0, bool quiet = false)
     {
-        const KernelJob made = {channel, pushes,     count,      nullptr,  0,         0,
-                                0,       visibility, events, hostWritten, admission, admissionFlags};
+        const KernelJob made = {channel, pushes,      count,     nullptr,        0,    0, 0, visibility,
+                                events,  hostWritten, admission, admissionFlags, quiet};
         return submitInSet(k_, set_, view, true, made, seqno, result, &uses, recorded, removals);
     }
 

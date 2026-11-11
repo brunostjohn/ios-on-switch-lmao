@@ -3243,6 +3243,7 @@ CommandBuffer *Device::begin()
     cb.refusal = {};
     cb.partial = false;
     cb.admissionBlocked = false;
+    cb.quietEnd = false;
     cb.nativeError = 0;
     cb.nativeReads_.clear();
     cb.nativeSurfaces_.clear();
@@ -3766,9 +3767,9 @@ bool CommandBuffer::commit(uint32_t &seqno)
                       : 0u;
         RAW_DIAGNOSTIC(noteExecUses(uses.uses().size()));
         RAW_ENCODE_BEGIN(execSpan, Exec);
-        const bool executed = d.job(d.setView_, d.channel_, pushes, count, uses, visibility, seq, &result, events,
-                                    &memberUses_, memberRemovals_, invalidates || memberHostWritten_, admission,
-                                    admissionFlags);
+        const bool executed =
+            d.job(d.setView_, d.channel_, pushes, count, uses, visibility, seq, &result, events, &memberUses_,
+                  memberRemovals_, invalidates || memberHostWritten_, admission, admissionFlags, !last || quietEnd);
         RAW_ENCODE_END(execSpan);
         if (!executed) {
             admissionBlocked = !published && result == kIOReturnCannotLock;

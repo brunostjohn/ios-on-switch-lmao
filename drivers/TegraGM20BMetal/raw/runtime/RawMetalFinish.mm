@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #import "RawMetalInternal.h"
+#include "raw_completion_source.h"
 #include "raw_stamps.h"
 
 static bool markWritten(const raw::RetirementWrites &writes, bool success, const raw::CpuCompletion *cpu = nullptr)
@@ -74,12 +75,15 @@ void retireRawRange(RMCommandBuffer *cb, size_t from, size_t to)
     }
     auto signals = publishRawEventSignals(cb);
     RAW_DIAGNOSTIC(gRM->stats.signalsPublished += signals.size());
+    const bool quiet = cb->_rangeQuiet;
     {
         std::lock_guard<std::mutex> l(gRM->doneLock);
         gRM->inflight.push_back({cb, cb->_seqno, std::move(writes), std::move(signals), cb->_gpuEventWaits,
-                                 cb->_channelGeneration, std::move(cpu)});
+                                 cb->_channelGeneration, std::move(cpu), quiet});
+        gRM->submitPromised = quiet;
     }
-    gRM->doneChanged.notify_one();
+    if (!quiet)
+        gRM->doneChanged.notify_one();
 }
 
 static void dispatchScheduledLocked(RMCommandBuffer *cb, NSArray *handlers)
@@ -345,20 +349,34 @@ static NSError *killError(uint32_t kernelError)
     return [NSError errorWithDomain:MTLCommandBufferErrorDomain code:code userInfo:nil];
 }
 
-// The completion thread: sleeps in the kernel on each raw submission's fence (the interrupt), in order.
+// The completion thread: one source per device (raw_completion_source.h). It sleeps in the kernel on the first raw range
+// in flight whose job interrupts, then retires each range up to it in order, those finding their fence already passed.
 void completionLoop()
 {
     RawState &r = *gRM;
     for (;;) {
         @autoreleasepool {
             RMRawRetirement retired;
+            uint32_t coverSeqno = 0;
+            uint64_t coverGeneration = 0;
+            bool covered = false;
             {
                 std::unique_lock<std::mutex> l(r.doneLock);
+                std::optional<size_t> target;
                 r.doneChanged.wait(l, [&] {
-                    return !r.inflight.empty();
+                    target = raw::completionTarget(r.inflight, r.submitPromised,
+                                                   r.completionWaiters.load(std::memory_order_relaxed) != 0);
+                    return target.has_value();
                 });
+                if (*target) {
+                    covered = true;
+                    coverSeqno = r.inflight[*target].seqno;
+                    coverGeneration = r.inflight[*target].generation;
+                }
                 retired = std::move(r.inflight.front());
             }
+            if (covered)
+                (void)r.raw->wait(coverSeqno, coverGeneration);
             RMCommandBuffer *cb = retired.buffer;
             // false: the kernel killed the channel with it in flight (a GPU fault or hang); the next command buffer gets a new one
             const bool ok = r.raw->wait(retired.seqno, retired.generation);

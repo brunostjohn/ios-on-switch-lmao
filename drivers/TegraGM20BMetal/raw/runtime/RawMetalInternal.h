@@ -159,6 +159,7 @@ struct RMRawRetirement {
     std::vector<raw::EventTimeline::Promise> waits;
     uint64_t generation = 0;
     raw::CpuCompletion cpu;
+    bool quiet = false;  // its job raised no interrupt: a later range's covers it (raw_completion_source.h)
 };
 
 struct RawState {
@@ -190,6 +191,10 @@ struct RawState {
     std::mutex doneLock;
     std::condition_variable doneChanged;
     std::deque<RMRawRetirement> inflight;  // immutable range fences; later submissions never change an earlier wait
+    // doneLock: the submit thread will put a job that interrupts behind the quiet ranges in flight; threads in
+    // waitUntilCompleted
+    bool submitPromised = false;
+    std::atomic<uint32_t> completionWaiters{0};
     dispatch_queue_t handlers;             // where scheduled handlers run (in order, never inside commit)
     std::atomic<uint32_t> committed{0};    // command buffers committed and not finished (gRawRelease's drain)
     Stats stats;
@@ -352,7 +357,7 @@ enum RMReadyDependency : uint32_t { RMRawProgress = 1, RMCompatibilityProgress =
 void wakeSubmit(void *queue, uint32_t dependencies = 0);
 bool m2vClear();
 void planSegments(RMCommandBuffer *cb);
-bool submitRange(RMCommandBuffer *cb);
+bool submitRange(RMCommandBuffer *cb, bool followed);
 
 // RawMetalPrivateComp.mm (raw_private_comp.h): submissions and the moves of compressed private textures take the submit
 // lock; a move inside a raw encode is refused

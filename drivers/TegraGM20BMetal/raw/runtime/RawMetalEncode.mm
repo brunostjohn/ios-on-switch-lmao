@@ -673,6 +673,7 @@ static bool encodeRawAttempt(RMCommandBuffer *cb, size_t from, size_t to, const 
     encoder = to;
     uint32_t seq = 0;
     prepareSharedEvents(cb, rc);
+    rc->quietEnd = cb->_rangeQuiet;
     if (!rc->commit(seq)) {
         cb->_partial = rc->partial;
         if (rc->admissionBlocked) {

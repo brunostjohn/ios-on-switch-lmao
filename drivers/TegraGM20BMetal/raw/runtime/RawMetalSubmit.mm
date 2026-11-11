@@ -3,6 +3,7 @@
 #include "RawMetalPlanExecution.h"
 #import "RawMetalEventJobs.h"
 #include "raw_order.h"
+#include "raw_completion_source.h"
 
 // ---- commit: order between the two drivers ----
 // With the kernel's Order (TegraGM20BABI.h method 14), the two drivers' command buffers are ordered on the GPU: before a raw
@@ -142,14 +143,33 @@ static void isolateRefused(RMCommandBuffer *cb, size_t encoder)
     cb->_segs.insert(cb->_segs.begin() + ptrdiff_t(cb->_segNext), parts.begin(), parts.end());
 }
 
+// What the range being submitted knows about its end (raw_completion_source.h)
+static raw::RangeEnd rangeEnd(RMCommandBuffer *cb, bool last, bool followed, bool observed)
+{
+    raw::RangeEnd end;
+    end.lastOfBuffer = last;
+    if (!last) {
+        const RMSegment &next = cb->_segs[cb->_segNext + 1];
+        end.nextRangeRaw = next.raw && !next.event;
+        end.signals = next.event;
+    }
+    end.followed = followed;
+    end.observed = observed || gRM->completionWaiters.load(std::memory_order_relaxed) != 0;
+    end.cpuOrdered = !gRM->gpuOrder;
+    return end;
+}
+
 // Only the submit worker owns the encoding arenas. A visit emits one legal range and yields its queue's reservation.
-bool submitRange(RMCommandBuffer *cb)
+// `followed`: another committed command buffer was ready when this one was taken.
+bool submitRange(RMCommandBuffer *cb, bool followed)
 {
     RawState &r = *gRM;
     NSError *priorError;
+    bool observed;
     {
         std::lock_guard<std::mutex> l(cb->_lock);
         priorError = cb->_segError;
+        observed = cb->_completedHandlers.count || cb->_presents;
     }
     if (priorError) {
         finish(cb, priorError);
@@ -207,6 +227,7 @@ bool submitRange(RMCommandBuffer *cb)
 #endif
         size_t refusedEncoder = range.to;
         rmStorageTargetsPlain(cb, range.from, range.to);
+        cb->_rangeQuiet = raw::quietEnd(rangeEnd(cb, last, followed, observed));
         const bool encoded = encodeRaw(cb, range.from, range.to, &why, &refusedEncoder);
 #if SWITCH_FRAME_TIMELINE
         raw::tEncodeProfile = nullptr;

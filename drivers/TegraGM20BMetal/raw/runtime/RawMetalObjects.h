@@ -288,6 +288,9 @@ struct RMSharedEventWait {
     std::shared_ptr<raw::ResourceReadyCompletion> _resourceReady;
     void *_nativeWaitEvent;
     bool _finishReady, _finishing, _submittedM2v;
+    // a drawable present was added (its completion is observed); the range being submitted ends quiet
+    // (raw_completion_source.h)
+    bool _presents, _rangeQuiet;
     bool
         _sampledShadows;  // it binds a texture sampled through a pool image (raw::Texture::sampled): encodeRaw refreshes them
     bool _standIns;  // it binds an extended-range texture (raw::Texture::standIn): encodeRaw draws its stand-in

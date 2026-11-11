@@ -312,6 +312,13 @@ public:
         return chains_[0].first != nullptr;
     }
 
+    // Another committed job waits behind the visited one on its own queue
+    bool behind(const Ticket &ticket)
+    {
+        auto *q = visiting(ticket);
+        return q && q->entries.size() > 1 && q->entries[1].committed;
+    }
+
     size_t size() const
     {
         return size_;

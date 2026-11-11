@@ -199,6 +199,17 @@ static void markHeld(std::vector<RMCommandBuffer *> &buffers, bool held)
     buffers.clear();
 }
 
+// The submit thread has no more raw work in hand: the quiet ranges it left in flight wait for their own interrupt. Only
+// this thread sets the promise (retireRawRange), so it reads it without the lock.
+static void closePromise()
+{
+    if (!gRM->submitPromised)
+        return;
+    std::lock_guard<std::mutex> d(gRM->doneLock);
+    gRM->submitPromised = false;
+    gRM->doneChanged.notify_one();
+}
+
 void submitLoop()
 {
     RawState &r = *gRM;
@@ -206,13 +217,17 @@ void submitLoop()
     for (;;) {
         @autoreleasepool {
             raw::SubmitQueue<void *, RMCommandBuffer *>::Ticket ticket;
+            bool followed = false;
             {
                 std::unique_lock<std::mutex> l(r.schedule);
                 for (;;) {
                     r.waiting.expire(raw::EventDeadline::Clock::now());
                     ticket = r.waiting.next();
-                    if (ticket)
+                    if (ticket) {
+                        followed = r.waiting.ready() || r.waiting.behind(ticket);
                         break;
+                    }
+                    closePromise();
                     const auto due = r.waiting.deadline();
                     const auto ready = [&] {
                         return r.waiting.ready();
@@ -310,7 +325,7 @@ void submitLoop()
                 finish(cb, error);
             else {
                 std::lock_guard<std::recursive_mutex> s(submitLock());
-                submitted = submitRange(cb);
+                submitted = submitRange(cb, followed);
             }
             {
                 std::lock_guard<std::mutex> l(r.schedule);
