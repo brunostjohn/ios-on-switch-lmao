@@ -1,0 +1,53 @@
+# The GPU experiment loop with HW Test's Bench screen: the batch format both sides read.
+load("@rules_python//python:py_library.bzl", "py_library")
+load("@rules_python//python:py_test.bzl", "py_test")
+load("//bazel/lint:defs.bzl", "lint_files")
+
+package(default_visibility = ["//tools:__subpackages__"])
+
+lint_files()
+
+exports_files(
+    ["testdata/golden_batch.json"],
+    visibility = ["//hw_test_app:__pkg__"],
+)
+
+py_library(
+    name = "protocol",
+    srcs = ["protocol.py"],
+)
+
+py_library(
+    name = "known",
+    srcs = [
+        "golden.py",
+        "known.py",
+    ],
+    deps = [":protocol"],
+)
+
+# The app's side of the format: its decoder's limits (Swift), its GPU side's method ranges (C++), its known program
+APP_SOURCES = [
+    "//hw_test_app:bench/bench_known.h",
+    "//hw_test_app:bench/bench_records.cpp",
+    "//hw_test_app:test_sources",
+]
+
+[
+    py_test(
+        name = name,
+        size = "small",
+        srcs = [name + ".py"],
+        data = APP_SOURCES + ["testdata/golden_batch.json"],
+        deps = [
+            ":known",
+            "//tools/gpu/maxwell:interp",
+            "//tools/gpu/maxwell:isa",
+        ],
+    )
+    for name in [
+        "agreement_test",
+        "golden_test",
+        "known_test",
+    ]
+]

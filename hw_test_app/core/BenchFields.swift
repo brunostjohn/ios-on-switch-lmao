@@ -1,0 +1,132 @@
+import CoreFoundation
+import Foundation
+
+/// One experiment's JSON fields, read and checked as tools/benchloop/protocol.py validate_experiment checks them.
+struct BenchFields {
+    let fields: [String: Any]
+
+    init(_ fields: [String: Any]) { self.fields = fields }
+
+    func experiment(id: String) throws -> BenchExperiment {
+        guard let kind = BenchKind(rawValue: fields["kind"] as? String ?? "") else { throw BenchInvalid("kind") }
+        let target = fields["target"] as? [String: Any] ?? [:]
+        guard let format = target["format"] as? String, let info = BenchProtocol.formats[format] else {
+            throw BenchInvalid("target format is not one the raw path renders")
+        }
+        let width = try count(target["width"], 1...BenchProtocol.maxSide, "width")
+        let height = try count(target["height"], 1...BenchProtocol.maxSide, "height")
+        let rect = try counts(fields["rect"] ?? ([0, 0, width, height] as [Any]), 4, 0...BenchProtocol.maxSide, "rect")
+        guard rect[0] < rect[2], rect[2] <= width, rect[1] < rect[3], rect[3] <= height else {
+            throw BenchInvalid("rect outside the target")
+        }
+        let draws = try counts(fields["draws"] ?? ([1] as [Any]), nil, (kind == .noop ? 0 : 1)...BenchProtocol.maxDraws, "draws")
+        guard (1...BenchProtocol.maxDrawCounts).contains(draws.count) else { throw BenchInvalid("draws: 1..16 counts") }
+        let repeats = try count(fields["repeats"] ?? (1 as Any), 1...BenchProtocol.maxRepeats, "repeats")
+        let warmup = try count(fields["warmup"] ?? (0 as Any), 0...BenchProtocol.maxWarmup, "warmup")
+        guard draws.count * (repeats + warmup) <= BenchProtocol.maxCommandBuffers else {
+            throw BenchInvalid("too many command buffers")
+        }
+        guard let readback = BenchReadback(rawValue: fields["readback"] as? String ?? "summary") else {
+            throw BenchInvalid("readback is none, summary or full")
+        }
+        let clear = (fields["clear"] as? [Any] ?? [0, 0, 0, 0]).compactMap { ($0 as? NSNumber)?.floatValue }
+        guard clear.count == 4 else { throw BenchInvalid("clear is four floats") }
+        var fill: Data?
+        if let text = fields["fill"] {
+            fill = try bytes(text, "fill")
+            guard fill?.count == width * height * info.bytes else { throw BenchInvalid("fill is the whole target, packed") }
+        }
+        var program: BenchProgram?
+        var threads = [1, 1, 1], groups = [1, 1, 1]
+        switch kind {
+        case .fragment, .readback:
+            program = try self.program(fields["program"], "program", sph: true)
+        case .compute:
+            let compute = fields["compute"] as? [String: Any] ?? [:]
+            program = try self.program(compute, "compute", sph: false)
+            threads = try counts(compute["threads"] ?? ([] as [Any]), 3, 1...BenchProtocol.maxThreads, "compute.threads")
+            groups = try counts(compute["groups"] ?? ([] as [Any]), 3, 1...BenchProtocol.maxGroups, "compute.groups")
+            guard threads.reduce(1, *) <= BenchProtocol.maxThreads else { throw BenchInvalid("compute.threads > 1024") }
+        case .noop, .known:
+            break
+        }
+        let methods = kind == .readback ? try pairs(fields["methods"] ?? ([] as [Any]), "methods") : []
+        let restore = kind == .readback ? try pairs(fields["restore"] ?? ([] as [Any]), "restore") : []
+        if kind != .readback, fields["methods"] != nil || fields["restore"] != nil {
+            throw BenchInvalid("only readback experiments set methods")
+        }
+        let experiment = BenchExperiment(
+            id: id, kind: kind, format: format, formatRaw: info.raw, texelBytes: info.bytes, width: UInt32(width),
+            height: UInt32(height), rect: rect.map(UInt32.init), clear: clear, fill: fill, program: program,
+            threads: threads.map(UInt32.init), groups: groups.map(UInt32.init), draws: draws.map(UInt32.init),
+            repeats: UInt32(repeats), warmup: UInt32(warmup), methods: methods, restore: restore, readback: readback)
+        guard Self.estimatedMs(experiment) <= BenchProtocol.maxCommandBufferMs else {
+            throw BenchInvalid("a command buffer would run past \(BenchProtocol.maxCommandBufferMs) ms")
+        }
+        return experiment
+    }
+
+    /// protocol.py estimated_ms: every lane runs every instruction at the SMs' full rate, a warp at the least.
+    static func estimatedMs(_ e: BenchExperiment) -> Double {
+        guard let program = e.program else { return 0 }
+        let instructions = Double(program.code.count / 32 * 3)
+        let lanes =
+            e.kind == .compute
+            ? Double(e.threads.reduce(1, *) * e.groups.reduce(1, *))
+            : max(32, Double((e.rect[2] - e.rect[0]) * (e.rect[3] - e.rect[1])))
+        let work = lanes * instructions * Double(e.draws.max() ?? 1)
+        return work / BenchProtocol.lanesPerClock / BenchProtocol.clockHz * 1e3
+    }
+
+    private func program(_ value: Any?, _ field: String, sph: Bool) throws -> BenchProgram {
+        guard let p = value as? [String: Any] else { throw BenchInvalid("\(field) is an object") }
+        let code = try bytes(p["code"] ?? ("" as Any), "\(field).code")
+        guard !code.isEmpty, code.count <= BenchProtocol.maxCode, code.count % 32 == 0 else {
+            throw BenchInvalid("\(field).code: whole 32-byte bundles, at most 64 KiB")
+        }
+        let data = try bytes(p["data"] ?? ("" as Any), "\(field).data")
+        guard data.count <= BenchProtocol.maxData, data.count % 16 == 0 else {
+            throw BenchInvalid("\(field).data: 16-byte multiples, at most 64 KiB")
+        }
+        let header = sph ? try bytes(p["sph"] ?? ("" as Any), "\(field).sph") : Data()
+        guard !sph || header.count == BenchProtocol.sphBytes else { throw BenchInvalid("program.sph is 80 bytes") }
+        let gprs = try count(p["gprs"], 1...255, "\(field).gprs")
+        return BenchProgram(sph: header, code: code, data: data, gprs: UInt32(gprs))
+    }
+
+    private func pairs(_ value: Any, _ field: String) throws -> [UInt32] {
+        guard let list = value as? [Any], list.count <= BenchProtocol.maxMethodPairs else {
+            throw BenchInvalid("\(field): at most \(BenchProtocol.maxMethodPairs) pairs")
+        }
+        var flat: [UInt32] = []
+        for pair in list {
+            let words = try counts(pair, 2, 0...Int(UInt32.max), field)
+            guard BenchProtocol.methodAllowed(UInt32(words[0])) else {
+                throw BenchInvalid("\(field): method \(String(words[0], radix: 16)) is not allowed")
+            }
+            flat += words.map(UInt32.init)
+        }
+        return flat
+    }
+
+    private func bytes(_ value: Any, _ field: String) throws -> Data {
+        guard let text = value as? String, let data = Data(base64Encoded: text) else {
+            throw BenchInvalid("\(field) is not base64")
+        }
+        return data
+    }
+
+    private func count(_ value: Any?, _ range: ClosedRange<Int>, _ field: String) throws -> Int {
+        guard let number = value as? NSNumber, CFGetTypeID(number) != CFBooleanGetTypeID(),
+            let n = Int(exactly: number.doubleValue), range.contains(n)
+        else { throw BenchInvalid("\(field) not in \(range.lowerBound)..\(range.upperBound)") }
+        return n
+    }
+
+    private func counts(_ value: Any, _ length: Int?, _ range: ClosedRange<Int>, _ field: String) throws -> [Int] {
+        guard let list = value as? [Any], length == nil || list.count == length else {
+            throw BenchInvalid("\(field) is a list of \(length.map(String.init) ?? "some") numbers")
+        }
+        return try list.map { try count($0, range, field) }
+    }
+}

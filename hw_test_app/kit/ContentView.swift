@@ -6,6 +6,7 @@ public struct ContentView: View {
     @ObservedObject var suite: Suite
     @ObservedObject var prompter: Prompter
     @ObservedObject var stage: Stage
+    @State private var benchShown = false
 
     public init(suite: Suite) {
         self.suite = suite
@@ -35,6 +36,10 @@ public struct ContentView: View {
                     Button("Interactive") { suite.runInteractive() }
                         .disabled(suite.running || suite.pendingRun != nil)
                 }
+                ToolbarItem(placement: .topBarLeading) {
+                    Button("Bench") { benchShown = true }
+                        .disabled(suite.running || suite.pendingRun != nil)
+                }
                 ToolbarItem(placement: .topBarTrailing) {
                     Button("Run All") { suite.runAll() }
                         .disabled(suite.running || suite.pendingRun != nil).bold()
@@ -52,6 +57,9 @@ public struct ContentView: View {
             }
         }
         .onAppear { suite.launch() }
+        .fullScreenCover(isPresented: $benchShown) {
+            BenchView(documents: suite.documents, ios: suite.ios) { benchShown = false }
+        }
         .sheet(isPresented: Binding(get: { suite.pendingRun != nil }, set: { _ in })) {
             VStack(alignment: .leading, spacing: 20) {
                 Text("Unfinished test run").font(.title2.bold())

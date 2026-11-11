@@ -90,7 +90,13 @@ int Kernel::call(uint32_t method, const void *in, size_t inSize, void *out, size
 bool Kernel::open(std::string &err)
 {
     using Connection = bool (*)(uint32_t *, bool *, uint32_t *, uint64_t *, uint64_t *);
+#ifdef SWITCH_RAW_OWN_CONNECTION
+    // HW Test's bench loop (debug images only): a second raw device in a process whose facade already holds NVK's VA
+    // window, so it needs a GPU VM of its own; its experiments' channel kills stay away from the app's Metal device too
+    void *nvk = nullptr;
+#else
     void *nvk = nvkImage();
+#endif
     if (!nvk)
         return openOwn(err);
     const auto connection = reinterpret_cast<Connection>(dlsym(nvk, "switch_nvk_connection"));

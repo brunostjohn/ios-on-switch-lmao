@@ -31,7 +31,7 @@ public final class Suite: ObservableObject {
     let stage = Stage()
     let documents: URL
     private let tests: [any HWTest]
-    private let ios: Int
+    let ios: Int
     private let store: RunStore
     private let logger = Logger(subsystem: Suite.logSubsystem, category: "results")
     private var launched = false

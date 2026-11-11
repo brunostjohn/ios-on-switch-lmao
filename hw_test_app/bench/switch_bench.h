@@ -1,0 +1,88 @@
+// HW Test's bench loop on the GPU (tools/benchloop): caller-supplied Maxwell programs and MAXWELL_B methods drawn on a raw
+// device of its own (raw/runtime/raw_gpu.h over its own connection and GPU VM), each command buffer timed by its PTIMER
+// stamps. Nothing here changes the app's Metal device.
+#ifndef SWITCH_BENCH_H
+#define SWITCH_BENCH_H
+
+#include <stddef.h>
+#include <stdint.h>
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+enum switch_bench_kind {
+    SWITCH_BENCH_NOOP,      // empty passes: the fixed cost of a command buffer
+    SWITCH_BENCH_KNOWN,     // the app's own constant-colour program (bench_known.h): proves program injection
+    SWITCH_BENCH_FRAGMENT,  // the caller's pixel program on a quad
+    SWITCH_BENCH_COMPUTE,   // the caller's kernel
+    SWITCH_BENCH_READBACK,  // the caller's pixel program with the caller's methods around its draw
+};
+
+enum switch_bench_status {
+    SWITCH_BENCH_OK,
+    SWITCH_BENCH_INVALID,  // the description is not one the raw path can take
+    SWITCH_BENCH_REFUSED,  // the raw path refused the state, the pass or a draw
+    SWITCH_BENCH_KILLED,   // the kernel killed the channel while it ran
+    SWITCH_BENCH_ERROR,
+};
+
+struct switch_bench_program {
+    const uint8_t *sph;  // 80 bytes; null for a kernel
+    const uint8_t *code;
+    size_t code_bytes;
+    const uint8_t *data;  // bound at constant buffer 1
+    size_t data_bytes;
+    uint32_t gprs;
+};
+
+struct switch_bench_experiment {
+    uint32_t kind;
+    uint32_t format, width, height;  // MTLPixelFormat
+    uint32_t rect[4];                // x0, y0, x1, y1 in pixels
+    float clear[4];
+    const uint8_t *fill;  // the target's texels before each command buffer, rows packed (null: cleared)
+    struct switch_bench_program program;
+    uint32_t threads[3], groups[3];
+    const uint32_t *draws;  // draws (dispatches) a command buffer, one entry per configuration
+    uint32_t draw_counts;
+    uint32_t repeats, warmup;
+    const uint32_t *methods;  // (method, value) pairs before the draw, then restore after it
+    uint32_t method_pairs;
+    const uint32_t *restore;
+    uint32_t restore_pairs;
+};
+
+struct switch_bench_result {
+    uint32_t status;
+    char why[256];
+    uint64_t *gpu_ns;   // draw_counts x repeats, the caller's; 0 where the stamps were overwritten
+    uint64_t *wall_ns;  // commit to the fence, mach_absolute_time
+    uint8_t *texels;    // width x height texels, rows packed, the caller's (null: none read)
+    size_t texel_bytes;
+    uint32_t lost_error;
+    uint64_t fault_va;
+    uint64_t template_key;  // the pack state whose vertex program and registers the draw took
+};
+
+struct switch_bench;
+
+// The bench's raw device over the installed pack; null with *why
+struct switch_bench *switch_bench_open(char *why, size_t why_size);
+void switch_bench_close(struct switch_bench *bench);
+// Bytes per texel of a target format the raw path renders, 0 for any other
+uint32_t switch_bench_texel_bytes(uint32_t format);
+// One line: the pack, the connection and the templates found
+size_t switch_bench_describe(struct switch_bench *bench, char *out, size_t size);
+// The known-answer program's shader data, which its texels must equal (bench_known.h)
+void switch_bench_known_data(uint32_t out[4]);
+// A kernel of nothing but EXIT, for the compute self-check; its byte count (0: `size` too small)
+size_t switch_bench_known_kernel(uint8_t *out, size_t size);
+// Runs on the caller's thread; one experiment at a time
+void switch_bench_run(struct switch_bench *bench, const struct switch_bench_experiment *e,
+                      struct switch_bench_result *r);
+
+#ifdef __cplusplus
+}
+#endif
+#endif

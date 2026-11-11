@@ -47,6 +47,7 @@ py_library(
         "interp.py",
         "quad.py",
     ],
+    visibility = ["//tools:__subpackages__"],
     deps = [":isa"],
 )
 

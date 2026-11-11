@@ -96,7 +96,11 @@ swift_test(
     size = "small",
     srcs = glob(["host_tests/*.swift"]),
     copts = SWIFT_COPTS,
-    env = {"HWTEST_MEDIA": " ".join(MEDIA)},
+    data = ["//tools/benchloop:testdata/golden_batch.json"],
+    env = {
+        "BENCH_GOLDEN": "$(rlocationpath //tools/benchloop:testdata/golden_batch.json)",
+        "HWTEST_MEDIA": " ".join(MEDIA),
+    },
     deps = [":core"],
 )
 
@@ -298,6 +302,71 @@ cc_library(
     target_compatible_with = ["@platforms//os:ios"],
 )
 
+# tools/benchloop's tests hold the app's known program and method ranges to the host's
+exports_files(
+    [
+        "bench/bench_known.h",
+        "bench/bench_records.cpp",
+    ],
+    visibility = ["//tools/benchloop:__pkg__"],
+)
+
+swift_interop_hint(
+    name = "bench_module",
+    module_name = "SwitchBench",
+)
+
+# The bench loop's GPU side (bench/switch_bench.h, tools/benchloop): the raw runtime compiled in again, as fetchform
+# links it, with SWITCH_RAW_OWN_CONNECTION so its device opens a connection and GPU VM of its own beside the facade's.
+# Hidden visibility keeps this copy's inline functions from being coalesced with the plugin's.
+cc_library(
+    name = "bench",
+    srcs = [
+        "bench/bench_known.h",
+        "bench/bench_records.cpp",
+        "bench/bench_records.h",
+        "bench/switch_bench.cpp",
+        "//drivers/NativeMetal:bridge/NativeMetalBlend.h",
+        "//drivers/TegraGM20B:TegraGM20BABI.h",
+        "//drivers/TegraGM20B:TegraGM20BLayout.h",
+        "//drivers/TegraGM20BMetal:raw/fx/fx_image.cpp",
+        "//drivers/TegraGM20BMetal:raw/fx/fx_mip.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_alias.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_arena.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_comp.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_completed.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_compute.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_gpu.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_kernel.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_pack.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_record_parts.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_shared_events.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_split.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_transfer.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_zeta.cpp",
+        "//drivers/TegraGM20BMetal:raw_runtime_headers",
+    ],
+    hdrs = ["bench/switch_bench.h"],
+    aspect_hints = [":bench_module"],
+    copts = [
+        "-O2",
+        "-std=c++17",
+        "-fvisibility=hidden",
+        "-fvisibility-inlines-hidden",
+        "-DSWITCH_RAW_HARNESS_MARKS",
+        "-DSWITCH_RAW_OWN_CONNECTION",
+        "-Idrivers/TegraGM20B",
+    ],
+    linkopts = [
+        "-Wl,-U,_switch_nmb_blend_color_words",
+        "-framework",
+        "CoreFoundation",
+        "-framework",
+        "IOKit",
+    ],
+    target_compatible_with = ["@platforms//os:ios"],
+)
+
 # Every test every iOS version runs, the runner, the list, the log lines and the run reports. UIKit: built only under an
 # ios_application's transition, never for the host by `bazel build //hw_test_app/...`.
 swift_library(
@@ -316,6 +385,7 @@ swift_library(
     target_compatible_with = ["@platforms//os:ios"],
     deps = [
         ":a64x_probe",
+        ":bench",
         ":core",
         ":cpu_clock",
         ":gpu",
