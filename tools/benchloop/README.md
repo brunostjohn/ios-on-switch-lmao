@@ -71,8 +71,9 @@ its fence, and that pass never completes on a killed channel, so the experiment 
 
 A kernel can write a buffer the result returns (`compute.output`): its address is the first 8 bytes of the shader
 data. A 2D experiment can read a source the batch carries, resolve a multisampled image built from that source, run
-nouveau's reference fill or leave out the waits the production path puts around 2D work. `compare` runs the same work a
-second way (the pixel program over the rect, the copy engine, the pack's resolve state, or a plain target for a
+nouveau's reference fill, clip to a rectangle, follow a clear-only pass in the same command buffer, or leave out the
+waits the production path puts around 2D work. `compare` runs the same work a second way (the pixel program over the
+rect, the copy engine, the pack's resolve state, the pack's mip state sampling the source, or a plain target for a
 compressed one), and the result carries both and a histogram of their differences. A result's `form` says what the app
 did, so a cell proves its own setup. Unknown fields make an experiment invalid on both sides, and
 `hw_test_app:core_test` decodes every generated batch with the app's own decoder.

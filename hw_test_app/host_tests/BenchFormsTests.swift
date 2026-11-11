@@ -45,7 +45,7 @@ final class BenchFormsTests: XCTestCase {
     func testAnUnknownFieldIsAnInvalidExperiment() throws {
         let entries = try decode([
             ["id": "a", "kind": "noop", "target": target("bgra8unorm", 4, 4), "colour": [0, 0, 0, 0]],
-            ["id": "b", "kind": "twod", "target": target("bgra8unorm", 4, 4), "twod": ["op": "fill", "clip": 1]],
+            ["id": "b", "kind": "twod", "target": target("bgra8unorm", 4, 4), "twod": ["op": "fill", "scissor": 1]],
             ["id": "c", "kind": "noop", "target": ["format": "bgra8unorm", "width": 4, "height": 4, "depth": 1]],
         ])
         XCTAssertEqual(entries.map { why($0)?.contains("unknown field") }, [true, true, true])
@@ -151,6 +151,43 @@ final class BenchFormsTests: XCTestCase {
         XCTAssertTrue(plain.compressed)
         XCTAssertNotNil(why(entries[6]))
         XCTAssertNotNil(why(entries[7]))
+    }
+
+    func testClipClearFirstAndTheSampledCompareNeedTheirShapes() throws {
+        let entries = try decode([
+            [
+                "id": "clip", "kind": "twod", "target": target("bgra8unorm", 16, 16),
+                "twod": ["op": "fill", "clip": [4, 4, 12, 10], "clearFirst": true],
+            ],
+            [
+                "id": "clip-out", "kind": "twod", "target": target("bgra8unorm", 16, 16),
+                "twod": ["op": "fill", "clip": [4, 4, 17, 10]],
+            ],
+            [
+                "id": "resolve-clear", "kind": "twod", "target": target("bgra8unorm", 8, 8),
+                "twod": ["op": "resolve", "samples": 4, "clearFirst": true],
+            ],
+            [
+                "id": "s3d", "kind": "twod", "target": target("rgb10a2unorm", 32, 32),
+                "twod": ["op": "scale", "du": 1 << 33, "dv": 1 << 33, "bilinear": true], "compare": "sampled3d",
+            ],
+            [
+                "id": "s3d-bgra", "kind": "twod", "target": target("bgra8unorm", 32, 32),
+                "twod": ["op": "scale", "du": 1 << 33, "dv": 1 << 33, "bilinear": true], "compare": "sampled3d",
+            ],
+            [
+                "id": "s3d-corner", "kind": "twod", "target": target("rgb10a2unorm", 32, 32),
+                "twod": ["op": "scale", "bilinear": true, "corner": true], "compare": "sampled3d",
+            ],
+        ])
+        guard case .experiment(let clip) = entries[0], let t = clip.twod else { return XCTFail(why(entries[0]) ?? "") }
+        XCTAssertEqual(t.clip, [4, 4, 12, 10])
+        XCTAssertTrue(t.clearFirst)
+        XCTAssertNotNil(why(entries[1]))
+        XCTAssertNotNil(why(entries[2]))
+        XCTAssertNil(why(entries[3]))
+        XCTAssertTrue(why(entries[4])?.contains("sampled-quad") == true)
+        XCTAssertNotNil(why(entries[5]))
     }
 
     func testTheHistogramCountsEachTexelsLargestChannelDifference() {

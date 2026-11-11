@@ -33,6 +33,7 @@ enum switch_bench_compare {
     SWITCH_BENCH_COMPARE_COPY,       // twod 1:1 point scale: the copy engine copying the source
     SWITCH_BENCH_COMPARE_RESOLVE3D,  // twod resolve: the pack's resolve state (raw_samples.h), as Metal's resolve draws
     SWITCH_BENCH_COMPARE_PLAIN,      // a compressed readback: the same draws into a plain target
+    SWITCH_BENCH_COMPARE_SAMPLED3D,  // twod bilinear scale: the pack's mip state (raw_mip.h) sampling the source
 };
 
 struct switch_bench_twod {
@@ -42,9 +43,11 @@ struct switch_bench_twod {
     uint32_t color[4];        // one packed word, or four floats' bits for RF32_GF32_BF32_AF32
     uint64_t du, dv, sx, sy;  // 32.32 source step per destination texel and source origin
     uint32_t bilinear, corner;
-    uint32_t reference;  // the reference fill: SRCCOPY, no colour key, clip at the surface (ProbeOp::referenceFill)
-    uint32_t bracketed;  // between the production 2D path's waits (ProbeOp::bracketed)
-    uint32_t samples;    // a resolve's: the multisampled image's samples a pixel
+    uint32_t reference;    // the reference fill: SRCCOPY, no colour key, clip at the surface (ProbeOp::referenceFill)
+    uint32_t bracketed;    // between the production 2D path's waits (ProbeOp::bracketed)
+    uint32_t samples;      // a resolve's: the multisampled image's samples a pixel
+    uint32_t clip[4];      // the 2D engine's clip rectangle x0, y0, x1, y1 (ProbeOp::clip); x1 0: none
+    uint32_t clear_first;  // a clear-only pass on the target just before the operation, in its command buffer
 };
 
 // What a scale, resolve or copy reads: rows packed (null: the bench's own 64x64 BGRA8 picture)
@@ -104,6 +107,7 @@ struct switch_bench_form {
     uint32_t set;
     uint32_t comptags, block_linear;  // the written target's
     uint32_t bracketed, reference, samples;
+    uint32_t clipped, clear_first;
 };
 
 struct switch_bench_result {

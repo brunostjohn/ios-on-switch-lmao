@@ -68,8 +68,9 @@ class AgreementTest(unittest.TestCase):
             match = re.search(rf'static let {swift}: Set<String> = \[(.*?)\]', text, re.DOTALL)
             self.assertIsNotNone(match, swift)
             self.assertEqual(set(re.findall(r'"(\w+)"', match.group(1))), python, swift)
-        formats = re.search(r'static let twodFormats: Set<UInt32> = \[(.*?)\]', text, re.DOTALL)
-        self.assertEqual({int(n) for n in re.findall(r'\d+', formats.group(1))}, protocol.TWOD_FORMATS)
+        for swift, python in (('twodFormats', protocol.TWOD_FORMATS), ('mipFormats', protocol.MIP_FORMATS)):
+            found = re.search(rf'static let {swift}: Set<UInt32> = \[(.*?)\]', text, re.DOTALL)
+            self.assertEqual({int(n) for n in re.findall(r'\d+', found.group(1))}, python, swift)
         grids = re.search(r'static let sampleGrids: \[Int: \(Int, Int\)\] = \[(.*?)\]', text, re.DOTALL)
         found = re.findall(r'(\d+): \((\d+), (\d+)\)', grids.group(1))
         self.assertEqual({int(n): (int(x), int(y)) for n, x, y in found}, protocol.SAMPLE_GRIDS)

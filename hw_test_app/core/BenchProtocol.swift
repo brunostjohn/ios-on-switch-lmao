@@ -69,16 +69,18 @@ public enum BenchProtocol {
     public static let maxChain = 3
     public static let twodKeys: Set<String> = [
         "op", "fmt2d", "colorFormat", "color", "du", "dv", "sx", "sy", "bilinear", "corner", "reference", "bracketed",
-        "samples",
+        "samples", "clip", "clearFirst",
     ]
     public static let sourceKeys: Set<String> = ["format", "width", "height", "data"]
     /// Target formats the 2D engine names a surface format for (raw_probe_ops.h probeTwodFormat)
     public static let twodFormats: Set<UInt32> = [10, 20, 25, 30, 60, 65, 70, 71, 80, 81, 90, 92, 110, 115, 125]
+    /// Target formats the pack has a sampled-quad state for (raw_mip.h mipState): a bilinear scale's 3D compare
+    public static let mipFormats: Set<UInt32> = [1, 20, 25, 40, 43, 55, 60, 65, 71, 81, 90, 92, 94, 105, 110, 125]
     /// A multisampled image's samples across and down, log2 (fx_image.cpp msLayout)
     public static let sampleGrids: [Int: (Int, Int)] = [2: (1, 0), 4: (1, 1)]
     public static let picture = (format: "bgra8unorm", width: 64, height: 64)
     public static let compares: [BenchKind: [String]] = [
-        .twod: ["program", "copy", "resolve3d"], .readback: ["plain"],
+        .twod: ["program", "copy", "resolve3d", "sampled3d"], .readback: ["plain"],
     ]
     public static let maxOutput = 64 * 1024
 
@@ -114,6 +116,10 @@ public struct BenchTwod: Equatable, Sendable {
     /// production 2D path puts around 2D work; `samples`: a resolve's source's samples a pixel
     public let reference: Bool, bracketed: Bool
     public let samples: UInt32
+    /// The 2D engine's clip rectangle [x0, y0, x1, y1) around the operation; nil: none
+    public let clip: [UInt32]?
+    /// A clear-only pass on the target just before the operation, in its command buffer (the 11 Nov 15:30 hang's slot)
+    public let clearFirst: Bool
 }
 
 /// What a scale, resolve or copy reads: texels the experiment gives, else the app's own picture

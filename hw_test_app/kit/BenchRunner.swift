@@ -47,6 +47,7 @@ final class BenchRunner {
     static let compares: [String: switch_bench_compare] = [
         "program": SWITCH_BENCH_COMPARE_PROGRAM, "copy": SWITCH_BENCH_COMPARE_COPY,
         "resolve3d": SWITCH_BENCH_COMPARE_RESOLVE3D, "plain": SWITCH_BENCH_COMPARE_PLAIN,
+        "sampled3d": SWITCH_BENCH_COMPARE_SAMPLED3D,
     ]
 
     func run(_ e: BenchExperiment) -> BenchOutcome {
@@ -77,6 +78,8 @@ final class BenchRunner {
             (x.twod.du, x.twod.dv, x.twod.sx, x.twod.sy) = (t.du, t.dv, t.sx, t.sy)
             (x.twod.bilinear, x.twod.corner) = (t.bilinear ? 1 : 0, t.corner ? 1 : 0)
             (x.twod.reference, x.twod.bracketed, x.twod.samples) = (t.reference ? 1 : 0, t.bracketed ? 1 : 0, t.samples)
+            if let c = t.clip { x.twod.clip = (c[0], c[1], c[2], c[3]) }
+            x.twod.clear_first = t.clearFirst ? 1 : 0
         }
         if let s = e.source {
             x.source = switch_bench_source(
@@ -121,6 +124,7 @@ final class BenchRunner {
             outcome.form = [
                 "comptags": Int(r.form.comptags), "block_linear": Int(r.form.block_linear),
                 "bracketed": Int(r.form.bracketed), "reference": Int(r.form.reference), "samples": Int(r.form.samples),
+                "clipped": Int(r.form.clipped), "clear_first": Int(r.form.clear_first),
             ]
         }
         (outcome.lostError, outcome.faultVA, outcome.templateKey) = (r.lost_error, r.fault_va, r.template_key)

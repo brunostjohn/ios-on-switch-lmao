@@ -14,8 +14,14 @@ class TwodTest(unittest.TestCase):
         protocol.batch('twod', experiments)
         ops = {e['twod']['op'] for e in experiments}
         self.assertEqual(ops, {'fill', 'scale', 'resolve'})
-        self.assertEqual({e.get('compare') for e in experiments} - {None}, {'program', 'copy', 'resolve3d'})
-        self.assertEqual(experiments[-1]['twod']['colorFormat'], twod.F32, 'the float form that hung runs last')
+        self.assertEqual(
+            {e.get('compare') for e in experiments} - {None}, {'program', 'copy', 'resolve3d', 'sampled3d'}
+        )
+        last = experiments[-1]['twod']
+        self.assertEqual(last['colorFormat'], twod.F32, 'the float form that hung runs last')
+        self.assertTrue(last['clearFirst'] and not last['bracketed'], 'after a clear-only pass, with no waits')
+        scales = [e for e in experiments if e['twod']['op'] in ('scale', 'resolve') and 'source' in e]
+        self.assertTrue(all(e['source']['format'] == e['target']['format'] for e in scales))
 
     def test_no_two_by_two_mean_of_the_source_is_a_tie(self) -> None:
         data, side = twod.source_texels(), 64
@@ -24,6 +30,21 @@ class TwodTest(unittest.TestCase):
                 for c in range(3):
                     block = [data[((y + dy) * side + x + dx) * 4 + c] for dy in (0, 1) for dx in (0, 1)]
                     self.assertNotEqual(sum(block) % 4, 2, (x, y, c))
+
+    def test_clipped_and_cleared_cells_are_judged_by_what_they_write(self) -> None:
+        cells = {e['id']: e for e in twod.generate()}
+        clip = cells['fill-own-clip-bgra8unorm']
+        self.assertEqual(twod.written_box(clip), (4, 4, 12, 10))
+        side, want = twod.SIDE, twod.wanted_fill(clip)
+        data = bytearray(bytes([twod.FILL_BYTE]) * (side * side * 4))
+        for y in range(4, 10):
+            for x in range(4, 12):
+                data[(y * side + x) * 4 : (y * side + x + 1) * 4] = want
+        result = {'status': 'ok', 'texels': {'data': protocol.b64(bytes(data))}}
+        row = twod.analyse([clip], {clip['id']: result})[0]
+        self.assertTrue(row['kept_outside'])
+        self.assertEqual(row['fill_exact'], row['fill_cells'])
+        self.assertEqual(twod.background(cells['fill-own-afterclear-bgra8unorm']), bytes(4))
 
     def test_fills_run_and_are_judged_on_the_fake_device(self) -> None:
         planned = [e for e in twod.generate() if e['id'] in ('fill-own-bgra8unorm', 'fill-own-ref-rgba8unorm')]

@@ -29,7 +29,7 @@ extension BenchFields {
             guard let compare = value as? String, BenchProtocol.compares[kind]?.contains(compare) == true else {
                 throw BenchInvalid("compare: one of \(BenchProtocol.compares[kind] ?? []) for \(kind.rawValue)")
             }
-            try check(compare: compare, forms, format: format, rect: rect)
+            try check(compare: compare, forms, format: format, size: size, rect: rect)
             forms.compare = compare
         } else if kind == .twod, fields["program"] != nil {
             throw BenchInvalid("a twod experiment draws a program only to compare with it")
@@ -37,7 +37,7 @@ extension BenchFields {
         return forms
     }
 
-    private func check(compare: String, _ forms: Forms, format: String, rect: [Int]) throws {
+    private func check(compare: String, _ forms: Forms, format: String, size: (Int, Int), rect: [Int]) throws {
         switch compare {
         case "plain":
             guard forms.compressed else {
@@ -57,6 +57,19 @@ extension BenchFields {
             }
             guard rect[2] - rect[0] <= source.1, rect[3] - rect[1] <= source.2 else {
                 throw BenchInvalid("compare copy: the rect inside the source")
+            }
+        case "sampled3d":
+            guard let t = forms.twod, t.op == .scale, t.bilinear, rect == [0, 0, size.0, size.1] else {
+                throw BenchInvalid("compare sampled3d: a whole-target bilinear scale")
+            }
+            // the centre origin, or the production form: the corner origin offset by half a step (probeResolveOp)
+            let centred = t.corner ? t.sx == t.du / 2 && t.sy == t.dv / 2 : t.sx == 0 && t.sy == 0
+            guard centred else {
+                throw BenchInvalid(
+                    "compare sampled3d: pixel centres mapped, the centre origin or the corner with half a step")
+            }
+            guard BenchProtocol.mipFormats.contains(BenchProtocol.formats[format]!.raw) else {
+                throw BenchInvalid("compare sampled3d: the pack has no sampled-quad state for it")
             }
         default:
             guard forms.twod?.op == .resolve else {
@@ -122,12 +135,23 @@ extension BenchFields {
         } else if t["samples"] != nil {
             throw BenchInvalid("twod.samples is a resolve's")
         }
+        guard op != .resolve || (t["clip"] == nil && t["clearFirst"] == nil) else {
+            throw BenchInvalid("a resolve takes no clip and no clear first")
+        }
+        var clip: [UInt32]?
+        if let value = t["clip"] {
+            let c = try counts(value, 4, 0...BenchProtocol.maxSide, "twod.clip")
+            guard c[0] < c[2], c[2] <= size.0, c[1] < c[3], c[3] <= size.1 else {
+                throw BenchInvalid("twod.clip inside the target")
+            }
+            clip = c.map(UInt32.init)
+        }
         return BenchTwod(
             op: op, fmt2d: fmt2d,
             colorFormat: UInt32(try count(t["colorFormat"] ?? (0 as Any), 0...255, "twod.colorFormat")),
             color: color.map(UInt32.init), du: try wide("du", 1 << 32), dv: try wide("dv", 1 << 32),
             sx: try wide("sx", 0), sy: try wide("sy", 0), bilinear: try flag("bilinear", false),
             corner: try flag("corner", false), reference: reference, bracketed: try flag("bracketed", true),
-            samples: UInt32(samples))
+            samples: UInt32(samples), clip: clip, clearFirst: try flag("clearFirst", false))
     }
 }

@@ -112,18 +112,20 @@ TARGET_KEYS = {'format', 'width', 'height'}
 PROGRAM_KEYS = {'code', 'data', 'sph', 'gprs'}
 COMPUTE_KEYS = {'code', 'data', 'gprs', 'threads', 'groups', 'output', 'chain', 'schedule'}
 TWOD_KEYS = {'op', 'fmt2d', 'colorFormat', 'color', 'du', 'dv', 'sx', 'sy', 'bilinear', 'corner'}
-TWOD_KEYS |= {'reference', 'bracketed', 'samples'}
+TWOD_KEYS |= {'reference', 'bracketed', 'samples', 'clip', 'clearFirst'}
 SOURCE_KEYS = {'format', 'width', 'height', 'data'}
 TWOD_OPS = ('fill', 'scale', 'resolve')
 # Target formats the 2D engine names a surface format for (raw_probe_ops.h probeTwodFormat), by MTLPixelFormat
 TWOD_FORMATS = {10, 20, 25, 30, 60, 65, 70, 71, 80, 81, 90, 92, 110, 115, 125}
+# Target formats the pack has a sampled-quad state for (raw_mip.h mipState): the 3D side of a bilinear scale's compare
+MIP_FORMATS = {1, 20, 25, 40, 43, 55, 60, 65, 71, 81, 90, 92, 94, 105, 110, 125}
 # A multisampled image's samples across and down, log2 (fx_image.cpp msLayout)
 SAMPLE_GRIDS = {2: (1, 0), 4: (1, 1)}
 ONE = 1 << 32
 # What a scale, resolve or copy reads when the experiment gives no source: the app's own picture
 PICTURE = ('bgra8unorm', 64, 64)
 # compare: the same operation again through another unit, both results and their difference returned
-COMPARES = {'twod': ('program', 'copy', 'resolve3d'), 'readback': ('plain',)}
+COMPARES = {'twod': ('program', 'copy', 'resolve3d', 'sampled3d'), 'readback': ('plain',)}
 MAX_OUTPUT = 64 * 1024
 # QMDs a compute experiment's own one may name dependent, one after another (hw_test_app/bench switch_bench.h)
 MAX_CHAIN = 3
@@ -268,9 +270,15 @@ def _twod(e: dict, target: Target) -> None:
         _count(t.get(field, 0), 0, 255, f'twod.{field}')
     for field in ('du', 'dv', 'sx', 'sy'):
         _count(t.get(field, 0), 0, (1 << 63) - 1, f'twod.{field}')
-    for field in ('bilinear', 'corner', 'bracketed', 'reference'):
+    for field in ('bilinear', 'corner', 'bracketed', 'reference', 'clearFirst'):
         _flag(t.get(field, False), f'twod.{field}')
     _require(not t.get('reference') or op == 'fill', 'twod.reference is the reference fill: fill only')
+    _require(op != 'resolve' or not ({'clip', 'clearFirst'} & set(t)), 'a resolve takes no clip and no clear first')
+    if 'clip' in t:
+        clip = t['clip']
+        _require(isinstance(clip, list) and len(clip) == 4, 'twod.clip is [x0, y0, x1, y1]')
+        x0, y0, x1, y1 = (_count(c, 0, MAX_SIDE, 'twod.clip') for c in clip)
+        _require(x0 < x1 <= target.width and y0 < y1 <= target.height, 'twod.clip inside the target')
     _require(
         t.get('fmt2d', 0) or FORMATS[target.format][0] in TWOD_FORMATS,
         'target format: the 2D engine has no surface format for it (give twod.fmt2d)',
@@ -287,6 +295,18 @@ def _twod(e: dict, target: Target) -> None:
         )
     else:
         _require('samples' not in t, "twod.samples is a resolve's")
+
+
+def centre_mapped(t: dict) -> bool:
+    """Say whether a scale maps destination pixel centres onto the source, as the 3D path's sampled quad does.
+
+    The centre origin with no offset, or the production form (raw_probe_ops.h probeResolveOp): the corner origin
+    offset by half a step.
+    """
+    du, dv, sx, sy = (t.get(k, ONE if k in ('du', 'dv') else 0) for k in ('du', 'dv', 'sx', 'sy'))
+    if t.get('corner'):
+        return sx == du // 2 and sy == dv // 2
+    return sx == 0 and sy == 0
 
 
 def _compare(e: dict, target: Target) -> None:
@@ -306,6 +326,16 @@ def _compare(e: dict, target: Target) -> None:
         x0, y0, x1, y1 = rect_of(e, target)
         source = source_of(e)
         _require(x1 - x0 <= source.width and y1 - y0 <= source.height, 'compare copy: the rect inside the source')
+    elif compare == 'sampled3d':
+        whole = rect_of(e, target) == (0, 0, target.width, target.height)
+        _require(t['op'] == 'scale' and t.get('bilinear') and whole, 'compare sampled3d: a whole-target bilinear scale')
+        _require(
+            centre_mapped(t),
+            'compare sampled3d: pixel centres mapped, the centre origin or the corner with half a step',
+        )
+        _require(
+            FORMATS[target.format][0] in MIP_FORMATS, 'compare sampled3d: the pack has no sampled-quad state for it'
+        )
     else:
         _require(t['op'] == 'resolve', "compare resolve3d: a resolve against the pack's resolve state")
 

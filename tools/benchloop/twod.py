@@ -1,10 +1,11 @@
 """The 2D engine: fills, scaled copies and resolves, one operation a command buffer, and their compare forms.
 
 Fills come in the destination's own colour format (one packed word, as nouveau's EXA fill sends it), as nouveau's
-reference fill (SRCCOPY, clip at the surface), unbracketed (no 3D waits around it: the slot the 11 Nov 15:30
-context-switch timeout ran in) and last in the RF32 x4 float form that was running then. Scales and resolves read a
-source whose 2x2 sums are never 2 mod 4, so no equal-weight mean lands on a .5 tie unless a cell asks for one.
-Each operation's compare form runs the same work through the 3D path or the copy engine; analyse() reads both.
+reference fill (SRCCOPY, clip at the surface), clipped to a rectangle, unbracketed (no 3D waits around it), and last
+after a clear-only pass in the same command buffer, the slot the 11 Nov 15:30 context-switch timeout ran in, in the
+RF32 x4 float form that was running then. Scales and resolves read a source of the target's own format (no conversion
+on the way in) whose 8-bit 2x2 sums are never 2 mod 4, so no equal-weight mean lands on a .5 tie unless a cell asks for
+one. Each operation's compare form runs the same work through the 3D path or the copy engine; analyse() reads both.
 """
 
 import random
@@ -28,6 +29,9 @@ OWN = {
     'rgba16float': (0xCA, struct.unpack('<I', struct.pack('<2e', 0.2, 0.4))[0]),
 }
 SCALE_FORMATS = ('bgra8unorm', 'rgba8unorm', 'rgb10a2unorm', 'rgba16float', 'rgba32float')
+# the formats the pack has a sampled-quad state for, the 3D side of a bilinear scale (protocol.MIP_FORMATS)
+SAMPLED3D_FORMATS = ('rgb10a2unorm', 'rgba16unorm', 'rgba32float')
+CLIP = [4, 4, 12, 10]
 RESOLVE_FORMATS = ('bgra8unorm', 'rgba8unorm', 'rgb10a2unorm', 'rgba16float')
 # name: (du as a fraction, destination side)
 SCALES = {'1to1': ((1, 1), 64), '2to1': ((2, 1), 32), '3to2': ((3, 2), 42), '3to7': ((3, 7), 140)}
@@ -49,8 +53,13 @@ def source_texels(seed: int = 11, side: int = 64) -> bytes:
     return bytes(out)
 
 
-def source(side: int = 64) -> dict:
-    return {'format': 'bgra8unorm', 'width': side, 'height': side, 'data': protocol.b64(source_texels(side=side))}
+def source(fmt: str = 'bgra8unorm', side: int = 64) -> dict:
+    """Give the tie-free source in `fmt`: the same colours, stored as that format stores them."""
+    data = source_texels(side=side)
+    if fmt != 'bgra8unorm':
+        colours = (texels.decode(data[i : i + 4], 'bgra8unorm') for i in range(0, len(data), 4))
+        data = b''.join(texels.encode(c, fmt) for c in colours)
+    return {'format': fmt, 'width': side, 'height': side, 'data': protocol.b64(data)}
 
 
 def _experiment(eid: str, fmt: str, size: tuple[int, int], op: dict, **extra: object) -> dict:
@@ -83,13 +92,34 @@ def scale(name: str, fmt: str, bilinear: bool, corner: bool, **extra: object) ->
     filter_ = 'bil' if bilinear else 'point'
     op = {'op': 'scale', 'du': step, 'dv': step, 'bilinear': bilinear, 'corner': corner}
     e = _experiment(f'scale-{name}-{filter_}-{"corner" if corner else "center"}-{fmt}', fmt, (side, side), op)
-    return e | {'source': source()} | extra
+    return e | {'source': source(fmt)} | extra
 
 
 def resolve(fmt: str, samples: int) -> dict:
     size = (32, 32) if samples == 4 else (32, 64)
     op = {'op': 'resolve', 'samples': samples}
-    return _experiment(f'resolve-{samples}x-{fmt}', fmt, size, op, source=source(), compare='resolve3d')
+    return _experiment(f'resolve-{samples}x-{fmt}', fmt, size, op, source=source(fmt), compare='resolve3d')
+
+
+def sampled(name: str, fmt: str, production: bool = False) -> dict:
+    """Give a whole-target bilinear scale mapping pixel centres against the pack's sampled-quad state.
+
+    The centre origin, or the production form: the corner origin offset by half a step.
+    """
+    _, side = SCALES[name]
+    step = (64 << 32) // side
+    op = {'op': 'scale', 'du': step, 'dv': step, 'bilinear': True}
+    if production:
+        op |= {'corner': True, 'sx': step // 2, 'sy': step // 2}
+    eid = f'scale-vs3d{"-prod" if production else ""}-{name}-{fmt}'
+    return _experiment(eid, fmt, (side, side), op, source=source(fmt), compare='sampled3d')
+
+
+def production(name: str, fmt: str) -> dict:
+    """Give a scale in the form the driver's 2D path uses: the corner origin offset by half a step (probeResolveOp)."""
+    e = scale(name, fmt, True, True)
+    e['twod'] |= {'sx': e['twod']['du'] // 2, 'sy': e['twod']['dv'] // 2}
+    return e | {'id': e['id'].replace('-corner-', '-prod-')}
 
 
 def compare_fill(fmt: str) -> dict:
@@ -116,6 +146,15 @@ def generate() -> list[dict]:
         out += [scale(name, fmt, True, corner) for name in ('2to1', '3to2', '3to7') for corner in (True, False)]
         out += [scale('2to1', fmt, False, True), scale('1to1', fmt, False, True)]
     out += [resolve(fmt, samples) for fmt in RESOLVE_FORMATS for samples in (4, 2)]
+    out += [production(name, fmt) for fmt in SCALE_FORMATS for name in ('2to1', '3to2', '3to7')]
+    # 1:1 is the control: both paths copy texel centres, so its histogram must be all 0
+    for fmt in SAMPLED3D_FORMATS:
+        out += [sampled(name, fmt) for name in ('1to1', '2to1', '3to2', '3to7')]
+        out += [sampled(name, fmt, production=True) for name in ('2to1', '3to2', '3to7')]
+    out.append(own_fill('bgra8unorm', '-clip', clip=CLIP))
+    clipped = scale('1to1', 'bgra8unorm', False, True)
+    clipped['twod'] |= {'clip': CLIP}
+    out.append(clipped | {'id': clipped['id'].replace('scale-', 'scale-clip-')})
     for side in TIMED:
         for fmt in ('bgra8unorm', 'rgba16float'):
             colour_format, packed = OWN[fmt]
@@ -126,7 +165,18 @@ def generate() -> list[dict]:
     out.append(own_fill('bgra8unorm', '-unbracketed', bracketed=False))
     out += [fill(f'fill-f32-{fmt}', fmt, F32, f32_words(RGBA)) for fmt in ('rgba32float', 'rgba16float', 'bgra8unorm')]
     out.append(fill('fill-f32-unbracketed-bgra8unorm', 'bgra8unorm', F32, f32_words(RGBA), bracketed=False))
-    return out
+    return out + hang_slot()
+
+
+def hang_slot() -> list[dict]:
+    """Give the 15:30 timeout's slot: a clear-only pass, then the fill, bracketed and not; f32 unbracketed last."""
+    words = f32_words(RGBA)
+    return [
+        own_fill('bgra8unorm', '-afterclear', clearFirst=True),
+        own_fill('bgra8unorm', '-afterclear-unbracketed', clearFirst=True, bracketed=False),
+        fill('fill-f32-afterclear-bgra8unorm', 'bgra8unorm', F32, words, clearFirst=True),
+        fill('fill-f32-afterclear-unbracketed-bgra8unorm', 'bgra8unorm', F32, words, clearFirst=True, bracketed=False),
+    ]
 
 
 def _texel_data(result: dict, key: str = 'texels') -> bytes:
@@ -146,21 +196,37 @@ def wanted_fill(e: dict) -> bytes | None:
     return None
 
 
+def written_box(e: dict) -> tuple[int, int, int, int]:
+    """Give the texels the operation writes: its rect, cut to its clip rectangle where it has one."""
+    x0, y0, x1, y1 = protocol.rect_of(e, protocol.target_of(e))
+    cx0, cy0, cx1, cy1 = e['twod'].get('clip', [x0, y0, x1, y1])
+    return max(x0, cx0), max(y0, cy0), min(x1, cx1), min(y1, cy1)
+
+
+def background(e: dict) -> bytes:
+    """Give what a texel the operation does not write holds: the fill, or the clear colour after a clear-only pass."""
+    fmt = e['target']['format']
+    if e['twod'].get('clearFirst'):
+        return texels.encode(tuple(e.get('clear', [0.0, 0.0, 0.0, 0.0])), fmt)
+    return bytes([FILL_BYTE]) * protocol.FORMATS[fmt][1]
+
+
 def analyse(experiments: list[dict], results: dict[str, dict]) -> list[dict]:
-    """Give, per operation: whether it ran, its form, whether it kept outside its rect, and its compare histogram."""
+    """Give, per operation: whether it ran, its form, whether it kept to what it writes, and its compare histogram."""
     rows = []
     for e in experiments:
         result = results.get(e['id']) or {}
         data = _texel_data(result)
         fmt = e['target']['format']
         bpp, width = protocol.FORMATS[fmt][1], e['target']['width']
-        x0, y0, x1, y1 = protocol.rect_of(e, protocol.target_of(e))
+        x0, y0, x1, y1 = written_box(e)
         cells = [data[i : i + bpp] for i in range(0, len(data), bpp)]
-        inside = [c for k, c in enumerate(cells) if x0 <= k % width < x1 and y0 <= k // width < y1]
-        outside = [c for k, c in enumerate(cells) if not (x0 <= k % width < x1 and y0 <= k // width < y1)]
+        written = [x0 <= k % width < x1 and y0 <= k // width < y1 for k in range(len(cells))]
+        inside = [c for c, w in zip(cells, written, strict=True) if w]
+        outside = [c for c, w in zip(cells, written, strict=True) if not w]
         row = {'id': e['id'], 'status': result.get('status'), 'why': result.get('why', ''), 'form': result.get('form')}
-        if data and 'fill' in e:
-            row['kept_outside'] = all(c == bytes([FILL_BYTE]) * bpp for c in outside)
+        if data and ('fill' in e or e['twod'].get('clearFirst')):
+            row['kept_outside'] = all(c == background(e) for c in outside)
         if data and e['twod']['op'] == 'fill' and (want := wanted_fill(e)) is not None:
             row['fill_exact'] = sum(c == want for c in inside)
             row['fill_cells'] = len(inside)

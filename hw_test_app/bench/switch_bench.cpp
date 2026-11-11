@@ -227,7 +227,7 @@ bool drawInto(switch_bench &b, const switch_bench_experiment &x, raw::Pipeline *
     bool ran = makeTarget(d, x, others, compressed, t, r);
     if (ran && compressed) {
         t.staging = &staging;
-        r.form = {1, t.color.comptags, t.color.blockLinear, 0, 0, 1};
+        r.form = {1, t.color.comptags, t.color.blockLinear, 0, 0, 1, 0, 0};
     }
     ran = ran && bench::timeDraws(b, x, t, pipeline, r);
     if (ran)

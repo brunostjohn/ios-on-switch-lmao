@@ -87,6 +87,12 @@ raw::ProbeOp operation(const switch_bench_experiment &x, const raw::Texture &tar
     memcpy(op.color, w.color, sizeof op.color);
     op.referenceFill = w.reference != 0;
     op.bracketed = w.bracketed != 0;
+    if (w.clip[2]) {
+        op.clip[0] = w.clip[0];
+        op.clip[1] = w.clip[1];
+        op.clip[2] = w.clip[2] - w.clip[0];
+        op.clip[3] = w.clip[3] - w.clip[1];
+    }
     if (read)
         op.src = surface(*read);
     op.dst = surface(target, w.fmt2d);
@@ -136,6 +142,52 @@ bool resolve3d(raw::CommandBuffer &cb, raw::Device &d, const raw::Texture &ms, c
     return drawn || s.refused(std::string("resolve draw refused: ") + (why ? why : "?"));
 }
 
+// The pack's mip state drawn over the whole of `into` from `read`: each pixel's centre mapped onto the source and sampled
+// with its linear sampler (pack/mip.metal), the 3D path's bilinear scale at any ratio
+bool sampled3d(raw::CommandBuffer &cb, raw::Device &d, const raw::Texture &read, const raw::Texture &into,
+               Submission &s)
+{
+    raw::Pipeline *mip = d.mipPipeline(into.format);
+    if (!mip)
+        return s.refused("the pack has no sampled-quad state for the format");
+    raw::Texture target = into;
+    raw::PassDesc p;
+    p.color[0].texture = &target;
+    p.color[0].load = raw::ColorAttachment::DontCare;
+    p.color[0].store = true;
+    p.count = 1;
+    p.width = into.width;
+    p.height = into.height;
+    raw::RenderEncoder *e = cb.render(p);
+    if (!e)
+        return s.refused("the raw path cannot render the sampled-quad target");
+    const float inverseSize[2] = {1.0f / float(into.width), 1.0f / float(into.height)};
+    const char *why = nullptr;
+    e->setPipeline(mip);
+    e->setTexture(0, &read);
+    e->setBytes(2, 0, inverseSize, sizeof inverseSize);
+    const bool drawn = e->draw(kTriangleStrip, 0, 4, 1, 0, &why);
+    e->end();
+    return drawn || s.refused(std::string("sampled-quad draw refused: ") + (why ? why : "?"));
+}
+
+// A pass that only clears `t`, as the 11 Nov 15:30 timeout's command buffer had before its 2D fill: a clear-only pass
+// leaves no draw for the tiled cache drain that follows draws
+bool clearOnly(raw::CommandBuffer &cb, const switch_bench_experiment &x, raw::Texture &t, Submission &s)
+{
+    raw::PassDesc p;
+    p.color[0].texture = &t;
+    p.color[0].load = raw::ColorAttachment::Clear;
+    memcpy(p.color[0].clear, x.clear, sizeof x.clear);
+    p.color[0].store = true;
+    p.count = 1;
+    raw::RenderEncoder *e = cb.render(p);
+    if (!e)
+        return s.refused("the raw path cannot render the target for the clear");
+    e->end();
+    return true;
+}
+
 // The compare form's operation into a second target, read back into r.compare_texels
 void compare(switch_bench &b, const switch_bench_experiment &x, const raw::Texture *read, const raw::Texture *ms,
              switch_bench_result &r)
@@ -166,6 +218,12 @@ void compare(switch_bench &b, const switch_bench_experiment &x, const raw::Textu
                               x.rect[3] - x.rect[1]);
                 e->end();
                 return true;
+            },
+            gpu, wall);
+    } else if (x.compare == SWITCH_BENCH_COMPARE_SAMPLED3D) {
+        ran = s.record(
+            [&](raw::CommandBuffer &cb) {
+                return sampled3d(cb, d, *read, t.color, s);
             },
             gpu, wall);
     } else if (x.compare == SWITCH_BENCH_COMPARE_RESOLVE3D && ms) {
@@ -206,7 +264,14 @@ void runTwod(switch_bench &b, const switch_bench_experiment &x, switch_bench_res
             d.destroyTexture(ms);
         return fail(r, SWITCH_BENCH_ERROR, "no memory for the target");
     }
-    r.form = {1, t.comptags, t.blockLinear, w.bracketed, w.reference, resolving ? ms.samples : 1u};
+    r.form = {1,
+              t.comptags,
+              t.blockLinear,
+              w.bracketed,
+              w.reference,
+              resolving ? ms.samples : 1u,
+              w.clip[2] != 0,
+              w.clear_first};
     const raw::ProbeOp op = operation(x, t, read);
     const uint32_t bpp = raw::formatInfo(x.format)->bpp;
     Submission s(b, x, r);
@@ -218,24 +283,33 @@ void runTwod(switch_bench &b, const switch_bench_experiment &x, switch_bench_res
                 fill(t, x, bpp);
             else
                 memset(t.cpu, 0, size_t(t.pitch) * x.height);
-            ran = s.record(
-                [&](raw::CommandBuffer &cb) {
-                    if (resolving) {
-                        raw::BlitEncoder *e = cb.blit();
-                        if (!e)
-                            return s.refused("the raw path opened no blit encoder");
-                        e->probe(gridFill(ms, *read, grid), read, ms);
-                        e->end();
-                        return cb.probeResolve(ms, t) || s.refused("the 2D engine has no resolve for the grid");
-                    }
-                    raw::BlitEncoder *e = cb.blit();
-                    if (!e)
-                        return s.refused("the raw path opened no blit encoder");
-                    e->probe(op, read, t);
-                    e->end();
-                    return true;
-                },
-                gpu, wall);
+            // a resolve's samples come from a command buffer of their own, so its stamps time the resolve alone
+            uint64_t fillGpu = 0, fillWall = 0;
+            ran = !resolving || s.record(
+                                    [&](raw::CommandBuffer &cb) {
+                                        raw::BlitEncoder *e = cb.blit();
+                                        if (!e)
+                                            return s.refused("the raw path opened no blit encoder");
+                                        e->probe(gridFill(ms, *read, grid), read, ms);
+                                        e->end();
+                                        return true;
+                                    },
+                                    fillGpu, fillWall);
+            ran = ran && s.record(
+                             [&](raw::CommandBuffer &cb) {
+                                 if (resolving)
+                                     return cb.probeResolve(ms, t) ||
+                                            s.refused("the 2D engine has no resolve for the grid");
+                                 if (w.clear_first && !clearOnly(cb, x, t, s))
+                                     return false;
+                                 raw::BlitEncoder *e = cb.blit();
+                                 if (!e)
+                                     return s.refused("the raw path opened no blit encoder");
+                                 e->probe(op, read, t);
+                                 e->end();
+                                 return true;
+                             },
+                             gpu, wall);
             if (ran && k >= x.warmup) {
                 r.gpu_ns[c * x.repeats + k - x.warmup] = gpu;
                 r.wall_ns[c * x.repeats + k - x.warmup] = wall;
