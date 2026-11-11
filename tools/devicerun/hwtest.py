@@ -98,6 +98,7 @@ TESTS: dict[str, bool] = {
             'gpu.raw.compressed_targets',
             'gpu.raw.zcull',
             'gpu.raw.mip_twod',
+            'gpu.raw.mip_twod_candidates',
             'gpu.path.job_visibility',
             'gpu.path.lean_copy',
             'gpu.path.control_reserve',

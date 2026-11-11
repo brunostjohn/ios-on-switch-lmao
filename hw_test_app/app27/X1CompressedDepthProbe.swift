@@ -17,7 +17,8 @@ enum X1CompressedDepthProbe {
         probe: "copy.ce_compressed_depth", risky: true, timeout: 180
     ) { gpu in try await run(gpu) }
 
-    static let size = 64, rounds = 16
+    // compressed memory is made off the render thread after the first ask: rounds wait for it, up to `attempts`
+    static let size = 64, rounds = 16, attempts = 60
     static let cases: [(String, MTLPixelFormat, Int)] = [
         ("d32f_1x", .depth32Float, 1), ("d32f_4x", .depth32Float, 4), ("d32s8_2x", .depth32Float_stencil8, 2),
         ("d32s8_4x", .depth32Float_stencil8, 4),
@@ -45,13 +46,14 @@ enum X1CompressedDepthProbe {
             let reference = try await scene.draw()
             _ = zetaKinds(gpu.device, true)
             var bad = 0, compressed = 0
-            for _ in 0..<rounds {
+            for _ in 0..<attempts where compressed < rounds {
                 let before = RawFacade.compression(of: gpu.device)["zeta_ce_copies"] ?? 0
                 let picture = try await scene.draw()
-                guard (RawFacade.compression(of: gpu.device)["zeta_ce_copies"] ?? 0) > before else { continue }
-                compressed += 1
-                if picture != reference { bad += 1 }
-                try await Task.sleep(nanoseconds: 10_000_000)
+                if (RawFacade.compression(of: gpu.device)["zeta_ce_copies"] ?? 0) > before {
+                    compressed += 1
+                    if picture != reference { bad += 1 }
+                }
+                try await Task.sleep(nanoseconds: 50_000_000)
             }
             wrong["\(name)"] = bad
             metrics.set("\(name)_compressed_rounds", compressed)

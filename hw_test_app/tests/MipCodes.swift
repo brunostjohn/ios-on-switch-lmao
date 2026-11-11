@@ -156,6 +156,9 @@ enum MipReference {
 struct MipTally {
     var exact = 0, withinOne = 0, wrong = 0, maxDiff: UInt32 = 0
 
+    /// "exact", "near" (within one code) or "wrong"; "-" with nothing compared
+    var verdict: String { wrong > 0 ? "wrong" : withinOne > 0 ? "near" : exact > 0 ? "exact" : "-" }
+
     mutating func add(_ got: [UInt8], _ want: [UInt8], texels: Int, _ layout: MipLayout) {
         for t in 0..<texels {
             for f in layout.fields {

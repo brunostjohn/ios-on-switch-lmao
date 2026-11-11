@@ -9,9 +9,11 @@ import Metal
 /// get one: the target beside a memoryless depth attachment (`mixed`), and rows not a multiple of 128 bytes
 /// (`unaligned`). Each round: the pattern blitted in, a pass that loads it and draws the left half, the target blitted out
 /// and read by the CPU (`load`, `cpu`); then a pass that clears it (to the boot ZBC table's opaque black or to an exact
-/// colour on alternate rounds) and draws the left half, blitted out (`clear`). Every byte the copy engine reads back must be
-/// the expected one; `cpu` (the buffer's CPU view) is reported, not judged here.
-/// ce_copies: fills and stores through compressed memory, which must move; storage_fallback_compressed must not.
+/// colour on alternate rounds) and draws the left half, blitted out (`clear`); then the pattern again under a
+/// framebuffer-fetching draw that writes back what it reads with alpha 1 (`fetch`: the pass binds the colour as a storage
+/// image, so its shadow must stay plain memory and the draw keep its storage form). Every byte the copy engine reads back
+/// must be the expected one; `cpu` (the buffer's CPU view) is reported, not judged here. ce_copies: fills and stores
+/// through compressed memory, which must move; storage_fallback_compressed must not; shadow_paths must be raw.
 enum CompressedShadowCases {
     static let width = 320, height = 180, rounds = 24
 
@@ -72,8 +74,17 @@ enum CompressedShadowCases {
         return out
     }
 
+    /// `under` with every alpha 1
+    static func opaque(_ under: [UInt8], _ f: Format) -> [UInt8] {
+        var out = under
+        let one: [UInt8] = f.bytes == 4 ? [255] : [0x00, 0x3c]
+        for t in 0..<width * height { out.replaceSubrange((t + 1) * f.bytes - one.count..<(t + 1) * f.bytes, with: one) }
+        return out
+    }
+
     static func run(_ gpu: GPU, _ metrics: inout Metrics, _ wrong: inout [String]) async throws {
         let start = RawFacade.compression(of: gpu.device)
+        var paths: Set<String> = []
         for f in formats {
             for mixed in [true, false] {
                 let label = "shadow_\(mixed ? "mixed" : "unaligned")_\(f.name)"
@@ -89,14 +100,21 @@ enum CompressedShadowCases {
                 }
                 let depth = mixed
                     ? try gpu.texture(.depth32Float, width, height, usage: [.renderTarget], storage: .memoryless) : nil
-                let state = try gpu.render(fragment: "exact_fragment", format: f.pixel, depth: mixed ? .depth32Float : .invalid)
-                var bad = ["load": 0, "cpu": 0, "clear": 0]
+                let zeta: MTLPixelFormat = mixed ? .depth32Float : .invalid
+                let state = try gpu.render(fragment: "exact_fragment", format: f.pixel, depth: zeta)
+                let fetch = try gpu.render(
+                    vertex: "fetch_depth_vertex", fragment: "fetch_add_fragment", format: f.pixel, depth: zeta)
+                let half = { (encoder: MTLRenderCommandEncoder) in
+                    encoder.setRenderPipelineState(state)
+                    GPU.draw(encoder, corners: GPU.pixelQuad(0, 0, width / 2, height, width: width, height: height), color: quad)
+                }
+                var bad = ["load": 0, "cpu": 0, "clear": 0, "fetch": 0]
                 var engagedAt = -1
                 for round in 0..<rounds {
                     let before = RawFacade.compression(of: gpu.device)["ce_copies"] ?? 0
                     let under = pattern(f, round: round)
                     try await gpu.upload(under, to: target, bytesPerRow: width * f.bytes)
-                    try await pass(gpu, target, depth, state, load: nil)
+                    paths.insert(try await pass(gpu, target, depth, load: nil, draw: half))
                     let loaded = expected(under, f)
                     if try await gpu.read(target, bytesPerPixel: f.bytes) != loaded { bad["load", default: 0] += 1 }
                     let cpu = (0..<height).flatMap { y in
@@ -104,11 +122,22 @@ enum CompressedShadowCases {
                     }
                     if cpu != loaded { bad["cpu", default: 0] += 1 }
                     let clear = clears(f)[round % 2]
-                    try await pass(gpu, target, depth, state, load: clear)
+                    paths.insert(try await pass(gpu, target, depth, load: clear, draw: half))
                     let cleared = expected(
                         Array(repeating: texel(SIMD4(clear.red, clear.green, clear.blue, clear.alpha), f), count: width * height)
                             .flatMap { $0 }, f)
                     if try await gpu.read(target, bytesPerPixel: f.bytes) != cleared { bad["clear", default: 0] += 1 }
+                    try await gpu.upload(under, to: target, bytesPerRow: width * f.bytes)
+                    paths.insert(
+                        try await pass(gpu, target, depth, load: nil) { encoder in
+                            encoder.setRenderPipelineState(fetch)
+                            var z: Float = 0.5
+                            var nothing = SIMD4<Float>(0, 0, 0, 1)
+                            encoder.setVertexBytes(&z, length: 4, index: 0)
+                            encoder.setFragmentBytes(&nothing, length: 16, index: 0)
+                            encoder.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 3)
+                        })
+                    if try await gpu.read(target, bytesPerPixel: f.bytes) != opaque(under, f) { bad["fetch", default: 0] += 1 }
                     if engagedAt < 0 && (RawFacade.compression(of: gpu.device)["ce_copies"] ?? 0) > before { engagedAt = round }
                     try await Task.sleep(nanoseconds: 10_000_000)
                 }
@@ -121,16 +150,19 @@ enum CompressedShadowCases {
         }
         let end = RawFacade.compression(of: gpu.device)
         let delta = { (key: String) in (end[key] ?? 0) - (start[key] ?? 0) }
+        metrics.set("shadow_paths", paths.sorted().joined(separator: ","))
         metrics.set("ce_copies", delta("ce_copies"))
         metrics.set("storage_fallback_compressed", delta("storage_fallback_compressed"))
+        if paths != ["raw"] { wrong.append("shadow_paths") }
         if delta("ce_copies") == 0 { wrong.append("no_compressed_shadow") }
         if delta("storage_fallback_compressed") != 0 { wrong.append("storage_fallback_compressed") }
     }
 
-    /// A pass over `target` that loads it (`load` nil) or clears it to `load`, then draws the left half the quad's colour
+    /// A pass over `target` that loads it (`load` nil) or clears it to `load`, then `draw`s: its path
     static func pass(
-        _ gpu: GPU, _ target: MTLTexture, _ depth: MTLTexture?, _ state: MTLRenderPipelineState, load: MTLClearColor?
-    ) async throws {
+        _ gpu: GPU, _ target: MTLTexture, _ depth: MTLTexture?, load: MTLClearColor?,
+        draw: (MTLRenderCommandEncoder) -> Void
+    ) async throws -> String {
         try await gpu.run { commands in
             let pass = MTLRenderPassDescriptor()
             pass.colorAttachments[0].texture = target
@@ -143,9 +175,8 @@ enum CompressedShadowCases {
                 pass.depthAttachment.storeAction = .dontCare
             }
             let encoder = commands.makeRenderCommandEncoder(descriptor: pass)!
-            encoder.setRenderPipelineState(state)
-            GPU.draw(encoder, corners: GPU.pixelQuad(0, 0, width / 2, height, width: width, height: height), color: quad)
+            draw(encoder)
             encoder.endEncoding()
-        }
+        }.path
     }
 }
