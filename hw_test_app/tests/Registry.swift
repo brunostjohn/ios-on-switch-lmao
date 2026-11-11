@@ -49,7 +49,7 @@ public enum Registry {
         DispatchSyncTest(), DispatchSyncWorkloopTest(), WorkloopSyncTest(), WidgetsRenderTest(),
     ]
 
-    static let compositor: [any HWTest] = UISceneTests.all + PacingTests.all
+    static let compositor: [any HWTest] = UISceneTests.all + [VideoAlphaTest()] + PacingTests.all
 
     public static let all: [any HWTest] =
         [CPUAsyncTimersTest(), RegDumpQuietTest()] + gpuScenes + metal + GPUPathTests.all + NativeObjectTests.all
