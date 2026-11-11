@@ -1376,3 +1376,16 @@ TEST(GM20BLayoutSource, TheAskersHoldIsPutOnEveryPath)
 	EXPECT_THAT(Between(info, "tgm_coh_hold_asker(coh);", "tgm_coh_put_asker(coh);"),
 		    Not(HasSubstr("return")));
 }
+
+// nvgpu's gr_gm20b_init_fs_state writes ZROP's and CROP's settings whole with the L2 slice count (0x12006c,
+// pri_ringmaster_enum_ltc), not the FBP count gk104's helper reads.
+TEST(GM20BRopSource, ZropAndCropCountTheL2SlicesAsNvgpuDoes)
+{
+	const std::string gr = SourceText("../nouveau/nvkm/engine/gr/gm20b.c");
+	const std::string init =
+		flat(definition(gr, "gm20b_gr_init_rop_active_ltcs(struct gf100_gr *gr)"));
+	EXPECT_THAT(init, HasSubstr("nvkm_rd32(device, 0x12006c)"));
+	EXPECT_THAT(init, HasSubstr("nvkm_wr32(device, 0x408850, ltc_count);"));
+	EXPECT_THAT(init, HasSubstr("nvkm_wr32(device, 0x408958, ltc_count);"));
+	EXPECT_THAT(flat(gr), HasSubstr(".init_rop_active_fbps = gm20b_gr_init_rop_active_ltcs,"));
+}
