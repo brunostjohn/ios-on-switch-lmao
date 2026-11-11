@@ -56,6 +56,7 @@
 #include "raw_host_access.h"
 #include "raw_heap.h"
 #include "raw_order.h"
+#include "raw_variants.h"
 #include "raw_pack.h"
 #include "raw_push.h"
 #include "raw_overlap.h"
@@ -1125,9 +1126,14 @@ public:
         return pack_;
     }
 
-    // A pack pipeline by its state key's FNV-1a (RawMetal.mm rawPipelineKey); null: not in the pack.
+    // A pack pipeline by its state key's FNV-1a (RawMetal.mm rawPipelineKey), else the record this process made for that
+    // key (completed_; packHolds says which); null: neither.
     // caTransform: its vertex function is Core Animation's fixed_vert_l?h_spc (Pipeline::caTransform)
     Pipeline *pipeline(uint64_t keyHash, PackForm form = PackForm::Default, bool caTransform = false);
+    bool packHolds(const Pipeline &pl) const
+    {
+        return raw::packHolds(pack_, pl.rec);
+    }
     Pipeline *placePipeline(uint64_t keyHash, PackForm form, bool caTransform);
     // The state's pack records for the variants its draws pick (PipelineVariantRecord), each placed, by name: null where it
     // cannot be (its programs find no room in the heap, or its storage or push metadata is not this runtime's)

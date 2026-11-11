@@ -319,7 +319,7 @@ RMPipeline *rmPipelineFor(RMDevice *device, MTLRenderPipelineDescriptor *d, MTLP
 #if SWITCH_RAW_DIAGNOSTICS
         markProbes(p->_raw, d.label);
 #endif
-        p->_packed = p->_raw != nullptr;
+        p->_packed = p->_raw && gRM->raw->packHolds(*p->_raw);
         if (p->_packed)
             packedVariants(p, packKey);
     }
