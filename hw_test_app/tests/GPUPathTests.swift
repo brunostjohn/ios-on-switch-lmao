@@ -146,7 +146,6 @@ struct LeanCopyPathTest: GPUPathTest {
 struct ControlReservePathTest: GPUPathTest {
     let id = "gpu.path.control_reserve"
     let name = "Control buffers come from the reserve and carry every draw's bytes"
-    let bit: Int? = 20
     let counters = ["control_bos"]
     static let width = 64, height = 8, bytesPerDraw = 4096
 

@@ -699,7 +699,7 @@ TEST(GM20BFencesSource, ExecQueuesItsWritersAcquiresBeforeItSubmits)
 	EXPECT_THAT(client(), Not(HasSubstr("kInfoAwaitingUserspace")));
 	for (const char *capability :
 	     {"TegraGM20BInfoResourceReady", "TegraGM20BInfoSharedEvents", "TegraGM20BInfoSemanticFence",
-	      "TegraGM20BInfoControlReserve", "TegraGM20BInfoCpuComplete", "TegraGM20BInfoUseRanges"})
+	      "TegraGM20BInfoCpuComplete", "TegraGM20BInfoUseRanges"})
 		EXPECT_THAT(capabilities, HasSubstr(capability));
 }
 
