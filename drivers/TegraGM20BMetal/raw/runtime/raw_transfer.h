@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 #pragma once
 #include "raw_kernel.h"
+#include "raw_resource_set.h"
 #include <array>
 #include <memory>
 #include <mutex>
@@ -28,7 +29,8 @@ struct TextureTransfer {
 
 class TextureTransfers {
 public:
-    bool copy(Kernel &kernel, std::mutex &allocationLock, const TextureTransfer &region,
+    // A job of the copy channel; it names `set` only when the texture is one of its members
+    bool copy(Kernel &kernel, ResourceSet &set, std::mutex &allocationLock, const TextureTransfer &region,
               void *bytes, uint64_t row, uint64_t image, bool write, std::shared_ptr<void> owner);
     void close(Kernel &kernel, std::mutex &allocationLock);
 
@@ -44,6 +46,7 @@ private:
     void reset(Kernel &kernel);
     std::mutex lock_;
     std::array<Slot, 4> slots_;
+    SetView view_;
     uint32_t channel_ = 0, last_ = 0, next_ = 0;
     const volatile uint32_t *fence_ = nullptr;
 };

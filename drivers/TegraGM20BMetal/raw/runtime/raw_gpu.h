@@ -1424,7 +1424,7 @@ public:
             return false;
         SurfaceList none;
         uint32_t seq = 0;
-        if (!k_.exec(channel_, nullptr, 0, lastSeqno_, seq, &none, result, JobVisibility::External, events))
+        if (!job(setView_, channel_, nullptr, 0, none, JobVisibility::External, seq, result, events))
             return false;
         lastSeqno_ = seq;
         seqno = seq;
@@ -1591,7 +1591,37 @@ private:
     Sizes sizes_ = kSizes[0];
     std::mutex lock_;
     Kernel k_;
+    // The BOs only this device's jobs touch (raw_resource_set.h); setView_ is the submitting thread's
+    ResourceSet set_;
+    SetView setView_;
     TextureTransfers transfers_;
+
+    // One job of `channel` naming the set; `uses`, the job's uses no member holds
+    bool job(SetView &view, uint32_t channel, const TegraGM20BAbiPush *pushes, uint32_t count, const SurfaceList &uses,
+             JobVisibility visibility, uint32_t &seqno, int *result = nullptr, const JobEvents &events = {})
+    {
+        if (!uses.valid()) {
+            if (result)
+                *result = kIOReturnBadArgument;
+            return false;
+        }
+        const KernelJob made = {channel, pushes, count, uses.uses().data(), uint32_t(uses.uses().size()), 0, 0,
+                                visibility, events};
+        return submitInSet(k_, set_, view, true, made, seqno, result);
+    }
+
+    // [va, va + bytes) is in a member, so no job names it: as the submitting thread sees the set
+    bool member(uint64_t va, uint64_t bytes)
+    {
+        set_.view(setView_);
+        return setView_.holds(va, bytes);
+    }
+
+    bool member(const Bo &bo)
+    {
+        set_.view(setView_);
+        return setView_.holds(bo);
+    }
     Pack pack_;
     // heap_: the shader heap's GPU VA reservation (bytes: the program window), bound from its start (heapBound_) in parts of
     // host memory as programs are placed

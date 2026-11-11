@@ -63,11 +63,6 @@ public:
     // `v` as the set is now; one load when nothing changed since it was taken
     void view(SetView &v) const;
 
-    uint32_t renewals() const
-    {
-        return renewals_.load(std::memory_order_relaxed);
-    }
-
 private:
     bool registerLocked(Kernel &k);
     void insertLocked(const Bo &bo, uint32_t access);
@@ -77,7 +72,7 @@ private:
     std::vector<SetMember> members_;  // by va
     uint32_t set_ = 0, generation_ = 0;
     const volatile uint32_t *mirror_ = nullptr;
-    std::atomic<uint32_t> version_{0}, renewals_{0};
+    std::atomic<uint32_t> version_{0};
 };
 
 // One job of `channel`, naming the set when `named` (the view's generation, made again and the job submitted again while
