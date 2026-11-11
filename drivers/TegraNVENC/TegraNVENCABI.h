@@ -23,7 +23,8 @@
 //   * Cache maintenance is explicit: Submit cleans the ranges the CPU wrote (the input picture), Wait invalidates the
 //     ranges the CPU will read (status, bitstream). Reference pictures are never touched by the CPU.
 //   * Jobs run in submission order; a fence is a syncpoint threshold, waited on by interrupt. The kernel bounds every
-//     wait itself (timeout_us is ignored); once published, a job past that bound is a hardware fault and panics.
+//     wait itself (timeout_us is ignored); once published, a job past that bound fails, and NVENC refuses work for the
+//     rest of the boot.
 //
 // TegraNVENCInfo says how the firmware reads the input picture, how it addresses chroma planes, and whether P pictures
 // are on.

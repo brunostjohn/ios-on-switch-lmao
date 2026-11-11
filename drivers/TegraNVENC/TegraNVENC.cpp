@@ -9,8 +9,9 @@
 //   E3  the TegraNVENC service and its user client published (TegraNVENCUserClient.cpp)
 // One line per stage ("TegraNVENC: E1 ok ..."), or the failing stage's FAIL line and nothing after it. Until E3
 // publishes, every failure is that one line: the engine is put back in reset with its clock off, its address space is
-// given back and nothing is published, so VideoToolbox has no hardware encoder. From E3 on a job past its bound panics with
-// one line, and a lost syncpoint interrupt panics in TegraHost1x. switch-no-nvdec turns it off.
+// given back and nothing is published, so VideoToolbox has no hardware encoder. From E3 on a job past its bound fails with
+// one line and NVENC refuses work for the rest of the boot; a lost syncpoint interrupt panics in TegraHost1x.
+// switch-no-nvdec turns it off.
 //
 // Input pictures are 16x16 tiles with chroma at the surface config's offset (TegraNVENCInfo): the layout and chroma
 // reading the unit encoded IPCM and IDR pictures from exactly on every boot of 11-06 (r30 archives, "E3 IPCM ok input
@@ -126,7 +127,8 @@ constexpr uint32_t kInFlight = 4, kSetupSlots = 8, kSetupSlotBytes = TEGRA_NVENC
 constexpr uint32_t kJobBoundUs = 500000, kWaitBoundUs = kInFlight * kJobBoundUs;
 IOLock *gEngineLock;
 uint32_t gSyncpt, gBase, gIssued;  // job n's fence is gBase + n
-bool gUp, gWedged, gSuspended;
+uint32_t gFailedThrough;           // with gStalled: every fence up to this one failed (wrapping compare)
+bool gUp, gWedged, gSuspended, gStalled;
 switch_dma_buffer gSetup, gSink;  // setup slots and the scratch buffer, never mapped into a client
 
 const char *falconState()
@@ -330,13 +332,34 @@ bool proofOfLife(uint64_t *us, uint32_t *id, uint32_t *from)
 void engineSuspend();
 void engineResume();
 
-// A fence past its bound is a hardware fault: no job runs before the service is published.
-[[noreturn]] void timedOut(uint32_t fence)
+// A fence past its bound: the engine stalled (a lost interrupt panics in TegraHost1x instead). The jobs in flight fail
+// and their waiters are released; NVENC refuses work for the rest of the boot, because channel 2 may still hold the
+// stalled stream, which a rebooted falcon would run. The engine keeps its clock: host1x stays able to drain the channel
+// into it. gEngineLock held.
+int stalled(uint32_t fence)
 {
+    if (__atomic_load_n(&gStalled, __ATOMIC_ACQUIRE))
+        return -5;
     char host[200];
     tegra_host1x_describe_channel(TEGRA_HOST1X_CHANNEL_NVENC, host, sizeof(host));
-    panic("TegraNVENC: job fence %u not reached in %u ms (syncpoint %u at %u, GP timer bound passed); %s; %s; %s",
+    IOLog("TegraNVENC: job fence %u not reached in %u ms (syncpoint %u at %u, GP timer bound passed); %s; %s; %s; "
+          "NVENC refuses work this boot\n",
           fence, kWaitBoundUs / 1000, gSyncpt, tegra_host1x_syncpt_read(gSyncpt), appDump(), falconDump(), host);
+    gWedged = true;
+    gFailedThrough = gBase + gIssued;
+    __atomic_store_n(&gStalled, true, __ATOMIC_RELEASE);
+    for (uint32_t now = tegra_host1x_syncpt_read(gSyncpt); static_cast<int32_t>(gFailedThrough - now) > 0;
+         now = tegra_host1x_syncpt_read(gSyncpt)) {
+        const uint32_t step = gFailedThrough - now > 2 ? 2 : gFailedThrough - now;
+        if (tegra_host1x_syncpt_release_failed(gSyncpt, now + step, step))
+            break;
+    }
+    return -5;
+}
+
+bool failedFence(uint32_t fence)
+{
+    return __atomic_load_n(&gStalled, __ATOMIC_ACQUIRE) && static_cast<int32_t>(fence - gFailedThrough) <= 0;
 }
 
 // Back to reset with the clock off after a failed bring-up: nothing will use the engine this boot.
@@ -479,12 +502,12 @@ int run(const TegraNVENCSubmit *s, TegraNVENCResolve resolve, void *context, uin
     }
     const uint32_t job = gIssued + 1;
     if (job > kInFlight) {
-        const int ret = tegra_host1x_syncpt_wait(gSyncpt, gBase + job - kInFlight, kWaitBoundUs);
-        if (ret) {
-            if (ret == TEGRA_HOST1X_ETIMEDOUT)
-                timedOut(gBase + job - kInFlight);
+        int ret = tegra_host1x_syncpt_wait(gSyncpt, gBase + job - kInFlight, kWaitBoundUs);
+        if (ret == TEGRA_HOST1X_ETIMEDOUT)
+            ret = stalled(gBase + job - kInFlight);
+        if (ret || gWedged) {
             IOLockUnlock(gEngineLock);
-            return ret;
+            return ret ? ret : -19;
         }
     }
     const uint32_t slot = job % kSetupSlots;
@@ -531,13 +554,13 @@ extern "C" int tegra_nvenc_wait(uint32_t fence)
     // A fence no job will reach would never be reached: refused, so it cannot pass for an engine fault.
     if ((int32_t)(fence - (gBase + __atomic_load_n(&gIssued, __ATOMIC_ACQUIRE))) > 0)
         return -22;
-    const int ret = tegra_host1x_syncpt_wait(gSyncpt, fence, kWaitBoundUs);
+    int ret = tegra_host1x_syncpt_wait(gSyncpt, fence, kWaitBoundUs);
     if (ret == TEGRA_HOST1X_ETIMEDOUT) {
         IOLockLock(gEngineLock);
-        timedOut(fence);
+        ret = stalled(fence);
         IOLockUnlock(gEngineLock);
     }
-    return ret;
+    return !ret && failedFence(fence) ? -5 : ret;
 }
 
 // Sleep (SC7), through TegraHost1x's sleep clients. Suspend lets the queued jobs finish (interrupt waits) and parks
@@ -550,7 +573,7 @@ void engineSuspend()
     IOLockLock(gEngineLock);
     gSuspended = true;
     if (!gWedged && tegra_host1x_syncpt_wait(gSyncpt, gBase + gIssued, kWaitBoundUs) == TEGRA_HOST1X_ETIMEDOUT)
-        timedOut(gBase + gIssued);
+        stalled(gBase + gIssued);
     park();
     tegra_nvenc_memory_detach();
     IOLockUnlock(gEngineLock);
@@ -562,7 +585,9 @@ void engineResume()
     bool wasOn = false;
     gLine[0] = 0;
     gWedged = true;
-    if (!tegra_nvenc_memory_attach(gLine, sizeof(gLine)) && powerUp(&wasOn) && bootFalcon()) {
+    if (gStalled) {
+        snprintf(gLine, sizeof(gLine), "a job stalled the engine before sleep");
+    } else if (!tegra_nvenc_memory_attach(gLine, sizeof(gLine)) && powerUp(&wasOn) && bootFalcon()) {
         const uint32_t from = tegra_host1x_syncpt_read(gSyncpt);
         const char *stage = nullptr;
         const int ret = answer(gSyncpt, from, &stage);
