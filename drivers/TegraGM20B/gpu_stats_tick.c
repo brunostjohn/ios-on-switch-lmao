@@ -3,6 +3,9 @@
 #include "gpu_internal.h"
 
 #if TGM_STATS
+/* TegraVIC (drivers/TegraVIC/SwitchVICMapping.cpp, debug kernels) */
+extern int switch_vic_mapping_describe(nvxnu_u32 iova, char *out, unsigned long size) __attribute__((weak_import));
+
 /* stats:
  * GPU-side times come from 16-byte semaphore releases, which write PTIMER. On this Tegra PTIMER is not in nanoseconds:
  * its source is 19.2 MHz while its 32 ns step assumes 31.25 MHz (nvgpu gm20b_tegra_platform.ptimer_src_freq,
@@ -384,6 +387,11 @@ void tgm_stats_tick(void)
 	lfs = __atomic_exchange_n(&tgm_stats.lock_free_sum, 0, __ATOMIC_RELAXED);
 	lfm = __atomic_exchange_n(&tgm_stats.lock_free_max, 0, __ATOMIC_RELAXED);
 	tegra_gm20b_mc_errors(&mc_int, &mc_err, &mc_adr);
+	if ((mc_err & 0xff) == 0x6c && switch_vic_mapping_describe) {
+		char vic[128];
+		if (!switch_vic_mapping_describe(mc_adr, vic, sizeof(vic)))
+			nvxnu_log("tegra-gm20b: MC refused a VIC read at %08x: %s", mc_adr, vic);
+	}
 	/* the GPU's share of the window spent on stamped user submissions and copies */
 	busy = PT_NS(es + cs) * 100 / (now - since);
 	clk_measure(clk, sizeof(clk));
