@@ -30,6 +30,7 @@ py_library(
         "fakegpu.py",
         "formula.py",
         "golden.py",
+        "gr_errors.py",
         "known.py",
         "loop.py",
         "report.py",
@@ -39,6 +40,7 @@ py_library(
         "texels.py",
         "transport.py",
     ],
+    data = ["gr_class_errors.txt"],
     deps = [
         ":protocol",
         "//tools/benchloop/sm53:encode",
@@ -82,6 +84,7 @@ APP_SOURCES = [
         "blend_models_test",
         "blend_test",
         "golden_test",
+        "gr_errors_test",
         "known_test",
         "loop_test",
         "rop_test",

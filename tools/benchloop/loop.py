@@ -1,8 +1,9 @@
 """One batch through the loop: written to the device's inbox, waited for, its results read back.
 
 The wait follows the app's `BENCH` log lines (idevicesyslog) when a stream is given: the `BENCH <batch> done` line ends
-it, and each experiment's line is kept as the fallback return path for when the outbox cannot be read. With no stream it
-asks for the batch's done.json every few seconds.
+it, and each experiment's line is kept as the fallback return path for when the outbox cannot be read. The kernel's GR
+error lines in the same stream are given to the experiment whose `BENCH` line follows them, since the app logs an
+experiment only after its channel died. With no stream it asks for the batch's done.json every few seconds.
 """
 
 import queue
@@ -14,17 +15,17 @@ from collections.abc import Callable, Iterator
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from tools.benchloop import protocol
+from tools.benchloop import gr_errors, protocol
 
 POLL_S = 2.0
 SLACK_S = 60.0
 
 
 class LogStream:
-    """`idevicesyslog` lines that carry `BENCH `, read on a thread so a wait can time out."""
+    """`idevicesyslog` lines that carry `BENCH ` or a kernel GR error, read on a thread so a wait can time out."""
 
     def __init__(self, udid: str | None, tool: str = 'idevicesyslog') -> None:
-        command = [tool, '--no-colors', '-m', 'BENCH ']
+        command = [tool, '--no-colors', '-m', 'BENCH ', '-m', 'gr: ']
         if udid:
             command[1:1] = ['-u', udid]
         self._process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
@@ -51,6 +52,7 @@ class Outcome:
     batch: str
     results: dict[str, dict] = field(default_factory=dict)
     log: dict[str, dict] = field(default_factory=dict)
+    kernel: dict[str, list[str]] = field(default_factory=dict)
     done: dict | None = None
     seconds: float = 0.0
 
@@ -107,10 +109,17 @@ def wait(transport: object, b: dict, stream: LogStream | None, sleep: Callable[[
     outcome = Outcome(name)
     outbox = f'{transport.root}/outbox/{name}'
     if stream:
+        pending: list[str] = []
         for line in stream.lines(until):
+            if 'BENCH ' not in line and gr_errors.is_gr_line(line):
+                if (text := gr_errors.decode(line)) and text not in pending:
+                    pending.append(text)
+                continue
             parsed = parse_log_line(line)
             if parsed and parsed[0] == name:
                 outcome.log[parsed[1]] = parsed[2]
+                if pending:
+                    outcome.kernel[parsed[1]], pending = pending, []
             if f'BENCH {name} done' in line:
                 break
     else:
@@ -147,4 +156,7 @@ def run(transport: object, b: dict, into: Path, stream: LogStream | None = None)
         transport.rm(f'{transport.root}/outbox/{outcome.batch}')
     for experiment_id, result in outcome.log.items():
         outcome.results.setdefault(experiment_id, result)
+    for experiment_id, lines in outcome.kernel.items():
+        if experiment_id in outcome.results:
+            outcome.results[experiment_id]['kernel'] = lines
     return outcome

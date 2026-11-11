@@ -61,9 +61,24 @@ def judge(results: dict[str, dict]) -> tuple[bool, list[str]]:
             detail += f' texels={"all the known answer" if right else distinct[:2]}'
         if r.get('why'):
             detail += f' why={r["why"]}'
+        if r.get('kernel'):
+            detail += f' kernel={"; ".join(r["kernel"])}'
         ok = ok and good
         lines.append(f'{e["id"]}: {"PASS" if good else "FAIL"} {detail}')
+    if dead := dead_bench(results.get('known')):
+        lines.insert(0, dead)
     return ok, lines
+
+
+def dead_bench(known_result: dict | None) -> str | None:
+    """Give the one line that says the installed app cannot draw at all, when its own known program died."""
+    if not known_result or known_result.get('status') != 'killed':
+        return None
+    cause = '; '.join(known_result.get('kernel', [])) or 'no GR line seen'
+    return (
+        f'BENCH DEAD: the app killed its own known program ({cause}). The installed app cannot draw: '
+        'no known, fragment or readback experiment can run until it is rebuilt'
+    )
 
 
 def roots(udid: str | None) -> list[transport.Afc]:
