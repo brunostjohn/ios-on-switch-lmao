@@ -1066,12 +1066,12 @@ TEST(GM20BHangSource, OnlyAConnectionsPushesAreRead)
 	EXPECT_THAT(flat(definition(client(), "bool AGXDeviceUserClient::setUp(")),
 		    HasSubstr("tgm_vm_claim_connection(vm_, this);"));
 	EXPECT_THAT(client(), Not(HasSubstr("tgm_vm_claim(")));
-	const std::string relayout = SourceText("../TegraGM20BRelayout.cpp");
-	EXPECT_THAT(flat(definition(relayout, "bool openSpace()")),
-		    HasSubstr("tgm_vm_claim(r.vm, &gRelayout);"));
-	EXPECT_THAT(relayout, Not(HasSubstr("tgm_vm_claim_connection(")));
+	// The kernel copy queues' spaces are claimed by their producers' state, never as a connection's.
 	EXPECT_THAT(flat(definition(SourceText("../SwitchGpuKqueue.h"), "bool openSpace(")),
 		    HasSubstr("tgm_vm_claim(vm, owner);"));
+	const std::string relayout = SourceText("../TegraGM20BRelayout.cpp");
+	EXPECT_THAT(flat(relayout), HasSubstr("r.space.openSpace(kShape, &gRelayout)"));
+	EXPECT_THAT(relayout, Not(HasSubstr("tgm_vm_claim_connection(")));
 	const std::string copy = SourceText("../TegraGM20BCopy.cpp");
 	EXPECT_THAT(flat(definition(copy, "bool openSpace()")), HasSubstr("queue.space.openSpace(kShape, &queue)"));
 	EXPECT_THAT(copy, Not(HasSubstr("tgm_vm_claim_connection(")));
@@ -1102,7 +1102,7 @@ TEST(GM20BRelayoutSource, KernelCopiesOrderOnTheGpu)
     EXPECT_THAT(waits, Not(HasSubstr("tgm_writer_wait(")));
 	const std::string move = flat(definition(relayout, "int move("));
 	EXPECT_THAT(move,
-		    HasSubstr("tgm_relayout_waits(r.vm, tgm_chan_uid(chan), writers, nwriters, "
+		    HasSubstr("tgm_relayout_waits(r.space.vm, tgm_chan_uid(chan), writers, nwriters, "
 			      "waits, 0)"));
 	// its wait is late on the writer an acquire sits on, so recovery finds that writer, not the copy behind it
 	EXPECT_THAT(move, HasSubstr("acquired[i] = {waits[i].uid, waits[i].seqno};"));
@@ -1115,10 +1115,9 @@ TEST(GM20BRelayoutSource, KernelCopiesOrderOnTheGpu)
 		flat(definition(gpu(), "static void writer_wait(")),
 		HasSubstr("chan = late_writer(uid, seqno, acquired, nacquired, &late); if "
 			  "(chan) verdict = tgm_hang_recover(chan, \"IOSurface lock\", late, "));
-	EXPECT_THAT(
-		flat(definition(relayout, "bool openSpace()")),
-		HasSubstr("tgm_fence_kernel(TGM_FENCE_KERNEL_RELAYOUT, &r.fenceCpu, &fencePage, "
-			  "&fenceOffset)"));
+	EXPECT_THAT(flat(relayout), HasSubstr("{\"relayout\", TGM_FENCE_KERNEL_RELAYOUT, 1, kPushVa, 0, 1}"));
+	EXPECT_THAT(flat(definition(SourceText("../SwitchGpuKqueue.h"), "bool openSpace(")),
+		    HasSubstr("tgm_fence_kernel(shape.fenceSlot, &fenceCpu, &fencePage, &fenceOffset)"));
 	const std::string copy = flat(SourceText("../TegraGM20BCopy.cpp"));
 	EXPECT_THAT(copy, HasSubstr("switch_gpu_backing_dependencies(&transaction, queue.dependencies,"));
 	EXPECT_THAT(copy, HasSubstr("queue.events.captureDependencies(queue.dependencies, count)"));
@@ -1296,8 +1295,11 @@ TEST(GM20BChannelSource, CopyChannelCreatesOnlyRequestedObjectsAndKeepsVerifiedR
     EXPECT_THAT(gpu(), HasSubstr("tgm_chan_new_copy(tgm_present.vm"));
     EXPECT_THAT(gpu(), HasSubstr("tgm_chan_new_copy(tgm_scrub.vm"));
     EXPECT_THAT(SourceText("../SwitchGpuKqueue.h"), HasSubstr("tgm_chan_new_copy(vm, owner"));
-    EXPECT_THAT(SourceText("../TegraGM20BCopy.cpp"), HasSubstr("queue.space.openChannel(kShape"));
-    EXPECT_THAT(SourceText("../TegraGM20BRelayout.cpp"), HasSubstr("tgm_chan_new_copy(r.vm"));
+    for (const char *producer : {"../TegraGM20BCopy.cpp", "../TegraGM20BRelayout.cpp", "../SwitchGpuCachedZero.cpp",
+				 "../SwitchGpuBridge.cpp"}) {
+        EXPECT_THAT(SourceText(producer), HasSubstr("space.openChannel(kShape"));
+        EXPECT_THAT(SourceText(producer), Not(HasSubstr("tgm_chan_new_copy(")));
+    }
 }
 
 // Every channel's acquire on another channel's fence reads the address space's view of the fence pool: a space without

@@ -6,6 +6,7 @@
 #include <stdint.h>
 #include <string.h>
 #include "TegraGM20BFences.h"
+#include "SwitchGpuKqueue.h"
 #include "SwitchGpuPin.h"
 #include "SwitchGpuRelayoutCache.h"
 #include "TegraGM20BGpu.h"
@@ -19,61 +20,23 @@ namespace
 constexpr uint64_t kPage = 4096;
 constexpr uint64_t kPushVa = 1ULL << 20;
 constexpr uint32_t kCheckpointWord = 1023;
+// The push page is GPU-writable: its last word receives the GPU's recovery checkpoint.
+constexpr SwitchGpuKqueueShape kShape = {"relayout", TGM_FENCE_KERNEL_RELAYOUT, 1, kPushVa, 0, 1};
 
 struct Relayout {
 	IOLock *lock;
-	tgm_vm *vm;
-	tgm_chan *chan;
-	tgm_mem *push, *fence;
-	switch_gpu_mapping *pushMapping;
-	uint32_t *pushCpu;
-	volatile uint32_t *fenceCpu;
-	uint64_t pushPa, fenceGpu;
+	SwitchGpuKqueue space;
 	bool unavailable;  // the last open failed (logged once until one succeeds)
 	SwitchGpuRelayoutCache mappings;
 } gRelayout;
 
-bool openSpace()
-{
-	Relayout &r = gRelayout;
-	uint64_t fencePage = 0;
-	uint32_t fenceOffset = 0;
-	r.pushCpu = static_cast<uint32_t *>(tgm_pool_alloc(kPage, 0, &r.pushPa));
-	if (!r.pushCpu ||
-	    tgm_fence_kernel(TGM_FENCE_KERNEL_RELAYOUT, &r.fenceCpu, &fencePage, &fenceOffset) ||
-	    tgm_vm_new(&r.vm))
-		return false;
-	tgm_vm_claim(r.vm, &gRelayout);
-	// The last word shares this page with commands and receives the GPU's recovery checkpoint.
-	if ((tgm_mem_new(r.vm, &r.pushPa, 1, &r.push) != 0) ||
-	    (switch_gpu_vm_map_volatile(r.vm, kPushVa, kPage, r.push, 0, 0, 0, 1, &r.pushMapping) !=
-	     0) ||
-	    (tgm_mem_new(r.vm, &fencePage, 1, &r.fence) != 0) ||
-	    (tgm_vm_kmap(r.vm, r.fence, kPage, &r.fenceGpu) != 0))
-		return false;
-	r.fenceGpu += fenceOffset;
-	return true;
-}
-
-void discardSpace()
-{
-	Relayout &r = gRelayout;
-	switch_gpu_vm_unmap(r.vm, &r.pushMapping);
-	tgm_vm_del(&r.vm);
-	tgm_mem_del(&r.push);
-	tgm_mem_del(&r.fence);
-	if (r.pushCpu)
-		tgm_pool_free(r.pushCpu, kPage, r.pushPa);
-	r.pushCpu = nullptr;
-}
-
 tgm_chan *channel()
 {
 	Relayout &r = gRelayout;
-	if (r.chan && tgm_chan_error(r.chan))
-		tgm_chan_del(&r.chan);
-	if (!r.vm && !openSpace()) {
-		discardSpace();
+	if (r.space.channel && tgm_chan_error(r.space.channel))
+		tgm_chan_del(&r.space.channel);
+	if (!r.space.vm && !r.space.openSpace(kShape, &gRelayout)) {
+		r.space.discardSpace(kShape);
 		if (!r.unavailable)
 			IOLog("tegra-gm20b: block-linear surfaces cannot be moved: no address "
 			      "space\n");
@@ -81,9 +44,8 @@ tgm_chan *channel()
 		return nullptr;
 	}
 	r.unavailable = false;
-	if (!r.chan)
-		tgm_chan_new_copy(r.vm, &gRelayout, r.fenceCpu, r.fenceGpu, "relayout", 1, &r.chan);
-	return r.chan;
+	r.space.openChannel(kShape, &gRelayout, nullptr);
+	return r.space.channel;
 }
 
 void tgm_relayout_finish_cpu(const tgm_relayout_pages *, const tgm_relayout_pages *,
@@ -132,18 +94,18 @@ int move(const tgm_relayout_pages &surface, const tgm_relayout_pages &rows, cons
 		return -12;
 	tgm_relayout_wait waits[TGM_RELAYOUT_MAX_WAITS];
 	const uint32_t nwaits =
-		tgm_relayout_waits(r.vm, tgm_chan_uid(chan), writers, nwriters, waits, 0);
+		tgm_relayout_waits(r.space.vm, tgm_chan_uid(chan), writers, nwriters, waits, 0);
 	if (nwaits == TGM_RELAYOUT_WAIT_FAILED)
 		return -75;
 	SwitchGpuRelayoutMapping *surfaceMap = nullptr, *rowsMap = nullptr;
 	bool finish = false;
-	int ret = switch_gpu_relayout_mapping(r.vm, &gRelayout.mappings, surface.pas,
+	int ret = switch_gpu_relayout_mapping(r.space.vm, &gRelayout.mappings, surface.pas,
 					      surface.npages, true, &surfaceMap);
 	if (!ret)
-		ret = switch_gpu_relayout_mapping(r.vm, &gRelayout.mappings, rows.pas, rows.npages,
+		ret = switch_gpu_relayout_mapping(r.space.vm, &gRelayout.mappings, rows.pas, rows.npages,
 						  false, &rowsMap);
 	if (!ret) {
-		__atomic_store_n(r.pushCpu + kCheckpointWord, 0u, __ATOMIC_RELEASE);
+		__atomic_store_n(r.space.words + kCheckpointWord, 0u, __ATOMIC_RELEASE);
 		const tgm_relayout_move m = {surfaceMap->tiled,
 					     surfaceMap->pitch,
 					     rowsMap->pitch,
@@ -151,7 +113,7 @@ int move(const tgm_relayout_pages &surface, const tgm_relayout_pages &rows, cons
 					     op,
 					     rowsBytes,
 					     kPushVa + uint64_t(kCheckpointWord) * 4};
-		const tgm_push push = {kPushVa, tgm_relayout_push(r.pushCpu, &l, &m, waits, nwaits),
+		const tgm_push push = {kPushVa, tgm_relayout_push(r.space.words, &l, &m, waits, nwaits),
 				       0, 0, 0, 0};
 		uint32_t seqno = 0;
 		ret = tgm_chan_exec(chan, &push, 1, &seqno, nullptr);
@@ -162,13 +124,13 @@ int move(const tgm_relayout_pages &surface, const tgm_relayout_pages &rows, cons
 			tgm_copy_wait(tgm_chan_uid(chan), seqno, acquired, nwaits);
 			ret = tgm_chan_error(chan) ? -5 : 0;
 			finish = ret &&
-				 __atomic_load_n(r.pushCpu + kCheckpointWord, __ATOMIC_ACQUIRE);
+				 __atomic_load_n(r.space.words + kCheckpointWord, __ATOMIC_ACQUIRE);
 		}
 	}
 	switch_gpu_relayout_mapping_put(rowsMap);
 	switch_gpu_relayout_mapping_put(surfaceMap);
 	if (ret && tgm_chan_error(chan)) {
-		switch_gpu_relayout_cache_clear(r.vm, &gRelayout.mappings);
+		switch_gpu_relayout_cache_clear(r.space.vm, &gRelayout.mappings);
 		if (!flushForCpu())
 			switch_refusal("iosurface-layout", "fault-unflushed",
 				       "a faulted relayout leaves the GPU's L2 unflushed for the CPU's move: "
