@@ -36,6 +36,7 @@ kernel_driver(
         "drivers/TegraGM20B",
         "kits/SwitchCAR",
         "kits/SwitchDMA",
+        "kits/SwitchIdle",
         "kits/SwitchMMIO",
     ],
 )

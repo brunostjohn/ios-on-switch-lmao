@@ -26,6 +26,7 @@
 #include "../../kits/SwitchCAR/SwitchCAR.h"
 #include "../../kits/SwitchDMA/SwitchDMABuffer.h"
 #include "../../kits/SwitchDMA/SwitchDcache.h"
+#include "../../kits/SwitchIdle/switch_idle.h"
 #include "../../kits/SwitchMMIO/SwitchMMIOKernel.h"
 
 namespace {
@@ -403,6 +404,7 @@ extern "C" int tegra_host1x_submit_on(uint32_t channel, const uint32_t *words, u
         c.va[from / 4 + i] = words[i];
     switch_dcache_clean((uint8_t *)c.va + from, bytes);  // its DSB also completes the padding's
     c.put = (from + bytes) % kPushBytes;                 // a job that ends exactly at the RESTART slot leaves PUT at 0
+    switch_emc_gpu_submit();
     channelWrite(channel, CH_DMAPUT, c.put);
     IOLockUnlock(gSubmitLock);
     return TEGRA_HOST1X_OK;

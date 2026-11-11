@@ -40,3 +40,42 @@ host_test(
     sanitize = False,
     deps = [":results_linkage", ":results_kernel"],
 )
+
+host_shims(
+    name = "submit_kernel",
+    headers = [
+        "IOKit/IOBufferMemoryDescriptor.h",
+        "IOKit/IOInterruptEventSource.h",
+        "IOKit/IOLib.h",
+        "IOKit/IOLocks.h",
+        "IOKit/IOWorkLoop.h",
+        "kern/clock.h",
+        "kern/thread.h",
+    ],
+    stubs = "switch_host1x_submit_stubs.h",
+)
+
+# TegraHost1x.cpp's submission with a memory register file: every engine's doorbell is preceded by EMC demand.
+host_test(
+    name = "switch_host1x_submit_test",
+    srcs = [
+        "switch_host1x_submit_test.cpp",
+        "//drivers/ArmGIC:SwitchInterrupts.h",
+        "//drivers/TegraHost1x:SwitchHost1xFailureRelease.h",
+        "//drivers/TegraHost1x:TegraHost1x.h",
+        "//kits/SwitchCAR:SwitchCAR.h",
+        "//kits/SwitchDMA:SwitchDMABuffer.h",
+        "//kits/SwitchDMA:SwitchDcache.h",
+        "//kits/SwitchIdle:switch_idle.h",
+        "//kits/SwitchMMIO:SwitchMMIO.h",
+        "//kits/SwitchMMIO:SwitchMMIOKernel.h",
+    ],
+    additional_compiler_inputs = ["//drivers/TegraHost1x:TegraHost1x.cpp"],
+    data = [
+        "//drivers/TegraNVDEC:SwitchNVDECJobs.cpp",
+        "//drivers/TegraNVENC:TegraNVENC.cpp",
+        "//drivers/TegraNVJPG:TegraNVJPG.cpp",
+        "//drivers/TegraVIC:SwitchVICJobs.cpp",
+    ],
+    deps = [":submit_kernel"],
+)

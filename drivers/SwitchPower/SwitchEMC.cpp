@@ -458,8 +458,8 @@ extern "C" void switch_emc_hint(unsigned int hint)
     }
 }
 
-// TegraGM20B, before each channel's doorbell: work for the GPU, so the EMC goes to its top rate ahead of that work's
-// traffic, as for a hint. One load while it is already there and held; never blocks.
+// TegraGM20B and TegraHost1x, before each channel's doorbell: work for the GPU or a host1x engine, so the EMC goes to
+// its top rate ahead of that work's traffic, as for a hint. One load while it is already there and held; never blocks.
 extern "C" void switch_emc_gpu_submit(void)
 {
     if (__atomic_load_n(&gTopHeld, __ATOMIC_RELAXED))
