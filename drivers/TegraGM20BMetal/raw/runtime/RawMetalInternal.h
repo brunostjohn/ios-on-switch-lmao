@@ -398,4 +398,9 @@ int computeReadiness(RMCommandBuffer *cb, const RMSegment &range);
 void rawStallTick();
 void watchFetchBarrierWay(raw::Device *dev);
 void watchKeylineProbe();
+// RawMetalGlassProbe.mm
+void watchGlassProbe(raw::Device *dev);
+void glassProbeCommitted(RMCommandBuffer *cb);
+bool rmWholePrograms();
+bool rmZeroNewBuffers();
 #endif

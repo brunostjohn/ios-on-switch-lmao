@@ -11,6 +11,7 @@
 #include "raw_blend_kill.h"
 #include "raw_dynamic_push.h"
 #include "raw_keyline_probe.h"
+#include "raw_glass_probe.h"
 #include "../../../NativeMetal/bridge/NativeMetalBlend.h"
 #include "../../../../kits/SwitchGM20B/SwitchGM20B.h"
 #include "raw_follow.h"
@@ -4466,6 +4467,8 @@ void armKeylineProbe()
 void RenderEncoder::probeDraw(const Pipeline &bound, Pipeline &drawn, uint32_t primitive, int32_t first, uint32_t count,
                               bool indexed, const PixelBox &limit)
 {
+    if (glassProbeArmed())
+        probeGlassDraw(bound, drawn, limit);
     const uint32_t generation = gKeylineGeneration.load(std::memory_order_relaxed);
     if (drawn.probeGeneration != generation) {
         drawn.probeGeneration = generation;
@@ -4547,6 +4550,53 @@ void RenderEncoder::probeDraw(const Pipeline &bound, Pipeline &drawn, uint32_t p
            limit.x1, limit.y1, primitive, indexed ? drawIndexCount_ : count, indexed ? " indexed" : "", scan.quads,
            scan.thin, scan.first.box[0], scan.first.box[1], scan.first.box[2], scan.first.box[3], scan.firstThin.first,
            scan.firstThin.box[0], scan.firstThin.box[1], scan.firstThin.box[2], scan.firstThin.box[3], colour);
+}
+
+// The glass probe's line for a Core Animation draw (raw_glass_probe.h): the form drawn as probeDraw names it, each
+// colour attachment as the pass bound it (format/bytes a texel/samples/layout[+comp][+ml]/size/load), the textures its
+// record samples and its uniform buffers
+void RenderEncoder::probeGlassDraw(const Pipeline &bound, const Pipeline &drawn, const PixelBox &limit)
+{
+    const PackPipeline &rec = *drawn.rec;
+    const char *form = drawn.splitOf                     ? "split"
+                       : drawn.storageBits               ? "storage"
+                       : &drawn == bound.barrierTwin     ? "barrier"
+                       : rec.flags & PipelineBarrierForm ? "barrier-record"
+                                                         : "whole";
+    char attachments[8 * 48] = "-", sampled[16 * 56] = "-", uniforms[8 * 32] = "-";
+    size_t at = 0;
+    for (uint32_t j = 0; j < pass_.count && j < 8 && at + 1 < sizeof attachments; j++)
+        if (const Texture *t = pass_.color[j].texture) {
+            const int n =
+                snprintf(attachments + at, sizeof attachments - at, "%sc%u:%u/%u/%u/%s%s%s/%ux%u/%c", at ? " " : "", j,
+                         t->format, t->bpp, t->samples, t->blockLinear ? "bl" : "pitch", t->comptags ? "+comp" : "",
+                         memoryless_[j] ? "+ml" : "", t->width, t->height, "dlc"[pass_.color[j].load]);
+            at += std::min(sizeof attachments - at - 1, size_t(std::max(n, 0)));
+        }
+    at = 0;
+    for (uint32_t k = 0; k < rec.entries && k < kPackEntries && at + 1 < sizeof sampled; k++)
+        if (const PackEntry &e = rec.entry[k]; e.kind == EntryTexture && e.slot < 16 && textures_[e.slot]) {
+            at += at ? size_t(snprintf(sampled + at, sizeof sampled - at, " ")) : 0;
+            const int n = glassProbeTexture(sampled + at, sizeof sampled - at, e.slot, *textures_[e.slot]);
+            at += std::min(sizeof sampled - at - 1, size_t(std::max(n, 0)));
+        }
+    at = 0;
+    for (uint32_t k = 0; k < rec.entries && k < kPackEntries && at + 1 < sizeof uniforms; k++)
+        if (const PackEntry &e = rec.entry[k]; e.kind == EntryUbo && !bufferStorage(e)) {
+            const Bound &b = bufs_[e.stage][e.slot];
+            at += at ? size_t(snprintf(uniforms + at, sizeof uniforms - at, " ")) : 0;
+            const int n = glassProbeUniform(uniforms + at, sizeof uniforms - at, e.stage, e.slot, b.cpu, b.size);
+            at += std::min(sizeof uniforms - at - 1, size_t(std::max(n, 0)));
+        }
+    char line[900];
+    snprintf(line, sizeof line, "%s k%016llx %s att %s tex %s uni %s box %u,%u-%u,%u", bound.caName,
+             (unsigned long long)rec.keyHash, form, attachments, sampled, uniforms, limit.x0, limit.y0, limit.x1,
+             limit.y1);
+    if (!glassProbeFirst(cb_, line) || gGlassProbeLines.fetch_sub(1, std::memory_order_relaxed) <= 0)
+        return;
+    os_log(os_log_create("com.brunostjohn.switch.TegraGM20BMetal", "raw"), "raw: glass draw g%u cb %06llx %{public}s",
+           gGlassProbeGeneration.load(std::memory_order_relaxed), (unsigned long long)(uintptr_t(cb_) & 0xffffff),
+           line);
 }
 
 // A write that stops a row or two short of a texture's edges (raw_keyline_probe.h EdgeMiss), once per shape and at most

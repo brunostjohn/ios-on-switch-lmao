@@ -247,6 +247,10 @@ struct Texture {
     bool compressed = false;
     // Its memory is bound with a compressible kind (raw_comp.h): its passes enable colour, or Z and stencil, compression
     bool comptags = false;
+#if SWITCH_RAW_DIAGNOSTICS
+    // A pass, copy, dispatch or upload of this process wrote it (raw_glass_probe.h)
+    bool probeWritten = false;
+#endif
 
     // A mipmapped texture's levels (r12, raw/fx): `chain` is the block-linear image of every level, NIL's layout, and this texture
     // is its level 0 (va, span, pitch and block height level 0's; its header, tic, the chain's). The 2D engine fills the later
@@ -753,6 +757,7 @@ private:
     void probeEdges() const;
     void probeDraw(const Pipeline &bound, Pipeline &drawn, uint32_t primitive, int32_t first, uint32_t count,
                    bool indexed, const PixelBox &limit);
+    void probeGlassDraw(const Pipeline &bound, const Pipeline &drawn, const PixelBox &limit);
 #endif
     const Runs *selfRuns(const Pipeline &pl, uint32_t primitive, int32_t first, uint32_t count, uint32_t instances,
                          const char **why);

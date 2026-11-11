@@ -21,6 +21,9 @@ void useTexture(raw::CommandBuffer *rc, RMTexture *t, bool write)
         t = t->_parent;
     if (!t)
         return;
+#if SWITCH_RAW_DIAGNOSTICS
+    t->_raw.probeWritten |= write;
+#endif
     rc->use(t->_raw, write);
     if (t->_buffer)
         rc->use(t->_buffer->_raw, write);
@@ -53,7 +56,7 @@ static bool encodeRawAttempt(RMCommandBuffer *cb, size_t from, size_t to, const 
     const uint64_t generation = d.channelGeneration();
     rc->internalCompletion();
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
-    rc->forceWholePrograms(cb->_forceWholePrograms);
+    rc->forceWholePrograms(cb->_forceWholePrograms || rmWholePrograms());
 #endif
     if (!validateNativeEventWaits(cb, generation)) {
         rc->abandon();

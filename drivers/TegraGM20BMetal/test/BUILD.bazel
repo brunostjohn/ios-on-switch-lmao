@@ -97,6 +97,8 @@
 #                     fit (compression tags, never Metal's compression flag), and the refusing keys' tally
 #   raw_keyline_probe_test  raw/runtime/raw_keyline_probe.h (debug builds' scroll edge keyline lines): a fill's
 #                     vertices in pixels with its half colour, and a write a row or two short of a texture's edge
+#   raw_glass_probe_test  raw/runtime/raw_glass_probe.h (debug builds' glass probe): the render server's command buffer
+#                     record word, a draw line's textures and uniforms, each line once a command buffer
 #   raw_fetch_order_test  raw/runtime/raw_fetch_order.h: the fetching draws refused as they are recorded (their encoder
 #                     alone goes to m2v) and those left to the CPU's geometry at submission
 #   raw_record_samplers_test  raw/runtime/raw_record.h: a record's constexpr entries index its own sampler headers whoever
@@ -1161,6 +1163,16 @@ host_test(
     srcs = [
         "raw_keyline_probe_test.cpp",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_keyline_probe.h",
+    ],
+    cxx_std = "c++17",
+)
+
+host_test(
+    name = "raw_glass_probe_test",
+    srcs = [
+        "raw_glass_probe_test.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_glass_probe.h",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_nonfinite.h",
     ],
     cxx_std = "c++17",
 )

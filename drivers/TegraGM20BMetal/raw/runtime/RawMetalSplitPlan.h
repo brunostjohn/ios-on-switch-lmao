@@ -29,7 +29,7 @@ inline void planSplitPrograms(RMCommandBuffer *cb, size_t begin, raw::RenderEnco
     RAW_ENCODE_SPAN(SplitPlan);
     encoder.beginSplitPlan();
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
-    if (cb->_forceWholePrograms)
+    if (cb->_forceWholePrograms || rmWholePrograms())
         return;
 #endif
     cb->_plan.forEachRasterGroup(begin, [&](const raw::RasterState &state, uint32_t draws) {
