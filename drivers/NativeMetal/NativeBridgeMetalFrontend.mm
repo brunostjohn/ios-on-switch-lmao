@@ -1778,11 +1778,47 @@ static bool systemCompiler();
 @implementation NBLibrary {
     std::once_flag _externsRead;
     NSArray<NSString *> *_externs;
+    std::once_flag _entriesRead;
+    NSSet<NSString *> *_entries;
 }
 
 - (void)dealloc
 {
     nmb_library_release(_handle);
+}
+
+// Every entry the runtime finds a function by, extern or not
+- (NSSet<NSString *> *)entries
+{
+    std::call_once(_entriesRead, [&] {
+        NSMutableSet<NSString *> *names = [NSMutableSet set];
+        for (uint32_t i = 0, n = nmb_library_function_count(_handle); i < n; i++) {
+            const size_t length = nmb_library_function_name(_handle, i, nullptr, 0);
+            std::vector<char> name(length + 1);
+            if (nmb_library_function_name(_handle, i, name.data(), name.size()) != length)
+                continue;
+            if (NSString *entry = [[NSString alloc] initWithBytes:name.data()
+                                                           length:length
+                                                         encoding:NSUTF8StringEncoding])
+                [names addObject:entry];
+        }
+        _entries = [names copy];
+    });
+    return _entries;
+}
+
+// Metal's answer to a name the library lacks, before any compile: Core Image asks each of its kernel libraries in turn for a
+// kernel and takes the first that makes it (CI::PrecompiledKernels::new_specialzied_function: ci_stdlib, then ci_filters)
+static id functionNotFound(NSString *name, NSError **error)
+{
+    if (error)
+        *error = [NSError errorWithDomain:MTLLibraryErrorDomain
+                                     code:MTLLibraryErrorFunctionNotFound
+                                 userInfo:@{
+                                     NSLocalizedDescriptionKey :
+                                         [NSString stringWithFormat:@"Function %@ was not found in the library", name]
+                                 }];
+    return nil;
 }
 
 - (id<MTLFunction>)newFunctionWithName:(NSString *)name
@@ -1799,6 +1835,8 @@ static bool systemCompiler();
                         constantValues:(MTLFunctionConstantValues *)values
                                  error:(NSError **)error
 {
+    if (name && ![self.entries containsObject:name])
+        return functionNotFound(name, error);
     // No values are no constants set (Core Image asks its stitched kernels so), where Core Image's kernels are compiled.
     if (!values && systemCompiler())
         values = [MTLFunctionConstantValues new];
@@ -1913,6 +1951,8 @@ static bool systemCompiler();
                          specializedName:d.specializedName
                           constantValues:d.constantValues ?: [MTLFunctionConstantValues new]
                                    error:error];
+    if (![self.entries containsObject:d.name])
+        return functionNotFound(d.name, error);
     id<MTLFunction> function = [self newFunctionWithName:d.name];
     if (!function) {
         if (error)
@@ -1997,8 +2037,10 @@ static bool systemCompiler();
 
 - (id<MTLFunction>)newFunctionWithName:(NSString *)name
 {
+    if (!name || ![self.entries containsObject:name])
+        return nil;
     SWITCH_METAL_DIAGNOSTIC(const uint64_t functionBegan = nowUs());
-    NmbFunction *handle = name ? nmb_function_new(_handle, name.UTF8String) : nullptr;
+    NmbFunction *handle = nmb_function_new(_handle, name.UTF8String);
     SWITCH_METAL_DIAGNOSTIC(gTimeFunction.add(functionBegan));
     if (!handle)
         return nil;

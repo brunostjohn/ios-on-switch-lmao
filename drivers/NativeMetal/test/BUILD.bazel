@@ -8,6 +8,8 @@ load("@rules_rust//rust:defs.bzl", "rust_test")
 #   native_artifact_seed_test  NativeComputeArtifactStorage.h: the process's own analyses, then the seed's packed ones
 #                           (SWITCH_SEED_TREE=<an image's ngpu/addons> with --test_env also reads back some of a built seed's)
 #   metallib_entries_test   MetallibEntries.h: a metallib's function list, and which entries Metal answers as extern
+#   core_image_probe_test   the selected IPSW's Core Image libraries: the kernels Core Image asks ci_stdlib for first are
+#                           ci_filters', so a real device misses there too (NBLibrary answers that miss as Metal does)
 #   journal_source_test     NativeBridgeMetalFrontend.mm: a raw-made state's journal line is written on the persist queue,
 #                           not on its creating thread
 #
@@ -44,6 +46,21 @@ host_test(
         "//kits/SwitchSeedPack:SwitchSeedPackWriter.h",
     ],
     cxx_std = "c++17",
+)
+
+host_test(
+    name = "core_image_probe_test",
+    srcs = [
+        "core_image_probe_test.cpp",
+        "//drivers/NativeMetal:MetallibEntries.h",
+    ],
+    cxx_std = "c++17",
+    data = [
+        "@ipsw//:crawl_qc",
+        "@ipsw//:crawl_tree",
+    ],
+    env = {"SWITCH_QUARTZCORE": "$(rootpath @ipsw//:crawl_qc)"},
+    deps = ["//drivers/NativeMetal/abi:metal_abi"],
 )
 
 host_test(
