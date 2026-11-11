@@ -31,6 +31,7 @@
 #   gm20b_push_scan_test     TegraGM20BPushScan.h (the kernel's method-stream reader and the push profile's classes) over
 #                            streams laid out as NVK writes them: every counter, and no profile stamp after a push whose
 #                            method continues, one the kernel could not read or one with an opcode NVK never writes
+#   gm20b_cost_hist_test     TegraGM20BCostHist.h: the debug lines' buckets, and a p95 a single slow frame leaves alone
 #   gm20b_sched_test         TegraGM20BSchedPolicy.h and tgm_hang_blame over deploy-2045's hang registers: what a
 #                            compositor kick preempts, the interleaved runlist (full, empty, one level), which channel a
 #                            late wait kills (the context GR cannot switch, a self-hung channel, never slow work)
@@ -278,6 +279,15 @@ host_test(
     srcs = [
         "gm20b_bind_history_test.cpp",
         "//drivers/TegraGM20B:TegraGM20BBindHistory.h",
+    ],
+    cxx_std = "c++17",
+)
+
+host_test(
+    name = "gm20b_cost_hist_test",
+    srcs = [
+        "gm20b_cost_hist_test.cpp",
+        "//drivers/TegraGM20B:TegraGM20BCostHist.h",
     ],
     cxx_std = "c++17",
 )

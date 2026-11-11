@@ -14,6 +14,7 @@
 #include "TegraGM20BGpu.h"
 #include "TegraGM20BSched.h"
 #include "TegraGM20BSchedPolicy.h"
+#include "TegraGM20BCostHist.h"
 #include "../TegraDisplayFlip/TegraScanoutCopy.h"
 
 static struct {
@@ -37,6 +38,23 @@ static struct {
 	/* PTIMER against the kernel clock: an anchor of both (taken again after each GPU power-up), the rate (16.16) */
 	u64 cal_ns, cal_pt, pt_rate;
 } dl;
+
+#if TGM_STATS
+/* The stats window's learned frames: `dl.expected` is a peak tracker (tgm_expect), so the line sets them beside it. */
+static struct {
+	u32 hist[TGM_COST_BUCKETS];
+	u64 n, sum, max;
+} frame_cost;
+
+static void frame_cost_add(u64 ns)
+{
+	frame_cost.hist[tgm_cost_bucket(ns)]++;
+	frame_cost.n++;
+	frame_cost.sum += ns;
+	if (ns > frame_cost.max)
+		frame_cost.max = ns;
+}
+#endif
 
 static void hold_work(void *arg);
 static void check_work(void *arg);
@@ -268,8 +286,12 @@ void tgm_deadline_presented(uint64_t queued)
 				dl.missed_clear++;
 			}
 		}
-		if (!dl.frame_biased && dl.frame_ns)
+		if (!dl.frame_biased && dl.frame_ns) {
 			dl.expected = tgm_expect(dl.expected, dl.frame_ns);
+#if TGM_STATS
+			frame_cost_add(dl.frame_ns);
+#endif
+		}
 	}
 	dl.frame_open = dl.frame_biased = dl.frame_app = 0;
 	dl.frame_ns = 0;
@@ -329,6 +351,10 @@ void tgm_deadline_stats(char *buf, unsigned int len)
 	u32 expired = 0;
 	unsigned long flags = 0;
 	u64 expected = 0;
+	u64 learned = 0;
+	u64 mean = 0;
+	u64 p95 = 0;
+	u64 max = 0;
 
 	if (!READ_ONCE(dl.device)) {
 		scnprintf(buf, len, "deadline off");
@@ -343,11 +369,19 @@ void tgm_deadline_stats(char *buf, unsigned int len)
 	expired = dl.expired;
 	expected = dl.expected;
 	dl.frames = dl.missed_app = dl.missed_clear = dl.windows = dl.empty = dl.expired = 0;
+#if TGM_STATS
+	learned = frame_cost.n;
+	mean = learned ? frame_cost.sum / learned / 1000 : 0;
+	p95 = tgm_cost_percentile(frame_cost.hist, learned, 950);
+	max = frame_cost.max / 1000;
+	memset(&frame_cost, 0, sizeof(frame_cost));
+#endif
 	spin_unlock_irqrestore(&dl.lock, flags);
-	scnprintf(
-		buf, len,
-		"%u compositor frames, %u missed their vblank with an app on the GPU at a "
-		"compositor kick, %u without; compositor GPU time %llu us a frame; %u windows (%u "
-		"with no frame, %u expired)",
-		frames, missed_app, missed_clear, expected / 1000, windows, empty, expired);
+	scnprintf(buf, len,
+		  "%u compositor frames, %u missed their vblank with an app on the GPU at a "
+		  "compositor kick, %u without; compositor GPU time a frame: mean %llu us, "
+		  "p95 %llu us, max %llu us over %llu learned frames, peak tracker %llu us; "
+		  "%u windows (%u with no frame, %u expired)",
+		  frames, missed_app, missed_clear, mean, p95, max, learned, expected / 1000,
+		  windows, empty, expired);
 }

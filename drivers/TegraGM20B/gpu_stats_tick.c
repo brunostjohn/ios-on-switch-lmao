@@ -241,7 +241,7 @@ static void stats_exec_owners(char *line, unsigned int len, u64 rate)
  * got, those above the minimum or with a turn, by owner. */
 static void stats_deadline(char *buf, unsigned int len)
 {
-	char deadline[240];
+	char deadline[320];
 	char holds[240];
 	struct tgm_chan *chan = NULL;
 	unsigned int n = 0;
