@@ -19,6 +19,11 @@ DATA_BANK = 1
 SAFE_DELAY = 15
 ONE = 0x3F800000
 OUTPUT_REGISTERS = 4
+LOOP_COUNTER = 3
+LOOP_PREDICATE = 6
+FIXED_LATENCY = 6
+# NAK's sm50 exec_latency for a branch
+BRANCH_DELAY = 13
 POSITION = (0x70, 0x74)
 SEPARATOR = encode.nop().sched(delay=SAFE_DELAY, wait=ALL_BARRIERS)
 
@@ -79,15 +84,38 @@ def settled(body: list[Instr]) -> list[Instr]:
     return body
 
 
+def looped(body: list[Instr], iterations: int, before: list[Instr]) -> list[Instr]:
+    """Give `body` run `iterations` times: a counter in LOOP_COUNTER, LOOP_PREDICATE set at the top, BRA at the end.
+
+    The predicate is written at the top so its 13 cycles pass inside the body; `before` is what precedes the loop, which
+    the branch offset needs.
+    """
+    start = len(before) + 1
+    top = [
+        encode.mov32i(LOOP_COUNTER, iterations).sched(delay=SAFE_DELAY),
+        encode.iadd32i(LOOP_COUNTER, LOOP_COUNTER, -1).sched(delay=FIXED_LATENCY),
+        encode.isetp(LOOP_PREDICATE, LOOP_COUNTER, RZ, 'ne').sched(delay=1),
+    ]
+    at = start + len(top) - 1 + len(body)
+    branch = encode.bra(encode.address(start) - encode.address(at) - 8, LOOP_PREDICATE).sched(delay=BRANCH_DELAY)
+    return [*top, *body, branch]
+
+
 def _gprs(code: bytes) -> int:
     return max(OUTPUT_REGISTERS, operands.highest_register(code) + 1)
 
 
 def fragment(
-    body: list[Instr], init: dict[int, int], results: tuple[int, int], preds: dict[int, bool] | None = None
+    body: list[Instr],
+    init: dict[int, int],
+    results: tuple[int, int],
+    preds: dict[int, bool] | None = None,
+    loop: int | None = None,
 ) -> Program:
-    """Give a fragment program: load `init` and `preds`, run `body`, write `results` to render target 0."""
-    code = encode.bundle(encode.finish([*prologue(init, preds), *settled(body), SEPARATOR, *epilogue(results)]))
+    """Give a fragment program: load `init` and `preds`, run `body` (`loop` times), write `results` to target 0."""
+    head = prologue(init, preds)
+    middle = looped(settled(body), loop, head) if loop else settled(body)
+    code = encode.bundle(encode.finish([*head, *middle, SEPARATOR, *epilogue(results)]))
     return Program(code, data_of(init), _gprs(code), sph.pixel(operands.attributes(code)))
 
 

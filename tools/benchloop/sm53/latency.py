@@ -1,12 +1,13 @@
 """The latency, throughput, dual-issue and operand-reuse experiments, as protocol experiment dicts.
 
-ladder      dependent FADDs at delays 6..15 in one warp: time against k * delay gives the clock.
+ladder      dependent FADDs at delays 6..15 in one warp, a short body looped: time against k * delay gives the clock.
 stall       dependent chains of each fixed-latency op at delays 1..15: the smallest delay whose texel is right is
             the op's latency (fixed-latency results are not interlocked, so a shorter delay reads a stale register).
-chain       k dependent variable-latency ops through alternating barriers: time against k gives the latency (each
-            link issued two cycles after the last, the soonest a barrier it set can be waited on).
+chain       k dependent variable-latency ops through alternating barriers, a body of n looped a fixed number of times:
+            time against k gives the latency (each link issued two cycles after the last, the soonest a barrier it
+            set can be waited on).
 throughput  independent streams of each op over the whole target: time against k gives issue cycles per warp.
-dual        independent pairs (X, Y) in one warp, X at delay 0 and at delay 1.
+dual        independent pairs (X, Y) in one warp, X at delay 0 and at delay 1, a short body looped.
 reuse       FFMA streams whose operands share a register bank, with and without reuse flags, and spread over banks.
 
 Each experiment carries a host-only `meta` (what fit.py groups by) and `expect` (the interpreter's texel).
@@ -41,30 +42,46 @@ DRAWS = [1, 2, 4, 8]
 REPEATS = 5
 WARMUP = 2
 LADDER_DELAYS = range(6, 16)
-LADDER_K = 256
+# A lone warp's command buffer costs ~45 us of fixed time with ~2 us of noise, and straight-line code past a few KiB
+# runs at instruction-fetch speed (~16 cycles an instruction): timed chains are a short body looped many times
+LADDER_BODY = 32
+LADDER_LOOPS = 256
 STALL_DELAYS = range(1, 16)
 STALL_K = 24
 PRED_LINKS = 6
-CHAIN_KS = (64, 128, 256, 512)
-THROUGHPUT_KS = (64, 128, 256)
+CHAIN_BODIES = (16, 32, 64)
+CHAIN_LOOPS = 128
+THROUGHPUT_KS = (512, 1024, 2048)
 STREAMS = {'gpr': 16, 'variable': 8, 'pred': 6}
-DUAL_KS = (128, 256, 512)
-REUSE_KS = (64, 128, 256)
+DUAL_BODIES = (16, 32, 64)
+DUAL_LOOPS = 128
+REUSE_KS = (512, 1024)
 REUSE_ACCUMULATORS = 8
 # operand A, operand B, reuse flags: 'conflict' reads three bank-0 registers, 'reuse' keeps A and B cached
-REUSE_VARIANTS = {'spread': (K1, K2, 0), 'conflict': (K0, CHAIN0, 0), 'reuse': (K0, CHAIN0, 0b011)}
+REUSE_VARIANTS = {
+    'spread': (K1, K2, 0),
+    'conflict': (K0, CHAIN0, 0),
+    'reuse': (K0, CHAIN0, 0b0011),
+    'reuse-1': (K0, CHAIN0, 0b0001),
+    'reuse-2': (K0, CHAIN0, 0b0010),
+    'reuse-4': (K0, CHAIN0, 0b0100),
+    'reuse-8': (K0, CHAIN0, 0b1000),
+    'reuse-c': (K0, CHAIN0, 0b1100),
+    'reuse-f': (K0, CHAIN0, 0b1111),
+}
 
 
-def experiment(eid: str, prog: Program, rect: list[int], meta: dict, exact: bool = True) -> dict:
+def experiment(eid: str, prog: Program, rect: list[int], meta: dict, exact: bool = True, timed: bool = True) -> dict:
+    """Give one experiment; an untimed one (its texel is the answer) runs one draw once."""
     texel = program.expected_texel(prog.code, prog.data)
     out = {
         'id': eid,
         'kind': 'fragment',
         'target': dict(TARGET),
         'rect': list(rect),
-        'draws': list(DRAWS),
-        'repeats': REPEATS,
-        'warmup': WARMUP,
+        'draws': list(DRAWS) if timed else [1],
+        'repeats': REPEATS if timed else 1,
+        'warmup': WARMUP if timed else 0,
         'clear': [0, 0, 0, 0],
         'readback': 'summary',
         'program': prog.wire(),
@@ -78,9 +95,9 @@ def experiment(eid: str, prog: Program, rect: list[int], meta: dict, exact: bool
 def ladder() -> list[dict]:
     out = []
     for d in LADDER_DELAYS:
-        body = [e.fadd(CHAIN0, CHAIN0, K1).sched(delay=d) for _ in range(LADDER_K)]
-        prog = program.fragment(body, {CHAIN0: f32(0.0), K1: f32(1.0)}, (CHAIN0, CHAIN0))
-        meta = {'family': 'ladder', 'op': 'FADD', 'k': LADDER_K, 'delay': d}
+        body = [e.fadd(CHAIN0, CHAIN0, K1).sched(delay=d) for _ in range(LADDER_BODY)]
+        prog = program.fragment(body, {CHAIN0: f32(0.0), K1: f32(1.0)}, (CHAIN0, CHAIN0), loop=LADDER_LOOPS)
+        meta = {'family': 'ladder', 'op': 'FADD', 'k': LADDER_BODY * LADDER_LOOPS, 'delay': d}
         out.append(experiment(f'ladder.d{d:02d}', prog, ONE_WARP, meta))
     return out
 
@@ -109,22 +126,22 @@ def stall(recipes: Iterable[Recipe] = FIXED) -> list[dict]:
         build = _stall_preds if r.pred else _stall_gprs
         for d in STALL_DELAYS:
             meta = {'family': 'stall', 'op': r.key, 'nak': r.nak, 'delay': d, 'pred': r.pred}
-            out.append(experiment(f'stall.{r.slug}.d{d:02d}', build(r, d), ONE_WARP, meta))
+            out.append(experiment(f'stall.{r.slug}.d{d:02d}', build(r, d), ONE_WARP, meta, timed=False))
     return out
 
 
 def _chain_link(r: Recipe, j: int) -> e.Instr:
-    return r.link(CHAIN0, CHAIN0).sched(
-        wr_bar=j % 2, wait=1 << (1 - j % 2) if j else 0, delay=e.BARRIER_SET_CYCLES
-    )
+    """Give link j: it sets barrier j % 2 and waits on the other, which the link before set (or last iteration's)."""
+    return r.link(CHAIN0, CHAIN0).sched(wr_bar=j % 2, wait=1 << (1 - j % 2), delay=e.BARRIER_SET_CYCLES)
 
 
 def chain(recipes: Iterable[Recipe] = VARIABLE_OPS) -> list[dict]:
     out = []
     for r in recipes:
-        for k in CHAIN_KS:
-            body = [_chain_link(r, j) for j in range(k)]
-            prog = program.fragment(body, {CHAIN0: r.seed} | r.constants(), (CHAIN0, CHAIN0))
+        for n in CHAIN_BODIES:
+            k = n * CHAIN_LOOPS
+            body = [_chain_link(r, j) for j in range(n)]
+            prog = program.fragment(body, {CHAIN0: r.seed} | r.constants(), (CHAIN0, CHAIN0), loop=CHAIN_LOOPS)
             meta = {'family': 'chain', 'op': r.key, 'nak': r.nak, 'k': k}
             out.append(experiment(f'chain.{r.slug}.k{k:03d}', prog, ONE_WARP, meta, r.exact))
     return out
@@ -168,9 +185,10 @@ def dual(pairs: Iterable[tuple[str, str]] = PAIRS) -> list[dict]:
     for x, y in pairs:
         first, second = _pair_form(x, CHAIN0), _pair_form(y, CHAIN0 + 4).sched(delay=1)
         for delay in (0, 1):
-            for k in DUAL_KS:
-                body = [first.sched(delay=delay), second] * k
-                prog = program.fragment(body, init, (CHAIN0, CHAIN0 + 4))
+            for n in DUAL_BODIES:
+                k = n * DUAL_LOOPS
+                body = [first.sched(delay=delay), second] * n
+                prog = program.fragment(body, init, (CHAIN0, CHAIN0 + 4), loop=DUAL_LOOPS)
                 meta = {'family': 'dual', 'op': f'{x}+{y}', 'pair': [x, y], 'delay': delay, 'k': k}
                 eid = f'dual.{x.lower()}-{y.lower()}.d{delay}.k{k:03d}'
                 out.append(experiment(eid, prog, ONE_WARP, meta, exact=x != 'MUFU' and y != 'MUFU'))

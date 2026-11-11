@@ -29,7 +29,7 @@ FLOAT_CMP |= {'ltu': 9, 'equ': 10, 'leu': 11, 'gtu': 12, 'neu': 13, 'geu': 14, '
 INT_CMP = {'f': 0, 'lt': 1, 'eq': 2, 'le': 3, 'gt': 4, 'ne': 5, 'ge': 6, 't': 7}
 COMBINE = {'and': 0, 'or': 1, 'xor': 2}
 LOGIC = {'and': 0, 'or': 1, 'xor': 2, 'passb': 3}
-MUFU = {'cos': 0, 'sin': 1, 'ex2': 2, 'lg2': 3, 'rcp': 4, 'rsq': 5}
+MUFU = {'cos': 0, 'sin': 1, 'ex2': 2, 'lg2': 3, 'rcp': 4, 'rsq': 5, 'sqrt': 8}
 SWIZZLE = {'h1h0': 0, 'f32': 1, 'h0h0': 2, 'h1h1': 3}
 FLOAT_WIDTH = {'f16': 1, 'f32': 2}
 FREQ = {'pass': 0, 'mulw': 1, 'const': 2, 'state': 3}
@@ -392,6 +392,22 @@ def ipa(d: int, addr: int, mods: str = '', inv_w: int = RZ) -> Instr:
         raise ValueError(f'IPA: attribute address {addr:#x} is not word aligned')
     w = _Word('IPA').reg(0, d).reg(8, RZ).reg(20, inv_w).put(28, 10, addr).reg(39, RZ).put(47, 3, PT)
     return w.flag(51, 'sat' in m).put(52, 2, _pick(m, LOCATION)).put(54, 2, _pick(m, FREQ)).instr()
+
+
+def bra(offset: int, pred: int = PT, neg: bool = False) -> Instr:
+    """Give a branch `offset` bytes from the next instruction, guarded by `pred`."""
+    word = OPCODES['BRA'] | (pred | int(neg) << 3) << 16 | (offset & 0xFFFFFF) << 20 | 0xF
+    return Instr(word)
+
+
+def address(index: int) -> int:
+    """Give the byte address of the index-th instruction once bundle() puts a scheduling word ahead of each three."""
+    return index // 3 * 32 + 8 + index % 3 * 8
+
+
+def ldc(d: int, offset_reg: int, bank: int, offset: int = 0, size: int = 4) -> Instr:
+    """LDC as sm50.rs encodes it; `size` is the memory type (4: 32-bit, 5: 64-bit; 6, 128-bit, traps on GM20B)."""
+    return Instr(OPCODES['LDC'] | d | offset_reg << 8 | PT << 16 | offset << 20 | bank << 36 | size << 48)
 
 
 def nop() -> Instr:
