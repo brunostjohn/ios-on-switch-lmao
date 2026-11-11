@@ -15,6 +15,14 @@ def metal(v: float, bits: int) -> int:
 
 
 class RopTest(unittest.TestCase):
+    def test_every_unorm_format_encodes_and_decodes(self) -> None:
+        colour = (0.0, 0.25, 0.5, 1.0)
+        for fmt, bits in texels.UNORM_BITS.items():
+            stored = texels.encode(colour, fmt)
+            self.assertEqual(len(stored), protocol.FORMATS[fmt][1], fmt)
+            want = [texels.unorm(c, n) for c, n in zip(colour, bits, strict=False)]
+            self.assertEqual(list(texels.codes(stored, fmt)), want, fmt)
+
     def test_models_disagree_on_the_values_sent(self) -> None:
         vs = rop.values(8)
         for a in texels.ROUNDING:

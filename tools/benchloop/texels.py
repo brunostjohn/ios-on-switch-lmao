@@ -111,6 +111,8 @@ def encode(colour: Colour, fmt: str, rounding: str = 'nearest') -> bytes:
             return bytes(codes)
         if bits[0] == 16:
             return struct.pack(f'<{len(codes)}H', *codes)
+        if fmt == 'bgr10a2unorm':
+            return struct.pack('<I', codes[2] | codes[1] << 10 | codes[0] << 20 | codes[3] << 30)
         return struct.pack('<I', codes[0] | codes[1] << 10 | codes[2] << 20 | codes[3] << 30)
     lanes, layout = FLOATS[fmt]
     return struct.pack(layout, *colour[:lanes])
