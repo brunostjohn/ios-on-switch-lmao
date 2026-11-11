@@ -1081,6 +1081,11 @@ public:
         return pack_;
     }
 
+    const Kernel &kernel() const
+    {
+        return k_;
+    }
+
     // A pack pipeline by its state key's FNV-1a (RawMetal.mm rawPipelineKey); null: not in the pack.
     // caTransform: its vertex function is Core Animation's fixed_vert_l?h_spc (Pipeline::caTransform)
     Pipeline *pipeline(uint64_t keyHash, PackForm form = PackForm::Default, bool caTransform = false);

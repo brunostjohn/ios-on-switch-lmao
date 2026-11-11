@@ -121,6 +121,7 @@ id rmComputeState(id device, id<MTLDevice> fallback, MTLComputePipelineDescripto
     s->_multipleOfWidth = descriptor.threadGroupSizeIsMultipleOfThreadExecutionWidth;
     s->_direct = [descriptor copy];
     s->_direct.computeFunction = twinOf(function);
+    s->_function = f;
     if (!archivesAnswer(s, f, options, error))
         return nil;
     id nativeReflection = nil;

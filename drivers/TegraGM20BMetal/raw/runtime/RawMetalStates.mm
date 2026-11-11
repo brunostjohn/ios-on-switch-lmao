@@ -235,15 +235,18 @@ static void markProbes(raw::Pipeline *pl, NSString *label)
 // run is asked again off this thread; m2v draws the state until then.
 static void makeRecord(RMPipeline *p, MTLRenderPipelineDescriptor *d)
 {
+    RAW_DIAGNOSTIC(p->_obtained.how = p->_raw ? "pack" : "none");
     if (p->_raw || !p->_completable || !gRM->completion)
         return;
     raw::Completion::Ask a;
     a.descriptor = twinDescriptor(d);
+    a.facade = d;
     a.key = p->_key;
     a.caTransform = p->_caTransform;
     a.own = !p->_packable;
     bool retry = false;
     p->_raw = gRM->completion->makeNow(a, &retry);
+    RAW_DIAGNOSTIC(p->_obtained = raw::Completion::lastObtained());
 #if SWITCH_RAW_DIAGNOSTICS
     if (p->_raw && native_bridge_metal_journal_render)
         native_bridge_metal_journal_render(a.descriptor, 0);

@@ -207,6 +207,7 @@ metal_plugin(
         GM20B_METAL + ":raw/runtime/raw_semantic_resources.cpp",
         GM20B_METAL + ":raw/runtime/raw_semantic_setters.cpp",
         GM20B_METAL + ":raw/runtime/raw_compile_request.cpp",
+        GM20B_METAL + ":raw/runtime/raw_remote.cpp",
         GM20B_METAL + ":compiler_cc_srcs",
     ],
     frameworks = [

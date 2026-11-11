@@ -236,7 +236,7 @@ using RMKernelSet = raw::ComputeKernelSet<raw::ComputeState>;
                         }
                         uint64_t retryAtUs = 0;
                         run.result.state = completion->kernel(state->_direct, ask->dispatch(), key, &run.result.retry,
-                                                              &retryAtUs);
+                                                              &retryAtUs, state->_function);
                         if (run.result.retry && retryAtUs) {
                             run.result.deferredRetry = true;
                             const uint64_t now = nowUs(), delay = retryAtUs > now ? retryAtUs - now : 0;

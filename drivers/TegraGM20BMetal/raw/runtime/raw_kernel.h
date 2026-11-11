@@ -69,6 +69,22 @@ public:
     ~Kernel();
     bool open(std::string &err);
 
+    // The connection and the form its calls take (raw_kernel_transport.h)
+    uint32_t connection() const
+    {
+        return conn_;
+    }
+
+    bool tunnelled() const
+    {
+        return tunnel_;
+    }
+
+    uint32_t tunnelSelector() const
+    {
+        return selector_;
+    }
+
     // The connection is NVK's: m2v's views of this path's memory may name its BOs and VAs.
     bool shared() const
     {

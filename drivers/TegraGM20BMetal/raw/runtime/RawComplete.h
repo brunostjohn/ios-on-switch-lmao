@@ -1,10 +1,11 @@
 // SPDX-License-Identifier: MIT
 // The raw device's completion of the states and kernels its pack lacks (RawMetal.mm), of any library's functions: each asked
-// once per process and per build. A state is looked up in the record cache under the process's shader cache directory when it is
-// created (made()), else made directly (RawDirect.h: m2v's translation and NVK's stage compile, no pipeline or capture), its
-// record kept, and handed to the raw device; for a state it refuses, m2v draws it. A kernel the same, at the first dispatch of
-// its key (raw_compute_key.h: its threadgroup shape and bindings are the dispatch's).
-// Its fragment program's split is made after state creation, offered to the state and kept with its record.
+// once per process and per build. A state is looked up in the installed seed and this process's table when it is created,
+// then in the system shader compiler's store, and otherwise asked of that compiler (raw_remote.h), which compiles each state
+// once for every process and boot; its record is handed to the raw device, and for a state it refuses m2v draws it. A kernel
+// the same, at the first dispatch of its key (raw_compute_key.h: its threadgroup shape and bindings are the dispatch's).
+// Only a process the kernel serves no compiler (switch-no-bt on iOS 17), or a state the compiler does not take, is made
+// here (RawDirect.h: m2v's translation and NVK's stage compile), each such compile counted and its reason logged once.
 #pragma once
 #import <Metal/Metal.h>
 #include <dispatch/dispatch.h>
@@ -18,6 +19,8 @@
 #include "raw_compute_lookup.h"
 #include "raw_cubic.h"
 #include "raw_metallib.h"
+#include "raw_obtained.h"
+#include "raw_remote.h"
 
 struct NmbDirectDispatch;
 
@@ -46,6 +49,9 @@ public:
         CubicBinds cubic;
         uint8_t fragmentTests = 0;
         bool resolveDescriptor = false;
+        // the descriptor over this facade's own functions, which a compile request names (nil: none can)
+        MTLRenderPipelineDescriptor *facade = nil;
+        uint32_t qos = 0;  // ask(): the asking thread's class, which the compiler runs it at
     };
 
     // The state's pipeline handed to `ready` once made, or null for a permanent refusal. Temporary allocation
@@ -60,11 +66,26 @@ public:
     // this process's, the disk's, or made now on the caller's thread, the dispatch that first needs it. Null: refused (named
     // once in the raw log), or temporarily unavailable. retryAtUs is the earliest next attempt after a transient failure.
     const ComputeState *kernel(MTLComputePipelineDescriptor *descriptor, const NmbDirectDispatch &dispatch,
-                               const std::string &key, bool *retry = nullptr, uint64_t *retryAtUs = nullptr);
+                               const std::string &key, bool *retry = nullptr, uint64_t *retryAtUs = nullptr,
+                               id facadeFunction = nil);
 
     void backgroundKernel(std::function<void()> work);
 
     Compiler::Stats stats() const;
+
+    uint64_t compiledHere() const
+    {
+        return inProcess_.count();
+    }
+
+    std::string compilerStore() const
+    {
+        return remote_->storeIdentity();
+    }
+
+    // What the calling thread's last makeNow got its record by
+    static Obtained lastObtained();
+    static void noteObtained(const Obtained &o);
 
 private:
     struct Pending;
@@ -87,12 +108,31 @@ private:
     std::atomic<bool> stopping_{false};
     std::mutex lock_;
     std::map<uint64_t, Ask> asked_;  // by CacheKey::name, what make() makes
+    std::set<uint64_t> notTaken_;    // by CacheKey::name, the states the compiler did not take: made here
     std::mutex kernelLock_;          // map membership only; each kernel owns its single-flight lock
     std::map<uint64_t, std::shared_ptr<Kernel>> kernels_;
+
+    std::unique_ptr<Remote> remote_;
+    InProcess inProcess_;
 
     bool keyOf(Ask &a, CacheKey &k);
     Direct &direct();
     Compiler::Outcome make(const CacheKey &k, RuntimeRecord &record, std::string &why);
+
+    // RawCompleteRemote.mm: the system shader compiler's side
+    void compiledHere(InProcess::Why why);
+    bool renderRequest(const Ask &a, const CacheKey &k, bool bytes, CompileRequest &r, Digest &name);
+    RecordCache::Found fromStore(const Digest &name, const CacheKey &k, RuntimeRecord &record, std::string &why);
+    // The state made by the compiler while this thread sleeps; false: not taken (made here instead)
+    bool remoteNow(const Ask &a, const CacheKey &k, Compiler::State &state, RuntimeRecord &record);
+    // The state asked of the compiler with `done` called once it answers; false: not asked
+    bool remoteLater(const Ask &a, const CacheKey &k, std::function<void(const RuntimeRecord *)> done);
+    // A kernel's record from the store or made by the compiler while this thread sleeps; Failed with `taken` false: not
+    // taken (made here instead)
+    Compiler::Outcome remoteKernel(id facadeFunction, MTLComputePipelineDescriptor *descriptor,
+                                   const NmbDirectDispatch &dispatch, const CacheKey &k, ComputeRecord &record,
+                                   std::string &why, bool &taken);
+    void logRemote(const Ask &a, const CacheKey &k, RecordCache::Found found, const char *how, uint64_t waitedUs);
 };
 
 }  // namespace raw

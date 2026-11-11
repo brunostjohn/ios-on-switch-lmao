@@ -78,6 +78,7 @@ static raw::Variant<raw::Pipeline> *renderVariant(RMPipeline *p, const raw::Cubi
     }
     raw::Completion::Ask request;
     request.descriptor = p->_madeFrom;
+    request.facade = p->_madeFrom;
     request.key = p->_key + name;
     request.caTransform = p->_caTransform;
     request.own = !p->_packable;

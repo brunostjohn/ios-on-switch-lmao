@@ -12,6 +12,7 @@
     bool _multipleOfWidth;
     raw::ComputeKernelCache<raw::ComputeState> _kernels;
     MTLComputePipelineDescriptor *_direct;
+    RMFunction *_function;  // the facade's, which a compile request names (nil: another device's)
     id<MTLComputePipelineState> _metadata;
     id<MTLComputePipelineState> _compatibility;
     id<MTLDevice> _fallback;
