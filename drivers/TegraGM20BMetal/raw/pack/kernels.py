@@ -11,7 +11,7 @@ import packfile
 
 CONSTEXPR = 0x80  # PackKernelEntry.slot of a constexpr sampler: its index in the pack's constexpr samplers
 BUFFER, TEXTURE, SAMPLER = 0, 1, 2  # runtime/raw_pack.h PackKernelEntryKind
-HEAD = struct.Struct('<QIHBb')
+HEAD = struct.Struct('<QIIBb')
 ENTRY = struct.Struct('<HBBI')
 ENTRIES = 16
 KERNEL_BYTES = HEAD.size + 64 * 4 + 8 + 32 * 4 + ENTRIES * ENTRY.size

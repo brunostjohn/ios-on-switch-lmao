@@ -28,7 +28,7 @@ std::string writePack(uint32_t version, uint32_t variants, const char *name)
     pp.variantCount[1] = uint8_t(variants);
     memcpy(file.data() + 0x100, &pp, sizeof pp);
     for (uint32_t i = 0; i < variants; i++) {
-        const raw::PackVariant v = {raw::AssumeUniformAligned << i, uint16_t(10 + i), 0};
+        const raw::PackVariant v = {raw::AssumeUniformAligned << i, 70000 + i};
         memcpy(file.data() + 0x300 + i * sizeof v, &v, sizeof v);
     }
     const std::string path = std::string(getenv("TEST_TMPDIR") ?: "/tmp") + "/" + name;
@@ -54,7 +54,7 @@ std::string writeVariantPack(const char *name)
     raw::PackPipeline pp[3] = {};
     for (uint32_t i = 0; i < 3; i++) {
         pp[i].keyHash = 7;
-        pp[i].vs = uint16_t(i);
+        pp[i].vs = 70000 + i;
         pp[i].flags = i ? raw::PipelineVariantRecord : 0;
     }
     pp[1].variantName = 1;
@@ -73,12 +73,12 @@ TEST(RawPack, AStatesVariantRecordsAreFoundByNameNeverAsTheState)
     std::string err;
     ASSERT_TRUE(pack.load(writeVariantPack("variants.bin").c_str(), 0, err)) << err;
     ASSERT_NE(pack.find(7), nullptr);
-    EXPECT_EQ(pack.find(7)->vs, 0);
+    EXPECT_EQ(pack.find(7)->vs, 70000u);
     EXPECT_EQ(pack.find(7, raw::PackForm::Barrier), nullptr);
     EXPECT_EQ(pack.variantRecords(7).size(), 2u);
     ASSERT_NE(pack.variantRecord(7, " | tests=2"), nullptr);
-    EXPECT_EQ(pack.variantRecord(7, " | tests=2")->vs, 1);
-    EXPECT_EQ(pack.variantRecord(7, " | cubic s0:0000n t0:80")->vs, 2);
+    EXPECT_EQ(pack.variantRecord(7, " | tests=2")->vs, 70001u);
+    EXPECT_EQ(pack.variantRecord(7, " | cubic s0:0000n t0:80")->vs, 70002u);
     EXPECT_EQ(pack.variantRecord(7, " | tests=3"), nullptr);
     EXPECT_EQ(pack.variantRecord(8, " | tests=2"), nullptr);
     const std::string key = "c0=80:15:0:1:0:0:1:0:0 | v a | f b | l RenderBox | cubic s0:0000n t0:80 | tests=4";
@@ -90,15 +90,15 @@ TEST(RawPack, RefusesAPackOfAnotherVersion)
 {
     raw::Pack pack;
     std::string err;
-    EXPECT_FALSE(pack.load(writePack(14, 0, "v14.bin").c_str(), 0, err));
-    EXPECT_EQ(err, "not a version-15 pack");
+    EXPECT_FALSE(pack.load(writePack(15, 0, "v15.bin").c_str(), 0, err));
+    EXPECT_EQ(err, "not a version-16 pack");
 }
 
 TEST(RawPack, ReadsAStagesVariantsInOrder)
 {
     raw::Pack pack;
     std::string err;
-    ASSERT_TRUE(pack.load(writePack(raw::kPackVersion, 2, "v15.bin").c_str(), 0, err)) << err;
+    ASSERT_TRUE(pack.load(writePack(raw::kPackVersion, 2, "current.bin").c_str(), 0, err)) << err;
     EXPECT_EQ(pack.header()->chipFacts, raw::AssumeTexsF16);
     const raw::PackPipeline *pp = pack.find(7);
     ASSERT_NE(pp, nullptr);
@@ -107,7 +107,7 @@ TEST(RawPack, ReadsAStagesVariantsInOrder)
     EXPECT_EQ(count, 0u);
     const raw::PackVariant *v = pack.variants(*pp, 1, count);
     ASSERT_EQ(count, 2u);
-    EXPECT_EQ(v[0].program, 10);
+    EXPECT_EQ(v[0].program, 70000u);
     EXPECT_EQ(v[1].assume, raw::AssumeUniformAligned << 1);
 }
 
@@ -125,8 +125,7 @@ TEST(RawPack, RefusesVariantsPastTheirSection)
 
 TEST(RawVariants, TheFirstVariantWhoseAssumptionsHoldIsDrawn)
 {
-    const raw::PackVariant v[2] = {{raw::AssumeUniformAligned | raw::AssumeTexsF16, 1, 0},
-                                   {raw::AssumeUniformAligned, 2, 0}};
+    const raw::PackVariant v[2] = {{raw::AssumeUniformAligned | raw::AssumeTexsF16, 1}, {raw::AssumeUniformAligned, 2}};
     EXPECT_EQ(raw::chooseVariant(v, 2, raw::AssumeUniformAligned | raw::AssumeTexsF16), 0u);
     EXPECT_EQ(raw::chooseVariant(v, 2, raw::AssumeUniformAligned | raw::AssumeUniformAligned << 1), 1u);
     EXPECT_EQ(raw::chooseVariant(v, 2, raw::AssumeUniformAligned << 1), 2u);
@@ -182,6 +181,35 @@ TEST(RawPack, AnArchiveDeclaresItsOwnKeysAlone)
     ASSERT_NE(held, nullptr);
     EXPECT_TRUE(pack.declares(*held, 11));
     EXPECT_FALSE(pack.declares(*held, 3));
+}
+
+// wide_index_pack.py's pack, written by the pack writer's codec: every program index past 65,535 reads back whole
+TEST(RawPack, ProgramIndicesPast16BitsReadBackAsThePackWriterWroteThem)
+{
+    raw::Pack pack;
+    std::string err;
+    ASSERT_TRUE(pack.load("drivers/TegraGM20BMetal/test/wide_index.bin", 0, err)) << err;
+    const std::string key = "samples=1 topo=0 ds=0/0 c0=80:15:0:1:0:0:1:0:0  | v wide_vertex  | f wide_fragment";
+    const raw::PackPipeline *pp = pack.find(raw::Pack::fnv(key.data(), key.size()));
+    ASSERT_NE(pp, nullptr);
+    EXPECT_EQ(pp->vs, 70000u);
+    EXPECT_EQ(pp->fs, 70001u);
+    uint32_t count = 0;
+    const raw::PackVariant *v = pack.variants(*pp, 1, count);
+    ASSERT_EQ(count, 1u);
+    EXPECT_EQ(v[0].program, 70002u);
+    const std::string kernel = "kernel | wide_kernel";
+    const raw::PackKernel *k = pack.findKernel(raw::Pack::fnv(kernel.data(), kernel.size()));
+    ASSERT_NE(k, nullptr);
+    EXPECT_EQ(k->program, 70003u);
+    EXPECT_EQ(k->regionWord, -1);
+    const raw::PackSplit *split = pack.split(70001);
+    ASSERT_NE(split, nullptr);
+    EXPECT_EQ(split->fs, 70004u);
+    EXPECT_EQ(split->prologue, 70005u);
+    EXPECT_EQ(split->frontierBytes, 16u);
+    EXPECT_EQ(split->frontierCbuf, 2u);
+    EXPECT_EQ(pack.split(70001 & 0xFFFF), nullptr);
 }
 
 TEST(RawPack, APackWithoutArchiveListsListsNone)

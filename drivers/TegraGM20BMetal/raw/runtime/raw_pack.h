@@ -33,7 +33,7 @@ enum PackSectionId {
     PackSectionCount
 };
 
-constexpr uint32_t kPackVersion = 15;
+constexpr uint32_t kPackVersion = 16;
 
 // What a record or a program variant (PackVariant) assumes, as bits of a mask: a draw takes a variant only where all of them
 // hold. Bits 0-15 are facts of the draw's bindings, bit 16 of its pipeline, bits 17-25 of the chip (kChipAssumptions): 17 and
@@ -112,8 +112,7 @@ struct PackProgram {
 // interlock and sample shading.
 struct PackVariant {
     uint32_t assume;
-    uint16_t program;
-    uint16_t reserved;
+    uint32_t program;
 };
 
 // A binary archive the IPSW's frameworks ship that declares states for the identity's GPU (pack/archives.py), so a creation
@@ -245,7 +244,7 @@ struct PackShaderTests {
 struct PackPipeline {
     uint64_t keyHash;    // FNV-1a 64 of the state key (the frontend journal's R-line fields but the label)
     uint32_t keyString;  // offset in the strings section: the key's fields before " | v" (attachments, vertex layout)
-    uint16_t vs, fs;     // program indices
+    uint32_t vs, fs;     // program indices
     uint32_t blob, blobDwords;  // (method, value) pairs in the blob section, dwords = 2 x pairs
     uint8_t entries, pushes, vertexSlot, pad;
     uint16_t vertexStride, setBytes;
@@ -306,7 +305,7 @@ inline int kernelResidualWord(const PackKernelEntry &e)
 struct PackKernel {
     uint64_t keyHash;
     uint32_t keyString;
-    uint16_t program;  // index in the programs section
+    uint32_t program;  // index in the programs section
     uint8_t entries;
     int8_t regionWord;  // root push word of m2v's DispatchRegion field (two uvec4: base, nominal size, grid), -1: none
     uint32_t qmd[64];   // NVK's QMD (QMDV01_07), its program offset, grid and constant buffer addresses zero
@@ -336,7 +335,8 @@ static_assert(sizeof(SplitCost) == 32);
 // words and frontierVA at 128, CB1..uboCount its UBOs, then shader constants. uboCbuf always names the fragment bindings.
 struct PackSplit {
     uint32_t thresholdPixels;
-    uint16_t whole, fs, prologue, frontierBytes;
+    uint32_t whole, fs, prologue;
+    uint16_t frontierBytes;
     uint8_t frontierCbuf, uboCount, shaderDataCbuf, prologueCbufs;
     uint8_t uboCbuf[8];
     uint16_t batchVersion, batchThreads;
@@ -378,14 +378,14 @@ struct InitAddresses {
 
 uint32_t relocated(const PackInitMethod &m, const InitAddresses &a);
 static_assert(sizeof(PackShaderTests) == 16, "shader test layout");
-static_assert(sizeof(PackPipeline) == 36 + kPackEntries * 8 + 4 + 32 * 4 + 4 + 36 + 16 + 56, "pack layout");
-static_assert(offsetof(PackPipeline, storageBlendMask) == 486 && offsetof(PackPipeline, fetchRung) == 524,
+static_assert(sizeof(PackPipeline) == 40 + kPackEntries * 8 + 4 + 32 * 4 + 4 + 36 + 16 + 56, "pack layout");
+static_assert(offsetof(PackPipeline, storageBlendMask) == 490 && offsetof(PackPipeline, fetchRung) == 528,
               "pack layout: packfile.py PIPELINE_V15");
 static_assert(sizeof(PackProgram) == 36, "pack layout");
 static_assert(sizeof(PackVariant) == 8, "pack layout");
 static_assert(sizeof(PackArchive) == 16, "pack layout");
-static_assert(sizeof(PackKernel) == 16 + 256 + 8 + 128 + 128, "pack layout");
-static_assert(sizeof(PackSplit) == 28 + 256 + 32, "pack layout");
+static_assert(sizeof(PackKernel) == 18 + 256 + 8 + 128 + 128, "pack layout");
+static_assert(sizeof(PackSplit) == 34 + 256 + 32, "pack layout");
 
 class Pack {
 public:
@@ -413,7 +413,7 @@ public:
     std::vector<const PackPipeline *> variantRecords(uint64_t keyHash) const;
     const PackPipeline *variantRecord(uint64_t keyHash, const std::string &name) const;
     const PackKernel *findKernel(uint64_t keyHash) const;  // nullptr: not in the pack
-    const PackSplit *split(uint16_t wholeProgram) const;   // nullptr: not split
+    const PackSplit *split(uint32_t wholeProgram) const;   // nullptr: not split
     // `pp`'s variants of stage `stage` (0 vertex, 1 fragment), `count` of them; nullptr: none
     const PackVariant *variants(const PackPipeline &pp, uint32_t stage, uint32_t &count) const;
     const PackArchive *archive(uint64_t pathHash) const;  // nullptr: the pack lists no such archive
