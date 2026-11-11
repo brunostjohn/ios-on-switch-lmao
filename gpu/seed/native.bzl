@@ -18,21 +18,24 @@ def three(i):
 def bucket_resources(_os, _inputs):
     return {"cpu": 1, "memory": 1024}
 
-def native_records(ctx, tools, crawl, store, lines):
-    """Make, stamp and check the native records; returns the stamped tree and the coverage check."""
-    inputs = depset(
-        tools.raw + [store, tools.twin] + ctx.files.device_libraries + ctx.files.embedded,
-        transitive = [crawl.files],
-    )
+def native_records(ctx, tools, crawl, views, lines):
+    """Make, stamp and check the native records; returns the stamped tree and the coverage check.
+
+    Bucket i reads views[i] of the libraries (its root, files and store; metal_seed's plan)."""
     buckets = []
     for i, corpus in enumerate(lines):
+        view = views[i]
+        inputs = depset(
+            tools.raw + [view.store, tools.twin] + ctx.files.device_libraries + ctx.files.embedded,
+            transitive = [view.files],
+        )
         out = ctx.actions.declare_directory(named(ctx, "_native/bucket-" + three(i)))
         args = ctx.actions.args()
         args.add("bucket")
         args.add("--raw", tools.raw_dir)
         args.add("--nvk", tools.twin)
-        args.add("--root", crawl.root + "/root")
-        args.add("--store", store)
+        args.add("--root", view.root + "/root")
+        args.add("--store", view.store)
         args.add("--qc", crawl.qc)
         args.add("--lines", corpus)
         args.add_all(ctx.files.embedded, before_each = "--embedded")

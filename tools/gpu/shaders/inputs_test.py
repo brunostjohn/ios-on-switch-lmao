@@ -68,17 +68,6 @@ class ShaderInputsTest(unittest.TestCase):
         self.assertEqual((self.out / entry['path']).read_bytes(), self.library)
         self.assertEqual(entry['functions'], 1)
 
-    def test_data_alone_holds_the_crawls_and_the_embedded_libraries_and_no_others(self):
-        header = self.root / 'embedded.h'
-        header.write_text('const unsigned char shader[] = {' + ','.join(f'0x{x:02x}' for x in self.library) + '};')
-        (self.crawl / 'data/crawled.metallib').write_bytes(self.system)
-        full = inputs.prepare(self.crawl, [self.archive()], [header], '27', self.out)
-        inputs.prepare_data(self.crawl, [header], self.root / 'data-only')
-        data = sorted(p.relative_to(self.root / 'data-only').as_posix() for p in (self.root / 'data-only').rglob('*'))
-        self.assertEqual(data, sorted(['data', 'data/crawled.metallib', full['embedded'][0]['path']]))
-        for path in data[1:]:
-            self.assertEqual((self.root / 'data-only' / path).read_bytes(), (self.out / path).read_bytes())
-
     def test_no_library_and_ambiguous_bundle_are_errors(self):
         with self.assertRaises(ValueError):
             inputs.application(self.archive(libraries=False), self.out, '27')

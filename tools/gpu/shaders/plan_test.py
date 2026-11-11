@@ -54,6 +54,17 @@ class BucketTest(unittest.TestCase):
         self.assertEqual(sum(len(b) - 1 for b in _buckets(lines)), 2)
         self.assertNotEqual(plan._program(lines[0]), plan._program(lines[1]))
 
+    def test_an_apps_lines_go_to_the_apps_buckets_and_move_no_other_line(self):
+        app = '/Applications/Fixture.app/default.metallib'
+        lines = [
+            _render('va', 'fa').replace(f'f fa lib={LIB}', f'f fa lib={app}'),
+            f'C ok=1 form=f opt=0 | k probe lib={app} | ',
+        ]
+        without = _buckets(CORPUS)
+        with_apps = plan.bucket(plan.lines_for('corpus', [*CORPUS, *lines], {}), 16, 2)[0]
+        self.assertEqual(with_apps[:16], without)
+        self.assertEqual(sorted(line for b in with_apps[16:] for line in b if line != plan.DERIVED), sorted(lines))
+
     def test_compute_linked_functions_are_part_of_the_key(self):
         lines = [
             f'C ok=1 form=d opt=0 | k kernel lib={LIB} | {tag} helper{i} lib={LIB} | '

@@ -73,15 +73,6 @@ def prepare(crawl: Path, applications: list[Path], headers: list[Path], major: s
     }
 
 
-def prepare_data(crawl: Path, headers: list[Path], out: Path) -> None:
-    """Lay out data/ alone, the libraries made from bytes: what the raw pack's probes read, which no app adds to."""
-    if not (crawl / 'data').is_dir():
-        raise ValueError('shader crawl must contain data/')
-    shutil.copytree(crawl / 'data', out / 'data', copy_function=shutil.copyfile, dirs_exist_ok=True)
-    for header in headers:
-        embedded(header, out)
-
-
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--crawl', type=Path, required=True)
@@ -91,16 +82,11 @@ def main() -> None:
     parser.add_argument('--ipsw', required=True)
     parser.add_argument('--out', type=Path, required=True)
     parser.add_argument('--report', type=Path)
-    parser.add_argument('--data-only', action='store_true')
     args = parser.parse_args()
-    if args.data_only:
-        prepare_data(args.crawl, args.embedded, args.out)
-        return
-    if not args.report:
-        parser.error('--report is required')
     report = prepare(args.crawl, args.application, args.embedded, args.ios_major, args.out)
     report['ipsw'] = args.ipsw
-    args.report.write_text(json.dumps(report, indent=2, sort_keys=True) + '\n')
+    if args.report:
+        args.report.write_text(json.dumps(report, indent=2, sort_keys=True) + '\n')
 
 
 if __name__ == '__main__':
