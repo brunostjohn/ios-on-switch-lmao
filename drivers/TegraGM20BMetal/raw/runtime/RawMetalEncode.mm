@@ -209,11 +209,14 @@ static bool encodeRawAttempt(RMCommandBuffer *cb, size_t from, size_t to, const 
             p.width = width;
             p.height = height;
             useTexture(rc, r.into, true);
+            raw::Pipeline *resolve = d.resolvePipeline(r.into->_raw.format);
+            if (!resolve)
+                return fail(PredEncPassRender, "a resolve format with no resolve state", r.attachment);
             raw::RenderEncoder *e = rc->render(p);
             if (!e)
                 return fail(PredEncPassRender, "a resolve texture the raw path cannot render", r.attachment);
             const uint32_t samples = from[r.attachment]->samples;
-            e->setPipeline(d.resolvePipeline(r.into->_raw.format));
+            e->setPipeline(resolve);
             e->setTexture(0, from[r.attachment]);
             e->setBytes(2, 0, &samples, sizeof samples);
             if (!e->draw(4 /* MTLPrimitiveTypeTriangleStrip */, 0, 4, 1, 0, why))
