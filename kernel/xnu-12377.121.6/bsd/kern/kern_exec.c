@@ -6805,8 +6805,16 @@ bad:
  * 1-4 DC A frames apart (r7l: 20/s idle from the animated Astronomy poster, "frames 2:6 3:91 4+:3"). NativeLegacyDisplay finds
  * the registration at the next frame end (watchVsync) and panics if V_BLANK stops while it is armed.
  */
+/*
+ * 24B119: off. Its QuartzCore has no CA_FORCE_TIMER (no such string in the dyld cache) and no VBL frame clock to pick:
+ * CA::WindowServer::AccelServer's constructor clears IOMFBServer+0x61f bit 1 (and #0xf8, orr #1 at 0x18451d518) and
+ * nothing sets it again, so add_vsync_source always makes the CADisplayTimer (0x184368108). That timer's phase comes
+ * from the frame information's Presentation_time: frame_info_callback hands each one to IOMFBDisplay::add_timing, which
+ * files it in the display timings shared memory (display+0x6788) that timer_callback's timing_reference reads. The
+ * contract for J181 is that frame information, which NativeLegacyDisplay sends at every latch (SwitchFrameInfo.h).
+ */
 #ifndef NATIVE_SWITCH_CA_VBL
-#define NATIVE_SWITCH_CA_VBL 1
+#define NATIVE_SWITCH_CA_VBL 0
 #endif
 
 /*

@@ -122,6 +122,11 @@ TEST(ConsoleReleaseSource, BothKernelsKickTheDisplayWhereTheHoldDrops)
         EXPECT_EQ(drops, 2u) << tree;
         EXPECT_THAT(exec, HasSubstr("__attribute__((weak)) void\nnative_legacy_console_released(void)\n{\n}"));
     }
+    // iOS 27's render server has no VBL frame clock to switch on: CA_FORCE_TIMER is iOS 17's alone.
+    EXPECT_THAT(SourceText("../../../kernel/xnu-12377.121.6/bsd/kern/kern_exec.c"),
+                HasSubstr("#ifndef NATIVE_SWITCH_CA_VBL\n#define NATIVE_SWITCH_CA_VBL 0\n#endif"));
+    EXPECT_THAT(SourceText("../../../kernel/xnu-10063.141.1/bsd/kern/kern_exec.c"),
+                HasSubstr("#ifndef NATIVE_SWITCH_CA_VBL\n#define NATIVE_SWITCH_CA_VBL 1\n#endif"));
     const std::string display = SourceText("../NativeLegacyDisplay.cpp");
     const std::string kick = Between(display, "    void kickOnce()\n", "\n    }\n");
     EXPECT_LT(kick.find("consoleReleasedFrame(latchRetire ? firstUntaken() : pendingSwapRequest())"),
