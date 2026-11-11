@@ -124,7 +124,8 @@ public enum TileCompressor {
             }, Unmanaged.passUnretained(collector).toOpaque(), &raw)
         guard created == noErr, let raw else { throw VideoError.status("VTTileCompressionSessionCreate", created) }
         let session = Unmanaged<CFTypeRef>.fromOpaque(raw).takeRetainedValue()
-        defer { calls.invalidate(raw) }
+        // Every call after the property batch goes through `raw`: the session must outlive them all.
+        defer { withExtendedLifetime(session) { calls.invalidate(raw) } }
         let properties: [CFString: Any] = [
             kVTCompressionPropertyKey_AllowTemporalCompression: false,
             kVTCompressionPropertyKey_AllowFrameReordering: false,
