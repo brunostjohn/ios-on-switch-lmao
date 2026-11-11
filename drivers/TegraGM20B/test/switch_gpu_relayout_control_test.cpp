@@ -22,6 +22,16 @@ volatile uint32_t fence;
 unsigned madeMemory, vmFailures, poolFrees;
 bool pushVolatile;
 switch_gpu_mapping pushWindow;
+
+// A move that faults past its checkpoint: its channel errors with dirty lines of the surface left in the L2
+constexpr uint64_t kSurfacePa = 0x10000000, kRowsPa = 0x20000000, kSurfaceGpuVa = 0x40000000;
+tgm_chan channels[4];
+unsigned channelsMade, channelsDeleted, flushJobs, cpuReads, cpuReadsBehindL2;
+bool channelsOpen, faultMoves;
+tgm_chan *faulted, *flushedOn;
+uint32_t flushVisibility;
+std::vector<uint8_t> surfaceBytes(16 * 4096), rowsBytes(16 * 4096);
+SwitchGpuRelayoutMapping surfaceMap{}, rowsMap{};
 }
 
 extern "C" void *tgm_pool_alloc(uint64_t bytes, uint64_t, uint64_t *pa)
@@ -105,18 +115,26 @@ extern "C" int tgm_vm_kmap(tgm_vm *, tgm_mem *, uint64_t, uint64_t *va)
 	return 0;
 }
 
-extern "C" uint32_t tgm_chan_error(tgm_chan *)
+extern "C" uint32_t tgm_chan_error(tgm_chan *chan)
 {
+	if (chan && chan == faulted)
+		return 1;
 	return 0;
 }
 
-extern "C" void tgm_chan_del(tgm_chan **)
+extern "C" void tgm_chan_del(tgm_chan **chan)
 {
+	*chan = nullptr;
+	++channelsDeleted;
 }
 
 extern "C" int tgm_chan_new_copy(tgm_vm *, const void *, volatile uint32_t *, uint64_t,
-				 const char *, int, tgm_chan **)
+				 const char *, int, tgm_chan **out)
 {
+	if (channelsOpen) {
+		*out = &channels[channelsMade++ % 4];
+		return 0;
+	}
 	return -12;
 }
 
@@ -125,8 +143,16 @@ extern "C" uint32_t tgm_chan_uid(tgm_chan *)
 	return 1;
 }
 
-extern "C" int tgm_chan_exec(tgm_chan *, const tgm_push *, uint32_t, uint32_t *, const tgm_prof *)
+extern "C" int tgm_chan_exec(tgm_chan *chan, const tgm_push *, uint32_t, uint32_t *seqno, const tgm_prof *)
 {
+	if (faultMoves) {
+		const std::vector<uint8_t> partial(512, 0xc5);
+		EXPECT_TRUE(memory.store(kSurfaceGpuVa + 4096, partial.data(), partial.size()));
+		gRelayout.pushCpu[kCheckpointWord] = 1;
+		faulted = chan;
+		*seqno = 1;
+		return 0;
+	}
 	return -12;
 }
 
@@ -152,8 +178,43 @@ extern "C" void tgm_cpu_clean_pages(const uint64_t *, uint32_t)
 {
 }
 
-extern "C" vm_offset_t phystokv(uint64_t)
+extern "C" int switch_gpu_chan_exec_visibility(tgm_chan *chan, const tgm_push *, uint32_t count,
+					       const switch_gpu_backing_token *, uint32_t, uint32_t *seqno,
+					       const tgm_prof *, uint32_t visibility)
 {
+	EXPECT_EQ(count, 0u);
+	++flushJobs;
+	flushedOn = chan;
+	flushVisibility = visibility;
+	if (!(visibility & SWITCH_GPU_SUBMIT_VISIBILITY_EXPLICIT) ||
+	    (visibility & SWITCH_GPU_SUBMIT_EXTERNAL_VISIBILITY))
+		memory.flushL2();
+	*seqno = 2;
+	return 0;
+}
+
+extern "C" void switch_gpu_chan_submit_enter(tgm_chan *)
+{
+}
+
+extern "C" void switch_gpu_chan_submit_leave(void)
+{
+}
+
+extern "C" int switch_gpu_chan_wait_submission_room(tgm_chan *, const tgm_push *, uint32_t, uint32_t,
+						     const tgm_prof *)
+{
+	return 0;
+}
+
+extern "C" vm_offset_t phystokv(uint64_t pa)
+{
+	if (faultMoves) {
+		++cpuReads;
+		cpuReadsBehindL2 += !memory.dirty.empty();
+		auto &bytes = pa >= kRowsPa ? rowsBytes : surfaceBytes;
+		return vm_offset_t(bytes.data() + (pa - (pa >= kRowsPa ? kRowsPa : kSurfacePa)));
+	}
 	return 0;
 }
 
@@ -172,8 +233,12 @@ switch_gpu_backing *switch_gpu_pin_memory(const uint64_t *, uint32_t, uint32_t,
 }
 
 int switch_gpu_relayout_mapping(tgm_vm *, SwitchGpuRelayoutCache *, const uint64_t *, uint32_t,
-				bool, SwitchGpuRelayoutMapping **)
+				bool surface, SwitchGpuRelayoutMapping **out)
 {
+	if (faultMoves) {
+		*out = surface ? &surfaceMap : &rowsMap;
+		return 0;
+	}
 	return -12;
 }
 
@@ -280,5 +345,36 @@ TEST_F(RelayoutControl, MovesTheCpuFinishesAreCountedWithTheStats)
 	tgm_relayout_cpu_stats(&moves, &bytes);
 	EXPECT_EQ(moves, TGM_STATS ? 1u : 0u);
 	EXPECT_EQ(bytes, TGM_STATS ? 2u * 4096u : 0u);
+}
+}  // namespace
+
+namespace
+{
+// A copy that faults past its checkpoint left its partial writes dirty in the L2: a new channel's empty External job
+// flushes them before the CPU's finish touches the surface in DRAM.
+TEST_F(RelayoutControl, AFaultedMoveFlushesTheL2BeforeTheCpuFinishesIt)
+{
+	channelsOpen = faultMoves = true;
+	memory.map(kSurfaceGpuVa, surfaceBytes, false, true);
+	tgm_layout l = {};
+	ASSERT_TRUE(tgm_layout_tiled(64, 64, 4, &l));
+	std::vector<uint64_t> surfacePas, rowsPas;
+	for (uint64_t at = 0; at < surfaceBytes.size(); at += 4096) {
+		surfacePas.push_back(kSurfacePa + at);
+		rowsPas.push_back(kRowsPa + at);
+	}
+	const tgm_relayout_pages surface = {surfacePas.data(), uint32_t(surfacePas.size())};
+	const tgm_relayout_pages rows = {rowsPas.data(), uint32_t(rowsPas.size())};
+	ASSERT_LE(l.bytes, surfaceBytes.size());
+	EXPECT_EQ(move(surface, rows, l, 256, TGM_RELAYOUT_TILE_IN_PLACE, nullptr, 0), 0);
+	EXPECT_EQ(flushJobs, 1u);
+	EXPECT_NE(flushedOn, nullptr);
+	EXPECT_NE(flushedOn, faulted);
+	EXPECT_TRUE(flushVisibility & SWITCH_GPU_SUBMIT_FORCE_FENCE);
+	EXPECT_FALSE(flushVisibility & SWITCH_GPU_SUBMIT_VISIBILITY_EXPLICIT);
+	EXPECT_GT(cpuReads, 0u);
+	EXPECT_EQ(cpuReadsBehindL2, 0u);
+	channelsOpen = faultMoves = false;
+	faulted = flushedOn = nullptr;
 }
 }  // namespace
