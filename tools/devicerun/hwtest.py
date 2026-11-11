@@ -182,6 +182,7 @@ TESTS: dict[str, bool] = {
     'net.wifi_link': False,
     'gpu.latency': False,
     'gpu.raw_share': False,
+    'gpu.recover.kill_one': False,
     'input.controllers': False,
     'input.joycon': False,
     'input.rail': False,

@@ -42,7 +42,8 @@ static const char *zetaMemoryRefusal(int asked)
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
 // hw_test_app's attribution: this process's command buffers on each path since the device opened, never reset (the rates
 // line's windows stay its own). Keys: raw, m2v, split, split_m2v, aborted, reopens (channels the kernel killed and this
-// process opened again), m2v.<reason>, pred.<predicate> (nonzero only).
+// process opened again), reopen_us (the last one's time), gpu_order (1: the drivers order on the GPU now), cpu_ordered (the
+// Orders the kernel refused, each a CPU-ordered line), m2v.<reason>, pred.<predicate> (nonzero only).
 - (NSDictionary<NSString *, NSNumber *> *)switchRawCounters
 {
     const Stats &s = gRM->stats;
@@ -53,6 +54,14 @@ static const char *zetaMemoryRefusal(int asked)
     d[@"split_m2v"] = @(s.splitM2v.load());
     d[@"aborted"] = @(s.aborted.load());
     d[@"reopens"] = @(gRM->raw->stats.reopens.load());
+    {
+        mach_timebase_info_data_t base;
+        mach_timebase_info(&base);
+        d[@"reopen_us"] = @(gRM->raw->stats.reopenTicks.load() * base.numer / base.denom / 1000);
+        std::lock_guard<std::mutex> m(gRM->m2vLock);
+        d[@"gpu_order"] = @(gRM->gpuOrder ? 1 : 0);
+    }
+    d[@"cpu_ordered"] = @(s.cpuOrdered.load());
     d[@"split_prologues"] = @(gRM->raw->stats.splitLaunches.load());
     d[@"interlock_draws"] = @(gRM->raw->stats.interlockDraws.load());
     d[@"storage_barriers"] = @(gRM->raw->stats.storageBarriers.load());
