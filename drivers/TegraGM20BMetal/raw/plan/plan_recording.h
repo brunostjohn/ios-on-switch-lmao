@@ -28,7 +28,7 @@ struct ResourceFacts {
         Surface = 1u << 2,     // an IOSurface's memory
         Drawable = 1u << 3,    // a CAMetalLayer drawable
         HostVisible = 1u << 4,
-        SampledShadow = 1u << 5,  // sampled through a pool image (raw::Texture::sampled): rows 16 but not 32 apart
+        SampledShadow = 1u << 5,  // sampled through a pool image (raw::Texture::sampled), by passes and kernels alike
         SurfaceView = 1u << 6,    // a shadowed surface view: its image is refreshed at every pass that samples it
         ExtendedRange = 1u << 7,  // drawn through an RGBA16F stand-in (raw_xr.h)
         PlanarStandIn = 1u << 8,  // a planar render target drawn through a stand-in (raw::Texture::planarStandIn)
@@ -36,7 +36,6 @@ struct ResourceFacts {
         Ycbcr = 1u << 10,         // a two-plane YCbCr texture sampled through a converted image (raw_ycbcr.h)
         ImageStale = 1u << 11,    // its converted image is behind its planes (surface seed, writes, native generation)
         MipChain2D = 1u << 12,    // its chain's levels are the 2D engine's (raw::Texture::chain->fmt2d)
-        ImageShadow = 1u << 13,   // a compute kernel samples it through an image of its own (copyShadows)
         RotatedPlane = 1u << 14,  // a drawable on the rotated (landscape) plane
         TwoPlaneXr = 1u << 15,    // RGB10A8_2P_XR10 over Metal's two planes
         StoredMultisample = 1u << 16,
@@ -56,7 +55,7 @@ struct ResourceFacts {
     uint8_t samples = 1;
     Layout layout = Layout::Pitch;
     uint32_t width = 0, height = 0;
-    uint32_t shadow = kNone;   // its pool image (SampledShadow, ImageShadow)
+    uint32_t shadow = kNone;   // its pool image (SampledShadow)
     uint32_t standIn = kNone;  // ExtendedRange's or PlanarStandIn's stand-in
     uint32_t luma = kNone, chroma = kNone;
 

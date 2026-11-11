@@ -128,7 +128,7 @@ TEST(Rules, BlitWholeTextureCopyIsACopyALevel)
 TEST(Rules, ComputeImage)
 {
     Rec rec;
-    const uint32_t pool = rec.texture(70, 64, 64), image = rec.texture(71, 64, 64, ResourceFacts::ImageShadow);
+    const uint32_t pool = rec.texture(70, 64, 64), image = rec.texture(71, 64, 64, ResourceFacts::SampledShadow);
     rec.r.resources[image].shadow = pool;
     rec.compute();
     rec.dispatch(rec.program(ProgramFacts{}), {texture(image, 2, 0)}, 1);

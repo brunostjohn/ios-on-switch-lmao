@@ -240,7 +240,7 @@ Caps chipCaps(uint32_t proven)
 
 namespace {
 
-// The pipelines of the glass frame by Core Animation name (out/agent-scratch/x1-glass/vp/out-deny.txt), keys made up
+// The glass frame's pipelines by Core Animation name, their keys made up
 struct Glass {
     Rec rec;
     uint32_t drawable, c1, c2, vb, ub, ib;

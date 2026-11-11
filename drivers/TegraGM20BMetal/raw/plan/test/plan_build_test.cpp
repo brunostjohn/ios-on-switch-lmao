@@ -152,7 +152,7 @@ TEST(Build, MipmapsAChainOrAPassALevel)
 TEST(Build, ComputeShadowsAroundTheDispatch)
 {
     Rec rec;
-    const uint32_t pool = rec.texture(70, 64, 64), image = rec.texture(71, 64, 64, ResourceFacts::ImageShadow);
+    const uint32_t pool = rec.texture(70, 64, 64), image = rec.texture(71, 64, 64, ResourceFacts::SampledShadow);
     rec.r.resources[image].shadow = pool;
     rec.compute();
     rec.dispatch(rec.program(ProgramFacts{}), {texture(image, 2, 1)}, 1u << 1);
@@ -206,6 +206,21 @@ TEST(Build, FusesAPassThatContinuesTheOneBefore)
     EXPECT_TRUE(b.graph.nodes[1].continues);
     EXPECT_EQ(b.graph.nodes[1].before, 0);
     EXPECT_FALSE(b.graph.nodes[2].continues) << "it samples its own target";
+}
+
+TEST(Build, AClearOnlyPassIsAClearNode)
+{
+    Rec rec;
+    const uint32_t pitch = rec.texture(80, 64, 64, ResourceFacts::Drawable);
+    rec.render(pass({colour(pitch, Load::Clear, Store::Store)}, 64, 64));
+    rec.end();
+    Built b = build(rec.r, chipCaps());
+    ASSERT_EQ(b.graph.nodes.size(), 1u);
+    EXPECT_EQ(b.graph.nodes[0].kind, NodeKind::Clear);
+    EXPECT_EQ(b.graph.nodes[0].rule, Rule::ClearThreeD);
+    b = build(rec.r, chipCaps(1u << uint32_t(Probe::TwodFill)));
+    EXPECT_EQ(b.graph.nodes[0].rule, Rule::ClearTwoD);
+    EXPECT_EQ(b.graph.nodes[0].engine, Engine::TwoD);
 }
 
 }  // namespace

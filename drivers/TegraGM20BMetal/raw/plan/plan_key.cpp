@@ -200,12 +200,28 @@ void nodeKeys(WorkGraph &g, const Recording &r)
             h.add(uint64_t(u.slot) | uint64_t(u.path) << 32 | uint64_t(u.stage) << 40 | uint64_t(u.write) << 48);
             h.add(u.range);
         }
+        if (n.pass != kNone) {
+            const PassDesc &p = r.passes[n.pass];
+            for (const Attachment &a : p.color)
+                attachment(h, a);
+            attachment(h, p.depth);
+            attachment(h, p.stencil);
+        }
         for (uint32_t i = 0; i < n.runs.count; ++i) {
             const DrawRun &run = g.runs[n.runs.first + i];
             h.add(run.program != kNone ? r.programs[run.program].key : uint64_t(run.own));
             h.add(uint64_t(run.variant) | uint64_t(run.before) << 8 | uint64_t(run.draws.count) << 32);
             for (Rung rung : run.rung)
                 h.add(uint64_t(rung));
+            if (run.own != OwnState::None)
+                continue;
+            bindings(h, r, r.states[run.state].bindings);
+            for (uint32_t d = 0; d < run.draws.count; ++d) {
+                const Draw &draw = r.draws[run.draws.first + d];
+                h.add(uint64_t(draw.primitive) | uint64_t(draw.indexSize) << 8 | uint64_t(draw.indirect) << 16 |
+                      uint64_t(draw.indices) << 32);
+                h.add(draw.arguments);
+            }
         }
         n.key = h.value();
     }

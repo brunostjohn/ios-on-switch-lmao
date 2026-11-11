@@ -71,7 +71,7 @@ uint32_t readThrough(const Builder &b, const Binding &x)
         return x.resource;
     if (f.has(ResourceFacts::ExtendedRange) && f.standIn != kNone)
         return f.standIn;
-    if ((f.has(ResourceFacts::SampledShadow) || f.has(ResourceFacts::ImageShadow)) && f.shadow != kNone)
+    if (f.has(ResourceFacts::SampledShadow) && f.shadow != kNone)
         return f.shadow;
     return x.resource;
 }

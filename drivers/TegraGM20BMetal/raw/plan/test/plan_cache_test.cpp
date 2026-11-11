@@ -69,6 +69,22 @@ TEST(Cache, NodeKeysFollowStructure)
     EXPECT_NE(a.graph.nodes[0].key, b.graph.nodes[0].key) << "the steady frame's pass also draws the glass";
 }
 
+// Nodes that lower to different words have different keys: a Clear load emits a clear, a DontCare load does not
+TEST(Cache, NodeKeysFollowWhatLoweringReads)
+{
+    const auto keyOf = [](Load load, uint8_t indexSize) {
+        Rec rec;
+        const uint32_t target = rec.texture(80, 64, 64), indices = rec.buffer(256);
+        rec.render(pass({colour(target, load, Store::Store)}, 64, 64));
+        rec.draw(rec.state(rec.program(caState(1, {80})), {}), 6, indexSize, indexSize ? indices : kNone);
+        rec.end();
+        return plan(rec.r, chipCaps(), JobContext{}).graph.nodes[0].key;
+    };
+    EXPECT_NE(keyOf(Load::Clear, 2), keyOf(Load::DontCare, 2));
+    EXPECT_NE(keyOf(Load::Clear, 2), keyOf(Load::Clear, 0));
+    EXPECT_EQ(keyOf(Load::Clear, 2), keyOf(Load::Clear, 2));
+}
+
 TEST(Cache, LeastRecentlyUsedGoesFirst)
 {
     PlanCache cache(2);

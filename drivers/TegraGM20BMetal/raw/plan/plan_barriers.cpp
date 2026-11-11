@@ -308,7 +308,7 @@ void Placer::run(const JobContext &job)
         node.after = {uint32_t(g_.edges.size()), uint32_t(edges.size())};
         g_.edges.insert(g_.edges.end(), edges.begin(), edges.end());
         const bool drained = (need & (WaitForIdle | FlushShaderData)) || (trustSwitch && (need & EngineSwitch));
-        note(need, head, drained || node.kind == NodeKind::Signal);
+        note(need, head, drained || (node.kind == NodeKind::Signal && caps_.selectable(Rule::EntryNoDrain)));
         inPass(head, end);
         record(head, end);
         if (onChannel(g_.nodes[end - 1].engine))

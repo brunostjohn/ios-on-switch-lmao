@@ -34,6 +34,22 @@ struct Simple {
     }
 };
 
+struct OnePassForValidation {
+    Recording r;
+
+    OnePassForValidation()
+    {
+        Rec rec;
+        const uint32_t standIn = rec.texture(115, 64, 64), xr = rec.texture(552, 64, 64, ResourceFacts::ExtendedRange);
+        const uint32_t target = rec.texture(80, 64, 64);
+        rec.r.resources[xr].standIn = standIn;
+        rec.render(pass({colour(target, Load::Clear, Store::Store)}, 64, 64));
+        rec.draw(rec.state(rec.program(caState(1, {80})), {texture(xr)}), 6, 0);
+        rec.end();
+        r = rec.r;
+    }
+};
+
 TEST(Validate, RecordedFramesArePlannable)
 {
     for (const Recording &r : {glassFrame0(), glassFrame1(), scrollFrame()})
@@ -110,6 +126,16 @@ TEST(Validate, RemainingGaps)
         rec.end();
         EXPECT_EQ(check(rec.r).problem, Problem::MipFormat);
     }
+}
+
+TEST(Validate, AConversionWithNoPackState)
+{
+    OnePassForValidation f;
+    Caps caps = chipCaps();
+    caps.own.has = [](const void *, OwnState s, uint16_t) {
+        return s != OwnState::ExtendedRange;
+    };
+    EXPECT_EQ(check(f.r, {}, caps).problem, Problem::ConversionState);
 }
 
 TEST(Validate, LostChannelFailsTheCommandBuffer)
