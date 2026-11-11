@@ -1,62 +1,10 @@
 // SPDX-License-Identifier: BSD-2-Clause-Patent
 // See HEVCNVDEC.h. Clause numbers are ITU-T H.265 (V8).
-#include "HEVCNVDEC.h"
+#include "HEVCState.h"
 #include <stdlib.h>
 #include <string.h>
 #include "../../TegraNVDEC/nvidia/nvdec_drv.h"
 #include "../../TegraNVDEC/nvidia/clc5b0.h"
-#include "../../TegraNVDEC/TegraNVDECCheck.h"
-
-#define SLOTS        16   // NVDEC's picture slots; the DPB (current picture included) never holds more
-#define MAX_SEGMENTS 600  // slice segments in one picture
-#define ALIGN(v, a)  (((v) + (a) - 1) / (a) * (a))
-
-enum {
-    kStatusOff = 0,
-    kTilesOff = 256,  // tile sizes: 0x900 bytes (pairs from entry 0, boundaries from entry 0x380)
-    kTilesBytes = 0x900,
-    kScalingOff = kTilesOff + kTilesBytes,  // nvdec_hevc_scaling_list_s, 0x400 reserved
-    kBitsOff = 0x1000,
-    // Filter buffer bytes per 64-aligned row: deblocking, SAO, BSD control (averne's FILTER/SAO/BSD_SIZE, 8-bit).
-    // Deblocking and SAO hold pixels, so a 16-bit picture gets twice theirs: the engine writes within the offsets it
-    // is given, and room it does not use costs nothing.
-    kDeblockBytesPerRow = 480,
-    kSaoBytesPerRow = 3840,
-    kBsdBytesPerRow = 60,
-};
-
-typedef struct {
-    bool used;                    // in the DPB
-    bool ref, long_term, output;  // marking; needed for output
-    int32_t poc;
-    uint32_t latency;  // PicLatencyCount
-    void *item;        // the decoded picture, waiting to be bumped out
-    uint32_t handle;   // its surface (kept while the slot is free, for the next picture)
-    uint8_t *va;
-    uint32_t display;  // with display8: the picture's 8-bit copy, what goes out
-    uint8_t *display_va;
-} Entry;
-
-struct HEVCDecoder {
-    H264Backend b;
-    HEVCParams params;
-    int first_sps;
-    bool allow10, display8;
-    Entry dpb[SLOTS];
-    uint32_t width, height, pitch, rows, luma_bytes, surface_bytes;  // the surfaces' geometry (pitch in bytes)
-    uint32_t sample_bytes;                                           // 2 for Main 10: 16-bit samples
-    uint32_t input, aux, colmv_bytes, filter_off, aux_bytes;
-    uint8_t *input_va, *aux_va;
-    uint64_t input_bytes;
-    bool decoded_any, stream_start, skip_rasl, have_prev;
-    int32_t prev_tid0_poc, last_poc;
-    uint32_t picture_index;
-    unsigned missing;
-#if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
-    bool probe_wanted, probe_ran;
-    HEVCDisplayProbeResult probe[2];
-#endif
-};
 
 HEVCDecoder *hevc_decoder_create(const H264Backend *backend)
 {
@@ -85,10 +33,9 @@ static void releaseBuffers(HEVCDecoder *d)
 {
     if (d->aux)
         d->b.free(d->b.ctx, d->aux);
-    if (d->input)
-        d->b.free(d->b.ctx, d->input);
-    d->aux = d->input = 0;
-    d->aux_va = d->input_va = NULL;
+    nvdec_ring_release(&d->ring, &d->b);
+    d->aux = 0;
+    d->aux_va = NULL;
 }
 
 static void dropAll(HEVCDecoder *d)  // the DPB emptied without output
@@ -145,11 +92,6 @@ void hevc_decoder_allow_10bit(HEVCDecoder *d, bool allow)
 void hevc_decoder_display_8bit(HEVCDecoder *d, bool on)
 {
     d->display8 = on;
-}
-
-static bool displayBuffer(const HEVCDecoder *d)
-{
-    return d->display8 && d->sample_bytes == 2;
 }
 
 // The 8-bit picture at framestride bytes a row: luma, then chroma at half the 16-bit luma's size. The kernel bounds a
@@ -222,12 +164,10 @@ static int configure(HEVCDecoder *d, const HEVCSPS *sps)
     if (d->b.alloc(d->b.ctx, d->aux_bytes, &d->aux, &va))
         return -3;
     d->aux_va = va;
-    d->input_bytes = kBitsOff + ALIGN((uint64_t)sps->width * sps->height / 2 + 0x10000, 0x10000);
-    if (d->b.alloc(d->b.ctx, d->input_bytes, &d->input, &va)) {
+    if (nvdec_ring_alloc(&d->ring, &d->b, kBitsOff + ALIGN((uint64_t)sps->width * sps->height / 2 + 0x10000, 0x10000))) {
         releaseBuffers(d);
         return -3;
     }
-    d->input_va = va;
     return 0;
 }
 
@@ -253,24 +193,6 @@ int hevc_decoder_configure(HEVCDecoder *d)
         }
         e->va = va;
     }
-    return 0;
-}
-
-static int growInput(HEVCDecoder *d, uint64_t needed)
-{
-    uint64_t bytes = d->input_bytes;
-    while (bytes < needed)
-        bytes *= 2;
-    if (bytes > (32u << 20))
-        return -1;
-    uint32_t handle;
-    void *va;
-    if (d->b.alloc(d->b.ctx, bytes, &handle, &va))
-        return -1;
-    d->b.free(d->b.ctx, d->input);
-    d->input = handle;
-    d->input_va = va;
-    d->input_bytes = bytes;
     return 0;
 }
 
@@ -332,178 +254,6 @@ static void entry(TegraNVDECSubmit *s, uint16_t method, uint16_t kind, uint32_t 
     e->kind = kind;
     e->value = value;
     e->offset = offset;
-}
-
-// Tile columns and rows in CTBs (6.5.1). False for a PPS whose explicit sizes do not fit this SPS.
-static bool tileGrid(const HEVCSPS *sps, const HEVCPPS *pps, uint16_t *col, uint16_t *row)
-{
-    const unsigned ctb = sps->log2_min_cb + sps->log2_diff_max_min_cb;
-    const uint32_t wc = (sps->width + (1u << ctb) - 1) >> ctb, hc = (sps->height + (1u << ctb) - 1) >> ctb;
-    const unsigned cols = pps->num_tile_columns, rows = pps->num_tile_rows;
-    if (cols > wc || rows > hc)
-        return false;
-    uint32_t sw = 0, sh = 0;
-    for (unsigned i = 0; i < cols; i++) {
-        col[i] = (uint16_t)(pps->uniform_spacing || !pps->tiles ? (i + 1) * wc / cols - i * wc / cols
-                            : i + 1 < cols                      ? pps->column_width[i]
-                                                                : wc - sw);
-        sw += col[i];
-    }
-    for (unsigned i = 0; i < rows; i++) {
-        row[i] = (uint16_t)(pps->uniform_spacing || !pps->tiles ? (i + 1) * hc / rows - i * hc / rows
-                            : i + 1 < rows                      ? pps->row_height[i]
-                                                                : hc - sh);
-        sh += row[i];
-    }
-    return sw == wc && sh == hc && col[cols - 1] && row[rows - 1] && col[cols - 1] <= wc && row[rows - 1] <= hc;
-}
-
-static void tileTable(uint16_t *t, const HEVCSPS *sps, const HEVCPPS *pps, const uint16_t *col, const uint16_t *row)
-{
-    memset(t, 0, kTilesBytes);
-    const unsigned shift = sps->log2_min_cb + sps->log2_diff_max_min_cb - 4;  // boundaries in 16-sample units
-    if (!pps->tiles) {
-        t[0] = col[0], t[1] = row[0];
-        return;
-    }
-    uint16_t *bound = t + 0x380, sum = 0;
-    for (unsigned i = 0; i < pps->num_tile_columns; i++)
-        *bound++ = (uint16_t)((sum += col[i]) << shift);
-    sum = 0;
-    for (unsigned i = 0; i < pps->num_tile_rows; i++)
-        *bound++ = (uint16_t)((sum += row[i]) << shift);
-    for (unsigned i = 0; i < pps->num_tile_rows; i++)
-        for (unsigned j = 0; j < pps->num_tile_columns; j++)
-            *t++ = col[j], *t++ = row[i];
-}
-
-static void scalingTable(nvdec_hevc_scaling_list_s *out, const HEVCScalingList *sl)
-{
-    memset(out, 0, sizeof(*out));
-    for (int i = 0; i < 6; i++)
-        out->ScalingListDCCoeff16x16[i] = sl->dc[0][i];
-    for (int i = 0; i < 2; i++)
-        out->ScalingListDCCoeff32x32[i] = sl->dc[1][i * 3];
-    for (int i = 0; i < 6; i++) {
-        memcpy(out->ScalingList4x4[i], sl->sl[0][i], 16);
-        memcpy(out->ScalingList8x8[i], sl->sl[1][i], 64);
-        memcpy(out->ScalingList16x16[i], sl->sl[2][i], 64);
-    }
-    memcpy(out->ScalingList32x32[0], sl->sl[3][0], 64);
-    memcpy(out->ScalingList32x32[1], sl->sl[3][3], 64);
-}
-
-static int8_t clip8(int32_t v)
-{
-    return (int8_t)(v < -128 ? -128 : v > 127 ? 127 : v);
-}
-
-typedef struct {
-    int8_t before[16], after[16], lt[16];  // RefPicSetStCurrBefore / StCurrAfter / LtCurr as slots (-1: missing)
-    uint8_t nb, na, nl;
-} RefSets;
-
-static void fillSetup(const HEVCDecoder *d, nvdec_hevc_pic_s *p, const HEVCSPS *sps, const HEVCPPS *pps,
-                      const HEVCSliceHeader *sh, int cur, int32_t poc, const RefSets *r, int scratch, uint32_t length)
-{
-    memset(p, 0, sizeof(*p));
-    p->stream_len = length;
-    p->sw_start_code_e = 1;
-    // 8-bit samples, or Main 10's in 16 bits (mode 1: P010, the 10 bits high, as 'x420' holds them), or those and an
-    // 8-bit display buffer (mode 2)
-    p->disp_output_mode = d->sample_bytes == 2 ? (displayBuffer(d) ? 2 : 1) : 0;
-    // framestride counts samples: in mode 1 the engine's rows are framestride x 2 bytes (averne's nvtegra_hevc.c
-    // halves P010's linesize). Given in bytes, every block row lands at twice its offset.
-    p->framestride[0] = p->framestride[1] = d->pitch / d->sample_bytes;
-    p->colMvBuffersize = d->colmv_bytes / 256;
-    p->HevcSaoBufferOffset = kDeblockBytesPerRow * d->sample_bytes * d->rows / 256;
-    p->HevcBsdCtrlOffset = (kDeblockBytesPerRow + kSaoBytesPerRow) * d->sample_bytes * d->rows / 256;
-    p->pic_width_in_luma_samples = sps->width;
-    p->pic_height_in_luma_samples = sps->height;
-    p->chroma_format_idc = 1;
-    p->bit_depth_luma = p->bit_depth_chroma = sps->bit_depth;
-    p->log2_min_luma_coding_block_size = sps->log2_min_cb;
-    p->log2_max_luma_coding_block_size = sps->log2_min_cb + sps->log2_diff_max_min_cb;
-    p->log2_min_transform_block_size = sps->log2_min_tb;
-    p->log2_max_transform_block_size = sps->log2_min_tb + sps->log2_diff_max_min_tb;
-    p->max_transform_hierarchy_depth_inter = sps->max_th_depth_inter;
-    p->max_transform_hierarchy_depth_intra = sps->max_th_depth_intra;
-    p->scalingListEnable = sps->scaling_list_enabled;
-    p->amp_enable_flag = sps->amp;
-    p->sample_adaptive_offset_enabled_flag = sps->sao;
-    p->pcm_enabled_flag = sps->pcm;
-    if (sps->pcm) {
-        p->pcm_sample_bit_depth_luma = sps->pcm_bit_depth;
-        p->pcm_sample_bit_depth_chroma = sps->pcm_bit_depth_chroma;
-        p->log2_min_pcm_luma_coding_block_size = sps->log2_min_pcm;
-        p->log2_max_pcm_luma_coding_block_size = sps->log2_min_pcm + sps->log2_diff_max_min_pcm;
-    }
-    p->pcm_loop_filter_disabled_flag = sps->pcm_loop_filter_disabled;
-    p->sps_temporal_mvp_enabled_flag = sps->temporal_mvp;
-    p->strong_intra_smoothing_enabled_flag = sps->strong_intra_smoothing;
-    p->dependent_slice_segments_enabled_flag = pps->dependent_slice_segments;
-    p->output_flag_present_flag = pps->output_flag_present;
-    p->num_extra_slice_header_bits = pps->num_extra_slice_header_bits;
-    p->sign_data_hiding_enabled_flag = pps->sign_data_hiding;
-    p->cabac_init_present_flag = pps->cabac_init_present;
-    p->num_ref_idx_l0_default_active = pps->num_ref_idx_l0_default;
-    p->num_ref_idx_l1_default_active = pps->num_ref_idx_l1_default;
-    p->init_qp = (unsigned)(pps->init_qp_minus26 + 26 + 6 * (sps->bit_depth - 8));
-    p->constrained_intra_pred_flag = pps->constrained_intra_pred;
-    p->transform_skip_enabled_flag = pps->transform_skip;
-    p->cu_qp_delta_enabled_flag = pps->cu_qp_delta;
-    p->diff_cu_qp_delta_depth = pps->diff_cu_qp_delta_depth;
-    p->pps_cb_qp_offset = (char)pps->cb_qp_offset;
-    p->pps_cr_qp_offset = (char)pps->cr_qp_offset;
-    p->pps_beta_offset = (char)pps->beta_offset;
-    p->pps_tc_offset = (char)pps->tc_offset;
-    p->pps_slice_chroma_qp_offsets_present_flag = pps->slice_chroma_qp_offsets_present;
-    p->weighted_pred_flag = pps->weighted_pred;
-    p->weighted_bipred_flag = pps->weighted_bipred;
-    p->transquant_bypass_enabled_flag = pps->transquant_bypass;
-    p->tiles_enabled_flag = pps->tiles;
-    p->entropy_coding_sync_enabled_flag = pps->entropy_coding_sync;
-    p->num_tile_columns = pps->tiles ? pps->num_tile_columns : 0;
-    p->num_tile_rows = pps->tiles ? pps->num_tile_rows : 0;
-    p->loop_filter_across_tiles_enabled_flag = pps->tiles && pps->loop_filter_across_tiles;
-    p->loop_filter_across_slices_enabled_flag = pps->loop_filter_across_slices;
-    p->deblocking_filter_control_present_flag = pps->deblocking_control;
-    p->deblocking_filter_override_enabled_flag = pps->deblocking_override;
-    p->pps_deblocking_filter_disabled_flag = pps->deblocking_disabled;
-    p->lists_modification_present_flag = pps->lists_modification_present;
-    p->log2_parallel_merge_level = pps->log2_parallel_merge_level;
-    p->slice_segment_header_extension_present_flag = pps->slice_header_extension_present;
-    p->num_ref_frames = (unsigned char)(r->nb + r->na + r->nl);  // NumPicTotalCurr
-    p->IDR_picture_flag = sh->nal_type == HEVC_NAL_IDR_W_RADL || sh->nal_type == HEVC_NAL_IDR_N_LP;
-    p->RAP_picture_flag = sh->nal_type >= HEVC_NAL_BLA_W_LP && sh->nal_type <= 23;
-    p->curr_pic_idx = (unsigned char)cur;
-    p->pattern_id = 2;  // the dithering tables off (averne: 2 for 8-bit output modes; a 10-bit source as well here)
-    p->sw_hdr_skip_length = sh->skip_bits;
-    const int32_t scratchDiff = scratch == cur ? 0 : clip8(poc - d->dpb[scratch].poc);
-    for (int i = 0; i < SLOTS; i++) {
-        if (i == cur)
-            continue;
-        const Entry *e = &d->dpb[i];
-        if (e->used && e->ref) {
-            p->RefDiffPicOrderCnts[i] = clip8(poc - e->poc);
-            if (e->long_term)
-                p->longtermflag |= (unsigned short)(1u << (15 - i));
-        } else {
-            p->RefDiffPicOrderCnts[i] = (short)scratchDiff;
-        }
-    }
-    // The initial reference picture lists (8.3.4), cycled to 16 entries; NVDEC applies the slices' modifications.
-    const unsigned total = r->nb + r->na + r->nl;
-    if (!total)
-        return;
-    const int8_t *order[2][3] = {{r->before, r->after, r->lt}, {r->after, r->before, r->lt}};
-    const uint8_t counts[2][3] = {{r->nb, r->na, r->nl}, {r->na, r->nb, r->nl}};
-    unsigned char *lists[2] = {p->initreflistidxl0, p->initreflistidxl1};
-    for (int l = 0; l < 2; l++)
-        for (unsigned i = 0; i < 16;)
-            for (int s = 0; s < 3 && i < 16; s++)
-                for (unsigned k = 0; k < counts[l][s] && i < 16; k++)
-                    lists[l][i++] = (unsigned char)(order[l][s][k] >= 0 ? order[l][s][k] : scratch);
 }
 
 typedef struct {
@@ -633,7 +383,7 @@ static int decodePicture(HEVCDecoder *d, const Span *seg, int count, const HEVCS
             return -3;
         e->va = address;
     }
-    if (displayBuffer(d) && displaySurface(d, e))
+    if (hevc_display_buffer(d) && displaySurface(d, e))
         return -3;
     int scratch = -1;
     const int8_t *sets[3] = {r.before, r.after, r.lt};
@@ -652,9 +402,11 @@ static int decodePicture(HEVCDecoder *d, const Span *seg, int count, const HEVCS
     uint64_t length = 0;
     for (int i = 0; i < count; i++)
         length += 4 + seg[i].size;
-    if (kBitsOff + length + 64 > d->input_bytes && growInput(d, kBitsOff + length + 64))
+    if (kBitsOff + length + 64 > nvdec_ring_current(&d->ring)->bytes &&
+        nvdec_ring_grow(&d->ring, &d->b, kBitsOff + length + 64, 0))
         return -3;
-    uint8_t *bits = d->input_va + kBitsOff;
+    const NVDECInput *input = nvdec_ring_current(&d->ring);
+    uint8_t *bits = input->va + kBitsOff;
     for (int i = 0; i < count; i++) {
         bits[0] = bits[1] = bits[2] = 0, bits[3] = 1;
         memcpy(bits + 4, seg[i].data, seg[i].size);
@@ -662,24 +414,24 @@ static int decodePicture(HEVCDecoder *d, const Span *seg, int count, const HEVCS
     }
     memset(bits, 0, 64);
     uint16_t col[20], row[22];
-    if (!tileGrid(sps, pps, col, row))
+    if (!hevc_tile_grid(sps, pps, col, row))
         return -1;
-    tileTable((uint16_t *)(d->input_va + kTilesOff), sps, pps, col, row);
-    scalingTable((nvdec_hevc_scaling_list_s *)(d->input_va + kScalingOff), hevc_scaling_list(sps, pps));
+    hevc_tile_table((uint16_t *)(input->va + kTilesOff), sps, pps, col, row);
+    hevc_scaling_table((nvdec_hevc_scaling_list_s *)(input->va + kScalingOff), hevc_scaling_list(sps, pps));
 
     TegraNVDECSubmit submit;
     memset(&submit, 0, sizeof(submit));
     submit.codec = TEGRA_NVDEC_CODEC_HEVC;
     submit.setup_bytes = sizeof(nvdec_hevc_pic_s);
-    fillSetup(d, (nvdec_hevc_pic_s *)submit.setup, sps, pps, sh, cur, poc, &r, scratch, (uint32_t)length);
+    hevc_fill_setup(d, (nvdec_hevc_pic_s *)submit.setup, sps, pps, sh, cur, poc, &r, scratch, (uint32_t)length);
     entry(&submit, NVC5B0_SET_APPLICATION_ID, TEGRA_NVDEC_ENTRY_VALUE, NVC5B0_SET_APPLICATION_ID_ID_HEVC, 0);
     entry(&submit, NVC5B0_SET_CONTROL_PARAMS, TEGRA_NVDEC_ENTRY_VALUE,
           NVC5B0_SET_CONTROL_PARAMS_CODEC_TYPE_HEVC | (1u << 4) /* GPTIMER_ON */ | (1u << 6) /* ERR_CONCEAL_ON */, 0);
     entry(&submit, NVC5B0_SET_PICTURE_INDEX, TEGRA_NVDEC_ENTRY_VALUE, d->picture_index++, 0);
-    entry(&submit, NVC5B0_SET_IN_BUF_BASE_OFFSET, TEGRA_NVDEC_ENTRY_RELOC, d->input, kBitsOff);
-    entry(&submit, NVC5B0_SET_NVDEC_STATUS_OFFSET, TEGRA_NVDEC_ENTRY_RELOC, d->input, kStatusOff);
-    entry(&submit, NVC5B0_HEVC_SET_SCALING_LIST_OFFSET, TEGRA_NVDEC_ENTRY_RELOC, d->input, kScalingOff);
-    entry(&submit, NVC5B0_HEVC_SET_TILE_SIZES_OFFSET, TEGRA_NVDEC_ENTRY_RELOC, d->input, kTilesOff);
+    entry(&submit, NVC5B0_SET_IN_BUF_BASE_OFFSET, TEGRA_NVDEC_ENTRY_RELOC, input->handle, kBitsOff);
+    entry(&submit, NVC5B0_SET_NVDEC_STATUS_OFFSET, TEGRA_NVDEC_ENTRY_RELOC, input->handle, kStatusOff);
+    entry(&submit, NVC5B0_HEVC_SET_SCALING_LIST_OFFSET, TEGRA_NVDEC_ENTRY_RELOC, input->handle, kScalingOff);
+    entry(&submit, NVC5B0_HEVC_SET_TILE_SIZES_OFFSET, TEGRA_NVDEC_ENTRY_RELOC, input->handle, kTilesOff);
     entry(&submit, NVC5B0_HEVC_SET_FILTER_BUFFER_OFFSET, TEGRA_NVDEC_ENTRY_RELOC, d->aux, d->filter_off);
     entry(&submit, NVC5B0_SET_COLOC_DATA_OFFSET, TEGRA_NVDEC_ENTRY_RELOC, d->aux, 0);
     for (uint16_t i = 0; i < SLOTS; i++) {
@@ -688,22 +440,24 @@ static int decodePicture(HEVCDecoder *d, const Span *seg, int count, const HEVCS
         entry(&submit, (uint16_t)(NVC5B0_SET_PICTURE_CHROMA_OFFSET0 + 4 * i), TEGRA_NVDEC_ENTRY_RELOC, pic->handle,
               d->luma_bytes);
     }
-    if (displayBuffer(d)) {
+    if (hevc_display_buffer(d)) {
         entry(&submit, NVC5B0_SET_DISPLAY_BUF_LUMA_OFFSET, TEGRA_NVDEC_ENTRY_RELOC, e->display, 0);
         entry(&submit, NVC5B0_SET_DISPLAY_BUF_CHROMA_OFFSET, TEGRA_NVDEC_ENTRY_RELOC, e->display, d->luma_bytes / 2);
     }
     entry(&submit, NVC5B0_EXECUTE, TEGRA_NVDEC_ENTRY_VALUE, 1u << 8 /* AWAKEN */, 0);
-    submit.clean[0] = (TegraNVDECRange){d->input, kTilesOff, (uint32_t)(kBitsOff - kTilesOff + length + 64), 0};
+    submit.clean[0] =
+        (TegraNVDECRange){input->handle, kTilesOff, (uint32_t)(kBitsOff - kTilesOff + length + 64), 0};
     submit.clean_count = 1;
     TegraNVDECWait wait = {.invalidate_count = 1};
-    wait.invalidate[0] = (TegraNVDECRange){d->input, kStatusOff, sizeof(nvdec_status_s), 0};
-    if ((!d->b.cpu_reads || d->b.cpu_reads(d->b.ctx)) && displayBuffer(d))
+    wait.invalidate[0] = (TegraNVDECRange){input->handle, kStatusOff, sizeof(nvdec_status_s), 0};
+    if ((!d->b.cpu_reads || d->b.cpu_reads(d->b.ctx)) && hevc_display_buffer(d))
         wait.invalidate[wait.invalidate_count++] = (TegraNVDECRange){e->display, 0, d->luma_bytes, 0};
     else if (!d->b.cpu_reads || d->b.cpu_reads(d->b.ctx))
         wait.invalidate[wait.invalidate_count++] = (TegraNVDECRange){e->handle, 0, d->surface_bytes, 0};
     if (d->b.submit(d->b.ctx, &submit, &wait.fence) || d->b.wait(d->b.ctx, &wait))
         return -2;
-    const nvdec_status_s *status = (const nvdec_status_s *)(d->input_va + kStatusOff);
+    const nvdec_status_s *status = (const nvdec_status_s *)(input->va + kStatusOff);
+    nvdec_ring_advance(&d->ring);
     const int error = status->error_status && !status->mbs_correctly_decoded ? (int)status->error_status : 0;
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
     if (d->probe_wanted && !d->probe_ran && idr && !error && d->sample_bytes == 2) {
@@ -729,7 +483,7 @@ static int decodePicture(HEVCDecoder *d, const Span *seg, int count, const HEVCS
     e->output = sh->pic_output;
     e->item = NULL;
     if (e->output) {
-        const bool display = displayBuffer(d);
+        const bool display = hevc_display_buffer(d);
         const H264Picture picture = {
             .luma = display ? e->display_va : e->va,
             .chroma = display ? e->display_va + d->luma_bytes / 2 : e->va + d->luma_bytes,

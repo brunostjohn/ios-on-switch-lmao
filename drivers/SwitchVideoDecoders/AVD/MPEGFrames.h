@@ -1,12 +1,13 @@
 // SPDX-License-Identifier: BSD-2-Clause-Patent
 // What MPEG-1/2 and MPEG-4 Part 2 on NVDEC share: four NV12 block-linear surfaces of one size (the picture being
 // decoded, the past and future references, one spare while a reference changes hands), NVDEC's three picture slots
-// (0 current, 1 past, 2 future, as averne's nvtegra_mpeg12.c and nvtegra_mpeg4.c bind them), the input buffer
-// (status record, the codec's own tables such as MPEG-2's slice offsets, then the bitstream), one job at a time, and the
-// picture out through the backend.
+// (0 current, 1 past, 2 future, as averne's nvtegra_mpeg12.c and nvtegra_mpeg4.c bind them), the input buffers
+// (NVDECRing.h: each job's status record, the codec's own tables such as MPEG-2's slice offsets, then the bitstream),
+// and the picture out through the backend.
 #ifndef MPEG_FRAMES_H
 #define MPEG_FRAMES_H
 #include "H264NVDEC.h"
+#include "NVDECRing.h"
 
 enum {
     MPEG_FRAMES_SURFACES = 4,
@@ -19,16 +20,14 @@ typedef struct {
     uint32_t handle[MPEG_FRAMES_SURFACES];
     uint8_t *va[MPEG_FRAMES_SURFACES];
     int8_t past, future;  // reference surfaces, -1 when none
-    uint32_t input;
-    uint8_t *input_va;
-    uint64_t input_bytes;
-    uint32_t bits_off;  // the bitstream in the input buffer
+    NVDECRing ring;
+    uint32_t bits_off;  // the bitstream in each input buffer
     uint32_t bits_len;  // its bytes, end sequence included
     uint32_t picture_index;
 } MPEGFrames;
 
-// Surfaces for width_mbs x height_mbs macroblocks (pitch 64-aligned, rows to whole 32-row macroblock pairs) and an
-// input buffer with `tables` bytes after the status record; the references are dropped. 0, or -3 when NVDEC buffers
+// Surfaces for width_mbs x height_mbs macroblocks (pitch 64-aligned, rows to whole 32-row macroblock pairs) and input
+// buffers with `tables` bytes after the status record; the references are dropped. 0, or -3 when NVDEC buffers
 // could not be had.
 int mpeg_frames_configure(MPEGFrames *f, uint32_t width_mbs, uint32_t height_mbs, uint32_t tables);
 void mpeg_frames_release(MPEGFrames *f);
@@ -38,6 +37,8 @@ int mpeg_frames_take(MPEGFrames *f);
 // The picture just decoded into `index` becomes the future reference, the old future the past one.
 void mpeg_frames_reference(MPEGFrames *f, int index);
 
+// The input buffer the next job fills: its tables at MPEG_FRAMES_TABLES.
+NVDECInput *mpeg_frames_input(MPEGFrames *f);
 // Appends `size` bytes of bitstream (reset first when `reset`); -1 when the input buffer cannot grow to hold them.
 int mpeg_frames_append(MPEGFrames *f, const uint8_t *data, size_t size, bool reset);
 

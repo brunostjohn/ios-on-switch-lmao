@@ -15,10 +15,7 @@ void mpeg_frames_release(MPEGFrames *f)
         f->handle[i] = 0;
         f->va[i] = NULL;
     }
-    if (f->input)
-        f->b.free(f->b.ctx, f->input);
-    f->input = 0;
-    f->input_va = NULL;
+    nvdec_ring_release(&f->ring, &f->b);
     f->past = f->future = -1;
 }
 
@@ -41,13 +38,11 @@ int mpeg_frames_configure(MPEGFrames *f, uint32_t width_mbs, uint32_t height_mbs
         f->va[i] = va;
     }
     f->bits_off = MPEG_FRAMES_TABLES + ALIGN(tables, 256);
-    f->input_bytes = ALIGN(f->bits_off + (uint64_t)width_mbs * height_mbs * 192 + 0x10000, 0x10000);
-    if (f->b.alloc(f->b.ctx, f->input_bytes, &f->input, &va)) {
-        f->input = 0;
+    if (nvdec_ring_alloc(&f->ring, &f->b,
+                         ALIGN(f->bits_off + (uint64_t)width_mbs * height_mbs * 192 + 0x10000, 0x10000))) {
         mpeg_frames_release(f);
         return -3;
     }
-    f->input_va = va;
     return 0;
 }
 
@@ -73,23 +68,9 @@ void mpeg_frames_reference(MPEGFrames *f, int index)
     f->future = (int8_t)index;
 }
 
-static int growInput(MPEGFrames *f, uint64_t needed)
+NVDECInput *mpeg_frames_input(MPEGFrames *f)
 {
-    uint64_t bytes = f->input_bytes;
-    while (bytes < needed)
-        bytes *= 2;
-    if (bytes > (32u << 20))
-        return -1;
-    uint32_t handle;
-    void *va;
-    if (f->b.alloc(f->b.ctx, bytes, &handle, &va))
-        return -1;
-    memcpy(va, f->input_va, f->bits_off + f->bits_len);
-    f->b.free(f->b.ctx, f->input);
-    f->input = handle;
-    f->input_va = va;
-    f->input_bytes = bytes;
-    return 0;
+    return nvdec_ring_current(&f->ring);
 }
 
 int mpeg_frames_append(MPEGFrames *f, const uint8_t *data, size_t size, bool reset)
@@ -97,9 +78,10 @@ int mpeg_frames_append(MPEGFrames *f, const uint8_t *data, size_t size, bool res
     if (reset)
         f->bits_len = 0;
     const uint64_t needed = (uint64_t)f->bits_off + f->bits_len + size;
-    if (needed > f->input_bytes && growInput(f, needed))
+    if (needed > mpeg_frames_input(f)->bytes &&
+        nvdec_ring_grow(&f->ring, &f->b, needed, (uint64_t)f->bits_off + f->bits_len))
         return -1;
-    memcpy(f->input_va + f->bits_off + f->bits_len, data, size);
+    memcpy(mpeg_frames_input(f)->va + f->bits_off + f->bits_len, data, size);
     f->bits_len += (uint32_t)size;
     return 0;
 }
@@ -116,8 +98,9 @@ void mpeg_frames_entry(TegraNVDECSubmit *s, uint16_t method, uint16_t kind, uint
 void mpeg_frames_bind(MPEGFrames *f, TegraNVDECSubmit *s, int current, int past, int future)
 {
     mpeg_frames_entry(s, NVC5B0_SET_PICTURE_INDEX, TEGRA_NVDEC_ENTRY_VALUE, f->picture_index++, 0);
-    mpeg_frames_entry(s, NVC5B0_SET_IN_BUF_BASE_OFFSET, TEGRA_NVDEC_ENTRY_RELOC, f->input, f->bits_off);
-    mpeg_frames_entry(s, NVC5B0_SET_NVDEC_STATUS_OFFSET, TEGRA_NVDEC_ENTRY_RELOC, f->input, 0);
+    const uint32_t input = mpeg_frames_input(f)->handle;
+    mpeg_frames_entry(s, NVC5B0_SET_IN_BUF_BASE_OFFSET, TEGRA_NVDEC_ENTRY_RELOC, input, f->bits_off);
+    mpeg_frames_entry(s, NVC5B0_SET_NVDEC_STATUS_OFFSET, TEGRA_NVDEC_ENTRY_RELOC, input, 0);
     const int slots[3] = {current, past, future};
     for (uint16_t i = 0; i < 3; i++) {
         const uint32_t handle = f->handle[slots[i]];
@@ -130,16 +113,18 @@ void mpeg_frames_bind(MPEGFrames *f, TegraNVDECSubmit *s, int current, int past,
 int mpeg_frames_run(MPEGFrames *f, TegraNVDECSubmit *s, int current, TegraNVDECRange clean)
 {
     mpeg_frames_entry(s, NVC5B0_EXECUTE, TEGRA_NVDEC_ENTRY_VALUE, 1u << 8 /* AWAKEN */, 0);
-    s->clean[s->clean_count++] = (TegraNVDECRange){f->input, f->bits_off, f->bits_len, 0};
+    const NVDECInput *input = mpeg_frames_input(f);
+    s->clean[s->clean_count++] = (TegraNVDECRange){input->handle, f->bits_off, f->bits_len, 0};
     if (clean.length)
         s->clean[s->clean_count++] = clean;
     TegraNVDECWait wait = {.invalidate_count = 1};
-    wait.invalidate[0] = (TegraNVDECRange){f->input, 0, sizeof(nvdec_status_s), 0};
+    wait.invalidate[0] = (TegraNVDECRange){input->handle, 0, sizeof(nvdec_status_s), 0};
     if (!f->b.cpu_reads || f->b.cpu_reads(f->b.ctx))
         wait.invalidate[wait.invalidate_count++] = (TegraNVDECRange){f->handle[current], 0, f->bytes, 0};
     if (f->b.submit(f->b.ctx, s, &wait.fence) || f->b.wait(f->b.ctx, &wait))
         return -2;
-    const nvdec_status_s *status = (const nvdec_status_s *)f->input_va;
+    const nvdec_status_s *status = (const nvdec_status_s *)input->va;
+    nvdec_ring_advance(&f->ring);
     return status->error_status && !status->mbs_correctly_decoded ? (int)status->error_status : 0;
 }
 

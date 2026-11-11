@@ -67,6 +67,12 @@ void nvdec_close(NVDECClient *c)
     free(c);
 }
 
+uint32_t nvdec_jobs_in_flight(const NVDECClient *c)
+{
+    (void)c;
+    return 8;
+}
+
 uint32_t nvdec_codecs(const NVDECClient *c)
 {
     (void)c;

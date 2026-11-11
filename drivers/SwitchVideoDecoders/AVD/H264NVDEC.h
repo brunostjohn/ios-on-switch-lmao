@@ -49,6 +49,7 @@ typedef struct {
     // Wait invalidate the surface. NULL: it does.
     bool (*cpu_reads)(void *ctx);
     int (*recycle)(void *ctx, uint32_t handle, uint64_t bytes, void **va);
+    uint32_t inputs;  // input buffers to cycle (NVDECRing.h); 0 as 1
 } H264Backend;
 
 typedef struct H264Decoder H264Decoder;

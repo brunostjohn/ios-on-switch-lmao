@@ -3,6 +3,7 @@
 #include "H264NVDEC.h"
 #include <stdlib.h>
 #include "H264DPB.h"
+#include "NVDECRing.h"
 #include <string.h>
 #include "../../TegraNVDEC/nvidia/nvdec_drv.h"
 #include "../../TegraNVDEC/nvidia/clc5b0.h"
@@ -27,9 +28,8 @@ struct H264Decoder {
     uint32_t surface[MAX_SURFACES];
     uint8_t *surface_va[MAX_SURFACES];
     uint32_t aux, mbhist_off, mbhist_bytes, history_off, history_bytes;
-    uint32_t input, slices_off, bits_off, max_slices;
-    uint8_t *input_va;
-    uint64_t input_bytes;
+    uint32_t slices_off, bits_off, max_slices;
+    NVDECRing ring;  // each picture's status record, slice offsets and bitstream
     H264DPB dpb;
     uint8_t last_pic_idx;
     // A first field's sample and the engine's word on it, until its frame goes out.
@@ -58,10 +58,8 @@ static void releaseBuffers(H264Decoder *d)
         d->b.free(d->b.ctx, d->surface[i]);
     if (d->aux)
         d->b.free(d->b.ctx, d->aux);
-    if (d->input)
-        d->b.free(d->b.ctx, d->input);
-    d->surfaces = d->aux = d->input = 0;
-    d->input_va = NULL;
+    nvdec_ring_release(&d->ring, &d->b);
+    d->surfaces = d->aux = 0;
     d->configured = false;
 }
 
@@ -164,8 +162,8 @@ static bool supported(const H264SPS *s)
 }
 
 // Picture buffers as averne's decoder sizes them: block-linear NV12 surfaces (pitch 64-aligned, height 32-aligned),
-// one colocated-motion area per surface, the MB history and the history buffer, and the input buffer holding the
-// engine's status, the slice offsets and the bitstream.
+// one colocated-motion area per surface, the MB history and the history buffer, and the input buffers (NVDECRing.h),
+// each holding a picture's status record, slice offsets and bitstream.
 static int allocate(H264Decoder *d, const H264SPS *s)
 {
     releaseBuffers(d);
@@ -195,11 +193,8 @@ static int allocate(H264Decoder *d, const H264SPS *s)
     d->max_slices = d->width_mbs * d->height_mbs;
     d->slices_off = 256;
     d->bits_off = ALIGN(d->slices_off + (d->max_slices + 1) * 4, 256);
-    d->input_bytes = d->bits_off + (d->width_mbs * d->height_mbs >= 3600 ? 0x100000 : 0x40000);
-    if (d->b.alloc(d->b.ctx, d->input_bytes, &d->input, &va))
-        return -1;
-    d->input_va = va;
-    return 0;
+    return nvdec_ring_alloc(&d->ring, &d->b,
+                            d->bits_off + (d->width_mbs * d->height_mbs >= 3600 ? 0x100000 : 0x40000));
 }
 
 // The first SPS a PPS refers to (avcC carries one of each in practice).
@@ -374,9 +369,10 @@ static void fillSubmit(H264Decoder *d, TegraNVDECSubmit *s, uint8_t picIdx)
     entry(s, NVC5B0_SET_CONTROL_PARAMS, TEGRA_NVDEC_ENTRY_VALUE,
           NVC5B0_SET_CONTROL_PARAMS_CODEC_TYPE_H264 | (1u << 4) /* GPTIMER_ON */ | (1u << 6) /* ERR_CONCEAL_ON */, 0);
     entry(s, NVC5B0_SET_PICTURE_INDEX, TEGRA_NVDEC_ENTRY_VALUE, d->picture_index++, 0);
-    entry(s, NVC5B0_SET_IN_BUF_BASE_OFFSET, TEGRA_NVDEC_ENTRY_RELOC, d->input, d->bits_off);
-    entry(s, NVC5B0_SET_SLICE_OFFSETS_BUF_OFFSET, TEGRA_NVDEC_ENTRY_RELOC, d->input, d->slices_off);
-    entry(s, NVC5B0_SET_NVDEC_STATUS_OFFSET, TEGRA_NVDEC_ENTRY_RELOC, d->input, 0);
+    const uint32_t input = nvdec_ring_current(&d->ring)->handle;
+    entry(s, NVC5B0_SET_IN_BUF_BASE_OFFSET, TEGRA_NVDEC_ENTRY_RELOC, input, d->bits_off);
+    entry(s, NVC5B0_SET_SLICE_OFFSETS_BUF_OFFSET, TEGRA_NVDEC_ENTRY_RELOC, input, d->slices_off);
+    entry(s, NVC5B0_SET_NVDEC_STATUS_OFFSET, TEGRA_NVDEC_ENTRY_RELOC, input, 0);
     entry(s, NVC5B0_SET_COLOC_DATA_OFFSET, TEGRA_NVDEC_ENTRY_RELOC, d->aux, 0);
     entry(s, NVC5B0_H264_SET_MBHIST_BUF_OFFSET, TEGRA_NVDEC_ENTRY_RELOC, d->aux, d->mbhist_off);
     entry(s, NVC5B0_SET_HISTORY_OFFSET, TEGRA_NVDEC_ENTRY_RELOC, d->aux, d->history_off);
@@ -387,8 +383,8 @@ static void fillSubmit(H264Decoder *d, TegraNVDECSubmit *s, uint8_t picIdx)
               d->luma_bytes);
     }
     entry(s, NVC5B0_EXECUTE, TEGRA_NVDEC_ENTRY_VALUE, 1u << 8 /* AWAKEN */, 0);
-    s->clean[0] = (TegraNVDECRange){d->input, d->slices_off, (d->slices + 1) * 4, 0};
-    s->clean[1] = (TegraNVDECRange){d->input, d->bits_off, d->bits_len + 16, 0};
+    s->clean[0] = (TegraNVDECRange){input, d->slices_off, (d->slices + 1) * 4, 0};
+    s->clean[1] = (TegraNVDECRange){input, d->bits_off, d->bits_len + 16, 0};
     s->clean_count = 2;
 }
 
@@ -437,15 +433,16 @@ static int decodePicture(H264Decoder *d, const H264Slice *sh, void *token, bool 
     }
     cur.pic_idx = (uint8_t)picIdx;
     static const uint8_t endOfStream[16] = {0, 0, 1, 0x0b, 0, 0, 0, 0, 0, 0, 1, 0x0b, 0, 0, 0, 0};
-    memcpy(d->input_va + d->bits_off + d->bits_len, endOfStream, sizeof(endOfStream));
-    ((uint32_t *)(d->input_va + d->slices_off))[d->slices] = d->bits_len;
+    const NVDECInput *input = nvdec_ring_current(&d->ring);
+    memcpy(input->va + d->bits_off + d->bits_len, endOfStream, sizeof(endOfStream));
+    ((uint32_t *)(input->va + d->slices_off))[d->slices] = d->bits_len;
 
     TegraNVDECSubmit submit;
     memset(&submit, 0, sizeof(submit));
     fillSetup(d, (nvdec_h264_pic_s *)submit.setup, sh, &cur);
     fillSubmit(d, &submit, (uint8_t)picIdx);
     TegraNVDECWait wait = {.timeout_us = 1000000, .invalidate_count = 1};
-    wait.invalidate[0] = (TegraNVDECRange){d->input, 0, sizeof(nvdec_status_s), 0};
+    wait.invalidate[0] = (TegraNVDECRange){input->handle, 0, sizeof(nvdec_status_s), 0};
     if (!d->b.cpu_reads || d->b.cpu_reads(d->b.ctx))
         wait.invalidate[wait.invalidate_count++] = (TegraNVDECRange){d->surface[picIdx], 0, d->surface_bytes, 0};
     if (d->b.submit(d->b.ctx, &submit, &wait.fence) || d->b.wait(d->b.ctx, &wait)) {
@@ -455,7 +452,8 @@ static int decodePicture(H264Decoder *d, const H264Slice *sh, void *token, bool 
         }
         return -2;
     }
-    const nvdec_status_s *status = (const nvdec_status_s *)d->input_va;
+    const nvdec_status_s *status = (const nvdec_status_s *)input->va;
+    nvdec_ring_advance(&d->ring);
     const int engine = status->error_status && !status->mbs_correctly_decoded ? (int)status->error_status : 0;
     d->last_pic_idx = (uint8_t)picIdx;
     if (h264_dpb_finish(dpb, sh, &cur))
@@ -473,34 +471,17 @@ static int decodePicture(H264Decoder *d, const H264Slice *sh, void *token, bool 
     return !second;
 }
 
-static int growInput(H264Decoder *d, uint64_t needed)
-{
-    uint64_t bytes = d->input_bytes;
-    while (bytes < needed)
-        bytes *= 2;
-    if (bytes > (32u << 20))
-        return -1;
-    uint32_t handle;
-    void *va;
-    if (d->b.alloc(d->b.ctx, bytes, &handle, &va))
-        return -1;
-    memcpy(va, d->input_va, d->bits_off + d->bits_len);
-    d->b.free(d->b.ctx, d->input);
-    d->input = handle;
-    d->input_va = va;
-    d->input_bytes = bytes;
-    return 0;
-}
-
 static int appendSlice(H264Decoder *d, const uint8_t *nal, size_t size)
 {
     if (d->slices >= d->max_slices)
         return -1;
     const uint64_t needed = (uint64_t)d->bits_off + d->bits_len + 3 + size + 16;
-    if (needed > d->input_bytes && growInput(d, needed))
+    if (needed > nvdec_ring_current(&d->ring)->bytes &&
+        nvdec_ring_grow(&d->ring, &d->b, needed, (uint64_t)d->bits_off + d->bits_len))
         return -1;
-    ((uint32_t *)(d->input_va + d->slices_off))[d->slices++] = d->bits_len;
-    uint8_t *dst = d->input_va + d->bits_off + d->bits_len;
+    uint8_t *input = nvdec_ring_current(&d->ring)->va;
+    ((uint32_t *)(input + d->slices_off))[d->slices++] = d->bits_len;
+    uint8_t *dst = input + d->bits_off + d->bits_len;
     dst[0] = dst[1] = 0;
     dst[2] = 1;
     memcpy(dst + 3, nal, size);
@@ -529,12 +510,14 @@ static int finishPicture(H264Decoder *d, const H264Slice *first, void *token, bo
         uint8_t *saved = malloc(bits + (slices + 1) * 4);
         if (!saved)
             return -1;
-        memcpy(saved, d->input_va + d->bits_off, bits);
-        memcpy(saved + bits, d->input_va + d->slices_off, (slices + 1) * 4);
+        const uint8_t *input = nvdec_ring_current(&d->ring)->va;
+        memcpy(saved, input + d->bits_off, bits);
+        memcpy(saved + bits, input + d->slices_off, (slices + 1) * 4);
         const int ret = allocate(d, sps);
-        if (!ret && (uint64_t)d->bits_off + bits + 16 <= d->input_bytes && slices <= d->max_slices) {
-            memcpy(d->input_va + d->bits_off, saved, bits);
-            memcpy(d->input_va + d->slices_off, saved + bits, (slices + 1) * 4);
+        const NVDECInput *fresh = nvdec_ring_current(&d->ring);
+        if (!ret && (uint64_t)d->bits_off + bits + 16 <= fresh->bytes && slices <= d->max_slices) {
+            memcpy(fresh->va + d->bits_off, saved, bits);
+            memcpy(fresh->va + d->slices_off, saved + bits, (slices + 1) * 4);
         }
         free(saved);
         if (ret) {

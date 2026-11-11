@@ -985,7 +985,9 @@ OSStatus avd_create_instance(FourCharCode codec, CFAllocatorRef allocator, VTVid
     d->codec = codec;
     d->planeAsked = -1;
     d->present = nvdec_can_present(client);
-    const H264Backend backend = {d, bufferAlloc, bufferFree, jobSubmit, jobWait, decoded, emit, discard, cpuReads, switch_recycle_output};
+    const H264Backend backend = {d,       bufferAlloc, bufferFree, jobSubmit,
+                                 jobWait, decoded,     emit,       discard,
+                                 cpuReads, switch_recycle_output, nvdec_jobs_in_flight(client) + 1};
     if (codec == kCMVideoCodecType_VP9          ? !(d->vp9 = vp9_decoder_create(&backend))
         : codec == kCMVideoCodecType_HEVC       ? !(d->hevc = hevc_decoder_create(&backend))
         : codec == kCMVideoCodecType_MPEG4Video ? !(d->mpeg4 = mpeg4_decoder_create(&backend))

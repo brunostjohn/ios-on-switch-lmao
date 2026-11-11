@@ -112,7 +112,7 @@ static void fillSetup(const MPEG2Decoder *d, nvdec_mpeg2_pic_s *p, const MPEG2Pi
 static int run(MPEG2Decoder *d, const MPEG2Picture *pic, int current, int past, int future, bool second)
 {
     MPEGFrames *f = &d->frames;
-    ((uint32_t *)(f->input_va + MPEG_FRAMES_TABLES))[d->slices] = f->bits_len;
+    ((uint32_t *)(mpeg_frames_input(f)->va + MPEG_FRAMES_TABLES))[d->slices] = f->bits_len;
     if (mpeg_frames_append(f, kEndOfStream, sizeof(kEndOfStream), false))
         return -3;
     TegraNVDECSubmit submit;
@@ -127,10 +127,11 @@ static int run(MPEG2Decoder *d, const MPEG2Picture *pic, int current, int past, 
     mpeg_frames_entry(&submit, NVC5B0_SET_CONTROL_PARAMS, TEGRA_NVDEC_ENTRY_VALUE,
                       type | (1u << 4) /* GPTIMER_ON */ | (1u << 6) /* ERR_CONCEAL_ON */, 0);
     mpeg_frames_bind(f, &submit, current, past, future);
-    mpeg_frames_entry(&submit, NVC5B0_SET_SLICE_OFFSETS_BUF_OFFSET, TEGRA_NVDEC_ENTRY_RELOC, f->input,
+    const uint32_t input = mpeg_frames_input(f)->handle;
+    mpeg_frames_entry(&submit, NVC5B0_SET_SLICE_OFFSETS_BUF_OFFSET, TEGRA_NVDEC_ENTRY_RELOC, input,
                       MPEG_FRAMES_TABLES);
     return mpeg_frames_run(f, &submit, current,
-                           (TegraNVDECRange){f->input, MPEG_FRAMES_TABLES, (d->slices + 1) * 4, 0});
+                           (TegraNVDECRange){input, MPEG_FRAMES_TABLES, (d->slices + 1) * 4, 0});
 }
 
 // The picture whose slices were collected: decoded into a new surface, or as the second field into its first's.
@@ -184,7 +185,7 @@ static int appendSlice(MPEG2Decoder *d, const uint8_t *data, size_t size)
 {
     if (d->slices >= d->max_slices)
         return -1;
-    ((uint32_t *)(d->frames.input_va + MPEG_FRAMES_TABLES))[d->slices++] = d->frames.bits_len;
+    ((uint32_t *)(mpeg_frames_input(&d->frames)->va + MPEG_FRAMES_TABLES))[d->slices++] = d->frames.bits_len;
     return mpeg_frames_append(&d->frames, data, size, false) ? -3 : 0;
 }
 
