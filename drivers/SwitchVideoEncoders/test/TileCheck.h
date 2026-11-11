@@ -17,8 +17,8 @@
 // the 'hvc1' registration to use.
 bool tile_check(CFStringRef encoderID, char *line, size_t size);
 
-// The fake engine's H.265 job: `buffers` by handle; `layout` and `chroma_mode` are the ones TegraNVENCInfo stated.
-// 0, or -1.
-int tile_check_engine(const TegraNVENCSubmit *submit, uint8_t *const *buffers, uint32_t layout, uint32_t chroma_mode);
+// The fake engine's H.265 job: `buffers` by handle, the input read in the layout its setup names; `chroma_mode` is the
+// one TegraNVENCInfo stated. 0, or -1.
+int tile_check_engine(const TegraNVENCSubmit *submit, uint8_t *const *buffers, uint32_t chroma_mode);
 
 #endif

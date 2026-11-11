@@ -51,12 +51,16 @@ enum {
 };  // NVENC application ids (clc5b7.h NVC5B7_SET_APPLICATION_ID_ID_NVENC_*)
 
 // Input picture layouts (nvenc_h264_surface_cfg_s of input_cfg); TegraNVENCInfo.input_layout names the one in use.
+// NVENC 5.0 reads 16x16 tiles or Tegra block linear (64Bx8 GOBs of 16Bx2 sectors), block_height counting GOBs; both
+// apps turn it into a code, 4, 8, 16 and 32 GOBs to 1..4 and anything else to 0, and no field selects pitch linear
+// (nvidia/SOURCE). PITCH and BL2 are the same code: which of the two the unit reads is HW Test
+// encode.nvenc_input_layouts.
 enum {
-    TEGRA_NVENC_LAYOUT_PITCH = 0,    // pitch linear: block_height 0, tiled_16x16 0
-    TEGRA_NVENC_LAYOUT_BL2_LOG = 1,  // Tegra block linear, 64Bx8 GOBs two to a block; block_height 1 (log2 GOBs)
-    TEGRA_NVENC_LAYOUT_BL2_RAW = 2,  // the same layout; block_height 2 (GOBs)
-    TEGRA_NVENC_LAYOUT_BL4_LOG = 3,  // block linear, four GOBs to a block; block_height 2 (log2 GOBs)
-    TEGRA_NVENC_LAYOUT_BL1 = 4,      // block linear, one GOB to a block; block_height 0
+    TEGRA_NVENC_LAYOUT_PITCH = 0,    // block_height 0, tiled_16x16 0
+    TEGRA_NVENC_LAYOUT_BL2 = 1,      // block linear, two GOBs a block: block_height 2
+    TEGRA_NVENC_LAYOUT_BL4 = 2,      // block_height 4
+    TEGRA_NVENC_LAYOUT_BL8 = 3,      // block_height 8
+    TEGRA_NVENC_LAYOUT_BL16 = 4,     // block_height 16, NvRm's block height for video surfaces
     TEGRA_NVENC_LAYOUT_TILED16 = 5,  // 16x16 tiles in raster order, tile rows `pitch` x 16 apart; tiled_16x16 1
     TEGRA_NVENC_LAYOUTS = 6,
 };

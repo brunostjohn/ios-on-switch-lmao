@@ -102,6 +102,8 @@ size_t h264enc_nal(uint8_t header, const uint8_t *rbsp, size_t size, uint8_t *ou
 // Picks level_idc when it is 0, and checks what NVENC and this code can take: 0, or -1.
 int h264enc_configure(H264EncConfig *config);
 void h264enc_layout(const H264EncConfig *config, H264EncLayout *layout);
+// A picture buffer of `width` x `height` (the coded size) in `layout` (TEGRA_NVENC_LAYOUT_*): whole blocks per plane.
+void h264enc_surface(uint32_t layout, uint32_t width, uint32_t height, H264EncSurface *surface);
 uint32_t h264enc_width_mbs(const H264EncConfig *config);
 uint32_t h264enc_height_mbs(const H264EncConfig *config);
 

@@ -73,3 +73,23 @@ for an I or IDR; with OUT_COLOC_DATA the engine writes colocated motion (I[0x186
 (0x5866-0x58b0). The checks: IN_COLOC_DATA written as 0 in a P or B with coloc_enable, or OUT_COLOC_DATA written as 0
 in an I, IDR or P, is error 0xe2640180 (0x311a-0x319e). The app reads l1 at 0x8a01-0x8a62 and temp_dist_l1 into
 I[0x478] (0x83b4-0x83d9).
+
+Input pictures (tools/falcon accesses with --region 0xa24:0x20, input_cfg at setup + 0x24; both apps alike, H.264 at
+0x85d3-0x86d5, H.265 at 0x1411b-0x141ee): of the surface config the apps read the size, both pitches, sfc_trans_mode,
+the four offsets, byte 0x40 (block_height bits 0-6, tiled_16x16 bit 7) and bits 0-1 of byte 0x41 (memory_mode); no
+app reads nv21_enable or input_bl_mode. I[0xe88] gets width and height in macroblocks (bits 0-8, 9-17), sfc_pitch >> 4
+(9 bits from 18: at most 8176 bytes), tiled_16x16 at bit 27 and memory_mode at bits 29-30 (0x85d3-0x861b); I[0xeb8]
+sfc_pitch_chroma >> 4 (0x8622); I[0xeac] sfc_trans_mode & 7 (0x8633); I[0xe8c] a block-height code, block_height
+32 -> 4, 16 -> 3, 8 -> 2, 4 -> 1, anything else 0 (0x8643-0x8664); I[0xe80] luma_top_frm_offset + IN_CUR_PIC
+(0x8686-0x8695); I[0xe84] chroma_top_frm_offset + CHROMA_U for memory_mode 0 and 2, else planar input with
+I[0xeb0] chroma_top_frm_offset + CHROMA_U and I[0xeb4] chroma_bot_offset + CHROMA_V (0x8698-0x86d5). No bit picks
+pitch linear: a surface is 16x16 tiles or block linear by its block-height code, block_height 0 and 2 giving the same
+code 0.
+NVIDIA's T210 driver (libnvtvmr, above) at create sets input_cfg memory_mode 1 and byte 0x40 to 0x80, 16x16 tiles
+(0x311a8-0x311b8); per picture (0x2d4cc-0x2d520), for an input NvRmSurface of layout 3 (Blocklinear, +0x10) it clears
+the chroma offsets and sets block_height to 1 << BlockHeightLog2 (+0x24), masked to 7 bits, and tiled_16x16 0; for
+every layout memory_mode becomes 1 when the chroma plane's colour format's low byte is 8, else 0, and nv21_enable 0;
+any other layout keeps the 16x16 tiles.
+So block_height counts 64Bx8 GOBs, NVIDIA's own stack hands NVENC 16x16-tiled or block-linear pictures and never pitch
+linear, and code k is 2 << k GOBs. Whether code 0 reads 2-GOB blocks or pitch rows is the unit's to answer (HW Test
+encode.nvenc_input_layouts encodes one IDR from each layout and decodes it back).

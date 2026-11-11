@@ -18,8 +18,8 @@ enum {
 int hevcnvenc_configure(HEVCEncConfig *config);
 uint32_t hevcnvenc_ctbs(const HEVCEncConfig *config);
 
-// Buffer sizes for a session (the H264EncLayout fields, for 32-aligned coded sizes).
-void hevcnvenc_layout(const HEVCEncConfig *config, H264EncLayout *layout);
+// Buffer sizes for a session (the H264EncLayout fields, for 32-aligned coded sizes), the input in `input_layout`.
+void hevcnvenc_layout(const HEVCEncConfig *config, uint32_t input_layout, H264EncLayout *layout);
 
 // The submit for one picture (TegraNVENCCheckH265.h accepts it). `input_layout` and `chroma_mode` are
 // TegraNVENCInfo's; `picture->qp` is the picture's constant QP.

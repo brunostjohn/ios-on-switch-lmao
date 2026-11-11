@@ -50,15 +50,63 @@ static inline uint32_t tegra_nvenc_history_bytes(uint32_t width, uint32_t height
     return row > picture ? row : picture;
 }
 
-// Luma rows a surface spans: its height rounded to 64, which covers 16x16 tiles and block-linear blocks of up to
-// eight GOBs.
-static inline uint32_t tegra_nvenc_surface_rows(uint32_t height)
+// Both apps give the engine a block-linear block height as a code (H.264 app 0x8643-0x8664, H.265 0x1417e-0x1419f, to
+// I/O 0xe8c): 32 GOBs 4, 16 GOBs 3, 8 GOBs 2, 4 GOBs 1, any other block_height 0. Code k is 2 << k GOBs of 8 rows.
+static inline uint32_t tegra_nvenc_block_code(uint32_t blockHeight)
 {
-    return tegra_nvenc_align(height, 64);
+    switch (blockHeight & 0x7f) {
+    case 32:
+        return 4;
+    case 16:
+        return 3;
+    case 8:
+        return 2;
+    case 4:
+        return 1;
+    default:
+        return 0;
+    }
+}
+
+// The block_height a layout puts in input_cfg (TegraNVENCABI.h): GOBs a block, 0 for pitch and 16x16 tiles.
+static inline uint32_t tegra_nvenc_layout_gobs(uint32_t layout)
+{
+    switch (layout) {
+    case TEGRA_NVENC_LAYOUT_BL2:
+        return 2;
+    case TEGRA_NVENC_LAYOUT_BL4:
+        return 4;
+    case TEGRA_NVENC_LAYOUT_BL8:
+        return 8;
+    case TEGRA_NVENC_LAYOUT_BL16:
+        return 16;
+    default:
+        return 0;
+    }
+}
+
+// Rows of one block of a plane: a 16x16 tile row, or 2 << code GOBs (code 0 read as two GOBs covers pitch rows too).
+static inline uint32_t tegra_nvenc_block_rows(bool tiled, uint32_t blockHeight)
+{
+    return tiled ? 16 : 16u << tegra_nvenc_block_code(blockHeight);
+}
+
+// Luma and chroma rows a surface spans: its plane heights rounded to whole blocks, and luma to at least 64 and chroma
+// to 32 rows as every surface has been laid out since E3.
+static inline uint32_t tegra_nvenc_luma_rows(uint32_t height, uint32_t blockRows)
+{
+    return tegra_nvenc_align(height, blockRows > 64 ? blockRows : 64);
+}
+
+static inline uint32_t tegra_nvenc_chroma_rows(uint32_t height, uint32_t blockRows)
+{
+    return tegra_nvenc_align((height + 1) / 2, blockRows > 32 ? blockRows : 32);
 }
 
 // A surface: luma at its relocation, chroma `chromaOffset` bytes into the luma buffer (surface config) or at its own
 // relocation. Every reading is bounded: the config offset alone, the chroma relocation alone, and the two added.
+// block_height is a GOB count with an unambiguous code (TegraNVENCABI.h), or 0 or 2; the apps take the pitch in 16-byte
+// units in a 9-bit field (I/O 0xe88 bits 18-26, 0xeb8), so 8176 bytes at most.
 static inline const char *tegra_nvenc_check_surface(const nvenc_h264_surface_cfg_s *c, uint32_t width, uint32_t height,
                                                     uint64_t lumaAvail, uint64_t chromaAvail, bool reference)
 {
@@ -70,14 +118,14 @@ static inline const char *tegra_nvenc_check_surface(const nvenc_h264_surface_cfg
         return "surface field offsets";
     if (reference ? (!c->tiled_16x16 || c->block_height) : (c->tiled_16x16 && c->block_height))
         return "surface tiling";
-    if (c->block_height > 2)
+    if (c->block_height && c->block_height != 2 && !tegra_nvenc_block_code(c->block_height))
         return "block height";
     const uint32_t pitch = c->sfc_pitch;
-    if (pitch != c->sfc_pitch_chroma || (pitch & 63) || pitch < tegra_nvenc_align(width, 16) || pitch > 16384)
+    if (pitch != c->sfc_pitch_chroma || (pitch & 63) || pitch < tegra_nvenc_align(width, 16) || pitch > 8176)
         return "surface pitch";
-    const uint64_t rows = tegra_nvenc_surface_rows(height);
-    const uint64_t luma = (uint64_t)pitch * rows;
-    const uint64_t chroma = luma / 2;
+    const uint32_t blockRows = tegra_nvenc_block_rows(c->tiled_16x16, c->block_height);
+    const uint64_t luma = (uint64_t)pitch * tegra_nvenc_luma_rows(height, blockRows);
+    const uint64_t chroma = (uint64_t)pitch * tegra_nvenc_chroma_rows(height, blockRows);
     const uint64_t offset = (uint64_t)c->chroma_top_frm_offset * 256;
     if (offset && offset < luma)
         return "chroma overlaps luma";

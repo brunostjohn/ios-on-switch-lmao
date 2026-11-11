@@ -231,7 +231,7 @@ static OSStatus startStream(Encoder *e, CFTypeRef primaries, CFTypeRef transfer,
                                   .fps_den = c->fps_den};
         if (hevcnvenc_configure(&e->hevc))
             return kVTPropertyNotSupportedErr;
-        hevcnvenc_layout(&e->hevc, &e->layout);
+        hevcnvenc_layout(&e->hevc, c->input_layout, &e->layout);
     } else {
         h264enc_layout(c, &e->layout);
     }

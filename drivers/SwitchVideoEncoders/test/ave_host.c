@@ -15,7 +15,7 @@
 // 1280x720 High IDR and P picture are byte for byte those of NVIDIA's own T210 driver (driverControls) and the checker
 // accepts them; the checker refuses each kind of bad submit derived from a good one; the layouts' offsets are a
 // bijection; the rate control converges on a synthetic bits-versus-QP model; the HEVC tile slots (TileCheck.c, whose
-// fake H.265 job is answered by tile_check_engine) in the same three layouts.
+// fake H.265 job is answered by tile_check_engine) in the same four layouts.
 // Prints "PASS ave ..." (test:ave_host_test).
 #include "../AVE/AVEEncoder.c"
 #include <stdio.h>
@@ -132,15 +132,15 @@ static void readMacroblock(const uint8_t *surface, uint32_t layout, uint32_t pit
         }
 }
 
+// The fake reads block_height as the GOB count it names.
 static uint32_t layoutOf(const nvenc_h264_surface_cfg_s *cfg)
 {
     if (cfg->tiled_16x16)
         return TEGRA_NVENC_LAYOUT_TILED16;
-    if (cfg->block_height == 1)
-        return TEGRA_NVENC_LAYOUT_BL2_LOG;
-    if (cfg->block_height == 2)
-        return gLayout == TEGRA_NVENC_LAYOUT_BL4_LOG ? gLayout : TEGRA_NVENC_LAYOUT_BL2_RAW;
-    return gLayout == TEGRA_NVENC_LAYOUT_BL1 ? gLayout : TEGRA_NVENC_LAYOUT_PITCH;  // block height 0: pitch or BL1
+    for (uint32_t layout = 0; layout < TEGRA_NVENC_LAYOUTS; layout++)
+        if (layout != TEGRA_NVENC_LAYOUT_TILED16 && tegra_nvenc_layout_gobs(layout) == cfg->block_height)
+            return layout;
+    return TEGRA_NVENC_LAYOUTS;
 }
 
 static int engine(NVENCClient *c, const TegraNVENCSubmit *s)
@@ -288,7 +288,7 @@ int nvenc_submit(void *ctx, const TegraNVENCSubmit *s, uint32_t *fence)
         return -1;
     }
     if (s->codec == TEGRA_NVENC_CODEC_H265) {
-        if (tile_check_engine(s, c->va, gLayout, gChroma))
+        if (tile_check_engine(s, c->va, gChroma))
             return -1;
         *fence = (uint32_t)++gSubmits;
         return 0;
@@ -376,7 +376,7 @@ static void layouts(void)
 {
     enum {
         PITCH = 128,
-        ROWS = 64
+        ROWS = 128  // a BL16 block
     };
 
     static uint8_t seen[PITCH * ROWS];
@@ -397,7 +397,7 @@ static void layouts(void)
             const uint32_t gob =
                 ((x % 64) / 32) * 256 + ((y % 8) / 2) * 64 + ((x % 32) / 16) * 32 + (y % 2) * 16 + x % 16;
             const size_t nvdec = (y / 16) * 128 * 16 + (x / 64) * 1024 + ((y % 16) / 8) * 512 + gob;
-            if (h264enc_surface_offset(TEGRA_NVENC_LAYOUT_BL2_LOG, 128, x, y) != nvdec) {
+            if (h264enc_surface_offset(TEGRA_NVENC_LAYOUT_BL2, 128, x, y) != nvdec) {
                 EXPECT(false, "BL2 differs from NVDEC's block linear at %u,%u", x, y);
                 return;
             }
@@ -603,6 +603,9 @@ static void refusals(void)
         {"ME predictors in without out", "ME predictors in without out, or out without in"},
         {"ME predictor buffer too small", "ME predictor buffers"},
         {"slice of one macroblock more than the picture", "slice control"},
+        {"block height 1, which the firmware reads as 0 (no GOB count of its own)", "block height"},
+        {"pitch past the firmware's 9-bit field of 16-byte units", "surface pitch"},
+        {"32-GOB blocks in a buffer laid out with whole 64-row blocks", "surface too small"},
     };
 
     for (unsigned k = 0; k < sizeof(cases) / sizeof(cases[0]); k++) {
@@ -707,6 +710,15 @@ static void refusals(void)
         case 23:
             ((nvenc_h264_slice_control_s *)(s.setup + pc->slice_control_offset))->num_mb++;
             break;
+        case 24:
+            p->input_cfg.block_height = 1;
+            break;
+        case 25:
+            p->input_cfg.sfc_pitch = p->input_cfg.sfc_pitch_chroma = 8192;
+            break;
+        case 26:
+            p->input_cfg.block_height = 32;
+            break;
         }
         const char *why = tegra_nvenc_check(&s, avail);
         EXPECT(why && !strcmp(why, cases[k].why), "%s: checker said \"%s\", expected \"%s\"", cases[k].name,
@@ -768,7 +780,8 @@ int main(void)
         uint32_t layout, chroma;
     } runs[] = {
         {TEGRA_NVENC_LAYOUT_PITCH, TEGRA_NVENC_CHROMA_OFFSET},
-        {TEGRA_NVENC_LAYOUT_BL2_LOG, TEGRA_NVENC_CHROMA_METHOD},
+        {TEGRA_NVENC_LAYOUT_BL2, TEGRA_NVENC_CHROMA_METHOD},
+        {TEGRA_NVENC_LAYOUT_BL16, TEGRA_NVENC_CHROMA_OFFSET},
         {TEGRA_NVENC_LAYOUT_TILED16, TEGRA_NVENC_CHROMA_OFFSET},
     };
 

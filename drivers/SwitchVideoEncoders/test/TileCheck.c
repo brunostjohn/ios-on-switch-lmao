@@ -16,6 +16,7 @@
 #include "../../TegraNVENC/nvidia/nvenc_drv.h"
 #pragma clang diagnostic pop
 #include "../../TegraNVENC/nvidia/clc5b7.h"
+#include "../../TegraNVENC/TegraNVENCCheckCommon.h"
 
 typedef struct OpaqueVTTileCompressionSession *VTTileCompressionSessionRef;
 typedef void (*TileOutput)(void *refcon, void *sourceRefCon, VTInt32Point origin, VTInt32Size size, OSStatus status,
@@ -48,15 +49,14 @@ enum {
 static uint8_t *gInputs[TILES];  // what each H.265 job read, raster: TILE x TILE luma, then TILE x TILE/2 CbCr
 static int gJobs;
 
-static uint32_t layoutOf(const nvenc_h265_surface_cfg_s *cfg, uint32_t proven)
+static uint32_t layoutOf(const nvenc_h265_surface_cfg_s *cfg)
 {
     if (cfg->tiled_16x16)
         return TEGRA_NVENC_LAYOUT_TILED16;
-    if (cfg->block_height == 1)
-        return TEGRA_NVENC_LAYOUT_BL2_LOG;
-    if (cfg->block_height == 2)
-        return proven == TEGRA_NVENC_LAYOUT_BL4_LOG ? proven : TEGRA_NVENC_LAYOUT_BL2_RAW;
-    return proven == TEGRA_NVENC_LAYOUT_BL1 ? proven : TEGRA_NVENC_LAYOUT_PITCH;
+    for (uint32_t layout = 0; layout < TEGRA_NVENC_LAYOUTS; layout++)
+        if (layout != TEGRA_NVENC_LAYOUT_TILED16 && tegra_nvenc_layout_gobs(layout) == cfg->block_height)
+            return layout;
+    return TEGRA_NVENC_LAYOUTS;
 }
 
 static const TegraNVENCEntry *find(const TegraNVENCSubmit *s, uint16_t method)
@@ -67,7 +67,7 @@ static const TegraNVENCEntry *find(const TegraNVENCSubmit *s, uint16_t method)
     return NULL;
 }
 
-int tile_check_engine(const TegraNVENCSubmit *s, uint8_t *const *buffers, uint32_t proven, uint32_t chromaMode)
+int tile_check_engine(const TegraNVENCSubmit *s, uint8_t *const *buffers, uint32_t chromaMode)
 {
     const nvenc_h265_drv_pic_setup_s *p = (const nvenc_h265_drv_pic_setup_s *)s->setup;
     const TegraNVENCEntry *in = find(s, NVC5B7_SET_IN_CUR_PIC), *inChroma = find(s, NVC5B7_SET_IN_CUR_PIC_CHROMA_U);
@@ -78,7 +78,7 @@ int tile_check_engine(const TegraNVENCSubmit *s, uint8_t *const *buffers, uint32
     const uint8_t *input = buffers[in->value] + in->offset;
     const uint32_t chroma = chromaMode == TEGRA_NVENC_CHROMA_OFFSET ? p->input_cfg.chroma_top_frm_offset * 256
                                                                     : inChroma->offset - in->offset;
-    const uint32_t layout = layoutOf(&p->input_cfg, proven), pitch = p->input_cfg.sfc_pitch;
+    const uint32_t layout = layoutOf(&p->input_cfg), pitch = p->input_cfg.sfc_pitch;
     uint8_t *raster = malloc(TILE * TILE * 3 / 2);
     for (uint32_t y = 0; y < TILE; y++)
         for (uint32_t x = 0; x < TILE; x++) {

@@ -163,15 +163,22 @@ int h264enc_configure(H264EncConfig *c)
     return 0;
 }
 
+void h264enc_surface(uint32_t layout, uint32_t width, uint32_t height, H264EncSurface *s)
+{
+    const uint32_t blockRows =
+        tegra_nvenc_block_rows(layout == TEGRA_NVENC_LAYOUT_TILED16, tegra_nvenc_layout_gobs(layout));
+    s->pitch = ALIGN(width, 64);
+    s->rows = tegra_nvenc_luma_rows(height, blockRows);
+    s->chroma_offset = s->pitch * s->rows;
+    s->bytes = s->chroma_offset + s->pitch * tegra_nvenc_chroma_rows(height, blockRows);
+}
+
 void h264enc_layout(const H264EncConfig *c, H264EncLayout *l)
 {
     memset(l, 0, sizeof(*l));
     const uint32_t wmbs = h264enc_width_mbs(c), hmbs = h264enc_height_mbs(c), mbs = wmbs * hmbs;
-    const uint32_t pitch = ALIGN(wmbs * 16, 64), rows = tegra_nvenc_surface_rows(c->height);
-    l->input.pitch = l->recon.pitch = pitch;
-    l->input.rows = l->recon.rows = rows;
-    l->input.chroma_offset = l->recon.chroma_offset = pitch * rows;
-    l->input.bytes = l->recon.bytes = pitch * rows + pitch * rows / 2;
+    h264enc_surface(c->input_layout, wmbs * 16, hmbs * 16, &l->input);
+    h264enc_surface(TEGRA_NVENC_LAYOUT_TILED16, wmbs * 16, hmbs * 16, &l->recon);
     // At most 3200 bits per macroblock (A.3.1 item j, the I_PCM bound) plus headers: NVENC's output never outgrows it.
     l->bitstream_bytes = ALIGN(mbs * 400 + 4096, 65536);
     l->status_bytes = 4096;
@@ -367,20 +374,8 @@ static void surfaceConfig(const H264EncConfig *c, const H264EncSurface *s, nvenc
         cfg->tiled_16x16 = 1;  // references are always 16x16 tiled (nvenc_drv.h 1.5)
         return;
     }
-    switch (c->input_layout) {
-    case TEGRA_NVENC_LAYOUT_BL2_LOG:
-        cfg->block_height = 1;
-        break;
-    case TEGRA_NVENC_LAYOUT_BL2_RAW:
-    case TEGRA_NVENC_LAYOUT_BL4_LOG:
-        cfg->block_height = 2;
-        break;
-    case TEGRA_NVENC_LAYOUT_TILED16:
-        cfg->tiled_16x16 = 1;
-        break;
-    default:
-        break;  // PITCH and BL1: block_height 0
-    }
+    cfg->tiled_16x16 = c->input_layout == TEGRA_NVENC_LAYOUT_TILED16;
+    cfg->block_height = tegra_nvenc_layout_gobs(c->input_layout);
 }
 
 // The slice, motion search, mode decision and quantisation controls: the values NVIDIA's own T210 driver gives NVENC
@@ -644,19 +639,10 @@ static size_t blockLinear(uint32_t gobs, uint32_t pitch, uint32_t x, uint32_t y)
 
 size_t h264enc_surface_offset(uint32_t layout, uint32_t pitch, uint32_t x, uint32_t y)
 {
-    switch (layout) {
-    case TEGRA_NVENC_LAYOUT_BL2_LOG:
-    case TEGRA_NVENC_LAYOUT_BL2_RAW:
-        return blockLinear(2, pitch, x, y);
-    case TEGRA_NVENC_LAYOUT_BL4_LOG:
-        return blockLinear(4, pitch, x, y);
-    case TEGRA_NVENC_LAYOUT_BL1:
-        return blockLinear(1, pitch, x, y);
-    case TEGRA_NVENC_LAYOUT_TILED16:
+    if (layout == TEGRA_NVENC_LAYOUT_TILED16)
         return (size_t)(y / 16) * pitch * 16 + (x / 16) * 256 + (y % 16) * 16 + x % 16;
-    default:
-        return (size_t)y * pitch + x;
-    }
+    const uint32_t gobs = tegra_nvenc_layout_gobs(layout);
+    return gobs ? blockLinear(gobs, pitch, x, y) : (size_t)y * pitch + x;
 }
 
 // One plane: `rows` x `bytes` samples from `src` (edge-replicated past `w` x `h`), 16 bytes at a time: each 16-byte

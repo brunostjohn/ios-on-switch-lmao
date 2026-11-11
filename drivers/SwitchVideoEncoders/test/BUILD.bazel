@@ -2,7 +2,7 @@
 #   ave_host_test  AVE (H264H7.videoencoder) itself on this Mac's VideoToolbox over a fake TegraNVENC client whose
 #                  engine is a lossless stand-in for NVENC: every submit accepted by the kernel's own checker
 #                  (TegraNVENCCheck.h), the encode check (EncodeCheck.c, the one the Switch runs once per boot) decoding
-#                  every frame back exactly with Apple's decoder in three input layouts, sync samples where they
+#                  every frame back exactly with Apple's decoder in four input layouts, sync samples where they
 #                  belong, P_Skip from the reference the setup names; B pictures where the session allows
 #                  reordering (ReorderCheck.c: decode order, decode times, picture types, exact decode back, an engine
 #                  that refuses B pictures); the SPS/PPS/avcC parsing back with AVD's H264Syntax.c; the checker
