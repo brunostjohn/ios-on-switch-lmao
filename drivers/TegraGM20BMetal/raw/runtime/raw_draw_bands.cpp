@@ -35,7 +35,8 @@ bool RenderEncoder::measureDraw(uint64_t units, DrawTiming &t)
         !measure(emitted_->bandRate, units))
         return false;
     const uint32_t n = dev_->drawStamps_.fetch_add(1, std::memory_order_relaxed);
-    t = {&emitted_->bandRate, units, n % kDrawStampSlots, n + 1 ? n + 1 : 1};
+    t = {&emitted_->bandRate, units, n % kDrawStampSlots, n + 1 ? n + 1 : 1, emitted_->rec ? emitted_->rec->keyHash : 0,
+         emitted_->fragmentInstructions};
     return true;
 }
 
@@ -102,6 +103,13 @@ void Device::learnDrawTimes(const std::vector<DrawTiming> &timings)
             continue;
         learn(*t.rate, ns, t.units);
         RAW_DIAGNOSTIC(stats.learnedDraws++);
+#if SWITCH_RAW_DIAGNOSTICS
+        if (ns >= kLongDrawNs)
+            os_log(os_log_create("com.brunostjohn.switch.TegraGM20BMetal", "raw"),
+                   "raw: long draw %llu us k%016llx %llu kunits %u instr, learned %u ps a unit",
+                   (unsigned long long)(ns / 1000), (unsigned long long)t.key, (unsigned long long)(t.units / 1000),
+                   t.instructions, t.rate->psPerUnit.load(std::memory_order_relaxed));
+#endif
     }
 }
 
