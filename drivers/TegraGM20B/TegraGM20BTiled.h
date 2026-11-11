@@ -31,8 +31,8 @@ struct tgm_tiled {
 	struct tgm_scratch *scratch;
 	uint32_t locks;
 	int wrote, stranded;
-	/* the rows as a GPU submission found them when it wrote the surface under a write lock (tgm_views_gpu_writes): the
-	 * last unlock merges; whether that was logged for the surface */
+	/* the texels as rows, read back before the first GPU submission that writes the surface under a write lock
+	 * (tgm_views_gpu_writes): the last unlock merges; whether that was logged for the surface */
 	struct tgm_scratch *base;
 	int merged;
 

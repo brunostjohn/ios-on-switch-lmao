@@ -258,7 +258,7 @@ GROUPS: dict[str, list[Check]] = {
             regex=r'timed out on (?P<who>.+) \(channel \d+\) (?P<ms>\d+) ms after its kick .* waits on (?P<what>.+)',
             show=('who', 'ms', 'what'),
             source='drivers/TegraGM20B/gpu_acquire.c',
-            note='first boots: ms near 1000 confirms the PTIMER scale; mthd 00000074: syncpoint waits time out',
+            note='first boots: ms near 1000: PTIMER scale right; METHOD0 address 0x74 (SYNCPOINTB): syncpoints too',
         ),
         Check(
             'gpu.acquire-unfired',

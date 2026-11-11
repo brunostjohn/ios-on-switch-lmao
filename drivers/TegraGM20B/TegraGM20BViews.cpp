@@ -9,9 +9,10 @@
 //  - the last unlock (any task) after a lock that may have written cleans the scratch's lines and has the copy engine
 //    write the rows back into the texels, behind the GPU's writers, before IOSurface's unlock moves the seed, then gives
 //    the scratch back;
-//  - a GPU submission that writes the surface while a write lock holds its rows (tgm_views_gpu_writes) first keeps the
-//    rows as they are (base), so that unlock lays only what the CPU changed over what the GPU wrote
-//    (TegraGM20BViewMerge.h): a CPU lock does not hold the GPU back, as on Apple's GPUs.
+//  - a GPU submission that writes the surface while a write lock holds its rows (tgm_views_gpu_writes) first reads the
+//    texels back as rows once more (base: what the lock found, the GPU's write not in yet), so that unlock lays only what
+//    the CPU changed over what the GPU wrote (TegraGM20BViewMerge.h): a CPU lock does not hold the GPU back, as on
+//    Apple's GPUs.
 // A view whose user client died (its task exited holding the lock) is dropped at the next trap of the surface. While any
 // lock is held the entry holds a reference of its own, so its surface stays block-linear and its scratch stays put.
 #include <IOKit/IOLib.h>
@@ -168,7 +169,15 @@ void drain(tgm_coh *c, tgm_tiled &t)
 		tgm_relayout_pages rows;
 		tgm_scratch_pages(t.scratch, &rows);
 		tgm_cpu_clean_pages(rows.pas, rows.npages);
-		if (!t.base || !mergeBack(c, t))
+		const bool merged = t.base && mergeBack(c, t);
+		if (t.base && !merged) {
+			switch_refusal("iosurface-layout", "merge-failed",
+				       "IOSurface %u: no memory or mapping to merge a GPU write "
+				       "made under a "
+				       "CPU write lock: the unlock writes the lock's rows over it",
+				       tgm_coh_surface_id(c));
+		}
+		if (!merged)
 			move(c, t, rows, TGM_RELAYOUT_TO_TILED);
 	}
 	if (t.base) {
@@ -302,7 +311,8 @@ extern "C" int tgm_views_trap(void *client, uint32_t index, uint32_t id, uint32_
 extern "C" void tgm_views_gpu_writes(struct tgm_coh *c)
 {
 	const tgm_tiled *seen = c ? __atomic_load_n(tgm_coh_tiled(c), __ATOMIC_ACQUIRE) : nullptr;
-	if (!seen || !__atomic_load_n(&seen->locks, __ATOMIC_ACQUIRE))
+	if (!seen || !__atomic_load_n(&seen->locks, __ATOMIC_ACQUIRE) ||
+	    !__atomic_load_n(&seen->wrote, __ATOMIC_ACQUIRE))
 		return;
 	tgm_coh_lock(c);
 	tgm_tiled *t = __atomic_load_n(tgm_coh_tiled(c), __ATOMIC_ACQUIRE);
@@ -311,9 +321,6 @@ extern "C" void tgm_views_gpu_writes(struct tgm_coh *c)
 		tgm_scratch *base = tgm_scratch_get(
 			static_cast<uint64_t>(tgm_coh_pages(c).npages) << 12, 0, &rows);
 		if (base) {
-			tgm_scratch_pages(t->scratch, &rows);
-			tgm_cpu_clean_pages(rows.pas, rows.npages);
-			tgm_scratch_pages(base, &rows);
 			tgm_cpu_clean_pages(rows.pas, rows.npages);
 			move(c, *t, rows, TGM_RELAYOUT_TO_ROWS);
 			tgm_cpu_clean_pages(rows.pas, rows.npages);

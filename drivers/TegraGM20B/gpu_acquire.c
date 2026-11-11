@@ -175,6 +175,24 @@ static enum tgm_wait_source semaphore_source(struct tgm_chan *chan,
 	return TGM_WAITS_UNKNOWN;
 }
 
+/* CCSR says the PBDMA switched the channel out on an acquire, or PBDMA0 is on it at a semaphore acquire or a syncpoint
+ * wait (a waiter it never left: its RAMFC is not current) */
+static int chan_parked(u32 chid, u32 ccsr)
+{
+	struct nvkm_device *device = tgm_gpu.device;
+	u32 method0 = 0;
+	u32 data0 = 0;
+
+	if (tgm_ccsr_acquiring(ccsr))
+		return 1;
+	if (PBDMA_CHID(nvkm_rd32(device, PBDMA_CHANNEL(0))) != chid)
+		return 0;
+	method0 = nvkm_rd32(device, PBDMA_METHOD0(0));
+	data0 = nvkm_rd32(device, PBDMA_DATA0(0));
+	return tgm_pbdma_acquiring(method0, data0) ||
+	       (PBDMA_METHOD_ADDR(method0) == TGM_HOST_SYNCPOINTB && !(data0 & 0x3u));
+}
+
 /* What the channel's push waits on: a live channel's fence (*source), something the kernel or a host1x engine releases
  * (VICTIM: never its fault), an acquire on an address only its own pushes name (UNKNOWN), or nothing (NONE). From RAMFC,
  * which holds the acquire once the PBDMA switched the channel out (CCSR acquire pending); else the order acquire
@@ -185,7 +203,7 @@ enum tgm_wait_source tgm_chan_wait_source(struct tgm_chan *chan, struct tgm_chan
 					  char *what, unsigned int len)
 {
 	const u32 ccsr = nvkm_rd32(tgm_gpu.device, TGM_CCSR_CHANNEL(chan->chid));
-	const int parked = tgm_ccsr_acquiring(ccsr) ||
+	const int parked = chan_parked(chan->chid, ccsr) ||
 			   chan->acquire_fired_ns >
 				   max(READ_ONCE(chan->progress_ns), READ_ONCE(chan->busy_ns));
 	const struct tgm_order *o = &chan->waited;
@@ -230,15 +248,15 @@ enum tgm_wait_source tgm_chan_wait_source(struct tgm_chan *chan, struct tgm_chan
 	return TGM_WAITS_NONE;
 }
 
-/* tgm_live_lock held: a channel the PBDMA switched out on an acquire (CCSR) that has waited past its timeout with no
- * interrupt for it. Logged once a channel; the hang checks go on deciding it. */
+/* tgm_live_lock held: a channel parked on an acquire (chan_parked) that has waited past its timeout with no interrupt
+ * for it. Logged once a channel; the hang checks go on deciding it. */
 void tgm_acquire_unfired(struct tgm_chan *chan, u64 now)
 {
 	const u64 since = max(READ_ONCE(chan->progress_ns), READ_ONCE(chan->busy_ns));
 
 	if (chan->acquire_unfired || chan->acquire_due || chan->acquire_fired_ns >= since ||
 	    now - since < TGM_ACQUIRE_NS + TGM_HANG_NS ||
-	    !tgm_ccsr_acquiring(nvkm_rd32(tgm_gpu.device, TGM_CCSR_CHANNEL(chan->chid))))
+	    !chan_parked(chan->chid, nvkm_rd32(tgm_gpu.device, TGM_CCSR_CHANNEL(chan->chid))))
 		return;
 	chan->acquire_unfired = 1;
 	nvxnu_log("tegra-gm20b: %s (channel %u) parked on an acquire %llu ms with its %llu ms "
@@ -291,6 +309,10 @@ static void acquire_timed_out(u32 chid, const struct acquire_record *r)
 	chan->acquire_fired_ns = r->ns;
 	chan->acquire_unread = 0;
 	kind = tgm_chan_wait_source(chan, &source, what, sizeof(what));
+	if (PBDMA_METHOD_ADDR(r->method0) == TGM_HOST_SYNCPOINTB) {
+		kind = TGM_WAITS_VICTIM;
+		scnprintf(what, sizeof(what), "a host1x syncpoint (PBDMA at SYNCPOINTB)");
+	}
 	nvxnu_log("tegra-gm20b: semaphore acquire timed out on %s (channel %u) %llu ms after its "
 		  "kick (timeout %llu ms), PBDMA at mthd %08x data %08x: waits on %s\n",
 		  chan->owner, chid,

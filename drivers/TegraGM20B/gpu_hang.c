@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 // Channel progress, hang detection, client fault isolation and recovery.
 #include "gpu_internal.h"
+#include "../../kits/SwitchLinux/SwitchLinux.h"
 
 /* The time the hold kept the channel off the GPU is not the channel's: it never counts toward a stall. */
 uint64_t tgm_chan_check_progress(struct tgm_chan *chan, const char *who, uint32_t seqno)
@@ -487,6 +488,9 @@ enum tgm_hang tgm_hang_recover(struct tgm_chan *late, const char *who, u32 seqno
 	return verdict;
 }
 
+/* tgm_live_lock: the line names the channel and the engine, past nvxnu_log's 512 characters and within os_log's 1,024 */
+static char ctxsw_line[1024];
+
 /* A client's context that cannot switch is the only one lost: nvkm's recovery (nvkm_runl_rc) takes that channel off
  * the runlist and resets the engines still on its group; every other channel's context lives in its own instance
  * block, GR's reset reloads its firmware with clock gating off (tgm_clkgate_guard_reset) and ZBC from nvkm's tables, and
@@ -516,9 +520,11 @@ enum tgm_ctxsw tgm_ctxsw_decide(int chid)
 			scnprintf(report, sizeof(report), "CTXSW_TIMEOUT: %s", state);
 			tgm_chan_isolate(chan, report, now);
 			tgm_engine_state(engine, sizeof(engine));
-			nvxnu_log("tegra-gm20b: context switch timed out, recovering %s (channel "
-				  "%u): %s; %s\n",
+			scnprintf(ctxsw_line, sizeof(ctxsw_line),
+				  "tegra-gm20b: context switch timed out, recovering %s (channel %u): "
+				  "%s; %s\n",
 				  chan->owner, chan->chid, state, engine);
+			switch_linux_log_line(ctxsw_line);
 		}
 	}
 	mutex_unlock(&tgm_live_lock);
