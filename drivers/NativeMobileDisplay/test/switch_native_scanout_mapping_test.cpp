@@ -56,7 +56,7 @@ struct Display {
 #include "../SwitchNativePlaneDisplay.h"
 };
 }
-int switch_native_scanout_acquire(OSObject *, SwitchNativeScanout *out)
+int switch_native_scanout_acquire(OSObject *, SwitchNativeScanout *out, bool)
 {
     ++acquisitions;
     *out = nativeError ? SwitchNativeScanout{} : nextNative;

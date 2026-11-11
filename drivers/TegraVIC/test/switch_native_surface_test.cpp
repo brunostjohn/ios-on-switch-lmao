@@ -425,6 +425,26 @@ TEST_F(TurnedSurface, TheDestinationIsTheDecodersPictureTurnedForTheDisplayOnly)
     switch_native_surface_release(&view);
 }
 
+// The display's acquire of a turned destination (SwitchLandscapeSelection.h): the decoder's picture, read-leased, with
+// the turn; without `turns` the destination is not a picture the display may scan as it is.
+TEST_F(TurnedSurface, TheDisplayAcquiresTheTurnedPictureItself)
+{
+    ASSERT_EQ(publishTurned(), 0);
+    const unsigned readers = native.readers;
+    SwitchNativeScanout scanout = {};
+    EXPECT_EQ(switch_native_scanout_acquire(turnedObject, &scanout), -95);
+    EXPECT_EQ(scanout.lease, nullptr);
+    ASSERT_EQ(switch_native_scanout_acquire(turnedObject, &scanout, true), 0);
+    EXPECT_EQ(scanout.view.native, &native);
+    EXPECT_EQ(scanout.view.turn.transform, 7u);
+    EXPECT_EQ(scanout.view.turn.width, 1280u);
+    EXPECT_NE(scanout.lease, nullptr);
+    EXPECT_EQ(native.readers, readers + 1);
+    EXPECT_EQ(turns, 0u);
+    switch_native_scanout_release(&scanout);
+    EXPECT_EQ(native.readers, readers);
+}
+
 TEST_F(TurnedSurface, APictureTheDecoderReplacedIsNotRecorded)
 {
     ASSERT_EQ(switch_native_surface_publish(&surface, &picture), 0);

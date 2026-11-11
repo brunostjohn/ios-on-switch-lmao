@@ -47,6 +47,7 @@ struct Display {
         image.yuv = false;
         return slot + 4;
     }
+    bool planeLandscapeDecide(const native_planes::Roles &, uint32_t, uint32_t, PlaneDecision &) { return false; }
 #include "../SwitchPlaneSelection.h"
 };
 native_planes::Layer layer(native_planes::Kind kind, bool ui = false)

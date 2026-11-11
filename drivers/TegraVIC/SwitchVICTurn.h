@@ -37,6 +37,13 @@ int switch_vic_turn_surface(const SwitchNativeSurfaceView &source, const TegraVI
                             const TegraVICSurface *destination, switch_gpu_cpu_lease *owned, bool queue,
                             const char **why);
 
+#if (defined(DEVELOPMENT) && DEVELOPMENT) || (defined(DEBUG) && DEBUG)
+// A HW Test run's own traits (SwitchLandscapeRunABI.h's SWITCH_DISPLAY_TRAIT_*), held for its TegraVIC connection
+// `client` until it releases them or the connection closes.
+void switch_display_traits_force(uint32_t traits, const void *client);
+void switch_display_traits_release(const void *client);
+#endif
+
 // TegraVIC's transform worker, before it copies: 1 when the job is recorded on its destination instead (nothing to
 // submit, the caller completes it), 0 to copy as before. A job with events copies: the events wait for VIC's work.
 int switch_vic_turn_defer(const TegraVICSurface *source, const TegraVICSurface *destination, const TegraVICPlan *plan,

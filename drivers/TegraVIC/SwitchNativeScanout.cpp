@@ -12,7 +12,7 @@ void switch_native_scanout_release(SwitchNativeScanout *scanout)
     *scanout = {};
 }
 
-int switch_native_scanout_acquire(OSObject *object, SwitchNativeScanout *scanout)
+int switch_native_scanout_acquire(OSObject *object, SwitchNativeScanout *scanout, bool turns)
 {
     if (!scanout)
         return -22;
@@ -22,7 +22,7 @@ int switch_native_scanout_acquire(OSObject *object, SwitchNativeScanout *scanout
         return -22;
     // The display calls this under its gate while it still scans earlier frames, whose leases a publisher of this
     // surface waits for.
-    int error = switch_native_surface_acquire(&surface, &scanout->view, true);
+    int error = switch_native_surface_acquire(&surface, &scanout->view, true, turns);
     switch_gpu_cpu_lease *logical = nullptr;
     if (!error)
         error = switch_gpu_backing_conversion_reserve(scanout->view.logical, SWITCH_GPU_BACKING_READ, 1, &logical);

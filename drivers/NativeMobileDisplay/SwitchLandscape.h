@@ -85,6 +85,30 @@ inline bool videoImage(const native_planes::Layer &picture, const switch_gpu_bac
     return switch_native_plane_planes(picture, layout, image);
 }
 
+// A detached layer showing the whole of a destination TegraVIC recorded as the decoder's picture (`width` x `height`
+// visible at `cropX`, `cropY` in its buffer) turned by `transform` from source rectangle `turned`: window A scans the
+// picture itself onto the layer's destination. False when the layer shows part of the destination (or turns it again),
+// the picture is not 8-bit 4:2:0, or its chroma is sited where the window does not sample it (VIC resamples it).
+inline bool turnedVideoImage(const native_planes::Layer &layer, const switch_gpu_backing_layout &layout,
+                             uint32_t cropX, uint32_t cropY, uint32_t width, uint32_t height, uint32_t transform,
+                             native_planes::Rect turned, uint32_t panelWidth, uint32_t panelHeight,
+                             native_planes::Image &image)
+{
+    using namespace native_planes;
+    if (layer.transform || layer.src.x || layer.src.y || uint32_t(layer.src.w) != layer.surface.width ||
+        uint32_t(layer.src.h) != layer.surface.height || layout.plane_count != 2 || layout.color_matrix > 3)
+        return false;
+    Layer picture;
+    picture.kind = layout.format == fourcc('4', '2', '0', 'v')   ? kKindNv12Video
+                   : layout.format == fourcc('4', '2', '0', 'f') ? kKindNv12Full
+                                                                 : kKindNone;
+    picture.surface.format = layout.format;
+    picture.surface.width = width;
+    picture.surface.height = height;
+    return videoImage(picture, layout, cropX, cropY, turned, transform, layer.dst, panelWidth, panelHeight, image) &&
+           !image.convert;
+}
+
 // Window A's and B's blend while B carries the UI over the video on A: B in front, premultiplied; A opaque behind it.
 struct Blend {
     uint32_t layer, match, nomatch;

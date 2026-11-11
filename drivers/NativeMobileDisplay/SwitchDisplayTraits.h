@@ -16,3 +16,14 @@ struct SwitchDisplayTraits {
 };
 
 constexpr SwitchDisplayTraits kSwitchDisplayTraits = {false, false, false};
+
+// The traits the kernel runs with: kSwitchDisplayTraits, and on debug kernels those a HW Test run forces for itself
+// through TegraVIC's kernel-test selector until its connection closes (SwitchVICTurn.cpp).
+#if (defined(DEVELOPMENT) && DEVELOPMENT) || (defined(DEBUG) && DEBUG)
+extern "C" SwitchDisplayTraits switch_display_traits(void);
+#else
+constexpr SwitchDisplayTraits switch_display_traits()
+{
+    return kSwitchDisplayTraits;
+}
+#endif

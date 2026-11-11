@@ -9,7 +9,8 @@ struct SwitchNativeScanout {
     uint64_t pitchOffset = 0;
 };
 
-int switch_native_scanout_acquire(OSObject *surface, SwitchNativeScanout *scanout);
+// turns: a picture TegraVIC recorded turned (SwitchVICTurn.h) too, for window A's column scan; view.turn says which.
+int switch_native_scanout_acquire(OSObject *surface, SwitchNativeScanout *scanout, bool turns = false);
 int switch_native_scanout_pitch(OSObject *surface, SwitchNativeScanout *scanout);
 int switch_native_scanout_pitch_wait(OSObject *surface, SwitchNativeScanout *scanout);
 void switch_native_scanout_release(SwitchNativeScanout *scanout);

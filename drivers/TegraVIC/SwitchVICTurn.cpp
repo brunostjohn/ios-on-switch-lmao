@@ -5,8 +5,14 @@
 #include "SwitchVICJobs.h"
 #include "SwitchVICMapping.h"
 #include "SwitchNativeVICImage.h"
+#include "../NativeMobileDisplay/SwitchLandscapeRunABI.h"
 
 namespace {
+#if TEGRA_VIC_STATS
+uint32_t gForcedTraits;
+const void *gForcedBy;
+#endif
+
 struct Turn {
     uint32_t refs = 1;
     switch_gpu_backing *source = nullptr, *destination = nullptr;
@@ -116,3 +122,28 @@ int switch_vic_turn_defer(const TegraVICSurface *source, const TegraVICSurface *
     switch_native_surface_release(&picture);
     return error ? 0 : 1;
 }
+
+#if TEGRA_VIC_STATS
+extern "C" SwitchDisplayTraits switch_display_traits(void)
+{
+    SwitchDisplayTraits traits = kSwitchDisplayTraits;
+    const uint32_t forced = __atomic_load_n(&gForcedTraits, __ATOMIC_ACQUIRE);
+    traits.overlayBlockYuv = traits.overlayBlockYuv || (forced & SWITCH_DISPLAY_TRAIT_OVERLAY_BLOCK_YUV);
+    traits.columnScanYuv = traits.columnScanYuv || (forced & SWITCH_DISPLAY_TRAIT_COLUMN_SCAN_YUV);
+    traits.offsetCrop = traits.offsetCrop || (forced & SWITCH_DISPLAY_TRAIT_OFFSET_CROP);
+    return traits;
+}
+
+void switch_display_traits_force(uint32_t traits, const void *client)
+{
+    __atomic_store_n(&gForcedBy, client, __ATOMIC_RELEASE);
+    __atomic_store_n(&gForcedTraits, traits, __ATOMIC_RELEASE);
+}
+
+void switch_display_traits_release(const void *client)
+{
+    const void *expected = client;
+    if (__atomic_compare_exchange_n(&gForcedBy, &expected, nullptr, false, __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE))
+        __atomic_store_n(&gForcedTraits, 0u, __ATOMIC_RELEASE);
+}
+#endif

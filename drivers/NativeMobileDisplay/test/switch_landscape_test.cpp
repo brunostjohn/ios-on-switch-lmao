@@ -146,6 +146,39 @@ TEST_F(Landscape, WhatWindowACannotTurnIsRefused)
     EXPECT_TRUE(admit({0, 0, 4096, 720}, 7, {0, 0, 720, 1280}));
 }
 
+// The destination Core Animation detaches is what the turn filled ('422v' on iPadOS 27, portrait), shown whole.
+TEST_F(Landscape, ADetachedTurnedDestinationScansThePictureItself)
+{
+    Layer destination;
+    destination.kind = kKindNv16Video;
+    destination.surface.format = fourcc('4', '2', '2', 'v');
+    destination.surface.width = 720;
+    destination.surface.height = 1280;
+    destination.src = {0, 0, 720, 1280};
+    destination.dst = {0, 0, 720, 1280};
+    const Rect turned = {0, 0, 1280, 720};
+    Image direct;
+    ASSERT_TRUE(switch_landscape::videoImage(picture, layout, 0, 0, turned, 7, destination.dst, 720, 1280, direct));
+    ASSERT_TRUE(switch_landscape::turnedVideoImage(destination, layout, 0, 0, 1280, 720, 7, turned, 720, 1280, image));
+    EXPECT_EQ(image.options, direct.options);
+    EXPECT_EQ(image.prescaled, direct.prescaled);
+    EXPECT_EQ(image.hOffset, direct.hOffset);
+    EXPECT_EQ(image.start[1], direct.start[1]);
+    destination.dst = {0, 160, 720, 960};  // letterboxed: still the whole destination
+    EXPECT_TRUE(switch_landscape::turnedVideoImage(destination, layout, 0, 0, 1280, 720, 7, turned, 720, 1280, image));
+    destination.src = {0, 0, 720, 1278};  // part of the destination
+    EXPECT_FALSE(switch_landscape::turnedVideoImage(destination, layout, 0, 0, 1280, 720, 7, turned, 720, 1280, image));
+    destination.src = {0, 0, 720, 1280};
+    destination.transform = 4;
+    EXPECT_FALSE(switch_landscape::turnedVideoImage(destination, layout, 0, 0, 1280, 720, 7, turned, 720, 1280, image));
+    destination.transform = 0;
+    layout.chroma_top = layout.chroma_bottom = 3;  // sited where window A does not sample: VIC resamples it
+    EXPECT_FALSE(switch_landscape::turnedVideoImage(destination, layout, 0, 0, 1280, 720, 7, turned, 720, 1280, image));
+    layout.chroma_top = layout.chroma_bottom = 0;
+    layout.format = fourcc('x', '4', '2', '0');
+    EXPECT_FALSE(switch_landscape::turnedVideoImage(destination, layout, 0, 0, 1280, 720, 7, turned, 720, 1280, image));
+}
+
 TEST_F(Landscape, TheUiOnWindowBIsInFrontOfTheVideo)
 {
     EXPECT_EQ(switch_landscape::kUiOnB.layer & 0xff, 0u);  // depth 0: in front

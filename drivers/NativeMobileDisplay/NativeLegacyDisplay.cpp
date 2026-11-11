@@ -4727,6 +4727,7 @@ public:
 #include "SwitchUnderflowDisplay.h"
 #include "SwitchLandscapeDisplay.h"
 #include "SwitchNativePlaneDisplay.h"
+#include "SwitchLandscapeSelection.h"
 #include "SwitchPlaneConversionDisplay.h"
 #include "SwitchScanoutSetup.h"
 #include "NativePlaneFenceDisplay.h"

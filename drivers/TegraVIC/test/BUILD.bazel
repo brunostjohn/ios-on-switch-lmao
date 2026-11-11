@@ -335,6 +335,7 @@ host_test(
     srcs = [
         "switch_vic_transform_test.cpp",
         "//drivers/NativeMobileDisplay:SwitchDisplayTraits.h",
+        "//drivers/NativeMobileDisplay:SwitchLandscapeRunABI.h",
         "//drivers/TegraVIC:SwitchVICTransform.h",
         "//drivers/TegraVIC:SwitchVICTurn.h",
         "//drivers/TegraVIC:SwitchVICSurfaceAccess.h",

@@ -86,6 +86,8 @@ void planeDecide(const OriginalLegacySwapRequest *request, PlaneDecision &d)
                           (((updated & (1u << static_cast<uint32_t>(roles.ui))) != 0u) || d.ui != planeShownUi));
     if (any && roles.ui < 0 && stats)
         ++stPlaneDropped;  // no UI layer: window A keeps the last one
+    if (planeLandscapeDecide(roles, width, height, d))
+        return;
     PlaneSet want = {};
     switch_display::Overlay wanted[2] = {};
     const int selected[2] = {roles.plane, roles.second};
