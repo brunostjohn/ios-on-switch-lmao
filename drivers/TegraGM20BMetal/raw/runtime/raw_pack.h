@@ -30,10 +30,11 @@ enum PackSectionId {
     PackSplits,
     PackVariants,
     PackArchives,
+    PackIterated,
     PackSectionCount
 };
 
-constexpr uint32_t kPackVersion = 16;
+constexpr uint32_t kPackVersion = 17;
 
 // What a record or a program variant (PackVariant) assumes, as bits of a mask: a draw takes a variant only where all of them
 // hold. Bits 0-15 are facts of the draw's bindings, bit 16 of its pipeline, bits 17-25 of the chip (kChipAssumptions): 17 and
@@ -137,10 +138,28 @@ enum PackFetchRung : uint8_t {
 };
 
 // PackPipeline::fetchRung's low bits are its PackFetchRung; its high bits, the rungs below FetchInterlock a color's fetch could
-// take once a device probe confirms them, which no draw takes: Core Animation's fragment blend of the color has a
-// fixed-function equation (FetchBlend, probe E4 of the ROP's arithmetic for its format and factors), or has none
-// (FetchIteratedBlend, probe d14 of the iterated blend unit)
+// take: Core Animation's fragment blend of the color has a fixed-function equation (FetchBlend), or has none
+// (FetchIteratedBlend). Where the pack holds the state's fetch-free form (PipelineFetchFreeForm), that record's fetchRung
+// names the rung it draws on for the color it blends.
 constexpr uint8_t kFetchRungMask = 0x0F, kFetchCandidateBlend = 0x10, kFetchCandidateIterated = 0x20;
+
+// A fetch-free form's iterated blend (PackIterated, one per program the pack's records name): the program the ROP runs for
+// the one colour target its draw binds, and the common blend block's alpha factors it takes alpha from (enable 1). A
+// program of no instructions is Core Animation's colour matrix (vcm), whose constants and form are each draw's uniform:
+// the GPU's macro SWITCH_GM20B_MACRO_VCM_CONSTANTS loads them from the fragment buffer and offset it names.
+constexpr uint32_t kIteratedProgramWords = 128, kIteratedConstants = 8;
+
+struct PackIteratedBlend {
+    uint8_t count;   // instructions, SET_ITERATED_BLEND_PASS; 0: the colour matrix macro's
+    uint8_t enable;  // SET_ITERATED_BLEND: 1 RGB from the program, alpha from the common block; 3 both from the program
+    uint8_t constants;       // constant slots it reads, from 0
+    uint8_t uniformSlot;     // the colour matrix's: the fragment buffer index it is in; kNoUniform: none
+    uint16_t uniformOffset;  // the matrix's bytes from the buffer's bind offset
+    uint16_t reserved;
+    uint32_t alphaSource, alphaDest;           // SET_BLEND_ALPHA_SOURCE_COEFF, SET_BLEND_ALPHA_DEST_COEFF (OGL values)
+    uint16_t constant[kIteratedConstants][3];  // SET_ITERATED_BLEND_CONSTANT_RED/GREEN/BLUE(j): half floats
+    uint32_t program[kIteratedProgramWords];   // LOAD_ITERATED_BLEND_INSTRUCTION words, the first count of them
+};
 
 // The bytes of a uniform buffer entry a pipeline's programs read: from its bind offset, in 16-byte units
 struct PackUniformRange {
@@ -206,7 +225,11 @@ enum PackPipelineFlags : uint32_t {
     PipelineStorageMetadata = 8,
     // one of the state's records for a variant its draws pick (the depth and stencil tests' class, the cubic samplers'
     // binds), made by the pack builder: under the state's keyHash, named by variantName; Pack::find passes over it
-    PipelineVariantRecord = 16
+    PipelineVariantRecord = 16,
+    // the state drawn with no framebuffer fetch: its program writes the blend's source, which the ROP blends with the
+    // color (fetchRung: FetchBlend, its registers' blend; FetchIteratedBlend, the iterated program it names). Under the
+    // state's keyHash; only PackForm::FetchFree finds it
+    PipelineFetchFreeForm = 32
 };
 
 // Where a key's variant name starts (" | cubic ...", then " | tests=<n>": the runtime's names, RawMetalCubic.mm), its size
@@ -216,11 +239,17 @@ inline size_t variantNameAt(const std::string &key)
     return std::min({key.find(" | cubic "), key.find(" | tests="), key.size()});
 }
 
-// Which of a state's records: its first (the storage form where it has both), or its barrier form
+// Which of a state's records: its first (the storage form where it has both), its barrier form, or its fetch-free form
 enum class PackForm : uint8_t {
     Default,
-    Barrier
+    Barrier,
+    FetchFree
 };
+
+struct PackPipeline;
+
+// The form a record answers to (Pack::find): a variant record's is its state's own
+PackForm recordForm(const PackPipeline &pp);
 
 constexpr uint8_t cbufKind(uint8_t type)
 {
@@ -254,7 +283,7 @@ struct PackPipeline {
         pushMask;  // root-table words [0x700, 0x780) the state's push ranges write (m2v's windows, as NVK wrote them)
     uint32_t pushWords[32];
     uint8_t blendColorWord, halfBlendColorWord;  // push word + 1, zero when absent
-    uint16_t pushReserved;
+    uint16_t iterated;  // a fetch-free form's iterated blend: its PackIteratedBlend's index + 1; 0: none
     uint8_t storageMask, storageWriteMask, storageSamples, storageTests;
     uint32_t storageTic[8];
     PackShaderTests shaderTests;
@@ -386,6 +415,7 @@ static_assert(sizeof(PackVariant) == 8, "pack layout");
 static_assert(sizeof(PackArchive) == 16, "pack layout");
 static_assert(sizeof(PackKernel) == 18 + 256 + 8 + 128 + 128, "pack layout");
 static_assert(sizeof(PackSplit) == 34 + 256 + 32, "pack layout");
+static_assert(sizeof(PackIteratedBlend) == 16 + 48 + 4 * kIteratedProgramWords, "pack layout");
 
 class Pack {
 public:
@@ -416,7 +446,8 @@ public:
     const PackSplit *split(uint32_t wholeProgram) const;   // nullptr: not split
     // `pp`'s variants of stage `stage` (0 vertex, 1 fragment), `count` of them; nullptr: none
     const PackVariant *variants(const PackPipeline &pp, uint32_t stage, uint32_t &count) const;
-    const PackArchive *archive(uint64_t pathHash) const;  // nullptr: the pack lists no such archive
+    const PackArchive *archive(uint64_t pathHash) const;              // nullptr: the pack lists no such archive
+    const PackIteratedBlend *iterated(const PackPipeline &pp) const;  // nullptr: it names none
     bool declares(const PackArchive &archive, uint64_t keyHash) const;
 
     const char *string(uint32_t off) const

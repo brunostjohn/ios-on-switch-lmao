@@ -9,9 +9,13 @@ MAGIC = b'GM20BPK1'
 # data and constant buffer types; 6: compute kernels (runtime/raw_pack.h PackKernel); 8: a texture3d entry's Metal
 # index; 9: split fragment programs (PackSplit); 10: dynamic blend push fields; 11: qualified ordered storage views;
 # 15: program variants, programs' register counts and bound-texture slots, the uniform table, fetch rungs, chip facts,
-# binary archives' declared states; 16: 32-bit program indices (pipelines, variants, kernels, splits)
-VERSION = 16
-SECTIONS = 12  # runtime/raw_pack.h PackSectionCount
+# binary archives' declared states; 16: 32-bit program indices (pipelines, variants, kernels, splits); 17: fetch-free
+# forms and their iterated blend programs
+VERSION = 17
+SECTIONS = 13  # runtime/raw_pack.h PackSectionCount
+# PackIteratedBlend: count, enable, constants, uniformSlot, uniformOffset, reserved, alphaSource, alphaDest,
+# constant[8][3], program[128]
+ITERATED = struct.Struct('<BBBBHHII24H128I')
 KERNEL_ENTRIES = 16  # PackKernel.entry's length
 PROGRAM_CBUFS = 11  # PackProgram.cbufType's length (runtime/raw_pack.h)
 # PackPipeline's record-v15 tail: variants, variantCount[2], storageBlendMask, storageBlendModel, boundEntries,
@@ -29,8 +33,15 @@ def chip_facts() -> int:
 # PackSplit (runtime/raw_pack.h)
 PACK_SPLIT = struct.Struct('<IIIIHBBBB8sHH64IHH7I')
 SPLIT_COST_FIELDS = (
-    'version', 'reserved', 'launch_cycles', 'drain_cycles', 'prologue_warp_cycles',
-    'prologue_instructions', 'saved_pixel_instructions', 'saved_pixel_cycles', 'frontier_values',
+    'version',
+    'reserved',
+    'launch_cycles',
+    'drain_cycles',
+    'prologue_warp_cycles',
+    'prologue_instructions',
+    'saved_pixel_instructions',
+    'saved_pixel_cycles',
+    'frontier_values',
 )
 
 
@@ -153,6 +164,7 @@ def pipeline_bytes(rec: dict, key_offset: int, blob_off: int, variants_off: int 
     flags |= 4 if rec.get('push_metadata') else 0
     flags |= 8 if rec.get('storage_mask') else 0
     flags |= 16 if variant_name(rec['key']) else 0
+    flags |= 32 if rec.get('form') == 'free' else 0
     head = struct.pack(
         '<QIIIIIBBBBHHI',
         keyhash,
@@ -169,11 +181,27 @@ def pipeline_bytes(rec: dict, key_offset: int, blob_off: int, variants_off: int 
         rec['set_size'],
         flags,
     )
-    dynamic = struct.pack('<BBH', rec.get('blend_color_word', 0), rec.get('half_blend_color_word', 0), 0)
-    storage = struct.pack('<BBBB8I', rec.get('storage_mask', 0), rec.get('storage_write_mask', 0),
-                          rec.get('storage_samples', 0), rec.get('storage_tests', 0), *rec.get('storage_tic', [0] * 8))
-    tests = struct.pack('<BBBBIII', rec.get('depth_test_word', 0), rec.get('stencil_test_word', 0),
-                        rec.get('test_flags', 0), 0, rec.get('depth_tic', 0), rec.get('stencil_tic', 0), 0)
+    dynamic = struct.pack(
+        '<BBH', rec.get('blend_color_word', 0), rec.get('half_blend_color_word', 0), rec.get('iterated', 0)
+    )
+    storage = struct.pack(
+        '<BBBB8I',
+        rec.get('storage_mask', 0),
+        rec.get('storage_write_mask', 0),
+        rec.get('storage_samples', 0),
+        rec.get('storage_tests', 0),
+        *rec.get('storage_tic', [0] * 8),
+    )
+    tests = struct.pack(
+        '<BBBBIII',
+        rec.get('depth_test_word', 0),
+        rec.get('stencil_test_word', 0),
+        rec.get('test_flags', 0),
+        0,
+        rec.get('depth_tic', 0),
+        rec.get('stencil_tic', 0),
+        0,
+    )
     counts = [sum(1 for v in rec.get('variants', []) if v['stage'] == stage) for stage in (0, 1)]
     v15 = PIPELINE_V15.pack(
         variants_off if any(counts) else 0,
@@ -258,6 +286,27 @@ def place_graphics(
     )
 
 
+def iterated_bytes(programs: list[dict]) -> bytes:
+    """Give the PackIterated section: each fetch-free form's iterated blend (iterated/table.py record)."""
+    out = bytearray()
+    for p in programs:
+        constants = [half for j in range(8) for half in p['constants'].get(j, (0, 0, 0))]
+        words = p['words'] + [0] * (128 - len(p['words']))
+        out += ITERATED.pack(
+            len(p['words']),
+            p['enable'],
+            len(p['constants']),
+            p.get('uniform_slot', 0xFF),
+            p.get('uniform_offset', 0),
+            0,
+            p['alpha_source'],
+            p['alpha_dest'],
+            *constants,
+            *words,
+        )
+    return bytes(out)
+
+
 def split_bytes(found: list[dict]) -> bytes:
     """Give the PackSplit section: the splits in whole-program order (raw_pack.cpp Pack::split searches it)."""
     return b''.join(
@@ -292,6 +341,7 @@ class Pack:
     kernels: list[dict]
     splits: list[dict] = field(default_factory=list)
     archives: bytes = b''  # the PackArchives section (archives.py)
+    iterated: list[dict] = field(default_factory=list)  # the PackIterated section's programs (iterated_bytes)
 
 
 def pipeline_sections(pipes: list[dict]) -> tuple[bytearray, list[int], bytearray, bytearray]:
@@ -361,6 +411,7 @@ def pack_bytes(pack: Pack) -> tuple[bytes, list[int]]:
         split_bytes(pack.splits),
         bytes(variant_bin),
         pack.archives,
+        iterated_bytes(pack.iterated),
     ]
     assert len(sections) == SECTIONS
     header_size = 8 + 4 * 4 + 8 * 2 * len(sections)

@@ -147,8 +147,10 @@ LAYOUTS = {
     14: (480, 32, 10, struct.Struct('<QIHHIIBBBBHHI')),
     15: (536, 36, 12, struct.Struct('<QIHHIIBBBBHHI')),
     16: (540, 36, 12, struct.Struct('<QIIIIIBBBBHHI')),
+    17: (540, 36, 13, struct.Struct('<QIIIIIBBBBHHI')),
 }
 VARIANT_RECORD = 16  # PackPipelineFlags PipelineVariantRecord: a variant's record under its state's key
+FETCH_FREE_FORM = 32  # PipelineFetchFreeForm: the state drawn with no framebuffer fetch, under its state's key
 
 
 class Pack:
@@ -161,13 +163,13 @@ class Pack:
             raise SystemExit(f'{path}: a version-{self.version} pack')
         pipeline_bytes, self.program_bytes, sections, head = LAYOUTS[self.version]
         self.sec = [struct.unpack_from('<QQ', self.p, 24 + 16 * i) for i in range(sections)]
-        self.pipelines = {}
+        self.pipelines, self.free = {}, {}
         for i in range(self.npipe):
             at = self.sec[1][0] + pipeline_bytes * i
             key, _, _, fs, blob, dwords, *_, flags = head.unpack_from(self.p, at)
             if flags & VARIANT_RECORD:
                 continue
-            self.pipelines.setdefault(key, (fs, blob, dwords))
+            (self.free if flags & FETCH_FREE_FORM else self.pipelines).setdefault(key, (fs, blob, dwords))
 
     def code(self, program: int) -> bytes:
         at = self.sec[0][0] + self.program_bytes * program

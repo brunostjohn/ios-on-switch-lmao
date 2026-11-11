@@ -24,6 +24,7 @@ usage: caset.py <qc-<build>.json> <corpus.log> [tier ...]   prints the R lines (
 import sys
 
 import caspec
+import fetchfree
 
 TIERS = ('corpus', 'manifest', 'variants', 'blend', 'fetch')
 LIFTABLE = range(1, 26)  # lift_blend_function: the blend functions above 25 stay in the fragment
@@ -151,32 +152,38 @@ def _variant_tier(tables: caspec.Tables, seeds: list[str]) -> list[str]:
 # (runtime/raw_pack.h kFetchCandidateBlend, kFetchCandidateIterated): 2 where QuartzCore's blend function has a
 # fixed-function equation (its table's 0-25), 3 where it has none (the iterated blend unit's), each only where nothing
 # else reads the destination (no texture or image function that does)
-FIXED_FUNCTION_BLENDS = range(26)
+FIXED_FUNCTION_BLENDS = fetchfree.FIXED_FUNCTION_BLENDS
 
 
 def fetch_rung(tables: caspec.Tables, name: str) -> int:
-    """Give the rung (2 or 3) a fragment blend of `name` is a candidate for, 0 for none or a QuartzCore 17's tables."""
-    if not tables.v27:
-        return 0
-    import caspec27  # noqa: PLC0415  (only a QuartzCore 27's tables decode it)
-
-    t = tables.v27
+    """Give the rung (2 or 3) a fragment blend of `name` is a candidate for, 0 for none."""
     try:
-        s = caspec27.decode(t, name)
+        s = caspec.decode(tables, name)
     except (KeyError, IndexError, ValueError):
         return 0
-    if s.fragB == t.none or t.tfi_flags(s.T) >> 1 & 1:
+    if s.fragB == tables.none_blend or tables.tfi_flags(s.T) >> 1 & 1:
         return 0
-    if any(t.image_flags(image.I) >> 3 & 1 for image in s.images[: s.decoded]):
+    images = s.images[: getattr(s, 'decoded', len(s.images))]
+    if any(tables.t['image_function_info'][image.I] >> 3 & 1 for image in images):
         return 0
     return 2 if s.fragB in FIXED_FUNCTION_BLENDS else 3
 
 
-def with_fetch_rung(tables: caspec.Tables, line: str) -> str:
-    """Give a Core Animation R line with its fragment blend's candidate rung after its label (" rung=<n>"), if any."""
+def with_fetch_rung(tables: caspec.Tables, line: str, why: dict[str, int] | None = None) -> str:
+    """Give a Core Animation R line with its fragment blend's candidate rung after its label (" rung=<n>").
+
+    A line whose state has a fetch-free form also carries its tag (fetchfree.tag); `why` counts the candidates' forms by
+    rung and their reasons for having none.
+    """
     name = caspec.corpus_fields(line)[0]
     rung = fetch_rung(tables, name) if name else 0
-    return line.replace(' samples=', f' rung={rung} samples=', 1) if rung else line
+    if not rung:
+        return line
+    free, reason = fetchfree.tag(tables, name, line)
+    if why is not None:
+        key = f'rung {rung}: ' + (reason or f'form on rung {free[6]}')
+        why[key] = why.get(key, 0) + 1
+    return line.replace(' samples=', f' rung={rung}{free} samples=', 1)
 
 
 def corpus_names(path: str, tables: caspec.Tables | None = None) -> list[str]:

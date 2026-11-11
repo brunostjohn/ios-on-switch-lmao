@@ -44,8 +44,13 @@ bool Pack::load(const char *path, uint64_t stack, std::string &err)
     base_ = static_cast<const uint8_t *>(m);
     size_ = st.st_size;
     hdr_ = reinterpret_cast<const PackHeader *>(base_);
-    if (size_ < sizeof(PackHeader) || memcmp(hdr_->magic, "GM20BPK1", 8) || hdr_->version != kPackVersion) {
-        err = "not a version-" + std::to_string(kPackVersion) + " pack";
+    if (size_ < sizeof(PackHeader) || memcmp(hdr_->magic, "GM20BPK1", 8)) {
+        err = "not a raw pack";
+        return false;
+    }
+    if (hdr_->version != kPackVersion) {
+        err = "a version-" + std::to_string(hdr_->version) + " pack: this runtime reads version " +
+              std::to_string(kPackVersion) + " only";
         return false;
     }
     if (stack && hdr_->stack != stack) {
@@ -123,7 +128,10 @@ const PackPipeline *Pack::find(uint64_t keyHash, PackForm form) const
         const PackPipeline *at = p + (index_.empty() ? lo : index_[lo]);
         if (at->flags & PipelineVariantRecord)
             continue;
-        if (form == PackForm::Barrier) {
+        if (form == PackForm::FetchFree || (at->flags & PipelineFetchFreeForm)) {
+            if (form == PackForm::FetchFree && (at->flags & PipelineFetchFreeForm))
+                return at;
+        } else if (form == PackForm::Barrier) {
             if (at->flags & PipelineBarrierForm)
                 return at;
         } else {
@@ -185,6 +193,20 @@ const PackSplit *Pack::split(uint32_t wholeProgram) const
         return x.whole < w;
     });
     return at != end && at->whole == wholeProgram ? at : nullptr;
+}
+
+PackForm recordForm(const PackPipeline &pp)
+{
+    return pp.flags & PipelineFetchFreeForm ? PackForm::FetchFree
+           : pp.flags & PipelineBarrierForm ? PackForm::Barrier
+                                            : PackForm::Default;
+}
+
+const PackIteratedBlend *Pack::iterated(const PackPipeline &pp) const
+{
+    if (!pp.iterated || uint64_t(pp.iterated) * sizeof(PackIteratedBlend) > bytes(PackIterated))
+        return nullptr;
+    return section<PackIteratedBlend>(PackIterated) + pp.iterated - 1;
 }
 
 const PackVariant *Pack::variants(const PackPipeline &pp, uint32_t stage, uint32_t &count) const

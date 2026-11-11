@@ -17,7 +17,9 @@ import struct
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), 'iterated'))
 import archives
+import fetchfree_link
 import kernels
 import mkpack
 import packfile
@@ -90,6 +92,7 @@ def load_records(path: str) -> tuple[list[dict], list[dict]]:
             if r.u32():
                 rec['split'] = {'record': r.blob(), 'programs': [program(r) for _ in range(2)]}
             rec['variants'] = [{'assume': r.u32(), 'program': program(r)} for _ in range(r.u32())]
+            rec['iterated'] = r.blob().decode()
         states.append(rec)
     return states, kernel_recs
 
@@ -163,7 +166,7 @@ def pipeline_of(rec: dict, varying: list[int], prog_index: dict[str, int], const
     regs = rec['probe']['records'][0]['regs']
     varying = list(varying)
     if storage_mask:
-        for method in [0x0210, 0x0754, 0x1224] + [0x1a00 + 4 * i for i in range(8) if storage_mask >> i & 1]:
+        for method in [0x0210, 0x0754, 0x1224] + [0x1A00 + 4 * i for i in range(8) if storage_mask >> i & 1]:
             if method not in varying:
                 varying.append(method)
     return {
@@ -202,6 +205,8 @@ def pipeline_of(rec: dict, varying: list[int], prog_index: dict[str, int], const
         'bound_entries': bound_entries,
         'uniform': uniform,
         'fetch_rung': list(fetch_rung),
+        'iterated_name': rec.get('iterated', ''),
+        'fs_image': rec['programs'][1]['image'],
         'variants': [
             {
                 'stage': 0 if i < vertex_variants else 1,
@@ -226,7 +231,8 @@ def gather(buckets: list[str], context: dict[int, int]) -> tuple[list[dict], lis
     states, seen, refused = [], set(), []
     for d in buckets:
         for rec in load_records(os.path.join(d, 'records.bin'))[0]:
-            form = 'barrier' if rec['outcome'] == 0 and PIPELINE.unpack_from(rec['pipeline'])[12] & 2 else ''
+            flags = PIPELINE.unpack_from(rec['pipeline'])[12] if rec['outcome'] == 0 else 0
+            form = 'barrier' if flags & 2 else 'free' if flags & 32 else ''
             if (form, rec['key']) in seen:
                 continue
             seen.add((form, rec['key']))
@@ -349,6 +355,7 @@ def main() -> None:
     lay_out_variants(states, programs, laid, report)
     constexpr_tsc: list[list[int]] = []
     pipes = sorted((pipeline_of(rec, varying, prog_index, constexpr_tsc) for rec in states), key=packfile.key_hash)
+    pipes, iterated = fetchfree_link.attach(pipes, report)
     computes = compute_kernels(buckets, constexpr_tsc, laid, report)
     used = list(dict.fromkeys(prog_recs[rec['fs']]['id'] for rec in pipes))
     split = splits.lay_out(used, found, programs, laid, report)
@@ -357,7 +364,16 @@ def main() -> None:
     held = archives.held_kernels([k['key'] for k in computes])
     report.append(archives.report(declared, kinds, held))
     pack = packfile.Pack(
-        pipes, prog_recs, constexpr_tsc, baseline, init_recs, heap, computes, split, archives.section(declared, held)
+        pipes,
+        prog_recs,
+        constexpr_tsc,
+        baseline,
+        init_recs,
+        heap,
+        computes,
+        split,
+        archives.section(declared, held),
+        iterated,
     )
     data, blob = packfile.pack_bytes(pack)
     os.makedirs(out_dir, exist_ok=True)

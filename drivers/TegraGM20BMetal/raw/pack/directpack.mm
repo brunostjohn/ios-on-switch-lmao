@@ -10,8 +10,10 @@
 // method and value pairs: raw_emit's), its vertex and fragment programs (header + code, shader data, constant buffer types:
 // each a u32 length and bytes), its constexpr sampler headers (u32 count, eight words each), which its entries number from 0,
 // and its fragment program's split: u32 0, or 1 and its PackSplit (no program indices), its per-pixel program and its prologue
-// (as the programs above; the prologue's header 80 bytes of zeros). A record of one of a state's variants has the variant's name
-// after its key (runtime/raw_pack.h variantNameAt).
+// (as the programs above; the prologue's header 80 bytes of zeros), its program variants, and the iterated blend program a
+// fetch-free form names (u32 length and bytes: ca/fetchfree.py, iterated/table.py; empty for any other record). A record of
+// one of a state's variants has the variant's name after its key (runtime/raw_pack.h variantNameAt); a state's fetch-free
+// form is under the state's key (PipelineFetchFreeForm).
 // Then per compute dispatch shape (the corpus's D lines, as the kernel probe read them: kernel_shapes.h): "DKRN", the outcome,
 // its raw_compute_key.h key and the reason, then for a made kernel its PackKernel (raw_direct_compute.h; program 0), its code,
 // shader data and constant buffer types, and its sampler headers, which its sampler entries number from 0 (slot 0x80 | n).
@@ -26,6 +28,7 @@
 #include "bridge/NativeMetalObjects.h"
 #include "direct_kernels.h"
 #include "direct_states.h"
+#include "fetch_free.h"
 
 namespace {
 
@@ -70,7 +73,8 @@ bool head(Writer &w, const char *tag, const std::string &key, raw::CompileOutcom
 }
 
 void record(Writer &w, const std::string &key, raw::CompileOutcome outcome, const std::string &why,
-            const raw::RuntimeRecord &rec, const std::map<uint32_t, uint32_t> &registers)
+            const raw::RuntimeRecord &rec, const std::map<uint32_t, uint32_t> &registers,
+            const std::string &iterated = "")
 {
     if (!head(w, "DREC", key, outcome, why))
         return;
@@ -102,6 +106,7 @@ void record(Writer &w, const std::string &key, raw::CompileOutcome outcome, cons
         w.u32(v.assume);
         program(v.program);
     }
+    w.text(iterated);
 }
 
 // The rung a Core Animation state's fragment blend is a candidate for (rawpack.py's split tags its line " rung=<2|3>":
@@ -140,12 +145,42 @@ std::vector<uint8_t> testClasses(const raw::PackPipeline &p, const std::string &
 
 struct Counts {
     uint32_t made = 0, refused = 0, failed = 0, split = 0, variants = 0;
+    uint32_t free[4] = {}, freeFetching = 0, freeRefused = 0;
 };
+
+// The state's fetch-free form (fetch_free.h), under the state's key: refused where the form still fetches (it reads
+// another attachment), so the state keeps its storage form
+void makeFetchFree(raw::Direct &direct, Writer &w, id<MTLLibrary> qc, const std::string &line, const std::string &key,
+                   raw::ProbeTextures textures, Counts &n)
+{
+    probe::FetchFree form;
+    probe::State s;
+    if (!probe::fetchFree(line, form) || !probe::parseState(qc, form.line, s) || form.colour >= 8)
+        return;
+    std::map<uint32_t, uint32_t> registers;
+    raw::RuntimeRecord rec;
+    std::string why;
+    // made under its own key, whose colour fields give its registers their blend, and filed under the state's
+    const raw::CompileOutcome outcome =
+        direct.make(s.d, s.key, rec, why, textures, &registers, true, raw::PackForm::Default);
+    const bool fetches = outcome == raw::CompileOutcome::Made &&
+                         (rec.pipeline.flags & (raw::PipelineFetches | raw::PipelineBarrierForm));
+    if (outcome != raw::CompileOutcome::Made || fetches) {
+        (fetches ? n.freeFetching : n.freeRefused)++;
+        why = fetches ? "it still fetches" : why;
+        fprintf(stderr, "directpack: no fetch-free form (%s): %s\n", why.c_str(), key.substr(0, 160).c_str());
+        return;
+    }
+    rec.pipeline.flags |= raw::PipelineFetchFreeForm;
+    rec.pipeline.fetchRung[form.colour] = form.rung == 2 ? raw::FetchBlend : raw::FetchIteratedBlend;
+    n.free[form.rung]++;
+    record(w, key, outcome, why, rec, registers, form.rung == 3 ? form.program : "");
+}
 
 // A state's records: its own, its barrier form where its own is the storage form and leaves the blend to the ROP (the runtime
 // gives one that computes it none: raw_gpu.cpp Device::pipeline), and one per test class its draws can ask for (named
 // " | tests=<class>" after its key, as the runtime names them)
-void makeState(raw::Direct &direct, Writer &w, const std::string &line, raw::ProbeTextures textures,
+void makeState(raw::Direct &direct, Writer &w, id<MTLLibrary> qc, const std::string &line, raw::ProbeTextures textures,
                const probe::State &s, Counts &n)
 {
     const auto make = [&](const std::string &key, raw::PackForm form, raw::RuntimeRecord &rec) {
@@ -166,6 +201,8 @@ void makeState(raw::Direct &direct, Writer &w, const std::string &line, raw::Pro
         raw::RuntimeRecord barrier;
         make(s.key, raw::PackForm::Barrier, barrier);
     }
+    if (rec.pipeline.flags & raw::PipelineFetches)
+        makeFetchFree(direct, w, qc, line, s.key, textures, n);
     for (const uint8_t tests : testClasses(rec.pipeline, s.key)) {
         raw::RuntimeRecord variant;
         textures.fragmentTests = tests;
@@ -227,7 +264,7 @@ int main(int argc, char **argv)
                          [&](const std::string &line, bool ours, probe::State &s) {
                              raw::ProbeTextures textures = probe::probeTextures(line, ours);
                              textures.cubic = s.cubic;
-                             makeState(direct, w, line, textures, s, counts);
+                             makeState(direct, w, qc, line, textures, s, counts);
                          });
         uint32_t kernels[3] = {};
         probe::eachKernel(
@@ -249,6 +286,9 @@ int main(int argc, char **argv)
                 "%u failed\n",
                 counts.made, counts.split, counts.variants, counts.refused, counts.failed, kernels[0], kernels[1],
                 kernels[2]);
+        fprintf(stderr,
+                "directpack: fetch-free forms: %u on rung 2, %u on rung 3; %u still fetch, %u otherwise refused\n",
+                counts.free[2], counts.free[3], counts.freeFetching, counts.freeRefused);
         return 0;
     }
 }

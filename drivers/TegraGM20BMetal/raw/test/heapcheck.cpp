@@ -106,8 +106,7 @@ int main(int argc, char **argv)
     uint32_t made = 0, programsRight = 0;
     std::set<uint32_t> named;
     for (uint32_t i = 0; i < count; i++) {
-        const raw::PackForm form =
-            records[i].flags & raw::PipelineBarrierForm ? raw::PackForm::Barrier : raw::PackForm::Default;
+        const raw::PackForm form = raw::recordForm(records[i]);
         const raw::Pipeline *pl = dev.pipeline(records[i].keyHash, form);
         if (records[i].flags & raw::PipelineVariantRecord)
             for (const auto &[name, variant] : dev.variantPipelines(records[i].keyHash, false))

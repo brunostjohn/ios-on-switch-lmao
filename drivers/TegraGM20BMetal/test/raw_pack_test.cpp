@@ -90,8 +90,8 @@ TEST(RawPack, RefusesAPackOfAnotherVersion)
 {
     raw::Pack pack;
     std::string err;
-    EXPECT_FALSE(pack.load(writePack(15, 0, "v15.bin").c_str(), 0, err));
-    EXPECT_EQ(err, "not a version-16 pack");
+    EXPECT_FALSE(pack.load(writePack(16, 0, "v16.bin").c_str(), 0, err));
+    EXPECT_EQ(err, "a version-16 pack: this runtime reads version 17 only");
 }
 
 TEST(RawPack, ReadsAStagesVariantsInOrder)

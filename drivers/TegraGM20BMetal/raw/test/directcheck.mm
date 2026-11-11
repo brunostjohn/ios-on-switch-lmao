@@ -8,7 +8,8 @@
 //   DIRECTCHECK_MET=<file>: appends the key hash and form of each pack record made the same (a sweep over every bucket checks
 //   that it met every record of the pack)
 //   DIRECTCHECK_DUMP=<dir>: writes each record made to <dir>/<key hash>.json (its key, programs and blob), what
-//   tools/gpu/maxwell/nakstat.py --dump reads
+//   tools/gpu/maxwell/nakstat.py --dump reads, and a state's fetch-free form (pack/fetch_free.h) to <dir>/free/<key hash>.json
+//   with its rung, colour and iterated blend program (tools/gpu/maxwell/rungcheck.py)
 // Each state the pack set aside that the direct compile refuses too is listed with its reason (REFUSED lines): run over a
 // device's harvest against the pack it booted with, they are the states its runtime refused.
 #import <Foundation/Foundation.h>
@@ -16,7 +17,9 @@
 #include <chrono>
 #include <cstdio>
 #include <set>
+#include <sys/stat.h>
 #include "../pack/direct_states.h"
+#include "../pack/fetch_free.h"
 #include "../runtime/RawDirect.h"
 #include "NativeBridgeMetalFrontend.h"
 #include "TwoPlaneStandIn.h"
@@ -53,11 +56,15 @@ std::string jsonString(const std::string &text)
     return out + "\"";
 }
 
-void dumpRecord(const char *dir, const std::string &key, const raw::RuntimeRecord &rec)
+void dumpRecord(const char *dir, const std::string &key, const raw::RuntimeRecord &rec,
+                const probe::FetchFree *free = nullptr)
 {
     char name[32];
     snprintf(name, sizeof name, "/%016llx.json", (unsigned long long)raw::packKeyHash(key));
-    const std::string path = std::string(dir) + name;
+    const std::string folder = std::string(dir) + (free ? "/free" : "");
+    if (free)
+        mkdir(folder.c_str(), 0755);
+    const std::string path = folder + name;
     FILE *f = fopen(path.c_str(), "w");
     if (!f)
         return;
@@ -69,6 +76,15 @@ void dumpRecord(const char *dir, const std::string &key, const raw::RuntimeRecor
         if (u.entry < rec.pipeline.entries && raw::bufferResidualWord(rec.pipeline.entry[u.entry]) >= 0)
             residuals += std::string(residuals.empty() ? "" : ", ") +
                          std::to_string(0x700 + 4 * raw::bufferResidualWord(rec.pipeline.entry[u.entry]));
+    std::string uniform, entries;
+    for (const raw::PackUniformRange &u : rec.pipeline.uniform)
+        uniform += std::string(uniform.empty() ? "" : ", ") + "[" + std::to_string(u.entry) + ", " +
+                   std::to_string(u.bank) + ", " + std::to_string(u.first) + ", " + std::to_string(u.end) + "]";
+    for (uint32_t k = 0; k < rec.pipeline.entries; k++) {
+        const raw::PackEntry &e = rec.pipeline.entry[k];
+        entries += std::string(k ? ", " : "") + "[" + std::to_string(e.kind) + ", " + std::to_string(e.stage) + ", " +
+                   std::to_string(e.slot) + ", " + std::to_string(e.samplerKind) + "]";
+    }
     std::string variants;
     for (size_t i = 0; i < rec.variants.size(); i++) {
         const raw::RuntimeRecord::Variant &v = rec.variants[i];
@@ -81,14 +97,31 @@ void dumpRecord(const char *dir, const std::string &key, const raw::RuntimeRecor
             "{\"key\": %s, \"vs\": \"%s\", \"fs\": \"%s\", \"fs_gprs\": %u, \"fs_bound_textures\": %u, \"blob\": [%s], "
             "\"split_fs\": \"%s\", \"split_prologue\": \"%s\", \"residual_words\": [%s], \"variants\": [%s], "
             "\"storage_mask\": %u, \"storage_blend_mask\": %u, \"storage_blend_model\": %u, "
-            "\"half_blend_color_word\": %u}\n",
+            "\"half_blend_color_word\": %u, \"free_rung\": %d, \"free_colour\": %u, \"free_program\": %s, "
+            "\"uniform\": [%s], \"entries\": [%s]}\n",
             jsonString(key).c_str(), hexOf(rec.programs[0].image).c_str(), hexOf(rec.programs[1].image).c_str(),
             rec.programs[1].gprs, rec.programs[1].boundTextures, blob.c_str(),
             rec.split ? hexOf(rec.splitPrograms[0].image).c_str() : "",
             rec.split ? hexOf(rec.splitPrograms[1].image).c_str() : "", residuals.c_str(), variants.c_str(),
             rec.pipeline.storageMask, rec.pipeline.storageBlendMask, rec.pipeline.storageBlendModel,
-            rec.pipeline.halfBlendColorWord);
+            rec.pipeline.halfBlendColorWord, free ? free->rung : 0, free ? free->colour : 0,
+            jsonString(free ? free->program : "").c_str(), uniform.c_str(), entries.c_str());
     fclose(f);
+}
+
+// The state's fetch-free form, made as directpack.mm makes it, where it fetches nothing
+void dumpFetchFree(raw::Direct &direct, id<MTLLibrary> qc, const std::string &line, const std::string &key,
+                   raw::ProbeTextures textures, const char *dir)
+{
+    probe::FetchFree form;
+    probe::State s;
+    if (!probe::fetchFree(line, form) || !probe::parseState(qc, form.line, s))
+        return;
+    raw::RuntimeRecord rec;
+    std::string why;
+    if (direct.make(s.d, s.key, rec, why, textures, nullptr, true) == raw::CompileOutcome::Made &&
+        !(rec.pipeline.flags & (raw::PipelineFetches | raw::PipelineBarrierForm)))
+        dumpRecord(dir, key, rec, &form);
 }
 
 }  // namespace
@@ -160,8 +193,10 @@ int main(int argc, char **argv)
                     rec.pipeline.flags |= raw::PipelineVariantRecord;
                 }
                 ms += std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - began).count();
-                if (const char *dir = getenv("DIRECTCHECK_DUMP"); dir && *dir && outcome == raw::CompileOutcome::Made)
+                if (const char *dir = getenv("DIRECTCHECK_DUMP"); dir && *dir && outcome == raw::CompileOutcome::Made) {
                     dumpRecord(dir, key, rec);
+                    dumpFetchFree(direct, qc, line, key, textures, dir);
+                }
                 std::string verdict;
                 if (outcome == raw::CompileOutcome::Failed) {
                     verdict = " failed (" + why + ")";

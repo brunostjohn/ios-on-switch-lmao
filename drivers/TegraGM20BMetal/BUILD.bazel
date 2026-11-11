@@ -223,8 +223,12 @@ py_library(
         [
             "raw/pack/*.py",
             "raw/pack/ca/*.py",
+            "raw/pack/iterated/*.py",
         ],
-        exclude = ["raw/pack/ca/*_test.py"],
+        exclude = [
+            "raw/pack/ca/*_test.py",
+            "raw/pack/iterated/*_test.py",
+        ],
     ),
     data = [
         "raw/pack/ca/qc-21H461.json",
@@ -256,6 +260,26 @@ py_test(
         "raw/pack/ca/qc-24B119.json",
     ],
     main = "raw/pack/ca/caspec27_test.py",
+    deps = [":raw_pack"],
+)
+
+# raw/pack/ca/fetchfree.py: the fetch-free forms the pack makes of fetching Core Animation states, on both IPSWs' tables.
+py_test(
+    name = "fetchfree_test",
+    srcs = ["raw/pack/ca/fetchfree_test.py"],
+    data = [
+        "raw/pack/ca/qc-21H461.json",
+        "raw/pack/ca/qc-24B119.json",
+    ],
+    main = "raw/pack/ca/fetchfree_test.py",
+    deps = [":raw_pack"],
+)
+
+# raw/pack/iterated: every iterated blend program a fetch-free form names, against QuartzCore's formula.
+py_test(
+    name = "iterated_table_test",
+    srcs = ["raw/pack/iterated/table_test.py"],
+    main = "raw/pack/iterated/table_test.py",
     deps = [":raw_pack"],
 )
 
