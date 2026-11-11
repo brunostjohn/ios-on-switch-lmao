@@ -38,6 +38,9 @@
 #   switch_landscape_test               SwitchLandscape.h: window A's column scan of a decoder's picture shows each
 #                                       IOSurfaceAccelerator quarter turn as TegraVIC lands it, pixel for pixel at 1:1
 #                                       through a fetch model, inside the source rectangle scaled
+#   switch_landscape_display_test       SwitchLandscapeDisplay.h against DC A's register file: a change of mode held
+#                                       for a quiet frame end, then the UI and the video moved in one request for all
+#                                       three windows, the latch checked on the UI window, the exits that cannot wait
 #   display_plane_fence_test            NativePlaneFence.h: window B never writes a surface the GPU renders before its
 #                                       writers' work is done, nor later than the present that orders it, against a
 #                                       model of the GPU present
@@ -517,6 +520,32 @@ host_test(
         "//drivers/TegraVIC:SwitchSurfaceColor.h",
         "//drivers/SwitchPower:SwitchDisplayBandwidth.h",
         "//drivers/TegraGM20B:TegraGM20BLayout.h",
+    ],
+)
+
+host_test(
+    name = "switch_landscape_display_test",
+    srcs = [
+        "switch_landscape_display_test.cpp",
+        "//drivers/NativeMobileDisplay:NativeColumnScan.h",
+        "//drivers/NativeMobileDisplay:NativePlanes.h",
+        "//drivers/NativeMobileDisplay:SwitchCompositionRegisters.h",
+        "//drivers/NativeMobileDisplay:SwitchDisplayBandwidthDisplay.h",
+        "//drivers/NativeMobileDisplay:SwitchDisplayComposition.h",
+        "//drivers/NativeMobileDisplay:SwitchDisplayMemoryEnvelope.h",
+        "//drivers/NativeMobileDisplay:SwitchDisplayTraits.h",
+        "//drivers/NativeMobileDisplay:SwitchLandscape.h",
+        "//drivers/NativeMobileDisplay:SwitchLandscapeDisplay.h",
+        "//drivers/NativeMobileDisplay:SwitchLandscapeState.h",
+        "//drivers/NativeMobileDisplay:SwitchLandscapeWindows.h",
+        "//drivers/NativeMobileDisplay:SwitchNativePlane.h",
+        "//drivers/NativeMobileDisplay:SwitchOverlayRecovery.h",
+        "//drivers/NativeMobileDisplay:SwitchOverlayRegisters.h",
+        "//drivers/SwitchPower:SwitchDisplayBandwidth.h",
+        "//drivers/SwitchPower:SwitchDisplayMemory.h",
+        "//drivers/TegraGM20B:SwitchGpuBacking.h",
+        "//drivers/TegraGM20B:TegraGM20BLayout.h",
+        "//drivers/TegraVIC:SwitchSurfaceColor.h",
     ],
 )
 

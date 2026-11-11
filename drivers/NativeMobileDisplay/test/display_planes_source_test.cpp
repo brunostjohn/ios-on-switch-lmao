@@ -104,7 +104,7 @@ TEST(DisplayPlanesSource, DriverFollowsTheRules)
     const std::string frame = Function(planes, "void planeFrameEnd()\n");
     EXPECT_THAT(frame, HasSubstr("retireThrough(now.seq, __atomic_load_n(&feStamp, __ATOMIC_ACQUIRE))"));
     EXPECT_THAT(frame, HasSubstr("beginPlaneRecovery("));
-    EXPECT_THAT(source, HasSubstr("if (status & kFrameEndInt)\n            planeFrameEnd();"));
+    EXPECT_THAT(source, HasSubstr("if (status & kFrameEndInt) {\n            planeFrameEnd();\n            landscapeFrameEnd();"));
     // The first client frame's swap retires at its own latch (latchRetire is on from the plane probe, before it).
     EXPECT_THAT(Method(source, "    void startRotation(int target = kNoBuffer)\n"), HasSubstr("entrySeq[target] = seqOf(flipRequest);"));
     EXPECT_THAT(Method(source, "    void checkRotation()\n"), HasSubstr("retireThrough(entrySeq[asked], stamp);"));
@@ -196,8 +196,7 @@ TEST(DisplayPlanesSource, PlaneSlotsHoldTheSurfaceTheyScan)
     EXPECT_THAT(native, HasSubstr("surfaceLayout(surface, block)"));
     EXPECT_THAT(Function(planes, "static const tgm_layout *surfaceLayout("),
                 HasSubstr("tegra_gm20b_surface_layout(pa & ~0xfffULL, &block) == 1"));
-    const std::string write =
-        Function(planes, "void planeWriteWindowRegisters(Window w, const switch_display::Overlay &p, bool live)");
+    const std::string write = Function(planes, "void planeWriteWindowRegisters(Window w, const switch_display::Overlay &p, bool live)");
     EXPECT_THAT(write, HasSubstr("buf[kSurfaceKind] = m.surfaceKind;"));
     EXPECT_THAT(write, HasSubstr("buf[kVOffset] = m.vOffset;"));
     EXPECT_THAT(Function(planes, "static bool planeSame("), HasSubstr("x.surfaceKind != y.surfaceKind"));

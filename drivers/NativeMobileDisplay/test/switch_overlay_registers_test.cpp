@@ -122,6 +122,10 @@ struct Display {
 
 #include "../SwitchLandscapeState.h"
 
+    bool landscapeHolds(PlaneSet &) { return false; }
+    void landscapeLeaveNow(const char *) {}
+    void landscapeAbandonWant() {}
+
 #include "../SwitchDisplayBandwidthDisplay.h"
 #include "../SwitchOverlayRegisters.h"
 #include "../SwitchCompositionRegisters.h"

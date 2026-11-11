@@ -109,7 +109,7 @@ static const tgm_layout *surfaceLayout(OSObject *surface, tgm_layout &block)
 bool planeSlotBusy(int k) const
 {
     if (planeRecovering || (planeBuildingSlots & (1u << unsigned(k))) || planeConversionUses(k) ||
-        planeLatch.uses(k) || planeTarget.uses(k) ||
+        planeLatch.uses(k) || planeTarget.uses(k) || (landscapeState.wanted && landscapeState.held.uses(k)) ||
         (planeFencePending && planeFencing.uses(k)) ||
         (planeNextSet && planeNext.uses(k)) || (planeHeldSet && planeHeld.uses(k)))
         return true;
@@ -293,10 +293,11 @@ void planeFrameEnd()
     if (planeRecoveryFrameEnd())
         return;
     if (planeLatch.requested()) {
-        const bool out = (dc[kDcStateControl] & switch_landscape::overlayRequests(landscapeOn())) != 0u;
+        const bool out = (dc[kDcStateControl] & landscapeRequestBits()) != 0u;
         if (planeLatch.latched(out, planeScannedSet())) {
             if (stats)
                 ++stPlaneLatched;
+            landscapeLatched();
             const PlaneSet now = planeSetOf(planeLatch.active);
             retireThrough(now.seq, __atomic_load_n(&feStamp, __ATOMIC_ACQUIRE));
             if (planeHeldSet && planeLatch.mayWrite()) {
@@ -334,6 +335,9 @@ void stopPlanes()
         PlaneProbeIo io = {this};
         planeProbe.perform(planeProbe.fail("the display stopped"), io);
     }
+    if (dc && planesAttached && !hwSuspended)
+        landscapeLeaveNow("the display stopped");
+    landscapeForget();
     if (dc && planesAttached && !hwSuspended) {
         dc[kWinBBase + native_planes::kOptions] = 0;
         dc[kWinCBase + native_planes::kOptions] = 0;
@@ -371,6 +375,7 @@ void planesQuiesce()
         planeProbeFinish();
     }
     planeLatch.settle();
+    landscapeLeaveNow("the display suspended (SC7)");
     planeForgetUnshadowed();
 }
 

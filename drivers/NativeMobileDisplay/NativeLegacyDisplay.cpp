@@ -62,6 +62,7 @@
 #include "../SwitchPower/SwitchEMC.h"
 #include "../SwitchPower/SwitchDisplayBandwidth.h"
 #include "../../kits/SwitchRefusal/SwitchRefusal.h"
+#include "SwitchLandscape.h"
 #include "SwitchLandscapeWindows.h"
 #if SWITCH_FRAME_TIMELINE
 #include <sys/sysctl.h>
@@ -440,6 +441,8 @@ struct PanicRestore {
     volatile bool panicking;  // a panic began: window A is the panic's
     volatile bool planes;     // window B may scan a plane, window A may blend over it: both go back (r18-planes)
     uint32_t blend[3];        // window A's BLEND_LAYER_CONTROL, MATCH and NOMATCH as hekate left them
+    volatile bool landscape;  // window A may column-scan a video (SwitchLandscapeDisplay.h): its geometry goes back too
+    uint32_t uiDepth;         // the UI's COLOR_DEPTH
 #if SWITCH_FRAME_TIMELINE
     volatile bool columnScan;  // a display experiment (column scan, window probe) has window A in its own format
     uint32_t columnScanDepth;  // the UI's COLOR_DEPTH
@@ -468,8 +471,14 @@ void restorePitchOnPanic(const char *message)
         dc[kWinbufStartAddr] = gPanicRestore.start;
         dc[kWinbufStartAddrHi] = 0;
 #if SWITCH_FRAME_TIMELINE
-        if (gPanicRestore.columnScan) {
-            dc[kWinColorDepth] = gPanicRestore.columnScanDepth;
+        const bool geometry = gPanicRestore.columnScan || gPanicRestore.landscape;
+        const uint32_t depth = gPanicRestore.columnScan ? gPanicRestore.columnScanDepth : gPanicRestore.uiDepth;
+#else
+        const bool geometry = gPanicRestore.landscape;
+        const uint32_t depth = gPanicRestore.uiDepth;
+#endif
+        if (geometry) {
+            dc[kWinColorDepth] = depth;
             dc[kWinPosition] = 0;
             dc[kWinSize] = kPitchSize;
             dc[kWinPrescaled] = kPitchPrescaled;
@@ -478,7 +487,6 @@ void restorePitchOnPanic(const char *message)
             dc[kWinDdaIncrement] = kUnitDda;
             dc[kWinbufVOffset] = 0;
         }
-#endif
         dc[kWinOptions] = gPanicRestore.options;
         uint32_t update = kGeneralUpdate | kWinAUpdate;
         uint32_t request = kGeneralActReq | kWinAActReq;
@@ -1439,7 +1447,7 @@ class NativeLegacyDisplay : public IOMobileFramebufferLegacy {
                ring.pending != kNoBuffer || ring.superseded != kNoBuffer || ring.drawing != kNoBuffer ||
                ring.held != kNoBuffer || (rotated && !rotationLatched) || probeRequest || probe.active() ||
                (!probeRan && (probeTables.memory != nullptr) && doubleBuffer) || (planesOn && planeLatch.requested()) ||
-               planeProbe.active() || planeHeldSet || planeRecovering;
+               planeProbe.active() || planeHeldSet || planeRecovering || landscapeState.wanted;
     }
 
     void maskIdleFrameEnd()
@@ -1652,8 +1660,10 @@ private:
             checkTapeSettled();
         if (status & kFrameEndInt)
             probeFrameEnd();
-        if (status & kFrameEndInt)
+        if (status & kFrameEndInt) {
             planeFrameEnd();
+            landscapeFrameEnd();
+        }
         if (status & kFrameEndInt)
             underflowFrameEnd();
         if (status & kFrameEndInt) {
@@ -2970,6 +2980,7 @@ private:
         releaseIdleDirectReads();
         if (planeLatch.requested()) {
             planeLatch.settle();
+            landscapeLatched(false);
             const uint64_t planeSeq = planeSetOf(planeLatch.active).seq;
             seq = planeSeq > seq ? planeSeq : seq;
         }
@@ -3087,6 +3098,8 @@ private:
         columnScanAbort("the display stopped");
         windowProbeAbort("the display stopped");
         abortProbe("the display stopped");
+        if (dc && !hwSuspended)
+            landscapeLeaveNow("the display stopped");
         if (rotated || tapeAttached || directAttached || planesAttached)
             retireScanoutStorage();
         stopDirect();
@@ -3174,13 +3187,14 @@ public:
         dc[kDcStateControl] = kGeneralActReq;
         __atomic_fetch_and(&dcPending, ~(kVblankInt | kFrameEndInt), __ATOMIC_RELAXED);
         // A window underflow latched around the stop is not the rotated scanout failing (checkRotation counts runs of them).
-        dc[kDcIntStatus] = kVblankInt | kFrameEndInt | kWinAUnderflowInt;
+        dc[kDcIntStatus] = kVblankInt | kFrameEndInt | uiUnderflow();
         clearUnderflowCounts();
         underflowRun = 0;
         scanoutStopped = !on;
         if (on) {
             writeIntMask(0, kFrameEndInt | (vsyncArmed ? kVblankInt : 0));
         } else {
+            landscapeScanoutStopped();
             armFlipDeadline();  // what is in flight now settles
         }
         if (!on && tapeAttached)
@@ -3503,6 +3517,10 @@ public:
             return;
         }
         if (columnScanBusy() || windowProbeHolds()) {  // windows A and B are a display experiment's (debug kernels)
+            kickDeferred = true;
+            return;
+        }
+        if (landscapeHoldsKicks()) {  // a change of mode goes out alone (SwitchLandscapeDisplay.h)
             kickDeferred = true;
             return;
         }
@@ -4707,6 +4725,7 @@ public:
 #include "SwitchDisplayBandwidthDisplay.h"
 #include "NativePlanesDisplay.h"
 #include "SwitchUnderflowDisplay.h"
+#include "SwitchLandscapeDisplay.h"
 #include "SwitchNativePlaneDisplay.h"
 #include "SwitchPlaneConversionDisplay.h"
 #include "SwitchScanoutSetup.h"
