@@ -7,6 +7,22 @@ from pathlib import Path
 
 from tools.benchloop import golden, loop, transport
 
+AFCCLIENT_OPTIONS = {'-u': 1, '--udid': 1, '--documents': 1, '--container': 1, '-n': 0, '-d': 0}
+
+
+def invalid_option(command: list[str]) -> str | None:
+    """Give the argument afcclient 1.4's getopt_long rejects: it permutes argv, so any dash before `--` is its own."""
+    args = iter(command[1:])
+    for arg in args:
+        if arg == '--':
+            return None
+        if arg.startswith('-'):
+            if arg not in AFCCLIENT_OPTIONS:
+                return arg
+            for _ in range(AFCCLIENT_OPTIONS[arg]):
+                next(args, None)
+    return None
+
 
 class Recorder:
     def __init__(self, outputs: dict[str, str] | None = None) -> None:
@@ -15,6 +31,8 @@ class Recorder:
 
     def __call__(self, command: list[str], **_: object) -> subprocess.CompletedProcess:
         self.calls.append(command)
+        if bad := invalid_option(command):
+            return subprocess.CompletedProcess(command, 2, '', f'afcclient: invalid option -- {bad.lstrip("-")}\n')
         verb = command[command.index('ls')] if 'ls' in command else ''
         out = self.outputs.get(command[-1] if verb else '', '')
         failed = verb and command[-1] not in self.outputs
@@ -29,7 +47,7 @@ class AfcTest(unittest.TestCase):
         afc.mkdir('/Documents/benchloop/inbox')
         self.assertEqual(
             run.calls[-1],
-            ['afcclient', '-u', 'u1', '--documents', transport.BUNDLES[0], 'mkdir', '/Documents/benchloop/inbox'],
+            ['afcclient', '-u', 'u1', '--documents', transport.BUNDLES[0], '--', 'mkdir', '/Documents/benchloop/inbox'],
         )
         self.assertEqual(afc.ls('/Documents'), ['benchloop'])
 
@@ -37,8 +55,17 @@ class AfcTest(unittest.TestCase):
         run = Recorder()
         afc = transport.Afc(run=run)
         afc.mv('/Switch/benchloop/inbox/.b.json.part', '/Switch/benchloop/inbox/b.json')
-        self.assertEqual(run.calls[-1][:2], ['afcclient', 'mv'])
+        self.assertEqual(run.calls[-1][:3], ['afcclient', '--', 'mv'])
         self.assertEqual(afc.root, '/Switch/benchloop')
+
+    def test_verb_flags_reach_the_verb(self) -> None:
+        run = Recorder()
+        afc = transport.Afc(udid='u1', documents=transport.BUNDLES[0], run=run)
+        with tempfile.TemporaryDirectory() as scratch:
+            afc.get('/Documents/benchloop/outbox/b', Path(scratch) / 'b')
+        afc.rm('/Documents/benchloop/outbox/b')
+        self.assertEqual(run.calls[0][-4:-2], ['get', '-r'])
+        self.assertEqual(run.calls[1][-3:], ['rm', '-rf', '/Documents/benchloop/outbox/b'])
 
     def test_a_missing_device_is_an_error(self) -> None:
         def absent(command: list[str], **_: object) -> subprocess.CompletedProcess:

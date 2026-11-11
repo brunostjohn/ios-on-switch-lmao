@@ -47,6 +47,8 @@ class Afc:
             command += ['-u', self.udid]
         if self.documents:
             command += ['--documents', self.documents]
+        # afcclient's getopt permutes argv: without `--`, `get -r` and `rm -rf` reach it as its own (invalid) options
+        command.append('--')
         try:
             done = self.run([*command, *args], capture_output=True, text=True, timeout=TIMEOUT_S, check=False)
         except (OSError, subprocess.TimeoutExpired) as e:
