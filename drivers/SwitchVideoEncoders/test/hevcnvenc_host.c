@@ -175,6 +175,13 @@ static nvenc_h265_drv_pic_setup_s *setupOf(TegraNVENCSubmit *s)
     return (nvenc_h265_drv_pic_setup_s *)s->setup;
 }
 
+static void insertBeforeExecute(TegraNVENCSubmit *s, TegraNVENCEntry e)
+{
+    s->entries[s->entry_count] = s->entries[s->entry_count - 1];
+    s->entries[s->entry_count - 1] = e;
+    s->entry_count++;
+}
+
 static void pPicture(TegraNVENCSubmit *s)
 {
     setupOf(s)->pic_control.pic_type = 0;
@@ -227,9 +234,22 @@ static void twoPass(TegraNVENCSubmit *s)
 
 static void refRelocation(TegraNVENCSubmit *s)
 {
-    s->entries[s->entry_count] = s->entries[s->entry_count - 1];
-    s->entries[s->entry_count - 1] = (TegraNVENCEntry){NVC5B7_SET_IN_REF_PIC0_LUMA, TEGRA_NVENC_ENTRY_RELOC, 2, 0};
-    s->entry_count++;
+    insertBeforeExecute(s, (TegraNVENCEntry){NVC5B7_SET_IN_REF_PIC0_LUMA, TEGRA_NVENC_ENTRY_RELOC, 2, 0});
+}
+
+static void reconChromaMethod(TegraNVENCSubmit *s)
+{
+    insertBeforeExecute(s, (TegraNVENCEntry){NVC5B7_SET_OUT_REF_PIC_CHROMA, TEGRA_NVENC_ENTRY_RELOC, 2, 0});
+}
+
+static void refChromaMethod(TegraNVENCSubmit *s)
+{
+    insertBeforeExecute(s, (TegraNVENCEntry){NVC5B7_SET_IN_REF_PIC0_CHROMA, TEGRA_NVENC_ENTRY_RELOC, 2, 0});
+}
+
+static void noReconChromaOffset(TegraNVENCSubmit *s)
+{
+    setupOf(s)->outputpic_cfg.chroma_top_frm_offset = 0;
 }
 
 static void checkRefusals(void)
@@ -249,6 +269,9 @@ static void checkRefusals(void)
         {"a width not of whole CTBs", oddWidth},
         {"two-pass RC", twoPass},
         {"a reference relocation", refRelocation},
+        {"a reconstruction chroma method", reconChromaMethod},
+        {"a reference chroma method", refChromaMethod},
+        {"a reconstruction without its chroma offset", noReconChromaOffset},
     };
 
     HEVCEncConfig c = {.width = 1280, .height = 720};
@@ -266,6 +289,27 @@ static void checkRefusals(void)
             avail[i] = 64u << 20;
         CHECK(tegra_nvenc_check(&s, avail) != NULL, "the checker took %s", kBreaks[k].name);
     }
+}
+
+// With the input's chroma by method, the reconstruction's is still at its config offset: app 3 reads no other.
+static void checkChromaMethodInput(void)
+{
+    HEVCEncConfig c = {.width = 1280, .height = 720};
+    hevcnvenc_configure(&c);
+    H264EncLayout l;
+    hevcnvenc_layout(&c, &l);
+    const H264EncHandles h = {1, 2, 3, 4, 5, {6, 7}};
+    const HEVCEncPicture idr = {.idr = true, .qp = 30};
+    static TegraNVENCSubmit s;
+    hevcnvenc_fill_submit(&c, TEGRA_NVENC_LAYOUT_TILED16, TEGRA_NVENC_CHROMA_METHOD, &l, &idr, &h, &s);
+    uint64_t avail[TEGRA_NVENC_MAX_ENTRIES];
+    for (uint32_t i = 0; i < TEGRA_NVENC_MAX_ENTRIES; i++)
+        avail[i] = 64u << 20;
+    const nvenc_h265_drv_pic_setup_s *p = setupOf(&s);
+    CHECK(p->outputpic_cfg.chroma_top_frm_offset == l.recon.chroma_offset / 256 && !p->input_cfg.chroma_top_frm_offset,
+          "chroma by method: the reconstruction's chroma offset");
+    const char *why = tegra_nvenc_check(&s, avail);
+    CHECK(!why, "chroma by method: the checker refused the IDR: %s", why ? why : "");
 }
 
 // HEVCEncSyntax.c's SPS and PPS state the tools the setup does (the firmware codes the slices by the setup, decoders
@@ -317,6 +361,7 @@ int main(void)
     checkSize(1920, 1080, kHeader1920, kSlice1920);
     checkSize(640, 360, kHeader640, kSlice640);
     checkRefusals();
+    checkChromaMethodInput();
     checkSyntax();
     if (gFailures) {
         printf("FAIL hevcnvenc: %d failures\n", gFailures);
