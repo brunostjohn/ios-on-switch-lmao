@@ -106,6 +106,9 @@
 #                     vertices in pixels with its half colour, and a write a row or two short of a texture's edge
 #   raw_glass_probe_test  raw/runtime/raw_glass_probe.h (debug builds' glass probe): the render server's command buffer
 #                     record word, a draw line's textures and uniforms, each line once a command buffer
+#   raw_glass_mem_test  raw/runtime/raw_glass_mem.h (debug builds' blur-texture probe): a row's black and non-finite
+#                     reads, rebuilt and reused textures with their age, a reused one changed with no write, a moved
+#                     texture header, and HW Test's notify words
 #   raw_fetch_order_test  raw/runtime/raw_fetch_order.h: the fetching draws refused as they are recorded (their encoder
 #                     alone goes to m2v) and those drawn a triangle at a time
 #   raw_record_samplers_test  raw/runtime/raw_record.h: a record's constexpr entries index its own sampler headers whoever
@@ -1295,6 +1298,16 @@ host_test(
     srcs = [
         "raw_glass_probe_test.cpp",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_glass_probe.h",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_nonfinite.h",
+    ],
+    cxx_std = "c++17",
+)
+
+host_test(
+    name = "raw_glass_mem_test",
+    srcs = [
+        "raw_glass_mem_test.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_glass_mem.h",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_nonfinite.h",
     ],
     cxx_std = "c++17",

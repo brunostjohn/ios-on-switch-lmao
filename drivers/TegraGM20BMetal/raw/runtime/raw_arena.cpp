@@ -253,6 +253,7 @@ void Device::purgeArena(uint32_t arena, const std::atomic<uint32_t> &committed)
     vm_address_t at = vm_address_t(a.cpu);
     vm_allocate(mach_task_self(), &at, a.bytes, VM_FLAGS_FIXED | VM_FLAGS_OVERWRITE);
     RAW_DIAGNOSTIC(stats.poolBytes -= a.bytes);
+    RAW_DIAGNOSTIC(glassMemEvent("heap purged", a.bytes));
     a.purged = true;
 }
 
@@ -277,6 +278,7 @@ bool Device::restoreArena(uint32_t arena)
     Arena &a = arenas_[arena];
     if (!bindArena(a))
         return false;
+    RAW_DIAGNOSTIC(glassMemEvent("heap restored", a.bytes));
     a.purged = false;
     purgedArenas_--;
     return true;

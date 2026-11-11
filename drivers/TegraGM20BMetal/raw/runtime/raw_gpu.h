@@ -47,6 +47,9 @@
 #include "raw_comp.h"
 #include "raw_attachment_lifetime.h"
 #include "raw_stats.h"
+#if SWITCH_RAW_DIAGNOSTICS
+#include "raw_glass_mem.h"
+#endif
 #include "raw_descriptors.h"
 #include "raw_encode_profile.h"
 #include "raw_transfer.h"
@@ -765,6 +768,7 @@ private:
     void probeDraw(const Pipeline &bound, Pipeline &drawn, uint32_t primitive, int32_t first, uint32_t count,
                    bool indexed, const PixelBox &limit);
     void probeGlassDraw(const Pipeline &bound, const Pipeline &drawn, const PixelBox &limit);
+    void glassMemSample(const Pipeline &bound, const Pipeline &drawn);
 #endif
     const Runs *selfRuns(const Pipeline &pl, uint32_t primitive, uint32_t count, uint32_t instances, const char **why);
     const Runs *sequentialRuns(const Pipeline &pl, const FetchDraw &shape, Runs &runs, const char **why);
@@ -983,6 +987,11 @@ private:
     ProbeForms forms_;
     ProbeTaken taken_;
     ProbeEngine lastEngine_ = ProbeEngine::None;  // the engine of the work encoded last, for forms_
+#endif
+#if SWITCH_RAW_DIAGNOSTICS
+    Texture glassMemImages_[kGlassMemItems];  // the image each of the probe's rows is read from
+    int glassMemSlot_ = -1;                   // its ring slot once its reads are encoded
+    void glassMemTail();
 #endif
     std::map<const Texture *, const Texture *> nativeReads_;
     std::vector<NativeSurface *> nativeSurfaces_;
@@ -1447,6 +1456,8 @@ public:
         std::atomic<uint64_t> commits{0}, pushBytes{0}, uploadBytes{0}, ringWaits{0}, ringsOutgrown{0}, imports{0},
             importBytes{0}, poolBytes{0}, poolChunks{0}, cleanBytes{0}, poolStalls{0};
         std::atomic<uint64_t> textureUploads{0}, textureReadbacks{0}, fusedPasses{0};
+        // GPU memory made or given back since open: chunks, compressed buffers, memoryless backings' memory, heap purges
+        std::atomic<uint64_t> memEvents{0};
         // uncompressed backings held now and their memory (a memoryless one's shared plain memory, a shadow's own), and the
         // retired ones among them and the free bytes of the block-linear and zeta chunks as trimBackings last counted them
         std::atomic<uint64_t> backings{0}, backingBytes{0}, retiredBackings{0}, tiledFreeBytes{0};
@@ -1555,6 +1566,12 @@ public:
 
     std::atomic<FetchBarrier> fetchBarrier{FetchBarrier::PixelShader};
     static const char *fetchBarrierName(FetchBarrier b);
+
+    // The render server's blur-texture probe (raw_glass_mem.h); null in any other process. Armed (HW Test's glass
+    // record), every command buffer it read logs its line until glassMemArmedUntil (mach time)
+    std::unique_ptr<GlassMem> glassMem;
+    std::atomic<uint64_t> glassMemArmedUntil{0};
+    void glassMemEvent(const char *what, uint64_t bytes);
 #endif
 
 private:
@@ -1870,6 +1887,15 @@ private:
     void growLoop();
     uint64_t commitCount_ = 0;
     uint64_t closedCount_ = 0;  // command buffers committed or abandoned (lock_)
+#if SWITCH_RAW_DIAGNOSTICS
+    // the probe's ring of rows (write-combined: the CPU reads what the copy engine wrote with no cache maintenance) and
+    // the records of the command buffers whose rows it holds, read at a begin() once their fences passed
+    Buffer glassMemRing_;
+    GlassMemCb glassMemCbs_[kGlassMemSlots];
+    bool glassMemBusy_[kGlassMemSlots] = {};
+    uint64_t glassMemSummaryAt_ = 0, glassMemSummaryCbs_ = 0;
+    void glassMemRead();
+#endif
 
     bool init(std::string &err);
     bool openChannel(std::string &err);
