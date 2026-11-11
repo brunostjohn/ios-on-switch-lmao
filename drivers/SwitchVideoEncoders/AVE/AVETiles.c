@@ -128,8 +128,11 @@ static OSStatus tileRegion(const Encoder *e, CVPixelBufferRef source, VTInt32Poi
 {
     const OSType format = CVPixelBufferGetPixelFormatType(source);
     if (!isNV12(format) || CVPixelBufferGetPlaneCount(source) != 2 ||
-        (e->configured && e->config.full_range != (format == kCVPixelFormatType_420YpCbCr8BiPlanarFullRange)))
+        (e->configured && e->config.full_range != (format == kCVPixelFormatType_420YpCbCr8BiPlanarFullRange))) {
+        switch_refusal_k(switch_refusal_key_with(switch_refusal_key("AVE", "tile source format"), format), "AVE",
+                         "tile source format", "%#x: tiles take '420v' or '420f', one range per session", format);
         return kVTPixelTransferNotSupportedErr;
+    }
     const int64_t width = (int64_t)CVPixelBufferGetWidth(source), height = (int64_t)CVPixelBufferGetHeight(source);
     if (origin.x < 0 || origin.y < 0 || (origin.x | origin.y) % kOffsetAlignment || origin.x >= width ||
         origin.y >= height || size.width < 1 || size.height < 1)
