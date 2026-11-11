@@ -89,6 +89,7 @@ kernel_driver(
         "gpu_present.c",
         "gpu_scrub.c",
         "gpu_power.c",
+        "gpu_zcull.c",
         "clkgate.c",
         "recover.c",
         "sched.c",

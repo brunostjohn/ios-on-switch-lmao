@@ -367,6 +367,7 @@ cc_library(
         "//drivers/NativeMetal:bridge/NativeMetalBlend.h",
         "//drivers/TegraGM20B:TegraGM20BABI.h",
         "//drivers/TegraGM20B:TegraGM20BLayout.h",
+        "//drivers/TegraGM20B:TegraGM20BZcullABI.h",
         "//drivers/TegraGM20BMetal:raw/fx/fx_image.cpp",
         "//drivers/TegraGM20BMetal:raw/fx/fx_mip.cpp",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_alias.cpp",

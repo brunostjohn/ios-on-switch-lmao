@@ -19,6 +19,8 @@
 #include "raw_cpu_completion.h"
 #include "raw_control_memory.h"
 
+struct TegraGM20BAbiZcullInfo;
+
 namespace raw {
 
 struct Bo {
@@ -105,6 +107,8 @@ public:
     // Method 19: adds a zero-bandwidth-clear entry to the GPU's table (raw_zbc.h); the kern_return_t (kIOReturnNoResources:
     // the table is full)
     int zbcAdd(const TegraGM20BAbiZbc &entry);
+    // Method 'ZC': zcull's layout (raw_zcull.h); kIOReturnUnsupported without zcull
+    int zcullInfo(TegraGM20BAbiZcullInfo &out);
     // GPU VA held for binds made into it later (bindImportAt), whole granules; 0: none left. releaseVa gives it back.
     uint64_t reserveVa(uint64_t bytes);
     void releaseVa(uint64_t va, uint64_t bytes);

@@ -8,8 +8,7 @@
 //    interior is the hardware's, set by the PTE kind (nil nvc0_choose_pte_kind: Z16, ZF32 or ZF32_X24S8 whatever the samples;
 //    one-sample Depth32Float_Stencil8 also its compressible ZF32_X24S8_2CSZV on compressed memory, raw_comp.h). The CPU never
 //    reads it.
-//  - Target: nvk_CmdBeginRendering's SET_ZT_* for one layer. NVK keeps no zcull here (the kext reports no zcull info), so
-//    SET_ACTIVE_ZCULL_REGION stays the baseline's 0x3f.
+//  - Target: nvk_CmdBeginRendering's SET_ZT_* for one layer; its zcull region, or none, raw_zcull.h's.
 //  - State: its register values are raw_depth_stencil_state.h's.
 #pragma once
 #include <cstdint>

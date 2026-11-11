@@ -149,6 +149,9 @@ void switch_gpu_mapping_describe(const struct switch_gpu_mapping *mapping, char 
 /* A zero-bandwidth-clear entry (ds, l2 as TegraGM20BAbiZbc has them): its table index, or -EINVAL (format), -ENOSPC
  * (table full), -ENODEV (no compression). */
 int tgm_zbc_add(int depth, uint32_t format, const uint32_t ds[4], const uint32_t l2[4]);
+/* Zcull's layout (TegraGM20BZcullABI.h method 'ZC'), or -EOPNOTSUPP where the GPU reported no zcull RAM. */
+struct TegraGM20BAbiZcullInfo;
+int tgm_zcull_info(struct TegraGM20BAbiZcullInfo *out);
 /* 0 when booted with switch-no-gpu-compression (TegraGM20B.cpp): GetInfo leaves TegraGM20BInfoCompression clear, so no
  * client binds a compressible kind or adds ZBC entries. */
 int switch_gpu_compression_on(void);

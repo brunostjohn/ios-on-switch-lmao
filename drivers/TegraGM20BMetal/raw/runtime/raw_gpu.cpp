@@ -501,6 +501,8 @@ bool Device::open(const char *packPath, uint64_t stack, std::string &err, Role r
         err = "not a MAXWELL_B with MAXWELL_DMA_COPY_A";
         return false;
     }
+    ZcullRegion probe;
+    zcullOn_ = k_.zcullInfo(zcullInfo_) == KERN_SUCCESS && zcullRegion(zcullInfo_, 0, 0, 1, 1, probe);
     return init(err);
 }
 
@@ -970,6 +972,7 @@ void Device::build(Pipeline &pl, const PackPipeline &pp, const PlacedProgram &vs
     uint32_t sph[20];
     memcpy(sph, fs.header, sizeof sph);
     pl.primitiveId = (sph[5] >> 24) & 1;  // NVA097_SPHV3T2_IMAP_PRIMITIVE_ID, bit 184
+    pl.fragmentDepth = (sph[19] >> 1) & 1;  // OMAP_DEPTH, bit 609
     bool tests = false;
     for (uint32_t k = 0; k < pp.blobDwords; k += 2) {
         const uint32_t m = blob[k], v = blob[k + 1];
@@ -3346,6 +3349,8 @@ RenderEncoder *CommandBuffer::render(const PassDesc &pass)
         e.areaW_ = std::min(e.areaW_, pass.width);
     if (pass.height)
         e.areaH_ = std::min(e.areaH_, pass.height);
+    e.zcull_.candidate = dev_->zcullOn_ && zeta && zetaHasDepth(zeta->format) && e.samples_ == 1 &&
+                         pass.depthStencil.clearDepth;
     // DontCare can become a clear after later draws establish readBits_. Treat its deferred prologue write like Clear.
     for (uint32_t j = 0; j < pass.count && j < 8; j++)
         if (e.pass_.color[j].texture && e.pass_.color[j].load != ColorAttachment::Load)
@@ -4668,6 +4673,7 @@ bool RenderEncoder::prepare(Pipeline *pl, uint32_t primitive, int32_t first, uin
             cb_->restart_ = restart;
         }
     }
+    const bool dsChanged = dsDirty_;
     if (dsDirty_) {
         const bool depth = zeta && zetaHasDepth(zeta->format), stencil = zeta && zetaHasStencil(zeta->format);
         emitDepthStencil(p,
@@ -4675,6 +4681,14 @@ bool RenderEncoder::prepare(Pipeline *pl, uint32_t primitive, int32_t first, uin
                                             : dsState_->regs(depth, stencil, stencilRef_[0], stencilRef_[1]),
                          cb_->ds_);
         dsDirty_ = false;
+    }
+    if (zcull_.candidate && (dsChanged || pl != zcullProgram_)) {
+        zcullProgram_ = pl;
+        if (zcullInvalidates(zcull_, ds_, zeta && zetaHasDepth(zeta->format), zeta && zetaHasStencil(zeta->format),
+                             pl->fragmentDepth, shaderTestsActive_ != 0)) {
+            p.m(kInvalidateZcull, 0);
+            RAW_DIAGNOSTIC(d.stats.zcullInvalidations++);
+        }
     }
     uint32_t *root = cb_->rootPush_;
     const PackPipeline &r = *pl->rec;
@@ -5644,8 +5658,8 @@ void RenderEncoder::end()
     probeEdges();
 #endif
     const std::vector<uint32_t> &restore = extrasAtBegin_ ? extrasAtBegin_->restore : std::vector<uint32_t>();
-    const uint32_t room = 160 + 8 * 32 + uint32_t(cl.size()) * 48 + kZetaTargetWords + kZetaClearWords + 16 +
-                          kSampleWords + uint32_t(restore.size());
+    const uint32_t room = 160 + 8 * 32 + uint32_t(cl.size()) * 48 + kZetaTargetWords + kZcullRegionWords +
+                          kZetaClearWords + 16 + kSampleWords + uint32_t(restore.size());
     uint64_t va;
     uint32_t *start = reinterpret_cast<uint32_t *>(d.alloc(d.push_, room * 4, 256, va));
     Push p{start, start + room};
@@ -5715,6 +5729,15 @@ void RenderEncoder::end()
     kit(p, switch_gm20b_render_area, count, planeArea().x1, planeArea().y1);
     const DepthStencilAttachment &zs = pass_.depthStencil;
     zetaTargetWords(p, zs.texture);
+    // ahead of the depth clear, which sets the region; over the plane the pass renders (a turned drawable's own axes)
+    const Rect plane = planeArea();
+    if (ZcullRegion region; zcull_.candidate && zcullRegion(d.zcullInfo_, plane.x0, plane.y0, plane.x1 - plane.x0,
+                                                            plane.y1 - plane.y0, region)) {
+        zcullRegionWords(p, region, zs.texture->format, zcull_.dir);
+        RAW_DIAGNOSTIC(d.stats.zcullPasses++);
+    } else if (d.zcullOn_) {
+        zcullOffWords(p);
+    }
     // NVK clears depth and stencil with the first color the pass clears over its render area, else on their own
     uint32_t zsBits = zs.texture ? zetaClearBits(zs.clearDepth && zetaHasDepth(zs.texture->format),
                                                  zs.clearStencil && zetaHasStencil(zs.texture->format))

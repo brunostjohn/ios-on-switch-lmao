@@ -186,6 +186,7 @@ ios_binary(
         "//drivers/NativeMetal:bridge/NativeMetalBlend.h",
         "//drivers/TegraGM20B:TegraGM20BABI.h",
         "//drivers/TegraGM20B:TegraGM20BLayout.h",
+        "//drivers/TegraGM20B:TegraGM20BZcullABI.h",
         "//kits/SwitchGM20B:class_headers",
         "//kits/SwitchGM20BEmit:emit_headers",
         "//kits/SwitchGM20BEmit:macros",

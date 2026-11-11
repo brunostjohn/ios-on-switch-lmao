@@ -360,6 +360,7 @@ static int m2(char *line, unsigned int len)
 		return ret;
 	/* GR is up: this line is the stage's real result, so it reaches the log even if the nvif setup below fails */
 	nvxnu_step("tegra-gm20b: %s\n", line);
+	tgm_zcull_init(device);
 
 	mutex_init(&tgm_gpu.lock);
 	at = "nvif_driver_init";

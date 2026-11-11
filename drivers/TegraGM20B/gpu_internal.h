@@ -619,6 +619,8 @@ extern struct scrub_state tgm_scrub;
 void tgm_scrub_open(void);
 void tgm_scrub_stats(char *buf, unsigned int len, u64 window_ms);
 void tgm_rail_up_locked(const void *site);
+/* gpu_zcull.c: zcull's layout read from GR's registers, once GR is up (m2) */
+void tgm_zcull_init(struct nvkm_device *device);
 #pragma GCC visibility pop
 
 #include "SwitchGpuActiveIrq.h"

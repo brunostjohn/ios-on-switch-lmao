@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 // The ABI dispatch: run's method switch.
 #include "TegraGM20BUserClientInternal.h"
+#include "TegraGM20BZcullABI.h"
 
 static IOReturn zbcAdd(const TegraGM20BAbiZbc *in, TegraGM20BAbiZbcReply *out)
 {
@@ -164,6 +165,9 @@ IOReturn AGXDeviceUserClient::run(uint32_t method, const void *in, uint32_t inSi
 		wantIn = sizeof(TegraGM20BAbiZbc);
 		wantOut = sizeof(TegraGM20BAbiZbcReply);
 		break;
+	case TegraGM20BMethodZcullInfo:
+		wantOut = sizeof(TegraGM20BAbiZcullInfo);
+		break;
 #if TGM_STATS
 	case TegraGM20BMethodReadback:
 		wantIn = sizeof(TegraGM20BAbiReadback);
@@ -284,6 +288,9 @@ IOReturn AGXDeviceUserClient::run(uint32_t method, const void *in, uint32_t inSi
 		return zbcAdd(static_cast<const TegraGM20BAbiZbc *>(in),
 			      static_cast<TegraGM20BAbiZbcReply *>(out));
 	}
+	if (method == TegraGM20BMethodZcullInfo)
+		return tgm_zcull_info(static_cast<TegraGM20BAbiZcullInfo *>(out)) ? kIOReturnUnsupported
+										    : kIOReturnSuccess;
 #if TGM_STATS
 	if (method == TegraGM20BMethodReadback) {
 		return tgm_readback_call(this, static_cast<const TegraGM20BAbiReadback *>(in),

@@ -62,6 +62,7 @@
 #include "raw_sampler.h"
 #include "raw_depth_stencil_state.h"
 #include "raw_sample_positions.h"
+#include "raw_zcull.h"
 #include "raw_xr.h"
 #include "raw_ycbcr.h"
 #include "raw_rotation.h"
@@ -405,6 +406,7 @@ struct Pipeline {
     Pipeline *barrierTwin = nullptr;
     bool constantBlend = false;     // a blend factor of a blended color is the encoder's blend color
     bool blendKill = false;         // its SET_ITERATED_BLEND_OPTIMIZATION drops zero-source pixels (raw_blend_kill.h)
+    bool fragmentDepth = false;     // its fragment program writes depth (SPH OMAP_DEPTH)
     uint32_t colorFormats[8] = {};  // MTLPixelFormat of each color attachment the state was made for (0: none)
     // its vertex function is Core Animation's fixed_vert_l?h_spc (raw_bounds.h), and attribute 0 (the position) as its key
     // gives it: floats from the stream's vertex start (0: no float position)
@@ -696,6 +698,8 @@ private:
     const DepthStencilState *dsState_ = &DepthStencilState::metalDefault();
     uint32_t stencilRef_[2] = {};
     bool dsDirty_ = true;
+    ZcullPass zcull_;                         // raw_zcull.h
+    const Pipeline *zcullProgram_ = nullptr;  // the state zcull_ last saw
     Texture *shaderDepth_ = nullptr, *shaderStencil_ = nullptr, *shaderStencilTemp_ = nullptr;
     uint8_t shaderTestsActive_ = 0;
     bool prepareShaderTests(const Pipeline &pipeline, const char **why);
@@ -1470,6 +1474,8 @@ public:
         std::atomic<uint64_t> dispatches{0};
         // states made with the zero-source pixel kill on (raw_blend_kill.h), and their binds encoded
         std::atomic<uint64_t> blendKillStates{0}, blendKillBinds{0};
+        // passes given a zcull region, and the regions a draw's state invalidated (raw_zcull.h)
+        std::atomic<uint64_t> zcullPasses{0}, zcullInvalidations{0};
         std::atomic<uint64_t> splitPrologues{0};  // split draws' prologue launches (raw_split.cpp)
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
         std::atomic<uint64_t> splitLaunches{0};
@@ -1920,6 +1926,9 @@ private:
     void clearZbc(const Texture &t, bool full, const uint32_t v[4]);
     void clearZbcDepth(const Texture &t, bool full, float depth);
     ZbcTable zbc_;
+    // zcull's layout where the kernel reports one (raw_zcull.h), from open
+    TegraGM20BAbiZcullInfo zcullInfo_ = {};
+    bool zcullOn_ = false;
     // Whether a full clear to `e` writes comptags only; one this process never asked for is asked for
     bool zbcHeld(const TegraGM20BAbiZbc &e);
     // compThread_ asks the kernel for the ZBC entries wanted, `l` dropped around each call

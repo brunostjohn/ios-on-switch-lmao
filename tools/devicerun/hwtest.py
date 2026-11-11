@@ -96,6 +96,7 @@ TESTS: dict[str, bool] = {
             'gpu.raw.blend_kill',
             'metal.float32_filtering',
             'gpu.raw.compressed_targets',
+            'gpu.raw.zcull',
             'gpu.path.job_visibility',
             'gpu.path.lean_copy',
             'gpu.path.control_reserve',
