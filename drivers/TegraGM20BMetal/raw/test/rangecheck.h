@@ -38,7 +38,7 @@ template<class Expect> void DeviceHarness::ranges(Device &device, Expect expect)
 
     auto &flags = const_cast<TegraGM20BAbiInfo &>(device.k_.info()).flags;
     const auto saved = flags;
-    flags |= TegraGM20BInfoSubmitAddress | TegraGM20BInfoUseRanges;
+    flags |= TegraGM20BInfoSubmitAddress;
     auto *cb = device.begin();
     if (!cb)
         std::abort();
@@ -95,15 +95,6 @@ template<class Expect> void DeviceHarness::ranges(Device &device, Expect expect)
            "texture readback carries the buffer-side row extent");
     blit->end();
     cb->surfaces_.clear();
-    flags &= ~uint32_t(TegraGM20BInfoUseRanges);
-    imported.bo.va = buffer.va;
-    cb->use(alias, true);
-    const auto &legacy = cb->surfaces_.uses();
-    expect(legacy.size() == 2 && legacy[0].handle == imported.bo.handle && legacy[1].reserved == 0 &&
-           !(legacy[1].access & TegraGM20BSurfaceRange),
-           "older addressed ABI retains whole-import ownership without range metadata");
-    cb->surfaces_.clear();
-    flags |= TegraGM20BInfoUseRanges;
     cb->useAddress(UINT64_MAX - 7, 16, true);
     expect(!cb->surfaces_.valid(), "overflowed GPU address extent cannot be submitted");
     cb->abandon();

@@ -228,7 +228,6 @@ struct CpuCompletePathTest: GPUPathTest {
 struct UseRangesPathTest: GPUPathTest {
     let id = "gpu.path.use_ranges"
     let name = "Uses name byte ranges, so buffers sharing a chunk keep their own writes"
-    let bit: Int? = 25
     let counters = ["ranged_uses"]
 
     func exercise(_ gpu: GPU, _: TestContext, _ metrics: inout Metrics) async throws -> [String] {

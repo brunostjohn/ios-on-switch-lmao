@@ -167,11 +167,6 @@ public:
         return exactJobs() && (info_.flags & TegraGM20BInfoPushFences) ? TegraGM20BMaxJobFences : 0;
     }
 
-    bool rangeUses() const
-    {
-        return exactJobs() && (info_.flags & TegraGM20BInfoUseRanges);
-    }
-
     bool cpuAccess(const Bo &bo, uint64_t offset, uint64_t bytes, uint32_t access, bool acquire);
     CpuCompletionResult completeCpu(const CpuCompletion &completion);
     // Blocks in the kernel until the channel's completed seqno passes `seqno` (the kext sleeps on the fence interrupt).

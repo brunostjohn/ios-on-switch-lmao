@@ -3367,7 +3367,7 @@ void CommandBuffer::useAddress(uint64_t va, uint64_t bytes, bool write)
 {
     if (va && dev_->k_.exactJobs())
         surfaces_.addAddress(va, bytes ? bytes : 1, write,
-                             bytes && bytes <= UINT32_MAX && dev_->k_.rangeUses() ? TegraGM20BSurfaceRange : 0u);
+                             bytes && bytes <= UINT32_MAX ? TegraGM20BSurfaceRange : 0u);
 }
 
 uint64_t CommandBuffer::batchLimit() const
@@ -3379,7 +3379,7 @@ void CommandBuffer::use(const Buffer &buffer, bool write)
 {
     buffersWritten_ |= write;
     externalWrites_ |= write && buffer.hostVisible;
-    const bool ranged = dev_->k_.rangeUses() && buffer.length && buffer.length <= UINT32_MAX;
+    const bool ranged = dev_->k_.exactJobs() && buffer.length && buffer.length <= UINT32_MAX;
     if (!ranged || !importContains(buffer.import, buffer.va, buffer.length))
         use(buffer.import, write);
     if (buffer.va && buffer.length && dev_->k_.exactJobs())
@@ -3392,7 +3392,7 @@ void CommandBuffer::use(const Texture &texture, bool write)
 {
     const Texture *view = write ? &texture : readTexture(&texture);
     const auto storage = view->storageRange();
-    const bool ranged = dev_->k_.rangeUses() && storage.bytes && storage.bytes <= UINT32_MAX;
+    const bool ranged = dev_->k_.exactJobs() && storage.bytes && storage.bytes <= UINT32_MAX;
     if (!ranged || !importContains(view->import, storage.va, storage.bytes))
         use(view->import, write);
     const bool hostVisible = storage.hostVisible || (view->import && !view->import->id);

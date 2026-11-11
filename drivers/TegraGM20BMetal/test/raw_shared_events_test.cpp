@@ -39,7 +39,6 @@ struct Model {
     std::vector<TegraGM20BAbiSurfaceUse> resourceUses;
     std::vector<uint8_t> submitted;
     unsigned submissions = 0;
-    bool rangeUses = false;
     bool pushFences = false;
     std::vector<std::vector<uint8_t>> records;
     unsigned cpuCalls = 0;
@@ -94,7 +93,6 @@ extern "C" kern_return_t IOConnectCallStructMethod(mach_port_t connection, uint3
         info = {};
         info.abi_version = TegraGM20BAbiVersion;
         info.flags = TegraGM20BInfoSubmitAddress |
-                     (model.rangeUses ? uint32_t(TegraGM20BInfoUseRanges) : 0u) |
                      (model.pushFences ? uint32_t(TegraGM20BInfoPushFences) : 0u) |
                      (model.shared ? uint32_t(TegraGM20BInfoSharedEvents | TegraGM20BInfoSemanticFence |
                                               TegraGM20BInfoResourceReady) : 0u);
@@ -421,14 +419,13 @@ static void batchSubmission(bool tunnel, bool supported)
           result == kIOReturnBadArgument && model.submissions == 4, "a kernel without fences is never sent one");
 }
 
-static void rangeSubmission(bool tunnel, bool supported)
+static void rangeSubmission(bool tunnel)
 {
     model = {};
     model.tunnel = tunnel;
-    model.rangeUses = supported;
     raw::Kernel kernel;
     std::string error;
-    check(kernel.open(error) && kernel.rangeUses() == supported, "range capability follows kernel advertisement");
+    check(kernel.open(error), "range connection opens");
     raw::SurfaceList resources;
     resources.addAddress(0x400000, 4096, true, TegraGM20BSurfaceRange);
     resources.addAddress(0x408000, 8192, true, TegraGM20BSurfaceRange);
@@ -438,11 +435,6 @@ static void rangeSubmission(bool tunnel, bool supported)
     int result = 0;
     const bool accepted = kernel.exec(3, &push, 1, 0, sequence, &resources, &result,
                                       raw::JobVisibility::Internal);
-    if (!supported) {
-        check(!accepted && result == kIOReturnBadArgument && !model.submissions,
-              "unadvertised byte ranges refuse before publication");
-        return;
-    }
     const size_t offset = sizeof(TegraGM20BAbiSubmit) + sizeof push;
     check(accepted && !result && sequence == 1 && model.submissions == 1 &&
           model.submitted.size() == offset + 3 * sizeof(TegraGM20BAbiSurfaceUse),
@@ -594,10 +586,8 @@ int main()
     batchSubmission(false, true);
     batchSubmission(true, true);
     batchSubmission(false, false);
-    rangeSubmission(false, true);
-    rangeSubmission(true, true);
-    rangeSubmission(false, false);
-    rangeSubmission(true, false);
+    rangeSubmission(false);
+    rangeSubmission(true);
     admission(false, true);
     admission(true, true);
     admission(false, false);

@@ -82,7 +82,6 @@ enum {
     TegraGM20BInfoSharedEvents = 1u << 21,
     TegraGM20BInfoSemanticFence = 1u << 22,
     TegraGM20BInfoResourceReady = 1u << 23,
-    TegraGM20BInfoUseRanges = 1u << 25,
     TegraGM20BInfoPushFences = 1u << 26, /* SubmitAddress takes TegraGM20BPushFence */
 };
 
@@ -447,7 +446,7 @@ enum {
 	TegraGM20BSurfaceWrite = 1u << 1, /* renders, blits or stores into it */
 	TegraGM20BSurfaceHostWritten = 1u << 3, /* SubmitAddress explicit visibility: CPU bytes changed since GPU use */
 	TegraGM20BSurfaceGpuAddress = 1u << 2, /* SubmitAddress only: handle is a GPU VA in a live binding */
-    TegraGM20BSurfaceRange = 1u << 4, /* With InfoUseRanges and GpuAddress, reserved is the nonzero byte extent. */
+    TegraGM20BSurfaceRange = 1u << 4, /* With GpuAddress, reserved is the nonzero byte extent. */
 };
 
 /* TegraGM20BAbiExecSurfaces.flags */

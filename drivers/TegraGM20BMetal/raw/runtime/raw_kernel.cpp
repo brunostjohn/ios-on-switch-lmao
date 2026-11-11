@@ -527,14 +527,6 @@ bool Kernel::exec(uint32_t channel, const TegraGM20BAbiPush *pushes, uint32_t co
             setError("The kernel cannot fence inside a job");
             return false;
         }
-    if (surfaces && !rangeUses())
-        for (const auto &use : surfaces->uses())
-            if (use.access & TegraGM20BSurfaceRange) {
-                if (result)
-                    *result = kIOReturnBadArgument;
-                setError("The kernel cannot represent this job's resource ranges");
-                return false;
-            }
     constexpr uint32_t admissionFlags = TegraGM20BSubmitAdmissionBegin | TegraGM20BSubmitAdmissionContinue |
         TegraGM20BSubmitAdmissionEnd | TegraGM20BSubmitAdmissionCancel;
     if (!admission.empty() && (!addressed || !resourceReady() || !admission.cookie ||
