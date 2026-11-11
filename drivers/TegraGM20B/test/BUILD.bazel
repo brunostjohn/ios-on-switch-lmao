@@ -474,6 +474,7 @@ host_library(
         "//drivers/TegraGM20B:TegraGM20BRelayout.h",
         "//drivers/TegraGM20B:TegraGM20BTiled.h",
         "//drivers/TegraGM20B:TegraGM20BViews.h",
+        "//drivers/TegraGM20B:SwitchGpuPathStats.h",
         "//kits/SwitchRefusal:SwitchRefusal.h",
     ],
     deps = [
@@ -1110,7 +1111,8 @@ host_test(
 host_test(
     name = "switch_gpu_cpu_complete_test",
     srcs = ["switch_gpu_cpu_complete_test.cpp", "switch_gpu_backing_fixture.h",
-            "//drivers/TegraGM20B:SwitchGpuUserCpuComplete.h"],
+            "//drivers/TegraGM20B:SwitchGpuUserCpuComplete.h", "//drivers/TegraGM20B:SwitchGpuPathStats.h",
+            "//drivers/TegraGM20B:TegraGM20BGpu.h"],
     deps = [":backing", ":coherency_kernel"],
 )
 

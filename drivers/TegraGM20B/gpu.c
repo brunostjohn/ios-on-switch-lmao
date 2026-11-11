@@ -73,6 +73,7 @@
 #include "SwitchGpuChannelPolicy.h"
 #include "SwitchGpuPresentTokens.h"
 #include "SwitchGpuMapping.h"
+#include "SwitchGpuPathStats.h"
 #include "TegraGM20BSyncpt.h"
 #include "TegraGM20BFences.h"
 #include "TegraGM20BHangDecode.h"
@@ -3149,6 +3150,8 @@ static void stats_tick(void)
 		lnew ? lns / lnew / 1000 : 0, lnm / 1000, lnew, lfree ? lfs / lfree / 1000 : 0,
 		lfm / 1000, lfree);
 	nvxnu_stats("tegra-gm20b: stats2 %s", line);
+	switch_gpu_path_window(line, sizeof(line));
+	nvxnu_stats("tegra-gm20b: paths %s", line);
 	stats_exec_owners(line, sizeof(line), rate);
 	stats_mem(ms);
 	stats_waits(ms);

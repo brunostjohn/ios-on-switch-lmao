@@ -1,0 +1,267 @@
+import Darwin
+import Foundation
+import HWTestCore
+import HWTestGPU
+import Metal
+
+/// kern.switch_gpu_paths (debug kernels, drivers/TegraGM20B/SwitchGpuPathStats.h): the capability flags the GM20B
+/// kernel advertises and how often this process took each path behind them.
+struct GPUPaths {
+    let flags: UInt32
+    let counts: [String: Int]
+
+    static func read() -> GPUPaths? {
+        var size = 0
+        guard sysctlbyname("kern.switch_gpu_paths", nil, &size, nil, 0) == 0, size > 0 else { return nil }
+        var bytes = [CChar](repeating: 0, count: size)
+        guard sysctlbyname("kern.switch_gpu_paths", &bytes, &size, nil, 0) == 0 else { return nil }
+        var flags: UInt32 = 0
+        var counts: [String: Int] = [:]
+        for field in String(cString: bytes).split(separator: " ") {
+            let pair = field.split(separator: "=", maxSplits: 1).map(String.init)
+            guard pair.count == 2 else { continue }
+            if pair[0] == "flags" {
+                flags = UInt32(pair[1].dropFirst(2), radix: 16) ?? 0
+            } else if let count = Int(pair[1]) {
+                counts[pair[0]] = count
+            }
+        }
+        return GPUPaths(flags: flags, counts: counts)
+    }
+
+    func taken(_ name: String, since before: GPUPaths) -> Int { (counts[name] ?? 0) - (before.counts[name] ?? 0) }
+}
+
+/// One GM20B kernel path behind a capability bit, on the raw facade: the kernel advertises the bit, a workload that
+/// needs the path gives the right bytes with every command buffer on the raw path, and the kernel counted the path for
+/// this process while it ran.
+protocol GPUPathTest: HWTest {
+    var bit: Int { get }
+    var counters: [String] { get }
+    /// The workload's failures, none when it gave the right bytes.
+    func exercise(_ gpu: GPU, _ metrics: inout Metrics) async throws -> [String]
+}
+
+extension GPUPathTest {
+    var subsystem: Subsystem { .metal }
+
+    func run(_ context: TestContext) async throws -> Outcome {
+        let gpu = try GPU.make()
+        guard RawFacade.kind(of: gpu.device) == "raw" else {
+            return .skip("the default device is not the raw facade (\(RawFacade.kind(of: gpu.device)))")
+        }
+        guard let before = GPUPaths.read() else {
+            return RawFacade.counters(of: gpu.device).isEmpty
+                ? .skip("no kern.switch_gpu_paths: not a debug kernel")
+                : .fail("a debug runtime on a kernel without kern.switch_gpu_paths")
+        }
+        var metrics = Metrics()
+        metrics.set("flags", String(before.flags, radix: 16))
+        var failures: [String] = []
+        if before.flags & (1 << UInt32(bit)) == 0 { failures.append("the kernel does not advertise bit \(bit)") }
+        failures += try await exercise(gpu, &metrics)
+        let after = GPUPaths.read() ?? before
+        for counter in counters {
+            let taken = after.taken(counter, since: before)
+            metrics.set(counter, taken)
+            if taken <= 0 { failures.append("no \(counter) while it ran") }
+        }
+        metrics.set("paths", gpu.paths.isEmpty ? "-" : gpu.paths.text)
+        if gpu.paths.paths.keys.contains(where: { $0 != "raw" }) {
+            failures.append("command buffers went \(gpu.paths.text)")
+        }
+        return failures.isEmpty
+            ? .pass(metrics, proof: gpu.proof) : .fail(failures.joined(separator: "; "), metrics, proof: gpu.proof)
+    }
+
+    static func wrong(_ got: [UInt8], _ want: [UInt8]) -> Int {
+        zip(got, want).filter { $0 != $1 }.count + abs(got.count - want.count)
+    }
+}
+
+/// JobVisibility (bit 18): a pass that writes only a private texture ends Internal, with no L2 flush; the blit into a
+/// shared buffer that reads it back ends External, and the CPU reads the pass's colour from it.
+struct JobVisibilityPathTest: GPUPathTest {
+    let id = "gpu.path.job_visibility"
+    let name = "Internal jobs skip the L2 flush, External ones put CPU-read bytes in DRAM"
+    let bit = 18
+    let counters = ["internal_jobs", "external_jobs"]
+
+    func exercise(_ gpu: GPU, _ metrics: inout Metrics) async throws -> [String] {
+        let target = try gpu.texture(.rgba8Unorm, 64, 64)
+        try await gpu.run { commands in
+            let pass = MTLRenderPassDescriptor()
+            pass.colorAttachments[0].texture = target
+            pass.colorAttachments[0].loadAction = .clear
+            pass.colorAttachments[0].clearColor = MTLClearColor(red: 0.2, green: 0.4, blue: 0.6, alpha: 1)
+            pass.colorAttachments[0].storeAction = .store
+            commands.makeRenderCommandEncoder(descriptor: pass)!.endEncoding()
+        }
+        let bytes = try await gpu.read(target, bytesPerPixel: 4)
+        let wrong = Self.wrong(bytes, Array([UInt8]([51, 102, 153, 255]).repeated(64 * 64)))
+        metrics.set("wrong_bytes", wrong)
+        return wrong == 0 ? [] : ["\(wrong) bytes of the cleared texture read back wrong"]
+    }
+}
+
+/// LeanCopyChannel (bit 19): replaceRegion and getBytes of a texture go through the process's copy channel, made
+/// copy-only, and the bytes round-trip.
+struct LeanCopyPathTest: GPUPathTest {
+    let id = "gpu.path.lean_copy"
+    let name = "Texture uploads and readbacks run on a copy-only channel"
+    let bit = 19
+    let counters = ["lean_copy_jobs"]
+
+    func exercise(_ gpu: GPU, _ metrics: inout Metrics) async throws -> [String] {
+        let width = 160, height = 48, row = width * 4
+        let texture = try gpu.texture(.rgba8Unorm, width, height, usage: [.shaderRead], storage: .shared)
+        let pattern = (0..<(row * height)).map { UInt8(truncatingIfNeeded: $0 &* 7 &+ 3) }
+        let region = MTLRegionMake2D(0, 0, width, height)
+        let before = RawFacade.counters(of: gpu.device)
+        texture.replace(region: region, mipmapLevel: 0, withBytes: pattern, bytesPerRow: row)
+        var back = [UInt8](repeating: 0, count: pattern.count)
+        texture.getBytes(&back, bytesPerRow: row, from: region, mipmapLevel: 0)
+        let after = RawFacade.counters(of: gpu.device)
+        let uploads = (after["texture_uploads"] ?? 0) - (before["texture_uploads"] ?? 0)
+        let readbacks = (after["texture_readbacks"] ?? 0) - (before["texture_readbacks"] ?? 0)
+        let wrong = Self.wrong(back, pattern)
+        metrics.set("uploads", uploads)
+        metrics.set("readbacks", readbacks)
+        metrics.set("wrong_bytes", wrong)
+        var failures: [String] = []
+        if uploads <= 0 || readbacks <= 0 { failures.append("the copy channel did not move the texture") }
+        if wrong != 0 { failures.append("\(wrong) bytes changed on the round trip") }
+        return failures
+    }
+}
+
+/// ControlReserve (bit 20): one command buffer with more setBytes than any before it makes the runtime allocate new
+/// control buffers from the kernel's reserve; every draw's colour comes from its own setBytes.
+struct ControlReservePathTest: GPUPathTest {
+    let id = "gpu.path.control_reserve"
+    let name = "Control buffers come from the reserve and carry every draw's bytes"
+    let bit = 20
+    let counters = ["control_bos"]
+    static let width = 64, height = 8, bytesPerDraw = 4096
+
+    func exercise(_ gpu: GPU, _ metrics: inout Metrics) async throws -> [String] {
+        let width = Self.width, height = Self.height
+        let target = try gpu.texture(.rgba8Unorm, width, height)
+        let pipeline = try gpu.render(fragment: "solid_fragment", format: .rgba8Unorm)
+        var want = [UInt8](repeating: 0, count: width * height * 4)
+        try await gpu.run { commands in
+            let pass = MTLRenderPassDescriptor()
+            pass.colorAttachments[0].texture = target
+            pass.colorAttachments[0].loadAction = .clear
+            pass.colorAttachments[0].storeAction = .store
+            let encoder = commands.makeRenderCommandEncoder(descriptor: pass)!
+            encoder.setRenderPipelineState(pipeline)
+            var payload = [Float](repeating: 0, count: Self.bytesPerDraw / 4)
+            for y in 0..<height {
+                for x in 0..<width {
+                    let value = UInt8((x * 3 + y * 29) & 0xff)
+                    payload[0] = Float(value) / 255
+                    payload[1] = Float(255 - value) / 255
+                    payload[2] = Float(y) / 255
+                    payload[3] = 1
+                    var corners = GPU.pixelQuad(x, y, x + 1, y + 1, width: width, height: height)
+                    encoder.setVertexBytes(&corners, length: MemoryLayout<SIMD4<Float>>.stride * 4, index: 0)
+                    encoder.setFragmentBytes(&payload, length: Self.bytesPerDraw, index: 0)
+                    encoder.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4)
+                    let at = (y * width + x) * 4
+                    want[at..<(at + 4)] = [value, 255 - value, UInt8(y), 255]
+                }
+            }
+            encoder.endEncoding()
+        }
+        let wrong = Self.wrong(try await gpu.read(target, bytesPerPixel: 4), want)
+        metrics.set("draws", width * height)
+        metrics.set("wrong_bytes", wrong)
+        return wrong == 0 ? [] : ["\(wrong) bytes of the draws' colours wrong"]
+    }
+}
+
+/// CpuComplete (bit 24): a GPU fill of no-copy cached memory is maintained by the kernel over exactly its range at
+/// completion, so the original pointer reads it without another contents call.
+struct CpuCompletePathTest: GPUPathTest {
+    let id = "gpu.path.cpu_complete"
+    let name = "The kernel maintains a GPU write's cached range at completion"
+    let bit = 24
+    let counters = ["cpu_completes"]
+
+    func exercise(_ gpu: GPU, _ metrics: inout Metrics) async throws -> [String] {
+        let length = 3 * Int(getpagesize())
+        var allocation: UnsafeMutableRawPointer?
+        guard posix_memalign(&allocation, Int(getpagesize()), length) == 0, let memory = allocation else {
+            throw TestFailure("aligned no-copy allocation failed")
+        }
+        memory.initializeMemory(as: UInt8.self, repeating: 0x11, count: length)
+        guard let buffer = gpu.device.makeBuffer(
+            bytesNoCopy: memory, length: length, options: .storageModeShared,
+            deallocator: { pointer, _ in free(pointer) })
+        else {
+            free(memory)
+            throw TestFailure("no-copy buffer creation failed")
+        }
+        let range = 100..<(length - 300)
+        try await gpu.run { commands in
+            let blit = commands.makeBlitCommandEncoder()!
+            blit.fill(buffer: buffer, range: range, value: 0x6b)
+            blit.endEncoding()
+        }
+        var wrong = 0
+        for offset in 0..<length {
+            let want: UInt8 = range.contains(offset) ? 0x6b : 0x11
+            if memory.load(fromByteOffset: offset, as: UInt8.self) != want { wrong += 1 }
+        }
+        metrics.set("wrong_bytes", wrong)
+        return wrong == 0 ? [] : ["\(wrong) bytes wrong through the original pointer"]
+    }
+}
+
+/// UseRanges (bit 25): small buffers share pool chunks, and each command buffer names only its buffer's bytes; the GPU
+/// writes each buffer while the CPU rewrites its neighbours, and no buffer loses either side's bytes.
+struct UseRangesPathTest: GPUPathTest {
+    let id = "gpu.path.use_ranges"
+    let name = "Uses name byte ranges, so buffers sharing a chunk keep their own writes"
+    let bit = 25
+    let counters = ["ranged_uses"]
+
+    func exercise(_ gpu: GPU, _ metrics: inout Metrics) async throws -> [String] {
+        let length = 768
+        let buffers = try (0..<8).map { _ in try gpu.buffer(length) }
+        for (index, buffer) in buffers.enumerated() {
+            buffer.contents().initializeMemory(as: UInt8.self, repeating: UInt8(index), count: length)
+        }
+        var committed: [MTLCommandBuffer] = []
+        for (index, buffer) in buffers.enumerated() where index % 2 == 0 {
+            committed.append(
+                try gpu.commit { commands in
+                    let blit = commands.makeBlitCommandEncoder()!
+                    blit.fill(buffer: buffer, range: 0..<length, value: UInt8(0x80 | index))
+                    blit.endEncoding()
+                })
+            buffers[index + 1].contents().initializeMemory(as: UInt8.self, repeating: UInt8(0x40 | index), count: length)
+        }
+        try gpu.finish(committed)
+        var wrong = 0
+        for (index, buffer) in buffers.enumerated() {
+            let want = UInt8(index % 2 == 0 ? 0x80 | index : 0x40 | (index - 1))
+            let bytes = UnsafeRawBufferPointer(start: buffer.contents(), count: length)
+            wrong += bytes.filter { $0 != want }.count
+        }
+        metrics.set("wrong_bytes", wrong)
+        return wrong == 0 ? [] : ["\(wrong) bytes wrong across buffers that share chunks"]
+    }
+}
+
+enum GPUPathTests {
+    static let all: [any HWTest] = [
+        JobVisibilityPathTest(), LeanCopyPathTest(), ControlReservePathTest(), CpuCompletePathTest(),
+        UseRangesPathTest(),
+    ]
+}
+
+extension Array {
+    fileprivate func repeated(_ times: Int) -> [Element] { (0..<times).flatMap { _ in self } }
+}

@@ -45,6 +45,7 @@
 #include "SwitchGpuChannelPolicy.h"
 #include "SwitchGpuJobFences.h"
 #include "SwitchGpuJobVisibility.h"
+#include "SwitchGpuPathStats.h"
 #include "SwitchGpuEventClient.h"
 #include "SwitchGpuAsyncReference.h"
 #include "SwitchGpuAdmission.h"
@@ -963,6 +964,7 @@ class AGXDeviceUserClient : public IOUserClient
     IOMemoryDescriptor *fence_view_ = nullptr;
     tgm_chan *chans_[kMaxChannels] = {};
     uint32_t channelLevels_[kMaxChannels] = {};
+    bool leanChannels_[kMaxChannels] = {};
     Bo *bos_ = nullptr, *zombies_ = nullptr, *readyBos_ = nullptr;
     SwitchGpuBoIndex<Bo, KernelMemory> boIndex_;
     RetiredBinding *retired_ = nullptr, **retiredTail_ = &retired_, *unmapping_ = nullptr;
@@ -1539,6 +1541,7 @@ IOReturn AGXDeviceUserClient::boAlloc(const TegraGM20BAbiBoAlloc *in,
 			bo->controlCharge =
 				(bo->bytes + PAGE_SIZE - 1) & ~(uint64_t(PAGE_SIZE) - 1);
 			control_bytes_ += bo->controlCharge;
+			switch_gpu_path_taken(SWITCH_GPU_PATH_CONTROL_BO, 1);
 		}
 		kind = TGM_BO_POOL;
 		bo->compositorPool = critical_;
@@ -1803,6 +1806,8 @@ IOReturn AGXDeviceUserClient::vmBind(const TegraGM20BAbiVmBind *in, uint32_t cou
 		}
 		if (const IOReturn mapped = mapRange(op, bo, record, queued))
 			return mapped;
+		switch_gpu_path_taken(SWITCH_GPU_PATH_VOLATILE_BIND,
+				      op.op == TegraGM20BBindMapVolatile ? 1 : 0);
 		tgm_stats_bind(1, op.range >> 12, statsNowNs() - start);
 	}
 	return kIOReturnSuccess;
@@ -1919,6 +1924,7 @@ IOReturn AGXDeviceUserClient::channelCreate(const TegraGM20BAbiChannelCreate *in
 	if (level_ != TGM_LEVEL_FOREGROUND && !critical_)
 		tgm_chan_set_level(chans_[slot], level_);
 	channelLevels_[slot] = level_;
+	leanChannels_[slot] = copyOnly != 0;
 	faultLogged_[slot] = false;
 	tgm_chan_on_fence(chans_[slot], retirementFence, this);
 	out->channel = slot + 1;
@@ -2470,7 +2476,8 @@ IOReturn AGXDeviceUserClient::exec(uint32_t channel, TegraGM20BAbiPush *input, u
 		events = job.events;
 		events->clear();
 	}
-	uint32_t useTotal = 0, writeCount = 0, surfaceCount = 0, nativeGuardCount = 0, writtenCount = 0;
+	uint32_t useTotal = 0, writeCount = 0, surfaceCount = 0, nativeGuardCount = 0, writtenCount = 0,
+		 rangedUses = 0;
 	bool hostWritten = !(visibility & TegraGM20BSubmitVisibilityExplicit);
 	bool unlockedWrites = false;
 	const uint32_t claim = switch_gpu_claim_flags(admissionBegin || admissionContinue);
@@ -2510,6 +2517,7 @@ IOReturn AGXDeviceUserClient::exec(uint32_t channel, TegraGM20BAbiPush *input, u
 	for (uint32_t i = 0; native && i < useCount; ++i) {
 		const bool addressed = uses[i].access & TegraGM20BSurfaceGpuAddress;
 		const uint64_t bytes = uses[i].access & TegraGM20BSurfaceRange ? uses[i].reserved : 0;
+		rangedUses += bytes != 0;
 		const Binding *binding = addressed
 			? switch_gpu_binding_find(binds_, nbinds_, uses[i].handle, bytes ? bytes : 1)
 			: nullptr;
@@ -2563,7 +2571,7 @@ IOReturn AGXDeviceUserClient::exec(uint32_t channel, TegraGM20BAbiPush *input, u
 		return kIOReturnBadArgument;
 	switch_gpu_backing_transaction transaction = {};
 	switch_gpu_backing_token completion = {};
-	uint32_t dependencies = 0;
+	uint32_t dependencies = 0, jobVisibility = 0;
 	int error = 0;
 	bool ownershipBusy = false, ownershipFailed = false;
 	// The active-submit gate pins this channel, its bindings and BOs while other channels and CPU releases proceed.
@@ -2647,12 +2655,12 @@ refresh:
 		if (!error) {
 			if (scratch)
 				scratch->phases.end(TGM_SUBMIT_LOCK);
-			error = switch_gpu_chan_exec_visibility(
-				chan, pushes, count, job.dependencies, dependencies, &seqno,
-				profiled ? &prof : nullptr,
-				switch_gpu_job_visibility(visibility, events && events->signals(),
-							  unlockedWrites,
-							  hostWritten || transaction.host_written));
+			jobVisibility = switch_gpu_job_visibility(visibility, events && events->signals(),
+								  unlockedWrites,
+								  hostWritten || transaction.host_written);
+			error = switch_gpu_chan_exec_visibility(chan, pushes, count, job.dependencies,
+								dependencies, &seqno,
+								profiled ? &prof : nullptr, jobVisibility);
 			if (scratch)
 				scratch->phases.end(TGM_SUBMIT_EXEC);
 		}
@@ -2688,6 +2696,7 @@ refresh:
 	if (ret)
 		return ret;
 	if (count) {
+		switch_gpu_path_job(jobVisibility, unlockedWrites, leanChannels_[channel - 1], rangedUses);
 		// The host imports this submission may have written, marked GPU-dirty with the submission as their writer
 		// (atomic stores, no cache maintenance): a CPU IOSurfaceLock of one waits for this seqno, then invalidates
 		// (tgm_coherency_*, the XNU hooks), and a listed Exec of another channel waits for it on the GPU.
@@ -2880,28 +2889,19 @@ void AGXDeviceUserClient::releaseMappings()
 
 namespace
 {
-// What each held bit still needs. JobVisibility: VIC and NVDEC to wait for a GM20B write's external
-// visibility, not for its job's completion (SwitchVICJobs, SwitchNVDECJobs read the physical
-// status), or they read the GPU L2's dirty lines' stale DRAM. UseRanges: JobVisibility (the raw
-// runtime asks for both). CpuComplete: UseRanges; a write without ranges is a writer of its whole
-// backing, so a later write to another buffer of the same chunk makes this one stale and it gets no
-// cache maintenance. SharedEvents and ResourceReady: SemanticFence. SemanticFence: a raw runtime
-// that reads failed_first as the one newest failure, not as a prefix. NativeSurfaceView: the media
-// unit's native surfaces.
+// What each held bit still needs. SharedEvents and ResourceReady: SemanticFence. SemanticFence: a raw
+// runtime that reads failed_first as the one newest failure, not as a prefix. NativeSurfaceView: the
+// media unit's native surfaces.
 constexpr uint32_t kInfoAwaitingUserspace =
-	TegraGM20BInfoNativeSurfaceView | TegraGM20BInfoJobVisibility |
-	TegraGM20BInfoLeanCopyChannel | TegraGM20BInfoControlReserve | TegraGM20BInfoSharedEvents |
-	TegraGM20BInfoSemanticFence | TegraGM20BInfoResourceReady | TegraGM20BInfoCpuComplete |
-	TegraGM20BInfoUseRanges;
+	TegraGM20BInfoNativeSurfaceView | TegraGM20BInfoSharedEvents | TegraGM20BInfoSemanticFence |
+	TegraGM20BInfoResourceReady;
 }  // namespace
 
-IOReturn AGXDeviceUserClient::getInfo(TegraGM20BAbiInfo *out)
+extern "C" uint32_t switch_gpu_info_flags(void)
 {
 	tgm_info info;
 	tgm_get_info(&info);
-	bzero(out, sizeof(*out));
-	out->abi_version = TegraGM20BAbiVersion;
-	out->flags = static_cast<uint32_t>(TegraGM20BInfoHostImport) | TegraGM20BInfoKernelMap |
+	uint32_t flags = static_cast<uint32_t>(TegraGM20BInfoHostImport) | TegraGM20BInfoKernelMap |
 		     TegraGM20BInfoOrder | TegraGM20BInfoSurfaceWrites |
 		     TegraGM20BInfoSurfaceLayout | TegraGM20BInfoExecSurfaces |
 		     TegraGM20BInfoPriority | TegraGM20BInfoKillRecord | TegraGM20BInfoSubmit |
@@ -2909,11 +2909,21 @@ IOReturn AGXDeviceUserClient::getInfo(TegraGM20BAbiInfo *out)
 		     TegraGM20BInfoCanonicalSurfaceLayout | TegraGM20BInfoNativeSurfaceView | TegraGM20BInfoJobVisibility | TegraGM20BInfoLeanCopyChannel | TegraGM20BInfoControlReserve |
 		     TegraGM20BInfoSharedEvents | TegraGM20BInfoSemanticFence | TegraGM20BInfoResourceReady |
 		     TegraGM20BInfoCpuComplete | TegraGM20BInfoUseRanges | TegraGM20BInfoPushFences;
-	out->flags &= ~kInfoAwaitingUserspace;
+	flags &= ~kInfoAwaitingUserspace;
 	if (info.comptag_lines && switch_gpu_compression_on())
-		out->flags |= TegraGM20BInfoCompression;
+		flags |= TegraGM20BInfoCompression;
 	if (switch_tiled_cache_on())
-		out->flags |= TegraGM20BInfoTiledCache;
+		flags |= TegraGM20BInfoTiledCache;
+	return flags;
+}
+
+IOReturn AGXDeviceUserClient::getInfo(TegraGM20BAbiInfo *out)
+{
+	tgm_info info;
+	tgm_get_info(&info);
+	bzero(out, sizeof(*out));
+	out->abi_version = TegraGM20BAbiVersion;
+	out->flags = switch_gpu_info_flags();
 	out->chipset = info.chipset;
 	out->device_id = 0;
 	out->gpc_count = info.gpc_count;

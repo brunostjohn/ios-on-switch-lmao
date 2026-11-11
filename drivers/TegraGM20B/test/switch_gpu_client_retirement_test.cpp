@@ -150,7 +150,7 @@ struct switch_gpu_mapping {
 	uint64_t va = 0, bytes = 0;
 	std::vector<uint8_t> *buffer = nullptr;
 	uint64_t offset = 0;
-	bool pending = false, big = false;
+	bool pending = false, big = false, vol = false;
 };
 
 struct tgm_mem {
@@ -162,7 +162,7 @@ Memory gpuMemory;
 void installPtes(switch_gpu_mapping *m)
 {
 	if (m->buffer)
-		gpuMemory.map(m->va, m->buffer->data() + m->offset, m->bytes, false);
+		gpuMemory.map(m->va, m->buffer->data() + m->offset, m->bytes, false, !m->vol);
 	m->pending = false;
 }
 
@@ -227,8 +227,9 @@ int switch_gpu_mapping_installed(const switch_gpu_mapping *mapping)
 	return mapping && !mapping->pending;
 }
 
-int switch_gpu_vm_install(void *, switch_gpu_mapping *mapping, tgm_mem *, uint8_t, int, int)
+int switch_gpu_vm_install(void *, switch_gpu_mapping *mapping, tgm_mem *, uint8_t, int, int vol)
 {
+	mapping->vol = vol != 0;
 	if (mapping->pending)
 		installPtes(mapping);
 	return 0;
@@ -242,9 +243,9 @@ int switch_gpu_vm_prepare(void *, uint64_t va, uint64_t range, tgm_mem *mem, uin
 }
 
 int switch_gpu_vm_map_volatile(void *, uint64_t va, uint64_t range, tgm_mem *mem, uint64_t offset,
-			       uint8_t, int, int, switch_gpu_mapping **out)
+			       uint8_t, int, int vol, switch_gpu_mapping **out)
 {
-	*out = new switch_gpu_mapping{9000, va, range, mem->buffer, offset, true, false};
+	*out = new switch_gpu_mapping{9000, va, range, mem->buffer, offset, true, false, vol != 0};
 	installPtes(*out);
 	return 0;
 }
@@ -485,7 +486,7 @@ public:
 	}
 
 	// VmBind's steps for one op (TegraGM20BUserClient.cpp vmBind): a Map of `bo` or, with no BO, an Unmap.
-	IOReturn bind(uint64_t va, uint64_t range, Bo *bo)
+	IOReturn bind(uint64_t va, uint64_t range, Bo *bo, uint32_t mapOp = TegraGM20BBindMap)
 	{
 		RetiredBinding *spare[2] = {new RetiredBinding{}, new RetiredBinding{}};
 		IOLockLock(lock_);
@@ -493,7 +494,7 @@ public:
 		IOReturn result = cutOverlaps(va, range, !queued, bo != nullptr, spare);
 		if (!result && bo) {
 			TegraGM20BAbiBindOp op = {};
-			op.op = TegraGM20BBindMap;
+			op.op = mapOp;
 			op.handle = bo->handle;
 			op.va = va;
 			op.range = range;
@@ -880,7 +881,34 @@ uint8_t gpuRead(uint64_t va)
 	const uint8_t *at = gpuMemory.at(va);
 	return at ? *at : 0;
 }
+
+uint32_t hostFetch(uint64_t va)
+{
+	std::vector<uint32_t> words;
+	return gpuMemory.fetch(va, 1, words) ? words[0] : 0;
+}
 }  // namespace
+
+// JobVisibility's control BOs (the push and upload rings, the control tables) are bound volatile: the host fetches
+// what the CPU wrote there since, with no L2 invalidate between jobs. A cacheable binding keeps its first fetch's line
+// until one, which a host-written job pays at its start.
+TEST_F(ClientRetirement, AVolatileMapIsFetchedPastTheL2)
+{
+	auto ring = bytesOf(0x11), table = bytesOf(0x22);
+	auto *rings = client.add(42, 0x200000, 0x4000, &ring);
+	auto *tables = client.add(43, 0x300000, 0x4000, &table);
+	chan.completed = chan.submitted;
+	ASSERT_EQ(client.bind(0x40000, 0x4000, rings, TegraGM20BBindMapVolatile), 0);
+	ASSERT_EQ(client.bind(0x80000, 0x4000, tables), 0);
+	EXPECT_EQ(hostFetch(0x40000), 0x11111111u);
+	EXPECT_EQ(hostFetch(0x80000), 0x22222222u);
+	std::fill_n(ring.begin(), 4, 0x33);
+	std::fill_n(table.begin(), 4, 0x44);
+	EXPECT_EQ(hostFetch(0x40000), 0x33333333u);
+	EXPECT_EQ(hostFetch(0x80000), 0x22222222u);
+	gpuMemory.invalidateL2();
+	EXPECT_EQ(hostFetch(0x80000), 0x44444444u);
+}
 
 // A Map over a range work queued earlier still uses: that work keeps the old pages even when it runs after the Map, work
 // submitted after it waits on the GPU for the bind epoch, and retirement switches the PTEs only once the old work is

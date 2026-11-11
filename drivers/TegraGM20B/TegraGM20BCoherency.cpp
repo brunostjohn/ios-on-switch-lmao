@@ -35,6 +35,7 @@
 #include "TegraGM20BGpu.h"
 #include "TegraGM20BTiled.h"
 #include "SwitchGpuBacking.h"
+#include "SwitchGpuPathStats.h"
 #if TGM_STATS
 #include <os/log.h>
 #endif
@@ -763,8 +764,10 @@ extern "C" uint32_t tgm_coh_surface_id(const struct tgm_coh *c)
 
 extern "C" void tgm_coh_wait_visible(struct tgm_coh *c)
 {
-	if (c->backing)
-		(void)switch_gpu_backing_wait_visible(c->backing);
+	if (!c->backing)
+		return;
+	switch_gpu_path_taken(SWITCH_GPU_PATH_VISIBLE_WAIT, 1);
+	(void)switch_gpu_backing_wait_visible(c->backing);
 }
 
 extern "C" uint32_t tgm_coh_writers(struct tgm_coh *c, struct tgm_relayout_writer *out,

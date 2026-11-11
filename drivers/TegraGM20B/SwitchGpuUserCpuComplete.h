@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #pragma once
+#include "SwitchGpuPathStats.h"
 
 IOReturn AGXDeviceUserClient::cpuComplete(const TegraGM20BAbiCpuComplete *input,
                                          TegraGM20BAbiCpuCompleteReply *reply)
@@ -44,8 +45,10 @@ IOReturn AGXDeviceUserClient::cpuComplete(const TegraGM20BAbiCpuComplete *input,
         switch_gpu_backing_retain(bo->backing);
     }
     IOLockUnlock(lock_);
-    if (!result)
+    if (!result) {
         result = ioreturn(switch_gpu_cpu_complete(prefix, resolved, count, reply));
+        switch_gpu_path_taken(SWITCH_GPU_PATH_CPU_COMPLETE, 1);
+    }
     for (uint32_t i = 0; i < count; ++i)
         switch_gpu_backing_release(resolved[i].backing);
     if (held)

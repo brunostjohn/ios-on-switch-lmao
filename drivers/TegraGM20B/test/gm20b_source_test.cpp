@@ -675,22 +675,25 @@ TEST(GM20BFencesSource, ExecQueuesItsWritersAcquiresBeforeItSubmits)
 		expectBefore(follow, "tgm_fence_wanted(", "ret = order_add(chan,");
 		expectBefore(follow, "ret = order_add(chan,", "mutex_unlock(&live_lock);");
 	}
-	const auto capabilities = flat(definition(client(), "IOReturn AGXDeviceUserClient::getInfo("));
+	const auto capabilities = flat(definition(client(), "uint32_t switch_gpu_info_flags(void)"));
 	for (const char *capability : {"TegraGM20BInfoExecSurfaces", "TegraGM20BInfoSubmitAddress",
 				      "TegraGM20BInfoResourceReady", "TegraGM20BInfoSemanticFence",
                                       "TegraGM20BInfoCpuComplete", "TegraGM20BInfoCpuAccess", "TegraGM20BInfoUseRanges",
                                       "TegraGM20BInfoJobVisibility"})
 		EXPECT_THAT(capabilities, HasSubstr(capability));
-	EXPECT_THAT(capabilities, HasSubstr("out->flags &= ~kInfoAwaitingUserspace;"));
+	EXPECT_THAT(capabilities, HasSubstr("flags &= ~kInfoAwaitingUserspace;"));
+	EXPECT_THAT(flat(definition(client(), "IOReturn AGXDeviceUserClient::getInfo(")),
+		    HasSubstr("out->flags = switch_gpu_info_flags();"));
 	const auto awaiting =
 		flat(client().substr(client().find("constexpr uint32_t kInfoAwaitingUserspace")));
 	for (const char *capability :
-	     {"TegraGM20BInfoNativeSurfaceView", "TegraGM20BInfoJobVisibility",
-	      "TegraGM20BInfoLeanCopyChannel", "TegraGM20BInfoControlReserve",
-	      "TegraGM20BInfoSharedEvents", "TegraGM20BInfoSemanticFence",
-	      "TegraGM20BInfoResourceReady", "TegraGM20BInfoCpuComplete",
-	      "TegraGM20BInfoUseRanges"})
+	     {"TegraGM20BInfoNativeSurfaceView", "TegraGM20BInfoSharedEvents",
+	      "TegraGM20BInfoSemanticFence", "TegraGM20BInfoResourceReady"})
 		EXPECT_THAT(awaiting.substr(0, awaiting.find(';')), HasSubstr(capability));
+	for (const char *capability :
+	     {"TegraGM20BInfoJobVisibility", "TegraGM20BInfoLeanCopyChannel",
+	      "TegraGM20BInfoControlReserve", "TegraGM20BInfoCpuComplete", "TegraGM20BInfoUseRanges"})
+		EXPECT_THAT(awaiting.substr(0, awaiting.find(';')), Not(HasSubstr(capability)));
 }
 
 // The flags exec hands chan_exec are SwitchGpuJobVisibility.h's (switch_gpu_job_visibility_test), with a write into an
@@ -1179,7 +1182,7 @@ TEST(GM20BJobFencesSource, OneJobOwnsItsUsesUntilItsLastFence)
 	EXPECT_THAT(room, HasSubstr("*entries = count + 6 + stamps + job_fences;"));
 	EXPECT_THAT(room, HasSubstr("SWITCH_GPU_FENCE_POINT_DWORDS * job_fences;"));
 	EXPECT_THAT(emit, HasSubstr("last = switch_gpu_job_emit(pushes, count, chan->submitted, &emitter);"));
-	EXPECT_THAT(flat(definition(client(), "IOReturn AGXDeviceUserClient::getInfo(")),
+	EXPECT_THAT(flat(definition(client(), "uint32_t switch_gpu_info_flags(void)")),
 		    HasSubstr("TegraGM20BInfoPushFences;"));
 	EXPECT_THAT(Between(client(), "constexpr uint32_t kInfoAwaitingUserspace =", ";"),
 		    Not(HasSubstr("TegraGM20BInfoPushFences")));
