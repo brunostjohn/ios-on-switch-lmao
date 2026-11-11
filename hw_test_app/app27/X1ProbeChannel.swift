@@ -104,12 +104,12 @@ struct ProbeLedger {
     var taken: [String: [String: Int]] = [:]
     var offPath: [String] = []
 
-    mutating func tally(_ cell: String, _ arm: String) -> ArmTally {
-        if !cells.contains(cell) { cells.append(cell) }
-        return tallies[cell]?[arm] ?? ArmTally()
+    func tally(_ cell: String, _ arm: String) -> ArmTally {
+        tallies[cell]?[arm] ?? ArmTally()
     }
 
     mutating func store(_ cell: String, _ arm: String, _ tally: ArmTally, _ batch: ArmBatch) {
+        if !cells.contains(cell) { cells.append(cell) }
         var t = tally
         t.gpuMilliseconds += batch.gpuMilliseconds
         t.batches += 1

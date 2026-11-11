@@ -94,6 +94,23 @@ struct BarrierKit {
         encoder.endEncoding()
     }
 
+    /// Pass B for many trials in one pass: tile k of `atlas` from all of `sources[k]` (no barrier between the draws)
+    func tapAll(_ commands: MTLCommandBuffer, _ sources: [MTLTexture], into atlas: MTLTexture) {
+        let encoder = commands.makeRenderCommandEncoder(descriptor: Self.pass(atlas))!
+        encoder.setRenderPipelineState(tap)
+        for (k, source) in sources.enumerated() {
+            encoder.setFragmentTexture(source, index: 0)
+            var params = [SIMD2<Int32>(0, 0), SIMD2(1, 1), SIMD2(0, Int32(k * Self.tile)),
+                          SIMD2(Int32(source.width), Int32(source.height))]
+            encoder.setFragmentBytes(&params, length: 32, index: 0)
+            var corners = GPU.pixelQuad(0, k * Self.tile, Self.tile, (k + 1) * Self.tile, width: atlas.width,
+                                        height: atlas.height)
+            encoder.setVertexBytes(&corners, length: 64, index: 0)
+            encoder.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4)
+        }
+        encoder.endEncoding()
+    }
+
     /// A pyramid level: `into` from the 2 x 2 boxes of `source`
     func level(_ commands: MTLCommandBuffer, _ source: MTLTexture, into: MTLTexture) {
         let encoder = commands.makeRenderCommandEncoder(descriptor: Self.pass(into))!

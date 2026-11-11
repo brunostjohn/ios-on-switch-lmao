@@ -141,3 +141,24 @@ fragment half4 x1_box_half(float4 position [[position]], texture2d<half, access:
     return (src.read(min(p, last)) + src.read(min(p + uint2(1, 0), last)) + src.read(min(p + uint2(0, 1), last)) +
             src.read(min(p + 1, last))) * 0.25h;
 }
+
+/// gpu.x1.job_boundary_idle: buffer word i of seed `seed` (x1_hash(i, 0, seed)), written through the SMs' stores
+kernel void x1_buffer_seed(device uint *out [[buffer(0)]], constant uint &seed [[buffer(1)]],
+                           uint i [[thread_position_in_grid]])
+{
+    out[i] = x1_hash(i, 0, seed);
+}
+
+/// A buffer read through the SMs' data cache
+kernel void x1_buffer_copy(device const uint *in [[buffer(0)]], device uint *out [[buffer(1)]],
+                           uint i [[thread_position_in_grid]])
+{
+    out[i] = in[i];
+}
+
+/// A buffer read through the constant cache
+kernel void x1_constant_copy(constant uint *in [[buffer(0)]], device uint *out [[buffer(1)]],
+                             uint i [[thread_position_in_grid]])
+{
+    out[i] = in[i];
+}
