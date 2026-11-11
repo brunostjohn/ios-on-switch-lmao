@@ -216,6 +216,10 @@ gk20a_gr_init(struct gf100_gr *gr)
 
 	gr->func->init_rop_active_fbps(gr);
 
+	/* Floorsweep at every init, as nvgpu's gk20a_init_gr_setup_hw does (init_fs_state), not only while making the
+	 * golden context: one of our contexts read PD's TPC counts at the netlist's 1,1,1,1 */
+	gf100_grctx_generate_floorsweep(gr);
+
 	/* Enable FIFO access */
 	nvkm_wr32(device, 0x400500, 0x00010001);
 
