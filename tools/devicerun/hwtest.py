@@ -97,6 +97,7 @@ TESTS: dict[str, bool] = {
         False,
     ),
     **{f'decode.{codec}_{size}': False for codec in CODECS for size in SIZES},
+    'decode.native_export': False,
     'playback.h264_1080p': False,
     'playback.hevc_1080p': False,
     **{f'encode.{codec}_{preset}': False for codec in ('h264', 'hevc') for preset in ('realtime', 'quality')},

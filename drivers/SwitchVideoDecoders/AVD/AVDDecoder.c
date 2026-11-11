@@ -45,6 +45,10 @@
 os_log_t gAVDLog;
 static const bool kReorder = false;  // see above
 
+#if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
+#define kSwitchPictureRoutesKey CFSTR("SwitchPictureRoutes")
+#endif
+
 static Decoder *storage(CMBaseObjectRef object)
 {
     return CMBaseObjectGetDerivedStorage(object);
@@ -600,6 +604,12 @@ static OSStatus copySupportedPropertyDictionary(VTVideoDecoderRef ref, CFDiction
                                                      &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks);
     CFDictionarySetValue(supported, kVTDecompressionPropertyKey_UsingHardwareAcceleratedVideoDecoder, description);
     CFRelease(description);
+#if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
+    CFDictionaryRef routes = CFDictionaryCreate(kCFAllocatorDefault, &keys[1], &values[1], 1,
+                                                &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks);
+    CFDictionarySetValue(supported, kSwitchPictureRoutesKey, routes);
+    CFRelease(routes);
+#endif
     *out = supported;
     return noErr;
 }
@@ -705,6 +715,25 @@ static CFStringRef copyDebugDescription(CMBaseObjectRef ref)
                                     ref, d->software ? "Apple's software decoder" : "NVDEC");
 }
 
+#if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
+// hw_test_app's decode.native_export: how this session's pictures reached the client so far, the counts the session's
+// closing line logs
+static CFDictionaryRef copyPictureRoutes(const Decoder *d)
+{
+    const int32_t counts[] = {(int32_t)d->frames, (int32_t)d->exported, (int32_t)(d->presented - d->exported),
+                              (int32_t)d->copied, (int32_t)d->errors};
+    const void *keys[] = {CFSTR("frames"), CFSTR("exported"), CFSTR("vic"), CFSTR("cpu"), CFSTR("errors")};
+    const void *values[5];
+    for (int i = 0; i < 5; i++)
+        values[i] = CFNumberCreate(kCFAllocatorDefault, kCFNumberSInt32Type, &counts[i]);
+    CFDictionaryRef routes = CFDictionaryCreate(kCFAllocatorDefault, keys, values, 5, &kCFTypeDictionaryKeyCallBacks,
+                                                &kCFTypeDictionaryValueCallBacks);
+    for (int i = 0; i < 5; i++)
+        CFRelease(values[i]);
+    return routes;
+}
+#endif
+
 static OSStatus copyProperty(CMBaseObjectRef ref, CFStringRef key, CFAllocatorRef allocator, void *value)
 {
     Decoder *d = storage(ref);
@@ -712,6 +741,12 @@ static OSStatus copyProperty(CMBaseObjectRef ref, CFStringRef key, CFAllocatorRe
         *(CFTypeRef *)value = CFRetain(d->software ? kCFBooleanFalse : kCFBooleanTrue);
         return noErr;
     }
+#if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
+    if (CFEqual(key, kSwitchPictureRoutesKey) && !d->software) {
+        *(CFTypeRef *)value = copyPictureRoutes(d);
+        return *(CFTypeRef *)value ? noErr : kVTAllocationFailedErr;
+    }
+#endif
     if (d->software && softwareVTable(d)->baseClass->copyProperty)
         return softwareVTable(d)->baseClass->copyProperty(VTVideoDecoderGetCMBaseObject(d->software), key, allocator,
                                                           value);

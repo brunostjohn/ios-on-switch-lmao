@@ -13,6 +13,8 @@ public struct DecodeResult {
     public let decodeSeconds: Double
     public let worstLumaError: Double
     public let worstChromaError: Double
+    /// How the decoder's pictures reached the client (frames, exported, vic, cpu, errors), where it says.
+    public var routes: [String: Int]?
 
     public var millisecondsPerFrame: Double { frames > 0 ? decodeSeconds * 1000 / Double(frames) : 0 }
     public var fps: Double { decodeSeconds > 0 ? Double(frames) / decodeSeconds : 0 }
@@ -45,10 +47,17 @@ public enum Decompressor {
         guard waited == noErr else {
             throw VideoError.status("VTDecompressionSessionWaitForAsynchronousFrames", waited)
         }
-        return collector.result(
+        var result = collector.result(
             expected: samples.count, seconds: max(0, wall - collector.checkSeconds),
             usingHardware: Compressor.readFlag(
                 session, kVTDecompressionPropertyKey_UsingHardwareAcceleratedVideoDecoder))
+        result.routes = pictureRoutes(session)
+        return result
+    }
+
+    /// The Switch decoder's SwitchPictureRoutes (debug builds of the AVD plugin): nil from any other decoder.
+    static func pictureRoutes(_ session: VTDecompressionSession) -> [String: Int]? {
+        (Compressor.read(session, "SwitchPictureRoutes" as CFString) as? [String: NSNumber])?.mapValues(\.intValue)
     }
 
     static func makeSession(
