@@ -1095,13 +1095,10 @@ nvk_shader_fill_push(struct nvk_device *dev,
           nvk_device_fragment_interlock(dev)) {
          max_dw_count += 2;
 
-         int coalescer_mode = shader->info.fs.interlock_mode;
-         if (shader->sample_shading_enable && coalescer_mode == NAK_FS_INTERLOCK_MODE_PIXEL) {
-            /* Force sample interlock even for pixel locks when
-             * sample_shading is enabled (otherwise the GPU faults?)
-             */
-            coalescer_mode = NAK_FS_INTERLOCK_MODE_SAMPLE;
-         }
+         const enum nak_fs_interlock_mode coalescer_mode =
+            nvk_fs_interlock_mode(shader->info.fs.interlock_mode,
+                                  shader->sample_shading_enable ||
+                                  shader->info.fs.uses_sample_shading);
          P_IMMD(p, NVB197, SET_PIXEL_SHADER_INTERLOCK_CONTROL, {
             .tile_coalescer_mode = mesa_to_nvb197_interlock_mode(coalescer_mode),
             .tile_coalescer_tile_size = TILE_COALESCER_TILE_SIZE_TC_TILE_SIZE_16X16,

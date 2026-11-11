@@ -76,9 +76,8 @@ switch_nvk_stage_of(const struct nvk_shader *shader,
       out->writes_depth = shader->info.fs.writes_depth;
       out->post_depth_coverage = shader->info.fs.post_depth_coverage;
       out->uses_sample_shading = shader->info.fs.uses_sample_shading || shader->sample_shading_enable;
-      unsigned mode = shader->info.fs.interlock_mode;
-      if (shader->sample_shading_enable && mode == NAK_FS_INTERLOCK_MODE_PIXEL)
-         mode = NAK_FS_INTERLOCK_MODE_SAMPLE;
+      const unsigned mode = nvk_fs_interlock_mode(shader->info.fs.interlock_mode,
+                                                  out->uses_sample_shading);
       out->interlock_control = mode | (shader->info.fs.interlock_unordered ? 8 : 0);
    }
 }
@@ -198,8 +197,10 @@ switch_nvk_split_parts(const struct switch_nvk_split *split,
    out->fs.writes_depth = split->fs.info.fs.writes_depth;
    out->fs.post_depth_coverage = split->fs.info.fs.post_depth_coverage;
    out->fs.uses_sample_shading = split->fs.info.fs.uses_sample_shading;
-   out->fs.interlock_control = split->fs.info.fs.interlock_mode |
-                               (split->fs.info.fs.interlock_unordered ? 8 : 0);
+   out->fs.interlock_control =
+      nvk_fs_interlock_mode(split->fs.info.fs.interlock_mode,
+                            split->fs.info.fs.uses_sample_shading) |
+      (split->fs.info.fs.interlock_unordered ? 8 : 0);
    split_program(&split->prologue, &out->prologue);
    out->layout = split->layout;
    memcpy(out->qmd, split->qmd, sizeof(out->qmd));
