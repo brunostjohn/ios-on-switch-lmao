@@ -296,6 +296,66 @@ TEST(RawGlassMem, FullReachReadsOneRow)
     EXPECT_EQ(it.inY, 64u);
 }
 
+// Disarmed, a command buffer's end takes no ring and launches no copy whatever its record holds; armed, a launch a row
+TEST(RawGlassMem, DisarmedTheTailLaunchesNothing)
+{
+    raw::GlassMemCb cb;
+    cb.count = 3;
+    cb.items[1].outside = true;
+    cb.items[2].flags = raw::kGlassMemUnsampled;
+    const raw::GlassMemTailPlan off = raw::glassMemTailPlan(false, cb);
+    EXPECT_FALSE(off.ring);
+    EXPECT_EQ(off.launches, 0u);
+    const raw::GlassMemTailPlan on = raw::glassMemTailPlan(true, cb);
+    EXPECT_TRUE(on.ring);
+    EXPECT_EQ(on.launches, 3u);
+    cb.count = 0;
+    EXPECT_FALSE(raw::glassMemTailPlan(true, cb).ring);
+}
+
+// HW Test arms it for every line, the main screen's watch for the lines that found something; each until its own time
+TEST(RawGlassMem, ArmingIsHwTestsOrTheWatchsUntilItsTime)
+{
+    raw::GlassMemArming arming;
+    EXPECT_FALSE(arming.on(100));
+    arming.arm(false, 1000);
+    EXPECT_TRUE(arming.on(100));
+    EXPECT_FALSE(arming.every(100));
+    arming.arm(true, 500);
+    EXPECT_TRUE(arming.every(100));
+    EXPECT_EQ(arming.until(), 1000u);
+    EXPECT_FALSE(arming.every(600));
+    EXPECT_TRUE(arming.on(600));
+    arming.disarm(false);
+    EXPECT_FALSE(arming.on(600));
+    EXPECT_TRUE(arming.on(100));
+    arming.disarm(true);
+    EXPECT_FALSE(arming.on(100));
+}
+
+// Armed again after a pause, no texture keeps the history of before it: writes made meanwhile went unseen
+TEST(RawGlassMem, ResetForgetsEveryWrite)
+{
+    raw::GlassMem probe;
+    probe.wrote(kPyramid, 110, 0);
+    probe.reset();
+    EXPECT_EQ(probe.sampled(item(kPyramid, 384, 128, kBgra8, 4), "PBGRABsovXmw_TgsgA3Xhf_Isrc", 7, 1, 111), -1);
+}
+
+// Each line names the probe's own copies: their launches and GPU time
+TEST(RawGlassMem, LineCarriesTheProbesCost)
+{
+    raw::GlassMem probe;
+    probe.wrote(kPyramid, 120, 0);
+    probe.sampled(item(kPyramid, 384, 128, kBgra8, 4), "PBGRABsovXmw_TgsgA3Xhf_Isrc", 7, 1, 120);
+    raw::GlassMemCb cb = probe.close(120, 12000, 0);
+    cb.launches = 1;
+    const std::string line = joined(probe.finish(cb, rows(120, {kGrey}).data(), true, 37000));
+    EXPECT_NE(line.find(" ce 1 gpu 37us |"), std::string::npos) << line;
+    EXPECT_EQ(probe.counts.launches.load(), 1u);
+    EXPECT_EQ(probe.counts.probeNs.load(), 37000u);
+}
+
 // The notify words HW Test unpacks: fields where ui.glass_sidebar reads them, saturating
 TEST(RawGlassMem, NotifyWordsPackTheirFields)
 {

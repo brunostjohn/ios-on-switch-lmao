@@ -6,8 +6,10 @@
 //   glass-record                the record alone (no lines to slow a moving scene)
 //   whole-programs-on|-off      every command buffer draws whole programs (switchRawWholePrograms)
 //   zero-new-buffers-on|-off    every new buffer starts zeroed
-// glass-probe and glass-record also arm the blur-texture probe's per-command-buffer lines (raw_glass_mem.h), whose counts
-// and the pool's shape this file publishes as glass-mem and glass-mem.pool.
+// glass-probe and glass-record also arm the blur-texture probe (raw_glass_mem.h) with every command buffer's line, and
+// glass-probe-off disarms it; glass-mem-watch[-off] arms it (or not) for kGlassMemWatchMs of normal use, with only the
+// lines that found something. While armed this file publishes its counts and the pool's shape (glass-mem,
+// glass-mem.pool) and, at each arming, until when (glass-mem.armed).
 // A switch left on turns itself off after kForcedSeconds: a test that died with it on leaves no process forced.
 // The record: each command buffer the render server commits for kRecordSeconds after either arms it, as its API made it
 // (draws, encoders, passes into a mip level above 0, the commit's mach time), in notify state, which crosses HW Test's
@@ -95,29 +97,54 @@ void armRecord(bool armed)
     notify_set_state(r.countToken, uint64_t(r.generation) << 32 | r.count);
 }
 
-// The blur-texture probe's lines for every command buffer for the next kGlassMemArmMs (raw_glass_mem.h), and the probe
-// back on where a killed submission had stopped it
-void armGlassMem(raw::Device *dev)
+// Until when the blur-texture probe is armed (mach time), its top bit set while HW Test's glass test armed it: the main
+// screen's countdown and the frame-cost tests' refusal read it (hw_test_app kit/GlassMemWatch.swift)
+void publishArming(raw::Device *dev)
+{
+    static int token = -1;
+    static std::once_flag registered;
+    std::call_once(registered, [] {
+        notify_register_check("com.brunostjohn.switch.debug.glass-mem.armed", &token);
+    });
+    const uint64_t now = mach_absolute_time(), until = dev->glassMemArming.until();
+    if (token >= 0)
+        notify_set_state(token,
+                         until > now ? (until & ~(1ull << 63)) | uint64_t(dev->glassMemArming.every(now)) << 63 : 0);
+}
+
+// The blur-texture probe armed for `ms` by HW Test's glass tests (`test`: every command buffer's line) or by the main
+// screen's watch, and back on where a killed submission had stopped it
+void armGlassMem(raw::Device *dev, bool test, uint64_t ms)
 {
     if (!dev->glassMem)
         return;
-    dev->glassMemArmedUntil.store(mach_absolute_time() + raw::glassProbeTicks(raw::kGlassMemArmMs),
-                                  std::memory_order_relaxed);
+    dev->glassMemArming.arm(test, mach_absolute_time() + raw::glassProbeTicks(ms));
     dev->glassMemStopped.store(false, std::memory_order_relaxed);
+    dev->glassMemOn.store(true, std::memory_order_relaxed);
+    publishArming(dev);
+    os_log(rawLog(), "raw: glassmem armed by %{public}s for %llu s", test ? "HW Test" : "the main screen's watch",
+           (unsigned long long)(ms / 1000));
 }
 
-// The probe's counts and the pool's shape in notify state for HW Test (ui.glass_sidebar): each commit while armed, else
-// once a second
+void disarmGlassMem(raw::Device *dev, bool test)
+{
+    if (!dev->glassMem)
+        return;
+    dev->glassMemArming.disarm(test);
+    publishArming(dev);
+}
+
+// The probe's counts and the pool's shape in notify state for HW Test (ui.glass_sidebar): each commit while HW Test
+// armed it, else once a second while armed; nothing while disarmed
 void publishGlassMem(raw::Device &d)
 {
     static std::atomic<uint64_t> last{0};
     static int memToken = -1, poolToken = -1;
     static std::once_flag registered;
-    if (!d.glassMem)
+    if (!d.glassMemOn.load(std::memory_order_relaxed))
         return;
     const uint64_t now = mach_absolute_time();
-    const bool armed = now < d.glassMemArmedUntil.load(std::memory_order_relaxed);
-    if (!armed && now - last.load(std::memory_order_relaxed) < raw::glassProbeTicks(1000))
+    if (!d.glassMemArming.every(now) && now - last.load(std::memory_order_relaxed) < raw::glassProbeTicks(1000))
         return;
     last.store(now, std::memory_order_relaxed);
     std::call_once(registered, [] {
@@ -154,7 +181,7 @@ void watchGlassProbe(raw::Device *dev)
                                  raw::armGlassProbe();
                                  if (renderServer)
                                      armRecord(true);
-                                 armGlassMem(dev);
+                                 armGlassMem(dev, true, raw::kGlassMemArmMs);
                                  os_log(rawLog(), "raw: glass probe armed g%u (debug notification)",
                                         raw::gGlassProbeGeneration.load(std::memory_order_relaxed));
                              });
@@ -163,14 +190,25 @@ void watchGlassProbe(raw::Device *dev)
                                  dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^(int) {
                                      raw::gGlassProbeGeneration.fetch_add(1, std::memory_order_relaxed);
                                      armRecord(true);
-                                     armGlassMem(dev);
+                                     armGlassMem(dev, true, raw::kGlassMemArmMs);
                                  });
     notify_register_dispatch("com.brunostjohn.switch.debug.glass-probe-off", &token,
                              dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^(int) {
                                  raw::disarmGlassProbe();
                                  if (renderServer)
                                      armRecord(false);
+                                 disarmGlassMem(dev, true);
                              });
+    if (renderServer) {
+        notify_register_dispatch("com.brunostjohn.switch.debug.glass-mem-watch", &token,
+                                 dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^(int) {
+                                     armGlassMem(dev, false, raw::kGlassMemWatchMs);
+                                 });
+        notify_register_dispatch("com.brunostjohn.switch.debug.glass-mem-watch-off", &token,
+                                 dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^(int) {
+                                     disarmGlassMem(dev, false);
+                                 });
+    }
     watchForced(gWholePrograms, "whole-programs");
     watchForced(gZeroNewBuffers, "zero-new-buffers");
 }

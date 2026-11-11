@@ -1571,10 +1571,11 @@ public:
     std::atomic<FetchBarrier> fetchBarrier{FetchBarrier::PixelShader};
     static const char *fetchBarrierName(FetchBarrier b);
 
-    // The render server's blur-texture probe (raw_glass_mem.h); null in any other process. Armed (HW Test's glass
-    // record), every command buffer it read logs its line until glassMemArmedUntil (mach time)
+    // The render server's blur-texture probe (raw_glass_mem.h); null in any other process. It runs only while armed
+    // (glassMemArming); glassMemOn is the frame path's one load, set when armed and cleared at the first begin() after
     std::unique_ptr<GlassMem> glassMem;
-    std::atomic<uint64_t> glassMemArmedUntil{0};
+    GlassMemArming glassMemArming;
+    std::atomic<bool> glassMemOn{false};
     // A submission carrying the probe's reads was killed: the probe stops for the process (its reads are new code on
     // the compositor's every command buffer)
     std::atomic<bool> glassMemStopped{false};
@@ -1901,8 +1902,11 @@ private:
     Bo glassMemRing_;
     GlassMemCb glassMemCbs_[kGlassMemSlots];
     bool glassMemBusy_[kGlassMemSlots] = {};
-    uint64_t glassMemSummaryAt_ = 0, glassMemSummaryCbs_ = 0;
-    void glassMemRead();
+    uint32_t glassMemBusyCount_ = 0;
+    uint64_t glassMemSummaryAt_ = 0, glassMemSummaryCbs_ = 0, glassMemSummaryLaunches_ = 0, glassMemSummaryNs_ = 0;
+    bool glassMemLive_ = false;  // armed for the command buffer being encoded (begin())
+    void glassMemFrame();
+    void glassMemRead(uint64_t now);
 #endif
 
     bool init(std::string &err);

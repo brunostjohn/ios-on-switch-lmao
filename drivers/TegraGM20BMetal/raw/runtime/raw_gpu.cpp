@@ -2179,7 +2179,7 @@ bool Device::createBlockTextureOver(void *bytes, uint64_t length, uint32_t width
 void Device::destroyTexture(Texture &t)
 {
 #if SWITCH_RAW_DIAGNOSTICS
-    if (glassMem)
+    if (glassMemOn.load(std::memory_order_relaxed))
         glassMem->forget(t.storageRange().va ? t.storageRange().va : t.va, t.view ? t.tic : 0);
 #endif
     if (t.view) {
@@ -3194,9 +3194,8 @@ CommandBuffer *Device::begin()
     growRing(push_, kSizes[0].push);
     growRing(upload_, kSizes[0].upload);
 #if SWITCH_RAW_DIAGNOSTICS
-    glassMemRead();
-    if (glassMem)
-        glassMem->begin();
+    if (glassMemOn.load(std::memory_order_relaxed) || glassMemLive_ || glassMemBusyCount_)
+        glassMemFrame();
     cb_.glassMemSlot_ = -1;
 #endif
     CommandBuffer &cb = cb_;
@@ -3501,7 +3500,7 @@ void CommandBuffer::use(const Texture &texture, bool write)
     const bool hostVisible = storage.hostVisible || (view->import && !view->import->id);
     externalWrites_ |= hostVisible && write;
 #if SWITCH_RAW_DIAGNOSTICS
-    if (write && dev_->glassMem)
+    if (write && dev_->glassMemLive_)
         dev_->glassMem->wrote(storage.va ? storage.va : view->va, dev_->commitCount_,
                               dev_->stats.memEvents.load(std::memory_order_relaxed));
 #endif
@@ -3677,7 +3676,7 @@ bool CommandBuffer::commit(uint32_t &seqno)
         segments_.insert(0, {va, uint32_t(p.at - head), 0});
     }
 #if SWITCH_RAW_DIAGNOSTICS
-    if (!segments_.empty() && d.glassMem)
+    if (!segments_.empty() && d.glassMemLive_)
         glassMemTail();
 #endif
     if (!segments_.empty()) {
@@ -3828,6 +3827,7 @@ bool CommandBuffer::commit(uint32_t &seqno)
     if (glassMemSlot_ >= 0) {
         d.glassMemCbs_[glassMemSlot_].seqno = seqno;
         d.glassMemBusy_[glassMemSlot_] = true;
+        d.glassMemBusyCount_++;
         glassMemSlot_ = -1;
     }
 #endif
@@ -4492,7 +4492,7 @@ void RenderEncoder::probeDraw(const Pipeline &bound, Pipeline &drawn, uint32_t p
 {
     if (glassProbeArmed())
         probeGlassDraw(bound, drawn, limit);
-    if (dev_->glassMem)
+    if (dev_->glassMemLive_)
         glassMemSample(bound, drawn);
     const uint32_t generation = gKeylineGeneration.load(std::memory_order_relaxed);
     if (drawn.probeGeneration != generation) {
@@ -4629,8 +4629,6 @@ void RenderEncoder::probeGlassDraw(const Pipeline &bound, const Pipeline &drawn,
 // them), and the copy engine reads plain memory only: a compressed binding hands it compressed bytes (raw_comp.h).
 void RenderEncoder::glassMemSample(const Pipeline &bound, const Pipeline &drawn)
 {
-    if (dev_->glassMemStopped.load(std::memory_order_relaxed))
-        return;
     const PackPipeline &rec = *drawn.rec;
     for (uint32_t k = 0; k < rec.entries && k < kPackEntries; k++) {
         const PackEntry &e = rec.entry[k];
@@ -5395,8 +5393,17 @@ void CommandBuffer::glassMemTail()
     GlassMemCb record =
         d.glassMem->close(d.commitCount_, mach_absolute_time(), d.stats.memEvents.load(std::memory_order_relaxed));
     glassMemSlot_ = -1;
-    if (!record.count || d.glassMemStopped.load(std::memory_order_relaxed))
+    for (uint32_t i = 0; i < record.count; i++) {
+        GlassMemItem &it = record.items[i];
+        if (const Texture *t = glassMemSources_[i]; t && t->arena && !t->view && !t->span.valid())
+            it.flags |= kGlassMemAliased | kGlassMemUnsampled;
+        if (!(it.flags & kGlassMemUnsampled))
+            glassMemRowsAt(it);
+    }
+    const GlassMemTailPlan plan = glassMemTailPlan(d.glassMemLive_, record);
+    if (!plan.ring)
         return;
+    record.launches = plan.launches;
     if (!d.glassMemRing_.va) {
         if (!d.k_.allocControl(uint64_t(kGlassMemSlots) * kGlassMemSlotBytes, d.glassMemRing_,
                                ControlUse::TransferSlot))
@@ -5409,22 +5416,22 @@ void CommandBuffer::glassMemTail()
             slot = int(s);
     if (slot < 0)
         return;
-    const uint32_t words = 16 + record.count * 128;
+    const uint32_t words = 24 + record.count * 128;
     uint64_t va;
     uint32_t *start = reinterpret_cast<uint32_t *>(d.alloc(d.push_, words * 4, 256, va));
     Push p{start, start + words};
     tiledCacheDrain(p, d.k_.info());
     p.m(WAIT_FOR_IDLE, 0);
     const uint64_t base = d.glassMemRing_.va + uint64_t(slot) * kGlassMemSlotBytes;
+    const uint64_t cookie = base + uint64_t(kGlassMemItems) * kGlassMemItemBytes, begun = cookie + kGlassMemStartAt;
+    p.inc(HOST_SEMAPHORE_A, {uint32_t(begun >> 32) & 0xff, uint32_t(begun), glassMemCookie(record.serial),
+                             HOST_SEMAPHORE_RELEASE_16_WFI});
     memset(d.glassMemRing_.cpu + uint64_t(slot) * kGlassMemSlotBytes, kGlassMemPoison,
            uint64_t(record.count) * kGlassMemItemBytes);
     for (uint32_t i = 0; i < record.count; i++) {
-        GlassMemItem &it = record.items[i];
-        if (const Texture *t = glassMemSources_[i]; t && t->arena && !t->view && !t->span.valid())
-            it.flags |= kGlassMemAliased | kGlassMemUnsampled;
+        const GlassMemItem &it = record.items[i];
         if (it.flags & kGlassMemUnsampled)
             continue;
-        glassMemRowsAt(it);
         const Texture &image = glassMemImages_[i];
         const uint64_t row = base + uint64_t(i) * kGlassMemItemBytes;
         copySides(p, sideOf(image, it.inX, it.inY, 0), {row, it.texels * it.bpp}, it.texels, 1, it.bpp, d.stats);
@@ -5432,7 +5439,6 @@ void CommandBuffer::glassMemTail()
             copySides(p, sideOf(image, it.outX, it.outY, 0), {row + kGlassMemRowBytes, it.texels * it.bpp}, it.texels,
                       1, it.bpp, d.stats);
     }
-    const uint64_t cookie = base + uint64_t(kGlassMemItems) * kGlassMemItemBytes;
     p.inc(HOST_SEMAPHORE_A, {uint32_t(cookie >> 32) & 0xff, uint32_t(cookie), glassMemCookie(record.serial),
                              HOST_SEMAPHORE_RELEASE_16_WFI});
     checkRoom(p, "the glass memory probe's reads");
@@ -5443,16 +5449,35 @@ void CommandBuffer::glassMemTail()
     glassMemSlot_ = slot;
 }
 
-// The probe's records whose rows landed, oldest first (a reused texture's row is judged against the one its last write
-// left): a line for each that found something, or for each while HW Test armed it, and a summary every 5 s. A killed
-// submission stops the probe; a record a reopened channel's fence never reaches is dropped after 120 command buffers.
-void Device::glassMemRead()
+// At begin(), where the probe is armed or was: armed again after a pause it starts with no history (what was written
+// meanwhile went unseen); still armed, the command buffer starts its record; disarmed, the rows in flight are read out
+// and nothing else runs until it is armed again.
+void Device::glassMemFrame()
 {
-    if (!glassMem)
-        return;
-    const os_log_t log = os_log_create("com.brunostjohn.switch.TegraGM20BMetal", "raw");
     const uint64_t now = mach_absolute_time();
-    const bool every = now < glassMemArmedUntil.load(std::memory_order_relaxed);
+    bool on = glassMem && !glassMemStopped.load(std::memory_order_relaxed) && glassMemArming.on(now);
+    if (!on) {
+        glassMemOn.store(false, std::memory_order_relaxed);
+        on = glassMem && !glassMemStopped.load(std::memory_order_relaxed) && glassMemArming.on(now);
+        if (on)
+            glassMemOn.store(true, std::memory_order_relaxed);
+    }
+    if (on && !glassMemLive_)
+        glassMem->reset();
+    glassMemLive_ = on;
+    glassMemRead(now);
+    if (on)
+        glassMem->begin();
+}
+
+// The probe's records whose rows landed, oldest first (a reused texture's row is judged against the one its last write
+// left): a line for each that found something, or for each while HW Test armed it, and a summary every 5 s, each with
+// what the probe's own reads cost. A killed submission stops the probe; a record a reopened channel's fence never
+// reaches is dropped after 120 command buffers.
+void Device::glassMemRead(uint64_t now)
+{
+    const os_log_t log = os_log_create("com.brunostjohn.switch.TegraGM20BMetal", "raw");
+    const bool every = glassMemArming.every(now);
     for (;;) {
         int next = -1;
         for (uint32_t s = 0; s < kGlassMemSlots; s++)
@@ -5464,9 +5489,11 @@ void Device::glassMemRead()
             if (commitCount_ - glassMemCbs_[next].serial <= 120)
                 break;
             glassMemBusy_[next] = false;
+            glassMemBusyCount_--;
             continue;
         }
         glassMemBusy_[next] = false;
+        glassMemBusyCount_--;
         if (lost(glassMemCbs_[next].seqno)) {
             if (!glassMemStopped.exchange(true))
                 os_log_error(log,
@@ -5477,29 +5504,41 @@ void Device::glassMemRead()
         }
         uint8_t rows[kGlassMemSlotBytes];
         memcpy(rows, glassMemRing_.cpu + uint64_t(next) * kGlassMemSlotBytes, sizeof rows);
-        for (const std::string &line : glassMem->finish(glassMemCbs_[next], rows, every))
+        const uint32_t cookie = glassMemCookie(glassMemCbs_[next].serial);
+        StampRelease begun, ended;
+        memcpy(&ended, rows + uint64_t(kGlassMemItems) * kGlassMemItemBytes, sizeof ended);
+        memcpy(&begun, rows + uint64_t(kGlassMemItems) * kGlassMemItemBytes + kGlassMemStartAt, sizeof begun);
+        const uint64_t probeNs = begun.payload == cookie && ended.payload == cookie && ended.ptimer >= begun.ptimer
+                                     ? ptimerNanoseconds(ended.ptimer - begun.ptimer)
+                                     : 0;
+        for (const std::string &line : glassMem->finish(glassMemCbs_[next], rows, every, probeNs))
             os_log(log, "raw: glassmem %{public}s", line.c_str());
     }
-    if (every || now - glassMemSummaryAt_ < glassProbeTicks(5000))
+    if (!glassMemLive_ || every || now - glassMemSummaryAt_ < glassProbeTicks(5000))
         return;
     const GlassMemCounts &c = glassMem->counts;
-    if (c.cbs.load() != glassMemSummaryCbs_)
-        os_log(
-            log,
-            "raw: glassmem totals cbs %llu rebuilt %llu reused %llu zero-reused %llu nf %llu chg %llu mv %llu ev %llu",
-            (unsigned long long)c.cbs.load(), (unsigned long long)c.rebuilt.load(), (unsigned long long)c.reused.load(),
-            (unsigned long long)c.black.load(), (unsigned long long)c.nonFinite.load(),
-            (unsigned long long)c.changed.load(), (unsigned long long)c.moved.load(),
-            (unsigned long long)stats.memEvents.load());
+    const uint64_t cbs = c.cbs.load() - glassMemSummaryCbs_, per = cbs ? cbs : 1;
+    if (cbs)
+        os_log(log,
+               "raw: glassmem totals cbs %llu rebuilt %llu reused %llu zero-reused %llu nf %llu chg %llu mv %llu ev "
+               "%llu probe ce %.1f/cb gpu %.0fus/cb",
+               (unsigned long long)c.cbs.load(), (unsigned long long)c.rebuilt.load(),
+               (unsigned long long)c.reused.load(), (unsigned long long)c.black.load(),
+               (unsigned long long)c.nonFinite.load(), (unsigned long long)c.changed.load(),
+               (unsigned long long)c.moved.load(), (unsigned long long)stats.memEvents.load(),
+               double(c.launches.load() - glassMemSummaryLaunches_) / double(per),
+               double(c.probeNs.load() - glassMemSummaryNs_) / 1000.0 / double(per));
     glassMemSummaryAt_ = now;
     glassMemSummaryCbs_ = c.cbs.load();
+    glassMemSummaryLaunches_ = c.launches.load();
+    glassMemSummaryNs_ = c.probeNs.load();
 }
 
 // A GPU-memory event, numbered: the render server's lines are what a reused texture's /e<n> counts
 void Device::glassMemEvent(const char *what, uint64_t bytes)
 {
     const uint64_t n = ++stats.memEvents;
-    if (glassMem)
+    if (glassMemOn.load(std::memory_order_relaxed))
         os_log(os_log_create("com.brunostjohn.switch.TegraGM20BMetal", "raw"),
                "raw: glassmem event %llu %{public}s %llu KiB", (unsigned long long)n, what,
                (unsigned long long)(bytes >> 10));
@@ -5770,7 +5809,7 @@ TextureTransferResult Device::transferTexture(const Texture &texture, uint32_t l
         return TextureTransferResult::Failed;
     RAW_DIAGNOSTIC((write ? stats.textureUploads : stats.textureReadbacks).fetch_add(1, std::memory_order_relaxed));
 #if SWITCH_RAW_DIAGNOSTICS
-    if (write && glassMem)
+    if (write && glassMemOn.load(std::memory_order_relaxed))
         glassMem->wrote(texture.storageRange().va ? texture.storageRange().va : texture.va,
                         __atomic_load_n(&commitCount_, __ATOMIC_RELAXED),
                         stats.memEvents.load(std::memory_order_relaxed));
@@ -5936,7 +5975,7 @@ void RenderEncoder::end()
     // pass prologue: the full barrier m2v puts between passes, the targets, then the clears
     const std::vector<Clear> cl = clearsSealed_ ? std::move(initialClears_) : clears();
 #if SWITCH_RAW_DIAGNOSTICS
-    if (d.glassMem && !d.glassMemStopped.load(std::memory_order_relaxed))
+    if (d.glassMemLive_)
         glassMemReached(cl);
 #endif
 #if SWITCH_RAW_DIAGNOSTICS

@@ -10,6 +10,7 @@
 // a slot without the cookie (its segment never ran) or a row still poisoned (its copy never landed) is not judged.
 // For a texture rebuilt in the command buffer, what its passes reached is kept (the first pass's load, the box its draws
 // covered) and a second row is read outside that box: memory nothing of this command buffer wrote.
+// It runs only while armed (GlassMemArming): disarmed, the frame path pays one relaxed load and nothing else.
 #pragma once
 #include <algorithm>
 #include <atomic>
@@ -28,9 +29,10 @@ namespace raw {
 constexpr uint32_t kGlassMemTexels = 32, kGlassMemItems = 16, kGlassMemSlots = 8, kGlassMemRows = 2,
                    kGlassMemReaches = 32;
 constexpr uint32_t kGlassMemRowBytes = kGlassMemTexels * 16, kGlassMemItemBytes = kGlassMemRows * kGlassMemRowBytes;
-constexpr uint32_t kGlassMemCookieBytes = 16;
+// The slot's end: the copies' completion release (its cookie) and, 16 bytes on, the release before them: their GPU time
+constexpr uint32_t kGlassMemCookieBytes = 32, kGlassMemStartAt = 16;
 constexpr uint32_t kGlassMemSlotBytes = kGlassMemItems * kGlassMemItemBytes + kGlassMemCookieBytes;
-constexpr uint64_t kGlassMemArmMs = 20000;
+constexpr uint64_t kGlassMemArmMs = 20000, kGlassMemWatchMs = 300000;
 constexpr uint8_t kGlassMemPoison = 0xa5;
 constexpr size_t kGlassMemLine = 900;  // os_log keeps about 1 KiB of a line
 // Entries kept: a texture CA dropped without our seeing its destroy (a client's) ages out past this many
@@ -145,7 +147,7 @@ inline bool glassMemRowsAt(GlassMemItem &it)
 
 struct GlassMemCb {
     uint64_t serial = 0, mach = 0, events = 0;
-    uint32_t seqno = 0, count = 0, dropped = 0, reaches = 0;
+    uint32_t seqno = 0, count = 0, dropped = 0, reaches = 0, launches = 0;
     GlassMemItem items[kGlassMemItems];
     std::pair<uint64_t, GlassMemReach> reach[kGlassMemReaches];
 };
@@ -163,6 +165,7 @@ inline bool glassMemGlassState(const char *state)
 
 struct GlassMemCounts {
     std::atomic<uint64_t> cbs{0}, rebuilt{0}, reused{0}, changed{0}, nonFinite{0}, moved{0}, black{0};
+    std::atomic<uint64_t> launches{0}, probeNs{0};  // the probe's own copy-engine launches and GPU time
 };
 
 // The "T" term of a Core Animation state's name (PBGRAXm_TvrdA2Xhf_Isrc: Tvrd), four letters at most
@@ -176,6 +179,55 @@ inline void glassMemState(const char *caName, char out[5])
     for (const char *c = t + 1; *c && n < 4 && (n == 0 || (*c >= 'a' && *c <= 'z') || (*c >= '0' && *c <= '9')); c++)
         out[n++] = *c;
     out[n] = 0;
+}
+
+// Who armed the probe and until when (mach time): HW Test's glass tests (`test`: every command buffer's line) for their
+// own run, or the owner from HW Test's main screen (lines that found something, and the totals)
+class GlassMemArming {
+public:
+    void arm(bool test, uint64_t until)
+    {
+        (test ? test_ : watch_).store(until, std::memory_order_relaxed);
+    }
+
+    void disarm(bool test)
+    {
+        (test ? test_ : watch_).store(0, std::memory_order_relaxed);
+    }
+
+    bool on(uint64_t now) const
+    {
+        return now < test_.load(std::memory_order_relaxed) || now < watch_.load(std::memory_order_relaxed);
+    }
+
+    bool every(uint64_t now) const
+    {
+        return now < test_.load(std::memory_order_relaxed);
+    }
+
+    uint64_t until() const
+    {
+        return std::max(test_.load(std::memory_order_relaxed), watch_.load(std::memory_order_relaxed));
+    }
+
+private:
+    std::atomic<uint64_t> test_{0}, watch_{0};
+};
+
+// What a command buffer's end does for the probe: no ring and no copy unless it is armed, then a launch for each row
+struct GlassMemTailPlan {
+    bool ring = false;
+    uint32_t launches = 0;
+};
+
+inline GlassMemTailPlan glassMemTailPlan(bool armed, const GlassMemCb &cb)
+{
+    GlassMemTailPlan plan;
+    for (uint32_t i = 0; armed && i < cb.count; i++)
+        if (!(cb.items[i].flags & kGlassMemUnsampled))
+            plan.launches += cb.items[i].outside ? 2 : 1;
+    plan.ring = plan.launches > 0;
+    return plan;
 }
 
 class GlassMem {
@@ -259,6 +311,16 @@ public:
         open_ = GlassMemCb();
     }
 
+    // Armed again: what was written while disarmed went unseen, so no texture's history holds
+    void reset()
+    {
+        std::lock_guard<std::mutex> l(lock_);
+        writes_.clear();
+        refs_.clear();
+        headers_.clear();
+        open_ = GlassMemCb();
+    }
+
     // `key` died (a view's header `tic` alone, when `tic`)
     void forget(uint64_t key, uint32_t tic = 0)
     {
@@ -303,17 +365,22 @@ public:
 
     // What `cb`'s rows read (`rows`: kGlassMemItemBytes an item, then the cookie): its lines (os_log's length each), none
     // when there is nothing to say and not `every`. Rows whose slot lacks the cookie are no read: '?', and count nothing.
-    std::vector<std::string> finish(const GlassMemCb &cb, const uint8_t *rows, bool every)
+    // `probeNs`: the GPU time of the probe's own copies, which each line names with their launches.
+    std::vector<std::string> finish(const GlassMemCb &cb, const uint8_t *rows, bool every, uint64_t probeNs = 0)
     {
         std::lock_guard<std::mutex> l(lock_);
         uint32_t cookie;
         memcpy(&cookie, rows + uint64_t(kGlassMemItems) * kGlassMemItemBytes, sizeof cookie);
         const bool landed = cookie == glassMemCookie(cb.serial);
-        if (landed)
+        if (landed) {
             counts.cbs++;
-        char head[160];
-        int at = snprintf(head, sizeof head, "cb %llu mach %llu seq %u ev %llu n %u", (unsigned long long)cb.serial,
-                          (unsigned long long)cb.mach, cb.seqno, (unsigned long long)cb.events, cb.count);
+            counts.launches += cb.launches;
+            counts.probeNs += probeNs;
+        }
+        char head[192];
+        int at = snprintf(head, sizeof head, "cb %llu mach %llu seq %u ev %llu n %u ce %u gpu %lluus",
+                          (unsigned long long)cb.serial, (unsigned long long)cb.mach, cb.seqno,
+                          (unsigned long long)cb.events, cb.count, cb.launches, (unsigned long long)(probeNs / 1000));
         if (cb.dropped)
             snprintf(head + at, sizeof head - size_t(at), " drop %u", cb.dropped);
         std::vector<std::string> lines{std::string(head) + " |"};
