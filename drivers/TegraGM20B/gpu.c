@@ -182,6 +182,7 @@ static u64 waiter_woken_ns[TGM_WAITERS];
 
 static struct {
 	u32 wakes, slept, woken, other, deadline;
+	u32 jobs; /* kicked (chan_fence_job), every channel */
 	u64 lat_sum, lat_max;
 	u64 stall, nonstall; /* the interrupt passes at the window's start */
 } wstat;
@@ -1247,6 +1248,9 @@ struct tgm_chan {
 	u32 hang_strikes, hang_seen; /* tgm_hang_confirm's state between hang checks */
 #if TGM_STATS
 	u64 killed_ns; /* chan_killed's time, for a fault's line (TegraGM20BUserClient.cpp) */
+	/* this window's SubmitAddress calls on it, by phase (tgm_stats_submit), for its owner */
+	u64 stat_submit_ns[TGM_SUBMIT_PHASES], stat_submit_total, stat_submit_max;
+	u32 stat_submits;
 #endif
 };
 
@@ -2349,7 +2353,8 @@ void tgm_stats_wait(uint32_t waiter, int woken, int done)
 		__atomic_store_n(&wstat.lat_max, lat, __ATOMIC_RELAXED);
 }
 
-/* The "waits" line: GPU interrupt passes by line, channel wakes, and how the fence waits that slept woke. */
+/* The "waits" line: GPU interrupt passes by line and per job kicked, channel wakes, and how the fence waits that slept
+ * woke: at their seqno, early (another seqno reached, a kill, a teardown) or at their deadline. */
 static void stats_waits(u64 ms)
 {
 	u64 stall = 0;
@@ -2358,12 +2363,15 @@ static void stats_waits(u64 ms)
 	u64 dn = 0;
 	u64 sum = 0;
 	u64 max = 0;
+	u64 per_job = 0;
 	u32 wakes = 0;
 	u32 slept = 0;
 	u32 woken = 0;
 	u32 other = 0;
 	u32 deadline = 0;
+	u32 jobs = 0;
 	u32 per = ms ? (u32)ms : 1;
+	char line[320];
 
 	nvxnu_irq_passes(&stall, &nonstall);
 	ds = stall - wstat.stall;
@@ -2375,15 +2383,19 @@ static void stats_waits(u64 ms)
 	woken = __atomic_exchange_n(&wstat.woken, 0, __ATOMIC_RELAXED);
 	other = __atomic_exchange_n(&wstat.other, 0, __ATOMIC_RELAXED);
 	deadline = __atomic_exchange_n(&wstat.deadline, 0, __ATOMIC_RELAXED);
+	jobs = __atomic_exchange_n(&wstat.jobs, 0, __ATOMIC_RELAXED);
 	sum = __atomic_exchange_n(&wstat.lat_sum, 0, __ATOMIC_RELAXED);
 	max = __atomic_exchange_n(&wstat.lat_max, 0, __ATOMIC_RELAXED);
-	nvxnu_stats("tegra-gm20b: waits %llu ms: interrupt passes %llu/s stall, %llu/s nonstall; "
-		    "channel wakes "
-		    "%llu/s; fence waits slept %llu/s: %u woken (%u for another channel's fence, "
-		    "wake to waiter mean %llu us max %llu us), %u at their deadline",
-		    ms, ds * 1000 / per, dn * 1000 / per, (u64)wakes * 1000 / per,
-		    (u64)slept * 1000 / per, woken, other,
-		    woken > other ? sum / (woken - other) / 1000 : 0, max / 1000, deadline);
+	per_job = jobs ? (ds + dn) * 100 / jobs : 0;
+	scnprintf(
+		line, sizeof(line),
+		"%llu ms: interrupt passes %llu/s stall, %llu/s nonstall, %llu.%02llu per job "
+		"(%u jobs); channel wakes %llu/s; fence waits slept %llu/s: %u woken, %u at their "
+		"seqno (wake to waiter mean %llu us max %llu us), %u at their deadline",
+		ms, ds * 1000 / per, dn * 1000 / per, per_job / 100, per_job % 100, jobs,
+		(u64)wakes * 1000 / per, (u64)slept * 1000 / per, woken, woken - other,
+		woken > other ? sum / (woken - other) / 1000 : 0, max / 1000, deadline);
+	nvxnu_stats("tegra-gm20b: waits %s", line);
 }
 
 void tgm_stats_prefault(uint64_t bytes)
@@ -2721,6 +2733,77 @@ static void clk_measure(char *buf, unsigned int len)
 		  meas, (slow >> 16) & 0x3f, gate & 3);
 }
 
+/* A process's SubmitAddress calls over the window, by phase (ns), with the longest call */
+struct stats_submits {
+	u64 ns[TGM_SUBMIT_PHASES], total, max;
+	u32 n;
+};
+
+static void stats_submits_merge(struct stats_submits *into, const struct stats_submits *from)
+{
+	unsigned int p = 0;
+
+	for (p = 0; p < TGM_SUBMIT_PHASES; p++)
+		into->ns[p] += from->ns[p];
+	into->total += from->total;
+	into->n += from->n;
+	if (from->max > into->max)
+		into->max = from->max;
+}
+
+#if TGM_STATS
+void tgm_stats_submit(struct tgm_chan *chan, const uint64_t ns[TGM_SUBMIT_PHASES])
+{
+	u64 total = 0;
+	unsigned int p = 0;
+
+	for (p = 0; p < TGM_SUBMIT_PHASES; p++) {
+		__atomic_fetch_add(&chan->stat_submit_ns[p], ns[p], __ATOMIC_RELAXED);
+		total += ns[p];
+	}
+	stats_add(&chan->stat_submit_total, &chan->stat_submit_max, total);
+	__atomic_fetch_add(&chan->stat_submits, 1, __ATOMIC_RELAXED);
+}
+
+/* live_lock held */
+static void stats_submits_take(struct tgm_chan *chan, struct stats_submits *s)
+{
+	unsigned int p = 0;
+
+	for (p = 0; p < TGM_SUBMIT_PHASES; p++)
+		s->ns[p] = __atomic_exchange_n(&chan->stat_submit_ns[p], 0, __ATOMIC_RELAXED);
+	s->total = __atomic_exchange_n(&chan->stat_submit_total, 0, __ATOMIC_RELAXED);
+	s->max = __atomic_exchange_n(&chan->stat_submit_max, 0, __ATOMIC_RELAXED);
+	s->n = __atomic_exchange_n(&chan->stat_submits, 0, __ATOMIC_RELAXED);
+}
+
+static unsigned int stats_submits_line(char *buf, unsigned int len, const struct stats_submits *s)
+{
+	if (!s->n)
+		return 0;
+	return scnprintf(buf, len,
+			 ", SubmitAddress %u x mean %llu us (resolve %llu, lock %llu, exec %llu, "
+			 "commit %llu) max %llu us",
+			 s->n, s->total / s->n / 1000, s->ns[TGM_SUBMIT_RESOLVE] / s->n / 1000,
+			 s->ns[TGM_SUBMIT_LOCK] / s->n / 1000, s->ns[TGM_SUBMIT_EXEC] / s->n / 1000,
+			 s->ns[TGM_SUBMIT_COMMIT] / s->n / 1000, s->max / 1000);
+}
+#else
+static void stats_submits_take(struct tgm_chan *chan, struct stats_submits *s)
+{
+	(void)chan;
+	(void)s;
+}
+
+static unsigned int stats_submits_line(char *buf, unsigned int len, const struct stats_submits *s)
+{
+	(void)buf;
+	(void)len;
+	(void)s;
+	return 0;
+}
+#endif
+
 /* The window's "exec" line: each process's stamped GPU time per submission (start to end stamp, the L2 flush included:
  * what its work held the GPU for, other channels' time slices inside it included), summed over its channels and taken from
  * them; the window's first EXEC_OWNERS - 1 processes by name, the rest as "(others)". `rate` converts PTIMER units to ns
@@ -2737,6 +2820,7 @@ static void stats_exec_owners(char *line, unsigned int len, u64 rate)
 		u64 prof_ns[TGM_PC_COUNT];
 		u32 prof_n[TGM_PC_COUNT];
 		u64 prof_dn[TGM_PC_COUNT], prof_sdn[TGM_PC_COUNT];
+		struct stats_submits submits;
 		struct switch_gpu_job_window jobs;
 		struct switch_gpu_prof_seq seq;
 	} o[EXEC_OWNERS];
@@ -2757,7 +2841,10 @@ static void stats_exec_owners(char *line, unsigned int len, u64 rate)
 		u64 sum = __atomic_exchange_n(&chan->stat_exec, 0, __ATOMIC_RELAXED);
 		u64 max = __atomic_exchange_n(&chan->stat_exec_max, 0, __ATOMIC_RELAXED);
 		u32 subs = __atomic_exchange_n(&chan->prof_subs, 0, __ATOMIC_RELAXED);
-		if ((!n && !subs) || chan->kernel)
+		struct stats_submits submits = {0};
+
+		stats_submits_take(chan, &submits);
+		if ((!n && !subs && !submits.n) || chan->kernel)
 			continue;
 		for (i = 0; i < used && strncmp(o[i].name, chan->owner, sizeof(o[i].name)); i++)
 			;
@@ -2772,6 +2859,7 @@ static void stats_exec_owners(char *line, unsigned int len, u64 rate)
 		if (max > o[i].max)
 			o[i].max = max;
 		o[i].subs += subs;
+		stats_submits_merge(&o[i].submits, &submits);
 		switch_gpu_job_take(&chan->stat_jobs, &taken);
 		switch_gpu_job_merge(&o[i].jobs, &taken);
 		switch_gpu_prof_seq_take(&chan->prof_slow, &seq);
@@ -2791,12 +2879,14 @@ static void stats_exec_owners(char *line, unsigned int len, u64 rate)
 	mutex_unlock(&live_lock);
 	line[0] = 0;
 	for (i = 0; i < EXEC_OWNERS; i++) {
-		if (!o[i].n)
+		if (!o[i].n && !o[i].submits.n)
 			continue;
-		at += scnprintf(line + at, len - at, "%s%s %u x mean %llu us max %llu us",
-				at ? "; " : "", o[i].name, o[i].n,
-				((o[i].sum / o[i].n) * rate >> 16) / 1000,
-				(o[i].max * rate >> 16) / 1000);
+		at += scnprintf(line + at, len - at, "%s%s", at ? "; " : "", o[i].name);
+		if (o[i].n)
+			at += scnprintf(line + at, len - at, " %u x mean %llu us max %llu us",
+					o[i].n, ((o[i].sum / o[i].n) * rate >> 16) / 1000,
+					(o[i].max * rate >> 16) / 1000);
+		at += stats_submits_line(line + at, len - at, &o[i].submits);
 	}
 	if (at)
 		nvxnu_stats("tegra-gm20b: exec by process: %s", line);
@@ -4688,6 +4778,8 @@ static u32 chan_fence_job(struct tgm_chan *chan, int external, u32 first, u32 ne
 		WRITE_ONCE(chan->busy_ns, chan->submit_ns);
 	}
 	job = switch_gpu_jobs_kick(&chan->jobs, first, next, chan->submit_ns);
+	if (stats_on())
+		__atomic_fetch_add(&wstat.jobs, 1, __ATOMIC_RELAXED);
     if (switch_gpu_irq_arm(&chan->irq_state, next) && nvif_event_allow(&chan->nonstall))
         nvxnu_panic("SwitchGpu: cannot arm channel completion");
     WRITE_ONCE(chan->submitted, next);

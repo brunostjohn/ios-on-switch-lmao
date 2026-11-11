@@ -888,6 +888,35 @@ class AGXDeviceUserClient : public IOUserClient
 		TegraGM20BAbiCpuAccess access;
         SwitchGpuCpuSurface reservation;
 	};
+
+	// Debug kernels: a SubmitAddress's time by phase, for the "exec by process" line (tgm_stats_submit).
+	struct SubmitPhases {
+#if TGM_STATS
+		uint64_t at = 0, ns[TGM_SUBMIT_PHASES] = {};
+
+		void start(uint64_t now)
+		{
+			at = now;
+			for (auto &phase : ns)
+				phase = 0;
+		}
+
+		void end(unsigned phase)
+		{
+			const uint64_t now = statsNowNs();
+			ns[phase] += now - at;
+			at = now;
+		}
+#else
+		void start(uint64_t)
+		{
+		}
+
+		void end(unsigned)
+		{
+		}
+#endif
+	};
 	struct JobScratch {
 		uint64_t *bytes;
 		switch_gpu_backing_token *dependencies;
@@ -899,6 +928,7 @@ class AGXDeviceUserClient : public IOUserClient
 		tgm_coh **written; // the listed uses' imports a job writes, as its uses resolved them
 		uint32_t capacity;
         SwitchGpuEventJob *events;
+		SubmitPhases phases;
 	};
     SwitchGpuEventClient events_;
     SwitchGpuResourceClient resources_;
@@ -2273,6 +2303,7 @@ void AGXDeviceUserClient::freeJob(JobScratch &job)
 IOReturn AGXDeviceUserClient::submitAddress(const TegraGM20BAbiSubmitAddress *in,
 					    TegraGM20BAbiExecReply *out)
 {
+	const uint64_t entered = statsNowNs();
 	if (in->reserved || in->bytes < sizeof(TegraGM20BAbiSubmit) || in->bytes > kJobBytes ||
 	    !in->address)
 		return kIOReturnBadArgument;
@@ -2283,6 +2314,7 @@ IOReturn AGXDeviceUserClient::submitAddress(const TegraGM20BAbiSubmitAddress *in
 	const uint32_t slot = header.channel - 1;
 	IOLockLock(submitLocks_[slot]);
 	auto &job = channelJobs_[slot];
+	job.phases.start(entered);
 	IOReturn result = kIOReturnBadArgument;
 	if (!reserveJob(job, TegraGM20BMaxJobUses + TegraGM20BMaxJobPushes)) {
 		result = kIOReturnNoMemory;
@@ -2334,6 +2366,12 @@ IOReturn AGXDeviceUserClient::submitAddress(const TegraGM20BAbiSubmitAddress *in
 						      out, uses, submit->surface_count, true, &job,
 						      submit->surface_flags, job.events,
 						      admissionCookie);
+#if TGM_STATS
+					if (!result && chans_[slot]) {
+						job.phases.end(TGM_SUBMIT_COMMIT);
+						tgm_stats_submit(chans_[slot], job.phases.ns);
+					}
+#endif
 					submitGate_.leave(lock_);
 				} else {
 					result = kIOReturnNotOpen;
@@ -2524,6 +2562,8 @@ IOReturn AGXDeviceUserClient::exec(uint32_t channel, TegraGM20BAbiPush *input, u
 	bool ownershipBusy = false, ownershipFailed = false;
 	// The active-submit gate pins this channel, its bindings and BOs while other channels and CPU releases proceed.
 	IOLockUnlock(lock_);
+	if (scratch)
+		scratch->phases.end(TGM_SUBMIT_RESOLVE);
 	uint32_t leaseCount = 0;
 	if (events)
 		error = events->sequence(eventChannels_[channel - 1]);
@@ -2598,7 +2638,9 @@ refresh:
 		if (!error)
 			error = events->bind(&completion);
 		ownershipFailed = error == -5;
-		if (!error)
+		if (!error) {
+			if (scratch)
+				scratch->phases.end(TGM_SUBMIT_LOCK);
 			error = switch_gpu_chan_exec_visibility(
 				chan, pushes, count, job.dependencies, dependencies, &seqno,
 				profiled ? &prof : nullptr,
@@ -2615,6 +2657,9 @@ refresh:
 					(hostWritten || transaction.host_written
 						 ? SWITCH_GPU_SUBMIT_HOST_WRITTEN
 						 : 0u));
+			if (scratch)
+				scratch->phases.end(TGM_SUBMIT_EXEC);
+		}
 		if (error != -11)
 			break;
 		switch_gpu_backing_abort(&transaction);

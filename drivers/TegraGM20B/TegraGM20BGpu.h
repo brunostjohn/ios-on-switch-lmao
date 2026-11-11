@@ -590,8 +590,21 @@ static inline void tgm_stats_import_cost(const struct tgm_import_cost *cost)
 #endif
 void tgm_stats_bind(int map, uint64_t pages, uint64_t ns);
 /* A fence wait that slept on `waiter`, then woke (woken 1) or reached its deadline (0), and found its fence done or
- * not: the "waits" line's wakes, waits woken for another channel's fence, and wake-to-waiter latency. */
+ * not: the "waits" line's wakes, waits woken at their seqno, and wake-to-waiter latency. */
 void tgm_stats_wait(uint32_t waiter, int woken, int done);
+
+/* A SubmitAddress by phase (TegraGM20BUserClient.cpp): resolving its uses under the connection lock, owning them
+ * (backing locks, dependency scan, room waits), chan_exec, and the commit after it. The "exec by process" line. */
+enum {
+	TGM_SUBMIT_RESOLVE,
+	TGM_SUBMIT_LOCK,
+	TGM_SUBMIT_EXEC,
+	TGM_SUBMIT_COMMIT,
+	TGM_SUBMIT_PHASES
+};
+#if TGM_STATS
+void tgm_stats_submit(struct tgm_chan *chan, const uint64_t ns[TGM_SUBMIT_PHASES]);
+#endif
 void tgm_stats_bo_free(uint64_t ns);
 void tgm_stats_prefault(uint64_t bytes);
 
