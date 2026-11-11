@@ -47,10 +47,11 @@ bool answers(Class cls, SEL sel)
     return !root || method_getImplementation(root) != method_getImplementation(m);
 }
 
+// The facade's classes: RM*, the device class, and the kernel events the device makes itself (SwitchSharedEvent)
 bool facadeClass(Class cls)
 {
     const char *name = class_getName(cls);
-    return !strncmp(name, "RM", 2) || !strcmp(name, "RawGM20BMetalDevice");
+    return !strncmp(name, "RM", 2) || !strcmp(name, "RawGM20BMetalDevice") || !strcmp(name, "SwitchSharedEvent");
 }
 
 struct Object {
