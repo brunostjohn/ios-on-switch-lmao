@@ -9,6 +9,19 @@
 #include "SwitchVICSemantics.h"
 #include "../TegraHost1x/SwitchHost1xResults.h"
 #include "../TegraHost1x/TegraHost1x.h"
+
+#if (defined(DEVELOPMENT) && DEVELOPMENT) || (defined(DEBUG) && DEBUG)
+namespace {
+const char *gLastRefusal;
+}
+#define SWITCH_VIC_REFUSED(stage) __atomic_store_n(&gLastRefusal, stage, __ATOMIC_RELAXED)
+const char *switch_vic_last_refusal()
+{
+    return __atomic_load_n(&gLastRefusal, __ATOMIC_RELAXED);
+}
+#else
+#define SWITCH_VIC_REFUSED(stage) ((void)0)
+#endif
 #include "../../kits/SwitchTime/SwitchTime.h"
 
 namespace {
@@ -196,8 +209,10 @@ int switch_vic_submit_checked(const TegraVICJob *jobs, uint32_t count, const Teg
     const switch_gpu_backing_token *eventTokens = nullptr;
     const uint32_t eventCount = switch_vic_events_tokens(events, &eventTokens);
 retry:
-    if (const int error = outcome.renew())
+    if (const int error = outcome.renew()) {
+        SWITCH_VIC_REFUSED("result record");
         return error;
+    }
     IOLockLock(gLock);
     while ((gSuspended || gQueue.count + count > SwitchVICQueue::kSlots) && !gFailed)
         IOLockSleep(gLock, &gQueue.count, THREAD_UNINT);
@@ -210,6 +225,7 @@ retry:
     switch_gpu_backing_token token = {};
     if (const int error = Results::prepare(outcome.value, gQueue.submitted + 1, gQueue.submitted + count, &token)) {
         IOLockUnlock(gLock);
+        SWITCH_VIC_REFUSED("result token");
         return error;
     }
     int error = 0;
@@ -228,6 +244,7 @@ retry:
             if (transaction.locked)
                 switch_gpu_backing_abort(&transaction);
             IOLockUnlock(gLock);
+            SWITCH_VIC_REFUSED("ownership: a CPU owner or guard refused a use, or dependencies");
             if (error != -28)
                 return error;
             if (const int grown = dependencies.grow(needed + eventCount))
@@ -247,14 +264,17 @@ retry:
     if (error) {
         switch_gpu_backing_abort(&transaction);
         IOLockUnlock(gLock);
+        SWITCH_VIC_REFUSED("event waits cover a dependency");
         return error;
     }
     if (capture) {
         error = dependencies.holdAll(needed);
         switch_gpu_backing_abort(&transaction);
         IOLockUnlock(gLock);
-        if (error)
+        if (error) {
+            SWITCH_VIC_REFUSED("holding dependencies");
             return error;
+        }
         switch_gpu_event_waits *inferred = nullptr;
         error = switch_gpu_event_waits_prepare_tokens(dependencies.tokens, needed, &inferred);
         dependencies.releaseTokens();
@@ -263,8 +283,10 @@ retry:
         if (!error && inferred)
             error = switch_gpu_event_waits_merge_uncommitted(batch.value, inferred);
         switch_gpu_event_waits_abort(&inferred);
-        if (error)
+        if (error) {
+            SWITCH_VIC_REFUSED("event waits for dependencies");
             return error;
+        }
         goto retry;
     }
     bool bridgeRequired = false;
@@ -289,16 +311,21 @@ retry:
         }
         switch_gpu_backing_abort(&transaction);
         IOLockUnlock(gLock);
+        SWITCH_VIC_REFUSED("a dependency's engine state");
         return error;
     }
     if (bridgeRequired) {
         error = dependencies.holdGpu(needed);
         switch_gpu_backing_abort(&transaction);
         IOLockUnlock(gLock);
-        if (error)
+        if (error) {
+            SWITCH_VIC_REFUSED("holding GPU dependencies");
             return error;
-        if (const int submitted = dependencies.submitBridge())
+        }
+        if (const int submitted = dependencies.submitBridge()) {
+            SWITCH_VIC_REFUSED("GPU bridge submission");
             return submitted;
+        }
         goto retry;
     }
     SwitchVICSemantic *semantic = nullptr;
@@ -308,6 +335,7 @@ retry:
     if (error) {
         switch_gpu_backing_abort(&transaction);
         IOLockUnlock(gLock);
+        SWITCH_VIC_REFUSED("semantic or event binding");
         return error;
     }
     uint32_t *words = gWords;

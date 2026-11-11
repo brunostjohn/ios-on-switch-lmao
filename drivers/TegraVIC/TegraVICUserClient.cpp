@@ -56,6 +56,7 @@
 #include "TegraVICSurface.h"
 #include "SwitchVICTransform.h"
 #include "SwitchVICMapping.h"
+#include "SwitchVICJobs.h"
 #include "SwitchVICEvents.h"
 #include "SwitchVICRequests.h"
 #include "../NativeMobileDisplay/DisplayWindowProbeABI.h"
@@ -276,8 +277,10 @@ void finishJob(Job *job, IOReturn status);
 void firstFailure(const Job *job, const char *stage, int status)
 {
     char line[160];
-    if (gStats.firstFailure(stage, status, job->src.desc.fourcc, job->dst.desc.fourcc, job->pid, line, sizeof(line)))
-        os_log(OS_LOG_DEFAULT, "%s", line);
+    if (gStats.firstFailure(stage, status, job->src.desc.fourcc, job->dst.desc.fourcc, job->pid, line, sizeof(line))) {
+        const char *refusal = status < 0 ? switch_vic_last_refusal() : nullptr;
+        os_log(OS_LOG_DEFAULT, "%s%s%s", line, refusal ? ", refused at " : "", refusal ? refusal : "");
+    }
 }
 #endif
 

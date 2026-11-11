@@ -35,3 +35,5 @@ struct SwitchVICOwnership {
 int switch_vic_submit_checked(const TegraVICJob *jobs, uint32_t count, const TegraVICAcquire *acquire,
                               const SwitchVICOwnership &ownership, void (*completion)(void *, int), void *context,
                               uint32_t *fence, SwitchVICEvents *events = nullptr);
+// Debug kernels: which check of switch_vic_submit_checked refused the last job it refused.
+const char *switch_vic_last_refusal();
