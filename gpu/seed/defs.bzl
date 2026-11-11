@@ -27,6 +27,8 @@ CrawlInfo = provider(
         "files": "depset: every file of the tree",
         "root": "the tree's directory, which holds root/ and data/",
         "qc": "QuartzCore's default.metallib",
+        "data_files": "depset: the files of data/ alone, without the applications' libraries below root/",
+        "data_root": "the directory holding that data/",
     },
 )
 
@@ -45,7 +47,27 @@ def _shader_crawl_impl(ctx):
         fail("qc must be the tree's " + QUARTZCORE)
     root = qc.path.removesuffix("/" + QUARTZCORE)
     files = depset(ctx.files.tree)
+    data_files, data_root = depset([f for f in ctx.files.tree if f.path.startswith(root + "/data/")]), root
     sources = []
+    if ctx.files.embedded:
+        # The raw pack's probes read data/ only: an HW Test app's shader edit then reruns none of them.
+        data = ctx.actions.declare_directory(named(ctx, "_data"))
+        args = ctx.actions.args()
+        args.add("--data-only")
+        args.add("--crawl", root)
+        args.add_all(ctx.files.embedded, before_each = "--embedded")
+        args.add("--ios-major", ctx.attr.ipsw[IpswInfo].version.split(".")[0])
+        args.add("--ipsw", ctx.attr.ipsw[IpswInfo].build)
+        args.add("--out", data.path)
+        ctx.actions.run(
+            executable = ctx.executable._inputs,
+            arguments = [args],
+            inputs = depset(ctx.files.embedded, transitive = [data_files]),
+            outputs = [data],
+            mnemonic = "MetalSeedData",
+            progress_message = "Adding the embedded shaders to the crawl's data libraries",
+        )
+        data_files, data_root = depset([data]), data.path
     if ctx.files.applications or ctx.files.embedded:
         tree = ctx.actions.declare_directory(named(ctx, "_inputs"))
         report = ctx.actions.declare_file(named(ctx, "_inputs.json"))
@@ -79,7 +101,7 @@ def _shader_crawl_impl(ctx):
     )
     return [
         DefaultInfo(files = depset([ctx.file.inventory] + sources, transitive = [files])),
-        CrawlInfo(files = files, root = root, qc = qc),
+        CrawlInfo(files = files, root = root, qc = qc, data_files = data_files, data_root = data_root),
         OutputGroupInfo(names = depset([names]), inventory = depset([ctx.file.inventory]), sources = depset(sources)),
     ]
 
@@ -369,8 +391,8 @@ def _seed_raw_pack_impl(ctx):
         progress_message = "Splitting the raw pack's states into buckets",
     )
 
-    probe_inputs = depset([tools.twin] + tools.raw + ctx.files.device_libraries +
-                          _generator_files(ctx, _RAW_PROBE), transitive = [crawl.files])
+    probe_inputs = depset([tools.twin, crawl.qc] + tools.raw + ctx.files.device_libraries +
+                          _generator_files(ctx, _RAW_PROBE), transitive = [crawl.data_files])
     buckets = []
     for i, bucket_corpus in enumerate(corpora):
         # rawpack.py knows a bucket by its directory's name (bucket0 also draws the raw path's own states).
@@ -381,7 +403,7 @@ def _seed_raw_pack_impl(ctx):
         args.add("--raw", tools.raw_dir)
         args.add("--nvk", tools.twin)
         args.add("--qc", crawl.qc)
-        args.add("--data-dir", crawl.root + "/data")
+        args.add("--data-dir", crawl.data_root + "/data")
         args.add_all(ctx.files.device_libraries, before_each = "--data")
         args.add("--lines", bucket_corpus)
         args.add("--out", bucket.path)

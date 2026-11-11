@@ -77,6 +77,34 @@ class StageManifestTest(unittest.TestCase):
                 self.assertEqual(hashlib.sha256(data).hexdigest(), digest)
                 self.assertEqual(len(data), int(length))
 
+    def test_the_manifest_made_from_the_seeds_part_is_the_one_made_at_once(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for name, data in {
+                'base/ngpu/addons/TegraGM20BMetal.bundle/TegraGM20BMetal': b'plugin',
+                'seed/SEED': b'seed',
+                'pack': b'records',
+                'raw/pack.bin': b'raw pipeline pack',
+                'native/native-analysis/index': index(1, 1),
+                'native/native-analysis/packs/000': b'analyses',
+            }.items():
+                (root / name).parent.mkdir(parents=True, exist_ok=True)
+                (root / name).write_bytes(data)
+            seed = ['--pack', str(root / 'pack'), '--pack-rlocation', 'pack']
+            for name in ('seed', 'raw', 'native'):
+                seed += ['--' + name, str(root / name), '--' + name + '-rlocation', name]
+            base = ['--self', 'bundle.stage', '--base', str(root / 'base'), '--base-rlocation', 'base']
+            runs = (
+                [*base, *seed, '--out', str(root / 'once.stage')],
+                ['--part', *seed, '--out', str(root / 'seed.part')],
+                [*base, '--from-part', str(root / 'seed.part'), '--out', str(root / 'joined.stage')],
+            )
+            for args in runs:
+                with mock.patch.object(sys, 'argv', ['stage_manifest.py', *args]):
+                    stage_manifest.main()
+            self.assertEqual((root / 'joined.stage').read_text(), (root / 'once.stage').read_text())
+            self.assertEqual(len((root / 'once.stage').read_text().splitlines()), 1 + 6)
+
     def test_a_packed_directory_without_a_seed_pack_index_is_refused(self):
         with tempfile.TemporaryDirectory() as directory:
             native = Path(directory)

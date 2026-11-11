@@ -357,20 +357,38 @@ def _rlocation(ctx, f):
 def _gpu_stage_impl(ctx):
     seed = ctx.attr.seed[SeedInfo]
     base = [f for f in ctx.files.base if f.is_directory][0]
-    manifest = ctx.actions.declare_file(ctx.attr.name + ".stage")
+
+    # The seed's lines on their own, so that the plugin, which most edits change, is all the manifest hashes again.
+    part = ctx.actions.declare_file(ctx.attr.name + ".stage.seed")
     args = ctx.actions.args()
-    args.add("--self", _rlocation(ctx, manifest))
-    for flag, tree in (("--base", base), ("--seed", seed.meta), ("--raw", ctx.file.raw), ("--native", seed.native)):
+    args.add("--part")
+    for flag, tree in (("--seed", seed.meta), ("--raw", ctx.file.raw), ("--native", seed.native)):
         args.add(flag, tree.path)
         args.add(flag + "-rlocation", _rlocation(ctx, tree))
     for pack in seed.packs:
         args.add("--pack", pack)
         args.add("--pack-rlocation", _rlocation(ctx, pack))
+    args.add("--out", part)
+    ctx.actions.run(
+        executable = ctx.executable._tool,
+        arguments = [args],
+        inputs = [seed.meta, seed.native, ctx.file.raw] + seed.packs,
+        outputs = [part],
+        mnemonic = "GpuStageSeed",
+        progress_message = "Listing the shader seed and the raw pack for the Data volume",
+    )
+
+    manifest = ctx.actions.declare_file(ctx.attr.name + ".stage")
+    args = ctx.actions.args()
+    args.add("--self", _rlocation(ctx, manifest))
+    args.add("--base", base.path)
+    args.add("--base-rlocation", _rlocation(ctx, base))
+    args.add("--from-part", part)
     args.add("--out", manifest)
     ctx.actions.run(
         executable = ctx.executable._tool,
         arguments = [args],
-        inputs = [base, seed.meta, seed.native, ctx.file.raw] + seed.packs,
+        inputs = [base, part],
         outputs = [manifest],
         mnemonic = "GpuStageManifest",
         progress_message = "Listing the GPU bundle, the shader seed and the raw pack for the Data volume",
