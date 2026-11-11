@@ -61,6 +61,7 @@
 #include "../../kits/SwitchDMA/SwitchDMABuffer.h"
 #include "../../kits/SwitchDMA/SwitchDcache.h"
 #include "../../kits/SwitchDMA/SwitchHwPage.h"
+#include "../../kits/SwitchEngineGate/SwitchEngineGateKernel.h"
 #include "../../kits/SwitchFalcon/SwitchFalcon.h"
 #include "../../kits/SwitchMath/SwitchMath.h"
 #include "../../kits/SwitchMMIO/SwitchMMIOKernel.h"
@@ -68,6 +69,7 @@
 
 extern "C" {
 int tegra_nvdec_await(uint32_t timeoutMs);
+IOLock *tegra_nvdec_power_lock(void);
 extern const uint8_t tegra_nvjpg_fw_start[] __asm__("_tegra_nvjpg_fw_start");
 extern const uint8_t tegra_nvjpg_fw_end[] __asm__("_tegra_nvjpg_fw_end");
 }
@@ -135,7 +137,8 @@ inline uint32_t jobBoundUs(uint64_t pixels)
 }
 
 IOLock *gJobLock;    // one job at a time: map, run, unmap
-IOLock *gStateLock;  // suspend/resume against jobs
+IOLock *gStateLock;  // power transitions against jobs
+SwitchEngineGate<SwitchEngineGateKernel> gGate;
 uint32_t gSyncpt, gNext, gPicture;
 bool gUp, gWedged, gSuspended;
 TegraNVJPGBuffer gSetup, gStatus;
@@ -151,6 +154,8 @@ const TegraNVJPGTraits kTraits = {
 const char *falconState()
 {
     static char text[160];
+    if (gUp && !gGate.powered())
+        return "falcon powered off (idle)";
     return switch_falcon_state(gJpg, text, sizeof(text));
 }
 
@@ -339,6 +344,8 @@ void park()
 
 void engineSuspend();
 void engineResume();
+int gateOn(void *);
+int gateOff(void *, bool);
 
 bool allocate()
 {
@@ -385,7 +392,8 @@ void bringUp(void *, wait_result_t)
     gMc = switch_mmio_map(kMcPA, 0x1000);
     gJobLock = IOLockAlloc();
     gStateLock = IOLockAlloc();
-    if (!gJpg || !gMc || !gJobLock || !gStateLock) {
+    IOLock *power = tegra_nvdec_power_lock();
+    if (!gJpg || !gMc || !gJobLock || !gStateLock || !power) {
         IOLog("TegraNVJPG: J0 FAIL no mapping\n");
         return;
     }
@@ -399,7 +407,11 @@ void bringUp(void *, wait_result_t)
     IOLog("TegraNVJPG: J0 ok firmware %u bytes at %#llx, arena %llu KiB at %#llx, %u page tables, in %llu us\n",
           gImage.size, gFirmware.pa, kArenaBytes >> 10, gArena.pa, kTables, switch_now_us() - began);
     bool wasOn = false;
-    if (!smmuSetUp() || !smmuAttach() || !powerUp(&wasOn) || !bootFalcon()) {
+    // NVDEC's gate may power NVDEC off or on meanwhile, switching the clock powerUp's MBIST workaround borrows.
+    IOLockLock(power);
+    const bool up = smmuSetUp() && smmuAttach() && powerUp(&wasOn) && bootFalcon();
+    IOLockUnlock(power);
+    if (!up) {
         IOLog("TegraNVJPG: %s\n", gLine[0] ? gLine : "J1 FAIL");
         park();
         giveBack();
@@ -434,6 +446,12 @@ void bringUp(void *, wait_result_t)
           id, from, tegra_host1x_syncpt_read(id), switch_now_us() - start, falconState());
     gSyncpt = id;
     gNext = tegra_host1x_syncpt_read(id);
+    if (!gGate.start({"TegraNVJPG", nullptr, gateOn, gateOff}, power)) {
+        IOLog("TegraNVJPG: J2 FAIL no idle timer\n");
+        park();
+        giveBack();
+        return;
+    }
     gUp = true;
     tegra_host1x_set_sleep_client(engineSuspend, engineResume);
     tegra_host1x_set_strict();
@@ -512,11 +530,14 @@ extern "C" int tegra_nvjpg_run(const TegraNVJPGJob *job, nvjpg_dec_status *statu
     if ((job->bitstream & 0xff) || (job->plane[0] & 0xff) || (job->planes > 1 && (job->plane[1] & 0xff)) ||
         (job->planes > 2 && (job->plane[2] & 0xff)))
         return -22;
+    if (const int error = gGate.use())
+        return error;
     IOLockLock(gStateLock);
     while (gSuspended)
         IOLockSleep(gStateLock, &gSuspended, THREAD_UNINT);
     if (gWedged) {
         IOLockUnlock(gStateLock);
+        gGate.done();
         return -19;
     }
     memcpy(gSetup.va, &job->setup, sizeof(job->setup));
@@ -558,49 +579,80 @@ extern "C" int tegra_nvjpg_run(const TegraNVJPGJob *job, nvjpg_dec_status *statu
     switch_dcache_clean_invalidate(gStatus.va, sizeof(nvjpg_dec_status));
     memcpy(status, gStatus.va, sizeof(*status));
     IOLockUnlock(gStateLock);
+    gGate.done();
     return ret;
 }
 
-// Sleep (SC7), through TegraHost1x's sleep clients. Suspend waits for the job lock (no job runs), parks the engine in
-// reset and drops the swgroup to bypass before host1x saves its syncpoints; new jobs block until resume. Resume runs
-// after host1x (and NVDEC, an earlier client, whose clock the MBIST workaround borrows) is back: the SMMU domain is
-// programmed again (SC7 resets the MC), the partition powered, the falcon reloaded from the kept image and proven
-// with J2's stream.
+// Idle power gating (SwitchEngineGate.h), as mainline's runtime PM does for VIC and NVDEC: off 500 ms after the last
+// decode, on at the next. On is J1 and J2 again on the kept image and SMMU domain (an idle power-off does not reset the
+// MC): partition, clock, reset and the MBIST workaround, the falcon reloaded and proven with J2's stream. A failure
+// there is one line and NVJPG refuses work (decodes go to the CPU). Off waits for no job (a decode holds the gate) and
+// powers the partition down. NVDEC's gate shares the lock (tegra_nvdec_power_lock): each one's power-up borrows the
+// other's clock for its MBIST workaround.
 namespace {
+int gateOn(void *)
+{
+    IOLockLock(gStateLock);
+    bool wasOn = false;
+    bool answered = false;
+    gLine[0] = 0;
+    if (powerUp(&wasOn) && bootFalcon()) {
+        const uint32_t from = tegra_host1x_syncpt_read(gSyncpt);
+        const char *stage = nullptr;
+        const int ret = answer(gSyncpt, from, &stage);
+        answered = !ret;
+        if (ret) {
+            char state[160];
+            snprintf(gLine, sizeof(gLine), "%s did not answer (%d, syncpoint %u %u->%u); %s", stage, ret, gSyncpt, from,
+                     tegra_host1x_syncpt_read(gSyncpt), switch_falcon_state(gJpg, state, sizeof(state)));
+        }
+    }
+    if (!answered) {
+        gWedged = true;
+        engineOff();
+        IOLog("TegraNVJPG: power-on FAIL %s; NVJPG refuses work (decodes go to the CPU)\n", gLine[0] ? gLine : "J1");
+    }
+    gNext = tegra_host1x_syncpt_read(gSyncpt);
+    gSuspended = false;
+    IOLockWakeup(gStateLock, &gSuspended, false);
+    IOLockUnlock(gStateLock);
+    return answered ? 0 : -19;
+}
+
+int gateOff(void *, bool)
+{
+    IOLockLock(gStateLock);
+    gSuspended = true;
+    const bool off = switch_pmc_power_down(kPartition, kClock, kClock);
+    IOLockUnlock(gStateLock);
+    return off ? SWITCH_ENGINE_GATE_OFF : -5;
+}
+
+// Sleep (SC7), through TegraHost1x's sleep clients. Suspend waits for the job lock (no job runs, none maps a window),
+// powers the engine off and drops the swgroup to bypass before host1x saves its syncpoints; new jobs wait for resume.
+// Resume runs after host1x (and NVDEC, an earlier client) is back and programs the SMMU domain again (SC7 resets the
+// MC); the next decode powers NVJPG on.
 void engineSuspend()
 {
     IOLockLock(gJobLock);
-    IOLockLock(gStateLock);
-    gSuspended = true;
+    gGate.suspend();
     smmuDetach();
-    engineOff();
-    IOLockUnlock(gStateLock);
     IOLockUnlock(gJobLock);
 }
 
 void engineResume()
 {
-    IOLockLock(gStateLock);
-    bool wasOn = false;
     gLine[0] = 0;
-    gWedged = true;
-    if (smmuAttach() && powerUp(&wasOn) && bootFalcon()) {
-        const uint32_t from = tegra_host1x_syncpt_read(gSyncpt);
-        const char *stage = nullptr;
-        const int ret = answer(gSyncpt, from, &stage);
-        if (!ret) {
-            gWedged = false;
-        } else {
-            snprintf(gLine, sizeof(gLine), "%s did not answer (%d, syncpoint %u %u->%u); %s", stage, ret, gSyncpt, from,
-                     tegra_host1x_syncpt_read(gSyncpt), falconState());
-        }
-    }
-    if (gWedged)
+    const bool attached = smmuAttach();
+    if (!attached) {
+        IOLockLock(gStateLock);
+        gWedged = true;
+        gSuspended = false;
+        IOLockWakeup(gStateLock, &gSuspended, false);
+        IOLockUnlock(gStateLock);
         IOLog("TegraNVJPG: resume FAIL %s; NVJPG refuses work (decodes go to the CPU)\n", gLine);
-    gNext = tegra_host1x_syncpt_read(gSyncpt);
-    gSuspended = false;
-    IOLockWakeup(gStateLock, &gSuspended, false);
-    IOLockUnlock(gStateLock);
+    }
+    gGate.resume(attached);
 }
 }  // namespace
 
