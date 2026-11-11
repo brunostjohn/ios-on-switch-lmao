@@ -320,6 +320,7 @@ void planeFrameEnd()
         return;
     }
     dc[kDcIntStatus] = underflow;
+    noteLatchedUnderflow(underflow);
     if (stats)
         ++stPlaneUnderflows;
     if (planeSetOf(planeLatch.active).on() && ++planeUnderflowRun >= kPlaneUnderflowFrames)

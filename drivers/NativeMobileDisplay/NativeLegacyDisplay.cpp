@@ -41,6 +41,7 @@
 #include "SwitchDisplayMemoryTiming.h"
 #include "SwitchDisplayRetirement.h"
 #include "SwitchScanoutBuffer.h"
+#include "SwitchUnderflowAccounting.h"
 #include "../TegraVIC/SwitchNativeVICImage.h"
 #include "../TegraVIC/SwitchVICScanoutConvert.h"
 #include "SwitchFrameInfo.h"
@@ -361,8 +362,7 @@ static constexpr uint32_t kWinDdaIncrement = 0x709, kWinLineStride = 0x70a;
 static constexpr uint32_t kWinBufferControl = 0x702, kWinHInitialDda = 0x707, kWinVInitialDda = 0x708,
                           kWinBlendLayer = 0x716;
 static constexpr uint32_t kDcDispWinOptions = 0x402, kDcScratchB = 0x326;
-static constexpr uint32_t kWinbufStartAddr = 0x800, kWinbufHOffset = 0x806, kWinbufVOffset = 0x808,
-                          kWinbufUnderflow = 0x80a;
+static constexpr uint32_t kWinbufStartAddr = 0x800, kWinbufHOffset = 0x806, kWinbufVOffset = 0x808;
 static constexpr uint32_t kWinbufSurfaceKind = 0x80b, kWinbufStartAddrHi = 0x80d;
 static constexpr uint32_t kReadMuxActive = 1u << 0, kWriteMuxActive = 1u << 2, kWindowASelect = 1u << 4,
                           kWinAActHcntrSel = 1u << 2;
@@ -1625,6 +1625,8 @@ private:
             tegra_gm20b_compositor_vsync(__atomic_load_n(&feStamp, __ATOMIC_ACQUIRE), 0, refreshTicks());
         watchVsync(status);
         if (status & kFrameEndInt)
+            underflowRead();
+        if (status & kFrameEndInt)
             columnScanFrameEnd();
         // After the compositor's vsync, since a latched flip starts the next frame's copy right here. A flip is also looked for at
         // V_BLANK (unmasked while a vsync client is registered), in case the controller latches after its FRAME_END.
@@ -1639,6 +1641,8 @@ private:
             probeFrameEnd();
         if (status & kFrameEndInt)
             planeFrameEnd();
+        if (status & kFrameEndInt)
+            underflowFrameEnd();
         if (status & kFrameEndInt) {
             color->frameEndAction(ring.pending == kNoBuffer && !probeRequest && (!rotated || rotationLatched) &&
                                   !columnScanBusy());
@@ -1676,8 +1680,11 @@ private:
         // r16-idle: a window in which nothing reached the screen and nothing went wrong is logged once, marked quiet; the
         // windows after it are counted and reset as always but not logged, until a swap, a present or an error comes. A
         // lit, still screen then writes no display lines at all (it wrote two every 5 s).
+        const switch_display::UnderflowAccounting::Totals counted[kUnderflowWindows] = {
+            underflows.take(0), underflows.take(1), underflows.take(2)};
         const bool quiet = (stSwaps == 0u) && (stPresents == 0u) && (stUnderflows == 0u) && (stGpuTimeouts == 0u) &&
                            (stNewMaps == 0u) && (stFallbacks == 0u) && (stVsyncIdle == 0u) &&
+                           ((counted[0].frames | counted[1].frames | counted[2].frames) == 0u) &&
                            (__atomic_load_n(&stRejected, __ATOMIC_RELAXED) == 0u);
         const bool logged = !(quiet && statsQuiet);
         statsQuiet = quiet;
@@ -1790,6 +1797,11 @@ private:
         }
         add("; planes %s: flips %u (b-only %u) latched %u, maps %u, dropped %u, underflow %u, unready %u", planesState,
             stPlaneFlips, stPlaneOnly, stPlaneLatched, stPlaneMaps, stPlaneDropped, stPlaneUnderflows, stPlaneUnready);
+        add("; UFLOW_STATUS A %llu (%u frames) B %llu (%u) C %llu (%u)%s",
+            static_cast<unsigned long long>(counted[0].counted), counted[0].frames,
+            static_cast<unsigned long long>(counted[1].counted), counted[1].frames,
+            static_cast<unsigned long long>(counted[2].counted), counted[2].frames,
+            counted[0].overflowed || counted[1].overflowed || counted[2].overflowed ? " overflowed" : "");
         planeTotalsClose();
         stPlaneFlips = stPlaneOnly = stPlaneLatched = stPlaneMaps = stPlaneDropped = stPlaneUnderflows =
             stPlaneUnready = 0;
@@ -3144,6 +3156,7 @@ public:
         __atomic_fetch_and(&dcPending, ~(kVblankInt | kFrameEndInt), __ATOMIC_RELAXED);
         // A window underflow latched around the stop is not the rotated scanout failing (checkRotation counts runs of them).
         dc[kDcIntStatus] = kVblankInt | kFrameEndInt | kWinAUnderflowInt;
+        clearUnderflowCounts();
         underflowRun = 0;
         scanoutStopped = !on;
         if (on) {
@@ -4671,6 +4684,7 @@ public:
 
 #include "SwitchDisplayBandwidthDisplay.h"
 #include "NativePlanesDisplay.h"
+#include "SwitchUnderflowDisplay.h"
 #include "SwitchNativePlaneDisplay.h"
 #include "SwitchPlaneConversionDisplay.h"
 #include "SwitchScanoutSetup.h"

@@ -142,6 +142,7 @@
             return;
         }
         dc[kDcIntStatus] = underflow;
+        noteLatchedUnderflow(underflow);
         if (stats)
             stUnderflows++;
         if (probe.active())
@@ -156,7 +157,7 @@
             return;
         panic("SwitchDisplay: window A underflowed %u frames in a row since the rotation: UFLOW_STATUS %#x OPTIONS "
               "%#x KIND %#x STRIDE %#x",
-              underflowRun, windowActive(kWinbufUnderflow), windowActive(kWinOptions), windowActive(kWinbufSurfaceKind),
+              underflowRun, underflowCounts[0], windowActive(kWinOptions), windowActive(kWinbufSurfaceKind),
               windowActive(kWinLineStride));
     }
 

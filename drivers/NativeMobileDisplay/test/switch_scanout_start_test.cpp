@@ -71,6 +71,7 @@ struct Display {
     uint64_t retired = 0, retiredAt = 0, stReplaced = 0, stUnderflows = 0;
     unsigned underflowRun = 0, pitchChecks = 0, hooks = 0, barriers = 0, deadlineArms = 0;
     unsigned marksWritten = 0, tapeStops = 0, presents = 0, latched = 0, planeStages = 0;
+    uint32_t notedUnderflow = 0, underflowCounts[3] = {};
 
     Display()
     {
@@ -136,6 +137,7 @@ struct Display {
     void retireThrough(uint64_t seq, uint64_t stamp) { retired = seq; retiredAt = stamp; }
     void flipLatched() { ++latched; }
     void releaseIdleDirectReads() {}
+    void noteLatchedUnderflow(uint32_t latched) { notedUnderflow |= latched; }
     void checkFlip(bool)
     {
         const int asked = ring.pending;
@@ -338,6 +340,18 @@ TEST(ScanoutStart, SingleBufferCopiedStartupStillLatches)
     d.frameEnd(true);
     EXPECT_TRUE(d.rotationLatched);
     EXPECT_EQ(d.tapeStops, 1u);
+}
+
+TEST(ScanoutStart, LatchedUnderflowAfterTheRotationIsNotedForTheFrame)
+{
+    Display d;
+    d.presentEntry(Display::kSlot0);
+    d.frameEnd(true);
+    d.dc.values[Display::kDcIntStatus] = Display::kWinAUnderflowInt;
+    d.frameEnd(false);
+    EXPECT_EQ(d.notedUnderflow, Display::kWinAUnderflowInt);
+    EXPECT_EQ(d.dc.values[Display::kDcIntStatus], 0u);
+    EXPECT_EQ(d.underflowRun, 1u);
 }
 
 }  // namespace

@@ -512,6 +512,15 @@ host_test(
 
 
 host_test(
+    name = "switch_underflow_accounting_test",
+    srcs = [
+        "switch_underflow_accounting_test.cpp",
+        "//drivers/NativeMobileDisplay:SwitchUnderflowAccounting.h",
+        "//drivers/NativeMobileDisplay:SwitchUnderflowDisplay.h",
+    ],
+)
+
+host_test(
     name = "switch_display_memory_envelope_test",
     srcs = [
         "switch_display_memory_envelope_test.cpp",

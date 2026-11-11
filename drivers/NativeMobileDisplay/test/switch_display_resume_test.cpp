@@ -124,7 +124,7 @@ struct Display {
     bool scanoutStopped = true, rotated = true, rotationLatched = true, resumeLit = true;
     bool presentDeferred = true, gpuPresentDeferred = true, kickDeferred = true;
     bool timingValid = true, planesRestored = false;
-    unsigned started = 0, callbacks = 0;
+    unsigned started = 0, callbacks = 0, underflowClears = 0;
     std::vector<int> order;
 
     Display()
@@ -162,6 +162,12 @@ struct Display {
 
     void writeIntMask(uint32_t, uint32_t)
     {}
+
+    void clearUnderflowCounts()
+    {
+        EXPECT_TRUE(hwSuspended);
+        ++underflowClears;
+    }
 
     void planesResume()
     {
@@ -224,6 +230,7 @@ TEST(DisplayResume, RestoresCompleteImageBeforeAnyDeferredPresentationOrStart)
     EXPECT_EQ(d.callbacks, 4u);
     EXPECT_EQ(d.order, (std::vector<int>{1, 2, 3, 4, 4, 4, 4}));
     EXPECT_TRUE(d.directAttached && d.planesAttached && gPanicRestore.armed);
+    EXPECT_EQ(d.underflowClears, 1u);
 }
 
 TEST(DisplayResume, DomainThatDoesNotComeBackPutsWindowABackOnItsScanBuffers)
