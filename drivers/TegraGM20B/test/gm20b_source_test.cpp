@@ -34,7 +34,14 @@ const std::string &client()
 
 const std::string &gpu()
 {
-	static const std::string source = SourceText("../gpu.c") + SourceText("../SwitchGpuVmMap.h") + SourceText("../SwitchGpuChannelCompletion.h");
+	static const std::string source = [] {
+		std::string units;
+		for (const char *unit : {"bringup", "clock", "mem", "hang", "stats", "stats_tick", "chan", "sync", "exec",
+					 "present", "scrub", "power"})
+			units += SourceText(std::string("../gpu_") + unit + ".c");
+		return units + SourceText("../gpu_internal.h") + SourceText("../gpu_inline.h") +
+		       SourceText("../SwitchGpuVmMap.h") + SourceText("../SwitchGpuChannelCompletion.h");
+	}();
 	return source;
 }
 
@@ -309,7 +316,7 @@ TEST(GM20BPoolIsolationSource, CpuMappedPoolMemoryIsWholeVmPages)
 TEST(GM20BPoolScrubSource, ScrubberFreesOnlyFromItsFence)
 {
 	const std::string fenced =
-		definition(gpu(), "static void scrub_fenced(struct tgm_chan *chan)");
+		definition(gpu(), "void scrub_fenced(struct tgm_chan *chan)");
 	EXPECT_THAT(fenced, HasSubstr("nvxnu_pool_free_zeroed("));
 	EXPECT_THAT(fenced, HasSubstr("tgm_chan_completed(chan)"));
 	EXPECT_EQ(Count(gpu(), "nvxnu_pool_free_zeroed("), 2u)
@@ -355,7 +362,7 @@ TEST(GM20BPushScanSource, KernelUsesTheHeader)
 	EXPECT_THAT(Between(gpu(), "static void chan_submission_room(", "\n}\n"),
 		    HasSubstr("|| count > TGM_PROF_MAX || profiled))"));
 	EXPECT_THAT(Between(gpu(), "static int chan_exec(", "\n}\n"), HasSubstr("chan->submitted + 1 + fences); /*"));
-	EXPECT_THAT(Between(gpu(), "static void stats_fences(", "\n}\n"),
+	EXPECT_THAT(Between(gpu(), "static inline void stats_fences(", "\n}\n"),
 		    HasSubstr("prof_collect(chan, first, fs->start.ns, st->end.ns)"));
 }
 
@@ -476,7 +483,7 @@ TEST(GM20BFenceWakeSource, WaitersWakeByChannel)
 	EXPECT_THAT(wake, HasSubstr("if (done == chan->woken_done) return;"));
 	EXPECT_THAT(wake, HasSubstr("if (switch_gpu_waiter_reached(&chan->wanted, done)) "
 				    "chan_wake_all_waiters(chan);"));
-	EXPECT_THAT(flat(definition(gpu(), "static int chan_killed(struct nvif_event *event, void "
+	EXPECT_THAT(flat(definition(gpu(), "int chan_killed(struct nvif_event *event, void "
 					   "*repv, u32 repc)")),
 		    HasSubstr("chan_wake_all_waiters(chan);"));
 	expectBefore(flat(definition(gpu(), "void tgm_chan_del(struct tgm_chan **pchan)")),
@@ -512,7 +519,7 @@ TEST(GM20BKillSource, AKilledChannelLeavesItsConnectionWorking)
 	EXPECT_THAT(order, HasSubstr("if (READ_ONCE(chan->error)) return -EIO;"));
 	EXPECT_THAT(order, HasSubstr("READ_ONCE(other->error)) continue;"));
 	const std::string killed = flat(definition(
-		gpu(), "static int chan_killed(struct nvif_event *event, void *repv, u32 repc)"));
+		gpu(), "int chan_killed(struct nvif_event *event, void *repv, u32 repc)"));
 	EXPECT_THAT(killed, HasSubstr("__atomic_store_n(chan->fence_cpu, chan->submitted, __ATOMIC_RELEASE);"));
 	EXPECT_THAT(killed, HasSubstr("chan->kernel || !tgm_all_clients()"));
 	EXPECT_LT(killed.find("switch_gpu_timeline_failed("), killed.find("__atomic_store_n(chan->fence_cpu"));
@@ -576,12 +583,12 @@ TEST(GM20BRoomSource, RoomIsWaitedForByInterrupt)
 		  3u);
 	const std::string wait = flat(definition(
 		gpu(),
-		"static int chan_wait_ready(struct tgm_chan *chan, u32 gpfifo_nr, u32 push_nr)"));
+		"int chan_wait_ready(struct tgm_chan *chan, u32 gpfifo_nr, u32 push_nr)"));
 	EXPECT_THAT(wait, HasSubstr("if (!nvxnu_idle(seq, end)"));
-	const auto reserve = flat(definition(gpu(), "static int chan_wait_room("));
+	const auto reserve = flat(definition(gpu(), "static inline int chan_wait_room("));
 	expectBefore(reserve, "chan_wait_ready(chan, gpfifo_nr, push_nr)",
 		     "nvif_chan_gpfifo_wait(&chan->chan, gpfifo_nr, push_nr)");
-	expectBefore(flat(definition(gpu(), "static u32 chan_fence_job(struct tgm_chan *chan, int external, u32 first, u32 next)")),
+	expectBefore(flat(definition(gpu(), "u32 chan_fence_job(struct tgm_chan *chan, int external, u32 first, u32 next)")),
 		     "nvif_chan_gpfifo_post(&chan->chan);", "NON_STALL_INTERRUPT, 0);");
 }
 
@@ -786,7 +793,7 @@ TEST(GM20BTlbSource, MapsOrderedOnTheGpuRemovalsSynchronous)
 	EXPECT_THAT(client(), HasSubstr("switch_gpu_vm_map_volatile(vm_, op.va"));
 	EXPECT_EQ(Count(client(), "tgm_vm_map("), 0u);
 	EXPECT_EQ(Count(gpu(), "nvxnu_gpu_ordered_begin();"), 3u);
-	const std::string map = flat(definition(gpu(), "static int vm_map("));
+	const std::string map = flat(definition(gpu(), "int tgm_vm_map_raw("));
 	expectBefore(map, "nvxnu_gpu_ordered_end(ordered_scope);", "nvif_vmm_raw_put(");
 	const std::string mixed = flat(definition(gpu(), "int switch_gpu_vm_map_volatile("));
 	expectBefore(mixed, "nvxnu_gpu_ordered_end(ordered_scope);", "nvif_vmm_raw_unmap(");
@@ -812,10 +819,10 @@ TEST(GM20BRailSource, GpuLockWakesARailGatedGpu)
 		<< "gpu_lock, tgm_timestamp_ns, tgm_sleep, tgm_rail_down, tgm_rail_up, "
 		   "tgm_rail_sc7_hold";
 	EXPECT_THAT(
-		flat(definition(gpu(), "static noinline void gpu_lock(void)")),
+		flat(definition(gpu(), "noinline void gpu_lock(void)")),
 		HasSubstr(
 			"if (unlikely(gpu.railed)) rail_up_locked(__builtin_return_address(0));"));
-	expectBefore(flat(definition(gpu(), "static void rail_up_locked(const void *site)")),
+	expectBefore(flat(definition(gpu(), "void rail_up_locked(const void *site)")),
 		     "gate_open();", "__atomic_store_n(&gpu.railed, 0, __ATOMIC_SEQ_CST);");
 	// rail_up_locked takes these under the caller's gpu.lock: no gpu_lock() caller may hold one
 	const std::string &text = gpu();
@@ -995,7 +1002,7 @@ TEST(GM20BRailSource, RailDownStopsTheGpuCallouts)
 	const std::string down = flat(definition(gpu(), "int tgm_rail_down(void)"));
 	expectBefore(down, "sleep_gate();", "tgm_deadline_suspend();");
 	expectBefore(down, "tgm_deadline_suspend();", "sleep_fences();");
-	expectBefore(flat(definition(gpu(), "static void rail_up_locked(const void *site)")),
+	expectBefore(flat(definition(gpu(), "void rail_up_locked(const void *site)")),
 		     "__atomic_store_n(&gpu.railed, 0, __ATOMIC_SEQ_CST);",
 		     "tgm_deadline_resume();");
 	const std::string power = flat(definition(gpu(), "static void sleep_power_down(void)"));
@@ -1030,7 +1037,7 @@ TEST(GM20BDeviceSource, DisplayParamsArriveByMethodAndByTrap)
 // live list under live_lock, and the client's free() takes every channel off it before it frees its lock.
 TEST(GM20BHangSource, OnlyAConnectionsPushesAreRead)
 {
-	EXPECT_THAT(flat(definition(gpu(), "static void chan_describe(")),
+	EXPECT_THAT(flat(definition(gpu(), "void chan_describe(")),
 		    HasSubstr("CHAN_PUSH_BYTES, chan->vm->connection, note, sizeof(note));"));
 	EXPECT_THAT(flat(definition(client(), "bool AGXDeviceUserClient::setUp(")),
 		    HasSubstr("tgm_vm_claim_connection(vm_, this);"));
@@ -1116,7 +1123,7 @@ TEST(GM20BSurfaceIdentitySource, ImportedSurfaceIdentityOutlivesLegacyCoherency)
 
 TEST(GM20BPresentSource, TypedProducerValidationAndReleaseNeverRunUnderTheIrqEventLock)
 {
-    const auto irq = flat(definition(gpu(), "static void present_fenced("));
+    const auto irq = flat(definition(gpu(), "static inline void present_fenced("));
     EXPECT_THAT(irq, HasSubstr("nvxnu_work_schedule(present.completion_work)"));
     EXPECT_THAT(irq, Not(HasSubstr("switch_gpu_present_tokens_finish")));
     const auto complete = flat(definition(gpu(), "static void present_typed_complete("));
@@ -1143,9 +1150,9 @@ TEST(GM20BPresentSource, ExactFrameSkipsLiveChannelEnumerationEvenWithoutGpuToke
 
 TEST(GM20BVmSource, MappingSerializesPerAddressSpaceWithSuspendAdmission)
 {
-	for (const char *signature : {"static int vm_map(", "int tgm_vm_unmap_pages(",
+	for (const char *signature : {"int tgm_vm_map_raw(", "int tgm_vm_unmap_pages(",
 				      "int switch_gpu_vm_map_volatile(", "void switch_gpu_vm_unmap(",
-				      "static int vm_kmap("}) {
+				      "int vm_kmap("}) {
 		const auto body = flat(definition(gpu(), signature));
 		expectBefore(body, "gate_enter();", "mutex_lock(&vm->map_lock);");
 		expectBefore(body, "mutex_unlock(&vm->map_lock);", "gate_leave();");
@@ -1197,7 +1204,7 @@ TEST(GM20BBoIndexSource, EveryBoListChangeKeepsTheIndex)
 
 TEST(GM20BVisibilitySource, InternalFenceKeepsExecutionOrderAndExternalFencePublishesVisibleFirst)
 {
-	const auto fence = flat(definition(gpu(), "static u32 chan_fence_job("));
+	const auto fence = flat(definition(gpu(), "u32 chan_fence_job("));
 	EXPECT_THAT(fence, HasSubstr("if (external && (l2_on() || chan->kernel))"));
 	expectBefore(fence, "NVB06F_MEM_OP_D_OPERATION_L2_FLUSH_DIRTY", "if (external && chan->visible_cpu)");
 	expectBefore(fence, "lower_32_bits(chan->visible_gpu)", "lower_32_bits(chan->fence_gpu)");

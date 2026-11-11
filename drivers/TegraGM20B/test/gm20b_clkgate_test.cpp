@@ -107,7 +107,7 @@ TEST(Gm20bClkgate, ElcgAutoBehindNvgpusIdleFilter)
 
 TEST(Gm20bClkgate, GpuFollowsNvgpusOrderAroundTheGoldenContext)
 {
-	const std::string gpu = Text(GPU_C);
+	const std::string gpu = Text(GPU_BRINGUP_C) + Text(GPU_POWER_C);
 	const size_t load = gpu.find("\t\t\tret = m2(line, len);\n\t\tif (ret)\n\t\t\treturn ret;\n"
 				     "\t\ttgm_clkgate_load(gpu.device);\n");
 	const size_t golden = gpu.find("\t\tret = m3(line, len);\n", load);
@@ -151,7 +151,7 @@ TEST(Gm20bClkgate, GrResetRunsWithGatingOffAndGetsTheListsBack)
 
 TEST(Gm20bClkgate, TheGuardIsInPlaceBeforeAnyChannel)
 {
-	const std::string gpu = Text(GPU_C);
+	const std::string gpu = Text(GPU_BRINGUP_C);
 	const size_t load = gpu.find(
 		"\t\ttgm_clkgate_load(gpu.device);\n\t\ttgm_clkgate_guard_reset(gpu.device);\n");
 	const size_t golden = gpu.find("\t\tret = m3(line, len);\n");

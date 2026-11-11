@@ -69,7 +69,7 @@ int switch_gpu_clock_ceiling(uint32_t requested_khz, uint32_t *applied_khz)
 	return result;
 }
 
-static int clock_ceiling_restore(void)
+int clock_ceiling_restore(void)
 {
 	int result = 0;
 	if (!idle.clk || !READ_ONCE(idle.clock_available))

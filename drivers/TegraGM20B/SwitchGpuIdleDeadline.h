@@ -9,14 +9,14 @@ static u64 idle_in_flight(void)
 	       __atomic_load_n(&idle.retired, __ATOMIC_SEQ_CST);
 }
 
-static void idle_kicked(u32 first, u32 last)
+void idle_kicked(u32 first, u32 last)
 {
 	__atomic_fetch_add(&idle.kicked, (u64)(last - first) + 1, __ATOMIC_SEQ_CST);
 }
 
 /* The interrupt pass and tgm_chan_del can retire the same channel at once: the cursor moves by CAS, so no seqno is
  * counted twice (one double count would leave in-flight wrapped for the rest of the boot). */
-static void idle_retire(struct tgm_chan *chan, u32 through)
+void idle_retire(struct tgm_chan *chan, u32 through)
 {
 	u32 seen = __atomic_load_n(&chan->gov_done, __ATOMIC_ACQUIRE);
 
@@ -28,7 +28,7 @@ static void idle_retire(struct tgm_chan *chan, u32 through)
 	__atomic_fetch_add(&idle.retired, (u64)(through - seen), __ATOMIC_SEQ_CST);
 }
 
-static void idle_fenced(struct tgm_chan *chan)
+void idle_fenced(struct tgm_chan *chan)
 {
 	idle_retire(chan, tgm_chan_completed(chan));
 }

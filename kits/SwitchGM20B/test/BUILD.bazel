@@ -21,6 +21,23 @@ py_binary(
     srcs = ["driver_constants.py"],
 )
 
+GPU_SOURCES = [
+    "gpu_internal.h",
+    "gpu_inline.h",
+    "gpu_bringup.c",
+    "gpu_clock.c",
+    "gpu_mem.c",
+    "gpu_hang.c",
+    "gpu_stats.c",
+    "gpu_stats_tick.c",
+    "gpu_chan.c",
+    "gpu_sync.c",
+    "gpu_exec.c",
+    "gpu_present.c",
+    "gpu_scrub.c",
+    "gpu_power.c",
+]
+
 # The drivers' hand-written method numbers and fields (STRUCTURE.md D4/D5), read as text: none of these files is
 # compiled or edited here. A define prefix limits a C file to its class constants.
 DRIVER_SOURCES = {
@@ -34,10 +51,9 @@ DRIVER_SOURCES = {
     "raw_mme.h": "//drivers/TegraGM20BMetal:raw/runtime/raw_mme.h",
     "fx_mip.cpp": "//drivers/TegraGM20BMetal:raw/fx/fx_mip.cpp",
     "nvdec.cpp": "//drivers/TegraGM20BMetal:raw/pack/nvdec.cpp",
-    "gpu.c": "//drivers/TegraGM20B:gpu.c",
-}
+} | {f: "//drivers/TegraGM20B:" + f for f in GPU_SOURCES}
 
-DEFINE_PREFIXES = {"gpu.c": "NVB0B5_"}
+DEFINE_PREFIXES = {f: "NVB0B5_" for f in GPU_SOURCES}
 
 genrule(
     name = "driver_constants_h",

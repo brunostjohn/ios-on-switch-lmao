@@ -109,13 +109,13 @@ TEST(RawStamps, UnstampedTimesAreTheHostsWindow)
 // for idle and a fence release that waits too, and it is the command buffer's last method, after the tiled cache's flush
 TEST(RawStamps, TheEndReleaseWaitsNoLongerThanTheKernelsFence)
 {
-    const std::string gpu = SourceText("../../TegraGM20B/gpu.c");
-    EXPECT_THAT(Body(gpu, "static int l2_on(void)"), HasSubstr("return 1;"));
+    const std::string gpu = SourceText("../../TegraGM20B/gpu_inline.h") + SourceText("../../TegraGM20B/gpu_exec.c");
+    EXPECT_THAT(Body(gpu, "static inline int l2_on(void)"), HasSubstr("return 1;"));
     // A submission without explicit visibility (every one this runtime makes) ends with the external fence.
-    EXPECT_THAT(Body(gpu, "static u32 chan_fence(struct tgm_chan *chan)"),
+    EXPECT_THAT(Body(gpu, "static inline u32 chan_fence(struct tgm_chan *chan)"),
                 HasSubstr("return chan_fence_visibility(chan, 1);"));
     EXPECT_THAT(gpu, HasSubstr("int external = !(visibility & SWITCH_GPU_SUBMIT_VISIBILITY_EXPLICIT) ||"));
-    const std::string fence = Body(gpu, "static u32 chan_fence_job(struct tgm_chan *chan, int external, u32 first, u32 next)");
+    const std::string fence = Body(gpu, "u32 chan_fence_job(struct tgm_chan *chan, int external, u32 first, u32 next)");
     EXPECT_THAT(fence, HasSubstr("PUSH_NVSQ(push, NV906F, NVB06F_WFI, 0);"));
     EXPECT_THAT(fence, HasSubstr("NVDEF(NV906F, SEMAPHORED, RELEASE_WFI, EN)"));
     const std::string raw = SourceText("../raw/runtime/raw_gpu.cpp");

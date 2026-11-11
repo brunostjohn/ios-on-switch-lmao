@@ -19,6 +19,14 @@ exports_files(glob(
 ))
 
 filegroup(
+    name = "gpu_sources",
+    srcs = glob([
+        "gpu_*.c",
+        "gpu_*.h",
+    ]),
+)
+
+filegroup(
     name = "all_files",
     srcs = glob(
         ["**"],
@@ -69,7 +77,18 @@ kernel_driver(
         "shim/stubs.c",
         "shim/nvif_nvkm.c",
         "platform.c",
-        "gpu.c",
+        "gpu_bringup.c",
+        "gpu_clock.c",
+        "gpu_mem.c",
+        "gpu_hang.c",
+        "gpu_stats.c",
+        "gpu_stats_tick.c",
+        "gpu_chan.c",
+        "gpu_sync.c",
+        "gpu_exec.c",
+        "gpu_present.c",
+        "gpu_scrub.c",
+        "gpu_power.c",
         "clkgate.c",
         "recover.c",
         "sched.c",

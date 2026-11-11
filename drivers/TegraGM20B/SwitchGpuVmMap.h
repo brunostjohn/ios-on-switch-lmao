@@ -5,9 +5,9 @@
  * l2_on(). A compressible kind maps with 128 KiB pages and the memory's comptags (TegraGM20BComp.h) or is refused: a map
  * demoted to its uncompressed kind, as nvgpu demotes one, would look compressed to its caller, who would go on clearing
  * and resolving it as compressed. */
-static int vm_map(struct tgm_vm *vm, uint64_t va, uint64_t range, struct tgm_mem *mem,
-		  uint64_t offset, uint8_t kind, int read_only, int vol, int gpu_ordered,
-		  uint8_t *page_shift)
+int tgm_vm_map_raw(struct tgm_vm *vm, uint64_t va, uint64_t range, struct tgm_mem *mem,
+		   uint64_t offset, uint8_t kind, int read_only, int vol, int gpu_ordered,
+		   uint8_t *page_shift)
 {
 	struct gf100_vmm_map_v0 args = {
 		.version = 0, .vol = !!vol, .ro = !!read_only, .priv = 0, .kind = kind};
@@ -56,7 +56,7 @@ static int vm_map(struct tgm_vm *vm, uint64_t va, uint64_t range, struct tgm_mem
 int tgm_vm_map(struct tgm_vm *vm, uint64_t va, uint64_t range, struct tgm_mem *mem, uint64_t offset,
 	       uint8_t kind, int read_only)
 {
-	return vm_map(vm, va, range, mem, offset, kind, read_only, !l2_on(), 0, NULL);
+	return tgm_vm_map_raw(vm, va, range, mem, offset, kind, read_only, !l2_on(), 0, NULL);
 }
 
 int tgm_vm_map_ordered(struct tgm_vm *vm, uint64_t va, uint64_t range, struct tgm_mem *mem,
@@ -64,7 +64,7 @@ int tgm_vm_map_ordered(struct tgm_vm *vm, uint64_t va, uint64_t range, struct tg
 {
 	if (!vm->owner)
 		return -EINVAL;
-	return vm_map(vm, va, range, mem, offset, kind, read_only, !l2_on(), 1, page_shift);
+	return tgm_vm_map_raw(vm, va, range, mem, offset, kind, read_only, !l2_on(), 1, page_shift);
 }
 
 int tgm_vm_unmap_pages(struct tgm_vm *vm, uint64_t va, uint64_t range, uint8_t page_shift)
@@ -489,8 +489,7 @@ int tgm_vm_kmap(struct tgm_vm *vm, struct tgm_mem *mem, uint64_t bytes, uint64_t
 	return vm_kmap(vm, mem, bytes, 0, va);
 }
 
-static int vm_kmap(struct tgm_vm *vm, struct tgm_mem *mem, uint64_t bytes, int read_only,
-		   uint64_t *va)
+int vm_kmap(struct tgm_vm *vm, struct tgm_mem *mem, uint64_t bytes, int read_only, uint64_t *va)
 {
 	struct gf100_vmm_map_v0 args = {
 		.version = 0, .vol = 1, .ro = !!read_only, .priv = 0, .kind = 0};
