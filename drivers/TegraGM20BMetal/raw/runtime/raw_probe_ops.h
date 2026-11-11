@@ -25,7 +25,8 @@ struct ProbeSurface {
 
 enum class ProbeOpKind : uint8_t {
     Scale,
-    Fill
+    Fill,
+    Method  // one 3D-class method and its value (gpu.recover.kill_one's illegal one)
 };
 
 struct ProbeOp {
@@ -42,6 +43,7 @@ struct ProbeOp {
     // cache drained and the 3D engine idle before; the 2D engine, then the 3D engine idle and the texture cache
     // invalidated after. The first boots' fills ran without them, as the last GR work after clear-only passes
     bool bracketed = true;
+    uint32_t method = 0, value = 0;
 };
 
 constexpr uint32_t kProbeBracketWords = 2 + 2 + 2 + 2 + 2;
@@ -119,6 +121,8 @@ inline bool probeResolveOp(const ProbeSurface &ms, uint32_t sxLog2, uint32_t syL
 
 inline size_t probeOpWords(const ProbeOp &op)
 {
+    if (op.kind == ProbeOpKind::Method)
+        return 2;
     if (op.kind == ProbeOpKind::Fill)
         return 2 + probe_ops_detail::kSurfaceWords + 2 + 5 + 4 + 5 + probe_ops_detail::kReferenceFillWords;
     return 2 + 2 * probe_ops_detail::kSurfaceWords + 2 + 2 + 3 * 5;
@@ -126,6 +130,10 @@ inline size_t probeOpWords(const ProbeOp &op)
 
 inline void emitProbeOp(Push &p, const ProbeOp &op)
 {
+    if (op.kind == ProbeOpKind::Method) {
+        p.m(op.method, op.value, SUBC_3D);
+        return;
+    }
     p.m(NV902D_SET_DST_COLOR_RENDER_TO_ZETA_SURFACE, 0, SUBC_2D);
     probe_ops_detail::surface(p, NV902D_SET_DST_FORMAT, op.dst);
     if (op.kind == ProbeOpKind::Fill) {

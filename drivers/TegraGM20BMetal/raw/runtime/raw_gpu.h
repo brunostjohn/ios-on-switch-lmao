@@ -1495,6 +1495,7 @@ public:
         // passes given a zcull region, and the regions a draw's state invalidated (raw_zcull.h)
         std::atomic<uint64_t> zcullPasses{0}, zcullInvalidations{0};
         std::atomic<uint64_t> splitPrologues{0};  // split draws' prologue launches (raw_split.cpp)
+        std::atomic<uint64_t> reopenTicks{0};     // the last reopen that made a channel, mach_absolute_time
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
         std::atomic<uint64_t> splitLaunches{0};
         std::atomic<uint64_t> interlockDraws{0}, storageBarriers{0};

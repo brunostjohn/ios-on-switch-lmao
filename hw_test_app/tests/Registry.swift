@@ -57,4 +57,7 @@ public enum Registry {
         + cpuAndSystem + [RawShareTest()]
         // Drives an NVDEC output mode nothing else uses: after every shared test.
         + [DisplayBufferTest()]
+
+    /// Kills the app's raw channel: each app runs it after all its other tests, so a failed recovery spoils none of them.
+    public static let recovery: [any HWTest] = [RecoverKillOneTest()]
 }

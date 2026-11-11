@@ -119,16 +119,27 @@ static raw::ProbeSurface probeSurface(const raw::Texture &t, uint32_t fmt2d)
 
 // 2D-engine work at the open blit encoder (raw_probe_ops.h): {kind: "scale"|"fill", read, written: textures, dx, dy, dw,
 // dh, and for scale du, dv, sx, sy (32.32), bilinear, corner, fmt2d (0: each texture's own); for fill colorFormat,
-// color0..color3, reference (the DDX's state first); unbracketed: no waits around it}. nil, else why not
+// color0..color3, reference (the DDX's state first); unbracketed: no waits around it}. Or {kind: "method", method, value,
+// written}: one 3D-class method there. nil, else why not
 - (NSString *)switchRawProbeEngine:(NSDictionary *)op
 {
     RMTexture *written = rawTexture(op[@"written"]), *read = rawTexture(op[@"read"]);
-    const bool fill = [op[@"kind"] isEqual:@"fill"];
-    if (!written || (!fill && !read))
+    const bool fill = [op[@"kind"] isEqual:@"fill"], method = [op[@"kind"] isEqual:@"method"];
+    if (!written || (!fill && !method && !read))
         return @"a texture the raw path does not hold (memoryless, a view, or refused)";
     std::lock_guard<std::mutex> lock(_lock);
     if (_committed || !_encOpen || ![_active isKindOfClass:[RMBlitEncoder class]])
         return @"no blit encoder open";
+    if (method) {
+        raw::ProbeOp o;
+        o.kind = raw::ProbeOpKind::Method;
+        o.method = uint32_t(number(op, @"method"));
+        o.value = uint32_t(number(op, @"value"));
+        if (o.method >= 0x8000 || o.method % 4)
+            return @"a 3D-class method below 0x8000";
+        _probeOps.push_back({_encAt, o, nil, written});
+        return nil;
+    }
     raw::ProbeOp o;
     o.kind = fill ? raw::ProbeOpKind::Fill : raw::ProbeOpKind::Scale;
     const uint32_t fmt2d = uint32_t(number(op, @"fmt2d"));

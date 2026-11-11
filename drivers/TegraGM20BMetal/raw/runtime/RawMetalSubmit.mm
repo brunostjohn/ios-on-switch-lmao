@@ -25,6 +25,7 @@ bool m2vClear()
 void orderRefused(const char *what, int kr)
 {
     once([NSString stringWithFormat:@"CPU-ordered: the kernel refused Order (%s, 0x%x)", what, kr]);
+    RAW_DIAGNOSTIC(gRM->stats.cpuOrdered++);
     std::lock_guard<std::mutex> m(gRM->m2vLock);
     gRM->gpuOrder = false;
     gRM->orderRefusedAt = gRM->raw->stats.reopens.load(std::memory_order_relaxed);

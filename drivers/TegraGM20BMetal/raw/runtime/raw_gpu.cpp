@@ -3076,6 +3076,9 @@ std::string Device::vaOwner(uint64_t va)
 
 bool Device::reopen()
 {
+#if SWITCH_RAW_DIAGNOSTICS
+    const uint64_t began = mach_absolute_time();
+#endif
     if (channel_) {  // none after a reopen the kernel refused: that channel was retired then
         keptSlot_ = fence_;
         Killed live = {};
@@ -3102,6 +3105,7 @@ bool Device::reopen()
     if (fence_ != keptSlot_)
         forgetKept();
     contextless_ = false;
+    RAW_DIAGNOSTIC(stats.reopenTicks = mach_absolute_time() - began);
     return true;
 }
 
