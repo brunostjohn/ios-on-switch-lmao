@@ -85,8 +85,8 @@ static inline bool tegra_nvenc_h265_zero(const void *p, size_t size)
 static inline const char *tegra_nvenc_h265_picture(const nvenc_h265_pic_control_s *pc, uint32_t ctbs, int *slot)
 {
     const bool idr = pc->pic_type == TEGRA_NVENC_H265_PIC_IDR;
-    const bool p = pc->pic_type == TEGRA_NVENC_H265_PIC_P && pc->nal_unit_type == TEGRA_NVENC_H265_TRAIL_R &&
-                   pc->ref_pic_flag;
+    const bool p =
+        pc->pic_type == TEGRA_NVENC_H265_PIC_P && pc->nal_unit_type == TEGRA_NVENC_H265_TRAIL_R && pc->ref_pic_flag;
     const bool idrNal =
         pc->nal_unit_type == TEGRA_NVENC_H265_IDR_W_RADL || pc->nal_unit_type == TEGRA_NVENC_H265_IDR_N_LP;
     if (!(idr ? idrNal : p) || pc->nuh_layer_id || pc->nuh_temporal_id_plus1 != 1)
