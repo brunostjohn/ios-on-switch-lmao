@@ -15,8 +15,8 @@ static void checkFetch(RMRenderEncoder *e, MTLPrimitiveType type, NSUInteger cou
     if (!pl || !e->_pipe || !e->_pipe->_raw || e->_cb->_encRefused)
         return;
     const raw::FetchRefusal refusal =
-        raw::fetchRefusal(raw::fetchesOwnColor(pl->fetchBits, pl->writeBits, pl->storageBits), pl->caTransform,
-                          pl->primitiveId, {uint32_t(type), uint32_t(count), uint32_t(instances), indirect, indexed});
+        raw::fetchRefusal(raw::fetchesOwnColor(pl->fetchBits, pl->writeBits, pl->storageBits), pl->primitiveId,
+                          {uint32_t(type), uint32_t(count), uint32_t(instances), indirect, indexed});
     if (refusal == raw::FetchRefusal::None)
         return;
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG

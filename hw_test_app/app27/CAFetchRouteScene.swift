@@ -112,7 +112,7 @@ struct CAFetchRouteScene: GPUScene {
             let interlocked = moved("fetch_interlocked")
             let refused = after.keys.filter { $0.hasPrefix("fetch_record.") || $0.hasPrefix("fetch_encode.") }
                 .reduce(0) { $0 + moved($1) }
-            let ordered = moved("fetch_whole") + moved("fetch_sequential")
+            let ordered = moved("fetch_sequential")
             // a pass the raw path refuses as it begins (m2v:pass:...) records no draw, so no fetch counter can move
             result.expect(
                 timing.path.hasPrefix("m2v:pass:") || interlocked + refused + ordered > 0,
