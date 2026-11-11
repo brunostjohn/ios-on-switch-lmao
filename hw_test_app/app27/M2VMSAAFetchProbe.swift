@@ -155,11 +155,9 @@ enum M2VMSAAFetchProbe {
         }
         if arm.target {
             let texel = arm.fetches ? CAFetchRouteScene.expected(Array(0..<triangles)) : stepColor(triangles - 1)
-            let compared = X1TwodProbes.Compared(
-                picture, Patterns.repeated(texel, count: size * size), width: size, bytesPerTexel: 4)
-            if compared.wrong > 0 {
+            if let first = firstDifference(picture, Patterns.repeated(texel, count: size * size), width: size) {
                 ran.verdict = "wrong"
-                ran.first = "\(arm.name)@\(compared.first)"
+                ran.first = "\(arm.name)@\(first)"
             }
         }
         if let kill = scan.errors.first {
@@ -181,6 +179,17 @@ enum M2VMSAAFetchProbe {
             pass.colorAttachments[0].storeAction = .store
             commands.makeRenderCommandEncoder(descriptor: pass)!.endEncoding()
         }
+    }
+
+    /// The first BGRA8 texel of `got` that differs from `want`, as x,y:got>want, or nil when every texel matches
+    static func firstDifference(_ got: [UInt8], _ want: [UInt8], width: Int) -> String? {
+        for t in 0..<min(got.count, want.count) / 4 {
+            let range = t * 4..<(t + 1) * 4
+            guard got[range] != want[range] else { continue }
+            let hex = { (bytes: ArraySlice<UInt8>) in bytes.map { String(format: "%02x", $0) }.joined() }
+            return "\(t % width),\(t / width):\(hex(got[range]))>\(hex(want[range]))"
+        }
+        return nil
     }
 
     /// msaa_probe_step's colour over nothing, stored as BGRA8
