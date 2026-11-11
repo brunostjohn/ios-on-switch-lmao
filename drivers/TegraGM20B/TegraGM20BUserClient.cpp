@@ -2682,6 +2682,7 @@ IOReturn AGXDeviceUserClient::waitFence(const TegraGM20BAbiWaitFence *in)
 		if (chan) {
 			waiter = tgm_chan_waiter(chan);
 			seq = tgm_waiter_seq(waiter);
+			tgm_chan_want(chan, in->seqno);
 		}
 		const uint64_t now = nowNs();
 		if (!chan) {

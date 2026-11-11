@@ -1211,7 +1211,8 @@ struct tgm_chan {
 	} queued[CHAN_QUEUED];
 
 	u32 gov_done;   /* idle clock: last seqno counted retired (idle_retire) */
-	u32 woken_done; /* the completed seqno its waiters were last woken for (chan_wake_waiters) */
+	u32 woken_done; /* the completed seqno chan_wake_waiters last looked at */
+	u64 wanted;     /* the lowest seqno a fence waiter sleeps for (switch_gpu_waiter_want) */
 	void (*fenced)(void *arg); /* tgm_chan_on_fence */
 	void *fenced_arg;
 	u32 stat_done; /* stats: last seqno whose latency was counted, submit times by seqno */
@@ -3499,8 +3500,11 @@ static void high_fenced(struct tgm_chan *chan, u32 from, u32 done)
 static void present_fenced(struct tgm_chan *chan);
 static void scrub_fenced(struct tgm_chan *chan);
 
+#include "SwitchGpuActiveIrq.h"
+
 /* The interrupt pass's own nvxnu_wake() at its end wakes the kernel's waits (channel teardown, sync_for_cpu, system
- * sleep's drain); a channel's fence waiters sleep on its word and wake only when its fence moved. */
+ * sleep's drain); a channel's fence waiters sleep on its word and wake only once its fence reaches the lowest seqno one
+ * of them waits for. */
 static void chan_wake_waiters(struct tgm_chan *chan)
 {
 	u32 done = tgm_chan_completed(chan);
@@ -3510,10 +3514,15 @@ static void chan_wake_waiters(struct tgm_chan *chan)
 	chan->woken_done = done;
 	if (SWITCH_FRAME_TIMELINE)
 		nvxnu_kdebug(SWITCH_KDBG_GPU_DONE, chan->chid, done, chan->critical);
-	chan_wake_all_waiters(chan);
+	if (switch_gpu_waiter_reached(&chan->wanted, done))
+		chan_wake_all_waiters(chan);
 }
 
-#include "SwitchGpuActiveIrq.h"
+void tgm_chan_want(struct tgm_chan *chan, uint32_t seqno)
+{
+	switch_gpu_waiter_want(&chan->wanted, seqno);
+}
+
 #include "SwitchGpuChannelCompletion.h"
 
 void tgm_chan_on_fence(struct tgm_chan *chan, void (*fenced)(void *arg), void *arg)

@@ -57,12 +57,13 @@ int tgm_stage(void);
 void tgm_get_info(struct tgm_info *info);
 uint64_t tgm_timestamp_ns(void);
 /* Waiting for a channel's fence (interrupt-driven from stage 1 on; no polled mode): with the channel valid, take
- * waiter = tgm_chan_waiter(chan) and seq = tgm_waiter_seq(waiter), then test the fence; tgm_waiter_idle() sleeps until
- * that channel's fence moves, it is killed or destroyed (1), or deadline_ns (the absolutetime_to_nanoseconds(
- * mach_absolute_time()) clock) passes (0). The waiter stays valid after the channel is gone. A fence found complete
- * after tgm_waiter_idle() returned 0 was not announced by its interrupt: tgm_waiter_unwoken() allows 50 ms for the
- * wake, then panics. */
+ * waiter = tgm_chan_waiter(chan) and seq = tgm_waiter_seq(waiter), publish the seqno (tgm_chan_want), then test the
+ * fence; tgm_waiter_idle() sleeps until that channel's fence reaches the lowest seqno published, it is killed or
+ * destroyed (1), or deadline_ns (the absolutetime_to_nanoseconds(mach_absolute_time()) clock) passes (0). The waiter
+ * stays valid after the channel is gone. A fence found complete after tgm_waiter_idle() returned 0 was not announced by
+ * its interrupt: tgm_waiter_unwoken() allows 50 ms for the wake, then panics. */
 uint32_t tgm_chan_waiter(struct tgm_chan *chan);
+void tgm_chan_want(struct tgm_chan *chan, uint32_t seqno);
 uint32_t tgm_waiter_seq(uint32_t waiter);
 int tgm_waiter_idle(uint32_t waiter, uint32_t seq, uint64_t deadline_ns);
 void tgm_waiter_unwoken(uint32_t waiter, uint32_t seq, uint32_t seqno);
