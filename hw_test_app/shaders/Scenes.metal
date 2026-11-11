@@ -189,19 +189,30 @@ struct TexsF16Out {
 };
 
 /// gpu.raw.texs_f16: one texel, sampled through two names of the same texture (bound textures, never one fetch), at the
-/// pixel's centre plus `offset` texels: TEXS's F32 form, and its F16 form's bits
-fragment TexsF16Out texs_f16_probe(TexsF16In in [[stage_in]], texture2d<float> first [[texture(0)]],
-                                   texture2d<float> second [[texture(1)]], constant float2 &offset [[buffer(0)]],
-                                   constant uint &linear [[buffer(1)]])
+/// pixel's centre plus `offset` texels: TEXS's F32 form, and its F16 form's bits. One function per filter, so each
+/// fetch's only use is the rounding NAK folds.
+static TexsF16Out texs_f16(TexsF16In in, texture2d<float> first, texture2d<float> second, float2 offset, sampler s)
 {
-    constexpr sampler point(coord::pixel, filter::nearest, address::clamp_to_edge);
-    constexpr sampler bilinear(coord::pixel, filter::linear, address::clamp_to_edge);
     const float2 at = in.position.xy + offset;
     TexsF16Out out;
-    out.f32 = linear ? first.sample(bilinear, at) : first.sample(point, at);
-    out.f16 = as_type<ushort4>(half4(linear ? second.sample(bilinear, at) : second.sample(point, at)));
+    out.f32 = first.sample(s, at);
+    out.f16 = as_type<ushort4>(half4(second.sample(s, at)));
     out.proof = as_type<uint>(at.x) == TEXS_F16_PROBE_MARKER ? 0u : TEXS_F16_PROOF_MARKER;
     return out;
+}
+
+fragment TexsF16Out texs_f16_point(TexsF16In in [[stage_in]], texture2d<float> first [[texture(0)]],
+                                   texture2d<float> second [[texture(1)]], constant float2 &offset [[buffer(0)]])
+{
+    constexpr sampler point(coord::pixel, filter::nearest, address::clamp_to_edge);
+    return texs_f16(in, first, second, offset, point);
+}
+
+fragment TexsF16Out texs_f16_linear(TexsF16In in [[stage_in]], texture2d<float> first [[texture(0)]],
+                                    texture2d<float> second [[texture(1)]], constant float2 &offset [[buffer(0)]])
+{
+    constexpr sampler bilinear(coord::pixel, filter::linear, address::clamp_to_edge);
+    return texs_f16(in, first, second, offset, bilinear);
 }
 
 /// gpu.raw.texs_f16: the same fetches by a compute kernel, whose textures stay bindless (TEX.B)

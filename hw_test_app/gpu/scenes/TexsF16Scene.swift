@@ -9,9 +9,11 @@ struct TexsF16Scene: GPUScene {
     let id = "gpu.raw.texs_f16"
     let name = "TEXS.F16 against round-to-nearest-even of its F32 form; bound TEXS against TEX.B"
 
-    /// (filter, offset in texels from the pixel's centre)
+    /// (name, bilinear, offset in texels from the pixel's centre). metal2vulkan fetches a nearest pixel-coordinate sample
+    /// as a texel load, so "point" decides TLDS.F16 and the bilinear ones TEXS.F16 ("centre": each texel exactly).
     static let samplings: [(String, UInt32, SIMD2<Float>)] = [
-        ("point", 0, SIMD2(0, 0)), ("quarter", 1, SIMD2(0.25, 0)), ("half", 1, SIMD2(0.5, 0.5)),
+        ("point", 0, SIMD2(0, 0)), ("centre", 1, SIMD2(0, 0)), ("quarter", 1, SIMD2(0.25, 0)),
+        ("half", 1, SIMD2(0.5, 0.5)),
     ]
 
     func run(_ gpu: GPU) async throws -> SceneResult {
@@ -54,12 +56,12 @@ struct TexsF16Scene: GPUScene {
         source.replace(
             region: MTLRegionMake2D(0, 0, width, height), mipmapLevel: 0, withBytes: texels,
             bytesPerRow: width * texelBytes)
-        let pipeline = try gpu.render(fragment: "texs_f16_probe", format: .rgba32Float) { d in
-            d.colorAttachments[1].pixelFormat = .rgba16Uint
-            d.colorAttachments[2].pixelFormat = .r32Uint
-        }
         let bindless = try gpu.compute("texs_f16_bindless")
         for (sampling, linear, offset) in Self.samplings {
+            let pipeline = try gpu.render(fragment: linear == 1 ? "texs_f16_linear" : "texs_f16_point", format: .rgba32Float) {
+                $0.colorAttachments[1].pixelFormat = .rgba16Uint
+                $0.colorAttachments[2].pixelFormat = .r32Uint
+            }
             let f32 = try gpu.texture(.rgba32Float, width, height, usage: [.renderTarget])
             let f16 = try gpu.texture(.rgba16Uint, width, height, usage: [.renderTarget])
             let proof = try gpu.texture(.r32Uint, width, height, usage: [.renderTarget])
@@ -79,7 +81,6 @@ struct TexsF16Scene: GPUScene {
                 encoder.setFragmentTexture(source, index: 0)
                 encoder.setFragmentTexture(source, index: 1)
                 encoder.setFragmentBytes(&at, length: MemoryLayout<SIMD2<Float>>.stride, index: 0)
-                encoder.setFragmentBytes(&filter, length: 4, index: 1)
                 encoder.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4)
                 encoder.endEncoding()
                 let compute = commands.makeComputeCommandEncoder()!

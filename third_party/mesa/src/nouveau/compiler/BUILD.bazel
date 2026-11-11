@@ -62,7 +62,11 @@ mesa_cc_library(
             "gen:src/util",
             "gen:src/util/format",
         ],
-    ),
+    ) + select({
+        # nak_nir_lower_tex_sm50.c's TEXS.F16 probe, debug builds only
+        "//bazel:release": ["-DSWITCH_DEBUG=0"],
+        "//conditions:default": ["-DSWITCH_DEBUG=1"],
+    }),
     sources = [
         "nak_nir_algebraic.c",
         "//third_party/mesa/src/nouveau/headers:nv_push_cl85b5.c",
