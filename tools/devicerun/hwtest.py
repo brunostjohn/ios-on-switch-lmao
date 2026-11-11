@@ -114,6 +114,7 @@ TESTS: dict[str, bool] = {
             'gpu.raw.private_compression',
             'gpu.raw.alpha_to_coverage',
             'gpu.compile.shared',
+            'gpu.sched.long_draw_bands',
             'gpu.path.job_visibility',
             'gpu.path.lean_copy',
             'gpu.path.control_reserve',
