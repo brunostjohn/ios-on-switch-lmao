@@ -21,37 +21,6 @@ volatile uint32_t gConnections;
 constexpr uint64_t kPrefaultMaxBytes = 256ULL << 10;
 }  // namespace
 
-namespace tgm_uc
-{
-
-IOReturn ioreturn(int err)
-{
-	switch (err) {
-	case 0:
-		return kIOReturnSuccess;
-	case -12:
-		return kIOReturnNoMemory;  // ENOMEM
-	case -22:
-		return kIOReturnBadArgument;  // EINVAL
-	case -16:
-		return kIOReturnBusy;  // EBUSY
-    case SWITCH_GPU_BACKING_DEPENDENCY_FAILED:
-        return kIOReturnAborted;
-	case -5:
-		return kIOReturnNotResponding;  // EIO
-	case -110:
-		return kIOReturnTimeout;  // ETIMEDOUT
-    case SWITCH_GPU_BACKING_STALE:
-	case -19:
-		return kIOReturnNotReady;  // ENODEV
-	case -28:
-		return kIOReturnNoResources;  // ENOSPC
-	default:
-		return kIOReturnError;
-	}
-}
-}  // namespace tgm_uc
-
 OSDefineMetaClassAndStructors(AGXDeviceUserClient, IOUserClient)
 
 #include "SwitchGpuClientRetirement.h"

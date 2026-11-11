@@ -5,23 +5,6 @@
 #define CHAN_PRESENT 1 /* the GPU present's channel */
 struct present_state present = {.lock = {NULL}};
 
-/* Whether a writer the present in flight waited for was killed before the submission it waited for ended. A wait on every
- * user channel (no address space imports the surface) names no writer, so no kill there is the frame's. Read before the
- * present is released: the next one rewrites the list. */
-int present_source_lost(void)
-{
-	u32 i = 0;
-
-	if (!present.writers)
-		return 0;
-	for (i = 0; i < present.waits; i++) {
-		if (present.wait[i].fence &&
-		    tgm_fence_lost(present.wait[i].fence, present.wait[i].seqno))
-			return 1;
-	}
-	return 0;
-}
-
 static void present_typed_complete(void *unused)
 {
 	void (*done)(void *, int);
@@ -140,28 +123,6 @@ static void present_deadline(void *arg)
 }
 
 #if TGM_STATS
-/* stats, from stats_fences (interrupt pass) before present_fenced completes the present: PTIMER from the end of
- * the last user submission present `seqno` waited for to the copy's start (its start stamp, after the acquires), ~0 when
- * it waited for none or a stamp is missing. The wait list is that present's: the next is queued only after
- * present_fenced. A user channel's stamps are in its ring, pool memory that stays mapped even after the channel is
- * gone; a reused page fails the payload check. */
-u64 present_gap(u32 seqno, u64 start)
-{
-	u64 last = 0;
-	u32 i = 0;
-
-	if (present.stamped != seqno || !present.waits)
-		return ~0ULL;
-	for (i = 0; i < present.waits; i++) {
-		volatile struct tgm_stamp *end = present.wait_end[i];
-		if (!end || end->payload != present.wait[i].seqno)
-			return ~0ULL;
-		if (end->ns > last)
-			last = end->ns;
-	}
-	return start >= last ? start - last : 0;
-}
-
 void present_stats(u32 *presents, u64 *sum, u64 *max)
 {
 	*presents = __atomic_exchange_n(&present.presents, 0, __ATOMIC_RELAXED);

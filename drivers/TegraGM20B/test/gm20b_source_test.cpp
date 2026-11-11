@@ -46,7 +46,7 @@ const std::string &gpu()
 					 "chan", "sync", "exec", "present", "scrub", "power"})
 			units += SourceText(std::string("../gpu_") + unit + ".c");
 		return units + SourceText("../gpu_internal.h") + SourceText("../gpu_inline.h") +
-		       SourceText("../SwitchGpuVmMap.h") +
+		       SourceText("../gpu_fenced.h") + SourceText("../SwitchGpuVmMap.h") +
 		       SourceText("../SwitchGpuChannelCompletion.h");
 	}();
 	return source;

@@ -86,35 +86,6 @@ static void scrub_work(void *arg)
 	gate_leave();
 }
 
-/* From the scrub channel's nonstall interrupt: every range whose fence passed goes back clean; then more claims. */
-void scrub_fenced(struct tgm_chan *chan)
-{
-	u32 done = tgm_chan_completed(chan);
-	u32 tail = scrub.tail;
-	u32 head = __atomic_load_n(&scrub.head, __ATOMIC_ACQUIRE);
-	u64 now = stats_on() ? nvxnu_nanotime() : 0;
-	u64 took = 0;
-	int freed = 0;
-
-	while (tail != head && (s32)(done - scrub.job[tail % SCRUB_JOBS].seqno) >= 0) {
-		u32 slot = tail % SCRUB_JOBS;
-		nvxnu_pool_free_zeroed(scrub.job[slot].pa, scrub.job[slot].bytes);
-		__atomic_fetch_sub(&scrub.inflight, scrub.job[slot].bytes, __ATOMIC_RELAXED);
-        if (stats_on()) {
-            took = now - scrub.job[slot].queued;
-            __atomic_fetch_add(&scrub.n, 1, __ATOMIC_RELAXED);
-            __atomic_fetch_add(&scrub.bytes, scrub.job[slot].bytes, __ATOMIC_RELAXED);
-            stats_add(&scrub.ns, &scrub.max_ns, took);
-        }
-		__atomic_store_n(&scrub.tail, ++tail, __ATOMIC_RELEASE);
-		freed = 1;
-	}
-	if (tail == head)
-		nvxnu_work_cancel(scrub.deadline);
-	if (freed && nvxnu_pool_dirty_free_pages())
-		nvxnu_work_schedule(scrub.work);
-}
-
 /* A range not back SCRUB_NS after it was queued: the client channel the GPU is stuck on is killed and the range gets
  * SCRUB_NS more; with none, one line and a panic. */
 static void scrub_deadline(void *arg)

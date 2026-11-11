@@ -196,7 +196,6 @@ int clk_raise(char *line, unsigned int len)
  * (the divider not reading back, the PLL not locked, the clock not at the rate) logs one line and leaves the GPU at
  * 768 MHz for the boot. */
 #define IDLE_DROP_NS (500ULL * 1000000ULL)
-#define IDLE_LOG_NS (10ULL * 1000000000ULL)
 #define GPCPLL_CFG_R 0x137000  /* 0 enable, 17 lock */
 #define GPC2CLK_OUT_R 0x137250 /* VCO divider 13:8: 0 = 1:1, 2 = 1:2 */
 #define SEL_VCO_R 0x137100     /* 0 = GPU on bypass, 1 = on GPCPLL */
@@ -374,49 +373,6 @@ void tegra_gm20b_perf_hint(unsigned int hint)
 		nvxnu_work_schedule(idle.raise_w);
 }
 
-#if TGM_STATS
-/* The periodic line (log only), from a kick at most every IDLE_LOG_NS. */
-void idle_stats(void)
-{
-	u64 now = 0;
-	u64 span = 0;
-	u64 low = 0;
-	u64 sum = 0;
-	u64 max = 0;
-	u32 drops = 0;
-	u32 raises = 0;
-	u32 hinted = 0;
-
-	if (!READ_ONCE(idle.on) || nvxnu_nanotime() - READ_ONCE(idle.log_start) < IDLE_LOG_NS ||
-	    !nvxnu_mutex_trylock(idle.clk))
-		return;
-	now = nvxnu_nanotime();
-	if (now - idle.log_start < IDLE_LOG_NS) {
-		nvxnu_mutex_unlock(idle.clk);
-		return;
-	}
-	span = now - idle.log_start;
-	low = idle.low_ns + (idle.low ? now - idle.low_since : 0);
-	if (idle.low)
-		idle.low_since = now;
-	sum = idle.raise_sum;
-	max = idle.raise_max;
-	drops = idle.drops;
-	raises = idle.raises;
-	hinted = idle.hinted;
-	idle.low_ns = idle.raise_sum = idle.raise_max = 0;
-	idle.drops = idle.raises = idle.hinted = 0;
-	idle.log_start = now;
-	nvxnu_mutex_unlock(idle.clk);
-	nvxnu_stats("tegra-gm20b: idle clock %llu ms: %llu.%llu%% at %u kHz, %u drops, %u raises "
-		    "(%u by a hint), "
-		    "raise mean %llu ns max %llu ns; %llu in flight; now %d kHz",
-		    span / 1000000, low * 100 / span, low * 1000 / span % 10, idle.idle_khz, drops,
-		    raises, hinted, raises ? sum / raises : 0, max, idle_in_flight(),
-		    nvkm_clk_read(gpu.device->clk, nv_clk_src_gpc));
-}
-#endif
-
 /* GPC 0's clock counter, as clk_measure reads it (NCGPCCLK cycles over 800 cycles of the 38.4 MHz reference, about
  * 21 us): started, waited for, read. In kHz of what it counts (about twice gpcclk if it counts gpc2clk). 0 if it could
  * not be read. idle_start only, before any client. */
@@ -530,45 +486,4 @@ void idle_start(void)
 }
 
 /* The last high completion, by both clocks (interrupt pass only) */
-static u64 high_end_ns, high_end_pt;
-
-/* A high channel's fence moved from `from` to `done` (interrupt pass): the GPU time of what completed, for the
- * compositor's time per frame (deadline.c): from its start stamp to its end stamp (debug kernels) or now, or for the
- * present (no stamp outside debug kernels) from its kick, then biased by any app on the GPU at its kicks. And each job's
- * start stamp after an app channel it was queued behind: the time that app took to leave the GPU (its preemption
- * latency, hold.c). A job with acquires before its stamp started late for its own reasons. A pass covers whole jobs (only
- * a job's own fence interrupts) unless another channel's interrupt ran it mid-job. */
-void high_fenced(struct tgm_chan *chan, u32 from, u32 done)
-{
-	volatile struct tgm_stamps *st = chan_stamps(chan, from + 1);
-	volatile struct tgm_stamps *last = chan_stamps(chan, done);
-	struct switch_gpu_kicked_job jobs[SWITCH_GPU_JOBS];
-	u64 now = nvxnu_nanotime();
-	u64 now_pt = nvkm_timer_read(gpu.device->timer);
-	u64 sample = 0;
-	u64 end_pt = 0;
-	u32 n = switch_gpu_jobs_span(&chan->jobs, from + 1, done, jobs);
-	int biased = !n;
-	u32 i = 0;
-
-	tgm_deadline_clock(now, now_pt);
-	end_pt = stats_on() && last->end.payload == done ? last->end.ns : now_pt;
-	if (!chan->kernel && n && st->start.payload == from + 1)
-		sample = tgm_deadline_pt_ns(tgm_gpu_span(end_pt, st->start.ns, high_end_pt));
-	if (!sample) {
-		for (i = 0; !biased && i < n; i++)
-			biased = jobs[i].app;
-		sample = tgm_gpu_span(now, n ? jobs[0].kick_ns : 0, high_end_ns);
-	}
-	high_end_ns = now;
-	high_end_pt = end_pt;
-	tgm_deadline_progress(sample, biased);
-	if (chan->kernel)
-		return;
-	for (i = 0; i < n; i++) {
-		st = chan_stamps(chan, jobs[i].first);
-		if ((s32)(jobs[i].first - from) > 0 && jobs[i].behind >= 0 && !jobs[i].waits &&
-		    st->start.payload == jobs[i].first)
-			tgm_hold_sampled(jobs[i].behind, jobs[i].asked_pt, st->start.ns);
-	}
-}
+u64 high_end_ns, high_end_pt;

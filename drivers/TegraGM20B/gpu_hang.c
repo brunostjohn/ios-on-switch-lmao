@@ -2,54 +2,6 @@
 // Channel progress, hang detection, client fault isolation and recovery.
 #include "gpu_internal.h"
 
-uint32_t tgm_chan_submitted(struct tgm_chan *chan)
-{
-	return chan->submitted;
-}
-
-uint32_t tgm_chan_completed(struct tgm_chan *chan)
-{
-	return READ_ONCE(*chan->fence_cpu);
-}
-
-uint32_t tgm_chan_error(struct tgm_chan *chan)
-{
-	return chan->error;
-}
-
-/* The target is released after the caller's snapshot of each channel's submitted seqno and acquired before
- * chan_exec moves its channel's: a submission that waits for this epoch is never in that snapshot. */
-void tgm_vm_bind_wait(struct tgm_vm *vm, uint64_t va, const volatile uint32_t *cpu, uint32_t target)
-{
-	WRITE_ONCE(vm->bind_va, va);
-	__atomic_store_n(&vm->bind_target, target, __ATOMIC_RELEASE);
-	__atomic_store_n(&vm->bind_cpu, cpu, __ATOMIC_RELEASE);
-}
-
-uint32_t tgm_chan_settled(struct tgm_chan *chan, int *failed)
-{
-	const u32 done = __atomic_load_n(chan->fence_cpu, __ATOMIC_ACQUIRE);
-
-	*failed = READ_ONCE(chan->error) != 0;
-	return done;
-}
-
-uint64_t tgm_chan_fault_va(struct tgm_chan *chan)
-{
-	return READ_ONCE(chan->fault_va);
-}
-#if TGM_STATS
-uint64_t tgm_chan_killed_ns(struct tgm_chan *chan)
-{
-	return READ_ONCE(chan->killed_ns);
-}
-
-#endif
-uint32_t tgm_chan_waiter(struct tgm_chan *chan)
-{
-	return (uint32_t)(chan->id % TGM_WAITERS);
-}
-
 /* One line of what the GPU is doing about a channel: owner, hardware channel id, error, completed/submitted fence and
  * how long ago the last one was kicked; GPFIFO GET/PUT as the host sees them (USERD 0x88/0x8c) and the PUT the kernel
  * wrote; PGRAPH_STATUS (0x400700, bit 0 busy), PFIFO engine 0 (GR) status (0x2640); PBDMA 0: status (0x3080, bits 13-15

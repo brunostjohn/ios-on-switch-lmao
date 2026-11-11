@@ -65,6 +65,13 @@ static inline int vm_imports(struct tgm_vm *vm, u64 pa) /* live_lock held */
 	return 0;
 }
 
+/* gpu_sync.c defines these for the rest of the driver; the units inline these copies of them (gnu_inline: a copy is
+ * never emitted), as gpu.c inlined its own. Keep the two the same. */
+extern inline __attribute__((gnu_inline)) uint32_t tgm_chan_completed(struct tgm_chan *chan)
+{
+	return READ_ONCE(*chan->fence_cpu);
+}
+
 /* 1 if the address space has a bind its channels' next submission must wait for (and *target, *va set) */
 static inline int bind_pending(const struct tgm_vm *vm, u32 *target, u64 *va)
 {
@@ -75,6 +82,11 @@ static inline int bind_pending(const struct tgm_vm *vm, u32 *target, u64 *va)
 	*target = __atomic_load_n(&vm->bind_target, __ATOMIC_ACQUIRE);
 	*va = READ_ONCE(vm->bind_va);
 	return (s32)(__atomic_load_n(cpu, __ATOMIC_ACQUIRE) - *target) < 0;
+}
+
+extern inline __attribute__((gnu_inline)) uint32_t tgm_chan_waiter(struct tgm_chan *chan)
+{
+	return (uint32_t)(chan->id % TGM_WAITERS);
 }
 
 static inline void chan_wake_all_waiters(struct tgm_chan *chan)
@@ -129,69 +141,6 @@ static inline u64 chan_stamps_va(struct tgm_chan *chan, u32 seqno)
 	       (u64)(seqno % CHAN_NSTAMPS) * sizeof(struct tgm_stamps);
 }
 
-static inline void stats_fences(struct tgm_chan *chan)
-{
-	u32 done = tgm_chan_completed(chan);
-	u32 s = chan->stat_done;
-	u32 i = 0;
-	u64 now = nvxnu_nanotime();
-	u64 start = 0;
-	u64 end = 0;
-	u64 gap = 0;
-	volatile struct tgm_stamps *st = NULL;
-
-	if ((s32)(done - s) > CHAN_NSTAMPS) {
-		s = done - CHAN_NSTAMPS;
-		chan->stat_run.live = 0;
-	}
-	for (; (s32)(done - s) > 0; s++) {
-		i = (s + 1) % CHAN_NSTAMPS;
-		if (!chan->kernel) {
-			__atomic_fetch_add(&stats.fences, 1, __ATOMIC_RELAXED);
-			stats_add(&stats.lat_sum, &stats.lat_max,
-				  now - READ_ONCE(chan->stat_sub_ns[i]));
-			stats_job_seqno(chan, s + 1);
-		}
-		st = chan_stamps(chan, s + 1);
-		if (!chan->kernel && s + 1 == READ_ONCE(chan->prof_seqno)) {
-			u32 first = READ_ONCE(chan->prof_first);
-			volatile struct tgm_stamps *fs = chan_stamps(chan, first);
-
-			if (fs->start.payload == first && st->end.payload == s + 1)
-				prof_collect(chan, first, fs->start.ns, st->end.ns);
-			WRITE_ONCE(chan->prof_seqno, 0);
-		}
-		if (st->start.payload != s + 1 || st->end.payload != s + 1)
-			continue; /* overwritten by a later submission, or not stamped */
-		start = st->start.ns;
-		end = st->end.ns;
-		if (chan->kernel) {
-			__atomic_fetch_add(&stats.copies, 1, __ATOMIC_RELAXED);
-			stats_add(&stats.copy_sum, &stats.copy_max, end - start);
-			gap = present_gap(s + 1, start);
-			if (gap != ~0ULL) {
-				__atomic_fetch_add(&stats.gaps, 1, __ATOMIC_RELAXED);
-				stats_add(&stats.gap_sum, &stats.gap_max, gap);
-			}
-			continue;
-		}
-		__atomic_fetch_add(&stats.timed, 1, __ATOMIC_RELAXED);
-		stats_add(&stats.queue_sum, &stats.queue_max,
-			  start - READ_ONCE(chan->stat_sub_ptimer[i]));
-		if (chan->high) {
-			__atomic_fetch_add(&stats.comp, 1, __ATOMIC_RELAXED);
-			stats_add(&stats.comp_sum, &stats.comp_max,
-				  start - READ_ONCE(chan->stat_sub_ptimer[i]));
-			if (READ_ONCE(chan->stat_kick[i]) != TGM_KICK_CLEAR) {
-				__atomic_fetch_add(&stats.behind, 1, __ATOMIC_RELAXED);
-				stats_add(&stats.behind_sum, &stats.behind_max,
-					  start - READ_ONCE(chan->stat_sub_ptimer[i]));
-			}
-		}
-	}
-	chan->stat_done = done;
-}
-
 /* Before a submission's work is kicked (the submitter's thread): busy now, and the run rate first. The order (busy
  * stamp, then the drop flags) pairs with gov_drop's (flag, then the stamp): one of the two always sees the other. */
 static inline void idle_wake(void)
@@ -202,6 +151,47 @@ static inline void idle_wake(void)
 	if (__atomic_load_n(&idle.low, __ATOMIC_SEQ_CST) ||
 	    __atomic_load_n(&idle.dropping, __ATOMIC_SEQ_CST))
 		(void)idle_raise();
+}
+
+/* The periodic line (log only), from a kick at most every IDLE_LOG_NS. */
+static inline void idle_stats(void)
+{
+	u64 now = 0;
+	u64 span = 0;
+	u64 low = 0;
+	u64 sum = 0;
+	u64 max = 0;
+	u32 drops = 0;
+	u32 raises = 0;
+	u32 hinted = 0;
+
+	if (!READ_ONCE(idle.on) || nvxnu_nanotime() - READ_ONCE(idle.log_start) < IDLE_LOG_NS ||
+	    !nvxnu_mutex_trylock(idle.clk))
+		return;
+	now = nvxnu_nanotime();
+	if (now - idle.log_start < IDLE_LOG_NS) {
+		nvxnu_mutex_unlock(idle.clk);
+		return;
+	}
+	span = now - idle.log_start;
+	low = idle.low_ns + (idle.low ? now - idle.low_since : 0);
+	if (idle.low)
+		idle.low_since = now;
+	sum = idle.raise_sum;
+	max = idle.raise_max;
+	drops = idle.drops;
+	raises = idle.raises;
+	hinted = idle.hinted;
+	idle.low_ns = idle.raise_sum = idle.raise_max = 0;
+	idle.drops = idle.raises = idle.hinted = 0;
+	idle.log_start = now;
+	nvxnu_mutex_unlock(idle.clk);
+	nvxnu_stats("tegra-gm20b: idle clock %llu ms: %llu.%llu%% at %u kHz, %u drops, %u raises "
+		    "(%u by a hint), "
+		    "raise mean %llu ns max %llu ns; %llu in flight; now %d kHz",
+		    span / 1000000, low * 100 / span, low * 1000 / span % 10, idle.idle_khz, drops,
+		    raises, hinted, raises ? sum / raises : 0, max, idle_in_flight(),
+		    nvkm_clk_read(gpu.device->clk, nv_clk_src_gpc));
 }
 
 /* gpu.lock held */
@@ -294,44 +284,6 @@ static inline u32 chan_fence_visibility(struct tgm_chan *chan, int external)
 static inline u32 chan_fence(struct tgm_chan *chan)
 {
 	return chan_fence_visibility(chan, 1);
-}
-
-/* From the present channel's nonstall interrupt (the interrupt pass, nvkm's event lock held): a present whose fence passed
- * is done, and its callback runs here (the display's only signals its work loop). completing covers the claim to the
- * callback's return, so tgm_present_outstanding never answers 0 for a present whose completion is not delivered yet. */
-static inline void present_fenced(struct tgm_chan *chan)
-{
-	u32 pending = __atomic_load_n(&present.pending, __ATOMIC_ACQUIRE);
-	void (*done)(void *, int) = NULL;
-	void *arg = NULL;
-	u64 queued = 0;
-	int status = 0;
-
-	if (!pending || (s32)(tgm_chan_completed(chan) - pending) < 0)
-		return;
-	done = present.done;
-	arg = present.arg;
-	queued = present.queued;
-	status = present_source_lost() ? TEGRA_SCANOUT_SOURCE_LOST : 0;
-	__atomic_fetch_add(&present.completing, 1, __ATOMIC_SEQ_CST);
-	if (!__atomic_compare_exchange_n(&present.pending, &pending, 0, false, __ATOMIC_SEQ_CST,
-					 __ATOMIC_RELAXED)) {
-		__atomic_fetch_sub(&present.completing, 1, __ATOMIC_SEQ_CST);
-		return;
-	}
-	nvxnu_work_cancel(present.deadline_work);
-	if (stats_on()) {
-		__atomic_fetch_add(&present.presents, 1, __ATOMIC_RELAXED);
-		stats_add(&present.lat_sum, &present.lat_max, nvxnu_nanotime() - present.queued);
-	}
-	tgm_deadline_presented(queued);
-	if (__atomic_load_n(&present.typed_pending, __ATOMIC_ACQUIRE)) {
-		present.completion_status = status;
-		nvxnu_work_schedule(present.completion_work);
-		return;
-	}
-	done(arg, status);
-	__atomic_fetch_sub(&present.completing, 1, __ATOMIC_SEQ_CST);
 }
 
 /* Pages went back dirty: the work item claims and queues them (any context; nothing before the scrubber is up). */

@@ -858,6 +858,7 @@ host_test(
     name = "switch_gpu_deadline_test",
     srcs = [
         "switch_gpu_deadline_test.cpp",
+        "//drivers/TegraGM20B:SwitchGpuIdleCount.h",
         "//drivers/TegraGM20B:SwitchGpuIdleDeadline.h",
         "//drivers/TegraGM20B:SwitchGpuJobFences.h",
         "//drivers/TegraGM20B:TegraGM20BABI.h",

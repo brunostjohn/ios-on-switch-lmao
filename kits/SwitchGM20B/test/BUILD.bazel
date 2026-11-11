@@ -24,6 +24,7 @@ py_binary(
 GPU_SOURCES = [
     "gpu_internal.h",
     "gpu_inline.h",
+    "gpu_fenced.h",
     "gpu_bringup.c",
     "gpu_clock.c",
     "gpu_mem.c",

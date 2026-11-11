@@ -1,6 +1,54 @@
 // SPDX-License-Identifier: MIT
-// Channel order, CPU syncs and GPU writers.
+// Channel progress and order, CPU syncs and GPU writers.
 #include "gpu_internal.h"
+
+uint32_t tgm_chan_submitted(struct tgm_chan *chan)
+{
+	return chan->submitted;
+}
+
+uint32_t tgm_chan_completed(struct tgm_chan *chan)
+{
+	return READ_ONCE(*chan->fence_cpu);
+}
+
+uint32_t tgm_chan_error(struct tgm_chan *chan)
+{
+	return chan->error;
+}
+
+/* The target is released after the caller's snapshot of each channel's submitted seqno and acquired before
+ * chan_exec moves its channel's: a submission that waits for this epoch is never in that snapshot. */
+void tgm_vm_bind_wait(struct tgm_vm *vm, uint64_t va, const volatile uint32_t *cpu, uint32_t target)
+{
+	WRITE_ONCE(vm->bind_va, va);
+	__atomic_store_n(&vm->bind_target, target, __ATOMIC_RELEASE);
+	__atomic_store_n(&vm->bind_cpu, cpu, __ATOMIC_RELEASE);
+}
+
+uint32_t tgm_chan_settled(struct tgm_chan *chan, int *failed)
+{
+	const u32 done = __atomic_load_n(chan->fence_cpu, __ATOMIC_ACQUIRE);
+
+	*failed = READ_ONCE(chan->error) != 0;
+	return done;
+}
+
+uint64_t tgm_chan_fault_va(struct tgm_chan *chan)
+{
+	return READ_ONCE(chan->fault_va);
+}
+#if TGM_STATS
+uint64_t tgm_chan_killed_ns(struct tgm_chan *chan)
+{
+	return READ_ONCE(chan->killed_ns);
+}
+
+#endif
+uint32_t tgm_chan_waiter(struct tgm_chan *chan)
+{
+	return (uint32_t)(chan->id % TGM_WAITERS);
+}
 
 /* live_lock held: `waiter`'s next submission waits for `source` to complete `seqno` (one entry per source, the later seqno) */
 static int order_add(struct tgm_chan *waiter, struct tgm_chan *source, u32 seqno)

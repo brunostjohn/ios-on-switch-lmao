@@ -407,10 +407,8 @@ void stats_mem(u64 ms);
  * one), and from the GPU's stamps (PTIMER): queue = the GPU started the submission - the kernel kicked it, exec = the
  * GPU finished it (L2 flush included) - started it. The present channel's stamps time its copy instead
  * (present_gap: and the gap before it). */
-u64 present_gap(u32 seqno, u64 start);
-void prof_collect(struct tgm_chan *chan, u32 seqno, u64 start, u64 end);
+static u64 present_gap(u32 seqno, u64 start);
 const char *prof_name(unsigned int c, char *buf, unsigned int len);
-void stats_job_seqno(struct tgm_chan *chan, u32 seqno);
 
 void present_stats(u32 *presents, u64 *sum, u64 *max);
 void scrub_stats(char *buf, unsigned int len, u64 window_ms);
@@ -430,6 +428,7 @@ void scrub_stats(char *buf, unsigned int len, u64 window_ms);
 #define NCGPCCLK_CFG_WRITE_EN 0x00010000u
 #define NCGPCCLK_CYCLES 800u
 void stats_tick(void);
+#define IDLE_LOG_NS (10ULL * 1000000000ULL)
 #define GPCPLL_COEFF_R 0x137004 /* M 7:0, N 15:8, PL 21:16 */
 
 struct idle_state {
@@ -449,18 +448,14 @@ struct idle_state {
     u32 drops, raises, hinted;
 };
 extern struct idle_state idle;
-void idle_fenced(struct tgm_chan *chan);
-void idle_kicked(u32 first, u32 last);
-void idle_retire(struct tgm_chan *chan, u32 through);
 int clock_ceiling_restore(void);
 u64 idle_raise(void);
-void idle_stats(void);
 void idle_start(void);
-void high_fenced(struct tgm_chan *chan, u32 from, u32 done);
+extern u64 high_end_ns, high_end_pt;
 
 /* nouveau_fence_wait_uevent_handler(): a fence's NON_STALL_INTERRUPT arrived; wake the fence waiters. */
 static void present_fenced(struct tgm_chan *chan);
-void scrub_fenced(struct tgm_chan *chan);
+static void scrub_fenced(struct tgm_chan *chan);
 void chan_timeslice_due(struct tgm_chan *chan);
 
 static int chan_push_wait(struct tgm_chan *chan, u32 push_nr);
@@ -576,8 +571,6 @@ struct present_state {
 	u64 recovered; /* when the present in flight last found a recovery under way, or work still progressing */
 };
 extern struct present_state present;
-int present_source_lost(void);
-u64 present_gap(u32 seqno, u64 start);
 void present_stats(u32 *presents, u64 *sum, u64 *max);
 
 /* pool scrub: the copy engine zeroes pool pages:
@@ -621,12 +614,12 @@ struct scrub_state {
 	u64 n, bytes, ns, max_ns;
 };
 extern struct scrub_state scrub;
-void scrub_fenced(struct tgm_chan *chan);
 void scrub_open(void);
 void scrub_stats(char *buf, unsigned int len, u64 window_ms);
 void rail_up_locked(const void *site);
 #pragma GCC visibility pop
 
-#include "gpu_inline.h"
-
 #include "SwitchGpuActiveIrq.h"
+#include "SwitchGpuIdleCount.h"
+#include "gpu_inline.h"
+#include "gpu_fenced.h"

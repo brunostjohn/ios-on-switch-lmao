@@ -13,35 +13,6 @@
  * line prints ("PTIMER xR"). */
 #define STATS_WINDOW_NS (5 * NSEC_PER_SEC)
 
-/* A user channel's completed seqno for the job timing: a job's first begins it, each of its seqnos ends a batch, its last
- * ends it and counts its whole time (first start to last end) as the window's exec time. */
-void stats_job_seqno(struct tgm_chan *chan, u32 seqno)
-{
-	volatile struct tgm_stamps *st = chan_stamps(chan, seqno);
-	struct switch_gpu_job_run *run = &chan->stat_run;
-	u32 i = seqno % CHAN_NSTAMPS;
-	u64 span = 0;
-
-	if (READ_ONCE(chan->stat_job[i].first) == seqno) {
-		switch_gpu_job_begin(run, seqno, READ_ONCE(chan->stat_job[i].last), st->start.ns);
-		run->live = st->start.payload == seqno;
-	}
-	if (!run->live || (s32)(seqno - run->first) < 0 || (s32)(run->last - seqno) < 0)
-		return;
-	if (st->end.payload != seqno || st->end.ns < run->prev_pt) {
-		run->live = 0;
-		return;
-	}
-	switch_gpu_job_batch(&chan->stat_jobs, run, st->end.ns, tgm_deadline_pt_ns(st->end.ns - run->prev_pt));
-	if (seqno != run->last)
-		return;
-	span = st->end.ns - run->start_pt;
-	stats_add(&stats.exec_sum, &stats.exec_max, span);
-	__atomic_fetch_add(&chan->stat_exec_n, 1, __ATOMIC_RELAXED);
-	stats_add(&chan->stat_exec, &chan->stat_exec_max, span);
-	switch_gpu_job_end(&chan->stat_jobs, run);
-}
-
 static void clk_measure(char *buf, unsigned int len)
 {
 	static int started;

@@ -184,7 +184,33 @@ bool spareKeep(IOBufferMemoryDescriptor *bmd, uint64_t *pas, uint64_t bytes,
 // TegraGM20BPushScan.h. Every kProfileEvery-th submission read is also profiled (gpu.c "push profile").
 constexpr uint32_t kScanEvery = 4, kPushOwners = 4,
 		   kProfileEvery = 16;  // 1 submission in 64 profiled (its pushes WFI-stamped)
-IOReturn ioreturn(int err);
+
+static inline IOReturn ioreturn(int err)
+{
+	switch (err) {
+	case 0:
+		return kIOReturnSuccess;
+	case -12:
+		return kIOReturnNoMemory;  // ENOMEM
+	case -22:
+		return kIOReturnBadArgument;  // EINVAL
+	case -16:
+		return kIOReturnBusy;  // EBUSY
+    case SWITCH_GPU_BACKING_DEPENDENCY_FAILED:
+        return kIOReturnAborted;
+	case -5:
+		return kIOReturnNotResponding;  // EIO
+	case -110:
+		return kIOReturnTimeout;  // ETIMEDOUT
+    case SWITCH_GPU_BACKING_STALE:
+	case -19:
+		return kIOReturnNotReady;  // ENODEV
+	case -28:
+		return kIOReturnNoResources;  // ENOSPC
+	default:
+		return kIOReturnError;
+	}
+}
 
 struct KernelMemory {
 	template <typename T>
