@@ -78,6 +78,17 @@ host_test(
 )
 
 host_test(
+    name = "switch_vic_transpose_probe_test",
+    srcs = [
+        "switch_vic_transpose_probe_test.cpp",
+        "vic_model.h",
+        "//drivers/TegraVIC:SwitchVICTransposeProbe.h",
+        "//drivers/TegraVIC:TegraVICConfig.h",
+        "//drivers/TegraVIC:TegraVICFormats.h",
+    ],
+)
+
+host_test(
     name = "switch_vic_stats_test",
     srcs = [
         "switch_vic_stats_test.cpp",

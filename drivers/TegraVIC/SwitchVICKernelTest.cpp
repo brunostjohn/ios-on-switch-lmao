@@ -11,6 +11,7 @@
 #include "SwitchVICLayoutProbe.h"
 #include "SwitchVICPackedProbe.h"
 #include "SwitchVICPitchProbe.h"
+#include "SwitchVICTransposeProbe.h"
 
 namespace {
 struct Probe {
@@ -23,6 +24,7 @@ constexpr Probe kProbes[] = {
     {SWITCH_VIC_LAYOUT_PROBE_MAGIC, sizeof(SwitchVICLayoutProbeReply), switch_vic_layout_probe_run},
     {SWITCH_VIC_FRACTION_PROBE_MAGIC, sizeof(SwitchVICFractionProbeReply), switch_vic_fraction_probe_run},
     {SWITCH_VIC_PACKED_PROBE_MAGIC, sizeof(SwitchVICPackedProbeReply), switch_vic_packed_probe_run},
+    {SWITCH_VIC_TRANSPOSE_PROBE_MAGIC, sizeof(SwitchVICTransposeProbeReply), switch_vic_transpose_probe_run},
 };
 
 bool gBusy;
