@@ -90,13 +90,12 @@ final class GlassSidebarVerdictTests: XCTestCase {
         XCTAssertNil(GlassSidebarVerdict.reclaimed(2, Array(run.prefix(3)), Array(reads.prefix(4))))
     }
 
-    func testNoReclaimFailsOnlyWithTheProbe() {
+    func testNoReclaimIsReportedNotFailed() {
         let held = words(Array(repeating: Self.busy, count: 6))
         let run = phases(sidebar: [Self.busy], detail: [Self.busy])
         let outcome = GlassSidebarVerdict.outcome(run, reads: held, scene: Metrics(), pngs: [], stopped: nil)
-        XCTAssertEqual(outcome.verdict, .fail)
+        XCTAssertEqual(outcome.verdict, .pass)
         XCTAssertEqual(outcome.metrics["reclaim"], .text("no"))
-        XCTAssertEqual(outcome.detail, "idle1: no idle reclaim; idle2: no idle reclaim")
         let release = words(Array(repeating: 0, count: 6), mems: Array(repeating: 0, count: 6))
         let quiet = GlassSidebarVerdict.outcome(
             phases(sidebar: [0], detail: [0]), reads: release, scene: Metrics(), pngs: [], stopped: nil)

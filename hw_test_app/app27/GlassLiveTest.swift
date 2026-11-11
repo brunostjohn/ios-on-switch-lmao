@@ -10,8 +10,10 @@ import UIKit
 /// Variants: still (only a dot far from the glass changes, the control), appear (the glass shows at the first display
 /// frame read, the dot toggling on: the frames ui.glass_first's unchanged-tree snapshot reuses the backdrop of), server
 /// (Core Animation animates the stripes in the render server), scroll (the app scrolls the stripes every display
-/// frame), glass (the glass moves over still stripes), slow (scroll every fourth frame) and plain (scroll without the
-/// read-back: the frame rate it costs).
+/// frame), glass (the glass moves over still stripes), slow (scroll every fourth frame), plain (scroll without the
+/// read-back: the frame rate it costs), and appear_whole and glass_whole: appear and glass with every raw process drawing
+/// whole programs (debug switch whole-programs), so a split program's prologue, launched ahead of its command buffer,
+/// is ruled in or out for the glass that is new or moves.
 ///
 /// Each frame is black (R, G, B <= 2 over 90% of the band), partial (over 2%), dark or good, at its present and, with a
 /// live kernel, at the end of its time on screen (the next present reads it again); changed= counts frames whose pixels
@@ -37,7 +39,8 @@ struct UIGlassLiveTest: HWTest {
         var pngs: [String] = []
         var stopped: String?
         for variant in LiveVariant.allCases where stopped == nil {
-            let scene = await context.onStage(fullScreen: true) { stage in LiveScene(stage, hidden: variant == .appear)
+            if variant.whole { GlassProbe.post("whole-programs-on") }
+            let scene = await context.onStage(fullScreen: true) { stage in LiveScene(stage, hidden: variant.appears)
             }
             await Snapshots.settle()
             let (reader, driver) = await MainActor.run {
@@ -56,6 +59,7 @@ struct UIGlassLiveTest: HWTest {
                 LiveSummary(
                     name: variant.rawValue, frames: reader?.frames ?? [], recorded: read.recorded,
                     regenerated: read.regenerated, seconds: Date().timeIntervalSince(start)))
+            if variant.whole { GlassProbe.post("whole-programs-off") }
             pngs += reader?.saved ?? []
             stopped = reader?.failure.map { "\(variant.rawValue):\($0)" }
         }
@@ -104,8 +108,12 @@ struct UIGlassLiveTest: HWTest {
 
 enum LiveVariant: String, CaseIterable {
     case still, appear, server, scroll, glass, slow, plain
+    case appearWhole = "appear_whole"
+    case glassWhole = "glass_whole"
 
     var readsBack: Bool { self != .plain }
+    var appears: Bool { self == .appear || self == .appearWhole }
+    var whole: Bool { self == .appearWhole || self == .glassWhole }
 }
 
 /// The stage of ui.glass_live, laid out symmetric about the screen's centre (LiveImage): stripes in a scroll view
@@ -175,14 +183,14 @@ final class LiveDriver: NSObject {
         let width = scene.stripes.bounds.width / 3
         switch variant {
         case .still: scene.dot.alpha = tick % 2 == 0 ? 1 : 0.9
-        case .appear:
+        case .appear, .appearWhole:
             scene.dot.alpha = tick % 2 == 0 ? 1 : 0.9
             if tick == 6 { scene.glass.isHidden = false }
         case .scroll, .plain:
             scene.scroll.contentOffset.x = width + CGFloat(tick * 4 % Int(width))
         case .slow:
             if tick % 4 == 0 { scene.scroll.contentOffset.x = width + CGFloat(tick % Int(width)) }
-        case .glass: scene.glass.transform = CGAffineTransform(translationX: 0, y: CGFloat(tick % 16) - 8)
+        case .glass, .glassWhole: scene.glass.transform = CGAffineTransform(translationX: 0, y: CGFloat(tick % 16) - 8)
         case .server: break
         }
     }

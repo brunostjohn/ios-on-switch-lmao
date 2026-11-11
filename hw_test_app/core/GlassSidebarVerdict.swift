@@ -83,9 +83,6 @@ public enum GlassSidebarVerdict {
             }
         }
         if partial > 0 { reasons.append("\(partial) frames show the sidebar partly black") }
-        for (name, reclaimed) in reclaims where reclaimed == false {
-            reasons.append("\(name): no idle reclaim")
-        }
         metrics.set("pngs", pngs.isEmpty ? "-" : String(pngs.prefix(3).joined(separator: ",").prefix(120)))
         if let stopped { metrics.set("stopped", stopped) }
         if !reasons.isEmpty { return .fail(LogLine.fitted(reasons, budget: 160), metrics) }

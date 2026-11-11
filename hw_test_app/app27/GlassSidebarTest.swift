@@ -11,7 +11,8 @@ import UIKit
 ///
 /// The render server's glass memory probe (GlassMemWords, DEVELOPMENT builds) is read at each phase boundary and its
 /// record armed before each moving phase. The result line: frames=, black=, partial=, probe= (- without the probe),
-/// reclaim= (yes: the pool showed the idle reclaim after both idle phases), under= (the detail is behind the judged
+/// reclaim= (yes: the pool showed the idle reclaim after both idle phases; reported, not judged: the black does not
+/// need it), under= (the detail is behind the judged
 /// band), region= (the band in points, x,y,w,h), means= (both candidate bands' mean level, a/b: the sidebar's should be
 /// the lower, the other near the stripes' 0.7), then per moving phase frames/black/partial and its first black frame's
 /// sequence, per phase its glass-mem counts' rise (cbs/changed/nonfinite/moved/zero), per idle phase the pool before
