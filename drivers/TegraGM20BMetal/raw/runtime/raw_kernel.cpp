@@ -404,7 +404,7 @@ void Kernel::free(Bo &bo)
 bool Kernel::channel(uint32_t engines, uint32_t &channel, const volatile uint32_t *&fence)
 {
     std::lock_guard<std::mutex> l(lostLock_);
-    if (engines == TegraGM20BEngineCopy && (info_.flags & TegraGM20BInfoLeanCopyChannel))
+    if (engines == TegraGM20BEngineCopy)
         engines |= TegraGM20BEngineCopyOnly;
     TegraGM20BAbiChannelCreate in = {engines, 0};
     TegraGM20BAbiChannelCreateReply r = {};

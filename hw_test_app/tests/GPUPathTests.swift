@@ -116,7 +116,6 @@ struct JobVisibilityPathTest: GPUPathTest {
 struct LeanCopyPathTest: GPUPathTest {
     let id = "gpu.path.lean_copy"
     let name = "Texture uploads and readbacks run on a copy-only channel"
-    let bit: Int? = 19
     let counters = ["lean_copy_jobs"]
 
     func exercise(_ gpu: GPU, _: TestContext, _ metrics: inout Metrics) async throws -> [String] {

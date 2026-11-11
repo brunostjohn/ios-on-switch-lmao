@@ -79,7 +79,6 @@ enum {
 	TegraGM20BInfoSubmitAddress = 1u << 14,
 	TegraGM20BInfoCpuPreserveDirty = 1u << 15,
 	TegraGM20BInfoCanonicalSurfaceLayout = 1u << 16,
-    TegraGM20BInfoLeanCopyChannel = 1u << 19,
     TegraGM20BInfoControlReserve = 1u << 20,
     TegraGM20BInfoSharedEvents = 1u << 21,
     TegraGM20BInfoSemanticFence = 1u << 22,
@@ -363,7 +362,7 @@ enum {
 	TegraGM20BEngine3D = 1u << 2,
 	TegraGM20BEngineM2MF = 1u << 3,
 	TegraGM20BEngineCompute = 1u << 4,
-    TegraGM20BEngineCopyOnly = 1u << 31, /* Requires InfoLeanCopyChannel and exactly EngineCopy. */
+    TegraGM20BEngineCopyOnly = 1u << 31, /* Requires exactly EngineCopy. */
 };
 
 /* Method 6. A GPFIFO channel on the GR runlist in the connection's VM. EngineCopyOnly binds only CE on subchannel 4;
