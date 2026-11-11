@@ -181,20 +181,22 @@ static inline void tegra_vic_rgb_fill(TegraVICOp *op, uint32_t r8, uint32_t g8, 
     op->fillAlpha10 = a8 >= 255 ? 1023 : a8 << 2;
 }
 
-// A fill of a 4:2:0 surface covers whole chroma samples: its rectangle widened to even coordinates (Apple's driver
-// rounds a border fill the same way), within the surface.
+// A fill of a subsampled surface covers whole chroma samples: its rectangle widened to even coordinates on each
+// subsampled axis (Apple's driver rounds a border fill the same way), within the surface.
 static inline void tegra_vic_even_rect(const TegraVICFormat *f, const TegraVICSurfaceDesc *d, TegraVICOp *o)
 {
-    if (!f->subsampled)
+    if (!f->subX && !f->subY)
         return;
-    const uint32_t x0 = o->dstX & ~1u;
-    const uint32_t y0 = o->dstY & ~1u;
-    uint32_t x1 = (o->dstX + o->dstW + 1) & ~1u;
-    uint32_t y1 = (o->dstY + o->dstH + 1) & ~1u;
+    const uint32_t mx = f->subX ? ~1u : ~0u;
+    const uint32_t my = f->subY ? ~1u : ~0u;
+    const uint32_t x0 = o->dstX & mx;
+    const uint32_t y0 = o->dstY & my;
+    uint32_t x1 = (o->dstX + o->dstW + (f->subX ? 1 : 0)) & mx;
+    uint32_t y1 = (o->dstY + o->dstH + (f->subY ? 1 : 0)) & my;
     if (x1 > d->width)
-        x1 = d->width & ~1u;
+        x1 = d->width & mx;
     if (y1 > d->height)
-        y1 = d->height & ~1u;
+        y1 = d->height & my;
     o->dstX = x0;
     o->dstY = y0;
     o->dstW = x1 > x0 ? x1 - x0 : 0;

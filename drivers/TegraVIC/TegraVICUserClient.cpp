@@ -743,7 +743,7 @@ OSDictionary *capabilities(const TegraVICTraits *t)
     putNumber(d, "kSurfaceAcceleratorCapabilitiesHistogram", 0);
     putNumber(d, "kSurfaceAcceleratorCapabilitiesHistogramValues", 0);
     putNumber(d, "kSurfaceAcceleratorCapabilitiesVERF", 0);
-    static const char *const kFormats[] = {"ARGB8888", "RGBA8888", "2Planes420"};
+    static const char *const kFormats[] = {"ARGB8888", "RGBA8888", "2Planes420", "2Planes422"};
     char key[64];
     for (const char *f : kFormats) {
         snprintf(key, sizeof(key), "IOSurfaceAcceleratorFormatIn%s", f);
@@ -753,8 +753,7 @@ OSDictionary *capabilities(const TegraVICTraits *t)
     }
     static const char *const kOff[] = {"Interleaved422", "LumaOnlyL008", "LumaOnlyL010",     "LumaOnlyL012",
                                        "LumaOnlyL016",   "ARGB2101010",  "ARGB8101010",      "2Planes42010",
-                                       "2Planes42210",   "2Planes44410", "1PlaneYCBCR10444", "2Planes422",
-                                       "2Planes444"};
+                                       "2Planes42210",   "2Planes44410", "1PlaneYCBCR10444", "2Planes444"};
     for (const char *f : kOff) {
         snprintf(key, sizeof(key), "IOSurfaceAcceleratorFormatIn%s", f);
         putNumber(d, key, 0);
@@ -851,7 +850,7 @@ extern "C" int tegra_vic_publish(void)
         present = "off (no memory for its page lists)";
     }
     IOLog("TegraVIC: V3 ok AppleM2ScalerCSCDriver published (Apple's classes, VIC's slots: newUserClient %d; "
-          "IOSurfaceAcceleratorClient; BGRA, RGBA, 420v, 420f; transforms %#x; up to %ux%u, %ux up, %ux down); "
+          "IOSurfaceAcceleratorClient; BGRA, RGBA, 420v, 420f, 422v, 422f; transforms %#x; up to %ux%u, %ux up, %ux down); "
           "NVDEC present %s\n",
           s0, tegra_vic_traits()->rotations, TEGRA_VIC_MAX_DIM, TEGRA_VIC_MAX_DIM, TEGRA_VIC_MAX_UPSCALE,
           TEGRA_VIC_MAX_DOWNSCALE, present);

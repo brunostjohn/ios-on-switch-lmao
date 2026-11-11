@@ -42,6 +42,7 @@ host_test(
         "//drivers/TegraVIC:TegraVICSurface.h",
         "//drivers/TegraVIC:TegraVICRequest.h",
         "//drivers/TegraVIC:TegraVICConfig.h",
+        "//drivers/TegraVIC:TegraVICFormats.h",
         "//drivers/TegraVIC:SwitchSurfaceColor.h",
         "//kits/SwitchDMA:SwitchDMAPages.h",
     ],

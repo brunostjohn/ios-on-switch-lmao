@@ -19,7 +19,7 @@ static inline uint64_t tegra_vic_bounce_round(uint64_t v, uint64_t a)
 // The bytes of a row of plane p that hold pixels.
 static inline uint32_t tegra_vic_bounce_row_bytes(const TegraVICFormat *f, uint32_t width, uint32_t p)
 {
-    return (f->subsampled && p ? width / 2 : width) * f->bpe[p];
+    return tegra_vic_plane_width(f, width, p) * f->bpe[p];
 }
 
 // 1: every plane's pitch is one VIC addresses; 0: the surface needs the bounce; -1: it cannot have one either (a plane

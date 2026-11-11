@@ -42,7 +42,9 @@
 //    ACT_REQ write for several windows latch them at one boundary, never half-written. The CSC and filter registers (0x500-
 //    0x638) are not shadowed (hekate di.h): written only while the window is off.
 //  - [T] YCbCr 4:2:0 semi-planar with Cb first (NV12, IOSurface '420v'/'420f') is COLOR_DEPTH 43 (mainline plane.c and hekate
-//    di.h; L4T's tegra_dc_ext.h names 42 and 43 the other way round).
+//    di.h; L4T's tegra_dc_ext.h names 42 and 43 the other way round); 4:2:2 semi-planar with Cb first (NV16, '422v'/'422f',
+//    what Core Animation's IOSurfaceAccelerator copies of a detached video are on iPadOS 27) is 45 by the same table, and
+//    mainline's T210 overlay windows list NV16 (dc.c: tegra210_dc_soc_info takes tegra114_overlay_formats).
 //  - [T] a block-linear surface (WINBUF_SURFACE_KIND BLOCK with its block height; LINE_STRIDE its bytes across) is fetched
 //    from START with the source origin in ADDR_H_OFFSET (bytes) and ADDR_V_OFFSET (lines), as mainline dc.c programs one
 //    whenever supports_block_linear (T210 sets it); window A already scans one so (kBlockSurfaceKind).
@@ -107,12 +109,14 @@ enum Kind {
     kKindBgra,
     kKindRgba,
     kKindNv12Video,
-    kKindNv12Full
+    kKindNv12Full,
+    kKindNv16Video,
+    kKindNv16Full
 };
 
 // The formats a window scans: 32-bit BGRA (also its lossless-compressed spelling '&BGA', which the GPU here writes as plain
-// rows), RGBA, and 8-bit 4:2:0 two-plane video or full range. Anything else (10-bit 'x420'/'xf20', 4:2:2, 'w30r', compressed
-// YUV) has no window format on T210.
+// rows), RGBA, and 8-bit 4:2:0 and 4:2:2 two-plane video or full range. Anything else (10-bit 'x420'/'xf20', 'w30r',
+// compressed YUV) has no window format on T210.
 inline Kind kindOf(uint32_t format, uint32_t planes)
 {
     if ((format == fourcc('B', 'G', 'R', 'A') && !planes) || (format == fourcc('&', 'B', 'G', 'A') && planes <= 1))
@@ -123,12 +127,26 @@ inline Kind kindOf(uint32_t format, uint32_t planes)
         return kKindNv12Video;
     if (format == fourcc('4', '2', '0', 'f') && planes == 2)
         return kKindNv12Full;
+    if (format == fourcc('4', '2', '2', 'v') && planes == 2)
+        return kKindNv16Video;
+    if (format == fourcc('4', '2', '2', 'f') && planes == 2)
+        return kKindNv16Full;
     return kKindNone;
 }
 
 inline bool isNv12(Kind k)
 {
     return k == kKindNv12Video || k == kKindNv12Full;
+}
+
+inline bool isNv16(Kind k)
+{
+    return k == kKindNv16Video || k == kKindNv16Full;
+}
+
+inline bool isYuv(Kind k)
+{
+    return isNv12(k) || isNv16(k);
 }
 
 // --- What the display publishes (and so what Core Animation can send) ------------------------------------------------------
@@ -240,7 +258,7 @@ enum : uint32_t {
 constexpr uint32_t kWinEnable = 1u << 30, kCscEnable = 1u << 18, kHFilterOn = 1u << 8, kVFilterOn = 1u << 10;
 // WINBUF_SURFACE_KIND: BLOCK, with the block height (GOBs, log2) in bits 6:4 (mainline dc.c DC_WINBUF_SURFACE_KIND_*).
 constexpr uint32_t kSurfaceKindBlock = 2, kSurfaceKindBlockHeightShift = 4;
-constexpr uint32_t kDepthB8G8R8A8 = 12, kDepthR8G8B8A8 = 13, kDepthYCbCr420SP = 43;
+constexpr uint32_t kDepthB8G8R8A8 = 12, kDepthR8G8B8A8 = 13, kDepthYCbCr420SP = 43, kDepthYCbCr422SP = 45;
 constexpr uint32_t kBlendBypass = 1u << 24, kBlendPremultiplied = 0x00ffff00u, kBlendOver = 0x262;
 // The TRM's default filter taps (mainline dc.c tegra_dc_setup_window): 6-tap H, 2-tap V (128 - 8i).
 constexpr uint32_t kHFilterTaps[16] = {0x00008000, 0x3e087ce1, 0x3b117ac1, 0x591b73aa, 0x57256d9a, 0x552f668b,
@@ -337,16 +355,18 @@ inline bool axisOf(int32_t s, int32_t sn, int32_t d, int32_t dn, uint32_t screen
     return a.initial <= 0xffff;
 }
 
-// A pitch surface's planes: each one's first source row, and the bytes the window reads from them.
-inline void pitchReads(const Surface &f, const Axis &x, const Axis &y, uint32_t bpp, Image &image)
+// A pitch surface's planes: each one's first source row, and the bytes the window reads from them. halfRows: the chroma
+// plane has a row for every two of luma (4:2:0).
+inline void pitchReads(const Surface &f, const Axis &x, const Axis &y, uint32_t bpp, bool halfRows, Image &image)
 {
     uint64_t low = UINT64_MAX;
     uint64_t high = 0;
     for (unsigned p = 0; p < (image.yuv ? 2u : 1u); ++p) {
         const uint64_t base = image.yuv ? f.offset[p] : 0;
         const uint64_t stride = f.stride[p];
-        const uint64_t row0 = p ? static_cast<uint64_t>(y.first) / 2 : static_cast<uint64_t>(y.first);
-        const uint64_t rows = p ? (static_cast<uint64_t>(y.count) + 1) / 2 : static_cast<uint64_t>(y.count);
+        const bool half = p && halfRows;
+        const uint64_t row0 = half ? static_cast<uint64_t>(y.first) / 2 : static_cast<uint64_t>(y.first);
+        const uint64_t rows = half ? (static_cast<uint64_t>(y.count) + 1) / 2 : static_cast<uint64_t>(y.count);
         image.start[p] = base + row0 * stride;
         const uint64_t a = image.start[p] + image.hOffset;
         const uint64_t b =
@@ -387,7 +407,7 @@ inline bool blockReads(const tgm_layout &b, const Surface &f, const Axis &y, Ima
 inline bool imageOf(const Layer &l, uint32_t width, uint32_t height, Image &image, const tgm_layout *block = nullptr)
 {
     image = Image();
-    image.yuv = isNv12(l.kind);
+    image.yuv = isYuv(l.kind);
     if ((image.yuv && l.surface.colorMatrix > 3) ||
         !switch_surface_dc_color(l.surface.transfer, l.surface.primaries,
                                  image.yuv ? l.surface.chromaTop : 0,
@@ -395,17 +415,17 @@ inline bool imageOf(const Layer &l, uint32_t width, uint32_t height, Image &imag
         return false;
     const uint32_t bpp = image.yuv ? 1 : 4;  // bytes per pixel the offsets and PRESCALED count (luma)
     const uint32_t hMax = image.yuv ? 8 : 4;
-    const uint32_t vMax = 15;  // DDA limits (4:2:0 counts as 2 bytes per pixel)
+    const uint32_t vMax = 15;  // DDA limits (4:2:0 and 4:2:2 count as 2 bytes per pixel)
     Axis x;
     Axis y;
     if (!axisOf(l.src.x, l.src.w, l.dst.x, l.dst.w, width, l.surface.width, hMax, image.yuv, x) ||
-        !axisOf(l.src.y, l.src.h, l.dst.y, l.dst.h, height, l.surface.height, vMax, image.yuv, y))
+        !axisOf(l.src.y, l.src.h, l.dst.y, l.dst.h, height, l.surface.height, vMax, isNv12(l.kind), y))
         return false;
     if (!x.visible || !y.visible)
         return true;
     image.visible = true;
     if (image.yuv) {
-        image.colorDepth = kDepthYCbCr420SP;
+        image.colorDepth = isNv12(l.kind) ? kDepthYCbCr420SP : kDepthYCbCr422SP;
     } else {
         image.colorDepth = l.kind == kKindRgba ? kDepthR8G8B8A8 : kDepthB8G8R8A8;
     }
@@ -423,10 +443,10 @@ inline bool imageOf(const Layer &l, uint32_t width, uint32_t height, Image &imag
         if (image.yuv || !blockReads(*block, l.surface, y, image))
             return false;
     } else {
-        pitchReads(l.surface, x, y, bpp, image);
+        pitchReads(l.surface, x, y, bpp, isNv12(l.kind), image);
     }
     image.matrix = matrixOf(l.surface);
-    image.fullRange = l.kind == kKindNv12Full;
+    image.fullRange = l.kind == kKindNv12Full || l.kind == kKindNv16Full;
     return true;
 }
 
@@ -456,7 +476,7 @@ inline unsigned checkDetached(const Layer &l, uint32_t width, uint32_t height, c
         static_cast<uint32_t>(s.w) > limits.maxSrcRectWidth ||
         static_cast<uint64_t>(s.w) * static_cast<uint64_t>(s.h) > limits.maxSrcRectTotal)
         return kScale;
-    const unsigned planes = isNv12(l.kind) ? 2 : 1;
+    const unsigned planes = isYuv(l.kind) ? 2 : 1;
     for (unsigned p = 0; p < planes; ++p) {
         const uint64_t base = planes == 1 ? 0 : l.surface.offset[p];
         const uint64_t rows = planes == 1 ? l.surface.height : l.surface.planeHeight[p];
@@ -465,7 +485,8 @@ inline unsigned checkDetached(const Layer &l, uint32_t width, uint32_t height, c
             return kAlignment;
         const uint64_t minRow =
             static_cast<uint64_t>(planes == 1 ? l.surface.width * 4 : (l.surface.width + 1) / 2 * 2);
-        if (l.surface.stride[p] < minRow || rows < (p ? (l.surface.height + 1) / 2 : l.surface.height) ||
+        const uint64_t needRows = p && isNv12(l.kind) ? (l.surface.height + 1) / 2 : l.surface.height;
+        if (l.surface.stride[p] < minRow || rows < needRows ||
             base + rows * l.surface.stride[p] > l.surface.allocation ||
             l.surface.allocation > l.surface.descriptorBytes)
             return kSurface;

@@ -60,12 +60,13 @@ Surface makeSurface(Kind kind, uint32_t width, uint32_t height)
     Surface s;
     s.width = width;
     s.height = height;
-    if (kind == kKindNv12Video || kind == kKindNv12Full) {
-        s.format = kind == kKindNv12Video ? fourcc('4', '2', '0', 'v') : fourcc('4', '2', '0', 'f');
+    if (isYuv(kind)) {
+        const bool full = kind == kKindNv12Full || kind == kKindNv16Full;
+        s.format = fourcc('4', '2', isNv12(kind) ? '0' : '2', full ? 'f' : 'v');
         s.planes = 2;
         s.stride[0] = s.stride[1] = roundUp(width, 256);  // VideoToolbox's pool: 256-byte rows and planes
         s.planeHeight[0] = height;
-        s.planeHeight[1] = (height + 1) / 2;
+        s.planeHeight[1] = isNv12(kind) ? (height + 1) / 2 : height;
         s.offset[0] = 0;
         s.offset[1] = roundUp((uint32_t)(s.stride[0] * (uint64_t)height), 256);
         s.allocation = s.offset[1] + (uint64_t)s.stride[1] * s.planeHeight[1];
@@ -92,10 +93,10 @@ Layer uiLayer()
 // a destination scaled 1/4..4x on each axis, anywhere on (or partly off) the screen.
 Layer randomDetached()
 {
-    static const Kind kinds[] = {kKindNv12Video, kKindNv12Full, kKindBgra, kKindRgba};
+    static const Kind kinds[] = {kKindNv12Video, kKindNv12Full, kKindNv16Video, kKindNv16Full, kKindBgra, kKindRgba};
     const Limits limits;
     Layer l;
-    l.kind = kinds[rnd(4)];
+    l.kind = kinds[rnd(6)];
     const uint32_t sw = 32 + rnd(limits.maxSrcBuffer - 32), sh = 32 + rnd(limits.maxSrcBuffer - 32);
     l.surface = makeSurface(l.kind, sw, sh);
     int32_t w = 1 + (int32_t)rnd(limits.maxSrcRectWidth < sw ? limits.maxSrcRectWidth : sw);
@@ -129,7 +130,7 @@ void testAcceptance()
         if ((uint64_t)d.dst.w * 4 < (uint64_t)d.src.w || (uint64_t)d.dst.h * 4 < (uint64_t)d.src.h ||
             (uint64_t)d.dst.w > 4ull * d.src.w || (uint64_t)d.dst.h > 4ull * d.src.h)
             continue;
-        const unsigned slot = isNv12(d.kind) ? 2 : 0;  // YUV in layer 2, RGB in layer 0 (QuartzCore [V])
+        const unsigned slot = isYuv(d.kind) ? 2 : 0;  // YUV in layer 2, RGB in layer 0 (QuartzCore [V])
         layers[slot] = d;
         has[slot] = true;
         const bool withUi = rnd(4) != 0;  // video-only swaps: the UI persists
@@ -290,6 +291,17 @@ void testImage()
               m.vInitial >= 4096,
           "odd crop: hOffset %u start %llu/%llu initial %#x %#x", m.hOffset, (unsigned long long)m.start[0],
           (unsigned long long)m.start[1], m.hInitial, m.vInitial);
+    // 4:2:2 (Core Animation's copy of a detached video on iPadOS 27): NV16's depth, and the same crop's chroma starts on
+    // its own row, the column still on a pair.
+    l.kind = kKindNv16Full;
+    l.surface = makeSurface(kKindNv16Full, 1280, 720);
+    CHECK(imageOf(l, W, H, m) && m.colorDepth == kDepthYCbCr422SP && m.fullRange && !(m.hOffset & 1) &&
+              m.start[0] == 5ull * l.surface.stride[0] && m.start[1] == l.surface.offset[1] + 5ull * l.surface.stride[1],
+          "4:2:2 crop: depth %u hOffset %u start %llu/%llu", m.colorDepth, m.hOffset, (unsigned long long)m.start[0],
+          (unsigned long long)m.start[1]);
+    l.surface.planeHeight[1] = 360;
+    l.src = {0, 0, 1280, 720};
+    CHECK(checkDetached(l, W, H) == kSurface, "a 4:2:2 chroma plane of half the rows");
 }
 
 void testCsc()

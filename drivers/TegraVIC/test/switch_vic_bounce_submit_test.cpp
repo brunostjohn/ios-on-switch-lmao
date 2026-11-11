@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: BSD-2-Clause-Patent
 #include <gtest/gtest.h>
 #include <string>
+#include <utility>
 #include <vector>
 #include "switch_vic_backing_stubs.h"
 #include "../SwitchVICBounceSubmit.cpp"
@@ -14,6 +15,7 @@ SwitchVICMapping sourceMap{0x10000000}, destinationMap{0x20000000}, scratchMaps[
 SwitchVICBounceSlot pool;
 std::vector<std::string> stages;
 std::vector<uint32_t> guardCounts;
+std::vector<std::pair<uint32_t, uint32_t>> copybackPlanes;  // bytes a row, rows
 bool immediate = false;
 int failStage = -1, gates = 0, callbacks = 0, result = 0, unreservesAtCallback = -1;
 struct Callback { void (*fn)(void *, int); void *context; };
@@ -36,7 +38,7 @@ void accept(void (*done)(void *, int), void *context) {
 }
 class Bounce : public testing::Test {
 protected:
-    void SetUp() override { stages.clear(); guardCounts.clear(); failStage = -1; immediate = false;
+    void SetUp() override { stages.clear(); guardCounts.clear(); copybackPlanes.clear(); failStage = -1; immediate = false;
         gates = callbacks = result = 0; unreservesAtCallback = -1; pending.clear(); pool = {};
         sourceBacking.refs = destinationBacking.refs = 1; }
     void TearDown() override { EXPECT_EQ(gates, 0); EXPECT_FALSE(pool.busy); EXPECT_TRUE(pending.empty());
@@ -86,10 +88,11 @@ int switch_vic_events_stage(SwitchVICEvents *, SwitchVICEvents **out) { *out = n
 void switch_vic_events_commit(SwitchVICEvents *) {}
 void switch_vic_events_release(SwitchVICEvents **) {}
 extern "C" int tegra_gm20b_ce_copy_plane_checked(const tegra_gm20b_ce_plane *, const tegra_gm20b_ce_plane *,
-    uint32_t, uint32_t, const tegra_gm20b_ce_wait *, const tegra_gm20b_ce_done *done,
+    uint32_t rowBytes, uint32_t rows, const tegra_gm20b_ce_wait *, const tegra_gm20b_ce_done *done,
     switch_gpu_backing *src, uint64_t, switch_gpu_backing *dst, uint64_t,
     const switch_gpu_copy_ownership *ownership, const switch_gpu_event_submission *) {
     stages.push_back(src == &scratchBacking[1] ? "copyback" : dst == &scratchBacking[1] ? "preserve" : "source");
+    if (src == &scratchBacking[1]) copybackPlanes.emplace_back(rowBytes, rows);
     guardCounts.push_back(ownership->guard_count);
     for (uint32_t i = 0; i < ownership->guard_count; ++i)
         EXPECT_TRUE(ownership->guards[i].backing == src || ownership->guards[i].backing == dst);
@@ -172,4 +175,29 @@ TEST_F(Bounce, ACopyBackTheGpuFailsFailsItsJob) {
     auto copyback = pending.back(); pending.pop_back();
     finish(); EXPECT_EQ(callbacks,0);
     copyback.fn(copyback.context,-5); EXPECT_EQ(callbacks,1); EXPECT_EQ(result,-5);
+}
+
+// iPadOS 27's detached-video copy into a '422v' on CoreVideo's 64-byte rows: VIC writes the scratch, then both planes
+// come back whole, the chroma plane a row for every luma row.
+TEST_F(Bounce, DetachedVideoCopyInto422vComesBackWithEveryChromaRow) {
+    TegraVICSurface src = {};
+    src.surface = &sourceObject; src.memory = &sourceMemory;
+    auto &s = src.desc;
+    s.fourcc = TEGRA_VIC_FOURCC('4','2','0','v'); s.width = 1920; s.height = 1080; s.planes = 2;
+    s.planeBytesPerRow[0] = s.planeBytesPerRow[1] = 2048; s.planeHeight[0] = 1080; s.planeHeight[1] = 540;
+    s.planeOffset[1] = 2048 * 1080; s.length = 2048 * 1080 * 3 / 2;
+    TegraVICSurface dst = {};
+    dst.surface = &destinationObject; dst.memory = &destinationMemory;
+    auto &d = dst.desc;
+    d.fourcc = TEGRA_VIC_FOURCC('4','2','2','v'); d.width = 300; d.height = 534; d.planes = 2;
+    d.planeBytesPerRow[0] = d.planeBytesPerRow[1] = 320; d.planeHeight[0] = d.planeHeight[1] = 534;
+    d.planeOffset[1] = 320 * 534; d.length = 320 * 534 * 2;
+    TegraVICPlan p = {}; p.count = 1; p.readsSource = 1;
+    p.op[0].srcW = 1920ull << 16; p.op[0].srcH = 1080ull << 16; p.op[0].dstW = 300; p.op[0].dstH = 534;
+    p.op[0].transform = TEGRA_VIC_ROT90;
+    ASSERT_EQ(switch_vic_bounce_submit(&src,&dst,&p,0,notify,nullptr,nullptr),1);
+    EXPECT_EQ(stages,(std::vector<std::string>{"vic","copyback","copyback"}));
+    EXPECT_EQ(copybackPlanes,(std::vector<std::pair<uint32_t, uint32_t>>{{300, 534}, {300, 534}}));
+    EXPECT_EQ(pool.buffers[1].desc.planeBytesPerRow[1], 512u);
+    finish(); EXPECT_EQ(callbacks,1); EXPECT_EQ(result,0);
 }

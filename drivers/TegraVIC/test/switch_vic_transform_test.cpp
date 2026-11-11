@@ -214,6 +214,42 @@ TEST_F(SwitchVICTransformTest, PitchSourceRetainsTheOrdinaryTwoBackingRoute)
     EXPECT_EQ(TEGRA_VIC_GET(submittedJob.config, TEGRA_VIC_SLOTS + TEGRA_VIC_SLOT_SURFACE, SURF_BLK_KIND), 0u);
 }
 
+// iPadOS 27's detached-video copy: a 1920x1080 '420v' a quarter turn into a 300x534 '422v', both on 256-byte rows, goes
+// straight to VIC as one job writing the transposed 4:2:2 output.
+TEST_F(SwitchVICTransformTest, DetachedVideoCopyInto422vRunsDirect)
+{
+    nativeInput = false;
+    immediate = true;
+    auto &s = source.desc;
+    s.width = 1920;
+    s.height = 1080;
+    s.planeBytesPerRow[0] = s.planeBytesPerRow[1] = 2048;
+    s.planeHeight[0] = 1080;
+    s.planeHeight[1] = 540;
+    s.planeOffset[1] = 2048 * 1080;
+    s.length = 2048 * 1080 * 3 / 2;
+    auto &d = destination.desc;
+    d.fourcc = TEGRA_VIC_FOURCC('4', '2', '2', 'v');
+    d.width = 300;
+    d.height = 534;
+    d.planes = 2;
+    d.planeBytesPerRow[0] = d.planeBytesPerRow[1] = 512;
+    d.planeHeight[0] = d.planeHeight[1] = 534;
+    d.planeOffset[1] = 512 * 536;
+    d.length = 512 * 536 * 2;
+    plan.op[0].srcW = uint64_t(1920) << 16;
+    plan.op[0].srcH = uint64_t(1080) << 16;
+    plan.op[0].dstW = 300;
+    plan.op[0].dstH = 534;
+    plan.op[0].transform = TEGRA_VIC_ROT90;
+    ASSERT_EQ(submit(), 1);
+    EXPECT_EQ(notifications, 1);
+    EXPECT_EQ(TEGRA_VIC_GET(submittedJob.config, TEGRA_VIC_OUTPUT_SURFACE, SURF_FORMAT),
+              uint64_t(TEGRA_VIC_T_Y8___U8V8_N422R));
+    EXPECT_EQ(TEGRA_VIC_GET(submittedJob.config, TEGRA_VIC_OUTPUT_SURFACE, SURF_CHROMA_WIDTH), 533u);
+    EXPECT_EQ(TEGRA_VIC_GET(submittedJob.config, TEGRA_VIC_OUTPUT, OUT_TRANSPOSE), 1u);
+}
+
 TEST_F(SwitchVICTransformTest, OverlappingDescriptorFallsBackBeforeTakingReservations)
 {
     source.memory = destination.memory;

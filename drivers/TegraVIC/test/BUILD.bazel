@@ -6,7 +6,8 @@
 # headers TegraVIC.cpp parses (tegra_vic_firmware_test); a
 # TransformSurface destination's seed moves when its job is done, through a pinned binding (tegra_vic_seed_source_test);
 # transposed jobs on vic_model.h, the output layout model pinned to the unit's V4 diag lines and hekate's rotation, with
-# the probes that measured the unit's transform traits (TegraVICProbe.h) run on it (tegra_vic_transpose_test).
+# the probes that measured the unit's transform traits (TegraVICProbe.h) run on it (tegra_vic_transpose_test); 4:2:2
+# biplanar requests, configurations, bounce geometry and model output (tegra_vic_422_test).
 #
 #   bazel test //drivers/TegraVIC/test:all
 load("//bazel/lint:defs.bzl", "lint_files")
@@ -46,6 +47,7 @@ host_library(
         "libdrm/vic40.h",
         "vic_host.c",
         "//drivers/TegraVIC:TegraVICConfig.h",
+        "//drivers/TegraVIC:TegraVICFormats.h",
         "//drivers/TegraVIC:TegraVICRequest.h",
         "//drivers/TegraVIC:SwitchSurfaceColor.h",
     ],
@@ -74,6 +76,7 @@ host_test(
         "//drivers/TegraHost1x:TegraHost1x.h",
         "//drivers/TegraVIC:TegraVICBounce.h",
         "//drivers/TegraVIC:TegraVICConfig.h",
+        "//drivers/TegraVIC:TegraVICFormats.h",
         "//drivers/TegraVIC:TegraVICRequest.h",
         "//drivers/TegraVIC:SwitchSurfaceColor.h",
     ],
@@ -113,11 +116,26 @@ host_test(
 )
 
 host_test(
+    name = "tegra_vic_422_test",
+    srcs = [
+        "TegraVICProbe.h",
+        "tegra_vic_422_test.cpp",
+        "vic_model.h",
+        "//drivers/TegraVIC:SwitchSurfaceColor.h",
+        "//drivers/TegraVIC:TegraVICBounce.h",
+        "//drivers/TegraVIC:TegraVICConfig.h",
+        "//drivers/TegraVIC:TegraVICFormats.h",
+        "//drivers/TegraVIC:TegraVICRequest.h",
+    ],
+)
+
+host_test(
     name = "tegra_vic_transpose_test",
     srcs = [
         "tegra_vic_transpose_test.cpp",
         "vic_model.h",
         "//drivers/TegraVIC:TegraVICConfig.h",
+        "//drivers/TegraVIC:TegraVICFormats.h",
         "TegraVICProbe.h",
     ],
 )
@@ -132,6 +150,7 @@ host_test(
         "//drivers/TegraVIC:SwitchVICSurfaceRange.h",
         "//drivers/TegraVIC:TegraVICBand.h",
         "//drivers/TegraVIC:TegraVICConfig.h",
+        "//drivers/TegraVIC:TegraVICFormats.h",
         "//drivers/TegraVIC:TegraVICRequest.h",
         "//drivers/TegraVIC:SwitchSurfaceColor.h",
     ],
@@ -159,6 +178,7 @@ host_test(
         "//drivers/TegraVIC:TegraVICRequest.h",
         "//drivers/TegraVIC:SwitchSurfaceColor.h",
         "//drivers/TegraVIC:TegraVICConfig.h",
+        "//drivers/TegraVIC:TegraVICFormats.h",
         "//drivers/TegraVIC:TegraVIC.h",
         "//drivers/TegraGM20B:SwitchGpuBacking.h",
         "//drivers/TegraGM20B:TegraGM20BGpu.h",
@@ -183,6 +203,7 @@ host_test(
         "//drivers/TegraVIC:TegraVICRequest.h",
         "//drivers/TegraVIC:SwitchSurfaceColor.h",
         "//drivers/TegraVIC:TegraVICConfig.h",
+        "//drivers/TegraVIC:TegraVICFormats.h",
         "//drivers/TegraVIC:TegraVICBand.h",
         "//drivers/TegraVIC:SwitchVICJobs.h",
         "//drivers/TegraVIC:SwitchVICEvents.h",
@@ -220,6 +241,7 @@ host_test(
         "//drivers/TegraVIC:TegraVICRequest.h",
         "//drivers/TegraVIC:SwitchSurfaceColor.h",
         "//drivers/TegraVIC:TegraVICConfig.h",
+        "//drivers/TegraVIC:TegraVICFormats.h",
         "//drivers/TegraVIC:TegraVICBand.h",
         "//drivers/TegraVIC:SwitchVICPicture.h",
         "//drivers/TegraVIC:SwitchVICPicturePlan.h",
@@ -260,6 +282,7 @@ host_test(
         "//drivers/TegraVIC:TegraVICRequest.h",
         "//drivers/TegraVIC:SwitchSurfaceColor.h",
         "//drivers/TegraVIC:TegraVICConfig.h",
+        "//drivers/TegraVIC:TegraVICFormats.h",
         "//drivers/TegraVIC:TegraVICBand.h",
         "//drivers/TegraGM20B:SwitchGpuBacking.h",
         "//drivers/TegraGM20B:SwitchGpuAdmission.h",
@@ -302,6 +325,7 @@ host_test(
         "//drivers/TegraVIC:TegraVIC.h",
         "//drivers/TegraVIC:TegraVICSurface.h",
         "//drivers/TegraVIC:TegraVICConfig.h",
+        "//drivers/TegraVIC:TegraVICFormats.h",
         "//drivers/TegraGM20B:SwitchGpuBacking.h",
         "//drivers/TegraGM20B:TegraGM20BLayout.h",
         "//kits/SwitchDMA:SwitchDcache.h",
@@ -322,6 +346,7 @@ host_test(
         "//drivers/TegraVIC:TegraVICRequest.h",
         "//drivers/TegraVIC:SwitchSurfaceColor.h",
         "//drivers/TegraVIC:TegraVICConfig.h",
+        "//drivers/TegraVIC:TegraVICFormats.h",
         "//drivers/TegraGM20B:SwitchGpuBacking.h",
         "//drivers/TegraGM20B:TegraGM20BGpu.h",
         "//drivers/TegraGM20B:TegraGM20BLayout.h",
@@ -360,6 +385,7 @@ host_test(
         "//drivers/TegraHost1x:SwitchHost1xResults.h",
         "//drivers/TegraVIC:TegraVIC.h",
         "//drivers/TegraVIC:TegraVICConfig.h",
+        "//drivers/TegraVIC:TegraVICFormats.h",
         "//drivers/TegraGM20B:SwitchGpuBacking.h",
         "//drivers/TegraGM20B:SwitchGpuBridge.h",
         "//drivers/TegraHost1x:TegraHost1x.h",
@@ -385,6 +411,7 @@ host_test(
         "//drivers/TegraVIC:TegraVICRequest.h",
         "//drivers/TegraVIC:SwitchSurfaceColor.h",
         "//drivers/TegraVIC:TegraVICConfig.h",
+        "//drivers/TegraVIC:TegraVICFormats.h",
         "//drivers/TegraVIC:TegraVICBand.h",
         "//drivers/TegraVIC:SwitchVICJobs.h",
         "//drivers/TegraVIC:SwitchVICEvents.h",
@@ -415,6 +442,7 @@ host_library(
         "//drivers/TegraVIC:TegraVICRequest.h",
         "//drivers/TegraVIC:SwitchSurfaceColor.h",
         "//drivers/TegraVIC:TegraVICConfig.h",
+        "//drivers/TegraVIC:TegraVICFormats.h",
     ],
     deps = ["//drivers/TegraGM20B/test:switch_gpu_event", "//drivers/TegraGM20B/test:event_kernel"],
 )
@@ -450,6 +478,7 @@ host_test(
         "//drivers/TegraVIC:TegraVIC.h",
         "//drivers/TegraVIC:TegraVICSurface.h",
         "//drivers/TegraVIC:TegraVICConfig.h",
+        "//drivers/TegraVIC:TegraVICFormats.h",
         "//drivers/TegraGM20B:SwitchGpuBacking.h",
         "//drivers/TegraGM20B:TegraGM20BLayout.h",
         "//kits/SwitchDMA:SwitchDcache.h",
@@ -475,6 +504,7 @@ host_test(
         "//drivers/TegraVIC:TegraVICRequest.h",
         "//drivers/TegraVIC:SwitchSurfaceColor.h",
         "//drivers/TegraVIC:TegraVICConfig.h",
+        "//drivers/TegraVIC:TegraVICFormats.h",
         "//drivers/TegraGM20B:SwitchGpuBacking.h",
         "//kits/SwitchDMA:SwitchDMAPages.h",
     ],
@@ -489,5 +519,6 @@ host_test(
         "vic_model.h",
         "TegraVICProbe.h",
         "//drivers/TegraVIC:TegraVICConfig.h",
+        "//drivers/TegraVIC:TegraVICFormats.h",
     ],
 )
