@@ -67,6 +67,19 @@ public enum RawFacade {
         (ask(buffer, "switchRawWholePrograms") as? NSNumber)?.boolValue ?? false
     }
 
+    /// How the facade got a render state's record (debug builds; nil elsewhere): "how" (pack, table, store, compiled,
+    /// joined, stored, here, none), "wait_us" and "qos" (the creating thread's wait for the shader compiler and its
+    /// class), "ran_class" (the compiler's band for it, 4 user-interactive).
+    public static func compile(of state: MTLRenderPipelineState) -> [String: Any]? {
+        ask(state, "switchRawCompile") as? [String: Any]
+    }
+
+    /// The shader compiler's store the facade maps (debug builds): its stack key and pack rules' digest in hex, "" for
+    /// none; nil off the facade.
+    public static func compilerStore(of device: MTLDevice) -> String? {
+        ask(device, "switchCompilerStore") as? String
+    }
+
     static func ask(_ object: Any, _ name: String) -> Any? {
         let selector = NSSelectorFromString(name)
         guard let object = object as? NSObject, object.responds(to: selector) else { return nil }
