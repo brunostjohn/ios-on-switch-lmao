@@ -267,6 +267,8 @@ TEST(Relayout, FailureBeforeCheckpointLeavesOriginalLayoutUntouched)
 
 TEST(Relayout, WaitsForEveryWriterFirst)
 {
+	constexpr uint32_t kSemaphoreRun =
+		1u << 29 | 4u << 16 | 0x0010 >> 2;  // SEMAPHOREA..D on subchannel 0
 	Surface s(kCases[2]);
 	s.move(TGM_RELAYOUT_TO_ROWS, {{0x1000040, 7, 5}, {0x1004040, 0xfffffffe, 6}});
 	uint32_t w[TGM_RELAYOUT_DWORDS];
@@ -274,9 +276,9 @@ TEST(Relayout, WaitsForEveryWriterFirst)
 	const tgm_relayout_move m = {kSurfaceVa,           kSurfaceRowsVa, kRowsVa, s.bytesPerRow,
 				     TGM_RELAYOUT_TO_ROWS, s.rows.size(),  0};
 	tgm_relayout_push(w, &s.l, &m, waits, 2);
-	EXPECT_EQ(w[0], tgm_relayout_header(0, 0x0010, 4));
-	EXPECT_EQ(w[5], tgm_relayout_header(0, 0x0010, 4));
-	EXPECT_EQ(w[10] >> 13 & 7, TGM_RELAYOUT_SUBC_COPY);
+	EXPECT_EQ(w[0], kSemaphoreRun);
+	EXPECT_EQ(w[5], kSemaphoreRun);
+	EXPECT_EQ(w[10] >> 13 & 7, kCopySubchannel);
 }
 
 }  // namespace

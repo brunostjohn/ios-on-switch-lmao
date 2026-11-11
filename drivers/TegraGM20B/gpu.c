@@ -62,9 +62,9 @@
 #include <nvif/vmm.h>
 #include <nvif/chan.h>
 #include <nvif/push906f.h>
-#include <nvhw/class/cla0b5.h>
 #include "TegraGM20BClkgate.h"
 #include "TegraGM20BComp.h"
+#include "TegraGM20BCopyEmit.h"
 #include "TegraGM20BGpu.h"
 #include "SwitchGpuJobFences.h"
 #include "SwitchGpuJobTiming.h"
@@ -5243,41 +5243,11 @@ int switch_gpu_chan_exec_visibility(struct tgm_chan *chan, const struct tgm_push
  * call) runs from the interrupt pass, with TEGRA_SCANOUT_SOURCE_LOST when a writer it waited for was killed before that
  * submission ended (the acquire passed on the kill's release, over a partial frame). A present that has not completed 1 s
  * after it was queued panics, naming what it waits for. Every mapping is volatile: the source was written by work whose
- * fence flushed the L2 (or bypassed it), the destination is read by the display controller only. Methods from open-gpu-doc classes/dma-copy/clb0b5.h.
+ * fence flushed the L2 (or bypassed it), the destination is read by the display controller only. The copy is
+ * kits/SwitchGM20BEmit's (TegraGM20BCopyEmit.c).
  * No user submission waits for a present: the compositor never writes a surface a copy still reads. Core Animation
  * recycles a framebuffer only when a later swap completes, and the display offers the next swap only once the copy
  * before it completed (NativeLegacyDisplay offerGpuCopy). */
-#define NVB0B5_LAUNCH_DMA 0x0300
-#define NVB0B5_LAUNCH_DMA_NON_PIPELINED (2u << 0)
-#define NVB0B5_LAUNCH_DMA_FLUSH_ENABLE (1u << 2)
-#define NVB0B5_LAUNCH_DMA_SRC_PITCH (1u << 7)       /* SRC_MEMORY_LAYOUT 7:7, PITCH 1 */
-#define NVB0B5_LAUNCH_DMA_DST_BLOCKLINEAR (0u << 8) /* DST_MEMORY_LAYOUT 8:8, BLOCKLINEAR 0 */
-#define NVB0B5_LAUNCH_DMA_DST_PITCH (1u << 8)
-#define NVB0B5_LAUNCH_DMA_MULTI_LINE (1u << 9)
-#define NVB0B5_OFFSET_IN_UPPER 0x0400
-#define NVB0B5_OFFSET_IN_LOWER 0x0404
-#define NVB0B5_OFFSET_OUT_UPPER 0x0408
-#define NVB0B5_OFFSET_OUT_LOWER 0x040c
-#define NVB0B5_PITCH_IN 0x0410
-#define NVB0B5_PITCH_OUT 0x0414
-#define NVB0B5_LINE_LENGTH_IN 0x0418
-#define NVB0B5_LINE_COUNT 0x041c
-#define NVB0B5_SET_DST_BLOCK_SIZE 0x070c
-#define NVB0B5_BLOCK_SIZE_FERMI_8(log2h) \
-	(((log2h) << 4) | (1u << 12)) /* WIDTH 1 GOB, HEIGHT 2^log2h, DEPTH 1, FERMI_8 */
-#define NVB0B5_SET_DST_WIDTH 0x0710
-#define NVB0B5_SET_DST_HEIGHT 0x0714
-#define NVB0B5_SET_DST_DEPTH 0x0718
-#define NVB0B5_SET_DST_LAYER 0x071c
-#define NVB0B5_SET_DST_ORIGIN 0x0720
-#define NVB0B5_SET_SRC_BLOCK_SIZE 0x0728
-#define NVB0B5_SET_SRC_WIDTH 0x072c
-#define NVB0B5_SET_SRC_HEIGHT 0x0730
-#define NVB0B5_SET_SRC_DEPTH 0x0734
-#define NVB0B5_SET_SRC_LAYER 0x0738
-#define NVB0B5_SET_SRC_ORIGIN 0x073c
-/* a read-back's pushes (present_push_reads): 9 + 7 + 2 */
-#define TGM_PRESENT_READ_DWORDS 18
 #define TGM_PRESENT_NS \
 	(1000 *        \
 	 NSEC_PER_MSEC) /* as the display's own limit: compositor jobs up to ~90 ms were seen */
@@ -5604,28 +5574,10 @@ static void present_push_reads(struct nvif_push *push, const struct tgm_present_
 
 	for (i = 0; i < n; i++) {
 		const struct tgm_present_read *r = &reads[i];
-		const int block = r->src_block_log2 >= 0;
+		const struct tgm_copy_side src = {r->src_va, r->src_pitch, r->src_block_log2};
+		const struct tgm_copy_side dst = {r->dst_va, r->dst_pitch, -1};
 
-		/* nouveau's NVDEF/NVVAL/PUSH_* macros compute in int and repeat their branches. */
-		/* NOLINTBEGIN(bugprone-signed-bitwise,bugprone-branch-clone) */
-		PUSH_NVSQ(push, NVA0B5, NVB0B5_OFFSET_IN_UPPER, upper_32_bits(r->src_va),
-			  NVB0B5_OFFSET_IN_LOWER, lower_32_bits(r->src_va), NVB0B5_OFFSET_OUT_UPPER,
-			  upper_32_bits(r->dst_va), NVB0B5_OFFSET_OUT_LOWER,
-			  lower_32_bits(r->dst_va), NVB0B5_PITCH_IN, block ? 0 : r->src_pitch,
-			  NVB0B5_PITCH_OUT, r->dst_pitch, NVB0B5_LINE_LENGTH_IN, r->width * 4,
-			  NVB0B5_LINE_COUNT, r->height);
-		if (block) {
-			PUSH_NVSQ(push, NVA0B5, NVB0B5_SET_SRC_BLOCK_SIZE,
-				  NVB0B5_BLOCK_SIZE_FERMI_8((u32)r->src_block_log2),
-				  NVB0B5_SET_SRC_WIDTH, r->src_pitch, NVB0B5_SET_SRC_HEIGHT,
-				  r->height, NVB0B5_SET_SRC_DEPTH, 1, NVB0B5_SET_SRC_LAYER, 0,
-				  NVB0B5_SET_SRC_ORIGIN, 0);
-		}
-		PUSH_NVSQ(push, NVA0B5, NVB0B5_LAUNCH_DMA,
-			  NVB0B5_LAUNCH_DMA_NON_PIPELINED | NVB0B5_LAUNCH_DMA_FLUSH_ENABLE |
-				  (block ? 0 : NVB0B5_LAUNCH_DMA_SRC_PITCH) |
-				  NVB0B5_LAUNCH_DMA_DST_PITCH | NVB0B5_LAUNCH_DMA_MULTI_LINE);
-		/* NOLINTEND(bugprone-signed-bitwise,bugprone-branch-clone) */
+		push->cur += tgm_copy_texels(push->cur, &src, &dst, r->width, r->height);
 	}
 }
 #endif
@@ -5677,7 +5629,7 @@ static int present_copy(uint64_t src_va, uint64_t src_pa, uint64_t also_pa, uint
 	}
 	push = &chan->chan.push;
 	ret = chan_push_wait(chan,
-			     (room + dependency_count) * 5 + 57 + nreads * TGM_PRESENT_READ_DWORDS +
+			     (room + dependency_count) * 5 + 57 + nreads * TGM_COPY_RECT_DWORDS +
 				     CHAN_FENCE_DWORDS); /* acquires, a start stamp, the copy, the
 								  read-backs, the fence */
 	if (ret == -ETIMEDOUT) {
@@ -5749,29 +5701,13 @@ static int present_copy(uint64_t src_va, uint64_t src_pa, uint64_t also_pa, uint
 		PUSH_NVSQ(push, NV906F, NVB06F_MEM_OP_C, 0, NVB06F_MEM_OP_D,
 			  NVB06F_MEM_OP_D_OPERATION_L2_FLUSH_DIRTY);
 		PUSH_NVSQ(push, NV906F, NVB06F_FB_FLUSH, 0);
-		/* nouveau's NVDEF/NVVAL/PUSH_* macros compute in int and repeat their branches. */
-		/* NOLINTBEGIN(bugprone-signed-bitwise,bugprone-branch-clone) */
-		PUSH_NVSQ(push, NVA0B5, NVB0B5_OFFSET_IN_UPPER, upper_32_bits(src_va),
-			  NVB0B5_OFFSET_IN_LOWER, lower_32_bits(src_va), NVB0B5_OFFSET_OUT_UPPER,
-			  upper_32_bits(dst_va), NVB0B5_OFFSET_OUT_LOWER, lower_32_bits(dst_va),
-			  NVB0B5_PITCH_IN, (u32)stride, NVB0B5_PITCH_OUT, 0, NVB0B5_LINE_LENGTH_IN,
-			  width * 4, NVB0B5_LINE_COUNT, height);
-		PUSH_NVSQ(push, NVA0B5, NVB0B5_SET_DST_BLOCK_SIZE,
-			  NVB0B5_BLOCK_SIZE_FERMI_8(block_height_log2), NVB0B5_SET_DST_WIDTH,
-			  dst_pitch, NVB0B5_SET_DST_HEIGHT, height, NVB0B5_SET_DST_DEPTH, 1,
-			  NVB0B5_SET_DST_LAYER, 0, NVB0B5_SET_DST_ORIGIN, 0);
-		if (src_block) {
-			PUSH_NVSQ(push, NVA0B5, NVB0B5_SET_SRC_BLOCK_SIZE,
-				  NVB0B5_BLOCK_SIZE_FERMI_8(TEGRA_SCANOUT_TILED_BLOCK_HEIGHT_LOG2),
-				  NVB0B5_SET_SRC_WIDTH, width * 4, NVB0B5_SET_SRC_HEIGHT, height,
-				  NVB0B5_SET_SRC_DEPTH, 1, NVB0B5_SET_SRC_LAYER, 0,
-				  NVB0B5_SET_SRC_ORIGIN, 0);
-		}
-		PUSH_NVSQ(push, NVA0B5, NVB0B5_LAUNCH_DMA,
-			  NVB0B5_LAUNCH_DMA_NON_PIPELINED | NVB0B5_LAUNCH_DMA_FLUSH_ENABLE |
-				  (src_block ? 0 : NVB0B5_LAUNCH_DMA_SRC_PITCH) |
-				  NVB0B5_LAUNCH_DMA_DST_BLOCKLINEAR | NVB0B5_LAUNCH_DMA_MULTI_LINE);
-		/* NOLINTEND(bugprone-signed-bitwise,bugprone-branch-clone) */
+		const int32_t src_block_log2 =
+			src_block ? TEGRA_SCANOUT_TILED_BLOCK_HEIGHT_LOG2 : -1;
+		const u32 src_pitch = src_block ? width * 4 : (u32)stride;
+		const struct tgm_copy_side src = {src_va, src_pitch, src_block_log2};
+		const struct tgm_copy_side dst = {dst_va, dst_pitch, (int32_t)block_height_log2};
+
+		push->cur += tgm_copy_texels(push->cur, &src, &dst, width, height);
 	}
 #if TGM_STATS
 	if (nreads)
@@ -5929,40 +5865,12 @@ static int scrub_submit(u64 pa, u64 bytes)
 
 	if (ret)
 		return ret;
-	/* nouveau's NVDEF/NVVAL/PUSH_* macros compute in int and repeat their branches. */
-	/* NOLINTBEGIN(bugprone-signed-bitwise,bugprone-branch-clone) */
-	PUSH_MTHD(push, NVA0B5, SET_REMAP_CONST_A, 0);
-	PUSH_MTHD(push, NVA0B5, SET_REMAP_COMPONENTS,
-		  NVDEF(NVA0B5, SET_REMAP_COMPONENTS, DST_X, CONST_A) |
-			  NVDEF(NVA0B5, SET_REMAP_COMPONENTS, COMPONENT_SIZE, FOUR) |
-			  NVDEF(NVA0B5, SET_REMAP_COMPONENTS, NUM_SRC_COMPONENTS, ONE) |
-			  NVDEF(NVA0B5, SET_REMAP_COMPONENTS, NUM_DST_COMPONENTS, ONE));
-	PUSH_MTHD(push, NVA0B5, PITCH_IN, SCRUB_LINE, PITCH_OUT, SCRUB_LINE);
-	if (lines) { /* whole 128 KiB lines, one multi-line fill */
-		PUSH_MTHD(push, NVA0B5, OFFSET_OUT_UPPER, upper_32_bits(va), OFFSET_OUT_LOWER,
-			  lower_32_bits(va));
-		PUSH_MTHD(push, NVA0B5, LINE_LENGTH_IN, SCRUB_LINE / 4, LINE_COUNT, (u32)lines);
-		PUSH_MTHD(push, NVA0B5, LAUNCH_DMA,
-			  NVDEF(NVA0B5, LAUNCH_DMA, DATA_TRANSFER_TYPE, NON_PIPELINED) |
-				  NVDEF(NVA0B5, LAUNCH_DMA, FLUSH_ENABLE, TRUE) |
-				  NVDEF(NVA0B5, LAUNCH_DMA, SRC_MEMORY_LAYOUT, PITCH) |
-				  NVDEF(NVA0B5, LAUNCH_DMA, DST_MEMORY_LAYOUT, PITCH) |
-				  NVDEF(NVA0B5, LAUNCH_DMA, MULTI_LINE_ENABLE, TRUE) |
-				  NVDEF(NVA0B5, LAUNCH_DMA, REMAP_ENABLE, TRUE));
-	}
-	if (rest) { /* the last pages, one line (a multiple of 4 KiB) */
-		va += lines * SCRUB_LINE;
-		PUSH_MTHD(push, NVA0B5, OFFSET_OUT_UPPER, upper_32_bits(va), OFFSET_OUT_LOWER,
-			  lower_32_bits(va));
-		PUSH_MTHD(push, NVA0B5, LINE_LENGTH_IN, (u32)(rest / 4), LINE_COUNT, 1);
-		PUSH_MTHD(push, NVA0B5, LAUNCH_DMA,
-			  NVDEF(NVA0B5, LAUNCH_DMA, DATA_TRANSFER_TYPE, NON_PIPELINED) |
-				  NVDEF(NVA0B5, LAUNCH_DMA, FLUSH_ENABLE, TRUE) |
-				  NVDEF(NVA0B5, LAUNCH_DMA, SRC_MEMORY_LAYOUT, PITCH) |
-				  NVDEF(NVA0B5, LAUNCH_DMA, DST_MEMORY_LAYOUT, PITCH) |
-				  NVDEF(NVA0B5, LAUNCH_DMA, REMAP_ENABLE, TRUE));
-	}
-	/* NOLINTEND(bugprone-signed-bitwise,bugprone-branch-clone) */
+	push->cur += tgm_fill_setup(push->cur, 0);
+	push->cur += tgm_fill_pitch(push->cur, SCRUB_LINE);
+	if (lines) /* whole 128 KiB lines, one multi-line fill */
+		push->cur += tgm_fill_lines(push->cur, va, SCRUB_LINE, (u32)lines, 1);
+	if (rest) /* the last pages, one line (a multiple of 4 KiB) */
+		push->cur += tgm_fill_lines(push->cur, va + lines * SCRUB_LINE, (u32)rest, 1, 0);
 	slot = scrub.head % SCRUB_JOBS;
 	scrub.job[slot].pa = pa;
 	scrub.job[slot].bytes = bytes;
@@ -6265,24 +6173,8 @@ static int m3(char *line, unsigned int len)
 	ret = chan_push_wait(chan, 12 + CHAN_FENCE_DWORDS);
 	if (ret)
 		goto done;
-	/* nouveau's NVDEF/NVVAL/PUSH_* macros compute in int and repeat their branches. */
-	/* NOLINTBEGIN(bugprone-signed-bitwise,bugprone-branch-clone) */
-	PUSH_MTHD(push, NVA0B5, SET_REMAP_CONST_A, 0xc0ffee42);
-	PUSH_MTHD(push, NVA0B5, SET_REMAP_COMPONENTS,
-		  NVDEF(NVA0B5, SET_REMAP_COMPONENTS, DST_X, CONST_A) |
-			  NVDEF(NVA0B5, SET_REMAP_COMPONENTS, COMPONENT_SIZE, FOUR) |
-			  NVDEF(NVA0B5, SET_REMAP_COMPONENTS, NUM_SRC_COMPONENTS, ONE) |
-			  NVDEF(NVA0B5, SET_REMAP_COMPONENTS, NUM_DST_COMPONENTS, ONE));
-	PUSH_MTHD(push, NVA0B5, OFFSET_OUT_UPPER, upper_32_bits(fill), OFFSET_OUT_LOWER,
-		  lower_32_bits(fill));
-	PUSH_MTHD(push, NVA0B5, LINE_LENGTH_IN, PAGE_SIZE / 4, LINE_COUNT, 1);
-	PUSH_MTHD(push, NVA0B5, LAUNCH_DMA,
-		  NVDEF(NVA0B5, LAUNCH_DMA, DATA_TRANSFER_TYPE, NON_PIPELINED) |
-			  NVDEF(NVA0B5, LAUNCH_DMA, FLUSH_ENABLE, TRUE) |
-			  NVDEF(NVA0B5, LAUNCH_DMA, SRC_MEMORY_LAYOUT, PITCH) |
-			  NVDEF(NVA0B5, LAUNCH_DMA, DST_MEMORY_LAYOUT, PITCH) |
-			  NVDEF(NVA0B5, LAUNCH_DMA, REMAP_ENABLE, TRUE));
-	/* NOLINTEND(bugprone-signed-bitwise,bugprone-branch-clone) */
+	push->cur += tgm_fill_setup(push->cur, 0xc0ffee42);
+	push->cur += tgm_fill_lines(push->cur, fill, PAGE_SIZE, 1, 0);
 	seqno = chan_fence(chan);
 	end = nvxnu_nanotime() + NSEC_PER_SEC;
 	for (;;) {

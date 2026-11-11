@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 // switch_gm20b_copy_rect against the copy emitters the drivers have today, for the same copies: word for word against
-// the raw path's emitCopy (raw_copy.h), method for method against the kernel's tgm_copy_rows and tgm_relayout_copy,
-// whose launch takes two words where the immediate form takes one.
+// the raw path's emitCopy (raw_copy.h), and method for method against the kernel's hand-encoded row and relayout copies
+// as they were before the kernel moved onto the kit, whose launch took two words where the immediate form takes one.
 #include <cstdint>
 #include <vector>
 
@@ -81,6 +81,21 @@ struct Case {
     bool ordered;
 };
 
+// The words the kernel hand-encoded for tgm_copy_rows and tgm_relayout_copy, for the inputs below
+constexpr uint32_t kHandRows[] = {0x20088100, 0x00000000, 0x12340000, 0x00000000, 0x56780000, 0x00001000,
+                                  0x00002000, 0x00000f00, 0x00000438, 0x200180c0, 0x00000386};
+constexpr uint32_t kHandToRows[] = {0x200181c2, 0x00033210, 0x20088100, 0x00000000, 0x80000000, 0x00000000, 0x90000000,
+                                    0x00001400, 0x00001400, 0x00000500, 0x000002d0, 0x200681ca, 0x00001040, 0x00000500,
+                                    0x000002d0, 0x00000001, 0x00000000, 0x00000000, 0x200180c0, 0x00000706};
+constexpr uint32_t kHandToTiled[] = {0x200181c2, 0x00033210, 0x20088100, 0x00000000, 0x90000000, 0x00000000, 0x80000000,
+                                     0x00001400, 0x00001400, 0x00000500, 0x000002d0, 0x200681c3, 0x00001040, 0x00000500,
+                                     0x000002d0, 0x00000001, 0x00000000, 0x00000000, 0x200180c0, 0x00000686};
+
+template <size_t N> std::vector<uint32_t> hand(const uint32_t (&words)[N])
+{
+    return std::vector<uint32_t>(words, words + N);
+}
+
 const Case kCases[] = {
     {"pitch to pitch", pitch(0x1000000, 1024), pitch(0x2000040, 2048), 4, 256, 64, false},
     {"pitch to block-linear", pitch(0x1000000, 512), tiled(0x40000000, 256, 128, 1, 0, 8, 16, 4, 0), 4, 64, 32, true},
@@ -123,8 +138,9 @@ TEST(EmitCopy, WordForWordTheRawPathsCopy)
 
 TEST(EmitCopy, MethodForMethodTheKernelsRowCopy)
 {
-    std::vector<uint32_t> theirs(TGM_COPY_DWORDS), ours(SWITCH_GM20B_COPY_RECT_WORDS(1));
-    theirs.resize(tgm_copy_rows(theirs.data(), 0x12340000, 4096, 0x56780000, 8192, 3840, 1080));
+    std::vector<uint32_t> kernel(TGM_COPY_DWORDS), ours(SWITCH_GM20B_COPY_RECT_WORDS(1));
+    kernel.resize(tgm_copy_rows(kernel.data(), 0x12340000, 4096, 0x56780000, 8192, 3840, 1080));
+    const std::vector<uint32_t> theirs = hand(kHandRows);
 
     switch_gm20b_copy copy = {};
     copy.src.base_addr = 0x12340000;
@@ -140,8 +156,9 @@ TEST(EmitCopy, MethodForMethodTheKernelsRowCopy)
     switch_gm20b_copy_rect(&p, &copy, NVB0B5_LAUNCH_DMA_DATA_TRANSFER_TYPE_NON_PIPELINED);
     ours.resize(nv_push_dw_count(&p));
 
+    EXPECT_EQ(Words(kernel), Words(ours));
     EXPECT_EQ(Methods(ours), Methods(theirs));
-    EXPECT_EQ(ours.size() + 1, theirs.size()) << "the kernel's LAUNCH_DMA takes a header and a word";
+    EXPECT_EQ(ours.size() + 1, theirs.size()) << "the hand-encoded LAUNCH_DMA took a header and a word";
 }
 
 TEST(EmitCopy, MethodForMethodTheKernelsRelayout)
@@ -151,9 +168,10 @@ TEST(EmitCopy, MethodForMethodTheKernelsRelayout)
     for (int toTiled = 0; toTiled < 2; toTiled++) {
         const uint64_t tiled = 0x80000000, rows = 0x90000000;
         const uint32_t pitch = 1280 * 4;
-        std::vector<uint32_t> theirs(TGM_RELAYOUT_DWORDS), ours(SWITCH_GM20B_COPY_RECT_WORDS(1));
-        theirs.resize(toTiled ? tgm_relayout_copy(theirs.data(), &l, rows, 0, tiled, 1, pitch)
-                              : tgm_relayout_copy(theirs.data(), &l, tiled, 1, rows, 0, pitch));
+        std::vector<uint32_t> kernel(TGM_RELAYOUT_DWORDS), ours(SWITCH_GM20B_COPY_RECT_WORDS(1));
+        kernel.resize(toTiled ? tgm_relayout_copy(kernel.data(), &l, rows, 0, tiled, 1, pitch)
+                              : tgm_relayout_copy(kernel.data(), &l, tiled, 1, rows, 0, pitch));
+        const std::vector<uint32_t> theirs = toTiled ? hand(kHandToTiled) : hand(kHandToRows);
 
         switch_gm20b_copy_surface block = {};
         block.base_addr = tiled;
@@ -181,7 +199,9 @@ TEST(EmitCopy, MethodForMethodTheKernelsRelayout)
         switch_gm20b_copy_rect(&p, &copy, NVB0B5_LAUNCH_DMA_DATA_TRANSFER_TYPE_NON_PIPELINED);
         ours.resize(nv_push_dw_count(&p));
 
+        EXPECT_EQ(Words(kernel), Words(ours)) << (toTiled ? "to tiled" : "to rows");
         EXPECT_EQ(Methods(ours), Methods(theirs)) << (toTiled ? "to tiled" : "to rows");
+        EXPECT_EQ(ours.size() + 1, theirs.size()) << (toTiled ? "to tiled" : "to rows");
     }
 }
 

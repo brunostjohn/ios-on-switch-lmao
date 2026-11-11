@@ -352,6 +352,7 @@ kernel_archive(
         "//drivers/SwitchAudio:SwitchAudio",
         "//drivers/SwitchWLAN:SwitchWLAN",
         "//drivers/TegraGM20B:TegraGM20B_nvkm",
+        "//drivers/TegraGM20B:TegraGM20B_emit",
         "//drivers/TegraGM20B:TegraGM20B",
         "//drivers/TegraBPMP:TegraBPMP",
         "//drivers/TegraDFLL:TegraDFLL_linux",

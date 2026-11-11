@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
-// The kernel's hand-encoded host and copy pushes (TegraGM20BSyncpt.h, TegraGM20BRelayout.h), read back as methods and
-// checked against the class headers' names and fields: what the kit's names will replace, method for method.
+// The kernel's host and copy pushes (TegraGM20BSyncpt.h, TegraGM20BRelayout.h), read back as methods and checked against
+// the class headers' names and fields.
 #include <cstdint>
 #include <vector>
 
@@ -88,6 +88,25 @@ TEST(EmitKernel, RelayoutClearIsAConstantRemapFill)
                                                          {kCopy, NVB0B5_LINE_LENGTH_IN, 1024},
                                                          {kCopy, NVB0B5_LINE_COUNT, 0x30},
                                                          {kCopy, NVB0B5_LAUNCH_DMA, launch}}));
+}
+
+// The words the kernel hand-encoded for these pushes before it moved onto the kit
+TEST(EmitKernel, TheKitWritesTheHandEncodedWords)
+{
+    const tgm_relayout_wait wait = {0x12345678c0, 77, 3};
+    uint32_t w[TGM_RELAYOUT_DWORDS];
+    EXPECT_EQ(words(tgm_relayout_acquire(w, &wait), w),
+              (std::vector<uint32_t>{0x20040004, 0x00000012, 0x345678c0, 0x0000004d, 0x00001004}));
+    EXPECT_EQ(
+        words(tgm_relayout_checkpoint(w, 0x1000040), w),
+        (std::vector<uint32_t>{0x2001001e, 0x00000000, 0x20010009, 0x00000000, 0x2002000c, 0x00000000, 0x80000000,
+                               0x20010009, 0x00000000, 0x20040004, 0x00000000, 0x01000040, 0x00000001, 0x01000002}));
+    const std::vector<uint32_t> clear = {0x200381c0, 0x00000000, 0x00000000, 0x00030004, 0x20068102,
+                                         0x00000044, 0x00001000, 0x00001000, 0x00001000, 0x00000400,
+                                         0x00000030, 0x200180c0, 0x00000786};
+    const std::vector<uint32_t> ours = words(tgm_relayout_clear(w, 0x4400001000, 0x30000), w);
+    EXPECT_EQ(Methods(ours), Methods(clear));
+    EXPECT_EQ(ours.size() + 1, clear.size()) << "LAUNCH_DMA in its one-word form";
 }
 
 }  // namespace

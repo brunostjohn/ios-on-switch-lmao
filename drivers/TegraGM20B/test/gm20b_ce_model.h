@@ -13,6 +13,8 @@
 #include "drivers/TegraGM20B/TegraGM20BLayout.h"
 #include "gm20b_gpu_memory.h"
 
+constexpr uint32_t kCopySubchannel = 4;  // MAXWELL_DMA_COPY_A, as the kernel's channels bind it
+
 struct Side {
 	uint32_t blockSize = 0, width = 0, height = 0, depth = 0, layer = 0, origin = 0;
 };
@@ -134,7 +136,7 @@ struct CopyEngine {
 			}
 			return;
 		}
-		ASSERT_EQ(subc, TGM_RELAYOUT_SUBC_COPY);
+		ASSERT_EQ(subc, kCopySubchannel);
 		m[mthd] = data;
 		if (mthd >= 0x0728 && mthd < 0x0740)
 			setSide(src, mthd - 0x0728, data);
@@ -166,7 +168,14 @@ struct CopyEngine {
 		for (uint32_t i = 0; i < n;) {
 			const uint32_t h = w[i++], op = h >> 29, count = (h >> 16) & 0x1fff,
 				       subc = (h >> 13) & 7, mthd = (h & 0xfff) << 2;
-			ASSERT_EQ(op, 1u) << "INC headers only: the host raises PBENTRY on header "
+			if (op == 4) {  // IMMD_DATA_METHOD: the count field is the value
+				method(subc, mthd, count);
+				if (fault)
+					return;
+				continue;
+			}
+			ASSERT_EQ(op, 1u) << "INC and immediate headers only: the host raises "
+					     "PBENTRY on header "
 					  << std::hex << h << " at word " << std::dec << i - 1;
 			for (uint32_t k = 0; k < count; k++) {
 				method(subc, mthd + 4 * k, w[i++]);

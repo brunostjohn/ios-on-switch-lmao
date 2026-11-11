@@ -439,6 +439,23 @@ host_test(
     deps = [":backing", ":coherency_kernel"],
 )
 
+# The kernel's copy-engine pushes on kits/SwitchGM20BEmit, as TegraGM20B_emit builds them for the kernel.
+host_library(
+    name = "copy_emit",
+    srcs = [
+        "//drivers/TegraGM20B:TegraGM20BABI.h",
+        "//drivers/TegraGM20B:TegraGM20BCopyEmit.c",
+        "//drivers/TegraGM20B:TegraGM20BFences.h",
+        "//drivers/TegraGM20B:TegraGM20BGpu.h",
+        "//drivers/TegraGM20B:TegraGM20BLayout.h",
+        "//drivers/TegraGM20B:TegraGM20BRelayout.h",
+    ],
+    hdrs = ["//drivers/TegraGM20B:TegraGM20BCopyEmit.h"],
+    copts = ["-Ikits/SwitchGM20BEmit"],
+    visibility = ["//kits/SwitchGM20BEmit/test:__pkg__"],
+    deps = ["//kits/SwitchGM20BEmit:copy_rect"],
+)
+
 host_library(
     name = "coherency",
     srcs = [
@@ -458,7 +475,10 @@ host_library(
         "//drivers/TegraGM20B:TegraGM20BViews.h",
         "//kits/SwitchRefusal:SwitchRefusal.h",
     ],
-    deps = [":coherency_kernel"],
+    deps = [
+        ":coherency_kernel",
+        ":copy_emit",
+    ],
 )
 
 host_test(
@@ -516,6 +536,7 @@ host_test(
         "//drivers/TegraGM20B:TegraGM20BRelayout.h",
     ],
     cxx_std = "c++17",
+    deps = [":copy_emit"],
 )
 
 host_test(
@@ -534,6 +555,7 @@ host_test(
         "//drivers/TegraGM20B:TegraGM20BSyncpt.h",
     ],
     cxx_std = "c++17",
+    deps = [":copy_emit"],
 )
 
 host_test(
@@ -828,7 +850,10 @@ host_library(
         "//drivers/TegraGM20B:TegraGM20BABI.h",
         "//kits/SwitchDMA:SwitchDcache.h",
     ],
-    deps = [":cached_zero_kernel"],
+    deps = [
+        ":cached_zero_kernel",
+        ":copy_emit",
+    ],
 )
 
 host_test(
@@ -861,7 +886,10 @@ host_test(
         "//kits/SwitchScratch:SwitchScratch.h",
     ],
     additional_compiler_inputs = ["//drivers/TegraGM20B:TegraGM20BRelayout.cpp"],
-    deps = [":relayout_control_kernel"],
+    deps = [
+        ":copy_emit",
+        ":relayout_control_kernel",
+    ],
 )
 
 
@@ -1011,7 +1039,7 @@ host_test(
         "//drivers/TegraGM20B:SwitchGpuEventClient.h", "//drivers/TegraGM20B:SwitchGpuEventChannel.h",
         "//drivers/TegraGM20B:SwitchGpuSharedEvent.h", "//drivers/TegraGM20B:SwitchGpuTimeline.h",
     ],
-    deps = [":copy_mappings", ":copy_kernel"],
+    deps = [":copy_mappings", ":copy_kernel", ":copy_emit"],
 )
 
 host_test(
@@ -1071,4 +1099,10 @@ host_test(
     srcs = ["switch_gpu_cpu_complete_test.cpp", "switch_gpu_backing_fixture.h",
             "//drivers/TegraGM20B:SwitchGpuUserCpuComplete.h"],
     deps = [":backing", ":coherency_kernel"],
+)
+
+host_test(
+    name = "gm20b_copy_emit_test",
+    srcs = ["gm20b_copy_emit_test.cpp"],
+    deps = [":copy_emit"],
 )

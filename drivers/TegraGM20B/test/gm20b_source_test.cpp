@@ -315,7 +315,7 @@ TEST(GM20BPoolScrubSource, ScrubberFreesOnlyFromItsFence)
 	EXPECT_EQ(Count(gpu(), "nvxnu_pool_free_zeroed("), 2u)
 		<< "tgm_pool_free_zeroed's and the scrubber's";
 	const std::string submit = definition(gpu(), "static int scrub_submit(u64 pa, u64 bytes)");
-	EXPECT_THAT(submit, HasSubstr("SET_REMAP_CONST_A, 0)"));
+	EXPECT_THAT(submit, HasSubstr("tgm_fill_setup(push->cur, 0)"));
 	EXPECT_THAT(
 		submit,
 		HasSubstr(
@@ -363,7 +363,7 @@ TEST(GM20BPushScanSource, KernelUsesTheHeader)
 TEST(GM20BPresentSource, FenceOnlyPresentHasNoCopy)
 {
 	expectBefore(Between(gpu(), "static int present_copy(", "\n}\n"), "if (dst_va) {",
-		     "NVB0B5_LAUNCH_DMA_NON_PIPELINED");
+		     "tgm_copy_texels(");
 }
 
 // A present waits for the writers of window B's surface too (TegraScanoutCopy alsoWritten), so the display writes window
@@ -395,10 +395,11 @@ TEST(GM20BPresentSource, ReadbackRidesTheFramesPresent)
 	const std::string copy = flat(Between(gpu(), "static int present_copy(", "\n}\n"));
 	expectBefore(copy, "if (dst_va) {", "present_push_reads(push, reads, nreads);");
 	expectBefore(copy, "present_push_reads(push, reads, nreads);", "chan_fence(chan);");
-	EXPECT_THAT(copy, HasSubstr("nreads * TGM_PRESENT_READ_DWORDS"));
+	EXPECT_THAT(copy, HasSubstr("nreads * TGM_COPY_RECT_DWORDS"));
 	const std::string reads = flat(Between(gpu(), "static void present_push_reads(", "\n}\n"));
-	EXPECT_THAT(reads, HasSubstr("NVB0B5_LAUNCH_DMA_NON_PIPELINED"));
-	EXPECT_THAT(reads, HasSubstr("NVB0B5_LAUNCH_DMA_DST_PITCH"));
+	EXPECT_THAT(reads, HasSubstr("dst = {r->dst_va, r->dst_pitch, -1};"));  // pitch-linear
+	EXPECT_THAT(reads,
+		    HasSubstr("tgm_copy_texels(push->cur, &src, &dst, r->width, r->height)"));
 	expectBefore(gpu(), "#if TGM_STATS\n/* Each read-back", "static void present_push_reads(");
 
 	const std::string scanout =
@@ -424,9 +425,7 @@ TEST(GM20BPresentSource, ReadbackRidesTheFramesPresent)
 TEST(GM20BPresentSource, TiledSourceIsCopiedBlockLinear)
 {
 	const std::string copy = flat(Between(gpu(), "static int present_copy(", "\n}\n"));
-	expectBefore(copy, "if (src_block) { PUSH_NVSQ(push, NVA0B5, NVB0B5_SET_SRC_BLOCK_SIZE",
-		     "NVB0B5_LAUNCH_DMA");
-	EXPECT_THAT(copy, HasSubstr("(src_block ? 0 : NVB0B5_LAUNCH_DMA_SRC_PITCH)"));
+	EXPECT_THAT(copy, HasSubstr("src_block ? TEGRA_SCANOUT_TILED_BLOCK_HEIGHT_LOG2 : -1;"));
 	const std::string surface = flat(Between(client(), "uint64_t presentSurface(", "\n}\n"));
 	EXPECT_THAT(surface, HasSubstr("const uint32_t kind = blockLinear ? TGM_LAYOUT_KIND : 0;"));
 	EXPECT_THAT(surface, HasSubstr("s.mem, bytes, static_cast<uint8_t>(kind))"));

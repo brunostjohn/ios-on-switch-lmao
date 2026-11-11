@@ -3,6 +3,7 @@ load("//bazel/lint:defs.bzl", "lint_files")
 # drivers/TegraGM20B: moved from out/native-a57/root-v1/tree/drivers/TegraGM20B by the layout move.
 load("//kernel/rules:driver_flags.bzl", "GPU_C_FLAGS", "LINUX_RELAXATIONS")
 load("//kernel/rules:kernel.bzl", "kernel_driver", "kernel_headers")
+load("//kits/SwitchGM20BEmit:defs.bzl", "SWITCH_GM20B_EMIT_INCLUDES")
 
 package(default_visibility = ["//visibility:public"])
 
@@ -40,6 +41,21 @@ kernel_driver(
     hdr_deps = [
         "kits/SwitchLinux",
         "kits/SwitchMMIO",
+    ],
+    object_names = "path",
+)
+
+# The kernel's copy-engine pushes on kits/SwitchGM20BEmit, with XNU's C headers (the kit's), not the nouveau units' shim.
+kernel_driver(
+    name = "TegraGM20B_emit",
+    srcs = [
+        "TegraGM20BCopyEmit.c",
+        "//kits/SwitchGM20BEmit:mesa/nouveau_copy_rect.c",
+    ],
+    c_copts = SWITCH_GM20B_EMIT_INCLUDES,
+    hdr_deps = [
+        "kits/SwitchGM20B",
+        "kits/SwitchGM20BEmit",
     ],
     object_names = "path",
 )

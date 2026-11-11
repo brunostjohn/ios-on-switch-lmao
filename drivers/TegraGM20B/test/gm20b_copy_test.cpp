@@ -220,17 +220,18 @@ void checkLeanChannel(const uint32_t *words, uint32_t count)
 		const uint32_t header = words[at++];
 		const uint32_t subchannel = (header >> 13) & 7;
 		const uint32_t method = (header & 0x1fff) * 4;
-		const uint32_t arguments = (header >> 16) & 0x1fff;
-		ASSERT_EQ(header >> 29, 1u);
+		const bool immediate = header >> 29 == 4;
+		const uint32_t arguments = immediate ? 1 : (header >> 16) & 0x1fff;
+		ASSERT_TRUE(immediate || header >> 29 == 1u);
 		ASSERT_GT(arguments, 0u);
-		ASSERT_LE(arguments, count - at);
+		ASSERT_LE(immediate ? 0 : arguments, count - at);
 		if (subchannel == 0)
 			EXPECT_LT(method + (arguments - 1) * 4, 0x100u);
 		else {
 			EXPECT_EQ(subchannel, 4u);
 			EXPECT_GE(method, 0x100u);
 		}
-		at += arguments;
+		at += immediate ? 0 : arguments;
 	}
 }
 }
