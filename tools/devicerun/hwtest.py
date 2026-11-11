@@ -92,6 +92,7 @@ TESTS: dict[str, bool] = {
             'gpu.path.native_surface_view',
             'gpu.path.semantic_fence',
             'gpu.path.shared_events',
+            'gpu.path.resource_ready',
         ],
         False,
     ),

@@ -2893,8 +2893,7 @@ void AGXDeviceUserClient::releaseMappings()
 
 namespace
 {
-// What the held bit still needs. ResourceReady: its own unmask (its readiness notification is a shared event).
-constexpr uint32_t kInfoAwaitingUserspace = TegraGM20BInfoResourceReady;
+constexpr uint32_t kInfoAwaitingUserspace = 0;
 }  // namespace
 
 extern "C" uint32_t switch_gpu_info_flags(void)

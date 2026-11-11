@@ -2,6 +2,7 @@ import Darwin
 import CoreVideo
 import Foundation
 import HWTestCore
+import IOSurface
 import HWTestGPU
 import HWTestVideo
 import Metal
@@ -427,10 +428,63 @@ struct SharedEventsPathTest: GPUPathTest {
     }
 }
 
+/// ResourceReady (bit 23): a command buffer that renders into an IOSurface while the CPU holds its lock is refused by the
+/// kernel and parks on a readiness notification instead of failing; it runs once the lock goes, and its pixels are there.
+struct ResourceReadyPathTest: GPUPathTest {
+    let id = "gpu.path.resource_ready"
+    let name = "A render into a CPU-locked IOSurface waits for the unlock instead of failing"
+    let bit = 23
+    let counters = ["ready_arms"]
+
+    func exercise(_ gpu: GPU, _: TestContext, _ metrics: inout Metrics) async throws -> [String] {
+        let width = 64, height = 64, rowBytes = 256
+        let properties: [IOSurfacePropertyKey: Any] = [
+            .width: width, .height: height, .bytesPerElement: 4, .bytesPerRow: rowBytes,
+            .allocSize: rowBytes * height, .pixelFormat: 0x4247_5241,
+        ]
+        guard let surface = IOSurface(properties: properties) else { throw TestFailure("IOSurface creation failed") }
+        let descriptor = MTLTextureDescriptor.texture2DDescriptor(
+            pixelFormat: .bgra8Unorm, width: width, height: height, mipmapped: false)
+        descriptor.usage = [.renderTarget, .shaderRead]
+        guard let texture = gpu.device.makeTexture(descriptor: descriptor, iosurface: surface, plane: 0) else {
+            throw TestFailure("no texture over the IOSurface")
+        }
+        guard surface.lock(options: [], seed: nil) == 0 else { throw TestFailure("IOSurfaceLock failed") }
+        let render = try gpu.commit { commands in
+            let pass = MTLRenderPassDescriptor()
+            pass.colorAttachments[0].texture = texture
+            pass.colorAttachments[0].loadAction = .clear
+            pass.colorAttachments[0].clearColor = MTLClearColor(red: 0, green: 1, blue: 0, alpha: 1)
+            pass.colorAttachments[0].storeAction = .store
+            commands.makeRenderCommandEncoder(descriptor: pass)!.endEncoding()
+        }
+        try await Task.sleep(nanoseconds: 100_000_000)
+        let heldBack = render.status != .completed && render.status != .error
+        surface.unlock(options: [], seed: nil)
+        try gpu.finish([render])
+        metrics.set("held_back", heldBack)
+        guard surface.lock(options: .readOnly, seed: nil) == 0 else {
+            throw TestFailure("IOSurfaceLock for the readback failed")
+        }
+        var wrong = 0
+        for y in 0..<height {
+            let row = UnsafeRawBufferPointer(start: surface.baseAddress + y * rowBytes, count: width * 4)
+            for x in 0..<width where Array(row[(x * 4)..<(x * 4 + 4)]) != [0, 255, 0, 255] { wrong += 1 }
+        }
+        surface.unlock(options: .readOnly, seed: nil)
+        metrics.set("wrong_pixels", wrong)
+        var failures: [String] = []
+        if !heldBack { failures.append("the render ran while the CPU held the lock") }
+        if wrong != 0 { failures.append("\(wrong) pixels miss the clear") }
+        return failures
+    }
+}
+
 enum GPUPathTests {
     static let all: [any HWTest] = [
         JobVisibilityPathTest(), LeanCopyPathTest(), ControlReservePathTest(), CpuCompletePathTest(),
         UseRangesPathTest(), NativeSurfaceViewPathTest(), SemanticFencePathTest(), SharedEventsPathTest(),
+        ResourceReadyPathTest(),
     ]
 }
 

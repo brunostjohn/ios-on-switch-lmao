@@ -1,12 +1,19 @@
 // SPDX-License-Identifier: MIT
 #include "switch_gpu_ready_stubs.h"
 #include "drivers/TegraGM20B/SwitchGpuReady.h"
+#include "drivers/TegraGM20B/SwitchGpuPathStats.h"
 #include <gtest/gtest.h>
 #include <array>
 #include <functional>
 #include <future>
 #include <thread>
 #include <vector>
+
+#if SWITCH_GPU_PATH_STATS
+extern "C" void switch_gpu_path_taken(enum switch_gpu_path, uint32_t)
+{
+}
+#endif
 
 thread_call_t switch_event_call;
 

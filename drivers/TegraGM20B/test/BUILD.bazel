@@ -1097,6 +1097,7 @@ host_library(
     srcs = ["//drivers/TegraGM20B:SwitchGpuReady.cpp", "//drivers/TegraGM20B:SwitchGpuResourceClient.cpp"],
     hdrs = [
         "//drivers/TegraGM20B:SwitchGpuReady.h", "//drivers/TegraGM20B:SwitchGpuResourceClient.h",
+        "//drivers/TegraGM20B:SwitchGpuPathStats.h",
         "//drivers/TegraGM20B:SwitchGpuAdmission.h", "//drivers/TegraGM20B:SwitchGpuBacking.h",
         "//drivers/TegraGM20B:TegraGM20BViews.h", "//drivers/TegraGM20B:TegraGM20BTiled.h",
         "//drivers/TegraGM20B:TegraGM20BGpu.h", "//drivers/TegraGM20B:TegraGM20BLayout.h",
@@ -1106,7 +1107,8 @@ host_library(
 )
 host_test(
     name = "switch_gpu_ready_test",
-    srcs = ["switch_gpu_ready_test.cpp", "switch_gpu_resource_test.cpp", "switch_gpu_ready_stubs.h", "switch_gpu_event_stubs.h"],
+    srcs = ["switch_gpu_ready_test.cpp", "switch_gpu_resource_test.cpp", "switch_gpu_ready_stubs.h", "switch_gpu_event_stubs.h",
+            "//drivers/TegraGM20B:SwitchGpuPathStats.h"],
     deps = [":ready", ":ready_kernel"],
 )
 

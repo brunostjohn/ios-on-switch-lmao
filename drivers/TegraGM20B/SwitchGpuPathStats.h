@@ -24,6 +24,7 @@ enum switch_gpu_path {
 	SWITCH_GPU_PATH_NATIVE_READ,    /* NativeSurfaceView: a job's read of one */
 	SWITCH_GPU_PATH_NATIVE_TILED,   /* NativeSurfaceView: a view of a block-linear picture (not the pitch planes) */
 	SWITCH_GPU_PATH_EVENT_JOB,      /* SharedEvents: a job that waits for or signals a shared event */
+	SWITCH_GPU_PATH_READY_ARM,      /* ResourceReady: a readiness notification armed for a refused admission */
 	SWITCH_GPU_PATH_COUNT
 };
 

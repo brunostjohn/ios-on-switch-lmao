@@ -686,9 +686,8 @@ TEST(GM20BFencesSource, ExecQueuesItsWritersAcquiresBeforeItSubmits)
 		    HasSubstr("out->flags = switch_gpu_info_flags();"));
 	const auto awaiting =
 		flat(client().substr(client().find("constexpr uint32_t kInfoAwaitingUserspace")));
-	EXPECT_THAT(awaiting.substr(0, awaiting.find(';')), HasSubstr("TegraGM20BInfoResourceReady"));
 	for (const char *capability :
-	     {"TegraGM20BInfoSharedEvents", "TegraGM20BInfoSemanticFence", "TegraGM20BInfoNativeSurfaceView", "TegraGM20BInfoJobVisibility",
+	     {"TegraGM20BInfoResourceReady", "TegraGM20BInfoSharedEvents", "TegraGM20BInfoSemanticFence", "TegraGM20BInfoNativeSurfaceView", "TegraGM20BInfoJobVisibility",
 	      "TegraGM20BInfoLeanCopyChannel",
 	      "TegraGM20BInfoControlReserve", "TegraGM20BInfoCpuComplete", "TegraGM20BInfoUseRanges"})
 		EXPECT_THAT(awaiting.substr(0, awaiting.find(';')), Not(HasSubstr(capability)));

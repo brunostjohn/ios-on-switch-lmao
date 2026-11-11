@@ -2,6 +2,7 @@
 #include <IOKit/IOLib.h>
 #include <libkern/c++/OSObject.h>
 #include "SwitchGpuAdmission.h"
+#include "SwitchGpuPathStats.h"
 #include "SwitchGpuReady.h"
 #include "SwitchGpuResourceClient.h"
 #include "TegraGM20BViews.h"
@@ -123,6 +124,7 @@ int SwitchGpuResourceClient::observe(const SwitchGpuResourceUse *uses, uint32_t 
 		watch->next = watches_;
 		watches_ = watch;
 		++count_;
+		switch_gpu_path_taken(SWITCH_GPU_PATH_READY_ARM, 1);
 	}
 	IOLockUnlock(lock_);
 	if (result) {
