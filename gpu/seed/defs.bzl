@@ -357,9 +357,12 @@ metal_seed = rule(
 # rawpack.py's BUCKETS: the split writes this many bucket corpora, each made by its own action.
 _RAW_BUCKETS = 16
 
-# The generator's modules each step runs (rawpack.py imports or runs them by path, beside it).
-_RAW_SPLIT = ["rawpack.py", "ca/caset.py", "ca/caspec.py", "ca/caspec27.py"]
-_RAW_PROBE = ["rawpack.py"]
+# The generator's modules each step runs (rawpack.py imports or runs them by path, beside it). Python finds a module
+# beside a script through the script's real path, so a module missing here still imported in the local sandbox (its
+# inputs are links into the source tree) and failed on a remote worker.
+_RAW_STAMP = ["rawpack.py", "packfile.py"]
+_RAW_SPLIT = _RAW_STAMP + ["ca/caset.py", "ca/caspec.py", "ca/caspec27.py"]
+_RAW_PROBE = _RAW_STAMP
 _RAW_LINK = [
     "rawpack.py",
     "directlink.py",
@@ -471,7 +474,7 @@ def _seed_raw_pack_impl(ctx):
     ctx.actions.run(
         executable = ctx.executable._tool,
         arguments = [args],
-        inputs = [linked, tools.manifest, ctx.file.generator],
+        inputs = [linked, tools.manifest] + _generator_files(ctx, _RAW_STAMP),
         outputs = [out],
         mnemonic = "MetalRawStamp",
         progress_message = "Stamping the raw pack with the tools' stack key",
