@@ -258,6 +258,7 @@ TESTS: dict[str, bool] = {
     'system.overlay_apps': False,
     'system.overlay_app_records': False,
     'system.widgets_render': False,
+    'ui.icon_render': False,
     'ui.launch_hitch': False,
 }
 
