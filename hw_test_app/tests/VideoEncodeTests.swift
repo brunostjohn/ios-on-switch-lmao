@@ -8,8 +8,8 @@ import VideoToolbox
 /// again on the hardware decoder and checked frame by frame. The frames come from the session's pool, and every
 /// picture's input must reach NVENC without a CPU copy: VIC writes it from the frame's IOSurface (SwitchEncoderRoutes).
 /// encode.h264_client_pool hands over frames from a pool of CoreVideo's defaults instead (1920-byte rows at 1080p, off
-/// VIC's 256-byte grid), as a client with buffers of its own does: how those reach NVENC (VIC after VideoToolbox's own
-/// transfer, or the plug-in's CPU copy) is reported, not judged.
+/// VIC's 256-byte grid), as a client with buffers of its own does, and is judged the same: it passes only if VideoToolbox
+/// moves such pictures onto the grid the encoder asked for, since a picture VIC cannot take fails its frame.
 struct VideoEncodeTest: HWTest {
     let codec: VideoCodec
     let realTime: Bool
@@ -64,6 +64,7 @@ struct VideoEncodeTest: HWTest {
         metrics.set("intra_only", encoded.predictedFrames == 0)
         metrics.set("input_vic", encoded.routes?["input_vic"] ?? -1)
         metrics.set("input_cpu_copies", encoded.routes?["input_cpu_copies"] ?? -1)
+        metrics.set("input_refused", encoded.routes?["input_refused"] ?? -1)
         return .judged(
             [
                 ("VTCopyVideoEncoderList offers it as hardware", !listed.isEmpty),
@@ -72,16 +73,18 @@ struct VideoEncodeTest: HWTest {
                 ("decodes back to the pattern (\(decoded.firstMismatch ?? "ok"))", decoded.matched == Self.frames),
                 ("real time keeps up with 60 fps", !realTime || Double(Self.frames) / encoded.seconds >= Double(fps)),
                 (
-                    "every input written by VIC, none copied by the CPU",
-                    clientPool || Self.noCopies(encoded.routes, Self.frames)
+                    "every input written by VIC, none copied or refused",
+                    Self.allByVIC(encoded.routes, Self.frames)
                 ),
             ], metrics, proof: encoded.usingHardware ? "encoder=\(encoded.encoderID)" : "")
     }
 
     /// The AVE plug-in's input routes (debug builds): VIC wrote every picture's input, the CPU copied none.
-    static func noCopies(_ routes: [String: Int]?, _ pictures: Int) -> Bool {
+    /// The AVE plug-in's input routes (debug builds): VIC wrote every picture's input, the CPU copied none and none
+    /// was refused.
+    static func allByVIC(_ routes: [String: Int]?, _ pictures: Int) -> Bool {
         guard let routes, let vic = routes["input_vic"] else { return false }
-        return routes["input_cpu_copies"] == 0 && vic >= pictures
+        return routes["input_cpu_copies"] == 0 && routes["input_refused"] == 0 && vic >= pictures
     }
 
     static var all: [VideoEncodeTest] {

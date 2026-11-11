@@ -824,26 +824,27 @@ int main(void)
     CFDictionaryRef spec = CFDictionaryCreate(NULL, specKeys, specValues, 1, &kCFTypeDictionaryKeyCallBacks,
                                               &kCFTypeDictionaryValueCallBacks);
 
-    // The CPU copy into the layout the kernel states, VIC writing the surface into BL16, and a kernel that refuses
-    // the surface (the session goes on with CPU copies into the BL16 buffer).
+    // The CPU copy into the layout the kernel states (a kernel without surface input), VIC writing the surface into
+    // BL16, and a kernel refusing every surface or every other one: those frames fail, none is copied.
     static const struct {
         uint32_t layout, chroma;
         bool surfaceInput;
         int refuse;
+        bool ok;                     // whether every frame and tile is to come out
         const char *frames, *tiles;  // the routes each check must report
     } runs[] = {
-        {TEGRA_NVENC_LAYOUT_PITCH, TEGRA_NVENC_CHROMA_OFFSET, false, 0, "inputs 0 by VIC 30 copied",
-         "inputs 0 by VIC 4 copied"},
-        {TEGRA_NVENC_LAYOUT_BL2, TEGRA_NVENC_CHROMA_METHOD, false, 0, "inputs 0 by VIC 30 copied",
-         "inputs 0 by VIC 4 copied"},
-        {TEGRA_NVENC_LAYOUT_TILED16, TEGRA_NVENC_CHROMA_OFFSET, false, 0, "inputs 0 by VIC 30 copied",
-         "inputs 0 by VIC 4 copied"},
-        {TEGRA_NVENC_LAYOUT_TILED16, TEGRA_NVENC_CHROMA_OFFSET, true, 0, "inputs 30 by VIC 0 copied",
-         "inputs 4 by VIC 0 copied"},
-        {TEGRA_NVENC_LAYOUT_TILED16, TEGRA_NVENC_CHROMA_OFFSET, true, 1, "inputs 0 by VIC 30 copied",
-         "inputs 0 by VIC 4 copied"},
-        {TEGRA_NVENC_LAYOUT_TILED16, TEGRA_NVENC_CHROMA_OFFSET, true, 2, "inputs 15 by VIC 15 copied",
-         "inputs 2 by VIC 2 copied"},
+        {TEGRA_NVENC_LAYOUT_PITCH, TEGRA_NVENC_CHROMA_OFFSET, false, 0, true, "inputs 0 by VIC 30 copied 0 refused",
+         "inputs 0 by VIC 4 copied 0 refused"},
+        {TEGRA_NVENC_LAYOUT_BL2, TEGRA_NVENC_CHROMA_METHOD, false, 0, true, "inputs 0 by VIC 30 copied 0 refused",
+         "inputs 0 by VIC 4 copied 0 refused"},
+        {TEGRA_NVENC_LAYOUT_TILED16, TEGRA_NVENC_CHROMA_OFFSET, false, 0, true, "inputs 0 by VIC 30 copied 0 refused",
+         "inputs 0 by VIC 4 copied 0 refused"},
+        {TEGRA_NVENC_LAYOUT_TILED16, TEGRA_NVENC_CHROMA_OFFSET, true, 0, true, "inputs 30 by VIC 0 copied 0 refused",
+         "inputs 4 by VIC 0 copied 0 refused"},
+        {TEGRA_NVENC_LAYOUT_TILED16, TEGRA_NVENC_CHROMA_OFFSET, true, 1, false, "inputs 0 by VIC 0 copied 30 refused",
+         "inputs 0 by VIC 0 copied 4 refused"},
+        {TEGRA_NVENC_LAYOUT_TILED16, TEGRA_NVENC_CHROMA_OFFSET, true, 2, false, "inputs 15 by VIC 0 copied 15 refused",
+         "inputs 2 by VIC 0 copied 2 refused"},
     };
 
     for (unsigned r = 0; r < sizeof(runs) / sizeof(runs[0]); r++) {
@@ -857,7 +858,8 @@ int main(void)
         printf("layout %u chroma %u%s: %s (submits %d, refused %d%s%s)\n", gLayout, gChroma,
                gSurfaceInput ? (gRefuseSurfaces ? " surfaces refused" : " surfaces") : "", line, gSubmits - submits,
                gRefused - refused, gRefusal ? ": " : "", gRefusal ? gRefusal : "");
-        EXPECT(ok && gSubmits - submits == 30 && gRefused == refused && strstr(line, runs[r].frames) &&
+        EXPECT(ok == runs[r].ok && gRefused == refused && strstr(line, runs[r].frames) &&
+                   (!runs[r].ok || gSubmits - submits == 30) &&
                    (gVIC - vic == 30 || !strstr(runs[r].frames, "inputs 30 by VIC")),
                "encode check, layout %u, surfaces %d refused %d", gLayout, gSurfaceInput, gRefuseSurfaces);
     }
@@ -865,6 +867,8 @@ int main(void)
     static const int kReorder[3][3] = {{-1, -1, 2}, {-1, 1, 1}, {0, -1, 0}};
     gLayout = TEGRA_NVENC_LAYOUT_TILED16;
     gChroma = TEGRA_NVENC_CHROMA_OFFSET;
+    gSurfaceInput = false;
+    gRefuseSurfaces = 0;
     for (unsigned r = 0; r < 3; r++) {
         const int refused = gRefused;
         char line[512];
@@ -897,7 +901,7 @@ int main(void)
         printf("tiles, layout %u chroma %u%s: %s (refused %d%s%s)\n", gLayout, gChroma,
                gSurfaceInput ? (gRefuseSurfaces ? " surfaces refused" : " surfaces") : "", line, gRefused - refused,
                gRefusal ? ": " : "", gRefusal ? gRefusal : "");
-        EXPECT(ok && gRefused == refused && strstr(line, runs[r].tiles),
+        EXPECT(ok == runs[r].ok && gRefused == refused && strstr(line, runs[r].tiles),
                "tile check, layout %u, surfaces %d refused %d", gLayout, gSurfaceInput, gRefuseSurfaces);
     }
     gSurfaceInput = false;

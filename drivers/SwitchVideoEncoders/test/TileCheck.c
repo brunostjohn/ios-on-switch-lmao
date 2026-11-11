@@ -335,16 +335,18 @@ bool tile_check(CFStringRef encoderID, char *line, size_t size)
     const int badOutput = badSamples(&outputs);
     const int32_t tiles = numberIn(routes, CFSTR("tiles")), errors = numberIn(routes, CFSTR("errors"));
     const int32_t byVIC = numberIn(routes, CFSTR("input_vic")), copied = numberIn(routes, CFSTR("input_cpu_copies"));
+    const int32_t refusedInputs = numberIn(routes, CFSTR("input_refused"));
     const bool ok = propertiesSet && hasFormats && alignment == 2 && padding && prepared.width == TILE &&
                     prepared.height == TILE && !refused && outputs.count == TILES && !outputs.failed && !wrongInput &&
                     !badOutput && tiles == TILES && errors == 0 && hardware == kCFBooleanTrue;
     snprintf(line, size,
              "%s %d/%d tiles out (%d failed, %d refused), batch set %s, attributes %s, offset alignment %d, source "
              "padding %s, prepared %dx%d, inputs wrong %d, samples wrong %d, routes tiles %d errors %d, hardware %s, "
-             "inputs %d by VIC %d copied",
+             "inputs %d by VIC %d copied %d refused",
              ok ? "ok" : "FAIL", outputs.count, TILES, outputs.failed, refused, propertiesSet ? "ok" : "refused",
              hasFormats ? "ok" : "missing", alignment, padding ? "yes" : "no", prepared.width, prepared.height,
-             wrongInput, badOutput, tiles, errors, hardware == kCFBooleanTrue ? "yes" : "no", byVIC, copied);
+             wrongInput, badOutput, tiles, errors, hardware == kCFBooleanTrue ? "yes" : "no", byVIC, copied,
+             refusedInputs);
     for (int i = 0; i < TILES; i++)
         if (outputs.samples[i])
             CFRelease(outputs.samples[i]);

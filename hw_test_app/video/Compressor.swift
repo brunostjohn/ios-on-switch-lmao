@@ -14,8 +14,8 @@ public struct CompressedClip {
     public let encoderID: String
     public let seconds: Double
     public let bytes: Int
-    /// SwitchEncoderRoutes (debug builds of the AVE plug-in): pictures, input_vic, input_cpu_copies; nil from any other
-    /// encoder.
+    /// SwitchEncoderRoutes (debug builds of the AVE plug-in): pictures, input_vic, input_cpu_copies, input_refused; nil
+    /// from any other encoder.
     public var routes: [String: Int]? = nil
 
     public var keyFrames: Int { samples.filter(\.isKeyFrame).count }

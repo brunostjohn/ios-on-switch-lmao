@@ -18,7 +18,8 @@
 // true when every frame decoded at `minPsnr` dB or better in every plane, sync samples fell where they should, and
 // the session said hardware. `spec` (NULL: RequireHardwareAcceleratedVideoEncoder) is the encoder specification;
 // `entropy` (NULL: the encoder's choice) sets H264EntropyMode. Frames come from the session's pixel buffer pool; the
-// line ends with the plug-in's input routes ("inputs N by VIC M copied", -1 from another encoder).
+// line ends with the plug-in's input routes ("inputs N by VIC M copied R refused", -1 from another
+// encoder).
 bool encode_check(CFDictionaryRef spec, CFStringRef entropy, double minPsnr, char *line, size_t size);
 // Frame i of that clip (320x240 NV12), and a decoded picture's PSNR against it (Y, U, V; 99 when exact).
 CVPixelBufferRef encode_check_frame(int i);

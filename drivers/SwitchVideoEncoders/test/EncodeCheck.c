@@ -241,7 +241,8 @@ bool encode_check(CFDictionaryRef spec, CFStringRef entropy, double minPsnr, cha
     CFDictionaryRef routes = NULL;
     VTSessionCopyProperty(session, CFSTR("SwitchEncoderRoutes"), NULL, &routes);
     const int32_t byVIC = routeCount(routes, CFSTR("input_vic")),
-                  copied = routeCount(routes, CFSTR("input_cpu_copies"));
+                  copied = routeCount(routes, CFSTR("input_cpu_copies")),
+                  refused = routeCount(routes, CFSTR("input_refused"));
     if (routes)
         CFRelease(routes);
     VTCompressionSessionInvalidate(session);
@@ -299,9 +300,9 @@ bool encode_check(CFDictionaryRef spec, CFStringRef entropy, double minPsnr, cha
         line, size,
         "%s %d/%d frames encoded (%d errors) by a %s encoder, %d decoded (%d errors), sync samples%s%s, PSNR min Y "
         "%.1f U %.1f V %.1f dB, mean Y %.1f dB, first frame under 20 dB %d, %zu bytes, %.2f ms/frame, inputs %d by "
-        "VIC %d copied",
+        "VIC %d copied %d refused",
         ok ? "ok" : "FAIL", enc.count, FRAMES, enc.errors + failed, onHardware ? "hardware" : "software", dec.count,
         dec.errors, keys, intraOnly ? " (intra only)" : "", dec.minPsnr[0], dec.minPsnr[1], dec.minPsnr[2],
-        dec.count ? dec.sumPsnr[0] / dec.count : 0.0, dec.badIndex, bytes, ms, byVIC, copied);
+        dec.count ? dec.sumPsnr[0] / dec.count : 0.0, dec.badIndex, bytes, ms, byVIC, copied, refused);
     return ok;
 }

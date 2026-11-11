@@ -154,7 +154,7 @@ static OSStatus codeTile(Encoder *e, CVPixelBufferRef source, const AVERegion *r
     submit->clean[submit->clean_count++] = (TegraNVENCRange){e->handles.aux, 0, sizeof(nvenc_pic_stat_s), 0};
     TegraNVENCWait wait = {.timeout_us = 1000000, .invalidate_count = 1};
     wait.invalidate[0] = (TegraNVENCRange){e->handles.aux, 0, sizeof(nvenc_pic_stat_s), 0};
-    const int submitted = ave_input_submit(e, source, r, submit, &wait.fence);
+    const int submitted = ave_input_submit(e, submit, &wait.fence);
     free(submit);
     if (submitted || nvenc_wait(e->client, &wait))
         return kVTVideoEncoderMalfunctionErr;
@@ -240,10 +240,10 @@ OSStatus ave_encode_tile(VTVideoEncoderRef ref, VTEncoderTile tile, CVImageBuffe
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
 CFDictionaryRef ave_copy_routes(const Encoder *e)
 {
-    const int32_t counts[] = {(int32_t)e->frames, (int32_t)e->tiles, (int32_t)e->errors, (int32_t)e->inputCopies,
-                              (int32_t)e->inputVIC};
-    const void *keys[] = {CFSTR("pictures"), CFSTR("tiles"), CFSTR("errors"), CFSTR("input_cpu_copies"),
-                          CFSTR("input_vic")};
+    const int32_t counts[] = {(int32_t)e->frames,      (int32_t)e->tiles,    (int32_t)e->errors,
+                              (int32_t)e->inputCopies, (int32_t)e->inputVIC, (int32_t)e->inputRefused};
+    const void *keys[] = {CFSTR("pictures"),         CFSTR("tiles"),     CFSTR("errors"),
+                          CFSTR("input_cpu_copies"), CFSTR("input_vic"), CFSTR("input_refused")};
 
     enum {
         COUNT = sizeof(counts) / sizeof(counts[0])

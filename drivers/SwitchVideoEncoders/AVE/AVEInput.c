@@ -3,10 +3,11 @@
 // IOSurface holds (TegraNVENC/nvidia/SOURCE), so with TEGRA_NVENC_FEATURE_SURFACE_INPUT the session's input buffer is
 // BL16 (block_height 16, a code the firmware's table names outright, 0x8643-0x8664) and every submit names the
 // picture's IOSurface: the kernel has VIC write the region into the buffer and NVENC's job waits for VIC's on the
-// hardware. The CPU touches no sample. The CPU copy (16-byte runs into the buffer's layout) is left for what VIC cannot
-// read: a picture without an IOSurface, rows off the grid VIC reads (VideoToolbox is asked for buffers on it; a
-// client's own pool may not be), a surface the kernel cannot take now (that picture), or one it refuses outright (the
-// rest of the session). One line each.
+// hardware. The CPU touches no sample. A picture VIC cannot take (no IOSurface, rows off the grid VIC reads, which
+// VideoToolbox is asked to keep to and a client's own pool may not, a surface the kernel refuses) fails its frame with
+// one line per reason and counts in input_refused: there is no CPU route beside VIC's. The CPU copy (16-byte runs into
+// the buffer's layout) is a session's whole route only when the kernel offers no surface input at all, which its
+// start line says.
 #include <CoreVideo/CoreVideo.h>
 #include <IOSurface/IOSurfaceRef.h>
 #include <IOKit/IOReturn.h>
@@ -114,11 +115,13 @@ static uint32_t vicMatrix(uint8_t h273)
 
 bool ave_input_put(Encoder *e, CVPixelBufferRef image, const AVERegion *r, TegraNVENCSubmit *submit)
 {
-    const char *why = e->surfaceInput ? unreadable(e, image) : NULL;
-    if (!e->surfaceInput || why) {
-        if (why)
-            switch_refusal("AVE", why, "%s: this picture's input is copied by the CPU", why);
+    if (!e->surfaceInput)
         return copyRegion(e, image, r, submit);
+    const char *why = unreadable(e, image);
+    if (why) {
+        e->inputRefused++;
+        switch_refusal("AVE", why, "%s: VIC cannot take this picture, its frame fails", why);
+        return false;
     }
     dropInputClean(e, submit);
     submit->source = (TegraNVENCSource){
@@ -134,27 +137,20 @@ bool ave_input_put(Encoder *e, CVPixelBufferRef image, const AVERegion *r, Tegra
     return true;
 }
 
-int ave_input_submit(Encoder *e, CVPixelBufferRef image, const AVERegion *r, TegraNVENCSubmit *submit, uint32_t *fence)
+int ave_input_submit(Encoder *e, const TegraNVENCSubmit *submit, uint32_t *fence)
 {
-    int status = nvenc_submit(e->client, submit, fence);
-    if (submit->source.surface_id && (status == kIOReturnUnsupported || status == kIOReturnNotReady)) {
-        if (status == kIOReturnUnsupported) {
-            e->surfaceInput = false;
-            os_log_error(gLog,
-                         "AVE: TegraNVENC refused %{public}s's IOSurface input (its line says why); this session's "
-                         "pictures are copied by the CPU",
-                         getprogname());
-        } else {
-            switch_refusal("AVE", "a surface VIC could not take now", "this picture's input is copied by the CPU");
-        }
-        submit->clean[submit->clean_count++] = (TegraNVENCRange){e->handles.input, 0, e->layout.input.bytes, 0};
-        status = copyRegion(e, image, r, submit) ? nvenc_submit(e->client, submit, fence) : kIOReturnError;
-    }
+    const int status = nvenc_submit(e->client, submit, fence);
     if (!status) {
         if (submit->source.surface_id)
             e->inputVIC++;
         else
             e->inputCopies++;
+    } else if (submit->source.surface_id && (status == kIOReturnUnsupported || status == kIOReturnNotReady)) {
+        e->inputRefused++;
+        if (status == kIOReturnUnsupported)
+            switch_refusal("AVE", "a surface VIC cannot take", "TegraNVENC's line says why; its frame fails");
+        else
+            switch_refusal("AVE", "a surface VIC could not take then", "TegraNVENC's line says why; its frame fails");
     }
     return status;
 }

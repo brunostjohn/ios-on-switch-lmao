@@ -398,6 +398,7 @@ static OSStatus encodePicture(Encoder *e, VTVideoEncoderFrame frame, CVPixelBuff
     const AVERegion whole = {0, 0, e->config.width, e->config.height};
     if (!ave_input_put(e, image, &whole, submit)) {
         free(submit);
+        e->errors++;
         return kVTVideoEncoderMalfunctionErr;
     }
     const uint64_t copied = mach_absolute_time();
@@ -406,7 +407,7 @@ static OSStatus encodePicture(Encoder *e, VTVideoEncoderFrame frame, CVPixelBuff
     submit->clean[submit->clean_count++] = (TegraNVENCRange){e->handles.aux, 0, sizeof(nvenc_pic_stat_s), 0};
     TegraNVENCWait wait = {.timeout_us = 1000000, .invalidate_count = 1};
     wait.invalidate[0] = (TegraNVENCRange){e->handles.aux, 0, sizeof(nvenc_pic_stat_s), 0};
-    const int submitted = ave_input_submit(e, image, &whole, submit, &wait.fence);
+    const int submitted = ave_input_submit(e, submit, &wait.fence);
     free(submit);
     if (submitted || nvenc_wait(e->client, &wait)) {
         e->errors++;
@@ -784,10 +785,10 @@ static void finalize(CMBaseObjectRef ref)
     if (e->frames)
         os_log(gLog,
                "AVE: session %ux%u in %{public}s ended: %u pictures on NVENC (%u key), %u failed, %llu bytes, inputs "
-               "%u by VIC and %u copied, mean %.2f ms input + %.2f ms encode",
+               "%u by VIC, %u copied, %u VIC could not take, mean %.2f ms input + %.2f ms encode",
                e->config.width, e->config.height, getprogname(), e->frames, e->keyFrames, e->errors,
-               (unsigned long long)e->bytes, e->inputVIC, e->inputCopies, ticksToMs(e->copyTicks) / e->frames,
-               ticksToMs(e->encodeTicks) / e->frames);
+               (unsigned long long)e->bytes, e->inputVIC, e->inputCopies, e->inputRefused,
+               ticksToMs(e->copyTicks) / e->frames, ticksToMs(e->encodeTicks) / e->frames);
     ave_reorder_release(e);
     if (e->client) {
         releaseBuffers(e);

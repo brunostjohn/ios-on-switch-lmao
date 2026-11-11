@@ -31,6 +31,7 @@ struct HEICEncodeTest: HWTest {
         metrics.set("nvenc_errors", tiled.routes?["errors"] ?? -1)
         metrics.set("input_vic", tiled.routes?["input_vic"] ?? -1)
         metrics.set("input_cpu_copies", tiled.routes?["input_cpu_copies"] ?? -1)
+        metrics.set("input_refused", tiled.routes?["input_refused"] ?? -1)
         metrics.set("tiles_decoded", tiled.decoded)
         metrics.set("tile_error", tiled.worstLumaError, digits: 1)
         metrics.set("tile_bytes", tiled.bytes)
@@ -70,8 +71,8 @@ struct HEICEncodeTest: HWTest {
                 ),
                 ("every tile decodes back to its region", tiled.decoded == tiled.expected && tiled.worstLumaError <= 4),
                 (
-                    "every tile's input read by VIC from its region, none copied by the CPU",
-                    VideoEncodeTest.noCopies(tiled.routes, tiled.expected)
+                    "every tile's input read by VIC from its region, none copied or refused",
+                    VideoEncodeTest.allByVIC(tiled.routes, tiled.expected)
                 ),
             ],
             metrics, proof: "SwitchEncoderRoutes tiles=\(nvencTiles.map(String.init) ?? "-") of \(tiled.expected)")
