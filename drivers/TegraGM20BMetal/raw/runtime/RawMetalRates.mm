@@ -278,11 +278,18 @@ size_t raw_metal_encode_rates(char *out, size_t size)
     const uint64_t wall = k.wallTicks.load(std::memory_order_relaxed);
     const double wallUs = double(wall - lastWall) * usPerTick;
     lastWall = wall;
-    static uint64_t lastExecUses;
-    const uint64_t usesNow = k.execUses.load(std::memory_order_relaxed);
+    static uint64_t lastExecUses, lastExecPushes;
+    const uint64_t usesNow = k.execUses.load(std::memory_order_relaxed),
+                   pushesNow = k.execPushes.load(std::memory_order_relaxed);
     const double execs = calls[size_t(EncodePart::Exec)] * double(encodes),
-                 execUses = execs ? double(usesNow - lastExecUses) / execs : 0.0;
+                 execUses = execs ? double(usesNow - lastExecUses) / execs : 0.0,
+                 execPushes = execs ? double(pushesNow - lastExecPushes) / execs : 0.0;
     lastExecUses = usesNow;
+    lastExecPushes = pushesNow;
+    double spans = 0;
+    for (size_t i = 0; i < raw::kEncodeParts; ++i)
+        spans += calls[i];
+    const double spanNs = double(raw::spanCostTicksPer1024()) * tickUs * 1000.0 / 1024.0;
     const double longestPrepareUs =
         double(gRM->raw->stats.encode.longestPrepare.exchange(0, std::memory_order_relaxed)) * tickUs;
     // per encode: state segment binds, binds of the segment the channel held, and the inline words the binds replaced;
@@ -293,12 +300,14 @@ size_t raw_metal_encode_rates(char *out, size_t size)
         last = now;
         return d;
     };
-    static uint64_t lastBinds, lastSkips, lastWords, lastSame, lastRecent, lastFresh;
+    static uint64_t lastBinds, lastSkips, lastWords, lastSame, lastRecent, lastFresh, lastCompared, lastInTables;
     const double segBinds = double(since(st.segmentBinds, lastBinds)) / double(encodes),
                  segSkips = double(since(st.segmentSkips, lastSkips)) / double(encodes),
                  segWords = double(since(st.segmentWords, lastWords)) / double(encodes);
     const uint64_t same = since(st.replay.same, lastSame), recent = since(st.replay.recent, lastRecent),
                    fresh = since(st.replay.fresh, lastFresh);
+    const double slotsCompared = double(since(st.slotsCompared, lastCompared)) / double(encodes),
+                 slotsInTables = double(since(st.slotsInTables, lastInTables)) / double(encodes);
     auto part = [&](EncodePart p) {
         return us[size_t(p)];
     };
@@ -309,7 +318,8 @@ size_t raw_metal_encode_rates(char *out, size_t size)
         out, size,
         "encode n=%llu wall=%.0f res=%.0f loop=%.0f state=%.0f pass=%.0f splan=%.0f fuse=%.0f pend=%.0f/%.1f "
         "draw=%.0f/%.1f prep=%.0f geo=%.0f desc=%.0f bar=%.0f slaunch=%.0f/%.1f blit=%.0f comp=%.0f tail=%.0f "
-        "commit=%.0f prolog=%.0f exec=%.0f/%.1f uses=%.0f kern=%.0f/%.1f gacq=%.0f/%.1f grel=%.0f/%.1f pmax=%.0f "
+        "commit=%.0f prolog=%.0f exec=%.0f/%.1f uses=%.0f pushes=%.0f kern=%.0f/%.1f gacq=%.0f/%.1f grel=%.0f/%.1f "
+        "pmax=%.0f use=%.0f/%.1f uni=%.0f/%.1f bind=%.0f var=%.0f pprol=%.0f slots=%.0f/%.0f spans=%.0f@%.0fns "
         "seg=%.1f/%.1f segw=%.0f replay=%llu/%llu/%llu",
         (unsigned long long)encodes, wallUs, part(EncodePart::Resources), part(EncodePart::Loop),
         part(EncodePart::State), part(EncodePart::Pass), part(EncodePart::SplitPlan), part(EncodePart::Fusion),
@@ -317,10 +327,13 @@ size_t raw_metal_encode_rates(char *out, size_t size)
         part(EncodePart::Prepare), part(EncodePart::Geometry), part(EncodePart::Descriptors),
         part(EncodePart::Barriers), part(EncodePart::SplitLaunch), count(EncodePart::SplitLaunch),
         part(EncodePart::Blit), part(EncodePart::Compute), part(EncodePart::Tail), part(EncodePart::Commit),
-        part(EncodePart::Prologues), part(EncodePart::Exec), count(EncodePart::Exec), execUses,
+        part(EncodePart::Prologues), part(EncodePart::Exec), count(EncodePart::Exec), execUses, execPushes,
         part(EncodePart::Kernel), count(EncodePart::Kernel), part(EncodePart::GeometryAcquire),
         count(EncodePart::GeometryAcquire), part(EncodePart::GeometryRelease), count(EncodePart::GeometryRelease),
-        longestPrepareUs, segBinds, segSkips, segWords, (unsigned long long)same, (unsigned long long)recent,
+        longestPrepareUs, part(EncodePart::Use), count(EncodePart::Use), part(EncodePart::Uniforms),
+        count(EncodePart::Uniforms), part(EncodePart::Bind), part(EncodePart::Variant), part(EncodePart::PassPrologue),
+        slotsCompared, slotsInTables, spans, spanNs,
+        segBinds, segSkips, segWords, (unsigned long long)same, (unsigned long long)recent,
         (unsigned long long)fresh);
     return n > 0 ? std::min(size_t(n), size - 1) : 0;
 }

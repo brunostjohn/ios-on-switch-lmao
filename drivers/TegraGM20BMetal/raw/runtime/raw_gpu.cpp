@@ -3466,6 +3466,7 @@ static uint64_t rowStorageBytes(uint32_t pitch, uint32_t width, uint32_t height,
 
 void CommandBuffer::useAddress(uint64_t va, uint64_t bytes, bool write)
 {
+    RAW_ENCODE_SPAN(Use);
     if (va && dev_->k_.exactJobs() && !dev_->member(va, bytes ? bytes : 1))
         surfaces_.addAddress(va, bytes ? bytes : 1, write,
                              bytes && bytes <= UINT32_MAX ? TegraGM20BSurfaceRange : 0u);
@@ -3478,6 +3479,7 @@ uint64_t CommandBuffer::batchLimit() const
 
 void CommandBuffer::use(const Buffer &buffer, bool write)
 {
+    RAW_ENCODE_SPAN(Use);
     buffersWritten_ |= write;
     externalWrites_ |= write && buffer.hostVisible;
     const bool ranged = dev_->k_.exactJobs() && buffer.length && buffer.length <= UINT32_MAX;
@@ -3491,6 +3493,7 @@ void CommandBuffer::use(const Buffer &buffer, bool write)
 
 void CommandBuffer::use(const Texture &texture, bool write)
 {
+    RAW_ENCODE_SPAN(Use);
     const Texture *view = write ? &texture : readTexture(&texture);
     const auto storage = view->storageRange();
     const bool ranged = dev_->k_.exactJobs() && storage.bytes && storage.bytes <= UINT32_MAX;
@@ -3732,6 +3735,7 @@ bool CommandBuffer::commit(uint32_t &seqno)
                       const JobEvents &events) {
         int result = KERN_SUCCESS;
         RAW_DIAGNOSTIC(noteExecUses(uses.uses().size()));
+        RAW_DIAGNOSTIC(noteExecPushes(count));
         RAW_ENCODE_BEGIN(execSpan, Exec);
         const bool executed = d.job(d.setView_, d.channel_, pushes, count, uses, visibility, seq, &result, events);
         RAW_ENCODE_END(execSpan);
@@ -3894,6 +3898,7 @@ void RenderEncoder::finishDraw(uint32_t vertices, uint32_t instances, bool indir
 
 void RenderEncoder::setBytes(int stage, uint32_t slot, const void *bytes, uint32_t length)
 {
+    RAW_ENCODE_SPAN(Uniforms);
     if (slot >= 31 || stage < 1 || stage > 2)
         return;
     uint64_t va;
@@ -4618,11 +4623,13 @@ bool RenderEncoder::prepare(Pipeline *pl, uint32_t primitive, int32_t first, uin
     else
         g = geometry(*pl, primitive, first, indexed ? drawIndexCount_ : count, {x[0], y[0], x[1], y[1]});
     auto geometryAnalysis = geometryCache_.analysis(g, bindingRevision_, cb_->geometryBudget_);
+    RAW_ENCODE_BEGIN(variantSpan, Variant);
     if (!indirectGeometry_)
         pl = splitTwin(pl, geometryAnalysis);
     // a variant has no split of its own: a draw large enough for the generic program's split twin keeps the twin
     if (!pl->splitOf)
         pl = dev_->variant(*pl, bindingFacts(*pl));
+    RAW_ENCODE_END(variantSpan);
     if (!whole_) {
         if (x[1] > x[0] && y[1] > y[0]) {
             const std::array<uint32_t, 4> r = {x[0], y[0], x[1], y[1]};
@@ -4687,6 +4694,7 @@ bool RenderEncoder::prepare(Pipeline *pl, uint32_t primitive, int32_t first, uin
     }
     const bool dsChanged = dsDirty_;
     if (dsDirty_) {
+        RAW_ENCODE_SPAN(Bind);
         const bool depth = zeta && zetaHasDepth(zeta->format), stencil = zeta && zetaHasStencil(zeta->format);
         if (shaderTestsActive_)
             emitDepthStencil(p, shaderDepthStencilRegs(depth), cb_->ds_);
@@ -4858,6 +4866,7 @@ bool RenderEncoder::prepare(Pipeline *pl, uint32_t primitive, int32_t first, uin
     const auto &residuals = prepared->residuals;
     const uint32_t residualMask = prepared->residualMask;
     const uint64_t setVa = prepared->address;
+    RAW_ENCODE_BEGIN(bindSpan, Bind);
     writeRaster(p, rasterFor(primitive));
     const bool dynamicBlend = r.blendColorWord || r.halfBlendColorWord;
     if (pl != emitted_ || residualMask || residualsPushed_ || (dynamicBlend && blendColorDirty_) ||
@@ -4911,6 +4920,7 @@ bool RenderEncoder::prepare(Pipeline *pl, uint32_t primitive, int32_t first, uin
         emitted_ = pl;
         residualsPushed_ = residualMask != 0;
     }
+    RAW_ENCODE_END(bindSpan);
     if (samplePasses_ != pl->samplePasses) {
         p.m(LOAD_CB_OFFSET, kRootSampleInfo + 8);
         p.nonInc(LOAD_CB, compatibleSampleMasks_, 4);
@@ -5617,6 +5627,7 @@ void RenderEncoder::end()
         bodies_.push_back({bodyStart_, p_.at});
     d.push_.head = uint64_t(reinterpret_cast<uint8_t *>(p_.at) - d.push_.bo.cpu);  // give back the unused reservation
     // pass prologue: the full barrier m2v puts between passes, the targets, then the clears
+    RAW_ENCODE_BEGIN(prologueSpan, PassPrologue);
     const std::vector<Clear> cl = clearsSealed_ ? std::move(initialClears_) : clears();
 #if SWITCH_RAW_DIAGNOSTICS
     probeEdges();
@@ -5732,6 +5743,7 @@ void RenderEncoder::end()
     checkRoom(p, "a pass prologue");
     cb_->segment(start, p.at);
     d.push_.head = uint64_t(reinterpret_cast<uint8_t *>(p.at) - d.push_.bo.cpu);
+    RAW_ENCODE_END(prologueSpan);
     [[maybe_unused]] const uint64_t bodyWords = appendBodies(cb_->segments_, bodies_, d.push_.bo.cpu, d.push_.bo.va);
     RAW_DIAGNOSTIC(d.stats.pushBytes += (bodyWords + uint64_t(p.at - start)) * 4);
     bodies_.clear();
