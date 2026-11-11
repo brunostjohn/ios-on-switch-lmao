@@ -2,6 +2,8 @@
 load("@rules_apple//apple:macos.bzl", "macos_command_line_application")
 load("@rules_apple//apple:resources.bzl", "apple_resource_group")
 load("@rules_cc//cc:cc_library.bzl", "cc_library")
+load("@rules_python//python:py_binary.bzl", "py_binary")
+load("@rules_python//python:py_test.bzl", "py_test")
 load("@rules_swift//swift:swift_interop_hint.bzl", "swift_interop_hint")
 load("@rules_swift//swift:swift_library.bzl", "swift_library")
 load("@rules_swift//swift:swift_test.bzl", "swift_test")
@@ -153,12 +155,47 @@ macos_command_line_application(
     deps = [":media_lib"],
 )
 
-# The raw pack corpus's Core Animation states, which gpu.ca.sweep draws on the raw facade and on m2v.
+# The raw pack corpus's Core Animation states this IPSW's QuartzCore makes (ca_states.py), which gpu.ca.sweep draws on
+# the raw facade and on m2v.
+py_binary(
+    name = "ca_states_filter",
+    srcs = ["ca_states.py"],
+    main = "ca_states.py",
+    deps = ["//tools/gpu/shaders:metallib"],
+)
+
 genrule(
     name = "ca_states",
-    srcs = ["//drivers/TegraGM20BMetal:precompile/corpus.log"],
+    srcs = [
+        "//drivers/TegraGM20BMetal:precompile/corpus.log",
+        "@ipsw//:crawl_qc",
+    ],
     outs = ["ca_states.log"],
-    cmd = "grep '^R ok=1 label=com.apple.coreanimation[.]' $< > $@",
+    cmd = "$(execpath :ca_states_filter) $(execpath //drivers/TegraGM20BMetal:precompile/corpus.log) " +
+          "$(execpath @ipsw//:crawl_qc) $@",
+    tools = [":ca_states_filter"],
+)
+
+py_test(
+    name = "ca_states_test",
+    size = "small",
+    srcs = [
+        "ca_states.py",
+        "ca_states_test.py",
+    ],
+    data = [
+        "//drivers/TegraGM20BMetal:precompile/corpus.log",
+        "@ipsw//:crawl_qc",
+    ],
+    env = select({
+        "//ipsw:" + kind: {
+            "CA_BUILD": kind,
+            "CA_CORPUS": "$(rootpath //drivers/TegraGM20BMetal:precompile/corpus.log)",
+            "CA_LIBRARY": "$(rootpath @ipsw//:crawl_qc)",
+        }
+        for kind in ("21H461", "24B119")
+    }),
+    deps = ["//tools/gpu/shaders:metallib"],
 )
 
 # gpu.ca.sweep's reference for the build's IPSW: the corpus states drawn on a Mac's GPU with that IPSW's QuartzCore
