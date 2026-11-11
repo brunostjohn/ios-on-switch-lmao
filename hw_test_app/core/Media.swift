@@ -63,6 +63,25 @@ public struct Clip: Equatable, Sendable {
     public static func named(_ file: String) -> Clip? { all.first { $0.file == file } }
 }
 
+/// The HEVC-with-alpha clip (HWTestVideo's AlphaVideo): the pattern in its colour layer and, in its alpha layer, a ramp
+/// down the picture that moves 32 steps a frame, so an alpha plane from another frame is off by 32 almost
+/// everywhere. At the AirPods cards' 1080x1200, in hierarchical B pictures like Apple's own alpha movies.
+public enum AlphaClip {
+    public static let file = "hevc_alpha.mp4"
+    public static let width = 1080
+    public static let height = 1200
+    public static let fps = 60
+    public static let frames = 60
+    public static let bitrate = 3_000_000
+    public static let pattern = Pattern(width: width, height: height, clip: 0x0400 | UInt16(height / 8 & 0xff))
+
+    /// Full range, 0 to 255.
+    public static func alpha(y: Int, frame: Int) -> Int {
+        let phase = (y * 512 / height + frame * 32) % 512
+        return phase < 256 ? phase : 511 - phase
+    }
+}
+
 public enum StillFormat: String, Sendable {
     case jpeg420 = "jpeg_420"
     case jpeg422 = "jpeg_422"

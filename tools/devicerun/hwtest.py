@@ -135,6 +135,7 @@ TESTS: dict[str, bool] = {
     'decode.native_export': False,
     'decode.native_export_main10': False,
     'decode.native_export_main10_8bit': False,
+    'decode.hevc_alpha': False,
     'decode.display_buffer': False,
     'playback.h264_1080p': False,
     'playback.hevc_1080p': False,
