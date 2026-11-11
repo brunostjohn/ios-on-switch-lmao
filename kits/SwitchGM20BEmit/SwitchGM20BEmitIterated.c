@@ -21,6 +21,7 @@ void switch_gm20b_iterated_blend(struct nv_push *p, const struct switch_gm20b_it
         for (uint32_t c = 0; c < 3 && 3 * j + c < b->constant_count; c++)
             P_INLINE_DATA(p, b->constants[3 * j + c]);
     }
+    P_IMMD(p, NVB197, SET_ITERATED_BLEND_OPTIMIZATION, NOOP_NEVER);
     P_IMMD(p, NVB197, LOAD_ITERATED_BLEND_INSTRUCTION_POINTER, 0);
     P_0INC(p, NVB197, LOAD_ITERATED_BLEND_INSTRUCTION);
     P_INLINE_ARRAY(p, b->program, (int)b->count);
