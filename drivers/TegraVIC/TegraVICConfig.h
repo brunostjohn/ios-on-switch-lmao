@@ -546,8 +546,10 @@ static inline const char *tegra_vic_build(const TegraVICImage *src, const TegraV
     if (!op->fill && op->transform && !t->surfaceFlips && !(t->subRects & (1u << op->transform)) &&
         (op->dstX || op->dstY || op->dstW != dst->width || op->dstH != dst->height))
         return "destination sub-rectangle this transform has not proven";
-    // NVDEC's pictures, the only block-linear sources the unit has run, are 4:2:0.
-    if (!op->fill && src->blockLinear && (!t->blockLinearIn || !src->format->subY))
+    // NVDEC's pictures, the only block-linear sources the unit has run, are 4:2:0. An L8 source is such a picture's
+    // luma plane alone, the same GOBs (a 'v0a8' alpha plane: HW Test decode.hevc_alpha).
+    if (!op->fill && src->blockLinear &&
+        (!t->blockLinearIn || !(src->format->subY || src->format->vic == TEGRA_VIC_T_L8)))
         return "block-linear source this engine has not proven";
     if (!op->fill && src->format->kind != TEGRA_VIC_KIND_RGB) {
         const bool same = dst->format->kind == src->format->kind && src->standard == dst->standard &&

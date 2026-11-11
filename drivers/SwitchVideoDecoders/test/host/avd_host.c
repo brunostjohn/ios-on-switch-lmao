@@ -115,7 +115,7 @@ int nvdec_present(NVDECClient *c, const TegraNVDECPresent *p)
     const OSType format = s ? IOSurfaceGetPixelFormat(s) : 0;
     bool ok = p->handle < 64 && c->va[p->handle] && p->pitch && !(p->pitch % 64) && p->rows && !(p->rows % 32) &&
               p->block_height_log2 == 1 && !(p->chroma_offset % 256) && p->chroma_offset >= luma &&
-              p->chroma_offset + luma / 2 <= c->size[p->handle] && s && !p->reserved &&
+              p->chroma_offset + luma / 2 <= c->size[p->handle] && s && !p->plane &&
               (bytes == 2 ? format == kCVPixelFormatType_420YpCbCr10BiPlanarVideoRange ||
                                 format == kCVPixelFormatType_420YpCbCr10BiPlanarFullRange
                           : bytes == 1);

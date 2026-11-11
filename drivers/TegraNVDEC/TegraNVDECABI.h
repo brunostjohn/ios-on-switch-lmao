@@ -136,6 +136,9 @@ typedef struct {
 // into an 'x420'/'xf20' one: the window (crop_x, crop_y, width x height, in samples) at (dst_x, dst_y), clipped to the
 // surface (a grid image's tile goes to its place in the canvas; dst_x a multiple of 256 bytes). pitch: whole 64-byte
 // GOBs; rows: whole pairs of 16-row blocks; chroma at chroma_offset (256-byte aligned, past the luma), rows / 2 rows.
+// plane: the destination plane the picture starts at. A tri-planar 'v0a8' surface (VideoToolbox's HEVC-with-alpha
+// target) takes an 8-bit picture at plane 0 into its Y and CbCr planes, or at plane 2 its luma alone into the alpha
+// plane; any other surface takes plane 0 only.
 // kIOReturnUnsupported: VIC does not take it (one kernel line says why); kIOReturnBadArgument: geometry outside the
 // buffer or an unknown surface.
 typedef struct {
@@ -143,7 +146,7 @@ typedef struct {
     uint32_t pitch, rows, chroma_offset, block_height_log2;
     uint32_t crop_x, crop_y, width, height;
     uint32_t dst_x, dst_y;
-    uint32_t sample_bytes, reserved;
+    uint32_t sample_bytes, plane;
 } TegraNVDECPresent;
 
 typedef struct {

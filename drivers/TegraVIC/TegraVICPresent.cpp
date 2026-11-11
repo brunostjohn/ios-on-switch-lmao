@@ -99,11 +99,12 @@ int place(const TegraVICPicture *picture, task_t task, Present *work,
         if (*why)
             return -95;
     }
+    const uint32_t planes = placement.whole.format->planes;
     work->sourceMap = switch_vic_mapping_acquire(picture->backing, false);
-    for (uint32_t plane = 0; plane < 2; ++plane)
+    for (uint32_t plane = 0; plane < planes; ++plane)
         work->destinationMaps[plane] = switch_vic_mapping_acquire_range(
             work->destination, true, static_cast<uint32_t>(placement.band[plane].start >> 12), placement.pages[plane]);
-    if (!work->sourceMap || !work->destinationMaps[0] || !work->destinationMaps[1]) {
+    if (!work->sourceMap || !work->destinationMaps[0] || (planes > 1 && !work->destinationMaps[1])) {
         *why = "the picture mappings could not be retained";
         return -12;
     }
@@ -111,7 +112,7 @@ int place(const TegraVICPicture *picture, task_t task, Present *work,
     TegraVICOp operation = {};
     switch_vic_picture_describe(&bytes, placement, switch_vic_mapping_address(work->sourceMap),
                                0, &source, &destination, &operation);
-    for (uint32_t plane = 0; plane < 2; ++plane)
+    for (uint32_t plane = 0; plane < planes; ++plane)
         destination.base[plane] = switch_vic_mapping_address(work->destinationMaps[plane]) +
                                   (placement.band[plane].start & 4095);
     *why = tegra_vic_build(&source, &destination, &operation, tegra_vic_traits(),
