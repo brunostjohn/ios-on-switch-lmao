@@ -7,18 +7,44 @@ import UIKit
 /// layers "Replay" and "Pocket", and "Keyline": a plain layer filled with a translucent white at the pocket's bottom
 /// edge), and the snapshot's keyline row with each one changed, which tells the draw that makes the purple row:
 /// keyline= the keyline layer's fill (r,g,b,a and its colour space), keyline_px= its rows in the picture, opacity and
-/// compositing filter; pocket_filters= the Pocket layer's filter types; container= the container's name. Then, the row
-/// at the keyline's last pixel row (<run>_rgb) and the picture's purple rows (<run>_at) with: the keyline hidden
-/// (nokeyline), filled opaque red, green, blue and grey (red, green, blue, grey), the Pocket layer without its colour
-/// matrix and SDR filters (nomatrix), and the Pocket layer hidden (nopocket).
+/// compositing filter; pocket_filters= the Pocket layer's filter types; container= the container's name. keyline_want=
+/// is the fill UIKit gives J181 in the view's interface style (keyline_style=), keyline_verdict= want (J181's fill in
+/// either style: UIKit takes the style from its own input), magenta (UIKit's fill for a display scale, keyline_scale=,
+/// that its keyline has no row for) or other; a fill other than J181's fails the test. Then, the row at the keyline's
+/// last pixel row (<run>_rgb) and the picture's purple rows (<run>_at) with: the keyline hidden (nokeyline), filled
+/// opaque red, green, blue and grey (red, green, blue, grey), the Pocket layer without its colour matrix and SDR
+/// filters (nomatrix), and the Pocket layer hidden (nopocket).
 enum PocketKeylineProbe {
     struct Layers {
         let keyline: CALayer
         let pocket: CALayer?
         let container: CALayer?
+        /// The keyline's fill, R, G, B, A, and J181's, the view's interface style's first
+        let fill: [Double]?
+        let wants: [[Double]]
     }
 
-    static func run(_ context: TestContext, _ metrics: inout Metrics) async -> [(String, Raster)] {
+    /// UIKit 27's keyline at scales 1 and 2: the separator alpha of its pocket constants (0.1 in both styles) over
+    /// sRGB white in dark and black in light
+    static func wants(dark: Bool) -> [[Double]] {
+        let (white, black): ([Double], [Double]) = ([1, 1, 1, 0.1], [0, 0, 0, 0.1])
+        return dark ? [white, black] : [black, white]
+    }
+
+    /// Why the keyline's fill fails the test, nil when it is J181's
+    static func fillProblem(_ layers: Layers) -> String? {
+        switch KeylineClaim.fillVerdict(layers.fill, wants: layers.wants) {
+        case "want": return nil
+        case "magenta": return "UIKit filled the keyline layer opaque magenta"
+        default: return "the keyline layer's fill is not J181's"
+        }
+    }
+
+    static func run(
+        _ context: TestContext, _ metrics: inout Metrics, _ reasons: inout [String]
+    ) async
+        -> [(String, Raster)]
+    {
         let host = await context.onStage(fullScreen: true) { stage -> UIHostingController<PocketList> in
             let host = UIHostingController(rootView: PocketList(hidden: false, style: .hard))
             host.view.frame = Snapshots.aligned(UIScreen.main.bounds)
@@ -36,6 +62,7 @@ enum PocketKeylineProbe {
             return []
         }
         metrics.merge(found)
+        if let problem = fillProblem(layers) { reasons.append(problem) }
         let original = await MainActor.run { layers.keyline.backgroundColor }
         let filters = await MainActor.run { layers.pocket?.filters }
         let opaque = { (r: CGFloat, g: CGFloat, b: CGFloat) in CGColor(srgbRed: r, green: g, blue: b, alpha: 1) }
@@ -92,7 +119,15 @@ enum PocketKeylineProbe {
         let scale = view.window?.screen.scale ?? 1
         let frame = keyline.convert(keyline.bounds, to: view.layer)
         let (top, bottom) = (frame.minY * scale, frame.maxY * scale)
+        let dark = view.traitCollection.userInterfaceStyle == .dark
+        let layers = Layers(
+            keyline: keyline, pocket: pocket, container: container, fill: rgba(keyline.backgroundColor),
+            wants: wants(dark: dark))
         metrics.set("keyline", fill(keyline.backgroundColor))
+        metrics.set("keyline_want", text(layers.wants[0]) + "/SRGB")
+        metrics.set("keyline_verdict", KeylineClaim.fillVerdict(layers.fill, wants: layers.wants))
+        metrics.set("keyline_scale", Double(view.traitCollection.displayScale))
+        metrics.set("keyline_style", dark ? "dark" : "light")
         metrics.set("keyline_px", String(format: "%.2f-%.2f", top, bottom))
         metrics.set("keyline_opacity", Double(keyline.opacity))
         metrics.set("keyline_filter", (keyline.compositingFilter as? NSObject)?.description ?? "-")
@@ -100,13 +135,24 @@ enum PocketKeylineProbe {
         metrics.set("container", (container?.name ?? "-").replacingOccurrences(of: " ", with: "_"))
         let row = max(Int(bottom.rounded(.up)) - 1, 0)
         metrics.set("keyline_row", row)
-        return (Layers(keyline: keyline, pocket: pocket, container: container), row, metrics)
+        return (layers, row, metrics)
     }
 
     static func fill(_ color: CGColor?) -> String {
         guard let color, let components = color.components else { return "-" }
         let space = (color.colorSpace?.name as String?)?.replacingOccurrences(of: "kCGColorSpace", with: "") ?? "-"
-        return components.map { String(format: "%.3f", $0) }.joined(separator: ",") + "/" + space
+        return text(components.map(Double.init)) + "/" + space
+    }
+
+    /// R, G, B, A of an RGB colour, nil for any other model
+    static func rgba(_ color: CGColor?) -> [Double]? {
+        guard let color, color.colorSpace?.model == .rgb, let components = color.components, components.count == 4
+        else { return nil }
+        return components.map(Double.init)
+    }
+
+    static func text(_ components: [Double]) -> String {
+        components.map { String(format: "%.3f", $0) }.joined(separator: ",")
     }
 
     static func filterTypes(_ layer: CALayer) -> String {

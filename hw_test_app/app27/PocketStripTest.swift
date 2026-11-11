@@ -21,7 +21,8 @@ import UIKit
 /// in that picture): soft and hard force the effect's style (.scrollEdgeEffectStyle), and a strip in hard alone is
 /// the hard style's keyline; half and pixel move the list down by half a pixel and by a whole one inside the stage and
 /// snapshot the stage, so a strip that comes and goes with the half-pixel move depends on how a fractional edge rounds.
-/// PocketKeylineProbe adds the hard effect's layers and the keyline row with each of them changed.
+/// PocketKeylineProbe adds the hard effect's layers, the keyline's fill against J181's (keyline_verdict=; any other
+/// fails the test) and the keyline row with each of them changed.
 ///
 /// With the edge effect shown, a debug kernel's scanout read-back (ScanoutReadback) also gives the frame's
 /// framebuffer (what backboardd rendered for the panel, before the display's copy) and its scanout buffer (what window
@@ -92,7 +93,7 @@ struct PocketStripTest: HWTest {
             metrics.set(name + "_bar", shot.bar)
             if !rows.isEmpty { saved.append((name, shot.picture)) }
         }
-        saved += await PocketKeylineProbe.run(context, &metrics)
+        saved += await PocketKeylineProbe.run(context, &metrics, &reasons)
         if !reasons.isEmpty {
             let directory = context.documents.appendingPathComponent("ui").appendingPathComponent(id)
             try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)

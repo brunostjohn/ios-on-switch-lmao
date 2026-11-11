@@ -16,11 +16,13 @@ import UIKit
 /// and fresh_rows= the rows they lie on. Then with the keyline hidden (nokeyline), the Pocket hidden (nopocket), the
 /// Pocket without its colour matrix and SDR filters (nomatrix), the keyline tinted at its own alpha (tint), grown three
 /// pixels upwards (tall) and moved a pixel up (up): <run>_rgb at the line row and <run>_fresh, the fresh texels within
-/// three rows of it. expect_rgb= is the keyline's white over nokeyline_rgb, source-over in unorm8; tint_want= the tint's.
+/// three rows of it. expect_rgb= is the keyline's own fill over nokeyline_rgb, source-over in unorm8; tint_want= the
+/// tint's.
 /// A debug kernel's read-back gives the framebuffer at the keyline (framebuffer_line_rgb=, framebuffer_line_at=) and its
 /// fresh texels (framebuffer_fresh=, framebuffer_fresh_cols=, framebuffer_fresh_rows=); readback= is ok or why not.
-/// PocketKeylineReplicaRun adds the keyline's state drawn offscreen. Fresh texels in the render or the framebuffer, or
-/// a purple keyline row, fail the test.
+/// PocketKeylineReplicaRun adds the keyline's state drawn offscreen. A keyline fill other than J181's
+/// (keyline_verdict=), fresh texels in the render or the framebuffer (not counted against a magenta fill, which draws
+/// the same value), or a purple keyline row fail the test.
 struct PocketKeylineTest: HWTest {
     let id = "ui.pocket_keyline"
     let name = "Scroll edge keyline: its row rendered, in the framebuffer and in an offscreen replica of its state"
@@ -67,7 +69,8 @@ struct PocketKeylineTest: HWTest {
         let variants = await Self.variants(layers, row: row, alpha: alpha, view: host.view, &metrics)
         let backdrop = variants["nokeyline"]
         if let backdrop {
-            metrics.set("expect_rgb", Self.text(KeylineClaim.expected(over: backdrop, alpha: Double(alpha))))
+            let rgb = layers.fill.map { Array($0.prefix(3)) } ?? [1, 1, 1]
+            metrics.set("expect_rgb", Self.text(KeylineClaim.expected(over: backdrop, alpha: Double(alpha), rgb: rgb)))
             let tint = KeylineClaim.expected(over: backdrop, alpha: Double(alpha), rgb: [1, 0.5, 0.25])
             metrics.set("tint_want", Self.text(tint))
         }
@@ -75,11 +78,15 @@ struct PocketKeylineTest: HWTest {
         let replica = await PocketKeylineReplicaRun.run(&metrics)
         let (claim, why) = KeylineClaim.verdict(
             KeylineClaim.Evidence(
-                line: line, backdrop: backdrop, framebuffer: framebuffer, replicaWrong: replica, alpha: Double(alpha)))
+                line: line, backdrop: backdrop, framebuffer: framebuffer, replicaWrong: replica, alpha: Double(alpha),
+                fill: layers.fill))
         var reasons: [String] = []
-        if !fresh.isEmpty { reasons.append("\(fresh.values.reduce(0, +)) fresh-texture texels in the render") }
-        if let count = metrics["framebuffer_fresh"], count != .integer(0) {
-            reasons.append("fresh-texture texels in the framebuffer")
+        if let problem = PocketKeylineProbe.fillProblem(layers) { reasons.append(problem) }
+        if !(layers.fill.map(KeylineClaim.magenta) ?? false) {
+            if !fresh.isEmpty { reasons.append("\(fresh.values.reduce(0, +)) fresh-texture texels in the render") }
+            if let count = metrics["framebuffer_fresh"], count != .integer(0) {
+                reasons.append("fresh-texture texels in the framebuffer")
+            }
         }
         if KeylineClaim.purple(line) { reasons.append("the keyline row is purple (\(Self.text(line)))") }
         var all = Metrics()

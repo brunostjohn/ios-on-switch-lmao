@@ -1,6 +1,8 @@
 import Foundation
 
 /// Which explanation of the scroll edge keyline's purple row (ui.pocket_keyline) its numbers support, as claim_verdict=:
+/// fill, UIKit filled the keyline layer with opaque magenta, the colour it gives a value it could not resolve: the row
+/// is that fill drawn as asked, so no pixel reasoning applies (a magenta texel is the fill, not an unwritten one);
 /// a, the keyline state's own draw is wrong (its offscreen replica drew another value into an attachment);
 /// b, the draw is right and the row is damaged or left unwritten after it (the replica is exact while the composited
 /// row is purple; a row holding Metal's fresh texture texel exactly is a row nothing wrote);
@@ -18,14 +20,34 @@ public enum KeylineClaim {
         /// What the replica drew wrong ("c0.g"), "" when it drew every attachment as expected, nil when it did not run
         public var replicaWrong: String?
         public var alpha: Double
+        /// The keyline layer's own fill, R, G, B, A (nil: unknown)
+        public var fill: [Double]?
 
-        public init(line: [Int], backdrop: [Int]?, framebuffer: [Int]?, replicaWrong: String?, alpha: Double) {
+        public init(
+            line: [Int], backdrop: [Int]?, framebuffer: [Int]?, replicaWrong: String?, alpha: Double,
+            fill: [Double]? = nil
+        ) {
             self.line = line
             self.backdrop = backdrop
             self.framebuffer = framebuffer
             self.replicaWrong = replicaWrong
             self.alpha = alpha
+            self.fill = fill
         }
+    }
+
+    public static func magenta(_ rgba: [Double]) -> Bool {
+        rgba.count == 4 && zip(rgba, [1.0, 0, 1, 1]).allSatisfy { abs($0 - $1) < 1e-6 }
+    }
+
+    /// The keyline layer's fill against those UIKit gives the device class (`wants`): "want", "magenta" or "other"
+    public static func fillVerdict(_ fill: [Double]?, wants: [[Double]]) -> String {
+        guard let fill else { return "other" }
+        if magenta(fill) { return "magenta" }
+        let same = { (want: [Double]) in
+            fill.count == want.count && zip(fill, want).allSatisfy { abs($0 - $1) < 0.001 }
+        }
+        return wants.contains(where: same) ? "want" : "other"
     }
 
     public static let rounding = 2
@@ -57,6 +79,9 @@ public enum KeylineClaim {
     }
 
     public static func verdict(_ e: Evidence) -> (claim: String, why: String) {
+        if let fill = e.fill, magenta(fill) {
+            return ("fill", "UIKit filled the keyline layer opaque magenta: the row is that fill as drawn")
+        }
         let framebufferPurple = e.framebuffer.map(purple) ?? false
         if !purple(e.line) && !framebufferPurple {
             if let backdrop = e.backdrop {

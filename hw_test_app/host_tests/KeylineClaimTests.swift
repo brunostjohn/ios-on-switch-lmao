@@ -4,10 +4,33 @@ import XCTest
 
 final class KeylineClaimTests: XCTestCase {
     func evidence(
-        line: [Int], backdrop: [Int]? = [20, 20, 21], framebuffer: [Int]? = nil, replica: String? = ""
+        line: [Int], backdrop: [Int]? = [20, 20, 21], framebuffer: [Int]? = nil, replica: String? = "",
+        fill: [Double]? = nil
     ) -> KeylineClaim.Evidence {
         KeylineClaim.Evidence(
-            line: line, backdrop: backdrop, framebuffer: framebuffer, replicaWrong: replica, alpha: 0.1)
+            line: line, backdrop: backdrop, framebuffer: framebuffer, replicaWrong: replica, alpha: 0.1, fill: fill)
+    }
+
+    func testAMagentaFillIsUIKitsOwnBeforeAnyPixelReasoning() {
+        let magenta: [Double] = [1, 0, 1, 1]
+        let fresh = evidence(line: [255, 0, 255], framebuffer: [255, 0, 255], fill: magenta)
+        XCTAssertEqual(KeylineClaim.verdict(fresh).claim, "fill")
+        XCTAssertEqual(
+            KeylineClaim.verdict(evidence(line: [255, 0, 255], replica: "c0.g", fill: magenta)).claim, "fill")
+        XCTAssertEqual(KeylineClaim.verdict(evidence(line: [255, 0, 255], replica: nil, fill: magenta)).claim, "fill")
+        let white = evidence(line: [255, 0, 255], framebuffer: [255, 0, 255], fill: [1, 1, 1, 0.1])
+        XCTAssertEqual(KeylineClaim.verdict(white).claim, "b")
+    }
+
+    func testTheFillIsJudgedAgainstTheDeviceClassesFill() {
+        let rows: [[Double]] = [[1, 1, 1, 0.1], [0, 0, 0, 0.1]]
+        XCTAssertEqual(KeylineClaim.fillVerdict([1, 1, 1, Double(Float(0.1))], wants: rows), "want")
+        XCTAssertEqual(KeylineClaim.fillVerdict([0, 0, 0, 0.1], wants: rows), "want")
+        XCTAssertEqual(KeylineClaim.fillVerdict([1, 0, 1, 1], wants: rows), "magenta")
+        XCTAssertEqual(KeylineClaim.fillVerdict([0, 0, 0, 0.1], wants: [rows[0]]), "other")
+        XCTAssertEqual(KeylineClaim.fillVerdict([1, 1, 1, 1], wants: rows), "other")
+        XCTAssertEqual(KeylineClaim.fillVerdict(nil, wants: rows), "other")
+        XCTAssertFalse(KeylineClaim.magenta([1, 0, 1, 0.5]))
     }
 
     func testTheKeylinesWhiteOverTheBackdropIsSourceOverOfTheHalfAlpha() {
