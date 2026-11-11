@@ -173,6 +173,12 @@ ios_binary(
     entitlements = "compiler/SwitchShaderCompiler.entitlements",
 )
 
+# The overlay files of the compiler that overlay/manifest.json names
+filegroup(
+    name = "overlay_files",
+    srcs = ["compiler/com.brunostjohn.switch.shadercompiler.plist"],
+)
+
 # What the raw path's records, pack entries and native seed records are made by, as //gpu:raw_stack hashes it: the shader
 # tools build the raw pack's tools from exactly these files (//gpu/seed:local_tools), and the plugin makes and reads its
 # records with the same units. raw_stack checks that each unit here includes nothing else; tools/gpu/raw_stack_test.py
