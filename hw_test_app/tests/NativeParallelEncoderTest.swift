@@ -7,7 +7,9 @@ import Metal
 /// C, B, A, over a colour target and a memoryless depth attachment. A sets a scissor and draws red; B draws green at
 /// the same depth with Metal's default scissor (all of it), so the depth A wrote keeps A's half red; C draws blue over
 /// the bottom quarter with no depth test, last in creation order whatever order the sub-encoders ended in. A parallel
-/// encoder of no sub-encoder still clears. Both command buffers stay raw.
+/// encoder of no sub-encoder still clears. Both command buffers stay raw. A group one of whose sub-encoders the raw
+/// path refuses (a depth clamp) goes to m2v whole, each sub-encoder a pass that loads what the one before stored (its
+/// path is a metric, its pixels checked).
 struct NativeParallelEncoderTest: NativeObjectTest {
     let id = "metal.native.parallel_encoder"
     let name = "Parallel render encoders: sub-encoders in creation order, one pass, Metal's default state each"
@@ -98,6 +100,7 @@ struct NativeParallelEncoderTest: NativeObjectTest {
             commands.makeParallelRenderCommandEncoder(descriptor: pass)?.endEncoding()
         }
         work.paths.append(empty.path)
+        try await refusedGroup(gpu, &work, &metrics)
         let magenta = try await gpu.read(cleared, bytesPerPixel: 4)
         let unclear = (0..<256).filter {
             Array(magenta.pixel($0 % 16, $0 / 16, width: 16)) != [255, 0, 255, 255]
@@ -105,5 +108,39 @@ struct NativeParallelEncoderTest: NativeObjectTest {
         metrics.set("unclear_pixels", unclear)
         if unclear != 0 { work.failures.append("an empty parallel encoder left \(unclear) pixels uncleared") }
         return work
+    }
+
+    /// A draws red everywhere, B clamps depth (which the raw path refuses) and draws green over the right half
+    func refusedGroup(_ gpu: GPU, _ work: inout NativeWork, _ metrics: inout Metrics) async throws {
+        let size = 32
+        let target = try gpu.texture(.rgba8Unorm, size, size)
+        let pipeline = try gpu.render(fragment: "solid_fragment", format: .rgba8Unorm)
+        let timing = try await gpu.run { commands in
+            let pass = MTLRenderPassDescriptor()
+            pass.colorAttachments[0].texture = target
+            pass.colorAttachments[0].loadAction = .clear
+            pass.colorAttachments[0].clearColor = MTLClearColor(red: 0, green: 0, blue: 0, alpha: 1)
+            pass.colorAttachments[0].storeAction = .store
+            guard let parallel = commands.makeParallelRenderCommandEncoder(descriptor: pass),
+                let a = parallel.makeRenderCommandEncoder(), let b = parallel.makeRenderCommandEncoder()
+            else { throw TestFailure("no parallel encoder or sub-encoder") }
+            a.setRenderPipelineState(pipeline)
+            GPU.draw(a, corners: GPU.fullScreen, color: SIMD4(1, 0, 0, 1))
+            b.setRenderPipelineState(pipeline)
+            b.setDepthClipMode(.clamp)
+            b.setScissorRect(MTLScissorRect(x: size / 2, y: 0, width: size / 2, height: size))
+            GPU.draw(b, corners: GPU.fullScreen, color: SIMD4(0, 1, 0, 1))
+            b.endEncoding()
+            a.endEncoding()
+            parallel.endEncoding()
+        }
+        metrics.set("refused_group_path", timing.path)
+        let pixels = try await gpu.read(target, bytesPerPixel: 4)
+        let wrong = (0..<size * size).filter {
+            let want: [UInt8] = $0 % size < size / 2 ? [255, 0, 0, 255] : [0, 255, 0, 255]
+            return Array(pixels.pixel($0 % size, $0 / size, width: size)) != want
+        }.count
+        metrics.set("refused_group_wrong", wrong)
+        if wrong != 0 { work.failures.append("\(wrong) pixels wrong in the group sent to m2v") }
     }
 }

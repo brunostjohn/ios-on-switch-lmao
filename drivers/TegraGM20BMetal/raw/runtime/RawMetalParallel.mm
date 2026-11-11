@@ -28,7 +28,8 @@ struct RMSubCommand {
 - (void)record:(const Cmd &)c
 {
     RMSubCommand s{c, {}};
-    std::copy_n(_extra.begin() + ptrdiff_t(c.x), raw::extraWords(c.op), s.extra.begin());
+    if (const size_t words = raw::extraWords(c.op))
+        std::copy_n(_extra.begin() + ptrdiff_t(c.x), words, s.extra.begin());
     _log.push_back(s);
     [super record:c];
 }
