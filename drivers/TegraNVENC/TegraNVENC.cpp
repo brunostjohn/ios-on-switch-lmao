@@ -24,11 +24,11 @@
 // most 4 jobs are queued, which bounds the push buffer NVENC shares with NVDEC (8 x 197 + 4 x 190 words < 4096) and the
 // 8 setup slots; the OS takes a queued job's methods into its own queue while an app runs and applies them only after
 // it (0x13b-0x1a1, 0x20e-0x235), so they cannot change the running job. Every job runs with the GP timer on (the
-// checker requires it; the H.264 app's limit is the setup's, 1 << 27 cycles at most, 329 ms at 408 MHz, the H.265
-// app's its own, width x height x 24 cycles up to 0x1600000); waits are bounded by kJobBoundUs per queued job whatever a
-// client asks for, and the largest picture the checker admits (36864 macroblocks) encodes well inside it. The GP timer
-// does not end a stalled job: its interrupt only records an error, and either app's end-of-picture spin waits for
-// macroblocks or CTBs the engine never reports (appDump), so the kernel's bound is what ends it.
+// checker requires it); both apps arm it with width x height x 24 cycles, at most 0x1600000 (H.264 0x3217-0x3256, H.265
+// 0x1f7e-0x1fbd), and neither reads the setup's gpTimer_timeout_val. Waits are bounded by kJobBoundUs per queued job
+// whatever a client asks for, and the largest picture the checker admits (36864 macroblocks) encodes well inside it.
+// The GP timer does not end a stalled job: its interrupt only records an error, and either app's end-of-picture spin
+// waits for macroblocks or CTBs the engine never reports (appDump), so the kernel's bound is what ends it.
 //
 // Firmware: linux-firmware's nvidia/tegra210/nvenc.bin, byte-identical to L4T's nvhost_nvenc050.fw (firmware/SOURCE),
 // booted non-securely as L4T's nvhost and TegraNVDEC boot theirs.
@@ -197,10 +197,11 @@ uint32_t dmem(uint32_t address)
     return switch_mmio_read32(gNvenc, SWITCH_FALCON_DMEMD);
 }
 
-// Which way the app is stuck. An error (0xe2640010 GP timer, 0xe2640060 encoder error, 0xe2640200 I[0x1ac4] bits
-// 0-2) with fewer macroblocks or CTBs than the target: the ISR saw the fault but the spin has no way out. No error and
-// fewer: the engine stopped reporting them, or its interrupt is pending untaken (encoder status bit 1 set). Count at the
-// target: past the spin, and the PC shows which of the polls after it holds the app.
+// Which way the app is stuck (the oldest unfinished job's: the one the falcon runs). An error (0xe2640010 GP timer,
+// 0xe2640060 encoder error, 0xe2640200 I[0x1ac4] bits 0-2) with fewer macroblocks or CTBs than the target: the ISR saw
+// the fault but the spin has no way out. No error and fewer: the engine stopped reporting them, or its interrupt is
+// pending untaken (encoder status bit 1 set). Count at the target: past the spin, and the PC shows which of the polls
+// after it holds the app.
 const char *appDump(uint32_t codec)
 {
     static char text[176];
@@ -382,7 +383,7 @@ int stalled(uint32_t fence)
     char host[200];
     tegra_host1x_describe_channel(TEGRA_HOST1X_CHANNEL_NVENC, host, sizeof(host));
     const uint32_t reached = tegra_host1x_syncpt_read(gSyncpt);
-    const char *app = appDump(gJobCodec[(fence - gBase) % kSetupSlots]);
+    const char *app = appDump(gJobCodec[(reached + 1 - gBase) % kSetupSlots]);
     const char *falcon = falconDump();
     tegra_host1x_channel_teardown(TEGRA_HOST1X_CHANNEL_NVENC);
     flushMemoryClient();
