@@ -7,9 +7,29 @@
 #pragma once
 #include <algorithm>
 #include <cstdint>
+#include <vector>
+#include "../../../../kits/SwitchGM20B/SwitchGM20B3D.h"
+#include "raw_state_segment.h"
 #include "raw_zeta.h"
 
 namespace raw {
+
+inline constexpr uint32_t kDepthStencilMethods[kDepthStencilRegs] = {
+    NVB197_SET_DEPTH_TEST, NVB197_SET_DEPTH_WRITE, NVB197_SET_DEPTH_FUNC, NVB197_SET_STENCIL_TEST,
+    NVB197_SET_STENCIL_OP_FAIL, NVB197_SET_STENCIL_OP_ZFAIL, NVB197_SET_STENCIL_OP_ZPASS, NVB197_SET_STENCIL_FUNC,
+    NVB197_SET_STENCIL_FUNC_REF, NVB197_SET_STENCIL_FUNC_MASK, NVB197_SET_STENCIL_MASK, NVB197_SET_BACK_STENCIL_OP_FAIL,
+    NVB197_SET_BACK_STENCIL_OP_ZFAIL, NVB197_SET_BACK_STENCIL_OP_ZPASS, NVB197_SET_BACK_STENCIL_FUNC,
+    NVB197_SET_BACK_STENCIL_FUNC_REF, NVB197_SET_BACK_STENCIL_MASK, NVB197_SET_BACK_STENCIL_FUNC_MASK,
+};
+
+// The methods that take `held` (what the GPU holds) to `want`, then held = want
+inline void emitDepthStencil(Push &p, const DepthStencilRegs &want, DepthStencilRegs &held)
+{
+    for (uint32_t i = 0; i < kDepthStencilRegs; i++)
+        if (want.v[i] != held.v[i])
+            p.m(kDepthStencilMethods[i], want.v[i]);
+    held = want;
+}
 
 // MTLCompareFunction and VkCompareOp share their order; NV's OGL value is 0x200 | it
 inline uint32_t depthStencilCompare(uint8_t f)
@@ -64,6 +84,38 @@ inline DepthStencilRegs shaderDepthStencilRegs(bool depth)
     return regs;
 }
 
+// A pair of aspects' registers but the stencil references, which a draw sets: a segment's words, one immediate each
+inline uint32_t depthStencilStateWords(const DepthStencilRegs &r, uint32_t out[kDepthStencilRegs])
+{
+    Push p{out, out + kDepthStencilRegs};
+    for (uint32_t i = 0; i < kDepthStencilRegs; i++)
+        if (i != kFrontStencilReference && i != kBackStencilReference)
+            p.m(kDepthStencilMethods[i], r.v[i]);
+    return uint32_t(p.at - out);
+}
+
+// The registers `want` sets that `held` (what the channel holds) lacks: by `segment` (the state's registers for the pass's
+// aspects but the references) where more of them differ than a segment bind costs, then the references inline. Each
+// register is an immediate, a word. True: the segment was bound.
+inline bool bindDepthStencil(Push &p, std::vector<PushBody> &bodies, uint32_t *&start, const DepthStencilRegs &want,
+                             DepthStencilRegs &held, const StateSegment &segment)
+{
+    uint32_t changed = 0;
+    for (uint32_t i = 0; i < kDepthStencilRegs; i++)
+        changed += want.v[i] != held.v[i];
+    if (!segment || changed <= kSegmentBindWords) {
+        emitDepthStencil(p, want, held);
+        return false;
+    }
+    bindSegment(bodies, start, p.at, segment);
+    const uint32_t front = held.v[kFrontStencilReference], back = held.v[kBackStencilReference];
+    held = want;
+    held.v[kFrontStencilReference] = front;
+    held.v[kBackStencilReference] = back;
+    emitDepthStencil(p, want, held);
+    return true;
+}
+
 // A state's register values, made at its creation for each pair of aspects a pass's attachment can have. A draw takes its
 // pass's pair and writes the references it set into them: the state's words are never derived again per draw.
 class DepthStencilState {
@@ -97,9 +149,23 @@ public:
         return state;
     }
 
+    // Its registers for each pair of aspects into `heap` (whose caller serialises place())
+    void place(StateSegmentHeap &heap)
+    {
+        uint32_t words[kDepthStencilRegs];
+        for (uint32_t aspects = 0; aspects < 4; aspects++)
+            segments_[aspects] = heap.place(words, depthStencilStateWords(byAspects_[aspects], words));
+    }
+
+    const StateSegment &segment(bool depth, bool stencil) const
+    {
+        return segments_[uint32_t(depth) | uint32_t(stencil) << 1];
+    }
+
 private:
     DepthStencilDesc desc_;
     DepthStencilRegs byAspects_[4];
+    StateSegment segments_[4];
 };
 
 }  // namespace raw

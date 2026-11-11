@@ -382,6 +382,8 @@ cc_library(
         "//drivers/TegraGM20BMetal:raw/runtime/raw_pack.cpp",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_record_parts.cpp",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_resource_set.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_encoder_state.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_state_segment.cpp",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_shared_events.cpp",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_split.cpp",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_transfer.cpp",

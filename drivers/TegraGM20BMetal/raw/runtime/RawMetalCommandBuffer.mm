@@ -492,6 +492,16 @@ static void giveRecording(RMCommandBuffer *b)
     return @YES;
 }
 
+// hw_test_app's gpu.path.state_segments: this command buffer binds every state as an inline copy (raw_gpu.h inlineStates)
+- (NSNumber *)switchRawInlineStates
+{
+    std::lock_guard<std::mutex> lock(_lock);
+    if (_committed)
+        return @NO;
+    _inlineStates = true;
+    return @YES;
+}
+
 // hw_test_app's clock of GPUStartTime/GPUEndTime, final once the command buffer completed: "ns" (its submission's GPU
 // stamps) or "host" (the host's window from submission to completion, which stands in where no stamp was read)
 - (NSString *)switchGpuClock

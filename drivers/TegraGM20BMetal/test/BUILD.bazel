@@ -37,6 +37,9 @@
 #   mkpack_owned_test raw/pack/mkpack.py: no blob or baseline register is one the raw path owns
 #   splits_layout_test  raw/pack/splits.py: a split is packed only where its per-pixel program binds its uniform
 #                     buffers as its whole program does
+#   raw_state_segment_test  raw/runtime/raw_state_segment.h: a bound segment's GPFIFO entries fetch the words the inline
+#                     stream wrote, the heap never moves a stream, a channel keeps its segment across a pass boundary only
+#                     where the boundary writes none of its registers (raw_pass_writes.h, checked against the emitters)
 #   raw_tiled_cache_test  raw/runtime/raw_tiled_cache.h: with the kernel's tiled-cache bit, deko3d's configuration then the
 #                     enable at context init and one flush per pass and per command buffer; nothing without it
 #   raw_probe_forms_test  raw/runtime/raw_probe_forms.h and raw_probe_ops.h (hw_test_app's barrier and 2D-engine probes,
@@ -667,6 +670,26 @@ host_test(
         "//drivers/TegraGM20BMetal:raw/runtime/raw_follow.h",
     ],
     cxx_std = "c++17",
+)
+
+host_test(
+    name = "raw_state_segment_test",
+    srcs = [
+        "raw_state_segment_test.cpp",
+        "//drivers/TegraGM20B:TegraGM20BABI.h",
+        "//drivers/TegraGM20B:TegraGM20BJobABI.h",
+        "//drivers/TegraGM20B:TegraGM20BLayout.h",
+        "//drivers/TegraGM20B:TegraGM20BZcullABI.h",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_state_segment.cpp",
+        "//drivers/TegraGM20BMetal:raw_runtime_headers",
+        "//kits/SwitchGM20BEmit:emit_headers",
+    ],
+    copts = ["-Idrivers/TegraGM20B"],
+    cxx_std = "c++17",
+    deps = [
+        "//kits/SwitchGM20B:classes",
+        "//kits/SwitchGM20BEmit:emit_ndebug",
+    ],
 )
 
 host_test(
@@ -1453,8 +1476,11 @@ host_test(
     name = "raw_depth_stencil_state_test",
     srcs = [
         "raw_depth_stencil_state_test.cpp",
+        "//drivers/TegraGM20B:TegraGM20BABI.h",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_batch.h",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_depth_stencil_state.h",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_push.h",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_state_segment.h",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_zeta.h",
     ],
     cxx_std = "c++17",

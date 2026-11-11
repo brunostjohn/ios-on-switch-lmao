@@ -75,6 +75,7 @@ static bool faceWritesStencil(const raw::StencilFace &f)
     RMDepthStencil *o = [RMDepthStencil new];
     o->_device = self;
     o->_raw = raw::DepthStencilState(desc);
+    gRM->raw->placeSegments(o->_raw);
     o->_descriptor = [d copy];
     o.label = d.label;
     return (id<MTLDepthStencilState>)o;

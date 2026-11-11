@@ -97,9 +97,8 @@ struct DepthStencilRegs {
     bool operator==(const DepthStencilRegs &o) const;
 };
 
-// The methods that take `held` (what the GPU holds) to `want`, then held = want
+// The most words emitDepthStencil (raw_depth_stencil_state.h) writes
 constexpr uint32_t kDepthStencilWords = 2 * kDepthStencilRegs;
-void emitDepthStencil(Push &p, const DepthStencilRegs &want, DepthStencilRegs &held);
 
 // A depth/stencil clear before a pass's draws (nvk_CmdClearAttachments): its values, then the CLEAR_SURFACE bits of its aspects
 constexpr uint32_t kZetaClearWords = 4;

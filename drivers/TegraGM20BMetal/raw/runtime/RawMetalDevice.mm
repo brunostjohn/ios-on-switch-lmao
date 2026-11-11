@@ -72,6 +72,10 @@ static const char *zetaMemoryRefusal(int asked)
     d[@"blend_kill_binds"] = @(gRM->raw->stats.blendKillBinds.load());
     d[@"zcull_passes"] = @(gRM->raw->stats.zcullPasses.load());
     d[@"zcull_invalidations"] = @(gRM->raw->stats.zcullInvalidations.load());
+    d[@"state_segment_binds"] = @(gRM->raw->stats.segmentBinds.load());
+    d[@"state_segment_words"] = @(gRM->raw->stats.segmentWords.load());
+    d[@"state_segment_skips"] = @(gRM->raw->stats.segmentSkips.load());
+    d[@"state_segment_extras_losses"] = @(gRM->raw->stats.segmentExtrasLosses.load());
     const raw::FetchCounts &fetch = gRM->raw->stats.fetch;
     d[@"fetch_whole"] = @(fetch.provenWhole.load());
     d[@"fetch_proof_vertices"] = @(fetch.proofVertices.load());

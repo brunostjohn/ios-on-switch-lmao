@@ -22,6 +22,7 @@
 #include "raw_dirty_ranges.h"
 #include "raw_batch.h"
 #include "raw_mme.h"
+#include "raw_state_segment.h"
 #include "raw_split_reuse.h"
 #include "raw_split_batch.h"
 #include "raw_split_cost.h"
@@ -383,6 +384,7 @@ struct Pipeline {
     const PackPipeline *rec = nullptr;
     uint32_t vertexInstructions = 1, fragmentInstructions = 1;
     std::vector<uint32_t> methods;         // the state's registers as ready push words (program offsets relocated)
+    StateSegment segment;                  // the same words in the device's segment heap; empty: they go inline
     uint32_t push[32] = {}, pushMask = 0;  // root table [0x700, 0x780): the words m2v's push ranges write, and which
     uint8_t setSlot[2] = {};  // the constant buffer slot the vertex and the pixel program read set 0 at (0: none)
 
@@ -655,15 +657,8 @@ private:
     const Pipeline *extrasAtBegin_ = nullptr;  // set back by the pass's prologue, before its clears
     uint32_t *bodyStart_ = nullptr;
 
-    struct Body {
-        uint32_t *first = nullptr, *second = nullptr;
-        uint64_t indirectVa = 0;
-        uint32_t indirectWords = 0;
-        bool incomplete = false;
-        bool batchEnd = false;
-    };
-
-    std::vector<Body> bodies_;  // ordered CPU streams and GPU-owned argument continuations
+    using Body = PushBody;
+    std::vector<Body> bodies_;
     SplitPassPlan splitPlan_;
     bool indirectGeometry_ = false;
     mme::DrawParams params_;  // what the channel holds: the context's zeros at a pass's start, put back at its end
@@ -671,6 +666,9 @@ private:
     void reserve();
     void finishDraw(uint32_t vertices, uint32_t instances, bool indirect = false);
     Pipeline *pipeline_ = nullptr, *emitted_ = nullptr;
+    void bindState(Push &p, const Pipeline &pl);
+    bool measuringInline() const;
+    bool bindsBySegment() const;
     const Pipeline *compatible_ = nullptr;
     uint32_t compatibleSampleMasks_[4]{};
     bool residualsPushed_ = false;  // the last draw's push words held SlotBindOffset residuals (RenderEncoder::prepare)
@@ -924,6 +922,11 @@ public:
     {
         forceWholePrograms_ = force;
     }
+    // hw_test_app's measurement of state segments: every state bound as the inline copy it was before them
+    void inlineStates(bool inline_)
+    {
+        inlineStates_ = inline_;
+    }
     const ProbeForms &probeForms() const
     {
         return forms_;
@@ -971,7 +974,7 @@ private:
     JobVisibility visibility_ = JobVisibility::Legacy;
     bool externalWrites_ = false;
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
-    bool forceWholePrograms_ = false;
+    bool forceWholePrograms_ = false, inlineStates_ = false;
     ProbeForms forms_;
     ProbeTaken taken_;
     ProbeEngine lastEngine_ = ProbeEngine::None;  // the engine of the work encoded last, for forms_
@@ -1002,6 +1005,8 @@ private:
     uint32_t restart_ = 0;                  // SET_DA_PRIMITIVE_RESTART_INDEX as the GPU will hold it
     DepthStencilRegs ds_;                   // and its depth/stencil registers
     const Pipeline *extrasLive_ = nullptr;  // and the state whose extras it holds (Pipeline::restore)
+    HeldSegment heldSegment_;               // and the state segment its registers hold
+    uint32_t segmentBinds_ = 0;             // its own (kSegmentBindsPerCommandBuffer)
     bool drawn_ = false;  // a draw was encoded (NVK resets the restart index at a command buffer's first)
     // the prologue's INVALIDATE_SHADER_CACHES_NO_WFI data word, which commit gives the INSTRUCTION bit when programs were placed
     // in the heap since the last submission that invalidated the instruction cache
@@ -1058,6 +1063,12 @@ public:
     // A pack pipeline by its state key's FNV-1a (RawMetal.mm rawPipelineKey); null: not in the pack.
     // caTransform: its vertex function is Core Animation's fixed_vert_l?h_spc (Pipeline::caTransform)
     Pipeline *pipeline(uint64_t keyHash, PackForm form = PackForm::Default, bool caTransform = false);
+    // A new depth/stencil state's registers into the segment heap
+    void placeSegments(DepthStencilState &state)
+    {
+        std::lock_guard<std::mutex> l(lock_);
+        state.place(segmentHeap_);
+    }
     Pipeline *placePipeline(uint64_t keyHash, PackForm form, bool caTransform);
     // The state's pack records for the variants its draws pick (PipelineVariantRecord), each placed, by name: null where it
     // cannot be (its programs find no room in the heap, or its storage or push metadata is not this runtime's)
@@ -1491,6 +1502,10 @@ public:
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
         std::atomic<uint64_t> splitLaunches{0};
         std::atomic<uint64_t> interlockDraws{0}, storageBarriers{0};
+        // state segment binds, the inline words they replaced, a pass's first binds of the segment the channel still held
+        // from the pass or command buffer before (no words; raw_state_segment.h), and passes that could not keep it because
+        // their prologue set back the last state's extras (Pipeline::restore)
+        std::atomic<uint64_t> segmentBinds{0}, segmentWords{0}, segmentSkips{0}, segmentExtrasLosses{0};
         EncodeTotals encode;
 #endif
 #else
@@ -1742,6 +1757,8 @@ private:
     void offerCompletedSplit(Completed &c, const RuntimeRecord &r, const PlacedProgram &vs, bool caTransform);
     bool takeTsc(uint32_t &tsc);
     const Pipeline *extrasLive_ = nullptr;  // the state whose extras (Pipeline::restore) the channel holds
+    HeldSegment heldSegment_;               // the state segment its registers hold after everything submitted
+    StateSegmentHeap segmentHeap_;          // lock_ (place)
     CommandBuffer cb_;
     uint32_t rootPush_[32] = {};  // what the GPU's root table holds at [0x700, 0x780) after everything submitted
     uint32_t restart_ = 0;        // and its primitive restart index

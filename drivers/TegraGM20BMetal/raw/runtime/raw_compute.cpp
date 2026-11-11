@@ -119,6 +119,7 @@ const ComputeState *placeCompute(Device &dev, const ComputeRecord &r)
 
 ComputeEncoder::ComputeEncoder(CommandBuffer &cb, Device &dev) : cb_(cb), dev_(dev)
 {
+    cb_.heldSegment_.lose();
     uint64_t va;
     start_ = reinterpret_cast<uint32_t *>(dev_.alloc(dev_.push_, kEncoderWords * 4, 256, va));
     p_ = Push{start_, start_ + kEncoderWords};

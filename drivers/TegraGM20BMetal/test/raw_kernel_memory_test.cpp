@@ -117,7 +117,7 @@ TEST(RawControlMemory, MemoryTheGpuAloneTouchesPerPixelOrDrawIsCached)
          {ControlUse::InterlockTickets, ControlUse::RootTable, ControlUse::ZeroPage, ControlUse::ColorTable})
         EXPECT_EQ(raw::controlMapping(use), raw::ControlMapping::Cached) << int(use);
     for (ControlUse use : {ControlUse::TextureHeaders, ControlUse::SamplerHeaders, ControlUse::Stamps, ControlUse::Ring,
-                           ControlUse::Bytes, ControlUse::TransferSlot})
+                           ControlUse::Bytes, ControlUse::TransferSlot, ControlUse::StateSegments})
         EXPECT_EQ(raw::controlMapping(use), raw::ControlMapping::Volatile) << int(use);
 }
 
