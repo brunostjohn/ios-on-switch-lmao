@@ -21,6 +21,7 @@
 #pragma once
 #include "raw_dirty_ranges.h"
 #include "raw_batch.h"
+#include "raw_mme.h"
 #include "raw_split_reuse.h"
 #include "raw_split_batch.h"
 #include "raw_split_cost.h"
@@ -664,7 +665,8 @@ private:
 
     std::vector<Body> bodies_;  // ordered CPU streams and GPU-owned argument continuations
     SplitPassPlan splitPlan_;
-    bool indirectGeometry_ = false, drawParamsUnknown_ = false;
+    bool indirectGeometry_ = false;
+    mme::DrawParams params_;  // what the channel holds: the context's zeros at a pass's start, put back at its end
     bool indirect(uint32_t primitive, bool indexed, const Buffer *arguments, uint64_t offset, const char **why);
     void reserve();
     void finishDraw(uint32_t vertices, uint32_t instances, bool indirect = false);
@@ -680,10 +682,11 @@ private:
     const Sampler *samplers_[16] = {};
     uint64_t vbVa_ = 0, vbLimit_ = 0, ibVa_ = 0, ibEnd_ = 0;
     uint32_t ibSize_ = 0;
-    // the state a draw needs, up to its draw parameters (vertices [vFirst, vFirst + vCount) of the stream are CPU-cleaned):
-    // the first vertex a draw of vertices starts at, or the base vertex an indexed one adds to each index
-    bool prepare(Pipeline *pl, uint32_t primitive, int32_t first, uint32_t vFirst, uint32_t vCount,
-                 uint32_t baseInstance, bool indexed, const char **why);
+    // the state a draw needs but its draw parameters, which its macro call writes (vertices [vFirst, vFirst + vCount) of
+    // the stream are CPU-cleaned): the first vertex a draw of vertices starts at, or the base vertex an indexed one adds to
+    // each index
+    bool prepare(Pipeline *pl, uint32_t primitive, int32_t first, uint32_t vFirst, uint32_t vCount, bool indexed,
+                 const char **why);
     // `pl`'s split twin where the draw is large enough for it to save time and its prologue can read what the draw binds
     Pipeline *splitTwin(Pipeline *pl, WrittenRegion::Analysis &analysis) const;
     uint32_t bindingFacts(const Pipeline &pl);
@@ -724,7 +727,7 @@ private:
     bool blendColorDirty_ = true;
     uint32_t blendWords_[8] = {};
     bool blendWordsDirty_ = true;
-    uint32_t topology_ = ~0u, restart_ = ~0u, first_ = 0, baseInstance_ = 0, baseVertex_ = 0;
+    uint32_t topology_ = ~0u, restart_ = ~0u;
     uint32_t samplePasses_ = 1;
     AttachmentWrites attachmentWrites_;
     bool memoryless_[8] = {};

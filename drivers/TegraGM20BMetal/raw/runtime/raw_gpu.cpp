@@ -59,7 +59,6 @@ enum : uint32_t {
     VIEWPORT_SCALE_X = NVB197_SET_VIEWPORT_SCALE_X(0),
     VIEWPORT_CLIP_H = NVB197_SET_VIEWPORT_CLIP_HORIZONTAL(0),
     CLEAR_RECT_H = NVB197_SET_CLEAR_RECT_HORIZONTAL,
-    VERTEX_ARRAY_START = NVB197_SET_VERTEX_ARRAY_START,
     COLOR_CLEAR_VALUE = NVB197_SET_COLOR_CLEAR_VALUE(0),
     INVALIDATE_SHADER_CACHES_NO_WFI = NVB197_INVALIDATE_SHADER_CACHES_NO_WFI,
     PIXEL_SHADER_BARRIER = NVB197_PIXEL_SHADER_BARRIER,
@@ -117,7 +116,6 @@ enum : uint32_t {
     BIND_GROUP_CB = NVB197_BIND_GROUP_CONSTANT_BUFFER(0),
     INDEX_BUFFER_A = NVB197_SET_INDEX_BUFFER_A,
     INDEX_BUFFER_E = NVB197_SET_INDEX_BUFFER_E,
-    INDEX_BUFFER_F = NVB197_SET_INDEX_BUFFER_F,
     DA_PRIMITIVE_RESTART_INDEX = NVB197_SET_DA_PRIMITIVE_RESTART_INDEX,
     CE_LAUNCH_DMA = NVB0B5_LAUNCH_DMA,
     CE_OFFSET_IN_UPPER = NVB0B5_OFFSET_IN_UPPER,
@@ -4051,19 +4049,17 @@ bool RenderEncoder::draw(uint32_t primitive, uint32_t first, uint32_t count, uin
             const bool reverse = runWinding_[run++];
             raster_.winding ^= reverse;
             const bool prepared =
-                prepare(pl, primitive, first + begin, first + begin, end - begin, baseInstance, false, why);
+                prepare(pl, primitive, first + begin, first + begin, end - begin, false, why);
             raster_.winding ^= reverse;
             if (!prepared)
                 return false;
-            p_.m(BEGIN, 0);
-            p_.inc(VERTEX_ARRAY_START, {first + begin, end - begin});
-            p_.m(END, 0);
+            mme::draw(p_, params_, false, first + begin, end - begin, 1, first + begin, baseInstance);
             finishDraw(end - begin, 1);
         }
         cb_->draws++;
         return true;
     }
-    if (!prepare(pl, primitive, first, first, count, baseInstance, false, why))
+    if (!prepare(pl, primitive, first, first, count, false, why))
         return false;
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
     const auto probe = instances == 1 ? dev_->armedProbe() : nullptr;
@@ -4073,23 +4069,17 @@ bool RenderEncoder::draw(uint32_t primitive, uint32_t first, uint32_t count, uin
 #endif
     if (p_.room() < kInstanceWords + probeWords)
         reserve();
-    if (instances == 1) {
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
-        if (probe && !probe->before.empty())
-            p_.raw(probe->before.data(), uint32_t(probe->before.size()));
-        if (probe)
-            dev_->probeEmitted.fetch_add(1, std::memory_order_relaxed);
+    if (probe && !probe->before.empty())
+        p_.raw(probe->before.data(), uint32_t(probe->before.size()));
+    if (probe)
+        dev_->probeEmitted.fetch_add(1, std::memory_order_relaxed);
 #endif
-        p_.m(BEGIN, 0);
-        p_.inc(VERTEX_ARRAY_START, {first, count});
-        p_.m(END, 0);
+    mme::draw(p_, params_, false, first, count, instances, first, baseInstance);
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
-        if (probe && !probe->after.empty())
-            p_.raw(probe->after.data(), uint32_t(probe->after.size()));
+    if (probe && !probe->after.empty())
+        p_.raw(probe->after.data(), uint32_t(probe->after.size()));
 #endif
-    } else {
-        mme::draw(p_, false, first, count, instances);
-    }
     cb_->draws++;
     finishDraw(count, instances);
     return true;
@@ -4292,7 +4282,7 @@ bool RenderEncoder::drawIndexed(uint32_t primitive, uint32_t count, uint32_t ind
 #endif
         const bool reverse = !runs.empty() && runWinding_[r];
         raster_.winding ^= reverse;
-        const bool prepared = prepare(pl, primitive, baseVertex, 0, 0, baseInstance, true, why);
+        const bool prepared = prepare(pl, primitive, baseVertex, 0, 0, true, why);
         raster_.winding ^= reverse;
         drawIndices_ = nullptr;
         if (!prepared)
@@ -4309,13 +4299,7 @@ bool RenderEncoder::drawIndexed(uint32_t primitive, uint32_t count, uint32_t ind
         }
         if (p_.room() < kInstanceWords)
             reserve();
-        if (instances == 1) {
-            p_.m(BEGIN, 0);
-            p_.inc(INDEX_BUFFER_F, {begin, end - begin});
-            p_.m(END, 0);
-        } else {
-            mme::draw(p_, true, begin, end - begin, instances);
-        }
+        mme::draw(p_, params_, true, begin, end - begin, instances, uint32_t(baseVertex), baseInstance);
         finishDraw(end - begin, instances);
     }
     cb_->draws++;
@@ -4346,7 +4330,7 @@ bool RenderEncoder::indirect(uint32_t primitive, bool indexed, const Buffer *arg
     }
     called_ = true;
     indirectGeometry_ = true;
-    const bool prepared = prepare(form, primitive, 0, 0, UINT32_MAX, 0, indexed, why);
+    const bool prepared = prepare(form, primitive, 0, 0, UINT32_MAX, indexed, why);
     indirectGeometry_ = false;
     if (!prepared)
         return false;
@@ -4365,8 +4349,7 @@ bool RenderEncoder::indirect(uint32_t primitive, bool indexed, const Buffer *arg
     dev_->push_.head = uint64_t(reinterpret_cast<uint8_t *>(p_.at) - dev_->push_.bo.cpu);
     bodyStart_ = nullptr;
     reserve();
-    drawParamsUnknown_ =
-        true;  // the macro changed draw root words/base registers; the next direct draw must restore them
+    params_.unknown = true;
     ++cb_->draws;
     finishDraw(0, 0, true);
     return true;
@@ -4597,7 +4580,7 @@ static void logEdgeMiss(const char *what, const Texture &t, const PixelBox &r, c
 #endif
 
 bool RenderEncoder::prepare(Pipeline *pl, uint32_t primitive, int32_t first, uint32_t vFirst, uint32_t vCount,
-                            uint32_t baseInstance, bool indexed, const char **why)
+                            bool indexed, const char **why)
 {
     RAW_ENCODE_SPAN(Prepare);
     const uint32_t count = vCount;
@@ -5048,23 +5031,6 @@ bool RenderEncoder::prepare(Pipeline *pl, uint32_t primitive, int32_t first, uin
         }
     }
     RAW_ENCODE_END(barrierSpan);
-    if (drawParamsUnknown_ || uint32_t(first) != first_ || baseInstance != baseInstance_) {
-        // nvk_mme_build_set_draw_params: root draw.vs.{base_vertex, base_instance} and the base registers
-        const uint32_t v[2] = {uint32_t(first), baseInstance};
-        p.m(LOAD_CB_OFFSET, 0);
-        p.nonInc(LOAD_CB, v, 2);
-        p.m(GLOBAL_BASE_INSTANCE_INDEX, baseInstance);
-        first_ = uint32_t(first);
-        baseInstance_ = baseInstance;
-    }
-    // the base vertex the hardware adds to an indexed draw's indices (nvk_mme_build_draw_indexed); 0 for a draw of vertices
-    const uint32_t baseVertex = indexed ? uint32_t(first) : 0;
-    if (drawParamsUnknown_ || baseVertex != baseVertex_) {
-        p.m(GLOBAL_BASE_VERTEX_INDEX, baseVertex);
-        p.m(VERTEX_ID_BASE, baseVertex);
-        baseVertex_ = baseVertex;
-    }
-    drawParamsUnknown_ = false;
 #if SWITCH_RAW_DIAGNOSTICS
     if (pipeline_ && pipeline_->caName)
         probeDraw(*pipeline_, *pl, primitive, first, count, indexed, {x[0], y[0], x[1], y[1]});
@@ -5643,13 +5609,13 @@ void RenderEncoder::end()
     if (rot_.turned())
         emitSwizzle(p_, kSwizzleIdentity);
     // the draw parameters the next encoder starts from: the root table's and the base registers, 0
-    if (drawParamsUnknown_ || first_ || baseInstance_) {
+    if (params_.unknown || params_.root || params_.baseInstance) {
         const uint32_t zero[2] = {};
         p_.m(LOAD_CB_OFFSET, 0);
         p_.nonInc(LOAD_CB, zero, 2);
         p_.m(GLOBAL_BASE_INSTANCE_INDEX, 0);
     }
-    if (drawParamsUnknown_ || baseVertex_) {
+    if (params_.unknown || params_.baseVertex) {
         p_.m(GLOBAL_BASE_VERTEX_INDEX, 0);
         p_.m(VERTEX_ID_BASE, 0);
     }
