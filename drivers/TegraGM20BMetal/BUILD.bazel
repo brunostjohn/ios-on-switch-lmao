@@ -236,6 +236,7 @@ py_test(
     name = "caspec27_test",
     srcs = ["raw/pack/ca/caspec27_test.py"],
     data = [
+        "precompile/ca-names/24B119.txt",
         "precompile/corpus.log",
         "raw/pack/ca/qc-24B119.json",
     ],

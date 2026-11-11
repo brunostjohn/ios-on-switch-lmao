@@ -14,6 +14,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 import caset  # noqa: E402
 import caspec  # noqa: E402
+import caspec27  # noqa: E402
 
 GLASS = (
     'R ok=1 label=com.apple.coreanimation.PBGRABsovXmw_TgbhA3Xhf_Isrc_Isrc samples=1 topo=0 ds=0/0'
@@ -27,6 +28,26 @@ DOWNSAMPLE = (
     ' a0=31:0:1:48:1:1 a1=29:16:1:48:1:1 a2=29:24:1:48:1:1 a3=27:32:1:48:1:1'
     ' | v downsample_blur_vert_lph  | f downsample_4_frag_lph  | '
 )
+
+
+def fetched_attachments(tables, s) -> set[int]:
+    """The colours QuartzCore's uber shader reads as framebuffer fetch inputs (its has_dest_k): with the 'f' flag, every one
+    a generic state has, else its destination run, its memoryless image sources and bcm's backdrop."""
+    if not s.flag('f'):
+        return set()
+    images = {img.M for img in s.images[: s.decoded] if img.M >= 0}
+    dest = caspec27._reads_dest(tables, s)
+    bcm = tables.dec['BlendFunction']['bcm']
+    return {
+        k
+        for k in range(s.A)
+        if s.flag('g') or s.S <= k < s.S + dest or k in images or (k == 1 and s.fragB == bcm)
+    }
+
+
+def written_attachments(tables, s) -> set[int]:
+    atts, _ = caspec27.color_attachments(tables, s)
+    return {k for k, a in enumerate(atts) if a[1]}
 
 
 def functions(line: str) -> list[tuple[str, dict[str, tuple[int, str]]]]:
@@ -46,6 +67,29 @@ class States27(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
         cls.tables = caspec.Tables(os.path.join(HERE, 'qc-24B119.json'))
+
+    def test_read_only_fetchers(self):
+        """The iOS 27 states whose fetches read only colours they never write: the raw path draws their barrier form
+        (raw_storage_form.h fetchesOnlyUnwritten). Every other fetching state writes a colour it fetches."""
+        tables = caspec.Tables(os.path.join(HERE, 'qc-24B119.json')).v27
+        with open(os.path.join(HERE, '../../../precompile/ca-names/24B119.txt')) as f:
+            names = [line.strip() for line in f if line.strip()]
+        read_only, own = [], []
+        for name in names:
+            s = caspec27.decode(tables, name)
+            fetched = fetched_attachments(tables, s)
+            if not fetched:
+                continue
+            written = written_attachments(tables, s)
+            (own if fetched & written else read_only).append(name)
+        self.assertEqual(len(read_only), 34)
+        self.assertEqual(len(own), 141)
+        for name in read_only:
+            self.assertRegex(name, r'_IsrcM[01]($|_)')
+        for name in ('PBGRABxorXm_TcimA2Xhf_IsrcM1', 'PBGRABsapXm_TcimA2Xhf_IsrcM1', 'PBGRABsovXm_TimgA2S1Xhfu_IsrcM0'):
+            self.assertIn(name, read_only)
+        for name in ('PBGRAXmw_A3Xghfc', 'PBGRAXmw_BvcmA3Xhf', 'PBGRAXm_Tc4pA2S1Xhf_Idst', 'PBGRAXmw_BpldA3Xhf'):
+            self.assertIn(name, own)
 
     def test_glass_and_blur_states(self):
         self.assertEqual(caspec.state_line(self.tables, 'PBGRABsovXmw_TgbhA3Xhf_Isrc_Isrc'), GLASS)

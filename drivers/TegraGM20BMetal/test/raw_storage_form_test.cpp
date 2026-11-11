@@ -41,6 +41,25 @@ TEST(StorageForm, AnotherTexelSizeOrSampleCountTakesTheBarrierForm)
     EXPECT_EQ(raw::storageViewMismatch(8, 4, target), raw::StorageFallback::None);
 }
 
+// PBGRABsovXm_TimgA2Xhf_IsrcM1: blends c0 in the ROP, samples memoryless c1 as an image, writes no c1
+TEST(StorageForm, AStateFetchingOnlyAColorItNeverWritesTakesItsBarrierForm)
+{
+    EXPECT_TRUE(raw::fetchesOnlyUnwritten(0b10, 0b01, 0, 0b10, 0b01));
+    EXPECT_TRUE(raw::fetchesOnlyUnwritten(0b01, 0b10, 0, 0b01, 0b10));  // ..._IsrcM0 under S1: reads c0, writes c1
+}
+
+// PBGRAXmw_A3Xghfc fetches and writes c0..c2 in its storage form (storageWrite), its twin through the ROP; a fragment
+// blend fetches the color it writes
+TEST(StorageForm, AStateFetchingWhatItWritesKeepsTheInterlock)
+{
+    EXPECT_FALSE(raw::fetchesOnlyUnwritten(0b111, 0, 0b111, 0b111, 0b111));
+    EXPECT_FALSE(raw::fetchesOnlyUnwritten(0b01, 0, 0b01, 0b01, 0b01));
+    EXPECT_FALSE(raw::fetchesOnlyUnwritten(0b11, 0b01, 0, 0b11, 0b01));  // reads c0 and c1, writes c0
+    EXPECT_FALSE(raw::fetchesOnlyUnwritten(0b10, 0b01, 0, 0b10, 0b11));  // its twin writes what it fetches
+    EXPECT_FALSE(raw::fetchesOnlyUnwritten(0b10, 0b01, 0, 0b11, 0b01));  // its twin fetches more
+    EXPECT_FALSE(raw::fetchesOnlyUnwritten(0, 0b01, 0, 0, 0b01));
+}
+
 TEST(StorageForm, EveryFallbackHasALogName)
 {
     for (size_t r = 0; r < raw::kStorageFallbacks; r++)

@@ -4022,6 +4022,9 @@ Pipeline *RenderEncoder::formFor(Pipeline *pl)
     if (!pl || !pl->storageBits)
         return pl;
     StorageFallback reason = StorageFallback::None;
+    if (const Pipeline *twin = pl->barrierTwin;
+        twin && fetchesOnlyUnwritten(pl->fetchBits, pl->writeBits, pl->storageWriteBits, twin->fetchBits, twin->writeBits))
+        reason = StorageFallback::ReadOnly;
     for (uint32_t slot = 0; slot < 8 && reason == StorageFallback::None; slot++)
         if (const Texture *t = pass_.color[slot].texture; t && (pl->storageBits >> slot & 1))
             reason = storageViewMismatch(texelBytes(pl->storageTic[slot]), pl->rec->storageSamples, *t);

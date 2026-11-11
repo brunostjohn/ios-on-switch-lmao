@@ -16,13 +16,24 @@ enum class StorageFallback : uint8_t {
     TexelBytes,  // an attachment's texel size is not the storage view's
     Samples,     // an attachment's samples are not the form's
     Compressed,  // an attachment's memory carries compression tags
-    NoTwin,      // one of the above with no barrier form to take: the encoder is refused
+    // it fetches only colors it never writes (Core Animation's memoryless image sources): no draw of it reads what another
+    // of its draws wrote, so the pixel interlock orders nothing the barrier form's barriers do not
+    ReadOnly,
+    NoTwin,  // one of the above with no barrier form to take: the encoder is refused
     Count
 };
 
 constexpr size_t kStorageFallbacks = size_t(StorageFallback::Count);
-constexpr const char *kStorageFallbackNames[kStorageFallbacks] = {"-",       "metadata",   "texel",
-                                                                  "samples", "compressed", "notwin"};
+constexpr const char *kStorageFallbackNames[kStorageFallbacks] = {"-",          "metadata", "texel", "samples",
+                                                                  "compressed", "readonly", "notwin"};
+
+// A storage form whose fetched colors (fetch) are none it writes, through the ROP (write) or as storage (storageWrite), and
+// whose barrier form also writes none of them
+constexpr bool fetchesOnlyUnwritten(uint8_t fetch, uint8_t write, uint8_t storageWrite, uint8_t twinFetch,
+                                    uint8_t twinWrite)
+{
+    return fetch && !(fetch & (write | storageWrite)) && twinFetch == fetch && !(twinFetch & twinWrite);
+}
 
 // Why attachment `t` cannot be viewed as the storage image of a form whose view has `viewTexelBytes` and `samples`
 template <typename Texture>
