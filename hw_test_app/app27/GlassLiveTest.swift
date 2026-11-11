@@ -13,7 +13,8 @@ import UIKit
 /// frame), glass (the glass moves over still stripes), slow (scroll every fourth frame), plain (scroll without the
 /// read-back: the frame rate it costs), and appear_whole and glass_whole: appear and glass with every raw process drawing
 /// whole programs (debug switch whole-programs), so a split program's prologue, launched ahead of its command buffer,
-/// is ruled in or out for the glass that is new or moves.
+/// is ruled in or out for the glass that is new or moves. After each variant `<variant>_rest=<last>/<after>`: the glass
+/// left on screen when the motion stopped against the glass once the backdrop under it is captured again.
 ///
 /// Each frame is black (R, G, B <= 2 over 90% of the band), partial (over 2%), dark or good, at its present and, with a
 /// live kernel, at the end of its time on screen (the next present reads it again); changed= counts frames whose pixels
@@ -54,16 +55,30 @@ struct UIGlassLiveTest: HWTest {
             let recordStart = GlassProbe.count()?.count ?? 0
             let read = await LiveReader.run(reader, until: start.addingTimeInterval(Self.seconds), after: recordStart)
             await MainActor.run { driver.stop() }
+            let rest = await Self.atRest(reader, scene)
             await context.clearStage()
-            summaries.append(
-                LiveSummary(
-                    name: variant.rawValue, frames: reader?.frames ?? [], recorded: read.recorded,
-                    regenerated: read.regenerated, seconds: Date().timeIntervalSince(start)))
+            var summary = LiveSummary(
+                name: variant.rawValue, frames: reader?.frames ?? [], recorded: read.recorded,
+                regenerated: read.regenerated, seconds: Date().timeIntervalSince(start))
+            summary.rest = rest
+            summaries.append(summary)
             if variant.whole { GlassProbe.post("whole-programs-off") }
             pngs += reader?.saved ?? []
             stopped = reader?.failure.map { "\(variant.rawValue):\($0)" }
         }
         return Self.outcome(summaries, live: session.live, stopped: stopped, pngs: pngs, directory: directory)
+    }
+
+    /// The glass the motion left on screen against the glass after the backdrop under it is captured again
+    @MainActor static func atRest(_ reader: LiveReader?, _ scene: LiveScene) async -> String {
+        guard let reader else { return "-" }
+        let last = reader.frames.last?.atPresent ?? "-"
+        try? await Task.sleep(nanoseconds: 500_000_000)
+        let before = reader.frames.count
+        scene.scroll.contentOffset.x += 1
+        _ = await LiveReader.run(
+            reader, until: Date().addingTimeInterval(0.4), after: GlassProbe.count()?.count ?? 0)
+        return "\(last)/\(reader.frames.count > before ? reader.frames[before].atPresent : "-")"
     }
 
     static func outcome(
@@ -87,6 +102,7 @@ struct UIGlassLiveTest: HWTest {
                 metrics.set(s.name + "_first", Int(s.black[0].sequence))
             }
             metrics.set(s.name + "_cbs", "\(Int(s.fps.rounded()))/\(s.regenerated)")
+            metrics.set(s.name + "_rest", s.rest)
         }
         metrics.set("pngs", pngs.isEmpty ? "-" : String(pngs.prefix(4).joined(separator: ",").prefix(160)))
         let encoder = JSONEncoder()

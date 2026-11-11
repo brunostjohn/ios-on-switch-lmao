@@ -109,6 +109,9 @@ struct LiveSummary {
     let recorded: Int
     let regenerated: Int
     let seconds: Double
+    /// "<last>/<after>": the glass of the frame left on screen when the motion stopped, and of the first frame after a
+    /// one-point change under the glass half a second later, which makes the render server capture the backdrop again
+    var rest = "-"
 
     var black: [LiveFrame] { frames.filter { $0.atPresent == "black" || $0.endVerdict == "black" } }
     var partial: Int { frames.filter { $0.atPresent == "partial" || $0.endVerdict == "partial" }.count }
