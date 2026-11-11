@@ -52,6 +52,7 @@
 #include "../TegraVIC/TegraVICSurface.h"
 #include "../TegraVIC/SwitchNativeScanout.h"
 #include "../TegraGM20B/SwitchGpuBridge.h"
+#include "../TegraGM20B/SwitchGpuReady.h"
 #include "../TegraHost1x/SwitchHost1xTokenFence.h"
 #include "SwitchNativePlane.h"
 #include "SwitchPlaneSlot.h"
@@ -1050,6 +1051,7 @@ class NativeLegacyDisplay : public IOMobileFramebufferLegacy {
 
     CopyJob job = {};
 #include "SwitchSourceWaitDisplay.h"
+#include "SwitchSourceReadyDisplay.h"
     bool copyQueued = false, copyStopping = false,
          presentDeferred = false;  // under the gate; presentDeferred: finished during SC7
     // Steady-state timing: one line every 5 s from the frame-end action, the only periodic log
@@ -3908,6 +3910,7 @@ public:
         if (!copySource || copyLoop->addEventSource(copySource) != kIOReturnSuccess)
             panic("SwitchDisplay: cannot start the copy thread");
         asyncCopy = mode;
+        startSourceReady();
     }
 
     // Stop and free, outside the gate: no copy may run once the scanout and kept mappings go. Removing the source closes the copy
@@ -3927,6 +3930,7 @@ public:
                 return kIOReturnSuccess;
             },
             this);
+        stopSourceReady();
         copyLoop->removeEventSource(copySource);
         OSSafeReleaseNULL(copySource);
         OSSafeReleaseNULL(copyLoop);

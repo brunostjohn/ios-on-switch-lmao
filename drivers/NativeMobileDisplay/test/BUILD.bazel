@@ -381,6 +381,25 @@ host_test(
     deps = [":native_scanout_kernel"],
 )
 
+# SwitchSourceReadyDisplay.h: a surface a writer holds at its offer is waited for on a GPU ready watch, not a thread.
+host_test(
+    name = "switch_source_ready_test",
+    srcs = [
+        "switch_source_ready_test.cpp",
+        "//drivers/NativeMobileDisplay:SwitchSourceReadyDisplay.h",
+        "//drivers/TegraVIC:SwitchNativeScanout.h",
+        "//drivers/TegraVIC:SwitchNativeSurface.h",
+        "//drivers/TegraVIC:TegraVICSurface.h",
+        "//drivers/TegraVIC:TegraVICRequest.h",
+        "//drivers/TegraVIC:SwitchSurfaceColor.h",
+        "//drivers/TegraVIC:TegraVICConfig.h",
+        "//drivers/TegraVIC:TegraVICFormats.h",
+        "//drivers/TegraVIC:SwitchVICPicture.h",
+        "//drivers/TegraGM20B:SwitchGpuBacking.h",
+    ],
+    deps = [":native_scanout_kernel"],
+)
+
 
 host_test(
     name = "switch_composition_test",
