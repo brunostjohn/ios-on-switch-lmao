@@ -23,6 +23,7 @@
 #include "raw_batch.h"
 #include "raw_mme.h"
 #include "raw_state_segment.h"
+#include "raw_replay_shape.h"
 #include "raw_split_reuse.h"
 #include "raw_split_batch.h"
 #include "raw_split_cost.h"
@@ -1506,6 +1507,7 @@ public:
         // from the pass or command buffer before (no words; raw_state_segment.h), and passes that could not keep it because
         // their prologue set back the last state's extras (Pipeline::restore)
         std::atomic<uint64_t> segmentBinds{0}, segmentWords{0}, segmentSkips{0}, segmentExtrasLosses{0};
+        ReplayTally replay;
         EncodeTotals encode;
 #endif
 #else
