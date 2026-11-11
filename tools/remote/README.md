@@ -28,7 +28,10 @@ gets no work done there.
 1. Build `bb_worker` and `bb_runner` from `buildbarn/bb-remote-execution` at the commit that matches the cluster's
    scheduler image (its tag ends in the commit), with `go build -trimpath ./cmd/bb_worker ./cmd/bb_runner`. On macOS
    `golang.org/x/sys` needs bb-storage's `patches/org_golang_x_sys/o-search.diff` (Buildbarn's own Bazel build
-   applies it).
+   applies it), and `bb_worker-clonefile.diff` here. Upstream hard-links each input from the cache into the action's
+   directory, and macOS may report a hard-linked executable by any of its names. The hermetic Python and rustc look
+   for their libraries next to themselves, so they found the cache directory and failed. APFS clones are separate
+   files that cost no space.
 2. Put two tokens, minted with the cache's key (homelab `make-cache-token.sh`), in
    `~/Library/Application Support/switch-ios/bazel-worker/`: `cache.token` (audience `bazel-cache`) and
    `worker.token` (audience `bazel-worker`).
