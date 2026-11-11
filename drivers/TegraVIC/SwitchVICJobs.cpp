@@ -111,6 +111,8 @@ void retireThread(void *, wait_result_t)
         const int result = completeJob(job);
         IOLockLock(gLock);
         gQueue.retire(static_cast<uint32_t>(job.fence));
+        if (!gQueue.count)
+            switch_vic_power_idle();
         __atomic_store_n(&gCompleted, gQueue.completed, __ATOMIC_RELEASE);
         IOLockWakeup(gLock, &gQueue.count, false);
         IOLockWakeup(gLock, &gQueue.completed, false);
@@ -188,6 +190,9 @@ int switch_vic_submit_checked(const TegraVICJob *jobs, uint32_t count, const Teg
         if (configs != 1)
             return -22;
     }
+    const SwitchVICPowerUse power;
+    if (power.error)
+        return power.error;
     SwitchVICDependencies dependencies;
 
     Results::Reservation outcome;
@@ -401,13 +406,16 @@ extern "C" int switch_vic_wait(uint32_t fence)
     return valid ? waitSequence(sequence) : -22;
 }
 
-void switch_vic_jobs_suspend()
+bool switch_vic_jobs_park(bool drain)
 {
     IOLockLock(gLock);
-    gSuspended = true;
-    while (gQueue.count)
+    const bool parked = drain || !gQueue.count;
+    if (parked)
+        gSuspended = true;
+    while (parked && gQueue.count)
         IOLockSleep(gLock, &gQueue.count, THREAD_UNINT);
     IOLockUnlock(gLock);
+    return parked;
 }
 
 void switch_vic_jobs_resume(bool ready, uint32_t completed)

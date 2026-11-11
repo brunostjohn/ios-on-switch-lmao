@@ -420,6 +420,30 @@ GROUPS: dict[str, list[Check]] = {
             source='drivers/TegraVIC/TegraVICUserClient.cpp',
         ),
         Check(
+            'media.idle-power',
+            'r32-media',
+            ': idle power off: ',
+            REPORT,
+            process=KERNEL,
+            regex=(
+                r'(?P<engine>Tegra\w+): idle power off: gates=(?P<gates>\d+) ungates=(?P<ungates>\d+) '
+                r'resume=(?P<resume>\d+)us max=(?P<max>\d+)us'
+            ),
+            show=('engine', 'gates', 'ungates', 'resume', 'max'),
+            source='kits/SwitchEngineGate/SwitchEngineGate.h',
+            note='DEVELOPMENT kernels: VIC, NVDEC and NVJPG idle power-off cycles and the power-on latency (L968)',
+        ),
+        Check(
+            'media.idle-power-failures',
+            'r32-media',
+            ('power-on FAIL', 'idle power-off refused by the hardware'),
+            process=KERNEL,
+            regex=r'Tegra(?:VIC|NVDEC|NVJPG): ',
+            show=('message',),
+            source='kits/SwitchEngineGate/SwitchEngineGate.h',
+            note='a power-on that fails wedges the engine for the boot; a refused power-off turns gating off',
+        ),
+        Check(
             'media.nvenc-e3-ran',
             'r32-media',
             'TegraNVENC: E3 ',
