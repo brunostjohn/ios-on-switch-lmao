@@ -4,6 +4,7 @@
 #   bazel run //tools/gpu/maxwell:nakstat -- --pack <pack.bin> --corpus $PWD/tools/gpu/maxwell/scoreboard.log
 #   bazel run //tools/gpu/maxwell:nakstat -- --dump <dir> --corpus ...   (directcheck's DIRECTCHECK_DUMP)
 #   bazel run //tools/gpu/maxwell:gate -- <before dump> <after dump> --corpus $PWD/tools/gpu/maxwell/scoreboard.log
+#   bazel run //tools/gpu/maxwell:blendcheck -- <dump dir>   (storage forms whose shader computes the blend)
 #
 # opcodes.txt is yuzu's maxwell.inc, verbatim (GPL-2.0-or-later, its notice kept).
 load("@rules_python//python:py_binary.bzl", "py_binary")
@@ -11,7 +12,11 @@ load("@rules_python//python:py_library.bzl", "py_library")
 load("@rules_python//python:py_test.bzl", "py_test")
 load("//bazel/lint:defs.bzl", "lint_files")
 
-lint_files(exclude = ["opcodes.txt"])
+lint_files(exclude = [
+    "opcodes.txt",
+    "testdata/rop_blend/rop_blend.metal",
+    "testdata/rop_blend/states.json",
+])
 
 exports_files(
     ["testdata/image_draw_fragment.hex"],
@@ -76,6 +81,28 @@ py_test(
     data = ["testdata/image_draw_fragment.hex"],
     deps = [
         ":gate",
+        ":interp",
+        ":isa",
+    ],
+)
+
+py_binary(
+    name = "blendcheck",
+    srcs = ["blendcheck.py"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":interp",
+        ":isa",
+    ],
+)
+
+py_test(
+    name = "blendcheck_test",
+    size = "small",
+    srcs = ["blendcheck_test.py"],
+    data = ["testdata/rop_blend/states.json"],
+    deps = [
+        ":blendcheck",
         ":interp",
         ":isa",
     ],

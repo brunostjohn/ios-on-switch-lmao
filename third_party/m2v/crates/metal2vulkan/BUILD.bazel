@@ -90,6 +90,14 @@ rust_test(
 )
 
 rust_test(
+    name = "rop_blend_test",
+    args = ["lower::fragment::rop_blend::"],
+    compile_data = glob(["tests/**"]),
+    crate = ":metal2vulkan",
+    deps = ["//third_party/m2v/crates/metal2vulkan-devtools"],
+)
+
+rust_test(
     name = "native_sm53_test",
     args = ["native_sm53"],
     compile_data = glob(["tests/**"]),

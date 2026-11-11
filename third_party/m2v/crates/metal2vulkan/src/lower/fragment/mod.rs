@@ -56,6 +56,7 @@ pub(crate) mod fetch;
 mod imageblock;
 mod input_blend;
 mod rog;
+mod rop_blend;
 mod stencil;
 
 use std::borrow::Cow;
@@ -602,6 +603,12 @@ pub fn writes_through_storage(cx: &SelectCx<'_>, color: u32) -> bool {
 /// Whether the function writes color attachment `color` in the storage form under Metal's
 /// 16-bit float blend of a `half4` output, which the shader computes
 /// (`DevicePolicy::half_blend`): the attachment stores Metal's value.
+/// The assumptions of the device's blend a storage form computes by its model (`rop_blend`), as
+/// `StorageAttachmentUse::blend_model` holds them: 0 where it computes none.
+pub(crate) fn blend_model(view: &fetch::StorageView) -> u8 {
+    fetch::modelled_blend(view).map_or(0, |b| b.assumptions())
+}
+
 pub fn blends_half_in_storage(cx: &SelectCx<'_>, color: u32) -> bool {
     fetch::blends_half(cx, color)
 }

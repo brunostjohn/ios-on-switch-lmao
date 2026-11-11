@@ -749,6 +749,15 @@ pub struct StorageAttachmentUse {
     /// reads them. Nothing for the consumer to do.
     #[cfg_attr(feature = "serde", serde(default))]
     pub kept: vk::ColorComponentFlags,
+    /// Where the function computes the device's fixed-function blend of the attachment itself
+    /// (the pipeline blends it; the attachment is out of the subpass, so the device does not),
+    /// the assumptions that blend's model makes of the device's blender, as bits (`Assumption`
+    /// in `lower::fragment`'s blend model: `f32` terms unfused 1, zero and one factors exact 2,
+    /// normalized clamps and store rounding to nearest 4, `half` store to nearest even 8, sRGB
+    /// by Metal's tables 16, `Min`/`Max` of numbers 32, `f32` denormals flushed 64). 0 where the
+    /// function blends nothing or computes Metal's own measured blend.
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub blend_model: u8,
 }
 
 /// The image a storage view of a color attachment binds, and how it is viewed
@@ -787,6 +796,7 @@ impl StorageAttachmentUse {
             view,
             uint_view: None,
             kept: vk::ColorComponentFlags::empty(),
+            blend_model: 0,
         }
     }
 
