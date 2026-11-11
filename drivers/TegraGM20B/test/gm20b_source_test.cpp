@@ -681,16 +681,14 @@ TEST(GM20BFencesSource, ExecQueuesItsWritersAcquiresBeforeItSubmits)
                                       "TegraGM20BInfoCpuComplete", "TegraGM20BInfoCpuAccess", "TegraGM20BInfoUseRanges",
                                       "TegraGM20BInfoJobVisibility"})
 		EXPECT_THAT(capabilities, HasSubstr(capability));
-	EXPECT_THAT(capabilities, HasSubstr("flags &= ~kInfoAwaitingUserspace;"));
 	EXPECT_THAT(flat(definition(client(), "IOReturn AGXDeviceUserClient::getInfo(")),
 		    HasSubstr("out->flags = switch_gpu_info_flags();"));
-	const auto awaiting =
-		flat(client().substr(client().find("constexpr uint32_t kInfoAwaitingUserspace")));
+	EXPECT_THAT(client(), Not(HasSubstr("kInfoAwaitingUserspace")));
 	for (const char *capability :
-	     {"TegraGM20BInfoResourceReady", "TegraGM20BInfoSharedEvents", "TegraGM20BInfoSemanticFence", "TegraGM20BInfoNativeSurfaceView", "TegraGM20BInfoJobVisibility",
-	      "TegraGM20BInfoLeanCopyChannel",
+	     {"TegraGM20BInfoResourceReady", "TegraGM20BInfoSharedEvents", "TegraGM20BInfoSemanticFence",
+	      "TegraGM20BInfoNativeSurfaceView", "TegraGM20BInfoJobVisibility", "TegraGM20BInfoLeanCopyChannel",
 	      "TegraGM20BInfoControlReserve", "TegraGM20BInfoCpuComplete", "TegraGM20BInfoUseRanges"})
-		EXPECT_THAT(awaiting.substr(0, awaiting.find(';')), Not(HasSubstr(capability)));
+		EXPECT_THAT(capabilities, HasSubstr(capability));
 }
 
 // The flags exec hands chan_exec are SwitchGpuJobVisibility.h's (switch_gpu_job_visibility_test), with a write into an
@@ -1181,8 +1179,6 @@ TEST(GM20BJobFencesSource, OneJobOwnsItsUsesUntilItsLastFence)
 	EXPECT_THAT(emit, HasSubstr("last = switch_gpu_job_emit(pushes, count, chan->submitted, &emitter);"));
 	EXPECT_THAT(flat(definition(client(), "uint32_t switch_gpu_info_flags(void)")),
 		    HasSubstr("TegraGM20BInfoPushFences;"));
-	EXPECT_THAT(Between(client(), "constexpr uint32_t kInfoAwaitingUserspace =", ";"),
-		    Not(HasSubstr("TegraGM20BInfoPushFences")));
 }
 
 // A use's handle is found by the index (switch_gpu_bo_index_test), never by walking the connection's BOs; every BO

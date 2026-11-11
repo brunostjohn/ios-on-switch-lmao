@@ -2891,11 +2891,6 @@ void AGXDeviceUserClient::releaseMappings()
 		scheduleOrphanRelease();
 }
 
-namespace
-{
-constexpr uint32_t kInfoAwaitingUserspace = 0;
-}  // namespace
-
 extern "C" uint32_t switch_gpu_info_flags(void)
 {
 	tgm_info info;
@@ -2908,7 +2903,6 @@ extern "C" uint32_t switch_gpu_info_flags(void)
 		     TegraGM20BInfoCanonicalSurfaceLayout | TegraGM20BInfoNativeSurfaceView | TegraGM20BInfoJobVisibility | TegraGM20BInfoLeanCopyChannel | TegraGM20BInfoControlReserve |
 		     TegraGM20BInfoSharedEvents | TegraGM20BInfoSemanticFence | TegraGM20BInfoResourceReady |
 		     TegraGM20BInfoCpuComplete | TegraGM20BInfoUseRanges | TegraGM20BInfoPushFences;
-	flags &= ~kInfoAwaitingUserspace;
 	if (info.comptag_lines && switch_gpu_compression_on())
 		flags |= TegraGM20BInfoCompression;
 	if (switch_tiled_cache_on())
