@@ -19,14 +19,16 @@
 //
 // Jobs (tegra_nvenc_run): host1x channel 0 in NVENC's class (0x21), each method written through the engine's THI
 // METHOD0/METHOD1 pair as NVDEC's, the picture setup from a kernel-only slot, then an OP_DONE increment of NVENC's
-// syncpoint: the job's fence. Every address method the firmware knows is written on every job (the submit's own, 0, or
-// the scratch buffer), so no job inherits an address from another client's. At most 4 jobs are queued, which bounds
-// the push buffer NVENC shares with NVDEC (8 x 197 + 4 x 190 words < 4096) and the 8 setup slots. Every job runs with
-// the GP timer on (the checker requires it, 1 << 27 cycles at most, 329 ms at 408 MHz); waits are bounded by
-// kJobBoundUs per queued job whatever a client asks for, and the largest picture the checker admits (36864 macroblocks)
-// encodes well inside it. The GP timer does not end a stalled job: its interrupt only records an error for the H.264
-// app, whose end-of-picture spin waits for macroblocks the engine never reports (appDump), so the kernel's bound is
-// what ends it.
+// syncpoint: the job's fence. No job inherits an address from another client's: the falcon OS zeroes every method word
+// after each job (nvenc.bin 0xb28-0xb51), and the kernel writes the addresses of features no submit uses as well. At
+// most 4 jobs are queued, which bounds the push buffer NVENC shares with NVDEC (8 x 197 + 4 x 190 words < 4096) and the
+// 8 setup slots; the OS takes a queued job's methods into its own queue while an app runs and applies them only after
+// it (0x13b-0x1a1, 0x20e-0x235), so they cannot change the running job. Every job runs with the GP timer on (the
+// checker requires it; the H.264 app's limit is the setup's, 1 << 27 cycles at most, 329 ms at 408 MHz, the H.265
+// app's its own, width x height x 24 cycles up to 0x1600000); waits are bounded by kJobBoundUs per queued job whatever a
+// client asks for, and the largest picture the checker admits (36864 macroblocks) encodes well inside it. The GP timer
+// does not end a stalled job: its interrupt only records an error, and either app's end-of-picture spin waits for
+// macroblocks or CTBs the engine never reports (appDump), so the kernel's bound is what ends it.
 //
 // Firmware: linux-firmware's nvidia/tegra210/nvenc.bin, byte-identical to L4T's nvhost_nvenc050.fw (firmware/SOURCE),
 // booted non-securely as L4T's nvhost and TegraNVDEC boot theirs.
@@ -103,11 +105,16 @@ enum : uint32_t {
 
 // The H.264 app's (app 1) DMEM words for the end of a picture, read with tools/falcon: the error its ISR (0xf1b)
 // records, the macroblocks it counts (+= I[0x1848] per encoder interrupt) and the count fn 0x48b9 spins at 0x4916 until
-// (the slice's num_mb, at most the picture's). H.265's app keeps its count and target at 0x360 and 0x38c.
+// (the slice's num_mb, at most the picture's). The H.265 app's (app 3): the setup's error (magic, 0x14a95), its ISR's
+// (GP timer, encoder; 0x26f5), the CTBs it counts (0x2776) and the target its spin at 0xfd35 waits for.
 enum : uint32_t {
     APP_ERROR = 0x2c8,
     APP_MBS_DONE = 0x2e4,
     APP_MBS_TARGET = 0x354,
+    APP3_SETUP_ERROR = 0x2ec,
+    APP3_ERROR = 0x2f0,
+    APP3_CTBS_DONE = 0x360,
+    APP3_CTBS_TARGET = 0x38c,
 };
 
 volatile uint8_t *gNvenc, *gMc;
@@ -129,6 +136,7 @@ constexpr uint32_t kJobBoundUs = 500000, kWaitBoundUs = kInFlight * kJobBoundUs;
 IOLock *gEngineLock;
 uint32_t gSyncpt, gBase, gIssued;  // job n's fence is gBase + n
 uint32_t gFailedThrough;           // with gFailed: every fence up to this one failed (wrapping compare)
+uint8_t gJobCodec[kSetupSlots];    // by setup slot: the codec of the job using it
 bool gUp, gWedged, gSuspended, gFailed;
 switch_dma_buffer gSetup, gSink;  // setup slots and the scratch buffer, never mapped into a client
 
@@ -189,17 +197,21 @@ uint32_t dmem(uint32_t address)
     return switch_mmio_read32(gNvenc, SWITCH_FALCON_DMEMD);
 }
 
-// Which way the H.264 app is stuck. An error (0xe2640010 GP timer, 0xe2640060 encoder error, 0xe2640200 I[0x1ac4]
-// bits 0-2) with fewer macroblocks than the target: the ISR saw the fault but the spin has no way out. No error and
-// fewer: the engine stopped reporting macroblocks, or its interrupt is pending untaken (encoder status bit 1 set).
-// Count at the target: past the spin, and the PC shows which of the polls after it holds the app.
-const char *appDump()
+// Which way the app is stuck. An error (0xe2640010 GP timer, 0xe2640060 encoder error, 0xe2640200 I[0x1ac4] bits
+// 0-2) with fewer macroblocks or CTBs than the target: the ISR saw the fault but the spin has no way out. No error and
+// fewer: the engine stopped reporting them, or its interrupt is pending untaken (encoder status bit 1 set). Count at the
+// target: past the spin, and the PC shows which of the polls after it holds the app.
+const char *appDump(uint32_t codec)
 {
-    static char text[160];
-    snprintf(text, sizeof(text), "H.264 app error %#x macroblocks %u of %u encoder status %#x (I[%#x] at +%#x)",
-             dmem(APP_ERROR), dmem(APP_MBS_DONE), dmem(APP_MBS_TARGET),
-             switch_mmio_read32(gNvenc, FALCON_IO + ENCODER_INT_STATUS), ENCODER_INT_STATUS,
-             FALCON_IO + ENCODER_INT_STATUS);
+    static char text[176];
+    const uint32_t status = switch_mmio_read32(gNvenc, FALCON_IO + ENCODER_INT_STATUS);
+    if (codec == TEGRA_NVENC_CODEC_H265)
+        snprintf(text, sizeof(text), "H.265 app error %#x setup error %#x CTBs %u of %u encoder status %#x (I[%#x])",
+                 dmem(APP3_ERROR), dmem(APP3_SETUP_ERROR), dmem(APP3_CTBS_DONE), dmem(APP3_CTBS_TARGET), status,
+                 ENCODER_INT_STATUS);
+    else
+        snprintf(text, sizeof(text), "H.264 app error %#x macroblocks %u of %u encoder status %#x (I[%#x])",
+                 dmem(APP_ERROR), dmem(APP_MBS_DONE), dmem(APP_MBS_TARGET), status, ENCODER_INT_STATUS);
     return text;
 }
 
@@ -370,7 +382,7 @@ int stalled(uint32_t fence)
     char host[200];
     tegra_host1x_describe_channel(TEGRA_HOST1X_CHANNEL_NVENC, host, sizeof(host));
     const uint32_t reached = tegra_host1x_syncpt_read(gSyncpt);
-    const char *app = appDump();
+    const char *app = appDump(gJobCodec[(fence - gBase) % kSetupSlots]);
     const char *falcon = falconDump();
     tegra_host1x_channel_teardown(TEGRA_HOST1X_CHANNEL_NVENC);
     flushMemoryClient();
@@ -544,6 +556,7 @@ int run(const TegraNVENCSubmit *s, TegraNVENCResolve resolve, void *context, uin
         }
     }
     const uint32_t slot = job % kSetupSlots;
+    gJobCodec[slot] = static_cast<uint8_t>(s->codec);
     uint8_t *setup = gSetup.va + static_cast<size_t>(slot) * kSetupSlotBytes;
     memcpy(setup, s->setup, s->setup_bytes);
     switch_dcache_clean(setup, s->setup_bytes);
