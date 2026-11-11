@@ -54,7 +54,8 @@
 #                            gpu_bringup.c's lock protocol on threads; GPU time never backwards across rail cycles
 #   gm20b_clkgate_test       TegraGM20BClkgate.h against nvgpu's gm20b_gating_reglist.c (nvidia/, verbatim): the SLCG and
 #                            BLCG writes are nvgpu's prod lists in its load order; ELCG's gate control; where gpu_bringup.c
-#                            applies them; GR's reset in a recovery with gating off
+#                            applies them; GR's reset in a recovery with gating off; TegraGM20BTherm.h's slowdown arming
+#                            against L4T's captured THERM registers
 #   gm20b_regdump_test       TegraGM20BRegDump.h against regs_gm20b.txt, the L4T capture's register list: same offsets,
 #                            order and list id; the dump's lines are the capture's form, one value per register; the
 #                            kernel log's lines carry every value once, in order, under a count and sum
@@ -340,6 +341,7 @@ host_test(
     srcs = [
         "gm20b_clkgate_test.cpp",
         "//drivers/TegraGM20B:TegraGM20BClkgate.h",
+        "//drivers/TegraGM20B:TegraGM20BTherm.h",
     ],
     data = [
         "//drivers/TegraGM20B:clkgate.c",
