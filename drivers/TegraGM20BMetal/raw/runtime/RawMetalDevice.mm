@@ -76,6 +76,12 @@ static const char *zetaMemoryRefusal(int asked)
     d[@"state_segment_words"] = @(gRM->raw->stats.segmentWords.load());
     d[@"state_segment_skips"] = @(gRM->raw->stats.segmentSkips.load());
     d[@"state_segment_extras_losses"] = @(gRM->raw->stats.segmentExtrasLosses.load());
+    {
+        mach_timebase_info_data_t base;
+        mach_timebase_info(&base);
+        d[@"encodes"] = @(gRM->raw->stats.encode.encodes.load());
+        d[@"encode_us"] = @(gRM->raw->stats.encode.wallTicks.load() * base.numer / base.denom / 1000);
+    }
     d[@"replay_same"] = @(gRM->raw->stats.replay.same.load());
     d[@"replay_recent"] = @(gRM->raw->stats.replay.recent.load());
     d[@"replay_new"] = @(gRM->raw->stats.replay.fresh.load());
