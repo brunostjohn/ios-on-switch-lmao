@@ -50,4 +50,17 @@ TEST(EmitRaster, ConstantColourOffIsOneWord)
     EXPECT_EQ(Methods(w), (std::vector<Method>{{k3D, NVB197_SET_CONSTANT_COLOR_RENDERING, 0}}));
 }
 
+TEST(EmitRaster, FillViaTriangleIsOneImmediateWord)
+{
+    for (uint32_t mode :
+         {uint32_t(NVB197_SET_FILL_VIA_TRIANGLE_MODE_DISABLED), uint32_t(NVB197_SET_FILL_VIA_TRIANGLE_MODE_FILL_ALL),
+          uint32_t(NVB197_SET_FILL_VIA_TRIANGLE_MODE_FILL_BBOX)}) {
+        const auto w = emitted(SWITCH_GM20B_FILL_VIA_TRIANGLE_WORDS, [&](nv_push *p) {
+            switch_gm20b_fill_via_triangle(p, mode);
+        });
+        EXPECT_EQ(w.size(), 1u);
+        EXPECT_EQ(Methods(w), (std::vector<Method>{{k3D, NVB197_SET_FILL_VIA_TRIANGLE, mode}}));
+    }
+}
+
 }  // namespace
