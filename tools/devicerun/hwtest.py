@@ -99,6 +99,7 @@ TESTS: dict[str, bool] = {
             'gpu.raw.zcull',
             'gpu.raw.mip_twod',
             'gpu.raw.mip_twod_candidates',
+            'gpu.raw.visibility',
             'gpu.path.job_visibility',
             'gpu.path.lean_copy',
             'gpu.path.control_reserve',

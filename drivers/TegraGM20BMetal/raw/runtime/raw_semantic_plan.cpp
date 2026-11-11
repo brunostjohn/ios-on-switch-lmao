@@ -98,7 +98,9 @@ uint32_t RMCommandPlan::captureKernel()
 
 bool RMCommandPlan::record(const Cmd &c, const std::vector<uint64_t> &extra)
 {
-    if (setter(c, extra))
+    // A visibility mode set on a pass with a result buffer is also an operation: the raw encode emits each one in order
+    // (raw_visibility.h), sets that no draw follows included
+    if (setter(c, extra) && !(c.op == OpVisibility && c.obj))
         return false;
     RMPlanOperation operation;
     operation.op = c.op;

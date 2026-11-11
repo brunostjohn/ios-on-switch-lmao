@@ -104,17 +104,31 @@ static void forwardCall(RMEncoder *e, SEL selector, const void *argument)
         forwardCall(self, _cmd, &mode);
 }
 
-// Core Animation sets the mode Disabled when its encoder state changes (update_encoder_state): nothing to do; any other mode
-// counts occlusion, which the raw path does not
+// Core Animation sets the mode Disabled when its encoder state changes (update_encoder_state); a counting mode is the 3D
+// engine's sample counter (raw_visibility.h)
 - (void)setVisibilityResultMode:(MTLVisibilityResultMode)mode offset:(NSUInteger)offset
 {
+    id<MTLBuffer> results = _pass.visibilityResultBuffer;
     if (mode != MTLVisibilityResultModeDisabled) {
-        [_cb takeReason:WhyCall why:@"a visibility result mode"];
-        hit(_cb, PredCallVisibility, mode);
+        raw::VisibilityAsk ask;
+        ask.mode = uint32_t(mode);
+        ask.offset = offset;
+        ask.rawBuffer = [(id)results isKindOfClass:[RMBuffer class]];
+        ask.bufferLength = ask.rawBuffer ? ((RMBuffer *)results)->_raw.length : 0;
+        ask.accumulate = [_pass respondsToSelector:@selector(visibilityResultType)] &&
+                         [[(id)_pass valueForKey:@"visibilityResultType"] integerValue] != 0;
+#if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
+        ask.probed = gRM->raw->probeBooleanVisibility.load(std::memory_order_acquire);
+#endif
+        if (const char *why = raw::visibilityRefusal(ask)) {
+            [_cb takeReason:WhyCall why:@(why)];
+            hit(_cb, PredCallVisibility, mode);
+        }
     }
     Cmd m = cmd(OpVisibility);
     m.a = uint32_t(mode);
     m.c = offset;
+    m.obj = (__bridge void *)results;
     [_cb record:m];
 }
 

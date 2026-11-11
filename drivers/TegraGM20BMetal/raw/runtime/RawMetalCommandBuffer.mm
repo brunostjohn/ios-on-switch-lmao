@@ -177,6 +177,8 @@ static void giveRecording(RMCommandBuffer *b)
             for (const RMPass::Color &a : pass.color)
                 if (a.resolve)
                     uses.push_back({(__bridge void *)a.resolve, raw::ResourceUse::Write});
+        } else if (cmd.op == OpVisibility && cmd.obj) {
+            uses.push_back({cmd.obj, raw::ResourceUse::Write});
         } else if (cmd.op == OpInvocation) {
             raw::forEachObject((__bridge NSInvocation *)cmd.obj, [&](id object) {
                 uses.push_back({(__bridge void *)object, raw::ResourceUse::Read | raw::ResourceUse::Write});
