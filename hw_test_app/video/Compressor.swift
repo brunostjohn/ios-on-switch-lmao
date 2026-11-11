@@ -14,6 +14,9 @@ public struct CompressedClip {
     public let encoderID: String
     public let seconds: Double
     public let bytes: Int
+    /// SwitchEncoderRoutes (debug builds of the AVE plug-in): pictures, input_vic, input_cpu_copies; nil from any other
+    /// encoder.
+    public var routes: [String: Int]? = nil
 
     public var keyFrames: Int { samples.filter(\.isKeyFrame).count }
     public var predictedFrames: Int { samples.count - keyFrames }
@@ -61,15 +64,20 @@ public struct CompressorSettings {
 }
 
 public enum Compressor {
-    /// `pause`: the encoder sits idle for that many seconds after that frame, then the clip goes on.
+    /// `pause`: the encoder sits idle for that many seconds after that frame, then the clip goes on. The pictures come
+    /// from the session's pixel buffer pool, laid out as the encoder asked, as a client should take them. `inspect` sees
+    /// the session after the last frame, before it goes.
     public static func encode(
-        _ settings: CompressorSettings, pattern: Pattern, frames: Int, pause: (after: Int, seconds: Double)? = nil
+        _ settings: CompressorSettings, pattern: Pattern, frames: Int, pause: (after: Int, seconds: Double)? = nil,
+        inspect: ((VTCompressionSession) throws -> Void)? = nil
     ) throws -> CompressedClip {
         let session = try makeSession(settings)
         defer { VTCompressionSessionInvalidate(session) }
-        let pool = try PatternPixels.pool(
-            width: settings.width, height: settings.height,
-            format: PatternPixels.format(bitDepth: settings.codec.bitDepth))
+        let pool =
+            try VTCompressionSessionGetPixelBufferPool(session)
+            ?? PatternPixels.pool(
+                width: settings.width, height: settings.height,
+                format: PatternPixels.format(bitDepth: settings.codec.bitDepth))
         let inputs = try (0..<frames).map {
             try PatternPixels.make(pattern, frame: $0, bitDepth: settings.codec.bitDepth, pool: pool)
         }
@@ -98,11 +106,13 @@ public enum Compressor {
         guard let format = CMSampleBufferGetFormatDescription(samples[0]) else {
             throw VideoError.message("the encoder's first sample has no format description")
         }
+        try inspect?(session)
         return CompressedClip(
             samples: samples, decodeOrder: decodeOrder, format: format,
             usingHardware: readFlag(session, kVTCompressionPropertyKey_UsingHardwareAcceleratedVideoEncoder),
             encoderID: readString(session, kVTCompressionPropertyKey_EncoderID), seconds: seconds,
-            bytes: samples.reduce(0) { $0 + CMSampleBufferGetTotalSampleSize($1) })
+            bytes: samples.reduce(0) { $0 + CMSampleBufferGetTotalSampleSize($1) },
+            routes: (read(session, "SwitchEncoderRoutes" as CFString) as? [String: NSNumber])?.mapValues(\.intValue))
     }
 
     static func makeSession(_ settings: CompressorSettings) throws -> VTCompressionSession {

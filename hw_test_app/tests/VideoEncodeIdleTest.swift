@@ -41,11 +41,17 @@ struct VideoEncodeIdleTest: HWTest {
         metrics.set("p_after_pause", afterPause.filter { !$0.isKeyFrame }.count)
         metrics.set("decoded_match", decoded.matched)
         metrics.set("luma_err", decoded.worstLumaError, digits: 1)
+        metrics.set("input_vic", encoded.routes?["input_vic"] ?? -1)
+        metrics.set("input_cpu_copies", encoded.routes?["input_cpu_copies"] ?? -1)
         return .judged(
             [
                 ("UsingHardwareAcceleratedVideoEncoder", encoded.usingHardware),
                 ("one key frame, P pictures across the pause", encoded.keyFrames == 1),
                 ("decodes back to the pattern (\(decoded.firstMismatch ?? "ok"))", decoded.matched == Self.frames),
+                (
+                    "every input written by VIC across the power-off, none copied by the CPU",
+                    VideoEncodeTest.noCopies(encoded.routes, Self.frames)
+                ),
             ], metrics, proof: encoded.usingHardware ? "encoder=\(encoded.encoderID)" : "")
     }
 

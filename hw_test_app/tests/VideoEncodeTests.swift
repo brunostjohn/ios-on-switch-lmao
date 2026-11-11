@@ -5,7 +5,8 @@ import HWTestVideo
 import VideoToolbox
 
 /// 1080p60 pattern frames through a hardware-only VTCompressionSession (P pictures, no reordering), then decoded
-/// again on the hardware decoder and checked frame by frame.
+/// again on the hardware decoder and checked frame by frame. The frames come from the session's pool, and every
+/// picture's input must reach NVENC without a CPU copy: VIC writes it from the frame's IOSurface (SwitchEncoderRoutes).
 struct VideoEncodeTest: HWTest {
     let codec: VideoCodec
     let realTime: Bool
@@ -51,6 +52,8 @@ struct VideoEncodeTest: HWTest {
         metrics.set("decoded_match", decoded.matched)
         metrics.set("luma_err", decoded.worstLumaError, digits: 1)
         metrics.set("intra_only", encoded.predictedFrames == 0)
+        metrics.set("input_vic", encoded.routes?["input_vic"] ?? -1)
+        metrics.set("input_cpu_copies", encoded.routes?["input_cpu_copies"] ?? -1)
         return .judged(
             [
                 ("VTCopyVideoEncoderList offers it as hardware", !listed.isEmpty),
@@ -58,7 +61,14 @@ struct VideoEncodeTest: HWTest {
                 ("P pictures after the first key frame", encoded.predictedFrames >= Self.frames - 2),
                 ("decodes back to the pattern (\(decoded.firstMismatch ?? "ok"))", decoded.matched == Self.frames),
                 ("real time keeps up with 60 fps", !realTime || Double(Self.frames) / encoded.seconds >= Double(fps)),
+                ("every input written by VIC, none copied by the CPU", Self.noCopies(encoded.routes, Self.frames)),
             ], metrics, proof: encoded.usingHardware ? "encoder=\(encoded.encoderID)" : "")
+    }
+
+    /// The AVE plug-in's input routes (debug builds): VIC wrote every picture's input, the CPU copied none.
+    static func noCopies(_ routes: [String: Int]?, _ pictures: Int) -> Bool {
+        guard let routes, let vic = routes["input_vic"] else { return false }
+        return routes["input_cpu_copies"] == 0 && vic >= pictures
     }
 
     static var all: [VideoEncodeTest] {
