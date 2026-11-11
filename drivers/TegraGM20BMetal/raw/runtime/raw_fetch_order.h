@@ -35,8 +35,9 @@ struct FetchCounts {
         interlocked{0};
     std::atomic<uint64_t> refusedAtRecord[kFetchRefusals]{}, refusedAtEncode[kFetchRefusals]{};
     std::atomic<uint64_t> storageFallback[kStorageFallbacks]{};
-    // the pipeline key hashes behind refusedAtRecord, refusedAtEncode and storageFallback
-    KeyTally recordKeys, encodeKeys, fallbackKeys;
+    // the pipeline key hashes behind refusedAtRecord, refusedAtEncode and storageFallback; and every interlocked draw's
+    // and generic merge state draw's (COMPILER.md E5: which states a glass frame's interlock and generic draws are)
+    KeyTally recordKeys, encodeKeys, fallbackKeys, interlockKeys, genericKeys;
 };
 
 struct FetchDraw {

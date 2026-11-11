@@ -3918,12 +3918,26 @@ bool RenderEncoder::draw(uint32_t primitive, uint32_t first, uint32_t count, uin
     }
     if (!prepare(pl, primitive, first, first, count, baseInstance, false, why))
         return false;
-    if (p_.room() < kInstanceWords)
+#if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
+    const auto probe = instances == 1 ? dev_->armedProbe() : nullptr;
+    const size_t probeWords = probe ? probe->before.size() + probe->after.size() : 0;
+#else
+    constexpr size_t probeWords = 0;
+#endif
+    if (p_.room() < kInstanceWords + probeWords)
         reserve();
     if (instances == 1) {
+#if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
+        if (probe && !probe->before.empty())
+            p_.raw(probe->before.data(), uint32_t(probe->before.size()));
+#endif
         p_.m(BEGIN, 0);
         p_.inc(VERTEX_ARRAY_START, {first, count});
         p_.m(END, 0);
+#if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
+        if (probe && !probe->after.empty())
+            p_.raw(probe->after.data(), uint32_t(probe->after.size()));
+#endif
     } else {
         mme::draw(p_, false, first, count, instances);
     }
@@ -4694,6 +4708,12 @@ bool RenderEncoder::prepare(Pipeline *pl, uint32_t primitive, int32_t first, uin
     }
     drawParamsUnknown_ = false;
     RAW_DIAGNOSTIC(dev_->stats.interlockDraws += pl->storageBits != 0);
+#if SWITCH_RAW_DIAGNOSTICS
+    if (pl->rec && pl->storageBits)
+        dev_->stats.fetch.interlockKeys.note(pl->rec->keyHash);
+    if (pl->rec && pl->genericState)
+        dev_->stats.fetch.genericKeys.note(pl->rec->keyHash);
+#endif
     RAW_DIAGNOSTIC(dev_->stats.fetch.interlocked += (pl->fetchBits & pl->storageBits) != 0);
     attachmentWrites_.rop |= pl->writeBits;
     attachmentWrites_.storage |= pl->storageWriteBits;

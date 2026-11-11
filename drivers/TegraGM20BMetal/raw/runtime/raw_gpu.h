@@ -414,6 +414,7 @@ struct Pipeline {
     // value makes the whole glass band black), and whether non-finite halves alone were reported
     const char *uniformProbe = nullptr;
     bool uniformHalvesReported = false;
+    bool genericState = false;  // DEVELOPMENT: Core Animation's generic merge state (..Xghfc), for the fetch keys line
 };
 
 // A state's fragment program split (raw_pack.h PackSplit): the twin that draws of rec.thresholdPixels pixels or more take, and
@@ -1359,6 +1360,23 @@ public:
         // channels made again after the kernel killed one; GPU order returns on one made since a refusal (raw_order.h)
         std::atomic<uint64_t> reopens{0};
     } stats;
+#if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
+    // hw_test_app's hardware probes (RawMetalProbe.mm): push words a draw of one instance emits after its state and before
+    // BEGIN, and after its END the words that set back what those set, while armed
+    struct ProbeWords {
+        std::vector<uint32_t> before, after;
+    };
+    std::atomic<bool> probeArmed{false};
+    std::mutex probeLock;
+    std::shared_ptr<const ProbeWords> probeWords;
+    std::shared_ptr<const ProbeWords> armedProbe()
+    {
+        if (!probeArmed.load(std::memory_order_acquire))
+            return nullptr;
+        std::lock_guard<std::mutex> hold(probeLock);
+        return probeWords;
+    }
+#endif
 
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
     // The fetch barrier's methods, set by the context-switch stress (test/fetchform.cpp) and the ceiling measurement

@@ -224,12 +224,16 @@ static void markUniformProbe(raw::Pipeline *pl, NSString *label)
     if (!pl || pl->uniformProbe || ![label hasPrefix:prefix])
         return;
     NSString *name = [label substringFromIndex:prefix.length];
-    if (![name containsString:@"_Tgs"] && ![name containsString:@"_Tgb"] && ![name hasSuffix:@"Xghfc"])
+    const bool generic = [name hasSuffix:@"Xghfc"];
+    if (![name containsString:@"_Tgs"] && ![name containsString:@"_Tgb"] && !generic)
         return;
     const char *kept = strdup(name.UTF8String);  // one per glass state, for the process's life
     pl->uniformProbe = kept;
-    if (pl->barrierTwin && !pl->barrierTwin->uniformProbe)
+    pl->genericState = generic;
+    if (pl->barrierTwin && !pl->barrierTwin->uniformProbe) {
         pl->barrierTwin->uniformProbe = kept;
+        pl->barrierTwin->genericState = generic;
+    }
 }
 #endif
 

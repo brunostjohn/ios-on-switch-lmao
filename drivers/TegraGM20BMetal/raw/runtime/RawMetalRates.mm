@@ -329,6 +329,8 @@ size_t raw_metal_fetch_keys(char *out, size_t size)
     keys("rec", k.recordKeys);
     keys("enc", k.encodeKeys);
     keys("sto", k.fallbackKeys);
+    keys("ilk", k.interlockKeys);
+    keys("gen", k.genericKeys);
     return any ? used : 0;
 }
 
