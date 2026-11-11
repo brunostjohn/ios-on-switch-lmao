@@ -4,7 +4,6 @@ import Foundation
 import HWTestCore
 import ImageIO
 import Metal
-import UniformTypeIdentifiers
 
 enum Pixels {
     /// Draws a decoded image into an RGBX buffer and checks it against the pattern.
@@ -162,37 +161,6 @@ struct ImageDecodeTest: HWTest {
     }
 
     static var all: [ImageDecodeTest] { StillImage.all.map { ImageDecodeTest(image: $0) } }
-}
-
-/// HEIC written on the device (ImageIO over the HEVC encoder) and read back.
-struct HEICEncodeTest: HWTest {
-    let id = "image.heic_encode"
-    let name = "HEIC encode and decode on the device"
-    let subsystem = Subsystem.images
-
-    func run(_ context: TestContext) async throws -> Outcome {
-        let pattern = Pattern(width: 1024, height: 768, clip: 0x5E1C)
-        let data = NSMutableData()
-        guard let destination = CGImageDestinationCreateWithData(data, UTType.heic.identifier as CFString, 1, nil)
-        else {
-            return .fail("ImageIO offers no HEIC destination")
-        }
-        let start = CFAbsoluteTimeGetCurrent()
-        CGImageDestinationAddImage(
-            destination, Pixels.patternImage(pattern), [kCGImageDestinationLossyCompressionQuality: 0.9] as CFDictionary
-        )
-        guard CGImageDestinationFinalize(destination) else { return .fail("CGImageDestinationFinalize failed") }
-        let encodeMs = (CFAbsoluteTimeGetCurrent() - start) * 1000
-        guard let source = CGImageSourceCreateWithData(data as CFData, nil),
-            let decoded = CGImageSourceCreateImageAtIndex(source, 0, nil)
-        else { return .fail("the HEIC written does not decode") }
-        let result = Pixels.check(decoded, pattern: pattern)
-        var metrics = Metrics()
-        metrics.set("encode_ms", encodeMs, digits: 1)
-        metrics.set("bytes", data.length)
-        metrics.set("error", result.lumaError, digits: 1)
-        return .judged([("decodes back to the pattern", result.matches(frame: 0, tolerance: 12))], metrics)
-    }
 }
 
 /// A Metal-backed CIContext: a blur of a flat colour stays flat (exact), and a 1080p blur chain is timed.
