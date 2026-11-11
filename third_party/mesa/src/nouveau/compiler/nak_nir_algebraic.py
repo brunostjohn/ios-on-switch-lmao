@@ -140,6 +140,20 @@ algebraic_lowering += [
     (('ior', ('u2u32', 'a@16'), ('ishl', ('u2u32', 'b@16'), 16)), ('pack_32_2x16_split', a, b)),
 ]
 
+# ios-on-switch-lmao: a half metal2vulkan widens to negate, clamp or select in
+# f32 and narrows again is that operation on the half itself, bit for bit.
+for op in ['fneg', 'fsat']:
+    algebraic_lowering += [
+        (('f2f16_rtne', (op, ('f2f32', 'a@16'))), (op, a), half_denorms_kept),
+    ]
+algebraic_lowering += [
+    (('f2f16_rtne', ('bcsel', c, ('f2f32', 'a@16'), ('f2f32', 'b@16'))), ('bcsel', c, a, b)),
+    (('f2f16_rtne', ('bcsel', c, ('f2f32', 'a@16'), '#b@32(is_representable_as_f16)')),
+        ('bcsel', c, a, ('f2f16_rtne', b))),
+    (('f2f16_rtne', ('bcsel', c, '#b@32(is_representable_as_f16)', ('f2f32', 'a@16'))),
+        ('bcsel', c, ('f2f16_rtne', b), a)),
+]
+
 # ios-on-switch-lmao: metal2vulkan holds a sampled texel rounded to half in an
 # f32 (a NaN kept as sampled, anything else the round trip through f16), and
 # narrows it again for the half arithmetic that reads it. Narrowed, both arms
