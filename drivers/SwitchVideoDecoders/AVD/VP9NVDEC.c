@@ -20,8 +20,18 @@ typedef struct {
     uint8_t refs;                             // slots holding it
 } Surface;
 
+// A frame's backward adaptation, waiting for the counts its job writes: done before the next frame's headers are read
+// (they start from the contexts it refreshes) and before the next job overwrites the counts.
+typedef struct {
+    bool waiting, intra, lastKey, refresh, allowHP;
+    uint8_t interpFilter, txMode, contextIdx;
+    uint32_t fence;
+    VP9FrameContext pre, fc;
+} Adaptation;
+
 struct VP9Decoder {
     H264Backend b;
+    Adaptation adaptation;
     VP9State state;
     VP9FrameContext fc;
     VP9FrameHeader header;
@@ -406,10 +416,41 @@ static void output(VP9Decoder *d, const Surface *s, uint32_t job, void *token)
         d->b.emit(d->b.ctx, item);
 }
 
+static void refresh(VP9Decoder *d, const VP9FrameContext *fc, bool contexts, uint8_t idx)
+{
+    if (contexts)
+        d->state.contexts[idx] = *fc;
+    d->fc = *fc;
+}
+
+int vp9_decoder_settle(VP9Decoder *d)
+{
+    Adaptation *a = &d->adaptation;
+    if (!a->waiting)
+        return 0;
+    a->waiting = false;
+    TegraNVDECWait wait = {.fence = a->fence, .invalidate_count = 1};
+    wait.invalidate[0] = (TegraNVDECRange){d->aux, d->counters_off, sizeof(nvdec_vp9EntropyCounts_t), 0};
+    if (d->b.wait(d->b.ctx, &wait))
+        return -2;
+    VP9Counts counts;
+    readCounts(&counts, (const nvdec_vp9EntropyCounts_t *)(d->aux_va + d->counters_off));
+    vp9_adapt_coef_probs(&a->fc, &a->pre, &counts, a->intra, a->lastKey);
+    if (!a->intra) {
+        vp9_adapt_mode_probs(&a->fc, &a->pre, &counts, a->interpFilter, a->txMode);
+        vp9_adapt_mv_probs(&a->fc, &a->pre, &counts, a->allowHP);
+    }
+    refresh(d, &a->fc, a->refresh, a->contextIdx);
+    return 0;
+}
+
 static int decodeFrame(VP9Decoder *d, const uint8_t *data, size_t size, void *token, bool *shown)
 {
     VP9State *st = &d->state;
     VP9FrameHeader h;
+    const int adapted = vp9_decoder_settle(d);
+    if (adapted)
+        return adapted;
     if (vp9_parse_uncompressed(st, data, size, &h))
         return -1;
     // One sample carries one frame token: a second shown frame in a superframe (not produced by encoders) is dropped.
@@ -490,24 +531,22 @@ static int decodeFrame(VP9Decoder *d, const uint8_t *data, size_t size, void *to
         return -2;
     nvdec_ring_advance(&d->ring);
 
-    // Backward adaptation from the engine's counts (vp9_decode_frame's tail), then the context refresh: the CPU needs
-    // what NVDEC counted before the next frame's probabilities exist.
-    if (!h.error_resilient && !h.frame_parallel) {
-        TegraNVDECWait wait = {.fence = fence, .invalidate_count = 1};
-        wait.invalidate[0] = (TegraNVDECRange){d->aux, d->counters_off, sizeof(nvdec_vp9EntropyCounts_t), 0};
-        if (d->b.wait(d->b.ctx, &wait))
-            return -2;
-        VP9Counts counts;
-        readCounts(&counts, (const nvdec_vp9EntropyCounts_t *)(d->aux_va + d->counters_off));
-        vp9_adapt_coef_probs(&fc, &pre, &counts, intra, d->have_last && d->last_key);
-        if (!intra) {
-            vp9_adapt_mode_probs(&fc, &pre, &counts, h.interp_filter, h.tx_mode);
-            vp9_adapt_mv_probs(&fc, &pre, &counts, h.allow_high_precision_mv);
-        }
-    }
-    if (h.refresh_frame_context)
-        st->contexts[h.frame_context_idx] = fc;
-    d->fc = fc;
+    // Backward adaptation from the engine's counts (vp9_decode_frame's tail), then the context refresh: NVDEC 2.0
+    // leaves the adaptation to the host, so the next frame waits for this one's counts (vp9_decoder_settle).
+    if (!h.error_resilient && !h.frame_parallel)
+        d->adaptation = (Adaptation){true,
+                                     intra,
+                                     d->have_last && d->last_key,
+                                     h.refresh_frame_context,
+                                     h.allow_high_precision_mv,
+                                     h.interp_filter,
+                                     h.tx_mode,
+                                     h.frame_context_idx,
+                                     fence,
+                                     pre,
+                                     fc};
+    else
+        refresh(d, &fc, h.refresh_frame_context, h.frame_context_idx);
     d->header = h;
 
     // The reference slots (swap_frame_buffers), then the buffers that alternate.

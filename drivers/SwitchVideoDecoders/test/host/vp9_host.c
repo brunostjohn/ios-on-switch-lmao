@@ -32,6 +32,10 @@ typedef struct {
     uint64_t firstAvail[TEGRA_NVDEC_MAX_ENTRIES];
     uint32_t counterHandle, counterOff;
     FakeEngine engine;
+    const VP9TraceFrame *jobFrame[64];  // the trace frame each job decoded, by fence
+    bool decoding;                      // inside vp9_decoder_decode, which began after job callStart
+    uint32_t callStart;
+    unsigned ownWaits;                  // waits inside a decode call for a job that call submitted
 } Fake;
 
 static int fakeAlloc(void *ctx, uint64_t size, uint32_t *handle, void **va)
@@ -111,16 +115,19 @@ static int fakeSubmit(void *ctx, const TegraNVDECSubmit *s, uint32_t *fence)
     }
     f->jobs++;
     *fence = fake_engine_submit(&f->engine, s);
+    f->jobFrame[*fence % 64] = f->frame;
     return 0;
 }
 
 static int fakeWait(void *ctx, const TegraNVDECWait *w)
 {
     Fake *f = ctx;
+    f->ownWaits += f->decoding && (int32_t)(w->fence - f->callStart) > 0;
     fake_engine_wait(&f->engine, w->fence);
     uint8_t *counters = f->va[f->counterHandle] + f->counterOff;
-    if (f->frame && f->frame->adapted)
-        memcpy(counters, f->counts + f->frame->counts_at, sizeof(nvdec_vp9EntropyCounts_t));
+    const VP9TraceFrame *frame = f->jobFrame[w->fence % 64];
+    if (frame && frame->adapted)
+        memcpy(counters, f->counts + frame->counts_at, sizeof(nvdec_vp9EntropyCounts_t));
     else
         memset(counters, 0, sizeof(nvdec_vp9EntropyCounts_t));
     return 0;
@@ -146,9 +153,11 @@ static uint32_t crcOf(const void *p, size_t n)
 }
 
 // Runs one clip's packets frame by frame and compares with its trace. Returns the number of mismatches.
+// settled: each frame's adaptation done before its contexts are compared; else the decoder adapts each frame when the
+// next one starts, and only the last frame's contexts are compared.
 static int runClip(const char *name, const uint32_t *sizes, int packets, const uint8_t *data,
                    const VP9TraceFrame *trace, int traced, const uint8_t *packed, size_t packedBytes,
-                   uint32_t countsBytes, int *shownOut)
+                   uint32_t countsBytes, bool settled, int *shownOut)
 {
     uint8_t *counts = malloc(countsBytes);
     uLongf unpacked = countsBytes;
@@ -186,7 +195,13 @@ static int runClip(const char *name, const uint32_t *sizes, int packets, const u
             const VP9TraceFrame *t = &trace[record];
             fake.frame = t;
             adapting += !t->show_existing && !t->error_resilient && !t->frame_parallel;
+            fake.decoding = true;
+            fake.callStart = fake.engine.submitted;
             const int ret = vp9_decoder_decode(d, packet + off[i], len[i], (void *)1);
+            fake.decoding = false;
+            if (!settled)
+                continue;
+            vp9_decoder_settle(d);
             const VP9FrameHeader *h = vp9_decoder_last_header(d);
             const VP9State *s = vp9_decoder_state(d);
             const bool inter = !t->key && !t->intra_only;
@@ -246,6 +261,21 @@ static int runClip(const char *name, const uint32_t *sizes, int packets, const u
         fprintf(stderr, "%s: %d frames decoded, libvpx %d\n", name, record, traced);
         bad++;
     }
+    if (!settled) {
+        vp9_decoder_settle(d);
+        const VP9TraceFrame *t = &trace[traced - 1];
+        const uint32_t fc = crcOf(vp9_decoder_frame_context(d), sizeof(VP9FrameContext));
+        const uint32_t contexts = crcOf(vp9_decoder_state(d)->contexts, sizeof(vp9_decoder_state(d)->contexts));
+        if (fc != t->fc_crc || contexts != t->contexts_crc) {
+            fprintf(stderr, "%s, adapting at the next frame: last context CRC %#010x stored %#010x, libvpx %#010x "
+                    "%#010x\n", name, fc, contexts, t->fc_crc, t->contexts_crc);
+            bad++;
+        }
+    }
+    if (fake.ownWaits) {
+        fprintf(stderr, "%s: %u decode calls waited for their own job\n", name, fake.ownWaits);
+        bad++;
+    }
     bad += fake.refused + (fake.recycled == 0);
     if (fake.engine.busyWrites || fake.engine.waits != adapting) {
         fprintf(stderr, "%s: %u CPU writes into a buffer a queued job uses, %u waits for %u adapting frames\n", name,
@@ -254,7 +284,7 @@ static int runClip(const char *name, const uint32_t *sizes, int packets, const u
     }
     *shownOut = fake.shown;
     // The checker's refusals, each from the clip's first (accepted) submit.
-    if (fake.haveFirst && !strcmp(name, "A")) {
+    if (fake.haveFirst && !strcmp(name, "A") && settled) {
         static const char *const kExpect[] = {NULL,
                                               "codec",
                                               "control params",
@@ -361,16 +391,21 @@ int main(int argc, char **argv)
 {
     (void)argc, (void)argv;
     int shownA = 0, shownB = 0;
+    int shownLate = 0;
     const int badA = runClip("A", kVP9ClipSizes, kVP9ClipPackets, kVP9ClipData, kTraceAFrames,
                              (int)(sizeof(kTraceAFrames) / sizeof(kTraceAFrames[0])), kTraceACounts,
-                             sizeof(kTraceACounts), kTraceACountsBytes, &shownA);
+                             sizeof(kTraceACounts), kTraceACountsBytes, true, &shownA);
+    const int badLate = runClip("A", kVP9ClipSizes, kVP9ClipPackets, kVP9ClipData, kTraceAFrames,
+                                (int)(sizeof(kTraceAFrames) / sizeof(kTraceAFrames[0])), kTraceACounts,
+                                sizeof(kTraceACounts), kTraceACountsBytes, false, &shownLate);
     const int badB = runClip("B", kTraceBSizes, (int)(sizeof(kTraceBSizes) / sizeof(kTraceBSizes[0])), kTraceBData,
                              kTraceBFrames, (int)(sizeof(kTraceBFrames) / sizeof(kTraceBFrames[0])), kTraceBCounts,
-                             sizeof(kTraceBCounts), kTraceBCountsBytes, &shownB);
-    const bool pass = !badA && !badB && shownA == kVP9ClipShown;
+                             sizeof(kTraceBCounts), kTraceBCountsBytes, true, &shownB);
+    const bool pass = !badA && !badB && !badLate && shownA == kVP9ClipShown && shownLate == kVP9ClipShown;
     printf("%s vp9: clip A %d frames (%d shown), clip B %d frames: headers, contexts and adaptation equal libvpx's, "
-           "every submit accepted, refusals as expected (%d + %d mismatches)\n",
+           "every submit accepted, refusals as expected (%d + %d mismatches); clip A adapting each frame at the next "
+           "one's start, no decode waiting for its own job (%d mismatches)\n",
            pass ? "PASS" : "FAIL", (int)(sizeof(kTraceAFrames) / sizeof(kTraceAFrames[0])), shownA,
-           (int)(sizeof(kTraceBFrames) / sizeof(kTraceBFrames[0])), badA, badB);
+           (int)(sizeof(kTraceBFrames) / sizeof(kTraceBFrames[0])), badA, badB, badLate);
     return pass ? 0 : 1;
 }
