@@ -189,6 +189,9 @@ int switch_gpu_backing_write_ranges(struct switch_gpu_backing_transaction *trans
  * stores made after completed GPU work; clients without that producer contract must use ordinary invalidation. */
 int switch_gpu_backing_cpu_acquire(struct switch_gpu_backing *backing, uint64_t offset,
 				   uint64_t bytes, uint32_t access);
+/* Sleeps until every engine write the backing records is in DRAM (an Internal GM20B job completes with its writes in the
+ * L2), taking no CPU ownership: for a kernel CPU access the caller already orders against new GPU work. */
+int switch_gpu_backing_wait_visible(struct switch_gpu_backing *backing);
 int switch_gpu_backing_cpu_release(struct switch_gpu_backing *backing, uint64_t offset,
 				   uint64_t bytes, uint32_t access);
 int switch_gpu_backing_cpu_acquire_owned(struct switch_gpu_backing *backing, uint64_t offset,

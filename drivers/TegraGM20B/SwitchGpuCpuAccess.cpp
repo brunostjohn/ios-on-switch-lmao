@@ -112,6 +112,16 @@ void release_cpu_locked(switch_gpu_backing *backing, uint32_t access)
 }
 }  // namespace
 
+extern "C" int switch_gpu_backing_wait_visible(switch_gpu_backing *backing)
+{
+	if (!backing)
+		return -22;
+	IOLockLock(backing->lock);
+	const int result = wait_locked(backing, kRead);
+	IOLockUnlock(backing->lock);
+	return result;
+}
+
 extern "C" int switch_gpu_backing_cpu_acquire(switch_gpu_backing *backing, uint64_t offset,
 					      uint64_t bytes, uint32_t access)
 {

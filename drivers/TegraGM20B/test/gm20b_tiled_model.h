@@ -19,6 +19,10 @@ struct FakeGpu {
 	std::vector<std::pair<uint32_t, uint32_t>> waits;
 	bool allDone = true;
 	int waitAll = 0;
+	// GPU writes of the surface that completed but are still in the L2 (an Internal job's), the waits that put them in
+	// DRAM, and the CPU moves that ran before one did
+	bool l2Dirty = false;
+	int visibleWaits = 0, staleCpuMoves = 0;
 };
 
 extern FakeGpu gGpu;

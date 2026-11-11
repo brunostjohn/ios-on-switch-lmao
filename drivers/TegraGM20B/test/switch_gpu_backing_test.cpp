@@ -1024,6 +1024,23 @@ TEST_F(Backing, CpuReadPromotesVisibilityBeforeInvalidating)
 	switch_gpu_backing_release(allocation);
 }
 
+TEST_F(Backing, AKernelCpuMoveWaitsForExecutedInternalWritesWithoutTakingOwnership)
+{
+	installVisibility();
+	auto *allocation = backing();
+	const auto writer = token(312, 1);
+	ASSERT_EQ(publish(allocation, SWITCH_GPU_BACKING_WRITE, writer), 0);
+	timelines[key(&writer)].completed = 1;
+	external_completed[key(&writer)] = 0;
+	const auto before = external_waits;
+	EXPECT_EQ(switch_gpu_backing_wait_visible(allocation), 0);
+	EXPECT_EQ(external_waits, before + 1);
+	EXPECT_EQ(switch_gpu_backing_wait_visible(allocation), 0);
+	EXPECT_EQ(external_waits, before + 1);
+	EXPECT_EQ(publish(allocation, SWITCH_GPU_BACKING_WRITE, token(313)), 0);
+	switch_gpu_backing_release(allocation);
+}
+
 TEST_F(Backing, VicDependsOnExecutedInternalGpuWritesUntilExternalVisibility)
 {
 	installVisibility();

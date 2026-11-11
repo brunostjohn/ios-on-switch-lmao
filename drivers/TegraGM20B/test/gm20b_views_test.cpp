@@ -158,6 +158,28 @@ TEST_F(Views, MovesTheCopyEngineCannotMakeAreTheCpus)
 	tgm_coherency_put(s.coh);
 }
 
+// The CPU's move reads and writes DRAM behind the GPU's L2: GPU writes that completed without reaching DRAM (an Internal
+// job's, no writer the registry still lists) get there first, at the dead task's drain as at a lock. The copy engine
+// reads through the L2, so its moves wait for nothing.
+TEST_F(Views, ACpuMoveWaitsForCompletedGpuWritesToReachDram)
+{
+	Tiled s(0xa0900000, 88);
+	map(1, s.id, 0x80000);
+	map(2, s.id, 0x90000);
+	gGpu.l2Dirty = true;
+	ASSERT_EQ(tegra_gm20b_iosurface_view(client(1), kLock, s.id, 0), 0);
+	EXPECT_EQ(gGpu.visibleWaits, 0);
+	gMoveFails = true;
+	gViews.dead.insert(client(1));
+	ASSERT_EQ(tegra_gm20b_iosurface_view(client(2), kLock, s.id, kReadOnly), 0);
+	EXPECT_EQ(gCpuMoves, 2);
+	EXPECT_EQ(gGpu.staleCpuMoves, 0);
+	EXPECT_GE(gGpu.visibleWaits, 1);
+	ASSERT_EQ(tegra_gm20b_iosurface_view(client(2), kUnlock, s.id, kReadOnly), 0);
+	gMoveFails = false;
+	tgm_coherency_put(s.coh);
+}
+
 // No memory for the rows: the lock is refused with nothing mapped or moved, never handed the texels
 TEST_F(Views, ALockWithNoScratchIsRefused)
 {

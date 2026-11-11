@@ -63,6 +63,13 @@ extern "C" void tgm_writer_wait(uint32_t uid, uint32_t seqno)
 	gGpu.completed[uid] = seqno;
 }
 
+extern "C" int switch_gpu_backing_wait_visible(switch_gpu_backing *)
+{
+	gGpu.visibleWaits++;
+	gGpu.l2Dirty = false;
+	return 0;
+}
+
 extern "C" int tgm_writers_all_done(void)
 {
 	return gGpu.allDone;
@@ -150,6 +157,7 @@ extern "C" void tgm_relayout_by_cpu(const struct tgm_relayout_pages *surface,
 				    const struct tgm_relayout_writer *, uint32_t)
 {
 	gCpuMoves++;
+	gGpu.staleCpuMoves += gGpu.l2Dirty;
 	tgm_relayout_cpu(surface, rows, l, bytes_per_row, op == TGM_RELAYOUT_TO_ROWS, modelPage);
 }
 

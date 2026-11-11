@@ -57,6 +57,8 @@ int tgm_coh_unshared(const struct tgm_coh *c);
 int tgm_coh_pinned(const struct tgm_coh *c);
 struct tgm_relayout_pages tgm_coh_pages(const struct tgm_coh *c);
 uint32_t tgm_coh_writers(struct tgm_coh *c, struct tgm_relayout_writer *out, uint32_t max);
+/* Until the GPU's writes to the pinned surface are in DRAM, which a CPU move reads and writes behind the L2 */
+void tgm_coh_wait_visible(struct tgm_coh *c);
 uint32_t tgm_coh_surface_id(const struct tgm_coh *c);
 /* The block-linear entry of surface `id` with a reference (tgm_coherency_put drops it); null: none */
 struct tgm_coh *tgm_coh_find_tiled(uint32_t id);

@@ -34,6 +34,11 @@ void tgm_relayout_by_cpu(const struct tgm_relayout_pages *, const struct tgm_rel
 {
 }
 
+int switch_gpu_backing_wait_visible(struct switch_gpu_backing *)
+{
+	return 0;
+}
+
 struct tgm_scratch *tgm_scratch_get(uint64_t, int, struct tgm_relayout_pages *)
 {
 	return nullptr;

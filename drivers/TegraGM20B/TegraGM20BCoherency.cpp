@@ -761,6 +761,12 @@ extern "C" uint32_t tgm_coh_surface_id(const struct tgm_coh *c)
 	return c->surfaceId;
 }
 
+extern "C" void tgm_coh_wait_visible(struct tgm_coh *c)
+{
+	if (c->backing)
+		(void)switch_gpu_backing_wait_visible(c->backing);
+}
+
 extern "C" uint32_t tgm_coh_writers(struct tgm_coh *c, struct tgm_relayout_writer *out,
 				    uint32_t max)
 {

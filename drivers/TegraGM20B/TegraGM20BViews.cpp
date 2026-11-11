@@ -102,6 +102,7 @@ void move(tgm_coh *c, const tgm_tiled &t, const tgm_relayout_pages &rows, int op
 			"IOSurface %u: the copy engine did not move its texels for the CPU (%d): "
 			"the CPU did",
 			tgm_coh_surface_id(c), ret);
+		tgm_coh_wait_visible(c);
 		tgm_relayout_by_cpu(&pages, &rows, &t.layout, t.bytes_per_row, op, writers, n);
 	}
 }
