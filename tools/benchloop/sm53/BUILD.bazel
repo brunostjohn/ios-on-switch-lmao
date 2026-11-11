@@ -87,6 +87,7 @@ py_library(
 py_library(
     name = "families",
     srcs = [
+        "affinity.py",
         "icache.py",
         "int3.py",
         "overlap.py",
@@ -119,6 +120,7 @@ py_library(
         ],
     )
     for name in [
+        "affinity_test",
         "icache_test",
         "int3_test",
         "intops_test",
