@@ -14,7 +14,22 @@ struct PushOwner {
 PushOwner gPushOwners[kPushOwners];
 uint64_t gPushSince;
 IOLock *gPushLock;
+switch_gpu_peaks::Peak gTargetPeaks[switch_gpu_peaks::kOwners];
 }  // namespace
+
+#if TGM_STATS
+void tgm_uc::tgm_target_peaks_line(char *line, size_t size)
+{
+	if (size)
+		line[0] = 0;
+	IOLock *held = __atomic_load_n(&gPushLock, __ATOMIC_ACQUIRE);
+	if (!held)
+		return;
+	IOLockLock(held);
+	switch_gpu_peaks::line(gTargetPeaks, line, size);
+	IOLockUnlock(held);
+}
+#endif
 
 IOReturn AGXDeviceUserClient::vmBind(const TegraGM20BAbiVmBind *in, uint32_t count)
 {
@@ -333,6 +348,7 @@ void AGXDeviceUserClient::scanPushes(const tgm_push *pushes, uint32_t count, tgm
 	const Binding *hit = nullptr;
 	uint64_t budget = kScanMaxBytes;
 	bool whole = true;
+	tgm_scan::TargetImage largest = {};
 	for (uint32_t i = 0; i < count; i++) {
 		if (prof && i < TGM_PROF_MAX) {
 			prof->cls[i] = TGM_PC_SKIP;
@@ -350,9 +366,16 @@ void AGXDeviceUserClient::scanPushes(const tgm_push *pushes, uint32_t count, tgm
 		budget -= bytes;
 		c.readBytes += bytes;
 		const uint64_t drawsBefore = c.draws;
+		const uint64_t clearsBefore = c.clears;
 		const uint64_t sampleBefore = c.sampleDraws;
 		const uint64_t interlocksBefore = c.interlocks;
 		const uint8_t cls = scanPush(c, p, whole, words, bytes / 4);
+		if (c.draws > drawsBefore || c.clears > clearsBefore) {
+			const tgm_scan::TargetImage drawn = tgm_scan::targetImage(p);
+			if (static_cast<uint64_t>(drawn.width) * drawn.height >
+			    static_cast<uint64_t>(largest.width) * largest.height)
+				largest = drawn;
+		}
 		if (prof && i < TGM_PROF_MAX) {
 			prof->cls[i] = cls;
 			const uint64_t draws = c.draws - drawsBefore;
@@ -398,6 +421,8 @@ void AGXDeviceUserClient::scanPushes(const tgm_push *pushes, uint32_t count, tgm
 	}
 	for (size_t k = 0; k < sizeof(c) / sizeof(uint64_t); k++)
 		reinterpret_cast<uint64_t *>(&o->c)[k] += reinterpret_cast<const uint64_t *>(&c)[k];
+	switch_gpu_peaks::note(gTargetPeaks, owner_, largest.width, largest.height,
+			       largest.samples);
 	if (!gPushSince) {
 		gPushSince = now;
 	} else if (now - gPushSince >= kScanWindowNs) {

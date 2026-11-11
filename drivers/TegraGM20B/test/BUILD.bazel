@@ -29,8 +29,10 @@
 #   gm20b_prefault_test      TegraGM20BSurfacePrefault.h over a mock create ABI: which IOSurfaceRootUserClient outputs
 #                            name a new surface, and which surfaces are faulted in (size, memory pressure)
 #   gm20b_push_scan_test     TegraGM20BPushScan.h (the kernel's method-stream reader and the push profile's classes) over
-#                            streams laid out as NVK writes them: every counter, and no profile stamp after a push whose
-#                            method continues, one the kernel could not read or one with an opcode NVK never writes
+#                            streams laid out as NVK and the raw path write them: every counter, each drawn target's
+#                            image under its sample grid, and no profile stamp after a push whose method continues, one
+#                            the kernel could not read or one with an opcode NVK never writes
+#   gm20b_target_peaks_test  SwitchGpuTargetPeaks.h: each process's largest target image since boot, and its line
 #   gm20b_cost_hist_test     TegraGM20BCostHist.h: the debug lines' buckets, and a p95 a single slow frame leaves alone
 #   gm20b_sched_test         TegraGM20BSchedPolicy.h and tgm_hang_blame over deploy-2045's hang registers: what a
 #                            compositor kick preempts, the interleaved runlist (full, empty, one level), which channel a
@@ -202,6 +204,15 @@ host_test(
         "//drivers/TegraGM20B:TegraGM20BPushScan.h",
     ],
     copts = ["-Wno-unused-parameter"],
+    cxx_std = "c++17",
+)
+
+host_test(
+    name = "gm20b_target_peaks_test",
+    srcs = [
+        "gm20b_target_peaks_test.cpp",
+        "//drivers/TegraGM20B:SwitchGpuTargetPeaks.h",
+    ],
     cxx_std = "c++17",
 )
 

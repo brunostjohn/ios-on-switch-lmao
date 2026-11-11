@@ -46,6 +46,7 @@
 #include "SwitchGpuJobFences.h"
 #include "SwitchGpuJobVisibility.h"
 #include "SwitchGpuPathStats.h"
+#include "SwitchGpuTargetPeaks.h"
 #include "SwitchGpuEventClient.h"
 #include "SwitchGpuAsyncReference.h"
 #include "SwitchGpuAdmission.h"
@@ -115,6 +116,8 @@ extern "C" kern_return_t vm_map_region_recurse_64(vm_map_t map, uint64_t *addres
 						  natural_t *depth, vm_region_submap_info_64_t info,
 						  mach_msg_type_number_t *count);
 
+// SwitchGpuTargetPeaks.h's line of every process's largest target image since boot
+void tgm_target_peaks_line(char *line, size_t size);
 #endif
 static inline uint64_t nowNs()
 {
