@@ -96,6 +96,6 @@ enum X1Probes {
         X1RawProbes.blendKills, X1RawProbes.viewportSwizzle, X1IteratedBlendProbe.probe,
         X1CompressedCopyProbe.probe, X1TwodProbes.scale, X1TwodProbes.clear, X1TwodProbes.resolve,
         X1VICPitchProbe.probe, X1VICLayoutProbe.probe, X1VICFractionProbe.probe,
-        X1VICPackedProbe.probe, X1VICTransposeProbe.probe,
+        X1VICPackedProbe.probe, X1VICTransposeProbe.probe, X1VICLargeProbe.probe,
     ]
 }
