@@ -12,6 +12,7 @@ use std::ops::Range;
 
 mod texs;
 pub use texs::bound_texture_cbuf;
+pub mod xmad;
 
 // Measured on GM20B by the bench loop; the doubles, HSET2, HSETP2 and HMNMX2 were not timed and keep NAK's guess.
 pub fn instr_latency(_sm: u8, op: &Op, dst_idx: usize) -> u32 {
@@ -3446,6 +3447,7 @@ macro_rules! sm50_op_match {
             Op::I2I($x) => $y,
             Op::IMad($x) => $y,
             Op::IMul($x) => $y,
+            Op::Xmad($x) => $y,
             Op::IMnMx($x) => $y,
             Op::ISetP($x) => $y,
             Op::Tex($x) => $y,

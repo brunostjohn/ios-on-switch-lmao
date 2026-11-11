@@ -116,6 +116,7 @@ pub fn side_effect_type(op: &Op) -> SideEffect {
         | Op::PopC(_)
         | Op::IMad(_)
         | Op::IMul(_)
+        | Op::Xmad(_)
         | Op::BMsk(_)
         | Op::IAbs(_)
         | Op::IAdd2(_)
@@ -280,6 +281,7 @@ pub fn estimate_variable_latency(sm: &ShaderModelInfo, op: &Op) -> u32 {
             assert!(sm.sm() < 70);
             86
         }
+        Op::Xmad(_) => 6,
 
         // Conversions
         Op::F2F(_) | Op::F2I(_) | Op::I2F(_) | Op::I2I(_) | Op::FRnd(_) => 15,

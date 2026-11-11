@@ -175,6 +175,8 @@ def alu(name: str, w: int, lane: Lane, inputs: Inputs) -> None:  # noqa: C901, P
         y = b - (1 << 32) if sb and b & 0x80000000 else b
         p = x * y
         lane.w(d, (p >> 32) if high else p)
+    elif name in ('XMAD_reg', 'XMAD_imm'):
+        lane.w(d, xmad(name, w, lane, a))
     elif base == 'BFE':
         r = operand_b(lane, w, name, inputs, i20)
         lane.w(d, bfe(a, r & 0xFF, (r >> 8) & 0xFF, bool(bits(w, 48, 1)), bool(bits(w, 40, 1))))
@@ -235,6 +237,30 @@ def memory(base: str, w: int, lane: Lane, inputs: Inputs, d: int) -> None:
         result = inputs.texture(('suld', handle, coords))
     for k in range(count):
         lane.w(d + k, result[k % 4])
+
+
+def xmad(name: str, w: int, lane: Lane, a: int) -> int:
+    """Run XMAD's register and immediate forms (nv50_ir emitXMAD's layout, yuzu's semantics); not .X, .CC or CSFU."""
+    if bits(w, 38, 1) or bits(w, 47, 1) or bits(w, 50, 3) == 3:
+        raise UnsupportedError('XMAD .X, .CC or CSFU')
+    b = bits(w, 20, 16) if name == 'XMAD_imm' else lane.r(bits(w, 20, 8))
+    b_hi = 0 if name == 'XMAD_imm' else bits(w, 35, 1)
+    c = lane.r(bits(w, 39, 8))
+
+    def half(v: int, hi: int, signed: int) -> int:
+        h = (v >> 16 if hi else v) & 0xFFFF
+        return h - 0x10000 if signed and h & 0x8000 else h
+
+    product = half(a, bits(w, 53, 1), bits(w, 48, 1)) * half(b, b_hi, bits(w, 49, 1))
+    if bits(w, 36, 1):
+        product <<= 16
+    c = {0: c, 1: c & 0xFFFF, 2: c >> 16, 4: (b << 16) + c}.get(bits(w, 50, 3))
+    if c is None:
+        raise UnsupportedError('XMAD mode')
+    out = (product + c) & 0xFFFFFFFF
+    if bits(w, 37, 1):
+        out = (out & 0xFFFF) | (b & 0xFFFF) << 16
+    return out
 
 
 def bfe(v: int, pos: int, length: int, signed: bool, reverse: bool) -> int:

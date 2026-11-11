@@ -107,6 +107,16 @@ py_test(
     ],
 )
 
+py_test(
+    name = "xmad_test",
+    size = "small",
+    srcs = ["xmad_test.py"],
+    deps = [
+        ":interp",
+        ":isa",
+    ],
+)
+
 py_binary(
     name = "blendcheck",
     srcs = ["blendcheck.py"],
