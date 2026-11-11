@@ -8,17 +8,27 @@
 #define TEGRA_NVENC_H
 #include <stddef.h>
 #include <stdint.h>
+#include <kern/task.h>
 #include "TegraNVENCABI.h"
 #include "../../kits/SwitchDMA/SwitchDMAPages.h"
 
 struct switch_dma_buffer;
 
+struct switch_gpu_backing;
+
 // One buffer NVENC reads or writes: any RAM pages, mapped at `iova` in NVENC's address space, 64 KiB granular, zeroed
-// and clean in the caches when allocated.
+// and clean in the caches when allocated. Its backing is what another engine writing it (VIC, an input picture) is
+// ordered by; the pages and the mapping go when the last reference to it does.
 struct TegraNVENCBlock {
     uint64_t iova, size;
     uint8_t *va;
     switch_dma_pages pages;  // the memory a client maps, and its page list
+    switch_gpu_backing *backing;
+};
+
+// Another engine's syncpoint threshold a job's stream waits for on the hardware before its methods.
+struct TegraNVENCAfter {
+    uint32_t syncpt, threshold;
 };
 
 // Resolves a submit's buffer handle; every user client supplies its own.
@@ -41,11 +51,15 @@ int tegra_nvenc_buffer_alloc(uint64_t size, TegraNVENCBlock *block);
 void tegra_nvenc_buffer_free(TegraNVENCBlock *block);  // only once no job can touch it
 void tegra_nvenc_memory_usage(uint64_t *limit, uint64_t *free);
 
-// Checks a submit (TegraNVENCCheck.h), cleans its CPU-written ranges, copies its setup into kernel memory, writes 0
-// in the address methods of features it leaves off and queues it on host1x channel 0. Returns 0 and the job's fence,
-// or a negative errno-style value.
-int tegra_nvenc_run(const TegraNVENCSubmit *submit, TegraNVENCResolve resolve, void *context, uint32_t *fence,
-                    const char **why);
+// Checks a submit (TegraNVENCCheck.h): 0, or -22 with the reason.
+int tegra_nvenc_check_submit(const TegraNVENCSubmit *submit, TegraNVENCResolve resolve, void *context,
+                             const char **why);
+// Checks a submit, cleans its CPU-written ranges, copies its setup into kernel memory, writes 0 in the address methods
+// of features it leaves off and queues it on host1x channel 0, after `after` when given. Returns 0 and the job's
+// fence, or a negative errno-style value.
+int tegra_nvenc_run(const TegraNVENCSubmit *submit, TegraNVENCResolve resolve, void *context,
+                    const TegraNVENCAfter *after, uint32_t *fence, const char **why);
+uint32_t tegra_nvenc_syncpt(void);  // the job fences' syncpoint
 // Sleeps until the fence is reached (syncpoint interrupt), bounded per queued job. Past that bound the jobs in flight
 // are cancelled (-5) and the engine is reset for the next one.
 int tegra_nvenc_wait(uint32_t fence);
@@ -57,5 +71,11 @@ const char *tegra_nvenc_app_dump(volatile uint8_t *nvenc, uint32_t codec);
 
 int tegra_nvenc_publish(void);  // E3
 }
+
+// TegraNVENCSource.cpp: a checked submit's source surface written into its input buffer by VIC. 0 and what the job
+// waits for, or a negative errno-style value and the reason. `last`: the connection's last job's fence, if any.
+bool tegra_nvenc_source_ready(void);
+int tegra_nvenc_source(const TegraNVENCSubmit *submit, TegraNVENCResolve resolve, void *context, task_t task,
+                       const uint32_t *last, TegraNVENCAfter *after, const char **why);
 
 #endif

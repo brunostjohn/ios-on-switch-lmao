@@ -38,8 +38,9 @@ void completed(void *context, int status)
     completion(owner, status);
     release(work);
 }
+}  // namespace
 
-bool pitchLayout(switch_gpu_backing *backing, uint64_t extent)
+bool switch_vic_pitch_backing(switch_gpu_backing *backing, uint64_t extent)
 {
     switch_gpu_backing_info info = {};
     switch_gpu_backing_describe(backing, &info);
@@ -54,7 +55,6 @@ bool pitchLayout(switch_gpu_backing *backing, uint64_t extent)
     }
     return true;
 }
-}  // namespace
 
 int switch_vic_transform(const TegraVICSurface *source, const TegraVICSurface *destination, const TegraVICPlan *plan,
                          uint32_t chromaSite, void (*completion)(void *, int), void *context, SwitchVICEvents *events)
@@ -86,10 +86,10 @@ int switch_vic_transform(const TegraVICSurface *source, const TegraVICSurface *d
     const uint64_t destinationExtent = tegra_vic_surface_extent(&destination->desc);
     const uint64_t sourceExtent = plan->readsSource ? tegra_vic_surface_extent(&source->desc) : 0;
     if (destinationExtent > UINT64_MAX - work->access[1].offset ||
-        !pitchLayout(output, work->access[1].offset + destinationExtent) ||
+        !switch_vic_pitch_backing(output, work->access[1].offset + destinationExtent) ||
         (plan->readsSource && !work->native.owner &&
          (sourceExtent > UINT64_MAX - work->access[0].offset ||
-          !pitchLayout(input, work->access[0].offset + sourceExtent))) ||
+          !switch_vic_pitch_backing(input, work->access[0].offset + sourceExtent))) ||
         (plan->readsSource && (input == output || work->native.logical == output))) {
         release(work);
         return 0;

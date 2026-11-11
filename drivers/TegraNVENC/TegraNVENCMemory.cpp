@@ -1,12 +1,14 @@
 // SPDX-License-Identifier: BSD-2-Clause-Patent
 // NVENC's memory, behind the MC SMMU (ASID 122, drivers/TegraSMMU/TegraSMMUEngine.h), as NVDEC's: every buffer a session
-// asks for is any RAM pages, wired and mapped into NVENC's window when allocated and unmapped when freed; the firmware,
+// asks for is any RAM pages, wired and mapped into NVENC's window when allocated, and a backing VIC can write as an
+// input picture; it is unmapped once the client freed it and VIC holds it no longer. The firmware,
 // the setup slots and the scratch buffer are identity-mapped, since the driver points methods at them by physical
 // address. What all sessions together may wire is capped (kWiredLimit).
 #include <IOKit/IOLib.h>
 #include "TegraNVENC.h"
 #include "../TegraSMMU/TegraSMMU.h"
 #include "../TegraSMMU/TegraSMMUEngine.h"
+#include "../TegraGM20B/SwitchGpuBacking.h"
 #include "../../kits/SwitchDMA/SwitchDMABuffer.h"
 
 namespace {
@@ -22,6 +24,20 @@ const TegraSMMUSwgroup kGroups[] = {
 
 TegraSMMUEngine gSpace;
 uint64_t gWired;  // atomic: bytes of every live buffer
+
+struct Allocation {
+    switch_dma_pages pages;
+    uint64_t iova, bytes;
+};
+
+void releaseAllocation(void *context)
+{
+    auto *allocation = static_cast<Allocation *>(context);
+    gSpace.unmap(allocation->iova, allocation->pages.count);
+    switch_dma_pages_free(&allocation->pages);
+    __atomic_sub_fetch(&gWired, allocation->bytes, __ATOMIC_RELAXED);
+    IODelete(allocation, Allocation, 1);
+}
 }  // namespace
 
 extern "C" int tegra_nvenc_memory_init(const switch_dma_buffer *firmware, const switch_dma_buffer *setup,
@@ -83,6 +99,23 @@ extern "C" int tegra_nvenc_buffer_alloc(uint64_t size, TegraNVENCBlock *block)
     }
     block->size = bytes;
     block->va = block->pages.va;
+    auto *allocation = IONew(Allocation, 1);
+    if (allocation) {
+        *allocation = {block->pages, block->iova, bytes};
+        block->backing =
+            switch_gpu_backing_register(block->pages.pages, block->pages.count, 0, allocation, releaseAllocation);
+    }
+    if (!block->backing) {
+        if (allocation) {
+            releaseAllocation(allocation);
+        } else {
+            gSpace.unmap(block->iova, block->pages.count);
+            switch_dma_pages_free(&block->pages);
+            __atomic_sub_fetch(&gWired, bytes, __ATOMIC_RELAXED);
+        }
+        *block = {};
+        return -12;
+    }
     return 0;
 }
 
@@ -90,9 +123,7 @@ extern "C" void tegra_nvenc_buffer_free(TegraNVENCBlock *block)
 {
     if (!block->iova)
         return;
-    gSpace.unmap(block->iova, block->pages.count);
-    switch_dma_pages_free(&block->pages);
-    __atomic_sub_fetch(&gWired, block->size, __ATOMIC_RELAXED);
+    switch_gpu_backing_release(block->backing);
     *block = {};
 }
 

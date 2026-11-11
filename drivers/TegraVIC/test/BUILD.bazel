@@ -390,6 +390,38 @@ host_test(
     deps = [":backing_kernel"],
 )
 
+# An encoder's input picture written by VIC (SwitchVICEncodeInput.cpp): block-linear output at the buffer's planes, the
+# region 1:1 at the origin, a checked read and a recorded write, after the encoder's last job.
+host_test(
+    name = "switch_vic_encode_input_test",
+    srcs = [
+        "switch_vic_encode_input_test.cpp",
+        "//drivers/TegraVIC:SwitchVICEncodeInput.h",
+        "//drivers/TegraVIC:SwitchVICTransform.h",
+        "//drivers/TegraVIC:SwitchVICSurfaceAccess.h",
+        "//drivers/TegraVIC:SwitchNativeSurface.h",
+        "//drivers/TegraVIC:SwitchNativePicture.h",
+        "//drivers/TegraVIC:SwitchNativeVICImage.h",
+        "//drivers/TegraVIC:SwitchVICPicture.h",
+        "//drivers/TegraVIC:SwitchVICJobs.h",
+        "//drivers/TegraVIC:SwitchVICEvents.h",
+        "//drivers/TegraVIC:SwitchVICSemantics.h",
+        "//drivers/TegraVIC:TegraVICRequest.h",
+        "//drivers/TegraVIC:SwitchSurfaceColor.h",
+        "//drivers/TegraGM20B:SwitchGpuSharedEvent.h",
+        "//drivers/TegraVIC:SwitchVICQueue.h",
+        "//drivers/TegraVIC:SwitchVICMapping.h",
+        "//drivers/TegraVIC:TegraVIC.h",
+        "//drivers/TegraVIC:TegraVICSurface.h",
+        "//drivers/TegraVIC:TegraVICConfig.h",
+        "//drivers/TegraVIC:TegraVICFormats.h",
+        "//drivers/TegraGM20B:SwitchGpuBacking.h",
+        "//kits/SwitchDMA:SwitchDcache.h",
+    ],
+    additional_compiler_inputs = ["//drivers/TegraVIC:SwitchVICEncodeInput.cpp"],
+    deps = [":backing_kernel"],
+)
+
 
 host_test(
     name = "switch_vic_access_test",

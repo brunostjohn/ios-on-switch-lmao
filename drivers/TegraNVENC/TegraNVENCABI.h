@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: BSD-2-Clause-Patent
-// TegraNVENC user client ABI, v3 (kernel: TegraNVENCUserClient.cpp; client: SwitchVideoEncoders/AVE).
+// TegraNVENC user client ABI, v4 (kernel: TegraNVENCUserClient.cpp; client: SwitchVideoEncoders/AVE).
 //
 // The service is "TegraNVENC" (IOServiceMatching), published by default once NVENC answers (E3). Its user
 // client's class is named AppleAVE2UserClient, the client class of iPad7,1's own encoder (AppleAVE2Driver, not loaded
@@ -26,13 +26,17 @@
 //     wait itself (timeout_us is ignored); once published, a job past that bound is cancelled: it and the jobs queued
 //     behind it fail, the engine is reset, and the next job runs.
 //
+//   * An input picture can come from an IOSurface of the calling task instead (TEGRA_NVENC_FEATURE_SURFACE_INPUT):
+//     the submit names it (TegraNVENCSource), VIC writes it into the input buffer in the layout input_cfg states, and
+//     NVENC's job waits for VIC's on the hardware. The CPU neither copies it nor waits.
+//
 // TegraNVENCInfo says how the firmware reads the input picture, how it addresses chroma planes, and whether P pictures
 // are on.
 #ifndef TEGRA_NVENC_ABI_H
 #define TEGRA_NVENC_ABI_H
 #include <stdint.h>
 
-#define TEGRA_NVENC_ABI_VERSION  3
+#define TEGRA_NVENC_ABI_VERSION  4
 #define TEGRA_NVENC_OPEN_TYPE    0x4e45       // 'NE'
 #define TEGRA_NVENC_TUNNEL_MAGIC 0x4e45544eu  // 'NETN'
 #define TEGRA_NVENC_TUNNEL_PROBE 0xffffffffu
@@ -78,12 +82,16 @@ typedef struct {
     uint32_t abi_version, nvenc_version;  // nvenc_version 0x50: NVENC 5.0 (T210)
     uint32_t codecs;                      // bit n: TEGRA_NVENC_CODEC_* n is accepted by Submit
     uint32_t max_width, max_height, max_mbs;
-    uint32_t input_layout;  // TEGRA_NVENC_LAYOUT_*
-    uint32_t chroma_mode;   // TEGRA_NVENC_CHROMA_*
-    uint32_t p_frames;      // 1: P pictures predicted from NVENC's own reconstruction; 0: intra only
-    uint32_t reserved;
+    uint32_t input_layout;               // TEGRA_NVENC_LAYOUT_*
+    uint32_t chroma_mode;                // TEGRA_NVENC_CHROMA_*
+    uint32_t p_frames;                   // 1: P pictures predicted from NVENC's own reconstruction; 0: intra only
+    uint32_t features;                   // TEGRA_NVENC_FEATURE_*
     uint64_t memory_limit, memory_free;  // what every session's buffers together may wire, and what is left
 } TegraNVENCInfo;
+
+enum {
+    TEGRA_NVENC_FEATURE_SURFACE_INPUT = 1u << 0,  // Submit takes a TegraNVENCSource into a block-linear input
+};
 
 typedef struct {
     uint64_t size;
@@ -122,6 +130,18 @@ enum {
 #define TEGRA_NVENC_MAX_RANGES  4
 #define TEGRA_NVENC_MAX_SETUP   2048
 
+// The input picture from an IOSurface of the calling task: its region at (x, y), width x height pixels, written by VIC
+// at the origin of the buffer IN_CUR_PIC and CHROMA_U relocate into (both the same buffer), as NV12 laid out as
+// input_cfg states (block linear or pitch, not 16x16 tiles). The rest of the coded picture keeps what the buffer holds.
+// surface_id 0: the input is what the CPU wrote.
+typedef struct {
+    uint32_t surface_id;
+    uint32_t x, y, width, height;
+    uint32_t format;  // '420v' or '420f': the range NVENC codes; a Y'CbCr source keeps its matrix
+    uint32_t matrix;  // an RGB source's: 0 BT.601, 1 BT.709, 2 BT.2020
+    uint32_t reserved;
+} TegraNVENCSource;
+
 typedef struct {
     uint32_t codec;  // TEGRA_NVENC_CODEC_*
     uint32_t entry_count, clean_count;
@@ -129,6 +149,7 @@ typedef struct {
     TegraNVENCEntry entries[TEGRA_NVENC_MAX_ENTRIES];  // no SET_IN_DRV_PIC_SETUP: the kernel adds it
     TegraNVENCRange clean[TEGRA_NVENC_MAX_RANGES];
     uint8_t setup[TEGRA_NVENC_MAX_SETUP];
+    TegraNVENCSource source;
 } TegraNVENCSubmit;
 
 typedef struct {
@@ -143,7 +164,7 @@ typedef struct {
 
 #ifdef __cplusplus
 static_assert(sizeof(TegraNVENCEntry) == 12, "entry");
-static_assert(sizeof(TegraNVENCSubmit) == 16 + 12 * 48 + 16 * 4 + 2048, "submit");
+static_assert(sizeof(TegraNVENCSubmit) == 16 + 12 * 48 + 16 * 4 + 2048 + 32, "submit");
 static_assert(sizeof(TegraNVENCSubmit) + 8 <= 4096, "submit travels inline");
 #else
 _Static_assert(sizeof(TegraNVENCSubmit) + 8 <= 4096, "submit travels inline");

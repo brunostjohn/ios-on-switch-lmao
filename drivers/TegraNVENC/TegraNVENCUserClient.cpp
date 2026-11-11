@@ -22,6 +22,7 @@
 #include "TegraNVENC.h"
 #include "TegraNVENCABI.h"
 #include "../../kits/SwitchDMA/SwitchDcache.h"
+#include "../../kits/SwitchRefusal/SwitchRefusal.h"
 
 namespace {
 constexpr uint32_t kMaxBuffers = 64, kMaxConnections = 16;
@@ -214,6 +215,7 @@ IOReturn AppleAVE2UserClient::run(uint32_t method, const void *in, uint32_t inSi
         info->input_layout = TEGRA_NVENC_LAYOUT_TILED16;
         info->chroma_mode = TEGRA_NVENC_CHROMA_OFFSET;
         info->p_frames = 1;
+        info->features = tegra_nvenc_source_ready() ? TEGRA_NVENC_FEATURE_SURFACE_INPUT : 0;
         tegra_nvenc_memory_usage(&info->memory_limit, &info->memory_free);
         break;
     }
@@ -261,9 +263,25 @@ IOReturn AppleAVE2UserClient::run(uint32_t method, const void *in, uint32_t inSi
         break;
     }
     case TegraNVENCMethodSubmit: {
+        const auto *submit = static_cast<const TegraNVENCSubmit *>(in);
         uint32_t fence = 0;
         const char *why = nullptr;
-        const int err = tegra_nvenc_run(static_cast<const TegraNVENCSubmit *>(in), resolve, this, &fence, &why);
+        TegraNVENCAfter after = {};
+        const bool sourced = submit->source.surface_id != 0;
+        if (sourced) {
+            int err = tegra_nvenc_check_submit(submit, resolve, this, &why);
+            if (!err)
+                err = tegra_nvenc_source(submit, resolve, this, current_task(), submitted_ ? &lastFence_ : nullptr,
+                                         &after, &why);
+            if (err) {
+                // The client copies the picture itself on any refusal here; the reason is its line too.
+                switch_refusal("TegraNVENC", why ? why : "source surface", "the input picture is not VIC's: %s",
+                               why ? why : "refused");
+                ret = kIOReturnUnsupported;
+                break;
+            }
+        }
+        const int err = tegra_nvenc_run(submit, resolve, this, sourced ? &after : nullptr, &fence, &why);
         if (err) {
             static volatile int logged;
             if (why &&
