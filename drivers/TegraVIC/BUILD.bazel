@@ -44,6 +44,7 @@ kernel_driver(
         "SwitchVICSurfaceAccess.cpp",
         "SwitchVICBouncePool.cpp",
         "SwitchVICBounceSubmit.cpp",
+        "SwitchVICPitchProbe.cpp",
         "TegraVICPresent.cpp",
         "TegraVICSurface.cpp",
         "TegraVICUserClient.cpp",

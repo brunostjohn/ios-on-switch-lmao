@@ -33,6 +33,14 @@ host_test(
 )
 
 host_test(
+    name = "switch_vic_pitch_probe_test",
+    srcs = [
+        "switch_vic_pitch_probe_test.cpp",
+        "//drivers/TegraVIC:SwitchVICPitchProbe.h",
+    ],
+)
+
+host_test(
     name = "switch_vic_stats_test",
     srcs = [
         "switch_vic_stats_test.cpp",

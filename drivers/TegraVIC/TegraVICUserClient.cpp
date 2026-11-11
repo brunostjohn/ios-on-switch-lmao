@@ -555,8 +555,12 @@ IOReturn tegra_vic_external_method(const IOUserClient *self, uint32_t selector, 
         return a->structureInputSize == 0x18 ? kIOReturnSuccess : kIOReturnBadArgument;
     case 4:  // custom filter coefficients: accepted, VIC uses its own filter
         return a->structureInputSize == 0x20 ? kIOReturnSuccess : kIOReturnBadArgument;
-    case 6:
-        return kIOReturnNotPermitted;  // kernel tests (Apple's: release kernels refuse)
+    case 6:  // kernel tests (Apple's: release kernels refuse)
+#if TEGRA_VIC_STATS
+        return switch_vic_pitch_probe_call(a);
+#else
+        return kIOReturnNotPermitted;
+#endif
     case 0:                            // capture
     case 2:                            // abort transfers
     case 3:                            // abort captures
