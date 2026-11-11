@@ -55,6 +55,9 @@ class Gpu:
         self.table, self.noise, self.random = table, noise, random.Random(seed)
 
     def run(self, e: dict) -> Outcome:
+        program = e.get('program')
+        if program and not protocol.reads_position_w(protocol.unb64(program.get('sph', ''))):
+            return Outcome('killed', 'the kernel killed the channel')
         try:
             per_draw, texel_of = getattr(self, '_' + e['kind'])(e)
         except (ValueError, KeyError, execute.UnsupportedError) as error:

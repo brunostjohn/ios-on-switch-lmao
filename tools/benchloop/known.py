@@ -36,7 +36,7 @@ KNOWN_CODE_WORDS = (
     NOP,
 )
 KNOWN_KERNEL_WORDS = (schedule(15, 1, 1), EXIT, NOP, NOP)
-KNOWN_SPH_WORDS = (2 | 3 << 5 | 5 << 10 | 1 << 14 | 1 << 17, *([0] * 17), 0xF, 0)
+KNOWN_SPH_WORDS = (2 | 3 << 5 | 5 << 10 | 1 << 14 | 1 << 17, 0, 0, 0, 0, 1 << 31, *([0] * 12), 0xF, 0)
 
 
 def words64(words: tuple[int, ...]) -> bytes:

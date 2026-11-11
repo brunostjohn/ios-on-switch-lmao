@@ -29,7 +29,11 @@ class KnownTest(unittest.TestCase):
                 'movCbuf(3, 1, 12), kExit, kNop,'
             ),
             'kKnownKernel[] = {schedule(15, 1, 1), kExit, kNop, kNop};',
-            '{2 | 3 << 5 | 5 << 10 | 1 << 14 | 1 << 17, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xf, 0};',
+            'kPositionW = 1u << 31;',
+            (
+                '{2 | 3 << 5 | 5 << 10 | 1 << 14 | 1 << 17, 0, 0, 0, 0, kPositionW, '
+                '0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xf, 0};'
+            ),
             'kKnownData[4] = {0x3f800000, 0x3f000000, 0x3e800000, 0x40000000};',
         ):
             self.assertIn(''.join(line.split()), text)
@@ -55,6 +59,7 @@ class KnownTest(unittest.TestCase):
         self.assertEqual(words[0] & 0x1F, 2)
         self.assertEqual(words[0] >> 10 & 0xF, 5)
         self.assertEqual(words[18], 0xF)
+        self.assertEqual(words[5], 1 << 31, 'position W: the GPU traps a pixel header without it')
 
 
 if __name__ == '__main__':

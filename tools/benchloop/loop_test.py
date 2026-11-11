@@ -5,12 +5,13 @@ process died mid-experiment records it and runs the rest.
 """
 
 import json
+import struct
 import tempfile
 import unittest
 from pathlib import Path
 
-from tools.benchloop import doctor, fakedevice, fakegpu, golden, loop, protocol, report, session, transport
-from tools.benchloop.sm53 import latency
+from tools.benchloop import doctor, fakedevice, fakegpu, golden, known, loop, protocol, report, session, transport
+from tools.benchloop.sm53 import latency, sph
 
 
 class LatencyLoopTest(unittest.TestCase):
@@ -32,6 +33,24 @@ class CalibrationTest(unittest.TestCase):
     def test_calibration_passes_on_the_fake_device(self) -> None:
         ok, lines = doctor.proven_on_fake()
         self.assertTrue(ok, lines)
+
+
+class PositionWTest(unittest.TestCase):
+    def experiment(self, sph: bytes) -> dict:
+        e = next(e for e in golden.golden_batch()['experiments'] if e['id'] == 'fragment')
+        return {**e, 'program': {**e['program'], 'sph': protocol.b64(sph)}}
+
+    def test_a_pixel_header_without_position_w_is_killed_and_refused(self) -> None:
+        words = list(struct.unpack('<20I', known.KNOWN_SPH))
+        words[5] = 0
+        e = self.experiment(struct.pack('<20I', *words))
+        self.assertEqual(fakegpu.Gpu().run(e).status, 'killed')
+        with self.assertRaisesRegex(protocol.InvalidError, 'position W'):
+            protocol.validate_experiment(e)
+
+    def test_the_hosts_headers_read_position_w(self) -> None:
+        self.assertEqual(fakegpu.Gpu().run(self.experiment(known.KNOWN_SPH)).status, 'ok')
+        self.assertEqual(fakegpu.Gpu().run(self.experiment(sph.pixel())).status, 'ok')
 
 
 class ReuseTest(unittest.TestCase):

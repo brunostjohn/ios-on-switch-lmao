@@ -66,6 +66,11 @@ class SphTest(unittest.TestCase):
         self.assertEqual(f.read(h, 'GENERIC_IMAP_X', 1), f.values['GENERIC_IMAP_X_UNUSED'])
         self.assertEqual(f.read(sph.pixel(), 'IMAP_POSITION_X'), 0)
 
+    def test_position_w_is_always_read(self):
+        # NAK's from_nir: "Required on fragment shaders, otherwise it cause a trap" (the device's gr SHADER a0000800)
+        for h in (sph.pixel(), sph.pixel({0x80: 1}), sph.pixel({0x7C: 0})):
+            self.assertEqual(self.f.read(h, 'IMAP_POSITION_W'), 1)
+
 
 if __name__ == '__main__':
     unittest.main()

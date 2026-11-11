@@ -140,6 +140,10 @@ def estimated_ms(experiment: dict) -> float:
     return max(experiment.get('draws', [1])) * work / LANES_PER_CLOCK / CLOCK_HZ * 1e3
 
 
+def reads_position_w(sph: bytes) -> bool:
+    return bool(int.from_bytes(sph[20:24], 'little') & 1 << 31)
+
+
 def _program(program: object, field: str) -> None:
     _require(isinstance(program, dict), f'{field} is an object')
     code = unb64(program.get('code', ''))
@@ -148,7 +152,11 @@ def _program(program: object, field: str) -> None:
     _require(len(data) <= MAX_DATA and len(data) % 16 == 0, f'{field}.data: 16-byte multiples, at most 64 KiB')
     _count(program.get('gprs'), 1, 255, f'{field}.gprs')
     if field == 'program':
-        _require(len(unb64(program.get('sph', ''))) == SPH_BYTES, 'program.sph is 80 bytes')
+        sph = unb64(program.get('sph', ''))
+        _require(len(sph) == SPH_BYTES, 'program.sph is 80 bytes')
+        _require(
+            reads_position_w(sph), 'program.sph: a pixel header must read position W (bit 191), or the GPU traps it'
+        )
 
 
 def validate_experiment(e: dict) -> None:

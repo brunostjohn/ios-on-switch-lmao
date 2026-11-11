@@ -295,6 +295,13 @@ private:
     }
 };
 
+bool readsPositionW(const uint8_t *sph)
+{
+    uint32_t word5;
+    memcpy(&word5, sph + 20, sizeof word5);
+    return word5 & bench::kPositionW;
+}
+
 bool valid(const switch_bench_experiment &x, switch_bench_result &r)
 {
     const raw::FormatInfo *f = raw::formatInfo(x.format);
@@ -314,6 +321,8 @@ bool valid(const switch_bench_experiment &x, switch_bench_result &r)
         (!p.code || !p.code_bytes || p.code_bytes % 32 || p.code_bytes > 0x10000 || p.data_bytes % 16 ||
          p.data_bytes > 0x10000 || !p.gprs || p.gprs > 255 || (x.kind != SWITCH_BENCH_COMPUTE && !p.sph)))
         why = "program: code in whole bundles, data in 16-byte steps, both at most 64 KiB, 1..255 registers, an SPH";
+    else if (why.empty() && programmed && x.kind != SWITCH_BENCH_COMPUTE && !readsPositionW(p.sph))
+        why = "program.sph: a pixel header must read position W (bit 191), or the GPU traps it";
     if (why.empty())
         return true;
     fail(r, SWITCH_BENCH_INVALID, why);

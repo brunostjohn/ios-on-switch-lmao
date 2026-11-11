@@ -38,9 +38,11 @@ constexpr uint64_t kKnownCode[] = {
 
 constexpr uint64_t kKnownKernel[] = {schedule(15, 1, 1), kExit, kNop, kNop};
 
-// SPH v3 type 2: a pixel program (shader type 5), MRT enable as NAK sets it, SASS version 1, colour 0's RGBA written
+// SPH v3 type 2: a pixel program (shader type 5), MRT enable as NAK sets it, SASS version 1, colour 0's RGBA written.
+// Position W is read (bit 191) as NAK's from_nir always reads it: a pixel header without it traps the channel.
+constexpr uint32_t kPositionW = 1u << 31;
 constexpr uint32_t kKnownSph[20] = {
-    2 | 3 << 5 | 5 << 10 | 1 << 14 | 1 << 17, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xf, 0};
+    2 | 3 << 5 | 5 << 10 | 1 << 14 | 1 << 17, 0, 0, 0, 0, kPositionW, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xf, 0};
 
 // 1.0, 0.5, 0.25 and 2.0 as float bits: an rgba32float target stores them bit for bit
 constexpr uint32_t kKnownData[4] = {0x3f800000, 0x3f000000, 0x3e800000, 0x40000000};

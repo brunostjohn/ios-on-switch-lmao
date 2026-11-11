@@ -9,6 +9,7 @@ SPH_VERSION = 3
 SHADER_TYPE_PIXEL = 5
 SASS_VERSION = 1
 IMAP_SYSTEM_VALUES_AB = 160
+IMAP_POSITION_W = 191
 IMAP_GENERIC = 192
 OMAP_TARGET = 576
 OMAP_SAMPLE_MASK = 608
@@ -29,7 +30,9 @@ def pixel(attributes: dict[int, int] | None = None, targets: int = 0xF, kills: b
     """Give the header of a fragment program that reads `attributes` (byte address: IPA frequency).
 
     `targets` is the output map, four bits (RGBA) per render target from target 0 up. MRT is enabled as NAK always
-    enables it: each target takes its own registers rather than a broadcast of the first.
+    enables it: each target takes its own registers rather than a broadcast of the first. Position W is always in the
+    input map, as NAK's from_nir puts it: the GPU traps a pixel header without it (gr DS_HWW_ESR SPH error 11, pixel
+    stage), which kills the channel.
     """
     h = _put(0, 0, 5, SPH_TYPE_PS)
     h = _put(h, 5, 5, SPH_VERSION)
@@ -37,6 +40,7 @@ def pixel(attributes: dict[int, int] | None = None, targets: int = 0xF, kills: b
     h = _put(h, 14, 1, 1)
     h = _put(h, 15, 1, int(kills))
     h = _put(h, 17, 4, SASS_VERSION)
+    h |= 1 << IMAP_POSITION_W
     for addr, freq in (attributes or {}).items():
         if addr < FIRST_GENERIC:
             h |= 1 << (IMAP_SYSTEM_VALUES_AB + addr // 4)
