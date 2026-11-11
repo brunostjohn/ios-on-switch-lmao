@@ -13,6 +13,8 @@ import Metal
 /// - cpu_us_<label>: per command buffer, the encode and the commit call (raw encodes and submits inside commit).
 /// - stall_us_<label>: per command buffer, the host's time after the commit that the GPU time does not account for (the
 ///   wait for the GPU and the completion's latency), where the GPU time is in nanoseconds.
+/// - ilk_<label> (raw): the timed runs' draws that took the pixel interlock, which InterlockBound holds to about m2v's
+///   time for the same state.
 /// On the raw facade a state the pack lacks is drawn by m2v until the runtime makes its record: the scene waits for it
 /// (warm_<label> runs) and leaves out a state that never reaches the raw path, naming its path.
 /// On the process's default device the wide blur (narrow_blur_27) also draws `dumpBuffers` untimed command buffers
@@ -89,10 +91,12 @@ struct CAHotStatesScene: GPUScene {
                     try await Task.sleep(nanoseconds: 50_000_000)
                 }
             }
+            let before = RawFacade.counters(of: gpu.device)
             var runs: [GPU.Timing] = []
             for _ in 0..<Self.runs {
                 runs.append(try await gpu.run(tolerateError: true, draw))
             }
+            let after = RawFacade.counters(of: gpu.device)
             if processDefault && line.fragment.name == Self.wideBlur {
                 let connection = GPUConnection()
                 let buffers = try (0..<Self.dumpBuffers).map { _ in try gpu.commit(draw) }
@@ -124,9 +128,16 @@ struct CAHotStatesScene: GPUScene {
                 result.metrics.set("stall_us_" + label, Stats.percentile(stalls, 0.5), digits: 0)
             }
             if warm > 0 { result.metrics.set("warm_" + label, warm) }
+            if let interlocked = after["interlock_draws"] {
+                result.metrics.set("ilk_" + label, interlocked - (before["interlock_draws"] ?? 0))
+            }
         }
         if timed == 0 { result.notes.append("no hot state made from this QuartzCore") }
         if processDefault { result.metrics.merge(dumped) }
         return result
+    }
+
+    func judge(_ metrics: inout Metrics) -> [String] {
+        InterlockBound.judge(&metrics)
     }
 }

@@ -57,6 +57,7 @@ public struct GPUSceneTest: HWTest {
         for (key, values) in hashes.sorted(by: { $0.key < $1.key }) where values.count > 1 {
             reasons.append("raw and m2v drew different pixels (\(key))")
         }
+        reasons += scene.judge(&metrics)
         if saved > 0 { metrics.set("pngs", saved) }
         if reasons.isEmpty { return .pass(metrics, proof: primary.proof, detail: LogLine.fitted(notes)) }
         return .fail(LogLine.fitted(reasons), metrics, proof: primary.proof)

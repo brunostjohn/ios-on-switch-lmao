@@ -92,7 +92,7 @@ bool TextureTransfers::copy(Kernel &kernel, std::mutex &allocationLock, const Te
     if (slot.memory.bytes < need) {
         std::lock_guard<std::mutex> allocate(allocationLock);
         Bo replacement;
-        if (!kernel.allocControl(std::max<uint64_t>(0x10000, need), replacement))
+        if (!kernel.allocControl(std::max<uint64_t>(0x10000, need), replacement, ControlUse::TransferSlot))
             return false;
         kernel.free(slot.memory);
         slot.memory = replacement;

@@ -17,6 +17,7 @@
 #include "raw_surfaces.h"
 #include "raw_shared_events.h"
 #include "raw_cpu_completion.h"
+#include "raw_control_memory.h"
 
 namespace raw {
 
@@ -54,11 +55,12 @@ public:
         return info_;
     }
 
+    // `control`: from the kernel's control reserve (TegraGM20BBoControl, coherent kind-0 memory only)
     bool alloc(uint64_t bytes, bool coherent, Bo &bo, uint32_t kind = 0, uint64_t align = 0x10000,
-               bool gpuVolatile = false);
-    bool allocControl(uint64_t bytes, Bo &bo)
+               bool gpuVolatile = false, bool control = false);
+    bool allocControl(uint64_t bytes, Bo &bo, ControlUse use)
     {
-        return alloc(bytes, true, bo, 0, 0x10000, true);
+        return alloc(bytes, true, bo, 0, 0x10000, controlMapping(use) == ControlMapping::Volatile, true);
     }
     // Wires [addr, addr + bytes) of this task (whole pages) and binds them; bo.va/bo.cpu name addr itself.
     bool import(void *addr, uint64_t bytes, Bo &bo, uint32_t kind = 0, uint32_t surfaceId = 0);

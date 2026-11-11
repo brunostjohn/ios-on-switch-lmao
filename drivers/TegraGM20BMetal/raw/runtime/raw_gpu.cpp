@@ -396,7 +396,7 @@ bool Device::ownWords(const Ring &r, uint64_t at, uint64_t bytes) const
 bool Device::outgrow(Ring &r, uint32_t bytes, uint64_t &at)
 {
     Bo larger;
-    if (!k_.allocControl(std::max<uint64_t>(r.bo.bytes * 2, uint64_t(bytes) * 2), larger))
+    if (!k_.allocControl(std::max<uint64_t>(r.bo.bytes * 2, uint64_t(bytes) * 2), larger, ControlUse::Ring))
         return false;
     RAW_DIAGNOSTIC(stats.ringsOutgrown++);
     r.outgrown.push_back(r.bo);
@@ -506,12 +506,25 @@ bool Device::open(const char *packPath, uint64_t stack, std::string &err, Role r
 // which textures, samplers and states need before any submission. The render server's channel, heap and first chunks too.
 bool Device::init(std::string &err)
 {
-    if (!k_.allocControl(kTicCount * 32, tic_) || !k_.allocControl(kTscCount * 32, tsc_) ||
-        !k_.allocControl(0x1000, root_) || !k_.allocControl(0x10000, zero_) || !k_.allocControl(0x1000, tickets_) ||
-        !k_.allocControl(kColorTableBytes, colorTable_) || !k_.allocControl(kStampSlots * sizeof(StampSlot), stamps_)) {
+    if (!k_.allocControl(kTicCount * 32, tic_, ControlUse::TextureHeaders) ||
+        !k_.allocControl(kTscCount * 32, tsc_, ControlUse::SamplerHeaders) ||
+        !k_.allocControl(0x1000, root_, ControlUse::RootTable) ||
+        !k_.allocControl(0x10000, zero_, ControlUse::ZeroPage) ||
+        !k_.allocControl(0x1000, tickets_, ControlUse::InterlockTickets) ||
+        !k_.allocControl(kColorTableBytes, colorTable_, ControlUse::ColorTable) ||
+        !k_.allocControl(kStampSlots * sizeof(StampSlot), stamps_, ControlUse::Stamps)) {
         err = k_.error();
         return false;
     }
+#if SWITCH_RAW_DIAGNOSTICS
+    static std::once_flag ticketsLogged;
+    std::call_once(ticketsLogged, [this] {
+        os_log(os_log_create("com.brunostjohn.switch.TegraGM20BMetal", "raw"),
+               "raw: interlock tickets mapped %{public}s at 0x%llx",
+               tickets_.gpuVolatile ? "volatile (GPU L2 bypassed)" : "cached (GPU L2)",
+               (unsigned long long)tickets_.va);
+    });
+#endif
     heap_.bytes = kProgramWindow;
     heap_.va = heap_.vaBase = k_.reserveVa(kProgramWindow);
     if (!heap_.va) {
@@ -617,8 +630,8 @@ bool Device::openChannel(std::string &err)
         fence_ = &kNoFence;
         return false;
     };
-    if (!k_.allocControl(sizes_.push, push_.bo) || !k_.allocControl(sizes_.upload, upload_.bo) ||
-        !k_.channel(kEngines, channel_, fence_))
+    if (!k_.allocControl(sizes_.push, push_.bo, ControlUse::Ring) ||
+        !k_.allocControl(sizes_.upload, upload_.bo, ControlUse::Ring) || !k_.channel(kEngines, channel_, fence_))
         return undo(false);
     const uint32_t words = contextWords() + uint32_t(fx::twodInitWords());
     uint64_t va;
@@ -2212,7 +2225,7 @@ bool Device::createControlBuffer(uint64_t length, Buffer &buffer)
         length = 16;
     std::lock_guard<std::mutex> lock(lock_);
     Chunk chunk;
-    if (!k_.allocControl(length, chunk.bo))
+    if (!k_.allocControl(length, chunk.bo, ControlUse::Bytes))
         return false;
     chunk.memory = chunk.bo.cpu;
     chunk.bytes = chunk.used = chunk.bo.bytes;
@@ -3085,7 +3098,7 @@ void Device::growRing(Ring &r, uint64_t most)
     const bool grow = r.waited && r.bo.bytes < most;
     r.waited = false;
     Bo larger;
-    if (!grow || !k_.allocControl(std::min(r.bo.bytes * 2, most), larger))
+    if (!grow || !k_.allocControl(std::min(r.bo.bytes * 2, most), larger, ControlUse::Ring))
         return;
     grownOut_.push_back({r.bo, lastSeqno_});
     r.bo = larger;

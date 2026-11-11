@@ -101,10 +101,11 @@ bool Kernel::open(std::string &)
     info_.flags = TegraGM20BInfoSubmitAddress | TegraGM20BInfoKillRecord;
     return true;
 }
-bool Kernel::alloc(uint64_t bytes, bool coherent, Bo &bo, uint32_t, uint64_t, bool gpuVolatile)
+bool Kernel::alloc(uint64_t bytes, bool coherent, Bo &bo, uint32_t, uint64_t, bool gpuVolatile, bool control)
 {
     EXPECT_TRUE(coherent);
     EXPECT_TRUE(gpuVolatile);
+    EXPECT_TRUE(control);
     const uint64_t handle = ++fake->handle;
     auto memory = std::make_unique<uint8_t[]>(bytes);
     bo = {};

@@ -127,11 +127,38 @@ host_test(
 )
 
 host_test(
+    name = "raw_kernel_memory_test",
+    srcs = [
+        "raw_kernel_memory_test.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_control_memory.h",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_cpu_completion.h",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_encode_profile.h",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_kernel.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_kernel.h",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_shared_events.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_shared_events.h",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_surfaces.h",
+        "//drivers/TegraGM20B:TegraGM20BABI.h",
+        "//drivers/TegraGM20B:TegraGM20BLayout.h",
+    ],
+    copts = ["-Idrivers/TegraGM20B"],
+    cxx_std = "c++17",
+    data = ["//drivers/TegraGM20BMetal:raw/runtime/raw_gpu.cpp"],
+    linkopts = [
+        "-framework",
+        "IOKit",
+        "-framework",
+        "CoreFoundation",
+    ],
+)
+
+host_test(
     name = "raw_shared_events_test",
     srcs = [
         "raw_shared_events_test.cpp",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_batch.h",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_kernel.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_control_memory.h",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_kernel.h",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_cpu_completion.h",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_encode_profile.h",
@@ -520,6 +547,7 @@ host_test(
         "//drivers/TegraGM20B:TegraGM20BLayout.h",
         "//drivers/TegraGM20BMetal:raw/pack/nvdec_comp.h",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_comp.h",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_control_memory.h",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_kernel.h",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_cpu_completion.h",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_shared_events.h",
@@ -821,6 +849,7 @@ host_test(
         "//drivers/TegraGM20BMetal:raw/fx/fx_mip.cpp",
         "//drivers/TegraGM20B:TegraGM20BABI.h",
         "//drivers/TegraGM20B:TegraGM20BLayout.h",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_control_memory.h",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_kernel.h",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_kit.h",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_cpu_completion.h",
@@ -846,6 +875,7 @@ host_test(
         "//drivers/TegraGM20B:TegraGM20BABI.h",
         "//drivers/TegraGM20B:TegraGM20BLayout.h",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_host_access.h",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_control_memory.h",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_kernel.h",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_cpu_completion.h",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_shared_events.h",

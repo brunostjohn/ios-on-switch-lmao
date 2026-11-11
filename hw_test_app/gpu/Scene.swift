@@ -10,10 +10,13 @@ public protocol GPUScene: Sendable {
     /// The longest one run may take on one device.
     var timeout: TimeInterval { get }
     func run(_ gpu: GPU) async throws -> SceneResult
+    /// Failures found by comparing the devices' runs, whose metrics carry their device's prefix (raw_, m2v_).
+    func judge(_ metrics: inout Metrics) -> [String]
 }
 
 extension GPUScene {
     public var timeout: TimeInterval { 60 }
+    public func judge(_ metrics: inout Metrics) -> [String] { [] }
 }
 
 public struct SceneCheck: Sendable {

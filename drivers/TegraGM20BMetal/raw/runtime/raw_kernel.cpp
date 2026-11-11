@@ -223,11 +223,11 @@ bool Kernel::bind(uint64_t va, uint64_t handle, uint64_t range, uint32_t kind, b
     return true;
 }
 
-bool Kernel::alloc(uint64_t bytes, bool coherent, Bo &bo, uint32_t kind, uint64_t align, bool gpuVolatile)
+bool Kernel::alloc(uint64_t bytes, bool coherent, Bo &bo, uint32_t kind, uint64_t align, bool gpuVolatile, bool control)
 {
     bytes = (bytes + info_.page_size - 1) & ~uint64_t(info_.page_size - 1);
     TegraGM20BAbiBoAlloc a = {bytes, 12, coherent ? uint32_t(TegraGM20BBoCoherent) : 0u};
-    if (gpuVolatile && coherent && !kind)
+    if (control && coherent && !kind)
         a.flags |= TegraGM20BBoControl;
     TegraGM20BAbiBoAllocReply r = {};
     bo = {};
