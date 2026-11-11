@@ -8,6 +8,8 @@
 // memory (an internal job's writes may sit in the L2 past its fence otherwise). The CPU fills a slot's rows with
 // kGlassMemPoison before its submission, and the slot ends with a host semaphore release of its command buffer's cookie:
 // a slot without the cookie (its segment never ran) or a row still poisoned (its copy never landed) is not judged.
+// For a texture rebuilt in the command buffer, what its passes reached is kept (the first pass's load, the box its draws
+// covered) and a second row is read outside that box: memory nothing of this command buffer wrote.
 #pragma once
 #include <algorithm>
 #include <atomic>
@@ -17,15 +19,20 @@
 #include <mutex>
 #include <string>
 #include <unordered_map>
+#include <utility>
+#include <vector>
 #include "raw_nonfinite.h"
 
 namespace raw {
 
-constexpr uint32_t kGlassMemTexels = 32, kGlassMemItems = 16, kGlassMemSlots = 8;
-constexpr uint32_t kGlassMemItemBytes = kGlassMemTexels * 16, kGlassMemCookieBytes = 16;
+constexpr uint32_t kGlassMemTexels = 32, kGlassMemItems = 16, kGlassMemSlots = 8, kGlassMemRows = 2,
+                   kGlassMemReaches = 32;
+constexpr uint32_t kGlassMemRowBytes = kGlassMemTexels * 16, kGlassMemItemBytes = kGlassMemRows * kGlassMemRowBytes;
+constexpr uint32_t kGlassMemCookieBytes = 16;
 constexpr uint32_t kGlassMemSlotBytes = kGlassMemItems * kGlassMemItemBytes + kGlassMemCookieBytes;
 constexpr uint64_t kGlassMemArmMs = 20000;
 constexpr uint8_t kGlassMemPoison = 0xa5;
+constexpr size_t kGlassMemLine = 900;  // os_log keeps about 1 KiB of a line
 // Entries kept: a texture CA dropped without our seeing its destroy (a client's) ages out past this many
 constexpr size_t kGlassMemTracked = 512;
 
@@ -86,20 +93,58 @@ inline GlassMemRow glassMemRow(const uint8_t *row, uint32_t texels, uint32_t bpp
     return r;
 }
 
-// One sampled texture's row in a command buffer's record
+// What a command buffer's passes into one image reached: the first pass's load ('c', 'l', 'd'; 0: none seen) and the box
+// their draws covered (the render area where their draws were not counted)
+struct GlassMemReach {
+    char load = 0;
+    uint32_t x0 = 0, y0 = 0, x1 = 0, y1 = 0;
+};
+
+// One sampled texture's rows in a command buffer's record
 struct GlassMemItem {
-    uint64_t key = 0;  // its storage address (Texture::storageRange): a view's is its parent's
+    uint64_t key = 0;    // its storage address (Texture::storageRange): a view's is its parent's
+    uint64_t image = 0;  // the address of the image (level) sampled, which its passes name as their target
     uint32_t width = 0, height = 0, format = 0, levels = 1, level = 0, texels = 0, bpp = 0;
     uint8_t flags = 0;
-    char state[5] = "-";  // the sampling state's family (the "T..." term of its name)
-    bool rebuilt = false, moved = false;
-    uint64_t age = 0, events = 0;  // command buffers and memory events since its last write
+    char state[5] = "-";                                 // the sampling state's family (the "T..." term of its name)
+    bool rebuilt = false, moved = false, fresh = false;  // fresh: its first write ever is this command buffer's
+    uint64_t age = 0, events = 0;                        // command buffers and memory events since its last write
+    GlassMemReach reach;
+    bool outside = false;  // a second row was read outside the reach
+    uint32_t inX = 0, inY = 0, outX = 0, outY = 0;
 };
+
+// Where `it`'s rows are read: the first in the middle of what its passes reached (else of the image), the second outside
+// that box, below or above it, else beside it; false when the box leaves no room for a row outside it
+inline bool glassMemRowsAt(GlassMemItem &it)
+{
+    const GlassMemReach &r = it.reach;
+    const bool known = r.load && r.x1 > r.x0 && r.y1 > r.y0;
+    const uint32_t w = it.width, h = it.height, n = it.texels;
+    const auto across = [&](uint32_t centre) {
+        return std::min(centre > n / 2 ? centre - n / 2 : 0u, w - n);
+    };
+    it.inX = across(known ? (r.x0 + r.x1) / 2 : w / 2);
+    it.inY = std::min(known ? (r.y0 + r.y1) / 2 : h / 2, h - 1);
+    it.outside = known;
+    if (known && r.y1 < h)
+        it.outX = across(w / 2), it.outY = (r.y1 + h) / 2;
+    else if (known && r.y0 > 0)
+        it.outX = across(w / 2), it.outY = r.y0 / 2;
+    else if (known && r.x1 + n <= w)
+        it.outX = r.x1 + (w - r.x1 - n) / 2, it.outY = h / 2;
+    else if (known && r.x0 >= n)
+        it.outX = (r.x0 - n) / 2, it.outY = h / 2;
+    else
+        it.outside = false;
+    return it.outside;
+}
 
 struct GlassMemCb {
     uint64_t serial = 0, mach = 0, events = 0;
-    uint32_t seqno = 0, count = 0, dropped = 0;
+    uint32_t seqno = 0, count = 0, dropped = 0, reaches = 0;
     GlassMemItem items[kGlassMemItems];
+    std::pair<uint64_t, GlassMemReach> reach[kGlassMemReaches];
 };
 
 // The value a command buffer's slot's semaphore release writes: never 0, which a slot holds before its release lands
@@ -137,9 +182,27 @@ public:
     {
         std::lock_guard<std::mutex> l(lock_);
         Write &w = writes_[key];
+        if (!w.first)
+            w.first = serial;
         w.serial = serial;
         w.events = events;
         trim();
+    }
+
+    // A pass of command buffer `serial` into the image at `image` ended: its load, and the box its draws covered
+    void reached(uint64_t image, char load, uint32_t x0, uint32_t y0, uint32_t x1, uint32_t y1, uint64_t serial)
+    {
+        std::lock_guard<std::mutex> l(lock_);
+        open_.serial = serial;
+        for (uint32_t i = 0; i < open_.reaches; i++)
+            if (open_.reach[i].first == image) {
+                GlassMemReach &r = open_.reach[i].second;
+                r.x0 = std::min(r.x0, x0), r.y0 = std::min(r.y0, y0);
+                r.x1 = std::max(r.x1, x1), r.y1 = std::max(r.y1, y1);
+                return;
+            }
+        if (open_.reaches < kGlassMemReaches)
+            open_.reach[open_.reaches++] = {image, GlassMemReach{load, x0, y0, x1, y1}};
     }
 
     // A draw of state `caName` sampled `item`'s texture in command buffer `serial`, header index `tic` holding bytes of
@@ -224,15 +287,19 @@ public:
             const auto found = writes_.find(it.key);
             const Write w = found == writes_.end() ? Write() : found->second;
             it.rebuilt = w.serial == serial;
+            it.fresh = w.first == serial;
             it.age = serial - w.serial;
             it.events = events - w.events;
+            for (uint32_t r = 0; it.rebuilt && r < cb.reaches; r++)
+                if (cb.reach[r].first == it.image)
+                    it.reach = cb.reach[r].second;
         }
         return cb;
     }
 
-    // What `cb`'s rows read (`rows`: kGlassMemItemBytes an item, then the cookie): its line, empty when there is nothing to
-    // say and not `every`. Rows whose slot lacks the cookie are no read: their verdicts are '?' and count nothing.
-    std::string finish(const GlassMemCb &cb, const uint8_t *rows, bool every)
+    // What `cb`'s rows read (`rows`: kGlassMemItemBytes an item, then the cookie): its lines (os_log's length each), none
+    // when there is nothing to say and not `every`. Rows whose slot lacks the cookie are no read: '?', and count nothing.
+    std::vector<std::string> finish(const GlassMemCb &cb, const uint8_t *rows, bool every)
     {
         std::lock_guard<std::mutex> l(lock_);
         uint32_t cookie;
@@ -240,38 +307,47 @@ public:
         const bool landed = cookie == glassMemCookie(cb.serial);
         if (landed)
             counts.cbs++;
-        char line[1000];
-        int at = snprintf(line, sizeof line, "cb %llu mach %llu seq %u ev %llu n %u", (unsigned long long)cb.serial,
+        char head[160];
+        int at = snprintf(head, sizeof head, "cb %llu mach %llu seq %u ev %llu n %u", (unsigned long long)cb.serial,
                           (unsigned long long)cb.mach, cb.seqno, (unsigned long long)cb.events, cb.count);
         if (cb.dropped)
-            at += snprintf(line + at, sizeof line - size_t(at), " drop %u", cb.dropped);
-        at += snprintf(line + at, sizeof line - size_t(at), " |");
+            snprintf(head + at, sizeof head - size_t(at), " drop %u", cb.dropped);
+        std::vector<std::string> lines{std::string(head) + " |"};
         bool notable = !landed;
-        for (uint32_t i = 0; i < cb.count && at > 0 && size_t(at) < sizeof line; i++) {
+        for (uint32_t i = 0; i < cb.count; i++) {
             const GlassMemItem &it = cb.items[i];
-            const char *verdict =
-                landed ? verdictOf(it, rows + uint64_t(i) * kGlassMemItemBytes, cb.serial, notable) : "?";
-            char levels[12] = "", level[8] = "", events[16] = "";
+            const uint8_t *row = rows + uint64_t(i) * kGlassMemItemBytes;
+            const std::string verdict = landed ? verdictOf(it, row, cb.serial, notable) : "?";
+            char levels[12] = "", level[8] = "", events[16] = "", reach[48] = "";
             if (it.levels > 1)
                 snprintf(levels, sizeof levels, "/L%u", it.levels);
             if (it.level)
                 snprintf(level, sizeof level, ".%u", it.level);
             if (!it.rebuilt && it.events)
                 snprintf(events, sizeof events, "/e%llu", (unsigned long long)it.events);
-            at += snprintf(line + at, sizeof line - size_t(at), " %04llx%s:%ux%u/f%u%s/%s%s/%s/%c%llu%s%s:%s",
-                           (unsigned long long)(it.key >> 14 & 0xffff), level, it.width, it.height, it.format, levels,
-                           it.flags & kGlassMemPitch ? "pitch" : "bl", it.flags & kGlassMemHeap ? "+heap" : "",
-                           it.state, it.rebuilt ? 'R' : 'U', (unsigned long long)(it.rebuilt ? 0 : it.age), events,
-                           it.moved ? "/mv" : "", verdict);
+            if (it.reach.load)
+                snprintf(reach, sizeof reach, "/%c%u,%u-%u,%u", it.reach.load, it.reach.x0, it.reach.y0, it.reach.x1,
+                         it.reach.y1);
+            char item[192];
+            snprintf(item, sizeof item, " %04llx%s:%ux%u/f%u%s/%s%s/%s/%c%llu%s%s%s%s:%s",
+                     (unsigned long long)(it.key >> 14 & 0xffff), level, it.width, it.height, it.format, levels,
+                     it.flags & kGlassMemPitch ? "pitch" : "bl", it.flags & kGlassMemHeap ? "+heap" : "", it.state,
+                     it.rebuilt ? 'R' : 'U', (unsigned long long)(it.rebuilt ? 0 : it.age), it.fresh ? "/n" : "", reach,
+                     events, it.moved ? "/mv" : "", verdict.c_str());
+            if (lines.back().size() + strlen(item) > kGlassMemLine)
+                lines.push_back(std::string(head) + " +|");
+            lines.back() += item;
         }
-        return notable || every ? std::string(line) : std::string();
+        if (!notable && !every)
+            lines.clear();
+        return lines;
     }
 
     GlassMemCounts counts;
 
 private:
     struct Write {
-        uint64_t serial = 0, events = 0;
+        uint64_t serial = 0, events = 0, first = 0;
     };
 
     struct Ref {
@@ -283,7 +359,34 @@ private:
         uint64_t key = 0, hash = 0;
     };
 
-    const char *verdictOf(const GlassMemItem &it, const uint8_t *row, uint64_t serial, bool &notable)
+    bool poisoned(const GlassMemItem &it, const uint8_t *row) const
+    {
+        for (uint32_t b = 0; b < it.texels * it.bpp; b++)
+            if (row[b] != kGlassMemPoison)
+                return false;
+        return true;
+    }
+
+    // The inside row's verdict, then the outside row's after a comma (no reference: it was never meant to be written)
+    std::string verdictOf(const GlassMemItem &it, const uint8_t *row, uint64_t serial, bool &notable)
+    {
+        std::string v = insideVerdict(it, row, serial, notable);
+        if (!it.outside || (it.flags & kGlassMemUnsampled))
+            return v;
+        const uint8_t *out = row + kGlassMemRowBytes;
+        if (poisoned(it, out))
+            return v + ",out:?";
+        const GlassMemRow r = glassMemRow(out, it.texels, it.bpp, it.format);
+        if (r.nonFinite) {
+            counts.nonFinite++;
+            notable = true;
+        }
+        char at[40];
+        snprintf(at, sizeof at, ",out@%u,%u:%s", it.outX, it.outY, r.nonFinite ? "nf" : r.black ? "zero" : "ok");
+        return v + at;
+    }
+
+    const char *insideVerdict(const GlassMemItem &it, const uint8_t *row, uint64_t serial, bool &notable)
     {
         (it.rebuilt ? counts.rebuilt : counts.reused)++;
         if (it.moved) {
@@ -292,10 +395,7 @@ private:
         }
         if (it.flags & kGlassMemUnsampled)
             return "-";
-        bool poisoned = true;
-        for (uint32_t b = 0; b < it.texels * it.bpp && poisoned; b++)
-            poisoned = row[b] == kGlassMemPoison;
-        if (poisoned)
+        if (poisoned(it, row))
             return "?";
         const GlassMemRow r = glassMemRow(row, it.texels, it.bpp, it.format);
         Ref &ref = refs_[it.key + it.level];

@@ -4655,6 +4655,7 @@ void RenderEncoder::glassMemSample(const Pipeline &bound, const Pipeline &drawn)
             const Texture &image = picks[p] ? level : t;
             GlassMemItem it;
             it.key = t.storageRange().va ? t.storageRange().va : t.va;
+            it.image = image.va;
             it.width = image.width;
             it.height = image.height;
             it.format = t.format;
@@ -4668,6 +4669,26 @@ void RenderEncoder::glassMemSample(const Pipeline &bound, const Pipeline &drawn)
             if (index >= 0)
                 cb_->glassMemImages_[index] = image;
         }
+    }
+}
+
+// What this pass reached of each colour target it stores into (a shadow target's own image, not its pool image): its
+// load and the box of its draws' pixels, the render area where they were not counted
+void RenderEncoder::glassMemReached()
+{
+    uint32_t box[4] = {0, 0, areaW_, areaH_};
+    if (drew_ && !whole_ && !rects_.empty()) {
+        box[0] = box[1] = UINT32_MAX;
+        box[2] = box[3] = 0;
+        for (const auto &r : rects_)
+            for (int k = 0; k < 4; k++)
+                box[k] = k < 2 ? std::min(box[k], r[k]) : std::max(box[k], r[k]);
+    }
+    for (uint32_t j = 0; j < pass_.count && j < 8; j++) {
+        const Texture *t = shadowOf_[j] ? shadowOf_[j] : pass_.color[j].texture;
+        if (!t || memoryless_[j] || !pass_.color[j].store)
+            continue;
+        dev_->glassMem->reached(t->va, "dlc"[pass_.color[j].load], box[0], box[1], box[2], box[3], dev_->commitCount_);
     }
 }
 
@@ -5379,7 +5400,7 @@ void CommandBuffer::glassMemTail()
             slot = int(s);
     if (slot < 0)
         return;
-    const uint32_t words = 16 + record.count * 64;
+    const uint32_t words = 16 + record.count * 128;
     uint64_t va;
     uint32_t *start = reinterpret_cast<uint32_t *>(d.alloc(d.push_, words * 4, 256, va));
     Push p{start, start + words};
@@ -5389,12 +5410,16 @@ void CommandBuffer::glassMemTail()
     memset(d.glassMemRing_.cpu + uint64_t(slot) * kGlassMemSlotBytes, kGlassMemPoison,
            uint64_t(record.count) * kGlassMemItemBytes);
     for (uint32_t i = 0; i < record.count; i++) {
-        const GlassMemItem &it = record.items[i];
+        GlassMemItem &it = record.items[i];
         if (it.flags & kGlassMemUnsampled)
             continue;
+        glassMemRowsAt(it);
         const Texture &image = glassMemImages_[i];
-        copySides(p, sideOf(image, (image.width - it.texels) / 2, image.height / 2, 0),
-                  {base + uint64_t(i) * kGlassMemItemBytes, it.texels * it.bpp}, it.texels, 1, it.bpp, d.stats);
+        const uint64_t row = base + uint64_t(i) * kGlassMemItemBytes;
+        copySides(p, sideOf(image, it.inX, it.inY, 0), {row, it.texels * it.bpp}, it.texels, 1, it.bpp, d.stats);
+        if (it.outside)
+            copySides(p, sideOf(image, it.outX, it.outY, 0), {row + kGlassMemRowBytes, it.texels * it.bpp}, it.texels,
+                      1, it.bpp, d.stats);
     }
     const uint64_t cookie = base + uint64_t(kGlassMemItems) * kGlassMemItemBytes;
     p.inc(HOST_SEMAPHORE_A, {uint32_t(cookie >> 32) & 0xff, uint32_t(cookie), glassMemCookie(record.serial),
@@ -5441,8 +5466,7 @@ void Device::glassMemRead()
         }
         uint8_t rows[kGlassMemSlotBytes];
         memcpy(rows, glassMemRing_.cpu + uint64_t(next) * kGlassMemSlotBytes, sizeof rows);
-        const std::string line = glassMem->finish(glassMemCbs_[next], rows, every);
-        if (!line.empty())
+        for (const std::string &line : glassMem->finish(glassMemCbs_[next], rows, every))
             os_log(log, "raw: glassmem %{public}s", line.c_str());
     }
     if (every || now - glassMemSummaryAt_ < glassProbeTicks(5000))
@@ -5864,6 +5888,10 @@ void RenderEncoder::end()
 {
     RAW_ENCODE_SPAN(PassEnd);
     Device &d = *dev_;
+#if SWITCH_RAW_DIAGNOSTICS
+    if (d.glassMem && !d.glassMemStopped.load(std::memory_order_relaxed))
+        glassMemReached();
+#endif
     endShaderTests();
     if (p_.room() < 64 + kSampleWords)
         reserve();

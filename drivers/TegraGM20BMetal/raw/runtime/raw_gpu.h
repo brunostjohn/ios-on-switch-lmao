@@ -769,6 +769,7 @@ private:
                    bool indexed, const PixelBox &limit);
     void probeGlassDraw(const Pipeline &bound, const Pipeline &drawn, const PixelBox &limit);
     void glassMemSample(const Pipeline &bound, const Pipeline &drawn);
+    void glassMemReached();
 #endif
     const Runs *selfRuns(const Pipeline &pl, uint32_t primitive, uint32_t count, uint32_t instances, const char **why);
     const Runs *sequentialRuns(const Pipeline &pl, const FetchDraw &shape, Runs &runs, const char **why);

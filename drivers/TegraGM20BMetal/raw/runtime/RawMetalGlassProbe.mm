@@ -95,12 +95,15 @@ void armRecord(bool armed)
     notify_set_state(r.countToken, uint64_t(r.generation) << 32 | r.count);
 }
 
-// The blur-texture probe's lines for every command buffer for the next kGlassMemArmMs (raw_glass_mem.h)
+// The blur-texture probe's lines for every command buffer for the next kGlassMemArmMs (raw_glass_mem.h), and the probe
+// back on where a killed submission had stopped it
 void armGlassMem(raw::Device *dev)
 {
-    if (dev->glassMem)
-        dev->glassMemArmedUntil.store(mach_absolute_time() + raw::glassProbeTicks(raw::kGlassMemArmMs),
-                                      std::memory_order_relaxed);
+    if (!dev->glassMem)
+        return;
+    dev->glassMemArmedUntil.store(mach_absolute_time() + raw::glassProbeTicks(raw::kGlassMemArmMs),
+                                  std::memory_order_relaxed);
+    dev->glassMemStopped.store(false, std::memory_order_relaxed);
 }
 
 // The probe's counts and the pool's shape in notify state for HW Test (ui.glass_sidebar): each commit while armed, else
