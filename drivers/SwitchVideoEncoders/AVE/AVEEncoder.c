@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: BSD-2-Clause-Patent
-// AVE stand-in: H.264 on the Tegra X1's NVENC as VideoToolbox's hardware 'avc1' encoder, and HEVC (every picture an
-// IDR: HEVCNVENC.h has no P pictures) as its 'hvc1' encoder, registered under ave.videoencoder's HEVC encoder ID.
+// AVE stand-in: H.264 and HEVC on the Tegra X1's NVENC as VideoToolbox's hardware 'avc1' and 'hvc1' encoders, the
+// latter under ave.videoencoder's HEVC encoder ID; both code IDR and P pictures, HEIC tiles are IDRs (AVETiles.c).
 //
 // How VideoToolbox finds it (21H461 VTLoadVideoEncoders, disassembled): VTInitializeVideoEncoderRegistry registers
 // VideoToolbox's own wrappers (muxed alpha, depth), then dlopens a fixed list of paths and calls each one's register
@@ -288,7 +288,7 @@ static OSStatus startStream(Encoder *e, CFTypeRef primaries, CFTypeRef transfer,
            e->rc.constQP >= 0 ? "constant quality"
            : cbr              ? "CBR"
                               : "VBR",
-           c->input_layout, e->info.p_frames && !hevc ? "P pictures" : "intra only");
+           c->input_layout, e->info.p_frames ? "P pictures" : "intra only");
     return noErr;
 }
 
@@ -343,13 +343,22 @@ static OSStatus encodePicture(Encoder *e, VTVideoEncoderFrame frame, CVPixelBuff
     if (CVPixelBufferGetWidth(image) != (size_t)e->size.width ||
         CVPixelBufferGetHeight(image) != (size_t)e->size.height || CVPixelBufferGetPlaneCount(image) != 2)
         return kVTPixelTransferNotSupportedErr;
-    const bool key = e->codec == kCMVideoCodecType_HEVC || wantsKey(e, pts, options);
+    const bool key = wantsKey(e, pts, options);
+    const bool hevc = e->codec == kCMVideoCodecType_HEVC;
     const uint64_t began = mach_absolute_time();
     if (CVPixelBufferLockBaseAddress(image, kCVPixelBufferLock_ReadOnly))
         return kVTVideoEncoderMalfunctionErr;
-    h264enc_put_input(&e->config, &e->layout, e->inputVA, CVPixelBufferGetBaseAddressOfPlane(image, 0),
-                      CVPixelBufferGetBytesPerRowOfPlane(image, 0), CVPixelBufferGetBaseAddressOfPlane(image, 1),
-                      CVPixelBufferGetBytesPerRowOfPlane(image, 1));
+    // HEVC codes whole 32x32 CTBs: the input is replicated out to them, not to H.264's 16-sample macroblocks.
+    if (hevc)
+        h264enc_put_region(e->info.input_layout, &e->layout.input, e->inputVA,
+                           CVPixelBufferGetBaseAddressOfPlane(image, 0), CVPixelBufferGetBytesPerRowOfPlane(image, 0),
+                           CVPixelBufferGetBaseAddressOfPlane(image, 1), CVPixelBufferGetBytesPerRowOfPlane(image, 1),
+                           e->config.width, e->config.height, hevcenc_coded_width(&e->hevc),
+                           hevcenc_coded_height(&e->hevc));
+    else
+        h264enc_put_input(&e->config, &e->layout, e->inputVA, CVPixelBufferGetBaseAddressOfPlane(image, 0),
+                          CVPixelBufferGetBytesPerRowOfPlane(image, 0), CVPixelBufferGetBaseAddressOfPlane(image, 1),
+                          CVPixelBufferGetBytesPerRowOfPlane(image, 1));
     CVPixelBufferUnlockBaseAddress(image, kCVPixelBufferLock_ReadOnly);
     const uint64_t copied = mach_absolute_time();
 
@@ -368,9 +377,10 @@ static OSStatus encodePicture(Encoder *e, VTVideoEncoderFrame frame, CVPixelBuff
     TegraNVENCSubmit *submit = malloc(sizeof(*submit));
     if (!submit)
         return kVTAllocationFailedErr;
-    if (e->codec == kCMVideoCodecType_HEVC) {
-        const HEVCEncPicture idr = {.idr = true, .poc = 0, .qp = picture.qp};
-        hevcnvenc_fill_submit(&e->hevc, e->info.input_layout, e->info.chroma_mode, &e->layout, &idr, &e->handles,
+    if (hevc) {
+        const HEVCEncPicture coded = {
+            .idr = key, .poc = e->pocCount, .qp = picture.qp, .picture_index = picture.picture_index};
+        hevcnvenc_fill_submit(&e->hevc, e->info.input_layout, e->info.chroma_mode, &e->layout, &coded, &e->handles,
                               submit);
     } else {
         h264enc_fill_submit(&e->config, &e->layout, &picture, &e->handles, submit);
