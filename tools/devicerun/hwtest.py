@@ -192,6 +192,7 @@ TESTS: dict[str, bool] = {
     'input.joycon_idle': False,
     'input.joycon_probe': True,
     'gpu.texture.kinds': False,
+    'gpu.astc.layouts': False,
     'system.union_readdir': False,
     'system.overlay_apps': False,
     'system.overlay_app_records': False,
