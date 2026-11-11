@@ -23,12 +23,13 @@
 // (present off this boot, an odd size, a surface it cannot address: the first refusal is one line)
 // the CPU de-swizzles it and then cleans the buffer's lines to DRAM (sys_dcache_flush). The CPU copy costs 2.47 ms a
 // 720p60 H.264 picture, most of mediaplaybackd's CPU time.
-// Frames go out as soon as they are decoded, in decode order, as Apple's H.264 decoders do even under
-// kVTDecodeFrame_EnableTemporalProcessing (macOS 27, test/vdectest) and its HEVC decoders do with or without it (macOS
-// 27, hardware and software, test/HEVCClip.h's clip A): clients order by presentation time.
-// VideoToolbox's MuxedAlphaDecoder (HEVC with alpha, the AirPods cards) keeps at most four frames in flight and fails
-// the next one after a 10 s wait: holding the four pictures their sps_max_num_reorder_pics allows stalls it.
-// H264NVDEC's and HEVCNVDEC's display-order bumping stays available (kReorder).
+// Frames go out as soon as they are decoded, in decode order, and clients order them by presentation time. Apple's iOS
+// HEVC decoder never reads kVTDecodeFrame_EnableTemporalProcessing (24B119 AVD.videodecoder's
+// AppleAVDWrapperHEVCDecoderDecodeFrame, 0x22c9e67d0, tests flag bits 0 and 2 only). VideoToolbox's MuxedAlphaDecoder
+// (HEVC with alpha: the AirPods cards) passes the client's flags to one session per layer and needs each layer's
+// picture out with no later input: four frames in flight (dispatch_semaphore_create(4): 24B119 0x18f0a370c, 21H461
+// 0x197b029d8), the next one failed after a 10 s wait (-12911), and a synchronous DecodeFrame waiting forever for both
+// layers (24B119 0x18f2cbbe4, 21H461 0x197b03208). H264NVDEC's and HEVCNVDEC's display-order bumping stays (kReorder).
 //
 // Log (subsystem com.brunostjohn.switch.avd, category decoder): per process, a refusal by TegraNVDEC; per session, one line when
 // it starts (on NVDEC, or on the software decoder and why) and one when it ends (frames, mean decode and copy time).
