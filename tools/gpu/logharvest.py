@@ -5,11 +5,20 @@ usage: bazel run //tools/gpu:logharvest -- <boot.logarchive>... [--build <IPSW b
                                             [--dry-run]
        bazel run //tools/gpu:logharvest -- --ndjson <file>...   (`log show --style ndjson --info` output instead)
 
-The raw runtime logs each state the pack lacked when it makes it ("raw: a state the pack lacks made ...: <hash> <key>",
-its key cut at 400 characters, then "raw: harvest <hash> <i>/<n> label=<label> <key>" parts that carry it whole), and
-each packed state's cubic variant the pack lacks ("state.variant_unpacked: ...: <variant> of <state hash> <key>").
-Each becomes an R line tagged os=<build>, built so that the pack generator's rawpack.state_key gives back the logged key
-exactly; a line the corpus already holds for that build (untagged, or tagged with it) is not added again.
+The lines it reads, os_log's (the raw runtime's in debug builds, RawComplete.mm and RawMetalCubic.mm):
+    raw: a state the pack lacks <made|not made|refused> in <ms> ms (<QoS>) after <ms> ms for a compile slot: <name>
+        <key>
+        (one line) <name>: the runtime's 16-hex-digit cache name of the state; <key>: its first 400 characters
+    raw: harvest <name> <i>/<n> <part>
+        the n parts, 700 characters each, of "label=<descriptor label, spaces as _> <whole key>"
+    <process>[<pid>] state.variant_unpacked: ...refused: | cubic <binds> of <state> <key>
+        a packed state's cubic variant the pack lacks; <state>: Pack::fnv of the state's key, 16 hex digits
+    OS version: <build>, deviceBuildVersion is "<build>", iPhone OS <version> (<build>)
+A key is RawPipelineKey.h pipelineKey's text: "<descriptor fields>  | v <function> <constants> | f <function>
+<constants>[ | <vl|vp|fl|fp> <linked function>...][ | l <framework>][ | cubic <binds>]". Each state becomes the line
+    R ok=1 label=<Core Animation label, else -> os=<build> <fields> | v <function> lib=<path> <constants> | f ... |
+built so that the pack generator's rawpack.state_key gives back the logged key exactly (QuartzCore's stages name no
+lib=); a line the corpus already holds for that build (untagged, or tagged with it) is not added again.
 
 A USB pull holds several boots with overlapping clocks: each boot (log show's bootUUID) is read alone, and names its OS
 build in its own lines ("OS version: 24B119"). A boot naming none is skipped unless --build names it; one naming
