@@ -37,6 +37,22 @@ uint32_t switch_gm20b_2d_fill_format(uint32_t format);
 void switch_gm20b_2d_fill(struct nv_push *p, const struct switch_gm20b_2d_surface *dst, uint32_t color, uint32_t x0,
                           uint32_t y0, uint32_t x1, uint32_t y1);
 
+// A scaled copy of `src` into [dst_x, dst_x + dst_w) x [dst_y, dst_y + dst_h) of `dst`: destination texel (x, y) samples
+// the source at src_x + (x + 1/2) du, src_y + (y + 1/2) dv under the centre origin, or from the corner under `corner`
+// (GM20B's mip chains: corner origin, source origin at du/2, raw/fx/fx_mip.h kGm20bSampling). 32.32 fixed point. The
+// engine's texture cache is invalidated (L1) before the source is read; the caller orders the source's writes before and
+// the destination's readers after.
+struct switch_gm20b_2d_scale_op {
+    uint32_t dst_x, dst_y, dst_w, dst_h;
+    uint64_t du, dv, src_x, src_y;
+    bool bilinear, corner;
+};
+
+#define SWITCH_GM20B_2D_SCALE_WORDS 40u
+
+void switch_gm20b_2d_scale(struct nv_push *p, const struct switch_gm20b_2d_surface *src,
+                           const struct switch_gm20b_2d_surface *dst, const struct switch_gm20b_2d_scale_op *s);
+
 #ifdef __cplusplus
 }
 #endif

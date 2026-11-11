@@ -40,6 +40,54 @@ static void destination(struct nv_push *p, const struct switch_gm20b_2d_surface 
     P_INLINE_DATA(p, (uint32_t)s->address);
 }
 
+static void source(struct nv_push *p, const struct switch_gm20b_2d_surface *s)
+{
+    P_MTHD(p, NV902D, SET_SRC_FORMAT);
+    P_INLINE_DATA(p, s->format);
+    if (s->pitch) {
+        P_INLINE_DATA(p, NV902D_SET_SRC_MEMORY_LAYOUT_V_PITCH);
+        P_MTHD(p, NV902D, SET_SRC_PITCH);
+        P_INLINE_DATA(p, s->pitch_bytes);
+    } else {
+        P_INLINE_DATA(p, NV902D_SET_SRC_MEMORY_LAYOUT_V_BLOCKLINEAR);
+        P_INLINE_DATA(p, (uint32_t)s->block_height_log2 << 4);
+        P_INLINE_DATA(p, 1);
+        P_MTHD(p, NV902D, SET_SRC_WIDTH);
+    }
+    P_INLINE_DATA(p, s->width);
+    P_INLINE_DATA(p, s->height);
+    P_INLINE_DATA(p, (uint32_t)(s->address >> 32));
+    P_INLINE_DATA(p, (uint32_t)s->address);
+}
+
+void switch_gm20b_2d_scale(struct nv_push *p, const struct switch_gm20b_2d_surface *src,
+                           const struct switch_gm20b_2d_surface *dst, const struct switch_gm20b_2d_scale_op *s)
+{
+    P_IMMD(p, NV902D, SET_DST_COLOR_RENDER_TO_ZETA_SURFACE, dst->zeta);
+    P_IMMD(p, NV902D, SET_COMPRESSION, dst->compressed);
+    destination(p, dst, dst->format);
+    source(p, src);
+    P_IMMD(p, NV902D, TWOD_INVALIDATE_TEXTURE_DATA_CACHE, V_L1_ONLY);
+    P_IMMD(
+        p, NV902D, SET_PIXELS_FROM_MEMORY_SAMPLE_MODE,
+        {.origin = s->corner ? ORIGIN_CORNER : ORIGIN_CENTER, .filter = s->bilinear ? FILTER_BILINEAR : FILTER_POINT});
+    P_MTHD(p, NV902D, SET_PIXELS_FROM_MEMORY_DST_X0);
+    P_INLINE_DATA(p, s->dst_x);
+    P_INLINE_DATA(p, s->dst_y);
+    P_INLINE_DATA(p, s->dst_w);
+    P_INLINE_DATA(p, s->dst_h);
+    P_MTHD(p, NV902D, SET_PIXELS_FROM_MEMORY_DU_DX_FRAC);
+    P_INLINE_DATA(p, (uint32_t)s->du);
+    P_INLINE_DATA(p, (uint32_t)(s->du >> 32));
+    P_INLINE_DATA(p, (uint32_t)s->dv);
+    P_INLINE_DATA(p, (uint32_t)(s->dv >> 32));
+    P_MTHD(p, NV902D, SET_PIXELS_FROM_MEMORY_SRC_X0_FRAC);
+    P_INLINE_DATA(p, (uint32_t)s->src_x);
+    P_INLINE_DATA(p, (uint32_t)(s->src_x >> 32));
+    P_INLINE_DATA(p, (uint32_t)s->src_y);
+    P_INLINE_DATA(p, (uint32_t)(s->src_y >> 32));
+}
+
 void switch_gm20b_2d_fill(struct nv_push *p, const struct switch_gm20b_2d_surface *dst, uint32_t color, uint32_t x0,
                           uint32_t y0, uint32_t x1, uint32_t y1)
 {

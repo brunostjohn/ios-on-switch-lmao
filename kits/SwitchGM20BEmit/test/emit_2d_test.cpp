@@ -144,4 +144,61 @@ TEST(Emit2D, AnSrgbSurfaceIsFilledThroughItsUnormView)
     }
 }
 
+TEST(Emit2D, AScaledBlitIsTheProbesScaleOp)
+{
+    switch_gm20b_2d_surface src = {}, dst = {};
+    src.address = 0x0100000000ull;
+    src.format = NV902D_SET_SRC_FORMAT_V_RF16_GF16_BF16_AF16;
+    src.block_height_log2 = 4;
+    src.width = 512;
+    src.height = 256;
+    dst = src;
+    dst.address = 0x0200000000ull;
+    dst.width = 256;
+    dst.height = 128;
+    switch_gm20b_2d_scale_op s = {0, 0, 256, 128, 2ull << 32, 2ull << 32, 1ull << 32, 1ull << 32, true, true};
+    std::vector<uint32_t> words(64);
+    nv_push p;
+    nv_push_init(&p, words.data(), words.size(), SUBC_MASK_ALL);
+    switch_gm20b_2d_scale(&p, &src, &dst, &s);
+    words.resize(nv_push_dw_count(&p));
+    EXPECT_LE(words.size(), SWITCH_GM20B_2D_SCALE_WORDS);
+    const std::vector<Method> expected = {
+        {k2D, NV902D_SET_DST_COLOR_RENDER_TO_ZETA_SURFACE, 0},
+        {k2D, NV902D_SET_COMPRESSION, 0},
+        {k2D, NV902D_SET_DST_FORMAT, NV902D_SET_SRC_FORMAT_V_RF16_GF16_BF16_AF16},
+        {k2D, NV902D_SET_DST_MEMORY_LAYOUT, NV902D_SET_DST_MEMORY_LAYOUT_V_BLOCKLINEAR},
+        {k2D, NV902D_SET_DST_BLOCK_SIZE, 4u << 4},
+        {k2D, NV902D_SET_DST_DEPTH, 1},
+        {k2D, NV902D_SET_DST_LAYER, 0},
+        {k2D, NV902D_SET_DST_WIDTH, 256},
+        {k2D, NV902D_SET_DST_HEIGHT, 128},
+        {k2D, NV902D_SET_DST_OFFSET_UPPER, 0x02},
+        {k2D, NV902D_SET_DST_OFFSET_LOWER, 0},
+        {k2D, NV902D_SET_SRC_FORMAT, NV902D_SET_SRC_FORMAT_V_RF16_GF16_BF16_AF16},
+        {k2D, NV902D_SET_SRC_MEMORY_LAYOUT, NV902D_SET_SRC_MEMORY_LAYOUT_V_BLOCKLINEAR},
+        {k2D, NV902D_SET_SRC_BLOCK_SIZE, 4u << 4},
+        {k2D, NV902D_SET_SRC_DEPTH, 1},
+        {k2D, NV902D_SET_SRC_WIDTH, 512},
+        {k2D, NV902D_SET_SRC_HEIGHT, 256},
+        {k2D, NV902D_SET_SRC_OFFSET_UPPER, 0x01},
+        {k2D, NV902D_SET_SRC_OFFSET_LOWER, 0},
+        {k2D, NV902D_TWOD_INVALIDATE_TEXTURE_DATA_CACHE, NV902D_TWOD_INVALIDATE_TEXTURE_DATA_CACHE_V_L1_ONLY},
+        {k2D, NV902D_SET_PIXELS_FROM_MEMORY_SAMPLE_MODE, 0x11},
+        {k2D, NV902D_SET_PIXELS_FROM_MEMORY_DST_X0, 0},
+        {k2D, NV902D_SET_PIXELS_FROM_MEMORY_DST_Y0, 0},
+        {k2D, NV902D_SET_PIXELS_FROM_MEMORY_DST_WIDTH, 256},
+        {k2D, NV902D_SET_PIXELS_FROM_MEMORY_DST_HEIGHT, 128},
+        {k2D, NV902D_SET_PIXELS_FROM_MEMORY_DU_DX_FRAC, 0},
+        {k2D, NV902D_SET_PIXELS_FROM_MEMORY_DU_DX_INT, 2},
+        {k2D, NV902D_SET_PIXELS_FROM_MEMORY_DV_DY_FRAC, 0},
+        {k2D, NV902D_SET_PIXELS_FROM_MEMORY_DV_DY_INT, 2},
+        {k2D, NV902D_SET_PIXELS_FROM_MEMORY_SRC_X0_FRAC, 0},
+        {k2D, NV902D_SET_PIXELS_FROM_MEMORY_SRC_X0_INT, 1},
+        {k2D, NV902D_SET_PIXELS_FROM_MEMORY_SRC_Y0_FRAC, 0},
+        {k2D, NV902D_PIXELS_FROM_MEMORY_SRC_Y0_INT, 1},
+    };
+    EXPECT_EQ(Methods(words), expected);
+}
+
 }  // namespace
