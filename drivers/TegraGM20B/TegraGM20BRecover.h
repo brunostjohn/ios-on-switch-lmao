@@ -131,8 +131,21 @@ struct nvkm_fifo_func *tgm_fifo_func(struct nvkm_fifo *fifo);
 /* Debug kernels: this window's context-switch timeout ticks waited out and recovered. */
 void tgm_recover_stats(char *buf, unsigned int len);
 /* The channels the GPU is on, most likely culprit first: each busy engine's (mid-switch, the context it saves or loads,
- * as nvkm's own recovery picks it), then each busy PBDMA's. Returns how many, at most max. */
+ * as nvkm's own recovery picks it), then each busy PBDMA's that is not parked on a semaphore acquire
+ * (tgm_pbdma_acquiring). Returns how many, at most max. */
 int tgm_recover_suspects(struct nvkm_device *device, int *chids, int max);
+
+/* A PBDMA on a host semaphore acquire that has not passed (NV906F SEMAPHORED with an ACQUIRE, ACQ_GEQ or ACQ_AND
+ * operation): its channel waits for another one's release, and the PBDMA switches between such channels
+ * (ACQUIRE_SWITCH), so the one a check finds it on is only a waiter. A kernel channel waiting so (the present's acquire
+ * of the compositor's fence) would otherwise be taken for a stuck kernel channel, which is fatal. */
+static inline int tgm_pbdma_acquiring(uint32_t method0, uint32_t data0)
+{
+	const uint32_t operation = data0 & 0xf;
+
+	return PBDMA_METHOD_ADDR(method0) == 0x1c &&
+	       (operation == 0x1 || operation == 0x4 || operation == 0x8);
+}
 
 /* A channel with work pending that has completed nothing for this long is stuck (one rule for the context-switch timeout
  * and every late wait). Above any finite drain seen (backboardd's two 144 ms m2v passes a frame), below TGM_HANG_NS and the

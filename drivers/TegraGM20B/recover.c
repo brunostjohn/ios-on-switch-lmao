@@ -399,7 +399,9 @@ int tgm_recover_suspects(struct nvkm_device *device, int *chids, int max)
 	{
 		for (i = 0; i < runl->runq_nr; i++) {
 			if (!runl->runq[i] ||
-			    !(nvkm_rd32(device, PBDMA_STATUS(runl->runq[i]->id)) & PBDMA_BUSY))
+			    !(nvkm_rd32(device, PBDMA_STATUS(runl->runq[i]->id)) & PBDMA_BUSY) ||
+			    tgm_pbdma_acquiring(nvkm_rd32(device, PBDMA_METHOD0(runl->runq[i]->id)),
+						nvkm_rd32(device, PBDMA_DATA0(runl->runq[i]->id))))
 				continue;
 			n = add(chids, n, max,
 				PBDMA_CHID(nvkm_rd32(device, PBDMA_CHANNEL(runl->runq[i]->id))));

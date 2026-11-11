@@ -552,3 +552,33 @@ TEST(HangConfirm, ALongJobThatCompletesBetweenChecksStartsOver)
 	EXPECT_FALSE(tgm_hang_confirm(0, 41, &strikes, &seen));
 	EXPECT_FALSE(tgm_hang_confirm(1, 41, &strikes, &seen));
 }
+
+// PBDMA0 at sliceV boot 2's three hangs (METHOD0, DATA0): backboardd's channel and the present's, each on a
+// SEMAPHORED ACQ_GEQ with ACQUIRE_SWITCH.
+TEST(HangSuspects, APbdmaParkedOnASemaphoreAcquireNamesNoSuspect)
+{
+	EXPECT_TRUE(tgm_pbdma_acquiring(0x8000001d, 0x00001004));
+	EXPECT_TRUE(tgm_pbdma_acquiring(0x0000001d, 0x00001004));
+	EXPECT_TRUE(tgm_pbdma_acquiring(0x8000001d, 0x00000001));
+	EXPECT_TRUE(tgm_pbdma_acquiring(0x8000001d, 0x00001008));
+	EXPECT_FALSE(tgm_pbdma_acquiring(0x8000001d, 0x01100002));  // a release
+	EXPECT_FALSE(tgm_pbdma_acquiring(0x80000021, 0x00000000));  // NON_STALL_INTERRUPT
+	EXPECT_FALSE(tgm_pbdma_acquiring(0x80010e01, 0x00001004));  // a 3D method with ACQ_GEQ-like data
+}
+
+// The panic: the present waited 2 s for backboardd's fence; GR idle, PBDMA0 between the two channels' acquires and on
+// the present's at two consecutive checks. As a suspect the present is a stuck kernel channel (fatal); left out, the
+// late channel is the one recovered.
+TEST(HangBlame, SliceVBoot2ThePresentOnItsAcquireLeavesTheBlameToItsProducer)
+{
+	const bool presentResident = !tgm_pbdma_acquiring(0x0000001d, 0x00001004);
+	Candidates k;
+	if (presentResident)
+		k.c.push_back(kStuckKernel);
+	k.c.push_back(kStuckClient);
+	int blame;
+	EXPECT_EQ(k.verdict(blame), TGM_HANG_RECOVERING);
+	EXPECT_EQ(blame, 0);
+	Candidates before{{kStuckKernel, kStuckClient}};
+	EXPECT_EQ(before.verdict(blame), TGM_HANG_STUCK);
+}
