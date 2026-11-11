@@ -615,7 +615,7 @@ bool Device::ensureChannel()
         channelRetryNs_ = now + kChannelRetryNs;
         return false;
     }
-    channelGeneration_.fetch_add(1, std::memory_order_release);
+    generations_.opened();
     channelReady_.store(true, std::memory_order_release);
     return true;
 }
@@ -2896,16 +2896,6 @@ void Device::trimBackings()
 // A wait the kernel refuses with no kill (the call failed, or the submit thread's reopen destroyed the channel meanwhile) is
 // no completion: the channel's status decides. A healthy channel is waited on again; one that keeps refusing is taken as
 // killed, with everything it has not completed, so nothing it may still run is released or written over as done.
-void Device::waitGenerationRetired(uint64_t generation)
-{
-    if (retiredGeneration_.load(std::memory_order_acquire) >= generation)
-        return;
-    std::unique_lock<std::mutex> lock(channelLock_);
-    channelRetired_.wait(lock, [&] {
-        return retiredGeneration_.load(std::memory_order_acquire) >= generation;
-    });
-}
-
 bool Device::waitFence(uint32_t seqno, uint64_t generation)
 {
     constexpr unsigned kRefusals = 3;
@@ -3054,8 +3044,7 @@ std::string Device::vaOwner(uint64_t va)
 
 bool Device::reopen()
 {
-    // Invalidate consumers before a destroyed slot can name another channel.
-    const uint64_t retiring = channelGeneration_.fetch_add(1, std::memory_order_release);
+    const uint64_t retiring = generations_.retire({});
     if (!contextless_) {  // the first try for this death: what the channel had failed, its kill record is kept
         Killed live = {};
         if (liveKill(live)) {
@@ -3070,20 +3059,21 @@ bool Device::reopen()
     // Closed once: the connection is NVK's, whose next channel may take the slot number
     if (channel_)
         k_.closeChannel(channel_);
-    {
-        std::lock_guard<std::mutex> lock(channelLock_);
-        retiredGeneration_.store(retiring, std::memory_order_release);
-    }
-    channelRetired_.notify_all();
-    channel_ = 0;
-    fence_ = &kNoFence;
-    auto refused = [&] {
+    generations_.closed(retiring);
+    if (!makeChannel(k_, kEngines, channel_, fence_, lastSeqno_, &kNoFence, [this](uint32_t channel, uint32_t &seqno) {
+            return newContext(channel, seqno);
+        })) {
         std::lock_guard<std::mutex> l(channelLock_);
         channelError_ = k_.error();
         return false;
-    };
-    if (!k_.channel(kEngines, channel_, fence_))
-        return refused();
+    }
+    contextless_ = false;
+    return true;
+}
+
+// A channel made again: the context the dead one took with it, before anything else runs on it
+bool Device::newContext(uint32_t channel, uint32_t &seq)
+{
     stats.reopens++;
     push_.inflight.clear();
     upload_.inflight.clear();
@@ -3112,15 +3102,12 @@ bool Device::reopen()
     p.m(WAIT_FOR_IDLE, 0);
     fx::emitTwodInit(p);
     TegraGM20BAbiPush seg = {va, uint32_t(p.at - start), 0};
-    uint32_t seq = 0;
     SurfaceList resources;
     resources.add(zero_.handle, false);
     resources.add(tickets_.handle, true);
-    if (!k_.exec(channel_, &seg, 1, 0, seq, &resources))
-        return refused();
-    lastSeqno_ = seq;
+    if (!k_.exec(channel, &seg, 1, 0, seq, &resources))
+        return false;
     retire(push_, seq);
-    contextless_ = false;
     return true;
 }
 
