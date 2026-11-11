@@ -375,6 +375,9 @@ static OSStatus encodePicture(Encoder *e, VTVideoEncoderFrame frame, CVPixelBuff
     if (!submit)
         return kVTAllocationFailedErr;
     h264enc_fill_submit(&e->config, &e->layout, &picture, &e->handles, submit);
+    // A job that ends without writing its record must not leave the previous picture's record to be read as its own.
+    memset(e->auxVA, 0, sizeof(nvenc_pic_stat_s));
+    submit->clean[submit->clean_count++] = (TegraNVENCRange){e->handles.aux, 0, sizeof(nvenc_pic_stat_s), 0};
     TegraNVENCWait wait = {.timeout_us = 1000000, .invalidate_count = 1};
     wait.invalidate[0] = (TegraNVENCRange){e->handles.aux, 0, sizeof(nvenc_pic_stat_s), 0};
     const int submitted = nvenc_submit(e->client, submit, &wait.fence);
