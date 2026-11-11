@@ -13,7 +13,8 @@
 // requirements: origins on even samples both ways (0x2c46180a0..0x2c4618100), and source padding, which AVE states
 // on its newer devices (0x2c4618110). Without it CMPhoto copies every tile that runs past the picture into a padded
 // buffer of its own first (__needsPixelBufferCopy 0x1a6bb59fc: EncoderSupportsSourcePadding, read from +0x40 of its
-// state, 0x1a6bb58a4); with it the tile comes as the region the picture covers, which this copy replicates anyway.
+// state, 0x1a6bb58a4); with it the tile comes as the region the picture covers. VIC reads that region straight from
+// CMPhoto's picture (AVEInput.c); the coded tile past it is what the buffer held, which the grid crops away.
 // One hvcC serves every tile.
 #include <CoreVideo/CoreVideo.h>
 #include <mach/mach_time.h>
@@ -32,36 +33,11 @@ enum {
     kSmallestSide = 32,    // NVENC's smallest picture side (TegraNVENCCheck.h)
 };
 
-typedef struct {
-    uint32_t x, y, width, height;
-} Region;
-
 static void setNumber(CFMutableDictionaryRef dict, CFStringRef key, int32_t value)
 {
     CFNumberRef number = CFNumberCreate(kCFAllocatorDefault, kCFNumberSInt32Type, &value);
     CFDictionarySetValue(dict, key, number);
     CFRelease(number);
-}
-
-static CFDictionaryRef copySourceAttributes(void)
-{
-    const int32_t formats[] = {kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange,
-                               kCVPixelFormatType_420YpCbCr8BiPlanarFullRange};
-    CFNumberRef numbers[2];
-    for (int i = 0; i < 2; i++)
-        numbers[i] = CFNumberCreate(kCFAllocatorDefault, kCFNumberSInt32Type, &formats[i]);
-    CFArrayRef list = CFArrayCreate(kCFAllocatorDefault, (const void **)numbers, 2, &kCFTypeArrayCallBacks);
-    CFDictionaryRef surface = CFDictionaryCreate(kCFAllocatorDefault, NULL, NULL, 0, &kCFTypeDictionaryKeyCallBacks,
-                                                 &kCFTypeDictionaryValueCallBacks);
-    const void *keys[] = {kCVPixelBufferPixelFormatTypeKey, kCVPixelBufferIOSurfacePropertiesKey};
-    const void *values[] = {list, surface};
-    CFDictionaryRef attributes = CFDictionaryCreate(kCFAllocatorDefault, keys, values, 2,
-                                                    &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks);
-    CFRelease(surface);
-    CFRelease(list);
-    for (int i = 0; i < 2; i++)
-        CFRelease(numbers[i]);
-    return attributes;
 }
 
 static CFDictionaryRef copyRequirements(void)
@@ -94,7 +70,7 @@ OSStatus ave_start_tile_session(VTVideoEncoderRef ref, VTTileEncoderSession sess
     e->size = (CMVideoDimensions){codedSide(tileSize.width), codedSide(tileSize.height)};
     OSStatus status = ave_open_engine(e);
     if (!status) {
-        CFDictionaryRef attributes = copySourceAttributes(), requirements = copyRequirements();
+        CFDictionaryRef attributes = ave_copy_input_attributes(e, 0, 0), requirements = copyRequirements();
         status =
             VTTileEncoderSessionSetTileAttributes(session, (VTInt32Size){e->size.width, e->size.height}, attributes);
         if (!status)
@@ -129,7 +105,8 @@ static bool isNV12(OSType format)
 }
 
 // The part of the tile the source covers: the rest of the tile picture repeats its last row and column.
-static OSStatus tileRegion(const Encoder *e, CVPixelBufferRef source, VTInt32Point origin, VTInt32Size size, Region *r)
+static OSStatus tileRegion(const Encoder *e, CVPixelBufferRef source, VTInt32Point origin, VTInt32Size size,
+                           AVERegion *r)
 {
     const OSType format = CVPixelBufferGetPixelFormatType(source);
     if (!isNV12(format) || CVPixelBufferGetPlaneCount(source) != 2 ||
@@ -145,8 +122,8 @@ static OSStatus tileRegion(const Encoder *e, CVPixelBufferRef source, VTInt32Poi
     int64_t w = width - origin.x, h = height - origin.y;
     w = w < size.width ? w : size.width;
     h = h < size.height ? h : size.height;
-    *r = (Region){(uint32_t)origin.x, (uint32_t)origin.y, (uint32_t)(w < e->size.width ? w : e->size.width),
-                  (uint32_t)(h < e->size.height ? h : e->size.height)};
+    *r = (AVERegion){(uint32_t)origin.x, (uint32_t)origin.y, (uint32_t)(w < e->size.width ? w : e->size.width),
+                     (uint32_t)(h < e->size.height ? h : e->size.height)};
     return noErr;
 }
 
@@ -158,31 +135,26 @@ static uint8_t tileQP(const Encoder *e)
     return (uint8_t)rc_qp(&rc, true);
 }
 
-static void putTile(Encoder *e, CVPixelBufferRef source, const Region *r)
-{
-    const size_t lumaStride = CVPixelBufferGetBytesPerRowOfPlane(source, 0);
-    const size_t chromaStride = CVPixelBufferGetBytesPerRowOfPlane(source, 1);
-    const uint8_t *luma = (const uint8_t *)CVPixelBufferGetBaseAddressOfPlane(source, 0) + r->y * lumaStride + r->x;
-    const uint8_t *chroma =
-        (const uint8_t *)CVPixelBufferGetBaseAddressOfPlane(source, 1) + r->y / 2 * chromaStride + r->x;
-    h264enc_put_region(e->info.input_layout, &e->layout.input, e->inputVA, luma, lumaStride, chroma, chromaStride,
-                       r->width, r->height, hevcenc_coded_width(&e->hevc), hevcenc_coded_height(&e->hevc));
-}
-
-// One IDR picture on NVENC; its length-prefixed NAL units land in e->avcc. 0, or why not.
-static OSStatus codeTile(Encoder *e, size_t *size)
+// One IDR picture on NVENC from the tile's region of `source`; its length-prefixed NAL units land in e->avcc. 0, or why
+// not.
+static OSStatus codeTile(Encoder *e, CVPixelBufferRef source, const AVERegion *r, size_t *size, uint64_t *put)
 {
     TegraNVENCSubmit *submit = malloc(sizeof(*submit));
     if (!submit)
         return kVTAllocationFailedErr;
     const HEVCEncPicture idr = {.idr = true, .poc = 0, .qp = tileQP(e)};
-    hevcnvenc_fill_submit(&e->hevc, e->info.input_layout, e->info.chroma_mode, &e->layout, &idr, &e->handles, submit);
+    hevcnvenc_fill_submit(&e->hevc, e->config.input_layout, e->info.chroma_mode, &e->layout, &idr, &e->handles, submit);
+    if (!ave_input_put(e, source, r, submit)) {
+        free(submit);
+        return kVTVideoEncoderMalfunctionErr;
+    }
+    *put = mach_absolute_time();
     // A job that ends without writing its record must not leave the previous tile's record to be read as its own.
     memset(e->auxVA, 0, sizeof(nvenc_pic_stat_s));
     submit->clean[submit->clean_count++] = (TegraNVENCRange){e->handles.aux, 0, sizeof(nvenc_pic_stat_s), 0};
     TegraNVENCWait wait = {.timeout_us = 1000000, .invalidate_count = 1};
     wait.invalidate[0] = (TegraNVENCRange){e->handles.aux, 0, sizeof(nvenc_pic_stat_s), 0};
-    const int submitted = nvenc_submit(e->client, submit, &wait.fence);
+    const int submitted = ave_input_submit(e, source, r, submit, &wait.fence);
     free(submit);
     if (submitted || nvenc_wait(e->client, &wait))
         return kVTVideoEncoderMalfunctionErr;
@@ -218,16 +190,12 @@ static OSStatus createSample(const Encoder *e, size_t size, CMSampleBufferRef *o
     return status;
 }
 
-static OSStatus encodeTile(Encoder *e, CVPixelBufferRef source, const Region *r, CMSampleBufferRef *out)
+static OSStatus encodeTile(Encoder *e, CVPixelBufferRef source, const AVERegion *r, CMSampleBufferRef *out)
 {
     const uint64_t began = mach_absolute_time();
-    if (CVPixelBufferLockBaseAddress(source, kCVPixelBufferLock_ReadOnly))
-        return kVTVideoEncoderMalfunctionErr;
-    putTile(e, source, r);
-    CVPixelBufferUnlockBaseAddress(source, kCVPixelBufferLock_ReadOnly);
-    const uint64_t copied = mach_absolute_time();
+    uint64_t copied = began;
     size_t size = 0;
-    const OSStatus status = codeTile(e, &size);
+    const OSStatus status = codeTile(e, source, r, &size, &copied);
     if (status) {
         e->errors++;
         return status;
@@ -249,7 +217,7 @@ OSStatus ave_encode_tile(VTVideoEncoderRef ref, VTEncoderTile tile, CVImageBuffe
     if (info)
         *info = 0;
     pthread_mutex_lock(&e->lock);
-    Region region;
+    AVERegion region;
     OSStatus status = e->failed ? kVTVideoEncoderMalfunctionErr : tileRegion(e, source, origin, size, &region);
     if (!status && !e->configured && (status = ave_configure(e, source))) {
         e->failed = true;
@@ -272,14 +240,21 @@ OSStatus ave_encode_tile(VTVideoEncoderRef ref, VTEncoderTile tile, CVImageBuffe
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
 CFDictionaryRef ave_copy_routes(const Encoder *e)
 {
-    const int32_t counts[] = {(int32_t)e->frames, (int32_t)e->tiles, (int32_t)e->errors};
-    const void *keys[] = {CFSTR("pictures"), CFSTR("tiles"), CFSTR("errors")};
-    const void *values[3];
-    for (int i = 0; i < 3; i++)
+    const int32_t counts[] = {(int32_t)e->frames, (int32_t)e->tiles, (int32_t)e->errors, (int32_t)e->inputCopies,
+                              (int32_t)e->inputVIC};
+    const void *keys[] = {CFSTR("pictures"), CFSTR("tiles"), CFSTR("errors"), CFSTR("input_cpu_copies"),
+                          CFSTR("input_vic")};
+
+    enum {
+        COUNT = sizeof(counts) / sizeof(counts[0])
+    };
+
+    const void *values[COUNT];
+    for (int i = 0; i < COUNT; i++)
         values[i] = CFNumberCreate(kCFAllocatorDefault, kCFNumberSInt32Type, &counts[i]);
-    CFDictionaryRef routes = CFDictionaryCreate(kCFAllocatorDefault, keys, values, 3, &kCFTypeDictionaryKeyCallBacks,
-                                                &kCFTypeDictionaryValueCallBacks);
-    for (int i = 0; i < 3; i++)
+    CFDictionaryRef routes = CFDictionaryCreate(kCFAllocatorDefault, keys, values, COUNT,
+                                                &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks);
+    for (int i = 0; i < COUNT; i++)
         CFRelease(values[i]);
     return routes;
 }

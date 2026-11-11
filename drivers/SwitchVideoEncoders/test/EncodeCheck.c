@@ -56,18 +56,23 @@ static void chromaAt(int i, int x, int y, uint8_t *u, uint8_t *v)  // x, y in ch
     *v = (uint8_t)(square ? 240 : 64 + ((y * 2) & 127));
 }
 
-CVPixelBufferRef encode_check_frame(int i)
+// From the session's pool, as a client should take them (buffers laid out as the encoder asked), or CoreVideo's own.
+static CVPixelBufferRef makeFrame(CVPixelBufferPoolRef pool, int i)
 {
-    const void *keys[] = {kCVPixelBufferIOSurfacePropertiesKey};
-    CFDictionaryRef empty =
-        CFDictionaryCreate(NULL, NULL, NULL, 0, &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks);
-    const void *values[] = {empty};
-    CFDictionaryRef attrs =
-        CFDictionaryCreate(NULL, keys, values, 1, &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks);
     CVPixelBufferRef image = NULL;
-    CVPixelBufferCreate(NULL, W, H, kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange, attrs, &image);
-    CFRelease(attrs);
-    CFRelease(empty);
+    if (pool) {
+        CVPixelBufferPoolCreatePixelBuffer(NULL, pool, &image);
+    } else {
+        const void *keys[] = {kCVPixelBufferIOSurfacePropertiesKey};
+        CFDictionaryRef empty =
+            CFDictionaryCreate(NULL, NULL, NULL, 0, &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks);
+        const void *values[] = {empty};
+        CFDictionaryRef attrs =
+            CFDictionaryCreate(NULL, keys, values, 1, &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks);
+        CVPixelBufferCreate(NULL, W, H, kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange, attrs, &image);
+        CFRelease(attrs);
+        CFRelease(empty);
+    }
     if (!image)
         return NULL;
     CVPixelBufferLockBaseAddress(image, 0);
@@ -81,6 +86,11 @@ CVPixelBufferRef encode_check_frame(int i)
             chromaAt(i, x, row, &c[(size_t)row * cs + 2 * x], &c[(size_t)row * cs + 2 * x + 1]);
     CVPixelBufferUnlockBaseAddress(image, 0);
     return image;
+}
+
+CVPixelBufferRef encode_check_frame(int i)
+{
+    return makeFrame(NULL, i);
 }
 
 static void encoded(void *refcon, void *frameRefcon, OSStatus status, VTEncodeInfoFlags flags, CMSampleBufferRef sample)
@@ -155,6 +165,16 @@ static void setNumber(VTCompressionSessionRef s, CFStringRef key, double value)
     CFRelease(n);
 }
 
+// A SwitchEncoderRoutes count (debug builds of the AVE plug-in), -1 from any other encoder.
+static int32_t routeCount(CFDictionaryRef routes, CFStringRef key)
+{
+    int32_t v = -1;
+    CFTypeRef n = routes && CFGetTypeID(routes) == CFDictionaryGetTypeID() ? CFDictionaryGetValue(routes, key) : NULL;
+    if (n && CFGetTypeID(n) == CFNumberGetTypeID())
+        CFNumberGetValue(n, kCFNumberSInt32Type, &v);
+    return v;
+}
+
 static bool isSync(CMSampleBufferRef sample)
 {
     CFArrayRef a = CMSampleBufferGetSampleAttachmentsArray(sample, false);
@@ -196,8 +216,9 @@ bool encode_check(CFDictionaryRef spec, CFStringRef entropy, double minPsnr, cha
     struct timespec t0, t1;
     clock_gettime(CLOCK_MONOTONIC, &t0);
     int failed = 0;
+    CVPixelBufferPoolRef pool = VTCompressionSessionGetPixelBufferPool(session);
     for (int i = 0; i < FRAMES; i++) {
-        CVPixelBufferRef image = encode_check_frame(i);
+        CVPixelBufferRef image = makeFrame(pool, i);
         if (!image) {
             failed++;
             continue;
@@ -217,6 +238,12 @@ bool encode_check(CFDictionaryRef spec, CFStringRef entropy, double minPsnr, cha
     }
     VTCompressionSessionCompleteFrames(session, kCMTimeInvalid);
     clock_gettime(CLOCK_MONOTONIC, &t1);
+    CFDictionaryRef routes = NULL;
+    VTSessionCopyProperty(session, CFSTR("SwitchEncoderRoutes"), NULL, &routes);
+    const int32_t byVIC = routeCount(routes, CFSTR("input_vic")),
+                  copied = routeCount(routes, CFSTR("input_cpu_copies"));
+    if (routes)
+        CFRelease(routes);
     VTCompressionSessionInvalidate(session);
     CFRelease(session);
     const double ms = ((double)(t1.tv_sec - t0.tv_sec) * 1e3 + (double)(t1.tv_nsec - t0.tv_nsec) / 1e6) / FRAMES;
@@ -271,9 +298,10 @@ bool encode_check(CFDictionaryRef spec, CFStringRef entropy, double minPsnr, cha
     snprintf(
         line, size,
         "%s %d/%d frames encoded (%d errors) by a %s encoder, %d decoded (%d errors), sync samples%s%s, PSNR min Y "
-        "%.1f U %.1f V %.1f dB, mean Y %.1f dB, first frame under 20 dB %d, %zu bytes, %.2f ms/frame",
+        "%.1f U %.1f V %.1f dB, mean Y %.1f dB, first frame under 20 dB %d, %zu bytes, %.2f ms/frame, inputs %d by "
+        "VIC %d copied",
         ok ? "ok" : "FAIL", enc.count, FRAMES, enc.errors + failed, onHardware ? "hardware" : "software", dec.count,
         dec.errors, keys, intraOnly ? " (intra only)" : "", dec.minPsnr[0], dec.minPsnr[1], dec.minPsnr[2],
-        dec.count ? dec.sumPsnr[0] / dec.count : 0.0, dec.badIndex, bytes, ms);
+        dec.count ? dec.sumPsnr[0] / dec.count : 0.0, dec.badIndex, bytes, ms, byVIC, copied);
     return ok;
 }

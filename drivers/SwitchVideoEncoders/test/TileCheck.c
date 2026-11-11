@@ -47,6 +47,7 @@ enum {
 };
 
 static uint8_t *gInputs[TILES];  // what each H.265 job read, raster: TILE x TILE luma, then TILE x TILE/2 CbCr
+static bool gSourced[TILES];     // the job named a surface: only its region was written (TegraNVENCSource)
 static int gJobs;
 
 static uint32_t layoutOf(const nvenc_h265_surface_cfg_s *cfg)
@@ -87,6 +88,7 @@ int tile_check_engine(const TegraNVENCSubmit *s, uint8_t *const *buffers, uint32
                 raster[TILE * TILE + y * TILE + x] = input[chroma + h264enc_surface_offset(layout, pitch, x, y)];
         }
     gInputs[gJobs] = raster;
+    gSourced[gJobs] = s->source.surface_id != 0;
     const uint8_t slice[] = {0, 0, 0, 1, 0x26, 0x01, 0xaf, (uint8_t)gJobs, 0x80};  // IDR_W_RADL, placeholder data
     memcpy(buffers[bits->value] + bits->offset, slice, sizeof(slice));
     nvenc_pic_stat_s *stat = (nvenc_pic_stat_s *)(buffers[status->value] + status->offset);
@@ -107,14 +109,18 @@ static uint8_t chromaAt(uint32_t pair, uint32_t row, uint32_t cr)
     return (uint8_t)(cr ? pair + row * 11 + 64 : pair * 7 + row + 128);
 }
 
+// Rows on VIC's 256-byte grid, as the encoder's attributes ask.
 static CVPixelBufferRef makeSource(uint32_t width, uint32_t height)
 {
     CFDictionaryRef surface =
         CFDictionaryCreate(NULL, NULL, NULL, 0, &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks);
-    const void *keys[] = {kCVPixelBufferIOSurfacePropertiesKey};
-    const void *values[] = {surface};
+    const int32_t rowAlignment = 256;
+    CFNumberRef alignment = CFNumberCreate(NULL, kCFNumberSInt32Type, &rowAlignment);
+    const void *keys[] = {kCVPixelBufferIOSurfacePropertiesKey, kCVPixelBufferBytesPerRowAlignmentKey};
+    const void *values[] = {surface, alignment};
     CFDictionaryRef attributes =
-        CFDictionaryCreate(NULL, keys, values, 1, &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks);
+        CFDictionaryCreate(NULL, keys, values, 2, &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks);
+    CFRelease(alignment);
     CVPixelBufferRef buffer = NULL;
     CVPixelBufferCreate(NULL, width, height, kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange, attributes, &buffer);
     CFRelease(attributes);
@@ -139,20 +145,21 @@ static void fill(CVPixelBufferRef buffer, uint32_t x0, uint32_t y0, uint32_t wid
 }
 
 // The input tile `i` should have read: its region of the source (the copy's own TILE x TILE for COPIED, whose
-// samples past the source are the copy's), the last row and column repeated past the region.
+// samples past the source are the copy's), the last row and column repeated past the region where the CPU copied it.
 static bool inputMatches(int i, const uint8_t *raster)
 {
     const uint32_t x0 = (uint32_t)(i & 1) * TILE, y0 = (uint32_t)(i >> 1) * TILE;
     const uint32_t width = i == COPIED ? TILE : (W - x0 < TILE ? W - x0 : TILE);
     const uint32_t height = i == COPIED ? TILE : (H - y0 < TILE ? H - y0 : TILE);
-    for (uint32_t y = 0; y < TILE; y++)
-        for (uint32_t x = 0; x < TILE; x++) {
+    for (uint32_t y = 0; y < (gSourced[i] ? height : TILE); y++)
+        for (uint32_t x = 0; x < (gSourced[i] ? width : TILE); x++) {
             const uint32_t sx = x < width ? x : width - 1, sy = y < height ? y : height - 1;
             if (raster[y * TILE + x] != lumaAt(x0 + sx, y0 + sy))
                 return false;
             const uint32_t cx = x / 2 < (width + 1) / 2 ? x / 2 : (width + 1) / 2 - 1;
             const uint32_t cy = y < (height + 1) / 2 ? y : (height + 1) / 2 - 1;
-            if (y < TILE / 2 && raster[TILE * TILE + y * TILE + x] != chromaAt(x0 / 2 + cx, y0 / 2 + cy, x & 1))
+            const uint32_t chromaRows = gSourced[i] ? (height + 1) / 2 : TILE / 2;
+            if (y < chromaRows && raster[TILE * TILE + y * TILE + x] != chromaAt(x0 / 2 + cx, y0 / 2 + cy, x & 1))
                 return false;
         }
     return true;
@@ -327,15 +334,17 @@ bool tile_check(CFStringRef encoderID, char *line, size_t size)
     }
     const int badOutput = badSamples(&outputs);
     const int32_t tiles = numberIn(routes, CFSTR("tiles")), errors = numberIn(routes, CFSTR("errors"));
+    const int32_t byVIC = numberIn(routes, CFSTR("input_vic")), copied = numberIn(routes, CFSTR("input_cpu_copies"));
     const bool ok = propertiesSet && hasFormats && alignment == 2 && padding && prepared.width == TILE &&
                     prepared.height == TILE && !refused && outputs.count == TILES && !outputs.failed && !wrongInput &&
                     !badOutput && tiles == TILES && errors == 0 && hardware == kCFBooleanTrue;
     snprintf(line, size,
              "%s %d/%d tiles out (%d failed, %d refused), batch set %s, attributes %s, offset alignment %d, source "
-             "padding %s, prepared %dx%d, inputs wrong %d, samples wrong %d, routes tiles %d errors %d, hardware %s",
+             "padding %s, prepared %dx%d, inputs wrong %d, samples wrong %d, routes tiles %d errors %d, hardware %s, "
+             "inputs %d by VIC %d copied",
              ok ? "ok" : "FAIL", outputs.count, TILES, outputs.failed, refused, propertiesSet ? "ok" : "refused",
              hasFormats ? "ok" : "missing", alignment, padding ? "yes" : "no", prepared.width, prepared.height,
-             wrongInput, badOutput, tiles, errors, hardware == kCFBooleanTrue ? "yes" : "no");
+             wrongInput, badOutput, tiles, errors, hardware == kCFBooleanTrue ? "yes" : "no", byVIC, copied);
     for (int i = 0; i < TILES; i++)
         if (outputs.samples[i])
             CFRelease(outputs.samples[i]);

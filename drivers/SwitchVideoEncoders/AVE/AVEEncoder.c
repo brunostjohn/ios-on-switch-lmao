@@ -21,11 +21,11 @@
 // Sessions: what NVENC takes (TegraNVENCCheck.h: progressive 4:2:0, 32..4096 a side, at most 4096x2304 macroblocks'
 // worth) runs on NVENC; anything else is refused at StartSession, and VideoToolbox has no other H.264 encoder to try.
 // No software encoder inside: there is no Apple one on 21H461 to fall back to.
-// Pixel buffers are asked for as NV12 ('420v'/'420f'); VideoToolbox's pixel transfer converts anything else (BGRA
-// screen captures) before EncodeFrame.
+// Pixel buffers are asked for as NV12 ('420v'/'420f') with rows and planes VIC reads (AVEInput.c); VideoToolbox's
+// pixel transfer converts anything else (BGRA screen captures) before EncodeFrame.
 //
-// Per picture (synchronous, on VideoToolbox's encode thread): the picture is copied into the session's input buffer in
-// the layout NVENC reads (TegraNVENCInfo.input_layout: a memcpy per row for pitch linear, 16-byte runs otherwise),
+// Per picture (synchronous, on VideoToolbox's encode thread): the submit names the picture's IOSurface and VIC writes it
+// into the session's input buffer in the layout NVENC reads (AVEInput.c; the CPU copies only what VIC cannot read),
 // the setup built (H264NVENC.c) with the QP the rate control picked (RateControl.h), the job queued on host1x channel 0,
 // and the thread sleeps on the syncpoint interrupt; then NVENC's Annex B slice becomes a length-prefixed sample with
 // the format description of this plug-in's own SPS/PPS, and goes out at once unless the session reorders
@@ -36,8 +36,8 @@
 // Tile sessions (HEIC grids through VTTileCompressionSession): AVETiles.c, on the same stream setup.
 //
 // Log (subsystem com.brunostjohn.switch.ave, category encoder): per session, one line when it starts and one when it ends
-// (frames, bytes, mean copy and encode time). Refusals (a size, TegraNVENC refusing the process, a property) are
-// kits/SwitchRefusal's, category AVE: one error line per process and reason.
+// (frames, bytes, inputs by VIC and copied, mean input and encode time). Refusals (a size, TegraNVENC refusing the
+// process, a property) are kits/SwitchRefusal's, category AVE: one error line per process and reason.
 #include <CoreFoundation/CoreFoundation.h>
 #include <dispatch/dispatch.h>
 #include <mach/mach_time.h>
@@ -218,8 +218,9 @@ static OSStatus startStream(Encoder *e, CFTypeRef primaries, CFTypeRef transfer,
         c->fps_num = (uint32_t)lround(e->expectedFrameRate * 1000);
         c->fps_den = 1000;
     }
-    c->input_layout = e->info.input_layout;
+    c->input_layout = ave_input_layout(e);
     c->chroma_mode = e->info.chroma_mode;
+    e->surfaceInput = (e->info.features & TEGRA_NVENC_FEATURE_SURFACE_INPUT) != 0;
     if (h264enc_configure(c))
         return kVTPropertyNotSupportedErr;
     const bool hevc = e->codec == kCMVideoCodecType_HEVC;
@@ -290,13 +291,13 @@ static OSStatus startStream(Encoder *e, CFTypeRef primaries, CFTypeRef transfer,
     e->configured = true;
     os_log(gLog,
            "AVE: %{public}s %ux%u in %{public}s on NVENC (%{public}s profile %u level %u, %{public}s, %{public}s, "
-           "input layout %u, %{public}s)",
+           "input layout %u %{public}s, %{public}s)",
            e->tileSession ? "tile session" : "session", c->width, c->height, getprogname(), hevc ? "HEVC" : "H.264",
            hevc ? 1 : c->profile_idc, hevc ? e->hevc.level_idc : c->level_idc, hevc || c->cabac ? "CABAC" : "CAVLC",
            e->rc.constQP >= 0 ? "constant quality"
            : cbr              ? "CBR"
                               : "VBR",
-           c->input_layout,
+           c->input_layout, e->surfaceInput ? "written by VIC from IOSurfaces" : "copied by the CPU",
            c->reorder         ? "B pictures"
            : e->info.p_frames ? "P pictures"
                               : "intra only");
@@ -362,22 +363,6 @@ static OSStatus encodePicture(Encoder *e, VTVideoEncoderFrame frame, CVPixelBuff
     const bool key = plan ? plan->picture.type == H264ENC_IDR : ave_wants_key(e, pts, options, e->sinceKey);
     const bool hevc = e->codec == kCMVideoCodecType_HEVC;
     const uint64_t began = mach_absolute_time();
-    if (CVPixelBufferLockBaseAddress(image, kCVPixelBufferLock_ReadOnly))
-        return kVTVideoEncoderMalfunctionErr;
-    // HEVC codes whole 32x32 CTBs: the input is replicated out to them, not to H.264's 16-sample macroblocks.
-    if (hevc)
-        h264enc_put_region(e->info.input_layout, &e->layout.input, e->inputVA,
-                           CVPixelBufferGetBaseAddressOfPlane(image, 0), CVPixelBufferGetBytesPerRowOfPlane(image, 0),
-                           CVPixelBufferGetBaseAddressOfPlane(image, 1), CVPixelBufferGetBytesPerRowOfPlane(image, 1),
-                           e->config.width, e->config.height, hevcenc_coded_width(&e->hevc),
-                           hevcenc_coded_height(&e->hevc));
-    else
-        h264enc_put_input(&e->config, &e->layout, e->inputVA, CVPixelBufferGetBaseAddressOfPlane(image, 0),
-                          CVPixelBufferGetBytesPerRowOfPlane(image, 0), CVPixelBufferGetBaseAddressOfPlane(image, 1),
-                          CVPixelBufferGetBytesPerRowOfPlane(image, 1));
-    CVPixelBufferUnlockBaseAddress(image, kCVPixelBufferLock_ReadOnly);
-    const uint64_t copied = mach_absolute_time();
-
     if (key && !plan) {
         e->frameNum = 0;
         e->pocCount = 0;
@@ -399,17 +384,23 @@ static OSStatus encodePicture(Encoder *e, VTVideoEncoderFrame frame, CVPixelBuff
     if (hevc) {
         const HEVCEncPicture coded = {
             .idr = key, .poc = e->pocCount, .qp = picture.qp, .picture_index = picture.picture_index};
-        hevcnvenc_fill_submit(&e->hevc, e->info.input_layout, e->info.chroma_mode, &e->layout, &coded, &e->handles,
+        hevcnvenc_fill_submit(&e->hevc, e->config.input_layout, e->info.chroma_mode, &e->layout, &coded, &e->handles,
                               submit);
     } else {
         h264enc_fill_submit(&e->config, &e->layout, &picture, handles, submit);
     }
+    const AVERegion whole = {0, 0, e->config.width, e->config.height};
+    if (!ave_input_put(e, image, &whole, submit)) {
+        free(submit);
+        return kVTVideoEncoderMalfunctionErr;
+    }
+    const uint64_t copied = mach_absolute_time();
     // A job that ends without writing its record must not leave the previous picture's record to be read as its own.
     memset(e->auxVA, 0, sizeof(nvenc_pic_stat_s));
     submit->clean[submit->clean_count++] = (TegraNVENCRange){e->handles.aux, 0, sizeof(nvenc_pic_stat_s), 0};
     TegraNVENCWait wait = {.timeout_us = 1000000, .invalidate_count = 1};
     wait.invalidate[0] = (TegraNVENCRange){e->handles.aux, 0, sizeof(nvenc_pic_stat_s), 0};
-    const int submitted = nvenc_submit(e->client, submit, &wait.fence);
+    const int submitted = ave_input_submit(e, image, &whole, submit, &wait.fence);
     free(submit);
     if (submitted || nvenc_wait(e->client, &wait)) {
         e->errors++;
@@ -520,29 +511,9 @@ static OSStatus startSession(VTVideoEncoderRef ref, VTVideoEncoderSession sessio
     e->size = size;
     OSStatus status = ave_open_engine(e);
     if (!status) {
-        const int32_t formats[] = {kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange,
-                                   kCVPixelFormatType_420YpCbCr8BiPlanarFullRange};
-        CFNumberRef numbers[2];
-        for (int i = 0; i < 2; i++)
-            numbers[i] = CFNumberCreate(kCFAllocatorDefault, kCFNumberSInt32Type, &formats[i]);
-        CFArrayRef list = CFArrayCreate(kCFAllocatorDefault, (const void **)numbers, 2, &kCFTypeArrayCallBacks);
-        CFDictionaryRef surface = CFDictionaryCreate(kCFAllocatorDefault, NULL, NULL, 0, &kCFTypeDictionaryKeyCallBacks,
-                                                     &kCFTypeDictionaryValueCallBacks);
-        CFNumberRef w = CFNumberCreate(kCFAllocatorDefault, kCFNumberSInt32Type, &size.width);
-        CFNumberRef h = CFNumberCreate(kCFAllocatorDefault, kCFNumberSInt32Type, &size.height);
-        const void *keys[] = {kCVPixelBufferPixelFormatTypeKey, kCVPixelBufferWidthKey, kCVPixelBufferHeightKey,
-                              kCVPixelBufferIOSurfacePropertiesKey};
-        const void *values[] = {list, w, h, surface};
-        CFDictionaryRef attributes = CFDictionaryCreate(
-            kCFAllocatorDefault, keys, values, 4, &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks);
+        CFDictionaryRef attributes = ave_copy_input_attributes(e, size.width, size.height);
         status = VTEncoderSessionSetPixelBufferAttributes(session, attributes);
         CFRelease(attributes);
-        CFRelease(w);
-        CFRelease(h);
-        CFRelease(surface);
-        CFRelease(list);
-        for (int i = 0; i < 2; i++)
-            CFRelease(numbers[i]);
     }
     pthread_mutex_unlock(&e->lock);
     return status;
@@ -799,10 +770,10 @@ static void finalize(CMBaseObjectRef ref)
     Encoder *e = storage(ref);
     if (e->frames)
         os_log(gLog,
-               "AVE: session %ux%u in %{public}s ended: %u pictures on NVENC (%u key), %u failed, %llu bytes, mean "
-               "%.2f ms copy + %.2f ms encode",
+               "AVE: session %ux%u in %{public}s ended: %u pictures on NVENC (%u key), %u failed, %llu bytes, inputs "
+               "%u by VIC and %u copied, mean %.2f ms input + %.2f ms encode",
                e->config.width, e->config.height, getprogname(), e->frames, e->keyFrames, e->errors,
-               (unsigned long long)e->bytes, ticksToMs(e->copyTicks) / e->frames,
+               (unsigned long long)e->bytes, e->inputVIC, e->inputCopies, ticksToMs(e->copyTicks) / e->frames,
                ticksToMs(e->encodeTicks) / e->frames);
     ave_reorder_release(e);
     if (e->client) {

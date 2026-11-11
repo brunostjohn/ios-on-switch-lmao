@@ -129,8 +129,10 @@ int nvenc_submit(void *ctx, const TegraNVENCSubmit *submit, uint32_t *fence)
 {
     NVENCClient *c = ctx;
     TegraNVENCFence reply;
-    if (call(c, c->selector, TegraNVENCMethodSubmit, submit, sizeof(*submit), &reply, sizeof(reply)))
-        return -1;
+    const kern_return_t kr =
+        call(c, c->selector, TegraNVENCMethodSubmit, submit, sizeof(*submit), &reply, sizeof(reply));
+    if (kr)
+        return kr;
     *fence = reply.fence;
     return 0;
 }

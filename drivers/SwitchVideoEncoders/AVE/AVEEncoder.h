@@ -43,7 +43,14 @@ typedef struct {
     AVEReorder reorder;
     uint32_t frames, keyFrames, tiles, errors;
     uint64_t bytes, copyTicks, encodeTicks;
+    bool surfaceInput;               // VIC writes the input from the picture's IOSurface (AVEInput.c)
+    uint32_t inputCopies, inputVIC;  // pictures whose input the CPU copied, and VIC wrote
 } Encoder;
+
+// A region of a source picture, in pixels.
+typedef struct {
+    uint32_t x, y, width, height;
+} AVERegion;
 
 extern os_log_t gLog;
 
@@ -80,6 +87,19 @@ OSStatus ave_reorder_frame(Encoder *e, VTVideoEncoderFrame frame, CVPixelBufferR
                            CFDictionaryRef options);
 void ave_reorder_flush(Encoder *e);
 void ave_reorder_release(Encoder *e);
+
+// AVEInput.c: how a picture reaches NVENC's input buffer. The layout the session's input buffer takes (block linear for
+// VIC when the kernel writes IOSurfaces in, else the CPU copy's), and the pixel buffer attributes asked of VideoToolbox
+// (NV12; rows and planes VIC reads; `width` and `height` 0 for none).
+uint32_t ave_input_layout(const Encoder *e);
+CFDictionaryRef ave_copy_input_attributes(const Encoder *e, int32_t width, int32_t height);
+// `region` of `image` into the submit's input, at the origin of the coded picture: VIC's (the submit names the surface)
+// when VIC can read the picture, else copied by the CPU now. False when the picture could not be read.
+bool ave_input_put(Encoder *e, CVPixelBufferRef image, const AVERegion *region, TegraNVENCSubmit *submit);
+// Submits, and when the kernel refuses the submit's surface the session goes on with CPU copies (one line): this
+// picture is copied and submitted again. 0 or the IOReturn; the input is counted on success.
+int ave_input_submit(Encoder *e, CVPixelBufferRef image, const AVERegion *region, TegraNVENCSubmit *submit,
+                     uint32_t *fence);
 
 // AVETiles.c: the encoder class's version 3 slots.
 OSStatus ave_start_tile_session(VTVideoEncoderRef ref, VTTileEncoderSession session, CFDictionaryRef specification,

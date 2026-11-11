@@ -15,10 +15,11 @@ TEST(SwitchVideoEncoders, AvePluginOnVideoToolbox)
     const std::string out = testing::internal::GetCapturedStdout();
     EXPECT_EQ(code, 0) << out;
     EXPECT_NE(out.find("PASS ave"), std::string::npos) << out;
-    // Each of the four input layouts: every frame by the hardware encoder, decoded back, sync samples where the
-    // encode check asks for them, exact (PSNR 99 dB is the check's "identical").
+    // Each input route (three layouts the CPU copies into, VIC writing BL16, a kernel refusing the surfaces): every
+    // frame by the hardware encoder, decoded back, sync samples where the encode check asks for them, exact (PSNR 99 dB
+    // is the check's "identical").
     EXPECT_EQ(switch_ios::test::Count(out, " ok 30/30 frames encoded (0 errors) by a hardware encoder, 30 decoded (0 "
                                            "errors), sync samples 0 10 15 25, PSNR min Y 99.0 U 99.0 V 99.0 dB"),
-              4u)
+              5u)
         << out;
 }
