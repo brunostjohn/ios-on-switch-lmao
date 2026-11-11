@@ -75,6 +75,27 @@ final class BenchProtocolTests: XCTestCase {
         guard case .invalid = decoded.entries[2] else { return XCTFail("a fragment experiment chose its targets") }
     }
 
+    func testATwodExperimentCarriesItsOperation() throws {
+        let batch: [String: Any] = [
+            "protocol": "benchloop/1", "batch": "b",
+            "experiments": [
+                ["id": "fill", "kind": "twod", "target": ["format": "bgra8unorm", "width": 8, "height": 8],
+                 "rect": [1, 1, 7, 7], "twod": ["op": "fill", "colorFormat": 0xCF, "color": [0xFF00_80FF, 0, 0, 0]]],
+                ["id": "half", "kind": "twod", "target": ["format": "bgra8unorm", "width": 8, "height": 8],
+                 "twod": ["op": "scale", "du": 1 << 33, "dv": 1 << 33, "bilinear": true]],
+                ["id": "none", "kind": "twod", "target": ["format": "bgra8unorm", "width": 8, "height": 8]],
+            ],
+        ]
+        let decoded = try BenchBatch.decode(try JSONSerialization.data(withJSONObject: batch))
+        guard case .experiment(let fill) = decoded.entries[0], let f = fill.twod else { return XCTFail("fill refused") }
+        XCTAssertEqual([f.colorFormat, f.color[0]], [0xCF, 0xFF00_80FF])
+        XCTAssertFalse(f.scale)
+        guard case .experiment(let half) = decoded.entries[1], let h = half.twod else { return XCTFail("scale refused") }
+        XCTAssertEqual(h.du, 1 << 33)
+        XCTAssertTrue(h.scale && h.bilinear)
+        guard case .invalid = decoded.entries[2] else { return XCTFail("a twod experiment without its operation ran") }
+    }
+
     func testResultFileCarriesRunsAndTexels() throws {
         let batch = try BenchBatch.decode(try golden())
         var outcome = BenchOutcome()

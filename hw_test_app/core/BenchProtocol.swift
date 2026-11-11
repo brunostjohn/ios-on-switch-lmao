@@ -65,7 +65,18 @@ public enum BenchProtocol {
 }
 
 public enum BenchKind: String, Sendable {
-    case noop, known, fragment, compute, readback
+    case noop, known, fragment, compute, readback, twod
+}
+
+/// One 2D-engine operation (hw_test_app/bench/switch_bench.h switch_bench_twod)
+public struct BenchTwod: Equatable, Sendable {
+    public let scale: Bool
+    public let fmt2d: UInt32
+    public let colorFormat: UInt32
+    public let color: [UInt32]
+    /// 32.32: the source step per destination texel (du, dv) and the source origin (sx, sy)
+    public let du: UInt64, dv: UInt64, sx: UInt64, sy: UInt64
+    public let bilinear: Bool, corner: Bool
 }
 
 public enum BenchReadback: String, Sendable {
@@ -114,6 +125,7 @@ public struct BenchExperiment: Equatable, Sendable {
     public let singleTarget: Bool
     /// The pack state to draw with, by key hash; 0: the bench's own choice
     public let templateKey: UInt64
+    public let twod: BenchTwod?
 
     public var commandBuffers: Int { draws.count * Int(repeats + warmup) }
 }

@@ -10,6 +10,7 @@
 #include <vector>
 #include "drivers/TegraGM20BMetal/raw/runtime/raw_compute.h"
 #include "drivers/TegraGM20BMetal/raw/runtime/raw_gpu.h"
+#include "drivers/TegraGM20BMetal/raw/runtime/raw_probe_ops.h"
 #include "hw_test_app/bench/bench_known.h"
 #include "hw_test_app/bench/bench_records.h"
 
@@ -234,6 +235,23 @@ public:
         return finish(cb, gpu, wall);
     }
 
+    bool twod(const raw::ProbeOp &op, const raw::Texture *read, const raw::Texture &written, uint64_t &gpu,
+              uint64_t &wall)
+    {
+        raw::Device &d = *b_.device;
+        raw::CommandBuffer *cb = d.begin();
+        if (!cb)
+            return error("no channel: " + d.channelError());
+        raw::BlitEncoder *e = cb->blit();
+        if (!e) {
+            cb->abandon();
+            return refused("the raw path opened no blit encoder");
+        }
+        e->probe(op, read, written);
+        e->end();
+        return finish(cb, gpu, wall);
+    }
+
     bool dispatch(const raw::ComputeState *state, uint32_t dispatches, uint64_t &gpu, uint64_t &wall)
     {
         raw::Device &d = *b_.device;
@@ -433,6 +451,72 @@ void runRender(switch_bench &b, const switch_bench_experiment &x, switch_bench_r
         d.destroyTexture(t.color);
 }
 
+raw::ProbeSurface twodSurface(const raw::Texture &t, uint32_t fmt2d)
+{
+    raw::ProbeSurface s;
+    s.va = t.va;
+    s.fmt2d = fmt2d ? fmt2d : raw::probeTwodFormat(t.format);
+    s.pitch = t.pitch;
+    s.width = t.width;
+    s.height = t.height;
+    s.blockLinear = t.blockLinear;
+    s.blockHeight = t.blockHeight;
+    return s;
+}
+
+// One 2D-engine operation a command buffer, so a rejected one names itself in the kernel's kill line
+void runTwod(switch_bench &b, const switch_bench_experiment &x, switch_bench_result &r)
+{
+    raw::Device &d = *b.device;
+    const switch_bench_twod &w = x.twod;
+    raw::ProbeOp op;
+    op.kind = w.op == SWITCH_BENCH_TWOD_FILL ? raw::ProbeOpKind::Fill : raw::ProbeOpKind::Scale;
+    op.dx = x.rect[0];
+    op.dy = x.rect[1];
+    op.dw = x.rect[2] - x.rect[0];
+    op.dh = x.rect[3] - x.rect[1];
+    op.du = w.du;
+    op.dv = w.dv;
+    op.sx = w.sx;
+    op.sy = w.sy;
+    op.bilinear = w.bilinear != 0;
+    op.corner = w.corner != 0;
+    op.colorFormat = w.color_format;
+    memcpy(op.color, w.color, sizeof op.color);
+    const raw::Texture *read = op.kind == raw::ProbeOpKind::Scale ? &b.image : nullptr;
+    if (read)
+        op.src = twodSurface(*read, 0);
+    raw::Texture t;
+    if (!d.createTexture(x.width, x.height, x.format, t, true))
+        return fail(r, SWITCH_BENCH_ERROR, "no memory for the target");
+    op.dst = twodSurface(t, w.fmt2d);
+    const uint32_t bpp = raw::formatInfo(x.format)->bpp;
+    Submission s(b, x, r);
+    bool ran = op.dst.fmt2d != 0;
+    if (!ran)
+        fail(r, SWITCH_BENCH_INVALID, "a format the 2D engine names none of");
+    for (uint32_t c = 0; ran && c < x.draw_counts; c++)
+        for (uint32_t k = 0; ran && k < x.warmup + x.repeats; k++) {
+            uint64_t gpu = 0, wall = 0;
+            if (x.fill)
+                fill(t, x, bpp);
+            else
+                memset(t.cpu, 0, size_t(t.pitch) * x.height);
+            ran = s.twod(op, read, t, gpu, wall);
+            if (ran && k >= x.warmup) {
+                r.gpu_ns[c * x.repeats + k - x.warmup] = gpu;
+                r.wall_ns[c * x.repeats + k - x.warmup] = wall;
+            }
+        }
+    if (ran) {
+        readBack(t, x, bpp, r);
+        Target alive;
+        alive.color = t;
+        checkAlive(b, x, alive, r);
+    }
+    d.destroyTexture(t);
+}
+
 void runCompute(switch_bench &b, const switch_bench_experiment &x, switch_bench_result &r)
 {
     if (!b.kernel)
@@ -527,6 +611,8 @@ void switch_bench_run(struct switch_bench *b, const struct switch_bench_experime
         return;
     if (x->kind == SWITCH_BENCH_COMPUTE)
         runCompute(*b, *x, *r);
+    else if (x->kind == SWITCH_BENCH_TWOD)
+        runTwod(*b, *x, *r);
     else
         runRender(*b, *x, *r);
     if (r->status == SWITCH_BENCH_KILLED)

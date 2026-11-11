@@ -5,6 +5,10 @@ precision: the store sweep (rop.py) and a fixed-function blend sweep (five facto
 restored to NVK's context-init value after the draw. analyse_precision says which options change a texel and whether any
 setting makes the store or the blend match Metal's rounding.
 
+twod: the 2D engine's solid fill and scaled copy, one operation a command buffer so a rejected one names itself:
+the solid colour given as RF32_GF32_BF32_AF32 (HW Test's gpu.x1.twod_clear) and as the target's own format with a
+packed colour (nouveau's EXA fill, xf86-video-nouveau nvc0_exa.c NVC0EXAPrepareSolid); copies at 1:1, 2:1 and 3:7.
+
 iterated: the iterated blend unit with colour 0 bound alone (the unit takes one target), a single-output pixel header,
 SET_BLEND_STATE_PER_TARGET false: the setup variants first, then each program of a rung-3 microcode table
 (out/agent-scratch/x1-f1/rung3/microcode.tsv: name, tags, method, value rows).
@@ -269,6 +273,76 @@ def analyse_iterated(experiments: list[dict], results: dict[str, dict]) -> list[
                 'why': result.get('why', ''),
                 'landed': bool(data) and data != fill,
                 'texels': [data[i : i + 4].hex() for i in range(0, min(len(data), 16), 4)],
+            }
+        )
+    return rows
+
+
+# the 2D engine's solid-prim colour format for a target format, and the colour packed as that format stores it
+TWOD_OWN = {
+    'bgra8unorm': (0xCF, 0xFF336699),
+    'rgba8unorm': (0xD5, 0xFF996633),
+    'rgb10a2unorm': (0xD1, 0xC0000000 | 0x266 << 20 | 0x199 << 10 | 0x0CC),
+    'rgba16float': (0xCA, 0),
+    'rgba32float': (0xC0, 0),
+    'r8unorm': (0xF3, 0x99),
+    'r16unorm': (0xEE, 0x9999),
+}
+TWOD_F32 = 0xC0
+
+
+def _twod(eid: str, fmt: str, op: dict, side: int = 16) -> dict:
+    fill = bytes([0xA5]) * (side * side * protocol.FORMATS[fmt][1])
+    return {
+        'id': eid,
+        'kind': 'twod',
+        'target': {'format': fmt, 'width': side, 'height': side},
+        'rect': [1, 1, side - 1, side - 1],
+        'fill': protocol.b64(fill),
+        'twod': op,
+        'readback': 'full',
+        'meta': {'family': 'twod'},
+    }
+
+
+def twod() -> list[dict]:
+    colour = [struct.unpack('<I', struct.pack('<f', v))[0] for v in (0.2, 0.4, 0.6, 1.0)]
+    out = []
+    for fmt, (own, packed) in TWOD_OWN.items():
+        if fmt not in protocol.FORMATS:
+            continue
+        out.append(_twod(f'twod-fill-f32-{fmt}', fmt, {'op': 'fill', 'colorFormat': TWOD_F32, 'color': colour}))
+        own_colour = colour if own == TWOD_F32 else [packed, 0, 0, 0]
+        out.append(_twod(f'twod-fill-own-{fmt}', fmt, {'op': 'fill', 'colorFormat': own, 'color': own_colour}))
+    for name, step in (('1to1', 1 << 32), ('2to1', 2 << 32), ('3to7', (3 << 32) // 7)):
+        for fmt in ('bgra8unorm', 'rgba16float'):
+            op = {'op': 'scale', 'du': step, 'dv': step, 'bilinear': name != '1to1', 'corner': True}
+            out.append(_twod(f'twod-scale-{name}-{fmt}', fmt, op))
+    return out
+
+
+def _at(data: bytes, index: int, bpp: int) -> bytes:
+    return data[index * bpp : (index + 1) * bpp]
+
+
+def analyse_twod(experiments: list[dict], results: dict[str, dict]) -> list[dict]:
+    """Give, per operation, whether it ran and whether it wrote inside its rectangle and nothing outside."""
+    rows = []
+    for e in experiments:
+        result = results.get(e['id']) or {}
+        data, fill = _texels(result), protocol.unb64(e['fill'])
+        bpp, side = protocol.FORMATS[e['target']['format']][1], e['target']['width']
+        x0, y0, x1, y1 = e['rect']
+        inside = [i for i in range(side * side) if x0 <= i % side < x1 and y0 <= i // side < y1]
+        outside = [i for i in range(side * side) if i not in set(inside)]
+        rows.append(
+            {
+                'id': e['id'],
+                'status': result.get('status'),
+                'why': result.get('why', ''),
+                'wrote_inside': bool(data) and all(_at(data, i, bpp) != _at(fill, i, bpp) for i in inside),
+                'kept_outside': bool(data) and all(_at(data, i, bpp) == _at(fill, i, bpp) for i in outside),
+                'first_inside': _at(data, inside[0], bpp).hex() if data else None,
             }
         )
     return rows

@@ -12,7 +12,7 @@ from dataclasses import dataclass
 
 PROTOCOL = 'benchloop/1'
 NAME = re.compile(r'^[a-z0-9][a-z0-9_.-]{0,63}$')
-KINDS = ('noop', 'known', 'fragment', 'compute', 'readback')
+KINDS = ('noop', 'known', 'fragment', 'compute', 'readback', 'twod')
 TEMPLATE = re.compile(r'^[0-9a-f]{16}$')
 READBACK = ('none', 'summary', 'full')
 
@@ -155,7 +155,7 @@ def instructions(code: bytes) -> int:
 
 def estimated_ms(experiment: dict) -> float:
     """Give the GPU time of the experiment's longest command buffer if every lane ran every instruction at full rate."""
-    if experiment['kind'] in ('noop', 'known'):
+    if experiment['kind'] in ('noop', 'known', 'twod'):
         return 0.0
     if experiment['kind'] == 'compute':
         c = experiment['compute']
@@ -185,6 +185,18 @@ def _program(program: object, field: str) -> None:
         _require(
             reads_position_w(sph), 'program.sph: a pixel header must read position W (bit 191), or the GPU traps it'
         )
+
+
+def _twod(t: object) -> None:
+    _require(isinstance(t, dict) and t.get('op') in ('fill', 'scale'), 'twod is an object whose op is fill or scale')
+    color = t.get('color', [0, 0, 0, 0])
+    _require(isinstance(color, list) and len(color) == 4, 'twod.color is four words')
+    for c in color:
+        _count(c, 0, 0xFFFFFFFF, 'twod.color')
+    for field in ('fmt2d', 'colorFormat'):
+        _count(t.get(field, 0), 0, 255, f'twod.{field}')
+    for field in ('du', 'dv', 'sx', 'sy'):
+        _count(t.get(field, 0), 0, (1 << 63) - 1, f'twod.{field}')
 
 
 def validate_experiment(e: dict) -> None:
@@ -222,6 +234,8 @@ def validate_experiment(e: dict) -> None:
             for n in v:
                 _count(n, 1, hi, f'compute.{field}')
         _require(c['threads'][0] * c['threads'][1] * c['threads'][2] <= MAX_THREADS, 'compute.threads > 1024')
+    if e['kind'] == 'twod':
+        _twod(e.get('twod'))
     if e['kind'] == 'readback':
         _pairs(e.get('methods', []), 'methods')
         _pairs(e.get('restore', []), 'restore')

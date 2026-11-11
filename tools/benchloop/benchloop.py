@@ -7,6 +7,7 @@
     rop                        the ROP's float to unorm rounding, against each rounding model
     precision                  the store and fixed-function blend under every ROP option set the other way (sweeps.py)
     iterated [microcode.tsv]   the iterated blend unit with colour 0 bound alone; the table's programs after the setups
+    twod                       the 2D engine's solid fill and scaled copy, one operation a command buffer
 
 --fake <folder> runs on the fake device (fakedevice.py) instead of USB. Results land in --out (default
 ~/Library/Application Support/switch-ios/benchloop/<time>/): the device's files, results.tsv and report.json.
@@ -23,7 +24,7 @@ from tools.benchloop import blend, doctor, report, rop, session, sweeps
 
 def parse(argv: list[str]) -> argparse.Namespace:
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument('command', choices=('doctor', 'run', 'latency', 'blend', 'rop', 'precision', 'iterated'))
+    p.add_argument('command', choices=('doctor', 'run', 'latency', 'blend', 'rop', 'precision', 'iterated', 'twod'))
     p.add_argument('inputs', nargs='*', type=Path)
     p.add_argument('--udid')
     p.add_argument('--fake', type=Path, help='a folder the fake device works in')
@@ -49,11 +50,9 @@ def experiments(args: argparse.Namespace) -> list[dict]:
     if args.command == 'blend':
         enables = (None,) if args.blend_enable == 'as-is' else (True, False)
         return [e for path in args.inputs for e in blend.generate(blend.Table.load(path), args.format, 32, enables)]
-    if args.command == 'precision':
-        return sweeps.precision()
     if args.command == 'iterated':
         return sweeps.iterated(args.inputs[0] if args.inputs else None)
-    return rop.generate()
+    return {'precision': sweeps.precision, 'twod': sweeps.twod}.get(args.command, rop.generate)()
 
 
 def main(argv: list[str]) -> int:

@@ -69,11 +69,8 @@ def analysis(command: str, planned: list[dict], results: dict[str, dict], inputs
         }
     if command == 'rop':
         return {'rop': [rop.check(e, results.get(e['id'], {'status': 'missing'})) for e in planned]}
-    if command == 'precision':
-        return {'precision': sweeps.analyse_precision(planned, results)}
-    if command == 'iterated':
-        return {'iterated': sweeps.analyse_iterated(planned, results)}
-    return {}
+    sweep = {'precision': sweeps.analyse_precision, 'iterated': sweeps.analyse_iterated, 'twod': sweeps.analyse_twod}
+    return {command: sweep[command](planned, results)} if command in sweep else {}
 
 
 def write(command: str, planned: list[dict], results: dict[str, dict], out: Path, inputs: list[Path]) -> str:

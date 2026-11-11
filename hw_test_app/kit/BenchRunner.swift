@@ -38,7 +38,7 @@ final class BenchRunner {
 
     static let kinds: [BenchKind: switch_bench_kind] = [
         .noop: SWITCH_BENCH_NOOP, .known: SWITCH_BENCH_KNOWN, .fragment: SWITCH_BENCH_FRAGMENT,
-        .compute: SWITCH_BENCH_COMPUTE, .readback: SWITCH_BENCH_READBACK,
+        .compute: SWITCH_BENCH_COMPUTE, .readback: SWITCH_BENCH_READBACK, .twod: SWITCH_BENCH_TWOD,
     ]
     static let statuses = ["ok", "invalid", "refused", "killed", "error"]
 
@@ -63,6 +63,13 @@ final class BenchRunner {
         (x.restore, x.restore_pairs) = (pinned.words(e.restore), UInt32(e.restore.count / 2))
         x.single_target = e.singleTarget ? 1 : 0
         x.template_key = e.templateKey
+        if let t = e.twod {
+            x.twod.op = (t.scale ? SWITCH_BENCH_TWOD_SCALE : SWITCH_BENCH_TWOD_FILL).rawValue
+            (x.twod.fmt2d, x.twod.color_format) = (t.fmt2d, t.colorFormat)
+            x.twod.color = (t.color[0], t.color[1], t.color[2], t.color[3])
+            (x.twod.du, x.twod.dv, x.twod.sx, x.twod.sy) = (t.du, t.dv, t.sx, t.sy)
+            (x.twod.bilinear, x.twod.corner) = (t.bilinear ? 1 : 0, t.corner ? 1 : 0)
+        }
         let timed = e.draws.count * Int(e.repeats)
         let texelBytes = e.readback == .none ? 0 : Int(e.width * e.height) * e.texelBytes
         var r = switch_bench_result()
