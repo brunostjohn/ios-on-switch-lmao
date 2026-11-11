@@ -60,7 +60,9 @@ from pathlib import Path
 
 from tools.gpu.shaders import replies as compiler_replies
 
-DESCRIPTOR = re.compile(r'(samples|topo|ds|opt|c\d|a\d+)=')
+# os=<build>: the OS build the journal was written under, which the raw pack keeps a line to (tools/gpu/rawpack.py
+# own_build)
+DESCRIPTOR = re.compile(r'(samples|topo|ds|opt|os|c\d|a\d+)=')
 COMPUTE = re.compile(r'(form|opt|max|tgm|icb|depth|abf|mut)=')
 # The checkout: bazel run's (also what //deploy:pull_logs runs this in), else the one this file is in.
 PROJECT = Path(os.environ.get('BUILD_WORKSPACE_DIRECTORY') or Path(__file__).resolve().parents[3])
@@ -136,8 +138,9 @@ def _normal_render(line: str) -> tuple[str | None, str | None]:
     end = line.find(' | ', f + 5) if f >= 0 else -1
     if v < 0 or f < 0:
         return None, None
-    # The functions the state links follow its stages (the frontend's linkedText: " | <vl|vp|fl|fp> <stage>")
-    while end >= 0 and line[end + 3 : end + 6] in ('vl ', 'vp ', 'fl ', 'fp '):
+    # The functions the state links follow its stages (the frontend's linkedText: " | <vl|vp|fl|fp> <stage>"), then
+    # the cubic samplers' binds of a state's variant (" | cubic ...", raw_cubic.h)
+    while end >= 0 and (line[end + 3 : end + 6] in ('vl ', 'vp ', 'fl ', 'fp ') or line[end + 3 : end + 9] == 'cubic '):
         end = line.find(' | ', end + 3)
     head = line[:v].split()
     label = next((t for t in head if t.startswith('label=')), 'label=-')

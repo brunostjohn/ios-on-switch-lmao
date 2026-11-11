@@ -326,14 +326,15 @@ def _seed_raw_pack_impl(ctx):
     crawl = ctx.attr.crawl[CrawlInfo]
     qc = [crawl.qc]
     lines = ctx.actions.declare_file(named(ctx, "_work/corpus.log"))
+    corpus_report = ctx.actions.declare_file(named(ctx, "_work/corpus-report.txt"))
     kind = ctx.attr.ipsw[IpswInfo].kind
     archives = [f for f in ctx.files.archives if f.basename == kind + ".tsv"]
     ctx.actions.run(
         executable = ctx.executable._tool,
-        arguments = ["corpus", "--corpus", ctx.file.corpus.path, "--out", lines.path] +
-                    ["--archives=" + f.path for f in archives],
+        arguments = ["corpus", "--corpus", ctx.file.corpus.path, "--out", lines.path, "--report", corpus_report.path] +
+                    ["--build", ctx.attr.ipsw[IpswInfo].build] + ["--archives=" + f.path for f in archives],
         inputs = [ctx.file.corpus] + archives,
-        outputs = [lines],
+        outputs = [lines, corpus_report],
         mnemonic = "MetalRawCorpus",
         progress_message = "Picking the raw pack's corpus lines",
     )
@@ -390,11 +391,12 @@ def _seed_raw_pack_impl(ctx):
     args.add("link")
     args.add("--generator", ctx.file.generator)
     args.add("--out", linked.path)
+    args.add("--corpus-report", corpus_report)
     args.add_all(buckets, expand_directories = False)
     ctx.actions.run(
         executable = ctx.executable._tool,
         arguments = [args],
-        inputs = depset(buckets + _generator_files(ctx, _RAW_LINK)),
+        inputs = depset([corpus_report] + buckets + _generator_files(ctx, _RAW_LINK)),
         outputs = [linked],
         mnemonic = "MetalRawLink",
         progress_message = "Linking the raw GM20B path's pipeline pack",

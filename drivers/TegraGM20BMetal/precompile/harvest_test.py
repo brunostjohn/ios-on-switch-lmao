@@ -22,6 +22,22 @@ def container(volume: Path, uuid: str, identifier: str) -> Path:
     return root
 
 
+class Lines(unittest.TestCase):
+    def test_a_render_line_keeps_its_build_and_its_variants_binds(self):
+        line = (
+            'R ok=1 label=primitive_image os=24B119 samples=1 topo=0 ds=260/260 t=12 c0=80:0:0:1:0:0:1:0:0'
+            ' | v primitive_image_vertex #0:36:4700 | f primitive_image_fragment #0:36:4700'
+            ' | cubic s0:0000n t0:80 | ms=4'
+        )
+        kept, key = harvest.normal(line)
+        self.assertEqual(
+            kept,
+            'R ok=1 label=primitive_image os=24B119 samples=1 topo=0 ds=260/260 c0=80:0:0:1:0:0:1:0:0'
+            ' | v primitive_image_vertex #0:36:4700 | f primitive_image_fragment #0:36:4700 | cubic s0:0000n t0:80 | ',
+        )
+        self.assertNotEqual(key, harvest.normal(line.replace(' os=24B119', ' os=21H461'))[1])
+
+
 class Caches(unittest.TestCase):
     def test_a_closed_system_container_is_opened_by_its_identifier(self):
         with tempfile.TemporaryDirectory() as d:
