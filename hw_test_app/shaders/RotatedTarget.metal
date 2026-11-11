@@ -38,6 +38,14 @@ fragment float4 rotated_fetch_fragment(RotatedVertex in [[stage_in]], float4 des
     return destination * 0.5f + in.color * 0.5f;
 }
 
+/// Reaches every pixel it covers and writes none (`color.a` is never 2, which the compiler cannot know)
+fragment float4 rotated_discard_fragment(RotatedVertex in [[stage_in]])
+{
+    if (in.color.a != 2.0f)
+        discard_fragment();
+    return in.color;
+}
+
 /// Takes fwidth alone, the same along either axis: a turned plane draws the program as it is
 fragment float4 rotated_fwidth_fragment(RotatedVertex in [[stage_in]])
 {

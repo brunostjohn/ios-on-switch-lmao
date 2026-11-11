@@ -11,8 +11,10 @@ import Metal
 /// derivative), a private depth texture neither loaded nor stored through a backing laid out as the plane, a 4x resolve
 /// into the plane through the resolve state's turned variant, a private colour texture stored beside the plane and a
 /// private depth texture loaded beside it (each through a stand-in laid out as the plane, turned in and back by the
-/// pack's turn copies), and rotation 4's load, which Metal makes transposed (its expected bytes the reference pass
-/// loading pass 1's frame flipped top to bottom): those cells FAIL when they run anywhere else (path= other than raw).
+/// pack's turn copies), rotation 4's load, which Metal makes transposed in each tile a draw reaches (its expected bytes
+/// the reference pass loading pass 1's frame flipped top to bottom, every tile reached by a full-frame draw whose fragments
+/// are discarded), and a load with no draw, which leaves the plane as it is: those cells FAIL when they run anywhere else
+/// (path= other than raw).
 /// native_cells / native_raw count the required cells and those that ran raw; tie_wrong counts the pixels the plane's
 /// rasteriser decides apart from the frame's where an edge runs through pixel centres (its tie rule turns too).
 struct RotatedTargetTest: HWTest {
@@ -74,7 +76,7 @@ struct RotatedTargetTest: HWTest {
 }
 
 enum RotatedCell: String, CaseIterable {
-    case clear, draw, load, points, fetch, position, derivative, fwidth, depth, resolve, beside, keptDepth, tie
+    case clear, draw, load, idleLoad, points, fetch, position, derivative, fwidth, depth, resolve, beside, keptDepth, tie
 
     enum Kind { case native, informational }
 
@@ -82,7 +84,7 @@ enum RotatedCell: String, CaseIterable {
 }
 
 struct RotatedStates {
-    let plain, position, derivative, fwidth, fetch, depthTested, multisampled, pair: MTLRenderPipelineState
+    let plain, position, derivative, fwidth, fetch, discarded, depthTested, multisampled, pair: MTLRenderPipelineState
     let lessEqual: MTLDepthStencilState
 
     init(_ gpu: GPU) throws {
@@ -94,6 +96,7 @@ struct RotatedStates {
         derivative = try make("rotated_derivative_fragment")
         fwidth = try make("rotated_fwidth_fragment")
         fetch = try make("rotated_fetch_fragment")
+        discarded = try make("rotated_discard_fragment")
         depthTested = try gpu.render(
             vertex: "rotated_vertex", fragment: "rotated_fragment", format: .bgra8Unorm, depth: .depth32Float)
         multisampled = try gpu.render(
@@ -235,8 +238,13 @@ struct RotatedCells {
         case .load:
             return [
                 encode(load: .clear, drawn),
-                encode(load: .load) { e in shapes(e, rect(10, 30, 40, 50), [0, 1, 1, 1], states.plain) },
+                encode(load: .load) { e in
+                    shapes(e, rect(0, 0, width, height), [1, 1, 1, 1], states.discarded)
+                    shapes(e, rect(10, 30, 40, 50), [0, 1, 1, 1], states.plain)
+                },
             ]
+        case .idleLoad:
+            return [encode(load: .clear, drawn), encode(load: .load) { _ in }]
         case .points:
             return [
                 encode(load: .clear) { e in

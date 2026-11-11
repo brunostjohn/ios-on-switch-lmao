@@ -615,7 +615,10 @@ static bool encodeRawAttempt(RMCommandBuffer *cb, size_t from, size_t to, const 
                 if (standInPass(t, false))
                     return false;
             standInLoads.clear();
-            if (!turned.begin(*rc, p, why))
+            bool draws = false;
+            for (size_t i = at + 1; i < to && !draws && cb->_plan.operation(i).op != OpEnd; i++)
+                draws = isPlanDraw(cb->_plan.operation(i).op);
+            if (!turned.begin(*rc, p, draws, why))
                 return fail(PredPassRotated, *why);
             if (!(re = rc->render(p)))
                 return fail(PredEncPassRender, "a pass the raw path cannot render to", p.count);

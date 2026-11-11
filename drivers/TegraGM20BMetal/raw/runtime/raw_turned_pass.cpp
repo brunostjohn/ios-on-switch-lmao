@@ -22,7 +22,7 @@ Texture *TurnedPass::standIn(CommandBuffer &rc, Texture &t, uint32_t tag, bool l
     return s;
 }
 
-bool TurnedPass::begin(CommandBuffer &rc, PassDesc &p, const char **why)
+bool TurnedPass::begin(CommandBuffer &rc, PassDesc &p, bool draws, const char **why)
 {
     backs_.clear();
     held_.clear();
@@ -40,7 +40,7 @@ bool TurnedPass::begin(CommandBuffer &rc, PassDesc &p, const char **why)
         if (!t)
             continue;
         if (t->rotation == 4) {
-            if (a.load == ColorAttachment::Load) {
+            if (draws && a.load == ColorAttachment::Load) {
                 Texture *temp = rc.turnScratch(turnCopyFormat(t->bpp), t->width, t->height, kTurnTag + j);
                 if (!temp) {
                     *why = "no scratch for a rotation-4 plane's load";
