@@ -22,4 +22,5 @@ TEST(SwitchVideoEncoders, AvePluginOnVideoToolbox)
                                            "errors), sync samples 0 10 15 25, PSNR min Y 99.0 U 99.0 V 99.0 dB"),
               5u)
         << out;
+    EXPECT_NE(out.find("ok layout probe: 7 of 7 layouts, 7 decode back exactly"), std::string::npos) << out;
 }

@@ -150,7 +150,7 @@ public enum Compressor {
         return session
     }
 
-    static func read(_ session: VTSession, _ key: CFString) -> CFTypeRef? {
+    public static func read(_ session: VTSession, _ key: CFString) -> CFTypeRef? {
         var value: Unmanaged<CFTypeRef>?
         guard VTSessionCopyProperty(session, key: key, allocator: nil, valueOut: &value) == noErr else { return nil }
         return value?.takeRetainedValue()

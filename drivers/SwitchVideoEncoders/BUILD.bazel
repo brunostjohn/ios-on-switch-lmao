@@ -35,6 +35,7 @@ ios_binary(
     srcs = [
         "AVE/AVEEncoder.c",
         "AVE/AVEInput.c",
+        "AVE/AVELayoutProbe.c",
         "AVE/AVEReorder.c",
         "AVE/AVETiles.c",
         "AVE/H264NVENC.c",

@@ -45,6 +45,9 @@ typedef struct {
     uint64_t bytes, copyTicks, encodeTicks;
     bool surfaceInput;               // VIC writes the input from the picture's IOSurface (AVEInput.c)
     uint32_t inputCopies, inputVIC;  // pictures whose input the CPU copied, and VIC wrote
+#if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
+    CVPixelBufferRef probeSource;  // the last picture, for SwitchEncoderLayoutProbe
+#endif
 } Encoder;
 
 // A region of a source picture, in pixels.
@@ -109,8 +112,11 @@ OSStatus ave_encode_tile(VTVideoEncoderRef ref, VTEncoderTile tile, CVImageBuffe
                          VTInt32Size size, CFDictionaryRef options, VTEncodeInfoFlags *info);
 OSStatus ave_complete_tiles(VTVideoEncoderRef ref);
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
-// hw_test_app's image.heic_encode: this session's pictures NVENC coded, tiles among them, and failures.
+// hw_test_app's encode tests: this session's pictures NVENC coded, tiles among them, failures, and how their inputs
+// reached NVENC.
 CFDictionaryRef ave_copy_routes(const Encoder *e);
+// AVELayoutProbe.c, hw_test_app's encode.nvenc_input_layouts: the last picture as one IDR from each input layout.
+CFDictionaryRef ave_copy_layout_probe(Encoder *e);
 #endif
 
 #endif

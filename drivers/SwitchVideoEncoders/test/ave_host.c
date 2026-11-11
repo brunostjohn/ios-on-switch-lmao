@@ -17,7 +17,7 @@
 // 1280x720 High IDR and P picture are byte for byte those of NVIDIA's own T210 driver (driverControls) and the checker
 // accepts them; the checker refuses each kind of bad submit derived from a good one; the layouts' offsets are a
 // bijection; the rate control converges on a synthetic bits-versus-QP model; the HEVC tile slots (TileCheck.c, whose
-// fake H.265 job is answered by tile_check_engine) in the same four layouts.
+// fake H.265 job is answered by tile_check_engine) over the same routes; the layout probe's IDRs (ProbeCheck.c).
 // Prints "PASS ave ..." (test:ave_host_test).
 #include "../AVE/AVEEncoder.c"
 #include <IOKit/IOReturn.h>
@@ -25,6 +25,7 @@
 #include <stddef.h>
 #include <stdio.h>
 #include "EncodeCheck.h"
+#include "ProbeCheck.h"
 #include "ReorderCheck.h"
 #include "TileCheck.h"
 #include "../../SwitchVideoDecoders/AVD/H264Syntax.h"
@@ -866,6 +867,12 @@ int main(void)
     gRefuseB = false;
     printf("B pictures refused: %s\n", refusalLine);
     EXPECT(refusalOk, "a refused B picture is coded as an I picture, B pictures turn off and the session goes on");
+    gSurfaceInput = true;
+    gRefuseSurfaces = false;
+    char probeLine[256];
+    const bool probed = probe_check(spec, probeLine, sizeof(probeLine));
+    printf("%s\n", probeLine);
+    EXPECT(probed, "SwitchEncoderLayoutProbe");
     CFRelease(spec);
     for (unsigned r = 0; r < sizeof(runs) / sizeof(runs[0]); r++) {
         gLayout = runs[r].layout;

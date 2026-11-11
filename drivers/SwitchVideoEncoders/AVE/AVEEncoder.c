@@ -59,7 +59,8 @@
 #define AVE_ENCODER_ID      "com.apple.videotoolbox.videoencoder.h264"
 #define AVE_HEVC_ENCODER_ID "com.apple.videotoolbox.videoencoder.hevc"
 
-#define kSwitchEncoderRoutesKey CFSTR("SwitchEncoderRoutes")
+#define kSwitchEncoderRoutesKey      CFSTR("SwitchEncoderRoutes")
+#define kSwitchEncoderLayoutProbeKey CFSTR("SwitchEncoderLayoutProbe")
 
 os_log_t gLog;
 
@@ -363,6 +364,11 @@ static OSStatus encodePicture(Encoder *e, VTVideoEncoderFrame frame, CVPixelBuff
     const bool key = plan ? plan->picture.type == H264ENC_IDR : ave_wants_key(e, pts, options, e->sinceKey);
     const bool hevc = e->codec == kCMVideoCodecType_HEVC;
     const uint64_t began = mach_absolute_time();
+#if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
+    CVPixelBufferRetain(image);
+    CVPixelBufferRelease(e->probeSource);
+    e->probeSource = image;
+#endif
     if (key && !plan) {
         e->frameNum = 0;
         e->pocCount = 0;
@@ -626,6 +632,7 @@ static OSStatus copySupportedPropertyDictionary(VTVideoEncoderRef ref, CFDiction
     describe(s, kVTCompressionPropertyKey_UsingHardwareAcceleratedVideoEncoder, kVTPropertyType_Boolean, true);
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
     describe(s, kSwitchEncoderRoutesKey, NULL, true);
+    describe(s, kSwitchEncoderLayoutProbeKey, NULL, true);
 #endif
     *out = s;
     return noErr;
@@ -751,6 +758,12 @@ static OSStatus copyProperty(CMBaseObjectRef ref, CFStringRef key, CFAllocatorRe
         pthread_mutex_unlock(&e->lock);
         return *(CFTypeRef *)value ? noErr : kVTAllocationFailedErr;
     }
+    if (CFEqual(key, kSwitchEncoderLayoutProbeKey)) {
+        pthread_mutex_lock(&e->lock);
+        *(CFTypeRef *)value = ave_copy_layout_probe(e);
+        pthread_mutex_unlock(&e->lock);
+        return *(CFTypeRef *)value ? noErr : -12783;
+    }
 #endif
     return -12783;  // kCMBaseObjectError_ValueNotAvailable
 }
@@ -781,6 +794,9 @@ static void finalize(CMBaseObjectRef ref)
         nvenc_close(e->client);  // the kernel waits for this connection's jobs
     }
     free(e->avcc);
+#if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
+    CVPixelBufferRelease(e->probeSource);
+#endif
     if (e->format)
         CFRelease(e->format);
     CFTypeRef *strings[] = {(CFTypeRef *)&e->profileLevel, (CFTypeRef *)&e->entropy, (CFTypeRef *)&e->primaries,
