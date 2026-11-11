@@ -31,6 +31,7 @@ kernel_driver(
     name = "TegraNVDEC",
     srcs = [
         "TegraNVDEC.cpp",
+        "SwitchNVDECCompletions.cpp",
         "SwitchNVDECJobs.cpp",
         "SwitchNVDECSemantics.cpp",
         "SwitchNVDECOutput.cpp",

@@ -67,6 +67,31 @@ host_test(
 
 
 host_shims(
+    name = "completions_kernel",
+    headers = ["IOKit/IOUserClient.h", "IOKit/IOLib.h", "IOKit/IOLocks.h", "IOKit/IOBufferMemoryDescriptor.h"],
+    stubs = "switch_nvdec_completions_stubs.h",
+)
+
+host_test(
+    name = "switch_nvdec_completions_test",
+    srcs = [
+        "switch_nvdec_completions_test.cpp",
+        "//drivers/TegraNVDEC:SwitchNVDECCompletions.h",
+        "//drivers/TegraNVDEC:SwitchNVDECQueue.h",
+        "//drivers/TegraNVDEC:TegraNVDEC.h",
+        "//drivers/TegraNVDEC:TegraNVDECABI.h",
+        "//drivers/TegraNVDEC:nvidia/clc5b0.h",
+        "//drivers/TegraNVDEC:nvidia/nvdec_drv.h",
+        "//drivers/TegraGM20B:SwitchGpuBacking.h",
+        "//kits/SwitchDMA:SwitchDMAPages.h",
+        "//kits/SwitchDMA:SwitchDcache.h",
+    ],
+    additional_compiler_inputs = ["//drivers/TegraNVDEC:SwitchNVDECCompletions.cpp"],
+    deps = [":completions_kernel"],
+)
+
+
+host_shims(
     name = "submit_kernel",
     headers = ["IOKit/IOLib.h", "IOKit/IOLocks.h", "IOKit/IOBufferMemoryDescriptor.h", "kern/thread.h", "kern/clock.h"],
     stubs = "switch_nvdec_submit_stubs.h",

@@ -210,7 +210,7 @@ void nvdec_free(void *ctx, uint32_t handle)
     c->va[handle] = NULL;
 }
 
-int nvdec_submit(void *ctx, const TegraNVDECSubmit *s, uint32_t *fence)
+int nvdec_submit(void *ctx, const TegraNVDECSubmit *s, TegraNVDECFence *reply)
 {
     NVDECClient *c = ctx;
     uint64_t avail[TEGRA_NVDEC_MAX_ENTRIES] = {0};
@@ -226,7 +226,7 @@ int nvdec_submit(void *ctx, const TegraNVDECSubmit *s, uint32_t *fence)
         gRefused++;
         return -1;
     }
-    *fence = (uint32_t)++gSubmits;
+    *reply = (TegraNVDECFence){(uint32_t)++gSubmits, 0};
     return 0;
 }
 

@@ -291,7 +291,10 @@ static int jobSubmit(void *ctx, const TegraNVDECSubmit *submit, uint32_t *fence)
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
     avd_frame_lap(&d->timing, AVD_BEFORE_SUBMIT, mach_absolute_time());
 #endif
-    return nvdec_submit(d->client, submit, fence);
+    TegraNVDECFence reply = {0};
+    const int error = nvdec_submit(d->client, submit, &reply);
+    *fence = reply.fence;
+    return error;
 }
 
 static int jobWait(void *ctx, const TegraNVDECWait *wait)
