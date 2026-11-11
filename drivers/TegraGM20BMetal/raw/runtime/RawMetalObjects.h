@@ -167,7 +167,9 @@ typedef NS_ENUM(uint8_t, RMTextureKind) {
     // released, from its queue)
     raw::Pipeline *_raw;
     bool _packable;     // its functions are one framework's default library's (looked up in the pack)
-    bool _packed;       // its record is the pack's, and so are its variants' (RawMetalCubic.mm packedVariants)
+    // its record is the pack's, and so are its variants' (RawMetalCubic.mm packedVariants); a record this process made is
+    // not, and its variants are made as well
+    bool _packed;
     bool _completable;  // both its functions are this device's (the runtime makes its record if the pack has none)
     bool _archived;     // an archive its creation listed declares it: its twin is made as a packed one's
     bool _caTransform;

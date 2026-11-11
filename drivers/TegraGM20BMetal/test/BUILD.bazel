@@ -100,7 +100,8 @@
 #                     push word raw/pack/probe_bind.h's bind-offset run names
 #   raw_pack_test     raw/runtime/raw_pack.h: a pack of another version is refused before anything else is read; a
 #                     stage's variants come out of their section in order, none past its end, and a draw takes the
-#                     first whose assumptions its facts hold (raw_variants.h); an archive declares its own keys alone
+#                     first whose assumptions its facts hold (raw_variants.h); an archive declares its own keys alone; a
+#                     record a process made is not the pack's (raw_variants.h packHolds)
 #   rawpack_archives_test  raw/pack/archives.py: the archive key lists, keyed as the runtime keys a creation
 #   raw_cache_test    raw/runtime/raw_cache.h: the records the runtime makes for states and kernels the pack lacks, kept
 #                     on disk and made once per process (raw/test/cachecheck: the same checks on a bucket's real records),

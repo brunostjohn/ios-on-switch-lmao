@@ -86,6 +86,22 @@ TEST(RawPack, AStatesVariantRecordsAreFoundByNameNeverAsTheState)
     EXPECT_EQ(raw::variantNameAt("c0=80 | v a | f b"), 17u);
 }
 
+// T-v1 iconservicesagent[322]: it made primitive_image's state (17:55:29.836) and its cubic variant (17:55:30.681), none of
+// them in the pack; a later pipeline object of that state got the made record from Device::pipeline, was taken as packed,
+// and its variant was refused as one the pack lacks (17:55:44.477), though the process had made it 14 s before.
+TEST(RawPack, ARecordAProcessMadeIsNotThePacks)
+{
+    raw::Pack pack;
+    std::string err;
+    ASSERT_TRUE(pack.load(writeVariantPack("holds.bin").c_str(), 0, err)) << err;
+    EXPECT_TRUE(raw::packHolds(pack, pack.find(7)));
+    EXPECT_TRUE(raw::packHolds(pack, pack.variantRecord(7, " | tests=2")));
+    const raw::PackPipeline made = *pack.find(7);
+    EXPECT_FALSE(raw::packHolds(pack, &made));
+    EXPECT_FALSE(raw::packHolds(pack, nullptr));
+    EXPECT_FALSE(raw::packHolds(pack, pack.find(7) + 3));
+}
+
 TEST(RawPack, RefusesAPackOfAnotherVersion)
 {
     raw::Pack pack;
