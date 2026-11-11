@@ -140,6 +140,17 @@ algebraic_lowering += [
     (('ior', ('u2u32', 'a@16'), ('ishl', ('u2u32', 'b@16'), 16)), ('pack_32_2x16_split', a, b)),
 ]
 
+# ios-on-switch-lmao: metal2vulkan holds a sampled texel rounded to half in an
+# f32 (a NaN kept as sampled, anything else the round trip through f16), and
+# narrows it again for the half arithmetic that reads it. Narrowed, both arms
+# are the texel's own f16: the round trip of a half is exact, and a NaN arm
+# narrows the texel itself. Each channel's guard (mask, compare, select, F2F
+# back) goes, leaving one F2F.
+algebraic_lowering += [
+    (('f2f16_rtne', ('bcsel', c, 'a@32', ('f2f32', ('f2f16_rtne', a)))), ('f2f16_rtne', a)),
+    (('f2f16_rtne', ('bcsel', c, ('f2f32', ('f2f16_rtne', 'a@32')), a)), ('f2f16_rtne', a)),
+]
+
 # ios-on-switch-lmao: metal2vulkan flushes a float's denormal to a signed zero
 # with integer ops wherever Metal does. An FTZ instruction (fp32 unless the
 # shader keeps denormals) flushes its float sources itself: those take the float
