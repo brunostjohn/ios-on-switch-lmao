@@ -72,6 +72,7 @@ struct Display {
     unsigned underflowRun = 0, pitchChecks = 0, hooks = 0, barriers = 0, deadlineArms = 0;
     unsigned marksWritten = 0, tapeStops = 0, presents = 0, latched = 0, planeStages = 0;
     uint32_t notedUnderflow = 0, underflowCounts[3] = {};
+    unsigned memoryPlans = 0;
 
     Display()
     {
@@ -138,6 +139,7 @@ struct Display {
     void flipLatched() { ++latched; }
     void releaseIdleDirectReads() {}
     void noteLatchedUnderflow(uint32_t latched) { notedUnderflow |= latched; }
+    void applyUiMemoryPlan() { ++memoryPlans; }
     void checkFlip(bool)
     {
         const int asked = ring.pending;
@@ -340,6 +342,23 @@ TEST(ScanoutStart, SingleBufferCopiedStartupStillLatches)
     d.frameEnd(true);
     EXPECT_TRUE(d.rotationLatched);
     EXPECT_EQ(d.tapeStops, 1u);
+}
+
+TEST(ScanoutStart, WindowAsMemoryPlanAtEachFirstLatch)
+{
+    Display d;
+    d.presentEntry(Display::kSlot0);
+    EXPECT_EQ(d.memoryPlans, 0u);
+    d.frameEnd(true);
+    EXPECT_EQ(d.memoryPlans, 1u);
+    d.frameEnd(false);
+    d.frameEnd(false);
+    EXPECT_EQ(d.memoryPlans, 1u);
+    // SC7's resume (SwitchDisplayResume.h): window A latches the restored state again.
+    d.rotationLatched = false;
+    d.rotationRequested = d.frameEnds;
+    d.frameEnd(true);
+    EXPECT_EQ(d.memoryPlans, 2u);
 }
 
 TEST(ScanoutStart, LatchedUnderflowAfterTheRotationIsNotedForTheFrame)

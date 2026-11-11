@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: BSD-2-Clause-Patent
 #include <gtest/gtest.h>
+#include <string>
 #include <vector>
 #include "../SwitchDisplayComposition.h"
 #include "../SwitchDisplayMemoryEnvelope.h"
@@ -7,7 +8,14 @@
 
 namespace {
 std::vector<uint64_t> reservations;
+std::vector<switch_display_memory_head> heads;
+std::vector<std::string> logs;
 int reserveError, memoryReady = 1;
+
+void IOLog(const char *format, ...)
+{
+    logs.emplace_back(format);
+}
 
 int switch_emc_display_memory_ready()
 {
@@ -17,6 +25,7 @@ int switch_emc_display_memory_ready()
 int switch_emc_display_memory_reserve(const switch_display_memory_head *request)
 {
     reservations.push_back(request->peak_bytes_per_second);
+    heads.push_back(*request);
     return reserveError;
 }
 
@@ -47,7 +56,12 @@ struct Display {
         }
     } planeLatch;
 
-    bool planeHeldSet = false, gpuScanout = false, queued = false;
+    bool planeHeldSet = false, gpuScanout = false, queued = false, overlaysIdle = true;
+
+    bool planeWindowIdle() const
+    {
+        return overlaysIdle;
+    }
 
     void getDisplayDimensions(uint32_t *width, uint32_t *height)
     {
@@ -90,6 +104,8 @@ protected:
     void SetUp() override
     {
         reservations.clear();
+        heads.clear();
+        logs.clear();
         reserveError = 0;
         memoryReady = 1;
         layers[0] = image(1440, 2560);
@@ -211,4 +227,51 @@ TEST_F(DisplayAdmission, CarriedUiCommitKeepsItsAcceptedEnvelope)
     EXPECT_EQ(reservations.size(), 2u);
 }
 
+TEST_F(DisplayAdmission, WindowAAloneGetsItsPlanAtTheFirstLatch)
+{
+    display.applyUiMemoryPlan();
+    ASSERT_EQ(heads.size(), 1u);
+    EXPECT_EQ(heads[0].peak_bytes_per_second, 312000000u);
+    EXPECT_EQ(heads[0].bandwidth_envelope, 0u);
+    EXPECT_NE(heads[0].windows[0].active, 0u);
+    EXPECT_EQ(heads[0].windows[1].active, 0u);
+    EXPECT_EQ(heads[0].windows[2].active, 0u);
+    EXPECT_EQ(logs.size(), 1u);
+    display.applyUiMemoryPlan();
+    EXPECT_EQ(heads.size(), 1u) << "held: the latch after a flip publishes nothing";
 }
+
+TEST_F(DisplayAdmission, AnOverlaysPlanIsNotReplacedAtTheFirstLatch)
+{
+    ASSERT_TRUE(display.validatePlaneBandwidth(present, layers, 720, 1280));
+    ASSERT_EQ(heads.size(), 1u);
+    display.applyUiMemoryPlan();
+    EXPECT_EQ(heads.size(), 1u);
+    Display other;
+    other.overlaysIdle = false;
+    other.applyUiMemoryPlan();
+    EXPECT_EQ(heads.size(), 1u) << "an overlay armed with the first frame publishes its own plan";
+}
+
+TEST_F(DisplayAdmission, RefusedPlanIsLoggedAndTriedAtTheNextFirstLatch)
+{
+    reserveError = -95;
+    display.applyUiMemoryPlan();
+    ASSERT_EQ(logs.size(), 1u);
+    EXPECT_NE(logs[0].find("refused"), std::string::npos);
+    EXPECT_FALSE(display.displayMemory.holding());
+    reserveError = 0;
+    display.applyUiMemoryPlan();
+    EXPECT_EQ(heads.size(), 2u);
+    EXPECT_TRUE(display.displayMemory.holding());
+}
+
+TEST_F(DisplayAdmission, NoModeNoPlan)
+{
+    display.displayMemory.invalidate();
+    display.applyUiMemoryPlan();
+    EXPECT_TRUE(heads.empty());
+    EXPECT_TRUE(logs.empty()) << "a timing that cannot be read is logged where it is captured";
+}
+
+}  // namespace

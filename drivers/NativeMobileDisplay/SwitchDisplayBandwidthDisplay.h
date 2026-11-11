@@ -57,6 +57,27 @@ uint64_t planeAdmissionDemand(const native_planes::Image &image)
     return image.yuv ? switch_display::add(bytes, bytes) : bytes;
 }
 
+// Window A's first latch, and its first again after SC7: the MC plan for window A alone, so the boot chain's latency
+// allowance and PTSA do not stay until the first overlay. An overlay's own admission, arming or retirement owns the plan.
+void applyUiMemoryPlan()
+{
+    if (!displayMemory.ready() || displayMemory.holding() || !planeWindowIdle())
+        return;
+    int error = 0;
+    const auto reserve = switch_emc_display_memory_reserve;
+    if (displayMemory.applyUiAlone([&error, reserve](const switch_display_memory_head *head) {
+            error = reserve(head);
+            return error;
+        })) {
+        IOLog("SwitchDisplay: memory plan for window A alone applied (%llu bytes/s)\n",
+              static_cast<unsigned long long>(displayMemory.reservation().peak_bytes_per_second));
+        return;
+    }
+    IOLog("SwitchDisplay: memory plan for window A alone refused (%d): its latency allowance and PTSA stay as the boot "
+          "chain left them until an overlay's plan\n",
+          error);
+}
+
 bool memoryAdmissionReady() const
 {
     return displayMemory.ready() && switch_emc_display_memory_ready();

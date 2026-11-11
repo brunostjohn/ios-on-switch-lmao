@@ -114,6 +114,7 @@
             underflowRun = 0;
             dc[kDcIntStatus] = kWinAUnderflowInt;
             stopConsoleTape();  // window A has left it
+            applyUiMemoryPlan();
             if (!rotationAnnounced) {
                 rotationAnnounced = true;
                 IOLog("SwitchDisplay: window A scanout latched at %#x after %llu frame ends\n",

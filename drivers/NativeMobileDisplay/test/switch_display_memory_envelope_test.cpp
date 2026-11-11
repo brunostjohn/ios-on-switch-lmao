@@ -57,6 +57,27 @@ protected:
     }
 };
 
+TEST_F(DisplayMemoryEnvelope, UiAloneOnlyWhileNothingIsHeldSinceTheModeWasConfigured)
+{
+    ASSERT_TRUE(envelope.applyUiAlone([this](auto *h) {
+        return apply(h);
+    }));
+    ASSERT_EQ(requests.size(), 1u);
+    EXPECT_EQ(requests[0].peak_bytes_per_second, 312000000u);
+    EXPECT_FALSE(requests[0].windows[1].active || requests[0].windows[2].active);
+    EXPECT_TRUE(envelope.holding());
+    ASSERT_TRUE(envelope.applyUiAlone([this](auto *h) {
+        return apply(h);
+    }));
+    EXPECT_EQ(requests.size(), 1u);
+    ASSERT_TRUE(envelope.configure(mode(), 720, 1280, false));
+    EXPECT_FALSE(envelope.holding());
+    ASSERT_TRUE(envelope.applyUiAlone([this](auto *h) {
+        return apply(h);
+    }));
+    EXPECT_EQ(requests.size(), 2u);
+}
+
 TEST_F(DisplayMemoryEnvelope, EitherBankCanTakeAnyAcceptedLayerWithoutNewAdmission)
 {
     updated[0] = {600000000, 20000, 8000, 1};

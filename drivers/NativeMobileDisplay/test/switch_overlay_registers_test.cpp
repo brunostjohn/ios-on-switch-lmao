@@ -89,6 +89,11 @@ struct Display {
         return nullptr;
     }
 
+    bool planeWindowIdle() const
+    {
+        return false;
+    }
+
     void getDisplayDimensions(uint32_t *width, uint32_t *height)
     {
         *width = 720;
