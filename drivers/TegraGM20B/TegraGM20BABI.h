@@ -79,7 +79,6 @@ enum {
 	TegraGM20BInfoSubmitAddress = 1u << 14,
 	TegraGM20BInfoCpuPreserveDirty = 1u << 15,
 	TegraGM20BInfoCanonicalSurfaceLayout = 1u << 16,
-    TegraGM20BInfoNativeSurfaceView = 1u << 17,
 	TegraGM20BInfoJobVisibility = 1u << 18,
     TegraGM20BInfoLeanCopyChannel = 1u << 19,
     TegraGM20BInfoControlReserve = 1u << 20,

@@ -9,7 +9,7 @@ namespace raw {
 const Texture *Device::nativeRead(const Texture &source, NativeSurface *&owner, int &error)
 {
     owner = nullptr;
-    if (!k_.nativeSurfaceViews() || !source.import || source.nativePlane == ~0u || source.chain || source.layers != 1 ||
+    if (!k_.exactJobs() || !source.import || source.nativePlane == ~0u || source.chain || source.layers != 1 ||
         source.depth != 1 || source.samples != 1 || source.blockW != 1 || source.blockH != 1 ||
         source.type != fx::kTexTwoD)
         return &source;

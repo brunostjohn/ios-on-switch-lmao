@@ -40,7 +40,7 @@ struct Kernel {
     unsigned queries = 0, frees = 0;
     bool views = true;
 
-    bool nativeSurfaceViews() const
+    bool exactJobs() const
     {
         return views;
     }
@@ -239,7 +239,7 @@ TEST_F(RawNativeSurface, UnsupportedRepresentationIsRequeriedOnLaterCommandBuffe
     EXPECT_EQ(device.k_.queries, 2u);
 }
 
-// The current kernel has no NativeSurfaceView: no query, no lock, no surface made, per read
+// A kernel without SubmitAddress has no native views: no query, no lock, no surface made, per read
 TEST_F(RawNativeSurface, AKernelWithoutViewsReadsTheSourceWithoutAQuery)
 {
     device.k_.views = false;

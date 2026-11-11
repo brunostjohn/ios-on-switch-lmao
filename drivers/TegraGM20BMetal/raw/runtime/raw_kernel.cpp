@@ -331,7 +331,7 @@ int Kernel::nativeSurfaceView(const Bo &source, Bo &view, TegraGM20BAbiNativeSur
 {
     layout = {};
     view = {};
-    if (!(info_.flags & TegraGM20BInfoNativeSurfaceView) || !exactJobs())
+    if (!exactJobs())
         return KERN_SUCCESS;
     const TegraGM20BAbiNativeSurfaceView in = {source.handle, 0, 0};
     const int result = call(TegraGM20BMethodNativeSurfaceView, &in, sizeof in, &layout, sizeof layout);

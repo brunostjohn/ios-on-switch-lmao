@@ -40,7 +40,8 @@ struct GPUPaths {
 /// needs the path gives the right bytes with every command buffer on the raw path, and the kernel counted the path for
 /// this process while it ran.
 protocol GPUPathTest: HWTest {
-    var bit: Int { get }
+    /// The capability bit that still gates the path, if any
+    var bit: Int? { get }
     var counters: [String] { get }
     /// The workload's failures, none when it gave the right bytes.
     func exercise(_ gpu: GPU, _ context: TestContext, _ metrics: inout Metrics) async throws -> [String]
@@ -48,6 +49,7 @@ protocol GPUPathTest: HWTest {
 
 extension GPUPathTest {
     var subsystem: Subsystem { .metal }
+    var bit: Int? { nil }
 
     func run(_ context: TestContext) async throws -> Outcome {
         let gpu = try GPU.make()
@@ -62,7 +64,9 @@ extension GPUPathTest {
         var metrics = Metrics()
         metrics.set("flags", String(before.flags, radix: 16))
         var failures: [String] = []
-        if before.flags & (1 << UInt32(bit)) == 0 { failures.append("the kernel does not advertise bit \(bit)") }
+        if let bit, before.flags & (1 << UInt32(bit)) == 0 {
+            failures.append("the kernel does not advertise bit \(bit)")
+        }
         failures += try await exercise(gpu, context, &metrics)
         let after = GPUPaths.read() ?? before
         for counter in counters {
@@ -88,7 +92,7 @@ extension GPUPathTest {
 struct JobVisibilityPathTest: GPUPathTest {
     let id = "gpu.path.job_visibility"
     let name = "Internal jobs skip the L2 flush, External ones put CPU-read bytes in DRAM"
-    let bit = 18
+    let bit: Int? = 18
     let counters = ["internal_jobs", "external_jobs"]
 
     func exercise(_ gpu: GPU, _: TestContext, _ metrics: inout Metrics) async throws -> [String] {
@@ -113,7 +117,7 @@ struct JobVisibilityPathTest: GPUPathTest {
 struct LeanCopyPathTest: GPUPathTest {
     let id = "gpu.path.lean_copy"
     let name = "Texture uploads and readbacks run on a copy-only channel"
-    let bit = 19
+    let bit: Int? = 19
     let counters = ["lean_copy_jobs"]
 
     func exercise(_ gpu: GPU, _: TestContext, _ metrics: inout Metrics) async throws -> [String] {
@@ -144,7 +148,7 @@ struct LeanCopyPathTest: GPUPathTest {
 struct ControlReservePathTest: GPUPathTest {
     let id = "gpu.path.control_reserve"
     let name = "Control buffers come from the reserve and carry every draw's bytes"
-    let bit = 20
+    let bit: Int? = 20
     let counters = ["control_bos"]
     static let width = 64, height = 8, bytesPerDraw = 4096
 
@@ -190,7 +194,7 @@ struct ControlReservePathTest: GPUPathTest {
 struct CpuCompletePathTest: GPUPathTest {
     let id = "gpu.path.cpu_complete"
     let name = "The kernel maintains a GPU write's cached range at completion"
-    let bit = 24
+    let bit: Int? = 24
     let counters = ["cpu_completes"]
 
     func exercise(_ gpu: GPU, _: TestContext, _ metrics: inout Metrics) async throws -> [String] {
@@ -228,7 +232,7 @@ struct CpuCompletePathTest: GPUPathTest {
 struct UseRangesPathTest: GPUPathTest {
     let id = "gpu.path.use_ranges"
     let name = "Uses name byte ranges, so buffers sharing a chunk keep their own writes"
-    let bit = 25
+    let bit: Int? = 25
     let counters = ["ranged_uses"]
 
     func exercise(_ gpu: GPU, _: TestContext, _ metrics: inout Metrics) async throws -> [String] {
@@ -266,7 +270,6 @@ struct UseRangesPathTest: GPUPathTest {
 struct NativeSurfaceViewPathTest: GPUPathTest {
     let id = "gpu.path.native_surface_view"
     let name = "Draws sample a decoded picture where the decoder put it, matching its CPU rows"
-    let bit = 17
     let counters = ["native_tiled_views", "native_reads"]
 
     func exercise(_ gpu: GPU, _ context: TestContext, _ metrics: inout Metrics) async throws -> [String] {
@@ -353,7 +356,7 @@ struct NativeSurfaceViewPathTest: GPUPathTest {
 struct SemanticFencePathTest: GPUPathTest {
     let id = "gpu.path.semantic_fence"
     let name = "Completions read the fence record's semantic state, and no failure spills onto later work"
-    let bit = 22
+    let bit: Int? = 22
     let counters: [String] = []
     static let count = 48, slice = 256
 
@@ -393,7 +396,7 @@ struct SemanticFencePathTest: GPUPathTest {
 struct SharedEventsPathTest: GPUPathTest {
     let id = "gpu.path.shared_events"
     let name = "A GPU wait on a shared event orders a copy after another queue's GPU signal"
-    let bit = 21
+    let bit: Int? = 21
     let counters = ["event_jobs"]
 
     func exercise(_ gpu: GPU, _: TestContext, _ metrics: inout Metrics) async throws -> [String] {
@@ -433,7 +436,7 @@ struct SharedEventsPathTest: GPUPathTest {
 struct ResourceReadyPathTest: GPUPathTest {
     let id = "gpu.path.resource_ready"
     let name = "A render into a CPU-locked IOSurface waits for the unlock instead of failing"
-    let bit = 23
+    let bit: Int? = 23
     let counters = ["ready_arms"]
 
     func exercise(_ gpu: GPU, _: TestContext, _ metrics: inout Metrics) async throws -> [String] {
