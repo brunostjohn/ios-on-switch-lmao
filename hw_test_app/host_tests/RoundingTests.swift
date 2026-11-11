@@ -16,6 +16,19 @@ final class RoundingTests: XCTestCase {
         XCTAssertEqual(X1Rounding.nearest.code(2.0, unorm8), 255)
     }
 
+    /// Cut to sixteenths of a code first: a hair past the tie falls back to it and goes down, a sixteenth and a half
+    /// past goes up
+    func testTruncatedToSixteenthsThenTiesDown() {
+        let unorm8 = X1Channel.unorm(bits: 8)
+        let rule = X1Rounding.trunc4TiesDown
+        XCTAssertEqual(rule.code(127.5 / 255, unorm8), 127)
+        XCTAssertEqual(rule.code((127.5 + 1.0 / 32) / 255, unorm8), 127)
+        XCTAssertEqual(X1Rounding.tiesDown.code((127.5 + 1.0 / 32) / 255, unorm8), 128)
+        XCTAssertEqual(rule.code((127.5 + 1.5 / 16) / 255, unorm8), 128)
+        XCTAssertEqual(rule.code(127.25 / 255, unorm8), 127)
+        XCTAssertEqual(rule.code(127.75 / 255, unorm8), 128)
+    }
+
     func testSmallFloatCodes() {
         let half = X1Channel.float(mantissa: 10)
         XCTAssertEqual(half.value(0x3c00), 1)
@@ -43,8 +56,8 @@ final class RoundingTests: XCTestCase {
         let channels: [X1Channel] = [.unorm(bits: 8), .unorm(bits: 8)]
         tally.add([127, 64], exact: [127.5 / 255, 64.25 / 255], channels: channels, metal: .nearest, at: 0)
         XCTAssertEqual(tally.offMetal, 1)
-        XCTAssertEqual(tally.rules, [.tiesDown, .down])
-        XCTAssertEqual(tally.text, "near:1:ties_down+down")
+        XCTAssertEqual(tally.rules, [.tiesDown, .down, .trunc4TiesDown])
+        XCTAssertEqual(tally.text, "near:1:ties_down+down+trunc4_ties_down")
         XCTAssertEqual(tally.fewestMisses, 0)
         tally.add([200, 64], exact: [127.5 / 255, 64.0 / 255], channels: channels, metal: .nearest, at: 1)
         XCTAssertEqual(tally.grade, "wrong")
