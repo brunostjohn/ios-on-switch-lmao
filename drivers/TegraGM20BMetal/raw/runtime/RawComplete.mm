@@ -2,6 +2,7 @@
 // See RawComplete.h.
 #import "RawComplete.h"
 
+#include <algorithm>
 #include <cstring>
 #include "NativeBridgeMetalFrontend.h"
 #include "RawDirect.h"
@@ -43,6 +44,20 @@ public:
 private:
     uint64_t wallUs_;
 };
+
+// A made state's label and whole key, in parts no log line cuts (the made line keeps 400 characters of the key, and a
+// message stops near 1 KiB): tools/gpu/logharvest.py joins them into precompile corpus lines
+void logHarvest(uint64_t name, NSString *label, const std::string &key)
+{
+    std::string text = std::string("label=") + (label.length ? label.UTF8String : "-");
+    std::replace(text.begin(), text.end(), ' ', '_');
+    text += " " + key;
+    constexpr size_t kPart = 700;
+    const size_t parts = (text.size() + kPart - 1) / kPart;
+    for (size_t i = 0; i < parts; i++)
+        os_log(rawLog(), "raw: harvest %016llx %zu/%zu %{public}s", (unsigned long long)name, i + 1, parts,
+               text.substr(i * kPart, kPart).c_str());
+}
 #endif
 
 // A compute key (raw_compute_key.h) with its function constants moved last: a log line cut short keeps its shape and bindings
@@ -243,6 +258,8 @@ Compiler::Outcome Completion::make(const CacheKey &k, RuntimeRecord &record, std
                                                 : "not made",
         cost.text().c_str(), (unsigned long long)(Compiler::slotWaitUs() / 1000), (unsigned long long)k.name(),
         a.key.c_str());
+    if (outcome != Compiler::Outcome::Refused)
+        logHarvest(k.name(), a.descriptor.label, a.key);
 #endif
     if (outcome != Compiler::Outcome::Made)
         once([NSString stringWithFormat:@"a state the pack lacks %s: %s | %.600s",

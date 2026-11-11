@@ -56,6 +56,23 @@ py_test(
     deps = [":rawpack_steps"],
 )
 
+# Adds the states a device made at run time to the precompile corpus, from a pulled logarchive (logharvest.py)
+py_binary(
+    name = "logharvest",
+    srcs = ["logharvest.py"],
+    data = ["//drivers/TegraGM20BMetal:precompile/archives/21H461.tsv", "//drivers/TegraGM20BMetal:precompile/archives/24B119.tsv"],
+    deps = ["//drivers/TegraGM20BMetal:raw_pack"],
+)
+
+py_test(
+    name = "logharvest_test",
+    srcs = [
+        "logharvest.py",
+        "logharvest_test.py",
+    ],
+    deps = ["//drivers/TegraGM20BMetal:raw_pack"],
+)
+
 py_binary(
     name = "raw_stack",
     srcs = ["raw_stack.py"],
