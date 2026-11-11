@@ -8,6 +8,7 @@
 #include "TegraVICPresent.h"
 #include "SwitchVICPicturePlan.h"
 #include "SwitchVICSurfaceRange.h"
+#include "SwitchVICTurn.h"
 #include "../TegraGM20B/TegraGM20BViews.h"
 #include "../TegraGM20B/SwitchGpuAdmission.h"
 
@@ -24,6 +25,9 @@ public:
     TegraVICSurfaceDesc pitch = {};
     switch_gpu_backing_layout layout = {};
     SwitchNativeSurfaceCrop crop = {};
+    SwitchNativeSurfaceTurn turn = {};
+    TegraVICOp turnOp = {};
+    uint32_t chromaSite = 0;
     alignas(8) volatile uint64_t generation = 1;
     bool pitchValid = false;
     bool preparing = false;
@@ -172,8 +176,16 @@ int prepare(const TegraVICSurface *surface, SwitchNativeSurface *native, uint32_
             auto picture = native->picture;
             picture.surfaceID = surface->id;
             const char *why = nullptr;
-            error = gpu ? switch_vic_present_surface_queue(&picture, &pitch, *owned, &why)
-                        : switch_vic_present_surface_owned(&picture, &pitch, *owned, &why);
+            if (native->turn.transform) {
+                SwitchNativeSurfaceView source = {};
+                source.native = native->native;
+                source.layout = native->layout;
+                source.crop = native->crop;
+                error = switch_vic_turn_surface(source, native->turnOp, native->chromaSite, &pitch, *owned, gpu, &why);
+            } else {
+                error = gpu ? switch_vic_present_surface_queue(&picture, &pitch, *owned, &why)
+                            : switch_vic_present_surface_owned(&picture, &pitch, *owned, &why);
+            }
             if (!error)
                 __atomic_store_n(&native->pitchValid, true, __ATOMIC_RELEASE);
         }
@@ -195,7 +207,7 @@ int prepare(const TegraVICSurface *surface, SwitchNativeSurface *native, uint32_
 }
 }  // namespace
 
-int switch_native_surface_acquire(const TegraVICSurface *surface, SwitchNativeSurfaceView *view, bool avoid)
+int switch_native_surface_acquire(const TegraVICSurface *surface, SwitchNativeSurfaceView *view, bool avoid, bool turns)
 {
     if (!view)
         return -22;
@@ -210,7 +222,9 @@ int switch_native_surface_acquire(const TegraVICSurface *surface, SwitchNativeSu
         switch_gpu_surface_finish(surface->memory);
         return -2;
     }
-    int error = !matches(surface, native) ? -95 : !active(native) ? SWITCH_GPU_BACKING_STALE : 0;
+    int error = !matches(surface, native) || (native->turn.transform && !turns) ? -95
+                : !active(native)                                               ? SWITCH_GPU_BACKING_STALE
+                                                                                : 0;
     auto *representation = error ? nullptr : SwitchMemoryAttachment::generation(surface->memory);
     auto *logical = error || !representation ? nullptr : switch_vic_surface_backing(surface);
     if (!error && !logical)
@@ -224,7 +238,10 @@ int switch_native_surface_acquire(const TegraVICSurface *surface, SwitchNativeSu
     surface->memory->retain();
     *view = {native, surface->memory, logical, native->native, {logical, &native->generation, 1},
              {logical, representation, __atomic_load_n(representation, __ATOMIC_ACQUIRE)},
-             native->producer, native->layout, native->crop};
+             native->producer,
+             native->layout,
+             native->crop,
+             native->turn};
     view->layout.color_matrix = surface->desc.colorMatrix;
     view->layout.transfer = surface->desc.transfer; view->layout.primaries = surface->desc.primaries;
     view->layout.chroma_top = surface->desc.chromaTop; view->layout.chroma_bottom = surface->desc.chromaBottom;
@@ -245,6 +262,63 @@ void switch_native_surface_release(SwitchNativeSurfaceView *view)
     if (view->descriptor)
         view->descriptor->release();
     *view = {};
+}
+
+// `next` in place of the surface's native picture: its own rows invalidated, the attachment replaced.
+static int install(const TegraVICSurface *surface, SwitchNativeSurface *next, const char **why)
+{
+    *why = "native export into a surface another publication holds";
+    int error = SwitchMemoryAttachment::enterExclusive(surface->memory, false);
+    if (error)
+        return error;
+    auto *logical = switch_vic_surface_backing(surface);
+    switch_gpu_cpu_lease *owned = nullptr;
+    *why = !logical                  ? "native export into a surface without a backing of its own"
+           : logical == next->native ? "native export into a surface its picture already backs"
+                                     : "native export into a surface whose backing would not reserve a conversion";
+    error = !logical                  ? -12
+            : logical == next->native ? -22
+                                      : switch_gpu_backing_conversion_reserve(logical, kWrite, 0, &owned);
+    auto *old = error ? nullptr : copy(surface->memory);
+    bool installed = false;
+    if (!error) {
+        installed = SwitchMemoryAttachment::replace(surface->memory, old, next);
+        *why = installed ? "native export whose surface's representation would not advance"
+                         : "native export that another publication beat to the surface";
+        error = installed ? advanceRepresentation(surface->memory, logical, owned) : -16;
+    }
+    if (!error && old) {
+        *why = "native export whose surface's earlier representation would not invalidate";
+        error = invalidate(old, logical, owned);
+    }
+    if (error && installed && !SwitchMemoryAttachment::replace(surface->memory, next, old))
+        panic("SwitchSurface: native publication rollback lost attachment");
+    if (old)
+        old->release();
+    if (!error)
+        tegra_vic_surface_written(surface);
+    if (owned)
+        switch_gpu_backing_cpu_release_owned(&owned, 0);
+    if (logical)
+        switch_gpu_backing_release(logical);
+    SwitchMemoryAttachment::leaveExclusive(surface->memory);
+    return error;
+}
+
+static SwitchNativeSurface *makeNative(switch_gpu_backing *picture, const char **why)
+{
+    *why = "native export without memory for its surface object";
+    if (!prepareLock())
+        return nullptr;
+    auto *next = new SwitchNativeSurface;
+    if (!next || !next->initialize()) {
+        if (next)
+            next->release();
+        return nullptr;
+    }
+    next->native = picture;
+    switch_gpu_backing_retain(next->native);
+    return next;
 }
 
 int switch_native_surface_publish(const TegraVICSurface *surface, const TegraVICPicture *picture, const char **why)
@@ -283,17 +357,9 @@ int switch_native_surface_publish(const TegraVICSurface *surface, const TegraVIC
     *why = "native export of a picture its backing cannot hold";
     if (!picture->bytes || picture->bytes > (uint64_t(info.page_count) << 12))
         return -22;
-    *why = "native export without memory for its surface object";
-    if (!prepareLock())
+    auto *next = makeNative(picture->backing, why);
+    if (!next)
         return -12;
-    auto *next = new SwitchNativeSurface;
-    if (!next || !next->initialize()) {
-        if (next)
-            next->release();
-        return -12;
-    }
-    next->native = picture->backing;
-    switch_gpu_backing_retain(next->native);
     next->picture = *picture;
     next->picture.pages = info.pages;
     next->picture.pageCount = info.page_count;
@@ -302,46 +368,52 @@ int switch_native_surface_publish(const TegraVICSurface *surface, const TegraVIC
     next->crop = crop;
     *why = "native export the GPU backing would not lease for reading";
     int error = switch_gpu_backing_export_read(next->native, &next->producer, &next->readLease);
-    if (error) {
-        next->release();
-        return error;
-    }
-    *why = "native export into a surface another publication holds";
-    error = SwitchMemoryAttachment::enterExclusive(surface->memory, false);
-    if (error) {
-        next->release();
-        return error;
-    }
-    auto *logical = switch_vic_surface_backing(surface);
-    switch_gpu_cpu_lease *owned = nullptr;
-    *why = !logical                  ? "native export into a surface without a backing of its own"
-        : logical == next->native    ? "native export into a surface its picture already backs"
-                                     : "native export into a surface whose backing would not reserve a conversion";
-    error = !logical ? -12 : logical == next->native ? -22
-        : switch_gpu_backing_conversion_reserve(logical, kWrite, 0, &owned);
-    auto *old = error ? nullptr : copy(surface->memory);
-    bool installed = false;
-    if (!error) {
-        installed = SwitchMemoryAttachment::replace(surface->memory, old, next);
-        *why = installed ? "native export whose surface's representation would not advance"
-                         : "native export that another publication beat to the surface";
-        error = installed ? advanceRepresentation(surface->memory, logical, owned) : -16;
-    }
-    if (!error && old) {
-        *why = "native export whose surface's earlier representation would not invalidate";
-        error = invalidate(old, logical, owned);
-    }
-    if (error && installed && !SwitchMemoryAttachment::replace(surface->memory, next, old))
-        panic("SwitchSurface: native publication rollback lost attachment");
-    if (old)
-        old->release();
     if (!error)
-        tegra_vic_surface_written(surface);
-    if (owned)
-        switch_gpu_backing_cpu_release_owned(&owned, 0);
-    if (logical)
-        switch_gpu_backing_release(logical);
-    SwitchMemoryAttachment::leaveExclusive(surface->memory);
+        error = install(surface, next, why);
+    next->release();
+    return error;
+}
+
+int switch_native_surface_publish_turned(const TegraVICSurface *destination, const SwitchNativeSurfaceView &source,
+                                         const TegraVICOp &op, uint32_t chromaSite, const char **why)
+{
+    const char *unused = nullptr;
+    if (!why)
+        why = &unused;
+    *why = "turned export into a surface at a base offset, or of no picture";
+    if (!destination || !destination->surface || !destination->memory || destination->baseOffset || !source.native ||
+        source.turn.transform)
+        return -22;
+    *why = "turned export into a surface whose allocation is not its descriptor's length";
+    if (!switch_vic_surface_owns_descriptor(destination->memory->getLength(), 0, destination->desc.length, PAGE_SIZE))
+        return -22;
+    SwitchNativeSurfaceTurn turn = {};
+    if ((*why = switch_vic_turn_of(op, destination->desc, source.crop, turn)))
+        return -95;
+    auto *next = makeNative(source.native, why);
+    if (!next)
+        return -12;
+    next->pitch = destination->desc;
+    next->layout = source.layout;
+    next->crop = source.crop;
+    next->turn = turn;
+    next->turnOp = op;
+    next->chromaSite = chromaSite;
+    *why = "turned export the decoder's picture would not lease for reading";
+    int error = switch_gpu_backing_export_read(next->native, &next->producer, &next->readLease);
+    // The decoder may have written the buffer again since `source` was acquired: the lease must be on that picture.
+    const auto &p = next->producer, &q = source.producer;
+    if (!error &&
+        (p.engine != q.engine || p.queue != q.queue || p.reset_generation != q.reset_generation || p.value != q.value ||
+         (source.guard.generation &&
+          __atomic_load_n(source.guard.generation, __ATOMIC_ACQUIRE) != source.guard.expected) ||
+         (source.representation.generation &&
+          __atomic_load_n(source.representation.generation, __ATOMIC_ACQUIRE) != source.representation.expected))) {
+        *why = "turned export of a picture the decoder has replaced";
+        error = SWITCH_GPU_BACKING_STALE;
+    }
+    if (!error)
+        error = install(destination, next, why);
     next->release();
     return error;
 }

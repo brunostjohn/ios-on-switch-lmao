@@ -84,9 +84,15 @@ extern "C" void switch_native_surface_gpu_release(switch_gpu_native_surface_view
     if (!view)
         return;
     SwitchNativeSurfaceView held = {static_cast<OSObject *>(view->owner),
-        static_cast<IOMemoryDescriptor *>(view->descriptor), view->logical, view->native,
-        view->payload, view->representation, view->producer, view->layout,
-        {view->crop_x, view->crop_y, view->crop_width, view->crop_height}};
+                                    static_cast<IOMemoryDescriptor *>(view->descriptor),
+                                    view->logical,
+                                    view->native,
+                                    view->payload,
+                                    view->representation,
+                                    view->producer,
+                                    view->layout,
+                                    {view->crop_x, view->crop_y, view->crop_width, view->crop_height},
+                                    {}};
     *view = {};
     switch_native_surface_release(&held);
 }

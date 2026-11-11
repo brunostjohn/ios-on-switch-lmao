@@ -8,6 +8,13 @@ struct SwitchNativeSurfaceCrop {
     uint32_t x, y, width, height;
 };
 
+// A destination TegraVIC recorded as a decoder's picture turned instead of copying it (SwitchVICTurn.h): the
+// IOSurfaceAccelerator transform (a quarter turn) and the source rectangle in the visible picture, pixels.
+struct SwitchNativeSurfaceTurn {
+    uint32_t transform;
+    uint32_t x, y, width, height;
+};
+
 struct SwitchNativeSurfaceView {
     OSObject *owner;
     IOMemoryDescriptor *descriptor;
@@ -18,15 +25,22 @@ struct SwitchNativeSurfaceView {
     switch_gpu_backing_token producer;
     switch_gpu_backing_layout layout;
     SwitchNativeSurfaceCrop crop;
+    SwitchNativeSurfaceTurn turn;  // transform 0: the picture as it is
 };
 
 // A view retains both backings. Every engine read submits both uses and both guards in one checked ownership transaction.
 // avoid: -16 instead of waiting for a publication in progress, which may itself wait for leases the caller holds.
-int switch_native_surface_acquire(const TegraVICSurface *surface, SwitchNativeSurfaceView *view, bool avoid);
+// turns: a turned picture too (the display); any other reader gets -95 and reads the rows, made on first access.
+int switch_native_surface_acquire(const TegraVICSurface *surface, SwitchNativeSurfaceView *view, bool avoid,
+                                  bool turns = false);
 void switch_native_surface_release(SwitchNativeSurfaceView *view);
 // why: on an error, the refusal (a literal) for the caller's one line.
 int switch_native_surface_publish(const TegraVICSurface *surface, const TegraVICPicture *picture,
                                   const char **why = nullptr);
+// `destination` (a whole NV12 surface) is `source`'s picture turned by `op` (a quarter turn of a source rectangle onto
+// the whole destination): its rows are made by VIC only when something other than the display reads them.
+int switch_native_surface_publish_turned(const TegraVICSurface *destination, const SwitchNativeSurfaceView &source,
+                                         const TegraVICOp &op, uint32_t chromaSite, const char **why = nullptr);
 
 // The caller holds a descriptor CPU reservation through the ensuing IOSurface CPU lock and unlock.
 extern "C" int switch_native_surface_prepare(OSObject *surface, uint32_t id, void *task, uint32_t options,

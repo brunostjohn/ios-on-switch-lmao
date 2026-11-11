@@ -210,6 +210,25 @@ extern "C" int switch_vic_present_surface_queue(const TegraVICPicture *picture, 
     }
     return error;
 }
+
+unsigned turns = 0;
+bool turnQueued = false;
+
+int switch_vic_turn_surface(const SwitchNativeSurfaceView &source, const TegraVICOp &op, uint32_t,
+                            const TegraVICSurface *destination, switch_gpu_cpu_lease *owned, bool queue, const char **)
+{
+    EXPECT_NE(source.native, owned->backing);
+    EXPECT_TRUE(owned->access & kWrite);
+    EXPECT_EQ(owned->backing, destination->memory->backing);
+    EXPECT_EQ(op.transform, 7u);
+    ++turns;
+    turnQueued = queue;
+    if (queue) {
+        ++owned->backing->content;
+        owned->backing->producer = {23, 1, SWITCH_GPU_ENGINE_VIC, 9};
+    }
+    return transferError;
+}
 namespace {
 class NativeSurface : public testing::Test {
 protected:
@@ -325,6 +344,155 @@ TEST_F(NativeSurface, PublicationRetainsDecoderAllocationAndGuardedViews)
     switch_gpu_cpu_lease *writeLease = nullptr;
     EXPECT_EQ(acquire(&native, kWrite | kAvoidSync, &writeLease), -16);
     switch_native_surface_release(&view);
+}
+
+// Core Animation's portrait destination for a landscape video: a whole 720x1280 '420v' surface the picture turned by
+// transform 7 fills (SwitchVICTurn.h).
+class TurnedSurface : public NativeSurface {
+protected:
+    IOMemoryDescriptor *turnedMemory = nullptr;
+    Surface *turnedObject = nullptr;
+    TegraVICSurface turned = {};
+    TegraVICOp op = {};
+
+    void SetUp() override
+    {
+        NativeSurface::SetUp();
+        turns = 0;
+        turnQueued = false;
+        turnedMemory = new IOMemoryDescriptor;
+        turnedMemory->length = 768 * 1280 * 3 / 2;
+        turnedMemory->backing = &replacement;
+        replacement.pageCount = (turnedMemory->length + 4095) / 4096;
+        turnedObject = new Surface(turnedMemory, 8);
+        auto &d = turnedObject->desc;
+        d.fourcc = 0x34323076;
+        d.width = 720;
+        d.height = 1280;
+        d.planes = 2;
+        d.length = turnedMemory->length;
+        d.planeBytesPerRow[0] = d.planeBytesPerRow[1] = 768;
+        d.planeWidth[0] = 720;
+        d.planeWidth[1] = 360;
+        d.planeHeight[0] = 1280;
+        d.planeHeight[1] = 640;
+        d.planeOffset[1] = 768 * 1280;
+        turned = {turnedObject, turnedMemory, d, 0, 8, false};
+        op.srcW = 1280ull << 16;
+        op.srcH = 720ull << 16;
+        op.dstW = 720;
+        op.dstH = 1280;
+        op.transform = 7;
+    }
+
+    void TearDown() override
+    {
+        turnedObject->release();
+        turnedMemory->release();
+        NativeSurface::TearDown();
+    }
+
+    int publishTurned()
+    {
+        SwitchNativeSurfaceView source = {};
+        int error = native.readers ? 0 : switch_native_surface_publish(&surface, &picture);
+        if (!error)
+            error = switch_native_surface_acquire(&surface, &source, false);
+        if (!error)
+            error = switch_native_surface_publish_turned(&turned, source, op, 0);
+        switch_native_surface_release(&source);
+        return error;
+    }
+};
+
+TEST_F(TurnedSurface, TheDestinationIsTheDecodersPictureTurnedForTheDisplayOnly)
+{
+    ASSERT_EQ(switch_native_surface_publish(&surface, &picture), 0);
+    const unsigned held = native.refs;
+    ASSERT_EQ(publishTurned(), 0);
+    EXPECT_EQ(native.refs, held + 2);  // the destination holds the decoder's picture as its source does, and its lease
+    EXPECT_EQ(native.readers, 2u);
+    EXPECT_EQ(turns, 0u);  // no VIC work
+    SwitchNativeSurfaceView view = {};
+    EXPECT_EQ(switch_native_surface_acquire(&turned, &view, false), -95);
+    ASSERT_EQ(switch_native_surface_acquire(&turned, &view, false, true), 0);
+    EXPECT_EQ(view.native, &native);
+    EXPECT_EQ(view.logical, &replacement);
+    EXPECT_EQ(view.turn.transform, 7u);
+    EXPECT_EQ(view.turn.width, 1280u);
+    EXPECT_EQ(view.turn.height, 720u);
+    EXPECT_EQ(view.layout.planes[0].height, 736u);
+    switch_native_surface_release(&view);
+}
+
+TEST_F(TurnedSurface, APictureTheDecoderReplacedIsNotRecorded)
+{
+    ASSERT_EQ(switch_native_surface_publish(&surface, &picture), 0);
+    SwitchNativeSurfaceView source = {};
+    ASSERT_EQ(switch_native_surface_acquire(&surface, &source, false), 0);
+    native.producer.value = 12;  // the decoder wrote the buffer again after the source was acquired
+    EXPECT_EQ(switch_native_surface_publish_turned(&turned, source, op, 0), SWITCH_GPU_BACKING_STALE);
+    switch_native_surface_release(&source);
+    SwitchNativeSurfaceView view = {};
+    EXPECT_EQ(switch_native_surface_acquire(&turned, &view, false, true), -2);  // nothing on the destination
+    EXPECT_EQ(turns, 0u);
+}
+
+TEST_F(TurnedSurface, ACpuReaderGetsRowsVicTurnsOnce)
+{
+    ASSERT_EQ(publishTurned(), 0);
+    for (unsigned index = 0; index != 2; ++index) {
+        switch_gpu_backing *backing = nullptr;
+        switch_gpu_cpu_lease *owned = nullptr;
+        ASSERT_EQ(prepareCpu(turnedObject, 1, &backing, &owned), 0);
+        EXPECT_EQ(owned->backing, &replacement);
+        EXPECT_EQ(turns, 1u);
+        EXPECT_FALSE(turnQueued);
+        EXPECT_EQ(transfers, 0u);  // never the picture copied unturned
+        finishCpu(turnedObject, backing, &owned);
+    }
+}
+
+TEST_F(TurnedSurface, AGpuReaderQueuesTheTurn)
+{
+    ASSERT_EQ(publishTurned(), 0);
+    switch_gpu_backing *backing = nullptr;
+    switch_gpu_cpu_lease *owned = nullptr;
+    const int entered = SwitchMemoryAttachment::enterCpu(turnedMemory, false);
+    ASSERT_EQ(entered, 0);
+    ASSERT_EQ(switch_native_surface_prepare_gpu(turnedObject, 8, nullptr, 1, &backing, &owned), 0);
+    EXPECT_EQ(turns, 1u);
+    EXPECT_TRUE(turnQueued);
+    EXPECT_EQ(replacement.producer.engine, uint32_t(SWITCH_GPU_ENGINE_VIC));
+    finishCpu(turnedObject, backing, &owned);
+}
+
+TEST_F(TurnedSurface, OnlyAQuarterTurnOntoAWholeNv12DestinationIsRecorded)
+{
+    SwitchNativeSurfaceTurn turn = {};
+    const SwitchNativeSurfaceCrop crop = {0, 0, 1280, 720};
+    EXPECT_EQ(switch_vic_turn_of(op, turned.desc, crop, turn), nullptr);
+    EXPECT_EQ(turn.transform, 7u);
+    TegraVICOp other = op;
+    other.transform = 3;
+    EXPECT_NE(switch_vic_turn_of(other, turned.desc, crop, turn), nullptr);
+    other = op;
+    other.dstH = 1000;
+    EXPECT_NE(switch_vic_turn_of(other, turned.desc, crop, turn), nullptr);
+    other = op;
+    other.srcX = 1ull << 16;
+    other.srcW -= 1ull << 16;
+    EXPECT_NE(switch_vic_turn_of(other, turned.desc, crop, turn), nullptr);
+    other = op;
+    other.srcW += 1;
+    EXPECT_NE(switch_vic_turn_of(other, turned.desc, crop, turn), nullptr);
+    other = op;
+    other.srcH = 722ull << 16;
+    EXPECT_NE(switch_vic_turn_of(other, turned.desc, crop, turn), nullptr);
+    TegraVICSurfaceDesc bgra = turned.desc;
+    bgra.fourcc = TEGRA_VIC_FOURCC('B', 'G', 'R', 'A');
+    bgra.planes = 0;
+    EXPECT_NE(switch_vic_turn_of(op, bgra, crop, turn), nullptr);
 }
 
 TEST_F(NativeSurface, ReadOnlyRowsMaterializeOnceAndReturnContinuousOwnership)

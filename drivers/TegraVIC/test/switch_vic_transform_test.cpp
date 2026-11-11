@@ -4,6 +4,7 @@
 #include "switch_vic_backing_stubs.h"
 #include "../SwitchNativePicture.h"
 #include "../SwitchVICTransform.cpp"
+#include "../SwitchVICTurn.cpp"
 
 struct SwitchVICMapping { uint64_t address; };
 namespace {
@@ -53,7 +54,7 @@ void switch_vic_surface_release_access(SwitchVICSurfaceAccess *access)
         --access->backing->refs;
     *access = {};
 }
-int switch_native_surface_acquire(const TegraVICSurface *surface, SwitchNativeSurfaceView *view, bool)
+int switch_native_surface_acquire(const TegraVICSurface *surface, SwitchNativeSurfaceView *view, bool, bool)
 {
     if (!nativeInput)
         return -2;
@@ -116,6 +117,39 @@ int switch_vic_submit_checked(const TegraVICJob *jobs, uint32_t count, const Teg
     }
     return 0;
 }
+namespace {
+unsigned publishedTurns = 0;
+}
+
+int switch_native_surface_publish_turned(const TegraVICSurface *, const SwitchNativeSurfaceView &source,
+                                         const TegraVICOp &op, uint32_t, const char **)
+{
+    EXPECT_EQ(source.native, &inputNative);
+    EXPECT_EQ(op.transform, 7u);
+    ++publishedTurns;
+    return 0;
+}
+
+switch_gpu_backing *switch_vic_surface_backing(const TegraVICSurface *)
+{
+    return nullptr;
+}
+
+extern "C" void switch_gpu_backing_retain(switch_gpu_backing *backing)
+{
+    ++backing->refs;
+}
+
+extern "C" void switch_gpu_backing_release(switch_gpu_backing *backing)
+{
+    --backing->refs;
+}
+
+extern "C" int switch_vic_wait(uint32_t)
+{
+    return 0;
+}
+
 namespace {
 class SwitchVICTransformTest : public testing::Test {
 protected:
@@ -257,4 +291,67 @@ TEST_F(SwitchVICTransformTest, OverlappingDescriptorFallsBackBeforeTakingReserva
     EXPECT_TRUE(declaredUses.empty());
     EXPECT_EQ(notifications, 0);
 }
-} // namespace
+
+// A landscape video's turn (SwitchVICTurn.h): a native picture a quarter turn onto all of a portrait '420v' is left to
+// the display only once V3 has passed and only for a request with no events; anything else is copied.
+class TurnDefer : public SwitchVICTransformTest {
+protected:
+    static constexpr SwitchDisplayTraits kProven = {false, true, false};
+
+    void SetUp() override
+    {
+        SwitchVICTransformTest::SetUp();
+        publishedTurns = 0;
+        auto &d = destination.desc;
+        d.fourcc = TEGRA_VIC_FOURCC('4', '2', '0', 'v');
+        d.width = 720;
+        d.height = 1280;
+        d.planes = 2;
+        d.planeBytesPerRow[0] = d.planeBytesPerRow[1] = 768;
+        d.planeHeight[0] = 1280;
+        d.planeHeight[1] = 640;
+        d.planeOffset[1] = 768 * 1280;
+        d.length = 768 * 1280 * 3 / 2;
+        plan.op[0].dstW = 720;
+        plan.op[0].dstH = 1280;
+        plan.op[0].transform = 7;
+    }
+
+    int defer(bool events, const SwitchDisplayTraits &traits = kProven)
+    {
+        return switch_vic_turn_defer(&source, &destination, &plan, 0, events, traits);
+    }
+};
+
+TEST_F(TurnDefer, AProvenTurnIsRecordedAndNothingIsSubmitted)
+{
+    EXPECT_EQ(defer(false), 1);
+    EXPECT_EQ(publishedTurns, 1u);
+    EXPECT_EQ(pending, nullptr);
+}
+
+TEST_F(TurnDefer, BeforeV3PassesEveryTurnIsCopied)
+{
+    EXPECT_EQ(defer(false, kSwitchDisplayTraits), 0);
+    EXPECT_EQ(publishedTurns, 0u);
+}
+
+TEST_F(TurnDefer, ARequestWithEventsIsCopied)
+{
+    EXPECT_EQ(defer(true), 0);
+    EXPECT_EQ(publishedTurns, 0u);
+}
+
+TEST_F(TurnDefer, APitchSourcePartOfTheDestinationOrNoTurnIsCopied)
+{
+    nativeInput = false;
+    EXPECT_EQ(defer(false), 0);
+    nativeInput = true;
+    plan.op[0].dstH = 1000;
+    EXPECT_EQ(defer(false), 0);
+    plan.op[0].dstH = 1280;
+    plan.op[0].transform = 0;
+    EXPECT_EQ(defer(false), 0);
+    EXPECT_EQ(publishedTurns, 0u);
+}
+}  // namespace
