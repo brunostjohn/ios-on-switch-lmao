@@ -36,6 +36,8 @@ void switch_gpu_path_job(uint32_t visibility, int unlocked_writes, int lean_copy
 void switch_gpu_path_window(char *line, size_t size);
 /* kern.switch_gpu_paths: "flags=0x... pid=N name=N ...", the reading process's counts */
 void switch_gpu_path_register(void);
+/* The same line for the calling process, as kern.switch_gpu_paths and TegraGM20BMethodPaths answer it */
+void switch_gpu_path_line(char *line, size_t size);
 #else
 #define SWITCH_GPU_PATH_STATS 0
 static inline void switch_gpu_path_taken(enum switch_gpu_path path, uint32_t count)

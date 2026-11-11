@@ -8,20 +8,39 @@ import HWTestVideo
 import Metal
 import VideoToolbox
 
-/// kern.switch_gpu_paths (debug kernels, drivers/TegraGM20B/SwitchGpuPathStats.h): the capability flags the GM20B
-/// kernel advertises and how often this process took each path behind them.
+/// The capability flags the GM20B kernel advertises and how often this process took each path behind them (debug
+/// kernels, drivers/TegraGM20B/SwitchGpuPathStats.h): asked on the test's own TegraGM20B connection
+/// (TegraGM20BPathsABI.h), which the app's sandbox admits where it denies the kern.switch_gpu_paths sysctl.
 struct GPUPaths {
     let flags: UInt32
     let counts: [String: Int]
 
-    static func read() -> GPUPaths? {
-        var size = 0
-        guard sysctlbyname("kern.switch_gpu_paths", nil, &size, nil, 0) == 0, size > 0 else { return nil }
-        var bytes = [CChar](repeating: 0, count: size)
-        guard sysctlbyname("kern.switch_gpu_paths", &bytes, &size, nil, 0) == 0 else { return nil }
+    static let method: UInt32 = 0x5050
+
+    enum Reading {
+        case counts(GPUPaths)
+        /// Neither route answered: the connection's (no_connection, release_kernel or a kern_return_t) and the
+        /// sysctl's errno.
+        case unreadable(connection: String, sysctl: Int32)
+    }
+
+    static func read(_ connection: GPUConnection?) -> Reading {
+        var asked = "no_connection"
+        if let connection {
+            let (kr, reply) = connection.call(method, GPUConnection.words([0, 0]), outputSize: 512)
+            if kr == KERN_SUCCESS { return .counts(parse(String(decoding: reply.prefix { $0 != 0 }, as: UTF8.self))) }
+            asked = kr == GPUConnection.kIOReturnUnsupported ? "release_kernel" : GPUConnection.hex(kr)
+        }
+        switch KernelSysctl.string("kern.switch_gpu_paths") {
+        case .value(let line): return .counts(parse(line))
+        case .failed(let error): return .unreadable(connection: asked, sysctl: error)
+        }
+    }
+
+    static func parse(_ line: String) -> GPUPaths {
         var flags: UInt32 = 0
         var counts: [String: Int] = [:]
-        for field in String(cString: bytes).split(separator: " ") {
+        for field in line.split(separator: " ") {
             let pair = field.split(separator: "=", maxSplits: 1).map(String.init)
             guard pair.count == 2 else { continue }
             if pair[0] == "flags" {
@@ -56,19 +75,29 @@ extension GPUPathTest {
         guard RawFacade.kind(of: gpu.device) == "raw" else {
             return .skip("the default device is not the raw facade (\(RawFacade.kind(of: gpu.device)))")
         }
-        guard let before = GPUPaths.read() else {
-            return RawFacade.counters(of: gpu.device).isEmpty
-                ? .skip("no kern.switch_gpu_paths: not a debug kernel")
-                : .fail("a debug runtime on a kernel without kern.switch_gpu_paths")
-        }
+        let connection = GPUConnection()
         var metrics = Metrics()
+        let before: GPUPaths
+        switch GPUPaths.read(connection) {
+        case .counts(let paths):
+            before = paths
+        case .unreadable(let asked, let error):
+            metrics.set("connection", asked)
+            metrics.set("sysctl", KernelSysctl.code(error))
+            if asked == "release_kernel" && error == ENOENT {
+                return .skip("no path counters: a release kernel", metrics)
+            }
+            let why = "the path counters are unreadable: connection \(asked), sysctl \(KernelSysctl.code(error))"
+            return .fail(why, metrics)
+        }
         metrics.set("flags", String(before.flags, radix: 16))
         var failures: [String] = []
         if let bit, before.flags & (1 << UInt32(bit)) == 0 {
             failures.append("the kernel does not advertise bit \(bit)")
         }
         failures += try await exercise(gpu, context, &metrics)
-        let after = GPUPaths.read() ?? before
+        let after: GPUPaths
+        if case .counts(let paths) = GPUPaths.read(connection) { after = paths } else { after = before }
         for counter in counters {
             let taken = after.taken(counter, since: before)
             metrics.set(counter, taken)

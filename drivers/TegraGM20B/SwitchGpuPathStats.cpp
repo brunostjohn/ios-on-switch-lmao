@@ -80,17 +80,8 @@ int pathsSysctl SYSCTL_HANDLER_ARGS
 	(void)oidp;
 	(void)arg1;
 	(void)arg2;
-	const int pid = proc_selfpid();
-	uint64_t counts[SWITCH_GPU_PATH_COUNT] = {};
-	if (IOLock *held = processLock()) {
-		IOLockLock(held);
-		if (const Process *p = slot(pid, false))
-			memcpy(counts, p->counts, sizeof(counts));
-		IOLockUnlock(held);
-	}
 	char line[512];
-	const int head = snprintf(line, sizeof(line), "flags=%#x pid=%d", switch_gpu_info_flags(), pid);
-	format(line, sizeof(line), head > 0 ? static_cast<size_t>(head) : 0, counts);
+	switch_gpu_path_line(line, sizeof(line));
 	return SYSCTL_OUT(req, line, strlen(line) + 1);
 }
 
@@ -135,6 +126,22 @@ extern "C" void switch_gpu_path_window(char *line, size_t size)
 	if (size)
 		line[0] = 0;
 	format(line, size, 0, counts);
+}
+
+extern "C" void switch_gpu_path_line(char *line, size_t size)
+{
+	if (!size)
+		return;
+	const int pid = proc_selfpid();
+	uint64_t counts[SWITCH_GPU_PATH_COUNT] = {};
+	if (IOLock *held = processLock()) {
+		IOLockLock(held);
+		if (const Process *p = slot(pid, false))
+			memcpy(counts, p->counts, sizeof(counts));
+		IOLockUnlock(held);
+	}
+	const int head = snprintf(line, size, "flags=%#x pid=%d", switch_gpu_info_flags(), pid);
+	format(line, size, head > 0 ? static_cast<size_t>(head) : 0, counts);
 }
 
 extern "C" void switch_gpu_path_register(void)
