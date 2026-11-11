@@ -4,6 +4,7 @@
 #include <new>
 #include "../../TegraVIC/SwitchNativeScanout.h"
 #include "../../TegraDisplayFlip/TegraScanoutRing.h"
+#include "../../TegraGM20B/TegraGM20BLayout.h"
 using IOByteCount = uint64_t;
 using addr64_t = uint64_t;
 constexpr int kIOMemoryMapperNone = 0, kIODirectionOut = 1, kIOReturnSuccess = 0;
@@ -18,7 +19,7 @@ class IOMemoryDescriptor : public OSObject { public:
 };
 void *tegra_gm20b_surface_hold(uint64_t, int *) { return nullptr; }
 void tegra_gm20b_surface_unhold(void *) {}
-int tegra_gm20b_surface_tiled(uint64_t) { return 0; }
+int tegra_gm20b_surface_layout(uint64_t, tgm_layout *) { return 0; }
 namespace {
 SwitchNativeScanout next;
 unsigned leases;

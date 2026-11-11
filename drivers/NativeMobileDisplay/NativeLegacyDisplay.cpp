@@ -385,7 +385,7 @@ static constexpr uint32_t kWinBActReq = 1u << 2, kWinBUpdate = 1u << 10, kWinBAc
 // H_DIRECTION starts (L4T window.c: (x + w) * Bpp - 1 = 0x13FF, the value hekate quotes for Horizon's own block scanout).
 // Portrait-native (SwitchPortrait.h): the same block layout scanned row by row, unrotated, as hekate's pitch window
 // scans; kBlockScan is what the block layout adds to hekate's WIN_OPTIONS.
-static constexpr uint32_t kBlockSurfaceKind = 2u | (4u << 4),
+static constexpr uint32_t kScanBlockLog2 = 4u, kBlockSurfaceKind = 2u | (kScanBlockLog2 << 4),
                           kBlockLineStride = static_cast<uint32_t>(kNativeBlockStride),
                           kBlockHOffset = SWITCH_PORTRAIT_NATIVE ? 0 : static_cast<uint32_t>(kNativeBlockStride) - 1,
                           kBlockScan = SWITCH_PORTRAIT_NATIVE ? 0 : kScanColumn | kHDirection;
@@ -3635,16 +3635,25 @@ public:
                 return;
         }
         noteSurface(surface, memory);
-        const bool tiled = surfaceTiled(memory);
-        if (direct && offerDirect(request, surface, memory, sourceStride, allocation, width, height, tiled, kickAt))
+        const int blockLog2 = surfaceBlockLog2(memory);
+        const bool tiled = blockLog2 >= 0;
+        // A block-linear frame in other blocks than window A's reaches the screen only through the GPU copy, which reads
+        // its layout: window A cannot scan it, nor a CPU copy take its bytes as they are.
+        const bool asScanned = !tiled || blockLog2 == static_cast<int>(kScanBlockLog2);
+        if (direct && asScanned &&
+            offerDirect(request, surface, memory, sourceStride, allocation, width, height, tiled, kickAt))
             return;
         if (direct && ring.target() == kNoBuffer) {  // no slot either: the frame end that frees a surface kicks again
             kickDeferred = true;
             return;
         }
         if (gpuCopy && !gpuBypass &&
-            offerGpuCopy(request, memory, sourceStride, allocation, width, height, tiled, kickAt))
+            offerGpuCopy(request, memory, sourceStride, allocation, width, height, blockLog2, kickAt))
             return;
+        if (!asScanned) {
+            native_legacy_transfer_observed(kIOReturnUnsupported, request, 0);
+            return;
+        }
         if (!gpuBypass && !(planeNextSet && planeFenced(planeNext)) &&
             native_legacy_gpu_offer(this, memory, sourceStride, width, height)) {
             // The GPU writes the scanout memory behind the CPU's back: the differential copy's picture of it is stale from now on.
@@ -3840,7 +3849,7 @@ public:
         kSwizzleTiled
     };
 
-    // A tiled source (tegra_gm20b_surface_tiled) is already in the scanout's block layout: copied as it is.
+    // A tiled source is in window A's own blocks (kickOnce's asScanned): copied as it is.
     static Swizzled swizzle(IOMemoryMap *target, const void *source, uint64_t bytes, uint64_t stride, uint32_t width,
                             uint32_t height, bool tiled)
     {
@@ -4194,7 +4203,7 @@ public:
     // Accepted, the swap retires now (the compositor renders its next frame, into its other surface, while the GPU copies), and
     // transferred holds the next swap until the completion has flipped window A.
     bool offerGpuCopy(const OriginalLegacySwapRequest *request, IOMemoryDescriptor *memory, uint64_t stride,
-                      uint64_t allocation, uint32_t width, uint32_t height, bool tiled, uint64_t kickAt)
+                      uint64_t allocation, uint32_t width, uint32_t height, int blockLog2, uint64_t kickAt)
     {
         if (width != kNativeBlockWidth || height != kNativeBlockHeight || !doubleBuffer)
             return false;
@@ -4214,7 +4223,8 @@ public:
         copy.targetBytes = kNativeBlockBytes;
         copy.targetPitch = static_cast<uint32_t>(kNativeBlockStride);
         copy.blockHeightLog2 = 4;  // kNativeBlockGobs, the DC's BLOCK_HEIGHT(4)
-        copy.flags = tiled ? TEGRA_SCANOUT_COPY_SOURCE_BLOCK : 0;
+        copy.flags = blockLog2 >= 0 ? TEGRA_SCANOUT_COPY_SOURCE_BLOCK : 0;
+        copy.sourceBlockHeightLog2 = blockLog2 >= 0 ? static_cast<uint32_t>(blockLog2) : 0;
         copy.alsoWritten = planeNextAlsoWritten();
         switch_gpu_backing_token planeTokens[2] = {};
         planeNextDependencies(copy, planeTokens);

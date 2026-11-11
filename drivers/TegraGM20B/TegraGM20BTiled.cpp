@@ -11,6 +11,7 @@
 #include <IOKit/IOLib.h>
 #include <stdint.h>
 #include <string.h>
+#include "TegraGM20BLayoutFit.h"
 #include "TegraGM20BRelayout.h"
 #include "TegraGM20BTiled.h"
 #include "../../kits/SwitchRefusal/SwitchRefusal.h"
@@ -36,7 +37,8 @@ enum Decision {
 #if TGM_STATS
 uint64_t gDecisions[Decisions], gLive, gLiveBytes;  // atomic
 
-void note(Decision d, uint32_t surfaceId, uint32_t width, uint32_t height, uint32_t bpp)
+void note(Decision d, uint32_t surfaceId, uint32_t width, uint32_t height, uint32_t bpp,
+	  uint32_t blockRows)
 {
 	static const char *const why[Decisions] = {
 		"block-linear", "pitch: its first GPU import only samples it",
@@ -45,17 +47,24 @@ void note(Decision d, uint32_t surfaceId, uint32_t width, uint32_t height, uint3
 	__atomic_fetch_add(&gDecisions[d], 1, __ATOMIC_RELAXED);
 	char name[32];
 	proc_selfname(name, sizeof(name));
-	os_log(OS_LOG_DEFAULT, "tegra-gm20b: IOSurface %u %ux%u x%u bytes %s (decided by %s[%d])",
-	       surfaceId, width, height, bpp, why[d], name, proc_selfpid());
+	if (d == DecidedTiled)
+		os_log(OS_LOG_DEFAULT,
+		       "tegra-gm20b: IOSurface %u %ux%u x%u bytes block-linear, %u-row blocks "
+		       "(decided by %s[%d])",
+		       surfaceId, width, height, bpp, blockRows, name, proc_selfpid());
+	else
+		os_log(OS_LOG_DEFAULT,
+		       "tegra-gm20b: IOSurface %u %ux%u x%u bytes %s (decided by %s[%d])",
+		       surfaceId, width, height, bpp, why[d], name, proc_selfpid());
 }
 #else
-void note(Decision, uint32_t, uint32_t, uint32_t, uint32_t)
+void note(Decision, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t)
 {
 }
 #endif
 
 Decision decide(tgm_coh *c, tgm_tiled &t, uint32_t width, uint32_t height, uint32_t bpp,
-		uint32_t bytesPerRow, bool writes)
+		uint32_t bytesPerRow, bool writes, bool fit)
 {
 	if (!writes)
 		return PitchSampledFirst;
@@ -63,8 +72,11 @@ Decision decide(tgm_coh *c, tgm_tiled &t, uint32_t width, uint32_t height, uint3
 		return PitchShared;
 	const tgm_relayout_pages pages = tgm_coh_pages(c);
 	const uint64_t bytes = static_cast<uint64_t>(pages.npages) << 12;
-	if (!tgm_layout_tiled(width, height, bpp, &t.layout) || t.layout.bytes > bytes ||
-	    bytesPerRow < width * bpp || static_cast<uint64_t>(bytesPerRow) * height > bytes)
+	const bool laid =
+		fit ? tgm_layout_tiled_within(width, height, bpp, bytes, &t.layout) != 0
+		    : tgm_layout_tiled(width, height, bpp, &t.layout) && t.layout.bytes <= bytes;
+	if (!laid || bytesPerRow < width * bpp ||
+	    static_cast<uint64_t>(bytesPerRow) * height > bytes)
 		return PitchShape;
 	t.bytes_per_row = bytesPerRow;
 	tgm_relayout_pages rows;
@@ -96,8 +108,10 @@ Decision decide(tgm_coh *c, tgm_tiled &t, uint32_t width, uint32_t height, uint3
 }
 }  // namespace
 
-extern "C" int tgm_coherency_layout(struct tgm_coh *c, uint32_t width, uint32_t height,
-				    uint32_t bpp, uint32_t bytes_per_row, int writes)
+namespace
+{
+int askLayout(struct tgm_coh *c, uint32_t width, uint32_t height, uint32_t bpp,
+	      uint32_t bytes_per_row, int writes, bool fit)
 {
 	if (!c)
 		return 0;
@@ -110,11 +124,12 @@ extern "C" int tgm_coherency_layout(struct tgm_coh *c, uint32_t width, uint32_t 
 		t = IONew(tgm_tiled, 1);
 	if (fresh && t) {
 		bzero(t, sizeof(*t));
-		const Decision d = decide(c, *t, width, height, bpp, bytes_per_row, writes != 0);
+		const Decision d =
+			decide(c, *t, width, height, bpp, bytes_per_row, writes != 0, fit);
 		t->tiled = static_cast<int>(d == DecidedTiled);
 		if (t->tiled)
 			__atomic_add_fetch(&gTiledLive, 1, __ATOMIC_ACQ_REL);
-		note(d, tgm_coh_surface_id(c), width, height, bpp);
+		note(d, tgm_coh_surface_id(c), width, height, bpp, 8u << t->layout.y_log2);
 #if TGM_STATS
 		if (t->tiled) {
 			__atomic_fetch_add(&gLive, 1, __ATOMIC_RELAXED);
@@ -133,6 +148,19 @@ extern "C" int tgm_coherency_layout(struct tgm_coh *c, uint32_t width, uint32_t 
 	}
 	tgm_coh_unlock(c);
 	return layout;
+}
+}  // namespace
+
+extern "C" int tgm_coherency_layout(struct tgm_coh *c, uint32_t width, uint32_t height,
+				    uint32_t bpp, uint32_t bytes_per_row, int writes)
+{
+	return askLayout(c, width, height, bpp, bytes_per_row, writes, false);
+}
+
+extern "C" int tgm_coherency_layout_fitted(struct tgm_coh *c, uint32_t width, uint32_t height,
+					   uint32_t bpp, uint32_t bytes_per_row, int writes)
+{
+	return askLayout(c, width, height, bpp, bytes_per_row, writes, true);
 }
 
 extern "C" int tgm_tiled_untile(struct tgm_coh *c)

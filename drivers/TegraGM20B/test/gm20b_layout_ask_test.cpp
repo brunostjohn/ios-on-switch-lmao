@@ -5,6 +5,7 @@
 // block-linear, one another client imported first stays pitch, and the hold goes on every outcome.
 #include <gtest/gtest.h>
 #include "drivers/TegraGM20B/TegraGM20BGpu.h"
+#include "drivers/TegraGM20B/TegraGM20BLayoutFit.h"
 #include "drivers/TegraGM20B/TegraGM20BRelayout.h"
 #include "drivers/TegraGM20B/TegraGM20BTiled.h"
 #include "drivers/TegraDisplayFlip/TegraScanoutCopy.h"
@@ -160,3 +161,66 @@ TEST_F(LayoutAsk, AnImportFreedBeforeItsDecisionLeavesItPitch)
 	EXPECT_TRUE(gone(p[0]));
 }
 }  // namespace
+
+namespace
+{
+// backboardd's 1280x720 BGRA surfaces: 3,686,400 bytes, 900 pages of the model's 4 KiB
+constexpr uint32_t kFrameW = 1280, kFrameH = 720, kFrameRow = 5120, kFramePages = 900;
+
+tgm_coh *importFrame(uint64_t first, uint32_t surfaceId, std::vector<uint64_t> &p)
+{
+	for (uint32_t i = 0; i < kFramePages; i++)
+		p.push_back(first + i * 0x2000);
+	int covered = 0;
+	tgm_coh *c = tgm_coherency_add(p[0], surfaceId, p.data(), kFramePages, 1, 1, &covered);
+	EXPECT_EQ(tgm_coherency_pin(c, reinterpret_cast<switch_gpu_backing *>(1), nullptr, nullptr),
+		  0);
+	return c;
+}
+}  // namespace
+
+TEST_F(LayoutAsk, AFrameNilWouldPadPastItsAllocationTakesTheTallestBlocksThatFit)
+{
+	std::vector<uint64_t> p;
+	tgm_coh *c = importFrame(0xd0000000, 301, p);
+	tgm_coh_hold_asker(c);
+	EXPECT_EQ(tgm_coherency_layout_fitted(c, kFrameW, kFrameH, 4, kFrameRow, 1), 1);
+	tgm_coh_put_asker(c);
+	tgm_layout l = {};
+	ASSERT_EQ(tegra_gm20b_surface_layout(p[0], &l), 1);
+	EXPECT_EQ(l.y_log2, 1);
+	EXPECT_EQ(l.rows, kFrameH);
+	EXPECT_EQ(l.row_bytes, kFrameRow);
+	EXPECT_EQ(l.bytes, uint64_t(kFramePages) << 12);
+	ASSERT_EQ(gMoves.size(), 1u);
+	EXPECT_EQ(gMoves[0].op, TGM_RELAYOUT_TILE_IN_PLACE);
+	tgm_coherency_put(c);
+	EXPECT_TRUE(gone(p[0]));
+}
+
+TEST_F(LayoutAsk, AnAskerThatTakesNilsBlockHeightLeavesSuchAFramePitch)
+{
+	std::vector<uint64_t> p;
+	tgm_coh *c = importFrame(0xd8000000, 302, p);
+	tgm_coh_hold_asker(c);
+	EXPECT_EQ(tgm_coherency_layout(c, kFrameW, kFrameH, 4, kFrameRow, 1), 0);
+	tgm_coh_put_asker(c);
+	EXPECT_FALSE(tegra_gm20b_surface_tiled(p[0]));
+	EXPECT_TRUE(gMoves.empty());
+	tgm_coherency_put(c);
+}
+
+TEST(LayoutFit, TheTallestBlocksAtMostNilsThatFitTheAllocation)
+{
+	tgm_layout l = {};
+	ASSERT_TRUE(tgm_layout_tiled_within(720, 1280, 4, 720 * 1280 * 4, &l));
+	EXPECT_EQ(l.y_log2, 4);
+	EXPECT_TRUE(tgm_layout_nil_height(&l));
+	ASSERT_TRUE(tgm_layout_tiled_within(1280, 720, 4, 1280 * 720 * 4, &l));
+	EXPECT_EQ(l.y_log2, 1);
+	EXPECT_FALSE(tgm_layout_nil_height(&l));
+	ASSERT_TRUE(tgm_layout_tiled_within(136, 136, 8, 163840, &l));
+	EXPECT_EQ(l.y_log2, 1);
+	EXPECT_EQ(l.rows, 144u);
+	EXPECT_FALSE(tgm_layout_tiled_within(100, 100, 4, 100 * 100 * 4, &l));
+}

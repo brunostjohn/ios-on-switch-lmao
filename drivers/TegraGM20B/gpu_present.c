@@ -237,7 +237,7 @@ static void present_push_reads(struct nvif_push *push, const struct tgm_present_
 
 #endif
 static int present_copy(uint64_t src_va, uint64_t src_pa, uint64_t also_pa, uint64_t stride,
-			int src_block, uint32_t width, uint32_t height, uint64_t dst_va,
+			int32_t src_block_log2, uint32_t width, uint32_t height, uint64_t dst_va,
 			uint32_t dst_pitch, uint32_t block_height_log2, void (*done)(void *, int),
 			void *arg, const struct tgm_present_read *reads, u32 nreads,
 			const struct switch_gpu_backing_token *dependencies, u32 dependency_count,
@@ -358,9 +358,7 @@ static int present_copy(uint64_t src_va, uint64_t src_pa, uint64_t also_pa, uint
 		PUSH_NVSQ(push, NV906F, NVB06F_MEM_OP_C, 0, NVB06F_MEM_OP_D,
 			  NVB06F_MEM_OP_D_OPERATION_L2_FLUSH_DIRTY);
 		PUSH_NVSQ(push, NV906F, NVB06F_FB_FLUSH, 0);
-		const int32_t src_block_log2 =
-			src_block ? TEGRA_SCANOUT_TILED_BLOCK_HEIGHT_LOG2 : -1;
-		const u32 src_pitch = src_block ? width * 4 : (u32)stride;
+		const u32 src_pitch = src_block_log2 >= 0 ? width * 4 : (u32)stride;
 		const struct tgm_copy_side src = {src_va, src_pitch, src_block_log2};
 		const struct tgm_copy_side dst = {dst_va, dst_pitch, (int32_t)block_height_log2};
 
@@ -390,7 +388,7 @@ static int present_copy(uint64_t src_va, uint64_t src_pa, uint64_t also_pa, uint
 
 /* Refused while the gate is shut: the display copies that frame on the CPU. */
 int tgm_present_copy(uint64_t src_va, uint64_t src_pa, uint64_t also_pa, uint64_t stride,
-		     int src_block, uint32_t width, uint32_t height, uint64_t dst_va,
+		     int32_t src_block_log2, uint32_t width, uint32_t height, uint64_t dst_va,
 		     uint32_t dst_pitch, uint32_t block_height_log2, void (*done)(void *, int),
 		     void *arg)
 {
@@ -398,23 +396,23 @@ int tgm_present_copy(uint64_t src_va, uint64_t src_pa, uint64_t also_pa, uint64_
 
 	if (!gate_try())
 		return -EBUSY;
-	ret = present_copy(src_va, src_pa, also_pa, stride, src_block, width, height, dst_va,
+	ret = present_copy(src_va, src_pa, also_pa, stride, src_block_log2, width, height, dst_va,
 			   dst_pitch, block_height_log2, done, arg, NULL, 0, NULL, 0, 0);
 	gate_leave();
 	return ret;
 }
 
 int tgm_present_copy_dependencies(uint64_t src_va, uint64_t src_pa, uint64_t also_pa,
-				  uint64_t stride, int src_block, uint32_t width, uint32_t height,
-				  uint64_t dst_va, uint32_t dst_pitch, uint32_t block_height_log2,
-				  void (*done)(void *, int), void *arg,
+				  uint64_t stride, int32_t src_block_log2, uint32_t width,
+				  uint32_t height, uint64_t dst_va, uint32_t dst_pitch,
+				  uint32_t block_height_log2, void (*done)(void *, int), void *arg,
 				  const struct switch_gpu_backing_token *dependencies,
 				  uint32_t dependency_count)
 {
 	int ret;
 	if (!gate_try())
 		return -EBUSY;
-	ret = present_copy(src_va, src_pa, also_pa, stride, src_block, width, height, dst_va,
+	ret = present_copy(src_va, src_pa, also_pa, stride, src_block_log2, width, height, dst_va,
 			   dst_pitch, block_height_log2, done, arg, NULL, 0, dependencies,
 			   dependency_count, 1);
 	gate_leave();
@@ -422,7 +420,7 @@ int tgm_present_copy_dependencies(uint64_t src_va, uint64_t src_pa, uint64_t als
 }
 #if TGM_STATS
 int tgm_present_copy_read(uint64_t src_va, uint64_t src_pa, uint64_t also_pa, uint64_t stride,
-			  int src_block, uint32_t width, uint32_t height, uint64_t dst_va,
+			  int32_t src_block_log2, uint32_t width, uint32_t height, uint64_t dst_va,
 			  uint32_t dst_pitch, uint32_t block_height_log2, void (*done)(void *, int),
 			  void *arg, const struct tgm_present_read *reads, uint32_t nreads)
 {
@@ -432,14 +430,14 @@ int tgm_present_copy_read(uint64_t src_va, uint64_t src_pa, uint64_t also_pa, ui
 		return -EINVAL;
 	if (!gate_try())
 		return -EBUSY;
-	ret = present_copy(src_va, src_pa, also_pa, stride, src_block, width, height, dst_va,
+	ret = present_copy(src_va, src_pa, also_pa, stride, src_block_log2, width, height, dst_va,
 			   dst_pitch, block_height_log2, done, arg, reads, nreads, NULL, 0, 0);
 	gate_leave();
 	return ret;
 }
 
 int tgm_present_copy_read_dependencies(uint64_t src_va, uint64_t src_pa, uint64_t also_pa,
-				       uint64_t stride, int src_block, uint32_t width,
+				       uint64_t stride, int32_t src_block_log2, uint32_t width,
 				       uint32_t height, uint64_t dst_va, uint32_t dst_pitch,
 				       uint32_t block_height_log2, void (*done)(void *, int),
 				       void *arg, const struct tgm_present_read *reads,
@@ -452,7 +450,7 @@ int tgm_present_copy_read_dependencies(uint64_t src_va, uint64_t src_pa, uint64_
 		return -EINVAL;
 	if (!gate_try())
 		return -EBUSY;
-	ret = present_copy(src_va, src_pa, also_pa, stride, src_block, width, height, dst_va,
+	ret = present_copy(src_va, src_pa, also_pa, stride, src_block_log2, width, height, dst_va,
 			   dst_pitch, block_height_log2, done, arg, reads, nreads, dependencies,
 			   dependency_count, 1);
 	gate_leave();

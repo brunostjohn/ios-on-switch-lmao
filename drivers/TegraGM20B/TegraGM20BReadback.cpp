@@ -242,7 +242,7 @@ void tgm_readback_closed(const void *owner)
 	IOLockUnlock(lock);
 }
 
-uint32_t tgm_readback_take(const TegraScanoutCopy *copy, uint64_t source, bool sourceBlock,
+uint32_t tgm_readback_take(const TegraScanoutCopy *copy, uint64_t source, int32_t sourceBlockLog2,
 			   uint64_t target, tgm_present_read (&reads)[TGM_PRESENT_READS])
 {
 	Readback &r = gReadback;
@@ -252,6 +252,7 @@ uint32_t tgm_readback_take(const TegraScanoutCopy *copy, uint64_t source, bool s
 					 __ATOMIC_ACQUIRE, __ATOMIC_RELAXED))
 		return 0;
 	const bool direct = (copy->flags & TEGRA_SCANOUT_COPY_FENCE_ONLY) != 0u;
+	const bool sourceBlock = sourceBlockLog2 >= 0;
 	const uint32_t pitch = copy->width * 4;
 	if (static_cast<uint64_t>(pitch) * copy->height > kReadbackBytes) {
 		r.status = EFBIG;
@@ -271,7 +272,7 @@ uint32_t tgm_readback_take(const TegraScanoutCopy *copy, uint64_t source, bool s
 		pitch,
 		copy->width,
 		copy->height,
-		sourceBlock ? static_cast<int32_t>(TEGRA_SCANOUT_TILED_BLOCK_HEIGHT_LOG2) : -1,
+		sourceBlockLog2,
 		0,
 	};
 	reads[0] = framebuffer;

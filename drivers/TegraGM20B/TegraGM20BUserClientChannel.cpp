@@ -124,10 +124,13 @@ IOReturn AGXDeviceUserClient::surfaceLayoutInfo(const TegraGM20BAbiSurfaceLayout
 	const bool exclusive = switch_gpu_surface_layout_exclusive(object, true) == 0;
 	const bool writes = exclusive && packed && !surface.client_memory && (canonical || same) &&
 		(in->flags & TegraGM20BLayoutWrites);
-	const int layout = packed ? tgm_coherency_layout(coh, uint32_t(surface.width),
-							 uint32_t(surface.height), surface.bpp,
-							 uint32_t(surface.pitch), writes)
-				  : tgm_coherency_layout(coh, 0, 0, 0, 0, 0);
+	const uint32_t width = uint32_t(surface.width), height = uint32_t(surface.height),
+		       pitch = uint32_t(surface.pitch);
+	const int layout =
+		!packed     ? tgm_coherency_layout(coh, 0, 0, 0, 0, 0)
+		: canonical ? tgm_coherency_layout_fitted(coh, width, height, surface.bpp, pitch,
+							  writes)
+			    : tgm_coherency_layout(coh, width, height, surface.bpp, pitch, writes);
 	if (exclusive)
 		switch_gpu_surface_layout_exclusive(object, false);
 	tgm_layout tiled = {};
@@ -149,7 +152,9 @@ IOReturn AGXDeviceUserClient::surfaceLayoutInfo(const TegraGM20BAbiSurfaceLayout
 	if (layout > 0) {
 		if (!described)
 			return kIOReturnNotReady;
-		*out = {canonical || same ? uint32_t(TegraGM20BLayoutTiled) : uint32_t(TegraGM20BLayoutOtherShape),
+		// method 16's askers lay the shape out themselves, at NIL's block height
+		const bool readable = canonical || (same && tgm_layout_nil_height(&tiled));
+		*out = {readable ? uint32_t(TegraGM20BLayoutTiled) : uint32_t(TegraGM20BLayoutOtherShape),
 			tiled.width, tiled.height, tiled.bpp, tiled.row_bytes, tiled.y_log2, tiled.rows, 0,
 			tiled.align, tiled.bytes};
 	} else if (layout < 0) {

@@ -86,12 +86,14 @@
         return slot.layout ? slot.tiled : tiled;
     }
 
-    // The GPU driver's word on whether the surface's pixels are block-linear (by its first page).
-    static bool surfaceTiled(IOMemoryDescriptor *memory)
+    // The GPU driver's word on the surface's pixels (by its first page): the block height of its block-linear layout, -1
+    // when they are rows.
+    static int surfaceBlockLog2(IOMemoryDescriptor *memory)
     {
         IOByteCount length = 0;
         const addr64_t pa = memory->getPhysicalSegment(0, &length, kIOMemoryMapperNone);
-        return (pa != 0u) && (tegra_gm20b_surface_tiled(pa & ~0xfffULL) != 0);
+        tgm_layout layout = {};
+        return (pa != 0u) && tegra_gm20b_surface_layout(pa & ~0xfffULL, &layout) == 1 ? layout.y_log2 : -1;
     }
 
     // A slot's mapping and its surface given back (it is neither scanned nor asked for).

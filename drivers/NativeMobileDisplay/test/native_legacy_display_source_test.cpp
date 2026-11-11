@@ -145,10 +145,19 @@ TEST(DirectScanoutSource, TiledSurfacesScanBlockLinear)
         method(display(), "    void layoutOf(int i, uint32_t &kind, uint32_t &stride, uint32_t &hOffset) const\n"),
         HasSubstr("kind = slots[i - kSlot0].tiled ? kBlockSurfaceKind : 0;"));
     EXPECT_THAT(method(display(), "    bool offerGpuCopy("),
-                HasSubstr("copy.flags = tiled ? TEGRA_SCANOUT_COPY_SOURCE_BLOCK : 0;"));
-    expectBefore(after(display(), "    void kickOnce()"), "const bool tiled = surfaceTiled(memory);",
+                HasSubstr("copy.flags = blockLog2 >= 0 ? TEGRA_SCANOUT_COPY_SOURCE_BLOCK : 0;"));
+    EXPECT_THAT(method(display(), "    bool offerGpuCopy("),
+                HasSubstr("copy.sourceBlockHeightLog2 = blockLog2 >= 0 ? static_cast<uint32_t>(blockLog2) : 0;"));
+    expectBefore(after(display(), "    void kickOnce()"), "const int blockLog2 = surfaceBlockLog2(memory);",
                  "offerDirect(request, surface, memory, sourceStride, allocation, width, height, tiled, kickAt)");
-    // the CPU's fallback copies a tiled frame as it is: it is already in the scanout's block layout
+    // window A scans, and the CPU's fallback copies as it is, only a frame in window A's own blocks; a frame tiled in
+    // other blocks takes the GPU copy (which reads its layout) or is not shown
+    const std::string kick = after(display(), "    void kickOnce()");
+    expectBefore(kick, "const bool asScanned = !tiled || blockLog2 == static_cast<int>(kScanBlockLog2);",
+                 "if (direct && asScanned &&");
+    expectBefore(kick, "offerGpuCopy(request, memory, sourceStride, allocation, width, height, blockLog2, kickAt)",
+                 "native_legacy_transfer_observed(kIOReturnUnsupported, request, 0);");
+    expectBefore(kick, "if (!asScanned) {", "native_legacy_gpu_offer(this, memory, sourceStride, width, height)");
     EXPECT_THAT(method(display(), "    static Swizzled swizzle("),
                 HasSubstr("memcpy(out, source, kNativeBlockBytes);"));
     EXPECT_THAT(

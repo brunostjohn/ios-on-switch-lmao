@@ -393,7 +393,7 @@ TEST(GM20BPresentSource, PresentWaitsForWindowBsWritersToo)
 		    HasSubstr("copy->alsoWritten & ~0xfffULL"));
 	const std::string fence =
 		flat(Between(client(), "extern \"C\" int tegra_gm20b_scanout_fence(", "\n}\n"));
-	EXPECT_THAT(fence, HasSubstr("tgm_present_copy(0, pa & ~0xfffULL, 0, 0, 0, 1, 1, 0, 0, 0, "
+	EXPECT_THAT(fence, HasSubstr("tgm_present_copy(0, pa & ~0xfffULL, 0, 0, -1, 1, 1, 0, 0, 0, "
 				     "presentDone, display)"));
 	EXPECT_THAT(fence, Not(HasSubstr("presentSurface(")));
 }
@@ -438,7 +438,20 @@ TEST(GM20BPresentSource, ReadbackRidesTheFramesPresent)
 TEST(GM20BPresentSource, TiledSourceIsCopiedBlockLinear)
 {
 	const std::string copy = flat(Between(gpu(), "static int present_copy(", "\n}\n"));
-	EXPECT_THAT(copy, HasSubstr("src_block ? TEGRA_SCANOUT_TILED_BLOCK_HEIGHT_LOG2 : -1;"));
+	EXPECT_THAT(
+		copy,
+		HasSubstr("const u32 src_pitch = src_block_log2 >= 0 ? width * 4 : (u32)stride;"));
+	EXPECT_THAT(copy, HasSubstr("{src_va, src_pitch, src_block_log2}"));
+	const std::string scanout =
+		flat(Between(client(), "extern \"C\" int tegra_gm20b_scanout_copy(", "\n}\n"));
+	EXPECT_THAT(
+		scanout,
+		HasSubstr("sourceBlock ? static_cast<int32_t>(copy->sourceBlockHeightLog2) : -1;"));
+	EXPECT_THAT(scanout,
+		    HasSubstr("tgm_readback_take(copy, source, blockLog2, target, reads)"));
+	EXPECT_THAT(flat(Between(SourceText("../TegraGM20BReadback.cpp"),
+				 "uint32_t tgm_readback_take(", "\n}\n")),
+		    Not(HasSubstr("TEGRA_SCANOUT_TILED")));
 	const std::string surface = flat(Between(client(), "uint64_t presentSurface(", "\n}\n"));
 	EXPECT_THAT(surface, HasSubstr("const uint32_t kind = blockLinear ? TGM_LAYOUT_KIND : 0;"));
 	EXPECT_THAT(surface, HasSubstr("s.mem, bytes, static_cast<uint8_t>(kind))"));
@@ -447,6 +460,11 @@ TEST(GM20BPresentSource, TiledSourceIsCopiedBlockLinear)
 	EXPECT_THAT(flat(Between(client(), "IOReturn AGXDeviceUserClient::surfaceLayoutInfo(",
 				 "\n}\n")),
 		    HasSubstr("tgm_coherency_layout(coh,"));
+	const std::string info = flat(
+		Between(client(), "IOReturn AGXDeviceUserClient::surfaceLayoutInfo(", "\n}\n"));
+	EXPECT_THAT(info, HasSubstr("? tgm_coherency_layout_fitted(coh, width, height, "
+				    "surface.bpp, pitch, writes)"));
+	EXPECT_THAT(info, HasSubstr("canonical || (same && tgm_layout_nil_height(&tiled))"));
 }
 
 // System sleep (gpu_power.c "system sleep"): every path that touches the GPU outside tgm_gpu.lock goes through the gate

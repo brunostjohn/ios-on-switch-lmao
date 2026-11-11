@@ -341,6 +341,7 @@ host_test(
         "//drivers/TegraVIC:TegraVICFormats.h",
         "//drivers/TegraVIC:SwitchVICPicture.h",
         "//drivers/TegraGM20B:SwitchGpuBacking.h",
+        "//drivers/TegraGM20B:TegraGM20BLayout.h",
         "//drivers/TegraDisplayFlip:TegraScanoutRing.h",
     ],
     deps = [":native_scanout_kernel"],

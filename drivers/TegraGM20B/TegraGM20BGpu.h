@@ -349,8 +349,8 @@ void tgm_fence_kill_clear(volatile uint32_t *fence);
 
 /* GPU present (gpu_present.c "GPU present"): a kernel channel and address space, made at the first call (from the self-test on).
  * Mappings in it are volatile, at addresses the caller picks in [TGM_USER_VA_START, TGM_KERNEL_VA). tgm_present_copy
- * queues one copy engine copy, pitch source (stride; src_block: block-linear, width x 4 bytes across, blocks of
- * 2^TEGRA_SCANOUT_TILED_BLOCK_HEIGHT_LOG2 GOBs) to a block-linear destination (dst_pitch bytes across, blocks one
+ * queues one copy engine copy, pitch source (stride; src_block_log2 >= 0: block-linear, width x 4 bytes across, blocks of
+ * 2^src_block_log2 GOBs) to a block-linear destination (dst_pitch bytes across, blocks one
  * GOB wide and 2^block_height_log2 GOBs high, 8-line GOBs), after the work submitted so far by the channels whose address
  * spaces import the source or also_pa's surface (window B's; 0: none) (every user channel's when none does), and
  * returns at once: 0, or -EBUSY (one in flight), -EINVAL, -ENODEV. done(arg, status) runs exactly once for an accepted
@@ -361,11 +361,11 @@ int tgm_present_open(struct tgm_vm **pvm);
 int tgm_present_map(uint64_t va, struct tgm_mem *mem, uint64_t bytes, uint8_t kind);
 int tgm_present_unmap(uint64_t va, uint64_t bytes);
 int tgm_present_copy(uint64_t src_va, uint64_t src_pa, uint64_t also_pa, uint64_t stride,
-		     int src_block, uint32_t width, uint32_t height, uint64_t dst_va,
+		     int32_t src_block_log2, uint32_t width, uint32_t height, uint64_t dst_va,
 		     uint32_t dst_pitch, uint32_t block_height_log2, void (*done)(void *, int),
 		     void *arg);
 int tgm_present_copy_dependencies(uint64_t src_va, uint64_t src_pa, uint64_t also_pa, uint64_t stride,
-    int src_block, uint32_t width, uint32_t height, uint64_t dst_va, uint32_t dst_pitch,
+    int32_t src_block_log2, uint32_t width, uint32_t height, uint64_t dst_va, uint32_t dst_pitch,
     uint32_t block_height_log2, void (*done)(void *, int), void *arg,
     const struct switch_gpu_backing_token *dependencies, uint32_t dependency_count);
 int tgm_present_outstanding(const void *arg);
@@ -440,6 +440,11 @@ void tgm_writers_wait_all(void);
  * block-linear at another shape. Sleeps on the copy engine's fence interrupt while it tiles. */
 int tgm_coherency_layout(struct tgm_coh *c, uint32_t width, uint32_t height, uint32_t bpp,
 			 uint32_t bytes_per_row, int writes);
+/* The same for an asker that reads the decided layout's block height (SurfaceLayoutInfo): the decision may lower the block
+ * height below NIL's to fit the surface's allocation (TegraGM20BLayoutFit.h), where tgm_coherency_layout's leaves that
+ * shape pitch-linear. */
+int tgm_coherency_layout_fitted(struct tgm_coh *c, uint32_t width, uint32_t height, uint32_t bpp,
+				uint32_t bytes_per_row, int writes);
 
 /* TegraGM20BTiled.cpp's stats, this window's (debug kernels): layouts decided block-linear, then pitch because the first
  * import only samples, because another import or a CPU lock existed, because the shape does not tile, because the
@@ -532,11 +537,11 @@ struct TegraGM20BAbiRegdumpReply;
 int tgm_regdump_log(const struct TegraGM20BAbiRegdump *in, struct TegraGM20BAbiRegdumpReply *reply);
 
 int tgm_present_copy_read(uint64_t src_va, uint64_t src_pa, uint64_t also_pa, uint64_t stride,
-			  int src_block, uint32_t width, uint32_t height, uint64_t dst_va,
+			  int32_t src_block_log2, uint32_t width, uint32_t height, uint64_t dst_va,
 			  uint32_t dst_pitch, uint32_t block_height_log2, void (*done)(void *, int),
 			  void *arg, const struct tgm_present_read *reads, uint32_t nreads);
 int tgm_present_copy_read_dependencies(uint64_t src_va, uint64_t src_pa, uint64_t also_pa,
-    uint64_t stride, int src_block, uint32_t width, uint32_t height, uint64_t dst_va,
+    uint64_t stride, int32_t src_block_log2, uint32_t width, uint32_t height, uint64_t dst_va,
     uint32_t dst_pitch, uint32_t block_height_log2, void (*done)(void *, int), void *arg,
     const struct tgm_present_read *reads, uint32_t nreads,
     const struct switch_gpu_backing_token *dependencies, uint32_t dependency_count);

@@ -13,21 +13,20 @@
 #pragma once
 #include <stdint.h>
 
-#define TEGRA_SCANOUT_COPY_VERSION 4u
+#define TEGRA_SCANOUT_COPY_VERSION 5u
 #define SWITCH_SCANOUT_MAX_DEPENDENCIES 32u
 struct switch_gpu_backing_token;
 // flags: no copy; the completion only says the compositor's GPU work on the source is done (direct scanout: the display
 // scans the source itself, through the SMMU). target, targetBytes, targetPitch and blockHeightLog2 are ignored.
 #define TEGRA_SCANOUT_COPY_FENCE_ONLY 1u
-// flags: the source is block-linear (tegra_gm20b_surface_tiled): GOBs of 64 bytes x 8 lines, blocks 1 GOB wide and
-// 2^TEGRA_SCANOUT_TILED_BLOCK_HEIGHT_LOG2 GOBs high, width x 4 bytes (whole GOBs) across.
+// flags: the source is block-linear (tegra_gm20b_surface_layout): GOBs of 64 bytes x 8 lines, blocks 1 GOB wide and
+// 2^sourceBlockHeightLog2 GOBs high, width x 4 bytes (whole GOBs) across.
 #define TEGRA_SCANOUT_COPY_SOURCE_BLOCK 2u
 // Tiled IOSurfaces (the GPU renders them block-linear, the display scans them as such): laid out by the GPU driver's one
-// rule (drivers/TegraGM20B/TegraGM20BLayout.h, NIL's) in the surface's own pages, under the generic 16Bx2 PTE kind; a
-// frame of 86 lines or more has blocks of 16 GOBs, rows of width x bytes per pixel rounded up to whole GOBs, and fits its
-// allocation (bytes per row is ignored).
-#define TEGRA_SCANOUT_TILED_KIND              0xfeu
-#define TEGRA_SCANOUT_TILED_BLOCK_HEIGHT_LOG2 4u
+// rule (drivers/TegraGM20B/TegraGM20BLayout.h, NIL's, its block height lowered to fit the allocation:
+// TegraGM20BLayoutFit.h) in the surface's own pages, under the generic 16Bx2 PTE kind; rows of width x bytes per pixel
+// rounded up to whole GOBs (bytes per row is ignored).
+#define TEGRA_SCANOUT_TILED_KIND 0xfeu
 
 struct TegraScanoutCopy {
     uint32_t version;        // TEGRA_SCANOUT_COPY_VERSION
@@ -49,6 +48,8 @@ struct TegraScanoutCopy {
     uint32_t targetPitch;      // 5120 bytes per line of pixels (80 GOBs across)
     uint32_t blockHeightLog2;  // 4: 16 GOBs per block
     uint32_t flags;            // TEGRA_SCANOUT_COPY_FENCE_ONLY (version 2)
+    // TEGRA_SCANOUT_COPY_SOURCE_BLOCK: the source layout's block height, log2 GOBs (version 5)
+    uint32_t sourceBlockHeightLog2;
     // The first page of another IOSurface the present also waits for the writers of, 0 for none (version 3): window B's
     // surface, when the GPU renders it and its change goes to the screen with this frame.
     uint64_t alsoWritten;

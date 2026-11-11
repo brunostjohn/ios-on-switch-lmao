@@ -541,6 +541,7 @@ host_library(
         "//drivers/TegraGM20B:TegraGM20BFences.h",
         "//drivers/TegraGM20B:TegraGM20BGpu.h",
         "//drivers/TegraGM20B:TegraGM20BLayout.h",
+        "//drivers/TegraGM20B:TegraGM20BLayoutFit.h",
         "//drivers/TegraGM20B:TegraGM20BRelayout.h",
         "//drivers/TegraGM20B:TegraGM20BTiled.h",
         "//drivers/TegraGM20B:TegraGM20BViews.h",

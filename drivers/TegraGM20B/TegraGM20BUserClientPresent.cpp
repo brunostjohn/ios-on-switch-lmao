@@ -184,9 +184,12 @@ extern "C" int tegra_gm20b_scanout_copy(const struct TegraScanoutCopy *copy)
 		OSDynamicCast(IOMemoryDescriptor, static_cast<OSObject *>(copy->source));
 	const bool fenceOnly = (copy->flags & TEGRA_SCANOUT_COPY_FENCE_ONLY) != 0u;
 	const bool sourceBlock = (copy->flags & TEGRA_SCANOUT_COPY_SOURCE_BLOCK) != 0u;
+	if (sourceBlock && copy->sourceBlockHeightLog2 > 5)
+		return kIOReturnBadArgument;
+	const int32_t blockLog2 =
+		sourceBlock ? static_cast<int32_t>(copy->sourceBlockHeightLog2) : -1;
 	const uint64_t sourceLines =
-		sourceBlock ? (copy->height + (8u << TEGRA_SCANOUT_TILED_BLOCK_HEIGHT_LOG2) - 1) &
-				      ~((8ULL << TEGRA_SCANOUT_TILED_BLOCK_HEIGHT_LOG2) - 1)
+		sourceBlock ? (copy->height + (8ULL << blockLog2) - 1) & ~((8ULL << blockLog2) - 1)
 			    : copy->height;
 	if (copy->dependencyCount > SWITCH_SCANOUT_MAX_DEPENDENCIES ||
 	    (copy->dependencyCount && !copy->dependencies) || !memory || !copy->width ||
@@ -241,24 +244,23 @@ extern "C" int tegra_gm20b_scanout_copy(const struct TegraScanoutCopy *copy)
 		gPresentSnapshot.display = copy->display;
 #if TGM_STATS
 		tgm_present_read reads[TGM_PRESENT_READS] = {};
-		const uint32_t nreads = tgm_readback_take(copy, source, sourceBlock, target, reads);
+		const uint32_t nreads = tgm_readback_take(copy, source, blockLog2, target, reads);
 		gPresentSnapshot.done = nreads ? tgm_readback_done : presentDone;
 		ret = tgm_present_copy_read_dependencies(
 			source, sourcePa, copy->alsoWritten & ~0xfffULL, copy->sourceStride,
-			static_cast<int>(sourceBlock), copy->width, copy->height, target,
-			copy->targetPitch, copy->blockHeightLog2,
-			SwitchGpuScanoutSnapshot::complete, &gPresentSnapshot, reads, nreads,
-			gPresentSnapshot.tokens, gPresentSnapshot.count);
+			blockLog2, copy->width, copy->height, target, copy->targetPitch,
+			copy->blockHeightLog2, SwitchGpuScanoutSnapshot::complete,
+			&gPresentSnapshot, reads, nreads, gPresentSnapshot.tokens,
+			gPresentSnapshot.count);
 		if (ret && nreads)
 			tgm_readback_refused();
 #else
 		gPresentSnapshot.done = presentDone;
 		ret = tgm_present_copy_dependencies(
 			source, sourcePa, copy->alsoWritten & ~0xfffULL, copy->sourceStride,
-			static_cast<int>(sourceBlock), copy->width, copy->height, target,
-			copy->targetPitch, copy->blockHeightLog2,
-			SwitchGpuScanoutSnapshot::complete, &gPresentSnapshot,
-			gPresentSnapshot.tokens, gPresentSnapshot.count);
+			blockLog2, copy->width, copy->height, target, copy->targetPitch,
+			copy->blockHeightLog2, SwitchGpuScanoutSnapshot::complete,
+			&gPresentSnapshot, gPresentSnapshot.tokens, gPresentSnapshot.count);
 #endif
 	}
 	if (ret)
@@ -281,7 +283,7 @@ extern "C" int tegra_gm20b_scanout_fence(void *display, uint64_t pa)
 		return kIOReturnNotReady;
 	// No copy (dst_va 0): only the acquires on the surface's writers and the fence; nothing of it is mapped.
 	const int ret =
-		tgm_present_copy(0, pa & ~0xfffULL, 0, 0, 0, 1, 1, 0, 0, 0, presentDone, display);
+		tgm_present_copy(0, pa & ~0xfffULL, 0, 0, -1, 1, 1, 0, 0, 0, presentDone, display);
 	return ret ? ioreturn(ret) : 0;
 }
 

@@ -21,6 +21,7 @@
 #include "TegraGM20BExecSurfaces.h"
 #include "TegraGM20BGpu.h"
 #include "TegraGM20BLayout.h"
+#include "TegraGM20BLayoutFit.h"
 #include "TegraGM20BPoolPolicy.h"
 #include "TegraGM20BViews.h"
 #include "TegraGM20BPushScan.h"
