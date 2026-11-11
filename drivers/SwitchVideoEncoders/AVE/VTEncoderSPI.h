@@ -97,6 +97,7 @@ extern OSStatus VTEncoderSessionEmitEncodedTile(VTTileEncoderSession session, VT
                                                 VTEncodeInfoFlags flags, CMSampleBufferRef sample);
 extern const CFStringRef kVTTileEncoderRequirement_HorizontalOffsetAlignment;
 extern const CFStringRef kVTTileEncoderRequirement_VerticalOffsetAlignment;
+extern const CFStringRef kVTTileEncoderRequirement_EncoderSupportsSourcePadding;
 
 extern const CFStringRef kVTVideoEncoder_IsHardwareAccelerated;
 extern const CFStringRef kVTVideoEncoder_EncoderNameKey;

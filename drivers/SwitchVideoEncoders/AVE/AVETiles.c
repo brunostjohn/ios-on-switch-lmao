@@ -10,7 +10,11 @@
 // The contract is that of Apple's AVE HEVC encoder (ave.videoencoder, 24B119): AVE_Session_HEVC_StartTileSession
 // 0x2c4617800 states the size it codes tiles at (never under its smallest picture) with the source pixel buffer
 // attributes (VTTileEncoderSessionSetTileAttributes 0x2c4617e34), then the same attributes for the canvas and the tile
-// requirements: origins on even samples both ways (0x2c46180a0..0x2c4618100). One hvcC serves every tile.
+// requirements: origins on even samples both ways (0x2c46180a0..0x2c4618100), and source padding, which AVE states
+// on its newer devices (0x2c4618110). Without it CMPhoto copies every tile that runs past the picture into a padded
+// buffer of its own first (__needsPixelBufferCopy 0x1a6bb59fc: EncoderSupportsSourcePadding, read from +0x40 of its
+// state, 0x1a6bb58a4); with it the tile comes as the region the picture covers, which this copy replicates anyway.
+// One hvcC serves every tile.
 #include <CoreVideo/CoreVideo.h>
 #include <mach/mach_time.h>
 #include <stdlib.h>
@@ -66,6 +70,7 @@ static CFDictionaryRef copyRequirements(void)
         kCFAllocatorDefault, 0, &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks);
     setNumber(requirements, kVTTileEncoderRequirement_HorizontalOffsetAlignment, kOffsetAlignment);
     setNumber(requirements, kVTTileEncoderRequirement_VerticalOffsetAlignment, kOffsetAlignment);
+    CFDictionarySetValue(requirements, kVTTileEncoderRequirement_EncoderSupportsSourcePadding, kCFBooleanTrue);
     return requirements;
 }
 

@@ -35,6 +35,7 @@ extern OSStatus VTTileCompressionSessionCopyProperty(VTTileCompressionSessionRef
 extern void VTTileCompressionSessionInvalidate(VTTileCompressionSessionRef session);
 extern const CFStringRef kVTCompressionPropertyKey_TileEncoderRequirements;
 extern const CFStringRef kVTTileEncoderRequirement_HorizontalOffsetAlignment;
+extern const CFStringRef kVTTileEncoderRequirement_EncoderSupportsSourcePadding;
 
 enum {
     W = 1000,
@@ -306,6 +307,9 @@ bool tile_check(CFStringRef encoderID, char *line, size_t size)
     const bool hasFormats = attributes && CFGetTypeID(attributes) == CFDictionaryGetTypeID() &&
                             CFDictionaryContainsKey(attributes, kCVPixelBufferPixelFormatTypeKey);
     const int32_t alignment = numberIn(requirements, kVTTileEncoderRequirement_HorizontalOffsetAlignment);
+    const bool padding =
+        requirements && CFGetTypeID(requirements) == CFDictionaryGetTypeID() &&
+        CFDictionaryGetValue(requirements, kVTTileEncoderRequirement_EncoderSupportsSourcePadding) == kCFBooleanTrue;
     VTInt32Size prepared = {0, 0};
     VTTileCompressionSessionPrepareToEncodeTiles(session, false, &prepared);
 
@@ -323,15 +327,15 @@ bool tile_check(CFStringRef encoderID, char *line, size_t size)
     }
     const int badOutput = badSamples(&outputs);
     const int32_t tiles = numberIn(routes, CFSTR("tiles")), errors = numberIn(routes, CFSTR("errors"));
-    const bool ok = propertiesSet && hasFormats && alignment == 2 && prepared.width == TILE &&
+    const bool ok = propertiesSet && hasFormats && alignment == 2 && padding && prepared.width == TILE &&
                     prepared.height == TILE && !refused && outputs.count == TILES && !outputs.failed && !wrongInput &&
                     !badOutput && tiles == TILES && errors == 0 && hardware == kCFBooleanTrue;
     snprintf(line, size,
-             "%s %d/%d tiles out (%d failed, %d refused), batch set %s, attributes %s, offset alignment %d, prepared "
-             "%dx%d, inputs wrong %d, samples wrong %d, routes tiles %d errors %d, hardware %s",
+             "%s %d/%d tiles out (%d failed, %d refused), batch set %s, attributes %s, offset alignment %d, source "
+             "padding %s, prepared %dx%d, inputs wrong %d, samples wrong %d, routes tiles %d errors %d, hardware %s",
              ok ? "ok" : "FAIL", outputs.count, TILES, outputs.failed, refused, propertiesSet ? "ok" : "refused",
-             hasFormats ? "ok" : "missing", alignment, prepared.width, prepared.height, wrongInput, badOutput, tiles,
-             errors, hardware == kCFBooleanTrue ? "yes" : "no");
+             hasFormats ? "ok" : "missing", alignment, padding ? "yes" : "no", prepared.width, prepared.height,
+             wrongInput, badOutput, tiles, errors, hardware == kCFBooleanTrue ? "yes" : "no");
     for (int i = 0; i < TILES; i++)
         if (outputs.samples[i])
             CFRelease(outputs.samples[i]);
