@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #import "RawMetalInternal.h"
+#import "RawMetalRotated.h"
 #include "raw_nonfinite.h"
 #include "NativeBridgeMetalFrontend.h"
 
@@ -452,7 +453,10 @@ static bool producesTexture(MTLTextureDescriptor *d)
     t->_surface = (IOSurfaceRef)CFRetain(s);
     t->_plane = plane;
     raw::YcbcrPlan ycbcr;
-    if (planar444(d, s, plane)) {  // RGB8_444_2P over a 4:4:4 two-plane surface: an RGBA8 image of its codes
+    raw::Rotation turned;
+    if (rotatedShape(d, s, plane, turned)) {
+        t->_rawOk = createRotated(t, d, s, turned);
+    } else if (planar444(d, s, plane)) {  // RGB8_444_2P over a 4:4:4 two-plane surface: an RGBA8 image of its codes
         void *base = IOSurfaceGetBaseAddress(s);
         const uintptr_t at = uintptr_t(base);
         t->_rawOk = gRM->raw->createPlanarTexture(

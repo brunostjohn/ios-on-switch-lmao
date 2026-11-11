@@ -165,6 +165,6 @@ TEST(SlmOwned, EveryPlacedProgramGetsTheAreaBeforeItsBind)
     EXPECT_THAT(commit, HasSubstr("segments_.insert(0,"));
     EXPECT_LT(at(commit, "emitSlm(p, slmVa,"), at(commit, "d.k_.exec("));
     const std::string build = Body(gpu, "void Device::build(Pipeline &pl, const PackPipeline &pp,");
-    EXPECT_LT(at(build, "if (ownedMethod(m))"), at(build, "w.m(m, v);"));
+    EXPECT_LT(at(build, "if (ownedMethod(m) || swizzleMethod(m))"), at(build, "w.m(m, v);"));
 }
 }  // namespace

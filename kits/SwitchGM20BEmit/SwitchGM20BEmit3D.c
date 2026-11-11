@@ -72,6 +72,17 @@ void switch_gm20b_viewport(struct nv_push *p, uint32_t index, const struct switc
     P_NVB197_SET_VIEWPORT_CLIP_VERTICAL(p, index, {.y0 = v->clip_y, .height = v->clip_height});
 }
 
+void switch_gm20b_viewport_swizzle(struct nv_push *p, uint32_t index, uint32_t swizzle)
+{
+    P_IMMD(p, NVB197, SET_VIEWPORT_COORDINATE_SWIZZLE(index),
+           {
+               .x = swizzle & 7,
+               .y = (swizzle >> 4) & 7,
+               .z = (swizzle >> 8) & 7,
+               .w = (swizzle >> 12) & 7,
+           });
+}
+
 void switch_gm20b_scissor(struct nv_push *p, uint32_t index, uint16_t xmin, uint16_t xmax, uint16_t ymin, uint16_t ymax)
 {
     P_MTHD(p, NVB197, SET_SCISSOR_ENABLE(index));

@@ -63,6 +63,7 @@
 #include "raw_depth_stencil_state.h"
 #include "raw_xr.h"
 #include "raw_ycbcr.h"
+#include "raw_rotation.h"
 #include "../fx/fx_mip.h"
 
 namespace raw {
@@ -287,6 +288,9 @@ struct Texture {
     // Its channels' MTLTextureSwizzle (red, green, blue, alpha), which its header's X..W_SOURCE take (Device::swizzle); a view
     // starts from the identity, whatever its parent's
     uint8_t swizzle[4] = {2, 3, 4, 5};
+    // Metal's rotation of a texture over a surface plane (raw_rotation.h): width and height are the plane's, the frame a pass
+    // draws is turned from them
+    uint8_t rotation = 0;
 };
 
 struct NativeSurface {
@@ -438,6 +442,7 @@ struct Pipeline {
     bool fillState = false;
     uint32_t probeGeneration = 0;
     uint8_t probeLines = 0, probeThinLines = 0;
+    bool turnSensitive = false;  // raw_rotation.h: its pixel program sees a turned plane's axes
 };
 
 // A state's fragment program split (raw_pack.h PackSplit): the twin that draws of rec.thresholdPixels pixels or more take, and
@@ -778,6 +783,20 @@ private:
     std::array<PassView, 8> passViews_{};
     uint8_t passViewCount_ = 0;
     uint32_t passViewTic(const Texture &t, uint32_t word0);
+
+    Rotation
+        rot_;  // the pass's turned plane (raw_rotation.h): its frame is what areaW_, areaH_ and the rectangles count in
+    void emitSwizzle(Push &p, uint32_t word);
+
+    Rect planeRect(uint32_t x0, uint32_t y0, uint32_t x1, uint32_t y1) const
+    {
+        return rot_.rect({x0, y0, x1, y1});
+    }
+
+    Rect planeArea() const
+    {
+        return planeRect(0, 0, areaW_, areaH_);
+    }
 };
 
 // Copy-engine work between passes (MAXWELL_DMA_COPY_A, as NVK's nouveau_copy_rect does it for pitch memory)
@@ -842,7 +861,8 @@ enum RefusalId : uint8_t {
     RefDepthStencil,  // a: the state's depth format, b: the pass's
     RefSamples,       // a: the state's samples, b: the pass's, c: the state's shading passes
     RefGeometry,      // CPU ordering proof unavailable; requires an interlocked native program
-    RefStorageView    // a: the attachment, b: its format, c: its width (raw_storage_form.h)
+    RefStorageView,   // a: the attachment, b: its format, c: its width (raw_storage_form.h)
+    RefRotated        // a: why (raw_rotated_pass.h RotatedRefusal), b: the rotation
 };
 
 struct Refusal {

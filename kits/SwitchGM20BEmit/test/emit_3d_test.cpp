@@ -69,11 +69,9 @@ template <typename F> std::vector<uint32_t> theirs(F emit)
 
 TEST(Emit3D, ViewportAndScissorAsRawWritesThem)
 {
-    expectRawSays(
-        "const switch_gm20b_viewport_state v = viewportState(viewport_);\n        kit(p, switch_gm20b_viewport, "
-        "0u, &v);");
-    expectRawSays("kit(p, switch_gm20b_scissor, 0u, uint16_t(scissor_[0]), uint16_t(scissor_[0] >> 16), "
-                  "uint16_t(scissor_[1]),");
+    expectRawSays("switch_gm20b_viewport_state v = viewportState(viewport_);\n        turnViewport(rot_, v);\n        "
+                  "kit(p, switch_gm20b_viewport, 0u, &v);");
+    expectRawSays("kit(p, switch_gm20b_scissor, 0u, uint16_t(s.x0), uint16_t(s.x1), uint16_t(s.y0), uint16_t(s.y1));");
     const switch_gm20b_viewport_state v = {{640.0f, -360.0f, 1.0f}, {640.0f, 360.0f, 0.0f}, 0, 1280, 0, 720};
     const uint32_t viewport[8] = {bits(640.0f), bits(-360.0f), bits(1.0f),  bits(640.0f),
                                   bits(360.0f), bits(0.0f),    1280u << 16, 720u << 16};
@@ -87,6 +85,18 @@ TEST(Emit3D, ViewportAndScissorAsRawWritesThem)
                   p.inc(uint32_t(g::c_VIEWPORT_CLIP_H), {viewport[6], viewport[7]});
                   p.inc(uint32_t(g::c_SCISSOR_ENABLE), {1, scissor[0], scissor[1]});
               })));
+}
+
+TEST(Emit3D, ViewportSwizzleAsRawWritesIt)
+{
+    expectRawSays("kit(p, switch_gm20b_viewport_swizzle, 0u, word);");
+    for (const uint32_t word : {0x6420u, 0x6402u})
+        EXPECT_EQ(Words(ours([&](nv_push *p) {
+                      switch_gm20b_viewport_swizzle(p, 0, word);
+                  })),
+                  Words(theirs([&](raw::Push &p) {
+                      p.m(0x0a18, word);
+                  })));
 }
 
 TEST(Emit3D, BlendConstantAsRawWritesIt)
@@ -105,7 +115,7 @@ TEST(Emit3D, BlendConstantAsRawWritesIt)
 TEST(Emit3D, ClearAsRawWritesIt)
 {
     expectRawSays("kit(p, switch_gm20b_clear, &s);");
-    expectRawSays("clearRect(p, c.x0, c.y0, c.x1, c.y1, v, c.target, area ? zsBits : 0);");
+    expectRawSays("clearRect(p, r.x0, r.y0, r.x1, r.y1, v, c.target, area ? zsBits : 0);");
     for (const bool depth : {false, true}) {
         const switch_gm20b_clear_state c = {{0x3f800000, 0, 0x3f000000, 0x3f800000}, 4, 1280, 8, 720, 2, depth, depth};
         const uint32_t zsBits = depth ? 3 : 0;
@@ -159,7 +169,7 @@ TEST(Emit3D, RenderTargetsAsRawWritesThem)
     expectRawSays("const switch_gm20b_target k = kitTarget(d);\n    kit(p, switch_gm20b_color_target, index, &k, "
                   "t.comptags);");
     expectRawSays("kit(p, switch_gm20b_color_target, index, &k, true);");
-    expectRawSays("kit(p, switch_gm20b_render_area, count, areaW_, areaH_);");
+    expectRawSays("kit(p, switch_gm20b_render_area, count, planeArea().x1, planeArea().y1);");
     raw::ColorTargetDesc pitch;
     pitch.va = 0x1234560000;
     pitch.pitch = 5120;

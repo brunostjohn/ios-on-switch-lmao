@@ -592,7 +592,7 @@ TEST(GM20BRawReopenSource, ReopenKeepsTheHeapAndReplaysTheContext)
 		EXPECT_THAT(relocated, HasSubstr(reloc));
 	EXPECT_THAT(context, HasSubstr("sampleWords(p, 1, root_.va);"));
 	EXPECT_THAT(
-		flat(definition(raw, "void sampleWords(Push &p, uint32_t samples, uint64_t root)")),
+		flat(definition(raw, "void sampleWords(Push &p, uint32_t samples, uint64_t root,")),
 		HasSubstr("p.inc(CB_SELECTOR_A,"));
 	const std::string begin = flat(definition(raw, "CommandBuffer *Device::begin()"));
 	expectBefore(begin, "!reopen())", "p.m(INVALIDATE_SHADER_CACHES_NO_WFI,");

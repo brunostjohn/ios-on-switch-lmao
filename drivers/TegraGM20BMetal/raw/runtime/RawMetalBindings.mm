@@ -127,7 +127,7 @@ void recordBytes(RMCommandBuffer *cb, Cmd m, const void *bytes, NSUInteger lengt
     RMTexture *x = [(id)t isKindOfClass:[RMTexture class]] ? (RMTexture *)t : nil;
     // an extended-range texture is sampled through its stand-in (raw_xr.h): one without (no ShaderRead usage) is m2v's to sample
     const bool unsampled = x && !x->_raw.standIn && raw::xrForm(x->_raw.format) != raw::XrForm::None;
-    if (t && (!x || !x->_rawOk || !x->_raw.tic || unsampled)) {
+    if (t && (!x || !x->_rawOk || !x->_raw.tic || unsampled || x->_raw.rotation)) {
         [_cb takeReason:WhyTexture why:@"a texture the raw path does not keep"];
         if (!x) {
             if (!predLogged(PredTexForeign))
@@ -135,8 +135,8 @@ void recordBytes(RMCommandBuffer *cb, Cmd m, const void *bytes, NSUInteger lengt
                         [NSString stringWithFormat:@"class %s", class_getName(object_getClass(t))]);
             hit(_cb, PredTexForeign, t.pixelFormat);
         } else
-            hit(_cb, RMPred(x->_pred ?: (x->_rawOk ? PredEncNoTic : PredTexShape)), x->_descriptor.pixelFormat,
-                x->_kind);
+            hit(_cb, RMPred(x->_pred ?: (x->_rawOk && !x->_raw.rotation ? PredEncNoTic : PredTexShape)),
+                x->_descriptor.pixelFormat, x->_kind);
     }
     if (stage == 2 && index < 16)
         _tex[index] = x;

@@ -75,6 +75,7 @@ enum RMPred : uint8_t {
     PredEncNoChannel,     // the kernel refused the channel or its context (logged with its answer)
     PredEncGeometry,      // a = primitive, b = count | instances << 32; no native raster-order plan
     PredEncStorageView,   // a = attachment, b = format | width << 32: no storage view and no barrier form to take
+    PredPassRotated,      // a = raw::RotatedRefusal, b = the rotation (a pass's, or the state's at encode)
     PredCount
 };
 
@@ -138,7 +139,8 @@ static constexpr const char *kPredNames[] = {"-",
                                              "enc.samples",
                                              "enc.nochannel",
                                              "enc.geometry",
-                                             "enc.storage"};
+                                             "enc.storage",
+                                             "pass.rotated"};
 static_assert(sizeof kPredNames / sizeof *kPredNames == PredCount, "a name for each predicate");
 
 // What makes a command buffer go to m2v (counted, one log line each kind)

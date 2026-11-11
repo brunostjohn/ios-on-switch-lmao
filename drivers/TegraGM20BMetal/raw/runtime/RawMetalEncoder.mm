@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #import "RawMetalInternal.h"
+#import "RawMetalRotated.h"
 
 // One count for every kind, as IOAccelDeviceGetNextGlobalTraceID is the device's
 uint64_t nextTraceId()
@@ -261,6 +262,11 @@ static bool rawResolve(MTLRenderPassColorAttachmentDescriptor *a, RMTexture *fro
             e->_count = c + 1;
             e->_samples = x->_raw.samples;
         }
+    }
+    e->_turn = passTurn(pass);
+    if (const raw::RotatedRefusal turned = rotatedPassRefusal(pass); turned != raw::RotatedRefusal::None) {
+        [self takeReason:WhyPass why:@(raw::rotatedRefusalText(turned))];
+        hit(self, PredPassRotated, uint64_t(turned));
     }
     facts.depth = zetaAttachment(pass);
     facts.depthLoad = pass.depthAttachment.loadAction;

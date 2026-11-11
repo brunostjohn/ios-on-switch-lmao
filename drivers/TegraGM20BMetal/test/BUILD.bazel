@@ -1,4 +1,6 @@
 # drivers/TegraGM20BMetal on the host:
+#   raw_rotation_test raw/runtime/raw_rotation.h, raw_rotated_pass.h: a turned plane's swizzle, viewport and rectangles put
+#                     each frame pixel where Metal stores it (rotated.rs), keep the winding, and which passes draw into it
 #   raw_target_test   raw/runtime/raw_target.h: the raw path's color target words, pitch as before and a mip chain's level as
 #                     NVK's block-linear target, addressing every texel where raw/fx's layout (the texture header's and
 #                     the 2D engine's view of the chain) has it
@@ -395,6 +397,20 @@ host_test(
         "//drivers/TegraGM20BMetal:raw/runtime/raw_pack.h",
     ],
     cxx_std = "c++17",
+)
+
+host_test(
+    name = "raw_rotation_test",
+    srcs = [
+        "raw_rotation_test.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_rotated_pass.h",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_rotation.h",
+    ],
+    cxx_std = "c++17",
+    deps = [
+        "//kits/SwitchGM20B:classes",
+        "//kits/SwitchGM20BEmit:emit",
+    ],
 )
 
 host_test(

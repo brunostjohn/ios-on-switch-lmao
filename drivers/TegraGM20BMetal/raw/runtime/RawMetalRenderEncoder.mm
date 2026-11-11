@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #import "RawMetalInternal.h"
+#import "RawMetalRotated.h"
 
 #include "raw_fetch_order.h"
 #include "raw_residual.h"
@@ -223,6 +224,10 @@ static void forwardCall(RMEncoder *e, SEL selector, const void *argument)
     if (pl.depthFormat != _zeta || (!_zeta && _ds.active())) {  // (raw::RenderEncoder::prepare's test)
         [_cb takeReason:WhyEncode why:@"a depth/stencil state or format the pass's attachment does not take"];
         return hit(_cb, PredEncDepthStencil, pl.depthFormat, _zeta | uint64_t(_ds.active()) << 32);
+    }
+    if (_turn && pl.turnSensitive) {
+        [_cb takeReason:WhyEncode why:@(raw::rotatedRefusalText(raw::RotatedRefusal::Variant))];
+        return hit(_cb, PredPassRotated, uint64_t(raw::RotatedRefusal::Variant), _turn);
     }
     uint32_t sampleMasks[4];
     if (pl.samples != _samples || !raw::sampleShadingMasks(_samples, pl.samplePasses, sampleMasks)) {

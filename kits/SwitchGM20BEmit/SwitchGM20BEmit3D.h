@@ -38,6 +38,9 @@ struct switch_gm20b_viewport_state {
 
 void switch_gm20b_viewport(struct nv_push *p, uint32_t index, const struct switch_gm20b_viewport_state *v);
 
+// Viewport `index`'s clip-space swizzle (NVB197_SET_VIEWPORT_COORDINATE_SWIZZLE: X in bits 2:0, Y 6:4, Z 10:8, W 14:12)
+void switch_gm20b_viewport_swizzle(struct nv_push *p, uint32_t index, uint32_t swizzle);
+
 // Inclusive minimum, exclusive maximum
 void switch_gm20b_scissor(struct nv_push *p, uint32_t index, uint16_t xmin, uint16_t xmax, uint16_t ymin,
                           uint16_t ymax);

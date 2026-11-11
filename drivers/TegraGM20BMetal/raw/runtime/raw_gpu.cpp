@@ -19,6 +19,7 @@
 #include "raw_mip.h"
 #include "raw_owned.h"
 #include "raw_residual.h"
+#include "raw_rotated_pass.h"
 #include "raw_samples.h"
 #include "raw_fragment_tests.h"
 #include "raw_shader_tests.h"
@@ -193,10 +194,11 @@ switch_gm20b_viewport_state viewportState(const uint32_t w[8])
 // A pass's sample layout (raw_samples.h): its registers and the root table's sample words, the root table left selected
 constexpr uint32_t kSampleWords = 20;
 
-void sampleWords(Push &p, uint32_t samples, uint64_t root)
+void sampleWords(Push &p, uint32_t samples, uint64_t root, const Rotation &turned = Rotation())
 {
     SampleLayout l;
     sampleLayout(samples, l);
+    turnPositions(turned, l.positions);
     p.m(SET_ANTI_ALIAS, l.antiAlias);
     p.incArray(ANTI_ALIAS_SAMPLE_POSITIONS, l.positions, 4);
     p.inc(CB_SELECTOR_A, {kRootBytes, uint32_t(root >> 32), uint32_t(root)});
@@ -885,7 +887,7 @@ void Device::build(Pipeline &pl, const PackPipeline &pp, const PlacedProgram &vs
     memcpy(writes, ctWrite_, sizeof writes);
     for (uint32_t k = 0; k < pp.blobDwords; k += 2) {
         const uint32_t m = blob[k], v = blob[k + 1];
-        if (ownedMethod(m))
+        if (ownedMethod(m) || swizzleMethod(m))
             continue;  // a pack made before the method was the runtime's: the probe process's value
         if (m >= CT_WRITE && m < CT_WRITE + 32)
             writes[(m - CT_WRITE) / 4] = v;
@@ -985,6 +987,11 @@ void Device::build(Pipeline &pl, const PackPipeline &pp, const PlacedProgram &vs
         memcpy(pl.storageTic, pp.storageTic, sizeof pl.storageTic);
         pl.readBits &= ~pl.storageBits;
     }
+    const uint32_t codeBytes = (fs.record->dataBytes ? fs.record->dataOffset : fs.record->bytes) - 0x80;
+    const HeapPart *code = heapPartAt(fs.program + 0x50);
+    pl.turnSensitive =
+        !code || turnSensitive(sph, reinterpret_cast<const uint32_t *>(code->cpu + (fs.program + 0x50 - code->offset)),
+                               codeBytes / 4, pl.fetchBits || pl.storageBits);
     pl.rec = &pp;
 }
 
@@ -3254,13 +3261,15 @@ RenderEncoder *CommandBuffer::render(const PassDesc &pass)
             samples = t->samples;
         }
     e.samples_ = std::max<uint8_t>(samples, 1);
+    if (passRotation(pass, e.rot_) != RotatedRefusal::None)
+        return nullptr;
     bool blockLinear = zeta != nullptr;
     for (uint32_t j = 0; j < pass.count && j < 8; j++)
         if (const Texture *t = pass.color[j].texture; t && !t->memoryless && (t->blockLinear || t->shadowTarget))
             blockLinear = true;
     if (zeta && zeta->memoryless) {
         std::lock_guard<std::mutex> l(dev_->lock_);
-        Texture *b = dev_->backing(*zeta);
+        Texture *b = dev_->backing(planeShaped(*zeta, e.rot_));
         if (!b)
             return nullptr;
         e.pass_.depthStencil.texture = b;
@@ -3298,7 +3307,8 @@ RenderEncoder *CommandBuffer::render(const PassDesc &pass)
         }
         if (t->memoryless) {  // back it for this pass
             std::lock_guard<std::mutex> l(dev_->lock_);
-            Texture *b = dev_->backing(*t, scratchTags[j], blockLinear, !(pass.storageMask >> j & 1));
+            Texture *b =
+                dev_->backing(planeShaped(*t, e.rot_), scratchTags[j], blockLinear, !(pass.storageMask >> j & 1));
             if (!b)
                 return nullptr;
             e.pass_.color[j].texture = b;
@@ -3321,6 +3331,8 @@ RenderEncoder *CommandBuffer::render(const PassDesc &pass)
             e.areaW_ = e.areaW_ ? std::min(e.areaW_, t->width) : t->width;
             e.areaH_ = e.areaH_ ? std::min(e.areaH_, t->height) : t->height;
         }
+    if (e.rot_.turned())
+        frameArea(pass, e.rot_, e.areaW_, e.areaH_);
     if (pass.width)
         e.areaW_ = std::min(e.areaW_, pass.width);
     if (pass.height)
@@ -4624,6 +4636,11 @@ bool RenderEncoder::prepare(Pipeline *pl, uint32_t primitive, int32_t first, uin
             cb_->refusal = {RefSamples, pl->samples, samples_, pl->samplePasses};
             return false;
         }
+        if (rot_.turned() && pl->turnSensitive) {
+            *why = rotatedRefusalText(RotatedRefusal::Variant);
+            cb_->refusal = {RefRotated, uint32_t(RotatedRefusal::Variant), rot_.turn};
+            return false;
+        }
         compatible_ = pl;
     }
     if (!prepareShaderTests(*pl, why))
@@ -4869,13 +4886,14 @@ bool RenderEncoder::prepare(Pipeline *pl, uint32_t primitive, int32_t first, uin
         restart_ = restart;
     }
     if (viewportDirty_) {
-        const switch_gm20b_viewport_state v = viewportState(viewport_);
+        switch_gm20b_viewport_state v = viewportState(viewport_);
+        turnViewport(rot_, v);
         kit(p, switch_gm20b_viewport, 0u, &v);
         viewportDirty_ = false;
     }
     if (scissorDirty_) {
-        kit(p, switch_gm20b_scissor, 0u, uint16_t(scissor_[0]), uint16_t(scissor_[0] >> 16), uint16_t(scissor_[1]),
-            uint16_t(scissor_[1] >> 16));
+        const Rect s = planeRect(scissor_[0] & 0xffff, scissor_[1] & 0xffff, scissor_[0] >> 16, scissor_[1] >> 16);
+        kit(p, switch_gm20b_scissor, 0u, uint16_t(s.x0), uint16_t(s.x1), uint16_t(s.y0), uint16_t(s.y1));
         scissorDirty_ = false;
     }
     // NVK's SET_BLEND_CONST_RED..ALPHA, the floats' bits, written where a draw blends with them
@@ -5199,7 +5217,7 @@ bool RenderEncoder::prepareShaderTests(const Pipeline &pipeline, const char **wh
     }
     const Texture *zeta = pass_.depthStencil.texture;
     ShaderTestShape copy;
-    if (!zeta || !shaderTestShape(zeta->format, samples_, areaW_, areaH_, flags, copy)) {
+    if (!zeta || !shaderTestShape(zeta->format, samples_, planeArea().x1, planeArea().y1, flags, copy)) {
         *why = "a shader depth/stencil test whose attachment cannot be copied exactly";
         cb_->refusal = {RefDepthStencil, zeta ? zeta->format : 0, flags, samples_};
         return false;
@@ -5247,7 +5265,7 @@ void RenderEncoder::copyShaderTests(uint8_t flags, bool toAttachment)
         reserve();
     const Texture &zeta = *pass_.depthStencil.texture;
     ShaderTestShape shape;
-    shaderTestShape(zeta.format, samples_, areaW_, areaH_, flags, shape);
+    shaderTestShape(zeta.format, samples_, planeArea().x1, planeArea().y1, flags, shape);
     auto side = [](const Texture &texture) {
         auto result = sideOf(texture, 0, 0, 0);
         result.height = sampleRows(texture);
@@ -5515,6 +5533,11 @@ void RenderEncoder::writeRaster(Push &p, const Raster &want)
     }
 }
 
+void RenderEncoder::emitSwizzle(Push &p, uint32_t word)
+{
+    kit(p, switch_gm20b_viewport_swizzle, 0u, word);
+}
+
 void RenderEncoder::continuePass(uint8_t stores)
 {
     // Clear reach is a Metal encoder property, including its empty-draw behavior.
@@ -5575,6 +5598,8 @@ void RenderEncoder::end()
     if (p_.room() < 64 + kSampleWords)
         reserve();
     writeRaster(p_, Raster());
+    if (rot_.turned())
+        emitSwizzle(p_, kSwizzleIdentity);
     // the draw parameters the next encoder starts from: the root table's and the base registers, 0
     if (drawParamsUnknown_ || first_ || baseInstance_) {
         const uint32_t zero[2] = {};
@@ -5621,9 +5646,11 @@ void RenderEncoder::end()
 #else
     kit(p, switch_gm20b_pass_barrier, false);
 #endif
+    if (rot_.turned())
+        emitSwizzle(p, rot_.swizzle());
     // ahead of the clears: a clear reaches every sample of its rectangle's pixels through it
     if (samples_ > 1)
-        sampleWords(p, samples_, d.root_.va);
+        sampleWords(p, samples_, d.root_.va, rot_);
     // shadow targets' pool images: their texels over the render area first, as NVK's tiled shadow loads them (a load that
     // keeps them: Load, and a DontCare the clears leave; a Clear clears it all), then the barrier to the pass
     bool copied = false;
@@ -5633,8 +5660,9 @@ void RenderEncoder::end()
                 continue;
             cb_->use(*o, false);
             cb_->use(*pass_.color[j].texture, true);
-            copySides(p, sideOf(*o, 0, 0, 0), sideOf(*pass_.color[j].texture, 0, 0, 0), areaW_, areaH_, o->bpp,
-                      d.stats);
+            const Rect a = planeArea();
+            copySides(p, sideOf(*o, a.x0, a.y0, 0), sideOf(*pass_.color[j].texture, a.x0, a.y0, 0), a.x1 - a.x0,
+                      a.y1 - a.y0, o->bpp, d.stats);
             copied = true;
         }
     if (copied) {
@@ -5648,15 +5676,16 @@ void RenderEncoder::end()
         if (!c.own)
             continue;
         const Texture *t = pass_.color[c.target].texture;
+        const Rect r = planeRect(c.x0, c.y0, c.x1, c.y1);
         colorTarget(p, 0, *t);
-        kit(p, switch_gm20b_render_area, 1u, c.x1, c.y1);
+        kit(p, switch_gm20b_render_area, 1u, r.x1, r.y1);
         p.m(ZT_SELECT, 0);
         uint32_t v[4] = {};
         clearWords(pass_.color[c.target].texture->format, c.value, v,
                    !called_ && pass_.color[c.target].texture->compressed);
         RAW_DIAGNOSTIC(d.countZbc(*t, !c.x0 && !c.y0 && c.x1 >= t->width && c.y1 >= t->height,
                                   zbcBootColor(t->format, v)));
-        clearRect(p, c.x0, c.y0, c.x1, c.y1, v, 0, 0);
+        clearRect(p, r.x0, r.y0, r.x1, r.y1, v, 0, 0);
         own = true;
     }
     if (own) {
@@ -5674,7 +5703,7 @@ void RenderEncoder::end()
     }
     // targets map to themselves (NVK writes all eight slots of the map; the hardware reads the first `count`), drawn from
     // (0, 0) over the render area
-    kit(p, switch_gm20b_render_area, count, areaW_, areaH_);
+    kit(p, switch_gm20b_render_area, count, planeArea().x1, planeArea().y1);
     const DepthStencilAttachment &zs = pass_.depthStencil;
     zetaTargetWords(p, zs.texture);
     // NVK clears depth and stencil with the first color the pass clears over its render area, else on their own
@@ -5693,11 +5722,13 @@ void RenderEncoder::end()
         RAW_DIAGNOSTIC(d.countZbc(*t, !c.x0 && !c.y0 && c.x1 >= t->width && c.y1 >= t->height,
                                   zbcBootColor(t->format, v)));
         const bool area = !c.x0 && !c.y0 && c.x1 == areaW_ && c.y1 == areaH_;
-        clearRect(p, c.x0, c.y0, c.x1, c.y1, v, c.target, area ? zsBits : 0);
+        const Rect r = planeRect(c.x0, c.y0, c.x1, c.y1);
+        clearRect(p, r.x0, r.y0, r.x1, r.y1, v, c.target, area ? zsBits : 0);
         zsBits = area ? 0 : zsBits;
     }
     if (zsBits) {
-        p.inc(CLEAR_RECT_H, {areaW_ << 16, areaH_ << 16});
+        const Rect a = planeArea();
+        p.inc(CLEAR_RECT_H, {a.x1 << 16 | a.x0, a.y1 << 16 | a.y0});
         p.m(CLEAR_SURFACE_CONTROL, 0x10);
         p.m(RENDER_ENABLE_OVERRIDE, 1);
         p.m(CLEAR_SURFACE, zsBits);
@@ -5742,7 +5773,9 @@ void RenderEncoder::end()
                 }
             cb_->use(*pass_.color[j].texture, false);
             cb_->use(*o, true);
-            copySides(q, sideOf(*pass_.color[j].texture, 0, 0, 0), sideOf(*o, 0, 0, 0), w, h, o->bpp, d.stats);
+            const Rect r = planeRect(0, 0, w, h);
+            copySides(q, sideOf(*pass_.color[j].texture, r.x0, r.y0, 0), sideOf(*o, r.x0, r.y0, 0), r.x1 - r.x0,
+                      r.y1 - r.y0, o->bpp, d.stats);
         }
         checkRoom(q, "a pass's shadow stores");
         cb_->segment(at, q.at);
@@ -5808,8 +5841,9 @@ std::vector<RenderEncoder::Clear> RenderEncoder::clears() const
             // (ReachClears), which the pass then loads.
             uint32_t rw = w, rh = h;
             if (a.store && !memoryless_[j]) {
-                rw = called_ ? std::min((w + kTile - 1) / kTile * kTile, a.texture->width) : a.texture->width;
-                rh = called_ ? std::min((h + kTile - 1) / kTile * kTile, a.texture->height) : a.texture->height;
+                const Rotation frame = rot_.turned() ? rot_ : frameOf(*a.texture);
+                rw = called_ ? std::min((w + kTile - 1) / kTile * kTile, frame.width) : frame.width;
+                rh = called_ ? std::min((h + kTile - 1) / kTile * kTile, frame.height) : frame.height;
             }
             Clear c{j, 0, 0, rw, rh, a.clear};
             c.own = rw != w || rh != h;

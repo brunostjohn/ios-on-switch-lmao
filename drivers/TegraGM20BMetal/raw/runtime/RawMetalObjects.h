@@ -389,6 +389,7 @@ uint64_t nextTraceId();
     uint32_t _count;        // its attachment count (the last attachment's index + 1)
     uint32_t _zeta;         // its depth/stencil attachment's format as the raw path holds it (0: none)
     uint32_t _samples;      // its color attachments' samples a pixel
+    uint8_t _turn;          // its turned attachments' rotation (raw_rotation.h; 0: none)
     uint32_t _passAt;       // its pass's RMPass (the command buffer's _passes)
     raw::DepthStencilDesc _ds;
     MTLRenderPassDescriptor *_pass;  // the command buffer's copy, which the raw encode and m2v's replay read
