@@ -483,6 +483,7 @@ host_test(
         "drivers/TegraGM20B",
     ],
     cxx_std = "c++17",
+    deps = ["//kits/SwitchGM20B:classes"],
 )
 
 host_test(
