@@ -1,0 +1,241 @@
+#!/usr/bin/env python3
+"""The raw path's shader scoreboard: what each state's fragment program costs a pixel, from its machine code.
+
+usage: nakstat.py (--pack pack.bin | --dump <directcheck DIRECTCHECK_DUMP dir>) [--corpus <R lines>]... [--json]
+
+A pack (raw/runtime/raw_pack.h) or a directcheck dump gives each state's programs and the register count its pipeline
+sets. Each state the corpora name gets a row: instructions by class, GPRs, warps per SM, and the time a 1280x720 draw
+takes if the program is instruction-bound (the hot-state scenes measure 8-22% above that). A program of at most
+STUB_INSTRUCTIONS writes constants; the corpus totals leave those out.
+"""
+
+import argparse
+import json
+import struct
+import sys
+from collections import Counter
+from pathlib import Path
+
+if __package__ in (None, ''):
+    sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
+
+from tools.gpu.maxwell import isa
+
+PIXELS_1280x720 = 1280 * 720
+LANES = 256
+CLOCK_HZ = 768e6
+STUB_INSTRUCTIONS = 12
+REGISTERS_PER_SM = 65536
+WARPS_PER_SM = 64
+FRAGMENT_REGISTER_COUNT = 0x214C  # SET_PIPELINE_REGISTER_COUNT(5)
+NAN_GUARD_MASK = 0x7FFFFFFF
+
+CLASSES = {
+    'tex': ('TEX', 'TEXS', 'TLD', 'TLDS', 'TLD4', 'TLD4S', 'TMML', 'TXD', 'TXQ', 'TXA'),
+    'conv': ('F2F', 'F2I', 'I2F', 'I2I'),
+    'ldc': ('LDC',),
+    'half': ('HADD2', 'HMUL2', 'HFMA2', 'HSET2', 'HSETP2'),
+    'fp32': ('FADD', 'FMUL', 'FFMA', 'FMNMX', 'FSET', 'FSETP', 'FCMP', 'FSWZADD', 'RRO', 'FCHK'),
+    'mufu': ('MUFU',),
+    'move': ('MOV', 'SEL', 'PRMT', 'P2R', 'R2P'),
+    'ctrl': ('NOP', 'SSY', 'SYNC', 'BRA', 'BRK', 'PBK', 'CONT', 'PCNT', 'EXIT', 'KIL', 'CAL', 'RET', 'JMP', 'DEPBAR'),
+    'mem': (
+        'IPA',
+        'ALD',
+        'AST',
+        'AL2P',
+        'LD',
+        'LDG',
+        'ST',
+        'STG',
+        'LDS',
+        'STS',
+        'LDL',
+        'STL',
+        'ATOM',
+        'ATOMS',
+        'RED',
+        'SULD',
+        'SUST',
+        'SUATOM',
+        'MEMBAR',
+        'CCTL',
+        'S2R',
+        'CS2R',
+        'PIXLD',
+        'ISBERD',
+        'OUT',
+        'BAR',
+        'VOTE',
+        'SHFL',
+    ),
+}
+ORDER = ['tex', 'conv', 'guard', 'ldc', 'half', 'fp32', 'mufu', 'move', 'ctrl', 'mem', 'int']
+
+
+def mnemonic_class(name: str) -> str:
+    base = name.split('_', 1)[0]
+    for cls, names in CLASSES.items():
+        if base in names or base.rstrip('32I') in names:
+            return cls
+    return 'int'
+
+
+def classify(code: bytes) -> Counter:
+    """Instruction classes of a program's code; 'guard' counts the |x| masks of NaN guards inside 'int'."""
+    out = Counter()
+    for word in isa.instructions(code):
+        name = isa.name(word)
+        out[mnemonic_class(name)] += 1
+        if name == 'LOP32I' and isa.field(word, 20, 32) == NAN_GUARD_MASK:
+            out['guard'] += 1
+    return out
+
+
+def warps_per_sm(gprs: int) -> int:
+    if gprs <= 0:
+        return WARPS_PER_SM
+    per_warp = ((gprs + 7) // 8) * 8 * 32
+    return min(WARPS_PER_SM, REGISTERS_PER_SM // per_warp // 4 * 4)
+
+
+def predicted_ms(instructions: int) -> float:
+    return instructions * PIXELS_1280x720 / (LANES * CLOCK_HZ) * 1e3
+
+
+def row(label: str, code: bytes, gprs: int) -> dict:
+    c = classify(code)
+    n = sum(v for k, v in c.items() if k != 'guard')
+    return {
+        'label': label,
+        'instructions': n,
+        'gprs': gprs,
+        'warps': warps_per_sm(gprs),
+        'ms_1280x720': round(predicted_ms(n), 3),
+        **{k: c.get(k, 0) for k in ORDER},
+    }
+
+
+def fnv(b: bytes) -> int:
+    h = 0xCBF29CE484222325
+    for x in b:
+        h = ((h ^ x) * 0x100000001B3) & 0xFFFFFFFFFFFFFFFF
+    return h
+
+
+def state_key(line: str) -> str:
+    """Give the pack key of a corpus R line (rawpack.py state_key, for lines without lib= or linked functions)."""
+    line = line.rstrip('\n').rstrip()
+    if line.endswith('|'):
+        line = line[:-1].rstrip()
+    bar1, bar2 = line.find(' | v '), line.find(' | f ')
+    if bar1 < 0 or bar2 < 0:
+        return ''
+    bar3 = line.find(' | ', bar2 + 5)
+    fields = [
+        h
+        for h in line[:bar1].split()
+        if h.startswith(('samples=', 'topo=', 'ds=')) or (len(h) > 1 and h[0] in 'ca' and h[1].isdigit())
+    ]
+    return (' '.join(fields) + ' ' + line[bar1 : bar3 if bar3 >= 0 else len(line)]).strip()
+
+
+class Pack:
+    PIPELINE_BYTES = 480
+
+    def __init__(self, path: Path):
+        self.p = path.read_bytes()
+        if self.p[:8] != b'GM20BPK1':
+            raise SystemExit(f'{path}: not a raw pack')
+        _, self.nprog, self.npipe, _ = struct.unpack_from('<4I', self.p, 8)
+        self.sec = [struct.unpack_from('<QQ', self.p, 24 + 16 * i) for i in range(10)]
+        self.pipelines = {}
+        for i in range(self.npipe):
+            at = self.sec[1][0] + self.PIPELINE_BYTES * i
+            key, _, _, fs, blob, dwords = struct.unpack_from('<QIHHII', self.p, at)
+            self.pipelines.setdefault(key, (fs, blob, dwords))
+
+    def code(self, program: int) -> bytes:
+        heap_offset, _, size, data_offset, _ = struct.unpack_from('<5I', self.p, self.sec[0][0] + 32 * program)
+        start = self.sec[7][0] + heap_offset + isa.HEADER_BYTES + 0x30
+        return self.p[start : self.sec[7][0] + heap_offset + (data_offset or size)]
+
+    def blob(self, at: int, dwords: int) -> list[int]:
+        return list(struct.unpack_from(f'<{dwords}I', self.p, self.sec[5][0] + 4 * at))
+
+    def state(self, key: str) -> tuple[bytes, int] | None:
+        found = self.pipelines.get(fnv(key.encode()))
+        if not found:
+            return None
+        fs, blob, dwords = found
+        return self.code(fs), register_count(self.blob(blob, dwords))
+
+
+def register_count(blob: list[int]) -> int:
+    pairs = dict(zip(blob[0::2], blob[1::2], strict=True))
+    return pairs.get(FRAGMENT_REGISTER_COUNT, 0)
+
+
+class Dump:
+    def __init__(self, path: Path):
+        self.states = {}
+        for f in sorted(path.glob('*.json')):
+            d = json.loads(f.read_text())
+            self.states[d['key']] = (bytes.fromhex(d['fs'])[isa.HEADER_BYTES :], register_count(d['blob']))
+
+    def state(self, key: str) -> tuple[bytes, int] | None:
+        return self.states.get(key)
+
+
+def labelled(corpora: list[Path]) -> list[tuple[str, str]]:
+    out = []
+    for path in corpora:
+        for line in path.read_text().splitlines():
+            if line.startswith('R ') and ' lib=' not in line:
+                label = line.split('label=')[1].split()[0].removeprefix('com.apple.coreanimation.')
+                out.append((label, state_key(line)))
+    return out
+
+
+def main() -> None:
+    ap = argparse.ArgumentParser(description=__doc__.split('\n')[0])
+    src = ap.add_mutually_exclusive_group(required=True)
+    src.add_argument('--pack', type=Path)
+    src.add_argument('--dump', type=Path)
+    ap.add_argument('--corpus', type=Path, action='append', default=[])
+    ap.add_argument('--json', action='store_true')
+    a = ap.parse_args()
+    source = Pack(a.pack) if a.pack else Dump(a.dump)
+    rows, missing = [], []
+    for label, key in labelled(a.corpus):
+        state = source.state(key)
+        if state is None:
+            missing.append(label)
+            continue
+        rows.append(row(label, *state))
+    real = [r for r in rows if r['instructions'] > STUB_INSTRUCTIONS]
+    summary = {
+        'states': len(rows),
+        'stubs': len(rows) - len(real),
+        'missing': len(missing),
+        'instructions': sum(r['instructions'] for r in real),
+        **{k: sum(r[k] for r in real) for k in ORDER},
+    }
+    if a.json:
+        print(json.dumps({'rows': rows, 'summary': summary, 'missing': missing}, indent=1))
+        return
+    head = f'{"state":42} {"instr":>6} {"gpr":>4} {"wrp":>4} {"ms":>7} ' + ' '.join(f'{k:>5}' for k in ORDER)
+    print(head)
+    for r in rows:
+        print(
+            f'{r["label"][:42]:42} {r["instructions"]:6} {r["gprs"]:4} {r["warps"]:4} {r["ms_1280x720"]:7.3f} '
+            + ' '.join(f'{r[k]:5}' for k in ORDER)
+        )
+    print(
+        f'corpus: {summary["states"]} states, {summary["stubs"]} stubs left out, {summary["missing"]} not found; '
+        f'{summary["instructions"]} instructions: ' + ', '.join(f'{k} {summary[k]}' for k in ORDER)
+    )
+
+
+if __name__ == '__main__':
+    main()

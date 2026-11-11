@@ -1,0 +1,38 @@
+# Maxwell machine-code tools: nakstat, the raw path's shader scoreboard.
+#
+#   bazel run //tools/gpu/maxwell:nakstat -- --pack <pack.bin> --corpus $PWD/tools/gpu/maxwell/scoreboard.log
+#   bazel run //tools/gpu/maxwell:nakstat -- --dump <dir> --corpus ...   (directcheck's DIRECTCHECK_DUMP)
+#
+# opcodes.txt is yuzu's maxwell.inc, verbatim (GPL-2.0-or-later, its notice kept).
+load("@rules_python//python:py_binary.bzl", "py_binary")
+load("@rules_python//python:py_library.bzl", "py_library")
+load("@rules_python//python:py_test.bzl", "py_test")
+load("//bazel/lint:defs.bzl", "lint_files")
+
+lint_files(exclude = ["opcodes.txt"])
+
+py_library(
+    name = "isa",
+    srcs = ["isa.py"],
+    data = ["opcodes.txt"],
+    visibility = ["//tools:__subpackages__"],
+)
+
+py_binary(
+    name = "nakstat",
+    srcs = ["nakstat.py"],
+    data = ["scoreboard.log"],
+    visibility = ["//visibility:public"],
+    deps = [":isa"],
+)
+
+py_test(
+    name = "nakstat_test",
+    size = "small",
+    srcs = ["nakstat_test.py"],
+    data = ["testdata/image_draw_fragment.hex"],
+    deps = [
+        ":isa",
+        ":nakstat",
+    ],
+)

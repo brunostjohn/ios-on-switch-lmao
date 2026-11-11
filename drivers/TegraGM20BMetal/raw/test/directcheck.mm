@@ -7,6 +7,8 @@
 // usage: directcheck <nvk dylib> <cache dir> <default.metallib> <corpus.log> <pack.bin>
 //   DIRECTCHECK_MET=<file>: appends the key hash and form of each pack record made the same (a sweep over every bucket checks
 //   that it met every record of the pack)
+//   DIRECTCHECK_DUMP=<dir>: writes each record made to <dir>/<key hash>.json (its key, programs and blob), what
+//   tools/gpu/maxwell/nakstat.py --dump reads
 // Each state the pack set aside that the direct compile refuses too is listed with its reason (REFUSED lines): run over a
 // device's harvest against the pack it booted with, they are the states its runtime refused.
 #import <Foundation/Foundation.h>
@@ -26,6 +28,49 @@ namespace {
 void missing(const char *cls, const char *sel)
 {
     fprintf(stderr, "MISSING -[%s %s]\n", cls, sel);
+}
+
+std::string hexOf(const std::vector<uint8_t> &bytes)
+{
+    static const char digits[] = "0123456789abcdef";
+    std::string out;
+    out.reserve(bytes.size() * 2);
+    for (uint8_t b : bytes) {
+        out += digits[b >> 4];
+        out += digits[b & 15];
+    }
+    return out;
+}
+
+std::string jsonString(const std::string &text)
+{
+    std::string out = "\"";
+    for (char c : text) {
+        if (c == '"' || c == '\\')
+            out += '\\';
+        out += c;
+    }
+    return out + "\"";
+}
+
+void dumpRecord(const char *dir, const std::string &key, const raw::RuntimeRecord &rec)
+{
+    char name[32];
+    snprintf(name, sizeof name, "/%016llx.json", (unsigned long long)raw::packKeyHash(key));
+    const std::string path = std::string(dir) + name;
+    FILE *f = fopen(path.c_str(), "w");
+    if (!f)
+        return;
+    std::string blob;
+    for (size_t i = 0; i < rec.blob.size(); i++)
+        blob += (i ? "," : "") + std::to_string(rec.blob[i]);
+    fprintf(f,
+            "{\"key\": %s, \"vs\": \"%s\", \"fs\": \"%s\", \"blob\": [%s], \"split_fs\": \"%s\", \"split_prologue\": "
+            "\"%s\"}\n",
+            jsonString(key).c_str(), hexOf(rec.programs[0].image).c_str(), hexOf(rec.programs[1].image).c_str(),
+            blob.c_str(), rec.split ? hexOf(rec.splitPrograms[0].image).c_str() : "",
+            rec.split ? hexOf(rec.splitPrograms[1].image).c_str() : "");
+    fclose(f);
 }
 
 }  // namespace
@@ -80,6 +125,8 @@ int main(int argc, char **argv)
                 const auto began = std::chrono::steady_clock::now();
                 const raw::CompileOutcome outcome = direct.make(s.d, s.key, rec, why, textures, nullptr, true);
                 ms += std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - began).count();
+                if (const char *dir = getenv("DIRECTCHECK_DUMP"); dir && *dir && outcome == raw::CompileOutcome::Made)
+                    dumpRecord(dir, s.key, rec);
                 std::string verdict;
                 if (outcome == raw::CompileOutcome::Failed) {
                     verdict = " failed (" + why + ")";
