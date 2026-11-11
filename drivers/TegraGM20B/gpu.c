@@ -1800,6 +1800,7 @@ static void hang_detail(struct tgm_chan *blame, struct tgm_chan *late, u64 now)
 	const struct tgm_order *w = &blame->waited;
 	struct tgm_hang_detail d = {0};
 	struct tgm_chan *source = NULL;
+	const volatile u32 *bind = NULL;
 	char line[TGM_HANG_LINE];
 
 	d.chid = blame->chid;
@@ -1822,7 +1823,9 @@ static void hang_detail(struct tgm_chan *blame, struct tgm_chan *late, u64 now)
 	d.late_submitted = READ_ONCE(late->submitted);
 	d.late_ms = (now - chan_progress_ns(late)) / 1000000;
 	tgm_hang_detail_format(line, sizeof(line), &d);
-	nvxnu_log("tegra-gm20b: GPU hang detail: %s\n", line);
+	bind = blame->vm ? __atomic_load_n(&blame->vm->bind_cpu, __ATOMIC_ACQUIRE) : NULL;
+	nvxnu_log("tegra-gm20b: GPU hang detail: %s; bind epoch %u of %u\n", line,
+		  bind ? READ_ONCE(*bind) : 0, bind ? READ_ONCE(blame->vm->bind_target) : 0);
 }
 #endif
 
