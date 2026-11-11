@@ -104,6 +104,20 @@ static raw::ProbeSurface probeSurface(const raw::Texture &t, uint32_t fmt2d)
     return [NSString stringWithFormat:@"%llu", (unsigned long long)gRM->raw->bandBudgetNs_.exchange(ns.unsignedLongLongValue)];
 }
 
+// Storage forms view compressed attachments while set, for gpu.raw.storage_compressed
+- (NSString *)switchRawProbeStorageCompressed:(NSNumber *)on
+{
+    gRM->raw->probeStorageCompressed.store(on.boolValue, std::memory_order_release);
+    return nil;
+}
+
+// MSAA resolves take the pack's resolve pass while set, for gpu.raw.resolve_twod's reference
+- (NSString *)switchRawProbeResolveDraw:(NSNumber *)on
+{
+    gRM->raw->probeResolveDraw.store(on.boolValue, std::memory_order_release);
+    return nil;
+}
+
 // What a probe's line says of a texture and the device: "raw=1 comptags=1 block_linear=1 pitch=N tiled_cache=1
 // compression=1", raw=0 where the raw path does not hold it
 - (NSString *)switchRawProbeFacts:(id<MTLTexture>)texture

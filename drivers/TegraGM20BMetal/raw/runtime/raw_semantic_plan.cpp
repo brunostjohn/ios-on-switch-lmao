@@ -189,10 +189,12 @@ bool RMCommandPlan::record(const Cmd &c, const std::vector<uint64_t> &extra)
     case OpCopyBufferToTexture:
     case OpCopyTextureToBuffer:
     case OpFillBuffer:
+    case OpFillTexture:
     case OpMipmaps:
     case OpResetCommands:
     case OpCopyCommands: {
-        const bool writes = c.op == OpFillBuffer || c.op == OpMipmaps || c.op == OpResetCommands;
+        const bool writes =
+            c.op == OpFillBuffer || c.op == OpFillTexture || c.op == OpMipmaps || c.op == OpResetCommands;
         operation.payload = append(transfers_, {c.obj, c.obj2, c.c, 0, c.x, c.a, uint8_t(c.a)});
         operation.uses = saveUses({{c.obj, uint8_t(writes ? raw::ResourceUse::Write : raw::ResourceUse::Read)},
                                    {c.obj2, raw::ResourceUse::Write}});
@@ -343,6 +345,7 @@ Cmd RMCommandPlan::legacy(size_t at) const
     case OpCopyBufferToTexture:
     case OpCopyTextureToBuffer:
     case OpFillBuffer:
+    case OpFillTexture:
     case OpMipmaps:
     case OpResetCommands:
     case OpCopyCommands: {

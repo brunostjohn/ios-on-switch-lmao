@@ -28,6 +28,25 @@ constexpr bool fixedBlendAcceptable(const FixedBlendAsk &a)
     return unorm8 && !a.readable && !a.accumulates && a.standardFactors && (a.eightBitSources || a.computedLayers <= 2);
 }
 
+// Rule resolve.twod: an 8-bit unorm MSAA resolve by the 2D engine, the sample grid read as one image at 2:1 (each
+// destination texel the box of its samples, corner origin at half a step). Within one code of Metal's (sum + n/2) / n:
+// gpu.x1.twod_resolve on the chip (T-v2: bgra8 and rgba8 at 2x and 4x near, none beyond one code). The engine stores a
+// value on a code's half way point as the code below (the ROP's unorm store: cut to n+4 fractional bits, nearest, ties
+// down), where Metal's rule rounds it up, and no 902d method sets its rounding. So it is taken where a one-code error
+// cannot be seen as data, as fetch.blend is: a whole-target resolve into a target the CPU never maps.
+struct ResolveAsk {
+    uint16_t format = 0;       // MTLPixelFormat of the resolve texture
+    uint8_t samples = 0;       // the attachment's
+    bool readable = false;     // CPU-visible storage (shared)
+    bool wholeTarget = false;  // the pass's render area is the resolve texture's whole level 0, slice 0
+};
+
+constexpr bool twodResolveAcceptable(const ResolveAsk &a)
+{
+    const bool unorm8 = a.format == 70 || a.format == 80;  // RGBA8Unorm, BGRA8Unorm
+    return unorm8 && (a.samples == 2 || a.samples == 4) && !a.readable && a.wholeTarget;
+}
+
 // Rung 3, rule fetch.iterated: the ROP's iterated blend (kits/SwitchGM20BEmit/SwitchGM20BEmitIterated.h) for blends with
 // no fixed-function equation (Core Animation's colour-matrix group and separable modes). Its setup is the one x1-units
 // derived from the class errors; it is taken once gpu.x1.iterated_blend reads nvn_accepted=nvn_run and

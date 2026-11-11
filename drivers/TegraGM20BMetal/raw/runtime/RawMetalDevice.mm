@@ -75,6 +75,8 @@ static const char *zetaMemoryRefusal(int asked)
     d[@"texture_readbacks"] = @(gRM->raw->stats.textureReadbacks.load());
     d[@"blend_kill_states"] = @(gRM->raw->stats.blendKillStates.load());
     d[@"blend_kill_binds"] = @(gRM->raw->stats.blendKillBinds.load());
+    d[@"resolve_twod"] = @(gRM->raw->stats.resolveTwod.load());
+    d[@"blur_twod_passes"] = @(gRM->raw->stats.blurTwodPasses.load());
     d[@"zcull_passes"] = @(gRM->raw->stats.zcullPasses.load());
     d[@"zcull_invalidations"] = @(gRM->raw->stats.zcullInvalidations.load());
     d[@"mip_twod_levels"] = @(gRM->raw->stats.mipTwodLevels.load());

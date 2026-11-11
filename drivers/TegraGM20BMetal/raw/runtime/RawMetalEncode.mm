@@ -7,6 +7,7 @@
 #include <optional>
 #include "raw_compute.h"
 #include "raw_compute_lookup.h"
+#include "raw_fetch_rungs.h"
 #include "raw_samples.h"
 
 // ---- the tape onto the raw path ----
@@ -184,6 +185,21 @@ __attribute__((objc_externally_retained)) static bool encodeRawAttempt(RMCommand
             from[r.attachment] = re->target(r.attachment);
         const uint32_t width = re->areaWidth(), height = re->areaHeight();
         for (const Resolve &r : resolves) {
+            const MTLStorageMode storage = r.into->_descriptor.storageMode;
+            raw::ResolveAsk ask;
+            ask.format = uint16_t(r.into->_raw.format);
+            ask.samples = uint8_t(from[r.attachment]->samples);
+            ask.readable = storage == MTLStorageModeShared;
+            ask.wholeTarget = width == r.into->_raw.width && height == r.into->_raw.height;
+            bool twod = raw::twodResolveAcceptable(ask);
+#if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
+            twod = twod && !d.probeResolveDraw.load(std::memory_order_relaxed);
+#endif
+            if (twod) {
+                useTexture(rc, r.into, true);
+                if (rc->resolveTwod(*from[r.attachment], r.into->_raw))
+                    continue;
+            }
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
             if (rc->probeForms().resolveTwoD) {
                 useTexture(rc, r.into, true);
@@ -642,6 +658,15 @@ __attribute__((objc_externally_retained)) static bool encodeRawAttempt(RMCommand
             RAW_ENCODE_SPAN(Blit);
             if (!encodeMipmaps(rc, (__bridge RMTexture *)c.obj, uint32_t(c.c), be, why))
                 return refused();
+            break;
+        }
+        case OpFillTexture: {
+            RAW_ENCODE_SPAN(Blit);
+            be->end();
+            if (!fillTexturePass(cb, c, rc))
+                return fail(PredBlitTexFill, "a texture fill into a target the raw path cannot render",
+                            ((__bridge RMTexture *)c.obj)->_descriptor.pixelFormat);
+            be = rc->blit();
             break;
         }
         case OpCopyTexture:

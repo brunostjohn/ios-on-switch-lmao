@@ -50,6 +50,7 @@ enum RMPred : uint8_t {
     PredBlitBufToTex,
     PredBlitTexToBuf,
     PredBlitWholeTexCopy,
+    PredBlitTexFill,  // a fillTexture: the raw path does not draw: a = pixel format, b = level or other format
     PredCompute,        // a kernel's buffer, texture or sampler not made by this device
     PredComputeOff16,   // a buffer off 16 bytes where the kernel's record names no residual word: a = slot
     PredComputeKernel,  // no pack kernel at the dispatch's shape, memory, textures and samplers
@@ -115,6 +116,7 @@ static constexpr const char *kPredNames[] = {"-",
                                              "blit.b2t",
                                              "blit.t2b",
                                              "blit.whole",
+                                             "blit.fill",
                                              "compute",
                                              "compute.off16",
                                              "compute.nokernel",

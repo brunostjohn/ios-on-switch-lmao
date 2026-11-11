@@ -2,6 +2,7 @@
 // A blit encoder's commands of the tape onto the copy engine (and the 2D engine's mip chains): see encodeRaw.
 #import "RawMetalInternal.h"
 #include "../fx/fx_mip_route.h"
+#include "raw_twod_fill.h"
 
 // What stands for a texture's memory in its blit encoder's order (raw::BlitEncoder::access): its surface, its buffer, or the
 // texture a view views
@@ -154,6 +155,42 @@ void encodeBlit(RMCommandBuffer *cb, const Cmd &c, raw::CommandBuffer *rc, raw::
     default:
         break;
     }
+}
+
+// fillTexture:level:slice:region:color: (OpFillTexture): the 2D engine's solid rectangle where rule clear.twod holds for the
+// format (raw_twod_fill.h), else CLEAR_SURFACE over the region in a pass of its own that loads the rest
+bool fillTexturePass(RMCommandBuffer *cb, const Cmd &c, raw::CommandBuffer *rc)
+{
+    RMTexture *t = (__bridge RMTexture *)c.obj;
+    const uint32_t x0 = uint32_t(extra(cb, c.x)), y0 = uint32_t(extra(cb, c.x + 1));
+    const uint32_t x1 = x0 + uint32_t(extra(cb, c.x + 2)), y1 = y0 + uint32_t(extra(cb, c.x + 3));
+    float rgba[4];
+    for (int k = 0; k < 4; k++) {
+        const uint32_t bits = uint32_t(extra(cb, c.x + 4 + k));
+        memcpy(&rgba[k], &bits, sizeof bits);
+    }
+    useTexture(rc, t, true);
+    if (x0 >= x1 || y0 >= y1)
+        return true;
+    if (raw::twodFillHolds(t->_raw.format)) {
+        raw::BlitEncoder *b = rc->blit();
+        b->fillTwod(t->_raw, x0, y0, x1, y1, raw::twodFillWord(t->_raw.format, rgba));
+        b->end();
+        return true;
+    }
+    raw::PassDesc p;
+    p.color[0].texture = &t->_raw;
+    p.color[0].load = raw::ColorAttachment::Load;
+    p.color[0].store = true;
+    p.count = 1;
+    p.width = t->_raw.width;
+    p.height = t->_raw.height;
+    raw::RenderEncoder *e = rc->render(p);
+    if (!e)
+        return false;
+    e->clearRegion(x0, y0, x1, y1, rgba);
+    e->end();
+    return true;
 }
 
 // Levels first + 1 .. last of a chain by the pack's mip state (raw_mip.h): one pass a level, level l + 1 drawn from a header of

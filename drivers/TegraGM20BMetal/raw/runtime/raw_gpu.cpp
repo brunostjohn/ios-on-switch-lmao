@@ -3605,7 +3605,8 @@ RenderEncoder *CommandBuffer::render(const PassDesc &pass)
             continue;
         }
         if (t->memoryless) {  // back it for this pass
-            Texture *b = backing(planeShaped(*t, e.rot_), scratchTags[j], blockLinear, !(pass.storageMask >> j & 1));
+            Texture *b = backing(planeShaped(*t, e.rot_), scratchTags[j], blockLinear,
+                              dev_->storageCompressedOk() || !(pass.storageMask >> j & 1));
             if (!b)
                 return nullptr;
             e.pass_.color[j].texture = b;
@@ -4414,7 +4415,8 @@ StorageFallback RenderEncoder::storageFallback(const Pipeline &pl) const
     StorageFallback reason = StorageFallback::None;
     for (uint32_t slot = 0; slot < 8 && reason == StorageFallback::None; slot++)
         if (const Texture *t = pass_.color[slot].texture; t && (pl.storageBits >> slot & 1))
-            reason = storageViewMismatch(texelBytes(pl.storageTic[slot]), pl.rec->storageSamples, *t);
+            reason = storageViewMismatch(texelBytes(pl.storageTic[slot]), pl.rec->storageSamples, *t,
+                                         dev_->storageCompressedOk());
     return reason;
 }
 
@@ -5270,8 +5272,8 @@ bool RenderEncoder::prepare(Pipeline *pl, uint32_t primitive, int32_t first, uin
                         cb_->use(*t, pl->storageWriteBits >> e.slot & 1);
                     tic = t ? t->tic : 0;
                     if (t && (pl->storageBits >> e.slot & 1)) {
-                        if (storageViewMismatch(texelBytes(pl->storageTic[e.slot]), pl->rec->storageSamples, *t) !=
-                            StorageFallback::None) {
+                        if (storageViewMismatch(texelBytes(pl->storageTic[e.slot]), pl->rec->storageSamples, *t,
+                                                dev_->storageCompressedOk()) != StorageFallback::None) {
                             *why = "an incompatible framebuffer storage view";
                             cb_->refusal = {RefStorageView, e.slot, t->format, t->width};
                             return false;
@@ -5991,6 +5993,18 @@ static void clearRect(Push &p, uint32_t x0, uint32_t y0, uint32_t x1, uint32_t y
     s.depth = zsBits & 1;
     s.stencil = zsBits & 2;
     kit(p, switch_gm20b_clear, &s);
+}
+
+void RenderEncoder::clearRegion(uint32_t x0, uint32_t y0, uint32_t x1, uint32_t y1, const float rgba[4])
+{
+    const Texture &t = *pass_.color[0].texture;
+    uint32_t v[4] = {};
+    clearWords(t.format, rgba, v, t.compressed);
+    dev_->clearZbc(t, !x0 && !y0 && x1 >= t.width && y1 >= t.height, v);
+    if (p_.room() < 64)
+        reserve();
+    clearRect(p_, x0, y0, x1, y1, v, 0, 0);
+    called_ = true;
 }
 
 static void colorTarget(Push &p, uint32_t index, const Texture &t)

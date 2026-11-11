@@ -38,6 +38,7 @@ enum Op : uint8_t {
     OpDrawIndexed,
     OpVisibility,
     OpFillBuffer,
+    OpFillTexture,
     // a compute encoder's (RawMetalCompute.mm)
     OpKernelState,
     OpKernelBytes,

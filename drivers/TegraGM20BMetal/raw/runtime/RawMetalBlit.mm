@@ -451,6 +451,44 @@ static bool sameSizeLevels(id<MTLTexture> s, id<MTLTexture> d, NSUInteger &sl, N
     setBinding(_cb, OpMipmaps, 0, 0, t, probe2d);
 }
 
+// fillTexture:level:slice:region:color: (SPI): level 0, slice 0 of a one-sample 2D texture the raw path renders, its
+// colour in the texture's own format; drawn at encode (fillTexturePass)
+- (void)fillTexture:(id<MTLTexture>)t level:(NSUInteger)level slice:(NSUInteger)slice region:(MTLRegion)region
+              color:(MTLClearColor)color
+{
+    RMTexture *x = [(id)t isKindOfClass:[RMTexture class]] ? (RMTexture *)t : nil;
+    if (x)
+        declareGpuWrites(x);
+    if (!x || !x->_rawOk || level || slice || x->_kind == RMTextureView || t.textureType != MTLTextureType2D ||
+        t.sampleCount > 1 || !x->_raw.renderable || region.origin.z || region.size.depth != 1 ||
+        region.origin.x + region.size.width > x->_raw.width || region.origin.y + region.size.height > x->_raw.height) {
+        [_cb takeReason:WhyTexture why:@"a texture fill the raw path does not draw (level, slice, view or region)"];
+        hit(_cb, PredBlitTexFill, t.pixelFormat, level);
+    }
+    [_cb retain:t];
+    Cmd m = cmd(OpFillTexture);
+    m.obj = (__bridge void *)t;
+    m.x = _cb->_extra.size();
+    const float rgba[4] = {float(color.red), float(color.green), float(color.blue), float(color.alpha)};
+    _cb->_extra.insert(_cb->_extra.end(), {region.origin.x, region.origin.y, region.size.width, region.size.height});
+    for (float v : rgba) {
+        uint32_t bits;
+        memcpy(&bits, &v, sizeof bits);
+        _cb->_extra.push_back(bits);
+    }
+    [_cb record:m];
+}
+
+- (void)fillTexture:(id<MTLTexture>)t level:(NSUInteger)level slice:(NSUInteger)slice region:(MTLRegion)region
+              color:(MTLClearColor)color pixelFormat:(MTLPixelFormat)format
+{
+    if (format != t.pixelFormat) {
+        [_cb takeReason:WhyTexture why:@"a texture fill through another pixel format"];
+        hit(_cb, PredBlitTexFill, format, t.pixelFormat);
+    }
+    [self fillTexture:t level:level slice:slice region:region color:color];
+}
+
 - (void)synchronizeResource:(id<MTLResource>)r
 {
     (void)r;  // shared memory: nothing to make visible

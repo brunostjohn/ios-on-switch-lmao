@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #import "RawMetalMultisample.h"
+#import <objc/message.h>
 #import "RawMetalPlanAdapters.h"
 #import "RawMetalIndirect.h"
 #include "raw_replay_twins.h"
@@ -258,6 +259,20 @@ id<MTLCommandBuffer> replay(RMCommandBuffer *cb, size_t from, size_t to, bool pa
                  destinationSlice:extra(cb, x + 8)
                  destinationLevel:extra(cb, x + 9)
                 destinationOrigin:MTLOriginMake(uint32_t(o), o >> 32, extra(cb, x + 11))];
+            break;
+        }
+        case OpFillTexture: {
+            float rgba[4];
+            for (int k = 0; k < 4; k++) {
+                const uint32_t bits = uint32_t(extra(cb, c.x + 4 + k));
+                memcpy(&rgba[k], &bits, sizeof bits);
+            }
+            // an SPI selector the SDK's protocol does not declare
+            using Fill = void (*)(id, SEL, id, NSUInteger, NSUInteger, MTLRegion, MTLClearColor);
+            reinterpret_cast<Fill>(objc_msgSend)(
+                enc, NSSelectorFromString(@"fillTexture:level:slice:region:color:"), twinOf((__bridge id)c.obj), 0, 0,
+                MTLRegionMake2D(extra(cb, c.x), extra(cb, c.x + 1), extra(cb, c.x + 2), extra(cb, c.x + 3)),
+                MTLClearColorMake(rgba[0], rgba[1], rgba[2], rgba[3]));
             break;
         }
         case OpFillBuffer:

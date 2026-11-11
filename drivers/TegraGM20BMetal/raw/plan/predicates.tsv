@@ -42,6 +42,7 @@ blit.tex	record	rule	copy.ce	levels, slices and 3D planes: one copy rectangle pe
 blit.b2t	record	rule	copy.ce	buffer rows into a texture: copy rectangles, one per plane
 blit.t2b	record	rule	copy.ce	texture rows into a buffer: as blit.b2t
 blit.whole	record	rule	copy.ce	a whole-texture copy of several levels or slices: one rectangle each
+blit.fill	record	m2v	-	a fillTexture: of a level, slice, view or region the raw path does not draw (level 0, slice 0 of a 2D texture it renders: CLEAR_SURFACE, or clear.twod)
 compute	record	m2v	-	a kernel's buffer, texture or sampler from m2v
 compute.off16	record	layer	L4	a kernel buffer off 16 bytes with no residual word: the binding ABI's residual words for kernels
 compute.nokernel	record	layer	L4	no pack kernel at the dispatch's shape: a kernel record per shape

@@ -825,6 +825,12 @@ private:
     void shortcutBegin(const Shortcut &s);
     void shortcutEnd(const Shortcut &s);
     bool blurTwod(const Pipeline &pl, uint32_t primitive, uint32_t first, uint32_t count, bool indexed);
+public:
+    // [x0, x1) x [y0, y1) of colour target 0 set to `rgba` (fillTexture:...): CLEAR_SURFACE over the region, with the ZBC
+    // table's value where the target is compressed
+    void clearRegion(uint32_t x0, uint32_t y0, uint32_t x1, uint32_t y1, const float rgba[4]);
+
+private:
     // `pl`, or its barrier twin where an attachment of this pass cannot be viewed as one of its storage images
     Pipeline *formFor(Pipeline *pl);
     StorageFallback storageFallback(const Pipeline &pl) const;
@@ -905,6 +911,10 @@ public:
     void fillBytes(uint64_t dst, uint64_t bytes, uint8_t value);
     // `bytes` (whole words) at `dst` set to the 32-bit `word`
     void fillWords(uint64_t dst, uint64_t bytes, uint32_t word);
+    // `ms`'s sample grid (2^sxLog2 x 2^syLog2 samples a pixel) halved into `into` by the 2D engine (raw_resolve_twod.cpp)
+    void resolveTwod(const Texture &ms, uint32_t sxLog2, uint32_t syLog2, const Texture &into, uint32_t fmt2d);
+    // [x0, x1) x [y0, y1) of `t` set to `word` by the 2D engine's solid rectangle (rule clear.twod, raw_twod_fill.h)
+    void fillTwod(const Texture &t, uint32_t x0, uint32_t y0, uint32_t x1, uint32_t y1, uint32_t word);
     // `lines` rows of `width` pixels of `bpp` bytes, from `src` (row stride srcPitch) to `dst` (dstPitch) (vkCmdCopyImage and the
     // buffer<->image copies of linear images)
     void copyRect(uint64_t src, uint32_t srcPitch, uint64_t dst, uint32_t dstPitch, uint32_t width, uint32_t lines,
@@ -980,6 +990,9 @@ public:
     Refusal refusal;                              // the last refused draw's predicate and its values
     RenderEncoder *render(const PassDesc &pass);  // null: an attachment the raw path cannot render to
     BlitEncoder *blit();
+    // `multisampled` resolved into `into` by the 2D engine (rule resolve.twod, raw_fetch_rungs.h); false: not a sample
+    // grid the engine reads at 2:1, nothing recorded
+    bool resolveTwod(const Texture &multisampled, const Texture &into);
     // CPU lines the GPU reads in this submission (CPU-written cached memory): cleaned to memory before it is submitted.
     // `invalidate`: also dropped from the CPU's caches (memory the GPU writes, so no dirty line lands on it later).
     void clean(const void *cpu, uint64_t bytes, bool invalidate = false);
@@ -1173,6 +1186,15 @@ public:
     }
     // `rec`'s state key where it is one of the pack's records, else null (a state the runtime made)
     const char *packKey(const PackPipeline &rec) const;
+    // a storage form may view a compressed attachment (raw_storage_form.h storageReadsCompressed, or its probe's switch)
+    bool storageCompressedOk() const
+    {
+#if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
+        if (probeStorageCompressed.load(std::memory_order_relaxed))
+            return true;
+#endif
+        return storageReadsCompressed();
+    }
 
     const Kernel &kernel() const
     {
@@ -1723,6 +1745,7 @@ public:
         // states made with the zero-source pixel kill on (raw_blend_kill.h), and their binds encoded
         std::atomic<uint64_t> blendKillStates{0}, blendKillBinds{0};
         std::atomic<uint64_t> blurTwodPasses{0};  // blur-chain passes drawn as 2D blits (raw_draw_shortcuts.cpp)
+        std::atomic<uint64_t> resolveTwod{0};     // MSAA resolves by the 2D engine (raw_resolve_twod.cpp)
         // passes given a zcull region, and the regions a draw's state invalidated (raw_zcull.h)
         std::atomic<uint64_t> zcullPasses{0}, zcullInvalidations{0};
         std::atomic<uint64_t> splitPrologues{0};  // split draws' prologue launches (raw_split.cpp)
@@ -1779,6 +1802,9 @@ public:
     std::atomic<bool> probeCompressNext{false};
     // private textures stay plain while set (raw_private_comp.h), for a probe's uncompressed reference
     std::atomic<bool> probePlainPrivate{false};
+    std::atomic<bool> probeResolveDraw{false};  // resolves take the pack's resolve pass, never resolve.twod
+    // storage forms view compressed attachments and storage-bound memoryless backings compress (gpu.raw.storage_compressed)
+    std::atomic<bool> probeStorageCompressed{false};
     // Boolean visibility results take the copy-engine lowering before rule vis.boolean holds (raw_visibility.h)
     std::atomic<bool> probeBooleanVisibility{false};
     std::map<uint64_t, Bo> probeCompressed;  // lock_
