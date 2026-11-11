@@ -80,6 +80,11 @@ public enum RawFacade {
         ask(device, "switchCompilerStore") as? String
     }
 
+    /// The buffer binds every state as the inline copy it was before state segments (debug builds, before its commit).
+    public static func inlineStates(in buffer: MTLCommandBuffer) -> Bool {
+        (ask(buffer, "switchRawInlineStates") as? NSNumber)?.boolValue ?? false
+    }
+
     static func ask(_ object: Any, _ name: String) -> Any? {
         let selector = NSSelectorFromString(name)
         guard let object = object as? NSObject, object.responds(to: selector) else { return nil }

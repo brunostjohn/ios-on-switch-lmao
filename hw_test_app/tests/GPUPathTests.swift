@@ -542,8 +542,8 @@ enum GPUPathTests {
         UseRangesPathTest(), NativeSurfaceViewPathTest.nv12, NativeSurfaceViewPathTest.p010, SemanticFencePathTest(),
         SharedEventsPathTest(),
         ResourceReadyPathTest(), SubmitJobPathTest(), RelayoutPathTest(), QuietJobsPathTest(),
-        PresentPromisePathTest(), PromiseCancelPathTest(), PromiseVICPathTest(), PromiseUnkeptPathTest(),
-        PromiseReleaseOrderPathTest(),
+        PresentPromisePathTest(), PromiseCancelPathTest(), StateSegmentsPathTest(), PromiseVICPathTest(),
+        PromiseUnkeptPathTest(), PromiseReleaseOrderPathTest(),
     ]
 }
 
