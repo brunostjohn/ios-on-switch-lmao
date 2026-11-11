@@ -40,7 +40,9 @@ class TimingSimTest(unittest.TestCase):
         regs, _ = timing_sim.run(looped.code, looped.data, TABLE)
         self.assertEqual(program.unpack(program.expected_texel(looped.code, looped.data))[0], f32(20.0))
         self.assertEqual(program.unpack(regs)[0], f32(20.0))
-        self.assertEqual(len(timing_sim.path(looped.code, looped.data)) - len(timing_sim.path(once.code)), 1 + 5 * (3 + 4) - 4)
+        self.assertEqual(
+            len(timing_sim.path(looped.code, looped.data)) - len(timing_sim.path(once.code)), 1 + 5 * (3 + 4) - 4
+        )
 
     def test_a_barrier_wait_holds_the_consumer_until_the_result_lands(self):
         def chain(k: int) -> list[e.Instr]:

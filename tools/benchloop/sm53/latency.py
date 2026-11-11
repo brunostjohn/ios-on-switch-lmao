@@ -71,17 +71,16 @@ REUSE_VARIANTS = {
 }
 
 
-def experiment(eid: str, prog: Program, rect: list[int], meta: dict, exact: bool = True, timed: bool = True) -> dict:
-    """Give one experiment; an untimed one (its texel is the answer) runs one draw once."""
+def experiment(eid: str, prog: Program, rect: list[int], meta: dict, exact: bool = True) -> dict:
     texel = program.expected_texel(prog.code, prog.data)
     out = {
         'id': eid,
         'kind': 'fragment',
         'target': dict(TARGET),
         'rect': list(rect),
-        'draws': list(DRAWS) if timed else [1],
-        'repeats': REPEATS if timed else 1,
-        'warmup': WARMUP if timed else 0,
+        'draws': list(DRAWS),
+        'repeats': REPEATS,
+        'warmup': WARMUP,
         'clear': [0, 0, 0, 0],
         'readback': 'summary',
         'program': prog.wire(),
@@ -126,7 +125,9 @@ def stall(recipes: Iterable[Recipe] = FIXED) -> list[dict]:
         build = _stall_preds if r.pred else _stall_gprs
         for d in STALL_DELAYS:
             meta = {'family': 'stall', 'op': r.key, 'nak': r.nak, 'delay': d, 'pred': r.pred}
-            out.append(experiment(f'stall.{r.slug}.d{d:02d}', build(r, d), ONE_WARP, meta, timed=False))
+            e = experiment(f'stall.{r.slug}.d{d:02d}', build(r, d), ONE_WARP, meta)
+            # the texel is the answer: one draw, once
+            out.append(e | {'draws': [1], 'repeats': 1, 'warmup': 0})
     return out
 
 

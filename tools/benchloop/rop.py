@@ -60,7 +60,7 @@ def values(bits: int) -> list[float]:
 
 def half_values() -> list[float]:
     """Give the f32s around the midpoints of neighbouring halves across the half range, and the specials."""
-    out = list(SPECIALS) + [65504.0, 65519.0, 65520.0, -65520.0]
+    out = [*SPECIALS, 65504.0, 65519.0, 65520.0, -65520.0]
     for h in range(0, 0x7BFF, 7):
         lo, hi = (struct.unpack('<e', struct.pack('<H', c))[0] for c in (h, h + 1))
         mid = texels.f32((lo + hi) / 2)
@@ -139,7 +139,8 @@ def readings(experiment: dict, result: dict) -> list[tuple[float, int, int]]:
     out = []
     for x, texel in enumerate(texels.split(protocol.unb64(data), fmt)):
         got = stored(texel, fmt)
-        out += [(v, lane, got[lane]) for lane, v in enumerate(experiment['meta']['colours'][x])]
+        colour = experiment['meta']['colours'][x]
+        out += [(colour[lane], lane, code) for lane, code in enumerate(got)]
     return out
 
 

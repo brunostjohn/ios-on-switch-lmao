@@ -37,7 +37,7 @@ class RopTest(unittest.TestCase):
         self.assertEqual(verdicts, {'bgra8unorm': {'nearest'}, 'rgb10a2unorm': {'nearest'}})
 
     def test_gm20b_model_reproduces_probe_v1(self) -> None:
-        """Probe v1 stored every half through the blended path: 321, 385 and 257 off Metal's rule, first 1805/1002/81."""
+        """Probe v1 stored every half blended: 321, 385 and 257 off Metal's rule, first at 1805/1002/81."""
         halves = [struct.unpack('<e', struct.pack('<H', h))[0] for h in range(0x10000)]
         for bits, count, first in ((8, 321, 0x1805), (10, 385, 0x1002), (16, 257, 0x81)):
             off = [h for h, v in enumerate(halves) if texels.unorm(v, bits, 'gm20b') != metal(v, bits)]
