@@ -23,10 +23,12 @@ raw::GlassMemItem item(uint64_t key, uint32_t width, uint32_t height, uint32_t f
     return it;
 }
 
-// Every texel of a row of `bpp`-byte texels `texel`
-std::vector<uint8_t> rows(std::initializer_list<std::vector<uint8_t>> texels)
+// A slot whose item i's row repeats texels[i], ending in command buffer `serial`'s cookie
+std::vector<uint8_t> rows(uint64_t serial, std::initializer_list<std::vector<uint8_t>> texels)
 {
     std::vector<uint8_t> out(raw::kGlassMemSlotBytes);
+    const uint32_t cookie = raw::glassMemCookie(serial);
+    memcpy(out.data() + uint64_t(raw::kGlassMemItems) * raw::kGlassMemItemBytes, &cookie, sizeof cookie);
     size_t at = 0;
     for (const std::vector<uint8_t> &texel : texels) {
         for (uint32_t t = 0; t < raw::kGlassMemTexels; t++)
@@ -97,7 +99,7 @@ TEST(RawGlassMem, ReusedRowChangedWithNoWriteIsCaught)
     raw::GlassMemCb built = probe.close(10, 1000, 3);
     ASSERT_EQ(built.count, 1u);
     EXPECT_TRUE(built.items[0].rebuilt);
-    std::string line = probe.finish(built, rows({kGrey}).data(), true);
+    std::string line = probe.finish(built, rows(10, {kGrey}).data(), true);
     EXPECT_NE(line.find("/Tgsg/R0:ok"), std::string::npos) << line;
 
     probe.sampled(item(kPyramid, 384, 128, kBgra8, 4), "PBGRABsovXmw_TgsgA3Xhf_Isrc", 7, 1, 11);
@@ -105,13 +107,13 @@ TEST(RawGlassMem, ReusedRowChangedWithNoWriteIsCaught)
     EXPECT_FALSE(same.items[0].rebuilt);
     EXPECT_EQ(same.items[0].age, 1u);
     EXPECT_EQ(same.items[0].events, 2u);
-    EXPECT_TRUE(probe.finish(same, rows({kGrey}).data(), false).empty());
-    line = probe.finish(same, rows({kGrey}).data(), true);
+    EXPECT_TRUE(probe.finish(same, rows(11, {kGrey}).data(), false).empty());
+    line = probe.finish(same, rows(11, {kGrey}).data(), true);
     EXPECT_NE(line.find("/U1/e2:ok"), std::string::npos) << line;
 
     probe.sampled(item(kPyramid, 384, 128, kBgra8, 4), "PBGRABsovXmw_TgsgA3Xhf_Isrc", 7, 1, 14);
     raw::GlassMemCb blackened = probe.close(14, 1400, 9);
-    line = probe.finish(blackened, rows({kOpaqueBlack}).data(), false);
+    line = probe.finish(blackened, rows(14, {kOpaqueBlack}).data(), false);
     EXPECT_NE(line.find("/U4/e6:zchg"), std::string::npos) << line;
     EXPECT_EQ(probe.counts.changed.load(), 1u);
     EXPECT_EQ(probe.counts.black.load(), 1u);
@@ -124,13 +126,13 @@ TEST(RawGlassMem, RebuiltRowsAreJudgedAndBecomeTheReference)
     probe.wrote(kCapture, 20, 0);
     probe.sampled(item(kCapture, 320, 128, kRgba16f, 8), "PBGRAXm_Tds4A2Xhf_Isrc", 9, 2, 20);
     const std::vector<uint8_t> nan = {0, 0x7e, 0, 0, 0, 0, 0, 0x3c};
-    std::string line = probe.finish(probe.close(20, 2000, 0), rows({nan}).data(), false);
+    std::string line = probe.finish(probe.close(20, 2000, 0), rows(20, {nan}).data(), false);
     EXPECT_NE(line.find("/R0:nf"), std::string::npos) << line;
     EXPECT_EQ(probe.counts.nonFinite.load(), 1u);
 
     probe.wrote(kCapture, 21, 0);
     probe.sampled(item(kCapture, 320, 128, kRgba16f, 8), "PBGRAXm_Tds4A2Xhf_Isrc", 9, 2, 21);
-    line = probe.finish(probe.close(21, 2100, 0), rows({std::vector<uint8_t>(8, 0)}).data(), true);
+    line = probe.finish(probe.close(21, 2100, 0), rows(21, {std::vector<uint8_t>(8, 0)}).data(), true);
     EXPECT_NE(line.find("/R0:zero"), std::string::npos) << line;
     EXPECT_EQ(probe.counts.black.load(), 0u);  // black counts reused rows only
 }
@@ -141,7 +143,7 @@ TEST(RawGlassMem, ReusedWithoutReferenceIsUnsure)
     raw::GlassMem probe;
     probe.wrote(kPyramid, 30, 0);
     probe.sampled(item(kPyramid, 384, 128, kBgra8, 4), "PBGRABsovXmw_TgsgA3Xhf_Isrc", 7, 1, 32);
-    const std::string line = probe.finish(probe.close(32, 3200, 0), rows({kWhite}).data(), true);
+    const std::string line = probe.finish(probe.close(32, 3200, 0), rows(32, {kWhite}).data(), true);
     EXPECT_NE(line.find("/U2:ok?"), std::string::npos) << line;
     EXPECT_EQ(probe.counts.changed.load(), 0u);
 }
@@ -152,9 +154,9 @@ TEST(RawGlassMem, HeaderChangedUnderTheSameIndexIsMoved)
     raw::GlassMem probe;
     probe.wrote(kPyramid, 40, 0);
     probe.sampled(item(kPyramid, 384, 128, kBgra8, 4), "PBGRABsovXmw_TgsgA3Xhf_Isrc", 7, 0xaaaa, 40);
-    probe.finish(probe.close(40, 4000, 0), rows({kGrey}).data(), false);
+    probe.finish(probe.close(40, 4000, 0), rows(40, {kGrey}).data(), false);
     probe.sampled(item(kPyramid, 384, 128, kBgra8, 4), "PBGRABsovXmw_TgsgA3Xhf_Isrc", 7, 0xbbbb, 41);
-    const std::string line = probe.finish(probe.close(41, 4100, 0), rows({kGrey}).data(), false);
+    const std::string line = probe.finish(probe.close(41, 4100, 0), rows(41, {kGrey}).data(), false);
     EXPECT_NE(line.find("/mv:ok"), std::string::npos) << line;
     EXPECT_EQ(probe.counts.moved.load(), 1u);
     probe.forget(kPyramid, 7);
@@ -183,9 +185,55 @@ TEST(RawGlassMem, FullLineFitsOsLog)
     }
     const raw::GlassMemCb cb = probe.close(60, ~0ull, ~0ull);
     EXPECT_EQ(cb.count, raw::kGlassMemItems);
-    const std::string line = probe.finish(cb, rows({}).data(), true);
+    const std::string line = probe.finish(cb, rows(60, {}).data(), true);
     EXPECT_LT(line.size(), 1000u);
     EXPECT_EQ(line.find("cb 60 mach "), 0u) << line;
+}
+
+// A slot whose cookie never landed (the fence passed without the copies' release) is no read: '?' and nothing counted
+TEST(RawGlassMem, SlotWithoutItsCookieIsNotJudged)
+{
+    raw::GlassMem probe;
+    probe.wrote(kPyramid, 70, 0);
+    probe.sampled(item(kPyramid, 384, 128, kBgra8, 4), "PBGRABsovXmw_TgsgA3Xhf_Isrc", 7, 1, 70);
+    const std::string line = probe.finish(probe.close(70, 7000, 0), rows(69, {kGrey}).data(), false);
+    EXPECT_NE(line.find("/R0:?"), std::string::npos) << line;
+    EXPECT_EQ(probe.counts.cbs.load(), 0u);
+    EXPECT_EQ(probe.counts.rebuilt.load(), 0u);
+}
+
+// Past the item cap a glass draw's texture takes the place of the latest item no glass draw sampled; the line counts drops
+TEST(RawGlassMem, GlassDrawsKeepTheirItemsPastTheCap)
+{
+    raw::GlassMem probe;
+    for (uint32_t i = 0; i <= raw::kGlassMemItems; i++) {
+        probe.wrote(kCapture + i * 0x40000, 80, 0);
+        probe.sampled(item(kCapture + i * 0x40000, 320, 128, kBgra8, 4), "PBGRAXm_TvrdA2Xhf_Isrc", 9, 1, 80);
+    }
+    probe.wrote(kPyramid, 80, 0);
+    const int index = probe.sampled(item(kPyramid, 384, 128, kBgra8, 4), "PBGRABsovXmw_TgsgA3Xhf_Isrc", 7, 1, 80);
+    EXPECT_EQ(index, int(raw::kGlassMemItems) - 1);
+    const raw::GlassMemCb cb = probe.close(80, 8000, 0);
+    EXPECT_EQ(cb.count, raw::kGlassMemItems);
+    EXPECT_EQ(cb.dropped, 2u);
+    EXPECT_EQ(cb.items[raw::kGlassMemItems - 1].key, kPyramid);
+    EXPECT_NE(probe.finish(cb, rows(80, {}).data(), true).find(" drop 2 |"), std::string::npos);
+}
+
+// A command buffer begun after an abandoned one starts with no items; a texture destroyed while listed is not read
+TEST(RawGlassMem, BeginDropsAnAbandonedRecordAndForgetStopsItsRead)
+{
+    raw::GlassMem probe;
+    probe.wrote(kPyramid, 90, 0);
+    probe.sampled(item(kPyramid, 384, 128, kBgra8, 4), "PBGRABsovXmw_TgsgA3Xhf_Isrc", 7, 1, 90);
+    probe.begin();
+    EXPECT_EQ(probe.close(90, 9000, 0).count, 0u);
+    probe.wrote(kPyramid, 91, 0);
+    probe.sampled(item(kPyramid, 384, 128, kBgra8, 4), "PBGRABsovXmw_TgsgA3Xhf_Isrc", 7, 1, 91);
+    probe.forget(kPyramid);
+    const raw::GlassMemCb cb = probe.close(91, 9100, 0);
+    ASSERT_EQ(cb.count, 1u);
+    EXPECT_TRUE(cb.items[0].flags & raw::kGlassMemUnsampled);
 }
 
 // The notify words HW Test unpacks: fields where ui.glass_sidebar reads them, saturating

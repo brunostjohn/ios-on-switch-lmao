@@ -1888,9 +1888,9 @@ private:
     uint64_t commitCount_ = 0;
     uint64_t closedCount_ = 0;  // command buffers committed or abandoned (lock_)
 #if SWITCH_RAW_DIAGNOSTICS
-    // the probe's ring of rows (write-combined: the CPU reads what the copy engine wrote with no cache maintenance) and
-    // the records of the command buffers whose rows it holds, read at a begin() once their fences passed
-    Buffer glassMemRing_;
+    // the probe's ring of rows (raw_glass_mem.h) and the records of the command buffers whose rows it holds, read at a
+    // begin() once their fences passed
+    Bo glassMemRing_;
     GlassMemCb glassMemCbs_[kGlassMemSlots];
     bool glassMemBusy_[kGlassMemSlots] = {};
     uint64_t glassMemSummaryAt_ = 0, glassMemSummaryCbs_ = 0;

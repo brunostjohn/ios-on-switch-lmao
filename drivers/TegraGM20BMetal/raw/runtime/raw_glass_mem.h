@@ -4,7 +4,9 @@
 // or reused (an earlier one did: its age in command buffers and the GPU-memory events since, Device::glassMemEvent), and
 // what one row of each read at the command buffer's end, by the copy engine into a ring the CPU reads once the fence passed:
 // black, non-finite, or for a reused one changed since the end of the command buffer that last wrote it. A texture header
-// whose 32 bytes changed under the same index while its texture lived counts as moved.
+// whose 32 bytes changed under the same index while its texture lived counts as moved. The ring is GPU-volatile control
+// memory (an internal job's writes may sit in the L2 past its fence otherwise), and each slot ends with a host semaphore
+// release of its command buffer's cookie: a slot without it is not judged.
 #pragma once
 #include <algorithm>
 #include <atomic>
@@ -19,7 +21,8 @@
 namespace raw {
 
 constexpr uint32_t kGlassMemTexels = 32, kGlassMemItems = 16, kGlassMemSlots = 8;
-constexpr uint32_t kGlassMemItemBytes = kGlassMemTexels * 16, kGlassMemSlotBytes = kGlassMemItems * kGlassMemItemBytes;
+constexpr uint32_t kGlassMemItemBytes = kGlassMemTexels * 16, kGlassMemCookieBytes = 16;
+constexpr uint32_t kGlassMemSlotBytes = kGlassMemItems * kGlassMemItemBytes + kGlassMemCookieBytes;
 constexpr uint64_t kGlassMemArmMs = 20000;
 // Entries kept: a texture CA dropped without our seeing its destroy (a client's) ages out past this many
 constexpr size_t kGlassMemTracked = 512;
@@ -93,9 +96,20 @@ struct GlassMemItem {
 
 struct GlassMemCb {
     uint64_t serial = 0, mach = 0, events = 0;
-    uint32_t seqno = 0, count = 0;
+    uint32_t seqno = 0, count = 0, dropped = 0;
     GlassMemItem items[kGlassMemItems];
 };
+
+// The value a command buffer's slot's semaphore release writes: never 0, which a slot holds before its release lands
+inline uint32_t glassMemCookie(uint64_t serial)
+{
+    return uint32_t(serial % 0xffffffffu) + 1;
+}
+
+inline bool glassMemGlassState(const char *state)
+{
+    return state[0] == 'T' && state[1] == 'g';
+}
 
 struct GlassMemCounts {
     std::atomic<uint64_t> cbs{0}, rebuilt{0}, reused{0}, changed{0}, nonFinite{0}, moved{0}, black{0};
@@ -131,10 +145,7 @@ public:
     int sampled(const GlassMemItem &item, const char *caName, uint32_t tic, uint64_t header, uint64_t serial)
     {
         std::lock_guard<std::mutex> l(lock_);
-        if (open_.serial != serial) {
-            open_ = GlassMemCb();
-            open_.serial = serial;
-        }
+        open_.serial = serial;
         auto w = writes_.find(item.key);
         if (w == writes_.end() || !w->second.serial)
             return -1;
@@ -149,13 +160,34 @@ public:
                 open_.items[i].moved |= moved;
                 return -1;
             }
-        if (open_.count == kGlassMemItems)
-            return -1;
-        GlassMemItem &it = open_.items[open_.count];
+        char state[5];
+        glassMemState(caName, state);
+        uint32_t at = open_.count;
+        if (at == kGlassMemItems) {
+            // the glass draws sample last: one takes the place of the latest item no glass draw sampled
+            open_.dropped++;
+            if (!glassMemGlassState(state))
+                return -1;
+            while (at > 0 && glassMemGlassState(open_.items[at - 1].state))
+                at--;
+            if (!at)
+                return -1;
+            at--;
+        } else {
+            open_.count++;
+        }
+        GlassMemItem &it = open_.items[at];
         it = item;
         it.moved = moved;
-        glassMemState(caName, it.state);
-        return int(open_.count++);
+        memcpy(it.state, state, sizeof state);
+        return int(at);
+    }
+
+    // A command buffer is begun: what an abandoned one sampled is no record's
+    void begin()
+    {
+        std::lock_guard<std::mutex> l(lock_);
+        open_ = GlassMemCb();
     }
 
     // `key` died (a view's header `tic` alone, when `tic`)
@@ -166,6 +198,9 @@ public:
             headers_.erase(tic);
             return;
         }
+        for (uint32_t i = 0; i < open_.count; i++)
+            if (open_.items[i].key == key)
+                open_.items[i].flags |= kGlassMemUnsampled;
         writes_.erase(key);
         for (auto it = refs_.begin(); it != refs_.end();)
             it = it->first - key < 16 ? refs_.erase(it) : std::next(it);
@@ -184,7 +219,8 @@ public:
         cb.events = events;
         for (uint32_t i = 0; i < cb.count; i++) {
             GlassMemItem &it = cb.items[i];
-            const Write &w = writes_[it.key];
+            const auto found = writes_.find(it.key);
+            const Write w = found == writes_.end() ? Write() : found->second;
             it.rebuilt = w.serial == serial;
             it.age = serial - w.serial;
             it.events = events - w.events;
@@ -192,18 +228,27 @@ public:
         return cb;
     }
 
-    // What `cb`'s rows read (`rows`: kGlassMemItemBytes an item): its line, empty when there is nothing to say and not `every`
+    // What `cb`'s rows read (`rows`: kGlassMemItemBytes an item, then the cookie): its line, empty when there is nothing to
+    // say and not `every`. Rows whose slot lacks the cookie are no read: their verdicts are '?' and count nothing.
     std::string finish(const GlassMemCb &cb, const uint8_t *rows, bool every)
     {
         std::lock_guard<std::mutex> l(lock_);
-        counts.cbs++;
+        uint32_t cookie;
+        memcpy(&cookie, rows + uint64_t(kGlassMemItems) * kGlassMemItemBytes, sizeof cookie);
+        const bool landed = cookie == glassMemCookie(cb.serial);
+        if (landed)
+            counts.cbs++;
         char line[1000];
-        int at = snprintf(line, sizeof line, "cb %llu mach %llu seq %u ev %llu n %u |", (unsigned long long)cb.serial,
+        int at = snprintf(line, sizeof line, "cb %llu mach %llu seq %u ev %llu n %u", (unsigned long long)cb.serial,
                           (unsigned long long)cb.mach, cb.seqno, (unsigned long long)cb.events, cb.count);
-        bool notable = false;
+        if (cb.dropped)
+            at += snprintf(line + at, sizeof line - size_t(at), " drop %u", cb.dropped);
+        at += snprintf(line + at, sizeof line - size_t(at), " |");
+        bool notable = !landed;
         for (uint32_t i = 0; i < cb.count && at > 0 && size_t(at) < sizeof line; i++) {
             const GlassMemItem &it = cb.items[i];
-            const char *verdict = verdictOf(it, rows + uint64_t(i) * kGlassMemItemBytes, cb.serial, notable);
+            const char *verdict =
+                landed ? verdictOf(it, rows + uint64_t(i) * kGlassMemItemBytes, cb.serial, notable) : "?";
             char levels[12] = "", level[8] = "", events[16] = "";
             if (it.levels > 1)
                 snprintf(levels, sizeof levels, "/L%u", it.levels);

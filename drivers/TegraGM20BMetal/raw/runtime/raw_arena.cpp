@@ -190,6 +190,10 @@ bool Device::arenaBuffer(uint32_t arena, uint64_t length, Buffer &b, std::option
 
 void Device::arenaRelease(Texture &t)
 {
+#if SWITCH_RAW_DIAGNOSTICS
+    if (glassMem && t.arena)
+        glassMem->forget(t.storageRange().va);
+#endif
     std::lock_guard<std::mutex> l(lock_);
     if (t.arena)
         freeSpan(t.span, Memory::Arena, t.lease);

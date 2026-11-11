@@ -3195,6 +3195,8 @@ CommandBuffer *Device::begin()
     growRing(upload_, kSizes[0].upload);
 #if SWITCH_RAW_DIAGNOSTICS
     glassMemRead();
+    if (glassMem)
+        glassMem->begin();
     cb_.glassMemSlot_ = -1;
 #endif
     CommandBuffer &cb = cb_;
@@ -5363,8 +5365,12 @@ void CommandBuffer::glassMemTail()
     glassMemSlot_ = -1;
     if (!record.count)
         return;
-    if (!d.glassMemRing_.va && !d.createBuffer(uint64_t(kGlassMemSlots) * kGlassMemSlotBytes, d.glassMemRing_, true))
-        return;
+    if (!d.glassMemRing_.va) {
+        if (!d.k_.allocControl(uint64_t(kGlassMemSlots) * kGlassMemSlotBytes, d.glassMemRing_,
+                               ControlUse::TransferSlot))
+            return;
+        memset(d.glassMemRing_.cpu, 0, uint64_t(kGlassMemSlots) * kGlassMemSlotBytes);
+    }
     int slot = -1;
     for (uint32_t s = 0; s < kGlassMemSlots && slot < 0; s++)
         if (!d.glassMemBusy_[s])
@@ -5386,16 +5392,19 @@ void CommandBuffer::glassMemTail()
         copySides(p, sideOf(image, (image.width - it.texels) / 2, image.height / 2, 0),
                   {base + uint64_t(i) * kGlassMemItemBytes, it.texels * it.bpp}, it.texels, 1, it.bpp, d.stats);
     }
+    const uint64_t cookie = base + uint64_t(kGlassMemItems) * kGlassMemItemBytes;
+    p.inc(HOST_SEMAPHORE_A, {uint32_t(cookie >> 32) & 0xff, uint32_t(cookie), glassMemCookie(record.serial),
+                             HOST_SEMAPHORE_RELEASE_16_WFI});
     checkRoom(p, "the glass memory probe's reads");
     segment(start, p.at);
-    use(d.glassMemRing_, true);
+    surfaces_.add(d.glassMemRing_.handle, true);
     d.glassMemCbs_[slot] = record;
     glassMemSlot_ = slot;
 }
 
 // The probe's records whose rows landed, oldest first (a reused texture's row is judged against the one its last write
-// left): a line for each that found something, or for each while HW Test armed it, and a summary every 5 s. A record whose
-// submission a reopened channel lost is dropped after 120 command buffers.
+// left): a line for each that found something, or for each while HW Test armed it, and a summary every 5 s. A record of
+// a killed submission is dropped, and one a reopened channel's fence never reaches after 120 command buffers.
 void Device::glassMemRead()
 {
     if (!glassMem)
@@ -5416,16 +5425,11 @@ void Device::glassMemRead()
             glassMemBusy_[next] = false;
             continue;
         }
-        uint8_t rows[kGlassMemSlotBytes];
-        const uint8_t *landed = glassMemRing_.cpu + uint64_t(next) * kGlassMemSlotBytes;
-#if defined(__aarch64__)
-        if (!glassMemRing_.wc)  // the pool's cached memory when no write-combined chunk had room
-            for (uintptr_t a = uintptr_t(landed) & ~uintptr_t(63); a < uintptr_t(landed) + sizeof rows; a += 64)
-                __asm__ volatile("dc civac, %0" ::"r"(a) : "memory");
-        __asm__ volatile("dsb sy" ::: "memory");
-#endif
-        memcpy(rows, landed, sizeof rows);
         glassMemBusy_[next] = false;
+        if (lost(glassMemCbs_[next].seqno))
+            continue;
+        uint8_t rows[kGlassMemSlotBytes];
+        memcpy(rows, glassMemRing_.cpu + uint64_t(next) * kGlassMemSlotBytes, sizeof rows);
         const std::string line = glassMem->finish(glassMemCbs_[next], rows, every);
         if (!line.empty())
             os_log(log, "raw: glassmem %{public}s", line.c_str());
@@ -5719,6 +5723,12 @@ TextureTransferResult Device::transferTexture(const Texture &texture, uint32_t l
     if (!transfers_.copy(k_, lock_, region, bytes, row, image, write, std::move(owner)))
         return TextureTransferResult::Failed;
     RAW_DIAGNOSTIC((write ? stats.textureUploads : stats.textureReadbacks).fetch_add(1, std::memory_order_relaxed));
+#if SWITCH_RAW_DIAGNOSTICS
+    if (write && glassMem)
+        glassMem->wrote(texture.storageRange().va ? texture.storageRange().va : texture.va,
+                        __atomic_load_n(&commitCount_, __ATOMIC_RELAXED),
+                        stats.memEvents.load(std::memory_order_relaxed));
+#endif
     return TextureTransferResult::Complete;
 }
 
