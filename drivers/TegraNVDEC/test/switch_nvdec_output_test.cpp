@@ -8,11 +8,11 @@ namespace {
 IOBufferMemoryDescriptor oldMemory, nextMemory;
 IOMemoryMap oldMap, nextMap;
 switch_gpu_backing oldBacking, nextBacking;
-switch_gpu_cpu_lease lease;
 uint64_t pages[512];
 bool vicReady, gpuReady, displayReady;
-int available, allocationError, lookupError, publishError;
-uint32_t allocations, frees, releases, lookups, surfaceReleases, publishes;
+int queryError, allocationError, lookupError, publishError;
+uint32_t pendingEngines, cpuOwnerCount;
+uint32_t allocations, frees, queries, lookups, surfaceReleases, publishes;
 uint32_t requestedId;
 task_t requestedTask;
 TegraVICPicture exportedPicture;
@@ -22,26 +22,15 @@ IOMemoryDescriptor surfaceMemory;
 extern "C" bool tegra_vic_present_ready() { return vicReady; }
 extern "C" bool switch_native_surface_gpu_ready() { return gpuReady; }
 extern "C" bool switch_native_surface_display_ready() { return displayReady; }
-extern "C" int switch_gpu_backing_cpu_acquire_owned(switch_gpu_backing *backing, uint64_t offset, uint64_t bytes,
-                                                     uint32_t access, switch_gpu_cpu_lease **out)
+extern "C" int switch_gpu_backing_pending(switch_gpu_backing *backing, uint32_t access, uint32_t *engines,
+                                          uint32_t *cpuOwners)
 {
     EXPECT_EQ(backing, &oldBacking);
-    EXPECT_EQ(offset, 0u);
-    EXPECT_EQ(bytes, 2u * 1024 * 1024);
-    EXPECT_EQ(access, SWITCH_GPU_BACKING_WRITE | SWITCH_GPU_BACKING_CPU_NO_CACHE | SWITCH_GPU_BACKING_CPU_AVOID_SYNC);
-    if (!available) {
-        lease.backing = backing;
-        *out = &lease;
-    }
-    return available;
-}
-extern "C" int switch_gpu_backing_cpu_release_owned(switch_gpu_cpu_lease **owned, int wrote)
-{
-    EXPECT_EQ(*owned, &lease);
-    EXPECT_EQ(wrote, 0);
-    ++releases;
-    *owned = nullptr;
-    return 0;
+    EXPECT_EQ(access, uint32_t(SWITCH_GPU_BACKING_WRITE));
+    ++queries;
+    *engines = pendingEngines;
+    *cpuOwners = cpuOwnerCount;
+    return queryError;
 }
 extern "C" int tegra_nvdec_buffer_alloc(uint64_t bytes, TegraNVDECBlock *block)
 {
@@ -101,8 +90,9 @@ protected:
         nextBacking = {};
         nextMemory.mapping = &nextMap;
         vicReady = gpuReady = displayReady = true;
-        available = allocationError = lookupError = publishError = 0;
-        allocations = frees = releases = lookups = surfaceReleases = publishes = 0;
+        queryError = allocationError = lookupError = publishError = 0;
+        pendingEngines = cpuOwnerCount = 0;
+        allocations = frees = queries = lookups = surfaceReleases = publishes = 0;
         requestedId = 0;
         requestedTask = nullptr;
         exportedPicture = {};
@@ -141,14 +131,24 @@ TEST_F(SwitchNVDECOutputTest, UnusedAllocationReusesMapAndHandle)
 {
     EXPECT_EQ(switch_nvdec_output_recycle(&buffer, task), 0);
     unchanged();
-    EXPECT_EQ(releases, 1u);
+    EXPECT_EQ(queries, 1u);
     EXPECT_EQ(allocations, 0u);
     EXPECT_EQ(frees, 0u);
 }
 
+// Under asynchronous decode a surface comes round again while the job that wrote it, VIC's copy of it or a GPU read
+// of it is still queued: the next job's dependencies order those, so the buffer stays.
+TEST_F(SwitchNVDECOutputTest, EngineWorkTheNextJobOrdersKeepsTheAllocation)
+{
+    pendingEngines = 1u << SWITCH_GPU_ENGINE_NVDEC | 1u << SWITCH_GPU_ENGINE_VIC | 1u << SWITCH_GPU_ENGINE_GM20B;
+    EXPECT_EQ(switch_nvdec_output_recycle(&buffer, task), 0);
+    unchanged();
+    EXPECT_EQ(allocations, 0u);
+}
+
 TEST_F(SwitchNVDECOutputTest, ExportedAllocationGetsIndependentReplacement)
 {
-    available = -16;
+    cpuOwnerCount = 1;
     oldBacking.refs = 2;
     EXPECT_EQ(switch_nvdec_output_recycle(&buffer, task), 0);
     EXPECT_EQ(buffer.handle, 19u);
@@ -160,12 +160,19 @@ TEST_F(SwitchNVDECOutputTest, ExportedAllocationGetsIndependentReplacement)
     EXPECT_EQ(oldBacking.refs, 1u);
     EXPECT_EQ(oldMap.refs, 0u);
     EXPECT_EQ(frees, 1u);
-    EXPECT_EQ(releases, 0u);
+}
+
+TEST_F(SwitchNVDECOutputTest, AScanoutStillReadingGetsAReplacement)
+{
+    pendingEngines = 1u << SWITCH_GPU_ENGINE_NVDEC | 1u << SWITCH_GPU_ENGINE_DISPLAY;
+    EXPECT_EQ(switch_nvdec_output_recycle(&buffer, task), 0);
+    EXPECT_EQ(buffer.block.backing, &nextBacking);
+    EXPECT_EQ(allocations, 1u);
 }
 
 TEST_F(SwitchNVDECOutputTest, FailedAllocationPreservesCurrentOutput)
 {
-    available = -16;
+    cpuOwnerCount = 1;
     allocationError = -12;
     EXPECT_EQ(switch_nvdec_output_recycle(&buffer, task), -12);
     unchanged();
@@ -174,7 +181,7 @@ TEST_F(SwitchNVDECOutputTest, FailedAllocationPreservesCurrentOutput)
 
 TEST_F(SwitchNVDECOutputTest, FailedMappingDropsOnlyReplacement)
 {
-    available = -16;
+    cpuOwnerCount = 1;
     nextMemory.mapping = nullptr;
     EXPECT_EQ(switch_nvdec_output_recycle(&buffer, task), -12);
     unchanged();
@@ -183,10 +190,10 @@ TEST_F(SwitchNVDECOutputTest, FailedMappingDropsOnlyReplacement)
     EXPECT_EQ(nextMemory.refs, 0u);
 }
 
-TEST_F(SwitchNVDECOutputTest, FailedOwnershipDoesNotAllocateOrRevive)
+TEST_F(SwitchNVDECOutputTest, FailedQueryDoesNotAllocateOrRevive)
 {
-    available = -5;
-    EXPECT_EQ(switch_nvdec_output_recycle(&buffer, task), -5);
+    queryError = -22;
+    EXPECT_EQ(switch_nvdec_output_recycle(&buffer, task), -22);
     unchanged();
     EXPECT_EQ(allocations, 0u);
 }

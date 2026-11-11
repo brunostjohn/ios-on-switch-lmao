@@ -14,17 +14,21 @@ bool switch_nvdec_native_output_ready()
         switch_native_surface_display_ready && switch_native_surface_display_ready();
 }
 
+// A buffer is reused in place unless a CPU owner holds it (an exported picture's read lease, which a decode job may not
+// write past) or an engine still uses it that the next job's dependencies cannot order (the display). NVDEC's own jobs
+// run in order, and a VIC or GPU user becomes a syncpoint wait in the next job's stream: neither costs a new buffer.
 int switch_nvdec_output_recycle(SwitchNVDECBuffer *buffer, task_t task)
 {
     if (!buffer || !buffer->handle || !buffer->block.backing || !buffer->map)
         return -22;
-    switch_gpu_cpu_lease *unused = nullptr;
-    const int available = switch_gpu_backing_cpu_acquire_owned(buffer->block.backing, 0, buffer->block.size,
-        SWITCH_GPU_BACKING_WRITE | SWITCH_GPU_BACKING_CPU_NO_CACHE | SWITCH_GPU_BACKING_CPU_AVOID_SYNC, &unused);
-    if (!available)
-        return switch_gpu_backing_cpu_release_owned(&unused, 0);
-    if (available != -16)
-        return available;
+    constexpr uint32_t kOrdered =
+        1u << SWITCH_GPU_ENGINE_NVDEC | 1u << SWITCH_GPU_ENGINE_VIC | 1u << SWITCH_GPU_ENGINE_GM20B;
+    uint32_t engines = 0, owners = 0;
+    const int read = switch_gpu_backing_pending(buffer->block.backing, SWITCH_GPU_BACKING_WRITE, &engines, &owners);
+    if (read)
+        return read;
+    if (!owners && !(engines & ~kOrdered))
+        return 0;
     TegraNVDECBlock replacement = {};
     const int allocated = tegra_nvdec_buffer_alloc(buffer->block.size, &replacement);
     if (allocated)
