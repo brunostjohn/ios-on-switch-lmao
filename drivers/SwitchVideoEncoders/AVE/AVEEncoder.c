@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: BSD-2-Clause-Patent
-// AVE stand-in: H.264 on the Tegra X1's NVENC as VideoToolbox's hardware 'avc1' encoder.
+// AVE stand-in: H.264 on the Tegra X1's NVENC as VideoToolbox's hardware 'avc1' encoder, and HEVC (every picture an
+// IDR: HEVCNVENC.h has no P pictures) as its 'hvc1' encoder, registered under ave.videoencoder's HEVC encoder ID.
 //
 // How VideoToolbox finds it (21H461 VTLoadVideoEncoders, disassembled): VTInitializeVideoEncoderRegistry registers
 // VideoToolbox's own wrappers (muxed alpha, depth), then dlopens a fixed list of paths and calls each one's register
@@ -41,6 +42,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include "H264NVENC.h"
+#include "HEVCNVENC.h"
 #include "NVENCClient.h"
 #include "RateControl.h"
 #include "VTEncoderSPI.h"
@@ -54,7 +56,8 @@
 // 21H461 is iOS 17.7: the hardware-encoder keys the SDK marks iOS 17.4 are there (weak imports at the 17.0 target).
 #pragma clang diagnostic ignored "-Wunguarded-availability-new"
 
-#define AVE_ENCODER_ID "com.apple.videotoolbox.videoencoder.h264"
+#define AVE_ENCODER_ID      "com.apple.videotoolbox.videoencoder.h264"
+#define AVE_HEVC_ENCODER_ID "com.apple.videotoolbox.videoencoder.hevc"
 
 typedef struct {
     pthread_mutex_t lock;
@@ -62,7 +65,9 @@ typedef struct {
     NVENCClient *client;
     TegraNVENCInfo info;
     CMVideoDimensions size;
+    CMVideoCodecType codec;  // 'avc1', or 'hvc1': every picture an IDR (HEVCNVENC.h has no P pictures)
     bool configured, failed;
+    HEVCEncConfig hevc;
     H264EncConfig config;
     H264EncLayout layout;
     H264EncHandles handles;
@@ -239,7 +244,19 @@ static OSStatus startStream(Encoder *e, CFTypeRef primaries, CFTypeRef transfer,
     c->chroma_mode = e->info.chroma_mode;
     if (h264enc_configure(c))
         return kVTPropertyNotSupportedErr;
-    h264enc_layout(c, &e->layout);
+    const bool hevc = e->codec == kCMVideoCodecType_HEVC;
+    if (hevc) {
+        // The H.264 config above stays the input copy's (h264enc_put_input); the stream is the HEVC config's.
+        e->hevc = (HEVCEncConfig){.width = c->width, .height = c->height, .full_range = c->full_range,
+                                  .colour_description = c->colour_description, .colour_primaries = c->colour_primaries,
+                                  .transfer = c->transfer, .matrix = c->matrix, .fps_num = c->fps_num,
+                                  .fps_den = c->fps_den};
+        if (hevcnvenc_configure(&e->hevc))
+            return kVTPropertyNotSupportedErr;
+        hevcnvenc_layout(&e->hevc, &e->layout);
+    } else {
+        h264enc_layout(c, &e->layout);
+    }
     const H264EncLayout *l = &e->layout;
     uint8_t *ignored;
     if (allocBuffer(e, l->input.bytes, &e->handles.input, &e->inputVA) ||
@@ -256,16 +273,19 @@ static OSStatus startStream(Encoder *e, CFTypeRef primaries, CFTypeRef transfer,
     if (!(e->avcc = malloc(e->avccCap)))
         return kVTAllocationFailedErr;
 
-    uint8_t avcC[512];
-    const size_t avcCSize = h264enc_write_avcc(c, avcC, sizeof(avcC));
-    CFDataRef atom = CFDataCreate(kCFAllocatorDefault, avcC, (CFIndex)avcCSize);
-    const void *atomKeys[] = {CFSTR("avcC")}, *atomValues[] = {atom};
+    uint8_t record[512];
+    const size_t recordSize = hevc ? hevcenc_write_hvcc(&e->hevc, record, sizeof(record))
+                                   : h264enc_write_avcc(c, record, sizeof(record));
+    if (!recordSize)
+        return kVTPropertyNotSupportedErr;
+    CFDataRef atom = CFDataCreate(kCFAllocatorDefault, record, (CFIndex)recordSize);
+    const void *atomKeys[] = {hevc ? CFSTR("hvcC") : CFSTR("avcC")}, *atomValues[] = {atom};
     CFDictionaryRef atoms = CFDictionaryCreate(kCFAllocatorDefault, atomKeys, atomValues, 1,
                                                &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks);
     CFMutableDictionaryRef extensions = CFDictionaryCreateMutable(
         kCFAllocatorDefault, 0, &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks);
     CFDictionarySetValue(extensions, kCMFormatDescriptionExtension_SampleDescriptionExtensionAtoms, atoms);
-    CFDictionarySetValue(extensions, kCMFormatDescriptionExtension_FormatName, CFSTR("H.264"));
+    CFDictionarySetValue(extensions, kCMFormatDescriptionExtension_FormatName, hevc ? CFSTR("HEVC") : CFSTR("H.264"));
     if (c->full_range)
         CFDictionarySetValue(extensions, kCMFormatDescriptionExtension_FullRangeVideo, kCFBooleanTrue);
     if (primaries)
@@ -275,7 +295,7 @@ static OSStatus startStream(Encoder *e, CFTypeRef primaries, CFTypeRef transfer,
     if (matrix)
         CFDictionarySetValue(extensions, kCMFormatDescriptionExtension_YCbCrMatrix, matrix);
     OSStatus status = VTEncoderSessionCreateVideoFormatDescription(
-        e->session, kCMVideoCodecType_H264, (int32_t)c->width, (int32_t)c->height, extensions, &e->format);
+        e->session, e->codec, (int32_t)c->width, (int32_t)c->height, extensions, &e->format);
     CFRelease(extensions);
     CFRelease(atoms);
     CFRelease(atom);
@@ -288,13 +308,14 @@ static OSStatus startStream(Encoder *e, CFTypeRef primaries, CFTypeRef transfer,
     rc_set_limit(&e->rc, e->limitBytes, e->limitSeconds);
     e->configured = true;
     os_log(gLog,
-           "AVE: session %ux%u in %{public}s on NVENC (H.264 profile %u level %u, %{public}s, %{public}s, input layout "
-           "%u, %{public}s)",
-           c->width, c->height, getprogname(), c->profile_idc, c->level_idc, c->cabac ? "CABAC" : "CAVLC",
+           "AVE: session %ux%u in %{public}s on NVENC (%{public}s profile %u level %u, %{public}s, %{public}s, input "
+           "layout %u, %{public}s)",
+           c->width, c->height, getprogname(), hevc ? "HEVC" : "H.264", hevc ? 1 : c->profile_idc,
+           hevc ? e->hevc.level_idc : c->level_idc, hevc || c->cabac ? "CABAC" : "CAVLC",
            e->rc.constQP >= 0 ? "constant quality"
            : cbr              ? "CBR"
                               : "VBR",
-           c->input_layout, e->info.p_frames ? "P pictures" : "intra only");
+           c->input_layout, e->info.p_frames && !hevc ? "P pictures" : "intra only");
     return noErr;
 }
 
@@ -349,7 +370,7 @@ static OSStatus encodePicture(Encoder *e, VTVideoEncoderFrame frame, CVPixelBuff
     if (CVPixelBufferGetWidth(image) != (size_t)e->size.width ||
         CVPixelBufferGetHeight(image) != (size_t)e->size.height || CVPixelBufferGetPlaneCount(image) != 2)
         return kVTPixelTransferNotSupportedErr;
-    const bool key = wantsKey(e, pts, options);
+    const bool key = e->codec == kCMVideoCodecType_HEVC || wantsKey(e, pts, options);
     const uint64_t began = mach_absolute_time();
     if (CVPixelBufferLockBaseAddress(image, kCVPixelBufferLock_ReadOnly))
         return kVTVideoEncoderMalfunctionErr;
@@ -374,7 +395,13 @@ static OSStatus encodePicture(Encoder *e, VTVideoEncoderFrame frame, CVPixelBuff
     TegraNVENCSubmit *submit = malloc(sizeof(*submit));
     if (!submit)
         return kVTAllocationFailedErr;
-    h264enc_fill_submit(&e->config, &e->layout, &picture, &e->handles, submit);
+    if (e->codec == kCMVideoCodecType_HEVC) {
+        const HEVCEncPicture idr = {.idr = true, .poc = 0, .qp = picture.qp};
+        hevcnvenc_fill_submit(&e->hevc, e->info.input_layout, e->info.chroma_mode, &e->layout, &idr, &e->handles,
+                              submit);
+    } else {
+        h264enc_fill_submit(&e->config, &e->layout, &picture, &e->handles, submit);
+    }
     // A job that ends without writing its record must not leave the previous picture's record to be read as its own.
     memset(e->auxVA, 0, sizeof(nvenc_pic_stat_s));
     submit->clean[submit->clean_count++] = (TegraNVENCRange){e->handles.aux, 0, sizeof(nvenc_pic_stat_s), 0};
@@ -458,6 +485,9 @@ static OSStatus startSession(VTVideoEncoderRef ref, VTVideoEncoderSession sessio
         status = kVTCouldNotFindVideoEncoderErr;
     } else if (!(e->client = nvenc_open(&error)) || !nvenc_info(e->client, &e->info)) {
         switch_refusal("AVE", "TegraNVENC refused the process", "error %#x: no H.264 encoder here", error);
+        status = kVTCouldNotFindVideoEncoderErr;
+    } else if (e->codec == kCMVideoCodecType_HEVC && !(e->info.codecs & 1u << TEGRA_NVENC_CODEC_H265)) {
+        switch_refusal("AVE", "this kernel's NVENC has no H.265", "no HEVC encoder here");
         status = kVTCouldNotFindVideoEncoderErr;
     }
     if (!status) {
@@ -627,7 +657,10 @@ static OSStatus setProperty(CMBaseObjectRef ref, CFStringRef key, CFTypeRef valu
                 rc_set_limit(&e->rc, bytes, seconds);
         }
     } else if (CFEqual(key, kVTCompressionPropertyKey_ProfileLevel)) {
-        if (value && CFGetTypeID(value) == CFStringGetTypeID() && CFStringHasPrefix(value, CFSTR("H264_")))
+        if (value && CFGetTypeID(value) == CFStringGetTypeID() &&
+            (e->codec == kCMVideoCodecType_HEVC
+                 ? CFStringHasPrefix(value, CFSTR("HEVC_Main_")) || CFStringHasPrefix(value, CFSTR("HEVC_MainStill_"))
+                 : CFStringHasPrefix(value, CFSTR("H264_"))))
             replace((CFTypeRef *)&e->profileLevel, value);
         else
             status = kVTPropertyNotSupportedErr;
@@ -761,7 +794,7 @@ static const VTPluginEncoderVTable kVTable = {NULL, &kBaseClass, &kEncoderClass}
 
 static OSStatus createInstance(FourCharCode codec, CFAllocatorRef allocator, VTVideoEncoderRef *out)
 {
-    if (codec != kCMVideoCodecType_H264)
+    if (codec != kCMVideoCodecType_H264 && codec != kCMVideoCodecType_HEVC)
         return kVTCouldNotFindVideoEncoderErr;
     CMBaseObjectRef object = NULL;
     const OSStatus status = CMDerivedObjectCreate(allocator, &kVTable, VTVideoEncoderGetClassID(), &object);
@@ -770,6 +803,7 @@ static OSStatus createInstance(FourCharCode codec, CFAllocatorRef allocator, VTV
     Encoder *e = storage(object);
     memset(e, 0, sizeof(*e));
     pthread_mutex_init(&e->lock, NULL);
+    e->codec = codec;
     e->allowTemporal = true;
     e->quality = -1;
     e->lastKeyTime = kCMTimeInvalid;
@@ -777,14 +811,14 @@ static OSStatus createInstance(FourCharCode codec, CFAllocatorRef allocator, VTV
     return noErr;
 }
 
-static OSStatus registerEncoder(void)
+static OSStatus registerEncoder(CMVideoCodecType codec, CFStringRef encoderID, CFStringRef name)
 {
     const void *keys[] = {CFSTR("CMClassImplementationID"), kVTVideoEncoder_IsHardwareAccelerated,
                           kVTVideoEncoder_EncoderNameKey};
-    const void *values[] = {CFSTR(AVE_ENCODER_ID), kCFBooleanTrue, CFSTR("Apple H.264 (HW)")};
+    const void *values[] = {encoderID, kCFBooleanTrue, name};
     CFDictionaryRef info =
         CFDictionaryCreate(NULL, keys, values, 3, &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks);
-    const OSStatus status = VTRegisterVideoEncoderWithInfo(kCMVideoCodecType_H264, info, createInstance);
+    const OSStatus status = VTRegisterVideoEncoderWithInfo(codec, info, createInstance);
     CFRelease(info);
     return status;
 }
@@ -796,9 +830,13 @@ void H264H7EncoderRegister(void)
     gLog = os_log_create("com.brunostjohn.switch.ave", "encoder");
     if (!nvenc_service_present())
         return;  // switch-no-nvdec, or NVENC did not prove itself at boot: nothing changes
-    const OSStatus status = registerEncoder();
-    if (status) {
+    OSStatus status = registerEncoder(kCMVideoCodecType_H264, CFSTR(AVE_ENCODER_ID), CFSTR("Apple H.264 (HW)"));
+    if (status)
         os_log_error(gLog, "AVE: VTRegisterVideoEncoderWithInfo('avc1') failed: %d", (int)status);
-        return;
-    }
+    // Apple's own HEVC registration (ave.videoencoder AVE_Plugin_HEVC_Register, 24B119 0x2c46d3e3c): its encoder ID
+    // and the hardware flag; VideoToolbox's 'muxa', depth and disparity wrappers take whatever 'hvc1' is registered.
+    // A kernel without H.265 refuses the session at StartSession (TegraNVENCInfo.codecs).
+    status = registerEncoder(kCMVideoCodecType_HEVC, CFSTR(AVE_HEVC_ENCODER_ID), CFSTR("Apple HEVC (HW)"));
+    if (status)
+        os_log_error(gLog, "AVE: VTRegisterVideoEncoderWithInfo('hvc1') failed: %d", (int)status);
 }

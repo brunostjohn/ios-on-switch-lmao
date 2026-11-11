@@ -45,6 +45,7 @@ bool nvenc_service_present(void)
     return true;
 }
 
+
 NVENCClient *nvenc_open(int *error)
 {
     (void)error;
