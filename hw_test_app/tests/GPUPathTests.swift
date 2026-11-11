@@ -508,7 +508,7 @@ enum GPUPathTests {
     static let all: [any HWTest] = [
         JobVisibilityPathTest(), LeanCopyPathTest(), ControlReservePathTest(), CpuCompletePathTest(),
         UseRangesPathTest(), NativeSurfaceViewPathTest(), SemanticFencePathTest(), SharedEventsPathTest(),
-        ResourceReadyPathTest(),
+        ResourceReadyPathTest(), SubmitJobPathTest(),
     ]
 }
 
