@@ -24,9 +24,9 @@
 // METHOD0/METHOD1 pair (averne's av_nvtegra_cmdbuf_push_value; L4T nvhost), the picture setup from a kernel-only slot,
 // then an OP_DONE increment of NVDEC's syncpoint: the job's fence. At most 8 jobs are queued, which bounds both the
 // push buffer and the 16 setup slots. Every job runs with the engine's GP timer on (the checker requires it), which
-// ends a picture the firmware cannot finish after 1 << 27 cycles (329 ms at 408 MHz) with an error status, so bad
-// input never holds the engine: waits are bounded by kJobBoundUs per queued job, whatever timeout a client asks for,
-// and a job past that bound is a hardware fault.
+// ends a picture the firmware cannot finish after 1 << 27 cycles (329 ms at 408 MHz, 291 ms at 460.8 MHz) with an
+// error status, so bad input never holds the engine: waits are bounded by kJobBoundUs per queued job, whatever timeout
+// a client asks for, and a job past that bound is a hardware fault.
 //
 // Firmware: the non-secure falcon image L4T loads as nvhost_nvdec020_ns.fw when CONFIG_NVDEC_BOOTLOADER is off
 // (switchroot's tegra_linux_defconfig), here linux-firmware's nvidia/tegra210/nvdec.bin (firmware/SOURCE). The secure
@@ -41,8 +41,9 @@
 //   data then code in 256-byte DMA chunks, IRQMSET/IRQDEST, ITFEN, BOOTVEC 0, STARTCPU) and nvdec.c (tegra210: no
 //   stream IDs, no RISC-V, firmware nvidia/tegra210/nvdec.bin, embedded here by firmware.S). L4T nvhost t210.c,
 //   nvdec.c and flcn.c agree on the order; DMA context 0 as L4T uses it on T210 (no context isolation there).
-//   Clock: PLLP undivided, 408 MHz, below the lowest T210B01 NVDEC DVFS point (460.8 MHz at minimum core voltage,
-//   tegra210b01-core-dvfs.c), so it is safe at any core voltage the boot chain left.
+//   Clock: PLLC3, as L4T's c3bus, at the rate tegra210b01-core-dvfs.c allows at VDD_CORE's 637 mV minimum for this
+//   chip's SoC process (460.8 MHz for process 1), or PLLP's 408 MHz where that is lower or PLLC3 is not ours
+//   (kits/SwitchCAR/SwitchEngineClock.h).
 // Waits on hardware sequencing with no interrupt of its own (partition status, IMEM/DMEM scrub, the falcon's DMA
 // queue) are bounded reads, as in drivers/SwitchUSB and nouveau; every completion of work is a host1x syncpoint
 // interrupt (TegraHost1x), and a lost one panics there.
@@ -57,6 +58,7 @@
 #include "SwitchNVDECJobs.h"
 #include "../../kits/SwitchBootArgs/SwitchBootArgs.h"
 #include "../../kits/SwitchCAR/SwitchCAR.h"
+#include "../../kits/SwitchCAR/SwitchEngineClock.h"
 #include "../../kits/SwitchCAR/SwitchPMC.h"
 #include "../../kits/SwitchDMA/SwitchDMABuffer.h"
 #include "../../kits/SwitchDMA/SwitchDcache.h"
@@ -84,8 +86,6 @@ enum : uint32_t {  // clock and reset controller
     LVL2_CLK_GATE_OVRE = 0x554,
     CLK_SOURCE_NVDEC = 0x698,
     OVRE_NVDEC_MBIST = (1u << 9) | (1u << 31),
-    SOURCE_PLLP = 4u << 29,
-    NVDEC_DIV_1 = 0,  // 7.1 divider: 408 MHz * 2 / (0 + 2) = 408 MHz
 };
 
 enum : uint32_t {
@@ -99,6 +99,7 @@ enum : uint32_t {
 };
 
 volatile uint8_t *gNvdec, *gMc;
+uint32_t gClockKHz;
 switch_dma_buffer gFirmware;  // stays: the falcon OS loads its apps from it through DMATRFBASE
 switch_falcon_image gImage;
 char gLine[256];
@@ -135,7 +136,7 @@ bool powerUp(bool *wasOn)
         }
         IODelay(10);
     }
-    switch_car_write(CLK_SOURCE_NVDEC, SOURCE_PLLP | NVDEC_DIV_1);
+    switch_car_write(CLK_SOURCE_NVDEC, switch_engine_clock_source(SWITCH_ENGINE_BUS_C3, &gClockKHz));
     IODelay(2);
     switch_car_clock_enable(kClock);
     IODelay(10);
@@ -321,10 +322,10 @@ void bringUpStages()
         giveUp(true);
         return;
     }
-    IOLog("TegraNVDEC: N1 ok SMMU ASID %u, partition %u %s, 408 MHz, falcon started (OS code %#x+%#x data %#x+%#x, %u "
+    IOLog("TegraNVDEC: N1 ok SMMU ASID %u, partition %u %s, %u kHz, falcon started (OS code %#x+%#x data %#x+%#x, %u "
           "apps)\n",
-          static_cast<unsigned>(TEGRA_SMMU_ASID_NVDEC), kPartition, wasOn ? "already on" : "powered here", gImage.code,
-          gImage.code_size, gImage.data, gImage.data_size, gImage.apps);
+          static_cast<unsigned>(TEGRA_SMMU_ASID_NVDEC), kPartition, wasOn ? "already on" : "powered here", gClockKHz,
+          gImage.code, gImage.code_size, gImage.data, gImage.data_size, gImage.apps);
     uint64_t us = 0;
     uint32_t id = 0;
     uint32_t from = 0;

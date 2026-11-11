@@ -41,8 +41,8 @@
 //   memory/tegra/tegra210.c (MC client hot reset NVENC: control 0x200 bit 11; SMMU ASID NVENC 0x264),
 //   include/linux/host1x.h (HOST1X_CLASS_NVENC 0x21), soc/tegra/pmc.c tegra_powergate_power_up, drm/tegra/falcon.c
 //   falcon_boot (shared with TegraNVDEC.cpp), L4T nvhost t210.c (NVENC 5.0, nvhost_nvenc050.fw).
-//   Clock: PLLP undivided, 408 MHz, the rate NVDEC runs at (the T210B01 core DVFS table gives NVENC and NVDEC the same
-//   points).
+//   Clock: NVDEC's (kits/SwitchCAR/SwitchEngineClock.h: PLLC3 at the 637 mV point, or PLLP's 408 MHz); the T210B01
+//   core DVFS table gives NVENC and NVDEC the same points.
 // Waits on hardware sequencing with no interrupt of its own (partition status, IMEM/DMEM scrub, the falcon's DMA
 // queue) are bounded reads, as in TegraNVDEC; every completion of work is a host1x syncpoint interrupt.
 #include <IOKit/IOLib.h>
@@ -56,6 +56,7 @@
 #include "TegraNVENC.h"
 #include "TegraNVENCCheck.h"
 #include "../../kits/SwitchCAR/SwitchCAR.h"
+#include "../../kits/SwitchCAR/SwitchEngineClock.h"
 #include "../../kits/SwitchCAR/SwitchPMC.h"
 #include "../../kits/SwitchDMA/SwitchDMABuffer.h"
 #include "../../kits/SwitchDMA/SwitchDcache.h"
@@ -83,8 +84,6 @@ enum : uint32_t {  // clock and reset controller
     LVL2_CLK_GATE_OVRE = 0x554,
     CLK_SOURCE_NVENC = 0x6a0,
     OVRE_MPE_MBIST = 1u << 29,
-    SOURCE_PLLP = 4u << 29,
-    NVENC_DIV_1 = 0,  // 7.1 divider: 408 MHz * 2 / (0 + 2) = 408 MHz
 };
 
 enum : uint32_t {
@@ -99,6 +98,7 @@ enum : uint32_t {
 };
 
 volatile uint8_t *gNvenc, *gMc;
+uint32_t gClockKHz;
 switch_dma_buffer gFirmware;  // stays: the falcon OS loads its apps from it through DMATRFBASE
 switch_falcon_image gImage;
 char gLine[256];
@@ -150,7 +150,7 @@ bool powerUp(bool *wasOn)
         }
         IODelay(10);
     }
-    switch_car_write(CLK_SOURCE_NVENC, SOURCE_PLLP | NVENC_DIV_1);
+    switch_car_write(CLK_SOURCE_NVENC, switch_engine_clock_source(SWITCH_ENGINE_BUS_C3, &gClockKHz));
     IODelay(2);
     switch_car_clock_enable(kClock);
     IODelay(10);
@@ -384,8 +384,8 @@ void bringUp(void *, wait_result_t)
         giveUp(true);
         return;
     }
-    IOLog("TegraNVENC: E1 ok partition %u %s, 408 MHz, falcon started (OS code %#x+%#x data %#x+%#x, %u apps)\n",
-          kPartition, wasOn ? "already on" : "powered here", gImage.code, gImage.code_size, gImage.data,
+    IOLog("TegraNVENC: E1 ok partition %u %s, %u kHz, falcon started (OS code %#x+%#x data %#x+%#x, %u apps)\n",
+          kPartition, wasOn ? "already on" : "powered here", gClockKHz, gImage.code, gImage.code_size, gImage.data,
           gImage.data_size, gImage.apps);
     uint64_t us = 0;
     uint32_t id = 0;
