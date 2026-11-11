@@ -205,6 +205,18 @@ host_test(
 )
 
 host_test(
+    name = "gm20b_job_abi_test",
+    srcs = [
+        "gm20b_job_abi_test.cpp",
+        "//drivers/TegraGM20B:TegraGM20BABI.h",
+        "//drivers/TegraGM20B:TegraGM20BJobABI.h",
+        "//drivers/TegraGM20B:TegraGM20BReadbackABI.h",
+        "//drivers/TegraGM20B:TegraGM20BRegDumpABI.h",
+    ],
+    data = ["//drivers/TegraGM20B:TegraGM20BABI.h"],
+)
+
+host_test(
     name = "switch_gpu_job_fences_test",
     srcs = [
         "switch_gpu_job_fences_test.cpp",
