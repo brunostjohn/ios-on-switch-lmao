@@ -160,6 +160,8 @@ static inline const char *tegra_nvdec_check_h264(const TegraNVDECSubmit *s, cons
     }
     if (p->hint_dump_en)
         return "hint dump";
+    if (!tegra_nvdec_zero(&p->displayPara, sizeof(p->displayPara)))
+        return "display output or histogram";
     if (p->gptimer_timeout_value > (1u << 27))
         return "GP timer limit";  // 0: the firmware's 1 << 27
     const uint32_t w = (uint32_t)p->PicWidthInMbs;
