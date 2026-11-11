@@ -17,7 +17,7 @@
 //    buffer, and every one committed after it while it waits, goes to the submit thread, which submits them in order once
 //    they may run; the render thread never blocks for it. waitUntilScheduled waits for the submission, so the display's
 //    copy (which waits on the GPU for every channel that imports the surface) never runs before the frame's work is submitted.
-#import "RawMetalInternal.h"
+#import "RawMetalIndirect.h"
 #include "raw_device_answers.h"
 #include "raw_limits_fill.h"
 
@@ -329,6 +329,8 @@ id<MTLDevice> raw_metal_device_open(const char *packPath, uint64_t stack, id<MTL
         {[RMEncoder class], @protocol(MTLCommandEncoder)},
         {[RMRenderEncoder class], @protocol(MTLRenderCommandEncoder)},
         {[RMParallelRenderEncoder class], @protocol(MTLParallelRenderCommandEncoder)},
+        {[RMIndirectCommandBuffer class], @protocol(MTLIndirectCommandBuffer)},
+        {[RMIndirectRenderCommand class], @protocol(MTLIndirectRenderCommand)},
         {[RMBlitEncoder class], @protocol(MTLBlitCommandEncoder)},
         {[RMComputeEncoder class], @protocol(MTLComputeCommandEncoder)},
     };

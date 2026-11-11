@@ -3,6 +3,7 @@
 #import "RawMetalPassFusion.h"
 #import "RawMetalSplitPlan.h"
 #import "RawMetalXrPlanes.h"
+#import "RawMetalIndirect.h"
 #include <optional>
 #include "raw_compute.h"
 #include "raw_compute_lookup.h"
@@ -629,6 +630,14 @@ __attribute__((objc_externally_retained)) static bool encodeRawAttempt(RMCommand
                 return refused();
             break;
         }
+        case OpExecuteCommands:
+            if (!encodeCommands(re, rc, cb->_plan.draw(at), why))
+                return refused();
+            break;
+        case OpResetCommands:
+        case OpCopyCommands:
+            encodeCommandsBlit(be, c);
+            break;
         case OpMipmaps: {
             RAW_ENCODE_SPAN(Blit);
             if (!encodeMipmaps(rc, (__bridge RMTexture *)c.obj, uint32_t(c.c), be, why))

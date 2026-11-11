@@ -636,6 +636,11 @@ public:
     bool drawIndirect(uint32_t primitive, const Buffer *arguments, uint64_t offset, const char **why);
     bool drawIndexedIndirect(uint32_t primitive, uint32_t indexSize, const Buffer *indices, uint64_t indexOffset,
                              const Buffer *arguments, uint64_t argumentOffset, const char **why);
+    // An indirect command buffer's commands (raw_icb.h): `words` at `offset` in `slots`, drawn with the state they inherit
+    // (`primitive` one of theirs; `indexed`: some draw indices, from `indexBuffers`)
+    // (`written`: the GPU wrote some of the words, which the channel fetches after those writes land)
+    bool executeSlots(const Buffer &slots, uint64_t offset, uint32_t words, uint32_t primitive, bool indexed,
+                      bool written, const Buffer *const *indexBuffers, size_t indexBufferCount, const char **why);
     void end();
 
     void continuePass(uint8_t stores);
@@ -856,6 +861,8 @@ public:
     // `bytes` bytes at `dst` set to `value` (fillBuffer:range:value:): the copy engine writing a constant, its whole words as
     // NVK's vkCmdFillBuffer (nvk_cmd_fill_memory_ce), the bytes before and after them one at a time
     void fillBytes(uint64_t dst, uint64_t bytes, uint8_t value);
+    // `bytes` (whole words) at `dst` set to the 32-bit `word`
+    void fillWords(uint64_t dst, uint64_t bytes, uint32_t word);
     // `lines` rows of `width` pixels of `bpp` bytes, from `src` (row stride srcPitch) to `dst` (dstPitch) (vkCmdCopyImage and the
     // buffer<->image copies of linear images)
     void copyRect(uint64_t src, uint32_t srcPitch, uint64_t dst, uint32_t dstPitch, uint32_t width, uint32_t lines,
@@ -904,6 +911,7 @@ private:
     const void *read_[kAccesses] = {}, *written_[kAccesses] = {};
     uint8_t reads_ = 0, writes_ = 0;
     void room(uint32_t words = 56);  // at least `words` words left in the reservation
+    void fillRun(uint64_t at, uint32_t width, uint32_t height, uint32_t unit);  // a constant fill's launch
 };
 
 // Which encode-time predicate refused a draw (set beside *why; RawMetal.mm counts and logs it, r10-rawsweep diagnostics)

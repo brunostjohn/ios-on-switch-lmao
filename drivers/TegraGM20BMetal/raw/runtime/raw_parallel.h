@@ -43,7 +43,8 @@ inline size_t extraWords(Op op)
 
 // A command a sub-encoder's command buffer recorded, as the parallel encoder's records it: its pass, setBytes chunk and extra
 // words where that command buffer holds them (its passes from `passBase`, its chunks from `chunkBase`, the words at
-// `extraAt`). OpDrawIndirect's and OpDrawIndexedIndirect's x is an argument offset, not an extra word.
+// `extraAt`). OpDrawIndirect's and OpDrawIndexedIndirect's x is an argument offset and OpExecuteCommands' a command index,
+// not extra words.
 inline Cmd spliced(Cmd c, size_t passBase, size_t chunkBase, size_t extraAt)
 {
     if (c.op == OpRender)

@@ -121,7 +121,8 @@ bool RMCommandPlan::record(const Cmd &c, const std::vector<uint64_t> &extra)
     case OpDraw:
     case OpDrawIndexed:
     case OpDrawIndirect:
-    case OpDrawIndexedIndirect: {
+    case OpDrawIndexedIndirect:
+    case OpExecuteCommands: {
         RMPlanDraw draw;
         draw.state = captureRender();
         draw.primitive = c.stage;
@@ -187,11 +188,14 @@ bool RMCommandPlan::record(const Cmd &c, const std::vector<uint64_t> &extra)
     case OpCopyTextureToBuffer:
     case OpFillBuffer:
     case OpMipmaps:
+    case OpResetCommands:
+    case OpCopyCommands: {
+        const bool writes = c.op == OpFillBuffer || c.op == OpMipmaps || c.op == OpResetCommands;
         operation.payload = append(transfers_, {c.obj, c.obj2, c.c, 0, c.x, c.a, uint8_t(c.a)});
-        operation.uses = saveUses({{c.obj, uint8_t(c.op == OpFillBuffer || c.op == OpMipmaps ? raw::ResourceUse::Write
-                                                                                             : raw::ResourceUse::Read)},
+        operation.uses = saveUses({{c.obj, uint8_t(writes ? raw::ResourceUse::Write : raw::ResourceUse::Read)},
                                    {c.obj2, raw::ResourceUse::Write}});
         break;
+    }
     case OpEnd:
         if (encoder_ != OpEnd)
             begins_[operations_[encoderBegin_].payload].end = size() + 1;
@@ -305,7 +309,8 @@ Cmd RMCommandPlan::legacy(size_t at) const
     case OpDraw:
     case OpDrawIndexed:
     case OpDrawIndirect:
-    case OpDrawIndexedIndirect: {
+    case OpDrawIndexedIndirect:
+    case OpExecuteCommands: {
         const auto &draw = draws_[operation.payload];
         c.stage = draw.primitive;
         c.a = c.op == OpDraw ? draw.first : draw.count;
@@ -336,7 +341,9 @@ Cmd RMCommandPlan::legacy(size_t at) const
     case OpCopyBufferToTexture:
     case OpCopyTextureToBuffer:
     case OpFillBuffer:
-    case OpMipmaps: {
+    case OpMipmaps:
+    case OpResetCommands:
+    case OpCopyCommands: {
         const auto &transfer = transfers_[operation.payload];
         c.obj = transfer.source;
         c.obj2 = transfer.destination;

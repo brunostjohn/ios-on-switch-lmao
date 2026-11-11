@@ -51,6 +51,9 @@ enum Op : uint8_t {
     OpDispatch,
     OpDrawIndirect,
     OpDrawIndexedIndirect,
+    OpExecuteCommands,  // an indirect command buffer's range: obj2 it, x the first command, c the count (RawMetalIndirect.mm)
+    OpResetCommands,    // obj and obj2 the buffer, c the first command, x the count
+    OpCopyCommands,     // obj the source, obj2 the destination, c the source's first command, x the count, a the destination's
 };
 
 // Transient adapter arguments. Native command plans do not store setter records.
@@ -74,5 +77,6 @@ inline Cmd cmd(Op op, uint8_t stage = 0, uint16_t index = 0)
 
 inline bool isPlanDraw(Op op)
 {
-    return op == OpDraw || op == OpDrawIndexed || op == OpDrawIndirect || op == OpDrawIndexedIndirect;
+    return op == OpDraw || op == OpDrawIndexed || op == OpDrawIndirect || op == OpDrawIndexedIndirect ||
+           op == OpExecuteCommands;
 }
