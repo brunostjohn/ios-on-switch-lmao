@@ -3,6 +3,7 @@
 // this is its layout). Little endian, packed, sections 256-byte aligned. Read-only after load: mmapped shared and pointed into,
 // so every process reads the same page-cache pages. Its pipelines are in keyHash order (Pack::find searches them in place).
 #pragma once
+#include <cstddef>
 #include <cstdint>
 #include <string>
 #include <vector>
@@ -32,8 +33,11 @@ enum PackSectionId {
 
 constexpr uint32_t kPackVersion = 15;
 
-// What a program variant (PackVariant) assumed of its draws, as bits of a mask: a draw takes a variant only where all of them
-// hold. Bits 0-15 are facts of the draw's bindings; bits 16 and up, facts of its pipeline or of the chip.
+// What a record or a program variant (PackVariant) assumes, as bits of a mask: a draw takes a variant only where all of them
+// hold. Bits 0-15 are facts of the draw's bindings, bit 16 of its pipeline, bits 17-25 of the chip (kChipAssumptions): 17 and
+// 18 of the code a variant runs, 19-25 of the ROP blend a storage form computes in its program (PackPipeline::storageBlendModel
+// holds them shifted down by kRopBlendShift, m2v rop_blend::Assumption's bits). A record is drawn whatever its ROP bits: they
+// name what a device probe has to confirm before the program's blend can be called the ROP's.
 enum PackAssumption : uint32_t {
     AssumeUniformAligned = 1u << 0,  // bits 0-7: bit k, PackPipeline::uniform[k]'s bind residual is 0
     AssumeTextureUnorm = 1u << 8,  // bits 8-15: bit k, the k-th EntryTexture entry's texel format is not a float format
@@ -42,10 +46,25 @@ enum PackAssumption : uint32_t {
     AssumeRopRounding = 1u << 17,
     // The chip's: TEXS/TLDS/TLD4S.F16 give round-to-nearest-even of the f32 result their F32 forms give
     AssumeTexsF16 = 1u << 18,
+    AssumeRopF32Terms = 1u << 19,        // blend terms and their sum in f32, each rounded to nearest even, unfused
+    AssumeRopZeroOneFactors = 1u << 20,  // a factor of zero drops its term (an infinity or NaN too), one passes it
+    // a normalized source clamped to [0, 1] (NaN 0), the store rounding to the nearest code
+    AssumeRopUnormStore = 1u << 21,
+    AssumeRopHalfStore = 1u << 22,     // a half store rounding to nearest even
+    AssumeRopSrgbTables = 1u << 23,    // sRGB decoded and encoded by Metal's tables
+    AssumeRopMinMaxNumber = 1u << 24,  // Min and Max answer the operand that is not a NaN
+    AssumeRopDenormals = 1u << 25,     // f32 denormals flushed to zero
 };
 
 constexpr uint32_t kUniformRanges = 8, kTextureFacts = 8;
-constexpr uint32_t kChipAssumptions = AssumeRopRounding | AssumeTexsF16;
+constexpr uint32_t kRopBlendShift = 19, kRopBlendAssumptions = 0x7Fu << kRopBlendShift;
+constexpr uint32_t kChipAssumptions = AssumeRopRounding | AssumeTexsF16 | kRopBlendAssumptions;
+
+// The PackAssumption bits of a record's storageBlendModel
+constexpr uint32_t ropBlendAssumptions(uint8_t model)
+{
+    return uint32_t(model) << kRopBlendShift & kRopBlendAssumptions;
+}
 
 struct PackHeader {
     char magic[8];                                    // "GM20BPK1"
@@ -95,14 +114,20 @@ struct PackVariant {
     uint16_t reserved;
 };
 
-// How a color attachment's framebuffer fetch is drawn (the fetch ladder): FetchNone where it is not fetched
+// The rung of the fetch ladder a color attachment's framebuffer fetch needs: FetchNone where it is not fetched
 enum PackFetchRung : uint8_t {
     FetchNone,
-    FetchBarrier,        // a texture read behind a pixel barrier
+    FetchBarrier,        // a texture read behind a pixel barrier: the state does not write the color
     FetchBlend,          // fixed-function blend state, the program fetching nothing
     FetchIteratedBlend,  // the ROP's iterated blend
-    FetchInterlock       // a storage image inside the pixel interlock, blended in the program
+    FetchInterlock       // a storage image inside the pixel interlock, any blend computed in the program
 };
+
+// PackPipeline::fetchRung's low bits are its PackFetchRung; its high bits, the rungs below FetchInterlock a color's fetch could
+// take once a device probe confirms them, which no draw takes: Core Animation's fragment blend of the color has a
+// fixed-function equation (FetchBlend, probe E4 of the ROP's arithmetic for its format and factors), or has none
+// (FetchIteratedBlend, probe d14 of the iterated blend unit)
+constexpr uint8_t kFetchRungMask = 0x0F, kFetchCandidateBlend = 0x10, kFetchCandidateIterated = 0x20;
 
 // The bytes of a uniform buffer entry a pipeline's programs read: from its bind offset, in 16-byte units
 struct PackUniformRange {
@@ -206,19 +231,18 @@ struct PackPipeline {
         pushMask;  // root-table words [0x700, 0x780) the state's push ranges write (m2v's windows, as NVK wrote them)
     uint32_t pushWords[32];
     uint8_t blendColorWord, halfBlendColorWord;  // push word + 1, zero when absent
-    // the storage attachments whose fixed-function blend the fragment program computes inside the interlock, and the
-    // assumptions its model makes of the ROP it stands in for (m2v StorageAttachmentUse::blend_model bits): what a ROP
-    // probe would have to confirm for these records
-    uint8_t storageBlendMask, storageBlendModel;
+    uint16_t pushReserved;
     uint8_t storageMask, storageWriteMask, storageSamples, storageTests;
     uint32_t storageTic[8];
     PackShaderTests shaderTests;
     uint32_t variants;        // the first of its stages' variants in the variants section
     uint8_t variantCount[2];  // vertex, then fragment: the vertex stage's first
-    uint16_t reservedV15;
+    // the storage attachments whose fixed-function blend the fragment program computes inside the interlock, and what its
+    // model assumes of the ROP it stands in for (ropBlendAssumptions)
+    uint8_t storageBlendMask, storageBlendModel;
     uint32_t boundEntries;                     // bit k: entry[k]'s handle word is read by a bound texture instruction
     PackUniformRange uniform[kUniformRanges];  // assumption bits 0-7
-    uint8_t fetchRung[8];                      // per color attachment: PackFetchRung
+    uint8_t fetchRung[8];                      // per color attachment: PackFetchRung, candidate rungs (kFetchRungMask)
     uint32_t reservedV15Tail;
 };
 
@@ -331,6 +355,8 @@ struct InitAddresses {
 uint32_t relocated(const PackInitMethod &m, const InitAddresses &a);
 static_assert(sizeof(PackShaderTests) == 16, "shader test layout");
 static_assert(sizeof(PackPipeline) == 36 + kPackEntries * 8 + 4 + 32 * 4 + 4 + 36 + 16 + 56, "pack layout");
+static_assert(offsetof(PackPipeline, storageBlendMask) == 486 && offsetof(PackPipeline, fetchRung) == 524,
+              "pack layout: packfile.py PIPELINE_V15");
 static_assert(sizeof(PackProgram) == 36, "pack layout");
 static_assert(sizeof(PackVariant) == 8, "pack layout");
 static_assert(sizeof(PackKernel) == 16 + 256 + 8 + 128 + 128, "pack layout");

@@ -130,6 +130,19 @@ class States27(unittest.TestCase):
                 checked += 1
         self.assertGreater(checked, 10000)
 
+    def test_a_fragment_blend_names_the_rung_it_is_a_candidate_for(self):
+        rungs = {
+            'Pb3a8Xmw_BclrA3Xhfx': 2,  # clear: a fixed-function equation
+            'PBGRAXm_BvdsA2S1Xhf': 3,  # vivid dodge: none
+            'Pb3a8Xm_TlubA2Xhf_Isrc': 0,  # its texture function reads the destination
+            'PBGRABaddXm_TcimA2Xhf_IsrcM1': 0,  # no blend of its own
+        }
+        for name, rung in rungs.items():
+            self.assertEqual(caset.fetch_rung(self.tables, name), rung, name)
+        line = caset.with_fetch_rung(self.tables, caspec.state_line(self.tables, 'PBGRAXm_BvdsA2S1Xhf'))
+        self.assertIn('.PBGRAXm_BvdsA2S1Xhf rung=3 samples=1 ', line)
+        self.assertEqual(caspec.corpus_fields(line)[0], 'PBGRAXm_BvdsA2S1Xhf')
+
 
 if __name__ == '__main__':
     unittest.main()

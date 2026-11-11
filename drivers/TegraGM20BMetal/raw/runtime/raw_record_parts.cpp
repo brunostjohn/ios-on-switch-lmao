@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <cstdio>
 #include <cstring>
 #include <set>
 #include "raw_owned.h"
@@ -227,17 +228,32 @@ static uint8_t uniformBank(const CapturedProgram &program, const PackEntry &e)
     return kNoUniform;
 }
 
+// The colors the key's descriptor has a write mask for ("c<n>=<format>:<mask>:...")
+static uint8_t describedWrites(const std::string &key)
+{
+    uint8_t writes = 0;
+    const std::string head = key.substr(0, key.find(" | "));
+    for (size_t at = head.find(" c"); at != std::string::npos; at = head.find(" c", at + 2)) {
+        unsigned color = 0, format = 0, mask = 0;
+        if (sscanf(head.c_str() + at, " c%u=%u:%u:", &color, &format, &mask) == 3 && color < 8 && mask)
+            writes |= uint8_t(1u << color);
+    }
+    return writes;
+}
+
 // The uniform entries the programs read (the assumption bits they are named by: PackPipeline::uniform), each color's rung, and
-// the set-0 handle words the fragment program's bound textures read
-static void describeReads(RuntimeRecord &out)
+// the set-0 handle words the fragment program's bound textures read. A fetched color the state does not write needs no more
+// than a barrier; one it writes, the interlock (where the function writes it, for a storage form's).
+static void describeReads(RuntimeRecord &out, const std::string &key)
 {
     PackPipeline &p = out.pipeline;
     memset(p.uniform, kNoUniform, sizeof p.uniform);
+    const uint8_t writes = (describedWrites(key) & ~p.storageMask) | (p.storageWriteMask & p.storageMask);
     uint32_t n = 0;
     for (uint32_t k = 0; k < p.entries; k++) {
         const PackEntry &e = p.entry[k];
         if (e.kind == EntryFetch && e.slot < 8)
-            p.fetchRung[e.slot] = p.storageMask >> e.slot & 1 ? FetchInterlock : FetchBarrier;
+            p.fetchRung[e.slot] = writes >> e.slot & 1 ? FetchInterlock : FetchBarrier;
         if (e.kind != EntryUbo || bufferStorage(e) || n == kUniformRanges)
             continue;
         const uint8_t bank = uniformBank(out.programs[e.stage == 1 ? 0 : 1], e);
@@ -329,7 +345,7 @@ bool assembleRecord(const RecordParts &parts, const std::string &key, const Pack
     p.storageBlendModel = parts.storageBlendModel;
     p.shaderTests = parts.shaderTests;
     memcpy(p.storageTic, parts.storageTic, sizeof p.storageTic);
-    describeReads(out);
+    describeReads(out, key);
     const size_t bar = key.find(" | ");
     out.keyString = key.substr(0, bar);
     while (!out.keyString.empty() && isspace(static_cast<unsigned char>(out.keyString.back())))

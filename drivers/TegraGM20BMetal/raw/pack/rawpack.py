@@ -165,7 +165,7 @@ def ca_states(tables_path: Path, corpus: Path, names: list[str] = ()) -> list[tu
     named = caset.corpus_names(str(corpus), tables) + [n for n in names if caset.makes(tables, n)]
     for tier, labels in caset.labels(tables, named, CA_TIERS).items():
         out.append((tier, [line for line in (caspec.state_line(tables, n) for n in labels) if fresh(line)]))
-    return out
+    return [(tier, [caset.with_fetch_rung(tables, line) for line in lines]) for tier, lines in out]
 
 
 # The raw runtime's sources directpack.mm makes its records with (RawDirect.mm beside them)

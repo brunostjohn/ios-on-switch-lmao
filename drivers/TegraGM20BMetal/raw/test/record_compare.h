@@ -86,8 +86,11 @@ inline std::string differences(const raw::Pack &pack, const raw::PackPipeline &p
         why += " key";
     if (!r.extras.empty())
         why += " extras";
-    if (pp.boundEntries != rp.boundEntries || memcmp(pp.uniform, rp.uniform, sizeof pp.uniform) ||
-        memcmp(pp.fetchRung, rp.fetchRung, sizeof pp.fetchRung))
+    // the pack's candidate rungs are its generator's (directpack.mm markCandidates), which no runtime record has
+    bool rungs = true;
+    for (uint32_t c = 0; c < 8; c++)
+        rungs &= (pp.fetchRung[c] & raw::kFetchRungMask) == rp.fetchRung[c];
+    if (pp.boundEntries != rp.boundEntries || memcmp(pp.uniform, rp.uniform, sizeof pp.uniform) || !rungs)
         why += " reads";
     if (pp.variantCount[0] != rp.variantCount[0] || pp.variantCount[1] != rp.variantCount[1])
         why += " variants";

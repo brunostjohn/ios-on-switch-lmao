@@ -19,7 +19,7 @@ template <class Header> const char *qualifyStorage(const NmbDirectState &state, 
 {
     const NmbDirectStorage &s = state.storage;
     if (state.storageForm != bool(s.mask) || (s.mask & ~255u) || (s.writes & ~s.mask) || (s.blendMask & ~s.writes) ||
-        (s.blendModel & ~255u))
+        (s.blendModel & ~(kRopBlendAssumptions >> kRopBlendShift)))
         return "storage form: inconsistent attachment masks";
     if (!s.mask)
         return nullptr;

@@ -147,6 +147,38 @@ def _variant_tier(tables: caspec.Tables, seeds: list[str]) -> list[str]:
     return [v for name in seeds for v in caspec27.variants(tables.v27, name)]
 
 
+# The fetch ladder's rung below the interlock a Core Animation state's fragment blend is a candidate for
+# (runtime/raw_pack.h kFetchCandidateBlend, kFetchCandidateIterated): 2 where QuartzCore's blend function has a
+# fixed-function equation (its table's 0-25), 3 where it has none (the iterated blend unit's), each only where nothing
+# else reads the destination (no texture or image function that does)
+FIXED_FUNCTION_BLENDS = range(26)
+
+
+def fetch_rung(tables: caspec.Tables, name: str) -> int:
+    """Give the rung (2 or 3) a fragment blend of `name` is a candidate for, 0 for none or a QuartzCore 17's tables."""
+    if not tables.v27:
+        return 0
+    import caspec27  # noqa: PLC0415  (only a QuartzCore 27's tables decode it)
+
+    t = tables.v27
+    try:
+        s = caspec27.decode(t, name)
+    except (KeyError, IndexError, ValueError):
+        return 0
+    if s.fragB == t.none or t.tfi_flags(s.T) >> 1 & 1:
+        return 0
+    if any(t.image_flags(image.I) >> 3 & 1 for image in s.images[: s.decoded]):
+        return 0
+    return 2 if s.fragB in FIXED_FUNCTION_BLENDS else 3
+
+
+def with_fetch_rung(tables: caspec.Tables, line: str) -> str:
+    """Give a Core Animation R line with its fragment blend's candidate rung after its label (" rung=<n>"), if any."""
+    name = caspec.corpus_fields(line)[0]
+    rung = fetch_rung(tables, name) if name else 0
+    return line.replace(' samples=', f' rung={rung} samples=', 1) if rung else line
+
+
 def corpus_names(path: str, tables: caspec.Tables | None = None) -> list[str]:
     """Give the corpus's Core Animation names; with `tables`, only those whose line this QuartzCore makes of the name.
 

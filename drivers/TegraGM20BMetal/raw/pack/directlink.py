@@ -148,16 +148,16 @@ def pipeline_of(rec: dict, varying: list[int], prog_index: dict[str, int], const
     )
     mask, *words = struct.unpack_from('<33I', p, PIPELINE.size + packfile.PACK_ENTRIES * 8)
     tail = PIPELINE_BYTES - packfile.PIPELINE_V15.size
-    blend, half, storage_blend_mask, storage_blend_model = struct.unpack_from('<BBBB', p, tail - 56)
+    blend, half, _reserved = struct.unpack_from('<BBH', p, tail - 56)
     storage_mask, storage_write_mask, storage_samples, storage_tests, *storage_tic = struct.unpack_from(
         '<BBBB8I', p, tail - 52
     )
     depth_word, stencil_word, test_flags, _reserved, depth_tic, stencil_tic, _reserved = struct.unpack_from(
         '<BBBBIII', p, tail - 16
     )
-    _variants, vertex_variants, _fragment_variants, _reserved, bound_entries, uniform, fetch_rung, _reserved = (
-        packfile.PIPELINE_V15.unpack_from(p, tail)
-    )
+    v15 = packfile.PIPELINE_V15.unpack_from(p, tail)
+    _variants, vertex_variants, _fragment_variants, storage_blend_mask, storage_blend_model = v15[:5]
+    bound_entries, uniform, fetch_rung, _reserved = v15[5:]
     regs = rec['probe']['records'][0]['regs']
     varying = list(varying)
     if storage_mask:

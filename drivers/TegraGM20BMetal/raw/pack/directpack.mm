@@ -18,6 +18,7 @@
 #import <Foundation/Foundation.h>
 #import <Metal/Metal.h>
 #include <cstdio>
+#include <cstdlib>
 #include "../runtime/raw_emit.h"
 #include "NativeBridgeMetalFrontend.h"
 #include "TwoPlaneStandIn.h"
@@ -102,6 +103,27 @@ void record(Writer &w, const std::string &key, raw::CompileOutcome outcome, cons
     }
 }
 
+// The rung a Core Animation state's fragment blend is a candidate for (rawpack.py's split tags its line " rung=<2|3>":
+// ca/caset.py fetch_rung), marked on each color the state fetches and writes with no pipeline blend: what a device probe
+// would have to confirm before such a fetch leaves the interlock
+void markCandidates(const std::string &line, raw::PackPipeline &p)
+{
+    const size_t at = line.find(" rung=");
+    const int rung = at == std::string::npos ? 0 : atoi(line.c_str() + at + 6);
+    const uint8_t candidate = rung == 2 ? raw::kFetchCandidateBlend : rung == 3 ? raw::kFetchCandidateIterated : 0;
+    const std::string head = line.substr(0, line.find(" | "));
+    for (size_t c = head.find(" c"); candidate && c != std::string::npos; c = head.find(" c", c + 2)) {
+        unsigned color = 0, x[9] = {};
+        if (sscanf(head.c_str() + c, " c%u=%u:%u:%u:%u:%u:%u:%u:%u:%u", &color, x, x + 1, x + 2, x + 3, x + 4, x + 5,
+                   x + 6, x + 7, x + 8) != 10 ||
+            color >= 8)
+            continue;
+        const bool replaces = x[3] == 1 && x[4] == 0 && x[5] == 0 && x[6] == 1 && x[7] == 0 && x[8] == 0;
+        if ((p.fetchRung[color] & raw::kFetchRungMask) == raw::FetchInterlock && (!x[2] || replaces))
+            p.fetchRung[color] |= candidate;
+    }
+}
+
 void kernel(Writer &w, const std::string &key, raw::CompileOutcome outcome, const std::string &why,
             const raw::ComputeRecord &rec)
 {
@@ -158,6 +180,7 @@ int main(int argc, char **argv)
                              std::string why;
                              const raw::CompileOutcome outcome =
                                  direct.make(s.d, s.key, rec, why, probe::probeTextures(line, ours), &registers, true);
+                             markCandidates(line, rec.pipeline);
                              record(w, s.key, outcome, why, rec, registers);
                              if (outcome == raw::CompileOutcome::Made &&
                                  (rec.pipeline.flags & raw::PipelineStorageMetadata)) {
@@ -167,6 +190,7 @@ int main(int argc, char **argv)
                                  const auto barrierOutcome =
                                      direct.make(s.d, s.key, barrier, barrierWhy, probe::probeTextures(line, ours),
                                                  &barrierRegisters, true, raw::PackForm::Barrier);
+                                 markCandidates(line, barrier.pipeline);
                                  record(w, s.key, barrierOutcome, barrierWhy, barrier, barrierRegisters);
                              }
                              split += outcome == raw::CompileOutcome::Made && rec.split;

@@ -13,8 +13,9 @@ VERSION = 15
 SECTIONS = 11  # runtime/raw_pack.h PackSectionCount
 KERNEL_ENTRIES = 16  # PackKernel.entry's length
 PROGRAM_CBUFS = 11  # PackProgram.cbufType's length (runtime/raw_pack.h)
-# PackPipeline's record-v15 tail: variants, variantCount[2], reserved, boundEntries, uniform[8], fetchRung[8], reserved
-PIPELINE_V15 = struct.Struct('<IBBHI32s8sI')
+# PackPipeline's record-v15 tail: variants, variantCount[2], storageBlendMask, storageBlendModel, boundEntries,
+# uniform[8], fetchRung[8], reserved
+PIPELINE_V15 = struct.Struct('<IBBBBI32s8sI')
 NO_UNIFORM = b'\xff\x00\x00\x00' * 8
 
 
@@ -155,8 +156,7 @@ def pipeline_bytes(rec: dict, key_offset: int, blob_off: int, variants_off: int 
         rec['set_size'],
         flags,
     )
-    dynamic = struct.pack('<BBBB', rec.get('blend_color_word', 0), rec.get('half_blend_color_word', 0),
-                          rec.get('storage_blend_mask', 0), rec.get('storage_blend_model', 0))
+    dynamic = struct.pack('<BBH', rec.get('blend_color_word', 0), rec.get('half_blend_color_word', 0), 0)
     storage = struct.pack('<BBBB8I', rec.get('storage_mask', 0), rec.get('storage_write_mask', 0),
                           rec.get('storage_samples', 0), rec.get('storage_tests', 0), *rec.get('storage_tic', [0] * 8))
     tests = struct.pack('<BBBBIII', rec.get('depth_test_word', 0), rec.get('stencil_test_word', 0),
@@ -165,7 +165,8 @@ def pipeline_bytes(rec: dict, key_offset: int, blob_off: int, variants_off: int 
     v15 = PIPELINE_V15.pack(
         variants_off if any(counts) else 0,
         *counts,
-        0,
+        rec.get('storage_blend_mask', 0),
+        rec.get('storage_blend_model', 0),
         rec.get('bound_entries', 0),
         rec.get('uniform', NO_UNIFORM),
         bytes(rec.get('fetch_rung', [0] * 8)),
