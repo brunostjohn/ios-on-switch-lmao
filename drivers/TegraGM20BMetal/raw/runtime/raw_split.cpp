@@ -2,11 +2,12 @@
 // Split fragment programs (raw_pack.h PackSplit): a state whose fragment program computes much from per-draw values alone
 // has a twin whose per-pixel program reads those values from a constant buffer of its own, the frontier, that a compute
 // prologue wrote for the draw. A large enough draw takes the twin; its prologue, one thread with the draw's constant buffers
-// bound, is launched in one compute segment ahead of the command buffer's 3D work. Method numbers are NVIDIA's (Mesa
-// src/nouveau/headers/nvidia/classes/clb197.h, clb1c0.h, cla1c0qmd.h, MIT).
+// bound, is launched in one compute segment ahead of the command buffer's 3D work. Method numbers are NVIDIA's
+// (kits/SwitchGM20B: Mesa's clb197.h, clb1c0.h, clb1c0qmd.h, MIT).
 #include <algorithm>
 #include <cstring>
 #include "raw_gpu.h"
+#include "../../../../kits/SwitchGM20B/SwitchGM20B.h"
 #include "raw_compute_visibility.h"
 #include "raw_slm.h"
 #include "raw_split_metadata.h"
@@ -15,20 +16,26 @@ namespace raw {
 namespace {
 
 enum : uint32_t {
-    WAIT_FOR_IDLE = 0x0110,
-    INVALIDATE_SHADER_CACHES = 0x021c,
-    INVALIDATE_SKED_CACHES = 0x0298,
-    SEND_PCAS_A = 0x02b4,
-    SEND_SIGNALING_PCAS_B = 0x02bc,
-    CB_SELECTOR_A = 0x2380,
-    BIND_GROUP_CB = 0x2410,
+    WAIT_FOR_IDLE = NVB1C0_WAIT_FOR_IDLE,
+    INVALIDATE_SHADER_CACHES = NVB1C0_INVALIDATE_SHADER_CACHES,
+    INVALIDATE_SKED_CACHES = NVB1C0_INVALIDATE_SKED_CACHES,
+    SEND_PCAS_A = NVB1C0_SEND_PCAS_A,
+    SEND_SIGNALING_PCAS_B = NVB1C0_SEND_SIGNALING_PCAS_B,
+    CB_SELECTOR_A = NVB197_SET_CONSTANT_BUFFER_SELECTOR_A,
+    BIND_GROUP_CB = NVB197_BIND_GROUP_CONSTANT_BUFFER(0),
 };
 
 constexpr uint32_t kRootBytes = 0x800, kMaxCbufBytes = 0x10000, kPixelGroup = 4;
-constexpr uint32_t kFlushData = 1u << 2, kInvalidateData = 1u << 4, kInvalidateConstant = 1u << 12;
-constexpr uint32_t kPcasInvalidateSchedule = 3;
+constexpr uint32_t kFlushData = NVDEF(NVB1C0, INVALIDATE_SHADER_CACHES, FLUSH_DATA, TRUE),
+                   kInvalidateData = NVDEF(NVB1C0, INVALIDATE_SHADER_CACHES, DATA, TRUE),
+                   kInvalidateConstant = NVDEF(NVB1C0, INVALIDATE_SHADER_CACHES, CONSTANT, TRUE);
+constexpr uint32_t kPcasInvalidateSchedule =
+    NVDEF(NVB1C0, SEND_SIGNALING_PCAS_B, INVALIDATE, TRUE) | NVDEF(NVB1C0, SEND_SIGNALING_PCAS_B, SCHEDULE, TRUE);
 // QMDV01_07 (cla1c0qmd.h): PROGRAM_OFFSET, and constant buffer i's ADDR_LOWER, then ADDR_UPPER (bits 0-7) and SIZE (15-31)
-constexpr uint32_t kQmdProgramOffset = 8, kQmdRasterWidth = 12, kQmdRasterHeightDepth = 13, kQmdCbufSizeShift = 15;
+constexpr uint32_t kQmdProgramOffset = SWITCH_NVB1C0_QMD_WORD(NVB1C0_QMDV01_07_PROGRAM_OFFSET),
+                   kQmdRasterWidth = SWITCH_NVB1C0_QMD_WORD(NVB1C0_QMDV01_07_CTA_RASTER_WIDTH),
+                   kQmdRasterHeightDepth = SWITCH_NVB1C0_QMD_WORD(NVB1C0_QMDV01_07_CTA_RASTER_HEIGHT),
+                   kQmdCbufSizeShift = SWITCH_NVB1C0_QMD_SHIFT(NVB1C0_QMDV01_07_CONSTANT_BUFFER_SIZE(0));
 
 constexpr uint32_t qmdCbufLo(uint32_t i)
 {
