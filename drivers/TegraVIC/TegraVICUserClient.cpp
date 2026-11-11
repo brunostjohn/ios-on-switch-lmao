@@ -615,7 +615,7 @@ static IOReturn kernelTest(const Conn *conn, const IOExternalMethodArguments *a)
         return switch_vic_landscape_call(conn, a);
     if (magic == SWITCH_DISPLAY_WINDOW_PROBE_MAGIC)
         return switch_display_window_probe_call ? switch_display_window_probe_call(a) : kIOReturnUnsupported;
-    return switch_vic_pitch_probe_call(a);
+    return switch_vic_kernel_test_call(a);
 }
 #endif
 

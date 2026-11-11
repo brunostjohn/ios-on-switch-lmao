@@ -1,4 +1,3 @@
-import Darwin
 import Foundation
 import HWTestCore
 import HWTestGPU
@@ -8,23 +7,12 @@ import HWTestKit
 /// self-test where 144- and 192-byte rows lost half the copy. Every public path bounces other source pitches through a
 /// GPU copy first, so the probe is TegraVIC's DEVELOPMENT kernel-test selector
 /// (drivers/TegraVIC/SwitchVICPitchProbe.h): nine 1:1 BGRA copies with no bounce at 320, 576 and 2880 bytes a row
-/// against 256-multiple controls, each compared in the kernel. A VIC job that hangs panics the kernel, so it runs last.
+/// against 256-multiple controls, each compared in the kernel.
 enum X1VICPitchProbe {
+    static let magic: UInt32 = 0x5650_4954  // 'VPIT'
     static let replyBytes = 340
     static let cases = 9
     static let firstControl = 6
-
-    /// The reply's words, or why there are none.
-    static func call() -> Result<[UInt32], TestFailure> {
-        let request = [UInt32(0x5650_4954), 0].flatMap { word in
-            (0..<4).map { UInt8(truncatingIfNeeded: word >> (8 * $0)) }
-        }
-        return VICKernelTest.call(request, replyBytes: replyBytes).map { bytes in
-            stride(from: 0, to: bytes.count, by: 4).map { at in
-                (0..<4).reduce(UInt32(0)) { $0 | UInt32(bytes[at + $1]) << (8 * $1) }
-            }
-        }
-    }
 
     static let probe = X1Probe(
         id: "gpu.x1.vic_pitch", name: "VIC rows of 320, 576 and 2880 bytes copied with no bounce", probe: "V9",
@@ -32,7 +20,7 @@ enum X1VICPitchProbe {
     ) { _ in
         var metrics = Metrics()
         let reply: [UInt32]
-        switch call() {
+        switch X1VICKernelTest.call(magic, replyBytes: replyBytes) {
         case .failure(let failure): return ProbeFinding(.inconclusive, metrics, note: failure.description)
         case .success(let words): reply = words
         }

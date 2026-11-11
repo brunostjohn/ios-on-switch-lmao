@@ -51,6 +51,7 @@
 #include "../TegraSMMU/TegraSMMUSpace.h"
 #include "TegraVIC.h"
 #include "SwitchVICJobs.h"
+#include "SwitchVICKernelTest.h"
 #include "SwitchVICMapping.h"
 #include "../../kits/SwitchCAR/SwitchCAR.h"
 #include "../../kits/SwitchCAR/SwitchPMC.h"
@@ -446,7 +447,12 @@ void bringUp(void *, wait_result_t)
 
 extern "C" void tegra_vic_describe(char *buffer, size_t size)
 {
+#if TEGRA_VIC_STATS
+    const char *probe = switch_vic_probe_running();
+    snprintf(buffer, size, "%s%s%s", probe, probe[0] ? "; " : "", gVic ? falconState() : "VIC not mapped");
+#else
     snprintf(buffer, size, "%s", gVic ? falconState() : "VIC not mapped");
+#endif
 }
 
 extern "C" bool tegra_vic_ready(void)
