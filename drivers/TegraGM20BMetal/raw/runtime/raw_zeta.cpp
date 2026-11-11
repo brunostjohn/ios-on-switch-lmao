@@ -1,11 +1,12 @@
 // SPDX-License-Identifier: MIT
-// See raw_zeta.h. Method numbers: NVIDIA's class headers as Mesa ships them (cl9097.h, clb197.h, clc597.h); the target words follow
+// See raw_zeta.h. Method numbers: NVIDIA's class headers (kits/SwitchGM20B: Mesa's clb197.h); the target words follow
 // Mesa NVK nvk_CmdBeginRendering, the state nvk_flush_ds_state and its vk_to_nv9097_* encodings, the clears nvk_CmdClearAttachments
 // (all MIT).
 #include "raw_zeta.h"
 
 #include <algorithm>
 #include <cstring>
+#include "../../../../kits/SwitchGM20B/SwitchGM20B.h"
 #include "../fx/fx_image.h"
 #include "raw_gpu.h"
 #include "raw_samples.h"
@@ -13,22 +14,35 @@
 namespace raw {
 namespace {
 enum : uint32_t {
-    Z_CLEAR_VALUE = 0x0d90,
-    STENCIL_CLEAR_VALUE = 0x0da0,
-    ZT_A = 0x0fe0,
-    STENCIL_COMPRESSION = 0x111c,
-    ZT_SPARSE = 0x1208,
-    ZT_SIZE_A = 0x1228,
-    ZT_SELECT = 0x1538,
-    ZT_LAYER = 0x179c,
-    Z_COMPRESSION = 0x19cc,
+    Z_CLEAR_VALUE = NVB197_SET_Z_CLEAR_VALUE,
+    STENCIL_CLEAR_VALUE = NVB197_SET_STENCIL_CLEAR_VALUE,
+    ZT_A = NVB197_SET_ZT_A,
+    STENCIL_COMPRESSION = NVB197_SET_STENCIL_COMPRESSION,
+    ZT_SPARSE = NVB197_SET_ZT_SPARSE,
+    ZT_SIZE_A = NVB197_SET_ZT_SIZE_A,
+    ZT_SELECT = NVB197_SET_ZT_SELECT,
+    ZT_LAYER = NVB197_SET_ZT_LAYER,
+    Z_COMPRESSION = NVB197_SET_Z_COMPRESSION,
 };
 
-// kDepthStencilRegs methods: SET_DEPTH_TEST, _WRITE, _FUNC, SET_STENCIL_TEST, SET_STENCIL_OP_FAIL/ZFAIL/ZPASS, SET_STENCIL_FUNC,
-// _REF, _FUNC_MASK, SET_STENCIL_MASK, then the back face's ops, func, ref, mask, func mask
-constexpr uint32_t kDepthStencilMethods[kDepthStencilRegs] = {0x12cc, 0x12e8, 0x130c, 0x1380, 0x1384, 0x1388,
-                                                              0x138c, 0x1390, 0x1394, 0x1398, 0x139c, 0x1598,
-                                                              0x159c, 0x15a0, 0x15a4, 0x0f54, 0x0f58, 0x0f5c};
+constexpr uint32_t kDepthStencilMethods[kDepthStencilRegs] = {NVB197_SET_DEPTH_TEST,
+                                                              NVB197_SET_DEPTH_WRITE,
+                                                              NVB197_SET_DEPTH_FUNC,
+                                                              NVB197_SET_STENCIL_TEST,
+                                                              NVB197_SET_STENCIL_OP_FAIL,
+                                                              NVB197_SET_STENCIL_OP_ZFAIL,
+                                                              NVB197_SET_STENCIL_OP_ZPASS,
+                                                              NVB197_SET_STENCIL_FUNC,
+                                                              NVB197_SET_STENCIL_FUNC_REF,
+                                                              NVB197_SET_STENCIL_FUNC_MASK,
+                                                              NVB197_SET_STENCIL_MASK,
+                                                              NVB197_SET_BACK_STENCIL_OP_FAIL,
+                                                              NVB197_SET_BACK_STENCIL_OP_ZFAIL,
+                                                              NVB197_SET_BACK_STENCIL_OP_ZPASS,
+                                                              NVB197_SET_BACK_STENCIL_FUNC,
+                                                              NVB197_SET_BACK_STENCIL_FUNC_REF,
+                                                              NVB197_SET_BACK_STENCIL_MASK,
+                                                              NVB197_SET_BACK_STENCIL_FUNC_MASK};
 
 // MTLCompareFunction and VkCompareOp share their order; NV's OGL value is 0x200 | it
 uint32_t compareOp(uint8_t f)
