@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: BSD-2-Clause-Patent
 #pragma once
 #include <IOKit/IOLocks.h>
-#include <kern/thread.h>
 #include "../TegraGM20B/SwitchGpuSharedEvent.h"
 #include "SwitchHost1xResults.h"
 
@@ -57,7 +56,6 @@ private:
         Results::semantic(token, result);
         node->batch = nullptr;
         __atomic_sub_fetch(&pending, 1u, __ATOMIC_RELEASE);
-        IOLockWakeup(lock, &pending, false);
         IOLockUnlock(lock);
         switch_gpu_events_completed();
         if (retired)
@@ -120,18 +118,4 @@ public:
 
     static void commit(Node *)
     {}
-
-    static void retire(switch_gpu_event_waits *batch)
-    {
-        IOLockLock(lock);
-        for (;;) {
-            bool found = false;
-            for (const auto &node : nodes)
-                found |= node.batch == batch;
-            if (!found)
-                break;
-            IOLockSleep(lock, &pending, THREAD_UNINT);
-        }
-        IOLockUnlock(lock);
-    }
 };
