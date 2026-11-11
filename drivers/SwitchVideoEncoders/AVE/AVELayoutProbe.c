@@ -2,9 +2,10 @@
 // SwitchEncoderLayoutProbe (debug builds, H.264 frame sessions that do not reorder; HW Test encode.nvenc_input_layouts):
 // the session's last picture coded again as one IDR from each input layout NVENC 5.0 might read, each in a buffer of
 // its own written by the CPU (and one written by VIC, the route the plug-in ships), returned as {layout: the IDR's AVCC
-// sample} or {layout: the failure} for the test to decode back against its picture. The firmware gives block_height 0 and 2 the
-// same code (TegraNVENC/nvidia/SOURCE), so exactly one of "pitch" and "bl2" can come back right: that one is what code
-// 0 reads. The probe leaves the session's next picture an IDR, since its pictures overwrote the reconstructions.
+// sample} or {layout: the failure} for the test to decode back against its picture. The firmware gives block_height 0
+// and 2 the same code (TegraNVENC/nvidia/SOURCE), so exactly one of "pitch" and "bl2" can come back right, and NVIDIA's
+// driver says "bl2". The probe leaves the session's next picture an IDR, since its pictures overwrote the
+// reconstructions.
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
 #include <CoreVideo/CoreVideo.h>
 #include <IOSurface/IOSurfaceRef.h>

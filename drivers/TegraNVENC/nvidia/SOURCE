@@ -90,6 +90,10 @@ NVIDIA's T210 driver (libnvtvmr, above) at create sets input_cfg memory_mode 1 a
 the chroma offsets and sets block_height to 1 << BlockHeightLog2 (+0x24), masked to 7 bits, and tiled_16x16 0; for
 every layout memory_mode becomes 1 when the chroma plane's colour format's low byte is 8, else 0, and nv21_enable 0;
 any other layout keeps the 16x16 tiles.
-So block_height counts 64Bx8 GOBs, NVIDIA's own stack hands NVENC 16x16-tiled or block-linear pictures and never pitch
-linear, and code k is 2 << k GOBs. Whether code 0 reads 2-GOB blocks or pitch rows is the unit's to answer (HW Test
-encode.nvenc_input_layouts encodes one IDR from each layout and decodes it back).
+TVMRVideoSurfaceCreate (0x42a8) makes each plane an NvRmSurface: layout 3 at +0x10, kind 0xfe at +0x20 and
+BlockHeightLog2 at +0x24 for a block-linear surface (0x43fc-0x4414), BlockHeightLog2 1 unless the caller's flags bits
+6-8 name 1..5 (0x43a4-0x43c0, 0x4508-0x4514), layout 2 for the 16x16-tiled one (0x44c4-0x44d0); pitch rows are 64-byte
+multiples (0x441c-0x4430). So block_height counts 64Bx8 GOBs, code k is 2 << k GOBs, and NVIDIA's own block-linear
+surfaces reach NVENC as block_height 2, code 0: code 0 reads 2-GOB blocks, the layout NVDEC writes. NVIDIA's stack
+hands NVENC 16x16 tiles or block linear and never pitch linear, which no field selects. HW Test
+encode.nvenc_input_layouts checks this on the unit, one IDR from each layout decoded back.

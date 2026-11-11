@@ -8,7 +8,8 @@ import VideoToolbox
 /// codes one 720p pattern picture again as an IDR from each layout (the CPU writing it in that layout, and VIC writing
 /// BL16, the route the encoder ships), and each IDR is decoded back here against the pattern. The firmware turns
 /// block_height into a code (TegraNVENC/nvidia/SOURCE): 4, 8, 16 GOBs are codes 1-3, while 0 (pitch) and 2 GOBs share
-/// code 0, so exactly one of "pitch" and "bl2" can decode back: that one is what code 0 reads.
+/// code 0, so exactly one of "pitch" and "bl2" can decode back. NVIDIA's driver sends its own 2-GOB surfaces as code 0,
+/// so "bl2" is expected; "pitch" reading would mean NVENC can take an IOSurface without VIC.
 struct NVENCInputLayoutTest: HWTest {
     let id = "encode.nvenc_input_layouts"
     let name = "NVENC input layouts: one IDR from each, decoded back"

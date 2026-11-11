@@ -1,8 +1,9 @@
 // SPDX-License-Identifier: BSD-2-Clause-Patent
 // How a picture reaches NVENC's input buffer. NVENC 5.0 reads 16x16 tiles or block linear, never the pitch rows an
 // IOSurface holds (TegraNVENC/nvidia/SOURCE), so with TEGRA_NVENC_FEATURE_SURFACE_INPUT the session's input buffer is
-// BL16 and every submit names the picture's IOSurface: the kernel has VIC write the region into the buffer and NVENC's
-// job waits for VIC's on the hardware. The CPU touches no sample. The CPU copy (16-byte runs into the buffer's layout)
+// BL16 (block_height 16, a code the firmware's table names outright, 0x8643-0x8664) and every submit names the
+// picture's IOSurface: the kernel has VIC write the region into the buffer and NVENC's job waits for VIC's on the
+// hardware. The CPU touches no sample. The CPU copy (16-byte runs into the buffer's layout)
 // is left for what VIC cannot read: a picture without an IOSurface, rows or planes off VIC's 256-byte grid (VideoToolbox
 // is asked for buffers on it), or a surface the kernel refused, after which the session copies (one line each).
 #include <CoreVideo/CoreVideo.h>
