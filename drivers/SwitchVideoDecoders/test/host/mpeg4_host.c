@@ -437,14 +437,23 @@ int main(int argc, char **argv)
     mpeg4_decoder_destroy(d);
 
     const bool pack = packed(&f, &volA);
+    // Joined after the I-VOP: the P- and B-VOPs before the next I-VOP are skipped without a job.
+    d = create(&f);
+    const int before = f.submits;
+    const size_t *v = kMPEG4ClipAVOPs;
+    const bool joined = !mpeg4_decoder_configure(d, &volA) &&
+                        mpeg4_decoder_decode(d, kMPEG4ClipA + v[1], v[2] - v[1], NULL) == 0 &&
+                        mpeg4_decoder_decode(d, kMPEG4ClipA + v[2], v[3] - v[2], NULL) == 0 && f.submits == before;
+    mpeg4_decoder_destroy(d);
     const int refused = refusals(&f);
     const bool layers = unsupportedLayers(&volA);
-    const bool ok =
-        !failedA && !failedB && matrices && skipped && truncated && pack && refused > 0 && layers && !f.refused;
+    const bool ok = !failedA && !failedB && matrices && skipped && truncated && pack && joined && refused > 0 &&
+                    layers && !f.refused;
     printf("%s mpeg4: clip A 18 VOPs, clip B 32 VOPs against FFmpeg (matrices %s, not-coded VOP %s, truncated VOP "
-           "%s, packed P+B %s), checker refuses %d bad submits, unsupported layers %s, %d jobs refused\n",
+           "%s, packed P+B %s, missing references %s), checker refuses %d bad submits, unsupported layers %s, %d jobs "
+           "refused\n",
            ok ? "PASS" : "FAIL", matrices ? "ok" : "wrong", skipped ? "ok" : "wrong", truncated ? "refused" : "taken",
-           pack ? "ok" : "wrong", refused, layers ? "refused" : "taken", f.refused);
+           pack ? "ok" : "wrong", joined ? "skipped" : "decoded", refused, layers ? "refused" : "taken", f.refused);
     if (failedA || failedB)
         printf("failed at clip A VOP %d, clip B VOP %d\n", failedA - 1, failedB - 1);
     return ok ? 0 : 1;

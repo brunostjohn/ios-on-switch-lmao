@@ -160,8 +160,7 @@ static void fillSetup(const MPEG4Decoder *d, nvdec_mpeg4_pic_s *p, const MPEG4VO
 static int decodeVOP(MPEG4Decoder *d, const MPEG4VOP *vop, const uint8_t *data, size_t size, int *status)
 {
     MPEGFrames *f = &d->frames;
-    if (vop->coding_type == MPEG4_VOP_S || (vop->coding_type != MPEG4_VOP_I && f->future < 0) ||
-        (vop->coding_type == MPEG4_VOP_B && f->past < 0))
+    if (vop->coding_type == MPEG4_VOP_S)
         return -1;
     const int current = mpeg_frames_take(f);
     if (current < 0)
@@ -223,7 +222,10 @@ int mpeg4_decoder_decode(MPEG4Decoder *d, const uint8_t *data, size_t size, void
             MPEG4VOP vop;
             if (!mpeg4_parse_vop(&d->vol, data + at + 4, next - at - 4, &vop))
                 return -1;
-            if (advanceTime(d, &vop)) {
+            // A VOP whose references are missing (a stream joined after its I-VOP) is skipped, not predicted from nothing.
+            const bool references = vop.coding_type == MPEG4_VOP_I || vop.coding_type == MPEG4_VOP_S ||
+                                    (d->frames.future >= 0 && (vop.coding_type != MPEG4_VOP_B || d->frames.past >= 0));
+            if (advanceTime(d, &vop) && references) {
                 if (vop.coded) {
                     int status = 0;
                     const int index = decodeVOP(d, &vop, data + at, next - at, &status);
