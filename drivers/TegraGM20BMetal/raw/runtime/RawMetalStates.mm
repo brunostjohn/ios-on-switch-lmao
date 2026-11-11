@@ -293,6 +293,8 @@ bool rmRenderArchiveMissed(MTLRenderPipelineDescriptor *d, MTLPipelineOption o, 
 
 RMPipeline *rmPipelineFor(RMDevice *device, MTLRenderPipelineDescriptor *d, MTLPipelineOption o, NSError **error)
 {
+    if (const char *why = rmUnsupportedRenderState(d))
+        return rmRefuseUnsupported(why, error);
     RMPipeline *p = [RMPipeline new];
     p->_device = device;
     p.label = d.label;

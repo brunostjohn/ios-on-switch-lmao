@@ -2,6 +2,19 @@
 #import "RawMetalInternal.h"
 #import "RawPipelineKey.h"
 #include "NativeBridgeMetalFrontend.h"
+#include "raw_function_tess.h"
+
+// The function list entry's TESS tag in the metallib the m2v function's library was made of
+static raw::FunctionTess functionTess(id twin)
+{
+    const void *bytes = nullptr;
+    size_t length = 0;
+    raw::FunctionTess tess;
+    if (native_bridge_metal_function_metallib(twin, &bytes, &length))
+        raw::metallibFunctionTess(static_cast<const uint8_t *>(bytes), length,
+                                  native_bridge_metal_function_library_name(twin).UTF8String ?: "", tess);
+    return tess;
+}
 
 @implementation RMFunction
 
@@ -34,6 +47,16 @@
 - (NSArray<MTLAttribute *> *)stageInputAttributes
 {
     return [(id<MTLFunction>)_twin stageInputAttributes];
+}
+
+- (MTLPatchType)patchType
+{
+    return MTLPatchType(functionTess(_twin).patchType);
+}
+
+- (NSInteger)patchControlPointCount
+{
+    return functionTess(_twin).controlPoints;
 }
 
 - (id<MTLArgumentEncoder>)newArgumentEncoderWithBufferIndex:(NSUInteger)index

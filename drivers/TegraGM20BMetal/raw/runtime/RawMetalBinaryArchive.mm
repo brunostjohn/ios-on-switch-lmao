@@ -92,6 +92,8 @@ static RMFunction *own(id<MTLFunction> function)
 {
     if (!own(d.vertexFunction) || (d.fragmentFunction && !own(d.fragmentFunction)))
         return failed(error, MTLBinaryArchiveErrorUnexpectedElement, @"a function of another device");
+    if (const char *why = rmUnsupportedRenderState(d))
+        return failed(error, MTLBinaryArchiveErrorCompilationFailure, @(why));
     return [self add:rmArchiveKey(raw_metal_pipeline_key(d).UTF8String)];
 }
 
