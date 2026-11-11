@@ -43,6 +43,8 @@ NIL's `nil_formats.csv`, read through NIL's own generator. `methods.tsv` files e
 ## Tests
 
 `driver_constants_test` reads the hand-written method numbers and fields out of the drivers' sources at build time and
-checks each against the headers (`test/driver_constants.tsv`). A new constant without a row fails, as does a row that
-no longer matches. A `mismatch` row is a driver bug; fixing the bug fails the test until the row says `nv`.
+checks each against the headers (`test/driver_constants.tsv`). A constant whose value comes from the headers (class
+names, drf.h macros, or other such constants, with no number of its own) needs no row, and a row for one fails. Every
+other constant needs a row: a new one without a row fails, as does a row that no longer matches. A `mismatch` row is a
+driver bug; fixing the bug fails the test until the row says `nv`.
 `caps_test` checks that the generator's output is stable and rejects a bad row.
