@@ -120,7 +120,7 @@ TEST(PbdmaIntr, ChannelErrorsBesideItStillGoToNvkm)
 
 // gpu.c's checks of a channel whose job's internal fences move its fence word with no interrupt: its progress time
 // moves when the interrupt pass or a check sees the word move (chan_progress_ns), and a check blames it as
-// tgm_ctxsw_decide and hang_recover do (stuck, confirmed by the next check).
+// tgm_ctxsw_decide and tgm_hang_recover do (stuck, confirmed by the next check).
 struct SilentJob {
 	uint32_t completed, submitted, irq_done, seen;
 	uint64_t progress_ns;

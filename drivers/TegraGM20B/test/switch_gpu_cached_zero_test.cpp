@@ -44,7 +44,7 @@ std::map<uint32_t, std::pair<uint64_t, uint32_t>> pending;  // seqno -> push GPU
 unsigned maps, unmaps, cacheOps, execs, nextError, progressChecks;
 int mapError;
 bool early;
-// chan_killed landing at the fence read: the error first, then the fence over the abandoned scrub.
+// tgm_chan_killed landing at the fence read: the error first, then the fence over the abandoned scrub.
 bool killAtFenceRead;
 bool pushReadOnly, pushVolatile, destinationReadOnly, destinationVolatile;
 switch_gpu_mapping pushWindow;

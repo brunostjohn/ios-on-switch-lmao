@@ -4,8 +4,8 @@
  * (test/gm20b_rail_test.cpp). The GPU goes down through system sleep's own steps (gpu.c tgm_rail_down, VDD_GPU off)
  * once the display is off and the GPU idle (at its idle clock: 500 ms without a submission or a swap, gpu.c idle_drop),
  * so the display's last frames finish at full speed. It comes back on the rail's thread call as the panel starts to
- * wake, so the unrail runs under the panel's power-up, or at once in whichever caller takes gpu.lock or enters the gate
- * while it is down (a demand, gpu.c gpu_lock). Each demand with the display off holds the GPU up longer before it may go
+ * wake, so the unrail runs under the panel's power-up, or at once in whichever caller takes tgm_gpu.lock or enters the gate
+ * while it is down (a demand, gpu.c tgm_gpu_lock). Each demand with the display off holds the GPU up longer before it may go
  * down again, so work that keeps coming back does not pay a rail cycle each time. System sleep owns the GPU from its
  * suspend to its resume: nothing moves the rail meanwhile, and a GPU already down stays down across it.
  */
@@ -40,7 +40,7 @@ static inline uint64_t tgm_rail_hold_ns(uint32_t demands)
 
 /* GPU time never goes backwards across a rail cycle or system sleep: PTIMER restarts from ktime at every wake
  * (nvkm_timer_init) and the GPU's clock may have run ahead of ktime, so each time handed out, and PTIMER after a wake, is
- * at least the last one before it (gpu.c stamp_last). */
+ * at least the last one before it (gpu.c tgm_stamp_last). */
 static inline uint64_t tgm_stamp_monotonic(uint64_t last, uint64_t now)
 {
 	return now > last ? now : last;

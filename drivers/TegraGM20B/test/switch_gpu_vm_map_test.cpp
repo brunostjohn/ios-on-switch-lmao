@@ -11,7 +11,7 @@ protected:
 	void SetUp() override
 	{
 		for (unsigned i = 0; i < 256; ++i)
-			gpu.mmu.kind[i] = u8(i);
+			tgm_gpu.mmu.kind[i] = u8(i);
 		a.owner = &a;
 		b.owner = &b;
 		a.vmm.id = 1;
@@ -237,7 +237,7 @@ TEST_F(VmMap, CompressedAliasesInDifferentSpacesUseOnlyCanonicalMemory)
 	memory.page = memory.mem.shift = 17;
 	memory.bytes = memory.mem.bytes = 32 * PAGE_SIZE;
 	memory.npages = 32;
-	gpu.mmu.kind[0x42] = 0xfe;
+	tgm_gpu.mmu.kind[0x42] = 0xfe;
 	mem_prepare_big_views(&memory);
 	EXPECT_EQ(memory.big_views, nullptr);
 	EXPECT_EQ(constructors, 0);
@@ -262,7 +262,7 @@ TEST_F(VmMap, PreparedUncompressedBigViewCannotBecomeIndependentCompressionAutho
 	mem_prepare_big_views(&memory);
 	ASSERT_NE(memory.big_views, nullptr);
 	ASSERT_EQ(memory.big_views->mem.shift, 17);
-	gpu.mmu.kind[0x42] = 0xfe;
+	tgm_gpu.mmu.kind[0x42] = 0xfe;
 	switch_gpu_mapping *mapping = nullptr;
 	EXPECT_EQ(switch_gpu_vm_map(&a, 0x40000000, 32 * PAGE_SIZE, &memory, 0, 0x42, 0, &mapping),
 		  -EINVAL);
@@ -357,7 +357,7 @@ TEST_F(VmMap, CompressedMappingCutInsideABigPageIsRefusedUntouched)
 	memory.page = memory.mem.shift = 17;
 	memory.bytes = memory.mem.bytes = 32 * PAGE_SIZE;
 	memory.npages = 32;
-	gpu.mmu.kind[0x42] = 0xfe;
+	tgm_gpu.mmu.kind[0x42] = 0xfe;
 	switch_gpu_mapping *mapping = nullptr, *below = nullptr, *taken = nullptr, *above = nullptr;
 	ASSERT_EQ(switch_gpu_vm_map(&a, 0x40000000, memory.bytes, &memory, 0, 0x42, 0, &mapping),
 		  0);

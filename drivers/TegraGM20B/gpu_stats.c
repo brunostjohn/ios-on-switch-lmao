@@ -3,7 +3,7 @@
 #include "gpu_internal.h"
 
 #if TGM_STATS
-struct stats_state stats;
+struct stats_state tgm_stats;
 
 #endif
 /* stats: the "mem" line's window (tgm_stats_bo_alloc and the rest, in TegraGM20BGpu.h). Times in ns; every
@@ -26,7 +26,7 @@ static struct {
 /* Who paid the window's slowest cached BoAlloc made on its own thread (best effort: the raiser of cached_max writes it). */
 static char mstat_max_owner[17];
 #if TGM_STATS
-u64 compositor_pool; /* the compositor's pool BOs (tgm_stats_compositor_pool) */
+u64 tgm_compositor_pool; /* the compositor's pool BOs (tgm_stats_compositor_pool) */
 
 #endif
 static struct {
@@ -43,9 +43,9 @@ void tgm_stats_import(int64_t bytes, uint64_t pa)
 	if (!stats_on())
 		return;
 	if (bytes > 0)
-		__atomic_fetch_add(&stats.imports, 1, __ATOMIC_RELAXED);
-	__atomic_fetch_add(&stats.live, bytes > 0 ? 1 : -1, __ATOMIC_RELAXED);
-	__atomic_fetch_add(&stats.live_bytes, bytes, __ATOMIC_RELAXED);
+		__atomic_fetch_add(&tgm_stats.imports, 1, __ATOMIC_RELAXED);
+	__atomic_fetch_add(&tgm_stats.live, bytes > 0 ? 1 : -1, __ATOMIC_RELAXED);
+	__atomic_fetch_add(&tgm_stats.live_bytes, bytes, __ATOMIC_RELAXED);
 	now = nvxnu_nanotime();
 	mutex_lock(&recent_lock);
 	if (bytes < 0) {
@@ -67,13 +67,13 @@ void tgm_stats_import(int64_t bytes, uint64_t pa)
 void tgm_stats_compositor_pool(int64_t bytes)
 {
 	if (stats_on())
-		__atomic_fetch_add(&compositor_pool, (u64)bytes, __ATOMIC_RELAXED);
+		__atomic_fetch_add(&tgm_compositor_pool, (u64)bytes, __ATOMIC_RELAXED);
 }
 
 /* The frame timeline (SwitchFrameTimeline.h): since the display last took them, the compositor's submissions and every
  * other process's count, and every process's new-surface work (BoImport, VmBind, BoAlloc, BoFree, the imports' cache
  * cleans). Callers on several connections at once: each field on its own atomics. */
-struct frame_gpu_state frame_gpu;
+struct frame_gpu_state tgm_frame_gpu;
 
 void tgm_stats_bo_alloc(uint64_t bytes, int kind, uint64_t ns, const uint64_t phase_ns[TGM_PHASES],
 			const char *owner)
@@ -81,11 +81,11 @@ void tgm_stats_bo_alloc(uint64_t bytes, int kind, uint64_t ns, const uint64_t ph
 	int i = 0;
 	if (!stats_on())
 		return;
-	__atomic_fetch_add(&frame_gpu.allocs, 1, __ATOMIC_RELAXED);
-	__atomic_fetch_add(&frame_gpu.alloc_ns, ns, __ATOMIC_RELAXED);
-	__atomic_fetch_add(&stats.allocs, 1, __ATOMIC_RELAXED);
-	__atomic_fetch_add(&stats.alloc_bytes, bytes, __ATOMIC_RELAXED);
-	__atomic_fetch_add(&stats.alloc_ns, ns, __ATOMIC_RELAXED);
+	__atomic_fetch_add(&tgm_frame_gpu.allocs, 1, __ATOMIC_RELAXED);
+	__atomic_fetch_add(&tgm_frame_gpu.alloc_ns, ns, __ATOMIC_RELAXED);
+	__atomic_fetch_add(&tgm_stats.allocs, 1, __ATOMIC_RELAXED);
+	__atomic_fetch_add(&tgm_stats.alloc_bytes, bytes, __ATOMIC_RELAXED);
+	__atomic_fetch_add(&tgm_stats.alloc_ns, ns, __ATOMIC_RELAXED);
 	if (bytes <= (64 << 10))
 		__atomic_fetch_add(&mstat.small_n, 1, __ATOMIC_RELAXED);
 	if (kind == TGM_BO_POOL) {
@@ -115,10 +115,10 @@ void tgm_stats_bo_import(uint64_t bytes, int read_only, int skipped, uint64_t ns
 	int i = 0;
 	if (!stats_on())
 		return;
-	__atomic_fetch_add(&frame_gpu.imports, 1, __ATOMIC_RELAXED);
-	__atomic_fetch_add(&frame_gpu.import_ns, ns, __ATOMIC_RELAXED);
-	__atomic_fetch_add(&frame_gpu.clean_ns, phase_ns[3], __ATOMIC_RELAXED);
-	__atomic_fetch_add(&frame_gpu.clean_bytes, bytes, __ATOMIC_RELAXED);
+	__atomic_fetch_add(&tgm_frame_gpu.imports, 1, __ATOMIC_RELAXED);
+	__atomic_fetch_add(&tgm_frame_gpu.import_ns, ns, __ATOMIC_RELAXED);
+	__atomic_fetch_add(&tgm_frame_gpu.clean_ns, phase_ns[3], __ATOMIC_RELAXED);
+	__atomic_fetch_add(&tgm_frame_gpu.clean_bytes, bytes, __ATOMIC_RELAXED);
 	__atomic_fetch_add(&mstat.import_n, 1, __ATOMIC_RELAXED);
 	__atomic_fetch_add(&mstat.import_bytes, bytes, __ATOMIC_RELAXED);
 	__atomic_fetch_add(&mstat.import_ro, !!read_only, __ATOMIC_RELAXED);
@@ -216,7 +216,7 @@ void tgm_stats_import_cost(const struct tgm_import_cost *c)
 		    c->coh_ns / 1000, c->clean_ns / 1000);
 }
 
-/* The window's "imports" line (stats_mem): its histograms and sums taken, as mstat's are. */
+/* The window's "imports" line (tgm_stats_mem): its histograms and sums taken, as mstat's are. */
 static void stats_imports(u64 ms, u64 map_n)
 {
 	u32 total[COST_BUCKETS];
@@ -279,8 +279,8 @@ void tgm_stats_bind(int map, uint64_t pages, uint64_t ns)
 {
 	if (!stats_on())
 		return;
-	__atomic_fetch_add(&frame_gpu.binds, 1, __ATOMIC_RELAXED);
-	__atomic_fetch_add(&frame_gpu.bind_ns, ns, __ATOMIC_RELAXED);
+	__atomic_fetch_add(&tgm_frame_gpu.binds, 1, __ATOMIC_RELAXED);
+	__atomic_fetch_add(&tgm_frame_gpu.bind_ns, ns, __ATOMIC_RELAXED);
 	if (map) {
 #if TGM_STATS
 		__atomic_fetch_add(&icost.bind[cost_bucket(ns)], 1, __ATOMIC_RELAXED);
@@ -298,7 +298,7 @@ void tgm_stats_bo_free(uint64_t ns)
 {
 	if (!stats_on())
 		return;
-	__atomic_fetch_add(&frame_gpu.frees, 1, __ATOMIC_RELAXED);
+	__atomic_fetch_add(&tgm_frame_gpu.frees, 1, __ATOMIC_RELAXED);
 	__atomic_fetch_add(&mstat.free_n, 1, __ATOMIC_RELAXED);
 	stats_add(&mstat.free_ns, &mstat.free_max, ns);
 }
@@ -309,27 +309,27 @@ void tgm_stats_wait(uint32_t waiter, int woken, int done)
 
 	if (!stats_on())
 		return;
-	__atomic_fetch_add(&wstat.slept, 1, __ATOMIC_RELAXED);
+	__atomic_fetch_add(&tgm_wstat.slept, 1, __ATOMIC_RELAXED);
 	if (!woken) {
-		__atomic_fetch_add(&wstat.deadline, 1, __ATOMIC_RELAXED);
+		__atomic_fetch_add(&tgm_wstat.deadline, 1, __ATOMIC_RELAXED);
 		return;
 	}
-	__atomic_fetch_add(&wstat.woken, 1, __ATOMIC_RELAXED);
+	__atomic_fetch_add(&tgm_wstat.woken, 1, __ATOMIC_RELAXED);
 	if (!done) {
-		__atomic_fetch_add(&wstat.other, 1, __ATOMIC_RELAXED);
+		__atomic_fetch_add(&tgm_wstat.other, 1, __ATOMIC_RELAXED);
 		return;
 	}
 	lat = nvxnu_nanotime() -
-	      __atomic_load_n(&waiter_woken_ns[waiter % TGM_WAITERS], __ATOMIC_RELAXED);
-	__atomic_fetch_add(&wstat.lat_sum, lat, __ATOMIC_RELAXED);
-	if (lat > __atomic_load_n(&wstat.lat_max, __ATOMIC_RELAXED))
-		__atomic_store_n(&wstat.lat_max, lat, __ATOMIC_RELAXED);
+	      __atomic_load_n(&tgm_waiter_woken_ns[waiter % TGM_WAITERS], __ATOMIC_RELAXED);
+	__atomic_fetch_add(&tgm_wstat.lat_sum, lat, __ATOMIC_RELAXED);
+	if (lat > __atomic_load_n(&tgm_wstat.lat_max, __ATOMIC_RELAXED))
+		__atomic_store_n(&tgm_wstat.lat_max, lat, __ATOMIC_RELAXED);
 }
 
 #if TGM_STATS
 /* The "waits" line: GPU interrupt passes by line and per job kicked, channel wakes, and how the fence waits that slept
  * woke: at their seqno, early (another seqno reached, a kill, a teardown) or at their deadline. */
-void stats_waits(u64 ms)
+void tgm_stats_waits(u64 ms)
 {
 	u64 stall = 0;
 	u64 nonstall = 0;
@@ -348,18 +348,18 @@ void stats_waits(u64 ms)
 	char line[320];
 
 	nvxnu_irq_passes(&stall, &nonstall);
-	ds = stall - wstat.stall;
-	dn = nonstall - wstat.nonstall;
-	wstat.stall = stall;
-	wstat.nonstall = nonstall;
-	wakes = __atomic_exchange_n(&wstat.wakes, 0, __ATOMIC_RELAXED);
-	slept = __atomic_exchange_n(&wstat.slept, 0, __ATOMIC_RELAXED);
-	woken = __atomic_exchange_n(&wstat.woken, 0, __ATOMIC_RELAXED);
-	other = __atomic_exchange_n(&wstat.other, 0, __ATOMIC_RELAXED);
-	deadline = __atomic_exchange_n(&wstat.deadline, 0, __ATOMIC_RELAXED);
-	jobs = __atomic_exchange_n(&wstat.jobs, 0, __ATOMIC_RELAXED);
-	sum = __atomic_exchange_n(&wstat.lat_sum, 0, __ATOMIC_RELAXED);
-	max = __atomic_exchange_n(&wstat.lat_max, 0, __ATOMIC_RELAXED);
+	ds = stall - tgm_wstat.stall;
+	dn = nonstall - tgm_wstat.nonstall;
+	tgm_wstat.stall = stall;
+	tgm_wstat.nonstall = nonstall;
+	wakes = __atomic_exchange_n(&tgm_wstat.wakes, 0, __ATOMIC_RELAXED);
+	slept = __atomic_exchange_n(&tgm_wstat.slept, 0, __ATOMIC_RELAXED);
+	woken = __atomic_exchange_n(&tgm_wstat.woken, 0, __ATOMIC_RELAXED);
+	other = __atomic_exchange_n(&tgm_wstat.other, 0, __ATOMIC_RELAXED);
+	deadline = __atomic_exchange_n(&tgm_wstat.deadline, 0, __ATOMIC_RELAXED);
+	jobs = __atomic_exchange_n(&tgm_wstat.jobs, 0, __ATOMIC_RELAXED);
+	sum = __atomic_exchange_n(&tgm_wstat.lat_sum, 0, __ATOMIC_RELAXED);
+	max = __atomic_exchange_n(&tgm_wstat.lat_max, 0, __ATOMIC_RELAXED);
 	per_job = jobs ? (ds + dn) * 100 / jobs : 0;
 	scnprintf(
 		line, sizeof(line),
@@ -387,13 +387,13 @@ void tgm_stats_prefault(uint64_t bytes)
  * page: XNU's own counters; with the kernel's user-fault timing, their mean and longest); and its "mem2" line: host
  * imports (mean/max, phase totals, read-only ones, cleans the registry skipped, re-imports of a surface released < 2 s
  * before) and VmBind maps (pages, mean/max) and unmaps. Each only when something happened. */
-void stats_mem(u64 ms)
+void tgm_stats_mem(u64 ms)
 {
 	u64 v[sizeof(mstat) / sizeof(u64)];
 	struct nvxnu_faults f;
 	static struct nvxnu_faults last;
 	static char line
-		[800]; /* one caller at a time: the submission that won the window (stats_tick) */
+		[800]; /* one caller at a time: the submission that won the window (tgm_stats_tick) */
 	char user[96] = "";
 	unsigned int k = 0;
 #define MS(field) v[offsetof(typeof(mstat), field) / sizeof(u64)]
@@ -464,7 +464,7 @@ void stats_mem(u64 ms)
 #undef MEAN_US
 }
 
-const char *prof_name(unsigned int c, char *buf, unsigned int len)
+const char *tgm_prof_name(unsigned int c, char *buf, unsigned int len)
 {
 	static const char *const size[] = {"full", "mid", "small"};
 	static const char *const other[] = {"pass", "sync",  "compute", "copy",

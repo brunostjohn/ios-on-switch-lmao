@@ -58,9 +58,9 @@ volatile int gStarted, gBringupDone;
 volatile int gSleeping;
 
 // Rail-gating with the display off (TegraGM20BRail.h). gRailLock orders the worker's moves against system sleep, which
-// holds gpu.lock across SC7 with the GPU already down (gRailSC7Held). gRailMoving counts the moves under way (the
+// holds tgm_gpu.lock across SC7 with the GPU already down (gRailSC7Held). gRailMoving counts the moves under way (the
 // worker's rail-down and a caller's rail-up can overlap) and holds SwitchThermal's CPU raise as gSleeping does across
-// SC7; a rail-up made under some caller's gpu.lock leaves gRailMoved for the worker, which lets the raise go.
+// SC7; a rail-up made under some caller's tgm_gpu.lock leaves gRailMoved for the worker, which lets the raise go.
 // gRailExpected: a wake source fired with the panel off, so the worker brings the GPU up once ahead of the panel
 // (consumed by that move; the display stays off as far as the rail knows). gRailDemands counts the wakes by work since
 // the display went off, the last at gRailDemandAt (mach time), for the hold; gRailHoldCall looks again when it ends

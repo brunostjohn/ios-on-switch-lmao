@@ -22,7 +22,7 @@ struct tgm_chan {
 constexpr int NVIF_EVENT_KEEP = 0, NVIF_EVENT_DROP = 1, CHAN_SCRUB = 2;
 unsigned highCalls, idleCalls, statsCalls, presentCalls, scrubCalls, wakeCalls, callbacks,
 	timestamps;
-int sc7_gate;
+int tgm_sc7_gate;
 bool diagnostic, suspended;
 
 uint32_t tgm_chan_completed(tgm_chan *channel)

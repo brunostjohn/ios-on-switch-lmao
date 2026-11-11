@@ -109,14 +109,16 @@ TEST(Gm20bClkgate, GpuFollowsNvgpusOrderAroundTheGoldenContext)
 {
 	const std::string gpu = Text(GPU_BRINGUP_C) + Text(GPU_POWER_C);
 	const size_t load = gpu.find("\t\t\tret = m2(line, len);\n\t\tif (ret)\n\t\t\treturn ret;\n"
-				     "\t\ttgm_clkgate_load(gpu.device);\n");
+				     "\t\ttgm_clkgate_load(tgm_gpu.device);\n");
 	const size_t golden = gpu.find("\t\tret = m3(line, len);\n", load);
-	const size_t enable = gpu.find("\t\ttgm_clkgate_enable(gpu.device);\n", golden);
+	const size_t enable = gpu.find("\t\ttgm_clkgate_enable(tgm_gpu.device);\n", golden);
 	EXPECT_NE(load, std::string::npos);
 	EXPECT_NE(golden, std::string::npos);
 	EXPECT_NE(enable, std::string::npos);
-	EXPECT_NE(gpu.find("\twake_fence();\n\ttgm_clkgate_enable(gpu.device);\n\twake_open();\n"),
-		  std::string::npos);
+	EXPECT_NE(
+		gpu.find(
+			"\twake_fence();\n\ttgm_clkgate_enable(tgm_gpu.device);\n\twake_open();\n"),
+		std::string::npos);
 }
 
 // The C definition starting with `head`, through `close` at column 0 (a function's brace, a table's "};")
@@ -152,8 +154,8 @@ TEST(Gm20bClkgate, GrResetRunsWithGatingOffAndGetsTheListsBack)
 TEST(Gm20bClkgate, TheGuardIsInPlaceBeforeAnyChannel)
 {
 	const std::string gpu = Text(GPU_BRINGUP_C);
-	const size_t load = gpu.find(
-		"\t\ttgm_clkgate_load(gpu.device);\n\t\ttgm_clkgate_guard_reset(gpu.device);\n");
+	const size_t load = gpu.find("\t\ttgm_clkgate_load(tgm_gpu.device);\n\t\ttgm_clkgate_guard_"
+				     "reset(tgm_gpu.device);\n");
 	const size_t golden = gpu.find("\t\tret = m3(line, len);\n");
 	ASSERT_NE(load, std::string::npos);
 	ASSERT_NE(golden, std::string::npos);

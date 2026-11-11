@@ -16,7 +16,7 @@
 static void clk_measure(char *buf, unsigned int len)
 {
 	static int started;
-	struct nvkm_device *device = gpu.device;
+	struct nvkm_device *device = tgm_gpu.device;
 	u32 cnt = nvkm_rd32(device, TRIM_GPC0_NCGPCCLK_CNT);
 	u32 ref_khz = gk20a_clk(device->clk)->parent_rate / 1000;
 	u32 vco = nvkm_rd32(device, 0x137100);
@@ -78,7 +78,7 @@ void tgm_stats_submit(struct tgm_chan *chan, const uint64_t ns[TGM_SUBMIT_PHASES
 	__atomic_fetch_add(&chan->stat_submits, 1, __ATOMIC_RELAXED);
 }
 
-/* live_lock held */
+/* tgm_live_lock held */
 static void stats_submits_take(struct tgm_chan *chan, struct stats_submits *s)
 {
 	unsigned int p = 0;
@@ -105,12 +105,12 @@ static unsigned int stats_submits_line(char *buf, unsigned int len, const struct
 /* The window's "exec" line: each process's stamped GPU time per submission (start to end stamp, the L2 flush included:
  * what its work held the GPU for, other channels' time slices inside it included), summed over its channels and taken from
  * them; the window's first EXEC_OWNERS - 1 processes by name, the rest as "(others)". `rate` converts PTIMER units to ns
- * (16.16, stats_tick). Called from the submission that won the window, never with live_lock held. */
+ * (16.16, tgm_stats_tick). Called from the submission that won the window, never with tgm_live_lock held. */
 #define EXEC_OWNERS 5
 
 static void stats_exec_owners(char *line, unsigned int len, u64 rate)
 {
-	/* static: one caller at a time (the window's winner, stats_tick) */
+	/* static: one caller at a time (the window's winner, tgm_stats_tick) */
 	static struct {
 		char name[17];
 		u64 sum, max;
@@ -132,8 +132,8 @@ static void stats_exec_owners(char *line, unsigned int len, u64 rate)
 	char name[32];
 
 	memset(o, 0, sizeof(o));
-	mutex_lock(&live_lock);
-	list_for_each_entry(chan, &live_chans, live)
+	mutex_lock(&tgm_live_lock);
+	list_for_each_entry(chan, &tgm_live_chans, live)
 	{
 		u32 n = __atomic_exchange_n(&chan->stat_exec_n, 0, __ATOMIC_RELAXED);
 		u64 sum = __atomic_exchange_n(&chan->stat_exec, 0, __ATOMIC_RELAXED);
@@ -174,7 +174,7 @@ static void stats_exec_owners(char *line, unsigned int len, u64 rate)
 				__atomic_exchange_n(&chan->prof_sdn[c], 0, __ATOMIC_RELAXED);
 		}
 	}
-	mutex_unlock(&live_lock);
+	mutex_unlock(&tgm_live_lock);
 	line[0] = 0;
 	for (i = 0; i < EXEC_OWNERS; i++) {
 		if (!o[i].n && !o[i].submits.n)
@@ -215,7 +215,7 @@ static void stats_exec_owners(char *line, unsigned int len, u64 rate)
 				break;
 			at += scnprintf(
 				line + at, len - at, "%s %s %u x %llu us (%llu us/submit",
-				shown ? ";" : "", prof_name(best, name, sizeof(name)),
+				shown ? ";" : "", tgm_prof_name(best, name, sizeof(name)),
 				o[i].prof_n[best],
 				((o[i].prof_ns[best] / max_t(u32, o[i].prof_n[best], 1)) * rate >>
 				 16) / 1000,
@@ -252,8 +252,8 @@ static void stats_deadline(char *buf, unsigned int len)
 	tgm_deadline_stats(deadline, sizeof(deadline));
 	tgm_hold_stats(holds, sizeof(holds));
 	n = scnprintf(buf, len, "%s; %s; latency by channel:", deadline, holds);
-	mutex_lock(&live_lock);
-	list_for_each_entry(chan, &live_chans, live)
+	mutex_lock(&tgm_live_lock);
+	list_for_each_entry(chan, &tgm_live_chans, live)
 	{
 		if (!chan->tracked)
 			continue;
@@ -269,16 +269,16 @@ static void stats_deadline(char *buf, unsigned int len)
 		}
 		shown++;
 	}
-	mutex_unlock(&live_lock);
+	mutex_unlock(&tgm_live_lock);
 	if (!shown)
 		scnprintf(buf + n, len - n, " all at the minimum");
 }
 
 /* Run by each submission: the first one after a window's end logs it. */
-void stats_tick(void)
+void tgm_stats_tick(void)
 {
 	u64 now = nvxnu_nanotime();
-	u64 since = __atomic_load_n(&stats.since, __ATOMIC_RELAXED);
+	u64 since = __atomic_load_n(&tgm_stats.since, __ATOMIC_RELAXED);
 	u64 ms = 0;
 	u64 sum = 0;
 	u64 max = 0;
@@ -329,65 +329,65 @@ void stats_tick(void)
 	char sched[120];
 	char recov[80];
 
-	__atomic_fetch_add(&stats.submits, 1, __ATOMIC_RELAXED);
+	__atomic_fetch_add(&tgm_stats.submits, 1, __ATOMIC_RELAXED);
 	if (!since) {
-		if (__atomic_compare_exchange_n(&stats.since, &since, now, false, __ATOMIC_RELAXED,
-						__ATOMIC_RELAXED))
-			stats.cal_ptimer = nvkm_timer_read(gpu.device->timer);
+		if (__atomic_compare_exchange_n(&tgm_stats.since, &since, now, false,
+						__ATOMIC_RELAXED, __ATOMIC_RELAXED))
+			tgm_stats.cal_ptimer = nvkm_timer_read(tgm_gpu.device->timer);
 		return;
 	}
 	if (now - since < STATS_WINDOW_NS ||
-	    !__atomic_compare_exchange_n(&stats.since, &since, now, false, __ATOMIC_RELAXED,
+	    !__atomic_compare_exchange_n(&tgm_stats.since, &since, now, false, __ATOMIC_RELAXED,
 					 __ATOMIC_RELAXED))
 		return;
 	ms = (now - since) / 1000000;
 	/* nanoseconds per PTIMER unit over this window, 16.16 fixed point; the window's stamps were taken within it */
-	pt = nvkm_timer_read(gpu.device->timer);
-	cal = stats.cal_ptimer;
-	stats.cal_ptimer = pt;
+	pt = nvkm_timer_read(tgm_gpu.device->timer);
+	cal = tgm_stats.cal_ptimer;
+	tgm_stats.cal_ptimer = pt;
 	rate = cal && pt > cal ? ((now - since) << 16) / (pt - cal) : 1 << 16;
 #define PT_NS(v) (((v) * rate) >> 16)
-	submits = __atomic_exchange_n(&stats.submits, 0, __ATOMIC_RELAXED);
-	fences = __atomic_exchange_n(&stats.fences, 0, __ATOMIC_RELAXED);
-	imports = __atomic_exchange_n(&stats.imports, 0, __ATOMIC_RELAXED);
-	sum = __atomic_exchange_n(&stats.lat_sum, 0, __ATOMIC_RELAXED);
-	max = __atomic_exchange_n(&stats.lat_max, 0, __ATOMIC_RELAXED);
-	timed = __atomic_exchange_n(&stats.timed, 0, __ATOMIC_RELAXED);
-	present_stats(&presents, &ps, &pm);
-	idle = __atomic_exchange_n(&stats.idle, 0, __ATOMIC_RELAXED);
-	writer = __atomic_exchange_n(&stats.writer, 0, __ATOMIC_RELAXED);
-	allocs = __atomic_exchange_n(&stats.allocs, 0, __ATOMIC_RELAXED);
-	abytes = __atomic_exchange_n(&stats.alloc_bytes, 0, __ATOMIC_RELAXED);
-	ans = __atomic_exchange_n(&stats.alloc_ns, 0, __ATOMIC_RELAXED);
-	qs = __atomic_exchange_n(&stats.queue_sum, 0, __ATOMIC_RELAXED);
-	qm = __atomic_exchange_n(&stats.queue_max, 0, __ATOMIC_RELAXED);
-	es = __atomic_exchange_n(&stats.exec_sum, 0, __ATOMIC_RELAXED);
-	em = __atomic_exchange_n(&stats.exec_max, 0, __ATOMIC_RELAXED);
-	copies = __atomic_exchange_n(&stats.copies, 0, __ATOMIC_RELAXED);
-	cs = __atomic_exchange_n(&stats.copy_sum, 0, __ATOMIC_RELAXED);
-	cm = __atomic_exchange_n(&stats.copy_max, 0, __ATOMIC_RELAXED);
-	gaps = __atomic_exchange_n(&stats.gaps, 0, __ATOMIC_RELAXED);
-	gs = __atomic_exchange_n(&stats.gap_sum, 0, __ATOMIC_RELAXED);
-	gm = __atomic_exchange_n(&stats.gap_max, 0, __ATOMIC_RELAXED);
-	comp = __atomic_exchange_n(&stats.comp, 0, __ATOMIC_RELAXED);
-	cos = __atomic_exchange_n(&stats.comp_sum, 0, __ATOMIC_RELAXED);
-	com = __atomic_exchange_n(&stats.comp_max, 0, __ATOMIC_RELAXED);
-	behind = __atomic_exchange_n(&stats.behind, 0, __ATOMIC_RELAXED);
-	bs = __atomic_exchange_n(&stats.behind_sum, 0, __ATOMIC_RELAXED);
-	bm = __atomic_exchange_n(&stats.behind_max, 0, __ATOMIC_RELAXED);
+	submits = __atomic_exchange_n(&tgm_stats.submits, 0, __ATOMIC_RELAXED);
+	fences = __atomic_exchange_n(&tgm_stats.fences, 0, __ATOMIC_RELAXED);
+	imports = __atomic_exchange_n(&tgm_stats.imports, 0, __ATOMIC_RELAXED);
+	sum = __atomic_exchange_n(&tgm_stats.lat_sum, 0, __ATOMIC_RELAXED);
+	max = __atomic_exchange_n(&tgm_stats.lat_max, 0, __ATOMIC_RELAXED);
+	timed = __atomic_exchange_n(&tgm_stats.timed, 0, __ATOMIC_RELAXED);
+	tgm_present_stats(&presents, &ps, &pm);
+	idle = __atomic_exchange_n(&tgm_stats.idle, 0, __ATOMIC_RELAXED);
+	writer = __atomic_exchange_n(&tgm_stats.writer, 0, __ATOMIC_RELAXED);
+	allocs = __atomic_exchange_n(&tgm_stats.allocs, 0, __ATOMIC_RELAXED);
+	abytes = __atomic_exchange_n(&tgm_stats.alloc_bytes, 0, __ATOMIC_RELAXED);
+	ans = __atomic_exchange_n(&tgm_stats.alloc_ns, 0, __ATOMIC_RELAXED);
+	qs = __atomic_exchange_n(&tgm_stats.queue_sum, 0, __ATOMIC_RELAXED);
+	qm = __atomic_exchange_n(&tgm_stats.queue_max, 0, __ATOMIC_RELAXED);
+	es = __atomic_exchange_n(&tgm_stats.exec_sum, 0, __ATOMIC_RELAXED);
+	em = __atomic_exchange_n(&tgm_stats.exec_max, 0, __ATOMIC_RELAXED);
+	copies = __atomic_exchange_n(&tgm_stats.copies, 0, __ATOMIC_RELAXED);
+	cs = __atomic_exchange_n(&tgm_stats.copy_sum, 0, __ATOMIC_RELAXED);
+	cm = __atomic_exchange_n(&tgm_stats.copy_max, 0, __ATOMIC_RELAXED);
+	gaps = __atomic_exchange_n(&tgm_stats.gaps, 0, __ATOMIC_RELAXED);
+	gs = __atomic_exchange_n(&tgm_stats.gap_sum, 0, __ATOMIC_RELAXED);
+	gm = __atomic_exchange_n(&tgm_stats.gap_max, 0, __ATOMIC_RELAXED);
+	comp = __atomic_exchange_n(&tgm_stats.comp, 0, __ATOMIC_RELAXED);
+	cos = __atomic_exchange_n(&tgm_stats.comp_sum, 0, __ATOMIC_RELAXED);
+	com = __atomic_exchange_n(&tgm_stats.comp_max, 0, __ATOMIC_RELAXED);
+	behind = __atomic_exchange_n(&tgm_stats.behind, 0, __ATOMIC_RELAXED);
+	bs = __atomic_exchange_n(&tgm_stats.behind_sum, 0, __ATOMIC_RELAXED);
+	bm = __atomic_exchange_n(&tgm_stats.behind_max, 0, __ATOMIC_RELAXED);
 	tgm_sched_stats(sched, sizeof(sched));
 	tgm_recover_stats(recov, sizeof(recov));
-	lnew = __atomic_exchange_n(&stats.lock_new, 0, __ATOMIC_RELAXED);
-	lns = __atomic_exchange_n(&stats.lock_new_sum, 0, __ATOMIC_RELAXED);
-	lnm = __atomic_exchange_n(&stats.lock_new_max, 0, __ATOMIC_RELAXED);
-	lfree = __atomic_exchange_n(&stats.lock_free, 0, __ATOMIC_RELAXED);
-	lfs = __atomic_exchange_n(&stats.lock_free_sum, 0, __ATOMIC_RELAXED);
-	lfm = __atomic_exchange_n(&stats.lock_free_max, 0, __ATOMIC_RELAXED);
+	lnew = __atomic_exchange_n(&tgm_stats.lock_new, 0, __ATOMIC_RELAXED);
+	lns = __atomic_exchange_n(&tgm_stats.lock_new_sum, 0, __ATOMIC_RELAXED);
+	lnm = __atomic_exchange_n(&tgm_stats.lock_new_max, 0, __ATOMIC_RELAXED);
+	lfree = __atomic_exchange_n(&tgm_stats.lock_free, 0, __ATOMIC_RELAXED);
+	lfs = __atomic_exchange_n(&tgm_stats.lock_free_sum, 0, __ATOMIC_RELAXED);
+	lfm = __atomic_exchange_n(&tgm_stats.lock_free_max, 0, __ATOMIC_RELAXED);
 	tegra_gm20b_mc_errors(&mc_int, &mc_err, &mc_adr);
 	/* the GPU's share of the window spent on stamped user submissions and copies */
 	busy = PT_NS(es + cs) * 100 / (now - since);
 	clk_measure(clk, sizeof(clk));
-	scrub_stats(scrubbed, sizeof(scrubbed), ms);
+	tgm_scrub_stats(scrubbed, sizeof(scrubbed), ms);
 	/* formatted here and logged as one string: os_log drops a message whose scalar arguments outgrow its 256-byte buffer
 	 * (libkern/os/log.h OS_LOG_BUFFER_MAX_SIZE), which a string argument does not count against */
 	scnprintf(line, sizeof(line),
@@ -438,10 +438,10 @@ void stats_tick(void)
 		imports * 1000ULL / (ms ? ms : 1),
 		/* live_bytes is signed: an arithmetic shift keeps its sign. */
 		/* NOLINTNEXTLINE(bugprone-signed-bitwise) */
-		(long long)(__atomic_load_n(&stats.live_bytes, __ATOMIC_RELAXED) >> 10),
-		__atomic_load_n(&stats.live, __ATOMIC_RELAXED), allocs, abytes >> 10, ans / 1000,
-		nvxnu_pool_used_pages() >> (20u - PAGE_SHIFT), nvxnu_pool_size() >> 20,
-		__atomic_load_n(&compositor_pool, __ATOMIC_RELAXED) >> 20, pool_clients >> 20,
+		(long long)(__atomic_load_n(&tgm_stats.live_bytes, __ATOMIC_RELAXED) >> 10),
+		__atomic_load_n(&tgm_stats.live, __ATOMIC_RELAXED), allocs, abytes >> 10,
+		ans / 1000, nvxnu_pool_used_pages() >> (20u - PAGE_SHIFT), nvxnu_pool_size() >> 20,
+		__atomic_load_n(&tgm_compositor_pool, __ATOMIC_RELAXED) >> 20, pool_clients >> 20,
 		pool_orphan_bytes >> 20, pool_orphans, pool_comp_bytes >> 20, pool_comps,
 		pool_system_bytes >> 20, pool_systems, scrubbed, mc_int, mc_err, mc_adr,
 		lnew ? lns / lnew / 1000 : 0, lnm / 1000, lnew, lfree ? lfs / lfree / 1000 : 0,
@@ -450,8 +450,8 @@ void stats_tick(void)
 	switch_gpu_path_window(line, sizeof(line));
 	nvxnu_stats("tegra-gm20b: paths %s", line);
 	stats_exec_owners(line, sizeof(line), rate);
-	stats_mem(ms);
-	stats_waits(ms);
+	tgm_stats_mem(ms);
+	tgm_stats_waits(ms);
 	/* The IOSurface lock/unlock traps' cache maintenance this window (TegraGM20BCoherency.cpp): GPU-written imports
 	 * invalidated at a CPU lock, CPU-written imports cleaned at an unlock. */
 	{

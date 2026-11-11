@@ -96,7 +96,7 @@ static inline void stats_job_seqno(struct tgm_chan *chan, u32 seqno)
 	if (seqno != run->last)
 		return;
 	span = st->end.ns - run->start_pt;
-	stats_add(&stats.exec_sum, &stats.exec_max, span);
+	stats_add(&tgm_stats.exec_sum, &tgm_stats.exec_max, span);
 	__atomic_fetch_add(&chan->stat_exec_n, 1, __ATOMIC_RELAXED);
 	stats_add(&chan->stat_exec, &chan->stat_exec_max, span);
 	switch_gpu_job_end(&chan->stat_jobs, run);
@@ -120,8 +120,8 @@ static inline void stats_fences(struct tgm_chan *chan)
 	for (; (s32)(done - s) > 0; s++) {
 		i = (s + 1) % CHAN_NSTAMPS;
 		if (!chan->kernel) {
-			__atomic_fetch_add(&stats.fences, 1, __ATOMIC_RELAXED);
-			stats_add(&stats.lat_sum, &stats.lat_max,
+			__atomic_fetch_add(&tgm_stats.fences, 1, __ATOMIC_RELAXED);
+			stats_add(&tgm_stats.lat_sum, &tgm_stats.lat_max,
 				  now - READ_ONCE(chan->stat_sub_ns[i]));
 			stats_job_seqno(chan, s + 1);
 		}
@@ -139,25 +139,25 @@ static inline void stats_fences(struct tgm_chan *chan)
 		start = st->start.ns;
 		end = st->end.ns;
 		if (chan->kernel) {
-			__atomic_fetch_add(&stats.copies, 1, __ATOMIC_RELAXED);
-			stats_add(&stats.copy_sum, &stats.copy_max, end - start);
+			__atomic_fetch_add(&tgm_stats.copies, 1, __ATOMIC_RELAXED);
+			stats_add(&tgm_stats.copy_sum, &tgm_stats.copy_max, end - start);
 			gap = present_gap(s + 1, start);
 			if (gap != ~0ULL) {
-				__atomic_fetch_add(&stats.gaps, 1, __ATOMIC_RELAXED);
-				stats_add(&stats.gap_sum, &stats.gap_max, gap);
+				__atomic_fetch_add(&tgm_stats.gaps, 1, __ATOMIC_RELAXED);
+				stats_add(&tgm_stats.gap_sum, &tgm_stats.gap_max, gap);
 			}
 			continue;
 		}
-		__atomic_fetch_add(&stats.timed, 1, __ATOMIC_RELAXED);
-		stats_add(&stats.queue_sum, &stats.queue_max,
+		__atomic_fetch_add(&tgm_stats.timed, 1, __ATOMIC_RELAXED);
+		stats_add(&tgm_stats.queue_sum, &tgm_stats.queue_max,
 			  start - READ_ONCE(chan->stat_sub_ptimer[i]));
 		if (chan->high) {
-			__atomic_fetch_add(&stats.comp, 1, __ATOMIC_RELAXED);
-			stats_add(&stats.comp_sum, &stats.comp_max,
+			__atomic_fetch_add(&tgm_stats.comp, 1, __ATOMIC_RELAXED);
+			stats_add(&tgm_stats.comp_sum, &tgm_stats.comp_max,
 				  start - READ_ONCE(chan->stat_sub_ptimer[i]));
 			if (READ_ONCE(chan->stat_kick[i]) != TGM_KICK_CLEAR) {
-				__atomic_fetch_add(&stats.behind, 1, __ATOMIC_RELAXED);
-				stats_add(&stats.behind_sum, &stats.behind_max,
+				__atomic_fetch_add(&tgm_stats.behind, 1, __ATOMIC_RELAXED);
+				stats_add(&tgm_stats.behind_sum, &tgm_stats.behind_max,
 					  start - READ_ONCE(chan->stat_sub_ptimer[i]));
 			}
 		}
@@ -177,7 +177,7 @@ static inline void high_fenced(struct tgm_chan *chan, u32 from, u32 done)
 	volatile struct tgm_stamps *last = chan_stamps(chan, done);
 	struct switch_gpu_kicked_job jobs[SWITCH_GPU_JOBS];
 	u64 now = nvxnu_nanotime();
-	u64 now_pt = nvkm_timer_read(gpu.device->timer);
+	u64 now_pt = nvkm_timer_read(tgm_gpu.device->timer);
 	u64 sample = 0;
 	u64 end_pt = 0;
 	u32 n = switch_gpu_jobs_span(&chan->jobs, from + 1, done, jobs);
@@ -187,14 +187,14 @@ static inline void high_fenced(struct tgm_chan *chan, u32 from, u32 done)
 	tgm_deadline_clock(now, now_pt);
 	end_pt = stats_on() && last->end.payload == done ? last->end.ns : now_pt;
 	if (!chan->kernel && n && st->start.payload == from + 1)
-		sample = tgm_deadline_pt_ns(tgm_gpu_span(end_pt, st->start.ns, high_end_pt));
+		sample = tgm_deadline_pt_ns(tgm_gpu_span(end_pt, st->start.ns, tgm_high_end_pt));
 	if (!sample) {
 		for (i = 0; !biased && i < n; i++)
 			biased = jobs[i].app;
-		sample = tgm_gpu_span(now, n ? jobs[0].kick_ns : 0, high_end_ns);
+		sample = tgm_gpu_span(now, n ? jobs[0].kick_ns : 0, tgm_high_end_ns);
 	}
-	high_end_ns = now;
-	high_end_pt = end_pt;
+	tgm_high_end_ns = now;
+	tgm_high_end_pt = end_pt;
 	tgm_deadline_progress(sample, biased);
 	if (chan->kernel)
 		return;
@@ -213,11 +213,11 @@ static inline int present_source_lost(void)
 {
 	u32 i = 0;
 
-	if (!present.writers)
+	if (!tgm_present.writers)
 		return 0;
-	for (i = 0; i < present.waits; i++) {
-		if (present.wait[i].fence &&
-		    tgm_fence_lost(present.wait[i].fence, present.wait[i].seqno))
+	for (i = 0; i < tgm_present.waits; i++) {
+		if (tgm_present.wait[i].fence &&
+		    tgm_fence_lost(tgm_present.wait[i].fence, tgm_present.wait[i].seqno))
 			return 1;
 	}
 	return 0;
@@ -228,7 +228,7 @@ static inline int present_source_lost(void)
  * callback's return, so tgm_present_outstanding never answers 0 for a present whose completion is not delivered yet. */
 static inline void present_fenced(struct tgm_chan *chan)
 {
-	u32 pending = __atomic_load_n(&present.pending, __ATOMIC_ACQUIRE);
+	u32 pending = __atomic_load_n(&tgm_present.pending, __ATOMIC_ACQUIRE);
 	void (*done)(void *, int) = NULL;
 	void *arg = NULL;
 	u64 queued = 0;
@@ -236,29 +236,30 @@ static inline void present_fenced(struct tgm_chan *chan)
 
 	if (!pending || (s32)(tgm_chan_completed(chan) - pending) < 0)
 		return;
-	done = present.done;
-	arg = present.arg;
-	queued = present.queued;
+	done = tgm_present.done;
+	arg = tgm_present.arg;
+	queued = tgm_present.queued;
 	status = present_source_lost() ? TEGRA_SCANOUT_SOURCE_LOST : 0;
-	__atomic_fetch_add(&present.completing, 1, __ATOMIC_SEQ_CST);
-	if (!__atomic_compare_exchange_n(&present.pending, &pending, 0, false, __ATOMIC_SEQ_CST,
+	__atomic_fetch_add(&tgm_present.completing, 1, __ATOMIC_SEQ_CST);
+	if (!__atomic_compare_exchange_n(&tgm_present.pending, &pending, 0, false, __ATOMIC_SEQ_CST,
 					 __ATOMIC_RELAXED)) {
-		__atomic_fetch_sub(&present.completing, 1, __ATOMIC_SEQ_CST);
+		__atomic_fetch_sub(&tgm_present.completing, 1, __ATOMIC_SEQ_CST);
 		return;
 	}
-	nvxnu_work_cancel(present.deadline_work);
+	nvxnu_work_cancel(tgm_present.deadline_work);
 	if (stats_on()) {
-		__atomic_fetch_add(&present.presents, 1, __ATOMIC_RELAXED);
-		stats_add(&present.lat_sum, &present.lat_max, nvxnu_nanotime() - present.queued);
+		__atomic_fetch_add(&tgm_present.presents, 1, __ATOMIC_RELAXED);
+		stats_add(&tgm_present.lat_sum, &tgm_present.lat_max,
+			  nvxnu_nanotime() - tgm_present.queued);
 	}
 	tgm_deadline_presented(queued);
-	if (__atomic_load_n(&present.typed_pending, __ATOMIC_ACQUIRE)) {
-		present.completion_status = status;
-		nvxnu_work_schedule(present.completion_work);
+	if (__atomic_load_n(&tgm_present.typed_pending, __ATOMIC_ACQUIRE)) {
+		tgm_present.completion_status = status;
+		nvxnu_work_schedule(tgm_present.completion_work);
 		return;
 	}
 	done(arg, status);
-	__atomic_fetch_sub(&present.completing, 1, __ATOMIC_SEQ_CST);
+	__atomic_fetch_sub(&tgm_present.completing, 1, __ATOMIC_SEQ_CST);
 }
 
 /* stats, from stats_fences (interrupt pass) before present_fenced completes the present: PTIMER from the end of
@@ -271,11 +272,11 @@ static inline u64 present_gap(u32 seqno, u64 start)
 	u64 last = 0;
 	u32 i = 0;
 
-	if (present.stamped != seqno || !present.waits)
+	if (tgm_present.stamped != seqno || !tgm_present.waits)
 		return ~0ULL;
-	for (i = 0; i < present.waits; i++) {
-		volatile struct tgm_stamp *end = present.wait_end[i];
-		if (!end || end->payload != present.wait[i].seqno)
+	for (i = 0; i < tgm_present.waits; i++) {
+		volatile struct tgm_stamp *end = tgm_present.wait_end[i];
+		if (!end || end->payload != tgm_present.wait[i].seqno)
 			return ~0ULL;
 		if (end->ns > last)
 			last = end->ns;
@@ -287,27 +288,29 @@ static inline u64 present_gap(u32 seqno, u64 start)
 static inline void scrub_fenced(struct tgm_chan *chan)
 {
 	u32 done = tgm_chan_completed(chan);
-	u32 tail = scrub.tail;
-	u32 head = __atomic_load_n(&scrub.head, __ATOMIC_ACQUIRE);
+	u32 tail = tgm_scrub.tail;
+	u32 head = __atomic_load_n(&tgm_scrub.head, __ATOMIC_ACQUIRE);
 	u64 now = stats_on() ? nvxnu_nanotime() : 0;
 	u64 took = 0;
 	int freed = 0;
 
-	while (tail != head && (s32)(done - scrub.job[tail % SCRUB_JOBS].seqno) >= 0) {
+	while (tail != head && (s32)(done - tgm_scrub.job[tail % SCRUB_JOBS].seqno) >= 0) {
 		u32 slot = tail % SCRUB_JOBS;
-		nvxnu_pool_free_zeroed(scrub.job[slot].pa, scrub.job[slot].bytes);
-		__atomic_fetch_sub(&scrub.inflight, scrub.job[slot].bytes, __ATOMIC_RELAXED);
-        if (stats_on()) {
-            took = now - scrub.job[slot].queued;
-            __atomic_fetch_add(&scrub.n, 1, __ATOMIC_RELAXED);
-            __atomic_fetch_add(&scrub.bytes, scrub.job[slot].bytes, __ATOMIC_RELAXED);
-            stats_add(&scrub.ns, &scrub.max_ns, took);
-        }
-		__atomic_store_n(&scrub.tail, ++tail, __ATOMIC_RELEASE);
+		nvxnu_pool_free_zeroed(tgm_scrub.job[slot].pa, tgm_scrub.job[slot].bytes);
+		__atomic_fetch_sub(&tgm_scrub.inflight, tgm_scrub.job[slot].bytes,
+				   __ATOMIC_RELAXED);
+		if (stats_on()) {
+			took = now - tgm_scrub.job[slot].queued;
+			__atomic_fetch_add(&tgm_scrub.n, 1, __ATOMIC_RELAXED);
+			__atomic_fetch_add(&tgm_scrub.bytes, tgm_scrub.job[slot].bytes,
+					   __ATOMIC_RELAXED);
+			stats_add(&tgm_scrub.ns, &tgm_scrub.max_ns, took);
+		}
+		__atomic_store_n(&tgm_scrub.tail, ++tail, __ATOMIC_RELEASE);
 		freed = 1;
 	}
 	if (tail == head)
-		nvxnu_work_cancel(scrub.deadline);
+		nvxnu_work_cancel(tgm_scrub.deadline);
 	if (freed && nvxnu_pool_dirty_free_pages())
-		nvxnu_work_schedule(scrub.work);
+		nvxnu_work_schedule(tgm_scrub.work);
 }

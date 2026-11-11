@@ -46,7 +46,7 @@ static void chan_free(struct tgm_chan *chan)
 {
 	int i = 0;
 	if (chan->high || chan->tracked)
-		tgm_sched_forget(gpu.device, chan->chid);
+		tgm_sched_forget(tgm_gpu.device, chan->chid);
 	nvif_event_dtor(&chan->nonstall);
 	nvif_event_dtor(&chan->kill);
 	switch_gpu_timeline_close(chan->timeline);
@@ -64,7 +64,7 @@ static void chan_free(struct tgm_chan *chan)
 		kfree(m);
 	}
 	if (chan->ring)
-		dma_free_attrs(&gpu_pdev.dev, CHAN_BYTES, chan->ring, chan->ring_pa, 0);
+		dma_free_attrs(&tgm_gpu_pdev.dev, CHAN_BYTES, chan->ring, chan->ring_pa, 0);
 	kfree(chan->ring_pas);
 	kfree(chan);
 }
@@ -94,7 +94,7 @@ static void chan_timeslice(u32 chid, u32 value)
 	struct nvkm_gpuobj *inst = NULL;
 	unsigned long flags = 0;
 
-	nvkm_runl_foreach(runl, gpu.device->fifo)
+	nvkm_runl_foreach(runl, tgm_gpu.device->fifo)
 	{
 		nchan = nvkm_runl_chan_get_chid(runl, chid, &flags);
 		if (nchan) {
@@ -119,7 +119,7 @@ void tgm_chan_set_level(struct tgm_chan *chan, unsigned int level)
 	if (chan->kernel)
 		return;
 	if (high == chan->high) {
-		tgm_sched_level(gpu.device, chan->chid, level);
+		tgm_sched_level(tgm_gpu.device, chan->chid, level);
 		return;
 	}
 	if (high) {
@@ -134,11 +134,11 @@ void tgm_chan_set_level(struct tgm_chan *chan, unsigned int level)
 		chan->critical = 1;
 		/* chan_nonstall reads the job records once it sees high */
 		__atomic_store_n(&chan->high, 1, __ATOMIC_RELEASE);
-		tgm_sched_level(gpu.device, chan->chid, TGM_LEVEL_HIGH);
+		tgm_sched_level(tgm_gpu.device, chan->chid, TGM_LEVEL_HIGH);
 	} else {
 		WRITE_ONCE(chan->high, 0);
 		chan->critical = 0;
-		tgm_sched_level(gpu.device, chan->chid, level);
+		tgm_sched_level(tgm_gpu.device, chan->chid, level);
 	}
 	if (compositor_timeslice_on())
 		chan->timeslice_due = high ? RAMFC_TIMESLICE_HIGH : RAMFC_TIMESLICE_DEFAULT;
@@ -146,12 +146,12 @@ void tgm_chan_set_level(struct tgm_chan *chan, unsigned int level)
 
 /* chan_exec, before a submission is kicked: the host saves a channel's RAMFC when it leaves it, so a level change's
  * timeslice is written while the channel is idle and on neither GR nor the PBDMA. */
-void chan_timeslice_due(struct tgm_chan *chan)
+void tgm_chan_timeslice_due(struct tgm_chan *chan)
 {
 	u32 value = chan->timeslice_due;
 
 	if (!value || (s32)(tgm_chan_completed(chan) - chan->submitted) < 0 ||
-	    tgm_sched_loaded(gpu.device, chan->chid))
+	    tgm_sched_loaded(tgm_gpu.device, chan->chid))
 		return;
 	chan_timeslice(chan->chid, value);
 	chan->timeslice_due = 0;
@@ -185,7 +185,7 @@ static int chan_new(struct tgm_vm *vm, const void *vm_owner, volatile uint32_t *
 	u32 bind_count = switch_gpu_channel_bind_words(bind_words, classes, copy_only);
 	int ret = 0;
 
-	if (gpu.stage < 2)
+	if (tgm_gpu.stage < 2)
 		return -ENODEV;
 	/* BoFree's zombies wait for the claimant's channels only: a space is addressed by its claimant's alone */
 	if (vm->owner != vm_owner)
@@ -208,7 +208,7 @@ static int chan_new(struct tgm_vm *vm, const void *vm_owner, volatile uint32_t *
 	chan->gov_done = chan->submitted;
 	chan->progress_done = chan->submitted;
 	chan->seen_done = chan->submitted;
-	chan->ring = dma_alloc_attrs(&gpu_pdev.dev, CHAN_BYTES, &chan->ring_pa, GFP_KERNEL,
+	chan->ring = dma_alloc_attrs(&tgm_gpu_pdev.dev, CHAN_BYTES, &chan->ring_pa, GFP_KERNEL,
 				     DMA_ATTR_WRITE_COMBINE);
 	chan->ring_pas = kcalloc(npages, sizeof(u64), GFP_KERNEL);
 	chan->ring_mem = kzalloc(sizeof(*chan->ring_mem), GFP_KERNEL);
@@ -219,14 +219,14 @@ static int chan_new(struct tgm_vm *vm, const void *vm_owner, volatile uint32_t *
 	for (i = 0; i < npages; i++)
 		chan->ring_pas[i] = chan->ring_pa + ((u64)i << PAGE_SHIFT);
 
-	gpu_lock();
+	tgm_gpu_lock();
 	locked = stats_on() ? nvxnu_nanotime() : 0;
 	{
 		struct nvif_mem_ram_v0 rargs = {.version = 0, .dma = (dma_addr_t *)chan->ring_pas};
 		chan->ring_mem->bytes = CHAN_BYTES;
-		ret = nvif_mem_ctor_type(&gpu.mmu, "chanRing", NVIF_CLASS_MEM_GF100, gpu.mem_type,
-					 PAGE_SHIFT, CHAN_BYTES, &rargs, sizeof(rargs),
-					 &chan->ring_mem->mem);
+		ret = nvif_mem_ctor_type(&tgm_gpu.mmu, "chanRing", NVIF_CLASS_MEM_GF100,
+					 tgm_gpu.mem_type, PAGE_SHIFT, CHAN_BYTES, &rargs,
+					 sizeof(rargs), &chan->ring_mem->mem);
 		if (ret) {
 			kfree(chan->ring_mem);
 			chan->ring_mem = NULL;
@@ -245,7 +245,7 @@ static int chan_new(struct tgm_vm *vm, const void *vm_owner, volatile uint32_t *
 		goto fail;
 
 	/* nouveau_channel_ctor(): GPFIFO channel on the GR runlist, in this VM, GPFIFO after the pushbuf */
-	runm = nvif_fifo_runlist(&gpu.dev, NV_DEVICE_HOST_RUNLIST_ENGINES_GR);
+	runm = nvif_fifo_runlist(&tgm_gpu.dev, NV_DEVICE_HOST_RUNLIST_ENGINES_GR);
 	args.chan.version = 0;
 	args.chan.namelen = 32;
 	args.chan.runlist = runm ? __ffs64(runm) : 0;
@@ -260,7 +260,7 @@ static int chan_new(struct tgm_vm *vm, const void *vm_owner, volatile uint32_t *
 	args.chan.huserd = 0;
 	args.chan.ouserd = 0;
 	snprintf((char *)args.chan.name, 32, "%s", chan->owner); /* nvkm names it in its reports */
-	ret = nvif_object_ctor(&gpu.dev.object, "chan", 0, MAXWELL_CHANNEL_GPFIFO_A, &args,
+	ret = nvif_object_ctor(&tgm_gpu.dev.object, "chan", 0, MAXWELL_CHANNEL_GPFIFO_A, &args,
 			       sizeof(args), &chan->user);
 	chan->chid = args.chan.chid;
 	if (!ret && critical && tgm_all_clients() && compositor_timeslice_on())
@@ -284,7 +284,7 @@ static int chan_new(struct tgm_vm *vm, const void *vm_owner, volatile uint32_t *
 	}
 	host->version = 0;
 	host->type = NVIF_CHAN_EVENT_V0_KILLED;
-	ret = nvif_event_ctor(&chan->user, "chanKilled", args.chan.chid, chan_killed, false,
+	ret = nvif_event_ctor(&chan->user, "chanKilled", args.chan.chid, tgm_chan_killed, false,
 			      &kargs.ev, sizeof(kargs), &chan->kill);
 	if (!ret)
 		ret = nvif_event_allow(&chan->kill);
@@ -303,19 +303,20 @@ static int chan_new(struct tgm_vm *vm, const void *vm_owner, volatile uint32_t *
 				 (u8 *)chan->ring + CHAN_PUSH_BYTES + CHAN_GPFIFO_BYTES,
 				 chan->ring_va + CHAN_PUSH_BYTES + CHAN_GPFIFO_BYTES);
 	if (stats_on()) {
-		__atomic_fetch_add(&stats.lock_new, 1, __ATOMIC_RELAXED);
-		stats_add(&stats.lock_new_sum, &stats.lock_new_max, nvxnu_nanotime() - locked);
+		__atomic_fetch_add(&tgm_stats.lock_new, 1, __ATOMIC_RELAXED);
+		stats_add(&tgm_stats.lock_new_sum, &tgm_stats.lock_new_max,
+			  nvxnu_nanotime() - locked);
 	}
-	mutex_unlock(&gpu.lock);
+	mutex_unlock(&tgm_gpu.lock);
 	if (ret) {
-		gpu_lock();
+		tgm_gpu_lock();
 		goto fail;
 	}
 
 	push = &chan->chan.push;
 	ret = chan_push_wait(chan, bind_count);
 	if (ret) {
-		gpu_lock();
+		tgm_gpu_lock();
 		goto fail;
 	}
 	for (i = 0; i < bind_count; i++)
@@ -325,36 +326,36 @@ static int chan_new(struct tgm_vm *vm, const void *vm_owner, volatile uint32_t *
 	chan->app = vm_owner != NULL;
 	ret = switch_gpu_timeline_init();
 	if (ret) {
-		gpu_lock();
+		tgm_gpu_lock();
 		goto fail;
 	}
-	mutex_lock(&live_lock);
-	chan->id = ++live_ids;
+	mutex_lock(&tgm_live_lock);
+	chan->id = ++tgm_live_ids;
 	chan->timeline = switch_gpu_timeline_create(chan->id, chan->fence_cpu);
 	if (!chan->timeline) {
-		mutex_unlock(&live_lock);
+		mutex_unlock(&tgm_live_lock);
 		ret = -ENOMEM;
-		gpu_lock();
+		tgm_gpu_lock();
 		goto fail;
 	}
-	list_add_tail(&chan->live, &live_chans);
-	mutex_unlock(&live_lock);
+	list_add_tail(&chan->live, &tgm_live_chans);
+	mutex_unlock(&tgm_live_lock);
 	*pchan = chan;
 	return 0;
 
 fail:
-	mutex_unlock(&gpu.lock);
+	mutex_unlock(&tgm_gpu.lock);
 	chan_free(chan);
 	return ret;
 }
 
-/* The gate: its subchannel binds are kicked after gpu.lock is dropped. */
+/* The gate: its subchannel binds are kicked after tgm_gpu.lock is dropped. */
 int tgm_chan_new(struct tgm_vm *vm, const void *vm_owner, volatile uint32_t *fence_cpu,
 		 uint64_t fence_gpu_va, const char *owner, int critical, struct tgm_chan **pchan)
 {
 	int ret = 0;
 
-	gate_enter();
+	tgm_gate_enter();
 	ret = chan_new(vm, vm_owner, fence_cpu, fence_gpu_va, owner, critical, 0, pchan);
 	gate_leave();
 	return ret;
@@ -364,7 +365,7 @@ int tgm_chan_new_copy(struct tgm_vm *vm, const void *vm_owner, volatile uint32_t
 		      uint64_t fence_gpu_va, const char *owner, int critical,
 		      struct tgm_chan **pchan)
 {
-	gate_enter();
+	tgm_gate_enter();
 	const int ret = chan_new(vm, vm_owner, fence_cpu, fence_gpu_va, owner, critical, 1, pchan);
 	gate_leave();
 	return ret;
@@ -377,9 +378,9 @@ static void chan_abandon(struct tgm_chan *chan)
 
 	if (chan->kernel)
 		tgm_chan_hung(chan, "channel destroy", chan->submitted, NSEC_PER_SEC);
-	mutex_lock(&live_lock);
-	chan_isolate(chan, HANG_REPORT "destroyed with its work still running 1 s later", now);
-	mutex_unlock(&live_lock);
+	mutex_lock(&tgm_live_lock);
+	tgm_chan_isolate(chan, HANG_REPORT "destroyed with its work still running 1 s later", now);
+	mutex_unlock(&tgm_live_lock);
 	for (;;) {
 		u32 seq = nvxnu_wake_seq();
 		if (READ_ONCE(chan->error))
@@ -401,7 +402,7 @@ void tgm_chan_del(struct tgm_chan **pchan)
 		return;
 	waiter = tgm_chan_waiter(chan);
 	if (chan->tracked)
-		tgm_hold_track(gpu.device, chan->chid, 0);
+		tgm_hold_track(tgm_gpu.device, chan->chid, 0);
 	/* bounded wait for idle (CONTRACT.md: <= 1 s), then nvkm tears the channel down (preempt + runlist) */
 	end = nvxnu_nanotime() + NSEC_PER_SEC;
 	for (;;) {
@@ -414,41 +415,43 @@ void tgm_chan_del(struct tgm_chan **pchan)
 	}
 	/* tearing down a channel that still runs would free pages the GPU is using: its owner is gone, so it is killed
 	 * as a hung client's is, and the teardown waits for that */
-	if (gpu.stage >= 3 && !chan->error && (s32)(tgm_chan_completed(chan) - chan->submitted) < 0)
+	if (tgm_gpu.stage >= 3 && !chan->error &&
+	    (s32)(tgm_chan_completed(chan) - chan->submitted) < 0)
 		chan_abandon(chan);
 	/* the idle clock's count: what it finished, and (a dead channel) what it never will */
 	idle_retire(chan, chan->submitted);
-	mutex_lock(&live_lock);
+	mutex_lock(&tgm_live_lock);
 	list_del(&chan->live);
 	order_forget(chan);
-	mutex_unlock(&live_lock);
-	gpu_lock();
+	mutex_unlock(&tgm_live_lock);
+	tgm_gpu_lock();
 	held = stats_on() ? nvxnu_nanotime() : 0;
 	chan_free(chan);
 	if (stats_on()) {
-		__atomic_fetch_add(&stats.lock_free, 1, __ATOMIC_RELAXED);
-		stats_add(&stats.lock_free_sum, &stats.lock_free_max, nvxnu_nanotime() - held);
+		__atomic_fetch_add(&tgm_stats.lock_free, 1, __ATOMIC_RELAXED);
+		stats_add(&tgm_stats.lock_free_sum, &tgm_stats.lock_free_max,
+			  nvxnu_nanotime() - held);
 	}
-	mutex_unlock(&gpu.lock);
+	mutex_unlock(&tgm_gpu.lock);
 	*pchan = NULL;
-	nvxnu_word_wake(&waiter_words[waiter]);
+	nvxnu_word_wake(&tgm_waiter_words[waiter]);
 }
-struct fences_state fences;
-u64 fences_pas
+struct fences_state tgm_fence_pages;
+u64 tgm_fences_pas
 	[TGM_FENCE_GPU_PAGES]; /* the range's GPU pages, for the address spaces that map all of it */
 
-/* live_lock held: the fence range, made once and kept */
+/* tgm_live_lock held: the fence range, made once and kept */
 static int fences_alloc(void)
 {
 	u32 i = 0;
 
-	if (fences.va)
+	if (tgm_fence_pages.va)
 		return 0;
-	fences.va = tgm_pool_alloc(TGM_FENCE_BYTES, 0, &fences.pa);
-	if (!fences.va)
+	tgm_fence_pages.va = tgm_pool_alloc(TGM_FENCE_BYTES, 0, &tgm_fence_pages.pa);
+	if (!tgm_fence_pages.va)
 		return -ENOMEM;
 	for (i = 0; i < TGM_FENCE_GPU_PAGES; i++)
-		fences_pas[i] = fences.pa + i * PAGE_SIZE;
+		tgm_fences_pas[i] = tgm_fence_pages.pa + i * PAGE_SIZE;
 	return 0;
 }
 
@@ -458,21 +461,21 @@ int tgm_fence_page_get(volatile uint32_t **va, uint64_t *pa)
 	u32 n = 0;
 	int ret = -ENOMEM;
 
-	mutex_lock(&live_lock);
+	mutex_lock(&tgm_live_lock);
 	for (n = 0; !fences_alloc() && n < TGM_FENCE_USER_PAGES; n++) {
-		i = (fences.next + n) % TGM_FENCE_USER_PAGES;
-		if (__atomic_load_n(&fences.used, __ATOMIC_ACQUIRE) & BIT_ULL(i))
+		i = (tgm_fence_pages.next + n) % TGM_FENCE_USER_PAGES;
+		if (__atomic_load_n(&tgm_fence_pages.used, __ATOMIC_ACQUIRE) & BIT_ULL(i))
 			continue;
-		__atomic_fetch_or(&fences.used, BIT_ULL(i), __ATOMIC_ACQ_REL);
-		__atomic_store_n(&fences.refs[i], 1, __ATOMIC_RELEASE);
-		fences.next = i + 1;
-		memset((u8 *)fences.va + i * TGM_FENCE_SLOT, 0, PAGE_SIZE);
-		*va = (volatile uint32_t *)((u8 *)fences.va + i * TGM_FENCE_SLOT);
-		*pa = fences.pa + i * TGM_FENCE_SLOT;
+		__atomic_fetch_or(&tgm_fence_pages.used, BIT_ULL(i), __ATOMIC_ACQ_REL);
+		__atomic_store_n(&tgm_fence_pages.refs[i], 1, __ATOMIC_RELEASE);
+		tgm_fence_pages.next = i + 1;
+		memset((u8 *)tgm_fence_pages.va + i * TGM_FENCE_SLOT, 0, PAGE_SIZE);
+		*va = (volatile uint32_t *)((u8 *)tgm_fence_pages.va + i * TGM_FENCE_SLOT);
+		*pa = tgm_fence_pages.pa + i * TGM_FENCE_SLOT;
 		ret = 0;
 		break;
 	}
-	mutex_unlock(&live_lock);
+	mutex_unlock(&tgm_live_lock);
 	return ret;
 }
 
@@ -483,17 +486,19 @@ void tgm_fence_page_put(const volatile uint32_t *va)
 
 void switch_gpu_fence_hold(const volatile uint32_t *va)
 {
-	uintptr_t off = (uintptr_t)va - (uintptr_t)fences.va;
+	uintptr_t off = (uintptr_t)va - (uintptr_t)tgm_fence_pages.va;
 	if (va && off / TGM_FENCE_SLOT < TGM_FENCE_USER_PAGES)
-		__atomic_add_fetch(&fences.refs[off / TGM_FENCE_SLOT], 1, __ATOMIC_ACQ_REL);
+		__atomic_add_fetch(&tgm_fence_pages.refs[off / TGM_FENCE_SLOT], 1,
+				   __ATOMIC_ACQ_REL);
 }
 
 void switch_gpu_fence_put(const volatile uint32_t *va)
 {
-	uintptr_t off = (uintptr_t)va - (uintptr_t)fences.va;
+	uintptr_t off = (uintptr_t)va - (uintptr_t)tgm_fence_pages.va;
 	if (va && off / TGM_FENCE_SLOT < TGM_FENCE_USER_PAGES &&
-	    !__atomic_sub_fetch(&fences.refs[off / TGM_FENCE_SLOT], 1, __ATOMIC_ACQ_REL))
-		__atomic_fetch_and(&fences.used, ~BIT_ULL(off / TGM_FENCE_SLOT), __ATOMIC_ACQ_REL);
+	    !__atomic_sub_fetch(&tgm_fence_pages.refs[off / TGM_FENCE_SLOT], 1, __ATOMIC_ACQ_REL))
+		__atomic_fetch_and(&tgm_fence_pages.used, ~BIT_ULL(off / TGM_FENCE_SLOT),
+				   __ATOMIC_ACQ_REL);
 }
 
 uint64_t switch_gpu_chan_identity(struct tgm_chan *chan)
@@ -525,13 +530,13 @@ int tgm_fence_kernel(unsigned int which, volatile uint32_t **va, uint64_t *page_
 
 	if (which >= TGM_FENCE_KERNEL_CHANNELS)
 		return -EINVAL;
-	mutex_lock(&live_lock);
+	mutex_lock(&tgm_live_lock);
 	ret = fences_alloc();
-	mutex_unlock(&live_lock);
+	mutex_unlock(&tgm_live_lock);
 	if (ret)
 		return ret;
-	*va = (volatile uint32_t *)((u8 *)fences.va + off);
-	*page_pa = fences.pa + (off & ~(PAGE_SIZE - 1));
+	*va = (volatile uint32_t *)((u8 *)tgm_fence_pages.va + off);
+	*page_pa = tgm_fence_pages.pa + (off & ~(PAGE_SIZE - 1));
 	*offset = (u32)(off & (PAGE_SIZE - 1));
 	return 0;
 }
@@ -541,37 +546,37 @@ int tgm_fence_kernel(unsigned int which, volatile uint32_t **va, uint64_t *page_
  * channels, and Metal's order between their command buffers is the order the process submits them in. tgm_chan_order
  * (TegraGM20BABI.h method 14) keeps it on the GPU, with no CPU wait: it queues semaphore ACQUIRE_GEQs (acquire switch on, as
  * the present's) on the fence words of the task's other channels, which the waiting channel's next tgm_chan_exec kicks as an
- * entry of their own ahead of its pushes. Every address space maps the whole fence pool read-only for them (fences_map, from
+ * entry of their own ahead of its pushes. Every address space maps the whole fence pool read-only for them (tgm_fences_map, from
  * tgm_vm_new), as the present's does. Each acquire names a seqno already submitted when it was queued (AfterTask: the other
  * channels' last; BeforeTask: one up to the channel's last), and a channel's entries run in order, so no two submissions can
  * wait for each other. A source channel's teardown waits for it to go idle and drops what was queued on it (order_forget),
  * so no acquire is left on a fence page handed out again; one already kicked has passed by then. A waiter stuck on one is a
  * hang like any other (tgm_chan_check_progress), and its line names the acquire (tgm_chan_hung). */
 static DEFINE_MUTEX(fences_mem_lock);
-struct tgm_mem *fences_mem; /* the whole pool as GPU memory, made once and kept */
+struct tgm_mem *tgm_fences_mem; /* the whole pool as GPU memory, made once and kept */
 
-int fences_map(struct tgm_vm *vm)
+int tgm_fences_map(struct tgm_vm *vm)
 {
 	int ret = 0;
 
 	mutex_lock(&fences_mem_lock);
-	if (!fences_mem) {
+	if (!tgm_fences_mem) {
 		/* the pool exists from the first connection on; make sure it does now */
-		mutex_lock(&live_lock);
+		mutex_lock(&tgm_live_lock);
 		ret = fences_alloc();
-		mutex_unlock(&live_lock);
+		mutex_unlock(&tgm_live_lock);
 		if (!ret)
-			ret = tgm_mem_new(vm, fences_pas, TGM_FENCE_GPU_PAGES, &fences_mem);
+			ret = tgm_mem_new(vm, tgm_fences_pas, TGM_FENCE_GPU_PAGES, &tgm_fences_mem);
 	}
 	mutex_unlock(&fences_mem_lock);
 	if (!ret)
-		ret = vm_kmap(vm, fences_mem, TGM_FENCE_BYTES, 1, &vm->fences_va);
+		ret = tgm_vm_kmap_raw(vm, tgm_fences_mem, TGM_FENCE_BYTES, 1, &vm->fences_va);
 	return ret;
 }
 
 void tgm_chan_set_group(struct tgm_chan *chan, const void *group)
 {
-	mutex_lock(&live_lock);
+	mutex_lock(&tgm_live_lock);
 	chan->group = group;
-	mutex_unlock(&live_lock);
+	mutex_unlock(&tgm_live_lock);
 }

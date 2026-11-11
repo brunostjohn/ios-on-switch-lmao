@@ -8,9 +8,9 @@
  * busy, gk104_runq_idle), the channel it serves (0x40120) and the method/data it is on (0x400c0/0x400c4: subchannel
  * 18:16, method 13:2, as gf100_runq_intr decodes them; a NV906F semaphore method there means a semaphore acquire that is
  * not satisfied); PMC_INTR_0; and the memory controller's last refused access (MC_INTSTATUS, MC_ERR_STATUS, MC_ERR_ADR). */
-void chan_describe(struct tgm_chan *chan, char *buf, unsigned int len)
+void tgm_chan_describe(struct tgm_chan *chan, char *buf, unsigned int len)
 {
-	struct nvkm_device *device = gpu.device;
+	struct nvkm_device *device = tgm_gpu.device;
 	volatile u32 *userd = chan->user.map.ptr;
 	const u32 eng = nvkm_rd32(device, 0x002640);
 	u32 mc_int = 0;
@@ -43,7 +43,7 @@ void tgm_chan_hung(struct tgm_chan *chan, const char *who, uint32_t seqno, uint6
 	char state[TGM_HANG_LINE];
 	char order[64] = "";
 	const struct tgm_order *w = &chan->waited;
-	chan_describe(chan, state, sizeof(state));
+	tgm_chan_describe(chan, state, sizeof(state));
 	/* still waiting for another channel of its task (tgm_chan_order) */
 	if (w->cpu && (s32)(READ_ONCE(*w->cpu) - w->seqno) < 0) {
 		scnprintf(order, sizeof(order), ", order wait on chan %llu fence %u (at %u)", w->id,
@@ -86,7 +86,7 @@ int tgm_all_clients(void)
 {
 	return 1; /* every process that asks gets a device */
 }
-struct iso_state iso;
+struct iso_state tgm_iso;
 
 static u32 fault_code(const char *report)
 {
@@ -123,7 +123,7 @@ void tgm_fence_kill_clear(volatile uint32_t *fence_cpu)
 /* nvkm killed the channel (nvkm_chan_error, from its recovery work). Before M3, M3 reads chan->error. From M3 on: an
  * isolated client channel is dead (see above); any other panics, with the report that started it if the interrupt pass
  * did not panic first. */
-int chan_killed(struct nvif_event *event, void *repv, u32 repc)
+int tgm_chan_killed(struct nvif_event *event, void *repv, u32 repc)
 {
 	struct tgm_chan *chan = container_of(event, struct tgm_chan, kill);
 	const char *report = chan->fault[0] ? chan->fault : nvxnu_gpu_errors();
@@ -131,12 +131,12 @@ int chan_killed(struct nvif_event *event, void *repv, u32 repc)
 
 	(void)repv;
 	(void)repc;
-	if (gpu.stage >= 3 && (chan->kernel || !tgm_all_clients())) {
-		chan_describe(chan, state, sizeof(state));
+	if (tgm_gpu.stage >= 3 && (chan->kernel || !tgm_all_clients())) {
+		tgm_chan_describe(chan, state, sizeof(state));
 		nvxnu_panic("tegra-gm20b: channel killed by nvkm recovery after \"%s\": %s",
 			    nvxnu_gpu_errors(), state);
 	}
-	if (gpu.stage < 3) {
+	if (tgm_gpu.stage < 3) {
 		if (!chan->error)
 			chan->error = 3;
 		return NVIF_EVENT_DROP;
@@ -198,7 +198,7 @@ static int chan_marked(u32 chid)
 	unsigned long flags = 0;
 	int marked = 0;
 
-	nvkm_runl_foreach(runl, gpu.device->fifo)
+	nvkm_runl_foreach(runl, tgm_gpu.device->fifo)
 	{
 		nchan = nvkm_runl_chan_get_chid(runl, chid, &flags);
 		if (!nchan)
@@ -241,7 +241,7 @@ static void chan_recover(u32 chid)
 	struct nvkm_chan *nchan = NULL;
 	unsigned long flags = 0;
 
-	nvkm_runl_foreach(runl, gpu.device->fifo)
+	nvkm_runl_foreach(runl, tgm_gpu.device->fifo)
 	{
 		nchan = nvkm_runl_chan_get_chid(runl, chid, &flags);
 		if (nchan) {
@@ -252,8 +252,8 @@ static void chan_recover(u32 chid)
 	}
 }
 
-/* live_lock held */
-void chan_isolate(struct tgm_chan *chan, const char *report, u64 now)
+/* tgm_live_lock held */
+void tgm_chan_isolate(struct tgm_chan *chan, const char *report, u64 now)
 {
 	if (chan->isolating || chan->error)
 		return;
@@ -262,13 +262,13 @@ void chan_isolate(struct tgm_chan *chan, const char *report, u64 now)
 	tgm_hold_drop(chan->chid);
 	strscpy(chan->fault, report, sizeof(chan->fault));
 	chan_recover(chan->chid);
-	iso.until = now + TGM_ISOLATE_NS;
-	nvxnu_work_schedule_after(iso.deadline, TGM_ISOLATE_NS);
+	tgm_iso.until = now + TGM_ISOLATE_NS;
+	nvxnu_work_schedule_after(tgm_iso.deadline, TGM_ISOLATE_NS);
 }
 
 /* From the GPU interrupt work loop after a pass with error reports (nvxnu_errors_fatal's filter): 1 if they stay with
  * client channels, whose kills are then under way; 0 to panic. */
-int errors_contained(const char *errors)
+int tgm_errors_contained(const char *errors)
 {
 	struct tgm_chan *named[8];
 	struct tgm_chan *chan = NULL;
@@ -280,7 +280,7 @@ int errors_contained(const char *errors)
 	int chid = 0;
 	u64 now = nvxnu_nanotime();
 
-	mutex_lock(&live_lock);
+	mutex_lock(&tgm_live_lock);
 	while (contained) {
 		p = next_chid(p, &chid);
 		if (!p)
@@ -288,7 +288,7 @@ int errors_contained(const char *errors)
 		if (chid == -2)
 			continue; /* "ch" with no number: not an attribution */
 		found = NULL;
-		list_for_each_entry(chan, &live_chans, live)
+		list_for_each_entry(chan, &tgm_live_chans, live)
 		{
 			if ((int)chan->chid == chid) {
 				found = chan;
@@ -303,7 +303,7 @@ int errors_contained(const char *errors)
 			named[n++] = found;
 	}
 	/* channels nvkm put into recovery itself, not yet dead or isolated */
-	list_for_each_entry(chan, &live_chans, live)
+	list_for_each_entry(chan, &tgm_live_chans, live)
 	{
 		if (!contained || chan->error || chan->isolating || !chan_marked(chan->chid))
 			continue;
@@ -315,27 +315,27 @@ int errors_contained(const char *errors)
 			named[n++] = chan;
 		}
 	}
-	if (!n && (!iso.until || now >= iso.until) && !only_fifo_errors(errors))
+	if (!n && (!tgm_iso.until || now >= tgm_iso.until) && !only_fifo_errors(errors))
 		contained = 0;
 	for (i = 0; contained && i < n; i++)
-		chan_isolate(named[i], errors, now);
-	mutex_unlock(&live_lock);
+		tgm_chan_isolate(named[i], errors, now);
+	mutex_unlock(&tgm_live_lock);
 	return contained;
 }
 
-void iso_deadline(void *arg)
+void tgm_iso_deadline(void *arg)
 {
 	struct tgm_chan *chan = NULL;
 	char state[TGM_HANG_LINE];
 	u64 now = nvxnu_nanotime();
 
 	(void)arg;
-	mutex_lock(&live_lock);
-	list_for_each_entry(chan, &live_chans, live)
+	mutex_lock(&tgm_live_lock);
+	list_for_each_entry(chan, &tgm_live_chans, live)
 	{
 		if (chan->isolating && !READ_ONCE(chan->error) &&
 		    now - chan->isolated_ns >= TGM_ISOLATE_NS) {
-			chan_describe(chan, state, sizeof(state));
+			tgm_chan_describe(chan, state, sizeof(state));
 			nvxnu_panic("tegra-gm20b: GPU error in %s not recovered %llu ms after it "
 				    "(\"%s\"): %s",
 				    chan->owner,
@@ -343,12 +343,12 @@ void iso_deadline(void *arg)
 				    chan->fault, state);
 		}
 	}
-	if (iso.until && now >= iso.until)
-		iso.until = 0;
-	mutex_unlock(&live_lock);
+	if (tgm_iso.until && now >= tgm_iso.until)
+		tgm_iso.until = 0;
+	mutex_unlock(&tgm_live_lock);
 }
 
-/* live_lock held. Internal fences move the fence word without an interrupt: a move the interrupt pass has not seen
+/* tgm_live_lock held. Internal fences move the fence word without an interrupt: a move the interrupt pass has not seen
  * counts as progress now, when a check first sees it. */
 static u64 chan_progress_ns(struct tgm_chan *chan, u64 now)
 {
@@ -372,7 +372,7 @@ static int chan_stuck(struct tgm_chan *chan, u64 now)
 			 READ_ONCE(chan->submitted), since + unheld, since);
 }
 
-/* Whether the channel's fence moved within the stuck time, or its GET did since hang_recover last read it (a long job
+/* Whether the channel's fence moved within the stuck time, or its GET did since tgm_hang_recover last read it (a long job
  * whose methods the engine still takes moves GET, not the fence). USERD's GP_GET and GET are what the host wrote back. */
 static int chan_moving(struct tgm_chan *chan, u64 now)
 {
@@ -392,9 +392,9 @@ static int chan_moving(struct tgm_chan *chan, u64 now)
  * reported. The channel to blame (TegraGM20BRecover.h tgm_hang_blame) is the first stuck one of what the engines and
  * PBDMAs are on (a context switch that does not finish blames the context nvkm's own recovery would), the channel of its
  * task `late` still waits on (tgm_chan_order), and `late`. A client's is killed as a faulting client's is, and the waits
- * it held up go on. live_lock held. */
+ * it held up go on. tgm_live_lock held. */
 #if TGM_STATS
-/* live_lock held: the blamed channel's own order wait and the late one's progress, as a line of its
+/* tgm_live_lock held: the blamed channel's own order wait and the late one's progress, as a line of its
  * own (TegraGM20BHangDecode.h tgm_hang_detail) */
 static void hang_detail(struct tgm_chan *blame, struct tgm_chan *late, u64 now)
 {
@@ -430,7 +430,7 @@ static void hang_detail(struct tgm_chan *blame, struct tgm_chan *late, u64 now)
 }
 
 #endif
-enum tgm_hang hang_recover(struct tgm_chan *late, const char *who, u32 seqno, u64 waited_ns)
+enum tgm_hang tgm_hang_recover(struct tgm_chan *late, const char *who, u32 seqno, u64 waited_ns)
 {
 	struct tgm_hang_candidate c[8] = {};
 	struct tgm_chan *chans[8] = {};
@@ -448,9 +448,9 @@ enum tgm_hang hang_recover(struct tgm_chan *late, const char *who, u32 seqno, u6
 	int b = 0;
 	int progress = 0;
 
-	if (gpu.stage < 3 || !iso.deadline)
+	if (tgm_gpu.stage < 3 || !tgm_iso.deadline)
 		return TGM_HANG_STUCK;
-	resident = tgm_recover_suspects(gpu.device, suspects, ARRAY_SIZE(suspects));
+	resident = tgm_recover_suspects(tgm_gpu.device, suspects, ARRAY_SIZE(suspects));
 	for (n = 0; n < resident; n++)
 		chans[n] = live_by(0, suspects[n]);
 	/* the late one's order acquires, source by source, up to two hops, then the late one itself last */
@@ -493,7 +493,7 @@ enum tgm_hang hang_recover(struct tgm_chan *late, const char *who, u32 seqno, u6
 			if (j != i && chans[j] && chans[j]->id == w->id)
 				c[i].waits = (u8)(j + 1);
 	}
-	list_for_each_entry(chan, &live_chans, live)
+	list_for_each_entry(chan, &tgm_live_chans, live)
 	{
 		if (now - chan_progress_ns(chan, now) < TGM_STUCK_NS)
 			progress = 1;
@@ -502,7 +502,7 @@ enum tgm_hang hang_recover(struct tgm_chan *late, const char *who, u32 seqno, u6
 	if (b < 0 || chans[b]->isolating)
 		return verdict;
 	blame = chans[b];
-	chan_describe(blame, state, sizeof(state));
+	tgm_chan_describe(blame, state, sizeof(state));
 	scnprintf(report, sizeof(report), HANG_REPORT "%s waited %llu ms for %s fence %u; %s", who,
 		  waited_ns / 1000000, late->owner, seqno, state);
 	nvxnu_log(
@@ -512,8 +512,8 @@ enum tgm_hang hang_recover(struct tgm_chan *late, const char *who, u32 seqno, u6
 #if TGM_STATS
 	hang_detail(blame, late, now);
 #endif
-	chan_isolate(blame, report, now);
-	tgm_recover_fault(gpu.device, blame->chid);
+	tgm_chan_isolate(blame, report, now);
+	tgm_recover_fault(tgm_gpu.device, blame->chid);
 	return verdict;
 }
 
@@ -525,26 +525,26 @@ enum tgm_ctxsw tgm_ctxsw_decide(int chid)
 	u64 now = nvxnu_nanotime();
 	enum tgm_ctxsw verdict = TGM_CTXSW_RESET;
 
-	mutex_lock(&live_lock);
+	mutex_lock(&tgm_live_lock);
 	chan = live_by(0, chid);
 	if (chan) {
 		verdict = tgm_ctxsw_verdict(1, READ_ONCE(chan->error) != 0, chan->kernel,
 					    chan_stuck(chan, now));
 		if (verdict == TGM_CTXSW_FATAL) {
-			chan_describe(chan, state, sizeof(state));
+			tgm_chan_describe(chan, state, sizeof(state));
 			nvxnu_panic("tegra-gm20b: context switch timed out on %s's channel: %s",
 				    chan->owner, state);
 		}
 		if (verdict == TGM_CTXSW_KILL && !chan->isolating) {
-			chan_describe(chan, state, sizeof(state));
+			tgm_chan_describe(chan, state, sizeof(state));
 			scnprintf(report, sizeof(report), "CTXSW_TIMEOUT: %s", state);
 			nvxnu_log("tegra-gm20b: context switch timed out, recovering %s (channel "
 				  "%u): %s\n",
 				  chan->owner, chan->chid, state);
-			chan_isolate(chan, report, now);
+			tgm_chan_isolate(chan, report, now);
 		}
 	}
-	mutex_unlock(&live_lock);
+	mutex_unlock(&tgm_live_lock);
 	return verdict;
 }
 
@@ -552,9 +552,9 @@ void tgm_chan_stalled(struct tgm_chan *chan, const char *who, uint32_t seqno, ui
 {
 	enum tgm_hang verdict = TGM_HANG_STUCK;
 
-	mutex_lock(&live_lock);
-	verdict = hang_recover(chan, who, seqno, waited_ns);
-	mutex_unlock(&live_lock);
+	mutex_lock(&tgm_live_lock);
+	verdict = tgm_hang_recover(chan, who, seqno, waited_ns);
+	mutex_unlock(&tgm_live_lock);
 	if (verdict == TGM_HANG_STUCK)
 		tgm_chan_hung(chan, who, seqno, waited_ns);
 }

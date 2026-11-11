@@ -25,7 +25,7 @@ struct {
 	uint64_t service_until, last_busy;
 	u64 kicked, retired;
 	void *drop_w, *raise_w;
-} idle;
+} tgm_idle;
 
 uint64_t now, last_swap;
 unsigned scheduled;
@@ -53,8 +53,8 @@ class GpuDeadline : public ::testing::Test
 protected:
 	void SetUp() override
 	{
-		idle = {};
-		idle.on = 1;
+		tgm_idle = {};
+		tgm_idle.on = 1;
 		now = 1000000000;
 		last_swap = 0;
 		scheduled = 0;
@@ -64,20 +64,20 @@ protected:
 TEST_F(GpuDeadline, ClampsServiceWindowAndPreservesExistingHold)
 {
 	tegra_gm20b_perf_deadline_ns(now + 1000000000);
-	EXPECT_EQ(idle.service_until, now + 20000000);
+	EXPECT_EQ(tgm_idle.service_until, now + 20000000);
 	tegra_gm20b_perf_deadline_ns(now + 5000000);
-	EXPECT_EQ(idle.service_until, now + 20000000);
-	EXPECT_EQ(idle.last_busy, now);
+	EXPECT_EQ(tgm_idle.service_until, now + 20000000);
+	EXPECT_EQ(tgm_idle.last_busy, now);
 	EXPECT_EQ(scheduled, 0u);
 }
 
 TEST_F(GpuDeadline, IdleAndRacingDropScheduleOnlyExistingRaiseWork)
 {
-	idle.low = 1;
+	tgm_idle.low = 1;
 	tegra_gm20b_perf_deadline_ns(now + 1000);
 	EXPECT_EQ(scheduled, 1u);
-	idle.low = 0;
-	idle.dropping = 1;
+	tgm_idle.low = 0;
+	tgm_idle.dropping = 1;
 	tegra_gm20b_perf_deadline_ns(now + 2000);
 	EXPECT_EQ(scheduled, 2u);
 }
@@ -85,14 +85,14 @@ TEST_F(GpuDeadline, IdleAndRacingDropScheduleOnlyExistingRaiseWork)
 TEST_F(GpuDeadline, ExpiredAndDisabledRequestsDoNothing)
 {
 	tegra_gm20b_perf_deadline_ns(now);
-	idle.on = 0;
+	tgm_idle.on = 0;
 	tegra_gm20b_perf_deadline_ns(now + 1000);
-	EXPECT_EQ(idle.service_until, 0u);
-	EXPECT_EQ(idle.last_busy, 0u);
+	EXPECT_EQ(tgm_idle.service_until, 0u);
+	EXPECT_EQ(tgm_idle.last_busy, 0u);
 	EXPECT_EQ(scheduled, 0u);
 }
 
-// One SubmitAddress carrying `batches` work batches, kicked as chan_fence_job kicks it: every seqno it releases.
+// One SubmitAddress carrying `batches` work batches, kicked as tgm_chan_fence_job kicks it: every seqno it releases.
 u32 kick(u32 submitted, u32 batches)
 {
 	std::vector<tgm_push> pushes(batches, tgm_push{0x100000, 16, 0, 0, 1, 0});
@@ -106,7 +106,7 @@ u32 kick(u32 submitted, u32 batches)
 void idleFor(u64 ns)
 {
 	now += ns;
-	idle.last_busy = now - ns;
+	tgm_idle.last_busy = now - ns;
 }
 
 TEST_F(GpuDeadline, AJobsInternalFencesAllRetireAndTheClockDropsOnce)
@@ -123,7 +123,7 @@ TEST_F(GpuDeadline, AJobsInternalFencesAllRetireAndTheClockDropsOnce)
 	idleFor(IDLE_DROP_NS);
 	tegra_gm20b_idle_tick();
 	EXPECT_EQ(scheduled, 1u);
-	EXPECT_EQ(idle.dropping, 1);
+	EXPECT_EQ(tgm_idle.dropping, 1);
 	tegra_gm20b_idle_tick();
 	EXPECT_EQ(scheduled, 1u);
 }
@@ -165,11 +165,11 @@ TEST_F(GpuDeadline, TeardownAndALatePassRetireADeadChannelOnce)
 	idle_fenced(&chan);
 	idle_retire(&chan, last);
 	EXPECT_EQ(idle_in_flight(), 0u);
-	chan.completed = last;  // chan_killed releases the whole sequence
+	chan.completed = last;  // tgm_chan_killed releases the whole sequence
 	idle_fenced(&chan);
 	idle_retire(&chan, last);
 	EXPECT_EQ(idle_in_flight(), 0u);
-	EXPECT_EQ(idle.retired, 5u);
+	EXPECT_EQ(tgm_idle.retired, 5u);
 }
 
 TEST_F(GpuDeadline, TheSequenceWrapsWithoutLosingCount)

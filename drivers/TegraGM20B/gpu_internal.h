@@ -3,7 +3,7 @@
  * GM20B bring-up and the per-connection GPU model, on top of the vendored nouveau nvkm/nvif code.
  * Mirrors what nouveau's DRM driver does for the same jobs:
  *   bring-up      nouveau_platform.c (gm20b_platform_data) + nvkm_device_tegra_new() + nvkm_device_init(), the latter
- *                 as m2_device_init() (no fini pass, GPCPLL up before L2/FB/PMU, as nvgpu)
+ *                 as tgm_m2_device_init() (no fini pass, GPCPLL up before L2/FB/PMU, as nvgpu)
  *   address space nouveau_uvmm.c VM_INIT (RAW vmm, kernel range [1<<39, 1<<40)) and VM_BIND (raw get/map/unmap)
  *   memory        nvkm_mem_new_host() with a caller-owned DMA address array (nvif_mem_ram_v0.dma)
  *   channels      nouveau_chan.c nouveau_channel_ctor()/_init() + nvif/chan906f.c GPFIFO/pushbuf helpers
@@ -38,7 +38,7 @@
 #include <engine/gr/gf100.h> /* gf100_gr_zbc_color_get, _depth_get: tgm_zbc_add */
 #include <subdev/acr.h>
 #include <subdev/clk.h>
-#include <subdev/clk/priv.h> /* nvkm_clk_func: clk_raise() runs calc/prog as gm20b_clk_init() does */
+#include <subdev/clk/priv.h> /* nvkm_clk_func: tgm_clk_raise() runs calc/prog as gm20b_clk_init() does */
 #include <subdev/clk/gk20a.h> /* gk20a_clk.parent_rate: clk_measure()'s reference */
 #include <subdev/devinit.h>
 #include <subdev/fb.h>
@@ -91,7 +91,7 @@
 #include "../TegraDisplayFlip/SwitchFrameTimeline.h"
 #include "../TegraDisplayFlip/TegraScanoutCopy.h"
 #pragma GCC visibility push(hidden)
-extern struct platform_device gpu_pdev;
+extern struct platform_device tgm_gpu_pdev;
 
 struct gpu_state {
 	int stage;
@@ -102,20 +102,20 @@ struct gpu_state {
 	struct nvif_mmu mmu;
 	int mem_type;
 	struct mutex lock; /* serialises every nvif call (nouveau holds cli->mutex likewise) */
-	int railed; /* rail-gated (TegraGM20BRail.h): powered down, under gpu.lock; the gate shut */
+	int railed; /* rail-gated (TegraGM20BRail.h): powered down, under tgm_gpu.lock; the gate shut */
 };
-extern struct gpu_state gpu;
+extern struct gpu_state tgm_gpu;
 
 struct rail_ups_state {
 	u32 display, demand;
 	const void *first_site;
 	u64 cpu_zeroed;
 };
-extern struct rail_ups_state rail_ups;
-extern u64 stamp_last;
+extern struct rail_ups_state tgm_rail_ups;
+extern u64 tgm_stamp_last;
 
-void rail_up_locked(const void *site);
-noinline void gpu_lock(void);
+void tgm_rail_up_locked(const void *site);
+noinline void tgm_gpu_lock(void);
 
 /* Fence waits by channel (nouveau_fence_chan.waiting): a fence's nonstall interrupt wakes the waiters of the channels
  * whose fence moved, not every thread in a GPU wait. nvkm runs every channel's nonstall handler on each nonstall
@@ -123,22 +123,22 @@ noinline void gpu_lock(void);
  * by id; a waiter of another channel on the same word wakes, finds its fence unchanged and sleeps again. Static: a
  * waiter may still sleep on its channel's word while the channel is destroyed. */
 #define TGM_WAITERS 128
-extern volatile u32 waiter_words[];
-extern u64 waiter_woken_ns[];
+extern volatile u32 tgm_waiter_words[];
+extern u64 tgm_waiter_woken_ns[];
 
 struct wstat_state {
 	u32 wakes, slept, woken, other, deadline;
-	u32 jobs; /* kicked (chan_fence_job), every channel */
+	u32 jobs; /* kicked (tgm_chan_fence_job), every channel */
 	u64 lat_sum, lat_max;
 	u64 stall, nonstall; /* the interrupt passes at the window's start */
 };
-extern struct wstat_state wstat;
-extern struct tgm_gate sc7_gate;
-extern struct mutex gate_lock;
-void gate_enter(void);
-int clk_raise(char *line, unsigned int len);
-int m2_device_init(struct nvkm_device *device, const char **at);
-extern u64 cpu_zeroes, cpu_zero_bytes;
+extern struct wstat_state tgm_wstat;
+extern struct tgm_gate tgm_sc7_gate;
+extern struct mutex tgm_gate_lock;
+void tgm_gate_enter(void);
+int tgm_clk_raise(char *line, unsigned int len);
+int tgm_m2_device_init(struct nvkm_device *device, const char **at);
+extern u64 tgm_cpu_zeroes, tgm_cpu_zero_bytes;
 
 static void scrub_kick(void);
 
@@ -148,7 +148,7 @@ struct tgm_vm {
 	struct list_head kmaps;
 	u64 fences_va; /* every connection's fence page, read-only (tgm_chan_order's acquires), 0: not mapped */
 	struct list_head
-		imports; /* struct tgm_import: first pages of the host imports made in it (live_lock) */
+		imports; /* struct tgm_import: first pages of the host imports made in it (tgm_live_lock) */
 	int imports_lost;         /* one could not be recorded: taken as importing every page */
 	struct tgm_tlb_space tlb; /* GPU-ordered maps (TegraGM20BTlb.h) */
 	const void *owner;        /* tgm_vm_claim: the connection whose channels alone address it */
@@ -182,16 +182,17 @@ struct tgm_mem {
 	bool big_views_ready;
 };
 
-int vm_kmap(struct tgm_vm *vm, struct tgm_mem *mem, uint64_t bytes, int read_only, uint64_t *va);
-int fences_map(struct tgm_vm *vm);
+int tgm_vm_kmap_raw(struct tgm_vm *vm, struct tgm_mem *mem, uint64_t bytes, int read_only,
+		    uint64_t *va);
+int tgm_fences_map(struct tgm_vm *vm);
 
 struct pfence_state {
 	void *va;
 	u64 pa;
 	struct tgm_mem *mem;
 };
-extern struct pfence_state pfence;
-int pfence_get(struct tgm_vm *vm);
+extern struct pfence_state tgm_pfence;
+int tgm_pfence_get(struct tgm_vm *vm);
 
 static int stats_on(void);
 int tgm_vm_map_raw(struct tgm_vm *vm, uint64_t va, uint64_t range, struct tgm_mem *mem,
@@ -256,18 +257,18 @@ struct tgm_chan {
 	int high; /* the compositor's or the present's: high on the runlist (TegraGM20BSched.h) */
 	int isolating; /* client fault isolation: its error or hang was taken as its own, the kill is under way */
 	u64 isolated_ns;
-	struct list_head live; /* live_chans, for tegra_gm20b_sync_for_cpu */
+	struct list_head live; /* tgm_live_chans, for tegra_gm20b_sync_for_cpu */
 	u64 id;
 	char owner[17];  /* process that created it */
 	char fault[200]; /* the nvkm report it was isolated for */
 	u64 fault_va;    /* error 1: the VA its MMU fault report names */
 	u64 submit_ns;   /* when the last fence was kicked */
-	u64 busy_ns;     /* hang_recover: when it last went from idle to work pending */
+	u64 busy_ns;     /* tgm_hang_recover: when it last went from idle to work pending */
 	u64 progress_ns; /* and when its fence was last seen moving: by the interrupt pass (to progress_done) or a check */
 	/* the hold's time on it (tgm_hold_held_ns) at the later of those two */
 	u64 progress_held;
 	u32 progress_done;
-	u32 seen_done; /* a hang check's last look at the fence word (chan_progress_ns; live_lock) */
+	u32 seen_done; /* a hang check's last look at the fence word (chan_progress_ns; tgm_live_lock) */
 	u32 stall_done; /* tgm_chan_check_progress: completed seqno first seen stalled, and when */
 	u64 stall_ns, stall_held;
 	int app;     /* a user channel: the hold may take it from its first submission */
@@ -307,17 +308,17 @@ struct tgm_chan {
 	u64 prof_dn[TGM_PC_COUNT],
 		prof_sdn[TGM_PC_COUNT]; /* draws, and draws shaded per sample, by class */
 	/* tgm_chan_order: its connection's task (tgm_chan_set_group), the acquires queued for its next submission
-	 * (live_lock), and the last one kicked (a hang's line names it while it has not passed) */
+	 * (tgm_live_lock), and the last one kicked (a hang's line names it while it has not passed) */
 	const void *group;
 	u32 norder;
 	struct tgm_order order[TGM_ORDER_MAX];
 	struct tgm_order waited;
 	struct tgm_hang_log hang;
-	/* hang_recover: its GPFIFO and pushbuffer GET as last read, and when they last moved */
+	/* tgm_hang_recover: its GPFIFO and pushbuffer GET as last read, and when they last moved */
 	u64 get_seen, get_ns;
 	u32 hang_strikes, hang_seen; /* tgm_hang_confirm's state between hang checks */
 #if TGM_STATS
-	u64 killed_ns; /* chan_killed's time, for a fault's line (TegraGM20BUserClient.cpp) */
+	u64 killed_ns; /* tgm_chan_killed's time, for a fault's line (TegraGM20BUserClient.cpp) */
 	/* this window's SubmitAddress calls on it, by phase (tgm_stats_submit), for its owner */
 	u64 stat_submit_ns[TGM_SUBMIT_PHASES], stat_submit_total, stat_submit_max;
 	u32 stat_submits;
@@ -325,17 +326,17 @@ struct tgm_chan {
 };
 
 #define CHAN_SCRUB 2 /* the pool scrubber's */
-extern struct list_head live_chans;
-extern struct mutex live_lock;
-extern u64 live_ids;
-void chan_describe(struct tgm_chan *chan, char *buf, unsigned int len);
+extern struct list_head tgm_live_chans;
+extern struct mutex tgm_live_lock;
+extern u64 tgm_live_ids;
+void tgm_chan_describe(struct tgm_chan *chan, char *buf, unsigned int len);
 
 #define TGM_HANG_NS (2 * NSEC_PER_SEC)
 
 /* client fault isolation:
  * With every process on the GPU, one app's bad shader or stale address must not take the system down. nvgpu's policy is
  * taken (gk20a_fifo_recover, gk20a_gr_isr: the faulting channel gets an error and only it is torn down): after an
- * interrupt pass in which nvkm reported errors (xnu_glue.cpp gpuInterrupt), errors_contained() takes the channels the
+ * interrupt pass in which nvkm reported errors (xnu_glue.cpp gpuInterrupt), tgm_errors_contained() takes the channels the
  * reports name ("on channel N [" for MMU faults, "ch N" for PBDMA errors and GR exceptions) and those nvkm put into
  * recovery in that pass without naming them. A context-switch timeout (a shader that never ends, a switch that never
  * drains) is a tick recover.c waits out until the engine's channel is stuck (tgm_ctxsw_decide), then recovers as nvkm does
@@ -343,27 +344,27 @@ void chan_describe(struct tgm_chan *chan, char *buf, unsigned int len);
  * every other scheduler error is recover.c's as well. If each is a client channel
  * (the compositor's too: Core Animation makes its resources again after an error, as on iOS), the errors are that
  * client's: nvkm's recovery (nvkm_runl_rc_cgrp: runlist blocked and preempted, the channel disabled and removed, an
- * engine still on it reset; nvkm starts it itself for MMU faults, errors_contained() for the rest, which nvkm only
- * reports) kills each one, chan_killed() marks it dead and releases its fence word so no acquire or CPU wait stays on
+ * engine still on it reset; nvkm starts it itself for MMU faults, tgm_errors_contained() for the rest, which nvkm only
+ * reports) kills each one, tgm_chan_killed() marks it dead and releases its fence word so no acquire or CPU wait stays on
  * it, and the GPU goes on. A hang with no error report (a wait that ran out) is recovered the same way by
- * hang_recover(), from what the GPU itself is stuck on. Everything else panics: an error on a kernel channel, a report
+ * tgm_hang_recover(), from what the GPU itself is stuck on. Everything else panics: an error on a kernel channel, a report
  * naming no channel or an unknown one (one naming none is taken as fallout while a recovery is under way), a kill not
  * done TGM_ISOLATE_NS after its report, and a hang on a kernel channel or with nothing progressing (tgm_chan_hung). */
 #define TGM_ISOLATE_NS (500 * NSEC_PER_MSEC)
 
 struct iso_state {
-	void *deadline; /* iso_deadline */
-	u64 until;      /* end of the recovery window, 0: none (live_lock) */
+	void *deadline; /* tgm_iso_deadline */
+	u64 until;      /* end of the recovery window, 0: none (tgm_live_lock) */
 };
-extern struct iso_state iso;
+extern struct iso_state tgm_iso;
 
-/* CONTRACT.md error codes: 1 MMU fault, 2 GR exception, 3 host error, 4 timeout (a hang, hang_recover) */
+/* CONTRACT.md error codes: 1 MMU fault, 2 GR exception, 3 host error, 4 timeout (a hang, tgm_hang_recover) */
 #define HANG_REPORT "hang: "
-int chan_killed(struct nvif_event *event, void *repv, u32 repc);
-void chan_isolate(struct tgm_chan *chan, const char *report, u64 now);
-int errors_contained(const char *errors);
-void iso_deadline(void *arg);
-enum tgm_hang hang_recover(struct tgm_chan *late, const char *who, u32 seqno, u64 waited_ns);
+int tgm_chan_killed(struct nvif_event *event, void *repv, u32 repc);
+void tgm_chan_isolate(struct tgm_chan *chan, const char *report, u64 now);
+int tgm_errors_contained(const char *errors);
+void tgm_iso_deadline(void *arg);
+enum tgm_hang tgm_hang_recover(struct tgm_chan *late, const char *who, u32 seqno, u64 waited_ns);
 
 struct stats_state {
 	u64 since;      /* start of the current window, 0 before the first submission */
@@ -383,15 +384,15 @@ struct stats_state {
 	 * app on the GPU (tgm_sched_kicked: preempted, mid-switch or deferred), PTIMER units */
 	u32 comp, behind;
 	u64 comp_sum, comp_max, behind_sum, behind_max;
-	/* gpu.lock held by a channel's setup (chan_new) and teardown (chan_free): every VmBind, BoAlloc, BoImport and BoFree
+	/* tgm_gpu.lock held by a channel's setup (chan_new) and teardown (chan_free): every VmBind, BoAlloc, BoImport and BoFree
 	 * of every process, the compositor's too, waits for it; nanoseconds, the sum counts them */
 	u64 lock_new_sum, lock_new_max, lock_free_sum, lock_free_max;
 	u32 lock_new, lock_free;
 	s64 live_bytes; /* host imports */
 	s32 live;
 };
-extern struct stats_state stats;
-extern u64 compositor_pool;
+extern struct stats_state tgm_stats;
+extern u64 tgm_compositor_pool;
 
 struct frame_gpu_state {
 	u64 first, last, exec_ns;
@@ -399,19 +400,19 @@ struct frame_gpu_state {
 	u32 imports, binds, allocs, frees;
 	u64 import_ns, bind_ns, alloc_ns, clean_ns, clean_bytes;
 };
-extern struct frame_gpu_state frame_gpu;
-void stats_waits(u64 ms);
-void stats_mem(u64 ms);
+extern struct frame_gpu_state tgm_frame_gpu;
+void tgm_stats_waits(u64 ms);
+void tgm_stats_mem(u64 ms);
 
 /* Submit-to-fence latency (CPU clock), seen from the fence's nonstall interrupt (every channel's handler runs on each
  * one), and from the GPU's stamps (PTIMER): queue = the GPU started the submission - the kernel kicked it, exec = the
  * GPU finished it (L2 flush included) - started it. The present channel's stamps time its copy instead
  * (present_gap: and the gap before it). */
 static u64 present_gap(u32 seqno, u64 start);
-const char *prof_name(unsigned int c, char *buf, unsigned int len);
+const char *tgm_prof_name(unsigned int c, char *buf, unsigned int len);
 
-void present_stats(u32 *presents, u64 *sum, u64 *max);
-void scrub_stats(char *buf, unsigned int len, u64 window_ms);
+void tgm_present_stats(u32 *presents, u64 *sum, u64 *max);
+void tgm_scrub_stats(char *buf, unsigned int len, u64 window_ms);
 
 /* The stats line's GPU clock, every window: the rate the GPCPLL is programmed for (nvkm_clk_read: its M/N/PL registers),
  * whether the GPU runs from it (SEL_VCO bit 0, GPC2CLK_OUT's bypass divider 0 = 1:1), and the rate GPC 0's clock
@@ -420,14 +421,14 @@ void scrub_stats(char *buf, unsigned int len, u64 window_ms);
  * count the previous window started and starts the next, so nothing waits for it. A measured rate below the programmed
  * one would show a slowdown or gating the PLL's registers do not: with it the line prints THERM's idle slowdown factor
  * (CLK_SLOWDOWN_0 bits 21:16, 0 = off; gm20b_clk_init clears it) and GR's engine clock gating mode (THERM_GATE_CTRL(0)
- * bits 1:0: 0 run, 1 auto, 2 stop). Called by one submission at a time (the window's winner, stats_tick). */
+ * bits 1:0: 0 run, 1 auto, 2 stop). Called by one submission at a time (the window's winner, tgm_stats_tick). */
 #define TRIM_GPC0_NCGPCCLK_CFG 0x134124
 #define TRIM_GPC0_NCGPCCLK_CNT 0x134128
 #define NCGPCCLK_CFG_RESET 0x01000000u
 #define NCGPCCLK_CFG_ENABLE 0x00100000u
 #define NCGPCCLK_CFG_WRITE_EN 0x00010000u
 #define NCGPCCLK_CYCLES 800u
-void stats_tick(void);
+void tgm_stats_tick(void);
 #define IDLE_LOG_NS (10ULL * 1000000000ULL)
 #define GPCPLL_COEFF_R 0x137004 /* M 7:0, N 15:8, PL 21:16 */
 
@@ -447,16 +448,16 @@ struct idle_state {
     u64 log_start, low_since, low_ns, raise_sum, raise_max;
     u32 drops, raises, hinted;
 };
-extern struct idle_state idle;
-int clock_ceiling_restore(void);
-u64 idle_raise(void);
-void idle_start(void);
-extern u64 high_end_ns, high_end_pt;
+extern struct idle_state tgm_idle;
+int tgm_clock_ceiling_restore(void);
+u64 tgm_idle_raise(void);
+void tgm_idle_start(void);
+extern u64 tgm_high_end_ns, tgm_high_end_pt;
 
 /* nouveau_fence_wait_uevent_handler(): a fence's NON_STALL_INTERRUPT arrived; wake the fence waiters. */
 static void present_fenced(struct tgm_chan *chan);
 static void scrub_fenced(struct tgm_chan *chan);
-void chan_timeslice_due(struct tgm_chan *chan);
+void tgm_chan_timeslice_due(struct tgm_chan *chan);
 
 static int chan_push_wait(struct tgm_chan *chan, u32 push_nr);
 
@@ -484,11 +485,11 @@ struct fences_state {
 	u32 refs[TGM_FENCE_USER_PAGES];
 	u32 next;
 };
-extern struct fences_state fences;
-extern u64 fences_pas[];
-extern struct tgm_mem *fences_mem;
-int fences_map(struct tgm_vm *vm);
-int order_waits(struct tgm_chan *chan);
+extern struct fences_state tgm_fence_pages;
+extern u64 tgm_fences_pas[];
+extern struct tgm_mem *tgm_fences_mem;
+int tgm_fences_map(struct tgm_vm *vm);
+int tgm_order_waits(struct tgm_chan *chan);
 
 /* CPU readers of GPU-written memory:
  * The GPU is not IO-coherent; its sysmem PTEs are volatile (no GPU L2 lines), so a submission's writes are in DRAM once
@@ -508,10 +509,10 @@ int order_waits(struct tgm_chan *chan);
 
 /* Push dwords chan_fence() may write, at most */
 #define CHAN_FENCE_DWORDS 48
-int chan_wait_ready(struct tgm_chan *chan, u32 gpfifo_nr, u32 push_nr);
-u32 chan_fence_job(struct tgm_chan *chan, int external, u32 first, u32 next);
-int backing_dependencies(struct tgm_chan *chan, const struct switch_gpu_backing_token *tokens,
-			 u32 count, int emit);
+int tgm_chan_wait_ready(struct tgm_chan *chan, u32 gpfifo_nr, u32 push_nr);
+u32 tgm_chan_fence_job(struct tgm_chan *chan, int external, u32 first, u32 next);
+int tgm_backing_dependencies(struct tgm_chan *chan, const struct switch_gpu_backing_token *tokens,
+			     u32 count, int emit);
 
 /* GPU present (TegraDisplayFlip/TegraScanoutCopy.h):
  * The display's swap path hands a frame (an IOSurface, pitch-linear BGRA) to the GPU instead
@@ -570,14 +571,14 @@ struct present_state {
 	u64 lat_sum, lat_max;
 	u64 recovered; /* when the present in flight last found a recovery under way, or work still progressing */
 };
-extern struct present_state present;
-void present_stats(u32 *presents, u64 *sum, u64 *max);
+extern struct present_state tgm_present;
+void tgm_present_stats(u32 *presents, u64 *sum, u64 *max);
 
 /* pool scrub: the copy engine zeroes pool pages:
  * The CPU would spend 0.3 s of every boot zeroing the pool at M1 (256 MiB through the write-combined aperture), and a
  * thread call's memset 4.5 ms per 16 MiB of freed pool BO. So its pages start dirty (shim nvxnu_pool_init) and the
  * GPU zeroes them: a kernel channel (CHAN_SCRUB) in an address space of its own, which maps
- * the whole pool once (volatile, at scrub.pool_va), runs MAXWELL_DMA_COPY_A fills of remapped constant 0 (as Mesa's
+ * the whole pool once (volatile, at tgm_scrub.pool_va), runs MAXWELL_DMA_COPY_A fills of remapped constant 0 (as Mesa's
  * nvk_cmd_fill_memory_ce and M3), each range followed by the kernel fence (chan_fence: WFI, FB flush, L2 flush of
  * dirty lines, then the semaphore release and the nonstall interrupt), so the zeros are in DRAM before the range goes
  * back clean (nvxnu_pool_free_zeroed) from that interrupt's pass. Nothing waits for it on the CPU: until then a range is
@@ -613,10 +614,10 @@ struct scrub_state {
 	/* stats: this window's ranges zeroed, their bytes and queue-to-done time (ns) */
 	u64 n, bytes, ns, max_ns;
 };
-extern struct scrub_state scrub;
-void scrub_open(void);
-void scrub_stats(char *buf, unsigned int len, u64 window_ms);
-void rail_up_locked(const void *site);
+extern struct scrub_state tgm_scrub;
+void tgm_scrub_open(void);
+void tgm_scrub_stats(char *buf, unsigned int len, u64 window_ms);
+void tgm_rail_up_locked(const void *site);
 #pragma GCC visibility pop
 
 #include "SwitchGpuActiveIrq.h"

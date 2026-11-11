@@ -416,7 +416,7 @@ void AGXDeviceUserClient::scanPushes(const tgm_push *pushes, uint32_t count, tgm
 		char v[kFields][24];
 		for (size_t k = 0; k < kFields; k++)
 			snprintf(v[k], sizeof(v[k]), "%llu.%llu", per[k] / n, per[k] * 10 / n % 10);
-		// one string argument: os_log drops a message whose scalar arguments outgrow its buffer (gpu.c stats_tick)
+		// one string argument: os_log drops a message whose scalar arguments outgrow its buffer (gpu.c tgm_stats_tick)
 		snprintf(line, sizeof(line),
 			 "%s: %llu of %llu submits read, %s KiB each (%llu%% readable); per "
 			 "submit: %s passes "

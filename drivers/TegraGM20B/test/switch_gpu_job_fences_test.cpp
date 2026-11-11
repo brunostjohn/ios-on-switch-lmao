@@ -93,7 +93,7 @@ TEST(JobFences, AFenceNeverSplitsAMethodOrFollowsTheJobsLastPush)
 	EXPECT_EQ(fences, uint32_t(TegraGM20BMaxJobFences));
 }
 
-// gpu.c's kill (chan_killed) marks every seqno after the completed one up to the last submitted as failed: wherever in
+// gpu.c's kill (tgm_chan_killed) marks every seqno after the completed one up to the last submitted as failed: wherever in
 // the job the fault lands, the seqno the job's reply named (its own fence's) fails, and the job before it does not.
 TEST(JobFences, AFaultInAnyBatchFailsTheWholeJob)
 {
@@ -110,7 +110,7 @@ TEST(JobFences, AFaultInAnyBatchFailsTheWholeJob)
 
 namespace
 {
-// Jobs kicked as chan_fence_job kicks them: `sizes` seqnos each, after `submitted`.
+// Jobs kicked as tgm_chan_fence_job kicks them: `sizes` seqnos each, after `submitted`.
 switch_gpu_jobs kicked(uint32_t submitted, std::initializer_list<uint32_t> sizes)
 {
 	switch_gpu_jobs jobs = {};

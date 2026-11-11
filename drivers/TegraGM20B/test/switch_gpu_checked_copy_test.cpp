@@ -79,7 +79,7 @@ void finish(int semantic = 1)
 	pump();
 }
 
-// chan_killed: the channel's error, its fence released and the kill's fenced callback; its retirement not yet run.
+// tgm_chan_killed: the channel's error, its fence released and the kill's fenced callback; its retirement not yet run.
 void kill()
 {
 	gpu.killed = gpu.completed + 1;

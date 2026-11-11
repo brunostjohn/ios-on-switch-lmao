@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 // Implicit GPU order between processes over host imports (TegraGM20BABI.h method 17) on the host: TegraGM20BExecSurfaces.cpp
 // and the coherency registry's writer records (TegraGM20BCoherency.cpp) over a model of gpu.c's channels, whose acquire
-// queue runs TegraGM20BFences.h's decision as tgm_chan_follow does under live_lock. Writers here are listed writes unless a
+// queue runs TegraGM20BFences.h's decision as tgm_chan_follow does under tgm_live_lock. Writers here are listed writes unless a
 // test says otherwise: an Exec without a list is a writer for the CPU lock's wait only.
 #include <cstdio>
 #include <map>

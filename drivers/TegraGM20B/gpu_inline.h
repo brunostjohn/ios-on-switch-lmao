@@ -10,15 +10,15 @@ static inline int badf(u32 v)
 
 static inline void gate_wake_closer(void)
 {
-	mutex_lock(&gate_lock);
-	nvxnu_wakeup(&sc7_gate.inside);
-	mutex_unlock(&gate_lock);
+	mutex_lock(&tgm_gate_lock);
+	nvxnu_wakeup(&tgm_sc7_gate.inside);
+	mutex_unlock(&tgm_gate_lock);
 }
 
 /* In (1), or refused while the gate is shut (0). */
 static inline int gate_try(void)
 {
-	enum tgm_gate_entry entry = tgm_gate_try_enter(&sc7_gate);
+	enum tgm_gate_entry entry = tgm_gate_try_enter(&tgm_sc7_gate);
 
 	if (entry == TGM_GATE_SHUT_WAKE)
 		gate_wake_closer();
@@ -27,7 +27,7 @@ static inline int gate_try(void)
 
 static inline void gate_leave(void)
 {
-	if (tgm_gate_leave(&sc7_gate))
+	if (tgm_gate_leave(&tgm_sc7_gate))
 		gate_wake_closer();
 }
 
@@ -52,7 +52,7 @@ static inline void mem_big_views_drop(struct tgm_mem *mem)
 	}
 }
 
-static inline int vm_imports(struct tgm_vm *vm, u64 pa) /* live_lock held */
+static inline int vm_imports(struct tgm_vm *vm, u64 pa) /* tgm_live_lock held */
 {
 	struct tgm_import *im = NULL;
 	if (vm->imports_lost)
@@ -94,18 +94,18 @@ static inline void chan_wake_all_waiters(struct tgm_chan *chan)
 	u32 waiter = tgm_chan_waiter(chan);
 
 	if (stats_on()) {
-		__atomic_store_n(&waiter_woken_ns[waiter], nvxnu_nanotime(), __ATOMIC_RELAXED);
-		__atomic_fetch_add(&wstat.wakes, 1, __ATOMIC_RELAXED);
+		__atomic_store_n(&tgm_waiter_woken_ns[waiter], nvxnu_nanotime(), __ATOMIC_RELAXED);
+		__atomic_fetch_add(&tgm_wstat.wakes, 1, __ATOMIC_RELAXED);
 	}
-	nvxnu_word_wake(&waiter_words[waiter]);
+	nvxnu_word_wake(&tgm_waiter_words[waiter]);
 }
 
-/* live_lock held; by id, else (id 0) by hardware channel */
+/* tgm_live_lock held; by id, else (id 0) by hardware channel */
 static inline struct tgm_chan *live_by(u64 id, int chid)
 {
 	struct tgm_chan *chan = NULL;
 
-	list_for_each_entry(chan, &live_chans, live)
+	list_for_each_entry(chan, &tgm_live_chans, live)
 	{
 		if (id ? chan->id == id : (int)chan->chid == chid)
 			return chan;
@@ -145,12 +145,12 @@ static inline u64 chan_stamps_va(struct tgm_chan *chan, u32 seqno)
  * stamp, then the drop flags) pairs with gov_drop's (flag, then the stamp): one of the two always sees the other. */
 static inline void idle_wake(void)
 {
-	if (!READ_ONCE(idle.on))
+	if (!READ_ONCE(tgm_idle.on))
 		return;
-	__atomic_store_n(&idle.last_busy, nvxnu_nanotime(), __ATOMIC_SEQ_CST);
-	if (__atomic_load_n(&idle.low, __ATOMIC_SEQ_CST) ||
-	    __atomic_load_n(&idle.dropping, __ATOMIC_SEQ_CST))
-		(void)idle_raise();
+	__atomic_store_n(&tgm_idle.last_busy, nvxnu_nanotime(), __ATOMIC_SEQ_CST);
+	if (__atomic_load_n(&tgm_idle.low, __ATOMIC_SEQ_CST) ||
+	    __atomic_load_n(&tgm_idle.dropping, __ATOMIC_SEQ_CST))
+		(void)tgm_idle_raise();
 }
 
 /* The periodic line (log only), from a kick at most every IDLE_LOG_NS. */
@@ -165,49 +165,50 @@ static inline void idle_stats(void)
 	u32 raises = 0;
 	u32 hinted = 0;
 
-	if (!READ_ONCE(idle.on) || nvxnu_nanotime() - READ_ONCE(idle.log_start) < IDLE_LOG_NS ||
-	    !nvxnu_mutex_trylock(idle.clk))
+	if (!READ_ONCE(tgm_idle.on) ||
+	    nvxnu_nanotime() - READ_ONCE(tgm_idle.log_start) < IDLE_LOG_NS ||
+	    !nvxnu_mutex_trylock(tgm_idle.clk))
 		return;
 	now = nvxnu_nanotime();
-	if (now - idle.log_start < IDLE_LOG_NS) {
-		nvxnu_mutex_unlock(idle.clk);
+	if (now - tgm_idle.log_start < IDLE_LOG_NS) {
+		nvxnu_mutex_unlock(tgm_idle.clk);
 		return;
 	}
-	span = now - idle.log_start;
-	low = idle.low_ns + (idle.low ? now - idle.low_since : 0);
-	if (idle.low)
-		idle.low_since = now;
-	sum = idle.raise_sum;
-	max = idle.raise_max;
-	drops = idle.drops;
-	raises = idle.raises;
-	hinted = idle.hinted;
-	idle.low_ns = idle.raise_sum = idle.raise_max = 0;
-	idle.drops = idle.raises = idle.hinted = 0;
-	idle.log_start = now;
-	nvxnu_mutex_unlock(idle.clk);
+	span = now - tgm_idle.log_start;
+	low = tgm_idle.low_ns + (tgm_idle.low ? now - tgm_idle.low_since : 0);
+	if (tgm_idle.low)
+		tgm_idle.low_since = now;
+	sum = tgm_idle.raise_sum;
+	max = tgm_idle.raise_max;
+	drops = tgm_idle.drops;
+	raises = tgm_idle.raises;
+	hinted = tgm_idle.hinted;
+	tgm_idle.low_ns = tgm_idle.raise_sum = tgm_idle.raise_max = 0;
+	tgm_idle.drops = tgm_idle.raises = tgm_idle.hinted = 0;
+	tgm_idle.log_start = now;
+	nvxnu_mutex_unlock(tgm_idle.clk);
 	nvxnu_stats("tegra-gm20b: idle clock %llu ms: %llu.%llu%% at %u kHz, %u drops, %u raises "
 		    "(%u by a hint), "
 		    "raise mean %llu ns max %llu ns; %llu in flight; now %d kHz",
-		    span / 1000000, low * 100 / span, low * 1000 / span % 10, idle.idle_khz, drops,
-		    raises, hinted, raises ? sum / raises : 0, max, idle_in_flight(),
-		    nvkm_clk_read(gpu.device->clk, nv_clk_src_gpc));
+		    span / 1000000, low * 100 / span, low * 1000 / span % 10, tgm_idle.idle_khz,
+		    drops, raises, hinted, raises ? sum / raises : 0, max, idle_in_flight(),
+		    nvkm_clk_read(tgm_gpu.device->clk, nv_clk_src_gpc));
 }
 
-/* gpu.lock held */
+/* tgm_gpu.lock held */
 static inline void chan_prioritize(struct tgm_chan *chan)
 {
 	chan->high = 1;
-	tgm_sched_level(gpu.device, chan->chid, TGM_LEVEL_HIGH);
+	tgm_sched_level(tgm_gpu.device, chan->chid, TGM_LEVEL_HIGH);
 }
 
-/* live_lock held, `chan` leaving: what other channels had queued on its fence word goes (it is idle: nothing to wait for) */
+/* tgm_live_lock held, `chan` leaving: what other channels had queued on its fence word goes (it is idle: nothing to wait for) */
 static inline void order_forget(struct tgm_chan *chan)
 {
 	struct tgm_chan *other = NULL;
 	u32 i = 0;
 
-	list_for_each_entry(other, &live_chans, live)
+	list_for_each_entry(other, &tgm_live_chans, live)
 	{
 		for (i = 0; i < other->norder;) {
 			if (other->order[i].id == chan->id) {
@@ -223,24 +224,24 @@ static inline int sync_done(u64 id, u32 seqno)
 {
 	struct tgm_chan *chan = NULL;
 	int done = 1; /* a channel that is gone was drained or stopped by tgm_chan_del */
-	mutex_lock(&live_lock);
-	list_for_each_entry(chan, &live_chans, live)
+	mutex_lock(&tgm_live_lock);
+	list_for_each_entry(chan, &tgm_live_chans, live)
 	{
 		if (chan->id == id) {
 			done = chan->error || (s32)(tgm_chan_completed(chan) - seqno) >= 0;
 			break;
 		}
 	}
-	mutex_unlock(&live_lock);
+	mutex_unlock(&tgm_live_lock);
 	return done;
 }
 
-/* live_lock held */
+/* tgm_live_lock held */
 static inline struct tgm_chan *live_by_uid(u32 uid)
 {
 	struct tgm_chan *chan = NULL;
 
-	list_for_each_entry(chan, &live_chans, live)
+	list_for_each_entry(chan, &tgm_live_chans, live)
 	{
 		if ((u32)chan->id == uid)
 			return chan;
@@ -264,7 +265,7 @@ static inline void push_stamp(struct nvif_push *push, u64 va, u32 payload)
 
 static inline int chan_wait_room(struct tgm_chan *chan, u32 gpfifo_nr, u32 push_nr)
 {
-	int ret = chan_wait_ready(chan, gpfifo_nr, push_nr);
+	int ret = tgm_chan_wait_ready(chan, gpfifo_nr, push_nr);
 	return ret ? ret : nvif_chan_gpfifo_wait(&chan->chan, gpfifo_nr, push_nr);
 }
 
@@ -278,7 +279,7 @@ static inline int chan_push_wait(struct tgm_chan *chan, u32 push_nr)
 
 static inline u32 chan_fence_visibility(struct tgm_chan *chan, int external)
 {
-	return chan_fence_job(chan, external, chan->submitted + 1, chan->submitted + 1);
+	return tgm_chan_fence_job(chan, external, chan->submitted + 1, chan->submitted + 1);
 }
 
 static inline u32 chan_fence(struct tgm_chan *chan)
@@ -289,6 +290,6 @@ static inline u32 chan_fence(struct tgm_chan *chan)
 /* Pages went back dirty: the work item claims and queues them (any context; nothing before the scrubber is up). */
 static inline void scrub_kick(void)
 {
-	if (READ_ONCE(scrub.chan))
-		nvxnu_work_schedule(scrub.work);
+	if (READ_ONCE(tgm_scrub.chan))
+		nvxnu_work_schedule(tgm_scrub.work);
 }

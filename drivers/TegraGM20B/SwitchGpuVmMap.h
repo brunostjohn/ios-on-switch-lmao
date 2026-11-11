@@ -17,14 +17,14 @@ int tgm_vm_map_raw(struct tgm_vm *vm, uint64_t va, uint64_t range, struct tgm_me
 	u32 ordered_scope = 0;
 	if (va < TGM_USER_VA_START || range > TGM_KERNEL_VA || va > TGM_KERNEL_VA - range ||
 	    offset > mem->bytes || range > mem->bytes - offset ||
-	    !nvif_mmu_kind_valid(&gpu.mmu, kind))
+	    !nvif_mmu_kind_valid(&tgm_gpu.mmu, kind))
 		return -EINVAL;
-	if (gpu.mmu.kind[kind] != kind) {
+	if (tgm_gpu.mmu.kind[kind] != kind) {
 		if (!tgm_comp_bind_ok(va, offset, range, mem->page))
 			return -EINVAL;
 		shift = TGM_COMP_SHIFT;
 	}
-	gate_enter();
+	tgm_gate_enter();
 	mutex_lock(&vm->map_lock);
 	if (gpu_ordered)
 		ordered_scope = nvxnu_gpu_ordered_begin();
@@ -72,9 +72,9 @@ int tgm_vm_unmap_pages(struct tgm_vm *vm, uint64_t va, uint64_t range, uint8_t p
 	int ret = 0;
 	if (va < TGM_USER_VA_START || range > TGM_KERNEL_VA || va > TGM_KERNEL_VA - range)
 		return -EINVAL;
-	gate_enter();
+	tgm_gate_enter();
 	mutex_lock(&vm->map_lock);
-	nvkm_ltc_flush(gpu.device->ltc);
+	nvkm_ltc_flush(tgm_gpu.device->ltc);
 	ret = nvif_vmm_raw_unmap(&vm->vmm, va, range, page_shift, false);
 	nvif_vmm_raw_put(&vm->vmm, va, range, page_shift);
 	mutex_unlock(&vm->map_lock);
@@ -113,9 +113,9 @@ static void mem_prepare_big_views(struct tgm_mem *mem)
 		view->offset = (u64)first << PAGE_SHIFT;
 		view->bytes = (u64)(at - first) << PAGE_SHIFT;
 		args.dma = (dma_addr_t *)(mem->pages + first);
-		ret = nvif_mem_ctor_type(&gpu.mmu, "big-span", NVIF_CLASS_MEM_GF100, gpu.mem_type,
-					 SWITCH_GPU_BIG_SHIFT, view->bytes, &args, sizeof(args),
-					 &view->mem);
+		ret = nvif_mem_ctor_type(&tgm_gpu.mmu, "big-span", NVIF_CLASS_MEM_GF100,
+					 tgm_gpu.mem_type, SWITCH_GPU_BIG_SHIFT, view->bytes, &args,
+					 sizeof(args), &view->mem);
 		if (ret) {
 			kfree(view);
 			continue;
@@ -157,10 +157,10 @@ int switch_gpu_vm_map_volatile(struct tgm_vm *vm, u64 va, u64 range, struct tgm_
 	if (!mapping || !vm || !mem || !vm->owner || !range ||
 	    ((va | range | offset) & (PAGE_SIZE - 1)) || va < TGM_USER_VA_START ||
 	    range > TGM_KERNEL_VA || va > TGM_KERNEL_VA - range || offset > mem->bytes ||
-	    range > mem->bytes - offset || !nvif_mmu_kind_valid(&gpu.mmu, kind))
+	    range > mem->bytes - offset || !nvif_mmu_kind_valid(&tgm_gpu.mmu, kind))
 		return -EINVAL;
 	*mapping = NULL;
-	compressed = gpu.mmu.kind[kind] != kind;
+	compressed = tgm_gpu.mmu.kind[kind] != kind;
 	if ((vol && kind) || (compressed && !tgm_comp_bind_ok(va, offset, range, mem->page)))
 		return -EINVAL;
 	while (at < range) {
@@ -187,7 +187,7 @@ int switch_gpu_vm_map_volatile(struct tgm_vm *vm, u64 va, u64 range, struct tgm_
 								     run.bytes, run.shift, 0};
 		at += run.bytes;
 	}
-	gate_enter();
+	tgm_gate_enter();
 	mutex_lock(&vm->map_lock);
 	ordered_scope = nvxnu_gpu_ordered_begin();
 	for (i = 0; i < count; ++i) {
@@ -238,9 +238,9 @@ void switch_gpu_vm_unmap(struct tgm_vm *vm, struct switch_gpu_mapping **mapping)
 	u32 i;
 	if (!made)
 		return;
-	gate_enter();
+	tgm_gate_enter();
 	mutex_lock(&vm->map_lock);
-	nvkm_ltc_flush(gpu.device->ltc);
+	nvkm_ltc_flush(tgm_gpu.device->ltc);
 	for (i = 0; i < made->count; ++i) {
 		const struct switch_gpu_mapping_entry *entry = &made->entries[i];
 		if (entry->pending)
@@ -296,7 +296,7 @@ int switch_gpu_vm_split(struct tgm_vm *vm, struct switch_gpu_mapping **mapping, 
 		const struct switch_gpu_mapping_entry *e = &old->entries[i];
 		const u64 e_end = e->va + e->bytes;
 		const bool cut = e->va < end && va < e_end && (e->va < va || e_end > end);
-		if (cut && e->shift != PAGE_SHIFT && gpu.mmu.kind[kind] != kind)
+		if (cut && e->shift != PAGE_SHIFT && tgm_gpu.mmu.kind[kind] != kind)
 			return -EINVAL;
 		counts[0] += e->va < va;
 		counts[2] += e_end > end;
@@ -358,13 +358,13 @@ int switch_gpu_vm_prepare(struct tgm_vm *vm, u64 va, u64 range, struct tgm_mem *
 	if (!mapping || !vm || !mem || !vm->owner || !range ||
 	    ((va | range | offset) & (PAGE_SIZE - 1)) || va < TGM_USER_VA_START ||
 	    range > TGM_KERNEL_VA || va > TGM_KERNEL_VA - range || offset > mem->bytes ||
-	    range > mem->bytes - offset || !nvif_mmu_kind_valid(&gpu.mmu, kind))
+	    range > mem->bytes - offset || !nvif_mmu_kind_valid(&tgm_gpu.mmu, kind))
 		return -EINVAL;
 	*mapping = NULL;
-	if (gpu.mmu.kind[kind] != kind && !tgm_comp_bind_ok(va, offset, range, mem->page))
+	if (tgm_gpu.mmu.kind[kind] != kind && !tgm_comp_bind_ok(va, offset, range, mem->page))
 		return -EINVAL;
 	for (at = 0; at < range; at += run.bytes, ++count)
-		if (gpu.mmu.kind[kind] != kind)
+		if (tgm_gpu.mmu.kind[kind] != kind)
 			run = (struct switch_gpu_mapping_run){range, SWITCH_GPU_BIG_SHIFT};
 		else if (!switch_gpu_mapping_next(mem->pages, mem->npages, va + at, offset + at,
 						  range - at, &run))
@@ -373,7 +373,7 @@ int switch_gpu_vm_prepare(struct tgm_vm *vm, u64 va, u64 range, struct tgm_mem *
 	if (!made)
 		return -ENOMEM;
 	for (at = 0; at < range; at += run.bytes) {
-		if (gpu.mmu.kind[kind] != kind)
+		if (tgm_gpu.mmu.kind[kind] != kind)
 			run = (struct switch_gpu_mapping_run){range, SWITCH_GPU_BIG_SHIFT};
 		else
 			switch_gpu_mapping_next(mem->pages, mem->npages, va + at, offset + at,
@@ -396,7 +396,7 @@ int switch_gpu_vm_install(struct tgm_vm *vm, struct switch_gpu_mapping *mapping,
 	if (!switch_gpu_mapping_pending(mapping))
 		return 0;
 	mem_prepare_big_views(mem);
-	gate_enter();
+	tgm_gate_enter();
 	mutex_lock(&vm->map_lock);
 	ordered_scope = nvxnu_gpu_ordered_begin();
 	for (i = 0; i < mapping->count; ++i) {
@@ -486,10 +486,11 @@ void switch_gpu_mapping_describe(const struct switch_gpu_mapping *mapping, char 
 
 int tgm_vm_kmap(struct tgm_vm *vm, struct tgm_mem *mem, uint64_t bytes, uint64_t *va)
 {
-	return vm_kmap(vm, mem, bytes, 0, va);
+	return tgm_vm_kmap_raw(vm, mem, bytes, 0, va);
 }
 
-int vm_kmap(struct tgm_vm *vm, struct tgm_mem *mem, uint64_t bytes, int read_only, uint64_t *va)
+int tgm_vm_kmap_raw(struct tgm_vm *vm, struct tgm_mem *mem, uint64_t bytes, int read_only,
+		    uint64_t *va)
 {
 	struct gf100_vmm_map_v0 args = {
 		.version = 0, .vol = 1, .ro = !!read_only, .priv = 0, .kind = 0};
@@ -497,7 +498,7 @@ int vm_kmap(struct tgm_vm *vm, struct tgm_mem *mem, uint64_t bytes, int read_onl
 	int ret = 0;
 	if (!k)
 		return -ENOMEM;
-	gate_enter();
+	tgm_gate_enter();
 	mutex_lock(&vm->map_lock);
 	ret = nvif_vmm_get(&vm->vmm, ADDR, false, PAGE_SHIFT, 0, bytes, &k->vma);
 	if (!ret) {

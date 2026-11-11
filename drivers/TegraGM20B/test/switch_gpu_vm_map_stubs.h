@@ -155,7 +155,7 @@ struct {
 	Device *device = &::device;
 	Mmu mmu;
 	unsigned mem_type;
-} gpu;
+} tgm_gpu;
 
 bool nvif_mmu_kind_valid(Mmu *, u8)
 {
@@ -192,7 +192,7 @@ bool gateShut;
 unsigned gateInside;
 std::atomic<unsigned> gateWaiting;
 
-void gate_enter()
+void tgm_gate_enter()
 {
 	std::unique_lock held(gateMutex);
 	++gateWaiting;
@@ -296,5 +296,5 @@ void nvif_vmm_put(nvif_vmm *vm, nvif_vma *vma)
 	nvif_vmm_raw_put(vm, vma->addr, 4096, 12);
 }
 
-static int vm_kmap(tgm_vm *, tgm_mem *, uint64_t, int, uint64_t *);
+static int tgm_vm_kmap_raw(tgm_vm *, tgm_mem *, uint64_t, int, uint64_t *);
 #include "../SwitchGpuVmMap.h"

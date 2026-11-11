@@ -40,7 +40,7 @@ static int chan_room(struct tgm_chan *chan, u32 gpfifo_nr, u32 push_nr)
 /* Room for gpfifo_nr entries and push_nr dwords, waited for by interrupt: every submission's GET report comes before its
  * fence's nonstall interrupt (chan_fence), whose pass ends in nvxnu_wake(), so nvif's own wait then finds the room at
  * once and never spins. -ETIMEDOUT after 1 s. */
-int chan_wait_ready(struct tgm_chan *chan, u32 gpfifo_nr, u32 push_nr)
+int tgm_chan_wait_ready(struct tgm_chan *chan, u32 gpfifo_nr, u32 push_nr)
 {
 	u64 end = nvxnu_nanotime() + NSEC_PER_SEC;
 	int ret = 0;
@@ -65,7 +65,7 @@ int chan_wait_ready(struct tgm_chan *chan, u32 gpfifo_nr, u32 push_nr)
  * was reserved by the caller (chan_wait_room / chan_push_wait): CHAN_FENCE_DWORDS. A job's internal fences
  * (chan_job_fence) released first .. next - 1 ahead of it, in the same kick, and raise no interrupt: this one announces
  * them all (the job's record says which). */
-u32 chan_fence_job(struct tgm_chan *chan, int external, u32 first, u32 next)
+u32 tgm_chan_fence_job(struct tgm_chan *chan, int external, u32 first, u32 next)
 {
 	struct nvif_push *push = &chan->chan.push;
 	struct switch_gpu_kicked_job *job = NULL;
@@ -120,7 +120,7 @@ u32 chan_fence_job(struct tgm_chan *chan, int external, u32 first, u32 next)
 	}
 	job = switch_gpu_jobs_kick(&chan->jobs, first, next, chan->submit_ns);
 	if (stats_on())
-		__atomic_fetch_add(&wstat.jobs, 1, __ATOMIC_RELAXED);
+		__atomic_fetch_add(&tgm_wstat.jobs, 1, __ATOMIC_RELAXED);
     if (switch_gpu_irq_arm(&chan->irq_state, next) && nvif_event_allow(&chan->nonstall))
         nvxnu_panic("SwitchGpu: cannot arm channel completion");
     WRITE_ONCE(chan->submitted, next);
@@ -130,7 +130,7 @@ u32 chan_fence_job(struct tgm_chan *chan, int external, u32 first, u32 next)
 	PUSH_KICK(push);
 	if (chan->high) {
 		struct tgm_sched_queued queued;
-		enum tgm_sched_kick kick = tgm_sched_kicked(gpu.device, chan->chid, &queued);
+		enum tgm_sched_kick kick = tgm_sched_kicked(tgm_gpu.device, chan->chid, &queued);
 
 		WRITE_ONCE(job->app, kick != TGM_KICK_CLEAR);
 		if (stats_on())
@@ -171,34 +171,34 @@ static void frame_submitted(struct tgm_chan *chan, u32 seqno, u64 start)
 
 	nvxnu_kdebug(SWITCH_KDBG_SUBMIT, chan->chid, seqno, chan->critical);
 	if (!chan->critical) {
-		__atomic_fetch_add(&frame_gpu.others, 1, __ATOMIC_RELAXED);
+		__atomic_fetch_add(&tgm_frame_gpu.others, 1, __ATOMIC_RELAXED);
 		return;
 	}
 	switch_sched_render_submitted();
-	__atomic_compare_exchange_n(&frame_gpu.first, &none, start, false, __ATOMIC_RELAXED,
+	__atomic_compare_exchange_n(&tgm_frame_gpu.first, &none, start, false, __ATOMIC_RELAXED,
 				    __ATOMIC_RELAXED);
-	__atomic_store_n(&frame_gpu.last, start, __ATOMIC_RELAXED);
-	__atomic_fetch_add(&frame_gpu.submits, 1, __ATOMIC_RELAXED);
-	__atomic_fetch_add(&frame_gpu.exec_ns, now - start, __ATOMIC_RELAXED);
+	__atomic_store_n(&tgm_frame_gpu.last, start, __ATOMIC_RELAXED);
+	__atomic_fetch_add(&tgm_frame_gpu.submits, 1, __ATOMIC_RELAXED);
+	__atomic_fetch_add(&tgm_frame_gpu.exec_ns, now - start, __ATOMIC_RELAXED);
 }
 
 void tegra_gm20b_frame_take(struct SwitchFrameGpu *out)
 {
 #if SWITCH_FRAME_TIMELINE
-	out->firstSubmit = __atomic_exchange_n(&frame_gpu.first, 0, __ATOMIC_RELAXED);
-	out->lastSubmit = __atomic_exchange_n(&frame_gpu.last, 0, __ATOMIC_RELAXED);
-	out->submits = __atomic_exchange_n(&frame_gpu.submits, 0, __ATOMIC_RELAXED);
-	out->others = __atomic_exchange_n(&frame_gpu.others, 0, __ATOMIC_RELAXED);
-	out->execNs = __atomic_exchange_n(&frame_gpu.exec_ns, 0, __ATOMIC_RELAXED);
-	out->imports = __atomic_exchange_n(&frame_gpu.imports, 0, __ATOMIC_RELAXED);
-	out->binds = __atomic_exchange_n(&frame_gpu.binds, 0, __ATOMIC_RELAXED);
-	out->allocs = __atomic_exchange_n(&frame_gpu.allocs, 0, __ATOMIC_RELAXED);
-	out->frees = __atomic_exchange_n(&frame_gpu.frees, 0, __ATOMIC_RELAXED);
-	out->importNs = __atomic_exchange_n(&frame_gpu.import_ns, 0, __ATOMIC_RELAXED);
-	out->bindNs = __atomic_exchange_n(&frame_gpu.bind_ns, 0, __ATOMIC_RELAXED);
-	out->allocNs = __atomic_exchange_n(&frame_gpu.alloc_ns, 0, __ATOMIC_RELAXED);
-	out->cleanNs = __atomic_exchange_n(&frame_gpu.clean_ns, 0, __ATOMIC_RELAXED);
-	out->cleanBytes = __atomic_exchange_n(&frame_gpu.clean_bytes, 0, __ATOMIC_RELAXED);
+	out->firstSubmit = __atomic_exchange_n(&tgm_frame_gpu.first, 0, __ATOMIC_RELAXED);
+	out->lastSubmit = __atomic_exchange_n(&tgm_frame_gpu.last, 0, __ATOMIC_RELAXED);
+	out->submits = __atomic_exchange_n(&tgm_frame_gpu.submits, 0, __ATOMIC_RELAXED);
+	out->others = __atomic_exchange_n(&tgm_frame_gpu.others, 0, __ATOMIC_RELAXED);
+	out->execNs = __atomic_exchange_n(&tgm_frame_gpu.exec_ns, 0, __ATOMIC_RELAXED);
+	out->imports = __atomic_exchange_n(&tgm_frame_gpu.imports, 0, __ATOMIC_RELAXED);
+	out->binds = __atomic_exchange_n(&tgm_frame_gpu.binds, 0, __ATOMIC_RELAXED);
+	out->allocs = __atomic_exchange_n(&tgm_frame_gpu.allocs, 0, __ATOMIC_RELAXED);
+	out->frees = __atomic_exchange_n(&tgm_frame_gpu.frees, 0, __ATOMIC_RELAXED);
+	out->importNs = __atomic_exchange_n(&tgm_frame_gpu.import_ns, 0, __ATOMIC_RELAXED);
+	out->bindNs = __atomic_exchange_n(&tgm_frame_gpu.bind_ns, 0, __ATOMIC_RELAXED);
+	out->allocNs = __atomic_exchange_n(&tgm_frame_gpu.alloc_ns, 0, __ATOMIC_RELAXED);
+	out->cleanNs = __atomic_exchange_n(&tgm_frame_gpu.clean_ns, 0, __ATOMIC_RELAXED);
+	out->cleanBytes = __atomic_exchange_n(&tgm_frame_gpu.clean_bytes, 0, __ATOMIC_RELAXED);
 #else
 	memset(out, 0, sizeof(*out));
 #endif
@@ -208,8 +208,8 @@ void tegra_gm20b_frame_take(struct SwitchFrameGpu *out)
  * from its snapshot of the user channels to its kick, so every user submission is either in a present's snapshot (the
  * copy waits for it) or kicked after that present (it waits for the copy). */
 
-int backing_dependencies(struct tgm_chan *chan, const struct switch_gpu_backing_token *tokens,
-			 u32 count, int emit)
+int tgm_backing_dependencies(struct tgm_chan *chan, const struct switch_gpu_backing_token *tokens,
+			     u32 count, int emit)
 {
 	u32 i;
 	for (i = 0; i < count; ++i) {
@@ -221,23 +221,24 @@ int backing_dependencies(struct tgm_chan *chan, const struct switch_gpu_backing_
 		if (token->engine == SWITCH_GPU_ENGINE_GM20B) {
 			struct tgm_chan *source;
 			u64 va;
-			mutex_lock(&live_lock);
+			mutex_lock(&tgm_live_lock);
 			source = live_by_uid(token->queue);
 			if (!source || token->reset_generation != (source->id >> 32) + 1 ||
 			    !chan->vm->fences_va || token->value > UINT32_MAX) {
-				mutex_unlock(&live_lock);
+				mutex_unlock(&tgm_live_lock);
 				return -ENODEV;
 			}
-			va = chan->vm->fences_va + ((uintptr_t)source->fence_cpu - (uintptr_t)fences.va);
+			va = chan->vm->fences_va +
+			     ((uintptr_t)source->fence_cpu - (uintptr_t)tgm_fence_pages.va);
 			if (emit) {
 				PUSH_MTHD(&chan->chan.push, NV906F, SEMAPHOREA, upper_32_bits(va),
 					SEMAPHOREB, lower_32_bits(va), SEMAPHOREC, (u32)token->value,
 					SEMAPHORED, NVDEF(NV906F, SEMAPHORED, OPERATION, ACQ_GEQ) |
 					NVDEF(NV906F, SEMAPHORED, ACQUIRE_SWITCH, ENABLED));
 				if (chan->high)
-					tgm_hold_need(gpu.device, source->chid);
+					tgm_hold_need(tgm_gpu.device, source->chid);
 			}
-			mutex_unlock(&live_lock);
+			mutex_unlock(&tgm_live_lock);
 		} else if (token->engine == SWITCH_GPU_ENGINE_VIC || token->engine == SWITCH_GPU_ENGINE_NVDEC ||
 			   token->engine == SWITCH_GPU_ENGINE_DISPLAY) {
 			u32 words[TGM_SYNCPT_WAIT_DWORDS];
@@ -371,18 +372,18 @@ static int chan_exec(struct tgm_chan *chan, const struct tgm_push *pushes, uint3
 	}
 	if (count > TegraGM20BMaxJobPushes || dependency_count > TegraGM20BMaxJobDependencies)
 		return -E2BIG;
-	ret = backing_dependencies(chan, dependencies, dependency_count, 0);
+	ret = tgm_backing_dependencies(chan, dependencies, dependency_count, 0);
 	if (ret)
 		return ret;
 	if (may_wait) {
 		idle_wake();
-		chan_timeslice_due(chan);
+		tgm_chan_timeslice_due(chan);
 	}
 	/* from its first submission: a channel made before its connection's GPU priority came (the compositor's, at boot)
 	 * is never held for the compositor's own frame */
 	if (chan->app && !chan->high && !chan->tracked) {
 		WRITE_ONCE(chan->tracked, 1);
-		tgm_hold_track(gpu.device, chan->chid, 1);
+		tgm_hold_track(tgm_gpu.device, chan->chid, 1);
 	}
 	/* a push profile (see "push profile"): only with the stats' stamps, one in flight per channel; one whose completion
 	 * the stats' interrupt pass no longer looks at (more than CHAN_NSTAMPS behind) is given up */
@@ -394,8 +395,8 @@ static int chan_exec(struct tgm_chan *chan, const struct tgm_push *pushes, uint3
 	chan_submission_room(chan, pushes, count, dependency_count, fences, &prof, &entries, &words);
 	if (!may_wait && !chan_room(chan, entries, words))
 		return -EAGAIN;
-	ret = may_wait ? chan_wait_ready(chan, entries, words) : 0;
-	if (ret == -ETIMEDOUT && gpu.stage >= 3) {
+	ret = may_wait ? tgm_chan_wait_ready(chan, entries, words) : 0;
+	if (ret == -ETIMEDOUT && tgm_gpu.stage >= 3) {
 		tgm_chan_stalled(chan, "exec: GPFIFO still full after 1 s", chan->submitted,
 				 NSEC_PER_SEC);
 	}
@@ -410,7 +411,7 @@ static int chan_exec(struct tgm_chan *chan, const struct tgm_push *pushes, uint3
 	chan->chan.defer_kick = true;
 	ret = nvif_chan_gpfifo_wait(&chan->chan, entries, words);
 	if (!ret)
-		ret = backing_dependencies(chan, dependencies, dependency_count, 1);
+		ret = tgm_backing_dependencies(chan, dependencies, dependency_count, 1);
 	/* a VA rebound over work still queued: nothing after the bind runs before retirement switched its PTEs; the TLB
 	 * invalidate below runs after this acquire */
 	bind = !ret && !chan->kernel && bind_pending(chan->vm, &bind_target, &bind_va);
@@ -433,14 +434,14 @@ static int chan_exec(struct tgm_chan *chan, const struct tgm_push *pushes, uint3
 	if (READ_ONCE(chan->norder)) {
 		/* the task's other channels' work it follows (tgm_chan_order), first, so the start stamp below times the work
 		 * itself */
-		waits = (u32)order_waits(chan);
+		waits = (u32)tgm_order_waits(chan);
 	}
 	/* a high channel's start stamp, in every kernel: the end of the preemption latency of an app it was queued behind */
 	if (stats_on() || chan->high) {
 		u32 next = chan->submitted + 1;
 		if (stats_on()) {
 			WRITE_ONCE(chan->stat_sub_ptimer[next % CHAN_NSTAMPS],
-				   nvkm_timer_read(gpu.device->timer));
+				   nvkm_timer_read(tgm_gpu.device->timer));
 		}
 		if (chan->high)
 			WRITE_ONCE(switch_gpu_jobs_next(&chan->jobs)->waits, waits);
@@ -494,11 +495,11 @@ static int chan_exec(struct tgm_chan *chan, const struct tgm_push *pushes, uint3
 	last = switch_gpu_job_emit(pushes, count, chan->submitted, &emitter);
 	tgm_hang_log_submit(&chan->hang, last, job.first, chan->chan.gpfifo.cur);
 
-	*seqno = chan_fence_job(chan, external, chan->submitted + 1, last);
+	*seqno = tgm_chan_fence_job(chan, external, chan->submitted + 1, last);
 	if (SWITCH_FRAME_TIMELINE && !chan->kernel)
 		frame_submitted(chan, *seqno, start);
 	if (stats_on())
-		stats_tick();
+		tgm_stats_tick();
 	return 0;
 }
 
@@ -507,7 +508,7 @@ int tgm_chan_exec(struct tgm_chan *chan, const struct tgm_push *pushes, uint32_t
 {
 	int ret = 0;
 
-	gate_enter();
+	tgm_gate_enter();
 	ret = chan_exec(chan, pushes, count, seqno, prof, NULL, 0, 1, 0);
 	gate_leave();
 	return ret;
@@ -515,9 +516,9 @@ int tgm_chan_exec(struct tgm_chan *chan, const struct tgm_push *pushes, uint32_t
 
 void switch_gpu_chan_submit_enter(struct tgm_chan *chan)
 {
-	gate_enter();
+	tgm_gate_enter();
 	idle_wake();
-	chan_timeslice_due(chan);
+	tgm_chan_timeslice_due(chan);
 }
 
 void switch_gpu_chan_submit_leave(void)
@@ -537,8 +538,8 @@ int switch_gpu_chan_wait_submission_room(struct tgm_chan *chan, const struct tgm
 	if (switch_gpu_job_fences(pushes, count, &fences))
 		return -EINVAL;
 	chan_submission_room(chan, pushes, count, dependency_count, fences, &prof, &entries, &words);
-	ret = chan_wait_ready(chan, entries, words);
-	if (ret == -ETIMEDOUT && gpu.stage >= 3)
+	ret = tgm_chan_wait_ready(chan, entries, words);
+	if (ret == -ETIMEDOUT && tgm_gpu.stage >= 3)
 		tgm_chan_stalled(chan, "exec: GPFIFO still full after 1 s", chan->submitted, NSEC_PER_SEC);
 	return READ_ONCE(chan->error) ? -EIO : ret == -ETIMEDOUT ? -EBUSY : ret;
 }

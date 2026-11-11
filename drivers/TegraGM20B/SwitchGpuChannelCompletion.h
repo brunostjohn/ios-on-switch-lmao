@@ -19,7 +19,7 @@ static int chan_nonstall(struct nvif_event *event, void *repv, u32 repc)
 	if (chan->kernel == CHAN_SCRUB) {
 		scrub_fenced(chan);
 		/* nobody sleeps on its fence but system sleep's drain and the wake's test fence */
-		if (tgm_gate_is_shut(&sc7_gate))
+		if (tgm_gate_is_shut(&tgm_sc7_gate))
 			nvxnu_wake();
 		return switch_gpu_irq_complete(&chan->irq_state, done) ? NVIF_EVENT_DROP
 								       : NVIF_EVENT_KEEP;

@@ -35,9 +35,9 @@ int tgm_bringup(int stage, char *line, unsigned int len);
  * reached; each step is one tgm_journal() line, and a step that cannot be done panics with one line. */
 void tgm_sleep(void);
 void tgm_wake(void);
-/* Rail-gating (TegraGM20BRail.h), thread context. down: the GPU off with gpu.lock released, 0 or -EBUSY (no M3); up:
- * back if it is down (a gpu.lock or gate caller wakes it the same way, under the lock it owns); railed: whether it is
- * down. sc7_hold/release: system sleep with the GPU down holds gpu.lock across it on SwitchSuspend's thread (1), or
+/* Rail-gating (TegraGM20BRail.h), thread context. down: the GPU off with tgm_gpu.lock released, 0 or -EBUSY (no M3); up:
+ * back if it is down (a tgm_gpu.lock or gate caller wakes it the same way, under the lock it owns); railed: whether it is
+ * down. sc7_hold/release: system sleep with the GPU down holds tgm_gpu.lock across it on SwitchSuspend's thread (1), or
  * takes tgm_sleep's path (0). idle: gpu.c's idle clock reached (its work item); idle_now: at the idle clock, or none. */
 int tgm_rail_down(void);
 void tgm_rail_up(void);
@@ -46,7 +46,7 @@ int tgm_rail_sc7_hold(void);
 void tgm_rail_sc7_release(void);
 void tgm_rail_idle(void);
 int tgm_idle_now(void);
-/* TegraGM20B.cpp, around every rail-up, under gpu.lock (never block): one starts (SwitchThermal holds its CPU raise), one
+/* TegraGM20B.cpp, around every rail-up, under tgm_gpu.lock (never block): one starts (SwitchThermal holds its CPU raise), one
  * is done (`demand`: work woke the GPU, not the display). */
 void tgm_rail_moving(void);
 void tgm_rail_moved(int demand);
@@ -90,7 +90,7 @@ void tgm_vm_claim(struct tgm_vm *vm, const void *owner);
 void tgm_vm_claim_connection(struct tgm_vm *vm, const void *connection);
 void tgm_vm_del(struct tgm_vm **pvm);
 /* Wrap physical pages as GPU memory. `pas` (one entry per 4 KiB page) must stay valid until tgm_mem_del. lock_wait_ns
- * (or NULL): with the stats, how long the call waited for gpu.lock. */
+ * (or NULL): with the stats, how long the call waited for tgm_gpu.lock. */
 int tgm_mem_new(struct tgm_vm *vm, const uint64_t *pas, uint32_t npages, struct tgm_mem **pmem);
 int tgm_mem_new_waited(struct tgm_vm *vm, const uint64_t *pas, uint32_t npages,
 		       struct tgm_mem **pmem, uint64_t *lock_wait_ns);
@@ -279,7 +279,7 @@ int tgm_chan_order(struct tgm_chan *chan, uint32_t flags, uint32_t seqno, uint32
  * self-test passed, or under client fault isolation for a client's channel: an error on a kernel channel panics
  * (nvkm's report in the panic string). */
 uint32_t tgm_chan_error(struct tgm_chan *chan);
-/* The completed seqno, then whether the channel had failed by then: chan_killed publishes its error before it advances
+/* The completed seqno, then whether the channel had failed by then: tgm_chan_killed publishes its error before it advances
  * the fence over the work it abandoned, so a seqno read here with *failed 0 was executed. */
 uint32_t tgm_chan_settled(struct tgm_chan *chan, int *failed);
 /* For error 1: the GPU VA its MMU fault report names (0: none named). */
@@ -571,7 +571,7 @@ void tgm_stats_bo_import(uint64_t bytes, int read_only, int skipped, uint64_t ns
 
 /* With the stats, one host import's costs for the "imports" line and, past 4 ms, a "slow import" line of its own: the
  * wiring's wall time and the importing thread's CPU time in it (the rest it waited: free pages, busy pages, a
- * decompression, the CPU), the system's zero-fill faults meanwhile, gpu.lock's wait inside the GPU memory object, the
+ * decompression, the CPU), the system's zero-fill faults meanwhile, tgm_gpu.lock's wait inside the GPU memory object, the
  * coherency registry's add and the clean. tgm_stats_cpu_ns and tgm_stats_zero_fills read the thread's CPU time and the
  * system's zero-fill count (0 without the stats). */
 struct tgm_import_cost {

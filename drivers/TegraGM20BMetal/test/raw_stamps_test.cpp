@@ -115,7 +115,8 @@ TEST(RawStamps, TheEndReleaseWaitsNoLongerThanTheKernelsFence)
     EXPECT_THAT(Body(gpu, "static inline u32 chan_fence(struct tgm_chan *chan)"),
                 HasSubstr("return chan_fence_visibility(chan, 1);"));
     EXPECT_THAT(gpu, HasSubstr("int external = !(visibility & SWITCH_GPU_SUBMIT_VISIBILITY_EXPLICIT) ||"));
-    const std::string fence = Body(gpu, "u32 chan_fence_job(struct tgm_chan *chan, int external, u32 first, u32 next)");
+    const std::string fence =
+        Body(gpu, "u32 tgm_chan_fence_job(struct tgm_chan *chan, int external, u32 first, u32 next)");
     EXPECT_THAT(fence, HasSubstr("PUSH_NVSQ(push, NV906F, NVB06F_WFI, 0);"));
     EXPECT_THAT(fence, HasSubstr("NVDEF(NV906F, SEMAPHORED, RELEASE_WFI, EN)"));
     const std::string raw = SourceText("../raw/runtime/raw_gpu.cpp");

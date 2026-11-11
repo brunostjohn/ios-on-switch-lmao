@@ -30,15 +30,15 @@ void *tgm_pool_alloc_ready(uint64_t bytes, uint64_t align, uint64_t reserve, uin
 
 #if TGM_STATS
 /* stats: freed pool BOs the CPU zeroed for the copy engine (tgm_pool_free_zeroed) */
-u64 cpu_zeroes, cpu_zero_bytes;
+u64 tgm_cpu_zeroes, tgm_cpu_zero_bytes;
 
 #endif
 void tgm_pool_free_zeroed(void *va, uint64_t bytes, uint64_t pa)
 {
 	bytes = pool_bo_bytes(bytes); /* the padding too: the owner's mapping covered it */
 	if (TGM_STATS) {
-		__atomic_fetch_add(&cpu_zeroes, 1, __ATOMIC_RELAXED);
-		__atomic_fetch_add(&cpu_zero_bytes, bytes, __ATOMIC_RELAXED);
+		__atomic_fetch_add(&tgm_cpu_zeroes, 1, __ATOMIC_RELAXED);
+		__atomic_fetch_add(&tgm_cpu_zero_bytes, bytes, __ATOMIC_RELAXED);
 	}
 	memset(va, 0, bytes);
 	/* the write-combining buffers drained before the pages are handed out again */
@@ -49,7 +49,7 @@ void tgm_pool_free_zeroed(void *va, uint64_t bytes, uint64_t pa)
 /* Back dirty: the scrubber zeroes it on the GPU (see "pool scrub") unless an allocation takes it first and zeroes it. */
 void tgm_pool_free(void *va, uint64_t bytes, uint64_t pa)
 {
-	dma_free_attrs(&gpu_pdev.dev, pool_bo_bytes(bytes), va, pa, 0);
+	dma_free_attrs(&tgm_gpu_pdev.dev, pool_bo_bytes(bytes), va, pa, 0);
 	scrub_kick();
 }
 
@@ -71,14 +71,14 @@ void tgm_pool_free_chunks(const uint64_t *pas, uint32_t npages)
 			lo = pa;
 		} else if (!bytes || pa != lo + bytes) {
 			if (bytes)
-				dma_free_attrs(&gpu_pdev.dev, bytes, NULL, lo, 0);
+				dma_free_attrs(&tgm_gpu_pdev.dev, bytes, NULL, lo, 0);
 			lo = pa;
 			bytes = 0;
 		}
 		bytes += TGM_COMP_BYTES;
 	}
 	if (bytes)
-		dma_free_attrs(&gpu_pdev.dev, bytes, NULL, lo, 0);
+		dma_free_attrs(&tgm_gpu_pdev.dev, bytes, NULL, lo, 0);
 	scrub_kick();
 }
 
@@ -106,18 +106,18 @@ struct tgm_kmap {
 
 /* The present channel's fence page (see "GPU present"): one pool page, made with the present's address space and kept
  * for good. */
-struct pfence_state pfence;
+struct pfence_state tgm_pfence;
 
 static DEFINE_MUTEX(pfence_lock);
 
-int pfence_get(struct tgm_vm *vm)
+int tgm_pfence_get(struct tgm_vm *vm)
 {
 	int ret = 0;
 	mutex_lock(&pfence_lock);
-	if (!pfence.mem) {
-		if (!pfence.va)
-			pfence.va = tgm_pool_alloc(PAGE_SIZE, 0, &pfence.pa);
-		ret = pfence.va ? tgm_mem_new(vm, &pfence.pa, 1, &pfence.mem) : -ENOMEM;
+	if (!tgm_pfence.mem) {
+		if (!tgm_pfence.va)
+			tgm_pfence.va = tgm_pool_alloc(PAGE_SIZE, 0, &tgm_pfence.pa);
+		ret = tgm_pfence.va ? tgm_mem_new(vm, &tgm_pfence.pa, 1, &tgm_pfence.mem) : -ENOMEM;
 	}
 	mutex_unlock(&pfence_lock);
 	return ret;
@@ -131,7 +131,7 @@ int tgm_vm_new(struct tgm_vm **pvm)
 	struct tgm_vm *vm = NULL;
 	int ret = 0;
 
-	if (gpu.stage < 2)
+	if (tgm_gpu.stage < 2)
 		return -ENODEV;
 	vm = kzalloc(sizeof(*vm), GFP_KERNEL);
 	if (!vm)
@@ -140,18 +140,18 @@ int tgm_vm_new(struct tgm_vm **pvm)
 	INIT_LIST_HEAD(&vm->kmaps);
 	INIT_LIST_HEAD(&vm->imports);
 	tgm_tlb_space_init(&vm->tlb);
-	gpu_lock();
+	tgm_gpu_lock();
 	/* RAW: the client manages [0, 1<<39) with raw binds; nvkm allocates in [1<<39, 1<<40) */
-	ret = nvif_vmm_ctor(&gpu.mmu, "uvmm", NVIF_CLASS_VMM_GM200, RAW, TGM_KERNEL_VA,
+	ret = nvif_vmm_ctor(&tgm_gpu.mmu, "uvmm", NVIF_CLASS_VMM_GM200, RAW, TGM_KERNEL_VA,
 			    TGM_VA_LIMIT - TGM_KERNEL_VA, &args, sizeof(args), &vm->vmm);
-	mutex_unlock(&gpu.lock);
+	mutex_unlock(&tgm_gpu.lock);
 	if (ret) {
 		mutex_destroy(&vm->map_lock);
 		kfree(vm);
 		return ret;
 	}
 	/* every channel's acquires on another channel's fence (task order, ownership dependencies) read this view */
-	ret = fences_map(vm);
+	ret = tgm_fences_map(vm);
 	if (ret) {
 		tgm_vm_del(&vm);
 		return ret;
@@ -160,10 +160,10 @@ int tgm_vm_new(struct tgm_vm **pvm)
 	return 0;
 }
 
-/* The caller holds gpu.lock or the SC7 gate. LTC/MMU locks serialize hardware maintenance. */
+/* The caller holds tgm_gpu.lock or the SC7 gate. LTC/MMU locks serialize hardware maintenance. */
 static void mmu_invalidate_all(void)
 {
-	struct nvkm_device *device = gpu.device;
+	struct nvkm_device *device = tgm_gpu.device;
 
 	nvkm_ltc_invalidate(device->ltc);
 	mutex_lock(&device->mmu->mutex);
@@ -196,8 +196,8 @@ void tgm_vm_del(struct tgm_vm **pvm)
 		return;
 	list_for_each_entry_safe(im, it, &vm->imports, head) /* no channel of it is left to look */
 		kfree(im);
-	gpu_lock();
-	nvkm_ltc_flush(gpu.device->ltc);
+	tgm_gpu_lock();
+	nvkm_ltc_flush(tgm_gpu.device->ltc);
 	list_for_each_entry_safe(k, t, &vm->kmaps, head)
 	{
 		nvif_vmm_put(&vm->vmm, &k->vma);
@@ -206,7 +206,7 @@ void tgm_vm_del(struct tgm_vm **pvm)
 	}
 	nvif_vmm_dtor(&vm->vmm);
 	mmu_invalidate_all(); /* a later space may reuse this one's page directory page */
-	mutex_unlock(&gpu.lock);
+	mutex_unlock(&tgm_gpu.lock);
 	mutex_destroy(&vm->map_lock);
 	kfree(vm);
 	*pvm = NULL;
@@ -232,7 +232,7 @@ static int mem_new(const uint64_t *pas, uint32_t npages, u8 page, struct tgm_mem
 	struct tgm_mem *mem = NULL;
 	u64 asked = 0;
 	int ret = 0;
-	if (gpu.stage < 2)
+	if (tgm_gpu.stage < 2)
 		return -ENODEV;
 	mem = kzalloc(sizeof(*mem), GFP_KERNEL);
 	if (!mem)
@@ -242,14 +242,14 @@ static int mem_new(const uint64_t *pas, uint32_t npages, u8 page, struct tgm_mem
 	mem->pages = pas;
 	mem->npages = npages;
 	asked = stats_on() && lock_wait_ns ? nvxnu_nanotime() : 0;
-	gpu_lock();
+	tgm_gpu_lock();
 	if (asked)
 		*lock_wait_ns = nvxnu_nanotime() - asked;
-	ret = nvif_mem_ctor_type(&gpu.mmu, "bo", NVIF_CLASS_MEM_GF100, gpu.mem_type, page,
+	ret = nvif_mem_ctor_type(&tgm_gpu.mmu, "bo", NVIF_CLASS_MEM_GF100, tgm_gpu.mem_type, page,
 				 mem->bytes, &args, sizeof(args), &mem->mem);
 	if (!ret)
 		mem_prepare_big_views(mem);
-	mutex_unlock(&gpu.lock);
+	mutex_unlock(&tgm_gpu.lock);
 	if (ret) {
 		kfree(mem);
 		return ret;
@@ -276,7 +276,7 @@ int tgm_mem_new_waited(struct tgm_vm *vm, const uint64_t *pas, uint32_t npages,
 int tgm_mem_new_exclusive(struct tgm_vm *vm, const uint64_t *pas, uint32_t npages,
 			  struct tgm_mem **pmem)
 {
-	const int comp = gpu.stage >= 2 && gpu.device->ltc->num_tags;
+	const int comp = tgm_gpu.stage >= 2 && tgm_gpu.device->ltc->num_tags;
 	(void)vm;
 	return mem_new(pas, npages, comp ? tgm_comp_page_shift(pas, npages) : PAGE_SHIFT, pmem,
 		       NULL);
@@ -291,10 +291,10 @@ void tgm_mem_del(struct tgm_mem **pmem)
 {
 	if (!*pmem)
 		return;
-	gpu_lock();
+	tgm_gpu_lock();
 	mem_big_views_drop(*pmem);
 	nvif_mem_dtor(&(*pmem)->mem);
-	mutex_unlock(&gpu.lock);
+	mutex_unlock(&tgm_gpu.lock);
 	kfree(*pmem);
 	*pmem = NULL;
 }
@@ -304,9 +304,9 @@ void tgm_mem_del(struct tgm_mem **pmem)
 /* Every user channel, so a CPU reader outside the GPU client can wait for all GPU work (tegra_gm20b_sync_for_cpu). */
 /* An empty list head points at itself. */
 /* NOLINTNEXTLINE(misc-static-initialization-cycle) */
-LIST_HEAD(live_chans);
-DEFINE_MUTEX(live_lock);
-u64 live_ids;
+LIST_HEAD(tgm_live_chans);
+DEFINE_MUTEX(tgm_live_lock);
+u64 tgm_live_ids;
 
 /* Host imports per address space, by first physical page: who can write a surface the GPU present copies (only an
  * address space that maps its pages; an IOSurface is imported from its page-aligned base, see "GPU present"). */
@@ -314,7 +314,7 @@ void tgm_vm_import_note(struct tgm_vm *vm, uint64_t pa, int add)
 {
 	struct tgm_import *im = NULL;
 
-	mutex_lock(&live_lock);
+	mutex_lock(&tgm_live_lock);
 	list_for_each_entry(im, &vm->imports, head)
 	{
 		if (im->pa == pa)
@@ -335,5 +335,5 @@ void tgm_vm_import_note(struct tgm_vm *vm, uint64_t pa, int add)
 		list_del(&im->head);
 		kfree(im);
 	}
-	mutex_unlock(&live_lock);
+	mutex_unlock(&tgm_live_lock);
 }

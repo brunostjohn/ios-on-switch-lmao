@@ -168,7 +168,7 @@ static inline int tgm_progress_seen(uint32_t completed, uint32_t irq_done, uint3
 	return 1;
 }
 
-/* What a wait that ran out with no GPU error reported found (gpu.c hang_recover). */
+/* What a wait that ran out with no GPU error reported found (gpu.c tgm_hang_recover). */
 enum tgm_hang {
 	TGM_HANG_STUCK, /* nothing to recover: the GPU is stuck on a kernel channel, or nothing progresses: panic */
 	TGM_HANG_RECOVERING, /* a client's channel the GPU is stuck on is being killed (or the late one died already) */

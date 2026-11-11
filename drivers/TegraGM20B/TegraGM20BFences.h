@@ -67,7 +67,7 @@ static inline enum tgm_writer_order tgm_writer_order(uint32_t self, uint32_t uid
 	return acquirable != 0 ? TGM_WRITER_GPU_ACQUIRE : TGM_WRITER_REFUSED;
 }
 
-/* A writer's channel as gpu.c finds it under live_lock (a channel that is gone needs no wait): the follower itself, killed
+/* A writer's channel as gpu.c finds it under tgm_live_lock (a channel that is gone needs no wait): the follower itself, killed
  * (its fence word passed every seqno it gave out), and its completed seqno. */
 struct tgm_fence_source {
 	int self;
@@ -85,7 +85,7 @@ static inline int tgm_fence_wanted(uint64_t writer, const struct tgm_fence_sourc
 }
 
 /* Whether a wait on `seqno` of a channel whose fence word is `fence` passed only because the channel was killed with that
- * submission unfinished (its kill record, gpu.c chan_killed): what the waiter ordered after never ran to its end. */
+ * submission unfinished (its kill record, gpu.c tgm_chan_killed): what the waiter ordered after never ran to its end. */
 static inline int tgm_fence_lost(const volatile struct TegraGM20BAbiFence *fence, uint32_t seqno)
 {
 	return (fence->error != 0 && (int32_t)(seqno - fence->killed_first) >= 0 &&

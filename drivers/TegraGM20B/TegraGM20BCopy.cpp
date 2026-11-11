@@ -109,7 +109,7 @@ bool idle()
 }
 
 // A failure restarts the event order at once; copies of an earlier order that fail later (queue.order) do not restart
-// the new one. A killed channel's copies are settled (fence released, timeline failed: chan_killed has run once
+// the new one. A killed channel's copies are settled (fence released, timeline failed: tgm_chan_killed has run once
 // tgm_chan_del returns) and retire through the tokens they hold, so it is replaced at once. A live channel whose order
 // failed keeps running its copies, and is replaced at its first idle moment, when deleting it waits for nothing: its
 // timeline keeps the failed seqno, and while any timeline does, every event job takes the semantic path

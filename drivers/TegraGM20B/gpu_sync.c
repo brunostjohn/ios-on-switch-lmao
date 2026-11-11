@@ -50,13 +50,13 @@ uint32_t tgm_chan_waiter(struct tgm_chan *chan)
 	return (uint32_t)(chan->id % TGM_WAITERS);
 }
 
-/* live_lock held: `waiter`'s next submission waits for `source` to complete `seqno` (one entry per source, the later seqno) */
+/* tgm_live_lock held: `waiter`'s next submission waits for `source` to complete `seqno` (one entry per source, the later seqno) */
 static int order_add(struct tgm_chan *waiter, struct tgm_chan *source, u32 seqno)
 {
-	uintptr_t off = (uintptr_t)source->fence_cpu - (uintptr_t)fences.va;
+	uintptr_t off = (uintptr_t)source->fence_cpu - (uintptr_t)tgm_fence_pages.va;
 	u32 i = 0;
 
-	if (!waiter->vm->fences_va || !fences.va || off >= TGM_FENCE_BYTES)
+	if (!waiter->vm->fences_va || !tgm_fence_pages.va || off >= TGM_FENCE_BYTES)
 		return -ENODEV;
 	for (i = 0; i < waiter->norder; i++) {
 		if (waiter->order[i].id != source->id)
@@ -104,8 +104,8 @@ int tgm_chan_order(struct tgm_chan *chan, uint32_t flags, uint32_t seqno, uint32
 		if ((s32)(tgm_chan_completed(chan) - seqno) >= 0)
 			flags &= ~TGM_ORDER_BEFORE; /* done already: nothing to wait for */
 	}
-	mutex_lock(&live_lock);
-	list_for_each_entry(other, &live_chans, live)
+	mutex_lock(&tgm_live_lock);
+	list_for_each_entry(other, &tgm_live_chans, live)
 	{
 		if (other == chan || other->kernel || !chan->group || other->group != chan->group ||
 		    READ_ONCE(other->error))
@@ -124,14 +124,14 @@ int tgm_chan_order(struct tgm_chan *chan, uint32_t flags, uint32_t seqno, uint32
 			n++;
 		}
 	}
-	mutex_unlock(&live_lock);
+	mutex_unlock(&tgm_live_lock);
 	*queued = n;
 	return ret;
 }
 
 /* From tgm_chan_exec, before a submission's own entries: the acquires tgm_chan_order queued for it, as one entry. One whose
  * source passed its seqno already is left out. 1 if any was pushed. */
-int order_waits(struct tgm_chan *chan)
+int tgm_order_waits(struct tgm_chan *chan)
 {
 	struct nvif_push *push = &chan->chan.push;
 	struct tgm_order wait[TGM_ORDER_MAX];
@@ -139,11 +139,11 @@ int order_waits(struct tgm_chan *chan)
 	u32 n = 0;
 	u32 kicked = 0;
 
-	mutex_lock(&live_lock);
+	mutex_lock(&tgm_live_lock);
 	n = chan->norder;
 	memcpy(wait, chan->order, n * sizeof(wait[0]));
 	chan->norder = 0;
-	mutex_unlock(&live_lock);
+	mutex_unlock(&tgm_live_lock);
 	for (i = 0; i < n; i++) {
 		if ((s32)(READ_ONCE(*wait[i].cpu) - wait[i].seqno) >= 0)
 			continue;
@@ -160,7 +160,7 @@ int order_waits(struct tgm_chan *chan)
 		kicked++;
 		/* the compositor never waits behind an app channel the deadline holds */
 		if (chan->high)
-			tgm_hold_need(gpu.device, wait[i].chid);
+			tgm_hold_need(tgm_gpu.device, wait[i].chid);
 	}
 	if (kicked)
 		PUSH_KICK(push);
@@ -196,8 +196,8 @@ int tegra_gm20b_sync_for_cpu(const void *va, uint64_t bytes, uint64_t timeout_ns
 	u64 end = 0;
 
 	mutex_lock(&sync_lock);
-	mutex_lock(&live_lock);
-	list_for_each_entry(chan, &live_chans, live)
+	mutex_lock(&tgm_live_lock);
+	list_for_each_entry(chan, &tgm_live_chans, live)
 	{
 		if (n < TGM_SYNC_MAX) {
 			want[n].id = chan->id;
@@ -205,7 +205,7 @@ int tegra_gm20b_sync_for_cpu(const void *va, uint64_t bytes, uint64_t timeout_ns
 			n++;
 		}
 	}
-	mutex_unlock(&live_lock);
+	mutex_unlock(&tgm_live_lock);
 	if (!n) {
 		mutex_unlock(&sync_lock);
 		return 0;
@@ -213,18 +213,18 @@ int tegra_gm20b_sync_for_cpu(const void *va, uint64_t bytes, uint64_t timeout_ns
 	end = nvxnu_nanotime() + timeout_ns;
 	for (i = 0; i < n && !ret; i++) {
 		ret = sync_wait(want[i].id, want[i].seqno, end);
-		if (!ret || gpu.stage < 3)
+		if (!ret || tgm_gpu.stage < 3)
 			continue;
 		/* the caller would copy a surface the GPU may still be writing: what the GPU is stuck on is killed and
 		 * waited for; slow work only times the copy out */
 		verdict = TGM_HANG_PROGRESSING;
-		mutex_lock(&live_lock);
+		mutex_lock(&tgm_live_lock);
 		chan = live_by(want[i].id, 0);
 		if (chan)
-			verdict = hang_recover(chan, "sync_for_cpu", want[i].seqno, timeout_ns);
+			verdict = tgm_hang_recover(chan, "sync_for_cpu", want[i].seqno, timeout_ns);
 		if (verdict == TGM_HANG_STUCK)
 			tgm_chan_hung(chan, "sync_for_cpu", want[i].seqno, timeout_ns);
-		mutex_unlock(&live_lock);
+		mutex_unlock(&tgm_live_lock);
 		if (verdict == TGM_HANG_RECOVERING) {
 			ret = sync_wait(want[i].id, want[i].seqno,
 					nvxnu_nanotime() + 2 * TGM_ISOLATE_NS);
@@ -248,14 +248,14 @@ int tgm_writer_done(uint32_t uid, uint32_t seqno)
 	struct tgm_chan *chan = NULL;
 	int done = 0;
 
-	mutex_lock(&live_lock);
+	mutex_lock(&tgm_live_lock);
 	chan = live_by_uid(uid);
 	done = !chan || chan->error || (s32)(tgm_chan_completed(chan) - seqno) >= 0;
-	mutex_unlock(&live_lock);
+	mutex_unlock(&tgm_live_lock);
 	return done;
 }
 
-/* live_lock held: what a wait for `uid` reaching `seqno` is late on. A kernel copy that sits on an acquire completes
+/* tgm_live_lock held: what a wait for `uid` reaching `seqno` is late on. A kernel copy that sits on an acquire completes
  * nothing of its own, so its lateness is the first writer it acquires on that has not completed; only once they all
  * have is it the copy's. */
 static struct tgm_chan *late_writer(u32 uid, u32 seqno, const struct tgm_relayout_writer *acquired,
@@ -298,16 +298,17 @@ static void writer_wait(u32 uid, u32 seqno, const struct tgm_relayout_writer *ac
 			if (!nvxnu_idle(seq, end) && tgm_writer_done(uid, seqno))
 				nvxnu_wake_due(seq, "fence", seqno);
 		}
-		if (gpu.stage < 3)
+		if (tgm_gpu.stage < 3)
 			continue;
 		verdict = TGM_HANG_PROGRESSING;
-		mutex_lock(&live_lock);
+		mutex_lock(&tgm_live_lock);
 		chan = late_writer(uid, seqno, acquired, nacquired, &late);
 		if (chan)
-			verdict = hang_recover(chan, "IOSurface lock", late, TGM_WRITER_HANG_NS);
+			verdict =
+				tgm_hang_recover(chan, "IOSurface lock", late, TGM_WRITER_HANG_NS);
 		if (verdict == TGM_HANG_STUCK)
 			tgm_chan_hung(chan, "IOSurface lock", late, TGM_WRITER_HANG_NS);
-		mutex_unlock(&live_lock);
+		mutex_unlock(&tgm_live_lock);
 	}
 }
 
@@ -328,14 +329,14 @@ int tgm_writer_fence_va(struct tgm_vm *vm, uint32_t uid, uint64_t *va)
 	uintptr_t off = 0;
 	int ret = -ENOENT;
 
-	mutex_lock(&live_lock);
+	mutex_lock(&tgm_live_lock);
 	chan = live_by_uid(uid);
-	off = chan ? (uintptr_t)chan->fence_cpu - (uintptr_t)fences.va : TGM_FENCE_BYTES;
-	if (chan && !chan->error && vm->fences_va && fences.va && off < TGM_FENCE_BYTES) {
+	off = chan ? (uintptr_t)chan->fence_cpu - (uintptr_t)tgm_fence_pages.va : TGM_FENCE_BYTES;
+	if (chan && !chan->error && vm->fences_va && tgm_fence_pages.va && off < TGM_FENCE_BYTES) {
 		*va = vm->fences_va + off;
 		ret = 0;
 	}
-	mutex_unlock(&live_lock);
+	mutex_unlock(&tgm_live_lock);
 	return ret;
 }
 
@@ -344,8 +345,8 @@ int tgm_writers_all_done(void)
 	struct tgm_chan *chan = NULL;
 	int done = 1;
 
-	mutex_lock(&live_lock);
-	list_for_each_entry(chan, &live_chans, live)
+	mutex_lock(&tgm_live_lock);
+	list_for_each_entry(chan, &tgm_live_chans, live)
 	{
 		if (!chan->error &&
 		    (s32)(tgm_chan_completed(chan) - READ_ONCE(chan->submitted)) < 0) {
@@ -353,7 +354,7 @@ int tgm_writers_all_done(void)
 			break;
 		}
 	}
-	mutex_unlock(&live_lock);
+	mutex_unlock(&tgm_live_lock);
 	return done;
 }
 
@@ -373,7 +374,7 @@ int tgm_chan_follow(struct tgm_chan *chan, const uint64_t *writers, uint32_t n)
 	uint32_t i = 0;
 	int ret = 0;
 
-	mutex_lock(&live_lock);
+	mutex_lock(&tgm_live_lock);
 	for (i = 0; i < n && !ret; i++) {
 		src = live_by_uid(tgm_fence_uid(writers[i]));
 		if (!src || src->kernel)
@@ -384,7 +385,7 @@ int tgm_chan_follow(struct tgm_chan *chan, const uint64_t *writers, uint32_t n)
 		if (tgm_fence_wanted(writers[i], &state))
 			ret = order_add(chan, src, tgm_fence_seqno(writers[i]));
 	}
-	mutex_unlock(&live_lock);
+	mutex_unlock(&tgm_live_lock);
 	return ret;
 }
 
@@ -396,8 +397,8 @@ int tgm_chan_follow_importers(struct tgm_chan *chan, uint64_t pa, uint32_t *pend
 	int ret = 0;
 
 	*pending = 0;
-	mutex_lock(&live_lock);
-	list_for_each_entry(other, &live_chans, live)
+	mutex_lock(&tgm_live_lock);
+	list_for_each_entry(other, &tgm_live_chans, live)
 	{
 		if (other->kernel || !vm_imports(other->vm, pa))
 			continue;
@@ -412,7 +413,7 @@ int tgm_chan_follow_importers(struct tgm_chan *chan, uint64_t pa, uint32_t *pend
 		if (ret)
 			break;
 	}
-	mutex_unlock(&live_lock);
+	mutex_unlock(&tgm_live_lock);
 	return ret;
 }
 

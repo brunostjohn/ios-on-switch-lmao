@@ -7,7 +7,7 @@ static struct resource gpu_res[] = {
 	{.start = 0x57000000, .end = 0x57ffffff, .name = "bar0", .flags = IORESOURCE_MEM},
 	{.start = 0x58000000, .end = 0x58ffffff, .name = "bar1", .flags = IORESOURCE_MEM},
 };
-struct platform_device gpu_pdev = {
+struct platform_device tgm_gpu_pdev = {
 	.name = "gpu",
 	.id = 0,
 	.dev = {.init_name = "57000000.gpu"},
@@ -22,97 +22,97 @@ static const struct nvkm_device_tegra_func gm20b_platform_data = {
 	.require_vdd = true,
 	.require_ref_clk = true,
 };
-struct gpu_state gpu = {.lock = {NULL}};
+struct gpu_state tgm_gpu = {.lock = {NULL}};
 
 #if TGM_STATS
-/* Rail-gating's count of wakes, for its journal line: how many the display asked for, how many work at gpu.lock or the
+/* Rail-gating's count of wakes, for its journal line: how many the display asked for, how many work at tgm_gpu.lock or the
  * gate did, where the first such caller came from, and the pool bytes its callers zeroed on the CPU while it was down. */
-struct rail_ups_state rail_ups;
+struct rail_ups_state tgm_rail_ups;
 
 #endif
-/* The last GPU time handed out (tgm_timestamp_ns) or read before a power-down (sleep_nvkm), under gpu.lock: the floor of
+/* The last GPU time handed out (tgm_timestamp_ns) or read before a power-down (sleep_nvkm), under tgm_gpu.lock: the floor of
  * every GPU time after it (tgm_stamp_monotonic). */
-u64 stamp_last;
+u64 tgm_stamp_last;
 
-/* gpu.lock for an nvif call. A rail-gated GPU is woken here, by the caller that needs it, under the lock it owns: the
+/* tgm_gpu.lock for an nvif call. A rail-gated GPU is woken here, by the caller that needs it, under the lock it owns: the
  * next holder finds the GPU up, and nothing reaches its registers while it is down. */
-noinline void gpu_lock(void)
+noinline void tgm_gpu_lock(void)
 {
-	mutex_lock(&gpu.lock);
-	if (unlikely(gpu.railed))
-		rail_up_locked(__builtin_return_address(0));
+	mutex_lock(&tgm_gpu.lock);
+	if (unlikely(tgm_gpu.railed))
+		tgm_rail_up_locked(__builtin_return_address(0));
 }
 
 int tgm_stage(void)
 {
-	return gpu.stage;
+	return tgm_gpu.stage;
 }
 #if TGM_STATS
 /* Debug kernels: clock gating off (nvgpu's disable values, ELCG run) or on again, for a frame-time A/B within one boot;
- * under gpu.lock, once the bring-up has reached M3. */
+ * under tgm_gpu.lock, once the bring-up has reached M3. */
 int tgm_clkgate_switch(int on)
 {
 	int ret = 0;
 
-	gpu_lock();
-	if (gpu.stage < 3) {
+	tgm_gpu_lock();
+	if (tgm_gpu.stage < 3) {
 		ret = -EBUSY;
 	} else if (on) {
-		tgm_clkgate_enable(gpu.device);
+		tgm_clkgate_enable(tgm_gpu.device);
 	} else {
-		tgm_clkgate_disable(gpu.device);
+		tgm_clkgate_disable(tgm_gpu.device);
 	}
-	mutex_unlock(&gpu.lock);
+	mutex_unlock(&tgm_gpu.lock);
 	nvxnu_log("tegra-gm20b: clock gating %s (debug A/B)%s\n", on ? "on" : "off",
 		  ret ? ": not yet, the bring-up has not reached M3" : "");
 	return ret;
 }
 #endif
-volatile u32 waiter_words[TGM_WAITERS];
+volatile u32 tgm_waiter_words[TGM_WAITERS];
 #if TGM_STATS
 /* stats: when each word was last woken (ns), and this window's wakes and fence waits (the "waits" line) */
-u64 waiter_woken_ns[TGM_WAITERS];
-struct wstat_state wstat;
+u64 tgm_waiter_woken_ns[TGM_WAITERS];
+struct wstat_state tgm_wstat;
 
 #endif
 uint32_t tgm_waiter_seq(uint32_t waiter)
 {
-	return nvxnu_word_seq(&waiter_words[waiter % TGM_WAITERS]);
+	return nvxnu_word_seq(&tgm_waiter_words[waiter % TGM_WAITERS]);
 }
 
 int tgm_waiter_idle(uint32_t waiter, uint32_t seq, uint64_t deadline_ns)
 {
-	return nvxnu_word_idle(&waiter_words[waiter % TGM_WAITERS], seq, deadline_ns);
+	return nvxnu_word_idle(&tgm_waiter_words[waiter % TGM_WAITERS], seq, deadline_ns);
 }
 
 void tgm_waiter_unwoken(uint32_t waiter, uint32_t seq, uint32_t seqno)
 {
-	nvxnu_word_wake_due(&waiter_words[waiter % TGM_WAITERS], seq, "fence", seqno);
+	nvxnu_word_wake_due(&tgm_waiter_words[waiter % TGM_WAITERS], seq, "fence", seqno);
 }
 
-/* System sleep's gate (TegraGM20BSleepGate.h, "system sleep" below): what touches the GPU outside gpu.lock goes through it. */
-struct tgm_gate sc7_gate;
-DEFINE_MUTEX(gate_lock);
+/* System sleep's gate (TegraGM20BSleepGate.h, "system sleep" below): what touches the GPU outside tgm_gpu.lock goes through it. */
+struct tgm_gate tgm_sc7_gate;
+DEFINE_MUTEX(tgm_gate_lock);
 
 /* In, waiting for the wake while the gate is shut. */
-void gate_enter(void)
+void tgm_gate_enter(void)
 {
 	enum tgm_gate_entry entry = TGM_GATE_IN;
 
-	while ((entry = tgm_gate_try_enter(&sc7_gate)) != TGM_GATE_IN) {
-		if (READ_ONCE(gpu.railed)) {
+	while ((entry = tgm_gate_try_enter(&tgm_sc7_gate)) != TGM_GATE_IN) {
+		if (READ_ONCE(tgm_gpu.railed)) {
 			if (entry == TGM_GATE_SHUT_WAKE)
 				gate_wake_closer();
-			gpu_lock();
-			mutex_unlock(&gpu.lock);
+			tgm_gpu_lock();
+			mutex_unlock(&tgm_gpu.lock);
 			continue;
 		}
-		mutex_lock(&gate_lock);
+		mutex_lock(&tgm_gate_lock);
 		if (entry == TGM_GATE_SHUT_WAKE)
-			nvxnu_wakeup(&sc7_gate.inside);
-		while (tgm_gate_is_shut(&sc7_gate) && !READ_ONCE(gpu.railed))
-			nvxnu_mutex_sleep(gate_lock.lck, &sc7_gate.shut, ~0ULL);
-		mutex_unlock(&gate_lock);
+			nvxnu_wakeup(&tgm_sc7_gate.inside);
+		while (tgm_gate_is_shut(&tgm_sc7_gate) && !READ_ONCE(tgm_gpu.railed))
+			nvxnu_mutex_sleep(tgm_gate_lock.lck, &tgm_sc7_gate.shut, ~0ULL);
+		mutex_unlock(&tgm_gate_lock);
 	}
 }
 
@@ -154,18 +154,18 @@ static int m1(char *line, unsigned int len)
 		return ret;
 	}
 	/* power-up (shim/tegra_shim.c), then BOOT_0 and every subdev constructor */
-	ret = nvkm_device_tegra_new(&gm20b_platform_data, &gpu_pdev, "", "error", &device);
+	ret = nvkm_device_tegra_new(&gm20b_platform_data, &tgm_gpu_pdev, "", "error", &device);
 	if (ret) {
 		scnprintf(line, len, "M1 FAIL nvkm_device_tegra_new %d", ret);
 		return ret;
 	}
-	gpu.device = device;
+	tgm_gpu.device = device;
 	nvxnu_step("tegra-gm20b: M1 step: device constructed, claim GPU interrupts\n");
 	/* nvkm's handler is recorded (request_irq in nvkm_device_ctor) and nothing is armed yet: claim the GPU lines
 	 * before the first nvkm init that may wait */
 	nvxnu_irq_start();
 	boot0 = nvkm_rd32(device, 0x000000);
-	gpu.boot0 = boot0;
+	tgm_gpu.boot0 = boot0;
 	tegra_gm20b_rail_get_uv(&uv);
 	nvxnu_step("tegra-gm20b: M1 step: BOOT_0 %08x, rail %d uV; init PRI ring\n", boot0, uv);
 
@@ -246,7 +246,7 @@ static void m2_step(struct nvkm_device *device, const char *what, const char *na
  * fifo, ltc and mm.
  * Without the fini, nvkm_subdev_init() passes over the three running subdevs and the rest come up in nvgpu's order on
  * the GPCPLL. The GPU left CAR reset in M1, so the fini pass's engine PMC resets have nothing to clear. */
-int m2_device_init(struct nvkm_device *device, const char **at)
+int tgm_m2_device_init(struct nvkm_device *device, const char **at)
 {
 	struct nvkm_subdev *subdev = NULL;
 	int ret = 0;
@@ -325,11 +325,11 @@ static struct nvif_parent tgm_nvif_parent;
 
 static int m2(char *line, unsigned int len)
 {
-	struct nvkm_device *device = gpu.device;
+	struct nvkm_device *device = tgm_gpu.device;
 	struct nvkm_engine *gr = NULL;
 	const char *at = "";
 	u64 units = 0;
-	int ret = m2_device_init(
+	int ret = tgm_m2_device_init(
 		device,
 		&at); /* fb, ltc, mmu, bar, ACR (HS on PMU), LS PMU, volt; privring/clk: M1 */
 
@@ -361,27 +361,27 @@ static int m2(char *line, unsigned int len)
 	/* GR is up: this line is the stage's real result, so it reaches the log even if the nvif setup below fails */
 	nvxnu_step("tegra-gm20b: %s\n", line);
 
-	mutex_init(&gpu.lock);
+	mutex_init(&tgm_gpu.lock);
 	at = "nvif_driver_init";
-	ret = nvif_driver_init(NULL, "", "error", "tegra-gm20b", device->handle, &gpu.client);
+	ret = nvif_driver_init(NULL, "", "error", "tegra-gm20b", device->handle, &tgm_gpu.client);
 	if (!ret) {
 		/* every object made below inherits this printer (nvif/object.c: object->parent = parent->parent) */
 		nvif_parent_ctor(&tgm_nvif_parent_func, &tgm_nvif_parent);
-		gpu.client.object.parent = &tgm_nvif_parent;
+		tgm_gpu.client.object.parent = &tgm_nvif_parent;
 		at = "nvif_device_ctor";
-		ret = nvif_device_ctor(&gpu.client, "dev", &gpu.dev);
+		ret = nvif_device_ctor(&tgm_gpu.client, "dev", &tgm_gpu.dev);
 	}
 	if (!ret) {
 		/* the MMU class is a child of the device object, as nouveau_drm.c creates it (on the client: -22) */
 		at = "nvif_mmu_ctor";
-		ret = nvif_mmu_ctor(&gpu.dev.object, "mmu", NVIF_CLASS_MMU_GF100, &gpu.mmu);
+		ret = nvif_mmu_ctor(&tgm_gpu.dev.object, "mmu", NVIF_CLASS_MMU_GF100, &tgm_gpu.mmu);
 	}
 	if (!ret) {
 		at = "nvif_mmu_type";
-		gpu.mem_type = nvif_mmu_type(&gpu.mmu, NVIF_MEM_HOST | NVIF_MEM_KIND);
-		if (gpu.mem_type < 0)
-			gpu.mem_type = nvif_mmu_type(&gpu.mmu, NVIF_MEM_HOST);
-		ret = gpu.mem_type < 0 ? gpu.mem_type : 0;
+		tgm_gpu.mem_type = nvif_mmu_type(&tgm_gpu.mmu, NVIF_MEM_HOST | NVIF_MEM_KIND);
+		if (tgm_gpu.mem_type < 0)
+			tgm_gpu.mem_type = nvif_mmu_type(&tgm_gpu.mmu, NVIF_MEM_HOST);
+		ret = tgm_gpu.mem_type < 0 ? tgm_gpu.mem_type : 0;
 	}
 	if (ret) {
 		scnprintf(line, len, "M2 FAIL %s %d (GR came up: see the M2 ok line above)", at,
@@ -392,15 +392,15 @@ static int m2(char *line, unsigned int len)
 
 void tgm_get_info(struct tgm_info *info)
 {
-	u64 units = gpu.stage >= 2 ? nvkm_gr_units(gpu.device->gr) : 0;
+	u64 units = tgm_gpu.stage >= 2 ? nvkm_gr_units(tgm_gpu.device->gr) : 0;
 	memset(info, 0, sizeof(*info));
-	if (!gpu.device)
+	if (!tgm_gpu.device)
 		return;
-	info->boot0 = gpu.boot0;
-	info->chipset = gpu.device->chipset;
+	info->boot0 = tgm_gpu.boot0;
+	info->chipset = tgm_gpu.device->chipset;
 	info->gpc_count = units & 0xff;
 	info->tpc_count = (units >> 8) & 0xffff;
-	info->comptag_lines = gpu.device->ltc->num_tags;
+	info->comptag_lines = tgm_gpu.device->ltc->num_tags;
 }
 
 /* Global, first fit, never removed, as nvgpu's ZBC_SET_TABLE and nvkm's FERMI_A_ZBC_* keep entries; GR and LTC init write
@@ -415,30 +415,30 @@ int tgm_zbc_add(int depth, uint32_t format, const uint32_t ds[4], const uint32_t
 	int ret = -EINVAL;
 	unsigned int i = 0;
 
-	if (gpu.stage < 2 || !gpu.device->ltc->num_tags)
+	if (tgm_gpu.stage < 2 || !tgm_gpu.device->ltc->num_tags)
 		return -ENODEV;
-	gr = gf100_gr(gpu.device->gr);
-	gpu_lock();
+	gr = gf100_gr(tgm_gpu.device->gr);
+	tgm_gpu_lock();
 	if (depth && format == FERMI_A_ZBC_DEPTH_V0_FMT_FP32)
 		ret = gf100_gr_zbc_depth_get(gr, format, ds[0], l2[0]);
 	for (i = 0; !depth && i < ARRAY_SIZE(color_formats); i++) {
 		if (format == color_formats[i])
 			ret = gf100_gr_zbc_color_get(gr, format, ds, l2);
 	}
-	mutex_unlock(&gpu.lock);
+	mutex_unlock(&tgm_gpu.lock);
 	return ret;
 }
 
 uint64_t tgm_timestamp_ns(void)
 {
 	u64 t = 0;
-	if (gpu.stage < 2)
+	if (tgm_gpu.stage < 2)
 		return 0;
-	mutex_lock(&gpu.lock);
+	mutex_lock(&tgm_gpu.lock);
 	/* a rail-gated GPU's time is ktime, without a wake: PTIMER restarts from it (stamp_reseed) */
-	t = gpu.railed ? (u64)ktime_to_ns(ktime_get()) : nvif_device_time(&gpu.dev);
-	stamp_last = t = tgm_stamp_monotonic(stamp_last, t);
-	mutex_unlock(&gpu.lock);
+	t = tgm_gpu.railed ? (u64)ktime_to_ns(ktime_get()) : nvif_device_time(&tgm_gpu.dev);
+	tgm_stamp_last = t = tgm_stamp_monotonic(tgm_stamp_last, t);
+	mutex_unlock(&tgm_gpu.lock);
 	return t;
 }
 
@@ -446,7 +446,7 @@ uint64_t tgm_timestamp_ns(void)
  * runlist (the GRCE) waits for the 3D engine at every switch of a channel to it; one on a runlist of its own overlaps. */
 static void log_engines(void)
 {
-	struct nvkm_device *device = gpu.device;
+	struct nvkm_device *device = tgm_gpu.device;
 	struct nvkm_top_device *tdev = NULL;
 	struct nvkm_runl *runl = NULL;
 	char line[256];
@@ -550,40 +550,40 @@ int tgm_bringup(int stage, char *line, unsigned int len)
 {
 	int ret = 0;
 	line[0] = 0;
-	if (gpu.stage < 1 && stage >= 1) {
+	if (tgm_gpu.stage < 1 && stage >= 1) {
 		ret = m1(line, len);
 		if (ret)
 			return ret;
-		gpu.stage = 1;
+		tgm_gpu.stage = 1;
 	}
-	if (gpu.stage < 2 && stage >= 2) {
-		ret = clk_raise(line, len); /* GPCPLL above 76.8 MHz before ACR/PMU/GR */
+	if (tgm_gpu.stage < 2 && stage >= 2) {
+		ret = tgm_clk_raise(line, len); /* GPCPLL above 76.8 MHz before ACR/PMU/GR */
 		if (!ret)
 			ret = m2(line, len);
 		if (ret)
 			return ret;
-		tgm_clkgate_load(gpu.device);
-		tgm_clkgate_guard_reset(gpu.device);
-		tgm_recover_init(gpu.device);
-		tgm_recover_arm(gpu.device);
-		tgm_sched_init(gpu.device);
-		gpu.stage = 2;
+		tgm_clkgate_load(tgm_gpu.device);
+		tgm_clkgate_guard_reset(tgm_gpu.device);
+		tgm_recover_init(tgm_gpu.device);
+		tgm_recover_arm(tgm_gpu.device);
+		tgm_sched_init(tgm_gpu.device);
+		tgm_gpu.stage = 2;
 	}
-	if (gpu.stage < 3 && stage >= 3) {
+	if (tgm_gpu.stage < 3 && stage >= 3) {
 		ret = m3(line, len);
 		if (ret)
 			return ret;
-		tgm_clkgate_enable(gpu.device);
-		gpu.stage = 3;
+		tgm_clkgate_enable(tgm_gpu.device);
+		tgm_gpu.stage = 3;
 		if (stats_on())
 			log_engines();
 		if (tgm_all_clients())
-			iso.deadline = nvxnu_work_alloc(iso_deadline, NULL);
-		nvxnu_errors_fatal(iso.deadline ? errors_contained : NULL);
+			tgm_iso.deadline = nvxnu_work_alloc(tgm_iso_deadline, NULL);
+		nvxnu_errors_fatal(tgm_iso.deadline ? tgm_errors_contained : NULL);
 		if (tgm_coherency_init())
 			nvxnu_log("tegra-gm20b: no coherency registry: imports are cleaned once\n");
-		idle_start(); /* 768 MHz while busy, 76.8 MHz once truly idle */
-		scrub_open(); /* the copy engine zeroes the pool from here on (see "pool scrub") */
+		tgm_idle_start(); /* 768 MHz while busy, 76.8 MHz once truly idle */
+		tgm_scrub_open(); /* the copy engine zeroes the pool from here on (see "pool scrub") */
 	}
 	return ret;
 }

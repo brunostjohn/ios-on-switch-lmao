@@ -65,9 +65,9 @@ static int clk_state(struct nvkm_device *device, const char *what, int ret, u32 
 	       now == (int)khz && !badf(ring) && (ring & 1) && !(bus & 0x8);
 }
 
-int clk_raise(char *line, unsigned int len)
+int tgm_clk_raise(char *line, unsigned int len)
 {
-	struct nvkm_device *device = gpu.device;
+	struct nvkm_device *device = tgm_gpu.device;
 	int speedo = tegra_sku_info.gpu_speedo_value;
 	int ceil_uv = tegra_gm20b_rail_max_uv();
 	int uv = 0;
@@ -190,7 +190,7 @@ int clk_raise(char *line, unsigned int len)
  * The change is the output divider alone, VCO left running and locked (1536 MHz: M 1, N 40 from the 38.4 MHz
  * reference), PL 1 <-> 10. GM20B's GPCPLL changes PL without a glitch (nvgpu clk_gm20b.c: PLDIV_GLITCHLESS; nouveau
  * gm20b.c gm20b_pllg_program_mnp's pdiv_only path, whose sequence this is: VCO divider 1:2 around it, an interim PL
- * sharing a bit with both ends). No NDIV slide, no relock, no bypass, no VDD_GPU write (the rail stays at clk_raise's
+ * sharing a bit with both ends). No NDIV slide, no relock, no bypass, no VDD_GPU write (the rail stays at tgm_clk_raise's
  * 800 mV): a few register writes and two 2 us delays, timed on every raise and logged (raise mean/max).
  * Before first use, gov_start runs one drop and raise at stage 3 (no client yet) and logs both times. Any failure
  * (the divider not reading back, the PLL not locked, the clock not at the rate) logs one line and leaves the GPU at
@@ -203,15 +203,15 @@ int clk_raise(char *line, unsigned int len)
 
 extern uint64_t
 native_display_last_swap_ns(void); /* NativeLegacyDisplay.cpp: validateSwap's last call, 0: none */
-struct idle_state idle;
+struct idle_state tgm_idle;
 
 #include "SwitchGpuIdleDeadline.h"
 
 /* GM20B's glitchless PL change (nouveau gm20b.c gm20b_pllg_program_mnp, pdiv_only): returns 0 when the GPCPLL is
- * locked, on the VCO, at PL `pl`. Under idle.clk. */
+ * locked, on the VCO, at PL `pl`. Under tgm_idle.clk. */
 static int pl_switch(u32 pl)
 {
-	struct nvkm_device *device = gpu.device;
+	struct nvkm_device *device = tgm_gpu.device;
 	u32 coeff = nvkm_rd32(device, GPCPLL_COEFF_R);
 	u32 old = (coeff >> 16) & 0x3f;
 	u32 back = 0;
@@ -251,19 +251,19 @@ static int pl_switch(u32 pl)
 		       : -EIO;
 }
 
-/* Under idle.clk: a divider change failed. One line, then 768 MHz for the boot (the divider, else nouveau's full
+/* Under tgm_idle.clk: a divider change failed. One line, then 768 MHz for the boot (the divider, else nouveau's full
  * reprogram of the rate), the idle clock off. */
 static void idle_fail(const char *what, u32 pl)
 {
-	struct nvkm_device *device = gpu.device;
+	struct nvkm_device *device = tgm_gpu.device;
 	int back = 0;
 
-	WRITE_ONCE(idle.on, 0);
-	WRITE_ONCE(idle.clock_available, 0);
-	back = pl_switch(idle.run_pl);
+	WRITE_ONCE(tgm_idle.on, 0);
+	WRITE_ONCE(tgm_idle.clock_available, 0);
+	back = pl_switch(tgm_idle.run_pl);
 	if (back)
-		back = clk_prog_khz(device, idle.run_khz);
-	WRITE_ONCE(idle.low, 0);
+		back = clk_prog_khz(device, tgm_idle.run_khz);
+	WRITE_ONCE(tgm_idle.low, 0);
 	nvxnu_log("tegra-gm20b: idle clock off: %s to PL %u did not take (GPCPLL_CFG %08x COEFF "
 		  "%08x SEL_VCO %x "
 		  "GPC2CLK_OUT %08x); %d kHz now (%d), for this boot\n",
@@ -275,29 +275,29 @@ static void idle_fail(const char *what, u32 pl)
 #include "SwitchGpuClockControl.h"
 
 /* Up to the run rate if the idle divider is in force; returns the ns it took (0: nothing to do). Thread context. */
-u64 idle_raise(void)
+u64 tgm_idle_raise(void)
 {
 	u64 t0 = 0;
 	u64 dt = 0;
 
-	nvxnu_mutex_lock(idle.clk);
-	if (READ_ONCE(idle.low)) {
+	nvxnu_mutex_lock(tgm_idle.clk);
+	if (READ_ONCE(tgm_idle.low)) {
 		t0 = stats_on() ? nvxnu_nanotime() : 0;
-		if (pl_switch(idle.run_pl)) {
-			idle_fail("raise", idle.run_pl);
+		if (pl_switch(tgm_idle.run_pl)) {
+			idle_fail("raise", tgm_idle.run_pl);
 		} else {
-            WRITE_ONCE(idle.low, 0);
-            if (stats_on()) {
-                dt = nvxnu_nanotime() - t0;
-                idle.raises++;
-                idle.raise_sum += dt;
-                if (dt > idle.raise_max)
-                    idle.raise_max = dt;
-                idle.low_ns += t0 - idle.low_since;
-            }
+			WRITE_ONCE(tgm_idle.low, 0);
+			if (stats_on()) {
+				dt = nvxnu_nanotime() - t0;
+				tgm_idle.raises++;
+				tgm_idle.raise_sum += dt;
+				if (dt > tgm_idle.raise_max)
+					tgm_idle.raise_max = dt;
+				tgm_idle.low_ns += t0 - tgm_idle.low_since;
+			}
 		}
 	}
-	nvxnu_mutex_unlock(idle.clk);
+	nvxnu_mutex_unlock(tgm_idle.clk);
 	return dt;
 }
 
@@ -306,59 +306,59 @@ static void idle_drop(void *arg)
 	u64 now = 0;
 
 	(void)arg;
-	nvxnu_mutex_lock(idle.clk);
+	nvxnu_mutex_lock(tgm_idle.clk);
 	now = nvxnu_nanotime();
-	if (READ_ONCE(idle.on) && !READ_ONCE(idle.low) && !idle_in_flight() &&
-	    now >= __atomic_load_n(&idle.service_until, __ATOMIC_SEQ_CST) &&
-	    now - __atomic_load_n(&idle.last_busy, __ATOMIC_SEQ_CST) >= IDLE_DROP_NS &&
+	if (READ_ONCE(tgm_idle.on) && !READ_ONCE(tgm_idle.low) && !idle_in_flight() &&
+	    now >= __atomic_load_n(&tgm_idle.service_until, __ATOMIC_SEQ_CST) &&
+	    now - __atomic_load_n(&tgm_idle.last_busy, __ATOMIC_SEQ_CST) >= IDLE_DROP_NS &&
 	    now - native_display_last_swap_ns() >= IDLE_DROP_NS) {
-		if (pl_switch(idle.idle_pl)) {
-			idle_fail("drop", idle.idle_pl);
+		if (pl_switch(tgm_idle.idle_pl)) {
+			idle_fail("drop", tgm_idle.idle_pl);
 		} else {
-			WRITE_ONCE(idle.low, 1);
-            if (stats_on()) {
-                idle.drops++;
-                idle.low_since = nvxnu_nanotime();
-            }
+			WRITE_ONCE(tgm_idle.low, 1);
+			if (stats_on()) {
+				tgm_idle.drops++;
+				tgm_idle.low_since = nvxnu_nanotime();
+			}
 		}
 	}
-	__atomic_store_n(&idle.dropping, 0, __ATOMIC_SEQ_CST);
-	nvxnu_mutex_unlock(idle.clk);
-	if (READ_ONCE(idle.low))
+	__atomic_store_n(&tgm_idle.dropping, 0, __ATOMIC_SEQ_CST);
+	nvxnu_mutex_unlock(tgm_idle.clk);
+	if (READ_ONCE(tgm_idle.low))
 		tgm_rail_idle();
 }
 
 int tgm_idle_now(void)
 {
-	return !READ_ONCE(idle.on) || READ_ONCE(idle.low);
+	return !READ_ONCE(tgm_idle.on) || READ_ONCE(tgm_idle.low);
 }
 
 static void idle_hint_raise(void *arg)
 {
 	(void)arg;
-	if (idle_raise()) {
-		nvxnu_mutex_lock(idle.clk);
-		idle.hinted++;
-		nvxnu_mutex_unlock(idle.clk);
+	if (tgm_idle_raise()) {
+		nvxnu_mutex_lock(tgm_idle.clk);
+		tgm_idle.hinted++;
+		nvxnu_mutex_unlock(tgm_idle.clk);
 	}
 }
 #if TGM_STATS
-/* Debug kernels: fn on a GPU held still, once the bring-up has reached M3: up and kept up under gpu.lock (no rail-down,
- * rail-up or system sleep), its GPCPLL divider fixed under idle.clk (taken inside gpu.lock, as sleep_idle_off takes it).
+/* Debug kernels: fn on a GPU held still, once the bring-up has reached M3: up and kept up under tgm_gpu.lock (no rail-down,
+ * rail-up or system sleep), its GPCPLL divider fixed under tgm_idle.clk (taken inside tgm_gpu.lock, as sleep_idle_off takes it).
  * 0, or -EBUSY before M3. */
 int tgm_gpu_held(void (*fn)(struct nvkm_device *device, void *arg), void *arg)
 {
-	gpu_lock();
-	if (gpu.stage < 3) {
-		mutex_unlock(&gpu.lock);
+	tgm_gpu_lock();
+	if (tgm_gpu.stage < 3) {
+		mutex_unlock(&tgm_gpu.lock);
 		return -EBUSY;
 	}
-	if (idle.clk)
-		nvxnu_mutex_lock(idle.clk);
-	fn(gpu.device, arg);
-	if (idle.clk)
-		nvxnu_mutex_unlock(idle.clk);
-	mutex_unlock(&gpu.lock);
+	if (tgm_idle.clk)
+		nvxnu_mutex_lock(tgm_idle.clk);
+	fn(tgm_gpu.device, arg);
+	if (tgm_idle.clk)
+		nvxnu_mutex_unlock(tgm_idle.clk);
+	mutex_unlock(&tgm_gpu.lock);
 	return 0;
 }
 
@@ -366,20 +366,20 @@ int tgm_gpu_held(void (*fn)(struct nvkm_device *device, void *arg), void *arg)
 /* drivers/SwitchPower switch_perf_hint (touch, missed frame, launch): busy now, and back up at once if low. */
 void tegra_gm20b_perf_hint(unsigned int hint)
 {
-	if (!READ_ONCE(idle.on) || hint < 1 || hint > 3)
+	if (!READ_ONCE(tgm_idle.on) || hint < 1 || hint > 3)
 		return;
-	__atomic_store_n(&idle.last_busy, nvxnu_nanotime(), __ATOMIC_SEQ_CST);
-	if (READ_ONCE(idle.low))
-		nvxnu_work_schedule(idle.raise_w);
+	__atomic_store_n(&tgm_idle.last_busy, nvxnu_nanotime(), __ATOMIC_SEQ_CST);
+	if (READ_ONCE(tgm_idle.low))
+		nvxnu_work_schedule(tgm_idle.raise_w);
 }
 
 /* GPC 0's clock counter, as clk_measure reads it (NCGPCCLK cycles over 800 cycles of the 38.4 MHz reference, about
  * 21 us): started, waited for, read. In kHz of what it counts (about twice gpcclk if it counts gpc2clk). 0 if it could
- * not be read. idle_start only, before any client. */
+ * not be read. tgm_idle_start only, before any client. */
 #if DEVELOPMENT || DEBUG
 static u32 gpc_counted_khz(void)
 {
-	struct nvkm_device *device = gpu.device;
+	struct nvkm_device *device = tgm_gpu.device;
 	u32 cnt = 0;
 
 	nvkm_wr32(device, TRIM_GPC0_NCGPCCLK_CFG, NCGPCCLK_CFG_RESET);
@@ -394,9 +394,9 @@ static u32 gpc_counted_khz(void)
 
 #endif
 /* Qualify the idle divider before exposing the clock policy to clients. */
-void idle_start(void)
+void tgm_idle_start(void)
 {
-	struct nvkm_device *device = gpu.device;
+	struct nvkm_device *device = tgm_gpu.device;
 	u32 coeff = nvkm_rd32(device, GPCPLL_COEFF_R);
 	u32 m = coeff & 0xff;
 	u32 n = (coeff >> 8) & 0xff;
@@ -414,8 +414,8 @@ void idle_start(void)
 	u32 at_run = 0;
 #endif
 
-	if (idle.clk || run <= BOOT_KHZ)
-		return; /* clk_raise did not raise it: it already runs the lowest rate */
+	if (tgm_idle.clk || run <= BOOT_KHZ)
+		return; /* tgm_clk_raise did not raise it: it already runs the lowest rate */
 	vco = m ? PLL_REF_KHZ * n / m : 0;
 	/* the lowest L4T B01 rate this VCO reaches by its output divider alone (gpcclk = VCO / 2 / PL) */
 	for (i = 0; (k = tegra_gm20b_dvfs_khz(i)); i++) {
@@ -430,29 +430,30 @@ void idle_start(void)
 			  m, n, pl, vco, run, run);
 		return;
 	}
-	idle.run_pl = pl;
-	idle.run_khz = (u32)run;
-	idle.vco_coeff = coeff & 0xffff;
-	idle.vco_khz = vco;
-	idle.maximum_khz = (u32)run;
-	idle.requested_khz = 0;
-	idle.idle_pl = vco / (2 * best);
-	idle.idle_khz = best;
-	idle.clk = nvxnu_mutex_alloc();
-	idle.drop_w = nvxnu_work_alloc(idle_drop, NULL);
-	idle.raise_w = nvxnu_work_alloc(idle_hint_raise, NULL);
-	if (!idle.clk || !idle.drop_w || !idle.raise_w) {
+	tgm_idle.run_pl = pl;
+	tgm_idle.run_khz = (u32)run;
+	tgm_idle.vco_coeff = coeff & 0xffff;
+	tgm_idle.vco_khz = vco;
+	tgm_idle.maximum_khz = (u32)run;
+	tgm_idle.requested_khz = 0;
+	tgm_idle.idle_pl = vco / (2 * best);
+	tgm_idle.idle_khz = best;
+	tgm_idle.clk = nvxnu_mutex_alloc();
+	tgm_idle.drop_w = nvxnu_work_alloc(idle_drop, NULL);
+	tgm_idle.raise_w = nvxnu_work_alloc(idle_hint_raise, NULL);
+	if (!tgm_idle.clk || !tgm_idle.drop_w || !tgm_idle.raise_w) {
 		nvxnu_log("tegra-gm20b: idle clock not used: no memory; the GPU stays at %d kHz\n",
 			  run);
 		return;
 	}
-	nvxnu_mutex_lock(idle.clk);
+	nvxnu_mutex_lock(tgm_idle.clk);
 #if DEVELOPMENT || DEBUG
 	t0 = nvxnu_nanotime();
 #endif
-	if (pl_switch(idle.idle_pl) || nvkm_clk_read(device->clk, nv_clk_src_gpc) != (int)best) {
-		idle_fail("test drop", idle.idle_pl);
-		nvxnu_mutex_unlock(idle.clk);
+	if (pl_switch(tgm_idle.idle_pl) ||
+	    nvkm_clk_read(device->clk, nv_clk_src_gpc) != (int)best) {
+		idle_fail("test drop", tgm_idle.idle_pl);
+		nvxnu_mutex_unlock(tgm_idle.clk);
 		return;
 	}
 #if DEVELOPMENT || DEBUG
@@ -460,30 +461,30 @@ void idle_start(void)
 	at_idle = gpc_counted_khz();
 	t0 = nvxnu_nanotime();
 #endif
-	if (pl_switch(idle.run_pl) || nvkm_clk_read(device->clk, nv_clk_src_gpc) != run) {
-		idle_fail("test raise", idle.run_pl);
-		nvxnu_mutex_unlock(idle.clk);
+	if (pl_switch(tgm_idle.run_pl) || nvkm_clk_read(device->clk, nv_clk_src_gpc) != run) {
+		idle_fail("test raise", tgm_idle.run_pl);
+		nvxnu_mutex_unlock(tgm_idle.clk);
 		return;
 	}
 #if DEVELOPMENT || DEBUG
 	up = nvxnu_nanotime() - t0;
 	at_run = gpc_counted_khz();
 #endif
-	idle.log_start = nvxnu_nanotime();
-	__atomic_store_n(&idle.last_busy, idle.log_start, __ATOMIC_SEQ_CST);
-	WRITE_ONCE(idle.clock_available, 1);
-	WRITE_ONCE(idle.on, 1);
-	nvxnu_mutex_unlock(idle.clk);
+	tgm_idle.log_start = nvxnu_nanotime();
+	__atomic_store_n(&tgm_idle.last_busy, tgm_idle.log_start, __ATOMIC_SEQ_CST);
+	WRITE_ONCE(tgm_idle.clock_available, 1);
+	WRITE_ONCE(tgm_idle.on, 1);
+	nvxnu_mutex_unlock(tgm_idle.clk);
 #if DEVELOPMENT || DEBUG
 	nvxnu_log("tegra-gm20b: idle clock: %d kHz while busy, %u kHz after %llu ms with no "
 		  "submission and no "
 		  "swap (GPCPLL M %u N %u: PL %u <-> %u, VCO %u kHz locked throughout, VDD_GPU "
 		  "unchanged); "
 		  "test drop %llu ns (GPC counter %u kHz), raise %llu ns (GPC counter %u kHz)\n",
-		  run, best, IDLE_DROP_NS / 1000000, m, n, pl, idle.idle_pl, vco, down, at_idle, up,
-		  at_run);
+		  run, best, IDLE_DROP_NS / 1000000, m, n, pl, tgm_idle.idle_pl, vco, down, at_idle,
+		  up, at_run);
 #endif
 }
 
 /* The last high completion, by both clocks (interrupt pass only) */
-u64 high_end_ns, high_end_pt;
+u64 tgm_high_end_ns, tgm_high_end_pt;
