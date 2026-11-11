@@ -50,17 +50,12 @@ struct VideoEncodeTest: HWTest {
         metrics.set("p_frames", encoded.predictedFrames)
         metrics.set("decoded_match", decoded.matched)
         metrics.set("luma_err", decoded.worstLumaError, digits: 1)
-        // NVENC's H.265 is IDR pictures only (TegraNVENC.h): its P pictures are reported, not required.
-        let intraOnly = codec == .hevc
-        metrics.set("intra_only", intraOnly)
+        metrics.set("intra_only", encoded.predictedFrames == 0)
         return .judged(
             [
                 ("VTCopyVideoEncoderList offers it as hardware", !listed.isEmpty),
                 ("UsingHardwareAcceleratedVideoEncoder", encoded.usingHardware),
-                (
-                    intraOnly ? "every picture a key frame" : "P pictures after the first key frame",
-                    intraOnly ? encoded.keyFrames == Self.frames : encoded.predictedFrames >= Self.frames - 2
-                ),
+                ("P pictures after the first key frame", encoded.predictedFrames >= Self.frames - 2),
                 ("decodes back to the pattern (\(decoded.firstMismatch ?? "ok"))", decoded.matched == Self.frames),
                 ("real time keeps up with 60 fps", !realTime || Double(Self.frames) / encoded.seconds >= Double(fps)),
             ], metrics, proof: encoded.usingHardware ? "encoder=\(encoded.encoderID)" : "")
