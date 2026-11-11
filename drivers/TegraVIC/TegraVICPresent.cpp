@@ -15,6 +15,7 @@ bool gPresentReady;
 
 struct Present {
     uint32_t references;
+    bool publishSeed;  // a queued transfer into a client's surface: its seed moves when VIC has written it
     TegraVICSurface surface = {};
     switch_gpu_backing *destination = nullptr;
     SwitchVICSurfaceAccess access;
@@ -36,9 +37,12 @@ void release(Present *work)
     IODelete(work, Present, 1);
 }
 
-void completed(void *context, int)
+void completed(void *context, int status)
 {
-    release(static_cast<Present *>(context));
+    auto *work = static_cast<Present *>(context);
+    if (!status && work->publishSeed)
+        tegra_vic_surface_written(&work->surface);
+    release(work);
 }
 
 int place(const TegraVICPicture *picture, task_t task, Present *work,
@@ -122,14 +126,19 @@ int place(const TegraVICPicture *picture, task_t task, Present *work,
                                           owned ? 0u : 1u, lease ? &lease : nullptr, lease ? 1u : 0u};
     if (asynchronous)
         __atomic_add_fetch(&work->references, 1, __ATOMIC_RELAXED);
+    work->publishSeed = asynchronous && !owned;
     int error = switch_vic_submit_checked(&work->job, 1, nullptr, ownership,
         asynchronous ? completed : nullptr, asynchronous ? work : nullptr, &fence);
     if (error && asynchronous)
         release(work);
     switch_vic_surface_unreserve(&work->access);
+#if TEGRA_VIC_STATS
+    if (!error)
+        switch_vic_stats_present(!asynchronous);
+#endif
     if (!error && !asynchronous)
         error = switch_vic_wait(fence);
-    if (!error && !owned)
+    if (!error && !owned && !asynchronous)
         tegra_vic_surface_written(&work->surface);
     if (error)
         *why = "the queued picture transfer failed";
@@ -172,7 +181,7 @@ static int present(const TegraVICPicture *picture, task_t task, switch_gpu_cpu_l
 
 extern "C" int tegra_vic_present(const TegraVICPicture *picture, task_t task, const char **why)
 {
-    return present(picture, task, nullptr, nullptr, false, why);
+    return present(picture, task, nullptr, nullptr, true, why);
 }
 
 extern "C" int switch_vic_present_owned(const TegraVICPicture *picture, task_t task,

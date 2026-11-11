@@ -26,7 +26,7 @@ TEST(SwitchVICStats, QueuedSubmissionsReportTheirOperationsTimesAndBytes)
     EXPECT_FALSE(stats.line(1000 + SwitchVICStats::kWindowUs - 1, line, sizeof(line)));
     ASSERT_TRUE(stats.line(1000 + SwitchVICStats::kWindowUs, line, sizeof(line)));
     EXPECT_STREQ(line, "TegraVIC: 5s jobs=2 ops=3 refused=0 pitch=0 failed=1 engine=3000us/job cpu=60us/job "
-                       "mapped=6144KB/job bounced=1");
+                       "mapped=6144KB/job bounced=1 presents=0 present_waits=0");
 }
 
 TEST(SwitchVICStats, EachWindowStartsFromZeroAndKeepsTheDeviceCheckFormat)
@@ -39,7 +39,7 @@ TEST(SwitchVICStats, EachWindowStartsFromZeroAndKeepsTheDeviceCheckFormat)
     char line[220] = {};
     ASSERT_TRUE(stats.line(1 + 2 * SwitchVICStats::kWindowUs, line, sizeof(line)));
     EXPECT_STREQ(line, "TegraVIC: 5s jobs=0 ops=0 refused=3 pitch=0 failed=0 engine=0us/job cpu=0us/job "
-                       "mapped=0KB/job bounced=0");
+                       "mapped=0KB/job bounced=0 presents=0 present_waits=0");
     const std::regex check(R"(TegraVIC: \d+s jobs=(\d+) ops=\d+ refused=(\d+))");
     EXPECT_TRUE(std::regex_search(std::string(line), check));
 }

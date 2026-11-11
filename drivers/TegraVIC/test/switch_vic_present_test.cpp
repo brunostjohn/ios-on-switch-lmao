@@ -17,7 +17,7 @@ IOMemoryDescriptor surfaceMemory;
 switch_gpu_backing sourceBacking, destinationBacking;
 TegraVICSurfaceDesc destinationDesc;
 std::vector<int> events;
-int admissionError = 0, completionError = 0, mappings = 0, lookups = 0;
+int admissionError = 0, completionError = 0, mappings = 0, lookups = 0, presentWaits = 0;
 std::vector<std::array<uint32_t, 2>> ranges;
 std::array<switch_gpu_backing_use, 2> declared;
 switch_gpu_cpu_lease *declaredLease;
@@ -46,6 +46,7 @@ extern "C" void tegra_vic_surface_release(TegraVICSurface *surface)
     *surface = {};
 }
 extern "C" void tegra_vic_surface_written(const TegraVICSurface *) { events.push_back(3); }
+extern "C" void switch_vic_stats_present(bool waited) { presentWaits += waited ? 1 : 0; }
 switch_gpu_backing *switch_vic_surface_backing(const TegraVICSurface *)
 {
     ++destinationBacking.refs;
@@ -160,7 +161,7 @@ protected:
         queuedContext = nullptr;
         inlineCompletion = false;
         ranges.clear();
-        admissionError = completionError = mappings = lookups = 0;
+        admissionError = completionError = mappings = lookups = presentWaits = 0;
         picture.backing = &sourceBacking;
         picture.pages = pages;
         picture.pageCount = 512;
@@ -201,7 +202,13 @@ TEST_F(SwitchVICPresent, OwnsBothAllocationsAndPublishesSeedOnlyAfterCompletion)
     EXPECT_EQ(declared[0].access, uint32_t(SWITCH_GPU_BACKING_READ));
     EXPECT_EQ(declared[1].backing, &destinationBacking);
     EXPECT_EQ(declared[1].access, uint32_t(SWITCH_GPU_BACKING_WRITE));
-    EXPECT_EQ(events, (std::vector<int>{1, 2, 3}));
+    EXPECT_EQ(events, (std::vector<int>{1})) << "queued: no CPU wait, no seed yet";
+#if TEGRA_VIC_STATS
+    EXPECT_EQ(presentWaits, 0);
+#endif
+    ASSERT_NE(queuedCompletion, nullptr);
+    queuedCompletion(queuedContext, 0);
+    EXPECT_EQ(events, (std::vector<int>{1, 3}));
     ASSERT_EQ(ranges.size(), 2u);
     EXPECT_EQ(ranges[0][0], 0u);
     EXPECT_EQ(ranges[1][0], uint32_t(destinationDesc.planeOffset[1] >> 12));
@@ -219,10 +226,19 @@ TEST_F(SwitchVICPresent, FailedAdmissionDoesNotWaitOrPublishSeed)
 
 TEST_F(SwitchVICPresent, FailedCompletionDoesNotPublishSeed)
 {
-    completionError = -19;
     const char *why = nullptr;
-    EXPECT_EQ(tegra_vic_present(&picture, nullptr, &why), -19);
-    EXPECT_EQ(events, (std::vector<int>{1, 2}));
+    EXPECT_EQ(tegra_vic_present(&picture, nullptr, &why), 0);
+    ASSERT_NE(queuedCompletion, nullptr);
+    queuedCompletion(queuedContext, -19);
+    EXPECT_EQ(events, (std::vector<int>{1}));
+}
+
+TEST_F(SwitchVICPresent, InlineCompletionOfAQueuedPresentPublishesOnce)
+{
+    inlineCompletion = true;
+    const char *why = nullptr;
+    EXPECT_EQ(tegra_vic_present(&picture, nullptr, &why), 0);
+    EXPECT_EQ(events, (std::vector<int>{1, 3}));
 }
 
 TEST_F(SwitchVICPresent, UnsupportedPictureLeavesNextPictureAccelerated)
@@ -233,7 +249,9 @@ TEST_F(SwitchVICPresent, UnsupportedPictureLeavesNextPictureAccelerated)
     EXPECT_TRUE(events.empty());
     picture.cropX = 0;
     EXPECT_EQ(tegra_vic_present(&picture, nullptr, &why), 0);
-    EXPECT_EQ(events, (std::vector<int>{1, 2, 3}));
+    ASSERT_NE(queuedCompletion, nullptr);
+    queuedCompletion(queuedContext, 0);
+    EXPECT_EQ(events, (std::vector<int>{1, 3}));
 }
 
 TEST_F(SwitchVICPresent, OwnedMaterializationCarriesExclusionAndPreservesSeed)

@@ -860,3 +860,10 @@ extern "C" int tegra_vic_publish(void)
           TEGRA_VIC_MAX_DOWNSCALE, present);
     return 0;  // the service stays: the attachment and the creation reference
 }
+
+#if TEGRA_VIC_STATS
+extern "C" void switch_vic_stats_present(bool waited)
+{
+    gStats.present(waited);
+}
+#endif
