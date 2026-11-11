@@ -221,6 +221,7 @@ BY_IOS: dict[str, dict[str, bool]] = {
         'ui.glass_motion': False,
         'ui.glass_first': False,
         'ui.glass_live': False,
+        'ui.glass_sidebar': False,
         'display.pocket_strip': False,
         'ui.pocket_keyline': False,
         'display.true_tone_default': False,
