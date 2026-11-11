@@ -28,7 +28,7 @@
 // 0x1f7e-0x1fbd), and neither reads the setup's gpTimer_timeout_val. Waits are bounded by kJobBoundUs per queued job
 // whatever a client asks for, and the largest picture the checker admits (36864 macroblocks) encodes well inside it.
 // The GP timer does not end a stalled job: its interrupt only records an error, and either app's end-of-picture spin
-// waits for macroblocks or CTBs the engine never reports (appDump), so the kernel's bound is what ends it.
+// waits for macroblocks or CTBs the engine never reports (tegra_nvenc_app_dump), so the kernel's bound is what ends it.
 //
 // Firmware: linux-firmware's nvidia/tegra210/nvenc.bin, byte-identical to L4T's nvhost_nvenc050.fw (firmware/SOURCE),
 // booted non-securely as L4T's nvhost and TegraNVDEC boot theirs.
@@ -58,6 +58,7 @@
 #include "../../kits/SwitchCAR/SwitchPMC.h"
 #include "../../kits/SwitchDMA/SwitchDMABuffer.h"
 #include "../../kits/SwitchDMA/SwitchDcache.h"
+#include "../../kits/SwitchEngineGate/SwitchEngineGateKernel.h"
 #include "../../kits/SwitchFalcon/SwitchFalcon.h"
 #include "../../kits/SwitchMMIO/SwitchMMIOKernel.h"
 #include "../../kits/SwitchTime/SwitchTime.h"
@@ -96,27 +97,6 @@ enum : uint32_t {
     MC_HOTRESET_NVENC = 1u << 11,
 };
 
-enum : uint32_t {
-    ICD_RREG = 0x8,  // icd_cmd opc rreg; register index << 8: SP 20, PC 21 (nvgpu falcon.h FALCON_REG_*)
-    THI_INT_STATUS = 0x78,
-    FALCON_IO = 0x1000,           // the falcon's I/O address 0 (I[0x8] is IRQSTAT at 0x1008)
-    ENCODER_INT_STATUS = 0x1870,  // I/O; bit 0 error, bit 1 macroblocks done, write 1 to clear (the H.264 app's ISR)
-};
-
-// The H.264 app's (app 1) DMEM words for the end of a picture, read with tools/falcon: the error its ISR (0xf1b)
-// records, the macroblocks it counts (+= I[0x1848] per encoder interrupt) and the count fn 0x48b9 spins at 0x4916 until
-// (the slice's num_mb, at most the picture's). The H.265 app's (app 3): the setup's error (magic, 0x14a95), its ISR's
-// (GP timer, encoder; 0x26f5), the CTBs it counts (0x2776) and the target its spin at 0xfd35 waits for.
-enum : uint32_t {
-    APP_ERROR = 0x2c8,
-    APP_MBS_DONE = 0x2e4,
-    APP_MBS_TARGET = 0x354,
-    APP3_SETUP_ERROR = 0x2ec,
-    APP3_ERROR = 0x2f0,
-    APP3_CTBS_DONE = 0x360,
-    APP3_CTBS_TARGET = 0x38c,
-};
-
 volatile uint8_t *gNvenc, *gMc;
 switch_dma_buffer gFirmware;  // stays: the falcon OS loads its apps from it through DMATRFBASE
 switch_falcon_image gImage;
@@ -139,81 +119,12 @@ uint32_t gFailedThrough;           // with gFailed: every fence up to this one f
 uint8_t gJobCodec[kSetupSlots];    // by setup slot: the codec of the job using it
 bool gUp, gWedged, gSuspended, gFailed;
 switch_dma_buffer gSetup, gSink;  // setup slots and the scratch buffer, never mapped into a client
+SwitchEngineGate<SwitchEngineGateKernel> gGate;
 
 const char *falconState()
 {
     static char text[160];
     return switch_falcon_state(gNvenc, text, sizeof(text));
-}
-
-const char *falconRunState(uint32_t cpuctl)
-{
-    if (cpuctl & 0x10)
-        return "halted";
-    return (cpuctl & 0x20) ? "stopped" : "running";
-}
-
-// A falcon that did not finish, for its one line (nvgpu gk20a_falcon_dump_stats): CPUCTL (bit 4 halted, bit 5
-// stopped, i.e. waiting for work), IDLESTATE (bit 0 the falcon, bits 1.. engine units busy), interrupts, mailboxes,
-// the exception register, the falcon's DMA queue and its external-error capture, the OS's version word, the THI
-// interrupt status, the last branch targets in the trace buffer (newest first), and PC and SP read three times through
-// the in-circuit debugger (the same PC three times: a tight wait loop or a stall; different: still running code). The
-// debugger is only used on a falcon whose fault is about to panic the system.
-const char *falconDump()
-{
-    static char text[512];
-    const uint32_t cpuctl = switch_mmio_read32(gNvenc, SWITCH_FALCON_CPUCTL);
-    int n = snprintf(
-        text, sizeof(text),
-        "falcon CPUCTL %#x (%s) IDLESTATE %#x IRQSTAT %#x MAILBOX %#x %#x EXCI %#x OS %#x DEBUGINFO %#x "
-        "DMATRFCMD %#x EXTERR %#x@%#x THI_INT %#x",
-        cpuctl, falconRunState(cpuctl), switch_mmio_read32(gNvenc, SWITCH_FALCON_IDLESTATE),
-        switch_mmio_read32(gNvenc, SWITCH_FALCON_IRQSTAT), switch_mmio_read32(gNvenc, SWITCH_FALCON_MAILBOX0),
-        switch_mmio_read32(gNvenc, SWITCH_FALCON_MAILBOX1), switch_mmio_read32(gNvenc, SWITCH_FALCON_EXCI),
-        switch_mmio_read32(gNvenc, SWITCH_FALCON_OS), switch_mmio_read32(gNvenc, SWITCH_FALCON_DEBUGINFO),
-        switch_mmio_read32(gNvenc, SWITCH_FALCON_DMATRFCMD), switch_mmio_read32(gNvenc, SWITCH_FALCON_EXTERRSTAT),
-        switch_mmio_read32(gNvenc, SWITCH_FALCON_EXTERRADDR), switch_mmio_read32(gNvenc, THI_INT_STATUS));
-    const uint32_t traced = (switch_mmio_read32(gNvenc, SWITCH_FALCON_TRACEIDX) >> 16) & 0xff;
-    n += snprintf(text + n, sizeof(text) - static_cast<size_t>(n), " trace(%u)", traced);
-    for (uint32_t i = 0; i < traced && i < 6; i++) {
-        switch_mmio_write32(gNvenc, SWITCH_FALCON_TRACEIDX, i);
-        n += snprintf(text + n, sizeof(text) - static_cast<size_t>(n), " %#x",
-                      switch_mmio_read32(gNvenc, SWITCH_FALCON_TRACEPC) & 0xffffff);
-    }
-    n += snprintf(text + n, sizeof(text) - static_cast<size_t>(n), " PC/SP");
-    for (int i = 0; i < 3; i++) {
-        switch_mmio_write32(gNvenc, SWITCH_FALCON_ICD_CMD, ICD_RREG | 21u << 8);
-        const uint32_t pc = switch_mmio_read32(gNvenc, SWITCH_FALCON_ICD_RDATA);
-        switch_mmio_write32(gNvenc, SWITCH_FALCON_ICD_CMD, ICD_RREG | 20u << 8);
-        n += snprintf(text + n, sizeof(text) - static_cast<size_t>(n), " %#x/%#x", pc,
-                      switch_mmio_read32(gNvenc, SWITCH_FALCON_ICD_RDATA));
-    }
-    return text;
-}
-
-uint32_t dmem(uint32_t address)
-{
-    switch_mmio_write32(gNvenc, SWITCH_FALCON_DMEMC, address);
-    return switch_mmio_read32(gNvenc, SWITCH_FALCON_DMEMD);
-}
-
-// Which way the app is stuck (the oldest unfinished job's: the one the falcon runs). An error (0xe2640010 GP timer,
-// 0xe2640060 encoder error, 0xe2640200 I[0x1ac4] bits 0-2) with fewer macroblocks or CTBs than the target: the ISR saw
-// the fault but the spin has no way out. No error and fewer: the engine stopped reporting them, or its interrupt is
-// pending untaken (encoder status bit 1 set). Count at the target: past the spin, and the PC shows which of the polls
-// after it holds the app.
-const char *appDump(uint32_t codec)
-{
-    static char text[176];
-    const uint32_t status = switch_mmio_read32(gNvenc, FALCON_IO + ENCODER_INT_STATUS);
-    if (codec == TEGRA_NVENC_CODEC_H265)
-        snprintf(text, sizeof(text), "H.265 app error %#x setup error %#x CTBs %u of %u encoder status %#x (I[%#x])",
-                 dmem(APP3_ERROR), dmem(APP3_SETUP_ERROR), dmem(APP3_CTBS_DONE), dmem(APP3_CTBS_TARGET), status,
-                 ENCODER_INT_STATUS);
-    else
-        snprintf(text, sizeof(text), "H.264 app error %#x macroblocks %u of %u encoder status %#x (I[%#x])",
-                 dmem(APP_ERROR), dmem(APP_MBS_DONE), dmem(APP_MBS_TARGET), status, ENCODER_INT_STATUS);
-    return text;
 }
 
 // tegra_powergate_power_up with the T210 MBIST workaround for the MPE partition (no slcg clock to hold on). A
@@ -345,6 +256,8 @@ bool proofOfLife(uint64_t *us, uint32_t *id, uint32_t *from)
 
 void engineSuspend();
 void engineResume();
+int gateOn(void *);
+int gateOff(void *, bool);
 
 // The memory controller stops taking the client's requests and drains those in flight (tegra_mc_flush), so the reset
 // cannot cut a transfer in half; powerUp lifts the hot reset again once the engine is out of reset. A bounded read: the
@@ -354,6 +267,12 @@ void flushMemoryClient()
     switch_mmio_write32(gMc, MC_HOTRESET_CTRL, switch_mmio_read32(gMc, MC_HOTRESET_CTRL) | MC_HOTRESET_NVENC);
     for (uint32_t i = 0; i < 1000 && !(switch_mmio_read32(gMc, MC_HOTRESET_STATUS) & MC_HOTRESET_NVENC); ++i)
         IODelay(1);
+}
+
+bool drained()
+{
+    return static_cast<int32_t>(tegra_host1x_syncpt_read(gSyncpt) -
+                                (gBase + __atomic_load_n(&gIssued, __ATOMIC_ACQUIRE))) >= 0;
 }
 
 bool failedFence(uint32_t fence)
@@ -383,8 +302,8 @@ int stalled(uint32_t fence)
     char host[200];
     tegra_host1x_describe_channel(TEGRA_HOST1X_CHANNEL_NVENC, host, sizeof(host));
     const uint32_t reached = tegra_host1x_syncpt_read(gSyncpt);
-    const char *app = appDump(gJobCodec[(reached + 1 - gBase) % kSetupSlots]);
-    const char *falcon = falconDump();
+    const char *app = tegra_nvenc_app_dump(gNvenc, gJobCodec[(reached + 1 - gBase) % kSetupSlots]);
+    const char *falcon = tegra_nvenc_falcon_dump(gNvenc);
     tegra_host1x_channel_teardown(TEGRA_HOST1X_CHANNEL_NVENC);
     flushMemoryClient();
     bool wasOn = false;
@@ -472,6 +391,11 @@ void bringUp(void *, wait_result_t)
           id, from, tegra_host1x_syncpt_read(id), us, falconState());
     gSyncpt = id;
     gBase = tegra_host1x_syncpt_read(id);
+    if (!gGate.start({"TegraNVENC", nullptr, gateOn, gateOff})) {
+        IOLog("TegraNVENC: E2 FAIL no idle timer\n");
+        giveUp(true);
+        return;
+    }
     gUp = true;
     tegra_host1x_set_sleep_client(engineSuspend, engineResume);
     tegra_nvenc_publish();
@@ -539,11 +463,14 @@ int run(const TegraNVENCSubmit *s, TegraNVENCResolve resolve, void *context, uin
         words[n++] = offset / 4;
         words[n++] = value;
     };
+    if (const int error = gGate.use())
+        return error;
     IOLockLock(gEngineLock);
     while (gSuspended)
         IOLockSleep(gEngineLock, &gSuspended, THREAD_UNINT);
     if (gWedged) {
         IOLockUnlock(gEngineLock);
+        gGate.done();
         return -19;
     }
     const uint32_t job = gIssued + 1;
@@ -553,6 +480,7 @@ int run(const TegraNVENCSubmit *s, TegraNVENCResolve resolve, void *context, uin
             ret = stalled(gBase + job - kInFlight);
         if (ret || gWedged) {
             IOLockUnlock(gEngineLock);
+            gGate.done();
             return ret ? ret : -19;
         }
     }
@@ -591,6 +519,7 @@ int run(const TegraNVENCSubmit *s, TegraNVENCResolve resolve, void *context, uin
         *fence = gBase + job;
     }
     IOLockUnlock(gEngineLock);
+    gGate.done();
     return ret;
 }
 }  // namespace
@@ -614,50 +543,87 @@ extern "C" int tegra_nvenc_wait(uint32_t fence)
         ret = stalled(fence);
         IOLockUnlock(gEngineLock);
     }
+    if (drained())
+        gGate.idle();
     return !ret && failedFence(fence) ? -5 : ret;
 }
 
-// Sleep (SC7), through TegraHost1x's sleep clients. Suspend lets the queued jobs finish (interrupt waits) and parks
-// the engine in reset before host1x saves its syncpoints; new jobs block until resume. Resume runs after host1x is
-// back: the partition is powered, the falcon reloaded from the kept image and proven with an IMMEDIATE and an OP_DONE
-// increment, as at E2.
 namespace {
-void engineSuspend()
+// Idle power gating (SwitchEngineGate.h), as mainline's runtime PM does for VIC and NVDEC: off 500 ms after the last
+// job, on at the next. Jobs run asynchronously and NVENC has no retire thread, so off finds work still queued unless
+// the syncpoint is at the last job's fence (BUSY), and the wait that sees the last fence reached arms the timer again
+// (a client's close waits for its last fence). On is E1 and E2 again on the kept image and address space (an idle
+// power-off does not reset the MC), then the jobs are numbered from the syncpoint. A failed power-on is one line and
+// NVENC refuses work from then on, as a wedged engine does. The MPE partition's MBIST workaround borrows no other
+// engine's clock, so the gate has its own lock.
+int gateOn(void *)
 {
     IOLockLock(gEngineLock);
-    gSuspended = true;
-    if (!gWedged && tegra_host1x_syncpt_wait(gSyncpt, gBase + gIssued, kWaitBoundUs) == TEGRA_HOST1X_ETIMEDOUT)
+    bool wasOn = false;
+    bool answered = false;
+    gLine[0] = 0;
+    if (!gWedged && powerUp(&wasOn) && bootFalcon()) {
+        const uint32_t from = tegra_host1x_syncpt_read(gSyncpt);
+        const char *stage = nullptr;
+        const int ret = answer(gSyncpt, from, &stage);
+        answered = !ret;
+        if (ret)
+            snprintf(gLine, sizeof(gLine), "%s did not answer (%d, syncpoint %u %u->%u); %s", stage, ret, gSyncpt, from,
+                     tegra_host1x_syncpt_read(gSyncpt), falconState());
+    }
+    if (!answered && !gWedged) {
+        gWedged = true;
+        park();
+        IOLog("TegraNVENC: power-on FAIL %s; NVENC refuses work\n", gLine[0] ? gLine : "E1");
+    }
+    gBase = tegra_host1x_syncpt_read(gSyncpt);
+    __atomic_store_n(&gIssued, 0, __ATOMIC_RELEASE);
+    gSuspended = false;
+    IOLockWakeup(gEngineLock, &gSuspended, false);
+    IOLockUnlock(gEngineLock);
+    return answered ? 0 : -19;
+}
+
+int gateOff(void *, bool drain)
+{
+    IOLockLock(gEngineLock);
+    if (!drain && !drained()) {
+        IOLockUnlock(gEngineLock);
+        return SWITCH_ENGINE_GATE_BUSY;
+    }
+    if (drain && !gWedged && tegra_host1x_syncpt_wait(gSyncpt, gBase + gIssued, kWaitBoundUs) == TEGRA_HOST1X_ETIMEDOUT)
         stalled(gBase + gIssued);
-    park();
+    gSuspended = true;
+    const bool off = switch_pmc_power_down(kPartition, kClock, kClock);
+    IOLockUnlock(gEngineLock);
+    return off ? SWITCH_ENGINE_GATE_OFF : -5;
+}
+
+// Sleep (SC7), through TegraHost1x's sleep clients. Suspend powers the engine off once its queued jobs are done (a
+// stall is cancelled as at any wait), before host1x saves its syncpoints, and detaches its address space; new jobs wait
+// for resume. Resume runs after host1x is back and attaches the address space again (SC7 resets the MC); the next job
+// powers NVENC on.
+void engineSuspend()
+{
+    gGate.suspend();
+    IOLockLock(gEngineLock);
     tegra_nvenc_memory_detach();
     IOLockUnlock(gEngineLock);
 }
 
 void engineResume()
 {
-    IOLockLock(gEngineLock);
-    bool wasOn = false;
     gLine[0] = 0;
-    gWedged = true;
-    if (!tegra_nvenc_memory_attach(gLine, sizeof(gLine)) && powerUp(&wasOn) && bootFalcon()) {
-        const uint32_t from = tegra_host1x_syncpt_read(gSyncpt);
-        const char *stage = nullptr;
-        const int ret = answer(gSyncpt, from, &stage);
-        if (!ret) {
-            gWedged = false;
-        } else {
-            snprintf(gLine, sizeof(gLine), "%s did not answer (%d, syncpoint %u %u->%u); %s", stage, ret, gSyncpt, from,
-                     tegra_host1x_syncpt_read(gSyncpt), falconState());
-        }
+    const bool attached = !tegra_nvenc_memory_attach(gLine, sizeof(gLine));
+    if (!attached) {
+        IOLockLock(gEngineLock);
+        gWedged = true;
+        gSuspended = false;
+        IOLockWakeup(gEngineLock, &gSuspended, false);
+        IOLockUnlock(gEngineLock);
+        IOLog("TegraNVENC: resume FAIL %s; NVENC refuses work\n", gLine);
     }
-    if (gWedged)
-        IOLog("TegraNVENC: resume FAIL %s; NVENC refuses work\n", gLine[0] ? gLine : "E1");
-    // Jobs lost to a wedge never incremented the syncpoint: number from where it really is.
-    gBase = tegra_host1x_syncpt_read(gSyncpt);
-    __atomic_store_n(&gIssued, 0, __ATOMIC_RELEASE);
-    gSuspended = false;
-    IOLockWakeup(gEngineLock, &gSuspended, false);
-    IOLockUnlock(gEngineLock);
+    gGate.resume(attached);
 }
 }  // namespace
 

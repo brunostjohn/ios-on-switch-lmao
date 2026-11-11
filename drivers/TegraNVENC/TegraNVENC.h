@@ -46,9 +46,14 @@ void tegra_nvenc_memory_usage(uint64_t *limit, uint64_t *free);
 // or a negative errno-style value.
 int tegra_nvenc_run(const TegraNVENCSubmit *submit, TegraNVENCResolve resolve, void *context, uint32_t *fence,
                     const char **why);
-// Sleeps until the fence is reached (syncpoint interrupt), bounded per queued job. Past that bound: a one-line panic.
+// Sleeps until the fence is reached (syncpoint interrupt), bounded per queued job. Past that bound the jobs in flight
+// are cancelled (-5) and the engine is reset for the next one.
 int tegra_nvenc_wait(uint32_t fence);
 bool tegra_nvenc_ready(void);
+
+// A stalled job's line (TegraNVENCDump.cpp): the falcon's state, and where the app the job runs is stuck.
+const char *tegra_nvenc_falcon_dump(volatile uint8_t *nvenc);
+const char *tegra_nvenc_app_dump(volatile uint8_t *nvenc, uint32_t codec);
 
 int tegra_nvenc_publish(void);  // E3
 }
