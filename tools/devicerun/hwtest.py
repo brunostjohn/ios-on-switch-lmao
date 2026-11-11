@@ -158,6 +158,7 @@ TESTS: dict[str, bool] = {
     'display.colour': False,
     'display.planes': False,
     'display.small_drawable': False,
+    'display.present_at_time': False,
     'display.plain_surfaces': False,
     'display.snapshot': False,
     'display.wake_gpu': True,
