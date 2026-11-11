@@ -438,11 +438,13 @@ host_library(
         "//drivers/TegraGM20B:SwitchGpuCpuLease.cpp",
         "//drivers/TegraGM20B:SwitchGpuOwnership.cpp",
         "//drivers/TegraGM20B:SwitchGpuResourceSet.cpp",
+        "//drivers/TegraGM20B:SwitchGpuJobStats.cpp",
         "//drivers/TegraGM20B:SwitchGpuWriters.cpp",
         "//drivers/TegraGM20B:SwitchGpuSurfaceAccess.cpp",
     ],
     hdrs = [
         "//drivers/TegraGM20B:SwitchGpuResourceSet.h",
+        "//drivers/TegraGM20B:SwitchGpuJobStats.h",
         "//drivers/TegraGM20B:SwitchGpuNativeSurface.h",
         "//drivers/TegraGM20B:SwitchGpuNativeUse.h",
         "//drivers/TegraDisplayFlip:TegraScanoutCopy.h",

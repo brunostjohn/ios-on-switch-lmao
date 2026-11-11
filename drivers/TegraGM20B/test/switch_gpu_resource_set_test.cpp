@@ -4,6 +4,8 @@
 // a submission is inside.
 #include "switch_gpu_backing_fixture.h"
 #include "drivers/TegraGM20B/SwitchGpuResourceSet.h"
+#include "drivers/TegraGM20B/SwitchGpuJobStats.h"
+#include <string>
 
 namespace
 {
@@ -407,4 +409,31 @@ TEST_F(ResourceSet, ASlotsJobIsReadWhole)
 		reader.join();
 	EXPECT_GT(reads.load(), 0u);
 	EXPECT_EQ(torn.load(), 0u);
+}
+
+TEST_F(ResourceSet, TheJobsLineCountsEndedGenerationsByCause)
+{
+	char line[512];
+	switch_gpu_job_window(line, sizeof(line));
+	auto *member = backing();
+	{
+		Set set;
+		set.attach({{member, kWrite, 0}});
+		set.attach({{member, kRead, 0}});
+		switch_gpu_set_note_job(set.set, 0, (const switch_gpu_backing_token[]){token(2, 1)});
+		switch_gpu_set_killed(set.set, 0);
+		switch_gpu_job_stale();
+		const uint64_t ns[4] = {1000, 2000, 30000, 4000};
+		switch_gpu_job_submitted(ns, 1, 3, 1);
+	}
+	switch_gpu_job_window(line, sizeof(line));
+	EXPECT_NE(std::string(line).find("SubmitJob 1 x mean 37 us (resolve 1, lock 2, exec 30, commit 4)"),
+		  std::string::npos)
+		<< line;
+	EXPECT_NE(std::string(line).find("set 1 hit 1 stale, shared 3.0 per job max 3, siblings 1"), std::string::npos)
+		<< line;
+	EXPECT_NE(std::string(line).find("free 0 layout 0 shared 0 kill 1 replace 1"), std::string::npos) << line;
+	switch_gpu_job_window(line, sizeof(line));
+	EXPECT_EQ(line[0], 0);
+	switch_gpu_backing_release(member);
 }

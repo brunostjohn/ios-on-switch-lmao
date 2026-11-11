@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 #include <string.h>
 #include "SwitchGpuBackingInternal.h"
+#include "SwitchGpuJobStats.h"
 
 struct switch_gpu_resource_set {
 	IOLock *lock;  // a leaving member's wait for the submissions inside
@@ -145,10 +146,10 @@ extern "C" uint32_t switch_gpu_set_generation(const switch_gpu_resource_set *set
 	return __atomic_load_n(&set->generation, __ATOMIC_SEQ_CST);
 }
 
-extern "C" void switch_gpu_set_invalidate(switch_gpu_resource_set *set, uint32_t cause)
+namespace
 {
-	if (cause >= SWITCH_GPU_SET_CAUSES)
-		return;
+void bump(switch_gpu_resource_set *set)
+{
 	__atomic_add_fetch(&set->generation, 1u, __ATOMIC_SEQ_CST);
 	if (!set->mirror)
 		return;
@@ -160,6 +161,15 @@ extern "C" void switch_gpu_set_invalidate(switch_gpu_resource_set *set, uint32_t
 		__atomic_store_n(set->mirror, now, __ATOMIC_RELEASE);
 		seen = now;
 	}
+}
+}  // namespace
+
+extern "C" void switch_gpu_set_invalidate(switch_gpu_resource_set *set, uint32_t cause)
+{
+	if (cause >= SWITCH_GPU_SET_CAUSES)
+		return;
+	bump(set);
+	switch_gpu_job_invalidated(cause);
 }
 
 extern "C" int switch_gpu_set_attach(switch_gpu_resource_set *set, const switch_gpu_set_member *members,
@@ -215,7 +225,10 @@ extern "C" int switch_gpu_set_attach(switch_gpu_resource_set *set, const switch_
 	IODelete(set->members, switch_gpu_set_member, set->capacity);
 	set->members = kept;
 	set->count = set->capacity = unique;
-	switch_gpu_set_invalidate(set, SWITCH_GPU_SET_CAUSE_REPLACE);
+	if (switch_gpu_set_generation(set))
+		switch_gpu_set_invalidate(set, SWITCH_GPU_SET_CAUSE_REPLACE);
+	else
+		bump(set);
 	*generation = switch_gpu_set_generation(set);
 	return 0;
 }

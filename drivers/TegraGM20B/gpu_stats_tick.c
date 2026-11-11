@@ -449,6 +449,9 @@ void tgm_stats_tick(void)
 	nvxnu_stats("tegra-gm20b: stats2 %s", line);
 	switch_gpu_path_window(line, sizeof(line));
 	nvxnu_stats("tegra-gm20b: paths %s", line);
+	switch_gpu_job_window(line, sizeof(line));
+	if (line[0])
+		nvxnu_stats("tegra-gm20b: jobs %s", line);
 	stats_exec_owners(line, sizeof(line), rate);
 	tgm_stats_mem(ms);
 	tgm_stats_waits(ms);

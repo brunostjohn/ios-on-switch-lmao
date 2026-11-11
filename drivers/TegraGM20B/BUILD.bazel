@@ -119,6 +119,7 @@ kernel_driver(
         "SwitchGpuCpuAccess.cpp",
         "SwitchGpuCpuComplete.cpp",
         "SwitchGpuPathStats.cpp",
+        "SwitchGpuJobStats.cpp",
         "SwitchGpuCpuLease.cpp",
         "SwitchGpuTimeline.cpp",
         "SwitchGpuBridge.cpp",

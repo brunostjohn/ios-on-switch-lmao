@@ -77,6 +77,7 @@
 #include "SwitchGpuPresentTokens.h"
 #include "SwitchGpuMapping.h"
 #include "SwitchGpuPathStats.h"
+#include "SwitchGpuJobStats.h"
 #include "TegraGM20BSyncpt.h"
 #include "TegraGM20BFences.h"
 #include "TegraGM20BHangDecode.h"

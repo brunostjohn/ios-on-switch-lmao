@@ -49,6 +49,7 @@
 #include "SwitchGpuResourceClient.h"
 #include "SwitchGpuResourceSet.h"
 #include "SwitchGpuFenceRecord.h"
+#include "SwitchGpuJobStats.h"
 
 #include "SwitchGpuSurfaceGeometry.h"
 #include "shim/include/switch_tiled_cache.h"
