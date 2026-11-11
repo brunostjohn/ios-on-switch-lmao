@@ -175,6 +175,8 @@ def alu(name: str, w: int, lane: Lane, inputs: Inputs) -> None:  # noqa: C901, P
         y = b - (1 << 32) if sb and b & 0x80000000 else b
         p = x * y
         lane.w(d, (p >> 32) if high else p)
+    elif base in ('LOP3', 'IADD3', 'ISCADD'):
+        lane.w(d, three_source(name, w, lane, inputs, a))
     elif name in ('XMAD_reg', 'XMAD_imm'):
         lane.w(d, xmad(name, w, lane, a))
     elif base == 'BFE':
@@ -237,6 +239,37 @@ def memory(base: str, w: int, lane: Lane, inputs: Inputs, d: int) -> None:
         result = inputs.texture(('suld', handle, coords))
     for k in range(count):
         lane.w(d + k, result[k % 4])
+
+
+def three_source(name: str, w: int, lane: Lane, inputs: Inputs, a: int) -> int:
+    """Run LOP3.LUT, IADD3 and ISCADD (Ryujinx InstDecoders' layouts); not .X, .CC, predicates or IADD3's parts."""
+    base, form = name.split('_', 1)
+    b = operand_b(lane, w, name, inputs, i20)
+    if base == 'ISCADD':
+        mode = bits(w, 48, 2)
+        if mode == 3 or bits(w, 47, 1):
+            raise UnsupportedError('ISCADD .PO or .CC')
+        x = -a if mode == 2 else a
+        y = -b if mode == 1 else b
+        return ((x << bits(w, 39, 5)) + y) & 0xFFFFFFFF
+    c = lane.r(bits(w, 39, 8))
+    if base == 'IADD3':
+        if bits(w, 47, 2) or (form == 'reg' and bits(w, 31, 8)):
+            raise UnsupportedError('IADD3 .X, .CC, part or shift')
+        terms = [(-v if bits(w, 51 - k, 1) else v) for k, v in enumerate((a, b, c))]
+        return sum(terms) & 0xFFFFFFFF
+    lut = bits(w, 28, 8) if form == 'reg' else bits(w, 48, 8)
+    flags = bits(w, 36, 3) if form == 'reg' else bits(w, 57 if form == 'imm' else 56, 1)
+    if bits(w, 47, 1) or flags:
+        raise UnsupportedError('LOP3 .X, .CC or predicate')
+    out = 0
+    for i in range(8):
+        if lut >> i & 1:
+            term = 0xFFFFFFFF
+            for k, v in enumerate((a, b, c)):
+                term &= v if i >> (2 - k) & 1 else ~v & 0xFFFFFFFF
+            out |= term
+    return out
 
 
 def xmad(name: str, w: int, lane: Lane, a: int) -> int:

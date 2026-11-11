@@ -84,6 +84,30 @@ class ImmediateTest(unittest.TestCase):
         self.assertEqual(lane.r(2), 0x3F800000)
 
 
+class ThreeSourceTest(unittest.TestCase):
+    def run_one(self, w: int, regs: dict) -> int:
+        lane = Lane()
+        for r, v in regs.items():
+            lane.w(r, v)
+        execute.alu(isa.name(w), w, lane, gate.Seeded(1, 0).inputs())
+        return lane.r(4)
+
+    def test_lop3_iadd3_iscadd(self):
+        regs = {1: 0x12345678, 2: 0x0F0F0F0F, 3: 0xFF00FF00}
+        # LOP3.LUT r4, r1, r2, r3, 0x96 (a ^ b ^ c); with a 20-bit immediate b, 0xE8 (majority)
+        lop3 = 0x5BE7 << 48 | 3 << 39 | 0x96 << 28 | 2 << 20 | 1 << 8 | 4
+        self.assertEqual(self.run_one(lop3, regs), 0x12345678 ^ 0x0F0F0F0F ^ 0xFF00FF00)
+        lop3i = 0x3C00 << 48 | 0xE8 << 48 | 3 << 39 | 0x7FFF << 20 | 1 << 8 | 4
+        a, b, c = 0x12345678, 0x7FFF, 0xFF00FF00
+        self.assertEqual(self.run_one(lop3i, regs), (a & b) | (a & c) | (b & c))
+        # IADD3 r4, r1, -r2, r3
+        iadd3 = 0x5CC0 << 48 | 1 << 50 | 3 << 39 | 2 << 20 | 1 << 8 | 4
+        self.assertEqual(self.run_one(iadd3, regs), (0x12345678 - 0x0F0F0F0F + 0xFF00FF00) & 0xFFFFFFFF)
+        # ISCADD r4, r1, 0x40, 3: (r1 << 3) + 0x40
+        iscadd = 0x3818 << 48 | 3 << 39 | 0x40 << 20 | 1 << 8 | 4
+        self.assertEqual(self.run_one(iscadd, regs), (0x12345678 << 3) + 0x40 & 0xFFFFFFFF)
+
+
 class GateTest(unittest.TestCase):
     def setUp(self):
         self.code = isa.from_hex_dump(FIXTURE.read_text())

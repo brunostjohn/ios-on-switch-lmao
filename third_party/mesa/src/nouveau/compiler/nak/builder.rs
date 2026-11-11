@@ -31,7 +31,7 @@ pub trait Builder {
         assert!(x.is_predicate() == is_predicate);
         assert!(y.is_predicate() == is_predicate);
 
-        if self.sm() >= 70 {
+        if self.sm() >= 70 || (self.sm() >= 50 && !is_predicate) {
             let mut op = op.to_lut();
             if x.src_mod.is_bnot() {
                 op = LogicOp3::new_lut(&|x, y, _| op.eval(!x, y, 0));
@@ -380,6 +380,12 @@ pub trait SSABuilder: Builder {
                 srcs: [x, y, z],
                 overflow: [Dst::None, Dst::None],
             });
+        } else if !z.is_zero() && self.sm() >= 50 {
+            self.push_op(OpIAdd3 {
+                dst: dst.into(),
+                srcs: [x, y, z],
+                overflow: [Dst::None, Dst::None],
+            });
         } else {
             assert!(z.is_zero());
             self.push_op(OpIAdd2 {
@@ -619,7 +625,7 @@ pub trait SSABuilder: Builder {
 
     fn lea(&mut self, a: Src, b: Src, shift: u8) -> SSAValue {
         let dst = self.alloc_ssa(RegFile::GPR);
-        assert!(self.sm() >= 70);
+        assert!(self.sm() >= 50);
 
         self.push_op(OpLea {
             dst: dst.into(),

@@ -355,6 +355,19 @@ py_test(
     main = "run_host_test.py",
 )
 
+# ios-on-switch-lmao: NAK's SM50 LOP3/IADD3/ISCADD encodings (nak/sm50/int3.rs sm53_int3_tests), from the same binary
+py_test(
+    name = "sm53_int3_test",
+    size = "small",
+    srcs = ["run_host_test.py"],
+    args = [
+        "$(rootpath :nak_sm53_half_test_bin)",
+        "sm53_int3_tests",
+    ],
+    data = [":nak_sm53_half_test_bin"],
+    main = "run_host_test.py",
+)
+
 mesa_cc_library(
     name = "nak_fs_depth_test_objects",
     testonly = True,

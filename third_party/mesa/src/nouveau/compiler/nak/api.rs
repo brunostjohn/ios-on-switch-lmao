@@ -170,7 +170,7 @@ fn nir_options(dev: &nv_device_info) -> nir_shader_compiler_options {
         lower_scmp: true,
         has_rotate32: dev.sm >= 32,
         has_shfr32: dev.sm >= 32,
-        has_iadd3: dev.sm >= 70,
+        has_iadd3: dev.sm >= 50,
         has_imad32: dev.sm >= 70,
         has_sdot_4x8: dev.sm >= 70,
         has_udot_4x8: dev.sm >= 70,

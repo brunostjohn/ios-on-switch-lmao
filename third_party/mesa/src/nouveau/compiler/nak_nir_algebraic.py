@@ -52,7 +52,7 @@ algebraic_lowering = [
         ('iadd3', ('ineg', a), c, ('ineg', b)), 'options->has_iadd3'),
 
     (('iadd', 'a@32', ('ishl', 'b@32', '#s@32')),
-        ('lea_nv', a, b, s), 'nak->sm >= 70'),
+        ('lea_nv', a, b, s), 'nak->sm >= 50'),
     (('iadd', 'a@64', ('ishl', 'b@64', '#s@32')),
         ('lea_nv', a, b, s), 'nak->sm >= 70'),
 ]

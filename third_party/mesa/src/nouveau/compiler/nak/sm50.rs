@@ -12,6 +12,7 @@ use std::ops::Range;
 
 #[cfg(test)]
 mod alu_tests;
+mod int3;
 mod texs;
 pub use texs::bound_texture_cbuf;
 pub mod xmad;
@@ -3451,6 +3452,9 @@ macro_rules! sm50_op_match {
             Op::IMad($x) => $y,
             Op::IMul($x) => $y,
             Op::Xmad($x) => $y,
+            Op::Lop3($x) => $y,
+            Op::IAdd3($x) => $y,
+            Op::Lea($x) => $y,
             Op::IMnMx($x) => $y,
             Op::ISetP($x) => $y,
             Op::Tex($x) => $y,
