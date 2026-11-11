@@ -12,6 +12,7 @@
 #include <kern/thread.h>
 #include <kern/thread_call.h>
 #include <mach/vm_region.h>
+#include "SwitchGpuSpares.h"
 #include <stddef.h>
 #include <string.h>
 #include <sys/systm.h>
@@ -173,12 +174,14 @@ struct SparePool {
 		poolZeroing;  // bytes ready, freed and waiting, pool bytes waiting
 #if TGM_STATS
 	OwnerStat owners[kOwners];
+	uint32_t misses[SWITCH_GPU_SPARE_MISSES], zeroBusy, zeroFailed, refillRefused;
 #endif
 };
 
 void cleanZeros(void *va, uint64_t bytes);
 SparePool *spares();
 Spare *spareTake(uint64_t bytes);
+void spareIneligible();
 bool spareKeep(IOBufferMemoryDescriptor *bmd, uint64_t *pas, uint64_t bytes,
 	       switch_gpu_cached_mapping *mapping = nullptr);
 

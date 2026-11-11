@@ -387,6 +387,14 @@ host_test(
 )
 
 host_test(
+    name = "switch_gpu_spares_test",
+    srcs = [
+        "switch_gpu_spares_test.cpp",
+        "//drivers/TegraGM20B:SwitchGpuSpares.h",
+    ],
+)
+
+host_test(
     name = "gm20b_gr_init_test",
     srcs = ["gm20b_gr_init_test.cpp"],
     data = [
