@@ -101,6 +101,8 @@ static inline void stats_job_seqno(struct tgm_chan *chan, u32 seqno)
 	span = st->end.ns - run->start_pt;
 	stats_add(&tgm_stats.exec_sum, &tgm_stats.exec_max, span);
 	__atomic_fetch_add(&chan->stat_exec_n, 1, __ATOMIC_RELAXED);
+	if (chan->high)
+		switch_gpu_compositor_job(tgm_deadline_pt_ns(span));
 	stats_add(&chan->stat_exec, &chan->stat_exec_max, span);
 	switch_gpu_job_end(&chan->stat_jobs, run);
 }

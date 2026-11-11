@@ -2,6 +2,22 @@
 #import "RawMetalInternal.h"
 #include "raw_completion_source.h"
 #include "raw_stamps.h"
+#if SWITCH_RAW_DIAGNOSTICS
+#include "TegraGM20BPathsABI.h"
+
+// The render server's spans of raw_span_marks.h's kLongSpanNs or more in a completed command buffer: logged, and noted to a
+// debug kernel for HW Test ui.launch_hitch
+static void reportLongSpans(uint32_t stamp, uint64_t gpuNs)
+{
+    for (const raw::StateSpan &s : gRM->raw->longSpans(stamp)) {
+        TegraGM20BAbiPathsSpan note = {TegraGM20BPathsOpNoteSpan, 0, {}};
+        raw::formatSpan(note.text, sizeof note.text, s);
+        os_log(rawLog(), "raw: long span %{public}s in a %llu us command buffer", note.text,
+               (unsigned long long)(gpuNs / 1000));
+        gRM->raw->kernelDebugCall(TegraGM20BMethodPaths, &note, sizeof note, nullptr, 0);
+    }
+}
+#endif
 
 static bool markWritten(const raw::RetirementWrites &writes, bool success, const raw::CpuCompletion *cpu = nullptr)
 {
@@ -303,6 +319,10 @@ void finish(RMCommandBuffer *cb, NSError *error)
         behindScheduled = cb->_handlersQueued;
     }
     cb->_changed.notify_all();
+#if SWITCH_RAW_DIAGNOSTICS
+    if (cb->_gpuStamped)
+        reportLongSpans(cb->_stamp, uint64_t((cb->_gpuEnd - cb->_gpuStart) * 1e9));
+#endif
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
     if (heldReturnUs)
         noteHeldReturn(cb, heldReturnUs, error ? "failed unsubmitted" : "finished unsubmitted");

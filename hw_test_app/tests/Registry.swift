@@ -70,6 +70,8 @@ public enum Registry {
         + [DisplayBufferTest()]
         // May stop NVJPG's host1x channel for 50 ms: last.
         + [DcHost1xClassTest()]
+        // Leaves this app for Settings and opens it again: last, so no other test runs while it is away.
+        + [LaunchHitchTest()]
 
     /// Reset the copy engine under the present, then kill the app's raw channel: each app runs them after all its other
     /// tests, so a failed recovery spoils none of them.

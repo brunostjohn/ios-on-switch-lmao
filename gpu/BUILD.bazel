@@ -162,6 +162,7 @@ metal_plugin(
         "//kits/SwitchSeedPack:SwitchSeedStore.h",
         GM20B_LAYOUT,
         "//drivers/TegraGM20B:TegraGM20BHost.h",
+        "//drivers/TegraGM20B:TegraGM20BPathsABI.h",
         "//drivers/TegraGM20B:TegraGM20BSchedPolicy.h",
         "//drivers/TegraGM20B:TegraGM20BZcullABI.h",
         "//kits/SwitchGM20B:class_headers",

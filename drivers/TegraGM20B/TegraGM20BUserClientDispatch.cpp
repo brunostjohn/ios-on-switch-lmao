@@ -188,8 +188,9 @@ IOReturn AGXDeviceUserClient::run(uint32_t method, const void *in, uint32_t inSi
 #endif
 #if SWITCH_GPU_PATH_STATS
 	case TegraGM20BMethodPaths:
-		wantIn = sizeof(TegraGM20BAbiPaths);
-		wantOut = sizeof(TegraGM20BAbiPathsReply);
+		wantIn = inSize == sizeof(TegraGM20BAbiPathsSpan) ? sizeof(TegraGM20BAbiPathsSpan)
+								   : sizeof(TegraGM20BAbiPaths);
+		wantOut = wantIn == sizeof(TegraGM20BAbiPathsSpan) ? 0 : sizeof(TegraGM20BAbiPathsReply);
 		break;
 #endif
 	default:
@@ -334,7 +335,15 @@ IOReturn AGXDeviceUserClient::run(uint32_t method, const void *in, uint32_t inSi
 	if (method == TegraGM20BMethodPaths) {
 		const uint32_t op = static_cast<const TegraGM20BAbiPaths *>(in)->op;
 		auto *reply = static_cast<TegraGM20BAbiPathsReply *>(out);
-		if (op == TegraGM20BPathsOpCounts)
+		if ((op == TegraGM20BPathsOpNoteSpan) != (inSize == sizeof(TegraGM20BAbiPathsSpan)))
+			return kIOReturnBadArgument;
+		if (op == TegraGM20BPathsOpNoteSpan) {
+			TegraGM20BAbiPathsSpan note = *static_cast<const TegraGM20BAbiPathsSpan *>(in);
+			note.text[sizeof(note.text) - 1] = 0;
+			switch_gpu_span_note(owner_, note.text);
+		} else if (op == TegraGM20BPathsOpSpans) {
+			switch_gpu_span_line(reply->line, sizeof(reply->line));
+		} else if (op == TegraGM20BPathsOpCounts)
 			switch_gpu_path_line(reply->line, sizeof(reply->line));
 #if TGM_STATS
 		else if (op == TegraGM20BPathsOpTargetPeaks)

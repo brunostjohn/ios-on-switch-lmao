@@ -546,6 +546,12 @@ bool Device::init(std::string &err)
     memset(tickets_.cpu, 0, tickets_.bytes);
     colorTableWords(reinterpret_cast<uint32_t *>(colorTable_.cpu));
     memset(stamps_.cpu, 0, stamps_.bytes);
+#if SWITCH_RAW_DIAGNOSTICS
+    if (role_ == Role::RenderServer && k_.allocControl(SpanMarks::kBytes, spanMarks_, ControlUse::Stamps)) {
+        set_.add(k_, spanMarks_, TegraGM20BSurfaceWrite);
+        spans_.open(spanMarks_.va, spanMarks_.cpu);
+    }
+#endif
     // texture header 0: NIL's null descriptor (block linear over the zero page), what NVK keeps at index 0
     uint32_t *t0 = reinterpret_cast<uint32_t *>(tic_.cpu);
     t0[0] = 0x2491d;
@@ -2633,7 +2639,9 @@ Pipeline *Device::xrPipeline(XrForm form)
 Pipeline *Device::resolvePipeline(uint32_t format)
 {
     const char *name = resolveState(format);
-    return name ? pipeline(Pack::fnv(name, strlen(name))) : nullptr;
+    Pipeline *pl = name ? pipeline(Pack::fnv(name, strlen(name))) : nullptr;
+    RAW_DIAGNOSTIC(if (pl) pl->spanName = name);
+    return pl;
 }
 
 Pipeline *Device::mipPipeline(uint32_t format)
@@ -3295,6 +3303,7 @@ CommandBuffer *Device::begin()
         if (commitCount_ % 64 == 0)
             trimBackings();
         cb.stamp = stampOf(commitCount_);
+        RAW_DIAGNOSTIC(spans_.begin(cb.stamp));
     }
     cb.timings.clear();
     // submission prologue, as NVK opens each submission: header/sampler caches (headers written since), constant, shader data and
@@ -3376,6 +3385,7 @@ RenderEncoder *CommandBuffer::render(const PassDesc &pass)
     e.dev_ = dev_;
     e.pass_ = pass;
     // the render hardware takes one memory layout for all of a pass's color targets (nvk_rendering_linear): block-linear when
+    RAW_DIAGNOSTIC(e.prologueMark_ = dev_->spans_.reserve());
     // one of them is, or is a pitch target the hardware cannot take (rendered through a shadow either way), or beside a zeta,
     // its pitch ones then rendered through block-linear shadows as NVK does; memoryless ones get a backing of the pass's layout
     const Texture *zeta = pass.depthStencil.texture;
@@ -3905,6 +3915,34 @@ bool Device::gpuNanoseconds(uint32_t stamp, uint64_t &ns) const
 }
 
 void CommandBuffer::abandon()
+#if SWITCH_RAW_DIAGNOSTICS
+std::vector<StateSpan> Device::longSpans(uint32_t stamp)
+{
+    if (!spans_.on() || !stamp)
+        return {};
+    const auto *slot = reinterpret_cast<const volatile StampSlot *>(stamps_.cpu + stampOffset(stamp));
+    if (slot->start.payload != stamp || slot->end.payload != stamp)
+        return {};
+    std::vector<StateSpan> spans = spans_.take(stamp, slot->start.ptimer, slot->end.ptimer);
+    spans.erase(std::remove_if(spans.begin(), spans.end(), [](const StateSpan &s) { return s.ns < kLongSpanNs; }),
+                spans.end());
+    return spans;
+}
+
+void RenderEncoder::markSpan(Push &p, uint32_t index, SpanKind kind)
+{
+    const Texture *t = pass_.color[0].texture;
+    const uint32_t kpx = t ? uint32_t(uint64_t(t->width) * t->height * t->samples / 1000) : 0;
+    SpanLabel label;
+    if (kind == SpanKind::Draws && emitted_)
+        label = drawSpanLabel(*emitted_, emitted_->rec ? emitted_->rec->keyHash : 0, kpx, samples_);
+    label.kind = kind;
+    label.kpx = uint16_t(std::min<uint32_t>(kpx, 0xffff));
+    label.samples = samples_;
+    dev_->spans_.markAt(p, index, label);
+}
+#endif
+
 {
     releaseGeometry();
     releaseNativeReads();
@@ -3951,6 +3989,13 @@ void RenderEncoder::finishDraw(uint32_t vertices, uint32_t instances, bool indir
 {
     const Pipeline &pl = *emitted_;
     const uint64_t vertexWork = BatchWork::product(BatchWork::product(vertices, instances), pl.vertexInstructions);
+#if SWITCH_RAW_DIAGNOSTICS
+    if (dev_->spans_.on()) {
+        if (p_.room() < kSpanMarkWords)
+            reserve();
+        markSpan(p_, dev_->spans_.reserve(), SpanKind::Draws);
+    }
+#endif
     const uint64_t fragmentWork = BatchWork::product(BatchWork::product(drawPixels_, instances),
                                                     uint64_t(pl.fragmentInstructions) * pl.samplePasses);
     if (cb_->batchWork_.add(indirect ? BatchWork::kSaturated : vertexWork + fragmentWork, cb_->batchLimit()))
@@ -6073,7 +6118,7 @@ void RenderEncoder::end()
 #endif
     const std::vector<uint32_t> &restore = extrasAtBegin_ ? extrasAtBegin_->restore : std::vector<uint32_t>();
     const uint32_t room = 160 + 8 * 32 + uint32_t(cl.size()) * 48 + kZetaTargetWords + kZcullRegionWords +
-                          kZetaClearWords + 16 + kSampleWords + uint32_t(restore.size());
+                          kZetaClearWords + 16 + kSampleWords + uint32_t(restore.size()) + kSpanMarkWords;
     uint64_t va;
     uint32_t *start = reinterpret_cast<uint32_t *>(d.alloc(d.push_, room * 4, 256, va));
     Push p{start, start + room};
@@ -6181,6 +6226,7 @@ void RenderEncoder::end()
         p.m(RENDER_ENABLE_OVERRIDE, 0);
     }
     checkRoom(p, "a pass prologue");
+    RAW_DIAGNOSTIC(markSpan(p, prologueMark_, SpanKind::Prologue));
     cb_->segment(start, p.at);
     d.push_.head = uint64_t(reinterpret_cast<uint8_t *>(p.at) - d.push_.bo.cpu);
     RAW_ENCODE_END(prologueSpan);

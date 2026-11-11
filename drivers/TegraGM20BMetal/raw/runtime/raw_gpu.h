@@ -79,6 +79,7 @@
 #include "raw_rotation.h"
 #include "raw_draw_bands.h"
 #include "raw_band_rates.h"
+#include "raw_span_marks.h"
 #include "../fx/fx_mip.h"
 
 namespace raw {
@@ -468,6 +469,7 @@ struct Pipeline {
     // this form's lines count in, and its lines there, of any draw and of thin ones
     const char *caName = nullptr;
     bool fillState = false;
+    const char *spanName = nullptr;  // DEVELOPMENT: the raw path's own states' name in the long span line (raw_span_marks.h)
     uint32_t probeGeneration = 0;
     uint8_t probeLines = 0, probeThinLines = 0;
     bool turnSensitive = false;  // raw_rotation.h: its pixel program sees a turned plane's axes
@@ -788,6 +790,10 @@ private:
     uint64_t drawPixels_ = 0;
     PixelBox drawBox_;
     uint8_t samples_ = 1;  // its attachments' samples a pixel
+#if SWITCH_RAW_DIAGNOSTICS
+    uint32_t prologueMark_ = SpanMarks::kNone;  // raw_span_marks.h: its prologue's mark, taken ahead of its draws'
+    void markSpan(Push &p, uint32_t index, SpanKind kind);
+#endif
     double vp_[4] = {};
     uint32_t sc_[4] = {};
     std::vector<std::array<uint32_t, 4>> rects_;
@@ -1494,6 +1500,16 @@ public:
     bool gpuNanoseconds(uint32_t stamp, uint64_t &ns) const;
     // a completed command buffer's measured draws, each teaching its state's rate (raw_band_rates.h)
     void learnDrawTimes(const std::vector<DrawTiming> &timings);
+#if SWITCH_RAW_DIAGNOSTICS
+    SpanMarks spans_;
+    // The render server's completed command buffer's spans of kLongSpanNs or more (raw_span_marks.h), which the facade logs
+    // and notes to the kernel for HW Test ui.launch_hitch
+    std::vector<StateSpan> longSpans(uint32_t stamp);
+    int kernelDebugCall(uint32_t method, const void *in, size_t inSize, void *out, size_t outSize)
+    {
+        return k_.debugCall(method, in, inSize, out, outSize);
+    }
+#endif
 
     bool lost(uint32_t seqno) const
     {
@@ -1863,6 +1879,9 @@ private:
     std::atomic<uint32_t> visibilityNext_{0};
 
     struct HeapPart {
+#if SWITCH_RAW_DIAGNOSTICS
+    Bo spanMarks_;
+#endif
         uint64_t offset = 0, bytes = 0;  // in the heap
         uint8_t *cpu = nullptr;
         Bo bo;

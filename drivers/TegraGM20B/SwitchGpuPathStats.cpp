@@ -12,6 +12,7 @@ extern "C" {
 #include <sys/errno.h>
 #include <sys/sysctl.h>
 #include "../../kits/SwitchSysctl/SwitchSysctl.h"
+#include "SwitchGpuSpanNotes.h"
 
 extern "C" int proc_selfpid(void);
 
@@ -129,8 +130,40 @@ extern "C" void switch_gpu_path_promise_abandoned(uint64_t waited_ns)
 	__atomic_fetch_add(&promisesAbandoned, 1, __ATOMIC_RELEASE);
 }
 
+switch_gpu_spans::Notes gSpans;
+uint64_t gCompositorJobMax;
 extern "C" void switch_gpu_path_taken(enum switch_gpu_path path, uint32_t count)
 {
+extern "C" void switch_gpu_span_note(const char *owner, const char *text)
+{
+	IOLock *held = processLock();
+	if (!held)
+		return;
+	IOLockLock(held);
+	switch_gpu_spans::add(gSpans, owner, text);
+	IOLockUnlock(held);
+}
+
+extern "C" void switch_gpu_compositor_job(uint64_t ns)
+{
+	uint64_t max = __atomic_load_n(&gCompositorJobMax, __ATOMIC_RELAXED);
+	while (ns > max && !__atomic_compare_exchange_n(&gCompositorJobMax, &max, ns, false, __ATOMIC_RELAXED,
+							__ATOMIC_RELAXED))
+		;
+}
+
+extern "C" void switch_gpu_span_line(char *line, size_t size)
+{
+	if (size)
+		line[0] = 0;
+	IOLock *held = processLock();
+	if (!held)
+		return;
+	IOLockLock(held);
+	switch_gpu_spans::take(gSpans, __atomic_exchange_n(&gCompositorJobMax, 0, __ATOMIC_RELAXED), line, size);
+	IOLockUnlock(held);
+}
+
 	if (!count)
 		return;
 	__atomic_fetch_add(&window[path], count, __ATOMIC_RELAXED);

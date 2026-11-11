@@ -60,6 +60,10 @@ void switch_gpu_path_line(char *line, size_t size);
 /* A writer promise given up on, whose reader had waited waited_ns: kern.switch_gpu_promises */
 void switch_gpu_path_promise_abandoned(uint64_t waited_ns);
 void switch_gpu_path_promise_direct(int what);
+/* SwitchGpuSpanNotes.h: a render server's long span, the compositor's job times (the interrupt pass), and the line of both */
+void switch_gpu_span_note(const char *owner, const char *text);
+void switch_gpu_compositor_job(uint64_t ns);
+void switch_gpu_span_line(char *line, size_t size);
 #else
 #define SWITCH_GPU_PATH_STATS 0
 static inline void switch_gpu_path_promise_abandoned(uint64_t waited_ns)
@@ -85,6 +89,11 @@ static inline void switch_gpu_path_job(uint32_t visibility, int unlocked_writes,
 	(void)unlocked_writes;
 	(void)lean_copy;
 	(void)ranged_uses;
+}
+
+static inline void switch_gpu_compositor_job(uint64_t ns)
+{
+	(void)ns;
 }
 
 static inline void switch_gpu_path_window(char *line, size_t size)
