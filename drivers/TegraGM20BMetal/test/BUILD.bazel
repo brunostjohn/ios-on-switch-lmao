@@ -512,6 +512,9 @@ host_test(
     data = [
         "//drivers/NativeMetal:NativeBridgeMetalFrontend.mm",
         "//drivers/TegraGM20BMetal:raw/runtime/RawMetalArchive.mm",
+        "//drivers/TegraGM20BMetal:raw/runtime/RawMetalBinaryArchive.mm",
+        "//drivers/TegraGM20BMetal:raw/runtime/RawMetalComputeState.mm",
+        "//drivers/TegraGM20BMetal:raw/runtime/RawMetalStates.mm",
     ],
 )
 
@@ -1289,6 +1292,20 @@ host_test(
     srcs = [
         "raw_resource_id_test.cpp",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_resource_id.h",
+    ],
+    cxx_std = "c++17",
+)
+
+host_test(
+    name = "raw_archive_keys_test",
+    srcs = [
+        "raw_archive_keys_test.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_archive.h",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_archive_keys.h",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_compute_key.h",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_metallib.h",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_pack.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_pack.h",
     ],
     cxx_std = "c++17",
 )

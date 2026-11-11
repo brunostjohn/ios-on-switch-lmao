@@ -1,7 +1,7 @@
 # raw's API inventory, written by raw/test/selcover (SELCOVER_WRITE=1; selcover_inventory.h says what each
 # column holds): container, item, selector, m2v, sent by, raw
-# m2v's items: base 5 m2v 6 m2vobj 6 none 65 raw 275 read 292 refused 163 unread 201 zero 44
-# sent selectors: base 86 m2v 15 m2vobj 12 none 8 raw 489 refused 56 zero 149
+# m2v's items: base 5 m2v 4 none 65 raw 283 read 292 refused 163 unread 201 zero 44
+# sent selectors: base 86 m2v 13 m2vobj 2 none 8 raw 501 refused 56 zero 149
 MTLArgument	access	access	I	-	read
 MTLArgument	active	isActive	I	-	unread
 MTLArgument	arrayLength	arrayLength	I	-	read
@@ -77,19 +77,19 @@ MTLAttributeDescriptor	offset	offset	I	-	read
 MTLAttributeDescriptor	offset	setOffset:	I	-	read
 MTLAttributeDescriptorArray	objectAtIndexedSubscript:	objectAtIndexedSubscript:	I	-	unread
 MTLAttributeDescriptorArray	setObject:atIndexedSubscript:	setObject:atIndexedSubscript:	I	-	unread
-MTLBinaryArchive	-	addFunctionWithDescriptor:library:error:	-	21H461,24B119	m2vobj
-MTLBinaryArchive	-	addLibraryWithDescriptor:error:	-	24B119	m2vobj
-MTLBinaryArchive	-	addMeshRenderPipelineFunctionsWithDescriptor:error:	-	24B119	m2vobj
+MTLBinaryArchive	-	addFunctionWithDescriptor:library:error:	-	21H461,24B119	raw
+MTLBinaryArchive	-	addLibraryWithDescriptor:error:	-	24B119	raw
+MTLBinaryArchive	-	addMeshRenderPipelineFunctionsWithDescriptor:error:	-	24B119	raw
 MTLBinaryArchive	-	formattedDescription:	-	21H461,24B119	m2vobj
 MTLBinaryArchive	-	keys	-	21H461,24B119	m2vobj
-MTLBinaryArchive	-	options	-	21H461,24B119	m2vobj
-MTLBinaryArchive	addComputePipelineFunctionsWithDescriptor:error:	addComputePipelineFunctionsWithDescriptor:error:	I	21H461,24B119	m2vobj
-MTLBinaryArchive	addRenderPipelineFunctionsWithDescriptor:error:	addRenderPipelineFunctionsWithDescriptor:error:	I	21H461,24B119	m2vobj
+MTLBinaryArchive	-	options	-	21H461,24B119	raw
+MTLBinaryArchive	addComputePipelineFunctionsWithDescriptor:error:	addComputePipelineFunctionsWithDescriptor:error:	I	21H461,24B119	raw
+MTLBinaryArchive	addRenderPipelineFunctionsWithDescriptor:error:	addRenderPipelineFunctionsWithDescriptor:error:	I	21H461,24B119	raw
 MTLBinaryArchive	addTileRenderPipelineFunctionsWithDescriptor:error:	addTileRenderPipelineFunctionsWithDescriptor:error:	I	24B119	refused
-MTLBinaryArchive	device	device	I	21H461,24B119	m2vobj
-MTLBinaryArchive	label	label	I	21H461,24B119	m2vobj
-MTLBinaryArchive	label	setLabel:	I	21H461,24B119	m2vobj
-MTLBinaryArchive	serializeToURL:error:	serializeToURL:error:	I	21H461,24B119	m2vobj
+MTLBinaryArchive	device	device	I	21H461,24B119	raw
+MTLBinaryArchive	label	label	I	21H461,24B119	raw
+MTLBinaryArchive	label	setLabel:	I	21H461,24B119	raw
+MTLBinaryArchive	serializeToURL:error:	serializeToURL:error:	I	21H461,24B119	raw
 MTLBinaryArchiveDescriptor	url	setUrl:	I	-	read
 MTLBinaryArchiveDescriptor	url	url	I	-	read
 MTLBinding	access	access	I	-	none
@@ -591,9 +591,9 @@ MTLDevice	newBufferWithBytesNoCopy:length:options:deallocator:	newBufferWithByte
 MTLDevice	newBufferWithLength:options:	newBufferWithLength:options:	I	21H461,24B119	raw
 MTLDevice	newCommandQueue	newCommandQueue	I	21H461,24B119	raw
 MTLDevice	newCommandQueueWithMaxCommandBufferCount:	newCommandQueueWithMaxCommandBufferCount:	I	21H461,24B119	raw
-MTLDevice	newComputePipelineStateWithDescriptor:options:completionHandler:	newComputePipelineStateWithDescriptor:options:completionHandler:	I	21H461,24B119	m2v
+MTLDevice	newComputePipelineStateWithDescriptor:options:completionHandler:	newComputePipelineStateWithDescriptor:options:completionHandler:	I	21H461,24B119	raw
 MTLDevice	newComputePipelineStateWithDescriptor:options:reflection:error:	newComputePipelineStateWithDescriptor:options:reflection:error:	I	21H461,24B119	raw
-MTLDevice	newComputePipelineStateWithFunction:completionHandler:	newComputePipelineStateWithFunction:completionHandler:	I	21H461,24B119	m2v
+MTLDevice	newComputePipelineStateWithFunction:completionHandler:	newComputePipelineStateWithFunction:completionHandler:	I	21H461,24B119	raw
 MTLDevice	newComputePipelineStateWithFunction:error:	newComputePipelineStateWithFunction:error:	I	21H461,24B119	raw
 MTLDevice	newComputePipelineStateWithFunction:options:completionHandler:	newComputePipelineStateWithFunction:options:completionHandler:	I	-	base
 MTLDevice	newComputePipelineStateWithFunction:options:reflection:error:	newComputePipelineStateWithFunction:options:reflection:error:	I	21H461,24B119	raw

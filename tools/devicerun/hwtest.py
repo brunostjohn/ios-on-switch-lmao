@@ -102,6 +102,7 @@ TESTS: dict[str, bool] = {
             'metal.native.shared_event',
             'metal.native.fence',
             'metal.native.argument_encoder',
+            'metal.native.binary_archive',
         ],
         False,
     ),

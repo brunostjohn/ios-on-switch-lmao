@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 #import "RawMetalInternal.h"
 #import "RawRenderKey.h"
+#import "RawMetalBinaryArchive.h"
 
 // The m2v device's Core Image filter-function linking (_MTLDevice's newLibraryWithImageFilterFunctionsSPI: sends it here)
 @protocol RMImageFilterLinking
@@ -181,6 +182,7 @@ static MTLLinkedFunctions *twinLinked(MTLLinkedFunctions *l)
 MTLRenderPipelineDescriptor *twinDescriptor(MTLRenderPipelineDescriptor *d)
 {
     MTLRenderPipelineDescriptor *t = [d copy];
+    t.binaryArchives = nil;  // this device's (RawMetalBinaryArchive.mm), which m2v cannot read
     t.vertexFunction = twinOf(d.vertexFunction);
     t.fragmentFunction = twinOf(d.fragmentFunction);
     t.vertexLinkedFunctions = twinLinked(d.vertexLinkedFunctions);
@@ -266,10 +268,9 @@ static void makeRecord(RMPipeline *p, MTLRenderPipelineDescriptor *d)
     });
 }
 
-// The state of `d` as the pack and the archives it lists answer: nil where it is Metal's binary archive miss (`*error`), never
-// compiled; `m2vAnswers` where an archive is m2v's own, whose answer is the twin's, made before the record
-static RMPipeline *pipelineFor(RMDevice *device, MTLRenderPipelineDescriptor *d, MTLPipelineOption o, bool &m2vAnswers,
-                               NSError **error)
+// The state of `d` as the pack and the archives it lists answer (RawMetalBinaryArchive.mm): nil where it is Metal's binary
+// archive miss (`*error`), never compiled
+static RMPipeline *pipelineFor(RMDevice *device, MTLRenderPipelineDescriptor *d, MTLPipelineOption o, NSError **error)
 {
     RMPipeline *p = [RMPipeline new];
     p->_device = device;
@@ -304,17 +305,16 @@ static RMPipeline *pipelineFor(RMDevice *device, MTLRenderPipelineDescriptor *d,
         if (p->_packed)
             packedVariants(p, packKey);
     }
-    const RMArchiveAnswer answer =
-        p->_raw || !p->_completable ? RMArchiveAnswer::NotAsked : rmArchiveAnswer(d.binaryArchives, o, keyHash);
-    if (answer == RMArchiveAnswer::Missed) {
+    const raw::ArchiveAnswer answer = p->_raw || !p->_completable
+                                          ? raw::ArchiveAnswer::NotAsked
+                                          : rmArchiveAnswer(d.binaryArchives, o, false, keyHash);
+    if (answer == raw::ArchiveAnswer::Missed) {
         if (error)
             *error = rmArchiveMissError((d.fragmentFunction ?: d.vertexFunction).name, "render");
         return nil;
     }
-    p->_archived = answer == RMArchiveAnswer::Declared;
-    m2vAnswers = answer == RMArchiveAnswer::M2V;
-    if (!m2vAnswers)
-        makeRecord(p, d);
+    p->_archived = answer == raw::ArchiveAnswer::Declared;
+    makeRecord(p, d);
     return p;
 }
 
@@ -354,7 +354,8 @@ static MTLRenderPipelineDescriptor *packedTwinDescriptor(MTLRenderPipelineDescri
 
 static MTLPipelineOption packedTwinOptions(MTLPipelineOption o, bool packed)
 {
-    return packed ? o & ~MTLPipelineOptionFailOnBinaryArchiveMiss : o;
+    (void)packed;  // the facade answers every archive miss (RawMetalBinaryArchive.mm)
+    return o & ~MTLPipelineOptionFailOnBinaryArchiveMiss;
 }
 
 static id<MTLRenderPipelineState> pipelineTwin(MTLRenderPipelineDescriptor *d, MTLPipelineOption o, bool packed,
@@ -363,7 +364,10 @@ static id<MTLRenderPipelineState> pipelineTwin(MTLRenderPipelineDescriptor *d, M
     if (packed && native_bridge_metal_render_pipeline_lazy)
         return native_bridge_metal_render_pipeline_lazy(gRM->fallback, packedTwinDescriptor(d, true),
                                                         packedTwinOptions(o, true));
-    return [gRM->fallback newRenderPipelineStateWithDescriptor:twinDescriptor(d) options:o reflection:nil error:error];
+    return [gRM->fallback newRenderPipelineStateWithDescriptor:twinDescriptor(d)
+                                                       options:packedTwinOptions(o, packed)
+                                                    reflection:nil
+                                                         error:error];
 }
 
 // A state of `d` under `o`: its record the pack's, or made at once, unless the archives it lists miss it as Metal's would; its
@@ -371,8 +375,7 @@ static id<MTLRenderPipelineState> pipelineTwin(MTLRenderPipelineDescriptor *d, M
 static id<MTLRenderPipelineState> makeState(RMDevice *device, MTLRenderPipelineDescriptor *d, MTLPipelineOption o,
                                             MTLAutoreleasedRenderPipelineReflection *reflection, NSError **error)
 {
-    bool m2vAnswers = false;
-    RMPipeline *p = pipelineFor(device, d, o, m2vAnswers, error);
+    RMPipeline *p = pipelineFor(device, d, o, error);
     if (!p)
         return nil;
     const bool packed = p->_raw || p->_archived;
@@ -383,11 +386,6 @@ static id<MTLRenderPipelineState> makeState(RMDevice *device, MTLRenderPipelineD
                                                                  error:error];
     else
         p->_twin = pipelineTwin(d, o, packed, error);
-    if (m2vAnswers) {
-        if (!p->_twin)
-            return nil;
-        makeRecord(p, d);
-    }
     refuseUnmade(p, d);
     if (error && p->_raw)
         *error = nil;
@@ -500,6 +498,8 @@ static dispatch_queue_t creationQueue()
 {
     MTLTileRenderPipelineDescriptor *t = [d copy];
     t.tileFunction = twinOf(d.tileFunction);
+    if (!rmTileArchiveAnswer(t, d, o, error))
+        return nil;
     return [self wrapCarried:[gRM->fallback newRenderPipelineStateWithTileDescriptor:t
                                                                              options:o
                                                                           reflection:r

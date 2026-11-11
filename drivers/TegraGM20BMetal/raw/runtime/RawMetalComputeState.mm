@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #import "RawMetalInternal.h"
+#import "RawMetalBinaryArchive.h"
 #import "RawMetalComputeState.h"
 #include "NativeBridgeMetalFrontend.h"
 #include "raw_compute_key.h"
@@ -81,32 +82,27 @@ static bool airOf(id<MTLFunction> function, raw::AirHash &out)
     return true;
 }
 
-// The archives a creation under MTLPipelineOptionFailOnBinaryArchiveMiss lists, as Metal's answer: false (and Metal's error)
-// where every one is Apple's, none declares the state and the pack holds no kernel of it, never compiled. Where one declares
-// it or the pack holds it, m2v's state goes without them (it reads an Apple archive as holding nothing); m2v answers for its
-// own.
+// The archives a creation under MTLPipelineOptionFailOnBinaryArchiveMiss lists (this device's, RawMetalBinaryArchive.mm), as
+// Metal's answer: false (and Metal's error) where none holds the state and the pack holds no kernel of it, never compiled.
+// m2v's state goes without the archives or the option either way: it reads none of this device's archives.
 static bool archivesAnswer(RMComputeState *s, RMFunction *f, MTLPipelineOption &options, NSError **error)
 {
-    if (!f)
+    raw::ArchiveAnswer answer = raw::ArchiveAnswer::NotAsked;
+    if (f) {
+        NSString *name = native_bridge_metal_function_library_name(s->_direct.computeFunction) ?: f.name;
+        const std::string key =
+            raw::computeArchiveKey(name.UTF8String ?: "", s->_constants, s->_maxThreads, s->_multipleOfWidth);
+        answer = rmArchiveAnswer(s->_direct.binaryArchives, options, false, raw::Pack::fnv(key.data(), key.size()));
+    }
+    options &= ~MTLPipelineOptionFailOnBinaryArchiveMiss;
+    s->_direct.binaryArchives = nil;
+    if (answer != raw::ArchiveAnswer::Missed ||
+        (s->_keyed &&
+         rmPackHoldsKernels(raw::computeStateKey(s->_air, s->_constants, s->_maxThreads, s->_multipleOfWidth))))
         return true;
-    NSString *name = native_bridge_metal_function_library_name(s->_direct.computeFunction) ?: f.name;
-    const std::string key =
-        raw::computeArchiveKey(name.UTF8String ?: "", s->_constants, s->_maxThreads, s->_multipleOfWidth);
-    const RMArchiveAnswer answer =
-        rmArchiveAnswer(s->_direct.binaryArchives, options, raw::Pack::fnv(key.data(), key.size()));
-    const bool held =
-        answer == RMArchiveAnswer::Missed && s->_keyed &&
-        rmPackHoldsKernels(raw::computeStateKey(s->_air, s->_constants, s->_maxThreads, s->_multipleOfWidth));
-    if (answer == RMArchiveAnswer::Missed && !held) {
-        if (error)
-            *error = rmArchiveMissError(f.name, "compute");
-        return false;
-    }
-    if (answer == RMArchiveAnswer::Declared || held) {
-        options &= ~MTLPipelineOptionFailOnBinaryArchiveMiss;
-        s->_direct.binaryArchives = nil;
-    }
-    return true;
+    if (error)
+        *error = rmArchiveMissError(f.name, "compute");
+    return false;
 }
 
 id rmComputeState(id device, id<MTLDevice> fallback, MTLComputePipelineDescriptor *descriptor,

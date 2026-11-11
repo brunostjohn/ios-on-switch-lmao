@@ -231,5 +231,6 @@ struct NativeFenceTest: NativeObjectTest {
 enum NativeObjectTests {
     static let all: [any HWTest] = [
         NativeDepthStencilTest(), NativeSharedEventTest(), NativeFenceTest(), NativeArgumentEncoderTest(),
+        NativeBinaryArchiveTest(),
     ]
 }

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
-// Guards on the facade's binary archives, which are m2v's (RawMetalArchive.mm) and which no host model runs: Metal adds a
-// device's own functions to its archives, the facade's descriptors name its functions, and m2v's archive takes only m2v's
-// (NativeBridgeMetalFrontend.mm renderDescriptor and computeDescriptor refuse a foreign function).
+// Guards on the facade's binary archives, which no host model runs: they are the device's own (RawMetalBinaryArchive.mm),
+// Metal adds the device's own functions to them, and m2v, which takes only its own functions and archives
+// (NativeBridgeMetalFrontend.mm renderDescriptor and computeDescriptor refuse a foreign function), is never handed one.
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
@@ -12,6 +12,7 @@
 using switch_ios::test::Body;
 using switch_ios::test::SourceText;
 using testing::HasSubstr;
+using testing::Not;
 
 namespace {
 
@@ -24,16 +25,27 @@ TEST(RawArchiveAddSource, M2VsArchiveTakesOnlyItsOwnFunctions)
                 HasSubstr("isKindOfClass:[NBFunction class]"));
 }
 
-TEST(RawArchiveAddSource, TheFacadesArchiveAddsTheTwinsOfItsDescriptorsFunctions)
+TEST(RawArchiveAddSource, TheFacadesArchiveIsTheDevicesOwnAndTakesItsFunctions)
 {
     const std::string archive = SourceText("../raw/runtime/RawMetalArchive.mm");
-    EXPECT_THAT(Body(archive, "- (id<MTLBinaryArchive>)newBinaryArchiveWithDescriptor:(MTLBinaryArchiveDescriptor *)d"),
-                HasSubstr("object_setClass(archive, facadeArchive("));
-    const std::string facade = Body(archive, "static Class facadeArchive(Class m2v)");
-    EXPECT_THAT(facade, HasSubstr("@selector(addRenderPipelineFunctionsWithDescriptor:error:)"));
-    EXPECT_THAT(facade, HasSubstr("@selector(addComputePipelineFunctionsWithDescriptor:error:)"));
-    EXPECT_THAT(Body(archive, "static BOOL addRenderTwins("), HasSubstr("twinDescriptor(d)"));
-    EXPECT_THAT(Body(archive, "static BOOL addComputeTwins("), HasSubstr("twinOf(d.computeFunction)"));
+    const std::string opened =
+        Body(archive, "- (id<MTLBinaryArchive>)newBinaryArchiveWithDescriptor:(MTLBinaryArchiveDescriptor *)d");
+    EXPECT_THAT(opened, HasSubstr("rmNewBinaryArchive("));
+    EXPECT_THAT(opened, Not(HasSubstr("fallback")));
+    const std::string own = SourceText("../raw/runtime/RawMetalBinaryArchive.mm");
+    EXPECT_THAT(Body(own, "- (BOOL)addRenderPipelineFunctionsWithDescriptor:(MTLRenderPipelineDescriptor *)d"),
+                HasSubstr("own(d.vertexFunction)"));
+    EXPECT_THAT(Body(own, "- (BOOL)addComputePipelineFunctionsWithDescriptor:(MTLComputePipelineDescriptor *)d"),
+                HasSubstr("own(d.computeFunction)"));
+}
+
+TEST(RawArchiveAddSource, M2vsTwinsAreMadeWithoutTheDevicesArchives)
+{
+    const std::string states = SourceText("../raw/runtime/RawMetalStates.mm");
+    EXPECT_THAT(Body(states, "MTLRenderPipelineDescriptor *twinDescriptor(MTLRenderPipelineDescriptor *d)"),
+                HasSubstr("t.binaryArchives = nil;"));
+    const std::string compute = SourceText("../raw/runtime/RawMetalComputeState.mm");
+    EXPECT_THAT(Body(compute, "static bool archivesAnswer("), HasSubstr("s->_direct.binaryArchives = nil;"));
 }
 
 }  // namespace
