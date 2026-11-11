@@ -379,6 +379,18 @@ TEST(GM20BPresentSource, FenceOnlyPresentHasNoCopy)
 		     "tgm_copy_texels(");
 }
 
+// A copying present flushes the L2 once, before the copy reads the frame; its copy writes around the L2, so its fence
+// does not flush again. A fence-only present (direct scanout of a frame the GPU drew through the L2) keeps the fence's.
+TEST(GM20BPresentSource, OneL2FlushPerPresent)
+{
+	const std::string copy = flat(Between(gpu(), "static int present_copy(", "\n}\n"));
+	expectBefore(copy, "NVB06F_MEM_OP_D_OPERATION_L2_FLUSH_DIRTY", "tgm_copy_texels(");
+	EXPECT_THAT(copy, HasSubstr("if (dst_va) chan_fence_volatile(chan); else chan_fence(chan);"));
+	const std::string fence = flat(definition(gpu(), "u32 tgm_chan_fence_job("));
+	expectBefore(fence, "NVB06F_FB_FLUSH, 0); if (external != TGM_FENCE_VOLATILE_WRITES) {",
+		     "NVB06F_MEM_OP_D_OPERATION_L2_FLUSH_DIRTY");
+}
+
 // A present waits for the writers of window B's surface too (TegraScanoutCopy alsoWritten), so the display writes window
 // B's registers for a surface the GPU renders only after that work; window B's own fence maps nothing and copies nothing.
 TEST(GM20BPresentSource, PresentWaitsForWindowBsWritersToo)

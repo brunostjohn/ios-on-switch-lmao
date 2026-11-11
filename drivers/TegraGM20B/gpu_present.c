@@ -358,6 +358,8 @@ static int present_copy(uint64_t src_va, uint64_t src_pa, uint64_t also_pa, uint
 		PUSH_NVSQ(push, NV906F, NVB06F_MEM_OP_C, 0, NVB06F_MEM_OP_D,
 			  NVB06F_MEM_OP_D_OPERATION_L2_FLUSH_DIRTY);
 		PUSH_NVSQ(push, NV906F, NVB06F_FB_FLUSH, 0);
+		if (stats_on())
+			__atomic_fetch_add(&tgm_stats.present_flushes, 1, __ATOMIC_RELAXED);
 		const u32 src_pitch = src_block_log2 >= 0 ? width * 4 : (u32)stride;
 		const struct tgm_copy_side src = {src_va, src_pitch, src_block_log2};
 		const struct tgm_copy_side dst = {dst_va, dst_pitch, (int32_t)block_height_log2};
@@ -377,7 +379,14 @@ static int present_copy(uint64_t src_va, uint64_t src_pa, uint64_t also_pa, uint
 	nvxnu_work_schedule_after(
 		tgm_present.deadline_work,
 		TGM_PRESENT_NS); /* before the kick, so the completion cancels it */
-	chan_fence(chan);
+	/* A copy's flush above put the frame's source in DRAM, and the copy and its read-backs write around the L2
+	 * (tgm_copy_texels); a fence-only present is direct scanout of a surface the GPU drew through the L2. */
+	if (dst_va)
+		chan_fence_volatile(chan);
+	else
+		chan_fence(chan);
+	if (!dst_va && stats_on())
+		__atomic_fetch_add(&tgm_stats.present_flushes, 1, __ATOMIC_RELAXED);
 	if (matched && stats_on())
 		__atomic_fetch_add(&tgm_stats.writer, 1, __ATOMIC_RELAXED);
 	if (!n && stats_on())

@@ -79,9 +79,11 @@ u32 tgm_chan_fence_job(struct tgm_chan *chan, int external, u32 first, u32 next)
 		/* NOLINTBEGIN(bugprone-signed-bitwise,bugprone-branch-clone) */
 		PUSH_NVSQ(push, NV906F, NVB06F_WFI, 0);
 		PUSH_NVSQ(push, NV906F, NVB06F_FB_FLUSH, 0);
-		PUSH_NVSQ(push, NV906F, NVB06F_MEM_OP_C, 0, NVB06F_MEM_OP_D,
-			  NVB06F_MEM_OP_D_OPERATION_L2_FLUSH_DIRTY);
-		PUSH_NVSQ(push, NV906F, NVB06F_FB_FLUSH, 0);
+		if (external != TGM_FENCE_VOLATILE_WRITES) {
+			PUSH_NVSQ(push, NV906F, NVB06F_MEM_OP_C, 0, NVB06F_MEM_OP_D,
+				  NVB06F_MEM_OP_D_OPERATION_L2_FLUSH_DIRTY);
+			PUSH_NVSQ(push, NV906F, NVB06F_FB_FLUSH, 0);
+		}
 		/* NOLINTEND(bugprone-signed-bitwise,bugprone-branch-clone) */
 	}
 	if (stats_on()) {

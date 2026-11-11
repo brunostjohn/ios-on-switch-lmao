@@ -399,9 +399,10 @@ struct stats_state {
 	u64 since;      /* start of the current window, 0 before the first submission */
 	u64 cal_ptimer; /* PTIMER at `since`: its rate over the window */
 	u32 submits, fences, imports, timed;
-	u32 idle;   /* presents that found no user work pending */
-	u32 writer; /* presents that waited for their surface's importers only */
-	u32 allocs; /* BoAllocs */
+	u32 idle;            /* presents that found no user work pending */
+	u32 writer;          /* presents that waited for their surface's importers only */
+	u32 present_flushes; /* L2_FLUSH_DIRTYs the presents pushed */
+	u32 allocs;          /* BoAllocs */
 	u64 alloc_bytes, alloc_ns;
 	u64 lat_sum, lat_max;                         /* user submissions only */
 	u64 queue_sum, queue_max, exec_sum, exec_max; /* GPU-side, from the stamps (PTIMER units) */
@@ -543,6 +544,9 @@ int tgm_order_waits(struct tgm_chan *chan);
 /* Push dwords chan_fence() may write, at most */
 #define CHAN_FENCE_DWORDS 48
 int tgm_chan_wait_ready(struct tgm_chan *chan, u32 gpfifo_nr, u32 push_nr);
+/* external: TGM_FENCE_VOLATILE_WRITES when every write the fence covers went around the L2: the engines idle and their
+ * writes committed, no L2 flush */
+#define TGM_FENCE_VOLATILE_WRITES 2
 u32 tgm_chan_fence_job(struct tgm_chan *chan, int external, u32 first, u32 next);
 int tgm_backing_dependencies(struct tgm_chan *chan, const struct switch_gpu_backing_token *tokens,
 			     u32 count, int emit);

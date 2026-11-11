@@ -264,6 +264,7 @@ void tgm_stats_tick(void)
 	u32 presents = 0;
 	u32 idle = 0;
 	u32 writer = 0;
+	u32 present_flushes = 0;
 	u32 allocs = 0;
 	u32 mc_int = 0;
 	u32 mc_err = 0;
@@ -325,6 +326,7 @@ void tgm_stats_tick(void)
 	tgm_present_stats(&presents, &ps, &pm);
 	idle = __atomic_exchange_n(&tgm_stats.idle, 0, __ATOMIC_RELAXED);
 	writer = __atomic_exchange_n(&tgm_stats.writer, 0, __ATOMIC_RELAXED);
+	present_flushes = __atomic_exchange_n(&tgm_stats.present_flushes, 0, __ATOMIC_RELAXED);
 	allocs = __atomic_exchange_n(&tgm_stats.allocs, 0, __ATOMIC_RELAXED);
 	abytes = __atomic_exchange_n(&tgm_stats.alloc_bytes, 0, __ATOMIC_RELAXED);
 	ans = __atomic_exchange_n(&tgm_stats.alloc_ns, 0, __ATOMIC_RELAXED);
@@ -369,7 +371,7 @@ void tgm_stats_tick(void)
 		  "queue "
 		  "mean %llu us max %llu us, exec mean %llu us max %llu us (%u stamped), busy "
 		  "%llu%% (PTIMER x%llu.%03llu), "
-		  "L2 %s, %u presents (%u writer-only), "
+		  "L2 %s, %u presents (%u writer-only, %u L2 flushes), "
 		  "offer to done mean %llu us max "
 		  "%llu us, %s; compositor GPU queue mean %llu us max %llu us (%u), with an app on "
 		  "the GPU at its kick mean %llu us max %llu us (%u); %s; %s",
@@ -377,7 +379,7 @@ void tgm_stats_tick(void)
 		  max / 1000, fences, timed ? PT_NS(qs) / timed / 1000 : 0, PT_NS(qm) / 1000,
 		  timed ? PT_NS(es) / timed / 1000 : 0, PT_NS(em) / 1000, timed, busy, rate >> 16,
 		  ((rate & 0xffff) * 1000) >> 16, l2_on() ? "cached" : "volatile", presents, writer,
-		  presents ? ps / presents / 1000 : 0, pm / 1000, clk,
+		  present_flushes, presents ? ps / presents / 1000 : 0, pm / 1000, clk,
 		  comp ? PT_NS(cos) / comp / 1000 : 0, PT_NS(com) / 1000, comp,
 		  behind ? PT_NS(bs) / behind / 1000 : 0, PT_NS(bm) / 1000, behind, sched, recov);
 	nvxnu_stats("tegra-gm20b: stats %s", line);
