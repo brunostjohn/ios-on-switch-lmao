@@ -8,6 +8,7 @@
 #import "RawMetalXrPlanes.h"
 #import "RawMetalIndirect.h"
 #include "raw_attachment_target.h"
+#import "RawMetalFresh.h"
 #include <optional>
 #include "raw_compute.h"
 #include "raw_compute_lookup.h"
@@ -60,6 +61,7 @@ encodeRawAttempt(RMCommandBuffer *cb, size_t from, size_t to, const char **why, 
         *why = "an event producer failed or is pending on a channel made again since";
         return false;
     }
+    FreshWrites firstContents(cb, from, to, *rc);
     RAW_ENCODE_BEGIN(resourceSpan, Resources);
     const auto buffers = [&](auto visit) {
         cb->_plan.forEachResource(from, to, RMResourceKind::Buffer, visit);
@@ -428,8 +430,12 @@ encodeRawAttempt(RMCommandBuffer *cb, size_t from, size_t to, const char **why, 
     RAW_ENCODE_BEGIN(loopSpan, Loop);
     for (size_t at = from; at < to; at++) {
         const Cmd c = cb->_plan.legacy(at);
-        if ((c.op == OpRender && !rmContinuesPass(cb, at)) || c.op == OpCompute || c.op == OpBlit)
+        if ((c.op == OpRender && !rmContinuesPass(cb, at)) || c.op == OpCompute || c.op == OpBlit) {
             encoder = at;
+#if SWITCH_RAW_DIAGNOSTICS
+            traceFreshUses(cb, at);
+#endif
+        }
         if (c.op == OpDispatch) {
             RAW_ENCODE_SPAN(Compute);
             const auto &dispatch = cb->_plan.dispatch(at);
@@ -774,6 +780,8 @@ encodeRawAttempt(RMCommandBuffer *cb, size_t from, size_t to, const char **why, 
 #endif
     if (!rc->commit(seq)) {
         cb->_partial = rc->partial;
+        if (rc->partial)
+            firstContents.submitted(cb);
         if (rc->admissionBlocked) {
             RMQueue *queue = cb->_queue;
             int armed = KERN_SUCCESS;
@@ -805,6 +813,7 @@ encodeRawAttempt(RMCommandBuffer *cb, size_t from, size_t to, const char **why, 
         }
         return fail(PredEncKernel, "the kernel refused the submission");
     }
+    firstContents.submitted(cb);
     publishSharedEvents(cb);
     if (rc->promisesKept) {
         std::lock_guard<raw::Mutex> l(cb->_lock);

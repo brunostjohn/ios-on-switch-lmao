@@ -123,6 +123,7 @@ enum : uint32_t {
     CE_PITCH_IN = NVB0B5_PITCH_IN,
     CE_LINE_LENGTH_IN = NVB0B5_LINE_LENGTH_IN,
     CE_SET_REMAP_CONST_A = NVB0B5_SET_REMAP_CONST_A,
+    CE_SET_REMAP_CONST_B = NVB0B5_SET_REMAP_CONST_B,
     CE_SET_REMAP_COMPONENTS = NVB0B5_SET_REMAP_COMPONENTS,
     CE_SET_DST_BLOCK_SIZE = NVB0B5_SET_DST_BLOCK_SIZE,  // then DST_WIDTH, HEIGHT, DEPTH, LAYER, ORIGIN
     CE_SET_SRC_BLOCK_SIZE = NVB0B5_SET_SRC_BLOCK_SIZE,  // then SRC_WIDTH, HEIGHT, DEPTH, LAYER, ORIGIN
@@ -7079,6 +7080,16 @@ void BlitEncoder::copyTexels(const Texture &src, uint32_t sx, uint32_t sy, uint3
     snprintf(detail, sizeof detail, " from %ux%u f%u at %u,%u", src.width, src.height, src.format, sx, sy);
     logEdgeMiss("copy", dst, {dx, dy, dx + w, dy + h}, detail);
 #endif
+}
+
+void BlitEncoder::fillTexels(const Texture &t, uint32_t z, uint32_t w, uint32_t h, const CopyFill &fill)
+{
+    cb_->use(t, true);
+    room(40);
+    p_.m(CE_SET_REMAP_CONST_A, fill.constA, SUBC_COPY);
+    p_.m(CE_SET_REMAP_CONST_B, fill.constB, SUBC_COPY);
+    const CopySide side = sideOf(t, 0, 0, z);
+    copyRemapped(p_, side, side, w, h, fill.remap, uint32_t(fill.componentBytes) * fill.components, dev_->stats);
 }
 
 void BlitEncoder::copyBufferTexels(uint64_t va, uint32_t pitch, const Texture &t, uint32_t x, uint32_t y, uint32_t z,

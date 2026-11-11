@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #import "RawMetalInternal.h"
+#import "RawMetalFresh.h"
 #include "RawMetalPlanExecution.h"
 #import "RawMetalEventJobs.h"
 #include "raw_encode_mallocs.h"
@@ -397,6 +398,7 @@ bool submitRange(RMCommandBuffer *cb, bool followed)
         }
         cb->_gpuPrefixEligible = false;
         rmRangePlain(cb, range.from, range.to);
+        writeFreshAhead(cb, range.from, range.to);
         if (r.gpuOrder && r.rawSinceM2v) {
             uint32_t waits = 0;
             const int kr = r.raw->orderOthersAfter(waits);

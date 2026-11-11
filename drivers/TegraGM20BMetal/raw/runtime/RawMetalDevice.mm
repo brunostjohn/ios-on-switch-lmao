@@ -2,6 +2,7 @@
 #import "RawMetalInternal.h"
 #import "RawMetalRotated.h"
 #import "RawMetalXrPlanes.h"
+#import "RawMetalFresh.h"
 #include "raw_nonfinite.h"
 #include <mach/vm_page_size.h>
 #include "NativeBridgeMetalFrontend.h"
@@ -363,6 +364,7 @@ static void reportNonFiniteStart(RMTexture *t, MTLTextureDescriptor *d)
             if (!said.exchange(true))
                 os_log(rawLog(), "raw: mip chain on (%u levels of %ux%u, %llu bytes)", unsigned(d.mipmapLevelCount),
                        unsigned(d.width), unsigned(d.height), (unsigned long long)t->_raw.chain->layout.bytes);
+            establishFresh(t, d);
             return (id<MTLTexture>)t;
         }
     }
@@ -444,6 +446,7 @@ static void reportNonFiniteStart(RMTexture *t, MTLTextureDescriptor *d)
             refuseTexture(w, PredTexPoolAlloc, d.width, d.height, @"twin-only (pool)", nil);
         return (id<MTLTexture>)w;
     }
+    establishFresh(t, d);
     return (id<MTLTexture>)t;
 }
 

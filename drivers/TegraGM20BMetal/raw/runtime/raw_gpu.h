@@ -38,6 +38,7 @@
 #include "raw_loop_copies.h"
 #include "raw_loop_ranges.h"
 #include "raw_visibility.h"
+#include "raw_fresh.h"
 #include "raw_view.h"
 #include <array>
 #include <atomic>
@@ -1000,6 +1001,8 @@ public:
     // texture's plane is 0) (vkCmdCopyImage)
     void copyTexels(const Texture &src, uint32_t sx, uint32_t sy, uint32_t sz, const Texture &dst, uint32_t dx,
                     uint32_t dy, uint32_t dz, uint32_t w, uint32_t h);
+    // `w` x `h` texels from the origin of plane z of `t` (a chain level: chainLevelImage) each set to `fill`'s texel
+    void fillTexels(const Texture &t, uint32_t z, uint32_t w, uint32_t h, const CopyFill &fill);
     // `w` x `h` texels between rows `pitch` bytes apart at `va` (both multiples of the texel's component, at most 4 bytes) and
     // (x, y) of plane z of `t`, pitch or block-linear: into `t` where `toTexture`, else out of it (vkCmdCopyBufferToImage,
     // vkCmdCopyImageToBuffer); the buffer's texels bufferUnit each. A Depth32Float_Stencil8 aspect's copy is NVK's

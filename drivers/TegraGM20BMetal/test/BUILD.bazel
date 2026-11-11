@@ -140,6 +140,10 @@
 #   raw_handoff_queue_test  raw/runtime/raw_handoff_queue.h: the submit worker's ranges reach the completion thread, and
 #                     every thread's schedule changes the submit worker, each giver's in order with no lock, the taker
 #                     sleeping until the next hand-off that wakes or a wake(), each counted until it is popped
+#   raw_fresh_test    raw/runtime/raw_fresh.h: a new texture's first contents as an M4 Max reads them, the copy engine's
+#                     constants that write each exactly, and the first passes that make writing them redundant
+#   raw_fresh_queue_test  raw/runtime/raw_fresh_queue.h over a model of the two channels: a new texture's first contents
+#                     land ahead of every write to it, the raw channel's and m2v's
 #   raw_residual_test raw/runtime/raw_residual.h: a buffer bound off m2v's descriptor base alignment (16 bytes for a
 #                     storage buffer, 256 for a uniform one) at the aligned base with its SlotBindOffset residual in the
 #                     push word raw/pack/probe_bind.h's bind-offset run names
@@ -1062,6 +1066,24 @@ host_test(
     srcs = [
         "raw_nonfinite_test.cpp",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_nonfinite.h",
+    ],
+    cxx_std = "c++17",
+)
+
+host_test(
+    name = "raw_fresh_test",
+    srcs = [
+        "raw_fresh_test.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_fresh.h",
+    ],
+    cxx_std = "c++17",
+)
+
+host_test(
+    name = "raw_fresh_queue_test",
+    srcs = [
+        "raw_fresh_queue_test.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_fresh_queue.h",
     ],
     cxx_std = "c++17",
 )
