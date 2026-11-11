@@ -65,11 +65,12 @@ static raw::Pipeline *unpackedVariant(RMPipeline *p, const std::string &suffix, 
                              key.c_str());
         return untested;
     }
-    // The variant's name and its state's hash come first, as the line is cut at SWITCH_REFUSAL_TEXT: tools/gpu/logharvest.py
-    // finds the state by the hash and harvests the variant
+    // The variant's name and its state's hash come first, as the line is cut at SWITCH_REFUSAL_TEXT:
+    // tools/gpu/logharvest.py finds the state by the hash and harvests the variant
     SWITCH_REFUSE_DETAIL("raw", "state.variant_unpacked", raw::Pack::fnv(key.data(), key.size()),
-                         "a packed state's variant the pack lacks: its draws are refused:%s of %016llx %s", name.c_str(),
-                         (unsigned long long)raw::Pack::fnv(p->_key.data(), p->_key.size()), p->_key.c_str());
+                         "a packed state's variant the pack lacks: its draws are refused:%s of %016llx %s",
+                         name.c_str(), (unsigned long long)raw::Pack::fnv(p->_key.data(), p->_key.size()),
+                         p->_key.c_str());
     return nullptr;
 }
 

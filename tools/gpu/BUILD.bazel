@@ -60,7 +60,6 @@ py_test(
 py_binary(
     name = "logharvest",
     srcs = ["logharvest.py"],
-    data = ["//drivers/TegraGM20BMetal:precompile/archives/21H461.tsv", "//drivers/TegraGM20BMetal:precompile/archives/24B119.tsv"],
     deps = ["//drivers/TegraGM20BMetal:raw_pack"],
 )
 
