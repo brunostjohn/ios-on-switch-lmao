@@ -134,6 +134,86 @@ TEST(SwitchVICPicture, PersistentAddressesBuildValidHardwareJobs)
     }
 }
 
+// A 'v0a8' target: Y, CbCr at half height, then an alpha plane as big as Y.
+TegraVICSurfaceDesc triPlanar(const Picture &image)
+{
+    TegraVICSurfaceDesc d = image.target;
+    d.fourcc = TEGRA_VIC_FOURCC('v', '0', 'a', '8');
+    d.planes = 3;
+    d.planeOffset[2] = d.planeOffset[1] + uint64_t(d.planeBytesPerRow[1]) * d.planeHeight[1];
+    d.planeBytesPerRow[2] = d.planeBytesPerRow[0];
+    d.planeWidth[2] = d.planeWidth[0];
+    d.planeHeight[2] = d.planeHeight[0];
+    d.length = d.planeOffset[2] + uint64_t(d.planeBytesPerRow[2]) * d.planeHeight[2];
+    return d;
+}
+
+TEST(SwitchVICPicture, ColourLayerFillsTheTriPlanarTargetsFirstTwoPlanes)
+{
+    Picture image;
+    const TegraVICSurfaceDesc target = triPlanar(image);
+    TegraVICPicture bytes = {};
+    TegraVICSurfaceDesc desc = {};
+    ASSERT_EQ(switch_vic_picture_bytes(&image.source, &target, &bytes, &desc), nullptr);
+    EXPECT_EQ(desc.fourcc, TEGRA_VIC_FOURCC('4', '2', '0', 'v'));
+    SwitchVICPlacement plan = {};
+    ASSERT_EQ(switch_vic_picture_place(&bytes, &desc, &plan), nullptr);
+    TegraVICImage src = {}, dst = {};
+    TegraVICOp op = {};
+    switch_vic_picture_describe(&bytes, plan, 0x30000000, 0x40000000, &src, &dst, &op);
+    EXPECT_EQ(dst.base[0], 0x40000000u);
+    EXPECT_EQ(dst.base[1], 0x40000000u + target.planeOffset[1]);
+    EXPECT_LE(dst.base[1] + dst.span[1], 0x40000000u + target.planeOffset[2]);
+    TegraVICJob job = {};
+    EXPECT_EQ(tegra_vic_build(&src, &dst, &op, &kTegraVICTraits, 0x80001000, 0x80002000, &job), nullptr);
+}
+
+TEST(SwitchVICPicture, AlphaLayerLumaAloneFillsTheAlphaPlane)
+{
+    Picture image;
+    image.source.plane = 2;
+    const TegraVICSurfaceDesc target = triPlanar(image);
+    TegraVICPicture bytes = {};
+    TegraVICSurfaceDesc desc = {};
+    ASSERT_EQ(switch_vic_picture_bytes(&image.source, &target, &bytes, &desc), nullptr);
+    EXPECT_EQ(desc.fourcc, TEGRA_VIC_FOURCC('L', '0', '0', '8'));
+    EXPECT_EQ(desc.planes, 1u);
+    SwitchVICPlacement plan = {};
+    ASSERT_EQ(switch_vic_picture_place(&bytes, &desc, &plan), nullptr);
+    EXPECT_EQ(plan.band[0].start, target.planeOffset[2]);
+    EXPECT_EQ(plan.pages[1], 0u);
+    TegraVICImage src = {}, dst = {};
+    TegraVICOp op = {};
+    switch_vic_picture_describe(&bytes, plan, 0x30000000, 0x40000000, &src, &dst, &op);
+    EXPECT_EQ(src.format->vic, TEGRA_VIC_T_L8);
+    EXPECT_EQ(src.span[0], image.source.chromaOffset);
+    EXPECT_EQ(src.base[1], 0u);
+    EXPECT_EQ(dst.base[0], 0x40000000u + target.planeOffset[2]);
+    EXPECT_EQ(dst.span[0], 2048u * 1079 + 1920u);
+    TegraVICJob job = {};
+    const char *why = tegra_vic_build(&src, &dst, &op, &kTegraVICTraits, 0x80001000, 0x80002000, &job);
+    ASSERT_EQ(why, nullptr) << why;
+    for (uint32_t i = 0; i < job.count; i++) {
+        EXPECT_NE(job.method[i], uint32_t(TEGRA_VIC_M_OUTPUT_CHROMA_U));
+        EXPECT_NE(job.method[i], uint32_t(TEGRA_VIC_M_SURFACE0_SLOT0_CHROMA_U));
+    }
+}
+
+TEST(SwitchVICPicture, PlaneSubsetsNeedAnEightBitTriPlanarTarget)
+{
+    Picture image;
+    image.source.plane = 2;
+    TegraVICPicture bytes = {};
+    TegraVICSurfaceDesc desc = {};
+    EXPECT_NE(switch_vic_picture_bytes(&image.source, &image.target, &bytes, &desc), nullptr);
+    image.source.plane = 1;
+    const TegraVICSurfaceDesc target = triPlanar(image);
+    EXPECT_NE(switch_vic_picture_bytes(&image.source, &target, &bytes, &desc), nullptr);
+    Picture wide(2);
+    const TegraVICSurfaceDesc wideTarget = triPlanar(wide);
+    EXPECT_NE(switch_vic_picture_bytes(&wide.source, &wideTarget, &bytes, &desc), nullptr);
+}
+
 TEST(SwitchVICPicture, UnsupportedWindowDoesNotChangeFutureCompatiblePictures)
 {
     Picture image;

@@ -279,4 +279,23 @@ TEST_F(SwitchNVDECOutputTest, InvalidGeometryLeavesOutputUnchanged)
     EXPECT_EQ(switch_nvdec_output_picture(&buffer.block, &invalid, &picture), -22);
     EXPECT_EQ(picture.width, 73u);
 }
+
+TEST_F(SwitchNVDECOutputTest, AlphaPlaneTakesEightBitLumaAndIsNeverExported)
+{
+    TegraVICPicture picture = {};
+    auto alpha = request;
+    alpha.plane = 2;
+    EXPECT_EQ(switch_nvdec_output_picture(&buffer.block, &alpha, &picture), 0);
+    EXPECT_EQ(picture.plane, 2u);
+    for (const uint32_t plane : {1u, 3u}) {
+        alpha.plane = plane;
+        EXPECT_EQ(switch_nvdec_output_picture(&buffer.block, &alpha, &picture), -22) << plane;
+    }
+    alpha.plane = 2;
+    alpha.sample_bytes = 2;
+    EXPECT_EQ(switch_nvdec_output_picture(&buffer.block, &alpha, &picture), -22);
+    alpha.sample_bytes = 1;
+    EXPECT_EQ(switch_nvdec_output_export(&buffer.block, &alpha, task), -95);
+    EXPECT_EQ(publishes, 0u);
+}
 }  // namespace
