@@ -166,7 +166,9 @@ bool submitRange(RMCommandBuffer *cb)
         if (event.op == OpWaitEvent)
             releaseEventWaits(cb);
         const bool unsignalled = event.op == OpSignalEvent && !range.gpuSignal;
-        const RMEventJob job = unsignalled ? submitEventJobs(cb) : RMEventJob::None;
+        const RMEventJob job = unsignalled                                  ? submitEventJobs(cb)
+                               : event.op == OpWaitEvent && range.gpuWait ? submitWaitJob(cb)
+                                                                           : RMEventJob::None;
         if (job == RMEventJob::Retry)
             return false;
         if (unsignalled && job == RMEventJob::None) {

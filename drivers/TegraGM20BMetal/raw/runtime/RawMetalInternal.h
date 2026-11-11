@@ -88,6 +88,8 @@ struct Stats {
     // shared event signals published as their raw work completes (publishRawEventSignals), those the CPU set after the head
     // waited for its own work, and native event waits that went on a submitted command buffer's promise
     std::atomic<uint64_t> signalsPublished{0}, signalsAfterWork{0}, waitsOnPromise{0};
+    // event waits the scheduler held its queue for on the CPU (a listener armed): no submitted producer, or a timeout
+    std::atomic<uint64_t> waitsHeldOnCpu{0};
     // diagnostics (r10-rawsweep): the raw encode thrown away by aborted command buffers, the m2v replay's time on the committing
     // thread (replay + commit), and the bytes replay cleans
     std::atomic<uint64_t> abortUs{0}, replayUs{0}, replayClean{0};

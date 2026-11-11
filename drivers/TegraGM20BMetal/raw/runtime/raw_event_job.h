@@ -4,6 +4,7 @@
 // ran before them, and after the m2v work committed before them through the kernel's Order.
 #pragma once
 #include <IOKit/IOReturn.h>
+#include <algorithm>
 #include <cstddef>
 #include <cstdint>
 #include <vector>
@@ -31,6 +32,27 @@ inline std::vector<size_t> signalJobRanges(const std::vector<EventRangeView> &ra
             carried.push_back(i);
     }
     return carried;
+}
+
+// One job's share of a run of waits then signals: every wait before any signal, as each signal follows the waits before it
+struct EventJobSlice {
+    size_t firstWait = 0, firstSignal = 0;
+    uint32_t waits = 0, signals = 0;
+};
+
+// The fewest jobs of at most `room` events each that carry `waits` waits then `signals` signals in that order
+inline std::vector<EventJobSlice> eventJobSlices(size_t waits, size_t signals, uint32_t room)
+{
+    std::vector<EventJobSlice> out;
+    size_t w = 0, s = 0;
+    while (room && (w < waits || s < signals)) {
+        EventJobSlice slice{w, s, uint32_t(std::min<size_t>(waits - w, room)), 0};
+        slice.signals = uint32_t(std::min<size_t>(signals - s, room - slice.waits));
+        w += slice.waits;
+        s += slice.signals;
+        out.push_back(slice);
+    }
+    return out;
 }
 
 // What a refused event job asks of its command buffer: to fail, or (its channel made again after the caller ordered the job
