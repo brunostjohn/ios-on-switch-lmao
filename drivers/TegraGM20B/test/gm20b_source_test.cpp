@@ -432,6 +432,27 @@ TEST(GM20BPresentSource, ReadbackRidesTheFramesPresent)
 	EXPECT_EQ(readback.substr(readback.size() - 7), "#endif\n");
 }
 
+// Live (ui.glass_live): every present, armed or not, records what window A will scan for it, so the next armed present
+// can read the frame shown before it again, as it is at the end of its time on screen; only an Arm takes the live flag.
+TEST(GM20BPresentSource, LiveReadbackRereadsTheFrameShownBefore)
+{
+	const std::string readback = SourceText("../TegraGM20BReadback.cpp");
+	const std::string take = flat(Between(readback, "uint32_t tgm_readback_take(", "\n}\n"));
+	expectBefore(take, "const Shown before = gShown;", "int armed = TegraGM20BReadbackArmed;");
+	expectBefore(take, "gShown.sequence = copy->sequence;",
+		     "int armed = TegraGM20BReadbackArmed;");
+	EXPECT_THAT(take, HasSubstr("gShown.read = direct ? tgm_present_read{source,"));
+	EXPECT_THAT(take, HasSubstr(": tgm_present_read{target,"));
+	expectBefore(take, "reads[1] = before.read;", "reads[1].dst_va = bufferVa(1);");
+	EXPECT_THAT(take,
+		    HasSubstr("r.live && before.read.src_va && before.read.width == copy->width"));
+	const std::string call = flat(Between(readback, "IOReturn tgm_readback_call(", "\n}\n"));
+	EXPECT_THAT(
+		call,
+		HasSubstr("in->reserved > 1 || (in->reserved && in->op != TegraGM20BReadbackArm)"));
+	EXPECT_THAT(call, HasSubstr("arm(owner, in->reserved == 1)"));
+}
+
 // A tiled (block-linear) source: the copy engine reads it block-linear with the tiled block height, never as pitch, through
 // a mapping of the kind its texels were written under; a surface's layout comes from its decision (SurfaceLayout), never
 // from how one client bound it.
