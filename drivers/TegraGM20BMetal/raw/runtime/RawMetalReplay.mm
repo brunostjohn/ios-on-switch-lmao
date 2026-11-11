@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: MIT
+#import "RawMetalMultisample.h"
 #import "RawMetalPlanAdapters.h"
 #include "raw_replay_twins.h"
 
@@ -96,6 +97,10 @@ id<MTLCommandBuffer> replay(RMCommandBuffer *cb, size_t from, size_t to, bool pa
 {
     if (void *missing = missingAttachmentTwin(cb, from, to)) {
         failMissingTwin(cb, (__bridge id)missing);
+        return nil;
+    }
+    if (RMTexture *owned = ownedZetaIn(cb, from, to)) {
+        failOwnedZeta(cb, owned);
         return nil;
     }
     id<MTLCommandQueue> queue = [cb->_queue rmTwin];

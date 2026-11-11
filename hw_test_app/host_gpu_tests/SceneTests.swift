@@ -58,6 +58,15 @@ final class SceneTests: XCTestCase {
         XCTAssertTrue(result.passed, result.reasons(limit: 8).joined(separator: "; "))
     }
 
+    func testStoredMSAAOnThisMac() async throws {
+        let gpu = try makeGPU()
+        let scene = try XCTUnwrap(Scenes.all.first { $0.id == "gpu.raw.stored_msaa" })
+        let result = try await scene.run(gpu)
+        XCTAssertTrue(result.passed, result.reasons(limit: 8).joined(separator: "; "))
+        let perCount = gpu.device.areProgrammableSamplePositionsSupported ? 6 : 5
+        XCTAssertEqual(result.checks.count, [2, 4].filter(gpu.device.supportsTextureSampleCount).count * perCount)
+    }
+
     func testPassFusionOnThisMac() async throws {
         let scene = try XCTUnwrap(Scenes.all.first { $0.id == "gpu.raw.pass_fusion" })
         let result = try await scene.run(makeGPU())

@@ -225,3 +225,19 @@ kernel void texs_f16_bindless(texture2d<float> first [[texture(0)]], device floa
     const float2 at = float2(id) + 0.5f + offset;
     out[id.y * first.get_width() + id.x] = linear ? first.sample(bilinear, at) : first.sample(point, at);
 }
+
+/// gpu.raw.stored_msaa: sample x % count of pixel (x / count, y) of a multisampled texture, its samples side by side
+fragment float4 ms_sample_fragment(float4 position [[position]], texture2d_ms<float> samples [[texture(0)]],
+                                   constant uint &count [[buffer(0)]])
+{
+    const uint2 at = uint2(position.xy);
+    return samples.read(uint2(at.x / count, at.y), at.x % count);
+}
+
+/// The same of a multisampled depth texture, in red
+fragment float4 ms_depth_fragment(float4 position [[position]], depth2d_ms<float> depth [[texture(0)]],
+                                  constant uint &count [[buffer(0)]])
+{
+    const uint2 at = uint2(position.xy);
+    return float4(depth.read(uint2(at.x / count, at.y), at.x % count), 0, 0, 1);
+}

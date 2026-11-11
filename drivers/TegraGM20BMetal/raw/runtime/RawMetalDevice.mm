@@ -3,6 +3,7 @@
 #import "RawMetalRotated.h"
 #include "raw_nonfinite.h"
 #include "NativeBridgeMetalFrontend.h"
+#import "RawMetalMultisample.h"
 
 // Why the raw path does not take a stored depth/stencil texture's m2v texture in place, from the answer of
 // native_bridge_metal_texture_memory (-3: m2v made no texture)
@@ -291,7 +292,9 @@ static void reportNonFiniteStart(RMTexture *t, MTLTextureDescriptor *d)
     }
     const bool line = lineShape(d), volume = volumeShape(d), multisampled = multisampleShape(d);
     const uint32_t array = arrayType(d);
-    if (!rawShape(d) && !zetaDescriptor(d) && !line && !volume && !array && !multisampled) {
+    const RMStoredSamples stored = storedMultisampleKind(d);
+    if (!rawShape(d) && !zetaDescriptor(d) && !line && !volume && !array && !multisampled &&
+        stored == RMStoredSamples::None) {
         RMTexture *w = (RMTexture *)[self wrapTwin:[gRM->fallback newTextureWithDescriptor:d] descriptor:d];
         if (w)
             refuseTexture(w, PredTexShape, rawShapeTerm(d), d.pixelFormat, @"twin-only", nil);
@@ -303,6 +306,9 @@ static void reportNonFiniteStart(RMTexture *t, MTLTextureDescriptor *d)
     if (line) {
         t->_kind = RMTexturePool;
         t->_rawOk = gRM->raw->createLine(uint32_t(d.width), uint32_t(d.pixelFormat), t->_raw);
+    } else if (stored != RMStoredSamples::None) {
+        t->_kind = RMTexturePool;
+        t->_rawOk = makeStoredMultisample(d, stored, t->_raw);
     } else if (volume) {
         t->_kind = RMTexturePool;
         t->_rawOk = gRM->raw->createVolume(uint32_t(d.width), uint32_t(d.height), uint32_t(d.depth),

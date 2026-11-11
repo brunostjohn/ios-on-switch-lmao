@@ -102,6 +102,9 @@
 #                     encoded, when an attachment of one of its passes has no twin
 #   nak_fp32_flush_test  NAK's fp32 flush elision (nak_nir_algebraic.py): a flushed source under fneg or fabs feeds an FTZ
 #                     instruction as its source does, and no FTZ result or widened half is a denormal
+#   raw_multisample_test  raw/runtime/raw_multisample.h, raw_sample_positions.h: a stored multisampled texture's header
+#                     (NIL's) and target (its sample grid), and a pass's sample layout at the standard positions or its
+#                     own, rounded as Metal samples them, as the methods NVK writes
 #
 #   bazel test //drivers/TegraGM20BMetal/test:all
 load("@rules_python//python:py_test.bzl", "py_test")
@@ -421,6 +424,33 @@ host_test(
         "//drivers/TegraGM20BMetal:raw/fx/fx_mip.cpp",
         "//drivers/TegraGM20BMetal:raw/fx/fx_mip.h",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_push.h",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_target.h",
+    ],
+    copts = [
+        "-I",
+        "drivers/TegraGM20B",
+    ],
+    cxx_std = "c++17",
+    deps = [
+        "//kits/SwitchGM20B:classes",
+        "//kits/SwitchGM20BEmit:emit",
+    ],
+)
+
+host_test(
+    name = "raw_multisample_test",
+    srcs = [
+        "raw_multisample_test.cpp",
+        "//drivers/TegraGM20B:TegraGM20BLayout.h",
+        "//drivers/TegraGM20BMetal:raw/fx/fx_image.cpp",
+        "//drivers/TegraGM20BMetal:raw/fx/fx_image.h",
+        "//drivers/TegraGM20BMetal:raw/fx/fx_mip.cpp",
+        "//drivers/TegraGM20BMetal:raw/fx/fx_mip.h",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_multisample.h",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_push.h",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_sample_positions.h",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_sample_shading.h",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_samples.h",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_target.h",
     ],
     copts = [

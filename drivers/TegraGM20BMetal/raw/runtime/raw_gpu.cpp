@@ -19,8 +19,8 @@
 #include "raw_mip.h"
 #include "raw_owned.h"
 #include "raw_residual.h"
+#include "raw_multisample.h"
 #include "raw_rotated_pass.h"
-#include "raw_samples.h"
 #include "raw_fragment_tests.h"
 #include "raw_shader_tests.h"
 #include "raw_shader_test_push.h"
@@ -194,16 +194,13 @@ switch_gm20b_viewport_state viewportState(const uint32_t w[8])
 // A pass's sample layout (raw_samples.h): its registers and the root table's sample words, the root table left selected
 constexpr uint32_t kSampleWords = 20;
 
-void sampleWords(Push &p, uint32_t samples, uint64_t root, const Rotation &turned = Rotation())
+void sampleWords(Push &p, uint32_t samples, uint64_t root, const SamplePositions &at = {},
+                 const Rotation &turned = Rotation())
 {
     SampleLayout l;
-    sampleLayout(samples, l);
+    sampleLayoutAt(samples, at, l);
     turnPositions(turned, l.positions);
-    p.m(SET_ANTI_ALIAS, l.antiAlias);
-    p.incArray(ANTI_ALIAS_SAMPLE_POSITIONS, l.positions, 4);
-    p.inc(CB_SELECTOR_A, {kRootBytes, uint32_t(root >> 32), uint32_t(root)});
-    p.m(LOAD_CB_OFFSET, kRootSampleInfo);
-    p.nonInc(LOAD_CB, l.root, kRootSampleInfoWords);
+    sampleLayoutMethods(p, l, kRootBytes, root);
 }
 
 // Texture header word 0 per MTLPixelFormat as NVK writes it (pack/mkformats.py over the twin, 11-04), and the color target format
@@ -1337,7 +1334,12 @@ void Device::writeTic(const Texture &t)
 {
     fx::MipChain one;
     uint32_t w[8] = {};
-    if (t.zeta) {  // NVK's image as laid out (createZetaOver): one level, its block height
+    if (t.samples > 1) {  // NIL's image of the sample grid (createStoredMultisample, createOwnedZeta, their views)
+        const uint32_t z = zetaFormatIndex(t.format);
+        const FormatInfo *f = z < kZetaFormats ? nullptr : formatInfo(t.format);
+        multisampleHeader(t.width, t.height, t.samples, t.bpp, t.va, f ? f->tic0 : kZetaFormatInfo[z].tic0,
+                          f && f->srgb, w);
+    } else if (t.zeta) {  // NVK's image as laid out (createZetaOver): one level, its block height
         one.width = t.width;
         one.height = t.height;
         one.levels = 1;
@@ -2188,6 +2190,8 @@ void Device::destroyTexture(Texture &t)
     if (t.tic) {
         freeTic(t.tic);
     }
+    if (t.zeta)
+        freeOwnedZeta(t.va);
     if (t.chain) {
         for (const uint32_t level : t.chain->levelTic)
             if (level) {
@@ -5650,7 +5654,7 @@ void RenderEncoder::end()
         emitSwizzle(p, rot_.swizzle());
     // ahead of the clears: a clear reaches every sample of its rectangle's pixels through it
     if (samples_ > 1)
-        sampleWords(p, samples_, d.root_.va, rot_);
+        sampleWords(p, samples_, d.root_.va, pass_.positions, rot_);
     // shadow targets' pool images: their texels over the render area first, as NVK's tiled shadow loads them (a load that
     // keeps them: Load, and a DontCare the clears leave; a Clear clears it all), then the barrier to the pass
     bool copied = false;

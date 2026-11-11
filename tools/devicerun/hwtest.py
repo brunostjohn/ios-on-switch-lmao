@@ -70,6 +70,7 @@ TESTS: dict[str, bool] = {
             'gpu.heap.m2v_target',
             'gpu.heap.placement',
             'gpu.raw.archive_miss',
+            'gpu.raw.stored_msaa',
             'metal.device',
             'metal.compute',
             'metal.render.color',

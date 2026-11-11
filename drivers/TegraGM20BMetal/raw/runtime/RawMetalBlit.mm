@@ -79,7 +79,7 @@ static bool inElements(RMTexture *t, MTLOrigin &o, MTLSize &size)
 // In elements (inElements)
 static bool copySideOk(RMTexture *t, NSUInteger slice, NSUInteger level, MTLOrigin o, MTLSize size)
 {
-    if (!t->_rawOk || t->_raw.memoryless || !inElements(t, o, size))
+    if (!t->_rawOk || t->_raw.memoryless || t->_raw.samples > 1 || !inElements(t, o, size))
         return false;
     raw::Texture view;
     if (level && (level >= raw::fx::kMaxLevels || !raw::chainLevelImage(t->_raw, uint32_t(level), view)))

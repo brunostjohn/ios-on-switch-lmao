@@ -529,6 +529,7 @@ static bool encodeRawAttempt(RMCommandBuffer *cb, size_t from, size_t to, const 
             p.width = uint32_t(std::min<NSUInteger>(pass.width, UINT32_MAX));
             p.height = uint32_t(std::min<NSUInteger>(pass.height, UINT32_MAX));
             p.storageMask = passStorageMask(cb, at);
+            p.positions = pass.positions;
             for (RMTexture *t : standInLoads)
                 if (standInPass(t, false))
                     return false;

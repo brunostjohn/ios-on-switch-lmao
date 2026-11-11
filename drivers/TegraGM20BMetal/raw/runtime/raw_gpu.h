@@ -61,6 +61,7 @@
 #include "raw_region.h"
 #include "raw_sampler.h"
 #include "raw_depth_stencil_state.h"
+#include "raw_sample_positions.h"
 #include "raw_xr.h"
 #include "raw_ycbcr.h"
 #include "raw_rotation.h"
@@ -523,6 +524,7 @@ struct PassDesc {
     // colors a draw of the pass binds as storage images (a pipeline's storage form): their memoryless backings take no
     // compression, which the surface unit cannot read through
     uint8_t storageMask = 0;
+    SamplePositions positions;
 };
 
 class RenderEncoder {
@@ -1133,6 +1135,13 @@ public:
     // `sampled`; false where it is not a layout the raw path renders (*why says which way)
     bool createZetaOver(const ZetaMemory &m, uint32_t width, uint32_t height, uint32_t format, bool sampled, Texture &t,
                         const char **why);
+    // A stored multisampled colour texture (raw_multisample.cpp): the persistent form of a memoryless one's block-linear
+    // backing, in memory of its own, which m2v's twin (NVK's image of the same descriptor) lies over in place
+    bool createStoredMultisample(uint32_t width, uint32_t height, uint32_t format, uint32_t samples, Texture &t);
+    // A stored multisampled depth/stencil texture in zeta memory of its own (raw_multisample.cpp), with a header where
+    // `sampled`. It has no m2v twin: NVK neither views zeta memory it did not make nor answers where a multisampled
+    // image's is.
+    bool createOwnedZeta(uint32_t width, uint32_t height, uint32_t format, uint32_t samples, bool sampled, Texture &t);
     // A Depth32Float_Stencil8 texture's stencil temp (Texture::stencilTemp), made on its first stencil copy
     bool stencilTemp(Texture &t);
     // A 1D texture: NIL's 1D image, one block-linear row (y_log2 0) under a ONE_D header, in block-linear memory the CPU
@@ -1782,6 +1791,19 @@ private:
     void plainFree(Backing &b);
     void freePlainSpan(PlainMem &mem);
     void dropPlain(PlainMem *mem);  // its span back, and it out of plainMems_
+
+    // createOwnedZeta's memory by its address: its format's index and span, outside Texture::span, which alias() and
+    // freeSpan() take for block-linear colour memory
+    std::map<uint64_t, std::pair<uint32_t, Span>> ownedZeta_;
+
+    void freeOwnedZeta(uint64_t va)  // lock_ held
+    {
+        const auto at = ownedZeta_.find(va);
+        if (at == ownedZeta_.end())
+            return;
+        tiledFree(zChunks_[at->second.first], at->second.second);
+        ownedZeta_.erase(at);
+    }
 
     std::vector<Backing *> backings_;  // memoryless attachments' memory, by size and format
     // the pool's growth ahead of need (lock_): free bytes of its shared chunks, a chunk being made by the grower thread

@@ -212,6 +212,7 @@ struct RMPass {
     double clearDepth;
     uint32_t clearStencil;
     NSUInteger width, height;
+    raw::SamplePositions positions;
 };
 
 // A command buffer's setBytes data, written once where the GPU reads it: write-combined pool chunks the raw encode binds in place

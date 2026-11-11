@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-#import "RawMetalInternal.h"
+#import "RawMetalMultisample.h"
 #import "RawMetalRotated.h"
 
 // One count for every kind, as IOAccelDeviceGetNextGlobalTraceID is the device's
@@ -278,9 +278,11 @@ static bool rawResolve(MTLRenderPassColorAttachmentDescriptor *a, RMTexture *fro
     if (pass.depthAttachment.texture || pass.stencilAttachment.texture) {
         [self retain:pass.depthAttachment.texture];
         [self retain:pass.stencilAttachment.texture];
-        if (rawDepthStencil(pass))
+        if (rawDepthStencil(pass)) {
             e->_zeta = ((RMTexture *)facts.depth)->_raw.format;
-        else {
+            if (!e->_count)
+                e->_samples = ((RMTexture *)facts.depth)->_raw.samples;
+        } else {
             [self takeReason:WhyPass why:@"a depth/stencil attachment the raw path does not take"];
             hit(self, PredPassDepthStencil, pass.depthAttachment.texture.pixelFormat,
                 pass.stencilAttachment.texture.pixelFormat);
@@ -290,9 +292,9 @@ static bool rawResolve(MTLRenderPassColorAttachmentDescriptor *a, RMTexture *fro
     // A visibility result buffer is written only by draws under a counting mode (setVisibilityResultMode:offset:, refused there),
     // as m2v copies results only where a query was taken (visibility.rs plan)
     [self retain:pass.visibilityResultBuffer];
-    // the raw path draws at the standard sample positions (raw_samples.h)
     const NSUInteger positions = [pass getSamplePositions:nullptr count:0];
-    if (pass.renderTargetArrayLength > 1 || pass.rasterizationRateMap || positions) {
+    if (pass.renderTargetArrayLength > 1 || pass.rasterizationRateMap ||
+        (positions && !passSamplePositions(pass, e->_samples, facts.positions))) {
         [self takeReason:WhyPass why:@"layers, a rate map or sample positions of its own"];
         hit(self, PredPassOther, pass.renderTargetArrayLength | positions << 32, pass.rasterizationRateMap != nil);
     }

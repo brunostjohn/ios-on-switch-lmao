@@ -13,7 +13,8 @@ inline raw::FusionPass fusionPass(RMCommandBuffer *cb, size_t begin)
     raw::FusionPass result;
     result.width = pass.width;
     result.height = pass.height;
-    result.bodySafe = !cb->_sampledShadows && !cb->_standIns;
+    // a fused pass's draws take the first pass's sample layout
+    result.bodySafe = !cb->_sampledShadows && !cb->_standIns && !pass.positions.count;
     std::array<RMTexture *, 10> targets{};
     auto attachment = [&](size_t slot, id object, NSUInteger level, MTLLoadAction load, MTLStoreAction store,
                           bool resolve) {

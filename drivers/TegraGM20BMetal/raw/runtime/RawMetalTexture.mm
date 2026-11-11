@@ -119,6 +119,10 @@ void traceSurfaceImage(RMTexture *t, const char *what, uint32_t seed)
             made = [m2v newTextureWithDescriptor:_descriptor iosurface:_surface plane:_plane];
             break;
         case RMTexturePool: {  // m2v's in-place texture over the same pool memory (as an IOSurface's)
+            if (_raw.zeta && _raw.samples > 1) {  // memory of its own: only a range that keeps none of it replays (ownedZetaIn)
+                made = [m2v newTextureWithDescriptor:_descriptor];
+                break;
+            }
             const size_t page = size_t(getpagesize());
             raw::Alias a;
             // Made aliasable before its first replay: its placement is given back, its address and its heap's arena kept
@@ -134,7 +138,8 @@ void traceSurfaceImage(RMTexture *t, const char *what, uint32_t seed)
             id<MTLBuffer> pages = shared ? rawAliasBuffer(a, cpu, (NSUInteger(bytes) + page - 1) & ~(page - 1),
                                                           MTLResourceStorageModeShared)
                                          : nil;
-            why = !_raw.span.valid() && !released ? "it has no memory of its own"
+            why = _raw.zeta && _raw.samples > 1     ? "NVK views no multisampled zeta memory the raw path owns"
+                  : !_raw.span.valid() && !released ? "it has no memory of its own"
                   : !shared ? "its memory could not be aliased (a purged heap's that did not come back)"
                   : !pages  ? "m2v did not take its memory"
                             : "m2v made no texture over its memory";
@@ -221,7 +226,7 @@ void traceSurfaceImage(RMTexture *t, const char *what, uint32_t seed)
     if (_raw.span.valid())
         return NSUInteger(_raw.span.bytes);
     id twin = _twin;
-    return twin ? [(id<MTLTexture>)twin allocatedSize] : 0;
+    return twin ? [(id<MTLTexture>)twin allocatedSize] : NSUInteger(_raw.storage.bytes);
 }
 
 - (MTLTextureType)textureType
