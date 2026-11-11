@@ -3,6 +3,9 @@
 
 usage: gate.py <before dump> <after dump> --corpus <R lines>... [--invocations N] [--seed S] [--after-variant N]
                [--zero bank:first-last]...
+       gate.py --rungs <dump> --corpus <R lines>... [--invocations N] [--seed S]
+           each fetch-free form of the dump with the ROP unit that stands in for its fetch against its storage form,
+           counted per rung (rungcheck.py)
 
 Every state of the corpora in both dumps runs N quads of each program (quad.py over interp.py's lanes) on the same
 seeded attributes, constant buffers, texture and storage-image results (specials included: NaNs with payloads,
@@ -22,7 +25,7 @@ from pathlib import Path
 if __package__ in (None, ''):
     sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
-from tools.gpu.maxwell import isa, nakstat
+from tools.gpu.maxwell import isa, nakstat, rungcheck
 from tools.gpu.maxwell.interp import Inputs, UnsupportedError
 from tools.gpu.maxwell.quad import LANES, run_quad
 
@@ -119,6 +122,10 @@ def describe(result: tuple) -> str:
 
 
 def main() -> None:
+    if '--rungs' in sys.argv:
+        sys.argv.remove('--rungs')
+        rungcheck.main()
+        return
     ap = argparse.ArgumentParser(description=__doc__.split('\n')[0])
     ap.add_argument('before', type=Path)
     ap.add_argument('after', type=Path)

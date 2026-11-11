@@ -5,6 +5,7 @@
 #   bazel run //tools/gpu/maxwell:nakstat -- --dump <dir> --corpus ...   (directcheck's DIRECTCHECK_DUMP)
 #   bazel run //tools/gpu/maxwell:gate -- <before dump> <after dump> --corpus $PWD/tools/gpu/maxwell/scoreboard.log
 #   bazel run //tools/gpu/maxwell:blendcheck -- <dump dir>   (storage forms whose shader computes the blend)
+#   bazel run //tools/gpu/maxwell:gate -- --rungs <dump dir> --corpus ...   (fetch-free forms through the ROP: rungcheck.py)
 #
 # opcodes.txt is yuzu's maxwell.inc, verbatim (GPL-2.0-or-later, its notice kept).
 load("@rules_python//python:py_binary.bzl", "py_binary")
@@ -62,6 +63,18 @@ py_library(
     deps = [":isa"],
 )
 
+py_library(
+    name = "rungcheck_lib",
+    srcs = ["rungcheck.py"],
+    deps = [
+        ":interp",
+        ":isa",
+        ":nakstat",
+        "//drivers/TegraGM20BMetal:raw_pack",
+        "//tools/benchloop:lib",
+    ],
+)
+
 py_binary(
     name = "gate",
     srcs = ["gate.py"],
@@ -71,7 +84,23 @@ py_binary(
         ":interp",
         ":isa",
         ":nakstat",
+        ":rungcheck_lib",
     ],
+)
+
+py_binary(
+    name = "rungcheck",
+    srcs = ["rungcheck.py"],
+    data = ["scoreboard.log"],
+    visibility = ["//visibility:public"],
+    deps = [":rungcheck_lib"],
+)
+
+py_test(
+    name = "rungcheck_test",
+    size = "small",
+    srcs = ["rungcheck_test.py"],
+    deps = [":rungcheck_lib"],
 )
 
 py_test(
