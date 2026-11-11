@@ -390,6 +390,26 @@ TEST_F(SwitchVICEncodeInputTest, RowsOffVICsGridAreBouncedThroughTheCopyEngine)
     EXPECT_EQ(mappings, 1);  // the destination's; the scratch's mapping is the pool's
 }
 
+// A source the GPU keeps block linear is bounced too, whole planes (the copy engine's only form for such a side), even
+// with its rows on VIC's grid, and only the region is then read from the scratch.
+TEST_F(SwitchVICEncodeInputTest, AGpuTiledSourceIsBouncedWholePlanes)
+{
+    sourcePitchLayout = false;
+    input.y = 8;
+    input.h = 1072;
+    uint32_t fence = 0;
+    bool bounced = false;
+    const char *why = nullptr;
+    ASSERT_EQ(switch_vic_encode_input(77, nullptr, &input, &fence, &bounced, &why), 0) << why;
+    EXPECT_TRUE(bounced);
+    ASSERT_EQ(engineCopies.size(), 2u);
+    EXPECT_EQ(engineCopies[0].src.offset, 0u);
+    EXPECT_EQ(engineCopies[0].rows, 1080u);
+    EXPECT_EQ(engineCopies[1].src.offset, uint64_t(2048) * 1080);
+    EXPECT_EQ(engineCopies[1].rows, 540u);
+    EXPECT_EQ(TEGRA_VIC_GET(submittedJob.config, TEGRA_VIC_SLOTS, SLOT_SOURCE_TOP), uint64_t(8) << 16);
+}
+
 TEST_F(SwitchVICEncodeInputTest, RefusesWithoutQueueingAndReleasesEverything)
 {
     uint32_t fence = 0;
@@ -398,9 +418,6 @@ TEST_F(SwitchVICEncodeInputTest, RefusesWithoutQueueingAndReleasesEverything)
     found = false;
     EXPECT_EQ(switch_vic_encode_input(77, nullptr, &input, &fence, &bounced, &why), -22);
     found = true;
-    sourcePitchLayout = false;
-    EXPECT_EQ(switch_vic_encode_input(77, nullptr, &input, &fence, &bounced, &why), -95);
-    sourcePitchLayout = true;
     input.chromaRows = 600;  // not whole sixteen-GOB blocks
     EXPECT_EQ(switch_vic_encode_input(77, nullptr, &input, &fence, &bounced, &why), -95);
     EXPECT_STREQ(why, "block-linear plane of partial blocks");

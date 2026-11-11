@@ -6,7 +6,8 @@
 // same batch, as the copy replicated the edge, where that is within VIC's 16x upscale. A source whose rows VIC does not
 // read as they are (off kTegraVICTraits.sourcePitchAlign: CoreVideo's 64-byte rows) has the region's rows copied first
 // by the GPU's copy engine into the bounce scratch TegraVICBounce.h lays out, and VIC reads that; the scratch's copy is
-// a recorded GPU write, so VIC's job waits for it on the hardware as TegraVIC's own bounced transfers do.
+// a recorded GPU write, so VIC's job waits for it on the hardware as TegraVIC's own bounced transfers do. A source the
+// GPU keeps block linear (tiled by default) is bounced the same way, whole planes.
 #include <IOKit/IOLib.h>
 #include "SwitchVICEncodeInput.h"
 #include "SwitchVICBouncePool.h"
@@ -54,8 +55,9 @@ void copied(void *context, int status)
     release(static_cast<EncodeInput *>(context));
 }
 
-// The region's rows of every plane into the scratch, at the scratch's pitch, by the GPU's copy engine.
-int bounce(EncodeInput *work, const SwitchVICEncodeInput *in, const SwitchVICBounceBuffer &scratch)
+// The region's rows of every plane into the scratch, at the scratch's pitch, by the GPU's copy engine; a block-linear
+// (GPU-tiled) source whole planes, the copy engine's only form for a block-linear side (TegraGM20BCopy.h).
+int bounce(EncodeInput *work, const SwitchVICEncodeInput *in, const SwitchVICBounceBuffer &scratch, bool tiled)
 {
     const TegraVICSurfaceDesc &d = work->surface.desc;
     const TegraVICFormat *f = tegra_vic_format(d.fourcc);
@@ -63,7 +65,8 @@ int bounce(EncodeInput *work, const SwitchVICEncodeInput *in, const SwitchVICBou
     const switch_gpu_copy_ownership ownership = {lease ? &lease : nullptr, lease ? 1u : 0u, &work->access.guard, 1};
     const switch_gpu_event_submission none = {};
     for (uint32_t p = 0; p < f->planes; ++p) {
-        const uint64_t first = tegra_vic_plane_rows(f, in->y, p), rows = tegra_vic_plane_rows(f, in->h, p);
+        const uint64_t first = tiled ? 0 : tegra_vic_plane_rows(f, in->y, p);
+        const uint64_t rows = tiled ? d.planeHeight[p] : tegra_vic_plane_rows(f, in->h, p);
         const uint64_t from = d.planeOffset[p] + first * d.planeBytesPerRow[p];
         const uint64_t to = scratch.desc.planeOffset[p] + first * scratch.desc.planeBytesPerRow[p];
         if ((work->surface.baseOffset + from) % TEGRA_VIC_BOUNCE_OFFSET_ALIGN)
@@ -179,10 +182,16 @@ int place(EncodeInput *work, uint32_t surfaceID, task_t task, const SwitchVICEnc
     }
     auto *input = work->native.owner ? work->native.native : work->access.backing;
     const uint64_t extent = tegra_vic_surface_extent(&work->surface.desc);
-    if (!work->native.owner &&
-        (extent > UINT64_MAX - work->access.offset || !switch_vic_pitch_backing(input, work->access.offset + extent))) {
-        *why = "a source surface that is not pitch linear";
-        return -95;
+    bool tiled = false;
+    if (!work->native.owner) {
+        switch_gpu_backing_info info = {};
+        switch_gpu_backing_describe(input, &info);
+        if (extent > UINT64_MAX - work->access.offset ||
+            work->access.offset + extent > static_cast<uint64_t>(info.page_count) * 4096) {
+            *why = "a source surface larger than its memory";
+            return -95;
+        }
+        tiled = !switch_vic_pitch_backing(input, work->access.offset + extent);
     }
     const int needed = work->native.owner ? 1
                                           : tegra_vic_bounce_needed(&work->surface.desc,
@@ -191,7 +200,7 @@ int place(EncodeInput *work, uint32_t surfaceID, task_t task, const SwitchVICEnc
         *why = "a source plane the copy engine cannot take either";
         return -95;
     }
-    *bounced = needed == 0;
+    *bounced = needed == 0 || tiled;
     if (*bounced && (error = switch_vic_bounce_acquire(&work->surface.desc, nullptr, &work->slot))) {
         *why = "the bounce scratch";
         return error;
@@ -224,7 +233,7 @@ int place(EncodeInput *work, uint32_t surfaceID, task_t task, const SwitchVICEnc
     }
     if (*why)
         return -95;
-    if (scratch && (error = bounce(work, in, *scratch))) {
+    if (scratch && (error = bounce(work, in, *scratch, tiled))) {
         *why = "the copy engine refused the bounce";
         return error;
     }
