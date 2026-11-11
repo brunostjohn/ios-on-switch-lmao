@@ -42,6 +42,12 @@
 #   raw_probe_forms_test  raw/runtime/raw_probe_forms.h and raw_probe_ops.h (hw_test_app's barrier and 2D-engine probes,
 #                     debug builds): today's forms are the words the runtime sent before, the relaxed ones never idle and
 #                     are the planner's, the 2D work copies and resolves as the 2D engine model does
+#   raw_constant_colour_test  raw/runtime/raw_constant_colour.h: which fills the ROP's constant colour may draw
+#   raw_fetch_rungs_test  raw/runtime/raw_fetch_rungs.h: where the ROP's blend and iterated blend may stand for an
+#                     in-shader blend
+#   raw_quad_fill_test  raw/runtime/raw_quad_fill.h: which quads one bounding-box triangle can draw
+#   raw_visibility_test  raw/runtime/raw_visibility.h: which visibility results the raw path writes, and the counter,
+#                     report and copy-engine words an encoder's mode sets and end emit
 #   raw_comp_test     raw/runtime/raw_comp.h: the compressible kinds the raw path binds (every sample count, every depth
 #                     format with one) are the kernel kind table's (nouveau gm200_mmu_kind) and demote as it says; the boot
 #                     ZBC values read alike by Metal and NV format; raw_zbc.h: the entries a clear adds hold the ROP's texel
@@ -1112,6 +1118,59 @@ host_test(
     ],
     cxx_std = "c++17",
     deps = ["//kits/SwitchGM20B:classes"],
+)
+
+host_test(
+    name = "raw_visibility_test",
+    srcs = [
+        "raw_visibility_test.cpp",
+        "//drivers/TegraGM20B:TegraGM20BABI.h",
+        "//drivers/TegraGM20B:TegraGM20BLayout.h",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_control_memory.h",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_cpu_completion.h",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_fence.h",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_kernel.h",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_kit.h",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_push.h",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_shared_events.h",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_surfaces.h",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_transfer.h",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_visibility.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_visibility.h",
+    ],
+    copts = ["-Idrivers/TegraGM20B"],
+    cxx_std = "c++20",
+    deps = [
+        "//kits/SwitchGM20B:classes",
+        "//kits/SwitchGM20BEmit:emit_ndebug",
+    ],
+)
+
+host_test(
+    name = "raw_constant_colour_test",
+    srcs = [
+        "raw_constant_colour_test.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_constant_colour.h",
+    ],
+    cxx_std = "c++17",
+)
+
+host_test(
+    name = "raw_quad_fill_test",
+    srcs = [
+        "raw_quad_fill_test.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_quad_fill.h",
+    ],
+    cxx_std = "c++17",
+)
+
+host_test(
+    name = "raw_fetch_rungs_test",
+    srcs = [
+        "raw_fetch_rungs_test.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_fetch_rungs.h",
+    ],
+    cxx_std = "c++17",
 )
 
 host_test(

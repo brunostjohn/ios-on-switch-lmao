@@ -2,6 +2,7 @@
 #include <gtest/gtest.h>
 #include "../raw/runtime/RawMetalPlanApply.h"
 #include <map>
+#include <vector>
 
 namespace {
 
@@ -63,6 +64,38 @@ struct Sink {
         ++kernelCalls;
     }
 };
+
+TEST(SemanticPlan, VisibilityModesOnAPassWithAResultBufferAreOperationsInOrder)
+{
+    RMCommandPlan plan;
+    plan.record(cmd(OpRender), {});
+    Cmd untracked = cmd(OpVisibility);
+    plan.record(untracked, {});
+    const size_t first = plan.size();
+    Cmd counting = cmd(OpVisibility);
+    counting.a = 2;
+    counting.obj = object(0x40);
+    plan.record(counting, {});
+    draw(plan);
+    counting.c = 8;
+    plan.record(counting, {});
+    Cmd disabled = cmd(OpVisibility);
+    disabled.obj = object(0x40);
+    plan.record(disabled, {});
+    plan.record(cmd(OpEnd), {});
+    std::vector<Cmd> modes;
+    for (size_t at = 0; at < plan.size(); ++at)
+        if (plan.operation(at).op == OpVisibility)
+            modes.push_back(plan.legacy(at));
+    ASSERT_EQ(modes.size(), 3u) << "a Disabled with no result buffer (Core Animation's) stays a setter";
+    EXPECT_EQ(first, 1u);
+    EXPECT_EQ(modes[0].a, 2u);
+    EXPECT_EQ(modes[0].c, 0u);
+    EXPECT_EQ(modes[1].c, 8u);
+    EXPECT_EQ(modes[2].a, 0u);
+    for (const Cmd &m : modes)
+        EXPECT_EQ(m.obj, object(0x40));
+}
 
 TEST(SemanticPlan, SettersCollapseBeforeTheFirstDraw)
 {

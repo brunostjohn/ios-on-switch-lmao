@@ -27,6 +27,7 @@
 #include "raw_attachment_order.h"
 #include "raw_probe_forms.h"
 #include "raw_probe_ops.h"
+#include "raw_visibility.h"
 #include <array>
 #include <atomic>
 #include <thread>
@@ -619,6 +620,10 @@ public:
     void end();
 
     void continuePass(uint8_t stores);
+    // setVisibilityResultMode:offset: (raw_visibility.h): false where the raw path cannot take it
+    bool setVisibility(uint32_t mode, const Buffer *results, uint64_t offset);
+    // the Metal encoder's results to their offsets, at its end (a fused pass's too)
+    void finishVisibility();
     void beginSplitPlan()
     {
         splitPlan_.clear();
@@ -699,6 +704,7 @@ private:
     uint32_t stencilRef_[2] = {};
     bool dsDirty_ = true;
     ZcullPass zcull_;                         // raw_zcull.h
+    VisibilityQueries visibility_;
     const Pipeline *zcullProgram_ = nullptr;  // the state zcull_ last saw
     Texture *shaderDepth_ = nullptr, *shaderStencil_ = nullptr, *shaderStencilTemp_ = nullptr;
     uint8_t shaderTestsActive_ = 0;
@@ -1510,6 +1516,8 @@ public:
     // the next createTexture binds compressible memory of its own (raw_comp.h kinds) where it makes a block-linear
     // target, which probeCompressed holds until destroyTexture; any other texture takes the flag and stays plain
     std::atomic<bool> probeCompressNext{false};
+    // Boolean visibility results take the copy-engine lowering before rule vis.boolean holds (raw_visibility.h)
+    std::atomic<bool> probeBooleanVisibility{false};
     std::map<uint64_t, Bo> probeCompressed;  // lock_
 #endif
 
@@ -1588,6 +1596,11 @@ private:
     // heap_: the shader heap's GPU VA reservation (bytes: the program window), bound from its start (heapBound_) in parts of
     // host memory as programs are placed
     Bo heap_, tic_, tsc_, root_, zero_, tickets_, colorTable_, stamps_;
+    // visibility results' report slots (raw_visibility.h), made at first use
+    uint64_t visibilitySlot();
+    Buffer visibilityPage_;
+    std::once_flag visibilityOnce_;
+    std::atomic<uint32_t> visibilityNext_{0};
 
     struct HeapPart {
         uint64_t offset = 0, bytes = 0;  // in the heap

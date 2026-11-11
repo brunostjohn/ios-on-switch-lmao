@@ -97,6 +97,8 @@ TESTS: dict[str, bool] = {
             'metal.float32_filtering',
             'gpu.raw.compressed_targets',
             'gpu.raw.zcull',
+            'gpu.raw.visibility',
+            'gpu.raw.fixed_blend_rule',
             'gpu.path.job_visibility',
             'gpu.path.lean_copy',
             'gpu.path.control_reserve',
@@ -229,6 +231,8 @@ BY_IOS: dict[str, dict[str, bool]] = {
         'gpu.x1.twod_clear': False,
         'gpu.x1.twod_resolve': False,
         'gpu.x1.vic_pitch': False,
+        'gpu.x1.constant_colour': False,
+        'gpu.x1.fill_bbox': False,
     },
 }
 
