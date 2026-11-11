@@ -44,6 +44,12 @@ TEST(HoldWorth, OnlyChannelsBetweenTheSlackAndAFrameAreHeld)
 	EXPECT_FALSE(tgm_hold_worth(TGM_INTERVAL_MAX_NS));
 }
 
+TEST(HoldWorth, AChannelDrawingInBandsIsLeftToTheCompositorsKick)
+{
+	EXPECT_FALSE(tgm_hold_worth(TGM_APP_BAND_NS));
+	EXPECT_LE(TGM_APP_BAND_NS, 2000ull * 1000);
+}
+
 TEST(KickVictim, AppOnGrIsPreempted)
 {
 	EXPECT_EQ(tgm_kick_victim(resident(26), 0, 1, 26, 0), 26);

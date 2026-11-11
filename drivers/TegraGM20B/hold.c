@@ -43,6 +43,18 @@ static struct {
 	u32 holds, preempts, busy, turned_n, hopeless_n, samples, checks;
 } hold;
 
+#if TGM_STATS
+extern int proc_selfpid(void);
+
+/* Each tracked channel's process and the preemption latencies sampled for it since that process last read them
+ * (tgm_hold_samples_take) */
+static struct {
+	int pid[HOLD_CHIDS];
+	u32 n[HOLD_CHIDS];
+	u64 max_ns[HOLD_CHIDS];
+} sampled;
+#endif
+
 void tgm_hold_init(void)
 {
 	static int once;
@@ -155,6 +167,9 @@ void tgm_hold_track(struct nvkm_device *device, unsigned int chid, int on)
 		return;
 	spin_lock_irqsave(&hold.lock, flags);
 	if (on) {
+#if TGM_STATS
+		WRITE_ONCE(sampled.pid[chid], proc_selfpid());
+#endif
 		__set_bit(chid, hold.tracked);
 		__clear_bit(chid, hold.isolating);
 		latency_set(chid, TGM_PREEMPT_MIN_NS);
@@ -331,9 +346,31 @@ void tgm_hold_sampled(unsigned int chid, uint64_t asked_pt, uint64_t start_pt)
 		hold.asked_pt[chid] = 0;
 		if (TGM_STATS)
 			hold.samples++;
+#if TGM_STATS
+		__atomic_fetch_add(&sampled.n[chid], 1, __ATOMIC_RELAXED);
+		if (sample > __atomic_load_n(&sampled.max_ns[chid], __ATOMIC_RELAXED))
+			__atomic_store_n(&sampled.max_ns[chid], sample, __ATOMIC_RELAXED);
+#endif
 	}
 	spin_unlock_irqrestore(&hold.lock, flags);
 }
+
+#if TGM_STATS
+void tgm_hold_samples_take(int pid, uint32_t *n, uint64_t *max_ns)
+{
+	unsigned int i = 0;
+	u64 max = 0;
+
+	*n = 0;
+	for (i = 0; i < HOLD_CHIDS; i++) {
+		if (READ_ONCE(sampled.pid[i]) != pid)
+			continue;
+		*n += __atomic_exchange_n(&sampled.n[i], 0, __ATOMIC_RELAXED);
+		max = max_t(u64, max, __atomic_exchange_n(&sampled.max_ns[i], 0, __ATOMIC_RELAXED));
+	}
+	*max_ns = max;
+}
+#endif
 
 void tgm_hold_check(struct nvkm_device *device, unsigned int chid)
 {

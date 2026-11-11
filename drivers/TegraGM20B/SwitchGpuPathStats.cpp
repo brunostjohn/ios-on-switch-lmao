@@ -1,6 +1,9 @@
 // SPDX-License-Identifier: MIT
 #include "SwitchGpuPathStats.h"
 #include "TegraGM20BGpu.h"
+extern "C" {
+#include "TegraGM20BSched.h"
+}
 #if SWITCH_GPU_PATH_STATS
 #include <IOKit/IOLib.h>
 #include <IOKit/IOLocks.h>
@@ -143,6 +146,13 @@ extern "C" void switch_gpu_path_line(char *line, size_t size)
 	}
 	const int head = snprintf(line, size, "flags=%#x pid=%d", switch_gpu_info_flags(), pid);
 	format(line, size, head > 0 ? static_cast<size_t>(head) : 0, counts);
+	uint32_t preempts = 0;
+	uint64_t preemptMax = 0;
+	tgm_hold_samples_take(pid, &preempts, &preemptMax);
+	const size_t used = strlen(line);
+	if (used < size)
+		snprintf(line + used, size - used, " preempts=%u preempt_max_us=%llu", preempts,
+			 static_cast<unsigned long long>(preemptMax / 1000));
 }
 
 extern "C" void switch_gpu_path_register(void)

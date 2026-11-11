@@ -246,6 +246,11 @@ static inline uint64_t tgm_gpu_span(uint64_t end, uint64_t start, uint64_t last_
 #define TGM_HOLD_SLACK_NS (1000ull * 1000)
 #define TGM_HOLD_CEILING_NS (16666667ull)
 
+/* The longest an app channel's draw is estimated to keep GR (drivers/TegraGM20BMetal raw_draw_bands.h): a longer one is
+ * drawn as scissor bands, each ending a batch of its own (its wait-for-idle seqno release), so a compositor kick waits
+ * for one band at most. The hold's slack: a channel whose draws fit it is never worth a hold. */
+#define TGM_APP_BAND_NS TGM_HOLD_SLACK_NS
+
 static inline int tgm_hold_worth(uint64_t preempt)
 {
 	return (preempt > TGM_HOLD_SLACK_NS && preempt <= TGM_HOLD_CEILING_NS) ? 1 : 0;
