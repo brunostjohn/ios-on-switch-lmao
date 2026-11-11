@@ -15,6 +15,16 @@ extension X1TwodProbes {
         }
     }
 
+    /// The 2D engine's UNORM name for an sRGB format's surface: the engine refuses a solid prim into A8RL8GL8BL8 or
+    /// A8BL8GL8RL8 (class error 0x4a, T-v2), so an sRGB target is filled through its UNORM view with the colour encoded
+    static func unormView(_ format: X1Format) -> UInt32? {
+        switch format.name {
+        case "bgra8srgb": return 0xcf
+        case "rgba8srgb": return 0xd5
+        default: return nil
+        }
+    }
+
     /// One fill: the reference state (SRCCOPY, clip at the surface) or the bare sequence of the first boots; the
     /// colour as one word in the destination's own format or as four floats (RF32_GF32_BF32_AF32); between the
     /// production 2D path's waits or, as on the first boots, with none
@@ -27,7 +37,8 @@ extension X1TwodProbes {
     }
 
     /// gpu.x1.twod_clear (clear.twod, LIMITS 2D-4): a 2D-engine solid rectangle over a target the 3D engine cleared,
-    /// all but a one-texel border, held to the colour's codes (a word: its own codes; floats: each rule's rounding).
+    /// all but a one-texel border, held to the colour's codes (a word: its own codes; floats: each rule's rounding). An
+    /// sRGB target is filled through its UNORM view (unormView) with the colour encoded, words and floats alike.
     /// The first boots' fill (bare state, four floats, no waits around it after a clear-only pass, the last GR work
     /// before the tail) left GR busy until a context-switch timeout, so the probe bisects one command buffer a step,
     /// journaled, safest first, every format by each form between the production 2D path's waits: the reference
@@ -78,19 +89,29 @@ extension X1TwodProbes {
                 "kind": "fill", "written": target, "dx": 1, "dy": 1, "dw": w - 2, "dh": h - 2,
                 "reference": step.reference ? 1 : 0, "unbracketed": step.bracketed ? 0 : 1,
             ]
+            if let view = unormView(format) { op["fmt2d"] = view }
             if step.word, let (fmt, word) = solidWord(format, codes) {
                 op["colorFormat"] = fmt
                 op["color0"] = word
             } else {
                 op["colorFormat"] = 0xc0
-                for c in 0..<4 { op["color\(c)"] = color[c].bitPattern }
+                for (c, channel) in format.channels.enumerated() {
+                    op["color\(c)"] = Float(exactValue(channel, Double(color[c]))).bitPattern
+                }
             }
             guard let path = await run(label, target, op) else {
                 failedStep = step
                 return false
             }
             guard path == "raw" else { return true }
-            let bytes = try await gpu.read(target, bytesPerPixel: format.bytesPerTexel)
+            let bytes: [UInt8]
+            do {
+                bytes = try await gpu.read(target, bytesPerPixel: format.bytesPerTexel)
+            } catch {
+                failedAt = "\(label)_read"
+                failedStep = step
+                return false
+            }
             var tally = X1RuleTally()
             let exact = format.channels.enumerated().map { c, channel in
                 step.word ? channel.value(codes[c]) : exactValue(channel, Double(color[c]))
