@@ -167,12 +167,14 @@ def crawled(inventory: dict) -> dict:
 
 
 STORE_PATH = re.compile(r'^.*/(store|crawl)/root/')
+# The library as the bucket saw it, below its own directory (an older report's absolute sandbox path included).
+STORE_IN_LINE = re.compile(r'\((?:[^()\s]*/)?(?:store|crawl)/root/')
 
 
 def refusals(lines: list[str]) -> dict[str, dict]:
     """Group the tool's refusals (`<kind> <what> (<library>): <error>`) by library: a count and the first few."""
     grouped: dict[str, dict] = {}
-    for line in lines:
+    for line in (STORE_IN_LINE.sub('(/', raw) for raw in lines):
         library = line[line.find(' (') + 2 : line.find('): ')] if ' (' in line and '): ' in line else '?'
         library = STORE_PATH.sub('/', library)
         entry = grouped.setdefault(library, {'count': 0, 'first': []})

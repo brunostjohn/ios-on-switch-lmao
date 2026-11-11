@@ -63,6 +63,16 @@ class PrefixTest(unittest.TestCase):
         self.assertEqual(merge.prefix_bits(112637), 15)
 
 
+class RefusalsTest(unittest.TestCase):
+    def test_a_refusal_reads_the_same_wherever_its_bucket_ran(self):
+        library = 'System/Library/PrivateFrameworks/GESS.framework/mlx.metallib'
+        sandbox = '/Users/u/Library/Caches/bazel/_bazel_u/0123/sandbox/darwin-sandbox/21961/execroot/_main/_bucket_001'
+        lines = [f'C kernel ({where}/root/{library}): compute pipeline' for where in (sandbox + '/store', 'store')]
+        grouped = merge.refusals(lines)
+        self.assertEqual(list(grouped), ['/' + library])
+        self.assertEqual(grouped['/' + library]['first'], [f'C kernel (/{library}): compute pipeline'] * 2)
+
+
 class JoinTest(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
