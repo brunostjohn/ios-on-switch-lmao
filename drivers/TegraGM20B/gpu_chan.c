@@ -45,6 +45,8 @@ void tgm_chan_on_fence(struct tgm_chan *chan, void (*fenced)(void *arg), void *a
 static void chan_free(struct tgm_chan *chan)
 {
 	int i = 0;
+	if (stats_on())
+		tgm_stats_gr_unbind(chan);
 	if (chan->high || chan->tracked)
 		tgm_sched_forget(tgm_gpu.device, chan->chid);
 	nvif_event_dtor(&chan->nonstall);
