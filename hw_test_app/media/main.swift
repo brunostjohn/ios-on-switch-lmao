@@ -32,6 +32,9 @@ func run(_ arguments: [String]) async throws {
         }
         try printPin(url)
     }
+    let alpha = out.appendingPathComponent(AlphaClip.file)
+    try MP4Writer.write(try AlphaVideo.encode(), to: alpha)
+    try printPin(alpha)
     for image in StillImage.all {
         let url = out.appendingPathComponent(image.file)
         try StillWriter.write(image, to: url)
@@ -61,6 +64,17 @@ func verify(_ directory: URL) async throws {
         } catch {
             print(clip.file, "not decoded here: \(error)")
         }
+    }
+    let alpha = directory.appendingPathComponent(AlphaClip.file)
+    if FileManager.default.fileExists(atPath: alpha.path) {
+        let demuxed = try await Demux.mp4(alpha)
+        let result = try AlphaVideo.decode(
+            demuxed.samples, format: demuxed.format,
+            flags: [._EnableAsynchronousDecompression, ._EnableTemporalProcessing])
+        print(
+            AlphaClip.file, "\(result.matched)/\(AlphaClip.frames) frames match", result.firstMismatch ?? "",
+            "\(result.outOfDisplayOrder) out of display order",
+            String(format: "luma %.1f chroma %.1f alpha %.1f", result.worstLuma, result.worstChroma, result.worstAlpha))
     }
     for image in StillImage.all {
         let url = directory.appendingPathComponent(image.file)
