@@ -21,11 +21,19 @@ struct switch_gm20b_2d_surface {
     uint32_t pitch_bytes;       // pitch layout
     uint8_t block_height_log2;  // block-linear layout
     uint32_t width, height;
+    bool
+        compressed;  // memory of a compressible kind with comptags: SET_COMPRESSION, so the engine keeps the tiles' state
+    bool zeta;       // a zeta surface written as colour (SET_DST_COLOR_RENDER_TO_ZETA_SURFACE)
 };
 
-#define SWITCH_GM20B_2D_FILL_WORDS 31u
+#define SWITCH_GM20B_2D_FILL_WORDS 32u
 
-// [x0, x1) x [y0, y1) of `dst` set to `color`, one word packed in `dst`'s own format
+// The format a solid fill writes `format` through: an sRGB one's UNORM twin. The engine refuses a solid prim into an
+// sRGB destination (ERROR2D_ILLEGAL_SRGB_DST_FORMAT_FOR_SOLID_PRIM, class error 0x4a: T-v2's gpu.x1.twod_clear), so an
+// sRGB surface is filled through its UNORM view with the colour's encoded codes.
+uint32_t switch_gm20b_2d_fill_format(uint32_t format);
+
+// [x0, x1) x [y0, y1) of `dst` set to `color`, one word packed in switch_gm20b_2d_fill_format(dst->format)
 void switch_gm20b_2d_fill(struct nv_push *p, const struct switch_gm20b_2d_surface *dst, uint32_t color, uint32_t x0,
                           uint32_t y0, uint32_t x1, uint32_t y1);
 

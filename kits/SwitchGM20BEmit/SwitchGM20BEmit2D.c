@@ -3,10 +3,26 @@
 
 #include "nv_push_cl902d.h"
 
-static void destination(struct nv_push *p, const struct switch_gm20b_2d_surface *s)
+uint32_t switch_gm20b_2d_fill_format(uint32_t format)
+{
+    switch (format) {
+    case NV902D_SET_DST_FORMAT_V_A8RL8GL8BL8:
+        return NV902D_SET_DST_FORMAT_V_A8R8G8B8;
+    case NV902D_SET_DST_FORMAT_V_A8BL8GL8RL8:
+        return NV902D_SET_DST_FORMAT_V_A8B8G8R8;
+    case NV902D_SET_DST_FORMAT_V_X8RL8GL8BL8:
+        return NV902D_SET_DST_FORMAT_V_X8R8G8B8;
+    case NV902D_SET_DST_FORMAT_V_X8BL8GL8RL8:
+        return NV902D_SET_DST_FORMAT_V_X8B8G8R8;
+    default:
+        return format;
+    }
+}
+
+static void destination(struct nv_push *p, const struct switch_gm20b_2d_surface *s, uint32_t format)
 {
     P_MTHD(p, NV902D, SET_DST_FORMAT);
-    P_INLINE_DATA(p, s->format);
+    P_INLINE_DATA(p, format);
     if (s->pitch) {
         P_INLINE_DATA(p, NV902D_SET_DST_MEMORY_LAYOUT_V_PITCH);
         P_MTHD(p, NV902D, SET_DST_PITCH);
@@ -27,8 +43,10 @@ static void destination(struct nv_push *p, const struct switch_gm20b_2d_surface 
 void switch_gm20b_2d_fill(struct nv_push *p, const struct switch_gm20b_2d_surface *dst, uint32_t color, uint32_t x0,
                           uint32_t y0, uint32_t x1, uint32_t y1)
 {
-    P_IMMD(p, NV902D, SET_DST_COLOR_RENDER_TO_ZETA_SURFACE, V_FALSE);
-    destination(p, dst);
+    const uint32_t format = switch_gm20b_2d_fill_format(dst->format);
+    P_IMMD(p, NV902D, SET_DST_COLOR_RENDER_TO_ZETA_SURFACE, dst->zeta);
+    P_IMMD(p, NV902D, SET_COMPRESSION, dst->compressed);
+    destination(p, dst, format);
     P_IMMD(p, NV902D, SET_OPERATION, V_SRCCOPY);
     P_IMMD(p, NV902D, SET_COLOR_KEY_ENABLE, V_FALSE);
     P_IMMD(p, NV902D, SET_RENDER_ENABLE_C, MODE_TRUE);
@@ -40,7 +58,7 @@ void switch_gm20b_2d_fill(struct nv_push *p, const struct switch_gm20b_2d_surfac
     P_IMMD(p, NV902D, SET_CLIP_ENABLE, V_TRUE);
     P_MTHD(p, NV902D, RENDER_SOLID_PRIM_MODE);
     P_INLINE_DATA(p, NV902D_RENDER_SOLID_PRIM_MODE_V_RECTS);
-    P_INLINE_DATA(p, dst->format);
+    P_INLINE_DATA(p, format);
     P_INLINE_DATA(p, color);
     P_MTHD(p, NV902D, RENDER_SOLID_PRIM_POINT_SET_X(0));
     P_INLINE_DATA(p, x0);

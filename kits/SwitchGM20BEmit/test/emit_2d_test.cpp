@@ -60,6 +60,7 @@ TEST(Emit2D, ABlockLinearFillIsTheReferenceFill)
     s.height = 720;
     std::vector<Method> expected = {
         {k2D, NV902D_SET_DST_COLOR_RENDER_TO_ZETA_SURFACE, 0},
+        {k2D, NV902D_SET_COMPRESSION, 0},
         {k2D, NV902D_SET_DST_FORMAT, NV902D_SET_DST_FORMAT_V_A8R8G8B8},
         {k2D, NV902D_SET_DST_MEMORY_LAYOUT, NV902D_SET_DST_MEMORY_LAYOUT_V_BLOCKLINEAR},
         {k2D, NV902D_SET_DST_BLOCK_SIZE, 4u << 4},
@@ -86,6 +87,7 @@ TEST(Emit2D, APitchFillNamesItsPitch)
     s.height = 720;
     std::vector<Method> expected = {
         {k2D, NV902D_SET_DST_COLOR_RENDER_TO_ZETA_SURFACE, 0},
+        {k2D, NV902D_SET_COMPRESSION, 0},
         {k2D, NV902D_SET_DST_FORMAT, NV902D_SET_DST_FORMAT_V_A8B8G8R8},
         {k2D, NV902D_SET_DST_MEMORY_LAYOUT, NV902D_SET_DST_MEMORY_LAYOUT_V_PITCH},
         {k2D, NV902D_SET_DST_PITCH, 5120},
@@ -97,6 +99,49 @@ TEST(Emit2D, APitchFillNamesItsPitch)
     const auto tail = fillTail(s);
     expected.insert(expected.end(), tail.begin(), tail.end());
     EXPECT_EQ(Methods(fill(s)), expected);
+}
+
+TEST(Emit2D, CompressionAndZetaAreTheSurfaces)
+{
+    switch_gm20b_2d_surface s = {};
+    s.format = NV902D_SET_DST_FORMAT_V_A8R8G8B8;
+    s.block_height_log2 = 4;
+    s.width = 64;
+    s.height = 64;
+    s.compressed = true;
+    s.zeta = true;
+    const auto m = Methods(fill(s));
+    ASSERT_GE(m.size(), 2u);
+    EXPECT_EQ(m[0], (Method{k2D, NV902D_SET_DST_COLOR_RENDER_TO_ZETA_SURFACE, 1}));
+    EXPECT_EQ(m[1], (Method{k2D, NV902D_SET_COMPRESSION, 1}));
+}
+
+TEST(Emit2D, AnSrgbSurfaceIsFilledThroughItsUnormView)
+{
+    const std::pair<uint32_t, uint32_t> twins[] = {
+        {NV902D_SET_DST_FORMAT_V_A8RL8GL8BL8, NV902D_SET_DST_FORMAT_V_A8R8G8B8},
+        {NV902D_SET_DST_FORMAT_V_A8BL8GL8RL8, NV902D_SET_DST_FORMAT_V_A8B8G8R8},
+        {NV902D_SET_DST_FORMAT_V_X8RL8GL8BL8, NV902D_SET_DST_FORMAT_V_X8R8G8B8},
+        {NV902D_SET_DST_FORMAT_V_X8BL8GL8RL8, NV902D_SET_DST_FORMAT_V_X8B8G8R8},
+        {NV902D_SET_DST_FORMAT_V_RF16_GF16_BF16_AF16, NV902D_SET_DST_FORMAT_V_RF16_GF16_BF16_AF16},
+    };
+    for (const auto &[srgb, unorm] : twins) {
+        switch_gm20b_2d_surface s = {};
+        s.format = srgb;
+        s.block_height_log2 = 4;
+        s.width = 64;
+        s.height = 64;
+        uint32_t dst = 0, solid = 0;
+        for (const Method &m : Methods(fill(s))) {
+            if (m.method == NV902D_SET_DST_FORMAT)
+                dst = m.value;
+            if (m.method == NV902D_SET_RENDER_SOLID_PRIM_COLOR_FORMAT)
+                solid = m.value;
+        }
+        EXPECT_EQ(switch_gm20b_2d_fill_format(srgb), unorm);
+        EXPECT_EQ(dst, unorm) << srgb;
+        EXPECT_EQ(solid, unorm) << srgb;
+    }
 }
 
 }  // namespace
