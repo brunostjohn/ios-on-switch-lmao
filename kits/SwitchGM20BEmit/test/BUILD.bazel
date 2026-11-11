@@ -15,6 +15,7 @@ host_library(
     srcs = [
         "//kits/SwitchGM20BEmit:SwitchGM20BEmit3D.c",
         "//kits/SwitchGM20BEmit:SwitchGM20BEmitBarrier.c",
+        "//kits/SwitchGM20BEmit:SwitchGM20BEmitRaster.c",
         "//kits/SwitchGM20BEmit:SwitchGM20BEmitReport.c",
         "//kits/SwitchGM20BEmit:mesa/nouveau_copy_rect.c",
     ],
@@ -22,10 +23,23 @@ host_library(
         "//kits/SwitchGM20BEmit:SwitchGM20BEmit3D.h",
         "//kits/SwitchGM20BEmit:SwitchGM20BEmitBarrier.h",
         "//kits/SwitchGM20BEmit:SwitchGM20BEmitCopy.h",
+        "//kits/SwitchGM20BEmit:SwitchGM20BEmitRaster.h",
         "//kits/SwitchGM20BEmit:SwitchGM20BEmitReport.h",
         "//kits/SwitchGM20BEmit:SwitchGM20BPushDecode.h",
     ],
     deps = ["//kits/SwitchGM20BEmit:push"],
+)
+
+host_test(
+    name = "emit_raster_test",
+    srcs = [
+        "emit_raster_test.cpp",
+        "push_words.h",
+    ],
+    deps = [
+        ":emit",
+        "//kits/SwitchGM20B:classes",
+    ],
 )
 
 host_test(
