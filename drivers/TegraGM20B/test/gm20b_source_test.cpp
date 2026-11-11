@@ -42,8 +42,8 @@ const std::string &gpu()
 {
 	static const std::string source = [] {
 		std::string units;
-		for (const char *unit : {"bringup", "clock", "mem", "hang", "stats", "stats_tick",
-					 "chan", "sync", "exec", "present", "scrub", "power"})
+		for (const char *unit : {"bringup", "clock", "mem", "hang", "describe", "acquire", "stats",
+					 "stats_tick", "chan", "sync", "exec", "present", "scrub", "power"})
 			units += SourceText(std::string("../gpu_") + unit + ".c");
 		return units + SourceText("../gpu_internal.h") + SourceText("../gpu_inline.h") +
 		       SourceText("../gpu_fenced.h") + SourceText("../SwitchGpuVmMap.h") +
@@ -987,6 +987,48 @@ TEST(GM20BSchedSource, HooksGoWhereTheFifosOneinitReadsThem)
 		    HasSubstr("interleave(fifo->engine.subdev.device, runl);"));
 }
 
+// The PBDMA's ACQUIRE interrupt is gpu_acquire.c's: the timeout goes off in the PBDMA before the bit is cleared (so the
+// same acquire cannot raise it again), and nvkm's handler, which would kill the waiter, never sees it.
+TEST(GM20BAcquireSource, TheAcquireInterruptIsTakenBeforeNvkmsHandler)
+{
+	const std::string runq = flat(definition(SourceText("../recover.c"),
+		"static bool runq_intr(struct nvkm_runq *runq, struct nvkm_runl *runl)"));
+	expectBefore(runq, "tgm_acquire_intr(device, runq->id)",
+		     "nvkm_wr32(device, PBDMA_INTR_0(runq->id), TGM_PBDMA_INTR_ACQUIRE)");
+	expectBefore(runq, "TGM_PBDMA_INTR_ACQUIRE)", "ctxsw.runq_nvkm->intr(runq, runl)");
+	const std::string intr = flat(definition(gpu(), "void tgm_acquire_intr(struct nvkm_device *device, int runq)"));
+	expectBefore(intr, "word & ~TGM_ACQUIRE_TIMEOUT_EN", "nvxnu_work_schedule(acq.work)");
+	EXPECT_THAT(intr, HasSubstr("nvkm_mask(device, PBDMA_INTR_EN_0(runq), TGM_PBDMA_INTR_ACQUIRE, 0)"));
+	EXPECT_THAT(intr, Not(HasSubstr("mutex_lock")));
+	EXPECT_THAT(flat(definition(SourceText("../recover.c"), "void tgm_recover_suspend(void)")),
+		    HasSubstr("tgm_acquire_suspend();"));
+}
+
+// Every channel's RAMFC carries the timeout before its first submission (the subchannel binds), and a channel whose
+// timeout an interrupt turned off gets it back only while it is idle and off the PBDMA, as a level change's timeslice.
+TEST(GM20BAcquireSource, EveryChannelIsArmedBeforeItsFirstKickAndReArmedWhenIdle)
+{
+	const auto create = flat(definition(gpu(), "static int chan_new("));
+	expectBefore(create, "chan->chid = args.chan.chid;", "tgm_acquire_arm(chan->chid);");
+	expectBefore(create, "tgm_acquire_arm(chan->chid);", "PUSH_KICK(push);");
+	const auto due = flat(definition(gpu(), "void tgm_chan_ramfc_due(struct tgm_chan *chan)"));
+	expectBefore(due, "tgm_sched_loaded(tgm_gpu.device, chan->chid)", "tgm_acquire_arm(chan->chid);");
+	EXPECT_EQ(Count(gpu(), "tgm_chan_ramfc_due(chan);"), 2u);
+}
+
+// A late wait and an acquire timeout blame by what the candidates' RAMFC says they wait on, and a check that finds a
+// channel parked past its timeout with no interrupt says so.
+TEST(GM20BAcquireSource, TheHangRuleReadsWhatEachCandidateWaitsOn)
+{
+	const auto recover = flat(definition(gpu(),
+		"enum tgm_hang tgm_hang_recover(struct tgm_chan *late, const char *who, u32 seqno, u64 waited_ns)"));
+	EXPECT_THAT(recover, HasSubstr("candidate_wait(&waits, chan, &source)"));
+	EXPECT_THAT(recover, HasSubstr("kind = candidate_wait(&waits, chans[i], &source);"));
+	EXPECT_THAT(recover, HasSubstr("c[i].victim = kind == TGM_WAITS_VICTIM || kind == TGM_WAITS_UNREAD;"));
+	EXPECT_THAT(recover, HasSubstr("tgm_acquire_unfired(chans[i], now);"));
+	EXPECT_THAT(recover, Not(HasSubstr("chan->waited.cpu")));
+}
+
 // Nouveau puts the SW engine on the runlist with id 15 and no status register: PFIFO_ENG_STATUS(15) (0x0026b8)
 // PRI-times out, and the GPU's bus error panics. Every per-engine status read is behind a context or a GR check.
 TEST(GM20BSchedSource, EngineStatusReadsSkipTheSoftwareEngine)
@@ -1317,12 +1359,16 @@ TEST(GM20BVisibilitySource, ColdGlobalInvalidationPreservesInternalDirtyData)
 }
 
 // nvkm_runl_chan_get_chid returns with spinlocks held and interrupts off; nvkm_kmap takes ltc->mutex.
-TEST(GM20BChannelSource, TimesliceWritesRamfcOnlyAfterTheChannelLookupUnlocks)
+TEST(GM20BChannelSource, RamfcIsMappedOnlyAfterTheChannelLookupUnlocks)
 {
-    const auto body = flat(definition(gpu(), "static void chan_timeslice("));
-    expectBefore(body, "nvkm_runl_chan_get_chid(", "nvkm_chan_put(&nchan, flags)");
-    expectBefore(body, "nvkm_chan_put(&nchan, flags)", "nvkm_kmap(");
-    expectBefore(body, "nvkm_kmap(", "nvkm_done(");
+    const auto lookup = flat(definition(gpu(), "static struct nvkm_gpuobj *chan_inst("));
+    expectBefore(lookup, "nvkm_runl_chan_get_chid(", "nvkm_chan_put(&nchan, flags)");
+    for (const char *signature : {"void tgm_ramfc_write(", "static int ramfc_read_waits("}) {
+        const auto body = flat(definition(gpu(), signature));
+        expectBefore(body, "chan_inst(chid)", "nvkm_kmap(");
+        expectBefore(body, "nvkm_kmap(", "nvkm_done(");
+    }
+    EXPECT_THAT(flat(definition(gpu(), "static void chan_timeslice(")), HasSubstr("tgm_ramfc_write("));
 }
 
 TEST(GM20BChannelSource, CopyChannelCreatesOnlyRequestedObjectsAndKeepsVerifiedRunlist)

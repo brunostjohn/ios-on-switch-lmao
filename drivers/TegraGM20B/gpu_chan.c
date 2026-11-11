@@ -84,30 +84,9 @@ static int compositor_timeslice_on(void)
 	return 1;
 }
 
-/* nvkm_runl_chan_get_chid returns holding spinlocks with interrupts off, and nvkm_kmap may sleep (the gk20a instobj's
- * L2 flush and invalidate take ltc->mutex), so RAMFC is written after nvkm_chan_put. The instance block is freed only
- * with the caller's channel object (chan->user), which neither chan_new nor a submission on the channel races. */
 static void chan_timeslice(u32 chid, u32 value)
 {
-	struct nvkm_runl *runl = NULL;
-	struct nvkm_chan *nchan = NULL;
-	struct nvkm_gpuobj *inst = NULL;
-	unsigned long flags = 0;
-
-	nvkm_runl_foreach(runl, tgm_gpu.device->fifo)
-	{
-		nchan = nvkm_runl_chan_get_chid(runl, chid, &flags);
-		if (nchan) {
-			inst = nchan->inst;
-			nvkm_chan_put(&nchan, flags);
-			break;
-		}
-	}
-	if (!inst)
-		return;
-	nvkm_kmap(inst);
-	nvkm_wo32(inst, RAMFC_TIMESLICE, value);
-	nvkm_done(inst);
+	tgm_ramfc_write(chid, RAMFC_TIMESLICE, value);
 }
 
 void tgm_chan_set_level(struct tgm_chan *chan, unsigned int level)
@@ -145,16 +124,23 @@ void tgm_chan_set_level(struct tgm_chan *chan, unsigned int level)
 }
 
 /* chan_exec, before a submission is kicked: the host saves a channel's RAMFC when it leaves it, so a level change's
- * timeslice is written while the channel is idle and on neither GR nor the PBDMA. */
-void tgm_chan_timeslice_due(struct tgm_chan *chan)
+ * timeslice, and the acquire timeout an ACQUIRE interrupt turned off, are written while the channel is idle and on
+ * neither GR nor the PBDMA. */
+void tgm_chan_ramfc_due(struct tgm_chan *chan)
 {
 	u32 value = chan->timeslice_due;
+	int acquire = READ_ONCE(chan->acquire_due);
 
-	if (!value || (s32)(tgm_chan_completed(chan) - chan->submitted) < 0 ||
+	if ((!value && !acquire) || (s32)(tgm_chan_completed(chan) - chan->submitted) < 0 ||
 	    tgm_sched_loaded(tgm_gpu.device, chan->chid))
 		return;
-	chan_timeslice(chan->chid, value);
+	if (value)
+		chan_timeslice(chan->chid, value);
 	chan->timeslice_due = 0;
+	if (acquire) {
+		tgm_acquire_arm(chan->chid);
+		WRITE_ONCE(chan->acquire_due, 0);
+	}
 }
 
 static int chan_new(struct tgm_vm *vm, const void *vm_owner, volatile uint32_t *fence_cpu,
@@ -263,6 +249,8 @@ static int chan_new(struct tgm_vm *vm, const void *vm_owner, volatile uint32_t *
 	ret = nvif_object_ctor(&tgm_gpu.dev.object, "chan", 0, MAXWELL_CHANNEL_GPFIFO_A, &args,
 			       sizeof(args), &chan->user);
 	chan->chid = args.chan.chid;
+	if (!ret)
+		tgm_acquire_arm(chan->chid);
 	if (!ret && critical && tgm_all_clients() && compositor_timeslice_on())
 		chan_timeslice(chan->chid, RAMFC_TIMESLICE_HIGH);
 	if (!ret && critical && vm_owner)

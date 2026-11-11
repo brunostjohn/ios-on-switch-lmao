@@ -289,7 +289,7 @@ const uint32_t *AGXDeviceUserClient::pushView(uint64_t va, uint64_t bytes,
 // states. From a GPU panic path on any thread: the binds are read under lock_, taken only if it is free (a thread that
 // holds it while a GPU wait hangs would never let it go), unless this thread is the one holding it (hangHolder_).
 int AGXDeviceUserClient::hungInterlocks(const uint64_t *va, const uint32_t *dwords, uint32_t n,
-					uint64_t *interlocks)
+					uint64_t *interlocks, uint32_t *lastEngine)
 {
 	const bool held = hangHolder_ == current_thread();
 	if (!held && !IOLockTryLock(lock_))
@@ -310,15 +310,16 @@ int AGXDeviceUserClient::hungInterlocks(const uint64_t *va, const uint32_t *dwor
 	if (!held)
 		IOLockUnlock(lock_);
 	*interlocks = c.interlocks;
+	*lastEngine = p.lastEngine;
 	return read;
 }
 
 extern "C" int tgm_client_interlocks(const void *client, const uint64_t *va, const uint32_t *dwords,
-				     uint32_t n, uint64_t *interlocks)
+				     uint32_t n, uint64_t *interlocks, uint32_t *last_engine)
 {
 	// NOLINTNEXTLINE(cppcoreguidelines-pro-type-const-cast): the C caller holds the client as const void *
 	return static_cast<AGXDeviceUserClient *>(const_cast<void *>(client))
-		->hungInterlocks(va, dwords, n, interlocks);
+		->hungInterlocks(va, dwords, n, interlocks, last_engine);
 }
 
 // The stats (see pushScanOn): count what this submission's pushes ask of the GPU, through the kernel's view of the
