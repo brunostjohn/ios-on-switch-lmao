@@ -19,6 +19,12 @@ enum X1TwodProbes {
         var wrong = 0, beyondOne = 0
         var first = ""
 
+        /// Texels that changed where nothing should have written
+        init(changed: Int) {
+            wrong = changed
+            beyondOne = changed
+        }
+
         init(_ got: [UInt8], _ want: [UInt8], width: Int, bytesPerTexel: Int) {
             for t in 0..<min(got.count, want.count) / bytesPerTexel {
                 let range = t * bytesPerTexel..<(t + 1) * bytesPerTexel
@@ -231,7 +237,7 @@ enum X1TwodProbes {
                     let edge = (0..<w * h).filter { t in
                         (t % w == 0 || t % w == w - 1 || t / w == 0 || t / w == h - 1) && Array(got[t * bpp..<(t + 1) * bpp]) != first
                     }.count
-                    cells.append(("\(name)_edge", Compared([UInt8](repeating: 0, count: edge), [], width: 1, bytesPerTexel: 1)))
+                    cells.append(("\(name)_edge", Compared(changed: edge)))
                 }
             }
         }

@@ -1455,7 +1455,7 @@ bool Device::createTexture(uint32_t width, uint32_t height, uint32_t format, Tex
     if (laid && blocks)
         blockLayout(t, bl);
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
-    if (laid && !blocks && compressedKind(t.bpp, false) && probeCompressNext.exchange(false))
+    if (probeCompressNext.exchange(false) && laid && !blocks && compressedKind(t.bpp, false))
         return probeCompressible(bl, t);
 #endif
     if (laid && blAlloc(bl.bytes, bl.align, t.span)) {

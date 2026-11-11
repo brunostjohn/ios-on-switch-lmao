@@ -1432,8 +1432,8 @@ public:
     }
     // the barrier forms of the command buffer begin() starts next (raw_probe_forms.h), set by its encoder
     ProbeForms nextForms;
-    // the next createTexture of a block-linear target binds compressible memory of its own (raw_comp.h kinds), which
-    // probeCompressed holds until destroyTexture
+    // the next createTexture binds compressible memory of its own (raw_comp.h kinds) where it makes a block-linear
+    // target, which probeCompressed holds until destroyTexture; any other texture takes the flag and stays plain
     std::atomic<bool> probeCompressNext{false};
     std::map<uint64_t, Bo> probeCompressed;  // lock_
 #endif
