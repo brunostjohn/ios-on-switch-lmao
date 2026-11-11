@@ -11,7 +11,7 @@ public enum Registry {
         MetalPixelFormatTest(), MetalHalfRoundingTest(), MetalCompressedTest(), MetalBlitTest(), MetalTextureViewTest(),
         MetalIOSurfaceTest(), SurfaceTiledDefaultTest(), MPSBlurTest(), MPSMatrixTest(), MetalRuntimeCompileTest(),
         CoreImageLibraryTest(),
-        MetalBenchmarkTest(), CompressionChurnTest(),
+        MetalBenchmarkTest(), FetchBlendCostTest(), CompressionChurnTest(),
     ]
 
     static let video: [any HWTest] =

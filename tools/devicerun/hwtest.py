@@ -86,6 +86,7 @@ TESTS: dict[str, bool] = {
             'metal.runtime_compile',
             'metal.library.core_image',
             'metal.benchmark',
+            'gpu.raw.fetch_blend_cost',
             'gpu.compression_churn',
             'gpu.path.job_visibility',
             'gpu.path.lean_copy',
