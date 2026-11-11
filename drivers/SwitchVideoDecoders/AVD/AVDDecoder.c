@@ -754,9 +754,10 @@ static CFDictionaryRef copyDisplayBufferProbe(const Decoder *d)
     for (int mode = 0; out && mode < 2; mode++) {
         const int32_t v[] = {r[mode].status,          (int32_t)r[mode].layout,      (int32_t)r[mode].max_diff,
                              (int32_t)r[mode].mean_milli, (int32_t)r[mode].trunc_milli, (int32_t)r[mode].round_milli};
-        os_log(gAVDLog, "AVD: display-buffer probe mode %d: status %d layout %d, max %d mean %d.%03d, trunc %d.%d%% round "
-               "%d.%d%%", mode + 2, v[0], v[1], v[2], v[3] / 1000, v[3] % 1000, v[4] / 10, v[4] % 10, v[5] / 10,
-               v[5] % 10);
+        os_log(gAVDLog,
+               "AVD: display-buffer probe mode %d: status %d layout %d, max %d mean %d.%03d, trunc %d.%d%% "
+               "round %d.%d%%",
+               mode + 2, v[0], v[1], v[2], v[3] / 1000, v[3] % 1000, v[4] / 10, v[4] % 10, v[5] / 10, v[5] % 10);
         for (int f = 0; f < 6; f++) {
             char name[32];
             snprintf(name, sizeof(name), "mode%d_%s", mode + 2, kFields[f]);

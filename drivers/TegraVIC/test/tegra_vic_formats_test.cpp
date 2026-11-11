@@ -111,7 +111,8 @@ TEST(VicFormats, EveryRowDescribesItsMemory)
         {TEGRA_VIC_FOURCC('4', '4', '4', 'v'), TEGRA_VIC_T_Y8___U8V8_N444, 2, TEGRA_VIC_KIND_YCC_VIDEO, 1, 2, 0, 0, 0},
         {TEGRA_VIC_FOURCC('4', '4', '4', 'f'), TEGRA_VIC_T_Y8___U8V8_N444, 2, TEGRA_VIC_KIND_YCC_FULL, 1, 2, 0, 0, 0},
         {kY420, TEGRA_VIC_T_Y8___U8___V8_N420, 3, TEGRA_VIC_KIND_YCC_VIDEO, 1, 1, 1, 1, 0},
-        {TEGRA_VIC_FOURCC('f', '4', '2', '0'), TEGRA_VIC_T_Y8___U8___V8_N420, 3, TEGRA_VIC_KIND_YCC_FULL, 1, 1, 1, 1, 0},
+        {TEGRA_VIC_FOURCC('f', '4', '2', '0'), TEGRA_VIC_T_Y8___U8___V8_N420, 3, TEGRA_VIC_KIND_YCC_FULL, 1, 1, 1, 1,
+         0},
         {TEGRA_VIC_FOURCC('2', 'v', 'u', 'y'), TEGRA_VIC_T_U8_Y8__V8_Y8, 1, TEGRA_VIC_KIND_YCC_VIDEO, 2, 0, 1, 0, 1},
         {TEGRA_VIC_FOURCC('y', 'u', 'v', 's'), TEGRA_VIC_T_Y8_U8__Y8_V8, 1, TEGRA_VIC_KIND_YCC_VIDEO, 2, 0, 1, 0, 1},
     };

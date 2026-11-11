@@ -58,8 +58,8 @@ static inline int switch_surface_chroma_site(uint32_t top, uint32_t bottom, uint
     return 1;
 }
 
-// A DC window's colour stage is its YCbCr matrix on co-sited (Left) chroma. Neither the window nor VIC has a transfer or
-// gamut stage, so a surface's transfer and primaries never decide which of them scans it.
+// A DC window's colour stage is its YCbCr matrix on co-sited (Left) chroma. Neither the window nor VIC has a transfer
+// or gamut stage, so a surface's transfer and primaries never decide which of them scans it.
 static inline int switch_surface_dc_siting(uint32_t top, uint32_t bottom)
 {
     uint32_t chroma = 0;

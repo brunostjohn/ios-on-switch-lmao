@@ -5,8 +5,8 @@ import HWTestVideo
 import VideoToolbox
 
 /// The bundled HEVC Main 10 clip decoded with the AVD plugin's display-buffer probe asked for (debug builds): its first
-/// IDR picture decoded again in disp_output_mode 2 and 3 with NVDEC's display buffer bound, each compared with the mode-1
-/// picture's 10 bits truncated to 8. claim_verdict PASS: both modes wrote the buffer within one code of the
+/// IDR picture decoded again in disp_output_mode 2 and 3 with NVDEC's display buffer bound, each compared with the
+/// mode-1 picture's 10 bits truncated to 8. claim_verdict PASS: both modes wrote the buffer within one code of the
 /// truncation everywhere; the mode-N fields say which layout and how close. INCONCLUSIVE when the decoder does not say.
 struct DisplayBufferTest: HWTest {
     let id = "decode.display_buffer"

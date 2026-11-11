@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: BSD-2-Clause-Patent
-// T210 runs no BPMP firmware (hekate passes it an sc7entry-fw and ATF powers it off): the boot chain's training owns the
-// EMC clock and nothing here may change it. The rate CLK_SOURCE_EMC runs at is the whole table, display memory
+// T210 runs no BPMP firmware (hekate passes it an sc7entry-fw and ATF powers it off): the boot chain's training owns
+// the EMC clock and nothing here may change it. The rate CLK_SOURCE_EMC runs at is the whole table, display memory
 // admission plans at it (L4T's tegra21x_la.c is the same for T210 and T210B01; only the DRAM type matters) and refuses
 // a demand above it. Read again after SC7, whose warmboot restores the clock.
 

@@ -78,8 +78,9 @@ static inline const TegraVICFormat *tegra_vic_format(uint32_t fourcc)
 {
     // 'BGRA' is bytes B, G, R, A: the 32-bit word 0xAARRGGBB, NVIDIA's A8R8G8B8. 'RGBA' is A8B8G8R8. 'l10r' is
     // CoreVideo's ARGB2101010LEPacked, A in the word's top two bits: A2R10G10B10. 'L565' is the 16-bit word with red on
-    // top, R5G6B5; 'L008' one luminance byte. '420v'/'420f' are NV12, '422v'/'422f' NV16 and '444v'/'444f' NV24 (Cb then
-    // Cr in the second plane); 'y420'/'f420' three planes, Y then Cb then Cr; '2vuy' is Cb Y0 Cr Y1, 'yuvs' Y0 Cb Y1 Cr.
+    // top, R5G6B5; 'L008' one luminance byte. '420v'/'420f' are NV12, '422v'/'422f' NV16 and '444v'/'444f' NV24 (Cb
+    // then Cr in the second plane); 'y420'/'f420' three planes, Y then Cb then Cr; '2vuy' is Cb Y0 Cr Y1, 'yuvs' Y0 Cb
+    // Y1 Cr.
     static const TegraVICFormat formats[] = {
         {TEGRA_VIC_FOURCC('B', 'G', 'R', 'A'), TEGRA_VIC_T_A8R8G8B8, 1, TEGRA_VIC_KIND_RGB, 1, {4, 0, 0}, 0, 0,
          TEGRA_VIC_T_A8R8G8B8, 0},
@@ -107,10 +108,10 @@ static inline const TegraVICFormat *tegra_vic_format(uint32_t fourcc)
          1, 1, TEGRA_VIC_T_Y8___U8___V8_N420, 0},
         {TEGRA_VIC_FOURCC('f', '4', '2', '0'), TEGRA_VIC_T_Y8___U8___V8_N420, 3, TEGRA_VIC_KIND_YCC_FULL, 0, {1, 1, 1},
          1, 1, TEGRA_VIC_T_Y8___U8___V8_N420, 0},
-        {TEGRA_VIC_FOURCC('2', 'v', 'u', 'y'), TEGRA_VIC_T_U8_Y8__V8_Y8, 1, TEGRA_VIC_KIND_YCC_VIDEO, 0, {2, 0, 0}, 1, 0,
-         0, 1},
-        {TEGRA_VIC_FOURCC('y', 'u', 'v', 's'), TEGRA_VIC_T_Y8_U8__Y8_V8, 1, TEGRA_VIC_KIND_YCC_VIDEO, 0, {2, 0, 0}, 1, 0,
-         0, 1},
+        {TEGRA_VIC_FOURCC('2', 'v', 'u', 'y'), TEGRA_VIC_T_U8_Y8__V8_Y8, 1, TEGRA_VIC_KIND_YCC_VIDEO, 0, {2, 0, 0}, 1,
+         0, 0, 1},
+        {TEGRA_VIC_FOURCC('y', 'u', 'v', 's'), TEGRA_VIC_T_Y8_U8__Y8_V8, 1, TEGRA_VIC_KIND_YCC_VIDEO, 0, {2, 0, 0}, 1,
+         0, 0, 1},
     };
     for (unsigned i = 0; i < sizeof(formats) / sizeof(formats[0]); i++) {  // NOLINT(modernize-loop-convert): C too
         if (formats[i].fourcc == fourcc)
