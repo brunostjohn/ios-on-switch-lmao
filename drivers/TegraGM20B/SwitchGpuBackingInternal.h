@@ -4,6 +4,7 @@
 #include <IOKit/IOLocks.h>
 #include "SwitchGpuBacking.h"
 #include "SwitchGpuWriterRanges.h"
+#include "SwitchGpuResourceSet.h"
 
 struct switch_gpu_backing_pages {
 	switch_gpu_backing_pages *older;
@@ -45,6 +46,10 @@ struct switch_gpu_backing {
 	uint32_t cpu_readers, cpu_writers, concurrent_readers, concurrent_writers, dirty;
 	uint32_t gpu_admission_readers, gpu_admission_writers;
 	bool initial_clean, retiring;
+	// Appended so every older field keeps its offset. set and set_access change under `lock`; shared is sticky.
+	switch_gpu_resource_set *set;
+	uint32_t set_access;
+	bool shared;
 };
 
 struct switch_gpu_cpu_lease {
@@ -78,6 +83,11 @@ const switch_gpu_cpu_lease *switch_gpu_backing_find_lease_locked(const switch_gp
 		const switch_gpu_cpu_lease *lease);
 
 void switch_gpu_backing_sort_uses(switch_gpu_backing_use *uses, uint32_t count);
+/* Records already-published jobs as the backing's users, as commit records a job; pending ones only. */
+int switch_gpu_backing_adopt_locked(switch_gpu_backing *backing, const switch_gpu_backing_token *jobs,
+				    uint32_t count, uint32_t access);
+/* Something outside the set reaches a member, or its layout changes: the set's jobs become its users and it leaves. */
+void switch_gpu_set_reached(switch_gpu_backing *backing, uint32_t cause);
 
 // Threads asleep until a backing's CPU holders leave. A holder whose IOSurface client died leaves only at a sweep
 // (switch_gpu_surface_sweep), which GPU jobs run while any thread or ready watch (switch_gpu_ready_waiting) waits.

@@ -416,10 +416,12 @@ host_library(
         "//drivers/TegraGM20B:SwitchGpuCpuComplete.cpp",
         "//drivers/TegraGM20B:SwitchGpuCpuLease.cpp",
         "//drivers/TegraGM20B:SwitchGpuOwnership.cpp",
+        "//drivers/TegraGM20B:SwitchGpuResourceSet.cpp",
         "//drivers/TegraGM20B:SwitchGpuWriters.cpp",
         "//drivers/TegraGM20B:SwitchGpuSurfaceAccess.cpp",
     ],
     hdrs = [
+        "//drivers/TegraGM20B:SwitchGpuResourceSet.h",
         "//drivers/TegraGM20B:SwitchGpuNativeSurface.h",
         "//drivers/TegraGM20B:SwitchGpuNativeUse.h",
         "//drivers/TegraDisplayFlip:TegraScanoutCopy.h",
@@ -442,6 +444,12 @@ host_library(
 host_test(
     name = "switch_gpu_backing_test",
     srcs = ["switch_gpu_backing_test.cpp", "switch_gpu_backing_fixture.h"],
+    deps = [":backing", ":coherency_kernel"],
+)
+
+host_test(
+    name = "switch_gpu_resource_set_test",
+    srcs = ["switch_gpu_resource_set_test.cpp", "switch_gpu_backing_fixture.h"],
     deps = [":backing", ":coherency_kernel"],
 )
 

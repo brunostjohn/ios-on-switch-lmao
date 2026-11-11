@@ -244,6 +244,10 @@ IOReturn AGXDeviceUserClient::channelDestroy(const TegraGM20BAbiChannel *in)
 	if (!in->channel || in->channel > kMaxChannels || !chans_[in->channel - 1])
 		return kIOReturnBadArgument;
 	logFaultBindings();
+	if (tgm_chan_error(chans_[in->channel - 1]))
+		for (auto *set : sets_)
+			if (set)
+				switch_gpu_set_killed(set, in->channel - 1);
 	hangHolder_ = current_thread();
 	tgm_chan_del(&chans_[in->channel - 1]);
     eventChannels_[in->channel - 1].reset();

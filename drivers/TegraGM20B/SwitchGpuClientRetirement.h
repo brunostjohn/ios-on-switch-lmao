@@ -397,6 +397,7 @@ void AGXDeviceUserClient::drainResources()
 	hangHolder_ = current_thread();
 	for (auto &chan : chans_)
 		tgm_chan_del(&chan);
+	destroySets();
 	for (auto &channel : eventChannels_)
 		channel.reset();
 	for (auto &admission : admissions_)
@@ -432,6 +433,7 @@ IOReturn AGXDeviceUserClient::boFree(const TegraGM20BAbiBoFree *in)
 		return kIOReturnBadArgument;
 	Bo *bo = *p;
 	*p = bo->next;
+	switch_gpu_backing_member_freed(bo->backing);
 	boIndex_.erase(bo->handle);
 	surfaces_.remove(bo->handle);
 	for (uint32_t i = 0; i < nbinds_;) {

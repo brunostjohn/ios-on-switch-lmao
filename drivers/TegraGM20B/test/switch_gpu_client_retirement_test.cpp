@@ -296,6 +296,13 @@ void scheduleOrphanRelease()
 
 using thread_t = void *;
 
+unsigned membersFreed = 0;
+
+void switch_gpu_backing_member_freed(switch_gpu_backing *)
+{
+	++membersFreed;
+}
+
 thread_t current_thread()
 {
 	return nullptr;
@@ -312,6 +319,7 @@ public:
 		tgm_mem *mem = nullptr;
 		uint32_t bindings = 0, flags = 0;
 		Bo **zombieLink = nullptr;
+		switch_gpu_backing *backing = nullptr;
 	};
 
 	struct RetiredBinding {
@@ -415,6 +423,10 @@ public:
 	}
 
 	void releaseCpuLeases()
+	{
+	}
+
+	void destroySets()
 	{
 	}
 
@@ -548,7 +560,9 @@ protected:
 TEST_F(ClientRetirement, FreeKeepsMappingAndPagesUntilExactFenceCompletes)
 {
 	client.add(1);
+	const unsigned freed = membersFreed;
 	free(1);
+	EXPECT_EQ(membersFreed, freed + 1);
 	EXPECT_EQ(client.nbinds_, 0u);
 	EXPECT_TRUE(unmapped.empty());
 	client.retireBatch();

@@ -441,3 +441,35 @@ extern "C" void switch_gpu_backing_abort(switch_gpu_backing_transaction *transac
 	}
 	unlock_transaction(transaction);
 }
+
+int switch_gpu_backing_adopt_locked(switch_gpu_backing *backing, const switch_gpu_backing_token *jobs,
+				    uint32_t count, uint32_t access)
+{
+	const uint32_t kind = access_kind(access);
+	for (uint32_t i = 0; i < count; ++i) {
+		const auto &job = jobs[i];
+		const auto *ops = switch_gpu_backing_engine_ops(job.engine);
+		if (!ops || switch_gpu_backing_token_status(&job) != 0)
+			continue;
+		const uint32_t slot = access_slot(backing, job, kind);
+		if (slot < backing->access_count &&
+		    !switch_gpu_backing_later(job, backing->accesses[slot].token))
+			continue;
+		if (slot == backing->access_count)
+			if (const int result = reserve_access(backing))
+				return result;
+		if (const int result = ops->retain_token(&job))
+			return result;
+		if (slot < backing->access_count)
+			switch_gpu_backing_drop_token(backing->accesses[slot].token);
+		else
+			++backing->access_count;
+		const bool write = kind & SWITCH_GPU_BACKING_WRITE;
+		backing->accesses[slot] = {job, write ? backing->content + 1 : 0, kind, false};
+		if (write) {
+			++backing->content;
+			backing->dirty |= SWITCH_GPU_BACKING_GPU_DIRTY;
+		}
+	}
+	return 0;
+}

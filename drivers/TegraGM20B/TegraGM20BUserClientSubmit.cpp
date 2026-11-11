@@ -55,6 +55,9 @@ IOReturn AGXDeviceUserClient::cpuAccess(const TegraGM20BAbiCpuAccess *in, bool r
 		IOLockUnlock(lock_);
 		if (!lease)
 			return kIOReturnBadArgument;
+		if (in->access & TegraGM20BCpuWrite)
+			if (auto *set = switch_gpu_backing_set(lease->backing))
+				switch_gpu_set_host_written(set);
 		const int result = lease->reservation.release(lease->backing);
 		switch_gpu_backing_release(lease->backing);
 		IODelete(lease, CpuLease, 1);
@@ -79,8 +82,14 @@ IOReturn AGXDeviceUserClient::cpuAccess(const TegraGM20BAbiCpuAccess *in, bool r
 		surface->retain();
 	switch_gpu_backing_retain(lease->backing);
 	IOLockUnlock(lock_);
-	int result = lease->reservation.acquire(lease->backing, surface, surfaceId, task_,
-						in->offset, in->bytes, in->access);
+	int result = switch_gpu_backing_set(lease->backing)
+			     ? switch_gpu_backing_member_lease(
+				       lease->backing,
+				       in->access & (TegraGM20BCpuRead | TegraGM20BCpuWrite))
+			     : 0;
+	if (!result)
+		result = lease->reservation.acquire(lease->backing, surface, surfaceId, task_,
+						    in->offset, in->bytes, in->access);
 	if (surface)
 		surface->release();
 	if (!result) {

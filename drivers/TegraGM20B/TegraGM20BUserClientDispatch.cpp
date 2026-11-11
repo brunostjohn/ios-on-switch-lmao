@@ -61,6 +61,13 @@ IOReturn AGXDeviceUserClient::run(uint32_t method, const void *in, uint32_t inSi
 		wantIn = sizeof(TegraGM20BAbiSubmitAddress);
 		wantOut = sizeof(TegraGM20BAbiExecReply);
 		break;
+	case TegraGM20BMethodResourceSetCreate:
+		wantIn = sizeof(TegraGM20BAbiResourceSetCreate);
+		wantOut = sizeof(TegraGM20BAbiResourceSetCreateReply);
+		break;
+	case TegraGM20BMethodResourceSetRelease:
+		wantIn = sizeof(TegraGM20BAbiResourceSetRelease);
+		break;
 	case TegraGM20BMethodVmBind:
 		if (inSize < offsetof(TegraGM20BAbiVmBind, ops))
 			return kIOReturnBadArgument;
@@ -239,6 +246,9 @@ IOReturn AGXDeviceUserClient::run(uint32_t method, const void *in, uint32_t inSi
 	if (method == TegraGM20BMethodSubmitAddress)
 		return submitAddress(static_cast<const TegraGM20BAbiSubmitAddress *>(in),
 				     static_cast<TegraGM20BAbiExecReply *>(out));
+	if (method == TegraGM20BMethodResourceSetCreate)
+		return resourceSetCreate(static_cast<const TegraGM20BAbiResourceSetCreate *>(in),
+					 static_cast<TegraGM20BAbiResourceSetCreateReply *>(out));
 	if (method == TegraGM20BMethodWaitFence)
 		return waitFence(static_cast<const TegraGM20BAbiWaitFence *>(in));
 	if (method == TegraGM20BMethodCpuComplete)
@@ -363,6 +373,9 @@ IOReturn AGXDeviceUserClient::run(uint32_t method, const void *in, uint32_t inSi
 		break;
 	case TegraGM20BMethodExecSurfaces:
 		ret = execSurfaces(static_cast<const TegraGM20BAbiExecSurfaces *>(in));
+		break;
+	case TegraGM20BMethodResourceSetRelease:
+		ret = resourceSetRelease(static_cast<const TegraGM20BAbiResourceSetRelease *>(in));
 		break;
 	case TegraGM20BMethodPriority:
 		priority_ = static_cast<const TegraGM20BAbiPriority *>(in)->priority;

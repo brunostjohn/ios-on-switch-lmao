@@ -16,6 +16,7 @@
 #include <string.h>
 #include <sys/systm.h>
 #include "TegraGM20BABI.h"
+#include "TegraGM20BJobABI.h"
 #include "TegraGM20BBindHistory.h"
 #include "TegraGM20BExecSurfaces.h"
 #include "TegraGM20BGpu.h"
@@ -46,6 +47,7 @@
 #include "SwitchGpuAsyncReference.h"
 #include "SwitchGpuAdmission.h"
 #include "SwitchGpuResourceClient.h"
+#include "SwitchGpuResourceSet.h"
 
 #include "SwitchGpuSurfaceGeometry.h"
 #include "shim/include/switch_tiled_cache.h"
@@ -435,6 +437,7 @@ class AGXDeviceUserClient : public IOUserClient
 	// the thread about to take a hang's line while it holds lock_ (tgm_chan_hung, tgm_chan_del), so hungInterlocks
 	// reads the binds without taking it again
 	thread_t hangHolder_ = nullptr;
+	switch_gpu_resource_set *sets_[TegraGM20BMaxResourceSets] = {};
 
 	Bo *findBo(uint64_t handle);
 	Bo *findAddress(uint64_t address, uint64_t bytes = 1);
@@ -498,6 +501,12 @@ class AGXDeviceUserClient : public IOUserClient
 				   TegraGM20BAbiSurfaceLayoutInfo *out, bool canonical);
 	void applyLevel(bool allChannels = true);
 	IOReturn execSurfaces(const TegraGM20BAbiExecSurfaces *in);
+	IOReturn resourceSetCreate(const TegraGM20BAbiResourceSetCreate *in,
+				   TegraGM20BAbiResourceSetCreateReply *out);
+	IOReturn attachSet(const TegraGM20BAbiResourceSetCreate *in, const TegraGM20BAbiSurfaceUse *uses,
+			   switch_gpu_set_member *members, TegraGM20BAbiResourceSetCreateReply *out);
+	IOReturn resourceSetRelease(const TegraGM20BAbiResourceSetRelease *in);
+	void destroySets();
 	IOReturn unmapToken(const TegraGM20BAbiUnmap *in);
 	void releaseMappings();
 

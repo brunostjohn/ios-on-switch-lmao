@@ -131,6 +131,18 @@ switch_gpu_backing *retire_pop()
 	return backing;
 }
 
+// registry held: what is found again by pages or surface is no longer private to one connection
+bool reached_locked(switch_gpu_backing *backing)
+{
+	if (__atomic_load_n(&backing->shared, __ATOMIC_ACQUIRE) && !__atomic_load_n(&backing->set, __ATOMIC_ACQUIRE))
+		return false;
+	IOLockLock(backing->lock);
+	__atomic_store_n(&backing->shared, true, __ATOMIC_RELEASE);
+	const bool member = backing->set != nullptr;
+	IOLockUnlock(backing->lock);
+	return member;
+}
+
 void destroy(switch_gpu_backing *backing)
 {
     switch_gpu_backing_writer_free_locked(backing);
@@ -229,9 +241,15 @@ extern "C" switch_gpu_backing *switch_gpu_backing_register(const uint64_t *pages
 		}
 		if (surface_id)
 			found->surface_id = surface_id;
+		// A retiring backing found again is its pages handed out anew, not shared.
+		if (!found->retiring)
+			__atomic_store_n(&found->shared, true, __ATOMIC_RELEASE);
 		++found->refs;
+		const bool member = found->set != nullptr;
 		IOLockUnlock(found->lock);
 		IOLockUnlock(lock);
+		if (member)
+			switch_gpu_set_reached(found, SWITCH_GPU_SET_CAUSE_SHARED);
 		if (old_owner && old_release)
 			old_release(old_owner);
 		if (owner)
@@ -265,9 +283,12 @@ extern "C" switch_gpu_backing *switch_gpu_backing_find_pa(uint64_t first_page)
 	auto *found = buckets[bucket(first_page)];
 	while (found && found->pages->addresses[0] != first_page)
 		found = found->next;
+	const bool member = found && reached_locked(found);
 	if (found)
 		++found->refs;
 	IOLockUnlock(lock);
+	if (member)
+		switch_gpu_set_reached(found, SWITCH_GPU_SET_CAUSE_SHARED);
 	return found;
 }
 
@@ -282,9 +303,12 @@ extern "C" switch_gpu_backing *switch_gpu_backing_find_surface(uint32_t surface_
 		for (auto *at = buckets[i]; at; at = at->next)
 			if (at->surface_id == surface_id && (!found || at->pages->count > found->pages->count))
 				found = at;
+	const bool member = found && reached_locked(found);
 	if (found)
 		++found->refs;
 	IOLockUnlock(lock);
+	if (member)
+		switch_gpu_set_reached(found, SWITCH_GPU_SET_CAUSE_SHARED);
 	return found;
 }
 
@@ -438,6 +462,8 @@ extern "C" int switch_gpu_backing_set_layout(switch_gpu_backing *backing,
 {
 	if (!backing || !layout || layout->plane_count > SWITCH_GPU_BACKING_MAX_PLANES)
 		return -22;
+	if (switch_gpu_backing_set(backing))
+		switch_gpu_set_reached(backing, SWITCH_GPU_SET_CAUSE_LAYOUT);
 	IOLockLock(backing->lock);
 	int result = 0;
 	const uint64_t bytes = uint64_t(backing->pages->count) << 12;

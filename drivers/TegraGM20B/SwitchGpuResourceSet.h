@@ -1,0 +1,70 @@
+/* SPDX-License-Identifier: MIT */
+/* A connection's persistent resource set (TegraGM20BJobABI.h methods 31-33): private backings registered once, whose GPU
+ * use a job records on the set instead of on each backing. The set keeps the latest job of each channel slot that named
+ * it; those jobs stand for every member's GPU users wherever a backing's own records are read: a CPU lease on a member
+ * and the moment a member stops being private take them into the member's records first. */
+#ifndef SWITCH_GPU_RESOURCE_SET_H
+#define SWITCH_GPU_RESOURCE_SET_H
+#include <stdint.h>
+#include "SwitchGpuBacking.h"
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+enum {
+	SWITCH_GPU_SET_SLOTS = 8,
+	SWITCH_GPU_SET_CAUSE_FREE = 0,
+	SWITCH_GPU_SET_CAUSE_LAYOUT = 1,
+	SWITCH_GPU_SET_CAUSE_SHARED = 2,
+	SWITCH_GPU_SET_CAUSE_KILL = 3,
+	SWITCH_GPU_SET_CAUSE_REPLACE = 4,
+	SWITCH_GPU_SET_CAUSES = 5,
+};
+
+struct switch_gpu_resource_set;
+
+/* access: SWITCH_GPU_BACKING_WRITE when the set's jobs may write the member, else they only read it */
+struct switch_gpu_set_member {
+	struct switch_gpu_backing *backing;
+	uint32_t access, reserved;
+};
+
+/* mirror: where the generation is published for the client (the fence page), or NULL */
+int switch_gpu_set_create(volatile uint32_t *mirror, struct switch_gpu_resource_set **set);
+/* Setup only, with every submission naming the set excluded. Members must be private (no surface, never reached from
+ * outside, no CPU completion tracking, in no other set); on success the set has exactly these members and a new
+ * generation. -EBUSY: a member is in another set; -EINVAL: one is not private. */
+int switch_gpu_set_attach(struct switch_gpu_resource_set *set, const struct switch_gpu_set_member *members,
+			  uint32_t count, uint32_t *generation);
+void switch_gpu_set_destroy(struct switch_gpu_resource_set *set);
+
+uint32_t switch_gpu_set_generation(const struct switch_gpu_resource_set *set);
+void switch_gpu_set_invalidate(struct switch_gpu_resource_set *set, uint32_t cause);
+
+/* A submission naming the set, from its generation check to its job's record: 0 and nothing held when `generation` is
+ * not the set's. A member leaving the set waits for the submissions inside to record their jobs. */
+int switch_gpu_set_enter(struct switch_gpu_resource_set *set, uint32_t generation);
+void switch_gpu_set_leave(struct switch_gpu_resource_set *set);
+/* The slot's channel ran a job naming the set; only that slot's submitter calls it. */
+void switch_gpu_set_note_job(struct switch_gpu_resource_set *set, uint32_t slot,
+			     const struct switch_gpu_backing_token *job);
+uint32_t switch_gpu_set_used(const struct switch_gpu_resource_set *set);
+uint32_t switch_gpu_set_seqno(const struct switch_gpu_resource_set *set, uint32_t slot);
+/* A channel that ran the set's jobs was killed: what it wrote is undefined, so the generation ends. */
+void switch_gpu_set_killed(struct switch_gpu_resource_set *set, uint32_t slot);
+
+/* CPU writes to members since the last job: the next job invalidates the GPU L2. */
+void switch_gpu_set_host_written(struct switch_gpu_resource_set *set);
+int switch_gpu_set_take_host_written(struct switch_gpu_resource_set *set);
+
+struct switch_gpu_resource_set *switch_gpu_backing_set(struct switch_gpu_backing *backing);
+/* Before a CPU lease of `access` on a member: the set's pending jobs become the member's recorded users. */
+int switch_gpu_backing_member_lease(struct switch_gpu_backing *backing, uint32_t access);
+/* The member's BO is gone: its pending set jobs stay its users, it leaves the set, and the generation ends. */
+void switch_gpu_backing_member_freed(struct switch_gpu_backing *backing);
+
+#ifdef __cplusplus
+}
+#endif
+#endif
