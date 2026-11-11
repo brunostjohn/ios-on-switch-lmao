@@ -512,14 +512,37 @@ TEST(DisplayPlanes, MatrixFollowsMetadataWithoutResolutionInference)
     EXPECT_EQ(matrixOf(surface), kBt2020);
 }
 
-TEST(DisplayPlanes, DirectPlaneColorAdmissionRequiresQualifiedDisplayEncoding)
+TEST(DisplayPlanes, WindowSitingDecidesConversionAndNoColourTagRefusesTheSwap)
 {
-    EXPECT_TRUE(switch_surface_dc_color(0, 0, 0, 0));
-    EXPECT_TRUE(switch_surface_dc_color(1, 1, 1, 1));
-    EXPECT_TRUE(switch_surface_dc_color(13, 1, 0, 0));
-    EXPECT_FALSE(switch_surface_dc_color(16, 9, 1, 1));
-    EXPECT_FALSE(switch_surface_dc_color(18, 9, 1, 1));
-    EXPECT_FALSE(switch_surface_dc_color(1, 12, 1, 1));
-    EXPECT_FALSE(switch_surface_dc_color(1, 1, 2, 2));
-    EXPECT_FALSE(switch_surface_dc_color(1, 1, 1, 3));
+    EXPECT_TRUE(switch_surface_dc_siting(0, 0));
+    EXPECT_TRUE(switch_surface_dc_siting(1, 1));
+    EXPECT_FALSE(switch_surface_dc_siting(2, 2));
+    EXPECT_FALSE(switch_surface_dc_siting(1, 3));
+    Layer l;
+    l.kind = kKindNv12Video;
+    l.surface = makeSurface(l.kind, 1920, 1080);
+    l.src = {0, 0, 1920, 1080};
+    l.dst = {0, 0, 720, 405};
+    const uint32_t tags[][5] = {{16, 9, 3, 1, 1}, {18, 9, 3, 1, 1}, {1, 12, 2, 1, 1}, {1, 1, 7, 1, 1},
+                                {1, 1, 2, 2, 2}, {1, 1, 2, 1, 3}};
+    for (const auto &tag : tags) {
+        l.surface.transfer = tag[0];
+        l.surface.primaries = tag[1];
+        l.surface.colorMatrix = tag[2];
+        l.surface.chromaTop = tag[3];
+        l.surface.chromaBottom = tag[4];
+        EXPECT_EQ(checkDetached(l, W, H), kAccepted) << tag[0] << " " << tag[1] << " " << tag[3];
+        Image image;
+        ASSERT_TRUE(imageOf(l, W, H, image));
+        EXPECT_EQ(image.convert, tag[3] != 1 || tag[4] != 1);
+        EXPECT_EQ(image.matrix, tag[2] == 3 ? kBt2020 : tag[2] == 2 ? kBt709 : kBt601);
+    }
+    l.kind = kKindBgra;
+    l.surface = makeSurface(l.kind, 720, 405);
+    l.surface.transfer = 16;
+    l.surface.primaries = 12;
+    l.src = {0, 0, 720, 405};
+    Image image;
+    ASSERT_TRUE(imageOf(l, W, H, image));
+    EXPECT_FALSE(image.convert);
 }

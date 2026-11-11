@@ -122,7 +122,7 @@ inline Assignment assign(const Overlay wanted[2], const WindowState current[2])
             const auto &window = current[candidate.window[p]];
             const auto &image = wanted[p].image;
             const bool cscMatches = window.matrix == int(image.matrix) && window.fullRange == int(image.fullRange);
-            if (image.yuv && window.live && !cscMatches) {
+            if (image.convert || (image.yuv && window.live && !cscMatches)) {
                 candidate.convert |= 1u << p;
                 cost += 16;
             }

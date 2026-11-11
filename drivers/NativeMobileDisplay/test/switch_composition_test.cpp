@@ -59,6 +59,13 @@ TEST(Composition, MatchingLiveMatricesAreReusedAndConflictsRequireVicConversion)
     desired.window[1].image.matrix=native_planes::kBt2020; result=assign(desired.window,windows);
     EXPECT_EQ(result.convert,2u);
 }
+TEST(Composition, SitingTheWindowCannotSampleGoesThroughVicOnAnyWindow) {
+    auto desired=frame(2,-1,1); desired.window[0].image.yuv=true; desired.window[0].image.convert=true;
+    WindowState windows[2]={{false,-1,-1,-1},{false,-1,-1,-1}};
+    EXPECT_EQ(assign(desired.window,windows).convert,1u);
+    desired.window[0].image.convert=false;
+    EXPECT_EQ(assign(desired.window,windows).convert,0u);
+}
 TEST(Composition, MixedTransitionBandwidthCoversBothIndependentOldAndNewWindows) {
     const Demand ui={0,0,720,1280,10};
     const Demand first[2]={{0,0,720,1280,100},{0,0,720,1280,1}};

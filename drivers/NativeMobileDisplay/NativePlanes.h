@@ -314,6 +314,7 @@ struct Image {
     bool yuv = false;
     Matrix matrix = kBt601;
     bool fullRange = false;
+    bool convert = false;  // chroma sited where the window does not sample it: VIC resamples it into BGRA first
 };
 
 // One axis of a window: the destination [d, d + dn) on a screen [0, screen), the source [s, s + sn) of a surface `limit`
@@ -408,11 +409,7 @@ inline bool imageOf(const Layer &l, uint32_t width, uint32_t height, Image &imag
 {
     image = Image();
     image.yuv = isYuv(l.kind);
-    if ((image.yuv && l.surface.colorMatrix > 3) ||
-        !switch_surface_dc_color(l.surface.transfer, l.surface.primaries,
-                                 image.yuv ? l.surface.chromaTop : 0,
-                                 image.yuv ? l.surface.chromaBottom : 0))
-        return false;
+    image.convert = image.yuv && !switch_surface_dc_siting(l.surface.chromaTop, l.surface.chromaBottom);
     const uint32_t bpp = image.yuv ? 1 : 4;  // bytes per pixel the offsets and PRESCALED count (luma)
     const uint32_t hMax = image.yuv ? 8 : 4;
     const uint32_t vMax = 15;  // DDA limits (4:2:0 and 4:2:2 count as 2 bytes per pixel)

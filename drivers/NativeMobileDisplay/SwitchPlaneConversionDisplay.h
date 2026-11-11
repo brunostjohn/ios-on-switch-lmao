@@ -122,7 +122,7 @@ int planeConvertSlot(int sourceSlot, const native_planes::Layer &layer, uint32_t
                       native_planes::Image &image, const OriginalLegacySwapRequest *request = nullptr)
 {
     const auto *source = planeSlots[sourceSlot].native;
-    if (!source || !source->lease || !native_planes::isNv12(layer.kind))
+    if (!source || !source->lease || !native_planes::isYuv(layer.kind))
         return -95;
     const uint32_t pitch = (layer.surface.width * 4 + 255) & ~255u;
     const uint64_t bytes = uint64_t(pitch) * layer.surface.height;
@@ -139,7 +139,6 @@ int planeConvertSlot(int sourceSlot, const native_planes::Layer &layer, uint32_t
     const uint32_t primaries = view.layout.plane_count ? view.layout.primaries : layer.surface.primaries;
     const uint32_t chromaTop = view.layout.plane_count ? view.layout.chroma_top : layer.surface.chromaTop;
     const uint32_t chromaBottom = view.layout.plane_count ? view.layout.chroma_bottom : layer.surface.chromaBottom;
-    if (!switch_surface_dc_color(transfer, primaries, 0, 0)) return -95;
     ConvertedPlane *selected = nullptr;
     bool cached = false;
     for (unsigned i = 0; i < kConvertedPlanes; ++i) {
