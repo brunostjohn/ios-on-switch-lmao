@@ -2,6 +2,7 @@
 #include "../raw/runtime/raw_encode_profile.h"
 #include <cstdio>
 #include <cstdlib>
+#include <mutex>
 
 namespace {
 unsigned checks;
@@ -15,8 +16,8 @@ void check(bool value)
 
 void spin(uint64_t ticks)
 {
-    const uint64_t until = mach_absolute_time() + ticks;
-    while (mach_absolute_time() < until) {
+    const uint64_t until = raw::encodeTicks() + ticks;
+    while (raw::encodeTicks() < until) {
     }
 }
 
@@ -71,11 +72,58 @@ void nested()
     check(totals.ticks[size_t(raw::EncodePart::Kernel)].load() == 11);
     check(totals.longestPrepare.load() == profile.longestPrepare);
 }
+// A part's self time leaves out the parts nested in it; counted events and locks land in the encoding thread's profile
+void selfTimesAndEvents()
+{
+    raw::EncodeProfile profile;
+    raw::tEncodeProfile = &profile;
+    std::mutex m;
+    {
+        RAW_ENCODE_SPAN(Loop);
+        spin(500);
+        {
+            RAW_ENCODE_SPAN(State);
+            spin(500);
+            RAW_ENCODE_SPAN(Apply);
+            RAW_ENCODE_COUNT(Applied);
+            RAW_ENCODE_COUNT(Applied, 2);
+            spin(500);
+        }
+        RAW_ENCODE_LOCK(l, m);
+    }
+    raw::tEncodeProfile = nullptr;
+    {
+        RAW_ENCODE_LOCK(l, m);
+        RAW_ENCODE_COUNT(Sends);
+    }
+    const auto self = [&](raw::EncodePart p) {
+        return profile.self[size_t(p)];
+    };
+    const auto ticks = [&](raw::EncodePart p) {
+        return profile.ticks[size_t(p)];
+    };
+    check(ticks(raw::EncodePart::Loop) >= ticks(raw::EncodePart::State) + 500);
+    check(self(raw::EncodePart::Loop) >= 500 && self(raw::EncodePart::Loop) < ticks(raw::EncodePart::Loop) - 1000);
+    check(self(raw::EncodePart::State) >= 500 && self(raw::EncodePart::State) < ticks(raw::EncodePart::State));
+    check(self(raw::EncodePart::Apply) == ticks(raw::EncodePart::Apply) && ticks(raw::EncodePart::Apply) >= 500);
+    check(self(raw::EncodePart::Loop) + self(raw::EncodePart::State) + self(raw::EncodePart::Apply) ==
+          ticks(raw::EncodePart::Loop));
+    check(profile.counts[size_t(raw::EncodeCount::Applied)] == 3);
+    check(profile.counts[size_t(raw::EncodeCount::Locks)] == 1);
+    check(profile.counts[size_t(raw::EncodeCount::Sends)] == 0);
+    check(profile.open == nullptr);
+
+    raw::EncodeTotals totals;
+    totals.add(profile, 1);
+    check(totals.counts[size_t(raw::EncodeCount::Applied)].load() == 3);
+    check(totals.self[size_t(raw::EncodePart::Apply)].load() == self(raw::EncodePart::Apply));
+}
 }  // namespace
 
 int main()
 {
     outsideAnEncode();
     nested();
+    selfTimesAndEvents();
     printf("encode profile: %u checks passed\n", checks);
 }

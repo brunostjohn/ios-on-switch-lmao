@@ -85,12 +85,11 @@ static const char *zetaMemoryRefusal(int asked)
     d[@"state_segment_skips"] = @(gRM->raw->stats.segmentSkips.load());
     d[@"state_segment_extras_losses"] = @(gRM->raw->stats.segmentExtrasLosses.load());
     {
-        mach_timebase_info_data_t base;
-        mach_timebase_info(&base);
         const raw::EncodeTotals &encode = gRM->raw->stats.encode;
+        const double perUs = raw::encodeTicksPerUs();
         d[@"encodes"] = @(encode.encodes.load());
-        d[@"encode_us"] = @(encode.wallTicks.load() * base.numer / base.denom / 1000);
-        d[@"exec_us"] = @(encode.ticks[size_t(raw::EncodePart::Exec)].load() * base.numer / base.denom / 1000);
+        d[@"encode_us"] = @(uint64_t(double(encode.wallTicks.load()) / perUs));
+        d[@"exec_us"] = @(uint64_t(double(encode.ticks[size_t(raw::EncodePart::Exec)].load()) / perUs));
         d[@"exec_pushes"] = @(encode.execPushes.load());
     }
     d[@"replay_same"] = @(gRM->raw->stats.replay.same.load());
