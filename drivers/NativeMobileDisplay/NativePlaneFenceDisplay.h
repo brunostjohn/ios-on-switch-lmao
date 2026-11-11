@@ -60,8 +60,10 @@ bool planeFence(const PlaneSet &p)
     __atomic_store_n(&gpuScanout, true, __ATOMIC_RELEASE);
     gpuDeadlines = 0;
     gpuDeadline->setTimeoutMS(kGpuCopyDeadlineMS);
-    planeFenceQueued = true;
-    copySource->interruptOccurred(nullptr, nullptr, 0);
+    if (!planeMediaFence(p)) {
+        planeFenceQueued = true;
+        copySource->interruptOccurred(nullptr, nullptr, 0);
+    }
     return true;
 }
 
