@@ -64,9 +64,11 @@ local frontend = {
   // An action waits on its inputs' round trips far more than it runs (10 s fetching to 1 s running, cold): many at once.
   inputDownloadConcurrency: 128,
   outputUploadConcurrency: 64,
+  // An input root is fetched directory by directory, one round trip each: XNU's tree and the toolchains alone have
+  // more than the 10,000 directories this held.
   directoryCache: {
-    maximumCount: 10000,
-    maximumSizeBytes: 64 * 1024 * 1024,
+    maximumCount: 1000000,
+    maximumSizeBytes: 1024 * 1024 * 1024,
     cacheReplacementPolicy: 'LEAST_RECENTLY_USED',
   },
 }
