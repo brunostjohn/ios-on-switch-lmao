@@ -58,6 +58,7 @@ class AppleD5500UserClient : public IOUserClient {
 
     IOLock *lock_ = nullptr;
     Buffer buffers_[kMaxBuffers] = {};
+    alignas(8) uint8_t input_[sizeof(TegraNVDECSubmit)] = {};  // under lock_: the record of a locked call
     uint32_t nextHandle_ = 1, lastFence_ = 0;
     bool submitted_ = false, counted_ = false;
 #if SWITCH_NVDEC_PROBES
@@ -68,6 +69,7 @@ class AppleD5500UserClient : public IOUserClient {
     Buffer *find(uint32_t handle);
     bool quiesce() const;
     static void drop(Buffer *b, bool returnMemory);
+    // Wait and the probe arm take lock_ themselves; every other method runs with the caller holding it.
     IOReturn run(uint32_t method, const void *in, uint32_t inSize, void *out, uint32_t *outSize);
     static bool resolve(void *context, uint32_t handle, TegraNVDECBlock *block);
 
@@ -221,7 +223,6 @@ IOReturn AppleD5500UserClient::run(uint32_t method, const void *in, uint32_t inS
         return result;
     }
 
-    IOLockLock(lock_);
     IOReturn ret = kIOReturnSuccess;
     switch (method) {
     case TegraNVDECMethodGetInfo: {
@@ -372,9 +373,14 @@ IOReturn AppleD5500UserClient::run(uint32_t method, const void *in, uint32_t inS
         ret = kIOReturnUnsupported;
         break;
     }
-    IOLockUnlock(lock_);
     return ret;
 }
+
+#if SWITCH_NVDEC_PROBES
+static constexpr uint32_t kUnlockedProbe = SwitchNVDECMethodDisplayProbe;
+#else
+static constexpr uint32_t kUnlockedProbe = TegraNVDECMethodWait;
+#endif
 
 IOReturn AppleD5500UserClient::externalMethod(uint32_t selector, IOExternalMethodArguments *arguments,
                                               IOExternalMethodDispatch *dispatch, OSObject *target, void *reference)
@@ -388,17 +394,26 @@ IOReturn AppleD5500UserClient::externalMethod(uint32_t selector, IOExternalMetho
         return kIOReturnBadArgument;
     if (header[1] == TEGRA_NVDEC_TUNNEL_PROBE)
         return kIOReturnSuccess;
-    // Records are naturally aligned structs and the caller's buffer may not be: copy the input (Submit is the largest).
+    // Records are naturally aligned structs and the caller's buffer may not be: each is copied, a Wait (which sleeps
+    // without the lock) onto the stack, every other call into the connection's own record under the lock.
+    const uint32_t method = header[1];
     const uint32_t inSize = arguments->structureInputSize - 8;
-    void *copy = inSize ? IOMallocData(inSize) : nullptr;
-    if (inSize && !copy)
-        return kIOReturnNoMemory;
-    if (inSize)
-        memcpy(copy, header + 2, inSize);
     uint32_t outSize = arguments->structureOutputSize;
-    const IOReturn ret = run(header[1], copy, inSize, arguments->structureOutput, &outSize);
-    if (copy)
-        IOFreeData(copy, inSize);
+    IOReturn ret;
+    if (method == TegraNVDECMethodWait || method == kUnlockedProbe) {
+        alignas(8) uint8_t record[sizeof(TegraNVDECWait)];
+        if (inSize > sizeof(record))
+            return kIOReturnBadArgument;
+        memcpy(record, header + 2, inSize);
+        ret = run(method, record, inSize, arguments->structureOutput, &outSize);
+    } else {
+        if (inSize > sizeof(input_))
+            return kIOReturnBadArgument;
+        IOLockLock(lock_);
+        memcpy(input_, header + 2, inSize);
+        ret = run(method, inSize ? input_ : nullptr, inSize, arguments->structureOutput, &outSize);
+        IOLockUnlock(lock_);
+    }
     arguments->structureOutputSize = ret ? 0 : outSize;
     return ret;
 }

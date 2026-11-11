@@ -59,6 +59,7 @@ class AppleAVE2UserClient : public IOUserClient {
     };
 
     IOLock *lock_ = nullptr;
+    alignas(8) uint8_t input_[sizeof(TegraNVENCSubmit)] = {};  // under lock_: the record of a locked call
     Buffer buffers_[kMaxBuffers] = {};
     uint32_t nextHandle_ = 1, lastFence_ = 0;
     bool submitted_ = false, counted_ = false;
@@ -66,6 +67,7 @@ class AppleAVE2UserClient : public IOUserClient {
     Buffer *find(uint32_t handle);
     bool quiesce() const;
     static void drop(Buffer *b, bool returnMemory);
+    // Wait takes lock_ itself; every other method runs with the caller holding it.
     IOReturn run(uint32_t method, const void *in, uint32_t inSize, void *out, uint32_t *outSize);
     static bool resolve(void *context, uint32_t handle, TegraNVENCBlock *block);
 
@@ -198,7 +200,6 @@ IOReturn AppleAVE2UserClient::run(uint32_t method, const void *in, uint32_t inSi
         return result;
     }
 
-    IOLockLock(lock_);
     IOReturn ret = kIOReturnSuccess;
     switch (method) {
     case TegraNVENCMethodGetInfo: {
@@ -281,7 +282,6 @@ IOReturn AppleAVE2UserClient::run(uint32_t method, const void *in, uint32_t inSi
         ret = kIOReturnUnsupported;
         break;
     }
-    IOLockUnlock(lock_);
     return ret;
 }
 
@@ -297,17 +297,26 @@ IOReturn AppleAVE2UserClient::externalMethod(uint32_t selector, IOExternalMethod
         return kIOReturnBadArgument;
     if (header[1] == TEGRA_NVENC_TUNNEL_PROBE)
         return kIOReturnSuccess;
-    // Records are naturally aligned structs and the caller's buffer may not be: copy the input (Submit is the largest).
+    // Records are naturally aligned structs and the caller's buffer may not be: each is copied, a Wait (which sleeps
+    // without the lock) onto the stack, every other call into the connection's own record under the lock.
+    const uint32_t method = header[1];
     const uint32_t inSize = arguments->structureInputSize - 8;
-    void *copy = inSize ? IOMallocData(inSize) : nullptr;
-    if (inSize && !copy)
-        return kIOReturnNoMemory;
-    if (inSize)
-        memcpy(copy, header + 2, inSize);
     uint32_t outSize = arguments->structureOutputSize;
-    const IOReturn ret = run(header[1], copy, inSize, arguments->structureOutput, &outSize);
-    if (copy)
-        IOFreeData(copy, inSize);
+    IOReturn ret;
+    if (method == TegraNVENCMethodWait) {
+        alignas(8) uint8_t record[sizeof(TegraNVENCWait)];
+        if (inSize > sizeof(record))
+            return kIOReturnBadArgument;
+        memcpy(record, header + 2, inSize);
+        ret = run(method, record, inSize, arguments->structureOutput, &outSize);
+    } else {
+        if (inSize > sizeof(input_))
+            return kIOReturnBadArgument;
+        IOLockLock(lock_);
+        memcpy(input_, header + 2, inSize);
+        ret = run(method, inSize ? input_ : nullptr, inSize, arguments->structureOutput, &outSize);
+        IOLockUnlock(lock_);
+    }
     arguments->structureOutputSize = ret ? 0 : outSize;
     return ret;
 }
