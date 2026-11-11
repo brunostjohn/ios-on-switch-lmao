@@ -837,8 +837,9 @@ public:
     void convertPlanar(const Texture &t);
     // An RGB10A8_2P_XR10 surface texture's image from its planes, or (`split`) its planes from its image (raw_xr_planes.h)
     void xrPlanes(const Texture &t, bool split);
-    // generateMipmaps of a mipmapped texture (Texture::chain) on the 2D engine: each later level from the one above, in place
-    void generate(Texture &t);
+    // generateMipmaps of a mipmapped texture (Texture::chain) on the 2D engine: levels first + 1 .. last from the one above, in
+    // place (fx_mip_route.h MipRun; `unproven` of its steps)
+    void generate(Texture &t, uint32_t first, uint32_t last, uint32_t unproven);
     // A YCbCr code target's chroma blocks on the 2D engine: `codes` (pitch) halved across, and down where `halved` is half its
     // height, into `halved` (block-linear), each code the rounded mean of its block's (Texture::chromaCodes)
     void halveChroma(const Texture &codes, const Texture &halved);
@@ -1442,6 +1443,8 @@ public:
         std::atomic<uint32_t> rtUnalignedPitch{0}, rtUnalignedVa{0};
         // mip chains: made, chain bytes, generated
         std::atomic<uint64_t> chains{0}, chainBytes{0}, chainGenerates{0};
+        // chain levels generateMipmaps made on the 2D engine (and those of its steps no probe covered), and by 3D passes
+        std::atomic<uint64_t> mipTwodLevels{0}, mipTwodUnproven{0}, mip3dLevels{0};
         // write-combined buffers: live bytes, and the buffers that asked for one and got pool memory (the WC pool full)
         std::atomic<uint64_t> wcBytes{0}, wcFallbacks{0};
         // the copy engine's work encoded: launches and the bytes they write (copies, remaps, the pass prologue's shadow copies)

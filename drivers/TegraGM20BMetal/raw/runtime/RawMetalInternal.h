@@ -272,9 +272,12 @@ void useBuffer(raw::CommandBuffer *rc, RMBuffer *b, bool write);
 // `fresh` and `standInFresh` (its pool image and its stand-in are refreshed again before a sample)
 void encodeBlit(RMCommandBuffer *cb, const Cmd &c, raw::CommandBuffer *rc, raw::BlitEncoder *be,
                 std::set<RMTexture *> &fresh, std::set<RMTexture *> &standInFresh);
-// A chain's generateMipmapsForTexture: of a format the 2D engine does not filter as Metal does (fmt2d 0): a pass of the pack's
-// mip state a level (raw_mip.h); false where the pack has none or a pass is refused (*why)
-bool mipPasses(raw::CommandBuffer *rc, RMTexture *t, const char **why);
+// Levels first + 1 .. last of a chain by a pass of the pack's mip state a level (raw_mip.h); false where the pack has none or a
+// pass is refused (*why)
+bool mipPasses(raw::CommandBuffer *rc, RMTexture *t, uint32_t first, uint32_t last, const char **why);
+// A chain's generateMipmapsForTexture: each step on the 2D engine or by mipPasses (raw/fx/fx_mip_route.h); `be` is the blit
+// encoder encoding goes on with
+bool encodeMipmaps(raw::CommandBuffer *rc, RMTexture *t, raw::BlitEncoder *&be, const char **why);
 
 // RawMetalTextureCpu.mm: `bytes` from `from` cleaned to memory (or cleaned and invalidated), then a DSB
 void cacheLines(const uint8_t *from, uint64_t bytes, bool invalidate);

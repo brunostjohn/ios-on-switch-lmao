@@ -18,6 +18,7 @@
 #include "raw_kit.h"
 #include "raw_mme.h"
 #include "raw_mip.h"
+#include "../fx/fx_mip_route.h"
 #include "raw_owned.h"
 #include "raw_residual.h"
 #include "raw_multisample.h"
@@ -6137,16 +6138,17 @@ void BlitEncoder::barrier()
     p_.m(CE_LAUNCH_DMA, kNonPipelined | kFlush | kPitchToPitch | kRemap, SUBC_COPY);
 }
 
-void BlitEncoder::generate(Texture &t)
+void BlitEncoder::generate(Texture &t, uint32_t first, uint32_t last, [[maybe_unused]] uint32_t unproven)
 {
     Texture::Chain *c = t.chain;
-    if (!c || !c->fmt2d)  // (the 3D engine's passes take those: mipPasses)
+    if (!c || !c->fmt2d || first >= last || last >= c->layout.levels)
         return;
     cb_->useAddress(c->va, c->layout.bytes, true);
-    const uint32_t last = c->layout.levels - 1;
-    room(uint32_t(fx::generateWords(c->layout, 0, last)));
-    fx::emitGenerate(p_, c->layout, c->va, nullptr, c->fmt2d, 0, last);
+    room(uint32_t(fx::generateLayersWords(c->layout, first, last)));
+    fx::emitGenerateLayers(p_, c->layout, c->va, c->fmt2d, first, last);
     RAW_DIAGNOSTIC(dev_->stats.chainGenerates++);
+    RAW_DIAGNOSTIC(dev_->stats.mipTwodLevels += last - first);
+    RAW_DIAGNOSTIC(dev_->stats.mipTwodUnproven += unproven);
 }
 
 void BlitEncoder::halveChroma(const Texture &codes, const Texture &halved)

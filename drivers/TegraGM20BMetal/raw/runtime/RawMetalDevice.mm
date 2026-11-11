@@ -63,6 +63,9 @@ static const char *zetaMemoryRefusal(int asked)
     d[@"blend_kill_binds"] = @(gRM->raw->stats.blendKillBinds.load());
     d[@"zcull_passes"] = @(gRM->raw->stats.zcullPasses.load());
     d[@"zcull_invalidations"] = @(gRM->raw->stats.zcullInvalidations.load());
+    d[@"mip_twod_levels"] = @(gRM->raw->stats.mipTwodLevels.load());
+    d[@"mip_twod_unproven_levels"] = @(gRM->raw->stats.mipTwodUnproven.load());
+    d[@"mip_3d_levels"] = @(gRM->raw->stats.mip3dLevels.load());
     const raw::FetchCounts &fetch = gRM->raw->stats.fetch;
     d[@"fetch_whole"] = @(fetch.provenWhole.load());
     d[@"fetch_proof_vertices"] = @(fetch.proofVertices.load());

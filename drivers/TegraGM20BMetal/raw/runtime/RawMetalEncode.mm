@@ -616,14 +616,8 @@ static bool encodeRawAttempt(RMCommandBuffer *cb, size_t from, size_t to, const 
         }
         case OpMipmaps: {
             RAW_ENCODE_SPAN(Blit);
-            if (!((__bridge RMTexture *)c.obj)->_raw.chain->fmt2d) {  // the 3D engine's passes (decided at record)
-                be->end();
-                if (!mipPasses(rc, (__bridge RMTexture *)c.obj, why))
-                    return refused();
-                be = rc->blit();
-                break;
-            }
-            encodeBlit(cb, c, rc, be, fresh, standInFresh);
+            if (!encodeMipmaps(rc, (__bridge RMTexture *)c.obj, be, why))
+                return refused();
             break;
         }
         case OpCopyTexture:
