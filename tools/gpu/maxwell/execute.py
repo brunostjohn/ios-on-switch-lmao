@@ -275,7 +275,7 @@ def unsupported(what: str) -> int:
     raise UnsupportedError(what)
 
 
-def fp32(base: str, name: str, w: int, lane: Lane, inputs: Inputs, a: int, d: int) -> None:  # noqa: C901, PLR0913, PLR0917  one dispatch per f32 opcode
+def fp32(base: str, name: str, w: int, lane: Lane, inputs: Inputs, a: int, d: int) -> None:  # noqa: PLR0913, PLR0917  one dispatch per f32 opcode
     if base == 'FADD32I':
         r = arith('add', [fmod(a, bits(w, 54, 1), bits(w, 56, 1)), bits(w, 20, 32)], F32, RN, bool(bits(w, 55, 1)))
         lane.w(d, r)
@@ -292,10 +292,7 @@ def fp32(base: str, name: str, w: int, lane: Lane, inputs: Inputs, a: int, d: in
         r ^= 0x80000000 if bits(w, 48, 1) and not is_nan(r, F32) else 0
         lane.w(d, saturate(r, F32) if bits(w, 50, 1) else r)
     elif base == 'FFMA':
-        if name.endswith('_cr'):
-            b, c = lane.r(bits(w, 39, 8)), inputs.cbuf(bits(w, 34, 5), bits(w, 20, 14) * 4)
-        else:
-            b, c = operand_b(lane, w, name, inputs, f20), lane.r(bits(w, 39, 8))
+        b, c = ffma_operands(name, w, lane, inputs)
         if bits(w, 48, 1):
             a ^= 0x80000000
         if bits(w, 49, 1):
@@ -313,6 +310,15 @@ def fp32(base: str, name: str, w: int, lane: Lane, inputs: Inputs, a: int, d: in
             x, b = flush(x, F32), flush(b, F32)
         r = float_cmp(bits(w, 48, 4), x, b)
         lane.setp(bits(w, 3, 3), combine(bits(w, 45, 2), r, lane.p(bits(w, 39, 3), bits(w, 42, 1))))
+
+
+def ffma_operands(name: str, w: int, lane: Lane, inputs: Inputs) -> tuple[int, int]:
+    """Give FFMA's B and C: maxwell.inc's _cr reads B from the constant buffer, _rc reads C from it."""
+    if name.endswith('_rc'):
+        return lane.r(bits(w, 39, 8)), inputs.cbuf(bits(w, 34, 5), bits(w, 20, 14) * 4)
+    if name.endswith('_cr'):
+        return inputs.cbuf(bits(w, 34, 5), bits(w, 20, 14) * 4), lane.r(bits(w, 39, 8))
+    return operand_b(lane, w, name, inputs, f20), lane.r(bits(w, 39, 8))
 
 
 def fminmax(x: int, y: int, want_min: bool, ftz: bool) -> int:
