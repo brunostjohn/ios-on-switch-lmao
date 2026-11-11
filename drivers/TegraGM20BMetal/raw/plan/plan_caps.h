@@ -23,7 +23,6 @@ enum class Probe : uint8_t {
     BlendExact,
     IteratedBlend,
     PassPixelBarrier,
-    RotatedTarget,
     Count
 };
 
@@ -35,8 +34,7 @@ constexpr const char *kProbeIds[] = {"-",
                                      "gpu.x1.mip_filter",
                                      "gpu.x1.blend_exact",
                                      "gpu.x1.iterated_blend",
-                                     "planned:gpu.x1.pass_pixel_barrier",
-                                     "gpu.x1.rotated_target"};
+                                     "planned:gpu.x1.pass_pixel_barrier"};
 static_assert(sizeof kProbeIds / sizeof *kProbeIds == size_t(Probe::Count), "an id for each probe");
 
 struct RuleEvidence {

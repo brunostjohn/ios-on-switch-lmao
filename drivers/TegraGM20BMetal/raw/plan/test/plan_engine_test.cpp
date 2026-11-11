@@ -60,6 +60,9 @@ TEST(Engine, CompressedCopyWaitsForItsProbe)
     const ResourceFacts compressed = tex(80, ResourceFacts::Compressed);
     EXPECT_FALSE(copyEngine(compressed, tex(80), chipCaps()).valid());
     EXPECT_EQ(copyEngine(compressed, tex(80), chipCaps(probe(Probe::CeCompressed))).rule, Rule::CopyEngineCompressed);
+    const Choice twod = copyEngine(compressed, tex(80), chipCaps(probe(Probe::TwodScale)));
+    EXPECT_EQ(twod.rule, Rule::CopyTwoD) << "through the texture unit, which reads compressed memory";
+    EXPECT_EQ(twod.engine, Engine::TwoD);
 }
 
 TEST(Engine, FillsOnTheCopyEngine)

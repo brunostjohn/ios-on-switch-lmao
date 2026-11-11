@@ -50,9 +50,12 @@ Choice copyEngine(const ResourceFacts &source, const ResourceFacts &destination,
     if (!sameTexels(source, destination))
         return {};
     const bool compressed = source.has(ResourceFacts::Compressed) || destination.has(ResourceFacts::Compressed);
-    if (compressed)
-        return pick(caps, Rule::CopyEngineCompressed, Engine::Copy);
-    return pick(caps, Rule::CopyEngine, Engine::Copy);
+    if (!compressed)
+        return pick(caps, Rule::CopyEngine, Engine::Copy);
+    const bool twod = source.kind == ResourceFacts::Texture && destination.kind == ResourceFacts::Texture &&
+                      source.format == destination.format && Caps::formatHas(source.format, SWITCH_GM20B_FORMAT_TWOD);
+    return first(pick(caps, Rule::CopyEngineCompressed, Engine::Copy),
+                 twod ? pick(caps, Rule::CopyTwoD, Engine::TwoD) : Choice{});
 }
 
 Choice fillEngine(const ResourceFacts &buffer, const Caps &caps)
