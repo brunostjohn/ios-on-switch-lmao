@@ -238,14 +238,17 @@ static inline uint64_t tgm_gpu_span(uint64_t end, uint64_t start, uint64_t last_
 	return end > from ? end - from : 0;
 }
 
-/* A channel whose preemption latency stays within this is left to the compositor's kick, whose preempt then costs the
- * compositor at most this: holding it every frame would only take GPU time from it. Only slower channels are held, and
- * with none tracked no window opens. */
+/* Which channels a window holds; with none tracked no window opens. One whose preemption latency stays within the
+ * slack is left to the compositor's kick, whose preempt then costs the compositor at most that: holding it every frame
+ * would only take GPU time from it. One whose latency exceeds a 60 Hz frame cannot leave in time for any hold, and its
+ * learned latency is mostly the compositor waiting on something else after the ask (F-v1: SwitchHWTest, mediaanalysisd
+ * and the kernel's own channels at the 100 ms cap): holding it every frame would starve it for nothing. */
 #define TGM_HOLD_SLACK_NS (1000ull * 1000)
+#define TGM_HOLD_CEILING_NS (16666667ull)
 
 static inline int tgm_hold_worth(uint64_t preempt)
 {
-	return preempt > TGM_HOLD_SLACK_NS ? 1 : 0;
+	return (preempt > TGM_HOLD_SLACK_NS && preempt <= TGM_HOLD_CEILING_NS) ? 1 : 0;
 }
 
 /* The one-period bound: a channel held in the last window that has not had its preemption latency's worth of GPU time

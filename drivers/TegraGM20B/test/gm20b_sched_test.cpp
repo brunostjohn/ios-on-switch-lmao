@@ -29,15 +29,19 @@ TEST(KickVictim, GrMidSwitchIsLeftToTheHost)
 	EXPECT_EQ(tgm_kick_victim(kHangEng0, 0, 1, 26, 0), TGM_VICTIM_SWITCHING);
 }
 
-// The measured preemption latencies of F-v1's widget visit (deadline lines, "latency by channel"): the compositor's kick
-// alone serves a channel within a millisecond; the poster, widget and icon renderers are held.
-TEST(HoldWorth, OnlyChannelsSlowerThanTheSlackAreHeld)
+// The learned preemption latencies of F-v1's widget visit (deadline lines, "latency by channel"): the compositor's kick
+// alone serves a channel within a millisecond; the poster, widget and icon renderers are held; a channel at the 100 ms
+// cap is not.
+TEST(HoldWorth, OnlyChannelsBetweenTheSlackAndAFrameAreHeld)
 {
 	EXPECT_FALSE(tgm_hold_worth(TGM_PREEMPT_MIN_NS));
 	EXPECT_FALSE(tgm_hold_worth(TGM_HOLD_SLACK_NS));
 	EXPECT_TRUE(tgm_hold_worth(TGM_HOLD_SLACK_NS + 1));
 	for (const uint64_t us : {7836u, 7035u, 4480u})
 		EXPECT_TRUE(tgm_hold_worth(us * 1000)) << us;
+	EXPECT_TRUE(tgm_hold_worth(TGM_HOLD_CEILING_NS));
+	EXPECT_FALSE(tgm_hold_worth(TGM_HOLD_CEILING_NS + 1));
+	EXPECT_FALSE(tgm_hold_worth(TGM_INTERVAL_MAX_NS));
 }
 
 TEST(KickVictim, AppOnGrIsPreempted)
