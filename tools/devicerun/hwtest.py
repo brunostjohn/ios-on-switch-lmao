@@ -123,6 +123,7 @@ TESTS: dict[str, bool] = {
             'gpu.path.semantic_fence',
             'gpu.path.shared_events',
             'gpu.path.resource_ready',
+            'gpu.path.submit_job',
             'metal.native.depth_stencil',
             'metal.native.shared_event',
             'metal.native.fence',
