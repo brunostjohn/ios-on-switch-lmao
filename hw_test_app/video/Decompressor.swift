@@ -13,6 +13,8 @@ public struct DecodeResult {
     public let decodeSeconds: Double
     public let worstLumaError: Double
     public let worstChromaError: Double
+    /// Every picture came out after the ones before it in display order.
+    public let displayOrdered: Bool
     /// How the decoder's pictures reached the client (frames, exported, vic, cpu, errors), where it says.
     public var routes: [String: Int]?
     /// The AVD plugin's SwitchDisplayBufferProbe reading (mode2_*, mode3_*), when it was asked for and ran.
@@ -25,12 +27,12 @@ public struct DecodeResult {
 public enum Decompressor {
     public static let tolerance = 12.0
 
-    /// Decodes `samples` (display order, no reordering) on the hardware decoder and checks every frame against the
-    /// pattern. A missing hardware decoder throws: there is no software fallback to measure by mistake. Only the
-    /// media tool's check on the Mac lets go of the hardware (`requireHardware: false`).
+    /// Decodes `samples` (in decode order) on the hardware decoder and checks every frame against the pattern. A
+    /// missing hardware decoder throws: there is no software fallback to measure by mistake. Only the media tool's check
+    /// on the Mac lets go of the hardware (`requireHardware: false`). `temporal` asks the decoder for display order.
     public static func decode(
         _ samples: [CMSampleBuffer], format: CMVideoFormatDescription, pattern: Pattern, bitDepth: Int, fps: Int,
-        requireHardware: Bool = true, probeDisplayBuffer: Bool = false
+        requireHardware: Bool = true, probeDisplayBuffer: Bool = false, temporal: Bool = false
     ) throws -> DecodeResult {
         let session = try makeSession(
             format: format, width: pattern.width, height: pattern.height, bitDepth: bitDepth,
@@ -41,12 +43,15 @@ public enum Decompressor {
         }
         let collector = Collector(pattern: pattern, fps: fps)
         let start = CFAbsoluteTimeGetCurrent()
+        var flags: VTDecodeFrameFlags = [._EnableAsynchronousDecompression]
+        if temporal { flags.insert(._EnableTemporalProcessing) }
         for (index, sample) in samples.enumerated() {
             let status = VTDecompressionSessionDecodeFrame(
-                session, sampleBuffer: sample, flags: [._EnableAsynchronousDecompression], infoFlagsOut: nil
+                session, sampleBuffer: sample, flags: flags, infoFlagsOut: nil
             ) { status, _, image, pts, _ in collector.add(status, image, pts) }
             guard status == noErr else { throw VideoError.status("VTDecompressionSessionDecodeFrame \(index)", status) }
         }
+        if temporal { VTDecompressionSessionFinishDelayedFrames(session) }
         let waited = VTDecompressionSessionWaitForAsynchronousFrames(session)
         let wall = CFAbsoluteTimeGetCurrent() - start
         guard waited == noErr else {
@@ -94,6 +99,8 @@ public enum Decompressor {
         private var firstMismatch: String?
         private var worstLuma = 0.0
         private var worstChroma = 0.0
+        private var lastFrame = -1
+        private var ordered = true
         private(set) var checkSeconds = 0.0
 
         init(pattern: Pattern, fps: Int) {
@@ -111,6 +118,8 @@ public enum Decompressor {
             lock.lock()
             defer { lock.unlock() }
             frames += 1
+            ordered = ordered && expected > lastFrame
+            lastFrame = expected
             if let verdict, verdict.matches(frame: expected, tolerance: Decompressor.tolerance) {
                 matched += 1
             } else if firstMismatch == nil {
@@ -135,7 +144,7 @@ public enum Decompressor {
                 frames: frames, matched: matched,
                 firstMismatch: firstMismatch ?? (missing > 0 ? "\(missing) frames never came out" : nil),
                 usingHardware: usingHardware, decodeSeconds: seconds, worstLumaError: worstLuma,
-                worstChromaError: worstChroma)
+                worstChromaError: worstChroma, displayOrdered: ordered)
         }
     }
 }

@@ -4,9 +4,11 @@ import Foundation
 import HWTestCore
 import VideoToolbox
 
-/// The pattern encoded by VideoToolbox, P pictures only (no frame reordering): decode order is display order.
+/// The pattern encoded by VideoToolbox. `decodeOrder` is the order the encoder put the samples out in; Compressor's
+/// `samples` are in display order (the same unless the session allows frame reordering).
 public struct CompressedClip {
     public let samples: [CMSampleBuffer]
+    public let decodeOrder: [CMSampleBuffer]
     public let format: CMVideoFormatDescription
     public let usingHardware: Bool
     public let encoderID: String
@@ -26,6 +28,8 @@ public struct CompressorSettings {
     public var realTime: Bool
     /// kVTVideoEncoderSpecification_RequireHardwareAcceleratedVideoEncoder: no software fallback.
     public var requireHardware: Bool
+    /// kVTCompressionPropertyKey_AllowFrameReordering (B pictures).
+    public var allowReordering = false
 
     public init(
         codec: VideoCodec, width: Int, height: Int, fps: Int, bitrate: Int, realTime: Bool, requireHardware: Bool
@@ -89,12 +93,13 @@ public enum Compressor {
         let flushed = VTCompressionSessionCompleteFrames(session, untilPresentationTimeStamp: .invalid)
         let seconds = CFAbsoluteTimeGetCurrent() - start
         guard flushed == noErr else { throw VideoError.status("VTCompressionSessionCompleteFrames", flushed) }
-        let samples = try collector.result(expected: frames)
+        let decodeOrder = try collector.result(expected: frames)
+        let samples = decodeOrder.sorted { $0.presentationTimeStamp < $1.presentationTimeStamp }
         guard let format = CMSampleBufferGetFormatDescription(samples[0]) else {
             throw VideoError.message("the encoder's first sample has no format description")
         }
         return CompressedClip(
-            samples: samples, format: format,
+            samples: samples, decodeOrder: decodeOrder, format: format,
             usingHardware: readFlag(session, kVTCompressionPropertyKey_UsingHardwareAcceleratedVideoEncoder),
             encoderID: readString(session, kVTCompressionPropertyKey_EncoderID), seconds: seconds,
             bytes: samples.reduce(0) { $0 + CMSampleBufferGetTotalSampleSize($1) })
@@ -116,7 +121,7 @@ public enum Compressor {
         guard status == noErr, let session else { throw VideoError.status("VTCompressionSessionCreate", status) }
         let properties: [CFString: Any] = [
             kVTCompressionPropertyKey_RealTime: settings.realTime,
-            kVTCompressionPropertyKey_AllowFrameReordering: false,
+            kVTCompressionPropertyKey_AllowFrameReordering: settings.allowReordering,
             kVTCompressionPropertyKey_ProfileLevel: settings.profile,
             kVTCompressionPropertyKey_AverageBitRate: settings.bitrate,
             kVTCompressionPropertyKey_ExpectedFrameRate: settings.fps,
@@ -167,7 +172,7 @@ public enum Compressor {
             guard samples.count == expected else {
                 throw VideoError.message("the encoder returned \(samples.count) of \(expected) frames")
             }
-            return samples.sorted { $0.presentationTimeStamp < $1.presentationTimeStamp }
+            return samples
         }
     }
 }
