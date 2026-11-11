@@ -260,6 +260,12 @@ pub fn estimate_variable_latency(sm: &ShaderModelInfo, op: &Op) -> u32 {
         return 0;
     }
 
+    if sm.sm() < 70 {
+        if let Some(cycles) = crate::sm50::measured_variable_latency(op) {
+            return cycles;
+        }
+    }
+
     match op {
         // Multi-function unit
         Op::Rro(_) | Op::MuFu(_) => 15,

@@ -107,7 +107,17 @@ def program(code: bytes) -> dict:
         'bank': bank,
         'bank_reads': bank_reads,
         'bytes': len(isa.words_of(code)) * 8,
+        'stalls': stalls(code),
     }
+
+
+def stalls(code: bytes) -> int:
+    words = isa.words_of(code)
+    total = 0
+    for at in range(0, len(words), 4):
+        for k in range(min(3, len(words) - at - 1)):
+            total += (words[at] >> (21 * k)) & 0xF
+    return total
 
 
 def predicted_ms(cycles: float, pixels: int) -> float:

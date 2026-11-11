@@ -33,7 +33,9 @@ class CostTest(unittest.TestCase):
 
     def test_program(self):
         p = cost.program(ffma_reg(1, 0, 4, 8).to_bytes(8, 'little').rjust(16, b'\0'))
-        self.assertEqual((p['cycles'], p['bank']), (3.0, 2))
+        self.assertEqual((p['cycles'], p['bank'], p['stalls']), (3.0, 2, 0))
+        bundle = (6 << 21 | 1 | 2 << 42).to_bytes(8, 'little') + (1).to_bytes(8, 'little') * 3
+        self.assertEqual(cost.stalls(bundle), 6 + 1 + 2)
         fixture = cost.program(isa.from_hex_dump(FIXTURE.read_text()))
         self.assertGreaterEqual(fixture['cycles'], fixture['cycles_overlap'])
         self.assertGreaterEqual(fixture['cycles_overlap'], 63)

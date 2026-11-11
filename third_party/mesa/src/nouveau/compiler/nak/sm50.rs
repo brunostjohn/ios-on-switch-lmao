@@ -13,6 +13,7 @@ use std::ops::Range;
 mod texs;
 pub use texs::bound_texture_cbuf;
 
+// Measured on GM20B by the bench loop; the doubles, HSET2, HSETP2 and HMNMX2 were not timed and keep NAK's guess.
 pub fn instr_latency(_sm: u8, op: &Op, dst_idx: usize) -> u32 {
     let file = match &op.dsts_as_slice()[dst_idx] {
         Dst::None => return 0,
@@ -21,25 +22,17 @@ pub fn instr_latency(_sm: u8, op: &Op, dst_idx: usize) -> u32 {
     };
 
     let (gpr_latency, pred_latency) = match op {
-            // Double-precision float ALU
-            Op::DAdd(_)
-            | Op::DFma(_)
-            | Op::DMnMx(_)
-            | Op::DMul(_)
-            | Op::DSetP(_)
-            // Half-precision float ALU
-            | Op::HAdd2(_)
-            | Op::HFma2(_)
-            | Op::HMul2(_)
-            | Op::HSet2(_)
-            | Op::HSetP2(_)
-            | Op::HMnMx2(_) => {
-                (13, 14)
-            }
-            _ => (6, 13)
+        Op::DAdd(_)
+        | Op::DFma(_)
+        | Op::DMnMx(_)
+        | Op::DMul(_)
+        | Op::DSetP(_)
+        | Op::HSet2(_)
+        | Op::HSetP2(_)
+        | Op::HMnMx2(_) => (13, 14),
+        _ => (6, 13),
     };
 
-    // This is BS and we know it
     match file {
         RegFile::GPR => gpr_latency,
         RegFile::Pred => pred_latency,
@@ -47,6 +40,18 @@ pub fn instr_latency(_sm: u8, op: &Op, dst_idx: usize) -> u32 {
         RegFile::Bar => 0, // Barriers have a HW scoreboard
         RegFile::Carry => 6,
         RegFile::Mem => panic!("Not a register"),
+    }
+}
+
+// Cycles from issue to a dependent instruction's issue through a scoreboard barrier, measured on GM20B by the bench loop.
+pub fn measured_variable_latency(op: &Op) -> Option<u32> {
+    match op {
+        Op::MuFu(_) | Op::F2F(_) | Op::F2I(_) | Op::I2F(_) | Op::Flo(_) => {
+            Some(13)
+        }
+        Op::Ldc(_) => Some(24),
+        Op::IMul(_) => Some(128),
+        _ => None,
     }
 }
 
