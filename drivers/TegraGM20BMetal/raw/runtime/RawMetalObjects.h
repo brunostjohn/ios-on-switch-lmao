@@ -172,9 +172,10 @@ typedef NS_ENUM(uint8_t, RMTextureKind) {
 @interface RMTwinObject : RMObject  // compute states, and any m2v object the facade only carries
 @end
 
-@interface RMDepthStencil : RMTwinObject {
+@interface RMDepthStencil : RMObject {
 @public
-    raw::DepthStencilDesc _raw;
+    raw::DepthStencilState _raw;
+    MTLDepthStencilDescriptor *_descriptor;
 }
 @end
 

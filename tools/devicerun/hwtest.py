@@ -98,6 +98,7 @@ TESTS: dict[str, bool] = {
             'gpu.path.semantic_fence',
             'gpu.path.shared_events',
             'gpu.path.resource_ready',
+            'metal.native.depth_stencil',
         ],
         False,
     ),

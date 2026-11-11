@@ -60,7 +60,7 @@
 #include "raw_overlap.h"
 #include "raw_region.h"
 #include "raw_sampler.h"
-#include "raw_zeta.h"
+#include "raw_depth_stencil_state.h"
 #include "raw_xr.h"
 #include "raw_ycbcr.h"
 #include "../fx/fx_mip.h"
@@ -568,7 +568,7 @@ public:
 
     void setScissor(uint32_t x, uint32_t y, uint32_t w, uint32_t h);
     void setBlendColor(const float rgba[4]);
-    void setDepthStencil(const DepthStencilDesc *d);  // null: Metal's default state
+    void setDepthStencil(const DepthStencilState *s);  // null: Metal's default state
     void setStencilReference(uint32_t front, uint32_t back);
 
     // MTLCullMode, MTLWinding and MTLTriangleFillMode, written as NVK's rasterizer registers at the next draw
@@ -681,6 +681,7 @@ private:
     float depthRange_[2] = {0, 1};
     bool scissorDirty_ = true, viewportDirty_ = true;
     DepthStencilDesc ds_;
+    const DepthStencilState *dsState_ = &DepthStencilState::metalDefault();
     uint32_t stencilRef_[2] = {};
     bool dsDirty_ = true;
     Texture *shaderDepth_ = nullptr, *shaderStencil_ = nullptr, *shaderStencilTemp_ = nullptr;

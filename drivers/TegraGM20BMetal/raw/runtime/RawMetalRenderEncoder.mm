@@ -300,7 +300,7 @@ static void forwardCall(RMEncoder *e, SEL selector, const void *argument)
         [_cb takeReason:WhyCall why:@"a depth/stencil state not made by this device"];
         hit(_cb, PredStateForeign);
     }
-    _ds = [(id)s isKindOfClass:[RMDepthStencil class]] ? ((RMDepthStencil *)s)->_raw : raw::DepthStencilDesc();
+    _ds = [(id)s isKindOfClass:[RMDepthStencil class]] ? ((RMDepthStencil *)s)->_raw.desc() : raw::DepthStencilDesc();
     setBinding(_cb, OpDepthStencil, 0, 0, s, 0);
 }
 

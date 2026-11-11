@@ -75,9 +75,6 @@
 
 @end
 
-@implementation RMDepthStencil
-@end
-
 @implementation RMDevice (States)
 
 - (id<MTLSamplerState>)newSamplerStateWithDescriptor:(MTLSamplerDescriptor *)d
@@ -121,31 +118,6 @@
         return (id<MTLSamplerState>)o;
     }
     return (id<MTLSamplerState>)r;
-}
-
-- (id<MTLDepthStencilState>)newDepthStencilStateWithDescriptor:(MTLDepthStencilDescriptor *)d
-{
-    id twin = [gRM->fallback newDepthStencilStateWithDescriptor:d];
-    if (!twin)
-        return nil;
-    RMDepthStencil *o = [RMDepthStencil new];
-    o->_device = self;
-    o->_twin = twin;
-    o.label = d.label;
-    o->_raw.depthCompare = uint8_t(d.depthCompareFunction);
-    o->_raw.depthWrite = d.depthWriteEnabled;
-    raw::StencilFace *faces[2] = {&o->_raw.front, &o->_raw.back};
-    MTLStencilDescriptor *stencils[2] = {d.frontFaceStencil, d.backFaceStencil};
-    for (int i = 0; i < 2; i++)
-        if (MTLStencilDescriptor *s = stencils[i]) {
-            faces[i]->compare = uint8_t(s.stencilCompareFunction);
-            faces[i]->fail = uint8_t(s.stencilFailureOperation);
-            faces[i]->depthFail = uint8_t(s.depthFailureOperation);
-            faces[i]->pass = uint8_t(s.depthStencilPassOperation);
-            faces[i]->readMask = s.readMask;
-            faces[i]->writeMask = s.writeMask;
-        }
-    return (id<MTLDepthStencilState>)o;
 }
 
 - (id<MTLLibrary>)newLibraryWithURL:(NSURL *)url error:(NSError **)error

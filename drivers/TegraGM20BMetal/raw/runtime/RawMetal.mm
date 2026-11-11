@@ -320,6 +320,7 @@ id<MTLDevice> raw_metal_device_open(const char *packPath, uint64_t stack, id<MTL
         {[RMFunction class], @protocol(MTLFunction)},
         {[RMHeap class], @protocol(MTLHeap)},
         {[RMSampler class], @protocol(MTLSamplerState)},
+        {[RMDepthStencil class], @protocol(MTLDepthStencilState)},
         {[RMPipeline class], @protocol(MTLRenderPipelineState)},
         {[RMQueue class], @protocol(MTLCommandQueue)},
         {[RMCommandBuffer class], @protocol(MTLCommandBuffer)},

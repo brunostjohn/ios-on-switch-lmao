@@ -10,10 +10,7 @@
 //    reads it.
 //  - Target: nvk_CmdBeginRendering's SET_ZT_* for one layer. NVK keeps no zcull here (the kext reports no zcull info), so
 //    SET_ACTIVE_ZCULL_REGION stays the baseline's 0x3f.
-//  - State: metal2vulkan state.rs depth_stencil_state (a depth test where the compare is not Always or depth writes, a
-//    stencil test where either face is not a no-op), then nvk_flush_ds_state: the enables only with an attachment of the
-//    aspect, masks cut to 8 bits by Mesa's dynamic state, references saturated at 255 (metal2vulkan render_state.rs, as
-//    Metal measured).
+//  - State: its register values are raw_depth_stencil_state.h's.
 #pragma once
 #include <cstdint>
 #include "raw_push.h"
@@ -78,6 +75,11 @@ struct StencilFace {
     uint32_t readMask = ~0u, writeMask = ~0u;
 };
 
+inline bool stencilNoop(const StencilFace &s)
+{
+    return s.compare == 7 && s.depthFail == 0 && s.pass == 0;
+}
+
 struct DepthStencilDesc {
     uint8_t depthCompare = 7;  // Always
     bool depthWrite = false;
@@ -96,11 +98,6 @@ struct DepthStencilRegs {
     bool operator==(const DepthStencilRegs &o) const;
 };
 
-// What the GPU holds at a draw of a pass with a depth/stencil attachment of the aspects `depth` and `stencil`, or without one,
-// under state `d` and stencil references `refFront`/`refBack` (setStencilFrontReferenceValue:backReferenceValue:)
-DepthStencilRegs depthStencilRegs(const DepthStencilDesc &d, uint32_t refFront, uint32_t refBack, bool depth,
-                                  bool stencil);
-DepthStencilRegs shaderDepthStencilRegs(bool depth);
 // The methods that take `held` (what the GPU holds) to `want`, then held = want
 constexpr uint32_t kDepthStencilWords = 2 * kDepthStencilRegs;
 void emitDepthStencil(Push &p, const DepthStencilRegs &want, DepthStencilRegs &held);

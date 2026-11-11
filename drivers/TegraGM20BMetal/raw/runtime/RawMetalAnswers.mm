@@ -31,37 +31,6 @@
 
 @end
 
-static bool faceWritesStencil(const raw::StencilFace &f)
-{
-    return f.writeMask && (f.fail || f.depthFail || f.pass);
-}
-
-@interface RMDepthStencil (Answers)
-@end
-@implementation RMDepthStencil (Answers)
-
-- (BOOL)readsDepth
-{
-    return _raw.depthCompare != MTLCompareFunctionAlways;
-}
-
-- (BOOL)writesDepth
-{
-    return _raw.depthWrite;
-}
-
-- (BOOL)readsStencil
-{
-    return _raw.front.compare != MTLCompareFunctionAlways || _raw.back.compare != MTLCompareFunctionAlways;
-}
-
-- (BOOL)writesStencil
-{
-    return faceWritesStencil(_raw.front) || faceWritesStencil(_raw.back);
-}
-
-@end
-
 // No statistics, counters or profiling on this device (m2v's queue answers each zero)
 @interface RMQueue (Answers)
 @end

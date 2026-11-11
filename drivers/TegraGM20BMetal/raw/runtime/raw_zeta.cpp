@@ -1,10 +1,8 @@
 // SPDX-License-Identifier: MIT
 // See raw_zeta.h. Method numbers: NVIDIA's class headers (kits/SwitchGM20B: Mesa's clb197.h); the target words follow
-// Mesa NVK nvk_CmdBeginRendering, the state nvk_flush_ds_state and its vk_to_nv9097_* encodings, the clears nvk_CmdClearAttachments
-// (all MIT).
+// Mesa NVK nvk_CmdBeginRendering, the state's emission nvk_flush_ds_state, the clears nvk_CmdClearAttachments (all MIT).
 #include "raw_zeta.h"
 
-#include <algorithm>
 #include <cstring>
 #include "../../../../kits/SwitchGM20B/SwitchGM20B.h"
 #include "../fx/fx_image.h"
@@ -43,23 +41,6 @@ constexpr uint32_t kDepthStencilMethods[kDepthStencilRegs] = {NVB197_SET_DEPTH_T
                                                               NVB197_SET_BACK_STENCIL_FUNC_REF,
                                                               NVB197_SET_BACK_STENCIL_MASK,
                                                               NVB197_SET_BACK_STENCIL_FUNC_MASK};
-
-// MTLCompareFunction and VkCompareOp share their order; NV's OGL value is 0x200 | it
-uint32_t compareOp(uint8_t f)
-{
-    return 0x200u | (f & 7u);
-}
-
-// MTLStencilOperation and VkStencilOp share their order; NV's D3D value is it + 1
-uint32_t stencilOp(uint8_t op)
-{
-    return (op & 7u) + 1;
-}
-
-bool noop(const StencilFace &s)
-{
-    return s.compare == 7 && s.depthFail == 0 && s.pass == 0;
-}
 
 uint32_t floatBits(float f)
 {
@@ -116,46 +97,12 @@ void zetaTargetWords(Push &p, const Texture *z)
 
 bool DepthStencilDesc::active() const
 {
-    return depthCompare != 7 || depthWrite || !noop(front) || !noop(back);
+    return depthCompare != 7 || depthWrite || !stencilNoop(front) || !stencilNoop(back);
 }
 
 bool DepthStencilRegs::operator==(const DepthStencilRegs &o) const
 {
     return !memcmp(v, o.v, sizeof v);
-}
-
-DepthStencilRegs depthStencilRegs(const DepthStencilDesc &d, uint32_t refFront, uint32_t refBack, bool depth,
-                                  bool stencil)
-{
-    DepthStencilRegs r;
-    const bool depthTest = d.depthCompare != 7 || d.depthWrite;
-    const bool stencilTest = !(noop(d.front) && noop(d.back));
-    r.v[0] = depthTest && depth;
-    r.v[1] = d.depthWrite && depth;
-    r.v[2] = compareOp(d.depthCompare);
-    r.v[3] = stencilTest && stencil;
-    const StencilFace *faces[2] = {&d.front, &d.back};
-    const uint32_t refs[2] = {refFront, refBack};
-    for (uint32_t i = 0; i < 2; i++) {
-        const StencilFace &s = *faces[i];
-        uint32_t *ops = i ? &r.v[11] : &r.v[4];
-        ops[0] = stencilOp(s.fail);
-        ops[1] = stencilOp(s.depthFail);
-        ops[2] = stencilOp(s.pass);
-        ops[3] = compareOp(s.compare);
-        uint32_t *rest = i ? &r.v[15] : &r.v[8];  // front: ref, func mask, mask; back: ref, mask, func mask
-        rest[0] = std::min(refs[i], 0xffu);
-        rest[1] = (i ? s.writeMask : s.readMask) & 0xff;
-        rest[2] = (i ? s.readMask : s.writeMask) & 0xff;
-    }
-    return r;
-}
-
-DepthStencilRegs shaderDepthStencilRegs(bool depth)
-{
-    auto regs = depthStencilRegs(DepthStencilDesc{}, 0, 0, depth, false);
-    regs.v[0] = depth;
-    return regs;
 }
 
 void emitDepthStencil(Push &p, const DepthStencilRegs &want, DepthStencilRegs &held)

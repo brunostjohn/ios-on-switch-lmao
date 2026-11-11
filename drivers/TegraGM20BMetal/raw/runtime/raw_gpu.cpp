@@ -3948,9 +3948,10 @@ void RenderEncoder::setBlendColor(const float rgba[4])
     }
 }
 
-void RenderEncoder::setDepthStencil(const DepthStencilDesc *d)
+void RenderEncoder::setDepthStencil(const DepthStencilState *s)
 {
-    ds_ = d ? *d : DepthStencilDesc();
+    dsState_ = s ? s : &DepthStencilState::metalDefault();
+    ds_ = dsState_->desc();
     compatible_ = nullptr;
     dsDirty_ = true;
 }
@@ -4642,11 +4643,10 @@ bool RenderEncoder::prepare(Pipeline *pl, uint32_t primitive, int32_t first, uin
         }
     }
     if (dsDirty_) {
+        const bool depth = zeta && zetaHasDepth(zeta->format), stencil = zeta && zetaHasStencil(zeta->format);
         emitDepthStencil(p,
-                         shaderTestsActive_ ? shaderDepthStencilRegs(zeta && zetaHasDepth(zeta->format))
-                                            : depthStencilRegs(ds_, stencilRef_[0], stencilRef_[1],
-                                                               zeta && zetaHasDepth(zeta->format),
-                                                               zeta && zetaHasStencil(zeta->format)),
+                         shaderTestsActive_ ? shaderDepthStencilRegs(depth)
+                                            : dsState_->regs(depth, stencil, stencilRef_[0], stencilRef_[1]),
                          cb_->ds_);
         dsDirty_ = false;
     }
