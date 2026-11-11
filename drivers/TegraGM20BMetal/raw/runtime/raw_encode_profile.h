@@ -4,8 +4,10 @@
 // three phases; Loop holds State, Pass (which holds SplitPlan), Fusion, Blit and Compute; Commit, in Tail, holds
 // Prologues and Exec (each Submit of the command buffer's batches; execUses: the job uses they carried). Draw (which
 // holds Prepare, and Prepare Geometry, Descriptors, Barriers and SplitLaunch), PassEnd, Kernel (every kernel call),
-// GeometryAcquire and GeometryRelease are counted in whichever phase they run. A span outside an encode (another
-// thread, or the submit worker between encodes) costs one thread-local read.
+// GeometryAcquire and GeometryRelease are counted in whichever phase they run. Use (each resource a command buffer
+// names), Uniforms (each setBytes chunk bound), Bind (a draw's state, root and depth/stencil words), Variant (a draw's
+// program form) and PassPrologue (a pass's targets and clears, inside PassEnd) are counted wherever they run too. A span
+// outside an encode (another thread, or the submit worker between encodes) costs one thread-local read.
 #pragma once
 #include <cstddef>
 #include <cstdint>
@@ -39,6 +41,11 @@ enum class EncodePart : uint8_t {
     Exec,
     GeometryAcquire,
     GeometryRelease,
+    Use,
+    Uniforms,
+    Bind,
+    Variant,
+    PassPrologue,
     Count
 };
 
@@ -47,7 +54,7 @@ constexpr size_t kEncodeParts = size_t(EncodePart::Count);
 struct EncodeProfile {
     uint64_t ticks[kEncodeParts] = {};
     uint64_t calls[kEncodeParts] = {};
-    uint64_t longestPrepare = 0, execUses = 0;
+    uint64_t longestPrepare = 0, execUses = 0, execPushes = 0;
 };
 
 inline thread_local EncodeProfile *tEncodeProfile = nullptr;
@@ -56,6 +63,12 @@ inline void noteExecUses(uint64_t uses)
 {
     if (tEncodeProfile)
         tEncodeProfile->execUses += uses;
+}
+
+inline void noteExecPushes(uint64_t pushes)
+{
+    if (tEncodeProfile)
+        tEncodeProfile->execPushes += pushes;
 }
 
 class EncodeSpan {
@@ -90,9 +103,29 @@ private:
     uint64_t began_;
 };
 
+// What one span adds to the part it is nested in, in ticks per 1024 spans, measured once: a part's time holds its
+// nested spans' count times this, which the encode line prints so a reader can take it out (Use and Uniforms are
+// hundreds of short spans a command buffer)
+inline uint64_t spanCostTicksPer1024()
+{
+    static const uint64_t cost = [] {
+        EncodeProfile scratch;
+        EncodeProfile *const saved = tEncodeProfile;
+        tEncodeProfile = &scratch;
+        const uint64_t start = mach_absolute_time();
+        for (int i = 0; i < 1024; ++i) {
+            EncodeSpan span(EncodePart::Use);
+        }
+        const uint64_t ticks = mach_absolute_time() - start;
+        tEncodeProfile = saved;
+        return ticks;
+    }();
+    return cost;
+}
+
 // The encodes' profiles since the device opened, each folded in once its encode returned (the submit worker's only)
 struct EncodeTotals {
-    std::atomic<uint64_t> encodes{0}, wallTicks{0}, longestPrepare{0}, execUses{0};
+    std::atomic<uint64_t> encodes{0}, wallTicks{0}, longestPrepare{0}, execUses{0}, execPushes{0};
     std::atomic<uint64_t> ticks[kEncodeParts] = {}, calls[kEncodeParts] = {};
 
     void add(const EncodeProfile &p, uint64_t wall)
@@ -100,6 +133,7 @@ struct EncodeTotals {
         encodes.fetch_add(1, std::memory_order_relaxed);
         wallTicks.fetch_add(wall, std::memory_order_relaxed);
         execUses.fetch_add(p.execUses, std::memory_order_relaxed);
+        execPushes.fetch_add(p.execPushes, std::memory_order_relaxed);
         for (size_t i = 0; i < kEncodeParts; ++i) {
             if (!p.calls[i])
                 continue;

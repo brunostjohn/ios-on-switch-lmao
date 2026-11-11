@@ -1604,6 +1604,9 @@ public:
         // their prologue set back the last state's extras (Pipeline::restore)
         std::atomic<uint64_t> segmentBinds{0}, segmentWords{0}, segmentSkips{0}, segmentExtrasLosses{0};
         ReplayTally replay;
+        // binding slots the encode compared applying recorded state, and the slots of the tables it compared
+        // (RawMetalPlanApply.h): what a comparison of every slot of each changed table looked at
+        std::atomic<uint64_t> slotsCompared{0}, slotsInTables{0};
         EncodeTotals encode;
 #endif
 #else

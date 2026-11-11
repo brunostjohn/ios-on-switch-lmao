@@ -716,6 +716,8 @@ static bool encodeRawAttempt(RMCommandBuffer *cb, size_t from, size_t to, const 
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
     cb->_probeTaken.add(rc->probeTaken());
     noteReplayShape(cb, from, to);
+    d.stats.slotsCompared += stateCursor.slotsCompared;
+    d.stats.slotsInTables += stateCursor.slotsInTables;
 #endif
     for (const Conversion &c : converted) {  // (submitted: their images hold the surfaces at these seeds)
         c.t->_imageSeed = c.seed;

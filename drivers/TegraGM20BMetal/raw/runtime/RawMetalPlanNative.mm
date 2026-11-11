@@ -20,6 +20,7 @@ struct NativePlanSink {
             return;
         }
         if (binding.source == raw::BufferBinding::Source::Bytes) {
+            RAW_ENCODE_SPAN(Uniforms);
             const raw::Buffer &chunk = cb->_bytes.chunks[binding.chunk];
             if (!chunk.wc)
                 commands.clean(chunk.cpu + binding.offset, std::max<uint32_t>((binding.length + 255) & ~255u, 256));
