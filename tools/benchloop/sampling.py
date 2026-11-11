@@ -18,6 +18,13 @@ TEX_BOUND = 0xC038  # TEX's bound form with its sparse predicate PT (NAK sm50.rs
 DIM_2D = 2
 LOD_ZERO = 1
 VARIABLE = {'wr_bar': 0, 'delay': encode.BARRIER_SET_CYCLES}
+
+
+def variable(bar: int) -> dict:
+    """Give a variable-latency instruction's scheduling on barrier `bar`: one barrier per result outstanding."""
+    return {'wr_bar': bar, 'delay': encode.BARRIER_SET_CYCLES}
+
+
 SETTLE = encode.nop().sched(delay=SAFE_DELAY, wait=encode.ALL_BARRIERS)
 
 
@@ -44,7 +51,7 @@ def _program(body: list[Instr], data: list[float]) -> dict:
 
 
 def _position() -> list[Instr]:
-    return [encode.ipa(4, POSITION[0]).sched(**VARIABLE), encode.ipa(5, POSITION[1]).sched(**VARIABLE), SETTLE]
+    return [encode.ipa(4, POSITION[0]).sched(**variable(0)), encode.ipa(5, POSITION[1]).sched(**variable(1)), SETTLE]
 
 
 def scale(width: int, height: int) -> dict:
@@ -82,7 +89,7 @@ def average4(source_width: int, source_height: int) -> dict:
         _fixed(encode.mov(14, 10)),
         _fixed(encode.mov(15, 13)),
     ]
-    fetches = [tex2d(24 + 4 * k, 8 + 2 * k).sched(wr_bar=1, delay=encode.BARRIER_SET_CYCLES) for k in range(4)]
+    fetches = [tex2d(24 + 4 * k, 8 + 2 * k).sched(**variable(2 + k)) for k in range(4)]
     channels = []
     for ch in range(4):
         channels += [

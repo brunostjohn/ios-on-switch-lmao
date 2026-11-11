@@ -59,6 +59,12 @@ class TwodTest(unittest.TestCase):
         )
         self.assertEqual(twod.box_mismatches(cell, box)['nearest_up'], 0)
         self.assertGreater(twod.box_mismatches(cell, box)['truncate'], 0, 'the source has sums that round')
+        point = next(e for e in twod.generate() if e['id'] == 'resolve-sweep-corner-point-p00')
+        sample = bytes(
+            src[((2 * y + 1) * side + 2 * x) * 4 + c] for y in range(32) for x in range(32) for c in range(4)
+        )
+        self.assertEqual(twod.point_sample(point, sample), (0, 1))
+        self.assertIsNone(twod.point_sample(point, box))
         sweep = [e for e in twod.generate() if e['id'].startswith('resolve-sweep-')]
         self.assertEqual(len(sweep), 2 * (17 + 17))
 

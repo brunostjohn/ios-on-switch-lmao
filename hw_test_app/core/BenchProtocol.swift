@@ -4,7 +4,7 @@ import Foundation
 /// tools/benchloop/protocol.py's batch as the bench loop decodes it: every limit and allowed method range is the
 /// same (tools/benchloop/agreement_test.py compares them), so the host's and the app's checks agree.
 public enum BenchProtocol {
-    public static let version = "benchloop/2"
+    public static let version = "benchloop/3"
     public static let maxExperiments = 256
     public static let maxSide = 2048
     public static let maxDrawCounts = 16

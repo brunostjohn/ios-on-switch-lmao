@@ -279,10 +279,13 @@ def background(e: dict) -> bytes:
 BOX_ROUNDINGS = {'nearest_up': 2, 'nearest_down': 1, 'truncate': 0}
 
 
+BOX_FORMATS = ('bgra8unorm', 'rgba8unorm')
+
+
 def box_mismatches(e: dict, data: bytes) -> dict[str, int] | None:
     """Give, per rounding, how many texels of a 4x 8-bit resolve differ from the box mean of their source samples."""
     t = e['twod']
-    if t['op'] != 'resolve' or t['samples'] != 4 or protocol.FORMATS[e['target']['format']][1] != 4 or not data:
+    if t['op'] != 'resolve' or t['samples'] != 4 or e['target']['format'] not in BOX_FORMATS or not data:
         return None
     src, side = protocol.unb64(e['source']['data']), e['source']['width']
     w, h = e['target']['width'], e['target']['height']
@@ -297,6 +300,29 @@ def box_mismatches(e: dict, data: bytes) -> dict[str, int] | None:
                 )
                 out[name] += got != want
     return out
+
+
+def point_sample(e: dict, data: bytes) -> tuple[int, int] | None:
+    """Give which sample (i, j) a point-filtered 4x read returned at every pixel; None if no one sample did.
+
+    The sweep's positive control: a point read must copy a sample, so None means the grid or its reading is wrong and
+    the bilinear cells judge nothing.
+    """
+    t = e['twod']
+    if not t.get('byScale') or t.get('bilinear') or e['target']['format'] not in BOX_FORMATS or not data:
+        return None
+    src, side = protocol.unb64(e['source']['data']), e['source']['width']
+    w, h = e['target']['width'], e['target']['height']
+    for j in (0, 1):
+        for i in (0, 1):
+            if all(
+                data[(y * w + x) * 4 : (y * w + x + 1) * 4]
+                == src[((2 * y + j) * side + 2 * x + i) * 4 : ((2 * y + j) * side + 2 * x + i + 1) * 4]
+                for y in range(h)
+                for x in range(w)
+            ):
+                return i, j
+    return None
 
 
 def analyse(experiments: list[dict], results: dict[str, dict]) -> list[dict]:
@@ -320,6 +346,8 @@ def analyse(experiments: list[dict], results: dict[str, dict]) -> list[dict]:
             row['fill_cells'] = len(inside)
         if (box := box_mismatches(e, data)) is not None:
             row['box_mismatches'] = box
+        if e['twod'].get('byScale') and not e['twod'].get('bilinear'):
+            row['point_sample'] = point_sample(e, data)
         if 'compare' in e:
             compare = result.get('compare') or {}
             row['compare'] = {'status': compare.get('status'), 'histogram': compare.get('histogram')}

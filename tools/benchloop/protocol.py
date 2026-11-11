@@ -1,4 +1,4 @@
-"""The batch and result files the host and HW Test's bench loop exchange (benchloop/2).
+"""The batch and result files the host and HW Test's bench loop exchange (benchloop/3).
 
 A batch is one JSON object; each experiment in it is validated here before it is written, and again by the app
 (hw_test_app/bench) before it runs. Byte strings travel as base64. Limits keep every command buffer far below the
@@ -10,7 +10,7 @@ import json
 import re
 from dataclasses import dataclass
 
-PROTOCOL = 'benchloop/2'
+PROTOCOL = 'benchloop/3'
 NAME = re.compile(r'^[a-z0-9][a-z0-9_.-]{0,63}$')
 KINDS = ('noop', 'known', 'fragment', 'compute', 'readback', 'twod')
 TEMPLATE = re.compile(r'^[0-9a-f]{16}$')
