@@ -663,10 +663,17 @@ static void putPlane(uint32_t layout, uint32_t pitch, uint8_t *dst, const uint8_
 void h264enc_put_input(const H264EncConfig *c, const H264EncLayout *l, uint8_t *buffer, const uint8_t *luma,
                        size_t lumaStride, const uint8_t *chroma, size_t chromaStride)
 {
-    const uint32_t codedW = h264enc_width_mbs(c) * 16, codedH = h264enc_height_mbs(c) * 16;
-    putPlane(c->input_layout, l->input.pitch, buffer, luma, lumaStride, c->width, c->height, codedW, codedH, 0);
-    putPlane(c->input_layout, l->input.pitch, buffer + l->input.chroma_offset, chroma, chromaStride, c->width,
-             c->height / 2, codedW, codedH / 2, 1);
+    h264enc_put_region(c->input_layout, &l->input, buffer, luma, lumaStride, chroma, chromaStride, c->width, c->height,
+                       h264enc_width_mbs(c) * 16, h264enc_height_mbs(c) * 16);
+}
+
+void h264enc_put_region(uint32_t layout, const H264EncSurface *input, uint8_t *buffer, const uint8_t *luma,
+                        size_t lumaStride, const uint8_t *chroma, size_t chromaStride, uint32_t width, uint32_t height,
+                        uint32_t codedWidth, uint32_t codedHeight)
+{
+    putPlane(layout, input->pitch, buffer, luma, lumaStride, width, height, codedWidth, codedHeight, 0);
+    putPlane(layout, input->pitch, buffer + input->chroma_offset, chroma, chromaStride, (width + 1) & ~1u,
+             (height + 1) / 2, codedWidth, codedHeight / 2, 1);
 }
 
 size_t h264enc_annexb_to_avcc(const uint8_t *in, size_t size, uint8_t *out, size_t cap)

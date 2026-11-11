@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: BSD-2-Clause-Patent
-// AVE's instance state and the session steps its entry points share.
+// AVE's instance state, shared by its frame sessions (AVEEncoder.c) and tile sessions (AVETiles.c).
 #ifndef AVE_ENCODER_H
 #define AVE_ENCODER_H
 #include <CoreFoundation/CoreFoundation.h>
@@ -14,9 +14,10 @@
 typedef struct {
     pthread_mutex_t lock;
     VTVideoEncoderSession session;
+    VTTileEncoderSession tileSession;  // a tile session (HEIC grids) instead of a frame session
     NVENCClient *client;
     TegraNVENCInfo info;
-    CMVideoDimensions size;
+    CMVideoDimensions size;  // a tile session's: the size every tile picture is coded at
     CMVideoCodecType codec;  // 'avc1', or 'hvc1': every picture an IDR (HEVCNVENC.h has no P pictures)
     bool configured, failed;
     HEVCEncConfig hevc;
@@ -37,7 +38,7 @@ typedef struct {
     uint32_t frameNum, idrPicId, pictureIndex, pocCount, sinceKey;
     CMTime lastKeyTime;
     RateControl rc;
-    uint32_t frames, keyFrames, errors;
+    uint32_t frames, keyFrames, tiles, errors;
     uint64_t bytes, copyTicks, encodeTicks;
 } Encoder;
 
@@ -49,5 +50,17 @@ OSStatus ave_open_engine(Encoder *e);
 // The stream the first picture fixes (full range or not and its colour tags): buffers, parameter sets, the format
 // description every sample carries, the rate control.
 OSStatus ave_configure(Encoder *e, CVPixelBufferRef image);
+
+// AVETiles.c: the encoder class's version 3 slots.
+OSStatus ave_start_tile_session(VTVideoEncoderRef ref, VTTileEncoderSession session, CFDictionaryRef specification,
+                                VTInt32Size tileSize, CFAllocatorRef allocator);
+OSStatus ave_prepare_to_encode_tiles(VTVideoEncoderRef ref, Boolean unused);
+OSStatus ave_encode_tile(VTVideoEncoderRef ref, VTEncoderTile tile, CVImageBufferRef source, VTInt32Point origin,
+                         VTInt32Size size, CFDictionaryRef options, VTEncodeInfoFlags *info);
+OSStatus ave_complete_tiles(VTVideoEncoderRef ref);
+#if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
+// hw_test_app's image.heic_encode: this session's pictures NVENC coded, tiles among them, and failures.
+CFDictionaryRef ave_copy_routes(const Encoder *e);
+#endif
 
 #endif
