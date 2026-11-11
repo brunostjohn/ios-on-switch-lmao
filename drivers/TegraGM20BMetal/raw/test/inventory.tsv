@@ -1,9 +1,9 @@
 # raw's API inventory, written by raw/test/selcover (SELCOVER_WRITE=1; selcover_inventory.h says what each
 # column holds): container, item, selector, m2v, sent by, raw
-# m2v's items: base 3 m2v 4 none 65 raw 293 read 292 refused 163 unread 201 zero 36
-# sent selectors: base 79 m2v 13 m2vobj 2 none 8 raw 517 refused 56 zero 140
+# m2v's items: base 3 m2v 4 none 65 raw 293 read 326 refused 163 unread 167 zero 36
+# sent selectors: base 79 m2v 11 none 8 raw 519 refused 56 zero 142
 MTLArgument	access	access	I	-	read
-MTLArgument	active	isActive	I	-	unread
+MTLArgument	active	isActive	I	-	read
 MTLArgument	arrayLength	arrayLength	I	-	read
 MTLArgument	bufferAlignment	bufferAlignment	I	-	unread
 MTLArgument	bufferDataSize	bufferDataSize	I	-	unread
@@ -22,8 +22,8 @@ MTLArgumentDescriptor	access	access	I	-	read
 MTLArgumentDescriptor	access	setAccess:	I	-	read
 MTLArgumentDescriptor	arrayLength	arrayLength	I	-	read
 MTLArgumentDescriptor	arrayLength	setArrayLength:	I	-	read
-MTLArgumentDescriptor	constantBlockAlignment	constantBlockAlignment	I	-	unread
-MTLArgumentDescriptor	constantBlockAlignment	setConstantBlockAlignment:	I	-	unread
+MTLArgumentDescriptor	constantBlockAlignment	constantBlockAlignment	I	-	read
+MTLArgumentDescriptor	constantBlockAlignment	setConstantBlockAlignment:	I	-	read
 MTLArgumentDescriptor	dataType	dataType	I	-	read
 MTLArgumentDescriptor	dataType	setDataType:	I	-	read
 MTLArgumentDescriptor	index	index	I	-	read
@@ -63,8 +63,8 @@ MTLArrayType	elementStructType	elementStructType	I	-	unread
 MTLArrayType	elementTextureReferenceType	elementTextureReferenceType	I	-	unread
 MTLArrayType	elementType	elementType	I	-	unread
 MTLArrayType	stride	stride	I	-	read
-MTLAttribute	active	isActive	I	-	unread
-MTLAttribute	attributeIndex	attributeIndex	I	-	unread
+MTLAttribute	active	isActive	I	-	read
+MTLAttribute	attributeIndex	attributeIndex	I	-	read
 MTLAttribute	attributeType	attributeType	I	-	unread
 MTLAttribute	name	name	I	-	read
 MTLAttribute	patchControlPointData	isPatchControlPointData	I	-	unread
@@ -80,8 +80,8 @@ MTLAttributeDescriptorArray	setObject:atIndexedSubscript:	setObject:atIndexedSub
 MTLBinaryArchive	-	addFunctionWithDescriptor:library:error:	-	21H461,24B119	raw
 MTLBinaryArchive	-	addLibraryWithDescriptor:error:	-	24B119	raw
 MTLBinaryArchive	-	addMeshRenderPipelineFunctionsWithDescriptor:error:	-	24B119	raw
-MTLBinaryArchive	-	formattedDescription:	-	21H461,24B119	m2vobj
-MTLBinaryArchive	-	keys	-	21H461,24B119	m2vobj
+MTLBinaryArchive	-	formattedDescription:	-	21H461,24B119	zero
+MTLBinaryArchive	-	keys	-	21H461,24B119	zero
 MTLBinaryArchive	-	options	-	21H461,24B119	raw
 MTLBinaryArchive	addComputePipelineFunctionsWithDescriptor:error:	addComputePipelineFunctionsWithDescriptor:error:	I	21H461,24B119	raw
 MTLBinaryArchive	addRenderPipelineFunctionsWithDescriptor:error:	addRenderPipelineFunctionsWithDescriptor:error:	I	21H461,24B119	raw
@@ -336,8 +336,8 @@ MTLComputeCommandEncoder	useHeaps:count:	useHeaps:count:	I	21H461,24B119	raw
 MTLComputeCommandEncoder	useResource:usage:	useResource:usage:	I	21H461,24B119	raw
 MTLComputeCommandEncoder	useResources:count:usage:	useResources:count:usage:	I	21H461,24B119	raw
 MTLComputeCommandEncoder	waitForFence:	waitForFence:	I	21H461,24B119	raw
-MTLComputePipelineDescriptor	binaryArchives	binaryArchives	I	-	unread
-MTLComputePipelineDescriptor	binaryArchives	setBinaryArchives:	I	-	unread
+MTLComputePipelineDescriptor	binaryArchives	binaryArchives	I	-	read
+MTLComputePipelineDescriptor	binaryArchives	setBinaryArchives:	I	-	read
 MTLComputePipelineDescriptor	buffers	buffers	I	-	read
 MTLComputePipelineDescriptor	computeFunction	computeFunction	I	-	read
 MTLComputePipelineDescriptor	computeFunction	setComputeFunction:	I	-	read
@@ -356,8 +356,8 @@ MTLComputePipelineDescriptor	preloadedLibraries	setPreloadedLibraries:	I	-	unrea
 MTLComputePipelineDescriptor	requiredThreadsPerThreadgroup	requiredThreadsPerThreadgroup	I	-	unread
 MTLComputePipelineDescriptor	requiredThreadsPerThreadgroup	setRequiredThreadsPerThreadgroup:	I	-	unread
 MTLComputePipelineDescriptor	reset	reset	I	-	read
-MTLComputePipelineDescriptor	stageInputDescriptor	setStageInputDescriptor:	I	-	unread
-MTLComputePipelineDescriptor	stageInputDescriptor	stageInputDescriptor	I	-	unread
+MTLComputePipelineDescriptor	stageInputDescriptor	setStageInputDescriptor:	I	-	read
+MTLComputePipelineDescriptor	stageInputDescriptor	stageInputDescriptor	I	-	read
 MTLComputePipelineDescriptor	supportAddingBinaryFunctions	setSupportAddingBinaryFunctions:	I	-	refused
 MTLComputePipelineDescriptor	supportAddingBinaryFunctions	supportAddingBinaryFunctions	I	-	refused
 MTLComputePipelineDescriptor	supportIndirectCommandBuffers	setSupportIndirectCommandBuffers:	I	-	unread
@@ -494,8 +494,8 @@ MTLDevice	-	newResourceGroupFromResources:count:	-	21H461,24B119	raw
 MTLDevice	-	newSharedEventWithMachPort:	-	21H461,24B119	raw
 MTLDevice	-	newSharedEventWithOptions:	-	24B119	raw
 MTLDevice	-	newTensorWithDescriptor:attachments:error:	-	24B119	base
-MTLDevice	-	newTextureLayoutWithDescriptor:isHeapOrBufferBacked:	-	21H461,24B119	m2v
-MTLDevice	-	newTextureWithBytesNoCopy:length:descriptor:deallocator:	-	21H461,24B119	m2v
+MTLDevice	-	newTextureLayoutWithDescriptor:isHeapOrBufferBacked:	-	21H461,24B119	raw
+MTLDevice	-	newTextureWithBytesNoCopy:length:descriptor:deallocator:	-	21H461,24B119	raw
 MTLDevice	-	newTextureWithDescriptor:iosurface:plane:	-	21H461,24B119	raw
 MTLDevice	-	newTextureWithDescriptor:iosurface:plane:slice:	-	21H461,24B119	base
 MTLDevice	-	newVisibleFunctionTableWithDescriptor:	-	24B119	none
@@ -814,8 +814,8 @@ MTLLibrary	newFunctionWithName:constantValues:completionHandler:	newFunctionWith
 MTLLibrary	newFunctionWithName:constantValues:error:	newFunctionWithName:constantValues:error:	I	21H461,24B119	raw
 MTLLibrary	reflectionForFunctionWithName:	reflectionForFunctionWithName:	I	24B119	zero
 MTLLibrary	type	type	I	21H461,24B119	raw
-MTLLinkedFunctions	binaryFunctions	binaryFunctions	I	-	unread
-MTLLinkedFunctions	binaryFunctions	setBinaryFunctions:	I	-	unread
+MTLLinkedFunctions	binaryFunctions	binaryFunctions	I	-	read
+MTLLinkedFunctions	binaryFunctions	setBinaryFunctions:	I	-	read
 MTLLinkedFunctions	functions	functions	I	-	read
 MTLLinkedFunctions	functions	setFunctions:	I	-	read
 MTLLinkedFunctions	groups	groups	I	-	read
@@ -869,14 +869,14 @@ MTLPointerType	elementStructType	elementStructType	I	-	unread
 MTLPointerType	elementType	elementType	I	-	unread
 MTLRasterizationRateLayerArray	objectAtIndexedSubscript:	objectAtIndexedSubscript:	I	-	unread
 MTLRasterizationRateLayerArray	setObject:atIndexedSubscript:	setObject:atIndexedSubscript:	I	-	unread
-MTLRasterizationRateLayerDescriptor	horizontal	horizontal	I	-	read
+MTLRasterizationRateLayerDescriptor	horizontal	horizontal	I	-	unread
 MTLRasterizationRateLayerDescriptor	horizontalSampleStorage	horizontalSampleStorage	I	-	unread
 MTLRasterizationRateLayerDescriptor	initWithSampleCount:	initWithSampleCount:	I	-	unread
 MTLRasterizationRateLayerDescriptor	initWithSampleCount:horizontal:vertical:	initWithSampleCount:horizontal:vertical:	I	-	unread
 MTLRasterizationRateLayerDescriptor	maxSampleCount	maxSampleCount	I	-	unread
 MTLRasterizationRateLayerDescriptor	sampleCount	sampleCount	I	-	read
 MTLRasterizationRateLayerDescriptor	sampleCount	setSampleCount:	I	-	read
-MTLRasterizationRateLayerDescriptor	vertical	vertical	I	-	read
+MTLRasterizationRateLayerDescriptor	vertical	vertical	I	-	unread
 MTLRasterizationRateLayerDescriptor	verticalSampleStorage	verticalSampleStorage	I	-	unread
 MTLRasterizationRateMap	copyParameterDataToBuffer:offset:	copyParameterDataToBuffer:offset:	I	-	none
 MTLRasterizationRateMap	device	device	I	-	none
@@ -892,7 +892,7 @@ MTLRasterizationRateMapDescriptor	label	label	I	-	read
 MTLRasterizationRateMapDescriptor	label	setLabel:	I	-	read
 MTLRasterizationRateMapDescriptor	layerAtIndex:	layerAtIndex:	I	-	unread
 MTLRasterizationRateMapDescriptor	layerCount	layerCount	I	-	unread
-MTLRasterizationRateMapDescriptor	layers	layers	I	-	unread
+MTLRasterizationRateMapDescriptor	layers	layers	I	-	read
 MTLRasterizationRateMapDescriptor	screenSize	screenSize	I	-	unread
 MTLRasterizationRateMapDescriptor	screenSize	setScreenSize:	I	-	unread
 MTLRasterizationRateMapDescriptor	setLayer:atIndex:	setLayer:atIndex:	I	-	unread
@@ -1057,20 +1057,20 @@ MTLRenderPassAttachmentDescriptor	level	level	I	-	read
 MTLRenderPassAttachmentDescriptor	level	setLevel:	I	-	read
 MTLRenderPassAttachmentDescriptor	loadAction	loadAction	I	-	read
 MTLRenderPassAttachmentDescriptor	loadAction	setLoadAction:	I	-	read
-MTLRenderPassAttachmentDescriptor	resolveDepthPlane	resolveDepthPlane	I	-	unread
-MTLRenderPassAttachmentDescriptor	resolveDepthPlane	setResolveDepthPlane:	I	-	unread
-MTLRenderPassAttachmentDescriptor	resolveLevel	resolveLevel	I	-	unread
-MTLRenderPassAttachmentDescriptor	resolveLevel	setResolveLevel:	I	-	unread
-MTLRenderPassAttachmentDescriptor	resolveSlice	resolveSlice	I	-	unread
-MTLRenderPassAttachmentDescriptor	resolveSlice	setResolveSlice:	I	-	unread
+MTLRenderPassAttachmentDescriptor	resolveDepthPlane	resolveDepthPlane	I	-	read
+MTLRenderPassAttachmentDescriptor	resolveDepthPlane	setResolveDepthPlane:	I	-	read
+MTLRenderPassAttachmentDescriptor	resolveLevel	resolveLevel	I	-	read
+MTLRenderPassAttachmentDescriptor	resolveLevel	setResolveLevel:	I	-	read
+MTLRenderPassAttachmentDescriptor	resolveSlice	resolveSlice	I	-	read
+MTLRenderPassAttachmentDescriptor	resolveSlice	setResolveSlice:	I	-	read
 MTLRenderPassAttachmentDescriptor	resolveTexture	resolveTexture	I	-	read
 MTLRenderPassAttachmentDescriptor	resolveTexture	setResolveTexture:	I	-	read
 MTLRenderPassAttachmentDescriptor	slice	setSlice:	I	-	read
 MTLRenderPassAttachmentDescriptor	slice	slice	I	-	read
 MTLRenderPassAttachmentDescriptor	storeAction	setStoreAction:	I	-	read
 MTLRenderPassAttachmentDescriptor	storeAction	storeAction	I	-	read
-MTLRenderPassAttachmentDescriptor	storeActionOptions	setStoreActionOptions:	I	-	unread
-MTLRenderPassAttachmentDescriptor	storeActionOptions	storeActionOptions	I	-	unread
+MTLRenderPassAttachmentDescriptor	storeActionOptions	setStoreActionOptions:	I	-	read
+MTLRenderPassAttachmentDescriptor	storeActionOptions	storeActionOptions	I	-	read
 MTLRenderPassAttachmentDescriptor	texture	setTexture:	I	-	read
 MTLRenderPassAttachmentDescriptor	texture	texture	I	-	read
 MTLRenderPassColorAttachmentDescriptor	clearColor	clearColor	I	-	read
@@ -1086,7 +1086,7 @@ MTLRenderPassDescriptor	defaultRasterSampleCount	defaultRasterSampleCount	I	-	un
 MTLRenderPassDescriptor	defaultRasterSampleCount	setDefaultRasterSampleCount:	I	-	unread
 MTLRenderPassDescriptor	depthAttachment	depthAttachment	I	-	read
 MTLRenderPassDescriptor	depthAttachment	setDepthAttachment:	I	-	read
-MTLRenderPassDescriptor	getSamplePositions:count:	getSamplePositions:count:	I	-	unread
+MTLRenderPassDescriptor	getSamplePositions:count:	getSamplePositions:count:	I	-	read
 MTLRenderPassDescriptor	imageblockSampleLength	imageblockSampleLength	I	-	refused
 MTLRenderPassDescriptor	imageblockSampleLength	setImageblockSampleLength:	I	-	refused
 MTLRenderPassDescriptor	rasterizationRateMap	rasterizationRateMap	I	-	read
@@ -1097,7 +1097,7 @@ MTLRenderPassDescriptor	renderTargetHeight	renderTargetHeight	I	-	read
 MTLRenderPassDescriptor	renderTargetHeight	setRenderTargetHeight:	I	-	read
 MTLRenderPassDescriptor	renderTargetWidth	renderTargetWidth	I	-	read
 MTLRenderPassDescriptor	renderTargetWidth	setRenderTargetWidth:	I	-	read
-MTLRenderPassDescriptor	setSamplePositions:count:	setSamplePositions:count:	I	-	unread
+MTLRenderPassDescriptor	setSamplePositions:count:	setSamplePositions:count:	I	-	read
 MTLRenderPassDescriptor	stencilAttachment	setStencilAttachment:	I	-	read
 MTLRenderPassDescriptor	stencilAttachment	stencilAttachment	I	-	read
 MTLRenderPassDescriptor	threadgroupMemoryLength	setThreadgroupMemoryLength:	I	-	unread
@@ -1136,16 +1136,16 @@ MTLRenderPipelineDescriptor	alphaToCoverageEnabled	isAlphaToCoverageEnabled	I	-	
 MTLRenderPipelineDescriptor	alphaToCoverageEnabled	setAlphaToCoverageEnabled:	I	-	unread
 MTLRenderPipelineDescriptor	alphaToOneEnabled	isAlphaToOneEnabled	I	-	unread
 MTLRenderPipelineDescriptor	alphaToOneEnabled	setAlphaToOneEnabled:	I	-	unread
-MTLRenderPipelineDescriptor	binaryArchives	binaryArchives	I	-	unread
-MTLRenderPipelineDescriptor	binaryArchives	setBinaryArchives:	I	-	unread
+MTLRenderPipelineDescriptor	binaryArchives	binaryArchives	I	-	read
+MTLRenderPipelineDescriptor	binaryArchives	setBinaryArchives:	I	-	read
 MTLRenderPipelineDescriptor	colorAttachments	colorAttachments	I	-	read
 MTLRenderPipelineDescriptor	depthAttachmentPixelFormat	depthAttachmentPixelFormat	I	-	read
 MTLRenderPipelineDescriptor	depthAttachmentPixelFormat	setDepthAttachmentPixelFormat:	I	-	read
 MTLRenderPipelineDescriptor	fragmentBuffers	fragmentBuffers	I	-	unread
 MTLRenderPipelineDescriptor	fragmentFunction	fragmentFunction	I	-	read
 MTLRenderPipelineDescriptor	fragmentFunction	setFragmentFunction:	I	-	read
-MTLRenderPipelineDescriptor	fragmentLinkedFunctions	fragmentLinkedFunctions	I	-	unread
-MTLRenderPipelineDescriptor	fragmentLinkedFunctions	setFragmentLinkedFunctions:	I	-	unread
+MTLRenderPipelineDescriptor	fragmentLinkedFunctions	fragmentLinkedFunctions	I	-	read
+MTLRenderPipelineDescriptor	fragmentLinkedFunctions	setFragmentLinkedFunctions:	I	-	read
 MTLRenderPipelineDescriptor	fragmentPreloadedLibraries	fragmentPreloadedLibraries	I	-	unread
 MTLRenderPipelineDescriptor	fragmentPreloadedLibraries	setFragmentPreloadedLibraries:	I	-	unread
 MTLRenderPipelineDescriptor	inputPrimitiveTopology	inputPrimitiveTopology	I	-	read
@@ -1154,10 +1154,10 @@ MTLRenderPipelineDescriptor	label	label	I	-	read
 MTLRenderPipelineDescriptor	label	setLabel:	I	-	read
 MTLRenderPipelineDescriptor	maxFragmentCallStackDepth	maxFragmentCallStackDepth	I	-	unread
 MTLRenderPipelineDescriptor	maxFragmentCallStackDepth	setMaxFragmentCallStackDepth:	I	-	unread
-MTLRenderPipelineDescriptor	maxTessellationFactor	maxTessellationFactor	I	-	unread
-MTLRenderPipelineDescriptor	maxTessellationFactor	setMaxTessellationFactor:	I	-	unread
-MTLRenderPipelineDescriptor	maxVertexAmplificationCount	maxVertexAmplificationCount	I	-	unread
-MTLRenderPipelineDescriptor	maxVertexAmplificationCount	setMaxVertexAmplificationCount:	I	-	unread
+MTLRenderPipelineDescriptor	maxTessellationFactor	maxTessellationFactor	I	-	read
+MTLRenderPipelineDescriptor	maxTessellationFactor	setMaxTessellationFactor:	I	-	read
+MTLRenderPipelineDescriptor	maxVertexAmplificationCount	maxVertexAmplificationCount	I	-	read
+MTLRenderPipelineDescriptor	maxVertexAmplificationCount	setMaxVertexAmplificationCount:	I	-	read
 MTLRenderPipelineDescriptor	maxVertexCallStackDepth	maxVertexCallStackDepth	I	-	unread
 MTLRenderPipelineDescriptor	maxVertexCallStackDepth	setMaxVertexCallStackDepth:	I	-	unread
 MTLRenderPipelineDescriptor	rasterSampleCount	rasterSampleCount	I	-	read
@@ -1192,8 +1192,8 @@ MTLRenderPipelineDescriptor	vertexDescriptor	setVertexDescriptor:	I	-	read
 MTLRenderPipelineDescriptor	vertexDescriptor	vertexDescriptor	I	-	read
 MTLRenderPipelineDescriptor	vertexFunction	setVertexFunction:	I	-	read
 MTLRenderPipelineDescriptor	vertexFunction	vertexFunction	I	-	read
-MTLRenderPipelineDescriptor	vertexLinkedFunctions	setVertexLinkedFunctions:	I	-	unread
-MTLRenderPipelineDescriptor	vertexLinkedFunctions	vertexLinkedFunctions	I	-	unread
+MTLRenderPipelineDescriptor	vertexLinkedFunctions	setVertexLinkedFunctions:	I	-	read
+MTLRenderPipelineDescriptor	vertexLinkedFunctions	vertexLinkedFunctions	I	-	read
 MTLRenderPipelineDescriptor	vertexPreloadedLibraries	setVertexPreloadedLibraries:	I	-	unread
 MTLRenderPipelineDescriptor	vertexPreloadedLibraries	vertexPreloadedLibraries	I	-	unread
 MTLRenderPipelineFunctionsDescriptor	fragmentAdditionalBinaryFunctions	fragmentAdditionalBinaryFunctions	I	-	refused
@@ -1319,7 +1319,7 @@ MTLStencilDescriptor	stencilFailureOperation	stencilFailureOperation	I	-	read
 MTLStencilDescriptor	writeMask	setWriteMask:	I	-	read
 MTLStencilDescriptor	writeMask	writeMask	I	-	read
 MTLStructMember	argumentIndex	argumentIndex	I	-	unread
-MTLStructMember	arrayType	arrayType	I	-	unread
+MTLStructMember	arrayType	arrayType	I	-	read
 MTLStructMember	dataType	dataType	I	-	read
 MTLStructMember	name	name	I	-	read
 MTLStructMember	offset	offset	I	-	read
@@ -1327,7 +1327,7 @@ MTLStructMember	pointerType	pointerType	I	-	unread
 MTLStructMember	structType	structType	I	-	unread
 MTLStructMember	textureReferenceType	textureReferenceType	I	-	unread
 MTLStructType	memberByName:	memberByName:	I	-	unread
-MTLStructType	members	members	I	-	unread
+MTLStructType	members	members	I	-	read
 MTLTexture	-	allocatedSize	-	21H461,24B119	raw
 MTLTexture	-	buffer	-	21H461,24B119	raw
 MTLTexture	-	bufferBytesPerRow	-	21H461,24B119	raw
@@ -1475,8 +1475,8 @@ MTLTileRenderPipelineDescriptor	tileBuffers	tileBuffers	I	-	refused
 MTLTileRenderPipelineDescriptor	tileFunction	setTileFunction:	I	-	read
 MTLTileRenderPipelineDescriptor	tileFunction	tileFunction	I	-	read
 MTLType	dataType	dataType	I	-	read
-MTLVertexAttribute	active	isActive	I	-	unread
-MTLVertexAttribute	attributeIndex	attributeIndex	I	-	unread
+MTLVertexAttribute	active	isActive	I	-	read
+MTLVertexAttribute	attributeIndex	attributeIndex	I	-	read
 MTLVertexAttribute	attributeType	attributeType	I	-	unread
 MTLVertexAttribute	name	name	I	-	read
 MTLVertexAttribute	patchControlPointData	isPatchControlPointData	I	-	unread
