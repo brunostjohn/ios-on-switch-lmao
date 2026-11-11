@@ -2094,9 +2094,9 @@ private:
         idleSincePresent = true;
     }
 
-    // Every DC A action, under the gate. The render server is a vsync client (kern_exec.c gives backboardd CA_FORCE_TIMER=1, so
-    // QuartzCore's IOMFBServer::set_vsync_enabled takes IOMobileFramebufferEnableVSyncNotifications instead of its CADisplayTimer)
-    // and draws nothing until its first vsync: its registration is found here, at the first frame end after it, whether or not it
+    // Every DC A action, under the gate. On iOS 17 the render server is a vsync client (the 21H461 kernel gives backboardd
+    // CA_FORCE_TIMER=1, so QuartzCore's IOMFBServer::set_vsync_enabled takes IOMobileFramebufferEnableVSyncNotifications instead
+    // of its CADisplayTimer; 24B119's has no such switch, the 12377 kern_exec.c) and draws nothing until its first vsync: its registration is found here, at the first frame end after it, whether or not it
     // went through kickSwapQueue (no swap comes to do it). Armed, V_BLANK must come every frame: kVsyncSilentFrames frame ends
     // without one panic, since the compositor would wait for ever.
     void watchVsync(uint32_t status)
