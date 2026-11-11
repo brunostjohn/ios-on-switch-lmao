@@ -143,6 +143,8 @@ def pull(transport: object, outcome: Outcome, into: Path) -> Outcome:
 def run(transport: object, b: dict, into: Path, stream: LogStream | None = None) -> Outcome:
     push(transport, b)
     outcome = pull(transport, wait(transport, b, stream), into)
+    if outcome.complete:
+        transport.rm(f'{transport.root}/outbox/{outcome.batch}')
     for experiment_id, result in outcome.log.items():
         outcome.results.setdefault(experiment_id, result)
     return outcome

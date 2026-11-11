@@ -1,5 +1,6 @@
 import Foundation
 import HWTestCore
+import Metal
 import SwitchBench
 
 /// The bench's raw device (hw_test_app/bench/switch_bench.h): one experiment at a time, on its caller's thread.
@@ -10,7 +11,9 @@ final class BenchRunner {
 
     deinit { switch_bench_close(bench) }
 
+    /// The Metal device is made first: it loads the GPU plugin, beside which the bench finds the raw pack.
     static func open() throws -> BenchRunner {
+        _ = MTLCreateSystemDefaultDevice()
         var why = [CChar](repeating: 0, count: 256)
         guard let bench = switch_bench_open(&why, why.count) else { throw BenchInvalid(String(cString: why)) }
         return BenchRunner(bench)

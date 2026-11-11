@@ -58,6 +58,7 @@ final class BenchWorker: @unchecked Sendable {
             watchers.forEach { $0.cancel() }
             watchers = []
             runner = nil
+            for root in roots { try? FileManager.default.removeItem(at: root.appendingPathComponent("status.json")) }
         }
     }
 
@@ -119,6 +120,10 @@ final class BenchWorker: @unchecked Sendable {
             return
         }
         let outbox = root.appendingPathComponent("outbox").appendingPathComponent(batch.name)
+        // done.json means an earlier batch of this name finished; only an unfinished one is resumed
+        if FileManager.default.fileExists(atPath: outbox.appendingPathComponent("done.json").path) {
+            try? FileManager.default.removeItem(at: outbox)
+        }
         try? FileManager.default.createDirectory(at: outbox, withIntermediateDirectories: true)
         let journal = outbox.appendingPathComponent("journal.txt")
         let earlier = (try? String(contentsOf: journal, encoding: .utf8)) ?? ""

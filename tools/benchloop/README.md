@@ -61,8 +61,8 @@ which the chain still writes the right texel, which is why every timing experime
 
 - `doctor` finds no device: iOS isn't running, or the Switch isn't paired. Unlock it and tap Trust.
 - `no done.json after N s`: the Bench screen isn't open, the app was suspended, or the batch went to a folder the app
-  isn't watching. The app writes `status.json` into every folder it watches, and `afcclient ls /Switch/benchloop` shows
-  whether the Media folder has one.
+  isn't watching. While the Bench screen is open the app keeps `status.json` in every folder it watches, and
+  `afcclient ls /Switch/benchloop` shows whether the Media folder has one.
 - Self-check `FAIL ... no raw device`: the app couldn't open its own connection to the GPU. The line gives the reason.
 - `refused` results name the draw predicate or state the raw path turned down. `killed` results carry the kernel's
   error code and fault address, and the kernel log has the decoded hang.

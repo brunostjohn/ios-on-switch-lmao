@@ -2,6 +2,7 @@
 
 import json
 import subprocess
+import time
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -25,7 +26,7 @@ class Session:
         step = protocol.MAX_EXPERIMENTS
         for start in range(0, len(experiments), step):
             part = experiments[start : start + step]
-            outcome = self.run(protocol.batch(f'{name}-{start // step}', part), into)
+            outcome = self.run(protocol.batch(unique(f'{name}-{start // step}'), part), into)
             results |= outcome.results
             if not outcome.complete:
                 missing = [e['id'] for e in part if e['id'] not in outcome.results]
@@ -35,6 +36,11 @@ class Session:
     def close(self) -> None:
         if self.stream:
             self.stream.close()
+
+
+def unique(name: str) -> str:
+    """Give `name` with the time, so a batch never meets an earlier batch's results on the device."""
+    return f'{name}-{time.strftime("%Y%m%d-%H%M%S")}-{time.monotonic_ns() % 1000000:06d}'
 
 
 def fake(folder: Path) -> Session:

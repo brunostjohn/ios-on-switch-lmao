@@ -34,6 +34,25 @@ class CalibrationTest(unittest.TestCase):
         self.assertTrue(ok, lines)
 
 
+class ReuseTest(unittest.TestCase):
+    def test_a_batch_name_run_again_runs_again(self) -> None:
+        with tempfile.TemporaryDirectory() as scratch:
+            root = Path(scratch) / 'device'
+            device = fakedevice.FakeDevice(root)
+            local = transport.Local(root, device.drain)
+            first = loop.run(local, golden.golden_batch(), Path(scratch) / 'first')
+            device.gpu = fakegpu.Gpu(seed=99)
+            second = loop.run(local, golden.golden_batch(), Path(scratch) / 'second')
+            self.assertFalse((root / 'outbox' / 'golden').exists())
+        self.assertTrue(first.complete)
+        self.assertTrue(second.complete)
+        self.assertNotEqual(first.results['fragment']['runs'], second.results['fragment']['runs'])
+
+    def test_session_names_are_unique(self) -> None:
+        self.assertNotEqual(session.unique('latency-0'), session.unique('latency-0'))
+        self.assertTrue(protocol.NAME.match(session.unique('calibration')))
+
+
 class CrashTest(unittest.TestCase):
     def test_an_experiment_the_process_died_in_is_recorded_and_the_rest_run(self) -> None:
         with tempfile.TemporaryDirectory() as scratch:

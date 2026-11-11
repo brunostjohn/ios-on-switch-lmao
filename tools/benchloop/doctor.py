@@ -79,7 +79,7 @@ def roots(udid: str | None) -> list[transport.Afc]:
 
 
 def prove(s: session.Session, into: Path) -> tuple[bool, list[str]]:
-    outcome = s.run(protocol.batch('calibration', calibration()), into)
+    outcome = s.run(protocol.batch(session.unique('calibration'), calibration()), into)
     ok, lines = judge(outcome.results)
     if not outcome.complete:
         lines.append(f'no done.json after {outcome.seconds:.0f} s (is the Bench screen open?)')

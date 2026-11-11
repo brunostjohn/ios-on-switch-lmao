@@ -100,6 +100,13 @@ bool retarget(std::string &key, uint32_t format)
     return true;
 }
 
+// Shader data in whole 256-byte steps, as NVK uploads it and the pack's dataBytes always are
+std::vector<uint8_t> padded(std::vector<uint8_t> data)
+{
+    data.resize((data.size() + 0xff) & ~size_t(0xff));
+    return data;
+}
+
 void setQmd(uint32_t *qmd, unsigned hi, unsigned lo, uint32_t v)
 {
     for (unsigned b = lo; b <= hi; b++, v >>= 1)
@@ -164,7 +171,7 @@ bool fragmentRecord(const raw::Pack &pack, const raw::PackPipeline &tpl, const P
     p.id = programId(fs);
     p.image = fs.sph;
     p.image.insert(p.image.end(), fs.code.begin(), fs.code.end());
-    p.data = fs.data;
+    p.data = padded(fs.data);
     p.cbufTypes = {raw::CbufRoot};
     if (!fs.data.empty())
         p.cbufTypes.push_back(raw::CbufShaderData);
@@ -206,6 +213,8 @@ bool kernelRecord(const raw::PackKernel &tpl, const Program &kernel, const uint3
         return false;
     }
     r = raw::ComputeRecord();
+    r.code = kernel.code;
+    r.data = padded(kernel.data);
     r.kernel = tpl;
     r.kernel.keyHash = 0;
     r.kernel.entries = 0;
@@ -222,9 +231,7 @@ bool kernelRecord(const raw::PackKernel &tpl, const Program &kernel, const uint3
     setQmd(qmd, 639, 624, threads[2]);
     setQmd(qmd, 647, 640, kernel.data.empty() ? 1 : 3);  // CONSTANT_BUFFER_VALID: the root table, the shader data
     if (!kernel.data.empty())
-        setQmd(qmd, 1055, 1039, uint32_t(kernel.data.size()));  // CONSTANT_BUFFER_SIZE(1)
-    r.code = kernel.code;
-    r.data = kernel.data;
+        setQmd(qmd, 1055, 1039, uint32_t(r.data.size()));  // CONSTANT_BUFFER_SIZE(1)
     r.cbufType[0] = raw::CbufRoot;
     r.cbufType[1] = kernel.data.empty() ? 0 : raw::CbufShaderData;
     r.cbufs = kernel.data.empty() ? 1 : 2;

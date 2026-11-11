@@ -6,6 +6,7 @@ Result files have the app's fields (core/BenchResult.swift), so the host reads t
 """
 
 import json
+import shutil
 import time
 import zlib
 from pathlib import Path
@@ -92,6 +93,8 @@ class FakeDevice:
             return
         name = b['batch']
         outbox = self.root / 'outbox' / name
+        if (outbox / 'done.json').is_file():
+            shutil.rmtree(outbox)
         outbox.mkdir(parents=True, exist_ok=True)
         journal = outbox / 'journal.txt'
         crashed, finished = journalled(journal.read_text() if journal.is_file() else '')

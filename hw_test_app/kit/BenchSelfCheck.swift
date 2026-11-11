@@ -14,6 +14,10 @@ enum BenchSelfCheck {
                 ["id": "noop", "kind": "noop", "target": target(size), "draws": [0], "repeats": 3, "readback": "none"],
                 ["id": "known", "kind": "known", "target": target(size), "readback": "full"],
                 [
+                    "id": "known-bgra8", "kind": "known", "readback": "full",
+                    "target": ["format": "bgra8unorm", "width": size, "height": size],
+                ],
+                [
                     "id": "compute", "kind": "compute", "target": target(size), "readback": "none",
                     "compute": [
                         "code": BenchRunner.knownKernel.base64EncodedString(), "gprs": 1, "threads": [32, 1, 1],
@@ -35,7 +39,12 @@ enum BenchSelfCheck {
             let gpu = outcome.runs.first.map { BenchResult.median($0.gpuNs) } ?? 0
             var verdict = outcome.status == "ok" && gpu > 0
             var detail = outcome.status == "ok" ? "\(gpu)ns" : "\(outcome.status):\(LogLine.sanitized(outcome.why))"
-            if e.kind == .known, outcome.status == "ok" {
+            if e.kind == .known, outcome.status == "ok", e.format != "rgba32float" {
+                // the template's own format: every texel the same, whatever the store's rounding of 0.5 and 0.25
+                let uniform = isUniform(outcome.texels ?? Data(), texelBytes: e.texelBytes)
+                verdict = verdict && uniform
+                detail += uniform ? ",uniform" : ",not uniform"
+            } else if e.kind == .known, outcome.status == "ok" {
                 let right = matching(outcome.texels ?? Data(), want: BenchRunner.knownData)
                 verdict = verdict && right == size * size
                 detail += ",\(right)/\(size * size)"
@@ -48,6 +57,14 @@ enum BenchSelfCheck {
 
     private static func target(_ size: Int) -> [String: Any] {
         ["format": "rgba32float", "width": size, "height": size]
+    }
+
+    private static func isUniform(_ texels: Data, texelBytes: Int) -> Bool {
+        guard texels.count >= texelBytes else { return false }
+        let first = texels.prefix(texelBytes)
+        return stride(from: 0, to: texels.count, by: texelBytes).allSatisfy {
+            texels.subdata(in: $0..<($0 + texelBytes)) == first
+        }
     }
 
     private static func matching(_ texels: Data, want: [UInt32]) -> Int {

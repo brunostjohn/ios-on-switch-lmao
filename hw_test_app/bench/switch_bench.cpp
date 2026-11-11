@@ -1,4 +1,5 @@
 #include "hw_test_app/bench/switch_bench.h"
+#include <mach-o/dyld.h>
 #include <mach/mach_time.h>
 #include <cstdio>
 #include <cstring>
@@ -15,6 +16,7 @@
 namespace {
 
 constexpr const char *kPack = "/System/Library/Extensions/TegraGM20BMetal.raw/pack.bin";
+constexpr const char kPlugin[] = "/TegraGM20BMetal.bundle/";
 constexpr uint32_t kTriangleStrip = 4, kBgra8 = 80;
 constexpr uint64_t kKeyBase = 0xbe7c000000000000ull;
 // Placed programs stay in the device's shader heap for its life: a long session starts a fresh device now and then
@@ -26,6 +28,18 @@ std::deque<raw::ComputeRecord> &kernelRecords()
 {
     static std::deque<raw::ComputeRecord> records;
     return records;
+}
+
+// The pack beside the Metal plugin this process loaded, where the plugin itself finds it (TegraGM20BMetalPlugin.mm
+// rawPackRefusal); fetchform's path when no plugin is loaded
+std::string packPath()
+{
+    for (uint32_t i = 0, n = _dyld_image_count(); i < n; i++) {
+        const char *name = _dyld_get_image_name(i);
+        if (const char *at = name ? strstr(name, kPlugin) : nullptr)
+            return std::string(name, at) + "/TegraGM20BMetal.raw/pack.bin";
+    }
+    return kPack;
 }
 
 uint64_t nanoseconds(uint64_t ticks)
@@ -52,6 +66,7 @@ struct switch_bench {
     const raw::PackKernel *kernel = nullptr;
     raw::Texture image;
     raw::Sampler sampler;
+    std::string pack;
     bool imageMade = false, samplerMade = false;
     uint64_t records = 0;
     std::string error;
@@ -59,8 +74,11 @@ struct switch_bench {
     bool open()
     {
         auto opened = std::make_unique<raw::Device>();
-        if (!opened->open(kPack, 0, error, raw::Device::Role::Client))
+        pack = packPath();
+        if (!opened->open(pack.c_str(), 0, error, raw::Device::Role::Client)) {
+            error = pack + ": " + error;
             return false;
+        }
         device = std::move(opened);
         fragment = bench::fragmentTemplate(device->pack());
         kernel = bench::kernelTemplate(device->pack());
@@ -449,12 +467,12 @@ size_t switch_bench_describe(struct switch_bench *b, char *out, size_t size)
     if (!b || !b->device)
         return size_t(snprintf(out, size, "no raw device: %s", b ? b->error.c_str() : "?"));
     const raw::Pack &pack = b->device->pack();
-    return size_t(snprintf(
-        out, size, "pack v%u stack %016llx states %u; template %016llx (%s); kernel template %016llx; own GPU VM",
-        pack.header()->version, (unsigned long long)pack.header()->stack, pack.header()->pipelines,
-        (unsigned long long)(b->fragment ? b->fragment->keyHash : 0),
-        b->fragment ? pack.string(b->fragment->keyString) : "none",
-        (unsigned long long)(b->kernel ? b->kernel->keyHash : 0)));
+    return size_t(snprintf(out, size,
+                           "%s v%u stack %016llx states %u; template %016llx (%s); kernel template %016llx; own GPU VM",
+                           b->pack.c_str(), pack.header()->version, (unsigned long long)pack.header()->stack,
+                           pack.header()->pipelines, (unsigned long long)(b->fragment ? b->fragment->keyHash : 0),
+                           b->fragment ? pack.string(b->fragment->keyString) : "none",
+                           (unsigned long long)(b->kernel ? b->kernel->keyHash : 0)));
 }
 
 void switch_bench_known_data(uint32_t out[4])
