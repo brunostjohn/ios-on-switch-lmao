@@ -299,19 +299,25 @@ int switch_native_surface_publish(const TegraVICSurface *surface, const TegraVIC
         next->release();
         return error;
     }
-    *why = "native export into a surface whose representation would not change";
     auto *logical = switch_vic_surface_backing(surface);
     switch_gpu_cpu_lease *owned = nullptr;
+    *why = !logical                  ? "native export into a surface without a backing of its own"
+        : logical == next->native    ? "native export into a surface its picture already backs"
+                                     : "native export into a surface whose backing would not reserve a conversion";
     error = !logical ? -12 : logical == next->native ? -22
         : switch_gpu_backing_conversion_reserve(logical, kWrite, 0, &owned);
     auto *old = error ? nullptr : copy(surface->memory);
     bool installed = false;
     if (!error) {
         installed = SwitchMemoryAttachment::replace(surface->memory, old, next);
+        *why = installed ? "native export whose surface's representation would not advance"
+                         : "native export that another publication beat to the surface";
         error = installed ? advanceRepresentation(surface->memory, logical, owned) : -16;
     }
-    if (!error && old)
+    if (!error && old) {
+        *why = "native export whose surface's earlier representation would not invalidate";
         error = invalidate(old, logical, owned);
+    }
     if (error && installed && !SwitchMemoryAttachment::replace(surface->memory, next, old))
         panic("SwitchSurface: native publication rollback lost attachment");
     if (old)

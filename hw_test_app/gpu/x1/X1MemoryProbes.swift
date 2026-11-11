@@ -6,9 +6,12 @@ import Metal
 public enum X1MemoryProbes {
     /// Metal's contract: a new MTLBuffer reads zero. Each size is made, checked, filled with 0xAB and freed 64 times,
     /// so the raw path's pool and write-combined spans are handed out again; pattern bytes are 0xAB found in a new one.
+    /// Only a span handed out again tests the claim: with every buffer zero and none at an address seen before, the
+    /// pages were fresh and the verdict is INCONCLUSIVE.
     public static func bufferZero(_ gpu: GPU) async throws -> ProbeFinding {
         var wrong: [String: Int] = [:]
         var metrics = Metrics()
+        var reusedAll = 0
         let modes: [(String, MTLResourceOptions)] = [
             ("shared", .storageModeShared), ("wc", [.storageModeShared, .cpuCacheModeWriteCombined]),
         ]
@@ -16,12 +19,15 @@ public enum X1MemoryProbes {
             var dirtyBuffers = 0
             var dirtyBytes = 0
             var patternBytes = 0
+            var reused = 0
+            var seen = Set<UInt>()
             for length in [4096, 65536, 1 << 20] {
                 for _ in 0..<64 {
                     try autoreleasepool {
                         guard let buffer = gpu.device.makeBuffer(length: length, options: options) else {
                             throw TestFailure("makeBuffer(\(length)) returned nil")
                         }
+                        if !seen.insert(UInt(bitPattern: buffer.contents())).inserted { reused += 1 }
                         let bytes = UnsafeBufferPointer(
                             start: buffer.contents().bindMemory(to: UInt8.self, capacity: length), count: length)
                         let dirty = bytes.reduce(0) { $0 + ($1 != 0 ? 1 : 0) }
@@ -37,8 +43,12 @@ public enum X1MemoryProbes {
             wrong[mode + "_dirty_buffers"] = dirtyBuffers
             metrics.set(mode + "_dirty_bytes", dirtyBytes)
             metrics.set(mode + "_pattern_bytes", patternBytes)
+            metrics.set(mode + "_reused", reused)
+            reusedAll += reused
         }
-        return ProbeFinding.counted(wrong, paths: [], metrics: metrics)
+        let finding = ProbeFinding.counted(wrong, paths: [], metrics: metrics)
+        guard finding.verdict == .pass, reusedAll == 0 else { return finding }
+        return ProbeFinding(.inconclusive, finding.metrics, note: "no buffer came back at an address seen before")
     }
 
     /// RGBA8 textures over a buffer, sampled at each texel's centre: one at offset 48 with rows of 48 bytes (16 mod

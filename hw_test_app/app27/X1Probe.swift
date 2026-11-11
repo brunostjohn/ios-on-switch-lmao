@@ -9,6 +9,7 @@ import Metal
 /// paths= (each command buffer's path on the facade) and reopens= (GPU channels the kernel killed while it ran and the
 /// facade opened again). A risky probe programs methods no driver has run on this chip: it runs even after an earlier
 /// test left the GPU unanswering, and ends with a fill on a fresh queue, so gpu_after=0 names the probe that wedged it.
+/// It starts by disarming what a probe that timed out left armed (stale_emitted= draws carried those methods).
 struct X1Probe: HWTest {
     let id: String
     let name: String
@@ -22,6 +23,7 @@ struct X1Probe: HWTest {
 
     func run(_ context: TestContext) async throws -> Outcome {
         let gpu = try GPU.make()
+        let stale = risky ? RawMethods.disarm(gpu.device) : 0
         let before = RawFacade.counters(of: gpu.device)
         var finding: ProbeFinding?
         var failure: String?
@@ -35,7 +37,10 @@ struct X1Probe: HWTest {
         base.set("dev", RawFacade.kind(of: gpu.device))
         base.set("paths", gpu.paths.isEmpty ? "-" : gpu.paths.text)
         base.set("reopens", (after["reopens"] ?? 0) - (before["reopens"] ?? 0))
-        if risky { base.set("gpu_after", await GPUProbe.answers()) }
+        if risky {
+            base.set("gpu_after", await GPUProbe.answers())
+            base.set("stale_emitted", stale)
+        }
         guard let finding else {
             var metrics = Metrics()
             metrics.set("probe", probe)
