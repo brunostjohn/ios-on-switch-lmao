@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: BSD-2-Clause-Patent
 // Host test for interlaced H.264 in AVD.videodecoder: h264_fields_scenarios.h's field-coded streams through H264NVDEC
 // with a fake NVDEC backend. For each picture it checks the job (field_pic_flag, bottom_field_flag, second_field, a
-// second field in its first field's surface, the kernel's checker accepting it), builds RefPicList0 from the dpb[]
-// table NVDEC is given (8.2.4.2.1, 8.2.4.2.2 and 8.2.4.2.5, as the engine builds it) and compares it with FFmpeg's,
-// and checks that every sample's frame is answered exactly once, in decoding order. Then the checker refuses each
-// interlaced setup it must not take.
+// second field in its first field's surface, the kernel's checker accepting it, the order counts it is given), builds
+// RefPicList0 from the dpb[] table NVDEC is given (8.2.4.2.1, 8.2.4.2.2 and 8.2.4.2.5, as the engine builds it) and
+// compares it with FFmpeg's, and checks that every sample's frame is answered exactly once, in decoding order. Then
+// the checker refuses each interlaced setup it must not take.
 //   h264_fields_host                        prints "PASS h264 fields: ..." (h264_fields_host_test)
 //   h264_fields_host --dump <case> <file>   writes the case's stream (Annex B) for FFmpeg
 //   h264_fields_host --oracle <case> <yuv>  prints the RefPicList0 FFmpeg's decode of it shows, per P picture
@@ -193,6 +193,45 @@ static void list0(const nvdec_h264_pic_s *p, unsigned active, Name names[17][2],
     }
 }
 
+static bool resets(const char *mmco)
+{
+    return mmco && (!strncmp(mmco, "5", 1) || strstr(mmco, " 5"));
+}
+
+// The order counts NVDEC is given (no pic_order_cnt_lsb wraps here, so a count is its lsb; a frame's bottom field is
+// one later): the picture's own, and a second field's first field's (0 for a first field's other field); each dpb[]
+// field's as decoded, 0 for a field never decoded and counted from the picture after its memory_management_control
+// operation 5; and in a second field's own-surface entry, its first field's count in both slots. counts: each
+// surface's fields as decoded, updated after the picture.
+static int orderCounts(const FieldsCase *c, unsigned j, const nvdec_h264_pic_s *p, bool second, int32_t counts[17][2])
+{
+    const FieldsPicture *pic = &c->steps[j].picture;
+    const unsigned parity = pic->structure == FS_BOTTOM;
+    int32_t want[2] = {pic->poc_lsb, pic->poc_lsb + 1};
+    if (pic->structure != FS_FRAME) {
+        want[parity] = pic->poc_lsb;
+        want[!parity] = second ? counts[p->CurrPicIdx][!parity] : 0;
+    }
+    int bad = p->CurrFieldOrderCnt[0] != want[0] || p->CurrFieldOrderCnt[1] != want[1];
+    for (unsigned i = 0; i < 16; i++) {
+        const nvdec_dpb_entry_s *e = &p->dpb[i];
+        if (!e->state || e->not_existing)
+            continue;
+        const bool own = second && e->index == p->CurrPicIdx;
+        for (unsigned f = 0; f < 2; f++)
+            bad += (int32_t)e->FieldOrderCnt[f] != counts[e->index][own ? !parity : f];
+    }
+    if (bad)
+        fprintf(stderr, "%s: picture %u: order counts %d %d (want %d %d) or a dpb[] entry's differ\n", c->name, j,
+                p->CurrFieldOrderCnt[0], p->CurrFieldOrderCnt[1], want[0], want[1]);
+    if (!second)
+        counts[p->CurrPicIdx][0] = counts[p->CurrPicIdx][1] = 0;
+    for (unsigned f = 0; f < 2; f++)
+        if (pic->structure & (1u << f))
+            counts[p->CurrPicIdx][f] = !resets(pic->mmco) ? want[f] : pic->structure == FS_FRAME ? (int32_t)f : 0;
+    return bad;
+}
+
 static int runCase(const FieldsCase *c, unsigned *pictures, unsigned *frames)
 {
     FieldsPicture pics[64];
@@ -226,6 +265,8 @@ static int runCase(const FieldsCase *c, unsigned *pictures, unsigned *frames)
 
     Name names[17][2];
     memset(names, 0, sizeof(names));
+    int32_t counts[17][2];
+    memset(counts, 0, sizeof(counts));
     unsigned firstSurface = 0, pairFrameNum = 0;
     bad += fake.job_count != c->count || fake.refused;
     for (unsigned j = 0; j < fake.job_count && j < c->count; j++) {
@@ -235,7 +276,7 @@ static int runCase(const FieldsCase *c, unsigned *pictures, unsigned *frames)
         const bool second = field && prev && prev->structure != FS_FRAME && prev->structure != pic->structure &&
                             !fake.jobs[j - 1].second_field && pairFrameNum == pic->frame_num && !pic->idr &&
                             prev->ref == pic->ref;
-        pairFrameNum = pic->mmco && (!strncmp(pic->mmco, "5", 1) || strstr(pic->mmco, " 5")) ? 0 : pic->frame_num;
+        pairFrameNum = resets(pic->mmco) ? 0 : pic->frame_num;
         if (p->field_pic_flag != field || p->bottom_field_flag != (pic->structure == FS_BOTTOM) ||
             p->second_field != second || (second && p->CurrPicIdx != firstSurface) || p->MbaffFrameFlag ||
             p->frame_mbs_only_flag || p->FrameHeightInMbs != 2) {
@@ -245,6 +286,7 @@ static int runCase(const FieldsCase *c, unsigned *pictures, unsigned *frames)
             bad++;
         }
         firstSurface = p->CurrPicIdx;
+        bad += orderCounts(c, j, p, second, counts);
         if (c->steps[j].list0) {
             char got[256];
             list0(p, pic->probes, names, got, sizeof(got));
