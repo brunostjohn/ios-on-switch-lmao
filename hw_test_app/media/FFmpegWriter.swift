@@ -6,8 +6,8 @@ import HWTestCore
 /// run to run. The MP4 files describe MPEG-2 and MPEG-1 by objectTypeIndication (0x61, 0x6a), which CoreMedia turns
 /// into 'mp2v' and 'mp1v'.
 ///   MPEG-4 720p: Simple profile (I- and P-VOPs, H.263 quantisation). 1080p: Advanced Simple (two B-VOPs between
-///     references, quarter-sample motion, MPEG quantisation with both matrices loaded), the streams NVDEC takes that the
-///     Mac's and the iPad's software decoders refuse.
+///     references, quarter-sample motion, MPEG quantisation with both matrices loaded), a stream NVDEC takes that the
+///     Mac's software decoder refuses (codecBadDataErr).
 ///   MPEG-2 720p: Main profile, progressive, two B-pictures, default matrices. 1080p: interlaced coding (field DCT and
 ///     field prediction in frame pictures), both matrices loaded, alternate scan, intra VLC table, non-linear quantiser
 ///     scale, 10-bit intra DC.
