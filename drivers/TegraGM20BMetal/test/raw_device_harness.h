@@ -55,7 +55,6 @@ protected:
         return cb->commit(seqno) ? seqno : 0;
     }
 
-    // The live channel's model slot
     kernel_model::Slot *liveSlot()
     {
         for (kernel_model::Slot &s : kernel_model::model.slots)

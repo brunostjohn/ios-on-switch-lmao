@@ -97,3 +97,19 @@ fragment float4 argument_colour_fragment(constant ColourArguments &arguments [[b
 {
     return *arguments.colour;
 }
+
+/// Two textures and a sampler reached through an argument buffer (metal.native.argument_encoder): the target's left half
+/// samples the first texture, its right half the second.
+struct TextureArguments {
+    texture2d<float> first [[id(0)]];
+    texture2d<float> second [[id(1)]];
+    sampler nearest [[id(2)]];
+};
+
+fragment float4 argument_textures_fragment(float4 position [[position]],
+                                           constant TextureArguments &arguments [[buffer(0)]])
+{
+    const float2 centre = float2(0.5);
+    return position.x < 4.0 ? arguments.first.sample(arguments.nearest, centre)
+                             : arguments.second.sample(arguments.nearest, centre);
+}
