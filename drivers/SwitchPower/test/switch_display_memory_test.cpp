@@ -41,10 +41,12 @@ TEST(DisplayMemory, MergedBandwidthBoundCoversEveryRelativeThreeWindowDemand)
                 }
 }
 
-TEST(DisplayMemory, ProfileRequiresB01AndLpddr4)
+TEST(DisplayMemory, ProfileTakesT210AndB01WithLpddr4)
 {
     EXPECT_TRUE(memoryProfile(0x2120, 1));
-    EXPECT_FALSE(memoryProfile(0x2110, 1));
+    EXPECT_TRUE(memoryProfile(0x2110, 1));
+    EXPECT_FALSE(memoryProfile(0x2100, 1));
+    EXPECT_FALSE(memoryProfile(0x2130, 1));
     EXPECT_FALSE(memoryProfile(0x2120, 2));
     EXPECT_FALSE(memoryProfile(0x1920, 1));
 }

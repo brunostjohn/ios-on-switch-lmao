@@ -21,6 +21,7 @@
 #include "../../kits/SwitchIdle/switch_idle.h"
 #include "../../kits/SwitchMMIO/SwitchMMIOKernel.h"
 #include "../../kits/SwitchMMIO/SwitchMMIOWords.h"
+#include "SwitchClocks.h"
 #include "SwitchDisplayMemoryState.h"
 #include "SwitchEMC.h"
 #include "SwitchEMCGovernor.h"
@@ -52,8 +53,9 @@ class SwitchEMC : public OSObject {
     volatile uint8_t *regs = nullptr;
     SwitchMMIOWords mcRegs;
     switch_display::MemoryState memoryState;
-    bool memoryQualified = false, memoryDirty = false;
+    bool memoryQualified = false, memoryDirty = false, fixed = false;
     uint32_t memoryAppliedKhz = 0;
+    volatile uint8_t *car = nullptr;
     uint32_t khz[SWITCH_EMC_MAX_RATES] = {};
     unsigned count = 0, cur = 0;
     bool governing = false, refusalLogged = false;
@@ -75,6 +77,12 @@ class SwitchEMC : public OSObject {
     void program();
     bool moveTo(unsigned index);
     unsigned reconcileRate(uint32_t observed, bool quiesced = false);
+    bool useFixedRate(unsigned now);
+    IOReturn holdFixedRate();
+    unsigned carEmcKhz() const
+    {
+        return car ? switchclk::readEmc(car).kHz : 0;
+    }
     unsigned memoryFloor(unsigned first) const;
     void dropDisplayMemory(const char *why);
     bool programMemory(uint32_t before, uint32_t after, bool force = false);
@@ -126,6 +134,7 @@ void framesStarted()
 
 #include "SwitchDisplayMemoryEMC.h"
 #include "SwitchEMCClock.h"
+#include "SwitchEMCFixed.h"
 
 SwitchEMC *SwitchEMC::create(char *why, size_t size)
 {
@@ -164,13 +173,19 @@ bool SwitchEMC::setup(char *why, size_t size)
     const int rows = tegra_bpmp_emc_rates(table, sizeof(table) / sizeof(table[0]));
     const int err = rows < 0 ? rows : tegra_bpmp_emc_get(&now);
     if (rows < 0 || err) {
-        snprintf(why, size, "the BPMP gave no EMC table or rate (%d)", rows < 0 ? rows : err);
-        return false;
-    }
-    count = switch_emc_rates(table, static_cast<unsigned>(rows), now + now / 1000, khz);
-    if (count < 2 || switch_emc_row(khz, count, now) != count - 1) {
-        snprintf(why, size, "EMC at %u kHz is not the top of %u usable BPMP rates", now, count);
-        return false;
+        car = switch_mmio_map(switchclk::kCarPA, 0x1000);
+        now = carEmcKhz();
+        if (!useFixedRate(now)) {
+            snprintf(why, size, "the BPMP gave no EMC table or rate (%d) and CLK_SOURCE_EMC reads no rate",
+                     rows < 0 ? rows : err);
+            return false;
+        }
+    } else {
+        count = switch_emc_rates(table, static_cast<unsigned>(rows), now + now / 1000, khz);
+        if (count < 2 || switch_emc_row(khz, count, now) != count - 1) {
+            snprintf(why, size, "EMC at %u kHz is not the top of %u usable BPMP rates", now, count);
+            return false;
+        }
     }
     cur = count - 1;
     mcRegs = SwitchMMIOWords(switch_mmio_map(0x70019000, 0x1000));
@@ -180,8 +195,11 @@ bool SwitchEMC::setup(char *why, size_t size)
     const uint32_t fbio = emcProfile ? switch_mmio_read32(emcProfile, 0x104) : 0;
     memoryQualified = mcRegs && emcProfile && chipProfile && switch_display::memoryProfile(hidrev, fbio);
     if (!memoryQualified)
-        IOLog("SwitchEMC: display memory admission off: HIDREV %#x FBIO_CFG5 %#x is not a T210B01 with LPDDR4\n",
+        IOLog("SwitchEMC: display memory admission off: HIDREV %#x FBIO_CFG5 %#x is not a T21x with LPDDR4\n",
               hidrev, fbio);
+    if (fixed)
+        IOLog("SwitchEMC: no BPMP firmware: the EMC stays at %u kHz (%s), where display memory admission plans\n",
+              now, switchclk::emcSourceName(switchclk::readEmc(car).source));
     regs = switch_mmio_map(kActmonPA, 0x400);
     loop = IOWorkLoop::workLoop();
     IOService *nub = switch_interrupt_nub(kActmonIntid, false);

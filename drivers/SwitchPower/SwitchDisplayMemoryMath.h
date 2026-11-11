@@ -45,9 +45,12 @@ inline uint64_t memorySpoolEnvelope(uint64_t bandwidthMBps, uint32_t dvfsNs)
     return dvfsNs ? (bandwidthMBps * dvfsNs * 3 + 4999) / 5000 + 2 : 0;
 }
 
+// T210 (major revision 1) or T210B01 (2) with LPDDR4 (EMC_FBIO_CFG5 DRAM_TYPE 1): L4T's T21x latency allowance and
+// bandwidth manager take both chips alike and key only on the DRAM type.
 inline bool memoryProfile(uint32_t hidrev, uint32_t fbio)
 {
-    return ((hidrev >> 8) & 0xff) == 0x21 && ((hidrev >> 4) & 0xf) == 2 && (fbio & 3) == 1;
+    const uint32_t major = (hidrev >> 4) & 0xf;
+    return ((hidrev >> 8) & 0xff) == 0x21 && (major == 1 || major == 2) && (fbio & 3) == 1;
 }
 
 // T210B01's BPMP rate is the root DRAM clock; the LA equations use half of it.

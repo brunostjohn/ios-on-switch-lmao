@@ -155,5 +155,6 @@ host_test(
         "//drivers/SwitchPower:SwitchDisplayMemoryEMC.h",
         "//drivers/SwitchPower:SwitchEMCGovernor.h",
         "//drivers/SwitchPower:SwitchEMCClock.h",
+        "//drivers/SwitchPower:SwitchEMCFixed.h",
     ],
 )

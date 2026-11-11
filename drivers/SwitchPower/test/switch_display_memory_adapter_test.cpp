@@ -66,8 +66,9 @@ public:
     Loop *loop = &object;
     Registers mcRegs;
     switch_display::MemoryState memoryState;
-    bool memoryQualified = true, memoryDirty = false;
+    bool memoryQualified = true, memoryDirty = false, fixed = false;
     uint32_t memoryAppliedKhz = 0;
+    unsigned carRate = 0;
     uint32_t khz[3] = {204000, 1331200, 1600000};
     unsigned count = 3, cur = 0, starts = 0, watermarks = 0;
     uint64_t residency[3] = {}, since = 0;
@@ -85,6 +86,12 @@ public:
     unsigned reconcileRate(uint32_t, bool = false);
     bool moveTo(unsigned);
     int reserveMemory(const switch_display_memory_head &);
+    bool useFixedRate(unsigned);
+    IOReturn holdFixedRate();
+    unsigned carEmcKhz() const
+    {
+        return carRate;
+    }
 
     void program()
     {
@@ -100,6 +107,7 @@ public:
 namespace {
 SwitchEMC *gEMC;
 uint64_t gDisplayBytes;
+bool gTopHeld;
 std::deque<std::pair<int, unsigned>> setResults;
 std::vector<unsigned> requestedRates;
 std::vector<uint64_t> activeDemandsAtSet;
@@ -129,6 +137,7 @@ int tegra_bpmp_emc_get(unsigned *actual)
 
 #include "../SwitchDisplayMemoryEMC.h"
 #include "../SwitchEMCClock.h"
+#include "../SwitchEMCFixed.h"
 
 namespace {
 using namespace switch_display;
@@ -303,4 +312,32 @@ TEST_F(MemoryAdapter, QuiescedResumeCanRecoverAFailedRateRead)
     EXPECT_EQ(emc.cur, 2u);
     EXPECT_EQ(emc.starts, 1u);
 }
+}
+
+TEST_F(MemoryAdapter, T210AdmitsAtTheBootChainsRateAndNeverAsksTheBpmp)
+{
+    ASSERT_TRUE(emc.useFixedRate(1600000));
+    ASSERT_EQ(SwitchEMC::governAction(&emc, nullptr, nullptr, nullptr, nullptr), kIOReturnError);
+    emc.carRate = 1600000;
+    ASSERT_EQ(SwitchEMC::governAction(&emc, nullptr, nullptr, nullptr, nullptr), 0);
+    EXPECT_EQ(emc.starts, 0u);
+    EXPECT_TRUE(gTopHeld);
+    EXPECT_EQ(emc.reserveMemory(request(2000000000)), 0);
+    EXPECT_GT(emc.mcRegs.writes, 0u);
+    EXPECT_EQ(emc.reserveMemory(request(20000000000ULL)), -28);
+    EXPECT_TRUE(requestedRates.empty());
+    EXPECT_TRUE(emc.displayMemoryReady());
+}
+
+TEST_F(MemoryAdapter, T210ReplansAtTheRateWarmbootRestores)
+{
+    emc.carRate = 1600000;
+    ASSERT_TRUE(emc.useFixedRate(emc.carRate));
+    ASSERT_EQ(emc.reserveMemory(request(2000000000)), 0);
+    emc.carRate = 204000;
+    ASSERT_EQ(SwitchEMC::governAction(&emc, &emc, nullptr, nullptr, nullptr), 0);
+    EXPECT_EQ(emc.khz[0], 204000u);
+    EXPECT_EQ(emc.count, 1u);
+    EXPECT_FALSE(emc.displayMemoryReady());
+    EXPECT_TRUE(requestedRates.empty());
 }

@@ -60,6 +60,8 @@ IOReturn SwitchEMC::governAction(OSObject *owner, void *resume, void *, void *, 
 {
     auto *self = static_cast<SwitchEMC *>(owner);
     unsigned now = 0;
+    if (self->fixed)
+        return self->holdFixedRate();
     if (self->governing)
         return kIOReturnSuccess;
     if (tegra_bpmp_emc_get(&now)) {
@@ -78,3 +80,4 @@ IOReturn SwitchEMC::governAction(OSObject *owner, void *resume, void *, void *, 
     self->startActmon();
     return kIOReturnSuccess;
 }
+
