@@ -1253,3 +1253,12 @@ host_test(
     cxx_std = "c++17",
     deps = ["//kits/SwitchGM20B:classes"],
 )
+
+host_test(
+    name = "raw_event_job_test",
+    srcs = [
+        "raw_event_job_test.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_event_job.h",
+    ],
+    cxx_std = "c++17",
+)

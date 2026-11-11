@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #import "RawMetalInternal.h"
+#import "RawMetalEventJobs.h"
 
 @implementation RMCommandBuffer (Events)
 
@@ -126,7 +127,7 @@ raw::EventReadiness eventReadiness(RMCommandBuffer *cb, raw::EventDeadline::Time
         return Readiness::ready;
     const Cmd c = cb->_plan.legacy(range.from);
     if (c.op == OpSignalEvent) {
-        if (range.gpuSignal)
+        if (range.gpuSignal || signalOrderedOnGpu(cb, range))
             return Readiness::ready;
         std::lock_guard<std::mutex> l(cb->_lock);
         return cb->_segmentPending ? Readiness::blocked : Readiness::ready;

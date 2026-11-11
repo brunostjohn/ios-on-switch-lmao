@@ -1357,6 +1357,24 @@ public:
         return kr == kIOReturnNotResponding ? KERN_SUCCESS : kr;
     }
 
+    // A job of no pushes that carries event waits and signals (at most TegraGM20BMaxJobEvents together): the kernel makes the
+    // channel acquire each wait's producer, and releases the signals once every earlier submission of this channel and what
+    // orderAfterOthers queued for it completed. Called where submissions are (serialised).
+    bool eventJob(const JobEvents &events, uint32_t &seqno, int *result = nullptr)
+    {
+        if (events.empty() || events.waitCount + events.signalCount > TegraGM20BMaxJobEvents || !ensureChannel())
+            return false;
+        if ((contextless_ || k_.lost(channel_)) && !reopen())
+            return false;
+        SurfaceList none;
+        uint32_t seq = 0;
+        if (!k_.exec(channel_, nullptr, 0, lastSeqno_, seq, &none, result, JobVisibility::External, events))
+            return false;
+        lastSeqno_ = seq;
+        seqno = seq;
+        return true;
+    }
+
     struct Stats {
 #if SWITCH_RAW_DIAGNOSTICS
         std::atomic<uint64_t> commits{0}, pushBytes{0}, uploadBytes{0}, ringWaits{0}, ringsOutgrown{0}, imports{0},

@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #import "RawMetalInternal.h"
+#import "RawMetalEventJobs.h"
 #include "raw_scheduled_wait.h"
 
 void wakeSubmit(void *queue, uint32_t dependencies)
@@ -203,7 +204,7 @@ void submitLoop()
                         wait = raw::HeadWait::compile;
                     }
                 }
-                if (!error && !blocked && !range.event && range.raw) {
+                if (!error && !blocked && ((!range.event && range.raw) || signalOrderedOnGpu(cb, range))) {
                     std::lock_guard<std::mutex> m(r.m2vLock);
                     if (!m2vClear()) {
                         blocked = true;

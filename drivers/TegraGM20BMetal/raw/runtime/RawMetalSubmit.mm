@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 #import "RawMetalInternal.h"
 #include "RawMetalPlanExecution.h"
+#import "RawMetalEventJobs.h"
 #include "raw_order.h"
 
 // ---- commit: order between the two drivers ----
@@ -163,7 +164,11 @@ bool submitRange(RMCommandBuffer *cb)
         const Cmd event = cb->_plan.legacy(range.from);
         if (event.op == OpWaitEvent)
             releaseEventWaits(cb);
-        if (event.op == OpSignalEvent && !range.gpuSignal) {
+        const bool unsignalled = event.op == OpSignalEvent && !range.gpuSignal;
+        const RMEventJob job = unsignalled ? submitEventJobs(cb) : RMEventJob::None;
+        if (job == RMEventJob::Retry)
+            return false;
+        if (unsignalled && job == RMEventJob::None) {
             // eventReadiness required all earlier submitted ranges to retire successfully before reaching this position.
             id<MTLSharedEvent> target = (__bridge id)event.obj;
             if (target.signaledValue < event.c)

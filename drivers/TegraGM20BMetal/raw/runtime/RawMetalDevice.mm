@@ -2,7 +2,6 @@
 #import "RawMetalInternal.h"
 #include "raw_nonfinite.h"
 #include "NativeBridgeMetalFrontend.h"
-#import "SwitchSharedEvent.h"
 
 // Why the raw path does not take a stored depth/stencil texture's m2v texture in place, from the answer of
 // native_bridge_metal_texture_memory (-3: m2v made no texture)
@@ -31,31 +30,6 @@ static const char *zetaMemoryRefusal(int asked)
 }
 
 @implementation RMDevice
-
-- (id<MTLSharedEvent>)newSharedEvent
-{
-    return gRM->sharedEvents ? [[SwitchSharedEvent alloc] initWithOptions:0] : [gRM->fallback newSharedEvent];
-}
-
-- (id<MTLSharedEvent>)newSharedEventWithHandle:(MTLSharedEventHandle *)handle
-{
-    return gRM->sharedEvents ? [[SwitchSharedEvent alloc] initWithHandle:handle] :
-                              [gRM->fallback newSharedEventWithHandle:handle];
-}
-
-- (id<MTLSharedEvent>)newSharedEventWithOptions:(NSInteger)options
-{
-    if (gRM->sharedEvents)
-        return [[SwitchSharedEvent alloc] initWithOptions:NSUInteger(options)];
-    return ((id (*)(id, SEL, NSInteger))objc_msgSend)(gRM->fallback, _cmd, options);
-}
-
-- (id<MTLSharedEvent>)newSharedEventWithMachPort:(mach_port_t)port
-{
-    if (gRM->sharedEvents)
-        return [[SwitchSharedEvent alloc] initWithMachPort:port];
-    return ((id (*)(id, SEL, mach_port_t))objc_msgSend)(gRM->fallback, _cmd, port);
-}
 
 - (void)rmCommit:(RMCommandBuffer *)cb
 {

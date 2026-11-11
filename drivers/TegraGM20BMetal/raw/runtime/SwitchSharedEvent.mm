@@ -26,6 +26,7 @@
     uint64_t _traceID;
 }
 @synthesize label = _label;
+@synthesize device = _device;
 
 - (instancetype)initWithOptions:(NSUInteger)options
 {
@@ -67,11 +68,6 @@
 - (instancetype)init
 {
     return [self initWithOptions:0];
-}
-
-- (id<MTLDevice>)device
-{
-    return nil;
 }
 
 - (mach_port_t)eventPort

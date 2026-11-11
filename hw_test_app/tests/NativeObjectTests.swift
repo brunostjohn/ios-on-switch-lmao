@@ -167,5 +167,5 @@ struct NativeDepthStencilTest: NativeObjectTest {
 }
 
 enum NativeObjectTests {
-    static let all: [any HWTest] = [NativeDepthStencilTest()]
+    static let all: [any HWTest] = [NativeDepthStencilTest(), NativeSharedEventTest()]
 }

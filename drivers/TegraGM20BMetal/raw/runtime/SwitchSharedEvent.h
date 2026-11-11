@@ -12,4 +12,5 @@
 @property (readonly) uint64_t labelTraceID;
 @property (readonly) id IOSurfaceSharedEvent;
 @property (readonly) BOOL supportsRollback;
+@property (nonatomic, weak) id<MTLDevice> device;
 @end

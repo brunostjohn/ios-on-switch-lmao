@@ -99,6 +99,7 @@ TESTS: dict[str, bool] = {
             'gpu.path.shared_events',
             'gpu.path.resource_ready',
             'metal.native.depth_stencil',
+            'metal.native.shared_event',
         ],
         False,
     ),
