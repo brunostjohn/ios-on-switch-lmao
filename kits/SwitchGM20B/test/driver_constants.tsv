@@ -15,28 +15,12 @@ raw_gpu.cpp	kClientFirstShare	policy	allocation policy
 raw_gpu.cpp	kClientHeapFirstShare	policy	allocation policy
 raw_gpu.cpp	kInstanceWords	policy	push words per instance
 raw_gpu.cpp	kSampleWords	policy	push words of a sample layout
-raw_compute.cpp	WAIT_FOR_IDLE	nv	NVB1C0_WAIT_FOR_IDLE
-raw_compute.cpp	INVALIDATE_TEXTURE_HEADER_CACHE_NO_WFI	nv	NVB1C0_INVALIDATE_TEXTURE_HEADER_CACHE_NO_WFI
-raw_compute.cpp	INVALIDATE_SKED_CACHES	nv	NVB1C0_INVALIDATE_SKED_CACHES
-raw_compute.cpp	SEND_PCAS_A	nv	NVB1C0_SEND_PCAS_A
-raw_compute.cpp	SEND_SIGNALING_PCAS_B	nv	NVB1C0_SEND_SIGNALING_PCAS_B
-raw_compute.cpp	INVALIDATE_SHADER_CACHES	nv	NVB1C0_INVALIDATE_SHADER_CACHES
-raw_compute.cpp	INVALIDATE_TEXTURE_DATA_CACHE_NO_WFI	nv	NVB1C0_INVALIDATE_TEXTURE_DATA_CACHE_NO_WFI
-raw_compute.cpp	INVALIDATE_SAMPLER_CACHE_NO_WFI	nv	NVB1C0_INVALIDATE_SAMPLER_CACHE_NO_WFI
 raw_compute.cpp	kRootBytes	policy	NVK's root descriptor table size (nvk_cmd_buffer.h)
 raw_compute.cpp	kRootSets	policy	NVK root table offset
 raw_compute.cpp	kRootPush	policy	NVK root table offset
 raw_compute.cpp	kUploadChunk	policy	upload granule
-raw_compute.cpp	kPcasInvalidateSchedule	nv	NVDEF(NVB1C0, SEND_SIGNALING_PCAS_B, INVALIDATE, TRUE) | NVDEF(NVB1C0, SEND_SIGNALING_PCAS_B, SCHEDULE, TRUE)
-raw_compute.cpp	kInvalidateData	nv	NVDEF(NVB1C0, INVALIDATE_SHADER_CACHES, DATA, TRUE)
-raw_compute.cpp	kFlushData	nv	NVDEF(NVB1C0, INVALIDATE_SHADER_CACHES, FLUSH_DATA, TRUE)
-raw_compute.cpp	kInvalidateConstant	nv	NVDEF(NVB1C0, INVALIDATE_SHADER_CACHES, CONSTANT, TRUE)
 raw_compute.cpp	kEncoderWords	policy	push reservation
 raw_compute.cpp	kConstexprSampler	policy	pack's constexpr sampler slot flag
-raw_compute.cpp	kQmdProgramOffset	nv	(DRF_LO(DRF_MW(NVB1C0_QMDV01_07_PROGRAM_OFFSET)) / 32)
-raw_compute.cpp	kQmdRasterWidth	nv	(DRF_LO(DRF_MW(NVB1C0_QMDV01_07_CTA_RASTER_WIDTH)) / 32)
-raw_compute.cpp	kQmdRasterHeightDepth	nv	(DRF_LO(DRF_MW(NVB1C0_QMDV01_07_CTA_RASTER_HEIGHT)) / 32)
-raw_compute.cpp	kQmdCbufValid	nv	(DRF_LO(DRF_MW(NVB1C0_QMDV01_07_CONSTANT_BUFFER_VALID(0))) / 32)
 raw_split.cpp	WAIT_FOR_IDLE	nv	NVB1C0_WAIT_FOR_IDLE
 raw_split.cpp	INVALIDATE_SHADER_CACHES	nv	NVB1C0_INVALIDATE_SHADER_CACHES
 raw_split.cpp	INVALIDATE_SKED_CACHES	nv	NVB1C0_INVALIDATE_SKED_CACHES

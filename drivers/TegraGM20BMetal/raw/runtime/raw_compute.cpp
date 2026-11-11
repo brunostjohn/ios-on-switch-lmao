@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
-// See raw_compute.h. Method numbers are NVIDIA's (Mesa src/nouveau/headers/nvidia/classes/clb1c0.h, cla1c0qmd.h, MIT).
+// See raw_compute.h. Method numbers are NVIDIA's (kits/SwitchGM20B: Mesa's clb1c0.h, clb1c0qmd.h, MIT).
 #include "raw_compute.h"
+#include "../../../../kits/SwitchGM20B/SwitchGM20B.h"
 #include "raw_compute_visibility.h"
 #include "raw_residual.h"
 #include "raw_slm.h"
@@ -15,25 +16,31 @@ namespace raw {
 namespace {
 
 enum : uint32_t {
-    WAIT_FOR_IDLE = 0x0110,
-    INVALIDATE_TEXTURE_HEADER_CACHE_NO_WFI = 0x0244,
-    INVALIDATE_SKED_CACHES = 0x0298,
-    SEND_PCAS_A = 0x02b4,
-    SEND_SIGNALING_PCAS_B = 0x02bc,
-    INVALIDATE_SHADER_CACHES = 0x021c,
-    INVALIDATE_TEXTURE_DATA_CACHE_NO_WFI = 0x1288,
-    INVALIDATE_SAMPLER_CACHE_NO_WFI = 0x1424,
+    WAIT_FOR_IDLE = NVB1C0_WAIT_FOR_IDLE,
+    INVALIDATE_TEXTURE_HEADER_CACHE_NO_WFI = NVB1C0_INVALIDATE_TEXTURE_HEADER_CACHE_NO_WFI,
+    INVALIDATE_SKED_CACHES = NVB1C0_INVALIDATE_SKED_CACHES,
+    SEND_PCAS_A = NVB1C0_SEND_PCAS_A,
+    SEND_SIGNALING_PCAS_B = NVB1C0_SEND_SIGNALING_PCAS_B,
+    INVALIDATE_SHADER_CACHES = NVB1C0_INVALIDATE_SHADER_CACHES,
+    INVALIDATE_TEXTURE_DATA_CACHE_NO_WFI = NVB1C0_INVALIDATE_TEXTURE_DATA_CACHE_NO_WFI,
+    INVALIDATE_SAMPLER_CACHE_NO_WFI = NVB1C0_INVALIDATE_SAMPLER_CACHE_NO_WFI,
 };
 
 constexpr uint32_t kRootBytes = 0x800, kRootSets = 0x38, kRootPush = 0x700, kUploadChunk = 0x100;
-constexpr uint32_t kPcasInvalidateSchedule = 3;
-constexpr uint32_t kInvalidateData = 1u << 4, kFlushData = 1u << 2, kInvalidateConstant = 1u << 12;
+constexpr uint32_t kPcasInvalidateSchedule =
+    NVDEF(NVB1C0, SEND_SIGNALING_PCAS_B, INVALIDATE, TRUE) | NVDEF(NVB1C0, SEND_SIGNALING_PCAS_B, SCHEDULE, TRUE);
+constexpr uint32_t kInvalidateData = NVDEF(NVB1C0, INVALIDATE_SHADER_CACHES, DATA, TRUE),
+                   kFlushData = NVDEF(NVB1C0, INVALIDATE_SHADER_CACHES, FLUSH_DATA, TRUE),
+                   kInvalidateConstant = NVDEF(NVB1C0, INVALIDATE_SHADER_CACHES, CONSTANT, TRUE);
 constexpr uint32_t kEncoderWords = 1 << 12;
 // PackKernelEntry.slot of a constexpr sampler: its index in the pack's (pack/kernels.py CONSTEXPR)
 constexpr uint8_t kConstexprSampler = 0x80;
 
-// QMDV01_07 (cla1c0qmd.h) words
-constexpr uint32_t kQmdProgramOffset = 8, kQmdRasterWidth = 12, kQmdRasterHeightDepth = 13, kQmdCbufValid = 20;
+// QMDV01_07 words
+constexpr uint32_t kQmdProgramOffset = SWITCH_NVB1C0_QMD_WORD(NVB1C0_QMDV01_07_PROGRAM_OFFSET),
+                   kQmdRasterWidth = SWITCH_NVB1C0_QMD_WORD(NVB1C0_QMDV01_07_CTA_RASTER_WIDTH),
+                   kQmdRasterHeightDepth = SWITCH_NVB1C0_QMD_WORD(NVB1C0_QMDV01_07_CTA_RASTER_HEIGHT),
+                   kQmdCbufValid = SWITCH_NVB1C0_QMD_WORD(NVB1C0_QMDV01_07_CONSTANT_BUFFER_VALID(0));
 
 constexpr uint32_t qmdCbufLo(uint32_t i)
 {
