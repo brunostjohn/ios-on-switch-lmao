@@ -11,7 +11,8 @@
 // (TegraNVENCABI.h TEGRA_NVENC_CHROMA_*), and for block-linear heights up to four GOBs.
 // Everything that would make the firmware write elsewhere is refused: ME-only and hybrid outputs, MPEC/AQ/stats-FIFO
 // dumps, two-pass and picture-level RC state, weighted prediction tables, B pictures, fields, MVC, encryption.
-// Every job must run with the engine's GP timer on and at most 1 << 27 cycles, as NVDEC's.
+// Every job must run with the engine's GP timer on. Both apps arm it with width x height x 24 cycles, at most 0x1600000
+// (H.264 app 0x3217-0x3256); neither reads gpTimer_timeout_val, which is bounded below as NVDEC's is.
 // Only progressive 4:2:0 8-bit H.264 frames, one slice, one control of each kind.
 // Slicing is the one NVIDIA's own T210 driver uses (TegraNVENC/nvidia/SOURCE): slice_mode 0 (the firmware walks the
 // slice control array, here one control of exactly the picture's macroblocks, as the H.265 checker requires of its
