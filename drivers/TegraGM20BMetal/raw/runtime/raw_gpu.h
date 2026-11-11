@@ -769,7 +769,6 @@ private:
                    bool indexed, const PixelBox &limit);
     void probeGlassDraw(const Pipeline &bound, const Pipeline &drawn, const PixelBox &limit);
     void glassMemSample(const Pipeline &bound, const Pipeline &drawn);
-    void glassMemReached();
 #endif
     const Runs *selfRuns(const Pipeline &pl, uint32_t primitive, uint32_t count, uint32_t instances, const char **why);
     const Runs *sequentialRuns(const Pipeline &pl, const FetchDraw &shape, Runs &runs, const char **why);
@@ -798,6 +797,9 @@ private:
     };
 
     std::vector<Clear> clears() const;
+#if SWITCH_RAW_DIAGNOSTICS
+    void glassMemReached(const std::vector<Clear> &cl);
+#endif
     std::vector<Clear> initialClears_;
     bool clearsSealed_ = false;
 
@@ -991,6 +993,7 @@ private:
 #endif
 #if SWITCH_RAW_DIAGNOSTICS
     Texture glassMemImages_[kGlassMemItems];  // the image each of the probe's rows is read from
+    const Texture *glassMemSources_[kGlassMemItems] = {};  // and the texture a draw bound (alive until completion)
     int glassMemSlot_ = -1;                   // its ring slot once its reads are encoded
     void glassMemTail();
 #endif

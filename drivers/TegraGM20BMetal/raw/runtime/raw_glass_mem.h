@@ -40,6 +40,7 @@ enum : uint8_t {
     kGlassMemHeap = 1,       // an MTLHeap's (an arena: a purge takes its pages)
     kGlassMemPitch = 2,      // pitch-linear
     kGlassMemUnsampled = 4,  // no row taken (compressed, memoryless, multisampled, converted)
+    kGlassMemAliased = 8,    // an MTLHeap texture made aliasable by the command buffer's end: its rows may be another's
 };
 
 // One row's read: every texel's colour (alpha left out) zero, any float component NaN or infinite, and its bytes' hash
@@ -93,11 +94,13 @@ inline GlassMemRow glassMemRow(const uint8_t *row, uint32_t texels, uint32_t bpp
     return r;
 }
 
-// What a command buffer's passes into one image reached: the first pass's load ('c', 'l', 'd'; 0: none seen) and the box
-// their draws covered (the render area where their draws were not counted)
+// What a command buffer's passes into one image reached: the first pass's load ('c', 'l', 'd'; 0: none seen), the box
+// their draws covered (the render area where their draws were not counted), the first pass's render area and the extent
+// its clears reached from the origin (0 x 0: none)
 struct GlassMemReach {
     char load = 0;
     uint32_t x0 = 0, y0 = 0, x1 = 0, y1 = 0;
+    uint32_t areaW = 0, areaH = 0, clearW = 0, clearH = 0;
 };
 
 // One sampled texture's rows in a command buffer's record
@@ -189,9 +192,10 @@ public:
         trim();
     }
 
-    // A pass of command buffer `serial` into the image at `image` ended: its load, and the box its draws covered
-    void reached(uint64_t image, char load, uint32_t x0, uint32_t y0, uint32_t x1, uint32_t y1, uint64_t serial)
+    // A pass of command buffer `serial` into the image at `image` ended: what it reached (GlassMemReach)
+    void reached(uint64_t image, const GlassMemReach &pass, uint64_t serial)
     {
+        const uint32_t x0 = pass.x0, y0 = pass.y0, x1 = pass.x1, y1 = pass.y1;
         std::lock_guard<std::mutex> l(lock_);
         open_.serial = serial;
         for (uint32_t i = 0; i < open_.reaches; i++)
@@ -202,7 +206,7 @@ public:
                 return;
             }
         if (open_.reaches < kGlassMemReaches)
-            open_.reach[open_.reaches++] = {image, GlassMemReach{load, x0, y0, x1, y1}};
+            open_.reach[open_.reaches++] = {image, pass};
     }
 
     // A draw of state `caName` sampled `item`'s texture in command buffer `serial`, header index `tic` holding bytes of
@@ -318,7 +322,7 @@ public:
             const GlassMemItem &it = cb.items[i];
             const uint8_t *row = rows + uint64_t(i) * kGlassMemItemBytes;
             const std::string verdict = landed ? verdictOf(it, row, cb.serial, notable) : "?";
-            char levels[12] = "", level[8] = "", events[16] = "", reach[48] = "";
+            char levels[12] = "", level[8] = "", events[16] = "", reach[96] = "";
             if (it.levels > 1)
                 snprintf(levels, sizeof levels, "/L%u", it.levels);
             if (it.level)
@@ -326,14 +330,14 @@ public:
             if (!it.rebuilt && it.events)
                 snprintf(events, sizeof events, "/e%llu", (unsigned long long)it.events);
             if (it.reach.load)
-                snprintf(reach, sizeof reach, "/%c%u,%u-%u,%u", it.reach.load, it.reach.x0, it.reach.y0, it.reach.x1,
-                         it.reach.y1);
-            char item[192];
-            snprintf(item, sizeof item, " %04llx%s:%ux%u/f%u%s/%s%s/%s/%c%llu%s%s%s%s:%s",
+                snprintf(reach, sizeof reach, "/%c%u,%u-%u,%u/a%ux%u/k%ux%u", it.reach.load, it.reach.x0, it.reach.y0,
+                         it.reach.x1, it.reach.y1, it.reach.areaW, it.reach.areaH, it.reach.clearW, it.reach.clearH);
+            char item[256];
+            snprintf(item, sizeof item, " %04llx%s:%ux%u/f%u%s/%s%s/%s/%c%llu%s%s%s%s%s:%s",
                      (unsigned long long)(it.key >> 14 & 0xffff), level, it.width, it.height, it.format, levels,
                      it.flags & kGlassMemPitch ? "pitch" : "bl", it.flags & kGlassMemHeap ? "+heap" : "", it.state,
                      it.rebuilt ? 'R' : 'U', (unsigned long long)(it.rebuilt ? 0 : it.age), it.fresh ? "/n" : "", reach,
-                     events, it.moved ? "/mv" : "", verdict.c_str());
+                     events, it.moved ? "/mv" : "", it.flags & kGlassMemAliased ? "/al" : "", verdict.c_str());
             if (lines.back().size() + strlen(item) > kGlassMemLine)
                 lines.push_back(std::string(head) + " +|");
             lines.back() += item;

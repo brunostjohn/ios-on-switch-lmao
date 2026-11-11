@@ -4666,15 +4666,18 @@ void RenderEncoder::glassMemSample(const Pipeline &bound, const Pipeline &drawn)
             it.flags = uint8_t((t.arena ? kGlassMemHeap : 0) | (t.blockLinear ? 0 : kGlassMemPitch) |
                                (copyable && image.height ? 0 : kGlassMemUnsampled));
             const int index = dev_->glassMem->sampled(it, bound.caName, t.tic, header, dev_->commitCount_);
-            if (index >= 0)
+            if (index >= 0) {
                 cb_->glassMemImages_[index] = image;
+                cb_->glassMemSources_[index] = &t;
+            }
         }
     }
 }
 
 // What this pass reached of each colour target it stores into (a shadow target's own image, not its pool image): its
-// load and the box of its draws' pixels, the render area where they were not counted
-void RenderEncoder::glassMemReached()
+// load, the box of its draws' pixels (the render area where they were not counted), its render area and its clears'
+// extent from the origin
+void RenderEncoder::glassMemReached(const std::vector<Clear> &cl)
 {
     uint32_t box[4] = {0, 0, areaW_, areaH_};
     if (drew_ && !whole_ && !rects_.empty()) {
@@ -4688,7 +4691,13 @@ void RenderEncoder::glassMemReached()
         const Texture *t = shadowOf_[j] ? shadowOf_[j] : pass_.color[j].texture;
         if (!t || memoryless_[j] || !pass_.color[j].store)
             continue;
-        dev_->glassMem->reached(t->va, "dlc"[pass_.color[j].load], box[0], box[1], box[2], box[3], dev_->commitCount_);
+        GlassMemReach reach{"dlc"[pass_.color[j].load], box[0], box[1], box[2], box[3], areaW_, areaH_, 0, 0};
+        for (const Clear &c : cl)
+            if (c.target == j && !c.x0 && !c.y0) {
+                reach.clearW = std::max(reach.clearW, c.x1);
+                reach.clearH = std::max(reach.clearH, c.y1);
+            }
+        dev_->glassMem->reached(t->va, reach, dev_->commitCount_);
     }
 }
 
@@ -5411,6 +5420,8 @@ void CommandBuffer::glassMemTail()
            uint64_t(record.count) * kGlassMemItemBytes);
     for (uint32_t i = 0; i < record.count; i++) {
         GlassMemItem &it = record.items[i];
+        if (const Texture *t = glassMemSources_[i]; t && t->arena && !t->view && !t->span.valid())
+            it.flags |= kGlassMemAliased | kGlassMemUnsampled;
         if (it.flags & kGlassMemUnsampled)
             continue;
         glassMemRowsAt(it);
@@ -5888,10 +5899,6 @@ void RenderEncoder::end()
 {
     RAW_ENCODE_SPAN(PassEnd);
     Device &d = *dev_;
-#if SWITCH_RAW_DIAGNOSTICS
-    if (d.glassMem && !d.glassMemStopped.load(std::memory_order_relaxed))
-        glassMemReached();
-#endif
     endShaderTests();
     if (p_.room() < 64 + kSampleWords)
         reserve();
@@ -5928,6 +5935,10 @@ void RenderEncoder::end()
     d.push_.head = uint64_t(reinterpret_cast<uint8_t *>(p_.at) - d.push_.bo.cpu);  // give back the unused reservation
     // pass prologue: the full barrier m2v puts between passes, the targets, then the clears
     const std::vector<Clear> cl = clearsSealed_ ? std::move(initialClears_) : clears();
+#if SWITCH_RAW_DIAGNOSTICS
+    if (d.glassMem && !d.glassMemStopped.load(std::memory_order_relaxed))
+        glassMemReached(cl);
+#endif
 #if SWITCH_RAW_DIAGNOSTICS
     probeEdges();
 #endif

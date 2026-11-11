@@ -266,7 +266,7 @@ TEST(RawGlassMem, RowOutsideWhatThePassesReachedIsReadAndNamed)
     raw::GlassMemItem t4 = item(kCapture, 512, 1408, kRgba16f, 8);
     t4.image = kCapture;
     probe.wrote(kCapture, 100, 0);
-    probe.reached(kCapture, 'c', 0, 0, 462, 1382, 100);
+    probe.reached(kCapture, raw::GlassMemReach{'c', 0, 0, 462, 1382, 462, 1382, 480, 1408}, 100);
     ASSERT_EQ(probe.sampled(t4, "PBGRABsovXmw_TgbhA3Xhf_Isrc_Isrc", 9, 1, 100), 0);
     raw::GlassMemCb cb = probe.close(100, 10000, 0);
     ASSERT_TRUE(cb.items[0].fresh);
@@ -280,7 +280,7 @@ TEST(RawGlassMem, RowOutsideWhatThePassesReachedIsReadAndNamed)
     for (uint32_t t = 0; t < raw::kGlassMemTexels; t++)
         memcpy(slot.data() + raw::kGlassMemRowBytes + t * 8, nan, 8);
     const std::string line = joined(probe.finish(cb, slot.data(), false));
-    EXPECT_NE(line.find("/Tgbh/R0/n/c0,0-462,1382:ok,out@240,1395:nf"), std::string::npos) << line;
+    EXPECT_NE(line.find("/Tgbh/R0/n/c0,0-462,1382/a462x1382/k480x1408:ok,out@240,1395:nf"), std::string::npos) << line;
     EXPECT_EQ(probe.counts.nonFinite.load(), 1u);
 }
 
