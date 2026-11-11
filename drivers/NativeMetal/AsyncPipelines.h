@@ -209,7 +209,9 @@ public:
     {
         std::lock_guard<std::mutex> g(lock);
         jobs.push_back(std::move(job));
-        if (idle == 0 && threads < policy().threads) {
+        // A worker counts as idle until it wakes, so an earlier job's wakeup may be addressed to it already: each idle worker
+        // takes one queued job, and a job beyond those starts a worker of its own
+        if (jobs.size() > idle && threads < policy().threads) {
             threads++;
             std::thread([this] {
                 serve();
