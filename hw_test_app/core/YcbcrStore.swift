@@ -23,23 +23,25 @@ public enum YcbcrStore {
         return UInt32((h * Double(max) + 0.5).rounded(.down))
     }
 
-    /// Luma codes, then Cb and Cr of each chroma block (2 x 2 texels, or 2 x 1 where not `halvedDown`), row by row.
+    /// Luma codes, then Cb and Cr of each chroma block (2 x 2 texels, 2 x 1 where not `halvedDown`, 1 x 1 where not
+    /// `halvedAcross` either), row by row.
     public static func codes(
-        _ texels: [SIMD4<Float>], width: Int, height: Int, max: UInt32, halvedDown: Bool, source: Source
+        _ texels: [SIMD4<Float>], width: Int, height: Int, max: UInt32, halvedAcross: Bool = true, halvedDown: Bool,
+        source: Source
     ) -> (luma: [UInt16], chroma: [UInt16]) {
         let luma = texels.map { UInt16(code($0.y, source, max: max)) }
-        let down = halvedDown ? 2 : 1
+        let across = halvedAcross ? 2 : 1, down = halvedDown ? 2 : 1, n = UInt32(across * down)
         var chroma: [UInt16] = []
         for y in 0..<(height / down) {
-            for x in 0..<(width / 2) {
+            for x in 0..<(width / across) {
                 for channel in [2, 0] {
                     var sum: UInt32 = 0
                     for dy in 0..<down {
-                        for dx in 0..<2 {
-                            sum += code(texels[(y * down + dy) * width + 2 * x + dx][channel], source, max: max)
+                        for dx in 0..<across {
+                            sum += code(texels[(y * down + dy) * width + across * x + dx][channel], source, max: max)
                         }
                     }
-                    chroma.append(UInt16((sum + UInt32(down)) / UInt32(2 * down)))
+                    chroma.append(UInt16((sum + n / 2) / n))
                 }
             }
         }

@@ -2197,12 +2197,14 @@ void Device::destroyTexture(Texture &t)
         t = {};
         return;
     }
-    for (Texture *plane : {t.luma, t.chroma, t.planarStandIn, t.stencilTemp, t.chromaCodes, t.chromaHalved})
+    for (Texture *plane : {t.luma, t.chroma, t.planarStandIn, t.stencilTemp})
         if (plane) {
             destroyTexture(*plane);
             delete plane;
         }
-    t.luma = t.chroma = t.planarStandIn = t.stencilTemp = t.chromaCodes = t.chromaHalved = nullptr;
+    t.luma = t.chroma = t.planarStandIn = t.stencilTemp = nullptr;
+    delete t.ycbcrStore;
+    t.ycbcrStore = nullptr;
     if (t.standIn) {
         destroyTexture(*t.standIn);
         delete t.standIn;
@@ -2611,6 +2613,15 @@ Pipeline *Device::ycbcrPipeline(uint8_t output)
     if (!output || output > 4)
         return nullptr;
     return pipeline(Pack::fnv(names[output], strlen(names[output])));
+}
+
+Pipeline *Device::ycbcrStorePipeline(bool chroma, bool wide)
+{
+    static const char *const names[2][2] = {
+        {"raw.ycbcr_store.ycbcr_store_luma8_frag", "raw.ycbcr_store.ycbcr_store_luma16_frag"},
+        {"raw.ycbcr_store.ycbcr_store_chroma8_frag", "raw.ycbcr_store.ycbcr_store_chroma16_frag"}};
+    const char *name = names[chroma][wide];
+    return pipeline(Pack::fnv(name, strlen(name)));
 }
 
 Pipeline *Device::xrPipeline(XrForm form)
@@ -3305,7 +3316,8 @@ RenderEncoder *CommandBuffer::render(const PassDesc &pass)
     e.pass_ = pass;
     // the render hardware takes one memory layout for all of a pass's color targets (nvk_rendering_linear): block-linear when
     // one of them is, or is a pitch target the hardware cannot take (rendered through a shadow either way), or beside a zeta,
-    // its pitch ones then rendered through block-linear shadows as NVK does; memoryless ones get a backing of the pass's layout
+    // its pitch ones then rendered through block-linear shadows as NVK does, or when every one is memoryless; memoryless ones
+    // get a backing of the pass's layout
     const Texture *zeta = pass.depthStencil.texture;
     if (zeta && !zeta->zeta)
         return nullptr;
@@ -3320,10 +3332,15 @@ RenderEncoder *CommandBuffer::render(const PassDesc &pass)
     e.samples_ = std::max<uint8_t>(samples, 1);
     if (passRotation(pass, e.rot_) != RotatedRefusal::None)
         return nullptr;
-    bool blockLinear = zeta != nullptr;
+    bool blockLinear = zeta != nullptr, pitchTarget = false;
     for (uint32_t j = 0; j < pass.count && j < 8; j++)
-        if (const Texture *t = pass.color[j].texture; t && !t->memoryless && (t->blockLinear || t->shadowTarget))
-            blockLinear = true;
+        if (const Texture *t = pass.color[j].texture; t && !t->memoryless) {
+            if (t->blockLinear || t->shadowTarget)
+                blockLinear = true;
+            else
+                pitchTarget = true;
+        }
+    blockLinear |= !pitchTarget;
     if (zeta && zeta->memoryless) {
         std::lock_guard<std::mutex> l(dev_->lock_);
         Texture *b = dev_->backing(planeShaped(*zeta, e.rot_));
@@ -6245,15 +6262,6 @@ void BlitEncoder::generate(Texture &t, uint32_t fmt2d, uint32_t first, uint32_t 
     RAW_DIAGNOSTIC(dev_->stats.chainGenerates++);
     RAW_DIAGNOSTIC(dev_->stats.mipTwodLevels += last - first);
     RAW_DIAGNOSTIC(dev_->stats.mipTwodUnproven += unproven);
-}
-
-void BlitEncoder::halveChroma(const Texture &codes, const Texture &halved)
-{
-    cb_->use(codes, false);
-    cb_->use(halved, true);
-    room(uint32_t(fx::halveWords()));
-    fx::emitHalve(p_, {codes.va, codes.pitch, codes.width, codes.height}, halved.va, halved.blockHeight, halved.width,
-                  halved.height, fx::twodFormat(codes.format));
 }
 
 void BlitEncoder::end()

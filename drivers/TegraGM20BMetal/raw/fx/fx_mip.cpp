@@ -343,25 +343,6 @@ void emitGenerate(Push &p, const MipChain &c, uint64_t chainVa, const Pitch *lev
     end(p);
 }
 
-size_t halveWords()
-{
-    return kBeginWords + kEndWords + 2 * kSurfaceWords + kBlitWords;
-}
-
-void emitHalve(Push &p, const Pitch &src, uint64_t dstVa, uint32_t dstYLog2, uint32_t dw, uint32_t dh, uint32_t fmt2d,
-               Sampling sampling)
-{
-    if (!dw || !dh || src.width != 2 * dw || (src.height != dh && src.height != 2 * dh))
-        return;
-    begin(p);
-    surface(p, TWOD_SET_DST_FORMAT, fmt2d, true, dstYLog2, 0, dw, dh, dstVa);
-    surface(p, TWOD_SET_SRC_FORMAT, fmt2d, false, 0, src.pitch, src.width, src.height, src.va);
-    const uint64_t du = ratio(src.width, dw), dv = ratio(src.height, dh);
-    blit(p, FILTER_BILINEAR, 0, 0, dw, dh, du, dv, origin(sampling, du), origin(sampling, dv),
-         sampling.corner ? 1u : SAMPLE_CENTER);
-    end(p);
-}
-
 size_t copyWords()
 {
     return kBeginWords + kEndWords + 2 * kSurfaceWords + kBlitWords;

@@ -3,6 +3,7 @@
 #import "RawMetalPassFusion.h"
 #import "RawMetalSplitPlan.h"
 #import "RawMetalXrPlanes.h"
+#include <array>
 #include <optional>
 #include "raw_compute.h"
 #include "raw_compute_lookup.h"
@@ -143,7 +144,8 @@ static bool encodeRawAttempt(RMCommandBuffer *cb, size_t from, size_t to, const 
     // A planar render target's stand-in passes (raw::Texture::planarStandIn), the frontend's: the planes' codes into the stand-in
     // before a pass that loads it (its code image from the planes first, the copy engine's remaps), the stand-in into the planes
     // after one that stores it. 0: drawn; else fail()'s or refused()'s answer.
-    std::vector<RMTexture *> standInLoads, standInStores, planesWritten;
+    std::vector<RMTexture *> standInLoads, planesWritten;
+    std::vector<std::pair<RMTexture *, uint32_t>> standInStores;  // and their attachment slots
     XrPlaneSync xrPlanes(*rc);
     auto standInPass = [&](RMTexture *t, bool store) -> int {
         raw::Texture &x = t->_raw;
@@ -154,7 +156,7 @@ static bool encodeRawAttempt(RMCommandBuffer *cb, size_t from, size_t to, const 
         }
         raw::PassDesc p;
         p.color[0].texture = store ? x.luma : x.planarStandIn;
-        p.color[1].texture = !store ? nullptr : x.chromaCodes ? x.chromaCodes : x.chroma;
+        p.color[1].texture = store ? x.chroma : nullptr;
         for (raw::ColorAttachment &a : p.color) {
             a.load = raw::ColorAttachment::DontCare;
             a.store = true;
@@ -172,11 +174,34 @@ static bool encodeRawAttempt(RMCommandBuffer *cb, size_t from, size_t to, const 
             return 2;
         }
         e->end();
-        if (store && x.chromaCodes)
-            storeYcbcrChroma(rc, x);
         if (store)
             planesWritten.push_back(t);
         return 0;
+    };
+    // The pass's backings of its YCbCr targets' stand-ins, read before the resolve passes take the encoder over, then the
+    // stand-ins stored into the planes
+    std::array<const raw::Texture *, 8> backings{};
+    auto standInBackings = [&] {
+        backings = {};
+        for (const auto &[t, j] : standInStores)
+            if (t->_raw.ycbcrStore && re)
+                backings[j] = re->target(j);
+    };
+    auto storeStandIns = [&]() -> bool {
+        for (const auto &[t, j] : standInStores) {
+            if (!t->_raw.ycbcrStore) {
+                if (standInPass(t, true))
+                    return false;
+                continue;
+            }
+            if (!backings[j])
+                return fail(PredEncPlanarRT, "a YCbCr texture's pass left no stand-in backing", j);
+            if (const int failed = storeYcbcrPlanes(rc, t->_raw, *backings[j], why))
+                return failed == 1 ? fail(PredEncPlanarRT, *why, j) : refused();
+            planesWritten.push_back(t);
+        }
+        standInStores.clear();
+        return true;
     };
 
     // Multisampled attachments' resolves (MTLStoreActionMultisampleResolve): after their pass, a pass of the pack's resolve state
@@ -499,7 +524,7 @@ static bool encodeRawAttempt(RMCommandBuffer *cb, size_t from, size_t to, const 
                     if (a.load == MTLLoadActionLoad || (a.load == MTLLoadActionDontCare && stores && !t->_raw.ycbcr))
                         standInLoads.push_back(t);
                     if (stores)
-                        standInStores.push_back(t);
+                        standInStores.push_back({t, j});
                 }
                 if (!fresh.empty())
                     fresh.erase(t);  // this pass writes it
@@ -531,6 +556,9 @@ static bool encodeRawAttempt(RMCommandBuffer *cb, size_t from, size_t to, const 
                 if (!raw::integerClearSlots(t->_raw.format, exact, p.color[j].clear))
                     for (int c = 0; c < 4; c++)
                         p.color[j].clear[c] = float(exact[c]);
+                if (t->_raw.ycbcrStore)  // Metal holds a clear's colour rounded to the nearest half, a draw's maybe not
+                    for (float &c : p.color[j].clear)
+                        c = float(_Float16(c));
                 p.count = j + 1;
             }
             if (RMTexture *z = (RMTexture *)pass.depth) {  // (rawDepthStencil: decided at record)
@@ -569,6 +597,7 @@ static bool encodeRawAttempt(RMCommandBuffer *cb, size_t from, size_t to, const 
             }
             if (re)
                 re->end();
+            standInBackings();
             if (re && !resolvePasses())
                 return false;
             if (be)
@@ -577,10 +606,8 @@ static bool encodeRawAttempt(RMCommandBuffer *cb, size_t from, size_t to, const 
                 ce->end();
                 ce.reset();
             }
-            for (RMTexture *t : standInStores)
-                if (standInPass(t, true))
-                    return false;
-            standInStores.clear();
+            if (!storeStandIns())
+                return false;
             re = nullptr;
             be = nullptr;
             break;
@@ -642,15 +669,15 @@ static bool encodeRawAttempt(RMCommandBuffer *cb, size_t from, size_t to, const 
     RAW_ENCODE_SPAN(Tail);
     if (re)
         re->end();
+    standInBackings();
     if (re && !resolvePasses())
         return false;
     if (be)
         be->end();
     if (ce)
         ce->end();
-    for (RMTexture *t : standInStores)
-        if (standInPass(t, true))
-            return false;
+    if (!storeStandIns())
+        return false;
     xrPlanes.flush();
     encoder = to;
     uint32_t seq = 0;

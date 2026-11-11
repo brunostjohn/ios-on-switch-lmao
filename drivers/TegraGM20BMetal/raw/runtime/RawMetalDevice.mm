@@ -517,7 +517,7 @@ static bool producesTexture(MTLTextureDescriptor *d)
             gRM->raw->createYcbcrTexture(IOSurfaceGetID(s), IOSurfaceGetBaseAddress(s), IOSurfaceGetAllocSize(s), s,
                                          ycbcr, uint32_t(d.width), uint32_t(d.height), t->_raw);
         if (t->_rawOk && ycbcr.target)
-            makeYcbcrTarget(t->_raw, uint32_t(d.pixelFormat));
+            makeYcbcrTarget(t->_raw, uint32_t(d.pixelFormat), ycbcr.store);
     } else if (rawShape(d) && !plane && IOSurfaceGetPlaneCount(s) <= 1) {
         // a surface without planes, or one described by a single plane (CoreVideo's chunky surfaces): its plane's bytes
         void *base = IOSurfaceGetBaseAddress(s);  // valid while the surface lives (the import retains it)

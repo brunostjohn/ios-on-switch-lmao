@@ -106,6 +106,7 @@ def key_hash(rec: dict) -> int:
     pair = f'{parts[1].rstrip()} | {parts[2]}' if len(parts) == 3 else ''
     for family, vertex, fragments in (
         ('ycbcr', 'ycbcr_vert', ('converted_frag', 'srgb_frag', 'codes_frag', 'codes10_frag')),
+        ('ycbcr_store', 'ycbcr_store_vert', ('luma8_frag', 'luma16_frag', 'chroma8_frag', 'chroma16_frag')),
         ('xr', 'xr_vert', ('bgr10_frag', 'bgra10_frag', 'planes_frag')),
         ('two_plane', 'two_plane_cover', ('load', 'store')),
         (

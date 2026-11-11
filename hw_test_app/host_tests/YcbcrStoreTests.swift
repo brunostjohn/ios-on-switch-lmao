@@ -21,6 +21,16 @@ final class YcbcrStoreTests: XCTestCase {
         XCTAssertEqual(pairs.chroma, [157, 113])
     }
 
+    func testFourFourFourChromaIsEachTexelsOwnCodes() {
+        let texels = YcbcrStore.codes(
+            Self.block, width: 2, height: 2, max: 1023, halvedAcross: false, halvedDown: false, source: .drawnFloat)
+        XCTAssertEqual(texels.chroma.count, 8)
+        for (i, texel) in Self.block.enumerated() {
+            XCTAssertEqual(UInt32(texels.chroma[2 * i]), YcbcrStore.code(texel.z, .drawnFloat, max: 1023))
+            XCTAssertEqual(UInt32(texels.chroma[2 * i + 1]), YcbcrStore.code(texel.x, .drawnFloat, max: 1023))
+        }
+    }
+
     func testHeldHalvesRoundAsMetalHoldsThem() {
         XCTAssertEqual(YcbcrStore.code(Float(bitPattern: 1_016_107_151), .drawnFloat, max: 255), 5)
         XCTAssertEqual(YcbcrStore.code(Float(bitPattern: 1_043_509_941), .drawnFloat, max: 1023), 178)

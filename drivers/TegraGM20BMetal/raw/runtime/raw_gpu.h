@@ -211,10 +211,10 @@ struct Texture {
     // and chroma (RG8Unorm over plane 1): the frontend's two-plane stand-in (TwoPlaneStandIn.metal), as m2v renders it. Never
     // sampled: Metal reads the texture's codes (span)
     Texture *planarStandIn = nullptr;
-    // A two-plane YCbCr code texture rendered into (raw_ycbcr_store.h) renders through planarStandIn too; its store writes the
-    // luma plane and each texel's chroma codes into chromaCodes (RG8Unorm, pitch), which the 2D engine halves into chromaHalved
-    // (block-linear) and the copy engine moves into the chroma plane
-    Texture *chromaCodes = nullptr, *chromaHalved = nullptr;
+    // A two-plane YCbCr texture rendered into (raw_ycbcr_store.h) renders through planarStandIn too, a memoryless RGBA32Float
+    // attachment whose backing is the pass's; the pack's store states then draw the luma plane and the chroma blocks from that
+    // backing, ycbcrStore their fragment buffer
+    YcbcrStoreShape *ycbcrStore = nullptr;
     // A two-plane YCbCr surface's texture (raw_ycbcr.h): the image sampled is span (RGBA16Float, RGBA32Float, RGBA8Unorm,
     // RGB10A2Unorm), which a pass of the pack's conversion state draws from the planes' textures, luma (R8Unorm, R16Unorm) and
     // chroma (RG8Unorm, RG16Unorm; none over plane 1), before the work that samples it (pack/ycbcr.metal; shape: its fragment
@@ -846,9 +846,6 @@ public:
     // generateMipmaps of a mipmapped texture (Texture::chain) on the 2D engine as surface format `fmt2d`: levels first + 1 ..
     // last from the one above, in place (fx_mip_route.h MipRun; `unproven` of its steps)
     void generate(Texture &t, uint32_t fmt2d, uint32_t first, uint32_t last, uint32_t unproven);
-    // A YCbCr code target's chroma blocks on the 2D engine: `codes` (pitch) halved across, and down where `halved` is half its
-    // height, into `halved` (block-linear), each code the rounded mean of its block's (Texture::chromaCodes)
-    void halveChroma(const Texture &codes, const Texture &halved);
     // The next command reads the memory `read` names and writes the memory `write` names (null: none; a name is any pointer
     // that stands for one memory): where it reads or writes what an earlier command of this encoder wrote, or writes what one
     // read, it waits for those first (barrier), as Metal orders a blit encoder's commands on one resource
@@ -1144,6 +1141,8 @@ public:
                                Texture &t);
     // The pack's stand-in states: the planes' codes into the stand-in, or (`store`) the stand-in into the planes
     Pipeline *standInPipeline(bool store);
+    // The pack's store state of a YCbCr texture's luma or chroma plane, of 8-bit or 16-bit words (pack/ycbcr_store.metal)
+    Pipeline *ycbcrStorePipeline(bool chroma, bool wide);
     bool createBufferTexture(const Buffer &b, uint64_t offset, uint32_t width, uint32_t height, uint32_t pitch,
                              uint32_t format,
                              Texture &t);  // over a buffer's memory (t holds no reference: the caller keeps the buffer)

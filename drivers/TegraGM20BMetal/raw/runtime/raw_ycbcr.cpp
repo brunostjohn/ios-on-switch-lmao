@@ -183,7 +183,8 @@ const char *planYcbcr(const YcbcrFacts &f, YcbcrPlan &out)
     if (f.target) {
         if (const char *why = ycbcrTargetRefusal(f.pixelFormat))
             return why;
-        if (planeOne || surface->sub != format->sub || (f.width & 1) || (halvedDown(format->sub) && (f.height & 1)))
+        if (planeOne || surface->sub != format->sub || (halvedAcross(format->sub) && (f.width & 1)) ||
+            (halvedDown(format->sub) && (f.height & 1)))
             return "a render target over plane 1, of other chroma than its surface's, or of a size its blocks do not "
                    "tile";
     }
@@ -229,6 +230,12 @@ const char *planYcbcr(const YcbcrFacts &f, YcbcrPlan &out)
     s[12] = (1u << format->bits) - 1;
     s[13] = (halvedAcross(format->sub) ? 1u : 0u) | (halvedDown(format->sub) ? 2u : 0u);
     s[14] = !planeOne;
+    if (f.target) {
+        const bool across = halvedAcross(format->sub), down = halvedDown(format->sub);
+        out.store = format->reads == Converted
+                        ? ycbcrConvertedShape(surface->full, YcbcrMatrix(matrix), across, down)
+                        : ycbcrCodesShape(format->bits, across, down);
+    }
     return nullptr;
 }
 

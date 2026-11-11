@@ -55,8 +55,8 @@
 #   raw_ycbcr_test    raw/runtime/raw_ycbcr.cpp: the two-plane YCbCr textures the raw path converts (m2v's rules) and the
 #                     conversion's shape; its texels against Metal's reads are raw/test/ycbcroracle.mm's (this Mac's GPU)
 #   raw_ycbcr_store_test  raw/runtime/raw_ycbcr_store.h: Metal's store of a pass into a two-plane YCbCr attachment (an M4
-#                     Max's bytes; every byte of its passes: raw/test/ycbcrstoreoracle.mm), the 2D engine's halving of the
-#                     texel codes into it (fx::emitHalve on twod_sim), and the code targets planYcbcr takes
+#                     Max's bytes; every byte of its passes: raw/test/ycbcrstoreoracle.mm), the pack's store states' codes
+#                     (ycbcrStoreDrawn) against it, and the targets planYcbcr takes
 #   raw_xr_test       raw/runtime/raw_xr.h: the extended-range formats the raw path keeps and the codes Metal's Clear
 #                     stores in them (an M4 Max's); against Metal's own reads and clears it is raw/test/xroracle.mm's
 #   raw_xr_planes_test  raw/runtime/raw_xr_planes.h: a two-plane XR surface's merge and split launches, run over bytes with
@@ -829,12 +829,6 @@ host_test(
     name = "raw_ycbcr_store_test",
     srcs = [
         "raw_ycbcr_store_test.cpp",
-        "//drivers/TegraGM20B:TegraGM20BLayout.h",
-        "//drivers/TegraGM20BMetal:raw/fx/fx_mip.cpp",
-        "//drivers/TegraGM20BMetal:raw/fx/fx_mip.h",
-        "//drivers/TegraGM20BMetal:raw/fx/test/twod_sim.cpp",
-        "//drivers/TegraGM20BMetal:raw/fx/test/twod_sim.h",
-        "//drivers/TegraGM20BMetal:raw/runtime/raw_push.h",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_ycbcr.cpp",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_ycbcr.h",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_ycbcr_store.h",

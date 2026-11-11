@@ -6,6 +6,8 @@
 
 #include <cstdint>
 
+#include "raw_ycbcr_store.h"
+
 namespace raw {
 
 // The descriptor's and the surface's facts the rules read.
@@ -48,6 +50,7 @@ struct YcbcrPlan {
     uint32_t lumaPitch = 0, chromaPitch = 0;
     uint32_t chromaWidth = 0, chromaHeight = 0;  // 0: no chroma plane read (a texture over plane 1: chroma codes 0)
     uint32_t shape[kYcbcrShapeWords] = {};
+    YcbcrStoreShape store;  // a target's store states' shape
 };
 
 // One of the two-plane YCbCr formats (Metal makes them over an IOSurface plane only)
