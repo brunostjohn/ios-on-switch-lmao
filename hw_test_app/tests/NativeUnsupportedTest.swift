@@ -124,7 +124,3 @@ struct NativeUnsupportedTest: NativeObjectTest {
         return work
     }
 }
-
-enum NativeCallTests {
-    static let all: [any HWTest] = [NativeUnsupportedTest()]
-}
