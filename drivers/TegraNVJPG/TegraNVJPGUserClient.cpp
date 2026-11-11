@@ -43,6 +43,7 @@
 #include <kern/clock.h>
 #include <kern/thread.h>
 #include <os/log.h>
+#include <sys/proc.h>
 #include <string.h>
 #include "../TegraVIC/TegraVICSurface.h"
 #include "TegraNVJPG.h"
@@ -96,8 +97,38 @@ IOReturn ioreturn(int err)
 struct {
     uint64_t windowStart, decodes, refused, failed, engineUs, cpuUs, pixels, bytes;
 } gStats;
-// Decodes NVJPG finished since boot, for HW Test's image.jpeg_* route (the service's TegraNVJPGDecodes, read live).
-uint64_t gHardwareDecodes;
+// Decodes NVJPG finished for the processes that asked last, for HW Test's image.jpeg_* route: a selector 7 call with
+// kRouteMagic at +0xcac and no source surface answers the caller's count (reached through the selector CMPhoto itself
+// uses, so the app's sandbox admits it where it may deny a registry or sysctl read). gStatsLock.
+constexpr uint32_t kRouteMagic = 0x5050;  // 'PP', as TegraGM20BMethodPaths
+struct {
+    int pid;
+    uint64_t decodes;
+} gByProcess[8];
+
+void countDecode(int pid)
+{
+    auto *slot = &gByProcess[0];
+    for (auto &entry : gByProcess) {
+        if (entry.pid == pid) {
+            slot = &entry;
+            break;
+        }
+        if (entry.decodes < slot->decodes)
+            slot = &entry;
+    }
+    if (slot->pid != pid)
+        *slot = {pid, 0};
+    slot->decodes++;
+}
+
+uint64_t decodesOf(int pid)
+{
+    for (const auto &entry : gByProcess)
+        if (entry.pid == pid)
+            return entry.decodes;
+    return 0;
+}
 #endif
 
 IOLock *gStatsLock;
@@ -154,6 +185,7 @@ struct Job {
     IOReturn status;
     uint32_t bytesUsed, cycles;
     uint64_t engineUs;
+    int pid;
     bool done;
     union {
         TegraNVJPGDecodeRequest base;
@@ -283,7 +315,7 @@ void engineThread(void *, wait_result_t)
         if (job->status)
             gStats.failed++;
         else
-            __atomic_add_fetch(&gHardwareDecodes, uint64_t(1), __ATOMIC_RELAXED);
+            countDecode(job->pid);
         gStats.engineUs += job->engineUs;
         gStats.cpuUs += job->cpuUs;
         gStats.pixels += static_cast<uint64_t>(job->plan.extent.width) * job->plan.extent.height;
@@ -561,6 +593,7 @@ IOReturn AppleJPEGDriverUserClient::decode(const void *in, uint32_t inSize, void
         return ret;
     }
     job->cpuUs = switch_now_us() - began;
+    job->pid = proc_selfpid();
     job->async = r.callback != 0;
     job->context = r.context;
     IOLockLock(lock_);
@@ -627,6 +660,19 @@ IOReturn AppleJPEGDriverUserClient::externalMethod(uint32_t selector, IOExternal
     case 1:
     case 5:
     case 7: {
+#if TEGRA_NVJPG_STATS
+        const auto *route = static_cast<const TegraNVJPGDecodeRequest2024 *>(a->structureInput);
+        if (selector == 7 && route->rsvdcac == kRouteMagic && !route->base.src_id) {
+            if (a->structureOutputSize != kSize[7])
+                return kIOReturnBadArgument;
+            auto *out = static_cast<uint64_t *>(a->structureOutput);
+            bzero(out, kSize[7]);
+            IOLockLock(gStatsLock);
+            out[0] = decodesOf(proc_selfpid());
+            IOLockUnlock(gStatsLock);
+            return kIOReturnSuccess;
+        }
+#endif
         if (!tegra_nvjpg_ready())
             return kIOReturnNotReady;
         uint32_t outSize = a->structureOutputSize;
@@ -696,16 +742,6 @@ OSDeclareDefaultStructors(AppleJPEGDriver)
         return kIOReturnUnsupported;
     }
 
-#if TEGRA_NVJPG_STATS
-    using IOService::copyProperty;
-    // Made when read, so a decode writes nothing to the registry.
-    OSObject *copyProperty(const char *key) const APPLE_KEXT_OVERRIDE
-    {
-        if (key && !strcmp(key, "TegraNVJPGDecodes"))
-            return OSNumber::withNumber(__atomic_load_n(&gHardwareDecodes, __ATOMIC_RELAXED), 64);
-        return IOService::copyProperty(key);
-    }
-#endif
 };
 
 OSDefineMetaClassAndStructors(AppleJPEGDriver, IOService)
