@@ -205,7 +205,8 @@ enum X1SwitchDrainProbe {
                             sourceSize: MTLSize(width: cell.width, height: cell.height, depth: 1), to: copy,
                             destinationSlice: 0, destinationLevel: 0, destinationOrigin: MTLOrigin())
                     } else {
-                        try RawProbe.engine(commands, ["kind": "scale", "read": source, "written": copy])
+                        try RawProbe.engine(
+                            commands, ["kind": "scale", "read": source, "written": copy, "unbracketed": 1])
                     }
                     blit.endEncoding()
                     kit.tap(commands, copy, into: atlas, index: k, base: base, step: SIMD2(1, 1))
