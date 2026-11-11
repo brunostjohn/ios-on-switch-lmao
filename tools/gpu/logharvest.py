@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """Add the render states a device made at run time, read from a pulled logarchive, to the precompile corpus.
 
-usage: bazel run //tools/gpu:logharvest -- <boot.logarchive>... [--build <IPSW build>] [--corpus <corpus.log>] [--dry-run]
+usage: bazel run //tools/gpu:logharvest -- <boot.logarchive>... [--build <IPSW build>] [--corpus <corpus.log>]
+                                            [--dry-run]
        bazel run //tools/gpu:logharvest -- --ndjson <file>...   (`log show --style ndjson --info` output instead)
 
 The raw runtime logs each state the pack lacked when it makes it ("raw: a state the pack lacks made ...: <hash> <key>",
@@ -12,10 +13,11 @@ exactly; a line the corpus already holds for that build (untagged, or tagged wit
 
 A USB pull holds several boots with overlapping clocks: each boot (log show's bootUUID) is read alone, and names its OS
 build in its own lines ("OS version: 24B119"). A boot naming none is skipped unless --build names it; one naming
-another build than --build is refused. Left out and counted: our own apps' states (SwitchHWTest*), a key the log cut
-with no whole parts, a key whose library the log does not name (" | air ...": a bundle's), one linking functions, a
-test-class variant (" | tests="), a Core Animation state with no label, a framework whose library path the build's
-archive inventory and the corpus do not name, and the states the device refused.
+another build than --build is refused. A key's test class (" | tests=<n>") is left off, as the pack builder makes
+those. Left out and counted: our own apps' states (SwitchHWTest*), a key the log cut with no whole parts (or parts that
+disagree with it), a key whose library the log does not name (" | air ...": a bundle's), one linking functions, a Core
+Animation state with no label, a framework whose library path the build's archive inventory and the corpus do not
+name, a variant whose state the corpus lacks, and the states the device refused.
 """
 
 import argparse
@@ -25,13 +27,14 @@ import os
 import re
 import subprocess
 import sys
+import types
 from collections import Counter, defaultdict
 from collections.abc import Iterable, Iterator
 from dataclasses import dataclass, field
 from pathlib import Path
 
 
-def generator_module():
+def generator_module() -> types.ModuleType:
     """Load the pack generator (raw/pack/rawpack.py), whose state_key a harvested line must give back its key by.
 
     By path: tools/gpu/rawpack.py, beside this file, has the same module name.
@@ -48,10 +51,10 @@ rawpack = generator_module()
 PROJECT = Path(os.environ.get('BUILD_WORKSPACE_DIRECTORY') or Path(__file__).resolve().parents[2])
 PRECOMPILE = 'drivers/TegraGM20BMetal/precompile'
 MADE = re.compile(
-    r'raw: a state the pack lacks (made|not made|refused) in .*? for a compile slot: ([0-9a-f]{16}) (.*)$', re.S
+    r'raw: a state the pack lacks (made|not made|refused) in .*? for a compile slot: ([0-9a-f]{16}) (.*)$', re.DOTALL
 )
 CUT = 400  # RawComplete.mm's made line: %.400s
-PART = re.compile(r'raw: harvest ([0-9a-f]{16}) (\d+)/(\d+) (.*)$', re.S)
+PART = re.compile(r'raw: harvest ([0-9a-f]{16}) (\d+)/(\d+) (.*)$', re.DOTALL)
 VARIANT = re.compile(r'state\.variant_unpacked: .*?refused:( \| .*?) of ([0-9a-f]{16}) ')
 VARIANT_ANY = 'state.variant_unpacked: '
 BUILD = r'([0-9]{2}[A-Z][0-9]{1,4}[a-z]?)'
@@ -65,8 +68,14 @@ CA_LABEL = 'com.apple.coreanimation.'
 FRAMEWORK_PATH = re.compile(r' lib=(/System/Library/(?:Private)?Frameworks/(\w+)\.framework/default\.metallib)')
 PREDICATE = ' OR '.join(
     f'eventMessage CONTAINS "{text}"'
-    for text in ('a state the pack lacks', 'raw: harvest ', VARIANT_ANY, 'OS version: ', 'deviceBuildVersion is',
-                 'iPhone OS ')
+    for text in (
+        'a state the pack lacks',
+        'raw: harvest ',
+        VARIANT_ANY,
+        'OS version: ',
+        'deviceBuildVersion is',
+        'iPhone OS ',
+    )
 )
 
 
@@ -150,35 +159,37 @@ def corpus_line(key: str, label: str, build: str, libraries: Libraries) -> tuple
     if len(segments) < 3 or not segments[1].startswith('v ') or not segments[2].startswith('f '):
         return None, 'not a render key'
     rest = segments[3:]
-    framework = ''
-    if rest and rest[0].startswith('l '):
-        framework = rest.pop(0)[2:].strip()
-    if any(s.startswith('air ') for s in rest):
-        return None, 'a bundle library (air): the log names no path'
-    if any(s.startswith(rawpack.LINKED) for s in rest):
-        return None, 'links functions'
-    if any(s.startswith('tests=') for s in rest):
-        return None, 'a test-class variant (the pack builder makes those)'
-    if any(not s.startswith('cubic ') for s in rest):
-        return None, 'an unknown segment'
-    if not framework and not label.startswith(CA_LABEL):
-        return None, 'a QuartzCore state without its Core Animation label'
-    lib = ''
-    if framework:
-        path = libraries.paths.get(framework)
-        if not path:
-            return None, f'no library path for {framework}'
-        lib = f' lib={path}'
+    framework = rest.pop(0)[2:].strip() if rest and rest[0].startswith('l ') else ''
+    why = unharvestable(rest, framework, label, libraries)
+    if why:
+        return None, why
+    lib = f' lib={libraries.paths[framework]}' if framework else ''
     stages = []
     for stage in segments[1:3]:
         kind, function, *constants = stage.split(' ', 2)
         stages.append(f'{kind} {function}{lib} {constants[0] if constants else ""}')
     head = segments[0].rstrip()
     tail = ''.join(f' | {s}' for s in rest)
-    line = f'R ok=1 label={label if label.startswith(CA_LABEL) else "-"} os={build} {head} | {" | ".join(stages)}{tail} | '
+    shown = label if label.startswith(CA_LABEL) else '-'
+    line = f'R ok=1 label={shown} os={build} {head} | {" | ".join(stages)}{tail} | '
     if rawpack.state_key(line) != key:
         return None, 'its line does not give back its key'
     return line, ''
+
+
+def unharvestable(rest: list[str], framework: str, label: str, libraries: Libraries) -> str:
+    """Why a key's segments after its stages (and its framework) cannot make a corpus line, '' where they can."""
+    if any(s.startswith('air ') for s in rest):
+        return 'a bundle library (air): the log names no path'
+    if any(s.startswith(rawpack.LINKED) for s in rest):
+        return 'links functions'
+    if any(not s.startswith('cubic ') for s in rest):
+        return 'an unknown segment'
+    if not framework and not label.startswith(CA_LABEL):
+        return 'a QuartzCore state without its Core Animation label'
+    if framework and framework not in libraries.paths:
+        return f'no library path for {framework}'
+    return ''
 
 
 def in_corpus(corpus: list[str], build: str) -> set[str]:
@@ -204,14 +215,12 @@ class Report:
     left: Counter = field(default_factory=Counter)
 
 
-def harvest(boots: dict[str, Boot], corpus: list[str], forced: str | None, precompile: Path) -> tuple[list[str], Report]:
+def harvest(
+    boots: dict[str, Boot], corpus: list[str], forced: str | None, precompile: Path
+) -> tuple[list[str], Report]:
     report, new = Report(), []
     for uuid, boot in sorted(boots.items()):
-        if forced and boot.builds and boot.builds != {forced}:
-            sys.exit(f'boot {uuid} names {", ".join(sorted(boot.builds))}, not --build {forced}')
-        if len(boot.builds) > 1:
-            sys.exit(f'boot {uuid} names more than one build: {", ".join(sorted(boot.builds))}')
-        build = forced or next(iter(boot.builds), None)
+        build = boot_build(uuid, boot, forced)
         if not build:
             report.boots.append(f'{uuid}: names no OS build, skipped (--build names it)')
             continue
@@ -219,21 +228,32 @@ def harvest(boots: dict[str, Boot], corpus: list[str], forced: str | None, preco
         for process, count in boot.unnamed.items():
             report.left[process, "a variant line that names no state hash (the runtime's older line)"] += count
         libraries = Libraries(build, corpus, precompile / 'archives' / f'{build}.tsv')
-        held = in_corpus(corpus + new, build)
-        for (process, name), outcome, label, key in states(boot, held):
-            if process.startswith(OWN_APPS):
-                report.left[process, 'our own app'] += 1
-                continue
-            if outcome == 'refused':
-                report.left[process, 'refused on the device'] += 1
-                continue
-            if key is None:
-                report.left[process, f'key cut at {CUT} characters, no whole parts'] += 1
-                continue
+        new += harvest_boot(boot, build, libraries, in_corpus(corpus + new, build), report)
+    return new, report
+
+
+def boot_build(uuid: str, boot: Boot, forced: str | None) -> str | None:
+    if forced and boot.builds and boot.builds != {forced}:
+        sys.exit(f'boot {uuid} names {", ".join(sorted(boot.builds))}, not --build {forced}')
+    if len(boot.builds) > 1:
+        sys.exit(f'boot {uuid} names more than one build: {", ".join(sorted(boot.builds))}')
+    return forced or next(iter(boot.builds), None)
+
+
+def harvest_boot(boot: Boot, build: str, libraries: Libraries, held: set[str], report: Report) -> list[str]:
+    """Give the lines of one boot's states `held` lacks (a cubic variant's state first), adding their keys to it."""
+    new = []
+    for process, outcome, label, key, missing in states(boot, held):
+        if process.startswith(OWN_APPS):
+            report.left[process, 'our own app'] += 1
+        elif outcome == 'refused':
+            report.left[process, 'refused on the device'] += 1
+        elif key is None:
+            report.left[process, missing] += 1
+        else:
             for wanted in dict.fromkeys((base_key(key), key)):
                 if wanted in held:
-                    if wanted == key:
-                        report.present[process] += 1
+                    report.present[process] += wanted == key
                     continue
                 line, why = corpus_line(wanted, label, build, libraries)
                 if not line:
@@ -242,19 +262,29 @@ def harvest(boots: dict[str, Boot], corpus: list[str], forced: str | None, preco
                 held.add(wanted)
                 new.append(line)
                 report.added[process] += 1
-    return new, report
+    return new
 
 
-def states(boot: Boot, held: set[str]) -> Iterator[tuple[tuple[str, str], str, str, str | None]]:
-    """Each state the boot made or refused once: its (process, hash), outcome, label and whole key (None: cut)."""
+def states(boot: Boot, held: set[str]) -> Iterator[tuple[str, str, str, str | None, str]]:
+    """Each state the boot made or refused once: its process, outcome, label, whole key, and why it has none.
+
+    A key's test class (" | tests=<n>") is left off: the pack builder makes a packed state's test classes itself.
+    """
     for (process, name), (outcome, key) in sorted(boot.made.items()):
         parts = whole(boot, process, name)
-        label, full = parts if parts else ('-', key if len(key) < CUT else None)
-        yield (process, name), outcome, label, full
+        if parts and not (parts[1].startswith(key) if len(key) >= CUT else parts[1] == key):
+            yield process, outcome, '-', None, 'its harvest parts disagree with its made line'
+            continue
+        label, full = parts or ('-', key if len(key) < CUT else None)
+        yield process, outcome, label, untested(full), f'key cut at {CUT} characters, no whole parts'
     by_hash = {f'{rawpack.packfile.fnv(k.encode()):016x}': k for k in held}
     for process, variant, state in sorted(boot.variants):
         base = by_hash.get(state)
-        yield (process, state), 'made', '-', base + variant if base else None
+        yield process, 'made', '-', untested(base + variant) if base else None, 'its state is not in the corpus'
+
+
+def untested(key: str | None) -> str | None:
+    return re.sub(r' \| tests=\d+$', '', key) if key else key
 
 
 def base_key(key: str) -> str:

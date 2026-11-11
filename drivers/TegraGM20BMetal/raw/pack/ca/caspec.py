@@ -397,7 +397,7 @@ def corpus_fields(line: str) -> tuple[str | None, str | None]:
     m = re.match(r'R ok=\d+ label=com\.apple\.coreanimation\.(\S+) (.*)$', line)
     if not m:
         return None, None
-    rest = re.sub(r' lib=\S+', '', m.group(2))
+    rest = re.sub(r' (lib|os)=\S+', '', ' ' + m.group(2))  # os=: the OS build the line was journaled under
     return m.group(1), re.sub(r'( \|)+$', '', ' '.join(rest.split()))
 
 

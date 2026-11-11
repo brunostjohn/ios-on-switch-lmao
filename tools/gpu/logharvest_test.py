@@ -29,6 +29,15 @@ CORPUS = (
     f'R ok=1 label=- os=21H461 {HEAD.rstrip()} | v primitive_gradient_vertex lib={RB}  '
     f'| f primitive_gradient_fragment lib={RB}  | \n'
 )
+
+
+def load_caspec():
+    sys.path.insert(0, str(Path(logharvest.rawpack.__file__).parent / 'ca'))
+    import caspec  # noqa: PLC0415 (ca/ is only on the path here)
+
+    return caspec
+
+
 BOOT, OTHER = 'AAAAAAAA-0000-0000-0000-000000000001', 'BBBBBBBB-0000-0000-0000-000000000002'
 
 
@@ -42,9 +51,7 @@ def record(boot: str, process: str, message: str) -> dict:
 
 
 def made(boot: str, process: str, name: str, key: str, outcome: str = 'made') -> dict:
-    message = (
-        f'raw: a state the pack lacks {outcome} in 120 ms (UI) after 0 ms for a compile slot: {name} {key[:400]}'
-    )
+    message = f'raw: a state the pack lacks {outcome} in 120 ms (UI) after 0 ms for a compile slot: {name} {key[:400]}'
     return record(boot, process, message)
 
 
@@ -59,7 +66,7 @@ def parts(boot: str, process: str, name: str, label: str, key: str) -> list[dict
 def variant(boot: str, process: str, state: str, name: str) -> dict:
     hashed = f'{logharvest.rawpack.packfile.fnv(state.encode()):016x}'
     message = (
-        f'{process}[323] state.variant_unpacked: a packed state\'s variant the pack lacks: its draws are refused:'
+        f"{process}[323] state.variant_unpacked: a packed state's variant the pack lacks: its draws are refused:"
         f'{name} of {hashed} {state}'
     )
     return record(boot, process, message[:250])
@@ -142,6 +149,29 @@ class LogHarvestTest(unittest.TestCase):
             for _ in range(2):
                 logharvest.main(['--ndjson', str(ndjson), '--corpus', str(corpus)])
             self.assertEqual(len(corpus.read_text().splitlines()), 2 + 4)
+
+    def test_a_variants_test_class_is_left_off_and_its_binds_kept(self):
+        records = [
+            record(BOOT, 'x', 'OS version: 24B119'),
+            made(BOOT, 'x', '0000000000000009', IMAGE + CUBIC + ' | tests=2'),
+        ]
+        added, _ = self.run_tool(records)
+        self.assertEqual([logharvest.rawpack.state_key(line) for line in added], [IMAGE + CUBIC])
+
+    def test_harvest_parts_that_disagree_with_the_made_line_are_left_out(self):
+        records = [
+            record(BOOT, 'x', 'OS version: 24B119'),
+            made(BOOT, 'backboardd', '0000000000000005', CA),
+            *parts(BOOT, 'backboardd', '0000000000000005', CA_LABEL, CA.replace('fc_c0:', 'fc_x0:')),
+        ]
+        added, _ = self.run_tool(records)
+        self.assertEqual(added, [])
+
+    def test_a_harvested_ca_line_gives_caspec_the_fields_of_its_untagged_line(self):
+        added, _ = self.run_tool(boot_records())
+        (line,) = [line for line in added if 'fixed_frag_lph_cph' in line]
+        caspec = sys.modules['caspec'] if 'caspec' in sys.modules else load_caspec()
+        self.assertEqual(caspec.corpus_fields(line), caspec.corpus_fields(line.replace(' os=24B119', '')))
 
     def test_left_out_states_are_counted_by_reason(self):
         boots = logharvest.read_boots(boot_records())
