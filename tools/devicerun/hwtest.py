@@ -140,6 +140,7 @@ TESTS: dict[str, bool] = {
     'playback.h264_1080p': False,
     'playback.hevc_1080p': False,
     **{f'encode.{codec}_{preset}': False for codec in ('h264', 'hevc') for preset in ('realtime', 'quality')},
+    **{f'encode.{codec}_idle_gap': False for codec in ('h264', 'hevc')},
     **{f'image.{still}': False for still in STILLS},
     'image.heic_encode': False,
     'image.coreimage': False,

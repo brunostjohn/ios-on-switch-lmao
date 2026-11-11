@@ -57,7 +57,10 @@ public struct CompressorSettings {
 }
 
 public enum Compressor {
-    public static func encode(_ settings: CompressorSettings, pattern: Pattern, frames: Int) throws -> CompressedClip {
+    /// `pause`: the encoder sits idle for that many seconds after that frame, then the clip goes on.
+    public static func encode(
+        _ settings: CompressorSettings, pattern: Pattern, frames: Int, pause: (after: Int, seconds: Double)? = nil
+    ) throws -> CompressedClip {
         let session = try makeSession(settings)
         defer { VTCompressionSessionInvalidate(session) }
         let pool = try PatternPixels.pool(
@@ -77,6 +80,11 @@ public enum Compressor {
                 infoFlagsOut: nil
             ) { status, _, sample in collector.add(status, sample) }
             guard status == noErr else { throw VideoError.status("VTCompressionSessionEncodeFrame \(index)", status) }
+            if let pause, pause.after == index {
+                let flushed = VTCompressionSessionCompleteFrames(session, untilPresentationTimeStamp: .invalid)
+                guard flushed == noErr else { throw VideoError.status("VTCompressionSessionCompleteFrames", flushed) }
+                Thread.sleep(forTimeInterval: pause.seconds)
+            }
         }
         let flushed = VTCompressionSessionCompleteFrames(session, untilPresentationTimeStamp: .invalid)
         let seconds = CFAbsoluteTimeGetCurrent() - start
