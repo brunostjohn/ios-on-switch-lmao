@@ -1,11 +1,17 @@
 import Foundation
 import HWTestCore
 
-/// The MPEG-4 Part 2 clips, from FFmpeg's encoder (`ffmpeg` on PATH, or $FFMPEG): the Mac's VideoToolbox encodes no
-/// MPEG-4 Part 2. The pattern goes in as raw I420 frames; one thread keeps the bytes the same from run to run. The
-/// 720p clip is Simple profile (I- and P-VOPs, H.263 quantisation); the 1080p one is Advanced Simple (two B-VOPs
-/// between references, quarter-sample motion, MPEG quantisation with both matrices loaded), the streams NVDEC takes
-/// that the Mac's and the iPad's software decoders refuse.
+/// The MPEG-4 Part 2, MPEG-2 and MPEG-1 clips, from FFmpeg's encoders (`ffmpeg` on PATH, or $FFMPEG): the Mac's
+/// VideoToolbox encodes none of them. The pattern goes in as raw I420 frames; one thread keeps the bytes the same from
+/// run to run. The MP4 files describe MPEG-2 and MPEG-1 by objectTypeIndication (0x61, 0x6a), which CoreMedia turns
+/// into 'mp2v' and 'mp1v'.
+///   MPEG-4 720p: Simple profile (I- and P-VOPs, H.263 quantisation). 1080p: Advanced Simple (two B-VOPs between
+///     references, quarter-sample motion, MPEG quantisation with both matrices loaded), the streams NVDEC takes that the
+///     Mac's and the iPad's software decoders refuse.
+///   MPEG-2 720p: Main profile, progressive, two B-pictures, default matrices. 1080p: interlaced coding (field DCT and
+///     field prediction in frame pictures), both matrices loaded, alternate scan, intra VLC table, non-linear quantiser
+///     scale, 10-bit intra DC.
+///   MPEG-1 720p: two B-pictures, a loaded intra matrix.
 enum FFmpegWriter {
     struct Failure: Error, CustomStringConvertible {
         let description: String
@@ -23,14 +29,25 @@ enum FFmpegWriter {
     ]
 
     static func encoder(_ clip: Clip) throws -> [String] {
-        guard clip.codec == .mpeg4 else { throw Failure(description: "\(clip.file): not an FFmpeg clip") }
-        let common = ["-c:v", "mpeg4", "-threads", "1", "-g", "30", "-b:v", "\(clip.bitrate)"]
-        guard clip.height > 720 else { return common + ["-bf", "0"] }
         let matrix = { (values: [Int]) in values.map(String.init).joined(separator: ",") }
-        return common + [
-            "-bf", "2", "-flags", "+qpel", "-mpeg_quant", "1", "-intra_matrix", matrix(intraMatrix), "-inter_matrix",
-            matrix(interMatrix),
-        ]
+        let rate = ["-threads", "1", "-g", "30", "-b:v", "\(clip.bitrate)"]
+        switch clip.codec {
+        case .mpeg4 where clip.height <= 720:
+            return ["-c:v", "mpeg4", "-bf", "0"] + rate
+        case .mpeg4:
+            return ["-c:v", "mpeg4", "-bf", "2", "-flags", "+qpel", "-mpeg_quant", "1", "-intra_matrix",
+                    matrix(intraMatrix), "-inter_matrix", matrix(interMatrix)] + rate
+        case .mpeg2 where clip.height <= 720:
+            return ["-c:v", "mpeg2video", "-bf", "2"] + rate
+        case .mpeg2:
+            return ["-c:v", "mpeg2video", "-bf", "2", "-flags", "+ildct+ilme", "-intra_matrix", matrix(intraMatrix),
+                    "-inter_matrix", matrix(interMatrix), "-alternate_scan", "1", "-intra_vlc", "1",
+                    "-non_linear_quant", "1", "-qmax", "28", "-dc", "10"] + rate
+        case .mpeg1:
+            return ["-c:v", "mpeg1video", "-bf", "2", "-intra_matrix", matrix(interMatrix)] + rate
+        default:
+            throw Failure(description: "\(clip.file): not an FFmpeg clip")
+        }
     }
 
     static func write(_ clip: Clip, to url: URL) throws {

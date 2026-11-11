@@ -37,7 +37,9 @@ inline uint32_t switch_nvdec_entry_access(const TegraNVDECSubmit &submit, uint32
         slots = 4;
         break;
     case TEGRA_NVDEC_CODEC_MPEG4:
-        if (submit.setup_bytes != sizeof(nvdec_mpeg4_pic_s))
+    case TEGRA_NVDEC_CODEC_MPEG12:
+        if (submit.setup_bytes !=
+            (submit.codec == TEGRA_NVDEC_CODEC_MPEG4 ? sizeof(nvdec_mpeg4_pic_s) : sizeof(nvdec_mpeg2_pic_s)))
             return 0;
         current = 0;
         slots = 3;

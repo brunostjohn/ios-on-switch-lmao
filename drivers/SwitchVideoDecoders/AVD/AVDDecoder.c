@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: BSD-2-Clause-Patent
-// AVD.videodecoder: H.264, VP9 (profile 0), HEVC (Main, Main 10 in 'x420', Main Still Picture) and MPEG-4 Part 2
-// (AVDMPEG.c) on the Tegra X1's NVDEC as VideoToolbox's hardware 'avc1', 'vp09', 'hvc1' and 'mp4v' decoders,
-// registered by AVDRegister.c. Tile sessions (grid HEIC: wallpapers, full-size photos) are AVDTiles.c.
+// AVD.videodecoder: H.264, VP9 (profile 0), HEVC (Main, Main 10 in 'x420', Main Still Picture), MPEG-4 Part 2 and
+// MPEG-1/2 (AVDMPEG.c) on the Tegra X1's NVDEC as VideoToolbox's hardware 'avc1', 'vp09', 'hvc1', 'mp4v', 'mp2v' and
+// 'mp1v' decoders, registered by AVDRegister.c. Tile sessions (grid HEIC: wallpapers, full-size photos) are AVDTiles.c.
 //
 // Selection: _vtSortRegistryItemsByRating ranks a higher rating first, then hardware, so this decoder is tried before
 // H264SW, and a factory that fails moves VideoToolbox to the next one.
@@ -79,6 +79,8 @@ const char *avd_codec_name(FourCharCode codec)
     return codec == kCMVideoCodecType_HEVC         ? "HEVC"
            : codec == kCMVideoCodecType_VP9        ? "VP9"
            : codec == kCMVideoCodecType_MPEG4Video ? "MPEG-4 Part 2"
+           : codec == kCMVideoCodecType_MPEG2Video ? "MPEG-2"
+           : codec == kCMVideoCodecType_MPEG1Video ? "MPEG-1"
                                                    : "H.264";
 }
 
@@ -221,6 +223,8 @@ static void *decoded(void *ctx, const H264Picture *picture)
         CVBufferSetAttachment(out->image, kCVImageBufferChromaLocationTopFieldKey, d->chromaTop, kCVAttachmentMode_ShouldPropagate);
     if (d->chromaBottom)
         CVBufferSetAttachment(out->image, kCVImageBufferChromaLocationBottomFieldKey, d->chromaBottom, kCVAttachmentMode_ShouldPropagate);
+    if (picture->fields)
+        avd_tag_fields(out->image, picture->fields);
     avd_place_picture(d, picture, out->image, 0, 0);
     return out;
 }
@@ -508,10 +512,11 @@ static OSStatus startSession(VTVideoDecoderRef ref, VTVideoDecoderSession sessio
     Decoder *d = storage(ref);
     pthread_mutex_lock(&d->lock);
     d->session = session;
-    if (d->vp9 || d->hevc || d->mpeg4) {
-        const OSStatus status = d->vp9    ? startVP9(d, session, format)
-                                : d->hevc ? startHEVC(d, session, format)
-                                          : avd_start_mpeg4(d, session, format);
+    if (d->vp9 || d->hevc || d->mpeg4 || d->mpeg2) {
+        const OSStatus status = d->vp9     ? startVP9(d, session, format)
+                                : d->hevc  ? startHEVC(d, session, format)
+                                : d->mpeg4 ? avd_start_mpeg4(d, session, format)
+                                           : avd_start_mpeg2(d, session, format);
         pthread_mutex_unlock(&d->lock);
         return status;
     }
@@ -614,6 +619,7 @@ static OSStatus decodeFrame(VTVideoDecoderRef ref, VTVideoDecoderFrame frame, CM
     const bool reorder = kReorder && (flags & kVTDecodeFrame_EnableTemporalProcessing);
     const int ret = d->vp9     ? vp9_decoder_decode(d->vp9, data, size, frame)
                     : d->mpeg4 ? mpeg4_decoder_decode(d->mpeg4, data, size, frame)
+                    : d->mpeg2 ? mpeg2_decoder_decode(d->mpeg2, data, size, frame)
                     : d->hevc  ? hevc_decoder_decode(d->hevc, data, size, d->lengthSize, frame, reorder)
                                : h264_decoder_decode(d->h264, data, size, d->lengthSize, frame, reorder);
     if (ret == 1) {
@@ -625,12 +631,12 @@ static OSStatus decodeFrame(VTVideoDecoderRef ref, VTVideoDecoderFrame frame, CM
     }
     if (!ret && d->session)  // parameter sets only: answered at once, without a picture
         VTDecoderSessionEmitDecodedFrame(d->session, frame, noErr, kVTDecodeInfo_FrameDropped, NULL);
-    // A VP9, HEVC or MPEG-4 sample that failed is answered through the session with its error: VideoToolbox keeps a
+    // A VP9, HEVC or MPEG sample that failed is answered through the session with its error: VideoToolbox keeps a
     // frame whose decodeFrame returned an error outstanding, and VTDecompressionSessionWaitForAsynchronousFrames then
     // never returns (macOS 27, test/avd_host). Those decoders handle one sample's picture within the call, so the
     // frame has not been answered yet.
     const OSStatus error = ret <= -2 ? kVTVideoDecoderMalfunctionErr : ret < 0 ? kVTVideoDecoderBadDataErr : noErr;
-    const bool answered = error && (d->vp9 || d->hevc || d->mpeg4) && d->session;
+    const bool answered = error && (d->vp9 || d->hevc || d->mpeg4 || d->mpeg2) && d->session;
     if (answered)
         VTDecoderSessionEmitDecodedFrame(d->session, frame, error, 0, NULL);
     pthread_mutex_unlock(&d->lock);
@@ -698,6 +704,8 @@ static Boolean canAcceptFormatDescription(VTVideoDecoderRef ref, CMVideoFormatDe
             CFRelease(hvcC);
         return same;
     }
+    if (d->mpeg2)
+        return avd_mpeg2_accepts(d, format);
     if (d->vp9) {  // a new size or profile gets a fresh decoder; frames within one session may change size
         const CMVideoDimensions size = CMVideoFormatDescriptionGetDimensions(format);
         CFDataRef vpcC = avd_copy_atom(format, CFSTR("vpcC"));
@@ -771,6 +779,7 @@ static void finalize(CMBaseObjectRef ref)
     vp9_decoder_destroy(d->vp9);
     hevc_decoder_destroy(d->hevc);
     mpeg4_decoder_destroy(d->mpeg4);
+    mpeg2_decoder_destroy(d->mpeg2);
     nvdec_close(d->client);
     if (d->avcC)
         CFRelease(d->avcC);
@@ -938,6 +947,8 @@ OSStatus avd_create_instance(FourCharCode codec, CFAllocatorRef allocator, VTVid
     if (codec == kCMVideoCodecType_VP9          ? !(d->vp9 = vp9_decoder_create(&backend))
         : codec == kCMVideoCodecType_HEVC       ? !(d->hevc = hevc_decoder_create(&backend))
         : codec == kCMVideoCodecType_MPEG4Video ? !(d->mpeg4 = mpeg4_decoder_create(&backend))
+        : codec == kCMVideoCodecType_MPEG2Video || codec == kCMVideoCodecType_MPEG1Video
+            ? !(d->mpeg2 = mpeg2_decoder_create(&backend))
                                                 : !(d->h264 = h264_decoder_create(&backend))) {
         CFRelease(object);  // finalize closes the client
         return kVTAllocationFailedErr;

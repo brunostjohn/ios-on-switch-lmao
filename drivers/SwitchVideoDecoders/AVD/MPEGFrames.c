@@ -22,7 +22,7 @@ void mpeg_frames_release(MPEGFrames *f)
     f->past = f->future = -1;
 }
 
-int mpeg_frames_configure(MPEGFrames *f, uint32_t width_mbs, uint32_t height_mbs)
+int mpeg_frames_configure(MPEGFrames *f, uint32_t width_mbs, uint32_t height_mbs, uint32_t tables)
 {
     mpeg_frames_release(f);
     f->width_mbs = width_mbs;
@@ -40,7 +40,8 @@ int mpeg_frames_configure(MPEGFrames *f, uint32_t width_mbs, uint32_t height_mbs
         }
         f->va[i] = va;
     }
-    f->input_bytes = ALIGN(MPEG_FRAMES_BITS_OFFSET + (uint64_t)width_mbs * height_mbs * 192 + 0x10000, 0x10000);
+    f->bits_off = MPEG_FRAMES_TABLES + ALIGN(tables, 256);
+    f->input_bytes = ALIGN(f->bits_off + (uint64_t)width_mbs * height_mbs * 192 + 0x10000, 0x10000);
     if (f->b.alloc(f->b.ctx, f->input_bytes, &f->input, &va)) {
         f->input = 0;
         mpeg_frames_release(f);
@@ -83,7 +84,7 @@ static int growInput(MPEGFrames *f, uint64_t needed)
     void *va;
     if (f->b.alloc(f->b.ctx, bytes, &handle, &va))
         return -1;
-    memcpy(va, f->input_va, MPEG_FRAMES_BITS_OFFSET + f->bits_len);
+    memcpy(va, f->input_va, f->bits_off + f->bits_len);
     f->b.free(f->b.ctx, f->input);
     f->input = handle;
     f->input_va = va;
@@ -95,10 +96,10 @@ int mpeg_frames_append(MPEGFrames *f, const uint8_t *data, size_t size, bool res
 {
     if (reset)
         f->bits_len = 0;
-    const uint64_t needed = (uint64_t)MPEG_FRAMES_BITS_OFFSET + f->bits_len + size;
+    const uint64_t needed = (uint64_t)f->bits_off + f->bits_len + size;
     if (needed > f->input_bytes && growInput(f, needed))
         return -1;
-    memcpy(f->input_va + MPEG_FRAMES_BITS_OFFSET + f->bits_len, data, size);
+    memcpy(f->input_va + f->bits_off + f->bits_len, data, size);
     f->bits_len += (uint32_t)size;
     return 0;
 }
@@ -115,7 +116,7 @@ void mpeg_frames_entry(TegraNVDECSubmit *s, uint16_t method, uint16_t kind, uint
 void mpeg_frames_bind(MPEGFrames *f, TegraNVDECSubmit *s, int current, int past, int future)
 {
     mpeg_frames_entry(s, NVC5B0_SET_PICTURE_INDEX, TEGRA_NVDEC_ENTRY_VALUE, f->picture_index++, 0);
-    mpeg_frames_entry(s, NVC5B0_SET_IN_BUF_BASE_OFFSET, TEGRA_NVDEC_ENTRY_RELOC, f->input, MPEG_FRAMES_BITS_OFFSET);
+    mpeg_frames_entry(s, NVC5B0_SET_IN_BUF_BASE_OFFSET, TEGRA_NVDEC_ENTRY_RELOC, f->input, f->bits_off);
     mpeg_frames_entry(s, NVC5B0_SET_NVDEC_STATUS_OFFSET, TEGRA_NVDEC_ENTRY_RELOC, f->input, 0);
     const int slots[3] = {current, past, future};
     for (uint16_t i = 0; i < 3; i++) {
@@ -129,7 +130,7 @@ void mpeg_frames_bind(MPEGFrames *f, TegraNVDECSubmit *s, int current, int past,
 int mpeg_frames_run(MPEGFrames *f, TegraNVDECSubmit *s, int current, TegraNVDECRange clean)
 {
     mpeg_frames_entry(s, NVC5B0_EXECUTE, TEGRA_NVDEC_ENTRY_VALUE, 1u << 8 /* AWAKEN */, 0);
-    s->clean[s->clean_count++] = (TegraNVDECRange){f->input, MPEG_FRAMES_BITS_OFFSET, f->bits_len, 0};
+    s->clean[s->clean_count++] = (TegraNVDECRange){f->input, f->bits_off, f->bits_len, 0};
     if (clean.length)
         s->clean[s->clean_count++] = clean;
     TegraNVDECWait wait = {.invalidate_count = 1};
@@ -142,7 +143,8 @@ int mpeg_frames_run(MPEGFrames *f, TegraNVDECSubmit *s, int current, TegraNVDECR
     return status->error_status && !status->mbs_correctly_decoded ? (int)status->error_status : 0;
 }
 
-void mpeg_frames_output(MPEGFrames *f, int index, uint32_t width, uint32_t height, int status, void *token)
+void mpeg_frames_output(MPEGFrames *f, int index, uint32_t width, uint32_t height, uint8_t fields, int status,
+                        void *token)
 {
     const H264Picture picture = {
         .luma = f->va[index],
@@ -155,6 +157,7 @@ void mpeg_frames_output(MPEGFrames *f, int index, uint32_t width, uint32_t heigh
         .coded_height = f->height_mbs * 16,
         .width = width,
         .height = height,
+        .fields = fields,
         .status = status,
         .token = token,
     };

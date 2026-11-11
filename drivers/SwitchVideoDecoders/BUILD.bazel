@@ -13,6 +13,8 @@ lint_files(exclude = [
     "AVD/VP9Tables.h",
     "test/HEVCClip.h",
     "test/HEVCTrace.h",
+    "test/MPEG2Clip.h",
+    "test/MPEG2Trace.h",
     "test/MPEG4Clip.h",
     "test/MPEG4Trace.h",
     "test/VDECClip.h",
@@ -59,8 +61,8 @@ ios_binary(
     sign_identifier = "com.brunostjohn.switch.hevch8",
 )
 
-# AVD.videodecoder: H.264, VP9, HEVC and MPEG-4 Part 2 on NVDEC as VideoToolbox's hardware 'avc1', 'vp09', 'hvc1' and
-# 'mp4v' decoders
+# AVD.videodecoder: H.264, VP9, HEVC, MPEG-4 Part 2 and MPEG-1/2 on NVDEC as VideoToolbox's hardware 'avc1', 'vp09',
+# 'hvc1', 'mp4v', 'mp2v' and 'mp1v' decoders
 # (AVD/AVDRegister.c says where they register). Its install name is its own: 24B119's dyld cache holds Apple's
 # AVD.videodecoder, and a file naming itself after a cache dylib is an override of it, not a decoder of its own.
 ios_binary(
@@ -80,6 +82,8 @@ ios_binary(
         "AVD/HEVCDisplayProbe.c",
         "AVD/HEVCNVDEC.c",
         "AVD/HEVCSyntax.c",
+        "AVD/MPEG2NVDEC.c",
+        "AVD/MPEG2Syntax.c",
         "AVD/MPEG4NVDEC.c",
         "AVD/MPEG4Syntax.c",
         "AVD/MPEGFrames.c",

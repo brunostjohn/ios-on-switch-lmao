@@ -10,6 +10,7 @@
 #include "AVDFrameTiming.h"
 #include "H264NVDEC.h"
 #include "HEVCNVDEC.h"
+#include "MPEG2NVDEC.h"
 #include "MPEG4NVDEC.h"
 #include "NVDECClient.h"
 #include "VP9NVDEC.h"
@@ -30,11 +31,12 @@ typedef struct {
     VTTileDecoderSession tileSession;  // a tile session (grid images) instead of a frame session
     AVDTile tile;
     NVDECClient *client;
-    FourCharCode codec;  // 'avc1', 'vp09', 'hvc1' or 'mp4v'
+    FourCharCode codec;  // 'avc1', 'vp09', 'hvc1', 'mp4v', 'mp2v' or 'mp1v'
     H264Decoder *h264;
     VP9Decoder *vp9;
     HEVCDecoder *hevc;
     MPEG4Decoder *mpeg4;
+    MPEG2Decoder *mpeg2;
     VTVideoDecoderRef software;  // the session runs on Apple's software decoder (AVDDecoder.c)
     CFDataRef avcC;              // or vpcC, hvcC, esds
     unsigned lengthSize;
@@ -69,8 +71,11 @@ void avd_set_attributes(Decoder *d, VTVideoDecoderSession session, bool fullRang
 // The session on Apple's software decoder for d->codec, `why` logged once; NVDEC's state must be gone already.
 OSStatus avd_start_software(Decoder *d, VTVideoDecoderSession session, CMVideoFormatDescriptionRef format,
                             const char *why);
-// AVDMPEG.c: an 'mp4v' session.
+// AVDMPEG.c: an 'mp4v' session, an 'mp2v' or 'mp1v' session, and a picture's field attachments (AVD_FIELDS_*).
 OSStatus avd_start_mpeg4(Decoder *d, VTVideoDecoderSession session, CMVideoFormatDescriptionRef format);
+OSStatus avd_start_mpeg2(Decoder *d, VTVideoDecoderSession session, CMVideoFormatDescriptionRef format);
+Boolean avd_mpeg2_accepts(const Decoder *d, CMVideoFormatDescriptionRef format);
+void avd_tag_fields(CVPixelBufferRef image, uint8_t fields);
 // The sample's bytes, contiguous: *data points into the sample or at *copy (the caller frees it).
 bool avd_sample_bytes(CMSampleBufferRef sample, const uint8_t **data, size_t *size, uint8_t **copy);
 // The picture into `image` with its top-left at (x, y), by VIC, else by the CPU; clipped to the image.

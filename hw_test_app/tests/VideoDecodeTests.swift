@@ -20,6 +20,8 @@ struct VideoDecodeTest: HWTest {
         case .hevc10: return "HEVC Main10"
         case .vp9: return "VP9"
         case .mpeg4: return "MPEG-4 Part 2"
+        case .mpeg2: return "MPEG-2"
+        case .mpeg1: return "MPEG-1"
         }
     }
 
@@ -29,6 +31,8 @@ struct VideoDecodeTest: HWTest {
         case .hevc, .hevc10: return kCMVideoCodecType_HEVC
         case .vp9: return kCMVideoCodecType_VP9
         case .mpeg4: return kCMVideoCodecType_MPEG4Video
+        case .mpeg2: return kCMVideoCodecType_MPEG2Video
+        case .mpeg1: return kCMVideoCodecType_MPEG1Video
         }
     }
 

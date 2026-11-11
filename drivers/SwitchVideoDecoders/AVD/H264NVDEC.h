@@ -13,6 +13,14 @@
 #include "H264Syntax.h"
 #include "../../TegraNVDEC/TegraNVDECABI.h"
 
+// How a picture's rows interleave in time (kCVImageBufferFieldCountKey and FieldDetailKey), where the codec says.
+enum {
+    AVD_FIELDS_UNSAID = 0,
+    AVD_FIELDS_PROGRESSIVE = 1,
+    AVD_FIELDS_TOP_FIRST = 2,
+    AVD_FIELDS_BOTTOM_FIRST = 3
+};
+
 typedef struct {
     const uint8_t *luma, *chroma;  // block-linear NV12 (16Bx2 sectors, GOB height 2), CPU-visible
     uint32_t pitch;                // bytes per row of both planes, a multiple of 64
@@ -21,6 +29,7 @@ typedef struct {
     uint32_t coded_width, coded_height;
     uint32_t crop_x, crop_y, width, height;  // the displayed window, in samples
     bool wide;                               // 16-bit samples (HEVC Main 10: P010, laid out as 'x420')
+    uint8_t fields;                          // AVD_FIELDS_*
     int32_t poc;
     int status;  // 0, or the engine's error_status when nothing decoded
     void *token;

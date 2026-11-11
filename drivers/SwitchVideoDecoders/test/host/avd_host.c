@@ -18,16 +18,19 @@
 //           HEVCNVDEC and the kernel's checker, all out of a hardware session; clip T again with VIC's present on,
 //           every picture handed over as 16-bit samples into an 'x420' buffer; then with every buffer refused, Apple's
 //           software HEVC decoder in it, matching FFmpeg.
-//   mp4v:   MPEG4Clip.h's clip A (Advanced Simple) as 'mp4v' with its 'esds' (mpeg4_session.c) on the fake engine:
+//   mp4v:   MPEG4Clip.h's clip A (Advanced Simple) as 'mp4v' with its 'esds' (mpeg_session.c) on the fake engine:
 //           all 18 VOPs through MPEG4NVDEC and the kernel's checker out of a hardware session; then with every buffer
 //           refused, clip B (Simple: the Mac's MPEG-4 decoder refuses clip A) on Apple's software decoder in the
 //           instance.
+//   mp2v:   MPEG2Clip.h's MPEG-2 clip A as 'mp2v' and its MPEG-1 clip C as 'mp1v', described without extensions as
+//           MediaToolbox's MPEG-2 stream readers describe them, every picture through MPEG2NVDEC and the kernel's
+//           checker out of a hardware session.
 // Prints "PASS avd ..." when all hold (avd_host_test).
 #include "../../AVD/AVDDecoder.c"
 #include "../../AVD/ClipCheck.h"
 #include <stdio.h>
 #include "../HEVCClip.h"
-#include "mpeg4_session.h"
+#include "mpeg_session.h"
 #include "../../../TegraNVDEC/TegraNVDECCheck.h"
 
 struct NVDECClient {
@@ -65,7 +68,7 @@ uint32_t nvdec_codecs(const NVDECClient *c)
 {
     (void)c;
     return 1u << TEGRA_NVDEC_CODEC_H264 | 1u << TEGRA_NVDEC_CODEC_VP9 | 1u << TEGRA_NVDEC_CODEC_HEVC |
-           TEGRA_NVDEC_HEVC_MAIN10 | 1u << TEGRA_NVDEC_CODEC_MPEG4;
+           TEGRA_NVDEC_HEVC_MAIN10 | 1u << TEGRA_NVDEC_CODEC_MPEG4 | 1u << TEGRA_NVDEC_CODEC_MPEG12;
 }
 
 bool nvdec_can_present(const NVDECClient *c)
@@ -344,10 +347,12 @@ int main(void)
     const void *keys[] = {CFSTR("CMClassImplementationID")}, *values[] = {CFSTR("com.brunostjohn.switch.avd-host")};
     CFDictionaryRef info =
         CFDictionaryCreate(NULL, keys, values, 1, &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks);
-    const OSStatus registered = VTRegisterVideoDecoderWithInfo(kCMVideoCodecType_H264, info, avd_create_instance) ||
-                                VTRegisterVideoDecoderWithInfo(kCMVideoCodecType_VP9, info, avd_create_instance) ||
-                                VTRegisterVideoDecoderWithInfo(kCMVideoCodecType_HEVC, info, avd_create_instance) ||
-                                VTRegisterVideoDecoderWithInfo(kCMVideoCodecType_MPEG4Video, info, avd_create_instance);
+    const FourCharCode codecs[] = {kCMVideoCodecType_H264,       kCMVideoCodecType_VP9,
+                                   kCMVideoCodecType_HEVC,       kCMVideoCodecType_MPEG4Video,
+                                   kCMVideoCodecType_MPEG2Video, kCMVideoCodecType_MPEG1Video};
+    OSStatus registered = noErr;
+    for (unsigned i = 0; i < sizeof(codecs) / sizeof(codecs[0]) && !registered; i++)
+        registered = VTRegisterVideoDecoderWithInfo(codecs[i], info, avd_create_instance);
     CFRelease(info);
     if (registered) {
         printf("FAIL avd: VTRegisterVideoDecoderWithInfo %d\n", (int)registered);
@@ -437,6 +442,21 @@ int main(void)
     gFull = false;
     CFRelease(mp4vSpec);
     printf("%s (submits %d)\nmp4v full: %s\n", mp4v, gSubmits - mp4vSubmits, mp4vFull);
+    char mp2v[256], mp1v[256];
+    const int mp2vSubmits = gSubmits;
+    const void *mp2vKeys[] = {kVTVideoDecoderSpecification_DecoderID},
+               *mp2vValues[] = {CFSTR("com.brunostjohn.switch.avd-host.mp2v")},
+               *mp1vValues[] = {CFSTR("com.brunostjohn.switch.avd-host.mp1v")};
+    CFDictionaryRef mp2vSpec = CFDictionaryCreate(NULL, mp2vKeys, mp2vValues, 1, &kCFTypeDictionaryKeyCallBacks,
+                                                  &kCFTypeDictionaryValueCallBacks);
+    CFDictionaryRef mp1vSpec = CFDictionaryCreate(NULL, mp2vKeys, mp1vValues, 1, &kCFTypeDictionaryKeyCallBacks,
+                                                  &kCFTypeDictionaryValueCallBacks);
+    const bool mpeg2Engine = mpeg2_session_check(mp2vSpec, false, mp2v, sizeof(mp2v)) &&
+                             mpeg2_session_check(mp1vSpec, true, mp1v, sizeof(mp1v)) &&
+                             gSubmits - mp2vSubmits == 18 + 15 && gRefused == mp4vRefused;
+    CFRelease(mp2vSpec);
+    CFRelease(mp1vSpec);
+    printf("%s\n%s (submits %d)\n", mp2v, mp1v, gSubmits - mp2vSubmits);
     char native[512];
     gPresentOn = gNativeOn = true;
     const unsigned exportsBefore = gNativeExports, recycleBefore = gRecycled;
@@ -454,9 +474,9 @@ int main(void)
                     gOpens > engineOpens && strstr(full, "hardware: software decoder, 30/30 frames match x264") &&
                     strstr(vp9, "vp9: hardware decoder") && strstr(vp9, " 16 out (") &&
                     hevcSubmits - vp9Submits == 18 && presentOk && hevcOk && tilesOk && nativeOk && mp4vEngine &&
-                    mp4vSoftware;
-    printf("%s avd: plug-in on VideoToolbox (H.264, VP9, HEVC and MPEG-4 Part 2 on a fake NVDEC, then Apple's software "
-           "H.264, HEVC and MPEG-4 Part 2 in the instance)\n",
+                    mp4vSoftware && mpeg2Engine;
+    printf("%s avd: plug-in on VideoToolbox (H.264, VP9, HEVC, MPEG-4 Part 2 and MPEG-1/2 on a fake NVDEC, then Apple's "
+           "software H.264, HEVC and MPEG-4 Part 2 in the instance)\n",
            ok ? "PASS" : "FAIL");
     return ok ? 0 : 1;
 }

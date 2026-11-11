@@ -14,6 +14,10 @@
 #                          ../mpeg4gen): every VOP field NVDEC is given equals FFmpeg's, B-VOP timing from FFmpeg's VOP
 #                          times, not-coded and packed VOPs, every submit accepted by the kernel's checker, which refuses
 #                          each bad one
+#   mpeg2_host_test        MPEG2Syntax/MPEG2NVDEC over FFmpeg's trace_headers (../MPEG2Trace.h, ../MPEG2Clip.h from
+#                          ../mpeg2gen): every picture field NVDEC is given equals FFmpeg's for MPEG-2 (progressive and
+#                          interlaced) and MPEG-1, slices and offsets, field pairs built here, every submit accepted by
+#                          the kernel's checker, which refuses each bad one
 #   avd_register_host_test AVDRegister's hardware entries per process: where it may open TegraNVDEC, or where its
 #                          sessions run in videocodecd
 #   avd_host_test          AVD.videodecoder itself on this Mac's VideoToolbox over a fake TegraNVDEC client: the
@@ -116,6 +120,22 @@ host_library(
 )
 
 host_library(
+    name = "mpeg2",
+    srcs = [
+        "//drivers/SwitchVideoDecoders:AVD/MPEG2NVDEC.c",
+        "//drivers/SwitchVideoDecoders:AVD/MPEG2Syntax.c",
+        "//drivers/TegraNVDEC:nvidia/clc5b0.h",
+        "//drivers/TegraNVDEC:nvidia/nvdec_drv.h",
+    ],
+    hdrs = [
+        "//drivers/SwitchVideoDecoders:AVD/MPEG2NVDEC.h",
+        "//drivers/SwitchVideoDecoders:AVD/MPEG2Syntax.h",
+    ],
+    copts = ["-O1"],
+    deps = [":mpeg4"],
+)
+
+host_library(
     name = "mpeg4",
     srcs = [
         "//drivers/SwitchVideoDecoders:AVD/MPEG4NVDEC.c",
@@ -195,6 +215,18 @@ host_library(
 )
 
 host_library(
+    name = "mpeg2_host",
+    srcs = [
+        "mpeg2_host.c",
+        "//drivers/SwitchVideoDecoders:test/MPEG2Clip.h",
+        "//drivers/SwitchVideoDecoders:test/MPEG2Trace.h",
+    ],
+    copts = ["-O1"],
+    defines = ["main=mpeg2_host_main"],
+    deps = [":mpeg2"],
+)
+
+host_library(
     name = "mpeg4_host",
     srcs = [
         "mpeg4_host.c",
@@ -211,8 +243,9 @@ host_library(
     name = "avd_host",
     srcs = [
         "avd_host.c",
-        "mpeg4_session.c",
-        "mpeg4_session.h",
+        "mpeg_session.c",
+        "mpeg_session.h",
+        "//drivers/SwitchVideoDecoders:test/MPEG2Clip.h",
         "//drivers/SwitchVideoDecoders:test/MPEG4Clip.h",
         "//drivers/SwitchVideoDecoders:AVD/AVDDecoder.h",
         "//drivers/SwitchVideoDecoders:AVD/AVDFrameTiming.h",
@@ -233,7 +266,7 @@ host_library(
         ":clip_check",
         ":h264",
         ":hevc",
-        ":mpeg4",
+        ":mpeg2",
         ":vp9",
     ],
 )
@@ -260,7 +293,7 @@ host_library(
     deps = [
         ":h264",
         ":hevc",
-        ":mpeg4",
+        ":mpeg2",
         ":vp9",
     ],
 )
@@ -286,6 +319,7 @@ host_library(
     "blocklinear_host",
     "h264_host",
     "hevc_host",
+    "mpeg2_host",
     "mpeg4_host",
     "vdectest",
     "vp9_host",
