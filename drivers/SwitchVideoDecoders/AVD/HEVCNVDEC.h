@@ -31,6 +31,9 @@ const HEVCSPS *hevc_decoder_sps(const HEVCDecoder *decoder);
 int hevc_decoder_configure(HEVCDecoder *decoder);
 // Whether Main 10 pictures are decoded (TEGRA_NVDEC_HEVC_MAIN10); 8-bit only when false.
 void hevc_decoder_allow_10bit(HEVCDecoder *decoder, bool allow);
+// Main 10 pictures go out as the 8-bit NV12 NVDEC writes into a display buffer in the same job (disp_output_mode 2: the
+// samples truncated to 8 bits, HW Test decode.display_buffer; Rec.709 only), the references staying 16-bit.
+void hevc_decoder_display_8bit(HEVCDecoder *decoder, bool on);
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
 // HEVCDisplayProbe.h on the session's first Main 10 IDR picture; false until it has run.
 void hevc_decoder_want_display_probe(HEVCDecoder *decoder);

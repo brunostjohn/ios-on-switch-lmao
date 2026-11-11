@@ -33,13 +33,15 @@ typedef struct {
     void *item;        // the decoded picture, waiting to be bumped out
     uint32_t handle;   // its surface (kept while the slot is free, for the next picture)
     uint8_t *va;
+    uint32_t display;  // with display8: the picture's 8-bit copy, what goes out
+    uint8_t *display_va;
 } Entry;
 
 struct HEVCDecoder {
     H264Backend b;
     HEVCParams params;
     int first_sps;
-    bool allow10;
+    bool allow10, display8;
     Entry dpb[SLOTS];
     uint32_t width, height, pitch, rows, luma_bytes, surface_bytes;  // the surfaces' geometry (pitch in bytes)
     uint32_t sample_bytes;                                           // 2 for Main 10: 16-bit samples
@@ -72,8 +74,10 @@ static void freeSurfaces(HEVCDecoder *d)
     for (int i = 0; i < SLOTS; i++) {
         if (d->dpb[i].handle)
             d->b.free(d->b.ctx, d->dpb[i].handle);
-        d->dpb[i].handle = 0;
-        d->dpb[i].va = NULL;
+        if (d->dpb[i].display)
+            d->b.free(d->b.ctx, d->dpb[i].display);
+        d->dpb[i].handle = d->dpb[i].display = 0;
+        d->dpb[i].va = d->dpb[i].display_va = NULL;
     }
 }
 
@@ -136,6 +140,36 @@ const HEVCSPS *hevc_decoder_sps(const HEVCDecoder *d)
 void hevc_decoder_allow_10bit(HEVCDecoder *d, bool allow)
 {
     d->allow10 = allow;
+}
+
+void hevc_decoder_display_8bit(HEVCDecoder *d, bool on)
+{
+    d->display8 = on;
+}
+
+static bool displayBuffer(const HEVCDecoder *d)
+{
+    return d->display8 && d->sample_bytes == 2;
+}
+
+// The 8-bit picture at framestride bytes a row: luma, then chroma at half the 16-bit luma's size. The kernel bounds a
+// display buffer as 16-bit planes (its unit is undocumented), so the buffer is the 16-bit luma's size.
+static int displaySurface(HEVCDecoder *d, Entry *e)
+{
+    if (!e->display) {
+        void *va;
+        if (d->b.alloc(d->b.ctx, d->luma_bytes, &e->display, &va)) {
+            e->display = 0;
+            return -3;
+        }
+        e->display_va = va;
+    } else if (d->b.recycle) {
+        void *address = e->display_va;
+        if (d->b.recycle(d->b.ctx, e->display, d->luma_bytes, &address))
+            return -3;
+        e->display_va = address;
+    }
+    return 0;
 }
 
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
@@ -375,8 +409,9 @@ static void fillSetup(const HEVCDecoder *d, nvdec_hevc_pic_s *p, const HEVCSPS *
     memset(p, 0, sizeof(*p));
     p->stream_len = length;
     p->sw_start_code_e = 1;
-    // 8-bit samples, or Main 10's in 16 bits (mode 1: P010, the 10 bits high, as 'x420' holds them)
-    p->disp_output_mode = d->sample_bytes == 2 ? 1 : 0;
+    // 8-bit samples, or Main 10's in 16 bits (mode 1: P010, the 10 bits high, as 'x420' holds them), or those and an
+    // 8-bit display buffer (mode 2)
+    p->disp_output_mode = d->sample_bytes == 2 ? (displayBuffer(d) ? 2 : 1) : 0;
     // framestride counts samples: in mode 1 the engine's rows are framestride x 2 bytes (averne's nvtegra_hevc.c
     // halves P010's linesize). Given in bytes, every block row lands at twice its offset.
     p->framestride[0] = p->framestride[1] = d->pitch / d->sample_bytes;
@@ -597,6 +632,8 @@ static int decodePicture(HEVCDecoder *d, const Span *seg, int count, const HEVCS
             return -3;
         e->va = address;
     }
+    if (displayBuffer(d) && displaySurface(d, e))
+        return -3;
     int scratch = -1;
     const int8_t *sets[3] = {r.before, r.after, r.lt};
     const uint8_t counts[3] = {r.nb, r.na, r.nl};
@@ -650,12 +687,18 @@ static int decodePicture(HEVCDecoder *d, const Span *seg, int count, const HEVCS
         entry(&submit, (uint16_t)(NVC5B0_SET_PICTURE_CHROMA_OFFSET0 + 4 * i), TEGRA_NVDEC_ENTRY_RELOC, pic->handle,
               d->luma_bytes);
     }
+    if (displayBuffer(d)) {
+        entry(&submit, NVC5B0_SET_DISPLAY_BUF_LUMA_OFFSET, TEGRA_NVDEC_ENTRY_RELOC, e->display, 0);
+        entry(&submit, NVC5B0_SET_DISPLAY_BUF_CHROMA_OFFSET, TEGRA_NVDEC_ENTRY_RELOC, e->display, d->luma_bytes / 2);
+    }
     entry(&submit, NVC5B0_EXECUTE, TEGRA_NVDEC_ENTRY_VALUE, 1u << 8 /* AWAKEN */, 0);
     submit.clean[0] = (TegraNVDECRange){d->input, kTilesOff, (uint32_t)(kBitsOff - kTilesOff + length + 64), 0};
     submit.clean_count = 1;
     TegraNVDECWait wait = {.invalidate_count = 1};
     wait.invalidate[0] = (TegraNVDECRange){d->input, kStatusOff, sizeof(nvdec_status_s), 0};
-    if (!d->b.cpu_reads || d->b.cpu_reads(d->b.ctx))
+    if ((!d->b.cpu_reads || d->b.cpu_reads(d->b.ctx)) && displayBuffer(d))
+        wait.invalidate[wait.invalidate_count++] = (TegraNVDECRange){e->display, 0, d->luma_bytes, 0};
+    else if (!d->b.cpu_reads || d->b.cpu_reads(d->b.ctx))
         wait.invalidate[wait.invalidate_count++] = (TegraNVDECRange){e->handle, 0, d->surface_bytes, 0};
     if (d->b.submit(d->b.ctx, &submit, &wait.fence) || d->b.wait(d->b.ctx, &wait))
         return -2;
@@ -685,18 +728,19 @@ static int decodePicture(HEVCDecoder *d, const Span *seg, int count, const HEVCS
     e->output = sh->pic_output;
     e->item = NULL;
     if (e->output) {
+        const bool display = displayBuffer(d);
         const H264Picture picture = {
-            .luma = e->va,
-            .chroma = e->va + d->luma_bytes,
-            .pitch = d->pitch,
-            .handle = e->handle,
-            .chroma_offset = d->luma_bytes,
+            .luma = display ? e->display_va : e->va,
+            .chroma = display ? e->display_va + d->luma_bytes / 2 : e->va + d->luma_bytes,
+            .pitch = display ? d->pitch / 2 : d->pitch,
+            .handle = display ? e->display : e->handle,
+            .chroma_offset = display ? d->luma_bytes / 2 : d->luma_bytes,
             .rows = d->rows,
             .coded_width = sps->width,
             .coded_height = sps->height,
             .crop_x = sps->crop_left,
             .crop_y = sps->crop_top,
-            .wide = d->sample_bytes == 2,
+            .wide = d->sample_bytes == 2 && !display,
             .width = (uint32_t)(sps->width - sps->crop_left - sps->crop_right),
             .height = (uint32_t)(sps->height - sps->crop_top - sps->crop_bottom),
             .poc = poc,
