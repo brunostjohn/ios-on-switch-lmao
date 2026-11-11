@@ -32,6 +32,7 @@
 #include <CoreFoundation/CoreFoundation.h>
 #include <IOKit/IOReturn.h>
 #include <IOSurface/IOSurfaceRef.h>
+#include <dlfcn.h>
 #include <libkern/OSCacheControl.h>
 #include <mach/mach_time.h>
 #include <os/log.h>
@@ -416,6 +417,33 @@ int avd_load_hvcc(Decoder *d, CFDataRef hvcC)
     return hevc_decoder_sps(d->hevc) ? 0 : -1;
 }
 
+static bool eightBit420(CFTypeRef value)
+{
+    OSType format = 0;
+    return value && CFGetTypeID(value) == CFNumberGetTypeID() && CFNumberGetValue(value, kCFNumberSInt32Type, &format) &&
+           (format == kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange ||
+            format == kCVPixelFormatType_420YpCbCr8BiPlanarFullRange);
+}
+
+// Whether the client asked VideoToolbox for 8-bit 4:2:0 only: then a Main 10 picture goes out as NVDEC's 8-bit display
+// buffer instead of a 16-bit picture VideoToolbox would convert. Looked up at run time: the SPI is not in every SDK.
+static bool clientWantsEightBit(VTVideoDecoderSession session)
+{
+    typedef CFDictionaryRef (*Attributes)(VTVideoDecoderSession);
+    const Attributes attributes =
+        (Attributes)dlsym(RTLD_DEFAULT, "VTDecoderSessionGetDestinationPixelBufferAttributes");
+    CFDictionaryRef wanted = attributes ? attributes(session) : NULL;
+    CFTypeRef formats = wanted ? CFDictionaryGetValue(wanted, kCVPixelBufferPixelFormatTypeKey) : NULL;
+    if (formats && CFGetTypeID(formats) == CFArrayGetTypeID()) {
+        const CFIndex count = CFArrayGetCount(formats);
+        for (CFIndex i = 0; i < count; i++)
+            if (!eightBit420(CFArrayGetValueAtIndex(formats, i)))
+                return false;
+        return count > 0;
+    }
+    return eightBit420(formats);
+}
+
 static OSStatus startHEVC(Decoder *d, VTVideoDecoderSession session, CMVideoFormatDescriptionRef format)
 {
     d->avcC = avd_copy_atom(format, CFSTR("hvcC"));
@@ -448,8 +476,13 @@ static OSStatus startHEVC(Decoder *d, VTVideoDecoderSession session, CMVideoForm
                                            sps->chroma_location, sps->chroma_top);
     d->chromaBottom = switch_video_chroma_tag(format, kCMFormatDescriptionExtension_ChromaLocationBottomField,
                                               sps->chroma_location, sps->chroma_bottom);
+    // Mode 2 truncates Rec.709-coded samples; PQ and HLG pictures stay 10-bit for whoever maps their range.
+    const bool hdr = d->transfer && (CFEqual(d->transfer, kCVImageBufferTransferFunction_SMPTE_ST_2084_PQ) ||
+                                     CFEqual(d->transfer, kCVImageBufferTransferFunction_ITU_R_2100_HLG));
+    const bool display8 = sps->bit_depth == 10 && !hdr && clientWantsEightBit(session);
+    hevc_decoder_display_8bit(d->hevc, display8);
     OSStatus status;
-    setAttributes(d, session, sps->full_range, sps->bit_depth == 10, &status);
+    setAttributes(d, session, sps->full_range, sps->bit_depth == 10 && !display8, &status);
     static const char *const kProfiles[4] = {"", "Main", "Main 10", "Main Still Picture"};
     if (!status)
         os_log(gAVDLog,

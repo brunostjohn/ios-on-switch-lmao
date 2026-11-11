@@ -118,6 +118,7 @@ TESTS: dict[str, bool] = {
     **{f'decode.{codec}_{size}': False for codec in CODECS for size in SIZES},
     'decode.native_export': False,
     'decode.native_export_main10': False,
+    'decode.native_export_main10_8bit': False,
     'decode.display_buffer': False,
     'playback.h264_1080p': False,
     'playback.hevc_1080p': False,

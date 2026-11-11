@@ -10,11 +10,15 @@ import VideoToolbox
 /// PASS when every picture went out natively; INCONCLUSIVE when the decoder does not say.
 /// decode.native_export_main10 is the same count for HEVC Main 10: the decoder's P010 picture goes out as the 'x420'
 /// surface's two 16-bit planes (LIMITS V12), where every Main 10 picture used to be a VIC copy.
+/// decode.native_export_main10_8bit asks for '420v' from the Main 10 clip: NVDEC writes each picture's 8-bit display
+/// buffer in the decode job (disp_output_mode 2, V13) and that buffer goes out natively; matched counts the pictures
+/// equal to the pattern, so a reference written at 8 bits (drift in the P pictures) fails it.
 struct NativeExportTest: HWTest {
     let id: String
     let name: String
     let codec: VideoCodec
     let probe: String
+    var outputBitDepth = 0
     let subsystem = Subsystem.decode
     var timeout: TimeInterval { 60 }
 
@@ -26,6 +30,10 @@ struct NativeExportTest: HWTest {
         id: "decode.native_export_main10",
         name: "HEVC Main 10 720p: P010 pictures exported natively against VIC copies, by the decoder's count",
         codec: .hevc10, probe: "V12")
+    static let main10To8 = NativeExportTest(
+        id: "decode.native_export_main10_8bit",
+        name: "HEVC Main 10 720p into '420v': NVDEC's 8-bit display buffers exported natively, by the decoder's count",
+        codec: .hevc10, probe: "V13", outputBitDepth: 8)
 
     func run(_ context: TestContext) async throws -> Outcome {
         guard let clip = Clip.all.first(where: { $0.codec == codec && $0.height == 720 }) else {
@@ -33,7 +41,8 @@ struct NativeExportTest: HWTest {
         }
         let demuxed = try await Demux.load(clip, from: context.media)
         let result = try Decompressor.decode(
-            demuxed.samples, format: demuxed.format, pattern: clip.pattern, bitDepth: clip.codec.bitDepth,
+            demuxed.samples, format: demuxed.format, pattern: clip.pattern,
+            bitDepth: outputBitDepth > 0 ? outputBitDepth : clip.codec.bitDepth,
             fps: clip.fps)
         var metrics = Metrics()
         metrics.set("frames", result.frames)
@@ -42,9 +51,11 @@ struct NativeExportTest: HWTest {
         if let routes = result.routes {
             for key in ["exported", "vic", "cpu", "errors"] { metrics.set("decoder_" + key, routes[key] ?? 0) }
             let notNative = (routes["vic"] ?? 0) + (routes["cpu"] ?? 0)
+            let wrong = result.frames - result.matched
             finding = ProbeFinding(
-                notNative == 0 && (routes["exported"] ?? 0) > 0 ? .pass : .fail, metrics,
-                note: notNative == 0 ? "" : "\(notNative) pictures were copied, not exported")
+                notNative == 0 && (routes["exported"] ?? 0) > 0 && wrong == 0 ? .pass : .fail, metrics,
+                note: notNative != 0 ? "\(notNative) pictures were copied, not exported"
+                    : wrong != 0 ? "\(wrong) pictures differ from the pattern" : "")
         } else {
             finding = ProbeFinding(.inconclusive, metrics, note: "the decoder does not answer SwitchPictureRoutes")
         }
