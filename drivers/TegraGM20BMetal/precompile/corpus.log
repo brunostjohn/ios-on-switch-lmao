@@ -4928,6 +4928,7 @@ D ok=1 tg=32,8,1 edge=0,0,0 threads=0 tex=0:115:2:1:1:02030405 | form=d opt=0 ma
 D ok=1 tg=32,8,1 edge=0,0,0 threads=0 tex=0:115:2:1:1:02030405 | form=d opt=0 max=0 tgm=0 icb=0 depth=1 abf=0 mut=0000000000000000000000000000000 label=- | k ci_gaussianBlur9 lib=data:a254cc1e788cc02b2b5e6b9c961e8a2c8f8b9da817c0fb759a0be29acf88b9e5  |
 R ok=1 label=- samples=1 topo=0 ds=0/0 c0=70:15:0:1:0:0:1:0:0 | v device_textured_vertex lib=/Applications/SwitchHWTest.app/default.metallib  | f nearest_fragment lib=/Applications/SwitchHWTest.app/default.metallib  | 
 R ok=1 label=- samples=1 topo=0 ds=0/0 c0=70:15:0:1:0:0:1:0:0 | v textured_vertex lib=/Applications/SwitchHWTest.app/default.metallib  | f sampled_fragment lib=/Applications/SwitchHWTest.app/default.metallib  | 
+R ok=1 label=- samples=1 topo=0 ds=0/0 c0=70:15:0:1:0:0:1:0:0 | v textured_vertex lib=/Applications/SwitchHWTest.app/default.metallib  | f sampled_fragment lib=/Applications/SwitchHWTest.app/default.metallib  | cubic s0:0000n t0:70 | 
 C ok=1 form=f opt=0 | k compute_sum_luma lib=/System/Library/Frameworks/QuartzCore.framework/default.metallib  | 
 D ok=1 tg=8,1,1 edge=0,0,0 threads=0 tgmem=0:128 tex=0:80:2:1:1:02030405 | form=f opt=0 | k compute_sum_luma lib=/System/Library/Frameworks/QuartzCore.framework/default.metallib  |
 D ok=1 tg=96,1,1 edge=0,0,0 threads=0 | form=f opt=0 | k multiply_add lib=/Applications/SwitchHWTest.app/default.metallib  |
