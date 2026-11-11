@@ -75,12 +75,18 @@ struct ImageDecodeTest: HWTest {
             ("\(image.width)x\(image.height) out", decoded.width == image.width && decoded.height == image.height),
             ("matches the pattern", result.matches(frame: 0, tolerance: image.tolerance)),
         ]
-        if let before, let after {
-            metrics.set("route", after > before ? "hardware" : "software")
-            metrics.set("nvjpg_decodes", Int(after - before))
-            checks.append(("decoded on NVJPG", after > before))
-        } else if jpeg {
-            metrics.set("route", "unknown")
+        if jpeg {
+            switch (before, after) {
+            case (.success(let first)?, .success(let last)?):
+                metrics.set("route", last > first ? "hardware" : "software")
+                metrics.set("nvjpg_decodes", Int(last - first))
+                checks.append(("decoded on NVJPG", last > first))
+            case (.failure(let why)?, _), (_, .failure(let why)?):
+                metrics.set("route", "unknown")
+                checks.append(("decoded on NVJPG (route unreadable: \(why.description))", false))
+            default:
+                break
+            }
         }
         return .judged(checks, metrics, proof: CGImageSourceGetType(source).map { $0 as String } ?? "")
     }

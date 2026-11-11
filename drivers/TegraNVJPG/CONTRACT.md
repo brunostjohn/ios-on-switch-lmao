@@ -81,8 +81,8 @@ marker blob) are written only on the multi-core strip path, which needs AppleJPE
 (startDecoder2024 0xfffffff008b06178) writes back +0x4c/+0x50 (the region) and +0xc94 (microseconds); no caller reads
 the output. JPEGH1 sends the destination's width and height as the picture's, which this driver refuses as BadArgument
 when they differ from the file's (that frame then decodes in software). Properties, formats and the per-image fallback
-are as on 21H461; nothing chooses the selector. Debug kernels answer the service property TegraNVJPGDecodes (decodes
-finished since boot, made when read) for HW Test's route.
+are as on 21H461; nothing chooses the selector. Debug kernels answer HW Test's route question on selector 7 itself: +0xcac = 0x5050 with no source
+surface returns, at out+0, the decodes NVJPG finished for the calling process.
 
 ## 4. The decode request
 
