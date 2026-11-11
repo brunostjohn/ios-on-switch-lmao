@@ -51,10 +51,16 @@ inline raw::FusionPass fusionPass(RMCommandBuffer *cb, size_t begin)
     }
     if (!result.bodySafe)
         return result;
-    cb->_plan.forEachUse(begin, end, [&](void *value, uint8_t access) {
+    // each operation's accesses on their own (forEachOperationUse): a write anywhere, or a sample of a target, fails the
+    // pass as the union of its accesses does
+    Class textureClass = [RMTexture class], bufferClass = [RMBuffer class];
+    cb->_plan.forEachOperationUse(begin, end, [&](void *value, uint8_t access) {
         id object = (__bridge id)value;
-        RMTexture *texture = [object isKindOfClass:[RMTexture class]] ? (RMTexture *)object : nil;
-        RMBuffer *buffer = [object isKindOfClass:[RMBuffer class]] ? (RMBuffer *)object : nil;
+        Class kind = object_getClass(object);
+        const bool isTexture = kind == textureClass || (kind != bufferClass && [object isKindOfClass:textureClass]);
+        const bool isBuffer = !isTexture && (kind == bufferClass || [object isKindOfClass:bufferClass]);
+        RMTexture *texture = isTexture ? (RMTexture *)object : nil;
+        RMBuffer *buffer = isBuffer ? (RMBuffer *)object : nil;
         const bool target = texture && std::find(targets.begin(), targets.end(), texture) != targets.end();
         if ((access & raw::ResourceUse::Write) && !target)
             result.bodySafe = false;

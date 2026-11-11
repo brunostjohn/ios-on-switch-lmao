@@ -125,6 +125,8 @@ static bool encodeRawAttempt(RMCommandBuffer *cb, size_t from, size_t to, const 
     std::optional<raw::ComputeEncoder> ce;
     bool serialCompute = false;
     raw::StateCursor stateCursor;
+    raw::FusionPass fused;
+    size_t fusedAt = SIZE_MAX;
     size_t renderBegin = to;
     bool continuing = false;
     size_t encoder = to;
@@ -574,10 +576,15 @@ static bool encodeRawAttempt(RMCommandBuffer *cb, size_t from, size_t to, const 
         case OpEnd:
             if (re)
                 re->finishVisibility();
-            if (re && at + 1 < to && cb->_plan.operation(at + 1).op == OpRender &&
-                raw::canFusePasses(fusionPass(cb, renderBegin), fusionPass(cb, at + 1))) {
-                continuing = true;
-                break;
+            if (re && at + 1 < to && cb->_plan.operation(at + 1).op == OpRender) {
+                // the next pass's facts are the next boundary's first pass's
+                const raw::FusionPass first = fusedAt == renderBegin ? fused : fusionPass(cb, renderBegin);
+                fused = fusionPass(cb, at + 1);
+                fusedAt = at + 1;
+                if (raw::canFusePasses(first, fused)) {
+                    continuing = true;
+                    break;
+                }
             }
             if (re)
                 re->end();

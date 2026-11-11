@@ -1012,6 +1012,13 @@ private:
     bool externalWrites_ = false;
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
     bool forceWholePrograms_ = false, inlineStates_ = false;
+    // the encode's per-draw and per-bind counts, kept plainly and added to the device's at the next begin(): an atomic
+    // add per draw for each was a measurable share of a debug build's draw
+    struct DrawCounts {
+        uint64_t uploadBytes = 0, segmentBinds = 0, segmentWords = 0, segmentSkips = 0, blendKillBinds = 0,
+                 interlockDraws = 0, interlocked = 0, interlockedBlends = 0;
+    } counts_;
+    void foldCounts();
     ProbeForms forms_;
     ProbeTaken taken_;
     ProbeEngine lastEngine_ = ProbeEngine::None;  // the engine of the work encoded last, for forms_
@@ -1762,12 +1769,25 @@ private:
         return submitInSet(k_, set_, view, true, made, seqno, result, &uses, recorded, removals);
     }
 
-    // The member [va, va + bytes) is in, so no job names it, as the submitting thread sees the set; else null
+    // [va, va + bytes) is in a member, so no job names it, as the submitting thread sees the set; else null. A draw's
+    // resources mostly lie in the member the last one found (a ring, a bytes chunk), which answers without a search while
+    // the view's version is the one it was found in.
     const SetMember *member(uint64_t va, uint64_t bytes)
     {
         set_.view(setView_);
-        return setView_.find(va, bytes);
+        const SetMember *last = lastMember_.member;
+        if (last && lastMember_.version == setView_.version && va - last->va < last->bytes &&
+            bytes <= last->bytes - (va - last->va))
+            return last;
+        const SetMember *m = setView_.find(va, bytes);
+        if (m)
+            lastMember_ = {m, setView_.version};
+        return m;
     }
+    struct {
+        const SetMember *member = nullptr;  // in setView_.members, which only a version change replaces
+        uint32_t version = 0;
+    } lastMember_;
 
     bool member(const Bo &bo)
     {

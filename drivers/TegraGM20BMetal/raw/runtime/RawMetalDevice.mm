@@ -87,8 +87,11 @@ static const char *zetaMemoryRefusal(int asked)
     {
         mach_timebase_info_data_t base;
         mach_timebase_info(&base);
-        d[@"encodes"] = @(gRM->raw->stats.encode.encodes.load());
-        d[@"encode_us"] = @(gRM->raw->stats.encode.wallTicks.load() * base.numer / base.denom / 1000);
+        const raw::EncodeTotals &encode = gRM->raw->stats.encode;
+        d[@"encodes"] = @(encode.encodes.load());
+        d[@"encode_us"] = @(encode.wallTicks.load() * base.numer / base.denom / 1000);
+        d[@"exec_us"] = @(encode.ticks[size_t(raw::EncodePart::Exec)].load() * base.numer / base.denom / 1000);
+        d[@"exec_pushes"] = @(encode.execPushes.load());
     }
     d[@"replay_same"] = @(gRM->raw->stats.replay.same.load());
     d[@"replay_recent"] = @(gRM->raw->stats.replay.recent.load());
