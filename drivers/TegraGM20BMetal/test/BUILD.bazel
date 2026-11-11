@@ -127,6 +127,19 @@ host_test(
 )
 
 host_test(
+    name = "raw_limits_fill_test",
+    srcs = [
+        "raw_limits_fill_test.cpp",
+        "//drivers/NativeMetal:LimitsTable.h",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_limits_fill.h",
+    ],
+    copts = ["-Idrivers/NativeMetal"],
+    cxx_std = "c++17",
+    linkopts = ["-lobjc"],
+    deps = ["//drivers/NativeMetal/abi:metal_abi"],
+)
+
+host_test(
     name = "raw_kernel_memory_test",
     srcs = [
         "raw_kernel_memory_test.cpp",

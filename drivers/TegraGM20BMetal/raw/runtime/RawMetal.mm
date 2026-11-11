@@ -18,6 +18,7 @@
 //    they may run; the render thread never blocks for it. waitUntilScheduled waits for the submission, so the display's
 //    copy (which waits on the GPU for every channel that imports the surface) never runs before the frame's work is submitted.
 #import "RawMetalInternal.h"
+#include "raw_limits_fill.h"
 
 #include <mach/mach.h>
 
@@ -337,17 +338,18 @@ id<MTLDevice> raw_metal_device_open(const char *packPath, uint64_t stack, id<MTL
     // Before the limits fill: RMDevice's answers (name, maxBufferLength) read the kernel's info through gRM
     gRM = r;
     // The base class's limits table (_MTLDevice's own accessors read it; the frontend's fillLimits filled the m2v device's from its
-    // answers): the same for this device, then this device's own answers (RMDevice's) where the base class reads them there.
+    // answers): the same for this device, then this device's own answers (RMDevice's) where _MTLDevice reads them there.
     static const SEL limits = NSSelectorFromString(@"limits");
-    if (fallback && [fallback respondsToSelector:limits] && [r->device respondsToSelector:limits]) {
+    Class owner = NSClassFromString(@"_MTLDevice");
+    if (fallback && owner && [fallback respondsToSelector:limits] && [r->device respondsToSelector:limits]) {
         const void *from = ((const void *(*)(id, SEL))objc_msgSend)(fallback, limits);
         void *to = ((void *(*)(id, SEL))objc_msgSend)(r->device, limits);
         if (from && to && from != to) {
             memcpy(to, from, kMTLDeviceLimitsBytes);
-            fillLimitsFromMethods(r->device, static_cast<uint8_t *>(to), [](const LimitField &field, LimitFill how) {
+            fillRawLimits(r->device, owner, static_cast<uint8_t *>(to), [](const LimitField &field, LimitFill how) {
                 if (how != LimitFill::Filled)
                     SWITCH_REFUSE_DETAIL("raw", "limits.layout", field.offset,
-                                         "limits: %s not written at 0x%x (the base class does not read it there)",
+                                         "limits: %s not written at 0x%x (_MTLDevice does not read it there)",
                                          field.selector, field.offset);
             });
         }
