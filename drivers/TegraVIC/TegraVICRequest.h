@@ -80,7 +80,8 @@ _Static_assert(offsetof(TegraVICRequest, dst_x) == 0x60 && offsetof(TegraVICRequ
 // What the kernel reads from an IOSurface (TegraVICSurface.cpp), or what the host test makes up.
 typedef struct {
     uint32_t fourcc, width, height, planes;
-    uint64_t planeOffset[2], planeBytesPerRow[2], planeWidth[2], planeHeight[2];
+    uint64_t planeOffset[TEGRA_VIC_MAX_PLANES], planeBytesPerRow[TEGRA_VIC_MAX_PLANES];
+    uint64_t planeWidth[TEGRA_VIC_MAX_PLANES], planeHeight[TEGRA_VIC_MAX_PLANES];
     uint64_t length;      // the surface's memory descriptor
     uint64_t protection;  // IOSurface protection options
     uint32_t colorMatrix, transfer, primaries, chromaTop, chromaBottom;
@@ -112,7 +113,7 @@ static inline uint64_t tegra_vic_surface_extent(const TegraVICSurfaceDesc *d)
 {
     uint64_t end = 0;
     const uint32_t planes = d->planes ? d->planes : 1;  // a surface without a plane array is one plane
-    for (uint32_t p = 0; p < planes && p < 2; p++) {
+    for (uint32_t p = 0; p < planes && p < TEGRA_VIC_MAX_PLANES; p++) {
         if (d->planeHeight[p] && d->planeBytesPerRow[p] > (UINT64_MAX - d->planeOffset[p]) / d->planeHeight[p])
             return UINT64_MAX;
         const uint64_t e = d->planeOffset[p] + d->planeBytesPerRow[p] * d->planeHeight[p];
@@ -133,7 +134,7 @@ static inline const char *tegra_vic_image_from(const TegraVICSurfaceDesc *d, uin
         return "plane count does not match the pixel format";
     im->width = d->width;
     im->height = d->height;
-    for (uint32_t p = 0; p < im->format->planes && p < 2; p++) {
+    for (uint32_t p = 0; p < im->format->planes; p++) {
         if (d->planeBytesPerRow[p] > 0xffffffffu || d->planeHeight[p] > 0xffffffffu)
             return "plane geometry";
         if (d->planeOffset[p] > d->length ||

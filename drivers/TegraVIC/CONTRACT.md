@@ -114,9 +114,10 @@ camera frameworks (no camera here). ReplayKit, AVFoundation, CoreImage, CoreVide
 min 4, max 16384 (dest height 16382), up 4x, down 8x H / 4x V, filter taps 9 V / 15 H, 32 phases, coefficient bits
 4.12, rotation, identity CSC, histogram, colour manager, accessibility, many formats. TegraVIC publishes what VIC does
 [T]: min 4, max 8192, 16x up and down, Apple's filter geometry (so CA's tables keep their shape; VIC ignores custom
-coefficients), rotation iff all 8 transforms proved, IdentityCSC 1, formats ARGB8888, RGBA8888, 2Planes420 and
-2Planes422 in and out, and 0 for HDR, film grain, enhancement, directional scaling, colour manager, accessibility,
-histogram, tiling, fractional offsets/dimensions, packed 4:2:2, 4:4:4, luma-only, 10-bit and compressed formats.
+coefficients), rotation iff all 8 transforms proved, IdentityCSC 1, formats ARGB8888, RGBA8888, 2Planes420,
+2Planes422, 2Planes444, LumaOnlyL008 and ARGB2101010 in and out, Interleaved422 once its trait is proven, and 0 for
+HDR, film grain, enhancement, directional scaling, colour manager, accessibility, histogram, tiling (Apple's GPU
+tiling), fractional offsets/dimensions, 10-bit YCbCr and compressed formats.
 Core Animation reads none of the format keys. On iPadOS 27 its detached-layer copy (`IOMFBDisplay::detach_layer`,
 QuartzCore 24B119) asks for '422v'/'422f' from a '420v'/'420f' layer regardless [V].
 
@@ -179,7 +180,8 @@ are generated in its encoding (`tegra_vic_matrix_*`) and checked on the host aga
   caller falls back"). Supporting them needs the IOSurface kext's IOSurfaceSharedEvent lookup/listener/signal
   (0x5b974d8, 0x5b97400, 0x5b97718, 0x5b96c88 [V], semantics [I]).
 - Colour standard by size, not by the surfaces' YCbCrMatrix attachment.
-- Packed 4:2:2, 4:4:4, L565, l10r, RGhA, 10-bit: refused (VideoToolbox falls back per call).
+- Packed 4:2:2 (until `packedYcc` is proven), RGhA, 10-bit YCbCr: refused (VideoToolbox falls back per call). L008,
+  L565, l10r, NV24 and three-plane 4:2:0 are table rows that have not run on the unit.
 - 4:2:2 biplanar (`Y8___U8V8_N422`, NVB0B6 code 63) has not run on the unit. Like every transposed output, a
   transposed 4:2:2 one is described before the transpose, where chroma halved across memory rows is halved down:
   `Y8___U8V8_N422R` (65), with the siting exchanged (`TegraVICFormats.h`). This rests on the law measured for 4:2:0,

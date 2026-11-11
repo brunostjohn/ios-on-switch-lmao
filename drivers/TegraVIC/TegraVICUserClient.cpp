@@ -216,10 +216,10 @@ void firstBounce(const TegraVICSurfaceDesc *d, const char *side)
     char name[32];
     proc_selfname(name, sizeof(name));
     os_log(OS_LOG_DEFAULT,
-           "TegraVIC: first bounce this boot: %s[%d] %s '%c%c%c%c' %ux%u, row pitch %llu (VIC takes multiples of 256)",
+           "TegraVIC: first bounce this boot: %s[%d] %s '%c%c%c%c' %ux%u, row pitch %llu (VIC takes multiples of %u)",
            name, proc_selfpid(), side, static_cast<char>(d->fourcc >> 24), static_cast<char>(d->fourcc >> 16),
            static_cast<char>(d->fourcc >> 8), static_cast<char>(d->fourcc), d->width, d->height,
-           static_cast<unsigned long long>(d->planeBytesPerRow[0]));
+           static_cast<unsigned long long>(d->planeBytesPerRow[0]), tegra_vic_traits()->pitchAlign);
 }
 #endif
 
@@ -247,7 +247,7 @@ struct Job {
 
 uint32_t pitchAlign()
 {
-    return tegra_vic_traits()->pitchAlign ? tegra_vic_traits()->pitchAlign : 256;
+    return tegra_vic_traits()->pitchAlign;
 }
 
 // How VIC will see a surface: as it is, or (rows it cannot address) as its bounce scratch.
@@ -747,22 +747,22 @@ OSDictionary *capabilities(const TegraVICTraits *t)
     putNumber(d, "kSurfaceAcceleratorCapabilitiesHistogram", 0);
     putNumber(d, "kSurfaceAcceleratorCapabilitiesHistogramValues", 0);
     putNumber(d, "kSurfaceAcceleratorCapabilitiesVERF", 0);
-    static const char *const kFormats[] = {"ARGB8888", "RGBA8888", "2Planes420", "2Planes422"};
+    // VIC 4.0 has no 10- or 16-bit YCbCr and no 8:10:10:10 layout (vic_ceb6_types.h adds them in VIC 5.1).
+    const struct {
+        const char *name;
+        uint64_t on;
+    } kFormats[] = {
+        {"ARGB8888", 1},     {"RGBA8888", 1},     {"2Planes420", 1},   {"2Planes422", 1},
+        {"2Planes444", 1},   {"LumaOnlyL008", 1}, {"ARGB2101010", 1},  {"Interleaved422", t->packedYcc},
+        {"LumaOnlyL010", 0}, {"LumaOnlyL012", 0}, {"LumaOnlyL016", 0}, {"ARGB8101010", 0},
+        {"2Planes42010", 0}, {"2Planes42210", 0}, {"2Planes44410", 0}, {"1PlaneYCBCR10444", 0},
+    };
     char key[64];
-    for (const char *f : kFormats) {
-        snprintf(key, sizeof(key), "IOSurfaceAcceleratorFormatIn%s", f);
-        putNumber(d, key, 1);
-        snprintf(key, sizeof(key), "IOSurfaceAcceleratorFormatOut%s", f);
-        putNumber(d, key, 1);
-    }
-    static const char *const kOff[] = {"Interleaved422", "LumaOnlyL008", "LumaOnlyL010",     "LumaOnlyL012",
-                                       "LumaOnlyL016",   "ARGB2101010",  "ARGB8101010",      "2Planes42010",
-                                       "2Planes42210",   "2Planes44410", "1PlaneYCBCR10444", "2Planes444"};
-    for (const char *f : kOff) {
-        snprintf(key, sizeof(key), "IOSurfaceAcceleratorFormatIn%s", f);
-        putNumber(d, key, 0);
-        snprintf(key, sizeof(key), "IOSurfaceAcceleratorFormatOut%s", f);
-        putNumber(d, key, 0);
+    for (const auto &f : kFormats) {
+        snprintf(key, sizeof(key), "IOSurfaceAcceleratorFormatIn%s", f.name);
+        putNumber(d, key, f.on);
+        snprintf(key, sizeof(key), "IOSurfaceAcceleratorFormatOut%s", f.name);
+        putNumber(d, key, f.on);
     }
     return d;
 }

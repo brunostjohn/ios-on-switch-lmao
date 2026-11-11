@@ -124,6 +124,17 @@ host_test(
 )
 
 host_test(
+    name = "tegra_vic_formats_test",
+    srcs = [
+        "tegra_vic_formats_test.cpp",
+        "//drivers/TegraVIC:SwitchSurfaceColor.h",
+        "//drivers/TegraVIC:TegraVICConfig.h",
+        "//drivers/TegraVIC:TegraVICFormats.h",
+        "//drivers/TegraVIC:TegraVICRequest.h",
+    ],
+)
+
+host_test(
     name = "tegra_vic_422_test",
     srcs = [
         "TegraVICProbe.h",

@@ -145,7 +145,7 @@ extern "C" IOReturn switch_vic_surface_from_object(OSObject *surface, uint32_t i
     d->planes = tegra_vic_ios_plane_count(surface);
     switch_vic_surface_color(surface, d);
     const uint32_t planes = d->planes ? d->planes : 1;
-    for (uint32_t p = 0; p < planes && p < 2; p++) {
+    for (uint32_t p = 0; p < planes && p < TEGRA_VIC_MAX_PLANES; p++) {
         d->planeOffset[p] = tegra_vic_ios_plane_offset(surface, p);
         d->planeBytesPerRow[p] = tegra_vic_ios_plane_bytes_per_row(surface, p);
         d->planeWidth[p] = tegra_vic_ios_plane_width(surface, p);

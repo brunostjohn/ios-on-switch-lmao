@@ -821,7 +821,7 @@ static void blockLinear(void)
         {1, "row pitch the engine cannot address"},
         {2, "block-linear plane of partial blocks"},
         {3, "plane extends past its mapping"},
-        {4, "block-linear destination"},
+        {4, "block-linear destination this engine has not proven"},
     };
 
     for (unsigned i = 0; i < sizeof(cases) / sizeof(cases[0]); i++) {
@@ -841,6 +841,7 @@ static void blockLinear(void)
             s.span[1] = 1920 * 540;
             break;
         case 4:
+            tt.blockLinearOut = 0;
             d.blockLinear = 1;
             break;
         }
