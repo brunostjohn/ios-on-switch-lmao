@@ -41,9 +41,11 @@ bool hevc_decoder_display_probe(const HEVCDecoder *decoder, HEVCDisplayProbeResu
 #endif
 
 // One access unit of length-prefixed NAL units (lengthSize 1..4). Returns 1 when a picture was decoded (it reaches
-// `decoded` now and `emit` when it is bumped out), 0 when the sample had none to decode (parameter sets, a skipped
-// RASL picture), -1 for unsupported or corrupt data, -2 when an NVDEC job failed, -3 when buffers failed.
-int hevc_decoder_decode(HEVCDecoder *decoder, const uint8_t *data, size_t size, unsigned lengthSize, void *token);
+// `decoded` now and `emit` when it is bumped out, or at once when `reorder` is false), 0 when the sample had none to
+// decode (parameter sets, a skipped RASL picture), -1 for unsupported or corrupt data, -2 when an NVDEC job failed, -3
+// when buffers failed.
+int hevc_decoder_decode(HEVCDecoder *decoder, const uint8_t *data, size_t size, unsigned lengthSize, void *token,
+                        bool reorder);
 // End of stream: every picture still waiting goes out, in output order.
 void hevc_decoder_flush(HEVCDecoder *decoder);
 

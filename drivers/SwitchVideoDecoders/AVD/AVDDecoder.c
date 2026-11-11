@@ -24,8 +24,11 @@
 // the CPU de-swizzles it and then cleans the buffer's lines to DRAM (sys_dcache_flush). The CPU copy costs 2.47 ms a
 // 720p60 H.264 picture, most of mediaplaybackd's CPU time.
 // Frames go out as soon as they are decoded, in decode order, as Apple's H.264 decoders do even under
-// kVTDecodeFrame_EnableTemporalProcessing (macOS 27, test/vdectest): clients order by presentation time. H264NVDEC's
-// display-order bumping stays available (kReorder).
+// kVTDecodeFrame_EnableTemporalProcessing (macOS 27, test/vdectest) and its HEVC decoders do with or without it (macOS
+// 27, hardware and software, test/HEVCClip.h's clip A): clients order by presentation time.
+// VideoToolbox's MuxedAlphaDecoder (HEVC with alpha, the AirPods cards) keeps at most four frames in flight and fails
+// the next one after a 10 s wait: holding the four pictures their sps_max_num_reorder_pics allows stalls it.
+// H264NVDEC's and HEVCNVDEC's display-order bumping stays available (kReorder).
 //
 // Log (subsystem com.brunostjohn.switch.avd, category decoder): per process, a refusal by TegraNVDEC; per session, one line when
 // it starts (on NVDEC, or on the software decoder and why) and one when it ends (frames, mean decode and copy time).
@@ -598,10 +601,10 @@ static OSStatus decodeFrame(VTVideoDecoderRef ref, VTVideoDecoderFrame frame, CM
 #endif
     // VP9: a superframe's hidden frames and its shown one; 0 when the sample showed none (answered like H.264's
     // parameter-set-only units).
+    const bool reorder = kReorder && (flags & kVTDecodeFrame_EnableTemporalProcessing);
     const int ret = d->vp9    ? vp9_decoder_decode(d->vp9, data, size, frame)
-                    : d->hevc ? hevc_decoder_decode(d->hevc, data, size, d->lengthSize, frame)
-                              : h264_decoder_decode(d->h264, data, size, d->lengthSize, frame,
-                                                    kReorder && (flags & kVTDecodeFrame_EnableTemporalProcessing));
+                    : d->hevc ? hevc_decoder_decode(d->hevc, data, size, d->lengthSize, frame, reorder)
+                              : h264_decoder_decode(d->h264, data, size, d->lengthSize, frame, reorder);
     if (ret == 1) {
         d->frames++;
         d->decodeTicks += mach_absolute_time() - began - (d->copyTicks - copied);
@@ -882,10 +885,10 @@ static const VTPluginBaseClass kBaseClass = {
 };
 
 // Version 3: VideoToolbox calls finishDelayedFrames (+0x38) only for version 2 and up (21H461
-// VTDecompressionSessionFinishDelayedFrames, 0x1978dc40c), and HEVC holds pictures for output order until then; the
-// tile session slots (+0x40, +0x48) only for version 3 (VTTileDecompressionSessionCreate, 0x197bab448), where a slot
-// that refuses moves VideoToolbox on to the next decoder. H264SW declares version 3 and leaves setProperties and
-// copySerializableProperties empty, so VideoToolbox checks the optional slots before calling.
+// VTDecompressionSessionFinishDelayedFrames, 0x1978dc40c), and display-order bumping (kReorder, HEIC tiles) holds
+// pictures until then; the tile session slots (+0x40, +0x48) only for version 3 (VTTileDecompressionSessionCreate,
+// 0x197bab448), where a slot that refuses moves VideoToolbox on to the next decoder. H264SW declares version 3 and
+// leaves setProperties and copySerializableProperties empty, so VideoToolbox checks the optional slots before calling.
 static const VTPluginDecoderClass kDecoderClass = {
     .version = 3,
     .startSession = startSession,
