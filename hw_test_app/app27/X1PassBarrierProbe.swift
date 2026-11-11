@@ -9,7 +9,10 @@ import Metal
 /// then B in one command buffer, eight a batch; the targets rotate between two, so a read too early, or through a
 /// texture cache still holding the last trial's lines, copies another seed's texels. Arms: control (today's
 /// switch_gm20b_pass_barrier), pixel (the planner's form), pixel_nowfi (0x1288 after the barrier), none (no barrier:
-/// the arm that shows a cell can see the hazard). Cells: format x layout x read shape x size.
+/// the arm that shows a cell can see the hazard). Cells: format x layout x read shape x size. F-v1 read pixel_nowfi wrong
+/// in every 64 x 64 cell (bgra8_bl_same_s 623 of 1,008 trials); T-v2, with CROP/ZROP counting both L2 slices (regdump
+/// 0x408958 = 0x408850 = 2), read it clean in all 16 held cells on 144 trials at least, so the 64 x 64 cells run four
+/// times as long (the F-v1 count).
 enum X1PassBarrierProbe {
     static let probe = X1Probe(
         id: "gpu.x1.pass_pixel_barrier",
@@ -45,7 +48,7 @@ enum X1PassBarrierProbe {
                 out.append(
                     Cell(
                         format: format, layout: .blockLinear, shape: shape, width: 64, height: 64, trials: 1504,
-                        seconds: 2))
+                        seconds: 8))
                 out.append(
                     Cell(
                         format: format, layout: .blockLinear, shape: shape, width: 320, height: 180,
@@ -75,6 +78,16 @@ enum X1PassBarrierProbe {
         return out
     }
 
+    /// Pass A's extra work per texel, rotating per trial. T-v2's none arm fired in 16 cells and was blind in 14, all of
+    /// them 320 x 180 or larger, where B's taps meet texels A finished long before: there A spins up to three times longer
+    static func spinLadder(_ cell: Cell) -> [Int] {
+        switch cell.size {
+        case "s": return [0, 6, 34, 80]
+        case "m": return [0, 12, 60, 240]
+        default: return [0, 3, 17, 120]
+        }
+    }
+
     static func run(_ gpu: GPU) async throws -> ProbeFinding {
         let journal = ProbeJournal(probe: "gpu.x1.pass_pixel_barrier")
         var ledger = ProbeLedger()
@@ -100,7 +113,7 @@ enum X1PassBarrierProbe {
                 if arm == "none" && !ledger.tally(name, arm).clean && step.round > 4 { continue }
                 let first = trial[step.cell]
                 let trialSeeds = (0..<batch).map { probeSeed(trial: first + $0, cell: index, seeds: seeds) }
-                let spins = (0..<batch).map { [0, 3, 17, 40][(first + $0) % 4] * (cell.width == 1280 ? 1 : 2) }
+                let spins = (0..<batch).map { spinLadder(cell)[(first + $0) % 4] }
                 let ran = try await gpu.run(forms: forms) { commands in
                     work.encode(commands, seeds: trialSeeds, spins: spins)
                 }
