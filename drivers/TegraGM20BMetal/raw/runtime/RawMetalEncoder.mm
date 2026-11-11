@@ -307,7 +307,7 @@ static bool rawResolve(RMCommandBuffer *cb, MTLRenderPassColorAttachmentDescript
     [self retain:pass.visibilityResultBuffer];
     const NSUInteger positions = [pass getSamplePositions:nullptr count:0];
     if (pass.renderTargetArrayLength > 1 || pass.rasterizationRateMap ||
-        (positions && !passSamplePositions(pass, e->_samples, facts.positions))) {
+        (positions && !passSamplePositions(pass, positions, e->_samples, facts.positions))) {
         [self takeReason:WhyPass why:@"layers, a rate map or sample positions of its own"];
         hit(self, PredPassOther, pass.renderTargetArrayLength | positions << 32, pass.rasterizationRateMap != nil);
     }
