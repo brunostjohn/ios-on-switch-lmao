@@ -1,7 +1,11 @@
 // SPDX-License-Identifier: BSD-2-Clause-Patent
 #include <IOKit/IOLib.h>
 #include <IOKit/IOLocks.h>
+#ifdef KERNEL
+#include <libkern/libkern.h>
+#else
 #include <stdio.h>
+#endif
 #include "SwitchVICMapping.h"
 
 struct SwitchVICMapping {
