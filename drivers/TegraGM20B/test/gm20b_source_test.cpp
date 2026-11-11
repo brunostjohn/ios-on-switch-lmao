@@ -27,8 +27,14 @@ namespace
 {
 const std::string &client()
 {
-	static const std::string source = SourceText("../TegraGM20BUserClient.cpp") +
-		SourceText("../SwitchGpuClientRetirement.h");
+	static const std::string source = [] {
+		std::string units;
+		for (const char *unit :
+		     {"", "Pool", "Bo", "Channel", "Submit", "Dispatch", "Present"})
+			units += SourceText(std::string("../TegraGM20BUserClient") + unit + ".cpp");
+		return units + SourceText("../TegraGM20BUserClientInternal.h") +
+		       SourceText("../SwitchGpuClientRetirement.h");
+	}();
 	return source;
 }
 
@@ -36,11 +42,12 @@ const std::string &gpu()
 {
 	static const std::string source = [] {
 		std::string units;
-		for (const char *unit : {"bringup", "clock", "mem", "hang", "stats", "stats_tick", "chan", "sync", "exec",
-					 "present", "scrub", "power"})
+		for (const char *unit : {"bringup", "clock", "mem", "hang", "stats", "stats_tick",
+					 "chan", "sync", "exec", "present", "scrub", "power"})
 			units += SourceText(std::string("../gpu_") + unit + ".c");
 		return units + SourceText("../gpu_internal.h") + SourceText("../gpu_inline.h") +
-		       SourceText("../SwitchGpuVmMap.h") + SourceText("../SwitchGpuChannelCompletion.h");
+		       SourceText("../SwitchGpuVmMap.h") +
+		       SourceText("../SwitchGpuChannelCompletion.h");
 	}();
 	return source;
 }
@@ -315,8 +322,7 @@ TEST(GM20BPoolIsolationSource, CpuMappedPoolMemoryIsWholeVmPages)
 
 TEST(GM20BPoolScrubSource, ScrubberFreesOnlyFromItsFence)
 {
-	const std::string fenced =
-		definition(gpu(), "void scrub_fenced(struct tgm_chan *chan)");
+	const std::string fenced = definition(gpu(), "void scrub_fenced(struct tgm_chan *chan)");
 	EXPECT_THAT(fenced, HasSubstr("nvxnu_pool_free_zeroed("));
 	EXPECT_THAT(fenced, HasSubstr("tgm_chan_completed(chan)"));
 	EXPECT_EQ(Count(gpu(), "nvxnu_pool_free_zeroed("), 2u)
@@ -582,13 +588,13 @@ TEST(GM20BRoomSource, RoomIsWaitedForByInterrupt)
 	EXPECT_EQ(Count(gpu(), "nvif_chan_gpfifo_wait("),
 		  3u);
 	const std::string wait = flat(definition(
-		gpu(),
-		"int chan_wait_ready(struct tgm_chan *chan, u32 gpfifo_nr, u32 push_nr)"));
+		gpu(), "int chan_wait_ready(struct tgm_chan *chan, u32 gpfifo_nr, u32 push_nr)"));
 	EXPECT_THAT(wait, HasSubstr("if (!nvxnu_idle(seq, end)"));
 	const auto reserve = flat(definition(gpu(), "static inline int chan_wait_room("));
 	expectBefore(reserve, "chan_wait_ready(chan, gpfifo_nr, push_nr)",
 		     "nvif_chan_gpfifo_wait(&chan->chan, gpfifo_nr, push_nr)");
-	expectBefore(flat(definition(gpu(), "u32 chan_fence_job(struct tgm_chan *chan, int external, u32 first, u32 next)")),
+	expectBefore(flat(definition(gpu(), "u32 chan_fence_job(struct tgm_chan *chan, int "
+					    "external, u32 first, u32 next)")),
 		     "nvif_chan_gpfifo_post(&chan->chan);", "NON_STALL_INTERRUPT, 0);");
 }
 
@@ -1123,18 +1129,20 @@ TEST(GM20BSurfaceIdentitySource, ImportedSurfaceIdentityOutlivesLegacyCoherency)
 
 TEST(GM20BPresentSource, TypedProducerValidationAndReleaseNeverRunUnderTheIrqEventLock)
 {
-    const auto irq = flat(definition(gpu(), "static inline void present_fenced("));
-    EXPECT_THAT(irq, HasSubstr("nvxnu_work_schedule(present.completion_work)"));
-    EXPECT_THAT(irq, Not(HasSubstr("switch_gpu_present_tokens_finish")));
-    const auto complete = flat(definition(gpu(), "static void present_typed_complete("));
-    expectBefore(complete, "mutex_unlock(&present.lock);", "switch_gpu_present_tokens_finish_visible(");
-    expectBefore(complete, "switch_gpu_present_tokens_finish_visible(", "&present.typed_pending, 0");
-    const auto copy = flat(definition(gpu(), "static int present_copy("));
-    expectBefore(copy, "backing_dependencies(chan, present.tokens.tokens, dependency_count, 1)",
-                 "if (dst_va) {");
-    expectBefore(copy, "&present.typed_pending, exact != 0", "chan_fence(chan);");
-    EXPECT_THAT(copy, HasSubstr("(room + dependency_count) * 5"));
-    EXPECT_THAT(copy, HasSubstr("push->cur = push_start"));
+	const auto irq = flat(definition(gpu(), "static inline void present_fenced("));
+	EXPECT_THAT(irq, HasSubstr("nvxnu_work_schedule(present.completion_work)"));
+	EXPECT_THAT(irq, Not(HasSubstr("switch_gpu_present_tokens_finish")));
+	const auto complete = flat(definition(gpu(), "static void present_typed_complete("));
+	expectBefore(complete, "mutex_unlock(&present.lock);",
+		     "switch_gpu_present_tokens_finish_visible(");
+	expectBefore(complete, "switch_gpu_present_tokens_finish_visible(",
+		     "&present.typed_pending, 0");
+	const auto copy = flat(definition(gpu(), "static int present_copy("));
+	expectBefore(copy, "backing_dependencies(chan, present.tokens.tokens, dependency_count, 1)",
+		     "if (dst_va) {");
+	expectBefore(copy, "&present.typed_pending, exact != 0", "chan_fence(chan);");
+	EXPECT_THAT(copy, HasSubstr("(room + dependency_count) * 5"));
+	EXPECT_THAT(copy, HasSubstr("push->cur = push_start"));
 }
 
 TEST(GM20BPresentSource, ExactFrameSkipsLiveChannelEnumerationEvenWithoutGpuTokens)
@@ -1150,9 +1158,9 @@ TEST(GM20BPresentSource, ExactFrameSkipsLiveChannelEnumerationEvenWithoutGpuToke
 
 TEST(GM20BVmSource, MappingSerializesPerAddressSpaceWithSuspendAdmission)
 {
-	for (const char *signature : {"int tgm_vm_map_raw(", "int tgm_vm_unmap_pages(",
-				      "int switch_gpu_vm_map_volatile(", "void switch_gpu_vm_unmap(",
-				      "int vm_kmap("}) {
+	for (const char *signature :
+	     {"int tgm_vm_map_raw(", "int tgm_vm_unmap_pages(", "int switch_gpu_vm_map_volatile(",
+	      "void switch_gpu_vm_unmap(", "int vm_kmap("}) {
 		const auto body = flat(definition(gpu(), signature));
 		expectBefore(body, "gate_enter();", "mutex_lock(&vm->map_lock);");
 		expectBefore(body, "mutex_unlock(&vm->map_lock);", "gate_leave();");
