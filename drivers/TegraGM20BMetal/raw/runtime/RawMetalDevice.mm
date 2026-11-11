@@ -84,6 +84,9 @@ static const char *zetaMemoryRefusal(int asked)
     d[@"state_segment_words"] = @(gRM->raw->stats.segmentWords.load());
     d[@"state_segment_skips"] = @(gRM->raw->stats.segmentSkips.load());
     d[@"state_segment_extras_losses"] = @(gRM->raw->stats.segmentExtrasLosses.load());
+    d[@"replay_same"] = @(gRM->raw->stats.replay.same.load());
+    d[@"replay_recent"] = @(gRM->raw->stats.replay.recent.load());
+    d[@"replay_new"] = @(gRM->raw->stats.replay.fresh.load());
     const raw::FetchCounts &fetch = gRM->raw->stats.fetch;
     d[@"fetch_sequential"] = @(fetch.sequential.load());
     d[@"fetch_triangles"] = @(fetch.sequentialTriangles.load());

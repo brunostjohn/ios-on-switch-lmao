@@ -261,6 +261,10 @@ void packedVariants(RMPipeline *p, uint64_t keyHash);
 // RawMetalHeap.mm: the purged heaps a committed command buffer's resources lie in, given their pages back before it is encoded
 // (it counts as committed already, so no purge runs meanwhile)
 void restoreArenas(RMCommandBuffer *cb);
+#if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
+// DEVELOPMENT: the structure of the plan's operations [from, to) into the device's replay tally (raw_replay_shape.h)
+void noteReplayShape(RMCommandBuffer *cb, size_t from, size_t to);
+#endif
 // A heap's pages back if it was purged (an m2v twin aliases them); true without a heap or an arena
 bool heapResident(RMHeap *h);
 
