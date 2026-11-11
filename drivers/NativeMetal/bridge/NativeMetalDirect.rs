@@ -20,8 +20,8 @@ use metal2vulkan::metal::{
     TextureUsage,
 };
 use metal2vulkan::pipeline::{
-    GraphicsState, PipelineLayout, PushField, RenderPipeline, RenderPipelineDescriptor, SlotClass, SlotInterface,
-    SlotRef, Stage, StandInView, StorageAttachmentView,
+    GraphicsState, PipelineLayout, PushField, RenderPipeline, RenderPipelineDescriptor, SampledType, SlotClass,
+    SlotInterface, SlotRef, Stage, StandInView, StorageAttachmentView, TextureSlot,
 };
 use std::ffi::{CString, c_char, c_void};
 use std::sync::{Arc, Mutex};
@@ -353,27 +353,61 @@ fn probe_bind_offset(stage: u32, slot: u32) -> u64 {
     }
 }
 
-/// The fragment texture slots the probe binds whose arguments the state's functions declare `texture3d` (Core Animation's
-/// colour cubes): a 3D texture bound there gives each its own write, at its own Metal index
-fn volume_slots(pipeline: &RenderPipeline) -> Vec<u32> {
+/// The fragment texture slots the probe binds whose arguments the state's functions declare other than a single-sample
+/// `texture2d` of floats: a texture of the declared type (Core Animation's colour cubes a 3D one, a `texture2d_ms` or a
+/// `depth2d_ms` a multisampled one), sampled type and comparison is bound there, so that each gets its own write at its
+/// own Metal index where a `texture2d` would get the declaration's neutral
+fn declared_slots(pipeline: &RenderPipeline) -> Vec<(u32, TextureSlot)> {
     pipeline
         .interface
         .slots
         .iter()
-        .filter(|(slot, interface)| {
-            slot.stage == Stage::Fragment
-                && slot.class == SlotClass::Texture
-                && slot.index < PROBE_TAGGED
-                && matches!(interface, SlotInterface::Texture(t) if t.texture_type == TextureType::Type3D)
+        .filter_map(|(slot, interface)| match interface {
+            SlotInterface::Texture(t)
+                if slot.stage == Stage::Fragment
+                    && slot.class == SlotClass::Texture
+                    && slot.index < PROBE_TAGGED
+                    && (t.texture_type != TextureType::Type2D
+                        || t.sampled_type != SampledType::Float
+                        || t.depth_compare) =>
+            {
+                Some((slot.index, *t))
+            }
+            _ => None,
         })
-        .map(|(slot, _)| slot.index)
         .collect()
 }
 
+/// What the probe binds at a slot declared `t`: its type (multisampled at the state's samples, else 4), and a format of its
+/// sampled type or a depth format for a comparison where the state names none
+fn declared_facts(t: &TextureSlot, own: Option<PixelFormat>, format: PixelFormat, samples: u32) -> TextureFacts {
+    let pixel_format = own.unwrap_or(match t.sampled_type {
+        _ if t.depth_compare => PixelFormat::Depth32Float,
+        SampledType::Uint => PixelFormat::RGBA8Uint,
+        SampledType::Sint => PixelFormat::RGBA8Sint,
+        _ => format,
+    });
+    let mut facts = TextureFacts::new(t.texture_type, pixel_format);
+    if matches!(
+        t.texture_type,
+        TextureType::Type2DMultisample | TextureType::Type2DMultisampleArray
+    ) {
+        facts.sample_count = if samples > 1 { samples } else { 4 };
+        facts.usage |= TextureUsage::RENDER_TARGET;
+    }
+    facts
+}
+
 /// The bind state of probe.mm's draw `run`: every buffer slot of both stages bound (inline bytes, or the bound run's
-/// buffers at each slot's own offset), 16 textures of `format` and `samples` (3D at `volumes`) and 16 samplers at the
-/// fragment stage, `binds`' in their places
-fn probe_state(run: usize, format: PixelFormat, samples: u32, volumes: &[u32], binds: &Binds) -> BindState {
+/// buffers at each slot's own offset), 16 textures of `format` and `samples` (of their declarations at `declared`) and 16
+/// samplers at the fragment stage, `binds`' in their places
+fn probe_state(
+    run: usize,
+    format: PixelFormat,
+    samples: u32,
+    declared: &[(u32, TextureSlot)],
+    binds: &Binds,
+) -> BindState {
     let mut state = BindState::default();
     state.fragment_tests = match binds.fragment_tests {
         1 => FragmentTests::Pass,
@@ -406,8 +440,8 @@ fn probe_state(run: usize, format: PixelFormat, samples: u32, volumes: &[u32], b
             for t in 0..PROBE_TAGGED {
                 let own = binds.textures.iter().find(|(slot, _)| *slot == t).map(|(_, f)| *f);
                 let mut facts = TextureFacts::new(TextureType::Type2D, own.unwrap_or(format));
-                if volumes.contains(&t) {
-                    facts.texture_type = TextureType::Type3D;
+                if let Some((_, d)) = declared.iter().find(|(slot, _)| *slot == t) {
+                    facts = declared_facts(d, own, format, samples);
                 } else if samples > 1 {
                     facts.texture_type = TextureType::Type2DMultisample;
                     facts.sample_count = samples;
@@ -803,7 +837,7 @@ pub unsafe extern "C" fn nmb_render_pipeline_direct(
         let base = compile
             .compile_render_pipeline(&descriptor, &budget)
             .map_err(compile_error("compile"))?;
-        let volumes = volume_slots(&base);
+        let declared = declared_slots(&base);
         let mut variants = vec![(VariantKey::new(), base)];
         let mut runs = Vec::with_capacity(RUN_BYTES.len());
         for run in 0..RUN_BYTES.len() {
@@ -811,7 +845,7 @@ pub unsafe extern "C" fn nmb_render_pipeline_direct(
                 compile,
                 &descriptor,
                 &mut variants,
-                &probe_state(run, format, texture_samples.max(1), &volumes, &binds),
+                &probe_state(run, format, texture_samples.max(1), &declared, &binds),
                 &budget,
             )?);
         }
