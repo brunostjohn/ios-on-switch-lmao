@@ -1210,7 +1210,7 @@ struct tgm_chan {
 		u8 app, waits;
 	} queued[CHAN_QUEUED];
 
-	u32 gov_done;   /* idle clock: last seqno counted retired (gov_fenced) */
+	u32 gov_done;   /* idle clock: last seqno counted retired (idle_retire) */
 	u32 woken_done; /* the completed seqno its waiters were last woken for (chan_wake_waiters) */
 	void (*fenced)(void *arg); /* tgm_chan_on_fence */
 	void *fenced_arg;
@@ -3127,17 +3127,13 @@ static struct {
 	int clock_available;
 	u64 last_busy; /* atomic: the last kick or hint (ns) */
     u64 service_until;
-    u64 kicked, retired; /* atomic: submissions kicked / seen complete, every channel, since boot */
+    u64 kicked, retired; /* atomic: seqnos kicked / retired since boot (SwitchGpuIdleDeadline.h) */
     /* the periodic line (under clk) */
     u64 log_start, low_since, low_ns, raise_sum, raise_max;
     u32 drops, raises, hinted;
 } idle;
 
-static u64 idle_in_flight(void)
-{
-	return __atomic_load_n(&idle.kicked, __ATOMIC_SEQ_CST) -
-	       __atomic_load_n(&idle.retired, __ATOMIC_SEQ_CST);
-}
+#include "SwitchGpuIdleDeadline.h"
 
 /* GM20B's glitchless PL change (nouveau gm20b.c gm20b_pllg_program_mnp, pdiv_only): returns 0 when the GPCPLL is
  * locked, on the VCO, at PL `pl`. Under idle.clk. */
@@ -3287,26 +3283,6 @@ static void idle_hint_raise(void *arg)
 	}
 }
 
-/* drivers/SwitchPower SwitchPerfGovernor.cpp, on the CPU governor's tick (XNU's perfcontrol deadline: interrupts
- * masked, scheduler context): a few loads, and a work item queued once the GPU has been idle long enough. */
-void tegra_gm20b_idle_tick(void)
-{
-	u64 now = 0;
-	int expected = 0;
-
-	if (!READ_ONCE(idle.on) || READ_ONCE(idle.low) || READ_ONCE(idle.dropping) ||
-	    idle_in_flight())
-		return;
-	now = nvxnu_nanotime();
-	if (now < __atomic_load_n(&idle.service_until, __ATOMIC_SEQ_CST) ||
-	    now - __atomic_load_n(&idle.last_busy, __ATOMIC_SEQ_CST) < IDLE_DROP_NS ||
-	    now - native_display_last_swap_ns() < IDLE_DROP_NS)
-		return;
-	if (__atomic_compare_exchange_n(&idle.dropping, &expected, 1, false, __ATOMIC_SEQ_CST,
-					__ATOMIC_SEQ_CST))
-		nvxnu_work_schedule(idle.drop_w);
-}
-
 /* drivers/SwitchPower switch_perf_hint (touch, missed frame, launch): busy now, and back up at once if low. */
 void tegra_gm20b_perf_hint(unsigned int hint)
 {
@@ -3315,25 +3291,6 @@ void tegra_gm20b_perf_hint(unsigned int hint)
 	__atomic_store_n(&idle.last_busy, nvxnu_nanotime(), __ATOMIC_SEQ_CST);
 	if (READ_ONCE(idle.low))
 		nvxnu_work_schedule(idle.raise_w);
-}
-
-#include "SwitchGpuIdleDeadline.h"
-
-/* chan_fence, after the kick; the nonstall pass (gov_fenced) and channel teardown retire. Counted from boot. */
-static void idle_kicked(void)
-{
-	__atomic_fetch_add(&idle.kicked, 1, __ATOMIC_SEQ_CST);
-}
-
-static void idle_fenced(struct tgm_chan *chan)
-{
-	u32 done = tgm_chan_completed(chan);
-	u32 n = done - chan->gov_done;
-
-	if ((s32)n <= 0)
-		return;
-	chan->gov_done = done;
-	__atomic_fetch_add(&idle.retired, n, __ATOMIC_SEQ_CST);
 }
 
 /* The periodic line (log only), from a kick at most every IDLE_LOG_NS. */
@@ -3951,9 +3908,7 @@ void tgm_chan_del(struct tgm_chan **pchan)
 	if (gpu.stage >= 3 && !chan->error && (s32)(tgm_chan_completed(chan) - chan->submitted) < 0)
 		chan_abandon(chan);
 	/* the idle clock's count: what it finished, and (a dead channel) what it never will */
-	idle_fenced(chan);
-	__atomic_fetch_add(&idle.retired, chan->submitted - chan->gov_done, __ATOMIC_SEQ_CST);
-	chan->gov_done = chan->submitted;
+	idle_retire(chan, chan->submitted);
 	mutex_lock(&live_lock);
 	list_del(&chan->live);
 	order_forget(chan);
@@ -4726,7 +4681,7 @@ static u32 chan_fence_job(struct tgm_chan *chan, int external, u32 first, u32 ne
     if (switch_gpu_irq_arm(&chan->irq_state, next) && nvif_event_allow(&chan->nonstall))
         nvxnu_panic("SwitchGpu: cannot arm channel completion");
     WRITE_ONCE(chan->submitted, next);
-    idle_kicked();
+    idle_kicked(first, next);
 	switch_emc_gpu_submit();
 	chan->chan.defer_kick = false;
 	PUSH_KICK(push);
