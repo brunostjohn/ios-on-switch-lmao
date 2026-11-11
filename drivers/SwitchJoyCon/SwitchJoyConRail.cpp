@@ -408,6 +408,9 @@ constexpr uint32_t kSubcommandMS = 1000;
 // Unanswered requests (see the header), in the intervals they were sent at: a running Joy-Con is gone after kSilentMS;
 // one that answers again after kQuietMS or more is logged.
 constexpr uint32_t kSilentMS = 1500, kQuietMS = 500;
+// Session start (calibrate): the stick's SPI reads (SwitchJoyConStick.h), then this step, the input report mode, then
+// the IMU.
+constexpr uint8_t kCalibrateMode = SWITCH_JOYCON_STICK_READS;
 // A non-zero rumble is sent again this often (L4T JC_RUMBLE_PERIOD_MS, J:470).
 constexpr uint32_t kRumbleKeepAliveMS = 50;
 // After the 3 Mbaud switch: 91/11 every 5 ms for up to 200 ms (hekate 1325-1341: ten sends 5 ms apart; L4T's retry
@@ -458,7 +461,7 @@ OSDefineMetaClassAndStructors(SwitchJoyConPairing, IOService)
         kBackoff,
         kHandshake,
         kPairing,
-        kCalibrating,  // the Joy-Con's stick calibration read, its IMU turned off (calibrate)
+        kCalibrating,  // the Joy-Con's stick calibration read, its input mode and IMU set (calibrate)
         kRunning,
         kEnding,  // a running session ended with 91/11 for a pairing to open the next one (bluetoothAddress)
         kSuspended
@@ -1663,12 +1666,14 @@ void SwitchJoyConRail::finishPairing(Side &s, bool paired, const char *how)
 }
 
 // Before the session runs and its HID device exists, so no reply of the rail's own reaches it: the Joy-Con's stick
-// calibration and parameters (SwitchJoyConStick.h; once a boot per Joy-Con), then subcommand 0x40 0 (its IMU samples
-// from the HID connect on: deku packet_parse/j2c.txt's first 0x30 report carries them before Horizon's 0x40 1).
+// calibration and parameters (SwitchJoyConStick.h; once a boot per Joy-Con), then subcommand 0x03 0x30, the input
+// report mode the rail runs in, whatever an earlier session left (Horizon sends it at every attach: deku
+// packet_parse/c2j.txt 13), and 0x40 0 (its IMU samples from the HID connect on: deku packet_parse/j2c.txt's first 0x30
+// report carries them before Horizon's 0x40 1).
 void SwitchJoyConRail::calibrate(Side &s)
 {
     s.phase = kCalibrating;
-    s.step = SWITCH_JOYCON_STICK_READS;
+    s.step = kCalibrateMode;
     if (!s.stickKnown || memcmp(s.stickMac, s.mac, sizeof(s.mac)) != 0) {
         switch_joycon_stick_defaults(&s.stick, s.cfg->left);
         s.step = 0;
@@ -1682,6 +1687,9 @@ void SwitchJoyConRail::sendCalibrationStep(Side &s)
         uint8_t read[5];
         switch_joycon_stick_request(&s.stick, s.step, read);
         sendSubcommand(s, kSubSpiRead, read, sizeof(read));
+    } else if (s.step == kCalibrateMode) {
+        const uint8_t mode = kReportFull;
+        sendSubcommand(s, kSubReportMode, &mode, 1);
     } else {
         const uint8_t off = 0;
         sendSubcommand(s, kSubImu, &off, 1);
@@ -1703,8 +1711,13 @@ void SwitchJoyConRail::calibrationReply(Side &s, const uint8_t *report, size_t l
         sendCalibrationStep(s);
         return;
     }
-    if (report[14] != kSubImu)
+    if (report[14] != (s.step == kCalibrateMode ? kSubReportMode : kSubImu))
         return;
+    if (s.step == kCalibrateMode) {
+        ++s.step;
+        sendCalibrationStep(s);
+        return;
+    }
     s.timer->cancelTimeout();
     if (!s.stickKnown || memcmp(s.stickMac, s.mac, sizeof(s.mac)) != 0) {
         memcpy(s.stickMac, s.mac, sizeof(s.mac));
@@ -2211,7 +2224,10 @@ void SwitchJoyConRail::timerAction(OSObject *owner, IOTimerEventSource *sender)
     case kCalibrating:
         SwitchJoyConRail::checkDelivery(*s, "calibration step timed out");
         IOLog("SwitchJoyCon: Joy-Con (%c) did not answer its %s; default stick calibration for this session\n",
-              s->cfg->letter, s->step < SWITCH_JOYCON_STICK_READS ? "stick calibration read" : "IMU off");
+              s->cfg->letter,
+              s->step < SWITCH_JOYCON_STICK_READS ? "stick calibration read"
+              : s->step == kCalibrateMode         ? "input report mode 0x30"
+                                                  : "IMU off");
         self->run(*s);
         s->imuOff = true;
         break;

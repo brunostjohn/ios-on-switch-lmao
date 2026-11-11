@@ -12,9 +12,11 @@
 // nothing in it is news but drift that adds up). The connection bits (byte 2's low nibble) and the timer (byte 1) are
 // not news.
 //
-// No report goes on just to keep the device alive: the plugin's idle clock follows input, not reports (boot 17, 24B119,
-// "isIdle for 300.07 seconds" while every 0x3F-mode report a second went on), and a Bluetooth Joy-Con in 0x3F sends
-// only on a button change (deku bluetooth_hid_subcommands_notes.md 81). While a client wants motion (the plugin's
+// No report goes on just to keep the device alive. JoyConHIDServicePlugin's idle clock follows input, not reports
+// (boot 17, 24B119: its "isIdle for N seconds" grew to 300 s with the plugin in 0x30 mode and all ~66 reports a second
+// handed on), and a Bluetooth Joy-Con in 0x3F sends only on a button change (deku bluetooth_hid_subcommands_notes.md
+// 81). That it takes a 0x30-mode Joy-Con falling silent for minutes is the device's to show: HW Test input.joycon_idle,
+// and the plugin's log keeping "isIdle" growing with no "Cancel" or "Device not active". While a client wants motion (the plugin's
 // subcommand 0x40 with a non-zero argument), every 0x30 report goes on: its IMU samples change every time. Replies (0x21)
 // and MCU reports (0x31) always go on.
 #pragma once
