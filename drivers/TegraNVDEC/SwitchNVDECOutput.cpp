@@ -76,8 +76,8 @@ int switch_nvdec_output_export(const TegraNVDECBlock *block, const TegraNVDECPre
     const int checked = switch_nvdec_output_picture(block, request, &picture);
     if (checked)
         return checked;
-    refusal->why = "native output of a placed or 16-bit picture";
-    if (request->sample_bytes != 1 || request->dst_x || request->dst_y)
+    refusal->why = "native output of a placed picture";
+    if (request->dst_x || request->dst_y)
         return -95;
     TegraVICSurface surface = {};
     refusal->why = "native output into a surface the caller does not hold";

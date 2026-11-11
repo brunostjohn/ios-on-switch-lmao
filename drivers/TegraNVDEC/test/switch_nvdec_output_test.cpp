@@ -236,7 +236,7 @@ TEST_F(SwitchNVDECOutputTest, AFailedExportNamesItsRefusalAndTheSurfacesSizes)
     vicReady = true;
     request.dst_x = 2;
     EXPECT_EQ(switch_nvdec_output_export(&buffer.block, &request, task, &refusal), -95);
-    EXPECT_STREQ(refusal.why, "native output of a placed or 16-bit picture");
+    EXPECT_STREQ(refusal.why, "native output of a placed picture");
     request.dst_x = 0;
     publishError = -22;
     surfaceMemory.length = 1703936;
@@ -247,15 +247,20 @@ TEST_F(SwitchNVDECOutputTest, AFailedExportNamesItsRefusalAndTheSurfacesSizes)
     EXPECT_EQ(refusal.baseOffset, 0u);
 }
 
-TEST_F(SwitchNVDECOutputTest, UnsupportedPlacementAndWideSamplesDoNotPublish)
+TEST_F(SwitchNVDECOutputTest, PlacedPicturesDoNotPublish)
 {
     request.dst_x = 2;
     EXPECT_EQ(switch_nvdec_output_export(&buffer.block, &request, task), -95);
-    request.dst_x = 0;
+    EXPECT_EQ(lookups, 0u);
+}
+
+TEST_F(SwitchNVDECOutputTest, TenBitPicturesPublishTheirSixteenBitPlanes)
+{
     request.sample_bytes = 2;
     request.width = 640;
-    EXPECT_EQ(switch_nvdec_output_export(&buffer.block, &request, task), -95);
-    EXPECT_EQ(lookups, 0u);
+    EXPECT_EQ(switch_nvdec_output_export(&buffer.block, &request, task), 0);
+    EXPECT_EQ(exportedPicture.sampleBytes, 2u);
+    EXPECT_EQ(publishes, 1u);
 }
 
 TEST_F(SwitchNVDECOutputTest, InvalidGeometryLeavesOutputUnchanged)

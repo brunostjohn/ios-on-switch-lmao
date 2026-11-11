@@ -122,7 +122,7 @@ static bool presentPicture(Decoder *d, const H264Picture *picture, CVPixelBuffer
                                  .dst_x = x,
                                  .dst_y = y,
                                  .sample_bytes = picture->wide ? 2 : 1};
-    if (!picture->status && !picture->wide && !x && !y &&
+    if (!picture->status && !x && !y &&
         width == CVPixelBufferGetWidth(image) && height == CVPixelBufferGetHeight(image) &&
         switch_nvdec_can_export(d->client) && !switch_nvdec_export(d->client, &p)) {
         d->exported++;

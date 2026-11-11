@@ -16,7 +16,7 @@ public enum Registry {
     ]
 
     static let video: [any HWTest] =
-        VideoDecodeTest.all + [NativeExportTest()] + PlaybackTest.all + VideoEncodeTest.all
+        VideoDecodeTest.all + [NativeExportTest(), NativeExportTest.main10] + PlaybackTest.all + VideoEncodeTest.all
 
     static let images: [any HWTest] =
         ImageDecodeTest.all + [HEICEncodeTest(), CoreImageTest(), PixelTransferTest(), PixelTransfer422Test()]
