@@ -528,7 +528,7 @@ __attribute__((objc_externally_retained)) static bool encodeRawAttempt(RMCommand
                 p.depthStencil.depth = float(std::clamp(pass.clearDepth, 0.0, 1.0));
                 p.depthStencil.stencil = pass.clearStencil;
             } else {
-                p.hiddenZeta = passTestsHiddenZeta(cb, at);
+                p.hiddenZeta = pass.testsHiddenZeta;
             }
             p.width = uint32_t(std::min<NSUInteger>(pass.width, UINT32_MAX));
             p.height = uint32_t(std::min<NSUInteger>(pass.height, UINT32_MAX));

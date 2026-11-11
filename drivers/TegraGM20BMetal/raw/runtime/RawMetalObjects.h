@@ -233,6 +233,7 @@ struct RMPass {
     NSUInteger width, height;
     raw::SamplePositions positions;
     uint8_t compressed = 0;  // colour attachments on compressed memory as the pass was made (raw_private_comp.h)
+    bool testsHiddenZeta = false;  // a depth/stencil state set in it tests depth or stencil (raw::testsHiddenZeta)
 };
 
 // A command buffer's setBytes data, written once where the GPU reads it: write-combined pool chunks the raw encode binds in place
