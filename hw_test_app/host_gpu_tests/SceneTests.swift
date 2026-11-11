@@ -49,7 +49,7 @@ final class SceneTests: XCTestCase {
         let scene = try XCTUnwrap(Scenes.all.first { $0.id == "gpu.raw.fetch_blend_order" })
         let result = try await scene.run(makeGPU())
         XCTAssertTrue(result.passed, result.reasons(limit: 8).joined(separator: "; "))
-        XCTAssertEqual(result.checks.count, 24)
+        XCTAssertEqual(result.checks.count, 29)
     }
 
     func testArchiveMissOnThisMac() async throws {

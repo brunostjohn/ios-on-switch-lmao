@@ -148,6 +148,21 @@ struct FetchBlendMesh: Sendable {
         return mesh
     }
 
+    /// Rectangles, each its own indexed strip of four vertices (16-bit indices, no restart), as RenderBox draws a quad
+    static func quads(_ count: Int) -> FetchBlendMesh {
+        var mesh = FetchBlendMesh()
+        for q in 0..<count {
+            let (x0, y0) = ((q * 13) % 40, (q * 23) % 40)
+            let (x1, y1) = (min(size, x0 + 10 + (q * 7) % 24), min(size, y0 + 12 + (q * 5) % 20))
+            let tag = UInt32((q * 3 + q / 4) & 3)
+            let first = UInt32(mesh.points.count)
+            for corner in [clip(x0, y0), clip(x1, y0), clip(x0, y1), clip(x1, y1)] { mesh.point(corner, tag) }
+            mesh.indices += (first..<first + 4).map { $0 }
+            mesh.layers.append(FetchBlendLayer(x0: x0, y0: y0, x1: x1, y1: y1, tag: tag))
+        }
+        return mesh
+    }
+
     /// `triangles` triangles of whole-target triangles and a rectangle every `rectEvery` pieces, their tags and places
     /// from `seed`.
     static func pieces(triangles: Int, seed: Int, rectEvery: Int = 5) -> [FetchBlendPiece] {
@@ -190,7 +205,14 @@ struct FetchBlendMesh: Sendable {
 enum FetchBlendState {
     static let clear = SIMD4<Int>(2, 0, 1, 3)
 
-    static func scale(_ format: TexelFormat) -> Float { format.isFloat ? 256 : 255 }
+    static func scale(_ format: TexelFormat) -> Float { format.isFloat ? 256 : format == .bgr10a2Unorm ? 1023 : 255 }
+
+    /// What the pixel's next fetch reads back of state `n` once stored in `format`: itself, but a two-bit alpha's
+    static func stored(_ n: SIMD4<Int>, _ format: TexelFormat) -> SIMD4<Int> {
+        let scale = scale(format)
+        let values = format.decode(format.encode((0..<4).map { Float(n[$0]) / scale })[...])
+        return SIMD4((0..<4).map { Int((values[$0] * scale).rounded()) })
+    }
 
     static func step(_ n: SIMD4<Int>, _ tag: UInt32) -> SIMD4<Int> {
         let full = n.x < 255 ? 0 : 1
@@ -198,13 +220,13 @@ enum FetchBlendState {
         return n &+ SIMD4(1 - full, full, mixed & 1, (mixed >> 1) & 1)
     }
 
-    static func replay(_ layers: [FetchBlendLayer], size: Int) -> [SIMD4<Int>] {
-        var pixels = [SIMD4<Int>](repeating: clear, count: size * size)
+    static func replay(_ layers: [FetchBlendLayer], size: Int, format: TexelFormat) -> [SIMD4<Int>] {
+        var pixels = [SIMD4<Int>](repeating: stored(clear, format), count: size * size)
         for layer in layers {
             let (xs, ys) = ((max(0, layer.x0), min(size, layer.x1)), (max(0, layer.y0), min(size, layer.y1)))
             guard xs.0 < xs.1, ys.0 < ys.1 else { continue }
             for y in ys.0..<ys.1 {
-                for x in xs.0..<xs.1 { pixels[y * size + x] = step(pixels[y * size + x], layer.tag) }
+                for x in xs.0..<xs.1 { pixels[y * size + x] = stored(step(pixels[y * size + x], layer.tag), format) }
             }
         }
         return pixels
