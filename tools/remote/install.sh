@@ -26,8 +26,11 @@ for token in cache.token worker.token; do
     }
 done
 mkdir -p "$home" "$agents"
+# A new file, never one written over: macOS kills a binary whose signed pages changed under the same vnode.
 for file in "$bin/bb_worker" "$bin/bb_runner" "$here/switch-worker" "$here/worker.jsonnet" "$here/runner.jsonnet"; do
-    cp -f "$file" "$home/"
+    name=$(basename "$file")
+    cp "$file" "$home/.$name.new"
+    mv -f "$home/.$name.new" "$home/$name"
 done
 chmod 600 "$home/cache.token" "$home/worker.token"
 
