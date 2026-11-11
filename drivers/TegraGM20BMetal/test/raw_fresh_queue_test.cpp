@@ -42,9 +42,9 @@ struct Gpu {
         rawSinceM2v = false;
     }
 
-    // Whether some order the GPU may run both channels in puts a write of `texture` ahead of its fill: the m2v channel run as
-    // early as its acquires allow, before the raw channel's later submissions
-    bool writeMayPrecedeFill(const std::string &texture) const
+    // Whether some order the GPU may run both channels in fills `texture` after a write of it: the m2v channel run as early
+    // as its acquires allow, before the raw channel's later submissions
+    bool fillMayFollowWrite(const std::string &texture) const
     {
         std::vector<std::string> order;
         size_t r = 0;
@@ -57,16 +57,17 @@ struct Gpu {
             order.insert(order.end(), raw[r].commands.begin(), raw[r].commands.end());
         const auto fill = std::find(order.begin(), order.end(), "fill:" + texture);
         const auto write = std::find(order.begin(), order.end(), "write:" + texture);
-        return write != order.end() && (fill == order.end() || write < fill);
+        return write != order.end() && fill != order.end() && write < fill;
     }
 };
 
 // The runtime's use of the queue: a raw submission takes every pending texture and writes it ahead of its own commands
-// (FreshWrites); an m2v submission is preceded by a raw one of the pending textures alone (writeFreshAhead) when `ahead`
+// (FreshWrites); an m2v submission is preceded by FreshQueue::writeAhead (writeFreshAhead), whose raw submission goes
+// through where `rawSubmits`, under GPU order where `gpuOrder`; `ahead` false is the runtime before it
 struct Runtime {
     raw::FreshQueue<Entry> fresh;
     Gpu gpu;
-    bool ahead = true;
+    bool ahead = true, gpuOrder = true, rawSubmits = true;
 
     std::shared_ptr<Texture> make(const std::string &name)
     {
@@ -75,13 +76,19 @@ struct Runtime {
         return t;
     }
 
+    static std::vector<std::string> fills(std::vector<Entry> &entries)
+    {
+        std::vector<std::string> out;
+        for (Entry &e : entries)
+            if (auto t = e.texture.lock())
+                out.push_back("fill:" + t->name);
+        return out;
+    }
+
     std::vector<std::string> takeFills()
     {
-        std::vector<std::string> fills;
-        for (Entry &e : fresh.take())
-            if (auto t = e.texture.lock())
-                fills.push_back("fill:" + t->name);
-        return fills;
+        std::vector<Entry> taken = fresh.take();
+        return fills(taken);
     }
 
     void raw(std::vector<std::string> commands)
@@ -93,8 +100,12 @@ struct Runtime {
 
     void m2v(std::vector<std::string> commands)
     {
-        if (ahead && fresh.any())
-            gpu.submitRaw(takeFills());
+        if (ahead)
+            fresh.writeAhead(gpuOrder, [&](std::vector<Entry> &taken) {
+                if (rawSubmits)
+                    gpu.submitRaw(fills(taken));
+                return rawSubmits;
+            });
         gpu.submitM2v(std::move(commands));
     }
 };
@@ -118,9 +129,12 @@ TEST(RawFreshQueue, AnM2vSubmissionGoesAfterTheRawFillOfItsTextures)
     Runtime rt;
     auto a = rt.make("a");
     rt.m2v({"write:a"});
-    EXPECT_FALSE(rt.gpu.writeMayPrecedeFill("a"));
+    ASSERT_EQ(rt.gpu.raw.size(), 1u);
+    EXPECT_EQ(rt.gpu.raw[0].commands, (std::vector<std::string>{"fill:a"}));
+    EXPECT_EQ(rt.gpu.m2v[0].acquires, 1u);
+    EXPECT_FALSE(rt.gpu.fillMayFollowWrite("a"));
     rt.raw({"write:a"});
-    EXPECT_FALSE(rt.gpu.writeMayPrecedeFill("a"));
+    EXPECT_FALSE(rt.gpu.fillMayFollowWrite("a"));
 }
 
 // Without the raw submission ahead, the next raw submission fills the texture after m2v wrote it, on another channel
@@ -131,7 +145,24 @@ TEST(RawFreshQueue, WithoutTheFillAheadAnM2vWriteIsOverwritten)
     auto a = rt.make("a");
     rt.m2v({"write:a"});
     rt.raw({"draw"});
-    EXPECT_TRUE(rt.gpu.writeMayPrecedeFill("a"));
+    EXPECT_TRUE(rt.gpu.fillMayFollowWrite("a"));
+}
+
+// Where the raw submission ahead cannot be ordered before m2v's, or fails, the texture keeps what its memory held: never a
+// fill after m2v wrote it
+TEST(RawFreshQueue, AFillThatCannotGoAheadIsDropped)
+{
+    for (const bool gpuOrder : {false, true}) {
+        Runtime rt;
+        rt.gpuOrder = gpuOrder;
+        rt.rawSubmits = !gpuOrder;
+        auto a = rt.make("a");
+        rt.m2v({"write:a"});
+        rt.raw({"draw"});
+        EXPECT_FALSE(rt.gpu.fillMayFollowWrite("a"));
+        for (const auto &s : rt.gpu.raw)
+            EXPECT_EQ(std::count(s.commands.begin(), s.commands.end(), "fill:a"), 0);
+    }
 }
 
 TEST(RawFreshQueue, AnM2vSubmissionAfterRawWorkWaitsForIt)
@@ -141,8 +172,8 @@ TEST(RawFreshQueue, AnM2vSubmissionAfterRawWorkWaitsForIt)
     rt.raw({"draw"});
     auto b = rt.make("b");
     rt.m2v({"write:b", "write:a"});
-    EXPECT_FALSE(rt.gpu.writeMayPrecedeFill("a"));
-    EXPECT_FALSE(rt.gpu.writeMayPrecedeFill("b"));
+    EXPECT_FALSE(rt.gpu.fillMayFollowWrite("a"));
+    EXPECT_FALSE(rt.gpu.fillMayFollowWrite("b"));
     EXPECT_EQ(rt.gpu.raw.size(), 2u);
 }
 

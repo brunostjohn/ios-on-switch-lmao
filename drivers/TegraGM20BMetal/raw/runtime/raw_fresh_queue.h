@@ -37,6 +37,15 @@ public:
         return taken;
     }
 
+    // Ahead of the other driver's submission: every pending entry, in a raw submission of its own (`submit`), where the GPU
+    // then orders the other driver after it (`ordered`). Where it does not, or the submission fails, they are dropped: their
+    // textures keep what their memory held rather than take their first contents later, over what the other driver wrote.
+    template <class Submit> bool writeAhead(bool ordered, Submit submit)
+    {
+        std::vector<Entry> taken = take();
+        return taken.empty() || (ordered && submit(taken));
+    }
+
     void settle(std::vector<Entry> &&taken, bool submitted)
     {
         if (submitted || taken.empty())

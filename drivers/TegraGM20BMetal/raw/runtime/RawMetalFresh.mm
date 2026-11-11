@@ -10,9 +10,9 @@ struct FreshEntry {
 };
 
 raw::FreshQueue<FreshEntry> gFresh;
-std::atomic<uint64_t> gFilled{0}, gFilledBytes{0}, gCleared{0}, gAhead{0};
 
 #if SWITCH_RAW_DIAGNOSTICS
+std::atomic<uint64_t> gFilled{0}, gFilledBytes{0}, gCleared{0}, gAhead{0};
 std::mutex gTraceLock;
 NSMapTable<RMTexture *, NSString *>
     *gUnwritten;  // fresh textures no command wrote yet: the read before it, if one came
@@ -120,11 +120,14 @@ void establishFresh(RMTexture *t, MTLTextureDescriptor *d)
 #endif
 }
 
-FreshWrites::FreshWrites(RMCommandBuffer *cb, size_t from, size_t to, raw::CommandBuffer &rc)
+// The entries' textures written ahead of the commands of [from, to) (none: all of them), each one that range names first
+// as a pass that clears all of it left to that pass; those the range never names come back in `later`
+static std::vector<id> writeEntries(RMCommandBuffer *cb, size_t from, size_t to, raw::CommandBuffer &rc,
+                                    std::vector<FreshEntry> &entries, std::vector<FreshEntry> &later)
 {
-    std::vector<FreshEntry> taken = gFresh.take(), later;
+    std::vector<id> handled;
     raw::BlitEncoder *b = nullptr;
-    for (FreshEntry &e : taken) {
+    for (FreshEntry &e : entries) {
         RMTexture *t = e.texture;
         if (!t || t->_heap)
             continue;
@@ -133,20 +136,29 @@ FreshWrites::FreshWrites(RMCommandBuffer *cb, size_t from, size_t to, raw::Comma
             later.push_back({t});
             continue;
         }
-        handled_.push_back(t);
+        handled.push_back(t);
         if (use == FirstUse::ClearsAll) {
-            gCleared.fetch_add(1, std::memory_order_relaxed);
+            RAW_DIAGNOSTIC(gCleared.fetch_add(1, std::memory_order_relaxed));
             continue;
         }
         if (!b)
             b = rc.blit();
-        gFilledBytes.fetch_add(writeFresh(*b, t), std::memory_order_relaxed);
-        gFilled.fetch_add(1, std::memory_order_relaxed);
+        const uint64_t bytes = writeFresh(*b, t);
+        RAW_DIAGNOSTIC(gFilledBytes.fetch_add(bytes, std::memory_order_relaxed));
+        RAW_DIAGNOSTIC(gFilled.fetch_add(1, std::memory_order_relaxed));
+        (void)bytes;
     }
     if (b) {
         b->barrier();
         b->end();
     }
+    return handled;
+}
+
+FreshWrites::FreshWrites(RMCommandBuffer *cb, size_t from, size_t to, raw::CommandBuffer &rc)
+{
+    std::vector<FreshEntry> taken = gFresh.take(), later;
+    handled_ = writeEntries(cb, from, to, rc, taken, later);
     gFresh.settle(std::move(later), false);
 }
 
@@ -182,22 +194,23 @@ bool writeFreshAhead(RMCommandBuffer *cb, size_t from, size_t to)
     (void)from;
     (void)to;
 #endif
-    if (!gFresh.any())
+    return gFresh.writeAhead(gRM->gpuOrder, [&](std::vector<FreshEntry> &taken) {
+        raw::CommandBuffer *rc = gRM->raw->begin();
+        if (!rc)
+            return false;
+        rc->internalCompletion();
+        std::vector<FreshEntry> later;
+        const std::vector<id> handled = writeEntries(cb, 0, 0, *rc, taken, later);
+        uint32_t seqno = 0;
+        if (!rc->commit(seqno)) {
+            rc->abandon();
+            return false;
+        }
+        cb->_owners.insert(cb->_owners.end(), handled.begin(), handled.end());
+        gRM->rawSinceM2v = true;
+        RAW_DIAGNOSTIC(gAhead.fetch_add(1, std::memory_order_relaxed));
         return true;
-    raw::CommandBuffer *rc = gRM->raw->begin();
-    if (!rc)
-        return false;
-    rc->internalCompletion();
-    FreshWrites writes(cb, 0, 0, *rc);
-    uint32_t seqno = 0;
-    if (!rc->commit(seqno)) {
-        rc->abandon();
-        return false;
-    }
-    writes.submitted(cb);
-    gRM->rawSinceM2v = true;
-    gAhead.fetch_add(1, std::memory_order_relaxed);
-    return true;
+    });
 }
 
 #if SWITCH_RAW_DIAGNOSTICS
@@ -262,7 +275,7 @@ void traceFreshUses(RMCommandBuffer *cb, size_t begin)
 
 @implementation RMDevice (Fresh)
 
-#if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
+#if SWITCH_RAW_DIAGNOSTICS
 // hw_test_app's gpu.texture.fresh: textures written to their first contents by the copy engine, their bytes, those a first
 // pass cleared whole instead, submissions made ahead of the other driver's for them, and reads of a fresh texture before any
 // command wrote it
@@ -273,9 +286,7 @@ void traceFreshUses(RMCommandBuffer *cb, size_t begin)
     d[@"filled_bytes"] = @(gFilledBytes.load());
     d[@"cleared"] = @(gCleared.load());
     d[@"ahead"] = @(gAhead.load());
-#if SWITCH_RAW_DIAGNOSTICS
     d[@"early_reads"] = @(gEarlyReads.load());
-#endif
     return d;
 }
 #endif

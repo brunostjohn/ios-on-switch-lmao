@@ -133,6 +133,25 @@ host_test(
 )
 
 host_test(
+    name = "fresh_fill_test",
+    srcs = [
+        "fresh_fill_test.cpp",
+        "push_words.h",
+        "//drivers/TegraGM20B:TegraGM20BABI.h",
+        "//drivers/TegraGM20B:TegraGM20BCopy.h",
+        "//drivers/TegraGM20B:TegraGM20BCopyPush.h",
+        "//drivers/TegraGM20B:TegraGM20BFences.h",
+        "//drivers/TegraGM20B:TegraGM20BGpu.h",
+        "//drivers/TegraGM20B:TegraGM20BLayout.h",
+        "//drivers/TegraGM20B:TegraGM20BRelayout.h",
+        "//drivers/TegraGM20B:TegraGM20BSyncpt.h",
+        "//drivers/TegraGM20BMetal:raw_runtime_headers",
+    ],
+    copts = ["-Idrivers/TegraGM20B"],
+    deps = [":emit"],
+)
+
+host_test(
     name = "emit_kernel_test",
     srcs = [
         "emit_kernel_test.cpp",
