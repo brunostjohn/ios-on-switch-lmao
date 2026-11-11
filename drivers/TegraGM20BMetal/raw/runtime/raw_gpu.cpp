@@ -2198,7 +2198,7 @@ bool Device::createBuffer(uint64_t length, Buffer &b, bool wc)
     b.length = length;
     // A reused span may still have dirty GPU lines from its previous owner. Acquire before exposing CPU bytes.
     HostAccess access;
-    if (k_.jobVisibility() && (!hostAccess(b, true, access) || !access.finish())) {
+    if (!hostAccess(b, true, access) || !access.finish()) {
         destroyBuffer(b);
         return false;
     }
@@ -3384,7 +3384,7 @@ void CommandBuffer::use(const Buffer &buffer, bool write)
         use(buffer.import, write);
     if (buffer.va && buffer.length && dev_->k_.exactJobs())
         surfaces_.addAddress(buffer.va, buffer.length, write,
-                             (buffer.hostVisible && dev_->k_.jobVisibility() ? TegraGM20BSurfaceHostWritten : 0u) |
+                             (buffer.hostVisible ? TegraGM20BSurfaceHostWritten : 0u) |
                              (ranged ? TegraGM20BSurfaceRange : 0u));
 }
 
@@ -3399,7 +3399,7 @@ void CommandBuffer::use(const Texture &texture, bool write)
     externalWrites_ |= hostVisible && write;
     if (view->va && dev_->k_.exactJobs())
         surfaces_.addAddress(storage.bytes ? storage.va : view->va, storage.bytes ? storage.bytes : 1, write,
-                             (hostVisible && dev_->k_.jobVisibility() ? TegraGM20BSurfaceHostWritten : 0u) |
+                             (hostVisible ? TegraGM20BSurfaceHostWritten : 0u) |
                              (ranged ? TegraGM20BSurfaceRange : 0u));
 }
 
@@ -3605,7 +3605,7 @@ bool CommandBuffer::commit(uint32_t &seqno)
             control(*bo, true);
         for (const auto &part : d.heapParts_)
             surfaces_.addAccess(part.bo.handle, TegraGM20BSurfaceRead |
-                (invalidates && d.k_.jobVisibility() ? uint32_t(TegraGM20BSurfaceHostWritten) : 0u));
+                (invalidates ? uint32_t(TegraGM20BSurfaceHostWritten) : 0u));
         for (const Bo &bo : d.slmOutgrown_)
             control(bo, true);
         // Split compute writes its frontier into upload storage. Retired chunks remain live through this submission.

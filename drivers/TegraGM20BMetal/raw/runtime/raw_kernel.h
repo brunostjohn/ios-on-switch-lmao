@@ -167,14 +167,9 @@ public:
         return exactJobs() && (info_.flags & TegraGM20BInfoPushFences) ? TegraGM20BMaxJobFences : 0;
     }
 
-    bool jobVisibility() const
-    {
-        return exactJobs() && (info_.flags & TegraGM20BInfoJobVisibility);
-    }
-
     bool rangeUses() const
     {
-        return jobVisibility() && (info_.flags & TegraGM20BInfoUseRanges);
+        return exactJobs() && (info_.flags & TegraGM20BInfoUseRanges);
     }
 
     bool cpuAccess(const Bo &bo, uint64_t offset, uint64_t bytes, uint32_t access, bool acquire);

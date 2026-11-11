@@ -393,7 +393,7 @@ extern "C" uint32_t switch_gpu_info_flags(void)
 		     TegraGM20BInfoSurfaceLayout | TegraGM20BInfoExecSurfaces |
 		     TegraGM20BInfoPriority | TegraGM20BInfoKillRecord | TegraGM20BInfoSubmit |
 		     TegraGM20BInfoCpuAccess | TegraGM20BInfoSubmitAddress | TegraGM20BInfoCpuPreserveDirty |
-		     TegraGM20BInfoCanonicalSurfaceLayout | TegraGM20BInfoJobVisibility | TegraGM20BInfoLeanCopyChannel | TegraGM20BInfoControlReserve |
+		     TegraGM20BInfoCanonicalSurfaceLayout | TegraGM20BInfoLeanCopyChannel | TegraGM20BInfoControlReserve |
 		     TegraGM20BInfoSharedEvents | TegraGM20BInfoSemanticFence | TegraGM20BInfoResourceReady |
 		     TegraGM20BInfoCpuComplete | TegraGM20BInfoUseRanges | TegraGM20BInfoPushFences;
 	if (info.comptag_lines && switch_gpu_compression_on())

@@ -38,7 +38,7 @@ template<class Expect> void DeviceHarness::ranges(Device &device, Expect expect)
 
     auto &flags = const_cast<TegraGM20BAbiInfo &>(device.k_.info()).flags;
     const auto saved = flags;
-    flags |= TegraGM20BInfoSubmitAddress | TegraGM20BInfoJobVisibility | TegraGM20BInfoUseRanges;
+    flags |= TegraGM20BInfoSubmitAddress | TegraGM20BInfoUseRanges;
     auto *cb = device.begin();
     if (!cb)
         std::abort();

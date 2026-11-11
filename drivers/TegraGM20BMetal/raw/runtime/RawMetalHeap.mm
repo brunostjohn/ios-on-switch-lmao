@@ -55,7 +55,7 @@ id<MTLBuffer> makeArenaBuffer(RMHeap *h, NSUInteger length, MTLResourceOptions o
         return nil;
     b->_heap = h;
     b->_raw.hostVisible = h->_descriptor.storageMode != MTLStorageModePrivate;
-    if (b->_raw.hostVisible && gRM->raw->jobVisibility()) {
+    if (b->_raw.hostVisible) {
         raw::HostAccess access;
         if (!gRM->raw->hostAccess(b->_raw, true, access) || !access.finish())
             return nil;

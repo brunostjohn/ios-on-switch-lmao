@@ -94,7 +94,7 @@ extern "C" kern_return_t IOConnectCallStructMethod(mach_port_t connection, uint3
         auto &info = *static_cast<TegraGM20BAbiInfo *>(output);
         info = {};
         info.abi_version = TegraGM20BAbiVersion;
-        info.flags = TegraGM20BInfoSubmitAddress | TegraGM20BInfoJobVisibility |
+        info.flags = TegraGM20BInfoSubmitAddress |
                      (model.rangeUses ? uint32_t(TegraGM20BInfoUseRanges) : 0u) |
                      (model.pushFences ? uint32_t(TegraGM20BInfoPushFences) : 0u) |
                      (model.cpuComplete ? uint32_t(TegraGM20BInfoCpuComplete) : 0u) |

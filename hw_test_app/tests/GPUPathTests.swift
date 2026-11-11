@@ -92,7 +92,6 @@ extension GPUPathTest {
 struct JobVisibilityPathTest: GPUPathTest {
     let id = "gpu.path.job_visibility"
     let name = "Internal jobs skip the L2 flush, External ones put CPU-read bytes in DRAM"
-    let bit: Int? = 18
     let counters = ["internal_jobs", "external_jobs"]
 
     func exercise(_ gpu: GPU, _: TestContext, _ metrics: inout Metrics) async throws -> [String] {

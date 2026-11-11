@@ -214,7 +214,7 @@ bool Kernel::bind(uint64_t va, uint64_t handle, uint64_t range, uint32_t kind, b
 {
     TegraGM20BAbiVmBind b = {};
     b.count = 1;
-    b.ops[0] = {gpuVolatile && jobVisibility() ? TegraGM20BBindMapVolatile : TegraGM20BBindMap,
+    b.ops[0] = {gpuVolatile && exactJobs() ? TegraGM20BBindMapVolatile : TegraGM20BBindMap,
                 kind, handle, 0, va, range};
     const size_t in = offsetof(TegraGM20BAbiVmBind, ops) + sizeof(b.ops[0]);
     if (call(TegraGM20BMethodVmBind, &b, in, nullptr, 0) != KERN_SUCCESS) {
@@ -253,7 +253,7 @@ bool Kernel::alloc(uint64_t bytes, bool coherent, Bo &bo, uint32_t kind, uint64_
         free(bo);
         return false;
     }
-    bo.gpuVolatile = gpuVolatile && jobVisibility();
+    bo.gpuVolatile = gpuVolatile && exactJobs();
     if (!bind(bo.va, bo.handle, bytes, kind, bo.gpuVolatile)) {
         free(bo);
         return false;
@@ -557,7 +557,7 @@ bool Kernel::exec(uint32_t channel, const TegraGM20BAbiPush *pushes, uint32_t co
         setError("The kernel cannot represent this job's shared events");
         return false;
     }
-    const bool explicitVisibility = addressed && jobVisibility() && visibility != JobVisibility::Legacy;
+    const bool explicitVisibility = addressed && visibility != JobVisibility::Legacy;
     TegraGM20BAbiExec legacyExec = {};
     size_t listBytes = 0;
     const TegraGM20BAbiExecSurfaces *list = nullptr;
