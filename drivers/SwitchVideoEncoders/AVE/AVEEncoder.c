@@ -386,7 +386,9 @@ static OSStatus encodePicture(Encoder *e, VTVideoEncoderFrame frame, CVPixelBuff
     }
     const nvenc_pic_stat_s *stat = (const nvenc_pic_stat_s *)e->auxVA;
     const uint32_t produced = (stat->total_bit_count + 7) / 8;
-    if (stat->error_status || stat->ucode_error_status || !produced || produced > e->layout.bitstream_bytes) {
+    // NVENC 5.0's H.264 and H.265 apps put 2 in error_status of every status record they write (nvenc.bin 0x7d29 and
+    // 0x1382b, before the record's DMA out); their errors are ucode_error_status.
+    if (stat->ucode_error_status || !produced || produced > e->layout.bitstream_bytes) {
         static int logged;
         if (!__atomic_exchange_n(&logged, 1, __ATOMIC_RELAXED))
             os_log_error(gLog, "AVE: NVENC %{public}s picture failed: error_status %u ucode %#x, %u bits%{public}s",

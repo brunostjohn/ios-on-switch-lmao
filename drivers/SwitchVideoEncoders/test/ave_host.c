@@ -235,6 +235,7 @@ static int engine(NVENCClient *c, const TegraNVENCSubmit *s)
         return -1;
     nvenc_pic_stat_s *stat = (nvenc_pic_stat_s *)(c->va[status->value] + status->offset);
     memset(stat, 0, sizeof(*stat));
+    stat->error_status = 2;  // what NVENC 5.0's H.264 app writes in every record (AVEEncoder.c)
     stat->total_bit_count = (uint32_t)(n + 4) * 8;
     stat->num_slices = 1;
     stat->pic_type = (unsigned short)pc->pic_type;
