@@ -13,7 +13,7 @@ struct GameControllerTest: HWTest {
     func run(_ context: TestContext) async throws -> Outcome {
         var observer: NSObjectProtocol?
         if GCController.controllers().isEmpty {
-            let attached: GCController? = await context.interact("Attach the Joy-Cons (or connect a controller)") {
+            let attached: GCController? = await context.interact("Press a button on the Joy-Cons (or connect a controller)") {
                 waiter in
                 observer = NotificationCenter.default.addObserver(
                     forName: .GCControllerDidConnect, object: nil, queue: .main

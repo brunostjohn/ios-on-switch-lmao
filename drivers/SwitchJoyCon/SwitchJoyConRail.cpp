@@ -173,6 +173,7 @@
 #include "SwitchJoyConRailPacket.h"
 #include "SwitchJoyConRxRing.h"
 #include "SwitchJoyConSession.h"
+#include "SwitchJoyConUse.h"
 #include "../../kits/SwitchCAR/SwitchPMC.h"
 #include "../../kits/SwitchDMA/SwitchDcache.h"
 #include "../../kits/SwitchMMIO/SwitchMMIOKernel.h"
@@ -556,6 +557,7 @@ OSDefineMetaClassAndStructors(SwitchJoyConPairing, IOService)
         uint8_t rumbleLength;
         bool rumbleFresh;
         switch_joycon_forward forward;
+        switch_joycon_use use;
         // Work loop: the last packet sent was a rumble report (the next reply does not send another), and when the last
         // rumble report went out.
         bool rumbleSent;
@@ -572,6 +574,10 @@ OSDefineMetaClassAndStructors(SwitchJoyConPairing, IOService)
     bool republishOff = false;  // the loop check tripped (see the header)
     bool hostKnown = false;     // `host` is the address SwitchBluetooth programmed
     uint8_t host[6] = {};
+    // The rail pair's game controller devices exist (SwitchJoyConUse.h); the last gamepad use; publishes and idle-outs.
+    bool gamepads = false;
+    uint64_t lastUse = 0;
+    uint32_t gamepadsPublished = 0, gamepadsIdled = 0;
 
     static uint32_t rd(Side &s, uint32_t reg)
     {
@@ -660,7 +666,11 @@ OSDefineMetaClassAndStructors(SwitchJoyConPairing, IOService)
     void finishPairing(Side &s, bool paired, const char *how);
     void run(Side &s);
     static IOService *createHid(Side &s);
+    static void dropGamepad(Side &s);
     static void dropHid(Side &s);
+    bool gamepadsLive(uint64_t now);
+    void noteUse();
+    void idleGamepads();
     void republish(Side &s);
     void armPoll();
     void tick(Side &s);
@@ -671,7 +681,7 @@ OSDefineMetaClassAndStructors(SwitchJoyConPairing, IOService)
     void handshakeReply(Side &s, uint8_t cmd, uint8_t echo, const uint8_t *payload, size_t length);
     void pairingReply(Side &s, const uint8_t *report, size_t length);
     void pairingSlotReply(Side &s, const uint8_t *data, bool ack, size_t length);
-    void runningReport(Side &s, const uint8_t *report, size_t length) const;
+    void runningReport(Side &s, const uint8_t *report, size_t length);
     static void setCharging(Side &s, bool on);
     void publishPairing(Side &s, const char *source);
     static void checkDelivery(Side &s, const char *why);
@@ -1648,7 +1658,8 @@ void SwitchJoyConRail::run(Side &s)
     s.reports = 0;
     s.errorsAtRun = s.lineErrors;
     s.overflowsAtRun = s.overflows;
-    s.hid = createHid(s);
+    switch_joycon_use_reset(&s.use);
+    s.hid = gamepadsLive(switch_now_ms()) ? createHid(s) : nullptr;
     const IOInterruptState state = IOSimpleLockLockDisableInterrupt(s.lock);
     startDmaLocked(s);  // before the first request: its reply is the first the DMA takes
     IOSimpleLockUnlockEnableInterrupt(s.lock, state);
@@ -1667,7 +1678,7 @@ IOService *SwitchJoyConRail::createHid(Side &s)
 
 // Every device goes through here. Once destroy has detached it, the device reports nothing more, so a session mark it
 // set before that is cleared with it and cannot republish the next device.
-void SwitchJoyConRail::dropHid(Side &s)
+void SwitchJoyConRail::dropGamepad(Side &s)
 {
     if (s.hid)
         switch_joycon_hid_destroy(s.hid);
@@ -1675,6 +1686,51 @@ void SwitchJoyConRail::dropHid(Side &s)
     IOLockLock(s.outLock);
     s.republish = false;
     IOLockUnlock(s.outLock);
+}
+
+void SwitchJoyConRail::dropHid(Side &s)
+{
+    dropGamepad(s);
+    switch_joycon_hid_buttons_release(s.cfg->left);
+}
+
+// iOS 27 only: the focus engine an idle gamepad wakes is UIKitCore 24B119's (SwitchJoyConUse.h); 17 publishes at attach.
+bool SwitchJoyConRail::gamepadsLive(uint64_t now)
+{
+#if XNU_12377_121_6
+    if (gamepads && switch_joycon_use_idle(lastUse, now))
+        idleGamepads();
+    return gamepads;
+#else
+    (void)now;
+    return true;
+#endif
+}
+
+void SwitchJoyConRail::noteUse()
+{
+    lastUse = switch_now_ms();
+    if (gamepads)
+        return;
+    gamepads = true;
+    ++gamepadsPublished;
+    for (Side &s : sides) {
+        if (s.phase == kRunning && !s.hid)
+            s.hid = createHid(s);
+    }
+    os_log(OS_LOG_DEFAULT, "SwitchJoyCon: rail Joy-Cons in use: game controllers published");
+}
+
+void SwitchJoyConRail::idleGamepads()
+{
+    gamepads = false;
+    ++gamepadsIdled;
+    for (Side &s : sides) {
+        dropGamepad(s);
+        switch_joycon_use_reset(&s.use);
+    }
+    os_log(OS_LOG_DEFAULT, "SwitchJoyCon: rail Joy-Cons idle for %u s: game controllers disconnected",
+           SWITCH_JOYCON_USE_IDLE_MS / 1000u);
 }
 
 void SwitchJoyConRail::sessionAction(OSObject *owner, IOInterruptEventSource *, int)
@@ -1741,6 +1797,7 @@ void SwitchJoyConRail::pollAction(OSObject *owner, IOTimerEventSource *)
         if (s.phase == kRunning)
             self->tick(s);
     }
+    (void)self->gamepadsLive(switch_now_ms());
     self->armPoll();
 }
 
@@ -1824,7 +1881,7 @@ void SwitchJoyConRail::rumbleAfterReply(Side &s)
     sendOutput(s, report, length);
 }
 
-void SwitchJoyConRail::runningReport(Side &s, const uint8_t *report, size_t length) const
+void SwitchJoyConRail::runningReport(Side &s, const uint8_t *report, size_t length)
 {
     // Battery in the high nibble of byte 2 (0 empty .. 8 full, bit 4 charging; J:1143-1170): stop charging when full,
     // start again below "high", as L4T does to spare the Joy-Con's simple charger.
@@ -1839,6 +1896,11 @@ void SwitchJoyConRail::runningReport(Side &s, const uint8_t *report, size_t leng
     ++s.reports;
     ++s.replies;
     rumbleAfterReply(s);
+    switch_joycon_hid_buttons(s.cfg->left, report, length);
+#if XNU_12377_121_6
+    if (switch_joycon_use_report(&s.use, report, length))
+        noteUse();
+#endif
     if (!s.hid)
         return;
     IOLockLock(s.outLock);
@@ -2280,10 +2342,10 @@ void SwitchJoyConRail::statsLine(char *buffer, size_t size) const
     for (const Side &s : sides) {
         const int n = snprintf(buffer + used, size - used,
                                "%s%c running=%d dma=%s replies=%u late=%u tails=%u errors=%u breaks=%u overflows=%u "
-                               "dropped=%u silences=%u recoveries=%u republished=%u",
+                               "dropped=%u silences=%u recoveries=%u republished=%u gamepad=%d published=%u idled=%u",
                                used ? "; " : "", s.cfg->letter, s.phase == kRunning ? 1 : 0, s.dmaOn ? "on" : "off",
                                s.replies, s.dmaLate, s.dmaTails, s.lineErrors, s.breaks, s.overflows, s.dropped,
-                               s.silences, s.recoveries, s.republished);
+                               s.silences, s.recoveries, s.republished, s.hid ? 1 : 0, gamepadsPublished, gamepadsIdled);
         if (n < 0 || static_cast<size_t>(n) >= size - used)
             break;
         used += static_cast<size_t>(n);

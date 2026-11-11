@@ -187,6 +187,7 @@ TESTS: dict[str, bool] = {
     'gpu.recover.kill_one': False,
     'input.controllers': False,
     'input.joycon': False,
+    'input.focus_idle': False,
     'input.rail': False,
     'gpu.texture.kinds': False,
     'system.union_readdir': False,
