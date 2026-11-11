@@ -60,8 +60,9 @@ local frontend = {
     }],
   }],
   filePool: { blockDevice: { file: { path: dir + '/filepool', sizeBytes: 2 * 1024 * 1024 * 1024 } } },
-  inputDownloadConcurrency: 16,
-  outputUploadConcurrency: 16,
+  // An action waits on its inputs' round trips far more than it runs (10 s fetching to 1 s running, cold): many at once.
+  inputDownloadConcurrency: 128,
+  outputUploadConcurrency: 64,
   directoryCache: {
     maximumCount: 10000,
     maximumSizeBytes: 64 * 1024 * 1024,
