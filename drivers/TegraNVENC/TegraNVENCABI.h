@@ -135,8 +135,9 @@ enum {
 // The input picture from an IOSurface of the calling task: its region at (x, y), width x height pixels, written by VIC
 // at the origin of the buffer IN_CUR_PIC and CHROMA_U relocate into (both the same buffer), as NV12 laid out as
 // input_cfg states (block linear or pitch, not 16x16 tiles). The rest of the coded picture keeps what the buffer holds.
-// surface_id 0: the input is what the CPU wrote. Submit answers kIOReturnUnsupported for a surface VIC cannot take
-// (its layout or geometry), kIOReturnNotReady for one it cannot take now; the client copies that picture itself.
+// Rows VIC does not read as they are go through the GPU's copy engine first, on the hardware. surface_id 0: the input
+// is what the CPU wrote. Submit answers kIOReturnUnsupported for a surface VIC cannot take (its layout or geometry),
+// kIOReturnNotReady for one it cannot take now.
 typedef struct {
     uint32_t surface_id;
     uint32_t x, y, width, height;
@@ -155,8 +156,15 @@ typedef struct {
     TegraNVENCSource source;
 } TegraNVENCSubmit;
 
+// How the job's input picture reached its buffer.
+enum {
+    TEGRA_NVENC_INPUT_CPU = 0,      // the client wrote it
+    TEGRA_NVENC_INPUT_VIC = 1,      // VIC from the source surface
+    TEGRA_NVENC_INPUT_BOUNCED = 2,  // VIC from the copy engine's 256-byte-row copy of the source's region
+};
+
 typedef struct {
-    uint32_t fence, reserved;
+    uint32_t fence, input;  // input: TEGRA_NVENC_INPUT_*
 } TegraNVENCFence;
 
 typedef struct {

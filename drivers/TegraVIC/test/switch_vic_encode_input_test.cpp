@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: BSD-2-Clause-Patent
 // SwitchVICEncodeInput.cpp: the job VIC runs for an encoder's input picture, against stubs of the surface lookup,
-// ownership, mappings and queue. A 1920x1080 NV12 surface with 2048-byte rows into NVENC's BL16 input buffer of the
+// ownership, mappings, copy engine, bounce pool and queue. A 1920x1080 NV12 surface with 2048-byte rows into NVENC's BL16 input buffer of the
 // coded 1920x1088 picture: the output surface is block linear with sixteen-GOB blocks at the buffer's luma and chroma
 // offsets, the region lands at the origin 1:1, the source is a checked read and the buffer a recorded write, and the
 // job waits for the encoder's last job first; the coded rows past the picture get its last two rows stretched over
@@ -32,7 +32,55 @@ std::vector<TegraVICJob> submittedJobs;
 TegraVICAcquire submittedAfter;
 bool hadAfter;
 std::vector<switch_gpu_backing_use> declaredUses;
+uint32_t sourceRow = 2048;
+SwitchVICBounceSlot bounceSlot;
+switch_gpu_backing scratchBacking;
+IOMemoryDescriptor scratchMemory;
+SwitchVICMapping *scratchMapping;
+int bounces = 0;
+
+struct EngineCopy {
+    tegra_gm20b_ce_plane src, dst;
+    uint32_t rowBytes, rows;
+    switch_gpu_backing *from, *to;
+    uint64_t fromOffset, toOffset;
+    tegra_gm20b_ce_done done;
+};
+
+std::vector<EngineCopy> engineCopies;
 }  // namespace
+
+int switch_vic_bounce_acquire(const TegraVICSurfaceDesc *source, const TegraVICSurfaceDesc *destination,
+                              SwitchVICBounceSlot **out)
+{
+    EXPECT_EQ(destination, nullptr);
+    ++bounces;
+    bounceSlot = {};
+    tegra_vic_bounce_desc(source, 256, &bounceSlot.buffers[0].desc);
+    bounceSlot.buffers[0].memory = &scratchMemory;
+    bounceSlot.buffers[0].backing = &scratchBacking;
+    bounceSlot.buffers[0].mapping = scratchMapping;
+    *out = &bounceSlot;
+    return 0;
+}
+
+void switch_vic_bounce_release(SwitchVICBounceSlot *slot)
+{
+    if (slot)
+        --bounces;
+}
+
+extern "C" int tegra_gm20b_ce_copy_plane_checked(const tegra_gm20b_ce_plane *src, const tegra_gm20b_ce_plane *dst,
+                                                 uint32_t rowBytes, uint32_t rows, const tegra_gm20b_ce_wait *,
+                                                 const tegra_gm20b_ce_done *done, switch_gpu_backing *from,
+                                                 uint64_t fromOffset, switch_gpu_backing *to, uint64_t toOffset,
+                                                 const switch_gpu_copy_ownership *ownership,
+                                                 const switch_gpu_event_submission *)
+{
+    EXPECT_EQ(ownership->guard_count, 1u);
+    engineCopies.push_back({*src, *dst, rowBytes, rows, from, to, fromOffset, toOffset, *done});
+    return 0;
+}
 
 extern "C" const TegraVICTraits *tegra_vic_traits()
 {
@@ -81,11 +129,11 @@ extern "C" IOReturn tegra_vic_surface_lookup(uint32_t id, task_t, TegraVICSurfac
     d.width = 1920;
     d.height = 1080;
     d.planes = 2;
-    d.planeBytesPerRow[0] = d.planeBytesPerRow[1] = 2048;
+    d.planeBytesPerRow[0] = d.planeBytesPerRow[1] = sourceRow;
     d.planeHeight[0] = 1080;
     d.planeHeight[1] = 540;
-    d.planeOffset[1] = 2048 * 1080;
-    d.length = 2048 * 1080 * 3 / 2;
+    d.planeOffset[1] = uint64_t(sourceRow) * 1080;
+    d.length = uint64_t(sourceRow) * 1080 * 3 / 2;
     d.colorMatrix = SWITCH_VIC_MATRIX_709;
     return 0;
 }
@@ -183,6 +231,9 @@ protected:
         hadAfter = false;
         declaredUses.clear();
         submittedJobs.clear();
+        engineCopies.clear();
+        sourceRow = 2048;
+        scratchMapping = new SwitchVICMapping{0x60000000u};
         input.destination = &buffer;
         input.lumaOffset = 0;
         input.chromaOffset = kChroma;
@@ -201,8 +252,12 @@ protected:
 
     void TearDown() override
     {
+        for (const auto &copy : engineCopies)
+            copy.done.fn(copy.done.arg, 0);
         if (pending)
             pending(pendingContext, 0);
+        EXPECT_EQ(bounces, 0);
+        delete scratchMapping;
         EXPECT_EQ(mappings, 0);
         EXPECT_EQ(accesses, 0);
         EXPECT_EQ(lookups, 0);
@@ -226,8 +281,9 @@ protected:
 TEST_F(SwitchVICEncodeInputTest, WritesTheRegionBlockLinearAtTheBufferOriginAfterTheEncodersLastJob)
 {
     uint32_t fence = 0;
+    bool bounced = false;
     const char *why = nullptr;
-    ASSERT_EQ(switch_vic_encode_input(77, nullptr, &input, &fence, &why), 0) << why;
+    ASSERT_EQ(switch_vic_encode_input(77, nullptr, &input, &fence, &bounced, &why), 0) << why;
     EXPECT_EQ(fence, 4321u);
     ASSERT_TRUE(hadAfter);
     EXPECT_EQ(submittedAfter.syncpt, 9u);
@@ -269,10 +325,12 @@ TEST_F(SwitchVICEncodeInputTest, ANarrowerPictureGetsItsLastColumnsStretchedRigh
     input.h = 1088;
     input.height = 1088;
     uint32_t fence = 0;
+    bool bounced = false;
     const char *why = nullptr;
-    ASSERT_EQ(switch_vic_encode_input(77, nullptr, &input, &fence, &why), -95);  // 1088 rows of a 1080-row surface
+    ASSERT_EQ(switch_vic_encode_input(77, nullptr, &input, &fence, &bounced, &why),
+              -95);  // 1088 rows of a 1080-row surface
     input.h = 1080;
-    ASSERT_EQ(switch_vic_encode_input(77, nullptr, &input, &fence, &why), 0) << why;
+    ASSERT_EQ(switch_vic_encode_input(77, nullptr, &input, &fence, &bounced, &why), 0) << why;
     ASSERT_EQ(submittedJobs.size(), 3u);
     const uint8_t *right = submittedJobs[1].config;
     EXPECT_EQ(tegra_vic_get(right, TEGRA_VIC_SLOTS, SLOT_SOURCE_LEFT_BIT, SLOT_SOURCE_LEFT_WIDTH), uint64_t(1898)
@@ -293,8 +351,9 @@ TEST_F(SwitchVICEncodeInputTest, ATileRegionIsReadFromItsOriginInTheSurface)
     input.y = 512;
     input.after = nullptr;
     uint32_t fence = 0;
+    bool bounced = false;
     const char *why = nullptr;
-    ASSERT_EQ(switch_vic_encode_input(77, nullptr, &input, &fence, &why), 0) << why;
+    ASSERT_EQ(switch_vic_encode_input(77, nullptr, &input, &fence, &bounced, &why), 0) << why;
     EXPECT_FALSE(hadAfter);
     EXPECT_EQ(submittedJobs.size(), 1u);
     EXPECT_EQ(TEGRA_VIC_GET(submittedJob.config, TEGRA_VIC_SLOTS, SLOT_SOURCE_LEFT), uint64_t(1024) << 16);
@@ -302,22 +361,52 @@ TEST_F(SwitchVICEncodeInputTest, ATileRegionIsReadFromItsOriginInTheSurface)
     EXPECT_EQ(TEGRA_VIC_GET(submittedJob.config, TEGRA_VIC_SLOTS, SLOT_DEST_LEFT), 0u);
 }
 
+// CoreVideo's 1920-byte rows are off VIC's 256-byte grid: the copy engine copies the region's rows of both planes into
+// the scratch at 2048 bytes a row, VIC reads the scratch, and the source stays listed under its guard.
+TEST_F(SwitchVICEncodeInputTest, RowsOffVICsGridAreBouncedThroughTheCopyEngine)
+{
+    sourceRow = 1920;
+    input.y = 0;
+    uint32_t fence = 0;
+    bool bounced = false;
+    const char *why = nullptr;
+    ASSERT_EQ(switch_vic_encode_input(77, nullptr, &input, &fence, &bounced, &why), 0) << why;
+    EXPECT_TRUE(bounced);
+    ASSERT_EQ(engineCopies.size(), 2u);
+    EXPECT_EQ(engineCopies[0].rows, 1080u);
+    EXPECT_EQ(engineCopies[0].rowBytes, 1920u);
+    EXPECT_EQ(engineCopies[0].src.pitch, 1920u);
+    EXPECT_EQ(engineCopies[0].dst.pitch, 2048u);
+    EXPECT_EQ(engineCopies[0].from, &sourcePitch);
+    EXPECT_EQ(engineCopies[0].to, &scratchBacking);
+    EXPECT_EQ(engineCopies[1].rows, 540u);
+    EXPECT_EQ(engineCopies[1].src.offset, uint64_t(1920) * 1080);
+    EXPECT_EQ(engineCopies[1].dst.offset, bounceSlot.buffers[0].desc.planeOffset[1]);
+    ASSERT_EQ(declaredUses.size(), 3u);
+    EXPECT_EQ(declaredUses[1].backing, &scratchBacking);
+    EXPECT_EQ(declaredUses[2].backing, &sourcePitch);
+    EXPECT_EQ(method(TEGRA_VIC_M_SURFACE0_SLOT0_LUMA), 0x60000000u >> 8);
+    EXPECT_EQ(TEGRA_VIC_GET(submittedJob.config, TEGRA_VIC_SLOTS + TEGRA_VIC_SLOT_SURFACE, SURF_LUMA_WIDTH), 2047u);
+    EXPECT_EQ(mappings, 1);  // the destination's; the scratch's mapping is the pool's
+}
+
 TEST_F(SwitchVICEncodeInputTest, RefusesWithoutQueueingAndReleasesEverything)
 {
     uint32_t fence = 0;
+    bool bounced = false;
     const char *why = nullptr;
     found = false;
-    EXPECT_EQ(switch_vic_encode_input(77, nullptr, &input, &fence, &why), -22);
+    EXPECT_EQ(switch_vic_encode_input(77, nullptr, &input, &fence, &bounced, &why), -22);
     found = true;
     sourcePitchLayout = false;
-    EXPECT_EQ(switch_vic_encode_input(77, nullptr, &input, &fence, &why), -95);
+    EXPECT_EQ(switch_vic_encode_input(77, nullptr, &input, &fence, &bounced, &why), -95);
     sourcePitchLayout = true;
     input.chromaRows = 600;  // not whole sixteen-GOB blocks
-    EXPECT_EQ(switch_vic_encode_input(77, nullptr, &input, &fence, &why), -95);
+    EXPECT_EQ(switch_vic_encode_input(77, nullptr, &input, &fence, &bounced, &why), -95);
     EXPECT_STREQ(why, "block-linear plane of partial blocks");
     input.chromaRows = kChromaRows;
     vicUp = false;
-    EXPECT_EQ(switch_vic_encode_input(77, nullptr, &input, &fence, &why), -19);
+    EXPECT_EQ(switch_vic_encode_input(77, nullptr, &input, &fence, &bounced, &why), -19);
     EXPECT_EQ(pending, nullptr);
 }
 }  // namespace

@@ -56,6 +56,8 @@ static void chromaAt(int i, int x, int y, uint8_t *u, uint8_t *v)  // x, y in ch
     *v = (uint8_t)(square ? 240 : 64 + ((y * 2) & 127));
 }
 
+bool encode_check_client_buffers;
+
 // From the session's pool, as a client should take them (buffers laid out as the encoder asked), or CoreVideo's own.
 static CVPixelBufferRef makeFrame(CVPixelBufferPoolRef pool, int i)
 {
@@ -216,7 +218,7 @@ bool encode_check(CFDictionaryRef spec, CFStringRef entropy, double minPsnr, cha
     struct timespec t0, t1;
     clock_gettime(CLOCK_MONOTONIC, &t0);
     int failed = 0;
-    CVPixelBufferPoolRef pool = VTCompressionSessionGetPixelBufferPool(session);
+    CVPixelBufferPoolRef pool = encode_check_client_buffers ? NULL : VTCompressionSessionGetPixelBufferPool(session);
     for (int i = 0; i < FRAMES; i++) {
         CVPixelBufferRef image = makeFrame(pool, i);
         if (!image) {
@@ -242,7 +244,8 @@ bool encode_check(CFDictionaryRef spec, CFStringRef entropy, double minPsnr, cha
     VTSessionCopyProperty(session, CFSTR("SwitchEncoderRoutes"), NULL, &routes);
     const int32_t byVIC = routeCount(routes, CFSTR("input_vic")),
                   copied = routeCount(routes, CFSTR("input_cpu_copies")),
-                  refused = routeCount(routes, CFSTR("input_refused"));
+                  refused = routeCount(routes, CFSTR("input_refused")),
+                  bounced = routeCount(routes, CFSTR("input_bounced"));
     if (routes)
         CFRelease(routes);
     VTCompressionSessionInvalidate(session);
@@ -300,9 +303,9 @@ bool encode_check(CFDictionaryRef spec, CFStringRef entropy, double minPsnr, cha
         line, size,
         "%s %d/%d frames encoded (%d errors) by a %s encoder, %d decoded (%d errors), sync samples%s%s, PSNR min Y "
         "%.1f U %.1f V %.1f dB, mean Y %.1f dB, first frame under 20 dB %d, %zu bytes, %.2f ms/frame, inputs %d by "
-        "VIC %d copied %d refused",
+        "VIC %d bounced %d copied %d refused",
         ok ? "ok" : "FAIL", enc.count, FRAMES, enc.errors + failed, onHardware ? "hardware" : "software", dec.count,
         dec.errors, keys, intraOnly ? " (intra only)" : "", dec.minPsnr[0], dec.minPsnr[1], dec.minPsnr[2],
-        dec.count ? dec.sumPsnr[0] / dec.count : 0.0, dec.badIndex, bytes, ms, byVIC, copied, refused);
+        dec.count ? dec.sumPsnr[0] / dec.count : 0.0, dec.badIndex, bytes, ms, byVIC, bounced, copied, refused);
     return ok;
 }

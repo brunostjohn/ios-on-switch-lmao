@@ -79,7 +79,7 @@ static int32_t code(Encoder *e, const H264EncConfig *c, const H264EncSurface *s,
     submit->clean[submit->clean_count++] = (TegraNVENCRange){e->handles.aux, 0, sizeof(nvenc_pic_stat_s), 0};
     TegraNVENCWait wait = {.timeout_us = 1000000, .invalidate_count = 1};
     wait.invalidate[0] = (TegraNVENCRange){e->handles.aux, 0, sizeof(nvenc_pic_stat_s), 0};
-    const int submitted = nvenc_submit(e->client, submit, &wait.fence);
+    const int submitted = nvenc_submit(e->client, submit, &wait.fence, NULL);
     free(submit);
     if (submitted)
         return -2;

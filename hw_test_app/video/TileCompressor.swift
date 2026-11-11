@@ -15,8 +15,8 @@ public enum TileCompressor {
         public let tiles: Int
         public let failed: Int
         public let usingHardware: Bool
-        /// SwitchEncoderRoutes {pictures, tiles, errors, input_vic, input_cpu_copies} (debug builds of the AVE plug-in):
-        /// nil from any other encoder.
+        /// SwitchEncoderRoutes {pictures, tiles, errors, input_vic, input_bounced, input_cpu_copies, input_refused}
+        /// (debug builds of the AVE plug-in): nil from any other encoder.
         public let routes: [String: Int]?
         public let bytes: Int
         public let decoded: Int

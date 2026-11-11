@@ -391,12 +391,16 @@ host_test(
 )
 
 # An encoder's input picture written by VIC (SwitchVICEncodeInput.cpp): block-linear output at the buffer's planes, the
-# region 1:1 at the origin, a checked read and a recorded write, after the encoder's last job.
+# region 1:1 at the origin, a checked read and a recorded write, after the encoder's last job; rows off VIC's grid
+# through the copy engine's bounce first.
 host_test(
     name = "switch_vic_encode_input_test",
     srcs = [
         "switch_vic_encode_input_test.cpp",
         "//drivers/TegraVIC:SwitchVICEncodeInput.h",
+        "//drivers/TegraVIC:SwitchVICBouncePool.h",
+        "//drivers/TegraVIC:TegraVICBounce.h",
+        "//drivers/TegraGM20B:TegraGM20BCopy.h",
         "//drivers/TegraVIC:SwitchVICTransform.h",
         "//drivers/TegraVIC:SwitchVICSurfaceAccess.h",
         "//drivers/TegraVIC:SwitchNativeSurface.h",

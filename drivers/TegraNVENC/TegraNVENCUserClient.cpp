@@ -268,6 +268,7 @@ IOReturn AppleAVE2UserClient::run(uint32_t method, const void *in, uint32_t inSi
         uint32_t fence = 0;
         const char *why = nullptr;
         TegraNVENCAfter after = {};
+        uint32_t route = TEGRA_NVENC_INPUT_CPU;
         const bool sourced = submit->source.surface_id != 0;
         if (sourced) {
             if (const int err = tegra_nvenc_check_submit(submit, resolve, this, &why)) {
@@ -275,7 +276,7 @@ IOReturn AppleAVE2UserClient::run(uint32_t method, const void *in, uint32_t inSi
                 break;
             }
             const int err = tegra_nvenc_source(submit, resolve, this, current_task(),
-                                               submitted_ ? &lastFence_ : nullptr, &after, &why);
+                                               submitted_ ? &lastFence_ : nullptr, &after, &route, &why);
             if (err) {
                 switch_refusal("TegraNVENC", why ? why : "source surface", "the input picture is not VIC's: %s",
                                why ? why : "refused");
@@ -296,7 +297,7 @@ IOReturn AppleAVE2UserClient::run(uint32_t method, const void *in, uint32_t inSi
         lastFence_ = fence;
         TegraNVENCFence *reply = static_cast<TegraNVENCFence *>(out);
         reply->fence = fence;
-        reply->reserved = 0;
+        reply->input = route;
         break;
     }
     default:

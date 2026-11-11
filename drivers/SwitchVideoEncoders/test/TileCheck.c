@@ -39,7 +39,7 @@ extern const CFStringRef kVTTileEncoderRequirement_HorizontalOffsetAlignment;
 extern const CFStringRef kVTTileEncoderRequirement_EncoderSupportsSourcePadding;
 
 enum {
-    W = 1000,
+    W = 960,  // rows of 960 bytes are off VIC's 256-byte grid at 64-byte alignment (tile_check_row_alignment)
     H = 700,
     TILE = 512,
     TILES = 4,
@@ -109,12 +109,13 @@ static uint8_t chromaAt(uint32_t pair, uint32_t row, uint32_t cr)
     return (uint8_t)(cr ? pair + row * 11 + 64 : pair * 7 + row + 128);
 }
 
-// Rows on VIC's 256-byte grid, as the encoder's attributes ask.
+uint32_t tile_check_row_alignment = 256;
+
 static CVPixelBufferRef makeSource(uint32_t width, uint32_t height)
 {
     CFDictionaryRef surface =
         CFDictionaryCreate(NULL, NULL, NULL, 0, &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks);
-    const int32_t rowAlignment = 256;
+    const int32_t rowAlignment = (int32_t)tile_check_row_alignment;
     CFNumberRef alignment = CFNumberCreate(NULL, kCFNumberSInt32Type, &rowAlignment);
     const void *keys[] = {kCVPixelBufferIOSurfacePropertiesKey, kCVPixelBufferBytesPerRowAlignmentKey};
     const void *values[] = {surface, alignment};
@@ -336,16 +337,17 @@ bool tile_check(CFStringRef encoderID, char *line, size_t size)
     const int32_t tiles = numberIn(routes, CFSTR("tiles")), errors = numberIn(routes, CFSTR("errors"));
     const int32_t byVIC = numberIn(routes, CFSTR("input_vic")), copied = numberIn(routes, CFSTR("input_cpu_copies"));
     const int32_t refusedInputs = numberIn(routes, CFSTR("input_refused"));
+    const int32_t bounced = numberIn(routes, CFSTR("input_bounced"));
     const bool ok = propertiesSet && hasFormats && alignment == 2 && padding && prepared.width == TILE &&
                     prepared.height == TILE && !refused && outputs.count == TILES && !outputs.failed && !wrongInput &&
                     !badOutput && tiles == TILES && errors == 0 && hardware == kCFBooleanTrue;
     snprintf(line, size,
              "%s %d/%d tiles out (%d failed, %d refused), batch set %s, attributes %s, offset alignment %d, source "
              "padding %s, prepared %dx%d, inputs wrong %d, samples wrong %d, routes tiles %d errors %d, hardware %s, "
-             "inputs %d by VIC %d copied %d refused",
+             "inputs %d by VIC %d bounced %d copied %d refused",
              ok ? "ok" : "FAIL", outputs.count, TILES, outputs.failed, refused, propertiesSet ? "ok" : "refused",
              hasFormats ? "ok" : "missing", alignment, padding ? "yes" : "no", prepared.width, prepared.height,
-             wrongInput, badOutput, tiles, errors, hardware == kCFBooleanTrue ? "yes" : "no", byVIC, copied,
+             wrongInput, badOutput, tiles, errors, hardware == kCFBooleanTrue ? "yes" : "no", byVIC, bounced, copied,
              refusedInputs);
     for (int i = 0; i < TILES; i++)
         if (outputs.samples[i])

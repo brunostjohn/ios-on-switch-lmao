@@ -72,11 +72,12 @@ const char *tegra_nvenc_app_dump(volatile uint8_t *nvenc, uint32_t codec);
 int tegra_nvenc_publish(void);  // E3
 }
 
-// TegraNVENCSource.cpp: a checked submit's source surface written into its input buffer by VIC. 0 and what the job
-// waits for, or a negative errno-style value and the reason. `last`: the connection's last job's fence, if any.
+// TegraNVENCSource.cpp: a checked submit's source surface written into its input buffer by VIC. 0, what the job waits
+// for and the route (TEGRA_NVENC_INPUT_*), or a negative errno-style value and the reason. `last`: the connection's last
+// job's fence, if any.
 bool tegra_nvenc_source_ready(void);
 uint32_t tegra_nvenc_source_row_align(void);
 int tegra_nvenc_source(const TegraNVENCSubmit *submit, TegraNVENCResolve resolve, void *context, task_t task,
-                       const uint32_t *last, TegraNVENCAfter *after, const char **why);
+                       const uint32_t *last, TegraNVENCAfter *after, uint32_t *route, const char **why);
 
 #endif

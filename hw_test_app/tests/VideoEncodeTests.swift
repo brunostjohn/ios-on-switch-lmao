@@ -8,8 +8,9 @@ import VideoToolbox
 /// again on the hardware decoder and checked frame by frame. The frames come from the session's pool, and every
 /// picture's input must reach NVENC without a CPU copy: VIC writes it from the frame's IOSurface (SwitchEncoderRoutes).
 /// encode.h264_client_pool hands over frames from a pool of CoreVideo's defaults instead (1920-byte rows at 1080p, off
-/// VIC's 256-byte grid), as a client with buffers of its own does, and is judged the same: it passes only if VideoToolbox
-/// moves such pictures onto the grid the encoder asked for, since a picture VIC cannot take fails its frame.
+/// VIC's 256-byte grid), as a client with buffers of its own does, and is judged the same: VideoToolbox moves a frame
+/// session's pictures onto the grid the encoder asked for (it did on the Mac, test/ave_host.c), and rows that still
+/// arrive off it are bounced through the copy engine in the kernel (input_bounced), so no input is copied or refused.
 struct VideoEncodeTest: HWTest {
     let codec: VideoCodec
     let realTime: Bool
@@ -65,6 +66,7 @@ struct VideoEncodeTest: HWTest {
         metrics.set("input_vic", encoded.routes?["input_vic"] ?? -1)
         metrics.set("input_cpu_copies", encoded.routes?["input_cpu_copies"] ?? -1)
         metrics.set("input_refused", encoded.routes?["input_refused"] ?? -1)
+        metrics.set("input_bounced", encoded.routes?["input_bounced"] ?? -1)
         return .judged(
             [
                 ("VTCopyVideoEncoderList offers it as hardware", !listed.isEmpty),

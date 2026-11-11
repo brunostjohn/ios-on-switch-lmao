@@ -42,7 +42,7 @@ uint32_t tegra_nvenc_source_row_align(void)
 }
 
 int tegra_nvenc_source(const TegraNVENCSubmit *s, TegraNVENCResolve resolve, void *context, task_t task,
-                       const uint32_t *last, TegraNVENCAfter *after, const char **why)
+                       const uint32_t *last, TegraNVENCAfter *after, uint32_t *route, const char **why)
 {
     const TegraNVENCSource &source = s->source;
     const TegraNVENCEntry *luma = relocation(s, NVC5B7_SET_IN_CUR_PIC);
@@ -88,8 +88,11 @@ int tegra_nvenc_source(const TegraNVENCSubmit *s, TegraNVENCResolve resolve, voi
     input.matrix = source.matrix;
     input.after = last ? &previous : nullptr;
     uint32_t fence = 0;
-    const int error = switch_vic_encode_input(source.surface_id, task, &input, &fence, why);
-    if (!error)
+    bool bounced = false;
+    const int error = switch_vic_encode_input(source.surface_id, task, &input, &fence, &bounced, why);
+    if (!error) {
         *after = {tegra_vic_syncpt(), fence};
+        *route = bounced ? TEGRA_NVENC_INPUT_BOUNCED : TEGRA_NVENC_INPUT_VIC;
+    }
     return error;
 }

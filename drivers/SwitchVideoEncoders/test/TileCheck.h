@@ -16,6 +16,8 @@
 // exactly the input it should have read, and the session's SwitchEncoderRoutes counted the tiles. `encoderID` names
 // the 'hvc1' registration to use.
 bool tile_check(CFStringRef encoderID, char *line, size_t size);
+// The source pictures' row alignment (bytes; 256 by default, VIC's grid).
+extern uint32_t tile_check_row_alignment;
 
 // The fake engine's H.265 job: `buffers` by handle, the input read in the layout its setup names; `chroma_mode` is the
 // one TegraNVENCInfo stated. 0, or -1.

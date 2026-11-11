@@ -125,7 +125,7 @@ void nvenc_free(void *ctx, uint32_t handle)
     call(c, c->selector, TegraNVENCMethodBufferFree, &b, sizeof(b), NULL, 0);  // the kernel unmaps it from this task
 }
 
-int nvenc_submit(void *ctx, const TegraNVENCSubmit *submit, uint32_t *fence)
+int nvenc_submit(void *ctx, const TegraNVENCSubmit *submit, uint32_t *fence, uint32_t *input)
 {
     NVENCClient *c = ctx;
     TegraNVENCFence reply;
@@ -134,6 +134,8 @@ int nvenc_submit(void *ctx, const TegraNVENCSubmit *submit, uint32_t *fence)
     if (kr)
         return kr;
     *fence = reply.fence;
+    if (input)
+        *input = reply.input;
     return 0;
 }
 

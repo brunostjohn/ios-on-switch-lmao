@@ -3,11 +3,11 @@
 // IOSurface holds (TegraNVENC/nvidia/SOURCE), so with TEGRA_NVENC_FEATURE_SURFACE_INPUT the session's input buffer is
 // BL16 (block_height 16, a code the firmware's table names outright, 0x8643-0x8664) and every submit names the
 // picture's IOSurface: the kernel has VIC write the region into the buffer and NVENC's job waits for VIC's on the
-// hardware. The CPU touches no sample. A picture VIC cannot take (no IOSurface, rows off the grid VIC reads, which
-// VideoToolbox is asked to keep to and a client's own pool may not, a surface the kernel refuses) fails its frame with
-// one line per reason and counts in input_refused: there is no CPU route beside VIC's. The CPU copy (16-byte runs into
-// the buffer's layout) is a session's whole route only when the kernel offers no surface input at all, which its
-// start line says.
+// hardware. The CPU touches no sample. Rows off the grid VIC reads (VideoToolbox is asked to keep to it; a client's own
+// pool may not) go through the GPU's copy engine in the kernel first (input_bounced). A picture VIC cannot take at all
+// (no IOSurface, a surface the kernel refuses) fails its frame with one line per reason and counts in input_refused:
+// there is no CPU route beside VIC's. The CPU copy (16-byte runs into the buffer's layout) is a session's whole route
+// only when the kernel offers no surface input at all, which its start line says.
 #include <CoreVideo/CoreVideo.h>
 #include <IOSurface/IOSurfaceRef.h>
 #include <IOKit/IOReturn.h>
@@ -69,20 +69,6 @@ static uint32_t codedHeight(const Encoder *e)
     return e->codec == kCMVideoCodecType_HEVC ? hevcenc_coded_height(&e->hevc) : h264enc_height_mbs(&e->config) * 16;
 }
 
-// Why VIC cannot read the picture, or NULL: rows off the grid the kernel states, which VideoToolbox's own buffers keep
-// to and a client's own pool may not. A plane off the grid is the kernel's to refuse (tegra_vic_build).
-static const char *unreadable(const Encoder *e, CVPixelBufferRef image)
-{
-    IOSurfaceRef surface = CVPixelBufferGetIOSurface(image);
-    if (!surface)
-        return "a picture without an IOSurface";
-    for (size_t p = 0; p < 2; p++) {
-        if (!e->info.surface_row_align || IOSurfaceGetBytesPerRowOfPlane(surface, p) % e->info.surface_row_align)
-            return "rows VIC does not read as they are";
-    }
-    return NULL;
-}
-
 static bool copyRegion(Encoder *e, CVPixelBufferRef image, const AVERegion *r, TegraNVENCSubmit *submit)
 {
     if (CVPixelBufferLockBaseAddress(image, kCVPixelBufferLock_ReadOnly))
@@ -117,10 +103,9 @@ bool ave_input_put(Encoder *e, CVPixelBufferRef image, const AVERegion *r, Tegra
 {
     if (!e->surfaceInput)
         return copyRegion(e, image, r, submit);
-    const char *why = unreadable(e, image);
-    if (why) {
+    if (!CVPixelBufferGetIOSurface(image)) {
         e->inputRefused++;
-        switch_refusal("AVE", why, "%s: VIC cannot take this picture, its frame fails", why);
+        switch_refusal("AVE", "a picture without an IOSurface", "VIC cannot take it, its frame fails");
         return false;
     }
     dropInputClean(e, submit);
@@ -139,12 +124,12 @@ bool ave_input_put(Encoder *e, CVPixelBufferRef image, const AVERegion *r, Tegra
 
 int ave_input_submit(Encoder *e, const TegraNVENCSubmit *submit, uint32_t *fence)
 {
-    const int status = nvenc_submit(e->client, submit, fence);
+    uint32_t input = TEGRA_NVENC_INPUT_CPU;
+    const int status = nvenc_submit(e->client, submit, fence, &input);
     if (!status) {
-        if (submit->source.surface_id)
-            e->inputVIC++;
-        else
-            e->inputCopies++;
+        e->inputCopies += input == TEGRA_NVENC_INPUT_CPU;
+        e->inputVIC += input != TEGRA_NVENC_INPUT_CPU;
+        e->inputBounced += input == TEGRA_NVENC_INPUT_BOUNCED;
     } else if (submit->source.surface_id && (status == kIOReturnUnsupported || status == kIOReturnNotReady)) {
         e->inputRefused++;
         if (status == kIOReturnUnsupported)
