@@ -76,6 +76,15 @@ void tgm_stats_compositor_pool(int64_t bytes)
  * cleans). Callers on several connections at once: each field on its own atomics. */
 struct frame_gpu_state tgm_frame_gpu;
 
+void tgm_stats_map(u64 small, u64 big, u64 could_be_big)
+{
+	if (!stats_on())
+		return;
+	__atomic_fetch_add(&tgm_stats.map_small, small, __ATOMIC_RELAXED);
+	__atomic_fetch_add(&tgm_stats.map_big, big, __ATOMIC_RELAXED);
+	__atomic_fetch_add(&tgm_stats.map_could, could_be_big, __ATOMIC_RELAXED);
+}
+
 void tgm_stats_bo_alloc(uint64_t bytes, int kind, uint64_t ns, const uint64_t phase_ns[TGM_PHASES],
 			const char *owner)
 {

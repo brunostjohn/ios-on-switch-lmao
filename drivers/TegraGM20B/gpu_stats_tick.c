@@ -423,6 +423,16 @@ void tgm_stats_tick(void)
 		lnew ? lns / lnew / 1000 : 0, lnm / 1000, lnew, lfree ? lfs / lfree / 1000 : 0,
 		lfm / 1000, lfree);
 	nvxnu_stats("tegra-gm20b: stats2 %s", line);
+	{
+		const u64 small = __atomic_exchange_n(&tgm_stats.map_small, 0, __ATOMIC_RELAXED);
+		const u64 big = __atomic_exchange_n(&tgm_stats.map_big, 0, __ATOMIC_RELAXED);
+		const u64 could = __atomic_exchange_n(&tgm_stats.map_could, 0, __ATOMIC_RELAXED);
+
+		if (small || big)
+			nvxnu_stats("tegra-gm20b: maps %llu KiB in 128 KiB PTEs, %llu KiB in 4 KiB "
+				    "PTEs, %llu KiB of those 128 KiB PTEs could have mapped",
+				    big >> 10, small >> 10, could >> 10);
+	}
 	switch_gpu_path_window(line, sizeof(line));
 	nvxnu_stats("tegra-gm20b: paths %s", line);
 	switch_gpu_job_window(line, sizeof(line));

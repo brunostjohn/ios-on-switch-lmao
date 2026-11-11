@@ -162,6 +162,15 @@ bool nvif_mmu_kind_valid(Mmu *, u8)
 	return true;
 }
 
+int stats_on()
+{
+	return 0;
+}
+
+void tgm_stats_map(uint64_t, uint64_t, uint64_t)
+{
+}
+
 int l2_on()
 {
 	return 1;

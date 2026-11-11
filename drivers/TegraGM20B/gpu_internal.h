@@ -404,7 +404,8 @@ struct stats_state {
 	u32 idle;            /* presents that found no user work pending */
 	u32 writer;          /* presents that waited for their surface's importers only */
 	u32 present_flushes; /* L2_FLUSH_DIRTYs the presents pushed */
-	u32 allocs;          /* BoAllocs */
+	u64 map_small, map_big, map_could; /* tgm_stats_map */
+	u32 allocs;                        /* BoAllocs */
 	u64 alloc_bytes, alloc_ns;
 	u64 lat_sum, lat_max;                         /* user submissions only */
 	u64 queue_sum, queue_max, exec_sum, exec_max; /* GPU-side, from the stamps (PTIMER units) */
@@ -461,6 +462,8 @@ void tgm_scrub_stats(char *buf, unsigned int len, u64 window_ms);
 #define NCGPCCLK_CFG_WRITE_EN 0x00010000u
 #define NCGPCCLK_CYCLES 800u
 void tgm_clk_measure(char *buf, unsigned int len);
+/* Debug kernels: a map's bytes in 4 KiB and in 128 KiB PTEs, and of its 4 KiB ones those 128 KiB PTEs could have mapped */
+void tgm_stats_map(u64 small, u64 big, u64 could_be_big);
 void tgm_stats_gr_bind(struct tgm_chan *chan);
 void tgm_stats_gr_unbind(struct tgm_chan *chan);
 void tgm_stats_gr_context(void);
