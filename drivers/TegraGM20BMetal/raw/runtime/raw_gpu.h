@@ -51,6 +51,7 @@
 #include "raw_transfer.h"
 #include "raw_fetch_order.h"
 #include "raw_kernel.h"
+#include "raw_channel_recovery.h"
 #include "raw_fence.h"
 #include "raw_host_access.h"
 #include "raw_heap.h"
@@ -1300,7 +1301,7 @@ public:
 
     uint64_t channelGeneration() const
     {
-        return channelGeneration_.load(std::memory_order_acquire);
+        return generations_.current();
     }
 
     uint32_t completed() const
@@ -1328,16 +1329,13 @@ public:
     }
     bool wait(uint32_t seqno, uint64_t generation)
     {
-        if (channelGeneration() != generation) {
-            waitGenerationRetired(generation);
-            return false;
-        }
+        if (channelGeneration() != generation)
+            return generations_.completed(generation, seqno);
         const bool success = done(seqno) && semanticFence(seqno).status != SemanticFenceStatus::Superseded
             ? !lost(seqno) : waitFence(seqno, generation);
         if (channelGeneration() == generation)
             return success;
-        waitGenerationRetired(generation);
-        return false;
+        return generations_.completed(generation, seqno);
     }
 
     // A completed command buffer's GPU time from its stamps; false when its slot holds a later one's
@@ -1617,10 +1615,7 @@ private:
     }
     std::mutex channelLock_;
     std::atomic<bool> channelReady_{false};
-    std::atomic<uint64_t> channelGeneration_{0};
-    std::atomic<uint64_t> retiredGeneration_{0};
-    std::condition_variable channelRetired_;
-    void waitGenerationRetired(uint64_t generation);
+    ChannelGenerations generations_;
     bool channelFailed_ = false;
     uint64_t channelRetryNs_ = 0;  // CLOCK_UPTIME_RAW: a refused channel is asked for again from then on
     static constexpr uint64_t kChannelRetryNs = 1000000000;
@@ -1850,6 +1845,7 @@ private:
     uint32_t contextWords() const;
     void emitContext(Push &p);
     bool reopen();
+    bool newContext(uint32_t channel, uint32_t &seqno);
     bool waitFence(uint32_t seqno, uint64_t generation);
     // the last seqno of a channel that died: it and every one before it failed (or completed before; not told apart),
     // where the kernel writes no kill records

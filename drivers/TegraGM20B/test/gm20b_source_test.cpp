@@ -562,12 +562,14 @@ TEST(GM20BKillSource, AKilledChannelLeavesItsConnectionWorking)
 TEST(GM20BRawReopenSource, ReopenKeepsTheHeapAndReplaysTheContext)
 {
 	const std::string raw = SourceText("../../TegraGM20BMetal/raw/runtime/raw_gpu.cpp");
-	const std::string reopen = flat(definition(raw, "bool Device::reopen()"));
+	// raw_channel_recovery.h makeChannel makes the channel, then runs newContext on it
+	const std::string reopen = flat(definition(raw, "bool Device::reopen()")) +
+				   flat(definition(raw, "bool Device::newContext(uint32_t channel, uint32_t &seq)"));
 	EXPECT_THAT(reopen, Not(HasSubstr("placed_")));
 	EXPECT_THAT(reopen, Not(HasSubstr("heapPlaced_")));
 	EXPECT_THAT(reopen, Not(HasSubstr("pipelines_")));
 	EXPECT_THAT(reopen, Not(HasSubstr("heap_")));
-	expectBefore(reopen, "k_.channel(kEngines, channel_, fence_)", "emitContext(p);");
+	expectBefore(reopen, "makeChannel(k_, kEngines, channel_, fence_", "emitContext(p);");
 	expectBefore(reopen, "emitContext(p);", "fx::emitTwodInit(p);");
 	// the interlock's ticket buffer zeroed by the copy engine in the new channel, after the context names it and before
 	// the 3D engine runs again
