@@ -1,7 +1,7 @@
 # raw's API inventory, written by raw/test/selcover (SELCOVER_WRITE=1; selcover_inventory.h says what each
 # column holds): container, item, selector, m2v, sent by, raw
-# m2v's items: base 5 m2v 7 m2vobj 27 none 65 raw 251 read 292 refused 163 unread 201 zero 46
-# sent selectors: base 86 m2v 16 m2vobj 31 none 8 raw 467 refused 56 zero 151
+# m2v's items: base 5 m2v 6 m2vobj 6 none 65 raw 275 read 292 refused 163 unread 201 zero 44
+# sent selectors: base 86 m2v 15 m2vobj 12 none 8 raw 489 refused 56 zero 149
 MTLArgument	access	access	I	-	read
 MTLArgument	active	isActive	I	-	unread
 MTLArgument	arrayLength	arrayLength	I	-	read
@@ -30,29 +30,29 @@ MTLArgumentDescriptor	index	index	I	-	read
 MTLArgumentDescriptor	index	setIndex:	I	-	read
 MTLArgumentDescriptor	textureType	setTextureType:	I	-	read
 MTLArgumentDescriptor	textureType	textureType	I	-	read
-MTLArgumentEncoder	-	setDepthStencilStates:withRange:	-	24B119	m2vobj
-MTLArgumentEncoder	-	setIntersectionFunctionTables:withRange:	-	21H461,24B119	m2vobj
-MTLArgumentEncoder	alignment	alignment	I	21H461,24B119	m2vobj
-MTLArgumentEncoder	constantDataAtIndex:	constantDataAtIndex:	I	21H461,24B119	m2vobj
-MTLArgumentEncoder	device	device	I	21H461,24B119	m2vobj
-MTLArgumentEncoder	encodedLength	encodedLength	I	21H461,24B119	m2vobj
-MTLArgumentEncoder	label	label	I	21H461,24B119	m2vobj
-MTLArgumentEncoder	label	setLabel:	I	21H461,24B119	m2vobj
-MTLArgumentEncoder	newArgumentEncoderForBufferAtIndex:	newArgumentEncoderForBufferAtIndex:	I	24B119	m2vobj
-MTLArgumentEncoder	setArgumentBuffer:offset:	setArgumentBuffer:offset:	I	21H461,24B119	m2vobj
-MTLArgumentEncoder	setArgumentBuffer:startOffset:arrayElement:	setArgumentBuffer:startOffset:arrayElement:	I	-	m2vobj
-MTLArgumentEncoder	setBuffer:offset:atIndex:	setBuffer:offset:atIndex:	I	21H461,24B119	m2vobj
-MTLArgumentEncoder	setBuffers:offsets:withRange:	setBuffers:offsets:withRange:	I	21H461,24B119	m2vobj
-MTLArgumentEncoder	setComputePipelineState:atIndex:	setComputePipelineState:atIndex:	I	-	m2vobj
-MTLArgumentEncoder	setComputePipelineStates:withRange:	setComputePipelineStates:withRange:	I	-	m2vobj
-MTLArgumentEncoder	setIndirectCommandBuffer:atIndex:	setIndirectCommandBuffer:atIndex:	I	24B119	m2vobj
-MTLArgumentEncoder	setIndirectCommandBuffers:withRange:	setIndirectCommandBuffers:withRange:	I	21H461,24B119	m2vobj
-MTLArgumentEncoder	setRenderPipelineState:atIndex:	setRenderPipelineState:atIndex:	I	-	m2vobj
-MTLArgumentEncoder	setRenderPipelineStates:withRange:	setRenderPipelineStates:withRange:	I	21H461,24B119	m2vobj
-MTLArgumentEncoder	setSamplerState:atIndex:	setSamplerState:atIndex:	I	21H461,24B119	m2vobj
-MTLArgumentEncoder	setSamplerStates:withRange:	setSamplerStates:withRange:	I	21H461,24B119	m2vobj
-MTLArgumentEncoder	setTexture:atIndex:	setTexture:atIndex:	I	21H461,24B119	m2vobj
-MTLArgumentEncoder	setTextures:withRange:	setTextures:withRange:	I	21H461,24B119	m2vobj
+MTLArgumentEncoder	-	setDepthStencilStates:withRange:	-	24B119	raw
+MTLArgumentEncoder	-	setIntersectionFunctionTables:withRange:	-	21H461,24B119	raw
+MTLArgumentEncoder	alignment	alignment	I	21H461,24B119	raw
+MTLArgumentEncoder	constantDataAtIndex:	constantDataAtIndex:	I	21H461,24B119	raw
+MTLArgumentEncoder	device	device	I	21H461,24B119	raw
+MTLArgumentEncoder	encodedLength	encodedLength	I	21H461,24B119	raw
+MTLArgumentEncoder	label	label	I	21H461,24B119	raw
+MTLArgumentEncoder	label	setLabel:	I	21H461,24B119	raw
+MTLArgumentEncoder	newArgumentEncoderForBufferAtIndex:	newArgumentEncoderForBufferAtIndex:	I	24B119	raw
+MTLArgumentEncoder	setArgumentBuffer:offset:	setArgumentBuffer:offset:	I	21H461,24B119	raw
+MTLArgumentEncoder	setArgumentBuffer:startOffset:arrayElement:	setArgumentBuffer:startOffset:arrayElement:	I	-	raw
+MTLArgumentEncoder	setBuffer:offset:atIndex:	setBuffer:offset:atIndex:	I	21H461,24B119	raw
+MTLArgumentEncoder	setBuffers:offsets:withRange:	setBuffers:offsets:withRange:	I	21H461,24B119	raw
+MTLArgumentEncoder	setComputePipelineState:atIndex:	setComputePipelineState:atIndex:	I	-	raw
+MTLArgumentEncoder	setComputePipelineStates:withRange:	setComputePipelineStates:withRange:	I	-	raw
+MTLArgumentEncoder	setIndirectCommandBuffer:atIndex:	setIndirectCommandBuffer:atIndex:	I	24B119	raw
+MTLArgumentEncoder	setIndirectCommandBuffers:withRange:	setIndirectCommandBuffers:withRange:	I	21H461,24B119	raw
+MTLArgumentEncoder	setRenderPipelineState:atIndex:	setRenderPipelineState:atIndex:	I	-	raw
+MTLArgumentEncoder	setRenderPipelineStates:withRange:	setRenderPipelineStates:withRange:	I	21H461,24B119	raw
+MTLArgumentEncoder	setSamplerState:atIndex:	setSamplerState:atIndex:	I	21H461,24B119	raw
+MTLArgumentEncoder	setSamplerStates:withRange:	setSamplerStates:withRange:	I	21H461,24B119	raw
+MTLArgumentEncoder	setTexture:atIndex:	setTexture:atIndex:	I	21H461,24B119	raw
+MTLArgumentEncoder	setTextures:withRange:	setTextures:withRange:	I	21H461,24B119	raw
 MTLArgumentEncoder	setVisibleFunctionTable:atIndex:	setVisibleFunctionTable:atIndex:	I	-	refused
 MTLArgumentEncoder	setVisibleFunctionTables:withRange:	setVisibleFunctionTables:withRange:	I	21H461,24B119	refused
 MTLArrayType	argumentIndexStride	argumentIndexStride	I	-	unread
@@ -583,7 +583,7 @@ MTLDevice	maxThreadgroupMemoryLength	maxThreadgroupMemoryLength	I	21H461,24B119	
 MTLDevice	maxThreadsPerThreadgroup	maxThreadsPerThreadgroup	I	21H461,24B119	raw
 MTLDevice	minimumLinearTextureAlignmentForPixelFormat:	minimumLinearTextureAlignmentForPixelFormat:	I	21H461,24B119	raw
 MTLDevice	name	name	I	21H461,24B119	raw
-MTLDevice	newArgumentEncoderWithArguments:	newArgumentEncoderWithArguments:	I	21H461,24B119	m2v
+MTLDevice	newArgumentEncoderWithArguments:	newArgumentEncoderWithArguments:	I	21H461,24B119	raw
 MTLDevice	newArgumentEncoderWithBufferBinding:	newArgumentEncoderWithBufferBinding:	I	21H461,24B119	base
 MTLDevice	newBinaryArchiveWithDescriptor:error:	newBinaryArchiveWithDescriptor:error:	I	21H461,24B119	raw
 MTLDevice	newBufferWithBytes:length:options:	newBufferWithBytes:length:options:	I	21H461,24B119	raw
@@ -1285,7 +1285,7 @@ MTLSamplerState	-	pixelFormat	-	21H461,24B119	raw
 MTLSamplerState	-	resourceIndex	-	21H461,24B119	raw
 MTLSamplerState	-	uniqueIdentifier	-	21H461,24B119	zero
 MTLSamplerState	device	device	I	21H461,24B119	raw
-MTLSamplerState	gpuResourceID	gpuResourceID	I	24B119	zero
+MTLSamplerState	gpuResourceID	gpuResourceID	I	24B119	raw
 MTLSharedEvent	-	IOSurfaceSharedEvent	-	21H461,24B119	raw
 MTLSharedEvent	-	device	-	21H461,24B119	raw
 MTLSharedEvent	-	label	-	21H461,24B119	raw
@@ -1373,7 +1373,7 @@ MTLTexture	depth	depth	I	21H461,24B119	raw
 MTLTexture	firstMipmapInTail	firstMipmapInTail	I	-	refused
 MTLTexture	getBytes:bytesPerRow:bytesPerImage:fromRegion:mipmapLevel:slice:	getBytes:bytesPerRow:bytesPerImage:fromRegion:mipmapLevel:slice:	I	21H461,24B119	raw
 MTLTexture	getBytes:bytesPerRow:fromRegion:mipmapLevel:	getBytes:bytesPerRow:fromRegion:mipmapLevel:	I	21H461,24B119	raw
-MTLTexture	gpuResourceID	gpuResourceID	I	24B119	zero
+MTLTexture	gpuResourceID	gpuResourceID	I	24B119	raw
 MTLTexture	height	height	I	21H461,24B119	raw
 MTLTexture	isSparse	isSparse	I	-	refused
 MTLTexture	mipmapLevelCount	mipmapLevelCount	I	21H461,24B119	raw

@@ -87,3 +87,13 @@ kernel void view_half_read_write(texture2d<half, access::read_write> texture [[t
 {
     texture.write(texture.read(id) * 0.5h + half4(0.25h, -0.5h, half(id.x), 1.0h), id);
 }
+
+/// A colour reached through an argument buffer's pointer (metal.native.argument_encoder).
+struct ColourArguments {
+    constant float4 *colour [[id(0)]];
+};
+
+fragment float4 argument_colour_fragment(constant ColourArguments &arguments [[buffer(0)]])
+{
+    return *arguments.colour;
+}

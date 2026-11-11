@@ -101,6 +101,7 @@ TESTS: dict[str, bool] = {
             'metal.native.depth_stencil',
             'metal.native.shared_event',
             'metal.native.fence',
+            'metal.native.argument_encoder',
         ],
         False,
     ),

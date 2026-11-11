@@ -1274,3 +1274,21 @@ host_test(
         "//drivers/TegraGM20BMetal:raw/runtime/raw_gpu.cpp",
     ],
 )
+
+host_test(
+    name = "raw_argument_layout_test",
+    srcs = [
+        "raw_argument_layout_test.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_argument_layout.h",
+    ],
+    cxx_std = "c++17",
+)
+
+host_test(
+    name = "raw_resource_id_test",
+    srcs = [
+        "raw_resource_id_test.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_resource_id.h",
+    ],
+    cxx_std = "c++17",
+)
