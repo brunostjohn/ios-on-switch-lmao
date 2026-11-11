@@ -14,7 +14,8 @@ static bool planeSame(const PlaneSet &a, const PlaneSet &b)
             x.position != y.position || x.size != y.size || x.prescaled != y.prescaled || x.dda != y.dda ||
             x.hInitial != y.hInitial || x.vInitial != y.vInitial || x.lineStride != y.lineStride ||
             x.hOffset != y.hOffset || x.vOffset != y.vOffset || x.surfaceKind != y.surfaceKind ||
-            x.options != y.options || x.start[0] != y.start[0] || x.start[1] != y.start[1] ||
+            x.options != y.options || x.byteSwap != y.byteSwap || x.start[0] != y.start[0] ||
+            x.start[1] != y.start[1] ||
             x.matrix != y.matrix || x.fullRange != y.fullRange)
             return false;
     }

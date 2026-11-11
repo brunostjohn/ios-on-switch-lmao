@@ -41,8 +41,9 @@
 //    the frame boundary: mainline dc.c tegra_dc_commit's comment, L4T "assemby -> arm -> active"): one UPDATE write and one
 //    ACT_REQ write for several windows latch them at one boundary, never half-written. The CSC and filter registers (0x500-
 //    0x638) are not shadowed (hekate di.h): written only while the window is off.
-//  - [T] YCbCr 4:2:0 semi-planar with Cb first (NV12, IOSurface '420v'/'420f') is COLOR_DEPTH 43 (mainline plane.c and hekate
-//    di.h; L4T's tegra_dc_ext.h names 42 and 43 the other way round); 4:2:2 semi-planar with Cb first (NV16, '422v'/'422f',
+//  - [V] YCbCr 4:2:0 semi-planar with Cb first (NV12, IOSurface '420v'/'420f') is COLOR_DEPTH 43 (mainline plane.c and
+//    hekate di.h; L4T's tegra_dc_ext.h agrees once its names are read from the word's top, SwitchWindowCaps.h; HW Test
+//    display.x1.window_formats shows it on the panel); 4:2:2 semi-planar with Cb first (NV16, '422v'/'422f',
 //    what Core Animation's IOSurfaceAccelerator copies of a detached video are on iPadOS 27) is 45 by the same table, and
 //    mainline's T210 overlay windows list NV16 (dc.c: tegra210_dc_soc_info takes tegra114_overlay_formats).
 //  - [T] a block-linear surface (WINBUF_SURFACE_KIND BLOCK with its block height; LINE_STRIDE its bytes across) is fetched
@@ -54,6 +55,7 @@
 
 #include "../TegraGM20B/TegraGM20BLayout.h"
 #include "../TegraVIC/SwitchSurfaceColor.h"
+#include "SwitchWindowCaps.h"
 
 namespace native_planes {
 
@@ -111,7 +113,8 @@ enum Kind {
     kKindNv12Video,
     kKindNv12Full,
     kKindNv16Video,
-    kKindNv16Full
+    kKindNv16Full,
+    kKindExtraYuv  // SwitchWindowCaps.h
 };
 
 // The formats a window scans: 32-bit BGRA (also its lossless-compressed spelling '&BGA', which the GPU here writes as plain
@@ -131,6 +134,8 @@ inline Kind kindOf(uint32_t format, uint32_t planes)
         return kKindNv16Video;
     if (format == fourcc('4', '2', '2', 'f') && planes == 2)
         return kKindNv16Full;
+    if (switch_window_caps::find(format, planes))
+        return kKindExtraYuv;
     return kKindNone;
 }
 
@@ -146,7 +151,7 @@ inline bool isNv16(Kind k)
 
 inline bool isYuv(Kind k)
 {
-    return isNv12(k) || isNv16(k);
+    return isNv12(k) || isNv16(k) || k == kKindExtraYuv;
 }
 
 // --- What the display publishes (and so what Core Animation can send) ------------------------------------------------------
@@ -320,6 +325,7 @@ struct Image {
     Matrix matrix = kBt601;
     bool fullRange = false;
     bool convert = false;  // chroma sited where the window does not sample it: VIC resamples it into BGRA first
+    uint8_t byteSwap = 0, lumaBytes = 0, fetchBytes = 0;  // SwitchWindowCaps.h's formats; 0 for the other kinds
 };
 
 // One axis of a window: the destination [d, d + dn) on a screen [0, screen), the source [s, s + sn) of a surface `limit`
@@ -408,10 +414,14 @@ inline bool blockReads(const tgm_layout &b, const Surface &f, const Axis &y, Ima
     return image.readHigh <= ((f.descriptorBytes + 4095) & ~4095ULL);
 }
 
+#include "SwitchWindowFormatImage.h"
+
 // The image of a layer checkDetached accepted: the destination clipped to the display with the source cut exactly where
 // the clipped edge samples it. block: the surface's layout when the GPU renders it block-linear.
 inline bool imageOf(const Layer &l, uint32_t width, uint32_t height, Image &image, const tgm_layout *block = nullptr)
 {
+    if (l.kind == kKindExtraYuv)
+        return extraImageOf(l, width, height, image, block);
     image = Image();
     image.yuv = isYuv(l.kind);
     image.convert = image.yuv && !switch_surface_dc_siting(l.surface.chromaTop, l.surface.chromaBottom);
@@ -478,6 +488,8 @@ inline unsigned checkDetached(const Layer &l, uint32_t width, uint32_t height, c
         static_cast<uint32_t>(s.w) > limits.maxSrcRectWidth ||
         static_cast<uint64_t>(s.w) * static_cast<uint64_t>(s.h) > limits.maxSrcRectTotal)
         return kScale;
+    if (l.kind == kKindExtraYuv)
+        return extraCheck(l, width, height, limits);
     const unsigned planes = isYuv(l.kind) ? 2 : 1;
     for (unsigned p = 0; p < planes; ++p) {
         const uint64_t base = planes == 1 ? 0 : l.surface.offset[p];

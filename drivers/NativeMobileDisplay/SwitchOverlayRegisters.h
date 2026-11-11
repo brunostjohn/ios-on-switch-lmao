@@ -65,7 +65,7 @@ void planeWriteWindowRegisters(unsigned window, const switch_display::Overlay &p
     if (!planeFiltersWritten[window] && !live)
         planeStartWindowRegisters(window);
     win[kColorDepth] = m.colorDepth;
-    win[kByteSwap] = 0;
+    win[kByteSwap] = m.byteSwap;
     win[kPosition] = m.position;
     win[kSize] = m.size;
     win[kPrescaled] = m.prescaled;

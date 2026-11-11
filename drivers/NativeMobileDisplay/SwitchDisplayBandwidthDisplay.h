@@ -5,9 +5,10 @@ switch_display::MemoryEnvelope displayMemory;
 
 switch_display::Demand planeDemand(const native_planes::Image &image)
 {
-    switch_display::Demand demand = {image.position & 0xffff, image.position >> 16, image.size & 0xffff,
-                                     image.size >> 16, uint64_t(displayMemory.pixelClock()) * (image.yuv ? 2 : 4)};
-    const uint32_t sourceWidth = (image.prescaled & 0xffff) / (image.yuv ? 1 : 4);
+    switch_display::Demand demand = {
+        image.position & 0xffff, image.position >> 16, image.size & 0xffff, image.size >> 16,
+        uint64_t(displayMemory.pixelClock()) * native_planes::fetchBytesPerPixel(image)};
+    const uint32_t sourceWidth = (image.prescaled & 0xffff) / native_planes::prescaledBytesPerPixel(image);
     demand.bytesPerSecond = switch_display::scaled(demand.bytesPerSecond, sourceWidth, demand.width);
     demand.bytesPerSecond = switch_display::scaled(demand.bytesPerSecond, image.prescaled >> 16, demand.height);
     return demand;
