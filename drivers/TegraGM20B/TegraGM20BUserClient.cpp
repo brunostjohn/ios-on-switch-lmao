@@ -44,6 +44,7 @@
 #include "SwitchGpuCpuComplete.h"
 #include "SwitchGpuChannelPolicy.h"
 #include "SwitchGpuJobFences.h"
+#include "SwitchGpuJobVisibility.h"
 #include "SwitchGpuEventClient.h"
 #include "SwitchGpuAsyncReference.h"
 #include "SwitchGpuAdmission.h"
@@ -832,6 +833,7 @@ class AGXDeviceUserClient : public IOUserClient
 		uint32_t
 			backing_pages;  // pas' length: npages, or a spare's pages when the BO is a view of its first ones
 		bool readOnly;  // imports of pages the task maps read-only: the GPU maps them read-only
+		bool unlockedReads;  // an IOSurface over its creator's memory, which the CPU reads without IOSurfaceLock
 		uint64_t *pas;  // one per 4 KiB page; tgm_mem keeps a pointer to it
 		void *pool_va;  // Coherent BOs: pool memory (write-combined, contiguous)
 		uint64_t pool_pa;
@@ -1621,6 +1623,7 @@ IOReturn AGXDeviceUserClient::boImport(const TegraGM20BAbiBoImport *in,
 		if (!bo->surface) {
 			ret = kIOReturnBadArgument;
         } else {
+            bo->unlockedReads = switch_gpu_surface_client_memory(bo->surface) != 0;
             bo->representation = switch_gpu_surface_generation(bo->surface);
             if (!bo->representation)
                 ret = kIOReturnNoMemory;
@@ -2469,6 +2472,7 @@ IOReturn AGXDeviceUserClient::exec(uint32_t channel, TegraGM20BAbiPush *input, u
 	}
 	uint32_t useTotal = 0, writeCount = 0, surfaceCount = 0, nativeGuardCount = 0, writtenCount = 0;
 	bool hostWritten = !(visibility & TegraGM20BSubmitVisibilityExplicit);
+	bool unlockedWrites = false;
 	const uint32_t claim = switch_gpu_claim_flags(admissionBegin || admissionContinue);
 	// flags: the SWITCH_GPU_BACKING_* ownership flags of the use beside its access
 	const auto addUse = [&](const Bo *bo, uint32_t access, uint32_t flags, uint64_t offset = 0,
@@ -2485,9 +2489,11 @@ IOReturn AGXDeviceUserClient::exec(uint32_t channel, TegraGM20BAbiPush *input, u
 			return error;
 		}
 		job.uses[useTotal++] = {bo->backing, access | flags, 0};
-		if (access & SWITCH_GPU_BACKING_WRITE)
+		if (access & SWITCH_GPU_BACKING_WRITE) {
 			job.writes[writeCount++] = {bo->backing, bo->representation ? 0 : offset,
 							     bo->representation ? 0 : bytes};
+			unlockedWrites |= bo->unlockedReads;
+		}
 		if (bo->representation)
 			job.surfaces[surfaceCount++] = {bo->backing,
 							bo->surface,
@@ -2644,19 +2650,9 @@ refresh:
 			error = switch_gpu_chan_exec_visibility(
 				chan, pushes, count, job.dependencies, dependencies, &seqno,
 				profiled ? &prof : nullptr,
-				(visibility & TegraGM20BSubmitVisibilityExplicit
-					 ? SWITCH_GPU_SUBMIT_VISIBILITY_EXPLICIT
-					 : 0u) |
-					((visibility & TegraGM20BSubmitExternalVisibility) ||
-							 (events && events->signals())
-						 ? SWITCH_GPU_SUBMIT_EXTERNAL_VISIBILITY
-						 : 0u) |
-					((visibility & TegraGM20BSubmitHasEvents)
-						 ? SWITCH_GPU_SUBMIT_FORCE_FENCE
-						 : 0u) |
-					(hostWritten || transaction.host_written
-						 ? SWITCH_GPU_SUBMIT_HOST_WRITTEN
-						 : 0u));
+				switch_gpu_job_visibility(visibility, events && events->signals(),
+							  unlockedWrites,
+							  hostWritten || transaction.host_written));
 			if (scratch)
 				scratch->phases.end(TGM_SUBMIT_EXEC);
 		}

@@ -693,6 +693,22 @@ TEST(GM20BFencesSource, ExecQueuesItsWritersAcquiresBeforeItSubmits)
 		EXPECT_THAT(awaiting.substr(0, awaiting.find(';')), HasSubstr(capability));
 }
 
+// The flags exec hands chan_exec are SwitchGpuJobVisibility.h's (switch_gpu_job_visibility_test), with a write into an
+// IOSurface over its creator's memory, which IOSurface's own field names at the import, as one that ends External.
+TEST(GM20BVisibilitySource, AJobWritingCreatorMemoryIsExternal)
+{
+	const std::string imported = flat(definition(client(), "IOReturn AGXDeviceUserClient::boImport("));
+	expectBefore(imported, "bo->surface = switch_gpu_surface_hold(",
+		     "bo->unlockedReads = switch_gpu_surface_client_memory(bo->surface) != 0;");
+	const std::string exec = flat(definition(client(), "IOReturn AGXDeviceUserClient::exec("));
+	expectBefore(exec, "if (access & SWITCH_GPU_BACKING_WRITE) {", "unlockedWrites |= bo->unlockedReads;");
+	EXPECT_THAT(exec, HasSubstr("switch_gpu_job_visibility(visibility, events && events->signals(), "
+				    "unlockedWrites, hostWritten || transaction.host_written)"));
+	const std::string surfaces = flat(SourceText("../TegraGM20BSurfaceClient.cpp"));
+	EXPECT_THAT(flat(definition(surfaces, "int switch_gpu_surface_client_memory(const OSObject *surface)")),
+		    HasSubstr("at<uint64_t>(surface, OriginalIOSurface::clientMemory) != 0"));
+}
+
 // A SurfaceWrites a client could not deliver never leaves a GPU write unmarked: the client stops saying its imports are
 // only sampled and flags every submission TegraGM20BPushImportsWritten, which makes the connection mark every writable
 // import at every Exec.

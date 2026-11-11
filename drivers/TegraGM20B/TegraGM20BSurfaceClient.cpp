@@ -147,10 +147,14 @@ extern "C" int tgm_surface_client_memory(uint32_t id, void *task)
 	const OSObject *surface = tgm_surface_lookup(id, task);
 	if (!surface)
 		return 1;
-	const int client =
-		static_cast<int>(at<uint64_t>(surface, OriginalIOSurface::clientMemory) != 0);
+	const int client = switch_gpu_surface_client_memory(surface);
 	surface->release();
 	return client;
+}
+
+extern "C" int switch_gpu_surface_client_memory(const OSObject *surface)
+{
+	return static_cast<int>(at<uint64_t>(surface, OriginalIOSurface::clientMemory) != 0);
 }
 
 namespace {

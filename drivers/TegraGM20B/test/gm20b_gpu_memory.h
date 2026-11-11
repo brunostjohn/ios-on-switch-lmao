@@ -39,6 +39,7 @@ struct Memory {
 
 	std::map<uint64_t, Pte> ptes;  // by GPU page number
 	std::map<const uint8_t *, std::array<uint8_t, kLine>> l2;  // by the line's first byte
+	std::map<const uint8_t *, uint64_t> dirty;                 // l2's written lines: their valid bytes
 	uint64_t lastPage = ~0ull;
 	const Pte *last = nullptr;
 
@@ -61,7 +62,37 @@ struct Memory {
 
 	void invalidateL2()
 	{
-		l2.clear();
+		for (auto line = l2.begin(); line != l2.end();)
+			line = dirty.count(line->first) ? std::next(line) : l2.erase(line);
+	}
+
+	// An engine's store through its GPU address. A cacheable page's line takes it and stays dirty, out of the CPU's sight,
+	// until flushL2() (MEM_OP L2_FLUSH_DIRTY) writes it to the bytes behind it. false: a fault.
+	bool store(uint64_t va, const uint8_t *data, uint64_t size)
+	{
+		for (uint64_t i = 0; i < size; ++i) {
+			const uint64_t address = va + i, pageOffset = address % kPage;
+			uint8_t *byte = at(address, true);
+			if (!byte)
+				return false;
+			if (!last->cached) {
+				*byte = data[i];
+				continue;
+			}
+			const uint64_t lineOffset = pageOffset % kLine;
+			const uint8_t *first = byte - lineOffset;
+			throughL2(byte, pageOffset);
+			l2[first][lineOffset] = data[i];
+			dirty[first] = std::min(kLine, last->valid() - (pageOffset - lineOffset));
+		}
+		return true;
+	}
+
+	void flushL2()
+	{
+		for (const auto &[first, valid] : dirty)
+			std::copy_n(l2[first].begin(), valid, const_cast<uint8_t *>(first));
+		dirty.clear();
 	}
 
 	void unmap(uint64_t va, uint64_t size)

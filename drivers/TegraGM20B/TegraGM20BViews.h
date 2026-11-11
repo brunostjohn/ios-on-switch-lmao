@@ -29,6 +29,7 @@ class OSObject;
 OSObject *tgm_surface_lookup(uint32_t id, void *task);
 OSObject *switch_gpu_surface_hold(uint32_t id, void *task, const uint64_t *pages, uint32_t count);
 const volatile uint64_t *switch_gpu_surface_generation(OSObject *surface);
+int switch_gpu_surface_client_memory(const OSObject *surface);
 #endif
 /* Whether surface `id` (looked up for `task`) lies in its creator's own memory, or cannot be looked up: such a surface
  * stays pitch */
