@@ -11,9 +11,11 @@
 // TegraNVJPG, not its class name: JPEGH1.videoencoder registers VideoToolbox's hardware 'jpeg' encoders only if
 // IOServiceNameMatching("AppleJPEGDriver") finds a service, and NVJPG's encoder is not driven here.
 //
-//   sel 1  decode (0x58 bytes in and out), sel 5 decode with Apple's codec extensions (0x1000): the JPEG file in the
+//   sel 1  decode (0x58 bytes in and out), sel 5 decode with Apple's codec extensions (0x1000), sel 7 the 2024 decode
+//          (0xda0; every decode on 24B119): the JPEG file in the
 //          source IOSurface (looked up in the caller's task, like Apple's driver), the picture into the destination
-//          IOSurface in its pixel format ('420f', 'BGRA', 'RGBA', 32ARGB), at the request's DCT scale and offset. The
+//          IOSurface in its pixel format ('420f', '422f', '444f', 'yuvf', 'BGRA', 'RGBA', 32ARGB), at the request's DCT
+//          scale and offset. The
 //          kernel parses the file (TegraNVJPGJpeg.h; Apple's hardware parses the stream itself, so userland sends no
 //          tables) and plans the decode (TegraNVJPGRequest.h) in the calling thread: a refusal is the call's own
 //          result, kIOReturnUnsupported for what NVJPG does not do (TegraNVJPGTraits) and
@@ -22,7 +24,7 @@
 //          order. Without a callback (+0x30) the call sleeps until its decode is done and returns its status; with one
 //          it returns once queued and the result comes back as an IOKit async completion on the port registered with
 //          IOConnectSetNotificationPort: callback(refcon +0x38, status, context +0x40).
-//   sel 0, 2  no-ops (Apple's). sel 3, 4, 6 encode and sel 7 the 2024 decode: kIOReturnUnsupported (CMPhoto's unified
+//   sel 0, 2  no-ops (Apple's). sel 3, 4, 6 encode: kIOReturnUnsupported (CMPhoto's unified
 //          encoder falls back to its software encoder, __encodeBuffer 0x1aaeebef4). sel 8, 9 power on/off: Apple's
 //          entitlement com.apple.applejpegdriver.poweron, else kIOReturnError, as Apple's; with it a no-op.
 //
@@ -94,6 +96,8 @@ IOReturn ioreturn(int err)
 struct {
     uint64_t windowStart, decodes, refused, failed, engineUs, cpuUs, pixels, bytes;
 } gStats;
+// Decodes NVJPG finished since boot, for HW Test's image.jpeg_* route (the service's TegraNVJPGDecodes, read live).
+uint64_t gHardwareDecodes;
 #endif
 
 IOLock *gStatsLock;
@@ -151,7 +155,14 @@ struct Job {
     uint32_t bytesUsed, cycles;
     uint64_t engineUs;
     bool done;
+    union {
+        TegraNVJPGDecodeRequest base;
+        TegraNVJPGDecodeRequestExt ext;
+        TegraNVJPGDecodeRequest2024 v2024;
+    } request;  // the caller's copy, in the job's one allocation
 };
+
+enum RequestKind { kSelector1, kSelector5, kSelector7 };
 
 Job *gHead, *gTail;
 uint32_t gQueued;
@@ -271,6 +282,8 @@ void engineThread(void *, wait_result_t)
         gStats.decodes++;
         if (job->status)
             gStats.failed++;
+        else
+            __atomic_add_fetch(&gHardwareDecodes, uint64_t(1), __ATOMIC_RELAXED);
         gStats.engineUs += job->engineUs;
         gStats.cpuUs += job->cpuUs;
         gStats.pixels += static_cast<uint64_t>(job->plan.extent.width) * job->plan.extent.height;
@@ -412,7 +425,7 @@ class AppleJPEGDriverUserClient : public IOUserClient {
     uint32_t pending_ = 0;
     bool counted_ = false, powerEntitled_ = false;
 
-    IOReturn decode(const void *in, uint32_t inSize, void *out, uint32_t *outSize, bool ext);
+    IOReturn decode(const void *in, uint32_t inSize, void *out, uint32_t *outSize, RequestKind kind);
 
 public:
     bool setUp(task_t task);
@@ -465,29 +478,28 @@ void AppleJPEGDriverUserClient::finished(Job *job)
     IOLockUnlock(lock_);
 }
 
-IOReturn AppleJPEGDriverUserClient::decode(const void *in, uint32_t inSize, void *out, uint32_t *outSize, bool ext)
+IOReturn AppleJPEGDriverUserClient::decode(const void *in, uint32_t inSize, void *out, uint32_t *outSize,
+                                           RequestKind kind)
 {
     const uint64_t began = switch_now_us();
-
-    union {
-        TegraNVJPGDecodeRequest base;
-        TegraNVJPGDecodeRequestExt ext;
-    } *req = static_cast<decltype(req)>(IOMallocData(sizeof(*req)));  // 4 KiB: not on the kernel stack
-
-    if (!req)
+    Job *job = IONewZero(Job, 1);
+    if (!job)
         return kIOReturnNoMemory;
-    memcpy(req, in, inSize);
+    memcpy(&job->request, in, inSize);
+    const auto *req = &job->request;
     const TegraNVJPGDecodeRequest &r = req->base;
     IOReturn ret = kIOReturnSuccess;
     const char *why = nullptr;
-    Job *job = IONewZero(Job, 1);
     TegraVICSurface src = {};
     TegraNVJPGImage img;
-    if (!job)
-        ret = kIOReturnNoMemory;
-    if (!ret && ext && req->ext.crop) {
+    if ((kind == kSelector5 && req->ext.crop) || (kind == kSelector7 && req->v2024.crop)) {
         ret = kIOReturnUnsupported;
-        why = "cropped decode (selector 5 crop rectangle)";
+        why = "cropped decode (crop rectangle)";
+    }
+    if (!ret && kind == kSelector7 &&
+        (req->v2024.header_bytes || req->v2024.strip_index || req->v2024.strip_entropy_bytes)) {
+        ret = kIOReturnUnsupported;
+        why = "strip decode (the service publishes one core)";
     }
     // Surfaces in the caller's task, as Apple's driver looks them up (not the task that opened the connection).
     if (!ret && (tegra_vic_surface_lookup(r.src_id, current_task(), &src) ||
@@ -499,19 +511,9 @@ IOReturn AppleJPEGDriverUserClient::decode(const void *in, uint32_t inSize, void
         ret = kIOReturnNotPermitted;  // Apple's 0xe00002e2 for a protected source
         why = "protected source";
     }
-    // The destination formats NVJPG writes, before any copying: under the interchange formats CMPhoto also asks for
-    // 422f, 444f and yuvf, the commonest refusal, which must cost no more than this.
-    if (!ret) {
-        const uint32_t f = job->dst.desc.fourcc;
-        if (f != TEGRA_NVJPG_FOURCC('4', '2', '0', 'f') && f != TEGRA_NVJPG_FOURCC('B', 'G', 'R', 'A') &&
-            f != TEGRA_NVJPG_FOURCC('R', 'G', 'B', 'A') && f != 0x20) {
-            ret = kIOReturnUnsupported;
-            why = "destination pixel format (NVJPG writes 420f, BGRA, RGBA, ARGB)";
-        }
-    }
     if (!ret) {
         uint64_t size = r.src_size;
-        if (!ext && src.desc.length < size)
+        if (src.desc.length < size)
             size = src.desc.length;
         why = readSource(&src, size, &img, job, &ret);
     }
@@ -555,9 +557,7 @@ IOReturn AppleJPEGDriverUserClient::decode(const void *in, uint32_t inSize, void
 #if TEGRA_NVJPG_STATS
         statsLine();
 #endif
-        if (job)
-            dropJob(job);
-        IOFreeData(req, sizeof(*req));
+        dropJob(job);
         return ret;
     }
     job->cpuUs = switch_now_us() - began;
@@ -574,10 +574,8 @@ IOReturn AppleJPEGDriverUserClient::decode(const void *in, uint32_t inSize, void
     job->client = this;
     const bool async = job->async;
     queueJob(job);
-    if (async) {
-        IOFreeData(req, sizeof(*req));
+    if (async)
         return kIOReturnSuccess;  // the job is the engine thread's now
-    }
     IOLockLock(lock_);
     while (!job->done)
         IOLockSleep(lock_, job, THREAD_UNINT);
@@ -586,22 +584,24 @@ IOReturn AppleJPEGDriverUserClient::decode(const void *in, uint32_t inSize, void
     IOLockUnlock(lock_);
     ret = job->status;
     // The output: the request back (CMPhoto reads Ext out+0x14/+0x18), with Apple's result words (startDecoder
-    // 0x46330: +0x4c 0 for a decode, +0x50/+0x54 codec registers userland does not read) and, for selector 5, the
-    // engine's time and cycles (startDecoderExt: +0x70 microseconds, +0x74 cycles).
+    // 0x46330: +0x4c 0 for a decode, +0x50/+0x54 codec registers userland does not read); for selector 5 the engine's
+    // time and cycles (startDecoderExt: +0x70 microseconds, +0x74 cycles); for selector 7 the region decoded at
+    // +0x4c/+0x50 and the time at +0xc94 (startDecoder2024).
     if (out && *outSize >= inSize) {
         memcpy(out, req, inSize);
         uint32_t *words = static_cast<uint32_t *>(out);
-        words[0x4c / 4] = 0;
-        words[0x50 / 4] = 0;
+        words[0x4c / 4] = kind == kSelector7 ? r.width : 0;
+        words[0x50 / 4] = kind == kSelector7 ? r.height : 0;
         words[0x54 / 4] = 0;
-        if (ext) {
+        if (kind == kSelector5) {
             words[0x70 / 4] = static_cast<uint32_t>(job->engineUs);
             words[0x74 / 4] = job->cycles;
+        } else if (kind == kSelector7) {
+            words[0xc94 / 4] = static_cast<uint32_t>(job->engineUs);
         }
         *outSize = inSize;
     }
     dropJob(job);
-    IOFreeData(req, sizeof(*req));
     return ret;
 }
 
@@ -625,12 +625,14 @@ IOReturn AppleJPEGDriverUserClient::externalMethod(uint32_t selector, IOExternal
     case 2:
         return kIOReturnSuccess;
     case 1:
-    case 5: {
+    case 5:
+    case 7: {
         if (!tegra_nvjpg_ready())
             return kIOReturnNotReady;
         uint32_t outSize = a->structureOutputSize;
+        const RequestKind kind = selector == 1 ? kSelector1 : selector == 5 ? kSelector5 : kSelector7;
         const IOReturn ret = decode(a->structureInput, a->structureInputSize, outSize ? a->structureOutput : nullptr,
-                                    &outSize, selector == 5);
+                                    &outSize, kind);
         a->structureOutputSize = outSize;
         return ret;
     }
@@ -638,7 +640,7 @@ IOReturn AppleJPEGDriverUserClient::externalMethod(uint32_t selector, IOExternal
     case 9:
         return powerEntitled_ ? kIOReturnSuccess : kIOReturnError;
     default:
-        return kIOReturnUnsupported;  // 3, 4, 6 encode; 7 the 2024 decode
+        return kIOReturnUnsupported;  // 3, 4, 6 encode
     }
 }
 
@@ -693,6 +695,17 @@ OSDeclareDefaultStructors(AppleJPEGDriver)
         (void)properties;
         return kIOReturnUnsupported;
     }
+
+#if TEGRA_NVJPG_STATS
+    using IOService::copyProperty;
+    // Made when read, so a decode writes nothing to the registry.
+    OSObject *copyProperty(const char *key) const APPLE_KEXT_OVERRIDE
+    {
+        if (key && !strcmp(key, "TegraNVJPGDecodes"))
+            return OSNumber::withNumber(__atomic_load_n(&gHardwareDecodes, __ATOMIC_RELAXED), 64);
+        return IOService::copyProperty(key);
+    }
+#endif
 };
 
 OSDefineMetaClassAndStructors(AppleJPEGDriver, IOService)

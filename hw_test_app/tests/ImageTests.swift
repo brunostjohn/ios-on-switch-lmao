@@ -58,21 +58,31 @@ struct ImageDecodeTest: HWTest {
             return .fail("ImageIO cannot open it")
         }
         let options = [kCGImageSourceShouldCacheImmediately: true] as CFDictionary
+        let jpeg = image.format.rawValue.hasPrefix("jpeg")
+        let before = jpeg ? JPEGRoute.decodes() : nil
         let start = CFAbsoluteTimeGetCurrent()
         guard let decoded = CGImageSourceCreateImageAtIndex(source, 0, options) else {
             return .fail("ImageIO cannot decode it")
         }
         let milliseconds = (CFAbsoluteTimeGetCurrent() - start) * 1000
+        let after = jpeg ? JPEGRoute.decodes() : nil
         let result = Pixels.check(decoded, pattern: image.pattern)
         var metrics = Metrics()
         metrics.set("decode_ms", milliseconds, digits: 1)
         metrics.set("mpix_s", Double(image.width * image.height) / milliseconds / 1000, digits: 1)
         metrics.set("error", result.lumaError, digits: 1)
-        return .judged(
-            [
-                ("\(image.width)x\(image.height) out", decoded.width == image.width && decoded.height == image.height),
-                ("matches the pattern", result.matches(frame: 0, tolerance: image.tolerance)),
-            ], metrics, proof: CGImageSourceGetType(source).map { $0 as String } ?? "")
+        var checks = [
+            ("\(image.width)x\(image.height) out", decoded.width == image.width && decoded.height == image.height),
+            ("matches the pattern", result.matches(frame: 0, tolerance: image.tolerance)),
+        ]
+        if let before, let after {
+            metrics.set("route", after > before ? "hardware" : "software")
+            metrics.set("nvjpg_decodes", Int(after - before))
+            checks.append(("decoded on NVJPG", after > before))
+        } else if jpeg {
+            metrics.set("route", "unknown")
+        }
+        return .judged(checks, metrics, proof: CGImageSourceGetType(source).map { $0 as String } ?? "")
     }
 
     static var all: [ImageDecodeTest] { StillImage.all.map { ImageDecodeTest(image: $0) } }
