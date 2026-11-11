@@ -6792,7 +6792,7 @@ bad:
  * transport-encoding 3, BT_WAKE through SwitchBluetooth's /dev/btwake): plain "H4" crashed every stack terminate.
  */
 /*
- * No CA_FORCE_TIMER here, unlike the 21H461 kernel: QuartzCore 24B119 has no vsync-driven frame clock to switch to. Its
+ * No CA_FORCE_TIMER here, as in the 21H461 kernel: QuartzCore 24B119 has no vsync-driven frame clock to switch to. Its
  * IOMFBServer takes IOMobileFramebufferGetVSyncRunLoopSource (add_vsync_source, 0x184368018) and
  * IOMobileFramebufferEnableVSyncNotifications (set_vsync_enabled, 0x18444ebf0) only with bit 1 of its flags at +0x61f,
  * which AccelServer's constructor clears (0x18451d520) and no store in QuartzCore sets; the variable and CADeviceUseVBL
