@@ -51,6 +51,7 @@ OPTIONS = {
     'blend-opt-control-0': ([[0x0FDC, 0]], [[0x0FDC, 1]]),
     'single-rop-1': ([[0x135C, 1]], [[0x135C, 0]]),
     'single-ct-write-0': ([[0x0F90, 0]], [[0x0F90, 1]]),
+    'ct-mrt-enable-0': ([[0x0FAC, 0]], [[0x0FAC, 1]]),
 }
 SRGB_OPTIONS = {'srgb-write-1': ([[0x15B8, 1]], [[0x15B8, 0]]), 'srgb-write-0': ([[0x15B8, 0]], [[0x15B8, 0]])}
 STORE_FORMATS = ('bgra8unorm', 'rgb10a2unorm', 'rgba16float')

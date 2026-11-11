@@ -74,7 +74,10 @@ data. A 2D experiment can read a source the batch carries, resolve a multisample
 nouveau's reference fill, clip to a rectangle, follow a clear-only pass in the same command buffer, or leave out the
 waits the production path puts around 2D work. `compare` runs the same work a second way (the pixel program over the
 rect, the copy engine, the pack's resolve state, the pack's mip state sampling the source, or a plain target for a
-compressed one), and the result carries both and a histogram of their differences. A result's `form` says what the app
+compressed one), and the result carries both and a histogram of their differences. A program whose bound TEX or TLD
+names texture 0x1fff samples the experiment's source: the app draws it with the plainest state that has a sampled
+texture and puts that texture's index in. A resolve with `byScale` reads its sample grid with the operation's own
+sample mode, filter and origin instead of the driver's resolve. A result's `form` says what the app
 did, so a cell proves its own setup. Unknown fields make an experiment invalid on both sides, and
 `hw_test_app:core_test` decodes every generated batch with the app's own decoder.
 

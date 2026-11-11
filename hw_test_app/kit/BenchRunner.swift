@@ -81,6 +81,7 @@ final class BenchRunner {
             if let c = t.clip { x.twod.clip = (c[0], c[1], c[2], c[3]) }
             x.twod.clear_first = t.clearFirst ? 1 : 0
             x.twod.tiled = t.tiled ? 1 : 0
+            x.twod.resolve_by_scale = t.byScale ? 1 : 0
         }
         if let s = e.source {
             x.source = switch_bench_source(

@@ -77,7 +77,7 @@ std::vector<uint32_t> otherFormats(const char *key)
 // The template's inputs as fetchform binds the pack's states (raw/test/fetchform.cpp): the rect's corners as float4
 // clip-space positions through identity matrices, the other attributes and uniforms fixed, its textures one picture
 void bind(raw::RenderEncoder *e, const raw::Pipeline &p, const switch_bench &b, const switch_bench_experiment &x,
-          const raw::Texture &image)
+          const raw::Texture &image, const raw::Sampler &sampler)
 {
     const raw::PackPipeline &r = *p.rec;
     std::vector<uint8_t> v(4 * r.vertexStride);
@@ -105,7 +105,7 @@ void bind(raw::RenderEncoder *e, const raw::Pipeline &p, const switch_bench &b, 
         else if (entry.kind == raw::EntryTexture)
             e->setTexture(entry.slot, &image);
         if (entry.kind != raw::EntryUbo && entry.samplerKind == raw::SamplerSlot)
-            e->setSampler(entry.sampler, &b.sampler);
+            e->setSampler(entry.sampler, &sampler);
     }
 }
 
@@ -243,7 +243,10 @@ bool drawInto(switch_bench &b, const switch_bench_experiment &x, raw::Pipeline *
 void runRender(switch_bench &b, const switch_bench_experiment &x, switch_bench_result &r)
 {
     raw::Device &d = *b.device;
-    const raw::PackPipeline *tpl = x.template_key ? bench::fragmentTemplate(d.pack(), x.template_key) : b.fragment;
+    const bool samples = x.kind != SWITCH_BENCH_NOOP && bench::samplesTexture(program(x));
+    const raw::PackPipeline *tpl = x.template_key ? bench::fragmentTemplate(d.pack(), x.template_key)
+                                   : samples      ? b.textured
+                                                  : b.fragment;
     raw::Pipeline *pipeline = nullptr;
     if (x.kind != SWITCH_BENCH_NOOP && !(pipeline = bench::pixelPipeline(b, x, r, x.single_target != 0)))
         return;
@@ -397,11 +400,14 @@ bool switch_bench::open()
     }
     device = std::move(opened);
     fragment = bench::fragmentTemplate(device->pack());
+    textured = bench::textureTemplate(device->pack());
     kernel = bench::kernelTemplate(device->pack());
-    raw::SamplerDesc nearest;
+    raw::SamplerDesc nearest, filtered;
+    filtered.minFilter = filtered.magFilter = 1;  // MTLSamplerMinMagFilterLinear
     imageMade = device->createTexture(64, 64, kBgra8, image, true);
     samplerMade = imageMade && device->createSampler(nearest, sampler);
-    if (!samplerMade) {
+    linearMade = samplerMade && device->createSampler(filtered, linear);
+    if (!linearMade) {
         error = "no memory for the template's texture and sampler";
         close();
         return false;
@@ -419,13 +425,15 @@ void switch_bench::reopen()
 
 void switch_bench::close()
 {
+    if (device && linearMade)
+        device->destroySampler(linear);
     if (device && samplerMade)
         device->destroySampler(sampler);
     if (device && imageMade)
         device->destroyTexture(image);
-    imageMade = samplerMade = false;
+    imageMade = samplerMade = linearMade = false;
     device.reset();
-    fragment = nullptr;
+    fragment = textured = nullptr;
     kernel = nullptr;
 }
 
@@ -455,7 +463,10 @@ raw::Pipeline *pixelPipeline(switch_bench &b, const switch_bench_experiment &x, 
                              bool firstColourOnly)
 {
     raw::Device &d = *b.device;
-    const raw::PackPipeline *tpl = x.template_key ? fragmentTemplate(d.pack(), x.template_key) : b.fragment;
+    const bench::Program fs = program(x);
+    const raw::PackPipeline *tpl = x.template_key       ? fragmentTemplate(d.pack(), x.template_key)
+                                   : samplesTexture(fs) ? b.textured
+                                                        : b.fragment;
     if (!tpl && x.template_key) {
         fail(r, SWITCH_BENCH_INVALID, "no plain pack state has the template key");
         return nullptr;
@@ -467,7 +478,7 @@ raw::Pipeline *pixelPipeline(switch_bench &b, const switch_bench_experiment &x, 
     raw::RuntimeRecord record;
     std::string why;
     const uint64_t key = kKeyBase | ++b.records;
-    if (!fragmentRecord(d.pack(), *tpl, program(x), x.format, key, pairs(x.methods, x.method_pairs),
+    if (!fragmentRecord(d.pack(), *tpl, fs, x.format, key, pairs(x.methods, x.method_pairs),
                         pairs(x.restore, x.restore_pairs), record, why, firstColourOnly)) {
         fail(r, SWITCH_BENCH_INVALID, why);
         return nullptr;
@@ -568,7 +579,7 @@ bool Submission::render(Target &t, raw::Pipeline *pipeline, uint32_t draws, uint
     e->setScissor(0, 0, w, h);
     if (draws) {
         e->setPipeline(pipeline);
-        bind(e, *pipeline, b_, x_, t.image ? *t.image : b_.image);
+        bind(e, *pipeline, b_, x_, t.image ? *t.image : b_.image, t.linear ? b_.linear : b_.sampler);
     }
     for (uint32_t n = 0; n < draws; n++) {
         const char *why = nullptr;

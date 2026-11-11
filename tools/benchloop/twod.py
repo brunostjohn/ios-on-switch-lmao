@@ -11,7 +11,7 @@ one. Each operation's compare form runs the same work through the 3D path or the
 import random
 import struct
 
-from tools.benchloop import columns, protocol, texels
+from tools.benchloop import columns, protocol, sampling, texels
 
 SIDE = 16
 FILL_BYTE = 0xA5
@@ -31,6 +31,12 @@ OWN = {
 SCALE_FORMATS = ('bgra8unorm', 'rgba8unorm', 'rgb10a2unorm', 'rgba16float', 'rgba32float')
 # the formats the pack has a sampled-quad state for, the 3D side of a bilinear scale (protocol.MIP_FORMATS)
 SAMPLED3D_FORMATS = ('rgb10a2unorm', 'rgba16unorm', 'rgba32float')
+# the formats the 2D engine scales and resolves in production, which have no pack sampled-quad state: their 3D side is
+# the bench's own sampling program (sampling.py)
+PROGRAM_FORMATS = ('bgra8unorm', 'rgba8unorm', 'rgba16float')
+# the resolve sweep: the driver's form is du = 2, sx = du / 2 = 1 texel, bilinear, corner; offsets in 1/16 texel
+SIXTEENTH = 1 << 28
+SWEEP_OFFSETS = {True: range(-8, 9), False: range(17)}
 CLIP = [4, 4, 12, 10]
 RESOLVE_FORMATS = ('bgra8unorm', 'rgba8unorm', 'rgb10a2unorm', 'rgba16float')
 # name: (du as a fraction, destination side)
@@ -51,6 +57,15 @@ def source_texels(seed: int = 11, side: int = 64) -> bytes:
             bump = 1 if x % 2 == 0 and y % 2 == 0 else 0
             out += bytes(min(255, 4 * rng.randrange(64) + bump) for _ in range(3)) + bytes([255])
     return bytes(out)
+
+
+def random_source(fmt: str = 'bgra8unorm', side: int = 64, seed: int = 5) -> dict:
+    """Give a source of random codes: its 2x2 sums take every residue, so a resolve's ties show their rounding."""
+    rng = random.Random(seed)
+    data = bytes(
+        b for _ in range(side * side) for b in (rng.randrange(256), rng.randrange(256), rng.randrange(256), 255)
+    )
+    return {'format': fmt, 'width': side, 'height': side, 'data': protocol.b64(data)}
 
 
 def source(fmt: str = 'bgra8unorm', side: int = 64) -> dict:
@@ -76,14 +91,17 @@ def _experiment(eid: str, fmt: str, size: tuple[int, int], op: dict, **extra: ob
     return e | extra
 
 
-def fill(eid: str, fmt: str, colour_format: int, colour: list[int], **op: object) -> dict:
+def fill(
+    eid: str, fmt: str, colour_format: int, colour: list[int], size: tuple[int, int] = (SIDE, SIDE), **op: object
+) -> dict:
     twod = {'op': 'fill', 'colorFormat': colour_format, 'color': colour} | op
-    return _experiment(eid, fmt, (SIDE, SIDE), twod, rect=[1, 1, SIDE - 1, SIDE - 1])
+    w, h = size
+    return _experiment(eid, fmt, size, twod, rect=[1, 1, w - 1, h - 1])
 
 
-def own_fill(fmt: str, suffix: str = '', **op: object) -> dict:
+def own_fill(fmt: str, suffix: str = '', size: tuple[int, int] = (SIDE, SIDE), **op: object) -> dict:
     colour_format, packed = OWN[fmt]
-    return fill(f'fill-own{suffix}-{fmt}', fmt, colour_format, [packed, 0, 0, 0], **op)
+    return fill(f'fill-own{suffix}-{fmt}', fmt, colour_format, [packed, 0, 0, 0], size, **op)
 
 
 def scale(name: str, fmt: str, bilinear: bool, corner: bool, **extra: object) -> dict:
@@ -113,6 +131,41 @@ def sampled(name: str, fmt: str, production: bool = False) -> dict:
         op |= {'corner': True, 'sx': step // 2, 'sy': step // 2}
     eid = f'scale-vs3d{"-prod" if production else ""}-{name}-{fmt}'
     return _experiment(eid, fmt, (side, side), op, source=source(fmt), compare='sampled3d')
+
+
+def scale_vs_program(name: str, fmt: str) -> dict:
+    """Give a whole-target bilinear scale from the centre origin against the sampling program, linear sampler."""
+    _, side = SCALES[name]
+    step = (64 << 32) // side
+    op = {'op': 'scale', 'du': step, 'dv': step, 'bilinear': True}
+    program = sampling.scale(side, side)
+    return _experiment(
+        f'scale-vsprog-{name}-{fmt}', fmt, (side, side), op, source=source(fmt), compare='program', program=program
+    )
+
+
+def resolve_vs_program(fmt: str) -> dict:
+    """Give the driver's 4x resolve against the box average of the same samples by the 3D path (sampling.average4)."""
+    op = {'op': 'resolve', 'samples': 4}
+    program = sampling.average4(64, 64)
+    return _experiment(
+        f'resolve-vsprog-4x-{fmt}', fmt, (32, 32), op, source=random_source(fmt), compare='program', program=program
+    )
+
+
+def resolve_sweep() -> list[dict]:
+    """Give the 4x BGRA8 resolve read by a scale of every sample mode, filter and origin offset in 1/16 texel."""
+    out = []
+    for corner, offsets in SWEEP_OFFSETS.items():
+        for bilinear in (True, False):
+            for k in offsets:
+                origin = (1 << 32 if corner else 0) + k * SIXTEENTH
+                op = {'op': 'resolve', 'samples': 4, 'byScale': True, 'du': 2 << 32, 'dv': 2 << 32}
+                op |= {'sx': origin, 'sy': origin, 'bilinear': bilinear, 'corner': corner}
+                eid = f'resolve-sweep-{"corner" if corner else "centre"}-{"bil" if bilinear else "point"}-'
+                eid += f'{"m" if k < 0 else "p"}{abs(k):02d}'
+                out.append(_experiment(eid, 'bgra8unorm', (32, 32), op, source=random_source()))
+    return out
 
 
 def production(name: str, fmt: str) -> dict:
@@ -150,7 +203,10 @@ def generate() -> list[dict]:
     # 1:1 is the control: both paths copy texel centres, so its histogram must be all 0
     for fmt in SAMPLED3D_FORMATS:
         out += [sampled(name, fmt) for name in ('1to1', '2to1', '3to2', '3to7')]
-        out += [sampled(name, fmt, production=True) for name in ('2to1', '3to2', '3to7')]
+        out += [sampled(name, fmt, production=True) for name in ('1to1', '2to1', '3to2', '3to7')]
+    out += [scale_vs_program(name, fmt) for fmt in PROGRAM_FORMATS for name in ('1to1', '2to1', '3to2', '3to7')]
+    out += [resolve_vs_program(fmt) for fmt in ('bgra8unorm', 'rgba8unorm')]
+    out += resolve_sweep()
     out.append(own_fill('bgra8unorm', '-clip', clip=CLIP))
     clipped = scale('1to1', 'bgra8unorm', False, True)
     clipped['twod'] |= {'clip': CLIP}
@@ -170,18 +226,20 @@ def generate() -> list[dict]:
 
 def hang_slot() -> list[dict]:
     """Give the 15:30 timeout's slot: a clear-only pass, then the fill, bracketed and not; f32 unbracketed last."""
-    words, out = f32_words(RGBA), []
+    words, out, probe = f32_words(RGBA), [], (40, 24)  # X1TwodClearProbe's target
     # the probe's target was a private texture, block-linear: the tiled cells are its layout, the pitch ones a control
     for tiled in (False, True):
         tag = '-tiled' if tiled else ''
         out += [
-            own_fill('bgra8unorm', f'-afterclear{tag}', clearFirst=True, tiled=tiled),
-            own_fill('bgra8unorm', f'-afterclear-unbracketed{tag}', clearFirst=True, bracketed=False, tiled=tiled),
-            fill(f'fill-f32-afterclear{tag}-bgra8unorm', 'bgra8unorm', F32, words, clearFirst=True, tiled=tiled),
+            own_fill('bgra8unorm', f'-afterclear{tag}', probe, clearFirst=True, tiled=tiled),
+            own_fill(
+                'bgra8unorm', f'-afterclear-unbracketed{tag}', probe, clearFirst=True, bracketed=False, tiled=tiled
+            ),
+            fill(f'fill-f32-afterclear{tag}-bgra8unorm', 'bgra8unorm', F32, words, probe, clearFirst=True, tiled=tiled),
         ]
     for tiled in (False, True):
         eid = f'fill-f32-afterclear-unbracketed{"-tiled" if tiled else ""}-bgra8unorm'
-        out.append(fill(eid, 'bgra8unorm', F32, words, clearFirst=True, bracketed=False, tiled=tiled))
+        out.append(fill(eid, 'bgra8unorm', F32, words, probe, clearFirst=True, bracketed=False, tiled=tiled))
     return out
 
 
@@ -217,6 +275,30 @@ def background(e: dict) -> bytes:
     return bytes([FILL_BYTE]) * protocol.FORMATS[fmt][1]
 
 
+# 8-bit box means of four codes, by rounding: what a 4x resolve can have done
+BOX_ROUNDINGS = {'nearest_up': 2, 'nearest_down': 1, 'truncate': 0}
+
+
+def box_mismatches(e: dict, data: bytes) -> dict[str, int] | None:
+    """Give, per rounding, how many texels of a 4x 8-bit resolve differ from the box mean of their source samples."""
+    t = e['twod']
+    if t['op'] != 'resolve' or t['samples'] != 4 or protocol.FORMATS[e['target']['format']][1] != 4 or not data:
+        return None
+    src, side = protocol.unb64(e['source']['data']), e['source']['width']
+    w, h = e['target']['width'], e['target']['height']
+    out = dict.fromkeys(BOX_ROUNDINGS, 0)
+    for y in range(h):
+        for x in range(w):
+            got = data[(y * w + x) * 4 : (y * w + x + 1) * 4]
+            for name, bias in BOX_ROUNDINGS.items():
+                want = bytes(
+                    (sum(src[((2 * y + j) * side + 2 * x + i) * 4 + c] for j in (0, 1) for i in (0, 1)) + bias) >> 2
+                    for c in range(4)
+                )
+                out[name] += got != want
+    return out
+
+
 def analyse(experiments: list[dict], results: dict[str, dict]) -> list[dict]:
     """Give, per operation: whether it ran, its form, whether it kept to what it writes, and its compare histogram."""
     rows = []
@@ -236,6 +318,8 @@ def analyse(experiments: list[dict], results: dict[str, dict]) -> list[dict]:
         if data and e['twod']['op'] == 'fill' and (want := wanted_fill(e)) is not None:
             row['fill_exact'] = sum(c == want for c in inside)
             row['fill_cells'] = len(inside)
+        if (box := box_mismatches(e, data)) is not None:
+            row['box_mismatches'] = box
         if 'compare' in e:
             compare = result.get('compare') or {}
             row['compare'] = {'status': compare.get('status'), 'histogram': compare.get('histogram')}

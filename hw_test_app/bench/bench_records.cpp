@@ -61,6 +61,36 @@ bool positionFirst(const raw::PackPipeline &p, const char *key)
            format == kFloat4 && offset == 0 && buffer == p.vertexSlot && stride == p.vertexStride && step == 1;
 }
 
+// Its first set-0 texture whose sampler is the draw's (a slot, not constexpr)
+const raw::PackEntry *sampledTexture(const raw::PackPipeline &p)
+{
+    for (uint32_t k = 0; k < p.entries && k < raw::kPackEntries; k++)
+        if (p.entry[k].kind == raw::EntryTexture && p.entry[k].samplerKind == raw::SamplerSlot)
+            return &p.entry[k];
+    return nullptr;
+}
+
+// A bound TEX (opcode bits 63..59 11000) or TLD (63..56 0xdc) instruction word's texture index: bits 36..48. TEX's
+// level mode, offset and depth flags sit among its opcode bits (NAK sm50.rs), so only the fixed ones are compared
+constexpr uint64_t kTexIndexMask = 0x1fffull << 36;
+
+bool boundFetch(uint64_t word)
+{
+    return word >> 59 == 0x18 || word >> 56 == 0xdc;
+}
+
+template <typename Visit> void fetchWords(std::vector<uint8_t> &code, Visit visit)
+{
+    for (size_t at = 0; at + 8 <= code.size(); at += 8) {
+        if (at / 8 % 4 == 0)
+            continue;  // a bundle's scheduling word
+        uint64_t word;
+        memcpy(&word, code.data() + at, 8);
+        if (boundFetch(word) && visit(word))
+            memcpy(code.data() + at, &word, 8);
+    }
+}
+
 bool plainState(const raw::PackPipeline &p, const char *key)
 {
     Color c0;
@@ -174,6 +204,32 @@ const raw::PackPipeline *fragmentTemplate(const raw::Pack &pack)
     return best;
 }
 
+const raw::PackPipeline *textureTemplate(const raw::Pack &pack)
+{
+    const raw::PackPipeline *pipelines = pack.section<raw::PackPipeline>(raw::PackPipelines);
+    const raw::PackPipeline *best = nullptr;
+    auto rank = [&](const raw::PackPipeline &p) {
+        return std::make_tuple(colors(pack.string(p.keyString)), p.entries, p.keyHash);
+    };
+    for (uint32_t i = 0; i < pack.header()->pipelines; i++) {
+        const raw::PackPipeline &p = pipelines[i];
+        if (plainState(p, pack.string(p.keyString)) && sampledTexture(p) && (!best || rank(p) < rank(*best)))
+            best = &p;
+    }
+    return best;
+}
+
+bool samplesTexture(const Program &p)
+{
+    std::vector<uint8_t> code = p.code;
+    bool found = false;
+    fetchWords(code, [&](uint64_t &word) {
+        found |= (word & kTexIndexMask) == uint64_t(kTextureIndexPlaceholder) << 36;
+        return false;
+    });
+    return found;
+}
+
 const raw::PackPipeline *fragmentTemplate(const raw::Pack &pack, uint64_t key)
 {
     const raw::PackPipeline *pipelines = pack.section<raw::PackPipeline>(raw::PackPipelines);
@@ -222,6 +278,24 @@ bool fragmentRecord(const raw::Pack &pack, const raw::PackPipeline &tpl, const P
     if (!fs.data.empty())
         p.cbufTypes.push_back(raw::CbufShaderData);
     p.gprs = uint8_t(fs.gprs);
+    if (samplesTexture(fs)) {
+        const raw::PackEntry *texture = sampledTexture(tpl);
+        if (!texture) {
+            why = "the program samples a texture and the template has none with a sampler slot";
+            return false;
+        }
+        // the program's bound fetches read the texture's handle where the set-0 entry holds it, set 0 a buffer of its own
+        std::vector<uint8_t> code(p.image.begin() + 80, p.image.end());
+        fetchWords(code, [&](uint64_t &word) {
+            if ((word & kTexIndexMask) != uint64_t(kTextureIndexPlaceholder) << 36)
+                return false;
+            word = (word & ~kTexIndexMask) | uint64_t(texture->offset / 4) << 36;
+            return true;
+        });
+        std::copy(code.begin(), code.end(), p.image.begin() + 80);
+        p.cbufTypes.push_back(raw::CbufSet);
+        p.boundTextures = uint8_t(p.cbufTypes.size());
+    }
     const uint32_t *blob = pack.section<uint32_t>(raw::PackBlob) + tpl.blob;
     r.blob.assign(blob, blob + tpl.blobDwords);
     // The key's write mask is Metal's: a state whose format its pixel program packs into one word (BGR10_XR, the

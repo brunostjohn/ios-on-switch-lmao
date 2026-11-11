@@ -44,8 +44,8 @@ extension BenchFields {
                 throw BenchInvalid("compare plain is the compressed target against a plain one")
             }
         case "program":
-            guard let op = forms.twod?.op, op != .resolve else {
-                throw BenchInvalid("compare program: a fill or scale against the program drawn over it")
+            guard forms.twod != nil else {
+                throw BenchInvalid("compare program: a 2D operation against the program drawn over it")
             }
         case "copy":
             guard let t = forms.twod, t.op == .scale, t.du == 1 << 32, t.dv == 1 << 32, t.sx == 0, t.sy == 0,
@@ -94,6 +94,12 @@ extension BenchFields {
         guard data.count == width * height * info.bytes else { throw BenchInvalid("source.data is the whole source") }
         return BenchSource(
             format: format, formatRaw: info.raw, width: UInt32(width), height: UInt32(height), data: data)
+    }
+
+    private func byScale(_ op: BenchTwodOp, _ t: [String: Any]) throws -> Bool {
+        guard let value = t["byScale"] else { return false }
+        guard let flag = value as? Bool, op == .resolve else { throw BenchInvalid("twod.byScale: a resolve's") }
+        return flag
     }
 
     private func twod(format: String, size: (Int, Int), rect: [Int], source: BenchSource?) throws -> BenchTwod {
@@ -153,6 +159,6 @@ extension BenchFields {
             sx: try wide("sx", 0), sy: try wide("sy", 0), bilinear: try flag("bilinear", false),
             corner: try flag("corner", false), reference: reference, bracketed: try flag("bracketed", true),
             samples: UInt32(samples), clip: clip, clearFirst: try flag("clearFirst", false),
-            tiled: try flag("tiled", false))
+            tiled: try flag("tiled", false), byScale: try byScale(op, t))
     }
 }

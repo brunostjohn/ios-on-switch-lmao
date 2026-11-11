@@ -11,6 +11,7 @@ from tools.benchloop import columns, protocol, rop
 from tools.benchloop.sm53 import latency
 
 COMPRESSED_FORMATS = ('bgra8unorm', 'rgba8unorm', 'rgb10a2unorm', 'rgba16float')
+DECOMPRESS_SURFACE = 0x02E0
 SIDE = 64
 CHUNKS = 8
 
@@ -39,6 +40,9 @@ def compressed() -> list[dict]:
                 if methods:
                     e |= {'methods': methods, 'restore': restore}
                 out.append(e)
+    first = next(e for e in out if e['id'] == 'comp-bgra8unorm-noblend-0')
+    # DECOMPRESS_SURFACE colour target 0, array index 0, before the draw: accepted on a compressed target, or its error
+    out.append(first | {'id': 'comp-bgra8unorm-decompress-0', 'methods': [[DECOMPRESS_SURFACE, 0]], 'restore': []})
     return out
 
 

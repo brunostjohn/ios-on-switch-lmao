@@ -22,6 +22,12 @@ struct Program {
 const raw::PackPipeline *fragmentTemplate(const raw::Pack &pack);
 // The pack state keyed `key` when it is as plain as fragmentTemplate's choice must be, else null
 const raw::PackPipeline *fragmentTemplate(const raw::Pack &pack, uint64_t key);
+// fragmentTemplate's choice among the states whose set-0 entries include a texture with a sampler slot: the template of a
+// program that samples (its bound TEX/TLD read that texture's handle), null if the pack has none
+const raw::PackPipeline *textureTemplate(const raw::Pack &pack);
+// A bound TEX or TLD whose texture index is this reads the template's texture: fragmentRecord puts its handle's index in
+constexpr uint32_t kTextureIndexPlaceholder = 0x1fff;
+bool samplesTexture(const Program &p);
 // A pack kernel whose program's constant buffer 0 is the root table: its QMD is the one patched.
 const raw::PackKernel *kernelTemplate(const raw::Pack &pack);
 

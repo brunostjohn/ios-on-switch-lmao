@@ -29,6 +29,8 @@ constexpr uint32_t kTemplateBlob[] = {
 // The template's programs' register counts and the vertex program's bound-texture slot
 constexpr uint8_t kTemplateGprs[2] = {0x20, 0x18}, kVertexBoundTextures = 3;
 constexpr uint32_t kSetCtWrite0 = 0x1a00, kSetPixelRegisterCount = 0x214c;
+constexpr uint64_t kTexturedKey = 0x2b2ae4ebb482e4d1ull;
+constexpr uint16_t kTextureOffset = 0x20;
 constexpr uint32_t kRgbaFloat32 = 125;
 
 template <class T>
@@ -48,7 +50,7 @@ protected:
         memcpy(h.magic, "GM20BPK1", 8);
         h.version = raw::kPackVersion;
         h.programs = 2;
-        h.pipelines = 1;
+        h.pipelines = 2;
         raw::PackProgram programs[2] = {};
         for (uint32_t i = 0; i < 2; i++) {
             programs[i].heapOffset = i * 0x100;
@@ -66,10 +68,16 @@ protected:
         pipeline.blobDwords = sizeof kTemplateBlob / 4;
         pipeline.vertexSlot = 1;
         pipeline.vertexStride = 48;
+        // the same state with a sampled texture: the template of a program that samples
+        raw::PackPipeline textured = pipeline;
+        textured.keyHash = kTexturedKey;
+        textured.entries = 1;
+        textured.entry[0] = {kTextureOffset, raw::EntryTexture, 2, 0, raw::SamplerSlot, 0, 0};
+        const raw::PackPipeline both[2] = {pipeline, textured};
         std::vector<uint8_t> heap(0x200, 0x5a);
         std::vector<uint8_t> out(sizeof h);
         put(out, h, raw::PackPrograms, programs, 2);
-        put(out, h, raw::PackPipelines, &pipeline, 1);
+        put(out, h, raw::PackPipelines, both, 2);
         put(out, h, raw::PackBlob, kTemplateBlob, sizeof kTemplateBlob / 4);
         put(out, h, raw::PackStrings, kTemplateKeyString, sizeof kTemplateKeyString);
         put(out, h, raw::PackHeap, heap.data(), heap.size());
@@ -97,6 +105,16 @@ protected:
         p.sph.assign(sph, sph + sizeof bench::kKnownSph);
         p.code.assign(code, code + sizeof bench::kKnownCode);
         p.gprs = bench::kKnownGprs;
+        return p;
+    }
+
+    // TEX.LZ R0, (R4, R5), bound texture <placeholder>, 2D, RGBA: a sampling program's fetch before the app places it
+    static bench::Program sampling()
+    {
+        bench::Program p = known();
+        const uint64_t tex = 0xc038ull << 48 | 7ull << 16 | 4ull << 8 | 255ull << 20 | 2ull << 28 | 0xfull << 31 |
+                             uint64_t(bench::kTextureIndexPlaceholder) << 36 | 1ull << 55;
+        memcpy(p.code.data() + 8, &tex, sizeof tex);
         return p;
     }
 
@@ -150,6 +168,30 @@ TEST_F(BenchRecords, BothProgramsCarryTheirRegisterCounts)
     EXPECT_EQ(pixel.gprs, bench::kKnownGprs);
     EXPECT_NE(pixel.gprs, 0);
     EXPECT_EQ(pixel.boundTextures, 0);
+}
+
+TEST_F(BenchRecords, ASamplingProgramReadsItsTemplatesTextureFromSetZero)
+{
+    EXPECT_FALSE(bench::samplesTexture(known()));
+    ASSERT_TRUE(bench::samplesTexture(sampling()));
+    const raw::PackPipeline *tpl = bench::textureTemplate(pack_);
+    ASSERT_NE(tpl, nullptr);
+    EXPECT_EQ(tpl->keyHash, kTexturedKey);
+    EXPECT_EQ(bench::fragmentTemplate(pack_)->keyHash, kTemplateKey);
+    raw::RuntimeRecord r;
+    std::string why;
+    ASSERT_TRUE(
+        bench::fragmentRecord(pack_, *tpl, sampling(), kRgbaFloat32, 0xbe7c000000000004ull, {}, {}, r, why, true))
+        << why;
+    uint64_t placed;
+    memcpy(&placed, r.programs[1].image.data() + 80 + 8, sizeof placed);
+    EXPECT_EQ(placed >> 36 & 0x1fff, kTextureOffset / 4);
+    EXPECT_EQ(placed & ~(0x1fffull << 36),
+              0xc038ull << 48 | 7ull << 16 | 4ull << 8 | 255ull << 20 | 2ull << 28 | 0xfull << 31 | 1ull << 55);
+    EXPECT_EQ(r.programs[1].cbufTypes.back(), raw::CbufSet);
+    EXPECT_EQ(r.programs[1].boundTextures, r.programs[1].cbufTypes.size());
+    EXPECT_FALSE(bench::fragmentRecord(pack_, *bench::fragmentTemplate(pack_), sampling(), kRgbaFloat32,
+                                       0xbe7c000000000005ull, {}, {}, r, why));
 }
 
 TEST_F(BenchRecords, ATemplateIsTakenByItsKeyOnlyWhenPlain)

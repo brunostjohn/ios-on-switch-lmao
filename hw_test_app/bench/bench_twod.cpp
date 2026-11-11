@@ -114,6 +114,27 @@ raw::ProbeOp gridFill(const raw::Texture &ms, const raw::Texture &read, const ra
     return op;
 }
 
+// The sample grid read into `into` by a scale of the experiment's sample mode, filter and origin, in place of the
+// driver's resolve, which is this with du = 2 << 32 a sampled axis, sx = du / 2, bilinear, corner (probeResolveOp)
+raw::ProbeOp gridScale(const switch_bench_experiment &x, const raw::Texture &ms, const raw::Texture &into,
+                       const raw::fx::MipChain &grid)
+{
+    const switch_bench_twod &w = x.twod;
+    raw::ProbeOp op;
+    op.kind = raw::ProbeOpKind::Scale;
+    op.src = surface(ms, 0, ms.width << grid.sxLog2, ms.height << grid.syLog2);
+    op.dst = surface(into);
+    op.dw = into.width;
+    op.dh = into.height;
+    op.du = w.du;
+    op.dv = w.dv;
+    op.sx = w.sx;
+    op.sy = w.sy;
+    op.bilinear = w.bilinear != 0;
+    op.corner = w.corner != 0;
+    return op;
+}
+
 // The pack's resolve state drawn from `ms` into `into`, as RawMetalEncode.mm's resolve does it
 bool resolve3d(raw::CommandBuffer &cb, raw::Device &d, const raw::Texture &ms, const raw::Texture &into, Submission &s)
 {
@@ -223,6 +244,7 @@ void compare(switch_bench &b, const switch_bench_experiment &x, const raw::Textu
     if (x.compare == SWITCH_BENCH_COMPARE_PROGRAM) {
         raw::Pipeline *pipeline = pixelPipeline(b, x, r, true);
         t.image = read;
+        t.linear = x.twod.op == SWITCH_BENCH_TWOD_SCALE && x.twod.bilinear;
         ran = pipeline && s.render(t, pipeline, 1, gpu, wall);
     } else if (x.compare == SWITCH_BENCH_COMPARE_COPY) {
         ran = s.record(
@@ -325,6 +347,14 @@ void runTwod(switch_bench &b, const switch_bench_experiment &x, switch_bench_res
                                     fillGpu, fillWall);
             ran = ran && s.record(
                              [&](raw::CommandBuffer &cb) {
+                                 if (resolving && w.resolve_by_scale) {
+                                     raw::BlitEncoder *e = cb.blit();
+                                     if (!e)
+                                         return s.refused("the raw path opened no blit encoder");
+                                     e->probe(gridScale(x, ms, t, grid), &ms, t);
+                                     e->end();
+                                     return true;
+                                 }
                                  if (resolving)
                                      return cb.probeResolve(ms, t) ||
                                             s.refused("the 2D engine has no resolve for the grid");

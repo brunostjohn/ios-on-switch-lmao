@@ -12,11 +12,12 @@
 struct switch_bench {
     std::unique_ptr<raw::Device> device;
     const raw::PackPipeline *fragment = nullptr;
+    const raw::PackPipeline *textured = nullptr;  // the template of a program that samples (bench::textureTemplate)
     const raw::PackKernel *kernel = nullptr;
     raw::Texture image;
-    raw::Sampler sampler;
+    raw::Sampler sampler, linear;
     std::string pack;
-    bool imageMade = false, samplerMade = false;
+    bool imageMade = false, samplerMade = false, linearMade = false;
     uint64_t records = 0;
     std::string error;
 
@@ -34,6 +35,7 @@ struct Target {
     // A colour with no CPU view (compressible memory): its texels copied in from here before each pass and out after it
     raw::Texture *staging = nullptr;
     const raw::Texture *image = nullptr;  // what the template's texture entries sample; null: the bench's picture
+    bool linear = false;                  // they sample it filtered (else nearest)
 };
 
 void fail(switch_bench_result &r, uint32_t status, const std::string &why);

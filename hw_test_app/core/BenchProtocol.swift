@@ -69,7 +69,7 @@ public enum BenchProtocol {
     public static let maxChain = 3
     public static let twodKeys: Set<String> = [
         "op", "fmt2d", "colorFormat", "color", "du", "dv", "sx", "sy", "bilinear", "corner", "reference", "bracketed",
-        "samples", "clip", "clearFirst", "tiled",
+        "samples", "clip", "clearFirst", "tiled", "byScale",
     ]
     public static let sourceKeys: Set<String> = ["format", "width", "height", "data"]
     /// Target formats the 2D engine names a surface format for (raw_probe_ops.h probeTwodFormat)
@@ -122,6 +122,8 @@ public struct BenchTwod: Equatable, Sendable {
     public let clearFirst: Bool
     /// A block-linear target (as a private Metal texture is), its texels in and out through the copy engine
     public let tiled: Bool
+    /// A resolve read by a scale of the sample grid with this operation's du, dv, sx, sy, bilinear and corner
+    public let byScale: Bool
 }
 
 /// What a scale, resolve or copy reads: texels the experiment gives, else the app's own picture

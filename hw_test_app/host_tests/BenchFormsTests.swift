@@ -191,6 +191,30 @@ final class BenchFormsTests: XCTestCase {
         XCTAssertNotNil(why(entries[5]))
     }
 
+    func testAResolveMayBeReadByAScaleAndComparedWithAProgram() throws {
+        let entries = try decode([
+            [
+                "id": "sweep", "kind": "twod", "target": target("bgra8unorm", 32, 32),
+                "twod": ["op": "resolve", "samples": 4, "byScale": true, "du": 1 << 33, "sx": 1 << 28, "corner": true],
+            ],
+            [
+                "id": "vsprog", "kind": "twod", "target": target("bgra8unorm", 32, 32),
+                "twod": ["op": "resolve", "samples": 4], "compare": "program", "program": program,
+            ],
+            [
+                "id": "fill-byscale", "kind": "twod", "target": target("bgra8unorm", 16, 16),
+                "twod": ["op": "fill", "byScale": true],
+            ],
+        ])
+        guard case .experiment(let sweep) = entries[0], let t = sweep.twod else {
+            return XCTFail(why(entries[0]) ?? "")
+        }
+        XCTAssertTrue(t.byScale && t.corner)
+        XCTAssertEqual(t.sx, 1 << 28)
+        XCTAssertNil(why(entries[1]))
+        XCTAssertNotNil(why(entries[2]))
+    }
+
     func testTheHistogramCountsEachTexelsLargestChannelDifference() {
         let a = Data([10, 20, 30, 40, 0, 0, 0, 0, 255, 255, 255, 255])
         let b = Data([10, 21, 30, 38, 0, 0, 0, 0, 0, 255, 255, 255])

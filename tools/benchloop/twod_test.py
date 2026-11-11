@@ -47,6 +47,21 @@ class TwodTest(unittest.TestCase):
         self.assertEqual(row['fill_exact'], row['fill_cells'])
         self.assertEqual(twod.background(cells['fill-own-afterclear-bgra8unorm']), bytes(4))
 
+    def test_a_resolve_is_judged_against_the_box_mean_of_its_samples(self) -> None:
+        cell = next(e for e in twod.generate() if e['id'] == 'resolve-sweep-corner-bil-p00')
+        self.assertEqual((cell['twod']['sx'], cell['twod']['du']), (1 << 32, 2 << 32))
+        src, side = protocol.unb64(cell['source']['data']), 64
+        box = bytes(
+            (sum(src[((2 * y + j) * side + 2 * x + i) * 4 + c] for j in (0, 1) for i in (0, 1)) + 2) >> 2
+            for y in range(32)
+            for x in range(32)
+            for c in range(4)
+        )
+        self.assertEqual(twod.box_mismatches(cell, box)['nearest_up'], 0)
+        self.assertGreater(twod.box_mismatches(cell, box)['truncate'], 0, 'the source has sums that round')
+        sweep = [e for e in twod.generate() if e['id'].startswith('resolve-sweep-')]
+        self.assertEqual(len(sweep), 2 * (17 + 17))
+
     def test_fills_run_and_are_judged_on_the_fake_device(self) -> None:
         planned = [e for e in twod.generate() if e['id'] in ('fill-own-bgra8unorm', 'fill-own-ref-rgba8unorm')]
         with tempfile.TemporaryDirectory() as scratch:
