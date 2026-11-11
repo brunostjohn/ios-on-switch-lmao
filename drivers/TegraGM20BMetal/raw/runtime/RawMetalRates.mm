@@ -264,17 +264,32 @@ size_t raw_metal_encode_rates(char *out, size_t size)
     if (!encodes)
         return 0;
     lastEncodes += encodes;
-    mach_timebase_info_data_t base;
-    mach_timebase_info(&base);
-    const double tickUs = double(base.numer) / double(base.denom) / 1000.0, usPerTick = tickUs / double(encodes);
-    double us[raw::kEncodeParts], calls[raw::kEncodeParts];
+    const double tickUs = 1.0 / raw::encodeTicksPerUs(), usPerTick = tickUs / double(encodes);
+    static uint64_t lastSelf[raw::kEncodeParts], lastCounts[raw::kEncodeCounts], lastMallocEncodes;
+    double us[raw::kEncodeParts], self[raw::kEncodeParts], calls[raw::kEncodeParts], counts[raw::kEncodeCounts];
     for (size_t i = 0; i < raw::kEncodeParts; ++i) {
-        const uint64_t t = k.ticks[i].load(std::memory_order_relaxed), n = k.calls[i].load(std::memory_order_relaxed);
+        const uint64_t t = k.ticks[i].load(std::memory_order_relaxed), n = k.calls[i].load(std::memory_order_relaxed),
+                       s = k.self[i].load(std::memory_order_relaxed);
         us[i] = double(t - lastTicks[i]) * usPerTick;
+        self[i] = double(s - lastSelf[i]) * usPerTick;
         calls[i] = double(n - lastCalls[i]) / double(encodes);
         lastTicks[i] = t;
+        lastSelf[i] = s;
         lastCalls[i] = n;
     }
+    const uint64_t mallocEncodes = k.mallocEncodes.load(std::memory_order_relaxed) - lastMallocEncodes;
+    lastMallocEncodes += mallocEncodes;
+    for (size_t i = 0; i < raw::kEncodeCounts; ++i) {
+        const uint64_t n = k.counts[i].load(std::memory_order_relaxed);
+        counts[i] = double(n - lastCounts[i]) / double(encodes);
+        lastCounts[i] = n;
+    }
+    const double mallocs = mallocEncodes ? counts[size_t(raw::EncodeCount::Mallocs)] * double(encodes) /
+                                               double(mallocEncodes)
+                                         : -1.0,
+                 frees = mallocEncodes ? counts[size_t(raw::EncodeCount::Frees)] * double(encodes) /
+                                             double(mallocEncodes)
+                                       : -1.0;
     const uint64_t wall = k.wallTicks.load(std::memory_order_relaxed);
     const double wallUs = double(wall - lastWall) * usPerTick;
     lastWall = wall;
@@ -314,7 +329,14 @@ size_t raw_metal_encode_rates(char *out, size_t size)
     auto count = [&](EncodePart p) {
         return calls[size_t(p)];
     };
-    const int n = snprintf(
+    auto own = [&](EncodePart p) {
+        return self[size_t(p)];
+    };
+    auto events = [&](raw::EncodeCount c) {
+        return counts[size_t(c)];
+    };
+    const double draws = count(EncodePart::Draw);
+    const int head = snprintf(
         out, size,
         "encode n=%llu wall=%.0f res=%.0f loop=%.0f state=%.0f pass=%.0f splan=%.0f fuse=%.0f pend=%.0f/%.1f "
         "draw=%.0f/%.1f prep=%.0f geo=%.0f desc=%.0f bar=%.0f slaunch=%.0f/%.1f blit=%.0f comp=%.0f tail=%.0f "
@@ -335,7 +357,25 @@ size_t raw_metal_encode_rates(char *out, size_t size)
         slotsCompared, slotsInTables, spans, spanNs,
         segBinds, segSkips, segWords, (unsigned long long)same, (unsigned long long)recent,
         (unsigned long long)fresh);
-    return n > 0 ? std::min(size_t(n), size - 1) : 0;
+    if (head <= 0 || size_t(head) >= size)
+        return head > 0 ? size - 1 : 0;
+    // self times: walk= the loop's own (the plan walk between its parts), res/tail= the phases', state/draw/prep/
+    // pend= theirs without the parts nested in them; apply= the planned bindings applied, tex= a binding table's texture
+    // and sampler entries, retire= the facade's after the encode; per command buffer the events of
+    // raw_encode_profile.h EncodeCount (mal/free -1: not counted), applied= per draw, useadd= the uses that reached
+    // the job's list
+    const int tail = snprintf(
+        out + head, size - head,
+        " walk=%.0f rself=%.0f tself=%.0f sself=%.0f dself=%.0f pself=%.0f eself=%.0f apply=%.0f tex=%.0f retire=%.0f "
+        "mal=%.1f free=%.1f lk=%.1f snd=%.1f applied=%.2f/d useadd=%.1f/%.1f descb=%.1f descu=%.1f geov=%.1f",
+        own(EncodePart::Loop), own(EncodePart::Resources), own(EncodePart::Tail), own(EncodePart::State),
+        own(EncodePart::Draw), own(EncodePart::Prepare), own(EncodePart::PassEnd), part(EncodePart::Apply),
+        part(EncodePart::Textures), part(EncodePart::Retire), mallocs, frees, events(raw::EncodeCount::Locks),
+        events(raw::EncodeCount::Sends), draws ? events(raw::EncodeCount::Applied) / draws : 0.0,
+        events(raw::EncodeCount::UseAdds), events(raw::EncodeCount::Uses), events(raw::EncodeCount::DescriptorBuilds),
+        events(raw::EncodeCount::DescriptorUploads), events(raw::EncodeCount::GeometryVertices));
+    const size_t n = size_t(head) + (tail > 0 ? size_t(tail) : 0);
+    return std::min(n, size - 1);
 }
 
 size_t raw_metal_fetch_keys(char *out, size_t size)

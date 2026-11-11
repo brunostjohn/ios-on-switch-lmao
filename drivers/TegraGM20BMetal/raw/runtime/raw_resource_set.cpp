@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #include "raw_resource_set.h"
+#include "raw_encode_profile.h"
 
 #include <IOKit/IOReturn.h>
 #include <mach/kern_return.h>
@@ -123,7 +124,7 @@ void ResourceSet::view(SetView &v) const
 {
     if (v.version == version_.load(std::memory_order_acquire))
         return;
-    std::lock_guard<std::mutex> l(lock_);
+    RAW_ENCODE_LOCK(l, lock_);
     v.set = members_.empty() ? 0 : set_;
     v.generation = generation_;
     v.members = members_;

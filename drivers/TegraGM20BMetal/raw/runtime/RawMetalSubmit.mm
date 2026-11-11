@@ -2,6 +2,7 @@
 #import "RawMetalInternal.h"
 #include "RawMetalPlanExecution.h"
 #import "RawMetalEventJobs.h"
+#include "raw_encode_mallocs.h"
 #include "raw_order.h"
 
 // ---- commit: order between the two drivers ----
@@ -202,18 +203,26 @@ bool submitRange(RMCommandBuffer *cb)
         const uint64_t began = nowUs();
         cb->_frame.mark(switch_frame::EncodeStart);
         raw::EncodeProfile profile;
-        const uint64_t profileTicks = mach_absolute_time();
+        std::optional<raw::EncodeMallocs> mallocs(std::in_place, profile);
+        const uint64_t profileTicks = raw::encodeTicks();
         raw::tEncodeProfile = &profile;
 #endif
         size_t refusedEncoder = range.to;
         const bool encoded = encodeRaw(cb, range.from, range.to, &why, &refusedEncoder);
 #if SWITCH_FRAME_TIMELINE
-        raw::tEncodeProfile = nullptr;
-        r.raw->stats.encode.add(profile, mach_absolute_time() - profileTicks);
+        const uint64_t wallTicks = raw::encodeTicks() - profileTicks;
         cb->_frame.mark(switch_frame::EncodeEnd);
         RAW_DIAGNOSTIC(r.stats.encodeUs += nowUs() - began);
+        const auto folded = [&, wallTicks] {
+            raw::tEncodeProfile = nullptr;
+            mallocs.reset();
+            r.raw->stats.encode.add(profile, wallTicks);
+        };
 #endif
         if (!encoded) {
+#if SWITCH_FRAME_TIMELINE
+            folded();
+#endif
             {
                 std::lock_guard<std::mutex> l(cb->_lock);
                 priorError = cb->_segError;
@@ -242,9 +251,15 @@ bool submitRange(RMCommandBuffer *cb)
         if (!r.gpuOrder)
             orderReturned();
         countDriver(1);
-        retireRawRange(cb, range.from, range.to);
-        if (last)
-            scheduled(cb);
+        {
+            RAW_ENCODE_SPAN(Retire);
+            retireRawRange(cb, range.from, range.to);
+            if (last)
+                scheduled(cb);
+        }
+#if SWITCH_FRAME_TIMELINE
+        folded();
+#endif
     } else {
         cb->_gpuPrefixEligible = false;
         if (r.gpuOrder && r.rawSinceM2v) {

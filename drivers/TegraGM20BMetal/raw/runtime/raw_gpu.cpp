@@ -2582,7 +2582,7 @@ bool Device::samplerVariant(Sampler &s, uint8_t map)
     }
     uint32_t w[8];
     samplerHeader(d, w);
-    std::lock_guard<std::mutex> l(lock_);
+    RAW_ENCODE_LOCK(l, lock_);
     uint32_t tsc = 0;
     if (!takeTsc(tsc))
         return false;
@@ -3223,7 +3223,7 @@ CommandBuffer *Device::begin()
     cb.segmentBinds_ = 0;
     cb.drawn_ = false;
     {
-        std::lock_guard<std::mutex> l(lock_);
+        RAW_ENCODE_LOCK(l, lock_);
         reapNativeSurfaces();
         if (commitCount_ % 64 == 0)
             trimBackings();
@@ -3320,7 +3320,7 @@ RenderEncoder *CommandBuffer::render(const PassDesc &pass)
         if (const Texture *t = pass.color[j].texture; t && !t->memoryless && (t->blockLinear || t->shadowTarget))
             blockLinear = true;
     if (zeta && zeta->memoryless) {
-        std::lock_guard<std::mutex> l(dev_->lock_);
+        RAW_ENCODE_LOCK(l, dev_->lock_);
         Texture *b = dev_->backing(planeShaped(*zeta, e.rot_));
         if (!b)
             return nullptr;
@@ -3348,7 +3348,7 @@ RenderEncoder *CommandBuffer::render(const PassDesc &pass)
                 RAW_DIAGNOSTIC(dev_->stats.rtUnalignedPitch = t->pitch);
                 RAW_DIAGNOSTIC(dev_->stats.rtUnalignedVa = uint32_t(t->va & 255));
             }
-            std::lock_guard<std::mutex> l(dev_->lock_);
+            RAW_ENCODE_LOCK(l, dev_->lock_);
             Texture *b = dev_->backing(*t, scratchTags[j], blockLinear, kCopyEngineReadsCompressed);
             if (!b || !b->renderable)
                 return nullptr;
@@ -3358,7 +3358,7 @@ RenderEncoder *CommandBuffer::render(const PassDesc &pass)
             continue;
         }
         if (t->memoryless) {  // back it for this pass
-            std::lock_guard<std::mutex> l(dev_->lock_);
+            RAW_ENCODE_LOCK(l, dev_->lock_);
             Texture *b =
                 dev_->backing(planeShaped(*t, e.rot_), scratchTags[j], blockLinear, !(pass.storageMask >> j & 1));
             if (!b)
@@ -3470,9 +3470,12 @@ static uint64_t rowStorageBytes(uint32_t pitch, uint32_t width, uint32_t height,
 void CommandBuffer::useAddress(uint64_t va, uint64_t bytes, bool write)
 {
     RAW_ENCODE_SPAN(Use);
-    if (va && dev_->k_.exactJobs() && !dev_->member(va, bytes ? bytes : 1))
+    RAW_ENCODE_COUNT(Uses);
+    if (va && dev_->k_.exactJobs() && !dev_->member(va, bytes ? bytes : 1)) {
+        RAW_ENCODE_COUNT(UseAdds);
         surfaces_.addAddress(va, bytes ? bytes : 1, write,
                              bytes && bytes <= UINT32_MAX ? TegraGM20BSurfaceRange : 0u);
+    }
 }
 
 uint64_t CommandBuffer::batchLimit() const
@@ -3483,20 +3486,24 @@ uint64_t CommandBuffer::batchLimit() const
 void CommandBuffer::use(const Buffer &buffer, bool write)
 {
     RAW_ENCODE_SPAN(Use);
+    RAW_ENCODE_COUNT(Uses);
     buffersWritten_ |= write;
     externalWrites_ |= write && buffer.hostVisible;
     const bool ranged = dev_->k_.exactJobs() && buffer.length && buffer.length <= UINT32_MAX;
     if (!ranged || !importContains(buffer.import, buffer.va, buffer.length))
         use(buffer.import, write);
-    if (buffer.va && buffer.length && dev_->k_.exactJobs() && !dev_->member(buffer.va, buffer.length))
+    if (buffer.va && buffer.length && dev_->k_.exactJobs() && !dev_->member(buffer.va, buffer.length)) {
+        RAW_ENCODE_COUNT(UseAdds);
         surfaces_.addAddress(buffer.va, buffer.length, write,
                              (buffer.hostVisible ? TegraGM20BSurfaceHostWritten : 0u) |
                              (ranged ? TegraGM20BSurfaceRange : 0u));
+    }
 }
 
 void CommandBuffer::use(const Texture &texture, bool write)
 {
     RAW_ENCODE_SPAN(Use);
+    RAW_ENCODE_COUNT(Uses);
     const Texture *view = write ? &texture : readTexture(&texture);
     const auto storage = view->storageRange();
     const bool ranged = dev_->k_.exactJobs() && storage.bytes && storage.bytes <= UINT32_MAX;
@@ -3505,10 +3512,12 @@ void CommandBuffer::use(const Texture &texture, bool write)
     const bool hostVisible = storage.hostVisible || (view->import && !view->import->id);
     externalWrites_ |= hostVisible && write;
     if (view->va && dev_->k_.exactJobs() &&
-        !dev_->member(storage.bytes ? storage.va : view->va, storage.bytes ? storage.bytes : 1))
+        !dev_->member(storage.bytes ? storage.va : view->va, storage.bytes ? storage.bytes : 1)) {
+        RAW_ENCODE_COUNT(UseAdds);
         surfaces_.addAddress(storage.bytes ? storage.va : view->va, storage.bytes ? storage.bytes : 1, write,
                              (hostVisible ? TegraGM20BSurfaceHostWritten : 0u) |
                              (ranged ? TegraGM20BSurfaceRange : 0u));
+    }
 }
 
 // Read ownership remains held until every consuming GPU job is published. Releasing after the CPU copy alone
@@ -3540,7 +3549,7 @@ bool CommandBuffer::acquireGeometry(const Buffer &buffer, const uint8_t *cpu, ui
         geometryRefusedBuffers_.end())
         return false;
     RAW_ENCODE_SPAN(GeometryAcquire);
-    std::lock_guard<std::mutex> lock(d.lock_);
+    RAW_ENCODE_LOCK(lock, d.lock_);
     Bo bo;
     if (buffer.import) {
         bo = buffer.import->bo;
@@ -3601,7 +3610,7 @@ void CommandBuffer::releaseGeometry()
     if (geometryReads_.empty())
         return;
     RAW_ENCODE_SPAN(GeometryRelease);
-    std::lock_guard<std::mutex> lock(dev_->lock_);
+    RAW_ENCODE_LOCK(lock, dev_->lock_);
     for (const auto &read : geometryReads_)
         if (!dev_->k_.cpuAccess(read.bo, read.offset, read.bytes, read.access, false))
             os_log_error(os_log_create("com.brunostjohn.switch.TegraGM20BMetal", "raw"),
@@ -3635,6 +3644,7 @@ void CommandBuffer::foldCounts()
 bool CommandBuffer::commit(uint32_t &seqno)
 {
     RAW_ENCODE_SPAN(Commit);
+    RAW_ENCODE_COUNT(GeometryVertices, GeometryBudget().vertices - geometryBudget_.vertices);
     if (nativeError)
         return false;
     struct ReleaseReads {
@@ -3667,7 +3677,7 @@ bool CommandBuffer::commit(uint32_t &seqno)
         ~RollbackInvalidation()
         {
             if (invalidates && !published) {
-                std::lock_guard<std::mutex> lock(device.lock_);
+                RAW_ENCODE_LOCK(lock, device.lock_);
                 device.heapInvalidated_ = before;
             }
         }
@@ -3675,7 +3685,7 @@ bool CommandBuffer::commit(uint32_t &seqno)
 
     uint64_t slmGiven = 0, slmVa = 0;
     {
-        std::lock_guard<std::mutex> l(d.lock_);
+        RAW_ENCODE_LOCK(l, d.lock_);
         if (shaderInvalidate_ && d.heapPlaced_ != d.heapInvalidated_) {
             *shaderInvalidate_ |= kInvalidateInstruction;
             invalidates = true;
@@ -3721,7 +3731,7 @@ bool CommandBuffer::commit(uint32_t &seqno)
     __asm__ volatile("dsb sy" ::: "memory");
 #endif
     if (d.k_.exactJobs()) {
-        std::lock_guard<std::mutex> lock(d.lock_);
+        RAW_ENCODE_LOCK(lock, d.lock_);
         auto control = [&](const Bo &bo, bool write) {
             if (bo.handle && !d.member(bo))
                 surfaces_.add(bo.handle, write);
@@ -3829,7 +3839,7 @@ bool CommandBuffer::commit(uint32_t &seqno)
     d.extrasLive_ = extrasLive_;
     d.heldSegment_ = heldSegment_;
     {
-        std::lock_guard<std::mutex> l(d.lock_);
+        RAW_ENCODE_LOCK(l, d.lock_);
         const uint64_t now = compClock();
         for (Texture *b : backings_)
             for (Device::Backing *k : d.backings_)
@@ -3860,7 +3870,7 @@ void CommandBuffer::abandon()
     releaseNativeReads();
     Device &d = *dev_;
     {
-        std::lock_guard<std::mutex> l(d.lock_);
+        RAW_ENCODE_LOCK(l, d.lock_);
         d.closedCount_++;
     }
     d.overflowing_ = false;
@@ -4745,6 +4755,7 @@ bool RenderEncoder::prepare(Pipeline *pl, uint32_t primitive, int32_t first, uin
     const auto *prepared = descriptors_.resolve(
         pl, bindingRevision_,
         [&](PreparedDescriptorWords &prepared) {
+            RAW_ENCODE_COUNT(DescriptorBuilds);
             static_assert(sizeof(prepared.words) == kSetBytes);
             uint32_t *set = prepared.words.data();
             for (uint32_t i = 0; i < r.entries; i++) {
@@ -4792,6 +4803,7 @@ bool RenderEncoder::prepare(Pipeline *pl, uint32_t primitive, int32_t first, uin
                     at[3] = 0;
                     continue;
                 }
+                RAW_ENCODE_SPAN(Textures);
                 uint32_t tic = 0, tsc = 0;
                 if (e.kind == EntryDepthTest || e.kind == EntryStencilTest) {
                     const bool depth = e.kind == EntryDepthTest;
@@ -4871,6 +4883,7 @@ bool RenderEncoder::prepare(Pipeline *pl, uint32_t primitive, int32_t first, uin
             return true;
         },
         [&](const DescriptorWords &words) {
+            RAW_ENCODE_COUNT(DescriptorUploads);
             uint64_t address = 0;
             uint8_t *upload = d.alloc(d.upload_, sizeof(words), 256, address);
             memcpy(upload, words.data(), sizeof(words));
@@ -5287,7 +5300,7 @@ bool RenderEncoder::prepareShaderTests(const Pipeline &pipeline, const char **wh
         shape.format = format;
         shape.samples = samples_;
         {
-            std::lock_guard<std::mutex> lock(dev_->lock_);
+            RAW_ENCODE_LOCK(lock, dev_->lock_);
             slot = dev_->backing(shape, tag, true, false);
         }
         if (!slot)
@@ -5411,7 +5424,7 @@ uint32_t Device::levelTic(Texture &t, uint32_t level)
     uint32_t &slot = t.chain->levelTic[level];
     if (const uint32_t made = __atomic_load_n(&slot, __ATOMIC_ACQUIRE))
         return made;
-    std::lock_guard<std::mutex> l(lock_);
+    RAW_ENCODE_LOCK(l, lock_);
     uint32_t tic = slot;
     if (!tic && (tic = allocTic())) {
         uint32_t w[8];
@@ -5435,7 +5448,7 @@ uint32_t RenderEncoder::passViewTic(const Texture &t, uint32_t word0)
 
 uint32_t Device::viewTic(const Texture &t, uint32_t word0)
 {
-    std::lock_guard<std::mutex> l(lock_);
+    RAW_ENCODE_LOCK(l, lock_);
     if (!t.tic)
         return 0;
     const auto views = viewTics_.equal_range(t.tic);

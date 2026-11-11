@@ -42,7 +42,7 @@ void noteSurfaceWrite(IOSurfaceRef s)
 {
     if (!gConverted.load(std::memory_order_relaxed))
         return;
-    std::lock_guard<std::mutex> l(gLock);
+    RAW_ENCODE_LOCK(l, gLock);
     auto it = gSurfaces.find(IOSurfaceGetID(s));
     if (it != gSurfaces.end())
         it->second.writes++;
@@ -50,6 +50,7 @@ void noteSurfaceWrite(IOSurfaceRef s)
 
 static void written(void *o)
 {
+    RAW_ENCODE_COUNT(Sends, 2);
     id object = (__bridge id)o;
     if (![object isKindOfClass:[RMTexture class]])
         return;

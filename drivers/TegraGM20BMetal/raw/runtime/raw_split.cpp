@@ -105,7 +105,7 @@ bool Device::placeSplitPrograms(const SplitSource &source, PlacedProgram &fs, ui
 // state draws whole from then on).
 SplitState *Device::makeSplit(Pipeline &pl)
 {
-    std::lock_guard<std::mutex> l(lock_);
+    RAW_ENCODE_LOCK(l, lock_);
     if (pl.split)
         return pl.split;
     const SplitSource *source = pl.splitSource;

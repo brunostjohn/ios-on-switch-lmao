@@ -12,6 +12,8 @@ struct NativePlanSink {
 
     void buffer(uint32_t stage, uint32_t slot, const raw::BufferBinding &binding)
     {
+        RAW_ENCODE_SPAN(Apply);
+        RAW_ENCODE_COUNT(Applied);
         if (binding.source == raw::BufferBinding::Source::Offset) {
             if (stage == 3)
                 compute->setBufferOffset(slot, binding.offset);
@@ -43,6 +45,8 @@ struct NativePlanSink {
     // A vertex texture (stage 1) binds nothing: no raw record reads one, raw_direct.cpp refuses a vertex-stage handle
     void texture(uint32_t stage, uint32_t slot, void *value)
     {
+        RAW_ENCODE_SPAN(Apply);
+        RAW_ENCODE_COUNT(Applied);
         RMTexture *object = (__bridge RMTexture *)value;
         if (stage == 3) {
             compute->setTexture(slot, object ? &object->_raw : nullptr);
@@ -54,6 +58,8 @@ struct NativePlanSink {
 
     void sampler(uint32_t stage, uint32_t slot, void *value)
     {
+        RAW_ENCODE_SPAN(Apply);
+        RAW_ENCODE_COUNT(Applied);
         RMSampler *object = (__bridge RMSampler *)value;
         if (stage == 3)
             compute->setSampler(slot, object ? &object->_raw : nullptr);
@@ -66,6 +72,8 @@ struct NativePlanSink {
 
     void raster(const raw::RasterState &next, const raw::RasterState *previous)
     {
+        RAW_ENCODE_SPAN(Apply);
+        RAW_ENCODE_COUNT(Applied);
         using R = raw::RasterState;
         using raw::rasterChanged;
         if (rasterChanged(next, previous, R::Pipeline, &R::pipeline) ||
