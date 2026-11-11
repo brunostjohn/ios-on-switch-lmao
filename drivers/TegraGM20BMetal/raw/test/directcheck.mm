@@ -137,6 +137,7 @@ int main(int argc, char **argv)
             [&](const std::string &line, bool ours, probe::State &s) {
                 states++;
                 raw::ProbeTextures textures = probe::probeTextures(line, ours);
+                textures.cubic = s.cubic;
                 // DIRECTCHECK_TESTS=<n>: each state's variant beside depth or stencil tests of class n
                 // (raw_fragment_tests.h FragmentTests), the one a fetch without a storage form takes, against the
                 // pack's record of it (PipelineVariantRecord)

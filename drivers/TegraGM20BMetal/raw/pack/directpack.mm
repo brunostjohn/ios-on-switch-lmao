@@ -224,7 +224,9 @@ int main(int argc, char **argv)
         Counts counts;
         probe::eachState(dev, qc, own, standIn, probe::corpusLines(text, own != nil),
                          [&](const std::string &line, bool ours, probe::State &s) {
-                             makeState(direct, w, line, probe::probeTextures(line, ours), s, counts);
+                             raw::ProbeTextures textures = probe::probeTextures(line, ours);
+                             textures.cubic = s.cubic;
+                             makeState(direct, w, line, textures, s, counts);
                          });
         uint32_t kernels[3] = {};
         probe::eachKernel(

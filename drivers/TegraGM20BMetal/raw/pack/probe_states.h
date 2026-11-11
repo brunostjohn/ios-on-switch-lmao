@@ -9,6 +9,7 @@
 #include <string>
 #include <vector>
 #import "../runtime/RawPipelineKey.h"
+#include "../runtime/raw_cubic.h"
 
 namespace probe {
 
@@ -109,7 +110,30 @@ struct State {
     std::string key, label;
     MTLRenderPipelineDescriptor *d;
     unsigned vertexBuffer = 99, vertexStride = 0;
+    raw::CubicBinds cubic;  // a line naming the state's cubic variant (" | cubic ...", raw_cubic.h): its binds
 };
+
+// A line's " | cubic s<slot>:<s><t><r><border><n|p>... t<slot>:<MTLPixelFormat>..." segment (raw_cubic.h key) as binds
+inline bool cubicBinds(const std::string &segment, raw::CubicBinds &out)
+{
+    const std::vector<std::string> tokens = split(segment);
+    for (size_t i = 1; i < tokens.size(); i++) {
+        const std::string &t = tokens[i];
+        const size_t colon = t.find(':');
+        if (colon == std::string::npos || colon < 2)
+            return false;
+        const uint8_t slot = uint8_t(atoi(t.c_str() + 1));
+        const std::string value = t.substr(colon + 1);
+        if (t[0] == 's' && value.size() == 5 && (value[4] == 'n' || value[4] == 'p'))
+            out.samplers.push_back({slot, uint8_t(value[0] - '0'), uint8_t(value[1] - '0'), uint8_t(value[2] - '0'),
+                                    uint8_t(value[3] - '0'), value[4] == 'n'});
+        else if (t[0] == 't')
+            out.textures.push_back({slot, uint32_t(strtoul(value.c_str(), nullptr, 10))});
+        else
+            return false;
+    }
+    return !out.empty();
+}
 
 // precompile.mm's R-line parser (the frontend's journal format); the state's key is the one the runtime computes of the
 // descriptor made (raw::pipelineKey), `framework` the library's (<name>.framework/default.metallib), "" for QuartzCore's.
@@ -185,9 +209,12 @@ inline bool parseState(id<MTLLibrary> qc, const std::string &line, State &s, con
         const bool isLinked = tag == "vl " || tag == "vp " || tag == "fl " || tag == "fp ";
         if (isLinked && !linkedFunction(d, qc, segment, linked))
             return false;
+        if (segment.rfind("cubic ", 0) == 0 && !cubicBinds(segment, s.cubic))
+            return false;
         at = next;
     }
-    s.key = raw::pipelineKey(d, &vertex, d.fragmentFunction ? &fragment : nullptr, linked, framework);
+    s.key = raw::pipelineKey(d, &vertex, d.fragmentFunction ? &fragment : nullptr, linked, framework) +
+            (s.cubic.empty() ? std::string() : s.cubic.key());
     s.d = d;
     return true;
 }

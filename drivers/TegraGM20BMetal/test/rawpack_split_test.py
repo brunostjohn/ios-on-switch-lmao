@@ -67,6 +67,11 @@ class StateKeyTest(unittest.TestCase):
             ' #0:36:6504 | fp clampToEdges_v1 as=custom_fn #1:33:00000000 | l RenderBox',
         )
 
+    def test_a_cubic_variant_is_keyed_after_its_states_framework(self):
+        # raw_cubic.h CubicBinds::key after the state's key, as RawMetalCubic.mm names the variant
+        line = LINKED + 'cubic s0:0000n  t0:80 | '
+        self.assertEqual(rawpack.state_key(line), rawpack.state_key(LINKED) + ' | cubic s0:0000n t0:80')
+
 
 class ProbeLogTest(unittest.TestCase):
     def test_an_empty_submission_is_no_probes(self):
