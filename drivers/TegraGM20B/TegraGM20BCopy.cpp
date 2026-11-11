@@ -8,11 +8,13 @@
 #include "TegraGM20BTiled.h"
 #include "SwitchGpuCopyMappings.h"
 #include "SwitchGpuEventClient.h"
+#include "SwitchGpuKqueue.h"
 
 namespace
 {
 constexpr uint32_t Jobs = 8;
 constexpr uint64_t Page = 4096, PushVa = 1ULL << 20;
+constexpr SwitchGpuKqueueShape kShape = {"ce-copy", TGM_FENCE_KERNEL_COPY, Jobs, PushVa, 1, 0};
 
 struct Job {
 	bool busy;
@@ -24,13 +26,7 @@ struct Job {
 
 struct Copier {
 	IOLock *lock;
-	tgm_vm *vm;
-	tgm_chan *channel;
-	tgm_mem *push, *fence;
-	switch_gpu_mapping *pushMapping;
-	uint32_t *words;
-	volatile uint32_t *fenceCpu;
-	uint64_t pushPa, fenceGpu, fencePage, pages[Jobs];
+	SwitchGpuKqueue space;
 	thread_call_t retirement;
 	bool semanticFailed, replaceChannel;
 	uint32_t waitingSources, order;
@@ -48,13 +44,7 @@ void fenced(void *)
 
 void discardSpace()
 {
-	switch_gpu_vm_unmap(queue.vm, &queue.pushMapping);
-	tgm_vm_del(&queue.vm);
-	tgm_mem_del(&queue.fence);
-	tgm_mem_del(&queue.push);
-	if (queue.words)
-		tgm_pool_free(queue.words, Page * Jobs, queue.pushPa);
-	queue.words = nullptr;
+	queue.space.discardSpace(kShape);
 	IODelete(queue.dependencies, switch_gpu_backing_token, TegraGM20BMaxJobDependencies);
 	queue.dependencies = nullptr;
 	queue.authority.destroy();
@@ -62,30 +52,12 @@ void discardSpace()
 
 bool openSpace()
 {
-	uint32_t fenceOffset = 0;
-	queue.words = static_cast<uint32_t *>(tgm_pool_alloc(Page * Jobs, 0, &queue.pushPa));
 	queue.dependencies = IONew(switch_gpu_backing_token, TegraGM20BMaxJobDependencies);
-	if (!queue.words || !queue.dependencies || !queue.authority.initialize() ||
-	    tgm_fence_kernel(TGM_FENCE_KERNEL_COPY, &queue.fenceCpu, &queue.fencePage,
-			     &fenceOffset) ||
-	    tgm_vm_new(&queue.vm))
-		goto fail;
-	tgm_vm_claim(queue.vm, &queue);
-	for (uint32_t i = 0; i < Jobs; ++i)
-		queue.pages[i] = queue.pushPa + i * Page;
-	// Volatile: the CPU rewrites a slot's push for every job, and a job whose surfaces nobody host-wrote is submitted
-	// with no L2 invalidate ahead of it (gpu_exec.c chan_exec), so the host would fetch the slot's last push from L2 lines.
-	if (tgm_mem_new(queue.vm, queue.pages, Jobs, &queue.push) ||
-	    switch_gpu_vm_map_volatile(queue.vm, PushVa, Page * Jobs, queue.push, 0, 0, 1, 1,
-				       &queue.pushMapping) ||
-	    tgm_mem_new(queue.vm, &queue.fencePage, 1, &queue.fence) ||
-	    tgm_vm_kmap(queue.vm, queue.fence, Page, &queue.fenceGpu))
-		goto fail;
-	queue.fenceGpu += fenceOffset;
+	if (!queue.dependencies || !queue.authority.initialize() || !queue.space.openSpace(kShape, &queue)) {
+		discardSpace();
+		return false;
+	}
 	return true;
-fail:
-	discardSpace();
-	return false;
 }
 
 // A copy whose own work is done while its event waits are not. Restarting the event order (authority.reset) would let
@@ -116,7 +88,7 @@ bool idle()
 // (switch_gpu_backing_has_semantics).
 int channel()
 {
-	const bool killed = queue.channel && tgm_chan_error(queue.channel);
+	const bool killed = queue.space.channel && tgm_chan_error(queue.space.channel);
 	if (killed || queue.semanticFailed) {
 		if (awaitingEvents())
 			return -16;
@@ -126,19 +98,12 @@ int channel()
 		++queue.order;
 	}
 	if (queue.replaceChannel && (killed || idle())) {
-		tgm_chan_del(&queue.channel);
+		tgm_chan_del(&queue.space.channel);
 		queue.replaceChannel = false;
 	}
-	if (!queue.vm && !openSpace())
+	if (!queue.space.vm && !openSpace())
 		return -12;
-	if (!queue.channel) {
-		const int result = tgm_chan_new_copy(queue.vm, &queue, queue.fenceCpu,
-						     queue.fenceGpu, "ce-copy", 0, &queue.channel);
-		if (result)
-			return result;
-		tgm_chan_on_fence(queue.channel, fenced, nullptr);
-	}
-	return 0;
+	return queue.space.openChannel(kShape, &queue, fenced);
 }
 
 #if DEVELOPMENT || DEBUG
@@ -146,7 +111,7 @@ int channel()
 void logFailedPush(const Job &job, int result)
 {
 	const auto slot = uint32_t(&job - queue.jobs);
-	const uint32_t *push = queue.words + slot * (Page / 4);
+	const uint32_t *push = queue.space.words + slot * (Page / 4);
 	char words[9 * 32 + 1] = "";
 	for (uint32_t i = 0, at = 0; i < job.dwords && i < 32; ++i)
 		at += uint32_t(snprintf(words + at, sizeof(words) - at, " %08x", push[i]));
@@ -271,9 +236,9 @@ int submit(Job &job, const tgm_push &push, switch_gpu_backing *source,
 	if (!result)
 		result = queue.events.sequence(queue.authority);
 	switch_gpu_backing_transaction transaction{};
-	switch_gpu_chan_submit_enter(queue.channel);
+	switch_gpu_chan_submit_enter(queue.space.channel);
 	for (; !result;) {
-		switch_gpu_chan_next_token(queue.channel, &job.completion);
+		switch_gpu_chan_next_token(queue.space.channel, &job.completion);
 		switch_gpu_backing_use uses[] = {{source, SWITCH_GPU_BACKING_READ, 0},
 						 {destination, SWITCH_GPU_BACKING_WRITE, 0}};
 		const auto *guards = ownership ? ownership->guards : nullptr;
@@ -312,7 +277,7 @@ int submit(Job &job, const tgm_push &push, switch_gpu_backing *source,
 		uint32_t sequence = 0;
 		if (!result)
 			result = switch_gpu_chan_exec_visibility(
-				queue.channel, &push, 1, queue.dependencies, count, &sequence,
+				queue.space.channel, &push, 1, queue.dependencies, count, &sequence,
 				nullptr,
 				SWITCH_GPU_SUBMIT_VISIBILITY_EXPLICIT |
 					SWITCH_GPU_SUBMIT_EXTERNAL_VISIBILITY |
@@ -328,7 +293,7 @@ int submit(Job &job, const tgm_push &push, switch_gpu_backing *source,
 		switch_gpu_backing_abort(&transaction);
 		if (result != -11)
 			break;
-		result = switch_gpu_chan_wait_submission_room(queue.channel, &push, 1, count,
+		result = switch_gpu_chan_wait_submission_room(queue.space.channel, &push, 1, count,
 							      nullptr);
 	}
 	switch_gpu_backing_abort(&transaction);
@@ -382,10 +347,10 @@ extern "C" int tegra_gm20b_ce_copy_plane_checked(
 		to.tiled ? to.value.bytes : uint64_t(dst->pitch) * (rows - 1) + rowBytes;
 	if (!result)
 		result = switch_gpu_copy_mapping(
-			queue.vm, &queue.mappings, static_cast<IOMemoryDescriptor *>(src->memory),
+			queue.space.vm, &queue.mappings, static_cast<IOMemoryDescriptor *>(src->memory),
 			src->offset, source, sourceOffset, sourceBytes, from.tiled, &job.source);
 	if (!result)
-		result = switch_gpu_copy_mapping(queue.vm, &queue.mappings,
+		result = switch_gpu_copy_mapping(queue.space.vm, &queue.mappings,
 						 static_cast<IOMemoryDescriptor *>(dst->memory),
 						 dst->offset, destination, destinationOffset,
 						 destinationBytes, to.tiled, &job.destination);
@@ -404,7 +369,7 @@ extern "C" int tegra_gm20b_ce_copy_plane_checked(
 					   done ? done->syncpt : TEGRA_GM20B_CE_NO_SYNCPT};
 		const tgm_push push = {
 			PushVa + slot * Page,
-			tgm_copy_push(queue.words + slot * (Page / 4), &copy, nullptr, 0), 0, 0, 0, 0};
+			tgm_copy_push(queue.space.words + slot * (Page / 4), &copy, nullptr, 0), 0, 0, 0, 0};
 		result = submit(job, push, source, destination, ownership, events);
 		job.dwords = push.dwords;
 	}

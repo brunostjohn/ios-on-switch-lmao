@@ -515,7 +515,7 @@ protected:
 	void TearDown() override
 	{
 		finish();
-		switch_gpu_copy_mappings_clear(queue.vm, &queue.mappings);
+		switch_gpu_copy_mappings_clear(queue.space.vm, &queue.mappings);
 		for (const auto &p : owners)
 			EXPECT_EQ(p->refs, 1u);
 		for (const auto &p : descriptors) {
@@ -524,9 +524,9 @@ protected:
 		}
 		EXPECT_EQ(tokenRefs, 0u);
 		EXPECT_EQ(maps, unmaps);
-		tgm_mem_del(&queue.push);
-		tgm_mem_del(&queue.fence);
-		free(queue.words);
+		tgm_mem_del(&queue.space.push);
+		tgm_mem_del(&queue.space.fence);
+		free(queue.space.words);
 		free(queue.dependencies);
 		if (queue.retirement)
 			thread_call_free(queue.retirement);
@@ -803,10 +803,10 @@ TEST_F(CheckedCopy, PartialInitializationReturnsItsControlAllocation)
 	memoryFailure = 2;
 	EXPECT_EQ(copy(a, b), -12);
 	EXPECT_EQ(poolFrees, 1u);
-	EXPECT_EQ(queue.vm, nullptr);
-	EXPECT_EQ(queue.push, nullptr);
-	EXPECT_EQ(queue.fence, nullptr);
-	EXPECT_EQ(queue.words, nullptr);
+	EXPECT_EQ(queue.space.vm, nullptr);
+	EXPECT_EQ(queue.space.push, nullptr);
+	EXPECT_EQ(queue.space.fence, nullptr);
+	EXPECT_EQ(queue.space.words, nullptr);
 	EXPECT_EQ(queue.dependencies, nullptr);
 	EXPECT_EQ(execs, 0u);
 }

@@ -1070,9 +1070,10 @@ TEST(GM20BHangSource, OnlyAConnectionsPushesAreRead)
 	EXPECT_THAT(flat(definition(relayout, "bool openSpace()")),
 		    HasSubstr("tgm_vm_claim(r.vm, &gRelayout);"));
 	EXPECT_THAT(relayout, Not(HasSubstr("tgm_vm_claim_connection(")));
+	EXPECT_THAT(flat(definition(SourceText("../SwitchGpuKqueue.h"), "bool openSpace(")),
+		    HasSubstr("tgm_vm_claim(vm, owner);"));
 	const std::string copy = SourceText("../TegraGM20BCopy.cpp");
-	EXPECT_THAT(flat(definition(copy, "bool openSpace()")),
-		    HasSubstr("tgm_vm_claim(queue.vm, &queue);"));
+	EXPECT_THAT(flat(definition(copy, "bool openSpace()")), HasSubstr("queue.space.openSpace(kShape, &queue)"));
 	EXPECT_THAT(copy, Not(HasSubstr("tgm_vm_claim_connection(")));
 	expectBefore(flat(definition(client(), "void AGXDeviceUserClient::free()")),
 		     "drainResources();", "IOLockFree(lock_);");
@@ -1123,9 +1124,7 @@ TEST(GM20BRelayoutSource, KernelCopiesOrderOnTheGpu)
 	EXPECT_THAT(copy, HasSubstr("queue.events.captureDependencies(queue.dependencies, count)"));
 	EXPECT_THAT(copy, HasSubstr("switch_gpu_chan_exec_visibility("));
 	EXPECT_THAT(copy, Not(HasSubstr("tgm_writer_wait(")));
-	EXPECT_THAT(copy,
-		    HasSubstr("tgm_fence_kernel(TGM_FENCE_KERNEL_COPY, &queue.fenceCpu, &queue.fencePage, "
-			      "&fenceOffset)"));
+	EXPECT_THAT(copy, HasSubstr("{\"ce-copy\", TGM_FENCE_KERNEL_COPY, Jobs, PushVa, 1, 0}"));
 	const std::string fences = flat(gpu());
 	EXPECT_THAT(fences, HasSubstr("#define TGM_FENCE_PAGES (TGM_FENCE_USER_PAGES + 1)"));
 	EXPECT_THAT(flat(definition(
@@ -1296,7 +1295,8 @@ TEST(GM20BChannelSource, CopyChannelCreatesOnlyRequestedObjectsAndKeepsVerifiedR
     expectBefore(objects, "if (ret)", "goto fail");
     EXPECT_THAT(gpu(), HasSubstr("tgm_chan_new_copy(tgm_present.vm"));
     EXPECT_THAT(gpu(), HasSubstr("tgm_chan_new_copy(tgm_scrub.vm"));
-    EXPECT_THAT(SourceText("../TegraGM20BCopy.cpp"), HasSubstr("tgm_chan_new_copy(queue.vm"));
+    EXPECT_THAT(SourceText("../SwitchGpuKqueue.h"), HasSubstr("tgm_chan_new_copy(vm, owner"));
+    EXPECT_THAT(SourceText("../TegraGM20BCopy.cpp"), HasSubstr("queue.space.openChannel(kShape"));
     EXPECT_THAT(SourceText("../TegraGM20BRelayout.cpp"), HasSubstr("tgm_chan_new_copy(r.vm"));
 }
 
