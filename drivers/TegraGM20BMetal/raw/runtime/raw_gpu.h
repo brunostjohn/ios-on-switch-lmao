@@ -209,6 +209,10 @@ struct Texture {
     // and chroma (RG8Unorm over plane 1): the frontend's two-plane stand-in (TwoPlaneStandIn.metal), as m2v renders it. Never
     // sampled: Metal reads the texture's codes (span)
     Texture *planarStandIn = nullptr;
+    // A two-plane YCbCr code texture rendered into (raw_ycbcr_store.h) renders through planarStandIn too; its store writes the
+    // luma plane and each texel's chroma codes into chromaCodes (RG8Unorm, pitch), which the 2D engine halves into chromaHalved
+    // (block-linear) and the copy engine moves into the chroma plane
+    Texture *chromaCodes = nullptr, *chromaHalved = nullptr;
     // A two-plane YCbCr surface's texture (raw_ycbcr.h): the image sampled is span (RGBA16Float, RGBA32Float, RGBA8Unorm,
     // RGB10A2Unorm), which a pass of the pack's conversion state draws from the planes' textures, luma (R8Unorm, R16Unorm) and
     // chroma (RG8Unorm, RG16Unorm; none over plane 1), before the work that samples it (pack/ycbcr.metal; shape: its fragment
@@ -828,6 +832,9 @@ public:
     void convertPlanar(const Texture &t);
     // generateMipmaps of a mipmapped texture (Texture::chain) on the 2D engine: each later level from the one above, in place
     void generate(Texture &t);
+    // A YCbCr code target's chroma blocks on the 2D engine: `codes` (pitch) halved across, and down where `halved` is half its
+    // height, into `halved` (block-linear), each code the rounded mean of its block's (Texture::chromaCodes)
+    void halveChroma(const Texture &codes, const Texture &halved);
     // The next command reads the memory `read` names and writes the memory `write` names (null: none; a name is any pointer
     // that stands for one memory): where it reads or writes what an earlier command of this encoder wrote, or writes what one
     // read, it waits for those first (barrier), as Metal orders a blit encoder's commands on one resource

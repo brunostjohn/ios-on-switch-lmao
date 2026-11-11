@@ -148,7 +148,7 @@ static bool encodeRawAttempt(RMCommandBuffer *cb, size_t from, size_t to, const 
         }
         raw::PassDesc p;
         p.color[0].texture = store ? x.luma : x.planarStandIn;
-        p.color[1].texture = store ? x.chroma : nullptr;
+        p.color[1].texture = !store ? nullptr : x.chromaCodes ? x.chromaCodes : x.chroma;
         for (raw::ColorAttachment &a : p.color) {
             a.load = raw::ColorAttachment::DontCare;
             a.store = true;
@@ -166,6 +166,8 @@ static bool encodeRawAttempt(RMCommandBuffer *cb, size_t from, size_t to, const 
             return 2;
         }
         e->end();
+        if (store && x.chromaCodes)
+            storeYcbcrChroma(rc, x);
         if (store)
             planesWritten.push_back(t);
         return 0;
@@ -480,9 +482,10 @@ static bool encodeRawAttempt(RMCommandBuffer *cb, size_t from, size_t to, const 
                 useTexture(rc, t, true);
                 if (t->_raw.planarStandIn) {
                     // Metal's DontCare load keeps the planes' codes where no draw writes, and the store writes every texel
-                    // (raw/test/standinoracle.mm): such a pass loads them too
+                    // (raw/test/standinoracle.mm): such a pass loads them too. A YCbCr code target's undrawn texels are
+                    // undefined there (raw_ycbcr_store.h)
                     const bool stores = a.store != MTLStoreActionDontCare;
-                    if (a.load == MTLLoadActionLoad || (a.load == MTLLoadActionDontCare && stores))
+                    if (a.load == MTLLoadActionLoad || (a.load == MTLLoadActionDontCare && stores && !t->_raw.ycbcr))
                         standInLoads.push_back(t);
                     if (stores)
                         standInStores.push_back(t);

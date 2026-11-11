@@ -244,9 +244,10 @@ static bool rawResolve(MTLRenderPassColorAttachmentDescriptor *a, RMTexture *fro
                             : @"(kept, of a format m2v's NVK renders none of)");
             }
             hit(self, PredPassAttFormat, t.pixelFormat, b);
-        } else if ((x->_raw.planar && !x->_raw.planarStandIn) || x->_raw.ycbcr) {
+        } else if ((x->_raw.planar && !x->_raw.planarStandIn) ||
+                   (x->_raw.ycbcr && ycbcrTargetPassRefusal(x->_raw, pass.colorAttachments[c]))) {
             [self takeReason:WhyPass why:@"a planar texture as a render target"];
-            hit(self, PredEncPlanarRT, t.pixelFormat, c);
+            hit(self, PredEncPlanarRT, t.pixelFormat, c | uint64_t(a.loadAction) << 8);
         } else if (pass.colorAttachments[c].slice || pass.colorAttachments[c].depthPlane ||
                    (pass.colorAttachments[c].resolveTexture && !rawResolve(pass.colorAttachments[c], x)) ||
                    (x->_raw.type != raw::fx::kTexTwoD && x->_raw.type != raw::fx::kTexOneD) ||

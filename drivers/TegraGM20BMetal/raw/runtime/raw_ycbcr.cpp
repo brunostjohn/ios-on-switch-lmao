@@ -4,6 +4,8 @@
 
 #include <cstring>
 
+#include "raw_ycbcr_store.h"
+
 namespace raw {
 namespace {
 
@@ -178,6 +180,13 @@ const char *planYcbcr(const YcbcrFacts &f, YcbcrPlan &out)
         return "shape or usage";
     if (f.width != f.surfaceWidth || f.height != f.surfaceHeight || !f.width || !f.height)
         return "texture size not the surface's";
+    if (f.target) {
+        if (const char *why = ycbcrTargetRefusal(f.pixelFormat))
+            return why;
+        if (planeOne || surface->sub != format->sub || (f.width & 1) || (halvedDown(format->sub) && (f.height & 1)))
+            return "a render target over plane 1, of other chroma than its surface's, or of a size its blocks do not "
+                   "tile";
+    }
     const uint32_t bytes = format->bits == 8 ? 1 : 2;
     const uint32_t cw = halvedAcross(format->sub) ? (f.width + 1) / 2 : f.width;
     const uint32_t ch = halvedDown(format->sub) ? (f.height + 1) / 2 : f.height;
@@ -194,6 +203,7 @@ const char *planYcbcr(const YcbcrFacts &f, YcbcrPlan &out)
 
     out = {};
     out.nativePlanes = f.fourcc == fourcc("420v") || f.fourcc == fourcc("420f");
+    out.target = f.target;
     out.output = outputOf(*format);
     out.addressMap = addressMapOf(*format);
     out.image = imageFormat(out.output);

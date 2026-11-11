@@ -83,6 +83,7 @@ TESTS: dict[str, bool] = {
             'metal.texture_view',
             'metal.iosurface',
             'gpu.surface.tiled_default',
+            'gpu.ycbcr_target',
             'metal.mps.blur',
             'metal.mps.matmul',
             'metal.runtime_compile',

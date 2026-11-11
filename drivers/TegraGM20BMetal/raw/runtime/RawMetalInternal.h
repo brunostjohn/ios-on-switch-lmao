@@ -289,6 +289,26 @@ void cpuLayer(RMTexture *t, MTLRegion r, NSUInteger slice, uint8_t *bytes, NSUIn
 // RawMetalDevice.mm
 const char *ycbcrPlan(MTLTextureDescriptor *d, IOSurfaceRef s, NSUInteger plane, raw::YcbcrPlan &out);
 
+// RawMetalStates.mm: the state of `d` as the pack and the archives it lists answer, nil where it is Metal's binary archive
+// miss (`*error`), never compiled; and whether the archives miss the state of `d` (its functions this device's)
+RMPipeline *rmPipelineFor(RMDevice *device, MTLRenderPipelineDescriptor *d, MTLPipelineOption o, NSError **error);
+bool rmRenderArchiveMissed(MTLRenderPipelineDescriptor *d, MTLPipelineOption o, NSError **error);
+
+// RawMetalYcbcrTargets.mm: two-plane YCbCr code textures rendered into (raw_ycbcr_store.h). A target's stand-in and chroma
+// textures (Texture::planarStandIn, chromaCodes, chromaHalved), the reason a pass into one goes to m2v (null: none), its chroma
+// blocks from the codes its store wrote, and a descriptor's first such attachment's format (0: none)
+void makeYcbcrTarget(raw::Texture &t, uint32_t pixelFormat);
+const char *ycbcrTargetPassRefusal(const raw::Texture &t, MTLRenderPassColorAttachmentDescriptor *a);
+void storeYcbcrChroma(raw::CommandBuffer *rc, const raw::Texture &t);
+uint32_t ycbcrTargetFormat(MTLRenderPipelineDescriptor *d);
+
+@interface RMDevice (YcbcrTargets)
+- (id<MTLRenderPipelineState>)ycbcrTargetState:(MTLRenderPipelineDescriptor *)d
+                                       options:(MTLPipelineOption)o
+                                    reflection:(MTLAutoreleasedRenderPipelineReflection *)reflection
+                                         error:(NSError **)error;
+@end
+
 // RawMetalReplay.mm
 id<MTLCommandBuffer> replay(RMCommandBuffer *cb, size_t from, size_t to, bool part);
 

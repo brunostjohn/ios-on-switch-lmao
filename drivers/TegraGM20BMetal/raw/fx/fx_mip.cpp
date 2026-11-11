@@ -130,6 +130,13 @@ uint64_t ratio(uint32_t from, uint32_t to)
     return (uint64_t(from) << 32) / to;
 }
 
+// The source origin of a scaled step of `step` (32.32) as `sampling` reads it, two's complement where it is negative
+uint64_t origin(const Sampling &sampling, uint64_t step)
+{
+    const int64_t half = int64_t(1) << 31;
+    return uint64_t(int64_t(sampling.halfDu) * int64_t(step / 2) + int64_t(sampling.halfTexel) * half);
+}
+
 }  // namespace
 
 uint32_t fullLevels(uint32_t width, uint32_t height)
@@ -325,12 +332,28 @@ void emitGenerate(Push &p, const MipChain &c, uint64_t chainVa, const Pitch *lev
         surface(p, TWOD_SET_DST_FORMAT, fmt2d, true, d.yLog2, 0, d.width, d.height, chainVa + d.offset);
         surface(p, TWOD_SET_SRC_FORMAT, fmt2d, true, s.yLog2, 0, s.width, s.height, chainVa + s.offset);
         const uint64_t du = ratio(s.width, d.width), dv = ratio(s.height, d.height);
-        // the source origin as `sampling` reads it (32.32, two's complement where it is negative)
-        const int64_t half = int64_t(1) << 31;
-        const uint64_t sx = uint64_t(int64_t(sampling.halfDu) * int64_t(du / 2) + int64_t(sampling.halfTexel) * half),
-                       sy = uint64_t(int64_t(sampling.halfDu) * int64_t(dv / 2) + int64_t(sampling.halfTexel) * half);
-        blit(p, FILTER_BILINEAR, 0, 0, d.width, d.height, du, dv, sx, sy, sampling.corner ? 1u : SAMPLE_CENTER);
+        blit(p, FILTER_BILINEAR, 0, 0, d.width, d.height, du, dv, origin(sampling, du), origin(sampling, dv),
+             sampling.corner ? 1u : SAMPLE_CENTER);
     }
+    end(p);
+}
+
+size_t halveWords()
+{
+    return kBeginWords + kEndWords + 2 * kSurfaceWords + kBlitWords;
+}
+
+void emitHalve(Push &p, const Pitch &src, uint64_t dstVa, uint32_t dstYLog2, uint32_t dw, uint32_t dh, uint32_t fmt2d,
+               Sampling sampling)
+{
+    if (!dw || !dh || src.width != 2 * dw || (src.height != dh && src.height != 2 * dh))
+        return;
+    begin(p);
+    surface(p, TWOD_SET_DST_FORMAT, fmt2d, true, dstYLog2, 0, dw, dh, dstVa);
+    surface(p, TWOD_SET_SRC_FORMAT, fmt2d, false, 0, src.pitch, src.width, src.height, src.va);
+    const uint64_t du = ratio(src.width, dw), dv = ratio(src.height, dh);
+    blit(p, FILTER_BILINEAR, 0, 0, dw, dh, du, dv, origin(sampling, du), origin(sampling, dv),
+         sampling.corner ? 1u : SAMPLE_CENTER);
     end(p);
 }
 

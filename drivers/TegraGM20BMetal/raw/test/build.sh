@@ -223,6 +223,14 @@ echo "built $OUT/shapecheck"
 xcrun clang++ -O1 -std=c++17 -fobjc-arc "$HERE/standinoracle.mm" -framework Metal -framework Foundation -framework CoreVideo \
     -framework IOSurface -o "$OUT/standinoracle"
 echo "built $OUT/standinoracle"
+# ycbcrstoreoracle: raw_ycbcr_store.h's rule of a pass's store into two-plane YCbCr attachments, and the raw route of the 8-bit
+# code formats (the stand-in, the two-plane store and the 2D engine's halving), against this Mac's Metal
+# ($OUT/ycbcrstoreoracle drivers/NativeMetal/TwoPlaneStandIn.metal)
+xcrun clang++ -O1 -std=c++17 -fobjc-arc -I "$TREE/drivers/TegraGM20B" -I "$TREE/kits/SwitchGM20BEmit/mesa" \
+    -I "$TREE/bazel-bin/kits/SwitchGM20BEmit/gen" -I "$TREE/third_party/mesa/src/nouveau/headers" "$HERE/ycbcrstoreoracle.mm" \
+    -x c++ "$RAW/fx/fx_mip.cpp" -framework Metal -framework Foundation -framework CoreVideo -framework IOSurface \
+    -o "$OUT/ycbcrstoreoracle"
+echo "built $OUT/ycbcrstoreoracle"
 # xroracle: the extended-range stand-ins, clears and Core Animation's passes against this Mac's Metal
 # ($OUT/xroracle pack/xr.metal <QuartzCore default.metallib>)
 xcrun clang++ -O1 -std=c++17 -fobjc-arc "$HERE/xroracle.mm" -framework Metal -framework Foundation -framework CoreVideo \

@@ -89,7 +89,7 @@ TEST(RawLinkedSource, TheRawRecordIsTheLinkedFunctionsToo)
     const std::string twin = Body(states, "MTLRenderPipelineDescriptor *twinDescriptor(");
     EXPECT_THAT(twin, HasSubstr("t.vertexLinkedFunctions = twinLinked(d.vertexLinkedFunctions);"));
     EXPECT_THAT(twin, HasSubstr("t.fragmentLinkedFunctions = twinLinked(d.fragmentLinkedFunctions);"));
-    EXPECT_THAT(Body(states, "static RMPipeline *pipelineFor("), HasSubstr("raw_metal_linked_packable(d)"));
+    EXPECT_THAT(Body(states, "RMPipeline *rmPipelineFor("), HasSubstr("raw_metal_linked_packable(d)"));
     EXPECT_THAT(Body(SourceText("../raw/runtime/RawMetalLibrary.mm"), "NSString *raw_metal_pipeline_key("),
                 HasSubstr("raw::pipelineKey(d, vf ? &vertex : nullptr, ff ? &fragment : nullptr, linkedKey(d),"));
     EXPECT_THAT(Body(SourceText("../raw/runtime/RawPipelineKey.h"), "inline std::string pipelineKey("),

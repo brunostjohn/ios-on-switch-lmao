@@ -19,7 +19,8 @@ struct YcbcrFacts {
     uint64_t offset[2] = {};                       // each plane's first byte past the surface's base address
     uint32_t pitch[2] = {};
     uint64_t allocBytes = 0;
-    bool simple = false;  // 2D, one level, one sample, not rotated, used for ShaderRead (and PixelFormatView) alone
+    bool simple = false;  // 2D, one level, one sample, not rotated, used to be sampled, viewed or rendered alone
+    bool target = false;  // used as a render target too (raw_ycbcr_store.h)
     const char *matrix = nullptr;  // kIOSurfaceYCbCrMatrix, null without one
 };
 
@@ -37,6 +38,7 @@ enum YcbcrOutput : uint8_t {
 struct YcbcrPlan {
     YcbcrOutput output = YcbcrConverted;
     bool nativePlanes = false;
+    bool target = false;  // passes render into it (RawMetalYcbcrTargets.mm)
     // Texture::addressMap: 1 the wrapping modes clamp to the edge (4:2:0, 4:2:2), 2 clamps to zero and to the border do
     // (codes), 3 both, 0 neither (a 4:4:4 converted texture)
     uint8_t addressMap = 0;

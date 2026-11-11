@@ -268,9 +268,27 @@ static void makeRecord(RMPipeline *p, MTLRenderPipelineDescriptor *d)
     });
 }
 
-// The state of `d` as the pack and the archives it lists answer (RawMetalBinaryArchive.mm): nil where it is Metal's binary
-// archive miss (`*error`), never compiled
-static RMPipeline *pipelineFor(RMDevice *device, MTLRenderPipelineDescriptor *d, MTLPipelineOption o, NSError **error)
+// What the archives a render creation lists answer for the state of key hash `keyHash` (RawMetalBinaryArchive.mm), Metal's
+// error where they miss it
+static raw::ArchiveAnswer renderArchiveAnswer(MTLRenderPipelineDescriptor *d, MTLPipelineOption o, uint64_t keyHash,
+                                              NSError **error)
+{
+    const raw::ArchiveAnswer answer = rmArchiveAnswer(d.binaryArchives, o, false, keyHash);
+    if (answer == raw::ArchiveAnswer::Missed && error)
+        *error = rmArchiveMissError((d.fragmentFunction ?: d.vertexFunction).name, "render");
+    return answer;
+}
+
+bool rmRenderArchiveMissed(MTLRenderPipelineDescriptor *d, MTLPipelineOption o, NSError **error)
+{
+    if (![(id)d.vertexFunction isKindOfClass:[RMFunction class]] ||
+        ![(id)d.fragmentFunction isKindOfClass:[RMFunction class]])
+        return false;
+    const std::string key = raw_metal_pipeline_key(d).UTF8String;
+    return renderArchiveAnswer(d, o, raw::Pack::fnv(key.data(), key.size()), error) == raw::ArchiveAnswer::Missed;
+}
+
+RMPipeline *rmPipelineFor(RMDevice *device, MTLRenderPipelineDescriptor *d, MTLPipelineOption o, NSError **error)
 {
     RMPipeline *p = [RMPipeline new];
     p->_device = device;
@@ -305,14 +323,10 @@ static RMPipeline *pipelineFor(RMDevice *device, MTLRenderPipelineDescriptor *d,
         if (p->_packed)
             packedVariants(p, packKey);
     }
-    const raw::ArchiveAnswer answer = p->_raw || !p->_completable
-                                          ? raw::ArchiveAnswer::NotAsked
-                                          : rmArchiveAnswer(d.binaryArchives, o, false, keyHash);
-    if (answer == raw::ArchiveAnswer::Missed) {
-        if (error)
-            *error = rmArchiveMissError((d.fragmentFunction ?: d.vertexFunction).name, "render");
+    const raw::ArchiveAnswer answer = p->_raw || !p->_completable ? raw::ArchiveAnswer::NotAsked
+                                                                   : renderArchiveAnswer(d, o, keyHash, error);
+    if (answer == raw::ArchiveAnswer::Missed)
         return nil;
-    }
     p->_archived = answer == raw::ArchiveAnswer::Declared;
     makeRecord(p, d);
     return p;
@@ -375,7 +389,7 @@ static id<MTLRenderPipelineState> pipelineTwin(MTLRenderPipelineDescriptor *d, M
 static id<MTLRenderPipelineState> makeState(RMDevice *device, MTLRenderPipelineDescriptor *d, MTLPipelineOption o,
                                             MTLAutoreleasedRenderPipelineReflection *reflection, NSError **error)
 {
-    RMPipeline *p = pipelineFor(device, d, o, error);
+    RMPipeline *p = rmPipelineFor(device, d, o, error);
     if (!p)
         return nil;
     const bool packed = p->_raw || p->_archived;
@@ -396,6 +410,8 @@ static id<MTLRenderPipelineState> makeState(RMDevice *device, MTLRenderPipelineD
                                                              error:(NSError **)error
 {
     SWITCH_API(ApiObject);
+    if (ycbcrTargetFormat(d))
+        return [self ycbcrTargetState:d options:MTLPipelineOptionNone reflection:nil error:error];
     return makeState(self, d, MTLPipelineOptionNone, nil, error);
 }
 
@@ -405,6 +421,8 @@ static id<MTLRenderPipelineState> makeState(RMDevice *device, MTLRenderPipelineD
                                                              error:(NSError **)error
 {
     SWITCH_API(ApiObject);
+    if (ycbcrTargetFormat(d))
+        return [self ycbcrTargetState:d options:o reflection:reflection error:error];
     return makeState(self, d, o, reflection, error);
 }
 

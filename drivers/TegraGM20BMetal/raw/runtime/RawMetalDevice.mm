@@ -415,7 +415,8 @@ const char *ycbcrPlan(MTLTextureDescriptor *d, IOSurfaceRef s, NSUInteger plane,
     }
     f.allocBytes = IOSurfaceGetAllocSize(s);
     f.simple = d.textureType == MTLTextureType2D && d.mipmapLevelCount == 1 && d.sampleCount == 1 && !turned &&
-               !(d.usage & ~(MTLTextureUsageShaderRead | MTLTextureUsagePixelFormatView));
+               !(d.usage & ~(MTLTextureUsageShaderRead | MTLTextureUsagePixelFormatView | MTLTextureUsageRenderTarget));
+    f.target = d.usage & MTLTextureUsageRenderTarget;
     char matrix[32] = "";
     if (CFTypeRef value = IOSurfaceCopyValue(s, CFSTR("IOSurfaceYCbCrMatrix"))) {
         if (CFGetTypeID(value) == CFStringGetTypeID())
@@ -479,6 +480,8 @@ static bool producesTexture(MTLTextureDescriptor *d)
         t->_rawOk =
             gRM->raw->createYcbcrTexture(IOSurfaceGetID(s), IOSurfaceGetBaseAddress(s), IOSurfaceGetAllocSize(s), s,
                                          ycbcr, uint32_t(d.width), uint32_t(d.height), t->_raw);
+        if (t->_rawOk && ycbcr.target)
+            makeYcbcrTarget(t->_raw, uint32_t(d.pixelFormat));
     } else if (rawShape(d) && !plane && IOSurfaceGetPlaneCount(s) <= 1) {
         // a surface without planes, or one described by a single plane (CoreVideo's chunky surfaces): its plane's bytes
         void *base = IOSurfaceGetBaseAddress(s);  // valid while the surface lives (the import retains it)

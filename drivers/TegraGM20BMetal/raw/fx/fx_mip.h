@@ -142,6 +142,14 @@ size_t copyWords();
 void emitCopyToLevel(Push &p, const MipChain &c, uint64_t chainVa, uint32_t level, const Pitch &src, uint32_t fmt2d,
                      uint32_t sx, uint32_t sy, uint32_t dx, uint32_t dy, uint32_t w, uint32_t h);
 
+// A 2:1 halving across (and down, where `dh` is half src.height) of a pitch surface into a block-linear one of dw x dh at
+// `dstVa` (block height dstYLog2), bilinear under `sampling`: each destination texel the rounded mean of the source texels it
+// halves (referenceDownsample's weights of one half), with the waits and invalidates of emitGenerate. A YCbCr code target's
+// chroma blocks (BlitEncoder::halveChroma).
+size_t halveWords();
+void emitHalve(Push &p, const Pitch &src, uint64_t dstVa, uint32_t dstYLog2, uint32_t dw, uint32_t dh, uint32_t fmt2d,
+               Sampling sampling = kGm20bSampling);
+
 // The CPU reference of one chain step: level n+1 from level n exactly as the 2D engine's bilinear blit samples under
 // kGm20bSampling (u = (x + 0.5) * w_n / w_{n+1} - 0.5, clamp to edge, unorm8 per component, weights at 1/256): the host
 // tests' oracle.

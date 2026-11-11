@@ -2169,12 +2169,12 @@ void Device::destroyTexture(Texture &t)
         t = {};
         return;
     }
-    for (Texture *plane : {t.luma, t.chroma, t.planarStandIn, t.stencilTemp})
+    for (Texture *plane : {t.luma, t.chroma, t.planarStandIn, t.stencilTemp, t.chromaCodes, t.chromaHalved})
         if (plane) {
             destroyTexture(*plane);
             delete plane;
         }
-    t.luma = t.chroma = t.planarStandIn = t.stencilTemp = nullptr;
+    t.luma = t.chroma = t.planarStandIn = t.stencilTemp = t.chromaCodes = t.chromaHalved = nullptr;
     if (t.standIn) {
         destroyTexture(*t.standIn);
         delete t.standIn;
@@ -6120,6 +6120,15 @@ void BlitEncoder::generate(Texture &t)
     room(uint32_t(fx::generateWords(c->layout, 0, last)));
     fx::emitGenerate(p_, c->layout, c->va, nullptr, c->fmt2d, 0, last);
     RAW_DIAGNOSTIC(dev_->stats.chainGenerates++);
+}
+
+void BlitEncoder::halveChroma(const Texture &codes, const Texture &halved)
+{
+    cb_->use(codes, false);
+    cb_->use(halved, true);
+    room(uint32_t(fx::halveWords()));
+    fx::emitHalve(p_, {codes.va, codes.pitch, codes.width, codes.height}, halved.va, halved.blockHeight, halved.width,
+                  halved.height, fx::twodFormat(codes.format));
 }
 
 void BlitEncoder::end()
