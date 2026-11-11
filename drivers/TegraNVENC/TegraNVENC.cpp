@@ -528,8 +528,8 @@ int run(const TegraNVENCSubmit *s, TegraNVENCResolve resolve, void *context, uin
     // predictor pair when the submit has none; the scratch buffer as the RC process state (NVIDIA's driver gives every
     // job one; constant QP leaves it unread); the setup slot (INCR METHOD0 x2: method, value, each); OP_DONE increment.
     constexpr uint32_t kUnused = sizeof(kUnusedMethods) / sizeof(kUnusedMethods[0]);
-    uint32_t words[1 + 3 * (kUnused + 4 + TEGRA_NVENC_MAX_ENTRIES) + 1];
-    uint32_t n = 0;
+    uint32_t words[SWITCH_HOST1X_WAIT_WORDS + 1 + 3 * (kUnused + 4 + TEGRA_NVENC_MAX_ENTRIES) + 1];
+    uint32_t n = SWITCH_HOST1X_WAIT_WORDS;
     bool predictors = false;
     for (uint32_t i = 0; i < s->entry_count; i++)
         predictors |= s->entries[i].method == NVC5B7_SET_IN_MEPRED_DATA;
@@ -578,7 +578,14 @@ int run(const TegraNVENCSubmit *s, TegraNVENCResolve resolve, void *context, uin
                                                              : e->value);
     }
     words[n++] = tegra_host1x_op_incr_syncpt(TEGRA_HOST1X_COND_OP_DONE, gSyncpt);
-    const int ret = tegra_host1x_submit_on(TEGRA_HOST1X_CHANNEL_NVENC, words, n);
+    // L4T's NVENC channel is serialized (t210.c .serialize): a job's methods reach the engine only once the job before
+    // it is done, by a host1x wait in the stream, not by the CPU.
+    uint32_t first = SWITCH_HOST1X_WAIT_WORDS;
+    if (gIssued) {
+        first = 0;
+        tegra_host1x_op_wait_syncpt(words, gSyncpt, gBase + gIssued);
+    }
+    const int ret = tegra_host1x_submit_on(TEGRA_HOST1X_CHANNEL_NVENC, words + first, n - first);
     if (!ret) {
         __atomic_store_n(&gIssued, job, __ATOMIC_RELEASE);
         *fence = gBase + job;
