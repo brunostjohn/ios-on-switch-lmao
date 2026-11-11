@@ -7,6 +7,8 @@
 // until the GPU's nonstall interrupt wakes them; a fence found complete without that wake panics (no polled mode), and
 // so does one that never completes.
 #include "TegraGM20BUserClientInternal.h"
+#include "SwitchGpuShaderCompiler.h"
+#include "TegraGM20BCompilerABI.h"
 
 namespace
 {
@@ -64,6 +66,7 @@ OSDefineMetaClassAndStructors(AGXDeviceUserClient, IOUserClient)
 
 IOReturn AGXDeviceUserClient::clientClose()
 {
+	switch_gpu_compiler_close(this);
 	drainResources();
 	terminate();
 	return kIOReturnSuccess;
@@ -486,8 +489,12 @@ IOReturn AGXDeviceUserClient::externalMethod(uint32_t selector,
 		memcpy(copy, in, inSize);
 	}
 	IOReturn ret;
-	if (method == TegraGM20BMethodEventObserve && inSize == sizeof(TegraGM20BAbiEventObserve) &&
-	    !outSize) {
+	if (switch_gpu_compiler_method(method)) {
+		ret = switch_gpu_compiler_call(
+			this, current_task(), method, inSize ? copy : nullptr, inSize,
+			arguments->structureOutput, outSize, arguments, asyncReference);
+	} else if (method == TegraGM20BMethodEventObserve &&
+		   inSize == sizeof(TegraGM20BAbiEventObserve) && !outSize) {
 		ret = eventObserve(static_cast<const TegraGM20BAbiEventObserve *>(copy), arguments,
 				   asyncReference);
 	} else if (method == TegraGM20BMethodResourceObserve && inSize == sizeof(TegraGM20BAbiResourceObserve) && !outSize) {
@@ -513,6 +520,8 @@ IOReturn AGXDeviceUserClient::clientMemoryForType(UInt32 type, IOOptionBits *opt
 		return kIOReturnSuccess;
 	}
 #endif
+	if (type == TegraGM20BCompilerStoreToken)
+		return switch_gpu_compiler_store(options, memory);
 	IOLockLock(lock_);
 	if (submitGate_.closed()) {
 		IOLockUnlock(lock_);

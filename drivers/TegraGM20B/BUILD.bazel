@@ -135,6 +135,8 @@ kernel_driver(
         "SwitchGpuRelayoutCache.cpp",
         "SwitchGpuCachedZero.cpp",
         "SwitchGpuEventClient.cpp",
+        "SwitchGpuShaderCompiler.cpp",
+        "SwitchGpuShaderCompilerQueue.cpp",
         "SwitchGpuEventChannel.cpp",
         "SwitchGpuEventJob.cpp",
         "SwitchGpuSharedEventNative.cpp",

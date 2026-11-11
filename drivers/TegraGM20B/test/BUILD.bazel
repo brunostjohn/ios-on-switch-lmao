@@ -1309,3 +1309,14 @@ host_test(
     srcs = ["gm20b_copy_emit_test.cpp"],
     deps = [":copy_emit"],
 )
+
+# SwitchGpuShaderCompilerPolicy.h: the shader compiler broker stops waiting for a compiler that declined, has nothing to
+# start it again, or was lost a third time
+host_test(
+    name = "switch_gpu_compiler_policy_test",
+    srcs = [
+        "switch_gpu_compiler_policy_test.cpp",
+        "//drivers/TegraGM20B:SwitchGpuShaderCompilerPolicy.h",
+    ],
+    copts = ["-Idrivers/TegraGM20B"],
+)
