@@ -21,10 +21,7 @@ export DEVELOPER_DIR="$$(/usr/bin/sed -n 's/^DEVELOPER_DIR=//p' $(execpath @xcod
 $(execpath @llvm//:bin/ld.lld) -Ttext=0x40010000 -e _start $(@D)/regwrite.o -o $(@D)/regwrite.elf
 $(execpath @llvm//:bin/llvm-objcopy) -O binary $(@D)/regwrite.elf $@
 """,
-    tags = [
-        "no-remote-exec",
-        "requires-darwin",
-    ],
+    tags = ["requires-darwin"],
     tools = [
         "@llvm//:bin/ld.lld",
         "@llvm//:bin/llvm-objcopy",

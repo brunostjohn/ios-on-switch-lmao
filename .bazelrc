@@ -113,8 +113,9 @@ build:dev --config=debug
 # xnu-10063, iPad7,1), ios27 is iPadOS 27.2 on xnu-12377 for iPad12,1.
 common:ios17 --//ipsw:kind=21H461
 common:ios27 --//ipsw:kind=24B119
-# agent: what an agent worktree adds on the shared machine (16 cores, many agents at once): fewer parallel actions.
-build:agent --jobs=4
+# agent: what an agent worktree adds on the shared machine (16 cores, many agents at once): four cores of local work.
+# --jobs bounds the actions in flight, remote ones included; local_resources alone keeps local work to four at a time.
+build:agent --jobs=32
 build:agent --local_resources=cpu=4
 # reproducible-check: ignore every cache so each action really runs, and write an execution log; `bazel run
 # //tools/repro:check` builds twice like this in two fresh output bases and diffs every artifact bit for bit.
@@ -132,6 +133,16 @@ build:remote --experimental_remote_cache_eviction_retries=5
 # the session in its output base (2.3 GiB in each), so every fresh worktree compiled m2v anew, to other bytes, and every
 # shader seed bucket keyed on the tools built from it ran again.
 build:remote --//bazel/rust:incremental=false
+build:remote --config=rbe
+# rbe: actions run on the remote workers behind that cache (tools/remote), and only top-level outputs come back here.
+# The per-user file names the executor (`build:rbe --remote_executor=grpc://host:port`); without one the remote
+# strategy is skipped and actions build here.
+build:rbe --spawn_strategy=remote,sandboxed
+build:rbe --strategy=Rustc=remote,sandboxed,local
+build:rbe --strategy=RustcMetadata=remote,sandboxed,local
+# A worker that is gone, or a scheduler with none left, costs one failed request per action, then it builds here.
+build:rbe --remote_local_fallback
+build:rbe --remote_download_outputs=toplevel
 
 # The default preset.
 build --config=debug

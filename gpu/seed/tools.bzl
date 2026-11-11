@@ -10,7 +10,7 @@ _XCODE = {
     "_xcode_identity": attr.label(default = "@xcode//:identity", allow_single_file = True),
 }
 
-_DARWIN = {"no-remote-exec": "1", "requires-darwin": ""}
+_DARWIN = {"requires-darwin": ""}
 
 SeedToolsInfo = provider(
     doc = "The shader tools' files, each on its own: what a seed step runs, without the rest of the tools.",

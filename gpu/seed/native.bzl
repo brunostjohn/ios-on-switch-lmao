@@ -7,7 +7,7 @@ each, the observed states' packs first.
 load("@bazel_skylib//rules:common_settings.bzl", "BuildSettingInfo")
 load("//ipsw:ipsw.bzl", "IpswInfo")
 
-DARWIN = {"no-remote-exec": "1", "requires-darwin": ""}
+DARWIN = {"requires-darwin": ""}
 
 def named(ctx, path):
     return "{}/{}{}".format(ctx.attr.ipsw[IpswInfo].kind, ctx.attr.name, path)

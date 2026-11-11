@@ -90,6 +90,9 @@ single_version_override(
     patches = ["//bazel/rust:rules_rust.patch"],
 )
 
+# Every action's execution platform, here or on a remote Mac worker (bazel/platforms).
+register_execution_platforms("//bazel/platforms:exec_darwin_arm64")
+
 # --- C/C++ toolchains, by target platform (bazel/platforms): the kernel's Apple clang with XNU's recipes ----------
 # First: none at all under --//install:prebuilt=release (bazel/toolchains/none).
 register_toolchains("//bazel/toolchains/none:cc")
