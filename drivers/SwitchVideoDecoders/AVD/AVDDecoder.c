@@ -5,8 +5,8 @@
 //
 // Selection: _vtSortRegistryItemsByRating ranks a higher rating first, then hardware, so this decoder is tried before
 // H264SW, and a factory that fails moves VideoToolbox to the next one.
-// StartSession is not retried with another decoder, so a stream NVDEC cannot take (interlaced, 4:2:2 or 4:4:4, high
-// bit depth, slice groups, beyond 4096x4096) or one NVDEC has no memory for runs on Apple's software decoder inside
+// StartSession is not retried with another decoder, so a stream NVDEC cannot take (4:2:2 or 4:4:4, high bit depth,
+// slice groups, beyond 4096x4096) or one NVDEC has no memory for runs on Apple's software decoder inside
 // this instance: VTSelectAndCreateVideoDecoderInstance with hardware disabled picks it, every class call is forwarded,
 // and UsingHardwareAcceleratedVideoDecoder answers false. VP9 has no software decoder in 21H461's VideoToolbox to fall
 // back on (and needs kVTVideoDecoderSpecification_AllowVP9Decode, which VideoToolbox gives Fig servers and entitled
@@ -557,12 +557,12 @@ static OSStatus startSession(VTVideoDecoderRef ref, VTVideoDecoderSession sessio
         status = avd_start_software(d, session, format,
                                     configured == -3
                                         ? "no NVDEC memory for its buffers (see the AVD alloc/map line)"
-                                        : "not decodable on NVDEC (progressive 4:2:0 8-bit up to 4096x4096 is)");
+                                        : "not decodable on NVDEC (4:2:0 8-bit up to 4096x4096 is)");
         pthread_mutex_unlock(&d->lock);
         return status;
     }
     d->width = (uint32_t)(sps->width_mbs * 16 - (int32_t)(sps->crop_left + sps->crop_right));
-    d->height = (uint32_t)(sps->height_map_units * 16 - (int32_t)(sps->crop_top + sps->crop_bottom));
+    d->height = (uint32_t)(sps->height_mbs * 16 - (int32_t)(sps->crop_top + sps->crop_bottom));
     const bool vui = sps->colour_description;
     d->pixelFormat = sps->full_range ? kCVPixelFormatType_420YpCbCr8BiPlanarFullRange
                                      : kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange;
@@ -590,9 +590,12 @@ static OSStatus startSession(VTVideoDecoderRef ref, VTVideoDecoderSession sessio
     CFRelease(attributes);
     if (!status)
         os_log(gAVDLog,
-               "AVD: session %ux%u in %{public}s on NVDEC (H.264 profile %u level %u, %u reference frames), pictures "
-               "out by %{public}s",
+               "AVD: session %ux%u in %{public}s on NVDEC (H.264 profile %u level %u, %u reference frames, "
+               "%{public}s), pictures out by %{public}s",
                d->width, d->height, getprogname(), sps->profile_idc, sps->level_idc, sps->max_num_ref_frames,
+               sps->frame_mbs_only            ? "progressive"
+               : sps->mb_adaptive_frame_field ? "interlaced, MBAFF"
+                                              : "interlaced",
                d->present ? "VIC" : "the CPU");
     pthread_mutex_unlock(&d->lock);
     return status;

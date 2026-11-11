@@ -168,9 +168,14 @@ static inline const char *tegra_nvdec_check_h264(const TegraNVDECSubmit *s, cons
     const uint32_t h = (uint32_t)p->FrameHeightInMbs;
     if (p->PicWidthInMbs < 3 || w > 256 || p->FrameHeightInMbs < 1 || h > 256)
         return "dimensions";
-    if (!p->frame_mbs_only_flag || p->field_pic_flag || p->MbaffFrameFlag)
-        return "not progressive";
-    if (p->tileFormat || p->gob_height || p->output_memory_layout || p->chroma_format_idc != 1)
+    // Interlaced: FrameHeightInMbs counts frame rows (two map units each); a field picture or an MBAFF frame writes
+    // its rows within the frame's surface, both fields of a frame into one (libnvtvmr's NV12 setups keep every
+    // top/bottom/frame offset 0 and frame_surfaces clear for field pictures: 0x19770-0x197a4, 0x1a23c, 0x19850).
+    const bool interlaced = !p->frame_mbs_only_flag;
+    if ((p->field_pic_flag && !interlaced) || (p->MbaffFrameFlag && (!interlaced || p->field_pic_flag)) ||
+        ((p->bottom_field_flag || p->second_field) && !p->field_pic_flag) || (interlaced && (h & 1)))
+        return "picture structure";
+    if (p->tileFormat || p->gob_height || p->output_memory_layout || p->frame_surfaces || p->chroma_format_idc != 1)
         return "surface format";
     if (p->luma_top_offset || p->luma_bot_offset || p->luma_frame_offset || p->chroma_top_offset ||
         p->chroma_bot_offset || p->chroma_frame_offset)
@@ -186,7 +191,10 @@ static inline const char *tegra_nvdec_check_h264(const TegraNVDECSubmit *s, cons
     if (p->CurrPicIdx >= SLOTS || p->CurrColIdx >= SLOTS)
         return "picture index";
     for (uint32_t i = 0; i < 16; i++) {  // NOLINT(modernize-loop-convert): C too
-        if (p->dpb[i].index >= SLOTS || p->dpb[i].col_idx >= SLOTS || p->dpb[i].output_memory_layout)
+        const nvdec_dpb_entry_s *e = &p->dpb[i];
+        if (e->index >= SLOTS || e->col_idx >= SLOTS || e->output_memory_layout || (e->is_field && !interlaced) ||
+            e->top_field_marking > 2 || e->bottom_field_marking > 2 || !e->top_field_marking != !(e->state & 1) ||
+            !e->bottom_field_marking != !(e->state & 2))
             return "dpb entry";
         if (p->dpb[i].col_idx > cols)
             cols = p->dpb[i].col_idx;
