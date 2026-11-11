@@ -61,6 +61,10 @@ IOReturn AGXDeviceUserClient::run(uint32_t method, const void *in, uint32_t inSi
 		wantIn = sizeof(TegraGM20BAbiSubmitAddress);
 		wantOut = sizeof(TegraGM20BAbiExecReply);
 		break;
+	case TegraGM20BMethodSubmitJob:
+		wantIn = sizeof(TegraGM20BAbiSubmitAddress);
+		wantOut = sizeof(TegraGM20BAbiExecReply);
+		break;
 	case TegraGM20BMethodResourceSetCreate:
 		wantIn = sizeof(TegraGM20BAbiResourceSetCreate);
 		wantOut = sizeof(TegraGM20BAbiResourceSetCreateReply);
@@ -246,6 +250,9 @@ IOReturn AGXDeviceUserClient::run(uint32_t method, const void *in, uint32_t inSi
 	if (method == TegraGM20BMethodSubmitAddress)
 		return submitAddress(static_cast<const TegraGM20BAbiSubmitAddress *>(in),
 				     static_cast<TegraGM20BAbiExecReply *>(out));
+	if (method == TegraGM20BMethodSubmitJob)
+		return submitJob(static_cast<const TegraGM20BAbiSubmitAddress *>(in),
+				 static_cast<TegraGM20BAbiExecReply *>(out));
 	if (method == TegraGM20BMethodResourceSetCreate)
 		return resourceSetCreate(static_cast<const TegraGM20BAbiResourceSetCreate *>(in),
 					 static_cast<TegraGM20BAbiResourceSetCreateReply *>(out));

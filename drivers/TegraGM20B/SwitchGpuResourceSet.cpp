@@ -283,6 +283,19 @@ extern "C" uint32_t switch_gpu_set_seqno(const switch_gpu_resource_set *set, uin
 		       : 0;
 }
 
+extern "C" uint32_t switch_gpu_set_waits(const switch_gpu_resource_set *set, uint32_t slot, uint32_t live,
+				       const uint32_t *completed, switch_gpu_set_wait *waits)
+{
+	const uint32_t others = switch_gpu_set_used(set) & live & ~(1u << slot);
+	uint32_t count = 0;
+	for (uint32_t other = 0; other < SWITCH_GPU_SET_SLOTS; ++other) {
+		const uint32_t seqno = switch_gpu_set_seqno(set, other);
+		if ((others & (1u << other)) && int32_t(completed[other] - seqno) < 0)
+			waits[count++] = {other, seqno};
+	}
+	return count;
+}
+
 extern "C" void switch_gpu_set_killed(switch_gpu_resource_set *set, uint32_t slot)
 {
 	if (slot >= SWITCH_GPU_SET_SLOTS || !(switch_gpu_set_used(set) & (1u << slot)))

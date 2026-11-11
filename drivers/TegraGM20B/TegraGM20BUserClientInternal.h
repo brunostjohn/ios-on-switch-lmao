@@ -62,6 +62,11 @@ using tgm_scan::scanPush;
 namespace tgm_uc
 {
 constexpr uint32_t kMaxChannels = 8;  // fence slots: 16 bytes each in the connection's fence page
+constexpr uint32_t kJobBytes =
+	sizeof(TegraGM20BAbiSubmit) + TegraGM20BMaxJobPushes * sizeof(TegraGM20BAbiPush) +
+	TegraGM20BMaxJobUses * sizeof(TegraGM20BAbiSurfaceUse) + sizeof(TegraGM20BAbiSubmitEvents) +
+	TegraGM20BMaxJobEvents * sizeof(TegraGM20BAbiEventUse) +
+	sizeof(TegraGM20BAbiSubmitAdmission);
 constexpr uint64_t kMaxBoBytes = 256ULL << 20;
 constexpr uint32_t kFenceToken = 0xfe000001u;
 // GPU pool pages are outside the VM (arm_vm_init.c switch_ram_init), so the kernel reports them as device
@@ -235,6 +240,8 @@ IOReturn collectPages(IOMemoryDescriptor *md, uint64_t bytes, uint64_t *pas);
 #pragma GCC visibility pop
 
 using namespace tgm_uc;
+
+struct SwitchGpuJobRecord;
 
 extern "C" int switch_native_surface_gpu_acquire(void *, switch_gpu_native_surface_view *)
 	__attribute__((weak));
@@ -506,6 +513,11 @@ class AGXDeviceUserClient : public IOUserClient
 	IOReturn attachSet(const TegraGM20BAbiResourceSetCreate *in, const TegraGM20BAbiSurfaceUse *uses,
 			   switch_gpu_set_member *members, TegraGM20BAbiResourceSetCreateReply *out);
 	IOReturn resourceSetRelease(const TegraGM20BAbiResourceSetRelease *in);
+	IOReturn submitJob(const TegraGM20BAbiSubmitAddress *in, TegraGM20BAbiExecReply *out);
+	IOReturn runJob(const SwitchGpuJobRecord &record, JobScratch &job, TegraGM20BAbiExecReply *out);
+	IOReturn runJobUses(const SwitchGpuJobRecord &record, JobScratch &job, TegraGM20BAbiExecReply *out,
+			    switch_gpu_resource_set *set, const switch_gpu_sibling_wait *siblings,
+			    uint32_t siblingCount);
 	void destroySets();
 	IOReturn unmapToken(const TegraGM20BAbiUnmap *in);
 	void releaseMappings();

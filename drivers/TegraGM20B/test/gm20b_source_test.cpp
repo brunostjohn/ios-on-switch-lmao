@@ -30,7 +30,7 @@ const std::string &client()
 	static const std::string source = [] {
 		std::string units;
 		for (const char *unit :
-		     {"", "Pool", "Bo", "Channel", "Submit", "Dispatch", "Present"})
+		     {"", "Pool", "Bo", "Channel", "Submit", "Dispatch", "Present", "Job", "JobSubmit"})
 			units += SourceText(std::string("../TegraGM20BUserClient") + unit + ".cpp");
 		return units + SourceText("../TegraGM20BUserClientInternal.h") +
 		       SourceText("../SwitchGpuClientRetirement.h");
@@ -362,12 +362,12 @@ TEST(GM20BPushScanSource, KernelUsesTheHeader)
 	EXPECT_THAT(scan, HasSubstr("scanPush(c, p, whole, nullptr, 0)"));
 	EXPECT_THAT(scan, HasSubstr("prof->cls[i] = cls;"));
 	// A stamp only after a push whose class is not SKIP, only on a profiled submission.
-	EXPECT_THAT(Between(gpu(), "static void chan_job_entry(", "\n}\n"),
+	EXPECT_THAT(Between(gpu(), "void chan_job_entry(", "\n}\n"),
 		    HasSubstr("if (prof && !pushes[i].incomplete && prof->cls[i] != TGM_PC_SKIP) {"));
 	// A job with internal fences is profiled whole: read at its last seqno, against its first's start stamp.
 	EXPECT_THAT(Between(gpu(), "static void chan_submission_room(", "\n}\n"),
 		    HasSubstr("|| count > TGM_PROF_MAX || profiled))"));
-	EXPECT_THAT(Between(gpu(), "static int chan_exec(", "\n}\n"), HasSubstr("chan->submitted + 1 + fences); /*"));
+	EXPECT_THAT(Between(gpu(), "int chan_exec_body(", "\n}\n"), HasSubstr("chan->submitted + 1 + fences); /*"));
 	EXPECT_THAT(Between(gpu(), "static inline void stats_fences(", "\n}\n"),
 		    HasSubstr("prof_collect(chan, first, fs->start.ns, st->end.ns)"));
 }
@@ -518,7 +518,7 @@ TEST(GM20BKillSource, AKilledChannelLeavesItsConnectionWorking)
 		flat(definition(client(), "IOReturn AGXDeviceUserClient::run(uint32_t method,"));
 	EXPECT_THAT(client(), Not(HasSubstr("dead_")));
 	EXPECT_THAT(run, Not(HasSubstr("tgm_chan_error(")));
-	EXPECT_THAT(flat(definition(gpu(), "static int chan_exec(struct tgm_chan *chan,")),
+	EXPECT_THAT(flat(definition(gpu(), "int chan_exec_body(struct tgm_chan *chan,")),
 		    HasSubstr("if (chan->error) return -EIO;"));
 	const std::string order =
 		flat(definition(gpu(), "int tgm_chan_order(struct tgm_chan *chan,"));
@@ -606,10 +606,24 @@ TEST(GM20BRoomSource, NativePublicationNeverSleepsWithBackingLocksHeld)
 	expectBefore(exec, "switch_gpu_backing_abort(&transaction);",
 		"switch_gpu_chan_wait_submission_room(");
 	expectBefore(exec, "switch_gpu_backing_commit(&transaction);", "switch_gpu_chan_submit_leave();");
-	const auto emit = flat(definition(gpu(), "static int chan_exec("));
+	const auto emit = flat(definition(gpu(), "int chan_exec_body("));
 	EXPECT_THAT(emit, HasSubstr("if (!may_wait && !chan_room(chan, entries, words)) return -EAGAIN;"));
 	expectBefore(emit, "chan->chan.defer_kick = true;", "nvif_chan_gpfifo_wait(&chan->chan, entries, words)");
 	EXPECT_THAT(emit, HasSubstr("chan->chan.gpfifo.cur = ring_cur;"));
+}
+
+// SubmitJob holds no connection lock and orders its shared uses' backing locks exactly as exec does.
+TEST(GM20BRoomSource, SubmitJobNeverSleepsWithBackingLocksHeld)
+{
+	const auto job = flat(definition(client(), "IOReturn AGXDeviceUserClient::runJobUses("));
+	EXPECT_THAT(job, Not(HasSubstr("IOLockLock(lock_)")));
+	expectBefore(job, "switch_gpu_chan_submit_enter(chan);", "switch_gpu_backing_begin_checked(");
+	expectBefore(job, "switch_gpu_backing_abort(&transaction);", "switch_gpu_chan_wait_submission_room(");
+	expectBefore(job, "switch_gpu_backing_commit(&transaction);", "switch_gpu_chan_submit_leave();");
+	expectBefore(job, "switch_gpu_set_note_job(set, slot, &completion);", "switch_gpu_chan_submit_leave();");
+	const auto submit = flat(definition(client(), "IOReturn AGXDeviceUserClient::submitJob("));
+	expectBefore(submit, "submitGate_.enterFast();", "runJob(record, job, out)");
+	expectBefore(submit, "runJob(record, job, out)", "submitGate_.leaveFast(lock_);");
 }
 
 // The waiter a submitter sleeps in after -EAGAIN waits for exactly the room chan_exec then checks, computed in one place:
@@ -619,11 +633,13 @@ TEST(GM20BRoomSource, WaiterAndSubmissionReserveOneRoom)
 	EXPECT_EQ(Count(gpu(), "5 * (TGM_ORDER_MAX + dependency_count"), 1u);
 	const auto room = flat(definition(gpu(), "static void chan_submission_room("));
 	EXPECT_THAT(room, HasSubstr("5 * (TGM_ORDER_MAX + dependency_count + 1)"));
-	const char *computed =
-		"chan_submission_room(chan, pushes, count, dependency_count, fences, &prof, &entries, &words);";
-	expectBefore(flat(definition(gpu(), "static int chan_exec(")), computed,
+	// SubmitJob's sibling acquires take a dependency's room; its retry asks the waiter for both together.
+	expectBefore(flat(definition(gpu(), "int chan_exec_body(")),
+		     "chan_submission_room(chan, pushes, count, dependency_count + sibling_count, fences, &prof, "
+		     "&entries, &words);",
 		     "if (!may_wait && !chan_room(chan, entries, words)) return -EAGAIN;");
-	expectBefore(flat(definition(gpu(), "int switch_gpu_chan_wait_submission_room(")), computed,
+	expectBefore(flat(definition(gpu(), "int switch_gpu_chan_wait_submission_room(")),
+		     "chan_submission_room(chan, pushes, count, dependency_count, fences, &prof, &entries, &words);",
 		     "ret = tgm_chan_wait_ready(chan, entries, words);");
 }
 
@@ -633,7 +649,7 @@ TEST(GM20BRoomSource, WaiterAndSubmissionReserveOneRoom)
 TEST(GM20BL2Source, InvalidateOnTheGpu)
 {
 	EXPECT_EQ(Count(gpu(), "FLUSH_L2_SYSTEM_INVALIDATE"), 0u);
-	const std::string exec = flat(Between(gpu(), "static int chan_exec(", "\n}\n"));
+	const std::string exec = flat(Between(gpu(), "int chan_exec_body(", "\n}\n"));
 	expectBefore(exec, "tlb = tgm_tlb_take(&chan->tlb, &chan->vm->tlb) || bind;",
 		     "NVB06F_MEM_OP_D_OPERATION_L2_SYSMEM_INVALIDATE);");
 	// a pending bind's acquire comes before the TLB invalidate that makes its new PTEs seen
@@ -648,7 +664,7 @@ TEST(GM20BL2Source, InvalidateOnTheGpu)
 		exec,
 		"NVB06F_MEM_OP_D_OPERATION_MMU_TLB_INVALIDATE); } PUSH_KICK(&chan->chan.push);",
 		"job.unprefetched = (l2_on() && host_written) || tlb;");
-	EXPECT_THAT(flat(Between(gpu(), "static void chan_job_entry(", "\n}\n")),
+	EXPECT_THAT(flat(Between(gpu(), "void chan_job_entry(", "\n}\n")),
 		    HasSubstr("pushes[i].no_prefetch || (job->unprefetched && !i));"));
 }
 
@@ -1183,7 +1199,7 @@ TEST(GM20BJobFencesSource, OneJobOwnsItsUsesUntilItsLastFence)
 	EXPECT_THAT(exec, HasSubstr("job.written[writtenCount++] = bo->coh;"));
 	EXPECT_THAT(exec, HasSubstr("tgm_coherency_wrote_listed(job.written[i], tgm_chan_uid(chan), seqno);"));
 	EXPECT_THAT(exec, Not(HasSubstr("findAddress(")));
-	const auto emit = flat(definition(gpu(), "static int chan_exec("));
+	const auto emit = flat(definition(gpu(), "int chan_exec_body("));
 	const auto room = flat(definition(gpu(), "static void chan_submission_room("));
 	EXPECT_THAT(room, HasSubstr("*entries = count + 6 + stamps + job_fences;"));
 	EXPECT_THAT(room, HasSubstr("SWITCH_GPU_FENCE_POINT_DWORDS * job_fences;"));
@@ -1213,7 +1229,7 @@ TEST(GM20BVisibilitySource, InternalFenceKeepsExecutionOrderAndExternalFencePubl
 	expectBefore(fence, "NVB06F_MEM_OP_D_OPERATION_L2_FLUSH_DIRTY", "if (external && chan->visible_cpu)");
 	expectBefore(fence, "lower_32_bits(chan->visible_gpu)", "lower_32_bits(chan->fence_gpu)");
 	EXPECT_THAT(fence, HasSubstr("RELEASE_WFI, EN"));
-	const auto exec = flat(definition(gpu(), "static int chan_exec("));
+	const auto exec = flat(definition(gpu(), "int chan_exec_body("));
 	EXPECT_THAT(exec, HasSubstr("if ((l2_on() && host_written) || tlb)"));
 	expectBefore(exec, "NVB06F_MEM_OP_D_OPERATION_L2_FLUSH_DIRTY", "NVB06F_MEM_OP_D_OPERATION_L2_SYSMEM_INVALIDATE");
 	EXPECT_THAT(

@@ -51,6 +51,13 @@ void switch_gpu_set_note_job(struct switch_gpu_resource_set *set, uint32_t slot,
 			     const struct switch_gpu_backing_token *job);
 uint32_t switch_gpu_set_used(const struct switch_gpu_resource_set *set);
 uint32_t switch_gpu_set_seqno(const struct switch_gpu_resource_set *set, uint32_t slot);
+struct switch_gpu_set_wait {
+	uint32_t slot, seqno;
+};
+/* What a job of `slot` follows: each other slot's latest set job, for slots in `live` (a channel, not killed) whose
+ * fence (completed[slot]) has not reached it. */
+uint32_t switch_gpu_set_waits(const struct switch_gpu_resource_set *set, uint32_t slot, uint32_t live,
+			      const uint32_t *completed, struct switch_gpu_set_wait *waits);
 /* A channel that ran the set's jobs was killed: what it wrote is undefined, so the generation ends. */
 void switch_gpu_set_killed(struct switch_gpu_resource_set *set, uint32_t slot);
 

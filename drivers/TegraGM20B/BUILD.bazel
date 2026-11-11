@@ -105,6 +105,7 @@ kernel_driver(
         "TegraGM20BUserClientDispatch.cpp",
         "TegraGM20BUserClientPresent.cpp",
         "TegraGM20BUserClientJob.cpp",
+        "TegraGM20BUserClientJobSubmit.cpp",
         "TegraGM20BDeviceClient.cpp",
         "TegraGM20BCoherency.cpp",
         "SwitchGpuBacking.cpp",

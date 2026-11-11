@@ -4,12 +4,6 @@
 
 namespace
 {
-constexpr uint32_t kJobBytes =
-	sizeof(TegraGM20BAbiSubmit) + TegraGM20BMaxJobPushes * sizeof(TegraGM20BAbiPush) +
-	TegraGM20BMaxJobUses * sizeof(TegraGM20BAbiSurfaceUse) + sizeof(TegraGM20BAbiSubmitEvents) +
-	TegraGM20BMaxJobEvents * sizeof(TegraGM20BAbiEventUse) +
-	sizeof(TegraGM20BAbiSubmitAdmission);
-
 constexpr bool pushScanOn()
 {
 	return TGM_STATS != 0;

@@ -244,3 +244,86 @@ TEST_F(ResourceSet, AMemberLeavingWaitsForTheSubmissionInside)
 	switch_gpu_backing_release(member);
 	switch_gpu_backing_release(member);
 }
+
+// A job follows each other channel's latest job on the set, only while that job is unfinished and its channel lives.
+TEST_F(ResourceSet, AJobFollowsTheOtherChannelsLatestSetJob)
+{
+	auto *member = backing();
+	Set set;
+	set.attach({{member, kWrite, 0}});
+	const auto copy = token(1, 5), render = token(2, 9);
+	switch_gpu_set_note_job(set.set, 3, &copy);
+	switch_gpu_set_note_job(set.set, 0, &render);
+	uint32_t completed[SWITCH_GPU_SET_SLOTS] = {};
+	completed[3] = 4;
+	completed[0] = 9;
+	switch_gpu_set_wait waits[SWITCH_GPU_SET_SLOTS];
+	ASSERT_EQ(switch_gpu_set_waits(set.set, 0, 0xff, completed, waits), 1u);
+	EXPECT_EQ(waits[0].slot, 3u);
+	EXPECT_EQ(waits[0].seqno, 5u);
+	completed[0] = 8;
+	ASSERT_EQ(switch_gpu_set_waits(set.set, 3, 0xff, completed, waits), 1u);
+	EXPECT_EQ(waits[0].slot, 0u);
+	EXPECT_EQ(waits[0].seqno, 9u);
+	EXPECT_EQ(switch_gpu_set_waits(set.set, 0, 0xff & ~(1u << 3), completed, waits), 0u);
+	completed[3] = 5;
+	EXPECT_EQ(switch_gpu_set_waits(set.set, 0, 0xff, completed, waits), 0u);
+	const auto later = token(1, 0x80000002);
+	switch_gpu_set_note_job(set.set, 3, &later);
+	completed[3] = 0x7ffffff0;
+	EXPECT_EQ(switch_gpu_set_waits(set.set, 0, 0xff, completed, waits), 1u);
+	switch_gpu_backing_release(member);
+}
+
+// A channel killed while its set job runs: its partner's acquire passes once the kill releases the fence, the set's
+// generation ends at the kill, and the next generation's jobs no longer follow the dead channel.
+TEST_F(ResourceSet, AKillMidSetEndsTheGenerationAndDropsTheDeadChannel)
+{
+	auto *member = backing();
+	Set set;
+	const uint32_t generation = set.attach({{member, kWrite, 0}});
+	const auto doomed = token(1, 7);
+	switch_gpu_set_note_job(set.set, 2, &doomed);
+	ASSERT_EQ(switch_gpu_set_enter(set.set, generation), 1);
+	uint32_t completed[SWITCH_GPU_SET_SLOTS] = {};
+	switch_gpu_set_wait waits[SWITCH_GPU_SET_SLOTS];
+	EXPECT_EQ(switch_gpu_set_waits(set.set, 5, 0xff, completed, waits), 1u);
+	switch_gpu_set_leave(set.set);
+	switch_gpu_set_killed(set.set, 2);
+	EXPECT_EQ(switch_gpu_set_enter(set.set, generation), 0);
+	const uint32_t next = set.attach({{member, kWrite, 0}});
+	ASSERT_EQ(switch_gpu_set_enter(set.set, next), 1);
+	EXPECT_EQ(switch_gpu_set_waits(set.set, 5, 0xff, completed, waits), 0u);
+	switch_gpu_set_leave(set.set);
+	switch_gpu_backing_release(member);
+}
+
+// A shared use is never a member, so a CPU lock of an IOSurface keeps excluding and ordering GPU work exactly.
+TEST_F(ResourceSet, ACpuLockOnASharedUseKeepsItsExclusion)
+{
+	const uint64_t page = next_page += 4096;
+	auto *surface = switch_gpu_backing_register(&page, 1, 41, nullptr, nullptr);
+	auto *member = backing();
+	{
+		Set set;
+		set.attach({{surface, kWrite, 0}}, -22);
+		set.attach({{member, kWrite, 0}});
+		EXPECT_EQ(switch_gpu_backing_set(surface), nullptr);
+		EXPECT_EQ(switch_gpu_backing_set(member), set.set);
+	}
+	ASSERT_EQ(switch_gpu_backing_cpu_acquire(surface, 0, 4096, kWrite), 0);
+	switch_gpu_backing_use use = {surface, kWrite, 0};
+	const auto job = token(3, 2);
+	switch_gpu_backing_transaction transaction = {};
+	EXPECT_EQ(switch_gpu_backing_begin(&use, 1, &job, &transaction), -16);
+	use.access = kWrite | SWITCH_GPU_BACKING_NO_CPU_EXCLUSION;
+	ASSERT_EQ(switch_gpu_backing_begin(&use, 1, &job, &transaction), 0);
+	switch_gpu_backing_commit(&transaction);
+	ASSERT_EQ(switch_gpu_backing_cpu_release(surface, 0, 4096, kWrite), 0);
+	EXPECT_EQ(switch_gpu_backing_cpu_acquire(surface, 0, 4096, kRead | SWITCH_GPU_BACKING_CPU_AVOID_SYNC), -16);
+	complete(job);
+	EXPECT_EQ(switch_gpu_backing_cpu_acquire(surface, 0, 4096, kRead | SWITCH_GPU_BACKING_CPU_AVOID_SYNC), 0);
+	EXPECT_EQ(switch_gpu_backing_cpu_release(surface, 0, 4096, kRead | SWITCH_GPU_BACKING_CPU_AVOID_SYNC), 0);
+	switch_gpu_backing_release(surface);
+	switch_gpu_backing_release(member);
+}

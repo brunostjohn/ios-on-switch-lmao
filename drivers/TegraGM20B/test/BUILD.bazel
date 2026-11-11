@@ -217,6 +217,16 @@ host_test(
 )
 
 host_test(
+    name = "gm20b_job_record_test",
+    srcs = [
+        "gm20b_job_record_test.cpp",
+        "//drivers/TegraGM20B:SwitchGpuJobRecord.h",
+        "//drivers/TegraGM20B:TegraGM20BABI.h",
+        "//drivers/TegraGM20B:TegraGM20BJobABI.h",
+    ],
+)
+
+host_test(
     name = "switch_gpu_job_fences_test",
     srcs = [
         "switch_gpu_job_fences_test.cpp",
@@ -349,6 +359,8 @@ host_test(
         "//drivers/TegraGM20B:TegraGM20BUserClientPool.cpp",
         "//drivers/TegraGM20B:TegraGM20BUserClientPresent.cpp",
         "//drivers/TegraGM20B:TegraGM20BUserClientSubmit.cpp",
+        "//drivers/TegraGM20B:TegraGM20BUserClientJob.cpp",
+        "//drivers/TegraGM20B:TegraGM20BUserClientJobSubmit.cpp",
         "//drivers/TegraGM20B:SwitchGpuClientRetirement.h",
         "//drivers/TegraGM20B:SwitchGpuNativeImport.h",
         "//drivers/TegraGM20B:gpu_sources",
