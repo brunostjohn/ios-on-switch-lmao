@@ -4,7 +4,7 @@ import XCTest
 
 final class LandscapeRunTests: XCTestCase {
     /// A reply as drivers/NativeMobileDisplay/SwitchLandscapeRunDisplay.h lays it out.
-    func reply(crc: [UInt32], mode: [UInt8], vicJobs: UInt32 = 0, latches: UInt32 = 0) -> [UInt8] {
+    func reply(crc: [UInt32], mode: [UInt8], vicJobs: [UInt32] = [0, 0, 0], latches: UInt32 = 0) -> [UInt8] {
         var bytes = [UInt8](repeating: 0, count: LandscapeSample.size)
         func put(_ word: UInt32, _ at: Int) {
             for i in 0..<4 { bytes[at + i] = UInt8(truncatingIfNeeded: word >> (8 * i)) }
@@ -16,17 +16,17 @@ final class LandscapeRunTests: XCTestCase {
         put(1, 20)
         put(latches, 24)
         put(3, 36)
-        put(vicJobs, 44)
-        put(7, 52)
-        put(2, 56)
-        put(1, 60)
-        for (i, value) in crc.enumerated() { put(value, 72 + 4 * i) }
-        for (i, value) in mode.enumerated() { bytes[72 + 4 * LandscapeSample.maxFrames + i] = value }
+        for (i, jobs) in vicJobs.enumerated() { put(jobs, 44 + 4 * i) }
+        put(7, 68)
+        put(2, 80)
+        put(1, 84)
+        for (i, value) in crc.enumerated() { put(value, 96 + 4 * i) }
+        for (i, value) in mode.enumerated() { bytes[96 + 4 * LandscapeSample.maxFrames + i] = value }
         return bytes
     }
 
     func sample(
-        _ crc: [UInt32], _ mode: [UInt8], switches: Int = 0, vicJobs: Int = 0, latches: Int = 0
+        _ crc: [UInt32], _ mode: [UInt8], switches: Int = 0, vicJobs: [Int] = [0, 0, 0], latches: Int = 0
     )
         -> LandscapeSample
     {
@@ -46,19 +46,20 @@ final class LandscapeRunTests: XCTestCase {
     }
 
     func testTheReplyCarriesEveryFrameAndCounter() throws {
-        let parsed = try XCTUnwrap(LandscapeSample(reply(crc: [1, 2, 3], mode: [0, 1, 3], vicJobs: 5, latches: 9)))
+        let parsed = try XCTUnwrap(
+            LandscapeSample(reply(crc: [1, 2, 3], mode: [0, 1, 3], vicJobs: [5, 6, 8], latches: 9)))
         XCTAssertEqual(parsed.crc, [1, 2, 3])
         XCTAssertEqual(parsed.mode, [0, 1, 3])
-        XCTAssertEqual(parsed.vicJobs, 5)
+        XCTAssertEqual(parsed.vicJobs, [5, 6, 8])
         XCTAssertEqual(parsed.overlayLatches, 9)
         XCTAssertEqual(parsed.underflows, [0, 3, 0])
-        XCTAssertEqual(parsed.vicEventTurns, 7)
+        XCTAssertEqual(parsed.vicEventTurns, [7, 0, 0])
         XCTAssertEqual(parsed.displayNs, 0x1_0000_0002)
         XCTAssertEqual(parsed.landscapeFrames, 2)
         XCTAssertNil(LandscapeSample([UInt8](repeating: 0, count: LandscapeSample.size)))
     }
 
-    func samples(enter: [UInt32]? = nil, vicJobs: Int = 0) -> LandscapeJudge.Samples {
+    func samples(enter: [UInt32]? = nil, vicJobs: [Int] = [0, 0, 0]) -> LandscapeJudge.Samples {
         var s = LandscapeJudge.Samples()
         s.vicHeld = sample(Array(repeating: 0xaaaa, count: 30), Array(repeating: 0, count: 30))
         let entering = enter ?? Array(repeating: 0xaaaa, count: 20) + Array(repeating: 0xbbbb, count: 70)
@@ -88,10 +89,19 @@ final class LandscapeRunTests: XCTestCase {
         XCTAssertEqual(metrics["stray_enter"], .integer(1))
     }
 
-    func testAVicJobWhilePlayingFails() {
-        let (checks, metrics) = LandscapeJudge.judge(samples(vicJobs: 90), dropped: 0)
-        XCTAssertEqual(checks.filter { !$0.1 }.map(\.0), ["no VIC job for the landscape video (vic_jobs_per_frame 0)"])
+    func testAVicJobFromTheDisplayServerWhilePlayingFails() {
+        let (checks, metrics) = LandscapeJudge.judge(samples(vicJobs: [90, 0, 0]), dropped: 0)
+        XCTAssertEqual(
+            checks.filter { !$0.1 }.map(\.0),
+            ["no VIC job from the display server for the landscape video (vic_jobs_per_frame 0)"])
         XCTAssertEqual(metrics["vic_jobs_per_frame"], .number(1, digits: 3))
+    }
+
+    func testOtherProcessesVicJobsAreReportedNotJudged() {
+        let (checks, metrics) = LandscapeJudge.judge(samples(vicJobs: [0, 12, 40]), dropped: 0)
+        XCTAssertEqual(checks.filter { !$0.1 }.map(\.0), [])
+        XCTAssertEqual(metrics["vic_jobs_test"], .integer(12))
+        XCTAssertEqual(metrics["vic_jobs_other"], .integer(40))
     }
 
     func testZeroReadingsAreNotFrames() {

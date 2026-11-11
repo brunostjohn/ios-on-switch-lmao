@@ -9,6 +9,12 @@
 #define SWITCH_DISPLAY_LANDSCAPE_RUN_MAGIC 0x444c5356u  // 'DLSV'
 #define SWITCH_DISPLAY_LANDSCAPE_RUN_FRAMES 240
 
+// Who asked TegraVIC for a job: Core Animation's display server (backboardd: the route under test), the HW Test process
+// making these requests, anyone else.
+#define SWITCH_DISPLAY_LANDSCAPE_ORIGIN_DISPLAY_SERVER 0
+#define SWITCH_DISPLAY_LANDSCAPE_ORIGIN_TEST 1
+#define SWITCH_DISPLAY_LANDSCAPE_ORIGIN_OTHER 2
+
 #define SWITCH_DISPLAY_TRAIT_OVERLAY_BLOCK_YUV 1u
 #define SWITCH_DISPLAY_TRAIT_COLUMN_SCAN_YUV 2u
 #define SWITCH_DISPLAY_TRAIT_OFFSET_CROP 4u
@@ -47,9 +53,9 @@ typedef struct {
     uint32_t overlayLatches;  // compositions latched (video frames shown)
     uint32_t uiLatches;       // UI flips latched
     uint32_t underflows[3];   // frame ends with windows A, B, C underflowing
-    uint32_t vicJobs;         // VIC jobs submitted
-    uint32_t vicTurns;        // quarter turns recorded instead of copied
-    uint32_t vicEventTurns;   // quarter turns copied because their request carries events
+    uint32_t vicJobs[3];      // VIC jobs submitted, by SWITCH_DISPLAY_LANDSCAPE_ORIGIN_*
+    uint32_t vicTurns[3];     // quarter turns recorded instead of copied, by origin
+    uint32_t vicEventTurns[3];  // quarter turns whose request carries events, by origin
     uint64_t displayNs;  // CPU in the display's kicks and frame ends
     uint64_t vicNs;      // CPU in TegraVIC's requests and engine thread
     uint32_t crc[SWITCH_DISPLAY_LANDSCAPE_RUN_FRAMES];
@@ -57,7 +63,7 @@ typedef struct {
 } SwitchDisplayLandscapeReply;
 
 #ifdef __cplusplus
-static_assert(sizeof(SwitchDisplayLandscapeReply) == 72 + 4 * SWITCH_DISPLAY_LANDSCAPE_RUN_FRAMES +
+static_assert(sizeof(SwitchDisplayLandscapeReply) == 96 + 4 * SWITCH_DISPLAY_LANDSCAPE_RUN_FRAMES +
                                                          SWITCH_DISPLAY_LANDSCAPE_RUN_FRAMES,
               "the app reads the reply at these offsets");
 #endif

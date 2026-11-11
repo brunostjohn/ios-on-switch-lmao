@@ -73,9 +73,11 @@ void landscapeRunFinish(int error)
     }
     SwitchVICTurnCounters vic = {};
     switch_vic_turn_counters(&vic);
-    s.reply.vicJobs = vic.jobs - s.vicAt.jobs;
-    s.reply.vicTurns = vic.turns - s.vicAt.turns;
-    s.reply.vicEventTurns = vic.eventTurns - s.vicAt.eventTurns;
+    for (unsigned i = 0; i != 3; ++i) {
+        s.reply.vicJobs[i] = vic.jobs[i] - s.vicAt.jobs[i];
+        s.reply.vicTurns[i] = vic.turns[i] - s.vicAt.turns[i];
+        s.reply.vicEventTurns[i] = vic.eventTurns[i] - s.vicAt.eventTurns[i];
+    }
     absolutetime_to_nanoseconds(s.displayTicks, &s.reply.displayNs);
     absolutetime_to_nanoseconds(vic.ticks - s.vicAt.ticks, &s.reply.vicNs);
     s.reply.error = error;

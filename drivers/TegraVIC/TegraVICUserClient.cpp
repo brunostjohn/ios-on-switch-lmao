@@ -250,6 +250,7 @@ struct Job {
 #if TEGRA_VIC_STATS
     uint64_t submittedUs;
     int pid;  // the transform caller's (the job runs on the engine thread)
+    uint8_t origin;
 #endif
 };
 
@@ -302,6 +303,7 @@ bool runJob(Job *job, IOReturn *status)
 #if TEGRA_VIC_STATS
     const uint64_t entered = mach_absolute_time();
     const bool eventTurn = job->events && job->plan.count == 1 && (job->plan.op[0].transform & TEGRA_VIC_ROT90);
+    const uint8_t origin = job->origin;
 #endif
     // A quarter turn of a decoder's picture window A scans itself: recorded on the destination, nothing to submit.
     SwitchDisplayTraits traits = switch_display_traits();
@@ -309,7 +311,7 @@ bool runJob(Job *job, IOReturn *status)
     if (!job->bounceSrc && !job->bounceDst &&
         switch_vic_turn_defer(&job->src, &job->dst, &job->plan, job->chromaSite, job->events != nullptr, traits)) {
 #if TEGRA_VIC_STATS
-        switch_vic_turn_count(false, true, false, mach_absolute_time() - entered);
+        switch_vic_turn_count(job->origin, false, true, eventTurn, mach_absolute_time() - entered);
 #endif
         *status = kIOReturnSuccess;
         return true;
@@ -339,7 +341,7 @@ bool runJob(Job *job, IOReturn *status)
     }
 #if TEGRA_VIC_STATS
     gStats.submission(operations, bounced, switch_now_us() - began, addressed);
-    switch_vic_turn_count(true, false, eventTurn, mach_absolute_time() - entered);
+    switch_vic_turn_count(origin, true, false, eventTurn, mach_absolute_time() - entered);
 #endif
     return false;
 }
@@ -482,7 +484,8 @@ IOReturn transform(Conn *conn, const void *in, uint32_t size)
         void stop()
         {
             if (at)
-                switch_vic_turn_count(false, false, false, mach_absolute_time() - at);
+                switch_vic_turn_count(SWITCH_DISPLAY_LANDSCAPE_ORIGIN_OTHER, false, false, false,
+                                      mach_absolute_time() - at);
             at = 0;
         }
         ~Charge() { stop(); }
@@ -499,6 +502,7 @@ IOReturn transform(Conn *conn, const void *in, uint32_t size)
         return kIOReturnNoMemory;
 #if TEGRA_VIC_STATS
     job->pid = proc_selfpid();
+    job->origin = switch_vic_turn_origin(job->pid);
 #endif
     // Surfaces in the caller's task, as Apple's driver looks them up (not the task that opened the connection).
     IOReturn ret = tegra_vic_surface_lookup(r.dst_id, current_task(), &job->dst);

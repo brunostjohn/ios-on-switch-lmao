@@ -9,7 +9,8 @@ import UIKit
 /// V3's trait forced for this run's own TegraVIC connection, so TegraVIC records each turn and window A column-scans
 /// the decoder's picture behind the UI on window B. DC A's CRC is read at every frame end of five samples: a held
 /// frame on the copy, the change to landscape on that same frame, the clip playing, the held frame again, the change
-/// back. Pass: no VIC job for the landscape video, no frame of either change showing anything but one route's CRC or
+/// back. Pass: no VIC job from Core Animation's display server for the landscape video (other processes' jobs are
+/// reported, not judged), no frame of either change showing anything but one route's CRC or
 /// the other's, the copy's very CRC back afterwards, no underflow, no frame dropped while playing. The two routes
 /// filter differently (VIC scales the turn, window A's DDAs scale the scan), so their CRCs are reported (crc_same),
 /// not compared.
@@ -89,10 +90,7 @@ struct LandscapeVideoTest: HWTest {
         await MainActor.run { video.pause() }
 
         let (checks, metrics) = LandscapeJudge.judge(samples, dropped: dropped)
-        let detail =
-            samples.enter.switches == 0 && samples.enter.vicEventTurns > 0
-            ? "Core Animation's turns carry events and are copied (TegraVIC: request shape lines)" : ""
-        return .judged(checks, metrics, detail: detail)
+        return .judged(checks, metrics)
     }
 
     /// The frames AVFoundation has dropped so far for `item`.

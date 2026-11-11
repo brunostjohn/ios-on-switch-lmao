@@ -5,6 +5,7 @@
 #include <IOKit/IOLib.h>
 #include <os/log.h>
 #include <string.h>
+#include <sys/proc.h>
 #include "SwitchVICTurn.h"
 #include "../NativeMobileDisplay/SwitchLandscapeRunABI.h"
 
@@ -13,6 +14,7 @@ extern "C" IOReturn switch_display_landscape_run_call(const IOExternalMethodArgu
 
 namespace {
 SwitchVICTurnCounters gCounters;
+int gTestPid = -1;
 constexpr unsigned kShapes = 32;
 uint64_t gShapes[kShapes];
 
@@ -69,22 +71,35 @@ void switch_vic_turn_request_seen(const TegraVICRequest &r, const TegraVICSurfac
     os_log(OS_LOG_DEFAULT, "%s", line);
 }
 
-void switch_vic_turn_count(bool submitted, bool turned, bool eventTurn, uint64_t ticks)
+uint8_t switch_vic_turn_origin(int pid)
 {
+    char name[32] = {};
+    proc_selfname(name, sizeof(name));
+    if (!strcmp(name, "backboardd"))
+        return SWITCH_DISPLAY_LANDSCAPE_ORIGIN_DISPLAY_SERVER;
+    return pid == __atomic_load_n(&gTestPid, __ATOMIC_RELAXED) ? SWITCH_DISPLAY_LANDSCAPE_ORIGIN_TEST
+                                                               : SWITCH_DISPLAY_LANDSCAPE_ORIGIN_OTHER;
+}
+
+void switch_vic_turn_count(uint8_t origin, bool submitted, bool turned, bool eventTurn, uint64_t ticks)
+{
+    const unsigned at = origin < 3 ? origin : SWITCH_DISPLAY_LANDSCAPE_ORIGIN_OTHER;
     if (submitted)
-        __atomic_add_fetch(&gCounters.jobs, 1u, __ATOMIC_RELAXED);
+        __atomic_add_fetch(&gCounters.jobs[at], 1u, __ATOMIC_RELAXED);
     if (turned)
-        __atomic_add_fetch(&gCounters.turns, 1u, __ATOMIC_RELAXED);
+        __atomic_add_fetch(&gCounters.turns[at], 1u, __ATOMIC_RELAXED);
     if (eventTurn)
-        __atomic_add_fetch(&gCounters.eventTurns, 1u, __ATOMIC_RELAXED);
+        __atomic_add_fetch(&gCounters.eventTurns[at], 1u, __ATOMIC_RELAXED);
     __atomic_add_fetch(&gCounters.ticks, ticks, __ATOMIC_RELAXED);
 }
 
 extern "C" void switch_vic_turn_counters(SwitchVICTurnCounters *out)
 {
-    out->jobs = __atomic_load_n(&gCounters.jobs, __ATOMIC_RELAXED);
-    out->turns = __atomic_load_n(&gCounters.turns, __ATOMIC_RELAXED);
-    out->eventTurns = __atomic_load_n(&gCounters.eventTurns, __ATOMIC_RELAXED);
+    for (unsigned i = 0; i != 3; ++i) {
+        out->jobs[i] = __atomic_load_n(&gCounters.jobs[i], __ATOMIC_RELAXED);
+        out->turns[i] = __atomic_load_n(&gCounters.turns[i], __ATOMIC_RELAXED);
+        out->eventTurns[i] = __atomic_load_n(&gCounters.eventTurns[i], __ATOMIC_RELAXED);
+    }
     out->ticks = __atomic_load_n(&gCounters.ticks, __ATOMIC_RELAXED);
 }
 
@@ -96,6 +111,7 @@ IOReturn switch_vic_landscape_call(const void *client, const IOExternalMethodArg
     if (a->scalarInputCount || a->scalarOutputCount || a->structureInputSize != sizeof(*request) || !request ||
         request->magic != SWITCH_DISPLAY_LANDSCAPE_RUN_MAGIC || request->reserved)
         return kIOReturnBadArgument;
+    __atomic_store_n(&gTestPid, proc_selfpid(), __ATOMIC_RELAXED);
     if (request->op == SWITCH_DISPLAY_LANDSCAPE_FORCE) {
         if (request->value & ~(SWITCH_DISPLAY_TRAIT_OVERLAY_BLOCK_YUV | SWITCH_DISPLAY_TRAIT_COLUMN_SCAN_YUV |
                                SWITCH_DISPLAY_TRAIT_OFFSET_CROP))
