@@ -58,6 +58,7 @@
 #include "../../kits/SwitchDMA/SwitchDMABuffer.h"
 #include "../../kits/SwitchDMA/SwitchDcache.h"
 #include "../../kits/SwitchDMA/SwitchHwPage.h"
+#include "../../kits/SwitchEngineGate/SwitchEngineGateKernel.h"
 #include "../../kits/SwitchFalcon/SwitchFalcon.h"
 #include "../../kits/SwitchMath/SwitchMath.h"
 #include "../../kits/SwitchMMIO/SwitchMMIOKernel.h"
@@ -133,7 +134,7 @@ constexpr uint32_t kTailPages = 4 * 16384 * 4 / SWITCH_HW_PAGE_SIZE;
 TegraVICBuffer gTailPage;
 uint64_t gTailPages[kTailPages];
 
-IOLock *gStateLock;  // suspend/resume against jobs
+SwitchEngineGate<SwitchEngineGateKernel> gGate;
 uint32_t gSyncpt;
 bool gUp, gWedged;
 TegraVICBuffer gConfig, gFilter;
@@ -141,6 +142,8 @@ TegraVICBuffer gConfig, gFilter;
 const char *falconState()
 {
     static char text[160];
+    if (gUp && !gGate.powered())
+        return "falcon powered off (idle)";
     return switch_falcon_state(gVic, text, sizeof(text));
 }
 
@@ -335,6 +338,8 @@ void park()
 
 void engineSuspend();
 void engineResume();
+int gateOn(void *);
+int gateOff(void *, bool drain);
 
 bool allocate()
 {
@@ -378,9 +383,8 @@ void bringUp(void *, wait_result_t)
     }
     gVic = switch_mmio_map(kVicPA, kVicSize);
     gMc = switch_mmio_map(kMcPA, 0x1000);
-    gStateLock = IOLockAlloc();
     gMappingLock = IOLockAlloc();
-    if (!gVic || !gMc || !gStateLock || !gMappingLock || !switch_vic_mapping_start()) {
+    if (!gVic || !gMc || !gMappingLock || !switch_vic_mapping_start()) {
         IOLog("TegraVIC: V0 FAIL no mapping\n");
         return;
     }
@@ -432,8 +436,9 @@ void bringUp(void *, wait_result_t)
         "us; %s\n",
         gFceSize, id, from, tegra_host1x_syncpt_read(id), switch_now_us() - start, falconState());
     gSyncpt = id;
-    if (!switch_vic_jobs_start(gConfig, id, tegra_host1x_syncpt_read(id))) {
-        IOLog("TegraVIC: V2 FAIL no completion worker\n");
+    if (!switch_vic_jobs_start(gConfig, id, tegra_host1x_syncpt_read(id)) ||
+        !gGate.start({"TegraVIC", nullptr, gateOn, gateOff})) {
+        IOLog("TegraVIC: V2 FAIL no completion worker or idle timer\n");
         park();
         giveBack();
         return;
@@ -533,45 +538,82 @@ extern "C" uint32_t tegra_vic_syncpt(void)
     return gSyncpt;
 }
 
-// Sleep (SC7), through TegraHost1x's sleep clients. Suspend waits for the queued jobs (switch_vic_jobs_suspend), parks
-// the engine in reset and drops the swgroup to bypass before host1x saves its syncpoints; new jobs block until resume.
-// Resume runs after host1x is back: the SMMU domain is programmed again (SC7 resets the MC), the partition powered, the
-// falcon reloaded from the kept image and proven with the V2 stream.
+// Idle power gating (SwitchEngineGate.h), as mainline's runtime PM: off 500 ms after the last job, on at the next. On
+// is SC7's resume minus the SMMU domain, which an idle power-off keeps (the MC is not reset): partition, clock, reset,
+// the falcon reloaded from the kept image and proven with V2's stream, the queue rebased on the syncpoint that stream
+// moved. A failure there is one line and VIC refuses work from then on. Off parks the queue and powers the partition
+// down; the host1x channel is left as it is, idle at the end of its last job's stream.
 namespace {
+int gateOn(void *)
+{
+    bool wasOn = false;
+    bool answered = false;
+    gLine[0] = 0;
+    if (powerUp(&wasOn) && bootFalcon()) {
+        const uint32_t from = tegra_host1x_syncpt_read(gSyncpt);
+        const char *stage = nullptr;
+        const int ret = answer(gSyncpt, from, &stage);
+        answered = !ret;
+        if (ret) {
+            char state[160];
+            snprintf(gLine, sizeof(gLine), "%s did not answer (%d, syncpoint %u %u->%u); %s", stage, ret, gSyncpt, from,
+                     tegra_host1x_syncpt_read(gSyncpt), switch_falcon_state(gVic, state, sizeof(state)));
+        }
+    }
+    if (!answered) {
+        gWedged = true;
+        IOLog("TegraVIC: power-on FAIL %s; VIC refuses work\n", gLine[0] ? gLine : "V1");
+        switch_car_reset_assert(kClock);
+        IODelay(2);
+        switch_car_clock_disable(kClock);
+    }
+    switch_vic_jobs_resume(answered, tegra_host1x_syncpt_read(gSyncpt));
+    return answered ? 0 : -19;
+}
+
+int gateOff(void *, bool drain)
+{
+    if (!switch_vic_jobs_park(drain))
+        return SWITCH_ENGINE_GATE_BUSY;
+    return switch_pmc_power_down(kPartition, kClock, kClock) ? SWITCH_ENGINE_GATE_OFF : -5;
+}
+
+// Sleep (SC7), through TegraHost1x's sleep clients. Suspend powers the engine off once its queued jobs are done and
+// drops the swgroup to bypass before host1x saves its syncpoints; new jobs wait for resume. Resume, after host1x is
+// back, programs the SMMU domain again (SC7 resets the MC); the engine is powered on by its next job.
 void engineSuspend()
 {
-    IOLockLock(gStateLock);
-    switch_vic_jobs_suspend();
+    gGate.suspend();
     smmuDetach();
-    switch_car_reset_assert(kClock);
-    IODelay(2);
-    switch_car_clock_disable(kClock);
-    IOLockUnlock(gStateLock);
 }
 
 void engineResume()
 {
-    IOLockLock(gStateLock);
-    bool wasOn = false;
     gLine[0] = 0;
-    gWedged = true;
-    if (smmuAttach() && powerUp(&wasOn) && bootFalcon()) {
-        const uint32_t from = tegra_host1x_syncpt_read(gSyncpt);
-        const char *stage = nullptr;
-        const int ret = answer(gSyncpt, from, &stage);
-        if (!ret) {
-            gWedged = false;
-        } else {
-            snprintf(gLine, sizeof(gLine), "%s did not answer (%d, syncpoint %u %u->%u); %s", stage, ret, gSyncpt, from,
-                     tegra_host1x_syncpt_read(gSyncpt), falconState());
-        }
+    const bool attached = smmuAttach();
+    if (!attached) {
+        gWedged = true;
+        IOLog("TegraVIC: resume FAIL %s; VIC refuses work\n", gLine);
+        switch_vic_jobs_resume(false, tegra_host1x_syncpt_read(gSyncpt));
     }
-    if (gWedged)
-        IOLog("TegraVIC: resume FAIL %s; VIC refuses work\n", gLine[0] ? gLine : "V1");
-    switch_vic_jobs_resume(!gWedged, tegra_host1x_syncpt_read(gSyncpt));
-    IOLockUnlock(gStateLock);
+    gGate.resume(attached);
 }
 }  // namespace
+
+extern "C" int switch_vic_power_use(void)
+{
+    return gGate.use();
+}
+
+extern "C" void switch_vic_power_done(void)
+{
+    gGate.done();
+}
+
+extern "C" void switch_vic_power_idle(void)
+{
+    gGate.idle();
+}
 
 // On by default (no boot-arg): VIC is the scaler Core Animation needs to clone the display (Screen Recording).
 extern "C" int tegra_vic_probe(void)

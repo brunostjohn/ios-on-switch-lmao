@@ -13,8 +13,8 @@ struct switch_gpu_bridge {
 namespace {
 std::vector<switch_gpu_backing_token> sourceTokens;
 std::vector<uint32_t> publishedWords;
-uint32_t begins, aborts, commits, retained, bridges, released, roomWaits, submits;
-int bridgeError, submitError, retainError, statusError;
+uint32_t begins, aborts, commits, retained, bridges, released, roomWaits, submits, powerUses, powerDones;
+int bridgeError, submitError, retainError, statusError, powerError;
 int bridgeResult = 1;
 uint64_t nextTestSequence = 0;
 bool transactionLocked, changeProducer, busyOnce;
@@ -194,6 +194,20 @@ int tegra_host1x_syncpt_wait(uint32_t, uint32_t, uint32_t)
 void tegra_vic_describe(char *, size_t)
 {}
 
+int switch_vic_power_use()
+{
+    ++powerUses;
+    return powerError;
+}
+
+void switch_vic_power_done()
+{
+    ++powerDones;
+}
+
+void switch_vic_power_idle()
+{}
+
 void tegra_host1x_describe_channel(uint32_t, char *, size_t)
 {}
 }
@@ -290,8 +304,8 @@ protected:
 
     void SetUp() override
     {
-        begins = aborts = commits = retained = bridges = released = roomWaits = submits = 0;
-        bridgeError = submitError = retainError = statusError = 0;
+        begins = aborts = commits = retained = bridges = released = roomWaits = submits = powerUses = powerDones = 0;
+        bridgeError = submitError = retainError = statusError = powerError = 0;
         bridgeResult = 1;
         transactionLocked = changeProducer = busyOnce = false;
         changeGeneration = nullptr;
@@ -500,4 +514,48 @@ TEST_F(SwitchVICJobsTest, ASubmissionWithoutAWriteUseIsRefused)
     EXPECT_EQ(switch_vic_submit_checked(jobs, 1, nullptr, {readOnly, 1, nullptr, 0, nullptr, 0}, nullptr, nullptr,
                                         nullptr), -22);
     EXPECT_EQ(gQueue.submitted, gQueue.completed);
+}
+
+// Idle power gating (TegraVIC.cpp, SwitchEngineGate.h): a submission holds the powered engine for the whole call, an
+// idle power-off parks only an empty queue, and the power-on's proof stream moves the syncpoint the queue rebases on.
+TEST_F(SwitchVICJobsTest, EverySubmissionHoldsThePowerOnceAndReleasesIt)
+{
+    ASSERT_EQ(submit(), 0);
+    EXPECT_EQ(powerUses, 1u);
+    EXPECT_EQ(powerDones, 1u);
+    submitError = -5;
+    EXPECT_EQ(submit(), -5);
+    EXPECT_EQ(powerUses, 2u);
+    EXPECT_EQ(powerDones, 2u);
+    submitError = 0;
+    powerError = -19;
+    const uint32_t before = submits;
+    EXPECT_EQ(submit(), -19);
+    EXPECT_EQ(submits, before);
+    EXPECT_EQ(powerDones, 2u);
+}
+
+TEST_F(SwitchVICJobsTest, AnIdlePowerOffParksOnlyAnEmptyQueue)
+{
+    ASSERT_EQ(submit(), 0);
+    EXPECT_FALSE(switch_vic_jobs_park(false));
+    EXPECT_FALSE(gSuspended);
+    auto job = gQueue.jobs[gQueue.head];
+    EXPECT_EQ(completeJob(job), 0);
+    ASSERT_TRUE(gQueue.retire(static_cast<uint32_t>(job.fence)));
+    EXPECT_TRUE(switch_vic_jobs_park(false));
+    EXPECT_TRUE(gSuspended);
+}
+
+TEST_F(SwitchVICJobsTest, AParkedQueueHoldsTheNextSubmissionUntilAResumeRebasesIt)
+{
+    ASSERT_TRUE(switch_vic_jobs_park(false));
+    EXPECT_THROW(submit(), std::runtime_error) << "the submission sleeps until resume";
+    IOLockUnlock(gLock);
+    const uint64_t base = gQueue.submitted;
+    switch_vic_jobs_resume(true, static_cast<uint32_t>(base) + 2);
+    EXPECT_FALSE(gSuspended);
+    ASSERT_EQ(submit(), 0);
+    EXPECT_EQ(gQueue.submitted, base + 3);
+    EXPECT_EQ(powerUses, powerDones);
 }
