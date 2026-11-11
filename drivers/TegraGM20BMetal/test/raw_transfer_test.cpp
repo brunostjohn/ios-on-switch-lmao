@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 #include "../raw/runtime/raw_transfer.h"
 #include "../raw/fx/fx_image.h"
+#include <IOKit/IOReturn.h>
 #include <gtest/gtest.h>
 #include <algorithm>
 #include <array>
