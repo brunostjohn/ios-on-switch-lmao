@@ -352,6 +352,14 @@ void wakeSubmit(void *queue, uint32_t dependencies = 0);
 bool m2vClear();
 void planSegments(RMCommandBuffer *cb);
 bool submitRange(RMCommandBuffer *cb);
+
+// RawMetalPrivateComp.mm (raw_private_comp.h): submissions and the moves of compressed private textures take the submit
+// lock; a move inside a raw encode is refused
+std::recursive_mutex &submitLock();
+extern thread_local bool tRawEncoding;
+uint32_t privateCompressedKind(MTLTextureDescriptor *d);
+bool rmTexturePlain(RMTexture *t);
+void rmRangePlain(RMCommandBuffer *cb, size_t from, size_t to);
 void unhold(RMCommandBuffer *cb);
 
 // RawMetalFinish.mm

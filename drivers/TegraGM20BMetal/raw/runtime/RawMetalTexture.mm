@@ -120,6 +120,7 @@ void traceSurfaceImage(RMTexture *t, const char *what, uint32_t seed)
             made = [m2v newTextureWithDescriptor:_descriptor iosurface:_surface plane:_plane];
             break;
         case RMTexturePool: {  // m2v's in-place texture over the same pool memory (as an IOSurface's)
+            rmTexturePlain(self);
             if (_raw.zeta && _raw.samples > 1) {  // memory of its own: only a range that keeps none of it replays (ownedZetaIn)
                 made = [m2v newTextureWithDescriptor:_descriptor];
                 break;
@@ -556,6 +557,7 @@ static int viewHeaderType(MTLTextureType type)
     v->_viewLevels = levels;
     v->_viewSlices = slices;
     const int header = viewHeaderType(type);
+    rmTexturePlain(self);
     if (_rawOk && header >= 0 && raw::formatInfo(uint32_t(format)))
         v->_rawOk = gRM->raw->createPartView(_raw, uint32_t(format), uint32_t(header), uint32_t(levels.location),
                                              uint32_t(levels.length), uint32_t(slices.location),
@@ -599,6 +601,7 @@ static int viewHeaderType(MTLTextureType type)
     v->_descriptor.pixelFormat = format;
     v->_kind = RMTextureView;
     v->_parent = self;
+    rmTexturePlain(self);
     if (_rawOk && !_raw.memoryless && raw::formatInfo(uint32_t(format)))
         v->_rawOk = gRM->raw->createView(_raw, uint32_t(format), v->_raw);
     if (!v->_rawOk)

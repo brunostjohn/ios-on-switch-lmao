@@ -420,6 +420,7 @@ static void refuse(const char *call, NSString *why)
 
 - (MTLResourceID)gpuResourceID
 {
+    rmTexturePlain(self);
     MTLResourceID resource;
     const uint64_t word = raw::textureResourceId(_raw.tic);
     memcpy(&resource, &word, sizeof word);

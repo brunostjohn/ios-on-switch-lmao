@@ -247,6 +247,7 @@ bool submitRange(RMCommandBuffer *cb)
             scheduled(cb);
     } else {
         cb->_gpuPrefixEligible = false;
+        rmRangePlain(cb, range.from, range.to);
         if (r.gpuOrder && r.rawSinceM2v) {
             uint32_t waits = 0;
             const int kr = r.raw->orderOthersAfter(waits);

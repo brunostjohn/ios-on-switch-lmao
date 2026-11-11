@@ -41,6 +41,16 @@ void useBuffer(raw::CommandBuffer *rc, RMBuffer *b, bool write)
 static bool encodeRawAttempt(RMCommandBuffer *cb, size_t from, size_t to, const char **why, bool &stale,
                              size_t *refusedEncoder)
 {
+    struct Encoding {
+        Encoding()
+        {
+            tRawEncoding = true;
+        }
+        ~Encoding()
+        {
+            tRawEncoding = false;
+        }
+    } encoding;
     raw::Device &d = *gRM->raw;
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
     d.nextForms = cb->_probeForms;

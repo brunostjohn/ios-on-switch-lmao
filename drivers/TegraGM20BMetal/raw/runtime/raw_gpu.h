@@ -27,6 +27,7 @@
 #include "raw_attachment_order.h"
 #include "raw_probe_forms.h"
 #include "raw_probe_ops.h"
+#include "raw_private_comp.h"
 #include "raw_visibility.h"
 #include <array>
 #include <atomic>
@@ -1232,6 +1233,20 @@ public:
     }
 
     void destroyTexture(Texture &t);
+    // Private render targets on compressed memory (raw_private_comp.h): made when compressed memory of the size is ready,
+    // moved to plain memory before anything names its pages through another binding (the caller serialises submissions
+    // and has no command buffer open)
+    bool createCompressedTexture(uint32_t width, uint32_t height, uint32_t format, uint32_t kind, Texture &t);
+    bool privateCompressed(const Texture &t);
+    bool plainFromCompressed(Texture &t);
+    uint64_t privateMade() const
+    {
+        return privateMade_.load(std::memory_order_relaxed);
+    }
+    uint64_t privateTransitions() const
+    {
+        return privateTransitions_.load(std::memory_order_relaxed);
+    }
     TextureTransferResult transferTexture(const Texture &texture, uint32_t level, uint32_t slice,
                                           const uint32_t origin[3], const uint32_t size[3], void *bytes,
                                           uint64_t row, uint64_t image, bool write, std::shared_ptr<void> owner);
@@ -1549,6 +1564,8 @@ public:
     // the next createTexture binds compressible memory of its own (raw_comp.h kinds) where it makes a block-linear
     // target, which probeCompressed holds until destroyTexture; any other texture takes the flag and stays plain
     std::atomic<bool> probeCompressNext{false};
+    // private textures stay plain while set (raw_private_comp.h), for a probe's uncompressed reference
+    std::atomic<bool> probePlainPrivate{false};
     // Boolean visibility results take the copy-engine lowering before rule vis.boolean holds (raw_visibility.h)
     std::atomic<bool> probeBooleanVisibility{false};
     std::map<uint64_t, Bo> probeCompressed;  // lock_
@@ -2000,6 +2017,10 @@ private:
     // When compressed or shared plain memory, a made buffer or a retired backing next turns stale (compClock()), 0 with
     // none held
     uint64_t compDeadline() const;
+    // private textures on compressed memory and their memory (raw_private_comp.h), lock_
+    std::unordered_map<const Texture *, PrivateComp> privateComp_;
+    std::atomic<uint64_t> privateMade_{0}, privateTransitions_{0};
+    void releasePrivateCompressed(const Texture &t);  // lock_ held
     // A clear of target t to SET_COLOR_CLEAR_VALUE words `v` (or depth `depth`), `full` it covers t whole: on a compressed
     // target, a value the ZBC table lacks is asked for (raw_zbc.h); hits and misses counted
     void clearZbc(const Texture &t, bool full, const uint32_t v[4]);

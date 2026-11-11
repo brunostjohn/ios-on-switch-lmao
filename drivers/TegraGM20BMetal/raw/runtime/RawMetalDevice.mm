@@ -75,6 +75,8 @@ static const char *zetaMemoryRefusal(int asked)
     d[@"mip_twod_levels"] = @(gRM->raw->stats.mipTwodLevels.load());
     d[@"mip_twod_unproven_levels"] = @(gRM->raw->stats.mipTwodUnproven.load());
     d[@"mip_3d_levels"] = @(gRM->raw->stats.mip3dLevels.load());
+    d[@"private_compressed"] = @(gRM->raw->privateMade());
+    d[@"private_moves"] = @(gRM->raw->privateTransitions());
     const raw::FetchCounts &fetch = gRM->raw->stats.fetch;
     d[@"fetch_sequential"] = @(fetch.sequential.load());
     d[@"fetch_triangles"] = @(fetch.sequentialTriangles.load());
@@ -386,7 +388,10 @@ static void reportNonFiniteStart(RMTexture *t, MTLTextureDescriptor *d)
     } else {
         t->_kind = RMTexturePool;
         // a shared texture (the CPU writes it: replaceRegion) in write-combined memory: its rows need no clean after
-        t->_rawOk = gRM->raw->createTexture(uint32_t(d.width), uint32_t(d.height), uint32_t(d.pixelFormat), t->_raw,
+        const uint32_t kind = tiled ? privateCompressedKind(d) : 0;
+        t->_rawOk = (kind && gRM->raw->createCompressedTexture(uint32_t(d.width), uint32_t(d.height),
+                                                               uint32_t(d.pixelFormat), kind, t->_raw)) ||
+                    gRM->raw->createTexture(uint32_t(d.width), uint32_t(d.height), uint32_t(d.pixelFormat), t->_raw,
                                             d.storageMode == MTLStorageModeShared, tiled);
         if (t->_rawOk)
             keepExtendedRange(d, t->_raw, false);

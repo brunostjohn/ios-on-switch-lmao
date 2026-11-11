@@ -13,7 +13,7 @@ public enum Registry {
         MPSMatrixTest(), MetalRuntimeCompileTest(), CoreImageLibraryTest(),
         MetalBenchmarkTest(), FetchBlendCostTest(), CompressionChurnTest(), RotatedTargetTest(), BlendKillTest(),
         Float32FilterTest(), CompressedTargetsTest(), ZcullTest(), MipTwodTest(), MipCandidatesTest(),
-        VisibilityTest(), FixedBlendRuleTest(),
+        VisibilityTest(), FixedBlendRuleTest(), PrivateCompressionTest(),
     ]
 
     static let video: [any HWTest] =

@@ -89,6 +89,14 @@ static raw::ProbeSurface probeSurface(const raw::Texture &t, uint32_t fmt2d)
     return nil;
 }
 
+// Private textures made while `on` is true stay on plain memory (raw_private_comp.h), for a probe's uncompressed
+// reference
+- (NSString *)switchRawProbePlainPrivate:(NSNumber *)on
+{
+    gRM->raw->probePlainPrivate.store(on.boolValue, std::memory_order_release);
+    return nil;
+}
+
 // What a probe's line says of a texture and the device: "raw=1 comptags=1 block_linear=1 pitch=N tiled_cache=1
 // compression=1", raw=0 where the raw path does not hold it
 - (NSString *)switchRawProbeFacts:(id<MTLTexture>)texture

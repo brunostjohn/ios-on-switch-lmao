@@ -2229,6 +2229,7 @@ void Device::destroyTexture(Texture &t)
         probeCompressed.erase(it);
     }
 #endif
+    releasePrivateCompressed(t);
     freeSpan(t.span, memoryOf(t), t.lease);
     t = {};
 }
