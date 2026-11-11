@@ -45,3 +45,31 @@ address bit in the mask gives), and 0x444-0x47c are dropped. The app
 writes all 16 slots to I[0x1040-0x107c] on every picture (0x80a1, ME byte 0x8f bits 4-7 neither 1 nor 2, 0 here), and
 NVIDIA's driver names slot 0 in every job it was captured sending (the other reconstruction), so H264NVENC.c's IDR does
 too.
+
+B pictures (libnvtvmr 32.7.6, the H.265 evaluation's library and method, see SOURCE-H265; H.264 create 0x30950, set
+configuration 0x32e70, feed 0x31eb8, frame 0x2ce58; read and evaluated, never run). The caller states each picture's
+type and, on an anchor, how many B pictures precede it in display order (feed record +0 and +8): an anchor's POC is the
+previous anchor's plus 2 x (that count + 1) (0x2fa24-0x2fa58), each B's 2 more than the picture before (0x2efb8). A B
+needs maxNumRefFrames >= 2 (0x2d0ac, create record +0xe) and is not a reference. Evaluated at 1280x720 High CABAC 8x8,
+constant QP, maxNumRefFrames 2, in coding order I0 P2 B1 P4 B3 and I0 P3 B1 B2 P6 B4 B5, a B differs from the P before
+it exactly in: pic_type 1 and ref_pic_flag 0; l0[0] and l1[0] the past and future anchors' slots << 1 (the H.264 app
+gives the engine an entry's bits 1-4 as the slot and bit 0 as the parity, 0x895d-0x89a2 into I[0x1884], as app 3
+does); temp_dist_l0[0] and temp_dist_l1[0] the POC differences / 2 (1 and -2, 2 and -1 in IBBP); dist_scale_factor[0][0]
+by H.264 8-203 (85, 171; 128 in IBP) and every other scale factor -1 (a P's are all 256); frame_num the previous
+reference's + 1; in the ME control predsrc.coloc_enable 1 and const_mv_stamp_l0/l1 3 (0x2ebd8-0x2ec3c); the slice QP.
+MD control, quant control and the rest of the slice control are the P's. bdirect_mode is session configuration
+(config +0x3c: 0 spatial, the default, 1 off, 2 temporal; 0x32f00-0x32f30) written into every picture (0x2e37c); the
+captured P-only session has it off. An anchor's td_l0 is its distance to the previous anchor (3 in IBBP).
+Methods (the P's set plus): every picture names OUT_COLOC_DATA, the colocated buffer paired with its reconstruction
+(0x2e8c4-0x2e8f0); a B names IN_COLOC_DATA, its list-1 reference's (0x2efdc, 0x30260), and IN_REF_PIC<slot>_LUMA for both
+references (0x2e784-0x2e884, one method a reference on chip 6). Buffers: maxNumRefFrames + 1 reconstructions with a
+colocated buffer each of (macroblocks x 64 + 255) & ~255 bytes (0x30dd4-0x30e14); a picture is coded into the one
+holding no picture of the DPB, a new anchor takes the slot of the one it evicts (anchor n in slot n & 1).
+Firmware: the app copies the method words to DMEM 0x380 (0x2e41-0x2ece), IN_COLOC_DATA at 0x3a4 and OUT_COLOC_DATA at
+0x3a8. Non-zero IN_COLOC_DATA goes to I[0xd00] with the macroblock count in I[0xd04], non-zero OUT_COLOC_DATA to
+I[0x1864] with the size in macroblocks in I[0x98c]/I[0x990] (0x333e-0x3398); a zero value leaves those registers as
+they were. With IN_COLOC_DATA the ME's colocated hint (I[0xd0c]) is the ME control's coloc_enable for a P or B, off
+for an I or IDR; with OUT_COLOC_DATA the engine writes colocated motion (I[0x1860]) for every picture but a B
+(0x5866-0x58b0). The checks: IN_COLOC_DATA written as 0 in a P or B with coloc_enable, or OUT_COLOC_DATA written as 0
+in an I, IDR or P, is error 0xe2640180 (0x311a-0x319e). The app reads l1 at 0x8a01-0x8a62 and temp_dist_l1 into
+I[0x478] (0x83b4-0x83d9).

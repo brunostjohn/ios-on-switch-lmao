@@ -106,12 +106,18 @@ char gLine[256];
 // one NVIDIA's own T210 driver leaves them at (its captured streams set none of them). The firmware takes a non-zero
 // address as the feature's data being there; 0 also means no job keeps another client's address in them.
 constexpr uint16_t kUnusedMethods[] = {
-    NVC5B7_SET_IN_RCDATA, NVC5B7_SET_IN_CEAHINTS_DATA, NVC5B7_SET_IN_COLOC_DATA,
-    NVC5B7_SET_IN_QP_MAP, NVC5B7_SET_IN_PARTITION_BUF,
+    NVC5B7_SET_IN_RCDATA,
+    NVC5B7_SET_IN_CEAHINTS_DATA,
+    NVC5B7_SET_IN_QP_MAP,
+    NVC5B7_SET_IN_PARTITION_BUF,
 };
 
-// The job engine. kJobBoundUs: the GP timer's 329 ms plus margin; a wait covers at most kInFlight queued jobs.
-constexpr uint32_t kInFlight = 4, kSetupSlots = 8, kSetupSlotBytes = TEGRA_NVENC_MAX_SETUP, kSinkBytes = 256 * 1024;
+uint32_t gLatched;  // tegra_nvenc_latch's: bit k, latched method k held a client's address since the falcon booted
+
+// The job engine. kJobBoundUs: the GP timer's 329 ms plus margin; a wait covers at most kInFlight queued jobs. The
+// scratch buffer takes a picture's colocated output (64 bytes a macroblock) when it stands in for a latched address.
+constexpr uint32_t kInFlight = 4, kSetupSlots = 8, kSetupSlotBytes = TEGRA_NVENC_MAX_SETUP;
+constexpr uint32_t kSinkBytes = TEGRA_NVENC_MAX_MBS * sizeof(nvenc_h264_coloc_mb_s);
 constexpr uint32_t kJobBoundUs = 500000, kWaitBoundUs = kInFlight * kJobBoundUs;
 IOLock *gEngineLock;
 uint32_t gSyncpt, gBase, gIssued;  // job n's fence is gBase + n
@@ -192,6 +198,7 @@ bool loadImage()
 // falcon_boot, minus its final idle poll: that the firmware runs is shown by E2's OP_DONE increment instead.
 bool bootFalcon()
 {
+    gLatched = 0;
     if (!loadImage())
         return false;
     switch (switch_falcon_load(gNvenc, gFirmware.pa, &gImage)) {
@@ -449,10 +456,12 @@ int run(const TegraNVENCSubmit *s, TegraNVENCResolve resolve, void *context, uin
 
     // SETCLASS; the submit's methods, SET_APPLICATION_ID first (the checker requires it: the OS selects the app before
     // anything is stored for it), then just before EXECUTE: 0 in every method of kUnusedMethods, and in the ME
-    // predictor pair when the submit has none; the scratch buffer as the RC process state (NVIDIA's driver gives every
-    // job one; constant QP leaves it unread); the setup slot (INCR METHOD0 x2: method, value, each); OP_DONE increment.
+    // predictor pair when the submit has none; in each latched method the submit leaves out, the scratch buffer or 0
+    // (tegra_nvenc_latch); the scratch buffer as the RC process state (NVIDIA's driver gives every job one; constant
+    // QP leaves it unread); the setup slot (INCR METHOD0 x2: method, value, each); OP_DONE increment.
     constexpr uint32_t kUnused = sizeof(kUnusedMethods) / sizeof(kUnusedMethods[0]);
-    uint32_t words[SWITCH_HOST1X_WAIT_WORDS + 1 + 3 * (kUnused + 4 + TEGRA_NVENC_MAX_ENTRIES) + 1];
+    uint32_t
+        words[SWITCH_HOST1X_WAIT_WORDS + 1 + 3 * (kUnused + TEGRA_NVENC_LATCHED + 4 + TEGRA_NVENC_MAX_ENTRIES) + 1];
     uint32_t n = SWITCH_HOST1X_WAIT_WORDS;
     bool predictors = false;
     for (uint32_t i = 0; i < s->entry_count; i++)
@@ -497,6 +506,13 @@ int run(const TegraNVENCSubmit *s, TegraNVENCResolve resolve, void *context, uin
             if (!predictors) {
                 method(NVC5B7_SET_IN_MEPRED_DATA, 0);
                 method(NVC5B7_SET_OUT_MEPRED_DATA, 0);
+            }
+            uint8_t latch[TEGRA_NVENC_LATCHED];
+            tegra_nvenc_latch(s, &gLatched, latch);
+            for (uint32_t k = 0; k < TEGRA_NVENC_LATCHED; k++) {
+                if (latch[k] != TEGRA_NVENC_LATCH_NONE)
+                    method(tegra_nvenc_latched_method(k),
+                           latch[k] == TEGRA_NVENC_LATCH_SCRATCH ? static_cast<uint32_t>(gSink.pa >> 8) : 0);
             }
             method(NVC5B7_SET_IO_RC_PROCESS, static_cast<uint32_t>(gSink.pa >> 8));
             method(NVC5B7_SET_IN_DRV_PIC_SETUP,

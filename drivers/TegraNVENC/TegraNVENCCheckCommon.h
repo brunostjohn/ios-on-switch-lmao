@@ -90,9 +90,47 @@ enum {
     TEGRA_NVENC_REFS = 16
 };
 
+// Address methods a submit may name or leave out: the colocated motion (a reordering H.264 session's) and reference
+// slots 1-15 (H.265 P pictures name slot 1 on alternate pictures, H.264 B pictures name it too). The OS keeps a
+// method's value across jobs, and the H.264 app programs the engine's colocated registers only from a non-zero value
+// (0x333e-0x3398, 0x5866-0x58b0), which then stay as they were; a written 0 in OUT_COLOC_DATA is its error 0xe2640180
+// for an IDR or P picture (0x315f-0x319e). So until the falcon next boots, the kernel gives a job that leaves out one
+// an earlier job named its scratch buffer there, never the earlier client's address; IN_COLOC_DATA is 0 until then.
+enum {
+    TEGRA_NVENC_LATCHED = 17,
+    TEGRA_NVENC_LATCH_NONE = 0,
+    TEGRA_NVENC_LATCH_ZERO = 1,
+    TEGRA_NVENC_LATCH_SCRATCH = 2,
+};
+
+static inline uint16_t tegra_nvenc_latched_method(uint32_t k)
+{
+    return k == 0   ? (uint16_t)NVC5B7_SET_IN_COLOC_DATA
+           : k == 1 ? (uint16_t)NVC5B7_SET_OUT_COLOC_DATA
+                    : (uint16_t)(NVC5B7_SET_IN_REF_PIC0_LUMA + 4 * (k - 1));
+}
+
+// What to write in each latched method `s` leaves out (TEGRA_NVENC_LATCH_*), given `latched` (bit k: method k held a
+// client's address since the falcon booted), which it updates.
+static inline void tegra_nvenc_latch(const TegraNVENCSubmit *s, uint32_t *latched, uint8_t action[TEGRA_NVENC_LATCHED])
+{
+    uint32_t named = 0;
+    for (uint32_t i = 0; i < s->entry_count; i++) {
+        for (uint32_t k = 0; k < TEGRA_NVENC_LATCHED; k++)
+            named |= (uint32_t)(s->entries[i].method == tegra_nvenc_latched_method(k)) << k;
+    }
+    for (uint32_t k = 0; k < TEGRA_NVENC_LATCHED; k++) {
+        action[k] = named & (1u << k)      ? (uint8_t)TEGRA_NVENC_LATCH_NONE
+                    : *latched & (1u << k) ? (uint8_t)TEGRA_NVENC_LATCH_SCRATCH
+                    : k == 0               ? (uint8_t)TEGRA_NVENC_LATCH_ZERO
+                                           : (uint8_t)TEGRA_NVENC_LATCH_NONE;
+    }
+    *latched |= named;
+}
+
 // Bytes from each relocation to the end of its buffer (1 for one exactly at a buffer's end; 0 for none).
 typedef struct {
-    uint64_t cur, curChroma, out, outChroma, bits, status, history, colocOut, mepredIn, mepredOut;
+    uint64_t cur, curChroma, out, outChroma, bits, status, history, colocIn, colocOut, mepredIn, mepredOut;
     uint64_t refLuma[TEGRA_NVENC_REFS], refChroma[TEGRA_NVENC_REFS];
     uint32_t control;  // SET_CONTROL_PARAMS
 } TegraNVENCRelocs;
@@ -173,6 +211,9 @@ static inline const char *tegra_nvenc_relocs(const TegraNVENCSubmit *s, const ui
             break;
         case NVC5B7_SET_IOHISTORY:
             slot = &r->history;
+            break;
+        case NVC5B7_SET_IN_COLOC_DATA:
+            slot = &r->colocIn;
             break;
         case NVC5B7_SET_OUT_COLOC_DATA:
             slot = &r->colocOut;

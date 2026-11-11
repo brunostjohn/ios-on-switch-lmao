@@ -8,6 +8,7 @@
 #                  the HEVC tile slots through VTTileCompressionSession as CMPhoto drives them (TileCheck.c)
 #   h264nvenc_host_test  H264NVENC.c's surfaces at the coded size where it is not the display size (1080p), the
 #                  kernel's checker taking those submits and refusing the display size
+#   nvenclatch_host_test  what TegraNVENC writes in the colocated and reference slot methods a job leaves out
 #   hevcnvenc_host_test  HEVCNVENC.c's H.265 IDR and P setups byte for byte against NVIDIA's T210 driver's (three
 #                  sizes), the kernel's H.265 checker taking them and refusing each kind of bad submit, the SPS/PPS
 #                  and P slice header stating what the setup does
@@ -89,6 +90,15 @@ host_library(
     deps = [":h264_nvenc"],
 )
 
+# What the kernel writes in the latched methods a job leaves out (tegra_nvenc_latch).
+host_library(
+    name = "nvenclatch_host",
+    srcs = ["nvenclatch_host.c"],
+    copts = ["-O1"],
+    defines = ["main=nvenclatch_host_main"],
+    deps = [":h264_nvenc"],
+)
+
 # The HEVC parameter set and slice header writer, parsed back with AVD's HEVC syntax.
 host_library(
     name = "hevcenc_host",
@@ -132,6 +142,12 @@ host_test(
     name = "h264nvenc_host_test",
     srcs = ["h264nvenc_host_test.cpp"],
     deps = [":h264nvenc_host"],
+)
+
+host_test(
+    name = "nvenclatch_host_test",
+    srcs = ["nvenclatch_host_test.cpp"],
+    deps = [":nvenclatch_host"],
 )
 
 host_test(

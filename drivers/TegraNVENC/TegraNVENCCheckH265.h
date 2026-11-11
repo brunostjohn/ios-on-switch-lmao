@@ -196,8 +196,8 @@ static inline const char *tegra_nvenc_check_h265(const TegraNVENCSubmit *s, cons
         return "missing relocation";
     if ((r.mepredIn == 0u) != (r.mepredOut == 0u))
         return "ME predictors in without out, or out without in";
-    if (r.colocOut)
-        return "colocated output";
+    if (r.colocOut || r.colocIn)
+        return "colocated motion";
     // App 3 copies method words 0-0x12 only (nvenc.bin 0xf41a-0xf4bb): a reconstruction's or reference's chroma is at
     // its luma address plus the surface config's offset (0x142da-0x142fe, 0x14267-0x142a4), never a chroma method. The
     // OS keeps IN_REF_PIC0_CHROMA in the word that marks methods written (nvidia/SOURCE).
