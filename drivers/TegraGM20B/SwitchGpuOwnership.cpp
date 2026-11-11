@@ -449,7 +449,10 @@ int switch_gpu_backing_adopt_locked(switch_gpu_backing *backing, const switch_gp
 	for (uint32_t i = 0; i < count; ++i) {
 		const auto &job = jobs[i];
 		const auto *ops = switch_gpu_backing_engine_ops(job.engine);
-		if (!ops || switch_gpu_backing_token_status(&job) != 0)
+		// A finished writer whose bytes may still be in the GPU L2 stays a user, as commit keeps it.
+		const int settled = kind & SWITCH_GPU_BACKING_WRITE ? switch_gpu_backing_token_external_status(&job)
+								    : switch_gpu_backing_token_status(&job);
+		if (!ops || settled != 0)
 			continue;
 		const uint32_t slot = access_slot(backing, job, kind);
 		if (slot < backing->access_count &&

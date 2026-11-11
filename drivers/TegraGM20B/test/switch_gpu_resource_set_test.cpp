@@ -44,7 +44,20 @@ uint64_t first_page(switch_gpu_backing *backing)
 	return info.pages[0];
 }
 
-class ResourceSet : public Backing {};
+class ResourceSet : public Backing {
+protected:
+	void SetUp() override
+	{
+		Backing::SetUp();
+		static bool visible;
+		if (!visible) {
+			const switch_gpu_backing_visibility gm = {external_status, external_wait};
+			ASSERT_EQ(switch_gpu_backing_register_visibility(SWITCH_GPU_ENGINE_GM20B, &gm), 0);
+			visible = true;
+		}
+		external_completed.clear();
+	}
+};
 }  // namespace
 
 TEST_F(ResourceSet, RegistrationLinksMembersAndPublishesTheGeneration)
@@ -326,4 +339,72 @@ TEST_F(ResourceSet, ACpuLockOnASharedUseKeepsItsExclusion)
 	EXPECT_EQ(switch_gpu_backing_cpu_release(surface, 0, 4096, kRead | SWITCH_GPU_BACKING_CPU_AVOID_SYNC), 0);
 	switch_gpu_backing_release(surface);
 	switch_gpu_backing_release(member);
+}
+
+// An Internal set job leaves its writes in the GPU L2 when it completes: a CPU reader of a member it may have written
+// still waits for them to reach DRAM.
+TEST_F(ResourceSet, AFinishedSetJobStillOwesAMembersReaderItsVisibility)
+{
+	auto *member = backing();
+	Set set;
+	set.attach({{member, kWrite, 0}});
+	const auto job = token(4, 6);
+	switch_gpu_set_note_job(set.set, 0, &job);
+	complete(job);
+	external_completed[{job.engine, job.queue, job.reset_generation}] = 5;
+	constexpr uint32_t avoid = SWITCH_GPU_BACKING_CPU_AVOID_SYNC;
+	ASSERT_EQ(switch_gpu_backing_member_lease(member, kRead), 0);
+	EXPECT_EQ(switch_gpu_backing_cpu_acquire(member, 0, 4096, kRead | avoid), -16);
+	external_completed[{job.engine, job.queue, job.reset_generation}] = 6;
+	EXPECT_EQ(switch_gpu_backing_cpu_acquire(member, 0, 4096, kRead | avoid), 0);
+	EXPECT_EQ(switch_gpu_backing_cpu_release(member, 0, 4096, kRead | avoid), 0);
+	switch_gpu_backing_release(member);
+}
+
+// A freed member leaves the set's list too: its pages go back once its users are done, not at the next registration.
+TEST_F(ResourceSet, AFreedMembersMemoryIsNotHeldByTheSet)
+{
+	static bool released;
+	released = false;
+	const uint64_t page = next_page += 4096;
+	auto *member = switch_gpu_backing_register(&page, 1, 0, &released, [](void *flag) {
+		*static_cast<bool *>(flag) = true;
+	});
+	Set set;
+	set.attach({{member, kWrite, 0}});
+	switch_gpu_backing_member_freed(member);
+	switch_gpu_backing_release(member);
+	do {
+		retirement_scheduled = false;
+		switch_gpu_backing_retire();
+	} while (retirement_scheduled);
+	EXPECT_TRUE(released);
+}
+
+// One writer per slot, readers anywhere: a reader never sees half of one job and half of the next.
+TEST_F(ResourceSet, ASlotsJobIsReadWhole)
+{
+	Set set;
+	std::atomic<bool> done{false};
+	std::atomic<uint32_t> torn{0}, reads{0};
+	std::vector<std::thread> readers;
+	for (int r = 0; r < 3; ++r)
+		readers.emplace_back([&] {
+			switch_gpu_backing_token jobs[SWITCH_GPU_SET_SLOTS];
+			while (!done.load(std::memory_order_relaxed))
+				for (uint32_t i = 0, n = switch_gpu_set_jobs(set.set, jobs); i < n; ++i) {
+					reads.fetch_add(1, std::memory_order_relaxed);
+					if (jobs[i].value != jobs[i].queue || jobs[i].reset_generation != jobs[i].queue)
+						torn.fetch_add(1, std::memory_order_relaxed);
+				}
+		});
+	for (uint32_t k = 1; k < 3000000 && !torn.load(std::memory_order_relaxed); ++k) {
+		const switch_gpu_backing_token job = {k, k, SWITCH_GPU_ENGINE_GM20B, k};
+		switch_gpu_set_note_job(set.set, 1, &job);
+	}
+	done = true;
+	for (auto &reader : readers)
+		reader.join();
+	EXPECT_GT(reads.load(), 0u);
+	EXPECT_EQ(torn.load(), 0u);
 }

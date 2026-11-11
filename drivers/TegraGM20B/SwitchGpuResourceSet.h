@@ -50,6 +50,8 @@ void switch_gpu_set_leave(struct switch_gpu_resource_set *set);
 void switch_gpu_set_note_job(struct switch_gpu_resource_set *set, uint32_t slot,
 			     const struct switch_gpu_backing_token *job);
 uint32_t switch_gpu_set_used(const struct switch_gpu_resource_set *set);
+/* Each used slot's latest job, whole: returns how many */
+uint32_t switch_gpu_set_jobs(const struct switch_gpu_resource_set *set, struct switch_gpu_backing_token *jobs);
 uint32_t switch_gpu_set_seqno(const struct switch_gpu_resource_set *set, uint32_t slot);
 struct switch_gpu_set_wait {
 	uint32_t slot, seqno;
@@ -68,7 +70,8 @@ int switch_gpu_set_take_host_written(struct switch_gpu_resource_set *set);
 struct switch_gpu_resource_set *switch_gpu_backing_set(struct switch_gpu_backing *backing);
 /* Before a CPU lease of `access` on a member: the set's pending jobs become the member's recorded users. */
 int switch_gpu_backing_member_lease(struct switch_gpu_backing *backing, uint32_t access);
-/* The member's BO is gone: its pending set jobs stay its users, it leaves the set, and the generation ends. */
+/* The member's BO is gone (setup only, with the set's submissions excluded): its pending set jobs stay its users, it
+ * leaves the set and its list, and the generation ends. */
 void switch_gpu_backing_member_freed(struct switch_gpu_backing *backing);
 
 #ifdef __cplusplus

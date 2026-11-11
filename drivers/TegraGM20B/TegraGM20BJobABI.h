@@ -54,7 +54,7 @@ enum {
 	TegraGM20BJobExternal = 1u << 0,    /* the job's writes reach DRAM before its fence (CPU, display, other engines) */
 	TegraGM20BJobHostWritten = 1u << 1, /* the CPU wrote memory the job reads through the GPU L2 since the last job */
 	TegraGM20BJobHasEvents = 1u << 2,   /* a TegraGM20BAbiSubmitEvents and its uses follow the shared uses */
-	TegraGM20BJobQuiet = 1u << 3,       /* no completion interrupt unless a CPU waiter asks for one */
+	TegraGM20BJobQuiet = 1u << 3,       /* accepted and not yet honoured: the job still raises its interrupt */
 };
 
 /* Method 33, reply TegraGM20BAbiExecReply. Pushes and shared uses are as SubmitAddress's (TegraGM20BPushFence allowed);
@@ -64,8 +64,7 @@ enum {
  * the set's (its fence-page word says the current one), or a shared use's native view is stale. A member named as a
  * shared use is refused. Shared uses keep SubmitAddress's ownership exactly, CPU-lock exclusion included.
  * Order between two channels is the order their SubmitJobs return in; calls that overlap are not ordered by the set.
- * A job submitted without the set that uses a member is not ordered against the set's jobs. Quiet: the job's fence
- * raises no interrupt; a wait that reaches it asks for one. */
+ * A job submitted without the set that uses a member is not ordered against the set's jobs. */
 struct TegraGM20BAbiJob {
 	uint32_t channel, push_count;
 	uint32_t set, set_generation;

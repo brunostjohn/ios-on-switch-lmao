@@ -12,7 +12,7 @@ struct switch_gpu_resource_set {
 		switch_gpu_backing_token job;
 	} slots[SWITCH_GPU_SET_SLOTS];
 	switch_gpu_set_member *members;
-	uint32_t count;
+	uint32_t count, capacity;
 };
 
 namespace
@@ -21,7 +21,7 @@ void put(switch_gpu_resource_set *set)
 {
 	if (__atomic_sub_fetch(&set->refs, 1u, __ATOMIC_ACQ_REL))
 		return;
-	IODelete(set->members, switch_gpu_set_member, set->count);
+	IODelete(set->members, switch_gpu_set_member, set->capacity);
 	IOLockFree(set->lock);
 	IODelete(set, switch_gpu_resource_set, 1);
 }
@@ -212,9 +212,9 @@ extern "C" int switch_gpu_set_attach(switch_gpu_resource_set *set, const switch_
 			detach(set->members[i].backing, set);
 		switch_gpu_backing_release(set->members[i].backing);
 	}
-	IODelete(set->members, switch_gpu_set_member, set->count);
+	IODelete(set->members, switch_gpu_set_member, set->capacity);
 	set->members = kept;
-	set->count = unique;
+	set->count = set->capacity = unique;
 	switch_gpu_set_invalidate(set, SWITCH_GPU_SET_CAUSE_REPLACE);
 	*generation = switch_gpu_set_generation(set);
 	return 0;
@@ -228,9 +228,9 @@ extern "C" void switch_gpu_set_destroy(switch_gpu_resource_set *set)
 		detach(set->members[i].backing, set);
 		switch_gpu_backing_release(set->members[i].backing);
 	}
-	IODelete(set->members, switch_gpu_set_member, set->count);
+	IODelete(set->members, switch_gpu_set_member, set->capacity);
 	set->members = nullptr;
-	set->count = 0;
+	set->count = set->capacity = 0;
 	put(set);
 }
 
@@ -269,6 +269,11 @@ extern "C" void switch_gpu_set_note_job(switch_gpu_resource_set *set, uint32_t s
 	__atomic_store_n(&entry.seq, seq + 2, __ATOMIC_RELEASE);
 	if (!(__atomic_load_n(&set->used, __ATOMIC_RELAXED) & (1u << slot)))
 		__atomic_fetch_or(&set->used, 1u << slot, __ATOMIC_RELEASE);
+}
+
+extern "C" uint32_t switch_gpu_set_jobs(const switch_gpu_resource_set *set, switch_gpu_backing_token *jobs)
+{
+	return read_jobs(set, jobs);
 }
 
 extern "C" uint32_t switch_gpu_set_used(const switch_gpu_resource_set *set)
@@ -359,6 +364,16 @@ void switch_gpu_set_reached(switch_gpu_backing *backing, uint32_t cause)
 
 extern "C" void switch_gpu_backing_member_freed(switch_gpu_backing *backing)
 {
-	if (switch_gpu_backing_set(backing))
-		switch_gpu_set_reached(backing, SWITCH_GPU_SET_CAUSE_FREE);
+	auto *set = switch_gpu_backing_set(backing);
+	if (!set)
+		return;
+	switch_gpu_set_reached(backing, SWITCH_GPU_SET_CAUSE_FREE);
+	uint32_t at = 0;
+	while (at < set->count && set->members[at].backing != backing)
+		++at;
+	if (at == set->count)
+		return;
+	memmove(&set->members[at], &set->members[at + 1], (set->count - at - 1) * sizeof(set->members[0]));
+	--set->count;
+	switch_gpu_backing_release(backing);
 }
