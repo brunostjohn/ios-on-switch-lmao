@@ -1,0 +1,70 @@
+// bb_worker on a Mac: takes darwin actions from the scheduler, runs them through bb_runner in a native build directory,
+// and keeps their inputs in a bounded cache. Every host value comes from the LaunchAgent's environment (install.sh);
+// the two tokens sit beside this file, chmod 600.
+local dir = std.extVar('SWITCH_WORKER_DIR');
+local cacheToken = std.stripChars(importstr 'cache.token', '\n');
+local workerToken = std.stripChars(importstr 'worker.token', '\n');
+local frontend = {
+  grpc: {
+    client: {
+      address: std.extVar('SWITCH_WORKER_FRONTEND'),
+      addMetadata: [{ header: 'authorization', values: ['Bearer ' + cacheToken] }],
+    },
+    enableCompression: true,
+  },
+};
+
+{
+  blobstore: {
+    contentAddressableStorage: {
+      chunkStorage: frontend,
+      chunkMappingStorage: { chunkMappingValidating: { backend: frontend } },
+      cdcParameterCache: { cacheSize: 1000, cacheDuration: '60s', cacheReplacementPolicy: 'LEAST_RECENTLY_USED' },
+    },
+    actionCache: frontend,
+  },
+  maximumMessageSizeBytes: 16 * 1024 * 1024,
+  scheduler: {
+    address: std.extVar('SWITCH_WORKER_SCHEDULER'),
+    addMetadata: [{ header: 'authorization', values: ['Bearer ' + workerToken] }],
+  },
+  global: {
+    diagnosticsHttpServer: {
+      httpServers: [{ listenAddresses: ['127.0.0.1:9986'], authenticationPolicy: { allow: {} } }],
+      enablePrometheus: true,
+    },
+  },
+  buildDirectories: [{
+    native: {
+      buildDirectoryPath: dir + '/build',
+      // Every input is hard-linked from here into an action's directory: the worker's only lasting disk use.
+      cacheDirectoryPath: dir + '/cache',
+      maximumCacheFileCount: 400000,
+      maximumCacheSizeBytes: std.parseInt(std.extVar('SWITCH_WORKER_CACHE_GIB')) * 1024 * 1024 * 1024,
+      cacheReplacementPolicy: 'LEAST_RECENTLY_USED',
+    },
+    runners: [{
+      endpoint: { address: 'unix://' + dir + '/runner.sock' },
+      concurrency: std.parseInt(std.extVar('SWITCH_WORKER_CONCURRENCY')),
+      platform: {
+        // Bazel's exec platform //bazel/platforms:exec_darwin_arm64, property for property.
+        properties: [
+          { name: 'ISA', value: 'arm64' },
+          { name: 'OSFamily', value: 'darwin' },
+          { name: 'xcode', value: std.extVar('SWITCH_WORKER_XCODE_BUILD') },
+        ],
+      },
+      maximumFilePoolFileCount: 100000,
+      maximumFilePoolSizeBytes: 2 * 1024 * 1024 * 1024,
+      workerId: { host: std.extVar('SWITCH_WORKER_HOST') },
+    }],
+  }],
+  filePool: { blockDevice: { file: { path: dir + '/filepool', sizeBytes: 2 * 1024 * 1024 * 1024 } } },
+  inputDownloadConcurrency: 16,
+  outputUploadConcurrency: 16,
+  directoryCache: {
+    maximumCount: 10000,
+    maximumSizeBytes: 64 * 1024 * 1024,
+    cacheReplacementPolicy: 'LEAST_RECENTLY_USED',
+  },
+}

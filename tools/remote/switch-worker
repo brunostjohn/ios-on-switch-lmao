@@ -1,0 +1,64 @@
+#!/bin/sh
+# This Mac's Bazel remote-execution worker: `switch-worker runner` and `switch-worker worker`, one LaunchAgent each
+# (install.sh). The worker advertises the Xcode at /Applications/Xcode.app, the path every client's actions name, and
+# stops taking work while the disk has less than the floor free; its actions then go back to the scheduler.
+set -eu
+
+here=$(cd "$(dirname "$0")" && pwd)
+dir=${SWITCH_WORKER_DIR:?}
+floor_gib=${SWITCH_WORKER_FLOOR_GIB:-20}
+xcode=/Applications/Xcode.app
+
+free_gib() { df -g "$dir" | awk 'NR==2 {print $4}'; }
+
+# launchd restarts a job that exits; the pause keeps a refusal from becoming a restart loop.
+refuse() {
+    echo "switch-worker: $*" >&2
+    sleep 300
+    exit 1
+}
+
+plist=$xcode/Contents/version.plist
+build=$(/usr/libexec/PlistBuddy -c 'Print :ProductBuildVersion' "$plist" 2>/dev/null) || refuse "no $plist"
+version=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$plist")
+selected=$(/usr/bin/xcode-select -p)
+[ "$selected" = "$xcode/Contents/Developer" ] || refuse "xcode-select points at $selected, not $xcode"
+# Bazel's XCODE_VERSION_OVERRIDE spelling: major.minor.patch.build.
+case $version in
+    *.*.*) ;;
+    *.*) version=$version.0 ;;
+    *) version=$version.0.0 ;;
+esac
+SWITCH_WORKER_XCODE_BUILD=$build
+SWITCH_WORKER_XCODE_VERSION=$version.$build
+export SWITCH_WORKER_XCODE_BUILD SWITCH_WORKER_XCODE_VERSION
+
+mkdir -p "$dir/build" "$dir/cache"
+touch "$dir/.metadata_never_index"
+
+case ${1:-} in
+    runner)
+        exec "$here/bb_runner" "$here/runner.jsonnet"
+        ;;
+    worker)
+        free=$(free_gib)
+        [ "$free" -ge "$floor_gib" ] || refuse "$free GiB free, under the ${floor_gib} GiB floor"
+        "$here/bb_worker" "$here/worker.jsonnet" &
+        pid=$!
+        trap 'kill "$pid" 2>/dev/null; wait "$pid"; exit 0' TERM INT
+        while kill -0 "$pid" 2>/dev/null; do
+            free=$(free_gib)
+            if [ "$free" -lt "$floor_gib" ]; then
+                kill "$pid"
+                wait "$pid" || true
+                refuse "$free GiB free, under the ${floor_gib} GiB floor: stopped"
+            fi
+            sleep 30
+        done
+        wait "$pid"
+        ;;
+    *)
+        echo "usage: switch-worker runner|worker" >&2
+        exit 2
+        ;;
+esac
