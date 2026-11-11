@@ -682,6 +682,23 @@ TEST(GM20BRoomSource, SubmitJobNeverSleepsWithBackingLocksHeld)
 	expectBefore(submit, "runJob(record, job, out)", "submitGate_.leaveFast(lock_);");
 }
 
+// The HW Test's gpu.path.submit_job reads these per process: a job SubmitJob ran, whether it named its set at the current
+// generation, a refusal for an ended generation, and a job the older SubmitAddress ran.
+TEST(GM20BRoomSource, SubmissionMethodsCountTheirPaths)
+{
+	const auto run = flat(definition(client(), "IOReturn AGXDeviceUserClient::runJob("));
+	expectBefore(run, "switch_gpu_path_taken(SWITCH_GPU_PATH_STALE_SET, 1);", "return kIOReturnNotReady;");
+	const auto job = flat(definition(client(), "IOReturn AGXDeviceUserClient::runJobUses("));
+	expectBefore(job, "switch_gpu_path_taken(SWITCH_GPU_PATH_SUBMIT_JOB, 1);", "return kIOReturnSuccess;");
+	expectBefore(job, "switch_gpu_path_taken(SWITCH_GPU_PATH_SET_JOB, set ? 1 : 0);", "return kIOReturnSuccess;");
+	const auto address = flat(definition(client(), "IOReturn AGXDeviceUserClient::submitAddress("));
+	expectBefore(address, "result = exec(submit->channel,",
+		     "switch_gpu_path_taken(SWITCH_GPU_PATH_ADDRESS_JOB, result ? 0 : 1);");
+	const std::string paths = SourceText("../SwitchGpuPathStats.cpp");
+	for (const char *name : {"\"submit_jobs\"", "\"set_jobs\"", "\"stale_sets\"", "\"address_jobs\""})
+		EXPECT_THAT(paths, HasSubstr(name));
+}
+
 // A fence wait woken at its seqno decides from the fence page alone; the connection lock is for publishing, errors and
 // timeouts.
 TEST(GM20BRoomSource, AWokenFenceWaitTakesNoConnectionLock)

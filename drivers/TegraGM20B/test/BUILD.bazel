@@ -481,6 +481,7 @@ host_test(
         "//drivers/TegraGM20B:TegraGM20BUserClientJobSubmit.cpp",
         "//drivers/TegraGM20B:SwitchGpuClientRetirement.h",
         "//drivers/TegraGM20B:SwitchGpuNativeImport.h",
+        "//drivers/TegraGM20B:SwitchGpuPathStats.cpp",
         "//drivers/TegraGM20B:gpu_sources",
         "//drivers/TegraGM20B:SwitchGpuVmMap.h",
         "//drivers/TegraGM20B:SwitchGpuChannelCompletion.h",

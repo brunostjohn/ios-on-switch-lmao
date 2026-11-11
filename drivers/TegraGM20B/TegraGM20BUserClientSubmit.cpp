@@ -245,6 +245,7 @@ IOReturn AGXDeviceUserClient::submitAddress(const TegraGM20BAbiSubmitAddress *in
 						tgm_stats_submit(chans_[slot], job.phases.ns);
 					}
 #endif
+					switch_gpu_path_taken(SWITCH_GPU_PATH_ADDRESS_JOB, result ? 0 : 1);
 					submitGate_.leave(lock_);
 				} else {
 					result = kIOReturnNotOpen;
