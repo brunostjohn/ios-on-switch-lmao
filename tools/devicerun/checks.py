@@ -8,6 +8,7 @@ from tools.devicerun.apps import APPS
 from tools.devicerun.audio import AUDIO
 from tools.devicerun.dispatch import DISPATCH
 from tools.devicerun.hwtest import HWTEST
+from tools.devicerun.joycon import JOYCON
 from tools.devicerun.lockscreen import LOCKSCREEN
 from tools.devicerun.morning import MORNING
 from tools.devicerun.protection import PROTECTION
@@ -457,6 +458,82 @@ GROUPS: dict[str, list[Check]] = {
             needs='usb.ss-lane',
             source='drivers/SwitchUSB/SwitchXHCIEvents.cpp',
         ),
+        Check(
+            'usb.host-up',
+            'r136-usbhost',
+            'SwitchUSB: host controller up',
+            TIMELINE,
+            process=KERNEL,
+            source='drivers/SwitchUSB/SwitchXHCI.cpp',
+        ),
+        Check(
+            'usb.host-save-state',
+            'r136-usbhost',
+            'AppleUSBHostController::setPowerStateGated: going to state',
+            process=KERNEL,
+            regex=r'going to state \d+ returned 0xe',
+            needs='usb.host-up',
+            source='IOUSBHostFamily (boot-1109-2145)',
+            note='AppleUSBXHCI saveState: Tegra answers CSS with SRE unless the hold takes it',
+        ),
+        Check(
+            'usb.host-exception',
+            'r136-usbhost',
+            'AppleUSBHostController::hardwareExceptionThreadCallGated: 0x',
+            process=KERNEL,
+            show=('exception',),
+            regex=r'\((?P<exception>[^)]+)\)$',
+            needs='usb.host-up',
+            unless='usb.host-sc7-restore',
+            source='IOUSBHostFamily (boot-1109-2145)',
+            note='a restore after SC7 is meant to fail once (usb.host-sc7-restore)',
+        ),
+        Check(
+            'usb.host-sc7-restore',
+            'r136-usbhost',
+            'SwitchUSB: XUSB host restore after SC7',
+            TIMELINE,
+            process=KERNEL,
+            source='drivers/SwitchUSB/SwitchXHCI.cpp',
+        ),
+        Check(
+            'usb.host-port-properties',
+            'r136-usbhost',
+            'Did not find port properties for registry entry',
+            process=KERNEL,
+            regex=r'SwitchXHCI@',
+            needs='usb.host-up',
+            source='IOAccessoryManager, iOS 27 (boot-1109-2145)',
+        ),
+        Check(
+            'usb.host-connect',
+            'r136-usbhost',
+            'SwitchUSB: host role +1 s',
+            'count > 0',
+            process=KERNEL,
+            regex=r'(?:pad 0|SS port 0) = port \d+ \([^)]*\): U0 ',
+            needs='usb.host-up',
+            source='drivers/SwitchUSB/SwitchUSB.cpp role +1 s line',
+            note='needs a device on the port',
+        ),
+        Check(
+            'usb.host-device',
+            'r136-usbhost',
+            'SwitchUSB: USB device ',
+            TIMELINE,
+            process=KERNEL,
+            source='drivers/SwitchUSB/SwitchXHCIServices.cpp',
+        ),
+        Check(
+            'usb.host-device-arrives',
+            'r136-usbhost',
+            'SwitchUSB: host role (a device on the port, VBUS on)',
+            process=KERNEL,
+            followed='usb.host-device',
+            within=10.0,
+            source='drivers/SwitchUSB/SwitchUSB.cpp',
+            note='a keyboard or stick on the port registers an IOUSBHostDevice',
+        ),
     ],
     'power': [
         Check(
@@ -687,64 +764,7 @@ GROUPS: dict[str, list[Check]] = {
             note='GPU KiB live; boot 15 peaked at 1.18 GB (backboardd) with 1.5 GB wired, pushing file pages out',
         ),
     ],
-    'joycon': [
-        # Every attach reads the Joy-Con's pairing log and says what its slot in use holds.
-        Check(
-            'joycon.slot-read',
-            'r108-btpair',
-            'SwitchJoyCon: Joy-Con',
-            'count >= 1',
-            process=KERNEL,
-            regex=r'(?:slot (?P<slot>\d+) in use names (?P<host>[0-9a-f:]+), '
-            r'host capability (?P<caps>0x[0-9a-f]+)|no slot in use)',
-            show=('slot', 'host', 'caps'),
-            source='drivers/SwitchJoyCon/SwitchJoyConRail.cpp finishPairing',
-        ),
-        # Every attach pairs the Joy-Con over the rail: one whose slot already named the console, left as it was, never
-        # paged after a detach (boot 17).
-        Check(
-            'joycon.pairing-skipped',
-            'r108-btexchange',
-            'SwitchJoyCon: Joy-Con',
-            process=KERNEL,
-            regex=r'paired to [0-9a-f:]+ (?!over the rail)',
-            needs='joycon.slot-read',
-            source='drivers/SwitchJoyCon/SwitchJoyConRail.cpp finishPairing',
-        ),
-        Check(
-            'joycon.detached',
-            'r108-btpair',
-            'on the rail stopped answering',
-            REPORT,
-            process=KERNEL,
-            source='drivers/SwitchJoyCon/SwitchJoyConRail.cpp tick',
-        ),
-        # A Joy-Con off the rail pages the console (a host page to it times out unless it is in sync mode).
-        Check(
-            'joycon.bt-paged',
-            'r108-btpair',
-            'link <- Connection Request',
-            'count >= 1',
-            process=KERNEL,
-            regex=r'Connection Request (?P<address>[0-9a-f:]+) class 000508',
-            show=('address',),
-            needs='joycon.detached',
-            source='drivers/SwitchBluetooth/SwitchBluetoothLinks.h',
-            note='boot 16: R and L paged at 04:05 after a button press',
-        ),
-        # bluetoothd without a key for a device that connected: a first pairing in Settings, or a Joy-Con whose rail key
-        # joyconpaird did not hand over.
-        Check(
-            'joycon.bt-key-missing',
-            'r108-btpair',
-            'link -> Link Key Request Negative Reply',
-            REPORT,
-            process=KERNEL,
-            regex=r'Negative Reply (?P<address>[0-9a-f:]+)',
-            show=('address',),
-            source='drivers/SwitchBluetooth/SwitchBluetoothLinks.h',
-        ),
-    ],
+    'joycon': JOYCON,
     'apps': APPS,
     'wifi': [
         Check(
@@ -795,6 +815,55 @@ GROUPS: dict[str, list[Check]] = {
             regex=r'SwitchWLAN: event (?P<code>\d+) \((?P<bytes>\d+) bytes\)',
             show=('code', 'bytes'),
             source='drivers/SwitchWLAN/SwitchWLANApple80211.cpp post_event',
+        ),
+        # Absent with wifi.en0-output failing: IFF_UP never reached IO80211Controller::enable.
+        Check(
+            'wifi.en0-up',
+            'r133-wifitx',
+            'SwitchWLAN: en0 up, its output thread started',
+            'count >= 1',
+            process=KERNEL,
+            needs='wifi.joined',
+            source='drivers/SwitchWLAN/SwitchWLANNet.cpp enable',
+        ),
+        Check(
+            'wifi.en0-output',
+            'r133-wifitx',
+            'SwitchWLAN: data ',
+            'max(batches) >= 1',
+            process=KERNEL,
+            regex=r'en0 (?P<starts>\d+) starts (?P<batches>\d+) batches',
+            needs='wifi.joined',
+            source='drivers/SwitchWLAN/SwitchWLAN.cpp stats',
+            note="boot 18: en0 0 starts in every window; IONetworkInterface's halted start thread was never started",
+        ),
+        Check(
+            'wifi.tx-frames',
+            'r133-wifitx',
+            'SwitchWLAN: stats ',
+            'max(tx) >= 1',
+            process=KERNEL,
+            regex=r'\), tx (?P<tx>\d+) \(',
+            needs='wifi.joined',
+            source='drivers/SwitchWLAN/SwitchWLAN.cpp stats',
+            note='every frame the radio sent, the key handshake included: wifi.en0-output is en0 alone',
+        ),
+        Check(
+            'wifi.dhcp-bound',
+            'r133-wifitx',
+            'DHCP en0: BOUND',
+            'count >= 1',
+            process='configd',
+            needs='wifi.joined',
+            note='boot 18: INIT retries, then "no server" and a 169.254 address',
+        ),
+        Check(
+            'wifi.connection-id-refused',
+            'r133-wifitx',
+            ('acknowledge Wi-Fi connection ID', 'APPLE80211_IOC_CONNECTION_ID)failed'),
+            process='configd',
+            source='drivers/SwitchWLAN/SwitchWLANApple80211.cpp',
+            note="boot 18: IPConfiguration's connection ID read and acknowledgement both answered -3903",
         ),
         Check(
             'wifi.dhcp-link-local',

@@ -143,11 +143,120 @@ class Rules(unittest.TestCase):
         self.assertEqual(got['wifi.dhcp-link-local'].verdict, FAIL)
         self.assertEqual(got['wifi.ipv6-solicit-failed'].verdict, FAIL)
 
+    def test_wifi_boot18_never_transmits(self):
+        got = self.wifi(list(devicerun.read_ndjson(str(TEST / 'wifi_boot18.ndjson'))))
+        self.assertEqual(got['wifi.joined'].verdict, PASS)
+        self.assertEqual(got['wifi.en0-up'].verdict, FAIL)
+        self.assertEqual(got['wifi.en0-output'].verdict, FAIL)
+        self.assertIn('max(batches) 0', got['wifi.en0-output'].observed)
+        self.assertEqual(got['wifi.tx-frames'].verdict, FAIL)
+        self.assertEqual(got['wifi.dhcp-bound'].verdict, FAIL)
+        self.assertEqual(got['wifi.dhcp-link-local'].verdict, FAIL)
+        self.assertEqual(got['wifi.connection-id-refused'].verdict, FAIL)
+
+    def test_wifi_en0_sending_and_a_lease_pass(self):
+        sent = {
+            'SwitchWLAN: stats ': ('tx 0 (0 KB)', 'tx 41 (6 KB)'),
+            'SwitchWLAN: data ': ('en0 0 starts 0 batches', 'en0 9 starts 9 batches'),
+        }
+        records = []
+        for record in devicerun.read_ndjson(str(TEST / 'wifi_boot18.ndjson')):
+            message = record['eventMessage']
+            if any(gone in message for gone in ('LINKLOCAL', 'no server', 'connection ID', 'CONNECTION_ID')):
+                continue
+            for prefix, (was, now) in sent.items():
+                if message.startswith(prefix):
+                    message = message.replace(was, now)
+            records.append({**record, 'eventMessage': message})
+        records.append({**records[-1], 'processImagePath': '/usr/libexec/configd', 'eventMessage': 'DHCP en0: BOUND'})
+        records.insert(0, {**records[0], 'eventMessage': 'SwitchWLAN: en0 up, its output thread started'})
+        got = self.wifi(records)
+        self.assertEqual(got['wifi.en0-up'].verdict, PASS)
+        self.assertEqual(got['wifi.en0-output'].verdict, PASS)
+        self.assertEqual(got['wifi.tx-frames'].verdict, PASS)
+        self.assertEqual(got['wifi.dhcp-bound'].verdict, PASS)
+        self.assertEqual(got['wifi.dhcp-link-local'].verdict, PASS)
+        self.assertEqual(got['wifi.connection-id-refused'].verdict, PASS)
+
+    @staticmethod
+    def wifi(records: list[dict]) -> dict[str, rules.Result]:
+        results, _ = devicerun.run_checks(records, checks.GROUPS['wifi'])
+        return {r.check.name: r for r in results}
+
     def test_wifi_checks_wait_for_a_join(self):
         got = run(*checks.GROUPS['wifi'])
         self.assertEqual(got['wifi.joined'].verdict, NO_DATA)
         self.assertEqual(got['wifi.join-completion-failed'].verdict, NO_DATA)
         self.assertEqual(got['wifi.dhcp-link-local'].verdict, NO_DATA)
+        self.assertEqual(got['wifi.en0-output'].verdict, NO_DATA)
+        self.assertEqual(got['wifi.dhcp-bound'].verdict, NO_DATA)
+
+
+class UsbHost(unittest.TestCase):
+    """The host-mode checks over boot-1109-2145's lines (a keyboard plugged twice) and a boot that enumerates."""
+
+    @staticmethod
+    def usb(records: list[dict]) -> dict[str, rules.Result]:
+        results, _ = devicerun.run_checks(records, checks.GROUPS['usb'])
+        return {r.check.name: r for r in results}
+
+    @staticmethod
+    def kernel(second: int, message: str, boot: str = 'B0000000-0000-0000-0000-000000000001') -> dict:
+        return {
+            'timestamp': f'2026-11-10 09:00:{second:02d}.000000+0000',
+            'bootUUID': boot,
+            'processImagePath': '/kernel.development',
+            'subsystem': '',
+            'category': '',
+            'messageType': 'Default',
+            'eventMessage': message,
+        }
+
+    def test_boot_1109_2145(self):
+        got = self.usb(list(devicerun.read_ndjson(str(TEST / 'usb_host_boot1109.ndjson'))))
+        for name in (
+            'usb.host-save-state',
+            'usb.host-exception',
+            'usb.host-port-properties',
+            'usb.host-connect',
+            'usb.host-device-arrives',
+        ):
+            self.assertEqual(got[name].verdict, FAIL, name)
+        self.assertIn('save state failed', got['usb.host-exception'].observed)
+
+    def test_a_keyboard_that_enumerates(self):
+        got = self.usb(
+            [
+                self.kernel(0, 'SwitchUSB: host controller up (AppleUSBXHCI, 1 interrupter, 3 shown to AppleUSBXHCI)'),
+                self.kernel(1, 'SwitchUSB: host role (a device on the port, VBUS on)'),
+                self.kernel(
+                    2,
+                    'SwitchUSB: host role +1 s (change 1, 1/2): xHCI USBCMD 0x801 USBSTS 0x8, pad 0 = port 5 '
+                    '(USB2 5+5): U0 low speed, SS port 0 = port 1 (USB3 1+4): RxDetect nothing',
+                ),
+                self.kernel(3, 'SwitchUSB: USB device Keyboard (05ac:024f) registered at location 0x5000000'),
+            ]
+        )
+        for name in (
+            'usb.host-save-state',
+            'usb.host-exception',
+            'usb.host-port-properties',
+            'usb.host-connect',
+            'usb.host-device-arrives',
+        ):
+            self.assertEqual(got[name].verdict, PASS, name)
+
+    def test_the_restore_after_sc7_excuses_its_exception(self):
+        exception = (
+            'SwitchXHCI@00000000: AppleUSBHostController::hardwareExceptionThreadCallGated: 0x00000004 '
+            '(save state failed)'
+        )
+        up = 'SwitchUSB: host controller up (AppleUSBXHCI, 1 interrupter, 3 shown to AppleUSBXHCI)'
+        restore = "SwitchUSB: XUSB host restore after SC7: the controller's state went with the falcon, USBSTS.SRE"
+        got = self.usb([self.kernel(0, up), self.kernel(1, restore), self.kernel(2, exception)])
+        self.assertEqual(got['usb.host-exception'].verdict, PASS)
+        got = self.usb([self.kernel(0, up), self.kernel(2, exception)])
+        self.assertEqual(got['usb.host-exception'].verdict, FAIL)
 
 
 class Sbim(unittest.TestCase):

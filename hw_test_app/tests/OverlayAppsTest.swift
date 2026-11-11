@@ -69,10 +69,12 @@ struct OverlayAppsTest: HWTest {
     }
 
     static func registered(_ identifier: String) -> Bool {
-        guard let proxies = NSClassFromString("LSApplicationProxy") as? NSObject.Type,
-            let proxy = proxies.perform(NSSelectorFromString("applicationProxyForIdentifier:"), with: identifier)?
-                .takeUnretainedValue() as? NSObject
-        else { return false }
-        return (proxy.value(forKey: "isInstalled") as? Bool) ?? false
+        (proxy(identifier)?.value(forKey: "isInstalled") as? Bool) ?? false
+    }
+
+    static func proxy(_ identifier: String) -> NSObject? {
+        guard let proxies = NSClassFromString("LSApplicationProxy") as? NSObject.Type else { return nil }
+        return proxies.perform(NSSelectorFromString("applicationProxyForIdentifier:"), with: identifier)?
+            .takeUnretainedValue() as? NSObject
     }
 }

@@ -24,9 +24,10 @@ that is an A12, so the 27 app carries LSE and FP16 code the A57 lacks, as any ap
 
 The apps only go on debug images. A kind's debug `//:boot` puts its app in `/Applications/SwitchHWTest.app` through
 the overlay, so the manifest and `//tools/devicerun` name a single app. A debug iOS 27 image also gets
-`SwitchHWTest27e.app`, the same app built for arm64e, which a64x translates whole. When the apps change,
-`bazel run //deploy:sd` leaves datamigrator's migration sentinel, and LaunchServices registers them on the next boot
-the way it registers an OS update's apps. `bazel build //hw_test_app:SwitchHWTest17` (or `:SwitchHWTest27`,
+`SwitchHWTest27e.app`, the same app built for arm64e, which a64x translates whole. When an app changes,
+`bazel run //deploy:sd` lists it for `switch-appregd`, which registers it on the next boot the way installd registers a
+built-in app, with no data migration. `system.overlay_app_records` checks that each app's record matches the bundle on
+disk. `bazel build //hw_test_app:SwitchHWTest17` (or `:SwitchHWTest27`,
 `:SwitchHWTest27e`) builds an app with rules_apple, signed ad hoc.
 
 The test clips and images are pinned in `bazel/pinned/hw_test_app/media`; every frame carries a barcode with its frame

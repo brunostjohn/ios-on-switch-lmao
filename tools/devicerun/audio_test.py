@@ -1,10 +1,10 @@
-"""audio.py's checks over boot 16's audiomxd lines (11-09, iOS 27)."""
+"""audio.py's checks over boot 16's and 17's audiomxd lines (11-09, iOS 27)."""
 
 import unittest
 
 from tools.devicerun import devicerun
 from tools.devicerun.audio import AUDIO
-from tools.devicerun.rules import FAIL, INFO, NO_DATA, PASS
+from tools.devicerun.rules import FAIL, INFO, NA, NO_DATA, PASS
 
 SETTING = "[0xd49838040|speaker_general] setting DSP graph '*.austrip' at index 0"
 REFUSED = (
@@ -19,6 +19,24 @@ CODEC_READY = (
     'SwitchAudio: Tegra I2S1 + RT5639 ready (playback and capture): S32_LE, I2S 32-bit slots at 64 fs (3072 kHz BCLK), '
     'RT5639 24-bit, 47999.878 Hz'
 )
+CODEC_ADDED = 'HALDeviceManager.cpp:283   Handling device state [Added] for Device ID: 41 for UID: Codec'
+MIC_ADDED = 'HALDeviceManager.cpp:283   Handling device state [Added] for Device ID: 44 for UID: Digital Mic'
+DROPPED = "StandardUtilities.h:673   CAException caught by ExceptionBarrier: 'who?' (:268)."
+NO_INPUT_DEVICE = (
+    '-CMSessionMgr- cmsShouldSkipBeginInterruption: Skipping begin interruption for sid:0x75008, SwitchHWTest(638), '
+    "'prim' because input can't be made routable, session hasInput=YES, hasInputDevice=NO, session hwControlFlags=18."
+)
+CONVERTER = (
+    'AudioConverter.cpp:1110  Created a new in process converter -> 0xcf94536f0, from  4 ch,  48000 Hz, Float32, '
+    'deinterleaved to  {} ch,  48000 Hz, Float32, interleaved'
+)
+
+
+def port(kind: str, connected: int = 1) -> str:
+    return (
+        'VirtualAudio_PortManager.cpp:273   Created and published port: [ id: 79; addr: 0xcf8f3f410; core port: '
+        f'[ type: {kind}; uid: Speaker; addr: 0xcf9271b18; conn: {connected}; rout: 1; quies: 0 ] ].'
+    )
 
 
 def record(message: str, second: int = 0, process: str = '/usr/sbin/audiomxd') -> dict:
@@ -64,6 +82,44 @@ class Audio(unittest.TestCase):
         got = results(record(CODEC_READY, process=KERNEL))
         self.assertEqual(got['audio.codec-ready'].verdict, PASS)
         self.assertEqual(got['audio.codec-absent'].verdict, PASS)
+
+    def test_boot_17_dropped_the_codec_and_had_no_input(self):
+        got = results(
+            record(CODEC_ADDED),
+            record(DROPPED),
+            record(port('pspk')),
+            record(CONVERTER.format(2), second=3),
+            record(NO_INPUT_DEVICE, second=4),
+        )
+        self.assertEqual(got['audio.device-dropped'].verdict, FAIL)
+        self.assertEqual(got['audio.input-device'].verdict, FAIL)
+        self.assertIn('SwitchHWTest', got['audio.input-device'].observed)
+        self.assertEqual(got['audio.builtin-mic'].verdict, NA)
+        self.assertEqual(got['audio.speaker-fold'].verdict, NA)
+
+    def test_j181_devices_pass(self):
+        got = results(
+            record(CODEC_ADDED),
+            record(MIC_ADDED),
+            record(port('pspk')),
+            record(port('phpw', 0)),
+            record(port('pmwi', 0)),
+            record(port('pmbi')),
+            record(CONVERTER.format(4), second=3),
+        )
+        self.assertEqual(got['audio.devices'].verdict, INFO)
+        self.assertIn('Digital Mic', got['audio.devices'].observed)
+        self.assertEqual(got['audio.device-dropped'].verdict, PASS)
+        self.assertEqual(got['audio.builtin-mic'].verdict, PASS)
+        self.assertEqual(got['audio.wired-ports'].verdict, INFO)
+        self.assertIn('pmwi', got['audio.wired-ports'].observed)
+        self.assertEqual(got['audio.input-device'].verdict, PASS)
+        self.assertEqual(got['audio.speaker-fold'].verdict, PASS)
+
+    def test_j181_left_only_speaker_fails(self):
+        got = results(record(MIC_ADDED), record(CONVERTER.format(2), second=3))
+        self.assertEqual(got['audio.speaker-fold'].verdict, FAIL)
+        self.assertEqual(got['audio.builtin-mic'].verdict, FAIL)
 
     def test_no_speaker_chain_is_no_data(self):
         got = results()
