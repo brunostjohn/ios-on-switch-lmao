@@ -220,12 +220,18 @@ void submitLoop()
                     else if (!ready)
                         blocked = true;
                     else {
-                        bool gpuOrder;
+                        bool gpuOrder, rawRetiring;
                         {
                             std::lock_guard<std::mutex> m(r.m2vLock);
                             gpuOrder = r.gpuOrder;
                         }
-                        if (!gpuOrder && !r.raw->done(r.raw->submitted())) {
+                        {
+                            std::lock_guard<std::mutex> d(r.doneLock);
+                            rawRetiring = !r.inflight.empty();
+                        }
+                        // completionLoop's retirements, which wake RMRawProgress: the device's own jobs (a reopen's context)
+                        // have no retirement, and a seqno the device submitted may be another channel's than its fence
+                        if (!gpuOrder && rawRetiring) {
                             blocked = true;
                             dependencies = RMRawProgress;
                         }
