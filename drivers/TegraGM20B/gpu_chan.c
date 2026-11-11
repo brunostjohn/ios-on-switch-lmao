@@ -253,6 +253,8 @@ static int chan_new(struct tgm_vm *vm, const void *vm_owner, volatile uint32_t *
 		tgm_acquire_arm(chan->chid);
 	if (!ret && critical && tgm_all_clients() && compositor_timeslice_on())
 		chan_timeslice(chan->chid, RAMFC_TIMESLICE_HIGH);
+	if (!ret && stats_on())
+		tgm_stats_gr_bind(chan);
 	if (!ret && critical && vm_owner)
 		chan_prioritize(chan);
 	if (!ret)

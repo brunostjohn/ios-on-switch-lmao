@@ -332,6 +332,8 @@ struct tgm_chan {
 	/* this window's SubmitAddress calls on it, by phase (tgm_stats_submit), for its owner */
 	u64 stat_submit_ns[TGM_SUBMIT_PHASES], stat_submit_total, stat_submit_max;
 	u32 stat_submits;
+	u64 gr_inst; /* tgm_stats_gr_context: its instance block, and whether its context's line is out */
+	int gr_context_logged;
 #endif
 };
 
@@ -457,6 +459,8 @@ void tgm_scrub_stats(char *buf, unsigned int len, u64 window_ms);
 #define NCGPCCLK_CFG_WRITE_EN 0x00010000u
 #define NCGPCCLK_CYCLES 800u
 void tgm_clk_measure(char *buf, unsigned int len);
+void tgm_stats_gr_bind(struct tgm_chan *chan);
+void tgm_stats_gr_context(struct tgm_chan *chan);
 void tgm_stats_tick(void);
 #define IDLE_LOG_NS (10ULL * 1000000000ULL)
 #define GPCPLL_COEFF_R 0x137004 /* M 7:0, N 15:8, PL 21:16 */

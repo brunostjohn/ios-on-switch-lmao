@@ -163,6 +163,7 @@ static inline void stats_fences(struct tgm_chan *chan)
 		}
 	}
 	chan->stat_done = done;
+	tgm_stats_gr_context(chan);
 }
 
 /* A high channel's fence moved from `from` to `done` (interrupt pass): the GPU time of what completed, for the
