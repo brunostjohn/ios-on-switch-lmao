@@ -5,6 +5,7 @@ load("@rules_python//python:py_library.bzl", "py_library")
 load("@rules_python//python:py_test.bzl", "py_test")
 load("//bazel/lint:defs.bzl", "lint_files")
 load("//kernel/rules:package.bzl", "ios_binary")
+load("//kits/SwitchGM20BEmit:defs.bzl", "EMIT_SOURCES")
 
 package(default_visibility = ["//visibility:public"])
 
@@ -174,7 +175,7 @@ ios_binary(
         "raw/runtime/raw_split.cpp",
         "raw/runtime/raw_zeta.cpp",
         "raw/test/fetchform.cpp",
-    ],
+    ] + ["//kits/SwitchGM20BEmit:" + s for s in EMIT_SOURCES],
     out = "build/switch-gpu/fetchform",
     hdrs = [
         ":raw_runtime_headers",
@@ -182,6 +183,7 @@ ios_binary(
         "//drivers/TegraGM20B:TegraGM20BABI.h",
         "//drivers/TegraGM20B:TegraGM20BLayout.h",
         "//kits/SwitchGM20B:class_headers",
+        "//kits/SwitchGM20BEmit:emit_headers",
     ],
     copts = [
         "-O2",
@@ -192,6 +194,10 @@ ios_binary(
         "-Wextra",
         "-I",
         "drivers/TegraGM20B",
+        "-I",
+        "kits/SwitchGM20BEmit/mesa",
+        "-I",
+        "{bin}/kits/SwitchGM20BEmit/gen",
         "-I",
         "third_party/mesa/src/nouveau/headers",
         "-lc++",

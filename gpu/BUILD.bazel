@@ -13,6 +13,7 @@
 load("@rules_rust//rust:defs.bzl", "rust_static_library")
 load("//bazel/lint:defs.bzl", "lint_files")
 load("//bazel/rust:defs.bzl", "cargo_ids", "rust_artifact")
+load("//kits/SwitchGM20BEmit:defs.bzl", "EMIT_SOURCES")
 load("//translate/arm64e:target.bzl", "a64x_target_linkopts")
 load(":defs.bzl", "gpu_stage", "gpu_tree", "llvm_as", "metal_bundle", "metal_plugin", "raw_stack")
 
@@ -159,6 +160,7 @@ metal_plugin(
         "//kits/SwitchRefusal:SwitchRefusalSite.h",
     ],
     bridge = ":bridge_ios",
+    c_srcs = ["//kits/SwitchGM20BEmit:" + s for s in EMIT_SOURCES],
     cc_srcs = [
         GM20B_METAL + ":raw/runtime/raw_gpu.cpp",
         GM20B_METAL + ":raw/runtime/raw_transfer.cpp",

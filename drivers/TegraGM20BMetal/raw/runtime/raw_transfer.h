@@ -1,12 +1,22 @@
 // SPDX-License-Identifier: MIT
 #pragma once
-#include "raw_copy.h"
 #include "raw_kernel.h"
 #include <array>
 #include <memory>
 #include <mutex>
 
 namespace raw {
+
+// One side of a copy-engine copy: pitch (va its first texel's, rows `pitch` apart) or a block-linear image (va its first
+// byte, `pitch` its row stride, from texel (x, y) of plane `layer` of its depth)
+struct CopySurface {
+    uint64_t va = 0;
+    uint32_t pitch = 0, x = 0, y = 0, height = 0;
+    bool blockLinear = false;
+    uint8_t blockHeight = 0;
+    uint32_t depth = 1, layer = 0;
+    uint8_t blockDepth = 0;
+};
 
 enum class TextureTransferResult : uint8_t { Unsupported, Complete, Failed };
 

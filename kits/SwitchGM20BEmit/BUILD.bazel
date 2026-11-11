@@ -98,6 +98,17 @@ cc_library(
     ],
 )
 
+# The emitters as the Metal plugin builds them, NDEBUG: for raw's host harnesses (and the bench library beside them), whose
+# addresses are host pointers, wider than the 40-bit address fields the debug checks hold them to.
+cc_library(
+    name = "emit_ndebug",
+    srcs = EMIT_SOURCES,
+    hdrs = glob(["SwitchGM20B*.h"]),
+    local_defines = ["NDEBUG"],
+    tags = ["no-lint"],
+    deps = [":push"],
+)
+
 # The raw path's draw macros, built with Mesa's MME builder (mme/switch_gm20b_macros.c): gen/SwitchGM20BMacros.h.
 cc_binary(
     name = "gen_macros",

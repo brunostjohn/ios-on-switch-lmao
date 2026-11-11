@@ -13,6 +13,7 @@
 #include "../../../../kits/SwitchGM20B/SwitchGM20B.h"
 #include "raw_follow.h"
 #include "raw_gpu.h"
+#include "raw_kit.h"
 #include "raw_mme.h"
 #include "raw_mip.h"
 #include "raw_owned.h"
@@ -4855,8 +4856,6 @@ static void clearWords(uint32_t format, const float in[4], uint32_t out[4], bool
 }
 
 namespace {
-// One side of a copy-engine copy: pitch (va the first texel's, rows `pitch` apart) or a block-linear image (va its first byte,
-// `pitch` its row stride, the copy from texel (x, y) of plane `layer` of its width x height x depth)
 using CopySide = CopySurface;
 
 // z: a 3D texture's plane, or an array's layer (its own 2D image, layerBytes on: NVK's array_stride step)
@@ -4865,11 +4864,10 @@ CopySide sideOf(const Texture &t, uint32_t x, uint32_t y, uint32_t z)
     if (!t.blockLinear)
         return {t.va + uint64_t(y) * t.pitch + uint64_t(x) * t.bpp, t.pitch};
     if (t.import && t.import->kind == TGM_LAYOUT_KIND)
-        return {t.va, t.pitch,      x + t.surfaceX, y + t.surfaceY, t.pitch / t.bpp, t.import->layout.height,
-                true, t.blockHeight};
+        return {t.va, t.pitch, x + t.surfaceX, y + t.surfaceY, t.import->layout.height, true, t.blockHeight};
     if (t.layers > 1)
-        return {t.va + z * t.layerBytes, t.pitch, x, y, t.pitch / t.bpp, t.height, true, t.blockHeight};
-    return {t.va, t.pitch, x, y, t.pitch / t.bpp, t.height, true, t.blockHeight, t.depth, z, t.blockDepth};
+        return {t.va + z * t.layerBytes, t.pitch, x, y, t.height, true, t.blockHeight};
+    return {t.va, t.pitch, x, y, t.height, true, t.blockHeight, t.depth, z, t.blockDepth};
 }
 
 // SET_REMAP_COMPONENTS of a texel copy: DST_X..W = SRC_X..W, COMPONENT_SIZE, NUM_SRC_COMPONENTS, NUM_DST_COMPONENTS
@@ -4887,10 +4885,8 @@ constexpr uint32_t remapOf(uint32_t x, uint32_t y, uint32_t z, uint32_t w, uint3
     return x | y << 4 | z << 8 | w << 12 | (size - 1) << 16 | (src - 1) << 20 | (dst - 1) << 24;
 }
 
-// `w` x `h` texels as nouveau_copy_rect moves them: a remap of components (`bytes` of each texel moved), so lengths, widths and
-// origins count texels; a block-linear side by its block size (one GOB wide, Fermi's 8-row GOBs), its width the row stride in
-// texels, a 3D image's plane by its depth and layer. `ordered`: NON_PIPELINED, after every earlier copy has completed (one that
-// reads what the copy before it wrote)
+// `w` x `h` texels by nouveau_copy_rect (raw_kit.h): a remap of components (`bytes` of each texel moved). `ordered`: after
+// every earlier copy has completed (one that reads what the copy before it wrote)
 void copyRemapped(Push &p, const CopySide &s, const CopySide &d, uint32_t w, uint32_t h, uint32_t remap, uint32_t bytes,
                   [[maybe_unused]] Device::Stats &stats, bool ordered = false)
 {

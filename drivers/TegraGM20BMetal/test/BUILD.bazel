@@ -790,8 +790,8 @@ host_test(
         "//drivers/TegraGM20BMetal:raw/fx/fx_mip.cpp",
         "//drivers/TegraGM20B:TegraGM20BABI.h",
         "//drivers/TegraGM20B:TegraGM20BLayout.h",
-        "//drivers/TegraGM20BMetal:raw/runtime/raw_copy.h",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_kernel.h",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_kit.h",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_cpu_completion.h",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_fence.h",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_shared_events.h",
@@ -802,7 +802,10 @@ host_test(
     ],
     copts = ["-Idrivers/TegraGM20B"],
     cxx_std = "c++17",
-    deps = ["//kits/SwitchGM20B:classes"],
+    deps = [
+        "//kits/SwitchGM20B:classes",
+        "//kits/SwitchGM20BEmit:emit_ndebug",
+    ],
 )
 
 host_test(

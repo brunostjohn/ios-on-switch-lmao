@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #include "raw_transfer.h"
+#include "raw_kit.h"
 #include "raw_fence.h"
 #include <algorithm>
 #include <cstring>

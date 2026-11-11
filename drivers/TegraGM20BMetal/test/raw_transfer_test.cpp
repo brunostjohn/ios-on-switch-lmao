@@ -262,8 +262,7 @@ TEST_F(RawTransfer, TiledSubregionRoundTripPreservesOtherTexels)
         for (size_t i = 0; i < input.size(); ++i)
             input[i] = uint8_t(i * 23 ^ i >> 4);
         raw::TextureTransfer region;
-        region.texture = {reinterpret_cast<uint64_t>(tiled.data()), layout.row_bytes, 9, 13,
-                          layout.row_bytes / bpp, 29, true, layout.y_log2};
+        region.texture = {reinterpret_cast<uint64_t>(tiled.data()), layout.row_bytes, 9, 13, 29, true, layout.y_log2};
         region.width = 23;
         region.height = 11;
         region.planes = 1;
@@ -298,8 +297,8 @@ TEST_F(RawTransfer, VolumePlanesPreserveTheirPhysicalBlockDepthAndCallerImageStr
         const auto &level = layout.level[0];
         std::vector<uint8_t> tiled(layout.bytes, 0xb3), input(128 * 7 * 4, 0xad), output(input.size(), 0x19);
         raw::TextureTransfer region;
-        region.texture = {reinterpret_cast<uint64_t>(tiled.data()), level.rowBytes, 5, 4,
-                          level.rowBytes / 4, 13, true, level.yLog2, 9, 3, level.zLog2};
+        region.texture = {reinterpret_cast<uint64_t>(tiled.data()), level.rowBytes, 5, 4, 13, true, level.yLog2, 9, 3,
+                          level.zLog2};
         region.width = 17;
         region.height = 5;
         region.planes = 4;
