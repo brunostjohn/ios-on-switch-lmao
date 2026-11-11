@@ -57,11 +57,17 @@ struct DisplayPacingTest: HWTest {
         let intervals = zip(stamps.dropFirst(), stamps).map { ($0 - $1) * 1000 }
         let period = 1000.0 / 60
         let dropped = Stats.droppedFrames(intervals: intervals, period: period)
+        let worst = intervals.indices.max { intervals[$0] < intervals[$1] }
+        let settled = stamps.firstIndex { $0 - (stamps.first ?? 0) > 0.5 } ?? stamps.count
         var metrics = Metrics()
         metrics.set("frames", stamps.count)
         metrics.set("p50_ms", Stats.percentile(intervals, 0.5), digits: 2)
         metrics.set("p99_ms", Stats.percentile(intervals, 0.99), digits: 2)
         metrics.set("max_ms", intervals.max() ?? 0, digits: 2)
+        metrics.set("max_at_ms", worst.map { (stamps[$0 + 1] - stamps[0]) * 1000 } ?? 0, digits: 1)
+        metrics.set(
+            "dropped_first_500ms",
+            Stats.droppedFrames(intervals: Array(intervals.prefix(max(settled - 1, 0))), period: period))
         metrics.set("dropped", dropped)
         return .judged(
             [
