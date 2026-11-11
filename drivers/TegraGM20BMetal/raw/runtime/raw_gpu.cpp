@@ -6207,11 +6207,17 @@ static ProbeSurface probeSurface(const Texture &t, uint32_t fmt2d, uint32_t widt
 
 void BlitEncoder::probe(const ProbeOp &op, const Texture *read, const Texture &written)
 {
-    room(uint32_t(probeOpWords(op)));
+    room(uint32_t(probeOpWords(op)) + kProbeBracketWords);
     if (read)
         cb_->use(*read, false);
     cb_->use(written, true);
+    if (op.bracketed) {
+        tiledCacheDrain(p_, dev_->k_.info());
+        p_.m(WAIT_FOR_IDLE, 0);
+    }
     emitProbeOp(p_, op);
+    if (op.bracketed)
+        probeOpAfter(p_);
     cb_->taken_.ops++;
 }
 

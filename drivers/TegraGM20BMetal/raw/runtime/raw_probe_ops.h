@@ -4,7 +4,9 @@
 // resolve, read as the sample grid's image at 2:1), emitted inside a blit encoder (BlitEncoder::probe). No wait of their
 // own: the blit encoder's opening and the next pass's prologue order them, as for every other blit. Surfaces as
 // raw/fx/fx_mip.cpp writes them (nvc0_2d_texture_set); the solid fill as nouveau's 2D rectangle fills write it (DRAW_SHAPE,
-// its colour format and colour, then the two corners).
+// its colour format and colour, then the two corners); the reference fill first sets the state nouveau's DDX gives the
+// object (nvc0_accel.c, nvc0_exa.c: SRCCOPY, colour key off, render enabled, the clip at the surface) and turns the clip
+// off after, as raw/fx/fx_mip.cpp expects it.
 #pragma once
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
 #include <cstddef>
@@ -35,13 +37,28 @@ struct ProbeOp {
     bool bilinear = false, corner = false;
     // Fill: SET_RENDER_SOLID_PRIM_COLOR_FORMAT, and its colour: one word, or four floats' bits for RF32_GF32_BF32_AF32
     uint32_t colorFormat = 0, color[4] = {};
+    bool referenceFill = false;
+    // Between the waits the production 2D path puts around 2D work (raw/fx/fx_mip.cpp begin and end): the tiled
+    // cache drained and the 3D engine idle before; the 2D engine, then the 3D engine idle and the texture cache
+    // invalidated after. The first boots' fills ran without them, as the last GR work after clear-only passes
+    bool bracketed = true;
 };
+
+constexpr uint32_t kProbeBracketWords = 2 + 2 + 2 + 2 + 2;
+
+inline void probeOpAfter(Push &p)
+{
+    p.m(NV902D_WAIT_FOR_IDLE, 0, SUBC_2D);
+    p.m(NVB197_WAIT_FOR_IDLE, 0);
+    p.m(NVB197_INVALIDATE_TEXTURE_DATA_CACHE_NO_WFI, 0);
+}
 
 constexpr uint32_t kTwodColorF32x4 = 0xc0;
 
 namespace probe_ops_detail {
 
 constexpr uint32_t kSurfaceWords = 1 + 4 + 2 + 1 + 4;
+constexpr uint32_t kReferenceFillWords = 2 + 2 + 2 + 5 + 2 + 2;
 
 inline void surface(Push &p, uint32_t base, const ProbeSurface &s)
 {
@@ -103,7 +120,7 @@ inline bool probeResolveOp(const ProbeSurface &ms, uint32_t sxLog2, uint32_t syL
 inline size_t probeOpWords(const ProbeOp &op)
 {
     if (op.kind == ProbeOpKind::Fill)
-        return 2 + probe_ops_detail::kSurfaceWords + 2 + 5 + 4 + 5;
+        return 2 + probe_ops_detail::kSurfaceWords + 2 + 5 + 4 + 5 + probe_ops_detail::kReferenceFillWords;
     return 2 + 2 * probe_ops_detail::kSurfaceWords + 2 + 2 + 3 * 5;
 }
 
@@ -112,12 +129,21 @@ inline void emitProbeOp(Push &p, const ProbeOp &op)
     p.m(NV902D_SET_DST_COLOR_RENDER_TO_ZETA_SURFACE, 0, SUBC_2D);
     probe_ops_detail::surface(p, NV902D_SET_DST_FORMAT, op.dst);
     if (op.kind == ProbeOpKind::Fill) {
+        if (op.referenceFill) {
+            p.m(NV902D_SET_OPERATION, NV902D_SET_OPERATION_V_SRCCOPY, SUBC_2D);
+            p.m(NV902D_SET_COLOR_KEY_ENABLE, 0, SUBC_2D);
+            p.m(NV902D_SET_RENDER_ENABLE_C, NV902D_SET_RENDER_ENABLE_C_MODE_TRUE, SUBC_2D);
+            p.inc(NV902D_SET_CLIP_X0, {0, 0, op.dst.width, op.dst.height}, SUBC_2D);
+            p.m(NV902D_SET_CLIP_ENABLE, NV902D_SET_CLIP_ENABLE_V_TRUE, SUBC_2D);
+        }
         if (op.colorFormat == kTwodColorF32x4)
             p.inc(NV902D_SET_RENDER_SOLID_PRIM_COLOR0, {op.color[0], op.color[1], op.color[2], op.color[3]}, SUBC_2D);
         p.inc(NV902D_RENDER_SOLID_PRIM_MODE,
               {NV902D_RENDER_SOLID_PRIM_MODE_V_RECTS, op.colorFormat, op.colorFormat == kTwodColorF32x4 ? 0 : op.color[0]},
               SUBC_2D);
         p.inc(NV902D_RENDER_SOLID_PRIM_POINT_SET_X(0), {op.dx, op.dy, op.dx + op.dw, op.dy + op.dh}, SUBC_2D);
+        if (op.referenceFill)
+            p.m(NV902D_SET_CLIP_ENABLE, NV902D_SET_CLIP_ENABLE_V_FALSE, SUBC_2D);
         return;
     }
     probe_ops_detail::surface(p, NV902D_SET_SRC_FORMAT, op.src);
