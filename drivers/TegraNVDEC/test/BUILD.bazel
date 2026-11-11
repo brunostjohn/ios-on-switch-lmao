@@ -16,6 +16,20 @@ host_test(
 )
 
 
+host_test(
+    name = "switch_nvdec_display_probe_test",
+    srcs = [
+        "switch_nvdec_display_probe_test.cpp",
+        "//drivers/TegraNVDEC:SwitchNVDECAccess.h",
+        "//drivers/TegraNVDEC:SwitchNVDECDisplayProbe.h",
+        "//drivers/TegraNVDEC:TegraNVDECABI.h",
+        "//drivers/TegraNVDEC:TegraNVDECCheck.h",
+        "//drivers/TegraNVDEC:nvidia/clc5b0.h",
+        "//drivers/TegraNVDEC:nvidia/nvdec_drv.h",
+    ],
+)
+
+
 host_shims(
     name = "output_kernel",
     headers = [
@@ -66,6 +80,7 @@ host_test(
         "//drivers/TegraNVDEC:SwitchNVDECQueue.h",
         "//drivers/TegraNVDEC:SwitchNVDECSemantics.h",
         "//drivers/TegraNVDEC:SwitchNVDECAccess.h",
+        "//drivers/TegraNVDEC:SwitchNVDECDisplayProbe.h",
         "//drivers/TegraNVDEC:TegraNVDEC.h",
         "//drivers/TegraNVDEC:TegraNVDECABI.h",
         "//drivers/TegraNVDEC:TegraNVDECCheck.h",

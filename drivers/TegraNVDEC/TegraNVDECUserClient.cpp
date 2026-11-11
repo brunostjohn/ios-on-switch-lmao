@@ -19,6 +19,7 @@
 #include <string.h>
 #include "../TegraVIC/TegraVICPresent.h"
 #include "SwitchNVDECOutput.h"
+#include "SwitchNVDECProbeABI.h"
 #include "TegraNVDEC.h"
 #include "nvidia/nvdec_drv.h"
 #include "../../kits/SwitchDMA/SwitchDcache.h"
@@ -59,6 +60,10 @@ class AppleD5500UserClient : public IOUserClient {
     Buffer buffers_[kMaxBuffers] = {};
     uint32_t nextHandle_ = 1, lastFence_ = 0;
     bool submitted_ = false, counted_ = false;
+#if SWITCH_NVDEC_PROBES
+    bool displayProbe_ = false;
+    IOReturn armDisplayProbe(const void *in, uint32_t inSize, uint32_t *outSize);
+#endif
 
     Buffer *find(uint32_t handle);
     bool quiesce() const;
@@ -154,6 +159,20 @@ void AppleD5500UserClient::free()
     IOUserClient::free();
 }
 
+#if SWITCH_NVDEC_PROBES
+IOReturn AppleD5500UserClient::armDisplayProbe(const void *in, uint32_t inSize, uint32_t *outSize)
+{
+    const auto *probe = static_cast<const SwitchNVDECDisplayProbe *>(in);
+    if (inSize != sizeof(*probe) || !probe || probe->op != SwitchNVDECDisplayProbeArm || probe->reserved)
+        return kIOReturnBadArgument;
+    *outSize = 0;
+    IOLockLock(lock_);
+    displayProbe_ = true;
+    IOLockUnlock(lock_);
+    return kIOReturnSuccess;
+}
+#endif
+
 IOReturn AppleD5500UserClient::run(uint32_t method, const void *in, uint32_t inSize, void *out, uint32_t *outSize)
 {
     static const struct {
@@ -170,6 +189,10 @@ IOReturn AppleD5500UserClient::run(uint32_t method, const void *in, uint32_t inS
         {sizeof(TegraNVDECPresent), 0},
     };
 
+#if SWITCH_NVDEC_PROBES
+    if (method == SwitchNVDECMethodDisplayProbe)
+        return armDisplayProbe(in, inSize, outSize);
+#endif
     if (method < TegraNVDECMethodGetInfo || method > SwitchNVDECMethodExport || inSize != kSizes[method].in ||
         *outSize < kSizes[method].out || (inSize && !in) || (kSizes[method].out && !out))
         return kIOReturnBadArgument;
@@ -267,8 +290,20 @@ IOReturn AppleD5500UserClient::run(uint32_t method, const void *in, uint32_t inS
         const bool tenBit = submit->codec == TEGRA_NVDEC_CODEC_HEVC &&
                             submit->setup_bytes >= sizeof(nvdec_hevc_pic_s) &&
                             reinterpret_cast<const nvdec_hevc_pic_s *>(submit->setup)->bit_depth_luma > 8;
+#if SWITCH_NVDEC_PROBES
+        const bool probe = displayProbe_;
+        displayProbe_ = false;
+#endif
         if (submit->codec < 32 && (codecs & (1u << submit->codec)) && (!tenBit || (codecs & TEGRA_NVDEC_HEVC_MAIN10))) {
-            err = tegra_nvdec_run(submit, resolve, this, &fence, &why);
+#if SWITCH_NVDEC_PROBES
+            if (probe) {
+                err = switch_nvdec_run_display_probe(submit, resolve, this, &fence, &why);
+                IOLog("TegraNVDEC: display-buffer probe: mode %u submit %s (%d)\n",
+                      reinterpret_cast<const nvdec_hevc_pic_s *>(submit->setup)->disp_output_mode,
+                      err ? (why ? why : "failed") : "queued", err);
+            } else
+#endif
+                err = tegra_nvdec_run(submit, resolve, this, &fence, &why);
         } else {
             why = "codec not decoded on NVDEC";
         }

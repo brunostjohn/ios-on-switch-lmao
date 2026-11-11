@@ -11,6 +11,9 @@
 #include "SwitchNVDECAccess.h"
 #include "TegraNVDEC.h"
 #include "TegraNVDECCheck.h"
+#if SWITCH_NVDEC_PROBES
+#include "SwitchNVDECDisplayProbe.h"
+#endif
 #include "../TegraGM20B/SwitchGpuBacking.h"
 #include "../TegraHost1x/TegraHost1x.h"
 #include "../../kits/SwitchDMA/SwitchDMABuffer.h"
@@ -107,7 +110,9 @@ void retireThread(void *, wait_result_t)
     }
 }
 
-int prepare(const TegraNVDECSubmit &submit, TegraNVDECResolve resolve, void *context, Submission &work,
+using Check = const char *(*)(const TegraNVDECSubmit *, const uint64_t *);
+
+int prepare(const TegraNVDECSubmit &submit, TegraNVDECResolve resolve, void *context, Check check, Submission &work,
             const char **why)
 {
     uint64_t avail[TEGRA_NVDEC_MAX_ENTRIES] = {};
@@ -122,7 +127,7 @@ int prepare(const TegraNVDECSubmit &submit, TegraNVDECResolve resolve, void *con
         }
         avail[i] = block.size - entry.offset;
     }
-    *why = tegra_nvdec_check(&submit, avail);
+    *why = check(&submit, avail);
     if (*why)
         return -22;
     for (uint32_t i = 0; i < submit.entry_count; ++i) {
@@ -368,8 +373,9 @@ bool switch_nvdec_jobs_start(const switch_dma_buffer &setup, uint32_t syncpt, ui
     return true;
 }
 
-extern "C" int tegra_nvdec_run(const TegraNVDECSubmit *submit, TegraNVDECResolve resolve, void *context,
-                               uint32_t *fence, const char **why)
+namespace {
+int run(const TegraNVDECSubmit *submit, TegraNVDECResolve resolve, void *context, Check check, uint32_t *fence,
+        const char **why)
 {
     if (!why)
         return -22;
@@ -384,7 +390,7 @@ extern "C" int tegra_nvdec_run(const TegraNVDECSubmit *submit, TegraNVDECResolve
     auto *work = IONewZero(Submission, 1);
     if (!work)
         return -12;
-    int error = prepare(*submit, resolve, context, *work, why);
+    int error = prepare(*submit, resolve, context, check, *work, why);
     if (!error)
         error = publish(*submit, *work, fence);
     if (work->words)
@@ -392,6 +398,38 @@ extern "C" int tegra_nvdec_run(const TegraNVDECSubmit *submit, TegraNVDECResolve
     IODelete(work, Submission, 1);
     return error;
 }
+
+#if SWITCH_NVDEC_PROBES
+const char *displayProbeCheck(const TegraNVDECSubmit *submit, const uint64_t *avail)
+{
+    struct Scratch {
+        TegraNVDECSubmit submit;
+        uint64_t avail[TEGRA_NVDEC_MAX_ENTRIES];
+    };
+
+    auto *scratch = IONew(Scratch, 1);
+    if (!scratch)
+        return "probe: no memory for the check";
+    const char *why = switch_nvdec_check_display_probe(submit, avail, &scratch->submit, scratch->avail);
+    IODelete(scratch, Scratch, 1);
+    return why;
+}
+#endif
+}  // namespace
+
+extern "C" int tegra_nvdec_run(const TegraNVDECSubmit *submit, TegraNVDECResolve resolve, void *context,
+                               uint32_t *fence, const char **why)
+{
+    return run(submit, resolve, context, tegra_nvdec_check, fence, why);
+}
+
+#if SWITCH_NVDEC_PROBES
+extern "C" int switch_nvdec_run_display_probe(const TegraNVDECSubmit *submit, TegraNVDECResolve resolve, void *context,
+                                   uint32_t *fence, const char **why)
+{
+    return run(submit, resolve, context, displayProbeCheck, fence, why);
+}
+#endif
 
 extern "C" int tegra_nvdec_wait(uint32_t fence)
 {
