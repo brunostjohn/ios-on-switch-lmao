@@ -3,6 +3,7 @@
 // alone) go to the GPU in jobs of no pushes on the raw channel (raw::Device::eventJob): released after everything the channel
 // ran before them, and after the m2v work committed before them through the kernel's Order.
 #pragma once
+#include <IOKit/IOReturn.h>
 #include <cstddef>
 #include <cstdint>
 #include <vector>
@@ -30,6 +31,15 @@ inline std::vector<size_t> signalJobRanges(const std::vector<EventRangeView> &ra
             carried.push_back(i);
     }
     return carried;
+}
+
+// What a refused event job asks of its command buffer: to fail, or (its channel made again after the caller ordered the job
+// and checked its waits there) to order it again on the new channel and submit it then
+enum class EventJobAnswer { failed, reordered };
+
+constexpr EventJobAnswer eventJobAnswer(int result)
+{
+    return result == kIOReturnNotResponding ? EventJobAnswer::reordered : EventJobAnswer::failed;
 }
 
 }  // namespace raw

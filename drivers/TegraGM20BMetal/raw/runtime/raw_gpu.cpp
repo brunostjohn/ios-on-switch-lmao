@@ -403,7 +403,7 @@ bool Device::outgrow(Ring &r, uint32_t bytes, uint64_t &at)
 void Device::retire(Ring &r, uint32_t seqno)
 {
     for (const Bo &b : r.outgrown)
-        grownOut_.push_back({b, seqno});
+        grownOut_.push_back({b, seqno, channelGeneration()});
     r.outgrown.clear();
     while (!r.inflight.empty() && r.inflight.front().submitted && done(r.inflight.front().seqno))
         r.inflight.pop_front();
@@ -3218,7 +3218,7 @@ void Device::growRing(Ring &r, uint64_t most)
     if (!grow || !k_.allocControl(std::min(r.bo.bytes * 2, most), larger, ControlUse::Ring))
         return;
     set_.add(k_, larger, &r == &upload_ ? TegraGM20BSurfaceWrite : TegraGM20BSurfaceRead);
-    grownOut_.push_back({r.bo, lastSeqno_});
+    grownOut_.push_back({r.bo, lastSeqno_, channelGeneration()});
     r.bo = larger;
     r.head = r.since = r.clear = 0;
     r.inflight.clear();
@@ -3232,8 +3232,8 @@ CommandBuffer *Device::begin()
     if ((contextless_ || k_.lost(channel_) || liveKill(live)) && !reopen())
         return nullptr;
     for (auto it = grownOut_.begin(); it != grownOut_.end();)
-        if (done(it->second)) {
-            set_.free(k_, it->first);
+        if (it->unused(channelGeneration(), [this](uint32_t seqno) { return done(seqno); })) {
+            set_.free(k_, it->bo);
             it = grownOut_.erase(it);
         } else {
             ++it;
@@ -3919,7 +3919,7 @@ void CommandBuffer::abandon()
         r->head = r->since = (r == &d.push_ ? pushStart_ : uploadStart_);
         if (!r->outgrown.empty()) {  // it began in a ring it grew out of: the new one is empty
             for (const Bo &b : r->outgrown)
-                d.grownOut_.push_back({b, d.lastSeqno_});
+                d.grownOut_.push_back({b, d.lastSeqno_, d.channelGeneration()});
             r->outgrown.clear();
             r->head = r->since = 0;
         }
