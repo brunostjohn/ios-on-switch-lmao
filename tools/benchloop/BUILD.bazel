@@ -22,6 +22,7 @@ py_library(
     name = "lib",
     srcs = [
         "blend.py",
+        "blend_models.py",
         "columns.py",
         "doctor.py",
         "fakeblend.py",
@@ -77,6 +78,7 @@ APP_SOURCES = [
     )
     for name in [
         "agreement_test",
+        "blend_models_test",
         "blend_test",
         "golden_test",
         "known_test",
