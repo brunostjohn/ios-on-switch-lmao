@@ -17,7 +17,7 @@ refuse() {
     exit 1
 }
 
-mkdir -p "$dir/build" "$dir/cas/persistent_state"
+mkdir -p "$dir/build" "$dir/cache"
 touch "$dir/.metadata_never_index"
 
 if [ "${1:-}" = floor ]; then
