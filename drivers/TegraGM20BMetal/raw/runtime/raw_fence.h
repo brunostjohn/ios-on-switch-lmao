@@ -35,6 +35,19 @@ template<class Read> SemanticFenceRead readSemanticFence(uint32_t seqno, Read re
     return {};
 }
 
+// The newest job the record names failed, 0 for none (or a record the kernel is writing)
+inline uint32_t newestSemanticFailure(const volatile TegraGM20BAbiFenceSemantic *record)
+{
+    const uint32_t before = __atomic_load_n(&record->epoch, __ATOMIC_ACQUIRE);
+    const uint32_t failed = __atomic_load_n(&record->failed_first, __ATOMIC_RELAXED);
+    const uint32_t flags = __atomic_load_n(&record->flags, __ATOMIC_RELAXED);
+    std::atomic_thread_fence(std::memory_order_acquire);
+    if ((before & 1) || __atomic_load_n(&record->epoch, __ATOMIC_RELAXED) != before ||
+        !(flags & TegraGM20BFenceSemanticFailed))
+        return 0;
+    return failed;
+}
+
 inline SemanticFenceRead readSemanticFence(const volatile TegraGM20BAbiFenceSemantic *record, uint32_t seqno)
 {
     return readSemanticFence(seqno, [record](unsigned field) {

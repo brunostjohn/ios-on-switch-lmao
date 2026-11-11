@@ -55,9 +55,9 @@ static bool encodeRawAttempt(RMCommandBuffer *cb, size_t from, size_t to, const 
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
     rc->forceWholePrograms(cb->_forceWholePrograms);
 #endif
-    if (!validateNativeEventWaits(cb, generation)) {
+    if (validateNativeEventWaits(cb, generation) != raw::EventDependencyState::ready) {
         rc->abandon();
-        *why = "the event producer no longer belongs to this GPU channel";
+        *why = "an event producer failed or is pending on a channel made again since";
         return false;
     }
     RAW_ENCODE_BEGIN(resourceSpan, Resources);

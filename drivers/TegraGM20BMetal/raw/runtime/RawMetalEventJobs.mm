@@ -85,8 +85,7 @@ RMEventJob submitEventJobs(RMCommandBuffer *cb)
         r.m2vSinceRaw = false;
         RAW_DIAGNOSTIC(r.stats.acquires += acquires);
     }
-    const uint64_t generation = r.raw->channelGeneration();
-    if (!validateNativeEventWaits(cb, generation))
+    if (validateNativeEventWaits(cb, r.raw->channelGeneration()) != raw::EventDependencyState::ready)
         return RMEventJob::Retry;
     uint32_t seqno = 0;
     for (size_t from = 0; from < signals.size(); from += TegraGM20BMaxJobEvents) {
@@ -100,7 +99,7 @@ RMEventJob submitEventJobs(RMCommandBuffer *cb)
     cb->_sharedSignalRanges = carried;
     publishSharedEvents(cb);
     cb->_seqno = seqno;
-    cb->_channelGeneration = generation;
+    cb->_channelGeneration = r.raw->channelGeneration();  // the job's: eventJob makes a channel the kernel killed again
     r.rawSinceM2v = true;
     retireRawRange(cb, cb->_segs[head].from, cb->_segs[head].to);
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG

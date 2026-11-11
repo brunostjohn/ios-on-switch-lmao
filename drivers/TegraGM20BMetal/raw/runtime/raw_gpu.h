@@ -1234,9 +1234,17 @@ public:
     bool hostAccess(const Texture &owner, const void *cpu, uint64_t bytes, bool write, HostAccess &access);
     CpuCompletion captureCpuCompletion(uint32_t seqno, uint64_t generation,
                                        const std::vector<const Buffer *> &buffers);
+    // A job of a channel made again since keeps nothing in the kernel to maintain its ranges against: Stale, so its buffers
+    // stay GPU-dirty and their next CPU access acquires them, never a failure of a job that completed
     CpuCompletionResult completeCpu(const CpuCompletion &completion)
     {
-        return k_.completeCpu(completion);
+        const auto retired = [&] {
+            return completion.valid && !completion.ranges.empty() && completion.generation != channelGeneration();
+        };
+        if (retired())
+            return CpuCompletionResult::Stale;
+        const CpuCompletionResult result = k_.completeCpu(completion);
+        return result == CpuCompletionResult::Failed && retired() ? CpuCompletionResult::Stale : result;
     }
     void destroyBuffer(Buffer &b);
 
@@ -1330,13 +1338,14 @@ public:
     bool wait(uint32_t seqno, uint64_t generation)
     {
         if (channelGeneration() != generation)
-            return generations_.completed(generation, seqno);
+            return retiredWait(seqno, generation);
         const bool success = done(seqno) && semanticFence(seqno).status != SemanticFenceStatus::Superseded
             ? !lost(seqno) : waitFence(seqno, generation);
         if (channelGeneration() == generation)
             return success;
-        return generations_.completed(generation, seqno);
+        return retiredWait(seqno, generation);
     }
+
 
     // A completed command buffer's GPU time from its stamps; false when its slot holds a later one's
     bool gpuNanoseconds(uint32_t stamp, uint64_t &ns) const;
@@ -1847,17 +1856,27 @@ private:
     bool reopen();
     bool newContext(uint32_t channel, uint32_t &seqno);
     bool waitFence(uint32_t seqno, uint64_t generation);
+    // A seqno of a channel reopen() retired: as that channel ended it, its failure's error kept for lostError()
+    bool retiredWait(uint32_t seqno, uint64_t generation)
+    {
+        uint32_t error = 0;
+        if (generations_.completed(generation, seqno, &error))
+            return true;
+        killedError_.store(error, std::memory_order_relaxed);
+        return false;
+    }
     // the last seqno of a channel that died: it and every one before it failed (or completed before; not told apart),
     // where the kernel writes no kill records
 
     // The seqnos a kill took (TegraGM20BAbiFence): the live channel's record, then the ones the channels it replaced left,
     // kept until reopen made the record's slot over (a slot's seqnos continue, so a kept record names its channel's alone).
-    struct Killed {
-        uint32_t first, last, error;
-    };
+    using Killed = KillRange;
 
     bool liveKill(Killed &k) const;
     bool killed(uint32_t seqno) const;
+    std::vector<KillRange> failedSeqnos() const;
+    void forgetKept();
+    const volatile uint32_t *keptSlot_ = &kNoFence;  // the fence record of the slot the kept records were written in
     mutable std::mutex killedLock_;
     std::atomic<bool> keptKills_{false};
     std::atomic<uint32_t> keptThrough_{0};

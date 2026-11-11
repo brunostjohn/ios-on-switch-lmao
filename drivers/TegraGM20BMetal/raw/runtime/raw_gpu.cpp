@@ -2953,6 +2953,38 @@ void Device::keepFailure(uint32_t seqno)
     keptKills_.store(true, std::memory_order_release);
 }
 
+// What the live channel failed, for its retirement: the kept records (its kill record among them) and the newest job its
+// fence record names failed
+std::vector<KillRange> Device::failedSeqnos() const
+{
+    std::vector<KillRange> failed;
+    {
+        std::lock_guard<std::mutex> l(killedLock_);
+        for (const Killed &kept : killedKept_)
+            if (kept.error)
+                failed.push_back(kept);
+    }
+    Killed live = {};
+    if (!k_.killRecords())  // nothing tells the seqnos the channel finished from those it took with it
+        failed.push_back({1, lastSeqno_, kWaitRefused});
+    else if (k_.lost(channel_) && !liveKill(live))  // the kernel publishes the error before the record and the fence
+        failed.push_back({*fence_ + 1, lastSeqno_, k_.lostError() ? k_.lostError() : kWaitRefused});
+    const auto *record = reinterpret_cast<const volatile TegraGM20BAbiFence *>(fence_);
+    if (const uint32_t seqno =
+            newestSemanticFailure(reinterpret_cast<const volatile TegraGM20BAbiFenceSemantic *>(record + 1)))
+        failed.push_back({seqno, seqno, kDependencyFailed});
+    return failed;
+}
+
+// A kept record names the seqnos of the slot it was written in, which a channel made in another slot gives out again
+void Device::forgetKept()
+{
+    std::lock_guard<std::mutex> l(killedLock_);
+    killedKept_ = {};
+    keptThrough_.store(0, std::memory_order_relaxed);
+    keptKills_.store(false, std::memory_order_release);
+}
+
 // The barriers order the record after the caller's read of the fence word, and its range after its error: the kernel
 // writes the range, the error, then the fence word.
 bool Device::liveKill(Killed &k) const
@@ -3042,8 +3074,8 @@ std::string Device::vaOwner(uint64_t va)
 
 bool Device::reopen()
 {
-    const uint64_t retiring = generations_.retire({});
-    if (!contextless_) {  // the first try for this death: what the channel had failed, its kill record is kept
+    if (channel_) {  // none after a reopen the kernel refused: that channel was retired then
+        keptSlot_ = fence_;
         Killed live = {};
         if (liveKill(live)) {
             k_.markLost(channel_, k_.opened());
@@ -3053,11 +3085,11 @@ bool Device::reopen()
             keptKills_.store(true, std::memory_order_release);
         }
         contextless_ = true;
-    }
-    // Closed once: the connection is NVK's, whose next channel may take the slot number
-    if (channel_)
+        const uint64_t retiring = generations_.retire(failedSeqnos());
+        // Closed once: the connection is NVK's, whose next channel may take the slot number
         k_.closeChannel(channel_);
-    generations_.closed(retiring);
+        generations_.closed(retiring);
+    }
     if (!makeChannel(k_, kEngines, channel_, fence_, lastSeqno_, &kNoFence, [this](uint32_t channel, uint32_t &seqno) {
             return newContext(channel, seqno);
         })) {
@@ -3065,6 +3097,8 @@ bool Device::reopen()
         channelError_ = k_.error();
         return false;
     }
+    if (fence_ != keptSlot_)
+        forgetKept();
     contextless_ = false;
     return true;
 }

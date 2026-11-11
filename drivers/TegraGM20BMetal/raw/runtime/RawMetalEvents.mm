@@ -249,17 +249,28 @@ void retireEventSignals(const std::vector<RMNativeEventSignal> &signals, bool su
     }
 }
 
-bool validateNativeEventWaits(RMCommandBuffer *cb, uint64_t generation)
+// blocked: a producer still pending on a channel made again since (the encode's begin() may have), whose GPU order this
+// channel does not have; its outcome settles it and wakes this queue (eventReadiness parks on it). Only a failed one fails.
+raw::EventDependencyState validateNativeEventWaits(RMCommandBuffer *cb, uint64_t generation)
 {
     if (cb->_gpuEventWaits.empty())
-        return true;
+        return raw::EventDependencyState::ready;
     std::lock_guard<std::mutex> lock(cb->_lock);
-    if (raw::eventDependencies(cb->_gpuEventWaits, generation, true) == raw::EventDependencyState::ready)
-        return true;
-    cb->_segError = [NSError errorWithDomain:MTLCommandBufferErrorDomain
-                                       code:MTLCommandBufferErrorInternal
-                                   userInfo:@{NSLocalizedDescriptionKey : @"The GPU event producer was lost"}];
-    return false;
+    const raw::EventDependencyState state = raw::eventDependencies(cb->_gpuEventWaits, generation, true);
+    if (state == raw::EventDependencyState::failed)
+        cb->_segError = [NSError errorWithDomain:MTLCommandBufferErrorDomain
+                                           code:MTLCommandBufferErrorInternal
+                                       userInfo:@{NSLocalizedDescriptionKey : @"A GPU event producer failed"}];
+    return state;
+}
+
+bool waitsOnRetiredProducer(RMCommandBuffer *cb)
+{
+    if (cb->_gpuEventWaits.empty())
+        return false;
+    std::lock_guard<std::mutex> lock(cb->_lock);
+    return raw::eventDependencies(cb->_gpuEventWaits, gRM->raw->channelGeneration(), true) ==
+           raw::EventDependencyState::blocked;
 }
 
 void releaseEventWaits(RMCommandBuffer *cb)
