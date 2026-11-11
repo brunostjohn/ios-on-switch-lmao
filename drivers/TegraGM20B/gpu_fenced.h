@@ -96,13 +96,15 @@ static inline void stats_job_seqno(struct tgm_chan *chan, u32 seqno)
 		return;
 	}
 	switch_gpu_job_batch(&chan->stat_jobs, run, st->end.ns, tgm_deadline_pt_ns(st->end.ns - run->prev_pt));
+	if (!chan->high)
+		tgm_hold_released(chan->chid, st->end.ns, seqno == run->last);
 	if (seqno != run->last)
 		return;
 	span = st->end.ns - run->start_pt;
-	stats_add(&tgm_stats.exec_sum, &tgm_stats.exec_max, span);
-	__atomic_fetch_add(&chan->stat_exec_n, 1, __ATOMIC_RELAXED);
 	if (chan->high)
 		switch_gpu_compositor_job(tgm_deadline_pt_ns(span));
+	stats_add(&tgm_stats.exec_sum, &tgm_stats.exec_max, span);
+	__atomic_fetch_add(&chan->stat_exec_n, 1, __ATOMIC_RELAXED);
 	stats_add(&chan->stat_exec, &chan->stat_exec_max, span);
 	switch_gpu_job_end(&chan->stat_jobs, run);
 }

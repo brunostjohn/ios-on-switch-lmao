@@ -19,6 +19,7 @@
 #include "TegraGM20BHost.h"
 #include "TegraGM20BSched.h"
 #include "TegraGM20BSchedPolicy.h"
+#include "SwitchGpuPreemptLanding.h"
 
 #define HOLD_CHIDS 512 /* GM20B's channels (CCSR_CHANNEL__SIZE_1) */
 #define HOLD_LATENCY_MAX TGM_INTERVAL_MAX_NS
@@ -52,6 +53,8 @@ static struct {
 	int pid[HOLD_CHIDS];
 	u32 n[HOLD_CHIDS];
 	u64 max_ns[HOLD_CHIDS];
+	struct switch_gpu_release last[HOLD_CHIDS]; /* each app channel's last batch release (hold.lock) */
+	struct switch_gpu_preempt_counts counts[HOLD_CHIDS];
 } sampled;
 #endif
 
@@ -350,27 +353,53 @@ void tgm_hold_sampled(unsigned int chid, uint64_t asked_pt, uint64_t start_pt)
 		__atomic_fetch_add(&sampled.n[chid], 1, __ATOMIC_RELAXED);
 		if (sample > __atomic_load_n(&sampled.max_ns[chid], __ATOMIC_RELAXED))
 			__atomic_store_n(&sampled.max_ns[chid], sample, __ATOMIC_RELAXED);
+		sampled.counts[chid].landed[switch_gpu_preempt_landing(&sampled.last[chid], asked_pt, start_pt)]++;
+		sampled.counts[chid].bucket[switch_gpu_preempt_bucket(sample)]++;
 #endif
 	}
 	spin_unlock_irqrestore(&hold.lock, flags);
 }
 
 #if TGM_STATS
-void tgm_hold_samples_take(int pid, uint32_t *n, uint64_t *max_ns)
+void tgm_hold_samples_take(int pid, uint32_t *n, uint64_t *max_ns, struct switch_gpu_preempt_counts *counts)
 {
+	unsigned long flags = 0;
 	unsigned int i = 0;
 	u64 max = 0;
 
 	*n = 0;
+	memset(counts, 0, sizeof(*counts));
 	for (i = 0; i < HOLD_CHIDS; i++) {
 		if (READ_ONCE(sampled.pid[i]) != pid)
 			continue;
 		*n += __atomic_exchange_n(&sampled.n[i], 0, __ATOMIC_RELAXED);
 		max = max_t(u64, max, __atomic_exchange_n(&sampled.max_ns[i], 0, __ATOMIC_RELAXED));
+		spin_lock_irqsave(&hold.lock, flags);
+		switch_gpu_preempt_add(counts, &sampled.counts[i]);
+		memset(&sampled.counts[i], 0, sizeof(sampled.counts[i]));
+		spin_unlock_irqrestore(&hold.lock, flags);
 	}
 	*max_ns = max;
 }
 #endif
+
+void tgm_hold_released(unsigned int chid, uint64_t end_pt, int job_last)
+{
+#if TGM_STATS
+	unsigned long flags = 0;
+
+	if (chid >= HOLD_CHIDS)
+		return;
+	spin_lock_irqsave(&hold.lock, flags);
+	sampled.last[chid].end_pt = end_pt;
+	sampled.last[chid].job_last = job_last != 0;
+	spin_unlock_irqrestore(&hold.lock, flags);
+#else
+	(void)chid;
+	(void)end_pt;
+	(void)job_last;
+#endif
+}
 
 void tgm_hold_check(struct nvkm_device *device, unsigned int chid)
 {

@@ -12,6 +12,7 @@ extern "C" {
 #include <sys/errno.h>
 #include <sys/sysctl.h>
 #include "../../kits/SwitchSysctl/SwitchSysctl.h"
+#include "SwitchGpuPreemptLanding.h"
 #include "SwitchGpuSpanNotes.h"
 
 extern "C" int proc_selfpid(void);
@@ -116,6 +117,8 @@ int promisesSysctl SYSCTL_HANDLER_ARGS
 }
 
 struct sysctl_oid gPromisesOid;
+switch_gpu_spans::Notes gSpans;
+uint64_t gCompositorJobMax;
 }  // namespace
 
 extern "C" void switch_gpu_path_promise_direct(int what)
@@ -130,10 +133,6 @@ extern "C" void switch_gpu_path_promise_abandoned(uint64_t waited_ns)
 	__atomic_fetch_add(&promisesAbandoned, 1, __ATOMIC_RELEASE);
 }
 
-switch_gpu_spans::Notes gSpans;
-uint64_t gCompositorJobMax;
-extern "C" void switch_gpu_path_taken(enum switch_gpu_path path, uint32_t count)
-{
 extern "C" void switch_gpu_span_note(const char *owner, const char *text)
 {
 	IOLock *held = processLock();
@@ -164,6 +163,8 @@ extern "C" void switch_gpu_span_line(char *line, size_t size)
 	IOLockUnlock(held);
 }
 
+extern "C" void switch_gpu_path_taken(enum switch_gpu_path path, uint32_t count)
+{
 	if (!count)
 		return;
 	__atomic_fetch_add(&window[path], count, __ATOMIC_RELAXED);
@@ -218,11 +219,22 @@ extern "C" void switch_gpu_path_line(char *line, size_t size)
 	format(line, size, head > 0 ? static_cast<size_t>(head) : 0, counts);
 	uint32_t preempts = 0;
 	uint64_t preemptMax = 0;
-	tgm_hold_samples_take(pid, &preempts, &preemptMax);
-	const size_t used = strlen(line);
+	switch_gpu_preempt_counts landed = {};
+	tgm_hold_samples_take(pid, &preempts, &preemptMax, &landed);
+	size_t used = strlen(line);
 	if (used < size)
-		snprintf(line + used, size - used, " preempts=%u preempt_max_us=%llu", preempts,
-			 static_cast<unsigned long long>(preemptMax / 1000));
+		snprintf(line + used, size - used,
+			 " preempts=%u preempt_max_us=%llu preempt_mid_job=%u preempt_job_end=%u preempt_unknown=%u",
+			 preempts, static_cast<unsigned long long>(preemptMax / 1000),
+			 landed.landed[SWITCH_GPU_LANDED_MID_JOB], landed.landed[SWITCH_GPU_LANDED_JOB_END],
+			 landed.landed[SWITCH_GPU_LANDED_UNKNOWN]);
+	static const char *const kBuckets[SWITCH_GPU_PREEMPT_BUCKETS] = {"lt250",  "lt500",  "lt1000",
+									 "lt2000", "lt4000", "ge4000"};
+	for (unsigned b = 0; b < SWITCH_GPU_PREEMPT_BUCKETS; b++) {
+		used = strlen(line);
+		if (used < size)
+			snprintf(line + used, size - used, " preempt_%s_us=%u", kBuckets[b], landed.bucket[b]);
+	}
 }
 
 extern "C" void switch_gpu_path_register(void)

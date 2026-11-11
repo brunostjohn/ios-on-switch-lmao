@@ -68,9 +68,13 @@ int tgm_hold_preempt(struct nvkm_device *device, unsigned int chid);
 uint64_t tgm_hold_asked(unsigned int chid, uint64_t asked_pt);
 /* The compositor's submission queued behind `chid` started at start_pt (its start stamp): an exact sample. */
 void tgm_hold_sampled(unsigned int chid, uint64_t asked_pt, uint64_t start_pt);
-/* Debug kernels: how many preemption latencies were sampled for process `pid`'s channels since its last call, and the
- * longest (hw_test_app gpu.sched.long_draw_bands, through SwitchGpuPathStats' line) */
-void tgm_hold_samples_take(int pid, uint32_t *n, uint64_t *max_ns);
+/* Debug kernels: how many preemption latencies were sampled for process `pid`'s channels since its last call, the
+ * longest, and where they landed with their buckets (SwitchGpuPreemptLanding.h; hw_test_app gpu.sched.long_draw_bands,
+ * through SwitchGpuPathStats' line) */
+struct switch_gpu_preempt_counts;
+void tgm_hold_samples_take(int pid, uint32_t *n, uint64_t *max_ns, struct switch_gpu_preempt_counts *counts);
+/* Debug kernels: an app channel's batch ending at end_pt, the job's last or not: where a preempt lands */
+void tgm_hold_released(unsigned int chid, uint64_t end_pt, int job_last);
 /* Half its preemption latency after a preempt: if `chid` has left the GPU, the latency comes down. */
 void tgm_hold_check(struct nvkm_device *device, unsigned int chid);
 uint64_t tgm_hold_latency(unsigned int chid);

@@ -34,6 +34,7 @@
 #                            the kernel could not read or one with an opcode NVK never writes
 #   gm20b_target_peaks_test  SwitchGpuTargetPeaks.h: each process's largest target image since boot, and its line
 #   gm20b_span_notes_test    SwitchGpuSpanNotes.h: the render server's long spans and the compositor's longest job
+#   gm20b_preempt_landing_test SwitchGpuPreemptLanding.h: where a kick's preempt landed (a band's release, a job's end)
 #   gm20b_cost_hist_test     TegraGM20BCostHist.h: the debug lines' buckets, and a p95 a single slow frame leaves alone
 #   gm20b_sched_test         TegraGM20BSchedPolicy.h and tgm_hang_blame over deploy-2045's hang registers: what a
 #                            compositor kick preempts, the interleaved runlist (full, empty, one level), which channel a
@@ -221,6 +222,15 @@ host_test(
     srcs = [
         "gm20b_target_peaks_test.cpp",
         "//drivers/TegraGM20B:SwitchGpuTargetPeaks.h",
+    ],
+    cxx_std = "c++17",
+)
+
+host_test(
+    name = "gm20b_preempt_landing_test",
+    srcs = [
+        "gm20b_preempt_landing_test.cpp",
+        "//drivers/TegraGM20B:SwitchGpuPreemptLanding.h",
     ],
     cxx_std = "c++17",
 )
