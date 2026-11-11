@@ -89,6 +89,7 @@ TESTS: dict[str, bool] = {
             'gpu.path.control_reserve',
             'gpu.path.cpu_complete',
             'gpu.path.use_ranges',
+            'gpu.path.native_surface_view',
         ],
         False,
     ),

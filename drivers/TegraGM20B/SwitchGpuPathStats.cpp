@@ -16,7 +16,8 @@ namespace
 {
 const char *const kNames[SWITCH_GPU_PATH_COUNT] = {
 	"internal_jobs", "external_jobs", "unlocked_writes", "volatile_binds", "lean_copy_jobs",
-	"control_bos",   "cpu_completes", "ranged_uses",     "visible_waits",
+	"control_bos",   "cpu_completes", "ranged_uses",     "visible_waits",  "native_views",
+	"native_reads",
 };
 
 // Every path is taken in the syscall or trap of the process it is for, so each process counts its own: a reader of

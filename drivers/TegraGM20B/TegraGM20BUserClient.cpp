@@ -2477,7 +2477,7 @@ IOReturn AGXDeviceUserClient::exec(uint32_t channel, TegraGM20BAbiPush *input, u
 		events->clear();
 	}
 	uint32_t useTotal = 0, writeCount = 0, surfaceCount = 0, nativeGuardCount = 0, writtenCount = 0,
-		 rangedUses = 0;
+		 rangedUses = 0, nativeReads = 0;
 	bool hostWritten = !(visibility & TegraGM20BSubmitVisibilityExplicit);
 	bool unlockedWrites = false;
 	const uint32_t claim = switch_gpu_claim_flags(admissionBegin || admissionContinue);
@@ -2487,6 +2487,7 @@ IOReturn AGXDeviceUserClient::exec(uint32_t channel, TegraGM20BAbiPush *input, u
 		hostWritten |= (access & TegraGM20BSurfaceHostWritten) != 0;
 		access &= ~uint32_t(TegraGM20BSurfaceGpuAddress | TegraGM20BSurfaceHostWritten | TegraGM20BSurfaceRange);
 		if (bo->nativeView) {
+			++nativeReads;
 			const uint32_t first = useTotal;
 			const int error = switch_gpu_native_surface_add_read(
 				*bo->nativeView, access, job.uses, job.guards, job.capacity,
@@ -2697,6 +2698,7 @@ refresh:
 		return ret;
 	if (count) {
 		switch_gpu_path_job(jobVisibility, unlockedWrites, leanChannels_[channel - 1], rangedUses);
+		switch_gpu_path_taken(SWITCH_GPU_PATH_NATIVE_READ, nativeReads);
 		// The host imports this submission may have written, marked GPU-dirty with the submission as their writer
 		// (atomic stores, no cache maintenance): a CPU IOSurfaceLock of one waits for this seqno, then invalidates
 		// (tgm_coherency_*, the XNU hooks), and a listed Exec of another channel waits for it on the GPU.
@@ -2889,12 +2891,13 @@ void AGXDeviceUserClient::releaseMappings()
 
 namespace
 {
-// What each held bit still needs. SharedEvents and ResourceReady: SemanticFence. SemanticFence: a raw
-// runtime that reads failed_first as the one newest failure, not as a prefix. NativeSurfaceView: the
-// media unit's native surfaces.
+// What each held bit still needs. SemanticFence: a raw runtime that reads failed_first as the one newest
+// failure, not as a prefix of failed seqnos (raw_fence.h readSemanticFence, raw_gpu.cpp liveKill), or one
+// failed event wait fails every later command buffer on its channel. SharedEvents: SemanticFence (the
+// runtime takes neither alone). ResourceReady: SharedEvents (its readiness notification is an event; without
+// one a refused admission fails the command buffer).
 constexpr uint32_t kInfoAwaitingUserspace =
-	TegraGM20BInfoNativeSurfaceView | TegraGM20BInfoSharedEvents | TegraGM20BInfoSemanticFence |
-	TegraGM20BInfoResourceReady;
+	TegraGM20BInfoSharedEvents | TegraGM20BInfoSemanticFence | TegraGM20BInfoResourceReady;
 }  // namespace
 
 extern "C" uint32_t switch_gpu_info_flags(void)

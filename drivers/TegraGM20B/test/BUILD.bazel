@@ -734,9 +734,11 @@ host_test(
 host_test(
     name = "switch_gpu_native_import_test",
     srcs = [
+        "gm20b_gpu_memory.h",
         "switch_gpu_native_import_test.cpp",
         "//drivers/TegraGM20B:SwitchGpuBoIndex.h",
         "//drivers/TegraGM20B:SwitchGpuNativeImport.h",
+        "//drivers/TegraGM20B:SwitchGpuPathStats.h",
         "//drivers/TegraGM20B:SwitchGpuNativeSurface.h",
         "//drivers/TegraGM20B:SwitchGpuBacking.h",
         "//drivers/TegraGM20B:TegraGM20BABI.h",

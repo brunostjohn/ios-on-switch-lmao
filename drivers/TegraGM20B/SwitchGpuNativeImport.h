@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #pragma once
+#include "SwitchGpuPathStats.h"
 
 static bool switch_gpu_native_reply(const switch_gpu_native_surface_view &view,
 				    const switch_gpu_backing_info &allocation,
@@ -102,5 +103,6 @@ IOReturn AGXDeviceUserClient::nativeSurfaceView(const TegraGM20BAbiNativeSurface
 	bos_ = bo;
 	boIndex_.insert(bo->handle, bo);
 	out->handle = bo->handle;
+	switch_gpu_path_taken(SWITCH_GPU_PATH_NATIVE_VIEW, 1);
 	return kIOReturnSuccess;
 }

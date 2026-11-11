@@ -1,8 +1,11 @@
 import Darwin
+import CoreVideo
 import Foundation
 import HWTestCore
 import HWTestGPU
+import HWTestVideo
 import Metal
+import VideoToolbox
 
 /// kern.switch_gpu_paths (debug kernels, drivers/TegraGM20B/SwitchGpuPathStats.h): the capability flags the GM20B
 /// kernel advertises and how often this process took each path behind them.
@@ -39,7 +42,7 @@ protocol GPUPathTest: HWTest {
     var bit: Int { get }
     var counters: [String] { get }
     /// The workload's failures, none when it gave the right bytes.
-    func exercise(_ gpu: GPU, _ metrics: inout Metrics) async throws -> [String]
+    func exercise(_ gpu: GPU, _ context: TestContext, _ metrics: inout Metrics) async throws -> [String]
 }
 
 extension GPUPathTest {
@@ -59,7 +62,7 @@ extension GPUPathTest {
         metrics.set("flags", String(before.flags, radix: 16))
         var failures: [String] = []
         if before.flags & (1 << UInt32(bit)) == 0 { failures.append("the kernel does not advertise bit \(bit)") }
-        failures += try await exercise(gpu, &metrics)
+        failures += try await exercise(gpu, context, &metrics)
         let after = GPUPaths.read() ?? before
         for counter in counters {
             let taken = after.taken(counter, since: before)
@@ -87,7 +90,7 @@ struct JobVisibilityPathTest: GPUPathTest {
     let bit = 18
     let counters = ["internal_jobs", "external_jobs"]
 
-    func exercise(_ gpu: GPU, _ metrics: inout Metrics) async throws -> [String] {
+    func exercise(_ gpu: GPU, _: TestContext, _ metrics: inout Metrics) async throws -> [String] {
         let target = try gpu.texture(.rgba8Unorm, 64, 64)
         try await gpu.run { commands in
             let pass = MTLRenderPassDescriptor()
@@ -112,7 +115,7 @@ struct LeanCopyPathTest: GPUPathTest {
     let bit = 19
     let counters = ["lean_copy_jobs"]
 
-    func exercise(_ gpu: GPU, _ metrics: inout Metrics) async throws -> [String] {
+    func exercise(_ gpu: GPU, _: TestContext, _ metrics: inout Metrics) async throws -> [String] {
         let width = 160, height = 48, row = width * 4
         let texture = try gpu.texture(.rgba8Unorm, width, height, usage: [.shaderRead], storage: .shared)
         let pattern = (0..<(row * height)).map { UInt8(truncatingIfNeeded: $0 &* 7 &+ 3) }
@@ -144,7 +147,7 @@ struct ControlReservePathTest: GPUPathTest {
     let counters = ["control_bos"]
     static let width = 64, height = 8, bytesPerDraw = 4096
 
-    func exercise(_ gpu: GPU, _ metrics: inout Metrics) async throws -> [String] {
+    func exercise(_ gpu: GPU, _: TestContext, _ metrics: inout Metrics) async throws -> [String] {
         let width = Self.width, height = Self.height
         let target = try gpu.texture(.rgba8Unorm, width, height)
         let pipeline = try gpu.render(fragment: "solid_fragment", format: .rgba8Unorm)
@@ -189,7 +192,7 @@ struct CpuCompletePathTest: GPUPathTest {
     let bit = 24
     let counters = ["cpu_completes"]
 
-    func exercise(_ gpu: GPU, _ metrics: inout Metrics) async throws -> [String] {
+    func exercise(_ gpu: GPU, _: TestContext, _ metrics: inout Metrics) async throws -> [String] {
         let length = 3 * Int(getpagesize())
         var allocation: UnsafeMutableRawPointer?
         guard posix_memalign(&allocation, Int(getpagesize()), length) == 0, let memory = allocation else {
@@ -227,7 +230,7 @@ struct UseRangesPathTest: GPUPathTest {
     let bit = 25
     let counters = ["ranged_uses"]
 
-    func exercise(_ gpu: GPU, _ metrics: inout Metrics) async throws -> [String] {
+    func exercise(_ gpu: GPU, _: TestContext, _ metrics: inout Metrics) async throws -> [String] {
         let length = 768
         let buffers = try (0..<8).map { _ in try gpu.buffer(length) }
         for (index, buffer) in buffers.enumerated() {
@@ -255,10 +258,96 @@ struct UseRangesPathTest: GPUPathTest {
     }
 }
 
+/// NativeSurfaceView (bit 17): a hardware-decoded frame's planes, sampled through CVMetalTextureCache, are read from
+/// the decoder's own block-linear picture through a native view, and give the bytes a CPU lock of the frame converts
+/// to rows. The GPU reads both planes before the CPU's lock prepares the rows.
+struct NativeSurfaceViewPathTest: GPUPathTest {
+    let id = "gpu.path.native_surface_view"
+    let name = "Draws sample a decoded picture where the decoder put it, matching its CPU rows"
+    let bit = 17
+    let counters = ["native_views", "native_reads"]
+
+    func exercise(_ gpu: GPU, _ context: TestContext, _ metrics: inout Metrics) async throws -> [String] {
+        guard let clip = Clip.all.first(where: { $0.codec == .h264 && $0.height == 720 }) else {
+            throw TestFailure("no 720p H.264 clip")
+        }
+        let frame = try Self.decodeFirst(try await Demux.load(clip, from: context.media), clip)
+        var made: CVMetalTextureCache?
+        guard CVMetalTextureCacheCreate(nil, nil, gpu.device, nil, &made) == kCVReturnSuccess, let cache = made else {
+            throw TestFailure("CVMetalTextureCacheCreate failed")
+        }
+        let planes: [(format: MTLPixelFormat, bytesPerPixel: Int)] = [(.r8Unorm, 1), (.rg8Unorm, 2)]
+        var sampled: [[UInt8]] = []
+        var held: [CVMetalTexture] = []
+        for (plane, shape) in planes.enumerated() {
+            var texture: CVMetalTexture?
+            guard CVMetalTextureCacheCreateTextureFromImage(
+                nil, cache, frame, nil, shape.format, CVPixelBufferGetWidthOfPlane(frame, plane),
+                CVPixelBufferGetHeightOfPlane(frame, plane), plane, &texture) == kCVReturnSuccess,
+                let texture, let metal = CVMetalTextureGetTexture(texture)
+            else { throw TestFailure("no Metal texture of plane \(plane)") }
+            held.append(texture)
+            sampled.append(try await gpu.read(metal, bytesPerPixel: shape.bytesPerPixel))
+        }
+        var failures: [String] = []
+        for (plane, shape) in planes.enumerated() {
+            let wrong = Self.wrong(sampled[plane], Self.rows(frame, plane: plane, bytesPerPixel: shape.bytesPerPixel))
+            metrics.set("plane\(plane)_wrong_bytes", wrong)
+            if wrong != 0 { failures.append("plane \(plane): \(wrong) bytes differ from the CPU's rows") }
+        }
+        metrics.set("textures", held.count)
+        return failures
+    }
+
+    final class Decoded: @unchecked Sendable {
+        var image: CVImageBuffer?
+        var status: OSStatus = noErr
+    }
+
+    static func decodeFirst(_ demuxed: Demuxed, _ clip: Clip) throws -> CVPixelBuffer {
+        let specification: [CFString: Any] = [
+            kVTVideoDecoderSpecification_RequireHardwareAcceleratedVideoDecoder: true
+        ]
+        let destination = PatternPixels.attributes(
+            width: clip.width, height: clip.height, format: PatternPixels.format(bitDepth: 8))
+        var made: VTDecompressionSession?
+        let created = VTDecompressionSessionCreate(
+            allocator: nil, formatDescription: demuxed.format, decoderSpecification: specification as CFDictionary,
+            imageBufferAttributes: destination as CFDictionary, outputCallback: nil, decompressionSessionOut: &made)
+        guard created == noErr, let session = made, let first = demuxed.samples.first else {
+            throw TestFailure("VTDecompressionSessionCreate \(created)")
+        }
+        defer { VTDecompressionSessionInvalidate(session) }
+        let decoded = Decoded()
+        let status = VTDecompressionSessionDecodeFrame(session, sampleBuffer: first, flags: [], infoFlagsOut: nil) {
+            status, _, image, _, _ in
+            decoded.status = status
+            decoded.image = image
+        }
+        _ = VTDecompressionSessionWaitForAsynchronousFrames(session)
+        guard status == noErr, decoded.status == noErr, let image = decoded.image else {
+            throw TestFailure("decoding the first frame failed (\(status), \(decoded.status))")
+        }
+        return image
+    }
+
+    /// A plane as a CPU lock gives it, rows packed
+    static func rows(_ frame: CVPixelBuffer, plane: Int, bytesPerPixel: Int) -> [UInt8] {
+        CVPixelBufferLockBaseAddress(frame, .readOnly)
+        defer { CVPixelBufferUnlockBaseAddress(frame, .readOnly) }
+        guard let base = CVPixelBufferGetBaseAddressOfPlane(frame, plane) else { return [] }
+        let stride = CVPixelBufferGetBytesPerRowOfPlane(frame, plane)
+        let rowBytes = CVPixelBufferGetWidthOfPlane(frame, plane) * bytesPerPixel
+        return (0..<CVPixelBufferGetHeightOfPlane(frame, plane)).flatMap { y in
+            [UInt8](UnsafeRawBufferPointer(start: base + y * stride, count: rowBytes))
+        }
+    }
+}
+
 enum GPUPathTests {
     static let all: [any HWTest] = [
         JobVisibilityPathTest(), LeanCopyPathTest(), ControlReservePathTest(), CpuCompletePathTest(),
-        UseRangesPathTest(),
+        UseRangesPathTest(), NativeSurfaceViewPathTest(),
     ]
 }
 

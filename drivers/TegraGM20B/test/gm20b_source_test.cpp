@@ -687,11 +687,10 @@ TEST(GM20BFencesSource, ExecQueuesItsWritersAcquiresBeforeItSubmits)
 	const auto awaiting =
 		flat(client().substr(client().find("constexpr uint32_t kInfoAwaitingUserspace")));
 	for (const char *capability :
-	     {"TegraGM20BInfoNativeSurfaceView", "TegraGM20BInfoSharedEvents",
-	      "TegraGM20BInfoSemanticFence", "TegraGM20BInfoResourceReady"})
+	     {"TegraGM20BInfoSharedEvents", "TegraGM20BInfoSemanticFence", "TegraGM20BInfoResourceReady"})
 		EXPECT_THAT(awaiting.substr(0, awaiting.find(';')), HasSubstr(capability));
 	for (const char *capability :
-	     {"TegraGM20BInfoJobVisibility", "TegraGM20BInfoLeanCopyChannel",
+	     {"TegraGM20BInfoNativeSurfaceView", "TegraGM20BInfoJobVisibility", "TegraGM20BInfoLeanCopyChannel",
 	      "TegraGM20BInfoControlReserve", "TegraGM20BInfoCpuComplete", "TegraGM20BInfoUseRanges"})
 		EXPECT_THAT(awaiting.substr(0, awaiting.find(';')), Not(HasSubstr(capability)));
 }

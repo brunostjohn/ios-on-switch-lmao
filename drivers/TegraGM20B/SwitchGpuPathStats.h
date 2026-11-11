@@ -20,6 +20,8 @@ enum switch_gpu_path {
 	SWITCH_GPU_PATH_CPU_COMPLETE,   /* CpuComplete: a call */
 	SWITCH_GPU_PATH_RANGED_USE,     /* UseRanges: a use with a byte range */
 	SWITCH_GPU_PATH_VISIBLE_WAIT,   /* a CPU relayout's wait for the surface's GPU writes to reach DRAM */
+	SWITCH_GPU_PATH_NATIVE_VIEW,    /* NativeSurfaceView: a view of a decoded picture's own memory */
+	SWITCH_GPU_PATH_NATIVE_READ,    /* NativeSurfaceView: a job's read of one */
 	SWITCH_GPU_PATH_COUNT
 };
 

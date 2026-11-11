@@ -1,10 +1,14 @@
 // SPDX-License-Identifier: MIT
 #include <cstdlib>
 #include <cstring>
+#include <map>
+#include <vector>
 #include <gtest/gtest.h>
 #include "drivers/TegraGM20B/TegraGM20BABI.h"
 #include "drivers/TegraGM20B/SwitchGpuBoIndex.h"
 #include "drivers/TegraGM20B/SwitchGpuNativeSurface.h"
+#include "drivers/TegraGM20B/SwitchGpuPathStats.h"
+#include "gm20b_gpu_memory.h"
 
 using IOReturn = int;
 constexpr int kIOReturnSuccess = 0, kIOReturnBadArgument = -22, kIOReturnUnsupported = -95,
@@ -155,6 +159,10 @@ public:
 				   TegraGM20BAbiNativeSurfaceViewReply *);
 };
 
+extern "C" void switch_gpu_path_taken(enum switch_gpu_path, uint32_t)
+{
+}
+
 #define switch_native_surface_gpu_acquire acquireFn
 #define switch_native_surface_gpu_release releaseFn
 #include "drivers/TegraGM20B/SwitchGpuNativeImport.h"
@@ -241,6 +249,31 @@ TEST_F(NativeImport, NativePlanesShareOneReadOnlyBoAndBorrowRetainedPersistentPa
 	EXPECT_EQ(physical.refs, 2u);
 	EXPECT_EQ(logical.refs, 1u);
 	EXPECT_EQ(acquired, 1u);
+}
+
+// The runtime binds a native view (Kernel::nativeSurfaceView's bindImport) as the view BO's pages: the decoded picture's
+// own, read-only, so a draw samples the media unit's block-linear planes where they lie, not the IOSurface's pitch
+// pages a conversion would fill, and can never write the picture.
+TEST_F(NativeImport, ADrawSamplesThePicturesOwnPagesReadOnly)
+{
+	std::map<uint64_t, std::vector<uint8_t>> dram;
+	for (uint32_t i = 0; i < 3; ++i)
+		dram[pages[i]].assign(4096, uint8_t(0xa0 + i));
+	ASSERT_EQ(client.nativeSurfaceView(&request, &reply), 0);
+	const auto *bo = client.findBo(reply.handle);
+	ASSERT_NE(bo, nullptr);
+	Memory gpu;
+	constexpr uint64_t kVa = 1ull << 32;
+	for (uint32_t i = 0; i < bo->mem->count; ++i)
+		gpu.map(kVa + uint64_t(i) * Memory::kPage, dram[bo->mem->pages[i]].data(), Memory::kPage,
+			bo->readOnly, true);
+	EXPECT_EQ(reply.bytes, uint64_t(bo->mem->count) * Memory::kPage);
+	for (uint32_t p = 0; p < reply.plane_count; ++p) {
+		const uint64_t at = kVa + reply.planes[p].offset;
+		ASSERT_NE(gpu.at(at), nullptr);
+		EXPECT_EQ(*gpu.at(at), uint8_t(0xa0 + reply.planes[p].offset / Memory::kPage));
+		EXPECT_EQ(gpu.at(at, true), nullptr);
+	}
 }
 
 TEST_F(NativeImport, PitchAuthorityAlsoCreatesAnImmutableGenerationGuardedProxy)
