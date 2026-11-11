@@ -20,9 +20,9 @@ namespace {
 constexpr uint64_t kPeriod = 16667, kHorizon = 1000000;  // microsecond ticks keep the arithmetic readable
 constexpr uint64_t kFrameEnd = 1000000;
 
-Clock at(uint64_t now, uint64_t asleep = 0, uint64_t lastFrameEnd = kFrameEnd)
+Clock at(uint64_t now, uint64_t asleep = 0, uint64_t lastFrameEnd = kFrameEnd, uint64_t accepted = 0)
 {
-    return {now, now + asleep, lastFrameEnd, kPeriod, kHorizon};
+    return {now, now + asleep, lastFrameEnd, kPeriod, kHorizon, accepted};
 }
 
 TEST(TimedPresent, NoTargetOrAPastOneIsDue)
@@ -41,10 +41,20 @@ TEST(TimedPresent, TheNextVblanksFrameFlipsAsBefore)
     }
 }
 
+// The render server's own timer sits at any phase to DC A's frame end: its frame for its next tick goes at once even when
+// that tick is most of a period after the frame end that will show it.
+TEST(TimedPresent, AnOrdinaryFrameGoesAtAnyTimerPhase)
+{
+    const uint64_t tick = kFrameEnd + 10000, now = tick + 1500;
+    EXPECT_EQ(decide(tick + kPeriod, at(now)), Decision::Early);
+    EXPECT_EQ(decide(tick + kPeriod, at(now, 0, kFrameEnd, now - 200)), Decision::Due);
+    EXPECT_EQ(decide(tick + 2 * kPeriod, at(now, 0, kFrameEnd, now - 200)), Decision::Early);
+}
+
 TEST(TimedPresent, ATargetTwoFramesOutWaitsForTheFrameEndBeforeIt)
 {
     const uint64_t target = kFrameEnd + 2 * kPeriod;
-    EXPECT_EQ(decide(target, at(kFrameEnd + 4000)), Decision::Early);
+    EXPECT_EQ(decide(target, at(kFrameEnd + 4000, 0, kFrameEnd, kFrameEnd + 3000)), Decision::Early);
     // at the next frame end the one after is the target's
     EXPECT_EQ(decide(target, at(kFrameEnd + kPeriod + 200, 0, kFrameEnd + kPeriod)), Decision::Due);
 }
