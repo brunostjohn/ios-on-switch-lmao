@@ -10,8 +10,8 @@ import Metal
 /// pixels must be the quad's and the clear's exactly: each added entry's texel, in its format's channel order, read back
 /// through every later clear that hits it. The RGBA16Float target cleared to the BGRA8 one's floats must get its own halves,
 /// not the BGRA8 texel (the GPU matches an entry by format and value). The facade must make compressed memory, add the
-/// entries and hit them. Then a 4x BGRA8 target cleared to a value the table holds and to 0.5 (a ROP tie, never added):
-/// the GPU time of each.
+/// entries and hit them. Then the shadow cases (CompressedShadowCases: the copy engine through compressed memory), and a
+/// 4x BGRA8 target cleared to a value the table holds and to 0.5 (a ROP tie, never added): the GPU time of each.
 struct CompressedTargetsTest: HWTest {
     let id = "gpu.raw.compressed_targets"
     let name = "Multisampled and depth memoryless targets compress; repeated clears become zero-bandwidth"
@@ -145,6 +145,7 @@ struct CompressedTargetsTest: HWTest {
         if delta("made") == 0 && (after["views"] ?? 0) == 0 { wrong.append("no_compressed_memory") }
         if delta("zbc_added") + delta("zbc_full") == 0 { wrong.append("no_zbc_entry_asked") }
         if delta("zbc_added") > 0 && delta("zbc_hits") == 0 { wrong.append("no_zbc_hit") }
+        try await CompressedShadowCases.run(gpu, &metrics, &wrong)
         let (heldMs, tieMs) = try await Self.clearTimes(gpu)
         metrics.set("zbc_clear_gpu_ms", heldMs, digits: 3)
         metrics.set("tie_clear_gpu_ms", tieMs, digits: 3)
