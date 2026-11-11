@@ -43,6 +43,7 @@ genrule(
     name = "driver_constants_h",
     srcs = ["driver_constants.tsv"] + DRIVER_SOURCES.values(),
     outs = ["driver_constants.h"],
+    visibility = ["//kits/SwitchGM20BEmit/test:__pkg__"],
     cmd = "$(execpath :driver_constants) --rows $(execpath driver_constants.tsv) --out $@ " + " ".join([
         "--source {}=$(execpath {}){}".format(short, label, ":" + DEFINE_PREFIXES[short] if short in DEFINE_PREFIXES else "")
         for short, label in DRIVER_SOURCES.items()
