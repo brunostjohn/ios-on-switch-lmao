@@ -5,8 +5,12 @@
 #include "raw_stamps.h"
 #include "raw_tiled_cache.h"
 #include "../../../../kits/SwitchGM20B/SwitchGM20B.h"
+#include "../../../../kits/SwitchGM20BEmit/SwitchGM20BEmitRaster.h"
 
 namespace raw {
+
+// a draw's shortcuts around its words (raw_draw_shortcuts.cpp), as raw_gpu.cpp reserves them
+constexpr uint32_t kShortcutWords = 2 * (SWITCH_GM20B_CONSTANT_COLOR_WORDS + SWITCH_GM20B_FILL_VIA_TRIANGLE_WORDS);
 
 constexpr uint32_t kMeasureWords = kTiledCacheFlushWords + kDrawStampWords;
 
@@ -47,15 +51,19 @@ void RenderEncoder::stampDraw(Push &p, const DrawTiming &t, bool end)
 }
 
 void RenderEncoder::emitDraw(bool indexed, uint32_t first, uint32_t count, uint32_t instances, uint32_t root,
-                             uint32_t baseInstance)
+                             uint32_t baseInstance, const Shortcut &cut)
 {
-    const auto words = [&](Push &p) { mme::draw(p, params_, indexed, first, count, instances, root, baseInstance); };
+    const auto words = [&](Push &p) {
+        shortcutBegin(cut);
+        mme::draw(p, params_, indexed, first, cut.bbox ? 3 : count, instances, root, baseInstance);
+        shortcutEnd(cut);
+    };
     const uint64_t units = drawUnits(instances);
     const uint32_t bands = drawBands(count, instances, units);
     DrawTiming timing;
     const bool measured = measureDraw(bands < 2 ? units : units / bands, timing);
     if (bands < 2) {
-        if (p_.room() < kBandWords + 2 * kMeasureWords)
+        if (p_.room() < kBandWords + 2 * kMeasureWords + kShortcutWords)
             reserve();
         if (measured)
             stampDraw(p_, timing, false);
@@ -74,7 +82,7 @@ void RenderEncoder::emitDraw(bool indexed, uint32_t first, uint32_t count, uint3
     emitBands(
         p_, rot_, area, drawBox_, bands,
         [&] {
-            if (p_.room() < kBandWords + 2 * kMeasureWords)
+            if (p_.room() < kBandWords + 2 * kMeasureWords + kShortcutWords)
                 reserve();
         },
         [&](Push &p) {

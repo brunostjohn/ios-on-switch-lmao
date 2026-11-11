@@ -87,6 +87,8 @@
 
 namespace raw {
 
+struct FillStream;
+
 class Device;
 class CommandBuffer;
 class ComputeEncoder;
@@ -473,6 +475,8 @@ struct Pipeline {
     const char *caName = nullptr;
     bool fillState = false;
     const char *spanName = nullptr;  // DEVELOPMENT: the raw path's own states' name in the long span line (raw_span_marks.h)
+    // what Core Animation's name for the state says its draws are (raw_ca_route.h CaRoute, raw_blur_twod.h BlurFunction)
+    uint8_t caRoute = 0, blurFunction = 0;
     uint32_t probeGeneration = 0;
     uint8_t probeLines = 0, probeThinLines = 0;
     bool turnSensitive = false;  // raw_rotation.h: its pixel program sees a turned plane's axes
@@ -710,8 +714,9 @@ private:
     void finishDraw(uint32_t vertices, uint32_t instances, bool indirect = false);
     void cutBatch();
     // the prepared draw's words, whole or in scissor bands (raw_draw_bands.h)
+    struct Shortcut;
     void emitDraw(bool indexed, uint32_t first, uint32_t count, uint32_t instances, uint32_t root,
-                  uint32_t baseInstance);
+                  uint32_t baseInstance, const Shortcut &cut);
     uint64_t drawUnits(uint32_t instances) const;
     uint32_t drawBands(uint32_t vertices, uint32_t instances, uint64_t units) const;
     bool measureDraw(uint64_t units, DrawTiming &t);
@@ -808,6 +813,18 @@ private:
     // colors the pass's first draw overwrites whole and opaquely: their clears inside the render area are not needed
     uint8_t covered_ = 0;
     using Runs = std::vector<std::pair<uint32_t, uint32_t>>;
+    // raw_draw_shortcuts.cpp: the ROP shortcuts a draw takes (constant colour, a quad as one bounding-box triangle) and a
+    // blur-chain pass drawn by the 2D engine, each behind its rule
+    struct Shortcut {
+        bool constant = false, bbox = false;
+        uint32_t rgba[4] = {};
+    };
+    bool cpuStream(const Pipeline &pl, uint32_t first, FillStream &s) const;
+    bool cpuIndices(uint32_t count, uint32_t out[6]) const;
+    Shortcut shortcut(const Pipeline &pl, uint32_t primitive, uint32_t first, uint32_t count, bool indexed);
+    void shortcutBegin(const Shortcut &s);
+    void shortcutEnd(const Shortcut &s);
+    bool blurTwod(const Pipeline &pl, uint32_t primitive, uint32_t first, uint32_t count, bool indexed);
     // `pl`, or its barrier twin where an attachment of this pass cannot be viewed as one of its storage images
     Pipeline *formFor(Pipeline *pl);
     StorageFallback storageFallback(const Pipeline &pl) const;
@@ -1154,6 +1171,8 @@ public:
     {
         return pack_;
     }
+    // `rec`'s state key where it is one of the pack's records, else null (a state the runtime made)
+    const char *packKey(const PackPipeline &rec) const;
 
     const Kernel &kernel() const
     {
@@ -1703,6 +1722,7 @@ public:
         std::atomic<uint64_t> dispatches{0};
         // states made with the zero-source pixel kill on (raw_blend_kill.h), and their binds encoded
         std::atomic<uint64_t> blendKillStates{0}, blendKillBinds{0};
+        std::atomic<uint64_t> blurTwodPasses{0};  // blur-chain passes drawn as 2D blits (raw_draw_shortcuts.cpp)
         // passes given a zcull region, and the regions a draw's state invalidated (raw_zcull.h)
         std::atomic<uint64_t> zcullPasses{0}, zcullInvalidations{0};
         std::atomic<uint64_t> splitPrologues{0};  // split draws' prologue launches (raw_split.cpp)

@@ -334,6 +334,7 @@ host_test(
         "//drivers/TegraGM20BMetal:raw/runtime/raw_completed.cpp",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_compute.cpp",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_draw_bands.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_draw_shortcuts.cpp",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_encoder_state.cpp",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_gpu.cpp",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_job_uses.cpp",
@@ -395,6 +396,7 @@ host_test(
         "//drivers/TegraGM20BMetal:raw/runtime/raw_completed.cpp",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_compute.cpp",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_draw_bands.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_draw_shortcuts.cpp",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_encoder_state.cpp",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_gpu.cpp",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_job_uses.cpp",
@@ -456,6 +458,7 @@ host_test(
         "//drivers/TegraGM20BMetal:raw/runtime/raw_completed.cpp",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_compute.cpp",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_draw_bands.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_draw_shortcuts.cpp",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_encoder_state.cpp",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_gpu.cpp",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_job_uses.cpp",
@@ -1696,6 +1699,27 @@ host_test(
     srcs = [
         "raw_constant_colour_test.cpp",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_constant_colour.h",
+    ],
+    cxx_std = "c++17",
+)
+
+host_test(
+    name = "raw_blur_twod_test",
+    srcs = [
+        "raw_blur_twod_test.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_blur_twod.h",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_ca_route.h",
+    ],
+    cxx_std = "c++17",
+)
+
+host_test(
+    name = "raw_draw_hooks_test",
+    srcs = [
+        "raw_draw_hooks_test.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_draw_hooks.h",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_keyline_probe.h",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_quad_fill.h",
     ],
     cxx_std = "c++17",
 )

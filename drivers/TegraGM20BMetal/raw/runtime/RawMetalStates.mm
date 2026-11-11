@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: MIT
 #import "RawMetalInternal.h"
+#include "raw_blur_twod.h"
+#include "raw_ca_route.h"
 #import "RawRenderKey.h"
 #import "RawMetalBinaryArchive.h"
 
@@ -169,6 +171,23 @@ MTLRenderPipelineDescriptor *twinDescriptor(MTLRenderPipelineDescriptor *d)
     return t;
 }
 
+// What Core Animation's name for a state says its draws are (raw_ca_route.h), for the draw shortcuts' rules: the state and
+// its barrier form alike
+static void markRoute(raw::Pipeline *pl, NSString *label)
+{
+    static NSString *const prefix = @"com.apple.coreanimation.";
+    if (!pl || pl->caRoute || ![label hasPrefix:prefix])
+        return;
+    const char *name = [label substringFromIndex:prefix.length].UTF8String;
+    const uint8_t route = uint8_t(raw::caRouteOf(name)), blur = uint8_t(raw::blurFunctionOf(name));
+    for (raw::Pipeline *p : {pl, pl->barrierTwin}) {
+        if (!p)
+            continue;
+        p->caRoute = route;
+        p->blurFunction = blur;
+    }
+}
+
 #if SWITCH_RAW_DIAGNOSTICS
 // Core Animation's glass background (Tgs*, Tgb*) and generic merge (..Xghfc) states: the draw path checks their uniforms for
 // NaN and infinity (raw_gpu.cpp probeUniforms), its barrier form's too
@@ -230,6 +249,7 @@ static void makeRecord(RMPipeline *p, MTLRenderPipelineDescriptor *d)
     if (p->_raw && native_bridge_metal_journal_render)
         native_bridge_metal_journal_render(a.descriptor, 0);
 #endif
+    markRoute(p->_raw, d.label);
 #if SWITCH_RAW_DIAGNOSTICS
     markProbes(p->_raw, d.label);
 #endif
@@ -239,6 +259,8 @@ static void makeRecord(RMPipeline *p, MTLRenderPipelineDescriptor *d)
     __weak RMPipeline *weak = p;
     gRM->completion->ask(std::move(a), [weak](raw::Pipeline *pl) {
         RMPipeline *strong = weak;
+        if (strong)
+            markRoute(pl, strong.label);
 #if SWITCH_RAW_DIAGNOSTICS
         if (strong)
             markProbes(pl, strong.label);
@@ -300,6 +322,7 @@ RMPipeline *rmPipelineFor(RMDevice *device, MTLRenderPipelineDescriptor *d, MTLP
     }
     if (lookedUp) {
         p->_raw = gRM->raw->pipeline(packKey, raw::PackForm::Default, p->_caTransform);
+        markRoute(p->_raw, d.label);
 #if SWITCH_RAW_DIAGNOSTICS
         markProbes(p->_raw, d.label);
 #endif
