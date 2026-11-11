@@ -5,7 +5,9 @@
 // release calls native_legacy_console_released, and the next kick with no swap queued takes the family's current swap
 // (the one Core Animation believes shown, its surfaces still the family's) through the ordinary present, once. It is
 // never retired again: it is no longer in the family's queue, and the first swap the compositor sends after it untakes
-// it. Included in the class body after SwitchRetireDisplay.h; under the gate.
+// it. Only while swaps retire at the latch (direct scanout): the other retirement (finishTransfer's retireSwap) would
+// refuse a swap that is not pending and leave the next one waiting. Included in the class body after
+// SwitchRetireDisplay.h; under the gate.
 
 const OriginalLegacySwapRequest *consoleReshown = nullptr;
 bool consoleReleased = false;
@@ -24,7 +26,7 @@ const OriginalLegacySwapRequest *consoleReleasedFrame(const OriginalLegacySwapRe
     }
     const OriginalLegacySwapRequest *current = nullptr;
     memcpy(&current, reinterpret_cast<const unsigned char *>(this) + swapQueueCurrent, sizeof(current));
-    if (!current || (current == consoleReshown && seqOf(current))) {
+    if (!latchRetire || !current || (current == consoleReshown && seqOf(current))) {
         consoleReleased = false;
         return nullptr;
     }

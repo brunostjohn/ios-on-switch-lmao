@@ -31,6 +31,7 @@ struct NativeLegacyDisplay {
     static constexpr size_t swapQueueCurrent = 0;
     std::set<const OriginalLegacySwapRequest *> taken, validated;
     unsigned kicks = 0;
+    bool latchRetire = true;
     void untake(const OriginalLegacySwapRequest *r) { taken.erase(r); }
     void removeValidated(const OriginalLegacySwapRequest *r) { validated.erase(r); }
     bool addValidated(const OriginalLegacySwapRequest *r, uint64_t) { return validated.insert(r).second; }
@@ -91,6 +92,17 @@ TEST_F(ConsoleRelease, AQueuedSwapOrNoCurrentFrameNeedsNoReshow)
     EXPECT_FALSE(display.consoleReleased);
     EXPECT_EQ(display.consoleReleasedFrame(nullptr), nullptr);
     EXPECT_EQ(logs, 0u);
+}
+
+// Retiring at the end of a copy (no direct scanout) would refuse the reshown swap and leave the next one waiting.
+TEST_F(ConsoleRelease, OnlyWhileSwapsRetireAtTheLatch)
+{
+    display.current = &shown;
+    display.latchRetire = false;
+    display.consoleReleasedKick();
+    EXPECT_EQ(display.consoleReleasedFrame(nullptr), nullptr);
+    EXPECT_FALSE(display.consoleReleased);
+    EXPECT_TRUE(display.validated.empty());
 }
 
 // Both kernels call the display right where the hold drops, and the kick asks before it validates its request.
