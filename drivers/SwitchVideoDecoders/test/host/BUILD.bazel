@@ -22,7 +22,8 @@
 #                          sessions run in videocodecd
 #   avd_host_test          AVD.videodecoder itself on this Mac's VideoToolbox over a fake TegraNVDEC client: the
 #                          plug-in's class layout, session calls and property answers for 'avc1', 'vp09' and 'hvc1', its
-#                          fall-back onto Apple's software decoders, VIC's present and the private check's gate
+#                          fall-back onto Apple's software decoders, VIC's present, the private check's gate and the
+#                          HEVC-with-alpha layer sessions' tri-planar answers
 #   vdectest_test          the clip check (../vdectest.c, also shipped as the vdectest tool) against Apple's own
 #                          decoders, which proves the clips and their x264 / FFmpeg CRCs
 # The clip and trace headers and vdectest.c stay in ../ (AVD.videodecoder and vdectest are built from them).
@@ -247,6 +248,7 @@ host_library(
         "mpeg_session.h",
         "//drivers/SwitchVideoDecoders:test/MPEG2Clip.h",
         "//drivers/SwitchVideoDecoders:test/MPEG4Clip.h",
+        "//drivers/SwitchVideoDecoders:AVD/AVDAlpha.c",
         "//drivers/SwitchVideoDecoders:AVD/AVDDecoder.h",
         "//drivers/SwitchVideoDecoders:AVD/AVDFrameTiming.h",
         "//drivers/SwitchVideoDecoders:AVD/SwitchVideoColor.h",

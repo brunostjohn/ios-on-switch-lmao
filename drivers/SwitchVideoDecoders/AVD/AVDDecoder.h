@@ -46,7 +46,13 @@ typedef struct {
     uint64_t decodeTicks, copyTicks;  // copyTicks: placing pictures in pixel buffers (VIC's or the CPU's copy)
     bool present;
     uint32_t presented, exported, copied;
+    // VideoToolbox's HEVC-with-alpha contract (AVDAlpha.c): what MuxedAlphaDecoder asked before the start, and what
+    // the session does: 'v0a8' buffers, and each picture written from firstPlane into the target VideoToolbox gives.
+    bool alphaAsked, triPlanar, intoTarget;
+    int32_t planeAsked;
+    uint32_t firstPlane;
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
+    uint32_t intoTargetCount;
     AVDFrameTiming timing;
 #endif
 } Decoder;
@@ -90,5 +96,21 @@ OSStatus avd_decode_tile(VTVideoDecoderRef ref, int64_t frameID, CMSampleBufferR
 // A decoded tile picture into its canvas, and its answer (both on the decoding thread, inside avd_decode_tile).
 void *avd_tile_decoded(Decoder *d, const H264Picture *picture);
 void avd_tile_emit(Decoder *d, Output *out);
+
+// AVDAlpha.c: SelectPixelFormatWithAlpha and WriteDirectlyToPlanesOfTargetCVPixelBuffer (true when `key` is one).
+bool avd_alpha_set_property(Decoder *d, CFStringRef key, CFTypeRef value);
+bool avd_alpha_copy_property(const Decoder *d, CFStringRef key, CFTypeRef *value);
+void avd_alpha_list_properties(CFMutableDictionaryRef supported);
+// At the start of a stream NVDEC decodes: whether its pictures go out tri-planar, and from which plane.
+void avd_alpha_start(Decoder *d, bool eightBit420);
+const char *avd_alpha_describe(const Decoder *d);  // for the session's start line
+// The CPU's copy of an alpha picture: its luma alone into plane 2.
+void avd_alpha_copy_luma(const H264Picture *picture, CVPixelBufferRef image, uint32_t width, uint32_t height);
+#if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
+void avd_alpha_count(const Decoder *d, bool byVIC);
+// The session's first plane (-1: not into a target), its pictures into targets, and the process's alpha-plane pictures
+// by VIC and by the CPU.
+void avd_alpha_routes(const Decoder *d, int32_t counts[4]);
+#endif
 
 #endif

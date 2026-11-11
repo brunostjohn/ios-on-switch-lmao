@@ -25,6 +25,9 @@
 //   mp2v:   MPEG2Clip.h's MPEG-2 clip A as 'mp2v' and its MPEG-1 clip C as 'mp1v', described without extensions as
 //           MediaToolbox's MPEG-2 stream readers describe them, every picture through MPEG2NVDEC and the kernel's
 //           checker out of a hardware session.
+//   alpha:  clip A's first picture through sessions opened as MuxedAlphaDecoder opens its layer sessions (AVDAlpha.c):
+//           asked nothing, a '420v' picture and no plane; asked for planes 0 or 2, a 'v0a8' picture, that plane
+//           answered and the picture handed to VIC for those planes.
 // Prints "PASS avd ..." when all hold (avd_host_test).
 #include "../../AVD/AVDDecoder.c"
 #include "../../AVD/ClipCheck.h"
@@ -41,7 +44,7 @@ struct NVDECClient {
 static bool gFull, gPresentOn, gNativeOn;
 static int gOpens, gSubmits, gRefused, gPresents, gPresentBad, gWaitRanges, gWidePresents;
 static uint32_t gLastDstX, gLastDstY;
-static unsigned gNativeExports, gRecycled;
+static unsigned gNativeExports, gRecycled, gAlphaPresents[2];
 
 bool nvdec_service_present(void)
 {
@@ -106,6 +109,28 @@ int switch_nvdec_recycle(void *client, uint32_t handle, uint64_t bytes, void **a
     return 0;
 }
 
+// A 'v0a8' surface takes plane 0 (its Y and CbCr planes) or plane 2 (the picture's luma alone into its alpha plane).
+static bool alphaPresent(NVDECClient *c, const TegraNVDECPresent *p, IOSurfaceRef s)
+{
+    const uint32_t first = p->plane;
+    if (IOSurfaceGetPlaneCount(s) != 3 || (first != 0 && first != 2) || p->sample_bytes != 1)
+        return false;
+    for (uint32_t k = 0; k < 3; k++)
+        if (IOSurfaceGetBytesPerRowOfPlane(s, k) % 256 ||
+            ((uintptr_t)IOSurfaceGetBaseAddressOfPlane(s, k) - (uintptr_t)IOSurfaceGetBaseAddress(s)) % 256)
+            return false;
+    IOSurfaceLock(s, 0, NULL);
+    const uint8_t *picture = c->va[p->handle];
+    block_linear_copy(IOSurfaceGetBaseAddressOfPlane(s, first), IOSurfaceGetBytesPerRowOfPlane(s, first), picture,
+                      p->pitch, p->crop_x, p->crop_y, p->width, p->height);
+    if (!first)
+        block_linear_copy(IOSurfaceGetBaseAddressOfPlane(s, 1), IOSurfaceGetBytesPerRowOfPlane(s, 1),
+                          picture + p->chroma_offset, p->pitch, p->crop_x, p->crop_y / 2, p->width, p->height / 2);
+    IOSurfaceUnlock(s, 0, NULL);
+    gAlphaPresents[first ? 1 : 0]++;
+    return true;
+}
+
 int nvdec_present(NVDECClient *c, const TegraNVDECPresent *p)
 {
     gPresents++;
@@ -115,10 +140,18 @@ int nvdec_present(NVDECClient *c, const TegraNVDECPresent *p)
     const OSType format = s ? IOSurfaceGetPixelFormat(s) : 0;
     bool ok = p->handle < 64 && c->va[p->handle] && p->pitch && !(p->pitch % 64) && p->rows && !(p->rows % 32) &&
               p->block_height_log2 == 1 && !(p->chroma_offset % 256) && p->chroma_offset >= luma &&
-              p->chroma_offset + luma / 2 <= c->size[p->handle] && s && !p->plane &&
-              (bytes == 2 ? format == kCVPixelFormatType_420YpCbCr10BiPlanarVideoRange ||
-                                format == kCVPixelFormatType_420YpCbCr10BiPlanarFullRange
-                          : bytes == 1);
+              p->chroma_offset + luma / 2 <= c->size[p->handle] && s;
+    if (ok && format == kCVPixelFormatType_420YpCbCr8VideoRange_8A_TriPlanar) {
+        ok = alphaPresent(c, p, s);
+        if (!ok)
+            gPresentBad++;
+        CFRelease(s);
+        return ok ? 0 : kIOReturnUnsupported;
+    }
+    ok = ok && !p->plane &&
+         (bytes == 2 ? format == kCVPixelFormatType_420YpCbCr10BiPlanarVideoRange ||
+                           format == kCVPixelFormatType_420YpCbCr10BiPlanarFullRange
+                     : bytes == 1);
     if (ok) {
         const uintptr_t base = (uintptr_t)IOSurfaceGetBaseAddress(s);
         ok = !(IOSurfaceGetBytesPerRowOfPlane(s, 0) % 256) && !(IOSurfaceGetBytesPerRowOfPlane(s, 1) % 256) &&
@@ -338,6 +371,71 @@ static bool tileCheck(CFDictionaryRef spec, bool vic, char *line, size_t size)
     return ok;
 }
 
+extern OSStatus VTDecompressionSessionCreateWithOptions(CFAllocatorRef, CMVideoFormatDescriptionRef, CFDictionaryRef,
+                                                        CFDictionaryRef, const VTDecompressionOutputCallbackRecord *,
+                                                        CFDictionaryRef, VTDecompressionSessionRef *);
+
+// One layer session as MuxedAlphaDecoder opens it (session options SelectPixelFormatWithAlpha and
+// WriteDirectlyToPlanesOfTargetCVPixelBuffer = `plane`; -1: neither), clip A's first picture through it with VIC on.
+static bool alphaCheck(CFDictionaryRef spec, int32_t plane, char *line, size_t size)
+{
+    static uint8_t sampleBytes[sizeof(kHEVCClipAData) + 64];
+    size_t bytes = 0;
+    CMVideoFormatDescriptionRef format = firstPicture(sampleBytes, &bytes);
+    CFMutableDictionaryRef options =
+        CFDictionaryCreateMutable(NULL, 0, &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks);
+    if (plane >= 0) {
+        CFNumberRef number = CFNumberCreate(NULL, kCFNumberSInt32Type, &plane);
+        CFDictionarySetValue(options, CFSTR("SelectPixelFormatWithAlpha"), kCFBooleanTrue);
+        CFDictionarySetValue(options, CFSTR("WriteDirectlyToPlanesOfTargetCVPixelBuffer"), number);
+        CFRelease(number);
+    }
+    gPresentOn = true;
+    const unsigned before[2] = {gAlphaPresents[0], gAlphaPresents[1]};
+    VTDecompressionSessionRef session = NULL;
+    const OSStatus created =
+        format ? VTDecompressionSessionCreateWithOptions(NULL, format, spec, NULL, NULL, options, &session) : -1;
+    __block OSType out = 0;
+    __block OSStatus decoded = -1;
+    int32_t answer = -1;
+    if (!created) {
+        CMBlockBufferRef block = NULL;
+        CMSampleBufferRef sample = NULL;
+        CMBlockBufferCreateWithMemoryBlock(NULL, sampleBytes, bytes, kCFAllocatorNull, NULL, 0, bytes, 0, &block);
+        CMSampleBufferCreateReady(NULL, block, format, 1, 0, NULL, 1, &bytes, &sample);
+        VTDecompressionSessionDecodeFrameWithOutputHandler(
+            session, sample, 0, NULL,
+            ^(OSStatus status, VTDecodeInfoFlags flags, CVImageBufferRef image, CMTime pts, CMTime duration) {
+                (void)flags, (void)pts, (void)duration;
+                decoded = status;
+                out = image ? CVPixelBufferGetPixelFormatType(image) : 0;
+            });
+        VTDecompressionSessionWaitForAsynchronousFrames(session);
+        CFTypeRef value = NULL;
+        VTSessionCopyProperty(session, CFSTR("WriteDirectlyToPlanesOfTargetCVPixelBuffer"), NULL, &value);
+        if (value && CFGetTypeID(value) == CFNumberGetTypeID())
+            CFNumberGetValue(value, kCFNumberSInt32Type, &answer);
+        if (value)
+            CFRelease(value);
+        CFRelease(sample), CFRelease(block);
+        VTDecompressionSessionInvalidate(session);
+        CFRelease(session);
+    }
+    gPresentOn = false;
+    CFRelease(options);
+    if (format)
+        CFRelease(format);
+    const unsigned colour = gAlphaPresents[0] - before[0], alpha = gAlphaPresents[1] - before[1];
+    snprintf(line, size,
+             "alpha (plane %d): create %d, decoded %d into '%.4s', answered plane %d, presents %u colour %u alpha",
+             (int)plane, (int)created, (int)decoded, (const char *)&(uint32_t){CFSwapInt32HostToBig(out)}, (int)answer,
+             colour, alpha);
+    return !created && !decoded && answer == plane &&
+           (plane < 0 ? out == kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange && !colour && !alpha
+                      : out == kCVPixelFormatType_420YpCbCr8VideoRange_8A_TriPlanar && colour == (plane == 0) &&
+                            alpha == (plane == 2));
+}
+
 int main(void)
 {
     gAVDLog = os_log_create("com.brunostjohn.switch.avd", "host-test");
@@ -419,6 +517,12 @@ int main(void)
     const bool tilesOk =
         tileCheck(hevcSpec, true, tiles, sizeof(tiles)) && tileCheck(hevcSpec, false, tilesOff, sizeof(tilesOff));
     printf("%s\n%s\n", tiles, tilesOff);
+    bool alphaOk = true;
+    for (int32_t plane = -1; plane <= 2; plane += plane < 0 ? 1 : 2) {
+        char alpha[256];
+        alphaOk &= alphaCheck(hevcSpec, plane, alpha, sizeof(alpha));
+        printf("%s\n", alpha);
+    }
     CFRelease(hevcSpec);
     printf("hevc: %s (submits %d)\nhevc10: %s (submits %d)\nhevc full: %s\n", hevc, hevcMain, hevc10, hevcTen,
            hevcFull);
@@ -473,10 +577,10 @@ int main(void)
                     strstr(engine, "hardware: hardware decoder") && strstr(engine, " 30 out (") &&
                     gOpens > engineOpens && strstr(full, "hardware: software decoder, 30/30 frames match x264") &&
                     strstr(vp9, "vp9: hardware decoder") && strstr(vp9, " 16 out (") &&
-                    hevcSubmits - vp9Submits == 18 && presentOk && hevcOk && tilesOk && nativeOk && mp4vEngine &&
-                    mp4vSoftware && mpeg2Engine;
-    printf("%s avd: plug-in on VideoToolbox (H.264, VP9, HEVC, MPEG-4 Part 2 and MPEG-1/2 on a fake NVDEC, then Apple's "
-           "software H.264, HEVC and MPEG-4 Part 2 in the instance)\n",
+                    hevcSubmits - vp9Submits == 18 && presentOk && hevcOk && tilesOk && alphaOk && nativeOk &&
+                    mp4vEngine && mp4vSoftware && mpeg2Engine;
+    printf("%s avd: plug-in on VideoToolbox (H.264, VP9, HEVC, HEVC with alpha, MPEG-4 Part 2 and MPEG-1/2 on a fake "
+           "NVDEC, then Apple's software H.264, HEVC and MPEG-4 Part 2 in the instance)\n",
            ok ? "PASS" : "FAIL");
     return ok ? 0 : 1;
 }

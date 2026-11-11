@@ -136,8 +136,9 @@ static bool presentPicture(Decoder *d, const H264Picture *picture, CVPixelBuffer
                                  .height = height,
                                  .dst_x = x,
                                  .dst_y = y,
-                                 .sample_bytes = picture->wide ? 2 : 1};
-    if (!picture->status && !x && !y &&
+                                 .sample_bytes = picture->wide ? 2 : 1,
+                                 .plane = d->firstPlane};
+    if (!picture->status && !x && !y && !d->triPlanar &&
         width == CVPixelBufferGetWidth(image) && height == CVPixelBufferGetHeight(image) &&
         switch_nvdec_can_export(d->client) && !switch_nvdec_export(d->client, &p)) {
         d->exported++;
@@ -163,8 +164,17 @@ void avd_place_picture(Decoder *d, const H264Picture *picture, CVPixelBufferRef 
     const uint32_t width = roomW < picture->width ? roomW : picture->width;
     const uint32_t height = roomH < picture->height ? roomH : picture->height;
     const uint32_t bytes = picture->wide ? 2 : 1;
-    if (d->present && presentPicture(d, picture, image, x, y, width, height)) {
+    const bool byVIC = d->present && presentPicture(d, picture, image, x, y, width, height);
+#if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
+    avd_alpha_count(d, byVIC);
+#endif
+    if (byVIC) {
         d->presented++;
+    } else if (width && height && d->firstPlane == 2) {
+        CVPixelBufferLockBaseAddress(image, 0);
+        avd_alpha_copy_luma(picture, image, width, height);
+        CVPixelBufferUnlockBaseAddress(image, 0);
+        d->copied++;
     } else if (width && height) {
         CVPixelBufferLockBaseAddress(image, 0);
         const size_t lumaPitch = CVPixelBufferGetBytesPerRowOfPlane(image, 0);
@@ -207,9 +217,19 @@ static void *decoded(void *ctx, const H264Picture *picture)
     out->status = picture->status ? kVTVideoDecoderBadDataErr : noErr;
     if (picture->status)
         d->errors++;
-    CVPixelBufferPoolRef pool = d->session ? VTDecoderSessionGetPixelBufferPool(d->session) : NULL;
-    if (!pool || CVPixelBufferPoolCreatePixelBuffer(kCFAllocatorDefault, pool, &out->image) != kCVReturnSuccess) {
+    CVPixelBufferPoolRef pool = d->session && !d->intoTarget ? VTDecoderSessionGetPixelBufferPool(d->session) : NULL;
+    const bool made =
+        d->intoTarget ? d->session && !VTDecoderSessionCreatePixelBuffer(d->session, out->frame, &out->image)
+                      : pool && !CVPixelBufferPoolCreatePixelBuffer(kCFAllocatorDefault, pool, &out->image);
+    if (!made || !out->image) {
         out->status = kVTVideoDecoderMalfunctionErr;
+        return out;
+    }
+#if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
+    d->intoTargetCount += d->intoTarget;
+#endif
+    if (d->firstPlane == 2) {  // the colour session tags the target both layers share
+        avd_place_picture(d, picture, out->image, 0, 0);
         return out;
     }
     if (d->matrix)
@@ -346,10 +366,11 @@ static void setAlignment(const Decoder *d, CFMutableDictionaryRef attributes)
 
 void avd_set_attributes(Decoder *d, VTVideoDecoderSession session, bool fullRange, bool tenBit, OSStatus *status)
 {
-    d->pixelFormat = tenBit ? (fullRange ? kCVPixelFormatType_420YpCbCr10BiPlanarFullRange
-                                         : kCVPixelFormatType_420YpCbCr10BiPlanarVideoRange)
-                            : (fullRange ? kCVPixelFormatType_420YpCbCr8BiPlanarFullRange
-                                         : kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange);
+    d->pixelFormat = d->triPlanar ? kCVPixelFormatType_420YpCbCr8VideoRange_8A_TriPlanar
+                     : tenBit     ? (fullRange ? kCVPixelFormatType_420YpCbCr10BiPlanarFullRange
+                                               : kCVPixelFormatType_420YpCbCr10BiPlanarVideoRange)
+                                  : (fullRange ? kCVPixelFormatType_420YpCbCr8BiPlanarFullRange
+                                               : kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange);
     CFMutableDictionaryRef attributes = CFDictionaryCreateMutable(
         kCFAllocatorDefault, 0, &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks);
     CFDictionaryRef surface = CFDictionaryCreate(kCFAllocatorDefault, NULL, NULL, 0, &kCFTypeDictionaryKeyCallBacks,
@@ -497,14 +518,16 @@ static OSStatus startHEVC(Decoder *d, VTVideoDecoderSession session, CMVideoForm
                                      CFEqual(d->transfer, kCVImageBufferTransferFunction_ITU_R_2100_HLG));
     const bool display8 = sps->bit_depth == 10 && !hdr && clientWantsEightBit(session);
     hevc_decoder_display_8bit(d->hevc, display8);
+    avd_alpha_start(d, sps->bit_depth == 8);
     OSStatus status;
     avd_set_attributes(d, session, sps->full_range, sps->bit_depth == 10 && !display8, &status);
     static const char *const kProfiles[4] = {"", "Main", "Main 10", "Main Still Picture"};
     if (!status)
         os_log(gAVDLog,
-               "AVD: session %ux%u in %{public}s on NVDEC (HEVC %{public}s, level %u.%u), pictures out by %{public}s",
+               "AVD: session %ux%u in %{public}s on NVDEC (HEVC %{public}s, level %u.%u), pictures out by "
+               "%{public}s%{public}s",
                d->width, d->height, getprogname(), kProfiles[sps->profile_idc], sps->level_idc / 30,
-               sps->level_idc % 30 / 3, d->present ? "VIC" : "the CPU");
+               sps->level_idc % 30 / 3, d->present ? "VIC" : "the CPU", avd_alpha_describe(d));
     return status;
 }
 
@@ -674,6 +697,8 @@ static OSStatus copySupportedPropertyDictionary(VTVideoDecoderRef ref, CFDiction
                                                      &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks);
     CFDictionarySetValue(supported, kVTDecompressionPropertyKey_UsingHardwareAcceleratedVideoDecoder, description);
     CFRelease(description);
+    if (!d->software)
+        avd_alpha_list_properties(supported);
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
     CFDictionaryRef routes = CFDictionaryCreate(kCFAllocatorDefault, &keys[1], &values[1], 1,
                                                 &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks);
@@ -803,19 +828,24 @@ static CFStringRef copyDebugDescription(CMBaseObjectRef ref)
 }
 
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
-// hw_test_app's decode.native_export: how this session's pictures reached the client so far, the counts the session's
-// closing line logs
+// hw_test_app's decode.native_export and decode.hevc_alpha: how this session's pictures reached the client so far, the
+// counts the session's closing line logs, then AVDAlpha.c's: the plane it writes VideoToolbox's target from and how
+// many, and the process's alpha-plane pictures by VIC and by the CPU (a HEVC-with-alpha client reaches only the colour
+// layer's session).
 static CFDictionaryRef copyPictureRoutes(const Decoder *d)
 {
-    const int32_t counts[] = {(int32_t)d->frames, (int32_t)d->exported, (int32_t)(d->presented - d->exported),
-                              (int32_t)d->copied, (int32_t)d->errors};
-    const void *keys[] = {CFSTR("frames"), CFSTR("exported"), CFSTR("vic"), CFSTR("cpu"), CFSTR("errors")};
-    const void *values[5];
-    for (int i = 0; i < 5; i++)
+    int32_t counts[9] = {(int32_t)d->frames, (int32_t)d->exported, (int32_t)(d->presented - d->exported),
+                         (int32_t)d->copied, (int32_t)d->errors};
+    avd_alpha_routes(d, &counts[5]);
+    const void *keys[] = {CFSTR("frames"),           CFSTR("exported"),         CFSTR("vic"),
+                          CFSTR("cpu"),              CFSTR("errors"),           CFSTR("first_plane"),
+                          CFSTR("into_target"),      CFSTR("process_alpha_vic"), CFSTR("process_alpha_cpu")};
+    const void *values[9];
+    for (int i = 0; i < 9; i++)
         values[i] = CFNumberCreate(kCFAllocatorDefault, kCFNumberSInt32Type, &counts[i]);
-    CFDictionaryRef routes = CFDictionaryCreate(kCFAllocatorDefault, keys, values, 5, &kCFTypeDictionaryKeyCallBacks,
+    CFDictionaryRef routes = CFDictionaryCreate(kCFAllocatorDefault, keys, values, 9, &kCFTypeDictionaryKeyCallBacks,
                                                 &kCFTypeDictionaryValueCallBacks);
-    for (int i = 0; i < 5; i++)
+    for (int i = 0; i < 9; i++)
         CFRelease(values[i]);
     return routes;
 }
@@ -863,6 +893,8 @@ static OSStatus copyProperty(CMBaseObjectRef ref, CFStringRef key, CFAllocatorRe
         *(CFTypeRef *)value = CFRetain(d->software ? kCFBooleanFalse : kCFBooleanTrue);
         return noErr;
     }
+    if (!d->software && avd_alpha_copy_property(d, key, (CFTypeRef *)value))
+        return noErr;
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
     if (CFEqual(key, kSwitchPictureRoutesKey) && !d->software) {
         *(CFTypeRef *)value = copyPictureRoutes(d);
@@ -882,6 +914,8 @@ static OSStatus copyProperty(CMBaseObjectRef ref, CFStringRef key, CFAllocatorRe
 static OSStatus setProperty(CMBaseObjectRef ref, CFStringRef key, CFTypeRef value)
 {
     Decoder *d = storage(ref);
+    if (!d->software && avd_alpha_set_property(d, key, value))
+        return noErr;
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
     if (CFEqual(key, kSwitchDisplayBufferProbeKey) && d->hevc && value == kCFBooleanTrue) {
         hevc_decoder_want_display_probe(d->hevc);
@@ -943,6 +977,7 @@ OSStatus avd_create_instance(FourCharCode codec, CFAllocatorRef allocator, VTVid
     pthread_mutex_init(&d->lock, NULL);
     d->client = client;
     d->codec = codec;
+    d->planeAsked = -1;
     d->present = nvdec_can_present(client);
     const H264Backend backend = {d, bufferAlloc, bufferFree, jobSubmit, jobWait, decoded, emit, discard, cpuReads, switch_recycle_output};
     if (codec == kCMVideoCodecType_VP9          ? !(d->vp9 = vp9_decoder_create(&backend))
