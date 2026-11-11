@@ -202,6 +202,19 @@ TEST(RawGlassMem, SlotWithoutItsCookieIsNotJudged)
     EXPECT_EQ(probe.counts.rebuilt.load(), 0u);
 }
 
+// A row the copy engine never wrote still holds the CPU's poison: '?', nothing counted for it
+TEST(RawGlassMem, PoisonedRowIsNotJudged)
+{
+    raw::GlassMem probe;
+    probe.wrote(kPyramid, 75, 0);
+    probe.sampled(item(kPyramid, 384, 128, kBgra8, 4), "PBGRABsovXmw_TgsgA3Xhf_Isrc", 7, 1, 75);
+    std::vector<uint8_t> slot = rows(75, {});
+    memset(slot.data(), raw::kGlassMemPoison, raw::kGlassMemItemBytes);
+    const std::string line = probe.finish(probe.close(75, 7500, 0), slot.data(), true);
+    EXPECT_NE(line.find("/R0:?"), std::string::npos) << line;
+    EXPECT_EQ(probe.counts.black.load(), 0u);
+}
+
 // Past the item cap a glass draw's texture takes the place of the latest item no glass draw sampled; the line counts drops
 TEST(RawGlassMem, GlassDrawsKeepTheirItemsPastTheCap)
 {

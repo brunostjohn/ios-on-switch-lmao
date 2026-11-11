@@ -5,8 +5,9 @@
 // what one row of each read at the command buffer's end, by the copy engine into a ring the CPU reads once the fence passed:
 // black, non-finite, or for a reused one changed since the end of the command buffer that last wrote it. A texture header
 // whose 32 bytes changed under the same index while its texture lived counts as moved. The ring is GPU-volatile control
-// memory (an internal job's writes may sit in the L2 past its fence otherwise), and each slot ends with a host semaphore
-// release of its command buffer's cookie: a slot without it is not judged.
+// memory (an internal job's writes may sit in the L2 past its fence otherwise). The CPU fills a slot's rows with
+// kGlassMemPoison before its submission, and the slot ends with a host semaphore release of its command buffer's cookie:
+// a slot without the cookie (its segment never ran) or a row still poisoned (its copy never landed) is not judged.
 #pragma once
 #include <algorithm>
 #include <atomic>
@@ -24,6 +25,7 @@ constexpr uint32_t kGlassMemTexels = 32, kGlassMemItems = 16, kGlassMemSlots = 8
 constexpr uint32_t kGlassMemItemBytes = kGlassMemTexels * 16, kGlassMemCookieBytes = 16;
 constexpr uint32_t kGlassMemSlotBytes = kGlassMemItems * kGlassMemItemBytes + kGlassMemCookieBytes;
 constexpr uint64_t kGlassMemArmMs = 20000;
+constexpr uint8_t kGlassMemPoison = 0xa5;
 // Entries kept: a texture CA dropped without our seeing its destroy (a client's) ages out past this many
 constexpr size_t kGlassMemTracked = 512;
 
@@ -290,6 +292,11 @@ private:
         }
         if (it.flags & kGlassMemUnsampled)
             return "-";
+        bool poisoned = true;
+        for (uint32_t b = 0; b < it.texels * it.bpp && poisoned; b++)
+            poisoned = row[b] == kGlassMemPoison;
+        if (poisoned)
+            return "?";
         const GlassMemRow r = glassMemRow(row, it.texels, it.bpp, it.format);
         Ref &ref = refs_[it.key + it.level];
         if (r.nonFinite) {

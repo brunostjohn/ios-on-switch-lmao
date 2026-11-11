@@ -1571,6 +1571,9 @@ public:
     // record), every command buffer it read logs its line until glassMemArmedUntil (mach time)
     std::unique_ptr<GlassMem> glassMem;
     std::atomic<uint64_t> glassMemArmedUntil{0};
+    // A submission carrying the probe's reads was killed: the probe stops for the process (its reads are new code on
+    // the compositor's every command buffer)
+    std::atomic<bool> glassMemStopped{false};
     void glassMemEvent(const char *what, uint64_t bytes);
 #endif
 

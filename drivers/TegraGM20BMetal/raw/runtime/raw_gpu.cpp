@@ -4629,6 +4629,8 @@ void RenderEncoder::probeGlassDraw(const Pipeline &bound, const Pipeline &drawn,
 // them), and the copy engine reads plain memory only: a compressed binding hands it compressed bytes (raw_comp.h).
 void RenderEncoder::glassMemSample(const Pipeline &bound, const Pipeline &drawn)
 {
+    if (dev_->glassMemStopped.load(std::memory_order_relaxed))
+        return;
     const PackPipeline &rec = *drawn.rec;
     for (uint32_t k = 0; k < rec.entries && k < kPackEntries; k++) {
         const PackEntry &e = rec.entry[k];
@@ -5363,7 +5365,7 @@ void CommandBuffer::glassMemTail()
     GlassMemCb record =
         d.glassMem->close(d.commitCount_, mach_absolute_time(), d.stats.memEvents.load(std::memory_order_relaxed));
     glassMemSlot_ = -1;
-    if (!record.count)
+    if (!record.count || d.glassMemStopped.load(std::memory_order_relaxed))
         return;
     if (!d.glassMemRing_.va) {
         if (!d.k_.allocControl(uint64_t(kGlassMemSlots) * kGlassMemSlotBytes, d.glassMemRing_,
@@ -5384,6 +5386,8 @@ void CommandBuffer::glassMemTail()
     tiledCacheDrain(p, d.k_.info());
     p.m(WAIT_FOR_IDLE, 0);
     const uint64_t base = d.glassMemRing_.va + uint64_t(slot) * kGlassMemSlotBytes;
+    memset(d.glassMemRing_.cpu + uint64_t(slot) * kGlassMemSlotBytes, kGlassMemPoison,
+           uint64_t(record.count) * kGlassMemItemBytes);
     for (uint32_t i = 0; i < record.count; i++) {
         const GlassMemItem &it = record.items[i];
         if (it.flags & kGlassMemUnsampled)
@@ -5397,14 +5401,15 @@ void CommandBuffer::glassMemTail()
                              HOST_SEMAPHORE_RELEASE_16_WFI});
     checkRoom(p, "the glass memory probe's reads");
     segment(start, p.at);
-    surfaces_.add(d.glassMemRing_.handle, true);
+    if (d.k_.exactJobs())
+        surfaces_.add(d.glassMemRing_.handle, true);
     d.glassMemCbs_[slot] = record;
     glassMemSlot_ = slot;
 }
 
 // The probe's records whose rows landed, oldest first (a reused texture's row is judged against the one its last write
-// left): a line for each that found something, or for each while HW Test armed it, and a summary every 5 s. A record of
-// a killed submission is dropped, and one a reopened channel's fence never reaches after 120 command buffers.
+// left): a line for each that found something, or for each while HW Test armed it, and a summary every 5 s. A killed
+// submission stops the probe; a record a reopened channel's fence never reaches is dropped after 120 command buffers.
 void Device::glassMemRead()
 {
     if (!glassMem)
@@ -5426,8 +5431,14 @@ void Device::glassMemRead()
             continue;
         }
         glassMemBusy_[next] = false;
-        if (lost(glassMemCbs_[next].seqno))
+        if (lost(glassMemCbs_[next].seqno)) {
+            if (!glassMemStopped.exchange(true))
+                os_log_error(log,
+                             "raw: glassmem: command buffer %llu carrying the probe's reads was killed: the probe is "
+                             "off for this process",
+                             (unsigned long long)glassMemCbs_[next].serial);
             continue;
+        }
         uint8_t rows[kGlassMemSlotBytes];
         memcpy(rows, glassMemRing_.cpu + uint64_t(next) * kGlassMemSlotBytes, sizeof rows);
         const std::string line = glassMem->finish(glassMemCbs_[next], rows, every);
