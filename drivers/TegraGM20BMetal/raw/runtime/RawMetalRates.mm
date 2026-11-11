@@ -443,4 +443,16 @@ void watchFetchBarrierWay(raw::Device *dev)
         });
     }
 }
+
+// The keyline probe armed (raw_gpu.h armKeylineProbe) in every process by HW Test's ui.pocket_keyline before it draws
+// (`idevicenotificationproxy -u <udid> post com.brunostjohn.switch.debug.keyline-probe` from the Mac)
+void watchKeylineProbe()
+{
+    int token;
+    notify_register_dispatch("com.brunostjohn.switch.debug.keyline-probe", &token,
+                             dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^(int) {
+                                 raw::armKeylineProbe();
+                                 os_log(rawLog(), "raw: keyline probe armed (debug notification)");
+                             });
+}
 #endif

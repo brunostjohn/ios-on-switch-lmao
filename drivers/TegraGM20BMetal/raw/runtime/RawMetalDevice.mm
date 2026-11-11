@@ -94,6 +94,9 @@ static const char *zetaMemoryRefusal(int asked)
         if (const uint64_t n = fetch.refusedAtEncode[r].load())
             d[[NSString stringWithFormat:@"fetch_encode.%s", raw::kFetchRefusalNames[r]]] = @(n);
     }
+    for (size_t r = 1; r < raw::kStorageFallbacks; r++)
+        if (const uint64_t n = fetch.storageFallback[r].load())
+            d[[NSString stringWithFormat:@"fetch_fallback.%s", raw::kStorageFallbackNames[r]]] = @(n);
     for (int r = 1; r < WhyCount; r++)
         if (const uint64_t n = s.reasons[r].load())
             d[[NSString stringWithFormat:@"m2v.%s", kReasonNames[r]]] = @(n);

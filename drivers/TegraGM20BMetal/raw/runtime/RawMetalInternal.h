@@ -390,4 +390,5 @@ int computeReadiness(RMCommandBuffer *cb, const RMSegment &range);
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
 void rawStallTick();
 void watchFetchBarrierWay(raw::Device *dev);
+void watchKeylineProbe();
 #endif

@@ -390,6 +390,7 @@ id<MTLDevice> raw_metal_device_open(const char *packPath, uint64_t stack, id<MTL
         dispatch_resume(stall);
     }
     watchFetchBarrierWay(dev);
+    watchKeylineProbe();
 #endif
     // what both threads hold up is the frame: they follow its committing threads (raw_follow.h)
     std::thread([] {

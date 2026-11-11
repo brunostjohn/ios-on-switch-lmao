@@ -9,6 +9,7 @@
 #include "raw_clear.h"
 #include "raw_attachment_lifetime.h"
 #include "raw_dynamic_push.h"
+#include "raw_keyline_probe.h"
 #include "../../../NativeMetal/bridge/NativeMetalBlend.h"
 #include "../../../../kits/SwitchGM20B/SwitchGM20B.h"
 #include "raw_follow.h"
@@ -38,6 +39,7 @@
 #include <mach/mach_time.h>
 #include <os/log.h>
 #include <pthread.h>
+#include <set>
 #include <time.h>
 #include <unistd.h>
 #include <algorithm>
@@ -4095,17 +4097,25 @@ const RenderEncoder::Runs *RenderEncoder::sequentialRuns(const Pipeline &pl, con
     return &runs;
 }
 
+StorageFallback RenderEncoder::storageFallback(const Pipeline &pl) const
+{
+    if (!pl.storageBits)
+        return StorageFallback::None;
+    if (const Pipeline *twin = pl.barrierTwin;
+        twin && fetchesOnlyUnwritten(pl.fetchBits, pl.writeBits, pl.storageWriteBits, twin->fetchBits, twin->writeBits))
+        return StorageFallback::ReadOnly;
+    StorageFallback reason = StorageFallback::None;
+    for (uint32_t slot = 0; slot < 8 && reason == StorageFallback::None; slot++)
+        if (const Texture *t = pass_.color[slot].texture; t && (pl.storageBits >> slot & 1))
+            reason = storageViewMismatch(texelBytes(pl.storageTic[slot]), pl.rec->storageSamples, *t);
+    return reason;
+}
+
 Pipeline *RenderEncoder::formFor(Pipeline *pl)
 {
     if (!pl || !pl->storageBits)
         return pl;
-    StorageFallback reason = StorageFallback::None;
-    if (const Pipeline *twin = pl->barrierTwin;
-        twin && fetchesOnlyUnwritten(pl->fetchBits, pl->writeBits, pl->storageWriteBits, twin->fetchBits, twin->writeBits))
-        reason = StorageFallback::ReadOnly;
-    for (uint32_t slot = 0; slot < 8 && reason == StorageFallback::None; slot++)
-        if (const Texture *t = pass_.color[slot].texture; t && (pl->storageBits >> slot & 1))
-            reason = storageViewMismatch(texelBytes(pl->storageTic[slot]), pl->rec->storageSamples, *t);
+    const StorageFallback reason = storageFallback(*pl);
     if (reason == StorageFallback::None)
         return pl;
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
@@ -4342,6 +4352,176 @@ static void probeUniforms(Pipeline &pl, uint32_t stage, uint32_t slot, const uin
         pl.uniformProbe = nullptr;
     else
         pl.uniformHalvesReported = true;
+}
+
+namespace {
+// The keyline probe's generation (each armKeylineProbe starts the next), and its armed window's lines left and end
+std::atomic<uint32_t> gKeylineGeneration{1};
+std::atomic<int32_t> gKeylineLines{0};
+std::atomic<int64_t> gKeylineUntil{0};
+
+int64_t keylineNow()
+{
+    return std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch())
+        .count();
+}
+
+bool keylineArmed()
+{
+    if (gKeylineLines.load(std::memory_order_relaxed) <= 0)
+        return false;
+    if (keylineNow() < gKeylineUntil.load(std::memory_order_relaxed))
+        return true;
+    gKeylineLines.store(0, std::memory_order_relaxed);
+    return false;
+}
+
+// "t<slot>:<w>x<h>/f<format>/<bl|pitch>[+ml][+import]" for each bound texture of `slots` (bit i: slot i, of the first 16)
+void describeTextures(char *out, size_t size, const Texture *const *textures, uint32_t slots)
+{
+    snprintf(out, size, "-");
+    size_t at = 0;
+    for (uint32_t slot = 0; slot < 16 && at + 1 < size; slot++) {
+        const Texture *t = textures[slot];
+        if (!(slots >> slot & 1) || !t)
+            continue;
+        const int n =
+            snprintf(out + at, size - at, "%st%u:%ux%u/f%u/%s%s%s", at ? " " : "", slot, t->width, t->height, t->format,
+                     t->blockLinear ? "bl" : "pitch", t->memoryless ? "+ml" : "", t->import ? "+import" : "");
+        at += std::min(size - at - 1, size_t(std::max(n, 0)));
+    }
+}
+}  // namespace
+
+void armKeylineProbe()
+{
+    gKeylineLines.store(256, std::memory_order_relaxed);
+    gKeylineUntil.store(keylineNow() + 30000, std::memory_order_relaxed);
+    gKeylineGeneration.fetch_add(1, std::memory_order_relaxed);
+}
+
+// A Core Animation draw (Pipeline::caName), for each form of its state: a solid fill of its three-colour pass its first four
+// draws and first twelve thin ones each probe generation, any other state its first four thin draws while the probe is
+// armed. Its line: the form drawn (storage: the state's own, inside the pixel interlock; barrier: its twin, as formFor took
+// it; barrier-record: the pack's barrier record standing for an unusable first one; split: its split twin; whole: its one
+// program), why its storage form fell back, its colour bits, each colour attachment as the pass bound it (format/bytes a
+// texel/samples/layout/size, then the load: d don't care, l load, c clear), the textures its record samples and, for a fill
+// that samples none, the ones an earlier draw left at slots 0 and 1, the draw's pixels (scissor within viewport), and its
+// quads as Core Animation wrote them (raw_keyline_probe.h): how many, how many thin, the first and the first thin one with
+// its colour
+void RenderEncoder::probeDraw(const Pipeline &bound, Pipeline &drawn, uint32_t primitive, int32_t first, uint32_t count,
+                              bool indexed, const PixelBox &limit)
+{
+    const uint32_t generation = gKeylineGeneration.load(std::memory_order_relaxed);
+    if (drawn.probeGeneration != generation) {
+        drawn.probeGeneration = generation;
+        drawn.probeLines = drawn.probeThinLines = 0;
+    }
+    const uint8_t anyLines = bound.fillState ? 4 : 0, thinLines = bound.fillState ? 12 : 4;
+    if ((drawn.probeLines >= anyLines && drawn.probeThinLines >= thinLines) || (!bound.fillState && !keylineArmed()))
+        return;
+    const Device &d = *dev_;
+    const PackPipeline &rec = *drawn.rec;
+    const PackPipeline *packed = d.pack_.section<PackPipeline>(PackPipelines);
+    const bool inPack = &rec >= packed && &rec < packed + d.pack_.bytes(PackPipelines) / sizeof(PackPipeline);
+    const Bound &matrix = bufs_[1][2];
+    const Bound &stream = bufs_[1][rec.vertexSlot < 31 ? rec.vertexSlot : 0];
+    const uint64_t skip = first >= 0 ? uint64_t(first) * rec.vertexStride : UINT64_MAX;
+    FillStream s;
+    if (stream.cpu && skip < stream.size) {
+        s.bytes = stream.cpu + skip;
+        s.size = stream.size - skip;
+    }
+    s.stride = rec.vertexStride;
+    s.positionOffset = drawn.positionOffset;
+    s.positionComponents = drawn.positionComponents;
+    s.colorOffset = inPack ? fillColorOffset(d.pack_.string(rec.keyString)) : -1;
+    std::vector<uint32_t> indices;
+    if (indexed && drawIndices_)
+        for (uint32_t i = 0; i < std::min(drawIndexCount_, kFillScanVertices); i++)
+            indices.push_back(drawIndexSize_ == 2 ? reinterpret_cast<const uint16_t *>(drawIndices_)[i]
+                                                  : reinterpret_cast<const uint32_t *>(drawIndices_)[i]);
+    const uint32_t vertices = indexed ? uint32_t(indices.size()) : count;
+    const uint32_t group = std::min(primitive == 4 ? vertices : 6u, vertices);
+    const FillScan scan = fillScan(s, indexed ? indices.data() : nullptr, vertices, group,
+                                   matrix.cpu && matrix.size >= 64 ? matrix.cpu : nullptr, vp_);
+    if (drawn.probeLines < anyLines)
+        drawn.probeLines++;
+    else if (scan.thin && drawn.probeThinLines < thinLines)
+        drawn.probeThinLines++;
+    else
+        return;
+    if (!bound.fillState && gKeylineLines.fetch_sub(1, std::memory_order_relaxed) <= 0)
+        return;
+    const char *form = drawn.splitOf                     ? "split"
+                       : drawn.storageBits               ? "storage"
+                       : &drawn == bound.barrierTwin     ? "barrier"
+                       : rec.flags & PipelineBarrierForm ? "barrier-record"
+                                                         : "whole";
+    char attachments[8 * 48] = "-";
+    size_t used = 0;
+    for (uint32_t j = 0; j < pass_.count && j < 8; j++) {
+        const Texture *t = pass_.color[j].texture;
+        const size_t room = sizeof attachments - used;
+        const int n =
+            t ? snprintf(attachments + used, room, "%sc%u:%u/%u/%u/%s%s%s/%ux%u/%c", used ? " " : "", j, t->format,
+                         t->bpp, t->samples, t->blockLinear ? "bl" : "pitch", t->comptags ? "+comp" : "",
+                         memoryless_[j] ? "+ml" : "", t->width, t->height, "dlc"[pass_.color[j].load])
+              : snprintf(attachments + used, room, "%sc%u:-", used ? " " : "", j);
+        used += std::min(room - 1, size_t(std::max(n, 0)));
+    }
+    uint32_t sampledSlots = 0;
+    for (uint32_t k = 0; k < rec.entries && k < kPackEntries; k++)
+        if (rec.entry[k].kind == EntryTexture && rec.entry[k].slot < 16)
+            sampledSlots |= 1u << rec.entry[k].slot;
+    char sampled[16 * 48], left[2 * 48] = "-", colour[64] = "-";
+    describeTextures(sampled, sizeof sampled, textures_, sampledSlots);
+    if (!sampledSlots)
+        describeTextures(left, sizeof left, textures_, 3);
+    const FillQuad &q = scan.thin ? scan.firstThin : scan.first;
+    if (q.colored)
+        snprintf(colour, sizeof colour, "%.5f,%.5f,%.5f,%.5f", q.color[0], q.color[1], q.color[2], q.color[3]);
+    os_log(os_log_create("com.brunostjohn.switch.TegraGM20BMetal", "raw"),
+           "raw: keyline draw %{public}s key %016llx fill %d form %{public}s fallback %{public}s own %d fetch %02x "
+           "write %02x read %02x storage %02x storewrite %02x att %{public}s samples %{public}s left %{public}s box "
+           "%u,%u-%u,%u draw %u/%u%{public}s quads %u thin %u first %.2f,%.2f-%.2f,%.2f thinquad %u "
+           "%.2f,%.2f-%.2f,%.2f colour %{public}s",
+           bound.caName, (unsigned long long)rec.keyHash, int(bound.fillState), form,
+           kStorageFallbackNames[size_t(storageFallback(bound))],
+           fetchesOwnColor(drawn.fetchBits, drawn.writeBits, drawn.storageBits), drawn.fetchBits, drawn.writeBits,
+           drawn.readBits, drawn.storageBits, drawn.storageWriteBits, attachments, sampled, left, limit.x0, limit.y0,
+           limit.x1, limit.y1, primitive, indexed ? drawIndexCount_ : count, indexed ? " indexed" : "", scan.quads,
+           scan.thin, scan.first.box[0], scan.first.box[1], scan.first.box[2], scan.first.box[3], scan.firstThin.first,
+           scan.firstThin.box[0], scan.firstThin.box[1], scan.firstThin.box[2], scan.firstThin.box[3], colour);
+}
+
+// A write that stops a row or two short of a texture's edges (raw_keyline_probe.h EdgeMiss), once per shape and at most
+// 256 shapes each probe generation: what wrote (a pass's render area or its draws' scissors within their viewports, a
+// copy, an upload), the texture, the rectangle written and `detail`
+static void logEdgeMiss(const char *what, const Texture &t, const PixelBox &r, const char *detail)
+{
+    const EdgeMiss m = edgeMiss(t.width, t.height, r.x0, r.y0, r.x1, r.y1);
+    if (!m.any())
+        return;
+    static std::mutex lock;
+    static std::set<std::array<uint32_t, 8>> seen;
+    static uint32_t seenGeneration = 0;
+    {
+        std::lock_guard<std::mutex> l(lock);
+        if (const uint32_t generation = gKeylineGeneration.load(std::memory_order_relaxed);
+            generation != seenGeneration) {
+            seen.clear();
+            seenGeneration = generation;
+        }
+        const std::array<uint32_t, 8> shape = {uint32_t(what[0]), t.width, t.height, t.format, r.x0, r.y0, r.x1, r.y1};
+        if (seen.size() >= 256 || !seen.insert(shape).second)
+            return;
+    }
+    os_log(os_log_create("com.brunostjohn.switch.TegraGM20BMetal", "raw"),
+           "raw: edge miss %{public}s %ux%u f%u %{public}s rect %u,%u-%u,%u short top %u bottom %u left %u right %u"
+           "%{public}s",
+           what, t.width, t.height, t.format, t.blockLinear ? "bl" : "pitch", r.x0, r.y0, r.x1, r.y1, m.top, m.bottom,
+           m.left, m.right, detail);
 }
 #endif
 
@@ -4799,6 +4979,10 @@ bool RenderEncoder::prepare(Pipeline *pl, uint32_t primitive, int32_t first, uin
         baseVertex_ = baseVertex;
     }
     drawParamsUnknown_ = false;
+#if SWITCH_RAW_DIAGNOSTICS
+    if (pipeline_ && pipeline_->caName)
+        probeDraw(*pipeline_, *pl, primitive, first, count, indexed, {x[0], y[0], x[1], y[1]});
+#endif
     RAW_DIAGNOSTIC(dev_->stats.interlockDraws += pl->storageBits != 0);
 #if SWITCH_RAW_DIAGNOSTICS
     if (pl->rec && pl->storageBits)
@@ -5333,6 +5517,30 @@ void RenderEncoder::continuePass(uint8_t stores)
     RAW_DIAGNOSTIC(dev_->stats.fusedPasses++);
 }
 
+#if SWITCH_RAW_DIAGNOSTICS
+// The pass's stored colours that it leaves a row or two of (logEdgeMiss): outside its render area, or outside every one of its
+// draws' scissors within their viewports; a Clear load reaches past both
+void RenderEncoder::probeEdges() const
+{
+    PixelBox drawn{areaW_, areaH_, 0, 0};
+    for (const auto &r : rects_)
+        drawn = {std::min(drawn.x0, r[0]), std::min(drawn.y0, r[1]), std::max(drawn.x1, r[2]),
+                 std::max(drawn.y1, r[3])};
+    const bool drawnKnown = drew_ && !whole_ && !rects_.empty();
+    for (uint32_t j = 0; j < pass_.count && j < 8; j++) {
+        const ColorAttachment &a = pass_.color[j];
+        if (!a.texture || !a.store || memoryless_[j] || a.load == ColorAttachment::Clear)
+            continue;
+        char detail[96];
+        snprintf(detail, sizeof detail, " c%u of %u load %c area %ux%u drew %d", j, pass_.count, "dlc"[a.load], areaW_,
+                 areaH_, int(drew_));
+        logEdgeMiss("pass.area", *a.texture, {0, 0, areaW_, areaH_}, detail);
+        if (drawnKnown)
+            logEdgeMiss("pass.draws", *a.texture, drawn, detail);
+    }
+}
+#endif
+
 void RenderEncoder::end()
 {
     RAW_ENCODE_SPAN(PassEnd);
@@ -5364,6 +5572,9 @@ void RenderEncoder::end()
     d.push_.head = uint64_t(reinterpret_cast<uint8_t *>(p_.at) - d.push_.bo.cpu);  // give back the unused reservation
     // pass prologue: the full barrier m2v puts between passes, the targets, then the clears
     const std::vector<Clear> cl = clearsSealed_ ? std::move(initialClears_) : clears();
+#if SWITCH_RAW_DIAGNOSTICS
+    probeEdges();
+#endif
     const std::vector<uint32_t> &restore = extrasAtBegin_ ? extrasAtBegin_->restore : std::vector<uint32_t>();
     const uint32_t room = 160 + 8 * 32 + uint32_t(cl.size()) * 48 + kZetaTargetWords + kZetaClearWords + 16 +
                           kSampleWords + uint32_t(restore.size());
@@ -5707,6 +5918,11 @@ void BlitEncoder::copyTexels(const Texture &src, uint32_t sx, uint32_t sy, uint3
     cb_->use(dst, true);
     room(32);
     copySides(p_, sideOf(src, sx, sy, sz), sideOf(dst, dx, dy, dz), w, h, src.bpp, dev_->stats);
+#if SWITCH_RAW_DIAGNOSTICS
+    char detail[64];
+    snprintf(detail, sizeof detail, " from %ux%u f%u at %u,%u", src.width, src.height, src.format, sx, sy);
+    logEdgeMiss("copy", dst, {dx, dy, dx + w, dy + h}, detail);
+#endif
 }
 
 void BlitEncoder::copyBufferTexels(uint64_t va, uint32_t pitch, const Texture &t, uint32_t x, uint32_t y, uint32_t z,
@@ -5718,6 +5934,10 @@ void BlitEncoder::copyBufferTexels(uint64_t va, uint32_t pitch, const Texture &t
     if (w && h)
         cb_->useAddress(va, rowStorageBytes(pitch, w, h, element), !toTexture);
     cb_->use(t, toTexture);
+#if SWITCH_RAW_DIAGNOSTICS
+    if (toTexture && !t.zeta)
+        logEdgeMiss("upload", t, {x, y, x + w, y + h}, "");
+#endif
     room(48);
     const CopySide rows{va, pitch}, texels = sideOf(t, x, y, z);
     const CopySide &from = toTexture ? rows : texels, &to = toTexture ? texels : rows;

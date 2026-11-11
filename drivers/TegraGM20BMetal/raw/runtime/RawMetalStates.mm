@@ -236,6 +236,24 @@ static void markUniformProbe(raw::Pipeline *pl, NSString *label)
         pl->barrierTwin->genericState = generic;
     }
 }
+
+// Core Animation's states, whose draws the keyline probe logs (raw_gpu.cpp probeDraw): a solid fill into its three-colour
+// pass (..Xmw_A3Xhfc, the scroll edge keyline's) always, any other while the probe is armed
+static void markDrawProbe(raw::Pipeline *pl, NSString *label)
+{
+    static NSString *const prefix = @"com.apple.coreanimation.";
+    if (!pl || pl->caName || ![label hasPrefix:prefix])
+        return;
+    // one per state, for the process's life
+    pl->caName = strdup([label substringFromIndex:prefix.length].UTF8String);
+    pl->fillState = [label hasSuffix:@"Xmw_A3Xhfc"];
+}
+
+static void markProbes(raw::Pipeline *pl, NSString *label)
+{
+    markUniformProbe(pl, label);
+    markDrawProbe(pl, label);
+}
 #endif
 
 // A state the pack lacks, of any library's functions: its record from this process or an earlier boot, else made at its
@@ -257,7 +275,7 @@ static void makeRecord(RMPipeline *p, MTLRenderPipelineDescriptor *d)
         native_bridge_metal_journal_render(a.descriptor, 0);
 #endif
 #if SWITCH_RAW_DIAGNOSTICS
-    markUniformProbe(p->_raw, d.label);
+    markProbes(p->_raw, d.label);
 #endif
     if (p->_raw || !retry)
         return;
@@ -267,7 +285,7 @@ static void makeRecord(RMPipeline *p, MTLRenderPipelineDescriptor *d)
         RMPipeline *strong = weak;
 #if SWITCH_RAW_DIAGNOSTICS
         if (strong)
-            markUniformProbe(pl, strong.label);
+            markProbes(pl, strong.label);
 #endif
         if (strong && pl)
             __atomic_store_n(&strong->_raw, pl, __ATOMIC_RELEASE);
@@ -308,7 +326,7 @@ static RMPipeline *pipelineFor(RMDevice *device, MTLRenderPipelineDescriptor *d,
     if (lookedUp) {
         p->_raw = gRM->raw->pipeline(packKey, raw::PackForm::Default, p->_caTransform);
 #if SWITCH_RAW_DIAGNOSTICS
-        markUniformProbe(p->_raw, d.label);
+        markProbes(p->_raw, d.label);
 #endif
         p->_packed = p->_raw != nullptr;
         if (p->_packed)

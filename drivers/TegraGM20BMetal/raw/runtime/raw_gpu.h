@@ -359,6 +359,12 @@ struct Sampler {
 struct SplitState;
 struct SplitSource;
 
+#if SWITCH_RAW_DIAGNOSTICS
+// The keyline probe (raw_keyline_probe.h) for 30 s or 256 lines: its budgets start again, and every Core Animation state's
+// thin draws log their line
+void armKeylineProbe();
+#endif
+
 struct Pipeline {
     const PackPipeline *rec = nullptr;
     uint32_t vertexInstructions = 1, fragmentInstructions = 1;
@@ -422,6 +428,14 @@ struct Pipeline {
     const PackVariant *variants[2] = {};
     uint8_t variantCount[2] = {};
     std::vector<Pipeline *> chosen;
+    // DEVELOPMENT: a Core Animation state's name, whose draws log their form and quads (RenderEncoder::probeDraw): a solid
+    // fill into its three-colour pass (..Xmw_A3Xhfc, the scroll edge keyline's state: fillState) its first draws and thin
+    // ones always, any other state its thin ones while the keyline probe is armed (armKeylineProbe); the probe's generation
+    // this form's lines count in, and its lines there, of any draw and of thin ones
+    const char *caName = nullptr;
+    bool fillState = false;
+    uint32_t probeGeneration = 0;
+    uint8_t probeLines = 0, probeThinLines = 0;
 };
 
 // A state's fragment program split (raw_pack.h PackSplit): the twin that draws of rec.thresholdPixels pixels or more take, and
@@ -715,6 +729,12 @@ private:
     using Runs = std::vector<std::pair<uint32_t, uint32_t>>;
     // `pl`, or its barrier twin where an attachment of this pass cannot be viewed as one of its storage images
     Pipeline *formFor(Pipeline *pl);
+    StorageFallback storageFallback(const Pipeline &pl) const;
+#if SWITCH_RAW_DIAGNOSTICS
+    void probeEdges() const;
+    void probeDraw(const Pipeline &bound, Pipeline &drawn, uint32_t primitive, int32_t first, uint32_t count,
+                   bool indexed, const PixelBox &limit);
+#endif
     const Runs *selfRuns(const Pipeline &pl, uint32_t primitive, int32_t first, uint32_t count, uint32_t instances,
                          const char **why);
     const Runs *sequentialRuns(const Pipeline &pl, const FetchDraw &shape, Runs &runs, const char **why);
