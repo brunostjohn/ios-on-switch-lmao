@@ -258,14 +258,15 @@ struct UseRangesPathTest: GPUPathTest {
     }
 }
 
-/// NativeSurfaceView (bit 17): a hardware-decoded frame's planes, sampled through CVMetalTextureCache, are read from
-/// the decoder's own block-linear picture through a native view, and give the bytes a CPU lock of the frame converts
-/// to rows. The GPU reads both planes before the CPU's lock prepares the rows.
+/// NativeSurfaceView (bit 17): a hardware-decoded frame's planes, read by a compute kernel through CVMetalTextureCache,
+/// come from the decoder's own block-linear picture through a native view, and give the bytes a CPU lock of the frame
+/// converts to rows. The GPU reads both planes before the CPU's lock prepares the rows; a blit would read the pitch
+/// planes instead.
 struct NativeSurfaceViewPathTest: GPUPathTest {
     let id = "gpu.path.native_surface_view"
     let name = "Draws sample a decoded picture where the decoder put it, matching its CPU rows"
     let bit = 17
-    let counters = ["native_views", "native_reads"]
+    let counters = ["native_tiled_views", "native_reads"]
 
     func exercise(_ gpu: GPU, _ context: TestContext, _ metrics: inout Metrics) async throws -> [String] {
         guard let clip = Clip.all.first(where: { $0.codec == .h264 && $0.height == 720 }) else {
@@ -276,7 +277,7 @@ struct NativeSurfaceViewPathTest: GPUPathTest {
         guard CVMetalTextureCacheCreate(nil, nil, gpu.device, nil, &made) == kCVReturnSuccess, let cache = made else {
             throw TestFailure("CVMetalTextureCacheCreate failed")
         }
-        let planes: [(format: MTLPixelFormat, bytesPerPixel: Int)] = [(.r8Unorm, 1), (.rg8Unorm, 2)]
+        let planes: [(format: MTLPixelFormat, channels: Int)] = [(.r8Unorm, 1), (.rg8Unorm, 2)]
         var sampled: [[UInt8]] = []
         var held: [CVMetalTexture] = []
         for (plane, shape) in planes.enumerated() {
@@ -287,11 +288,12 @@ struct NativeSurfaceViewPathTest: GPUPathTest {
                 let texture, let metal = CVMetalTextureGetTexture(texture)
             else { throw TestFailure("no Metal texture of plane \(plane)") }
             held.append(texture)
-            sampled.append(try await gpu.read(metal, bytesPerPixel: shape.bytesPerPixel))
+            let texels = try await gpu.texels(metal)
+            sampled.append(texels.flatMap { texel in (0..<shape.channels).map { UInt8((texel[$0] * 255).rounded()) } })
         }
         var failures: [String] = []
         for (plane, shape) in planes.enumerated() {
-            let wrong = Self.wrong(sampled[plane], Self.rows(frame, plane: plane, bytesPerPixel: shape.bytesPerPixel))
+            let wrong = Self.wrong(sampled[plane], Self.rows(frame, plane: plane, bytesPerPixel: shape.channels))
             metrics.set("plane\(plane)_wrong_bytes", wrong)
             if wrong != 0 { failures.append("plane \(plane): \(wrong) bytes differ from the CPU's rows") }
         }
