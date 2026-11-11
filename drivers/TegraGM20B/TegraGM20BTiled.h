@@ -45,12 +45,15 @@ struct tgm_tiled {
 };
 
 /* TegraGM20BCoherency.cpp: the entry's lock (held across a decision and a move), its layout slot (entry lock), whether
- * it is its surface's only import (refs 1), its page list (entry lock), and the GPU writers a move of it must follow
- * (still running; after a writer lost its slot, every channel's submitted work is waited for here and none is returned) */
+ * the caller's is its only reference and no CPU lock is held (alone: an untile's test), whether the same holds once the
+ * askers' holds are left out (unshared: a decision's test; any other import, display hold or trap in flight still
+ * counts), its page list (entry lock), and the GPU writers a move of it must follow (still running; after a writer lost
+ * its slot, every channel's submitted work is waited for here and none is returned) */
 void tgm_coh_lock(struct tgm_coh *c);
 void tgm_coh_unlock(struct tgm_coh *c);
 struct tgm_tiled **tgm_coh_tiled(struct tgm_coh *c);
 int tgm_coh_alone(struct tgm_coh *c);
+int tgm_coh_unshared(const struct tgm_coh *c);
 int tgm_coh_pinned(const struct tgm_coh *c);
 struct tgm_relayout_pages tgm_coh_pages(const struct tgm_coh *c);
 uint32_t tgm_coh_writers(struct tgm_coh *c, struct tgm_relayout_writer *out, uint32_t max);
@@ -63,6 +66,10 @@ struct tgm_coh *tgm_coh_find_tiled_pa(uint64_t pa, uint64_t *offset);
 struct tgm_coh *tgm_coh_find_pa(uint64_t pa);
 /* One more reference to an entry the caller holds one to */
 void tgm_coh_hold(struct tgm_coh *c);
+/* The same, for the importer asking the surface's layout (tgm_coherency_layout) with its connection's lock dropped: it
+ * keeps the entry alive, and the decision does not count it as another user. tgm_coh_put_asker drops it. */
+void tgm_coh_hold_asker(struct tgm_coh *c);
+void tgm_coh_put_asker(struct tgm_coh *c);
 
 /* TegraGM20BRelayout.cpp: the scratch of rows a move goes through (kits/SwitchScratch's; null: none to be had), charged
  * to the locking task (`for_task` 1: the current task; 0: the kernel) */

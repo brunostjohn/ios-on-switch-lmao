@@ -77,6 +77,7 @@ TESTS: dict[str, bool] = {
             'metal.blit',
             'metal.texture_view',
             'metal.iosurface',
+            'gpu.surface.tiled_default',
             'metal.mps.blur',
             'metal.mps.matmul',
             'metal.runtime_compile',

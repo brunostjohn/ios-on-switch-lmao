@@ -1799,7 +1799,7 @@ IOReturn AGXDeviceUserClient::surfaceLayoutInfo(const TegraGM20BAbiSurfaceLayout
 	tgm_coh *coh = bo->coh;
 	OSObject *object = bo->surface;
 	const uint64_t first = bo->pas[0];
-	tgm_coh_hold(coh);
+	tgm_coh_hold_asker(coh);
 	if (object)
 		object->retain();
 	IOLockUnlock(lock_);
@@ -1816,7 +1816,7 @@ IOReturn AGXDeviceUserClient::surfaceLayoutInfo(const TegraGM20BAbiSurfaceLayout
 		switch_gpu_surface_layout_exclusive(object, false);
 	tgm_layout tiled = {};
 	const bool described = layout > 0 && tegra_gm20b_surface_layout(first, &tiled);
-	tgm_coherency_put(coh);
+	tgm_coh_put_asker(coh);
 	if (object)
 		object->release();
 	IOLockLock(lock_);

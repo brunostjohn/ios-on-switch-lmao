@@ -59,7 +59,7 @@ Decision decide(tgm_coh *c, tgm_tiled &t, uint32_t width, uint32_t height, uint3
 {
 	if (!writes)
 		return PitchSampledFirst;
-	if (!tgm_coh_alone(c) || !tgm_coh_pinned(c))
+	if (!tgm_coh_unshared(c) || !tgm_coh_pinned(c))
 		return PitchShared;
 	const tgm_relayout_pages pages = tgm_coh_pages(c);
 	const uint64_t bytes = static_cast<uint64_t>(pages.npages) << 12;

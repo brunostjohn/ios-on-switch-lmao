@@ -466,6 +466,7 @@ host_test(
     srcs = [
         "gm20b_coherency_test.cpp",
         "gm20b_backing_stubs.cpp",
+        "gm20b_layout_ask_test.cpp",
         "gm20b_tiled_model.h",
         "gm20b_views_test.cpp",
     ],

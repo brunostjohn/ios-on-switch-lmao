@@ -1272,10 +1272,23 @@ TEST(GM20BLayoutSource, LayoutDecisionHoldsNeitherTheConnectionLockNorItsGate)
 {
 	const std::string info =
 		flat(definition(client(), "IOReturn AGXDeviceUserClient::surfaceLayoutInfo("));
-	expectBefore(info, "tgm_coh_hold(coh);", "IOLockUnlock(lock_);");
+	expectBefore(info, "tgm_coh_hold_asker(coh);", "IOLockUnlock(lock_);");
 	expectBefore(info, "IOLockUnlock(lock_);", "tgm_coherency_layout(coh,");
-	expectBefore(info, "tgm_coherency_put(coh);", "IOLockLock(lock_);");
+	expectBefore(info, "tgm_coh_put_asker(coh);", "IOLockLock(lock_);");
 	const std::string run = flat(definition(client(), "IOReturn AGXDeviceUserClient::run("));
 	EXPECT_THAT(run, HasSubstr("method != TegraGM20BMethodSurfaceLayout &&"));
 	EXPECT_THAT(run, HasSubstr("method != TegraGM20BMethodSurfaceLayoutInfo;"));
+}
+
+// The asker's hold (gm20b_layout_ask_test) is the only reference the decision does not count as another user: it is
+// taken once and put once, with no return between them.
+TEST(GM20BLayoutSource, TheAskersHoldIsPutOnEveryPath)
+{
+	const std::string info =
+		flat(definition(client(), "IOReturn AGXDeviceUserClient::surfaceLayoutInfo("));
+	EXPECT_EQ(Count(info, "tgm_coh_hold_asker("), 1u);
+	EXPECT_EQ(Count(info, "tgm_coh_put_asker("), 1u);
+	EXPECT_THAT(info, Not(HasSubstr("tgm_coh_hold(")));
+	EXPECT_THAT(Between(info, "tgm_coh_hold_asker(coh);", "tgm_coh_put_asker(coh);"),
+		    Not(HasSubstr("return")));
 }

@@ -45,7 +45,8 @@ struct tgm_coh {
 	tgm_coh *idNext;  // surface-ID chain, while surfaceId != 0
 	uint64_t pa;      // the surface's first physical page
 	uint32_t surfaceId;
-	uint32_t refs;  // registry lock
+	uint32_t refs;    // registry lock
+	uint32_t askers;  // registry lock: refs held across a layout decision (tgm_coh_hold_asker)
 	bool parked;
 	switch_gpu_backing *backing;
 	void *surface;
@@ -657,6 +658,16 @@ extern "C" int tgm_coh_alone(struct tgm_coh *c)
 	return alone;
 }
 
+extern "C" int tgm_coh_unshared(const struct tgm_coh *c)
+{
+	IOLockLock(gRegistryLock);
+	const int unshared =
+		static_cast<int>(c->refs - c->askers == 1 &&
+				 (__atomic_load_n(&c->cpuLocks, __ATOMIC_ACQUIRE)) == 0u);
+	IOLockUnlock(gRegistryLock);
+	return unshared;
+}
+
 extern "C" struct tgm_relayout_pages tgm_coh_pages(const struct tgm_coh *c)
 {
 	return {c->pas, c->npages};
@@ -725,6 +736,24 @@ extern "C" void tgm_coh_hold(struct tgm_coh *c)
 	IOLockLock(gRegistryLock);
 	c->refs++;
 	IOLockUnlock(gRegistryLock);
+}
+
+extern "C" void tgm_coh_hold_asker(struct tgm_coh *c)
+{
+	IOLockLock(gRegistryLock);
+	c->refs++;
+	c->askers++;
+	IOLockUnlock(gRegistryLock);
+}
+
+// The count drops before the reference, which may be the entry's last: in between, the asker counts as another user of
+// the surface (a decision then says pitch), never the other way round.
+extern "C" void tgm_coh_put_asker(struct tgm_coh *c)
+{
+	IOLockLock(gRegistryLock);
+	c->askers--;
+	IOLockUnlock(gRegistryLock);
+	tgm_coherency_put(c);
 }
 
 extern "C" uint32_t tgm_coh_surface_id(const struct tgm_coh *c)
