@@ -11,6 +11,8 @@ import UIKit
 final class RecoverBystander: @unchecked Sendable {
     /// The same byte in every channel, whichever order the solid colour's format packs them in
     static let fill = 0x8080_8080
+    /// NV902D_SET_RENDER_SOLID_PRIM_COLOR_FORMAT_V_A8B8G8R8: the solid colour as one RGBA8 word
+    static let a8b8g8r8 = 0xd5
     private let runner: BenchRunner
     private let experiment: BenchExperiment
     private let lock = NSLock()
@@ -27,7 +29,7 @@ final class RecoverBystander: @unchecked Sendable {
                 [
                     "id": "bystander", "kind": "twod", "readback": "full", "repeats": 4,
                     "target": ["format": "rgba8unorm", "width": 64, "height": 64],
-                    "twod": ["op": "fill", "color": [Self.fill, 0, 0, 0]],
+                    "twod": ["op": "fill", "colorFormat": Self.a8b8g8r8, "color": [Self.fill, 0, 0, 0]],
                 ]
             ],
         ]
