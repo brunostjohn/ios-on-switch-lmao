@@ -2,9 +2,23 @@ import Darwin
 import Foundation
 import HWTestCore
 
-/// How many JPEG decodes NVJPG finished for this process (debug kernels): selector 7 of AppleJPEGDriverUserClient, the
-/// one CMPhoto's own decodes use, with 0x5050 at +0xcac and no source surface (drivers/TegraNVJPG/CONTRACT.md).
+/// How many JPEG decodes NVJPG finished for this process, and the output formats they wrote (debug kernels): selector 7
+/// of AppleJPEGDriverUserClient, the one CMPhoto's own decodes use, with 0x5050 at +0xcac and no source surface
+/// (drivers/TegraNVJPG/CONTRACT.md).
 enum JPEGRoute {
+    struct Counts {
+        let decodes: UInt64
+        let formats: UInt64
+    }
+
+    /// TegraNVJPGJpeg.h's TEGRA_NVJPG_OUT_* order.
+    static let formatNames = ["420f", "y420", "BGRA", "RGBA", "ARGB", "L008", "422f", "444f", "yuvf"]
+
+    static func names(_ formats: UInt64) -> String {
+        let named = formatNames.enumerated().filter { formats >> UInt64($0.offset) & 1 != 0 }.map(\.element)
+        return named.isEmpty ? "-" : named.joined(separator: ",")
+    }
+
     typealias Matching = @convention(c) (UnsafePointer<CChar>) -> CFMutableDictionary?
     typealias Service = @convention(c) (mach_port_t, CFDictionary?) -> mach_port_t
     typealias Open =
@@ -18,7 +32,7 @@ enum JPEGRoute {
     static let requestBytes = 0xda0
 
     /// The count, or why there is none.
-    static func decodes() -> Result<UInt64, TestFailure> {
+    static func decodes() -> Result<Counts, TestFailure> {
         guard let iokit = dlopen("/System/Library/Frameworks/IOKit.framework/IOKit", RTLD_NOW),
             let matching = dlsym(iokit, "IOServiceMatching"), let service = dlsym(iokit, "IOServiceGetMatchingService"),
             let open = dlsym(iokit, "IOServiceOpen"), let release = dlsym(iokit, "IOObjectRelease"),
@@ -49,6 +63,9 @@ enum JPEGRoute {
         guard kr == KERN_SUCCESS, size == requestBytes else {
             return .failure(TestFailure("selector 7 \(String(UInt32(bitPattern: kr), radix: 16)) size \(size)"))
         }
-        return .success(reply.withUnsafeBytes { $0.load(as: UInt64.self) })
+        return .success(
+            reply.withUnsafeBytes {
+                Counts(decodes: $0.load(as: UInt64.self), formats: $0.load(fromByteOffset: 8, as: UInt64.self))
+            })
     }
 }

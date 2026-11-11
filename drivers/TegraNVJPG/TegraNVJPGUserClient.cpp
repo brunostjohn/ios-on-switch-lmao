@@ -98,15 +98,16 @@ struct {
     uint64_t windowStart, decodes, refused, failed, engineUs, cpuUs, pixels, bytes;
 } gStats;
 // Decodes NVJPG finished for the processes that asked last, for HW Test's image.jpeg_* route: a selector 7 call with
-// kRouteMagic at +0xcac and no source surface answers the caller's count (reached through the selector CMPhoto itself
-// uses, so the app's sandbox admits it where it may deny a registry or sysctl read). gStatsLock.
+// kRouteMagic at +0xcac and no source surface answers the caller's count and the output formats those decodes wrote,
+// through the selector CMPhoto's own decodes use, which the app's sandbox admits where it may deny a registry or
+// sysctl read. gStatsLock.
 constexpr uint32_t kRouteMagic = 0x5050;  // 'PP', as TegraGM20BMethodPaths
 struct {
     int pid;
-    uint64_t decodes;
+    uint64_t decodes, formats;  // formats: bit n, a decode into TEGRA_NVJPG_OUT_n
 } gByProcess[8];
 
-void countDecode(int pid)
+void countDecode(int pid, uint32_t format)
 {
     auto *slot = &gByProcess[0];
     for (auto &entry : gByProcess) {
@@ -118,16 +119,19 @@ void countDecode(int pid)
             slot = &entry;
     }
     if (slot->pid != pid)
-        *slot = {pid, 0};
+        *slot = {pid, 0, 0};
     slot->decodes++;
+    slot->formats |= 1ull << format;
 }
 
-uint64_t decodesOf(int pid)
+void countsOf(int pid, uint64_t *decodes, uint64_t *formats)
 {
-    for (const auto &entry : gByProcess)
-        if (entry.pid == pid)
-            return entry.decodes;
-    return 0;
+    for (const auto &entry : gByProcess) {
+        if (entry.pid == pid) {
+            *decodes = entry.decodes;
+            *formats = entry.formats;
+        }
+    }
 }
 #endif
 
@@ -315,7 +319,7 @@ void engineThread(void *, wait_result_t)
         if (job->status)
             gStats.failed++;
         else
-            countDecode(job->pid);
+            countDecode(job->pid, job->plan.target.format);
         gStats.engineUs += job->engineUs;
         gStats.cpuUs += job->cpuUs;
         gStats.pixels += static_cast<uint64_t>(job->plan.extent.width) * job->plan.extent.height;
@@ -668,7 +672,7 @@ IOReturn AppleJPEGDriverUserClient::externalMethod(uint32_t selector, IOExternal
             auto *out = static_cast<uint64_t *>(a->structureOutput);
             bzero(out, kSize[7]);
             IOLockLock(gStatsLock);
-            out[0] = decodesOf(proc_selfpid());
+            countsOf(proc_selfpid(), &out[0], &out[1]);
             IOLockUnlock(gStatsLock);
             return kIOReturnSuccess;
         }
