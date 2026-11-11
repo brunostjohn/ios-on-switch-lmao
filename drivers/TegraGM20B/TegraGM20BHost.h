@@ -9,6 +9,8 @@
 #define PFIFO_ENG_CHSW 0x00008000
 #define PFIFO_ENG_CTX_STATUS(s) (((s) >> 13) & 7)
 #define PFIFO_ENG_CTX_VALID 1
+#define PFIFO_ENG_CTX_LOAD 5
+#define PFIFO_ENG_CTX_SWITCH 7
 #define PFIFO_ENG_ID_TSG 0x00001000
 #define PFIFO_ENG_ID(s) ((s) & 0xfff)
 #define PFIFO_ENG_NEXT_ID_TSG 0x10000000

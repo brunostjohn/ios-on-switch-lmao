@@ -51,6 +51,20 @@ static inline int tgm_kick_victim(uint32_t eng, int eng_high, int pbdma_busy, ui
 	return TGM_VICTIM_NONE;
 }
 
+/* While GR is mid-switch, what a high kick preempts: the app channel GR is loading (a load, or a save and a load), which
+ * the host picked while no high channel had work and which would keep GR for its timeslice; TGM_VICTIM_SWITCHING for a
+ * save alone or a switch to a high channel or a TSG, which the interleaved runlist follows with a high channel. */
+static inline int tgm_kick_loading(uint32_t eng, int next_high)
+{
+	const uint32_t ctx = PFIFO_ENG_CTX_STATUS(eng);
+
+	if ((eng & PFIFO_ENG_BUSY) && (eng & PFIFO_ENG_CHSW) &&
+	    (ctx == PFIFO_ENG_CTX_LOAD || ctx == PFIFO_ENG_CTX_SWITCH) &&
+	    !(eng & PFIFO_ENG_NEXT_ID_TSG) && !next_high)
+		return (int)PFIFO_ENG_NEXT_ID(eng);
+	return TGM_VICTIM_SWITCHING;
+}
+
 /* Whether a high kick preempts its victim: never one high work waits for (the present's waits, the compositor's acquires,
  * tgm_hold_need): the compositor would only yield at its acquire and the host switch back. */
 static inline int tgm_kick_may_preempt(int victim, int needed)

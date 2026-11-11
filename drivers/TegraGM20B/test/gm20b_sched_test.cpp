@@ -29,6 +29,22 @@ TEST(KickVictim, GrMidSwitchIsLeftToTheHost)
 	EXPECT_EQ(tgm_kick_victim(kHangEng0, 0, 1, 26, 0), TGM_VICTIM_SWITCHING);
 }
 
+// deploy-2045's switch from backboardd's channel 3 to Maps' 26: the host picked an app while no high channel had work
+TEST(KickLoading, TheAppGrIsLoadingIsPreempted)
+{
+	EXPECT_EQ(tgm_kick_loading(kHangEng0, 0), 26);
+	EXPECT_EQ(tgm_kick_loading(PFIFO_ENG_BUSY | 5u << 13 | 26u << 16, 0), 26);
+}
+
+TEST(KickLoading, ASaveAloneASwitchToAHighChannelOrATsgIsLeftToTheHost)
+{
+	EXPECT_EQ(tgm_kick_loading(kHangEng0, 1), TGM_VICTIM_SWITCHING);
+	EXPECT_EQ(tgm_kick_loading(PFIFO_ENG_BUSY | 6u << 13 | 26u << 16 | 3u, 0),
+		  TGM_VICTIM_SWITCHING);
+	EXPECT_EQ(tgm_kick_loading(kHangEng0 | PFIFO_ENG_NEXT_ID_TSG, 0), TGM_VICTIM_SWITCHING);
+	EXPECT_EQ(tgm_kick_loading(kCtxValid | 26, 0), TGM_VICTIM_SWITCHING);
+}
+
 // The learned preemption latencies of F-v1's widget visit (deadline lines, "latency by channel"): the compositor's kick
 // alone serves a channel within a millisecond; the poster, widget and icon renderers are held; a channel at the 100 ms
 // cap is not.
