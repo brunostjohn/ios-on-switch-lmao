@@ -443,6 +443,8 @@ IOReturn AGXDeviceUserClient::exec(uint32_t channel, TegraGM20BAbiPush *input, u
 	bool ownershipBusy = false, ownershipFailed = false;
 	// The active-submit gate pins this channel, its bindings and BOs while other channels and CPU releases proceed.
 	IOLockUnlock(lock_);
+	for (uint32_t i = 0; i < writtenCount; ++i)
+		tgm_views_gpu_writes(job.written[i]);
 	if (scratch)
 		scratch->phases.end(TGM_SUBMIT_RESOLVE);
 	uint32_t leaseCount = 0;

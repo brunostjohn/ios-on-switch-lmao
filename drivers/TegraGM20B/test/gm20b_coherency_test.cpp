@@ -204,6 +204,27 @@ extern "C" void tgm_scratch_pages(const struct tgm_scratch *s, struct tgm_relayo
 	*pages = {s->pas.data(), uint32_t(s->pas.size())};
 }
 
+// A kernel mapping of a scratch: its pages' bytes in one buffer, written back to the pages at the unmap.
+struct ScratchMap {
+	tgm_relayout_pages pages;
+	std::vector<uint8_t> bytes;
+};
+
+extern "C" void *tgm_scratch_map(struct tgm_scratch *s, void **map)
+{
+	const tgm_relayout_pages pages = {s->pas.data(), uint32_t(s->pas.size())};
+	auto *m = new ScratchMap{pages, gather(pages)};
+	*map = m;
+	return m->bytes.data();
+}
+
+extern "C" void tgm_scratch_unmap(void *map)
+{
+	auto *m = static_cast<ScratchMap *>(map);
+	scatter(m->pages, m->bytes);
+	delete m;
+}
+
 extern "C" int tgm_cpu_view_of(void *client, uint32_t id, struct tgm_cpu_view *out)
 {
 	const auto it = gViews.mappings.find({client, id});

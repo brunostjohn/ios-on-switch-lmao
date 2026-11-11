@@ -987,6 +987,15 @@ TEST(GM20BSchedSource, HooksGoWhereTheFifosOneinitReadsThem)
 		    HasSubstr("interleave(fifo->engine.subdev.device, runl);"));
 }
 
+// A submission that writes a block-linear IOSurface under a CPU write lock keeps the lock's rows before it runs, with the
+// connection's lock dropped and before the active-submit gate's channel entry (the copy engine's wait sleeps).
+TEST(GM20BViewsSource, AGpuWriteUnderACpuWriteLockIsMergedNotHeldBack)
+{
+	const auto exec = flat(definition(client(), "IOReturn AGXDeviceUserClient::exec("));
+	expectBefore(exec, "IOLockUnlock(lock_);", "tgm_views_gpu_writes(job.written[i]);");
+	expectBefore(exec, "tgm_views_gpu_writes(job.written[i]);", "switch_gpu_chan_submit_enter(chan);");
+}
+
 // The PBDMA's ACQUIRE interrupt is gpu_acquire.c's: the timeout goes off in the PBDMA before the bit is cleared (so the
 // same acquire cannot raise it again), and nvkm's handler, which would kill the waiter, never sees it.
 TEST(GM20BAcquireSource, TheAcquireInterruptIsTakenBeforeNvkmsHandler)

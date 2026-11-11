@@ -453,12 +453,16 @@ struct SharedEventsPathTest: GPUPathTest {
     }
 }
 
-/// ResourceReady (bit 23): a command buffer that renders into an IOSurface while the CPU holds its lock is refused by the
-/// kernel and parks on a readiness notification instead of failing; it runs once the lock goes, and its pixels are there.
+/// A render into an IOSurface while the CPU holds a write lock on it (bit 23 advertised). Apple's contract
+/// (IOSurfaceRef.h: "lock" is used loosely, a bound on CPU access; IOSurface.kext's lock waits for GPU work submitted
+/// before it and never holds back GPU work after it) is that the render runs and its pixels are what the next lock
+/// reads where the CPU wrote none. Reported apart: whether the kernel refused the submission (`kernel_refused`, a
+/// ResourceReady readiness arm), whether the runtime held the command buffer back while the lock was held
+/// (`held_back`), and the pixels. Only the pixels and the command buffer's completion decide it.
 struct ResourceReadyPathTest: GPUPathTest {
     let id = "gpu.path.resource_ready"
-    let name = "A render into a CPU-locked IOSurface waits for the unlock instead of failing"
-    let counters = ["ready_arms"]
+    let name = "A render into a CPU-locked IOSurface runs and its pixels survive the unlock"
+    let counters: [String] = []
 
     func exercise(_ gpu: GPU, _: TestContext, _ metrics: inout Metrics) async throws -> [String] {
         let width = 64, height = 64, rowBytes = 256
@@ -473,6 +477,8 @@ struct ResourceReadyPathTest: GPUPathTest {
         guard let texture = gpu.device.makeTexture(descriptor: descriptor, iosurface: surface, plane: 0) else {
             throw TestFailure("no texture over the IOSurface")
         }
+        let connection = GPUConnection()
+        let pathsBefore = GPUPaths.read(connection)
         guard surface.lock(options: [], seed: nil) == 0 else { throw TestFailure("IOSurfaceLock failed") }
         let render = try gpu.commit { commands in
             let pass = MTLRenderPassDescriptor()
@@ -487,6 +493,11 @@ struct ResourceReadyPathTest: GPUPathTest {
         surface.unlock(options: [], seed: nil)
         try gpu.finish([render])
         metrics.set("held_back", heldBack)
+        if case .counts(let before) = pathsBefore, case .counts(let after) = GPUPaths.read(connection) {
+            metrics.set("kernel_refused", after.taken("ready_arms", since: before))
+        } else {
+            metrics.set("kernel_refused", "unreadable")
+        }
         guard surface.lock(options: .readOnly, seed: nil) == 0 else {
             throw TestFailure("IOSurfaceLock for the readback failed")
         }
@@ -498,8 +509,8 @@ struct ResourceReadyPathTest: GPUPathTest {
         surface.unlock(options: .readOnly, seed: nil)
         metrics.set("wrong_pixels", wrong)
         var failures: [String] = []
-        if !heldBack { failures.append("the render ran while the CPU held the lock") }
-        if wrong != 0 { failures.append("\(wrong) pixels miss the clear") }
+        if render.status != .completed { failures.append("the render ended \(render.status.rawValue)") }
+        if wrong != 0 { failures.append("\(wrong) pixels miss the render made under the lock") }
         return failures
     }
 }

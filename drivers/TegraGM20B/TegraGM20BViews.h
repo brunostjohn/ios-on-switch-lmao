@@ -68,6 +68,9 @@ void tgm_scratch_discard(struct tgm_scratch *scratch);
  * nonzero refuses the lock (kIOReturnCannotLock: kIOSurfaceLockAvoidSync and the GPU still writes it). Nothing for a
  * surface that is not block-linear. */
 int tgm_views_trap(void *client, uint32_t index, uint32_t id, uint32_t options);
+/* Before a GPU submission that writes the surface of `c` (any may be null): a write lock's rows kept to merge at its
+ * unlock. One atomic load when no lock is held. Sleeps on the copy engine's fence interrupt while it copies. */
+void tgm_views_gpu_writes(struct tgm_coh *c);
 
 #ifdef __cplusplus
 }

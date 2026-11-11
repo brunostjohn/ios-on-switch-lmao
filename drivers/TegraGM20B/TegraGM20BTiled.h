@@ -31,6 +31,10 @@ struct tgm_tiled {
 	struct tgm_scratch *scratch;
 	uint32_t locks;
 	int wrote, stranded;
+	/* the rows as a GPU submission found them when it wrote the surface under a write lock (tgm_views_gpu_writes): the
+	 * last unlock merges; whether that was logged for the surface */
+	struct tgm_scratch *base;
+	int merged;
 
 	struct {
 		struct tgm_cpu_view view;
@@ -80,6 +84,10 @@ struct tgm_scratch *tgm_scratch_get(uint64_t bytes, int for_task, struct tgm_rel
 void tgm_scratch_put(struct tgm_scratch *scratch);
 void tgm_scratch_stats(uint64_t *held, uint64_t *peak);
 void tgm_scratch_pages(const struct tgm_scratch *scratch, struct tgm_relayout_pages *pages);
+/* The scratch's bytes, cacheable, in the kernel's address space until tgm_scratch_unmap(*map); null when it cannot be
+ * mapped */
+void *tgm_scratch_map(struct tgm_scratch *scratch, void **map);
+void tgm_scratch_unmap(void *map);
 void tgm_tiled_free(struct tgm_tiled *t);
 /* Whether any surface is block-linear now: every trap and query returns at once while none is */
 int tgm_tiled_any(void);

@@ -120,6 +120,57 @@ TEST_F(Views, ALockSeesRowsWhileTheGpuAndDisplayKeepTexels)
 	tgm_coherency_put(s.coh);
 }
 
+// F-v1, gpu.path.resource_ready: a render into the surface while a CPU write lock holds its rows. On Apple's GPUs the
+// render runs and its pixels stay where the CPU wrote none; here the unlock lays only the CPU's changes over them.
+TEST_F(Views, AGpuWriteUnderAWriteLockKeepsItsBytesWhereTheCpuWroteNone)
+{
+	Tiled s(0xa4000000, 85);
+	map(1, s.id, 0x10000);
+	ASSERT_EQ(tegra_gm20b_iosurface_view(client(1), kLock, s.id, 0), 0);
+	const size_t lockMoves = gMoves.size();
+	tgm_views_gpu_writes(s.coh);
+	ASSERT_EQ(gMoves.size(), lockMoves + 1);
+	EXPECT_EQ(gMoves.back().op, TGM_RELAYOUT_TO_ROWS);
+	tgm_views_gpu_writes(s.coh);  // a second writer keeps the first one's base
+	EXPECT_EQ(gMoves.size(), lockMoves + 1);
+
+	std::vector<uint8_t> green(s.rows.size(), 0x5a), texels = s.texels();
+	tgm_layout_write(&s.l, texels.data(), 0, 0, kW, kH, green.data(), kRow);
+	scatter(s.pages, texels);
+	auto *scratch = static_cast<const tgm_scratch *>(gViews.mapped.at({task(1), 0x10000}));
+	const tgm_relayout_pages viewPages = {scratch->pas.data(), uint32_t(scratch->pas.size())};
+	std::vector<uint8_t> view = gather(viewPages);
+	memset(&view[3 * kRow], 0xc3, kW * kBpp);  // the CPU writes row 3 only
+	scatter(viewPages, view);
+
+	ASSERT_EQ(tegra_gm20b_iosurface_view(client(1), kUnlock, s.id, 0), 0);
+	std::vector<uint8_t> back(s.rows.size());
+	const std::vector<uint8_t> after = s.texels();
+	tgm_layout_read(&s.l, after.data(), 0, 0, kW, kH, back.data(), kRow);
+	// a byte the CPU wrote with the value its rows already held is not told from one it left alone
+	std::vector<uint8_t> want(green);
+	for (uint32_t x = 0; x < kW * kBpp; x++)
+		want[3 * kRow + x] = s.rows[3 * kRow + x] == 0xc3 ? 0x5a : 0xc3;
+	EXPECT_TRUE(s.rowsAre(back, want));
+	tgm_coherency_put(s.coh);
+}
+
+TEST_F(Views, ReadOnlyLocksAndUnlockedSurfacesKeepNoBase)
+{
+	Tiled s(0xa6000000, 86);
+	map(1, s.id, 0x10000);
+	const size_t before = gMoves.size();
+	tgm_views_gpu_writes(s.coh);
+	tgm_views_gpu_writes(nullptr);
+	EXPECT_EQ(gMoves.size(), before);
+	ASSERT_EQ(tegra_gm20b_iosurface_view(client(1), kLock, s.id, kReadOnly), 0);
+	const size_t locked = gMoves.size();
+	tgm_views_gpu_writes(s.coh);
+	EXPECT_EQ(gMoves.size(), locked);
+	ASSERT_EQ(tegra_gm20b_iosurface_view(client(1), kUnlock, s.id, kReadOnly), 0);
+	tgm_coherency_put(s.coh);
+}
+
 // The copy engine failing (a faulted copy, no channel or mappings) never leaves a lock with texels or a write unlanded:
 // the CPU makes the same moves through the pages, clearing the scratch's stale bytes first
 TEST_F(Views, MovesTheCopyEngineCannotMakeAreTheCpus)
