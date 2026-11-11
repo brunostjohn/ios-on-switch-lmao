@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 // Guards on how TegraGM20B's kernel code uses what gm20b_pool_policy_test and gm20b_push_scan_test exercise, and on the
-// pool's zeroing, which no host model runs (it lives in nvkm's shim and gpu.c's channels):
+// pool's zeroing, which no host model runs (it lives in nvkm's shim and gpu_scrub.c's channel):
 //  - the user client decides a coherent BO's memory through TegraGM20BPoolPolicy.h, serves a BO the pool does not from
 //    a write-combined buffer of its own, never refuses a coherent BO for want of pool room, and the stats line names
 //    the pool's holders;
@@ -449,7 +449,7 @@ TEST(GM20BPresentSource, TiledSourceIsCopiedBlockLinear)
 		    HasSubstr("tgm_coherency_layout(coh,"));
 }
 
-// System sleep (gpu.c "system sleep"): every path that touches the GPU outside tgm_gpu.lock goes through the gate
+// System sleep (gpu_power.c "system sleep"): every path that touches the GPU outside tgm_gpu.lock goes through the gate
 // gm20b_sleep_test runs, and sleep and wake keep the orders the hardware needs.
 TEST(GM20BSleepSource, GpuTouchingPathsGoThroughTheGate)
 {

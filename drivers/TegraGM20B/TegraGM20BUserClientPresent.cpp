@@ -2,7 +2,7 @@
 // The display's present: scanout copies and fences on the GPU.
 #include "TegraGM20BUserClientInternal.h"
 
-// GPU frame copy for the display (TegraScanoutCopy.h). The display offers each swapped surface; gpu.c's present channel
+// GPU frame copy for the display (TegraScanoutCopy.h). The display offers each swapped surface; gpu_present.c's present channel
 // copies it, after the compositor's GPU work, into the block-linear target, and calls native_legacy_gpu_complete from the
 // GPU interrupt pass. Offers come one at a time under the display's gate: nothing here waits for the GPU.
 //   targets   the display's scanout buffers (three: latest-frame-wins flips), physically contiguous, mapped once

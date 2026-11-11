@@ -646,7 +646,7 @@ int nvxnu_pool_setup(void)
 		return -ENOMEM;
 	for (unsigned long i = 0; i < pool_npages; i++)
 		pool_pages[i].pa = nvxnu_pool_base_pa() + (i << PAGE_SHIFT);
-	/* nothing zeroed them yet: the GPU's scrubber will (gpu.c "pool scrub") */
+	/* nothing zeroed them yet: the GPU's scrubber will (gpu_scrub.c "pool scrub") */
     if (!zeroed)
         bitmap_set(pool_dirty, 0, pool_npages);
     switch_gpu_pool_remember(&pool_extents, 0, pool_npages, zeroed);

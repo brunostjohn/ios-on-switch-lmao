@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 // The stats' method-stream reader (TegraGM20BUserClient.cpp scanPushes): counts what a submission's pushes ask
-// of the GM20B and names each push for the push profile (gpu.c "push profile"). Plain C++ with no kernel dependency, so
+// of the GM20B and names each push for the push profile (gpu_fenced.h "push profile"). Plain C++ with no kernel dependency, so
 // the host test (test/gm20b_push_scan_test.cpp) runs the same code over NVK's streams.
 // Encoding: NV906F DMA headers (opcode 31:29, count or immediate 28:16, subchannel 15:13, dword method 11:0); NVK's
 // subchannels (Mesa nv_push.h: 0 3D, 1 compute, 3 2D, 4 copy) and MME macros (nvk_mme.h: 2 CLEAR, 10 SET_ANTI_ALIAS,

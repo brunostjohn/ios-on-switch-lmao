@@ -215,7 +215,7 @@ struct nvkm_device;
  * wake (GR re-initialized from the same golden image) enable alone. */
 void tgm_clkgate_load(struct nvkm_device *device);
 void tgm_clkgate_enable(struct nvkm_device *device);
-/* Debug kernels' A/B (gpu.c tgm_clkgate_switch): every list's "disable" value and ELCG run, as nvgpu turns gating off. */
+/* Debug kernels' A/B (gpu_bringup.c tgm_clkgate_switch): every list's "disable" value and ELCG run, as nvgpu turns gating off. */
 void tgm_clkgate_disable(struct nvkm_device *device);
 /* Once GR exists (M2): GR's reset in a channel's recovery (nouveau's nvkm_runl_rc) runs with gating off and gets every list
  * back with ELCG on after it, as nvgpu resets GR (gk20a_fifo_handle_mmu_fault_locked between nvgpu_cg_pg_disable and

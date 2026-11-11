@@ -1,5 +1,5 @@
 /* SPDX-License-Identifier: MIT */
-/* The push profile's slowest submission of a window, push by push in order (gpu.c "push profile"): each push's class,
+/* The push profile's slowest submission of a window, push by push in order (gpu_fenced.h "push profile"): each push's class,
  * its pass's colour target 0 in thousands of pixels, its draws and interlock enables, and its GPU time. With the jobs
  * line's batches it attributes a frame's GPU time pass by pass. */
 #ifndef SWITCH_GPU_PROFILE_SEQUENCE_H

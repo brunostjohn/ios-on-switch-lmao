@@ -159,7 +159,7 @@ GROUPS: dict[str, list[Check]] = {
             process=KERNEL,
             regex=r'imports (?P<n>\d+) in (?P<ms>\d+) ms .*?total p50 (?P<p50>\d+) p99 (?P<p99>\d+) '
             r'max (?P<max>\d+) us.*?(?P<slow>\d+) over 4 ms',
-            source='drivers/TegraGM20B/gpu.c stats_imports (r32-gpufixed-importstats)',
+            source='drivers/TegraGM20B/gpu_stats.c stats_imports (r32-gpufixed-importstats)',
             note='debug kernels; us per window',
         ),
         Check(
@@ -179,7 +179,7 @@ GROUPS: dict[str, list[Check]] = {
             process=KERNEL,
             regex=r'slow import (?P<owner>\S+) (?P<kib>\d+) KiB.*?: (?P<us>\d+) us =',
             show=('owner', 'kib'),
-            source='drivers/TegraGM20B/gpu.c (r32-gpufixed-importstats)',
+            source='drivers/TegraGM20B/gpu_stats.c (r32-gpufixed-importstats)',
             note='imports over 4 ms',
         ),
         Check(
@@ -209,7 +209,7 @@ GROUPS: dict[str, list[Check]] = {
             process=KERNEL,
             regex=r'coherency (?P<invalidations>\d+) lock invalidations \((?P<kib>\d+) KiB\)',
             show=('invalidations', 'kib'),
-            source='drivers/TegraGM20B/gpu.c',
+            source='drivers/TegraGM20B/gpu_stats_tick.c',
         ),
         Check(
             'gpu.rainbow',
@@ -238,7 +238,7 @@ GROUPS: dict[str, list[Check]] = {
             'r30-frames',
             'tegra-gm20b: GPU present unavailable',
             process=KERNEL,
-            source='drivers/TegraGM20B/gpu.c',
+            source='drivers/TegraGM20B/gpu_present.c',
         ),
         Check(
             'gpu.mmu-fault',
@@ -246,7 +246,7 @@ GROUPS: dict[str, list[Check]] = {
             ' on channel ',
             process=KERNEL,
             regex='fault',
-            source='drivers/TegraGM20B/gpu.c (nvkm fault reports)',
+            source='drivers/TegraGM20B/gpu_hang.c (nvkm fault reports)',
         ),
         Check(
             'gpu.pbentry',
@@ -255,7 +255,7 @@ GROUPS: dict[str, list[Check]] = {
             process=KERNEL,
             regex=r'\.gpu: fifo: PBDMA\d: \w+ \[PBENTRY\] ch \d+ \[\w+ (?P<who>[^\]]+)\]',
             show=('who',),
-            source='drivers/TegraGM20B/gpu.c (nvkm PBDMA interrupt)',
+            source='drivers/TegraGM20B/gpu_hang.c (nvkm PBDMA interrupt)',
             note='the GPU fetched a zero push word; boot 15: MercuryPosterExt x76, its raw push ring a system BO',
         ),
     ],

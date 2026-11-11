@@ -5,7 +5,7 @@
  * vsync_callback), and CA starts a frame at it for the vblank after the one it came with; the display passes each one on
  * here with its real vblank (tegra_gm20b_compositor_vsync). A window then holds each app channel from its own preemption
  * latency before the compositor's latest start (that vblank less the compositor's GPU time per frame) until the frame's
- * present completes (hold.c). The GPU time per frame is learned from the high channels' completions (gpu.c
+ * present completes (hold.c). The GPU time per frame is learned from the high channels' completions (gpu_fenced.h
  * high_fenced), summed per present. QuartzCore's own hint (tegra_gm20b_display_deadline) comes once a second
  * (hint_agx_timing::next_agx_hint), too seldom to start a window from. Every decision is made at a vsync, a kick, a
  * fence interrupt or a host-time callout; nothing waits or polls.

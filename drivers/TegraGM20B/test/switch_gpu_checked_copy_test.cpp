@@ -53,7 +53,7 @@ uint32_t leaseCount;
 void (*irq)(void *);
 void *irqContext;
 std::map<uint64_t, switch_gpu_backing *> allocations;
-// The GPU as gpu.c drives it, for the tests that run what the queue submits: the host fetches each push through the
+// The GPU as gpu_exec.c drives it, for the tests that run what the queue submits: the host fetches each push through the
 // page table and the L2 (gm20b_gpu_memory.h), after the L2 invalidate chan_exec puts ahead of a submission that is not
 // explicit, is host-written, or follows a GPU-ordered map (the TLB invalidate's flush).
 bool emulate, mappedSinceExec;
@@ -144,7 +144,7 @@ extern "C" void tgm_mem_del(tgm_mem **p)
 	*p = nullptr;
 }
 
-// Cacheable, as gpu.c's vm_map maps it with the L2 on (vol = !l2_on()).
+// Cacheable, as SwitchGpuVmMap.h's tgm_vm_map_raw maps it with the L2 on (vol = !l2_on()).
 extern "C" int tgm_vm_map_ordered(tgm_vm *, uint64_t va, uint64_t bytes, tgm_mem *mem,
 				  uint64_t offset, uint8_t, int readOnly, uint8_t *)
 {
@@ -160,7 +160,7 @@ extern "C" int tgm_vm_kmap(tgm_vm *, tgm_mem *, uint64_t, uint64_t *va)
 	return 0;
 }
 
-// Cacheable unless volatile, as gpu.c maps with the L2 on.
+// Cacheable unless volatile, as SwitchGpuVmMap.h maps with the L2 on.
 extern "C" int switch_gpu_vm_map_volatile(tgm_vm *, uint64_t va, uint64_t bytes, tgm_mem *mem,
 					  uint64_t offset, uint8_t, int readOnly, int vol,
 					  switch_gpu_mapping **out)

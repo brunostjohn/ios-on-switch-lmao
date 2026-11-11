@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
-// gpu.c's present, read-back and pool-scrub pushes (TegraGM20BCopyEmit.c, on kits/SwitchGM20BEmit) against the
-// hand-encoded words gpu.c wrote for the same inputs before it moved onto the kit.
+// gpu_present.c's and gpu_scrub.c's present, read-back and pool-scrub pushes (TegraGM20BCopyEmit.c, on kits/SwitchGM20BEmit) against the
+// hand-encoded words the kernel wrote for the same inputs before it moved onto the kit.
 #include <algorithm>
 #include <cstdint>
 #include <map>

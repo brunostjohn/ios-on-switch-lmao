@@ -118,7 +118,7 @@ TEST(PbdmaIntr, ChannelErrorsBesideItStillGoToNvkm)
 	EXPECT_EQ(tgm_pbdma_for_nvkm(0x00040000u), 0x00040000u);  // PBENTRY
 }
 
-// gpu.c's checks of a channel whose job's internal fences move its fence word with no interrupt: its progress time
+// gpu_hang.c's checks of a channel whose job's internal fences move its fence word with no interrupt: its progress time
 // moves when the interrupt pass or a check sees the word move (chan_progress_ns), and a check blames it as
 // tgm_ctxsw_decide and tgm_hang_recover do (stuck, confirmed by the next check).
 struct SilentJob {

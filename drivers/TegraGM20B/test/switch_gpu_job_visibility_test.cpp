@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 // SwitchGpuJobVisibility.h over gm20b_gpu_memory.h: a job's stores sit dirty in the L2, and its fence writes them to DRAM
-// only when the job ends External (gpu.c tgm_chan_fence_job: WFI, FB_FLUSH, L2_FLUSH_DIRTY). A job that writes an IOSurface
+// only when the job ends External (gpu_exec.c tgm_chan_fence_job: WFI, FB_FLUSH, L2_FLUSH_DIRTY). A job that writes an IOSurface
 // over its creator's memory ends External whatever the runtime asked, so the creator's lockless read after completion
 // sees the GPU's bytes; a job that writes only what a lock or a visibility wait guards stays Internal.
 #include <gtest/gtest.h>
@@ -14,7 +14,7 @@ namespace
 constexpr uint64_t kSurfaceVa = 1ull << 32, kDrawn = 4000, kDrawnBytes = 256;
 constexpr uint32_t kInternal = TegraGM20BSubmitVisibilityExplicit;
 
-// gpu.c chan_exec's reading of the flags: without explicit visibility every job is External.
+// gpu_exec.c chan_exec's reading of the flags: without explicit visibility every job is External.
 bool flushes(uint32_t visibility)
 {
 	return !(visibility & SWITCH_GPU_SUBMIT_VISIBILITY_EXPLICIT) ||

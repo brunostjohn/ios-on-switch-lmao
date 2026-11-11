@@ -9,7 +9,7 @@
 #                            block-linear surface (TegraGM20BViews.cpp): rows in a scratch at the task's own address
 #                            while the pages keep texels, shared readers, nested locks, writes put back, dead tasks
 #   gm20b_fences_test        TegraGM20BExecSurfaces.cpp and TegraGM20BFences.h with the registry's writer records over a
-#                            model of gpu.c's channels: which listed surfaces' writers an Exec waits for on the GPU (another
+#                            model of gpu_*.c's channels: which listed surfaces' writers an Exec waits for on the GPU (another
 #                            channel's, unfinished, not killed), which imports it counts as written, and no list or the
 #                            all-imports flag as before
 #   gm20b_relayout_test      TegraGM20BRelayout.h's copy-engine pushes over a model of MAXWELL_DMA_COPY_A: every move
@@ -37,16 +37,16 @@
 #                            context), which engines hold a channel at its unbind, and that a PBDMA ENG_RESET never
 #                            reaches nvkm as the channel's error
 #   gm20b_sleep_test         TegraGM20BSleepGate.h (system sleep's gate and plan): every transition, and on threads with
-#                            gpu.c's sleeping protocol around it, no caller inside between the drain and the wake, a
+#                            gpu_power.c's sleeping protocol around it, no caller inside between the drain and the wake, a
 #                            submission waiting at the gate goes on at the wake, a caller that never leaves fails the drain
-#   gm20b_source_test        how the user client and gpu.c use both, the pool's zeroing (nvkm shim, scrubber), the
+#   gm20b_source_test        how the user client and gpu_*.c use both, the pool's zeroing (nvkm shim, scrubber), the
 #                            fence-only present, and which paths go through the sleep gate in what order (none of which a
 #                            host model runs); NVK's stencil copy temp on the bind alignment
 #   gm20b_rail_test          TegraGM20BRail.h: the rail goes down with the display off and the GPU idle, once a demand's
 #                            hold has run out, up on its thread call only for the display, never while system sleep holds it;
-#                            gpu.c's lock protocol on threads; GPU time never backwards across rail cycles
+#                            gpu_bringup.c's lock protocol on threads; GPU time never backwards across rail cycles
 #   gm20b_clkgate_test       TegraGM20BClkgate.h against nvgpu's gm20b_gating_reglist.c (nvidia/, verbatim): the SLCG and
-#                            BLCG writes are nvgpu's prod lists in its load order; ELCG's gate control; where gpu.c
+#                            BLCG writes are nvgpu's prod lists in its load order; ELCG's gate control; where gpu_bringup.c
 #                            applies them; GR's reset in a recovery with gating off
 #   gm20b_regdump_test       TegraGM20BRegDump.h against regs_gm20b.txt, the L4T capture's register list: same offsets,
 #                            order and list id; the dump's lines are the capture's form, one value per register; the

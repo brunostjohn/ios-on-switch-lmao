@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 // What the nonstall pass (SwitchGpuChannelCompletion.h) inlines of the present, the scrubber, the idle clock and the
-// statistics on every fence: gpu.c had it all in one file.
+// statistics on every fence.
 #pragma once
 #include "gpu_inline.h"
 

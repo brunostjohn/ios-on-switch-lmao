@@ -264,14 +264,14 @@ static inline enum tgm_preempt_how tgm_preempt_how(int irqs_off, int pending)
 }
 
 /* nvkm's recovery uses the same enable bits as the hold (nvkm_chan_error blocks a channel for good, nvkm_runl_rc_cgrp
- * puts its group in recovery): a channel errored, being isolated (gpu.c's client fault isolation) or in a group under
+ * puts its group in recovery): a channel errored, being isolated (gpu_hang.c's client fault isolation) or in a group under
  * recovery is never held or released here. */
 static inline int tgm_may_release(int errored, int isolating, int rc)
 {
 	return (errored == 0 && isolating == 0 && rc == 0) ? 1 : 0;
 }
 
-/* An app channel the hold may take: below the compositor's level, registered by gpu.c, not waited for by the present in
+/* An app channel the hold may take: below the compositor's level, registered by gpu_chan.c, not waited for by the present in
  * flight, and not already blocked by nvkm (a teardown or a context bind holds it itself). */
 static inline int tgm_may_hold(unsigned level, int holdable, int needed, int errored, int isolating,
 			       int rc, int blocked)

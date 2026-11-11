@@ -5366,7 +5366,7 @@ extern "C" bool native_legacy_detach_ready(void)
     return ok;
 }
 
-// TegraGM20B gpu.c (idle clock): the last swap, in nanoseconds of uptime; 0 before the first. Any context.
+// TegraGM20B gpu_clock.c (idle clock): the last swap, in nanoseconds of uptime; 0 before the first. Any context.
 extern "C" uint64_t native_display_last_swap_ns(void)
 {
     uint64_t ns = 0;

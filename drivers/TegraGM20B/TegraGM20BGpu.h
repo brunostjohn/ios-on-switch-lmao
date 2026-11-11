@@ -1,7 +1,7 @@
 /* SPDX-License-Identifier: MIT */
 /*
  * C interface between the IOKit layer (TegraGM20B.cpp, TegraGM20BUserClient.cpp) and the nvkm/nvif layer
- * (gpu.c). Plain C types only; every object is opaque. All calls may block; call from thread context.
+ * (gpu_*.c). Plain C types only; every object is opaque. All calls may block; call from thread context.
  */
 #ifndef TEGRA_GM20B_GPU_H
 #define TEGRA_GM20B_GPU_H
@@ -31,14 +31,14 @@ struct tgm_info {
 /* Bring the GPU up to `stage` (1 = M1 power/ring/GPCPLL, 2 = + ACR/PMU/FECS/GPCCS, 3 = + channel/CE/fence
  * self-test). Writes one human-readable result line into `line`. Returns 0 or a negative errno. */
 int tgm_bringup(int stage, char *line, unsigned int len);
-/* System sleep (gpu.c "system sleep", TegraGM20BSleep.h): the GPU off and back, for whatever stage the finished bring-up
+/* System sleep (gpu_power.c "system sleep", TegraGM20BSleep.h): the GPU off and back, for whatever stage the finished bring-up
  * reached; each step is one tgm_journal() line, and a step that cannot be done panics with one line. */
 void tgm_sleep(void);
 void tgm_wake(void);
 /* Rail-gating (TegraGM20BRail.h), thread context. down: the GPU off with tgm_gpu.lock released, 0 or -EBUSY (no M3); up:
  * back if it is down (a tgm_gpu.lock or gate caller wakes it the same way, under the lock it owns); railed: whether it is
  * down. sc7_hold/release: system sleep with the GPU down holds tgm_gpu.lock across it on SwitchSuspend's thread (1), or
- * takes tgm_sleep's path (0). idle: gpu.c's idle clock reached (its work item); idle_now: at the idle clock, or none. */
+ * takes tgm_sleep's path (0). idle: gpu_clock.c's idle clock reached (its work item); idle_now: at the idle clock, or none. */
 int tgm_rail_down(void);
 void tgm_rail_up(void);
 int tgm_railed(void);
@@ -177,7 +177,7 @@ uint64_t tgm_pool_avail(void);
 /* Zero a pool BO's range (write-combined; off any client's thread) and give it back clean, so the next tgm_pool_alloc of
  * those pages does no memset. tgm_pool_free gives a range back as it is. */
 void tgm_pool_free_zeroed(void *va, uint64_t bytes, uint64_t pa);
-/* Give a freed pool range back zeroed by the GPU's copy engine (gpu.c "pool scrub"), without the CPU waiting: 0 if queued
+/* Give a freed pool range back zeroed by the GPU's copy engine (gpu_scrub.c "pool scrub"), without the CPU waiting: 0 if queued
  * (the range comes back clean once the copy engine's fence passes), else (no scrubber, its queue full, or not a pool
  * range) the caller zeroes it. */
 int tgm_pool_scrub(uint64_t pa, uint64_t bytes);
@@ -193,7 +193,7 @@ struct tgm_push {
 };
 /* Append the pushes, then the fence (WFI semaphore release of the next seqno), then kick. User mappings are
  * L2-cacheable: the L2's clean lines are invalidated on the GPU before the pushes are fetched and its dirty lines
- * written back before the seqno is released (gpu.c l2_on). The pushes run after what the acquires tgm_chan_order
+ * written back before the seqno is released (gpu_inline.h l2_on). The pushes run after what the acquires tgm_chan_order
  * queued for the channel wait for. -EBUSY when the GPFIFO stays full for 1 s (a panic from the self-test on), -EIO on a
  * dead channel. */
 struct tgm_prof;
@@ -228,7 +228,7 @@ void switch_gpu_chan_visibility(struct tgm_chan *chan, volatile uint32_t *visibl
 	uint64_t visible_gpu);
 void switch_gpu_fence_hold(const volatile uint32_t *fence);
 void switch_gpu_fence_put(const volatile uint32_t *fence);
-/* The stats' push profile (gpu.c "push profile"): `prof` (or NULL) names each push of a sampled submission by what it
+/* The stats' push profile (gpu_fenced.h "push profile"): `prof` (or NULL) names each push of a sampled submission by what it
  * asks of the GPU (TegraGM20BUserClient.cpp scanPushes); the submission then stamps the GPU's time after each push whose
  * class is not TGM_PC_SKIP, and each window's "gpuprof" line gives every process's GPU time by class. Draws and clears
  * are split by their pass's first color target: its size (full >= 600k pixels, mid >= 100k, small), pitch-linear or
@@ -315,7 +315,7 @@ int tgm_client_interlocks(const void *client, const uint64_t *va, const uint32_t
  * self-test on: a stuck channel is killed and waited for). Thread context. */
 int tegra_gm20b_sync_for_cpu(const void *va, uint64_t bytes, uint64_t timeout_ns);
 
-/* Fence pages: one per connection, from one pool range the GPU present maps whole (gpu.c). Zeroed; 0 or -ENOMEM. */
+/* Fence pages: one per connection, from one pool range the GPU present maps whole (gpu_chan.c). Zeroed; 0 or -ENOMEM. */
 int tgm_fence_page_get(volatile uint32_t **va, uint64_t *pa);
 void tgm_fence_page_put(const volatile uint32_t *va);
 
@@ -336,7 +336,7 @@ int tgm_fence_kernel(unsigned int which, volatile uint32_t **va, uint64_t *page_
 /* A channel's fence word is a TegraGM20BAbiFence: its kill record zeroed, for a channel about to be made on it. */
 void tgm_fence_kill_clear(volatile uint32_t *fence);
 
-/* GPU present (gpu.c "GPU present"): a kernel channel and address space, made at the first call (from the self-test on).
+/* GPU present (gpu_present.c "GPU present"): a kernel channel and address space, made at the first call (from the self-test on).
  * Mappings in it are volatile, at addresses the caller picks in [TGM_USER_VA_START, TGM_KERNEL_VA). tgm_present_copy
  * queues one copy engine copy, pitch source (stride; src_block: block-linear, width x 4 bytes across, blocks of
  * 2^TEGRA_SCANOUT_TILED_BLOCK_HEIGHT_LOG2 GOBs) to a block-linear destination (dst_pitch bytes across, blocks one
@@ -344,7 +344,7 @@ void tgm_fence_kill_clear(volatile uint32_t *fence);
  * spaces import the source or also_pa's surface (window B's; 0: none) (every user channel's when none does), and
  * returns at once: 0, or -EBUSY (one in flight), -EINVAL, -ENODEV. done(arg, status) runs exactly once for an accepted
  * copy, from the GPU interrupt pass, when its bytes are in DRAM: status 0, or TEGRA_SCANOUT_SOURCE_LOST when a writer it
- * waited for was killed before that work ended. One not done in 1 s is the present's deadline's (gpu.c present_deadline).
+ * waited for was killed before that work ended. One not done in 1 s is the present's deadline's (gpu_present.c present_deadline).
  * tgm_present_outstanding: whether the copy accepted with `arg` is not completed yet (its callback not returned). */
 int tgm_present_open(struct tgm_vm **pvm);
 int tgm_present_map(uint64_t va, struct tgm_mem *mem, uint64_t bytes, uint8_t kind);
@@ -415,7 +415,7 @@ int tegra_gm20b_iosurface_lock_will(uint32_t surface_id, uint32_t options);
 /* Before an IOSurface lock (index 2) or unlock (3) trap through IOSurfaceRootUserClient `client`: a block-linear surface's
  * CPU view (TegraGM20BViews.cpp); nonzero refuses the lock (kIOReturnCannotLock). */
 int tegra_gm20b_iosurface_view(void *client, uint32_t index, uint32_t surface_id, uint32_t options);
-/* A channel's submissions as the coherency registry names them (gpu.c): uid, a 32-bit channel id never reused while the
+/* A channel's submissions as the coherency registry names them (gpu_sync.c): uid, a 32-bit channel id never reused while the
  * channel lives; done, whether submission seqno completed (a channel that is gone or was killed counts as done); wait,
  * until it is done, on the fence interrupt (a wait that runs long recovers what the GPU is stuck on, as
  * tegra_gm20b_sync_for_cpu's does); all, every live channel's submissions so far. */
@@ -621,7 +621,7 @@ void tgm_stats_submit(struct tgm_chan *chan, const uint64_t ns[TGM_SUBMIT_PHASES
 void tgm_stats_bo_free(uint64_t ns);
 void tgm_stats_prefault(uint64_t bytes);
 
-/* drivers/SwitchPower (gpu.c "idle clock"): switch_perf_hint's touch/missed-frame/launch hints (any context; back to
+/* drivers/SwitchPower (gpu_clock.c "idle clock"): switch_perf_hint's touch/missed-frame/launch hints (any context; back to
  * the run rate at once if idle), and the CPU governor's tick (scheduler context: loads, at most one work item). */
 void tegra_gm20b_perf_hint(unsigned int hint);
 /* A continuous-nanosecond service boundary, clamped to the next 20 ms. */

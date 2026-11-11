@@ -256,7 +256,7 @@ TEST(Deadline, ErroredIsolatedOrRecoveringChannelsAreNeverHeldOrReleased)
 	EXPECT_TRUE(tgm_may_hold(kFg, 1, 0, 0, 0, 0, 0));
 	EXPECT_TRUE(tgm_may_hold(kBg, 1, 0, 0, 0, 0, 0));
 	EXPECT_FALSE(tgm_may_hold(kHigh, 1, 0, 0, 0, 0, 0));
-	EXPECT_FALSE(tgm_may_hold(kFg, 0, 0, 0, 0, 0, 0));  // not an app channel gpu.c registered
+	EXPECT_FALSE(tgm_may_hold(kFg, 0, 0, 0, 0, 0, 0));  // not registered by gpu_chan.c
 	EXPECT_FALSE(tgm_may_hold(kFg, 1, 1, 0, 0, 0, 0));  // the present in flight waits for it
 	EXPECT_FALSE(tgm_may_hold(kFg, 1, 0, 1, 0, 0, 0));
 	EXPECT_FALSE(tgm_may_hold(kFg, 1, 0, 0, 1, 0, 0));

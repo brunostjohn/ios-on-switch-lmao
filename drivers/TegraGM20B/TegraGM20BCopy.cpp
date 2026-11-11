@@ -74,7 +74,7 @@ bool openSpace()
 	for (uint32_t i = 0; i < Jobs; ++i)
 		queue.pages[i] = queue.pushPa + i * Page;
 	// Volatile: the CPU rewrites a slot's push for every job, and a job whose surfaces nobody host-wrote is submitted
-	// with no L2 invalidate ahead of it (gpu.c chan_exec), so the host would fetch the slot's last push from L2 lines.
+	// with no L2 invalidate ahead of it (gpu_exec.c chan_exec), so the host would fetch the slot's last push from L2 lines.
 	if (tgm_mem_new(queue.vm, queue.pages, Jobs, &queue.push) ||
 	    switch_gpu_vm_map_volatile(queue.vm, PushVa, Page * Jobs, queue.push, 0, 0, 1, 1,
 				       &queue.pushMapping) ||

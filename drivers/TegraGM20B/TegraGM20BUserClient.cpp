@@ -3,14 +3,14 @@
 // records of TegraGM20BABI.h. Transport modelled on drivers/NativeAdreno/NativeAdrenoPublish.cpp: Apple user-client
 // class name (sandbox profiles admit it), one open type, struct-in/struct-out methods with exact sizes, the same
 // methods tunnelled through any admitted selector, and clientMemoryForType views cached per token so
-// IOConnectUnmapMemory64 finds the same descriptor. GPU work goes through gpu.c (TegraGM20BGpu.h). Fence waits sleep
+// IOConnectUnmapMemory64 finds the same descriptor. GPU work goes through gpu_*.c (TegraGM20BGpu.h). Fence waits sleep
 // until the GPU's nonstall interrupt wakes them; a fence found complete without that wake panics (no polled mode), and
 // so does one that never completes.
 #include "TegraGM20BUserClientInternal.h"
 
 namespace
 {
-// Connections system-wide: 16, or 64 with every process on the GPU (gpu.c TGM_FENCE_USER_PAGES: one fence page each).
+// Connections system-wide: 16, or 64 with every process on the GPU (gpu_internal.h TGM_FENCE_USER_PAGES: one fence page each).
 constexpr uint32_t kMaxConnections = 16, kMaxConnectionsAll = 64;
 volatile uint32_t gConnections;
 
@@ -52,7 +52,7 @@ OSDefineMetaClassAndStructors(AGXDeviceUserClient, IOUserClient)
 	    tgm_mem_new(vm_, &fence_pa_, 1, &fence_mem_) ||
 	    tgm_vm_kmap(vm_, fence_mem_, 4096, &fence_gpu_))
 		return false;
-	// the whole fence slot (gpu.c TGM_FENCE_SLOT): one VM page
+	// the whole fence slot (gpu_internal.h TGM_FENCE_SLOT): one VM page
 	IOAddressRange range = {fence_pa_, static_cast<IOByteCount>(PAGE_SIZE)};
 	fence_view_ = IOMemoryDescriptor::withAddressRanges(
 		&range, 1,

@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 // The kernel's copy-engine pushes, written by kits/SwitchGM20BEmit (TegraGM20BCopyEmit.c) into a caller's words. Only
-// plain C here: nouveau's units (gpu.c) include it, and Mesa's drf.h must stay out of them.
+// plain C here: nouveau's units (gpu_*.c) include it, and Mesa's drf.h must stay out of them.
 #pragma once
 #include <stdint.h>
 

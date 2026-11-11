@@ -1,4 +1,4 @@
-// TegraGM20BRail.h: when the GPU's rail goes down and comes back up around the display's power; and gpu.c's rail
+// TegraGM20BRail.h: when the GPU's rail goes down and comes back up around the display's power; and gpu_power.c's rail
 // protocol on threads (tgm_rail_down, tgm_gpu_lock, tgm_gate_enter's railed path) with a std::mutex and condition variables in
 // place of lck_mtx and thread_wakeup.
 #include "drivers/TegraGM20B/TegraGM20BRail.h"
@@ -59,7 +59,7 @@ TEST(Gm20bRail, TheHoldDoublesWithEachDemandUpToItsCap)
 	EXPECT_EQ(tgm_rail_hold_ns(UINT32_MAX), 64000000000ull);
 }
 
-// gpu.c's GPU time across rail cycles: PTIMER runs on the GPU's own clock (ahead of ktime here), restarts from ktime at
+// gpu_bringup.c's GPU time across rail cycles: PTIMER runs on the GPU's own clock (ahead of ktime here), restarts from ktime at
 // every wake (nvkm_timer_init, then stamp_reseed), and tgm_timestamp_ns answers ktime while the GPU is down.
 struct GpuTime {
 	uint64_t ktime = 1000000000, ptimer = 1000000000, last = 0;
@@ -129,7 +129,7 @@ TEST(Gm20bRail, PtimerFollowsKtimeOnceKtimeIsAhead)
 	EXPECT_EQ(tgm_stamp_monotonic(7, 7), 7u);
 }
 
-// gpu.c: tgm_gpu.lock (`gpuLock`, owned by whoever takes it, as lck_mtx is), tgm_gate_lock with the gate's two events, and
+// gpu_bringup.c: tgm_gpu.lock (`gpuLock`, owned by whoever takes it, as lck_mtx is), tgm_gate_lock with the gate's two events, and
 // tgm_gpu.railed. tgm_rail_up_locked runs in whichever caller finds the GPU down, under the tgm_gpu.lock it took itself.
 struct RailKernel {
 	tgm_gate gate = {};

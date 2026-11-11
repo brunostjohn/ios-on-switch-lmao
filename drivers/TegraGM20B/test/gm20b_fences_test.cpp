@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 // Implicit GPU order between processes over host imports (TegraGM20BABI.h method 17) on the host: TegraGM20BExecSurfaces.cpp
-// and the coherency registry's writer records (TegraGM20BCoherency.cpp) over a model of gpu.c's channels, whose acquire
+// and the coherency registry's writer records (TegraGM20BCoherency.cpp) over a model of gpu_*.c's channels, whose acquire
 // queue runs TegraGM20BFences.h's decision as tgm_chan_follow does under tgm_live_lock. Writers here are listed writes unless a
 // test says otherwise: an Exec without a list is a writer for the CPU lock's wait only.
 #include <cstdio>
@@ -34,7 +34,7 @@ extern "C" void tgm_cpu_clean_pages(const uint64_t *pas, uint32_t npages)
 	cleanCalls().emplace_back(pas, pas + npages);
 }
 
-// gpu.c's live channels by uid (one not listed is gone): completed and submitted seqnos, killed, and the first pages its
+// gpu_*.c's live channels by uid (one not listed is gone): completed and submitted seqnos, killed, and the first pages its
 // address space imports. queued is order_add's queue: one acquire per waiter and source, the later seqno, at most
 // TGM_ORDER_MAX sources per waiter.
 struct FakeChannel {
@@ -758,7 +758,7 @@ TEST(FenceDecisions, WaitOnlyForAnUnfinishedWriteOfALiveOtherChannel)
 	EXPECT_FALSE(tgm_fence_wanted(0, &running));
 }
 
-// A present's wait passed on a killed writer's release (gpu.c present_fenced): the frame is lost only when the submission it
+// A present's wait passed on a killed writer's release (gpu_fenced.h present_fenced): the frame is lost only when the submission it
 // waited for was among those the kill left unfinished, across the seqno wrap too.
 TEST(FenceDecisions, AWaitIsLostOnlyOnASubmissionTheKillLeftUnfinished)
 {

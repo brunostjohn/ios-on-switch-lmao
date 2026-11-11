@@ -163,7 +163,7 @@ STUTTER = [
         'max(max) <= 100000',
         process=KERNEL,
         regex=r'raise mean (?P<mean>\d+) ns max (?P<max>\d+) ns',
-        source='drivers/TegraGM20B/gpu.c',
+        source='drivers/TegraGM20B/gpu_inline.h idle_stats',
         note='76.8 -> 768 MHz before the kick that needs it, ns: a PL change and two 2 us delays',
     ),
     Check(

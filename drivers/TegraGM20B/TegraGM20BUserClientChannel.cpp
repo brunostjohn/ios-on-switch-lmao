@@ -212,8 +212,8 @@ IOReturn AGXDeviceUserClient::channelCreate(const TegraGM20BAbiChannelCreate *in
 	return kIOReturnSuccess;
 }
 
-// Method 14: GPU-side order between this channel and the task's other channels (gpu.c tgm_chan_order); the peers are found by
-// task in gpu.c, only the caller's own channel is named here.
+// Method 14: GPU-side order between this channel and the task's other channels (gpu_sync.c tgm_chan_order); the peers are found by
+// task in gpu_sync.c, only the caller's own channel is named here.
 IOReturn AGXDeviceUserClient::order(const TegraGM20BAbiOrder *in, TegraGM20BAbiOrderReply *out)
 {
 	static_assert(TegraGM20BOrderAfterTask == TGM_ORDER_AFTER &&
@@ -276,7 +276,7 @@ const uint32_t *AGXDeviceUserClient::pushView(uint64_t va, uint64_t bytes,
 		    : nullptr;
 }
 
-// A hang's line (gpu.c chan_hung_note): the hung submission's pushes read as the stats read them, for its interlocked
+// A hang's line (gpu_hang.c): the hung submission's pushes read as the stats read them, for its interlocked
 // states. From a GPU panic path on any thread: the binds are read under lock_, taken only if it is free (a thread that
 // holds it while a GPU wait hangs would never let it go), unless this thread is the one holding it (hangHolder_).
 int AGXDeviceUserClient::hungInterlocks(const uint64_t *va, const uint32_t *dwords, uint32_t n,
@@ -416,7 +416,7 @@ void AGXDeviceUserClient::scanPushes(const tgm_push *pushes, uint32_t count, tgm
 		char v[kFields][24];
 		for (size_t k = 0; k < kFields; k++)
 			snprintf(v[k], sizeof(v[k]), "%llu.%llu", per[k] / n, per[k] * 10 / n % 10);
-		// one string argument: os_log drops a message whose scalar arguments outgrow its buffer (gpu.c tgm_stats_tick)
+		// one string argument: os_log drops a message whose scalar arguments outgrow its buffer (gpu_stats_tick.c tgm_stats_tick)
 		snprintf(line, sizeof(line),
 			 "%s: %llu of %llu submits read, %s KiB each (%llu%% readable); per "
 			 "submit: %s passes "

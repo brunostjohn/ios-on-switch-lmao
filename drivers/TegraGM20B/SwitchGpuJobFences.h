@@ -14,7 +14,7 @@
 #define SWITCH_GPU_FENCE_POINT_DWORDS 32
 
 /* A channel's last jobs by the seqnos each released (`first` .. `last`), with what its kick found (high channels,
- * gpu.c high_fenced). The interrupt pass covers whole jobs and a fence waiter's seqno is announced by the end of its job,
+ * gpu_fenced.h high_fenced). The interrupt pass covers whole jobs and a fence waiter's seqno is announced by the end of its job,
  * so both find a seqno's job here. A record being refilled is empty (`first` past `last`) until `last` is published. */
 #define SWITCH_GPU_JOBS 8
 

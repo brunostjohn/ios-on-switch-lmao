@@ -31,8 +31,8 @@ mme_registers	8	max	hw: Fermi MME register file R0-R7	host	third_party/mesa/src/
 zbc_color_entries	15	max	hw: LTC dstg_zbc colour table, index 0 reserved	source	drivers/TegraGM20B/nouveau/nvkm/subdev/ltc/gm20b.c:117	gpu.clear.formats	-
 zbc_depth_entries	15	max	hw: LTC dstg_zbc depth table, index 0 reserved	source	drivers/TegraGM20B/nouveau/nvkm/subdev/ltc/gm20b.c:117	gpu.clear.formats	-
 compression_line_bytes	131072	min	hw: one comptag line per 128 KiB	chip	drivers/TegraGM20B/TegraGM20BComp.h:14	gpu.compression_churn	-
-big_page_bytes	131072	min	hw: GMMU big page (64 or 128 KiB per VM)	chip	drivers/TegraGM20B/gpu.c:936	gpu.compression_churn	-
-small_page_bytes	4096	min	hw: GMMU small page	chip	drivers/TegraGM20B/gpu.c:936	gpu.compression_churn	-
+big_page_bytes	131072	min	hw: GMMU big page (64 or 128 KiB per VM)	chip	drivers/TegraGM20B/gpu_mem.c:130	gpu.compression_churn	-
+small_page_bytes	4096	min	hw: GMMU small page	chip	drivers/TegraGM20B/gpu_mem.c:129	gpu.compression_churn	-
 host1x_syncpoints	256	max	tegra SWITCH_NVB06F_SYNCPOINTB	host	drivers/TegraGM20B/TegraGM20BSyncpt.h:44; ext:nvgpu hw_pbdma_gm20b.h pbdma_syncpointb	planned:gpu.x1.host1x_chain	-
 push_method_count	8191	max	906f DMA_METHOD_COUNT	source	third_party/mesa/src/nouveau/headers/nvidia/classes/cl906f.h:173; kits/SwitchGM20BEmit/mesa/nv_push.h:233	gpu.draw.instanced	-
 push_immediate_bits	13	max	906f DMA_IMMD_DATA	chip	third_party/mesa/src/nouveau/headers/nvidia/classes/cl906f.h:174	gpu.draw.instanced	-

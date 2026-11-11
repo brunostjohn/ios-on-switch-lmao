@@ -5,7 +5,7 @@
  * nvkm's own counted block (chan->blocked under chan->lock: gk104_chan_stop's ENABLE_CLR, gk104_chan_start's ENABLE_SET
  * once the count is back at zero), so it composes with nvkm's blocks for a teardown or a context bind; the runlist is
  * never rebuilt for it (nv50_runl_wait polls). The channel the GPU is on is preempted too, and leaves at its next
- * wait-for-idle: its preemption latency is learned from the compositor's start stamp after it (gpu.c), and brought down
+ * wait-for-idle: its preemption latency is learned from the compositor's start stamp after it (gpu_fenced.h), and brought down
  * when a check half that latency after a preempt finds it gone.
  */
 #include <core/device.h>
@@ -25,14 +25,14 @@
 
 static struct {
 	spinlock_t lock;
-	DECLARE_BITMAP(tracked, HOLD_CHIDS); /* gpu.c's app channels */
+	DECLARE_BITMAP(tracked, HOLD_CHIDS); /* gpu_chan.c's app channels */
 	DECLARE_BITMAP(needed, HOLD_CHIDS);  /* high work waits for them, since need_ns */
 	DECLARE_BITMAP(held, HOLD_CHIDS);
 	DECLARE_BITMAP(held_last, HOLD_CHIDS); /* held in the last window, not yet given its turn */
 	DECLARE_BITMAP(turned, HOLD_CHIDS);    /* given its turn this window */
 	DECLARE_BITMAP(hopeless,
 		       HOLD_CHIDS); /* stats: its hold put off to the next vblank this window */
-	DECLARE_BITMAP(isolating, HOLD_CHIDS); /* gpu.c is killing it (tgm_hold_drop) */
+	DECLARE_BITMAP(isolating, HOLD_CHIDS); /* gpu_hang.c is killing it (tgm_hold_drop) */
 	u32 latency[HOLD_CHIDS];               /* preemption latency, ns */
 	u64 asked_pt[HOLD_CHIDS],
 		asked_ns[HOLD_CHIDS]; /* our ask to leave the GPU not yet sampled: PTIMER, kernel clock */

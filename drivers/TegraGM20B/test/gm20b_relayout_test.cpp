@@ -148,7 +148,7 @@ TEST(Relayout, RoundTripIsIdentity)
 }
 
 // A tiling move follows the surface's running writers in its own push: a connection's channel and the copy engine's (whose
-// fence is in every space's fence view, gpu.c tgm_fence_kernel) are semaphore acquires ahead of its copies; its own
+// fence is in every space's fence view, gpu_chan.c tgm_fence_kernel) are semaphore acquires ahead of its copies; its own
 // channel's work needs none; a writer with no fence in the view, or past the push's acquires, is refused, never waited for.
 TEST(Relayout, TheMovesPushCarriesItsWritersAcquires)
 {

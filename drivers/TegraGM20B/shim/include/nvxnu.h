@@ -143,7 +143,7 @@ static inline volatile void *nvxnu_ioremap(nvxnu_u64 pa, nvxnu_u64 size, int wri
  * fallback, an IOBufferMemoryDescriptor. Page granular (4 KiB).
  */
 /* *zeroed: 1 if the pool's pages were zeroed here (the fallback); the reserved range is not, its pages start dirty and
- * the GPU's copy engine zeroes them once it runs (gpu.c "pool scrub") */
+ * the GPU's copy engine zeroes them once it runs (gpu_scrub.c "pool scrub") */
 int nvxnu_pool_init(int *zeroed);
 /* XNU's VM page: what a CPU mapping covers, 16 KiB over the A57's 4 KiB granule. Pool and GPU pages stay 4 KiB. */
 nvxnu_u32 nvxnu_vm_page_size(void);

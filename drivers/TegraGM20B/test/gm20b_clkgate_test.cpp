@@ -1,5 +1,5 @@
 // TegraGM20BClkgate.h against nvgpu's own gm20b_gating_reglist.c (kept verbatim in nvidia/): the registers and values
-// the driver writes are nvgpu's "prod" lists, in nvgpu's load order, and gpu.c applies them at bring-up and after SC7.
+// the driver writes are nvgpu's "prod" lists, in nvgpu's load order, and gpu_bringup.c and gpu_power.c apply them at bring-up and after SC7.
 // GR's reset in a recovery runs with gating off and gets the lists back after it, as nvgpu resets GR.
 #include "drivers/TegraGM20B/TegraGM20BClkgate.h"
 

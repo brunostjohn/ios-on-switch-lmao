@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-// Every GM20B engine class the channels bind (drivers/TegraGM20B gpu.c binds all five on every channel).
+// Every GM20B engine class the channels bind (drivers/TegraGM20B gpu_chan.c binds all five on every channel).
 #pragma once
 #include "SwitchGM20B2D.h"
 #include "SwitchGM20B3D.h"

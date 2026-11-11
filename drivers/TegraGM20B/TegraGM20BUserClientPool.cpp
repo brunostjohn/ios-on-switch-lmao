@@ -400,7 +400,7 @@ bool spareKeep(IOBufferMemoryDescriptor *bmd, uint64_t *pas, uint64_t bytes,
 	return true;
 }
 
-// A freed pool BO's range (no task maps it) to be zeroed and given back clean: by the GPU's copy engine (gpu.c "pool
+// A freed pool BO's range (no task maps it) to be zeroed and given back clean: by the GPU's copy engine (gpu_scrub.c "pool
 // scrub", no CPU time), else by the thread call: true if taken.
 bool poolZeroLater(void *va, uint64_t pa, uint64_t bytes)
 {

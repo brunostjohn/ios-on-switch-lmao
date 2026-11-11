@@ -222,7 +222,7 @@ uint32_t ExecSurfaces::listedAccess(uint64_t handle) const
 }
 
 // The writers of other channels, merged per channel into at most TGM_ORDER_MAX at a time (as many acquires as a submission
-// can queue), then handed to gpu.c under one hold of its lock.
+// can queue), then handed to gpu_sync.c under one hold of its lock.
 int ExecSurfaces::follow(tgm_chan *chan, const List &list)
 {
 	const uint32_t self = tgm_chan_uid(chan);

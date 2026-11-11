@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-// The small helpers of gpu_internal.h that the gpu_*.c units inline, as gpu.c did when they were its statics.
+// The small helpers the gpu_*.c units inline: each has its own copy, so the submit and interrupt paths call none.
 #pragma once
 #include "gpu_internal.h"
 
@@ -66,7 +66,7 @@ static inline int vm_imports(struct tgm_vm *vm, u64 pa) /* tgm_live_lock held */
 }
 
 /* gpu_sync.c defines these for the rest of the driver; the units inline these copies of them (gnu_inline: a copy is
- * never emitted), as gpu.c inlined its own. Keep the two the same. */
+ * never emitted). Keep the two the same. */
 extern inline __attribute__((gnu_inline)) uint32_t tgm_chan_completed(struct tgm_chan *chan)
 {
 	return READ_ONCE(*chan->fence_cpu);

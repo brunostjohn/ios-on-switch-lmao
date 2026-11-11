@@ -2,7 +2,7 @@
 // A raw command buffer's GPU time, Metal's GPUStartTime and GPUEndTime: two 16-byte host semaphore releases in its own push
 // (NV906F SEMAPHORED, RELEASE_WFI EN, as the kernel's stats stamps), the first ahead of its prologue and the last after its final
 // work, each writing the payload and PTIMER. The last one's wait for idle is the one the kernel's fence release makes right after
-// it (drivers/TegraGM20B/gpu.c tgm_chan_exec: WFI, the L2 flush, then the fence with RELEASE_WFI), so it holds the GPU no longer.
+// it (drivers/TegraGM20B/gpu_exec.c tgm_chan_exec: WFI, the L2 flush, then the fence with RELEASE_WFI), so it holds the GPU no longer.
 //
 // PTIMER does not count nanoseconds here: its source is the 19.2 MHz oscillator and each tick adds 32, a step that assumes
 // 31.25 MHz, so one unit is 31.25 / 19.2 = 625/384 ns. GK20A-family PTIMERs have no rate registers to set it right (nouveau's

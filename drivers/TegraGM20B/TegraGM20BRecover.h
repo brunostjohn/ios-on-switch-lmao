@@ -1,5 +1,5 @@
 /* SPDX-License-Identifier: MIT */
-/* What the GPU is stuck on (recover.c), for gpu.c's client fault isolation. */
+/* What the GPU is stuck on (recover.c), for gpu_hang.c's client fault isolation. */
 #pragma once
 #include <stdint.h>
 #include "TegraGM20BHost.h"
@@ -26,7 +26,7 @@ enum tgm_ctxsw {
 	TGM_CTXSW_FATAL, /* a kernel channel is stuck */
 };
 
-/* known: one of gpu.c's channels; dead: killed already; stuck: tgm_stuck. */
+/* known: one of gpu_chan.c's channels; dead: killed already; stuck: tgm_stuck. */
 static inline enum tgm_ctxsw tgm_ctxsw_verdict(int known, int dead, int kernel, int stuck)
 {
 	if (!known || dead)
@@ -36,7 +36,7 @@ static inline enum tgm_ctxsw tgm_ctxsw_verdict(int known, int dead, int kernel, 
 	return kernel ? TGM_CTXSW_FATAL : TGM_CTXSW_KILL;
 }
 
-/* gpu.c, from recover.c's work (thread context): tgm_ctxsw_verdict for hardware channel chid. A stuck client channel is
+/* gpu_hang.c, from recover.c's work (thread context): tgm_ctxsw_verdict for hardware channel chid. A stuck client channel is
  * being killed on return; a stuck kernel channel panics. */
 enum tgm_ctxsw tgm_ctxsw_decide(int chid);
 
@@ -168,7 +168,7 @@ static inline int tgm_progress_seen(uint32_t completed, uint32_t irq_done, uint3
 	return 1;
 }
 
-/* What a wait that ran out with no GPU error reported found (gpu.c tgm_hang_recover). */
+/* What a wait that ran out with no GPU error reported found (gpu_hang.c tgm_hang_recover). */
 enum tgm_hang {
 	TGM_HANG_STUCK, /* nothing to recover: the GPU is stuck on a kernel channel, or nothing progresses: panic */
 	TGM_HANG_RECOVERING, /* a client's channel the GPU is stuck on is being killed (or the late one died already) */
@@ -177,7 +177,7 @@ enum tgm_hang {
 
 struct tgm_hang_candidate {
 	uint8_t live; /* a channel of the kernel's list */
-	uint8_t stuck; /* work pending and nothing completed for the stuck time (gpu.c TGM_STUCK_NS) */
+	uint8_t stuck; /* work pending and nothing completed for the stuck time (TGM_STUCK_NS, gpu_hang.c) */
 	uint8_t kernel; /* the present's or the scrubber's */
 	uint8_t resident; /* an engine or PBDMA is on it (tgm_recover_suspects) */
 	uint8_t moving; /* its fence, or its GPFIFO and pushbuffer GET, moved within the stuck time */

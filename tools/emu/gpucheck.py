@@ -14,14 +14,14 @@ from pathlib import Path
 from tools.emu import gpulog
 
 REACHED = re.compile(r'tegra-gm20b: pool scrub: \d+ MiB queued')
-# The queued line comes only from a claim that finds the pool clean (gpu.c scrub_work). When the boot scrub's last
+# The queued line comes only from a claim that finds the pool clean (gpu_scrub.c scrub_work). When the boot scrub's last
 # range fills SCRUB_INFLIGHT, the claim loop ends on that bound instead, and once nothing is left dirty no completion
 # schedules another claim, so the line never comes although every range was queued. The scrub queues the pool within a
 # tenth of a second of M3 and panics on a range not back after SCRUB_NS (1 s), so a kernel line this long after M3,
 # with no panic, also reaches the milestone.
 SCRUB_SETTLED_S = 2.0
 STAMP = re.compile(r'^\[\s*(\d+\.\d+)\]')
-# The scrubber's fill (gpu.c scrub_submit): copy-engine lines of SCRUB_LINE bytes, 32768 four-byte elements.
+# The scrubber's fill (gpu_scrub.c scrub_submit): copy-engine lines of SCRUB_LINE bytes, 32768 four-byte elements.
 SCRUB_FILL = ('b0b5', '0418', '00008000')
 REQUIRED = (re.compile(r'tegra-gm20b: M3 ok'), re.compile(r'tegra-gm20b: M4 ok'))
 FAILURES = re.compile(

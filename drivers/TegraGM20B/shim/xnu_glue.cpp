@@ -166,7 +166,7 @@ extern "C" void nvxnu_error(const char *dev, const char *fmt, ...)
 }
 
 // From the end of the GPU self-test (M3) on, any such report panics (bring-up keeps its own FAIL lines before that),
-// unless `contained` (gpu.c client fault isolation) takes it as one client's.
+// unless `contained` (gpu_hang.c client fault isolation) takes it as one client's.
 extern "C" void nvxnu_errors_fatal(int (*contained)(const char *errors))
 {
 	gErrorsContained = contained;
@@ -544,7 +544,7 @@ extern "C" int nvxnu_pool_init(int *zeroed)
 		pool.size = end - start;
 		// No CPU clear (0.3 s of boot for 256 MiB through the write-combined aperture): every page starts
 		// dirty, an allocation before the GPU runs zeroes the pages it takes, and the copy engine zeroes the rest
-		// once the GPU is up (gpu.c "pool scrub").
+		// once the GPU is up (gpu_scrub.c "pool scrub").
 		return 0;
 	}
 	IOBufferMemoryDescriptor *md = IOBufferMemoryDescriptor::inTaskWithPhysicalMask(

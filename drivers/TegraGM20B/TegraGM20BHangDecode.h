@@ -1,5 +1,5 @@
 /* SPDX-License-Identifier: MIT */
-/* What a GPU hang's line (gpu.c tgm_chan_describe) says beyond the registers: where GR's context switch is, and whether the
+/* What a GPU hang's line (gpu_hang.c tgm_chan_describe) says beyond the registers: where GR's context switch is, and whether the
  * hung submission turned on the pixel interlock, whose ticket wait is a loop in the shader itself. */
 #ifndef TEGRA_GM20B_HANG_DECODE_H
 #define TEGRA_GM20B_HANG_DECODE_H

@@ -14,11 +14,11 @@
 
 /* PFIFO_ENG_TIMEOUT (nvgpu hw_fifo_gm20b.h fifo_eng_timeout_r): nouveau leaves it as reset, and with it off a context
  * switch that never completes stalls every channel with no interrupt at all. Its period counts PTIMER microseconds, and
- * PTIMER runs at 19.2/31.25 of real time on this Tegra (gpu.c "stats"; nvgpu scales it the same way, scale_ptimer). The
+ * PTIMER runs at 19.2/31.25 of real time on this Tegra (gpu_stats.c "stats"; nvgpu scales it the same way, scale_ptimer). The
  * period is a detection tick, not a limit: a graphics context saves only at a wait-for-idle, so a switch waits for the
  * work in flight, and the hardware raises SCHED_ERROR CTXSW_TIMEOUT again each period the switch stays pending (nvgpu
  * gk20a_fifo_check_ch_ctxsw_timeout adds up these ticks). A tick recovers the context only once its channel is stuck by
- * gpu.c's rule (tgm_ctxsw_decide: nothing completed for TGM_STUCK_NS), so a long but finite drain, as backboardd's m2v
+ * gpu_hang.c's rule (tgm_ctxsw_decide: nothing completed for TGM_STUCK_NS), so a long but finite drain, as backboardd's m2v
  * passes of 144 ms, two a frame, is waited out. */
 #define ENG_TIMEOUT 0x002a0c
 #define ENG_TIMEOUT_DETECTION 0x80000000
@@ -58,7 +58,7 @@ struct nvkm_fifo_func *tgm_fifo_func(struct nvkm_fifo *fifo)
 	return &ctxsw.func;
 }
 
-/* From nvkm's interrupt pass, which holds its interrupt spinlock: gpu.c's rule needs its channel list's mutex, so the
+/* From nvkm's interrupt pass, which holds its interrupt spinlock: gpu_hang.c's rule needs its channel list's mutex, so the
  * decision runs in ctxsw_work. */
 static void ctxsw_tick(struct nvkm_fifo *fifo, u32 engm)
 {
@@ -88,7 +88,7 @@ static u32 engines_switching(struct nvkm_fifo *fifo)
 
 /* Every SCHED_ERROR code is handled as nvgpu's gk20a_fifo_handle_sched_error handles it: the engines busy mid-switch
  * get a context-switch timeout's decision, and with none there is nothing to recover. nvkm's own handler names only
- * CTXSW_TIMEOUT and does nothing for the rest, and a report naming no channel would be fatal to gpu.c. */
+ * CTXSW_TIMEOUT and does nothing for the rest, and a report naming no channel would be fatal to gpu_hang.c. */
 static void sched_error(struct nvkm_device *device)
 {
 	u32 code = nvkm_rd32(device, PFIFO_INTR_SCHED_ERROR) & 0xff;

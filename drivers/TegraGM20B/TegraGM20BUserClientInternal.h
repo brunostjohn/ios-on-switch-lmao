@@ -171,7 +171,7 @@ Spare *spareTake(uint64_t bytes);
 bool spareKeep(IOBufferMemoryDescriptor *bmd, uint64_t *pas, uint64_t bytes,
 	       switch_gpu_cached_mapping *mapping = nullptr);
 
-// With the stats (also gpu.c's stats lines): the method stream of every kScanEvery-th submission of each
+// With the stats (also gpu_stats_tick.c's stats lines): the method stream of every kScanEvery-th submission of each
 // connection is read back and what it asks of the GPU is counted, one line per process every 5 s ("tegra-gm20b: push
 // <process>", the window's first kPushOwners - 1 processes by name, the rest as "(others)"), per submission: render passes
 // (and of those, the ones with a depth target and the multisampled ones), bound color targets (RTs) and the pitch-linear
@@ -181,7 +181,7 @@ bool spareKeep(IOBufferMemoryDescriptor *bmd, uint64_t *pas, uint64_t bytes,
 // host WFI; copy-engine copies with their bytes and the zero-length LAUNCH_DMAs NVK uses as a copy-engine WFI, 2D blits,
 // compute dispatches and semaphore acquires; "bad" counts streams with an opcode NVK does not emit. Pushes in host
 // imports (no kernel mapping) are not read; the line says what share of the push bytes was. The reader:
-// TegraGM20BPushScan.h. Every kProfileEvery-th submission read is also profiled (gpu.c "push profile").
+// TegraGM20BPushScan.h. Every kProfileEvery-th submission read is also profiled (gpu_fenced.h "push profile").
 constexpr uint32_t kScanEvery = 4, kPushOwners = 4,
 		   kProfileEvery = 16;  // 1 submission in 64 profiled (its pushes WFI-stamped)
 
@@ -269,7 +269,7 @@ class AGXDeviceUserClient : public IOUserClient
 		bool compositorPool;  // a pool BO counted as the compositor's (critical_ when it was made)
 		tgm_mem *mem;
 		bool backingMemory;
-		tgm_coh *coh;  // imports: the surface's coherency registry entry (gpu.c), held
+		tgm_coh *coh;  // imports: the surface's coherency entry, held (TegraGM20BCoherency)
 		switch_gpu_backing *backing;
         switch_gpu_native_surface_view *nativeView;
 		SharedWiring *
@@ -416,7 +416,7 @@ class AGXDeviceUserClient : public IOUserClient
     char owner_[17] = {};       // the opening process
     uint32_t pushSubmits_ = 0;  // the stats: its submissions, every kScanEvery-th read (scanPushes)
     uint32_t pushScans_ =
-	    0;  // the ones read, every kProfileEvery-th also profiled (gpu.c "push profile")
+	    0;  // the ones read, every kProfileEvery-th also profiled (gpu_fenced.h "push profile")
     // the compositor's: its queues asked for the top GPU priority (method 18); its channels are high, it has no pool quota
     bool critical_ = false;
     // what the connection's queues asked for (method 18), whether runningboardd denies it the GPU (then the background
