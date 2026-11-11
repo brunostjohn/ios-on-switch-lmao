@@ -3201,6 +3201,7 @@ CommandBuffer *Device::begin()
     cb.externalWrites_ = false;
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
     cb.forceWholePrograms_ = cb.inlineStates_ = false;
+    cb.foldCounts();
 #endif
     cb.draws = cb.passes = cb.blits = 0;
     cb.refusal = {};
@@ -3288,7 +3289,9 @@ RenderEncoder *CommandBuffer::render(const PassDesc &pass)
     bodies.clear();
     rects.clear();
     splitPlan.clear();
-    e = RenderEncoder();
+    // made again where it is, not built aside and moved in: the encoder is 16 KB, most of it the written region
+    e.~RenderEncoder();
+    new (&e) RenderEncoder();
     e.bodies_ = std::move(bodies);
     e.rects_ = std::move(rects);
     e.splitPlan_ = std::move(splitPlan);
@@ -3613,6 +3616,22 @@ std::shared_ptr<ResourceReadyCompletion> CommandBuffer::resourceReadiness(std::f
     return events ? events->resources(surfaces_.uses(), std::move(ready), result) : nullptr;
 }
 
+#if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
+void CommandBuffer::foldCounts()
+{
+    Device::Stats &stats = dev_->stats;
+    stats.uploadBytes += counts_.uploadBytes;
+    stats.segmentBinds += counts_.segmentBinds;
+    stats.segmentWords += counts_.segmentWords;
+    stats.segmentSkips += counts_.segmentSkips;
+    stats.blendKillBinds += counts_.blendKillBinds;
+    stats.interlockDraws += counts_.interlockDraws;
+    stats.fetch.interlocked += counts_.interlocked;
+    stats.fetch.interlockedBlends += counts_.interlockedBlends;
+    counts_ = {};
+}
+#endif
+
 bool CommandBuffer::commit(uint32_t &seqno)
 {
     RAW_ENCODE_SPAN(Commit);
@@ -3628,6 +3647,7 @@ bool CommandBuffer::commit(uint32_t &seqno)
     } releaseReads{*this};
 
     Device &d = *dev_;
+    RAW_DIAGNOSTIC(foldCounts());
     // a commit that fails after some of its jobs ran leaves the channel holding a segment the device cannot name
     d.heldSegment_.lose();
     launchPrologues();
@@ -3910,7 +3930,7 @@ void RenderEncoder::setBytes(int stage, uint32_t slot, const void *bytes, uint32
                           m};  // m2v binds the Metal length (its upload chunks are 256-byte aligned)
     bufs_[stage][slot].resourceVa = dev_->upload_.bo.va;
     invalidateDescriptors();
-    RAW_DIAGNOSTIC(dev_->stats.uploadBytes += chunk);
+    RAW_DIAGNOSTIC(cb_->counts_.uploadBytes += chunk);
 }
 
 void RenderEncoder::setBytesAt(int stage, uint32_t slot, uint64_t va, uint32_t length, const uint8_t *cpu,
@@ -4263,7 +4283,7 @@ bool RenderEncoder::drawIndexed(uint32_t primitive, uint32_t count, uint32_t ind
         padded.cpu = m;
         padded.length = bytes;
         padded.wc = true;
-        RAW_DIAGNOSTIC(dev_->stats.uploadBytes += bytes);
+        RAW_DIAGNOSTIC(cb_->counts_.uploadBytes += bytes);
         ib = &padded;
         drawIndexCpuSafe_ = true;  // immutable upload bytes owned by this command buffer
         drawIndexBuffer_ = nullptr;
@@ -4701,7 +4721,7 @@ bool RenderEncoder::prepare(Pipeline *pl, uint32_t primitive, int32_t first, uin
         else if (bindDepthStencil(p, bodies_, bodyStart_, dsState_->regs(depth, stencil, stencilRef_[0], stencilRef_[1]),
                                   cb_->ds_, bindsBySegment() ? dsState_->segment(depth, stencil) : StateSegment())) {
             cb_->segmentBinds_++;
-            RAW_DIAGNOSTIC(d.stats.segmentBinds++);
+            RAW_DIAGNOSTIC(cb_->counts_.segmentBinds++);
         }
         dsDirty_ = false;
     }
@@ -4855,7 +4875,7 @@ bool RenderEncoder::prepare(Pipeline *pl, uint32_t primitive, int32_t first, uin
             uint8_t *upload = d.alloc(d.upload_, sizeof(words), 256, address);
             memcpy(upload, words.data(), sizeof(words));
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
-            RAW_DIAGNOSTIC(d.stats.uploadBytes += sizeof(words));
+            RAW_DIAGNOSTIC(cb_->counts_.uploadBytes += sizeof(words));
 #endif
             return address;
         });
@@ -4879,7 +4899,7 @@ bool RenderEncoder::prepare(Pipeline *pl, uint32_t primitive, int32_t first, uin
                 cb_->heldSegment_.lose();
             }
             bindState(p, *pl);
-            RAW_DIAGNOSTIC(d.stats.blendKillBinds += pl->blendKill);
+            RAW_DIAGNOSTIC(cb_->counts_.blendKillBinds += pl->blendKill);
             if (!pl->restore.empty())
                 cb_->extrasLive_ = pl;
         }
@@ -5060,15 +5080,15 @@ bool RenderEncoder::prepare(Pipeline *pl, uint32_t primitive, int32_t first, uin
     if (pipeline_ && pipeline_->caName)
         probeDraw(*pipeline_, *pl, primitive, first, count, indexed, {x[0], y[0], x[1], y[1]});
 #endif
-    RAW_DIAGNOSTIC(dev_->stats.interlockDraws += pl->storageBits != 0);
+    RAW_DIAGNOSTIC(cb_->counts_.interlockDraws += pl->storageBits != 0);
 #if SWITCH_RAW_DIAGNOSTICS
     if (pl->rec && pl->storageBits)
         dev_->stats.fetch.interlockKeys.note(pl->rec->keyHash);
     if (pl->rec && pl->genericState)
         dev_->stats.fetch.genericKeys.note(pl->rec->keyHash);
 #endif
-    RAW_DIAGNOSTIC(dev_->stats.fetch.interlocked += (pl->fetchBits & pl->storageBits) != 0);
-    RAW_DIAGNOSTIC(dev_->stats.fetch.interlockedBlends += pl->storageBlendBits != 0);
+    RAW_DIAGNOSTIC(cb_->counts_.interlocked += (pl->fetchBits & pl->storageBits) != 0);
+    RAW_DIAGNOSTIC(cb_->counts_.interlockedBlends += pl->storageBlendBits != 0);
     attachmentWrites_.rop |= pl->writeBits;
     attachmentWrites_.storage |= pl->storageWriteBits;
     if (pl->writeBits)

@@ -24,7 +24,7 @@ void RenderEncoder::bindState(Push &p, const Pipeline &pl)
 {
     HeldSegment &held = cb_->heldSegment_;
     if (held.holds(pl.segment) && !measuringInline()) {
-        RAW_DIAGNOSTIC(dev_->stats.segmentSkips++);
+        RAW_DIAGNOSTIC(cb_->counts_.segmentSkips++);
         return;
     }
     if (!pl.segment || !bindsBySegment()) {
@@ -38,8 +38,8 @@ void RenderEncoder::bindState(Push &p, const Pipeline &pl)
     bindSegment(bodies_, bodyStart_, p.at, pl.segment);
     held.bound(pl.segment);
     cb_->segmentBinds_++;
-    RAW_DIAGNOSTIC(dev_->stats.segmentBinds++);
-    RAW_DIAGNOSTIC(dev_->stats.segmentWords += pl.segment.words);
+    RAW_DIAGNOSTIC(cb_->counts_.segmentBinds++);
+    RAW_DIAGNOSTIC(cb_->counts_.segmentWords += pl.segment.words);
 }
 
 void RenderEncoder::writeRaster(Push &p, const Raster &want)

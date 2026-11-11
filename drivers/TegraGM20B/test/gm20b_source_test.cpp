@@ -372,6 +372,20 @@ TEST(GM20BPushScanSource, KernelUsesTheHeader)
 		    HasSubstr("prof_collect(chan, first, fs->start.ns, st->end.ns)"));
 }
 
+// SubmitJob's jobs are scanned and profiled as SubmitAddress's submissions were: the raw runtime submits nothing else,
+// so without this its jobs are missing from the push and gpuprof lines. The profile is the channel scratch's, under
+// its submit lock, and a Core Animation job of segment binds (about 90 pushes) fits it.
+TEST(GM20BPushScanSource, SubmitJobScansAndProfilesItsPushes)
+{
+	const std::string run = Between(client(), "IOReturn AGXDeviceUserClient::runJobUses(", "\n}\n");
+	EXPECT_THAT(run, HasSubstr("scanPushes(pushes, count, profiled ? job.profile : nullptr);"));
+	EXPECT_THAT(run, HasSubstr("&seqno, prof, jobVisibility);"));
+	EXPECT_THAT(run, HasSubstr("dependencies + siblingCount, prof);"));
+	EXPECT_THAT(Between(gpu(), "int switch_gpu_chan_exec_job(", "\n}\n"),
+		    HasSubstr("chan_exec_body(chan, pushes, count, seqno, prof,"));
+	EXPECT_THAT(SourceText("../TegraGM20BGpu.h"), HasSubstr("#define TGM_PROF_MAX 256"));
+}
+
 // Direct scanout's fence-only present (NativeMobileDisplay, TEGRA_SCANOUT_COPY_FENCE_ONLY) launches no copy.
 TEST(GM20BPresentSource, FenceOnlyPresentHasNoCopy)
 {

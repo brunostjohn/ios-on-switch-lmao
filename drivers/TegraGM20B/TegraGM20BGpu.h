@@ -235,7 +235,7 @@ struct switch_gpu_sibling_wait {
 int switch_gpu_chan_exec_job(struct tgm_chan *chan, const struct tgm_push *push, uint32_t count,
 	const struct switch_gpu_backing_token *dependencies, uint32_t dependency_count,
 	const struct switch_gpu_sibling_wait *siblings, uint32_t sibling_count, uint32_t *seqno,
-	uint32_t visibility);
+	const struct tgm_prof *prof, uint32_t visibility);
 struct TegraGM20BAbiFenceSemantic;
 void switch_gpu_chan_semantic_visibility(struct tgm_chan *, volatile struct TegraGM20BAbiFenceSemantic *);
 void switch_gpu_chan_visibility(struct tgm_chan *chan, volatile uint32_t *visible_cpu,
@@ -247,7 +247,7 @@ void switch_gpu_fence_put(const volatile uint32_t *fence);
  * class is not TGM_PC_SKIP, and each window's "gpuprof" line gives every process's GPU time by class. Draws and clears
  * are split by their pass's first color target: its size (full >= 600k pixels, mid >= 100k, small), pitch-linear or
  * block-linear, multisampled or not. */
-#define TGM_PROF_MAX 128
+#define TGM_PROF_MAX 256
 
 enum {
 	TGM_PC_DRAW = 0,   /* + size * 4 + pitch * 2 + msaa */

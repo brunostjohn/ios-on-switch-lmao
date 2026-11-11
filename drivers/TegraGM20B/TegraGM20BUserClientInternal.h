@@ -363,6 +363,12 @@ class AGXDeviceUserClient : public IOUserClient
 		uint32_t capacity;
         SwitchGpuEventJob *events;
 		SubmitPhases phases;
+#if TGM_STATS
+		// the push scan and profile of the channel's jobs (SubmitJob), under its submit lock; the profile allocated
+		// with the scratch, not on the stack: TGM_PROF_MAX pushes take 2 KiB
+		uint32_t scanSubmits, scans;
+		tgm_prof *profile;
+#endif
 	};
     SwitchGpuEventClient events_;
     SwitchGpuResourceClient resources_;

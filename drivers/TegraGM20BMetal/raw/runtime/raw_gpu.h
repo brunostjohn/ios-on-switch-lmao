@@ -976,6 +976,13 @@ private:
     bool externalWrites_ = false;
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
     bool forceWholePrograms_ = false, inlineStates_ = false;
+    // the encode's per-draw and per-bind counts, kept plainly and added to the device's at the next begin(): an atomic
+    // add per draw for each was a measurable share of a debug build's draw
+    struct DrawCounts {
+        uint64_t uploadBytes = 0, segmentBinds = 0, segmentWords = 0, segmentSkips = 0, blendKillBinds = 0,
+                 interlockDraws = 0, interlocked = 0, interlockedBlends = 0;
+    } counts_;
+    void foldCounts();
     ProbeForms forms_;
     ProbeTaken taken_;
     ProbeEngine lastEngine_ = ProbeEngine::None;  // the engine of the work encoded last, for forms_
@@ -1633,12 +1640,31 @@ private:
         return submitInSet(k_, set_, view, true, made, seqno, result);
     }
 
-    // [va, va + bytes) is in a member, so no job names it: as the submitting thread sees the set
+    // [va, va + bytes) is in a member, so no job names it: as the submitting thread sees the set. A draw's resources
+    // mostly lie in the member the last one found (a ring, a bytes chunk), which answers without a search while the
+    // view's version is the one it was found in.
     bool member(uint64_t va, uint64_t bytes)
     {
         set_.view(setView_);
-        return setView_.holds(va, bytes);
+        if (lastMember_.version == setView_.version && va - lastMember_.va < lastMember_.bytes &&
+            bytes <= lastMember_.bytes - (va - lastMember_.va))
+            return true;
+        const auto after = std::upper_bound(setView_.members.begin(), setView_.members.end(), va,
+                                            [](uint64_t at, const SetMember &m) {
+                                                return at < m.va;
+                                            });
+        if (after == setView_.members.begin())
+            return false;
+        const SetMember &m = *std::prev(after);
+        if (va - m.va >= m.bytes || bytes > m.bytes - (va - m.va))
+            return false;
+        lastMember_ = {m.va, m.bytes, setView_.version};
+        return true;
     }
+    struct {
+        uint64_t va = 0, bytes = 0;
+        uint32_t version = 0;
+    } lastMember_;
 
     bool member(const Bo &bo)
     {

@@ -9,10 +9,11 @@ import Metal
 /// the opaque quad again, so every pass binds A, B, A and starts with the A the pass or frame before ended with.
 /// Additive blending of 8-bit values is exact, so every pixel is checked against its sum. Then the same command buffers
 /// of `switches` alternating binds, in batches bound inline (as before segments) and by segment in turn: the encode
-/// time the facade counted and the GPU time per command buffer of each, which decide whether a state as short as these
-/// is worth a segment (raw_state_segment.h kSegmentBindWords), and both arms' pixels, the same bytes. A state the
-/// runtime made with registers outside the pack's (extras) cannot keep its segment across a pass, which the facade
-/// counts apart. The counters are the facade's (debug builds); a release runtime has none and the test skips.
+/// time the facade counted, its pushes and kernel submit time per command buffer, and the GPU time per command buffer
+/// of each, which decide whether a state as short as these is worth a segment (raw_state_segment.h kSegmentBindWords),
+/// and both arms' pixels, the same bytes. A state the runtime made with registers outside the pack's (extras) cannot
+/// keep its segment across a pass, which the facade counts apart. The counters are the facade's (debug builds); a
+/// release runtime has none and the test skips.
 struct StateSegmentsPathTest: HWTest {
     let id = "gpu.path.state_segments"
     let name = "Pipeline binds run GPU-resident state segments, and a held one is not bound again"
@@ -98,7 +99,7 @@ struct StateSegmentsPathTest: HWTest {
     func compare(_ gpu: GPU, _ a: MTLRenderPipelineState, _ b: MTLRenderPipelineState, _ metrics: inout Metrics)
         async throws -> [String]
     {
-        var encodeUs = [0.0, 0.0], gpuUs = [0.0, 0.0], encodes = [0, 0]
+        var encodeUs = [0.0, 0.0], gpuUs = [0.0, 0.0], execUs = [0.0, 0.0], encodes = [0, 0], pushes = [0, 0]
         var images: [[UInt8]] = [[], []]
         for batch in 0..<Self.batches {
             let arm = batch % 2
@@ -125,6 +126,8 @@ struct StateSegmentsPathTest: HWTest {
             let after = RawFacade.counters(of: gpu.device)
             encodeUs[arm] += Double((after["encode_us"] ?? 0) - (before["encode_us"] ?? 0))
             encodes[arm] += (after["encodes"] ?? 0) - (before["encodes"] ?? 0)
+            execUs[arm] += Double((after["exec_us"] ?? 0) - (before["exec_us"] ?? 0))
+            pushes[arm] += (after["exec_pushes"] ?? 0) - (before["exec_pushes"] ?? 0)
             gpuUs[arm] += buffers.map { max(0, $0.gpuEndTime - $0.gpuStartTime) * 1e6 }.reduce(0, +)
             if images[arm].isEmpty, let target { images[arm] = try await gpu.read(target, bytesPerPixel: 4) }
         }
@@ -134,6 +137,16 @@ struct StateSegmentsPathTest: HWTest {
         metrics.set("segment_encode_us", String(format: "%.0f", perEncode[1]))
         let perBind = (perEncode[1] - perEncode[0]) * 1000 / Double(Self.switches)
         metrics.set("segment_cpu_ns_per_bind", String(format: "%.0f", perBind))
+        let perCb = { (values: [Double], arm: Int) in encodes[arm] > 0 ? values[arm] / Double(encodes[arm]) : 0 }
+        let pushesPerCb = (0..<2).map { perCb(pushes.map(Double.init), $0) }
+        metrics.set("inline_pushes_per_cb", String(format: "%.0f", pushesPerCb[0]))
+        metrics.set("segment_pushes_per_cb", String(format: "%.0f", pushesPerCb[1]))
+        metrics.set("inline_submit_us", String(format: "%.0f", perCb(execUs, 0)))
+        metrics.set("segment_submit_us", String(format: "%.0f", perCb(execUs, 1)))
+        let extraPushes = pushesPerCb[1] - pushesPerCb[0]
+        metrics.set(
+            "submit_ns_per_extra_push",
+            extraPushes > 0 ? String(format: "%.0f", (perCb(execUs, 1) - perCb(execUs, 0)) * 1000 / extraPushes) : "-")
         metrics.set("inline_gpu_us", String(format: "%.0f", gpuUs[0] / buffers))
         metrics.set("segment_gpu_us", String(format: "%.0f", gpuUs[1] / buffers))
         let differ = Self.wrong(images[1], images[0])

@@ -327,6 +327,26 @@ public:
             visit(use.first, use.second);
     }
 
+    // Each operation's uses in [from, to), an operation whose use span is the one before's skipped, with no merging: a
+    // resource may be visited more than once, each time with one operation's access. For visitors whose result is the
+    // same for a resource visited once with the union of its accesses and visited once per access set.
+    template <typename F> void forEachOperationUse(size_t from, size_t to, F visit) const
+    {
+        uint32_t last = ~0u;
+        for (size_t at = from; at < std::min(to, size()); ++at) {
+            const uint32_t index = operations_[at].uses;
+            if (index == last)
+                continue;
+            last = index;
+            const UseSpan span = useSpans_[index];
+            for (uint32_t i = 0; i < span.count; ++i) {
+                const auto &use = uses_[span.begin + i];
+                if (use.object)
+                    visit(use.object, use.access);
+            }
+        }
+    }
+
     template <typename F> void forEachWritten(size_t from, size_t to, F visit) const
     {
         forEachUse(from, to, [&](void *object, uint8_t access) {
