@@ -30,12 +30,33 @@ py_library(
     visibility = ["//tools:__subpackages__"],
 )
 
+py_library(
+    name = "cost",
+    srcs = ["cost.py"],
+    visibility = ["//tools:__subpackages__"],
+    deps = [":isa"],
+)
+
+py_test(
+    name = "cost_test",
+    size = "small",
+    srcs = ["cost_test.py"],
+    data = ["testdata/image_draw_fragment.hex"],
+    deps = [
+        ":cost",
+        ":isa",
+    ],
+)
+
 py_binary(
     name = "nakstat",
     srcs = ["nakstat.py"],
     data = ["scoreboard.log"],
     visibility = ["//visibility:public"],
-    deps = [":isa"],
+    deps = [
+        ":cost",
+        ":isa",
+    ],
 )
 
 py_test(
