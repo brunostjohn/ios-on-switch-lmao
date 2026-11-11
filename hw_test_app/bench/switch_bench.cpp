@@ -295,6 +295,16 @@ private:
     }
 };
 
+// A trap in a lone command buffer can land after its fence (the channel is killed while the wait already returned), so
+// one more empty pass on the channel: it never completes on a killed one
+void checkAlive(switch_bench &b, const switch_bench_experiment &x, Target &t, switch_bench_result &r)
+{
+    uint64_t gpu = 0, wall = 0;
+    if (Submission(b, x, r).render(t, nullptr, 0, gpu, wall) || r.status != SWITCH_BENCH_KILLED)
+        return;
+    snprintf(r.why, sizeof r.why, "the channel was dead after the experiment's last fence (a trap the fence missed)");
+}
+
 bool readsPositionW(const uint8_t *sph)
 {
     uint32_t word5;
@@ -384,23 +394,26 @@ void runRender(switch_bench &b, const switch_bench_experiment &x, switch_bench_r
 {
     raw::Device &d = *b.device;
     raw::Pipeline *pipeline = nullptr;
+    const raw::PackPipeline *tpl = x.template_key ? bench::fragmentTemplate(d.pack(), x.template_key) : b.fragment;
     if (x.kind != SWITCH_BENCH_NOOP) {
-        if (!b.fragment)
+        if (!tpl && x.template_key)
+            return fail(r, SWITCH_BENCH_INVALID, "no plain pack state has the template key");
+        if (!tpl)
             return fail(r, SWITCH_BENCH_ERROR, "the pack has no state the bench can take as a template");
         raw::RuntimeRecord record;
         std::string why;
         const uint64_t key = kKeyBase | ++b.records;
-        if (!bench::fragmentRecord(d.pack(), *b.fragment, program(x), x.format, key, pairs(x.methods, x.method_pairs),
-                                   pairs(x.restore, x.restore_pairs), record, why))
+        if (!bench::fragmentRecord(d.pack(), *tpl, program(x), x.format, key, pairs(x.methods, x.method_pairs),
+                                   pairs(x.restore, x.restore_pairs), record, why, x.single_target != 0))
             return fail(r, SWITCH_BENCH_INVALID, why);
         if (!(pipeline = d.addRecord(record, false, why)))
             return fail(r, SWITCH_BENCH_REFUSED, why);
-        r.template_key = b.fragment->keyHash;
+        r.template_key = tpl->keyHash;
     }
     const uint32_t bpp = raw::formatInfo(x.format)->bpp;
     Target t;
     std::vector<uint32_t> others =
-        b.fragment ? otherFormats(d.pack().string(b.fragment->keyString)) : std::vector<uint32_t>();
+        tpl && !x.single_target ? otherFormats(d.pack().string(tpl->keyString)) : std::vector<uint32_t>();
     t.others.resize(x.kind == SWITCH_BENCH_NOOP ? 0 : others.size());
     const bool colorMade = d.createTexture(x.width, x.height, x.format, t.color, true);
     size_t othersMade = 0;
@@ -409,8 +422,11 @@ void runRender(switch_bench &b, const switch_bench_experiment &x, switch_bench_r
         othersMade++;
     if (!colorMade || othersMade < t.others.size())
         fail(r, SWITCH_BENCH_ERROR, "no memory for the target");
-    else if (timeDraws(b, x, t, pipeline, r))
+    else if (timeDraws(b, x, t, pipeline, r)) {
         readBack(t.color, x, bpp, r);
+        if (x.kind != SWITCH_BENCH_NOOP)
+            checkAlive(b, x, t, r);
+    }
     for (size_t i = 0; i < othersMade; i++)
         d.destroyTexture(t.others[i]);
     if (colorMade)

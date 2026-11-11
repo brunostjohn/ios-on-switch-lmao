@@ -52,6 +52,29 @@ final class BenchProtocolTests: XCTestCase {
         guard case .experiment = decoded.entries[2] else { return XCTFail("a plain noop refused") }
     }
 
+    func testAReadbackMayBindColourZeroAlone() throws {
+        let program: [String: Any] = [
+            "sph": Data(count: 80).base64EncodedString(), "code": Data(count: 32).base64EncodedString(), "gprs": 4,
+        ]
+        let target: [String: Any] = ["format": "bgra8unorm_srgb", "width": 4, "height": 4]
+        let batch: [String: Any] = [
+            "protocol": "benchloop/1", "batch": "b",
+            "experiments": [
+                ["id": "one", "kind": "readback", "target": target, "program": program, "targets": 1,
+                 "template": "1b1ae4ebb482e4d1"],
+                ["id": "two", "kind": "readback", "target": target, "program": program, "targets": 2],
+                ["id": "frag", "kind": "fragment", "target": target, "program": program, "targets": 1],
+            ],
+        ]
+        let decoded = try BenchBatch.decode(try JSONSerialization.data(withJSONObject: batch))
+        guard case .experiment(let one) = decoded.entries[0] else { return XCTFail("targets 1 refused") }
+        XCTAssertTrue(one.singleTarget)
+        XCTAssertEqual(one.formatRaw, 81)
+        XCTAssertEqual(one.templateKey, 0x1b1a_e4eb_b482_e4d1)
+        guard case .invalid = decoded.entries[1] else { return XCTFail("targets 2 accepted") }
+        guard case .invalid = decoded.entries[2] else { return XCTFail("a fragment experiment chose its targets") }
+    }
+
     func testResultFileCarriesRunsAndTexels() throws {
         let batch = try BenchBatch.decode(try golden())
         var outcome = BenchOutcome()

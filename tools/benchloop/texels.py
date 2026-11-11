@@ -9,7 +9,19 @@ from tools.benchloop import protocol
 
 Colour = tuple[float, float, float, float]
 FLOATS = {'rgba16float': (4, '<4e'), 'rgba32float': (4, '<4f'), 'r32float': (1, '<f'), 'rg32float': (2, '<2f')}
-UNORM_BITS = {'bgra8unorm': (8, 8, 8, 8), 'rgba8unorm': (8, 8, 8, 8), 'rgb10a2unorm': (10, 10, 10, 2)}
+UNORM_BITS = {
+    'bgra8unorm': (8, 8, 8, 8),
+    'rgba8unorm': (8, 8, 8, 8),
+    'rgb10a2unorm': (10, 10, 10, 2),
+    'bgr10a2unorm': (10, 10, 10, 2),
+    'r8unorm': (8,),
+    'rg8unorm': (8, 8),
+    'r16unorm': (16,),
+    'rg16unorm': (16, 16),
+    'rgba16unorm': (16, 16, 16, 16),
+}
+# codes as stored: the same bytes as their linear twins, the values sRGB-encoded
+SRGB = {'rgba8unorm_srgb': 'rgba8unorm', 'bgra8unorm_srgb': 'bgra8unorm'}
 
 
 def round_half_even(x: Fraction) -> int:
@@ -103,7 +115,15 @@ def encode(colour: Colour, fmt: str, rounding: str = 'nearest') -> bytes:
 
 
 def codes(texel: bytes, fmt: str) -> tuple[int, ...]:
-    """Give a unorm texel's codes in RGBA order."""
+    """Give a unorm texel's codes in RGBA order (as many as the format has)."""
+    fmt = SRGB.get(fmt, fmt)
+    if fmt in ('r8unorm', 'rg8unorm'):
+        return tuple(texel)
+    if fmt in ('r16unorm', 'rg16unorm', 'rgba16unorm'):
+        return struct.unpack(f'<{len(texel) // 2}H', texel)
+    if fmt == 'bgr10a2unorm':
+        w = struct.unpack('<I', texel)[0]
+        return w >> 20 & 0x3FF, w >> 10 & 0x3FF, w & 0x3FF, w >> 30
     if fmt == 'bgra8unorm':
         return texel[2], texel[1], texel[0], texel[3]
     if fmt == 'rgba8unorm':

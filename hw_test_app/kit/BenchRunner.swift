@@ -61,6 +61,8 @@ final class BenchRunner {
         (x.repeats, x.warmup) = (e.repeats, e.warmup)
         (x.methods, x.method_pairs) = (pinned.words(e.methods), UInt32(e.methods.count / 2))
         (x.restore, x.restore_pairs) = (pinned.words(e.restore), UInt32(e.restore.count / 2))
+        x.single_target = e.singleTarget ? 1 : 0
+        x.template_key = e.templateKey
         let timed = e.draws.count * Int(e.repeats)
         let texelBytes = e.readback == .none ? 0 : Int(e.width * e.height) * e.texelBytes
         var r = switch_bench_result()

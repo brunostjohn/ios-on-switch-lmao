@@ -55,11 +55,23 @@ struct BenchFields {
         if kind != .readback, fields["methods"] != nil || fields["restore"] != nil {
             throw BenchInvalid("only readback experiments set methods")
         }
+        let targets = try count(fields["targets"] ?? (0 as Any), 0...1, "targets")
+        if kind != .readback, fields["targets"] != nil {
+            throw BenchInvalid("only readback experiments choose their targets")
+        }
+        var templateKey: UInt64 = 0
+        if let text = fields["template"] {
+            guard let hex = text as? String, hex.count == 16, let key = UInt64(hex, radix: 16), key != 0 else {
+                throw BenchInvalid("template is a pack state's key hash, 16 hex digits")
+            }
+            templateKey = key
+        }
         let experiment = BenchExperiment(
             id: id, kind: kind, format: format, formatRaw: info.raw, texelBytes: info.bytes, width: UInt32(width),
             height: UInt32(height), rect: rect.map(UInt32.init), clear: clear, fill: fill, program: program,
             threads: threads.map(UInt32.init), groups: groups.map(UInt32.init), draws: draws.map(UInt32.init),
-            repeats: UInt32(repeats), warmup: UInt32(warmup), methods: methods, restore: restore, readback: readback)
+            repeats: UInt32(repeats), warmup: UInt32(warmup), methods: methods, restore: restore, readback: readback,
+            singleTarget: targets == 1, templateKey: templateKey)
         guard Self.estimatedMs(experiment) <= BenchProtocol.maxCommandBufferMs else {
             throw BenchInvalid("a command buffer would run past \(BenchProtocol.maxCommandBufferMs) ms")
         }

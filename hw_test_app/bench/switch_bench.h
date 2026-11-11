@@ -51,6 +51,8 @@ struct switch_bench_experiment {
     uint32_t method_pairs;
     const uint32_t *restore;
     uint32_t restore_pairs;
+    uint32_t single_target;  // readback: colour 0 bound alone, the template's other colours left out
+    uint64_t template_key;   // the pack state to draw with (bench_records.h fragmentTemplate); 0: the bench's own choice
 };
 
 struct switch_bench_result {
