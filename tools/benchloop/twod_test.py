@@ -20,6 +20,7 @@ class TwodTest(unittest.TestCase):
         last = experiments[-1]['twod']
         self.assertEqual(last['colorFormat'], twod.F32, 'the float form that hung runs last')
         self.assertTrue(last['clearFirst'] and not last['bracketed'], 'after a clear-only pass, with no waits')
+        self.assertTrue(last['tiled'], "on the probe's layout: a private texture is block-linear")
         scales = [e for e in experiments if e['twod']['op'] in ('scale', 'resolve') and 'source' in e]
         self.assertTrue(all(e['source']['format'] == e['target']['format'] for e in scales))
 

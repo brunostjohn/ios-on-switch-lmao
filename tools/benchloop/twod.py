@@ -170,13 +170,19 @@ def generate() -> list[dict]:
 
 def hang_slot() -> list[dict]:
     """Give the 15:30 timeout's slot: a clear-only pass, then the fill, bracketed and not; f32 unbracketed last."""
-    words = f32_words(RGBA)
-    return [
-        own_fill('bgra8unorm', '-afterclear', clearFirst=True),
-        own_fill('bgra8unorm', '-afterclear-unbracketed', clearFirst=True, bracketed=False),
-        fill('fill-f32-afterclear-bgra8unorm', 'bgra8unorm', F32, words, clearFirst=True),
-        fill('fill-f32-afterclear-unbracketed-bgra8unorm', 'bgra8unorm', F32, words, clearFirst=True, bracketed=False),
-    ]
+    words, out = f32_words(RGBA), []
+    # the probe's target was a private texture, block-linear: the tiled cells are its layout, the pitch ones a control
+    for tiled in (False, True):
+        tag = '-tiled' if tiled else ''
+        out += [
+            own_fill('bgra8unorm', f'-afterclear{tag}', clearFirst=True, tiled=tiled),
+            own_fill('bgra8unorm', f'-afterclear-unbracketed{tag}', clearFirst=True, bracketed=False, tiled=tiled),
+            fill(f'fill-f32-afterclear{tag}-bgra8unorm', 'bgra8unorm', F32, words, clearFirst=True, tiled=tiled),
+        ]
+    for tiled in (False, True):
+        eid = f'fill-f32-afterclear-unbracketed{"-tiled" if tiled else ""}-bgra8unorm'
+        out.append(fill(eid, 'bgra8unorm', F32, words, clearFirst=True, bracketed=False, tiled=tiled))
+    return out
 
 
 def _texel_data(result: dict, key: str = 'texels') -> bytes:

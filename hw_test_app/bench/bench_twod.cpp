@@ -188,6 +188,22 @@ bool clearOnly(raw::CommandBuffer &cb, const switch_bench_experiment &x, raw::Te
     return true;
 }
 
+// The whole of `from` into `to` by the copy engine, in a command buffer of its own (untimed)
+bool copyAll(Submission &s, const raw::Texture &from, raw::Texture &to)
+{
+    uint64_t gpu = 0, wall = 0;
+    return s.record(
+        [&](raw::CommandBuffer &cb) {
+            raw::BlitEncoder *e = cb.blit();
+            if (!e)
+                return s.refused("the raw path opened no blit encoder");
+            e->copyTexels(from, 0, 0, 0, to, 0, 0, 0, to.width, to.height);
+            e->end();
+            return true;
+        },
+        gpu, wall);
+}
+
 // The compare form's operation into a second target, read back into r.compare_texels
 void compare(switch_bench &b, const switch_bench_experiment &x, const raw::Texture *read, const raw::Texture *ms,
              switch_bench_result &r)
@@ -259,11 +275,21 @@ void runTwod(switch_bench &b, const switch_bench_experiment &x, switch_bench_res
     if (resolving && (!raw::fx::msLayout(x.width, x.height, w.samples, raw::formatInfo(x.format)->bpp, grid) ||
                       !d.createStoredMultisample(x.width, x.height, x.format, w.samples, ms)))
         return fail(r, SWITCH_BENCH_REFUSED, "no multisampled image of the format and samples");
-    if (!d.createTexture(x.width, x.height, x.format, t, true)) {
-        if (ms.va)
-            d.destroyTexture(ms);
+    raw::Texture staging;
+    const bool tiled = w.tiled != 0;
+    if (!d.createTexture(x.width, x.height, x.format, t, !tiled, tiled) ||
+        (tiled && !d.createTexture(x.width, x.height, x.format, staging, true))) {
+        for (raw::Texture *made : {&ms, &t, &staging})
+            if (made->va)
+                d.destroyTexture(*made);
         return fail(r, SWITCH_BENCH_ERROR, "no memory for the target");
     }
+    if (tiled && !t.blockLinear) {
+        d.destroyTexture(t);
+        d.destroyTexture(staging);
+        return fail(r, SWITCH_BENCH_REFUSED, "the target's shape does not tile");
+    }
+    raw::Texture &cpuSide = tiled ? staging : t;
     r.form = {1,
               t.comptags,
               t.blockLinear,
@@ -280,9 +306,11 @@ void runTwod(switch_bench &b, const switch_bench_experiment &x, switch_bench_res
         for (uint32_t k = 0; ran && k < x.warmup + x.repeats; k++) {
             uint64_t gpu = 0, wall = 0;
             if (x.fill)
-                fill(t, x, bpp);
+                fill(cpuSide, x, bpp);
             else
-                memset(t.cpu, 0, size_t(t.pitch) * x.height);
+                memset(cpuSide.cpu, 0, size_t(cpuSide.pitch) * x.height);
+            if (tiled && !(ran = copyAll(s, staging, t)))
+                break;
             // a resolve's samples come from a command buffer of their own, so its stamps time the resolve alone
             uint64_t fillGpu = 0, fillWall = 0;
             ran = !resolving || s.record(
@@ -315,8 +343,10 @@ void runTwod(switch_bench &b, const switch_bench_experiment &x, switch_bench_res
                 r.wall_ns[c * x.repeats + k - x.warmup] = wall;
             }
         }
+    if (ran && tiled)
+        ran = copyAll(s, t, staging);
     if (ran)
-        readBack(t, x, bpp, r.texels, r.texel_bytes);
+        readBack(cpuSide, x, bpp, r.texels, r.texel_bytes);
     if (ran && x.compare != SWITCH_BENCH_COMPARE_NONE && r.compare_texels) {
         CompareRun run(x, r);
         compare(b, x, read, ms.va ? &ms : nullptr, run.r);
@@ -328,6 +358,8 @@ void runTwod(switch_bench &b, const switch_bench_experiment &x, switch_bench_res
         checkAlive(b, x, alive, r);
     }
     d.destroyTexture(t);
+    if (staging.va)
+        d.destroyTexture(staging);
     if (ms.va)
         d.destroyTexture(ms);
 }

@@ -135,8 +135,8 @@ extension BenchFields {
         } else if t["samples"] != nil {
             throw BenchInvalid("twod.samples is a resolve's")
         }
-        guard op != .resolve || (t["clip"] == nil && t["clearFirst"] == nil) else {
-            throw BenchInvalid("a resolve takes no clip and no clear first")
+        guard op != .resolve || (t["clip"] == nil && t["clearFirst"] == nil && t["tiled"] == nil) else {
+            throw BenchInvalid("a resolve takes no clip, no clear first and no tiled target")
         }
         var clip: [UInt32]?
         if let value = t["clip"] {
@@ -152,6 +152,7 @@ extension BenchFields {
             color: color.map(UInt32.init), du: try wide("du", 1 << 32), dv: try wide("dv", 1 << 32),
             sx: try wide("sx", 0), sy: try wide("sy", 0), bilinear: try flag("bilinear", false),
             corner: try flag("corner", false), reference: reference, bracketed: try flag("bracketed", true),
-            samples: UInt32(samples), clip: clip, clearFirst: try flag("clearFirst", false))
+            samples: UInt32(samples), clip: clip, clearFirst: try flag("clearFirst", false),
+            tiled: try flag("tiled", false))
     }
 }

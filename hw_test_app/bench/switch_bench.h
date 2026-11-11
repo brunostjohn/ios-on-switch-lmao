@@ -48,6 +48,7 @@ struct switch_bench_twod {
     uint32_t samples;      // a resolve's: the multisampled image's samples a pixel
     uint32_t clip[4];      // the 2D engine's clip rectangle x0, y0, x1, y1 (ProbeOp::clip); x1 0: none
     uint32_t clear_first;  // a clear-only pass on the target just before the operation, in its command buffer
+    uint32_t tiled;        // a block-linear target with no CPU view, its texels in and out through the copy engine
 };
 
 // What a scale, resolve or copy reads: rows packed (null: the bench's own 64x64 BGRA8 picture)

@@ -112,7 +112,7 @@ TARGET_KEYS = {'format', 'width', 'height'}
 PROGRAM_KEYS = {'code', 'data', 'sph', 'gprs'}
 COMPUTE_KEYS = {'code', 'data', 'gprs', 'threads', 'groups', 'output', 'chain', 'schedule'}
 TWOD_KEYS = {'op', 'fmt2d', 'colorFormat', 'color', 'du', 'dv', 'sx', 'sy', 'bilinear', 'corner'}
-TWOD_KEYS |= {'reference', 'bracketed', 'samples', 'clip', 'clearFirst'}
+TWOD_KEYS |= {'reference', 'bracketed', 'samples', 'clip', 'clearFirst', 'tiled'}
 SOURCE_KEYS = {'format', 'width', 'height', 'data'}
 TWOD_OPS = ('fill', 'scale', 'resolve')
 # Target formats the 2D engine names a surface format for (raw_probe_ops.h probeTwodFormat), by MTLPixelFormat
@@ -270,10 +270,10 @@ def _twod(e: dict, target: Target) -> None:
         _count(t.get(field, 0), 0, 255, f'twod.{field}')
     for field in ('du', 'dv', 'sx', 'sy'):
         _count(t.get(field, 0), 0, (1 << 63) - 1, f'twod.{field}')
-    for field in ('bilinear', 'corner', 'bracketed', 'reference', 'clearFirst'):
+    for field in ('bilinear', 'corner', 'bracketed', 'reference', 'clearFirst', 'tiled'):
         _flag(t.get(field, False), f'twod.{field}')
     _require(not t.get('reference') or op == 'fill', 'twod.reference is the reference fill: fill only')
-    _require(op != 'resolve' or not ({'clip', 'clearFirst'} & set(t)), 'a resolve takes no clip and no clear first')
+    _require(op != 'resolve' or not ({'clip', 'clearFirst', 'tiled'} & set(t)), 'a resolve: no clip, clear or tiling')
     if 'clip' in t:
         clip = t['clip']
         _require(isinstance(clip, list) and len(clip) == 4, 'twod.clip is [x0, y0, x1, y1]')

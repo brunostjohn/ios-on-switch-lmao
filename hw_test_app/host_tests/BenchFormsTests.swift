@@ -165,7 +165,7 @@ final class BenchFormsTests: XCTestCase {
             ],
             [
                 "id": "resolve-clear", "kind": "twod", "target": target("bgra8unorm", 8, 8),
-                "twod": ["op": "resolve", "samples": 4, "clearFirst": true],
+                "twod": ["op": "resolve", "samples": 4, "tiled": true],
             ],
             [
                 "id": "s3d", "kind": "twod", "target": target("rgb10a2unorm", 32, 32),
@@ -183,6 +183,7 @@ final class BenchFormsTests: XCTestCase {
         guard case .experiment(let clip) = entries[0], let t = clip.twod else { return XCTFail(why(entries[0]) ?? "") }
         XCTAssertEqual(t.clip, [4, 4, 12, 10])
         XCTAssertTrue(t.clearFirst)
+        XCTAssertFalse(t.tiled)
         XCTAssertNotNil(why(entries[1]))
         XCTAssertNotNil(why(entries[2]))
         XCTAssertNil(why(entries[3]))

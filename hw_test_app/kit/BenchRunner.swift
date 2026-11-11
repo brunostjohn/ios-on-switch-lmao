@@ -80,6 +80,7 @@ final class BenchRunner {
             (x.twod.reference, x.twod.bracketed, x.twod.samples) = (t.reference ? 1 : 0, t.bracketed ? 1 : 0, t.samples)
             if let c = t.clip { x.twod.clip = (c[0], c[1], c[2], c[3]) }
             x.twod.clear_first = t.clearFirst ? 1 : 0
+            x.twod.tiled = t.tiled ? 1 : 0
         }
         if let s = e.source {
             x.source = switch_bench_source(
