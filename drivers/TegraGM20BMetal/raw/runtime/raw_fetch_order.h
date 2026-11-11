@@ -34,11 +34,12 @@ constexpr uint32_t kSequentialTriangles = 96;
 
 // Fetching draws by how they kept raster order since the device opened, counted in debug builds only: drawn whole on the
 // CPU's proof that no two of their triangles share a pixel, with the vertices and bytes the proof read; drawn a triangle
-// at a time (no vertex read) and those triangles; fetched inside the pixel interlock; refused, by reason, as recorded
+// at a time (no vertex read) and those triangles; fetched inside the pixel interlock, and of those the draws whose shader
+// computes the fixed-function blend there; refused, by reason, as recorded
 // (the encoder to m2v) and at encoding
 struct FetchCounts {
     std::atomic<uint64_t> provenWhole{0}, proofVertices{0}, proofBytes{0}, sequential{0}, sequentialTriangles{0},
-        interlocked{0};
+        interlocked{0}, interlockedBlends{0};
     std::atomic<uint64_t> refusedAtRecord[kFetchRefusals]{}, refusedAtEncode[kFetchRefusals]{};
     std::atomic<uint64_t> storageFallback[kStorageFallbacks]{};
     // the pipeline key hashes behind refusedAtRecord, refusedAtEncode and storageFallback; and those of every draw in the

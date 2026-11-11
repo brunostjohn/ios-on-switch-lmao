@@ -938,6 +938,7 @@ void Device::build(Pipeline &pl, const PackPipeline &pp, const PlacedProgram &vs
     if (pp.flags & PipelineStorageMetadata) {
         pl.storageBits = pp.storageMask;
         pl.storageWriteBits = pp.storageWriteMask;
+        pl.storageBlendBits = pp.storageBlendMask & pp.storageWriteMask;
         memcpy(pl.storageTic, pp.storageTic, sizeof pl.storageTic);
         pl.readBits &= ~pl.storageBits;
     }
@@ -4775,6 +4776,7 @@ bool RenderEncoder::prepare(Pipeline *pl, uint32_t primitive, int32_t first, uin
         dev_->stats.fetch.genericKeys.note(pl->rec->keyHash);
 #endif
     RAW_DIAGNOSTIC(dev_->stats.fetch.interlocked += (pl->fetchBits & pl->storageBits) != 0);
+    RAW_DIAGNOSTIC(dev_->stats.fetch.interlockedBlends += pl->storageBlendBits != 0);
     attachmentWrites_.rop |= pl->writeBits;
     attachmentWrites_.storage |= pl->storageWriteBits;
     if (pl->writeBits)

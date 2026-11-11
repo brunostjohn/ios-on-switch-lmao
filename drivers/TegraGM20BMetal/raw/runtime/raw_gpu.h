@@ -380,6 +380,8 @@ struct Pipeline {
     // form of a fetch: the state turns the interlock on with SET_PIXEL_SHADER_INTERLOCK_CONTROL); the ROP writes none of them
     uint8_t storageBits = 0;
     uint8_t storageWriteBits = 0;
+    // of storageWriteBits, those whose fixed-function blend the fragment shader computes inside the interlock
+    uint8_t storageBlendBits = 0;
     uint32_t storageTic[8] = {};
     // the same state's barrier form, which orders its fetches with barriers where a pass's attachments cannot be viewed as
     // the storage images of this one (raw_storage_form.h); resolved with the state, null where the pack has none
