@@ -1,7 +1,7 @@
 # raw's API inventory, written by raw/test/selcover (SELCOVER_WRITE=1; selcover_inventory.h says what each
 # column holds): container, item, selector, m2v, sent by, raw
 # m2v's items: base 5 m2v 11 m2vobj 35 none 65 raw 239 read 292 refused 163 unread 201 zero 46
-# sent selectors: base 88 m2v 22 m2vobj 44 none 8 raw 446 refused 56 zero 151
+# sent selectors: base 87 m2v 22 m2vobj 44 none 8 raw 447 refused 56 zero 151
 MTLArgument	access	access	I	-	read
 MTLArgument	active	isActive	I	-	unread
 MTLArgument	arrayLength	arrayLength	I	-	read
@@ -407,7 +407,7 @@ MTLDepthStencilState	gpuResourceID	gpuResourceID	I	24B119	zero
 MTLDevice	-	accelerationStructureSizesWithDescriptor:	-	21H461,24B119	base
 MTLDevice	-	acceleratorPort	-	21H461,24B119	base
 MTLDevice	-	allowLibrariesFromOtherPlatforms	-	24B119	base
-MTLDevice	-	architecture	-	21H461,24B119	base
+MTLDevice	-	architecture	-	21H461,24B119	raw
 MTLDevice	-	areBarycentricCoordsSupported	-	21H461,24B119	base
 MTLDevice	-	copyShaderCacheToPath:	-	21H461,24B119	base
 MTLDevice	-	counterSets	-	21H461,24B119	base

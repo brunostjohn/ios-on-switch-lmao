@@ -1,11 +1,13 @@
 // SPDX-License-Identifier: MIT
 // The raw device's answers to Metal's capability and identity queries, which its class inherited from m2v's device class
 // before: the per-kind table (raw_device_answers.h) and the identity below, each equal to m2v's answer today
-// (raw/test/selcover holds them so on the host).
+// (raw/test/selcover holds them so on the host), and the identity's GPU architecture, which m2v's device answers with no
+// Apple GPU subtype.
 #import "RawMetalInternal.h"
 #include <mach/vm_page_size.h>
 #include <os/proc.h>
 #include <algorithm>
+#include "raw_archive.h"
 #include "raw_device_answers.h"
 
 namespace {
@@ -92,9 +94,22 @@ void installDeviceAnswers(Class cls)
     }
 }
 
+@interface MTLArchitecture (Private)
+- (instancetype)initWithCPUType:(int)type cpuSubtype:(int)subtype;
+@end
+
 @interface RMDevice (Identity)
 @end
 @implementation RMDevice (Identity)
+
+// targetDeviceArchitecture stays the base class's nil: Metal picks AGX slices of libraries and archives by it, and this GPU
+// runs none of them
+- (MTLArchitecture *)architecture
+{
+    static MTLArchitecture *const architecture =
+        [[MTLArchitecture alloc] initWithCPUType:int(raw::kAppleGpuCpuType) cpuSubtype:int(kKind.gpuSubtype)];
+    return architecture;
+}
 
 // NVK's form of the kernel's names (nvk_physical_device.c), the name the device has had
 - (NSString *)name

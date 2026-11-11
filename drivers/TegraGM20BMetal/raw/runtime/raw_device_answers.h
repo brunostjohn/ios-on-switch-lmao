@@ -30,6 +30,10 @@ struct Kind {
     size_t countCount;
     const ArgRange *args;
     size_t argCount;
+    // The identity's Apple GPU subtype, that of the AGX slices the IPSW ships: MTLArchitecture names it (Metal's
+    // newArchitectureNameString: 0x61 applegpu_g9g, 0xd2 applegpu_g12p), and frameworks open their per-GPU archives by
+    // that name (CMImaging's -[FigMetalContext _identifyGPU]: <bundle>/binaryArchive.g12p on 24B119)
+    uint32_t gpuSubtype;
 };
 
 inline constexpr Count kCounts21H461[] = {
@@ -301,8 +305,8 @@ inline constexpr ArgRange kArgs24B119[] = {
 };
 
 inline constexpr Kind kKinds[] = {
-    {"21H461", kCounts21H461, std::size(kCounts21H461), kArgs21H461, std::size(kArgs21H461)},
-    {"24B119", kCounts24B119, std::size(kCounts24B119), kArgs24B119, std::size(kArgs24B119)},
+    {"21H461", kCounts21H461, std::size(kCounts21H461), kArgs21H461, std::size(kArgs21H461), 0x61},
+    {"24B119", kCounts24B119, std::size(kCounts24B119), kArgs24B119, std::size(kArgs24B119), 0xd2},
 };
 
 // The kind this build is for (MetalABI.h): its table's index, or the table count when it has none
