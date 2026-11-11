@@ -94,6 +94,7 @@ TESTS: dict[str, bool] = {
     'image.heic_encode': False,
     'image.coreimage': False,
     'image.pixel_transfer': False,
+    'image.pixel_transfer_422': False,
     'audio.playback_44k': False,
     'audio.playback_48k': False,
     'audio.low_latency': False,
