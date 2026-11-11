@@ -754,8 +754,7 @@ private:
     void probeDraw(const Pipeline &bound, Pipeline &drawn, uint32_t primitive, int32_t first, uint32_t count,
                    bool indexed, const PixelBox &limit);
 #endif
-    const Runs *selfRuns(const Pipeline &pl, uint32_t primitive, int32_t first, uint32_t count, uint32_t instances,
-                         const char **why);
+    const Runs *selfRuns(const Pipeline &pl, uint32_t primitive, uint32_t count, uint32_t instances, const char **why);
     const Runs *sequentialRuns(const Pipeline &pl, const FetchDraw &shape, Runs &runs, const char **why);
     const Runs *refuseFetch(const Pipeline &pl, FetchRefusal refusal, uint32_t primitive, uint32_t count,
                             uint32_t instances, const char **why);
@@ -1457,10 +1456,6 @@ public:
             fetchBarriersInterlocked{0};
         // Clear loads of colors, and those left out because the pass's first draw covers them (RenderEncoder::clears)
         std::atomic<uint64_t> clears{0}, clearsElided{0};
-        // draws that fetch a color they write (debug builds): split into runs where their own triangles may cover a pixel
-        // twice, and the runs; those of more than one triangle it could not tell apart (drawn whole, unordered within);
-        // the CPU time telling them (raw_overlap.h)
-        std::atomic<uint64_t> selfOverlapSplit{0}, selfOverlapRuns{0}, selfOverlapUnbounded{0}, selfOverlapNs{0};
         FetchCounts fetch;
         // compressed memory held now (raw_comp.h CompMem and made buffers no backing took) and its bytes, the backings on it
         // now; buffers made and the kernel's refusals since the device opened; full-target clears of compressed targets to a

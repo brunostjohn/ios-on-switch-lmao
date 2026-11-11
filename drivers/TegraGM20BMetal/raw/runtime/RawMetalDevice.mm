@@ -64,8 +64,6 @@ static const char *zetaMemoryRefusal(int asked)
     d[@"zcull_passes"] = @(gRM->raw->stats.zcullPasses.load());
     d[@"zcull_invalidations"] = @(gRM->raw->stats.zcullInvalidations.load());
     const raw::FetchCounts &fetch = gRM->raw->stats.fetch;
-    d[@"fetch_whole"] = @(fetch.provenWhole.load());
-    d[@"fetch_proof_vertices"] = @(fetch.proofVertices.load());
     d[@"fetch_sequential"] = @(fetch.sequential.load());
     d[@"fetch_triangles"] = @(fetch.sequentialTriangles.load());
     d[@"fetch_interlocked"] = @(fetch.interlocked.load());

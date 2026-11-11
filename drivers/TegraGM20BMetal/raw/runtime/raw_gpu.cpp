@@ -4015,7 +4015,7 @@ bool RenderEncoder::draw(uint32_t primitive, uint32_t first, uint32_t count, uin
     readBits_ |= pl->fetchBits;
     if (!count || !instances)
         return true;
-    const Runs *ordered = selfRuns(*pl, primitive, first, count, instances, why);
+    const Runs *ordered = selfRuns(*pl, primitive, count, instances, why);
     if (!ordered)
         return false;
     const Runs &runs = *ordered;
@@ -4077,13 +4077,13 @@ bool RenderEncoder::draw(uint32_t primitive, uint32_t first, uint32_t count, uin
     return true;
 }
 
-// The runs a draw that fetches a color it writes is drawn as, where its own triangles may cover a pixel twice
-// (raw_overlap.h); empty: it is drawn whole. The indexed draw being prepared sets drawIndices_ first
-const RenderEncoder::Runs *RenderEncoder::selfRuns(const Pipeline &pl, uint32_t primitive, int32_t first,
-                                                   uint32_t count, uint32_t instances, const char **why)
+// The runs a draw that fetches a color it writes through the texture unit is drawn as, one triangle each
+// (sequentialRuns); empty: it is drawn whole, as a draw that fetches inside the pixel interlock is. The indexed draw being
+// prepared sets drawIndices_ first
+const RenderEncoder::Runs *RenderEncoder::selfRuns(const Pipeline &pl, uint32_t primitive, uint32_t count,
+                                                   uint32_t instances, const char **why)
 {
     static thread_local Runs runs;
-    static thread_local TriangleRuns triangles;
     runs.clear();
     runWinding_.fill(false);
     const bool indexed = drawIndices_ != nullptr;
@@ -4091,46 +4091,9 @@ const RenderEncoder::Runs *RenderEncoder::selfRuns(const Pipeline &pl, uint32_t 
     const bool fetchesOwn = fetchesOwnColor(pl.fetchBits, pl.writeBits, pl.storageBits);
     if (!fetchesOwn || singlePrimitive(shape))
         return &runs;
-    if (const FetchRefusal refusal = fetchRefusal(fetchesOwn, pl.caTransform, pl.primitiveId, shape);
-        refusal != FetchRefusal::None)
+    if (const FetchRefusal refusal = fetchRefusal(fetchesOwn, pl.primitiveId, shape); refusal != FetchRefusal::None)
         return refuseFetch(pl, refusal, primitive, count, instances, why);
-    if (!pl.caTransform)
-        return sequentialRuns(pl, shape, runs, why);
-#if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
-    const auto start = std::chrono::steady_clock::now();
-#endif
-    auto analysis = geometryCache_.analysis(geometry(pl, primitive, first, count, {0, 0, ~0u, ~0u}), bindingRevision_,
-                                            cb_->geometryBudget_);
-#if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
-    const GeometrySnapshot *proof =
-        analysis.geometry().bounded && !analysis.snapshot().evaluated ? &analysis.snapshot() : nullptr;
-#endif
-    const bool told = triangles.split(analysis, runs);
-#if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
-    dev_->stats.selfOverlapNs += uint64_t(
-        std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - start).count());
-    if (proof && proof->valid) {
-        const DrawGeometry &g = proof->source;
-        dev_->stats.fetch.proofVertices += g.count;
-        dev_->stats.fetch.proofBytes +=
-            64 + uint64_t(g.count) * (g.indexSize + uint64_t(g.positions.components) * sizeof(float));
-    }
-    if (told && runs.empty())
-        dev_->stats.fetch.provenWhole++;
-    if (!told)
-        RAW_DIAGNOSTIC(dev_->stats.selfOverlapUnbounded++);
-    else if (!runs.empty()) {
-        RAW_DIAGNOSTIC(dev_->stats.selfOverlapSplit++);
-        RAW_DIAGNOSTIC(dev_->stats.selfOverlapRuns += runs.size());
-    }
-#else
-    (void)told;
-#endif
-    if (!told || (pl.primitiveId && !runs.empty()))
-        return sequentialRuns(pl, shape, runs, why);
-    if (primitive == 4)
-        runWinding_ = TriangleRuns::winding(analysis, runs);
-    return &runs;
+    return sequentialRuns(pl, shape, runs, why);
 }
 
 // A draw whose own triangles may cover a pixel twice, one triangle a run: each is ordered after the one before by
@@ -4254,7 +4217,7 @@ bool RenderEncoder::drawIndexed(uint32_t primitive, uint32_t count, uint32_t ind
     drawIndices_ = at;
     drawIndexSize_ = indexSize;
     drawIndexCount_ = count;
-    const Runs *ordered = selfRuns(*pl, primitive, baseVertex, count, instances, why);
+    const Runs *ordered = selfRuns(*pl, primitive, count, instances, why);
     if (!ordered) {
         drawIndices_ = nullptr;
         return false;
@@ -4315,7 +4278,7 @@ bool RenderEncoder::indirect(uint32_t primitive, bool indexed, const Buffer *arg
     Pipeline *form = formFor(pipeline_);
     const Pipeline &pl = *form;
     const bool fetchesOwn = fetchesOwnColor(pl.fetchBits, pl.writeBits, pl.storageBits);
-    if (const FetchRefusal refusal = fetchRefusal(fetchesOwn, pl.caTransform, pl.primitiveId, {primitive, 0, 1, true});
+    if (const FetchRefusal refusal = fetchRefusal(fetchesOwn, pl.primitiveId, {primitive, 0, 1, true});
         refusal != FetchRefusal::None) {
         refuseFetch(pl, refusal, primitive, 0, 0, why);
         return false;
