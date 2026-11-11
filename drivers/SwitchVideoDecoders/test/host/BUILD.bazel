@@ -92,17 +92,22 @@ host_library(
 host_library(
     name = "hevc",
     srcs = [
+        "//drivers/SwitchVideoDecoders:AVD/HEVCDisplayProbe.c",
         "//drivers/SwitchVideoDecoders:AVD/HEVCNVDEC.c",
         "//drivers/SwitchVideoDecoders:AVD/HEVCSyntax.c",
         "//drivers/TegraNVDEC:nvidia/clc5b0.h",
         "//drivers/TegraNVDEC:nvidia/nvdec_drv.h",
     ],
     hdrs = [
+        "//drivers/SwitchVideoDecoders:AVD/HEVCDisplayProbe.h",
         "//drivers/SwitchVideoDecoders:AVD/HEVCNVDEC.h",
         "//drivers/SwitchVideoDecoders:AVD/HEVCSyntax.h",
     ],
     copts = ["-O1"],
-    deps = [":h264"],
+    deps = [
+        ":block_linear",
+        ":h264",
+    ],
 )
 
 # The clip check over the three clips, on VideoToolbox.

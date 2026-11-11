@@ -50,6 +50,10 @@ struct HEVCDecoder {
     int32_t prev_tid0_poc, last_poc;
     uint32_t picture_index;
     unsigned missing;
+#if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
+    bool probe_wanted, probe_ran;
+    HEVCDisplayProbeResult probe[2];
+#endif
 };
 
 HEVCDecoder *hevc_decoder_create(const H264Backend *backend)
@@ -133,6 +137,20 @@ void hevc_decoder_allow_10bit(HEVCDecoder *d, bool allow)
 {
     d->allow10 = allow;
 }
+
+#if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
+void hevc_decoder_want_display_probe(HEVCDecoder *d)
+{
+    d->probe_wanted = true;
+}
+
+bool hevc_decoder_display_probe(const HEVCDecoder *d, HEVCDisplayProbeResult out[2])
+{
+    if (d->probe_ran)
+        memcpy(out, d->probe, sizeof(d->probe));
+    return d->probe_ran;
+}
+#endif
 
 int32_t hevc_decoder_last_poc(const HEVCDecoder *d)
 {
@@ -643,6 +661,16 @@ static int decodePicture(HEVCDecoder *d, const Span *seg, int count, const HEVCS
         return -2;
     const nvdec_status_s *status = (const nvdec_status_s *)(d->input_va + kStatusOff);
     const int error = status->error_status && !status->mbs_correctly_decoded ? (int)status->error_status : 0;
+#if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
+    if (d->probe_wanted && !d->probe_ran && idr && !error && d->sample_bytes == 2) {
+        TegraNVDECWait probeWait = {.invalidate_count = 1};
+        probeWait.invalidate[0] = (TegraNVDECRange){e->handle, 0, d->luma_bytes, 0};
+        for (uint32_t mode = 2; mode <= 3; mode++)
+            hevc_display_probe_run(&d->b, &submit, &probeWait, d->surface_bytes, d->luma_bytes, e->va, d->pitch,
+                                   d->rows, sps->width, sps->height, mode, &d->probe[mode - 2]);
+        d->probe_ran = true;
+    }
+#endif
 
     // 8.3.1's prevTid0Pic; the current picture becomes a short-term reference (8.3.2).
     if (sh->temporal_id == 0 && !(nal >= HEVC_NAL_RADL_N && nal <= HEVC_NAL_RASL_R) && !(nal <= 14 && !(nal & 1)))

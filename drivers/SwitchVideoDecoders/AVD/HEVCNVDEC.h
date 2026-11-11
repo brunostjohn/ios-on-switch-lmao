@@ -14,6 +14,7 @@
 #ifndef HEVC_NVDEC_H
 #define HEVC_NVDEC_H
 #include "H264NVDEC.h"
+#include "HEVCDisplayProbe.h"
 #include "HEVCSyntax.h"
 
 typedef struct HEVCDecoder HEVCDecoder;
@@ -30,6 +31,11 @@ const HEVCSPS *hevc_decoder_sps(const HEVCDecoder *decoder);
 int hevc_decoder_configure(HEVCDecoder *decoder);
 // Whether Main 10 pictures are decoded (TEGRA_NVDEC_HEVC_MAIN10); 8-bit only when false.
 void hevc_decoder_allow_10bit(HEVCDecoder *decoder, bool allow);
+#if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
+// HEVCDisplayProbe.h on the session's first Main 10 IDR picture; false until it has run.
+void hevc_decoder_want_display_probe(HEVCDecoder *decoder);
+bool hevc_decoder_display_probe(const HEVCDecoder *decoder, HEVCDisplayProbeResult out[2]);
+#endif
 
 // One access unit of length-prefixed NAL units (lengthSize 1..4). Returns 1 when a picture was decoded (it reaches
 // `decoded` now and `emit` when it is bumped out), 0 when the sample had none to decode (parameter sets, a skipped

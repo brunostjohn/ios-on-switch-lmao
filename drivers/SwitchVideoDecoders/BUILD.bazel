@@ -73,6 +73,7 @@ ios_binary(
         "AVD/VP9NVDEC.c",
         "AVD/VP9Syntax.c",
         "AVD/VP9Probs.c",
+        "AVD/HEVCDisplayProbe.c",
         "AVD/HEVCNVDEC.c",
         "AVD/HEVCSyntax.c",
         "//kits/SwitchRefusal:SwitchRefusal.c",

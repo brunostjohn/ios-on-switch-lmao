@@ -15,6 +15,8 @@ public struct DecodeResult {
     public let worstChromaError: Double
     /// How the decoder's pictures reached the client (frames, exported, vic, cpu, errors), where it says.
     public var routes: [String: Int]?
+    /// The AVD plugin's SwitchDisplayBufferProbe reading (mode2_*, mode3_*), when it was asked for and ran.
+    public var displayBufferProbe: [String: Int]?
 
     public var millisecondsPerFrame: Double { frames > 0 ? decodeSeconds * 1000 / Double(frames) : 0 }
     public var fps: Double { decodeSeconds > 0 ? Double(frames) / decodeSeconds : 0 }
@@ -28,12 +30,15 @@ public enum Decompressor {
     /// media tool's check on the Mac lets go of the hardware (`requireHardware: false`).
     public static func decode(
         _ samples: [CMSampleBuffer], format: CMVideoFormatDescription, pattern: Pattern, bitDepth: Int, fps: Int,
-        requireHardware: Bool = true
+        requireHardware: Bool = true, probeDisplayBuffer: Bool = false
     ) throws -> DecodeResult {
         let session = try makeSession(
             format: format, width: pattern.width, height: pattern.height, bitDepth: bitDepth,
             requireHardware: requireHardware)
         defer { VTDecompressionSessionInvalidate(session) }
+        if probeDisplayBuffer {
+            VTSessionSetProperty(session, key: "SwitchDisplayBufferProbe" as CFString, value: kCFBooleanTrue)
+        }
         let collector = Collector(pattern: pattern, fps: fps)
         let start = CFAbsoluteTimeGetCurrent()
         for (index, sample) in samples.enumerated() {
@@ -52,6 +57,10 @@ public enum Decompressor {
             usingHardware: Compressor.readFlag(
                 session, kVTDecompressionPropertyKey_UsingHardwareAcceleratedVideoDecoder))
         result.routes = pictureRoutes(session)
+        if probeDisplayBuffer {
+            result.displayBufferProbe = (Compressor.read(session, "SwitchDisplayBufferProbe" as CFString)
+                as? [String: NSNumber])?.mapValues(\.intValue)
+        }
         return result
     }
 

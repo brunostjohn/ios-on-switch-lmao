@@ -387,11 +387,42 @@ static void testDecode(void)
     }
 }
 
+static size_t gobOffset(uint32_t x, uint32_t y, uint32_t pitch)
+{
+    return (size_t)(y / 16) * (pitch / 64) * 1024 + (x / 64) * 1024 + ((y % 16) / 8) * 512 + ((x % 64) / 32) * 256 +
+           ((y % 8) / 2) * 64 + ((x % 32) / 16) * 32 + (y % 2) * 16 + x % 16;
+}
+
+// HEVCDisplayProbe's reading: a display buffer written as pitch-linear 8-bit truncation of a block-linear P010 picture
+// is found as that layout, exact; a buffer left poisoned is "not written".
+static void testDisplayProbeCompare(void)
+{
+    enum { W = 64, H = 32, PITCH16 = 128 };
+    static uint8_t ref[PITCH16 * H], display[PITCH16 * H * 3 / 2];
+    for (uint32_t y = 0; y < H; y++)
+        for (uint32_t x = 0; x < W; x++) {
+            const uint16_t sample = (uint16_t)(((x * 7 + y * 13) % 1024) << 6);
+            ref[gobOffset(2 * x, y, PITCH16)] = (uint8_t)sample;
+            ref[gobOffset(2 * x + 1, y, PITCH16)] = (uint8_t)(sample >> 8);
+        }
+    HEVCDisplayProbeResult r = {0};
+    memset(display, HEVC_DISPLAY_POISON, sizeof(display));
+    hevc_display_probe_compare(display, sizeof(display), ref, PITCH16, H, W, H, &r);
+    CHECK(r.layout == HEVC_DISPLAY_NOT_WRITTEN, "display probe: a poisoned buffer read as layout %u", r.layout);
+    for (uint32_t y = 0; y < H; y++)
+        for (uint32_t x = 0; x < W; x++)
+            display[y * (PITCH16 / 2) + x] = (uint8_t)(((x * 7 + y * 13) % 1024) >> 2);
+    hevc_display_probe_compare(display, sizeof(display), ref, PITCH16, H, W, H, &r);
+    CHECK(r.layout == HEVC_DISPLAY_PITCH_8 && r.max_diff == 0 && r.trunc_milli == 1000,
+          "display probe: layout %u max %u trunc %u", r.layout, r.max_diff, r.trunc_milli);
+}
+
 int main(int argc, char **argv)
 {
     (void)argc, (void)argv;
     testSyntax();
     testDecode();
+    testDisplayProbeCompare();
     if (gFailures) {
         printf("FAIL hevc: %d failures\n", gFailures);
         return 1;

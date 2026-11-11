@@ -53,4 +53,6 @@ public enum Registry {
         [CPUAsyncTimersTest(), RegDumpQuietTest()] + gpuScenes + metal + GPUPathTests.all + video + images + audio
         + display + compositor + sensorsAndInput + connectivityAndStorage
         + cpuAndSystem + [RawShareTest()]
+        // Drives an NVDEC output mode nothing else uses: after every shared test.
+        + [DisplayBufferTest()]
 }

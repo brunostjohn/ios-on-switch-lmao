@@ -46,7 +46,8 @@ os_log_t gAVDLog;
 static const bool kReorder = false;  // see above
 
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
-#define kSwitchPictureRoutesKey CFSTR("SwitchPictureRoutes")
+#define kSwitchPictureRoutesKey       CFSTR("SwitchPictureRoutes")
+#define kSwitchDisplayBufferProbeKey CFSTR("SwitchDisplayBufferProbe")
 #endif
 
 static Decoder *storage(CMBaseObjectRef object)
@@ -609,6 +610,11 @@ static OSStatus copySupportedPropertyDictionary(VTVideoDecoderRef ref, CFDiction
                                                 &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks);
     CFDictionarySetValue(supported, kSwitchPictureRoutesKey, routes);
     CFRelease(routes);
+    const void *probeValues[] = {kVTPropertyType_Enumeration, kVTPropertyReadWriteStatus_ReadWrite};
+    CFDictionaryRef probe = CFDictionaryCreate(kCFAllocatorDefault, keys, probeValues, 2,
+                                               &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks);
+    CFDictionarySetValue(supported, kSwitchDisplayBufferProbeKey, probe);
+    CFRelease(probe);
 #endif
     *out = supported;
     return noErr;
@@ -734,6 +740,40 @@ static CFDictionaryRef copyPictureRoutes(const Decoder *d)
 }
 #endif
 
+#if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
+// hw_test_app's decode.display_buffer: HEVCDisplayProbe.h's reading of modes 2 and 3, once the session's first Main 10
+// IDR picture has been decoded; nothing before.
+static CFDictionaryRef copyDisplayBufferProbe(const Decoder *d)
+{
+    HEVCDisplayProbeResult r[2];
+    if (!hevc_decoder_display_probe(d->hevc, r))
+        return NULL;
+    static const char *const kFields[] = {"status", "layout", "max", "mean_milli", "trunc_milli", "round_milli"};
+    CFMutableDictionaryRef out = CFDictionaryCreateMutable(kCFAllocatorDefault, 12, &kCFTypeDictionaryKeyCallBacks,
+                                                           &kCFTypeDictionaryValueCallBacks);
+    for (int mode = 0; out && mode < 2; mode++) {
+        const int32_t v[] = {r[mode].status,          (int32_t)r[mode].layout,      (int32_t)r[mode].max_diff,
+                             (int32_t)r[mode].mean_milli, (int32_t)r[mode].trunc_milli, (int32_t)r[mode].round_milli};
+        os_log(gAVDLog, "AVD: display-buffer probe mode %d: status %d layout %d, max %d mean %d.%03d, trunc %d.%d%% round "
+               "%d.%d%%", mode + 2, v[0], v[1], v[2], v[3] / 1000, v[3] % 1000, v[4] / 10, v[4] % 10, v[5] / 10,
+               v[5] % 10);
+        for (int f = 0; f < 6; f++) {
+            char name[32];
+            snprintf(name, sizeof(name), "mode%d_%s", mode + 2, kFields[f]);
+            CFStringRef key = CFStringCreateWithCString(kCFAllocatorDefault, name, kCFStringEncodingUTF8);
+            CFNumberRef number = CFNumberCreate(kCFAllocatorDefault, kCFNumberSInt32Type, &v[f]);
+            if (key && number)
+                CFDictionarySetValue(out, key, number);
+            if (key)
+                CFRelease(key);
+            if (number)
+                CFRelease(number);
+        }
+    }
+    return out;
+}
+#endif
+
 static OSStatus copyProperty(CMBaseObjectRef ref, CFStringRef key, CFAllocatorRef allocator, void *value)
 {
     Decoder *d = storage(ref);
@@ -746,6 +786,10 @@ static OSStatus copyProperty(CMBaseObjectRef ref, CFStringRef key, CFAllocatorRe
         *(CFTypeRef *)value = copyPictureRoutes(d);
         return *(CFTypeRef *)value ? noErr : kVTAllocationFailedErr;
     }
+    if (CFEqual(key, kSwitchDisplayBufferProbeKey) && d->hevc) {
+        *(CFTypeRef *)value = copyDisplayBufferProbe(d);
+        return *(CFTypeRef *)value ? noErr : -12783;
+    }
 #endif
     if (d->software && softwareVTable(d)->baseClass->copyProperty)
         return softwareVTable(d)->baseClass->copyProperty(VTVideoDecoderGetCMBaseObject(d->software), key, allocator,
@@ -756,6 +800,12 @@ static OSStatus copyProperty(CMBaseObjectRef ref, CFStringRef key, CFAllocatorRe
 static OSStatus setProperty(CMBaseObjectRef ref, CFStringRef key, CFTypeRef value)
 {
     Decoder *d = storage(ref);
+#if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
+    if (CFEqual(key, kSwitchDisplayBufferProbeKey) && d->hevc && value == kCFBooleanTrue) {
+        hevc_decoder_want_display_probe(d->hevc);
+        return noErr;
+    }
+#endif
     if (d->software && softwareVTable(d)->baseClass->setProperty)
         return softwareVTable(d)->baseClass->setProperty(VTVideoDecoderGetCMBaseObject(d->software), key, value);
     return noErr;  // real-time, thread count, ...: nothing to tune on a fixed-function engine
