@@ -327,6 +327,8 @@ struct tgm_chan {
 	/* tgm_hang_recover: its GPFIFO and pushbuffer GET as last read, and when they last moved */
 	u64 get_seen, get_ns;
 	u32 hang_strikes, hang_seen; /* tgm_hang_confirm's state between hang checks */
+	u32 fault_seqno;             /* faulted: the seqno a GR error stopped in (gpu_fault.c) */
+	int faulted;
 #if TGM_STATS
 	u64 killed_ns; /* tgm_chan_killed's time, for a fault's line (TegraGM20BUserClient.cpp) */
 	/* this window's SubmitAddress calls on it, by phase (tgm_stats_submit), for its owner */
@@ -547,6 +549,11 @@ int tgm_chan_wait_ready(struct tgm_chan *chan, u32 gpfifo_nr, u32 push_nr);
 /* external: TGM_FENCE_VOLATILE_WRITES when every write the fence covers went around the L2: the engines idle and their
  * writes committed, no L2 flush */
 #define TGM_FENCE_VOLATILE_WRITES 2
+/* gpu_fault.c; TGM_KILL_GR_ERROR is the kill record's error for a GR error (gpu_hang.c fault_code) */
+#define TGM_KILL_GR_ERROR 2
+void tgm_fault_publish(struct tgm_chan *chan);
+void tgm_fault_unpublish(struct tgm_chan *chan);
+void tgm_fence_kill_record(volatile u32 *fence_cpu, u32 first, u32 last, u32 error);
 u32 tgm_chan_fence_job(struct tgm_chan *chan, int external, u32 first, u32 next);
 int tgm_backing_dependencies(struct tgm_chan *chan, const struct switch_gpu_backing_token *tokens,
 			     u32 count, int emit);

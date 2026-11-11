@@ -33,6 +33,7 @@
 #include <subdev/mc.h>
 #include <subdev/pmu.h>
 
+#include "TegraGM20BGrFault.h"
 #include "TegraGM20BTexTrap.h"
 #include <subdev/therm.h>
 #include <subdev/timer.h>
@@ -1730,6 +1731,7 @@ gf100_gr_intr(struct nvkm_inth *inth)
 				   "subc %d class %04x mthd %04x data %08x\n",
 				   chid, inst << 12, name, subc,
 				   class, mthd, data);
+			tgm_gr_fault(chid);
 		}
 		nvkm_wr32(device, 0x400100, 0x00000010);
 		stat &= ~0x00000010;
@@ -1739,6 +1741,7 @@ gf100_gr_intr(struct nvkm_inth *inth)
 		nvkm_error(subdev, "ILLEGAL_CLASS ch %d [%010llx %s] "
 			   "subc %d class %04x mthd %04x data %08x\n",
 			   chid, inst << 12, name, subc, class, mthd, data);
+		tgm_gr_fault(chid);
 		nvkm_wr32(device, 0x400100, 0x00000020);
 		stat &= ~0x00000020;
 	}
@@ -1750,6 +1753,7 @@ gf100_gr_intr(struct nvkm_inth *inth)
 				   "subc %d class %04x mthd %04x data %08x\n",
 			   code, en ? en->name : "", chid, inst << 12,
 			   name, subc, class, mthd, data);
+		tgm_gr_fault(chid);
 		nvkm_wr32(device, 0x400100, 0x00100000);
 		stat &= ~0x00100000;
 	}
@@ -1758,6 +1762,7 @@ gf100_gr_intr(struct nvkm_inth *inth)
 		if (!gf100_gr_trap_tex(gr, chid, name)) {
 			nvkm_error(subdev, "TRAP ch %d [%010llx %s]\n",
 				   chid, inst << 12, name);
+			tgm_gr_fault(chid);
 			gf100_gr_trap_intr(gr);
 		}
 		nvkm_wr32(device, 0x400100, 0x00200000);

@@ -152,4 +152,45 @@ TEST(Gm20bTexTrap, NouveauReportsTexAloneWithoutATrapError)
 	EXPECT_NE(Text(GK20A_C).find("nvkm_wr32(device, 0x419d0c, 0x3);"), std::string::npos);
 }
 
+// T-v2 kill_one and iterated_blend: each channel error gf100_gr_intr reports is handed to the kext before its
+// acknowledgement lets GR finish the faulting job, so the kill record names that job, not the ones after it.
+TEST(Gm20bGrFault, EveryChannelErrorIsChargedBeforeGrGoesOn)
+{
+	const std::string intr = Body(Text(GF100_C), "gf100_gr_intr(struct nvkm_inth *inth)\n{");
+	for (const char *ack : {"nvkm_wr32(device, 0x400100, 0x00000010);",
+				"nvkm_wr32(device, 0x400100, 0x00000020);",
+				"nvkm_wr32(device, 0x400100, 0x00100000);",
+				"nvkm_wr32(device, 0x400100, 0x00200000);"}) {
+		const size_t at = intr.find(ack);
+		ASSERT_NE(at, std::string::npos) << ack;
+		const size_t fault = intr.rfind("tgm_gr_fault(chid);", at);
+		ASSERT_NE(fault, std::string::npos) << ack;
+		EXPECT_EQ(intr.find("nvkm_wr32(device, 0x400100", fault), at)
+			<< ack << ": charged before its own ack";
+	}
+	const size_t sw = intr.find("if (!gf100_gr_mthd_sw(device, class, mthd, data)) {");
+	EXPECT_LT(sw, intr.find("tgm_gr_fault(chid);")) << "a software method is no error";
+	const size_t tex = intr.find("if (!gf100_gr_trap_tex(gr, chid, name)) {");
+	EXPECT_LT(tex, intr.rfind("tgm_gr_fault(chid);")) << "a TEX-only trap is no error";
+	EXPECT_LT(intr.rfind("tgm_gr_fault(chid);"),
+		  intr.find("nvkm_wr32(device, 0x400500, 0x00010001);"));
+	const std::string fault = Body(Text(GPU_FAULT_C), "void tgm_gr_fault(int chid)\n{");
+	EXPECT_NE(fault.find("chan->fault_seqno = tgm_chan_completed(chan) + 1;"),
+		  std::string::npos);
+	EXPECT_NE(fault.find("tgm_fence_kill_record(chan->fence_cpu, chan->fault_seqno"),
+		  std::string::npos)
+		<< "recorded before the job's fence can pass it";
+	const std::string killed =
+		Body(Text(GPU_HANG_C), "int tgm_chan_killed(struct nvif_event *event");
+	EXPECT_NE(killed.find("first = tgm_kill_first(chan->faulted, chan->fault_seqno"),
+		  std::string::npos);
+	EXPECT_NE(killed.find("tgm_fence_kill_record(chan->fence_cpu, first, chan->submitted"),
+		  std::string::npos);
+	const std::string free =
+		Body(Text(GPU_CHAN_C), "static void chan_free(struct tgm_chan *chan)\n{");
+	EXPECT_LT(free.find("tgm_fault_unpublish(chan);"),
+		  free.find("nvif_object_dtor(&chan->user);"))
+		<< "out of the table before nvkm drops the channel";
+}
+
 }  // namespace

@@ -44,29 +44,8 @@ static u32 fault_code(const char *report)
 	if (strstr(report, "fault "))
 		return 1;
 	if (strstr(report, "TRAP") || strstr(report, "ILLEGAL_") || strstr(report, "DATA_ERROR"))
-		return 2;
+		return TGM_KILL_GR_ERROR;
 	return 3;
-}
-
-static void fence_kill_record(volatile u32 *fence_cpu, u32 submitted, u32 error)
-{
-	volatile struct TegraGM20BAbiFence *fence = (volatile struct TegraGM20BAbiFence *)fence_cpu;
-
-	WRITE_ONCE(fence->killed_first, READ_ONCE(fence->completed) + 1);
-	WRITE_ONCE(fence->killed_last, submitted);
-	__asm__ volatile("dsb sy" ::: "memory");
-	WRITE_ONCE(fence->error, error);
-	__asm__ volatile("dsb sy" ::: "memory");
-}
-
-void tgm_fence_kill_clear(volatile uint32_t *fence_cpu)
-{
-	volatile struct TegraGM20BAbiFence *fence = (volatile struct TegraGM20BAbiFence *)fence_cpu;
-
-	WRITE_ONCE(fence->error, 0);
-	WRITE_ONCE(fence->killed_first, 0);
-	WRITE_ONCE(fence->killed_last, 0);
-	__asm__ volatile("dsb sy" ::: "memory");
 }
 
 /* nvkm killed the channel (nvkm_chan_error, from its recovery work). Before M3, M3 reads chan->error. From M3 on: an
@@ -77,6 +56,7 @@ int tgm_chan_killed(struct nvif_event *event, void *repv, u32 repc)
 	struct tgm_chan *chan = container_of(event, struct tgm_chan, kill);
 	const char *report = chan->fault[0] ? chan->fault : nvxnu_gpu_errors();
 	char state[TGM_HANG_LINE];
+	u32 first = 0;
 
 	(void)repv;
 	(void)repc;
@@ -98,8 +78,9 @@ int tgm_chan_killed(struct nvif_event *event, void *repv, u32 repc)
 	if (fault_code(report) == 1)
 		WRITE_ONCE(chan->fault_va, tgm_fault_va(report, (int)chan->chid));
 	WRITE_ONCE(chan->error, fault_code(report));
-	switch_gpu_timeline_failed(chan->timeline, READ_ONCE(*chan->fence_cpu));
-	fence_kill_record(chan->fence_cpu, chan->submitted, chan->error);
+	first = tgm_kill_first(chan->faulted, chan->fault_seqno, READ_ONCE(*chan->fence_cpu));
+	switch_gpu_timeline_failed(chan->timeline, first - 1);
+	tgm_fence_kill_record(chan->fence_cpu, first, chan->submitted, chan->error);
 	__atomic_store_n(chan->fence_cpu, chan->submitted, __ATOMIC_RELEASE);
 	__asm__ volatile("dsb sy" ::: "memory");
 	nvxnu_log("tegra-gm20b: GPU error in %s (channel %u): channel killed, GPU running: %s\n",

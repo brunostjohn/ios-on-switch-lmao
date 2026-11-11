@@ -45,6 +45,7 @@ void tgm_chan_on_fence(struct tgm_chan *chan, void (*fenced)(void *arg), void *a
 static void chan_free(struct tgm_chan *chan)
 {
 	int i = 0;
+	tgm_fault_unpublish(chan);
 	if (stats_on())
 		tgm_stats_gr_unbind(chan);
 	if (chan->high || chan->tracked)
@@ -331,6 +332,7 @@ static int chan_new(struct tgm_vm *vm, const void *vm_owner, volatile uint32_t *
 		goto fail;
 	}
 	list_add_tail(&chan->live, &tgm_live_chans);
+	tgm_fault_publish(chan);
 	mutex_unlock(&tgm_live_lock);
 	*pchan = chan;
 	return 0;

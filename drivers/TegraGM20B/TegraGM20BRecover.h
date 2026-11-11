@@ -176,6 +176,13 @@ static inline int tgm_progress_seen(uint32_t completed, uint32_t irq_done, uint3
 	return 1;
 }
 
+/* The first seqno a kill fails: the one a GR error stopped in, taken at the error (gpu_fault.c tgm_gr_fault) because
+ * GR can finish that job and release its fence before the kill comes; else the first not complete. */
+static inline uint32_t tgm_kill_first(int faulted, uint32_t fault_seqno, uint32_t completed)
+{
+	return faulted ? fault_seqno : completed + 1;
+}
+
 /* What a wait that ran out with no GPU error reported found (gpu_hang.c tgm_hang_recover). */
 enum tgm_hang {
 	TGM_HANG_STUCK, /* nothing to recover: the GPU is stuck on a kernel channel, or nothing progresses: panic */

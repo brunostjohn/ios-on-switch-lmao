@@ -71,6 +71,16 @@ TEST(Unbind, AnEngineLoadingTheChannelHoldsIt)
 	EXPECT_FALSE(tgm_engine_holds(engine(6, 4, 17), 17));  // NEXT_ID means nothing while saving
 }
 
+// T-v2 kill_one: the poisoned job P stopped GR, which finished P and released its fence before the kill
+TEST(Kill, TheFirstFailedSeqnoIsTheJobAGrErrorStoppedIn)
+{
+	EXPECT_EQ(tgm_kill_first(1, 105731u, 105731u), 105731u);
+	EXPECT_EQ(tgm_kill_first(1, 105731u, 105730u), 105731u);
+	EXPECT_EQ(tgm_kill_first(0, 0u, 105731u), 105732u)
+		<< "a kill with no GR error: the first not complete";
+	EXPECT_EQ(tgm_kill_first(1, 0u, 0xffffffffu), 0u) << "across the fence word's wrap";
+}
+
 TEST(Unbind, AnIdleEngineOrATsgIdHoldsNoChannel)
 {
 	EXPECT_FALSE(tgm_engine_holds(engine(1, 17, 0) & ~kBusy, 17));
