@@ -15,6 +15,7 @@ public enum Registry {
         Float32FilterTest(), CompressedTargetsTest(), ZcullTest(), MipTwodTest(), MipCandidatesTest(),
         VisibilityTest(), FixedBlendRuleTest(), PrivateCompressionTest(), AlphaToCoverageTest(),
         CompileSharedTest(), DrawBandsTest(), DispatchPiecesTest(), PosterTargetsTest(), ResolveCostTest(),
+        MsaaFirstUseTest(),
     ]
 
     static let video: [any HWTest] =

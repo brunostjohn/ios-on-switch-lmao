@@ -154,7 +154,8 @@ static const char *zetaMemoryRefusal(int asked)
         @"zbc_inexact" : @(s.zbcInexact.load()),
         @"ce_copies" : @(s.compCopies.load()),
         @"zeta_ce_copies" : @(s.compZetaCopies.load()),
-        @"storage_fallback_compressed" : @(s.fetch.storageFallback[size_t(raw::StorageFallback::Compressed)].load())
+        @"storage_fallback_compressed" : @(s.fetch.storageFallback[size_t(raw::StorageFallback::Compressed)].load()),
+        @"misses" : @(s.compMisses.load())
     };
 }
 

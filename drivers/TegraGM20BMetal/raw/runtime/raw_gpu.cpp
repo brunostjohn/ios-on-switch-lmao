@@ -1947,6 +1947,7 @@ bool Device::createMemoryless(uint32_t width, uint32_t height, uint32_t format, 
         return false;
     t.memoryless = true;
     t.samples = uint8_t(samples);
+    compPrearm(t);
     return true;
 }
 
@@ -3384,8 +3385,8 @@ RenderEncoder *CommandBuffer::render(const PassDesc &pass)
     e.cb_ = this;
     e.dev_ = dev_;
     e.pass_ = pass;
-    // the render hardware takes one memory layout for all of a pass's color targets (nvk_rendering_linear): block-linear when
     RAW_DIAGNOSTIC(e.prologueMark_ = dev_->spans_.reserve());
+    // the render hardware takes one memory layout for all of a pass's color targets (nvk_rendering_linear): block-linear when
     // one of them is, or is a pitch target the hardware cannot take (rendered through a shadow either way), or beside a zeta,
     // its pitch ones then rendered through block-linear shadows as NVK does; memoryless ones get a backing of the pass's layout
     const Texture *zeta = pass.depthStencil.texture;
@@ -3914,7 +3915,6 @@ bool Device::gpuNanoseconds(uint32_t stamp, uint64_t &ns) const
     return stampedNanoseconds(*slot, stamp, ns);
 }
 
-void CommandBuffer::abandon()
 #if SWITCH_RAW_DIAGNOSTICS
 std::vector<StateSpan> Device::longSpans(uint32_t stamp)
 {
@@ -3943,6 +3943,7 @@ void RenderEncoder::markSpan(Push &p, uint32_t index, SpanKind kind)
 }
 #endif
 
+void CommandBuffer::abandon()
 {
     releaseGeometry();
     releaseNativeReads();
@@ -3988,7 +3989,6 @@ void RenderEncoder::reserve()
 void RenderEncoder::finishDraw(uint32_t vertices, uint32_t instances, bool indirect)
 {
     const Pipeline &pl = *emitted_;
-    const uint64_t vertexWork = BatchWork::product(BatchWork::product(vertices, instances), pl.vertexInstructions);
 #if SWITCH_RAW_DIAGNOSTICS
     if (dev_->spans_.on()) {
         if (p_.room() < kSpanMarkWords)
@@ -3996,6 +3996,7 @@ void RenderEncoder::finishDraw(uint32_t vertices, uint32_t instances, bool indir
         markSpan(p_, dev_->spans_.reserve(), SpanKind::Draws);
     }
 #endif
+    const uint64_t vertexWork = BatchWork::product(BatchWork::product(vertices, instances), pl.vertexInstructions);
     const uint64_t fragmentWork = BatchWork::product(BatchWork::product(drawPixels_, instances),
                                                     uint64_t(pl.fragmentInstructions) * pl.samplePasses);
     if (cb_->batchWork_.add(indirect ? BatchWork::kSaturated : vertexWork + fragmentWork, cb_->batchLimit()))
@@ -6225,8 +6226,8 @@ void RenderEncoder::end()
         p.m(CLEAR_SURFACE, zsBits);
         p.m(RENDER_ENABLE_OVERRIDE, 0);
     }
-    checkRoom(p, "a pass prologue");
     RAW_DIAGNOSTIC(markSpan(p, prologueMark_, SpanKind::Prologue));
+    checkRoom(p, "a pass prologue");
     cb_->segment(start, p.at);
     d.push_.head = uint64_t(reinterpret_cast<uint8_t *>(p.at) - d.push_.bo.cpu);
     RAW_ENCODE_END(prologueSpan);

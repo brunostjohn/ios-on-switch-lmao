@@ -1659,6 +1659,8 @@ public:
         // value the boot ZBC table holds (no texels written) and to one it does not
         std::atomic<uint64_t> compHeld{0}, compHeldBytes{0}, compViews{0}, compMade{0}, compFailed{0}, zbcHits{0},
             zbcMisses{0};
+        // passes whose memoryless attachment wanted compressed memory not made yet, and took plain memory
+        std::atomic<uint64_t> compMisses{0};
         // ZBC entries this process added, those a full table refused, and full clears of compressed targets to a value no
         // entry can hold (raw_zbc.h)
         std::atomic<uint64_t> zbcAdded{0}, zbcFull{0}, zbcInexact{0};
@@ -1877,11 +1879,11 @@ private:
     Buffer visibilityPage_;
     std::once_flag visibilityOnce_;
     std::atomic<uint32_t> visibilityNext_{0};
-
-    struct HeapPart {
 #if SWITCH_RAW_DIAGNOSTICS
     Bo spanMarks_;
 #endif
+
+    struct HeapPart {
         uint64_t offset = 0, bytes = 0;  // in the heap
         uint8_t *cpu = nullptr;
         Bo bo;
@@ -2277,6 +2279,8 @@ private:
     void compStop();
     // Asks compThread_ for `w` unless it was
     void compAsk(const CompWant &w);
+    // A new multisampled memoryless attachment's compressed memory, asked for at its creation so its first pass finds it made
+    void compPrearm(const Texture &m);
     // compThread_ started where it is not: it trims what an idle process holds when it turns stale (compDeadline)
     void compStart();
     bool compRearm_ = false;  // shared plain memory was made: compThread_ takes its deadline (lock_)

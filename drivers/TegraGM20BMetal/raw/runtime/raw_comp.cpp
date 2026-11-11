@@ -128,6 +128,22 @@ void Device::compStart()
     compWake_.notify_one();
 }
 
+void Device::compPrearm(const Texture &m)
+{
+    if (m.samples < 2)
+        return;
+    std::lock_guard<std::mutex> l(lock_);
+    const uint32_t kind = compKind(m, kMemorylessTag, true);
+    Texture t;
+    fx::MipChain c;
+    uint64_t bytes = 0;
+    if (!kind || !backingLayout(m, t, c, bytes))
+        return;
+    const uint64_t need = compBytes(bytes);
+    if (comp_.fit(need, kind) == comp_.ready.end())
+        compAsk({compClassBytes(need), kind});
+}
+
 Device::Backing *Device::compBacking(const Texture &m, uint32_t tag, uint32_t kind)
 {
     Texture t;
@@ -141,6 +157,7 @@ Device::Backing *Device::compBacking(const Texture &m, uint32_t tag, uint32_t ki
         auto it = comp_.fit(need, kind);
         if (it == comp_.ready.end()) {
             compAsk({compClassBytes(need), kind});
+            RAW_DIAGNOSTIC(stats.compMisses++);
             return nullptr;
         }
         comp_.mems.push_back(std::make_unique<CompMem>(CompMem{it->bo, kind, tag, 0}));

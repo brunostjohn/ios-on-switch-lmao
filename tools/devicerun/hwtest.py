@@ -120,6 +120,7 @@ TESTS: dict[str, bool] = {
             'gpu.sched.long_dispatch_pieces',
             'gpu.poster_targets',
             'gpu.msaa.resolve_cost',
+            'gpu.msaa.first_use',
             'gpu.path.job_visibility',
             'gpu.path.lean_copy',
             'gpu.path.control_reserve',
@@ -257,8 +258,8 @@ TESTS: dict[str, bool] = {
     'system.overlay_apps': False,
     'system.overlay_app_records': False,
     'system.widgets_render': False,
-}
     'ui.launch_hitch': False,
+}
 
 # The tests only one iOS version's app runs (hw_test_app/app<version>), by that version.
 BY_IOS: dict[str, dict[str, bool]] = {
