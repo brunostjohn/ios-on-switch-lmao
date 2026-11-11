@@ -99,6 +99,29 @@ TEST(SemanticPlan, VisibilityModesOnAPassWithAResultBufferAreOperationsInOrder)
         EXPECT_EQ(m.obj, object(0x40));
 }
 
+TEST(SemanticPlan, PredicationRecordsKeepTheirWordCompareAndReference)
+{
+    RMCommandPlan plan;
+    plan.record(cmd(OpCompute), {});
+    Cmd start = cmd(OpPredicate, 1);
+    start.obj = object(0x80);
+    start.c = 0x124;
+    start.a = 4;
+    start.b = 0xfffffffeu;
+    plan.record(start, {});
+    plan.record(cmd(OpPredicate, 3), {});
+    plan.record(cmd(OpEnd), {});
+    ASSERT_EQ(plan.size(), 4u);
+    const Cmd got = plan.legacy(1);
+    EXPECT_EQ(got.op, OpPredicate);
+    EXPECT_EQ(got.stage, 1);
+    EXPECT_EQ(got.obj, object(0x80));
+    EXPECT_EQ(got.c, 0x124u);
+    EXPECT_EQ(got.a, 4u);
+    EXPECT_EQ(got.b, 0xfffffffeu);
+    EXPECT_EQ(plan.legacy(2).stage, 3);
+}
+
 TEST(SemanticPlan, SettersCollapseBeforeTheFirstDraw)
 {
     RMCommandPlan plan;

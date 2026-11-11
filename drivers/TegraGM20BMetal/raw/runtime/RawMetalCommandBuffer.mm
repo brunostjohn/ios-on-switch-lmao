@@ -126,6 +126,10 @@ static void giveRecording(RMCommandBuffer *b)
 {
     if (cmd.op == OpPipeline && _recordedPass < _passes.size() && _passes[_recordedPass].compressed)
         rmNoteStorageTargets(self, _passes[_recordedPass], cmd);
+    if (cmd.op == OpCompute)
+        _predicates.computeEncoder(cmd.a);
+    else if (cmd.op == OpRender || cmd.op == OpBlit || cmd.op == OpSignalEvent || cmd.op == OpWaitEvent)
+        _predicates.otherWork();
     if (_plan.record(cmd, _extra)) {
         std::vector<raw::ResourceUse> uses;
         if (isPlanDraw(cmd.op)) {
@@ -194,6 +198,8 @@ static void giveRecording(RMCommandBuffer *b)
                     uses.push_back({(__bridge void *)a.resolve, raw::ResourceUse::Write});
         } else if (cmd.op == OpVisibility && cmd.obj) {
             uses.push_back({cmd.obj, raw::ResourceUse::Write});
+        } else if (cmd.op == OpPredicate && cmd.obj) {
+            uses.push_back({cmd.obj, raw::ResourceUse::Read});
         } else if (cmd.op == OpInvocation) {
             raw::forEachObject((__bridge NSInvocation *)cmd.obj, [&](id object) {
                 uses.push_back({(__bridge void *)object, raw::ResourceUse::Read | raw::ResourceUse::Write});

@@ -31,6 +31,7 @@
 #include "raw_probe_forms.h"
 #include "raw_probe_ops.h"
 #include "raw_private_comp.h"
+#include "raw_predication.h"
 #include "raw_visibility.h"
 #include <array>
 #include <atomic>
@@ -990,6 +991,11 @@ public:
     Refusal refusal;                              // the last refused draw's predicate and its values
     RenderEncoder *render(const PassDesc &pass);  // null: an attachment the raw path cannot render to
     BlitEncoder *blit();
+    // Metal's predication unit ended (raw_predication.h)
+    void endPredicationUnit()
+    {
+        predication_.endUnit();
+    }
     // `multisampled` resolved into `into` by the 2D engine (rule resolve.twod, raw_fetch_rungs.h); false: not a sample
     // grid the engine reads at 2:1, nothing recorded
     bool resolveTwod(const Texture &multisampled, const Texture &into);
@@ -1072,6 +1078,7 @@ private:
     friend class BlitEncoder;
     friend class ComputeEncoder;
     Device *dev_ = nullptr;
+    Predication predication_;
     PushBatches segments_;
     BatchWork batchWork_;
     uint64_t batchLimit() const;

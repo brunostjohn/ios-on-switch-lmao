@@ -3415,6 +3415,7 @@ CommandBuffer *Device::begin()
     cb.named_.clear();
     cb.sharedWaits_.clear();
     cb.sharedSignals_.clear();
+    cb.predication_.endUnit();
     cb.visibility_ = JobVisibility::Legacy;
     cb.externalWrites_ = false;
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG

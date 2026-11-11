@@ -100,7 +100,7 @@ __attribute__((objc_externally_retained)) static bool encodeRawAttempt(RMCommand
     raw::RenderEncoder *re = nullptr;
     raw::BlitEncoder *be = nullptr;
     std::optional<raw::ComputeEncoder> ce;
-    bool serialCompute = false;
+    bool serialCompute = false, computeUnit = false;
     raw::StateCursor stateCursor;
     raw::FusionPass fused;
     size_t fusedAt = SIZE_MAX;
@@ -464,11 +464,16 @@ __attribute__((objc_externally_retained)) static bool encodeRawAttempt(RMCommand
         }
         switch (c.op) {
         case OpCompute:
+            if (!computeUnit || serialCompute != (c.a == MTLDispatchTypeSerial))
+                rc->endPredicationUnit();
+            computeUnit = true;
             ce.emplace(*rc, d);
             serialCompute = c.a == MTLDispatchTypeSerial;
             ce->setSerial(serialCompute);
             break;
         case OpRender: {
+            computeUnit = false;
+            rc->endPredicationUnit();
             RAW_ENCODE_SPAN(Pass);
             const RMPass &pass = cb->_passes[c.x];
             renderBegin = at;
@@ -564,6 +569,8 @@ __attribute__((objc_externally_retained)) static bool encodeRawAttempt(RMCommand
             break;
         }
         case OpBlit:
+            computeUnit = false;
+            rc->endPredicationUnit();
             be = rc->blit();
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
             for (const auto &o : cb->_probeOps)

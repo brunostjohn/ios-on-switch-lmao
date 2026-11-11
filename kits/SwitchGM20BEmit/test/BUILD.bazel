@@ -18,6 +18,7 @@ host_library(
         "//kits/SwitchGM20BEmit:SwitchGM20BEmitBarrier.c",
         "//kits/SwitchGM20BEmit:SwitchGM20BEmitDecompress.c",
         "//kits/SwitchGM20BEmit:SwitchGM20BEmitIterated.c",
+        "//kits/SwitchGM20BEmit:SwitchGM20BEmitPredicate.c",
         "//kits/SwitchGM20BEmit:SwitchGM20BEmitRaster.c",
         "//kits/SwitchGM20BEmit:SwitchGM20BEmitReport.c",
         "//kits/SwitchGM20BEmit:mesa/nouveau_copy_rect.c",
@@ -29,6 +30,7 @@ host_library(
         "//kits/SwitchGM20BEmit:SwitchGM20BEmitCopy.h",
         "//kits/SwitchGM20BEmit:SwitchGM20BEmitDecompress.h",
         "//kits/SwitchGM20BEmit:SwitchGM20BEmitIterated.h",
+        "//kits/SwitchGM20BEmit:SwitchGM20BEmitPredicate.h",
         "//kits/SwitchGM20BEmit:SwitchGM20BEmitRaster.h",
         "//kits/SwitchGM20BEmit:SwitchGM20BEmitReport.h",
         "//kits/SwitchGM20BEmit:SwitchGM20BPushDecode.h",
@@ -88,6 +90,18 @@ host_test(
     name = "emit_report_test",
     srcs = [
         "emit_report_test.cpp",
+        "push_words.h",
+    ],
+    deps = [
+        ":emit",
+        "//kits/SwitchGM20B:classes",
+    ],
+)
+
+host_test(
+    name = "emit_predicate_test",
+    srcs = [
+        "emit_predicate_test.cpp",
         "push_words.h",
     ],
     deps = [

@@ -200,6 +200,27 @@ void ComputeEncoder::barrier()
     p_.m(INVALIDATE_TEXTURE_DATA_CACHE_NO_WFI, 0, SUBC_COMPUTE);
 }
 
+Predication::Answer ComputeEncoder::startIf(uint64_t wordVa, PredicateCompare compare, uint32_t reference)
+{
+    room(Predication::kStartWords);
+    uint64_t va;
+    uint8_t *cpu = dev_.alloc(dev_.upload_, Predication::kSlotBytes, Predication::kSlotAlign, va);
+    return cb_.predication_.startIf(p_, {cpu, va}, wordVa, predicateTest(compare, reference));
+}
+
+Predication::Answer ComputeEncoder::startElse()
+{
+    room(Predication::kStartWords);
+    uint64_t va;
+    uint8_t *cpu = dev_.alloc(dev_.upload_, Predication::kSlotBytes, Predication::kSlotAlign, va);
+    return cb_.predication_.startElse(p_, {cpu, va});
+}
+
+Predication::Answer ComputeEncoder::endIf()
+{
+    return cb_.predication_.endIf();
+}
+
 void ComputeEncoder::setTexture(uint32_t slot, const Texture *t)
 {
     if (slot < 31 && textures_[slot] != t) {
@@ -446,9 +467,11 @@ bool ComputeEncoder::launch(const std::array<uint32_t, 3> &grid, const DispatchP
     uint8_t *qmdUpload = dev_.alloc(dev_.upload_, sizeof qmd, 256, qmdVa);
     memcpy(qmdUpload, qmd, sizeof qmd);
     RAW_DIAGNOSTIC(dev_.stats.uploadBytes += sizeof qmd);
-    room(8);
+    room(8 + Predication::kGuardWords + Predication::kReleaseWords);
+    cb_.predication_.guard(p_);
     p_.m(SEND_PCAS_A, uint32_t(qmdVa >> 8), SUBC_COMPUTE);
     p_.m(SEND_SIGNALING_PCAS_B, kPcasInvalidateSchedule, SUBC_COMPUTE);
+    cb_.predication_.release(p_);
     return true;
 }
 

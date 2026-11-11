@@ -105,7 +105,9 @@ void planSegments(RMCommandBuffer *cb)
     cb->_gpuPrefixEligible = true;
     [cb closeEncoder];
     raw::ExecutionPlan plan;
-    const auto error = makeExecutionPlan(cb->_plan, cb->_whole, plan, [](const RMPlanEvent &entry) {
+    // A predicated block may span its unit's encoders: one driver runs all of them
+    const bool whole = cb->_whole || (cb->_predicates.recorded() && cb->_reason != WhyRaw);
+    const auto error = makeExecutionPlan(cb->_plan, whole, plan, [](const RMPlanEvent &entry) {
         id event = (__bridge id)entry.event;
         return [event respondsToSelector:@selector(signaledValue)] &&
                [event respondsToSelector:@selector(setSignaledValue:)] &&
@@ -267,7 +269,10 @@ bool submitRange(RMCommandBuffer *cb, bool followed)
             }
             cb->_reason = WhyEncode;
             cb->_why = [NSString stringWithUTF8String:why ?: "?"];
-            isolateRefused(cb, refusedEncoder);
+            if (cb->_predicates.recorded())
+                range.raw = false;
+            else
+                isolateRefused(cb, refusedEncoder);
             return false;
         }
         RAW_DIAGNOSTIC(r.stats.raw++);

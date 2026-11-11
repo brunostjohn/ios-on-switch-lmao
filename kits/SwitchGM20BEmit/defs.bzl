@@ -14,6 +14,7 @@ EMIT_SOURCES = [
     "SwitchGM20BEmitBarrier.c",
     "SwitchGM20BEmitDecompress.c",
     "SwitchGM20BEmitIterated.c",
+    "SwitchGM20BEmitPredicate.c",
     "SwitchGM20BEmitRaster.c",
     "SwitchGM20BEmitReport.c",
     "mesa/nouveau_copy_rect.c",

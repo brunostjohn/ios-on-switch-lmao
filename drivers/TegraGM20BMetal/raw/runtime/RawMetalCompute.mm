@@ -7,10 +7,30 @@
 #include "raw_compute_key.h"
 #include "raw_compute_lookup.h"
 #import "RawMetalComputeState.h"
+#include "raw_predication.h"
 #include "raw_view.h"
 #include "raw_surface_view.h"
 
 using RMKernelJob = raw::ComputeKernelJob<raw::ComputeState>;
+
+@protocol RMPredicatedEncoder
+- (void)encodeStartIf:(id<MTLBuffer>)buffer
+               offset:(NSUInteger)offset
+           comparison:(NSUInteger)comparison
+       referenceValue:(uint32_t)reference;
+- (void)encodeStartElse;
+- (BOOL)encodeEndIf;
+- (void)encodeStartWhile:(id<MTLBuffer>)buffer
+                  offset:(NSUInteger)offset
+              comparison:(NSUInteger)comparison
+          referenceValue:(uint32_t)reference;
+- (BOOL)encodeEndWhile;
+- (void)encodeStartDoWhile;
+- (BOOL)encodeEndDoWhile:(id<MTLBuffer>)buffer
+                  offset:(NSUInteger)offset
+              comparison:(NSUInteger)comparison
+          referenceValue:(uint32_t)reference;
+@end
 using RMKernelSet = raw::ComputeKernelSet<raw::ComputeState>;
 
 @interface RMComputeEncoder () {
@@ -278,6 +298,76 @@ using RMKernelSet = raw::ComputeKernelSet<raw::ComputeState>;
     [_cb record:m];
 }
 
+- (BOOL)predicate:(raw::PredicateRecords::Kind)kind
+              buffer:(id<MTLBuffer>)buffer
+              offset:(NSUInteger)offset
+          comparison:(uint64_t)comparison
+           reference:(uint32_t)reference
+{
+    const bool answer = _cb->_predicates.record(kind);
+    if (_cb->_predicates.loops())
+        [self refuse:PredComputePredicate value:kind why:@"a predicated loop, which the raw path does not run"];
+    else if (_cb->_predicates.misused())
+        [self refuse:PredComputePredicate value:kind why:@"a predication record with no block of its kind open"];
+    const bool rawBuffer = [(id)buffer isKindOfClass:[RMBuffer class]];
+    if (kind == raw::PredicateRecords::StartIf &&
+        (!rawBuffer || (offset & ~3ull) + 4 > ((RMBuffer *)buffer)->_raw.length))
+        [self refuse:PredComputePredicate value:offset why:@"a predicate word outside a raw buffer"];
+    Cmd m = cmd(OpPredicate, uint8_t(kind));
+    m.obj = (__bridge void *)buffer;
+    m.c = offset & ~3ull;
+    m.a = uint32_t(raw::predicateCompare(comparison));
+    m.b = reference;
+    [_cb record:m];
+    return answer;
+}
+
+- (void)encodeStartIf:(id<MTLBuffer>)buffer
+               offset:(NSUInteger)offset
+           comparison:(NSUInteger)comparison
+       referenceValue:(uint32_t)reference
+{
+    [self predicate:raw::PredicateRecords::StartIf buffer:buffer offset:offset comparison:comparison reference:reference];
+}
+
+- (void)encodeStartElse
+{
+    [self predicate:raw::PredicateRecords::StartElse buffer:nil offset:0 comparison:0 reference:0];
+}
+
+- (BOOL)encodeEndIf
+{
+    return [self predicate:raw::PredicateRecords::EndIf buffer:nil offset:0 comparison:0 reference:0];
+}
+
+- (void)encodeStartWhile:(id<MTLBuffer>)buffer
+                  offset:(NSUInteger)offset
+              comparison:(NSUInteger)comparison
+          referenceValue:(uint32_t)reference
+{
+    [self predicate:raw::PredicateRecords::StartWhile buffer:buffer offset:offset comparison:comparison
+          reference:reference];
+}
+
+- (BOOL)encodeEndWhile
+{
+    return [self predicate:raw::PredicateRecords::EndWhile buffer:nil offset:0 comparison:0 reference:0];
+}
+
+- (void)encodeStartDoWhile
+{
+    [self predicate:raw::PredicateRecords::StartDoWhile buffer:nil offset:0 comparison:0 reference:0];
+}
+
+- (BOOL)encodeEndDoWhile:(id<MTLBuffer>)buffer
+                  offset:(NSUInteger)offset
+              comparison:(NSUInteger)comparison
+          referenceValue:(uint32_t)reference
+{
+    return [self predicate:raw::PredicateRecords::EndDoWhile buffer:buffer offset:offset comparison:comparison
+                 reference:reference];
+}
+
 - (void)dispatchThreadgroups:(MTLSize)groups threadsPerThreadgroup:(MTLSize)threads
 {
     [self dispatch:groups threads:threads perThread:false];
@@ -292,7 +382,37 @@ using RMKernelSet = raw::ComputeKernelSet<raw::ComputeState>;
 
 bool isKernelCommand(Op op)
 {
-    return op >= OpKernelState && op <= OpDispatch;
+    return (op >= OpKernelState && op <= OpDispatch) || op == OpPredicate;
+}
+
+// m2v's encoder takes the same SPI (metal2vulkan-runtime/src/predication.rs)
+static void replayPredicate(id<MTLComputeCommandEncoder> e, const Cmd &c)
+{
+    id twin = twinOf((__bridge id)c.obj);
+    id<RMPredicatedEncoder> p = (id<RMPredicatedEncoder>)e;
+    switch (c.stage) {
+    case raw::PredicateRecords::StartIf:
+        [p encodeStartIf:twin offset:c.c comparison:c.a referenceValue:c.b];
+        break;
+    case raw::PredicateRecords::StartElse:
+        [p encodeStartElse];
+        break;
+    case raw::PredicateRecords::EndIf:
+        [p encodeEndIf];
+        break;
+    case raw::PredicateRecords::StartWhile:
+        [p encodeStartWhile:twin offset:c.c comparison:c.a referenceValue:c.b];
+        break;
+    case raw::PredicateRecords::EndWhile:
+        [p encodeEndWhile];
+        break;
+    case raw::PredicateRecords::StartDoWhile:
+        [p encodeStartDoWhile];
+        break;
+    case raw::PredicateRecords::EndDoWhile:
+        [p encodeEndDoWhile:twin offset:c.c comparison:c.a referenceValue:c.b];
+        break;
+    }
 }
 
 void replayKernel(id encoder, RMCommandBuffer *cb, const Cmd &c, std::set<RMBuffer *> &buffers)
@@ -331,6 +451,9 @@ void replayKernel(id encoder, RMCommandBuffer *cb, const Cmd &c, std::set<RMBuff
     case OpKernelBarrier:
         [e memoryBarrierWithScope:MTLBarrierScopeBuffers | MTLBarrierScopeTextures];
         break;
+    case OpPredicate:
+        replayPredicate(e, c);
+        break;
     case OpDispatch: {
         const MTLSize grid = MTLSizeMake(extra(cb, c.x), extra(cb, c.x + 1), extra(cb, c.x + 2)),
                       threads = MTLSizeMake(c.c & 0xffff, (c.c >> 16) & 0xffff, c.c >> 32);
@@ -343,6 +466,30 @@ void replayKernel(id encoder, RMCommandBuffer *cb, const Cmd &c, std::set<RMBuff
     default:
         break;
     }
+}
+
+static bool encodePredicate(raw::ComputeEncoder &e, RMCommandBuffer *cb, const Cmd &c, const char **why)
+{
+    (void)cb;
+    raw::Predication::Answer answer = raw::Predication::Answer::Misused;
+    switch (c.stage) {
+    case raw::PredicateRecords::StartIf: {
+        RMBuffer *b = (__bridge RMBuffer *)c.obj;
+        answer = e.startIf(b->_raw.va + c.c, raw::PredicateCompare(c.a), c.b);
+        break;
+    }
+    case raw::PredicateRecords::StartElse:
+        answer = e.startElse();
+        break;
+    case raw::PredicateRecords::EndIf:
+        answer = e.endIf();
+        break;
+    default:
+        break;
+    }
+    if (answer != raw::Predication::Answer::Done)
+        *why = "a predication record the raw path cannot run";
+    return answer == raw::Predication::Answer::Done;
 }
 
 bool encodeKernel(raw::ComputeEncoder &e, raw::CommandBuffer &rc, RMCommandBuffer *cb, const Cmd &c, const char **why)
@@ -375,6 +522,8 @@ bool encodeKernel(raw::ComputeEncoder &e, raw::CommandBuffer &rc, RMCommandBuffe
     case OpKernelBarrier:
         e.barrier();
         break;
+    case OpPredicate:
+        return encodePredicate(e, cb, c, why);
     case OpDispatch: {
         const uint32_t groups[3] = {uint32_t(extra(cb, c.x + 3)), uint32_t(extra(cb, c.x + 4)),
                                     uint32_t(extra(cb, c.x + 5))},

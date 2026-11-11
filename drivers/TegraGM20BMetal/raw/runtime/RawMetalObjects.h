@@ -18,6 +18,7 @@
 #include "RawMetalPredicates.h"
 #include "RawResidency.h"
 #include "raw_handler_order.h"
+#include "raw_predicate_records.h"
 #include "raw_submit_queue.h"
 #include "raw_event_timeline.h"
 #include "raw_retirement.h"
@@ -290,6 +291,7 @@ struct RMSharedEventWait {
     // frame. The command buffer completes with its last segment.
     size_t _encAt;
     bool _encOpen, _encRefused, _whole;
+    raw::PredicateRecords _predicates;
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
     bool _forceWholePrograms, _inlineStates;
     // hw_test_app's probes (RawMetalProbe.mm): its barriers' forms, where they took effect, and its 2D-engine work, each

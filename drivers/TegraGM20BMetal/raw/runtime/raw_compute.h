@@ -77,6 +77,10 @@ public:
                         const std::array<uint32_t, 3> &nominal, bool first, bool last, const char **why);
     // memoryBarrier...: the dispatches before have written, and their writes are visible to the ones after
     void barrier();
+    // A predication record (raw_predication.h): the word at `wordVa` for encodeStartIf; Misused: nothing encoded
+    Predication::Answer startIf(uint64_t wordVa, PredicateCompare compare, uint32_t reference);
+    Predication::Answer startElse();
+    Predication::Answer endIf();
     void end();
 
 private:

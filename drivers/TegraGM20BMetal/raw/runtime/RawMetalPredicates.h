@@ -57,6 +57,7 @@ enum RMPred : uint8_t {
     PredComputeImage,   // a texture sampled through an image of its own: a = slot
     PredComputeView,    // a texture where m2v binds a view of another texel size: a = slot
     PredComputeEdge,    // dispatchThreads: of a grid with an edge threadgroup: a = the grid's edge
+    PredComputePredicate,  // a predication record raw does not run (a loop, a misused or unbalanced one, a word outside a raw buffer): a = kind or offset
     PredMipmaps,
     PredMipmapsFormat,  // a mipmapped texture's generateMipmaps in a format neither the 2D engine nor a mip state filters: a = format
     PredEvent,
@@ -123,6 +124,7 @@ static constexpr const char *kPredNames[] = {"-",
                                              "compute.image",
                                              "compute.view",
                                              "compute.edge",
+                                             "compute.predicate",
                                              "mipmaps",
                                              "mipmaps.fmt",
                                              "event",
