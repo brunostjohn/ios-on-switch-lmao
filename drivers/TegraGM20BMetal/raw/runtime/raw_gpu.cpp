@@ -16,6 +16,7 @@
 #include "../../../../kits/SwitchGM20B/SwitchGM20B.h"
 #include "raw_follow.h"
 #include "raw_gpu.h"
+#include "TegraGM20BJobABI.h"
 #include "raw_kit.h"
 #include "raw_mme.h"
 #include "raw_mip.h"
@@ -3748,17 +3749,36 @@ bool CommandBuffer::commit(uint32_t &seqno)
     const uint32_t maxPushes = d.k_.maxPushes(), maxFences = d.k_.maxFences();
     if (!segments_.valid(maxPushes))
         return false;  // validate all indivisible continuation groups before publishing any prefix
+    // A command buffer of several jobs holds its shared uses' CPU-lock admission from its first job to its last
+    const bool multiple =
+        (!segments_.empty() && segments_.submission(0, maxPushes, maxFences) < segments_.size()) ||
+        sharedWaits_.size() + sharedSignals_.size() > TegraGM20BMaxJobEvents;
+    const uint64_t admission = multiple ? d.k_.nextAdmission() : 0;
+    bool admissionHeld = false;
     uint32_t seq = 0;
-    auto submit = [&](const TegraGM20BAbiPush *pushes, uint32_t count, SurfaceList &uses, JobVisibility visibility,
-                      const JobEvents &events) {
+    auto submit = [&](const TegraGM20BAbiPush *pushes, uint32_t count, SurfaceList &resources, JobVisibility visibility,
+                      const JobEvents &events, bool last) {
         int result = KERN_SUCCESS;
+        SurfaceList &uses = admission ? surfaces_ : resources;
+        const uint32_t admissionFlags =
+            admission ? (published ? uint32_t(TegraGM20BJobAdmissionContinue) : uint32_t(TegraGM20BJobAdmissionBegin)) |
+                            (last ? uint32_t(TegraGM20BJobAdmissionEnd) : 0u)
+                      : 0u;
         RAW_DIAGNOSTIC(noteExecUses(uses.uses().size()));
         RAW_ENCODE_BEGIN(execSpan, Exec);
         const bool executed = d.job(d.setView_, d.channel_, pushes, count, uses, visibility, seq, &result, events,
-                                    &memberUses_, memberRemovals_, invalidates || memberHostWritten_);
+                                    &memberUses_, memberRemovals_, invalidates || memberHostWritten_, admission,
+                                    admissionFlags);
         RAW_ENCODE_END(execSpan);
         if (!executed) {
             admissionBlocked = !published && result == kIOReturnCannotLock;
+            if (admissionHeld) {
+                SurfaceList none;
+                uint32_t cancelled = 0;
+                (void)d.job(d.setView_, d.channel_, nullptr, 0, none, JobVisibility::Internal, cancelled, nullptr, {},
+                            nullptr, 0, false, admission, TegraGM20BJobAdmissionCancel);
+                admissionHeld = false;
+            }
             if ((!nativeSurfaces_.empty() || !sharedWaits_.empty() || !sharedSignals_.empty()) &&
                 (result == kIOReturnNotReady || result == kIOReturnAborted))
                 nativeError = result;
@@ -3770,6 +3790,7 @@ bool CommandBuffer::commit(uint32_t &seqno)
             return false;
         }
         published = true;
+        admissionHeld = admission && !last;
         d.lastSeqno_ = seq;
         return true;
     };
@@ -3780,7 +3801,7 @@ bool CommandBuffer::commit(uint32_t &seqno)
            TegraGM20BMaxJobEvents) {
         const uint32_t count = uint32_t(std::min<size_t>(sharedWaits_.size() - waited, TegraGM20BMaxJobEvents));
         const JobEvents events{sharedWaits_.data() + waited, nullptr, count, 0};
-        if (!submit(nullptr, 0, eventResources, JobVisibility::Internal, events))
+        if (!submit(nullptr, 0, eventResources, JobVisibility::Internal, events, false))
             return false;
         waited += count;
     }
@@ -3793,7 +3814,9 @@ bool CommandBuffer::commit(uint32_t &seqno)
             uint32_t(std::min<size_t>(sharedSignals_.size(), TegraGM20BMaxJobEvents - waitCount)) : 0;
         const JobEvents events{waitCount ? sharedWaits_.data() + waited : nullptr,
                               signalCount ? sharedSignals_.data() : nullptr, waitCount, signalCount};
-        if (!submit(segments_.data() + at, uint32_t(n), surfaces_, visibility, events))
+        const bool last = closing && waited + waitCount == sharedWaits_.size() &&
+                          signaled + signalCount == sharedSignals_.size();
+        if (!submit(segments_.data() + at, uint32_t(n), surfaces_, visibility, events, last))
             return false;
         waited += waitCount;
         signaled += signalCount;
@@ -3811,7 +3834,8 @@ bool CommandBuffer::commit(uint32_t &seqno)
                                                              TegraGM20BMaxJobEvents - waitCount));
         const JobEvents events{waitCount ? sharedWaits_.data() + waited : nullptr,
                               signalCount ? sharedSignals_.data() + signaled : nullptr, waitCount, signalCount};
-        if (!submit(nullptr, 0, eventResources, JobVisibility::External, events))
+        const bool last = waited + waitCount == sharedWaits_.size() && signaled + signalCount == sharedSignals_.size();
+        if (!submit(nullptr, 0, eventResources, JobVisibility::External, events, last))
             return false;
         waited += waitCount;
         signaled += signalCount;

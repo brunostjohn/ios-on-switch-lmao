@@ -62,6 +62,9 @@ struct KernelJob {
     JobVisibility visibility = JobVisibility::External;
     JobEvents events;
     bool hostWritten = false;  // the CPU wrote a member the job reads through the GPU L2 since the last job
+    // A command buffer of several jobs: its cookie (Kernel::nextAdmission) and TegraGM20BJobAdmission* flags
+    uint64_t admission = 0;
+    uint32_t admissionFlags = 0;
 };
 
 class Kernel {
@@ -193,6 +196,11 @@ public:
     uint64_t promiseWrites(const uint64_t *handles, uint32_t count);
     void endPromise(uint64_t cookie);
 
+    uint64_t nextAdmission()
+    {
+        return admissionCookie_.fetch_add(1, std::memory_order_relaxed);
+    }
+
     uint32_t maxPushes() const
     {
         return (info_.flags & TegraGM20BInfoSubmitAddress) ? TegraGM20BMaxJobPushes : TegraGM20BMaxPushes;
@@ -262,6 +270,7 @@ private:
     // A SurfaceWrites failed: imports stop saying the GPU only samples them.
     std::atomic<bool> importsWritten_{false};
     std::atomic<uint32_t> lostChannel_{0}, lostError_{0}, opened_{0};
+    std::atomic<uint64_t> admissionCookie_{1};
     std::mutex lostLock_;  // a channel made, and a channel marked lost, one after the other
     std::atomic<uint64_t> lostFaultVa_{0};
     uint64_t fenceMap_ = 0;  // the connection's fence page, mapped once: every channel's word is in it

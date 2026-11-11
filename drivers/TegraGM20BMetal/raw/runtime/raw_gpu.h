@@ -1709,9 +1709,11 @@ private:
     // buffer used (raw_resource_set.h submitInSet)
     bool job(SetView &view, uint32_t channel, const TegraGM20BAbiPush *pushes, uint32_t count, SurfaceList &uses,
              JobVisibility visibility, uint32_t &seqno, int *result = nullptr, const JobEvents &events = {},
-             const std::vector<SetUse> *recorded = nullptr, uint32_t removals = 0, bool hostWritten = false)
+             const std::vector<SetUse> *recorded = nullptr, uint32_t removals = 0, bool hostWritten = false,
+             uint64_t admission = 0, uint32_t admissionFlags = 0)
     {
-        const KernelJob made = {channel, pushes, count, nullptr, 0, 0, 0, visibility, events, hostWritten};
+        const KernelJob made = {channel, pushes,     count,      nullptr,  0,         0,
+                                0,       visibility, events, hostWritten, admission, admissionFlags};
         return submitInSet(k_, set_, view, true, made, seqno, result, &uses, recorded, removals);
     }
 

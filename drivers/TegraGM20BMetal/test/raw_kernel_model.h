@@ -14,6 +14,7 @@
 #include "TegraGM20BABI.h"
 #include "TegraGM20BJobABI.h"
 #include <IOKit/IOKitLib.h>
+#include <algorithm>
 #include <cstdint>
 #include <cstring>
 #include <map>
@@ -55,6 +56,23 @@ struct Model {
     std::map<uint64_t, std::pair<uint64_t, uint64_t>> binds;  // va: the BO bound there and its bytes
     SetState sets[TegraGM20BMaxResourceSets];
     unsigned submitJobs = 0, setJobs = 0, staleSets = 0, addressJobs = 0, staleViews = 0;
+    std::map<uint32_t, std::pair<uint64_t, std::vector<uint64_t>>> admitted;  // channel: cookie, its uses' BOs
+    std::vector<uint64_t> cpuLocked;  // an IOSurfaceLock in another process: a job naming one is refused CannotLock
+
+    bool lockedByCpu(uint64_t bo) const
+    {
+        return std::find(cpuLocked.begin(), cpuLocked.end(), bo) != cpuLocked.end();
+    }
+
+    // Another process's IOSurfaceLock: it waits (kIOReturnBusy here) while a command buffer's admission holds the surface
+    int cpuLock(uint64_t bo)
+    {
+        for (const auto &[channel, held] : admitted)
+            if (std::find(held.second.begin(), held.second.end(), bo) != held.second.end())
+                return kIOReturnBusy;
+        cpuLocked.push_back(bo);
+        return KERN_SUCCESS;
+    }
     std::vector<Job> jobs;
     bool inFlight = false;  // jobs run until a kill
     unsigned refuse = 0;    // submissions refused from now, with `refusal`
@@ -187,6 +205,34 @@ struct Model {
         for (uint32_t i = 0; i < head->shared_count; ++i)
             if (const uint64_t bo = resolve(shared[i]); bo && bos.at(bo).set)
                 return kIOReturnBadArgument;
+        const uint32_t admission = head->flags & TegraGM20BJobAdmission;
+        const uint64_t cookie =
+            admission ? reinterpret_cast<const TegraGM20BAbiSubmitAdmission *>(shared + head->shared_count)->cookie : 0;
+        auto held = admitted.find(head->channel);
+        if (admission & TegraGM20BJobAdmissionCancel) {
+            if (held != admitted.end() && held->second.first == cookie)
+                admitted.erase(held);
+            reply = {};
+            return KERN_SUCCESS;
+        }
+        if (bool(admission & TegraGM20BJobAdmissionContinue) != (held != admitted.end()) ||
+            (held != admitted.end() && held->second.first != cookie))
+            return kIOReturnBadArgument;
+        std::vector<uint64_t> named;
+        for (uint32_t i = 0; i < head->shared_count; ++i)
+            if (const uint64_t bo = resolve(shared[i]))
+                named.push_back(bo);
+        for (const uint64_t bo : named) {
+            if (held != admitted.end() &&
+                std::find(held->second.second.begin(), held->second.second.end(), bo) == held->second.second.end())
+                return kIOReturnBadArgument;
+            if (held == admitted.end() && lockedByCpu(bo))
+                return kIOReturnCannotLock;
+        }
+        if (admission & TegraGM20BJobAdmissionBegin)
+            admitted[head->channel] = {cookie, named};
+        if (admission & TegraGM20BJobAdmissionEnd)
+            admitted.erase(head->channel);
         if (staleViews) {
             staleViews--;
             return kIOReturnNotReady;

@@ -248,6 +248,38 @@ TEST_F(ResourceSetTest, ACompositorFramesJobNamesOnlyItsSharedUses)
            before.uses().size(), after.uses().size(), recorded.size());
 }
 
+// A command buffer of two jobs touching an IOSurface another process locks between them: with its admission the lock
+// orders after the whole command buffer and the second job runs; without it the second job is refused CannotLock (the
+// command buffer would end partial)
+TEST_F(ResourceSetTest, ACpuLockBetweenACommandBuffersJobsOrdersAfterIt)
+{
+    static uint8_t pages[0x4000] __attribute__((aligned(0x4000)));
+    raw::Bo surface;
+    ASSERT_TRUE(kernel.import(pages, sizeof pages, surface));
+    const std::vector<TegraGM20BAbiSurfaceUse> uses = {{surface.handle, kWrite, 0}};
+    auto submit = [&](uint64_t cookie, uint32_t flags, int *result) {
+        raw::KernelJob j;
+        j.channel = channel;
+        j.uses = uses.data();
+        j.useCount = 1;
+        j.admission = cookie;
+        j.admissionFlags = flags;
+        uint32_t seqno = 0;
+        return kernel.submitJob(j, seqno, result);
+    };
+    const uint64_t cookie = kernel.nextAdmission();
+    int result = KERN_SUCCESS;
+    ASSERT_TRUE(submit(cookie, TegraGM20BJobAdmissionBegin, &result));
+    EXPECT_EQ(model.cpuLock(surface.handle), kIOReturnBusy) << "the lock got between the command buffer's jobs";
+    ASSERT_TRUE(submit(cookie, TegraGM20BJobAdmissionContinue | TegraGM20BJobAdmissionEnd, &result));
+    EXPECT_EQ(model.cpuLock(surface.handle), KERN_SUCCESS);
+    model.cpuLocked.clear();
+    ASSERT_TRUE(submit(0, 0, &result));
+    ASSERT_EQ(model.cpuLock(surface.handle), KERN_SUCCESS);
+    EXPECT_FALSE(submit(0, 0, &result));
+    EXPECT_EQ(result, kIOReturnCannotLock);
+}
+
 TEST(SetView, HoldsOnlyRangesInsideOneMember)
 {
     raw::SetView view;

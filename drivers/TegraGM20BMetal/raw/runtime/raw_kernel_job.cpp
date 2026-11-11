@@ -24,7 +24,7 @@ bool fits(const KernelJob &job, uint32_t maxFences)
         job.events.waitCount > TegraGM20BMaxJobEvents ||
         job.events.signalCount > TegraGM20BMaxJobEvents - job.events.waitCount ||
         (job.events.waitCount && !job.events.waits) || (job.events.signalCount && !job.events.signals) ||
-        (!job.set) != (!job.generation))
+        (!job.set) != (!job.generation) || (!job.admission) != (!job.admissionFlags))
         return false;
     for (uint32_t i = 0; i < job.pushCount; ++i)
         if ((job.pushes[i].flags & TegraGM20BPushFence) && !maxFences)
@@ -49,14 +49,15 @@ bool Kernel::submitJob(const KernelJob &job, uint32_t &seqno, int *result)
     const size_t eventBytes = events ? sizeof(TegraGM20BAbiSubmitEvents) +
                                            (job.events.waitCount + job.events.signalCount) * sizeof(TegraGM20BAbiEventUse)
                                      : 0;
-    const size_t bytes = sizeof(TegraGM20BAbiJob) + pushBytes + useBytes + eventBytes;
+    const size_t admissionBytes = job.admission ? sizeof(TegraGM20BAbiSubmitAdmission) : 0;
+    const size_t bytes = sizeof(TegraGM20BAbiJob) + pushBytes + useBytes + admissionBytes + eventBytes;
     // Reused per submitting thread: a steady stream of jobs allocates nothing.
     thread_local std::vector<uint64_t> storage;
     storage.resize((bytes + sizeof(uint64_t) - 1) / sizeof(uint64_t));
     auto *at = reinterpret_cast<uint8_t *>(storage.data());
     const uint32_t flags = (job.visibility != JobVisibility::Internal ? uint32_t(TegraGM20BJobExternal) : 0u) |
                            (job.hostWritten ? uint32_t(TegraGM20BJobHostWritten) : 0u) |
-                           (events ? uint32_t(TegraGM20BJobHasEvents) : 0u);
+                           (events ? uint32_t(TegraGM20BJobHasEvents) : 0u) | job.admissionFlags;
     const TegraGM20BAbiJob header = {job.channel, job.pushCount, job.set, job.generation, job.useCount, flags};
     memcpy(at, &header, sizeof header);
     at += sizeof header;
@@ -66,6 +67,11 @@ bool Kernel::submitJob(const KernelJob &job, uint32_t &seqno, int *result)
     if (useBytes)
         memcpy(at, job.uses, useBytes);
     at += useBytes;
+    if (admissionBytes) {
+        const TegraGM20BAbiSubmitAdmission lease = {job.admission, 0};
+        memcpy(at, &lease, sizeof lease);
+        at += sizeof lease;
+    }
     if (events) {
         const TegraGM20BAbiSubmitEvents tail = {job.events.waitCount, job.events.signalCount, 0};
         memcpy(at, &tail, sizeof tail);
