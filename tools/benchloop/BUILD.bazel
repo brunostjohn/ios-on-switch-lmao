@@ -87,3 +87,26 @@ APP_SOURCES = [
         "transport_test",
     ]
 ]
+
+# bazel run //tools/benchloop:rung3 -- <dir>: fetch rung 3's iterated blend programs as bench tables (rung3.py)
+py_library(
+    name = "rung3_lib",
+    srcs = ["rung3.py"],
+    deps = ["//drivers/TegraGM20BMetal:raw_pack"],
+)
+
+py_binary(
+    name = "rung3",
+    srcs = ["rung3.py"],
+    deps = [":rung3_lib"],
+)
+
+py_test(
+    name = "rung3_test",
+    size = "small",
+    srcs = ["rung3_test.py"],
+    deps = [
+        ":lib",
+        ":rung3_lib",
+    ],
+)

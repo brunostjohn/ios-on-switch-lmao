@@ -99,6 +99,7 @@ TESTS: dict[str, bool] = {
             'gpu.raw.zcull',
             'gpu.raw.visibility',
             'gpu.raw.fixed_blend_rule',
+            'gpu.raw.fetch_rung2',
             'gpu.path.job_visibility',
             'gpu.path.lean_copy',
             'gpu.path.control_reserve',
@@ -192,6 +193,7 @@ TESTS: dict[str, bool] = {
     'system.overlay_apps': False,
     'system.overlay_app_records': False,
     'system.widgets_render': False,
+    'gpu.raw.fetch_rung3': False,
 }
 
 # The tests only one iOS version's app runs (hw_test_app/app<version>), by that version.

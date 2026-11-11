@@ -15,8 +15,10 @@ A table (`iterated-blend/1`, JSON) holds one blend's microcode and what it shoul
 An instruction is a LOAD_ITERATED_BLEND_INSTRUCTION word, given whole (a hex string) or by the fields clb197.h
 names, each value one of that field's names there (or a number). `passes` is SET_ITERATED_BLEND_PASS and `alpha`
 SET_ITERATED_BLEND's ALPHA_ENABLE; `constants` are SET_ITERATED_BLEND_CONSTANT_RED/GREEN/BLUE(j) words; `methods` are
-other state the blend needs (SET_BLEND(0), the per-target blend) set with it, from protocol.METHOD_RANGES. `rgb` and `a`
-are formula.py expressions; `tolerance` is in codes of the target. Each experiment draws one source colour per column
+other state the blend needs (SET_BLEND(0), the per-target blend) set with it, from protocol.METHOD_RANGES, and
+`restore` (optional) what each of them is set back to after the draw, 0 for one it does not name: the per-target blend
+switch goes back to 1, as the context has it. The pass count is never set back (0 is INVALID_VALUE). `rgb` and `a` are
+formula.py expressions; `tolerance` is in codes of the target. Each experiment draws one source colour per column
 over one destination colour per row and reads every texel back.
 """
 
@@ -137,6 +139,7 @@ class Table:
         self.words = [instruction(i) for i in fields['instructions']]
         self.constants = [[int(c) & 0xFFFFFFFF for c in rgb] for rgb in fields.get('constants', [])]
         self.extra = [list(p) for p in fields.get('methods', [])]
+        self.restore = {int(m): int(v) for m, v in fields.get('restore', [])}
         self.rgb = formula.Formula(fields['rgb'])
         self.a = formula.Formula(fields['a'])
         self.tolerance = int(fields.get('tolerance', 1))
@@ -157,12 +160,11 @@ class Table:
         for j, (r, g, b) in enumerate(self.constants):
             set_up += [[CONSTANT_RED + 16 * j, r], [CONSTANT_RED + 16 * j + 4, g], [CONSTANT_RED + 16 * j + 8, b]]
         set_up += self.extra
-        restore = [[m, 0] for m, _ in self.extra]
+        restore = [[SET_ITERATED_BLEND, 0]] + [[m, self.restore.get(m, 0)] for m, _ in self.extra]
         if blend_enable is not None:
             set_up.append([0x1360, int(blend_enable)])  # SET_BLEND(0)
             restore.append([0x1360, 0])
         set_up.append([SET_ITERATED_BLEND, 1 | int(self.alpha) << 1])
-        restore += [[SET_ITERATED_BLEND, 0], [SET_ITERATED_BLEND_PASS, 0]]
         return set_up, restore
 
 

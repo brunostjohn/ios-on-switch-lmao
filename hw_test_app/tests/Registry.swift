@@ -13,7 +13,7 @@ public enum Registry {
         MPSMatrixTest(), MetalRuntimeCompileTest(), CoreImageLibraryTest(),
         MetalBenchmarkTest(), FetchBlendCostTest(), CompressionChurnTest(), RotatedTargetTest(), BlendKillTest(),
         Float32FilterTest(), CompressedTargetsTest(), ZcullTest(),
-        VisibilityTest(), FixedBlendRuleTest(),
+        VisibilityTest(), FixedBlendRuleTest(), FetchRungTest(id: "gpu.raw.fetch_rung2", rung: 2),
     ]
 
     static let video: [any HWTest] =
@@ -58,4 +58,7 @@ public enum Registry {
         + cpuAndSystem + [RawShareTest()]
         // Drives an NVDEC output mode nothing else uses: after every shared test.
         + [DisplayBufferTest()]
+
+    /// Programs a unit no other driver here drives, which kills the channel when its setup is wrong: each app's last.
+    public static let last: [any HWTest] = [FetchRungTest(id: "gpu.raw.fetch_rung3", rung: 3)]
 }
