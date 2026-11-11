@@ -11,8 +11,9 @@ int planeNativeSlotFor(OSObject *surface, const native_planes::Layer &layer, uin
         switch_native_scanout_release(&scanout);
         return error;
     }
-    if (error || !switch_native_plane_image(layer, width, height, scanout.view.layout,
-                                            scanout.view.crop.x, scanout.view.crop.y, image)) {
+    const bool native = !error && switch_native_plane_image(layer, width, height, scanout.view.layout,
+                                                            scanout.view.crop.x, scanout.view.crop.y, image);
+    if (!native) {
         switch_native_scanout_release(&scanout);
         error = switch_native_scanout_pitch(surface, &scanout);
         tgm_layout block = {};
@@ -34,7 +35,10 @@ int planeNativeSlotFor(OSObject *surface, const native_planes::Layer &layer, uin
         switch_native_scanout_release(&scanout);
         return error;
     }
-    return planeMapSnapshot(scanout, image);
+    const int slot = planeMapSnapshot(scanout, image);
+    if (native && slot >= 0 && stats)
+        ++stPlaneNative;
+    return slot;
 }
 
 int planeMapSnapshot(SwitchNativeScanout &scanout, const native_planes::Image &image, int avoid = -1)

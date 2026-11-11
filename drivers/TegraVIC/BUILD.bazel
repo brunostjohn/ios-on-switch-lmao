@@ -55,6 +55,7 @@ kernel_driver(
     hdrs = ["//kernel/switch:include/switch/memory_attachment.h"],
     copts = ["-I", "{tree}/kernel/switch/include"],
     hdr_deps = [
+        "drivers/NativeMobileDisplay",
         "drivers/TegraGM20B",
         "drivers/TegraHost1x",
         "drivers/TegraSMMU",

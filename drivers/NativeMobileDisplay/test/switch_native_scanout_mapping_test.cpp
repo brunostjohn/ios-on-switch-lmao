@@ -43,7 +43,7 @@ struct Display {
     using PlaneSet = switch_display::Composition;
     PlaneSet planeNext;
     bool planeNextSet = false, stats = true, windowIdle = false;
-    uint32_t planeSlotUses = 0, stPlaneMaps = 0, flushes = 0;
+    uint32_t planeSlotUses = 0, stPlaneMaps = 0, stPlaneNative = 0, flushes = 0;
     bool busy[kPlaneSlots] = {};
     Mapping probeDomain;
     bool planeSlotBusy(int slot) const { return busy[slot]; }
@@ -165,6 +165,7 @@ TEST_F(NativeScanoutMapping, SteadyPlaybackMapsEachPoolBufferOnce)
     }
     EXPECT_EQ(pool.probeDomain.maps, 3u);
     EXPECT_EQ(pool.stPlaneMaps, 3u);
+    EXPECT_EQ(pool.stPlaneNative, 30u);  // every frame scanned in the decoder's own block-linear layout
     EXPECT_EQ(pool.probeDomain.unmaps, 0u);
     EXPECT_EQ(pool.flushes, 3u);
 }

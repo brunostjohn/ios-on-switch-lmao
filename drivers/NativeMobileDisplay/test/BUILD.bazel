@@ -31,6 +31,10 @@
 #   display_column_scan_test            NativeColumnScan.h: window A's column-scan registers against a fetch model held
 #                                       to the landscape UI's hardware rotation; the 4K test surface and the reference
 #                                       frame showing the same panel; the run's decisions for a pass and each failure
+#   display_window_probe_test           DisplayWindowProbe.h: each window probe's claim steps show their reference's
+#                                       panel pixel for pixel through a fetch model of windows A and B (also with
+#                                       chroma interpolated at the crops' edges), its control another; the run's
+#                                       decisions for a pass and each failure, and the reply HW Test reads
 #   display_plane_fence_test            NativePlaneFence.h: window B never writes a surface the GPU renders before its
 #                                       writers' work is done, nor later than the present that orders it, against a
 #                                       model of the GPU present
@@ -255,6 +259,21 @@ host_test(
         'XNU_KERN_EXEC=\\"$(rootpath //kernel/xnu-10063.141.1/bsd:kern/kern_exec.c)\\"',
         'XNU27_KERN_EXEC=\\"$(rootpath //kernel/xnu-12377.121.6/bsd:kern/kern_exec.c)\\"',
     ],
+)
+
+host_test(
+    name = "display_window_probe_test",
+    srcs = [
+        "display_window_probe_test.cpp",
+        "//drivers/NativeMobileDisplay:DisplayWindowProbe.h",
+        "//drivers/NativeMobileDisplay:DisplayWindowProbeABI.h",
+        "//drivers/NativeMobileDisplay:DisplayWindowProbeRun.h",
+        "//drivers/NativeMobileDisplay:NativeColumnScan.h",
+        "//drivers/NativeMobileDisplay:NativePlanes.h",
+        "//drivers/TegraVIC:SwitchSurfaceColor.h",
+        "//drivers/TegraGM20B:TegraGM20BLayout.h",
+    ],
+    copts = ["-O1"],
 )
 
 host_test(

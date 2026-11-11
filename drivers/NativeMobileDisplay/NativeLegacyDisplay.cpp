@@ -65,6 +65,7 @@
 #if SWITCH_FRAME_TIMELINE
 #include <sys/sysctl.h>
 #include "NativeColumnScan.h"
+#include "DisplayWindowProbeRun.h"
 extern "C" void native_legacy_frame_end_hold(void);
 extern "C" void native_legacy_frame_end_release(void);
 #endif
@@ -439,7 +440,7 @@ struct PanicRestore {
     volatile bool planes;     // window B may scan a plane, window A may blend over it: both go back (r18-planes)
     uint32_t blend[3];        // window A's BLEND_LAYER_CONTROL, MATCH and NOMATCH as hekate left them
 #if SWITCH_FRAME_TIMELINE
-    volatile bool columnScan;  // the column-scan experiment has window A scaled and in YUV (NativeColumnScanDisplay.h)
+    volatile bool columnScan;  // a display experiment (column scan, window probe) has window A in its own format
     uint32_t columnScanDepth;  // the UI's COLOR_DEPTH
 #endif
 };
@@ -468,8 +469,13 @@ void restorePitchOnPanic(const char *message)
 #if SWITCH_FRAME_TIMELINE
         if (gPanicRestore.columnScan) {
             dc[kWinColorDepth] = gPanicRestore.columnScanDepth;
+            dc[kWinPosition] = 0;
+            dc[kWinSize] = kPitchSize;
             dc[kWinPrescaled] = kPitchPrescaled;
+            dc[kWinHInitialDda] = 0;
+            dc[kWinVInitialDda] = 0;
             dc[kWinDdaIncrement] = kUnitDda;
+            dc[kWinbufVOffset] = 0;
         }
 #endif
         dc[kWinOptions] = gPanicRestore.options;
@@ -998,6 +1004,9 @@ class NativeLegacyDisplay : public IOMobileFramebufferLegacy {
     // window B underflow frames, ready-mask mismatches at a kick.
     uint32_t stPlaneFlips = 0, stPlaneOnly = 0, stPlaneLatched = 0, stPlaneMaps = 0, stPlaneDropped = 0,
              stPlaneUnderflows = 0, stPlaneUnready = 0;
+    // Of the placements, a decoder's own block-linear picture (SwitchNativePlane.h): static, the instance is at the size
+    // a kalloc_type class may have.
+    static uint32_t stPlaneNative;
     bool kickDeferred = false;                  // a swap is waiting for a frame end (or for the SC7 resume)
     uint64_t flipRequested = 0, flipWaits = 0;  // frameEnds when the last flip went out; swaps that waited for a buffer
     IOTimerEventSource *flipTimer =
@@ -1626,8 +1635,10 @@ private:
         watchVsync(status);
         if (status & kFrameEndInt)
             underflowRead();
-        if (status & kFrameEndInt)
+        if (status & kFrameEndInt) {
             columnScanFrameEnd();
+            windowProbeFrameEnd();
+        }
         // After the compositor's vsync, since a latched flip starts the next frame's copy right here. A flip is also looked for at
         // V_BLANK (unmasked while a vsync client is registered), in case the controller latches after its FRAME_END.
         if ((status & kFrameEndInt) && rotated) {
@@ -1645,7 +1656,7 @@ private:
             underflowFrameEnd();
         if (status & kFrameEndInt) {
             color->frameEndAction(ring.pending == kNoBuffer && !probeRequest && (!rotated || rotationLatched) &&
-                                  !columnScanBusy());
+                                  !columnScanBusy() && !windowProbeHolds());
         }
         if ((status & kFrameEndInt) && stats) {
             if (frameStall.frameEnd(mach_absolute_time(), refreshTicks(), vsyncWanted()))
@@ -1795,13 +1806,15 @@ private:
         } else if (planesAttached) {
             planesState = "off";
         }
-        add("; planes %s: flips %u (b-only %u) latched %u, maps %u, dropped %u, underflow %u, unready %u", planesState,
-            stPlaneFlips, stPlaneOnly, stPlaneLatched, stPlaneMaps, stPlaneDropped, stPlaneUnderflows, stPlaneUnready);
+        add("; planes %s: flips %u (b-only %u) latched %u, maps %u (native %u), dropped %u, underflow %u, unready %u",
+            planesState, stPlaneFlips, stPlaneOnly, stPlaneLatched, stPlaneMaps, stPlaneNative, stPlaneDropped,
+            stPlaneUnderflows, stPlaneUnready);
         add("; UFLOW_STATUS A %llu (%u frames) B %llu (%u) C %llu (%u)%s",
             static_cast<unsigned long long>(counted[0].counted), counted[0].frames,
             static_cast<unsigned long long>(counted[1].counted), counted[1].frames,
             static_cast<unsigned long long>(counted[2].counted), counted[2].frames,
             counted[0].overflowed || counted[1].overflowed || counted[2].overflowed ? " overflowed" : "");
+        stPlaneNative = 0;
         planeTotalsClose();
         stPlaneFlips = stPlaneOnly = stPlaneLatched = stPlaneMaps = stPlaneDropped = stPlaneUnderflows =
             stPlaneUnready = 0;
@@ -3069,6 +3082,7 @@ private:
     void stopRotation()
     {
         columnScanAbort("the display stopped");
+        windowProbeAbort("the display stopped");
         abortProbe("the display stopped");
         if (rotated || tapeAttached || directAttached || planesAttached)
             retireScanoutStorage();
@@ -3119,8 +3133,10 @@ public:
     {
         if (!dc)
             return false;
-        if (!on && !hwSuspended)
+        if (!on && !hwSuspended) {
             columnScanAbort("the display went off");
+            windowProbeAbort("the display went off");
+        }
         if (!on && !hwSuspended && planeProbe.active()) {  // r18-planes: no frame end comes once the scan stops
             PlaneProbeIo io = {this};
             planeProbe.perform(planeProbe.fail("the display went off"), io);
@@ -3186,6 +3202,7 @@ public:
     void quiesceForSuspend()
     {
         columnScanAbort("the display suspended (SC7)");
+        windowProbeAbort("the display suspended (SC7)");
         abortProbe("the display suspended (SC7)");
         planesQuiesce();  // r18-planes
         resumeLit = !scanoutStopped;
@@ -3482,7 +3499,7 @@ public:
             kickDeferred = true;
             return;
         }
-        if (columnScanBusy()) {  // window A is the column-scan experiment's (debug kernels)
+        if (columnScanBusy() || windowProbeHolds()) {  // windows A and B are a display experiment's (debug kernels)
             kickDeferred = true;
             return;
         }
@@ -4692,6 +4709,7 @@ public:
 #include "SwitchPlaneFenceAdmission.h"
 #include "NativePlanesTotals.h"
 #include "NativeColumnScanDisplay.h"
+#include "DisplayWindowProbeDisplay.h"
 
     IOReturn collectCompletionReports(uint32_t, void *, uint32_t *count, uint32_t) override
     {
@@ -5202,17 +5220,19 @@ public:
         }
         IOLog(
             "SwitchDisplay: swap %u held at the queue head %llu ms (accepted %d, taken %llu of %llu): transferred %d, "
-            "deferred %d (probe %d, plane probe %d, column scan %d, tape %d, no surface %d), ring front %d pending %d "
+            "deferred %d (probe %d, plane probe %d, column scan %d, window probe %d, tape %d, no surface %d), ring "
+            "front "
+            "%d pending %d "
             "replaced %d drawing %d held %d, latch retire %d, direct %d, planes %d (armed %d, held %d), gpu %d%s, "
             "copy %d%s, scanout %s, %llu frame ends, %llu since the last flip\n",
             id, accepted != 0u ? static_cast<unsigned long long>(ticksNs(now - accepted) / 1000000) : 0ULL,
             flag(isValidated(head)), static_cast<unsigned long long>(seqOf(head)),
             static_cast<unsigned long long>(takeSeq), flag(transferred), flag(kickDeferred),
-            flag(probe.active() || probeRequest), flag(planeProbe.active()), flag(columnScanBusy()), flag(tapeSettle),
-            flag(ring.target() == kNoBuffer), ring.front, ring.pending, ring.superseded, ring.drawing, ring.held,
-            flag(latchRetire), flag(directOn), flag(planesOn), planeLatch.armed, flag(planeHeldSet),
-            flag(gpuRequest != nullptr), gpuRequest == head ? " (this swap)" : "", flag(copyQueued),
-            copyQueued && job.request == head ? " (this swap)" : "", scanout,
+            flag(probe.active() || probeRequest), flag(planeProbe.active()), flag(columnScanBusy()),
+            flag(windowProbeHolds()), flag(tapeSettle), flag(ring.target() == kNoBuffer), ring.front, ring.pending,
+            ring.superseded, ring.drawing, ring.held, flag(latchRetire), flag(directOn), flag(planesOn),
+            planeLatch.armed, flag(planeHeldSet), flag(gpuRequest != nullptr), gpuRequest == head ? " (this swap)" : "",
+            flag(copyQueued), copyQueued && job.request == head ? " (this swap)" : "", scanout,
             static_cast<unsigned long long>(frameEnds), static_cast<unsigned long long>(frameEnds - flipRequested));
     }
 
@@ -5243,9 +5263,30 @@ OSDefineMetaClassWithInit(NativeLegacyDisplay, IOMobileFramebufferLegacy, ) Nati
 
 OSDefineDefaultStructors(NativeLegacyDisplay,
                          IOMobileFramebufferLegacy) NativeLegacyDisplay *NativeLegacyDisplay::primaryDisplay;
+constinit uint32_t NativeLegacyDisplay::stPlaneNative = 0;
 #if SWITCH_FRAME_TIMELINE
 constinit NativeLegacyDisplay::ColumnScanState NativeLegacyDisplay::columnScan;
 constinit struct sysctl_oid NativeLegacyDisplay::columnScanOid = {};
+constinit NativeLegacyDisplay::WindowProbeState NativeLegacyDisplay::windowProbe;
+
+// HW Test's window probes (DisplayWindowProbe.h), from TegraVIC's kernel-test selector: the request and reply are
+// DisplayWindowProbeABI.h's.
+extern "C" IOReturn switch_display_window_probe_call(const IOExternalMethodArguments *a)
+{
+    const auto *request = static_cast<const SwitchDisplayWindowProbeRequest *>(a->structureInput);
+    if (a->scalarInputCount || a->scalarOutputCount || a->structureInputSize != sizeof(*request) || !request ||
+        request->magic != SWITCH_DISPLAY_WINDOW_PROBE_MAGIC || request->reserved ||
+        a->structureOutputSize != sizeof(SwitchDisplayWindowProbeReply) || !a->structureOutput)
+        return kIOReturnBadArgument;
+    NativeLegacyDisplay *display = __atomic_load_n(&NativeLegacyDisplay::primaryDisplay, __ATOMIC_ACQUIRE);
+    if (!display)
+        return kIOReturnNotReady;
+    SwitchDisplayWindowProbeReply reply;
+    const IOReturn status = display->windowProbeCall(*request, reply);
+    if (status == kIOReturnSuccess)
+        memcpy(a->structureOutput, &reply, sizeof(reply));
+    return status;
+}
 #endif
 
 // SwitchBrightness's display power sequence (SwitchBrightness.h): from its work loop, after the panel is asleep and before it wakes.
