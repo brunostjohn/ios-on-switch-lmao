@@ -60,6 +60,9 @@ struct PocketStripTest: HWTest {
             metrics.set(name + "_rows", rows.count)
             metrics.set(name + "_at", Self.ranges(rows))
             if !rows.isEmpty { reasons.append("\(rows.count) purple rows with the edge effect \(name)") }
+            let pattern = Self.patternPixels(shot.picture)
+            metrics.set(name + "_pattern_px", pattern)
+            if pattern > 0 { reasons.append("\(pattern) pattern pixels with the edge effect \(name)") }
             pictures.append(shot.picture)
             saved.append((name, shot.picture))
             bar = shot.bar
@@ -218,6 +221,19 @@ struct PocketStripTest: HWTest {
         let margin: Float = 40.0 / 255
         let green = picture[x, y, 1]
         return picture[x, y, 0] - green > margin && picture[x, y, 2] - green > margin
+    }
+
+    /// Pixels of a new texture's pattern as Apple's GPUs read it (raw_fresh.h): opaque magenta, 254 where a filter mixed in
+    /// 1/255 of a neighbour
+    static func patternPixels(_ picture: Raster) -> Int {
+        var count = 0
+        for y in 0..<picture.height {
+            for x in 0..<picture.width
+            where byte(picture[x, y, 1]) == 0 && byte(picture[x, y, 0]) >= 254 && byte(picture[x, y, 2]) >= 254 {
+                count += 1
+            }
+        }
+        return count
     }
 
     static func purpleRows(_ picture: Raster) -> [Int] {
