@@ -25,6 +25,21 @@ bool nvenc_service_present(void)
     return s != 0;
 }
 
+uint32_t nvenc_service_codecs(void)
+{
+    const io_service_t s = service();
+    if (!s)
+        return 0;
+    uint32_t codecs = 0;
+    CFTypeRef value = IORegistryEntryCreateCFProperty(s, CFSTR("TegraNVENCCodecs"), kCFAllocatorDefault, 0);
+    if (value && CFGetTypeID(value) == CFNumberGetTypeID())
+        CFNumberGetValue(value, kCFNumberSInt32Type, &codecs);
+    if (value)
+        CFRelease(value);
+    IOObjectRelease(s);
+    return codecs;
+}
+
 static kern_return_t call(NVENCClient *c, uint32_t selector, uint32_t method, const void *in, size_t inSize, void *out,
                           size_t outSize)
 {
