@@ -46,6 +46,8 @@ static inline bool nvdec_status_range(const TegraNVDECSubmit *submit, TegraNVDEC
 bool nvdec_listen(NVDECClient *client, dispatch_queue_t queue, NVDECDone done, void *context);
 // No `done` starts once this returns; one running on the queue finishes (the caller may be on it). nvdec_close stops.
 void nvdec_stop_listening(NVDECClient *client);
+// The completions come as TegraNVDEC's port messages, not from the refused port's Wait route.
+bool nvdec_completions_on_port(const NVDECClient *client);
 // TegraNVDECInfo.features has TEGRA_NVDEC_FEATURE_PRESENT: VIC copies pictures into IOSurfaces (nvdec_present).
 bool nvdec_can_present(const NVDECClient *client);
 bool switch_nvdec_can_export(const NVDECClient *client);

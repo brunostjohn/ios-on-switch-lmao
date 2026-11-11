@@ -15,6 +15,8 @@ NVDECListener *nvdec_listener_start(io_connect_t connection, uint32_t selector, 
 // A job just submitted, its status record at `status` in this task: the Wait route queues its Wait.
 void nvdec_listener_submitted(NVDECListener *listener, uint32_t fence, TegraNVDECRange range, const void *status);
 void nvdec_listener_stop(NVDECListener *listener);
+// The kernel's messages bring the completions (false: the Wait route).
+bool nvdec_listener_on_port(const NVDECListener *listener);
 
 // One call through the selector the sandbox admits (NVDECClient.c).
 kern_return_t nvdec_tunnel(io_connect_t connection, uint32_t selector, uint32_t method, const void *in, size_t inSize,

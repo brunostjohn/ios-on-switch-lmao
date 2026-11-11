@@ -68,9 +68,11 @@ struct VideoDecodeTest: HWTest {
             ("every frame decodes to the pattern (\(result.firstMismatch ?? "ok"))", result.matched == clip.frames),
         ]
         var proof = result.usingHardware ? "UsingHardwareAcceleratedVideoDecoder=1" : ""
-        // Debug builds of the AVD plug-in count the pictures its NVDEC jobs put out and how each reached the client.
+        // Debug builds of the AVD plug-in count the pictures its NVDEC jobs put out, how each reached the client, where
+        // its decode thread waited, and how long from DecodeFrame to each picture's emission (decode.async_emit judges
+        // the waits).
         if let routes = result.routes {
-            for key in ["frames", "exported", "vic", "cpu", "errors"] {
+            for key in DecodeRouteTest.keys {
                 metrics.set("decoder_" + key, routes[key] ?? 0)
             }
             checks.append(

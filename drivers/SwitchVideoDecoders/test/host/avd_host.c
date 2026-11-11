@@ -113,6 +113,11 @@ bool nvdec_listen(NVDECClient *c, dispatch_queue_t queue, NVDECDone done, void *
     return true;
 }
 
+bool nvdec_completions_on_port(const NVDECClient *c)
+{
+    return c->listener != NULL;
+}
+
 void nvdec_stop_listening(NVDECClient *c)
 {
     FakeListener *l = c->listener;

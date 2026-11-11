@@ -169,6 +169,11 @@ void nvdec_listener_submitted(NVDECListener *l, uint32_t fence, TegraNVDECRange 
     dispatch_async_f(l->queue, p, waited);
 }
 
+bool nvdec_listener_on_port(const NVDECListener *l)
+{
+    return l && l->source;
+}
+
 void nvdec_listener_stop(NVDECListener *l)
 {
     if (!l)
