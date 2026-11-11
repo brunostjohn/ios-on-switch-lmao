@@ -1032,6 +1032,7 @@ host_test(
     name = "raw_cache_test",
     srcs = [
         "raw_cache_test.cpp",
+        "//drivers/NativeMetal:MetallibSlice.h",
         "//drivers/TegraGM20BMetal:raw/pack/probe_bind.h",
         "//drivers/TegraGM20BMetal:raw/pack/probe_record.h",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_cache.cpp",
@@ -1052,13 +1053,16 @@ host_test(
         "//drivers/TegraGM20BMetal:raw/test/cache_checks.h",
         "//kits/SwitchSeedPack:SwitchSeedPack.h",
     ],
+    copts = ["-Idrivers/NativeMetal"],
     cxx_std = "c++17",
+    deps = ["//drivers/NativeMetal/abi:metal_abi"],
 )
 
 host_test(
     name = "raw_native_seed_test",
     srcs = [
         "raw_native_seed_test.cpp",
+        "//drivers/NativeMetal:MetallibSlice.h",
         "//drivers/TegraGM20BMetal:raw/pack/probe_bind.h",
         "//drivers/TegraGM20BMetal:raw/pack/probe_record.h",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_cache.cpp",
@@ -1080,7 +1084,9 @@ host_test(
         "//kits/SwitchSeedPack:SwitchSeedPack.h",
         "//kits/SwitchSeedPack:SwitchSeedPackWriter.h",
     ],
+    copts = ["-Idrivers/NativeMetal"],
     cxx_std = "c++17",
+    deps = ["//drivers/NativeMetal/abi:metal_abi"],
 )
 
 host_test(

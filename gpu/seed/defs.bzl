@@ -71,7 +71,7 @@ def _shader_crawl_impl(ctx):
     names = ctx.actions.declare_file(named(ctx, ".names.json"))
     ctx.actions.run(
         executable = ctx.executable._libraries,
-        arguments = ["names", root + "/root", names.path],
+        arguments = ["names", "--build", ctx.attr.ipsw[IpswInfo].build, root + "/root", names.path],
         inputs = files,
         outputs = [names],
         mnemonic = "M2vLibraryNames",

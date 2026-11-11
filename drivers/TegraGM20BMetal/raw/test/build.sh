@@ -94,7 +94,7 @@ xcrun clang++ -O2 -g -std=c++17 -fobjc-arc -Wall -Wextra -I "$RAW/pack" "$HERE/v
 xcrun clang++ -O1 -g -std=c++17 -fobjc-arc -Wall -Wextra "$HERE/invocationcheck.mm" -framework Foundation -framework Metal \
     -o "$OUT/invocationcheck"
 # cachecheck: the runtime's record cache and compile table on a bucket's records, and the AIR hashes on a real library
-xcrun clang++ "${FLAGS[@]}" "$HERE/cachecheck.cpp" "$RAW/runtime/raw_cache.cpp" "$RAW/runtime/raw_kernel_cache.cpp" "$RAW/runtime/raw_compiler.cpp" "$RAW/runtime/raw_metallib.cpp" "$RAW/runtime/raw_record.cpp" "$RAW/runtime/raw_record_parts.cpp" \
+xcrun clang++ "${FLAGS[@]}" -I "$FRONT" -I "$METAL_ABI" "$HERE/cachecheck.cpp" "$RAW/runtime/raw_cache.cpp" "$RAW/runtime/raw_kernel_cache.cpp" "$RAW/runtime/raw_compiler.cpp" "$RAW/runtime/raw_metallib.cpp" "$RAW/runtime/raw_record.cpp" "$RAW/runtime/raw_record_parts.cpp" \
     "$RAW/runtime/raw_pack.cpp" -o "$OUT/cachecheck"
 # directcheck: the direct compile of every state of a corpus (runtime/raw_direct.h), its records against the pack
 xcrun clang++ "${OBJC[@]}" -Wall -Wextra -x objective-c++ "$HERE/directcheck.mm" "$RAW/runtime/RawDirect.mm" "$FRONT/NativeBridgeMetalFrontend.mm" \

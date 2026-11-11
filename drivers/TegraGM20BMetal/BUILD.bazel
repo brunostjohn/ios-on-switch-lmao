@@ -409,6 +409,7 @@ py_test(
         "precompile/libraries.py",
         "precompile/libraries_test.py",
     ],
+    data = ["//drivers/NativeMetal:MetallibSlice.h"],
     imports = ["precompile"],
     main = "precompile/libraries_test.py",
 )
