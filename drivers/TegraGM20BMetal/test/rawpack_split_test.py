@@ -67,6 +67,21 @@ class StateKeyTest(unittest.TestCase):
             ' #0:36:6504 | fp clampToEdges_v1 as=custom_fn #1:33:00000000 | l RenderBox',
         )
 
+    def test_a_fragment_with_no_constants_keeps_its_space_before_the_framework(self):
+        # MapKit.SnapshotService's VectorKit state as the device logged its key (a state the pack lacks made, 24B119)
+        vectorkit = ' lib=/System/Library/PrivateFrameworks/VectorKit.framework/default.metallib'
+        line = (
+            'R ok=1 label=- samples=1 topo=0 ds=0/0 c0=81:15:0:1:0:0:1:0:0 a0=29:0:0:16:1:1 a1=29:8:0:16:1:1'
+            f' | v ImageCopy::imageCopy_vertex{vectorkit}  | f ImageCopy::imageCopy_fragment{vectorkit}  | '
+        )
+        self.assertEqual(
+            rawpack.state_key(line),
+            'samples=1 topo=0 ds=0/0 c0=81:15:0:1:0:0:1:0:0 a0=29:0:0:16:1:1 a1=29:8:0:16:1:1'
+            '  | v ImageCopy::imageCopy_vertex  | f ImageCopy::imageCopy_fragment  | l VectorKit',
+        )
+        quartzcore = line.replace(vectorkit, '')
+        self.assertTrue(rawpack.state_key(quartzcore).endswith(' | f ImageCopy::imageCopy_fragment'))
+
     def test_a_cubic_variant_is_keyed_after_its_states_framework(self):
         # raw_cubic.h CubicBinds::key after the state's key, as RawMetalCubic.mm names the variant
         line = LINKED + 'cubic s0:0000n  t0:80 | '
