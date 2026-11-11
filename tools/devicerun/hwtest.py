@@ -210,6 +210,7 @@ BY_IOS: dict[str, dict[str, bool]] = {
         'gpu.x1.blend_kills': False,
         'gpu.x1.viewport_swizzle': False,
         'gpu.x1.iterated_blend': False,
+        'gpu.x1.ce_compressed': False,
         'gpu.x1.vic_pitch': False,
     },
 }
