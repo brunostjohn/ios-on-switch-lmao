@@ -17,7 +17,8 @@ import Metal
 /// SET_ANTI_ALIAS_ENABLE 0x1534 (NVK 1, golden 0). So the single-sample case runs first, as is, and each multisampled
 /// case runs with NVIDIA's 0x15b4 around every draw (`<case>_aa=csaa_off`), then, if that killed its command buffer, with
 /// 0x1534 cleared instead (aa_off); a case whose arms all failed is named (`<case>_aa=killed`) and the multisampled cases
-/// after it are not run. Each case is journaled before it runs.
+/// after it are not run. A multisampled case whose words the channel refused or never emitted judges nothing and makes the
+/// claim INCONCLUSIVE. Each case is journaled before it runs.
 enum X1CompressedDepthProbe {
     static let probe = X1Probe(
         id: "gpu.x1.ce_compressed_depth",
@@ -74,7 +75,7 @@ enum X1CompressedDepthProbe {
         let journal = ProbeJournal(probe: "gpu.x1.ce_compressed_depth")
         var wrong: [String: Int] = [:]
         var engaged = 0
-        var killed: [String] = []
+        var killed: [String] = [], refused: [String] = []
         var dead: String?
         cases: for (name, format, samples) in cases where gpu.device.supportsTextureSampleCount(samples) {
             let scene = try Scene(gpu: gpu, format: format, samples: samples)
@@ -83,17 +84,24 @@ enum X1CompressedDepthProbe {
                 journal.starting("\(name) \(arm)")
                 if !before.isEmpty, let refusal = RawMethods.arm(gpu.device, before: before, after: after) {
                     metrics.set("\(name)_aa", LogLine.sanitized(refusal))
+                    refused.append(name)
                     continue cases
                 }
-                defer { if !before.isEmpty { _ = RawMethods.disarm(gpu.device) } }
                 do {
                     let (bad, compressed) = try await rounds(gpu, scene)
+                    let emitted = before.isEmpty ? 0 : RawMethods.disarm(gpu.device)
+                    if !before.isEmpty && emitted == 0 {
+                        metrics.set("\(name)_aa", "\(arm)_not_emitted")
+                        refused.append(name)
+                        continue cases
+                    }
                     wrong[name] = bad
                     metrics.set("\(name)_aa", arm)
                     metrics.set("\(name)_compressed_rounds", compressed)
                     engaged += compressed
                     continue cases
                 } catch {
+                    if !before.isEmpty { _ = RawMethods.disarm(gpu.device) }
                     killed.append("\(name):\(arm)")
                 }
             }
@@ -114,6 +122,9 @@ enum X1CompressedDepthProbe {
         if finding.verdict == .pass, let dead {
             finding.verdict = .inconclusive
             finding.note = "\(dead)'s draws were killed under every anti-alias arm"
+        } else if finding.verdict == .pass, !refused.isEmpty {
+            finding.verdict = .inconclusive
+            finding.note = "no anti-alias words reached the draws of \(refused.joined(separator: ","))"
         }
         return finding
     }
