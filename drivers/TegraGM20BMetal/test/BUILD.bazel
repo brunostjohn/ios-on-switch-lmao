@@ -106,6 +106,8 @@
 #                     vertices in pixels with its half colour, and a write a row or two short of a texture's edge
 #   raw_glass_probe_test  raw/runtime/raw_glass_probe.h (debug builds' glass probe): the render server's command buffer
 #                     record word, a draw line's textures and uniforms, each line once a command buffer
+#   raw_arena_purge_test  raw/runtime/raw_arena_purge.h: an MTLHeap's pages go back only while it is volatile at the purge
+#                     itself, idle, uncommitted and unleased, and NonVolatile answers whether they had gone
 #   raw_glass_mem_test  raw/runtime/raw_glass_mem.h (debug builds' blur-texture probe): a row's black and non-finite
 #                     reads, rebuilt and reused textures with their age, a reused one changed with no write, a moved
 #                     texture header, and HW Test's notify words
@@ -1299,6 +1301,15 @@ host_test(
         "raw_glass_probe_test.cpp",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_glass_probe.h",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_nonfinite.h",
+    ],
+    cxx_std = "c++17",
+)
+
+host_test(
+    name = "raw_arena_purge_test",
+    srcs = [
+        "raw_arena_purge_test.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_arena_purge.h",
     ],
     cxx_std = "c++17",
 )

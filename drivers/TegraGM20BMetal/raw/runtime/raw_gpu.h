@@ -1293,7 +1293,7 @@ public:
     // `committed` (the caller's command buffers committed and unfinished) is 0. A commit adds to it before it reads
     // purgedArenas() and the purge counts itself there before it reads `committed`, both sequentially consistent, so one of
     // them sees the other: the commit restores what it reaches, or the purge does not happen.
-    void setArenaVolatile(uint32_t arena, bool isVolatile);
+    bool setArenaVolatile(uint32_t arena, bool isVolatile);  // whether its pages had gone (raw_arena_purge.h)
     void purgeArena(uint32_t arena, const std::atomic<uint32_t> &committed);
     void purgeArenas(const std::atomic<uint32_t> &committed);
     bool arenaPurged(uint32_t arena);
@@ -1809,6 +1809,7 @@ private:
     std::vector<Arena> arenas_;
     std::atomic<uint32_t> purgedArenas_{0};
     bool bindArena(Arena &a);  // lock_ held
+    void purgeLocked(Arena &a, const std::atomic<uint32_t> &committed);
     void freeArena(Arena &a);  // lock_ held
     void arenaFree(Span &s);   // lock_ held
     bool aliasArena(const Span &s, Lease *&lease, Alias &a);
