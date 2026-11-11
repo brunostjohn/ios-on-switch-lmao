@@ -123,9 +123,13 @@ int switch_vic_transform(const TegraVICSurface *source, const TegraVICSurface *d
         release(work);
         return -22;
     }
-    switch_gpu_backing_use uses[3] = {{output, SWITCH_GPU_BACKING_WRITE, 0},
-                                      {input, SWITCH_GPU_BACKING_READ, 0},
-                                      {work->native.logical, SWITCH_GPU_BACKING_READ, 0}};
+    // A native source is read from the decoder's picture; the surface's own backing is listed only to order against
+    // it. A CPU reader materializing that backing's pitch rows from the same picture holds it as a writer until VIC
+    // has copied them, which must not refuse this read (the guards still refuse a representation the CPU replaced).
+    switch_gpu_backing_use uses[3] = {
+        {output, SWITCH_GPU_BACKING_WRITE, 0},
+        {input, SWITCH_GPU_BACKING_READ, 0},
+        {work->native.logical, SWITCH_GPU_BACKING_READ | SWITCH_GPU_BACKING_NO_CPU_EXCLUSION, 0}};
     switch_gpu_backing_guard guards[3] = {work->access[1].guard};
     uint32_t guardCount = 1;
     if (work->native.owner) {
