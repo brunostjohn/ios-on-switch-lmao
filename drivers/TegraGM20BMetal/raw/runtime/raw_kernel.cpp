@@ -377,6 +377,8 @@ bool Kernel::bindImportAt(void *addr, Bo &bo, uint64_t va, uint32_t kind)
         free(bo);
         return false;
     }
+    bo.vaBase = va;
+    bo.vaReserved = true;
     bo.va = va + (uintptr_t(addr) & (info_.page_size - 1));
     bo.cpu = static_cast<uint8_t *>(addr);
     return true;
@@ -395,7 +397,7 @@ void Kernel::free(Bo &bo)
         TegraGM20BAbiBoFree f = {bo.handle};
         call(TegraGM20BMethodBoFree, &f, sizeof f, nullptr, 0);
     }
-    if (bo.vaBase)
+    if (bo.vaBase && !bo.vaReserved)
         freeVa(bo.vaBase, bo.bytes);
     bo = {};
 }

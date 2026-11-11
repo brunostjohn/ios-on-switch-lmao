@@ -31,7 +31,21 @@ struct Bo {
     uint64_t vaBase = 0;  // the bound range's start (an import's va is inside its first page)
     uint64_t mapped = 0;  // CPU mapping bytes (allocations)
     bool gpuVolatile = false;
+    bool vaReserved = false;  // bound inside a reservation (bindImportAt): the VA is the reservation's, not freed with it
 };
+
+// The offset into `bo` of the CPU bytes [cpu, cpu + bytes): bo.cpu is the CPU address of bo.va, which lies bo.va - bo.vaBase
+// into the BO. False when they are not all inside it.
+inline bool boCpuOffset(const Bo &bo, const void *cpu, uint64_t bytes, uint64_t &offset)
+{
+    if (!bo.cpu || !cpu || bo.va < bo.vaBase || bo.va - bo.vaBase > uintptr_t(bo.cpu))
+        return false;
+    const uintptr_t base = uintptr_t(bo.cpu) - (bo.va - bo.vaBase), address = uintptr_t(cpu);
+    if (address < base || address - base > bo.bytes || bytes > bo.bytes - (address - base))
+        return false;
+    offset = address - base;
+    return true;
+}
 
 struct JobAdmission {
     uint64_t cookie = 0;

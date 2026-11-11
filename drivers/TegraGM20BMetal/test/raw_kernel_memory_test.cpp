@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #include "../raw/runtime/raw_control_memory.h"
+#include "../raw/runtime/raw_host_access.h"
 #include "../raw/runtime/raw_kernel.h"
 #include "bazel/testing/source_text.h"
 #include <IOKit/IOKitLib.h>
@@ -68,6 +69,11 @@ extern "C" kern_return_t IOConnectCallStructMethod(mach_port_t, uint32_t method,
         std::abort();
     }
 }
+
+namespace raw {
+void reportCpuReleaseFailure()
+{}
+}  // namespace raw
 
 extern "C" io_service_t IOServiceGetMatchingService(mach_port_t, CFDictionaryRef matching)
 {
@@ -152,4 +158,36 @@ TEST_F(RawKernelMemory, CachedControlMemoryBindsThroughTheL2FromTheControlReserv
         EXPECT_EQ(flags, uint32_t(TegraGM20BBoCoherent | TegraGM20BBoControl));
     kernel.free(tickets);
     kernel.free(ring);
+}
+
+// An MTLHeap's arena: host pages imported and bound at a VA reserved for them (raw_arena.cpp bindArena)
+TEST_F(RawKernelMemory, AnImportBoundInAReservationLeasesItsBytesToTheCpuAndLeavesItsVa)
+{
+    constexpr uint64_t kBytes = 0x20000;
+    auto *cpu = static_cast<uint8_t *>(aligned_alloc(0x4000, kBytes));
+    ASSERT_NE(cpu, nullptr);
+    const uint64_t va = kernel.reserveVa(kBytes);
+    ASSERT_NE(va, 0u);
+    raw::Bo bo;
+    ASSERT_TRUE(kernel.importPages(cpu, kBytes, bo));
+    ASSERT_TRUE(kernel.bindImportAt(cpu, bo, va, 0));
+    {
+        raw::HostAccess access;
+        ASSERT_TRUE(access.acquire(kernel, bo, cpu + 0x1100, 64, true));
+        ASSERT_EQ(model.acquires.size(), 1u);
+        EXPECT_EQ(model.acquires[0].handle, bo.handle);
+        EXPECT_EQ(model.acquires[0].offset, 0x1100u);
+        EXPECT_EQ(model.acquires[0].bytes, 64u);
+        EXPECT_TRUE(access.finish());
+    }
+    uint64_t offset = 0;
+    EXPECT_TRUE(raw::boCpuOffset(bo, cpu + kBytes - 16, 16, offset));
+    EXPECT_EQ(offset, kBytes - 16);
+    EXPECT_FALSE(raw::boCpuOffset(bo, cpu + kBytes - 16, 17, offset));
+    const uint64_t used = kernel.vaInUse();
+    kernel.free(bo);
+    EXPECT_EQ(kernel.vaInUse(), used);
+    kernel.releaseVa(va, kBytes);
+    EXPECT_EQ(kernel.vaInUse(), used - kBytes);
+    free(cpu);
 }

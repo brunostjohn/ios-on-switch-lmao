@@ -48,19 +48,12 @@ CpuCompletion Device::captureCpuCompletion(uint32_t seqno, uint64_t generation,
         if (!buffer || !buffer->hostVisible || buffer->wc || !buffer->cpu)
             continue;
         const Bo bo = bufferBoLocked(*buffer);
-        const uint64_t prefix = bo.va - bo.vaBase;
-        const uintptr_t address = uintptr_t(buffer->cpu);
-        if (!bo.handle || !bo.cpu || bo.va < bo.vaBase || prefix > uintptr_t(bo.cpu)) {
+        uint64_t offset = 0;
+        if (!bo.handle || !buffer->length || !boCpuOffset(bo, buffer->cpu, buffer->length, offset)) {
             result.valid = false;
             break;
         }
-        const uintptr_t base = uintptr_t(bo.cpu) - prefix;
-        if (address < base || !buffer->length || address - base > bo.bytes ||
-            buffer->length > bo.bytes - (address - base)) {
-            result.valid = false;
-            break;
-        }
-        result.ranges.push_back({bo.handle, address - base, buffer->length});
+        result.ranges.push_back({bo.handle, offset, buffer->length});
     }
     result.coalesce();
     return result;
@@ -111,13 +104,10 @@ bool Device::hostAccess(const Texture &texture, const void *cpu, uint64_t reques
             bytes = texture.span.bytes;
         } else if (texture.import) {
             bo = texture.import->bo;
-            if (bo.va < bo.vaBase || bo.va - bo.vaBase > uintptr_t(bo.cpu))
+            uint64_t offset = 0;
+            if (!boCpuOffset(bo, texture.cpu, 1, offset))
                 return false;
-            const uintptr_t base = uintptr_t(bo.cpu) - (bo.va - bo.vaBase);
-            const uintptr_t ownerAddress = uintptr_t(texture.cpu);
-            if (ownerAddress < base || ownerAddress - base >= bo.bytes)
-                return false;
-            bytes = bo.bytes - (ownerAddress - base);
+            bytes = bo.bytes - offset;
         }
     }
     if (requestedBytes && !hostRangeContains(texture.cpu, bytes, cpu, requestedBytes))

@@ -25,14 +25,10 @@ public:
 
     bool acquire(Kernel &kernel, const Bo &bo, const void *cpu, uint64_t bytes, bool write)
     {
-        if (bo.va < bo.vaBase || bo.va - bo.vaBase > uintptr_t(bo.cpu))
+        uint64_t offset = 0;
+        if (kernel_ || !bo.handle || !bytes || !boCpuOffset(bo, cpu, bytes, offset))
             return false;
-        const uintptr_t base = uintptr_t(bo.cpu) - (bo.va - bo.vaBase);
-        const uintptr_t address = uintptr_t(cpu);
-        if (kernel_ || !bo.handle || !bo.cpu || !cpu || address < base || !bytes ||
-            address - base > bo.bytes || bytes > bo.bytes - (address - base))
-            return false;
-        offset_ = address - base;
+        offset_ = offset;
         bytes_ = bytes;
         access_ = write ? TegraGM20BCpuWrite : TegraGM20BCpuRead;
         if (!kernel.cpuAccess(bo, offset_, bytes_, access_, true))
