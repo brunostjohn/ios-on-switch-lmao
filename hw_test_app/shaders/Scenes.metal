@@ -172,3 +172,45 @@ fragment float4 sampled_fragment(TexturedVertex in [[stage_in]], texture2d<float
 {
     return texture.sample(bound, in.uv, level(0));
 }
+
+/// NAK takes TEXS's F16 forms for a shader holding this value in debug builds, whatever the chip facts say
+/// (nak_nir_lower_tex_sm50.c), and stamps TEXS_F16_PROOF_MARKER with 0x5346 << 16 | the fetches it folded
+constant uint TEXS_F16_PROBE_MARKER = 0x7fa55346u;
+constant uint TEXS_F16_PROOF_MARKER = 0x7fa55347u;
+
+struct TexsF16In {
+    float4 position [[position]];
+};
+
+struct TexsF16Out {
+    float4 f32 [[color(0)]];
+    ushort4 f16 [[color(1)]];
+    uint proof [[color(2)]];
+};
+
+/// gpu.raw.texs_f16: one texel, sampled through two names of the same texture (bound textures, never one fetch), at the
+/// pixel's centre plus `offset` texels: TEXS's F32 form, and its F16 form's bits
+fragment TexsF16Out texs_f16_probe(TexsF16In in [[stage_in]], texture2d<float> first [[texture(0)]],
+                                   texture2d<float> second [[texture(1)]], constant float2 &offset [[buffer(0)]],
+                                   constant uint &linear [[buffer(1)]])
+{
+    constexpr sampler point(coord::pixel, filter::nearest, address::clamp_to_edge);
+    constexpr sampler bilinear(coord::pixel, filter::linear, address::clamp_to_edge);
+    const float2 at = in.position.xy + offset;
+    TexsF16Out out;
+    out.f32 = linear ? first.sample(bilinear, at) : first.sample(point, at);
+    out.f16 = as_type<ushort4>(half4(linear ? second.sample(bilinear, at) : second.sample(point, at)));
+    out.proof = as_type<uint>(at.x) == TEXS_F16_PROBE_MARKER ? 0u : TEXS_F16_PROOF_MARKER;
+    return out;
+}
+
+/// gpu.raw.texs_f16: the same fetches by a compute kernel, whose textures stay bindless (TEX.B)
+kernel void texs_f16_bindless(texture2d<float> first [[texture(0)]], device float4 *out [[buffer(0)]],
+                              constant float2 &offset [[buffer(1)]], constant uint &linear [[buffer(2)]],
+                              uint2 id [[thread_position_in_grid]])
+{
+    constexpr sampler point(coord::pixel, filter::nearest, address::clamp_to_edge);
+    constexpr sampler bilinear(coord::pixel, filter::linear, address::clamp_to_edge);
+    const float2 at = float2(id) + 0.5f + offset;
+    out[id.y * first.get_width() + id.x] = linear ? first.sample(bilinear, at) : first.sample(point, at);
+}

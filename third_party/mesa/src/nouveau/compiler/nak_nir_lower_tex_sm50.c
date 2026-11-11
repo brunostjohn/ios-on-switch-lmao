@@ -221,3 +221,116 @@ nak_nir_sm50_scalarize_tex(nir_tex_instr *tex, enum nak_nir_lod_mode lod,
 
    return *src0_comps <= 2 && *src1_comps <= 2;
 }
+
+/*
+ * A scalar fetch whose every use rounds a component to half, to nearest even,
+ * gives its result as halves (TEXS/TLDS/TLD4S.F16, two to a register).  Only
+ * where the chip is known to round so (raw_chip_facts.h AssumeTexsF16), or in
+ * the device's probe of it.  NIR's opt_16bit_destination, for one fetch.
+ */
+static bool
+fold_f16(nir_tex_instr *tex)
+{
+   if (tex->def.bit_size != 32 || tex->is_shadow ||
+       nir_alu_type_get_base_type(tex->dest_type) != nir_type_float)
+      return false;
+
+   nir_foreach_use_including_if(use, &tex->def) {
+      if (nir_src_is_if(use) ||
+          nir_src_use_instr(use)->type != nir_instr_type_alu ||
+          nir_instr_as_alu(nir_src_use_instr(use))->op != nir_op_f2f16_rtne)
+         return false;
+   }
+
+   nir_foreach_use(use, &tex->def) {
+      nir_alu_instr *alu = nir_instr_as_alu(nir_src_use_instr(use));
+      alu->op = nir_op_mov;
+      alu->fp_math_ctrl = nir_op_valid_fp_math_ctrl(alu->op, alu->fp_math_ctrl);
+   }
+   tex->def.bit_size = 16;
+   tex->dest_type = nir_type_float16;
+   return true;
+}
+
+/* hw_test_app/shaders/Scenes.metal TEXS_F16_PROBE_MARKER: SwitchHWTest's
+ * probe of TEXS.F16's rounding, whose fetches take the F16 forms in debug
+ * builds whatever the chip facts say; its TEXS_F16_PROOF_MARKER becomes
+ * 0x5346 << 16 | the fetches folded, so the probe knows it ran them
+ */
+#define TEXS_F16_PROBE_MARKER 0x7fa55346u
+#define TEXS_F16_PROOF_MARKER 0x7fa55347u
+
+static bool
+texs_f16_probe(nir_shader *nir)
+{
+#if defined(SWITCH_DEBUG) && SWITCH_DEBUG
+   nir_foreach_function_impl(impl, nir) {
+      nir_foreach_block(block, impl) {
+         nir_foreach_instr(instr, block) {
+            if (instr->type != nir_instr_type_load_const)
+               continue;
+            nir_load_const_instr *c = nir_instr_as_load_const(instr);
+            for (unsigned i = 0; i < c->def.num_components; i++) {
+               if (c->def.bit_size == 32 && c->value[i].u32 == TEXS_F16_PROBE_MARKER)
+                  return true;
+            }
+         }
+      }
+   }
+#endif
+   return false;
+}
+
+static void
+stamp_proof(nir_shader *nir, uint32_t proof)
+{
+   nir_foreach_function_impl(impl, nir) {
+      nir_foreach_block(block, impl) {
+         nir_foreach_instr(instr, block) {
+            if (instr->type != nir_instr_type_load_const)
+               continue;
+            nir_load_const_instr *c = nir_instr_as_load_const(instr);
+            for (unsigned i = 0; i < c->def.num_components; i++) {
+               if (c->def.bit_size == 32 && c->value[i].u32 == TEXS_F16_PROOF_MARKER)
+                  c->value[i].u32 = proof;
+            }
+         }
+      }
+   }
+}
+
+bool
+nak_nir_sm50_fold_f16_fetches(nir_shader *nir, const struct nak_compiler *nak,
+                              bool texs_f16)
+{
+   if (nak->sm < 50 || nak->sm >= 70)
+      return false;
+   const bool probe = texs_f16_probe(nir);
+   if (!texs_f16 && !probe)
+      return false;
+
+   bool progress = false;
+   unsigned count = 0;
+   nir_foreach_function_impl(impl, nir) {
+      bool folded = false;
+      nir_foreach_block(block, impl) {
+         nir_foreach_instr(instr, block) {
+            if (instr->type != nir_instr_type_tex)
+               continue;
+            nir_tex_instr *tex = nir_instr_as_tex(instr);
+            struct nak_nir_tex_flags flags;
+            memcpy(&flags, &tex->backend_flags, sizeof(flags));
+            if (!flags.scalar || flags.f16 || !fold_f16(tex))
+               continue;
+            flags.f16 = true;
+            memcpy(&tex->backend_flags, &flags, sizeof(flags));
+            folded = true;
+            count++;
+         }
+      }
+      progress |= nir_progress(folded, impl, nir_metadata_control_flow);
+   }
+   if (probe)
+      stamp_proof(nir, 0x53460000u | MIN2(count, 0xffffu));
+   return progress;
+}

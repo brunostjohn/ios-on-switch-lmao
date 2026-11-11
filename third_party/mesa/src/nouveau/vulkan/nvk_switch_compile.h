@@ -62,9 +62,14 @@ struct switch_nvk_stage_info {
    const struct switch_nvk_ir *semantic;
    const void *portable_context;
    bool (*portable)(const void *context, const uint32_t **words, size_t *bytes);
+   /* A fragment stage's fetches rounded to half take TEXS's F16 forms (a chip
+    * fact the pack builder holds: raw_chip_facts.h AssumeTexsF16)
+    */
+   bool texs_f16;
 };
 
 extern _Thread_local bool switch_nvk_center_frag_depth_current;
+extern _Thread_local bool switch_nvk_texs_f16_current;
 
 struct switch_nvk_stage {
    uint8_t header[80];

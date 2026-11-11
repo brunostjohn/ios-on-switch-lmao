@@ -5454,6 +5454,8 @@ pub struct OpTex {
     pub nodep: bool,
     pub channel_mask: ChannelMask,
     pub scalar: bool,
+    /// SM50 scalar forms: halves, two to a register
+    pub f16: bool,
 }
 
 impl DisplayOp for OpTex {
@@ -5469,6 +5471,9 @@ impl DisplayOp for OpTex {
         write!(f, "{}", self.mem_eviction_priority)?;
         if self.scalar {
             write!(f, ".scr")?;
+        }
+        if self.f16 {
+            write!(f, ".f16")?;
         }
         if self.nodep {
             write!(f, ".nodep")?;
@@ -5498,6 +5503,8 @@ pub struct OpTld {
     pub nodep: bool,
     pub channel_mask: ChannelMask,
     pub scalar: bool,
+    /// SM50 scalar forms: halves, two to a register
+    pub f16: bool,
 }
 
 impl DisplayOp for OpTld {
@@ -5509,6 +5516,9 @@ impl DisplayOp for OpTld {
         write!(f, "{}", self.mem_eviction_priority)?;
         if self.scalar {
             write!(f, ".scr")?;
+        }
+        if self.f16 {
+            write!(f, ".f16")?;
         }
         if self.nodep {
             write!(f, ".nodep")?;
@@ -5538,6 +5548,8 @@ pub struct OpTld4 {
     pub nodep: bool,
     pub channel_mask: ChannelMask,
     pub scalar: bool,
+    /// SM50 scalar forms: halves, two to a register
+    pub f16: bool,
 }
 
 impl DisplayOp for OpTld4 {
@@ -5549,6 +5561,9 @@ impl DisplayOp for OpTld4 {
         write!(f, "{}", self.mem_eviction_priority)?;
         if self.scalar {
             write!(f, ".scr")?;
+        }
+        if self.f16 {
+            write!(f, ".f16")?;
         }
         if self.nodep {
             write!(f, ".nodep")?;

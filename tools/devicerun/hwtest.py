@@ -54,6 +54,7 @@ TESTS: dict[str, bool] = {
             'gpu.compute.half_alu',
             'gpu.ca.sweep',
             'gpu.sm53_probe',
+            'gpu.raw.texs_f16',
             'gpu.xr_blend',
             'gpu.draw.linked_function',
             'gpu.raw.storage_offset',

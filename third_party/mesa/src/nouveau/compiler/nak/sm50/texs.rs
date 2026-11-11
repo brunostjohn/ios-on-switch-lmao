@@ -247,6 +247,7 @@ mod sm53_texs_tests {
             nodep: true,
             channel_mask: ChannelMask::new(0xf),
             scalar,
+            f16: false,
         }
     }
 
@@ -313,6 +314,7 @@ mod sm53_texs_tests {
             nodep: false,
             channel_mask: ChannelMask::new(0xf),
             scalar: true,
+            f16: false,
         });
         assert_eq!(decode_name(w), "TLDS");
         assert_eq!(bits(w, 59, 1), 1);
@@ -334,6 +336,7 @@ mod sm53_texs_tests {
             nodep: false,
             channel_mask: ChannelMask::new(0xf),
             scalar: true,
+            f16: false,
         });
         assert_eq!(decode_name(w), "TLD4S");
         assert_eq!(bits(w, 55, 1), 0); // precision: F32

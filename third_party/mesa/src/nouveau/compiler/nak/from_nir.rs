@@ -1978,6 +1978,14 @@ impl<'a> ShaderFromNir<'a> {
         } else if sm50_scalar && (mask == 0x5 || mask == 0x6) {
             mask = 0x7;
         }
+        // The F16 forms pack the components they write in order, so they
+        // write every component up to the last one read: each half then sits
+        // where a 16-bit value of NIR's has it
+        let f16 = flags.f16();
+        if f16 {
+            assert!(sm50_scalar && tex.def.bit_size() == 16);
+            mask = (1_u8 << (8 - mask.leading_zeros())) - 1;
+        }
         if flags.is_sparse() {
             mask &= !(1 << (tex.def.num_components - 1));
             if mask == 0 {
@@ -1991,14 +1999,20 @@ impl<'a> ShaderFromNir<'a> {
         let channel_mask = ChannelMask::new(mask);
 
         let dst_comps = u8::try_from(mask.count_ones()).unwrap();
-        let dst = b.alloc_ssa_vec(RegFile::GPR, dst_comps);
+        let dst_regs = if f16 {
+            dst_comps.div_ceil(2)
+        } else {
+            dst_comps
+        };
+        let dst = b.alloc_ssa_vec(RegFile::GPR, dst_regs);
 
         // On Volta and later, and for SM50's scalar forms, the destination is
         // split in two
         let mut dsts = [Dst::None, Dst::None];
+        let first = if f16 { 1 } else { 2 };
         if dst_comps > 2 && (b.sm() >= 70 || sm50_scalar) {
-            dsts[0] = SSARef::try_from(&dst[0..2]).unwrap().into();
-            dsts[1] = SSARef::try_from(&dst[2..]).unwrap().into();
+            dsts[0] = SSARef::try_from(&dst[0..first]).unwrap().into();
+            dsts[1] = SSARef::try_from(&dst[first..]).unwrap().into();
         } else {
             dsts[0] = dst.clone().into();
         }
@@ -2123,6 +2137,7 @@ impl<'a> ShaderFromNir<'a> {
                     nodep: flags.nodep(),
                     channel_mask,
                     scalar: flags.scalar(),
+                    f16: flags.f16(),
                 });
             } else if tex.op == nir_texop_tg4 {
                 b.push_op(OpTld4 {
@@ -2138,6 +2153,7 @@ impl<'a> ShaderFromNir<'a> {
                     nodep: flags.nodep(),
                     channel_mask,
                     scalar: flags.scalar(),
+                    f16: flags.f16(),
                 });
             } else {
                 assert!(offset_mode != TexOffsetMode::PerPx);
@@ -2155,8 +2171,24 @@ impl<'a> ShaderFromNir<'a> {
                     nodep: flags.nodep(),
                     channel_mask,
                     scalar: flags.scalar(),
+                    f16: flags.f16(),
                 });
             }
+        }
+
+        if f16 {
+            let words = usize::from(tex.def.num_components().div_ceil(2));
+            let nir_dst = (0..words)
+                .map(|i| {
+                    if i < dst.len() {
+                        dst[i]
+                    } else {
+                        b.copy(0.into())
+                    }
+                })
+                .collect();
+            self.set_ssa(tex.def.as_def(), nir_dst);
+            return;
         }
 
         let mut di = 0_usize;

@@ -62,9 +62,12 @@ struct nak_fs_key {
 
    /** Raw shader depth tests reconstruct sample depth from pixel-center Z. */
    bool center_frag_depth;
+
+   /** Maxwell: fetches rounded to half take TEXS's F16 forms (a chip fact) */
+   bool texs_f16;
 };
 PRAGMA_DIAGNOSTIC_POP
-static_assert(sizeof(struct nak_fs_key) == 4, "This struct has no holes");
+static_assert(sizeof(struct nak_fs_key) == 5, "This struct has no holes");
 
 struct nak_constant_offset_info {
    /**

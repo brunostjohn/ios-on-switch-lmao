@@ -198,6 +198,7 @@ nvk_populate_fs_key(struct nak_fs_key *key,
 {
    memset(key, 0, sizeof(*key));
    key->center_frag_depth = switch_nvk_center_frag_depth_current;
+   key->texs_f16 = switch_nvk_texs_f16_current;
 
    /* Turn underestimate on when no state is availaible or if explicitly set */
    if (state == NULL || state->rs == NULL ||

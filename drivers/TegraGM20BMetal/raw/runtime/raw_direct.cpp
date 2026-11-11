@@ -4,6 +4,7 @@
 #include "raw_direct.h"
 #include "raw_direct_nvk.h"
 #include "raw_direct_push.h"
+#include "raw_chip_facts.h"
 #include "raw_direct_storage.h"
 #include "raw_residual.h"
 #include "raw_split_metadata.h"
@@ -107,7 +108,7 @@ public:
     // Refused: a state the raw path does not draw from a record; Failed: NVK could not compile a stage. `split`: the fragment
     // stage's split too (split()). `zeroPush`: root push words compiled as the constant 0 besides the state's constant ones
     CompileOutcome compile(const NmbDirectState &state, uint32_t halfTargets, bool split, std::string &why,
-                           uint32_t zeroPush = 0)
+                           uint32_t zeroPush = 0, bool texsF16 = false)
     {
         if (state.stageCount != 2) {
             why = std::to_string(state.stageCount) + " stages";
@@ -141,6 +142,7 @@ public:
                 nullptr,
                 nullptr};
             memcpy(info.constPushWords, state.draws[0].push, sizeof info.constPushWords);
+            info.texsF16 = texsF16 && s.stage == kFragmentBit;
             info.constPushMask |= zeroPush;
             for (uint32_t i = 0; i < 32; i++)
                 if (zeroPush >> i & 1)
@@ -310,13 +312,14 @@ bool emitted(const std::string &key, const Stages &stages, const std::vector<uin
     return true;
 }
 
-// A residual-0 variant of each stage whose uniform reads go through a bind residual (raw_residual.h): compiled with those root
-// push words as the constant 0, so a uniform read is a constant-buffer operand at an immediate offset rather than an LDC at
-// the residual. Its assumption bits are the uniform[] entries of its stage; a stage the fold leaves as it was has none.
-void residualZeroVariants(const NmbDirectState &state, const DirectNvk &nvk, void *device, uint32_t halfTargets,
-                          const Stages &generic, RuntimeRecord &out)
+// Each stage's program variants, most specialised first (raw_pack.h PackVariant): residual 0, compiled with the root push
+// words that hold uniform bind residuals (raw_residual.h) as the constant 0, so a uniform read is a constant-buffer operand
+// at an immediate offset; and where the chip is proven to round them so (raw_chip_facts.h), fetches rounded to half in
+// TEXS's F16 forms. A stage's variant is kept only where its code differs, and nothing else a record says of it does.
+void programVariants(const NmbDirectState &state, const DirectNvk &nvk, void *device, uint32_t halfTargets,
+                     const Stages &generic, RuntimeRecord &out)
 {
-    uint32_t assume[2] = {}, zeroPush = 0;
+    uint32_t residual[2] = {}, zeroPush = 0;
     const PackPipeline &p = out.pipeline;
     for (uint32_t k = 0; k < kUniformRanges; k++) {
         if (p.uniform[k].entry >= p.entries)
@@ -325,24 +328,43 @@ void residualZeroVariants(const NmbDirectState &state, const DirectNvk &nvk, voi
         const int word = bufferResidualWord(e);
         if (word < 0 || word >= 32)
             continue;
-        assume[e.stage == 1 ? 0 : 1] |= AssumeUniformAligned << k;
+        residual[e.stage == 1 ? 0 : 1] |= AssumeUniformAligned << k;
         zeroPush |= 1u << word;
     }
-    if (!zeroPush)
-        return;
-    Stages stages(nvk, device);
-    std::string why;
-    if (stages.compile(state, halfTargets, false, why, zeroPush) != CompileOutcome::Made)
-        return;
-    for (uint32_t k = 0; k < 2; k++) {
-        const EmitProgram a = generic.emit(int(k)), b = stages.emit(int(k));
-        const CapturedProgram &program = stages.program(int(k));
-        if (!assume[k] || program.image == out.programs[k].image || program.cbufTypes != out.programs[k].cbufTypes ||
-            a.earlyFragmentTests != b.earlyFragmentTests || a.interlockControl != b.interlockControl ||
-            a.usesSampleShading != b.usesSampleShading)
+    struct Kind {
+        uint32_t zeroPush;
+        bool texsF16;
+    };
+    const bool f16 = kProvenChipFacts & AssumeTexsF16;
+    std::vector<Kind> kinds;
+    if (zeroPush && f16)
+        kinds.push_back({zeroPush, true});
+    if (zeroPush)
+        kinds.push_back({zeroPush, false});
+    if (f16)
+        kinds.push_back({0, true});
+    std::vector<RuntimeRecord::Variant> made[2];
+    for (const Kind &kind : kinds) {
+        Stages stages(nvk, device);
+        std::string why;
+        if (stages.compile(state, halfTargets, false, why, kind.zeroPush, kind.texsF16) != CompileOutcome::Made)
             continue;
-        out.variants.push_back({assume[k], program});
-        out.pipeline.variantCount[k]++;
+        for (uint32_t k = 0; k < 2; k++) {
+            const EmitProgram a = generic.emit(int(k)), b = stages.emit(int(k));
+            const CapturedProgram &program = stages.program(int(k));
+            const auto same = [&](const RuntimeRecord::Variant &v) {
+                return v.program.image == program.image;
+            };
+            if (program.image == out.programs[k].image || program.cbufTypes != out.programs[k].cbufTypes ||
+                a.earlyFragmentTests != b.earlyFragmentTests || a.interlockControl != b.interlockControl ||
+                a.usesSampleShading != b.usesSampleShading || std::any_of(made[k].begin(), made[k].end(), same))
+                continue;
+            made[k].push_back({(kind.zeroPush ? residual[k] : 0) | (kind.texsF16 ? AssumeTexsF16 : 0), program});
+        }
+    }
+    for (uint32_t k = 0; k < 2; k++) {
+        out.pipeline.variantCount[k] = uint8_t(made[k].size());
+        out.variants.insert(out.variants.end(), made[k].begin(), made[k].end());
     }
 }
 
@@ -494,7 +516,7 @@ CompileOutcome directRecord(const NmbDirectState &state, const DirectNvk &nvk, c
     if (split && !storage.storageMask)
         splitInto(nvk, stages.split(1), out);
     if (variants)
-        residualZeroVariants(state, nvk, device, halfFloatTargets(key), stages, out);
+        programVariants(state, nvk, device, halfFloatTargets(key), stages, out);
     return CompileOutcome::Made;
 }
 

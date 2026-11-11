@@ -11,7 +11,7 @@ public enum Scenes {
         GlyphAtlasScene(), ReplaceRegionScene(), BlitUploadScene(), SurfaceLockScene(), ClearFormatsScene(),
         ClearThenDrawScene(), InstancedDrawScene(), DepthBiasScene(), RenderThenSampleScene(), UnormBlendScene(),
         ExtendedBlendScene(), MipmapScene(), MSAAResolveScene(), MPSBlurScene(), CoreImageBlurScene(),
-        HalfArithmeticScene(), SM53ProbeScene(), XRBlendScene(), TextureKindsScene(), LatencyScene(),
+        HalfArithmeticScene(), SM53ProbeScene(), TexsF16Scene(), XRBlendScene(), TextureKindsScene(), LatencyScene(),
         LinkedFunctionScene(),
         StorageOffsetScene(),
         PixelSamplerScene(),

@@ -2284,7 +2284,7 @@ impl SM50Op for OpTex {
 
     fn encode(&self, e: &mut SM50Encoder<'_>) {
         if self.scalar {
-            e.encode_texs(self, false);
+            e.encode_texs(self, self.f16);
             return;
         }
         match self.tex {
@@ -2323,7 +2323,7 @@ impl SM50Op for OpTld {
 
     fn encode(&self, e: &mut SM50Encoder<'_>) {
         if self.scalar {
-            e.encode_tlds(self, false);
+            e.encode_tlds(self, self.f16);
             return;
         }
         match self.tex {
@@ -2368,7 +2368,7 @@ impl SM50Op for OpTld4 {
             TexOffsetMode::PerPx => 2_u8,
         };
         if self.scalar {
-            e.encode_tld4s(self, false);
+            e.encode_tld4s(self, self.f16);
             return;
         }
         match self.tex {

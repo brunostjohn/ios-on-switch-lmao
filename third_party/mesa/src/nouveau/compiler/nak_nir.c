@@ -2119,6 +2119,13 @@ nak_postprocess_nir(nir_shader *nir,
       }
    } while (progress);
 
+   /* After the late rules, which leave a texel metal2vulkan rounds to half as
+    * one f2f16_rtne
+    */
+   if (OPT(nir, nak_nir_sm50_fold_f16_fetches, nak,
+           fs_key != NULL && fs_key->texs_f16))
+      OPT(nir, nir_opt_copy_prop);
+
    OPT(nir, nir_opt_move, nir_move_comparisons | nir_move_load_ubo);
 
    if (nak->sm < 70) {
