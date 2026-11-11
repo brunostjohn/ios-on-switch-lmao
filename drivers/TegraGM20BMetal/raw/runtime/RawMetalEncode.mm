@@ -2,6 +2,7 @@
 #import "RawMetalPlanAdapters.h"
 #import "RawMetalPassFusion.h"
 #import "RawMetalSplitPlan.h"
+#import "RawMetalXrPlanes.h"
 #include <optional>
 #include "raw_compute.h"
 #include "raw_compute_lookup.h"
@@ -139,6 +140,7 @@ static bool encodeRawAttempt(RMCommandBuffer *cb, size_t from, size_t to, const 
     // before a pass that loads it (its code image from the planes first, the copy engine's remaps), the stand-in into the planes
     // after one that stores it. 0: drawn; else fail()'s or refused()'s answer.
     std::vector<RMTexture *> standInLoads, standInStores, planesWritten;
+    XrPlaneSync xrPlanes(*rc);
     auto standInPass = [&](RMTexture *t, bool store) -> int {
         raw::Texture &x = t->_raw;
         if (!store) {
@@ -362,6 +364,7 @@ static bool encodeRawAttempt(RMCommandBuffer *cb, size_t from, size_t to, const 
                 stale.push_back(texture);
         });
         for (RMTexture *t : stale) {
+            xrPlanes.read(t);
             raw::Texture &x = t->_raw;
             raw::PassDesc p;
             p.color[0].texture = x.standIn;
@@ -480,6 +483,7 @@ static bool encodeRawAttempt(RMCommandBuffer *cb, size_t from, size_t to, const 
                 if (t->_raw.planar && !t->_raw.planarStandIn)
                     return fail(PredEncPlanarRT, "a planar texture as a render target", j);
                 useTexture(rc, t, true);
+                xrPlanes.attach(t, a.load, pass);
                 if (t->_raw.planarStandIn) {
                     // Metal's DontCare load keeps the planes' codes where no draw writes, and the store writes every texel
                     // (raw/test/standinoracle.mm): such a pass loads them too. A YCbCr code target's undrawn texels are
@@ -625,6 +629,7 @@ static bool encodeRawAttempt(RMCommandBuffer *cb, size_t from, size_t to, const 
         case OpCopyBufferToTexture:
         case OpCopyTextureToBuffer: {
             RAW_ENCODE_SPAN(Blit);
+            xrPlanes.blit(c, be);
             encodeBlit(cb, c, rc, be, fresh, standInFresh);
             break;
         }
@@ -645,6 +650,7 @@ static bool encodeRawAttempt(RMCommandBuffer *cb, size_t from, size_t to, const 
     for (RMTexture *t : standInStores)
         if (standInPass(t, true))
             return false;
+    xrPlanes.flush();
     encoder = to;
     uint32_t seq = 0;
     prepareSharedEvents(cb, rc);
@@ -685,6 +691,7 @@ static bool encodeRawAttempt(RMCommandBuffer *cb, size_t from, size_t to, const 
         c.t->_imageCurrent = true;
     }
     noteSurfaceWrites(cb, from, to);
+    xrPlanes.submitted();
     for (RMTexture *t : planesWritten)  // a write the surface's seed does not show: its image is converted again
         t->_imageCurrent = false;
     cb->_seqno = seq;

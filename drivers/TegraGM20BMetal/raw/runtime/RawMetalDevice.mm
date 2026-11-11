@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 #import "RawMetalInternal.h"
 #import "RawMetalRotated.h"
+#import "RawMetalXrPlanes.h"
 #include "raw_nonfinite.h"
 #include "NativeBridgeMetalFrontend.h"
 #import "RawMetalMultisample.h"
@@ -475,6 +476,8 @@ static bool producesTexture(MTLTextureDescriptor *d)
             !gRM->raw->createPlanarTarget(IOSurfaceGetID(s), base, IOSurfaceGetAllocSize(s), s, t->_raw))
             SWITCH_REFUSE_DETAIL("raw", "planar.target", 0, "no stand-in for a %lux%lu RGB8_444_2P render target",
                                  (unsigned long)d.width, (unsigned long)d.height);
+    } else if (xrPlanesShape(d, s, plane)) {
+        t->_rawOk = makeXrPlanes(t, s);
     } else if (raw::isYcbcrFormat(uint32_t(d.pixelFormat)) && !ycbcrPlan(d, s, plane, ycbcr)) {
         // a YCbCr texture: an image the pack's conversion state draws
         t->_rawOk =

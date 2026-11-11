@@ -112,7 +112,8 @@ void answerMissing(id object, NSInvocation *invocation)
 }
 
 // A format the raw path has a header for. RGB10A8_2P_XR10 only private or memoryless: its texels are m2v's own layout, not the two
-// planes of Metal's bytes a surface, a buffer or the CPU holds (raw_xr.h)
+// planes of Metal's bytes a surface, a buffer or the CPU holds (raw_xr.h); one over a two-plane surface's planes is taken before
+// this (xrPlanesShape)
 static bool keptFormat(MTLTextureDescriptor *d)
 {
     if (raw::xrForm(uint32_t(d.pixelFormat)) == raw::XrForm::Planes && d.storageMode != MTLStorageModePrivate &&

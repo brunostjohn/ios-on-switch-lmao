@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #import "RawMetalInternal.h"
+#import "RawMetalXrPlanes.h"
 
 bool bufferRows(uint64_t offset, uint64_t bytesPerRow, uint32_t rows, uint32_t rowBytes, uint32_t bpp, bool intoTexture,
                 BufferRows &out)
@@ -166,10 +167,13 @@ static bool sameSizeLevels(id<MTLTexture> s, id<MTLTexture> d, NSUInteger &sl, N
         [_cb takeReason:WhyTexture why:@"a texture copy the raw path does not do (levels, slices, formats)"];
         hit(_cb, PredBlitTexCopy, ss | sl << 8 | ds << 16 | dl << 24,
             uint64_t(size.width) << 32 | uint32_t(size.height));
-    } else if (a->_raw.converted() || b->_raw.converted()) {
-        // Metal's copies move a planar texture's planes' bytes: m2v's
+    } else if (const bool from = a->_raw.converted() || xrOverPlanes(a->_raw),
+               to = b->_raw.converted() || xrOverPlanes(b->_raw);
+               from || to) {
+        // Metal's copies move a planar texture's planes' bytes, an RGB10A8_2P_XR10 surface texture's both planes at plane
+        // 0's rows (m2v two_planes.rs): m2v's
         [_cb takeReason:WhyTexture why:@"a copy to or from a planar texture"];
-        hit(_cb, PredEncPlanarCopy, a->_raw.converted(), b->_raw.converted());
+        hit(_cb, PredEncPlanarCopy, from, to);
     }
     [_cb retain:s];
     [_cb retain:d];

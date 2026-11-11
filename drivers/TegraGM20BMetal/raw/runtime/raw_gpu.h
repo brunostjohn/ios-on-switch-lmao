@@ -278,7 +278,7 @@ struct Texture {
     // colour target, sampled (tic) only where it was made to be. A stored one (not memoryless) is NVK's image, rendered,
     // sampled and copied in place, by aspect
     // (BlitEncoder::copyBufferTexels): a Depth32Float_Stencil8 one's stencil through stencilTemp, two bytes a texel (NVK's
-    // stencil_copy_temp)
+    // stencil_copy_temp), as an RGB10A8_2P_XR10 surface texture's alpha byte goes (Device::createXrPlanesTexture)
     bool zeta = false;
     Texture *stencilTemp = nullptr;
 
@@ -830,6 +830,8 @@ public:
     // A planar texture's image from its surface's planes (Texture::planar): two remapped copies, the luma codes into green
     // (alpha 255), then the chroma pairs into red (Cr) and blue (Cb), each leaving the other components as they are
     void convertPlanar(const Texture &t);
+    // An RGB10A8_2P_XR10 surface texture's image from its planes, or (`split`) its planes from its image (raw_xr_planes.h)
+    void xrPlanes(const Texture &t, bool split);
     // generateMipmaps of a mipmapped texture (Texture::chain) on the 2D engine: each later level from the one above, in place
     void generate(Texture &t);
     // A YCbCr code target's chroma blocks on the 2D engine: `codes` (pitch) halved across, and down where `halved` is half its
@@ -1122,6 +1124,12 @@ public:
     // stand-in
     // states or a plane cannot be rendered
     bool createPlanarTarget(uint64_t surfaceId, void *base, uint64_t allocBytes, const void *surface, Texture &t);
+    // RGB10A8_2P_XR10 over a two-plane surface, its planes at `word` and `alpha` (offsets in the allocation, with their
+    // pitches): raw's form of the format in a pool image (raw_xr_planes.h), the planes as luma and chroma, the copies' temp
+    // as stencilTemp
+    bool createXrPlanesTexture(uint64_t surfaceId, void *base, uint64_t allocBytes, const void *surface, uint64_t word,
+                               uint32_t wordPitch, uint64_t alpha, uint32_t alphaPitch, uint32_t width, uint32_t height,
+                               Texture &t);
     // The pack's stand-in states: the planes' codes into the stand-in, or (`store`) the stand-in into the planes
     Pipeline *standInPipeline(bool store);
     bool createBufferTexture(const Buffer &b, uint64_t offset, uint32_t width, uint32_t height, uint32_t pitch,
