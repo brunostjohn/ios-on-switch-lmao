@@ -461,6 +461,15 @@ host_test(
 )
 
 host_test(
+    name = "raw_archive_add_source_test",
+    srcs = ["raw_archive_add_source_test.cpp"],
+    data = [
+        "//drivers/NativeMetal:NativeBridgeMetalFrontend.mm",
+        "//drivers/TegraGM20BMetal:raw/runtime/RawMetalArchive.mm",
+    ],
+)
+
+host_test(
     name = "raw_linked_source_test",
     srcs = ["raw_linked_source_test.cpp"],
     data = [
