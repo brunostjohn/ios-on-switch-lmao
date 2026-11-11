@@ -626,6 +626,15 @@ TEST(GM20BRoomSource, SubmitJobNeverSleepsWithBackingLocksHeld)
 	expectBefore(submit, "runJob(record, job, out)", "submitGate_.leaveFast(lock_);");
 }
 
+// A fence wait woken at its seqno decides from the fence page alone; the connection lock is for publishing, errors and
+// timeouts.
+TEST(GM20BRoomSource, AWokenFenceWaitTakesNoConnectionLock)
+{
+	const auto wait = flat(definition(client(), "IOReturn AGXDeviceUserClient::waitFence("));
+	expectBefore(wait, "switch_gpu_fence_passed(record, in->seqno, waitedOn)", "IOLockLock(lock_);");
+	expectBefore(wait, "if (ret != kIOReturnSuccess) { IOLockLock(lock_);", "tgm_chan_want(chan, in->seqno);");
+}
+
 // The waiter a submitter sleeps in after -EAGAIN waits for exactly the room chan_exec then checks, computed in one place:
 // a waiter that returned with less left the retry loops (TegraGM20BCopy.cpp submit, the user client's exec) spinning.
 TEST(GM20BRoomSource, WaiterAndSubmissionReserveOneRoom)

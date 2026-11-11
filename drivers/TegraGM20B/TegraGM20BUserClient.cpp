@@ -209,7 +209,8 @@ void AGXDeviceUserClient::releaseBo(Bo *bo)
 }
 
 // Sleeps without the connection lock (a waiter must not block submitters), so the channel can be destroyed meanwhile:
-// it is looked up again, under the lock, before every look at it.
+// it is looked up again, under the lock, before every look at it but one: a wake is first checked against the fence
+// page alone (SwitchGpuFenceRecord.h), as the channel the wait began on.
 IOReturn AGXDeviceUserClient::waitFence(const TegraGM20BAbiWaitFence *in)
 {
 	if (!in->channel || in->channel > kMaxChannels)
@@ -217,6 +218,8 @@ IOReturn AGXDeviceUserClient::waitFence(const TegraGM20BAbiWaitFence *in)
 	const uint64_t limit_ns = in->timeout_ns == UINT64_MAX ? 10000000000ULL : in->timeout_ns;
 	uint64_t start = nowNs();
 	uint64_t deadline = limit_ns > UINT64_MAX - start ? UINT64_MAX : start + limit_ns;
+	const volatile uint32_t *record = fence_va_ + static_cast<size_t>(in->channel - 1) * 16;
+	uint64_t waitedOn = 0;
 	uint32_t waiter = 0;
 	uint32_t seq = 0;
 	bool woken = false;
@@ -224,37 +227,45 @@ IOReturn AGXDeviceUserClient::waitFence(const TegraGM20BAbiWaitFence *in)
 		const uint32_t sleptOn = waiter;
 		IOReturn ret = kIOReturnNotReady;
 		uint64_t eventGeneration = 0;
-		IOLockLock(lock_);
-		tgm_chan *chan = chans_[in->channel - 1];
-		if (chan) {
-			waiter = tgm_chan_waiter(chan);
-			seq = tgm_waiter_seq(waiter);
-			tgm_chan_want(chan, in->seqno);
-		}
-		const uint64_t now = nowNs();
-		if (!chan) {
-			ret = slept ? kIOReturnNotResponding : kIOReturnBadArgument;
-		} else if (tgm_chan_error(chan)) {
-			ret = kIOReturnNotResponding;
-		} else if (static_cast<int32_t>(tgm_chan_completed(chan) - in->seqno) >= 0) {
-			ret = kIOReturnSuccess;
+		if (woken && waitedOn && switch_gpu_fence_passed(record, in->seqno, waitedOn)) {
 			eventGeneration = eventChannels_[in->channel - 1].generation();
-		} else if (in->timeout_ns == UINT64_MAX && now - start >= limit_ns) {
-			// CONTRACT: UINT64_MAX means 10 s; then what the GPU is stuck on is killed (this channel's error
-			// ends the wait) and the wait goes on
-			hangHolder_ = current_thread();
-			tgm_chan_stalled(chan, "fence wait", in->seqno, now - start);
-			hangHolder_ = nullptr;
-			start = now;
-			deadline = now + limit_ns;
-		} else if (!limit_ns || now - start >= limit_ns) {
-			hangHolder_ = current_thread();
-			if (limit_ns)
-				tgm_chan_check_progress(chan, "fence wait", in->seqno);
-			hangHolder_ = nullptr;
-			ret = kIOReturnTimeout;
+			if (switch_gpu_fence_identity(record) == waitedOn)
+				ret = kIOReturnSuccess;
 		}
-		IOLockUnlock(lock_);
+		if (ret != kIOReturnSuccess) {
+			IOLockLock(lock_);
+			tgm_chan *chan = chans_[in->channel - 1];
+			if (chan) {
+				waiter = tgm_chan_waiter(chan);
+				seq = tgm_waiter_seq(waiter);
+				tgm_chan_want(chan, in->seqno);
+				waitedOn = switch_gpu_chan_identity(chan);
+			}
+			const uint64_t now = nowNs();
+			if (!chan) {
+				ret = slept ? kIOReturnNotResponding : kIOReturnBadArgument;
+			} else if (tgm_chan_error(chan)) {
+				ret = kIOReturnNotResponding;
+			} else if (static_cast<int32_t>(tgm_chan_completed(chan) - in->seqno) >= 0) {
+				ret = kIOReturnSuccess;
+				eventGeneration = eventChannels_[in->channel - 1].generation();
+			} else if (in->timeout_ns == UINT64_MAX && now - start >= limit_ns) {
+				// CONTRACT: UINT64_MAX means 10 s; then what the GPU is stuck on is killed (this channel's error
+				// ends the wait) and the wait goes on
+				hangHolder_ = current_thread();
+				tgm_chan_stalled(chan, "fence wait", in->seqno, now - start);
+				hangHolder_ = nullptr;
+				start = now;
+				deadline = now + limit_ns;
+			} else if (!limit_ns || now - start >= limit_ns) {
+				hangHolder_ = current_thread();
+				if (limit_ns)
+					tgm_chan_check_progress(chan, "fence wait", in->seqno);
+				hangHolder_ = nullptr;
+				ret = kIOReturnTimeout;
+			}
+			IOLockUnlock(lock_);
+		}
 		if (slept) {
 			tgm_stats_wait(sleptOn, static_cast<int>(woken),
 				       static_cast<int>(ret == kIOReturnSuccess));
@@ -272,7 +283,7 @@ IOReturn AGXDeviceUserClient::waitFence(const TegraGM20BAbiWaitFence *in)
 		woken = (tgm_waiter_idle(waiter, seq, deadline) != 0);
 		if (!woken) {
 			IOLockLock(lock_);
-			chan = chans_[in->channel - 1];
+			tgm_chan *chan = chans_[in->channel - 1];
 			const bool unwoken = (chan != nullptr) && tgm_chan_waiter(chan) == waiter &&
 					     tgm_chan_announced(chan, in->seqno);
 			IOLockUnlock(lock_);
