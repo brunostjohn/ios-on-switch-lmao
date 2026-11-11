@@ -17,7 +17,7 @@ final class PresentAtTimeRun: NSObject {
     private var started: CFTimeInterval = 0
     private var frame = 0
     private(set) var submitted = 0
-    static let period = 1.0 / 60
+    nonisolated static let period = 1.0 / 60
 
     init(done: Waiter<Bool>) {
         let device = MTLCreateSystemDefaultDevice()
