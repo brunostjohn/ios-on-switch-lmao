@@ -47,6 +47,7 @@
 #include "SwitchFrameStall.h"
 #include "SwitchInteraction.h"
 #include "SwitchSBIM.h"
+#include "SwitchTimedPresent.h"
 #include "../SwitchSuspend/SwitchSleepSteps.h"
 #include "../TegraVIC/TegraVICConfig.h"
 #include "../TegraVIC/TegraVICSurface.h"
@@ -3461,6 +3462,8 @@ public:
         const OriginalLegacySwapRequest *request = latchRetire ? firstUntaken() : pendingSwapRequest();
         if (!request || !isValidated(request))
             return;
+        if (presentNotDue(request))
+            return;
         if ((probe.active() || probeRequest) && !releaseProbeHold()) {  // window A is the SMMU probe's for a few frames
             kickDeferred = true;
             return;
@@ -4537,6 +4540,7 @@ public:
     }
 
 #include "SwitchRetireDisplay.h"
+#include "SwitchTimedPresentDisplay.h"
 
     // A swap window A can scan in place: one full-frame BGRA surface (validateSwap's single layer), its rows a multiple of 64
     // bytes, at most one slot. The portrait-native layout only: window A then scans rows unrotated, as hekate's pitch window does.

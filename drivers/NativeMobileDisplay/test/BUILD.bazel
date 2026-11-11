@@ -564,3 +564,17 @@ host_test(
         "//drivers/NativeMobileDisplay:NativePlaneFenceDisplay.h",
     ],
 )
+
+# SwitchTimedPresent.h: a swap flips at the frame end before its requested presentation; the next vblank's as before.
+host_test(
+    name = "switch_timed_present_test",
+    srcs = [
+        "switch_timed_present_test.cpp",
+        "//drivers/NativeMobileDisplay:SwitchTimedPresent.h",
+    ],
+    data = [
+        "//drivers/NativeMobileDisplay:NativeLegacyDisplay.cpp",
+        "//drivers/NativeMobileDisplay:SwitchRetireDisplay.h",
+        "//drivers/NativeMobileDisplay:SwitchTimedPresentDisplay.h",
+    ],
+)
