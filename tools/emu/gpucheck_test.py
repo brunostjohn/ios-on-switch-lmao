@@ -22,6 +22,11 @@ class GpuMilestoneTest(unittest.TestCase):
     def test_not_reached_without_m4(self):
         self.assertIsNone(gpucheck.reached([BRINGUP[0], BRINGUP[1], BRINGUP[3]]))
 
+    def test_reached_once_the_scrub_has_settled_without_its_queued_line(self):
+        later = '[     3.633340] SwitchALS: off: BH1730 on I2C2 0x29 never answered'
+        self.assertIsNone(gpucheck.reached([*BRINGUP[:3], '[     3.272310] SwitchAudio: headphones in at start']))
+        self.assertEqual(gpucheck.reached([*BRINGUP[:3], later]), later)
+
     def test_bringup_and_gpu_errors_fail(self):
         for line in (
             '[     1.343058] tegra-gm20b: M3 FAIL vm=ok chan=no fence=0/0 ce_fill_bad=0/1024 err=0 ret=-28',
@@ -46,6 +51,8 @@ class GpuMilestoneTest(unittest.TestCase):
             run = Path(tmp)
             self.assertEqual(gpucheck.after_run(run), ['the GPU executed no method'])
             (run / 'gpu-methods.raw').write_text('0 4 b0b5 0300 00000586\n')
+            self.assertEqual(gpucheck.after_run(run), ['the scrubber ran no fill'])
+            (run / 'gpu-methods.raw').write_text('0 4 b0b5 0418 00008000\n0 4 b0b5 0300 00000786\n')
             (run / 'gpu-events.log').write_text('5 runlist 0 submit: 1 entries at 0xe42be000\n')
             self.assertEqual(gpucheck.after_run(run), [])
             (run / 'gpu-events.log').write_text('6 channel 0 stopped: pushbuffer fetch\n')
