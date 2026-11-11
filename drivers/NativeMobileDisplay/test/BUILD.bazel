@@ -618,3 +618,17 @@ host_test(
         "//drivers/TegraSMMU:TegraSMMU.h",
     ],
 )
+
+# SwitchMediaPlaneFence.h: video planes armed on VIC's and NVDEC's syncpoints, the GPU's left on the bridge.
+host_test(
+    name = "switch_media_plane_fence_test",
+    srcs = [
+        "switch_media_plane_fence_test.cpp",
+        "//drivers/NativeMobileDisplay:SwitchMediaPlaneFence.h",
+        "//drivers/TegraGM20B:SwitchGpuBacking.h",
+    ],
+    data = [
+        "//drivers/NativeMobileDisplay:NativeLegacyDisplay.cpp",
+        "//drivers/NativeMobileDisplay:NativePlaneFenceDisplay.h",
+    ],
+)
