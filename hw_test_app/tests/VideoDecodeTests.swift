@@ -19,6 +19,7 @@ struct VideoDecodeTest: HWTest {
         case .hevc: return "HEVC Main"
         case .hevc10: return "HEVC Main10"
         case .vp9: return "VP9"
+        case .mpeg4: return "MPEG-4 Part 2"
         }
     }
 
@@ -27,6 +28,7 @@ struct VideoDecodeTest: HWTest {
         case .h264: return kCMVideoCodecType_H264
         case .hevc, .hevc10: return kCMVideoCodecType_HEVC
         case .vp9: return kCMVideoCodecType_VP9
+        case .mpeg4: return kCMVideoCodecType_MPEG4Video
         }
     }
 
@@ -55,11 +57,20 @@ struct VideoDecodeTest: HWTest {
         metrics.set("fps", result.fps, digits: 1)
         metrics.set("luma_err", result.worstLumaError, digits: 1)
         metrics.set("chroma_err", result.worstChromaError, digits: 1)
-        return .judged(
-            [
-                ("UsingHardwareAcceleratedVideoDecoder", result.usingHardware),
-                ("every frame decodes to the pattern (\(result.firstMismatch ?? "ok"))", result.matched == clip.frames),
-            ], metrics, proof: result.usingHardware ? "UsingHardwareAcceleratedVideoDecoder=1" : "")
+        var checks = [
+            ("UsingHardwareAcceleratedVideoDecoder", result.usingHardware),
+            ("every frame decodes to the pattern (\(result.firstMismatch ?? "ok"))", result.matched == clip.frames),
+        ]
+        var proof = result.usingHardware ? "UsingHardwareAcceleratedVideoDecoder=1" : ""
+        // Debug builds of the AVD plug-in count the pictures its NVDEC jobs put out and how each reached the client.
+        if let routes = result.routes {
+            for key in ["frames", "exported", "vic", "cpu", "errors"] { metrics.set("decoder_" + key, routes[key] ?? 0) }
+            checks.append(
+                ("every frame an NVDEC picture (SwitchPictureRoutes)",
+                 routes["frames"] == clip.frames && routes["errors"] == 0))
+            proof += " SwitchPictureRoutes frames=\(routes["frames"] ?? 0)"
+        }
+        return .judged(checks, metrics, proof: proof)
     }
 
     static let unsupported: Set<OSStatus> = [

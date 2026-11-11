@@ -52,14 +52,16 @@ enum TegraNVDECMethod {
 
 // Service properties, true for each codec in TegraNVDECInfo.codecs: a process that may not open a client finds them by
 // matching (IOPropertyMatch), which its sandbox does not filter as it filters property reads.
-#define TEGRA_NVDEC_DECODES_H264 "TegraNVDECDecodesH264"
-#define TEGRA_NVDEC_DECODES_VP9  "TegraNVDECDecodesVP9"
-#define TEGRA_NVDEC_DECODES_HEVC "TegraNVDECDecodesHEVC"
+#define TEGRA_NVDEC_DECODES_H264  "TegraNVDECDecodesH264"
+#define TEGRA_NVDEC_DECODES_VP9   "TegraNVDECDecodesVP9"
+#define TEGRA_NVDEC_DECODES_HEVC  "TegraNVDECDecodesHEVC"
+#define TEGRA_NVDEC_DECODES_MPEG4 "TegraNVDECDecodesMPEG4"
 
 // NVDEC application ids (clc5b0.h NVC5B0_SET_APPLICATION_ID_ID_*). TegraNVDECInfo.codecs has bit n set for each
 // codec NVDEC decodes; Submit refuses the others.
 enum {
     TEGRA_NVDEC_CODEC_H264 = 3,
+    TEGRA_NVDEC_CODEC_MPEG4 = 4,
     TEGRA_NVDEC_CODEC_HEVC = 7,
     TEGRA_NVDEC_CODEC_VP9 = 9
 };
@@ -117,7 +119,7 @@ enum {
 typedef struct {
     uint32_t codec;  // TEGRA_NVDEC_CODEC_*
     uint32_t entry_count, clean_count;
-    uint32_t setup_bytes;                              // sizeof(nvdec_h264_pic_s) / sizeof(nvdec_vp9_pic_s)
+    uint32_t setup_bytes;                              // sizeof the codec's nvdec_*_pic_s
     TegraNVDECEntry entries[TEGRA_NVDEC_MAX_ENTRIES];  // no SET_DRV_PIC_SETUP_OFFSET: the kernel adds it
     TegraNVDECRange clean[TEGRA_NVDEC_MAX_RANGES];
     uint8_t setup[TEGRA_NVDEC_MAX_SETUP];

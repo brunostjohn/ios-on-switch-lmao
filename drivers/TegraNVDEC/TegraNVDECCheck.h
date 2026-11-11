@@ -13,7 +13,7 @@
 // reference surfaces, the previous map and vectors) are bounded by their buffers too. Every job must run with the
 // engine's GP timer on and at most its default limit (1 << 27 cycles), which is what bounds a job whatever its
 // bitstream holds (TegraNVDEC.cpp kJobBoundUs). Content protection, histogram and hint dumps (outputs to addresses no
-// relocation names) are refused.
+// relocation names) are refused. MPEG-4 Part 2: TegraNVDECCheckMPEG.h.
 #ifndef TEGRA_NVDEC_CHECK_H
 #define TEGRA_NVDEC_CHECK_H
 #include <stdbool.h>
@@ -74,6 +74,8 @@ static inline const char *tegra_nvdec_check_value(const TegraNVDECSubmit *s, uin
     *seen |= 1u << bit;
     return NULL;  // NOLINT(modernize-use-nullptr): C too (avd_host.c)
 }
+
+#include "TegraNVDECCheckMPEG.h"  // needs tegra_nvdec_check_value
 
 static inline const char *tegra_nvdec_check_h264(const TegraNVDECSubmit *s, const uint64_t *avail)
 {
@@ -556,6 +558,8 @@ static inline const char *tegra_nvdec_check(const TegraNVDECSubmit *s, const uin
         return tegra_nvdec_check_vp9(s, avail);
     case TEGRA_NVDEC_CODEC_HEVC:
         return tegra_nvdec_check_hevc(s, avail);
+    case TEGRA_NVDEC_CODEC_MPEG4:
+        return tegra_nvdec_check_mpeg4(s, avail);
     default:
         return "codec";
     }

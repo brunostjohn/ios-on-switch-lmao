@@ -94,6 +94,8 @@ void AVDRegister(void)
         registerCodec(kCMVideoCodecType_H264, 0);
     if (codecs & (1u << TEGRA_NVDEC_CODEC_VP9))
         registerCodec(kCMVideoCodecType_VP9, 0);
+    if (codecs & (1u << TEGRA_NVDEC_CODEC_MPEG4))
+        registerCodec(kCMVideoCodecType_MPEG4Video, 0);
     // Rated above the default 0: the registry sorts by rating before the hardware flag, so NVDEC's 'hvc1' is chosen
     // before HEVCH8's stand-in (Apple's software decoder under the hardware flag). The stand-in stays registered behind
     // it for the streams avd_load_hvcc hands to software and the tile sessions avd_start_tile_session refuses.

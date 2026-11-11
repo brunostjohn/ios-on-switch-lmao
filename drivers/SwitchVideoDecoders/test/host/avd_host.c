@@ -18,11 +18,16 @@
 //           HEVCNVDEC and the kernel's checker, all out of a hardware session; clip T again with VIC's present on,
 //           every picture handed over as 16-bit samples into an 'x420' buffer; then with every buffer refused, Apple's
 //           software HEVC decoder in it, matching FFmpeg.
+//   mp4v:   MPEG4Clip.h's clip A (Advanced Simple) as 'mp4v' with its 'esds' (mpeg4_session.c) on the fake engine:
+//           all 18 VOPs through MPEG4NVDEC and the kernel's checker out of a hardware session; then with every buffer
+//           refused, clip B (Simple: the Mac's MPEG-4 decoder refuses clip A) on Apple's software decoder in the
+//           instance.
 // Prints "PASS avd ..." when all hold (avd_host_test).
 #include "../../AVD/AVDDecoder.c"
 #include "../../AVD/ClipCheck.h"
 #include <stdio.h>
 #include "../HEVCClip.h"
+#include "mpeg4_session.h"
 #include "../../../TegraNVDEC/TegraNVDECCheck.h"
 
 struct NVDECClient {
@@ -60,7 +65,7 @@ uint32_t nvdec_codecs(const NVDECClient *c)
 {
     (void)c;
     return 1u << TEGRA_NVDEC_CODEC_H264 | 1u << TEGRA_NVDEC_CODEC_VP9 | 1u << TEGRA_NVDEC_CODEC_HEVC |
-           TEGRA_NVDEC_HEVC_MAIN10;
+           TEGRA_NVDEC_HEVC_MAIN10 | 1u << TEGRA_NVDEC_CODEC_MPEG4;
 }
 
 bool nvdec_can_present(const NVDECClient *c)
@@ -341,7 +346,8 @@ int main(void)
         CFDictionaryCreate(NULL, keys, values, 1, &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks);
     const OSStatus registered = VTRegisterVideoDecoderWithInfo(kCMVideoCodecType_H264, info, avd_create_instance) ||
                                 VTRegisterVideoDecoderWithInfo(kCMVideoCodecType_VP9, info, avd_create_instance) ||
-                                VTRegisterVideoDecoderWithInfo(kCMVideoCodecType_HEVC, info, avd_create_instance);
+                                VTRegisterVideoDecoderWithInfo(kCMVideoCodecType_HEVC, info, avd_create_instance) ||
+                                VTRegisterVideoDecoderWithInfo(kCMVideoCodecType_MPEG4Video, info, avd_create_instance);
     CFRelease(info);
     if (registered) {
         printf("FAIL avd: VTRegisterVideoDecoderWithInfo %d\n", (int)registered);
@@ -418,6 +424,19 @@ int main(void)
                         strstr(hevcFull, "A 20/20, V 14/14") && hevc10VicOk;
     printf("engine: %s (opens %d, submits %d, refused %d)\nfull: %s (opens %d)\n", engine, engineOpens, engineSubmits,
            gRefused, full, gOpens - engineOpens);
+    char mp4v[256], mp4vFull[256];
+    const int mp4vSubmits = gSubmits, mp4vRefused = gRefused;
+    const void *mp4vKeys[] = {kVTVideoDecoderSpecification_DecoderID},
+               *mp4vValues[] = {CFSTR("com.brunostjohn.switch.avd-host.mp4v")};
+    CFDictionaryRef mp4vSpec = CFDictionaryCreate(NULL, mp4vKeys, mp4vValues, 1, &kCFTypeDictionaryKeyCallBacks,
+                                                  &kCFTypeDictionaryValueCallBacks);
+    const bool mp4vEngine = mpeg4_session_check(mp4vSpec, false, true, mp4v, sizeof(mp4v)) &&
+                            gSubmits - mp4vSubmits == 18 && gRefused == mp4vRefused;
+    gFull = true;
+    const bool mp4vSoftware = mpeg4_session_check(mp4vSpec, true, false, mp4vFull, sizeof(mp4vFull));
+    gFull = false;
+    CFRelease(mp4vSpec);
+    printf("%s (submits %d)\nmp4v full: %s\n", mp4v, gSubmits - mp4vSubmits, mp4vFull);
     char native[512];
     gPresentOn = gNativeOn = true;
     const unsigned exportsBefore = gNativeExports, recycleBefore = gRecycled;
@@ -434,9 +453,10 @@ int main(void)
                     strstr(engine, "hardware: hardware decoder") && strstr(engine, " 30 out (") &&
                     gOpens > engineOpens && strstr(full, "hardware: software decoder, 30/30 frames match x264") &&
                     strstr(vp9, "vp9: hardware decoder") && strstr(vp9, " 16 out (") &&
-                    hevcSubmits - vp9Submits == 18 && presentOk && hevcOk && tilesOk && nativeOk;
-    printf("%s avd: plug-in on VideoToolbox (H.264, VP9 and HEVC on a fake NVDEC, then Apple's software H.264 and "
-           "HEVC in the instance)\n",
+                    hevcSubmits - vp9Submits == 18 && presentOk && hevcOk && tilesOk && nativeOk && mp4vEngine &&
+                    mp4vSoftware;
+    printf("%s avd: plug-in on VideoToolbox (H.264, VP9, HEVC and MPEG-4 Part 2 on a fake NVDEC, then Apple's software "
+           "H.264, HEVC and MPEG-4 Part 2 in the instance)\n",
            ok ? "PASS" : "FAIL");
     return ok ? 0 : 1;
 }

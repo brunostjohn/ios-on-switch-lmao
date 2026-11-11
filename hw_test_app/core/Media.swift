@@ -5,6 +5,7 @@ public enum VideoCodec: String, CaseIterable, Sendable {
     case hevc
     case hevc10 = "hevc_main10"
     case vp9
+    case mpeg4  // last: clipID numbers codecs in this order
 
     public var bitDepth: Int { self == .hevc10 ? 10 : 8 }
     public var container: String { self == .vp9 ? "ivf" : "mp4" }
@@ -37,11 +38,17 @@ public struct Clip: Equatable, Sendable {
     public var pattern: Pattern { Pattern(width: width, height: height, clip: clipID) }
 
     public static let all: [Clip] = VideoCodec.allCases.flatMap { codec in
-        [
-            Clip(codec: codec, width: 1280, height: 720, fps: 60, frames: 60, bitrate: 1_000_000),
-            Clip(codec: codec, width: 1920, height: 1080, fps: 60, frames: 60, bitrate: 2_000_000),
-            Clip(codec: codec, width: 3840, height: 2160, fps: 30, frames: 30, bitrate: 4_000_000),
-        ]
+        codec == .mpeg4
+            // NVDEC 2.0 decodes MPEG-4 Part 2 up to 2032x2032: no 4K clip.
+            ? [
+                Clip(codec: codec, width: 1280, height: 720, fps: 60, frames: 60, bitrate: 4_000_000),
+                Clip(codec: codec, width: 1920, height: 1080, fps: 60, frames: 60, bitrate: 8_000_000),
+            ]
+            : [
+                Clip(codec: codec, width: 1280, height: 720, fps: 60, frames: 60, bitrate: 1_000_000),
+                Clip(codec: codec, width: 1920, height: 1080, fps: 60, frames: 60, bitrate: 2_000_000),
+                Clip(codec: codec, width: 3840, height: 2160, fps: 30, frames: 30, bitrate: 4_000_000),
+            ]
     }
 
     public static func named(_ file: String) -> Clip? { all.first { $0.file == file } }

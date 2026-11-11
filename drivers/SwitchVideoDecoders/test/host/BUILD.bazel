@@ -10,6 +10,10 @@
 #   hevc_host_test         HEVCSyntax/HEVCNVDEC over FFmpeg's own trace (../HEVCTrace.h, ../HEVCClip.h from
 #                          ../hevcgen): every slice header field NVDEC is given equals FFmpeg's, pictures in FFmpeg's
 #                          order, every submit accepted by the kernel's checker, which refuses each bad one
+#   mpeg4_host_test        MPEG4Syntax/MPEG4NVDEC over FFmpeg's own trace (../MPEG4Trace.h, ../MPEG4Clip.h from
+#                          ../mpeg4gen): every VOP field NVDEC is given equals FFmpeg's, B-VOP timing from FFmpeg's VOP
+#                          times, not-coded and packed VOPs, every submit accepted by the kernel's checker, which refuses
+#                          each bad one
 #   avd_register_host_test AVDRegister's hardware entries per process: where it may open TegraNVDEC, or where its
 #                          sessions run in videocodecd
 #   avd_host_test          AVD.videodecoder itself on this Mac's VideoToolbox over a fake TegraNVDEC client: the
@@ -44,6 +48,7 @@ host_library(
     hdrs = [
         "//drivers/TegraNVDEC:TegraNVDECABI.h",
         "//drivers/TegraNVDEC:TegraNVDECCheck.h",
+        "//drivers/TegraNVDEC:TegraNVDECCheckMPEG.h",
     ],
 )
 
@@ -110,6 +115,25 @@ host_library(
     ],
 )
 
+host_library(
+    name = "mpeg4",
+    srcs = [
+        "//drivers/SwitchVideoDecoders:AVD/MPEG4NVDEC.c",
+        "//drivers/SwitchVideoDecoders:AVD/MPEG4Syntax.c",
+        "//drivers/SwitchVideoDecoders:AVD/MPEGFrames.c",
+        "//drivers/TegraNVDEC:nvidia/clc5b0.h",
+        "//drivers/TegraNVDEC:nvidia/nvdec_drv.h",
+    ],
+    hdrs = [
+        "//drivers/SwitchVideoDecoders:AVD/AVDBits.h",
+        "//drivers/SwitchVideoDecoders:AVD/MPEG4NVDEC.h",
+        "//drivers/SwitchVideoDecoders:AVD/MPEG4Syntax.h",
+        "//drivers/SwitchVideoDecoders:AVD/MPEGFrames.h",
+    ],
+    copts = ["-O1"],
+    deps = [":h264"],
+)
+
 # The clip check over the three clips, on VideoToolbox.
 host_library(
     name = "clip_check",
@@ -170,14 +194,30 @@ host_library(
     deps = [":hevc"],
 )
 
+host_library(
+    name = "mpeg4_host",
+    srcs = [
+        "mpeg4_host.c",
+        "//drivers/SwitchVideoDecoders:test/MPEG4Clip.h",
+        "//drivers/SwitchVideoDecoders:test/MPEG4Trace.h",
+    ],
+    copts = ["-O1"],
+    defines = ["main=mpeg4_host_main"],
+    deps = [":mpeg4"],
+)
+
 # avd_host.c includes the plug-in's AVDDecoder.c itself (for its factory).
 host_library(
     name = "avd_host",
     srcs = [
         "avd_host.c",
+        "mpeg4_session.c",
+        "mpeg4_session.h",
+        "//drivers/SwitchVideoDecoders:test/MPEG4Clip.h",
         "//drivers/SwitchVideoDecoders:AVD/AVDDecoder.h",
         "//drivers/SwitchVideoDecoders:AVD/AVDFrameTiming.h",
         "//drivers/SwitchVideoDecoders:AVD/SwitchVideoColor.h",
+        "//drivers/SwitchVideoDecoders:AVD/AVDMPEG.c",
         "//drivers/SwitchVideoDecoders:AVD/AVDTiles.c",
         "//drivers/SwitchVideoDecoders:AVD/NVDECClient.h",
         "//drivers/SwitchVideoDecoders:AVD/VTDecoderSPI.h",
@@ -193,6 +233,7 @@ host_library(
         ":clip_check",
         ":h264",
         ":hevc",
+        ":mpeg4",
         ":vp9",
     ],
 )
@@ -219,6 +260,7 @@ host_library(
     deps = [
         ":h264",
         ":hevc",
+        ":mpeg4",
         ":vp9",
     ],
 )
@@ -244,6 +286,7 @@ host_library(
     "blocklinear_host",
     "h264_host",
     "hevc_host",
+    "mpeg4_host",
     "vdectest",
     "vp9_host",
 ]]

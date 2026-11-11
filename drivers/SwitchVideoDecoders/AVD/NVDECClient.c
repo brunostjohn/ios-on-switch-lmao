@@ -48,7 +48,8 @@ uint32_t nvdec_service_codecs(void)
 {
     return (serviceDecodes(TEGRA_NVDEC_DECODES_H264) ? 1u << TEGRA_NVDEC_CODEC_H264 : 0) |
            (serviceDecodes(TEGRA_NVDEC_DECODES_VP9) ? 1u << TEGRA_NVDEC_CODEC_VP9 : 0) |
-           (serviceDecodes(TEGRA_NVDEC_DECODES_HEVC) ? 1u << TEGRA_NVDEC_CODEC_HEVC : 0);
+           (serviceDecodes(TEGRA_NVDEC_DECODES_HEVC) ? 1u << TEGRA_NVDEC_CODEC_HEVC : 0) |
+           (serviceDecodes(TEGRA_NVDEC_DECODES_MPEG4) ? 1u << TEGRA_NVDEC_CODEC_MPEG4 : 0);
 }
 
 static kern_return_t call(NVDECClient *c, uint32_t selector, uint32_t method, const void *in, size_t inSize, void *out,
