@@ -9,8 +9,13 @@ import Metal
 /// and raw's channels replay, and ITERATED_BLEND_TARGET_COUNT (0x59: the bench's draws with two colour targets bound):
 /// every arm draws into one target, clears per-target blend and gives the common blend block (0x133c-0x1358) the alpha blend
 /// NVN pairs with the program. Programs are NVN's, as Ryujinx's AdvancedBlendFunctions table records them; each ends by
-/// writing TEMP0, which is the blend's result. One arm a command buffer, journaled before it runs, NVN's own sequences
-/// first and the arms expected to be refused last; a refusal ends the arm, not the probe.
+/// writing TEMP0, which is the blend's result. Each program arm sets SET_ITERATED_BLEND_OPTIMIZATION (0x02f4) to NEVER:
+/// the facade's source-over states set NOOP_SOURCE_RGBA_0000 (raw_blend_kill.h), whose drop of a zero source is right for
+/// the common block's source-over but not for a program that ignores the destination (T-v2's pass arm kept the
+/// destination on its row of zero source, 510 fields up to 255 codes off). One arm a command buffer, journaled before it
+/// runs, NVN's own sequences first and the arms expected to be refused last; a refusal ends the arm, not the probe. The
+/// kernel reports no class error for those arms on the chip, so their pixels say what ran (`pixels=`): the destination
+/// untouched (dst), the common block's blend alone (common), the program's pass (pass), or none of them (other).
 enum X1IteratedBlendProbe {
     static let size = 256
     static let maxRefusals = 3
@@ -81,6 +86,7 @@ enum X1IteratedBlendProbe {
             w.append((constantRed + UInt32(16 * (j / 3) + 4 * (j % 3)), UInt32(c)))
         }
         guard !arm.program.isEmpty else { return w }
+        w.append((X1RawProbes.setIteratedBlendOptimization, 0))
         w.append((X1RawProbes.loadIteratedBlendPointer, 0))
         w += arm.program.map { (X1RawProbes.loadIteratedBlendInstruction, $0) }
         return w + [
@@ -124,6 +130,16 @@ enum X1IteratedBlendProbe {
         return j
     }
 
+    /// What an arm the class should have refused drew, from its pixels
+    static func drew(_ got: [UInt8]) -> String {
+        let readings: [(String, Arm)] = [
+            ("pass", arms[1]), ("common", arms[0]),
+            ("dst", Arm(name: "dst", rgb: { _, _, d, _ in d }, alpha: { _, da in da })),
+        ]
+        for (name, arm) in readings where judge(arm, got, rgb: arm.rgb!).beyondOne == 0 { return name }
+        return "other"
+    }
+
     static let probe = X1Probe(
         id: "gpu.x1.iterated_blend", name: "Iterated blend: NVN's advanced-blend programs with per-target blend off",
         probe: "d14", risky: true, timeout: 180
@@ -159,11 +175,12 @@ enum X1IteratedBlendProbe {
                 }
                 paths.append(drawn.path)
                 emitted += drawn.emitted
+                let got = try await gpu.read(target, bytesPerPixel: 4)
                 guard let rgb = arm.rgb else {
-                    outcomes.append("\(arm.name):accepted")
+                    outcomes.append("\(arm.name):accepted:pixels=\(drew(got))")
                     continue
                 }
-                let j = judge(arm, try await gpu.read(target, bytesPerPixel: 4), rgb: rgb)
+                let j = judge(arm, got, rgb: rgb)
                 outcomes.append("\(arm.name):accepted:\(j.inexact):\(j.beyondOne):\(j.maxDiff)")
                 if isNVN {
                     nvnAccepted += 1
