@@ -55,6 +55,7 @@
 #include "TegraVICPresent.h"
 #include "TegraVICSurface.h"
 #include "SwitchVICTransform.h"
+#include "SwitchVICMapping.h"
 #include "SwitchVICEvents.h"
 #include "SwitchVICRequests.h"
 #include "SwitchVICStats.h"
@@ -326,7 +327,8 @@ bool runJob(Job *job, IOReturn *status)
 #if TEGRA_VIC_STATS
 void statsLine()
 {
-    char line[220];
+    char line[240];
+    gStats.add(gStats.maps, switch_vic_mapping_take_made());
     if (gStats.line(switch_now_us(), line, sizeof(line)))
         os_log(OS_LOG_DEFAULT, "%s", line);
 }
