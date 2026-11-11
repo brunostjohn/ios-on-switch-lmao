@@ -102,6 +102,8 @@ static RMFunction *own(id<MTLFunction> function)
     RMFunction *f = own(d.computeFunction);
     if (!f)
         return failed(error, MTLBinaryArchiveErrorUnexpectedElement, @"a function of another device");
+    if (const char *why = rmUnsupportedComputeState(d))
+        return failed(error, MTLBinaryArchiveErrorCompilationFailure, @(why));
     return [self add:rmArchiveKey(computeKey(d, f))];
 }
 
