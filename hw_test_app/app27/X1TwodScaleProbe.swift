@@ -66,7 +66,7 @@ extension X1TwodProbes {
     ) { gpu in
         let journal = ProbeJournal(probe: "gpu.x1.twod_scale")
         var cells: [(String, X1RuleTally)] = []
-        var readings: [String] = []
+        var readings: [String] = [], offPath: [String] = []
         var ops = 0
         let ratios = [("1to1", 64, 64), ("2to1", 128, 64), ("3to7", 30, 70), ("3to2", 96, 64)]
         for format in X1Format.all {
@@ -88,6 +88,11 @@ extension X1TwodProbes {
                         blit.endEncoding()
                     }
                     ops += batch.taken["ops"] ?? 0
+                    let name = "\(format.name)_\(ratio)_\(point ? "point" : "linear")"
+                    guard batch.path == "raw" else {
+                        offPath.append("\(name):\(batch.path)")
+                        continue
+                    }
                     let bytes = try await gpu.read(written, bytesPerPixel: format.bytesPerTexel)
                     let filters = Filter.all(point: point, srgb: srgb)
                     var tallies = [X1RuleTally](repeating: X1RuleTally(), count: filters.count)
@@ -103,14 +108,13 @@ extension X1TwodProbes {
                                 got, exact: exact, channels: format.channels, metal: format.metalRounding, at: t)
                         }
                     }
-                    let name = "\(format.name)_\(ratio)_\(point ? "point" : "linear")"
                     cells.append((name, tallies[metal]))
                     let best = tallies.indices.min { tallies[$0].fewestMisses < tallies[$1].fewestMisses } ?? metal
                     readings.append("\(name):\(filters[best].name):\(tallies[best].text)")
                 }
             }
         }
-        var finding = finding("copy.twod", cells, ops: ops, paths: gpu.paths.paths.keys.map { $0 })
+        var finding = finding("copy.twod", cells, ops: ops, offPath: offPath)
         finding.metrics.set("best_readings", readings.joined(separator: ","))
         return finding
     }

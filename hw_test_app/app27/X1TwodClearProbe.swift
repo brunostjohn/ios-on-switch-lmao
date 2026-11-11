@@ -28,11 +28,12 @@ extension X1TwodProbes {
 
     /// gpu.x1.twod_clear (clear.twod, LIMITS 2D-4): a 2D-engine solid rectangle over a target the 3D engine cleared,
     /// all but a one-texel border, held to the colour's codes (a word: its own codes; floats: each rule's rounding).
-    /// The first boots' fill (bare state, four floats, no waits around it after a clear-only pass) left GR busy until
-    /// a context-switch timeout, so the probe bisects one command buffer a step, journaled, safest first: the four
-    /// forms between the production 2D path's waits, every format by the forms that ran, then position alone: a
-    /// known-good scaled copy and the reference fill each with no waits in the fill's slot (position=). The first
-    /// step a command buffer fails on ends the probe and is named (failed_at=).
+    /// The first boots' fill (bare state, four floats, no waits around it after a clear-only pass, the last GR work
+    /// before the tail) left GR busy until a context-switch timeout, so the probe bisects one command buffer a step,
+    /// journaled, safest first, every format by each form between the production 2D path's waits: the reference
+    /// word, the bare word, the reference floats, the bare floats; then position alone: a known-good scaled copy and
+    /// the reference word fill each with no waits in the fill's slot (position=). The first step a command buffer
+    /// fails on ends the probe and is named (failed_at=); cells off the raw path are listed apart.
     static let clear = X1Probe(
         id: "gpu.x1.twod_clear", name: "2D-engine solid fills, bisected, against the colour's codes per format",
         probe: "clear.twod", risky: true, timeout: 150
@@ -44,8 +45,9 @@ extension X1TwodProbes {
         var ops = 0, borders = 0
         var failedAt: String?
         var failedStep: FillStep?
-        /// The 3D clear of `target` to the border colour, then `op` at the blit encoder; false where it failed
-        func run(_ label: String, _ target: MTLTexture, _ op: [String: Any]) async -> Bool {
+        var offPath: [String] = []
+        /// The 3D clear of `target` to the border colour, then `op` at the blit encoder: its path, nil where it failed
+        func run(_ label: String, _ target: MTLTexture, _ op: [String: Any]) async -> String? {
             journal.starting(label)
             do {
                 let batch = try await gpu.run(forms: "") { commands in
@@ -58,10 +60,11 @@ extension X1TwodProbes {
                     blit.endEncoding()
                 }
                 ops += batch.taken["ops"] ?? 0
-                return true
+                if batch.path != "raw" { offPath.append("\(label):\(batch.path)") }
+                return batch.path
             } catch {
                 failedAt = label
-                return false
+                return nil
             }
         }
         func fill(_ format: X1Format, _ step: FillStep, _ color: SIMD4<Float>) async throws -> Bool {
@@ -82,10 +85,11 @@ extension X1TwodProbes {
                 op["colorFormat"] = 0xc0
                 for c in 0..<4 { op["color\(c)"] = color[c].bitPattern }
             }
-            guard await run(label, target, op) else {
+            guard let path = await run(label, target, op) else {
                 failedStep = step
                 return false
             }
+            guard path == "raw" else { return true }
             let bytes = try await gpu.read(target, bytesPerPixel: format.bytesPerTexel)
             var tally = X1RuleTally()
             let exact = format.channels.enumerated().map { c, channel in
@@ -110,38 +114,29 @@ extension X1TwodProbes {
             SIMD4(0.2, 0.4, 0.6, 0.8), SIMD4(1.0 / 3, 2.0 / 3, 0.1, 0.9),
         ]
         var ran: [FillStep] = []
-        for (reference, word) in [(true, true), (true, false), (false, true), (false, false)] {
+        outer: for (reference, word) in [(true, true), (false, true), (true, false), (false, false)] {
             let step = FillStep(reference: reference, word: word)
             guard try await fill(bgra8, step, colors[2]) else { break }
             ran.append(step)
-        }
-        var position = "not_run"
-        if failedAt == nil {
-            outer: for format in X1Format.all {
-                for step in ran {
-                    for color in colors where !(format.name == "bgra8" && color == colors[2]) {
-                        guard try await fill(format, step, color) else { break outer }
-                    }
+            for format in X1Format.all {
+                for color in colors where !(format.name == "bgra8" && color == colors[2]) {
+                    guard try await fill(format, step, color) else { break outer }
                 }
             }
         }
+        var position = "not_run"
         if failedAt == nil {
             let source = try gpu.texture(.bgra8Unorm, w, h, usage: [.renderTarget, .shaderRead])
             let target = try gpu.texture(.bgra8Unorm, w, h, usage: [.renderTarget, .shaderRead])
-            position =
-                await run(
-                    "bgra8_scale_open", target,
-                    [
-                        "kind": "scale", "read": source, "written": target,
-                        "unbracketed": 1,
-                    ]) ? "scale_ran" : "scale_hung"
-            if position == "scale_ran" {
-                position =
-                    try await fill(bgra8, FillStep(reference: true, word: true, bracketed: false), colors[2])
-                    ? "clean" : "fill_hung"
+            let scaled = await run(
+                "bgra8_scale_open", target, ["kind": "scale", "read": source, "written": target, "unbracketed": 1])
+            position = scaled == nil ? "scale_hung" : "scale_ran"
+            if scaled != nil {
+                let filled = try await fill(bgra8, FillStep(reference: true, word: true, bracketed: false), colors[2])
+                position = filled ? "clean" : "fill_hung"
             }
         }
-        var finding = finding("clear.twod", cells, ops: ops, paths: gpu.paths.paths.keys.map { $0 })
+        var finding = finding("clear.twod", cells, ops: ops, offPath: offPath)
         finding.metrics.set("failed_at", failedAt ?? "-")
         finding.metrics.set("forms_ran", ran.map(\.name).joined(separator: ","))
         finding.metrics.set("position", position)
