@@ -156,7 +156,7 @@ OSStatus avd_decode_tile(VTVideoDecoderRef ref, int64_t frameID, CMSampleBufferR
     avd_frame_begin(&d->timing, began);
 #endif
     const int ret = readable && offset.x >= 0 && offset.y >= 0
-                        ? hevc_decoder_decode(d->hevc, data, bytes, d->lengthSize, (void *)(intptr_t)frameID)
+                        ? hevc_decoder_decode(d->hevc, data, bytes, d->lengthSize, (void *)(intptr_t)frameID, true)
                         : -1;
     if (ret == 1) {
         hevc_decoder_flush(d->hevc);

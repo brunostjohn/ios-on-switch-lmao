@@ -249,7 +249,7 @@ static HEVCDecoder *decodeClip(Fake *f, const uint8_t *data, size_t size, int *a
     hevc_decoder_allow_10bit(d, tenBit);
     *aus = samples(data, size, buffer, sample, sizes, 64);
     for (int i = 0; i < *aus; i++) {
-        const int ret = hevc_decoder_decode(d, sample[i], sizes[i], 4, (void *)(intptr_t)i);
+        const int ret = hevc_decoder_decode(d, sample[i], sizes[i], 4, (void *)(intptr_t)i, true);
         CHECK(ret == 1, "access unit %d: hevc_decoder_decode %d", i, ret);
     }
     hevc_decoder_flush(d);
@@ -291,7 +291,8 @@ static void testDecode(void)
             uint8_t *sample[64];
             size_t sizes[64];
             samples(clip->data, clip->size, buffer, sample, sizes, 64);
-            CHECK(hevc_decoder_decode(e, sample[0], sizes[0], 4, NULL) == -1 && !g.jobs, "Main 10 taken while off");
+            CHECK(hevc_decoder_decode(e, sample[0], sizes[0], 4, NULL, true) == -1 && !g.jobs,
+                  "Main 10 taken while off");
             hevc_decoder_destroy(e);
         }
         printf("decode: clip %c %dx%d %d-bit, %d access units, every job accepted by the kernel checker, %d pictures "
@@ -393,6 +394,39 @@ static size_t gobOffset(uint32_t x, uint32_t y, uint32_t pitch)
            ((y % 8) / 2) * 64 + ((x % 32) / 16) * 32 + (y % 2) * 16 + x % 16;
 }
 
+// Without reordering every picture goes out before its decode call returns, as Apple's HEVC decoders do on a clip with
+// B pictures: none is held for display order.
+static void testDecodeOrder(void)
+{
+    const HEVCClip *clip = &kHEVCClips[0];
+    Fake f;
+    memset(&f, 0, sizeof(f));
+    const H264Backend backend = {&f,          fakeAlloc, fakeFree,    fakeSubmit, fakeWait,
+                                 fakeDecoded, fakeEmit,  fakeDiscard, NULL, switch_fake_recycle};
+    HEVCDecoder *d = hevc_decoder_create(&backend);
+    static uint8_t buffer[64 * 1024];
+    uint8_t *sample[64];
+    size_t sizes[64];
+    const int aus = samples(clip->data, clip->size, buffer, sample, sizes, 64);
+    bool held = false, reordered = false;
+    for (int i = 0; i < aus; i++) {
+        CHECK(hevc_decoder_decode(d, sample[i], sizes[i], 4, (void *)(intptr_t)i, false) == 1,
+              "decode order: access unit %d", i);
+        held |= f.outCount != i + 1;
+        reordered |= clip->display[i] != i;
+    }
+    hevc_decoder_flush(d);
+    bool order = f.outCount == aus;
+    for (int k = 0; order && k < f.outCount; k++)
+        order = f.out[k] == k;
+    CHECK(reordered, "decode order: clip %c has no B pictures to hold", clip->name);
+    CHECK(!held && order, "decode order: clip %c held a picture past its decode (%d out of %d)", clip->name,
+          f.outCount, aus);
+    CHECK(!hevc_decoder_missing_refs(d), "decode order: %u references missing", hevc_decoder_missing_refs(d));
+    hevc_decoder_destroy(d);
+    printf("decode order: clip %c, %d pictures each out before its decode call returned\n", clip->name, aus);
+}
+
 // HEVCDisplayProbe's reading: a display buffer written as pitch-linear 8-bit truncation of a block-linear P010 picture
 // is found as that layout, exact; a buffer left poisoned is "not written".
 static void testDisplayProbeCompare(void)
@@ -422,6 +456,7 @@ int main(int argc, char **argv)
     (void)argc, (void)argv;
     testSyntax();
     testDecode();
+    testDecodeOrder();
     testDisplayProbeCompare();
     if (gFailures) {
         printf("FAIL hevc: %d failures\n", gFailures);

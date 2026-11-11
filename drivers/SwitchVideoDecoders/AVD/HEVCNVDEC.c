@@ -523,7 +523,8 @@ static int findRef(const HEVCDecoder *d, int32_t poc, bool lsbOnly, int32_t mask
     return -1;
 }
 
-static int decodePicture(HEVCDecoder *d, const Span *seg, int count, const HEVCSliceHeader *sh, void *token)
+static int decodePicture(HEVCDecoder *d, const Span *seg, int count, const HEVCSliceHeader *sh, void *token,
+                         bool reorder)
 {
     const HEVCPPS *pps = &d->params.pps[sh->pps_id];
     const HEVCSPS *sps = &d->params.sps[pps->sps_id];
@@ -751,6 +752,10 @@ static int decodePicture(HEVCDecoder *d, const Span *seg, int count, const HEVCS
         if (!e->item)
             e->output = false;
     }
+    if (!reorder) {
+        hevc_decoder_flush(d);
+        return sh->pic_output ? 1 : 0;
+    }
     // C.5.2.3: latency counts, then the additional bumping.
     for (int i = 0; i < SLOTS; i++)
         if (i != cur && d->dpb[i].used && d->dpb[i].output)
@@ -761,7 +766,8 @@ static int decodePicture(HEVCDecoder *d, const Span *seg, int count, const HEVCS
     return sh->pic_output ? 1 : 0;  // a picture not output is answered at once, as a dropped frame
 }
 
-int hevc_decoder_decode(HEVCDecoder *d, const uint8_t *data, size_t size, unsigned lengthSize, void *token)
+int hevc_decoder_decode(HEVCDecoder *d, const uint8_t *data, size_t size, unsigned lengthSize, void *token,
+                        bool reorder)
 {
     if (lengthSize < 1 || lengthSize > 4)
         return -1;
@@ -794,7 +800,7 @@ int hevc_decoder_decode(HEVCDecoder *d, const uint8_t *data, size_t size, unsign
             seg[count].data = nal, seg[count++].size = n;
         }
     }
-    const int ret = count ? decodePicture(d, seg, count, &first, token) : 0;
+    const int ret = count ? decodePicture(d, seg, count, &first, token, reorder) : 0;
     if (eos)
         d->stream_start = true;  // 8.1.3: the next IRAP picture starts a coded video sequence anew
     return ret;
