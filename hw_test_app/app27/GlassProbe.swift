@@ -64,9 +64,11 @@ enum GlassProbe {
         return (state >> 32, state & 0xffff_ffff)
     }
 
-    /// The command buffers recorded after the `after`th, oldest first, as many as the record still holds.
+    /// The command buffers recorded after the `after`th, oldest first, as many as the record still holds; none when an
+    /// arming started the record again meanwhile.
     static func buffers(after: UInt64) -> (count: UInt64, buffers: [Buffer], lost: UInt64) {
         guard let (_, count) = count() else { return (after, [], 0) }
+        guard count >= after else { return (count, [], 0) }
         let first = max(after, count > recordSlots ? count - recordSlots : 0)
         let buffers = (first..<count).compactMap { index in
             state("\(recordName).\(index % recordSlots)").map(Buffer.init(word:))

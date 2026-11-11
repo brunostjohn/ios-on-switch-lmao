@@ -78,7 +78,7 @@ struct UIGlassLiveTest: HWTest {
         for s in summaries {
             metrics.set(s.name, s.field)
             if !s.black.isEmpty {
-                metrics.set(s.name + "_gaps", s.gaps)
+                metrics.set(s.name + "_gaps", String(s.gaps.prefix(32)))
                 metrics.set(s.name + "_moved", s.coincidence)
                 metrics.set(s.name + "_first", Int(s.black[0].sequence))
             }
@@ -98,7 +98,7 @@ struct UIGlassLiveTest: HWTest {
         }
         if partial > 0 { reasons.append("\(partial) frames show the glass partly black") }
         if changed > 0 { reasons.append("\(changed) frames changed while on screen") }
-        return reasons.isEmpty ? .pass(metrics) : .fail(LogLine.fitted(reasons), metrics)
+        return reasons.isEmpty ? .pass(metrics) : .fail(LogLine.fitted(reasons, budget: 160), metrics)
     }
 }
 
