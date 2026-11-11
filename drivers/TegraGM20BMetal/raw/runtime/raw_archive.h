@@ -24,8 +24,8 @@ inline bool appleGpuBinary(const uint8_t *head, size_t bytes)
     return magic == kMachMagic64 && cpu == kAppleGpuCpuType;
 }
 
-// A file m2v's binary archive wrote ("M2VBARCH", metal2vulkan-runtime binary_archive/container.rs): every other archive file
-// is Apple's, whose declared states the pack lists (raw_pack.h PackArchive)
+// A file m2v's binary archive wrote ("M2VBARCH", metal2vulkan-runtime binary_archive/container.rs): it holds nothing of this
+// device's (raw_archive_keys.h archiveFile)
 inline bool m2vArchive(const uint8_t *head, size_t bytes)
 {
     return bytes >= 8 && !memcmp(head, "M2VBARCH", 8);

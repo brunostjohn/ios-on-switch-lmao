@@ -7,8 +7,9 @@ import Metal
 /// made; once added to the archive it is a hit. A render state (made at once and, on the Switch, through a completion
 /// handler) and a compute state of this app's library, against an empty archive and against QuartzCore's
 /// default.metallib opened as an archive, which declares Core Animation's states and none of this app's. On the raw
-/// facade the empty archive is m2v's, which m2v answers for; QuartzCore's is Apple's, which the raw pack's archive key
-/// lists answer for, in the target driver's error domain with Metal's code 3.
+/// facade every archive is the device's own (RawMetalBinaryArchive.mm): the empty one holds what was added to it, and
+/// QuartzCore's what the raw pack's archive key lists declare for that file; a miss is the target driver's error domain
+/// with Metal's code 3.
 struct ArchiveMissScene: GPUScene {
     let id = "gpu.raw.archive_miss"
     let name = "A binary archive miss under FailOnBinaryArchiveMiss is Metal's nil"

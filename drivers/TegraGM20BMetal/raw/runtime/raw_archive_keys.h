@@ -93,7 +93,7 @@ inline ArchiveFile archiveFile(const uint8_t *bytes, size_t length)
         return ArchiveFile::None;
     if (!memcmp(bytes, kArchiveMagic, 8))
         return ArchiveFile::Keys;
-    if (!memcmp(bytes, "M2VBARCH", 8))
+    if (m2vArchive(bytes, length))
         return ArchiveFile::M2v;
     if (!memcmp(bytes, "MTLB", 4) || appleGpuBinary(bytes, length))
         return ArchiveFile::Apple;
