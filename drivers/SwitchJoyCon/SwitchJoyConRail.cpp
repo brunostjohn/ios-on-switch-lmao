@@ -43,7 +43,9 @@
 //   hekate 1059-1074): the next queued output report, else 1F. That clock is the protocol, not a poll of hardware
 //   state: every reply is taken by interrupt. One clock (`poll`) serves both rails, so two seated Joy-Cons cost one
 //   wakeup per 15 ms, and it runs only while a Joy-Con is running: an empty rail, or a rail paused with the display,
-//   has no timer at all. Rumble (output report 0x10) goes out on the reply, as L4T's rumble worker does (J:1132-1138,
+//   has no timer at all. A Joy-Con's stick calibration and dead zone are read from its SPI flash before its session
+//   runs (calibrate, SwitchJoyConStick.h), and a 0x30 report reaches the HID device only when it says something new
+//   (SwitchJoyConForward.h). Rumble (output report 0x10) goes out on the reply, as L4T's rumble worker does (J:1132-1138,
 //   1871-1905): right after the Joy-Con answers a request, the newest rumble report is sent if there is one it has not
 //   had, or again every 50 ms while it asks for a non-zero amplitude (L4T's keep-alive, J:1845-1851: a Joy-Con stops
 //   a vibration that is not refreshed). The request stays every 15 ms, so input never depends on whether the Joy-Con
@@ -173,6 +175,7 @@
 #include "SwitchJoyConRailPacket.h"
 #include "SwitchJoyConRxRing.h"
 #include "SwitchJoyConSession.h"
+#include "SwitchJoyConStick.h"
 #include "SwitchJoyConUse.h"
 #include "../../kits/SwitchCAR/SwitchPMC.h"
 #include "../../kits/SwitchDMA/SwitchDcache.h"
@@ -378,7 +381,8 @@ enum : uint8_t {
     kSubReportMode = 0x03,
     kSubHciState = 0x06,
     kSubShipment = 0x08,
-    kSubSpiRead = 0x10
+    kSubSpiRead = 0x10,
+    kSubImu = 0x40
 };
 
 enum : uint8_t {
@@ -450,6 +454,7 @@ OSDefineMetaClassAndStructors(SwitchJoyConPairing, IOService)
         kBackoff,
         kHandshake,
         kPairing,
+        kCalibrating,  // the Joy-Con's stick calibration read, its IMU turned off (calibrate)
         kRunning,
         kEnding,  // a running session ended with 91/11 for a pairing to open the next one (bluetoothAddress)
         kSuspended
@@ -520,8 +525,10 @@ OSDefineMetaClassAndStructors(SwitchJoyConPairing, IOService)
         uint32_t unanswered;  // requests sent since the last reply (header: silence)
         uint32_t errorsAtReply, breaksAtReply;
         // Since boot, for kern.switch_joycon (debug kernels): input reports, packets dropped for a length no Joy-Con
-        // sends, silences that detached it, silences of kQuietRequests or more it answered after, devices republished.
+        // sends, silences that detached it, silences of kQuietRequests or more it answered after, devices republished;
+        // input reports handed to the HID device and held back (SwitchJoyConForward.h).
         uint32_t replies, dropped, silences, recoveries, republished;
+        uint32_t forwarded, suppressed;
         uint8_t packet[kMaxRx];
         size_t packetLength;
         bool oversizeLogged;
@@ -558,6 +565,14 @@ OSDefineMetaClassAndStructors(SwitchJoyConPairing, IOService)
         bool rumbleFresh;
         switch_joycon_forward forward;
         switch_joycon_use use;
+        // The stick as this session's Joy-Con describes it (calibrate), kept for the boot by BD_ADDR.
+        switch_joycon_stick stick;
+        uint8_t stickMac[6];
+        bool stickKnown;
+        // Work loop: the Joy-Con's IMU is to be turned off at the next tick (its HID client wanted motion and went), and
+        // the subcommand of the rail's own whose reply is not the HID device's.
+        bool imuOff;
+        uint8_t ownReply;
         // Work loop: the last packet sent was a rumble report (the next reply does not send another), and when the last
         // rumble report went out.
         bool rumbleSent;
@@ -664,6 +679,9 @@ OSDefineMetaClassAndStructors(SwitchJoyConPairing, IOService)
     static void endSession(Side &s);
     void sendPairStep(Side &s);
     void finishPairing(Side &s, bool paired, const char *how);
+    void calibrate(Side &s);
+    static void sendCalibrationStep(Side &s);
+    void calibrationReply(Side &s, const uint8_t *report, size_t length);
     void run(Side &s);
     static IOService *createHid(Side &s);
     static void dropGamepad(Side &s);
@@ -674,6 +692,7 @@ OSDefineMetaClassAndStructors(SwitchJoyConPairing, IOService)
     void republish(Side &s);
     void armPoll();
     void tick(Side &s);
+    static bool ownReplyTaken(Side &s, const uint8_t *report, size_t length);
     static void rumbleAfterReply(Side &s);
     void detach(Side &s);
     static void pause(Side &s);
@@ -1134,6 +1153,10 @@ void SwitchJoyConRail::received(Side &s, const uint8_t *packet, size_t length)
         if (cmd == kCmdExtRet && length > kHeader)
             pairingReply(s, packet + kHeader, length - kHeader);
         break;
+    case kCalibrating:
+        if (cmd == kCmdExtRet && length > kHeader)
+            calibrationReply(s, packet + kHeader, length - kHeader);
+        break;
     case kRunning:
         if (cmd == kCmdExtRet && length > kHeader)
             runningReport(s, packet + kHeader, length - kHeader);
@@ -1215,6 +1238,12 @@ IOReturn SwitchJoyConRail::output(void *context, const uint8_t *report, size_t l
     if (length < 2 || length > kMaxOutput)
         return kIOReturnBadArgument;
     IOReturn result = kIOReturnSuccess;
+#if DEVELOPMENT || DEBUG
+    if (report[0] == kReportSubcommand && length > 11 && report[10] == kSubImu) {
+        os_log(OS_LOG_DEFAULT, "SwitchJoyCon: Joy-Con (%c) HID client turns its IMU %s", s.cfg->letter,
+               report[11] ? "on" : "off");
+    }
+#endif
     IOLockLock(s.outLock);
     switch_joycon_forward_output(&s.forward, report, length);
     if (report[0] == kReportRumble) {
@@ -1406,7 +1435,7 @@ void SwitchJoyConRail::handshakeReply(Side &s, uint8_t cmd, uint8_t echo, const 
     if (pairing && hostKnown) {
         startPairing(s);
     } else {
-        run(s);
+        calibrate(s);
     }
 }
 
@@ -1597,6 +1626,62 @@ void SwitchJoyConRail::finishPairing(Side &s, bool paired, const char *how)
     } else {
         IOLog("SwitchJoyCon: Joy-Con (%c) not paired for Bluetooth: %s\n", s.cfg->letter, how);
     }
+    calibrate(s);
+}
+
+// Before the session runs and its HID device exists, so no reply of the rail's own reaches it: the Joy-Con's stick
+// calibration and parameters (SwitchJoyConStick.h; once a boot per Joy-Con), then subcommand 0x40 0 (its IMU samples
+// from the HID connect on: deku packet_parse/j2c.txt's first 0x30 report carries them before Horizon's 0x40 1).
+void SwitchJoyConRail::calibrate(Side &s)
+{
+    s.phase = kCalibrating;
+    s.step = SWITCH_JOYCON_STICK_READS;
+    if (!s.stickKnown || memcmp(s.stickMac, s.mac, sizeof(s.mac)) != 0) {
+        switch_joycon_stick_defaults(&s.stick, s.cfg->left);
+        s.step = 0;
+    }
+    sendCalibrationStep(s);
+}
+
+void SwitchJoyConRail::sendCalibrationStep(Side &s)
+{
+    if (s.step < SWITCH_JOYCON_STICK_READS) {
+        uint8_t read[5];
+        switch_joycon_stick_request(&s.stick, s.step, read);
+        sendSubcommand(s, kSubSpiRead, read, sizeof(read));
+    } else {
+        const uint8_t off = 0;
+        sendSubcommand(s, kSubImu, &off, 1);
+    }
+    s.timer->setTimeoutMS(kSubcommandMS);
+}
+
+// A refused read leaves the defaults; a reply to an earlier read is ignored.
+void SwitchJoyConRail::calibrationReply(Side &s, const uint8_t *report, size_t length)
+{
+    if (length < 16 || report[0] != kReportReply)
+        return;
+    const bool ack = (report[13] & 0x80) != 0;
+    if (s.step < SWITCH_JOYCON_STICK_READS) {
+        if (report[14] != kSubSpiRead ||
+            (ack && !switch_joycon_stick_reply(&s.stick, s.step, report + 15, length - 15)))
+            return;
+        ++s.step;
+        sendCalibrationStep(s);
+        return;
+    }
+    if (report[14] != kSubImu)
+        return;
+    s.timer->cancelTimeout();
+    if (!s.stickKnown || memcmp(s.stickMac, s.mac, sizeof(s.mac)) != 0) {
+        memcpy(s.stickMac, s.mac, sizeof(s.mac));
+        s.stickKnown = true;
+#if DEVELOPMENT || DEBUG
+        os_log(OS_LOG_DEFAULT, "SwitchJoyCon: Joy-Con (%c) stick centre %u,%u (%s calibration), dead zone %u (%s)",
+               s.cfg->letter, s.stick.centre[0], s.stick.centre[1], s.stick.user ? "user" : "factory",
+               s.stick.dead_zone, s.stick.params ? "its own" : "default");
+#endif
+    }
     run(s);
 }
 
@@ -1653,6 +1738,8 @@ void SwitchJoyConRail::run(Side &s)
     s.phase = kRunning;
     s.lastReply = switch_now_ms();
     s.unanswered = 0;
+    s.imuOff = false;
+    s.ownReply = 0;
     s.errorsAtReply = s.lineErrors;
     s.breaksAtReply = s.breaks;
     s.reports = 0;
@@ -1685,6 +1772,8 @@ void SwitchJoyConRail::dropGamepad(Side &s)
     s.hid = nullptr;
     IOLockLock(s.outLock);
     s.republish = false;
+    s.imuOff |= s.forward.imu;
+    s.forward.imu = false;
     IOLockUnlock(s.outLock);
 }
 
@@ -1801,8 +1890,9 @@ void SwitchJoyConRail::pollAction(OSObject *owner, IOTimerEventSource *)
     self->armPoll();
 }
 
-// One request per 15 ms: the oldest queued output report (subcommands keep their order), else the input request, after
-// the tail of the last reply a late RX channel left. A Joy-Con that left kSilentRequests unanswered is gone (header).
+// One request per 15 ms: the IMU off its HID client left on, else the oldest queued output report (subcommands keep
+// their order), else the input request, after the tail of the last reply a late RX channel left. A Joy-Con that left
+// kSilentRequests unanswered is gone (header).
 void SwitchJoyConRail::tick(Side &s)
 {
     takeTail(s);
@@ -1832,6 +1922,15 @@ void SwitchJoyConRail::tick(Side &s)
         return;
     }
     ++s.unanswered;
+    s.rumbleSent = false;
+    s.ownReply = 0;
+    if (s.imuOff) {
+        const uint8_t off = 0;
+        s.imuOff = false;
+        s.ownReply = kSubImu;
+        sendSubcommand(s, kSubImu, &off, 1);
+        return;
+    }
     uint8_t report[kMaxOutput];
     size_t length = 0;
     IOLockLock(s.outLock);
@@ -1841,7 +1940,6 @@ void SwitchJoyConRail::tick(Side &s)
         memcpy(report, s.queue[at], length);
     }
     IOLockUnlock(s.outLock);
-    s.rumbleSent = false;
     if (length) {
         sendOutput(s, report, length);
     } else {
@@ -1898,16 +1996,20 @@ void SwitchJoyConRail::runningReport(Side &s, const uint8_t *report, size_t leng
     rumbleAfterReply(s);
     switch_joycon_hid_buttons(s.cfg->left, report, length);
 #if XNU_12377_121_6
-    if (switch_joycon_use_report(&s.use, report, length))
+    if (switch_joycon_use_report(&s.use, &s.stick, report, length))
         noteUse();
 #endif
-    if (!s.hid)
+    if (!s.hid || ownReplyTaken(s, report, length))
         return;
     IOLockLock(s.outLock);
-    const bool forward = switch_joycon_forward_report(&s.forward, report, length, switch_now_ms());
+    const bool forward = switch_joycon_forward_report(&s.forward, &s.stick, report, length);
     IOLockUnlock(s.outLock);
-    if (forward)
+    if (forward) {
+        ++s.forwarded;
         switch_joycon_hid_input(s.hid, report, length);
+    } else {
+        ++s.suppressed;
+    }
     // 0x31 is 0x30 (timer, battery, buttons, sticks, vibrator, three IMU samples; yuzu joycon_types.h
     // InputReportNfcIr) followed by the MCU's data. JoyConHIDServicePlugin drops 0x31 (21H461, FUN_0000f928 handles
     // 0x21, 0x30, 0x3F), so the head goes to the device again as 0x30 and the controller keeps working during a scan.
@@ -1917,6 +2019,15 @@ void SwitchJoyConRail::runningReport(Side &s, const uint8_t *report, size_t leng
         standard[0] = kReportFull;
         switch_joycon_hid_input(s.hid, standard, sizeof(standard));
     }
+}
+
+// The reply to the rail's own subcommand (tick: the IMU off) is not the HID client's, which waits for its own.
+bool SwitchJoyConRail::ownReplyTaken(Side &s, const uint8_t *report, size_t length)
+{
+    if (!s.ownReply || report[0] != kReportReply || length < 15 || report[14] != s.ownReply)
+        return false;
+    s.ownReply = 0;
+    return true;
 }
 
 void SwitchJoyConRail::detach(Side &s)
@@ -1984,6 +2095,13 @@ void SwitchJoyConRail::timerAction(OSObject *owner, IOTimerEventSource *sender)
     case kPairing:
         SwitchJoyConRail::checkDelivery(*s, "pairing step timed out");
         self->finishPairing(*s, false, "no reply");
+        break;
+    case kCalibrating:
+        SwitchJoyConRail::checkDelivery(*s, "calibration step timed out");
+        IOLog("SwitchJoyCon: Joy-Con (%c) did not answer its %s; default stick calibration for this session\n",
+              s->cfg->letter, s->step < SWITCH_JOYCON_STICK_READS ? "stick calibration read" : "IMU off");
+        self->run(*s);
+        s->imuOff = true;
         break;
     case kEnding:
         SwitchJoyConRail::checkDelivery(*s, "no answer to 91/11");
@@ -2342,10 +2460,12 @@ void SwitchJoyConRail::statsLine(char *buffer, size_t size) const
     for (const Side &s : sides) {
         const int n = snprintf(buffer + used, size - used,
                                "%s%c running=%d dma=%s replies=%u late=%u tails=%u errors=%u breaks=%u overflows=%u "
-                               "dropped=%u silences=%u recoveries=%u republished=%u gamepad=%d published=%u idled=%u",
+                               "dropped=%u silences=%u recoveries=%u republished=%u gamepad=%d published=%u idled=%u "
+                               "forwarded=%u suppressed=%u deadzone=%u calibrated=%d",
                                used ? "; " : "", s.cfg->letter, s.phase == kRunning ? 1 : 0, s.dmaOn ? "on" : "off",
                                s.replies, s.dmaLate, s.dmaTails, s.lineErrors, s.breaks, s.overflows, s.dropped,
-                               s.silences, s.recoveries, s.republished, s.hid ? 1 : 0, gamepadsPublished, gamepadsIdled);
+                               s.silences, s.recoveries, s.republished, s.hid ? 1 : 0, gamepadsPublished, gamepadsIdled,
+                               s.forwarded, s.suppressed, s.stick.dead_zone, s.stickKnown ? 1 : 0);
         if (n < 0 || static_cast<size_t>(n) >= size - used)
             break;
         used += static_cast<size_t>(n);
@@ -2357,7 +2477,7 @@ static SwitchJoyConRail *gRail;  // set once at start, for switch_joycon_suspend
 #if DEVELOPMENT || DEBUG
 static int statsSysctl(struct sysctl_oid *, void *, int, struct sysctl_req *req)
 {
-    char line[512] = "";
+    char line[1024] = "";
     if (const SwitchJoyConRail *rail = __atomic_load_n(&gRail, __ATOMIC_ACQUIRE))
         rail->statsLine(line, sizeof(line));
     return SYSCTL_OUT(req, line, strlen(line) + 1);
@@ -2371,7 +2491,8 @@ static void registerStats()
     switch_sysctl_oid(&oid, &sysctl__kern_children, "switch_joycon",
                       static_cast<int>(CTLTYPE_STRING | CTLFLAG_RD | CTLFLAG_LOCKED), statsSysctl, "A",
                       "each rail: running, RX DMA, and since boot its replies, late and tail takes, "
-                      "line errors, breaks, overflows, dropped packets, silences, recoveries, republished devices");
+                      "line errors, breaks, overflows, dropped packets, silences, recoveries, republished devices, "
+                      "reports forwarded and held back; its stick dead zone");
     sysctl_register_oid(&oid);
 }
 #endif

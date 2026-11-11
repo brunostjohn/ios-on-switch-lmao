@@ -1,58 +1,99 @@
 // drivers/SwitchJoyCon/SwitchJoyConUse.h: which rail reports are the user playing, and when the pair goes idle.
 #include <gtest/gtest.h>
 
-#include <array>
 #include <cstdint>
 #include <utility>
+#include <vector>
 
 #include "../SwitchJoyConUse.h"
+#include "switch_joycon_fixture.h"
 
 namespace {
 
-using Report = std::array<uint8_t, 49>;
-
-void putStick(Report &r, unsigned at, unsigned x, unsigned y)
-{
-    r[at] = static_cast<uint8_t>(x & 0xff);
-    r[at + 1] = static_cast<uint8_t>((x >> 8) | ((y & 0x0f) << 4));
-    r[at + 2] = static_cast<uint8_t>(y >> 4);
-}
-
-Report resting(uint8_t id = 0x30, unsigned x = 2048, unsigned y = 2048)
-{
-    Report r{};
-    r[0] = id;
-    r[2] = 0x8e;
-    putStick(r, 6, x, y);
-    putStick(r, 9, 2100, 1990);
-    return r;
-}
+using switch_joycon_fixture::Report;
+using switch_joycon_fixture::report;
 
 struct Use : ::testing::Test {
     switch_joycon_use u{};
+    switch_joycon_stick stick = switch_joycon_fixture::capturedStick();
 
     void SetUp() override
     {
         switch_joycon_use_reset(&u);
-        ASSERT_FALSE(take(resting()));
     }
 
     bool take(const Report &r)
     {
-        return switch_joycon_use_report(&u, r.data(), r.size());
+        return switch_joycon_use_report(&u, &stick, r.data(), r.size());
+    }
+
+    unsigned uses(const std::vector<Report> &reports)
+    {
+        unsigned n = 0;
+        for (const Report &r : reports)
+            n += take(r) ? 1 : 0;
+        return n;
     }
 };
 
-TEST_F(Use, RestingSticksAndNoiseAreNotUse)
+TEST_F(Use, TheCapturedRestingJoyConIsNotUse)
 {
-    EXPECT_FALSE(take(resting()));
-    EXPECT_FALSE(take(resting(0x30, 2048 + SWITCH_JOYCON_USE_TRAVEL, 2048 - SWITCH_JOYCON_USE_TRAVEL)));
+    EXPECT_EQ(uses(switch_joycon_fixture::resting(328)), 0u);
 }
 
-TEST_F(Use, AStickPushIsUse)
+TEST_F(Use, AQuarterHourOfNoiseAndDriftInsideTheDeadZoneIsNotUse)
 {
-    EXPECT_TRUE(take(resting(0x30, 2048 + SWITCH_JOYCON_USE_TRAVEL + 1, 2048)));
-    EXPECT_TRUE(take(resting(0x30, 2048, 400)));
+    EXPECT_EQ(uses(switch_joycon_fixture::resting(60000, 6, 90, 40)), 0u);
+}
+
+TEST_F(Use, APushIsUseFromItsFirstReportOutAndHoldingItIsNot)
+{
+    EXPECT_EQ(uses(switch_joycon_fixture::resting(20)), 0u);
+    const std::vector<Report> pushed = switch_joycon_fixture::push(0x75c + 900, 6, 300);
+    std::vector<unsigned> at;
+    for (size_t i = 0; i < pushed.size(); ++i) {
+        if (take(pushed[i]))
+            at.push_back(static_cast<unsigned>(i));
+    }
+    ASSERT_FALSE(at.empty());
+    EXPECT_EQ(at.front(), 1u);  // 1841 + 157 is still in, 1841 + 314 is out
+    EXPECT_LT(at.back(), 6u);
+}
+
+TEST_F(Use, BackToRestThenAnotherPushIsUseAgain)
+{
+    EXPECT_EQ(uses(switch_joycon_fixture::resting(5)), 0u);
+    EXPECT_GE(uses(switch_joycon_fixture::push(0x75c + 900, 6, 10)), 1u);
+    EXPECT_EQ(uses(switch_joycon_fixture::resting(10)), 0u);
+    EXPECT_GE(uses(switch_joycon_fixture::push(0x75c + 900, 6, 10)), 1u);
+}
+
+TEST_F(Use, MovingADeadZoneWhileOutIsUse)
+{
+    EXPECT_EQ(uses(switch_joycon_fixture::resting(5)), 0u);
+    EXPECT_GE(uses(switch_joycon_fixture::push(0x75c + 600, 3, 2)), 1u);
+    EXPECT_FALSE(take(report(true, 0x75c + 600 + 0xae, 2088)));
+    EXPECT_TRUE(take(report(true, 0x75c + 600 + 0xae + 20, 2088 + 20)));
+}
+
+TEST_F(Use, NoiseAtTheDeadZonesEdgeCountsOnce)
+{
+    EXPECT_EQ(uses(switch_joycon_fixture::resting(5)), 0u);
+    unsigned n = 0;
+    for (unsigned i = 0; i < 400; ++i)
+        n += take(report(true, 0x75c + 0xae - 3 + (i * 7) % 8, 0x83b)) ? 1 : 0;
+    EXPECT_EQ(n, 1u);
+}
+
+TEST_F(Use, AStickThatRestsOutOfItsDeadZoneIsNotUseUntilItMoves)
+{
+    std::vector<Report> worn;
+    for (const Report &r : switch_joycon_fixture::resting(2000, 2)) {
+        const unsigned x = (r[6] | (r[7] & 0x0f) << 8) + 260;
+        worn.push_back(report(true, x, r[7] >> 4 | r[8] << 4));
+    }
+    EXPECT_EQ(uses(worn), 0u);
+    EXPECT_TRUE(take(report(true, 1841 + 260 + 300, 2088)));
 }
 
 TEST_F(Use, EveryGamepadButtonIsUse)
@@ -62,8 +103,9 @@ TEST_F(Use, EveryGamepadButtonIsUse)
         uint8_t bit;
     } buttons[] = {{3, 0x01}, {3, 0x02}, {3, 0x04}, {3, 0x08}, {3, 0x40}, {3, 0x80}, {4, 0x01}, {4, 0x02},
                    {4, 0x04}, {4, 0x08}, {5, 0x01}, {5, 0x02}, {5, 0x04}, {5, 0x08}, {5, 0x40}, {5, 0x80}};
+
     for (const auto &button : buttons) {
-        Report r = resting();
+        Report r = report(true, 1841, 2088);
         r[button.byte] = button.bit;
         EXPECT_TRUE(take(r)) << "byte " << button.byte << " bit " << unsigned{button.bit};
     }
@@ -71,9 +113,9 @@ TEST_F(Use, EveryGamepadButtonIsUse)
 
 TEST_F(Use, HomeCaptureGripAndRailButtonsAreNotUse)
 {
-    for (const auto &[byte, bit] : {std::pair<unsigned, uint8_t>{4, 0x10}, {4, 0x20}, {4, 0x80}, {3, 0x10}, {3, 0x20},
-                                    {5, 0x10}, {5, 0x20}}) {
-        Report r = resting();
+    for (const auto &[byte, bit] :
+         {std::pair<unsigned, uint8_t>{4, 0x10}, {4, 0x20}, {4, 0x80}, {3, 0x10}, {3, 0x20}, {5, 0x10}, {5, 0x20}}) {
+        Report r = report(true, 1841, 2088);
         r[byte] = bit;
         EXPECT_FALSE(take(r)) << "byte " << byte << " bit " << unsigned{bit};
     }
@@ -81,36 +123,39 @@ TEST_F(Use, HomeCaptureGripAndRailButtonsAreNotUse)
 
 TEST_F(Use, SubcommandRepliesAndNfcReportsCarryTheSameButtons)
 {
-    Report reply = resting(0x21);
+    Report reply = report(true, 1841, 2088);
+    reply[0] = 0x21;
     reply[3] = 0x08;
     EXPECT_TRUE(take(reply));
-    Report nfc = resting(0x31);
+    Report nfc = report(true, 1841, 2088);
+    nfc[0] = 0x31;
     nfc[5] = 0x02;
     EXPECT_TRUE(take(nfc));
 }
 
 TEST_F(Use, SimpleReportsAndShortPacketsAreIgnored)
 {
-    Report simple = resting(0x3f);
+    Report simple = report(true, 1841, 2088);
+    simple[0] = 0x3f;
     simple[3] = 0xff;
     EXPECT_FALSE(take(simple));
-    Report r = resting();
+    Report r = report(true, 1841, 2088);
     r[3] = 0x08;
-    EXPECT_FALSE(switch_joycon_use_report(&u, r.data(), 11));
+    EXPECT_FALSE(switch_joycon_use_report(&u, &stick, r.data(), 11));
 }
 
-TEST(SwitchJoyConUse, TheRestIsTakenAgainAfterAReset)
+TEST(SwitchJoyConUse, AJoyConRsOtherStickBytesAreNotItsStick)
 {
+    switch_joycon_stick stick{};
+    switch_joycon_stick_defaults(&stick, false);
     switch_joycon_use u{};
     switch_joycon_use_reset(&u);
-    const Report pushed = resting(0x30, 3800, 2048);
-    EXPECT_FALSE(switch_joycon_use_report(&u, pushed.data(), pushed.size()));
-    EXPECT_FALSE(switch_joycon_use_report(&u, pushed.data(), pushed.size()));
-    const Report centred = resting();
-    EXPECT_TRUE(switch_joycon_use_report(&u, centred.data(), centred.size()));
-    switch_joycon_use_reset(&u);
-    EXPECT_FALSE(switch_joycon_use_report(&u, centred.data(), centred.size()));
-    EXPECT_FALSE(switch_joycon_use_report(&u, centred.data(), centred.size()));
+    Report r = report(false, 2048, 2048);
+    EXPECT_FALSE(switch_joycon_use_report(&u, &stick, r.data(), r.size()));
+    switch_joycon_fixture::putStick(r, true, 4000, 4000);
+    EXPECT_FALSE(switch_joycon_use_report(&u, &stick, r.data(), r.size()));
+    switch_joycon_fixture::putStick(r, false, 2048 + 600, 2048);
+    EXPECT_TRUE(switch_joycon_use_report(&u, &stick, r.data(), r.size()));
 }
 
 TEST(SwitchJoyConUse, IdleAfterGameControllersOwnTimeout)
