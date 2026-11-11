@@ -57,7 +57,7 @@ TEST(Lower, GlassFrameEmitters)
     const std::vector<EmitOp> ops = lower(b.graph, r, JobContext{true});
     EXPECT_EQ(count(ops, Emitter::DrawMacro), uint32_t(r.draws.size()));
     EXPECT_EQ(count(ops, Emitter::Present), 1u);
-    EXPECT_EQ(ops.front().emitter, Emitter::InvalidateShaderCachesNoWfi);
+    EXPECT_EQ(ops.front().emitter, Emitter::InvalidateShaderCaches);
     EXPECT_TRUE(ops.front().arg & InvalidateInstructions) << "the heap grew: the job's entry drops instructions";
     std::set<Emitter> outside;
     for (const EmitOp &op : ops)

@@ -51,6 +51,7 @@ struct EmitOp {
     Emitter emitter;
     uint32_t node;
     uint32_t arg;
+    uint16_t level = 0;  // a copy's level: one copy rectangle a level, its layers in one call
 };
 
 std::vector<EmitOp> lower(const WorkGraph &g, const Recording &r, const JobContext &job);

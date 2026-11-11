@@ -124,23 +124,4 @@ Rung fetchRung(uint8_t recorded, const Caps &caps, Rule &rule)
     return base;
 }
 
-Engine implicitEngine(Rule rule)
-{
-    switch (rule) {
-    case Rule::PlanarCodes:
-    case Rule::YcbcrPlaneFill:
-    case Rule::ShadowRefresh:
-    case Rule::ComputeShadowLoad:
-    case Rule::ComputeShadowStore:
-        return Engine::Copy;
-    case Rule::PlanarStandInLoad:
-    case Rule::PlanarStandInStore:
-    case Rule::YcbcrImage:
-    case Rule::ExtendedRangeStandIn:
-        return Engine::ThreeD;
-    default:
-        return Engine::None;
-    }
-}
-
 }  // namespace raw::plan

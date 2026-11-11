@@ -5,6 +5,7 @@
 #include "../plan_lower.h"
 #include "fixtures.h"
 #include <gtest/gtest.h>
+#include <algorithm>
 #include <map>
 #include <random>
 
@@ -35,10 +36,20 @@ Recording perturb(Recording r, std::mt19937 &rng)
     for (Event &e : r.events)
         e.value = any(rng);
     for (Transfer &t : r.transfers) {
-        t.sourceOffset = any(rng);
-        t.destinationOffset = any(rng);
+        uint64_t room = UINT64_MAX;
+        for (uint32_t slot : {t.source, t.destination})
+            if (slot != kNone && r.resources[slot].bytes)
+                room = std::min(room, r.resources[slot].bytes / 2);
+        if (room != UINT64_MAX) {
+            t.bytes = 1 + any(rng) % room;
+            t.sourceOffset = any(rng) % room;
+            t.destinationOffset = any(rng) % room;
+        }
         t.value = uint8_t(any(rng));
     }
+    for (Dispatch &d : r.dispatches)
+        for (uint32_t i = 0; i < 3; ++i)
+            d.grid[i] = uint64_t(d.threads[i]) * (1 + any(rng) % 64);
     std::map<uint32_t, uint32_t> renumbered;
     for (ResourceFacts &f : r.resources) {
         f.handle.generation = any(rng);
@@ -59,6 +70,7 @@ void expectSame(const Built &a, const Built &b)
         EXPECT_EQ(x.before, y.before) << i;
         EXPECT_EQ(x.continues, y.continues) << i;
         EXPECT_EQ(x.runs.count, y.runs.count) << i;
+        EXPECT_EQ(x.key, y.key) << i;
     }
     ASSERT_EQ(a.graph.runs.size(), b.graph.runs.size());
     for (size_t i = 0; i < a.graph.runs.size(); ++i) {
@@ -74,7 +86,7 @@ void expectSame(const Built &a, const Built &b)
 TEST(Property, NoRuleReadsDrawData)
 {
     std::mt19937 rng(20261111);
-    for (const Recording &base : {glassFrame0(), glassFrame1(), scrollFrame(true), scrollFrame(false)}) {
+    for (const Recording &base : {glassFrame0(), glassFrame1(), scrollFrame(true), scrollFrame(false), mixedFrame()}) {
         for (uint32_t probes : {0u, 1u << uint32_t(Probe::PassPixelBarrier)}) {
             const Caps caps = chipCaps(probes);
             const Built reference = plan(base, caps, JobContext{});

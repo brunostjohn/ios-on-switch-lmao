@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 #include "plan_key.h"
 #include <unordered_map>
+#include <vector>
 
 namespace raw::plan {
 
@@ -36,24 +37,35 @@ private:
 
 void resources(Hash &h, const Recording &r)
 {
-    std::unordered_map<uint32_t, uint32_t> canonical;
+    struct Memory {
+        uint32_t canonical;
+        std::vector<uint32_t> slots;
+    };
+
+    std::unordered_map<uint32_t, Memory> sharing;
     for (uint32_t i = 0; i < r.resources.size(); ++i) {
         const ResourceFacts &f = r.resources[i];
-        const uint32_t memory =
-            f.memory == kNone ? kNone : canonical.emplace(f.memory, uint32_t(canonical.size())).first->second;
+        std::vector<uint32_t> *earlier = nullptr;
+        uint32_t memory = kNone;
+        if (f.memory != kNone) {
+            Memory &m = sharing.try_emplace(f.memory, Memory{uint32_t(sharing.size()), {}}).first->second;
+            earlier = &m.slots;
+            memory = m.canonical;
+        }
         h.add(uint64_t(f.kind) | uint64_t(f.layout) << 8 | uint64_t(f.samples) << 16 | uint64_t(f.format) << 32);
         h.add(uint64_t(f.flags) | uint64_t(memory) << 32);
         h.add(uint64_t(f.levels) | uint64_t(f.layers) << 16 | uint64_t(f.width) << 32);
         h.add(uint64_t(f.height) | uint64_t(f.shadow) << 32);
         h.add(uint64_t(f.standIn) | uint64_t(f.luma) << 32);
         h.add(f.chroma);
-        for (uint32_t j = 0; j < i && memory != kNone; ++j) {
+        if (!earlier)
+            continue;
+        for (uint32_t j : *earlier) {
             const ResourceFacts &o = r.resources[j];
-            if (o.memory != f.memory)
-                continue;
             const bool meet = !f.bytes || !o.bytes || (f.offset < o.offset + o.bytes && o.offset < f.offset + f.bytes);
             h.add(uint64_t(j) << 1 | meet);
         }
+        earlier->push_back(i);
     }
 }
 
@@ -126,7 +138,11 @@ void op(Hash &h, const Recording &r, const Op &o)
     }
     case OpKind::Transfer: {
         const Transfer &t = r.transfers[o.payload];
-        h.add(uint64_t(t.kind) | uint64_t(t.aspect) << 8 | uint64_t(t.source) << 32);
+        const auto past = [&](uint32_t slot, uint64_t offset) {
+            return slot != kNone && r.resources[slot].bytes && t.bytes && offset + t.bytes > r.resources[slot].bytes;
+        };
+        const bool outside = past(t.source, t.sourceOffset) || past(t.destination, t.destinationOffset);
+        h.add(uint64_t(t.kind) | uint64_t(t.aspect) << 8 | uint64_t(outside) << 16 | uint64_t(t.source) << 32);
         h.add(t.destination);
         h.add(t.sourceRange);
         h.add(t.destinationRange);
@@ -167,6 +183,32 @@ uint64_t structuralKey(const Recording &r, const Caps &caps)
     for (const Boundary &b : r.boundaries)
         h.add(uint64_t(b.kind) | uint64_t(b.afterEncoder) << 8 | uint64_t(b.payload) << 32);
     return h.value();
+}
+
+void nodeKeys(WorkGraph &g, const Recording &r)
+{
+    for (Node &n : g.nodes) {
+        Hash h;
+        h.add(uint64_t(n.kind) | uint64_t(n.engine) << 8 | uint64_t(n.rule) << 16 | uint64_t(n.continues) << 24 |
+              uint64_t(n.before) << 32);
+        h.add(uint64_t(n.pass) | uint64_t(n.from) << 32);
+        h.add(n.to);
+        h.add(n.fromRange);
+        h.add(n.toRange);
+        for (uint32_t i = 0; i < n.uses.count; ++i) {
+            const Use &u = g.uses[n.uses.first + i];
+            h.add(uint64_t(u.slot) | uint64_t(u.path) << 32 | uint64_t(u.stage) << 40 | uint64_t(u.write) << 48);
+            h.add(u.range);
+        }
+        for (uint32_t i = 0; i < n.runs.count; ++i) {
+            const DrawRun &run = g.runs[n.runs.first + i];
+            h.add(run.program != kNone ? r.programs[run.program].key : uint64_t(run.own));
+            h.add(uint64_t(run.variant) | uint64_t(run.before) << 8 | uint64_t(run.draws.count) << 32);
+            for (Rung rung : run.rung)
+                h.add(uint64_t(rung));
+        }
+        n.key = h.value();
+    }
 }
 
 }  // namespace raw::plan

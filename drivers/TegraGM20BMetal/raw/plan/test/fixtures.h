@@ -62,6 +62,11 @@ Recording glassFrame1();
 // its own
 Recording scrollFrame(bool aliasedScratch = true);
 
+// Every kind of node at once: an event wait, a copy into a texture and a fill, a dispatch writing what a pass reads as
+// constants, a pass with a resolve, an extended-range stand-in and a refreshed shadow, a mip chain, an indirect draw, the
+// present and a signal
+Recording mixedFrame();
+
 // Each node and run with the barriers placed before it and the nodes its edges lead from, one line each
 std::string describe(const WorkGraph &g);
 

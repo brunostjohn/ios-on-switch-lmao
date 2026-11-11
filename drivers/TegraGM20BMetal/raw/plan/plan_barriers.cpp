@@ -273,12 +273,17 @@ Barriers Placer::entry(const JobContext &job) const
     }
     if (job.heapPlaced)
         out |= InvalidateInstructions;
+    // Until a probe shows every job ends drained with its storage writes flushed, the entry flushes and drains as
+    // raw_gpu.cpp's submission prologue does
+    if (!caps_.selectable(Rule::EntryNoDrain))
+        out |= FlushShaderData | InvalidateShaderData | InvalidateTextureData;
     return out;
 }
 
 void Placer::run(const JobContext &job)
 {
     g_.entry = entry(job);
+    const bool trustSwitch = caps_.selectable(Rule::SwitchDrain);
     Engine previous = Engine::None;
     for (uint32_t head = 0; head < g_.nodes.size();) {
         uint32_t end = head + 1;
@@ -295,14 +300,15 @@ void Placer::run(const JobContext &job)
             need = crossNode(head, end, edges);
         }
         const bool switched = switchDrains(previous, node.engine);
-        if (switched && (need & WaitForIdle) && !(need & FlushShaderData))
+        if (switched && trustSwitch && (need & WaitForIdle) && !(need & FlushShaderData))
             need = Barriers((need & ~WaitForIdle) | EngineSwitch);
         else if (switched)
             need |= EngineSwitch;
         node.before = need;
         node.after = {uint32_t(g_.edges.size()), uint32_t(edges.size())};
         g_.edges.insert(g_.edges.end(), edges.begin(), edges.end());
-        note(need, head, (need & kDrains) || node.kind == NodeKind::Signal);
+        const bool drained = (need & (WaitForIdle | FlushShaderData)) || (trustSwitch && (need & EngineSwitch));
+        note(need, head, drained || node.kind == NodeKind::Signal);
         inPass(head, end);
         record(head, end);
         if (onChannel(g_.nodes[end - 1].engine))

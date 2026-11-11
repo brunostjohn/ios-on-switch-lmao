@@ -2,6 +2,7 @@
 #include "plan_build.h"
 #include "plan_builder.h"
 #include "plan_fusion.h"
+#include "plan_key.h"
 #include <algorithm>
 
 namespace raw::plan {
@@ -61,15 +62,30 @@ std::vector<uint32_t> sampledSlots(const Recording &r, const Encoder &e)
     return out;
 }
 
+// What a texture binding reads: an extended-range texture's stand-in, a shadowed texture's pool image, else the texture
+// (raw::CommandBuffer::readTexture)
+uint32_t readThrough(const Builder &b, const Binding &x)
+{
+    const ResourceFacts &f = b.facts(x.resource);
+    if (x.path != Path::Texture)
+        return x.resource;
+    if (f.has(ResourceFacts::ExtendedRange) && f.standIn != kNone)
+        return f.standIn;
+    if ((f.has(ResourceFacts::SampledShadow) || f.has(ResourceFacts::ImageShadow)) && f.shadow != kNone)
+        return f.shadow;
+    return x.resource;
+}
+
 void stateUses(Builder &b, const Span &bindings)
 {
     for (uint32_t k = 0; k < bindings.count; ++k) {
         const Binding &x = b.r.bindings[bindings.first + k];
         if (x.resource == kNone || b.facts(x.resource).kind == ResourceFacts::Sampler)
             continue;
-        b.use(x.resource, x.path, false, stageOf(x.stage));
+        const uint32_t slot = readThrough(b, x);
+        b.use(slot, x.path, false, stageOf(x.stage));
         if (x.write)
-            b.use(x.resource, x.path, true, stageOf(x.stage));
+            b.use(slot, x.path, true, stageOf(x.stage));
     }
 }
 
@@ -312,6 +328,7 @@ Built plan(const Recording &r, const Caps &caps, const JobContext &job)
 {
     Built out = build(r, caps);
     placeBarriers(out.graph, r, caps, job);
+    nodeKeys(out.graph, r);
     return out;
 }
 

@@ -37,6 +37,7 @@ enum class Problem : uint8_t {
     SamplerAddressMode,
     ResolveFormat,
     MipFormat,
+    ConversionState,
     CompressedCopy,
     Count
 };
@@ -63,6 +64,7 @@ constexpr const char *kProblemNames[] = {"none",
                                          "sampler_address_mode",
                                          "resolve_format",
                                          "mip_format",
+                                         "conversion_state",
                                          "compressed_copy"};
 static_assert(sizeof kProblemNames / sizeof *kProblemNames == size_t(Problem::Count), "a name for each problem");
 

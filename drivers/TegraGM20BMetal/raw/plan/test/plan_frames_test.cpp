@@ -29,12 +29,14 @@ Frame planFrame(const Recording &r, const char *name)
     f.built = plan(r, chipCaps(), JobContext{});
     EXPECT_TRUE(validate(r, f.built, Answers{}, ChannelState{}).plannable()) << name;
     f.edges = countGraph(f.built.graph);
-    f.relaxed = countGraph(plan(r, chipCaps(1u << uint32_t(Probe::PassPixelBarrier)), JobContext{}).graph);
+    const uint32_t barrierProbes = 1u << uint32_t(Probe::PassPixelBarrier) | 1u << uint32_t(Probe::IdleJobBoundary) |
+                                   1u << uint32_t(Probe::SwitchDrain);
+    f.relaxed = countGraph(plan(r, chipCaps(barrierProbes), JobContext{}).graph);
     f.today = todayCounts(f.built.graph, r);
     std::printf("%s\n", name);
     print("  today (unconditional)", f.today);
     print("  edges (selectable)", f.edges);
-    print("  edges + pixel probe", f.relaxed);
+    print("  edges + barrier probes", f.relaxed);
     std::printf("%s", describe(f.built.graph).c_str());
     return f;
 }
@@ -57,7 +59,7 @@ TEST(Frames, GlassFirstFrame)
               TiledCacheFlush | FlushShaderData | InvalidateShaderData | InvalidateTextureData)
         << "the merge's storage access meets the background draws' colour writes";
     EXPECT_EQ(g.nodes[6].before, TiledCacheFlush | FlushShaderData) << "the present reads what the interlock stored";
-    EXPECT_EQ(f.edges.shaderInval, 3u);
+    EXPECT_EQ(f.edges.shaderInval, 4u) << "the job's entry, the glass pass, the merge's storage barrier, the present";
     EXPECT_LT(f.edges.drains, f.today.drains);
     EXPECT_LT(f.edges.shaderInval, f.today.shaderInval);
     EXPECT_EQ(f.relaxed.wfi, 0u);
@@ -68,17 +70,25 @@ TEST(Frames, GlassSteadyFrame)
     const Recording r = glassFrame1();
     const Frame f = planFrame(r, "glass frame 1");
     EXPECT_EQ(f.edges.wfi, 0u);
-    EXPECT_EQ(f.edges.shaderInval, 2u);
+    EXPECT_EQ(f.edges.shaderInval, 3u) << "the job's entry, the merge's storage barrier, the present";
     EXPECT_EQ(f.today.wfi, 1u);
 }
 
 TEST(Frames, Scroll)
 {
     const Frame f = planFrame(scrollFrame(true), "scroll frame (synthetic, memoryless aliased per tag)");
-    EXPECT_EQ(f.edges.shaderInval, 0u) << "no storage writes and no GPU-written constants: no shader-cache drain";
+    EXPECT_EQ(f.edges.shaderInval, 1u) << "no storage writes, no GPU-written constants: the job's entry alone";
     EXPECT_GE(f.today.drains, 13u);
     const Frame own = planFrame(scrollFrame(false), "scroll frame (synthetic, a memoryless backing per pass)");
-    EXPECT_LE(own.edges.drains, 4u);
+    EXPECT_EQ(own.edges.drains, 5u);
+    EXPECT_EQ(own.relaxed.drains, 0u);
+}
+
+TEST(Frames, MixedEngines)
+{
+    const Frame f = planFrame(mixedFrame(), "mixed frame (synthetic: copy, fill, dispatch, resolve, mips, indirect)");
+    EXPECT_GT(f.edges.switchDrains + f.edges.wfi, 0u);
+    EXPECT_EQ(f.edges.setReference, 1u) << "the indirect draw reads arguments the GPU wrote";
 }
 
 }  // namespace

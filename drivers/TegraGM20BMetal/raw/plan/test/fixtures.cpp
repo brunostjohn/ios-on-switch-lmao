@@ -396,6 +396,61 @@ Recording scrollFrame(bool aliasedScratch)
     return rec.r;
 }
 
+Recording mixedFrame()
+{
+    Rec rec;
+    const uint32_t event = rec.sampler();
+    const uint32_t staging = rec.buffer(1 << 16), args = rec.buffer(256), uniforms = rec.buffer(4096);
+    const uint32_t atlas = rec.texture(10, 256, 256);
+    const uint32_t standIn = rec.texture(115, 64, 64), xr = rec.texture(552, 64, 64, ResourceFacts::ExtendedRange);
+    const uint32_t pool = rec.texture(10, 360, 240), thumb = rec.texture(10, 360, 240, ResourceFacts::SampledShadow);
+    const uint32_t ms = rec.texture(80, 256, 256, ResourceFacts::Memoryless, 1, 4);
+    const uint32_t resolved = rec.texture(80, 256, 256, ResourceFacts::MipChain2D, 9);
+    const uint32_t drawable =
+        rec.texture(80, 1280, 720, ResourceFacts::Drawable | ResourceFacts::Surface | ResourceFacts::Rendered);
+    rec.r.resources[xr].standIn = standIn;
+    rec.r.resources[thumb].shadow = pool;
+    rec.wait(event, 1);
+    rec.blit();
+    Transfer upload;
+    upload.kind = Transfer::CopyBufferToTexture;
+    upload.source = staging;
+    upload.destination = atlas;
+    upload.bytes = 4096;
+    rec.transfer(upload);
+    Transfer fill;
+    fill.kind = Transfer::FillBuffer;
+    fill.destination = args;
+    fill.bytes = 64;
+    rec.transfer(fill);
+    rec.end();
+    rec.compute();
+    ProgramFacts kernel;
+    kernel.compute = true;
+    rec.dispatch(rec.program(kernel), {storage(uniforms, true), storage(args, true, 2, 1)});
+    rec.end();
+    Attachment a = colour(ms, Load::Clear, Store::Resolve);
+    a.resolve = resolved;
+    rec.render(pass({a}, 256, 256));
+    ProgramFacts p = caState(7, {80});
+    p.samples = 4;
+    rec.draw(rec.state(rec.program(p), {vertices(staging), constants(uniforms), texture(atlas), texture(xr, 1, 1),
+                                        texture(thumb, 1, 2)}));
+    rec.end();
+    rec.blit();
+    Transfer mips;
+    mips.kind = Transfer::Mipmaps;
+    mips.destination = resolved;
+    rec.transfer(mips);
+    rec.end();
+    rec.render(pass({colour(drawable, Load::Load, Store::Store)}, 1280, 720));
+    rec.drawIndirect(rec.state(rec.program(caState(8, {80})), {texture(resolved)}), args);
+    rec.end();
+    rec.present(drawable);
+    rec.signal(event, 2);
+    return rec.r;
+}
+
 std::string describe(const WorkGraph &g)
 {
     static const char *const bits[] = {"tiled", "wfi", "flush", "data",   "const", "instr", "tex",

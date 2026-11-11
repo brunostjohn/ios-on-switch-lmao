@@ -51,6 +51,8 @@ enum class Rule : uint8_t {
     FetchIterated,
     FetchInterlock,
     PassPixelBarrier,
+    EntryNoDrain,
+    SwitchDrain,
     Count
 };
 
@@ -79,7 +81,9 @@ constexpr const char *kRuleNames[] = {"recorded",
                                       "fetch.blend",
                                       "fetch.iterated",
                                       "fetch.interlock",
-                                      "barrier.pass_pixel"};
+                                      "barrier.pass_pixel",
+                                      "barrier.entry_no_drain",
+                                      "barrier.switch_drain"};
 static_assert(sizeof kRuleNames / sizeof *kRuleNames == size_t(Rule::Count), "a name for each rule");
 
 // The barrier vocabulary, one bit per kit sequence (kits/SwitchGM20BEmit/SwitchGM20BEmitBarrier.h). EngineSwitch is
@@ -102,7 +106,6 @@ enum Barrier : uint16_t {
 
 using Barriers = uint16_t;
 
-constexpr Barriers kDrains = WaitForIdle | FlushShaderData | EngineSwitch;
 constexpr Barriers kShaderCaches =
     FlushShaderData | InvalidateShaderData | InvalidateConstants | InvalidateInstructions;
 

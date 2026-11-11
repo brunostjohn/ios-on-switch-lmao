@@ -104,9 +104,9 @@ TEST(Hazard, EngineSwitchDrains)
     EXPECT_FALSE(switchDrains(Engine::ThreeD, Engine::Display));
 }
 
-// A copy into a texture, then a pass sampling it: the subchannel change to the 3D engine is the drain, so only the
-// texture lines are dropped
-TEST(Placement, CopyThenSampleTakesTheSwitchAsItsDrain)
+// A copy into a texture, then a pass sampling it: the WFI stays until the probe shows the subchannel change to the 3D
+// engine drains the copy engine; then the switch is the drain and only the texture lines are dropped
+TEST(Placement, CopyThenSampleTakesTheSwitchAsItsDrainOnceProbed)
 {
     Rec rec;
     const uint32_t staging = rec.buffer(1 << 16), image = rec.texture(80, 64, 64), target = rec.texture(80, 64, 64);
@@ -122,7 +122,9 @@ TEST(Placement, CopyThenSampleTakesTheSwitchAsItsDrain)
     rec.end();
     const Built b = plan(rec.r, chipCaps(), JobContext{});
     ASSERT_EQ(b.graph.nodes.size(), 2u);
-    EXPECT_EQ(b.graph.nodes[1].before, EngineSwitch | InvalidateTextureData);
+    EXPECT_EQ(b.graph.nodes[1].before, EngineSwitch | WaitForIdle | InvalidateTextureData);
+    const Built probed = plan(rec.r, chipCaps(1u << uint32_t(Probe::SwitchDrain)), JobContext{});
+    EXPECT_EQ(probed.graph.nodes[1].before, EngineSwitch | InvalidateTextureData);
 }
 
 // Two passes sampling what one pass drew: the second needs nothing the first's barrier did not give
@@ -142,6 +144,15 @@ TEST(Placement, ABarrierSatisfiesLaterReaders)
     const Built built = plan(rec.r, chipCaps(), JobContext{});
     EXPECT_EQ(built.graph.nodes[1].before, TiledCacheFlush | WaitForIdle | InvalidateTextureData);
     EXPECT_EQ(built.graph.nodes[2].before, 0);
+}
+
+TEST(Placement, JobEntryDrainsUntilProbed)
+{
+    const Recording r = glassFrame1();
+    EXPECT_TRUE(plan(r, chipCaps(), JobContext{}).graph.entry & FlushShaderData);
+    const Barriers probed = plan(r, chipCaps(1u << uint32_t(Probe::IdleJobBoundary)), JobContext{}).graph.entry;
+    EXPECT_FALSE(probed & (FlushShaderData | WaitForIdle));
+    EXPECT_TRUE(probed & InvalidateTextureData);
 }
 
 TEST(Placement, InstructionCachesOnlyWhenTheHeapGrew)

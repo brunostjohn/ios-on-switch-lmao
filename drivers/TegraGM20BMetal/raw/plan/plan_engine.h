@@ -28,6 +28,4 @@ bool mipFilteredByTwoD(uint16_t format);
 // The rung a fetched colour takes: the record's rung, or a lower one the record names as a candidate once its probe passed
 Rung fetchRung(uint8_t recorded, const Caps &caps, Rule &rule);
 
-Engine implicitEngine(Rule rule);
-
 }  // namespace raw::plan

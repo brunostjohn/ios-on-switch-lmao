@@ -9,7 +9,7 @@ namespace {
 
 constexpr Barriers kSubmissionPrologue = FlushShaderData | InvalidateShaderData | InvalidateTextureData;
 
-// raw_gpu.cpp:3330 switch_gm20b_pass_barrier: WAIT_FOR_IDLE, then INVALIDATE_SHADER_CACHES (which waits again)
+// RenderEncoder::end's switch_gm20b_pass_barrier: WAIT_FOR_IDLE, then INVALIDATE_SHADER_CACHES (which waits again)
 void passBarrier(Counts &c, bool tiled)
 {
     c.tiledFlushes += tiled;

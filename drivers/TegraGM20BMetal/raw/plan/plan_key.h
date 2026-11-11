@@ -9,4 +9,8 @@ namespace raw::plan {
 
 uint64_t structuralKey(const Recording &r, const Caps &caps);
 
+// Each node's key for a fragment cache: what its words are made from, its barriers included; draw counts per run stay in
+// (a run's draws are words), their arguments do not
+void nodeKeys(WorkGraph &g, const Recording &r);
+
 }  // namespace raw::plan

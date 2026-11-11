@@ -11,13 +11,13 @@ class Builder {
 public:
     Builder(const Recording &r, const Caps &caps, WorkGraph &g)
         : r(r), caps(caps), g(g), fresh(r.resources.size()), standInFresh(r.resources.size()),
-          converted(r.resources.size()), codes(r.resources.size())
+          converted(r.resources.size()), codes(r.resources.size()), planesWritten(r.resources.size())
     {}
 
     const Recording &r;
     const Caps &caps;
     WorkGraph &g;
-    std::vector<uint8_t> fresh, standInFresh, converted, codes;
+    std::vector<uint8_t> fresh, standInFresh, converted, codes, planesWritten;
     std::vector<uint32_t> unplanned;  // nodes no rule could place (their ladders had no selectable rung)
 
     uint32_t open(NodeKind kind, Engine engine, Rule rule, uint32_t source = kNone)
@@ -74,6 +74,9 @@ public:
         use(from, Path::Texture, false, Stage::Fragment, fromRange);
         use(to, Path::Rop, true, Stage::Fragment, toRange);
         run(own);
+        const uint16_t format = facts(own == OwnState::ExtendedRange ? from : to).format;
+        if (!caps.selectable(rule) || !caps.own.available(own, format))
+            unplanned.push_back(n);
         return n;
     }
 
@@ -84,6 +87,8 @@ public:
         g.nodes[n].to = to;
         use(from, Path::Copy, false, Stage::Transfer);
         use(to, Path::Copy, true, Stage::Transfer);
+        if (!caps.selectable(rule))
+            unplanned.push_back(n);
         return n;
     }
 };

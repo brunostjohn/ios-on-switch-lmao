@@ -27,7 +27,7 @@ constexpr EmitterInfo kEmitters[] = {
     {Emitter::CopyRemap, false, "raw_gpu.cpp BlitEncoder::convertPlanar (copy engine remaps)"},
     {Emitter::Dispatch, false, "raw_compute.cpp ComputeEncoder::dispatchRegion"},
     {Emitter::ComputeBarrier, false, "raw_compute.cpp compute-class INVALIDATE_SHADER_CACHES and texture invalidate"},
-    {Emitter::SetReference, false, "host SET_REFERENCE (raw_gpu.cpp:4240)"},
+    {Emitter::SetReference, false, "host SET_REFERENCE (RenderEncoder::indirect)"},
     {Emitter::SemaphoreAcquire, false, "raw_shared_events.cpp, the job's waits (TegraGM20BABI SubmitAddress)"},
     {Emitter::SemaphoreRelease, false, "raw_shared_events.cpp, the job's signals"},
     {Emitter::Present, false, "the kernel's present job (gpu_present.c)"},
@@ -37,6 +37,17 @@ static_assert(sizeof kEmitters / sizeof *kEmitters == size_t(Emitter::Count), "a
 void op(std::vector<EmitOp> &out, Emitter e, uint32_t node, uint32_t arg = kNone)
 {
     out.push_back({e, node, arg});
+}
+
+// switch_gm20b_copy_rect copies one level's layers: a copy over several levels is one call a level
+void copyLevels(std::vector<EmitOp> &out, const Recording &r, const Node &n, uint32_t index, uint32_t ordered)
+{
+    const ResourceFacts &to = r.resources[n.to];
+    const uint32_t levels = to.kind != ResourceFacts::Texture ? 1
+                            : n.toRange.levels == UINT16_MAX  ? uint32_t(to.levels) - n.toRange.level
+                                                              : n.toRange.levels;
+    for (uint32_t l = 0; l < levels; ++l)
+        out.push_back({Emitter::CopyRect, index, l ? kNone : ordered, uint16_t(n.toRange.level + l)});
 }
 
 void ownPassBody(std::vector<EmitOp> &out, const Node &n, uint32_t index)
@@ -132,7 +143,10 @@ std::vector<EmitOp> lower(const WorkGraph &g, const Recording &r, const JobConte
             }
             break;
         case NodeKind::Copy:
-            op(out, n.engine == Engine::TwoD ? Emitter::TwoDBlit : Emitter::CopyRect, i, ordered);
+            if (n.engine == Engine::TwoD)
+                op(out, Emitter::TwoDBlit, i);
+            else
+                copyLevels(out, r, n, i, ordered);
             break;
         case NodeKind::Fill:
             op(out, Emitter::CopyFill, i, ordered);

@@ -164,6 +164,8 @@ Problem unplannedProblem(const Node &n)
         return Problem::ResolveFormat;
     case NodeKind::MipChain:
         return Problem::MipFormat;
+    case NodeKind::Convert:
+        return Problem::ConversionState;
     default:
         return Problem::CompressedCopy;
     }

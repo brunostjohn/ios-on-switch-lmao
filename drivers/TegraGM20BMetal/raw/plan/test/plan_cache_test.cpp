@@ -48,6 +48,27 @@ TEST(Cache, StructureMisses)
     EXPECT_EQ(cache.hits(), 0u);
 }
 
+TEST(Cache, AnOutOfRangeCopyIsAnotherStructure)
+{
+    const Caps caps = chipCaps();
+    Recording r = mixedFrame();
+    PlanCache cache;
+    EXPECT_TRUE(cache.get(r, caps, Answers{}).finding.plannable());
+    r.transfers[1].destinationOffset = 250;
+    const Plan &bad = cache.get(r, caps, Answers{});
+    EXPECT_EQ(bad.finding.problem, Problem::BufferRange);
+    EXPECT_EQ(cache.plans(), 2u);
+}
+
+TEST(Cache, NodeKeysFollowStructure)
+{
+    const Built a = plan(glassFrame0(), chipCaps(), JobContext{});
+    const Built b = plan(glassFrame1(), chipCaps(), JobContext{});
+    EXPECT_NE(a.graph.nodes[0].key, 0u);
+    EXPECT_NE(a.graph.nodes[1].key, a.graph.nodes[2].key) << "different targets and states";
+    EXPECT_NE(a.graph.nodes[0].key, b.graph.nodes[0].key) << "the steady frame's pass also draws the glass";
+}
+
 TEST(Cache, LeastRecentlyUsedGoesFirst)
 {
     PlanCache cache(2);

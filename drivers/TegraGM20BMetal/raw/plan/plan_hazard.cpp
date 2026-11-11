@@ -9,55 +9,55 @@ constexpr ClauseInfo kClauses[] = {
     {Clause::Execution, "the earlier node completes",
      "nvk_cmd_buffer.c:521-523 (any source stage: NVK_BARRIER_WFI); :678-687 (WFI on the last subchannel, the switch "
      "drains the others)",
-     "raw_gpu.cpp:3330 every pass prologue; :3295 every blit encoder; raw_compute.cpp:128 every compute encoder"},
+     "RenderEncoder::end's pass prologue (switch_gm20b_pass_barrier); CommandBuffer::blit; the ComputeEncoder "
+     "constructor"},
     {Clause::FlushStorage, "storage writes leave the SMs' L1",
      "nvk_cmd_buffer.c:525-526 (SHADER_STORAGE_WRITE: FLUSH_SHADER_DATA); :663-675 (INVALIDATE_SHADER_CACHES "
      ".flush_data, itself a WFI)",
-     "raw_gpu.cpp:5315-5316 pass end after storage writes; :4732 in-pass storage barrier"},
+     "RenderEncoder::end after storage writes; RenderEncoder::prepare's storage barrier"},
     {Clause::TiledCache, "binned colour writes leave the tiled cache",
      "nvk_tiled_cache.h:65-72, nvk_cmd_buffer.c:431, nvk_event.c:184 (this fork's 7c0b96132, not upstream: at a "
      "release "
      "and at a command buffer's end)",
-     "raw_gpu.cpp:5313-5314 every pass end that drew; raw_tiled_cache.h:61"},
+     "RenderEncoder::end at every pass that drew (raw_tiled_cache.h tiledCacheDrain)"},
     {Clause::TextureRead, "a texture-unit read of written memory",
      "nvk_cmd_buffer.c:565-567 (INPUT_ATTACHMENT/SHADER_SAMPLED_READ: INVALIDATE_TEX_DATA); :571-580 (blit and "
      "resolve reads); :818-829 (INVALIDATE_TEXTURE_DATA_CACHE_NO_WFI)",
-     "raw_gpu.cpp:3330 every pass prologue"},
+     "RenderEncoder::end's pass prologue"},
     {Clause::StorageRead, "a storage read of written memory",
      "nvk_cmd_buffer.c:569-570 (SHADER_STORAGE_READ: INVALIDATE_SHADER_DATA); :851-863 "
      "(INVALIDATE_SHADER_CACHES_NO_WFI "
      ".global_data)",
-     "raw_gpu.cpp:3330 every pass prologue"},
+     "RenderEncoder::end's pass prologue"},
     {Clause::ConstantRead, "a GPU-written buffer read as constants",
      "nvk_cmd_buffer.c:560-563 (UNIFORM_READ: SHADER_DATA and CONSTANT); :851-863",
-     "raw_gpu.cpp:3330 constants dropped at every pass"},
+     "RenderEncoder::end's pass prologue drops constants at every pass"},
     {Clause::IndirectRead, "GPU-written arguments read by the push fetcher",
      "nvk_cmd_buffer.c:550-558 (INDIRECT_COMMAND_READ: MME data, constants); :880-891 (SET_REFERENCE)",
-     "raw_gpu.cpp:4238-4240 every indirect draw"},
+     "RenderEncoder::indirect at every indirect draw"},
     {Clause::PixelOrdered, "a fetch of a colour an earlier draw of the pass wrote",
      "nvk_cmd_buffer.c:922-1032 (this fork's 42fed4abc: PIXEL_SHADER_BARRIER and the pixel-ordered texture invalidate "
      "0x0f74 for a colour write to a fragment read)",
-     "raw_gpu.cpp:4735, :4828-4850 fetchBarrier"},
+     "RenderEncoder::prepare and fetchBarrier"},
     {Clause::InPassStorage, "a storage access meets colour writes in the pass",
      "nvk_cmd_buffer.c:521-526 and :569-570 (WFI, flush, shader data; NVK drops no texture lines for a storage read: "
      "raw's texture invalidate is kept until probed)",
-     "raw_gpu.cpp:4728-4733 tiled drain, flush and data, texture data; raw_attachment_order.h"},
+     "RenderEncoder::prepare: tiled drain, flush and data, texture data (raw_attachment_order.h)"},
     {Clause::InterlockOrder, "a storage access after one in the interlock",
-     "none: the interlock's ticket orders them (NVK enables fragment shader interlock on MAXWELL_B, "
-     "nvk_physical_device.c)",
-     "raw_gpu.cpp:4700-4703"},
+     "none: the interlock's ticket orders them (NVK exposes fragment shader interlock, nvk_physical_device.c:733-734)",
+     "RenderEncoder::prepare"},
     {Clause::CopyOrder, "a copy after a copy of the same memory",
      "nvk_cmd_buffer.c:700-712 (the copy engine's wait: LAUNCH_DMA NON_PIPELINED, FLUSH_ENABLE)",
      "kits/SwitchGM20BEmit/SwitchGM20BEmitCopy.h:48 data_transfer_type"},
     {Clause::WriteAfterRead, "a write after a read",
      "nvk_cmd_buffer.c:541-588 (invalidates follow the destination's reads only): execution alone",
-     "raw_gpu.cpp:3330 every pass prologue"},
+     "RenderEncoder::end's pass prologue"},
     {Clause::CrossPassPixel, "a colour write and a fragment read in different passes, pixel-ordered (probe-gated)",
      "nvk_cmd_buffer.c:1013-1032 (this fork: the pixel-ordered dependency also across vkCmdBeginRendering)", "none"},
     {Clause::FetchOnly, "vertex fetch, a copy-engine read or the display after a write",
      "nvk_cmd_buffer.c:541-588: VERTEX_ATTRIBUTE_READ and INDEX_READ invalidate nothing; TRANSFER_READ at COPY "
      "invalidates texture and shader data (:576-580) because NVK's copies can be shaders, the copy engine reads L2",
-     "raw_gpu.cpp:3295"},
+     "CommandBuffer::blit's WFI"},
 };
 static_assert(sizeof kClauses / sizeof *kClauses == size_t(Clause::Count), "a row for each clause");
 

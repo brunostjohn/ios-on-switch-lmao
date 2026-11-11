@@ -9,13 +9,13 @@
 tex.shape	create	gap	rotated_target,stored_multisample,two_plane_extended_range,planar_target	terms 5 rotation (R1, probe gpu.x1.rotated_target), 3 samples (R3), 6 format 550 over two planes (R2) and planar YCbCr (R4); terms 1, 2, 4 (type, levels, arrays) are L3 layouts from NIL
 tex.pool	create	growth	-	pool span or header slot: the pool grows (L3), the GPU work waits
 tex.surf.plane	create	layer	L3	a plane of a planar surface as a texture of its own: a plane TIC over the surface's memory
-tex.surf.pitch	create	rule	shadow.refresh	rows 16 but not 32 apart: the copy engine fills a conforming pool image before each pass that samples it
+tex.surf.pitch	create	layer	L3	L3 gives such a surface a conforming pool image; the planner's shadow.refresh then fills it on the copy engine before each pass that samples it
 tex.surf.bounds	create	nil	-	rows past the surface's allocation: newTextureWithDescriptor:iosurface:plane: answers nil
-tex.surf.base	create	rule	shadow.refresh	a base off a page: sampled through a pool image
+tex.surf.base	create	layer	L3	a base off a page: a pool image L3 makes, filled by shadow.refresh
 tex.surf.imp	create	layer	L3	the kernel refused the import or the header slot: a resource failure at creation
 tex.planar	create	rule	planar.codes	the 4:4:4 two-plane code texture: copy-engine remaps from its planes when stale
-tex.buf.base	create	rule	shadow.refresh	a base 16 but not 32 bytes into the buffer while the device answers 16 (iosurfaceReadOnlyTextureAlignmentBytes held at 16); below the answered alignment it is a client error
-tex.buf.pitch	create	rule	shadow.refresh	bytesPerRow 16 but not 32 apart: as tex.buf.base
+tex.buf.base	create	layer	L3	a base 16 but not 32 bytes into the buffer while the device answers 16 (iosurfaceReadOnlyTextureAlignmentBytes held at 16): a pool image L3 makes, filled by shadow.refresh; below the answered alignment it is a client error
+tex.buf.pitch	create	layer	L3	bytesPerRow 16 but not 32 apart: as tex.buf.base
 tex.buf.other	create	nil	-	memoryless, or past the buffer: newTextureWithDescriptor:offset:bytesPerRow: answers nil
 tex.view	create	layer	L3	views of another texel size or of a part of a 3D texture: TIC views made at view creation
 tex.foreign	record	m2v	-	m2v's own texture
@@ -45,8 +45,8 @@ blit.whole	record	rule	copy.ce	a whole-texture copy of several levels or slices:
 compute	record	m2v	-	a kernel's buffer, texture or sampler from m2v
 compute.off16	record	layer	L4	a kernel buffer off 16 bytes with no residual word: the binding ABI's residual words for kernels
 compute.nokernel	record	layer	L4	no pack kernel at the dispatch's shape: a kernel record per shape
-compute.image	record	rule	compute.shadow_load,compute.shadow_store	a texture sampled through an image of its own; a cropped surface view aliasing another resource of the dispatch is ordered by the edges
-compute.view	record	rule	compute.shadow_load,compute.shadow_store	a view of another texel size at a kernel's texture slot: a shadow in the kernel's format (L3 makes it)
+compute.image	record	rule	compute.shadow_load,compute.shadow_store	a texture sampled through an image of its own; the cropped-surface-view alias case is not tested
+compute.view	record	layer	L3	a view of another texel size at a kernel's texture slot: a shadow in the kernel's format L3 makes, then compute.shadow_load and compute.shadow_store
 compute.edge	record	query	non_uniform_threadgroups	dispatchThreads: with an edge threadgroup at the claimed family
 mipmaps	record	layer	L3	a mipmapped texture made with no chain: every mipmapped texture gets NIL's chain
 mipmaps.fmt	record	rule	mip.twod,mip.twod_probed,mip.draw	formats with neither engine nor a pack mip state stay gap mip_format

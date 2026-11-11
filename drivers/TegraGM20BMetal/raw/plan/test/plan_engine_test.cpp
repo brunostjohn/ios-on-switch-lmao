@@ -87,7 +87,7 @@ TEST(Engine, ResolvesAsToday)
     EXPECT_FALSE(resolveEngine(tex(252, 0, 4), tex(252), chipCaps()).valid()) << "depth: no resolve state";
 }
 
-// Today: the 2D engine for fx::twodFormat's five formats, the pack's mip state for the rest (RawMetalBlit.mm:430-440)
+// Today: the 2D engine for fx::twodFormat's five formats, the pack's mip state for the rest (RMBlitEncoder generateMipmapsForTexture:)
 TEST(Engine, MipmapsAsToday)
 {
     for (uint16_t f : {80, 70, 115, 10, 30}) {

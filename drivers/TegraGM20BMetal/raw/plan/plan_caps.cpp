@@ -33,6 +33,8 @@ constexpr RuleEvidence kEvidence[] = {
     {Rule::FetchIterated, SWITCH_GM20B_FEATURE_3D_G5, Grade::Source, Probe::IteratedBlend},
     {Rule::FetchInterlock, SWITCH_GM20B_FEATURE_3D_G12, Grade::Chip, Probe::None},
     {Rule::PassPixelBarrier, SWITCH_GM20B_FEATURE_3D_A6, Grade::Chip, Probe::PassPixelBarrier},
+    {Rule::EntryNoDrain, SWITCH_GM20B_FEATURE_HOST_4, Grade::Chip, Probe::IdleJobBoundary},
+    {Rule::SwitchDrain, SWITCH_GM20B_FEATURE_HOST_9, Grade::Chip, Probe::SwitchDrain},
 };
 static_assert(sizeof kEvidence / sizeof *kEvidence == size_t(Rule::Count), "evidence for each rule");
 

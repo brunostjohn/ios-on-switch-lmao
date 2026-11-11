@@ -13,11 +13,12 @@ bool sampledThroughShadow(const ResourceFacts &f)
     return f.has(ResourceFacts::SampledShadow) && f.shadow != kNone;
 }
 
-// RawMetalEncode.mm:271-308: plane shadows filled by the copy engine, then a pass of the pack's conversion state
+// encodeRawAttempt's planar block (YCbCr): plane shadows filled by the copy engine, then a pass of the pack's conversion state.
+// No engine on the GPU channel converts 4:2:0 to RGB; VIC's colour conversion is a job on another engine
 void ycbcr(Builder &b, uint32_t t)
 {
     const ResourceFacts &f = b.facts(t);
-    if (!f.has(ResourceFacts::Ycbcr) || !f.has(ResourceFacts::ImageStale) || b.converted[t])
+    if (!f.has(ResourceFacts::Ycbcr) || !(f.has(ResourceFacts::ImageStale) || b.planesWritten[t]) || b.converted[t])
         return;
     for (uint32_t plane : {f.luma, f.chroma})
         if (plane != kNone && sampledThroughShadow(b.facts(plane)))
@@ -29,7 +30,7 @@ void ycbcr(Builder &b, uint32_t t)
     b.converted[t] = 1;
 }
 
-// RawMetalEncode.mm:261-270 and :139-145: a 4:4:4 code texture's codes from its two planes, by copy-engine remaps
+// encodeRawAttempt's planar block and standInPass (convertPlanar): a 4:4:4 code texture's codes from its two planes, by copy-engine remaps
 uint32_t planarCodes(Builder &b, uint32_t t)
 {
     const ResourceFacts &f = b.facts(t);
@@ -43,7 +44,7 @@ uint32_t planarCodes(Builder &b, uint32_t t)
     return n;
 }
 
-// RawMetalEncode.mm:321-335 refresh: a sampled texture's pool image from its texels, once until work here writes it
+// encodeRawAttempt's refresh: a sampled texture's pool image from its texels, once until work here writes it
 // (a surface view at every pass)
 void shadowRefresh(Builder &b, uint32_t t)
 {
@@ -54,7 +55,8 @@ void shadowRefresh(Builder &b, uint32_t t)
     b.fresh[t] = 1;
 }
 
-// RawMetalEncode.mm:342-375 standIns: an extended-range texture's RGBA16F stand-in drawn from its codes
+// encodeRawAttempt's standIns: an extended-range texture's RGBA16F stand-in drawn from its codes. The texture header has no
+// extended-range format; an UNORM view with the affine in the consumer's program (an L4 variant) would remove the pass
 void extendedRange(Builder &b, uint32_t t)
 {
     const ResourceFacts &f = b.facts(t);
@@ -76,12 +78,14 @@ void beforePass(Builder &b, const Encoder &e, const std::vector<uint32_t> &sampl
     for (uint32_t t : sampled) {
         const ResourceFacts &f = b.facts(t);
         ycbcr(b, t);
-        if (f.has(ResourceFacts::PlanarCodes) && f.has(ResourceFacts::ImageStale) && !b.codes[t])
+        if (f.has(ResourceFacts::PlanarCodes) && (f.has(ResourceFacts::ImageStale) || b.planesWritten[t]) &&
+            !b.codes[t])
             planarCodes(b, t);
         shadowRefresh(b, t);
         extendedRange(b, t);
     }
-    // RawMetalEncode.mm:471-479, :522-525 standInPass(t, false): the planes' codes, then the stand-in drawn from them
+    // encodeRawAttempt's standInPass(t, false): the planes' codes, then the stand-in drawn from them. The ROP writes no two
+    // planes of different sizes and the copy engine's remap does not subsample, so the stand-in is drawn
     for (const Attachment &a : b.r.passes[e.pass].color) {
         if (a.texture == kNone || !b.facts(a.texture).has(ResourceFacts::PlanarStandIn) || !loadsStandIn(a))
             continue;
@@ -93,7 +97,7 @@ void beforePass(Builder &b, const Encoder &e, const std::vector<uint32_t> &sampl
 void afterPass(Builder &b, const Encoder &e)
 {
     const PassDesc &pass = b.r.passes[e.pass];
-    // RawMetalEncode.mm:182-211 resolvePasses: each resolved attachment into its resolve texture
+    // encodeRawAttempt's resolvePasses: each resolved attachment into its resolve texture
     for (const Attachment &a : pass.color) {
         if (a.texture == kNone || a.resolve == kNone ||
             (a.store != Store::Resolve && a.store != Store::StoreAndResolve))
@@ -115,14 +119,15 @@ void afterPass(Builder &b, const Encoder &e)
         if (!c.valid())
             b.unplanned.push_back(n);
     }
-    // RawMetalEncode.mm:550-553 standInPass(t, true): the stand-in back into the planes
+    // encodeRawAttempt's standInPass(t, true): the stand-in back into the planes
     for (const Attachment &a : pass.color) {
         if (a.texture == kNone || !b.facts(a.texture).has(ResourceFacts::PlanarStandIn) || a.store == Store::DontCare)
             continue;
         const ResourceFacts &f = b.facts(a.texture);
         b.ownPass(Rule::PlanarStandInStore, OwnState::StandInStore, f.standIn, f.luma);
         b.use(f.chroma, Path::Rop, true);
-        b.codes[a.texture] = 0;
+        b.codes[a.texture] = b.converted[a.texture] = 0;
+        b.planesWritten[a.texture] = 1;
     }
 }
 
@@ -138,14 +143,14 @@ std::vector<uint32_t> shadowedSlots(const Builder &b, const Dispatch &d)
     return out;
 }
 
-// RawMetalEncode.mm:387-410 copyShadows(false): the kernel's images from their textures before the dispatch
+// encodeRawAttempt's copyShadows(false): the kernel's images from their textures before the dispatch
 void beforeDispatch(Builder &b, const Dispatch &d)
 {
     for (uint32_t t : shadowedSlots(b, d))
         b.copy(Rule::ComputeShadowLoad, t, b.facts(t).shadow);
 }
 
-// RawMetalEncode.mm:422-425 copyShadows(true): the images back into their textures, and every pool image stale again
+// encodeRawAttempt's copyShadows(true): the images back into their textures, and every pool image stale again
 void afterDispatch(Builder &b, const Dispatch &d)
 {
     const std::vector<uint32_t> slots = shadowedSlots(b, d);
@@ -155,7 +160,7 @@ void afterDispatch(Builder &b, const Dispatch &d)
         std::fill(b.fresh.begin(), b.fresh.end(), 0);
 }
 
-// RawMetalEncode.mm:591-601 and RawMetalEncodeBlit.mm:168-200 mipPasses: the 2D engine's chain, else a pass a level
+// encodeRawAttempt's OpMipmaps case and mipPasses (RawMetalEncodeBlit.mm): the 2D engine's chain, else a pass a level
 void mipChain(Builder &b, const Transfer &t, uint32_t source)
 {
     const uint32_t tex = t.destination != kNone ? t.destination : t.source;
