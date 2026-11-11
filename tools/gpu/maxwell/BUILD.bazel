@@ -13,6 +13,11 @@ load("//bazel/lint:defs.bzl", "lint_files")
 
 lint_files(exclude = ["opcodes.txt"])
 
+exports_files(
+    ["testdata/image_draw_fragment.hex"],
+    visibility = ["//tools:__subpackages__"],
+)
+
 py_library(
     name = "isa",
     srcs = ["isa.py"],

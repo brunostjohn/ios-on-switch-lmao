@@ -14,7 +14,7 @@ HEADER = Path(__file__).resolve().parents[2] / 'hw_test_app' / 'bench' / 'bench_
 
 class KnownTest(unittest.TestCase):
     def test_header_builds_the_same_words(self) -> None:
-        text = ' '.join(HEADER.read_text().split())
+        text = ''.join(HEADER.read_text().split())
         for line in (
             'return delay | 7u << 5 | 7u << 8;',
             'return control(d0) | control(d1) << 21 | control(d2) << 42;',
@@ -32,7 +32,7 @@ class KnownTest(unittest.TestCase):
             '{2 | 3 << 5 | 5 << 10 | 1 << 14 | 1 << 17, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xf, 0};',
             'kKnownData[4] = {0x3f800000, 0x3f000000, 0x3e800000, 0x40000000};',
         ):
-            self.assertIn(line, text)
+            self.assertIn(''.join(line.split()), text)
 
     def test_instructions_decode_as_meant(self) -> None:
         names = [isa.name(w) for w in isa.instructions(known.KNOWN_CODE)]
