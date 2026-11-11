@@ -106,8 +106,12 @@ Different from the hardware:
 - The SD card stays in U-Boot's 48 MHz mode. The controller reports no SDR104, so SwitchSD's SDR104 bring-up does not
   run.
 - No BPMP firmware runs, so the EMC keeps its rate.
-- No GPU falcon code runs and nothing is drawn. The GMMU has no TLB, so stale-translation bugs don't show, and
-  channels run to completion in runlist order on one PBDMA, without timeslicing or preemption.
+- No GPU falcon code runs and nothing is drawn. The GMMU has no TLB, so stale-translation bugs don't show. A channel's
+  work runs to completion when its GP_PUT is written or the host's 200 us poll comes, in runlist order on one PBDMA,
+  without timeslicing or preemption, so PBDMA and engine status always read idle and a channel waiting on a semaphore
+  acquire looks idle to the kext's hang checks. There is no L2: every GPU access goes to DRAM, so a missing L2 flush or
+  invalidate goes unnoticed (M3's L2-cached target included). An invalid pushbuffer header stops its channel without the
+  PBDMA interrupt the hardware raises.
 - Missing: security engine keys, TSEC, audio, USB, and the Wi-Fi and Bluetooth radios behind their buses.
 
 A boot that gets further here is a hint. A panic here is a lead to check on the device.

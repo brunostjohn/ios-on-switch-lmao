@@ -100,6 +100,8 @@ def main() -> int:
     boot.run_machine(run, inputs, args.timeout, watch)
     wall = time.monotonic() - started
     report.summarize(run, watch.log)
+    if args.until == 'gpu' and not watch.failed:
+        watch.failed = gpucheck.failure((run / 'kernel.log').read_text().splitlines())
     panic = watch.panic or report.panic_text((run / 'ramoops.raw').read_bytes())
     if panic:
         print(f'PANIC after {wall:.0f} s wall ({run}):\n{panic}')
