@@ -69,7 +69,7 @@ static int8_t clip8(int32_t v)
 }
 
 void hevc_fill_setup(const HEVCDecoder *d, nvdec_hevc_pic_s *p, const HEVCSPS *sps, const HEVCPPS *pps,
-                      const HEVCSliceHeader *sh, int cur, int32_t poc, const RefSets *r, int scratch, uint32_t length)
+                     const HEVCSliceHeader *sh, int cur, int32_t poc, const RefSets *r, int scratch, uint32_t length)
 {
     memset(p, 0, sizeof(*p));
     p->stream_len = length;

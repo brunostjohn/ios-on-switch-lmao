@@ -141,8 +141,7 @@ static bool presentPicture(Decoder *d, const H264Picture *picture, CVPixelBuffer
                                  .dst_y = y,
                                  .sample_bytes = picture->wide ? 2 : 1,
                                  .plane = d->firstPlane};
-    if (!x && !y && !d->triPlanar &&
-        width == CVPixelBufferGetWidth(image) && height == CVPixelBufferGetHeight(image) &&
+    if (!x && !y && !d->triPlanar && width == CVPixelBufferGetWidth(image) && height == CVPixelBufferGetHeight(image) &&
         switch_nvdec_can_export(d->client) && !switch_nvdec_export(d->client, &p)) {
         d->exported++;
         return true;
@@ -824,8 +823,8 @@ static void finalize(CMBaseObjectRef ref)
                "%.2f ms out (%u pictures exported as the surface's native NVDEC picture, %u placed by VIC, %u by the "
                "CPU)",
                d->width, d->height, getprogname(), d->frames, avd_emitter_errors(d->emitter),
-               ticksToMs(d->decodeTicks) / d->frames,
-               ticksToMs(d->copyTicks) / d->frames, d->exported, d->presented - d->exported, d->copied);
+               ticksToMs(d->decodeTicks) / d->frames, ticksToMs(d->copyTicks) / d->frames, d->exported,
+               d->presented - d->exported, d->copied);
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
     if (d->frames) {
         const uint64_t *slowest = d->timing.slowest;

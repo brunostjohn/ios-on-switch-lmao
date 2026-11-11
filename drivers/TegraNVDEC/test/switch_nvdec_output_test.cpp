@@ -21,7 +21,9 @@ IOMemoryDescriptor surfaceMemory;
 
 extern "C" bool tegra_vic_present_ready() { return vicReady; }
 extern "C" bool switch_native_surface_gpu_ready() { return gpuReady; }
-extern "C" bool switch_native_surface_display_ready() { return displayReady; }
+extern "C" bool switch_native_surface_display_ready() { return displayReady;
+}
+
 extern "C" int switch_gpu_backing_pending(switch_gpu_backing *backing, uint32_t access, uint32_t *engines,
                                           uint32_t *cpuOwners)
 {

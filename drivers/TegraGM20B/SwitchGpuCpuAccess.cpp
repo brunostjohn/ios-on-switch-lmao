@@ -211,21 +211,24 @@ extern "C" int switch_gpu_backing_wait(switch_gpu_backing *backing, uint32_t acc
 	return result;
 }
 
-extern "C" int switch_gpu_backing_pending(switch_gpu_backing *backing, uint32_t access, uint32_t *engines,
-					  uint32_t *cpu_owners)
+extern "C" int switch_gpu_backing_pending(switch_gpu_backing *backing, uint32_t access,
+					  uint32_t *engines, uint32_t *cpu_owners)
 {
-	if (!backing || !engines || !cpu_owners || !(access & (kRead | kWrite)) || (access & ~(kRead | kWrite)))
+	if (!backing || !engines || !cpu_owners || !(access & (kRead | kWrite)) ||
+	    (access & ~(kRead | kWrite)))
 		return -22;
 	uint32_t found = 0;
 	IOLockLock(backing->lock);
 	switch_gpu_backing_prune_locked(backing);
 	for (uint32_t i = 0; i < backing->access_count; ++i) {
 		const auto &recorded = backing->accesses[i];
-		if (!conflicts(recorded.access, access) || recorded.token.engine >= SWITCH_GPU_ENGINE_COUNT)
+		if (!conflicts(recorded.access, access) ||
+		    recorded.token.engine >= SWITCH_GPU_ENGINE_COUNT)
 			continue;
-		const int status = (recorded.access & kWrite)
-					   ? switch_gpu_backing_token_external_status(&recorded.token)
-					   : switch_gpu_backing_token_status(&recorded.token);
+		const int status =
+			(recorded.access & kWrite)
+				? switch_gpu_backing_token_external_status(&recorded.token)
+				: switch_gpu_backing_token_status(&recorded.token);
 		if (!status)
 			found |= 1u << recorded.token.engine;
 	}

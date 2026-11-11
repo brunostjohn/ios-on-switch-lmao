@@ -203,8 +203,8 @@ int growWords(Submission &work, uint32_t dependencies)
     return 0;
 }
 
-int publish(const TegraNVDECSubmit &submit, Submission &work, const SwitchNVDECCompletion &completion,
-            uint32_t *fence, bool *waitedForRoom)
+int publish(const TegraNVDECSubmit &submit, Submission &work, const SwitchNVDECCompletion &completion, uint32_t *fence,
+            bool *waitedForRoom)
 {
     SwitchHost1xDependencies dependencies;
     Results::Reservation outcome;

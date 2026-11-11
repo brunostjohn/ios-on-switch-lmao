@@ -78,10 +78,12 @@ static void deliver(NVDECListener *l, const uint8_t *bytes)
 static void received(void *context)
 {
     NVDECListener *l = context;
+
     union {
         mach_msg_header_t header;
         uint8_t bytes[sizeof(CompletionMessage) + 128 + sizeof(mach_msg_max_trailer_t)];
     } m;
+
     while (!stopped(l)) {
         if (mach_msg(&m.header, MACH_RCV_MSG | MACH_RCV_TIMEOUT, 0, sizeof(m), l->port, 0, MACH_PORT_NULL) !=
             MACH_MSG_SUCCESS)

@@ -685,8 +685,9 @@ int main(void)
     gPresentOn = gNativeOn = false;
     CFRelease(spec);
     const bool nativeOk = strstr(native, "hardware: hardware decoder") && strstr(native, " 30 out (") &&
-        gNativeExports - exportsBefore == 30 && gRecycled - recycleBefore == 30 &&
-        gPresents == copiesBefore && gWaitRanges - nativeWaits <= 30 && gSurfaceWaits == nativeSurfaceWaits;
+                          gNativeExports - exportsBefore == 30 && gRecycled - recycleBefore == 30 &&
+                          gPresents == copiesBefore && gWaitRanges - nativeWaits <= 30 &&
+                          gSurfaceWaits == nativeSurfaceWaits;
     printf("native: %s (exports %u, recycled %u, pitch copies %d)\n", native,
            gNativeExports - exportsBefore, gRecycled - recycleBefore, gPresents - copiesBefore);
     const bool ok = engineOpens >= 1 && engineSubmits == 30 && !gRefused &&

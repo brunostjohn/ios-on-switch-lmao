@@ -15,15 +15,26 @@ CFDictionaryRef avd_copy_picture_routes(const Decoder *d)
         kEmitter = 9,
         kCount = kEmitter + AVD_ROUTE_COUNT
     };
+
     int32_t counts[kCount] = {(int32_t)d->frames, (int32_t)d->exported, (int32_t)(d->presented - d->exported),
                               (int32_t)d->copied, (int32_t)avd_emitter_errors(d->emitter)};
     avd_alpha_routes(d, &counts[kAlpha]);
     avd_emitter_routes(d->emitter, &counts[kEmitter]);
-    const void *keys[kCount] = {CFSTR("frames"),          CFSTR("exported"),          CFSTR("vic"),
-                                CFSTR("cpu"),             CFSTR("errors"),            CFSTR("first_plane"),
-                                CFSTR("into_target"),     CFSTR("process_alpha_vic"), CFSTR("process_alpha_cpu"),
-                                CFSTR("picture_waits"),   CFSTR("sync_waits"),        CFSTR("dependency_waits"),
-                                CFSTR("room_waits"),      CFSTR("in_flight_max"),     CFSTR("emit_latency_us")};
+    const void *keys[kCount] = {CFSTR("frames"),
+                                CFSTR("exported"),
+                                CFSTR("vic"),
+                                CFSTR("cpu"),
+                                CFSTR("errors"),
+                                CFSTR("first_plane"),
+                                CFSTR("into_target"),
+                                CFSTR("process_alpha_vic"),
+                                CFSTR("process_alpha_cpu"),
+                                CFSTR("picture_waits"),
+                                CFSTR("sync_waits"),
+                                CFSTR("dependency_waits"),
+                                CFSTR("room_waits"),
+                                CFSTR("in_flight_max"),
+                                CFSTR("emit_latency_us")};
     const void *values[kCount];
     for (int i = 0; i < kCount; i++)
         values[i] = CFNumberCreate(kCFAllocatorDefault, kCFNumberSInt32Type, &counts[i]);
@@ -45,8 +56,12 @@ CFDictionaryRef avd_copy_display_buffer_probe(const Decoder *d)
     CFMutableDictionaryRef out = CFDictionaryCreateMutable(kCFAllocatorDefault, 12, &kCFTypeDictionaryKeyCallBacks,
                                                            &kCFTypeDictionaryValueCallBacks);
     for (int mode = 0; out && mode < 2; mode++) {
-        const int32_t v[] = {r[mode].status,          (int32_t)r[mode].layout,      (int32_t)r[mode].max_diff,
-                             (int32_t)r[mode].mean_milli, (int32_t)r[mode].trunc_milli, (int32_t)r[mode].round_milli};
+        const int32_t v[] = {r[mode].status,
+                             (int32_t)r[mode].layout,
+                             (int32_t)r[mode].max_diff,
+                             (int32_t)r[mode].mean_milli,
+                             (int32_t)r[mode].trunc_milli,
+                             (int32_t)r[mode].round_milli};
         os_log(gAVDLog,
                "AVD: display-buffer probe mode %d: status %d layout %d, max %d mean %d.%03d, trunc %d.%d%% "
                "round %d.%d%%",

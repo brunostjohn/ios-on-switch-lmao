@@ -42,8 +42,8 @@ static void readRoutes(VTDecompressionSessionRef session, const Options *options
     VTSessionCopyProperty(session, CFSTR("SwitchPictureRoutes"), NULL, &routes);
     for (unsigned i = 0; i < options->count; i++) {
         CFStringRef key = CFStringCreateWithCString(NULL, options->keys[i], kCFStringEncodingUTF8);
-        CFTypeRef value = routes && CFGetTypeID(routes) == CFDictionaryGetTypeID() ? CFDictionaryGetValue(routes, key)
-                                                                                   : NULL;
+        CFTypeRef value =
+            routes && CFGetTypeID(routes) == CFDictionaryGetTypeID() ? CFDictionaryGetValue(routes, key) : NULL;
         options->values[i] = -1;
         if (value && CFGetTypeID(value) == CFNumberGetTypeID())
             CFNumberGetValue(value, kCFNumberSInt32Type, &options->values[i]);

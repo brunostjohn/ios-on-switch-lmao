@@ -194,8 +194,7 @@ static int allocate(H264Decoder *d, const H264SPS *s)
     d->max_slices = d->width_mbs * d->height_mbs;
     d->slices_off = 256;
     d->bits_off = ALIGN(d->slices_off + (d->max_slices + 1) * 4, 256);
-    return nvdec_ring_alloc(&d->ring, &d->b,
-                            d->bits_off + (d->width_mbs * d->height_mbs >= 3600 ? 0x100000 : 0x40000));
+    return nvdec_ring_alloc(&d->ring, &d->b, d->bits_off + (d->width_mbs * d->height_mbs >= 3600 ? 0x100000 : 0x40000));
 }
 
 // The first SPS a PPS refers to (avcC carries one of each in practice).
@@ -293,8 +292,8 @@ static void finishUnpaired(H264Decoder *d)
     if (!dpb->pairing)
         return;
     dpb->pairing = false;
-    output(d, dpb->pair_idx, d->held_token, dpb->pair_poc, fieldOrder(d, dpb->pair_parity, dpb->pair_poc, dpb->pair_poc),
-           d->held_job, 0, d->held_refused);
+    output(d, dpb->pair_idx, d->held_token, dpb->pair_poc,
+           fieldOrder(d, dpb->pair_parity, dpb->pair_poc, dpb->pair_poc), d->held_job, 0, d->held_refused);
 }
 
 void h264_decoder_flush(H264Decoder *d)
@@ -465,8 +464,8 @@ static int decodePicture(H264Decoder *d, const H264Slice *sh, void *token, bool 
     }
     const int32_t poc = cur.poc[0] < cur.poc[1] ? cur.poc[0] : cur.poc[1];
     const uint8_t first = second ? (uint8_t)(H264_FRAME ^ cur.structure) : H264_FRAME;
-    output(d, (uint8_t)picIdx, second ? d->held_token : token, poc, fieldOrder(d, first, cur.poc[0], cur.poc[1]),
-           fence, second ? d->held_job : 0, false);
+    output(d, (uint8_t)picIdx, second ? d->held_token : token, poc, fieldOrder(d, first, cur.poc[0], cur.poc[1]), fence,
+           second ? d->held_job : 0, false);
     bump(d, reorder ? d->reorder : 0);
     return !second;
 }

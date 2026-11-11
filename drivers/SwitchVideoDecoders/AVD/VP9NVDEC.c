@@ -523,8 +523,7 @@ static int decodeFrame(VP9Decoder *d, const uint8_t *data, size_t size, void *to
     }
     entry(&submit, NVC5B0_EXECUTE, TEGRA_NVDEC_ENTRY_VALUE, 1u << 8 /* AWAKEN */, 0);
     // The CPU wrote the probability table, the tile sizes and the tile data: one range of the input buffer.
-    submit.clean[0] =
-        (TegraNVDECRange){input->handle, kProbOff, (uint32_t)(kBitsOff - kProbOff + tileBytes + 64), 0};
+    submit.clean[0] = (TegraNVDECRange){input->handle, kProbOff, (uint32_t)(kBitsOff - kProbOff + tileBytes + 64), 0};
     submit.clean_count = 1;
     uint32_t fence = 0;
     if (d->b.submit(d->b.ctx, &submit, &fence))

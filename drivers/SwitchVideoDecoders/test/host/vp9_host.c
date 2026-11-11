@@ -35,7 +35,7 @@ typedef struct {
     const VP9TraceFrame *jobFrame[64];  // the trace frame each job decoded, by fence
     bool decoding;                      // inside vp9_decoder_decode, which began after job callStart
     uint32_t callStart;
-    unsigned ownWaits;                  // waits inside a decode call for a job that call submitted
+    unsigned ownWaits;  // waits inside a decode call for a job that call submitted
 } Fake;
 
 static int fakeAlloc(void *ctx, uint64_t size, uint32_t *handle, void **va)
@@ -267,8 +267,10 @@ static int runClip(const char *name, const uint32_t *sizes, int packets, const u
         const uint32_t fc = crcOf(vp9_decoder_frame_context(d), sizeof(VP9FrameContext));
         const uint32_t contexts = crcOf(vp9_decoder_state(d)->contexts, sizeof(vp9_decoder_state(d)->contexts));
         if (fc != t->fc_crc || contexts != t->contexts_crc) {
-            fprintf(stderr, "%s, adapting at the next frame: last context CRC %#010x stored %#010x, libvpx %#010x "
-                    "%#010x\n", name, fc, contexts, t->fc_crc, t->contexts_crc);
+            fprintf(stderr,
+                    "%s, adapting at the next frame: last context CRC %#010x stored %#010x, libvpx %#010x "
+                    "%#010x\n",
+                    name, fc, contexts, t->fc_crc, t->contexts_crc);
             bad++;
         }
     }

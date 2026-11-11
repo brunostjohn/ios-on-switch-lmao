@@ -164,7 +164,8 @@ static int configure(HEVCDecoder *d, const HEVCSPS *sps)
     if (d->b.alloc(d->b.ctx, d->aux_bytes, &d->aux, &va))
         return -3;
     d->aux_va = va;
-    if (nvdec_ring_alloc(&d->ring, &d->b, kBitsOff + ALIGN((uint64_t)sps->width * sps->height / 2 + 0x10000, 0x10000))) {
+    if (nvdec_ring_alloc(&d->ring, &d->b,
+                         kBitsOff + ALIGN((uint64_t)sps->width * sps->height / 2 + 0x10000, 0x10000))) {
         releaseBuffers(d);
         return -3;
     }
@@ -458,8 +459,7 @@ static int decodePicture(HEVCDecoder *d, const Span *seg, int count, const HEVCS
         entry(&submit, NVC5B0_SET_DISPLAY_BUF_CHROMA_OFFSET, TEGRA_NVDEC_ENTRY_RELOC, e->display, d->luma_bytes / 2);
     }
     entry(&submit, NVC5B0_EXECUTE, TEGRA_NVDEC_ENTRY_VALUE, 1u << 8 /* AWAKEN */, 0);
-    submit.clean[0] =
-        (TegraNVDECRange){input->handle, kTilesOff, (uint32_t)(kBitsOff - kTilesOff + length + 64), 0};
+    submit.clean[0] = (TegraNVDECRange){input->handle, kTilesOff, (uint32_t)(kBitsOff - kTilesOff + length + 64), 0};
     submit.clean_count = 1;
     uint32_t fence = 0;
     if (d->b.submit(d->b.ctx, &submit, &fence))

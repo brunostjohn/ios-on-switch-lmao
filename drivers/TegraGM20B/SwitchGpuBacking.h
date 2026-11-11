@@ -225,8 +225,8 @@ void switch_gpu_backing_cpu_cancel(struct switch_gpu_backing *backing, uint32_t 
 int switch_gpu_backing_wait(struct switch_gpu_backing *backing, uint32_t access);
 /* Nothing waits: the engines (bit 1 << SWITCH_GPU_ENGINE_*) with recorded work still pending that a use of `access`
  * would follow, and the CPU owners (readers and writers, an export's read lease among them) holding the backing now. */
-int switch_gpu_backing_pending(struct switch_gpu_backing *backing, uint32_t access, uint32_t *engines,
-			       uint32_t *cpu_owners);
+int switch_gpu_backing_pending(struct switch_gpu_backing *backing, uint32_t access,
+			       uint32_t *engines, uint32_t *cpu_owners);
 
 #ifdef __cplusplus
 }

@@ -1067,24 +1067,34 @@ TEST_F(Backing, PendingNamesTheEnginesAUseWouldFollowAndTheCpuOwners)
 {
 	auto *allocation = backing();
 	uint32_t engines = ~0u, owners = ~0u;
-	ASSERT_EQ(switch_gpu_backing_pending(allocation, SWITCH_GPU_BACKING_WRITE, &engines, &owners), 0);
+	ASSERT_EQ(
+		switch_gpu_backing_pending(allocation, SWITCH_GPU_BACKING_WRITE, &engines, &owners),
+		0);
 	EXPECT_EQ(engines, 0u);
 	EXPECT_EQ(owners, 0u);
 	const auto decode = token(4, 1, SWITCH_GPU_ENGINE_NVDEC);
 	const auto present = token(5, 1, SWITCH_GPU_ENGINE_VIC);
 	ASSERT_EQ(publish(allocation, SWITCH_GPU_BACKING_WRITE, decode), 0);
 	ASSERT_EQ(publish(allocation, SWITCH_GPU_BACKING_READ, present), 0);
-	ASSERT_EQ(switch_gpu_backing_pending(allocation, SWITCH_GPU_BACKING_WRITE, &engines, &owners), 0);
+	ASSERT_EQ(
+		switch_gpu_backing_pending(allocation, SWITCH_GPU_BACKING_WRITE, &engines, &owners),
+		0);
 	EXPECT_EQ(engines, (1u << SWITCH_GPU_ENGINE_NVDEC) | (1u << SWITCH_GPU_ENGINE_VIC));
-	ASSERT_EQ(switch_gpu_backing_pending(allocation, SWITCH_GPU_BACKING_READ, &engines, &owners), 0);
+	ASSERT_EQ(
+		switch_gpu_backing_pending(allocation, SWITCH_GPU_BACKING_READ, &engines, &owners),
+		0);
 	EXPECT_EQ(engines, 1u << SWITCH_GPU_ENGINE_NVDEC) << "a reader follows writers only";
 	complete(decode);
 	complete(present);
 	ASSERT_EQ(switch_gpu_backing_cpu_acquire(allocation, 0, 4096, SWITCH_GPU_BACKING_READ), 0);
-	ASSERT_EQ(switch_gpu_backing_pending(allocation, SWITCH_GPU_BACKING_WRITE, &engines, &owners), 0);
+	ASSERT_EQ(
+		switch_gpu_backing_pending(allocation, SWITCH_GPU_BACKING_WRITE, &engines, &owners),
+		0);
 	EXPECT_EQ(engines, 0u);
 	EXPECT_EQ(owners, 1u);
-	EXPECT_EQ(switch_gpu_backing_pending(allocation, SWITCH_GPU_BACKING_CPU_AVOID_SYNC, &engines, &owners), -22);
+	EXPECT_EQ(switch_gpu_backing_pending(allocation, SWITCH_GPU_BACKING_CPU_AVOID_SYNC,
+					     &engines, &owners),
+		  -22);
 	ASSERT_EQ(switch_gpu_backing_cpu_release(allocation, 0, 4096, SWITCH_GPU_BACKING_READ), 0);
 	switch_gpu_backing_release(allocation);
 }

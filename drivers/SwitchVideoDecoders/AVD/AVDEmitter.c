@@ -84,8 +84,9 @@ static void markDone(AVDEmitter *e, Job *job, OSStatus status)
     job->done = true;
     job->status = status;
     for (Output *out = e->live; out; out = out->liveNext) {
-        bool *done = out->job == job->fence ? &out->jobDone : out->firstFieldJob == job->fence ? &out->firstFieldDone
-                                                                                                 : NULL;
+        bool *done = out->job == job->fence             ? &out->jobDone
+                     : out->firstFieldJob == job->fence ? &out->firstFieldDone
+                                                        : NULL;
         if (done && !*done) {
             *done = true;
             if (status && !out->status) {

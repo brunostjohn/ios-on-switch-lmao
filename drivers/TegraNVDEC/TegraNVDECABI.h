@@ -58,9 +58,9 @@ enum TegraNVDECMethod {
 
 #define SWITCH_NVDEC_FEATURE_NATIVE_OUTPUT (1u << 1)
 #define TEGRA_NVDEC_FEATURE_PRESENT (1u << 0)  // TegraNVDECInfo.features: Present is on (VIC reads block linear)
-#define TEGRA_NVDEC_FEATURE_COMPLETION (1u << 2)
-#define SWITCH_NVDEC_COMPLETION_PORT 0x4e43  // 'NC': IOConnectSetNotificationPort's type for job completions
-#define SWITCH_NVDEC_COMPLETION_ARGS 3       // fence, error_status, mbs_correctly_decoded
+#define TEGRA_NVDEC_FEATURE_COMPLETION     (1u << 2)
+#define SWITCH_NVDEC_COMPLETION_PORT       0x4e43  // 'NC': IOConnectSetNotificationPort's type for job completions
+#define SWITCH_NVDEC_COMPLETION_ARGS       3       // fence, error_status, mbs_correctly_decoded
 
 // Service properties, true for each codec in TegraNVDECInfo.codecs: a process that may not open a client finds them by
 // matching (IOPropertyMatch), which its sandbox does not filter as it filters property reads.

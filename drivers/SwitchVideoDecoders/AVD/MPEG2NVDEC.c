@@ -128,8 +128,7 @@ static int64_t run(MPEG2Decoder *d, const MPEG2Picture *pic, int current, int pa
                       type | (1u << 4) /* GPTIMER_ON */ | (1u << 6) /* ERR_CONCEAL_ON */, 0);
     mpeg_frames_bind(f, &submit, current, past, future);
     const uint32_t input = mpeg_frames_input(f)->handle;
-    mpeg_frames_entry(&submit, NVC5B0_SET_SLICE_OFFSETS_BUF_OFFSET, TEGRA_NVDEC_ENTRY_RELOC, input,
-                      MPEG_FRAMES_TABLES);
+    mpeg_frames_entry(&submit, NVC5B0_SET_SLICE_OFFSETS_BUF_OFFSET, TEGRA_NVDEC_ENTRY_RELOC, input, MPEG_FRAMES_TABLES);
     return mpeg_frames_run(f, &submit, (TegraNVDECRange){input, MPEG_FRAMES_TABLES, (d->slices + 1) * 4, 0});
 }
 
