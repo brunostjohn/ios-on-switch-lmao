@@ -128,6 +128,10 @@ build:remote --remote_upload_local_results=true
 build:remote --remote_timeout=120s
 build:remote --remote_cache_compression
 build:remote --experimental_remote_cache_eviction_retries=5
+# Results shared through a cache must be the same bytes wherever they are made. An incremental crate's rlib depends on
+# the session in its output base (2.3 GiB in each), so every fresh worktree compiled m2v anew, to other bytes, and every
+# shader seed bucket keyed on the tools built from it ran again.
+build:remote --//bazel/rust:incremental=false
 
 # The default preset.
 build --config=debug
