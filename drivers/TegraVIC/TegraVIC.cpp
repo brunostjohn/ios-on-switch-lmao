@@ -74,7 +74,7 @@ constexpr uint32_t kThiMethod0 = 0x40;  // THI METHOD0 (offset) then METHOD1 (da
 constexpr uint64_t kMcPA = 0x70019000;
 constexpr uint32_t kPartition = 23;                           // TEGRA_POWERGATE_VIC
 constexpr unsigned kClock = 178;                              // TEGRA210_CLK_VIC03: CAR bank X bit 18, also its reset
-constexpr uint64_t kArenaBytes = kSwitchVICConfigBytes + 0x3000;
+constexpr uint64_t kArenaBytes = kSwitchVICConfigBytes + 0x3000 + SWITCH_HW_PAGE_SIZE;
 constexpr uint32_t kAsid = TEGRA_SMMU_ASID_VIC;
 
 enum : uint32_t {  // clock and reset controller
@@ -124,6 +124,13 @@ TegraSMMUDomain gDomain;  // directory = page 0, the windows' tables pages 1.., 
 TegraSMMUSpace gMappingSpace;
 uint32_t gMappingBitmap[TegraSMMUSpace::bitmapWords(kMappingBytes)];
 IOLock *gMappingLock;
+// VIC's surface cache fetches a pitch-linear surface in 64-byte x 4-row units and its 2-tap filter reads a row below a
+// scaled source's last, so a job can read up to four rows past a surface's last byte (probe-v1: MC SMMU fault type 6,
+// client 0x6c vicsrd, at 0x4001d400 and 0x4005d400, 0xd400 into mappings of at most 13 pages). Every mapping ends in
+// read-only views of one zero page covering four rows of VIC's widest row (16384 elements of 4 bytes).
+constexpr uint32_t kTailPages = 4 * 16384 * 4 / SWITCH_HW_PAGE_SIZE;
+TegraVICBuffer gTailPage;
+uint64_t gTailPages[kTailPages];
 
 IOLock *gStateLock;  // suspend/resume against jobs
 uint32_t gSyncpt;
@@ -345,7 +352,14 @@ bool allocate()
     }
     memcpy(gFirmware.va, tegra_vic_fw_start, gImage.size);
     switch_dcache_clean(gFirmware.va, gImage.size);
-    return tegra_vic_buffer(kSwitchVICConfigBytes, &gConfig) == 0 && tegra_vic_buffer(0x3000, &gFilter) == 0;
+    if (tegra_vic_buffer(kSwitchVICConfigBytes, &gConfig) || tegra_vic_buffer(0x3000, &gFilter) ||
+        tegra_vic_buffer(SWITCH_HW_PAGE_SIZE, &gTailPage))
+        return false;
+    memset(gTailPage.va, 0, SWITCH_HW_PAGE_SIZE);
+    switch_dcache_clean(gTailPage.va, SWITCH_HW_PAGE_SIZE);
+    for (auto &page : gTailPages)
+        page = gTailPage.pa;
+    return true;
 }
 
 void giveBack()
@@ -469,17 +483,19 @@ extern "C" uint64_t tegra_vic_filter_address(void)
 
 extern "C" uint64_t switch_vic_mapping_create(const uint64_t *pages, uint32_t count, bool writable)
 {
-    if (!gUp || !pages || !count || count > kMappingBytes / SWITCH_HW_PAGE_SIZE)
+    if (!gUp || !pages || !count || count > kMappingBytes / SWITCH_HW_PAGE_SIZE - kTailPages)
         return 0;
     for (uint32_t i = 0; i < count; ++i) {
         if ((pages[i] & (SWITCH_HW_PAGE_SIZE - 1)) || pages[i] >= (1ULL << 34))
             return 0;
     }
-    const uint64_t bytes = static_cast<uint64_t>(count) * SWITCH_HW_PAGE_SIZE;
+    const uint64_t bytes = static_cast<uint64_t>(count + kTailPages) * SWITCH_HW_PAGE_SIZE;
     IOLockLock(gMappingLock);
     uint64_t address = gMappingSpace.alloc(bytes);
-    if (address && !gDomain.map(address, pages, count, writable)) {
-        gDomain.unmap(address, count);
+    if (address && (!gDomain.map(address, pages, count, writable) ||
+                    !gDomain.map(address + static_cast<uint64_t>(count) * SWITCH_HW_PAGE_SIZE, gTailPages, kTailPages,
+                                 false))) {
+        gDomain.unmap(address, count + kTailPages);
         gMappingSpace.release(address, bytes);
         address = 0;
     }
@@ -495,8 +511,8 @@ extern "C" uint64_t switch_vic_mapping_create(const uint64_t *pages, uint32_t co
 extern "C" void switch_vic_mapping_destroy(uint64_t address, uint32_t count)
 {
     IOLockLock(gMappingLock);
-    if (gMappingSpace.release(address, static_cast<uint64_t>(count) * SWITCH_HW_PAGE_SIZE)) {
-        gDomain.unmap(address, count);
+    if (gMappingSpace.release(address, static_cast<uint64_t>(count + kTailPages) * SWITCH_HW_PAGE_SIZE)) {
+        gDomain.unmap(address, count + kTailPages);
         uintptr_t low = 0, high = 0;
         if (gDomain.takeDirty(&low, &high)) {
             switch_dcache_clean(reinterpret_cast<void *>(low), high - low);
