@@ -379,8 +379,6 @@ extern "C" int tegra_nvenc_publish(void)
     service->setProperty("NativeSandboxGrantProcess",
                          "mediaserverd,videocodecd,replayd,avconferenced,cameracaptured,com.apple.WebKit");
     service->setProperty("TegraNVENCABIVersion", (unsigned long long)TEGRA_NVENC_ABI_VERSION, 32);
-    // Every process registers its encoders from this, without a connection of its own.
-    service->setProperty("TegraNVENCCodecs", (unsigned long long)kTegraNVENCCodecs, 32);
     if (!service->attach(resources)) {
         service->release();
         IOLog("TegraNVENC: E3 FAIL could not attach the service\n");

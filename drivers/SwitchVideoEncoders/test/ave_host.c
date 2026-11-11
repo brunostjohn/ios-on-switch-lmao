@@ -45,10 +45,6 @@ bool nvenc_service_present(void)
     return true;
 }
 
-uint32_t nvenc_service_codecs(void)
-{
-    return 1u << TEGRA_NVENC_CODEC_H264;
-}
 
 NVENCClient *nvenc_open(int *error)
 {

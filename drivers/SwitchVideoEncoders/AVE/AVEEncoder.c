@@ -486,6 +486,9 @@ static OSStatus startSession(VTVideoEncoderRef ref, VTVideoEncoderSession sessio
     } else if (!(e->client = nvenc_open(&error)) || !nvenc_info(e->client, &e->info)) {
         switch_refusal("AVE", "TegraNVENC refused the process", "error %#x: no H.264 encoder here", error);
         status = kVTCouldNotFindVideoEncoderErr;
+    } else if (e->codec == kCMVideoCodecType_HEVC && !(e->info.codecs & 1u << TEGRA_NVENC_CODEC_H265)) {
+        switch_refusal("AVE", "this kernel's NVENC has no H.265", "no HEVC encoder here");
+        status = kVTCouldNotFindVideoEncoderErr;
     }
     if (!status) {
         const int32_t formats[] = {kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange,
@@ -832,9 +835,8 @@ void H264H7EncoderRegister(void)
         os_log_error(gLog, "AVE: VTRegisterVideoEncoderWithInfo('avc1') failed: %d", (int)status);
     // Apple's own HEVC registration (ave.videoencoder AVE_Plugin_HEVC_Register, 24B119 0x2c46d3e3c): its encoder ID
     // and the hardware flag; VideoToolbox's 'muxa', depth and disparity wrappers take whatever 'hvc1' is registered.
-    if (nvenc_service_codecs() & 1u << TEGRA_NVENC_CODEC_H265) {
-        status = registerEncoder(kCMVideoCodecType_HEVC, CFSTR(AVE_HEVC_ENCODER_ID), CFSTR("Apple HEVC (HW)"));
-        if (status)
-            os_log_error(gLog, "AVE: VTRegisterVideoEncoderWithInfo('hvc1') failed: %d", (int)status);
-    }
+    // A kernel without H.265 refuses the session at StartSession (TegraNVENCInfo.codecs).
+    status = registerEncoder(kCMVideoCodecType_HEVC, CFSTR(AVE_HEVC_ENCODER_ID), CFSTR("Apple HEVC (HW)"));
+    if (status)
+        os_log_error(gLog, "AVE: VTRegisterVideoEncoderWithInfo('hvc1') failed: %d", (int)status);
 }

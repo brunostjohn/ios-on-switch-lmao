@@ -10,7 +10,6 @@
 typedef struct NVENCClient NVENCClient;
 
 bool nvenc_service_present(void);
-uint32_t nvenc_service_codecs(void);  // TegraNVENCInfo.codecs, from the service's registry entry
 NVENCClient *nvenc_open(int *error);  // NULL with the IOReturn when the service is absent or refuses this process
 void nvenc_close(NVENCClient *client);
 
