@@ -73,6 +73,10 @@ plist() {
 </plist>
 EOF
     launchctl bootout "gui/$uid/com.brunostjohn.switch.bazel-$role" 2>/dev/null || true
+    # bootout returns before the job is gone, and bootstrapping it again before then fails.
+    while launchctl print "gui/$uid/com.brunostjohn.switch.bazel-$role" >/dev/null 2>&1; do
+        sleep 0.2
+    done
     launchctl bootstrap "gui/$uid" "$agents/com.brunostjohn.switch.bazel-$role.plist"
 }
 
