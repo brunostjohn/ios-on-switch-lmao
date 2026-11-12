@@ -7,7 +7,8 @@
 //  - the scissor and the viewport bound it in whole tiles, each rounded out to the tiles it touches (a primitive outside the
 //    scissor in a tile the scissor touches reaches that tile); an empty scissor is tile (0, 0), and so is one wholly outside
 //    the viewport;
-//  - every tile when another colour attachment clears and stores, none in a pass without a draw.
+//  - every tile when another colour attachment clears and stores, none in a pass without a draw call unless a turned colour
+//    attachment clears and stores (raw_area_load.h).
 // The raw path draws the pass's geometry again before the pass (CommandBuffer::reach) into an R8Uint mask of a texel a tile:
 // each draw's own vertex program and bindings, the pack's turn_reach_frag writing 1, conservative raster (NVB197
 // SET_CONSERVATIVE_RASTER), the viewport scaled to the mask, its clip rectangle and the scissor rounded out to tiles. A pass

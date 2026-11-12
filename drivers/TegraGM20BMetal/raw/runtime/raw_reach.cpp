@@ -10,6 +10,7 @@
 #include <os/log.h>
 
 #include "../../../../kits/SwitchGM20B/SwitchGM20B3D.h"
+#include "raw_area_load.h"
 #include "raw_blend_kill.h"
 #include "raw_clear.h"
 #include "raw_gpu.h"
@@ -142,7 +143,7 @@ bool CommandBuffer::reach(const PassDesc &pass, uint32_t width, uint32_t height,
                           const char **why)
 {
     out = {};
-    if (!draws.any())
+    if (!draws.any() && !runsWithoutDraws(pass))
         return true;
     const bool every = reachesEveryTile(pass);
     const uint32_t step = draws.atFrameResolution() ? 1 : reachStep(width, height);

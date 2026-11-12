@@ -4,6 +4,8 @@
 
 #include <algorithm>
 
+#include "raw_area_load.h"
+
 namespace raw {
 namespace {
 
@@ -116,8 +118,10 @@ bool TurnedPass::begin(CommandBuffer &rc, PassDesc &p, DrawReplay &replay, const
     p.width = area.x1;
     p.height = area.y1;
     planeArea_ = rot_.rect(area);
-    const bool draws = replay.any();
-    if (loadsRotation4(p) && !rc.reach(p, area.x1, area.y1, replay, reach_, why))
+    const bool runs = replay.any() || runsWithoutDraws(p);
+    p.drawn |= runs;
+    if ((loadsRotation4(p) || loadsPastArea(p, area.x1, area.y1)) &&
+        !rc.reach(p, area.x1, area.y1, replay, reach_, why))
         return false;
     const TurnMap intoPlane = frameToPlane(rot_), outOfPlane = planeToFrame(rot_);
     for (uint32_t j = 0; j < p.count && j < 8; j++) {
@@ -126,6 +130,8 @@ bool TurnedPass::begin(CommandBuffer &rc, PassDesc &p, DrawReplay &replay, const
         if (!t)
             continue;
         const bool loaded = a.load == ColorAttachment::Load;
+        if (loaded && !loadPastArea(rc, *t, area.x1, area.y1, reach_, kTurnTag + j, why))
+            return false;
         if (t->rotation && sameFrame(quarterFrame(*t), rot_)) {
             if (t->rotation != 4)
                 continue;
@@ -138,7 +144,7 @@ bool TurnedPass::begin(CommandBuffer &rc, PassDesc &p, DrawReplay &replay, const
         }
         // a stored Clear reaches past the render area (RenderEncoder::clears), where a stand-in of the pass's plane may not:
         // that reach is cleared by a pass of its own first, the stand-in then cleared over the render area
-        if (a.load == ColorAttachment::Clear && a.store && !t->memoryless && !clearAhead(rc, a, area, draws, why))
+        if (a.load == ColorAttachment::Clear && a.store && !t->memoryless && !clearAhead(rc, a, area, runs, why))
             return false;
         if (t->rotation) {
             const Rotation own = frameOf(*t);
