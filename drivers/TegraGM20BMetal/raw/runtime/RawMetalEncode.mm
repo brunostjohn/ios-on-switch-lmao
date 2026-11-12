@@ -686,10 +686,10 @@ __attribute__((objc_externally_retained)) static bool encodeRawAttempt(RMCommand
             break;
         }
         case OpSignalEvent:
-            computeUnit = false;
-            rc->endPredicationUnit();
             if (!isInlineSignal(cb, at))
                 break;
+            computeUnit = false;
+            rc->endPredicationUnit();
             xrPlanes.flush();
             if (!releaseInlineSignal(cb, at, rc)) {
                 encoder = to;
