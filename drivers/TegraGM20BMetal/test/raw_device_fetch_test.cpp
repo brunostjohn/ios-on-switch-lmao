@@ -95,15 +95,16 @@ protected:
         d.why = why ? why : "";
         e->end();
         d.draws = cb->draws;
-        d.interlocked = k.interlocked - interlocked;
-        d.split = k.sequential - split;
-        d.triangles = k.sequentialTriangles - triangles;
         if (d.ok) {
             uint32_t seqno = 0;
             EXPECT_TRUE(cb->commit(seqno));
         } else {
             cb->abandon();
         }
+        // the debug per-draw counts are the command buffer's until its commit folds them into the device's
+        d.interlocked = k.interlocked - interlocked;
+        d.split = k.sequential - split;
+        d.triangles = k.sequentialTriangles - triangles;
         return d;
     }
 

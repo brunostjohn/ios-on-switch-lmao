@@ -4480,7 +4480,7 @@ bool RenderEncoder::executeSlots(const IcbExecute &x, const char **why)
     }
     called_ = true;
     indirectGeometry_ = true;
-    const bool prepared = prepare(form, x.primitive, 0, 0, UINT32_MAX, 0, x.indexed, why);
+    const bool prepared = prepare(form, x.primitive, 0, 0, UINT32_MAX, x.indexed, why);
     indirectGeometry_ = false;
     if (!prepared)
         return false;
