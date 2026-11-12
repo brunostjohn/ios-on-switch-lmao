@@ -56,6 +56,7 @@
 #endif
 #include "raw_descriptors.h"
 #include "raw_encode_profile.h"
+#include "raw_use_memo.h"
 #include "raw_transfer.h"
 #include "raw_fetch_order.h"
 #include "raw_kernel.h"
@@ -1008,6 +1009,7 @@ private:
     std::vector<SetUse> memberUses_;
     uint32_t memberRemovals_ = 0;
     bool memberHostWritten_ = false;
+    UseMemo named_;  // (raw_use_memo.h)
     JobVisibility visibility_ = JobVisibility::Legacy;
     bool externalWrites_ = false;
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG

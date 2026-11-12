@@ -176,6 +176,7 @@ metal_plugin(
     cc_srcs = [
         GM20B_METAL + ":raw/runtime/raw_gpu.cpp",
         GM20B_METAL + ":raw/runtime/raw_draw_bands.cpp",
+        GM20B_METAL + ":raw/runtime/raw_job_uses.cpp",
         GM20B_METAL + ":raw/runtime/raw_transfer.cpp",
         GM20B_METAL + ":raw/runtime/raw_split.cpp",
         GM20B_METAL + ":raw/runtime/raw_variants.cpp",

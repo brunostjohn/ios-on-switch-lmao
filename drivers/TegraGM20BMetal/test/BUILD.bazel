@@ -25,8 +25,11 @@
 #   raw_linked_source_test  how a render pipeline's linked functions reach m2v (frontend, bridge, its C and Rust forms)
 #                     and how the raw path's twin and record key take them
 #   raw_encode_profile_test  raw/runtime/raw_encode_profile.h: a debug build's encode spans count only inside an
-#                     encode, each part's time holds its nested parts', and the totals fold profiles and keep the longest
+#                     encode, each part's time holds its nested parts' and its self time leaves them out, events and
+#                     locks count in the encoding thread's profile, and the totals fold profiles and keep the longest
 #                     prepare
+#   raw_use_memo_test raw/runtime/raw_use_memo.h: a resource named again at its address and access is answered, any
+#                     other name or one evicted by another is not
 #   raw_follow_test   raw/runtime/raw_follow.h: the raw path's threads take a fixed-priority committer's policy, never a
 #                     lower one, and keep their own for a timeshare committer
 #   raw_slm_test      raw/runtime/raw_slm.h: the shader local memory a program's header or a kernel's QMD asks of a
@@ -165,6 +168,16 @@ host_test(
     srcs = [
         "raw_encode_profile_test.cpp",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_encode_profile.h",
+    ],
+    cxx_std = "c++17",
+    gtest_main = False,
+)
+
+host_test(
+    name = "raw_use_memo_test",
+    srcs = [
+        "raw_use_memo_test.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_use_memo.h",
     ],
     cxx_std = "c++17",
     gtest_main = False,
