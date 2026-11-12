@@ -447,8 +447,7 @@ void Device::emitContext(Push &p)
 {
     const uint32_t initCount = uint32_t(pack_.bytes(PackInit) / sizeof(PackInitMethod));
     const PackInitMethod *im = pack_.section<PackInitMethod>(PackInit);
-    InitAddresses here = {heap_.va, zero_.va, root_.va, tic_.va, tsc_.va, kTicCount - 1, kTscCount - 1};
-    here.tickets = tickets_.va;
+    const InitAddresses here{heap_.va, zero_.va, root_.va, tic_.va, tsc_.va, kTicCount - 1, kTscCount - 1, tickets_.va};
     for (uint32_t i = 0; i < initCount; i++) {
         const uint32_t d = relocated(im[i], here);
         p.m(im[i].mthd, d, im[i].subc);

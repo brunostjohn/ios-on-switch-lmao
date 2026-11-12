@@ -125,9 +125,8 @@ TEST(RawPack, TheContextInitPushesThisProcesssAddressesWhateverThePackHolds)
                                  .c_str(),
                              0, err))
         << err;
-    raw::InitAddresses here = {
-        0x10'0000'1000, 0x20'0000'2000, 0x30'0000'3000, 0x40'0000'4000, 0x50'0000'5000, 8191, 1023};
-    here.tickets = 0x60'0000'6000;
+    const raw::InitAddresses here = {0x10'0000'1000, 0x20'0000'2000, 0x30'0000'3000, 0x40'0000'4000,
+                                     0x50'0000'5000, 8191,           1023,           0x60'0000'6000};
     const std::vector<uint32_t> pushed = pushedInit(zero, here);
     EXPECT_EQ(pushed, pushedInit(garbage, here));
     ASSERT_EQ(pushed.size(), 2u * SWITCH_GM20B_CONTEXT_METHODS);

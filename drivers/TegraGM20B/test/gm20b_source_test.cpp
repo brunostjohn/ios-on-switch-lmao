@@ -596,9 +596,8 @@ TEST(GM20BRawReopenSource, ReopenKeepsTheHeapAndReplaysTheContext)
 	const std::string context = flat(definition(raw, "void Device::emitContext(Push &p)"));
 	// the init template relocated to this device's own addresses (raw_pack.cpp relocated, shared with the runtime's capture),
 	// the interlock's ticket buffer among them
-	EXPECT_THAT(context, HasSubstr("InitAddresses here = {heap_.va, zero_.va, root_.va, "
-				       "tic_.va, tsc_.va, kTicCount - 1, kTscCount - 1};"));
-	EXPECT_THAT(context, HasSubstr("here.tickets = tickets_.va;"));
+	EXPECT_THAT(context, HasSubstr("const InitAddresses here{heap_.va, zero_.va, root_.va, "
+				       "tic_.va, tsc_.va, kTicCount - 1, kTscCount - 1, tickets_.va};"));
 	EXPECT_THAT(context, HasSubstr("relocated(im[i], here)"));
 	const std::string relocated = flat(
 		definition(SourceText("../../TegraGM20BMetal/raw/runtime/raw_pack.cpp"),
