@@ -11,4 +11,10 @@ namespace raw {
 
 constexpr uint32_t kProvenChipFacts = 0;
 
+// The colour ROP writes a zeta's memory (PTE kinds ZF32_X24S8 and S8) as a colour target of its texel size, and the zeta's
+// depth and stencil tests and the texture unit then read what it wrote: the one-draw stencil route (raw_zeta_colour.h).
+// Set by hand from SwitchHWTest gpu.raw.zeta_colour: every colour_* count 0, colour_draws above 0, reopens=0, and no
+// "fault", "ROP", "LTC" or "TRAP" kernel line in its window. Until then stencil planes take the eight-draw route.
+constexpr bool kColourRopWritesZeta = false;
+
 }  // namespace raw

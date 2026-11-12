@@ -93,3 +93,44 @@ fragment void stencil_bits_ms_d32fs8_max_frag(Out in [[stage_in]], Samples z [[t
     const uint2 at = source(in.position, b);
     keep(s.read(at, picked(z, at, b.samples, true)).r, b);
 }
+
+// The one-draw route (raw/runtime/raw_zeta_colour.h): the target is the zeta's memory as a colour image of its texel, RG32Uint
+// over Depth32Float_Stencil8 (R its depth's bits, G its stencil) and R8Uint over Stencil8. From one sample the whole texel is
+// written; a multisampled Depth32Float_Stencil8 state writes G alone (its target's write mask), the depth word kept.
+fragment uint4 stencil_bits_s8_colour_frag(Out in [[stage_in]], Texels s [[texture(0)]], constant Bits &b [[buffer(0)]])
+{
+    return uint4(s.read(source(in.position, b)).r, 0, 0, 0);
+}
+
+fragment uint4 stencil_bits_d32fs8_colour_frag(Out in [[stage_in]], Texels z [[texture(0)]], Texels s [[texture(1)]],
+                                               constant Bits &b [[buffer(0)]])
+{
+    const uint2 at = source(in.position, b);
+    return uint4(z.read(at).r, s.read(at).r, 0, 0);
+}
+
+fragment uint4 stencil_bits_ms_s8_colour_frag(Out in [[stage_in]], Samples s [[texture(0)]],
+                                              constant Bits &b [[buffer(0)]])
+{
+    return uint4(s.read(source(in.position, b), b.sample).r, 0, 0, 0);
+}
+
+fragment uint4 stencil_bits_ms_d32fs8_colour_frag(Out in [[stage_in]], Samples s [[texture(0)]],
+                                                  constant Bits &b [[buffer(0)]])
+{
+    return uint4(0, s.read(source(in.position, b), b.sample).r, 0, 0);
+}
+
+fragment uint4 stencil_bits_ms_d32fs8_min_colour_frag(Out in [[stage_in]], Samples z [[texture(0)]],
+                                                      Samples s [[texture(1)]], constant Bits &b [[buffer(0)]])
+{
+    const uint2 at = source(in.position, b);
+    return uint4(0, s.read(at, picked(z, at, b.samples, false)).r, 0, 0);
+}
+
+fragment uint4 stencil_bits_ms_d32fs8_max_colour_frag(Out in [[stage_in]], Samples z [[texture(0)]],
+                                                      Samples s [[texture(1)]], constant Bits &b [[buffer(0)]])
+{
+    const uint2 at = source(in.position, b);
+    return uint4(0, s.read(at, picked(z, at, b.samples, true)).r, 0, 0);
+}

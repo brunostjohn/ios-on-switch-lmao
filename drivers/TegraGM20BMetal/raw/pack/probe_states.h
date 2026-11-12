@@ -385,8 +385,16 @@ inline std::vector<std::string> corpusLines(NSString *text, bool own)
                               "260/260 | v stencil_bits_vert | f stencil_bits_ms_d32fs8_min_frag",
                               "260/260 | v stencil_bits_vert | f stencil_bits_ms_d32fs8_max_frag"})
         lines.push_back(std::string("@O R ok=1 label=raw.own samples=1 topo=0 ds=") + depth);
+    // and the one-draw stencil route's (runtime/raw_zeta_colour.h): a multisampled Depth32Float_Stencil8 source's through
+    // write mask G alone (MTLColorWriteMaskGreen), its target's depth word kept
     for (const char *out : {"c0=115:15:0:1:0:0:1:0:0 | v two_plane_cover | f two_plane_load",
-                            "c0=10:15:0:1:0:0:1:0:0 c1=30:15:0:1:0:0:1:0:0 | v two_plane_cover | f two_plane_store"})
+                            "c0=10:15:0:1:0:0:1:0:0 c1=30:15:0:1:0:0:1:0:0 | v two_plane_cover | f two_plane_store",
+                            "c0=13:15:0:1:0:0:1:0:0 | v stencil_bits_vert | f stencil_bits_s8_colour_frag",
+                            "c0=103:15:0:1:0:0:1:0:0 | v stencil_bits_vert | f stencil_bits_d32fs8_colour_frag",
+                            "c0=13:15:0:1:0:0:1:0:0 | v stencil_bits_vert | f stencil_bits_ms_s8_colour_frag",
+                            "c0=103:4:0:1:0:0:1:0:0 | v stencil_bits_vert | f stencil_bits_ms_d32fs8_colour_frag",
+                            "c0=103:4:0:1:0:0:1:0:0 | v stencil_bits_vert | f stencil_bits_ms_d32fs8_min_colour_frag",
+                            "c0=103:4:0:1:0:0:1:0:0 | v stencil_bits_vert | f stencil_bits_ms_d32fs8_max_colour_frag"})
         lines.push_back(std::string("@O R ok=1 label=raw.own samples=1 topo=0 ds=0/0 ") + out);
     return lines;
 }

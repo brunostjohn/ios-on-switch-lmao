@@ -24,6 +24,21 @@ struct ColorTargetDesc {
     uint64_t layerBytes = 0;  // the image's layer size (block-linear: ARRAY_PITCH)
 };
 
+// Texture `t` (raw_gpu.h, or any type of its fields) of render format `rtFormat` and `rows` rows as a target
+template <typename Texture> ColorTargetDesc colorTargetDesc(const Texture &t, uint32_t rtFormat, uint32_t rows)
+{
+    ColorTargetDesc d;
+    d.va = t.va;
+    d.pitch = t.pitch;
+    d.height = rows;
+    d.bpp = t.bpp;
+    d.rtFormat = rtFormat;
+    d.blockLinear = t.blockLinear;
+    d.blockHeight = t.blockHeight;
+    d.layerBytes = t.layerBytes;
+    return d;
+}
+
 inline switch_gm20b_target kitTarget(const ColorTargetDesc &d)
 {
     switch_gm20b_target k = {};

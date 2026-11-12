@@ -5594,15 +5594,8 @@ static void clearRect(Push &p, uint32_t x0, uint32_t y0, uint32_t x1, uint32_t y
 
 static void colorTarget(Push &p, uint32_t index, const Texture &t)
 {
-    ColorTargetDesc d;
-    d.va = t.va;
-    d.pitch = t.pitch;
-    d.height = t.import && t.import->kind == TGM_LAYOUT_KIND ? t.import->layout.height : sampleRows(t);
-    d.bpp = t.bpp;
-    d.rtFormat = formatInfo(t.format)->rt;
-    d.blockLinear = t.blockLinear;
-    d.blockHeight = t.blockHeight;
-    d.layerBytes = t.layerBytes;
+    const uint32_t rows = t.import && t.import->kind == TGM_LAYOUT_KIND ? t.import->layout.height : sampleRows(t);
+    const ColorTargetDesc d = colorTargetDesc(t, formatInfo(t.format)->rt, rows);
     const switch_gm20b_target k = kitTarget(d);
     kit(p, switch_gm20b_color_target, index, &k, t.comptags);
 }

@@ -961,9 +961,18 @@ public:
     // `map` or its `pick` sample; `view` the stencil header's texture, read until e's end()
     bool stencilBits(RenderEncoder &e, const Texture &src, Texture &view, uint32_t format, const TurnMap &map,
                      StencilSample pick, const char **why, bool zeroFirst = false);
+    // `src`'s stencil bound for a stencil program into a zeta of `format`: its stencil header's texture `view` at 0, or with
+    // `depth` `src` itself at 0 (its depth, read as its float's bits) and `view` at 1; `view` read until e's end()
+    bool bindStencilSource(RenderEncoder &e, const Texture &src, Texture &view, uint32_t format, bool depth,
+                           const char **why);
     // A multisampled zeta's stencil resolve into one-sample `into` of its format, over (0, 0, width, height): a pass of its own
     bool stencilResolve(Texture &into, const Texture &from, StencilSample pick, uint32_t width, uint32_t height,
                         const char **why);
+    // raw_zeta_colour.h: whether one draw of the colour ROP writes `into`'s stencil from `src` (its `pick` sample), and that
+    // draw's pass: each texel from `src`'s at `map`, or its pick sample's stencil, over (0, 0, width, height) (0: all)
+    bool zetaColourTakes(const Texture &into, const Texture &src, StencilSample pick);
+    bool zetaColour(const Texture &into, const Texture &src, StencilSample pick, const TurnMap &map, uint32_t width,
+                    uint32_t height, const char **why);
     BlitEncoder *blit();
     // CPU lines the GPU reads in this submission (CPU-written cached memory): cleaned to memory before it is submitted.
     // `invalidate`: also dropped from the CPU's caches (memory the GPU writes, so no dirty line lands on it later).
@@ -1193,7 +1202,10 @@ public:
     // The pack's state that draws a chain level of `format` from the level above (raw_mip.h mipState), null if the pack has none
     Pipeline *mipPipeline(uint32_t format);
     Pipeline *depthResolvePipeline(uint32_t format, uint32_t filter);  // raw_samples.h depthResolveState
-    Pipeline *stencilBitsPipeline(uint32_t format, uint32_t samples, StencilSample pick);  // raw_stencil_bits.h
+    Pipeline *stencilBitsPipeline(uint32_t format, uint32_t samples, StencilSample pick);    // raw_stencil_bits.h
+    Pipeline *stencilColourPipeline(uint32_t format, uint32_t samples, StencilSample pick);  // raw_zeta_colour.h
+    // raw_zeta_colour.h: the chip fact, or a debug build's probe asking for the route
+    bool zetaColourTaken() const;
     // raw_reach.h: `pl` drawing its geometry into a reach target; null: *why
     Pipeline *reachTwin(Pipeline &pl, const char **why);
     // s's header under address map `map` (Texture::addressMap), made now if it is not yet
@@ -1581,6 +1593,9 @@ public:
         std::atomic<uint64_t> blendKillStates{0}, blendKillBinds{0};
         // passes given a zcull region, and the regions a draw's state invalidated (raw_zcull.h)
         std::atomic<uint64_t> zcullPasses{0}, zcullInvalidations{0};
+        // stencil plane draws encoded: the eight-draw route's (raw_stencil_bits.h) and the one-draw route's
+        // (raw_zeta_colour.h)
+        std::atomic<uint64_t> stencilBitDraws{0}, zetaColourDraws{0};
         std::atomic<uint64_t> splitPrologues{0};  // split draws' prologue launches (raw_split.cpp)
         std::atomic<uint64_t> reopenTicks{0};     // the last reopen that made a channel, mach_absolute_time
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
@@ -1605,6 +1620,8 @@ public:
     std::atomic<bool> probeMipCandidates{false};
     // memoryless zetas the copy engine fills and drains for the shader's depth tests take their compressible kind (raw_comp.h)
     std::atomic<bool> probeZetaKinds{false};
+    // stencil planes take the one-draw route (raw_zeta_colour.h) where it writes them, whatever kColourRopWritesZeta says
+    std::atomic<bool> probeZetaColour{false};
     std::atomic<uint64_t> probeEmitted{0};  // draws that emitted them since they were armed
     std::mutex probeLock;
     std::shared_ptr<const ProbeWords> probeWords;

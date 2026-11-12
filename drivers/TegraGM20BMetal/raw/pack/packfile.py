@@ -137,7 +137,11 @@ def key_hash(rec: dict) -> int:
         (
             'stencil_bits',
             'stencil_bits_vert',
-            ('s8_frag', 'd32fs8_frag', 'ms_s8_frag', 'ms_d32fs8_frag', 'ms_d32fs8_min_frag', 'ms_d32fs8_max_frag'),
+            tuple(
+                f'{form}{route}_frag'
+                for form in ('s8', 'd32fs8', 'ms_s8', 'ms_d32fs8', 'ms_d32fs8_min', 'ms_d32fs8_max')
+                for route in ('', '_colour')
+            ),
         ),
         ('xr', 'xr_vert', ('bgr10_frag', 'bgra10_frag', 'planes_frag', 'two_planes_frag')),
         ('two_plane', 'two_plane_cover', ('load', 'store')),

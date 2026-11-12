@@ -9,7 +9,8 @@
 //    first such in sample order) and, where the depth is not resolved, the last sample's (what an M-series Mac's GPU
 //    resolves: hw_test_app gpu.raw.stored_msaa on the host).
 // The source's stencil is read through the header NVK samples a stencil aspect through (kStencilViews), a multisampled one's
-// samples alike (the header's other words are the zeta's own).
+// samples alike (the header's other words are the zeta's own). A plane raw_zeta_colour.h's one draw takes is written by it
+// instead.
 #pragma once
 #include <cstdint>
 #include "raw_turn_copy.h"
