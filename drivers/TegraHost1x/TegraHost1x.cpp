@@ -13,7 +13,7 @@
 #include <IOKit/IOLib.h>
 #include <IOKit/IOLocks.h>
 #include <IOKit/IOBufferMemoryDescriptor.h>
-#include <IOKit/IOInterruptEventSource.h>
+#include <IOKit/IOFilterInterruptEventSource.h>
 #include <IOKit/IOWorkLoop.h>
 #include "TegraHost1x.h"
 #include "SwitchHost1xChannels.h"
@@ -56,7 +56,7 @@ enum : uint32_t {  // sync unit, relative to kSyncOffset
 
 volatile uint8_t *gHost, *gMc;
 IOWorkLoop *gLoop;
-IOInterruptEventSource *gIrq;
+IOFilterInterruptEventSource *gIrq;
 IOLock *gSubmitLock;  // every channel's push buffer and arena, and suspend/resume
 
 uint32_t gNextSyncpt = kFirstOwn;
@@ -78,6 +78,16 @@ inline void syncWrite(uint32_t o, uint32_t v)
 void interruptOccurred(OSObject *, IOInterruptEventSource *, int)
 {
     switch_host1x_intr_handle();
+}
+
+// Primary interrupt context: the filter waiters, then true, which masks the line until the action has acked and
+// re-armed (a passed threshold stays disabled until re-armed, as in mainline intr.c). The action owns the status and
+// enable writes because the armed set they are masked with is its lock's.
+// NOLINTNEXTLINE(misc-const-correctness): IOFilterInterruptEventSource::Filter's signature
+bool syncptFilter(OSObject *, IOFilterInterruptEventSource *)
+{
+    switch_host1x_intr_filter();
+    return true;
 }
 
 int fail(const char *why, uint32_t value)
@@ -128,7 +138,9 @@ bool attachInterrupt()
 {
     gLoop = IOWorkLoop::workLoop();
     IOService *nub = switch_interrupt_nub(kIntid, false);
-    gIrq = gLoop && nub ? IOInterruptEventSource::interruptEventSource(gLoop, &interruptOccurred, nub, 0) : nullptr;
+    gIrq = gLoop && nub ? IOFilterInterruptEventSource::filterInterruptEventSource(gLoop, &interruptOccurred,
+                                                                                   &syncptFilter, nub, 0)
+                        : nullptr;
     if (!gIrq || !switch_host1x_intr_init(gLoop, gHost + kSyncOffset, kIntid) ||
         gLoop->addEventSource(gIrq) != kIOReturnSuccess)
         return false;

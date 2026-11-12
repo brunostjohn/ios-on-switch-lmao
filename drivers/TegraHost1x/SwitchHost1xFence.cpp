@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: BSD-2-Clause-Patent
 // The fence lists in the kernel: one lock, the syncpoint interrupt's action, the work-loop hand-off and one timer for
-// the bounds. See SwitchHost1xFence.h.
+// the bounds; and the filter waiters, which the interrupt's primary filter runs under a simple lock. See
+// SwitchHost1xFence.h.
 #include <IOKit/IOLib.h>
 #include <IOKit/IOLocks.h>
 #include <IOKit/IOInterruptEventSource.h>
@@ -41,6 +42,48 @@ uint64_t gBoundsAt;
 uint32_t gIntid;
 bool gUp, gStrict;
 
+// A filter waiter's own fence (first, so the list's callback finds the waiter) arms its threshold and is expired by
+// the pass like any other. Free -> reserved (gLock) -> waiting (published once queued) -> retired (expired or
+// cancelled: the filter skips it) -> free (its fence's callback, after the pass, or a cancel that took it back).
+struct FilterWaiter {
+    switch_host1x_fence fence;
+    void (*fn)(void *);
+    void *ctx;
+    uint32_t generation;
+    uint8_t state;
+    bool fired;
+};
+
+enum : uint8_t {
+    kWaiterFree,
+    kWaiterRetired,
+    kWaiterWaiting
+};
+
+constexpr uint32_t kFilterWaiters = 8;
+IOSimpleLock *gFilterLock;  // the waiters' state and gFilterUp, against the filter
+FilterWaiter gWaiters[kFilterWaiters];
+bool gFilterUp;  // the sync unit is clocked: the filter may read it
+
+void setWaiter(FilterWaiter &waiter, uint8_t state)
+{
+    const IOInterruptState interrupts = IOSimpleLockLockDisableInterrupt(gFilterLock);
+    waiter.state = state;
+    IOSimpleLockUnlockEnableInterrupt(gFilterLock, interrupts);
+}
+
+void waiterExpired(switch_host1x_fence *fence, int)
+{
+    setWaiter(*reinterpret_cast<FilterWaiter *>(fence), kWaiterFree);
+}
+
+void setFilterUp(bool up)
+{
+    const IOInterruptState interrupts = IOSimpleLockLockDisableInterrupt(gFilterLock);
+    gFilterUp = up;
+    IOSimpleLockUnlockEnableInterrupt(gFilterLock, interrupts);
+}
+
 uint64_t deadlineIn(uint32_t us)
 {
     uint64_t deadline = 0;
@@ -56,11 +99,15 @@ void armBoundsLocked(uint64_t deadline)
     thread_call_enter_delayed(gBounds, deadline);
 }
 
-// Waiters (no callback) are woken here, under the lock; fences with a callback move to `callbacks` in state.
+// Waiters (no callback) are woken here, under the lock; fences with a callback move to `callbacks` in state. A filter
+// waiter whose fence expired is retired here, before the pass runs any callback, so no filter runs it after the
+// callbacks its threshold ends.
 void sortLocked(SwitchHost1xExpired &done, SwitchHost1xExpired &callbacks, uint8_t state)
 {
     for (auto *fence = done.take(); fence;) {
         auto *next = fence->next;
+        if (fence->signaled == waiterExpired)
+            setWaiter(*reinterpret_cast<FilterWaiter *>(fence), kWaiterRetired);
         if (fence->signaled) {
             fence->state = state;
             callbacks.push(fence);
@@ -121,11 +168,31 @@ bool switch_host1x_intr_init(IOWorkLoop *loop, volatile uint8_t *sync, uint32_t 
     gBounds = thread_call_allocate_with_options(bounds, nullptr, THREAD_CALL_PRIORITY_KERNEL, THREAD_CALL_OPTIONS_ONCE);
     gKick = IOInterruptEventSource::interruptEventSource(loop, &kicked);
     IOLock *lock = IOLockAlloc();
-    if (!lock || !gBounds || !gKick || loop->addEventSource(gKick) != kIOReturnSuccess)
+    IOSimpleLock *filterLock = IOSimpleLockAlloc();
+    if (!lock || !filterLock || !gBounds || !gKick || loop->addEventSource(gKick) != kIOReturnSuccess)
         return false;
     gKick->enable();
+    __atomic_store_n(&gFilterLock, filterLock, __ATOMIC_RELEASE);
     __atomic_store_n(&gLock, lock, __ATOMIC_RELEASE);
     return true;
+}
+
+void switch_host1x_intr_filter()
+{
+    IOSimpleLock *lock = __atomic_load_n(&gFilterLock, __ATOMIC_ACQUIRE);
+    if (!lock)
+        return;
+    IOSimpleLockLock(lock);
+    if (gFilterUp) {
+        for (auto &waiter : gWaiters) {
+            if (waiter.state != kWaiterWaiting || waiter.fired ||
+                !switch_host1x_reached(gList.value(gRegisters, waiter.fence.syncpt), waiter.fence.threshold))
+                continue;
+            waiter.fired = true;
+            waiter.fn(waiter.ctx);
+        }
+    }
+    IOSimpleLockUnlock(lock);
 }
 
 void switch_host1x_intr_handle()
@@ -151,6 +218,7 @@ void switch_host1x_intr_stop()
 {
     IOLockLock(gLock);
     gUp = false;
+    setFilterUp(false);
     IOLockUnlock(gLock);
 }
 
@@ -159,6 +227,7 @@ void switch_host1x_intr_start()
     SwitchHost1xExpired done;
     IOLockLock(gLock);
     gUp = true;
+    setFilterUp(true);
     gList.rearm(gRegisters, done);
     settleLocked(done);
     IOLockUnlock(gLock);
@@ -223,6 +292,72 @@ extern "C" bool switch_host1x_fence_remove(switch_host1x_fence *fence)
     settleLocked(done);
     IOLockUnlock(gLock);
     return removed;
+}
+
+extern "C" int switch_host1x_filter_wait(uint32_t syncpt, uint32_t threshold, void (*fn)(void *), void *ctx,
+                                         switch_host1x_filter_handle *handle)
+{
+    if (!gLock)
+        return TEGRA_HOST1X_ENODEV;
+    if (syncpt >= SwitchHost1xFenceList<Registers>::kSyncpts || !fn || !handle)
+        return TEGRA_HOST1X_EINVAL;
+    IOLockLock(gLock);
+    if (!gUp) {
+        IOLockUnlock(gLock);
+        return TEGRA_HOST1X_ENODEV;
+    }
+    if (switch_host1x_reached(gList.value(gRegisters, syncpt), threshold)) {
+        IOLockUnlock(gLock);
+        return SWITCH_HOST1X_FILTER_PASSED;
+    }
+    FilterWaiter *waiter = nullptr;
+    const IOInterruptState interrupts = IOSimpleLockLockDisableInterrupt(gFilterLock);
+    for (auto &slot : gWaiters)
+        if (!waiter && slot.state == kWaiterFree)
+            waiter = &slot;
+    if (waiter)
+        waiter->state = kWaiterRetired;
+    IOSimpleLockUnlockEnableInterrupt(gFilterLock, interrupts);
+    if (!waiter) {
+        IOLockUnlock(gLock);
+        return TEGRA_HOST1X_ENOMEM;
+    }
+    switch_host1x_fence_init(&waiter->fence, syncpt, threshold, waiterExpired);
+    waiter->fn = fn;
+    waiter->ctx = ctx;
+    waiter->fired = false;
+    ++waiter->generation;
+    SwitchHost1xExpired done;
+    gList.add(gRegisters, &waiter->fence, done);
+    const bool queued = waiter->fence.state == SWITCH_HOST1X_FENCE_QUEUED;
+    if (queued)
+        setWaiter(*waiter, kWaiterWaiting);
+    settleLocked(done);
+    *handle = (uint64_t(waiter->generation) << 32) | uint64_t(waiter - gWaiters);
+    IOLockUnlock(gLock);
+    return queued ? int(TEGRA_HOST1X_OK) : int(SWITCH_HOST1X_FILTER_PASSED);
+}
+
+// While host1x is down its list cannot be touched: the waiter is only retired, and its fence expires after the resume.
+extern "C" bool switch_host1x_filter_cancel(switch_host1x_filter_handle handle)
+{
+    const uint64_t index = handle & 0xffffffffu;
+    if (!gLock || index >= kFilterWaiters)
+        return false;
+    auto &waiter = gWaiters[index];
+    IOLockLock(gLock);
+    const IOInterruptState interrupts = IOSimpleLockLockDisableInterrupt(gFilterLock);
+    const bool mine = waiter.generation == uint32_t(handle >> 32) && waiter.state == kWaiterWaiting;
+    const bool ran = waiter.fired;
+    if (mine)
+        waiter.state = kWaiterRetired;
+    IOSimpleLockUnlockEnableInterrupt(gFilterLock, interrupts);
+    SwitchHost1xExpired done;
+    if (mine && gUp && gList.remove(gRegisters, &waiter.fence, done))
+        setWaiter(waiter, kWaiterFree);
+    settleLocked(done);
+    IOLockUnlock(gLock);
+    return mine && !ran;
 }
 
 // A waiter is a fence without a callback, woken under the lock. A wait that ends with the syncpoint past the threshold

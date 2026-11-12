@@ -47,6 +47,7 @@ struct Signal {
 };
 
 std::vector<Signal> gSignals(8);
+std::vector<std::string> gOrder;
 
 void signaled(switch_host1x_fence *fence, int status)
 {
@@ -54,6 +55,30 @@ void signaled(switch_host1x_fence *fence, int status)
     ++signal.calls;
     signal.status = status;
     signal.lockHeld = gLock->held;
+    gOrder.push_back("callback " + std::to_string(fence->threshold));
+}
+
+// A filter waiter's fn: in the filter, under its simple lock, never under the list's IOLock.
+void filtered(void *ctx)
+{
+    gOrder.push_back("filter " + std::to_string(reinterpret_cast<uintptr_t>(ctx)));
+    if (!gFilterLock->held || gFilterLock->disabled || gLock->held)
+        gOrder.push_back("wrong context");
+}
+
+void *tag(uintptr_t n)
+{
+    return reinterpret_cast<void *>(n);
+}
+
+uint32_t &enabled(uint32_t id)
+{
+    return reg(0xf20 + 4 * (id / 32));
+}
+
+uint32_t &disabled(uint32_t id)
+{
+    return reg(0xf00 + 4 * (id / 32));
 }
 }  // namespace
 
@@ -121,6 +146,7 @@ struct Host1xFence : testing::Test {
         switch_test_bounds_at = 0;
         gBoundsAt = 0;
         gSignals.assign(8, {});
+        gOrder.clear();
     }
 };
 
@@ -301,5 +327,114 @@ TEST_F(Host1xFence, ASubmitWithoutArenaRoomSleepsUntilTheOldestJobsFenceInterrup
     value(175) = 2;
     ASSERT_EQ(switch_host1x_job_reserve(channel, SWITCH_HOST1X_ARENA_WORDS, &words), TEGRA_HOST1X_OK);
     switch_host1x_job_cancel(channel);
+}
+
+// The display's VIC flip: its fn in the filter, then the pass, which runs the ordinary fence's callback and retires the
+// waiter, so a later interrupt's filter never runs it again.
+TEST_F(Host1xFence, AFilterWaiterRunsInTheFilterAheadOfThePassAndOnce)
+{
+    value(176) = 0;
+    switch_host1x_fence fence;
+    switch_host1x_fence_init(&fence, 176, 3, signaled);
+    ASSERT_EQ(switch_host1x_fence_add(&fence, 0), TEGRA_HOST1X_OK);
+    switch_host1x_filter_handle handle = 0;
+    ASSERT_EQ(switch_host1x_filter_wait(176, 3, filtered, tag(1), &handle), TEGRA_HOST1X_OK);
+    EXPECT_EQ(threshold(176), 3u);
+    switch_host1x_intr_filter();
+    EXPECT_TRUE(gOrder.empty()) << "not there yet";
+    value(176) = 3;
+    switch_host1x_intr_filter();
+    interrupt(176);
+    switch_host1x_intr_filter();
+    const std::vector<std::string> want = {"filter 1", "callback 3"};
+    EXPECT_EQ(gOrder, want);
+    EXPECT_FALSE(switch_host1x_filter_cancel(handle));
+}
+
+TEST_F(Host1xFence, AThresholdAlreadyPassedIsRefusedAndItsWaiterNeverRuns)
+{
+    value(177) = 5;
+    switch_host1x_filter_handle handle = 0;
+    EXPECT_EQ(switch_host1x_filter_wait(177, 5, filtered, tag(2), &handle), SWITCH_HOST1X_FILTER_PASSED);
+    switch_host1x_intr_filter();
+    EXPECT_TRUE(gOrder.empty());
+}
+
+TEST_F(Host1xFence, APassThatBeatsTheFilterRetiresTheWaiterUnrun)
+{
+    value(178) = 0;
+    switch_host1x_filter_handle handle = 0;
+    ASSERT_EQ(switch_host1x_filter_wait(178, 2, filtered, tag(3), &handle), TEGRA_HOST1X_OK);
+    value(178) = 2;
+    interrupt(178);
+    switch_host1x_intr_filter();
+    EXPECT_TRUE(gOrder.empty());
+    EXPECT_FALSE(switch_host1x_filter_cancel(handle)) << "gone with its pass";
+}
+
+TEST_F(Host1xFence, ACancelledWaiterNeverRunsAndItsThresholdIsDisarmed)
+{
+    value(179) = 0;
+    switch_host1x_filter_handle handle = 0;
+    ASSERT_EQ(switch_host1x_filter_wait(179, 4, filtered, tag(4), &handle), TEGRA_HOST1X_OK);
+    EXPECT_EQ(enabled(179) & (1u << (179 % 32)), 1u << (179 % 32));
+    disabled(179) = 0;
+    EXPECT_TRUE(switch_host1x_filter_cancel(handle));
+    EXPECT_EQ(disabled(179) & (1u << (179 % 32)), 1u << (179 % 32));
+    value(179) = 4;
+    switch_host1x_intr_filter();
+    EXPECT_TRUE(gOrder.empty());
+    EXPECT_FALSE(switch_host1x_filter_cancel(handle)) << "a second cancel";
+}
+
+TEST_F(Host1xFence, ACancelAfterTheFilterRanSaysItRan)
+{
+    value(180) = 0;
+    switch_host1x_filter_handle handle = 0;
+    ASSERT_EQ(switch_host1x_filter_wait(180, 1, filtered, tag(5), &handle), TEGRA_HOST1X_OK);
+    value(180) = 1;
+    switch_host1x_intr_filter();
+    EXPECT_FALSE(switch_host1x_filter_cancel(handle));
+    interrupt(180);
+    switch_host1x_intr_filter();
+    const std::vector<std::string> want = {"filter 5"};
+    EXPECT_EQ(gOrder, want);
+}
+
+// SC7 with waiters out: the filter reads nothing of the unclocked sync unit; one whose syncpoint got there across the
+// sleep is expired by the resume's re-arm and never runs, one still short runs from the filter after the resume.
+TEST_F(Host1xFence, AcrossSleepTheFilterReadsNothingAndAWaiterStillShortRunsAfterTheResume)
+{
+    value(181) = value(182) = 0;
+    switch_host1x_filter_handle reached = 0, shortOf = 0;
+    ASSERT_EQ(switch_host1x_filter_wait(181, 3, filtered, tag(6), &reached), TEGRA_HOST1X_OK);
+    ASSERT_EQ(switch_host1x_filter_wait(182, 3, filtered, tag(7), &shortOf), TEGRA_HOST1X_OK);
+    tegra_host1x_suspend();
+    value(181) = 3;
+    switch_host1x_intr_filter();
+    EXPECT_TRUE(gOrder.empty());
+    tegra_host1x_resume();
+    switch_host1x_intr_handle();
+    switch_host1x_intr_filter();
+    EXPECT_TRUE(gOrder.empty());
+    value(182) = 3;
+    switch_host1x_intr_filter();
+    const std::vector<std::string> want = {"filter 7"};
+    EXPECT_EQ(gOrder, want);
+    interrupt(182);
+}
+
+TEST_F(Host1xFence, EveryWaiterOutRefusesTheNextUntilAPassFreesThem)
+{
+    value(183) = 0;
+    switch_host1x_filter_handle handle = 0;
+    for (uint32_t i = 1; i <= kFilterWaiters; ++i)
+        ASSERT_EQ(switch_host1x_filter_wait(183, i, filtered, tag(10 + i), &handle), TEGRA_HOST1X_OK) << i;
+    EXPECT_EQ(switch_host1x_filter_wait(183, 9, filtered, tag(9), &handle), TEGRA_HOST1X_ENOMEM);
+    value(183) = kFilterWaiters;
+    interrupt(183);
+    EXPECT_EQ(switch_host1x_filter_wait(183, 20, filtered, tag(20), &handle), TEGRA_HOST1X_OK);
+    EXPECT_TRUE(switch_host1x_filter_cancel(handle));
+    EXPECT_TRUE(gOrder.empty());
 }
 }  // namespace
