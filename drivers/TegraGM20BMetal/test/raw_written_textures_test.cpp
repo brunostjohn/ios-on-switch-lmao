@@ -1,8 +1,9 @@
 // SPDX-License-Identifier: MIT
 // raw/runtime/raw_written_textures.h: which bound formats a state's record was not compiled for, the variant's name the
 // runtime and the pack builder both give it, and the check a made variant passes. RenderBox's uber_resolve_fragment writes
-// a half texture at slot 0 and a 565 code at slot 1; the probe compiled them for BGRA8Unorm (80) and RGBA8Uint (73), and
-// RenderBox binds R16Uint (23) at slot 1 for a B5G6R5Unorm or BGR5A1Unorm target.
+// a half texture at slot 0 and a 565 code at slot 1; the probe compiled them for BGRA8Unorm (80) and RGBA8Uint (73).
+// RenderBox resolves a B5G6R5Unorm or BGR5A1Unorm target through an R16Uint (23) texture; slot 1 is the function's only
+// ushort texture, so that is where it binds it.
 #include <gtest/gtest.h>
 #include "../raw/runtime/raw_written_textures.h"
 
