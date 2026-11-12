@@ -113,6 +113,9 @@ raw::Digest rulesDigest(const raw::PackRules &r)
 }  // namespace
 
 struct Engine::State {
+    std::mutex opening;
+    bool opened = false;
+    std::string openRefusal;
     id<MTLDevice> device = nil;
     uint64_t stack = 0;
     raw::Pack pack;
@@ -269,15 +272,28 @@ bool Engine::open(uint64_t stack, std::string &why)
 bool Engine::openDevice(std::string &why)
 {
     State &s = *state_;
+    std::lock_guard<std::mutex> l(s.opening);
+    if (s.opened)
+        return s.device ? true : (why = s.openRefusal, false);
+    s.opened = true;
+#if SWITCH_DEBUG
+    const uint64_t began = clock_gettime_nsec_np(CLOCK_UPTIME_RAW);
+#endif
     const std::string loader = besidePlugin("libvulkan_nouveau.dylib");
     @try {
         s.device = native_bridge_metal_open(loader.c_str(), nullptr, acceleratorId(), missing);
     } @catch (NSException *exception) {
         s.device = nil;
     }
-    if (!s.device)
-        return why = std::string("no m2v device: ") + nmb_last_error(), false;
+    if (!s.device) {
+        s.openRefusal = std::string("no m2v device: ") + nmb_last_error();
+        return why = s.openRefusal, false;
+    }
     s.direct = std::make_unique<raw::Direct>(s.pack);
+#if SWITCH_DEBUG
+    os_log(logger(), "SwitchShaderCompiler: m2v device opened for its first compile in %llu ms",
+           (unsigned long long)((clock_gettime_nsec_np(CLOCK_UPTIME_RAW) - began) / 1000000));
+#endif
     return true;
 }
 
@@ -288,6 +304,8 @@ raw::Digest Engine::rules() const
 
 int32_t Engine::compile(const Prepared &p, std::string &entry, std::string &why)
 {
+    if (!openDevice(why))
+        return TegraGM20BCompileUnavailable;
     @autoreleasepool {
         return p.request.kind == raw::RequestKind::Kernel ? state_->kernel(p, entry, why)
                                                           : state_->render(p, entry, why);
