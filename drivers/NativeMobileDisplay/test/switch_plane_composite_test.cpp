@@ -181,7 +181,6 @@ struct NativeLegacyDisplay : OSObject {
     using Window = switch_landscape::Window;
     using Commits = switch_display::Compositions<PlaneSet>;
     static constexpr uint32_t kWinABase = 0xb80, kWinBBase = 0xd80, kWinCBase = 0xf80;
-    static constexpr uint32_t kWinbufBBase = 0xdc0, kWinbufCBase = 0xfc0, kWincBBase = 0xc00, kWincCBase = 0xe00;
     static constexpr uint32_t kWinAUpdate = 1 << 9, kWinBUpdate = 1 << 10, kWinCUpdate = 1 << 11;
     static constexpr uint32_t kWinAActReq = 2, kWinBActReq = 4, kWinCActReq = 8;
     static constexpr uint32_t kGeneralUpdate = 1 << 8, kGeneralActReq = 1;
