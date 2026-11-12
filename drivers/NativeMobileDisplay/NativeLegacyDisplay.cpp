@@ -3250,6 +3250,7 @@ public:
         windowProbeAbort("the display suspended (SC7)");
         landscapeRunAbort();
         abortProbe("the display suspended (SC7)");
+        const uint64_t shown = suspendShownSeq();
         planesQuiesce();  // r18-planes
         resumeLit = !scanoutStopped;
         setScanout(false);
@@ -3268,6 +3269,7 @@ public:
         __asm__ volatile("dmb ish" ::: "memory");
         vblankSource->disable();
         hwSuspended = true;
+        retireSuspendShown(shown);
     }
 
 #include "SwitchDisplayResume.h"
@@ -4642,6 +4644,7 @@ public:
     }
 
 #include "SwitchRetireDisplay.h"
+#include "SwitchSuspendRetire.h"
 #include "SwitchTimedPresentDisplay.h"
 #include "SwitchConsoleReleaseDisplay.h"
 

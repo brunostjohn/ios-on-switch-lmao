@@ -239,8 +239,9 @@ struct Display {
     } planeSlots[8];
 
     struct {
-        int held = kNoBuffer;
+        int held = kNoBuffer, pending = kNoBuffer;
     } ring;
+    uint64_t entrySeq[8] = {};
 
     struct {
         bool active() const
@@ -511,8 +512,10 @@ struct Display {
     void suspend()
     {
         mediaFlipFromGate();
+        const uint64_t shown = suspendShownSeq();
         planeLatch.settle();
         hwSuspended = true;
+        retireSuspendShown(shown);
     }
 
     void resume()
@@ -537,6 +540,7 @@ struct Display {
 #include "../SwitchOverlayRecovery.h"
 #include "../SwitchPlanesResume.h"
 #include "../SwitchMediaCompletionFlipDisplay.h"
+#include "../SwitchSuspendRetire.h"
 #undef SWITCH_FRAME_TIMELINE
 };
 
