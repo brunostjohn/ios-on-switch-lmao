@@ -12,6 +12,11 @@ _XCODE = {
 
 _DARWIN = {"requires-darwin": ""}
 
+# The raw sources' Python that the raw build step reads: rawpack.py imports packfile.py at start. Python finds a module
+# beside a script through the script's real path, so an undeclared one still imported in the local sandbox (its inputs
+# are links into the source tree) and failed on a remote worker.
+_RAW_BUILD_MODULES = ["packfile.py"]
+
 SeedToolsInfo = provider(
     doc = "The shader tools' files, each on its own: what a seed step runs, without the rest of the tools.",
     fields = {
@@ -116,7 +121,7 @@ def _seed_tools_impl(ctx):
     ctx.actions.run(
         executable = ctx.executable._rawpack,
         arguments = [args],
-        inputs = depset([ctx.file.host_bridge, ctx.file.metal_abi, ctx.file.raw_generator] + xcode + [f for f in ctx.files.raw_srcs if f.extension != "py"]),
+        inputs = depset([ctx.file.host_bridge, ctx.file.metal_abi, ctx.file.raw_generator] + xcode + [f for f in ctx.files.raw_srcs if f.extension != "py" or f.basename in _RAW_BUILD_MODULES]),
         outputs = [raw],
         mnemonic = "SeedToolsRaw",
         progress_message = "Building the raw pack's probe and mock GM20B",

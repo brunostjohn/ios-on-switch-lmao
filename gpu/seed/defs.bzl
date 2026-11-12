@@ -373,11 +373,18 @@ _RAW_LINK = [
     "probelog.py",
     "splits.py",
     "archives.py",
+    # Read beside the generator's directory: mkpack.py's owned methods, layouts.py's colour table, packfile.py's chip
+    # facts.
+    "../runtime/raw_owned.h",
+    "../runtime/raw_srgb_table.h",
+    "../runtime/raw_chip_facts.h",
 ]
 
 def _generator_files(ctx, names):
-    here = ctx.file.generator.dirname + "/"
-    files = [f for f in ctx.files.srcs if f.path.removeprefix(here) in names]
+    here = ctx.file.generator.dirname
+    parent = here.rpartition("/")[0]
+    wanted = [parent + "/" + n.removeprefix("../") if n.startswith("../") else here + "/" + n for n in names]
+    files = [f for f in ctx.files.srcs if f.path in wanted]
     if len(files) != len(names):
         fail("the raw pack generator's srcs lack some of " + ", ".join(names))
     return files
@@ -431,7 +438,11 @@ def _seed_raw_pack_impl(ctx):
         args.add("--generator", ctx.file.generator)
         args.add("--raw", tools.raw_dir)
         args.add("--nvk", tools.twin)
-        args.add("--qc", crawl.qc)
+
+        # The probe reads every framework's library beside QuartzCore's (rawpack.py library_root): QuartzCore's copy in
+        # the base tree, which this step declares, not the crawl repository's, whose other libraries it does not. The
+        # local sandbox read those anyway; a remote worker has only the declared files (fewer states and kernels).
+        args.add("--qc", crawl.base_root + "/" + QUARTZCORE)
         args.add("--data-dir", crawl.base_root + "/data")
         args.add_all(ctx.files.device_libraries, before_each = "--data")
         args.add("--lines", bucket_corpus)

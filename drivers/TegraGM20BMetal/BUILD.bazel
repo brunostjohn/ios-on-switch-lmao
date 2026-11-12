@@ -51,6 +51,7 @@ filegroup(
         "raw/runtime/raw_owned.h",  # the methods the raw path owns (pack/mkpack.py reads them)
         "//kits/SwitchGM20B:class_headers",  # pack/nvdec.cpp's method numbers
         "raw/runtime/raw_srgb_table.h",  # the colour table pack/layouts.py recognises
+        "raw/runtime/raw_chip_facts.h",  # the chip facts pack/packfile.py writes into a pack's header
         # a kernel's key (pack/kernel_shapes.h)
         "raw/runtime/raw_compute_key.h",
         "raw/runtime/raw_metallib.cpp",
