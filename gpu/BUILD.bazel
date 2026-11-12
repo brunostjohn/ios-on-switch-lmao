@@ -56,6 +56,7 @@ rust_static_library(
         METAL + ":bridge/NativeMetalBridge.rs",
         METAL + ":bridge/NativeMetalDirect.rs",
         METAL + ":bridge/NativeMetalDirectCompute.rs",
+        METAL + ":bridge/NativeMetalOffline.rs",
         METAL + ":bridge/NativeMetalComputeArtifact.rs",
         METAL + ":bridge/NativeMetalArtifactCodec.rs",
         METAL + ":bridge/NativeMetalReflection.rs",
@@ -92,6 +93,8 @@ rust_static_library(
         "//third_party/m2v/crates/metal2vulkan-runtime",
         "@rust_crates//:ash",
         "@rust_crates//:libc",
+        "@rust_crates//:serde",
+        "@rust_crates//:serde_json",
         "@rust_crates//:sha2",
     ],
 )
