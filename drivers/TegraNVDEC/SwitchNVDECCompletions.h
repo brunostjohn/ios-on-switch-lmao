@@ -18,7 +18,8 @@ struct SwitchNVDECCompletionPort {
 
 SwitchNVDECCompletions *switch_nvdec_completions_create(const SwitchNVDECCompletionPort &port);
 void switch_nvdec_completions_release(SwitchNVDECCompletions *completions);  // the connection's reference
-// The registered port; a replaced one's right is released.
+// The registered port. It keeps one send right, the last registration's: a replaced port's right is released, and so
+// is the earlier right to a port registered again. A refusal takes nothing (the MIG server releases the call's right).
 IOReturn switch_nvdec_completions_listen(SwitchNVDECCompletions *completions, mach_port_t port, task_t task);
 void switch_nvdec_completions_close(SwitchNVDECCompletions *completions);  // later completions are sent nowhere
 // One submit's completion: empty while no port listens or when the submit names no status record (the checker refuses
