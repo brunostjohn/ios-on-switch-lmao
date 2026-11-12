@@ -368,6 +368,19 @@ py_test(
     main = "run_host_test.py",
 )
 
+# ios-on-switch-lmao: NAK's SM50 HSETP2 encoding (nak/sm50/hsetp2.rs sm53_hsetp2_tests), from the same binary
+py_test(
+    name = "sm53_hsetp2_test",
+    size = "small",
+    srcs = ["run_host_test.py"],
+    args = [
+        "$(rootpath :nak_sm53_half_test_bin)",
+        "sm53_hsetp2_tests",
+    ],
+    data = [":nak_sm53_half_test_bin"],
+    main = "run_host_test.py",
+)
+
 mesa_cc_library(
     name = "nak_fs_depth_test_objects",
     testonly = True,

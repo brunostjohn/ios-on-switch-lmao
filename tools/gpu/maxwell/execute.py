@@ -16,6 +16,7 @@ from tools.gpu.maxwell.interp import (
     fmod,
     from_f32,
     half_op,
+    halves,
     i20,
     int_cmp,
     mufu,
@@ -175,6 +176,8 @@ def alu(name: str, w: int, lane: Lane, inputs: Inputs) -> None:  # noqa: C901, P
         y = b - (1 << 32) if sb and b & 0x80000000 else b
         p = x * y
         lane.w(d, (p >> 32) if high else p)
+    elif name == 'HSETP2_reg':
+        hsetp2(w, lane)
     elif base in ('LOP3', 'IADD3', 'ISCADD'):
         lane.w(d, three_source(name, w, lane, inputs, a))
     elif name in ('XMAD_reg', 'XMAD_imm'):
@@ -239,6 +242,25 @@ def memory(base: str, w: int, lane: Lane, inputs: Inputs, d: int) -> None:
         result = inputs.texture(('suld', handle, coords))
     for k in range(count):
         lane.w(d + k, result[k % 4])
+
+
+def hsetp2(w: int, lane: Lane) -> None:
+    """Run HSETP2's register form (Ryujinx InstHsetp2R's layout and semantics)."""
+    a = halves(lane.r(bits(w, 8, 8)), bits(w, 47, 2))
+    b = halves(lane.r(bits(w, 20, 8)), bits(w, 28, 2))
+    results = []
+    for k in range(2):
+        x = fmod(a[k], bits(w, 44, 1), bits(w, 43, 1), 16)
+        y = fmod(b[k], bits(w, 30, 1), bits(w, 31, 1), 16)
+        if bits(w, 6, 1):
+            x, y = flush(x, F16), flush(y, F16)
+        results.append(float_cmp(bits(w, 35, 4), convert(x, F16, F32, 0, False), convert(y, F16, F32, 0, False)))
+    if bits(w, 49, 1):
+        both = results[0] and results[1]
+        results = [both, not both]
+    accum = lane.p(bits(w, 39, 3), bits(w, 42, 1))
+    lane.setp(bits(w, 3, 3), combine(bits(w, 45, 2), results[0], accum))
+    lane.setp(bits(w, 0, 3), combine(bits(w, 45, 2), results[1], accum))
 
 
 def three_source(name: str, w: int, lane: Lane, inputs: Inputs, a: int) -> int:
