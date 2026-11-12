@@ -41,9 +41,9 @@ TEST(RawLinkedSource, TheFrontendHandsEachStagesLinkedFunctionsToTheBridge)
                 HasSubstr("d.vertexLinkedFunctions, d.fragmentLinkedFunctions"));
 
     const std::string bridge = SourceText("../../NativeMetal/bridge/NativeMetalObjects.rs");
-    const std::string convert = Body(bridge, "fn render_descriptor(");
-    EXPECT_THAT(convert, HasSubstr("function_descriptor().with_linked(vertex_linked)"));
-    EXPECT_THAT(convert, HasSubstr("function_descriptor().with_linked(fragment_linked)"));
+    const std::string convert = Body(bridge, "fn render_descriptor<F: DescriptorFunction>(");
+    EXPECT_THAT(convert, HasSubstr("stage_function().with_linked(vertex_linked)"));
+    EXPECT_THAT(convert, HasSubstr("stage_function().with_linked(fragment_linked)"));
 }
 
 TEST(RawLinkedSource, AFunctionKeepsTheSpecializedNameItWasMadeUnder)
@@ -61,7 +61,8 @@ TEST(RawLinkedSource, AFunctionKeepsTheSpecializedNameItWasMadeUnder)
     EXPECT_THAT(Body(frontend, "static std::string renderPipelineLine("), HasSubstr("line += linkedText(d);"));
 
     const std::string bridge = SourceText("../../NativeMetal/bridge/NativeMetalObjects.rs");
-    EXPECT_THAT(Body(bridge, "fn linked_functions("), HasSubstr(".with_link_name(specialized.clone())"));
+    EXPECT_THAT(Body(bridge, "impl DescriptorFunction for NmbFunction {"),
+                HasSubstr("self.0.linked_function().with_link_name(self.1.clone())"));
 }
 
 std::vector<std::string> fields(const std::string &body, const std::regex &field)
@@ -75,9 +76,9 @@ std::vector<std::string> fields(const std::string &body, const std::regex &field
 TEST(RawLinkedSource, TheDescriptorsCAndRustFormsAgree)
 {
     const std::string c = Between(SourceText("../../NativeMetal/bridge/NativeMetalObjects.h"),
-                                  "struct NmbRenderPipelineDescriptor {", "};");
+                                  "#define NMB_RENDER_PIPELINE_DESCRIPTOR_FIELDS(Function)", "\n\n");
     const std::string rust = Between(SourceText("../../NativeMetal/bridge/NativeMetalObjects.rs"),
-                                     "pub struct NmbRenderPipelineDescriptor {", "\n}");
+                                     "pub struct NmbRenderPipelineDescriptorOf<F> {", "\n}");
     const std::vector<std::string> namesC = fields(c, std::regex(R"((\w+_(?:linked|count));)"));
     EXPECT_EQ(namesC, fields(rust, std::regex(R"(pub (\w+_(?:linked|count)):)")));
     EXPECT_EQ(namesC.size(), 8u);
