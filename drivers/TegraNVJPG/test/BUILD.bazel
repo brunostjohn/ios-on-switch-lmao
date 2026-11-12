@@ -91,6 +91,8 @@ host_test(
         "//drivers/TegraSMMU:TegraSMMU.h",
         "//drivers/TegraSMMU:TegraSMMUDomain.h",
         "//kits/SwitchCAR:SwitchCAR.h",
+        "//kits/SwitchCAR:SwitchEngineClock.h",
+        "//kits/SwitchCAR:SwitchEngineClockPlan.h",
         "//kits/SwitchCAR:SwitchPMC.h",
         "//kits/SwitchDMA:SwitchDMABuffer.h",
         "//kits/SwitchDMA:SwitchDcache.h",

@@ -911,7 +911,8 @@ TEST_F(SwitchNVDECSubmitTest, AnIdleGatedEngineIsPoweredOnByTheNextDecode)
         return nullptr;
     };
     const char *why = nullptr;
-    EXPECT_EQ(run(&request, resolve, nullptr, check, &fence, &why), 0);
+    bool waitedForRoom = false;
+    EXPECT_EQ(run(&request, resolve, nullptr, check, nullptr, &fence, &waitedForRoom, &why), 0);
     testGate = nullptr;
     EXPECT_TRUE(gate.powered());
     EXPECT_FALSE(gSuspended);
