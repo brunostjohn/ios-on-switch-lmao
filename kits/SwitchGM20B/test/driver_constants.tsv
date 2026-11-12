@@ -50,7 +50,8 @@ raw_stamps.h	kPtimerNsDen	policy	PTIMER to ns on this part (raw_stamps.h)
 raw_stamps.h	kStampSlots	policy	stamp page layout
 raw_stamps.h	kDrawStampSlots	policy	measured draws' stamp ring (raw_band_rates.h)
 raw_stamps.h	kDrawStampBase	policy	stamp page layout
-raw_stamps.h	kStampBytes	policy	stamp page layout
+raw_stamps.h	kLoopWordsBase	policy	stamp page layout: the predicated-loop overflow words after the draw stamps
+raw_stamps.h	kStampBytes	policy	stamp page layout: the slots, the draw stamps and a predicated-loop overflow word per slot
 raw_stamps.h	kDrawStampWords	policy	push words of a draw stamp
 raw_mme.h	kAbi	policy	raw macro ABI version
 raw_mme.h	kDraw	policy	raw macro slot
