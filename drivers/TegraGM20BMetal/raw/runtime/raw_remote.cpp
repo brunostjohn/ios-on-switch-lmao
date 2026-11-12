@@ -38,6 +38,24 @@ void Remote::refresh(const TegraGM20BAbiCompilerInfoReply &info)
         map(info.generation);
 }
 
+// No compiler took a request: whether one is registered or waited for now
+void Remote::recheck()
+{
+    TegraGM20BAbiCompilerInfoReply info = {};
+    if (call(TegraGM20BMethodCompilerInfo, nullptr, 0, &info, sizeof info) != kIOReturnSuccess)
+        return;
+    absent_.store(!(info.flags & (TegraGM20BCompilerExpected | TegraGM20BCompilerRegistered)),
+                  std::memory_order_release);
+    refresh(info);
+}
+
+bool Remote::taking()
+{
+    if (absent_.load(std::memory_order_acquire))
+        recheck();
+    return !absent_.load(std::memory_order_acquire);
+}
+
 bool Remote::serving()
 {
     if (!capable_)
@@ -171,7 +189,7 @@ Remote::Answer Remote::answerOf(int32_t result)
 
 Remote::Answer Remote::compile(const std::string &request, uint32_t *how)
 {
-    if (!serving())
+    if (!serving() || !taking())
         return Answer::Unavailable;
     const TegraGM20BAbiCompile in = {uint64_t(uintptr_t(request.data())), request.size(),         0, stack_,
                                      uint32_t(qos_class_self()),          TegraGM20BCompileWaited};
@@ -184,12 +202,14 @@ Remote::Answer Remote::compile(const std::string &request, uint32_t *how)
     latest_.store(reply.generation, std::memory_order_release);
     if (how)
         *how = reply.how;
+    if (reply.result == TegraGM20BCompileUnavailable)
+        recheck();
     return answerOf(reply.result);
 }
 
 bool Remote::compileAsync(const std::string &request, bool waited, uint32_t qos, std::function<void(Answer)> done)
 {
-    if (!serving())
+    if (!serving() || !taking())
         return false;
     std::lock_guard<std::mutex> l(asyncLock_);
     if (!port_) {
@@ -222,6 +242,8 @@ bool Remote::ask(Held &&held)
     if (asked == kIOReturnSuccess)
         return true;
     pending_.erase(cookie);
+    if (asked == kIOReturnNotReady)
+        recheck();
     if (asked != kIOReturnNoResources || pending_.empty())
         return false;
     held_.push_back(std::move(held));
@@ -269,7 +291,10 @@ void Remote::delivered(void *refcon, int result, void *cookie, void *word)
     if (result != kIOReturnSuccess)
         return done(Answer::Unavailable);
     remote->latest_.store(uint32_t(packed >> 32), std::memory_order_release);
-    done(answerOf(int32_t(uint32_t(packed))));
+    const int32_t answer = int32_t(uint32_t(packed));
+    if (answer == TegraGM20BCompileUnavailable)
+        remote->recheck();
+    done(answerOf(answer));
 }
 
 }  // namespace raw

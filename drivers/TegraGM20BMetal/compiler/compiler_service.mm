@@ -11,10 +11,12 @@
 #include <IOKit/IOKitLib.h>
 #include <dispatch/dispatch.h>
 #include <mach/mach.h>
+#include <malloc/malloc.h>
 #include <os/log.h>
 #include <pthread/qos.h>
 #include <time.h>
 #include <unistd.h>
+#include <memory>
 #include <mutex>
 #include <thread>
 #include <vector>
@@ -63,7 +65,41 @@ const char *resultName(int32_t result)
     static const char *names[] = {"made", "refused", "not made", "not taken"};
     return result >= 0 && result <= 3 ? names[result] : "?";
 }
+
+// What jetsam holds against the plist's JetsamProperties: the footprint now and its peak this process, and the heap's part
+void logFootprint(const char *when)
+{
+    task_vm_info_data_t vm = {};
+    mach_msg_type_number_t count = TASK_VM_INFO_COUNT;
+    if (task_info(mach_task_self(), TASK_VM_INFO, reinterpret_cast<task_info_t>(&vm), &count) != KERN_SUCCESS)
+        return;
+    malloc_statistics_t heap = {};
+    malloc_zone_statistics(nullptr, &heap);
+    os_log(
+        logger(),
+        "SwitchShaderCompiler: footprint %{public}s: %llu KiB, peak %llu KiB; internal %llu KiB, compressed %llu KiB; "
+        "heap %llu KiB in use of %llu KiB",
+        when, (unsigned long long)(vm.phys_footprint >> 10), (unsigned long long)(vm.ledger_phys_footprint_peak >> 10),
+        (unsigned long long)(vm.internal >> 10), (unsigned long long)(vm.compressed >> 10),
+        (unsigned long long)(heap.size_in_use >> 10), (unsigned long long)(heap.size_allocated >> 10));
+}
 #endif
+
+// Take's buffer, left uninitialised: zeroing it would touch every page, which jetsam counts, and Take writes only a
+// request's own bytes
+std::unique_ptr<uint8_t[]> untouched(size_t bytes)
+{
+    return std::unique_ptr<uint8_t[]>(new uint8_t[bytes]);  // NOLINT(modernize-make-unique): make_unique zeroes it
+}
+
+// The heap the workers' compiles freed goes back to the system once the pool has nothing queued or running
+void idle()
+{
+    malloc_zone_pressure_relief(nullptr, 0);
+#if SWITCH_DEBUG
+    logFootprint("idle");
+#endif
+}
 
 class Service {
 public:
@@ -77,7 +113,8 @@ private:
     RequestLog log_;
     SystemLibraries system_;
     std::unique_ptr<Pool> pool_;
-    std::vector<uint8_t> buffer_ = std::vector<uint8_t>(1u << 20);
+    size_t bufferBytes_ = 1u << 20;
+    std::unique_ptr<uint8_t[]> buffer_ = untouched(bufferBytes_);
 
     int call(uint32_t method, const void *in, size_t inSize, void *out, size_t outSize)
     {
@@ -188,11 +225,12 @@ void Service::submit(Prepared prepared, std::string request, const Waiter &waite
 
 void Service::take(uint64_t stack)
 {
-    TegraGM20BAbiCompilerTake in = {uint64_t(uintptr_t(buffer_.data())), buffer_.size()};
+    TegraGM20BAbiCompilerTake in = {uint64_t(uintptr_t(buffer_.get())), bufferBytes_};
     TegraGM20BAbiCompilerTakeReply reply = {};
     const int error = call(TegraGM20BMethodCompilerTake, &in, sizeof in, &reply, sizeof reply);
-    if (!error && !reply.id && reply.bytes > buffer_.size() && reply.bytes <= TegraGM20BCompileRequestLimit) {
-        buffer_.resize(size_t(reply.bytes));
+    if (!error && !reply.id && reply.bytes > bufferBytes_ && reply.bytes <= TegraGM20BCompileRequestLimit) {
+        bufferBytes_ = size_t(reply.bytes);
+        buffer_ = untouched(bufferBytes_);
         return;
     }
     if (error == kIOReturnAborted)
@@ -203,7 +241,7 @@ void Service::take(uint64_t stack)
         exit(1);
     }
     const bool waited = reply.flags & TegraGM20BCompileWaited;
-    std::string request(reinterpret_cast<const char *>(buffer_.data()), size_t(reply.bytes));
+    std::string request(reinterpret_cast<const char *>(buffer_.get()), size_t(reply.bytes));
     const Waiter waiter = {reply.id, reply.client, bandOf(reply.qos, waited), false};
     Prepared prepared;
     std::string why;
@@ -273,6 +311,9 @@ bool Service::open(uint64_t stack)
         os_log_error(logger(), "SwitchShaderCompiler: running without its sandbox: %{public}s", why.c_str());
     os_log(logger(), "SwitchShaderCompiler: serving at %llu ms of uptime",
            (unsigned long long)(clock_gettime_nsec_np(CLOCK_UPTIME_RAW) / 1000000));
+#if SWITCH_DEBUG
+    logFootprint("serving");
+#endif
     return true;
 }
 
@@ -329,6 +370,7 @@ void Service::serve()
     hooks.lower = [](void *token) {
         pthread_override_qos_class_end_np(static_cast<pthread_override_t>(token));
     };
+    hooks.idle = idle;
     pool_ = std::make_unique<Pool>(std::move(hooks));
     std::thread([this] {
         pthread_set_qos_class_self_np(QOS_CLASS_BACKGROUND, 0);

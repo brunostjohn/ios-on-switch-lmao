@@ -42,6 +42,10 @@ public:
     // The kernel takes requests: it has the compiler's methods and a compiler is registered or on its way (asked of the
     // kernel again while it is not: a compiler may register later)
     bool serving();
+    // A compiler may take a request now. False once a request found none registered and none waited for (the third lost,
+    // or a decline): from then on each ask is the kernel's CompilerInfo, never a request, until a compiler registers.
+    // The caller still makes the state off its own thread, as for any request a compiler did not take.
+    bool taking();
 
     // The store's entry under `name`, copied out of the mapping
     bool find(const Digest &name, std::string &bytes);
@@ -73,6 +77,7 @@ private:
     const uint64_t stack_;
     bool capable_ = false;
     std::atomic<bool> expected_{false};
+    std::atomic<bool> absent_{false};
     std::atomic<const Mapping *> mapping_{nullptr};
     std::atomic<uint32_t> latest_{0};  // the newest generation a completion named
     std::mutex mapLock_, asyncLock_;
@@ -85,6 +90,7 @@ private:
     // asyncLock_ held: the request asked, or held past the bound; false: neither
     bool ask(Held &&held);
     void refresh(const TegraGM20BAbiCompilerInfoReply &info);
+    void recheck();
     int call(uint32_t method, const void *in, size_t inSize, void *out, size_t outSize, uint64_t *reference = nullptr);
     void map(uint32_t generation);
     static Call transportCall(const KernelTransport &transport);

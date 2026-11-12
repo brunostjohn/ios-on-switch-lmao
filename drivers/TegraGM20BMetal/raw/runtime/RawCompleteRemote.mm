@@ -169,6 +169,10 @@ bool Completion::remoteNow(const Ask &a, const CacheKey &k, Compiler::State &sta
     const uint64_t began = nowUs();
     RAW_DIAGNOSTIC(tObtained = {"store", 0, uint32_t(qos_class_self()), 0});
     if (found == RecordCache::Found::None) {
+        if (!remote_->taking()) {
+            compiledHere(InProcess::NotTaken);
+            return false;
+        }
         if (!renderRequest(a, k, true, r, name)) {
             compiledHere(InProcess::NoRequest);
             return false;
@@ -234,6 +238,10 @@ bool Completion::remoteLater(const Ask &a, const CacheKey &k, std::function<void
         settle(found, record, why);
         return true;
     }
+    if (!remote_->taking()) {
+        compiledHere(InProcess::NotTaken);
+        return false;
+    }
     const uint64_t began = nowUs();
     const Ask asked = a;
     const bool sent = remote_->compileAsync(
@@ -298,6 +306,10 @@ Compiler::Outcome Completion::remoteKernel(id facadeFunction, MTLComputePipeline
     };
     RecordCache::Found found = stored();
     if (found == RecordCache::Found::None) {
+        if (!remote_->taking()) {
+            compiledHere(InProcess::NotTaken);
+            return Compiler::Outcome::Failed;
+        }
         switch (remote_->compile(encodeRequest(r))) {
         case Remote::Answer::Made:
         case Remote::Answer::Refused:

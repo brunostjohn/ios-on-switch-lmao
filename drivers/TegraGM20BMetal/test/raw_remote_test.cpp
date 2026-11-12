@@ -26,10 +26,10 @@ constexpr uint64_t kStack = 0x5357495443480005ull;
 class Kernel {
 public:
     uint32_t flags = TegraGM20BCompilerCapable | TegraGM20BCompilerRegistered | TegraGM20BCompilerStore;
-    int called = kIOReturnSuccess;
+    int called = kIOReturnSuccess, asyncCalled = kIOReturnSuccess;
     int32_t answer = TegraGM20BCompileMade;
     uint32_t generation = 1, how = TegraGM20BCompileCompiled | 4u << 8;
-    unsigned maps = 0, compiles = 0;
+    unsigned maps = 0, compiles = 0, asyncAsked = 0;
     std::function<void()> compiling;  // what the compiler does before it answers
     switch_seed_pack::StoreWriter store;
 
@@ -62,6 +62,9 @@ public:
             if (method == TegraGM20BMethodCompile && reference) {
                 if (waiting.size() >= bound)
                     return kIOReturnNoResources;
+                asyncAsked++;
+                if (asyncCalled != kIOReturnSuccess)
+                    return asyncCalled;
                 compiles++;
                 Waiting w = {static_cast<const TegraGM20BAbiCompile *>(in)->cookie, {}};
                 memcpy(w.reference, reference, sizeof w.reference);
@@ -203,6 +206,56 @@ TEST_F(RemoteCompile, AnInterruptedWaitOrAFullQueueIsAFailureALaterAskRetries)
     kernel.called = kIOReturnSuccess;
     kernel.answer = TegraGM20BCompileUnavailable;
     EXPECT_EQ(remote.compile("a request"), raw::Remote::Answer::Unavailable);
+}
+
+// The third compiler lost: none registered, none waited for. The process keeps reading the store and making the states
+// it lacks off the asking thread, as for any request a compiler did not take, but sends no request until one registers.
+TEST_F(RemoteCompile, AProcessSendsNoRequestOnceOneFindsNoCompilerUntilOneRegisters)
+{
+    raw::Remote remote(kernel.call(), kStack);
+    ASSERT_TRUE(remote.serving());
+    kernel.flags = TegraGM20BCompilerCapable | TegraGM20BCompilerStore;
+    kernel.answer = TegraGM20BCompileUnavailable;
+    EXPECT_EQ(remote.compile("a request"), raw::Remote::Answer::Unavailable);
+    EXPECT_TRUE(remote.serving());
+    EXPECT_FALSE(remote.taking());
+    EXPECT_EQ(remote.compile("a request"), raw::Remote::Answer::Unavailable);
+    EXPECT_FALSE(remote.compileAsync("a request", true, 0, [](raw::Remote::Answer) {}));
+    EXPECT_EQ(kernel.compiles, 1u);
+    publish();
+    std::string bytes;
+    EXPECT_TRUE(remote.find(name, bytes));
+    kernel.flags = TegraGM20BCompilerCapable | TegraGM20BCompilerRegistered | TegraGM20BCompilerStore;
+    kernel.answer = TegraGM20BCompileMade;
+    EXPECT_TRUE(remote.taking());
+    EXPECT_EQ(remote.compile("a request"), raw::Remote::Answer::Made);
+    EXPECT_EQ(kernel.compiles, 2u);
+}
+
+TEST_F(RemoteCompile, AnAsynchronousRequestRefusedForWantOfACompilerStopsTheRequests)
+{
+    raw::Remote remote(kernel.call(), kStack);
+    kernel.flags = TegraGM20BCompilerCapable;
+    kernel.asyncCalled = kIOReturnNotReady;
+    EXPECT_FALSE(remote.compileAsync("a request", true, 0, [](raw::Remote::Answer) {}));
+    EXPECT_TRUE(remote.serving());
+    EXPECT_FALSE(remote.taking());
+    EXPECT_FALSE(remote.compileAsync("a request", true, 0, [](raw::Remote::Answer) {}));
+    EXPECT_EQ(kernel.compiles, 0u);
+    EXPECT_EQ(kernel.asyncAsked, 1u);
+}
+
+// A compiler that went with requests waiting answers them Unavailable: while the next one is on its way the process asks
+// again at once
+TEST_F(RemoteCompile, AnUnavailableAnswerWhileTheNextCompilerIsWaitedForKeepsTheRequests)
+{
+    raw::Remote remote(kernel.call(), kStack);
+    kernel.flags = TegraGM20BCompilerCapable | TegraGM20BCompilerExpected;
+    kernel.answer = TegraGM20BCompileUnavailable;
+    EXPECT_EQ(remote.compile("a request"), raw::Remote::Answer::Unavailable);
+    EXPECT_TRUE(remote.taking());
+    EXPECT_EQ(remote.compile("a request"), raw::Remote::Answer::Unavailable);
+    EXPECT_EQ(kernel.compiles, 2u);
 }
 
 TEST_F(RemoteCompile, AStoreOfAnotherStackIsNotRead)
