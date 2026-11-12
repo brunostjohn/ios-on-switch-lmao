@@ -104,7 +104,7 @@ TEST(DisplayPlanesSource, DriverFollowsTheRules)
     const std::string frame = Function(planes, "void planeFrameEnd()\n");
     EXPECT_THAT(frame, HasSubstr("retireThrough(now.seq, __atomic_load_n(&feStamp, __ATOMIC_ACQUIRE))"));
     EXPECT_THAT(frame, HasSubstr("beginPlaneRecovery("));
-    EXPECT_THAT(source, HasSubstr("if (status & kFrameEndInt)\n            planeFrameEnd();"));
+    EXPECT_THAT(source, HasSubstr("if (status & kFrameEndInt) {\n            planeFrameEnd();\n            landscapeFrameEnd();"));
     // The first client frame's swap retires at its own latch (latchRetire is on from the plane probe, before it).
     EXPECT_THAT(Method(source, "    void startRotation(int target = kNoBuffer)\n"), HasSubstr("entrySeq[target] = seqOf(flipRequest);"));
     EXPECT_THAT(Method(source, "    void checkRotation()\n"), HasSubstr("retireThrough(entrySeq[asked], stamp);"));
@@ -196,7 +196,7 @@ TEST(DisplayPlanesSource, PlaneSlotsHoldTheSurfaceTheyScan)
     EXPECT_THAT(native, HasSubstr("surfaceLayout(surface, block)"));
     EXPECT_THAT(Function(planes, "static const tgm_layout *surfaceLayout("),
                 HasSubstr("tegra_gm20b_surface_layout(pa & ~0xfffULL, &block) == 1"));
-    const std::string write = Function(planes, "void planeWriteWindowRegisters(unsigned window, const switch_display::Overlay &p, bool live)");
+    const std::string write = Function(planes, "void planeWriteWindowRegisters(Window w, const switch_display::Overlay &p, bool live)");
     EXPECT_THAT(write, HasSubstr("buf[kSurfaceKind] = m.surfaceKind;"));
     EXPECT_THAT(write, HasSubstr("buf[kVOffset] = m.vOffset;"));
     EXPECT_THAT(Function(planes, "static bool planeSame("), HasSubstr("x.surfaceKind != y.surfaceKind"));
@@ -218,16 +218,12 @@ TEST(DisplayPlanesSource, BackboarddDetachesOnlyWhenTheDisplaySaysSo)
     EXPECT_THAT(exec, Not(HasSubstr("if (vbl && single_layer) {")));
 }
 
-// Debug iOS 27 kernels have backboardd log why each layer was or was not detached; release kernels and iOS 17 do not.
-TEST(DisplayPlanesSource, DetachReasonsLoggedOnlyByDebugIos27Kernels)
+// No kernel has backboardd log why each layer was or was not detached: QuartzCore 24B119's CA_PRINT_DETACHING
+// (ca_debug_options[32]) logs four lines a composited frame on the render thread ("ClearUI detach fail", "[CA]",
+// "[Server]" and "[Display] Surface ID ... detach result").
+TEST(DisplayPlanesSource, NoKernelHasTheRenderServerLogItsDetachReasons)
 {
-    const std::string xnu27 = Runfile(XNU27_KERN_EXEC);
-    const std::string print =
-        Between(xnu27, "#if DEVELOPMENT || DEBUG\n#define NATIVE_SWITCH_CA_PRINT_DETACHING", "#endif");
-    EXPECT_THAT(print, HasSubstr("\"CA_PRINT_DETACHING=1\","));
-    EXPECT_THAT(print, HasSubstr("#else\n#define NATIVE_SWITCH_CA_PRINT_DETACHING\n"));
-    EXPECT_EQ(Count(xnu27, "CA_PRINT_DETACHING=1"), 1u);
-    EXPECT_EQ(Count(xnu27, "NATIVE_SWITCH_CA_PRINT_DETACHING NULL"), 2u);
+    EXPECT_THAT(Runfile(XNU27_KERN_EXEC), Not(HasSubstr("CA_PRINT_DETACHING")));
     EXPECT_THAT(XnuKernExec(), Not(HasSubstr("CA_PRINT_DETACHING")));
 }
 
@@ -288,7 +284,8 @@ TEST(DisplayPlanesSource, WindowBWaitsForTheGpuOnSurfacesItRenders)
     const std::string worker = SourceText("../SwitchPlaneFenceAdmission.h");
     EXPECT_THAT(worker, HasSubstr("switch_gpu_bridge_fence(producers, count"));
     EXPECT_THAT(worker, HasSubstr("switch_gpu_bridge_wait_room()"));
-    EXPECT_THAT(Function(fence, "bool planeFenced(const PlaneSet &p) const"),
+    EXPECT_THAT(Function(fence, "bool planeFenced(const PlaneSet &p) const"), HasSubstr("planeOverlayWaits(*native)"));
+    EXPECT_THAT(Function(SourceText("../SwitchNativePlaneDisplay.h"), "static bool planeOverlayWaits("),
                 HasSubstr("switch_gpu_backing_token_external_status"));
     const std::string done = Function(fence, "void finishPlaneFence(int status)");
     ExpectBefore(done, "if (status || !planesOn) {", "planeOut(planeFencing);");

@@ -2,7 +2,8 @@
 // drivers/TegraGM20B/TegraGM20BPushScan.h on the host: the kernel's stats method-stream reader over streams laid out
 // as NVK writes them for GM20B (a Core Animation-like submission: the command buffer prologue, a pass into a pitch-linear
 // 720x1280 target, its draws in a push of their own, barriers, NVK's copy-engine WFI, a method continued across two pushes;
-// a multisampled pass; a push the kernel cannot read), checking every counter and each push's profile class. A push the
+// a multisampled pass; a push the kernel cannot read) and the raw path's, checking every counter and each push's profile
+// class and target image. A push the
 // profile may stamp after must end on a method boundary: the stamp would otherwise land inside a method's data.
 #include <gtest/gtest.h>
 
@@ -145,6 +146,89 @@ TEST(GM20BPushScan, MultisampledPassCopyClearDispatch)
 
 // A framebuffer fetch's barrier as NVIDIA orders it (PIXEL_SHADER_BARRIER, then the texture invalidate 0x0f74 it
 // orders), and a state that turns the pixel interlock on (pixel conflicts, ordered) and one that turns it off.
+// The raw path's 4x pass as it writes one: no NVK macro, SET_ANTI_ALIAS 2X2 itself in the pass's prologue and 1X1 again
+// after its last draw, in that draw's push; the target is the 720x1280 image's 1440x2560 sample grid. Its resolve pass
+// draws the 720x1280 one-sample image.
+static void raw_target(Push &p, uint32_t width, uint32_t height)
+{
+	p.push_back(inc(0, 0x0800, 6));
+	for (uint32_t w : {0x3eu, 0xf7e0c000u, width, height, 0xcfu, 0u})
+		p.push_back(w);
+	p.push_back(immd(0, 0x121c, 1));
+	p.push_back(immd(0, 0x1538, 1));
+}
+
+static void raw_draw(Push &p)
+{
+	p.push_back(immd(0, 0x1618, 0));
+	p.push_back(immd(0, 0x1614, 0));
+}
+
+TEST(GM20BPushScan, RawMultisampledPassAndItsResolve)
+{
+	Push t0, t1, t2, t3;
+	raw_target(t0, 1440, 2560);
+	t0.push_back(immd(0, 0x15d0, 2));
+	t0.push_back(immd(0, 0x19d0, 0x3c));
+	raw_draw(t1);
+	raw_draw(t2);
+	t2.push_back(immd(0, 0x15d0, 0));
+	raw_target(t3, 720, 1280);
+	raw_draw(t3);
+	PushParse p = {};
+	PushCounts c = {};
+	bool whole = true;
+	CHECK(scanPush(c, p, whole, t0.data(), t0.size()) == TGM_PC_CLEAR + 0 * 4 + 0 + 1);
+	CHECK(targetPixels(p) == 1440 * 2560);
+	CHECK(scanPush(c, p, whole, t1.data(), t1.size()) == TGM_PC_DRAW + 0 * 4 + 0 + 1);
+	CHECK(scanPush(c, p, whole, t2.data(), t2.size()) == TGM_PC_DRAW + 0 * 4 + 0 + 1);
+	const TargetImage drawn = targetImage(p);
+	CHECK(drawn.width == 720 && drawn.height == 1280 && drawn.samples == 4);
+	CHECK(scanPush(c, p, whole, t3.data(), t3.size()) == TGM_PC_DRAW + 0 * 4 + 0 + 0);
+	const TargetImage resolved = targetImage(p);
+	CHECK(resolved.width == 720 && resolved.height == 1280 && resolved.samples == 1);
+	CHECK(c.passes == 2 && c.msaaPasses == 1 && c.draws == 3 && c.clears == 1);
+}
+
+// Each SET_ANTI_ALIAS mode's sample grid, NVK's macro (log2 samples in bits 7:4) and the method alike: a target's WIDTH and
+// HEIGHT over the grid are its image's.
+TEST(GM20BPushScan, SampleGridOfEachMode)
+{
+	struct Mode {
+		uint32_t mode, across, down;
+	};
+
+	for (const Mode m : {Mode{0, 1, 1}, Mode{1, 2, 1}, Mode{2, 2, 2}, Mode{3, 4, 2},
+			     Mode{4, 4, 2}, Mode{5, 2, 1}, Mode{6, 4, 4}, Mode{8, 2, 2},
+			     Mode{9, 2, 2}, Mode{10, 4, 2}, Mode{11, 4, 2}}) {
+		Push q;
+		raw_target(q, 64 * m.across, 32 * m.down);
+		q.push_back(immd(0, 0x15d0, m.mode));
+		raw_draw(q);
+		PushParse p = {};
+		PushCounts c = {};
+		bool whole = true;
+		scanPush(c, p, whole, q.data(), q.size());
+		const TargetImage image = targetImage(p);
+		EXPECT_EQ(image.width, 64u) << m.mode;
+		EXPECT_EQ(image.height, 32u) << m.mode;
+		EXPECT_EQ(image.samples, m.across * m.down) << m.mode;
+	}
+	for (uint32_t log2 = 0; log2 <= 3; log2++) {
+		Push q;
+		begin_pass(q, 128 << ((log2 + 1) / 2), 64 << (log2 / 2), false, log2, false);
+		draws(q, 1);
+		PushParse p = {};
+		PushCounts c = {};
+		bool whole = true;
+		scanPush(c, p, whole, q.data(), q.size());
+		const TargetImage image = targetImage(p);
+		EXPECT_EQ(image.width, 128u) << log2;
+		EXPECT_EQ(image.height, 64u) << log2;
+		EXPECT_EQ(image.samples, 1u << log2) << log2;
+	}
+}
+
 TEST(GM20BPushScan, PixelShaderBarrierAndInterlock)
 {
 	Push s0 = {immd(0, 0x0de0, 0), immd(0, 0x0f74, 0)};
@@ -153,6 +237,18 @@ TEST(GM20BPushScan, PixelShaderBarrierAndInterlock)
 	CHECK(e.c.psBarriers == 1 && e.c.texInval == 1 && e.c.wfi == 0);
 	CHECK(e.c.interlocks == 1);
 	CHECK(e.cls[0] == TGM_PC_SYNC && e.cls[1] == TGM_PC_STATE);
+}
+
+// A hang's line names the last engine method of the hung submission: F-v1's twod_clear ended on the 2D engine's
+// RENDER_SOLID_PRIM_POINT_Y (subchannel 3, 0x060c); host methods (a semaphore after it) do not replace it.
+TEST(GM20BPushScan, TheLastEngineMethodSurvivesHostMethodsAfterIt)
+{
+	Push fill = {inc(3, 0x0600, 4), 1, 1, 39, 23, immd(0, 0x0078, 0)};
+	PushCounts c = {};
+	PushParse p = {};
+	CHECK(p.lastEngine == 0);
+	pushParse(c, p, fill.data(), fill.size());
+	CHECK(p.lastEngine == (3u << 16 | 0x060cu));
 }
 
 TEST(GM20BPushScan, UnreadablePushEndsTheStamps)

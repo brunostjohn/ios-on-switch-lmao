@@ -1,10 +1,18 @@
 // SPDX-License-Identifier: BSD-2-Clause-Patent
+#include <algorithm>
+#include <vector>
 #include "drivers/TegraGM20B/test/switch_gpu_event_fixture.h"
 #include "drivers/TegraNVDEC/SwitchNVDECSemantics.h"
 #include "drivers/TegraHost1x/SwitchHost1xResults.h"
 
 namespace {
 switch_gpu_backing_semantics adapter;
+std::vector<switch_gpu_event_waits *> retired;
+
+void recordRetired(switch_gpu_event_waits *batch)
+{
+    retired.push_back(batch);
+}
 }
 
 extern "C" int switch_gpu_backing_register_semantics(uint32_t engine, const switch_gpu_backing_semantics *operations)
@@ -17,7 +25,7 @@ extern "C" int switch_gpu_backing_register_semantics(uint32_t engine, const swit
 TEST_F(Events, DecodeFailuresRemainExactAcrossHardwareCompletedConsumers)
 {
     using Results = SwitchHost1xResults<SWITCH_GPU_ENGINE_NVDEC>;
-    ASSERT_TRUE(switch_nvdec_semantics_start(162));
+    ASSERT_TRUE(switch_nvdec_semantics_start(162, recordRetired));
     statusEngine = SWITCH_GPU_ENGINE_NVDEC;
     statusOverride = Results::status;
     physicalOverride = Results::physicalStatus;
@@ -64,9 +72,9 @@ TEST_F(Events, DecodeFailuresRemainExactAcrossHardwareCompletedConsumers)
     EXPECT_EQ(adapter.snapshot(&first, &captured), -5);
     EXPECT_EQ(adapter.snapshot(&independent, &captured), 0);
     EXPECT_EQ(native->value, 0u);
-    switch_nvdec_semantics_retire(a);
-    switch_nvdec_semantics_retire(b);
-    switch_nvdec_semantics_retire(c);
+    EXPECT_EQ(std::count(retired.begin(), retired.end(), a), 1);
+    EXPECT_EQ(std::count(retired.begin(), retired.end(), b), 1);
+    EXPECT_EQ(std::count(retired.begin(), retired.end(), c), 1);
     Results::complete(&ra, -5);
     Results::complete(&rb, 0);
     Results::complete(&rc, -5);

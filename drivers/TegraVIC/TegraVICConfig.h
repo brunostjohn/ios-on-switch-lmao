@@ -81,6 +81,7 @@ enum {
     TEGRA_VIC_FILTER_1TAP = 0,
     TEGRA_VIC_FILTER_2TAP = 1,
     TEGRA_VIC_ALPHA_OPAQUE = 0,
+    TEGRA_VIC_ALPHA_BACKGROUND = 1,  // every pixel's alpha the background's (OUT_BACKGROUND_ALPHA)
     TEGRA_VIC_ALPHA_SOURCE_STREAM = 3,
 };
 
@@ -419,8 +420,8 @@ static const TegraVICTraits kTegraVICTraits = {
     .fillThroughMatrix = 1,
     .yccIn = TEGRA_VIC_YCC_IN_RGB | TEGRA_VIC_YCC_IN_COPY,
     .blockLinearIn = 1,
-    .blockLinearOut = 1,  // averne's nvtegra writes T210 VIC output in GENERIC_16Bx2, GOB height 2; never run here
-    .packedYcc = 0,       // the element size of a packed 4:2:2 row is undocumented: probe vic.packed422 (design only)
+    .blockLinearOut = 1,  // averne's nvtegra writes T210 VIC output in GENERIC_16Bx2: probe gpu.x1.vic_block_linear
+    .packedYcc = 0,       // a packed 4:2:2 row's element size and byte order: probe gpu.x1.vic_packed422
     .subRects = 0x41,
     .surfaceFlips = 1,
 };
@@ -545,8 +546,10 @@ static inline const char *tegra_vic_build(const TegraVICImage *src, const TegraV
     if (!op->fill && op->transform && !t->surfaceFlips && !(t->subRects & (1u << op->transform)) &&
         (op->dstX || op->dstY || op->dstW != dst->width || op->dstH != dst->height))
         return "destination sub-rectangle this transform has not proven";
-    // NVDEC's pictures, the only block-linear sources the unit has run, are 4:2:0.
-    if (!op->fill && src->blockLinear && (!t->blockLinearIn || !src->format->subY))
+    // NVDEC's pictures, the only block-linear sources the unit has run, are 4:2:0. An L8 source is such a picture's
+    // luma plane alone, the same GOBs (a 'v0a8' alpha plane: HW Test decode.hevc_alpha).
+    if (!op->fill && src->blockLinear &&
+        (!t->blockLinearIn || !(src->format->subY || src->format->vic == TEGRA_VIC_T_L8)))
         return "block-linear source this engine has not proven";
     if (!op->fill && src->format->kind != TEGRA_VIC_KIND_RGB) {
         const bool same = dst->format->kind == src->format->kind && src->standard == dst->standard &&

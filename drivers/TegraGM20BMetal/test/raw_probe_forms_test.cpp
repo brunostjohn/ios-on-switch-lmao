@@ -269,4 +269,46 @@ TEST(ProbeOps, FillNamesItsRectangleAndColour)
     EXPECT_EQ(raw::probeTwodFormat(55), 0u);
 }
 
+TEST(ProbeOps, AfterAnOpTheTwoDEngineIdlesBeforeTheThreeDEngineAndTheTextureCacheIsInvalidated)
+{
+    const auto m = words([](raw::Push &p) {
+        raw::probeOpAfter(p);
+    });
+    EXPECT_EQ(m, (std::vector<Method>{{3, NV902D_WAIT_FOR_IDLE, 0},
+                                      {0, NVB197_WAIT_FOR_IDLE, 0},
+                                      {0, NVB197_INVALIDATE_TEXTURE_DATA_CACHE_NO_WFI, 0}}));
+    EXPECT_LE(m.size() * 2, raw::kProbeBracketWords);
+}
+
+TEST(ProbeOps, ReferenceFillSetsTheDdxStateClipsToTheSurfaceAndUnclipsAfter)
+{
+    raw::ProbeOp op;
+    op.kind = raw::ProbeOpKind::Fill;
+    op.referenceFill = true;
+    op.dst = {0x300000, 0xcf, 256, 64, 32, false, 0};
+    op.dx = 1, op.dy = 1, op.dw = 62, op.dh = 30;
+    op.colorFormat = 0xcf;
+    op.color[0] = 0xff204060;
+    uint32_t buffer[128];
+    raw::Push p{buffer, buffer + 128};
+    raw::emitProbeOp(p, op);
+    EXPECT_LE(size_t(p.at - buffer), raw::probeOpWords(op));
+    const auto m = words([&](raw::Push &q) {
+        raw::emitProbeOp(q, op);
+    });
+    const auto at = [&](Method x) {
+        return size_t(std::find(m.begin(), m.end(), x) - m.begin());
+    };
+    const size_t mode = at({3, NV902D_RENDER_SOLID_PRIM_MODE, NV902D_RENDER_SOLID_PRIM_MODE_V_RECTS});
+    ASSERT_LT(mode, m.size());
+    EXPECT_LT(at({3, NV902D_SET_OPERATION, NV902D_SET_OPERATION_V_SRCCOPY}), mode);
+    EXPECT_LT(at({3, NV902D_SET_CLIP_ENABLE, 1}), mode);
+    EXPECT_LT(at({3, NV902D_SET_CLIP_WIDTH, 64}), mode);
+    EXPECT_LT(at({3, NV902D_SET_CLIP_HEIGHT, 32}), mode);
+    EXPECT_EQ(at({3, NV902D_SET_RENDER_SOLID_PRIM_COLOR_FORMAT, 0xcf}), mode + 1);
+    EXPECT_EQ(at({3, NV902D_SET_RENDER_SOLID_PRIM_COLOR, 0xff204060}), mode + 2);
+    EXPECT_EQ(m.back(), (Method{3, NV902D_SET_CLIP_ENABLE, 0}));
+    EXPECT_EQ(at({3, NV902D_SET_RENDER_SOLID_PRIM_COLOR0, 0}), m.size());
+}
+
 }  // namespace

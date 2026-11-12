@@ -59,6 +59,11 @@ const std::vector<TextMapping> kMappings = {
      0x2a0400000,
      0x7c60000,
      0},
+    {".30",
+     {0xff, 0x9f, 0xc5, 0x5c, 0xee, 0x05, 0x3e, 0x45, 0xba, 0x2d, 0x82, 0x65, 0xba, 0xb4, 0x57, 0xee},
+     0x208400000,
+     0x7ca0000,
+     0},
 };
 
 const switch_us_cache &kCache = switch_us_cache_24B119;
@@ -480,13 +485,33 @@ TEST(XnuUiScaleSites24B119, ScrollEdgeKeylineTakesThe2xRowAtEveryScaleBut3)
     }
 }
 
-TEST(XnuUiScaleSites24B119, OnlyTheGridAndWidgetKitApplyAtScaleOne)
+TEST(XnuUiScaleSites24B119, OnlyTheGridWidgetKitAndTheTimebaseApplyAtScaleOne)
 {
     for (size_t i = 0; i < kCache.count; i++) {
         const std::string name = switch_ui_scale_sites::NameOf(kCache.sites[i]);
         const bool every_scale = name == "SpringBoardHome home screen grid 3x5" ||
                                  name == "WidgetKit placeholder batch deadline (n + 10) x 5 s" ||
-                                 name == "WidgetKit archived image limit of a 2x screen";
+                                 name == "WidgetKit archived image limit of a 2x screen" ||
+                                 name == "SampleAnalysis mach timebase of a 19.2 MHz counter";
         EXPECT_EQ(kCache.sites[i].every_scale, every_scale) << name;
     }
+}
+
+TEST(XnuUiScaleSites24B119, SampleAnalysisKnowsTheX1Timebase)
+{
+    const switch_us_site *site = Named("SampleAnalysis mach timebase of a 19.2 MHz counter");
+    ASSERT_NE(site, nullptr);
+    ASSERT_EQ(site->edits, 2u);
+    EXPECT_TRUE(site->every_scale);
+    const switch_us_edit &pairs = site->edit[0], &rates = site->edit[1];
+    uint32_t stock[4] = {}, patched[2] = {};
+    std::memcpy(stock, pairs.stock, sizeof(stock));
+    std::memcpy(patched, pairs.patched, sizeof(patched));
+    EXPECT_EQ(stock[0], 1u);
+    EXPECT_EQ(stock[1], 1u);
+    EXPECT_EQ(static_cast<double>(stock[2]) / stock[3], 1e9 / 24e6);
+    EXPECT_EQ(static_cast<double>(patched[0]) / patched[1], 1e9 / 19.2e6);
+    EXPECT_EQ(Double(rates.stock), 1e-7);
+    EXPECT_EQ(Double(rates.stock + 8), 24e6);
+    EXPECT_EQ(Double(rates.patched), 19.2e6);
 }

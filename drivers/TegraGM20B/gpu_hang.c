@@ -1,58 +1,7 @@
 // SPDX-License-Identifier: MIT
 // Channel progress, hang detection, client fault isolation and recovery.
 #include "gpu_internal.h"
-
-/* One line of what the GPU is doing about a channel: owner, hardware channel id, error, completed/submitted fence and
- * how long ago the last one was kicked; GPFIFO GET/PUT as the host sees them (USERD 0x88/0x8c) and the PUT the kernel
- * wrote; PGRAPH_STATUS (0x400700, bit 0 busy), PFIFO engine 0 (GR) status (0x2640); PBDMA 0: status (0x3080, bits 13-15
- * busy, gk104_runq_idle), the channel it serves (0x40120) and the method/data it is on (0x400c0/0x400c4: subchannel
- * 18:16, method 13:2, as gf100_runq_intr decodes them; a NV906F semaphore method there means a semaphore acquire that is
- * not satisfied); PMC_INTR_0; and the memory controller's last refused access (MC_INTSTATUS, MC_ERR_STATUS, MC_ERR_ADR). */
-void tgm_chan_describe(struct tgm_chan *chan, char *buf, unsigned int len)
-{
-	struct nvkm_device *device = tgm_gpu.device;
-	volatile u32 *userd = chan->user.map.ptr;
-	const u32 eng = nvkm_rd32(device, 0x002640);
-	u32 mc_int = 0;
-	u32 mc_err = 0;
-	u32 mc_adr = 0;
-	char engine[48];
-	char note[112];
-
-	tgm_hang_engine(eng, engine, sizeof(engine));
-	tgm_hang_note(&chan->hang, tgm_chan_completed(chan) + 1, chan->submitted,
-		      chan->chan.gpfifo.map.ptr, chan->chan.gpfifo.max, chan->ring_va,
-		      CHAN_PUSH_BYTES, chan->vm->connection, note, sizeof(note));
-	tegra_gm20b_mc_errors(&mc_int, &mc_err, &mc_adr);
-	scnprintf(
-		buf, len,
-		"%s ch %u err %u fence %u/%u kicked %llu ms ago%s, gp %u/%u (put %u), PGRAPH %08x "
-		"ENG0 %08x (%s), "
-		"PBDMA0 %08x ch %u mthd %08x data %08x, PMC %08x, MC %08x err %08x at %08x",
-		chan->owner[0] ? chan->owner : "?", chan->chid, chan->error,
-		tgm_chan_completed(chan), chan->submitted,
-		chan->submit_ns ? (nvxnu_nanotime() - chan->submit_ns) / 1000000 : 0ULL, note,
-		userd ? userd[0x88 / 4] : 0, userd ? userd[0x8c / 4] : 0, chan->chan.gpfifo.cur,
-		nvkm_rd32(device, 0x400700), eng, engine, nvkm_rd32(device, 0x003080),
-		nvkm_rd32(device, 0x040120) & 0xfff, nvkm_rd32(device, 0x0400c0),
-		nvkm_rd32(device, 0x0400c4), nvkm_rd32(device, 0x000100), mc_int, mc_err, mc_adr);
-}
-
-void tgm_chan_hung(struct tgm_chan *chan, const char *who, uint32_t seqno, uint64_t waited_ns)
-{
-	char state[TGM_HANG_LINE];
-	char order[64] = "";
-	const struct tgm_order *w = &chan->waited;
-	tgm_chan_describe(chan, state, sizeof(state));
-	/* still waiting for another channel of its task (tgm_chan_order) */
-	if (w->cpu && (s32)(READ_ONCE(*w->cpu) - w->seqno) < 0) {
-		scnprintf(order, sizeof(order), ", order wait on chan %llu fence %u (at %u)", w->id,
-			  w->seqno, READ_ONCE(*w->cpu));
-	}
-	nvxnu_panic("tegra-gm20b: %s: fence %u still pending after %llu ms and no GPU error "
-		    "reported: %s%s",
-		    who, seqno, waited_ns / 1000000, state, order);
-}
+#include "../../kits/SwitchLinux/SwitchLinux.h"
 
 /* The time the hold kept the channel off the GPU is not the channel's: it never counts toward a stall. */
 uint64_t tgm_chan_check_progress(struct tgm_chan *chan, const char *who, uint32_t seqno)
@@ -95,29 +44,8 @@ static u32 fault_code(const char *report)
 	if (strstr(report, "fault "))
 		return 1;
 	if (strstr(report, "TRAP") || strstr(report, "ILLEGAL_") || strstr(report, "DATA_ERROR"))
-		return 2;
+		return TGM_KILL_GR_ERROR;
 	return 3;
-}
-
-static void fence_kill_record(volatile u32 *fence_cpu, u32 submitted, u32 error)
-{
-	volatile struct TegraGM20BAbiFence *fence = (volatile struct TegraGM20BAbiFence *)fence_cpu;
-
-	WRITE_ONCE(fence->killed_first, READ_ONCE(fence->completed) + 1);
-	WRITE_ONCE(fence->killed_last, submitted);
-	__asm__ volatile("dsb sy" ::: "memory");
-	WRITE_ONCE(fence->error, error);
-	__asm__ volatile("dsb sy" ::: "memory");
-}
-
-void tgm_fence_kill_clear(volatile uint32_t *fence_cpu)
-{
-	volatile struct TegraGM20BAbiFence *fence = (volatile struct TegraGM20BAbiFence *)fence_cpu;
-
-	WRITE_ONCE(fence->error, 0);
-	WRITE_ONCE(fence->killed_first, 0);
-	WRITE_ONCE(fence->killed_last, 0);
-	__asm__ volatile("dsb sy" ::: "memory");
 }
 
 /* nvkm killed the channel (nvkm_chan_error, from its recovery work). Before M3, M3 reads chan->error. From M3 on: an
@@ -128,6 +56,7 @@ int tgm_chan_killed(struct nvif_event *event, void *repv, u32 repc)
 	struct tgm_chan *chan = container_of(event, struct tgm_chan, kill);
 	const char *report = chan->fault[0] ? chan->fault : nvxnu_gpu_errors();
 	char state[TGM_HANG_LINE];
+	u32 first = 0;
 
 	(void)repv;
 	(void)repc;
@@ -149,8 +78,9 @@ int tgm_chan_killed(struct nvif_event *event, void *repv, u32 repc)
 	if (fault_code(report) == 1)
 		WRITE_ONCE(chan->fault_va, tgm_fault_va(report, (int)chan->chid));
 	WRITE_ONCE(chan->error, fault_code(report));
-	switch_gpu_timeline_failed(chan->timeline, READ_ONCE(*chan->fence_cpu));
-	fence_kill_record(chan->fence_cpu, chan->submitted, chan->error);
+	first = tgm_kill_first(chan->faulted, chan->fault_seqno, READ_ONCE(*chan->fence_cpu));
+	switch_gpu_timeline_failed(chan->timeline, first - 1);
+	tgm_fence_kill_record(chan->fence_cpu, first, chan->submitted, chan->error);
 	__atomic_store_n(chan->fence_cpu, chan->submitted, __ATOMIC_RELEASE);
 	__asm__ volatile("dsb sy" ::: "memory");
 	nvxnu_log("tegra-gm20b: GPU error in %s (channel %u): channel killed, GPU running: %s\n",
@@ -430,10 +360,37 @@ static void hang_detail(struct tgm_chan *blame, struct tgm_chan *late, u64 now)
 }
 
 #endif
+/* What the candidates wait on (tgm_chan_wait_source), read once a channel and check */
+struct candidate_waits {
+	struct tgm_chan *chan[8], *source[8];
+	enum tgm_wait_source kind[8];
+	int n;
+};
+
+/* tgm_live_lock held */
+static enum tgm_wait_source candidate_wait(struct candidate_waits *w, struct tgm_chan *chan,
+					   struct tgm_chan **source)
+{
+	int i = 0;
+
+	for (i = 0; i < w->n && w->chan[i] != chan; i++)
+		;
+	if (i == w->n && w->n < (int)ARRAY_SIZE(w->chan)) {
+		w->chan[i] = chan;
+		w->kind[i] = tgm_chan_wait_source(chan, &w->source[i], NULL, 0);
+		w->n++;
+	}
+	*source = i < w->n ? w->source[i] : NULL;
+	return i < w->n ? w->kind[i] : TGM_WAITS_NONE;
+}
+
 enum tgm_hang tgm_hang_recover(struct tgm_chan *late, const char *who, u32 seqno, u64 waited_ns)
 {
 	struct tgm_hang_candidate c[8] = {};
 	struct tgm_chan *chans[8] = {};
+	struct candidate_waits waits = {};
+	struct tgm_chan *source = NULL;
+	enum tgm_wait_source kind = TGM_WAITS_NONE;
 	struct tgm_chan *chan = NULL;
 	struct tgm_chan *blame = NULL;
 	char report[sizeof(late->fault)];
@@ -453,15 +410,9 @@ enum tgm_hang tgm_hang_recover(struct tgm_chan *late, const char *who, u32 seqno
 	resident = tgm_recover_suspects(tgm_gpu.device, suspects, ARRAY_SIZE(suspects));
 	for (n = 0; n < resident; n++)
 		chans[n] = live_by(0, suspects[n]);
-	/* the late one's order acquires, source by source, up to two hops, then the late one itself last */
+	/* the late one's acquires, source by source, up to two hops, then the late one itself last */
 	for (chan = late, i = 0; chan && i < 2; i++) {
-		struct tgm_chan *source = NULL;
-
-		if (!chan->waited.cpu ||
-		    (s32)(READ_ONCE(*chan->waited.cpu) - chan->waited.seqno) >= 0)
-			break;
-		source = live_by(chan->waited.id, 0);
-		if (!source)
+		if (candidate_wait(&waits, chan, &source) != TGM_WAITS_CHANNEL || !source)
 			break;
 		chans[n++] = source;
 		chan = source;
@@ -469,6 +420,7 @@ enum tgm_hang tgm_hang_recover(struct tgm_chan *late, const char *who, u32 seqno
 	chans[n] = late;
 	for (i = 0; i <= n; i++) {
 		c[i].live = chans[i] != NULL;
+		c[i].dead = !chans[i] || READ_ONCE(chans[i]->error) != 0;
 		c[i].kernel = chans[i] && chans[i]->kernel;
 		c[i].resident = i < resident;
 		c[i].moving = chans[i] && chan_moving(chans[i], now);
@@ -485,12 +437,13 @@ enum tgm_hang tgm_hang_recover(struct tgm_chan *late, const char *who, u32 seqno
 						 &chans[i]->hang_strikes, &chans[i]->hang_seen);
 	}
 	for (i = 0; i <= n; i++) {
-		const struct tgm_order *w = chans[i] ? &chans[i]->waited : NULL;
-
-		if (!w || !w->cpu || (s32)(READ_ONCE(*w->cpu) - w->seqno) >= 0)
+		if (!chans[i])
 			continue;
-		for (j = 0; j <= n; j++)
-			if (j != i && chans[j] && chans[j]->id == w->id)
+		kind = candidate_wait(&waits, chans[i], &source);
+		c[i].victim = kind == TGM_WAITS_VICTIM || kind == TGM_WAITS_UNREAD;
+		tgm_acquire_unfired(chans[i], now);
+		for (j = 0; source && j <= n; j++)
+			if (j != i && chans[j] == source)
 				c[i].waits = (u8)(j + 1);
 	}
 	list_for_each_entry(chan, &tgm_live_chans, live)
@@ -499,6 +452,18 @@ enum tgm_hang tgm_hang_recover(struct tgm_chan *late, const char *who, u32 seqno
 			progress = 1;
 	}
 	verdict = tgm_hang_blame(c, n + 1, READ_ONCE(late->error) != 0, late->kernel, progress, &b);
+	if (verdict == TGM_HANG_RESIDUE) {
+		if (tgm_recover_residue(tgm_gpu.device, suspects[b])) {
+			nvxnu_log("tegra-gm20b: GPU hang: %s waited %llu ms for %s fence %u behind "
+				  "dead channel %d: its engine reset, nothing killed\n",
+				  who, waited_ns / 1000000, late->owner, seqno, suspects[b]);
+			return TGM_HANG_RECOVERING;
+		}
+		for (i = 0; i <= n; i++)
+			c[i].dead = 0;
+		verdict = tgm_hang_blame(c, n + 1, READ_ONCE(late->error) != 0, late->kernel,
+					 progress, &b);
+	}
 	if (b < 0 || chans[b]->isolating)
 		return verdict;
 	blame = chans[b];
@@ -517,11 +482,20 @@ enum tgm_hang tgm_hang_recover(struct tgm_chan *late, const char *who, u32 seqno
 	return verdict;
 }
 
+/* tgm_live_lock: the line names the channel and the engine, past nvxnu_log's 512 characters and within os_log's 1,024 */
+static char ctxsw_line[1024];
+
+/* A client's context that cannot switch is the only one lost: nvkm's recovery (nvkm_runl_rc) takes that channel off
+ * the runlist and resets the engines still on its group; every other channel's context lives in its own instance
+ * block, GR's reset reloads its firmware with clock gating off (tgm_clkgate_guard_reset) and ZBC from nvkm's tables, and
+ * the runlist goes on without the dead channel. */
 enum tgm_ctxsw tgm_ctxsw_decide(int chid)
 {
 	struct tgm_chan *chan = NULL;
 	char report[sizeof(chan->fault)];
 	char state[TGM_HANG_LINE];
+	char engine[TGM_HANG_LINE];
+	char engines[TGM_HANG_LINE];
 	u64 now = nvxnu_nanotime();
 	enum tgm_ctxsw verdict = TGM_CTXSW_RESET;
 
@@ -532,16 +506,23 @@ enum tgm_ctxsw tgm_ctxsw_decide(int chid)
 					    chan_stuck(chan, now));
 		if (verdict == TGM_CTXSW_FATAL) {
 			tgm_chan_describe(chan, state, sizeof(state));
-			nvxnu_panic("tegra-gm20b: context switch timed out on %s's channel: %s",
-				    chan->owner, state);
+			tgm_engine_state(engine, sizeof(engine));
+			tgm_engines_line(engines, sizeof(engines));
+			nvxnu_panic("tegra-gm20b: context switch timed out on %s's channel: %s; "
+				    "engines %s; %s",
+				    chan->owner, state, engines, engine);
 		}
 		if (verdict == TGM_CTXSW_KILL && !chan->isolating) {
 			tgm_chan_describe(chan, state, sizeof(state));
 			scnprintf(report, sizeof(report), "CTXSW_TIMEOUT: %s", state);
-			nvxnu_log("tegra-gm20b: context switch timed out, recovering %s (channel "
-				  "%u): %s\n",
-				  chan->owner, chan->chid, state);
 			tgm_chan_isolate(chan, report, now);
+			tgm_engine_state(engine, sizeof(engine));
+			tgm_engines_line(engines, sizeof(engines));
+			scnprintf(ctxsw_line, sizeof(ctxsw_line),
+				  "tegra-gm20b: context switch timed out, recovering %s (channel "
+				  "%u): %s; engines %s; %s\n",
+				  chan->owner, chan->chid, state, engines, engine);
+			switch_linux_log_line(ctxsw_line);
 		}
 	}
 	mutex_unlock(&tgm_live_lock);

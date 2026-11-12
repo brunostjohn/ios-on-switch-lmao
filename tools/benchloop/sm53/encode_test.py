@@ -153,6 +153,14 @@ class EncodeTest(unittest.TestCase):
         for instr, name in CONSTRUCTED:
             self.assertEqual(instr.name, name, hex(instr.word))
 
+    def test_a_wait_one_cycle_after_its_barrier_is_set_is_refused(self):
+        ipa = e.ipa(4, 0x70).sched(wr_bar=0)
+        consumer = e.mov(0, 4).sched(wait=1)
+        self.assertEqual(e.barrier_hazards([ipa, consumer]), [1])
+        self.assertEqual(e.barrier_hazards([ipa.sched(delay=e.BARRIER_SET_CYCLES), consumer]), [])
+        with self.assertRaises(ValueError):
+            e.bundle([ipa, consumer])
+
     def test_control_bits_round_trip(self):
         c = Control(delay=13, yld=True, wr_bar=2, rd_bar=4, wait=0x21, reuse=0b101)
         self.assertEqual(Control.of(c.bits()), c)

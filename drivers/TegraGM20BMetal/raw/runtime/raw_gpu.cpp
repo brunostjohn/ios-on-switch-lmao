@@ -11,6 +11,7 @@
 #include "raw_blend_kill.h"
 #include "raw_dynamic_push.h"
 #include "raw_keyline_probe.h"
+#include "raw_glass_probe.h"
 #include "../../../NativeMetal/bridge/NativeMetalBlend.h"
 #include "../../../../kits/SwitchGM20B/SwitchGM20B.h"
 #include "raw_follow.h"
@@ -18,6 +19,7 @@
 #include "raw_kit.h"
 #include "raw_mme.h"
 #include "raw_mip.h"
+#include "../fx/fx_mip_route.h"
 #include "raw_owned.h"
 #include "raw_residual.h"
 #include "raw_multisample.h"
@@ -484,6 +486,10 @@ bool Device::open(const char *packPath, uint64_t stack, std::string &err, Role r
 {
     role_ = role;
     sizes_ = kSizes[role == Role::RenderServer ? 0 : 1];
+#if SWITCH_RAW_DIAGNOSTICS
+    if (role == Role::RenderServer)
+        glassMem = std::make_unique<GlassMem>();
+#endif
     if (!pack_.load(packPath, stack, err))
         return false;
     if (!k_.open(err))
@@ -693,8 +699,10 @@ bool Device::slmNeed(uint64_t perWarp)
         return false;
     if (slm_.bytes)
         slmOutgrown_.push_back(slm_);
+    set_.add(k_, area, TegraGM20BSurfaceWrite, true);
     slm_ = area;
-    slmPerWarp_ = perWarp;
+    slmVa_.store(area.va, std::memory_order_relaxed);
+    slmPerWarp_.store(perWarp, std::memory_order_release);
     os_log(os_log_create("com.brunostjohn.switch.TegraGM20BMetal", "raw"),
            "raw: shader local memory: %llu bytes a warp, %llu KiB", (unsigned long long)perWarp,
            (unsigned long long)(a.bytes >> 10));
@@ -724,6 +732,7 @@ bool Device::heapGrow(uint64_t end)
         vm_deallocate(mach_task_self(), cpu, part.bytes);
         return false;
     }
+    set_.add(k_, part.bo, TegraGM20BSurfaceRead, true);
     heapParts_.push_back(part);
     heapBound_ += part.bytes;
     return true;
@@ -910,6 +919,7 @@ void Device::build(Pipeline &pl, const PackPipeline &pp, const PlacedProgram &vs
     };
     pl.vertexInstructions = instructions(*vs.record);
     pl.fragmentInstructions = instructions(*fs.record);
+    pl.vertexStores = writesMemory(vs.header);
     pl.memoryEntries = pp.memoryEntries;
     std::vector<uint32_t> words(64 + 16 + pp.blobDwords * 2);
     Push w{words.data(), words.data() + words.size()};
@@ -1093,9 +1103,11 @@ bool Device::newChunk(uint64_t size, bool dedicated, std::unique_lock<std::mutex
         ch.free[0] = size;
         poolFree_ += size;
     }
+    set_.add(k_, ch.bo, TegraGM20BSurfaceRead);
     chunks_[c] = std::move(ch);
     RAW_DIAGNOSTIC(stats.poolBytes += size);
     RAW_DIAGNOSTIC(stats.poolChunks++);
+    RAW_DIAGNOSTIC(glassMemEvent(dedicated ? "pool chunk made (dedicated)" : "pool chunk made", size));
     index = c;
     return true;
 }
@@ -1256,7 +1268,8 @@ void Device::freeChunk(Chunk &ch)
 {
     RAW_DIAGNOSTIC(stats.poolBytes -= ch.bytes);
     RAW_DIAGNOSTIC(stats.poolChunks--);
-    k_.free(ch.bo);
+    RAW_DIAGNOSTIC(glassMemEvent("chunk freed", ch.bytes));
+    set_.free(k_, ch.bo);
     vm_deallocate(mach_task_self(), vm_address_t(ch.memory), ch.bytes);
     ch = Chunk();
 }
@@ -2009,9 +2022,11 @@ bool Device::newTiledChunk(std::vector<Chunk> &chunks, uint32_t kind, uint64_t s
         chunks.emplace_back();
     if (!dedicated)
         ch.free[0] = size;
+    set_.add(k_, ch.bo, TegraGM20BSurfaceWrite);
     chunks[c] = std::move(ch);
     RAW_DIAGNOSTIC(stats.poolBytes += size);
     RAW_DIAGNOSTIC(stats.poolChunks++);
+    RAW_DIAGNOSTIC(glassMemEvent(kind == fx::kBlockLinearKind ? "block-linear chunk made" : "zeta chunk made", size));
     index = c;
     return true;
 }
@@ -2210,6 +2225,10 @@ bool Device::createBlockTextureOver(void *bytes, uint64_t length, uint32_t width
 
 void Device::destroyTexture(Texture &t)
 {
+#if SWITCH_RAW_DIAGNOSTICS
+    if (glassMemOn.load(std::memory_order_relaxed))
+        glassMem->forget(t.storageRange().va ? t.storageRange().va : t.va, t.view ? t.tic : 0);
+#endif
     if (t.view) {
         std::lock_guard<std::mutex> l(lock_);
         if (t.tic) {
@@ -2257,6 +2276,7 @@ void Device::destroyTexture(Texture &t)
         probeCompressed.erase(it);
     }
 #endif
+    releasePrivateCompressed(t);
     freeSpan(t.span, memoryOf(t), t.lease);
     t = {};
 }
@@ -2299,6 +2319,7 @@ bool Device::createControlBuffer(uint64_t length, Buffer &buffer)
     Chunk chunk;
     if (!k_.allocControl(length, chunk.bo, ControlUse::Bytes))
         return false;
+    set_.add(k_, chunk.bo, TegraGM20BSurfaceRead);
     chunk.memory = chunk.bo.cpu;
     chunk.bytes = chunk.used = chunk.bo.bytes;
     chunk.dedicated = true;
@@ -2349,6 +2370,7 @@ bool Device::wcAlloc(uint64_t bytes, Span &s)
         Chunk ch;
         if (!k_.alloc(size, true, ch.bo))
             return false;  // the GPU pool is full: pool memory instead (createBuffer)
+        set_.add(k_, ch.bo, TegraGM20BSurfaceRead);
         ch.memory = ch.bo.cpu;
         ch.bytes = size;
         ch.dedicated = dedicated;
@@ -2378,7 +2400,7 @@ void Device::wcFree(Span &s)
     ch.used -= s.bytes;
     RAW_DIAGNOSTIC(stats.wcBytes -= s.bytes);
     if (ch.dedicated) {
-        k_.free(ch.bo);
+        set_.free(k_, ch.bo);
         ch = Chunk();
         s = {};
         return;
@@ -2406,7 +2428,7 @@ void Device::wcFree(Span &s)
     if (!ch.used) {
         for (const Chunk &other : wcChunks_)
             if (&other != &ch && other.bo.handle && !other.dedicated && !other.used) {
-                k_.free(ch.bo);  // (the kernel keeps the pages until the work submitted before has completed)
+                set_.free(k_, ch.bo);  // (the kernel keeps the pages until the work submitted before has completed)
                 ch = Chunk();
                 break;
             }
@@ -2767,6 +2789,7 @@ Device::Backing *Device::plainBacking(const Texture &m, uint32_t tag, bool block
             return nullptr;
         }
         RAW_DIAGNOSTIC(stats.backingBytes += made->span.bytes);
+        RAW_DIAGNOSTIC(glassMemEvent("memoryless plain memory made", made->span.bytes));
         plainMems_.push_back(std::move(made));
         mem = plainMems_.back().get();
         // the views of its tag's smaller memory: no pass takes them again (an animated layer seldom asks a size twice), so it
@@ -2819,6 +2842,7 @@ void Device::freePlainSpan(PlainMem &mem)
 void Device::dropPlain(PlainMem *mem)
 {
     RAW_DIAGNOSTIC(stats.backingBytes -= mem->span.bytes);
+    RAW_DIAGNOSTIC(glassMemEvent("memoryless plain memory freed", mem->span.bytes));
     freePlainSpan(*mem);
     plainMems_.erase(std::find_if(plainMems_.begin(), plainMems_.end(), [&](const std::unique_ptr<PlainMem> &p) {
         return p.get() == mem;
@@ -2836,11 +2860,11 @@ void Device::plainFree(Backing &b)
         dropPlain(mem);
 }
 
-Texture *Device::lastBacking(const Texture &m, uint32_t tag, bool blockLinear, bool compression)
+Texture *Device::lastBacking(const Texture &m, uint32_t tag, bool blockLinear, bool compression, bool copied)
 {
     const uint64_t epoch = backingEpoch_.load(std::memory_order_seq_cst);
     for (const BackingAsk &ask : asks_) {
-        if (ask.epoch != epoch || !ask.same(m, tag, blockLinear, compression))
+        if (ask.epoch != epoch || !ask.same(m, tag, blockLinear, compression, copied))
             continue;
         Backing *b = ask.backing;
         b->lastCommit.store(commitCount_, std::memory_order_relaxed);
@@ -2851,11 +2875,11 @@ Texture *Device::lastBacking(const Texture &m, uint32_t tag, bool blockLinear, b
     return nullptr;
 }
 
-Texture *Device::backing(const Texture &m, uint32_t tag, bool blockLinear, bool compression)
+Texture *Device::backing(const Texture &m, uint32_t tag, bool blockLinear, bool compression, bool copied)
 {
-    BackingAsk ask{m.width, m.height, m.format, tag, m.samples, m.zeta, blockLinear, compression};
+    BackingAsk ask{m.width, m.height, m.format, tag, m.samples, m.zeta, blockLinear, compression, copied};
     blockLinear |= m.zeta;
-    const uint32_t kind = compression ? compKind(m, tag, blockLinear) : 0;
+    const uint32_t kind = compression ? compKind(m, blockLinear, copied) : 0;
     const CompMem *mem = kind ? comp_.largest(tag, kind) : nullptr;
     Backing *plain = nullptr;
     blockLinear |= m.samples > 1;
@@ -3246,6 +3270,11 @@ CommandBuffer *Device::begin()
         }
     growRing(push_, kSizes[0].push);
     growRing(upload_, kSizes[0].upload);
+#if SWITCH_RAW_DIAGNOSTICS
+    if (glassMemOn.load(std::memory_order_relaxed) || glassMemLive_ || glassMemBusyCount_)
+        glassMemFrame();
+    cb_.glassMemSlot_ = -1;
+#endif
     CommandBuffer &cb = cb_;
     cb.dev_ = this;
     cb.segments_.clear();
@@ -3253,6 +3282,10 @@ CommandBuffer *Device::begin()
     cb.dirty_.clear();
     cb.backings_.clear();
     cb.surfaces_.clear();
+    set_.view(setView_);
+    cb.memberUses_.clear();
+    cb.memberRemovals_ = setView_.removals;
+    cb.memberHostWritten_ = false;
     cb.named_.clear();
     cb.sharedWaits_.clear();
     cb.sharedSignals_.clear();
@@ -3262,7 +3295,7 @@ CommandBuffer *Device::begin()
     cb.forceWholePrograms_ = cb.inlineStates_ = false;
     cb.foldCounts();
 #endif
-    cb.draws = cb.passes = cb.blits = 0;
+    cb.draws = cb.passes = cb.blits = cb.bands = 0;
     cb.refusal = {};
     cb.partial = false;
     cb.admissionBlocked = false;
@@ -3393,17 +3426,17 @@ RenderEncoder *CommandBuffer::render(const PassDesc &pass)
     // the device's backings: those the last passes asked the same of with no lock, else under the device's lock once a
     // pass however many attachments need one (the compression thread trims them under it)
     std::unique_lock<std::mutex> backingLock(dev_->lock_, std::defer_lock);
-    const auto backing = [&](const Texture &shape, uint32_t tag, bool linear, bool compression) {
-        if (Texture *b = backingLock.owns_lock() ? nullptr : dev_->lastBacking(shape, tag, linear, compression))
+    const auto backing = [&](const Texture &shape, uint32_t tag, bool linear, bool compression, bool copied) {
+        if (Texture *b = backingLock.owns_lock() ? nullptr : dev_->lastBacking(shape, tag, linear, compression, copied))
             return b;
         if (!backingLock.owns_lock()) {
             backingLock.lock();
             RAW_ENCODE_COUNT(Locks);
         }
-        return dev_->backing(shape, tag, linear, compression);
+        return dev_->backing(shape, tag, linear, compression, copied);
     };
     if (zeta && zeta->memoryless) {
-        Texture *b = backing(planeShaped(*zeta, e.rot_), 0, false, true);
+        Texture *b = backing(planeShaped(*zeta, e.rot_), 0, false, true, false);
         if (!b)
             return nullptr;
         e.pass_.depthStencil.texture = b;
@@ -3430,7 +3463,7 @@ RenderEncoder *CommandBuffer::render(const PassDesc &pass)
                 RAW_DIAGNOSTIC(dev_->stats.rtUnalignedPitch = t->pitch);
                 RAW_DIAGNOSTIC(dev_->stats.rtUnalignedVa = uint32_t(t->va & 255));
             }
-            Texture *b = backing(*t, scratchTags[j], blockLinear, kCopyEngineReadsCompressed);
+            Texture *b = backing(*t, scratchTags[j], blockLinear, !(pass.storageMask >> j & 1), true);
             if (!b || !b->renderable)
                 return nullptr;
             e.pass_.color[j].texture = b;
@@ -3439,7 +3472,8 @@ RenderEncoder *CommandBuffer::render(const PassDesc &pass)
             continue;
         }
         if (t->memoryless) {  // back it for this pass
-            Texture *b = backing(planeShaped(*t, e.rot_), scratchTags[j], blockLinear, !(pass.storageMask >> j & 1));
+            Texture *b =
+                backing(planeShaped(*t, e.rot_), scratchTags[j], blockLinear, !(pass.storageMask >> j & 1), false);
             if (!b)
                 return nullptr;
             e.pass_.color[j].texture = b;
@@ -3540,6 +3574,18 @@ static uint64_t rowStorageBytes(uint32_t pitch, uint32_t width, uint32_t height,
     return last <= UINT64_MAX - rows ? rows + last : 0;
 }
 
+// A use of a member goes with the set and is only recorded, should the member leave the set before the job is submitted
+bool CommandBuffer::useMember(uint64_t va, uint64_t bytes, bool write, bool hostWritten)
+{
+    const SetMember *m = dev_->member(va, bytes);
+    if (!m)
+        return false;
+    if (write && !(m->access & TegraGM20BSurfaceWrite))
+        dev_->set_.promote(dev_->k_, m->handle);
+    memberUses_.push_back({m->handle, write ? uint32_t(TegraGM20BSurfaceWrite) : uint32_t(TegraGM20BSurfaceRead)});
+    memberHostWritten_ |= hostWritten;
+    return true;
+}
 uint64_t CommandBuffer::batchLimit() const
 {
     return dev_->role() == Device::Role::RenderServer ? BatchWork::kRenderServerLimit : BatchWork::kLimit;
@@ -3701,26 +3747,22 @@ bool CommandBuffer::commit(uint32_t &seqno)
 
         ~RollbackInvalidation()
         {
-            if (invalidates && !published) {
-                RAW_ENCODE_LOCK(lock, device.lock_);
+            if (invalidates && !published)
                 device.heapInvalidated_ = before;
-            }
         }
     } rollback{d, invalidates, published, invalidatedBefore};
 
     uint64_t slmGiven = 0, slmVa = 0;
-    {
-        RAW_ENCODE_LOCK(l, d.lock_);
-        if (shaderInvalidate_ && d.heapPlaced_ != d.heapInvalidated_) {
-            *shaderInvalidate_ |= kInvalidateInstruction;
-            invalidates = true;
-            invalidatedBefore = d.heapInvalidated_;
-            d.heapInvalidated_ = d.heapPlaced_;
-        }
-        if (d.slmPerWarp_ != d.slmChannel_) {
-            slmGiven = d.slmPerWarp_;
-            slmVa = d.slm_.va;
-        }
+    const uint64_t placed = d.heapPlaced_.load(std::memory_order_acquire);
+    if (shaderInvalidate_ && placed != d.heapInvalidated_) {
+        *shaderInvalidate_ |= kInvalidateInstruction;
+        invalidates = true;
+        invalidatedBefore = d.heapInvalidated_;
+        d.heapInvalidated_ = placed;
+    }
+    if (const uint64_t perWarp = d.slmPerWarp_.load(std::memory_order_acquire); perWarp != d.slmChannel_) {
+        slmGiven = perWarp;
+        slmVa = d.slmVa_.load(std::memory_order_relaxed);
     }
     // ahead of everything in it: a program placed after begin() may ask for more than the channel has
     if (slmGiven && !segments_.empty()) {
@@ -3730,6 +3772,10 @@ bool CommandBuffer::commit(uint32_t &seqno)
         emitSlm(p, slmVa, slmArea(slmGiven, d.k_.info().tpc_count));
         segments_.insert(0, {va, uint32_t(p.at - head), 0});
     }
+#if SWITCH_RAW_DIAGNOSTICS
+    if (!segments_.empty() && d.glassMemLive_)
+        glassMemTail();
+#endif
     if (!segments_.empty()) {
         uint64_t va;
         auto *tail = reinterpret_cast<uint32_t *>(d.alloc(d.push_, (kTiledCacheFlushWords + kStampWords) * 4, 4, va));
@@ -3755,29 +3801,6 @@ bool CommandBuffer::commit(uint32_t &seqno)
     // The cleans and WC ring writes complete before the kernel rings GP_PUT.
     __asm__ volatile("dsb sy" ::: "memory");
 #endif
-    if (d.k_.exactJobs()) {
-        RAW_ENCODE_LOCK(lock, d.lock_);
-        auto control = [&](const Bo &bo, bool write) {
-            if (bo.handle && !d.member(bo))
-                surfaces_.add(bo.handle, write);
-        };
-        for (const Bo *bo : {&d.tic_, &d.tsc_, &d.zero_, &d.colorTable_})
-            control(*bo, false);
-        for (const Bo *bo : {&d.root_, &d.tickets_, &d.stamps_, &d.slm_})
-            control(*bo, true);
-        for (const auto &part : d.heapParts_)
-            surfaces_.addAccess(part.bo.handle, TegraGM20BSurfaceRead |
-                (invalidates ? uint32_t(TegraGM20BSurfaceHostWritten) : 0u));
-        for (const Bo &bo : d.slmOutgrown_)
-            control(bo, true);
-        // Split compute writes its frontier into upload storage. Retired chunks remain live through this submission.
-        control(d.upload_.bo, true);
-        for (const Bo &bo : d.upload_.outgrown)
-            control(bo, true);
-        control(d.push_.bo, false);
-        for (const Bo &bo : d.push_.outgrown)
-            control(bo, false);
-    }
     if (geometryWritable())
         return false;  // later internal writes invalidate the CPU proof; no prefix may reach the GPU
     if (!batchWork_.operations)
@@ -3792,7 +3815,8 @@ bool CommandBuffer::commit(uint32_t &seqno)
         RAW_DIAGNOSTIC(noteExecUses(uses.uses().size()));
         RAW_DIAGNOSTIC(noteExecPushes(count));
         RAW_ENCODE_BEGIN(execSpan, Exec);
-        const bool executed = d.job(d.setView_, d.channel_, pushes, count, uses, visibility, seq, &result, events);
+        const bool executed = d.job(d.setView_, d.channel_, pushes, count, uses, visibility, seq, &result, events,
+                                    &memberUses_, memberRemovals_, invalidates || memberHostWritten_);
         RAW_ENCODE_END(execSpan);
         if (!executed) {
             admissionBlocked = !published && result == kIOReturnCannotLock;
@@ -3854,6 +3878,14 @@ bool CommandBuffer::commit(uint32_t &seqno)
         signaled += signalCount;
     }
     seqno = d.lastSeqno_;
+#if SWITCH_RAW_DIAGNOSTICS
+    if (glassMemSlot_ >= 0) {
+        d.glassMemCbs_[glassMemSlot_].seqno = seqno;
+        d.glassMemBusy_[glassMemSlot_] = true;
+        d.glassMemBusyCount_++;
+        glassMemSlot_ = -1;
+    }
+#endif
     if (slmGiven)
         d.slmChannel_ = slmGiven;
     d.retire(d.push_, seq);
@@ -3863,19 +3895,15 @@ bool CommandBuffer::commit(uint32_t &seqno)
     d.ds_ = ds_;
     d.extrasLive_ = extrasLive_;
     d.heldSegment_ = heldSegment_;
-    {
-        RAW_ENCODE_LOCK(l, d.lock_);
-        const uint64_t now = compClock();
-        for (Texture *b : backings_)
-            for (Device::Backing *k : d.backings_)
-                if (&k->texture == b) {
-                    k->lastUse = seq;
-                    k->submitted = true;
-                    k->usedNs = now;
-                }
-        d.commitCount_++;
-        d.closedCount_++;
+    const uint64_t now = compClock();
+    for (Texture *b : backings_) {
+        Device::Backing &k = Device::backingOf(*b);
+        k.lastUse.store(seq, std::memory_order_relaxed);
+        k.submitted.store(true, std::memory_order_relaxed);
+        k.usedNs.store(now, std::memory_order_relaxed);
     }
+    d.commitCount_.fetch_add(1, std::memory_order_relaxed);
+    d.closedCount_.fetch_add(1, std::memory_order_release);
     releaseNativeReads();
     RAW_DIAGNOSTIC(d.stats.commits++);
     return true;
@@ -3894,10 +3922,7 @@ void CommandBuffer::abandon()
     releaseGeometry();
     releaseNativeReads();
     Device &d = *dev_;
-    {
-        RAW_ENCODE_LOCK(l, d.lock_);
-        d.closedCount_++;
-    }
+    d.closedCount_.fetch_add(1, std::memory_order_release);
     d.overflowing_ = false;
     d.overflow_.clear();
     for (Device::Ring *r : {&d.push_, &d.upload_}) {
@@ -3941,8 +3966,12 @@ void RenderEncoder::finishDraw(uint32_t vertices, uint32_t instances, bool indir
     const uint64_t vertexWork = BatchWork::product(BatchWork::product(vertices, instances), pl.vertexInstructions);
     const uint64_t fragmentWork = BatchWork::product(BatchWork::product(drawPixels_, instances),
                                                     uint64_t(pl.fragmentInstructions) * pl.samplePasses);
-    if (!cb_->batchWork_.add(indirect ? BatchWork::kSaturated : vertexWork + fragmentWork, cb_->batchLimit()))
-        return;
+    if (cb_->batchWork_.add(indirect ? BatchWork::kSaturated : vertexWork + fragmentWork, cb_->batchLimit()))
+        cutBatch();
+}
+
+void RenderEncoder::cutBatch()
+{
     if (p_.at > bodyStart_) {
         bodies_.push_back({bodyStart_, p_.at, 0, 0, false, true});
         bodyStart_ = p_.at;
@@ -4125,35 +4154,29 @@ bool RenderEncoder::draw(uint32_t primitive, uint32_t first, uint32_t count, uin
             raster_.winding ^= reverse;
             if (!prepared)
                 return false;
-            mme::draw(p_, params_, false, first + begin, end - begin, 1, first + begin, baseInstance);
-            finishDraw(end - begin, 1);
+            emitDraw(false, first + begin, end - begin, 1, first + begin, baseInstance);
         }
         cb_->draws++;
         return true;
     }
     if (!prepare(pl, primitive, first, first, count, false, why))
         return false;
-#if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
-    const auto probe = instances == 1 ? dev_->armedProbe() : nullptr;
-    const size_t probeWords = probe ? probe->before.size() + probe->after.size() : 0;
-#else
-    constexpr size_t probeWords = 0;
-#endif
-    if (p_.room() < kInstanceWords + probeWords)
-        reserve();
-#if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
-    if (probe && !probe->before.empty())
-        p_.raw(probe->before.data(), uint32_t(probe->before.size()));
-    if (probe)
-        dev_->probeEmitted.fetch_add(1, std::memory_order_relaxed);
-#endif
-    mme::draw(p_, params_, false, first, count, instances, first, baseInstance);
-#if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
-    if (probe && !probe->after.empty())
-        p_.raw(probe->after.data(), uint32_t(probe->after.size()));
-#endif
     cb_->draws++;
-    finishDraw(count, instances);
+#if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
+    if (const auto probe = instances == 1 ? dev_->armedProbe() : nullptr) {
+        if (p_.room() < kInstanceWords + probe->before.size() + probe->after.size())
+            reserve();
+        if (!probe->before.empty())
+            p_.raw(probe->before.data(), uint32_t(probe->before.size()));
+        dev_->probeEmitted.fetch_add(1, std::memory_order_relaxed);
+        mme::draw(p_, params_, false, first, count, instances, first, baseInstance);
+        if (!probe->after.empty())
+            p_.raw(probe->after.data(), uint32_t(probe->after.size()));
+        finishDraw(count, instances);
+        return true;
+    }
+#endif
+    emitDraw(false, first, count, instances, first, baseInstance);
     return true;
 }
 
@@ -4395,10 +4418,7 @@ bool RenderEncoder::drawIndexed(uint32_t primitive, uint32_t count, uint32_t ind
             ibEnd_ = last;
             ibSize_ = indexSize;
         }
-        if (p_.room() < kInstanceWords)
-            reserve();
-        mme::draw(p_, params_, true, begin, end - begin, instances, uint32_t(baseVertex), baseInstance);
-        finishDraw(end - begin, instances);
+        emitDraw(true, begin, end - begin, instances, uint32_t(baseVertex), baseInstance);
     }
     cb_->draws++;
     return true;
@@ -4564,6 +4584,10 @@ void armKeylineProbe()
 void RenderEncoder::probeDraw(const Pipeline &bound, Pipeline &drawn, uint32_t primitive, int32_t first, uint32_t count,
                               bool indexed, const PixelBox &limit)
 {
+    if (glassProbeArmed())
+        probeGlassDraw(bound, drawn, limit);
+    if (dev_->glassMemLive_)
+        glassMemSample(bound, drawn);
     const uint32_t generation = gKeylineGeneration.load(std::memory_order_relaxed);
     if (drawn.probeGeneration != generation) {
         drawn.probeGeneration = generation;
@@ -4645,6 +4669,134 @@ void RenderEncoder::probeDraw(const Pipeline &bound, Pipeline &drawn, uint32_t p
            limit.x1, limit.y1, primitive, indexed ? drawIndexCount_ : count, indexed ? " indexed" : "", scan.quads,
            scan.thin, scan.first.box[0], scan.first.box[1], scan.first.box[2], scan.first.box[3], scan.firstThin.first,
            scan.firstThin.box[0], scan.firstThin.box[1], scan.firstThin.box[2], scan.firstThin.box[3], colour);
+}
+
+// The glass probe's line for a Core Animation draw (raw_glass_probe.h): the form drawn as probeDraw names it, each
+// colour attachment as the pass bound it (format/bytes a texel/samples/layout[+comp][+ml]/size/load), the textures its
+// record samples and its uniform buffers
+void RenderEncoder::probeGlassDraw(const Pipeline &bound, const Pipeline &drawn, const PixelBox &limit)
+{
+    const PackPipeline &rec = *drawn.rec;
+    const char *form = drawn.splitOf                     ? "split"
+                       : drawn.storageBits               ? "storage"
+                       : &drawn == bound.barrierTwin     ? "barrier"
+                       : rec.flags & PipelineBarrierForm ? "barrier-record"
+                                                         : "whole";
+    char attachments[8 * 48] = "-", sampled[16 * 56] = "-", uniforms[8 * 32] = "-";
+    size_t at = 0;
+    for (uint32_t j = 0; j < pass_.count && j < 8 && at + 1 < sizeof attachments; j++)
+        if (const Texture *t = pass_.color[j].texture) {
+            const int n =
+                snprintf(attachments + at, sizeof attachments - at, "%sc%u:%u/%u/%u/%s%s%s/%ux%u/%c", at ? " " : "", j,
+                         t->format, t->bpp, t->samples, t->blockLinear ? "bl" : "pitch", t->comptags ? "+comp" : "",
+                         memoryless_[j] ? "+ml" : "", t->width, t->height, "dlc"[pass_.color[j].load]);
+            at += std::min(sizeof attachments - at - 1, size_t(std::max(n, 0)));
+        }
+    at = 0;
+    for (uint32_t k = 0; k < rec.entries && k < kPackEntries && at + 1 < sizeof sampled; k++)
+        if (const PackEntry &e = rec.entry[k]; e.kind == EntryTexture && e.slot < 16 && textures_[e.slot]) {
+            at += at ? size_t(snprintf(sampled + at, sizeof sampled - at, " ")) : 0;
+            const int n = glassProbeTexture(sampled + at, sizeof sampled - at, e.slot, *textures_[e.slot]);
+            at += std::min(sizeof sampled - at - 1, size_t(std::max(n, 0)));
+        }
+    at = 0;
+    for (uint32_t k = 0; k < rec.entries && k < kPackEntries && at + 1 < sizeof uniforms; k++)
+        if (const PackEntry &e = rec.entry[k]; e.kind == EntryUbo && !bufferStorage(e)) {
+            const Bound &b = bufs_[e.stage][e.slot];
+            at += at ? size_t(snprintf(uniforms + at, sizeof uniforms - at, " ")) : 0;
+            const int n = glassProbeUniform(uniforms + at, sizeof uniforms - at, e.stage, e.slot, b.cpu, b.size);
+            at += std::min(sizeof uniforms - at - 1, size_t(std::max(n, 0)));
+        }
+    char taps[160] = "";
+    if (glassProbeBlurState(bound.caName)) {
+        const Bound &u = bufs_[2][1];
+        taps[0] = ' ';
+        glassProbeTaps(taps + 1, sizeof taps - 1, u.cpu, u.size);
+    }
+    char line[1000];
+    snprintf(line, sizeof line, "%s k%016llx %s att %s tex %s uni %s box %u,%u-%u,%u%s", bound.caName,
+             (unsigned long long)rec.keyHash, form, attachments, sampled, uniforms, limit.x0, limit.y0, limit.x1,
+             limit.y1, taps);
+    if (!glassProbeFirst(cb_, line) || gGlassProbeLines.fetch_sub(1, std::memory_order_relaxed) <= 0)
+        return;
+    os_log(os_log_create("com.brunostjohn.switch.TegraGM20BMetal", "raw"), "raw: glass draw g%u cb %06llx %{public}s",
+           gGlassProbeGeneration.load(std::memory_order_relaxed), (unsigned long long)(uintptr_t(cb_) & 0xffffff),
+           line);
+}
+
+// The blur-texture probe's rows (raw_glass_mem.h) of what a Core Animation draw samples: each texture's level 0 and, for a
+// mip chain, its middle level, one row each, read at the command buffer's end. Surfaces are left out (other processes write
+// them), and the copy engine reads plain memory only: a compressed binding hands it compressed bytes (raw_comp.h).
+void RenderEncoder::glassMemSample(const Pipeline &bound, const Pipeline &drawn)
+{
+    const PackPipeline &rec = *drawn.rec;
+    for (uint32_t k = 0; k < rec.entries && k < kPackEntries; k++) {
+        const PackEntry &e = rec.entry[k];
+        if (e.kind != EntryTexture || e.slot >= 16 || !textures_[e.slot])
+            continue;
+        const Texture &t = *textures_[e.slot];
+        if (t.import)
+            continue;
+        const uint32_t levels = t.chain ? t.chain->layout.levels : 1;
+        const bool copyable = !t.comptags && !t.memoryless && !t.zeta && !t.converted() && !t.standIn && !t.sampled &&
+                              t.blockW == 1 && t.blockH == 1 && t.bpp && t.bpp <= 16 && t.samples == 1 &&
+                              t.layers == 1 && t.type == fx::kTexTwoD && t.va;
+        uint64_t header = 0xcbf29ce484222325ull;
+        if (t.tic)
+            for (uint32_t b = 0; b < 32; b++)
+                header = (header ^ dev_->tic_.cpu[32 * t.tic + b]) * 0x100000001b3ull;
+        const uint32_t picks[2] = {0, levels > 1 ? (levels + 1) / 2 : 0};
+        for (uint32_t p = 0; p < (picks[1] ? 2u : 1u); p++) {
+            Texture level;
+            if (picks[p] && !chainLevelImage(t, picks[p], level))
+                continue;
+            const Texture &image = picks[p] ? level : t;
+            GlassMemItem it;
+            it.key = t.storageRange().va ? t.storageRange().va : t.va;
+            it.image = image.va;
+            it.width = image.width;
+            it.height = image.height;
+            it.format = t.format;
+            it.levels = levels;
+            it.level = picks[p];
+            it.bpp = t.bpp;
+            it.texels = std::min(kGlassMemTexels, image.width);
+            it.flags = uint8_t((t.arena ? kGlassMemHeap : 0) | (t.blockLinear ? 0 : kGlassMemPitch) |
+                               (copyable && image.height ? 0 : kGlassMemUnsampled));
+            const int index = dev_->glassMem->sampled(it, bound.caName, t.tic, header, dev_->commitCount_);
+            if (index >= 0) {
+                cb_->glassMemImages_[index] = image;
+                cb_->glassMemSources_[index] = &t;
+            }
+        }
+    }
+}
+
+// What this pass reached of each colour target it stores into (a shadow target's own image, not its pool image): its
+// load, the box of its draws' pixels (the render area where they were not counted), its render area and its clears'
+// extent from the origin
+void RenderEncoder::glassMemReached(const std::vector<Clear> &cl)
+{
+    uint32_t box[4] = {0, 0, areaW_, areaH_};
+    if (drew_ && !whole_ && !rects_.empty()) {
+        box[0] = box[1] = UINT32_MAX;
+        box[2] = box[3] = 0;
+        for (const auto &r : rects_)
+            for (int k = 0; k < 4; k++)
+                box[k] = k < 2 ? std::min(box[k], r[k]) : std::max(box[k], r[k]);
+    }
+    for (uint32_t j = 0; j < pass_.count && j < 8; j++) {
+        const Texture *t = shadowOf_[j] ? shadowOf_[j] : pass_.color[j].texture;
+        if (!t || memoryless_[j] || !pass_.color[j].store)
+            continue;
+        GlassMemReach reach{"dlc"[pass_.color[j].load], box[0], box[1], box[2], box[3], areaW_, areaH_, 0, 0};
+        for (const Clear &c : cl)
+            if (c.target == j && !c.x0 && !c.y0) {
+                reach.clearW = std::max(reach.clearW, c.x1);
+                reach.clearH = std::max(reach.clearH, c.y1);
+            }
+        dev_->glassMem->reached(t->va, reach, dev_->commitCount_);
+    }
 }
 
 // A write that stops a row or two short of a texture's edges (raw_keyline_probe.h EdgeMiss), once per shape and at most
@@ -5178,8 +5330,8 @@ bool RenderEncoder::prepare(Pipeline *pl, uint32_t primitive, int32_t first, uin
         written_.add(geometryAnalysis);
     // Reuse a bound already established for split/coverage/fetch decisions. Admission never triggers new CPU geometry
     // reads; unknown geometry uses the clipped viewport/scissor extent rather than the whole render target.
-    const PixelBox costBox = geometryAnalysis.cachedBox();
-    drawPixels_ = costBox.empty() ? 0 : uint64_t(costBox.x1 - costBox.x0) * (costBox.y1 - costBox.y0);
+    drawBox_ = geometryAnalysis.cachedBox();
+    drawPixels_ = drawBox_.empty() ? 0 : uint64_t(drawBox_.x1 - drawBox_.x0) * (drawBox_.y1 - drawBox_.y0);
     return pl->freeForm.matrixSlot == kNoUniform || matrixConstants(*pl, why);
 }
 
@@ -5383,6 +5535,168 @@ void copyRows(Push &p, uint64_t src, uint32_t srcPitch, uint64_t dst, uint32_t d
 }
 }  // namespace
 
+#if SWITCH_RAW_DIAGNOSTICS
+// The blur-texture probe's reads, after everything else the command buffer does: its draws' writes reach memory (the tiled
+// cache's flush, the wait for idle) before the copy engine reads each row into a ring slot, read at a later begin() once
+// this submission's fence passed. A full ring (no begin() between eight submissions) drops the record.
+void CommandBuffer::glassMemTail()
+{
+    Device &d = *dev_;
+    GlassMemCb record =
+        d.glassMem->close(d.commitCount_, mach_absolute_time(), d.stats.memEvents.load(std::memory_order_relaxed));
+    glassMemSlot_ = -1;
+    for (uint32_t i = 0; i < record.count; i++) {
+        GlassMemItem &it = record.items[i];
+        if (const Texture *t = glassMemSources_[i]; t && t->arena && !t->view && !t->span.valid())
+            it.flags |= kGlassMemAliased | kGlassMemUnsampled;
+        if (!(it.flags & kGlassMemUnsampled))
+            glassMemRowsAt(it);
+    }
+    const GlassMemTailPlan plan = glassMemTailPlan(d.glassMemLive_, record);
+    if (!plan.ring)
+        return;
+    record.launches = plan.launches;
+    if (!d.glassMemRing_.va) {
+        if (!d.k_.allocControl(uint64_t(kGlassMemSlots) * kGlassMemSlotBytes, d.glassMemRing_,
+                               ControlUse::TransferSlot))
+            return;
+        memset(d.glassMemRing_.cpu, 0, uint64_t(kGlassMemSlots) * kGlassMemSlotBytes);
+    }
+    int slot = -1;
+    for (uint32_t s = 0; s < kGlassMemSlots && slot < 0; s++)
+        if (!d.glassMemBusy_[s])
+            slot = int(s);
+    if (slot < 0)
+        return;
+    const uint32_t words = 24 + record.count * 128;
+    uint64_t va;
+    uint32_t *start = reinterpret_cast<uint32_t *>(d.alloc(d.push_, words * 4, 256, va));
+    Push p{start, start + words};
+    tiledCacheDrain(p, d.k_.info());
+    p.m(WAIT_FOR_IDLE, 0);
+    const uint64_t base = d.glassMemRing_.va + uint64_t(slot) * kGlassMemSlotBytes;
+    const uint64_t cookie = base + uint64_t(kGlassMemItems) * kGlassMemItemBytes, begun = cookie + kGlassMemStartAt;
+    p.inc(HOST_SEMAPHORE_A, {uint32_t(begun >> 32) & 0xff, uint32_t(begun), glassMemCookie(record.serial),
+                             HOST_SEMAPHORE_RELEASE_16_WFI});
+    memset(d.glassMemRing_.cpu + uint64_t(slot) * kGlassMemSlotBytes, kGlassMemPoison,
+           uint64_t(record.count) * kGlassMemItemBytes);
+    for (uint32_t i = 0; i < record.count; i++) {
+        const GlassMemItem &it = record.items[i];
+        if (it.flags & kGlassMemUnsampled)
+            continue;
+        const Texture &image = glassMemImages_[i];
+        const uint64_t row = base + uint64_t(i) * kGlassMemItemBytes;
+        copySides(p, sideOf(image, it.inX, it.inY, 0), {row, it.texels * it.bpp}, it.texels, 1, it.bpp, d.stats);
+        if (it.outside)
+            copySides(p, sideOf(image, it.outX, it.outY, 0), {row + kGlassMemRowBytes, it.texels * it.bpp}, it.texels,
+                      1, it.bpp, d.stats);
+    }
+    p.inc(HOST_SEMAPHORE_A, {uint32_t(cookie >> 32) & 0xff, uint32_t(cookie), glassMemCookie(record.serial),
+                             HOST_SEMAPHORE_RELEASE_16_WFI});
+    checkRoom(p, "the glass memory probe's reads");
+    segment(start, p.at);
+    if (d.k_.exactJobs())
+        surfaces_.add(d.glassMemRing_.handle, true);
+    d.glassMemCbs_[slot] = record;
+    glassMemSlot_ = slot;
+}
+
+// At begin(), where the probe is armed or was: armed again after a pause it starts with no history (what was written
+// meanwhile went unseen); still armed, the command buffer starts its record; disarmed, the rows in flight are read out
+// and nothing else runs until it is armed again.
+void Device::glassMemFrame()
+{
+    const uint64_t now = mach_absolute_time();
+    bool on = glassMem && !glassMemStopped.load(std::memory_order_relaxed) && glassMemArming.on(now);
+    if (!on) {
+        glassMemOn.store(false, std::memory_order_relaxed);
+        on = glassMem && !glassMemStopped.load(std::memory_order_relaxed) && glassMemArming.on(now);
+        if (on)
+            glassMemOn.store(true, std::memory_order_relaxed);
+    }
+    if (on && !glassMemLive_)
+        glassMem->reset();
+    glassMemLive_ = on;
+    glassMemRead(now);
+    if (on)
+        glassMem->begin();
+}
+
+// The probe's records whose rows landed, oldest first (a reused texture's row is judged against the one its last write
+// left): a line for each that found something, or for each while HW Test armed it, and a summary every 5 s, each with
+// what the probe's own reads cost. A killed submission stops the probe; a record a reopened channel's fence never
+// reaches is dropped after 120 command buffers.
+void Device::glassMemRead(uint64_t now)
+{
+    const os_log_t log = os_log_create("com.brunostjohn.switch.TegraGM20BMetal", "raw");
+    const bool every = glassMemArming.every(now);
+    for (;;) {
+        int next = -1;
+        for (uint32_t s = 0; s < kGlassMemSlots; s++)
+            if (glassMemBusy_[s] && (next < 0 || glassMemCbs_[s].serial < glassMemCbs_[next].serial))
+                next = int(s);
+        if (next < 0)
+            break;
+        if (!done(glassMemCbs_[next].seqno)) {
+            if (commitCount_ - glassMemCbs_[next].serial <= 120)
+                break;
+            glassMemBusy_[next] = false;
+            glassMemBusyCount_--;
+            continue;
+        }
+        glassMemBusy_[next] = false;
+        glassMemBusyCount_--;
+        if (lost(glassMemCbs_[next].seqno)) {
+            if (!glassMemStopped.exchange(true))
+                os_log_error(log,
+                             "raw: glassmem: command buffer %llu carrying the probe's reads was killed: the probe is "
+                             "off for this process",
+                             (unsigned long long)glassMemCbs_[next].serial);
+            continue;
+        }
+        uint8_t rows[kGlassMemSlotBytes];
+        memcpy(rows, glassMemRing_.cpu + uint64_t(next) * kGlassMemSlotBytes, sizeof rows);
+        const uint32_t cookie = glassMemCookie(glassMemCbs_[next].serial);
+        StampRelease begun, ended;
+        memcpy(&ended, rows + uint64_t(kGlassMemItems) * kGlassMemItemBytes, sizeof ended);
+        memcpy(&begun, rows + uint64_t(kGlassMemItems) * kGlassMemItemBytes + kGlassMemStartAt, sizeof begun);
+        const uint64_t probeNs = begun.payload == cookie && ended.payload == cookie && ended.ptimer >= begun.ptimer
+                                     ? ptimerNanoseconds(ended.ptimer - begun.ptimer)
+                                     : 0;
+        for (const std::string &line : glassMem->finish(glassMemCbs_[next], rows, every, probeNs))
+            os_log(log, "raw: glassmem %{public}s", line.c_str());
+    }
+    if (!glassMemLive_ || every || now - glassMemSummaryAt_ < glassProbeTicks(5000))
+        return;
+    const GlassMemCounts &c = glassMem->counts;
+    const uint64_t cbs = c.cbs.load() - glassMemSummaryCbs_, per = cbs ? cbs : 1;
+    if (cbs)
+        os_log(log,
+               "raw: glassmem totals cbs %llu rebuilt %llu reused %llu zero-reused %llu nf %llu chg %llu mv %llu ev "
+               "%llu probe ce %.1f/cb gpu %.0fus/cb",
+               (unsigned long long)c.cbs.load(), (unsigned long long)c.rebuilt.load(),
+               (unsigned long long)c.reused.load(), (unsigned long long)c.black.load(),
+               (unsigned long long)c.nonFinite.load(), (unsigned long long)c.changed.load(),
+               (unsigned long long)c.moved.load(), (unsigned long long)stats.memEvents.load(),
+               double(c.launches.load() - glassMemSummaryLaunches_) / double(per),
+               double(c.probeNs.load() - glassMemSummaryNs_) / 1000.0 / double(per));
+    glassMemSummaryAt_ = now;
+    glassMemSummaryCbs_ = c.cbs.load();
+    glassMemSummaryLaunches_ = c.launches.load();
+    glassMemSummaryNs_ = c.probeNs.load();
+}
+
+// A GPU-memory event, numbered: the render server's lines are what a reused texture's /e<n> counts
+void Device::glassMemEvent(const char *what, uint64_t bytes)
+{
+    const uint64_t n = ++stats.memEvents;
+    if (glassMemOn.load(std::memory_order_relaxed))
+        os_log(os_log_create("com.brunostjohn.switch.TegraGM20BMetal", "raw"),
+               "raw: glassmem event %llu %{public}s %llu KiB", (unsigned long long)n, what,
+               (unsigned long long)(bytes >> 10));
+}
+#endif
+
 bool RenderEncoder::prepareShaderTests(const Pipeline &pipeline, const char **why)
 {
     const uint8_t flags = pipeline.rec->shaderTests.flags;
@@ -5467,6 +5781,7 @@ void RenderEncoder::copyShaderTests(uint8_t flags, bool toAttachment)
         copyRemapped(p_, image(copy.source), image(copy.destination), shape.width, shape.height,
                      copy.remap, copy.bytes, dev_->stats, copy.ordered);
     }
+    RAW_DIAGNOSTIC(dev_->stats.compZetaCopies += zeta.comptags);
     p_.inc(CE_LINE_LENGTH_IN, {0, 0}, SUBC_COPY);
     p_.m(CE_LAUNCH_DMA, (kLaunchPitch & ~3u) | 2u | (1u << 10), SUBC_COPY);
     p_.m(INVALIDATE_SHADER_CACHES, kInvalidateData);
@@ -5645,6 +5960,12 @@ TextureTransferResult Device::transferTexture(const Texture &texture, uint32_t l
     if (!transfers_.copy(k_, set_, lock_, region, bytes, row, image, write, std::move(owner)))
         return TextureTransferResult::Failed;
     RAW_DIAGNOSTIC((write ? stats.textureUploads : stats.textureReadbacks).fetch_add(1, std::memory_order_relaxed));
+#if SWITCH_RAW_DIAGNOSTICS
+    if (write && glassMemOn.load(std::memory_order_relaxed))
+        glassMem->wrote(texture.storageRange().va ? texture.storageRange().va : texture.va,
+                        commitCount_.load(std::memory_order_relaxed),
+                        stats.memEvents.load(std::memory_order_relaxed));
+#endif
     return TextureTransferResult::Complete;
 }
 
@@ -5783,6 +6104,10 @@ void RenderEncoder::end()
         clears(initialClears_);
     const std::vector<Clear> &cl = initialClears_;
 #if SWITCH_RAW_DIAGNOSTICS
+    if (d.glassMemLive_)
+        glassMemReached(cl);
+#endif
+#if SWITCH_RAW_DIAGNOSTICS
     probeEdges();
 #endif
     const std::vector<uint32_t> &restore = extrasAtBegin_ ? extrasAtBegin_->restore : std::vector<uint32_t>();
@@ -5815,6 +6140,7 @@ void RenderEncoder::end()
             const Rect a = planeArea();
             copySides(p, sideOf(*o, a.x0, a.y0, 0), sideOf(*pass_.color[j].texture, a.x0, a.y0, 0), a.x1 - a.x0,
                       a.y1 - a.y0, o->bpp, d.stats);
+            RAW_DIAGNOSTIC(d.stats.compCopies += pass_.color[j].texture->comptags);
             copied = true;
         }
     if (copied) {
@@ -5925,6 +6251,7 @@ void RenderEncoder::end()
             const Rect r = planeRect(0, 0, w, h);
             copySides(q, sideOf(*pass_.color[j].texture, r.x0, r.y0, 0), sideOf(*o, r.x0, r.y0, 0), r.x1 - r.x0,
                       r.y1 - r.y0, o->bpp, d.stats);
+            RAW_DIAGNOSTIC(d.stats.compCopies += pass_.color[j].texture->comptags);
         }
         checkRoom(q, "a pass's shadow stores");
         cb_->segment(at, q.at);
@@ -6255,16 +6582,17 @@ void BlitEncoder::barrier()
     p_.m(CE_LAUNCH_DMA, kNonPipelined | kFlush | kPitchToPitch | kRemap, SUBC_COPY);
 }
 
-void BlitEncoder::generate(Texture &t)
+void BlitEncoder::generate(Texture &t, uint32_t fmt2d, uint32_t first, uint32_t last, [[maybe_unused]] uint32_t unproven)
 {
     Texture::Chain *c = t.chain;
-    if (!c || !c->fmt2d)  // (the 3D engine's passes take those: mipPasses)
+    if (!c || !fmt2d || first >= last || last >= c->layout.levels)
         return;
     cb_->useAddress(c->va, c->layout.bytes, true);
-    const uint32_t last = c->layout.levels - 1;
-    room(uint32_t(fx::generateWords(c->layout, 0, last)));
-    fx::emitGenerate(p_, c->layout, c->va, nullptr, c->fmt2d, 0, last);
+    room(uint32_t(fx::generateLayersWords(c->layout, first, last)));
+    fx::emitGenerateLayers(p_, c->layout, c->va, fmt2d, first, last);
     RAW_DIAGNOSTIC(dev_->stats.chainGenerates++);
+    RAW_DIAGNOSTIC(dev_->stats.mipTwodLevels += last - first);
+    RAW_DIAGNOSTIC(dev_->stats.mipTwodUnproven += unproven);
 }
 
 void BlitEncoder::halveChroma(const Texture &codes, const Texture &halved)
@@ -6325,11 +6653,17 @@ static ProbeSurface probeSurface(const Texture &t, uint32_t fmt2d, uint32_t widt
 
 void BlitEncoder::probe(const ProbeOp &op, const Texture *read, const Texture &written)
 {
-    room(uint32_t(probeOpWords(op)));
+    room(uint32_t(probeOpWords(op)) + kProbeBracketWords);
     if (read)
         cb_->use(*read, false);
     cb_->use(written, true);
+    if (op.bracketed) {
+        tiledCacheDrain(p_, dev_->k_.info());
+        p_.m(WAIT_FOR_IDLE, 0);
+    }
     emitProbeOp(p_, op);
+    if (op.bracketed)
+        probeOpAfter(p_);
     cb_->taken_.ops++;
 }
 

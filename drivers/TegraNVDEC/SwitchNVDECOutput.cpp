@@ -51,14 +51,15 @@ int switch_nvdec_output_picture(const TegraNVDECBlock *block, const TegraNVDECPr
     const uint64_t bytes = uint64_t(request->chroma_offset) + luma / 2;
     if (!request->pitch || request->pitch % 64 || !request->rows || request->rows % 32 ||
         request->block_height_log2 != 1 || request->chroma_offset % 256 || request->chroma_offset < luma ||
-        bytes > block->size || (request->sample_bytes != 1 && request->sample_bytes != 2) || request->reserved ||
+        bytes > block->size || (request->sample_bytes != 1 && request->sample_bytes != 2) ||
+        (request->plane != 0 && (request->plane != 2 || request->sample_bytes != 1)) ||
         (uint64_t(request->crop_x) + request->width) * request->sample_bytes > request->pitch ||
         uint64_t(request->crop_y) + request->height > request->rows)
         return -22;
     *picture = {block->backing, block->pages.pages, block->pages.count, bytes, request->pitch, request->rows,
                 request->chroma_offset, request->block_height_log2, request->crop_x, request->crop_y,
                 request->width, request->height, request->dst_x, request->dst_y, request->surface_id,
-                request->sample_bytes};
+                request->sample_bytes, request->plane};
     return 0;
 }
 
@@ -76,8 +77,8 @@ int switch_nvdec_output_export(const TegraNVDECBlock *block, const TegraNVDECPre
     const int checked = switch_nvdec_output_picture(block, request, &picture);
     if (checked)
         return checked;
-    refusal->why = "native output of a placed or 16-bit picture";
-    if (request->sample_bytes != 1 || request->dst_x || request->dst_y)
+    refusal->why = "native output of a placed picture";
+    if (request->dst_x || request->dst_y || request->plane)
         return -95;
     TegraVICSurface surface = {};
     refusal->why = "native output into a surface the caller does not hold";

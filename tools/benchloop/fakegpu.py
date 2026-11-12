@@ -10,11 +10,12 @@ import struct
 from dataclasses import dataclass, field
 
 from tools.benchloop import fakeblend, known, protocol, texels
-from tools.benchloop.sm53 import timing_sim
+from tools.benchloop.sm53 import encode, program, timing_sim
 from tools.benchloop.sm53.program import inputs
 from tools.gpu.maxwell import execute
 
 CLOCK_HZ = 768e6
+UNWRITTEN = 0xA5
 OVERHEAD_NS = 14_000.0
 LATENCIES = {
     'FADD': 6, 'FMUL': 6, 'FFMA': 6, 'FMNMX': 6, 'FSETP': 7, 'HADD2': 7, 'HMUL2': 7, 'HFMA2': 7, 'IADD': 6,
@@ -36,6 +37,27 @@ class Outcome:
     runs: list[tuple[int, list[int], list[int]]] = field(default_factory=list)
     texels: bytes | None = None
     milliseconds: float = 0.0
+    output: bytes | None = None
+
+
+def _output(c: dict) -> bytes:
+    """Give a kernel's output buffer: each thread's stores (program.store_epilogue's), the rest never written.
+
+    The interpreter runs one lane without memory, so the stores are taken out and their registers read at EXIT; the
+    stores of every thread are the same words at its own stride.
+    """
+    instrs = encode.unbundle(protocol.unb64(c['code']))
+    stores = [(i.word & 0xFF, i.word >> 20 & 0xFFFFFF) for i in instrs if i.name == 'STG']
+    code = encode.bundle([encode.nop().sched(**vars(i.control)) if i.name == 'STG' else i for i in instrs])
+    regs, _ = execute.run(code, inputs(protocol.unb64(c.get('data', ''))), 256)
+    out = bytearray([UNWRITTEN]) * c['output']
+    threads = c['threads'][0] * c['threads'][1] * c['threads'][2] * c['groups'][0] * c['groups'][1] * c['groups'][2]
+    for t in range(threads):
+        for reg, offset in stores:
+            at = t * program.OUTPUT_STRIDE + offset
+            if at + 4 <= len(out):
+                out[at : at + 4] = struct.pack('<I', regs[reg])
+    return bytes(out)
 
 
 def _iterated(e: dict) -> tuple[list[int], int, bool] | None:
@@ -63,8 +85,10 @@ class Gpu:
         except (ValueError, KeyError, execute.UnsupportedError) as error:
             return Outcome('refused', f'fake GPU: {error}')
         out = Outcome(runs=self._times(e, per_draw))
-        if e.get('readback', 'summary') != 'none':
+        if e.get('readback', 'summary') != 'none' and texel_of:
             out.texels = self._texels(e, texel_of)
+        if e.get('readback', 'summary') != 'none' and e['kind'] == 'compute' and 'output' in e['compute']:
+            out.output = _output(e['compute'])
         return out
 
     def _times(self, e: dict, per_draw: float) -> list[tuple[int, list[int], list[int]]]:
@@ -111,17 +135,26 @@ class Gpu:
         regs, cycles = timing_sim.run(code, data, self.table)
         x0, y0, x1, y1 = protocol.rect_of(e, protocol.target_of(e))
         per_draw = timing_sim.draw_ns(
-            cycles, (x1 - x0) * (y1 - y0), CLOCK_HZ, timing_sim.issue_cycles(code, self.table)
+            cycles, (x1 - x0) * (y1 - y0), CLOCK_HZ, timing_sim.issue_cycles(code, self.table, data)
         )
         texel = self._words(regs, e['target']['format'])
         return per_draw, lambda *_: texel
 
     def _compute(self, e: dict) -> tuple[float, object]:
         c = e['compute']
+        if 'output' in c:
+            return 1000.0, None
         code = protocol.unb64(c['code'])
         _, cycles = timing_sim.run(code, protocol.unb64(c.get('data', '')), self.table, outputs=0)
         lanes = c['threads'][0] * c['threads'][1] * c['threads'][2] * c['groups'][0] * c['groups'][1] * c['groups'][2]
         return timing_sim.draw_ns(cycles, lanes, CLOCK_HZ, timing_sim.issue_cycles(code, self.table)), None
+
+    def _twod(self, e: dict) -> tuple[float, object]:
+        """Give a fill its colour where the host knows the format's packing; leave the target otherwise."""
+        from tools.benchloop import twod  # noqa: PLC0415  twod builds programs with the interpreter's encoder
+
+        want = twod.wanted_fill(e) if e['twod']['op'] == 'fill' else None
+        return 2000.0, lambda _x, _y, under: want if want is not None else under
 
     def _readback(self, e: dict) -> tuple[float, object]:
         p, fmt = e['program'], e['target']['format']

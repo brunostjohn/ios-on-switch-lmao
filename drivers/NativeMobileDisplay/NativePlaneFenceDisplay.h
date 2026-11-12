@@ -14,7 +14,7 @@ bool planeFenced(const PlaneSet &p) const
             continue;
         const auto *native = planeSlots[overlay.slot].native;
         if (native && native->lease) {
-            if (native->view.producer.engine && switch_gpu_backing_token_external_status(&native->view.producer) != 1)
+            if (planeOverlayWaits(*native))
                 return true;
         } else if (overlay.image.surfaceKind) {
             return true;
@@ -60,8 +60,10 @@ bool planeFence(const PlaneSet &p)
     __atomic_store_n(&gpuScanout, true, __ATOMIC_RELEASE);
     gpuDeadlines = 0;
     gpuDeadline->setTimeoutMS(kGpuCopyDeadlineMS);
-    planeFenceQueued = true;
-    copySource->interruptOccurred(nullptr, nullptr, 0);
+    if (!planeMediaFence(p)) {
+        planeFenceQueued = true;
+        copySource->interruptOccurred(nullptr, nullptr, 0);
+    }
     return true;
 }
 

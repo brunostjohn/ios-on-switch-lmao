@@ -34,6 +34,10 @@ static struct switch_gm20b_copy_surface tgm_side(const struct tgm_copy_side *s, 
 	return c;
 }
 
+/* The present's copy and its read-backs. LAUNCH_DMA's BYPASS_L2 stays USE_PTE_SETTING, as nvgpu and NVK leave it: the
+ * present's mappings are volatile PTEs already (gpu_present.c tgm_present_map), so its writes reach DRAM at the fence's
+ * FB_FLUSH with no L2 flush (chan_fence_volatile). Device boot T-v3 set FORCE_VOLATILE here and its copy engine never
+ * finished switching off the present's context once another copy channel wanted the engine. */
 uint32_t tgm_copy_texels(uint32_t *w, const struct tgm_copy_side *src,
 			 const struct tgm_copy_side *dst, uint32_t width, uint32_t height)
 {

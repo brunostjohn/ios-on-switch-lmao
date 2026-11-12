@@ -12,6 +12,9 @@ __attribute__((objc_externally_retained)) void useTexture(raw::CommandBuffer *rc
         t = t->_parent;
     if (!t)
         return;
+#if SWITCH_RAW_DIAGNOSTICS
+    t->_raw.probeWritten |= write;
+#endif
     rc->use(t->_raw, write);
     if (t->_buffer)
         rc->use(t->_buffer->_raw, write);

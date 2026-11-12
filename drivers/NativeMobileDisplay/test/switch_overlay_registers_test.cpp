@@ -4,9 +4,11 @@
 #include <stdexcept>
 #include "../SwitchDisplayComposition.h"
 #include "../SwitchDisplayMemoryEnvelope.h"
+#include "../SwitchLandscapeWindows.h"
 
 namespace {
 uint64_t reserved;
+switch_display_memory_head reservedHead;
 int reserveError;
 
 int switch_emc_display_memory_ready()
@@ -17,6 +19,7 @@ int switch_emc_display_memory_ready()
 int switch_emc_display_memory_reserve(const switch_display_memory_head *request)
 {
     reserved = request->peak_bytes_per_second;
+    reservedHead = *request;
     return reserveError;
 }
 
@@ -33,9 +36,10 @@ using SwitchMMIOWords = uint32_t *;
 struct Display {
     bool entryPlaneSet[4] = {};
     using PlaneSet = switch_display::Composition;
+    using Window = switch_landscape::Window;
     using Commits = switch_display::Compositions<PlaneSet>;
     static constexpr uint32_t kWinABase = 0xb80, kWinBBase = 0xd80, kWinCBase = 0xf80;
-    static constexpr uint32_t kWinbufBBase = 0xdc0, kWinbufCBase = 0xfc0, kWincBBase = 0xc00, kWincCBase = 0xe00;
+    static constexpr uint32_t kWinbufCBase = 0xfc0, kWincBBase = 0xc00, kWincCBase = 0xe00;
     static constexpr uint32_t kWinAUpdate = 1 << 9, kWinBUpdate = 1 << 10, kWinCUpdate = 1 << 11;
     static constexpr uint32_t kWinAActReq = 2, kWinBActReq = 4, kWinCActReq = 8;
     static constexpr uint32_t kGeneralUpdate = 1 << 8, kGeneralActReq = 1;
@@ -72,6 +76,7 @@ struct Display {
 
     Display()
     {
+        landscapeState = {};
         planeLatch.values = sets;
         reserved = 0;
         reserveError = 0;
@@ -87,6 +92,11 @@ struct Display {
     const void *firstUntaken() const
     {
         return nullptr;
+    }
+
+    bool planeWindowIdle() const
+    {
+        return false;
     }
 
     void getDisplayDimensions(uint32_t *width, uint32_t *height)
@@ -109,6 +119,12 @@ struct Display {
     {
         ++deadlines;
     }
+
+#include "../SwitchLandscapeState.h"
+
+    bool landscapeHolds(PlaneSet &) { return false; }
+    void landscapeLeaveNow(const char *) {}
+    void landscapeAbandonWant() {}
 
 #include "../SwitchDisplayBandwidthDisplay.h"
 #include "../SwitchOverlayRegisters.h"
@@ -133,6 +149,8 @@ struct Display {
         planeRetireBandwidth();
     }
 };
+
+Display::LandscapeState Display::landscapeState;
 
 Display::PlaneSet video(native_planes::Matrix matrix, int slot = 1)
 {
@@ -195,6 +213,80 @@ TEST(OverlayRegisters, BothWindowLatchesAndIdentityAreRequiredBeforeOldMappingRe
     display.latch();
     EXPECT_FALSE(display.planeLatch.uses(1));
     EXPECT_TRUE(display.planeLatch.uses(2));
+}
+
+// The video column-scanned on window A behind the UI on B (SwitchLandscape.h): 1920x1080 turned onto the 720x1280 panel.
+Display::PlaneSet landscapeVideo(int slot = 1)
+{
+    auto p = video(native_planes::kBt709, slot);
+    p.landscape = true;
+    p.window[0].depth = 1;
+    p.window[0].image.options = native_planes::kWinEnable | native_planes::kCscEnable | switch_landscape::kScanColumn |
+                                native_planes::kHFilterOn | native_planes::kVFilterOn;
+    p.window[0].image.size = (1280u << 16) | 720;
+    p.window[0].image.prescaled = (1920u << 16) | 1080;
+    p.window[0].image.dda = (6144u << 16) | 6144;
+    p.window[0].image.surfaceKind = 2 | 1 << 4;
+    return p;
+}
+
+void enterLandscape(Display &display)
+{
+    display.sets[0] = {};
+    display.sets[0].landscape = true;
+    display.planeLatch.active = 0;
+}
+
+TEST(OverlayRegisters, LandscapeOverlayGoesToWindowAWithItsOwnCscAndLeavesTheUiOnB)
+{
+    Display display;
+    enterLandscape(display);
+    const uint32_t ui = native_planes::kWinEnable | 0x40;
+    display.dc[Display::kWinBBase + native_planes::kOptions] = ui;
+    uint32_t updates = 0, requests = 0;
+    const auto p = landscapeVideo();
+    ASSERT_TRUE(display.stage(p, &updates, &requests));
+    EXPECT_EQ(updates, Display::kGeneralUpdate | Display::kWinAUpdate | Display::kWinCUpdate);
+    EXPECT_EQ(requests, Display::kGeneralActReq | Display::kWinAActReq | Display::kWinCActReq);
+    EXPECT_EQ(display.dc[Display::kWinABase + native_planes::kOptions], p.window[0].image.options);
+    EXPECT_EQ(display.dc[Display::kWinABase + native_planes::kPrescaled], p.window[0].image.prescaled);
+    EXPECT_EQ(display.dc[Display::kWinABase + native_planes::kBlendLayer], native_planes::kBlendBypass | 1u);
+    EXPECT_EQ(display.dc[0xbc0 + native_planes::kSurfaceKind], p.window[0].image.surfaceKind);
+    EXPECT_EQ(display.dc[0xbc0 + native_planes::kStartAddr], display.planeSlotIova(1));
+    EXPECT_EQ(display.dc[Display::kWinBBase + native_planes::kOptions], ui);
+    for (unsigned i = 0; i < 8; ++i)
+        EXPECT_EQ(display.dc[0xa00 + native_planes::kCscYof + i], native_planes::kCsc[native_planes::kBt709][0][i]);
+    EXPECT_EQ(display.landscapeState.csc[0], int(native_planes::kBt709));
+    EXPECT_TRUE(display.landscapeState.filtersWritten);
+    EXPECT_EQ(display.planeCsc[0][0], -1);
+    EXPECT_EQ(display.dc[Display::kWincBBase + native_planes::kCscYof], 0u);
+    display.latch();
+    EXPECT_TRUE(display.planeLatch.uses(1));
+}
+
+// L4T t21x/bandwidth.c for a rotated semi-planar window: 16 lines of the source's height, 17 when it scales, 2 bytes
+// each; the UI on B keeps the line its own window asks for.
+TEST(OverlayRegisters, LandscapeReservesWindowARotatedAndTheUiOnB)
+{
+    Display display;
+    enterLandscape(display);
+    ASSERT_TRUE(display.stage(landscapeVideo()));
+    EXPECT_EQ(reservedHead.windows[0].active, 1u);
+    EXPECT_EQ(reservedHead.windows[0].required_buffering_bytes, 1080u * 17 * 2);
+    EXPECT_EQ(reservedHead.windows[0].latency_buffering_bytes, 0u);
+    EXPECT_EQ(reservedHead.windows[0].peak_bytes_per_second, 78000000ull * 2 * 1080 / 720 * 1920 / 1280);
+    EXPECT_EQ(reservedHead.windows[1].active, 1u);
+    EXPECT_EQ(reservedHead.windows[1].required_buffering_bytes, 720u * 4);
+    EXPECT_EQ(reservedHead.windows[2].active, 0u);
+}
+
+TEST(OverlayRegisters, PortraitKeepsTheUiOnAInTheReservation)
+{
+    Display display;
+    ASSERT_TRUE(display.stage(video(native_planes::kBt601)));
+    EXPECT_EQ(reservedHead.windows[0].required_buffering_bytes, 720u * 4);
+    EXPECT_EQ(reservedHead.windows[1].active, 1u);
+    EXPECT_EQ(reservedHead.windows[2].active, 0u);
 }
 
 TEST(OverlayRegisters, MixedTransitionReservesBothOldAndNewBeforeProgramming)

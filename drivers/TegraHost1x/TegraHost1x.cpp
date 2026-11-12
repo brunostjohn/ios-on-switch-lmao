@@ -17,11 +17,10 @@
 #include <IOKit/IOBufferMemoryDescriptor.h>
 #include <IOKit/IOInterruptEventSource.h>
 #include <IOKit/IOWorkLoop.h>
-#include <kern/clock.h>
-#include <kern/thread.h>
 #include <string.h>
 #include "TegraHost1x.h"
 #include "SwitchHost1xFailureRelease.h"
+#include "SwitchHost1xIntr.h"
 #include "../ArmGIC/SwitchInterrupts.h"
 #include "../../kits/SwitchCAR/SwitchCAR.h"
 #include "../../kits/SwitchDMA/SwitchDMABuffer.h"
@@ -37,7 +36,6 @@ constexpr uint32_t kSyncOffset = 0x2100;
 constexpr uint32_t kIntid = 32 + 65;  // "syncpt" (tegra210.dtsi host1x@50000000)
 constexpr uint32_t kSyncpts = 192, kFirstOwn = 160;
 constexpr uint32_t kPushBytes = 16384;  // 2048 two-word slots (4x Linux's), + RESTART: room for 8 NVDEC jobs
-constexpr uint32_t kGraceMs = 50;
 
 enum : uint32_t {  // clock and reset controller (Linux clk.h, clk-tegra-periph.c)
     CLK_OUT_ENB_L = 0x010,
@@ -67,6 +65,7 @@ enum : uint32_t {  // channel registers, channel 0 at the start of the aperture
 
 enum : uint32_t {  // sync unit, relative to kSyncOffset
     SYNC_CMDPROC_STOP = 0x0ac,
+    SYNC_CH_TEARDOWN = 0x0b0,
     SYNC_USEC_CLK = 0x1a4,
     SYNC_CTXSW_TIMEOUT_CFG = 0x1a8,
     SYNC_IP_BUSY_TIMEOUT = 0x1bc,
@@ -74,9 +73,7 @@ enum : uint32_t {  // sync unit, relative to kSyncOffset
     SYNC_CBSTAT0 = 0xcc0,
     SYNC_INT_STATUS = 0xe80,
     SYNC_INT_DISABLE = 0xf00,
-    SYNC_INT_ENABLE_CPU0 = 0xf20,
     SYNC_SYNCPT = 0xf80,
-    SYNC_INT_THRESH = 0x1380,
 };
 
 constexpr uint32_t opRestart(uint32_t byteOffset)
@@ -89,7 +86,6 @@ constexpr uint32_t kOpNop = 2u << 28;  // NONINCR, offset 0, count 0
 volatile uint8_t *gHost, *gMc;
 IOWorkLoop *gLoop;
 IOInterruptEventSource *gIrq;
-IOLock *gLock;        // syncpoint waits and the interrupt action
 IOLock *gSubmitLock;  // every channel's push buffer, and suspend/resume
 
 // A command DMA channel and its push buffer. Channel n's registers are at n * 0x4000 (Linux host1x_channel_init).
@@ -101,13 +97,10 @@ struct Channel {
 
 constexpr uint32_t kChannelStride = 0x4000;
 Channel gChannels[TEGRA_HOST1X_CHANNELS];
-uint32_t gWake;  // wait channel; also counts interrupt actions
 uint32_t gNextSyncpt = kFirstOwn;
-uint32_t gArmed[kSyncpts / 32];  // threshold interrupts a waiter enabled (gLock); INT_STATUS bits are sticky for all
-int gState;                      // 0 not started, 1 up, 2 suspended, < 0 failed
-uint32_t gSaved[kSyncpts];       // syncpoint values across SC7, which resets the sync unit
+int gState;                 // 0 not started, 1 up, 2 suspended, < 0 failed
+uint32_t gSaved[kSyncpts];  // syncpoint values across SC7, which resets the sync unit
 unsigned gClockMHz;
-bool gStrict;  // a client proved its engine: a lost interrupt panics from here on (tegra_host1x_set_strict)
 
 inline uint32_t sync(uint32_t o)
 {
@@ -119,28 +112,10 @@ inline void syncWrite(uint32_t o, uint32_t v)
     switch_mmio_write32(gHost, kSyncOffset + o, v);
 }
 
-inline bool reached(uint32_t value, uint32_t threshold)
-{
-    return static_cast<int32_t>(value - threshold) >= 0;
-}
-
-// The syncpoint line (level). Every armed status bit seen is disabled and cleared, as Linux syncpt_thresh_isr does,
-// so the line is quiet on return; waiters re-read their syncpoint. Status bits of syncpoints nobody armed (another
-// engine counting) are sticky but do not drive the line, and are left alone.
+// The syncpoint line (level): its fences expire and their syncpoints re-arm (SwitchHost1xFenceList.h).
 void interruptOccurred(OSObject *, IOInterruptEventSource *, int)
 {
-    IOLockLock(gLock);
-    for (uint32_t i = 0; i < kSyncpts / 32; i++) {
-        const uint32_t status = sync(SYNC_INT_STATUS + 4 * i) & gArmed[i];
-        if (!status)
-            continue;
-        syncWrite(SYNC_INT_DISABLE + 4 * i, status);
-        syncWrite(SYNC_INT_STATUS + 4 * i, status);
-        gArmed[i] &= ~status;
-    }
-    gWake++;
-    IOLockWakeup(gLock, &gWake, false);
-    IOLockUnlock(gLock);
+    switch_host1x_intr_handle();
 }
 
 int fail(const char *why, uint32_t value)
@@ -231,7 +206,8 @@ bool attachInterrupt()
     gLoop = IOWorkLoop::workLoop();
     IOService *nub = switch_interrupt_nub(kIntid, false);
     gIrq = gLoop && nub ? IOInterruptEventSource::interruptEventSource(gLoop, &interruptOccurred, nub, 0) : nullptr;
-    if (!gIrq || gLoop->addEventSource(gIrq) != kIOReturnSuccess)
+    if (!gIrq || !switch_host1x_intr_init(gLoop, gHost + kSyncOffset, kIntid) ||
+        gLoop->addEventSource(gIrq) != kIOReturnSuccess)
         return false;
     gIrq->enable();
     return true;
@@ -241,9 +217,8 @@ int bringUp()
 {
     gHost = switch_mmio_map(kHost1xPA, kHost1xSize);
     gMc = switch_mmio_map(kMcPA, 0x1000);
-    gLock = IOLockAlloc();
     gSubmitLock = IOLockAlloc();
-    if (!gHost || !gMc || !gLock || !gSubmitLock)
+    if (!gHost || !gMc || !gSubmitLock)
         return fail("no mapping", 0);
     bool enabled = false;
     if (!clockOn(&gClockMHz, &enabled))
@@ -259,6 +234,7 @@ int bringUp()
         return fail("no push buffer below 4 GiB", 0);
     channelProgram();
     gState = 1;
+    switch_host1x_intr_start();
     IOLog("TegraHost1x: H1 ok channel 0, host1x %u MHz%s\n", gClockMHz, enabled ? ", enabled here" : "");
     return TEGRA_HOST1X_OK;
 }
@@ -313,61 +289,6 @@ extern "C" int tegra_host1x_syncpt_release_failed(uint32_t id, uint32_t threshol
         __atomic_load_n(&gNextSyncpt, __ATOMIC_ACQUIRE)) : TEGRA_HOST1X_ENODEV;
     IOLockUnlock(gSubmitLock);
     return result;
-}
-
-// Linux host1x_intr_add_fence order: threshold, then enable; the value is read again after arming so an increment
-// that landed in between is not slept on. A wait that ends with the syncpoint's status bit still set at the
-// controller, after a grace period for an action under way, means the interrupt never reached the CPU: a panic once
-// strict (an engine was proven and published), TEGRA_HOST1X_ELOST while its probe is still running.
-extern "C" int tegra_host1x_syncpt_wait(uint32_t id, uint32_t threshold, uint32_t timeoutUs)
-{
-    if (gState != 1)
-        return TEGRA_HOST1X_ENODEV;
-    if (id >= kSyncpts)
-        return TEGRA_HOST1X_EINVAL;
-    const uint32_t word = id / 32;
-    const uint32_t bit = 1u << (id % 32);
-    IOLockLock(gLock);
-    syncWrite(SYNC_INT_THRESH + 4 * id, threshold);
-    syncWrite(SYNC_INT_STATUS + 4 * word, bit);
-    syncWrite(SYNC_INT_ENABLE_CPU0 + 4 * word, bit);
-    gArmed[word] |= bit;
-    uint64_t deadline = 0;
-    clock_interval_to_deadline(timeoutUs, kMicrosecondScale, &deadline);
-    int ret = TEGRA_HOST1X_OK;
-    for (bool grace = false; !reached(tegra_host1x_syncpt_read(id), threshold);) {
-        if (IOLockSleepDeadline(gLock, &gWake, deadline, THREAD_UNINT) != THREAD_TIMED_OUT)
-            continue;
-        if (!reached(tegra_host1x_syncpt_read(id), threshold)) {
-            ret = TEGRA_HOST1X_ETIMEDOUT;  // the engine did not get there: its failure, not the interrupt's
-            break;
-        }
-        if (!(sync(SYNC_INT_STATUS + 4 * word) & bit))
-            break;
-        if (grace) {
-            if (!__atomic_load_n(&gStrict, __ATOMIC_ACQUIRE)) {
-                ret = TEGRA_HOST1X_ELOST;
-                break;
-            }
-            char gic[192];
-            switch_interrupt_describe(kIntid, gic, sizeof(gic));
-            panic("TegraHost1x: syncpoint %u threshold interrupt lost (INTID %u): value %u threshold %u INT_STATUS[%u] "
-                  "%#x, %s",
-                  id, kIntid, tegra_host1x_syncpt_read(id), threshold, word, sync(SYNC_INT_STATUS + 4 * word), gic);
-        }
-        grace = true;
-        clock_interval_to_deadline(kGraceMs, kMillisecondScale, &deadline);
-    }
-    syncWrite(SYNC_INT_DISABLE + 4 * word, bit);
-    syncWrite(SYNC_INT_STATUS + 4 * word, bit);
-    gArmed[word] &= ~bit;
-    IOLockUnlock(gLock);
-    return ret;
-}
-
-extern "C" void tegra_host1x_set_strict(void)
-{
-    __atomic_store_n(&gStrict, true, __ATOMIC_RELEASE);
 }
 
 // Linux push_buffer_push + cdma_flush: words go in at PUT (wrapping at the RESTART slot), are cleaned to DRAM, and
@@ -434,12 +355,41 @@ extern "C" void tegra_host1x_describe(char *buffer, size_t size)
     tegra_host1x_describe_channel(TEGRA_HOST1X_CHANNEL_DEFAULT, buffer, size);
 }
 
+// Linux cdma_freeze: the channel's command processor stops and the channel is torn down, so the methods it was
+// feeding an engine that stopped taking them are dropped. The engine is reset before tegra_host1x_channel_restart.
+extern "C" void tegra_host1x_channel_teardown(uint32_t channel)
+{
+    if (gState != 1 || channel >= TEGRA_HOST1X_CHANNELS)
+        return;
+    IOLockLock(gSubmitLock);
+    syncWrite(SYNC_CMDPROC_STOP, sync(SYNC_CMDPROC_STOP) | 1u << channel);
+    channelWrite(channel, CH_DMACTRL, DMACTRL_STOP);
+    syncWrite(SYNC_CH_TEARDOWN, 1u << channel);
+    IOLockUnlock(gSubmitLock);
+}
+
+// Linux cdma_resume with nothing left to run: GET is set to PUT (INITGET loads it from PUT), so the torn-down stream
+// is skipped and the next submit runs first.
+extern "C" void tegra_host1x_channel_restart(uint32_t channel)
+{
+    if (gState != 1 || channel >= TEGRA_HOST1X_CHANNELS)
+        return;
+    IOLockLock(gSubmitLock);
+    channelWrite(channel, CH_DMACTRL, DMACTRL_STOP);
+    channelWrite(channel, CH_DMAPUT, gChannels[channel].put);
+    channelWrite(channel, CH_DMACTRL, DMACTRL_STOP | DMACTRL_GETRST | DMACTRL_INITGET);
+    syncWrite(SYNC_CMDPROC_STOP, sync(SYNC_CMDPROC_STOP) & ~(1u << channel));
+    channelWrite(channel, CH_DMACTRL, 0);
+    IOLockUnlock(gSubmitLock);
+}
+
 // Clients have quiesced (their last fences reached) before this. SC7 powers the sync unit and channels down, so the
 // syncpoint values handed out are saved (Linux host1x_syncpt_save) and the channels are stopped.
 extern "C" void tegra_host1x_suspend(void)
 {
     if (gState != 1)
         return;
+    switch_host1x_intr_stop();
     IOLockLock(gSubmitLock);
     for (uint32_t id = kFirstOwn; id < kSyncpts && id < gNextSyncpt; id++)
         gSaved[id] = sync(SYNC_SYNCPT + 4 * id);
@@ -470,15 +420,12 @@ extern "C" void tegra_host1x_resume(void)
         IOLockUnlock(gSubmitLock);
         return;
     }
-    IOLockLock(gLock);
     syncConfigure();
-    for (uint32_t &armed : gArmed)
-        armed = 0;
-    IOLockUnlock(gLock);
     for (uint32_t id = kFirstOwn; id < kSyncpts && id < gNextSyncpt; id++)
         syncWrite(SYNC_SYNCPT + 4 * id, gSaved[id]);
     channelProgram();
     gState = 1;
+    switch_host1x_intr_start();
     IOLockUnlock(gSubmitLock);
 }
 

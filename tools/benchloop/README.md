@@ -24,6 +24,12 @@ bazel run //tools/benchloop -- latency                 # SM53 latency, throughpu
 bazel run //tools/benchloop -- latency --family stall --op FFMA
 bazel run //tools/benchloop -- blend "$PWD/table.json" --blend-enable both
 bazel run //tools/benchloop -- rop                     # float to unorm rounding
+bazel run //tools/benchloop -- precision               # store and blend under each ROP option set the other way
+bazel run //tools/benchloop -- iterated "$PWD/microcode.tsv"  # iterated blend, colour 0 bound alone
+bazel run //tools/benchloop -- twod                    # 2D-engine fills, scaled copies and resolves, with compares
+bazel run //tools/benchloop -- store16                 # float to unorm16 rounding (R16, RGBA16)
+bazel run //tools/benchloop -- compressed              # draws into compressible memory against a plain target
+bazel run //tools/benchloop -- cstall                  # the stall family as kernels storing their results
 bazel run //tools/benchloop -- run "$PWD/batch.json"   # any batch in protocol.py's format
 bazel run //tools/benchloop -- latency --fake /tmp/fake  # the same loop against fakedevice.py, no Switch needed
 ```
@@ -56,6 +62,24 @@ timeout of its own. A kill is recorded in that experiment's result and the next 
 On Maxwell, fixed-latency instructions don't interlock: the delay encoded with an instruction is the whole wait. A timed
 chain of dependent FADDs therefore measures the delay written into it. The latency of those ops is the smallest delay at
 which the chain still writes the right texel, which is why every timing experiment also returns its texels.
+
+A readback experiment can bind colour 0 alone (`"targets": 1`) for the iterated blend unit, which rejected every draw
+made with the template's two colour targets bound. It can also name the plain pack state to draw with (`"template"`, a
+key hash). After every experiment the app submits one more empty pass: a trap in a lone command buffer can land after
+its fence, and that pass never completes on a killed channel, so the experiment is reported as killed.
+
+A kernel can write a buffer the result returns (`compute.output`): its address is the first 8 bytes of the shader
+data. A 2D experiment can read a source the batch carries, resolve a multisampled image built from that source, run
+nouveau's reference fill or leave out the waits the production path puts around 2D work. `compare` runs the same work a
+second way (the pixel program over the rect, the copy engine, the pack's resolve state, or a plain target for a
+compressed one), and the result carries both and a histogram of their differences. A result's `form` says what the app
+did, so a cell proves its own setup. Unknown fields make an experiment invalid on both sides, and
+`hw_test_app:core_test` decodes every generated batch with the app's own decoder.
+
+The generated code follows two rules learned from traps on the device. A wait on a barrier must come at least two cycles
+after the instruction that set it, or it passes before the barrier is up; `encode.barrier_hazards` refuses such code.
+LDC has no 128-bit form on GM20B. Timed chains also loop a short body, since a lone warp on straight-line code longer
+than a few KiB runs at instruction-fetch speed.
 
 ## When something is wrong
 

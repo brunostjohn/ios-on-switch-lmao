@@ -42,8 +42,8 @@ const std::string &gpu()
 {
 	static const std::string source = [] {
 		std::string units;
-		for (const char *unit : {"bringup", "clock", "mem", "hang", "stats", "stats_tick",
-					 "chan", "sync", "exec", "present", "scrub", "power"})
+		for (const char *unit : {"bringup", "clock", "mem", "hang", "describe", "acquire", "stats",
+					 "stats_tick", "chan", "sync", "exec", "present", "scrub", "power"})
 			units += SourceText(std::string("../gpu_") + unit + ".c");
 		return units + SourceText("../gpu_internal.h") + SourceText("../gpu_inline.h") +
 		       SourceText("../gpu_fenced.h") + SourceText("../SwitchGpuVmMap.h") +
@@ -393,6 +393,18 @@ TEST(GM20BPresentSource, FenceOnlyPresentHasNoCopy)
 		     "tgm_copy_texels(");
 }
 
+// A copying present flushes the L2 once, before the copy reads the frame; its copy writes around the L2, so its fence
+// does not flush again. A fence-only present (direct scanout of a frame the GPU drew through the L2) keeps the fence's.
+TEST(GM20BPresentSource, OneL2FlushPerPresent)
+{
+	const std::string copy = flat(Between(gpu(), "static int present_copy(", "\n}\n"));
+	expectBefore(copy, "NVB06F_MEM_OP_D_OPERATION_L2_FLUSH_DIRTY", "tgm_copy_texels(");
+	EXPECT_THAT(copy, HasSubstr("if (dst_va) chan_fence_volatile(chan); else chan_fence(chan);"));
+	const std::string fence = flat(definition(gpu(), "u32 tgm_chan_fence_job("));
+	expectBefore(fence, "NVB06F_FB_FLUSH, 0); if (external != TGM_FENCE_VOLATILE_WRITES) {",
+		     "NVB06F_MEM_OP_D_OPERATION_L2_FLUSH_DIRTY");
+}
+
 // A present waits for the writers of window B's surface too (TegraScanoutCopy alsoWritten), so the display writes window
 // B's registers for a surface the GPU renders only after that work; window B's own fence maps nothing and copies nothing.
 TEST(GM20BPresentSource, PresentWaitsForWindowBsWritersToo)
@@ -444,6 +456,27 @@ TEST(GM20BPresentSource, ReadbackRidesTheFramesPresent)
 	EXPECT_THAT(done, Not(HasSubstr("tgm_cpu_clean_pages")));
 	expectBefore(readback, "#include \"TegraGM20BReadback.h\"\n\n#if TGM_STATS\n", "namespace");
 	EXPECT_EQ(readback.substr(readback.size() - 7), "#endif\n");
+}
+
+// Live (ui.glass_live): every present, armed or not, records what window A will scan for it, so the next armed present
+// can read the frame shown before it again, as it is at the end of its time on screen; only an Arm takes the live flag.
+TEST(GM20BPresentSource, LiveReadbackRereadsTheFrameShownBefore)
+{
+	const std::string readback = SourceText("../TegraGM20BReadback.cpp");
+	const std::string take = flat(Between(readback, "uint32_t tgm_readback_take(", "\n}\n"));
+	expectBefore(take, "const Shown before = gShown;", "int armed = TegraGM20BReadbackArmed;");
+	expectBefore(take, "gShown.sequence = copy->sequence;",
+		     "int armed = TegraGM20BReadbackArmed;");
+	EXPECT_THAT(take, HasSubstr("gShown.read = direct ? tgm_present_read{source,"));
+	EXPECT_THAT(take, HasSubstr(": tgm_present_read{target,"));
+	expectBefore(take, "reads[1] = before.read;", "reads[1].dst_va = bufferVa(1);");
+	EXPECT_THAT(take,
+		    HasSubstr("r.live && before.read.src_va && before.read.width == copy->width"));
+	const std::string call = flat(Between(readback, "IOReturn tgm_readback_call(", "\n}\n"));
+	EXPECT_THAT(
+		call,
+		HasSubstr("in->reserved > 1 || (in->reserved && in->op != TegraGM20BReadbackArm)"));
+	EXPECT_THAT(call, HasSubstr("arm(owner, in->reserved == 1)"));
 }
 
 // A tiled (block-linear) source: the copy engine reads it block-linear with the tiled block height, never as pitch, through
@@ -672,11 +705,12 @@ TEST(GM20BRoomSource, SubmissionMethodsCountTheirPaths)
 	const auto job = flat(definition(client(), "IOReturn AGXDeviceUserClient::runJobUses("));
 	expectBefore(job, "switch_gpu_path_taken(SWITCH_GPU_PATH_SUBMIT_JOB, 1);", "return kIOReturnSuccess;");
 	expectBefore(job, "switch_gpu_path_taken(SWITCH_GPU_PATH_SET_JOB, set ? 1 : 0);", "return kIOReturnSuccess;");
+	expectBefore(job, "switch_gpu_path_taken(SWITCH_GPU_PATH_SHARED_USE, head.shared_count);", "return kIOReturnSuccess;");
 	const auto address = flat(definition(client(), "IOReturn AGXDeviceUserClient::submitAddress("));
 	expectBefore(address, "result = exec(submit->channel,",
 		     "switch_gpu_path_taken(SWITCH_GPU_PATH_ADDRESS_JOB, result ? 0 : 1);");
 	const std::string paths = SourceText("../SwitchGpuPathStats.cpp");
-	for (const char *name : {"\"submit_jobs\"", "\"set_jobs\"", "\"stale_sets\"", "\"address_jobs\""})
+	for (const char *name : {"\"submit_jobs\"", "\"set_jobs\"", "\"stale_sets\"", "\"address_jobs\"", "\"shared_uses\""})
 		EXPECT_THAT(paths, HasSubstr(name));
 }
 
@@ -993,6 +1027,57 @@ TEST(GM20BSchedSource, HooksGoWhereTheFifosOneinitReadsThem)
 		    HasSubstr("tgm_fifo_func(fifo)->runl_ctor = sched_runl_ctor;"));
 	EXPECT_THAT(flat(definition(sched, "static int sched_runl_ctor(struct nvkm_fifo *fifo)")),
 		    HasSubstr("interleave(fifo->engine.subdev.device, runl);"));
+}
+
+// A submission that writes a block-linear IOSurface under a CPU write lock keeps the lock's rows before it runs, with the
+// connection's lock dropped and before the active-submit gate's channel entry (the copy engine's wait sleeps).
+TEST(GM20BViewsSource, AGpuWriteUnderACpuWriteLockIsMergedNotHeldBack)
+{
+	const auto exec = flat(definition(client(), "IOReturn AGXDeviceUserClient::exec("));
+	expectBefore(exec, "IOLockUnlock(lock_);", "tgm_views_gpu_writes(job.written[i]);");
+	expectBefore(exec, "tgm_views_gpu_writes(job.written[i]);", "switch_gpu_chan_submit_enter(chan);");
+}
+
+// The PBDMA's ACQUIRE interrupt is gpu_acquire.c's: the timeout goes off in the PBDMA before the bit is cleared (so the
+// same acquire cannot raise it again), and nvkm's handler, which would kill the waiter, never sees it.
+TEST(GM20BAcquireSource, TheAcquireInterruptIsTakenBeforeNvkmsHandler)
+{
+	const std::string runq = flat(definition(SourceText("../recover.c"),
+		"static bool runq_intr(struct nvkm_runq *runq, struct nvkm_runl *runl)"));
+	expectBefore(runq, "tgm_acquire_intr(device, runq->id)",
+		     "nvkm_wr32(device, PBDMA_INTR_0(runq->id), TGM_PBDMA_INTR_ACQUIRE)");
+	expectBefore(runq, "TGM_PBDMA_INTR_ACQUIRE)", "ctxsw.runq_nvkm->intr(runq, runl)");
+	const std::string intr = flat(definition(gpu(), "void tgm_acquire_intr(struct nvkm_device *device, int runq)"));
+	expectBefore(intr, "word & ~TGM_ACQUIRE_TIMEOUT_EN", "nvxnu_work_schedule(acq.work)");
+	EXPECT_THAT(intr, HasSubstr("nvkm_mask(device, PBDMA_INTR_EN_0(runq), TGM_PBDMA_INTR_ACQUIRE, 0)"));
+	EXPECT_THAT(intr, Not(HasSubstr("mutex_lock")));
+	EXPECT_THAT(flat(definition(SourceText("../recover.c"), "void tgm_recover_suspend(void)")),
+		    HasSubstr("tgm_acquire_suspend();"));
+}
+
+// Every channel's RAMFC carries the timeout before its first submission (the subchannel binds), and a channel whose
+// timeout an interrupt turned off gets it back only while it is idle and off the PBDMA, as a level change's timeslice.
+TEST(GM20BAcquireSource, EveryChannelIsArmedBeforeItsFirstKickAndReArmedWhenIdle)
+{
+	const auto create = flat(definition(gpu(), "static int chan_new("));
+	expectBefore(create, "chan->chid = args.chan.chid;", "tgm_acquire_arm(chan->chid);");
+	expectBefore(create, "tgm_acquire_arm(chan->chid);", "PUSH_KICK(push);");
+	const auto due = flat(definition(gpu(), "void tgm_chan_ramfc_due(struct tgm_chan *chan)"));
+	expectBefore(due, "tgm_sched_loaded(tgm_gpu.device, chan->chid)", "tgm_acquire_arm(chan->chid);");
+	EXPECT_EQ(Count(gpu(), "tgm_chan_ramfc_due(chan);"), 2u);
+}
+
+// A late wait and an acquire timeout blame by what the candidates' RAMFC says they wait on, and a check that finds a
+// channel parked past its timeout with no interrupt says so.
+TEST(GM20BAcquireSource, TheHangRuleReadsWhatEachCandidateWaitsOn)
+{
+	const auto recover = flat(definition(gpu(),
+		"enum tgm_hang tgm_hang_recover(struct tgm_chan *late, const char *who, u32 seqno, u64 waited_ns)"));
+	EXPECT_THAT(recover, HasSubstr("candidate_wait(&waits, chan, &source)"));
+	EXPECT_THAT(recover, HasSubstr("kind = candidate_wait(&waits, chans[i], &source);"));
+	EXPECT_THAT(recover, HasSubstr("c[i].victim = kind == TGM_WAITS_VICTIM || kind == TGM_WAITS_UNREAD;"));
+	EXPECT_THAT(recover, HasSubstr("tgm_acquire_unfired(chans[i], now);"));
+	EXPECT_THAT(recover, Not(HasSubstr("chan->waited.cpu")));
 }
 
 // Nouveau puts the SW engine on the runlist with id 15 and no status register: PFIFO_ENG_STATUS(15) (0x0026b8)
@@ -1325,12 +1410,16 @@ TEST(GM20BVisibilitySource, ColdGlobalInvalidationPreservesInternalDirtyData)
 }
 
 // nvkm_runl_chan_get_chid returns with spinlocks held and interrupts off; nvkm_kmap takes ltc->mutex.
-TEST(GM20BChannelSource, TimesliceWritesRamfcOnlyAfterTheChannelLookupUnlocks)
+TEST(GM20BChannelSource, RamfcIsMappedOnlyAfterTheChannelLookupUnlocks)
 {
-    const auto body = flat(definition(gpu(), "static void chan_timeslice("));
-    expectBefore(body, "nvkm_runl_chan_get_chid(", "nvkm_chan_put(&nchan, flags)");
-    expectBefore(body, "nvkm_chan_put(&nchan, flags)", "nvkm_kmap(");
-    expectBefore(body, "nvkm_kmap(", "nvkm_done(");
+    const auto lookup = flat(definition(gpu(), "static struct nvkm_gpuobj *chan_inst("));
+    expectBefore(lookup, "nvkm_runl_chan_get_chid(", "nvkm_chan_put(&nchan, flags)");
+    for (const char *signature : {"void tgm_ramfc_write(", "static int ramfc_read_waits("}) {
+        const auto body = flat(definition(gpu(), signature));
+        expectBefore(body, "chan_inst(chid)", "nvkm_kmap(");
+        expectBefore(body, "nvkm_kmap(", "nvkm_done(");
+    }
+    EXPECT_THAT(flat(definition(gpu(), "static void chan_timeslice(")), HasSubstr("tgm_ramfc_write("));
 }
 
 TEST(GM20BChannelSource, CopyChannelCreatesOnlyRequestedObjectsAndKeepsVerifiedRunlist)
@@ -1406,4 +1495,17 @@ TEST(GM20BLayoutSource, TheAskersHoldIsPutOnEveryPath)
 	EXPECT_THAT(info, Not(HasSubstr("tgm_coh_hold(")));
 	EXPECT_THAT(Between(info, "tgm_coh_hold_asker(coh);", "tgm_coh_put_asker(coh);"),
 		    Not(HasSubstr("return")));
+}
+
+// nvgpu's gr_gm20b_init_fs_state writes ZROP's and CROP's settings whole with the L2 slice count (0x12006c,
+// pri_ringmaster_enum_ltc), not the FBP count gk104's helper reads.
+TEST(GM20BRopSource, ZropAndCropCountTheL2SlicesAsNvgpuDoes)
+{
+	const std::string gr = SourceText("../nouveau/nvkm/engine/gr/gm20b.c");
+	const std::string init =
+		flat(definition(gr, "gm20b_gr_init_rop_active_ltcs(struct gf100_gr *gr)"));
+	EXPECT_THAT(init, HasSubstr("nvkm_rd32(device, 0x12006c)"));
+	EXPECT_THAT(init, HasSubstr("nvkm_wr32(device, 0x408850, ltc_count);"));
+	EXPECT_THAT(init, HasSubstr("nvkm_wr32(device, 0x408958, ltc_count);"));
+	EXPECT_THAT(flat(gr), HasSubstr(".init_rop_active_fbps = gm20b_gr_init_rop_active_ltcs,"));
 }

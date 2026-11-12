@@ -64,6 +64,8 @@ static const char *zetaMemoryRefusal(int asked)
     d[@"cpu_ordered"] = @(s.cpuOrdered.load());
     d[@"split_prologues"] = @(gRM->raw->stats.splitLaunches.load());
     d[@"interlock_draws"] = @(gRM->raw->stats.interlockDraws.load());
+    d[@"banded_draws"] = @(gRM->raw->stats.bandedDraws.load());
+    d[@"bands"] = @(gRM->raw->stats.bands.load());
     d[@"storage_barriers"] = @(gRM->raw->stats.storageBarriers.load());
     d[@"texture_uploads"] = @(gRM->raw->stats.textureUploads.load());
     d[@"fused_passes"] = @(gRM->raw->stats.fusedPasses.load());
@@ -72,6 +74,12 @@ static const char *zetaMemoryRefusal(int asked)
     d[@"blend_kill_binds"] = @(gRM->raw->stats.blendKillBinds.load());
     d[@"zcull_passes"] = @(gRM->raw->stats.zcullPasses.load());
     d[@"zcull_invalidations"] = @(gRM->raw->stats.zcullInvalidations.load());
+    d[@"mip_twod_levels"] = @(gRM->raw->stats.mipTwodLevels.load());
+    d[@"mip_twod_unproven_levels"] = @(gRM->raw->stats.mipTwodUnproven.load());
+    d[@"mip_3d_levels"] = @(gRM->raw->stats.mip3dLevels.load());
+    d[@"private_compressed"] = @(gRM->raw->privateMade());
+    d[@"private_moves"] = @(gRM->raw->privateTransitions());
+    d[@"compiled_here"] = @(gRM->completion ? gRM->completion->compiledHere() : 0);
     d[@"state_segment_binds"] = @(gRM->raw->stats.segmentBinds.load());
     d[@"state_segment_words"] = @(gRM->raw->stats.segmentWords.load());
     d[@"state_segment_skips"] = @(gRM->raw->stats.segmentSkips.load());
@@ -128,7 +136,8 @@ static const char *zetaMemoryRefusal(int asked)
 
 // hw_test_app's gpu.compression_churn and gpu.raw.compressed_targets: the raw device's compressed memory (raw_comp.h).
 // held, held_bytes and views are now; made and refused count since the device opened, and so do the clears of compressed
-// targets the ZBC table held or not and the entries this process added (raw_zbc.h).
+// targets the ZBC table held or not and the entries this process added (raw_zbc.h); ce_copies: a shadow's fills and stores
+// through compressed memory; storage_fallback_compressed: draws whose storage form a compressed attachment turned away.
 - (NSDictionary<NSString *, NSNumber *> *)switchRawCompression
 {
     const auto &s = gRM->raw->stats;
@@ -142,7 +151,10 @@ static const char *zetaMemoryRefusal(int asked)
         @"zbc_misses" : @(s.zbcMisses.load()),
         @"zbc_added" : @(s.zbcAdded.load()),
         @"zbc_full" : @(s.zbcFull.load()),
-        @"zbc_inexact" : @(s.zbcInexact.load())
+        @"zbc_inexact" : @(s.zbcInexact.load()),
+        @"ce_copies" : @(s.compCopies.load()),
+        @"zeta_ce_copies" : @(s.compZetaCopies.load()),
+        @"storage_fallback_compressed" : @(s.fetch.storageFallback[size_t(raw::StorageFallback::Compressed)].load())
     };
 }
 
@@ -218,6 +230,13 @@ static const char *zetaMemoryRefusal(int asked)
         return t->_twin ? (id<MTLBuffer>)t : nil;
     }
     b->_raw.hostVisible = (o & MTLResourceStorageModeMask) != MTLResourceStorageModePrivate;
+#if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
+    if (rmZeroNewBuffers() && b->_raw.cpu) {
+        memset(b->_raw.cpu, 0, b->_raw.length);
+        if (!b->_raw.wc)
+            cacheLines(b->_raw.cpu, b->_raw.length, false);
+    }
+#endif
     return (id<MTLBuffer>)b;
 }
 
@@ -389,7 +408,10 @@ static void reportNonFiniteStart(RMTexture *t, MTLTextureDescriptor *d)
     } else {
         t->_kind = RMTexturePool;
         // a shared texture (the CPU writes it: replaceRegion) in write-combined memory: its rows need no clean after
-        t->_rawOk = gRM->raw->createTexture(uint32_t(d.width), uint32_t(d.height), uint32_t(d.pixelFormat), t->_raw,
+        const uint32_t kind = tiled ? privateCompressedKind(d) : 0;
+        t->_rawOk = (kind && gRM->raw->createCompressedTexture(uint32_t(d.width), uint32_t(d.height),
+                                                               uint32_t(d.pixelFormat), kind, t->_raw)) ||
+                    gRM->raw->createTexture(uint32_t(d.width), uint32_t(d.height), uint32_t(d.pixelFormat), t->_raw,
                                             d.storageMode == MTLStorageModeShared, tiled);
         if (t->_rawOk)
             keepExtendedRange(d, t->_raw, false);

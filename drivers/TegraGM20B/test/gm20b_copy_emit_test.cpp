@@ -54,6 +54,8 @@ void expectSameCopy(const std::vector<uint32_t> &ours, const std::vector<uint32_
 	if (dstBlock)
 		a.erase(kPitchOut), b.erase(kPitchOut);
 	EXPECT_EQ(a, b);
+	EXPECT_EQ(a.at(kLaunch) & (1u << 20), 0u)
+		<< "BYPASS_L2 stays USE_PTE_SETTING, as nvgpu and NVK leave it";
 	EXPECT_EQ(ours.back() >> 29, 4u) << "LAUNCH_DMA in its one-word form";
 	EXPECT_LT(ours.size(), hand.size());
 }

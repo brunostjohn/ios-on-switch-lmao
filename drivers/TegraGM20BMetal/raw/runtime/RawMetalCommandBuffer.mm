@@ -446,6 +446,9 @@ static void giveRecording(RMCommandBuffer *b)
 #endif
     if (_active)
         [(RMEncoder *)_active endEncoding];
+#if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
+    glassProbeCommitted(self);
+#endif
     [(RMDevice *)_device rmCommit:self];
 #if SWITCH_FRAME_TIMELINE
     _frame.mark(switch_frame::Back);

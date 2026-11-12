@@ -1,17 +1,20 @@
 """The latency, throughput, dual-issue and operand-reuse experiments, as protocol experiment dicts.
 
-ladder      dependent FADDs at delays 6..15 in one warp: time against k * delay gives the clock.
+ladder      dependent FADDs at delays 6..15 in one warp, a short body looped: time against k * delay gives the clock.
 stall       dependent chains of each fixed-latency op at delays 1..15: the smallest delay whose texel is right is
             the op's latency (fixed-latency results are not interlocked, so a shorter delay reads a stale register).
-chain       k dependent variable-latency ops through alternating barriers: time against k gives the latency.
+chain       k dependent variable-latency ops through alternating barriers, a body of n looped a fixed number of times:
+            time against k gives the latency (each link issued two cycles after the last, the soonest a barrier it
+            set can be waited on).
 throughput  independent streams of each op over the whole target: time against k gives issue cycles per warp.
-dual        independent pairs (X, Y) in one warp, X at delay 0 and at delay 1.
+dual        independent pairs (X, Y) in one warp, X at delay 0 and at delay 1, a short body looped.
 reuse       FFMA streams whose operands share a register bank, with and without reuse flags, and spread over banks.
 
 Each experiment carries a host-only `meta` (what fit.py groups by) and `expect` (the interpreter's texel).
 """
 
 from collections.abc import Callable, Iterable
+from dataclasses import dataclass
 
 from tools.benchloop import protocol
 from tools.benchloop.sm53 import encode as e, operands, program
@@ -40,18 +43,33 @@ DRAWS = [1, 2, 4, 8]
 REPEATS = 5
 WARMUP = 2
 LADDER_DELAYS = range(6, 16)
-LADDER_K = 256
+# A lone warp's command buffer costs ~45 us of fixed time with ~2 us of noise, and straight-line code past a few KiB
+# runs at instruction-fetch speed (~16 cycles an instruction): timed chains are a short body looped many times
+LADDER_BODY = 32
+LADDER_LOOPS = 256
 STALL_DELAYS = range(1, 16)
 STALL_K = 24
 PRED_LINKS = 6
-CHAIN_KS = (64, 128, 256, 512)
-THROUGHPUT_KS = (64, 128, 256)
+CHAIN_BODIES = (16, 32, 64)
+CHAIN_LOOPS = 128
+THROUGHPUT_KS = (512, 1024, 2048)
 STREAMS = {'gpr': 16, 'variable': 8, 'pred': 6}
-DUAL_KS = (128, 256, 512)
-REUSE_KS = (64, 128, 256)
+DUAL_BODIES = (16, 32, 64)
+DUAL_LOOPS = 128
+REUSE_KS = (512, 1024)
 REUSE_ACCUMULATORS = 8
 # operand A, operand B, reuse flags: 'conflict' reads three bank-0 registers, 'reuse' keeps A and B cached
-REUSE_VARIANTS = {'spread': (K1, K2, 0), 'conflict': (K0, CHAIN0, 0), 'reuse': (K0, CHAIN0, 0b011)}
+REUSE_VARIANTS = {
+    'spread': (K1, K2, 0),
+    'conflict': (K0, CHAIN0, 0),
+    'reuse': (K0, CHAIN0, 0b0011),
+    'reuse-1': (K0, CHAIN0, 0b0001),
+    'reuse-2': (K0, CHAIN0, 0b0010),
+    'reuse-4': (K0, CHAIN0, 0b0100),
+    'reuse-8': (K0, CHAIN0, 0b1000),
+    'reuse-c': (K0, CHAIN0, 0b1100),
+    'reuse-f': (K0, CHAIN0, 0b1111),
+}
 
 
 def experiment(eid: str, prog: Program, rect: list[int], meta: dict, exact: bool = True) -> dict:
@@ -77,21 +95,42 @@ def experiment(eid: str, prog: Program, rect: list[int], meta: dict, exact: bool
 def ladder() -> list[dict]:
     out = []
     for d in LADDER_DELAYS:
-        body = [e.fadd(CHAIN0, CHAIN0, K1).sched(delay=d) for _ in range(LADDER_K)]
-        prog = program.fragment(body, {CHAIN0: f32(0.0), K1: f32(1.0)}, (CHAIN0, CHAIN0))
-        meta = {'family': 'ladder', 'op': 'FADD', 'k': LADDER_K, 'delay': d}
+        body = [e.fadd(CHAIN0, CHAIN0, K1).sched(delay=d) for _ in range(LADDER_BODY)]
+        prog = program.fragment(body, {CHAIN0: f32(0.0), K1: f32(1.0)}, (CHAIN0, CHAIN0), loop=LADDER_LOOPS)
+        meta = {'family': 'ladder', 'op': 'FADD', 'k': LADDER_BODY * LADDER_LOOPS, 'delay': d}
         out.append(experiment(f'ladder.d{d:02d}', prog, ONE_WARP, meta))
     return out
 
 
-def _stall_gprs(r: Recipe, delay: int) -> Program:
+@dataclass(frozen=True)
+class Stall:
+    """A stall chain's parts, drawn (fragment: the results as a texel) or dispatched (kernel: stored to its output)."""
+
+    body: list
+    init: dict[int, int]
+    results: tuple[int, int]
+    preds: dict[int, bool] | None = None
+
+    def fragment(self) -> Program:
+        return program.fragment(self.body, self.init, self.results, self.preds)
+
+    def kernel(self) -> Program:
+        return program.compute_out(self.body, self.init, self.results, self.preds)
+
+    def expected(self) -> tuple[int, int]:
+        """Give the two results the interpreter says the chain ends with (its fragment form's texel, unpacked)."""
+        p = self.fragment()
+        return program.unpack(program.expected_texel(p.code, p.data))
+
+
+def _stall_gprs(r: Recipe, delay: int) -> Stall:
     regs = chain_registers(STALL_K + 1)
     body = [r.link(regs[j + 1], regs[j]).sched(delay=delay) for j in range(STALL_K)]
     init = {regs[0]: r.seed} | {regs[j]: r.poison + r.step * j for j in range(1, STALL_K + 1)} | r.constants()
-    return program.fragment(body, init, (regs[-1], regs[STALL_K // 2]))
+    return Stall(body, init, (regs[-1], regs[STALL_K // 2]))
 
 
-def _stall_preds(r: Recipe, delay: int) -> Program:
+def _stall_preds(r: Recipe, delay: int) -> Stall:
     """Give a chain P0 -> P6 of `p = (K1 < K2) xor accum`, each P starting as the complement of its true value."""
     truth = [bool(r.seed)]
     for _ in range(PRED_LINKS):
@@ -99,7 +138,7 @@ def _stall_preds(r: Recipe, delay: int) -> Program:
     preds = {0: truth[0]} | {j: not truth[j] for j in range(1, PRED_LINKS + 1)}
     body = [r.link(j + 1, j).sched(delay=delay) for j in range(PRED_LINKS)]
     body += [SEPARATOR, e.sel(CHAIN0, K1, K2, PRED_LINKS), e.sel(CHAIN0 + 4, K1, K2, PRED_LINKS // 2)]
-    return program.fragment(body, r.constants(), (CHAIN0, CHAIN0 + 4), preds)
+    return Stall(body, r.constants(), (CHAIN0, CHAIN0 + 4), preds)
 
 
 def stall(recipes: Iterable[Recipe] = FIXED) -> list[dict]:
@@ -108,20 +147,49 @@ def stall(recipes: Iterable[Recipe] = FIXED) -> list[dict]:
         build = _stall_preds if r.pred else _stall_gprs
         for d in STALL_DELAYS:
             meta = {'family': 'stall', 'op': r.key, 'nak': r.nak, 'delay': d, 'pred': r.pred}
-            out.append(experiment(f'stall.{r.slug}.d{d:02d}', build(r, d), ONE_WARP, meta))
+            e = experiment(f'stall.{r.slug}.d{d:02d}', build(r, d).fragment(), ONE_WARP, meta)
+            # the texel is the answer: one draw, once
+            out.append(e | {'draws': [1], 'repeats': 1, 'warmup': 0})
+    return out
+
+
+def compute_stall(recipes: Iterable[Recipe] = FIXED, threads: int = 32) -> list[dict]:
+    """Give the stall family as kernels storing their results: one warp, no target, the results as buffer words."""
+    out = []
+    for r in recipes:
+        build = _stall_preds if r.pred else _stall_gprs
+        for d in STALL_DELAYS:
+            chain = build(r, d)
+            k = chain.kernel()
+            x, y = chain.expected()
+            compute = k.wire() | {'threads': [threads, 1, 1], 'groups': [1, 1, 1]}
+            out.append(
+                {
+                    'id': f'cstall.{r.slug}.d{d:02d}',
+                    'kind': 'compute',
+                    'target': {'format': 'rgba32float', 'width': 1, 'height': 1},
+                    'compute': compute | {'output': threads * program.OUTPUT_STRIDE},
+                    'readback': 'full',
+                    'meta': {'family': 'compute-stall', 'op': r.key, 'nak': r.nak, 'delay': d, 'pred': r.pred},
+                    'expect': {'words': [x, y] * threads},
+                }
+            )
+            protocol.validate_experiment(out[-1])
     return out
 
 
 def _chain_link(r: Recipe, j: int) -> e.Instr:
-    return r.link(CHAIN0, CHAIN0).sched(wr_bar=j % 2, wait=1 << (1 - j % 2) if j else 0)
+    """Give link j: it sets barrier j % 2 and waits on the other, which the link before set (or last iteration's)."""
+    return r.link(CHAIN0, CHAIN0).sched(wr_bar=j % 2, wait=1 << (1 - j % 2), delay=e.BARRIER_SET_CYCLES)
 
 
 def chain(recipes: Iterable[Recipe] = VARIABLE_OPS) -> list[dict]:
     out = []
     for r in recipes:
-        for k in CHAIN_KS:
-            body = [_chain_link(r, j) for j in range(k)]
-            prog = program.fragment(body, {CHAIN0: r.seed} | r.constants(), (CHAIN0, CHAIN0))
+        for n in CHAIN_BODIES:
+            k = n * CHAIN_LOOPS
+            body = [_chain_link(r, j) for j in range(n)]
+            prog = program.fragment(body, {CHAIN0: r.seed} | r.constants(), (CHAIN0, CHAIN0), loop=CHAIN_LOOPS)
             meta = {'family': 'chain', 'op': r.key, 'nak': r.nak, 'k': k}
             out.append(experiment(f'chain.{r.slug}.k{k:03d}', prog, ONE_WARP, meta, r.exact))
     return out
@@ -165,9 +233,10 @@ def dual(pairs: Iterable[tuple[str, str]] = PAIRS) -> list[dict]:
     for x, y in pairs:
         first, second = _pair_form(x, CHAIN0), _pair_form(y, CHAIN0 + 4).sched(delay=1)
         for delay in (0, 1):
-            for k in DUAL_KS:
-                body = [first.sched(delay=delay), second] * k
-                prog = program.fragment(body, init, (CHAIN0, CHAIN0 + 4))
+            for n in DUAL_BODIES:
+                k = n * DUAL_LOOPS
+                body = [first.sched(delay=delay), second] * n
+                prog = program.fragment(body, init, (CHAIN0, CHAIN0 + 4), loop=DUAL_LOOPS)
                 meta = {'family': 'dual', 'op': f'{x}+{y}', 'pair': [x, y], 'delay': delay, 'k': k}
                 eid = f'dual.{x.lower()}-{y.lower()}.d{delay}.k{k:03d}'
                 out.append(experiment(eid, prog, ONE_WARP, meta, exact=x != 'MUFU' and y != 'MUFU'))

@@ -287,6 +287,11 @@ static inline u32 chan_fence(struct tgm_chan *chan)
 	return chan_fence_visibility(chan, 1);
 }
 
+static inline u32 chan_fence_volatile(struct tgm_chan *chan)
+{
+	return chan_fence_visibility(chan, TGM_FENCE_VOLATILE_WRITES);
+}
+
 /* Pages went back dirty: the work item claims and queues them (any context; nothing before the scrubber is up). */
 static inline void scrub_kick(void)
 {

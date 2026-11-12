@@ -24,6 +24,8 @@
             plane(planeHeld);
         if (planeFencePending)
             plane(planeFencing);
+        if (landscapeState.wanted)
+            plane(landscapeState.held);
         return first;
     }
 

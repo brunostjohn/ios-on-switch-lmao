@@ -271,10 +271,15 @@ void mipChainTic(const MipChain &c, uint64_t va, uint32_t tic0, bool srgb, uint3
 
 uint32_t twodFormat(uint32_t mtl)
 {
-    // formats whose 2D-engine filtering is plain per-component unorm/float arithmetic, as Vulkan's linear blit does. The sRGB
-    // forms (BGRA8Unorm_sRGB 81 -> A8RL8GL8BL8 0xd0, RGBA8Unorm_sRGB 71 -> A8BL8GL8RL8 0xd6) are left out: nothing shows the 2D
-    // engine filters them in linear space as Metal does. They and the other formats are the 3D engine's (raw_mip.h).
+    // formats whose 2D-engine filtering is plain per-component unorm/float arithmetic, as Vulkan's linear blit does, and the
+    // sRGB forms, which it decodes before it filters and encodes after, as Metal does: gpu.x1.twod_scale's 2:1 bilinear cells
+    // bgra8srgb and rgba8srgb are within one code of the texture unit's linear-space filtering at every texel (637 by one),
+    // where filtering the codes would put all 4,096 of them 2-62 codes off. The other formats are the 3D engine's (raw_mip.h).
     switch (mtl) {
+    case 81:
+        return 0xd0;  // BGRA8Unorm_sRGB -> A8RL8GL8BL8
+    case 71:
+        return 0xd6;  // RGBA8Unorm_sRGB -> A8BL8GL8RL8
     case 80:
         return 0xcf;  // BGRA8Unorm -> A8R8G8B8
     case 70:

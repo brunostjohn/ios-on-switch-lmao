@@ -45,33 +45,21 @@ void packedVariants(RMPipeline *p, uint64_t keyHash)
     }
 }
 
-// A packed state's variant the pack does not hold: a draw that needs one of its cubic samplers' binds is refused (neither its
-// own program nor another binds' filters them as Metal does), and one of a test class the pack builder could not make draws
-// the record without it (the state's own, or its cubic variant's), as a refused device compile left it, and says so
-static raw::Pipeline *unpackedVariant(RMPipeline *p, const std::string &suffix, const std::string &name)
+// A packed state's test class the pack builder could not make: its draws take the record without it, as a refused device
+// compile leaves it, and say so
+static raw::Pipeline *untestedVariant(RMPipeline *p, const std::string &name)
 {
     const std::string key = p->_key + name;
-    raw::Pipeline *untested = p->_raw;
-    if (!suffix.empty()) {
-        std::lock_guard<std::mutex> lock(p->_variantLock);
-        const auto found = p->_variants.find(suffix);
-        untested = suffix != name && found != p->_variants.end() ? found->second->value() : nullptr;
-    }
-    if (untested) {
-        SWITCH_REFUSE_DETAIL("raw", "state.tests_unpacked", raw::Pack::fnv(key.data(), key.size()),
-                             "a packed state's test class the pack builder could not make: drawn without it: %s",
-                             key.c_str());
-        return untested;
-    }
-    // The variant's name and its state's hash come first, as the line is cut at SWITCH_REFUSAL_TEXT:
-    // tools/gpu/logharvest.py finds the state by the hash and harvests the variant
-    SWITCH_REFUSE_DETAIL("raw", "state.variant_unpacked", raw::Pack::fnv(key.data(), key.size()),
-                         "a packed state's variant the pack lacks: its draws are refused:%s of %016llx %s",
-                         name.c_str(), (unsigned long long)raw::Pack::fnv(p->_key.data(), p->_key.size()),
-                         p->_key.c_str());
-    return nullptr;
+    SWITCH_REFUSE_DETAIL("raw", "state.tests_unpacked", raw::Pack::fnv(key.data(), key.size()),
+                         "a packed state's test class the pack builder could not make: drawn without it: %s",
+                         key.c_str());
+    return p->_raw;
 }
 
+// A cubic variant no pack holds is made off the encoding thread from the binds of the draw that first needs it, the only
+// place they are known (the texture unit has no cubic filter for another record to stand in with); m2v draws until it is
+// made. Its record is kept on disk, so a later boot draws it raw from its first draw. A RenderBox state's compile takes
+// seconds on the device, which no encoding thread may wait for.
 static raw::Variant<raw::Pipeline> *renderVariant(RMPipeline *p, const raw::CubicBinds &binds, uint8_t tests)
 {
     const std::string suffix = binds.empty() ? std::string() : binds.key();
@@ -84,12 +72,13 @@ static raw::Variant<raw::Pipeline> *renderVariant(RMPipeline *p, const raw::Cubi
         variant = std::make_shared<raw::Variant<raw::Pipeline>>();
         p->_variants.emplace(name, variant);
     }
-    if (p->_packed) {
-        variant->publish(unpackedVariant(p, suffix, name));
+    if (p->_packed && binds.empty()) {
+        variant->publish(untestedVariant(p, name));
         return variant.get();
     }
     raw::Completion::Ask request;
     request.descriptor = p->_madeFrom;
+    request.facade = p->_madeFrom;
     request.key = p->_key + name;
     request.caTransform = p->_caTransform;
     request.own = !p->_packable;

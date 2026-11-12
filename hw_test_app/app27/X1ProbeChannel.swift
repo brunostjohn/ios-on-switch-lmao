@@ -16,7 +16,8 @@ enum RawProbe {
 
     static func call(_ object: AnyObject, _ selector: Selector, _ argument: Any? = nil) throws -> String? {
         guard let object = object as? NSObject, object.responds(to: selector) else {
-            throw TestFailure("the facade has no \(NSStringFromSelector(selector)) (a release plug-in or another device)")
+            throw TestFailure(
+                "the facade has no \(NSStringFromSelector(selector)) (a release plug-in or another device)")
         }
         let answer = argument == nil ? object.perform(selector) : object.perform(selector, with: argument)
         return answer?.takeUnretainedValue() as? String
@@ -57,24 +58,6 @@ enum RawProbe {
     }
 }
 
-/// A probe's steps on the card before each starts (Documents/hwtest/x1-probe-steps.log, F_FULLFSYNC'd) and in the
-/// log: a hang or a panic names the cell and arm that ran, not only the probe.
-struct ProbeJournal {
-    let probe: String
-    private static let logger = Logger(subsystem: "com.brunostjohn.switch.hwtest", category: "x1probe")
-
-    func starting(_ step: String) {
-        let line = "\(Date().timeIntervalSince1970) \(probe) starting \(step)\n"
-        Self.logger.log("\(probe, privacy: .public) starting \(step, privacy: .public)")
-        guard let documents = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first else {
-            return
-        }
-        let directory = documents.appendingPathComponent("hwtest")
-        try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        try? DurableFile.append(line, to: directory.appendingPathComponent("x1-probe-steps.log"))
-    }
-}
-
 /// One arm's run of a batch: its GPU time, the facade's path and where its forms took effect.
 struct ArmBatch {
     var gpuMilliseconds = 0.0
@@ -93,6 +76,27 @@ extension GPU {
         }
         let taken = try buffer.map(RawProbe.taken) ?? [:]
         return ArmBatch(gpuMilliseconds: timing.gpuMilliseconds, path: timing.path, taken: taken)
+    }
+}
+
+extension GPU {
+    /// Command buffers under `forms` committed back to back and awaited together, so each starts as the one before
+    /// it ends: the last one's GPU time, the first path off the raw path (else raw), and the forms' effect in all.
+    func runBackToBack(forms: String, _ encodes: [(MTLCommandBuffer) throws -> Void]) throws -> ArmBatch {
+        let buffers = try encodes.map { encode in
+            try commit { commands in
+                if !forms.isEmpty { try RawProbe.forms(commands, forms) }
+                try encode(commands)
+            }
+        }
+        try finish(buffers)
+        var batch = ArmBatch()
+        if let last = buffers.last { batch.gpuMilliseconds = max(0, last.gpuEndTime - last.gpuStartTime) * 1000 }
+        batch.path = buffers.map(RawFacade.path(of:)).first { $0 != "raw" } ?? "raw"
+        for buffer in buffers {
+            for (key, value) in try RawProbe.taken(buffer) { batch.taken[key, default: 0] += value }
+        }
+        return batch
     }
 }
 
@@ -128,17 +132,22 @@ struct ProbeLedger {
         for (index, arm) in relaxed.enumerated() {
             var verdicts: [CellVerdict] = []
             var cellsText: [String] = []
+            var blindCells: [String] = []
             var minTrials = Int.max
             for cell in cells {
                 guard let tally = tallies[cell]?[arm] else { continue }
                 let v = CellVerdict.of(relaxed: tally, unguarded: none.flatMap { tallies[cell]?[$0] })
                 verdicts.append(v)
+                if v == .blind { blindCells.append(cell) }
                 cellsText.append("\(cell):\(v.rawValue):\(tally.trials):\(tally.mismatchedTrials)")
                 minTrials = min(minTrials, tally.trials)
-                if let first = tally.first, metrics["\(arm)_first"] == nil { metrics.set("\(arm)_first", "\(cell)@\(first)") }
+                if let first = tally.first, metrics["\(arm)_first"] == nil {
+                    metrics.set("\(arm)_first", "\(cell)@\(first)")
+                }
             }
             let claim = CellVerdict.claim(verdicts)
             metrics.set("\(arm)_verdict", claim.rawValue)
+            metrics.set("\(arm)_blind_cells", blindCells.isEmpty ? "-" : blindCells.joined(separator: ","))
             metrics.set("\(arm)_cells", cellsText.joined(separator: ","))
             metrics.set("\(arm)_held", verdicts.filter { $0 == .holds }.count)
             metrics.set("\(arm)_failed", verdicts.filter { $0 == .fails }.count)

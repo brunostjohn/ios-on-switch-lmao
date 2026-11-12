@@ -1,11 +1,15 @@
 // SPDX-License-Identifier: GPL-2.0-only
-// Display controller B; see TegraDisplayB.h. The base configuration is display controller A's (hekate's
-// di.inl as TegraDisplayPower.cpp has it) without the DSI parts; the rest is Linux drivers/gpu/drm/tegra/dc.c and dc.h
-// (Copyright (C) 2012 Avionic Design GmbH, 2012 NVIDIA Corporation): tegra_crtc_atomic_enable, tegra_dc_set_timings
-// (reference-to-sync 1/1), tegra_dc_commit_state (shift clock 1:1), tegra_dc_setup_window for a 1:1 pitch BGRA
-// window, SOR_ENABLE(1) = DC_DISP_DISP_WIN_OPTIONS bit 26. Power: the DISB partition (19), DISP2 clock and reset 26, MC
-// client hot reset DCB (MC 0x200 bit 3, Linux memory/tegra/tegra210.c), the MBIST workaround (clk-tegra210.c
-// tegra210_generic_mbist_war, LVL2_CLK_GATE_OVRA bit 2).
+// Copyright (c) 2018 naehrwert
+// Copyright (c) 2018-2025 CTCaer
+// Copyright (C) 2012 Avionic Design GmbH
+// Copyright (C) 2012 NVIDIA CORPORATION
+// Display controller B; see TegraDisplayB.h. kInit is display controller A's base configuration from hekate
+// (github.com/CTCaer/hekate, GPL-2.0-only): bdk/display/di.inl _di_dc_init_config, as TegraDisplayPower.cpp has it,
+// without the DSI parts. The rest is Linux drivers/gpu/drm/tegra/dc.c and dc.h: tegra_crtc_atomic_enable,
+// tegra_dc_set_timings (reference-to-sync 1/1), tegra_dc_commit_state (shift clock 1:1), tegra_dc_setup_window for a
+// 1:1 pitch BGRA window, SOR_ENABLE(1) = DC_DISP_DISP_WIN_OPTIONS bit 26. Power: the DISB partition (19), DISP2 clock
+// and reset 26, MC client hot reset DCB (MC 0x200 bit 3, Linux memory/tegra/tegra210.c), the MBIST workaround
+// (clk-tegra210.c tegra210_generic_mbist_war, LVL2_CLK_GATE_OVRA bit 2).
 #include "TegraDisplayB.h"
 
 #include <IOKit/IOLib.h>

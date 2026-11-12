@@ -1,4 +1,4 @@
-"""The batch and result files the host and HW Test's bench loop exchange (benchloop/1).
+"""The batch and result files the host and HW Test's bench loop exchange (benchloop/2).
 
 A batch is one JSON object; each experiment in it is validated here before it is written, and again by the app
 (hw_test_app/bench) before it runs. Byte strings travel as base64. Limits keep every command buffer far below the
@@ -10,9 +10,10 @@ import json
 import re
 from dataclasses import dataclass
 
-PROTOCOL = 'benchloop/1'
+PROTOCOL = 'benchloop/2'
 NAME = re.compile(r'^[a-z0-9][a-z0-9_.-]{0,63}$')
-KINDS = ('noop', 'known', 'fragment', 'compute', 'readback')
+KINDS = ('noop', 'known', 'fragment', 'compute', 'readback', 'twod')
+TEMPLATE = re.compile(r'^[0-9a-f]{16}$')
 READBACK = ('none', 'summary', 'full')
 
 MAX_EXPERIMENTS = 256
@@ -42,23 +43,88 @@ FORMATS = {
     'rg32float': (105, 8),
     'rgba16float': (115, 8),
     'rgba32float': (125, 16),
+    'r8unorm': (10, 1),
+    'r16unorm': (20, 2),
+    'r16float': (25, 2),
+    'rg8unorm': (30, 2),
+    'b5g6r5unorm': (40, 2),
+    'bgr5a1unorm': (43, 2),
+    'rg16unorm': (60, 4),
+    'rg16float': (65, 4),
+    'rgba8unorm_srgb': (71, 4),
+    'bgra8unorm_srgb': (81, 4),
+    'rg11b10float': (92, 4),
+    'bgr10a2unorm': (94, 4),
+    'rgba16unorm': (110, 8),
 }
 
-# MAXWELL_B methods a readback experiment may set around its draw: the blend, iterated blend and colour write state.
+# MAXWELL_B methods a readback experiment may set around its draw: the blend, iterated blend and colour write state, and
+# every ROP option that could trade colour precision (the owner's question: is an inexact result our configuration).
 # The raw path owns everything else (raw_owned.h); hw_test_app/bench/switch_bench_methods.h holds the same ranges.
 METHOD_RANGES = (
+    (0x02E0, 0x02E4),  # DECOMPRESS_SURFACE
     (0x02F4, 0x02F8),  # SET_ITERATED_BLEND_OPTIMIZATION
+    (0x0754, 0x0758),  # SET_HYBRID_ANTI_ALIAS_CONTROL
+    (0x0D9C, 0x0DA0),  # SET_REDUCE_COLOR_THRESHOLDS_ENABLE
     (0x0DD0, 0x0DD8),  # SET_ITERATED_BLEND, SET_ITERATED_BLEND_PASS
     (0x0DF0, 0x0DF8),  # LOAD_ITERATED_BLEND_INSTRUCTION_POINTER, LOAD_ITERATED_BLEND_INSTRUCTION
+    (0x0F40, 0x0F54),  # SET_CONSTANT_COLOR_RENDERING, _RED.._ALPHA
+    (0x0F90, 0x0F94),  # SET_SINGLE_CT_WRITE_CONTROL
+    (0x0FAC, 0x0FB0),  # SET_CT_MRT_ENABLE
     (0x0FDC, 0x0FE0),  # SET_BLEND_OPT_CONTROL
-    (0x12E4, 0x12E8),  # SET_BLEND_STATE_PER_TARGET
+    (0x10CC, 0x10D0),  # SET_REDUCE_COLOR_THRESHOLDS_UNORM8
+    (0x10E0, 0x10F4),  # SET_REDUCE_COLOR_THRESHOLDS_UNORM10..SRGB8
+    (0x113C, 0x1140),  # SET_FILL_VIA_TRIANGLE
+    (0x1140, 0x1144),  # SET_BLEND_PER_FORMAT_ENABLE
+    (0x1220, 0x1224),  # SET_COMPRESSION_THRESHOLD
+    (0x12E0, 0x12E8),  # SET_ALPHA_TO_COVERAGE_DITHER_CONTROL, SET_BLEND_STATE_PER_TARGET
     (0x131C, 0x132C),  # SET_BLEND_CONST_RED..ALPHA
     (0x133C, 0x1360),  # SET_BLEND_SEPARATE_FOR_ALPHA..SET_SINGLE_ROP_CONTROL
     (0x1360, 0x1380),  # SET_BLEND(i)
+    (0x13A8, 0x13AC),  # SET_PS_SATURATE
     (0x1480, 0x1500),  # SET_ITERATED_BLEND_CONSTANT_RED/GREEN/BLUE(j)
+    (0x15B8, 0x15BC),  # SET_SRGB_WRITE
+    (0x19C0, 0x19C4),  # SET_BLEND_FLOAT_OPTION
     (0x1A00, 0x1A20),  # SET_CT_WRITE(i)
     (0x1E00, 0x1F00),  # SET_BLEND_PER_TARGET_*(j)
+    (0x2600, 0x2604),  # SET_COLOR_CLAMP
 )
+
+
+# Every field an experiment and its parts may carry: the app refuses any other, so a misspelt field is an invalid
+# experiment rather than a different one
+EXPERIMENT_KEYS = {
+    'id',
+    'kind',
+    'target',
+    'rect',
+    'draws',
+    'repeats',
+    'warmup',
+    'clear',
+    'readback',
+    'template',
+    'fill',
+}
+EXPERIMENT_KEYS |= {'program', 'compute', 'twod', 'methods', 'restore', 'targets', 'source', 'compare', 'compressed'}
+EXPERIMENT_KEYS |= {'meta', 'expect'}
+TARGET_KEYS = {'format', 'width', 'height'}
+PROGRAM_KEYS = {'code', 'data', 'sph', 'gprs'}
+COMPUTE_KEYS = {'code', 'data', 'gprs', 'threads', 'groups', 'output'}
+TWOD_KEYS = {'op', 'fmt2d', 'colorFormat', 'color', 'du', 'dv', 'sx', 'sy', 'bilinear', 'corner'}
+TWOD_KEYS |= {'reference', 'bracketed', 'samples'}
+SOURCE_KEYS = {'format', 'width', 'height', 'data'}
+TWOD_OPS = ('fill', 'scale', 'resolve')
+# Target formats the 2D engine names a surface format for (raw_probe_ops.h probeTwodFormat), by MTLPixelFormat
+TWOD_FORMATS = {10, 20, 25, 30, 60, 65, 70, 71, 80, 81, 90, 92, 110, 115, 125}
+# A multisampled image's samples across and down, log2 (fx_image.cpp msLayout)
+SAMPLE_GRIDS = {2: (1, 0), 4: (1, 1)}
+ONE = 1 << 32
+# What a scale, resolve or copy reads when the experiment gives no source: the app's own picture
+PICTURE = ('bgra8unorm', 64, 64)
+# compare: the same operation again through another unit, both results and their difference returned
+COMPARES = {'twod': ('program', 'copy', 'resolve3d'), 'readback': ('plain',)}
+MAX_OUTPUT = 64 * 1024
 
 
 class InvalidError(ValueError):
@@ -80,6 +146,16 @@ def method_allowed(method: int) -> bool:
 def _require(ok: bool, why: str) -> None:
     if not ok:
         raise InvalidError(why)
+
+
+def _keys(value: dict, allowed: set[str], what: str) -> None:
+    unknown = sorted(set(value) - allowed)
+    _require(not unknown, f'{what}: unknown field {", ".join(unknown)}')
+
+
+def _flag(value: object, what: str) -> bool:
+    _require(isinstance(value, bool), f'{what} is true or false')
+    return value
 
 
 def _count(value: object, lo: int, hi: int, what: str) -> int:
@@ -109,6 +185,8 @@ class Target:
 
 def target_of(experiment: dict) -> Target:
     t = experiment.get('target') or {}
+    _require(isinstance(t, dict), 'target is an object')
+    _keys(t, TARGET_KEYS, 'target')
     _require(t.get('format') in FORMATS, f'target format {t.get("format")!r} is not one the raw path renders')
     return Target(t['format'], _count(t.get('width'), 1, MAX_SIDE, 'width'), _count(t.get('height'), 1, MAX_SIDE, 'h'))
 
@@ -127,7 +205,7 @@ def instructions(code: bytes) -> int:
 
 def estimated_ms(experiment: dict) -> float:
     """Give the GPU time of the experiment's longest command buffer if every lane ran every instruction at full rate."""
-    if experiment['kind'] in ('noop', 'known'):
+    if experiment['kind'] in ('noop', 'known') or (experiment['kind'] == 'twod' and 'program' not in experiment):
         return 0.0
     if experiment['kind'] == 'compute':
         c = experiment['compute']
@@ -146,6 +224,7 @@ def reads_position_w(sph: bytes) -> bool:
 
 def _program(program: object, field: str) -> None:
     _require(isinstance(program, dict), f'{field} is an object')
+    _keys(program, COMPUTE_KEYS if field == 'compute' else PROGRAM_KEYS, field)
     code = unb64(program.get('code', ''))
     _require(0 < len(code) <= MAX_CODE and len(code) % 32 == 0, f'{field}.code: whole 32-byte bundles, at most 64 KiB')
     data = unb64(program.get('data', ''))
@@ -159,8 +238,109 @@ def _program(program: object, field: str) -> None:
         )
 
 
+def source_of(experiment: dict) -> Target:
+    """Give what a scale, resolve or copy reads: the experiment's source texture, else the app's picture."""
+    src = experiment.get('source')
+    if src is None:
+        return Target(*PICTURE)
+    _require(isinstance(src, dict), 'source is an object')
+    _keys(src, SOURCE_KEYS, 'source')
+    _require(src.get('format') in FORMATS, f'source format {src.get("format")!r} is not one the raw path renders')
+    _require(FORMATS[src['format']][0] in TWOD_FORMATS, 'source format: the 2D engine has no surface format for it')
+    width = _count(src.get('width'), 1, MAX_SIDE, 'source.width')
+    t = Target(src['format'], width, _count(src.get('height'), 1, MAX_SIDE, 'source.height'))
+    _require(len(unb64(src.get('data', ''))) == t.width * t.height * t.texel_bytes, 'source.data is the whole source')
+    return t
+
+
+def _twod(e: dict, target: Target) -> None:
+    t = e.get('twod')
+    _require(isinstance(t, dict) and t.get('op') in TWOD_OPS, f'twod is an object whose op is one of {TWOD_OPS}')
+    _keys(t, TWOD_KEYS, 'twod')
+    op = t['op']
+    color = t.get('color', [0, 0, 0, 0])
+    _require(isinstance(color, list) and len(color) == 4, 'twod.color is four words')
+    for c in color:
+        _count(c, 0, 0xFFFFFFFF, 'twod.color')
+    for field in ('fmt2d', 'colorFormat'):
+        _count(t.get(field, 0), 0, 255, f'twod.{field}')
+    for field in ('du', 'dv', 'sx', 'sy'):
+        _count(t.get(field, 0), 0, (1 << 63) - 1, f'twod.{field}')
+    for field in ('bilinear', 'corner', 'bracketed', 'reference'):
+        _flag(t.get(field, False), f'twod.{field}')
+    _require(not t.get('reference') or op == 'fill', 'twod.reference is the reference fill: fill only')
+    _require(
+        t.get('fmt2d', 0) or FORMATS[target.format][0] in TWOD_FORMATS,
+        'target format: the 2D engine has no surface format for it (give twod.fmt2d)',
+    )
+    _require(op != 'fill' or 'source' not in e, 'a fill reads no source')
+    source = source_of(e)
+    if op == 'resolve':
+        _require(t.get('samples') in SAMPLE_GRIDS, f'twod.samples is one of {sorted(SAMPLE_GRIDS)}')
+        sx, sy = SAMPLE_GRIDS[t['samples']]
+        _require(rect_of(e, target) == (0, 0, target.width, target.height), 'a resolve writes the whole target')
+        _require(
+            target.width << sx <= source.width and target.height << sy <= source.height,
+            "a resolve's sample grid is copied from the source's corner: the source must cover it",
+        )
+    else:
+        _require('samples' not in t, "twod.samples is a resolve's")
+
+
+def _compare(e: dict, target: Target) -> None:
+    compare = e['compare']
+    _require(compare in COMPARES.get(e['kind'], ()), f'compare: one of {COMPARES.get(e["kind"], ())} for {e["kind"]}')
+    if e['kind'] == 'readback':
+        _require(e.get('compressed') is True, 'compare plain is the compressed target against a plain one')
+        return
+    t = e['twod']
+    if compare == 'program':
+        _require(t['op'] in ('fill', 'scale'), 'compare program: a fill or scale against the program drawn over it')
+        _program(e.get('program'), 'program')
+    elif compare == 'copy':
+        one_to_one = t.get('du', ONE) == ONE and t.get('dv', ONE) == ONE and not t.get('sx') and not t.get('sy')
+        _require(t['op'] == 'scale' and one_to_one and not t.get('bilinear'), 'compare copy: a 1:1 point scale')
+        _require(source_of(e).format == target.format, 'compare copy: the copy engine copies bytes, one format')
+        x0, y0, x1, y1 = rect_of(e, target)
+        source = source_of(e)
+        _require(x1 - x0 <= source.width and y1 - y0 <= source.height, 'compare copy: the rect inside the source')
+    else:
+        _require(t['op'] == 'resolve', "compare resolve3d: a resolve against the pack's resolve state")
+
+
+def _compute(c: object) -> None:
+    _program(c, 'compute')
+    for field, hi in (('threads', MAX_THREADS), ('groups', MAX_GROUPS)):
+        v = c.get(field)
+        _require(isinstance(v, list) and len(v) == 3, f'compute.{field} is [x, y, z]')
+        for n in v:
+            _count(n, 1, hi, f'compute.{field}')
+    _require(c['threads'][0] * c['threads'][1] * c['threads'][2] <= MAX_THREADS, 'compute.threads > 1024')
+    if 'output' in c:
+        output = _count(c['output'], 16, MAX_OUTPUT, 'compute.output')
+        _require(output % 16 == 0, 'compute.output: 16-byte multiples')
+        _require(
+            len(unb64(c.get('data', ''))) >= 16, "compute.output: its address goes in the shader data's first 8 bytes"
+        )
+
+
+def _forms(e: dict, target: Target) -> None:
+    """Check the source, compressed and compare fields: which kinds take them and what each needs."""
+    if e['kind'] == 'twod':
+        _twod(e, target)
+    else:
+        _require('source' not in e, 'only twod experiments read a source')
+    if 'compressed' in e:
+        _require(e['kind'] == 'readback' and _flag(e['compressed'], 'compressed'), 'compressed: a readback target')
+    if 'compare' in e:
+        _compare(e, target)
+    elif e['kind'] == 'twod':
+        _require('program' not in e, 'a twod experiment draws a program only to compare with it')
+
+
 def validate_experiment(e: dict) -> None:
     _require(isinstance(e, dict), 'an experiment is an object')
+    _keys(e, EXPERIMENT_KEYS, 'experiment')
     _require(isinstance(e.get('id'), str) and bool(NAME.match(e['id'])), f'id {e.get("id")!r}')
     _require(e.get('kind') in KINDS, f'{e["id"]}: kind {e.get("kind")!r}')
     target = target_of(e)
@@ -175,25 +355,26 @@ def validate_experiment(e: dict) -> None:
     clear = e.get('clear', [0, 0, 0, 0])
     _require(isinstance(clear, list) and len(clear) == 4, 'clear is four floats')
     _require(e.get('readback', 'summary') in READBACK, 'readback is none, summary or full')
+    if 'template' in e:
+        _require(
+            isinstance(e['template'], str) and bool(TEMPLATE.match(e['template'])) and int(e['template'], 16) != 0,
+            "template is a pack state's key hash, 16 hex digits",
+        )
     if 'fill' in e:
         fill = unb64(e['fill'])
         _require(len(fill) == target.width * target.height * target.texel_bytes, 'fill is the whole target, packed')
     if e['kind'] in ('fragment', 'readback'):
         _program(e.get('program'), 'program')
     if e['kind'] == 'compute':
-        c = e.get('compute')
-        _program(c, 'compute')
-        for field, hi in (('threads', MAX_THREADS), ('groups', MAX_GROUPS)):
-            v = c.get(field)
-            _require(isinstance(v, list) and len(v) == 3, f'compute.{field} is [x, y, z]')
-            for n in v:
-                _count(n, 1, hi, f'compute.{field}')
-        _require(c['threads'][0] * c['threads'][1] * c['threads'][2] <= MAX_THREADS, 'compute.threads > 1024')
+        _compute(e.get('compute'))
+    _forms(e, target)
     if e['kind'] == 'readback':
         _pairs(e.get('methods', []), 'methods')
         _pairs(e.get('restore', []), 'restore')
+        _require(e.get('targets', 0) in (0, 1), 'targets is 1 (colour 0 bound alone) or left out')
     else:
         _require('methods' not in e and 'restore' not in e, 'only readback experiments set methods')
+        _require('targets' not in e, 'only readback experiments choose their targets')
     _require(
         estimated_ms(e) <= MAX_COMMAND_BUFFER_MS, f'{e["id"]}: a command buffer would take {estimated_ms(e):.1f} ms'
     )

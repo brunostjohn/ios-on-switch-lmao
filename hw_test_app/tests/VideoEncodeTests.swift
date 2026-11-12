@@ -50,6 +50,7 @@ struct VideoEncodeTest: HWTest {
         metrics.set("p_frames", encoded.predictedFrames)
         metrics.set("decoded_match", decoded.matched)
         metrics.set("luma_err", decoded.worstLumaError, digits: 1)
+        metrics.set("intra_only", encoded.predictedFrames == 0)
         return .judged(
             [
                 ("VTCopyVideoEncoderList offers it as hardware", !listed.isEmpty),

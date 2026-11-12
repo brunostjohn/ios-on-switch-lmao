@@ -9,7 +9,23 @@ struct SwitchNativeScanout {
     uint64_t pitchOffset = 0;
 };
 
-int switch_native_scanout_acquire(OSObject *surface, SwitchNativeScanout *scanout);
+// turns: a picture TegraVIC recorded turned (SwitchVICTurn.h) too, for window A's column scan; view.turn says which.
+int switch_native_scanout_acquire(OSObject *surface, SwitchNativeScanout *scanout, bool turns = false);
 int switch_native_scanout_pitch(OSObject *surface, SwitchNativeScanout *scanout);
 int switch_native_scanout_pitch_wait(OSObject *surface, SwitchNativeScanout *scanout);
 void switch_native_scanout_release(SwitchNativeScanout *scanout);
+// The display latched (or dropped) the frame the scanout shows: a recorded turn's request signals go now.
+void switch_native_scanout_deliver(SwitchNativeScanout *scanout);
+
+// What a scanout of the picture is ordered after: its producer, and a recorded turn's request waits. At most capacity.
+inline uint32_t switch_native_scanout_dependencies(const SwitchNativeScanout &scanout, switch_gpu_backing_token *tokens,
+                                                   uint32_t capacity)
+{
+    uint32_t count = 0;
+    if (scanout.view.producer.engine && count < capacity)
+        tokens[count++] = scanout.view.producer;
+    for (uint32_t i = 0; i < scanout.view.waitCount && count < capacity; ++i)
+        if (scanout.view.waits[i].engine)
+            tokens[count++] = scanout.view.waits[i];
+    return count;
+}

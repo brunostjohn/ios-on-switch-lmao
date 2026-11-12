@@ -4,6 +4,33 @@
 #include "TegraVICRequest.h"
 #include "SwitchVICPicture.h"
 
+// A tri-planar 'v0a8' destination (Y, CbCr, alpha: VideoToolbox's HEVC-with-alpha target, which the decoder sessions
+// of both layers share) is the planes the picture writes: from plane 0 a '420v' of its first two, from plane 2 an
+// 'L008' of the alpha plane, which takes the picture's luma alone.
+inline const char *switch_vic_picture_planes(const TegraVICPicture *p, TegraVICSurfaceDesc *d)
+{
+    if (d->fourcc != TEGRA_VIC_FOURCC('v', '0', 'a', '8'))
+        return p->plane ? "picture into a plane of a surface that is not 'v0a8'" : nullptr;
+    if (d->planes != 3)
+        return "'v0a8' surface without three planes";
+    if (p->plane == 0) {
+        d->fourcc = TEGRA_VIC_FOURCC('4', '2', '0', 'v');
+        d->planes = 2;
+        return nullptr;
+    }
+    if (p->plane != 2)
+        return "picture into a 'v0a8' plane other than 0 or 2";
+    d->fourcc = TEGRA_VIC_FOURCC('L', '0', '0', '8');
+    d->planes = 1;
+    d->planeOffset[0] = d->planeOffset[2];
+    d->planeBytesPerRow[0] = d->planeBytesPerRow[2];
+    d->planeWidth[0] = d->planeWidth[2];
+    d->planeHeight[0] = d->planeHeight[2];
+    for (uint32_t k = 1; k < TEGRA_VIC_MAX_PLANES; k++)
+        d->planeOffset[k] = d->planeBytesPerRow[k] = d->planeWidth[k] = d->planeHeight[k] = 0;
+    return nullptr;
+}
+
 // A picture of 16-bit samples (P010 into 'x420'/'xf20') goes as an 8-bit one of twice the width: both layouts hold
 // the same bytes in the same places, and the 4:2:0 pass-through moves bytes untouched (kTegraVICTraits.blockLinearIn).
 inline const char *switch_vic_picture_bytes(const TegraVICPicture *wide, const TegraVICSurfaceDesc *d, TegraVICPicture *p,
@@ -11,6 +38,8 @@ inline const char *switch_vic_picture_bytes(const TegraVICPicture *wide, const T
 {
     *p = *wide;
     *bytes = *d;
+    if (const char *why = switch_vic_picture_planes(wide, bytes))
+        return why;
     if (wide->sampleBytes == 1)
         return nullptr;
     if (wide->sampleBytes != 2)
@@ -43,7 +72,8 @@ inline const char *switch_vic_picture_place(const TegraVICPicture *p, const Tegr
     const char *why = tegra_vic_image_from(d, 0, &pl->whole);
     if (why)
         return why;
-    if (pl->whole.format->kind == TEGRA_VIC_KIND_RGB || pl->whole.format->planes != 2)
+    const bool lumaAlone = p->plane == 2 && pl->whole.format->vic == TEGRA_VIC_T_L8;
+    if (!lumaAlone && (pl->whole.format->kind == TEGRA_VIC_KIND_RGB || pl->whole.format->planes != 2))
         return "destination is not 4:2:0";
     // Odd sizes are refused rather than rounded: the column or row VIC could not write would show what the buffer held.
     if ((p->cropX | p->cropY | p->dstX | p->dstY) & 1)
@@ -61,7 +91,9 @@ inline const char *switch_vic_picture_place(const TegraVICPicture *p, const Tegr
     if (!p->pages || !p->bytes || p->bytes > static_cast<uint64_t>(p->pageCount) << 12 ||
         p->bytes > static_cast<uint64_t>(8192u) << 12)
         return "picture memory outside its page list or over 32 MiB";
-    for (uint32_t k = 0; k < 2; k++) {
+    pl->band[1] = {};
+    pl->pages[1] = 0;
+    for (uint32_t k = 0; k < pl->whole.format->planes; k++) {
         const uint32_t firstRow = k ? p->dstY / 2 : p->dstY;
         const uint32_t rows = k ? pl->height / 2 : pl->height;
         if (p->dstX > pl->whole.pitch[k] || pl->width > pl->whole.pitch[k] - p->dstX ||
@@ -89,7 +121,8 @@ inline void switch_vic_picture_describe(const TegraVICPicture *p, const SwitchVI
     dst->transfer = pl.whole.transfer; dst->primaries = pl.whole.primaries;
     dst->chromaSite = pl.whole.chromaSite;
     dst->lastRowExact = 1;
-    for (uint32_t k = 0; k < 2; k++) {
+    const uint32_t planes = pl.whole.format->planes;
+    for (uint32_t k = 0; k < planes; k++) {
         dst->pitch[k] = pl.band[k].pitch;
         dst->rows[k] = pl.band[k].rows;
         dst->base[k] = dstBase + pl.band[k].start;
@@ -99,13 +132,16 @@ inline void switch_vic_picture_describe(const TegraVICPicture *p, const SwitchVI
     src->format = pl.whole.format;
     src->width = p->cropX + pl.width;
     src->height = p->cropY + pl.height;
-    src->pitch[0] = src->pitch[1] = p->pitch;
+    src->pitch[0] = p->pitch;
     src->rows[0] = p->rows;
-    src->rows[1] = p->rows / 2;
     src->base[0] = srcBase;
     src->span[0] = p->chromaOffset;
-    src->base[1] = srcBase + p->chromaOffset;
-    src->span[1] = p->chromaOffset < p->bytes ? p->bytes - p->chromaOffset : 0;
+    if (planes > 1) {
+        src->pitch[1] = p->pitch;
+        src->rows[1] = p->rows / 2;
+        src->base[1] = srcBase + p->chromaOffset;
+        src->span[1] = p->chromaOffset < p->bytes ? p->bytes - p->chromaOffset : 0;
+    }
     src->standard = pl.whole.standard;
     src->transfer = pl.whole.transfer; src->primaries = pl.whole.primaries;
     src->chromaSite = pl.whole.chromaSite;

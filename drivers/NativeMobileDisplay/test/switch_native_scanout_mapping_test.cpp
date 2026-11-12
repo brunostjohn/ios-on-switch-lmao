@@ -24,8 +24,9 @@ extern "C" void tegra_gm20b_surface_unhold(void *) { ++unholds; }
 
 namespace {
 SwitchNativeScanout nextNative, nextPitch;
-unsigned leases, acquisitions, pitchAcquisitions;
+unsigned leases, acquisitions, pitchAcquisitions, deliveries;
 int nativeError, pitchError;
+uint64_t completedThrough = 0;  // tokens with a value up to this have completed
 struct Mapping {
     unsigned maps = 0, unmaps = 0, count = 0;
     uint64_t first = 0;
@@ -37,13 +38,14 @@ struct Mapping {
 template <unsigned Slots>
 struct Display {
     static constexpr unsigned kPlaneSlots = Slots;
+    static constexpr unsigned kPlaneOverlayDependencies = 3, kPlaneDependencies = 6;
     static constexpr uint64_t kPlaneSlotSpan = 20ULL << 20;
     using PlaneSlot = switch_display::PlaneSlot;
     PlaneSlot planeSlots[kPlaneSlots] = {};
     using PlaneSet = switch_display::Composition;
     PlaneSet planeNext;
     bool planeNextSet = false, stats = true, windowIdle = false;
-    uint32_t planeSlotUses = 0, stPlaneMaps = 0, flushes = 0;
+    uint32_t planeSlotUses = 0, stPlaneMaps = 0, stPlaneNative = 0, flushes = 0;
     bool busy[kPlaneSlots] = {};
     Mapping probeDomain;
     bool planeSlotBusy(int slot) const { return busy[slot]; }
@@ -56,7 +58,7 @@ struct Display {
 #include "../SwitchNativePlaneDisplay.h"
 };
 }
-int switch_native_scanout_acquire(OSObject *, SwitchNativeScanout *out)
+int switch_native_scanout_acquire(OSObject *, SwitchNativeScanout *out, bool)
 {
     ++acquisitions;
     *out = nativeError ? SwitchNativeScanout{} : nextNative;
@@ -69,6 +71,15 @@ int switch_native_scanout_pitch(OSObject *, SwitchNativeScanout *out)
     *out = pitchError ? SwitchNativeScanout{} : nextPitch;
     if (out->lease) ++leases;
     return pitchError;
+}
+int switch_gpu_backing_token_external_status(const switch_gpu_backing_token *token)
+{
+    return token->value <= completedThrough ? 1 : 0;
+}
+void switch_native_scanout_deliver(SwitchNativeScanout *value)
+{
+    if (value->lease)
+        ++deliveries;
 }
 void switch_native_scanout_release(SwitchNativeScanout *value)
 {
@@ -85,7 +96,8 @@ protected:
     bool resolved;
     void SetUp() override
     {
-        leases = acquisitions = pitchAcquisitions = 0;
+        leases = acquisitions = pitchAcquisitions = deliveries = 0;
+        completedThrough = 0;
         nativeError = pitchError = 0;
         for (uint32_t i = 0; i < pages.size(); ++i) pages[i] = 0x80000000ULL + uint64_t(i) * 4096;
         layer = {};
@@ -127,7 +139,7 @@ TEST_F(NativeScanoutMapping, NativeAllocationMapsOnceAndCarriesExactProducer)
     display->planeNext.window[0].on = true;
     display->planeNext.window[0].slot = 0;
     TegraScanoutCopy copy = {};
-    switch_gpu_backing_token tokens[2] = {};
+    switch_gpu_backing_token tokens[6] = {};
     display->planeNextDependencies(copy, tokens);
     ASSERT_EQ(copy.dependencyCount, 1u); ASSERT_NE(copy.dependencies, nullptr);
     EXPECT_EQ(copy.dependencies[0].value, 73u);
@@ -165,6 +177,7 @@ TEST_F(NativeScanoutMapping, SteadyPlaybackMapsEachPoolBufferOnce)
     }
     EXPECT_EQ(pool.probeDomain.maps, 3u);
     EXPECT_EQ(pool.stPlaneMaps, 3u);
+    EXPECT_EQ(pool.stPlaneNative, 30u);  // every frame scanned in the decoder's own block-linear layout
     EXPECT_EQ(pool.probeDomain.unmaps, 0u);
     EXPECT_EQ(pool.flushes, 3u);
 }
@@ -258,3 +271,45 @@ TEST_F(NativeScanoutMapping, CpuOwnedOrdinarySurfaceDefersWithoutMappingOrDroppi
     EXPECT_EQ(leases, 0u);
 }
 }  // namespace
+
+// A recorded turn's request waits come with its picture: the set waits for them as for the picture's producer.
+TEST_F(NativeScanoutMapping, ARecordedTurnsRequestWaitsOrderTheSetLikeItsProducer)
+{
+    const switch_gpu_backing_token waits[2] = {{300, 2, SWITCH_GPU_ENGINE_GM20B, 81}, {301, 3, SWITCH_GPU_ENGINE_VIC, 82}};
+    nextNative.view.waits = waits;
+    nextNative.view.waitCount = 2;
+    ASSERT_EQ(admit(), 0);
+    display->planeNextSet = true;
+    display->planeNext.window[0].on = true;
+    display->planeNext.window[0].slot = 0;
+    TegraScanoutCopy copy = {};
+    switch_gpu_backing_token tokens[6] = {};
+    display->planeNextDependencies(copy, tokens);
+    ASSERT_EQ(copy.dependencyCount, 3u);
+    EXPECT_EQ(copy.dependencies[0].value, 73u);
+    EXPECT_EQ(copy.dependencies[1].value, 300u);
+    EXPECT_EQ(copy.dependencies[2].value, 301u);
+    completedThrough = 300;
+    EXPECT_TRUE(display->planeOverlayWaits(*display->planeSlots[0].native));
+    completedThrough = 301;
+    EXPECT_FALSE(display->planeOverlayWaits(*display->planeSlots[0].native));
+}
+
+// The signals go when the set showing the frame latches, and a frame dropped before it was shown still delivers them
+// when its slot goes back.
+TEST_F(NativeScanoutMapping, AShownFrameDeliversAtItsLatchAndADroppedOneWhenItsSlotGoesBack)
+{
+    ASSERT_EQ(admit(), 0);
+    Display<2>::PlaneSet shown = {};
+    shown.window[0].on = true;
+    shown.window[0].slot = 0;
+    display->planeDeliver(shown);
+    EXPECT_EQ(deliveries, 1u);
+    ++nextNative.allocation.allocation_id;
+    display->busy[0] = true;
+    ASSERT_EQ(admit(), 1);
+    display->busy[0] = false;
+    display->planeReleaseLease(1);
+    EXPECT_EQ(deliveries, 2u);
+    EXPECT_EQ(leases, 1u);
+}

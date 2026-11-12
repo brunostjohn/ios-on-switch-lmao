@@ -235,15 +235,18 @@ static void markProbes(raw::Pipeline *pl, NSString *label)
 // run is asked again off this thread; m2v draws the state until then.
 static void makeRecord(RMPipeline *p, MTLRenderPipelineDescriptor *d)
 {
+    RAW_DIAGNOSTIC(p->_obtained.how = p->_raw ? "pack" : "none");
     if (p->_raw || !p->_completable || !gRM->completion)
         return;
     raw::Completion::Ask a;
     a.descriptor = twinDescriptor(d);
+    a.facade = d;
     a.key = p->_key;
     a.caTransform = p->_caTransform;
     a.own = !p->_packable;
     bool retry = false;
     p->_raw = gRM->completion->makeNow(a, &retry);
+    RAW_DIAGNOSTIC(p->_obtained = raw::Completion::lastObtained());
 #if SWITCH_RAW_DIAGNOSTICS
     if (p->_raw && native_bridge_metal_journal_render)
         native_bridge_metal_journal_render(a.descriptor, 0);
@@ -273,7 +276,7 @@ static void makeRecord(RMPipeline *p, MTLRenderPipelineDescriptor *d)
 static raw::ArchiveAnswer renderArchiveAnswer(MTLRenderPipelineDescriptor *d, MTLPipelineOption o, uint64_t keyHash,
                                               NSError **error)
 {
-    const raw::ArchiveAnswer answer = rmArchiveAnswer(d.binaryArchives, o, false, keyHash);
+    const raw::ArchiveAnswer answer = rmArchiveAnswer(d.binaryArchives, o, keyHash);
     if (answer == raw::ArchiveAnswer::Missed && error)
         *error = rmArchiveMissError((d.fragmentFunction ?: d.vertexFunction).name, "render");
     return answer;
@@ -323,8 +326,11 @@ RMPipeline *rmPipelineFor(RMDevice *device, MTLRenderPipelineDescriptor *d, MTLP
         if (p->_packed)
             packedVariants(p, packKey);
     }
-    const raw::ArchiveAnswer answer = p->_raw || !p->_completable ? raw::ArchiveAnswer::NotAsked
-                                                                   : renderArchiveAnswer(d, o, keyHash, error);
+    // A framework's state the pack holds is the device's archive hit, as Apple's own archives hold its states for Apple's
+    // GPUs; any other state is answered by the archives the creation lists alone, as Metal answers it
+    const bool deviceArchive = p->_packable && p->_raw;
+    const raw::ArchiveAnswer answer = p->_completable && !deviceArchive ? renderArchiveAnswer(d, o, keyHash, error)
+                                                                        : raw::ArchiveAnswer::NotAsked;
     if (answer == raw::ArchiveAnswer::Missed)
         return nil;
     p->_archived = answer == raw::ArchiveAnswer::Declared;

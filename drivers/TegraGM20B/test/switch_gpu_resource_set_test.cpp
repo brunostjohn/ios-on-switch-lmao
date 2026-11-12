@@ -3,6 +3,7 @@
 // standing for a member's users when a CPU lease or something outside the set reaches it, and a member that leaves while
 // a submission is inside.
 #include "switch_gpu_backing_fixture.h"
+#include "drivers/TegraGM20B/SwitchGpuBackingInternal.h"
 #include "drivers/TegraGM20B/SwitchGpuResourceSet.h"
 #include "drivers/TegraGM20B/SwitchGpuJobStats.h"
 #include <string>
@@ -19,7 +20,7 @@ struct Set {
 	uint32_t attach(std::vector<switch_gpu_set_member> members, int expected = 0)
 	{
 		uint32_t generation = 0;
-		EXPECT_EQ(switch_gpu_set_attach(set, members.data(), uint32_t(members.size()), &generation),
+		EXPECT_EQ(switch_gpu_set_attach(set, members.data(), uint32_t(members.size()), &generation, nullptr),
 			  expected);
 		return generation;
 	}
@@ -180,7 +181,7 @@ TEST_F(ResourceSet, AMemberReachedFromOutsideOrdersItsNewUserAfterTheSetsJobs)
 	ASSERT_EQ(waits.size(), 1u);
 	EXPECT_EQ(waits[0].queue, 5u);
 	uint32_t next = 0;
-	EXPECT_EQ(switch_gpu_set_attach(set.set, (switch_gpu_set_member[]){{member, kRead, 0}}, 1, &next), -22);
+	EXPECT_EQ(switch_gpu_set_attach(set.set, (switch_gpu_set_member[]){{member, kRead, 0}}, 1, &next, nullptr), -22);
 	switch_gpu_backing_release(member);
 	switch_gpu_backing_release(member);
 }
@@ -210,12 +211,12 @@ TEST_F(ResourceSet, ACpuLeaseWaitsOnlyForSetJobsThatConflict)
 	const auto job = token(7, 3);
 	switch_gpu_set_note_job(set.set, 0, &job);
 	constexpr uint32_t avoid = SWITCH_GPU_BACKING_CPU_AVOID_SYNC;
-	ASSERT_EQ(switch_gpu_backing_member_lease(readOnly, kRead), 0);
+	switch_gpu_backing_member_cpu(readOnly);
 	EXPECT_EQ(switch_gpu_backing_cpu_acquire(readOnly, 0, 4096, kRead | avoid), 0);
 	EXPECT_EQ(switch_gpu_backing_cpu_release(readOnly, 0, 4096, kRead | avoid), 0);
-	ASSERT_EQ(switch_gpu_backing_member_lease(written, kRead), 0);
+	switch_gpu_backing_member_cpu(written);
 	EXPECT_EQ(switch_gpu_backing_cpu_acquire(written, 0, 4096, kRead | avoid), -16);
-	ASSERT_EQ(switch_gpu_backing_member_lease(readOnly, kWrite), 0);
+	switch_gpu_backing_member_cpu(readOnly);
 	EXPECT_EQ(switch_gpu_backing_cpu_acquire(readOnly, 0, 4096, kWrite | avoid), -16);
 	complete(job);
 	EXPECT_EQ(switch_gpu_backing_cpu_acquire(written, 0, 4096, kRead | avoid), 0);
@@ -345,6 +346,64 @@ TEST_F(ResourceSet, ACpuLockOnASharedUseKeepsItsExclusion)
 
 // An Internal set job leaves its writes in the GPU L2 when it completes: a CPU reader of a member it may have written
 // still waits for them to reach DRAM.
+// A CPU lease or CpuComplete takes a member out for good: its generation ends, and making the set again refuses it by name
+TEST_F(ResourceSet, ACpuAccessTakesAMemberOutForGood)
+{
+	auto *member = backing(), *other = backing();
+	Set set;
+	const uint32_t generation = set.attach({{member, kWrite, 0}, {other, kRead, 0}});
+	const auto job = token(3, 2);
+	switch_gpu_set_note_job(set.set, 0, &job);
+	switch_gpu_backing_member_cpu(member);
+	EXPECT_GT(switch_gpu_set_generation(set.set), generation);
+	EXPECT_EQ(switch_gpu_backing_set(member), nullptr);
+	EXPECT_EQ(switch_gpu_backing_set(other), set.set);
+	EXPECT_EQ(outside_waits(member, kRead).size(), 1u);
+	uint32_t next = 0;
+	switch_gpu_backing *refused = nullptr;
+	const switch_gpu_set_member again[] = {{member, kWrite, 0}, {other, kRead, 0}};
+	EXPECT_EQ(switch_gpu_set_attach(set.set, again, 2, &next, &refused), -22);
+	EXPECT_EQ(refused, member);
+	EXPECT_EQ(switch_gpu_backing_set(other), set.set) << "a refused attach changed the set";
+	switch_gpu_backing_release(member);
+	switch_gpu_backing_release(other);
+}
+
+// A member a replace or a release lets go keeps the set's pending jobs as its users
+TEST_F(ResourceSet, AMemberLetGoKeepsTheSetsPendingJobs)
+{
+	auto *dropped = backing(), *kept = backing();
+	{
+		Set set;
+		set.attach({{dropped, kWrite, 0}, {kept, kWrite, 0}});
+		const auto job = token(5, 4);
+		switch_gpu_set_note_job(set.set, 1, &job);
+		set.attach({{kept, kWrite, 0}});
+		EXPECT_EQ(switch_gpu_backing_set(dropped), nullptr);
+		EXPECT_EQ(outside_waits(dropped, kRead).size(), 1u) << "the replace forgot the set's job";
+	}
+	EXPECT_EQ(switch_gpu_backing_set(kept), nullptr);
+	EXPECT_EQ(outside_waits(kept, kRead).size(), 1u) << "the release forgot the set's job";
+	switch_gpu_backing_release(dropped);
+	switch_gpu_backing_release(kept);
+}
+
+// A CPU-tracked import may join; leaving, its writers cover it whole, so CpuComplete maintains what the set's jobs wrote
+TEST_F(ResourceSet, ACpuTrackedMemberLeavesWithWholeWriterRanges)
+{
+	auto *member = backing();
+	ASSERT_EQ(switch_gpu_backing_cpu_track(member), 0);
+	Set set;
+	set.attach({{member, kWrite, 0}});
+	const auto job = token(6, 9);
+	switch_gpu_set_note_job(set.set, 0, &job);
+	switch_gpu_backing_member_cpu(member);
+	ASSERT_EQ(member->writer_count, 1u);
+	EXPECT_EQ(member->writers[0].begin, 0u);
+	EXPECT_EQ(member->writers[0].end, uint64_t(member->pages->count) << 12);
+	switch_gpu_backing_release(member);
+}
+
 TEST_F(ResourceSet, AFinishedSetJobStillOwesAMembersReaderItsVisibility)
 {
 	auto *member = backing();
@@ -355,7 +414,7 @@ TEST_F(ResourceSet, AFinishedSetJobStillOwesAMembersReaderItsVisibility)
 	complete(job);
 	external_completed[{job.engine, job.queue, job.reset_generation}] = 5;
 	constexpr uint32_t avoid = SWITCH_GPU_BACKING_CPU_AVOID_SYNC;
-	ASSERT_EQ(switch_gpu_backing_member_lease(member, kRead), 0);
+	switch_gpu_backing_member_cpu(member);
 	EXPECT_EQ(switch_gpu_backing_cpu_acquire(member, 0, 4096, kRead | avoid), -16);
 	external_completed[{job.engine, job.queue, job.reset_generation}] = 6;
 	EXPECT_EQ(switch_gpu_backing_cpu_acquire(member, 0, 4096, kRead | avoid), 0);

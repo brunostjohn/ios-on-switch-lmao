@@ -10,8 +10,25 @@ inline task_t current_task()
 	return nullptr;
 }
 
+class IOMemoryMap
+{
+public:
+	uintptr_t getVirtualAddress() const
+	{
+		return 0;
+	}
+	void release()
+	{
+	}
+};
+
 class IOBufferMemoryDescriptor : public IOMemoryDescriptor
 {
+public:
+	IOMemoryMap *map()
+	{
+		return nullptr;
+	}
 };
 
 inline unsigned relayoutLogs;

@@ -128,6 +128,58 @@ filegroup(
     ],
 )
 
+# The system shader compiler (compiler/): compiled into the plugin and run by SwitchShaderCompiler below. Not part of the
+# stack key: a store is named by the stack and the pack's rules, its entries are raw_cache.cpp's, and a store name made
+# otherwise only misses.
+filegroup(
+    name = "compiler_srcs",
+    srcs = [
+        "compiler/compiler_engine.mm",
+        "compiler/compiler_request.mm",
+        "compiler/compiler_sandbox.mm",
+        "compiler/compiler_service.mm",
+    ],
+)
+
+filegroup(
+    name = "compiler_cc_srcs",
+    srcs = [
+        "compiler/compiler_log.cpp",
+        "compiler/compiler_pool.cpp",
+        "compiler/compiler_store.cpp",
+    ],
+)
+
+filegroup(
+    name = "compiler_headers",
+    srcs = glob(["compiler/*.h"]),
+)
+
+# /usr/libexec/SwitchShaderCompiler (overlay/manifest.json): loads the plugin and runs its compiler. launchd starts it on
+# iOS 27 (com.brunostjohn.switch.shadercompiler.plist), the BlueTool stand-in on iOS 17.
+ios_binary(
+    name = "SwitchShaderCompiler",
+    srcs = ["compiler/SwitchShaderCompiler.c"],
+    out = "build/switch-gpu/SwitchShaderCompiler",
+    copts = [
+        "-O2",
+        "-Wall",
+        "-Wextra",
+        "-Werror",
+        "-framework",
+        "IOKit",
+        "-framework",
+        "CoreFoundation",
+    ],
+    entitlements = "compiler/SwitchShaderCompiler.entitlements",
+)
+
+# The overlay files of the compiler that overlay/manifest.json names
+filegroup(
+    name = "overlay_files",
+    srcs = ["compiler/com.brunostjohn.switch.shadercompiler.plist"],
+)
+
 # What the raw path's records, pack entries and native seed records are made by, as //gpu:raw_stack hashes it: the shader
 # tools build the raw pack's tools from exactly these files (//gpu/seed:local_tools), and the plugin makes and reads its
 # records with the same units. raw_stack checks that each unit here includes nothing else; tools/gpu/raw_stack_test.py
@@ -172,6 +224,8 @@ ios_binary(
         "raw/runtime/raw_arena.cpp",
         "raw/runtime/raw_comp.cpp",
         "raw/runtime/raw_gpu.cpp",
+        "raw/runtime/raw_private_comp.cpp",
+        "raw/runtime/raw_draw_bands.cpp",
         "raw/runtime/raw_job_uses.cpp",
         "raw/runtime/raw_transfer.cpp",
         "raw/runtime/raw_kernel.cpp",
@@ -192,7 +246,9 @@ ios_binary(
         "//drivers/NativeMetal:bridge/NativeMetalBlend.h",
         "//drivers/TegraGM20B:TegraGM20BABI.h",
         "//drivers/TegraGM20B:TegraGM20BJobABI.h",
+        "//drivers/TegraGM20B:TegraGM20BHost.h",
         "//drivers/TegraGM20B:TegraGM20BLayout.h",
+        "//drivers/TegraGM20B:TegraGM20BSchedPolicy.h",
         "//drivers/TegraGM20B:TegraGM20BZcullABI.h",
         "//kits/SwitchGM20B:class_headers",
         "//kits/SwitchGM20BEmit:emit_headers",

@@ -62,6 +62,11 @@ public:
         return configured;
     }
 
+    bool holding() const
+    {
+        return applied;
+    }
+
     bool configure(const switch_display_memory_head &timing, uint32_t sourceWidth, uint32_t sourceHeight, bool rotated)
     {
         if (!timing.pixel_clock_hz || !timing.active_width || !timing.active_height ||
@@ -109,22 +114,50 @@ public:
 
     template <class Apply> bool arm(const switch_display_memory_window active[2], uint64_t peak, Apply apply)
     {
-        auto next = request(peak);
-        next.windows[1] = active[0];
-        next.windows[2] = active[1];
-        return publish(next, true, apply);
+        const switch_display_memory_window windows[3] = {mode.windows[0], active[0], active[1]};
+        return armWindows(windows, peak, apply);
+    }
+
+    // Window A alone, unless a plan has been published since the mode was configured.
+    template <class Apply> bool applyUiAlone(Apply apply)
+    {
+        if (applied)
+            return true;
+        return publish(request(mode.peak_bytes_per_second), false, apply);
     }
 
     template <class Apply> bool retire(const switch_display_memory_window active[2], uint64_t peak, Apply apply)
     {
+        const switch_display_memory_window windows[3] = {mode.windows[0], active[0], active[1]};
+        return retireWindows(windows, peak, apply);
+    }
+
+    // Windows A, B and C as a composition has them (the UI on A or, in landscape, on B: uiWindow()). Armed, the
+    // reservation covers what is held too, so a request out keeps both its old and its new demand.
+    template <class Apply> bool armWindows(const switch_display_memory_window windows[3], uint64_t peak, Apply apply)
+    {
         auto next = request(peak);
-        next.windows[1] = active[0];
-        next.windows[2] = active[1];
+        for (unsigned i = 0; i != 3; ++i)
+            next.windows[i] = windows[i];
+        return publish(next, true, apply);
+    }
+
+    template <class Apply> bool retireWindows(const switch_display_memory_window windows[3], uint64_t peak, Apply apply)
+    {
+        auto next = request(peak);
+        for (unsigned i = 0; i != 3; ++i)
+            next.windows[i] = windows[i];
         if (!publish(next, false, apply))
             return false;
         for (auto &layer : layers)
             layer = {};
         return true;
+    }
+
+    // The UI's own window as configure() sized it.
+    const switch_display_memory_window &uiWindow() const
+    {
+        return mode.windows[0];
     }
 
     const switch_display_memory_head &reservation() const

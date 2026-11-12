@@ -5,9 +5,10 @@
 // whose fence is behind the old one. Jobs (SubmitAddress, SubmitJob) complete as they are submitted, or stay in flight
 // until a kill, which writes the record and then moves the fence past every seqno given out, as the kernel does. Memory a
 // killed job wrote holds undefined contents until a job writes it again; a job that only reads it is counted
-// (staleReads). A SubmitJob naming a set uses every member as registered. Sets refuse what the kernel refuses (imports,
-// cached BoAllocs, a BO of another set) and end their generation, mirrored in the fence page, when a member is freed, a
-// channel that used the set is destroyed killed, or the set is made again. Its IOKit calls replace the framework's:
+// (staleReads). A SubmitJob naming a set uses every member as registered. Sets leave out what the kernel leaves out (a BO
+// a CPU lease named, a BO of another set: access 0 in the caller's records) and end their generation, mirrored in the
+// fence page, when a member is freed or leased by the CPU, a channel that used the set is destroyed killed, or the set is
+// made again. Its IOKit calls replace the framework's:
 // include it in one unit of a test.
 #pragma once
 #include "TegraGM20BABI.h"
@@ -23,7 +24,7 @@ namespace kernel_model {
 constexpr uint32_t kSlots = 16, kRecordBytes = 64, kFenceToken = 0x7fff0000, kFencePageBytes = 4096;
 
 struct BoState {
-    bool import = false, cached = false;
+    bool import = false, cached = false, cpuReached = false;
     uint32_t set = 0;  // the set it is a member of, 0: none
 };
 
@@ -216,20 +217,23 @@ struct Model {
             ++index;
         if (index == TegraGM20BMaxResourceSets)
             return kIOReturnNoResources;
-        const auto *uses = reinterpret_cast<const TegraGM20BAbiSurfaceUse *>(uintptr_t(in.uses_address));
+        auto *uses = reinterpret_cast<TegraGM20BAbiSurfaceUse *>(uintptr_t(in.uses_address));
         constexpr uint32_t kAccess = TegraGM20BSurfaceRead | TegraGM20BSurfaceWrite;
-        for (uint32_t i = 0; i < in.count; ++i) {
-            const auto it = bos.find(uses[i].handle);
-            if (uses[i].reserved || !(uses[i].access & kAccess) || (uses[i].access & ~kAccess) || it == bos.end() ||
-                it->second.import || it->second.cached)
+        for (uint32_t i = 0; i < in.count; ++i)
+            if (uses[i].reserved || !(uses[i].access & kAccess) || (uses[i].access & ~kAccess) ||
+                !bos.count(uses[i].handle))
                 return kIOReturnBadArgument;
-            if (it->second.set && it->second.set != index + 1)
-                return kIOReturnExclusiveAccess;
-        }
         for (const auto &member : sets[index].members)
             if (const auto it = bos.find(member.handle); it != bos.end())
                 it->second.set = 0;
-        sets[index].members.assign(uses, uses + in.count);
+        sets[index].members.clear();
+        for (uint32_t i = 0; i < in.count; ++i) {
+            const BoState &bo = bos.at(uses[i].handle);
+            if (bo.cpuReached || (bo.set && bo.set != index + 1))
+                uses[i].access = 0;
+            else
+                sets[index].members.push_back(uses[i]);
+        }
         for (const auto &member : sets[index].members)
             bos[member.handle].set = index + 1;
         sets[index].live = true;
@@ -255,6 +259,21 @@ struct Model {
         bos.erase(it);
         for (auto bound = binds.begin(); bound != binds.end();)
             bound = bound->second.first == handle ? binds.erase(bound) : std::next(bound);
+    }
+
+    void cpuLease(uint64_t handle)
+    {
+        const auto it = bos.find(handle);
+        if (it == bos.end())
+            return;
+        it->second.cpuReached = true;
+        if (const uint32_t set = it->second.set) {
+            auto &members = sets[set - 1].members;
+            for (auto at = members.begin(); at != members.end();)
+                at = at->handle == handle ? members.erase(at) : std::next(at);
+            it->second.set = 0;
+            endGeneration(set - 1);
+        }
     }
 
     void destroyed(uint32_t channel, bool killed)
@@ -303,7 +322,8 @@ extern "C" kern_return_t IOConnectCallStructMethod(mach_port_t, uint32_t method,
         auto &info = *static_cast<TegraGM20BAbiInfo *>(output);
         info = {};
         info.abi_version = TegraGM20BAbiVersion;
-        info.flags = TegraGM20BInfoKernelMap | TegraGM20BInfoSubmitAddress | TegraGM20BInfoKillRecord;
+        info.flags = TegraGM20BInfoKernelMap | TegraGM20BInfoSubmitAddress | TegraGM20BInfoKillRecord |
+                     TegraGM20BInfoCpuAccess;
         info.cls_copy = 0xb0b5;
         info.cls_eng3d = 0xb197;
         info.va_start = 0x1000000;
@@ -331,6 +351,11 @@ extern "C" kern_return_t IOConnectCallStructMethod(mach_port_t, uint32_t method,
         model.binds[op.va] = {op.handle, op.range};
         return KERN_SUCCESS;
     }
+    case TegraGM20BMethodCpuAcquire:
+        model.cpuLease(static_cast<const TegraGM20BAbiCpuAccess *>(input)->handle);
+        return KERN_SUCCESS;
+    case TegraGM20BMethodCpuRelease:
+        return KERN_SUCCESS;
     case TegraGM20BMethodResourceSetCreate:
         return model.setCreate(*static_cast<const TegraGM20BAbiResourceSetCreate *>(input),
                                *static_cast<TegraGM20BAbiResourceSetCreateReply *>(output));

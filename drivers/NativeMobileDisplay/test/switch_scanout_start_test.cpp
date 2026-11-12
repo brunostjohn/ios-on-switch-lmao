@@ -30,7 +30,7 @@ struct Display {
     static constexpr uint32_t kReadMuxActive = 1, kWriteMuxActive = 4, kWindowASelect = 0x10;
     static constexpr uint32_t kGeneralUpdate = 1 << 8, kWinAUpdate = 1 << 9, kWinBUpdate = 1 << 10;
     static constexpr uint32_t kGeneralActReq = 1, kWinAActReq = 2, kWinBActReq = 4;
-    static constexpr uint32_t kWinAUnderflowInt = 1 << 8;
+    static constexpr uint32_t kWinAUnderflowInt = 1 << 8, kWinBUnderflowInt = 1 << 9;
     static constexpr unsigned kLatchFrames = 6, kDirectUnderflowFrames = 3, kUnderflowFrames = 12;
     enum Reg {
         kDcRegActControl, kDcStateAccess, kDcWindowHeader, kWinLineStride, kWinbufSurfaceKind,
@@ -52,8 +52,9 @@ struct Display {
             }
         };
         Reference operator[](unsigned index) { return {*this, index}; }
-    } dc;
-    std::array<uint32_t, kRegCount> active{};
+    } dc, windowB;
+    std::array<uint32_t, kRegCount> active{}, activeB{};
+    bool uiOnB = false;  // landscape: the UI's flips go to window B's own registers
     struct Layout { uint32_t kind, stride, hOffset; };
     std::array<Layout, TegraScanoutRing::kMaxEntries> layouts{};
     struct Plane { uint64_t seq = 0; uint32_t address = 0; };
@@ -71,6 +72,8 @@ struct Display {
     uint64_t retired = 0, retiredAt = 0, stReplaced = 0, stUnderflows = 0;
     unsigned underflowRun = 0, pitchChecks = 0, hooks = 0, barriers = 0, deadlineArms = 0;
     unsigned marksWritten = 0, tapeStops = 0, presents = 0, latched = 0, planeStages = 0;
+    uint32_t notedUnderflow = 0, underflowCounts[3] = {};
+    unsigned memoryPlans = 0;
 
     Display()
     {
@@ -131,15 +134,24 @@ struct Display {
         request |= kWinBActReq;
     }
     uint32_t windowActive(Reg reg) const { return active[reg]; }
+    Registers::Reference uiWord(unsigned index) { return uiOnB ? windowB[index] : dc[index]; }
+    uint32_t uiActive(unsigned index) const { return uiOnB ? activeB[index] : active[index]; }
+    uint32_t uiUpdate() const { return uiOnB ? kWinBUpdate : kWinAUpdate; }
+    uint32_t uiRequest() const { return uiOnB ? kWinBActReq : kWinAActReq; }
+    uint32_t uiUnderflow() const { return uiOnB ? kWinBUnderflowInt : kWinAUnderflowInt; }
+    char uiName() const { return uiOnB ? 'B' : 'A'; }
+    void landscapeRunUnderflow(uint32_t) {}
     void stopConsoleTape() { ++tapeStops; }
     void notePresent(uint64_t, uint64_t, uint64_t) { ++presents; }
     void retireThrough(uint64_t seq, uint64_t stamp) { retired = seq; retiredAt = stamp; }
     void flipLatched() { ++latched; }
     void releaseIdleDirectReads() {}
+    void noteLatchedUnderflow(uint32_t latched) { notedUnderflow |= latched; }
+    void applyUiMemoryPlan() { ++memoryPlans; }
     void checkFlip(bool)
     {
         const int asked = ring.pending;
-        if (ring.latch(surfaceIndex(active[kWinbufStartAddr]), dc.values[kDcStateControl] != 0) ==
+        if (ring.latch(surfaceIndex(uiActive(kWinbufStartAddr)), dc.values[kDcStateControl] != 0) ==
             TegraScanoutRing::kTaken) {
             retireThrough(entrySeq[asked], feStamp);
             flipLatched();
@@ -149,6 +161,7 @@ struct Display {
     {
         if (latch) {
             active = dc.values;
+            activeB = windowB.values;
             dc.values[kDcStateControl] = 0;
         }
         ++frameEnds;
@@ -327,6 +340,50 @@ TEST(ScanoutStart, PreparedEntryKeepsItsSequenceEvenIfCurrentRequestChanges)
     EXPECT_EQ(d.retired, 123u);
 }
 
+TEST(ScanoutStart, LandscapeFlipsWriteWindowBAndLeaveWindowAToTheVideo)
+{
+    Display d;
+    d.presentEntry(Display::kSlot0);
+    d.frameEnd(true);
+    ASSERT_TRUE(d.rotationLatched);
+    d.uiOnB = true;
+    d.windowB.values = d.dc.values;
+    d.activeB = d.active;
+    const auto windowA = d.dc.values;
+    const int copied = d.ring.target();
+    ASSERT_NE(copied, Display::kNoBuffer);
+    d.dc.requests.clear();
+    d.flipRequest = 43;
+    d.presentEntry(copied);
+    EXPECT_EQ(d.windowB.values[Display::kWinbufStartAddr], d.surfaceAddress(copied));
+    EXPECT_EQ(d.windowB.values[Display::kWinbufSurfaceKind], Display::kBlockSurfaceKind);
+    EXPECT_EQ(d.windowB.values[Display::kWinLineStride], Display::kBlockLineStride);
+    EXPECT_EQ(d.dc.values[Display::kWinbufStartAddr], windowA[Display::kWinbufStartAddr]);
+    EXPECT_EQ(d.dc.values[Display::kWinbufSurfaceKind], windowA[Display::kWinbufSurfaceKind]);
+    ASSERT_EQ(d.dc.requests.size(), 2u);
+    EXPECT_EQ(d.dc.requests[0], Display::kGeneralUpdate | Display::kWinBUpdate);
+    EXPECT_EQ(d.dc.requests[1], Display::kGeneralActReq | Display::kWinBActReq);
+    d.frameEnd(true);
+    EXPECT_EQ(d.ring.front, copied);
+    EXPECT_EQ(d.retired, 43u);
+}
+
+TEST(ScanoutStart, LandscapeCountsOnlyWindowBUnderflowsAgainstTheUi)
+{
+    Display d;
+    d.presentEntry(Display::kSlot0);
+    d.frameEnd(true);
+    d.uiOnB = true;
+    d.dc.values[Display::kDcIntStatus] = Display::kWinAUnderflowInt;
+    d.frameEnd(false);
+    EXPECT_EQ(d.underflowRun, 0u);
+    EXPECT_EQ(d.dc.values[Display::kDcIntStatus], Display::kWinAUnderflowInt);
+    d.dc.values[Display::kDcIntStatus] = Display::kWinBUnderflowInt;
+    d.frameEnd(false);
+    EXPECT_EQ(d.underflowRun, 1u);
+    EXPECT_EQ(d.dc.values[Display::kDcIntStatus], 0u);
+}
+
 TEST(ScanoutStart, SingleBufferCopiedStartupStillLatches)
 {
     Display d;
@@ -338,6 +395,35 @@ TEST(ScanoutStart, SingleBufferCopiedStartupStillLatches)
     d.frameEnd(true);
     EXPECT_TRUE(d.rotationLatched);
     EXPECT_EQ(d.tapeStops, 1u);
+}
+
+TEST(ScanoutStart, WindowAsMemoryPlanAtEachFirstLatch)
+{
+    Display d;
+    d.presentEntry(Display::kSlot0);
+    EXPECT_EQ(d.memoryPlans, 0u);
+    d.frameEnd(true);
+    EXPECT_EQ(d.memoryPlans, 1u);
+    d.frameEnd(false);
+    d.frameEnd(false);
+    EXPECT_EQ(d.memoryPlans, 1u);
+    // SC7's resume (SwitchDisplayResume.h): window A latches the restored state again.
+    d.rotationLatched = false;
+    d.rotationRequested = d.frameEnds;
+    d.frameEnd(true);
+    EXPECT_EQ(d.memoryPlans, 2u);
+}
+
+TEST(ScanoutStart, LatchedUnderflowAfterTheRotationIsNotedForTheFrame)
+{
+    Display d;
+    d.presentEntry(Display::kSlot0);
+    d.frameEnd(true);
+    d.dc.values[Display::kDcIntStatus] = Display::kWinAUnderflowInt;
+    d.frameEnd(false);
+    EXPECT_EQ(d.notedUnderflow, Display::kWinAUnderflowInt);
+    EXPECT_EQ(d.dc.values[Display::kDcIntStatus], 0u);
+    EXPECT_EQ(d.underflowRun, 1u);
 }
 
 }  // namespace

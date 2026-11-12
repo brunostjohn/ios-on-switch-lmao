@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: BSD-2-Clause-Patent
 #include "TegraDisplayColor.h"
+#include "EDRDisplayFactor.h"
 #include <string.h>
 
 using namespace switch_color;
@@ -33,7 +34,7 @@ static void logMatrix(const char *call, uint32_t location, const Matrix &m)
           v[2], v[3], v[4], v[5], v[6], v[7], v[8]);
 }
 
-// The first CSCs those requests program, signed, 256 being one, KRR KGR KBR (red out) first, with the two 16.16 scales
+// The first CSCs those requests program, signed, 256 being one, KRR KGR KBR (red out) first, with the three 16.16 scales
 // folded into them: what the panel's channels get.
 static void logCsc(const Tables &tables, const Inputs &in)
 {
@@ -46,8 +47,9 @@ static void logCsc(const Tables &tables, const Inputs &in)
         const int word = tables.csc[i];
         v[i] = word >= 0x200 ? word - 0x400 : word;
     }
-    IOLog("SwitchDisplay: colour CSC: %d %d %d / %d %d %d / %d %d %d (correction %#x, scale %#x%s)\n", v[0], v[1], v[2],
-          v[3], v[4], v[5], v[6], v[7], v[8], in.correction, in.accessibilityScale, in.blank ? ", blank" : "");
+    IOLog("SwitchDisplay: colour CSC: %d %d %d / %d %d %d / %d %d %d (correction %#x, scale %#x, edr %#x%s)\n", v[0],
+          v[1], v[2], v[3], v[4], v[5], v[6], v[7], v[8], in.correction, in.accessibilityScale, in.edrScale,
+          in.blank ? ", blank" : "");
 }
 #endif
 
@@ -307,6 +309,19 @@ IOReturn TegraDisplayColor::setAccessibilityScale(uint32_t scale)
     });
     commit();
     return status;
+}
+
+void TegraDisplayColor::setEdrFactor(float factor)
+{
+    const uint32_t scale = switch_edr_display_scale(factor);
+    const IOReturn status = change(lock, generation, [&] {
+        if (inputs.edrScale == scale)
+            return kIOReturnNotReady;
+        inputs.edrScale = scale;
+        return kIOReturnSuccess;
+    });
+    if (status == kIOReturnSuccess)
+        commit();
 }
 
 void TegraDisplayColor::writeTables(const Tables &tables, const Tables *written)

@@ -38,8 +38,11 @@
     "switch-appregd register them at the next boot as installd registers a built-in app (tools/deploy/app_journal.py).",
     "switch-appregd and joyconpaird share /usr/libexec, which no boot-arg hides: only the BlueTool stand-in starts them",
     "on iOS 17, and on iOS 27 the kernel disables joyconpaird's launchd job with switch-no-bt.",
-    "Debug iOS 27 packages show iOS 27's com.apple.coreanimation logging profile with CADebug's info lines persisted, so the",
-    "pulled log holds the render server's detach results (drivers/NativeMobileDisplay/logging).",
+    "SwitchShaderCompiler (drivers/TegraGM20BMetal/compiler) compiles every GPU client's states the pack lacks into one",
+    "store: launchd starts it on iOS 27, the BlueTool stand-in on iOS 17 (so with switch-no-bt there it does not run, and",
+    "the kernel then tells clients no compiler will come).",
+    "Debug iOS 27 packages show iOS 27's com.apple.coreanimation logging profile with CADebug's info lines persisted",
+    "(drivers/NativeMobileDisplay/logging).",
     "iOS 27's launchd bootstraps /System/Cryptexes/Supplemental/System/Library/LaunchDaemons when the commpage",
     "byte it checks is set, which the 27 kernel does (commpage.c). That path is a symlink to",
     "/private/preboot/Cryptexes/Supplemental, which the 27 kernel creates as this union's point: our daemons' plists go",
@@ -95,6 +98,17 @@
     {
       "path": "/private/preboot/Cryptexes/Supplemental/System/Library/LaunchDaemons/com.brunostjohn.switch.appregd.plist",
       "source": "drivers/SwitchAppRegistration/com.brunostjohn.switch.appregd.plist",
+      "union": "/private/preboot/Cryptexes/Supplemental",
+      "kind": "24B119"
+    },
+    {
+      "path": "/usr/libexec/SwitchShaderCompiler",
+      "source": "build/switch-gpu/SwitchShaderCompiler",
+      "trust": true
+    },
+    {
+      "path": "/private/preboot/Cryptexes/Supplemental/System/Library/LaunchDaemons/com.brunostjohn.switch.shadercompiler.plist",
+      "source": "drivers/TegraGM20BMetal/compiler/com.brunostjohn.switch.shadercompiler.plist",
       "union": "/private/preboot/Cryptexes/Supplemental",
       "kind": "24B119"
     },

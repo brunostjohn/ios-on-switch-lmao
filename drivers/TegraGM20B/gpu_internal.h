@@ -276,6 +276,15 @@ struct tgm_chan {
 	int app;     /* a user channel: the hold may take it from its first submission */
 	int tracked; /* the hold may take it (tgm_hold_track) */
 	u32 timeslice_due; /* RAMFC timeslice for a level change, written once the host holds the channel no more */
+	/* gpu_acquire.c: its RAMFC ACQUIRE has the timeout off since an ACQUIRE interrupt (written again once the host
+	 * holds the channel no more); that interrupt's time; the last check of its acquire while it stays parked (0: none)
+	 * and the seqno completed then; a parked acquire that never interrupted was logged (tgm_live_lock) */
+	int acquire_due;
+	u64 acquire_fired_ns;
+	u64 acquire_check_ns;
+	u32 acquire_done;
+	int acquire_unfired;
+	u32 acquire_unread; /* checks since its interrupt that found RAMFC naming nothing yet */
 
 	/* its last jobs; high channels': each job's kick, the app channel it was queued behind and when that one was asked to
 	 * leave the GPU (PTIMER), whether an app held the GPU at its kick, whether acquires came before its start stamp */
@@ -319,11 +328,14 @@ struct tgm_chan {
 	/* tgm_hang_recover: its GPFIFO and pushbuffer GET as last read, and when they last moved */
 	u64 get_seen, get_ns;
 	u32 hang_strikes, hang_seen; /* tgm_hang_confirm's state between hang checks */
+	u32 fault_seqno;             /* faulted: the seqno a GR error stopped in (gpu_fault.c) */
+	int faulted;
 #if TGM_STATS
 	u64 killed_ns; /* tgm_chan_killed's time, for a fault's line (TegraGM20BUserClient.cpp) */
 	/* this window's SubmitAddress calls on it, by phase (tgm_stats_submit), for its owner */
 	u64 stat_submit_ns[TGM_SUBMIT_PHASES], stat_submit_total, stat_submit_max;
 	u32 stat_submits;
+	unsigned int gr_slot; /* gpu_stats_ctx.c's slot for its GR context, plus 1; 0: none */
 #endif
 };
 
@@ -332,8 +344,26 @@ extern struct list_head tgm_live_chans;
 extern struct mutex tgm_live_lock;
 extern u64 tgm_live_ids;
 void tgm_chan_describe(struct tgm_chan *chan, char *buf, unsigned int len);
+/* GR's, FECS's and PBDMA0's state for a context switch that timed out (TegraGM20BHangDecode.h tgm_engine_format) */
+void tgm_engine_state(char *buf, unsigned int len);
 
 #define TGM_HANG_NS (2 * NSEC_PER_SEC)
+
+/* gpu_acquire.c: a semaphore or syncpoint acquire still waiting this long after it began interrupts (RAMFC ACQUIRE).
+ * Above any wait a working GPU makes (TGM_STUCK_NS), at the present's own limit (TGM_PRESENT_NS). */
+#define TGM_ACQUIRE_NS (2 * TGM_STUCK_NS)
+void tgm_ramfc_write(u32 chid, u32 offset, u32 value);
+void tgm_acquire_arm(u32 chid);
+enum tgm_wait_source {
+	TGM_WAITS_NONE,
+	TGM_WAITS_CHANNEL, /* a live channel's fence */
+	TGM_WAITS_VICTIM,  /* a word the kernel releases (a bind epoch) or a host1x syncpoint */
+	TGM_WAITS_UNKNOWN, /* an acquire on an address only its own pushes name */
+	TGM_WAITS_UNREAD,  /* parked on an acquire RAMFC does not name yet (the PBDMA still holds it): a victim */
+};
+enum tgm_wait_source tgm_chan_wait_source(struct tgm_chan *chan, struct tgm_chan **source, char *what,
+					  unsigned int len);
+void tgm_acquire_unfired(struct tgm_chan *chan, u64 now);
 
 /* client fault isolation:
  * With every process on the GPU, one app's bad shader or stale address must not take the system down. nvgpu's policy is
@@ -372,9 +402,11 @@ struct stats_state {
 	u64 since;      /* start of the current window, 0 before the first submission */
 	u64 cal_ptimer; /* PTIMER at `since`: its rate over the window */
 	u32 submits, fences, imports, timed;
-	u32 idle;   /* presents that found no user work pending */
-	u32 writer; /* presents that waited for their surface's importers only */
-	u32 allocs; /* BoAllocs */
+	u32 idle;            /* presents that found no user work pending */
+	u32 writer;          /* presents that waited for their surface's importers only */
+	u32 present_flushes; /* L2_FLUSH_DIRTYs the presents pushed */
+	u64 map_small, map_big, map_could; /* tgm_stats_map */
+	u32 allocs;                        /* BoAllocs */
 	u64 alloc_bytes, alloc_ns;
 	u64 lat_sum, lat_max;                         /* user submissions only */
 	u64 queue_sum, queue_max, exec_sum, exec_max; /* GPU-side, from the stamps (PTIMER units) */
@@ -430,6 +462,13 @@ void tgm_scrub_stats(char *buf, unsigned int len, u64 window_ms);
 #define NCGPCCLK_CFG_ENABLE 0x00100000u
 #define NCGPCCLK_CFG_WRITE_EN 0x00010000u
 #define NCGPCCLK_CYCLES 800u
+void tgm_clk_measure(char *buf, unsigned int len);
+void tgm_engines_line(char *buf, unsigned int len);
+/* Debug kernels: a map's bytes in 4 KiB and in 128 KiB PTEs, and of its 4 KiB ones those 128 KiB PTEs could have mapped */
+void tgm_stats_map(u64 small, u64 big, u64 could_be_big);
+void tgm_stats_gr_bind(struct tgm_chan *chan);
+void tgm_stats_gr_unbind(struct tgm_chan *chan);
+void tgm_stats_gr_context(void);
 void tgm_stats_tick(void);
 #define IDLE_LOG_NS (10ULL * 1000000000ULL)
 #define GPCPLL_COEFF_R 0x137004 /* M 7:0, N 15:8, PL 21:16 */
@@ -459,7 +498,7 @@ extern u64 tgm_high_end_ns, tgm_high_end_pt;
 /* nouveau_fence_wait_uevent_handler(): a fence's NON_STALL_INTERRUPT arrived; wake the fence waiters. */
 static void present_fenced(struct tgm_chan *chan);
 static void scrub_fenced(struct tgm_chan *chan);
-void tgm_chan_timeslice_due(struct tgm_chan *chan);
+void tgm_chan_ramfc_due(struct tgm_chan *chan);
 
 static int chan_push_wait(struct tgm_chan *chan, u32 push_nr);
 
@@ -512,6 +551,14 @@ int tgm_order_waits(struct tgm_chan *chan);
 /* Push dwords chan_fence() may write, at most */
 #define CHAN_FENCE_DWORDS 48
 int tgm_chan_wait_ready(struct tgm_chan *chan, u32 gpfifo_nr, u32 push_nr);
+/* external: TGM_FENCE_VOLATILE_WRITES when every write the fence covers went around the L2: the engines idle and their
+ * writes committed, no L2 flush */
+#define TGM_FENCE_VOLATILE_WRITES 2
+/* gpu_fault.c; TGM_KILL_GR_ERROR is the kill record's error for a GR error (gpu_hang.c fault_code) */
+#define TGM_KILL_GR_ERROR 2
+void tgm_fault_publish(struct tgm_chan *chan);
+void tgm_fault_unpublish(struct tgm_chan *chan);
+void tgm_fence_kill_record(volatile u32 *fence_cpu, u32 first, u32 last, u32 error);
 u32 tgm_chan_fence_job(struct tgm_chan *chan, int external, u32 first, u32 next);
 int tgm_backing_dependencies(struct tgm_chan *chan, const struct switch_gpu_backing_token *tokens,
 			     u32 count, int emit);

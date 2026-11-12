@@ -4,13 +4,27 @@
 // the host test (test/gm20b_push_scan_test.cpp) runs the same code over NVK's streams.
 // Encoding: NV906F DMA headers (opcode 31:29, count or immediate 28:16, subchannel 15:13, dword method 11:0); NVK's
 // subchannels (Mesa nv_push.h: 0 3D, 1 compute, 3 2D, 4 copy) and MME macros (nvk_mme.h: 2 CLEAR, 10 SET_ANTI_ALIAS,
-// 11..16 the draws); method numbers from Mesa's clb197.h, clb1c0.h, clb06f.h, cl902d.h and cla0b5.h.
+// 11..16 the draws); method numbers from Mesa's clb197.h, clb1c0.h, clb06f.h, cl902d.h and cla0b5.h. The raw GM20B path
+// writes the methods those macros would, SET_ANTI_ALIAS among them, directly.
 #pragma once
 #include <stdint.h>
 #include "TegraGM20BGpu.h"
 
 namespace tgm_scan
 {
+// Colour target 0 as a pass sets it: WIDTH (bytes when pitch), HEIGHT, its layout, and the sample grid of the last
+// SET_ANTI_ALIAS as log2 samples across and down. A multisampled target's WIDTH and HEIGHT count its sample grid (NIL's
+// px_extent_sa), so a 4x 720x1280 image is a 1440x2560 target.
+struct Target {
+	uint32_t width, height;
+	bool pitch;
+	uint8_t gridX, gridY;
+};
+
+struct TargetImage {
+	uint32_t width, height, samples;
+};
+
 struct PushCounts {
 	uint64_t submits, scanned, bytes, readBytes, unparsed;
 	uint64_t passes, depthPasses, msaaPasses, targets, linearTargets, draws, clears;
@@ -27,14 +41,15 @@ struct PushParse {
 	uint32_t op, subc, mthd,
 		left;  // the method in progress (it may continue in the next push of the submission)
 	uint32_t ceLine, ceCount;  // the copy engine's LINE_LENGTH_IN / LINE_COUNT
-	// the push profile's pass state (scanPushes): color target 0's width (bytes when pitch) and height, its layout, and
-	// the sample count of the last SET_ANTI_ALIAS
-	uint32_t rtWidth, rtHeight;
-	bool rtPitch, msaa;
+	// the push profile's pass state (scanPushes), and that state as the last draw or clear found it: the raw path's pass
+	// sets SET_ANTI_ALIAS back to 1X1 after its last draw, in the same push
+	Target rt, drawn;
 	// NVK's ANTI_ALIAS scratch as the SET_ANTI_ALIAS macro keeps it (nvk_mme_set_anti_alias: masked writes; bits 7:4
 	// log2 samples, 3:0 log2 of 1 / minSampleShading), and whether this submission wrote its shading half yet
 	uint32_t antiAlias;
 	bool shadingKnown;
+	// the last method parsed for an engine (method 0x100 and up), subchannel << 16 | method; 0 before any
+	uint32_t lastEngine;
 };
 
 // Fragment shading passes per pixel, log2, as the macro derives them: log2 samples - log2(1 / minSampleShading), at least 0
@@ -45,8 +60,33 @@ inline uint32_t shadingPassesLog2(const PushParse &p)
 	return passes > 0 ? static_cast<uint32_t>(passes) : 0;
 }
 
+// SET_ANTI_ALIAS SAMPLES_MODE's grid: 1X1, 2X1, 2X2, 4X2, 4X2_D3D, 2X1_D3D, 4X4, -, then the VC modes 2X2_VC_4, 2X2_VC_12,
+// 4X2_VC_8 and 4X2_VC_24, which store their real samples
+inline void antiAliasMode(Target &t, uint32_t mode)
+{
+	static const uint8_t across[16] = {0, 1, 1, 2, 2, 1, 2, 0, 1, 1, 2, 2, 0, 0, 0, 0};
+	static const uint8_t down[16] = {0, 0, 1, 1, 1, 0, 2, 0, 1, 1, 1, 1, 0, 0, 0, 0};
+	t.gridX = across[mode & 0xf];
+	t.gridY = down[mode & 0xf];
+}
+
+// NVK's SET_ANTI_ALIAS macro argument, log2 samples: NIL's layouts of 2, 4, 8 and 16 samples have the grids of 2X1, 2X2,
+// 4X2 and 4X4
+inline void antiAliasSamplesLog2(Target &t, uint32_t log2)
+{
+	static const uint8_t mode[5] = {0, 1, 2, 3, 6};
+	antiAliasMode(t, log2 <= 4 ? mode[log2] : 0);
+}
+
+inline bool multisampled(const Target &t)
+{
+	return (t.gridX | t.gridY) != 0;
+}
+
 inline void pushMethod(PushCounts &c, PushParse &p, uint32_t subc, uint32_t mthd, uint32_t data)
 {
+	if (mthd >= 0x100)
+		p.lastEngine = subc << 16 | mthd;
 	if (mthd < 0x100) {                            // host methods, any subchannel
 		if (mthd == 0x001c && (data & 0xd)) {  // SEMAPHORED: ACQUIRE, ACQ_GEQ, ACQ_AND
 			c.acquires++;
@@ -81,14 +121,19 @@ inline void pushMethod(PushCounts &c, PushParse &p, uint32_t subc, uint32_t mthd
 			c.depthPasses += data & 1;
 		} else if (mthd == 0x19d0) {
 			c.clears++;  // CLEAR_SURFACE
+			p.drawn = p.rt;
 		} else if (mthd == 0x1618) {
 			c.draws++;  // BEGIN outside an MME macro
 			c.sampleDraws +=
 				static_cast<uint64_t>(p.shadingKnown && shadingPassesLog2(p) != 0u);
+			p.drawn = p.rt;
+		} else if (mthd == 0x15d0) {
+			antiAliasMode(p.rt, data);  // SET_ANTI_ALIAS
+			c.msaaPasses += static_cast<uint64_t>(multisampled(p.rt));
 		} else if (mthd == 0x0808) {
-			p.rtWidth = data;  // SET_COLOR_TARGET_WIDTH(0)
+			p.rt.width = data;  // SET_COLOR_TARGET_WIDTH(0)
 		} else if (mthd == 0x080c) {
-			p.rtHeight = data;  // SET_COLOR_TARGET_HEIGHT(0)
+			p.rt.height = data;  // SET_COLOR_TARGET_HEIGHT(0)
 		} else if (target && (mthd & 0x3f) == 0x10 && data) {
 			c.targets++;  // SET_COLOR_TARGET_FORMAT, not DISABLED
 		} else if (target && (mthd & 0x3f) == 0x14) {
@@ -96,7 +141,7 @@ inline void pushMethod(PushCounts &c, PushParse &p, uint32_t subc, uint32_t mthd
 				(data & (1u << 12)) != 0u;  // SET_COLOR_TARGET_MEMORY LAYOUT_PITCH
 			c.linearTargets += static_cast<uint64_t>(pitch);
 			if (mthd == 0x0814)
-				p.rtPitch = pitch;
+				p.rt.pitch = pitch;
 		} else if (mthd >= 0x3800 && mthd < 0x3c00 && !(mthd & 7)) {  // CALL_MME_MACRO(j)
 			const uint32_t j = (mthd - 0x3800) / 8;
 			if (j == 10) {
@@ -113,7 +158,9 @@ inline void pushMethod(PushCounts &c, PushParse &p, uint32_t subc, uint32_t mthd
 			c.msaaPasses += static_cast<uint64_t>(
 				j == 10 && ((data & 0x00f00000) != 0u) && (data & 0xf0) != 0u);
 			if (j == 10 && (data & 0x00f00000))
-				p.msaa = ((data & 0xf0) != 0u);
+				antiAliasSamplesLog2(p.rt, (data >> 4) & 0xf);
+			if ((j >= 11 && j <= 16) || j == 2)
+				p.drawn = p.rt;
 		}
 		break;
 	case 1:                                                         // MAXWELL_COMPUTE_B
@@ -181,13 +228,22 @@ inline void pushParse(PushCounts &c, PushParse &p, const uint32_t *w, uint64_t n
 	}
 }
 
-// The push profile's class of one push (TegraGM20BGpu.h TGM_PC_*): what its methods asked of the GPU (before -> after),
-// draws and clears by the pass state the parser holds.
+// The last draw's or clear's target in samples: its sample grid
 inline uint64_t targetPixels(const PushParse &p)
 {
-	return static_cast<uint64_t>(p.rtPitch ? p.rtWidth / 4 : p.rtWidth) * p.rtHeight;
+	return static_cast<uint64_t>(p.drawn.pitch ? p.drawn.width / 4 : p.drawn.width) *
+	       p.drawn.height;
 }
 
+inline TargetImage targetImage(const PushParse &p)
+{
+	const uint32_t across = p.drawn.pitch ? p.drawn.width / 4 : p.drawn.width;
+	return {across >> p.drawn.gridX, p.drawn.height >> p.drawn.gridY,
+		1u << (p.drawn.gridX + p.drawn.gridY)};
+}
+
+// The push profile's class of one push (TegraGM20BGpu.h TGM_PC_*): what its methods asked of the GPU (before -> after),
+// draws and clears by the target the last of them found.
 inline uint8_t pushClass(const PushCounts &before, const PushCounts &after, const PushParse &p)
 {
 	const uint64_t pixels = targetPixels(p);
@@ -197,7 +253,8 @@ inline uint8_t pushClass(const PushCounts &before, const PushCounts &after, cons
 	} else if (pixels >= 100000) {
 		area = 1;
 	}
-	const uint8_t variant = area * 4 + (p.rtPitch ? 2 : 0) + (p.msaa ? 1 : 0);
+	const uint8_t variant =
+		area * 4 + (p.drawn.pitch ? 2 : 0) + (multisampled(p.drawn) ? 1 : 0);
 	if (after.draws > before.draws)
 		return TGM_PC_DRAW + variant;
 	if (after.clears > before.clears)

@@ -12,12 +12,15 @@ public enum Registry {
         MetalIOSurfaceTest(), SurfaceTiledDefaultTest(), YcbcrTargetTest(), XRTwoPlaneTest(), MPSBlurTest(),
         MPSMatrixTest(), MetalRuntimeCompileTest(), CoreImageLibraryTest(),
         MetalBenchmarkTest(), FetchBlendCostTest(), CompressionChurnTest(), RotatedTargetTest(), BlendKillTest(),
-        Float32FilterTest(), CompressedTargetsTest(), ZcullTest(),
-        VisibilityTest(), FixedBlendRuleTest(), FetchRungTest(id: "gpu.raw.fetch_rung2", rung: 2),
+        Float32FilterTest(), CompressedTargetsTest(), ZcullTest(), MipTwodTest(), MipCandidatesTest(),
+        VisibilityTest(), FixedBlendRuleTest(), PrivateCompressionTest(), AlphaToCoverageTest(),
+        CompileSharedTest(), DrawBandsTest(), PosterTargetsTest(), ResolveCostTest(),
+        FetchRungTest(id: "gpu.raw.fetch_rung2", rung: 2),
     ]
 
     static let video: [any HWTest] =
-        VideoDecodeTest.all + [NativeExportTest()] + PlaybackTest.all + VideoEncodeTest.all
+        VideoDecodeTest.all + [NativeExportTest.h264, NativeExportTest.main10, NativeExportTest.main10To8, HEVCAlphaTest()]
+        + PlaybackTest.all + VideoEncodeTest.all + VideoEncodeIdleTest.all
 
     static let images: [any HWTest] =
         ImageDecodeTest.all + [HEICEncodeTest(), CoreImageTest(), PixelTransferTest(), PixelTransfer422Test()]
@@ -30,11 +33,12 @@ public enum Registry {
     static let display: [any HWTest] = [
         DisplayModeTest(), DisplayPacingTest(), BrightnessTest(), ColourPipelineTest(), PlanesTest(),
         PlainSurfacesTest(), DisplaySnapshotTest(), WakeTest(),
-    ]
+    ] + DisplayWindowProbeTest.all + [LandscapeVideoTest()]
 
     static let sensorsAndInput: [any HWTest] = [
         AccelerometerTest(), GyroscopeTest(), DeviceMotionTest(), AmbientLightTest(), ControllersTest(), RailTest(),
-        JoyConInputTest(), GameControllerTest(), KeyboardTest(), TouchTest(),
+        JoyConIdleTest(), JoyConProbeTest(), JoyConInputTest(), FocusIdleTest(), FocusSearchTest(),
+        GameControllerTest(), KeyboardTest(), TouchTest(),
     ]
 
     static let connectivityAndStorage: [any HWTest] = [
@@ -49,7 +53,7 @@ public enum Registry {
         DispatchSyncTest(), DispatchSyncWorkloopTest(), WorkloopSyncTest(), WidgetsRenderTest(),
     ]
 
-    static let compositor: [any HWTest] = UISceneTests.all + PacingTests.all
+    static let compositor: [any HWTest] = UISceneTests.all + [VideoAlphaTest()] + PacingTests.all
 
     public static let all: [any HWTest] =
         [CPUAsyncTimersTest(), RegDumpQuietTest()] + gpuScenes + metal + GPUPathTests.all + NativeObjectTests.all
@@ -59,8 +63,8 @@ public enum Registry {
         // Drives an NVDEC output mode nothing else uses: after every shared test.
         + [DisplayBufferTest()]
 
-    /// Programs a unit no other driver here drives, which kills the channel when its setup is wrong: each app's last.
-    public static let last: [any HWTest] = [FetchRungTest(id: "gpu.raw.fetch_rung3", rung: 3)]
     /// Kills the app's raw channel: each app runs it after all its other tests, so a failed recovery spoils none of them.
     public static let recovery: [any HWTest] = [RecoverKillOneTest()]
+    /// Programs a unit no other driver here drives, which kills the channel when its setup is wrong: each app's last.
+    public static let last: [any HWTest] = [FetchRungTest(id: "gpu.raw.fetch_rung3", rung: 3)]
 }

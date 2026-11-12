@@ -89,6 +89,21 @@ static raw::ProbeSurface probeSurface(const raw::Texture &t, uint32_t fmt2d)
     return nil;
 }
 
+// Private textures made while `on` is true stay on plain memory (raw_private_comp.h), for a probe's uncompressed
+// reference
+- (NSString *)switchRawProbePlainPrivate:(NSNumber *)on
+{
+    gRM->raw->probePlainPrivate.store(on.boolValue, std::memory_order_release);
+    return nil;
+}
+
+// The longest a draw this process encodes from now on is estimated to keep GR before it goes in scissor bands
+// (raw_draw_bands.h), in nanoseconds; 0: never banded. Answers the budget it replaced.
+- (NSString *)switchRawBandBudget:(NSNumber *)ns
+{
+    return [NSString stringWithFormat:@"%llu", (unsigned long long)gRM->raw->bandBudgetNs_.exchange(ns.unsignedLongLongValue)];
+}
+
 // A fetching draw whose state has a fetch-free form of rung `rung` (2 or 3) takes it whatever its rule; 4 keeps every draw
 // on the storage form; 0 gives the decision back to the rules (raw_fetch_free.h), for HW Test gpu.raw.fetch_rung2/3
 - (NSString *)switchRawProbeFetchRung:(NSNumber *)rung
@@ -138,7 +153,8 @@ static raw::ProbeSurface probeSurface(const raw::Texture &t, uint32_t fmt2d)
 
 // 2D-engine work at the open blit encoder (raw_probe_ops.h): {kind: "scale"|"fill", read, written: textures, dx, dy, dw,
 // dh, and for scale du, dv, sx, sy (32.32), bilinear, corner, fmt2d (0: each texture's own); for fill colorFormat,
-// color0..color3}. Or {kind: "method", method, value, written}: one 3D-class method there. nil, else why not
+// color0..color3, reference (the DDX's state first); unbracketed: no waits around it}. Or {kind: "method", method, value,
+// written}: one 3D-class method there. nil, else why not
 - (NSString *)switchRawProbeEngine:(NSDictionary *)op
 {
     RMTexture *written = rawTexture(op[@"written"]), *read = rawTexture(op[@"read"]);
@@ -175,6 +191,8 @@ static raw::ProbeSurface probeSurface(const raw::Texture &t, uint32_t fmt2d)
     o.bilinear = number(op, @"bilinear") != 0;
     o.corner = number(op, @"corner") != 0;
     o.colorFormat = uint32_t(number(op, @"colorFormat"));
+    o.referenceFill = number(op, @"reference") != 0;
+    o.bracketed = number(op, @"unbracketed") == 0;
     for (int c = 0; c < 4; ++c)
         o.color[c] = uint32_t(number(op, [NSString stringWithFormat:@"color%d", c]));
     if (!o.dst.fmt2d || (read && !o.src.fmt2d))

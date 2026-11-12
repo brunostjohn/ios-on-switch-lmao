@@ -5,6 +5,7 @@
 #include <atomic>
 #include <condition_variable>
 #include <map>
+#include <memory>
 #include <mutex>
 #include <set>
 #include <string>
@@ -19,6 +20,8 @@
 #include "raw_submit_queue.h"
 #include "raw_event_timeline.h"
 #include "raw_variant.h"
+#include "raw_library_source.h"
+#include "raw_obtained.h"
 
 namespace raw {
 template <typename T> class ComputeKernelJob;
@@ -64,12 +67,15 @@ static inline id twinPublish(id object, __strong id &slot, id made)
 @interface RMLibrary : RMObject {
 @public
     std::string _framework;  // "QuartzCore", "RenderBox"...; empty: not a framework's default library (never looked up)
+    std::shared_ptr<raw::LibrarySource> _source;
 }
 @end
 @interface RMFunction : RMObject {
 @public
     std::string _constants;
     std::string _framework;
+    std::shared_ptr<raw::LibrarySource> _source;
+    bool _specialized;  // made with constant values (even none)
 }
 @property (nonatomic, copy) NSString *name;
 @end
@@ -168,6 +174,7 @@ typedef NS_ENUM(uint8_t, RMTextureKind) {
     MTLRenderPipelineDescriptor *_madeFrom;  // completable states': what its cubic variants are made of
     std::mutex _variantLock;
     std::map<std::string, std::shared_ptr<raw::Variant<raw::Pipeline>>> _variants;
+    raw::Obtained _obtained;  // debug builds: how its creation got its record
 }
 @end
 

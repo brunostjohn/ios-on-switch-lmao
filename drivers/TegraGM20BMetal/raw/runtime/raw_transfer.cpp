@@ -3,7 +3,6 @@
 #include "raw_kit.h"
 #include "raw_fence.h"
 #include <algorithm>
-#include <os/log.h>
 #include <cstring>
 #include <limits>
 
@@ -108,6 +107,8 @@ bool TextureTransfers::copy(Kernel &kernel, ResourceSet &set, std::mutex &alloca
     SurfaceList uses;
     uses.add(slot.memory.handle, !write);
     set.view(view_);
+    const uint32_t removals = view_.removals;
+    recorded_.clear();
     for (uint32_t z = 0; z < region.planes; ++z) {
         CopySurface texture = region.texture;
         if (region.layerBytes)
@@ -115,15 +116,14 @@ bool TextureTransfers::copy(Kernel &kernel, ResourceSet &set, std::mutex &alloca
         else
             texture.layer += z;
         const CopySurface staging{slot.memory.va + z * plane, uint32_t(pitch)};
-        // The set's jobs are ordered across channels only by the order their SubmitJobs return in, which nothing
-        // serialises against the device's channel here; no texture a transfer reaches is a member today.
-        if (view_.holds(texture.va, 1)) {
-            os_log_error(os_log_create("com.brunostjohn.switch.TegraGM20BMetal", "raw"),
-                         "raw: a texture transfer reached resource set member 0x%llx: refused",
-                         (unsigned long long)texture.va);
-            return false;
+        // A member goes with the set: the device's channel's latest set job and this one follow each other
+        if (const SetMember *m = view_.find(texture.va, 1)) {
+            if (write && !(m->access & TegraGM20BSurfaceWrite))
+                set.promote(kernel, m->handle);
+            recorded_.push_back({m->handle, write ? uint32_t(TegraGM20BSurfaceWrite) : uint32_t(TegraGM20BSurfaceRead)});
+        } else {
+            uses.addAddress(texture.va, 1, write);
         }
-        uses.addAddress(texture.va, 1, write);
         emitCopy(push, write ? staging : texture, write ? texture : staging,
                  region.width, region.height, copyTexelRemap(region.bpp), true);
     }
@@ -135,11 +135,9 @@ bool TextureTransfers::copy(Kernel &kernel, ResourceSet &set, std::mutex &alloca
     job.channel = channel_;
     job.pushes = &commands;
     job.pushCount = 1;
-    job.uses = uses.uses().data();
-    job.useCount = uint32_t(uses.uses().size());
     job.visibility = write ? JobVisibility::Internal : JobVisibility::External;
     uint32_t sequence = 0;
-    if (!uses.valid() || !submitInSet(kernel, set, view_, false, job, sequence))
+    if (!submitInSet(kernel, set, view_, !recorded_.empty(), job, sequence, nullptr, &uses, &recorded_, removals))
         return false;
     slot.sequence = sequence;
     slot.pending = true;

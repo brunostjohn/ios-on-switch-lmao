@@ -8,7 +8,7 @@ id<MTLBinaryArchive> rmNewBinaryArchive(id device, MTLBinaryArchiveDescriptor *d
 
 // A creation's answer under `options` for the state of archive key `key` (the pack holding it: `packed`), over the archives
 // its descriptor lists; asked after the pack lookup and before any compile
-raw::ArchiveAnswer rmArchiveAnswer(NSArray *archives, MTLPipelineOption options, bool packed, uint64_t key);
+raw::ArchiveAnswer rmArchiveAnswer(NSArray *archives, MTLPipelineOption options, uint64_t key);
 
 // Metal's error for a Missed creation: code 3 in the target driver's domain (raw_device_answers.h Kind::driver)
 NSError *rmArchiveMissError(NSString *function, const char *pipeline);

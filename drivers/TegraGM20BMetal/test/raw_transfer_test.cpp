@@ -15,7 +15,7 @@ struct FakeGpu {
     struct Job { uint64_t va; uint32_t words, sequence; };
     TegraGM20BAbiFence fence{};
     TegraGM20BAbiFenceSemantic semantic{};
-    uint32_t sequence = 0, allocations = 0, waits = 0, submissions = 0;
+    uint32_t sequence = 0, allocations = 0, waits = 0, submissions = 0, set = 0, registrations = 0;
     uint64_t handle = 0;
     bool reject = false, completeOnSubmit = false, refuseWait = false;
     uint32_t semanticOnSubmit = 0;
@@ -146,7 +146,6 @@ bool Kernel::submitJob(const KernelJob &job, uint32_t &sequence, int *)
     EXPECT_TRUE(job.events.empty());
     EXPECT_EQ(job.channel, 7u);
     EXPECT_EQ(job.pushCount, 1u);
-    EXPECT_EQ(job.set, 0u) << "a copy of no set member named the set";
     EXPECT_NE(job.visibility, JobVisibility::Legacy);
     if (fake->reject)
         return false;
@@ -154,15 +153,21 @@ bool Kernel::submitJob(const KernelJob &job, uint32_t &sequence, int *)
     fake->jobs.push_back({job.pushes->va, job.pushes->dwords, sequence});
     fake->uses.assign(job.uses, job.uses + job.useCount);
     fake->visibility = job.visibility;
+    fake->set = job.set;
     ++fake->submissions;
     fake->semantic = {2, sequence, sequence, fake->semanticOnSubmit};
     if (fake->completeOnSubmit)
         fake->complete(sequence);
     return true;
 }
-int Kernel::resourceSet(const std::vector<TegraGM20BAbiSurfaceUse> &, uint32_t &, uint32_t &, const volatile uint32_t *&)
+int Kernel::resourceSet(std::vector<TegraGM20BAbiSurfaceUse> &, uint32_t &set, uint32_t &generation,
+                        const volatile uint32_t *&mirror)
 {
-    return kIOReturnUnsupported;
+    static const volatile uint32_t word = 1;
+    set = 1;
+    generation = ++fake->registrations;
+    mirror = &word;
+    return KERN_SUCCESS;
 }
 bool Kernel::wait(uint32_t, uint32_t sequence, uint64_t, int *result)
 {
@@ -228,6 +233,25 @@ TEST_F(RawTransfer, UploadSnapshotsCallerBytesAndKeepsOwnerWithoutWaiting)
     ASSERT_EQ(gpu.uses.size(), 2u);
     EXPECT_EQ(gpu.uses[1].handle, region.texture.va);
     EXPECT_EQ(gpu.uses[1].access, uint32_t(TegraGM20BSurfaceGpuAddress | TegraGM20BSurfaceWrite));
+}
+
+// A texture in a set member goes with the set: the copy job names it and no use of the texture; a write to a member the set
+// only read makes it a written one first
+TEST_F(RawTransfer, AMemberTexturesCopyNamesTheSet)
+{
+    std::vector<uint8_t> target(128, 0), bytes(128, 0x35);
+    const raw::TextureTransfer region{{reinterpret_cast<uint64_t>(target.data()), 32}, 8, 4, 1, 4};
+    raw::Bo chunk;
+    chunk.handle = 77;
+    chunk.va = chunk.vaBase = reinterpret_cast<uint64_t>(target.data());
+    chunk.bytes = target.size();
+    ASSERT_TRUE(set.add(kernel, chunk, TegraGM20BSurfaceRead));
+    ASSERT_TRUE(copy(region, bytes.data(), 32, true));
+    EXPECT_EQ(gpu.set, 1u);
+    EXPECT_EQ(gpu.registrations, 2u) << "the written member was not made a written one";
+    ASSERT_EQ(gpu.uses.size(), 1u) << "the member texture was named as a use";
+    gpu.complete(gpu.sequence);
+    EXPECT_EQ(target, std::vector<uint8_t>(128, 0x35));
 }
 
 TEST_F(RawTransfer, WarmSlotsReuseOnlyAfterTheirFenceAndHandleSequenceZero)

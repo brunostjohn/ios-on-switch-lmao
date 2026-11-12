@@ -16,6 +16,16 @@ __attribute__((objc_externally_retained)) static bool encodeRawAttempt(RMCommand
                                                                         const char **why, bool &stale,
                                                                         size_t *refusedEncoder)
 {
+    struct Encoding {
+        Encoding()
+        {
+            tRawEncoding = true;
+        }
+        ~Encoding()
+        {
+            tRawEncoding = false;
+        }
+    } encoding;
     raw::Device &d = *gRM->raw;
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
     d.nextForms = cb->_probeForms;
@@ -31,7 +41,7 @@ __attribute__((objc_externally_retained)) static bool encodeRawAttempt(RMCommand
     const uint64_t generation = d.channelGeneration();
     rc->internalCompletion();
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
-    rc->forceWholePrograms(cb->_forceWholePrograms);
+    rc->forceWholePrograms(cb->_forceWholePrograms || rmWholePrograms());
     rc->inlineStates(cb->_inlineStates);
 #endif
     if (validateNativeEventWaits(cb, generation) != raw::EventDependencyState::ready) {
@@ -190,11 +200,14 @@ __attribute__((objc_externally_retained)) static bool encodeRawAttempt(RMCommand
             p.width = width;
             p.height = height;
             useTexture(rc, r.into, true);
+            raw::Pipeline *resolve = d.resolvePipeline(r.into->_raw.format);
+            if (!resolve)
+                return fail(PredEncPassRender, "a resolve format with no resolve state", r.attachment);
             raw::RenderEncoder *e = rc->render(p);
             if (!e)
                 return fail(PredEncPassRender, "a resolve texture the raw path cannot render", r.attachment);
             const uint32_t samples = from[r.attachment]->samples;
-            e->setPipeline(d.resolvePipeline(r.into->_raw.format));
+            e->setPipeline(resolve);
             e->setTexture(0, from[r.attachment]);
             e->setBytes(2, 0, &samples, sizeof samples);
             if (!e->draw(4 /* MTLPrimitiveTypeTriangleStrip */, 0, 4, 1, 0, why))
@@ -609,14 +622,8 @@ __attribute__((objc_externally_retained)) static bool encodeRawAttempt(RMCommand
         }
         case OpMipmaps: {
             RAW_ENCODE_SPAN(Blit);
-            if (!((__bridge RMTexture *)c.obj)->_raw.chain->fmt2d) {  // the 3D engine's passes (decided at record)
-                be->end();
-                if (!mipPasses(rc, (__bridge RMTexture *)c.obj, why))
-                    return refused();
-                be = rc->blit();
-                break;
-            }
-            encodeBlit(cb, c, rc, be, fresh, standInFresh);
+            if (!encodeMipmaps(rc, (__bridge RMTexture *)c.obj, uint32_t(c.c), be, why))
+                return refused();
             break;
         }
         case OpCopyTexture:

@@ -37,7 +37,7 @@ class LatencyTest(unittest.TestCase):
             for lat in (2, 6, 13, 15):
                 table = timing_sim.Table({r.key: lat})
                 for delay in (lat - 1, lat):
-                    prog = build(r, delay)
+                    prog = build(r, delay).fragment()
                     regs, _ = timing_sim.run(prog.code, prog.data, table)
                     right = regs == program.expected_texel(prog.code, prog.data)
                     self.assertEqual(right, delay >= lat, (r.key, lat, delay))
@@ -45,7 +45,7 @@ class LatencyTest(unittest.TestCase):
     def test_variable_chains_wait_on_the_previous_link(self):
         prog = latency.chain([ops.RECIPES['IMUL']])[0]['program']
         links = [d for d in operands.decode(protocol.unb64(prog['code'])) if d.base == 'IMUL']
-        self.assertEqual([(d.control.wr_bar, d.control.wait) for d in links[:3]], [(0, 0), (1, 1), (0, 2)])
+        self.assertEqual([(d.control.wr_bar, d.control.wait) for d in links[:3]], [(0, 2), (1, 1), (0, 2)])
 
 
 if __name__ == '__main__':

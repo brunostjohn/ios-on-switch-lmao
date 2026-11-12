@@ -13,9 +13,17 @@ struct switch_gpu_bridge {
 namespace {
 std::vector<switch_gpu_backing_token> sourceTokens;
 std::vector<uint32_t> publishedWords;
-uint32_t begins, aborts, commits, retained, bridges, released, roomWaits, submits;
-int bridgeError, submitError, retainError, statusError;
-int bridgeResult = 1;
+uint32_t begins, aborts, commits, retained, bridges, released, roomWaits, submits, powerUses, powerDones;
+int bridgeError, submitError, retainError, statusError, powerError, semanticResult = 1;
+std::vector<switch_host1x_fence *> fences;
+std::vector<uint32_t> fenceBounds, watchedBounds;
+
+struct Notification {
+    void (*completed)(void *, int);
+    void *context;
+};
+
+std::vector<Notification> notifications;
 uint64_t nextTestSequence = 0;
 bool transactionLocked, changeProducer, busyOnce;
 bool semanticCapture;
@@ -140,9 +148,34 @@ int switch_gpu_bridge_status(const switch_gpu_bridge *)
     return 1;
 }
 
-int switch_gpu_bridge_wait(const switch_gpu_bridge *)
+int switch_gpu_bridge_notify(const switch_gpu_bridge *, void (*completed)(void *, int), void *context)
 {
-    return bridgeResult;
+    EXPECT_FALSE(switch_test_queue_locked);
+    notifications.push_back({completed, context});
+    return 0;
+}
+
+void switch_host1x_fence_init(switch_host1x_fence *fence, uint32_t syncpt, uint32_t threshold,
+                              void (*signaled)(switch_host1x_fence *, int))
+{
+    *fence = {};
+    fence->syncpt = syncpt;
+    fence->threshold = threshold;
+    fence->signaled = signaled;
+}
+
+int switch_host1x_fence_add(switch_host1x_fence *fence, uint32_t boundUs)
+{
+    EXPECT_TRUE(switch_test_queue_locked);
+    fence->state = SWITCH_HOST1X_FENCE_QUEUED;
+    fences.push_back(fence);
+    fenceBounds.push_back(boundUs);
+    return 0;
+}
+
+void switch_host1x_fence_watch(switch_host1x_fence *, uint32_t boundUs)
+{
+    watchedBounds.push_back(boundUs);
 }
 
 void switch_gpu_bridge_release(switch_gpu_bridge **bridge)
@@ -205,7 +238,21 @@ void tegra_host1x_describe_channel(uint32_t, char *, size_t)
     throw std::runtime_error("decode fault");
 }
 
-bool switch_nvdec_semantics_start(uint32_t)
+int switch_nvdec_power_use()
+{
+    ++powerUses;
+    return powerError;
+}
+
+void switch_nvdec_power_done()
+{
+    ++powerDones;
+}
+
+void switch_nvdec_power_idle()
+{}
+
+bool switch_nvdec_semantics_start(uint32_t, void (*)(switch_gpu_event_waits *))
 {
     return true;
 }
@@ -227,8 +274,6 @@ void switch_nvdec_semantics_commit(SwitchNVDECSemantic *)
 void switch_nvdec_semantics_physical(uint64_t)
 {}
 
-void switch_nvdec_semantics_retire(switch_gpu_event_waits *)
-{}
 
 extern "C" {
 void switch_gpu_event_waits_retain(switch_gpu_event_waits *)
@@ -250,9 +295,9 @@ void switch_gpu_event_waits_commit(switch_gpu_event_waits **batch)
     *batch = nullptr;
 }
 
-int switch_gpu_event_waits_wait(switch_gpu_event_waits *, uint64_t)
+int switch_gpu_event_waits_cached_status(const switch_gpu_event_waits *)
 {
-    return 1;
+    return semanticResult;
 }
 
 int switch_gpu_event_waits_covers_token(switch_gpu_event_waits *, const switch_gpu_backing_token *)
@@ -294,8 +339,15 @@ protected:
     void SetUp() override
     {
         begins = aborts = commits = retained = bridges = released = roomWaits = submits = preparedBatches = 0;
-        bridgeError = submitError = retainError = statusError = 0;
-        bridgeResult = 1;
+        powerUses = powerDones = 0;
+        bridgeError = submitError = retainError = statusError = powerError = 0;
+        semanticResult = 1;
+        fences.clear();
+        fenceBounds.clear();
+        watchedBounds.clear();
+        notifications.clear();
+        for (auto &stage : Stages::stages)
+            stage = {};
         transactionLocked = changeProducer = busyOnce = semanticCapture = false;
         sourceTokens.clear();
         publishedWords.clear();
@@ -343,6 +395,30 @@ protected:
     {
         for (uint32_t i = 0; i < count; ++i)
             sourceTokens.push_back({10, 1, SWITCH_GPU_ENGINE_GM20B, i + 1});
+    }
+
+    static void interrupt(size_t which)
+    {
+        auto *fence = fences.at(which);
+        fence->state = SWITCH_HOST1X_FENCE_IDLE;
+        fence->signaled(fence, 0);
+    }
+
+    static void bridged(size_t which, int status)
+    {
+        const auto notification = notifications.at(which);
+        notification.completed(notification.context, status);
+    }
+
+    // The events' retirement reporting the job's semantic outcome.
+    static void semantic(uint64_t sequence)
+    {
+        switch_gpu_event_waits *batch = nullptr;
+        for (const auto &job : gQueue.jobs)
+            if (job.sequence == sequence)
+                batch = job.semantics;
+        ASSERT_NE(batch, nullptr);
+        semanticRetired(batch);
     }
 };
 
@@ -463,17 +539,90 @@ TEST_F(SwitchNVDECSubmitTest, CompletedHardwareWithFailedProducerRetiresOnlyItsO
 {
     gpu();
     ASSERT_EQ(submit(), 0);
-    bridgeResult = -5;
-    auto failed = gQueue.jobs[gQueue.head];
-    EXPECT_EQ(completeJob(failed), -5);
-    ASSERT_TRUE(gQueue.retire(static_cast<uint32_t>(failed.sequence)));
-    EXPECT_EQ(waitSequence(failed.sequence), -5);
+    const uint64_t failed = gQueue.submitted;
+    bridged(0, -5);
+    interrupt(0);
+    semantic(failed);
+    EXPECT_EQ(waitSequence(failed), -5);
     sourceTokens.clear();
-    bridgeResult = 1;
     ASSERT_EQ(submit(), 0);
-    auto independent = gQueue.jobs[gQueue.head];
-    EXPECT_EQ(completeJob(independent), 0);
-    ASSERT_TRUE(gQueue.retire(static_cast<uint32_t>(independent.sequence)));
-    EXPECT_EQ(waitSequence(independent.sequence), 0);
-    EXPECT_EQ(waitSequence(failed.sequence), -5);
+    const uint64_t independent = gQueue.submitted;
+    interrupt(1);
+    semantic(independent);
+    EXPECT_EQ(waitSequence(independent), 0);
+    EXPECT_EQ(waitSequence(failed), -5);
+    EXPECT_EQ(gQueue.count, 0u);
+}
+
+// A decode's bound covers the whole queue ahead of it, from its submission or, behind a GPU producer, from that
+// producer's completion (D8); it ends on the interrupt, the bridge and the events' retirement, in any order, on no
+// thread of its own.
+TEST_F(SwitchNVDECSubmitTest, ADecodeEndsWhenItsFenceBridgeAndSemanticOutcomeAreAllIn)
+{
+    ASSERT_EQ(submit(), 0);
+    EXPECT_EQ(fenceBounds.back(), kWaitBoundUs);
+    EXPECT_EQ(fences.back()->threshold, fence);
+    const uint64_t plain = gQueue.submitted;
+    gpu();
+    ASSERT_EQ(submit(), 0);
+    const uint64_t bridgedDecode = gQueue.submitted;
+    EXPECT_EQ(fenceBounds.back(), 0u);
+    semantic(plain);
+    EXPECT_EQ(gQueue.count, 2u);
+    interrupt(0);
+    EXPECT_EQ(gQueue.count, 1u);
+    interrupt(1);
+    semantic(bridgedDecode);
+    EXPECT_EQ(gQueue.count, 1u);
+    bridged(0, 0);
+    EXPECT_EQ(watchedBounds, std::vector<uint32_t>{kWaitBoundUs});
+    EXPECT_EQ(gQueue.count, 0u);
+    EXPECT_EQ(gQueue.completed, bridgedDecode);
+    EXPECT_EQ(released, 1u);
+}
+
+TEST_F(SwitchNVDECSubmitTest, ADecodeWhoseFenceFailsFaults)
+{
+    ASSERT_EQ(submit(), 0);
+    auto *failing = fences.at(0);
+    EXPECT_THROW(failing->signaled(failing, TEGRA_HOST1X_ETIMEDOUT), std::runtime_error);
+}
+
+// Idle power gating (TegraNVDEC.cpp, SwitchEngineGate.h): a run holds the powered engine across its publication, an
+// idle power-off parks only an empty queue, and the power-on's proof stream moves the syncpoint the queue rebases on.
+TEST_F(SwitchNVDECSubmitTest, EveryRunHoldsThePowerOnceAndReleasesIt)
+{
+    const TegraNVDECResolve resolve = [](void *, uint32_t, TegraNVDECBlock *) {
+        return false;
+    };
+    const Check check = [](const TegraNVDECSubmit *, const uint64_t *) -> const char * {
+        return nullptr;
+    };
+    const char *why = nullptr;
+    ASSERT_EQ(run(&request, resolve, nullptr, check, &fence, &why), 0);
+    EXPECT_EQ(powerUses, 1u);
+    EXPECT_EQ(powerDones, 1u);
+    powerError = -19;
+    const uint32_t before = submits;
+    EXPECT_EQ(run(&request, resolve, nullptr, check, &fence, &why), -19);
+    EXPECT_EQ(submits, before);
+    EXPECT_EQ(powerDones, 1u);
+}
+
+TEST_F(SwitchNVDECSubmitTest, AnIdlePowerOffParksOnlyAnEmptyQueue)
+{
+    ASSERT_EQ(submit(), 0);
+    EXPECT_FALSE(switch_nvdec_jobs_park(false));
+    EXPECT_FALSE(gSuspended);
+}
+
+TEST_F(SwitchNVDECSubmitTest, AParkedQueueHoldsTheNextJobUntilAResumeRebasesIt)
+{
+    ASSERT_TRUE(switch_nvdec_jobs_park(false));
+    EXPECT_THROW(submit(), std::runtime_error) << "the job sleeps until resume";
+    IOLockUnlock(gLock);
+    switch_nvdec_jobs_resume(true, static_cast<uint32_t>(nextTestSequence) + 2);
+    EXPECT_FALSE(gSuspended);
+    ASSERT_EQ(submit(), 0);
+    EXPECT_EQ(fence, static_cast<uint32_t>(nextTestSequence + 3));
 }

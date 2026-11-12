@@ -4,6 +4,7 @@
 // moves and a restore is one import and one bind at the same VA, no texture header or CPU pointer rewritten.
 #include "raw_gpu.h"
 #include "TegraGM20BLayout.h"
+#include "raw_arena_purge.h"
 
 #include <mach/mach.h>
 
@@ -42,6 +43,9 @@ bool Device::bindArena(Arena &a)
         k_.free(a.bo);
         return false;
     }
+    Bo alias = a.bo;
+    alias.va = alias.vaBase = a.bufferVa;
+    set_.add(k_, {{&a.bo, TegraGM20BSurfaceRead}, {&alias, TegraGM20BSurfaceRead}});
     RAW_DIAGNOSTIC(stats.poolBytes += a.bytes);
     return true;
 }
@@ -88,7 +92,7 @@ void Device::freeArena(Arena &a)
     if (a.purged) {
         purgedArenas_--;
     } else {
-        k_.free(a.bo);
+        set_.free(k_, a.bo);
         RAW_DIAGNOSTIC(stats.poolBytes -= a.bytes);
     }
     k_.releaseVa(a.va, a.bytes);
@@ -190,6 +194,10 @@ bool Device::arenaBuffer(uint32_t arena, uint64_t length, Buffer &b, std::option
 
 void Device::arenaRelease(Texture &t)
 {
+#if SWITCH_RAW_DIAGNOSTICS
+    if (t.arena && glassMemOn.load(std::memory_order_relaxed))
+        glassMem->forget(t.storageRange().va);
+#endif
     std::lock_guard<std::mutex> l(lock_);
     if (t.arena)
         freeSpan(t.span, Memory::Arena, t.lease);
@@ -214,11 +222,10 @@ uint64_t Device::arenaLargestFree(uint32_t arena, uint64_t align)
     return arena < arenas_.size() ? arenas_[arena].place.largestFree(std::max<uint64_t>(align, 1)) : 0;
 }
 
-void Device::setArenaVolatile(uint32_t arena, bool isVolatile)
+bool Device::setArenaVolatile(uint32_t arena, bool isVolatile)
 {
     std::lock_guard<std::mutex> l(lock_);
-    if (arena < arenas_.size())
-        arenas_[arena].isVolatile = isVolatile;
+    return arena < arenas_.size() && arenaSetVolatile(arenas_[arena], !isVolatile);
 }
 
 uint64_t Device::arenaBytes()
@@ -236,37 +243,36 @@ bool Device::arenaPurged(uint32_t arena)
     return arena < arenas_.size() && arenas_[arena].purged;
 }
 
-void Device::purgeArena(uint32_t arena, const std::atomic<uint32_t> &committed)
+// lock_ held. The commit path counts itself in `committed` before it counts purged arenas, so one of the two sees the
+// other: a command buffer committed meanwhile keeps the pages.
+void Device::purgeLocked(Arena &a, const std::atomic<uint32_t> &committed)
 {
-    std::lock_guard<std::mutex> l(lock_);
-    if (arena >= arenas_.size())
-        return;
-    Arena &a = arenas_[arena];
-    if (!a.used || a.purged || a.leases || !done(submitted()))
-        return;
     purgedArenas_++;
     if (committed.load()) {
         purgedArenas_--;
         return;
     }
-    k_.free(a.bo);
+    set_.free(k_, a.bo);
     vm_address_t at = vm_address_t(a.cpu);
     vm_allocate(mach_task_self(), &at, a.bytes, VM_FLAGS_FIXED | VM_FLAGS_OVERWRITE);
     RAW_DIAGNOSTIC(stats.poolBytes -= a.bytes);
+    RAW_DIAGNOSTIC(glassMemEvent("heap purged", a.bytes));
     a.purged = true;
+}
+
+void Device::purgeArena(uint32_t arena, const std::atomic<uint32_t> &committed)
+{
+    std::lock_guard<std::mutex> l(lock_);
+    if (arena < arenas_.size() && arenaPurgeable(arenas_[arena], done(submitted()), committed.load() != 0, true))
+        purgeLocked(arenas_[arena], committed);
 }
 
 void Device::purgeArenas(const std::atomic<uint32_t> &committed)
 {
-    std::vector<uint32_t> volatileArenas;
-    {
-        std::lock_guard<std::mutex> l(lock_);
-        for (uint32_t i = 0; i < arenas_.size(); i++)
-            if (arenas_[i].used && arenas_[i].isVolatile && !arenas_[i].purged)
-                volatileArenas.push_back(i);
-    }
-    for (const uint32_t i : volatileArenas)
-        purgeArena(i, committed);
+    std::lock_guard<std::mutex> l(lock_);
+    purgeIdleArenas(arenas_, done(submitted()), committed.load() != 0, [&](Arena &a) {
+        purgeLocked(a, committed);
+    });
 }
 
 bool Device::restoreArena(uint32_t arena)
@@ -277,6 +283,7 @@ bool Device::restoreArena(uint32_t arena)
     Arena &a = arenas_[arena];
     if (!bindArena(a))
         return false;
+    RAW_DIAGNOSTIC(glassMemEvent("heap restored", a.bytes));
     a.purged = false;
     purgedArenas_--;
     return true;

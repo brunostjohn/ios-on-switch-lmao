@@ -32,9 +32,24 @@ class TimingSimTest(unittest.TestCase):
         cycles = [_run([e.fadd(8, 8, 5).sched(delay=d) for _ in range(10)], init)[1] for d in (6, 7)]
         self.assertEqual(cycles[1] - cycles[0], 10)
 
+    def test_a_looped_body_runs_once_per_iteration(self):
+        init = {8: f32(0.0), 5: f32(1.0)}
+        body = [e.fadd(8, 8, 5).sched(delay=6) for _ in range(4)]
+        once = program.fragment(body, init, (8, 8))
+        looped = program.fragment(body, init, (8, 8), loop=5)
+        regs, _ = timing_sim.run(looped.code, looped.data, TABLE)
+        self.assertEqual(program.unpack(program.expected_texel(looped.code, looped.data))[0], f32(20.0))
+        self.assertEqual(program.unpack(regs)[0], f32(20.0))
+        self.assertEqual(
+            len(timing_sim.path(looped.code, looped.data)) - len(timing_sim.path(once.code)), 1 + 5 * (3 + 4) - 4
+        )
+
     def test_a_barrier_wait_holds_the_consumer_until_the_result_lands(self):
         def chain(k: int) -> list[e.Instr]:
-            return [e.mufu(8, 8, 'rcp').sched(wr_bar=j % 2, wait=1 << (1 - j % 2) if j else 0) for j in range(k)]
+            return [
+                e.mufu(8, 8, 'rcp').sched(wr_bar=j % 2, wait=1 << (1 - j % 2) if j else 0, delay=e.BARRIER_SET_CYCLES)
+                for j in range(k)
+            ]
 
         (x4, c4), (_, c8) = _run(chain(4), {8: f32(4.0)}), _run(chain(8), {8: f32(4.0)})
         self.assertEqual(c8 - c4, 4 * 20)

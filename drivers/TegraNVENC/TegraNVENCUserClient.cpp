@@ -107,13 +107,14 @@ bool AppleAVE2UserClient::resolve(void *context, uint32_t handle, TegraNVENCBloc
     return b != nullptr;
 }
 
-// The connection's jobs are done (or the engine is wedged and will never touch memory again before a resume resets it).
+// The connection's jobs are done, or were cancelled (-5: the engine was reset and its memory client flushed before the
+// failure was published), or the engine is wedged and will never touch memory again before a resume resets it.
 bool AppleAVE2UserClient::quiesce() const
 {
     if (!submitted_)
         return true;
     const int ret = tegra_nvenc_wait(lastFence_);
-    return ret == 0 || !tegra_nvenc_ready();
+    return ret == 0 || ret == -5 || !tegra_nvenc_ready();
 }
 
 // The client's mappings of the buffer are revoked before its pages can go to anyone else. A buffer a wedged job may

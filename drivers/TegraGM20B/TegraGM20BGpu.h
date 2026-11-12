@@ -245,7 +245,7 @@ void switch_gpu_fence_put(const volatile uint32_t *fence);
 /* The stats' push profile (gpu_fenced.h "push profile"): `prof` (or NULL) names each push of a sampled submission by what it
  * asks of the GPU (TegraGM20BUserClient.cpp scanPushes); the submission then stamps the GPU's time after each push whose
  * class is not TGM_PC_SKIP, and each window's "gpuprof" line gives every process's GPU time by class. Draws and clears
- * are split by their pass's first color target: its size (full >= 600k pixels, mid >= 100k, small), pitch-linear or
+ * are split by their pass's first color target: its size (full >= 600k samples, mid >= 100k, small), pitch-linear or
  * block-linear, multisampled or not. */
 #define TGM_PROF_MAX 256
 
@@ -268,7 +268,7 @@ struct tgm_prof {
 	uint8_t cls[TGM_PROF_MAX];
 	/* each push's draws, and those shaded per sample (PushCounts::sampleDraws) */
 	uint16_t draws[TGM_PROF_MAX], sampleDraws[TGM_PROF_MAX];
-	/* its pass's colour target 0 in thousands of pixels, and its interlock enables (SwitchGpuProfileSequence.h) */
+	/* its pass's colour target 0 in thousands of samples, and its interlock enables (SwitchGpuProfileSequence.h) */
 	uint16_t kpx[TGM_PROF_MAX];
 	uint8_t interlocks[TGM_PROF_MAX];
 };
@@ -316,11 +316,12 @@ void tgm_chan_stalled(struct tgm_chan *chan, const char *who, uint32_t seqno, ui
  * armed for that and for nothing sooner. */
 uint64_t tgm_chan_check_progress(struct tgm_chan *chan, const char *who, uint32_t seqno);
 /* A hang's line (TegraGM20BUserClient.cpp): the SET_PIXEL_SHADER_INTERLOCK_CONTROL methods with conflict detection on
- * in the `n` pushes at va[i] (dwords[i] long) of `client`'s connection (its space's tgm_vm_claim_connection). Returns
+ * in the `n` pushes at va[i] (dwords[i] long) of `client`'s connection (its space's tgm_vm_claim_connection), and the
+ * last engine method among them (subchannel << 16 | method, 0: none; TegraGM20BPushScan.h lastEngine). Returns
  * the pushes it read (one in a host import has no kernel view), or -1 when the connection's lock is held by another
  * thread. */
 int tgm_client_interlocks(const void *client, const uint64_t *va, const uint32_t *dwords,
-			  uint32_t n, uint64_t *interlocks);
+			  uint32_t n, uint64_t *interlocks, uint32_t *last_engine);
 
 /* For a CPU reader of GPU-written memory outside the GPU client (NativeLegacyDisplay's copy of a swapped IOSurface,
  * which calls it weakly): wait for every GPU submission made so far (all channels), then clean+invalidate

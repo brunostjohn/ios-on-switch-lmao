@@ -34,12 +34,28 @@ void beginPlaneRecovery(const char *why)
     planeRecovering = true;
     planeRecoveryTarget = {};
     const int states[] = {planeLatch.active, planeLatch.superseded, planeLatch.armed};
+    bool landscape = false;
     for (int state : states)
-        if (state >= 0)
+        if (state >= 0) {
+            landscape = landscape || planeSetOf(state).landscape;
             holdPlaneRecovery(planeSetOf(state));
+        }
     if (planeHeldSet) {
         holdPlaneRecovery(planeHeld);
         planeHeldSet = false;
+    }
+    if (landscape) {
+        // The windows go back to portrait first; what went wrong was window A's column scan (or its reservation).
+        IOLog("SwitchDisplay: the overlay recovery leaves landscape: landscape off this boot\n");
+        landscapeState.retired = true;
+        landscapeLeaveNow(why);
+    } else {
+        landscapeAbandonWant();
+    }
+    if (planeRecoveryTarget.landscape) {
+        planeRecoveryTarget.landscape = false;
+        planeRecoveryTarget.window[0] = planeRecoveryTarget.window[1] = {};
+        planeTarget = planeRecoveryTarget;
     }
     writePlaneRecoveryOff();
 }
@@ -73,15 +89,13 @@ bool planeRecoveryFrameEnd()
     }
     // Only observed inactive windows permit replacing their live CSC/filter state or releasing old snapshots.
     planeLatch.reset();
-    for (unsigned window = 0; window != 2; ++window) {
-        planeCsc[window][0] = planeCsc[window][1] = -1;
-        planeFiltersWritten[window] = false;
-    }
+    planeForgetUnshadowed();
     planeUnderflowRun = 0;
     planeRecovering = false;
     PlaneSet restore = planeRecoveryTarget;
-    if (!planesOn)
+    if (!planesOn || restore.landscape)
         restore.window[0] = restore.window[1] = {};
+    restore.landscape = false;
     planeRecoveryTarget = {};
     planeFlipOnly(restore);
     planeReleaseIdle();

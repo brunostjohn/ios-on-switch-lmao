@@ -9,14 +9,20 @@ import Metal
 /// then B in one command buffer, eight a batch; the targets rotate between two, so a read too early, or through a
 /// texture cache still holding the last trial's lines, copies another seed's texels. Arms: control (today's
 /// switch_gm20b_pass_barrier), pixel (the planner's form), pixel_nowfi (0x1288 after the barrier), none (no barrier:
-/// the arm that shows a cell can see the hazard). Cells: format x layout x read shape x size.
+/// the arm that shows a cell can see the hazard). Cells: format x layout x read shape x size. F-v1 read pixel_nowfi wrong
+/// in every 64 x 64 cell (bgra8_bl_same_s 623 of 1,008 trials); T-v2, with CROP/ZROP counting both L2 slices (regdump
+/// 0x408958 = 0x408850 = 2), read it clean in all 16 held cells on 144 trials at least, so the 64 x 64 cells run four
+/// times as long (the F-v1 count).
 enum X1PassBarrierProbe {
     static let probe = X1Probe(
-        id: "gpu.x1.pass_pixel_barrier", name: "A pixel barrier between passes orders a pass's samples after the last's",
-        probe: "barrier.pass_pixel", timeout: 300, body: run)
+        id: "gpu.x1.pass_pixel_barrier",
+        name: "A pixel barrier between passes orders a pass's samples after the last's",
+        probe: "barrier.pass_pixel", timeout: 420, body: run)
 
-    static let arms = [("control", "pass=today"), ("pixel", "pass=pixel"), ("pixel_nowfi", "pass=pixel_nowfi"),
-                       ("none", "pass=none")]
+    static let arms = [
+        ("control", "pass=today"), ("pixel", "pass=pixel"), ("pixel_nowfi", "pass=pixel_nowfi"),
+        ("none", "pass=none"),
+    ]
     static let batch = 8
     static let seeds = 16
 
@@ -39,25 +45,47 @@ enum X1PassBarrierProbe {
         var out: [Cell] = []
         for format in [MTLPixelFormat.bgra8Unorm, .rgba16Float] {
             for shape in [Shape.same, .stride, .flip, .pyramid] {
-                out.append(Cell(format: format, layout: .blockLinear, shape: shape, width: 64, height: 64, trials: 1504,
-                                seconds: 2))
-                out.append(Cell(format: format, layout: .blockLinear, shape: shape, width: 320, height: 180,
-                                trials: 1504, seconds: 4))
+                out.append(
+                    Cell(
+                        format: format, layout: .blockLinear, shape: shape, width: 64, height: 64, trials: 1504,
+                        seconds: 8))
+                out.append(
+                    Cell(
+                        format: format, layout: .blockLinear, shape: shape, width: 320, height: 180,
+                        trials: 1504, seconds: shape == .stride ? 14 : 4))
             }
-            for shape in [Shape.stride, .pyramid] {
-                out.append(Cell(format: format, layout: .blockLinear, shape: shape, width: 1280, height: 720,
-                                trials: 600, seconds: 9))
-            }
+            out.append(
+                Cell(
+                    format: format, layout: .blockLinear, shape: .stride, width: 1280, height: 720,
+                    trials: 600, seconds: 36))
+            out.append(
+                Cell(
+                    format: format, layout: .blockLinear, shape: .pyramid, width: 1280, height: 720,
+                    trials: 600, seconds: 9))
             for layout in [BarrierKit.Layout.pitch, .compressed] {
                 for shape in [Shape.same, .pyramid] {
-                    out.append(Cell(format: format, layout: layout, shape: shape, width: 320, height: 180,
-                                    trials: 1504, seconds: 4))
+                    out.append(
+                        Cell(
+                            format: format, layout: layout, shape: shape, width: 320, height: 180,
+                            trials: 1504, seconds: 4))
                 }
             }
-            out.append(Cell(format: format, layout: .blockLinear, shape: .waw, width: 320, height: 180, trials: 1504,
-                            seconds: 4))
+            out.append(
+                Cell(
+                    format: format, layout: .blockLinear, shape: .waw, width: 320, height: 180, trials: 1504,
+                    seconds: 4))
         }
         return out
+    }
+
+    /// Pass A's extra work per texel, rotating per trial. T-v2's none arm fired in 16 cells and was blind in 14, all of
+    /// them 320 x 180 or larger, where B's taps meet texels A finished long before: there A spins up to three times longer
+    static func spinLadder(_ cell: Cell) -> [Int] {
+        switch cell.size {
+        case "s": return [0, 6, 34, 80]
+        case "m": return [0, 12, 60, 240]
+        default: return [0, 3, 17, 120]
+        }
     }
 
     static func run(_ gpu: GPU) async throws -> ProbeFinding {
@@ -85,7 +113,7 @@ enum X1PassBarrierProbe {
                 if arm == "none" && !ledger.tally(name, arm).clean && step.round > 4 { continue }
                 let first = trial[step.cell]
                 let trialSeeds = (0..<batch).map { probeSeed(trial: first + $0, cell: index, seeds: seeds) }
-                let spins = (0..<batch).map { [0, 3, 17, 40][(first + $0) % 4] * (cell.width == 1280 ? 1 : 2) }
+                let spins = (0..<batch).map { spinLadder(cell)[(first + $0) % 4] }
                 let ran = try await gpu.run(forms: forms) { commands in
                     work.encode(commands, seeds: trialSeeds, spins: spins)
                 }
@@ -103,15 +131,17 @@ enum X1PassBarrierProbe {
                     }
                     guard let want = references[seed] else { continue }
                     want.withUnsafeBytes {
-                        tally.compare(got, $0, trial: first + k, width: BarrierKit.tile, bytesPerTexel: kit.bytesPerTexel)
+                        tally.compare(
+                            got, $0, trial: first + k, width: BarrierKit.tile, bytesPerTexel: kit.bytesPerTexel)
                     }
                 }
                 trial[step.cell] += batch
                 ledger.store(name, arm, tally, ran)
             }
         }
-        var finding = ledger.finding(relaxed: ["pixel", "pixel_nowfi"], none: "none", control: "control",
-                                     takenKey: "passes", rule: "barrier.pass_pixel")
+        var finding = ledger.finding(
+            relaxed: ["pixel", "pixel_nowfi"], none: "none", control: "control",
+            takenKey: "passes", rule: "barrier.pass_pixel")
         finding.metrics.set("control_vs_cpu", controlVsCpu)
         finding.metrics.set("skipped", skipped.isEmpty ? "-" : skipped.joined(separator: ","))
         if controlVsCpu > 0 {
@@ -160,7 +190,12 @@ enum X1PassBarrierProbe {
             let stride = SIMD2<Int32>(Int32(max(1, width / t)), Int32(max(1, height / t)))
             switch cell.shape {
             case .same, .waw: return (SIMD2(Int32(max(0, width - t)), Int32(max(0, height - t))), SIMD2(1, 1))
-            case .stride, .pyramid: return (SIMD2(0, 0), stride)
+            case .stride:
+                // The last tap is the bottom-right texel, which pass A writes last: from the top-left the taps end
+                // short of A's last strip at 320 x 180 and 1280 x 720 and never meet the hazard.
+                let end = SIMD2<Int32>(Int32(width - 1), Int32(height - 1)) &- stride &* Int32(t - 1)
+                return (SIMD2(max(0, end.x), max(0, end.y)), stride)
+            case .pyramid: return (SIMD2(0, 0), stride)
             case .flip: return (SIMD2(Int32(width - 1), Int32(height - 1)), SIMD2<Int32>(0, 0) &- stride)
             }
         }
@@ -172,8 +207,9 @@ enum X1PassBarrierProbe {
                 var source = target
                 if cell.shape == .waw, k % 2 < views.count {
                     let t = BarrierKit.tile
-                    kit.seed(commands, views[k % 2], seed: seed ^ 0x5555, spin: 0,
-                             window: (cell.width - t, cell.height - t, cell.width, cell.height))
+                    kit.seed(
+                        commands, views[k % 2], seed: seed ^ 0x5555, spin: 0,
+                        window: (cell.width - t, cell.height - t, cell.width, cell.height))
                 }
                 for level in levels {
                     kit.level(commands, source, into: level)

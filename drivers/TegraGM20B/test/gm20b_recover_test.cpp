@@ -4,8 +4,10 @@
 // while PBDMA0 served backboardd's channel 4 (ENG_RESET), then GR stuck switching a killed channel's context, a
 // CTXSW_TIMEOUT tick every 256 ms and SCHED_ERROR 0x0d.
 #include <cstdint>
+#include <cstdio>
 #include <string>
 #include <gtest/gtest.h>
+#include "drivers/TegraGM20B/TegraGM20BHangDecode.h"
 #include "drivers/TegraGM20B/TegraGM20BRecover.h"
 
 namespace
@@ -69,6 +71,24 @@ TEST(Unbind, AnEngineLoadingTheChannelHoldsIt)
 	EXPECT_FALSE(tgm_engine_holds(engine(6, 4, 17), 17));  // NEXT_ID means nothing while saving
 }
 
+// T-v2 19:26:20: after channel 20's kill GR sat 3 s in 0x0014a014, a context load of channel 20 with BUSY clear
+TEST(Unbind, AnEngineWaitingOnALoadHoldsTheChannelThoughNotBusy)
+{
+	EXPECT_TRUE(tgm_engine_holds(0x0014a014u, 20));
+	EXPECT_FALSE(tgm_engine_holds(0x0014a014u, 1));
+	EXPECT_TRUE(tgm_engine_holds(engine(6, 17, 4) & ~kBusy, 17)) << "saving it out";
+}
+
+// T-v2 kill_one: the poisoned job P stopped GR, which finished P and released its fence before the kill
+TEST(Kill, TheFirstFailedSeqnoIsTheJobAGrErrorStoppedIn)
+{
+	EXPECT_EQ(tgm_kill_first(1, 105731u, 105731u), 105731u);
+	EXPECT_EQ(tgm_kill_first(1, 105731u, 105730u), 105731u);
+	EXPECT_EQ(tgm_kill_first(0, 0u, 105731u), 105732u)
+		<< "a kill with no GR error: the first not complete";
+	EXPECT_EQ(tgm_kill_first(1, 0u, 0xffffffffu), 0u) << "across the fence word's wrap";
+}
+
 TEST(Unbind, AnIdleEngineOrATsgIdHoldsNoChannel)
 {
 	EXPECT_FALSE(tgm_engine_holds(engine(1, 17, 0) & ~kBusy, 17));
@@ -116,6 +136,53 @@ TEST(PbdmaIntr, ChannelErrorsBesideItStillGoToNvkm)
 {
 	EXPECT_EQ(tgm_pbdma_for_nvkm(0x01200000u), 0x00200000u);  // METHOD
 	EXPECT_EQ(tgm_pbdma_for_nvkm(0x00040000u), 0x00040000u);  // PBENTRY
+}
+
+// nvkm's gf100_runq_intr counts ACQUIRE among the channel-fatal bits (0xc67fe000) and writes a NOP over METHOD0: the
+// waiter would be killed for waiting and its acquire skipped.
+TEST(PbdmaIntr, AnAcquireTimeoutNeverReachesNvkm)
+{
+	EXPECT_NE(0xc67fe000u & TGM_PBDMA_INTR_ACQUIRE, 0u);
+	EXPECT_EQ(tgm_pbdma_for_nvkm(TGM_PBDMA_INTR_ACQUIRE), 0u);
+	EXPECT_EQ(tgm_pbdma_for_nvkm(TGM_PBDMA_INTR_ACQUIRE | 0x00200000u), 0x00200000u);
+}
+
+// F-v1, gpu.x1.twod_clear: "SwitchHWTest ch 31 err 0 fence 92920/92921 kicked 517 ms ago, gp 2574/2574 (put 2574),
+// PGRAPH 03200083 ENG0 801fc01f (ch 31 -> ch 31, ctxsw save), PBDMA0 001f001f ch 31 mthd 8000001d data 00000002": GR
+// busy with the 2D fill and unable to save the context, the PBDMA parked at the job's closing SEMAPHORED release (WFI).
+TEST(Ctxsw, FV1sTwodClearSaveTimeoutKillsOnlyTheClient)
+{
+	constexpr uint32_t eng0 = 0x801fc01fu;
+	EXPECT_EQ(PFIFO_ENG_CTX_STATUS(eng0), 6u);
+	EXPECT_TRUE(tgm_engine_holds(eng0, 31));
+	EXPECT_FALSE(tgm_engine_holds(eng0, 4));
+	EXPECT_FALSE(tgm_pbdma_acquiring(
+		0x8000001du, 0x00000002u));  // a release waiting for idle, not an acquire
+	const int stuck = tgm_stuck(0, 92920, 92921, 517 * kMs, 0);
+	ASSERT_TRUE(stuck);
+	EXPECT_EQ(tgm_ctxsw_verdict(1, 0, 0, stuck), TGM_CTXSW_KILL);
+}
+
+TEST(Ctxsw, TheEngineLineNamesGrFecsTheTrappedClassAndThePbdma)
+{
+	tgm_engine_regs r = {};
+	r.mailbox0 = 0x1;
+	r.current_ctx = 0x8001234au;
+	r.trapped_addr = 0x80030604u;  // subchannel 3, RENDER_SOLID_PRIM_POINT_SET_Y(0)
+	r.trapped_class = 0x902du;
+	r.gp_get = 2574;
+	r.gp_put = 2574;
+	r.get = 0x00120000u;
+	r.put = 0x00120040u;
+	char line[TGM_HANG_LINE];
+	tgm_engine_format(line, sizeof(line), &r);
+	const std::string text = line;
+	EXPECT_NE(text.find("FECS mailbox0 00000001"), std::string::npos) << text;
+	EXPECT_NE(text.find("ctx 8001234a"), std::string::npos) << text;
+	EXPECT_NE(text.find("subc 3 mthd 0604 class 902d"), std::string::npos) << text;
+	EXPECT_NE(text.find("gp 2574/2574 pb 0000120000/0000120040"), std::string::npos) << text;
+	// beside the channel's own line (F-v1's was 330 characters), within os_log's 1,024
+	EXPECT_LT(text.size(), 400u);
 }
 
 // gpu_hang.c's checks of a channel whose job's internal fences move its fence word with no interrupt: its progress time

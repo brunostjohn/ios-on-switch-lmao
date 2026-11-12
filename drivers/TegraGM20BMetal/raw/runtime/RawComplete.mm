@@ -88,6 +88,13 @@ Completion::Completion(Device &device, const char *cacheDir, uint64_t stack, con
     compiler_ = std::make_unique<Compiler>(&cache_, [this](const CacheKey &k, RuntimeRecord &record, std::string &why) {
         return make(k, record, why);
     });
+    const raw::Kernel &kernel = device_.kernel();
+    remote_ = std::make_unique<Remote>(
+        KernelTransport{kernel.connection(), kernel.tunnelled(), kernel.tunnelSelector()}, stack_);
+    if (!remote_->serving())
+        os_log_error(rawLog(),
+                     "raw: %{public}s has no shader compiler this boot: the states its pack lacks are made here",
+                     getprogname());
     // the directory taken at once, for the lookups at state creation; its scan (another build's entries removed, the bytes
     // kept counted) on the queue, before any store there
     if (writable)
@@ -133,6 +140,7 @@ struct Completion::Pending {
 
 void Completion::ask(Ask asked, std::function<void(Pipeline *)> ready)
 {
+    asked.qos = uint32_t(qos_class_self());
     request(std::move(asked), std::make_shared<Pending>(pending_, std::move(ready)));
 }
 
@@ -153,11 +161,20 @@ void Completion::request(Ask asked, std::shared_ptr<Pending> pending)
             pending->ready(nullptr);
             return;
         }
+        bool remote = remote_->serving();
         {
             std::lock_guard<std::mutex> l(lock_);
             asked_[k.name()] = a;
+            remote &= !notTaken_.count(k.name());
         }
         const bool caTransform = a.caTransform;
+        if (remote && remoteLater(a, k, [this, k, caTransform, pending](const RuntimeRecord *record) {
+                if (record)
+                    place(k, record, caTransform, pending);
+                else
+                    pending->ready(nullptr);
+            }))
+            return;
         auto done = [this, k, asked, pending, caTransform](const RuntimeRecord *record, const std::string &) {
             if (record) {
                 place(k, record, caTransform, pending);
@@ -214,7 +231,29 @@ Pipeline *Completion::makeNow(Ask a, bool *retry)
     }
     RuntimeRecord record;
     std::string why;
-    const Compiler::State state = compiler_->makeNow(k, record, why);
+    Compiler::State state = Compiler::State::Pending;
+    RAW_DIAGNOSTIC(noteObtained({"table", 0, uint32_t(qos_class_self()), 0}));
+    switch (compiler_->lookup(k, record, why)) {
+    case RecordCache::Found::Record:
+        state = Compiler::State::Ready;
+        break;
+    case RecordCache::Found::Refusal:
+        state = Compiler::State::Refused;
+        break;
+    case RecordCache::Found::None:
+        if (!remote_->serving()) {
+            compiledHere(InProcess::NoCompiler);
+            RAW_DIAGNOSTIC(noteObtained({"here", 0, uint32_t(qos_class_self()), 0}));
+            state = compiler_->makeNow(k, record, why);
+        } else if (!remoteNow(a, k, state, record)) {
+            // made here, off this thread: ask() makes it on the compile queue
+            std::lock_guard<std::mutex> l(lock_);
+            notTaken_.insert(k.name());
+            *retry = true;
+            return nullptr;
+        }
+        break;
+    }
     *retry = state == Compiler::State::Failed || state == Compiler::State::Pending;
     return state == Compiler::State::Ready ? device_.addRecord(record, a.caTransform, why, retry) : nullptr;
 }
@@ -275,7 +314,7 @@ void Completion::backgroundKernel(std::function<void()> work)
 }
 
 const ComputeState *Completion::kernel(MTLComputePipelineDescriptor *descriptor, const NmbDirectDispatch &dispatch,
-                                       const std::string &key, bool *retry, uint64_t *retryAtUs)
+                                       const std::string &key, bool *retry, uint64_t *retryAtUs, id facadeFunction)
 {
     CacheKey k;
     k.stack = stack_;
@@ -303,6 +342,13 @@ const ComputeState *Completion::kernel(MTLComputePipelineDescriptor *descriptor,
             outcome = Compiler::Outcome::Refused;
             break;
         case RecordCache::Found::None: {
+            bool taken = false;
+            if (remote_->serving())
+                outcome = remoteKernel(facadeFunction, descriptor, dispatch, k, record, why, taken);
+            else
+                compiledHere(InProcess::NoCompiler);
+            if (taken)
+                break;
 #if SWITCH_RAW_DIAGNOSTICS
             const uint64_t began = nowUs();
 #endif

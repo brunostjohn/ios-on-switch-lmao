@@ -59,6 +59,7 @@ TEST(EmitIterated, TheSetupIsTheProbesMethodsInItsOrder)
         {0, 0x1480, 0x3800},
         {0, 0x1484, 0x3800},
         {0, 0x1488, 0x3800},
+        {0, 0x02f4, 0},
         {0, 0x0df0, 0},
     };
     for (uint32_t w : kOverlay)

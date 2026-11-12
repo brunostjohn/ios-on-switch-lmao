@@ -9,15 +9,17 @@
 namespace bench {
 namespace {
 
-constexpr uint32_t kSetPixelRegisterCount = 0x214c;  // SET_PIPELINE_REGISTER_COUNT(PIXEL)
-constexpr uint32_t kSetCtWrite0 = 0x1a00;            // SET_CT_WRITE(0)
-constexpr uint32_t kCtWriteRgba = 0x1111;            // its R, G, B and A enables
-constexpr uint32_t kFloat4 = 31;                     // MTLVertexFormatFloat4
+constexpr uint32_t kSetCtWrite0 = 0x1a00;  // SET_CT_WRITE(0)
+constexpr uint32_t kCtWriteRgba = 0x1111;  // its R, G, B and A enables
+constexpr uint32_t kFloat4 = 31;           // MTLVertexFormatFloat4
 
 // tools/benchloop/protocol.py METHOD_RANGES
 constexpr raw::MethodRange kAllowed[] = {
-    {0x02F4, 0x02F8}, {0x0DD0, 0x0DD8}, {0x0DF0, 0x0DF8}, {0x0FDC, 0x0FE0}, {0x12E4, 0x12E8}, {0x131C, 0x132C},
-    {0x133C, 0x1360}, {0x1360, 0x1380}, {0x1480, 0x1500}, {0x1A00, 0x1A20}, {0x1E00, 0x1F00},
+    {0x02E0, 0x02E4}, {0x02F4, 0x02F8}, {0x0754, 0x0758}, {0x0D9C, 0x0DA0}, {0x0DD0, 0x0DD8}, {0x0DF0, 0x0DF8},
+    {0x0F40, 0x0F54}, {0x0F90, 0x0F94}, {0x0FAC, 0x0FB0}, {0x0FDC, 0x0FE0}, {0x10CC, 0x10D0}, {0x10E0, 0x10F4},
+    {0x113C, 0x1140}, {0x1140, 0x1144}, {0x1220, 0x1224}, {0x12E0, 0x12E8}, {0x131C, 0x132C}, {0x133C, 0x1360},
+    {0x1360, 0x1380}, {0x13A8, 0x13AC}, {0x1480, 0x1500}, {0x15B8, 0x15BC}, {0x19C0, 0x19C4}, {0x1A00, 0x1A20},
+    {0x1E00, 0x1F00}, {0x2600, 0x2604},
 };
 
 struct Color {
@@ -78,6 +80,8 @@ raw::CapturedProgram captured(const raw::Pack &pack, uint32_t index)
     if (p.dataBytes)
         c.data.assign(heap + p.heapOffset + p.dataOffset, heap + p.heapOffset + p.dataOffset + p.dataBytes);
     c.cbufTypes.assign(p.cbufType, p.cbufType + std::min<uint8_t>(p.cbufs, sizeof p.cbufType));
+    c.gprs = p.gprs;
+    c.boundTextures = p.boundTextures;
     return c;
 }
 
@@ -100,6 +104,11 @@ bool retarget(std::string &key, uint32_t format)
         return false;
     key.replace(at + 4, colon - at - 4, std::to_string(format));
     return true;
+}
+
+std::string tag(unsigned colour)
+{
+    return " c" + std::to_string(colour) + "=";
 }
 
 // Shader data in whole 256-byte steps, as NVK uploads it and the pack's dataBytes always are
@@ -138,6 +147,18 @@ bool methodAllowed(uint32_t method)
     });
 }
 
+std::string withoutOtherColours(std::string key)
+{
+    for (unsigned c = 1; c < 8; c++) {
+        const size_t at = key.find(tag(c));
+        if (at == std::string::npos)
+            continue;
+        const size_t end = key.find(' ', at + 1);
+        key.erase(at, end == std::string::npos ? std::string::npos : end - at);
+    }
+    return key;
+}
+
 const raw::PackPipeline *fragmentTemplate(const raw::Pack &pack)
 {
     const raw::PackPipeline *pipelines = pack.section<raw::PackPipeline>(raw::PackPipelines);
@@ -151,6 +172,15 @@ const raw::PackPipeline *fragmentTemplate(const raw::Pack &pack)
             best = &p;
     }
     return best;
+}
+
+const raw::PackPipeline *fragmentTemplate(const raw::Pack &pack, uint64_t key)
+{
+    const raw::PackPipeline *pipelines = pack.section<raw::PackPipeline>(raw::PackPipelines);
+    for (uint32_t i = 0; i < pack.header()->pipelines; i++)
+        if (pipelines[i].keyHash == key)
+            return plainState(pipelines[i], pack.string(pipelines[i].keyString)) ? &pipelines[i] : nullptr;
+    return nullptr;
 }
 
 const raw::PackKernel *kernelTemplate(const raw::Pack &pack)
@@ -170,12 +200,14 @@ const raw::PackKernel *kernelTemplate(const raw::Pack &pack)
 
 bool fragmentRecord(const raw::Pack &pack, const raw::PackPipeline &tpl, const Program &fs, uint32_t format,
                     uint64_t key, const Methods &methods, const Methods &restore, raw::RuntimeRecord &r,
-                    std::string &why)
+                    std::string &why, bool firstColourOnly)
 {
     r = raw::RuntimeRecord();
     r.pipeline = tpl;
     r.pipeline.keyHash = key;
     r.keyString = pack.string(tpl.keyString);
+    if (firstColourOnly)
+        r.keyString = withoutOtherColours(r.keyString);
     if (!retarget(r.keyString, format)) {
         why = "the template's key names no first colour";
         return false;
@@ -189,9 +221,9 @@ bool fragmentRecord(const raw::Pack &pack, const raw::PackPipeline &tpl, const P
     p.cbufTypes = {raw::CbufRoot};
     if (!fs.data.empty())
         p.cbufTypes.push_back(raw::CbufShaderData);
+    p.gprs = uint8_t(fs.gprs);
     const uint32_t *blob = pack.section<uint32_t>(raw::PackBlob) + tpl.blob;
     r.blob.assign(blob, blob + tpl.blobDwords);
-    setWord(r.blob, kSetPixelRegisterCount, fs.gprs);
     // The key's write mask is Metal's: a state whose format its pixel program packs into one word (BGR10_XR, the
     // device's template) has the hardware write R alone
     setWord(r.blob, kSetCtWrite0, kCtWriteRgba);

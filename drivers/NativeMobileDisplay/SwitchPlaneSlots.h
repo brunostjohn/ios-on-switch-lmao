@@ -18,8 +18,10 @@ void planeDropSlot(unsigned k)
             slot.memory->complete(kIODirectionOut);
             slot.memory->release();
         }
-        if (slot.native)
+        if (slot.native) {
+            switch_native_scanout_deliver(slot.native);
             switch_native_scanout_release(slot.native);
+        }
         cleanDomain();
     }
     OSSafeReleaseNULL(slot.surface);
@@ -31,8 +33,10 @@ void planeDropSlot(unsigned k)
 void planeReleaseLease(unsigned k)
 {
     auto *native = planeSlots[k].native;
-    if (native && native->lease)
+    if (native && native->lease) {
+        switch_native_scanout_deliver(native);
         switch_native_scanout_release(native);
+    }
 }
 
 // After a latch: every frame no set shows goes back to its producer; with window B idle, GPU surfaces go back too.

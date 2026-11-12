@@ -17,4 +17,5 @@ typedef struct {
     uint32_t dstX, dstY;       // where in the destination it goes (even; dstX a multiple of 256 bytes but 0)
     uint32_t surfaceID;        // a '420v' or '420f' IOSurface of `task`; with 16-bit samples 'x420' or 'xf20'
     uint32_t sampleBytes;      // 1, or 2 for 16-bit samples (NVDEC's Main 10, P010)
+    uint32_t plane;            // TegraNVDECPresent.plane: 0, or 2 for the luma alone into a 'v0a8' alpha plane
 } TegraVICPicture;

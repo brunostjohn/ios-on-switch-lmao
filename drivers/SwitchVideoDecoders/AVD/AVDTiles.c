@@ -7,8 +7,9 @@
 // The contract is that of Apple's A10X decoder (H264H8.videodecoder AppleD5500WrapperHEVCDecoderStartTileSession /
 // DecodeTile, 21H461): requirements set once at the start, the destination and offset of each tile taken from
 // DecodeTile, each tile answered with VTDecoderSessionEmitDecodedTile before DecodeTile returns. What NVDEC and VIC
-// cannot take is refused at the start (Main 10, sizes outside NVDEC's HEVC range, VIC's present off),
-// and VideoToolbox then takes the next decoder.
+// cannot take is refused at the start (sizes outside NVDEC's HEVC range, VIC's present off, Main 10 on a kernel without
+// it), and VideoToolbox then takes the next decoder. Main 10 tiles go into an 'x420'/'xf20' canvas: VIC places their
+// 16-bit samples as bytes of a row twice as wide, so such a canvas is at most half VIC's widest surface.
 #include <CoreVideo/CoreVideo.h>
 #include <mach/mach_time.h>
 #include <stdlib.h>
@@ -22,15 +23,17 @@ enum {
     kCanvasRowBytes = 16384,
 };
 
-static CFDictionaryRef copyCanvasAttributes(bool fullRange)
+static CFDictionaryRef copyCanvasAttributes(bool fullRange, bool tenBit)
 {
     CFMutableDictionaryRef attributes = CFDictionaryCreateMutable(
         kCFAllocatorDefault, 0, &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks);
     CFDictionaryRef surface = CFDictionaryCreate(kCFAllocatorDefault, NULL, NULL, 0, &kCFTypeDictionaryKeyCallBacks,
                                                  &kCFTypeDictionaryValueCallBacks);
-    avd_set_number(attributes, kCVPixelBufferPixelFormatTypeKey,
-                   (int32_t)(fullRange ? kCVPixelFormatType_420YpCbCr8BiPlanarFullRange
-                                       : kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange));
+    const OSType format = tenBit ? (fullRange ? kCVPixelFormatType_420YpCbCr10BiPlanarFullRange
+                                              : kCVPixelFormatType_420YpCbCr10BiPlanarVideoRange)
+                                 : (fullRange ? kCVPixelFormatType_420YpCbCr8BiPlanarFullRange
+                                              : kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange);
+    avd_set_number(attributes, kCVPixelBufferPixelFormatTypeKey, (int32_t)format);
     avd_set_number(attributes, kCVPixelBufferBytesPerRowAlignmentKey, kRowAlignment);
     avd_set_number(attributes, kCVPixelBufferPlaneAlignmentKey, kRowAlignment);
     CFDictionarySetValue(attributes, kCVPixelBufferIOSurfacePropertiesKey, surface);
@@ -39,7 +42,7 @@ static CFDictionaryRef copyCanvasAttributes(bool fullRange)
 }
 
 // A tile's left edge is where VIC's plane base goes: its byte offset in a row must be a multiple of VIC's alignment.
-static CFDictionaryRef copyTileRequirements(void)
+static CFDictionaryRef copyTileRequirements(bool tenBit)
 {
     CFMutableDictionaryRef requirements = CFDictionaryCreateMutable(
         kCFAllocatorDefault, 0, &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks);
@@ -50,7 +53,7 @@ static CFDictionaryRef copyTileRequirements(void)
     avd_set_number(requirements, kVTTileDecoderRequirement_MaximumTileHeight, kTileCeiling);
     avd_set_number(requirements, kVTTileDecoderRequirement_TileWidthPixelAlignment, 2);
     avd_set_number(requirements, kVTTileDecoderRequirement_TileHeightPixelAlignment, 2);
-    avd_set_number(requirements, kVTTileDecoderRequirement_MaximumCanvasWidth, kCanvasSide);
+    avd_set_number(requirements, kVTTileDecoderRequirement_MaximumCanvasWidth, tenBit ? kCanvasSide / 2 : kCanvasSide);
     avd_set_number(requirements, kVTTileDecoderRequirement_MaximumCanvasHeight, kCanvasSide);
     avd_set_number(requirements, kVTTileDecoderRequirement_MaximumCanvasRowBytes, kCanvasRowBytes);
     avd_set_number(requirements, kVTTileDecoderRequirement_MinimumDecodableWidth, kTileFloor);
@@ -66,8 +69,8 @@ static const char *prepare(Decoder *d, const HEVCSPS *sps)
         return "VIC cannot place pictures this boot (TegraNVDECInfo.features)";
     if (!sps)
         return "not Main or Main Still Picture 4:2:0";
-    if (sps->bit_depth != 8)
-        return "10-bit (tiles are placed by VIC, which takes 8-bit NV12)";
+    if (sps->bit_depth == 10 && !(nvdec_codecs(d->client) & TEGRA_NVDEC_HEVC_MAIN10))
+        return "Main 10, which this kernel's NVDEC does not decode";
     if (sps->width > kTileCeiling || sps->height > kTileCeiling || sps->width < kTileFloor || sps->height < kTileFloor)
         return "tile size outside NVDEC's HEVC range";
     if (hevc_decoder_configure(d->hevc))
@@ -91,11 +94,13 @@ OSStatus avd_start_tile_session(VTVideoDecoderRef ref, VTTileDecoderSession sess
         switch_refusal("AVD", why, "tile session left to the next decoder");
         return kVTVideoDecoderUnsupportedDataFormatErr;
     }
-    hevc_decoder_allow_10bit(d->hevc, false);
+    const bool tenBit = sps->bit_depth == 10;
+    hevc_decoder_allow_10bit(d->hevc, tenBit);
     d->tileSession = session;
     d->width = (uint32_t)(sps->width - sps->crop_left - sps->crop_right);
     d->height = (uint32_t)(sps->height - sps->crop_top - sps->crop_bottom);
-    CFDictionaryRef attributes = copyCanvasAttributes(sps->full_range), requirements = copyTileRequirements();
+    CFDictionaryRef attributes = copyCanvasAttributes(sps->full_range, tenBit),
+                    requirements = copyTileRequirements(tenBit);
     const OSStatus status = VTTileDecoderSessionSetTileDecodeRequirements(session, attributes, requirements);
     CFRelease(attributes);
     CFRelease(requirements);
@@ -151,7 +156,7 @@ OSStatus avd_decode_tile(VTVideoDecoderRef ref, int64_t frameID, CMSampleBufferR
     avd_frame_begin(&d->timing, began);
 #endif
     const int ret = readable && offset.x >= 0 && offset.y >= 0
-                        ? hevc_decoder_decode(d->hevc, data, bytes, d->lengthSize, (void *)(intptr_t)frameID)
+                        ? hevc_decoder_decode(d->hevc, data, bytes, d->lengthSize, (void *)(intptr_t)frameID, true)
                         : -1;
     if (ret == 1) {
         hevc_decoder_flush(d->hevc);

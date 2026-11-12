@@ -9,9 +9,8 @@
 #include <string>
 #include <vector>
 #include "drivers/TegraGM20BMetal/raw/runtime/raw_compute.h"
-#include "drivers/TegraGM20BMetal/raw/runtime/raw_gpu.h"
+#include "hw_test_app/bench/bench_device.h"
 #include "hw_test_app/bench/bench_known.h"
-#include "hw_test_app/bench/bench_records.h"
 
 namespace {
 
@@ -21,6 +20,7 @@ constexpr uint32_t kTriangleStrip = 4, kBgra8 = 80;
 constexpr uint64_t kKeyBase = 0xbe7c000000000000ull;
 // Placed programs stay in the device's shader heap for its life: a long session starts a fresh device now and then
 constexpr uint64_t kRecordsPerDevice = 4096;
+constexpr uint8_t kUnwritten = 0xa5;  // an output buffer's bytes before a kernel runs, so a word it never wrote shows
 
 // placeCompute caches a placed kernel by its record's address for the device's life, so a record's address must never
 // name another kernel: the records outlive every device the bench opens
@@ -52,76 +52,6 @@ uint64_t nanoseconds(uint64_t ticks)
     return ticks * base.numer / base.denom;
 }
 
-void fail(switch_bench_result &r, uint32_t status, const std::string &why)
-{
-    r.status = status;
-    snprintf(r.why, sizeof r.why, "%s", why.c_str());
-}
-
-}  // namespace
-
-struct switch_bench {
-    std::unique_ptr<raw::Device> device;
-    const raw::PackPipeline *fragment = nullptr;
-    const raw::PackKernel *kernel = nullptr;
-    raw::Texture image;
-    raw::Sampler sampler;
-    std::string pack;
-    bool imageMade = false, samplerMade = false;
-    uint64_t records = 0;
-    std::string error;
-
-    bool open()
-    {
-        auto opened = std::make_unique<raw::Device>();
-        pack = packPath();
-        if (!opened->open(pack.c_str(), 0, error, raw::Device::Role::Client)) {
-            error = pack + ": " + error;
-            return false;
-        }
-        device = std::move(opened);
-        fragment = bench::fragmentTemplate(device->pack());
-        kernel = bench::kernelTemplate(device->pack());
-        raw::SamplerDesc nearest;
-        imageMade = device->createTexture(64, 64, kBgra8, image, true);
-        samplerMade = imageMade && device->createSampler(nearest, sampler);
-        if (!samplerMade) {
-            error = "no memory for the template's texture and sampler";
-            close();
-            return false;
-        }
-        for (uint32_t i = 0; i < 64 * 64; i++)
-            reinterpret_cast<uint32_t *>(image.cpu + (i / 64) * image.pitch)[i % 64] = 0xff000000 | i * 0x010307;
-        return true;
-    }
-
-    // After a kill: a fresh connection, GPU VM and channel, so no state the killed work left behind reaches the next
-    void reopen()
-    {
-        close();
-        open();
-    }
-
-    void close()
-    {
-        if (device && samplerMade)
-            device->destroySampler(sampler);
-        if (device && imageMade)
-            device->destroyTexture(image);
-        imageMade = samplerMade = false;
-        device.reset();
-        fragment = nullptr;
-        kernel = nullptr;
-    }
-};
-
-namespace {
-
-struct Target {
-    raw::Texture color;
-    std::vector<raw::Texture> others;  // the template's other colours, memoryless
-};
-
 std::vector<uint32_t> otherFormats(const char *key)
 {
     std::vector<uint32_t> formats;
@@ -139,7 +69,8 @@ std::vector<uint32_t> otherFormats(const char *key)
 
 // The template's inputs as fetchform binds the pack's states (raw/test/fetchform.cpp): the rect's corners as float4
 // clip-space positions through identity matrices, the other attributes and uniforms fixed, its textures one picture
-void bind(raw::RenderEncoder *e, const raw::Pipeline &p, const switch_bench &b, const switch_bench_experiment &x)
+void bind(raw::RenderEncoder *e, const raw::Pipeline &p, const switch_bench &b, const switch_bench_experiment &x,
+          const raw::Texture &image)
 {
     const raw::PackPipeline &r = *p.rec;
     std::vector<uint8_t> v(4 * r.vertexStride);
@@ -165,135 +96,11 @@ void bind(raw::RenderEncoder *e, const raw::Pipeline &p, const switch_bench &b, 
         if (entry.kind == raw::EntryUbo)
             e->setBytes(entry.stage, entry.slot, entry.stage == 1 ? identity : uniforms, sizeof uniforms);
         else if (entry.kind == raw::EntryTexture)
-            e->setTexture(entry.slot, &b.image);
+            e->setTexture(entry.slot, &image);
         if (entry.kind != raw::EntryUbo && entry.samplerKind == raw::SamplerSlot)
             e->setSampler(entry.sampler, &b.sampler);
     }
 }
-
-void fill(raw::Texture &t, const switch_bench_experiment &x, uint32_t bpp)
-{
-    for (uint32_t y = 0; y < x.height; y++)
-        memcpy(t.cpu + y * t.pitch, x.fill + size_t(y) * x.width * bpp, size_t(x.width) * bpp);
-}
-
-void readBack(const raw::Texture &t, const switch_bench_experiment &x, uint32_t bpp, switch_bench_result &r)
-{
-    if (!r.texels || r.texel_bytes < size_t(x.width) * x.height * bpp)
-        return;
-    for (uint32_t y = 0; y < x.height; y++)
-        memcpy(r.texels + size_t(y) * x.width * bpp, t.cpu + y * t.pitch, size_t(x.width) * bpp);
-}
-
-// One command buffer: `draws` quads (or dispatches) and its times. False: `r` says why.
-class Submission {
-public:
-    Submission(switch_bench &b, const switch_bench_experiment &x, switch_bench_result &r) : b_(b), x_(x), r_(r)
-    {}
-
-    bool render(Target &t, raw::Pipeline *pipeline, uint32_t draws, uint64_t &gpu, uint64_t &wall)
-    {
-        raw::Device &d = *b_.device;
-        raw::CommandBuffer *cb = d.begin();
-        if (!cb)
-            return error("no channel: " + d.channelError());
-        raw::PassDesc pass;
-        pass.count = 1 + uint32_t(t.others.size());
-        pass.color[0].texture = &t.color;
-        pass.color[0].load = x_.fill ? raw::ColorAttachment::Load : raw::ColorAttachment::Clear;
-        memcpy(pass.color[0].clear, x_.clear, sizeof x_.clear);
-        for (size_t i = 0; i < t.others.size(); i++) {
-            pass.color[1 + i].texture = &t.others[i];
-            pass.color[1 + i].load = raw::ColorAttachment::Clear;
-            pass.color[1 + i].store = false;
-        }
-        raw::RenderEncoder *e = cb->render(pass);
-        if (!e) {
-            cb->abandon();
-            return refused("the raw path cannot render the target");
-        }
-        e->setViewport(0, 0, x_.width, x_.height, 0, 1);
-        e->setScissor(0, 0, x_.width, x_.height);
-        if (draws) {
-            e->setPipeline(pipeline);
-            bind(e, *pipeline, b_, x_);
-        }
-        for (uint32_t n = 0; n < draws; n++) {
-            const char *why = nullptr;
-            if (!e->draw(kTriangleStrip, 0, 4, 1, 0, &why)) {
-                e->end();
-                const raw::Refusal refusal = cb->refusal;
-                cb->abandon();
-                char line[160];
-                snprintf(line, sizeof line, "draw refused: %s (predicate %u: %u %u %u)", why ? why : "?", refusal.id,
-                         refusal.a, refusal.b, refusal.c);
-                return refused(line);
-            }
-        }
-        e->end();
-        return finish(cb, gpu, wall);
-    }
-
-    bool dispatch(const raw::ComputeState *state, uint32_t dispatches, uint64_t &gpu, uint64_t &wall)
-    {
-        raw::Device &d = *b_.device;
-        raw::CommandBuffer *cb = d.begin();
-        if (!cb)
-            return error("no channel: " + d.channelError());
-        {
-            raw::ComputeEncoder ce(*cb, d);
-            ce.setState(state);
-            for (uint32_t n = 0; n < dispatches; n++) {
-                const char *why = nullptr;
-                if (!ce.dispatch(x_.groups, x_.threads, &why)) {
-                    ce.end();
-                    cb->abandon();
-                    return refused(std::string("dispatch refused: ") + (why ? why : "?"));
-                }
-            }
-            ce.end();
-        }
-        return finish(cb, gpu, wall);
-    }
-
-private:
-    switch_bench &b_;
-    const switch_bench_experiment &x_;
-    switch_bench_result &r_;
-
-    bool finish(raw::CommandBuffer *cb, uint64_t &gpu, uint64_t &wall)
-    {
-        raw::Device &d = *b_.device;
-        const uint32_t stamp = cb->stamp;
-        uint32_t seq = 0;
-        const uint64_t start = mach_absolute_time();
-        const bool committed = cb->commit(seq);
-        const bool done = committed && d.wait(seq);
-        wall = nanoseconds(mach_absolute_time() - start);
-        if (!done) {
-            r_.lost_error = d.lostError();
-            r_.fault_va = d.lostFaultVa();
-            fail(r_, SWITCH_BENCH_KILLED,
-                 committed ? "the kernel killed the channel" : "the kernel refused the submission");
-            return false;
-        }
-        if (!d.gpuNanoseconds(stamp, gpu))
-            gpu = 0;
-        return true;
-    }
-
-    bool refused(const std::string &why)
-    {
-        fail(r_, SWITCH_BENCH_REFUSED, why);
-        return false;
-    }
-
-    bool error(const std::string &why)
-    {
-        fail(r_, SWITCH_BENCH_ERROR, why);
-        return false;
-    }
-};
 
 bool readsPositionW(const uint8_t *sph)
 {
@@ -315,17 +122,19 @@ bool valid(const switch_bench_experiment &x, switch_bench_result &r)
     else if (!x.draw_counts || !x.repeats)
         why = "no command buffers";
     const switch_bench_program &p = x.program;
-    const bool programmed =
-        x.kind == SWITCH_BENCH_FRAGMENT || x.kind == SWITCH_BENCH_READBACK || x.kind == SWITCH_BENCH_COMPUTE;
+    const bool programmed = x.kind == SWITCH_BENCH_FRAGMENT || x.kind == SWITCH_BENCH_READBACK ||
+                            x.kind == SWITCH_BENCH_COMPUTE || x.compare == SWITCH_BENCH_COMPARE_PROGRAM;
     if (why.empty() && programmed &&
         (!p.code || !p.code_bytes || p.code_bytes % 32 || p.code_bytes > 0x10000 || p.data_bytes % 16 ||
          p.data_bytes > 0x10000 || !p.gprs || p.gprs > 255 || (x.kind != SWITCH_BENCH_COMPUTE && !p.sph)))
         why = "program: code in whole bundles, data in 16-byte steps, both at most 64 KiB, 1..255 registers, an SPH";
     else if (why.empty() && programmed && x.kind != SWITCH_BENCH_COMPUTE && !readsPositionW(p.sph))
         why = "program.sph: a pixel header must read position W (bit 191), or the GPU traps it";
+    else if (why.empty() && x.output_bytes && (x.output_bytes % 16 || x.output_bytes > 0x10000 || p.data_bytes < 16))
+        why = "compute output: 16-byte steps up to 64 KiB, its address in shader data of at least 16 bytes";
     if (why.empty())
         return true;
-    fail(r, SWITCH_BENCH_INVALID, why);
+    bench::fail(r, SWITCH_BENCH_INVALID, why);
     return false;
 }
 
@@ -360,16 +169,237 @@ bench::Methods pairs(const uint32_t *words, uint32_t count)
     return out;
 }
 
+// The target and the template's other colours (memoryless); false: no memory, `r` says so
+bool makeTarget(raw::Device &d, const switch_bench_experiment &x, const std::vector<uint32_t> &others,
+                bool compressible, bench::Target &t, switch_bench_result &r)
+{
+    if (compressible)
+        d.probeCompressNext.store(true, std::memory_order_release);
+    if (!d.createTexture(x.width, x.height, x.format, t.color, !compressible, compressible)) {
+        bench::fail(r, SWITCH_BENCH_ERROR, "no memory for the target");
+        return false;
+    }
+    if (compressible && !t.color.comptags) {
+        d.destroyTexture(t.color);
+        bench::fail(r, SWITCH_BENCH_REFUSED, "the target did not get compressible memory (no comptags)");
+        return false;
+    }
+    for (uint32_t format : others) {
+        t.others.emplace_back();
+        if (!d.createMemoryless(x.width, x.height, format, t.others.back())) {
+            t.others.pop_back();
+            bench::fail(r, SWITCH_BENCH_ERROR, "no memory for the template's other colours");
+            return false;
+        }
+    }
+    return true;
+}
+
+void destroyTarget(raw::Device &d, bench::Target &t)
+{
+    for (raw::Texture &o : t.others)
+        d.destroyTexture(o);
+    t.others.clear();
+    if (t.color.va)
+        d.destroyTexture(t.color);
+}
+
+// The experiment's draws into colour 0: compressed, its texels through a staging texture, else written and read by the
+// CPU. `into` gets the texels
+bool drawInto(switch_bench &b, const switch_bench_experiment &x, raw::Pipeline *pipeline,
+              const std::vector<uint32_t> &others, bool compressed, uint8_t *into, switch_bench_result &r)
+{
+    raw::Device &d = *b.device;
+    const uint32_t bpp = raw::formatInfo(x.format)->bpp;
+    bench::Target t;
+    raw::Texture staging;
+    if (compressed && !d.createTexture(x.width, x.height, x.format, staging, true)) {
+        bench::fail(r, SWITCH_BENCH_ERROR, "no memory for the staging texture");
+        return false;
+    }
+    bool ran = makeTarget(d, x, others, compressed, t, r);
+    if (ran && compressed) {
+        t.staging = &staging;
+        r.form = {1, t.color.comptags, t.color.blockLinear, 0, 0, 1};
+    }
+    ran = ran && bench::timeDraws(b, x, t, pipeline, r);
+    if (ran)
+        bench::readBack(compressed ? staging : t.color, x, bpp, into, r.texel_bytes);
+    if (ran && x.kind != SWITCH_BENCH_NOOP)
+        bench::checkAlive(b, x, t, r);
+    destroyTarget(d, t);
+    if (staging.va)
+        d.destroyTexture(staging);
+    return ran;
+}
+
+void runRender(switch_bench &b, const switch_bench_experiment &x, switch_bench_result &r)
+{
+    raw::Device &d = *b.device;
+    const raw::PackPipeline *tpl = x.template_key ? bench::fragmentTemplate(d.pack(), x.template_key) : b.fragment;
+    raw::Pipeline *pipeline = nullptr;
+    if (x.kind != SWITCH_BENCH_NOOP && !(pipeline = bench::pixelPipeline(b, x, r, x.single_target != 0)))
+        return;
+    std::vector<uint32_t> others;
+    if (tpl && !x.single_target && x.kind != SWITCH_BENCH_NOOP)
+        others = otherFormats(d.pack().string(tpl->keyString));
+    if (!drawInto(b, x, pipeline, others, x.compressed != 0, r.texels, r))
+        return;
+    if (x.compare == SWITCH_BENCH_COMPARE_PLAIN && r.compare_texels) {
+        bench::CompareRun plain(x, r);
+        drawInto(b, x, pipeline, others, false, r.compare_texels, plain.r);
+        plain.report(r);
+    }
+}
+
+void runCompute(switch_bench &b, const switch_bench_experiment &x, switch_bench_result &r)
+{
+    if (!b.kernel)
+        return bench::fail(r, SWITCH_BENCH_ERROR, "the pack has no kernel the bench can take as a template");
+    raw::Device &d = *b.device;
+    raw::Buffer output;
+    if (x.output_bytes && !d.createBuffer(x.output_bytes, output, true))
+        return bench::fail(r, SWITCH_BENCH_ERROR, "no memory for the output buffer");
+    bench::Program p = program(x);
+    if (output.va)
+        memcpy(p.data.data(), &output.va, sizeof output.va);
+    raw::ComputeRecord &record = kernelRecords().emplace_back();
+    std::string why;
+    const raw::ComputeState *state = nullptr;
+    if (!bench::kernelRecord(*b.kernel, p, x.threads, record, why))
+        bench::fail(r, SWITCH_BENCH_INVALID, why);
+    else if (!(state = raw::placeCompute(d, record)))
+        bench::fail(r, SWITCH_BENCH_REFUSED, "no room for the kernel in the shader heap");
+    else
+        r.template_key = b.kernel->keyHash;
+    bench::Submission s(b, x, r);
+    bool ran = state != nullptr;
+    for (uint32_t c = 0; ran && c < x.draw_counts; c++)
+        for (uint32_t k = 0; ran && k < x.warmup + x.repeats; k++) {
+            uint64_t gpu = 0, wall = 0;
+            if (output.cpu)
+                memset(output.cpu, kUnwritten, x.output_bytes);
+            ran = s.dispatch(state, x.draws[c], gpu, wall);
+            if (ran && k >= x.warmup) {
+                r.gpu_ns[c * x.repeats + k - x.warmup] = gpu;
+                r.wall_ns[c * x.repeats + k - x.warmup] = wall;
+            }
+        }
+    if (ran && output.cpu && r.output && r.output_bytes >= x.output_bytes)
+        memcpy(r.output, output.cpu, x.output_bytes);
+    uint64_t gpu = 0, wall = 0;
+    if (ran && !s.dispatch(state, 0, gpu, wall) && r.status == SWITCH_BENCH_KILLED)
+        snprintf(r.why, sizeof r.why, "the channel was dead after the kernel's last fence (a trap the fence missed)");
+    if (output.va)
+        d.destroyBuffer(output);
+}
+
+}  // namespace
+
+bool switch_bench::open()
+{
+    auto opened = std::make_unique<raw::Device>();
+    pack = packPath();
+    if (!opened->open(pack.c_str(), 0, error, raw::Device::Role::Client)) {
+        error = pack + ": " + error;
+        return false;
+    }
+    device = std::move(opened);
+    fragment = bench::fragmentTemplate(device->pack());
+    kernel = bench::kernelTemplate(device->pack());
+    raw::SamplerDesc nearest;
+    imageMade = device->createTexture(64, 64, kBgra8, image, true);
+    samplerMade = imageMade && device->createSampler(nearest, sampler);
+    if (!samplerMade) {
+        error = "no memory for the template's texture and sampler";
+        close();
+        return false;
+    }
+    for (uint32_t i = 0; i < 64 * 64; i++)
+        reinterpret_cast<uint32_t *>(image.cpu + (i / 64) * image.pitch)[i % 64] = 0xff000000 | i * 0x010307;
+    return true;
+}
+
+void switch_bench::reopen()
+{
+    close();
+    open();
+}
+
+void switch_bench::close()
+{
+    if (device && samplerMade)
+        device->destroySampler(sampler);
+    if (device && imageMade)
+        device->destroyTexture(image);
+    imageMade = samplerMade = false;
+    device.reset();
+    fragment = nullptr;
+    kernel = nullptr;
+}
+
+namespace bench {
+
+void fail(switch_bench_result &r, uint32_t status, const std::string &why)
+{
+    r.status = status;
+    snprintf(r.why, sizeof r.why, "%s", why.c_str());
+}
+
+void fill(raw::Texture &t, const switch_bench_experiment &x, uint32_t bpp)
+{
+    for (uint32_t y = 0; y < x.height; y++)
+        memcpy(t.cpu + y * t.pitch, x.fill + size_t(y) * x.width * bpp, size_t(x.width) * bpp);
+}
+
+void readBack(const raw::Texture &t, const switch_bench_experiment &x, uint32_t bpp, uint8_t *into, size_t bytes)
+{
+    if (!into || !t.cpu || bytes < size_t(x.width) * x.height * bpp)
+        return;
+    for (uint32_t y = 0; y < x.height; y++)
+        memcpy(into + size_t(y) * x.width * bpp, t.cpu + y * t.pitch, size_t(x.width) * bpp);
+}
+
+raw::Pipeline *pixelPipeline(switch_bench &b, const switch_bench_experiment &x, switch_bench_result &r,
+                             bool firstColourOnly)
+{
+    raw::Device &d = *b.device;
+    const raw::PackPipeline *tpl = x.template_key ? fragmentTemplate(d.pack(), x.template_key) : b.fragment;
+    if (!tpl && x.template_key) {
+        fail(r, SWITCH_BENCH_INVALID, "no plain pack state has the template key");
+        return nullptr;
+    }
+    if (!tpl) {
+        fail(r, SWITCH_BENCH_ERROR, "the pack has no state the bench can take as a template");
+        return nullptr;
+    }
+    raw::RuntimeRecord record;
+    std::string why;
+    const uint64_t key = kKeyBase | ++b.records;
+    if (!fragmentRecord(d.pack(), *tpl, program(x), x.format, key, pairs(x.methods, x.method_pairs),
+                        pairs(x.restore, x.restore_pairs), record, why, firstColourOnly)) {
+        fail(r, SWITCH_BENCH_INVALID, why);
+        return nullptr;
+    }
+    raw::Pipeline *pipeline = d.addRecord(record, false, why);
+    if (!pipeline)
+        fail(r, SWITCH_BENCH_REFUSED, why);
+    else
+        r.template_key = tpl->keyHash;
+    return pipeline;
+}
+
 bool timeDraws(switch_bench &b, const switch_bench_experiment &x, Target &t, raw::Pipeline *pipeline,
                switch_bench_result &r)
 {
     const uint32_t bpp = raw::formatInfo(x.format)->bpp;
     Submission s(b, x, r);
+    raw::Texture *written = t.staging ? t.staging : &t.color;
     for (uint32_t c = 0; c < x.draw_counts; c++)
         for (uint32_t k = 0; k < x.warmup + x.repeats; k++) {
             uint64_t gpu = 0, wall = 0;
             if (x.fill)
-                fill(t.color, x, bpp);
+                fill(*written, x, bpp);
             if (!s.render(t, pipeline, pipeline ? x.draws[c] : 0, gpu, wall))
                 return false;
             if (k >= x.warmup) {
@@ -380,69 +410,169 @@ bool timeDraws(switch_bench &b, const switch_bench_experiment &x, Target &t, raw
     return true;
 }
 
-void runRender(switch_bench &b, const switch_bench_experiment &x, switch_bench_result &r)
+CompareRun::CompareRun(const switch_bench_experiment &x, const switch_bench_result &of)
+    : r(of), gpu_(size_t(x.draw_counts) * x.repeats), wall_(gpu_.size())
 {
-    raw::Device &d = *b.device;
-    raw::Pipeline *pipeline = nullptr;
-    if (x.kind != SWITCH_BENCH_NOOP) {
-        if (!b.fragment)
-            return fail(r, SWITCH_BENCH_ERROR, "the pack has no state the bench can take as a template");
-        raw::RuntimeRecord record;
-        std::string why;
-        const uint64_t key = kKeyBase | ++b.records;
-        if (!bench::fragmentRecord(d.pack(), *b.fragment, program(x), x.format, key, pairs(x.methods, x.method_pairs),
-                                   pairs(x.restore, x.restore_pairs), record, why))
-            return fail(r, SWITCH_BENCH_INVALID, why);
-        if (!(pipeline = d.addRecord(record, false, why)))
-            return fail(r, SWITCH_BENCH_REFUSED, why);
-        r.template_key = b.fragment->keyHash;
-    }
-    const uint32_t bpp = raw::formatInfo(x.format)->bpp;
-    Target t;
-    std::vector<uint32_t> others =
-        b.fragment ? otherFormats(d.pack().string(b.fragment->keyString)) : std::vector<uint32_t>();
-    t.others.resize(x.kind == SWITCH_BENCH_NOOP ? 0 : others.size());
-    const bool colorMade = d.createTexture(x.width, x.height, x.format, t.color, true);
-    size_t othersMade = 0;
-    while (colorMade && othersMade < t.others.size() &&
-           d.createMemoryless(x.width, x.height, others[othersMade], t.others[othersMade]))
-        othersMade++;
-    if (!colorMade || othersMade < t.others.size())
-        fail(r, SWITCH_BENCH_ERROR, "no memory for the target");
-    else if (timeDraws(b, x, t, pipeline, r))
-        readBack(t.color, x, bpp, r);
-    for (size_t i = 0; i < othersMade; i++)
-        d.destroyTexture(t.others[i]);
-    if (colorMade)
-        d.destroyTexture(t.color);
+    r.status = SWITCH_BENCH_OK;
+    r.why[0] = 0;
+    r.gpu_ns = gpu_.data();
+    r.wall_ns = wall_.data();
+    r.form = {};
 }
 
-void runCompute(switch_bench &b, const switch_bench_experiment &x, switch_bench_result &r)
+void CompareRun::report(switch_bench_result &into) const
 {
-    if (!b.kernel)
-        return fail(r, SWITCH_BENCH_ERROR, "the pack has no kernel the bench can take as a template");
-    raw::ComputeRecord &record = kernelRecords().emplace_back();
-    std::string why;
-    if (!bench::kernelRecord(*b.kernel, program(x), x.threads, record, why))
-        return fail(r, SWITCH_BENCH_INVALID, why);
-    const raw::ComputeState *state = raw::placeCompute(*b.device, record);
-    if (!state)
-        return fail(r, SWITCH_BENCH_REFUSED, "no room for the kernel in the shader heap");
-    r.template_key = b.kernel->keyHash;
-    Submission s(b, x, r);
-    for (uint32_t c = 0; c < x.draw_counts; c++)
-        for (uint32_t k = 0; k < x.warmup + x.repeats; k++) {
-            uint64_t gpu = 0, wall = 0;
-            if (!s.dispatch(state, x.draws[c], gpu, wall))
-                return;
-            if (k >= x.warmup) {
-                r.gpu_ns[c * x.repeats + k - x.warmup] = gpu;
-                r.wall_ns[c * x.repeats + k - x.warmup] = wall;
+    into.compare_status = r.status;
+    snprintf(into.compare_why, sizeof into.compare_why, "%s", r.why);
+    if (r.status != SWITCH_BENCH_KILLED)
+        return;
+    into.status = r.status;
+    into.lost_error = r.lost_error;
+    into.fault_va = r.fault_va;
+    snprintf(into.why, sizeof into.why, "compare: %s", r.why);
+}
+
+void checkAlive(switch_bench &b, const switch_bench_experiment &x, Target &t, switch_bench_result &r)
+{
+    uint64_t gpu = 0, wall = 0;
+    Target empty = t;
+    empty.staging = nullptr;
+    if (Submission(b, x, r).render(empty, nullptr, 0, gpu, wall) || r.status != SWITCH_BENCH_KILLED)
+        return;
+    snprintf(r.why, sizeof r.why, "the channel was dead after the experiment's last fence (a trap the fence missed)");
+}
+
+bool Submission::render(Target &t, raw::Pipeline *pipeline, uint32_t draws, uint64_t &gpu, uint64_t &wall)
+{
+    raw::Device &d = *b_.device;
+    raw::CommandBuffer *cb = d.begin();
+    if (!cb)
+        return error("no channel: " + d.channelError());
+    const uint32_t w = x_.width, h = x_.height;
+    if (t.staging) {
+        raw::BlitEncoder *in = cb->blit();
+        if (!in) {
+            cb->abandon();
+            return refused("the raw path opened no blit encoder");
+        }
+        in->copyTexels(*t.staging, 0, 0, 0, t.color, 0, 0, 0, w, h);
+        in->end();
+    }
+    raw::PassDesc pass;
+    pass.count = 1 + uint32_t(t.others.size());
+    pass.color[0].texture = &t.color;
+    pass.color[0].load = x_.fill ? raw::ColorAttachment::Load : raw::ColorAttachment::Clear;
+    memcpy(pass.color[0].clear, x_.clear, sizeof x_.clear);
+    for (size_t i = 0; i < t.others.size(); i++) {
+        pass.color[1 + i].texture = &t.others[i];
+        pass.color[1 + i].load = raw::ColorAttachment::Clear;
+        pass.color[1 + i].store = false;
+    }
+    raw::RenderEncoder *e = cb->render(pass);
+    if (!e) {
+        cb->abandon();
+        return refused("the raw path cannot render the target");
+    }
+    e->setViewport(0, 0, w, h, 0, 1);
+    e->setScissor(0, 0, w, h);
+    if (draws) {
+        e->setPipeline(pipeline);
+        bind(e, *pipeline, b_, x_, t.image ? *t.image : b_.image);
+    }
+    for (uint32_t n = 0; n < draws; n++) {
+        const char *why = nullptr;
+        if (!e->draw(kTriangleStrip, 0, 4, 1, 0, &why)) {
+            e->end();
+            const raw::Refusal refusal = cb->refusal;
+            cb->abandon();
+            char line[160];
+            snprintf(line, sizeof line, "draw refused: %s (predicate %u: %u %u %u)", why ? why : "?", refusal.id,
+                     refusal.a, refusal.b, refusal.c);
+            return refused(line);
+        }
+    }
+    e->end();
+    if (t.staging) {
+        raw::BlitEncoder *out = cb->blit();
+        if (!out) {
+            cb->abandon();
+            return refused("the raw path opened no blit encoder");
+        }
+        out->copyTexels(t.color, 0, 0, 0, *t.staging, 0, 0, 0, w, h);
+        out->end();
+    }
+    return finish(cb, gpu, wall);
+}
+
+bool Submission::record(const std::function<bool(raw::CommandBuffer &)> &body, uint64_t &gpu, uint64_t &wall)
+{
+    raw::Device &d = *b_.device;
+    raw::CommandBuffer *cb = d.begin();
+    if (!cb)
+        return error("no channel: " + d.channelError());
+    if (!body(*cb)) {
+        cb->abandon();
+        return false;
+    }
+    return finish(cb, gpu, wall);
+}
+
+bool Submission::dispatch(const raw::ComputeState *state, uint32_t dispatches, uint64_t &gpu, uint64_t &wall)
+{
+    raw::Device &d = *b_.device;
+    raw::CommandBuffer *cb = d.begin();
+    if (!cb)
+        return error("no channel: " + d.channelError());
+    {
+        raw::ComputeEncoder ce(*cb, d);
+        ce.setState(state);
+        for (uint32_t n = 0; n < dispatches; n++) {
+            const char *why = nullptr;
+            if (!ce.dispatch(x_.groups, x_.threads, &why)) {
+                ce.end();
+                cb->abandon();
+                return refused(std::string("dispatch refused: ") + (why ? why : "?"));
             }
         }
+        ce.end();
+    }
+    return finish(cb, gpu, wall);
 }
 
-}  // namespace
+bool Submission::finish(raw::CommandBuffer *cb, uint64_t &gpu, uint64_t &wall)
+{
+    raw::Device &d = *b_.device;
+    const uint32_t stamp = cb->stamp;
+    uint32_t seq = 0;
+    const uint64_t start = mach_absolute_time();
+    const bool committed = cb->commit(seq);
+    const bool done = committed && d.wait(seq);
+    wall = nanoseconds(mach_absolute_time() - start);
+    if (!done) {
+        r_.lost_error = d.lostError();
+        r_.fault_va = d.lostFaultVa();
+        fail(r_, SWITCH_BENCH_KILLED,
+             committed ? "the kernel killed the channel" : "the kernel refused the submission");
+        return false;
+    }
+    if (!d.gpuNanoseconds(stamp, gpu))
+        gpu = 0;
+    return true;
+}
+
+bool Submission::refused(const std::string &why)
+{
+    fail(r_, SWITCH_BENCH_REFUSED, why);
+    return false;
+}
+
+bool Submission::error(const std::string &why)
+{
+    fail(r_, SWITCH_BENCH_ERROR, why);
+    return false;
+}
+
+}  // namespace bench
 
 extern "C" {
 
@@ -499,18 +629,21 @@ size_t switch_bench_known_kernel(uint8_t *out, size_t size)
 
 void switch_bench_run(struct switch_bench *b, const struct switch_bench_experiment *x, struct switch_bench_result *r)
 {
-    r->status = SWITCH_BENCH_OK;
-    r->why[0] = 0;
+    r->status = r->compare_status = SWITCH_BENCH_OK;
+    r->why[0] = r->compare_why[0] = 0;
+    r->form = {};
     if (b->records >= kRecordsPerDevice) {
         b->records = 0;
         b->reopen();
     }
     if (!b->device && !b->open())
-        return fail(*r, SWITCH_BENCH_ERROR, "no raw device: " + b->error);
+        return bench::fail(*r, SWITCH_BENCH_ERROR, "no raw device: " + b->error);
     if (!valid(*x, *r))
         return;
     if (x->kind == SWITCH_BENCH_COMPUTE)
         runCompute(*b, *x, *r);
+    else if (x->kind == SWITCH_BENCH_TWOD)
+        bench::runTwod(*b, *x, *r);
     else
         runRender(*b, *x, *r);
     if (r->status == SWITCH_BENCH_KILLED)

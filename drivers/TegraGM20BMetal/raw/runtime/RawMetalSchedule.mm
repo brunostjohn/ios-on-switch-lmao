@@ -252,6 +252,7 @@ void submitLoop()
             if (error)
                 finish(cb, error);
             else {
+                std::lock_guard<std::recursive_mutex> s(submitLock());
                 submitted = submitRange(cb);
             }
             {

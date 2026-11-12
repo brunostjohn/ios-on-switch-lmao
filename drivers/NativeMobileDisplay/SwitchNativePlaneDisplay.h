@@ -11,8 +11,9 @@ int planeNativeSlotFor(OSObject *surface, const native_planes::Layer &layer, uin
         switch_native_scanout_release(&scanout);
         return error;
     }
-    if (error || !switch_native_plane_image(layer, width, height, scanout.view.layout,
-                                            scanout.view.crop.x, scanout.view.crop.y, image)) {
+    const bool native = !error && switch_native_plane_image(layer, width, height, scanout.view.layout,
+                                                            scanout.view.crop.x, scanout.view.crop.y, image);
+    if (!native) {
         switch_native_scanout_release(&scanout);
         error = switch_native_scanout_pitch(surface, &scanout);
         tgm_layout block = {};
@@ -34,7 +35,10 @@ int planeNativeSlotFor(OSObject *surface, const native_planes::Layer &layer, uin
         switch_native_scanout_release(&scanout);
         return error;
     }
-    return planeMapSnapshot(scanout, image);
+    const int slot = planeMapSnapshot(scanout, image);
+    if (native && slot >= 0 && stats)
+        ++stPlaneNative;
+    return slot;
 }
 
 int planeMapSnapshot(SwitchNativeScanout &scanout, const native_planes::Image &image, int avoid = -1)
@@ -72,6 +76,7 @@ int planeMapSnapshot(SwitchNativeScanout &scanout, const native_planes::Image &i
     }
     if (mapped >= 0) {
         auto &slot = planeSlots[mapped];
+        switch_native_scanout_deliver(slot.native);
         switch_native_scanout_release(slot.native);
         *slot.native = scanout;
         scanout = {};
@@ -112,20 +117,40 @@ int planeMapSnapshot(SwitchNativeScanout &scanout, const native_planes::Image &i
     return victim;
 }
 
-unsigned planeDependencies(const PlaneSet &set, switch_gpu_backing_token tokens[2]) const
+// A picture's producer, or a recorded turn's request wait, not complete yet: the set goes out once the GPU has seen
+// them complete (planeFence), never before.
+static bool planeOverlayWaits(const SwitchNativeScanout &native)
+{
+    switch_gpu_backing_token tokens[kPlaneOverlayDependencies];
+    const uint32_t count = switch_native_scanout_dependencies(native, tokens, kPlaneOverlayDependencies);
+    for (uint32_t i = 0; i < count; ++i)
+        if (switch_gpu_backing_token_external_status(&tokens[i]) != 1)
+            return true;
+    return false;
+}
+
+unsigned planeDependencies(const PlaneSet &set, switch_gpu_backing_token tokens[kPlaneDependencies]) const
 {
     unsigned count = 0;
     for (const auto &overlay : set.window) {
         if (!overlay.on)
             continue;
         const auto *native = planeSlots[overlay.slot].native;
-        if (native && native->lease && native->view.producer.engine)
-            tokens[count++] = native->view.producer;
+        if (native && native->lease)
+            count += switch_native_scanout_dependencies(*native, tokens + count, kPlaneOverlayDependencies);
     }
     return count;
 }
 
-void planeNextDependencies(TegraScanoutCopy &copy, switch_gpu_backing_token tokens[2]) const
+// A set's frames are on the panel (or will never be): recorded turns' request signals go.
+void planeDeliver(const PlaneSet &set)
+{
+    for (const auto &overlay : set.window)
+        if (overlay.on && planeSlots[overlay.slot].native)
+            switch_native_scanout_deliver(planeSlots[overlay.slot].native);
+}
+
+void planeNextDependencies(TegraScanoutCopy &copy, switch_gpu_backing_token tokens[kPlaneDependencies]) const
 {
     if (!planeNextSet)
         return;

@@ -140,7 +140,7 @@ static int entryOf(const TegraNVDECSubmit *s, uint16_t method)
 static int refusals(const Fake *f)
 {
     int bad = 0;
-    for (int c = 0; c <= 12; c++) {
+    for (int c = 0; c <= 13; c++) {
         TegraNVDECSubmit s = f->first;
         uint64_t avail[TEGRA_NVDEC_MAX_ENTRIES];
         memcpy(avail, f->firstAvail, sizeof(avail));
@@ -154,7 +154,7 @@ static int refusals(const Fake *f)
         case 0:
             break;  // as decoded: accepted
         case 1:
-            s.codec = 4, expected = "codec";
+            s.codec = 2, expected = "codec";  // VC-1, which NVDEC is not given
             break;
         case 2:
             s.entries[control].value &= ~0x10u, expected = "control params";
@@ -195,6 +195,9 @@ static int refusals(const Fake *f)
             break;
         case 12:
             s.setup_bytes -= 4, expected = "setup size";
+            break;
+        case 13:
+            p->displayPara.enableTFOutput = 1, expected = "display output or histogram";
             break;
         }
         const char *why = tegra_nvdec_check(&s, avail);

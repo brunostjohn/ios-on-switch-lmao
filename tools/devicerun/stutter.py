@@ -35,8 +35,9 @@ STUTTER = [
         regex=r'vsync (?P<sent>\d+) sent [\d.]+/s of (?P<vblanks>\d+) vblanks',
         where='vblanks >= 30',
         source=DISPLAY,
-        note='Core Animation paced by DC A V_BLANK: CA_FORCE_TIMER=1 is what makes CADeviceUseVBL true; '
-        '"vsync 0 sent" is the free-running timer. 11-06: 298 of 299',
+        note='iOS 17: Core Animation paced by DC A V_BLANK, CA_FORCE_TIMER=1 is what makes CADeviceUseVBL true; '
+        '"vsync 0 sent" is the free-running timer. 11-06: 298 of 299. iOS 27 has no vsync-paced CA (its CADisplayTimer '
+        'follows frame info), so no vblanks are counted there',
     ),
     Check(
         'stutter.vsync-late',

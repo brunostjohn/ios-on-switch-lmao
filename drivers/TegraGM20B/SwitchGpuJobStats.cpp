@@ -76,11 +76,11 @@ extern "C" void switch_gpu_job_window(char *line, size_t size)
 	__builtin_snprintf(line, size,
 		 "SubmitJob %llu x mean %llu us (resolve %llu, lock %llu, exec %llu, commit %llu) max %llu us, "
 		 "set %llu hit %llu stale, shared %llu.%llu per job max %llu, siblings %llu, generations ended: "
-		 "free %llu layout %llu shared %llu kill %llu replace %llu",
+		 "free %llu layout %llu shared %llu kill %llu replace %llu cpu %llu",
 		 jobs, total / n / 1000, ns[0] / n / 1000, ns[1] / n / 1000, ns[2] / n / 1000, ns[3] / n / 1000,
 		 totalMax / 1000, sets, stale, shared / n, shared * 10 / n % 10, sharedMax, siblings,
 		 causes[SWITCH_GPU_SET_CAUSE_FREE], causes[SWITCH_GPU_SET_CAUSE_LAYOUT],
 		 causes[SWITCH_GPU_SET_CAUSE_SHARED], causes[SWITCH_GPU_SET_CAUSE_KILL],
-		 causes[SWITCH_GPU_SET_CAUSE_REPLACE]);
+		 causes[SWITCH_GPU_SET_CAUSE_REPLACE], causes[SWITCH_GPU_SET_CAUSE_CPU]);
 }
 #endif

@@ -4,7 +4,7 @@ bool planeFenceQueued = false;
 void planeFenceWork()
 {
     planeFenceQueued = false;
-    switch_gpu_backing_token producers[2] = {};
+    switch_gpu_backing_token producers[kPlaneDependencies] = {};
     const unsigned count = planeDependencies(planeFencing, producers);
     const uint64_t pa = count ? 0 : planeFencePa(planeFencing);
     int error = kIOReturnAborted;

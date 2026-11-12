@@ -32,6 +32,7 @@ kernel_driver(
     name = "TegraNVENC",
     srcs = [
         "TegraNVENC.cpp",
+        "TegraNVENCDump.cpp",
         "TegraNVENCMemory.cpp",
         "TegraNVENCUserClient.cpp",
         "firmware.S",
@@ -42,6 +43,7 @@ kernel_driver(
         "kits/SwitchBootArgs",
         "kits/SwitchCAR",
         "kits/SwitchDMA",
+        "kits/SwitchEngineGate",
         "kits/SwitchFalcon",
         "kits/SwitchMMIO",
         "kits/SwitchTime",

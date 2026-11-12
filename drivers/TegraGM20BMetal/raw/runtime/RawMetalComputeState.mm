@@ -92,7 +92,7 @@ static bool archivesAnswer(RMComputeState *s, RMFunction *f, MTLPipelineOption &
         NSString *name = native_bridge_metal_function_library_name(s->_direct.computeFunction) ?: f.name;
         const std::string key =
             raw::computeArchiveKey(name.UTF8String ?: "", s->_constants, s->_maxThreads, s->_multipleOfWidth);
-        answer = rmArchiveAnswer(s->_direct.binaryArchives, options, false, raw::Pack::fnv(key.data(), key.size()));
+        answer = rmArchiveAnswer(s->_direct.binaryArchives, options, raw::Pack::fnv(key.data(), key.size()));
     }
     options &= ~MTLPipelineOptionFailOnBinaryArchiveMiss;
     s->_direct.binaryArchives = nil;
@@ -121,6 +121,7 @@ id rmComputeState(id device, id<MTLDevice> fallback, MTLComputePipelineDescripto
     s->_multipleOfWidth = descriptor.threadGroupSizeIsMultipleOfThreadExecutionWidth;
     s->_direct = [descriptor copy];
     s->_direct.computeFunction = twinOf(function);
+    s->_function = f;
     if (!archivesAnswer(s, f, options, error))
         return nil;
     id nativeReflection = nil;

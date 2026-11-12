@@ -36,6 +36,19 @@ fragment float4 solid_fragment(constant float4 &color [[buffer(0)]])
     return color;
 }
 
+/// gpu.compile.shared: a state and a kernel no pack or store holds before the run that salts them (each run's own value)
+constant uint compile_salt [[function_constant(0)]];
+
+fragment float4 salted_fragment()
+{
+    return float4(float(compile_salt & 0xffu) / 255.0, float((compile_salt >> 8) & 0xffu) / 255.0, 0.25, 1.0);
+}
+
+kernel void salted_kernel(device uint *out [[buffer(0)]], uint id [[thread_position_in_grid]])
+{
+    out[id] = id ^ compile_salt;
+}
+
 /// Writes exactly the floats it is given, so the render target's own float-to-format conversion is what is tested.
 fragment float4 exact_fragment(constant float4 &value [[buffer(0)]])
 {

@@ -82,10 +82,14 @@ int Kernel::bindCompressed(Bo &bo, uint32_t kind)
     return KERN_SUCCESS;
 }
 
-uint32_t Device::compKind(const Texture &m, uint32_t tag, bool blockLinear) const
+uint32_t Device::compKind(const Texture &m, bool blockLinear, bool copied) const
 {
+    bool zetaProbe = false;
+#if SWITCH_RAW_DIAGNOSTICS
+    zetaProbe = probeZetaKinds.load(std::memory_order_relaxed);
+#endif
     return backingKind((k_.info().flags & TegraGM20BInfoCompression) != 0, blockLinear, m.zeta ? m.format : 0, m.bpp,
-                       std::max<uint32_t>(m.samples, 1), tag, kMemorylessTag);
+                       std::max<uint32_t>(m.samples, 1), copied, zetaProbe);
 }
 
 void Device::compAsk(const CompWant &w)
@@ -197,6 +201,7 @@ void Device::compMake(std::unique_lock<std::mutex> &l)
             RAW_DIAGNOSTIC(stats.compMade++);
             RAW_DIAGNOSTIC(stats.compHeld++);
             RAW_DIAGNOSTIC(stats.compHeldBytes += bo.bytes);
+            RAW_DIAGNOSTIC(glassMemEvent("compressed memory made", bo.bytes));
             RAW_DIAGNOSTIC(os_log_debug(compLog(), "raw: compressed memory %llu KiB kind 0x%x made in %lld us",
                                         (unsigned long long)(w.bytes >> 10), w.kind, (long long)us));
             continue;
@@ -236,6 +241,7 @@ void Device::compFree(Backing &b)
         return;
     RAW_DIAGNOSTIC(stats.compHeld--);
     RAW_DIAGNOSTIC(stats.compHeldBytes -= mem->bo.bytes);
+    RAW_DIAGNOSTIC(glassMemEvent("compressed memory freed", mem->bo.bytes));
     set_.free(k_, mem->bo);
     comp_.mems.erase(std::find_if(comp_.mems.begin(), comp_.mems.end(), [&](const std::unique_ptr<CompMem> &m) {
         return m.get() == mem;
@@ -265,6 +271,7 @@ void Device::compTrim(uint64_t now)
         if (readyStale(commitCount_, it->madeAt, now, it->readyNs)) {
             RAW_DIAGNOSTIC(stats.compHeld--);
             RAW_DIAGNOSTIC(stats.compHeldBytes -= it->bo.bytes);
+            RAW_DIAGNOSTIC(glassMemEvent("compressed memory freed unused", it->bo.bytes));
             set_.free(k_, it->bo);
             it = comp_.ready.erase(it);
             comp_.freed(commitCount_);

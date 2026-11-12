@@ -2,6 +2,7 @@
 #include <gtest/gtest.h>
 #include <array>
 #include "../SwitchDisplayComposition.h"
+#include "../SwitchLandscapeWindows.h"
 namespace {
 using namespace native_planes;
 struct Display {
@@ -17,6 +18,11 @@ struct Display {
     static uint32_t planeBufferBase(unsigned window) { return window ? 0xfc0 : kWinbufBBase; }
     uint32_t planeSlotIova(int slot){return 0x10000000+uint32_t(slot)*0x100000;}
     PlaneSet &planeSetOf(int id){return sets[id>=0?id:Commits::kSlots];}
+    using Window = switch_landscape::Window;
+    static Window planeWindowOf(const PlaneSet &set, unsigned index)
+    {
+        return switch_landscape::windowsOf(set.landscape).overlay[index];
+    }
 #include "../SwitchCompositionRegisters.h"
     void load(const PlaneSet &p) {
         for(unsigned window=0;window!=2;++window) {

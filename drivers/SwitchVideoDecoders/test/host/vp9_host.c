@@ -269,7 +269,7 @@ static int runClip(const char *name, const uint32_t *sizes, int packets, const u
             }
             switch (c) {
             case 1:
-                s.codec = 4;
+                s.codec = 2;  // VC-1, which NVDEC is not given
                 break;
             case 2:
                 s.entries[find[0]].value &= ~0x10u;

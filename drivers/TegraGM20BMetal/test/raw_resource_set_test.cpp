@@ -2,6 +2,7 @@
 #include "raw_kernel_model.h"
 #include "../raw/runtime/raw_resource_set.h"
 #include <gtest/gtest.h>
+#include <cstdio>
 #include <string>
 
 namespace {
@@ -69,22 +70,59 @@ TEST_F(ResourceSetTest, MembersGoWithTheSetNotAsUses)
     EXPECT_EQ(model.staleSets, 0u);
 }
 
-// An import, a cached BO and a BO of another set are refused as members: they stay uses, the rest join
-TEST_F(ResourceSetTest, WhatTheKernelRefusesStaysAUse)
+// The device's own imported pages and cached BOs join; a BO of another set stays out, by name
+TEST_F(ResourceSetTest, ImportsAndCachedBosJoinAndAnotherSetsBoStaysOut)
 {
     raw::Bo cached, imported;
     ASSERT_TRUE(kernel.alloc(0x10000, false, cached));
     static uint8_t pages[0x4000] __attribute__((aligned(0x4000)));
     ASSERT_TRUE(kernel.import(pages, sizeof pages, imported));
-    EXPECT_FALSE(set.add(kernel, {{&root, kWrite}, {&cached, kWrite}, {&imported, kRead}}));
+    EXPECT_TRUE(set.add(kernel, {{&root, kWrite}, {&cached, kWrite}, {&imported, kRead}}));
     set.view(view);
     EXPECT_TRUE(view.holds(root));
-    EXPECT_FALSE(view.holds(cached));
-    EXPECT_FALSE(view.holds(imported));
-    ASSERT_TRUE(job({{cached.handle, kWrite, 0}, {imported.handle, kRead, 0}}));
+    EXPECT_TRUE(view.holds(cached));
+    EXPECT_TRUE(view.holds(imported));
+    ASSERT_TRUE(job());
     EXPECT_TRUE(used(cached.handle, kWrite));
+    EXPECT_TRUE(used(imported.handle, kRead));
     raw::ResourceSet other;
     EXPECT_FALSE(other.add(kernel, root, kRead)) << "a member of one set joined a second";
+}
+
+// A CPU lease takes a member out for good: the next job is refused once, the set is made again without it, and the uses
+// the command buffer recorded of it become uses of the job
+TEST_F(ResourceSetTest, ACpuLeasedMembersRecordedUsesBecomeTheJobsUses)
+{
+    ASSERT_TRUE(set.add(kernel, {{&root, kWrite}, {&ring, kWrite}}));
+    set.view(view);
+    const uint32_t removals = view.removals;
+    const std::vector<raw::SetUse> recorded = {{ring.handle, kWrite}, {root.handle, kWrite}};
+    ASSERT_TRUE(kernel.cpuAccess(ring, 0, 0x1000, TegraGM20BCpuRead, true));
+    raw::SurfaceList uses;
+    raw::KernelJob j;
+    j.channel = channel;
+    uint32_t seqno = 0;
+    ASSERT_TRUE(raw::submitInSet(kernel, set, view, true, j, seqno, nullptr, &uses, &recorded, removals));
+    EXPECT_EQ(model.staleSets, 1u);
+    EXPECT_FALSE(view.holds(ring));
+    EXPECT_TRUE(used(ring.handle, kWrite)) << "a use of the member the CPU took out went unnamed";
+    ASSERT_EQ(uses.uses().size(), 1u) << "a member still in the set was named as a use";
+}
+
+// An always-used BO the kernel keeps out is a use of every job
+TEST_F(ResourceSetTest, AnAlwaysUsedBoOutsideIsAUseOfEveryJob)
+{
+    ASSERT_TRUE(set.add(kernel, root, kWrite, true));
+    ASSERT_TRUE(kernel.cpuAccess(root, 0, 0x1000, TegraGM20BCpuRead, true));
+    for (int i = 0; i < 2; ++i) {
+        raw::SurfaceList uses;
+        raw::KernelJob j;
+        j.channel = channel;
+        uint32_t seqno = 0;
+        ASSERT_TRUE(raw::submitInSet(kernel, set, view, true, j, seqno, nullptr, &uses));
+        EXPECT_TRUE(used(root.handle, kWrite));
+    }
+    EXPECT_EQ(view.outside.size(), 1u);
 }
 
 // A freed member leaves the view before its VA can go to another BO, and the set is made again without it, so the next job
@@ -149,6 +187,65 @@ TEST_F(ResourceSetTest, AMemberIsNeverAUse)
     EXPECT_EQ(result, kIOReturnBadArgument);
     EXPECT_FALSE(job({{root.va, kRead | TegraGM20BSurfaceGpuAddress, 0}}, &result, false));
     EXPECT_EQ(result, kIOReturnBadArgument);
+}
+
+// A compositor frame as SubmitAddress named it, 132 uses: 9 control BOs, 93 ranges of the device's own chunks (block-linear
+// imports, write-combined and cached BOs), 24 IOSurface layers and 6 native views. With the set, the job names the 30
+// shared ones and nothing of the device's own memory.
+TEST_F(ResourceSetTest, ACompositorFramesJobNamesOnlyItsSharedUses)
+{
+    static uint8_t tiled[2][0x40000] __attribute__((aligned(0x4000)));
+    static uint8_t layers[24][0x4000] __attribute__((aligned(0x4000)));
+    std::vector<raw::Bo> control(6), chunks(5), surfaces(24), views(6);
+    for (auto &bo : control)
+        ASSERT_TRUE(kernel.allocControl(0x1000, bo, raw::ControlUse::TextureHeaders));
+    ASSERT_TRUE(kernel.import(tiled[0], sizeof tiled[0], chunks[0]));
+    ASSERT_TRUE(kernel.import(tiled[1], sizeof tiled[1], chunks[1]));
+    ASSERT_TRUE(kernel.alloc(0x40000, true, chunks[2]));
+    ASSERT_TRUE(kernel.alloc(0x40000, true, chunks[3]));
+    ASSERT_TRUE(kernel.alloc(0x40000, false, chunks[4]));
+    for (int i = 0; i < 24; ++i)
+        ASSERT_TRUE(kernel.import(layers[i], sizeof layers[i], surfaces[i]));
+    for (auto &bo : views)
+        ASSERT_TRUE(kernel.alloc(0x4000, true, bo));
+    ASSERT_TRUE(set.add(kernel, {{&root, kWrite}, {&tickets, kWrite}, {&ring, kRead}}, true));
+    for (auto &bo : control)
+        ASSERT_TRUE(set.add(kernel, bo, kRead, true));
+    for (auto &bo : chunks)
+        ASSERT_TRUE(set.add(kernel, bo, kWrite));
+    set.view(view);
+    raw::SurfaceList before, after;
+    std::vector<raw::SetUse> recorded;
+    for (const raw::Bo *bo : {&root, &tickets, &ring})
+        before.add(bo->handle, true);
+    for (const auto &bo : control)
+        before.add(bo.handle, false);
+    for (uint32_t i = 0; i < 93; ++i) {
+        const raw::Bo &chunk = chunks[i % chunks.size()];
+        const uint64_t va = chunk.va + (i / chunks.size()) * 0x2000;
+        before.addAddress(va, 0x1000, i % 3 == 0, TegraGM20BSurfaceRange);
+        if (const raw::SetMember *m = view.find(va, 0x1000))
+            recorded.push_back({m->handle, i % 3 == 0 ? kWrite : kRead});
+        else
+            after.addAddress(va, 0x1000, i % 3 == 0, TegraGM20BSurfaceRange);
+    }
+    for (const auto &bo : surfaces) {
+        before.add(bo.handle, &bo == &surfaces[0]);
+        after.add(bo.handle, &bo == &surfaces[0]);
+    }
+    for (const auto &bo : views) {
+        before.add(bo.handle, false);
+        after.add(bo.handle, false);
+    }
+    raw::KernelJob j;
+    j.channel = channel;
+    uint32_t seqno = 0;
+    ASSERT_TRUE(raw::submitInSet(kernel, set, view, true, j, seqno, nullptr, &after, &recorded, view.removals));
+    EXPECT_EQ(before.uses().size(), 132u);
+    EXPECT_EQ(after.uses().size(), 30u) << "the job named more than its IOSurfaces and native views";
+    EXPECT_EQ(model.setJobs, 1u);
+    printf("compositor frame: %zu uses by SubmitAddress, %zu beside the set by SubmitJob, %zu recorded member uses\n",
+           before.uses().size(), after.uses().size(), recorded.size());
 }
 
 TEST(SetView, HoldsOnlyRangesInsideOneMember)
