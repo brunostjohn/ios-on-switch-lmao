@@ -435,6 +435,8 @@ Device::~Device()
     if (channel_)
         k_.closeChannel(channel_);
     reapNativeSurfaces(true);
+    for (Backing *b : trimmedBackings_)
+        delete b;
 }
 
 uint32_t Device::contextWords() const
@@ -2764,6 +2766,7 @@ Device::Backing *Device::plainBacking(const Texture &m, uint32_t tag, bool block
         for (Backing *b : backings_)
             if (b->plain && b->plain != mem && b->plain->tag == tag && b->plain->memory == memory)
                 b->retired = true;
+        backingsChanged();
         compRearm_ = true;  // an idle process gives it back when it turns stale
         compStart();
     }
@@ -2826,18 +2829,38 @@ void Device::plainFree(Backing &b)
         dropPlain(mem);
 }
 
+Texture *Device::lastBacking(const Texture &m, uint32_t tag, bool blockLinear, bool compression, bool copied)
+{
+    const uint64_t epoch = backingEpoch_.load(std::memory_order_seq_cst);
+    for (const BackingAsk &ask : asks_) {
+        if (ask.epoch != epoch || !ask.same(m, tag, blockLinear, compression, copied, zetaKindsProbed()))
+            continue;
+        Backing *b = ask.backing;
+        b->lastCommit.store(commitCount_, std::memory_order_relaxed);
+        b->lastClosed.store(closedCount_, std::memory_order_seq_cst);
+        // a trim moves the epoch before it reads the stamps: one that began since reads ours or is seen here
+        return backingEpoch_.load(std::memory_order_seq_cst) == epoch ? &b->texture : nullptr;
+    }
+    return nullptr;
+}
+
 Texture *Device::backing(const Texture &m, uint32_t tag, bool blockLinear, bool compression, bool copied)
 {
+    BackingAsk ask{m.width, m.height, m.format, tag, m.samples, m.zeta, blockLinear, compression, copied,
+                   zetaKindsProbed()};
     blockLinear |= m.zeta;
     const uint32_t kind = compression ? compKind(m, blockLinear, copied) : 0;
     const CompMem *mem = kind ? comp_.largest(tag, kind) : nullptr;
     Backing *plain = nullptr;
     blockLinear |= m.samples > 1;
     const auto asked = [&](Backing *b) {
-        b->lastCommit = commitCount_;
-        b->lastClosed = closedCount_;
+        b->lastCommit.store(commitCount_, std::memory_order_relaxed);
+        b->lastClosed.store(closedCount_, std::memory_order_relaxed);
         if (tag < lastBackings_.size())
             lastBackings_[tag] = b;
+        ask.backing = b;
+        ask.epoch = backingEpoch_.load(std::memory_order_relaxed);
+        asks_[nextAsk_++ % asks_.size()] = ask;
         return &b->texture;
     };
     const auto matches = [&](const Backing *b) {
@@ -2852,13 +2875,15 @@ Texture *Device::backing(const Texture &m, uint32_t tag, bool blockLinear, bool 
         if (matches(b)) {
             if (b->plain && b->plain != largestPlain(tag, b->plain->memory)) {
                 b->retired = true;  // larger plain memory of its tag took its place: a view of that replaces it
+                backingsChanged();
                 continue;
             }
             if (backingCompressionMatches(b->comp != nullptr, b->comp, mem, kind != 0))
                 return asked(b);
-            if (b->comp && kind)
+            if (b->comp && kind) {
                 b->retired = true;  // larger memory of its tag and kind took its place: a view of that replaces it
-            else if (!b->comp)
+                backingsChanged();
+            } else if (!b->comp)
                 plain = b;
         }
     if (Backing *c = kind ? compBacking(m, tag, kind) : nullptr) {
@@ -2880,6 +2905,7 @@ Texture *Device::backing(const Texture &m, uint32_t tag, bool blockLinear, bool 
 // (raw_comp.h backingStale; the compressed-memory thread trims then).
 void Device::trimBackings()
 {
+    backingsChanged();
     const uint64_t now = compClock();
     compTrim(now);
     for (auto it = spares_.begin(); it != spares_.end();) {
@@ -2895,8 +2921,8 @@ void Device::trimBackings()
 #endif
     for (auto it = backings_.begin(); it != backings_.end();) {
         Backing *b = *it;
-        if (backingStale(commitCount_, b->lastCommit, closedCount_, b->lastClosed, now, b->usedNs, b->retired,
-                         b->comp || b->plain) &&
+        if (backingStale(commitCount_, b->lastCommit.load(std::memory_order_seq_cst), closedCount_,
+                         b->lastClosed.load(std::memory_order_seq_cst), now, b->usedNs, b->retired, b->comp || b->plain) &&
             (!b->submitted || done(b->lastUse))) {
             if (b->tag < lastBackings_.size() && lastBackings_[b->tag] == b)
                 lastBackings_[b->tag] = nullptr;
@@ -2905,7 +2931,7 @@ void Device::trimBackings()
             } else if (b->plain) {
                 plainFree(*b);
             }
-            delete b;
+            trimmedBackings_.push_back(b);
             it = backings_.erase(it);
             continue;
         }
@@ -3263,6 +3289,9 @@ CommandBuffer *Device::begin()
     {
         RAW_ENCODE_LOCK(l, lock_);
         reapNativeSurfaces();
+        for (Backing *b : trimmedBackings_)
+            delete b;
+        trimmedBackings_.clear();
         if (commitCount_ % 64 == 0)
             trimBackings();
         cb.stamp = stampOf(commitCount_);
@@ -3366,18 +3395,20 @@ RenderEncoder *CommandBuffer::render(const PassDesc &pass)
     for (uint32_t j = 0; j < pass.count && j < 8; j++)
         if (const Texture *t = pass.color[j].texture; t && !t->memoryless && (t->blockLinear || t->shadowTarget))
             blockLinear = true;
-    // the device's backings, under its lock once a pass however many attachments need one (the compression thread
-    // trims them under it)
+    // the device's backings: those the last passes asked the same of with no lock, else under the device's lock once a
+    // pass however many attachments need one (the compression thread trims them under it)
     std::unique_lock<std::mutex> backingLock(dev_->lock_, std::defer_lock);
-    const auto backings = [&]() {
+    const auto backing = [&](const Texture &shape, uint32_t tag, bool linear, bool compression, bool copied = false) {
+        if (Texture *b = backingLock.owns_lock() ? nullptr : dev_->lastBacking(shape, tag, linear, compression, copied))
+            return b;
         if (!backingLock.owns_lock()) {
             backingLock.lock();
             RAW_ENCODE_COUNT(Locks);
         }
+        return dev_->backing(shape, tag, linear, compression, copied);
     };
     if (zeta && zeta->memoryless) {
-        backings();
-        Texture *b = dev_->backing(planeShaped(*zeta, e.rot_));
+        Texture *b = backing(planeShaped(*zeta, e.rot_), 0, false, true);
         if (!b)
             return nullptr;
         e.pass_.depthStencil.texture = b;
@@ -3404,8 +3435,7 @@ RenderEncoder *CommandBuffer::render(const PassDesc &pass)
                 RAW_DIAGNOSTIC(dev_->stats.rtUnalignedPitch = t->pitch);
                 RAW_DIAGNOSTIC(dev_->stats.rtUnalignedVa = uint32_t(t->va & 255));
             }
-            backings();
-            Texture *b = dev_->backing(*t, scratchTags[j], blockLinear, !(pass.storageMask >> j & 1), true);
+            Texture *b = backing(*t, scratchTags[j], blockLinear, !(pass.storageMask >> j & 1), true);
             if (!b || !b->renderable)
                 return nullptr;
             e.pass_.color[j].texture = b;
@@ -3414,9 +3444,7 @@ RenderEncoder *CommandBuffer::render(const PassDesc &pass)
             continue;
         }
         if (t->memoryless) {  // back it for this pass
-            backings();
-            Texture *b =
-                dev_->backing(planeShaped(*t, e.rot_), scratchTags[j], blockLinear, !(pass.storageMask >> j & 1));
+            Texture *b = backing(planeShaped(*t, e.rot_), scratchTags[j], blockLinear, !(pass.storageMask >> j & 1));
             if (!b)
                 return nullptr;
             e.pass_.color[j].texture = b;
@@ -5563,7 +5591,7 @@ bool RenderEncoder::prepareShaderTests(const Pipeline &pipeline, const char **wh
         shape.height = zeta->height;
         shape.format = format;
         shape.samples = samples_;
-        {
+        if (!(slot = dev_->lastBacking(shape, tag, true, false))) {
             RAW_ENCODE_LOCK(lock, dev_->lock_);
             slot = dev_->backing(shape, tag, true, false);
         }
