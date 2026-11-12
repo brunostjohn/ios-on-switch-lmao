@@ -7,14 +7,60 @@ import UIKit
 /// A Liquid Glass panel (UIGlassEffect, regular) across the middle of vertical stripes and of flat grey. Outside it the
 /// composited picture must match the CPU's. Inside, away from the lensing at its edges, each column over the stripes
 /// stays constant down its length (no streak or block) and the grey stays flat and not black. The stripes' remaining
-/// contrast is reported (contrast=) but not judged: how much glass blurs is UIKit's choice, not the GPU's.
+/// contrast is reported (contrast=) but not judged: how much glass blurs is UIKit's choice, not the GPU's. The stripes'
+/// column spread is measured again under the raw path's debug switches whole-programs (column_spread_whole=) and
+/// split-frontier-wfi (column_spread_fwfi=), reported and not judged: whether bent stripes follow the split draws. A
+/// failed run saves each picture (composited.png, composited-whole.png, composited-fwfi.png).
 struct UIGlassTest: HWTest {
     let id = "ui.glass"
     let name = "UIGlassEffect over stripes and flat grey"
     let subsystem = Subsystem.compositor
 
+    static let arms = [("whole", "whole-programs"), ("fwfi", "split-frontier-wfi")]
+
     func run(_ context: TestContext) async throws -> Outcome {
-        let (outside, inside) = await UISceneTests.staged(context) { stage, screen -> UIView in
+        let (outside, inside) = await Self.snapshot(context)
+        var metrics = Metrics()
+        var reasons: [String] = []
+        outside.judge(&metrics, &reasons, "outside")
+        let (stripes, grey) = Self.measure(inside)
+        metrics.set("column_spread", Int((stripes.columnSpread * 255).rounded()))
+        metrics.set("contrast", Int((stripes.contrast * 255).rounded()))
+        metrics.set("grey_spread", Int((grey.spread * 255).rounded()))
+        metrics.set("grey_mean", grey.mean.map { String(Int(($0 * 255).rounded())) }.joined(separator: ","))
+        var pictures = [("composited.png", inside)]
+        for (name, forced) in Self.arms {
+            GlassProbe.post(forced + "-on")
+            let (_, armed) = await Self.snapshot(context)
+            GlassProbe.post(forced + "-off")
+            metrics.set("column_spread_" + name, Int((Self.measure(armed).0.columnSpread * 255).rounded()))
+            pictures.append(("composited-\(name).png", armed))
+        }
+        let checks: [(String, Bool)] = [
+            ("each column constant down the glass (spread <= 6)", stripes.columnSpread <= 6.0 / 255),
+            ("grey stays flat (spread <= 6)", grey.spread <= 6.0 / 255),
+            ("grey not black", grey.mean.prefix(3).reduce(0, +) > 0.12),
+        ]
+        reasons += checks.filter { !$0.1 }.map(\.0)
+        if !reasons.isEmpty {
+            let directory = context.documents.appendingPathComponent("ui").appendingPathComponent(id)
+            try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+            for (file, picture) in pictures { try? picture.png()?.write(to: directory.appendingPathComponent(file)) }
+        }
+        return reasons.isEmpty ? .pass(metrics) : .fail(LogLine.fitted(reasons), metrics)
+    }
+
+    static func measure(_ inside: Raster) -> (Backdrop.Stripes, (spread: Float, mean: [Float])) {
+        let inset = inside.height / 16
+        let (top, height, half) = (inside.height / 4 + inset, inside.height / 2 - 2 * inset, inside.width / 2)
+        return (
+            Backdrop.overStripes(inside.cropped(x: inset, y: top, width: half - 2 * inset, height: height)),
+            Backdrop.overUniform(inside.cropped(x: half + inset, y: top, width: half - 2 * inset, height: height))
+        )
+    }
+
+    static func snapshot(_ context: TestContext) async -> (CompositeCheck, Raster) {
+        await UISceneTests.staged(context) { stage, screen -> UIView in
             let root = UIView(frame: Snapshots.aligned(screen))
             root.addSubview(BackdropStripes(frame: CGRect(x: 0, y: 0, width: screen.width / 2, height: screen.height)))
             let grey = UIView(frame: CGRect(x: screen.width / 2, y: 0, width: screen.width / 2, height: screen.height))
@@ -37,30 +83,6 @@ struct UIGlassTest: HWTest {
                 composited
             )
         }
-        var metrics = Metrics()
-        var reasons: [String] = []
-        outside.judge(&metrics, &reasons, "outside")
-        let inset = inside.height / 16
-        let (top, height, half) = (inside.height / 4 + inset, inside.height / 2 - 2 * inset, inside.width / 2)
-        let stripes = Backdrop.overStripes(inside.cropped(x: inset, y: top, width: half - 2 * inset, height: height))
-        let grey = Backdrop.overUniform(
-            inside.cropped(x: half + inset, y: top, width: half - 2 * inset, height: height))
-        metrics.set("column_spread", Int((stripes.columnSpread * 255).rounded()))
-        metrics.set("contrast", Int((stripes.contrast * 255).rounded()))
-        metrics.set("grey_spread", Int((grey.spread * 255).rounded()))
-        metrics.set("grey_mean", grey.mean.map { String(Int(($0 * 255).rounded())) }.joined(separator: ","))
-        let checks: [(String, Bool)] = [
-            ("each column constant down the glass (spread <= 6)", stripes.columnSpread <= 6.0 / 255),
-            ("grey stays flat (spread <= 6)", grey.spread <= 6.0 / 255),
-            ("grey not black", grey.mean.prefix(3).reduce(0, +) > 0.12),
-        ]
-        reasons += checks.filter { !$0.1 }.map(\.0)
-        if !reasons.isEmpty {
-            let directory = context.documents.appendingPathComponent("ui").appendingPathComponent(id)
-            try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-            try? inside.png()?.write(to: directory.appendingPathComponent("composited.png"))
-        }
-        return reasons.isEmpty ? .pass(metrics) : .fail(LogLine.fitted(reasons), metrics)
     }
 }
 

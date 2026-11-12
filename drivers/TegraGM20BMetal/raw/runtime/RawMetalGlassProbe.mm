@@ -9,6 +9,7 @@
 //   split-generic-on|-off       a draw the split plan takes draws the generic whole program: no variant, no prologue
 //   split-launch-only-on|-off   its prologue runs and writes its frontier, but the generic whole program draws
 //   split-no-reuse-on|-off      its split twin draws with a frontier of its own prologue, none an earlier draw made
+//   split-frontier-wfi-on|-off  after the prologues the 3D class also flushes, invalidates and waits for idle
 //   split-capture[-off]         the next kSplitCaptureDraws split draws logged for the bench (raw_split_capture.h) as
 //                               `raw: splitcap` lines, for kSplitCaptureMs at most
 // glass-probe and glass-record also arm the blur-texture probe (raw_glass_mem.h) with every command buffer's line, and
@@ -40,7 +41,7 @@ struct Forced {
     std::atomic<uint32_t> generation{0};
 };
 
-Forced gWholePrograms, gZeroNewBuffers, gSplitGeneric, gSplitLaunchOnly, gSplitNoReuse;
+Forced gWholePrograms, gZeroNewBuffers, gSplitGeneric, gSplitLaunchOnly, gSplitNoReuse, gSplitFrontierWfi;
 
 struct Record {
     std::mutex lock;
@@ -183,6 +184,11 @@ raw::SplitProbe rmSplitProbe()
     return raw::SplitProbe::Twin;
 }
 
+bool rmSplitFrontierWfi()
+{
+    return gSplitFrontierWfi.on.load(std::memory_order_relaxed);
+}
+
 bool rmZeroNewBuffers()
 {
     return gZeroNewBuffers.on.load(std::memory_order_relaxed);
@@ -263,6 +269,7 @@ void watchGlassProbe(raw::Device *dev)
     watchForced(gSplitGeneric, "split-generic");
     watchForced(gSplitLaunchOnly, "split-launch-only");
     watchForced(gSplitNoReuse, "split-no-reuse");
+    watchForced(gSplitFrontierWfi, "split-frontier-wfi");
 }
 
 void glassProbeCommitted(RMCommandBuffer *cb)

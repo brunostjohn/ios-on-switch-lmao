@@ -530,5 +530,6 @@ void glassProbeCommitted(RMCommandBuffer *cb);
 bool rmWholePrograms();
 bool rmZeroNewBuffers();
 raw::SplitProbe rmSplitProbe();
+bool rmSplitFrontierWfi();
 void splitCaptureCommitted(raw::CommandBuffer &rc);
 #endif

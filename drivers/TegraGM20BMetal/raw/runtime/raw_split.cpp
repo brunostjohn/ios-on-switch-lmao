@@ -281,7 +281,7 @@ void CommandBuffer::launchPrologues()
             ++scalars;
     }
     const uint32_t launches = scalars + uint32_t(splitBatches_.runs().size());
-    const uint32_t words = 16 + 4 * launches;
+    const uint32_t words = 20 + 4 * launches;
     uint64_t va = 0;
     uint32_t *start = reinterpret_cast<uint32_t *>(d.alloc(d.push_, words * 4, 4, va));
     Push p{start, start + words};
@@ -328,6 +328,12 @@ void CommandBuffer::launchPrologues()
         RAW_DIAGNOSTIC(d.stats.uploadBytes += tableBytes + kSplitParamsBytes);
     }
     computeToGraphics(p, false);
+#if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
+    if (splitFrontierWfi_) {
+        p.m(INVALIDATE_SHADER_CACHES, kInvalidateData | kFlushData | kInvalidateConstant, SUBC_3D);
+        p.m(WAIT_FOR_IDLE, 0, SUBC_3D);
+    }
+#endif
     RAW_DIAGNOSTIC(d.stats.uploadBytes += uint64_t(launches) * sizeof(PackSplit::qmd));
     RAW_DIAGNOSTIC(d.stats.pushBytes += uint64_t(p.at - start) * 4);
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
