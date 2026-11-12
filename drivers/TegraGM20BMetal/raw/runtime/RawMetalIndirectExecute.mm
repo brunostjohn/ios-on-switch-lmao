@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: MIT
-// A compute encoder's execute of an indirect command buffer of dispatches (raw_icb_compute.h): the buffer's own words by
-// reference where it inherits nothing, else words written now for the encoder's pipeline or buffers into the command buffer's
-// upload memory; m2v's replay encodes the commands again into m2v's buffer, which executes them as Metal does; and a blit's
-// reset or copy of the commands.
+// A compute encoder's execute of an indirect command buffer of dispatches (raw_icb_compute.h) by reference: the buffer's own
+// words, or its variant for the encoder's pipeline where it inherits that, and the bind slots for the encoder's buffers in
+// the macros' scratch where it inherits them; m2v's replay encodes the commands again into m2v's buffer, which executes
+// them as Metal does; and a blit's reset or copy of the commands.
 #import "RawMetalIndirectCompute.h"
 
 namespace {
@@ -19,27 +19,50 @@ uint32_t *slotOf(RMIndirectComputeBuffer *b, NSUInteger index)
     return reinterpret_cast<uint32_t *>(b->_raw.cpu) + index * raw::icb::kComputeSlotWords;
 }
 
-// Why the execute has no raw form (null: it has), each command's kernels made for the encoder's pipeline where it inherits it
+const char *const kStageIn = "an indirect dispatch command that sets a stage-in region (the encoder's is m2v's)",
+                  *const kNoKernel =
+                      "an indirect dispatch command the raw path has no kernel for at the encoder's pipeline";
+
+// Each command's kernels at the encoder's pipeline, for a buffer with no variant for it at its generation
+void pipelineKernels(RMKernelExecute *x)
+{
+    RMIndirectComputeBuffer *b = x->_buffer;
+    x->_kernels.assign(b->_count, nullptr);
+    x->_kernelsGeneration = b->_generation;
+    for (uint32_t i = 0; i < b->_count; i++) {
+        raw::ComputeDispatch shape;
+        if (b->_dispatches[i].dispatched && !b->_dispatches[i].stageIn)
+            x->_kernels[i] = rmCommandKernels(x->_pipeline, b->_dispatches[i], shape);
+    }
+}
+
+// Why the execute has no raw form (null: it has); a buffer that inherits the pipeline has its commands' kernels at the
+// encoder's made now where it has no variant for it
 const char *admit(RMKernelExecute *x)
 {
     RMIndirectComputeBuffer *b = x->_buffer;
     const auto [from, to] = reach(x);
     std::lock_guard<std::mutex> hold(b->_lock);
-    if (b->_inheritPipeline)
-        x->_kernels.resize(to - from);
+    if (b->_inheritPipeline) {
+        const auto made = b->_variants.find(x->_pipeline);
+        const bool current = made != b->_variants.end() && made->second->generation == b->_generation;
+        if (!current)
+            pipelineKernels(x);
+        for (uint32_t i = from; i < to; i++) {
+            const RMICBDispatch &c = b->_dispatches[i];
+            if (c.dispatched && c.stageIn)
+                return kStageIn;
+            if (c.dispatched && (current ? made->second->missing[i] : !x->_kernels[i]))
+                return kNoKernel;
+        }
+        return nullptr;
+    }
     for (uint32_t i = from; i < to; i++) {
         const RMICBDispatch &c = b->_dispatches[i];
-        if (!c.dispatched)
-            continue;
-        if (c.stageIn)
-            return "an indirect dispatch command that sets a stage-in region (the encoder's is m2v's)";
-        if (b->_inheritPipeline) {
-            raw::ComputeDispatch shape;
-            if (!(x->_kernels[i - from] = rmCommandKernels(x->_pipeline, c, shape)))
-                return "an indirect dispatch command the raw path has no kernel for at the encoder's pipeline";
-        } else if (!(b->_inheritBuffers ? bool(c.kernels) : c.raw)) {
+        if (c.dispatched && c.stageIn)
+            return kStageIn;
+        if (c.dispatched && !c.raw)
             return "an indirect dispatch command the raw path has no kernel for";
-        }
     }
     return nullptr;
 }
@@ -55,45 +78,6 @@ std::vector<RMBuffer *> commandBuffers(RMKernelExecute *x)
             if (buffer && std::find(out.begin(), out.end(), buffer) == out.end())
                 out.push_back(buffer);
     return out;
-}
-
-// The commands' words for the state the buffer inherits, into the command buffer's upload memory: their slots, then each
-// command's regions
-bool inheritedSlots(raw::ComputeEncoder &e, RMKernelExecute *x, raw::Buffer &slots, const char **why)
-{
-    RMIndirectComputeBuffer *b = x->_buffer;
-    const auto [from, to] = reach(x);
-    const uint32_t bytes = (to - from) * raw::icb::kComputeSlotWords * 4;
-    slots = {};
-    slots.cpu = e.upload(bytes, slots.va);
-    slots.length = bytes;
-    raw::ComputeEncoder::IcbBuffer inherited[31];
-    if (b->_inheritBuffers)
-        e.inheritBuffers(inherited);
-    std::lock_guard<std::mutex> hold(b->_lock);
-    for (uint32_t i = from; i < to; i++) {
-        const RMICBDispatch &c = b->_dispatches[i];
-        uint32_t *slot = reinterpret_cast<uint32_t *>(slots.cpu) + (i - from) * raw::icb::kComputeSlotWords;
-        const std::shared_ptr<RMKernelSet> &kernels = b->_inheritPipeline ? x->_kernels[i - from] : c.kernels;
-        RMComputeState *pipeline = b->_inheritPipeline ? x->_pipeline : c.pipeline;
-        if (!c.dispatched || !kernels || !pipeline) {
-            raw::icb::computeEmpty(slot);
-            continue;
-        }
-        const raw::ComputeDispatch shape = raw::computeDispatch(c.grid, c.threads, c.perThread, pipeline->_threadLimit);
-        raw::ComputeEncoder::IcbBuffer own[31];
-        if (!b->_inheritBuffers)
-            rmCommandBuffers(c, own);
-        RMICBBlock block;
-        block.bytes = rmCommandBytes(*kernels);
-        block.cpu = e.upload(block.bytes, block.va);
-        raw::icb::ComputeCommand words{};
-        if (!rmCommandRegions(*kernels, shape, b->_inheritBuffers ? inherited : own, block, words, why))
-            return false;
-        words.barrier = c.barrier;
-        raw::icb::dispatch(slot, i, words);
-    }
-    return true;
 }
 
 }  // namespace
@@ -170,6 +154,29 @@ bool inheritedSlots(raw::ComputeEncoder &e, RMKernelExecute *x, raw::Buffer &slo
 
 @end
 
+// The buffer's commands for the execute's pipeline as they are now: the variant made at an earlier execute, or made now
+static std::shared_ptr<RMICBVariant> pipelineVariant(RMKernelExecute *x, const char **why)
+{
+    RMIndirectComputeBuffer *b = x->_buffer;
+    const auto [from, to] = reach(x);
+    std::lock_guard<std::mutex> hold(b->_lock);
+    std::shared_ptr<RMICBVariant> &v = b->_variants[x->_pipeline];
+    if (!v || v->generation != b->_generation) {
+        if (x->_kernelsGeneration != b->_generation || x->_kernels.size() != b->_count)
+            pipelineKernels(x);
+        std::shared_ptr<RMICBVariant> made = rmPipelineVariant(b, x->_pipeline, x->_kernels, why);
+        if (!made)
+            return nullptr;
+        v = made;
+    }
+    for (uint32_t i = from; i < to; i++)
+        if (v->missing[i]) {
+            *why = kNoKernel;
+            return nullptr;
+        }
+    return v;
+}
+
 bool encodeKernelCommands(raw::ComputeEncoder &e, raw::CommandBuffer &rc, RMKernelExecute *x, const char **why)
 {
     RMIndirectComputeBuffer *b = x->_buffer;
@@ -187,17 +194,36 @@ bool encodeKernelCommands(raw::ComputeEncoder &e, raw::CommandBuffer &rc, RMKern
                                            x->_range ? &x->_range->_raw : nullptr,
                                            x->_rangeOffset,
                                            b->_gpuWritten.load(std::memory_order_relaxed)};
-    raw::Buffer inherited;
-    if (b->_inheritPipeline || b->_inheritBuffers) {
-        if (!inheritedSlots(e, x, inherited, why))
-            return false;
-        run.slots = &inherited;
-        run.at = 0;
-        run.written = false;
-    } else if (x->_range) {
+    if (x->_range) {
         run.at = 0;
         run.first = 0;
         run.count = uint32_t(b->_count);
+    }
+    if (b->_inheritPipeline) {
+        if (!(x->_variant = pipelineVariant(x, why)))
+            return false;
+        for (const raw::Buffer &chunk : x->_variant->chunks)
+            rc.use(chunk, false);
+        run.slots = &x->_variant->slots;
+        run.written = false;
+        if (b->_inheritBuffers) {
+            run.binds = &x->_variant->binds;
+            run.bindSlots = x->_variant->bindSlots;
+            run.alignedSlots = x->_variant->alignedSlots;
+        }
+    } else if (b->_inheritBuffers) {
+        std::lock_guard<std::mutex> hold(b->_lock);
+        if (b->_bindsChanged) {
+            b->_bindSlots = b->_alignedSlots = 0;
+            for (const RMICBDispatch &c : b->_dispatches) {
+                b->_bindSlots |= c.bindSlots;
+                b->_alignedSlots |= c.alignedSlots;
+            }
+            b->_bindsChanged = false;
+        }
+        run.binds = &b->_binds;
+        run.bindSlots = b->_bindSlots;
+        run.alignedSlots = b->_alignedSlots;
     }
     if (x->_range)
         useBuffer(&rc, x->_range, false);
@@ -277,10 +303,24 @@ void encodeKernelCommandsBlit(raw::BlitEncoder *be, const Cmd &c)
                     be->fillWords(to->_raw.va + (into + i) * kSlotBytes + raw::icb::kComputeIndexWord * 4, 4,
                                   uint32_t(into + i));
         }
+        if (to->_inheritBuffers) {
+            constexpr uint64_t kBindBytes = raw::icb::kComputeBindSlotWords * 4;
+            if (copy && from->_inheritBuffers)
+                be->copyBytes(from->_binds.va + first * kBindBytes, to->_binds.va + into * kBindBytes,
+                              count * kBindBytes);
+            else
+                be->fillWords(to->_binds.va + into * kBindBytes, count * kBindBytes, raw::icb::kNop);
+        }
         to->_gpuWritten.store(true, std::memory_order_relaxed);
     }
     std::lock_guard<std::mutex> hold(to->_lock);
+    to->_bindsChanged = true;
+    to->_generation++;
     for (NSUInteger i = 0; i < count; i++) {
+        if (copy && !from->_inheritBuffers) {
+            commands[i].binds.clear();
+            commands[i].bindSlots = commands[i].alignedSlots = 0;
+        }
         to->_dispatches[into + i] = commands[i];
         // with no copy engine (the blit encoder replayed on m2v) the words are the CPU's to write, as Metal's would be the GPU's
         if (be)
@@ -289,5 +329,7 @@ void encodeKernelCommandsBlit(raw::BlitEncoder *be, const Cmd &c)
             raw::icb::dispatch(slotOf(to, into + i), uint32_t(into + i), commands[i].words);
         else
             raw::icb::computeEmpty(slotOf(to, into + i));
+        if (to->_inheritBuffers)
+            raw::icb::binds(rmBindSlot(to, into + i), commands[i].binds.data(), uint32_t(commands[i].binds.size()));
     }
 }

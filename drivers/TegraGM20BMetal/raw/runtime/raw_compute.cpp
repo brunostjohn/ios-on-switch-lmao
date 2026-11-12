@@ -8,6 +8,7 @@
 #include "raw_compute_visibility.h"
 #include "raw_dispatch_bands.h"
 #include "raw_stamps.h"
+#include "raw_icb_compute.h"
 #include "raw_residual.h"
 #include "raw_slm.h"
 #include "raw_view.h"
@@ -369,6 +370,26 @@ void ComputeEncoder::rootWords(const PackKernel &r, const uint32_t base[3], cons
         root[kRootPush / 4 + __builtin_ctz(m)] = residuals[__builtin_ctz(m)];
     if (r.regionWord >= 0)
         memcpy(root + kRootPush / 4 + r.regionWord, region, std::min<size_t>(8 * 4, 4 * (32 - r.regionWord)));
+}
+
+bool ComputeEncoder::icbBinds(const ComputeState &k, uint64_t va, std::vector<icb::ComputeBind> &out, const char **why)
+{
+    const PackKernel &r = *k.rec;
+    const uint64_t rootVa = va + icb::kComputeQmdBytes, setVa = rootVa + icb::kComputeRootBytes;
+    for (uint32_t i = 0; i < r.entries; i++) {
+        const PackKernelEntry &e = r.entry[i];
+        if (e.kind != KernelBuffer || e.slot >= 31)
+            continue;
+        const int word = kernelResidualWord(e);
+        // the macro writes the residual itself, 0 for a base on 16 bytes: the word the record leaves for it must be 0
+        if (word >= 0 && (r.pushMask >> word & 1) && r.pushWords[word]) {
+            *why = "a kernel whose residual push word the record fills";
+            return false;
+        }
+        out.push_back(
+            {setVa + e.offset, word >= 0 ? rootVa + kRootPush + 4 * uint32_t(word) : 0, e.slot, kernelBufferWindow(e)});
+    }
+    return true;
 }
 
 bool ComputeEncoder::qmdWords(const ComputeState &k, const uint32_t groups[3], uint64_t rootVa, uint64_t setVa,
