@@ -320,6 +320,56 @@ bool ComputeEncoder::dispatch(const uint32_t groups[3], const uint32_t threads[3
     return !plan.count || dispatchRegion(plan.regions[0], plan.grid, plan.nominal, true, true, why);
 }
 
+// NVK's root table of a dispatch (nvk_cmd_upload_qmd): the cs group count, set 0's address and size, the push words with the
+// SlotBindOffset residuals and m2v's DispatchRegion field
+void ComputeEncoder::rootWords(const PackKernel &r, const uint32_t groups[3], uint64_t setVa, uint32_t residualMask,
+                               const std::array<uint32_t, 32> &residuals, const uint32_t region[8], uint32_t *root)
+{
+    root[3] = groups[0];
+    root[4] = groups[1];
+    root[5] = groups[2];
+    root[kRootSets / 4 + 0] = uint32_t(setVa);
+    root[kRootSets / 4 + 1] = uint32_t(setVa >> 32);
+    root[kRootSets / 4 + 2] = r.setBytes;
+    for (uint32_t m = r.pushMask; m; m &= m - 1)
+        root[kRootPush / 4 + __builtin_ctz(m)] = r.pushWords[__builtin_ctz(m)];
+    for (uint32_t m = residualMask; m; m &= m - 1)
+        root[kRootPush / 4 + __builtin_ctz(m)] = residuals[__builtin_ctz(m)];
+    if (r.regionWord >= 0)
+        memcpy(root + kRootPush / 4 + r.regionWord, region, std::min<size_t>(8 * 4, 4 * (32 - r.regionWord)));
+}
+
+bool ComputeEncoder::qmdWords(const ComputeState &k, const uint32_t groups[3], uint64_t rootVa, uint64_t setVa,
+                              uint32_t *qmd, const char **why)
+{
+    memcpy(qmd, k.rec->qmd, sizeof k.rec->qmd);
+    qmd[kQmdProgramOffset] = k.program;
+    qmd[kQmdRasterWidth] = groups[0];
+    qmd[kQmdRasterHeightDepth] = groups[1] | groups[2] << 16;
+    for (uint32_t i = 0; i < 8; i++) {
+        if (!(qmd[kQmdCbufValid] >> i & 1))
+            continue;
+        uint64_t va = 0;
+        switch (cbufKind(k.cbufType[i])) {
+        case CbufRoot:
+            va = rootVa;
+            break;
+        case CbufSet:
+            va = setVa;
+            break;
+        case CbufShaderData:
+            va = k.data;
+            break;
+        default:
+            *why = "a kernel reading a constant buffer the raw path does not bind";
+            return false;
+        }
+        qmd[qmdCbufLo(i)] = uint32_t(va);
+        qmd[qmdCbufLo(i) + 1] = (qmd[qmdCbufLo(i) + 1] & ~0xffu) | uint32_t(va >> 32);
+    }
+    return true;
+}
+
 bool ComputeEncoder::dispatchRegion(const ComputeRegion &part, const std::array<uint32_t, 3> &total,
                                     const std::array<uint32_t, 3> &nominal, bool first, bool last, const char **why)
 {
@@ -347,18 +397,7 @@ bool ComputeEncoder::dispatchRegion(const ComputeRegion &part, const std::array<
     const std::array<uint32_t, 3> grid{groups[0], groups[1], groups[2]};
     if (!rootVa_ || grid_ != grid || !std::equal(std::begin(region), std::end(region), region_.begin())) {
         uint32_t root[kRootBytes / 4] = {};
-        root[3] = groups[0];
-        root[4] = groups[1];
-        root[5] = groups[2];
-        root[kRootSets / 4 + 0] = uint32_t(setVa_);
-        root[kRootSets / 4 + 1] = uint32_t(setVa_ >> 32);
-        root[kRootSets / 4 + 2] = r.setBytes;
-        for (uint32_t m = r.pushMask; m; m &= m - 1)
-            root[kRootPush / 4 + __builtin_ctz(m)] = r.pushWords[__builtin_ctz(m)];
-        for (uint32_t m = residualMask_; m; m &= m - 1)
-            root[kRootPush / 4 + __builtin_ctz(m)] = residuals_[__builtin_ctz(m)];
-        if (r.regionWord >= 0)
-            memcpy(root + kRootPush / 4 + r.regionWord, region, std::min<size_t>(sizeof region, 4 * (32 - r.regionWord)));
+        rootWords(r, groups, setVa_, residualMask_, residuals_, region, root);
         uint8_t *upload = dev_.alloc(dev_.upload_, kRootBytes, 256, rootVa_);
         memcpy(upload, root, sizeof root);
         grid_ = grid;
@@ -367,31 +406,8 @@ bool ComputeEncoder::dispatchRegion(const ComputeRegion &part, const std::array<
     }
     uint64_t qmdVa = 0;
     uint32_t qmd[kQmdWords];
-    memcpy(qmd, r.qmd, sizeof r.qmd);
-    qmd[kQmdProgramOffset] = state_->program;
-    qmd[kQmdRasterWidth] = groups[0];
-    qmd[kQmdRasterHeightDepth] = groups[1] | groups[2] << 16;
-    for (uint32_t i = 0; i < 8; i++) {
-        if (!(qmd[kQmdCbufValid] >> i & 1))
-            continue;
-        uint64_t va = 0;
-        switch (cbufKind(state_->cbufType[i])) {
-        case CbufRoot:
-            va = rootVa_;
-            break;
-        case CbufSet:
-            va = setVa_;
-            break;
-        case CbufShaderData:
-            va = state_->data;
-            break;
-        default:
-            *why = "a kernel reading a constant buffer the raw path does not bind";
-            return false;
-        }
-        qmd[qmdCbufLo(i)] = uint32_t(va);
-        qmd[qmdCbufLo(i) + 1] = (qmd[qmdCbufLo(i) + 1] & ~0xffu) | uint32_t(va >> 32);
-    }
+    if (!qmdWords(*state_, groups, rootVa_, setVa_, qmd, why))
+        return false;
     uint8_t *qmdUpload = dev_.alloc(dev_.upload_, sizeof qmd, 256, qmdVa);
     memcpy(qmdUpload, qmd, sizeof qmd);
     RAW_DIAGNOSTIC(dev_.stats.uploadBytes += sizeof qmd);

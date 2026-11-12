@@ -133,6 +133,14 @@ struct Objects {
         id<MTLIndirectCommandBuffer> commands = [dev newIndirectCommandBufferWithDescriptor:icb maxCommandCount:1 options:0];
         put("MTLIndirectCommandBuffer", commands);
         put("MTLIndirectRenderCommand", [commands indirectRenderCommandAtIndex:0]);
+        MTLIndirectCommandBufferDescriptor *dispatches = [MTLIndirectCommandBufferDescriptor new];
+        dispatches.commandTypes =
+            MTLIndirectCommandTypeConcurrentDispatch | MTLIndirectCommandTypeConcurrentDispatchThreads;
+        dispatches.inheritPipelineState = NO;
+        dispatches.inheritBuffers = NO;
+        put("MTLIndirectComputeCommand",
+            [[dev newIndirectCommandBufferWithDescriptor:dispatches maxCommandCount:1 options:0]
+                indirectComputeCommandAtIndex:0]);
         // Made only from a pack state or a kernel the host corpus lacks: the facade's classes, with the m2v class each carries
         put("MTLRenderPipelineState", class_createInstance(NSClassFromString(@"RMPipeline"), 0),
             NSClassFromString(@"NBRenderPipeline"));

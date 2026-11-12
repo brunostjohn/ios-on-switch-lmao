@@ -5,6 +5,6 @@ import HWTestCore
 enum NativeCallTests {
     static let all: [any HWTest] = [
         NativeUnsupportedTest(), NativeVertexSamplerTest(), NativeParallelEncoderTest(), NativeIndirectCommandsTest(),
-        NativeCountersTest(),
+        NativeComputeCommandsTest(), NativeCountersTest(),
     ]
 }
