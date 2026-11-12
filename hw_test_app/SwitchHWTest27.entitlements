@@ -24,6 +24,7 @@
 		<string>kern.switch_planes_dropped</string>
 		<string>kern.switch_joycon</string>
 		<string>kern.switch_gpu_paths</string>
+		<string>kern.switch_gpu_promises</string>
 		<string>kern.a64x.images</string>
 		<string>kern.a64x.images_native</string>
 		<string>kern.a64x.images_marked</string>

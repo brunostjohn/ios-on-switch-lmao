@@ -107,6 +107,7 @@ static const char *promise_maker(uint32_t offset)
  * surface is dropped). */
 void tgm_promise_abandoned_report(uint32_t offset, uint32_t value, const char *who, u64 waited_ns)
 {
+	switch_gpu_path_promise_abandoned(waited_ns);
 	nvxnu_log("tegra-gm20b: %s's writer promise at fence offset %u (value %u) was not kept: %s waited %llu ms "
 		  "for it; it goes on without the promised writes, and a present of the surface is dropped\n",
 		  promise_maker(offset), offset, value, who, waited_ns / 1000000);

@@ -92,7 +92,31 @@ int pathsSysctl SYSCTL_HANDLER_ARGS
 }
 
 struct sysctl_oid gPathsOid;
+
+// Writer promises given up on since boot (each reported in one "was not kept" line, gpu_promise.c), and how long the
+// reader of the last one had waited: counted for every process, as a present's deadline gives one up in the kernel's.
+uint64_t promisesAbandoned, promiseWaitedNs;
+
+int promisesSysctl SYSCTL_HANDLER_ARGS
+{
+	(void)oidp;
+	(void)arg1;
+	(void)arg2;
+	char line[96];
+	snprintf(line, sizeof(line), "abandoned=%llu last_waited_ms=%llu",
+		 static_cast<unsigned long long>(__atomic_load_n(&promisesAbandoned, __ATOMIC_ACQUIRE)),
+		 static_cast<unsigned long long>(__atomic_load_n(&promiseWaitedNs, __ATOMIC_RELAXED) / 1000000));
+	return SYSCTL_OUT(req, line, strlen(line) + 1);
+}
+
+struct sysctl_oid gPromisesOid;
 }  // namespace
+
+extern "C" void switch_gpu_path_promise_abandoned(uint64_t waited_ns)
+{
+	__atomic_store_n(&promiseWaitedNs, waited_ns, __ATOMIC_RELAXED);
+	__atomic_fetch_add(&promisesAbandoned, 1, __ATOMIC_RELEASE);
+}
 
 extern "C" void switch_gpu_path_taken(enum switch_gpu_path path, uint32_t count)
 {
@@ -164,5 +188,10 @@ extern "C" void switch_gpu_path_register(void)
 			  pathsSysctl, "A",
 			  "GM20B capability flags, and the paths behind them the reading process took");
 	sysctl_register_oid(&gPathsOid);
+	switch_sysctl_oid(&gPromisesOid, &sysctl__kern_children, "switch_gpu_promises",
+			  static_cast<int>(CTLTYPE_STRING | CTLFLAG_RD | CTLFLAG_KERN | CTLFLAG_LOCKED),
+			  promisesSysctl, "A",
+			  "writer promises given up on since boot, and how long the last one's reader had waited");
+	sysctl_register_oid(&gPromisesOid);
 }
 #endif

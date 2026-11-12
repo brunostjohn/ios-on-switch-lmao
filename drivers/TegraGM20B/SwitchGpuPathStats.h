@@ -53,8 +53,15 @@ void switch_gpu_path_window(char *line, size_t size);
 void switch_gpu_path_register(void);
 /* The same line for the calling process, as kern.switch_gpu_paths and TegraGM20BMethodPaths answer it */
 void switch_gpu_path_line(char *line, size_t size);
+/* A writer promise given up on, whose reader had waited waited_ns: kern.switch_gpu_promises */
+void switch_gpu_path_promise_abandoned(uint64_t waited_ns);
 #else
 #define SWITCH_GPU_PATH_STATS 0
+static inline void switch_gpu_path_promise_abandoned(uint64_t waited_ns)
+{
+	(void)waited_ns;
+}
+
 static inline void switch_gpu_path_taken(enum switch_gpu_path path, uint32_t count)
 {
 	(void)path;
