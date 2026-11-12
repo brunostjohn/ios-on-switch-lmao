@@ -112,12 +112,31 @@ static void giveup_report(uint32_t offset, uint32_t value, const struct switch_g
 		tgm_promise_maker(offset), offset, value, e->waiter, waited_ns / 1000000, e->who);
 }
 
+#if TGM_STATS
+/* tgm_live_lock held: the ACQUIRE probe's look at the GPU readers still parked at a give-up */
+static void giveup_probe(const struct switch_gpu_giveup *e)
+{
+	const u64 now = nvxnu_nanotime();
+	u32 i;
+
+	for (i = 0; i < e->readers; i++) {
+		struct tgm_chan *chan = live_by_uid(e->reader[i].uid);
+
+		if (chan)
+			tgm_acquire_probe_giveup(chan, e->parked_ns, now);
+	}
+}
+
+#endif
 /* tgm_live_lock held: the mark before the word moves, taken back when the maker's own release came first */
 static void giveup_stepped(uint32_t offset, uint32_t value, int step, void *entry)
 {
 	const struct switch_gpu_giveup *e = (const struct switch_gpu_giveup *)entry;
 
 	if (step == SWITCH_GPU_PROMISE_RAISING) {
+#if TGM_STATS
+		giveup_probe(e);
+#endif
 		tgm_promise_abandon(offset, value);
 		return;
 	}

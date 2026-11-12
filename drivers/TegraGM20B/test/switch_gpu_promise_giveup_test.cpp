@@ -55,6 +55,7 @@ protected:
 		fake::owner = 1;
 		fake::hangLooks = fake::pathAbandoned = fake::directGivenUp = fake::cpuRaised = 0;
 		presentReleased = 0;
+		probedReaders = 0;
 		std::memset(&giveups, 0, sizeof(giveups));
 		giveup_call = nullptr;
 		for (auto &word : fake::pool)
@@ -206,6 +207,8 @@ TEST_P(GiveUp, IsGivenUpOnceAboutOneSecondAfterThePark)
 	EXPECT_EQ(shown(), kPrevious);
 	EXPECT_EQ(fake::pathAbandoned, 1u);
 	EXPECT_EQ(fake::cpuRaised, 1u);
+	EXPECT_EQ(probedReaders, 1u)
+		<< "the ACQUIRE probe looks at the reader still parked at the give-up";
 	EXPECT_FALSE(fake::call.pending) << "nothing left to wait on";
 	until(second + 20000 * kMs);
 	EXPECT_EQ(lines.size(), 1u);

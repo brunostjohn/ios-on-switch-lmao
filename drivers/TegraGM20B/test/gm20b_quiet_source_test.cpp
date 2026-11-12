@@ -261,6 +261,10 @@ TEST(GM20BPromiseSource, PresentsAndJobsOrderBehindWriterPromises)
 		    HasSubstr("#if TGM_STATS\n\t\ttgm_acquire_probe_look(chans[i], now);\n#endif"));
 	EXPECT_THAT(Body(unit("gpu_stats_tick.c"), "void tgm_stats_tick(void)"),
 		    HasSubstr("tgm_acquire_probe_window(line, sizeof(line), now);"));
+	// and at a give-up, the one look a promise park gets past its first second
+	EXPECT_THAT(Body(acquire_c, "void tgm_acquire_probe_giveup("), Not(HasSubstr("panic")));
+	expectBefore(Body(unit("gpu_promise_giveup.c"), "static void giveup_stepped("), "#if TGM_STATS\n\t\tgiveup_probe(e);",
+		     "tgm_promise_abandon(offset, value);");
 	EXPECT_THAT(unit("SwitchGpuAdmission.cpp"), HasSubstr("switch_gpu_backing_exclusive_readers(backing)"));
 	EXPECT_THAT(unit("SwitchGpuOwnership.cpp"), HasSubstr("switch_gpu_backing_exclusive_readers(backing)"));
 	EXPECT_THAT(unit("SwitchGpuCpuAccess.cpp"), HasSubstr("--backing->promised_readers;"));

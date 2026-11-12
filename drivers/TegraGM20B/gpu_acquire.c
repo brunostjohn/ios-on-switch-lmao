@@ -322,6 +322,44 @@ void tgm_acquire_probe_look(struct tgm_chan *chan, u64 now)
 		  ccsr, pbdma, method0, data0, data0 & (1u << 12) ? "on" : "off", acquire);
 }
 
+static const char *const probe_giveup_names[] = {
+	"switched out", "on PBDMA0 at the acquire with its timeout armed",
+	"on PBDMA0 at the acquire with its timeout off",
+	"neither on PBDMA0 at an acquire nor switched out on one"};
+
+/* A GPU reader still parked on a writer promise at its give-up (SwitchGpuPromiseGiveUp.h), which comes about
+ * TGM_ACQUIRE_NS after the park, too soon for a look above to judge the timeout: where the PBDMA has it, and whether an
+ * ACQUIRE interrupt came since the park, once a boot */
+void tgm_acquire_probe_giveup(struct tgm_chan *chan, u64 parked_ns, u64 now)
+{
+	struct nvkm_device *device = tgm_gpu.device;
+	static int logged;
+	u32 ccsr = 0;
+	u32 method0 = 0;
+	u32 data0 = 0;
+	u32 acquire = 0;
+	u32 pbdma = 0;
+
+	if (logged || READ_ONCE(chan->error))
+		return;
+	logged = 1;
+	ccsr = nvkm_rd32(device, TGM_CCSR_CHANNEL(chan->chid));
+	pbdma = PBDMA_CHID(nvkm_rd32(device, PBDMA_CHANNEL(0)));
+	method0 = nvkm_rd32(device, PBDMA_METHOD0(0));
+	data0 = nvkm_rd32(device, PBDMA_DATA0(0));
+	acquire = nvkm_rd32(device, TGM_PBDMA_ACQUIRE(0));
+	nvxnu_log("tegra-gm20b: acquire probe: %s (channel %u) still parked on a writer promise at "
+		  "its give-up "
+		  "%llu ms after the park, %s ACQUIRE interrupt since: %s (CCSR %08x; PBDMA0 on "
+		  "channel %u at "
+		  "method %08x data %08x, ACQUIRE_SWITCH %s, ACQUIRE %08x)\n",
+		  chan->owner, chan->chid, (now - parked_ns) / NSEC_PER_MSEC,
+		  chan->acquire_fired_ns >= parked_ns ? "an" : "no",
+		  probe_giveup_names[tgm_acquire_probe_where(
+			  chan->chid, ccsr, pbdma, tgm_pbdma_acquiring(method0, data0), acquire)],
+		  ccsr, pbdma, method0, data0, data0 & (1u << 12) ? "on" : "off", acquire);
+}
+
 void tgm_acquire_probe_window(char *line, unsigned int len, u64 now)
 {
 	struct tgm_chan *chan = NULL;

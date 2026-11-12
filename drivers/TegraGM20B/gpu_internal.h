@@ -408,6 +408,7 @@ void tgm_acquire_unfired(struct tgm_chan *chan, u64 now);
  * live channel */
 void tgm_acquire_probe_look(struct tgm_chan *chan, u64 now);
 void tgm_acquire_probe_window(char *line, unsigned int len, u64 now);
+void tgm_acquire_probe_giveup(struct tgm_chan *chan, u64 parked_ns, u64 now);
 #endif
 
 /* client fault isolation:

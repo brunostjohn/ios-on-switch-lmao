@@ -224,6 +224,14 @@ inline const char *tgm_promise_maker(uint32_t)
 	return "maker-app";
 }
 
+inline unsigned probedReaders = 0;
+
+inline void tgm_acquire_probe_giveup(fake_tgm_chan *, uint64_t, uint64_t)
+{
+	interrupts_off::mayBlock("the ACQUIRE probe's look (tgm_live_lock's caller)");
+	++probedReaders;
+}
+
 inline void tgm_promise_cpu_raised(uint32_t, uint32_t)
 {
 	++fake::cpuRaised;
