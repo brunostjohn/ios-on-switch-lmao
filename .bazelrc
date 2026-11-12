@@ -137,6 +137,8 @@ build:rbe --spawn_strategy=remote,sandboxed
 build:rbe --strategy=Rustc=remote,sandboxed,local
 build:rbe --strategy=RustcMetadata=remote,sandboxed,local
 # A worker that is gone, or a scheduler with none left, costs one failed request per action, then it builds here.
+# Bazel runs that fallback unsandboxed and has no flag to sandbox it; tools/remote/README.md keeps its results out of
+# the shared cache on the Macs that name an executor (every cache user expands rbe through remote, executor or not).
 build:rbe --remote_local_fallback
 build:rbe --remote_download_outputs=toplevel
 # rules_rust's process_wrapper is stripped (-Cstrip=symbols) with rust-objcopy from the toolchain's sysroot, and NVK's

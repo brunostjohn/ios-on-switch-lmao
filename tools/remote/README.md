@@ -11,11 +11,13 @@ comes from the Mac's private `remote.bazelrc`:
 
 ```text
 build:rbe --remote_executor=grpc://<frontend host:port>
+build:rbe --noremote_upload_local_results
 ```
 
 Without that line, or off the LAN, actions build here as before. Actions also build here when no worker is left
-(`--remote_local_fallback`, after the scheduler's two-minute wait). To build one command locally, pass
-`--remote_executor=`.
+(`--remote_local_fallback`, after the scheduler's two-minute wait). Bazel runs that fallback unsandboxed, which is
+what the second line keeps out of the shared cache. It lives here and not in `.bazelrc` because every cache user
+expands `rbe`. To build one command locally, pass `--remote_executor=`.
 
 Only top-level targets come back. A script that reads `bazel-bin` has to build what it reads as a top-level target,
 or use `bazel run`.
@@ -37,14 +39,14 @@ path, and the worker advertises that Xcode's build as the `xcode` exec property.
    `~/Library/Application Support/switch-ios/bazel-worker/`: `cache.token` (audience `bazel-cache`) and
    `worker.token` (audience `bazel-worker`).
 3. Run `tools/remote/install.sh <dir with the binaries> <frontend host:port> <scheduler host:port> <cache GiB>
-   <concurrent actions>`. Use a node's own address, not the API VIP: the VIP resets long-lived connections within a
-   minute. The script installs three LaunchAgents (`com.brunostjohn.switch.bazel-runner`, `-worker`, `-floor`) and
-   starts them.
+   <concurrent actions> [floor GiB]`. Use a node's own address, not the API VIP: the VIP resets long-lived connections
+   within a minute. The Studio runs with a 2 GiB cache, 12 actions and a 17 GiB floor. The script installs three
+   LaunchAgents (`com.brunostjohn.switch.bazel-runner`, `-worker`, `-floor`) and starts them.
 
 Inputs are cached in `~/Library/Caches/switch-ios-worker/cache`, up to the given size. Actions run in `build/` next to
-it and are deleted when they finish. Logs go to `runner.log` and `worker.log`. While less than 20 GiB is free
-(`SWITCH_WORKER_FLOOR_GIB`), the floor job takes the runner out of service, and the worker takes no new work until
-there is room again.
+it and are deleted when they finish. Logs go to `runner.log` and `worker.log`. While free disk is under the floor
+(20 GiB by default), the floor job takes the runner out of service, and the worker takes no new work until there is
+room again. Restarting the worker empties its cache.
 
 To stop a worker, boot out its three jobs: `launchctl bootout gui/$(id -u)/com.brunostjohn.switch.bazel-worker`,
 then the same for `-runner` and `-floor`.
