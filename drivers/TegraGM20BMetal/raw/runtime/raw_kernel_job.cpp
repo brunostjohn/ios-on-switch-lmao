@@ -194,4 +194,10 @@ int Kernel::resourceSet(std::vector<TegraGM20BAbiSurfaceUse> &members, uint32_t 
     return KERN_SUCCESS;
 }
 
+int Kernel::releaseSet(uint32_t set)
+{
+    const TegraGM20BAbiResourceSetRelease in = {set, 0};
+    return call(TegraGM20BMethodResourceSetRelease, &in, sizeof in, nullptr, 0);
+}
+
 }  // namespace raw

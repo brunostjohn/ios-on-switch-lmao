@@ -24,6 +24,7 @@ protected:
     void SetUp() override
     {
         model = {};
+        kernel.observeFrees(set);
         std::string err;
         ASSERT_TRUE(kernel.open(err)) << err;
         ASSERT_TRUE(kernel.allocControl(0x1000, root, raw::ControlUse::RootTable));
@@ -133,13 +134,91 @@ TEST_F(ResourceSetTest, AFreedMemberLeavesBeforeItsAddressIsGivenBack)
     set.view(view);
     const uint64_t ringVa = ring.va;
     ASSERT_TRUE(view.holds(ringVa, 0x100));
-    set.free(kernel, ring);
+    kernel.free(ring);
     set.view(view);
     EXPECT_FALSE(view.holds(ringVa, 0x100));
     EXPECT_TRUE(view.holds(root));
     ASSERT_TRUE(job());
     EXPECT_EQ(model.staleSets, 0u) << "a free the device made itself sent a job to the kernel with an ended generation";
     EXPECT_FALSE(used(ringVa, kRead));
+}
+
+// A free the device makes through any path leaves the set: the kernel never sees the handle in a later registration
+TEST_F(ResourceSetTest, AnyFreeOfAMemberLeavesTheSet)
+{
+    raw::Bo spare;
+    ASSERT_TRUE(kernel.alloc(0x10000, true, spare));
+    ASSERT_TRUE(set.add(kernel, {{&root, kWrite}, {&spare, kRead}}));
+    ASSERT_TRUE(kernel.cpuAccess(spare, 0, 0x1000, TegraGM20BCpuWrite, true));
+    const uint64_t handle = spare.handle;
+    kernel.free(spare);
+    ASSERT_TRUE(set.add(kernel, ring, kRead)) << "the kernel refused BO " << model.refusedHandle;
+    EXPECT_EQ(model.setRefusals, 0u);
+    set.view(view);
+    EXPECT_FALSE(view.named(handle));
+    EXPECT_TRUE(job());
+}
+
+// A BO freed where the set does not hear it (another driver's free of the connection's handle): the kernel refuses the
+// registration and names it, and the set is made again once without it
+TEST_F(ResourceSetTest, ARefusedMemberIsLeftOutAndTheSetMadeAgainOnce)
+{
+    raw::Bo gone;
+    ASSERT_TRUE(kernel.alloc(0x10000, true, gone));
+    ASSERT_TRUE(set.add(kernel, {{&root, kWrite}, {&gone, kRead}}));
+    model.freeBo(gone.handle);
+    ASSERT_TRUE(set.add(kernel, ring, kRead));
+    EXPECT_EQ(model.setRefusals, 1u);
+    EXPECT_EQ(set.counts().refusals, 1u);
+    EXPECT_EQ(set.counts().rebuilds, 1u);
+    EXPECT_TRUE(set.refusal().empty());
+    set.view(view);
+    EXPECT_FALSE(view.named(gone.handle));
+    EXPECT_TRUE(view.holds(ring));
+    EXPECT_TRUE(job());
+    EXPECT_EQ(model.setJobs, 1u);
+}
+
+// Two dead members: the second attempt is refused too, naming the other, so the registration fails with the member
+// named and the job of the ended generation is refused with it; neither is sent again, and the next job makes the set
+TEST_F(ResourceSetTest, ASecondRefusalFailsTheJobAndLeavesNoRefusedMember)
+{
+    raw::Bo first, second;
+    ASSERT_TRUE(kernel.alloc(0x10000, true, first));
+    ASSERT_TRUE(kernel.alloc(0x10000, true, second));
+    ASSERT_TRUE(set.add(kernel, {{&root, kWrite}, {&first, kRead}, {&second, kRead}}));
+    set.view(view);
+    model.freeBo(first.handle);
+    model.freeBo(second.handle);
+    int result = KERN_SUCCESS;
+    EXPECT_FALSE(job({}, &result));
+    EXPECT_EQ(result, kIOReturnBadArgument);
+    EXPECT_NE(view.refused.find("BO " + std::to_string(second.handle)), std::string::npos) << view.refused;
+    EXPECT_NE(view.refused.find("no such BO"), std::string::npos) << view.refused;
+    EXPECT_EQ(set.counts().refusals, 2u);
+    EXPECT_EQ(set.counts().rebuilds, 0u);
+    EXPECT_TRUE(job()) << view.refused;
+    EXPECT_TRUE(view.refused.empty());
+    EXPECT_EQ(model.setRefusals, 2u);
+}
+
+// The set's id refused (no record named): the set is made anew under another id, its members with it
+TEST_F(ResourceSetTest, ASetTheKernelNoLongerHoldsIsMadeAnew)
+{
+    ASSERT_TRUE(set.add(kernel, {{&root, kWrite}, {&ring, kRead}}));
+    ASSERT_TRUE(job());
+    model.sets[0].live = false;
+    model.sets[0].members.clear();
+    model.bos[root.handle].set = model.bos[ring.handle].set = 0;
+    ASSERT_TRUE(set.add(kernel, tickets, kWrite));
+    EXPECT_EQ(set.counts().refusals, 1u);
+    EXPECT_EQ(set.counts().rebuilds, 1u);
+    EXPECT_TRUE(model.sets[0].live);
+    EXPECT_EQ(model.sets[0].members.size(), 3u);
+    set.view(view);
+    EXPECT_TRUE(view.holds(root));
+    EXPECT_TRUE(view.holds(ring));
+    EXPECT_TRUE(job());
 }
 
 // A channel killed after naming the set ends its generation when it is destroyed; the next job, on the channel made

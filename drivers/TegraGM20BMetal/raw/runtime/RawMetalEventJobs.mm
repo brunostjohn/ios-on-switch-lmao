@@ -48,18 +48,19 @@ bool signalOrderedOnGpu(RMCommandBuffer *cb, const RMSegment &range)
     return gRM->gpuOrder;
 }
 
-static void eventJobFailure(RMCommandBuffer *cb, int result)
+// `setRefused`: the job's resource set refusal (raw::Device::setRefused), empty for none
+static void eventJobFailure(RMCommandBuffer *cb, int result, const std::string &setRefused = {})
 {
+    NSString *why =
+        setRefused.empty()
+            ? [NSString
+                  stringWithFormat:@"The kernel refused an event job (0x%x): a producer failed or is lost", result]
+            : [NSString stringWithUTF8String:setRefused.c_str()];
     std::lock_guard<raw::Mutex> lock(cb->_lock);
     if (!cb->_segError)
-        cb->_segError = [NSError
-            errorWithDomain:MTLCommandBufferErrorDomain
-                       code:MTLCommandBufferErrorInternal
-                   userInfo:@{
-                       NSLocalizedDescriptionKey : [NSString
-                           stringWithFormat:@"The kernel refused an event job (0x%x): a producer failed or is lost",
-                                            result]
-                   }];
+        cb->_segError = [NSError errorWithDomain:MTLCommandBufferErrorDomain
+                                            code:MTLCommandBufferErrorInternal
+                                        userInfo:@{NSLocalizedDescriptionKey : why}];
 }
 
 // The leasable signals no job carries from `at` (raw::signalJobRanges), with their events
@@ -112,7 +113,7 @@ static RMEventJob submitJobs(RMCommandBuffer *cb, const std::vector<TegraGM20BAb
                                     slice.signals};
         if (!r.raw->eventJob(events, seqno, &result, generation)) {
             if (raw::eventJobAnswer(result) != raw::EventJobAnswer::reordered)
-                eventJobFailure(cb, result);
+                eventJobFailure(cb, result, r.raw->setRefused());
             return RMEventJob::Retry;
         }
     }

@@ -75,6 +75,20 @@ struct KernelJob {
     uint32_t promiseCount = 0;
 };
 
+class Kernel;
+
+// What names the connection's BOs by handle beyond their owners (the device's resource set, raw_resource_set.h). Every
+// BoFree goes through Kernel::free, which tells it before the handle dies (`leaving`: true when it named it) and after
+// (`left`), so no list it sends the kernel names a BO the kernel no longer holds.
+class FreeObserver {
+public:
+    virtual bool leaving(uint64_t handle) = 0;
+    virtual void left(Kernel &k) = 0;
+
+protected:
+    ~FreeObserver() = default;
+};
+
 class Kernel {
 public:
     ~Kernel();
@@ -162,7 +176,15 @@ public:
     bool bindAlias(const Bo &bo, uint64_t va, uint32_t kind);
     // BoFree (the kernel unbinds it at once and releases the pages after the channels complete what they had); the VA goes
     // back to the free list at once: call it only once no submission that uses the BO is still running (raw::Device does).
+    // The observer's list loses the handle first.
     void free(Bo &bo);
+
+    // Set once, before the first free
+    void observeFrees(FreeObserver &observer)
+    {
+        freeObserver_ = &observer;
+    }
+
     bool channel(uint32_t engines, uint32_t &channel, const volatile uint32_t *&fence);
     void closeChannel(uint32_t channel);
 
@@ -204,9 +226,13 @@ public:
     // Method 33. kIOReturnNotReady (in `result`) is the set's ended generation or a stale native view: no error is kept.
     bool submitJob(const KernelJob &job, uint32_t &seqno, int *result = nullptr);
     // Method 31: `set` (0: a new one) made with `members`, but each the kernel refused, which comes back with access 0; its
-    // id and generation; `mirror`, the generation's word in the fence page. The kern_return_t.
+    // id and generation; `mirror`, the generation's word in the fence page. The kern_return_t; with
+    // kIOReturnBadArgument the member the kernel refused the whole call for has its reason in `reserved`
+    // (TegraGM20BJobABI.h).
     int resourceSet(std::vector<TegraGM20BAbiSurfaceUse> &members, uint32_t &set, uint32_t &generation,
                     const volatile uint32_t *&mirror);
+    // Method 32
+    int releaseSet(uint32_t set);
     // Method 34: a writer promise of `channel`'s job for the IOSurface imports `handles` (Make), or its release (Cancel).
     // The kern_return_t.
     int promise(uint32_t channel, const std::vector<uint64_t> &handles, uint32_t &promise);
@@ -317,6 +343,7 @@ private:
     bool tunnel_ = false;
     bool shared_ = false;
     void (*release_)() = nullptr;  // NVK's switch_nvk_connection_release
+    FreeObserver *freeObserver_ = nullptr;
     // A SurfaceWrites failed: imports stop saying the GPU only samples them.
     std::atomic<bool> importsWritten_{false};
     std::atomic<uint32_t> lostChannel_{0}, lostError_{0}, opened_{0};

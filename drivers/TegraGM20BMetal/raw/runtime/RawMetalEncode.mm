@@ -915,6 +915,11 @@ encodeRawAttempt(RMCommandBuffer *cb, size_t from, size_t to, const char **why, 
             rc->abandon();
             return false;
         }
+        if (!rc->setRefused.empty() && !rc->partial) {
+            failCommandBuffer(cb, [NSString stringWithUTF8String:rc->setRefused.c_str()]);
+            rc->abandon();
+            return false;
+        }
         stale = rc->nativeError == kIOReturnNotReady && !rc->partial;
         if (stale)
             rc->invalidateNativeReads();

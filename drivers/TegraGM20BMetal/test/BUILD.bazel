@@ -671,7 +671,9 @@ host_test(
 
 # raw/runtime/raw_resource_set.h over the same model (methods 31-33): members go with the set and never as uses, what the
 # kernel refuses stays a use, a freed member leaves the view before its VA is reused, a killed channel's set is made again
-# for the next job, and a NotReady the generation's mirror does not explain stays the job's
+# for the next job, a NotReady the generation's mirror does not explain stays the job's, and a registration the kernel
+# refuses is made once more without the member it names (anew where it names none), a second refusal failing the job
+# with that member named and leaving no refused member behind
 host_test(
     name = "raw_resource_set_test",
     srcs = [
@@ -3088,6 +3090,7 @@ host_test(
         "//drivers/TegraGM20BMetal:raw/fx/fx_mip.cpp",
         "//drivers/TegraGM20B:TegraGM20BABI.h",
         "//drivers/TegraGM20B:TegraGM20BClockABI.h",
+        "//drivers/TegraGM20B:TegraGM20BJobABI.h",
         "//drivers/TegraGM20B:TegraGM20BLayout.h",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_control_memory.h",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_kernel.h",

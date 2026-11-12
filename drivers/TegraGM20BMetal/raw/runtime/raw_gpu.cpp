@@ -548,6 +548,7 @@ bool Device::open(const char *packPath, uint64_t stack, std::string &err, Role r
 {
     role_ = role;
     sizes_ = kSizes[role == Role::RenderServer ? 0 : 1];
+    k_.observeFrees(set_);
 #if SWITCH_RAW_DIAGNOSTICS
     if (role == Role::RenderServer)
         glassMem = std::make_unique<GlassMem>();
@@ -726,8 +727,8 @@ bool Device::openChannel(std::string &err)
         err = k_.error();
         if (created)
             k_.closeChannel(channel_);
-        set_.free(k_, push_.bo);
-        set_.free(k_, upload_.bo);
+        k_.free(push_.bo);
+        k_.free(upload_.bo);
         push_ = Ring();
         upload_ = Ring();
         channel_ = 0;
@@ -1650,7 +1651,7 @@ void Device::freeChunk(Chunk &ch)
     RAW_DIAGNOSTIC(stats.poolBytes -= ch.bytes);
     RAW_DIAGNOSTIC(stats.poolChunks--);
     RAW_DIAGNOSTIC(glassMemEvent("chunk freed", ch.bytes));
-    set_.free(k_, ch.bo);
+    k_.free(ch.bo);
     if (ch.pitchVa)
         k_.releaseVa(ch.pitchVa, ch.bytes);
     vm_deallocate(mach_task_self(), vm_address_t(ch.memory), ch.bytes);
@@ -3059,7 +3060,7 @@ void Device::wcFree(Span &s)
     ch.used -= s.bytes;
     RAW_DIAGNOSTIC(stats.wcBytes -= s.bytes);
     if (ch.dedicated) {
-        set_.free(k_, ch.bo);
+        k_.free(ch.bo);
         ch = Chunk();
         s = {};
         return;
@@ -3087,7 +3088,7 @@ void Device::wcFree(Span &s)
     if (!ch.used) {
         for (const Chunk &other : wcChunks_)
             if (&other != &ch && other.bo.handle && !other.dedicated && !other.used) {
-                set_.free(k_, ch.bo);  // (the kernel keeps the pages until the work submitted before has completed)
+                k_.free(ch.bo);  // (the kernel keeps the pages until the work submitted before has completed)
                 ch = Chunk();
                 break;
             }
@@ -4068,7 +4069,7 @@ CommandBuffer *Device::begin()
         if (it->unused(channelGeneration(), [this](uint32_t seqno) {
                 return done(seqno);
             })) {
-            set_.free(k_, it->bo);
+            k_.free(it->bo);
             it = grownOut_.erase(it);
         } else {
             ++it;
@@ -4119,6 +4120,7 @@ CommandBuffer *Device::begin()
     cb.promises.clear();
     cb.promisesKept = false;
     cb.nativeError = 0;
+    cb.setRefused.clear();
     cb.nativeReads_.clear();
     cb.nativeSurfaces_.clear();
     cb.pitchImports_.clear();
@@ -4743,6 +4745,7 @@ bool CommandBuffer::commit(uint32_t &seqno)
         RAW_ENCODE_END(execSpan);
         if (!executed) {
             admissionBlocked = !published && result == kIOReturnCannotLock;
+            setRefused = d.setView_.refused;
             if (admissionHeld) {
                 SurfaceList none;
                 uint32_t cancelled = 0;

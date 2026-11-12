@@ -101,13 +101,13 @@ bool Device::bindArenaPart(Arena &a, uint64_t offset, uint64_t bytes)
 void Device::unbindArena(Arena &a)
 {
     if (a.parts.empty()) {
-        set_.free(k_, a.bo);
+        k_.free(a.bo);
         RAW_DIAGNOSTIC(stats.poolBytes -= a.bytes);
         return;
     }
     for (auto &[offset, part] : a.parts) {
         RAW_DIAGNOSTIC(stats.poolBytes -= part.bytes);
-        set_.free(k_, part);
+        k_.free(part);
     }
     a.parts.clear();
     a.holes.clear();

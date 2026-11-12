@@ -187,6 +187,11 @@ int Kernel::resourceSet(std::vector<TegraGM20BAbiSurfaceUse> &, uint32_t &set, u
     return KERN_SUCCESS;
 }
 
+int Kernel::releaseSet(uint32_t)
+{
+    return KERN_SUCCESS;
+}
+
 bool Kernel::wait(uint32_t, uint32_t sequence, uint64_t, int *result)
 {
     ++fake->waits;

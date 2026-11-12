@@ -260,7 +260,7 @@ void Device::compFree(Backing &b)
     RAW_DIAGNOSTIC(stats.compHeld--);
     RAW_DIAGNOSTIC(stats.compHeldBytes -= mem->bo.bytes);
     RAW_DIAGNOSTIC(glassMemEvent("compressed memory freed", mem->bo.bytes));
-    set_.free(k_, mem->bo);
+    k_.free(mem->bo);
     comp_.mems.erase(std::find_if(comp_.mems.begin(), comp_.mems.end(), [&](const std::unique_ptr<CompMem> &m) {
         return m.get() == mem;
     }));
@@ -290,7 +290,7 @@ void Device::compTrim(uint64_t now)
             RAW_DIAGNOSTIC(stats.compHeld--);
             RAW_DIAGNOSTIC(stats.compHeldBytes -= it->bo.bytes);
             RAW_DIAGNOSTIC(glassMemEvent("compressed memory freed unused", it->bo.bytes));
-            set_.free(k_, it->bo);
+            k_.free(it->bo);
             it = comp_.ready.erase(it);
             comp_.freed(commits());
             continue;

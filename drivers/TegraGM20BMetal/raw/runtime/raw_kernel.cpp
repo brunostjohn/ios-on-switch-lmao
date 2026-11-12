@@ -397,6 +397,7 @@ bool Kernel::bindAlias(const Bo &bo, uint64_t va, uint32_t kind)
 
 void Kernel::free(Bo &bo)
 {
+    const bool listed = bo.handle && freeObserver_ && freeObserver_->leaving(bo.handle);
     if (bo.token && bo.cpu)
         unmap(bo.token, uint64_t(uintptr_t(bo.cpu)));
     if (bo.handle) {
@@ -408,6 +409,8 @@ void Kernel::free(Bo &bo)
     if (bo.vaBase && !bo.vaReserved)
         freeVa(bo.vaBase, bo.bytes);
     bo = {};
+    if (listed)
+        freeObserver_->left(*this);
 }
 
 bool Kernel::channel(uint32_t engines, uint32_t &channel, const volatile uint32_t *&fence)

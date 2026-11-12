@@ -2,11 +2,13 @@
 #include "raw_lock.h"
 #include "raw_resource_set.h"
 #include "raw_encode_profile.h"
+#include "TegraGM20BJobABI.h"
 
 #include <IOKit/IOReturn.h>
 #include <mach/kern_return.h>
 #include <os/log.h>
 #include <algorithm>
+#include <cstdio>
 
 namespace raw {
 namespace {
@@ -14,6 +16,20 @@ os_log_t setLog()
 {
     static os_log_t log = os_log_create("com.brunostjohn.switch.TegraGM20BMetal", "raw");
     return log;
+}
+
+const char *refusedWhy(uint32_t reason)
+{
+    switch (reason) {
+    case TegraGM20BSetRefusedReserved:
+        return "its reserved word is not zero";
+    case TegraGM20BSetRefusedAccess:
+        return "its access is neither read nor write";
+    case TegraGM20BSetRefusedGone:
+        return "the connection holds no such BO";
+    default:
+        return "no reason given";
+    }
 }
 }  // namespace
 
@@ -63,18 +79,17 @@ bool ResourceSet::eraseLocked(uint64_t handle)
     return members_.size() + outside_.size() != before;
 }
 
-// What the kernel refused comes back with access 0 and leaves members_ for good (always ones for outside_).
-bool ResourceSet::registerLocked(Kernel &k)
+// One ResourceSetCreate of every member. What the kernel refused comes back with access 0 and leaves members_ for good
+// (always ones for outside_).
+bool ResourceSet::attempt(Kernel &k, std::vector<TegraGM20BAbiSurfaceUse> &uses, int &kr)
 {
-    if (members_.empty())
-        return true;
-    std::vector<TegraGM20BAbiSurfaceUse> uses;
-    uses.reserve(members_.size());
+    uses.clear();
     for (const SetMember &m : members_)
         uses.push_back({m.handle, m.access, 0});
     uint32_t set = set_, generation = 0;
     const volatile uint32_t *mirror = nullptr;
-    if (k.resourceSet(uses, set, generation, mirror) != KERN_SUCCESS)
+    kr = k.resourceSet(uses, set, generation, mirror);
+    if (kr != KERN_SUCCESS)
         return false;
     size_t kept = 0;
     for (size_t i = 0; i < members_.size(); ++i) {
@@ -92,15 +107,106 @@ bool ResourceSet::registerLocked(Kernel &k)
     return true;
 }
 
+// A refused registration: refusal_ and one error line say which member the kernel named and why, and that member leaves
+// the list with every record of its BO (a use of the jobs that touch it from now on). True: it named one.
+bool ResourceSet::refusedLocked(const std::vector<TegraGM20BAbiSurfaceUse> &uses, const char *when, bool again)
+{
+    refusals_.fetch_add(1, std::memory_order_relaxed);
+    const auto named = std::find_if(uses.begin(), uses.end(), [](const TegraGM20BAbiSurfaceUse &u) {
+        return u.reserved != 0;
+    });
+    char line[256];
+    if (named == uses.end())
+        snprintf(line, sizeof line, "the kernel refused resource set %u (%zu members) %s and named no member", set_,
+                 uses.size(), when);
+    else
+        snprintf(line, sizeof line, "the kernel refused resource set %u's member %zu of %zu %s (BO %llu: %s)", set_,
+                 size_t(named - uses.begin()), uses.size(), when, (unsigned long long)named->handle,
+                 refusedWhy(named->reserved));
+    refusal_ = lastRefusal_ = line;
+    os_log_error(setLog(), "raw: %{public}s; %{public}s", line,
+                 again                 ? "the set was not made"
+                 : named == uses.end() ? "made anew"
+                                       : "made again without it");
+    if (named == uses.end())
+        return false;
+    const uint64_t handle = named->handle;
+    const size_t before = members_.size();
+    members_.erase(std::remove_if(members_.begin(), members_.end(),
+                                  [&](const SetMember &m) {
+                                      return m.handle == handle;
+                                  }),
+                   members_.end());
+    removals_ += uint32_t(before - members_.size());
+    version_.fetch_add(1, std::memory_order_release);
+    return true;
+}
+
+// Every member out, as uses of the jobs that touch them (always ones of every job): a set the kernel holds under no id
+// names nothing.
+void ResourceSet::leaveAllLocked()
+{
+    for (const SetMember &m : members_)
+        if (m.always)
+            outside_.push_back(m);
+    removals_ += uint32_t(members_.size());
+    members_.clear();
+    version_.fetch_add(1, std::memory_order_release);
+}
+
+// lock_ held: the set made again with every member. One the kernel refuses for a member it names is made once more
+// without it; one it refuses naming none (the set's id) is made once more as a new set. A second refusal takes its
+// member out too and gives up, so no list the kernel refused is sent again. `when`: what made it again, for the error
+// line.
+bool ResourceSet::registerLocked(Kernel &k, const char *when)
+{
+    if (members_.empty())
+        return true;
+    std::vector<TegraGM20BAbiSurfaceUse> uses;
+    uses.reserve(members_.size());
+    int kr = KERN_SUCCESS;
+    for (const bool again : {false, true}) {
+        if (attempt(k, uses, kr)) {
+            if (again)
+                rebuilds_.fetch_add(1, std::memory_order_relaxed);
+            refusal_.clear();
+            return true;
+        }
+        if (kr != kIOReturnBadArgument) {
+            refusal_ = "the resource set was not made " + std::string(when) + " (" + k.error() + ")";
+            os_log_error(setLog(), "raw: %{public}s", refusal_.c_str());
+            break;
+        }
+        const bool named = refusedLocked(uses, when, again);
+        if (again || (!named && !set_))
+            break;
+        if (!named) {
+            k.releaseSet(set_);
+            set_ = 0;
+        }
+        if (members_.empty())
+            return true;
+    }
+    if (!set_)
+        leaveAllLocked();
+    return false;
+}
+
 bool ResourceSet::add(Kernel &k, std::initializer_list<Candidate> candidates, bool always)
 {
     std::lock_guard<raw::Mutex> l(lock_);
     for (const Candidate &c : candidates)
         insertLocked(*c.bo, c.access, always);
-    if (!registerLocked(k)) {
+    if (!registerLocked(k, "for a new member")) {
+        const size_t before = members_.size();
         for (const Candidate &c : candidates)
-            eraseLocked(c.bo->handle);
-        os_log_error(setLog(), "raw: the resource set was not made (%{public}s)", k.error().c_str());
+            members_.erase(std::remove_if(members_.begin(), members_.end(),
+                                          [&](const SetMember &m) {
+                                              return m.handle == c.bo->handle;
+                                          }),
+                           members_.end());
+        if (members_.size() != before)
+            version_.fetch_add(1, std::memory_order_release);
         return false;
     }
     for (const Candidate &c : candidates)
@@ -120,37 +226,34 @@ void ResourceSet::promote(Kernel &k, uint64_t handle)
             m.access |= TegraGM20BSurfaceWrite;
             changed = true;
         }
-    if (changed && !registerLocked(k))
-        os_log_error(setLog(), "raw: the resource set was not made again for a written member (%{public}s)",
-                     k.error().c_str());
+    if (changed)
+        registerLocked(k, "for a written member");
 }
 
-void ResourceSet::free(Kernel &k, Bo &bo)
+bool ResourceSet::leaving(uint64_t handle)
 {
     std::lock_guard<raw::Mutex> l(lock_);
-    const bool listed = eraseLocked(bo.handle);
-    if (listed) {
-        ++removals_;
-        version_.fetch_add(1, std::memory_order_release);
-    }
-    k.free(bo);
-    if (listed && !registerLocked(k))
-        os_log_error(setLog(), "raw: the resource set was not made again after a member's free (%{public}s)",
-                     k.error().c_str());
+    if (!eraseLocked(handle))
+        return false;
+    ++removals_;
+    version_.fetch_add(1, std::memory_order_release);
+    return true;
 }
 
-bool ResourceSet::renew(Kernel &k, uint32_t generation)
+void ResourceSet::left(Kernel &k)
+{
+    std::lock_guard<raw::Mutex> l(lock_);
+    registerLocked(k, "after a member's free");
+}
+
+ResourceSet::Renewal ResourceSet::renew(Kernel &k, uint32_t generation)
 {
     std::lock_guard<raw::Mutex> l(lock_);
     if (generation != generation_)
-        return true;
+        return Renewal::renewed;
     if (!mirror_ || *mirror_ == generation_)
-        return false;
-    if (registerLocked(k))
-        return true;
-    os_log_error(setLog(), "raw: the resource set's generation ended and it was not made again (%{public}s)",
-                 k.error().c_str());
-    return false;
+        return Renewal::current;
+    return registerLocked(k, "for an ended generation") ? Renewal::renewed : Renewal::refused;
 }
 
 void ResourceSet::view(SetView &v) const
@@ -166,10 +269,23 @@ void ResourceSet::view(SetView &v) const
     v.version = version_.load(std::memory_order_relaxed);
 }
 
+std::string ResourceSet::refusal() const
+{
+    std::lock_guard<raw::Mutex> l(lock_);
+    return refusal_;
+}
+
+std::string ResourceSet::lastRefusal() const
+{
+    std::lock_guard<raw::Mutex> l(lock_);
+    return lastRefusal_;
+}
+
 bool submitInSet(Kernel &k, ResourceSet &set, SetView &view, bool named, KernelJob job, uint32_t &seqno, int *result,
                  SurfaceList *uses, const std::vector<SetUse> *recorded, uint32_t removals)
 {
     set.view(view);
+    view.refused.clear();
     for (;;) {
         if (uses) {
             for (const SetMember &m : view.outside)
@@ -194,8 +310,19 @@ bool submitInSet(Kernel &k, ResourceSet &set, SetView &view, bool named, KernelJ
             *result = kr;
         if (submitted)
             return true;
-        if (kr != kIOReturnNotReady || !job.set || !set.renew(k, job.generation))
+        if (kr != kIOReturnNotReady || !job.set)
             return false;
+        switch (set.renew(k, job.generation)) {
+        case ResourceSet::Renewal::renewed:
+            break;
+        case ResourceSet::Renewal::current:
+            return false;
+        case ResourceSet::Renewal::refused:
+            view.refused = set.refusal();
+            if (result)
+                *result = kIOReturnBadArgument;
+            return false;
+        }
         set.view(view);
     }
 }

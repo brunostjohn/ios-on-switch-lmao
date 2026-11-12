@@ -1464,6 +1464,9 @@ public:
     std::vector<uint32_t> promises;
     bool promisesKept = false;
     int nativeError = 0;
+    // Why a job was refused when it was the resource set: its generation ended and the kernel refused to make it again
+    // (SetView::refused). The command buffer fails with it.
+    std::string setRefused;
     std::shared_ptr<ResourceReadyCompletion> resourceReadiness(std::function<void()> ready, int &result);
     const Texture *readTexture(const Texture *texture);
     void requirePitch(const Import *source);
@@ -2357,6 +2360,7 @@ public:
     // since has neither, so the job is not submitted: false with kIOReturnNotResponding, and the caller orders again.
     bool eventJob(const JobEvents &events, uint32_t &seqno, int *result = nullptr, uint64_t generation = 0)
     {
+        setView_.refused.clear();
         if (events.empty() || events.waitCount + events.signalCount > TegraGM20BMaxJobEvents || !ensureChannel())
             return false;
         Killed live = {};
@@ -2374,6 +2378,23 @@ public:
         lastSeqno_ = seq;
         seqno = seq;
         return true;
+    }
+
+    // Why the submitting thread's last job was refused when it was the resource set: the kernel refused to make it
+    // again (SetView::refused); empty otherwise
+    const std::string &setRefused() const
+    {
+        return setView_.refused;
+    }
+
+    ResourceSet::Counts setCounts() const
+    {
+        return set_.counts();
+    }
+
+    std::string setLastRefusal() const
+    {
+        return set_.lastRefusal();
     }
 
     struct Stats {
