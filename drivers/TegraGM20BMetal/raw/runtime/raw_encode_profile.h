@@ -15,6 +15,7 @@
 #include <cstdint>
 
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
+#include <TargetConditionals.h>
 #include <mach/mach_time.h>
 #include <atomic>
 #include <mutex>
@@ -79,8 +80,8 @@ enum class EncodeCount : uint8_t {
 constexpr size_t kEncodeParts = size_t(EncodePart::Count), kEncodeCounts = size_t(EncodeCount::Count);
 
 // The generic timer's virtual count without mach_absolute_time's barrier: a span's two reads may drift by a few
-// instructions, which its sum over thousands of spans averages out. Its rate is the timer's (CNTFRQ_EL0), which need
-// not be mach_absolute_time's (an M4's counts 1 GHz under a 24 MHz timebase).
+// instructions, which its sum over thousands of spans averages out. A Mac's need not run at mach_absolute_time's rate
+// (an M4's counts 1 GHz under a 24 MHz timebase).
 inline uint64_t encodeTicks()
 {
 #if defined(__arm64__)
@@ -92,9 +93,10 @@ inline uint64_t encodeTicks()
 #endif
 }
 
+// On a device the count is mach_absolute_time's own (its timebase converts it); a Mac's runs at CNTFRQ_EL0
 inline double encodeTicksPerUs()
 {
-#if defined(__arm64__)
+#if defined(__arm64__) && !TARGET_OS_IPHONE
     uint64_t hz;
     __asm__ volatile("mrs %0, cntfrq_el0" : "=r"(hz));
     return double(hz) / 1e6;

@@ -25,7 +25,7 @@ void CommandBuffer::useAddress(uint64_t va, uint64_t bytes, bool write)
 void CommandBuffer::use(const Buffer &buffer, bool write)
 {
     RAW_ENCODE_COUNT(Uses);
-    if (named_.named(&buffer, buffer.va, write))
+    if (named_.named(&buffer, buffer.va, buffer.length, buffer.import, write))
         return;
     RAW_ENCODE_SPAN(Use);
     buffersWritten_ |= write;
@@ -44,7 +44,7 @@ void CommandBuffer::use(const Buffer &buffer, bool write)
 void CommandBuffer::use(const Texture &texture, bool write)
 {
     RAW_ENCODE_COUNT(Uses);
-    if (named_.named(&texture, texture.va, write))
+    if (named_.named(&texture, texture.va, texture.storageRange().bytes, texture.import, write))
         return;
     RAW_ENCODE_SPAN(Use);
     const Texture *view = write ? &texture : readTexture(&texture);

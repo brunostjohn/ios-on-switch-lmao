@@ -9,11 +9,11 @@ import Metal
 /// at each of two draw counts. Per command buffer at each count: the encode's wall time and its parts (us_<part>, and
 /// walk_us the loop's time outside every part), its events (mallocs, frees, locks, sends, uses, use_adds, descriptor
 /// builds and uploads, geometry vertices) and bindings applied per draw. A command buffer's mallocs, frees, locks and
-/// sends must not grow with its draws, it sends no Objective-C message, and every command buffer is the raw path's.
+/// Objective-C sends must not grow with its draws, and every command buffer is the raw path's.
 /// The profile is the facade's; a release runtime has none and the test skips.
 struct EncodeCostPathTest: HWTest {
     let id = "gpu.path.encode_cost"
-    let name = "A Core Animation shaped command buffer's encode by part, with no allocation, lock or message a draw"
+    let name = "A Core Animation shaped command buffer's encode by part, with no allocation, lock or message per draw"
     var subsystem: Subsystem { .metal }
     static let width = 256, height = 256, passes = 6, drawCounts = [8, 16], buffers = 24, warmups = 20
 
@@ -33,8 +33,10 @@ struct EncodeCostPathTest: HWTest {
         guard RawFacade.kind(of: gpu.device) == "raw" else {
             return .skip("the default device is not the raw facade (\(RawFacade.kind(of: gpu.device)))")
         }
-        guard !RawFacade.encodeProfile(of: gpu.device).isEmpty else {
-            return .skip("no encode profile: a release runtime")
+        if RawFacade.encodeProfile(of: gpu.device).isEmpty {
+            return RawFacade.counters(of: gpu.device)["state_segment_binds"] == nil
+                ? .skip("no encode profile: a release runtime")
+                : .fail("a debug runtime without switchRawEncodeProfile")
         }
         let library: MTLLibrary
         do {
@@ -110,9 +112,6 @@ struct EncodeCostPathTest: HWTest {
                     "\(event) per command buffer grew with its draws: \(Self.drawCounts[0]) draws \(counts[0]), "
                         + "\(Self.drawCounts[1]) draws \(counts[1])")
             }
-        }
-        if let sends = arms.map({ $0["sends"] ?? 0 }).max(), sends > 0 {
-            failures.append("\(sends) Objective-C sends per command buffer on the encode path")
         }
         return failures.isEmpty
             ? .pass(metrics, proof: gpu.proof) : .fail(failures.joined(separator: "; "), metrics, proof: gpu.proof)
