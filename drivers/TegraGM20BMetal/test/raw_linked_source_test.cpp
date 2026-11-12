@@ -89,7 +89,7 @@ TEST(RawLinkedSource, TheRawRecordIsTheLinkedFunctionsToo)
     const std::string twin = Body(states, "MTLRenderPipelineDescriptor *twinDescriptor(");
     EXPECT_THAT(twin, HasSubstr("t.vertexLinkedFunctions = twinLinked(d.vertexLinkedFunctions);"));
     EXPECT_THAT(twin, HasSubstr("t.fragmentLinkedFunctions = twinLinked(d.fragmentLinkedFunctions);"));
-    EXPECT_THAT(Body(states, "RMPipeline *rmPipelineFor("), HasSubstr("raw_metal_linked_packable(d)"));
+    EXPECT_THAT(Body(states, "RMPipeline *rmPipelineShell("), HasSubstr("raw_metal_linked_packable(d)"));
     EXPECT_THAT(Body(SourceText("../raw/runtime/RawMetalLibrary.mm"), "NSString *raw_metal_pipeline_key("),
                 HasSubstr("raw::pipelineKey(d, vf ? &vertex : nullptr, ff ? &fragment : nullptr, linkedKey(d),"));
     EXPECT_THAT(Body(SourceText("../raw/runtime/RawPipelineKey.h"), "inline std::string pipelineKey("),
@@ -120,7 +120,7 @@ TEST(RawLinkedSource, ThePacksKeysAreTheRuntimes)
 }
 
 // A state the pack holds is this device's archive hit: every way the facade asks m2v for its twin (at once, with
-// reflection; a completion handler's creation is the synchronous one, on a worker) drops the creation's archives and
+// reflection; a completion handler's creation finishes as the synchronous one does) drops the creation's archives and
 // FailOnBinaryArchiveMiss, so a command buffer that falls back never meets a twin m2v refused (device boot 10: "foreign
 // render pipeline", 833 failed frames).
 TEST(RawLinkedSource, APackedStatesTwinNeverFailsOnTheArchive)
@@ -132,14 +132,16 @@ TEST(RawLinkedSource, APackedStatesTwinNeverFailsOnTheArchive)
                 HasSubstr("o & ~MTLPipelineOptionFailOnBinaryArchiveMiss"));
     EXPECT_THAT(Body(states, "static id<MTLRenderPipelineState> pipelineTwin("),
                 HasSubstr("packedTwinOptions(o, true)"));
-    const std::string made = Body(states, "static id<MTLRenderPipelineState> makeState(");
-    EXPECT_THAT(made, HasSubstr("packedTwinOptions(o, packed)"));
-    EXPECT_THAT(made, HasSubstr("pipelineTwin(d, o, packed, error)"));
+    const std::string finish = Body(states, "id<MTLRenderPipelineState> rmFinishState(");
+    EXPECT_THAT(finish, HasSubstr("packedTwinOptions(o, packed)"));
+    EXPECT_THAT(finish, HasSubstr("pipelineTwin(d, o, packed, error)"));
+    EXPECT_THAT(Body(states, "static id<MTLRenderPipelineState> makeState("), HasSubstr("rmFinishState(p, d, o"));
+    const std::string later = SourceText("../raw/runtime/RawMetalStatesLater.mm");
+    EXPECT_THAT(Body(later, "static void finishState("), HasSubstr("rmFinishState(p, d, o"));
     for (const char *handlerType : {"(MTLNewRenderPipelineStateCompletionHandler)handler",
                                     "(MTLNewRenderPipelineStateWithReflectionCompletionHandler)handler"}) {
-        const std::string handler = Between(states, std::string("completionHandler:") + handlerType, "\n}\n");
-        EXPECT_THAT(handler, HasSubstr("dispatch_async(creationQueue(), ^{"));
-        EXPECT_THAT(handler, HasSubstr("newRenderPipelineStateWithDescriptor:copy"));
+        const std::string handler = Between(later, std::string("completionHandler:") + handlerType, "\n}\n");
+        EXPECT_THAT(handler, HasSubstr("createLater(self, [d copy]"));
     }
 }
 
