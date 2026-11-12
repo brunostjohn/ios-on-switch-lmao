@@ -39,6 +39,7 @@ struct Job {
     uint32_t channel = 0, seqno = 0;
     uint64_t uid = 0;
     std::vector<TegraGM20BAbiSurfaceUse> uses;
+    std::vector<TegraGM20BAbiPush> pushes;  // a SubmitJob's GP entries
 };
 
 struct Slot {
@@ -55,6 +56,23 @@ struct Model {
     std::map<uint64_t, BoState> bos;
     std::map<uint64_t, std::pair<uint64_t, uint64_t>> imports;  // handle: the host pages imported and their bytes
     std::map<uint64_t, std::pair<uint64_t, uint64_t>> binds;  // va: the BO bound there and its bytes
+
+    // Where the host holds the BO bound at `va` (its allocation, or the pages an import named), null: none bound there
+    uint8_t *host(uint64_t va)
+    {
+        auto bound = binds.upper_bound(va);
+        if (bound == binds.begin())
+            return nullptr;
+        --bound;
+        const uint64_t offset = va - bound->first, handle = bound->second.first;
+        if (offset >= bound->second.second)
+            return nullptr;
+        if (const auto held = memory.find(uint32_t(handle)); held != memory.end() && offset < held->second.size())
+            return held->second.data() + offset;
+        if (const auto pages = imports.find(handle); pages != imports.end() && offset < pages->second.second)
+            return reinterpret_cast<uint8_t *>(uintptr_t(pages->second.first)) + offset;
+        return nullptr;
+    }
     SetState sets[TegraGM20BMaxResourceSets];
     unsigned submitJobs = 0, setJobs = 0, staleSets = 0, addressJobs = 0, staleViews = 0;
     std::map<uint32_t, std::pair<uint64_t, std::vector<uint64_t>>> admitted;  // channel: cookie, its uses' BOs
@@ -152,7 +170,7 @@ struct Model {
     {
         for (auto &use : uses)
             use.handle = resolve(use) ? resolve(use) : use.handle;
-        Job job{channel, ++s.submitted, s.uid, std::move(uses)};
+        Job job{channel, ++s.submitted, s.uid, std::move(uses), {}};
         for (const auto &use : job.uses) {
             if (use.access & TegraGM20BSurfaceWrite)
                 undefined.erase(use.handle);
@@ -247,7 +265,10 @@ struct Model {
             setJobs++;
         }
         submitJobs++;
-        return run(*s, head->channel, std::move(uses), reply);
+        const int kr = run(*s, head->channel, std::move(uses), reply);
+        const auto *pushes = reinterpret_cast<const TegraGM20BAbiPush *>(head + 1);
+        jobs.back().pushes.assign(pushes, pushes + head->push_count);
+        return kr;
     }
 
     void endGeneration(uint32_t index)

@@ -33,6 +33,9 @@ struct Gpu {
     std::vector<uint8_t> memory;
     std::vector<uint32_t> launched;
     std::function<void(uint32_t)> onLaunch;  // what a launch's program does to memory
+    // A device's memory instead of `memory` (a raw::Device over the kernel model), with only the compute class and the
+    // copy engine modelled: other subchannels' methods (3D, 2D, host semaphores the stamps release) do nothing
+    std::function<uint8_t *(uint64_t)> map;
     bool enabled = true;
     // false: the fetcher reads a segment's words as they were when the CPU wrote them (a GPU-written head unseen)
     bool seesHeads = true;
@@ -42,6 +45,11 @@ struct Gpu {
 
     uint8_t *at(uint64_t va)
     {
+        if (map) {
+            uint8_t *mapped = map(va);
+            EXPECT_NE(mapped, nullptr) << std::hex << va;
+            return mapped;
+        }
         EXPECT_GE(va, kBase);
         EXPECT_LT(va - kBase, memory.size());
         return memory.data() + (va - kBase);
@@ -169,7 +177,7 @@ struct Gpu {
             copyEngine(m, v);
         else if (subchannel == kCompute)
             compute(m, v);
-        else
+        else if (!map)
             ADD_FAILURE() << "subchannel " << subchannel;
     }
 
