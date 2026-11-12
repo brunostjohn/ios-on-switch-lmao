@@ -8,8 +8,7 @@ import Metal
 /// 'b3a8' (format 550) surface and the luma boost into it and into BGR10_XR (554), each beside a memoryless 550
 /// colour 1, sampling a BGRA8 picture. The functions' uniforms are zero (as the raw pack's probe binds them), so
 /// what is drawn means nothing; what counts is how long each pass takes on the GPU (t_<state>= in ms, the median of
-/// three), which path took it, and whether it completed. hash_lub_xr= is compared between the raw facade's run and
-/// the m2v device's.
+/// three), which path took it, and whether it completed. The BGR10_XR luma boost's picture (lub_xr) is held to the Mac's.
 struct CABlurChainScene: GPUScene {
     let id = "gpu.ca.blur_chain"
     let name = "CA backdrop blur chain on b3a8 and BGR10_XR: timing and path"
@@ -80,7 +79,7 @@ struct CABlurChainScene: GPUScene {
             result.metrics.set("t_\(short)", Stats.percentile(times, 0.5), digits: 3)
             if target === xr {
                 let bytes = try await gpu.read(xr, bytesPerPixel: 4)
-                result.metrics.set("hash_\(short)", String(FirstTiledSurfaceScene.fnv(bytes), radix: 16))
+                result.picture(short, bytes: bytes, metalFormat: xr.pixelFormat.rawValue, width: size, height: size)
             }
         }
         return result

@@ -1,38 +1,17 @@
 import CoreVideo
 import Foundation
 import HWTestCore
-import HWTestGPU
-import HWTestKit
 import IOSurface
 import Metal
 import simd
-
-struct CAGlassSplitTest: HWTest {
-    let scene = CAGlassSplitScene()
-    let subsystem = Subsystem.metal
-    var id: String { scene.id }
-    var name: String { scene.name }
-    var timeout: TimeInterval { scene.timeout * 2 }
-
-    func run(_ context: TestContext) async throws -> Outcome {
-        let gpu = try GPU.make()
-        guard RawFacade.kind(of: gpu.device) == "raw" else {
-            return .skip("requires the raw facade to exercise native whole and split programs")
-        }
-        guard RawFacade.counters(of: gpu.device)["split_prologues"] != nil else {
-            return .skip("requires development split attribution; route coverage is unverified")
-        }
-        return try await GPUSceneTest(scene: scene).run(context)
-    }
-}
 
 // Scissoring the same quad keeps every vertex output identical; the debug control pins the tiled reference to whole programs.
 // Cumulative launch counts must prove different native programs; image agreement alone cannot establish coverage.
 // The XR variants are the device's glass, glass_background_sdf_minimal over sdf_filter_vert: into 'b3a8' (550) as the
 // corpus has it, and into BGR10_XR (554), which the corpus lacks (the runtime makes its record). They start from a
-// grey clear and bind glass_background_all's material (the sdf state's own inputs are not known here), so raw and m2v
-// judge each other's pixels (hash_b3a8, hash_xr); b3a8 is read back through a compute read of its RGB plane. Each
-// one's route and fetch routes are in its metrics.
+// grey clear and bind glass_background_all's material (the sdf state's own inputs are not known here); each one draw's
+// picture is held to the Mac's (b3a8, xr), b3a8 read back through a compute read of its RGB plane. Each one's route and
+// fetch routes are in its metrics.
 struct CAGlassSplitScene: GPUScene {
     let id = "gpu.ca.glass_split"
     let name = "CA 27 Liquid Glass over content: one draw on its split twin against tiles on its whole program"
@@ -143,7 +122,11 @@ struct CAGlassSplitScene: GPUScene {
         result.metrics.set(name + "_paths", paths.sorted().joined(separator: ","))
         result.metrics.set(name + "_mean_split", Self.mean(split.picture))
         result.metrics.set(name + "_picture_split", Self.coarsePicture(split.picture))
-        result.metrics.set("hash_" + name, Self.coarsePicture(split.picture))
+        let read: (format: TexelFormat, metal: UInt) =
+            frame.target.pixelFormat == .bgr10_xr ? (.bgr10XR, 554) : (.rgba16Float, MTLPixelFormat.rgba16Float.rawValue)
+        result.picture(
+            name, bytes: Patterns.bytes(split.picture, read.format), metalFormat: read.metal, width: Self.size,
+            height: Self.size)
         if let twins = split.twins { result.metrics.set(name + "_twins_split", twins) }
         if let twins = whole.twins { result.metrics.set(name + "_twins_whole", twins) }
         for (drawn, half) in [("one draw", split), ("the tiles", whole)] {

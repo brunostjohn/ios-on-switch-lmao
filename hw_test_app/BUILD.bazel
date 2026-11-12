@@ -45,6 +45,7 @@ swift_library(
     srcs = glob([
         "gpu/*.swift",
         "gpu/scenes/*.swift",
+        "gpu/scenes27/*.swift",
         "gpu/x1/*.swift",
     ]),
     copts = SWIFT_COPTS,
@@ -261,6 +262,45 @@ swift_test(
     ],
 )
 
+# The GPU scenes' pictures with no CPU model (SceneResult.picture) for the build's IPSW, which GPUSceneTest holds the
+# Switch's to: drawn on a Mac's GPU with that IPSW's QuartzCore (scene_goldens/SceneGoldensWriter.swift) and written into
+# goldens/ by `bazel run //hw_test_app:scene_goldens` (and with --config=ios27). Run it after changing a scene's picture.
+# Manual: it needs a Mac GPU.
+swift_test(
+    name = "scene_goldens",
+    size = "medium",
+    srcs = ["scene_goldens/SceneGoldensWriter.swift"],
+    copts = SWIFT_COPTS,
+    data = glob(["shaders/*.metal"]) + ["@ipsw//:crawl_qc"],
+    env = select({
+        "//ipsw:" + kind: {
+            "CA_BUILD": kind,
+            "CA_LIBRARY": "$(rlocationpath @ipsw//:crawl_qc)",
+        }
+        for kind in ("21H461", "24B119")
+    }),
+    tags = ["manual"],
+    deps = [
+        ":core",
+        ":gpu",
+    ],
+)
+
+genrule(
+    name = "scene_goldens_txt",
+    srcs = select({
+        "//ipsw:21H461": ["goldens/scenes_21H461.txt"],
+        "//ipsw:24B119": ["goldens/scenes_24B119.txt"],
+    }),
+    outs = ["scene_goldens.txt"],
+    cmd = "cp $< $@",
+)
+
+apple_resource_group(
+    name = "scene_goldens_resources",
+    resources = [":scene_goldens_txt"],
+)
+
 # An image compiled GPU-compressed (ASTC), which CoreUI hands Core Animation as texture data: the render server makes its
 # texture over memory laid out by the device's texture layout (ui.compressed_image)
 apple_resource_group(
@@ -284,6 +324,7 @@ filegroup(
         "core/*.swift",
         "gpu/*.swift",
         "gpu/scenes/*.swift",
+        "gpu/scenes27/*.swift",
         "gpu/x1/*.swift",
         "kit/*.swift",
         "tests/*.swift",
@@ -547,6 +588,7 @@ swift_library(
     copts = SWIFT_COPTS,
     data = [
         ":ca_states_resources",
+        ":scene_goldens_resources",
         ":compressed_assets",
         ":media_resources",
     ],

@@ -1,3 +1,4 @@
+import HWTestGPU
 import HWTestKit
 
 /// What only iOS 27 has: QuartzCore 27's glass states on the raw path, Metal 4, Liquid Glass through UIKit and the
@@ -7,7 +8,7 @@ import HWTestKit
 enum Tests27 {
     static let all: [any HWTest] =
         [
-            GPUSceneTest(scene: CAGlassScene()), CAGlassSplitTest(), GPUSceneTest(scene: CAFetchRouteScene()),
+            GPUSceneTest(scene: Scenes.glass), CAGlassSplitTest(), GPUSceneTest(scene: CAFetchRouteScene()),
             Metal4Test(), BinaryArchiveTest(), UIGlassABTest(), UIGlassTest(), UIGlassMotionTest(),
             UIGlassFirstFrameTest(), UIGlassLiveTest(), UIGlassSidebarTest(), UIGlassSettingsTest(),
             PocketStripTest(), PocketKeylineTest(),

@@ -10,7 +10,7 @@ from tools.devicerun.rules import FAIL, INFO, NA, NO_DATA, PASS
 
 APP = Path(__file__).resolve().parents[2] / 'hw_test_app'
 SHARED = (APP / 'tests', APP / 'gpu/scenes')
-BY_IOS = {'17': (APP / 'app17',), '27': (APP / 'app27',)}
+BY_IOS = {'17': (APP / 'app17',), '27': (APP / 'app27', APP / 'gpu/scenes27')}
 PARAMETERIZED = re.compile(
     r'^(decode\.|playback\.|encode\.|audio\.playback_|image\.(' + '|'.join(hwtest.STILLS) + r')$)'
 )

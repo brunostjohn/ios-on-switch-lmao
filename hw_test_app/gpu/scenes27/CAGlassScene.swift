@@ -1,6 +1,5 @@
 import Foundation
 import HWTestCore
-import HWTestGPU
 import Metal
 
 /// QuartzCore 27's Liquid Glass background (glass_background_all over the variable blur's vertex function, into BGRA8
@@ -8,8 +7,8 @@ import Metal
 /// QuartzCore's own library exactly as these corpus lines say. They are caspec27_test.py's GLASS and DOWNSAMPLE
 /// (drivers/TegraGM20BMetal/raw/pack/ca), which caspec.state_line makes from qc-24B119.json. 27's raw pack holds every
 /// glass variant, so on the facade each pass must take the raw path: an m2v path fails. Their uniforms are zero, as
-/// the pack's probe binds them, so the pictures have no CPU model: hash_<pass>= is compared between the raw and the
-/// m2v run, t_<pass>= is the GPU time in ms (the median of three).
+/// the pack's probe binds them, so the pictures have no CPU model: each pass's is held to the Mac's (ds4_rgba16f, glass),
+/// t_<pass>= is the GPU time in ms (the median of three). iOS 27's app runs it (Scenes.glass).
 struct CAGlassScene: GPUScene {
     let id = "gpu.ca.glass"
     let name = "CA 27 Liquid Glass background and RGBA16Float downsample: path and pixels"
@@ -92,14 +91,11 @@ struct CAGlassScene: GPUScene {
             result.expect(!paths.contains { $0.hasPrefix("error:") }, "\(short): \(shown)")
             if onFacade { result.expect(paths == ["raw"], "\(short) drew on \(shown), not the raw path") }
             result.metrics.set("t_\(short)", Stats.percentile(times, 0.5), digits: 3)
-            let bytesPerPixel = line.colors[0].format == MTLPixelFormat.rgba16Float.rawValue ? 8 : 4
+            let format = line.colors[0].format
+            let bytesPerPixel = format == MTLPixelFormat.rgba16Float.rawValue ? 8 : 4
             let bytes = try await gpu.read(attachments[0], bytesPerPixel: bytesPerPixel)
-            result.metrics.set("hash_\(short)", String(Self.fnv(bytes), radix: 16))
+            result.picture(short, bytes: bytes, metalFormat: format, width: size, height: size)
         }
         return result
-    }
-
-    static func fnv(_ bytes: [UInt8]) -> UInt64 {
-        bytes.reduce(0xcbf2_9ce4_8422_2325) { ($0 ^ UInt64($1)) &* 0x100_0000_01b3 }
     }
 }
