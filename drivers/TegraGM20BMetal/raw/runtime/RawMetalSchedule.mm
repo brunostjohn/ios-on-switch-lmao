@@ -265,19 +265,18 @@ void submitLoop()
             uint32_t dependencies = 0;
             bool blocked = false;
             raw::HeadWait wait = raw::HeadWait::signal;
-            NSError *error;
-            {
+            const auto failed = [cb]() -> NSError * {
+                if (!cb->_segError.set())
+                    return nil;
                 std::lock_guard<std::mutex> l(cb->_lock);
-                error = cb->_segError;
-            }
+                return cb->_segError;
+            };
+            NSError *error = failed();
             if (!error) {
                 blocked = eventReadiness(cb, deadline) == raw::EventReadiness::blocked;
                 if (blocked)
                     wait = eventWait(cb);
-                {
-                    std::lock_guard<std::mutex> lock(cb->_lock);
-                    error = cb->_segError;
-                }
+                error = failed();
             }
             if (!error && !blocked && cb->_segNext < cb->_segs.size()) {
                 RMSegment &range = cb->_segs[cb->_segNext];

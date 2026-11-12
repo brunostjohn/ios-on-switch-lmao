@@ -269,6 +269,31 @@ struct RMBytes {
     uint32_t used = 0;                // its bytes taken
 };
 
+// A command buffer's first error, set under its lock; whether it has one is readable with no lock
+class RMSegError {
+public:
+    RMSegError &operator=(NSError *error)
+    {
+        error_ = error;
+        set_.store(error != nil, std::memory_order_release);
+        return *this;
+    }
+
+    operator NSError *() const
+    {
+        return error_;
+    }
+
+    bool set() const
+    {
+        return set_.load(std::memory_order_acquire);
+    }
+
+private:
+    NSError *error_ = nil;
+    std::atomic<bool> set_{false};
+};
+
 // A command a parallel encoder's sub-encoder recorded, with its extra words (RawMetalParallel.mm)
 struct RMSubCommand {
     Cmd cmd;
@@ -333,7 +358,7 @@ struct RMSharedEventWait {
 #endif
     std::vector<RMSegment> _segs;
     size_t _segNext;
-    NSError *_segError;  // an m2v segment's error, reported at completion
+    RMSegError _segError;                   // an m2v segment's error, reported at completion
     std::atomic<uint32_t> _segmentPending;  // moved by the submit worker with no lock, read and lowered under _lock
     uint64_t _channelGeneration, _rawPrefixGeneration;
     bool _gpuPrefixEligible;
