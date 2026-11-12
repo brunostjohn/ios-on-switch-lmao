@@ -2373,6 +2373,9 @@ RAW_HOST_UNITS = [
         "raw_semantic_setters.cpp",
         "raw_compile_request.cpp",
         "raw_remote.cpp",
+        "raw_job_uses.cpp",
+        "raw_encoder_state.cpp",
+        "raw_state_segment.cpp",
     ]
 ] + [
     "//drivers/TegraGM20BMetal:raw/fx/fx_mip.cpp",

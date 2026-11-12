@@ -730,7 +730,11 @@ host_test(
 
 host_test(
     name = "switch_gpu_program_pages_test",
-    srcs = ["switch_gpu_program_pages_test.cpp"],
+    srcs = [
+        "gm20b_record_model.h",
+        "switch_gpu_program_pages_stubs.cpp",
+        "switch_gpu_program_pages_test.cpp",
+    ],
     deps = [
         ":backing",
         ":coherency",

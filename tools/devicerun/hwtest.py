@@ -107,6 +107,7 @@ TESTS: dict[str, bool] = {
             'gpu.x1.rotated_target',
             'gpu.raw.blend_kill',
             'metal.float32_filtering',
+            'gpu.raw.surface_buffer',
             'gpu.raw.compressed_targets',
             'gpu.raw.zcull',
             'gpu.raw.mip_twod',
