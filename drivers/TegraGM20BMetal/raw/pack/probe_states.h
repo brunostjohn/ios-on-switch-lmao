@@ -111,6 +111,9 @@ struct State {
     MTLRenderPipelineDescriptor *d;
     unsigned vertexBuffer = 99, vertexStride = 0;
     raw::CubicBinds cubic;  // a line naming the state's cubic variant (" | cubic ...", raw_cubic.h): its binds
+    // a line naming the state's sampled two-plane variant (" | xrs=<slots>", raw_xr_pass.h): its slots, which its key
+    // leaves out (the runtime names the variant after the test class and the two-plane pass, RawMetalCubic.mm)
+    uint16_t xrSlots = 0;
 };
 
 // A line's " | cubic s<slot>:<s><t><r><border><n|p>... t<slot>:<MTLPixelFormat>..." segment (raw_cubic.h key) as binds
@@ -210,6 +213,8 @@ inline bool parseState(id<MTLLibrary> qc, const std::string &line, State &s, con
         if (isLinked && !linkedFunction(d, qc, segment, linked))
             return false;
         if (segment.rfind("cubic ", 0) == 0 && !cubicBinds(segment, s.cubic))
+            return false;
+        if (segment.rfind("xrs=", 0) == 0 && !(s.xrSlots = uint16_t(strtoul(segment.c_str() + 4, nullptr, 10))))
             return false;
         at = next;
     }
@@ -339,6 +344,7 @@ inline std::vector<std::string> corpusLines(NSString *text, bool own)
                             "115 | v xr_vert | f xr_bgr10_frag",
                             "115 | v xr_vert | f xr_bgra10_frag",
                             "115 | v xr_vert | f xr_planes_frag",
+                            "115 | v xr_vert | f xr_two_planes_frag",
                             "70 | v resolve_vert | f resolve_rgba8_frag",
                             "70 | v resolve_vert | f resolve_rgba8_srgb_frag",
                             "80 | v resolve_vert | f resolve_bgra8_frag",

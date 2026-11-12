@@ -158,10 +158,10 @@ std::vector<const PackPipeline *> Pack::variantRecords(uint64_t keyHash) const
     return out;
 }
 
-const PackPipeline *Pack::variantRecord(uint64_t keyHash, const std::string &name) const
+const PackPipeline *Pack::variantRecord(uint64_t keyHash, const std::string &name, PackForm form) const
 {
     for (const PackPipeline *rec : variantRecords(keyHash))
-        if (name == string(rec->variantName))
+        if (name == string(rec->variantName) && bool(rec->flags & PipelineBarrierForm) == (form == PackForm::Barrier))
             return rec;
     return nullptr;
 }

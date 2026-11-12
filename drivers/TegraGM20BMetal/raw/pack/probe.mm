@@ -157,6 +157,7 @@ int main(int argc, char **argv)
             {"f xr_bgr10_frag", tagged(MTLPixelFormatR32Uint)},
             {"f xr_bgra10_frag", tagged(MTLPixelFormatRGBA16Uint)},
             {"f xr_planes_frag", tagged(MTLPixelFormatRG32Uint)},
+            {"f xr_two_planes_frag", tagged(MTLPixelFormatR32Uint)},
             {"f two_plane_store", tagged(MTLPixelFormatRGBA16Float)},
             {"f ycbcr_store_", tagged(MTLPixelFormatRGBA32Float)},
             {"f ycbcr_packed_", tagged(MTLPixelFormatR32Uint)},

@@ -102,6 +102,7 @@ pub(crate) mod table;
 #[cfg(test)]
 pub(crate) mod testing;
 pub(crate) mod tile_map;
+pub(crate) mod two_plane;
 pub(crate) mod vertex;
 
 pub use artifact::{

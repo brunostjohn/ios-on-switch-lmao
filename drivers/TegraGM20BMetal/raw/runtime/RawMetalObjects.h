@@ -288,6 +288,9 @@ struct RMSharedEventWait {
     bool
         _sampledShadows;  // it binds a texture sampled through a pool image (raw::Texture::sampled): encodeRaw refreshes them
     bool _standIns;  // it binds an extended-range texture (raw::Texture::standIn): encodeRaw draws its stand-in
+    // the two-plane RGB10A8_2P_XR10 textures a draw samples through the stand-in, its state having no ready " | xrs="
+    // variant for them (raw_xr_pass.h): only these of that format get their stand-in drawn
+    std::set<RMTexture *> _xrStandIns;
     RMCommandPlan _plan;
     std::vector<RMPass> _passes;  // OpRender's (Cmd::x)
     RMBytes _bytes;               // OpBytes': chunk Cmd::c, offset Cmd::a, length Cmd::b
@@ -396,6 +399,7 @@ uint64_t nextTraceId();
     uint32_t _zeta;         // its depth/stencil attachment's format as the raw path holds it (0: none)
     uint32_t _samples;      // its color attachments' samples a pixel
     uint8_t _turn;          // its turned attachments' rotation (raw_rotation.h; 0: none)
+    bool _xrPlanes;         // it draws RGB10A8_2P_XR10 in its two planes (raw_xr_pass.h): its states' " | xr2p" variants
     uint32_t _passAt;       // its pass's RMPass (the command buffer's _passes)
     raw::DepthStencilDesc _ds;
     MTLRenderPassDescriptor *_pass;  // the command buffer's copy, which the raw encode and m2v's replay read

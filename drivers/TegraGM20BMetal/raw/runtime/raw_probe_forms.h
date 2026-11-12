@@ -64,10 +64,13 @@ struct ProbeForms {
     EntryForm entry = EntryForm::Today;
     SwitchForm switchForm = SwitchForm::Today;
     bool resolveTwoD = false;
+    // a storage form's draws take its barrier twin wherever it has one (HW Test gpu.raw.xr_two_plane's barrier cells)
+    bool barrierFetch = false;
 
     bool any() const
     {
-        return pass != PassForm::Today || entry != EntryForm::Today || switchForm != SwitchForm::Today || resolveTwoD;
+        return pass != PassForm::Today || entry != EntryForm::Today || switchForm != SwitchForm::Today || resolveTwoD ||
+               barrierFetch;
     }
 
     bool keepsTiledFlush() const
@@ -96,7 +99,7 @@ struct ProbeTaken {
 };
 
 // "pass=<today|pixel|pixel_nowfi|none> entry=<today|planner|bare> switch=<today|nowfi|nowfi_noflush|none>
-// resolve=<draw|twod>", any subset in any order; false on anything else
+// resolve=<draw|twod> fetch=<today|barrier>", any subset in any order; false on anything else
 inline bool parseProbeForms(const char *text, ProbeForms &out)
 {
     ProbeForms f;
@@ -136,6 +139,8 @@ inline bool parseProbeForms(const char *text, ProbeForms &out)
             f.switchForm = SwitchForm::None;
         else if (key == "resolve" && (value == "draw" || value == "twod"))
             f.resolveTwoD = value == "twod";
+        else if (key == "fetch" && (value == "today" || value == "barrier"))
+            f.barrierFetch = value == "barrier";
         else
             return false;
     }

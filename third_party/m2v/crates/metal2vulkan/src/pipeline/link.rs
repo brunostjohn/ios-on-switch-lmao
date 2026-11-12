@@ -438,6 +438,10 @@ fn render_state(
         (r.alpha_to_coverage, r.texture_write_rounding_mode),
         p,
     )?;
+    crate::pipeline::two_plane::check(fragment, &r.color_attachments, p)?;
+    let alphas = crate::pipeline::two_plane::alphas(&r.color_attachments, p);
+    crate::pipeline::two_plane::split_colors(&mut gs.color_attachments, &alphas);
+    let storage = crate::pipeline::two_plane::split_storage(storage, &alphas);
     gs.fragment_imageblock = ib;
     gs.color_outputs = color_outputs(fs, &storage)?;
     gs.storage_attachments = storage;

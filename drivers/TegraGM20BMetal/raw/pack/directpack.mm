@@ -21,6 +21,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include "../runtime/raw_emit.h"
+#include "../runtime/raw_xr_pass.h"
 #include "NativeBridgeMetalFrontend.h"
 #include "TwoPlaneStandIn.h"
 #include "bridge/NativeMetalObjects.h"
@@ -139,39 +140,65 @@ std::vector<uint8_t> testClasses(const raw::PackPipeline &p, const std::string &
 }
 
 struct Counts {
-    uint32_t made = 0, refused = 0, failed = 0, split = 0, variants = 0;
+    uint32_t made = 0, refused = 0, failed = 0, split = 0, variants = 0, planes = 0, planesRefused = 0, sampled = 0;
 };
+
+// Whether a state's key names an RGB10A8_2P_XR10 colour ("c<j>=550:")
+bool twoPlaneColors(const std::string &key)
+{
+    const std::string head = key.substr(0, key.find(" | "));
+    for (size_t at = head.find(" c"); at != std::string::npos; at = head.find(" c", at + 2))
+        if (head.compare(at + 4, 4, "550:") == 0)
+            return true;
+    return false;
+}
 
 // A state's records: its own, its barrier form where its own is the storage form and leaves the blend to the ROP (the runtime
 // gives one that computes it none: raw_gpu.cpp Device::pipeline), and one per test class its draws can ask for (named
-// " | tests=<class>" after its key, as the runtime names them)
+// " | tests=<class>" after its key, as the runtime names them); then, for a state of RGB10A8_2P_XR10 colours, the same of its
+// two-plane form (raw_xr_pass.h), each named " | xr2p" after
 void makeState(raw::Direct &direct, Writer &w, const std::string &line, raw::ProbeTextures textures,
                const probe::State &s, Counts &n)
 {
-    const auto make = [&](const std::string &key, raw::PackForm form, raw::RuntimeRecord &rec) {
+    const auto make = [&](const std::string &key, raw::PackForm form, const raw::ProbeTextures &t,
+                          raw::RuntimeRecord &rec) {
         std::map<uint32_t, uint32_t> registers;
         std::string why;
-        const raw::CompileOutcome outcome = direct.make(s.d, key, rec, why, textures, &registers, true, form);
+        const raw::CompileOutcome outcome = direct.make(s.d, key, rec, why, t, &registers, true, form);
         markCandidates(line, rec.pipeline);
         record(w, key, outcome, why, rec, registers);
         return outcome;
     };
-    raw::RuntimeRecord rec;
-    const raw::CompileOutcome outcome = make(s.key, raw::PackForm::Default, rec);
+    const auto forms = [&](raw::ProbeTextures t, const char *suffix) {
+        raw::RuntimeRecord rec;
+        const raw::CompileOutcome outcome = make(s.key + suffix, raw::PackForm::Default, t, rec);
+        if (outcome != raw::CompileOutcome::Made)
+            return outcome;
+        n.split += rec.split;
+        if ((rec.pipeline.flags & raw::PipelineStorageMetadata) && !rec.pipeline.storageBlendMask) {
+            raw::RuntimeRecord barrier;
+            make(s.key + suffix, raw::PackForm::Barrier, t, barrier);
+        }
+        for (const uint8_t tests : testClasses(rec.pipeline, s.key)) {
+            raw::RuntimeRecord variant;
+            t.fragmentTests = tests;
+            n.variants += make(s.key + " | tests=" + std::to_string(tests) + suffix, raw::PackForm::Default, t,
+                               variant) == raw::CompileOutcome::Made;
+        }
+        return outcome;
+    };
+    // a line of a sampled two-plane variant (" | xrs=<slots>") names that variant's records alone
+    const std::string sampled = s.xrSlots ? raw::xrSampledVariant(s.xrSlots) : std::string();
+    textures.xrSlots = s.xrSlots;
+    const raw::CompileOutcome outcome = forms(textures, sampled.c_str());
     (outcome == raw::CompileOutcome::Made ? n.made : outcome == raw::CompileOutcome::Refused ? n.refused : n.failed)++;
-    if (outcome != raw::CompileOutcome::Made)
+    n.sampled += s.xrSlots && outcome == raw::CompileOutcome::Made;
+    if (outcome != raw::CompileOutcome::Made || !twoPlaneColors(s.key))
         return;
-    n.split += rec.split;
-    if ((rec.pipeline.flags & raw::PipelineStorageMetadata) && !rec.pipeline.storageBlendMask) {
-        raw::RuntimeRecord barrier;
-        make(s.key, raw::PackForm::Barrier, barrier);
-    }
-    for (const uint8_t tests : testClasses(rec.pipeline, s.key)) {
-        raw::RuntimeRecord variant;
-        textures.fragmentTests = tests;
-        n.variants += make(s.key + " | tests=" + std::to_string(tests), raw::PackForm::Default, variant) ==
-                      raw::CompileOutcome::Made;
-    }
+    raw::ProbeTextures planes = textures;
+    planes.twoPlane = true;
+    const std::string planesName = raw::kXrPlanesVariant + sampled;
+    (forms(planes, planesName.c_str()) == raw::CompileOutcome::Made ? n.planes : n.planesRefused)++;
 }
 
 void kernel(Writer &w, const std::string &key, raw::CompileOutcome outcome, const std::string &why,
@@ -244,11 +271,10 @@ int main(int argc, char **argv)
             [](const std::string &, const std::string &) {});
         fclose(w.f);
         fprintf(stderr,
-                "directpack: %u states made (%u split, %u test variants), %u refused, %u failed; %u kernels made, %u "
-                "refused, "
-                "%u failed\n",
-                counts.made, counts.split, counts.variants, counts.refused, counts.failed, kernels[0], kernels[1],
-                kernels[2]);
+                "directpack: %u states made (%u split, %u test variants, %u two-plane forms, %u refused, %u sampled two-plane "
+                "variants), %u refused, %u failed; %u kernels made, %u refused, %u failed\n",
+                counts.made, counts.split, counts.variants, counts.planes, counts.planesRefused, counts.sampled,
+                counts.refused, counts.failed, kernels[0], kernels[1], kernels[2]);
         return 0;
     }
 }

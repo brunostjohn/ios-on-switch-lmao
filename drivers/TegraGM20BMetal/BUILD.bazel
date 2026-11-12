@@ -106,6 +106,8 @@ filegroup(
         "raw/runtime/raw_record_parts.h",
         "raw/runtime/raw_residual.h",
         "raw/runtime/raw_rotation.h",
+        "raw/runtime/raw_xr.h",
+        "raw/runtime/raw_xr_pass.h",
     ],
 )
 

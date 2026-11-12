@@ -75,6 +75,9 @@ static const char *zetaMemoryRefusal(int asked)
     d[@"mip_twod_levels"] = @(gRM->raw->stats.mipTwodLevels.load());
     d[@"mip_twod_unproven_levels"] = @(gRM->raw->stats.mipTwodUnproven.load());
     d[@"mip_3d_levels"] = @(gRM->raw->stats.mip3dLevels.load());
+    d[@"xr_plane_passes"] = @(gRM->raw->stats.xrPlanePasses.load());
+    d[@"xr_plane_shadows"] = @(gRM->raw->stats.xrPlaneShadows.load());
+    d[@"xr_pair_binds"] = @(gRM->raw->stats.xrPairBinds.load());
     const raw::FetchCounts &fetch = gRM->raw->stats.fetch;
     d[@"fetch_whole"] = @(fetch.provenWhole.load());
     d[@"fetch_proof_vertices"] = @(fetch.proofVertices.load());
@@ -385,6 +388,8 @@ static void reportNonFiniteStart(RMTexture *t, MTLTextureDescriptor *d)
         t->_kind = RMTextureMemoryless;
         t->_rawOk = gRM->raw->createMemoryless(uint32_t(d.width), uint32_t(d.height), uint32_t(d.pixelFormat), t->_raw,
                                                std::max<uint32_t>(uint32_t(d.sampleCount), 1));
+        if (t->_rawOk && raw::xrForm(uint32_t(d.pixelFormat)) == raw::XrForm::Planes)
+            t->_rawOk = gRM->raw->createXrMemoryless(t->_raw);
     } else {
         t->_kind = RMTexturePool;
         // a shared texture (the CPU writes it: replaceRegion) in write-combined memory: its rows need no clean after

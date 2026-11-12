@@ -58,7 +58,7 @@ bool everyRecordFound(const raw::Pack &pack)
         const raw::PackForm form =
             p[i].flags & raw::PipelineBarrierForm ? raw::PackForm::Barrier : raw::PackForm::Default;
         const raw::PackPipeline *found = p[i].flags & raw::PipelineVariantRecord
-                                             ? pack.variantRecord(p[i].keyHash, pack.string(p[i].variantName))
+                                             ? pack.variantRecord(p[i].keyHash, pack.string(p[i].variantName), form)
                                              : pack.find(p[i].keyHash, form);
         if (!found || found->keyHash != p[i].keyHash)
             return false;

@@ -179,7 +179,7 @@ metal_plugin(
         GM20B_METAL + ":raw/runtime/raw_shared_events.cpp",
         GM20B_METAL + ":raw/runtime/raw_pack.cpp",
         GM20B_METAL + ":raw/runtime/raw_ycbcr.cpp",
-        GM20B_METAL + ":raw/runtime/raw_xr_planes.cpp",
+        GM20B_METAL + ":raw/runtime/raw_xr_texture.cpp",
         GM20B_METAL + ":raw/runtime/raw_zeta.cpp",
         GM20B_METAL + ":raw/runtime/raw_multisample.cpp",
         GM20B_METAL + ":raw/runtime/raw_turn_copy.cpp",

@@ -6,12 +6,12 @@
 #include "raw_view.h"
 
 // A texture a raw kernel samples as it is: no image of its own the raw path would refresh first (a chain's levels, planes
-// converted, an extended-range stand-in, a shadow of rows the texture header cannot take)
+// converted, an extended-range stand-in, a shadow of rows the texture header cannot take), nor one held in two planes
 static bool plainTexture(RMTexture *t)
 {
     const raw::Texture &x = t->_raw;
     return t->_rawOk && x.tic && !x.chain && !x.converted() && !x.standIn && (!x.sampled || x.surfaceView) &&
-           !x.memoryless;
+           !x.memoryless && !x.xrPlanes;
 }
 
 bool admitComputeDispatch(RMCommandBuffer *cb, size_t at, const raw::ComputeKernelSet<raw::ComputeState> *kernels,

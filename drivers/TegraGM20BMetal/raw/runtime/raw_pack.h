@@ -214,14 +214,16 @@ enum PackPipelineFlags : uint32_t {
     PipelineVariantRecord = 16,
     // its fragment program reads a turned plane's axes and no turned variant (AssumeTurned) could be made of it: a turned pass
     // does not draw it
-    PipelineTurnRefused = 32
+    PipelineTurnRefused = 32,
+    // its RGB10A8_2P_XR10 colours drawn in Metal's two planes (raw_xr_pass.h): the record of the state's " | xr2p" variant
+    PipelineTwoPlane = 64
 };
 
-// Where a key's variant name starts (" | cubic ...", then " | tests=<n>": the runtime's names, RawMetalCubic.mm), its size
-// where it names none
+// Where a key's variant name starts (" | cubic ...", then " | tests=<n>", then " | xr2p", then " | xrs=<slots>": the runtime's
+// names, RawMetalCubic.mm), its size where it names none
 inline size_t variantNameAt(const std::string &key)
 {
-    return std::min({key.find(" | cubic "), key.find(" | tests="), key.size()});
+    return std::min({key.find(" | cubic "), key.find(" | tests="), key.find(" | xr2p"), key.find(" | xrs="), key.size()});
 }
 
 // Which of a state's records: its first (the storage form where it has both), or its barrier form
@@ -262,7 +264,9 @@ struct PackPipeline {
         pushMask;  // root-table words [0x700, 0x780) the state's push ranges write (m2v's windows, as NVK wrote them)
     uint32_t pushWords[32];
     uint8_t blendColorWord, halfBlendColorWord;  // push word + 1, zero when absent
-    uint16_t pushReserved;
+    // the fragment texture slots its programs read through a two-plane RGB10A8_2P_XR10 texture's header pair (raw_xr_pass.h):
+    // the record of its " | xrs=<slots>" variant
+    uint16_t xrSlots;
     uint8_t storageMask, storageWriteMask, storageSamples, storageTests;
     uint32_t storageTic[8];
     PackShaderTests shaderTests;
@@ -416,9 +420,11 @@ public:
     }
 
     const PackPipeline *find(uint64_t keyHash, PackForm form = PackForm::Default) const;  // nullptr: not in the pack
-    // the state's PipelineVariantRecords, and the one named `name` (variantNameAt); nullptr: not in the pack
+    // the state's PipelineVariantRecords, and the one named `name` (variantNameAt) of `form` (a two-plane form's storage
+    // form has its barrier twin, raw_xr_pass.h); nullptr: not in the pack
     std::vector<const PackPipeline *> variantRecords(uint64_t keyHash) const;
-    const PackPipeline *variantRecord(uint64_t keyHash, const std::string &name) const;
+    const PackPipeline *variantRecord(uint64_t keyHash, const std::string &name,
+                                      PackForm form = PackForm::Default) const;
     const PackKernel *findKernel(uint64_t keyHash) const;  // nullptr: not in the pack
     const PackSplit *split(uint16_t wholeProgram) const;   // nullptr: not split
     // `pp`'s variants of stage `stage` (0 vertex, 1 fragment), `count` of them; nullptr: none

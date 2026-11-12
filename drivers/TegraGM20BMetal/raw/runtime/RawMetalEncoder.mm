@@ -242,6 +242,23 @@ static bool rawResolve(RMCommandBuffer *cb, MTLRenderPassColorAttachmentDescript
            (gRM->raw->resolvePipeline(from->_raw.format) || resolvesByTwoD(cb, from->_raw.format));
 }
 
+// Whether the pass draws RGB10A8_2P_XR10 in its two planes (raw_xr_pass.h); a pass of a 550 beside one it cannot draw so is
+// refused (pass.fmt, b 0x550 << 8 | attachment)
+static void xrPlanesPassOf(RMCommandBuffer *cb, RMRenderEncoder *e, MTLRenderPassDescriptor *pass)
+{
+    const raw::Texture *colors[8] = {};
+    for (unsigned c = 0; c < 8; c++)
+        if (RMTexture *x = (RMTexture *)pass.colorAttachments[c].texture; [(id)x isKindOfClass:[RMTexture class]] && x->_rawOk)
+            colors[c] = &x->_raw;
+    bool planes = false;
+    if (const char *refused = raw::xrPlanesPass(colors, planes)) {
+        [cb takeReason:WhyPass why:@(refused)];
+        SWITCH_REFUSE_DETAIL("raw", "xr.planes_pass", 0, "%s: m2v's", refused);
+        hit(cb, PredPassAttFormat, 550, uint64_t(0x550) << 8);
+    }
+    e->_xrPlanes = planes;
+}
+
 @implementation RMCommandBuffer (Encoders)
 
 - (void)begin:(RMEncoder *)e
@@ -319,6 +336,7 @@ static bool rawResolve(RMCommandBuffer *cb, MTLRenderPassColorAttachmentDescript
             e->_samples = x->_raw.samples;
         }
     }
+    xrPlanesPassOf(self, e, pass);
     e->_turn = passTurn(pass);
     if (const raw::RotatedRefusal turned = rotatedPassRefusal(pass); turned != raw::RotatedRefusal::None) {
         [self takeReason:WhyPass why:@(raw::rotatedRefusalText(turned))];

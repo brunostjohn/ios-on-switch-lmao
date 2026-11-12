@@ -88,8 +88,8 @@ def push_bytes(push: list[tuple[int, int]]) -> bytes:
     return struct.pack('<I32I', mask, *words)
 
 
-# A key's variant name (runtime/raw_pack.h variantNameAt): " | cubic ..." then " | tests=<n>" at its end
-VARIANT_NAME = re.compile(r'( \| cubic [^|]*?)?( \| tests=\d+)?$')
+# A key's variant name (runtime/raw_pack.h variantNameAt): " | cubic ...", " | tests=<n>", " | xr2p", " | xrs=<slots>" at its end
+VARIANT_NAME = re.compile(r'( \| cubic [^|]*?)?( \| tests=\d+)?( \| xr2p)?( \| xrs=\d+)?$')
 
 
 def variant_name(key: str) -> str:
@@ -139,7 +139,7 @@ def key_hash(rec: dict) -> int:
             'stencil_bits_vert',
             ('s8_frag', 'd32fs8_frag', 'ms_s8_frag', 'ms_d32fs8_frag', 'ms_d32fs8_min_frag', 'ms_d32fs8_max_frag'),
         ),
-        ('xr', 'xr_vert', ('bgr10_frag', 'bgra10_frag', 'planes_frag')),
+        ('xr', 'xr_vert', ('bgr10_frag', 'bgra10_frag', 'planes_frag', 'two_planes_frag')),
         ('two_plane', 'two_plane_cover', ('load', 'store')),
         (
             'resolve',
@@ -188,6 +188,7 @@ def pipeline_bytes(rec: dict, key_offset: int, blob_off: int, variants_off: int 
     flags |= 8 if rec.get('storage_mask') else 0
     flags |= 16 if variant_name(rec['key']) else 0
     flags |= 32 if rec.get('turn_refused') else 0  # PipelineTurnRefused
+    flags |= 64 if rec.get('two_plane') else 0  # PipelineTwoPlane
     head = struct.pack(
         '<QIHHIIBBBBHHI',
         keyhash,
@@ -204,7 +205,9 @@ def pipeline_bytes(rec: dict, key_offset: int, blob_off: int, variants_off: int 
         rec['set_size'],
         flags,
     )
-    dynamic = struct.pack('<BBH', rec.get('blend_color_word', 0), rec.get('half_blend_color_word', 0), 0)
+    dynamic = struct.pack(
+        '<BBH', rec.get('blend_color_word', 0), rec.get('half_blend_color_word', 0), rec.get('xr_slots', 0)
+    )
     storage = struct.pack('<BBBB8I', rec.get('storage_mask', 0), rec.get('storage_write_mask', 0),
                           rec.get('storage_samples', 0), rec.get('storage_tests', 0), *rec.get('storage_tic', [0] * 8))
     tests = struct.pack('<BBBBIII', rec.get('depth_test_word', 0), rec.get('stencil_test_word', 0),

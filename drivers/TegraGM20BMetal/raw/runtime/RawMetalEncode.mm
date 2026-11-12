@@ -3,7 +3,6 @@
 #import "RawMetalPassFusion.h"
 #import "RawMetalReach.h"
 #import "RawMetalSplitPlan.h"
-#import "RawMetalXrPlanes.h"
 #include <array>
 #include <optional>
 #include "raw_compute.h"
@@ -33,7 +32,7 @@ void useTexture(raw::CommandBuffer *rc, RMTexture *t, bool write)
         rc->use(t->_buffer->_raw, write);
     for (const raw::Texture *plane : {t->_raw.luma, t->_raw.chroma})
         if (plane)
-            rc->use(*plane, false);
+            rc->use(*plane, write && t->_raw.xrPlanes);
 }
 
 void useBuffer(raw::CommandBuffer *rc, RMBuffer *b, bool write)
@@ -148,7 +147,6 @@ static bool encodeRawAttempt(RMCommandBuffer *cb, size_t from, size_t to, const 
     // after one that stores it. 0: drawn; else fail()'s or refused()'s answer.
     std::vector<RMTexture *> standInLoads, planesWritten;
     std::vector<std::pair<RMTexture *, uint32_t>> standInStores;  // and their attachment slots
-    XrPlaneSync xrPlanes(*rc);
     auto standInPass = [&](RMTexture *t, bool store) -> int {
         raw::Texture &x = t->_raw;
         if (!store) {
@@ -444,11 +442,11 @@ static bool encodeRawAttempt(RMCommandBuffer *cb, size_t from, size_t to, const 
             if (!(use.access & raw::ResourceUse::Sample))
                 return;
             RMTexture *texture = (__bridge RMTexture *)use.object;
-            if (texture->_raw.standIn && !standInFresh.count(texture))
+            if (texture->_raw.standIn && !standInFresh.count(texture) &&
+                (!texture->_raw.xrPlanes || cb->_xrStandIns.count(texture)))
                 stale.push_back(texture);
         });
         for (RMTexture *t : stale) {
-            xrPlanes.read(t);
             raw::Texture &x = t->_raw;
             raw::PassDesc p;
             p.color[0].texture = x.standIn;
@@ -461,8 +459,10 @@ static bool encodeRawAttempt(RMCommandBuffer *cb, size_t from, size_t to, const 
             codes.push_back(x);
             codes.back().standIn = nullptr;
             useTexture(rc, t, false);
-            conv->setPipeline(d.xrPipeline(raw::xrForm(x.format)));
-            conv->setTexture(0, &codes.back());
+            conv->setPipeline(d.xrPipeline(raw::xrForm(x.format), x.xrPlanes));
+            conv->setTexture(0, x.xrPlanes ? x.luma : &codes.back());
+            if (x.xrPlanes)
+                conv->setTexture(1, x.chroma);
             conv->setViewport(0, 0, x.width, x.height, 0, 1);
             conv->setScissor(0, 0, x.width, x.height);
             if (!conv->draw(4 /* MTLPrimitiveTypeTriangleStrip */, 0, 4, 1, 0, why))
@@ -567,7 +567,6 @@ static bool encodeRawAttempt(RMCommandBuffer *cb, size_t from, size_t to, const 
                 if (t->_raw.planar && !t->_raw.planarStandIn)
                     return fail(PredEncPlanarRT, "a planar texture as a render target", j);
                 useTexture(rc, t, true);
-                xrPlanes.attach(t, a.load, pass);
                 if (t->_raw.planarStandIn) {
                     // Metal's DontCare load keeps the planes' codes where no draw writes, and the store writes every texel
                     // (raw/test/standinoracle.mm): such a pass loads them too. A YCbCr code target's undrawn texels are
@@ -636,6 +635,8 @@ static bool encodeRawAttempt(RMCommandBuffer *cb, size_t from, size_t to, const 
                     return false;
             standInLoads.clear();
             PlanDraws draws(cb, at, to, *rc);
+            if (const char *refused = raw::expandXrPlanes(p, *gRM->raw))
+                return fail(PredEncPassRender, refused);
             if (!turned.begin(*rc, p, draws, why))
                 return fail(PredPassRotated, *why);
             if (!(re = rc->render(p)))
@@ -721,7 +722,6 @@ static bool encodeRawAttempt(RMCommandBuffer *cb, size_t from, size_t to, const 
         case OpCopyBufferToTexture:
         case OpCopyTextureToBuffer: {
             RAW_ENCODE_SPAN(Blit);
-            xrPlanes.blit(c, be);
             encodeBlit(cb, c, rc, be, fresh, standInFresh);
             break;
         }
@@ -744,7 +744,6 @@ static bool encodeRawAttempt(RMCommandBuffer *cb, size_t from, size_t to, const 
         return fail(PredPassRotated, *why);
     if (!storeStandIns())
         return false;
-    xrPlanes.flush();
     encoder = to;
     uint32_t seq = 0;
     prepareSharedEvents(cb, rc);
@@ -785,7 +784,6 @@ static bool encodeRawAttempt(RMCommandBuffer *cb, size_t from, size_t to, const 
         c.t->_imageCurrent = true;
     }
     noteSurfaceWrites(cb, from, to);
-    xrPlanes.submitted();
     for (RMTexture *t : planesWritten)  // a write the surface's seed does not show: its image is converted again
         t->_imageCurrent = false;
     cb->_seqno = seq;
