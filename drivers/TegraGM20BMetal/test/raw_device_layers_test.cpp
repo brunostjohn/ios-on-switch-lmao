@@ -4,6 +4,7 @@
 #include "raw_device_harness.h"
 #include "../raw/fx/fx_image.h"
 #include "../raw/runtime/raw_attachment_target.h"
+#include "../raw/runtime/raw_layers.h"
 #include "../raw/runtime/raw_mme.h"
 #include "../raw/runtime/raw_record.h"
 #include "../../../kits/SwitchGM20B/SwitchGM20B3D.h"
@@ -335,6 +336,16 @@ TEST_F(DeviceLayers, AOneLayerRecordOfASliceChoosingStateIsRefusedInALayeredPass
     };
     EXPECT_EQ(drawn(1), "");
     EXPECT_NE(drawn(4).find("layered pass"), std::string::npos);
+}
+
+// The m2v guard's rule (RawMetalM2vGuard.mm fails such a command buffer rather than replay it): only a one-layer record of
+// a slice-choosing state, only in a layered pass
+TEST(RawLayers, AOneLayerRecordInALayeredPassHasNoRenderer)
+{
+    EXPECT_NE(raw::layeredDrawMissing(raw::kLayerDropped, 2, raw::kLayerDropped), nullptr);
+    EXPECT_EQ(raw::layeredDrawMissing(raw::kLayerDropped, 1, raw::kLayerDropped), nullptr);
+    EXPECT_EQ(raw::layeredDrawMissing(3, 6, raw::kLayerDropped), nullptr);
+    EXPECT_EQ(raw::layeredDrawMissing(0, 6, raw::kLayerDropped), nullptr);
 }
 
 // A vertex function choosing among the encoder's viewports draws below its count, which its draws write: a record made

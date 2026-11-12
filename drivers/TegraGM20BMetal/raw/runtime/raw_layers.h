@@ -36,4 +36,14 @@ template <class Pass> const char *layeredRefusal(const Pass &pass, uint8_t sampl
     return nullptr;
 }
 
+// What a draw of a state whose record is `arrayLengthWord`'s in a pass of `layers` layers leaves no renderer for (null:
+// none): a state whose vertex function chooses its slice, made for one layer (kLayerDropped), has no layered form in
+// m2v either (its plan refuses the same fragment function in a layered pass)
+inline const char *layeredDrawMissing(uint8_t arrayLengthWord, uint32_t layers, uint8_t layerDropped)
+{
+    if (layers <= 1 || arrayLengthWord != layerDropped)
+        return nullptr;
+    return "a state whose vertex function chooses its layer and which m2v has no layered form of, in a layered pass";
+}
+
 }  // namespace raw

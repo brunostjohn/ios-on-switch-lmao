@@ -3,13 +3,15 @@
 // setVertexAmplificationCount:viewMappings: or attribute stride forms (NativeBridgeMetalFrontend.mm answers each zero,
 // so m2v draws without them) and it makes no indirect command buffer; a state the raw path made of tessellation,
 // amplification, a dynamic attribute stride or stage-in is drawn by raw alone; the replay of indirect draw commands
-// reads no range the GPU wrote (replayCommands). A range of a command buffer the raw path refused that holds any of
-// these never replays there: the command buffer fails as Metal reports an error, naming the refusal.
+// reads no range the GPU wrote (replayCommands); m2v has no layered form of a state the raw path made for one layer only
+// (raw_layers.h layeredDrawMissing). A range of a command buffer the raw path refused that holds any of these never
+// replays there: the command buffer fails as Metal reports an error, naming the refusal.
 #import "RawMetalIndirectCompute.h"
+#include "raw_layers.h"
 
 namespace {
 
-const char *drawMissing(RMCommandBuffer *cb, size_t at, Op op)
+const char *drawMissing(RMCommandBuffer *cb, size_t at, Op op, uint32_t layers)
 {
     if (op == OpDrawPatches || op == OpDrawPatchesIndirect)
         return "a patch draw";
@@ -25,6 +27,10 @@ const char *drawMissing(RMCommandBuffer *cb, size_t at, Op op)
     id pipeline = (__bridge id)raster.pipeline;
     if ([pipeline isKindOfClass:[RMPipeline class]] && ((RMPipeline *)pipeline)->_m2vMissing)
         return ((RMPipeline *)pipeline)->_m2vMissing;
+    if (const raw::Pipeline *made =
+            [pipeline isKindOfClass:[RMPipeline class]] ? ((RMPipeline *)pipeline)->_raw : nullptr)
+        if (const char *missing = raw::layeredDrawMissing(made->rec->arrayLengthWord, layers, raw::kLayerDropped))
+            return missing;
     const auto &vertexBuffers = plan.buffers[0][state.buffers[0]];
     for (uint32_t slot = 0; slot < 31; slot++)
         if (vertexBuffers[slot].stride != raw::kStaticStride)
@@ -62,11 +68,20 @@ const char *executeMissing(RMCommandBuffer *cb, size_t at)
 // What of [from, to) m2v has no form of (null: nothing)
 const char *rangeMissing(RMCommandBuffer *cb, size_t from, size_t to)
 {
+    // the layers of the pass a draw of the range is in: the last OpRender at or before it
+    uint32_t layers = 1;
+    for (size_t at = from; at-- > 0;)
+        if (cb->_plan.operation(at).op == OpRender) {
+            layers = cb->_passes[cb->_plan.legacy(at).x].layers;
+            break;
+        }
     for (size_t at = from; at < to; at++) {
         const Op op = cb->_plan.operation(at).op;
         const char *missing = nullptr;
+        if (op == OpRender)
+            layers = cb->_passes[cb->_plan.legacy(at).x].layers;
         if (isPlanDraw(op))
-            missing = drawMissing(cb, at, op);
+            missing = drawMissing(cb, at, op, layers);
         else if (op == OpDispatch)
             missing = kernelStateMissing(cb, cb->_plan.dispatch(at).state);
         else if (op == OpExecuteKernels)
