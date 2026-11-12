@@ -91,6 +91,10 @@ Completion::Completion(Device &device, const char *cacheDir, uint64_t stack, con
     const raw::Kernel &kernel = device_.kernel();
     remote_ = std::make_unique<Remote>(
         KernelTransport{kernel.connection(), kernel.tunnelled(), kernel.tunnelSelector()}, stack_);
+    Remote *remote = remote_.get();
+    device_.runSlotsFrom([remote](const uint8_t *slot, uint32_t size, const uint8_t *&mapping, uint64_t &bytes) {
+        return remote->findSlot(slot, size, mapping, bytes);
+    });
     if (!remote_->serving())
         os_log_error(rawLog(),
                      "raw: %{public}s has no shader compiler this boot: the states its pack lacks are made here",
@@ -107,6 +111,7 @@ Completion::Completion(Device &device, const char *cacheDir, uint64_t stack, con
 
 Completion::~Completion()
 {
+    device_.runSlotsFrom(nullptr);
     stopping_.store(true, std::memory_order_release);
     compiler_->drain();
     dispatch_group_wait(pending_, DISPATCH_TIME_FOREVER);

@@ -231,6 +231,7 @@ TESTS: dict[str, bool] = {
     'system.overlay_app_records': False,
     'system.widgets_render': False,
     'gpu.raw.fetch_rung3': False,
+    'ui.icon_render': False,
 }
 
 # The tests only one iOS version's app runs (hw_test_app/app<version>), by that version.

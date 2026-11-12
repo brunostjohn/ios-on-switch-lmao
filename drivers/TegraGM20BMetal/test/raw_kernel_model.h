@@ -52,12 +52,14 @@ struct Model {
     uint64_t nextHandle = 1, nextUid = 1;
     std::map<uint32_t, std::vector<uint8_t>> memory;
     std::map<uint64_t, BoState> bos;
+    std::map<uint64_t, std::pair<uint64_t, uint64_t>> imports;  // handle: the host pages imported and their bytes
     std::map<uint64_t, std::pair<uint64_t, uint64_t>> binds;  // va: the BO bound there and its bytes
     SetState sets[TegraGM20BMaxResourceSets];
     unsigned submitJobs = 0, setJobs = 0, staleSets = 0, addressJobs = 0, staleViews = 0;
     std::vector<Job> jobs;
     bool inFlight = false;  // jobs run until a kill
     unsigned refuse = 0;    // submissions refused from now, with `refusal`
+    uint64_t vaEnd = 0x100000000;  // GetInfo's client VA end: a raw::Device's program window needs 4 GiB of its quarter
     int refusal = kIOReturnNoResources;
     unsigned notResponding = 0;  // WaitFences answered kIOReturnNotResponding while GetStatus calls the channel healthy
     bool foreignTakesFreedSlot = false;
@@ -257,6 +259,7 @@ struct Model {
             endGeneration(set - 1);
         }
         bos.erase(it);
+        imports.erase(handle);
         for (auto bound = binds.begin(); bound != binds.end();)
             bound = bound->second.first == handle ? binds.erase(bound) : std::next(bound);
     }
@@ -327,7 +330,7 @@ extern "C" kern_return_t IOConnectCallStructMethod(mach_port_t, uint32_t method,
         info.cls_copy = 0xb0b5;
         info.cls_eng3d = 0xb197;
         info.va_start = 0x1000000;
-        info.va_end = 0x100000000;
+        info.va_end = model.vaEnd;
         info.page_size = 4096;
         return KERN_SUCCESS;
     }
@@ -339,10 +342,13 @@ extern "C" kern_return_t IOConnectCallStructMethod(mach_port_t, uint32_t method,
         *static_cast<TegraGM20BAbiBoAllocReply *>(output) = {model.nextHandle++, token, 0};
         return KERN_SUCCESS;
     }
-    case TegraGM20BMethodBoImport:
+    case TegraGM20BMethodBoImport: {
+        const auto &in = *static_cast<const TegraGM20BAbiBoImport *>(input);
         model.bos[model.nextHandle] = {true, true, 0};
+        model.imports[model.nextHandle] = {in.address, in.bytes};
         *static_cast<TegraGM20BAbiBoAllocReply *>(output) = {model.nextHandle++, 0, 0};
         return KERN_SUCCESS;
+    }
     case TegraGM20BMethodBoFree:
         model.freeBo(static_cast<const TegraGM20BAbiBoFree *>(input)->handle);
         return KERN_SUCCESS;

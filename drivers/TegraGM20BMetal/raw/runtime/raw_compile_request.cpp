@@ -226,6 +226,22 @@ Digest sha256(const void *bytes, size_t size)
     return out;
 }
 
+Digest programSlotName(const void *slot, size_t size)
+{
+    static constexpr char kDomain[] = "GM20B program slot";
+    Digest out{};
+    CC_SHA256_CTX c;
+    CC_SHA256_Init(&c);
+    CC_SHA256_Update(&c, kDomain, CC_LONG(sizeof kDomain));
+    for (size_t at = 0; at < size;) {
+        const size_t chunk = std::min<size_t>(size - at, 1u << 30);
+        CC_SHA256_Update(&c, static_cast<const uint8_t *>(slot) + at, CC_LONG(chunk));
+        at += chunk;
+    }
+    CC_SHA256_Final(out.data(), &c);
+    return out;
+}
+
 LibraryIdentity identityOf(const RequestLibrary &library)
 {
     LibraryIdentity id;

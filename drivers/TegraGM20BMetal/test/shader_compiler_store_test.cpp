@@ -5,6 +5,9 @@
 #include "../compiler/compiler_log.h"
 #include "../compiler/compiler_store.h"
 #include "../raw/runtime/raw_cache.h"
+#include "../raw/runtime/raw_compute_slot.h"
+#include "../raw/runtime/raw_program_pages.h"
+#include "../raw/runtime/raw_record_parts.h"
 
 #include <gtest/gtest.h>
 
@@ -134,6 +137,54 @@ TEST_F(SharedStore, AStoreIsKeyedByStackAndPackRulesAndAnOldOneStaysWholeForItsR
     EXPECT_NE(next.path(), store.path());
 }
 
+// A made record's program slots of a page or more land on pages of their own, found by their bytes' name, ahead of the
+// record: what a client runs in place from its mapping
+TEST_F(SharedStore, ARecordsLargeSlotsArePublishedOnPagesOfTheirOwn)
+{
+    raw::RuntimeRecord record;
+    record.keyString = keyOf(7).key;
+    record.programs[0].id = "small";
+    record.programs[0].image.assign(80 + 512, 0x11);
+    record.programs[1].id = "large";
+    record.programs[1].image.assign(80 + 200 * 1024, 0x22);
+    record.programs[1].data.assign(512, 0x33);
+    const std::string entry = raw::encodeEntry(keyOf(7), &record, "");
+    switch_compiler::Store store;
+    open(store);
+    ASSERT_EQ(store.putProgramSlots(keyOf(7), entry), switch_compiler::Store::Put::Added);
+    EXPECT_EQ(store.entries(), 1u) << "the small slot is copied by its client";
+    EXPECT_EQ(store.putProgramSlots(keyOf(7), entry), switch_compiler::Store::Put::Added);
+    EXPECT_EQ(store.entries(), 1u) << "a slot is kept once";
+    ASSERT_EQ(store.put(digest(0x51, 7), entry), switch_compiler::Store::Put::Added);
+    raw::PackProgram info;
+    const std::vector<uint8_t> slot = raw::programSlot(record.programs[1], info);
+    const raw::Digest name = raw::programSlotName(slot.data(), slot.size());
+    Client client(store.path());
+    pack::Bytes found;
+    ASSERT_TRUE(client.reader.find(name.data(), found));
+    EXPECT_EQ(uint64_t(found.data - client.mapped.data) % raw::kProgramSlotPage, 0u);
+    EXPECT_EQ(found.size, raw::programSlotEntryBytes(slot.size()));
+    EXPECT_EQ(memcmp(found.data, slot.data(), slot.size()), 0);
+    for (size_t i = slot.size(); i < found.size; i++)
+        ASSERT_EQ(found.data[i], 0) << "zeros through the prefetch past its end";
+    std::string bytes, refusal;
+    raw::RuntimeRecord read;
+    ASSERT_TRUE(client.find(7, bytes));
+    EXPECT_EQ(raw::decodeEntry(bytes, keyOf(7), read, refusal), raw::RecordCache::Found::Record);
+
+    raw::ComputeRecord kernel;
+    kernel.code.assign(48 * 1024, 0x44);
+    kernel.data.assign(256, 0x55);
+    EXPECT_EQ(store.putProgramSlots(keyOf(8), raw::encodeKernelEntry(keyOf(8), &kernel, "")),
+              switch_compiler::Store::Put::Added);
+    EXPECT_EQ(store.entries(), 3u) << "a kernel's slot as raw_compute.cpp places it";
+    const std::vector<uint8_t> kernelSlot = raw::computeSlot(kernel);
+    const raw::Digest kernelName = raw::programSlotName(kernelSlot.data(), kernelSlot.size());
+    Client again(store.path());
+    ASSERT_TRUE(again.reader.find(kernelName.data(), found));
+    EXPECT_EQ(uint64_t(found.data - again.mapped.data) % raw::kProgramSlotPage, 0u);
+}
+
 TEST_F(SharedStore, ReadersInOtherThreadsAndProcessesOnlyEverSeeWholeEntries)
 {
     switch_compiler::Store store;
@@ -232,6 +283,31 @@ TEST_F(SharedStore, AFullStoreKeepsItsNewestEntriesAndTakesTheNext)
     EXPECT_LE(store.entries(), added / 2 + 2);
     pack::Bytes found;
     EXPECT_TRUE(before.reader.find(digest(0x52, 0).data(), found));
+}
+
+// A slot the full store had no room for says so, so the compiler makes room and puts it with its record
+TEST_F(SharedStore, ASlotAFullStoreRefusesIsPutAfterItsRoomIsMade)
+{
+    switch_compiler::Store store;
+    open(store);
+    const std::string big(1u << 20, 'x');
+    uint32_t added = 0;
+    while (store.put(digest(0x53, added), big + std::to_string(added)) == switch_compiler::Store::Put::Added)
+        added++;
+    raw::RuntimeRecord record;
+    record.keyString = keyOf(9).key;
+    record.programs[0].image.assign(80 + 512, 0x11);
+    record.programs[1].image.assign(80 + 2048 * 1024, 0x22);
+    const std::string entry = raw::encodeEntry(keyOf(9), &record, "");
+    EXPECT_EQ(store.putProgramSlots(keyOf(9), entry), switch_compiler::Store::Put::Full);
+    std::string error;
+    ASSERT_TRUE(store.makeRoom(error)) << error;
+    EXPECT_EQ(store.putProgramSlots(keyOf(9), entry), switch_compiler::Store::Put::Added);
+    raw::PackProgram info;
+    const std::vector<uint8_t> slot = raw::programSlot(record.programs[1], info);
+    Client client(store.path());
+    pack::Bytes found;
+    EXPECT_TRUE(client.reader.find(raw::programSlotName(slot.data(), slot.size()).data(), found));
 }
 
 TEST_F(SharedStore, TheLogKeepsWholeRequestsAcrossATornTail)

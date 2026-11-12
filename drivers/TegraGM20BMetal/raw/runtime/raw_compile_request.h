@@ -88,6 +88,8 @@ struct LibraryIdentity {
 
 Digest sha256(const void *bytes, size_t size);
 LibraryIdentity identityOf(const RequestLibrary &library);
+// The store's name of a program slot's bytes (raw_record.h programSlot), apart from every record's name
+Digest programSlotName(const void *slot, size_t size);
 
 // The store's name of the record of `k` made from `r`'s stages in these libraries, and of `r`'s fields and dispatch beyond
 // what the key names

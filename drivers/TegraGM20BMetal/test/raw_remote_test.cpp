@@ -7,6 +7,7 @@
 // connection's bound is held until an earlier one is answered, and a remote that goes ends what it still waits for.
 #include "../raw/runtime/raw_remote.h"
 #include "../raw/runtime/raw_cache_io.h"
+#include "../raw/runtime/raw_program_pages.h"
 #include "TegraGM20BABI.h"
 #include "TegraGM20BCompilerABI.h"
 
@@ -138,6 +139,32 @@ TEST_F(RemoteCompile, AStoredRecordIsReadWithNoRequestFromAStoreMappedOnce)
     EXPECT_EQ(bytes, "a record");
     EXPECT_EQ(kernel.maps, 1u);
     EXPECT_EQ(kernel.compiles, 0u);
+}
+
+// A program slot the compiler published on pages of its own is found in place in the mapping, by its bytes alone
+TEST_F(RemoteCompile, APublishedSlotIsFoundInPlaceInTheMapping)
+{
+    std::vector<uint8_t> slot(40 * 1024);
+    for (size_t i = 0; i < slot.size(); i++)
+        slot[i] = uint8_t(i * 7);
+    std::vector<uint8_t> entry = slot;
+    entry.resize(raw::programSlotEntryBytes(slot.size()));
+    publish();
+    const raw::Digest slotName = raw::programSlotName(slot.data(), slot.size());
+    kernel.store.put(slotName.data(), entry.data(), uint32_t(entry.size()));
+    raw::Remote remote(kernel.call(), kStack);
+    std::string bytes;
+    ASSERT_TRUE(remote.find(name, bytes)) << "a record lookup maps the store";
+    const uint8_t *mapping = nullptr;
+    uint64_t mapped = 0;
+    const uint8_t *at = remote.findSlot(slot.data(), slot.size(), mapping, mapped);
+    ASSERT_NE(at, nullptr);
+    EXPECT_GE(at, mapping);
+    EXPECT_LE(at + entry.size(), mapping + mapped);
+    EXPECT_EQ(uint64_t(at - mapping) % raw::kProgramSlotPage, 0u);
+    EXPECT_EQ(memcmp(at, slot.data(), slot.size()), 0);
+    slot[100] ^= 1;
+    EXPECT_EQ(remote.findSlot(slot.data(), slot.size(), mapping, mapped), nullptr) << "other bytes are another slot";
 }
 
 TEST_F(RemoteCompile, ARecordTheCompilerMadeIsReadOnceItAnswersFromItsNewGeneration)

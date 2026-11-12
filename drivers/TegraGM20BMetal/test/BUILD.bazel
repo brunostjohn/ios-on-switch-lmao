@@ -86,6 +86,8 @@
 #                     the one the selected IPSW ships AGX binaries for, its QuartzCore's
 #   raw_heap_test     raw/runtime/raw_heap.h: an MTLHeap's placements in its one span, Metal's contract (a full heap
 #                     answers nil, aliasable ranges are taken again, usedSize and maxAvailableSizeWithAlignment)
+#   raw_program_pages_test  raw/runtime/raw_program_pages.h: the pages a program run in place from a file needs bound in
+#                     the program window, its alignment kept, each page asked for once, nothing past the file's region
 #   raw_residual_test raw/runtime/raw_residual.h: a buffer bound off m2v's descriptor base alignment (16 bytes for a
 #                     storage buffer, 256 for a uniform one) at the aligned base with its SlotBindOffset residual in the
 #                     push word raw/pack/probe_bind.h's bind-offset run names
@@ -137,16 +139,24 @@
 #                     encoded, when an attachment of one of its passes has no twin
 #   nak_fp32_flush_test  NAK's fp32 flush elision (nak_nir_algebraic.py): a flushed source under fneg or fabs feeds an FTZ
 #                     instruction as its source does, and no FTZ result or widened half is a denormal
+#   raw_facade_lazy_test  the raw facade (RawMetal.h) over the kernel model with a pack of one state (raw_facade_harness.h):
+#                     a packed state's draw opens no m2v device and runs its programs in place from the pack's pages;
+#                     an unpacked state, a reflection, a foreign sampler and a method only m2v's device class has each open
+#                     it once, naming what for
+#   raw_arena_trim_test  raw/runtime/raw_arena_trim.h: an idle heap kept non-volatile gives back the ranges no resource is
+#                     placed in, keeps the rest's contents, and binds a hole again at a placement into it
 #   raw_multisample_test  raw/runtime/raw_multisample.h, raw_sample_positions.h: a stored multisampled texture's header
 #                     (NIL's) and target (its sample grid), and a pass's sample layout at the standard positions or its
 #                     own, rounded as Metal samples them, as the methods NVK writes
 #
 #   bazel test //drivers/TegraGM20BMetal/test:all
+load("@rules_cc//cc:cc_binary.bzl", "cc_binary")
 load("@rules_python//python:py_binary.bzl", "py_binary")
 load("@rules_python//python:py_test.bzl", "py_test")
 load("@rules_rust//rust:defs.bzl", "rust_test")
 load("//bazel/lint:defs.bzl", "lint_files")
 load("//bazel/testing:defs.bzl", "host_library", "host_test")
+load(":defs.bzl", "objcxx_units")
 
 lint_files()
 
@@ -1008,6 +1018,7 @@ host_test(
     data = [
         "//drivers/TegraGM20BMetal:raw/runtime/raw_completed.cpp",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_compute.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_compute_slot.h",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_gpu.cpp",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_split.cpp",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_variants.cpp",
@@ -1523,6 +1534,29 @@ host_test(
 )
 
 host_test(
+    name = "raw_program_pages_test",
+    srcs = [
+        "raw_program_pages_test.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_program_pages.h",
+    ],
+    cxx_std = "c++17",
+)
+
+host_test(
+    name = "raw_metallib_functions_test",
+    srcs = [
+        "made_metallib.h",
+        "raw_metallib_functions_test.cpp",
+        "//drivers/NativeMetal:MetallibEntries.h",
+        "//drivers/NativeMetal:MetallibSlice.h",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_metallib_functions.h",
+    ],
+    copts = ["-Idrivers/NativeMetal"],
+    cxx_std = "c++17",
+    deps = ["//drivers/NativeMetal/abi:metal_abi"],
+)
+
+host_test(
     name = "raw_split_reuse_test",
     srcs = [
         "raw_split_reuse_test.cpp",
@@ -1774,6 +1808,7 @@ host_test(
         "//drivers/TegraGM20BMetal:raw/runtime/RawMetalFences.mm",
         "//drivers/TegraGM20BMetal:raw/runtime/RawMetalReplay.mm",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_compute.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_compute_slot.h",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_gpu.cpp",
     ],
 )
@@ -1872,13 +1907,13 @@ host_test(
         "-Idrivers/NativeMetal",
     ],
     cxx_std = "c++17",
-    deps = ["//drivers/NativeMetal/abi:metal_abi"],
     linkopts = [
         "-framework",
         "Foundation",
         "-framework",
         "Metal",
     ],
+    deps = ["//drivers/NativeMetal/abi:metal_abi"],
 )
 
 host_test(
@@ -1902,6 +1937,7 @@ host_test(
         "//drivers/TegraGM20BMetal:raw/runtime/raw_compile_request.cpp",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_compile_request.h",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_compute_record.h",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_compute_slot.h",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_cubic.h",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_kernel_cache.cpp",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_metallib.cpp",
@@ -1909,7 +1945,11 @@ host_test(
         "//drivers/TegraGM20BMetal:raw/runtime/raw_pack.cpp",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_pack.h",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_pipeline_fields.h",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_owned.h",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_program_pages.h",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_record.h",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_record_parts.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_record_parts.h",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_render_key.h",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_stats.h",
         "//kits/SwitchSeedPack:SwitchSeedPack.h",
@@ -1949,6 +1989,7 @@ host_test(
         "//drivers/TegraGM20BMetal:raw/runtime/raw_pack.cpp",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_pack.h",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_pipeline_fields.h",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_program_pages.h",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_record.h",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_render_key.h",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_stats.h",
@@ -1960,11 +2001,345 @@ host_test(
         "-Idrivers/NativeMetal",
     ],
     cxx_std = "c++17",
-    deps = ["//drivers/NativeMetal/abi:metal_abi"],
     linkopts = [
         "-framework",
         "IOKit",
         "-framework",
         "CoreFoundation",
     ],
+    deps = ["//drivers/NativeMetal/abi:metal_abi"],
+)
+
+# The raw facade and runtime as //gpu:plugin builds them, for this Mac (raw_facade_harness.h): the facade's Objective-C++ units
+# through .cpp units of their own (defs.bzl), the runtime's C++ units, the shader compiler's, and the emitters
+RAW_HOST_UNITS = [
+    "//drivers/TegraGM20BMetal:raw/runtime/" + u
+    for u in [
+        "raw_gpu.cpp",
+        "raw_draw_bands.cpp",
+        "raw_transfer.cpp",
+        "raw_split.cpp",
+        "raw_variants.cpp",
+        "raw_alias.cpp",
+        "raw_arena.cpp",
+        "raw_kernel.cpp",
+        "raw_kernel_job.cpp",
+        "raw_resource_set.cpp",
+        "raw_shared_events.cpp",
+        "raw_pack.cpp",
+        "raw_ycbcr.cpp",
+        "raw_xr_planes.cpp",
+        "raw_zeta.cpp",
+        "raw_visibility.cpp",
+        "raw_visibility_pass.cpp",
+        "raw_private_comp.cpp",
+        "raw_multisample.cpp",
+        "raw_comp.cpp",
+        "raw_record_parts.cpp",
+        "raw_direct.cpp",
+        "raw_direct_compute.cpp",
+        "raw_emit.cpp",
+        "raw_cache.cpp",
+        "raw_kernel_cache.cpp",
+        "raw_compiler.cpp",
+        "raw_metallib.cpp",
+        "raw_completed.cpp",
+        "raw_compute.cpp",
+        "raw_semantic_plan.cpp",
+        "raw_semantic_resources.cpp",
+        "raw_semantic_setters.cpp",
+        "raw_compile_request.cpp",
+        "raw_remote.cpp",
+    ]
+] + [
+    "//drivers/TegraGM20BMetal:raw/fx/fx_mip.cpp",
+    "//drivers/TegraGM20BMetal:raw/fx/fx_image.cpp",
+    "//drivers/TegraGM20BMetal:compiler_cc_srcs",
+]
+
+RAW_HOST_HEADERS = [
+    "//drivers/NativeMetal:frontend_headers",
+    "//drivers/TegraGM20B:TegraGM20BABI.h",
+    "//drivers/TegraGM20B:TegraGM20BCompilerABI.h",
+    "//drivers/TegraGM20B:TegraGM20BHost.h",
+    "//drivers/TegraGM20B:TegraGM20BJobABI.h",
+    "//drivers/TegraGM20B:TegraGM20BLayout.h",
+    "//drivers/TegraGM20B:TegraGM20BSchedPolicy.h",
+    "//drivers/TegraGM20B:TegraGM20BZcullABI.h",
+    "//drivers/TegraGM20BMetal:compiler_headers",
+    "//drivers/TegraGM20BMetal:raw_runtime_headers",
+    "//kits/SwitchGM20B:class_headers",
+    "//kits/SwitchGM20BEmit:emit_headers",
+    "//kits/SwitchRefusal:SwitchRefusal.h",
+    "//kits/SwitchRefusal:SwitchRefusalSite.h",
+    "//kits/SwitchSeedPack:SwitchSeedStore.h",
+]
+
+RAW_HOST_COPTS = [
+    "-Idrivers/NativeMetal",
+    "-Idrivers/TegraGM20B",
+    "-Idrivers/TegraGM20BMetal/raw/runtime",
+    "-Ikits/SwitchRefusal",
+    "-Ikits/SwitchGM20BEmit/mesa",
+    "-I$(GENDIR)/kits/SwitchGM20BEmit/gen",
+    "-Ithird_party/mesa/src/nouveau/headers",
+    "-I$(GENDIR)/kits/SwitchGM20B",
+    "-Wno-deprecated-declarations",
+    # the plugin's key (gpu/defs.bzl): any, as a host test's pack takes
+    "-DTEGRA_RAW_STACK=0ull",
+]
+
+RAW_HOST_DEPS = [
+    "//drivers/NativeMetal/abi:metal_abi",
+    "//kits/SwitchGM20B:caps",
+    "//kits/SwitchGM20BEmit:macros_h",
+]
+
+objcxx_units(
+    name = "raw_facade_units",
+    testonly = True,
+    srcs = [
+        "//drivers/TegraGM20BMetal:compiler_srcs",
+        "//drivers/TegraGM20BMetal:raw_facade_srcs",
+    ],
+)
+
+host_library(
+    name = "raw_facade_host",
+    srcs = [":raw_facade_units"],
+    additional_compiler_inputs = [
+        "//drivers/TegraGM20BMetal:compiler_srcs",
+        "//drivers/TegraGM20BMetal:raw_facade_srcs",
+    ] + RAW_HOST_HEADERS,
+    copts = [
+        "-x",
+        "objective-c++",
+        "-fobjc-arc",
+        # an included .mm is a header to clang, which asks a header that annotates some pointers to annotate them all
+        "-Wno-nullability-completeness",
+        "-Wno-nullability-completeness-on-arrays",
+    ] + RAW_HOST_COPTS,
+    cxx_std = "c++17",
+    sanitize = False,
+    deps = RAW_HOST_DEPS,
+)
+
+host_library(
+    name = "raw_runtime_host",
+    srcs = RAW_HOST_UNITS + RAW_HOST_HEADERS,
+    copts = RAW_HOST_COPTS,
+    cxx_std = "c++17",
+    sanitize = False,
+    deps = RAW_HOST_DEPS + ["//kits/SwitchGM20BEmit:emit_ndebug"],
+)
+
+# NVK's shared connection, as the raw path looks it up in a loaded image of NVK's name (raw_facade_harness.h loads it). In
+# a directory of its own: raw::Kernel looks for NVK beside a test's binary too, and the other tests here open their own.
+cc_binary(
+    name = "fake_nvk/libvulkan_nouveau.dylib",
+    testonly = True,
+    srcs = ["fake_nvk_connection.c"],
+    linkshared = True,
+)
+
+host_test(
+    name = "raw_facade_lazy_test",
+    srcs = [
+        "made_metallib.h",
+        "raw_facade_harness.h",
+        "raw_facade_lazy_test.cpp",
+        "raw_frontend_absent.cpp",
+        "raw_kernel_model.h",
+    ] + RAW_HOST_HEADERS,
+    copts = [
+        "-x",
+        "objective-c++",
+        "-fobjc-arc",
+    ] + RAW_HOST_COPTS,
+    cxx_std = "c++17",
+    data = [":fake_nvk/libvulkan_nouveau.dylib"],
+    env = {"SWITCH_FAKE_NVK": "$(rootpath :fake_nvk/libvulkan_nouveau.dylib)"},
+    linkopts = [
+        "-framework",
+        "Foundation",
+        "-framework",
+        "Metal",
+        "-framework",
+        "IOSurface",
+        "-framework",
+        "IOKit",
+        "-framework",
+        "CoreFoundation",
+        "-lobjc",
+    ],
+    sanitize = False,
+    deps = [
+        ":raw_facade_host",
+        ":raw_runtime_host",
+        "//kits/SwitchRefusal:switch_refusal",
+    ] + RAW_HOST_DEPS,
+)
+
+# hostsim's mock GM20B (mock_iokit.c), which interposes IOKit's calls for every image of a process that links it: NVK's too
+cc_binary(
+    name = "libmock_iokit.dylib",
+    testonly = True,
+    srcs = [
+        "//drivers/TegraGM20B:TegraGM20BABI.h",
+        "//drivers/TegraGM20BMetal:hostsim/mock_iokit.c",
+        "//drivers/TegraGM20BMetal:hostsim/mock_iokit.h",
+    ],
+    copts = ["-Idrivers/TegraGM20B"],
+    linkopts = [
+        "-framework",
+        "IOKit",
+        "-framework",
+        "CoreFoundation",
+    ],
+    linkshared = True,
+)
+
+objcxx_units(
+    name = "frontend_units",
+    testonly = True,
+    srcs = ["//drivers/NativeMetal:NativeBridgeMetalFrontend.mm"],
+)
+
+host_library(
+    name = "frontend_host",
+    srcs = [":frontend_units"],
+    additional_compiler_inputs = ["//drivers/NativeMetal:NativeBridgeMetalFrontend.mm"] + RAW_HOST_HEADERS,
+    copts = [
+        "-x",
+        "objective-c++",
+        "-fobjc-arc",
+        "-Wno-nullability-completeness",
+        "-Wno-nullability-completeness-on-arrays",
+    ] + RAW_HOST_COPTS,
+    cxx_std = "c++17",
+    sanitize = False,
+    deps = ["//drivers/NativeMetal/abi:metal_abi"],
+)
+
+# What the m2v device's open costs a client process (the frontend, the host bridge, NVK's host twin over the mock GM20B)
+host_test(
+    name = "m2v_open_footprint_test",
+    size = "medium",
+    srcs = [
+        "m2v_open_footprint_test.cpp",
+        ":libmock_iokit.dylib",
+        "//drivers/TegraGM20BMetal:hostsim/mock_iokit.h",
+        "//gpu:bridge_darwin",
+    ] + RAW_HOST_HEADERS,
+    copts = [
+        "-x",
+        "objective-c++",
+        "-fobjc-arc",
+    ] + RAW_HOST_COPTS,
+    cxx_std = "c++17",
+    data = ["//gpu/nvk:host_dylib"],
+    env = {"SWITCH_NVK": "$(rootpath //gpu/nvk:host_dylib)"},
+    linkopts = [
+        "-framework",
+        "Foundation",
+        "-framework",
+        "Metal",
+        "-framework",
+        "IOSurface",
+        "-framework",
+        "IOKit",
+        "-framework",
+        "CoreFoundation",
+        "-lobjc",
+    ],
+    sanitize = False,
+    deps = [":frontend_host"],
+)
+
+# raw/runtime/raw_arena_trim.h: the ranges of a heap kept non-volatile that no resource is placed in, and raw::Device's
+# idle give-back of them over the kernel model: its placed parts imported again with their contents, the holes' pages
+# untouched, a placement into a hole bound again, a volatile heap purged instead
+host_test(
+    name = "raw_arena_trim_test",
+    srcs = [
+        "raw_arena_trim_test.cpp",
+        "raw_frontend_absent.cpp",
+        "raw_kernel_model.h",
+    ] + RAW_HOST_HEADERS,
+    copts = [
+        "-x",
+        "objective-c++",
+        "-fobjc-arc",
+    ] + RAW_HOST_COPTS,
+    cxx_std = "c++17",
+    linkopts = [
+        "-framework",
+        "Foundation",
+        "-framework",
+        "Metal",
+        "-framework",
+        "IOSurface",
+        "-framework",
+        "IOKit",
+        "-framework",
+        "CoreFoundation",
+        "-lobjc",
+    ],
+    sanitize = False,
+    deps = [
+        ":raw_runtime_host",
+        "//kits/SwitchRefusal:switch_refusal",
+    ] + RAW_HOST_DEPS,
+)
+
+# What the shader compiler's open costs (compiler_engine.mm openDevice), a step a process over the mock GM20B: NVK's image,
+# a bare NVK device, and the m2v device it opens; each step's growth by image and VM tag
+host_test(
+    name = "compiler_open_footprint_test",
+    size = "medium",
+    srcs = [
+        "compiler_open_footprint_test.cpp",
+        "footprint_breakdown.h",
+        ":libmock_iokit.dylib",
+        "//gpu:bridge_darwin",
+        "//third_party/mesa:include/vulkan/vk_platform.h",
+        "//third_party/mesa:include/vulkan/vulkan_core.h",
+        "//third_party/mesa:include/vk_video/vulkan_video_codecs_common.h",
+    ] + ["//third_party/mesa:include/vk_video/vulkan_video_codec_%s.h" % c for c in [
+        "av1std_decode",
+        "av1std_encode",
+        "av1std",
+        "h264std_decode",
+        "h264std_encode",
+        "h264std",
+        "h265std_decode",
+        "h265std_encode",
+        "h265std",
+        "vp9std_decode",
+        "vp9std",
+    ]] + RAW_HOST_HEADERS,
+    copts = [
+        "-x",
+        "objective-c++",
+        "-fobjc-arc",
+        "-Ithird_party/mesa/include",
+    ] + RAW_HOST_COPTS,
+    cxx_std = "c++17",
+    data = ["//gpu/nvk:host_dylib"],
+    env = {"SWITCH_NVK": "$(rootpath //gpu/nvk:host_dylib)"},
+    linkopts = [
+        "-framework",
+        "Foundation",
+        "-framework",
+        "Metal",
+        "-framework",
+        "IOSurface",
+        "-framework",
+        "IOKit",
+        "-framework",
+        "CoreFoundation",
+        "-lobjc",
+    ],
+    sanitize = False,
+    deps = [":frontend_host"],
 )

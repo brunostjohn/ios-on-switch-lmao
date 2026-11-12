@@ -45,8 +45,13 @@ public:
 
     // The store's entry under `name`, copied out of the mapping
     bool find(const Digest &name, std::string &bytes);
+    // A program slot's bytes where the mapped store holds them (switch_compiler::Store::putProgramSlots), in place, with
+    // that mapping's first byte and size in `mapping` and `bytes`; null where it holds none of them
+    const uint8_t *findSlot(const uint8_t *slot, size_t size, const uint8_t *&mapping, uint64_t &bytes) const;
     // The mapped store's identity (its stack and the pack rules' digest) in hex, "" with none mapped
     std::string storeIdentity() const;
+    // The mapped store's first byte and size; null with none mapped
+    const uint8_t *storeMapping(uint64_t &bytes) const;
     // Asked of the compiler at the calling thread's class; the thread sleeps until it answers. *how: the reply's
     // (TegraGM20BCompilerABI.h TegraGM20BCompileCompiled... and the class it ran at)
     Answer compile(const std::string &request, uint32_t *how = nullptr);
@@ -58,6 +63,8 @@ public:
 private:
     struct Mapping {
         uint32_t generation = 0;
+        const uint8_t *base = nullptr;
+        uint64_t bytes = 0;
         uint8_t identity[switch_seed_pack::kIdentityBytes] = {};
         switch_seed_pack::StoreReader reader;
     };

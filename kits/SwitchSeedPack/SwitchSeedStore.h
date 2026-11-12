@@ -6,7 +6,9 @@
 //   header (kStoreHeaderBytes): magic "SWSTORE1" | version u32 | name bytes u32 | slots u32 (a power of two) | 0 u32
 //          | data offset u64 | data bytes u64 | identity [32]                                          (little endian)
 //   slots, from kStoreHeaderBytes: per slot offset u64 | length u32 | checksum u32 | name [kStoreNameBytes]
-//   data, from data offset: the entries' bytes, each at a kStoreAlignment boundary
+//   data, from data offset: the entries' bytes, each at a kStoreAlignment boundary; an entry whose length is a whole
+//          number of kStorePageBytes pages starts on such a page and has its pages to itself (a GPU client imports
+//          those pages and runs what they hold in place, so nothing is written into them once they are published)
 //
 // An entry lands in this order: its bytes, then its slot's length, checksum and name, then the slot's offset, stored with
 // release; a reader loads the offset with acquire and reads nothing of a slot whose offset is 0. No file is ever cut short
@@ -29,6 +31,7 @@ namespace switch_seed_pack {
 
 constexpr char kStoreMagic[8] = {'S', 'W', 'S', 'T', 'O', 'R', 'E', '1'};
 constexpr uint32_t kStoreVersion = 1, kStoreNameBytes = 32, kStoreAlignment = 8;
+constexpr uint64_t kStorePageBytes = 16384;
 constexpr size_t kStoreHeaderBytes = 4096, kStoreSlotBytes = 16 + kStoreNameBytes;
 constexpr uint64_t kRetired = ~uint64_t(0);
 
@@ -202,7 +205,8 @@ public:
         const int64_t old = reader_.slotOf(name);
         if (old >= 0 && !replace)
             return Put::Present;
-        const uint64_t at = (end_ + kStoreAlignment - 1) & ~uint64_t(kStoreAlignment - 1);
+        const uint64_t align = length && !(length % kStorePageBytes) ? kStorePageBytes : kStoreAlignment;
+        const uint64_t at = (end_ + align - 1) & ~(align - 1);
         if ((used_ + retired_ + 1) * 4 > uint64_t(layout_.slots) * 3 || at + length > layout_.fileBytes())
             return Put::Full;
         uint32_t slot = firstSlot(name, layout_.slots);

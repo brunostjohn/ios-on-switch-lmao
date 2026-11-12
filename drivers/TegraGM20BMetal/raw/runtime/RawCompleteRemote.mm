@@ -40,16 +40,17 @@ void logHarvestParts(uint64_t name, NSString *label, const std::string &key)
 #endif
 
 // A function of this facade as a request's stage, its library added to `r` once (`ids` beside it); false: one no request
-// can name (another device's, or one m2v keeps no metallib of)
+// can name (another device's, or one neither the facade nor m2v keeps a metallib of). The bytes are the AIR slice the
+// facade read, else m2v's library's.
 bool addStage(CompileRequest &r, std::vector<LibraryIdentity> &ids, std::map<const LibrarySource *, uint32_t> &seen,
               const char *tag, id function, bool bytes)
 {
     if (![function isKindOfClass:[RMFunction class]])
         return false;
     RMFunction *f = function;
-    const void *data = nullptr;
-    size_t length = 0;
-    if (!f->_source || !native_bridge_metal_function_metallib(f->_twin, &data, &length))
+    const void *data = f->_source ? f->_source->bytes : nullptr;
+    size_t length = f->_source ? f->_source->size : 0;
+    if (!f->_source || (!data && !native_bridge_metal_function_metallib(f->_twin, &data, &length)))
         return false;
     const auto [at, first] = seen.try_emplace(f->_source.get(), uint32_t(r.libraries.size()));
     if (first) {

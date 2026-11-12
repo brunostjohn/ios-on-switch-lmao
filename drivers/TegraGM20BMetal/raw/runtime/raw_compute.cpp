@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 // See raw_compute.h. Method numbers are NVIDIA's (kits/SwitchGM20B: Mesa's clb1c0.h, clb1c0qmd.h, MIT).
 #include "raw_compute.h"
+#include "raw_compute_slot.h"
 #include "../../../../kits/SwitchGM20B/SwitchGM20B.h"
 #include "raw_compute_visibility.h"
 #include "raw_residual.h"
@@ -82,11 +83,7 @@ const ComputeState *placeCompute(Device &dev, const ComputeRecord &r)
     const uint64_t key = uint64_t(uintptr_t(&r));
     if (auto it = gStates.find({&dev, key}); it != gStates.end())
         return &it->second;
-    const size_t dataAt = r.data.empty() ? r.code.size() : (r.code.size() + 0xff) & ~size_t(0xff);
-    std::vector<uint8_t> slot(dataAt + r.data.size(), 0);
-    memcpy(slot.data(), r.code.data(), r.code.size());
-    if (!r.data.empty())
-        memcpy(slot.data() + dataAt, r.data.data(), r.data.size());
+    const std::vector<uint8_t> slot = computeSlot(r);
     ComputeState c;
     c.placed = r.kernel;
     c.instructions = uint32_t(std::max<size_t>(1, r.code.size() / 8));
@@ -111,7 +108,7 @@ const ComputeState *placeCompute(Device &dev, const ComputeRecord &r)
     RAW_DIAGNOSTIC(dev.stats.programsPlaced++);
     memcpy(c.cbufType, r.cbufType, sizeof c.cbufType);
     c.program = uint32_t(at);
-    c.data = r.data.empty() ? 0 : dev.heap_.va + at + dataAt;
+    c.data = r.data.empty() ? 0 : dev.heap_.va + at + computeSlotDataAt(r);
     ComputeState &placed = gStates.emplace(std::make_pair(&dev, key), c).first->second;
     placed.rec = &placed.placed;
     return &placed;

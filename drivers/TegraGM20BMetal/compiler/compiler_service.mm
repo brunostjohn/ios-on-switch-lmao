@@ -1,11 +1,13 @@
 // SPDX-License-Identifier: MIT
 // The system shader compiler's process (TegraGM20BCompilerABI.h), run by /usr/libexec/SwitchShaderCompiler from inside the
 // GPU plugin. Once the GPU's service is up it reads the installed pack, opens its store (compiler_store.h) and registers it
-// with the kernel, so every GPU client reads the store from then on; then it opens the m2v device it compiles with, enters
-// its sandbox, makes the requests an earlier build's store had (compiler_log.h) again at the background class, and takes
+// with the kernel, so every GPU client reads the store from then on; then it enters its sandbox, makes the requests an
+// earlier build's store had (compiler_log.h) again at the background class, and takes
 // requests one by one on a thread that sleeps in the kernel between them. A request is prepared there (compiler_request.h),
 // answered from the store when its entry is in, and otherwise handed to the pool (compiler_pool.h), which makes each
-// record once for every process that asks, at the class of its most urgent waiter.
+// record once for every process that asks, at the class of its most urgent waiter. The m2v device it compiles with is
+// opened at the first compile (compiler_engine.h), inside the sandbox: a compiler whose store holds every state asked of
+// it never opens one.
 #import <Foundation/Foundation.h>
 
 #include <IOKit/IOKitLib.h>
@@ -100,7 +102,8 @@ private:
     std::mutex publishLock_;
 
     int32_t run(Work &work);
-    bool publish(const raw::Digest &name, const std::string &entry, std::string &why);
+    bool publish(const raw::Digest *name, const raw::CacheKey &key, const std::string &entry, bool slots,
+                 std::string &why);
     bool connect(std::string &why);
     void decline();
     bool registerStore(uint64_t stack, std::string &why);
@@ -119,18 +122,25 @@ int32_t packed(int32_t result, bool stored, qos_class_t ran)
     return result | (stored ? kStoredBit : 0) | int32_t(bandOf(uint32_t(ran), true)) << kClassShift;
 }
 
-// A full store is written again with its newest half and registered again, then takes the entry
-bool Service::publish(const raw::Digest &name, const std::string &entry, std::string &why)
+// The entry under `name` (null: the store holds it already), and with `slots` its program slots ahead of it
+// (Store::putProgramSlots): a full store is written again with its newest half and registered again, then takes both
+bool Service::publish(const raw::Digest *name, const raw::CacheKey &key, const std::string &entry, bool slots,
+                      std::string &why)
 {
     std::lock_guard<std::mutex> l(publishLock_);
-    Store::Put put = store_.put(name, entry);
+    const auto putAll = [&] {
+        if (slots && store_.putProgramSlots(key, entry) == Store::Put::Full)
+            return Store::Put::Full;
+        return name ? store_.put(*name, entry) : Store::Put::Added;
+    };
+    Store::Put put = putAll();
     if (put == Store::Put::Full) {
         const uint32_t before = store_.entries();
         if (!store_.makeRoom(why) || !registerStore(uint64_t(TEGRA_RAW_STACK), why))
             return false;
         os_log(logger(), "SwitchShaderCompiler: the full store kept its newest %u of %u entries", store_.entries(),
                before);
-        put = store_.put(name, entry);
+        put = putAll();
     }
     if (put != Store::Put::Added)
         why = "the store took no entry";
@@ -154,7 +164,7 @@ int32_t Service::run(Work &work)
     const uint64_t wall = clock_gettime_nsec_np(CLOCK_UPTIME_RAW);
 #endif
     int32_t result = engine_.compile(p, entry, why);
-    if (!entry.empty() && !publish(p.name, entry, why))
+    if (!entry.empty() && !publish(&p.name, p.key, entry, result == TegraGM20BCompileMade, why))
         result = TegraGM20BCompileFailed;
     if (result == TegraGM20BCompileMade)
         log_.add(p.name, asked.request);
@@ -261,7 +271,7 @@ bool Service::open(uint64_t stack)
     root_ = geteuid() ? kMobileRoot : kSystemRoot;
     std::string why;
     if (!connect(why) || !engine_.open(stack, why) || !store_.open(root_, stack, engine_.rules(), why) ||
-        !registerStore(stack, why) || !engine_.openDevice(why)) {
+        !registerStore(stack, why)) {
         os_log_error(logger(), "SwitchShaderCompiler: not serving: %{public}s", why.c_str());
         decline();
         return false;
@@ -276,8 +286,8 @@ bool Service::open(uint64_t stack)
     return true;
 }
 
-// The requests an earlier store was made from, made again as background work nobody waits for: a store already holding
-// one answers it at once
+// The requests an earlier store was made from, made again as background work nobody waits for. A store already holding
+// one gets the record's program slots it lacks (a store written before they were kept, or one that dropped them)
 void Service::warm(uint64_t stack)
 {
     uint32_t again = 0, dropped = 0;
@@ -290,9 +300,13 @@ void Service::warm(uint64_t stack)
         }
         name = prepared.name;
         std::string bytes;
-        if (!store_.find(name, bytes) || storedResult(bytes, prepared.key) < 0) {
+        const int32_t stored = store_.find(name, bytes) ? storedResult(bytes, prepared.key) : -1;
+        if (stored < 0) {
             again++;
             submit(std::move(prepared), request, {0, 0, Band::Background, false}, 0);
+        } else if (stored == TegraGM20BCompileMade && !publish(nullptr, prepared.key, bytes, true, why)) {
+            os_log_error(logger(), "SwitchShaderCompiler: a stored record's program slots not kept: %{public}s",
+                         why.c_str());
         }
         return true;
     });

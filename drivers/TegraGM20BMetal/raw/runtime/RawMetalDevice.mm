@@ -120,8 +120,10 @@ static const char *zetaMemoryRefusal(int asked)
 }
 
 // hw_test_app's system.widgets_render and gpu.raw.memoryless_burst: the bytes the raw device holds now. pool: its pool,
-// block-linear and depth chunks; wc: its write-combined chunks; heap: the shader heap's bound parts; backings: memoryless
-// attachments' uncompressed backings (trimBackings' last count); grows: allocations that wired a chunk themselves.
+// block-linear and depth chunks; wc: its write-combined chunks; heap: the shader heap's host memory (programs copied);
+// heap_in_place: the pack's and the shader compiler's store's pages larger programs run from (file pages, outside the
+// footprint); backings: memoryless attachments' uncompressed backings (trimBackings' last count); grows: allocations that
+// wired a chunk themselves.
 - (NSDictionary<NSString *, NSNumber *> *)switchRawMemory
 {
     raw::Device &d = *gRM->raw;
@@ -129,6 +131,7 @@ static const char *zetaMemoryRefusal(int asked)
         @"pool" : @(d.stats.poolBytes.load()),
         @"wc" : @(d.wcChunkBytesHeld()),
         @"heap" : @(d.heapBytes()),
+        @"heap_in_place" : @(d.heapInPlaceBytes()),
         @"backings" : @(d.stats.backingBytes.load()),
         @"grows" : @(d.stats.poolStalls.load())
     };
@@ -161,7 +164,7 @@ static const char *zetaMemoryRefusal(int asked)
 // The m2v device this one wraps (the one TEGRA_RAW_METAL=0 gives the process): hw_test_app draws each scene on both
 - (id<MTLDevice>)switchM2VDevice
 {
-    return gRM->fallback;
+    return RM_M2V("HW Test's m2v device");
 }
 #endif
 
@@ -189,7 +192,7 @@ static const char *zetaMemoryRefusal(int asked)
     return a ? std::max<NSUInteger>(a, 32) : a;
 }
 
-// (every other selector: the m2v device's own method, which the device class inherits)
+// (a selector only m2v's device class has a method for opens the m2v device at its first use: RawMetalM2V.mm)
 - (id<MTLCommandQueue>)newCommandQueue
 {
     RMQueue *q = [RMQueue new];
@@ -226,7 +229,7 @@ static const char *zetaMemoryRefusal(int asked)
             logPred(PredCallBufForeign, 0, n, @"(made: the pool had no room)");
         RMTwinObject *t = [RMTwinObject new];
         t->_device = self;
-        t->_twin = [gRM->fallback newBufferWithLength:n options:o];
+        t->_twin = [RM_M2V("a buffer the pool had no room for") newBufferWithLength:n options:o];
         return t->_twin ? (id<MTLBuffer>)t : nil;
     }
     b->_raw.hostVisible = (o & MTLResourceStorageModeMask) != MTLResourceStorageModePrivate;
@@ -248,7 +251,7 @@ static const char *zetaMemoryRefusal(int asked)
         return b;
     if (![(id)b isKindOfClass:[RMBuffer class]]) {  // the pool had no room: m2v's buffer, made with the bytes
         RMTwinObject *t = (RMTwinObject *)b;
-        t->_twin = [gRM->fallback newBufferWithBytes:p length:n options:o];
+        t->_twin = [RM_M2V("a buffer the pool had no room for") newBufferWithBytes:p length:n options:o];
         return t->_twin ? b : nil;
     }
     RMBuffer *buffer = (RMBuffer *)b;
@@ -275,7 +278,8 @@ static const char *zetaMemoryRefusal(int asked)
             logPred(PredCallBufForeign, uintptr_t(p) & 0xfff, n, @"(made: a no-copy buffer the raw path refused)");
         RMTwinObject *t = [RMTwinObject new];
         t->_device = self;
-        t->_twin = [gRM->fallback newBufferWithBytesNoCopy:p length:n options:o deallocator:deallocator];
+        id<MTLDevice> m2v = RM_M2V("a no-copy buffer the raw path refused");
+        t->_twin = [m2v newBufferWithBytesNoCopy:p length:n options:o deallocator:deallocator];
         return t->_twin ? (id<MTLBuffer>)t : nil;
     }
     b->_deallocator = [deallocator copy];
@@ -349,7 +353,8 @@ static void reportNonFiniteStart(RMTexture *t, MTLTextureDescriptor *d)
     const RMStoredSamples stored = storedMultisampleKind(d);
     if (!rawShape(d) && !zetaDescriptor(d) && !line && !volume && !array && !multisampled &&
         stored == RMStoredSamples::None) {
-        RMTexture *w = (RMTexture *)[self wrapTwin:[gRM->fallback newTextureWithDescriptor:d] descriptor:d];
+        id<MTLDevice> m2v = RM_M2V("a texture of a shape the raw path does not take");
+        RMTexture *w = (RMTexture *)[self wrapTwin:[m2v newTextureWithDescriptor:d] descriptor:d];
         if (w)
             refuseTexture(w, PredTexShape, rawShapeTerm(d), d.pixelFormat, @"twin-only", nil);
         return (id<MTLTexture>)w;
@@ -376,7 +381,7 @@ static void reportNonFiniteStart(RMTexture *t, MTLTextureDescriptor *d)
     } else if (d.storageMode != MTLStorageModeMemoryless && zetaDescriptor(d)) {
         // one allocation for both drivers: m2v's texture, which the raw path renders and copies in place
         t->_kind = RMTexturePool;
-        id twin = [gRM->fallback newTextureWithDescriptor:d];
+        id twin = [RM_M2V("a stored depth/stencil texture's memory") newTextureWithDescriptor:d];
         struct switch_nvk_image_memory m;
         const int asked = !twin                                 ? -3
                           : !native_bridge_metal_texture_memory ? -1
@@ -421,7 +426,8 @@ static void reportNonFiniteStart(RMTexture *t, MTLTextureDescriptor *d)
 #endif
     }
     if (!t->_rawOk) {
-        RMTexture *w = (RMTexture *)[self wrapTwin:t->_twin ?: [gRM->fallback newTextureWithDescriptor:d] descriptor:d];
+        id twin = t->_twin ?: [RM_M2V("a texture the raw path made no memory for") newTextureWithDescriptor:d];
+        RMTexture *w = (RMTexture *)[self wrapTwin:twin descriptor:d];
         if (w)
             refuseTexture(w, PredTexPoolAlloc, d.width, d.height, @"twin-only (pool)", nil);
         return (id<MTLTexture>)w;

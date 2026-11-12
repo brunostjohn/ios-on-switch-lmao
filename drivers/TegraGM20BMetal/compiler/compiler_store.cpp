@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: MIT
 // See compiler_store.h.
 #include "compiler_store.h"
+#include "../raw/runtime/raw_compute_slot.h"
+#include "../raw/runtime/raw_program_pages.h"
 
 #include <dirent.h>
 #include <sys/stat.h>
@@ -108,6 +110,45 @@ Store::Put Store::put(const raw::Digest &name, const std::string &entry)
     default:
         return Put::Failed;
     }
+}
+
+// The slots a record's or a kernel's entry holds, as the client lays each out to place it (raw_completed.cpp, raw_compute.cpp)
+static std::vector<std::vector<uint8_t>> entrySlots(const raw::CacheKey &key, const std::string &entry)
+{
+    std::vector<std::vector<uint8_t>> slots;
+    std::string refusal;
+    raw::RuntimeRecord record;
+    if (raw::decodeEntry(entry, key, record, refusal) == raw::RecordCache::Found::Record) {
+        std::vector<const raw::CapturedProgram *> programs = {&record.programs[0], &record.programs[1]};
+        for (const raw::RuntimeRecord::Variant &v : record.variants)
+            programs.push_back(&v.program);
+        if (record.split)
+            programs.push_back(&record.splitPrograms[0]);
+        for (const raw::CapturedProgram *program : programs) {
+            raw::PackProgram info;
+            if (!program->image.empty())
+                slots.push_back(raw::programSlot(*program, info));
+        }
+        return slots;
+    }
+    raw::ComputeRecord kernel;
+    if (raw::decodeKernelEntry(entry, key, kernel, refusal) == raw::RecordCache::Found::Record)
+        slots.push_back(raw::computeSlot(kernel));
+    return slots;
+}
+
+Store::Put Store::putProgramSlots(const raw::CacheKey &key, const std::string &entry)
+{
+    for (std::vector<uint8_t> &slot : entrySlots(key, entry)) {
+        if (slot.size() < raw::kProgramSlotPage)
+            continue;
+        const raw::Digest name = raw::programSlotName(slot.data(), slot.size());
+        slot.resize(raw::programSlotEntryBytes(slot.size()));
+        std::lock_guard<std::mutex> l(lock_);
+        if (writer_.put(name.data(), slot.data(), uint32_t(slot.size())) == switch_seed_pack::StoreWriter::Put::Full)
+            return Put::Full;
+    }
+    return Put::Added;
 }
 
 bool Store::makeRoom(std::string &error)

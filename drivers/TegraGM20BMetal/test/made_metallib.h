@@ -29,7 +29,9 @@ inline void bigEndian(std::vector<uint8_t> &out, size_t at, uint32_t v)
         out[at + i] = uint8_t(v >> (24 - 8 * i));
 }
 
-inline std::string universal(const std::vector<std::string> &functions, uint8_t seed = 0xA0, uint8_t filler = 0xEE)
+// `types`: each function's TYPE tag (0 vertex, 1 fragment, 2 kernel); fragment where it has none
+inline std::string universal(const std::vector<std::string> &functions, uint8_t seed = 0xA0, uint8_t filler = 0xEE,
+                             const std::vector<uint8_t> &types = {})
 {
     std::vector<uint8_t> slice(0x58);
     memcpy(slice.data(), "MTLB", 4);
@@ -38,7 +40,7 @@ inline std::string universal(const std::vector<std::string> &functions, uint8_t 
     for (size_t i = 0; i < functions.size(); i++) {
         std::vector<uint8_t> e(4);
         tag(e, "NAME", functions[i].c_str(), uint16_t(functions[i].size() + 1));
-        const uint8_t type = 1;
+        const uint8_t type = i < types.size() ? types[i] : 1;
         tag(e, "TYPE", &type, 1);
         uint8_t hash[32];
         memset(hash, seed + int(i), sizeof hash);
