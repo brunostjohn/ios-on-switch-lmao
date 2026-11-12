@@ -2928,7 +2928,8 @@ void Device::trimBackings()
     for (auto it = backings_.begin(); it != backings_.end();) {
         Backing *b = *it;
         if (backingStale(commitCount_, b->lastCommit.load(std::memory_order_seq_cst), closedCount_,
-                         b->lastClosed.load(std::memory_order_seq_cst), now, b->usedNs, b->retired, b->comp || b->plain) &&
+                         b->lastClosed.load(std::memory_order_seq_cst), now, b->usedNs, b->retired,
+                         b->comp || b->plain) &&
             (!b->submitted || done(b->lastUse))) {
             if (b->tag < lastBackings_.size() && lastBackings_[b->tag] == b)
                 lastBackings_[b->tag] = nullptr;
@@ -4309,13 +4310,16 @@ bool RenderEncoder::drawIndexed(uint32_t primitive, uint32_t count, uint32_t ind
     // with index 0 past it from the hardware, the zero page, or a padded copy
     uint64_t indexLimit = uint64_t(count) * indexSize;
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
-    if (const uint32_t probed = cb_->forms_.indexLimit) {
+    const uint32_t probedLimit = cb_->forms_.indexLimit;
+    if (probedLimit)
         cb_->taken_.indexLimits++;
-        indexLimit = probed;
-        drawIndexBuffer_ = nullptr;
-    } else
+#else
+    constexpr uint32_t probedLimit = 0;
 #endif
-    if (count > inside && !inside && uint64_t(count) * indexSize <= dev_->zero_.bytes) {
+    if (probedLimit) {
+        indexLimit = probedLimit;
+        drawIndexBuffer_ = nullptr;
+    } else if (count > inside && !inside && uint64_t(count) * indexSize <= dev_->zero_.bytes) {
         padded.va = dev_->zero_.va;
         padded.cpu = dev_->zero_.cpu;
         padded.length = dev_->zero_.bytes;
