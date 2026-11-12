@@ -4716,6 +4716,7 @@ public:
 #include "SwitchScanoutSetup.h"
 #include "NativePlaneFenceDisplay.h"
 #include "SwitchMediaPlaneFence.h"
+#include "SwitchMediaCompletionFlipDisplay.h"
 #include "SwitchPlaneFenceAdmission.h"
 #include "NativePlanesTotals.h"
 #include "SwitchPlaneSurfaceUseDisplay.h"

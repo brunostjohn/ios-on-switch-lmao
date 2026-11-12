@@ -42,6 +42,9 @@
 #                                       order of completion, pass, boundary, frame end and SC7
 #   switch_completion_flip_proof_test   the same on a unit whose window A WINBUF aperture refuses the stores: one
 #                                       line, completion flips off, the frame flips from the gate, no latch misread
+#   switch_media_completion_flip_test   SwitchMediaCompletionFlipDisplay.h: a media plane set staged at its offer and
+#                                       written by its producers' completion; never taken before its request, never
+#                                       a surface scanned before its producer finished, whatever the order
 #   display_planes_source_test         the driver and XNU follow those rules (validateSwap, the kick, one
 #                                       STATE_CONTROL pair, retire at the latch, the panic hook, the published limits,
 #                                       backboardd's CA_DISABLE_DETACHED gate), and the plane accessors are TegraVIC's
@@ -579,6 +582,42 @@ host_test(
         "//drivers/TegraVIC:SwitchSurfaceColor.h",
         "//drivers/SwitchPower:SwitchDisplayBandwidth.h",
         "//drivers/TegraGM20B:TegraGM20BLayout.h",
+    ],
+)
+
+host_test(
+    name = "switch_media_completion_flip_test",
+    srcs = [
+        "switch_media_completion_flip_harness.h",
+        "switch_media_completion_flip_test.cpp",
+        "//drivers/NativeMobileDisplay:NativePlanes.h",
+        "//drivers/NativeMobileDisplay:SwitchCompletionFlip.h",
+        "//drivers/NativeMobileDisplay:SwitchCompositionRegisters.h",
+        "//drivers/NativeMobileDisplay:SwitchDisplayBandwidthDisplay.h",
+        "//drivers/NativeMobileDisplay:SwitchDisplayComposition.h",
+        "//drivers/NativeMobileDisplay:SwitchDisplayMemoryEnvelope.h",
+        "//drivers/NativeMobileDisplay:SwitchMediaCompletionFlipDisplay.h",
+        "//drivers/NativeMobileDisplay:SwitchOverlayRecovery.h",
+        "//drivers/NativeMobileDisplay:SwitchOverlayRegisters.h",
+        "//drivers/NativeMobileDisplay:SwitchPlaneAdmissionDrop.h",
+        "//drivers/NativeMobileDisplay:SwitchPlaneSelection.h",
+        "//drivers/NativeMobileDisplay:SwitchPlanesResume.h",
+        "//drivers/NativeMobileDisplay:SwitchWindowCaps.h",
+        "//drivers/NativeMobileDisplay:SwitchWindowFormatImage.h",
+        "//drivers/SwitchPower:SwitchDisplayBandwidth.h",
+        "//drivers/SwitchPower:SwitchDisplayMemory.h",
+        "//drivers/TegraGM20B:SwitchGpuBacking.h",
+        "//drivers/TegraGM20B:TegraGM20BLayout.h",
+        "//drivers/TegraVIC:SwitchSurfaceColor.h",
+    ],
+    data = [
+        "//drivers/NativeMobileDisplay:NativeLegacyDisplay.cpp",
+        "//drivers/NativeMobileDisplay:NativePlaneFenceDisplay.h",
+        "//drivers/NativeMobileDisplay:NativePlanesDisplay.h",
+        "//drivers/NativeMobileDisplay:SwitchCompletionFlipDisplay.h",
+        "//drivers/NativeMobileDisplay:SwitchMediaPlaneFence.h",
+        "//drivers/NativeMobileDisplay:SwitchOverlayRecovery.h",
+        "//drivers/NativeMobileDisplay:SwitchOverlayRegisters.h",
     ],
 )
 

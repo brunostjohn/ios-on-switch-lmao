@@ -24,6 +24,9 @@ struct Composition {
     }
 };
 
+// `armed` may be staged ahead of its request (armedRequested false): its registers are in the assembly copy and a
+// producer's completion writes the ACT_REQ (SwitchPlaneCompletionFlipDisplay.h). Until request(), no boundary can have
+// taken it, so a frame end reads it as a request still out, and requested() is about a superseded set alone.
 template<class State = Composition> class Compositions {
 public:
     static constexpr unsigned kSlots = 4;
@@ -31,8 +34,9 @@ public:
     enum class Latch { Waiting, Taken, Replaced, Inconsistent };
     State *values = nullptr;
     int active = kOff, armed = kNone, superseded = kNone;
+    bool armedRequested = true;
 
-    bool requested() const { return armed != kNone; }
+    bool requested() const { return (armed != kNone && armedRequested) || superseded != kNone; }
     bool mayWrite() const { return superseded == kNone; }
     bool busy(int id) const { return id >= 0 && (id == active || id == armed || id == superseded); }
 
@@ -48,13 +52,33 @@ public:
         values[id] = next;
         superseded = armed;
         armed = int(id);
+        armedRequested = true;
         return armed;
+    }
+
+    void deferRequest() { armedRequested = armed == kNone; }
+    void request() { armedRequested = true; }
+
+    // A staged set whose request never came: the latch is as it was before write().
+    void withdraw()
+    {
+        if (armed == kNone || armedRequested)
+            return;
+        armed = superseded;
+        superseded = kNone;
+        armedRequested = true;
     }
 
     Latch observe(uint32_t requests, int scanned)
     {
-        if (!requested())
+        if (armed == kNone)
             return Latch::Waiting;
+        if (!armedRequested) {
+            // Registers that match the staged set are the newest requested one's (only its addresses differ).
+            requests |= 1u;
+            if (scanned == armed)
+                scanned = superseded != kNone ? superseded : active;
+        }
         if (!requests) {
             if (scanned != armed)
                 return Latch::Inconsistent;
@@ -80,13 +104,19 @@ public:
     {
         active = kOff;
         armed = superseded = kNone;
+        armedRequested = true;
     }
 
+    // The last request is what the window has; a staged set stays armed for its request.
     void settle()
     {
-        if (requested())
+        if (armed != kNone && armedRequested)
             active = armed;
-        armed = superseded = kNone;
+        else if (superseded != kNone)
+            active = superseded;
+        if (armedRequested)
+            armed = kNone;
+        superseded = kNone;
     }
 
     bool uses(int slot) const

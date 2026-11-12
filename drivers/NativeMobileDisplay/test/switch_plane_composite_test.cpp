@@ -276,6 +276,9 @@ struct NativeLegacyDisplay : OSObject {
         ++withdrawals;
     }
 
+    void mediaFlipFromGate()
+    {}
+
     Loop *getWorkLoop()
     {
         return &loop;

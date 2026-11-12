@@ -71,6 +71,7 @@ bool planeFence(const PlaneSet &p)
 // when its writers' work was lost or failed, or planes went off meanwhile.
 void finishPlaneFence(int status)
 {
+    mediaFlipPass();
     gpuDeadline->cancelTimeout();
     __atomic_store_n(&gpuScanout, false, __ATOMIC_RELEASE);
     planeFencePending = false;

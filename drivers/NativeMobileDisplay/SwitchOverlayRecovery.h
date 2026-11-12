@@ -28,6 +28,7 @@ void writePlaneRecoveryOff()
 
 void beginPlaneRecovery(const char *why)
 {
+    mediaFlipFromGate();
     if (planeRecovering)
         return;
     IOLog("SwitchDisplay: recovering overlay windows: %s\n", why);

@@ -28,6 +28,26 @@ TEST(Composition, ReplacedCommitKeepsBothSetsUntilBoundaryIdentityIsKnown) {
     ASSERT_NE(commits.write(frame(5,6,3)),Compositions<>::kNone);
     for(int slot=1;slot<=6;++slot) EXPECT_TRUE(commits.uses(slot));
 }
+// A staged entry (a producer's completion writes its ACT_REQ) is never taken before request(), even when the scanned
+// registers match it; a superseded one still is; withdraw() and settle() leave the latch as the requests made it.
+TEST(Composition, AStagedEntryIsTakenOnlyAfterItsRequest) {
+    Composition storage[5]; Compositions<> commits; commits.values=storage;
+    const int first=commits.write(frame(1,2,1)); ASSERT_EQ(commits.observe(0,first),Compositions<>::Latch::Taken);
+    const int staged=commits.write(frame(3,-1,2)); commits.deferRequest();
+    EXPECT_FALSE(commits.requested()); EXPECT_TRUE(commits.busy(staged));
+    EXPECT_EQ(commits.observe(0,staged),Compositions<>::Latch::Waiting); EXPECT_EQ(commits.active,first);
+    commits.withdraw(); EXPECT_EQ(commits.armed,Compositions<>::kNone); EXPECT_EQ(commits.active,first);
+    const int out=commits.write(frame(4,-1,3)); const int next=commits.write(frame(5,-1,4)); commits.deferRequest();
+    EXPECT_TRUE(commits.requested());
+    EXPECT_EQ(commits.observe(0,out),Compositions<>::Latch::Replaced); EXPECT_EQ(commits.active,out);
+    EXPECT_FALSE(commits.requested());
+    commits.settle(); EXPECT_EQ(commits.active,out); EXPECT_EQ(commits.armed,next);
+    commits.request(); EXPECT_TRUE(commits.requested());
+    EXPECT_EQ(commits.observe(0,next),Compositions<>::Latch::Taken); EXPECT_EQ(commits.active,next);
+    const int last=commits.write(frame(6,-1,5)); commits.deferRequest(); commits.withdraw();
+    EXPECT_EQ(commits.armed,Compositions<>::kNone); EXPECT_FALSE(commits.busy(last));
+}
+
 TEST(Composition, SameSurfaceGeometryChangeGetsAnIndependentCommitIdentity) {
     Composition storage[5]; Compositions<> commits; commits.values=storage; auto original=frame(1,2,10);
     const int first=commits.write(original); ASSERT_EQ(commits.observe(0,first),Compositions<>::Latch::Taken);
