@@ -4943,6 +4943,7 @@ bool RenderEncoder::prepare(Pipeline *pl, uint32_t primitive, int32_t first, uin
             cb_->clean(b.buffer->cpu + from, bytes);
         }
     }
+    bool selected = false;
     if (descriptorBinding_.changed(pl, setVa)) {
         const uint32_t s[4] = {uint32_t(setVa), uint32_t(setVa >> 32), kSetBytes, 0};
         p.m(LOAD_CB_OFFSET, 0x38);
@@ -4953,21 +4954,25 @@ bool RenderEncoder::prepare(Pipeline *pl, uint32_t primitive, int32_t first, uin
                 p.m(BIND_GROUP_CB + 0x20 * 0, 1 | uint32_t(pl->setSlot[0]) << 4);
             if (pl->setSlot[1])
                 p.m(BIND_GROUP_CB + 0x20 * 4, 1 | uint32_t(pl->setSlot[1]) << 4);
+            selected = true;
         }
-        // NVK_MME_BIND_CBUF_DESC's bindings, read from cached CPU words rather than the WC upload.
-        for (uint8_t u = 0; u < pl->uboCount; u++) {
-            const Pipeline::UboCbuf &c = pl->ubos[u];
-            const uint32_t *desc = set + r.entry[c.entry].offset / 4;
-            if (desc[2]) {
-                p.inc(CB_SELECTOR_A, {std::min(desc[2], kMaxCbufBytes), desc[1], desc[0]});
-                p.m(BIND_GROUP_CB + 0x20 * c.group, 1 | uint32_t(c.slot) << 4);
-            } else {
-                p.m(BIND_GROUP_CB + 0x20 * c.group, uint32_t(c.slot) << 4);
-            }
-        }
-        if (pl->setSlot[0] || pl->setSlot[1] || pl->uboCount)
-            p.inc(CB_SELECTOR_A, {kRootBytes, uint32_t(d.root_.va >> 32), uint32_t(d.root_.va)});
     }
+    // NVK_MME_BIND_CBUF_DESC's bindings, read from cached CPU words rather than the WC upload.
+    for (uint8_t u = 0; u < pl->uboCount; u++) {
+        const Pipeline::UboCbuf &c = pl->ubos[u];
+        const uint32_t *desc = set + r.entry[c.entry].offset / 4;
+        if (!descriptorBinding_.uboMoved(u, desc))
+            continue;
+        if (desc[2]) {
+            p.inc(CB_SELECTOR_A, {std::min(desc[2], kMaxCbufBytes), desc[1], desc[0]});
+            p.m(BIND_GROUP_CB + 0x20 * c.group, 1 | uint32_t(c.slot) << 4);
+            selected = true;
+        } else {
+            p.m(BIND_GROUP_CB + 0x20 * c.group, uint32_t(c.slot) << 4);
+        }
+    }
+    if (selected)
+        p.inc(CB_SELECTOR_A, {kRootBytes, uint32_t(d.root_.va >> 32), uint32_t(d.root_.va)});
     if (pl->splitOf)
         launchSplit(p, *pl, set);
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
