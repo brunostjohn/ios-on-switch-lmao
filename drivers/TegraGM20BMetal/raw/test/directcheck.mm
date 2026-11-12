@@ -187,6 +187,8 @@ int main(int argc, char **argv)
                     textures.fragmentTests = uint8_t(atoi(tests));
                     key += " | tests=" + std::to_string(textures.fragmentTests);
                 }
+                textures.written = s.written;
+                key += raw::writtenVariant(s.written);
                 const size_t named = raw::variantNameAt(key);
                 const uint64_t keyHash = raw::packKeyHash(key.substr(0, named));
                 // DIRECTCHECK_BARRIER=1: each state's barrier form against the pack's

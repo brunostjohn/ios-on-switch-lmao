@@ -152,8 +152,11 @@ static void giveRecording(RMCommandBuffer *b)
                             } else if ((entry.kind == raw::EntryTexture || entry.kind == raw::EntryTexture3d) &&
                                        entry.slot < raw::kStageTextures) {
                                 const uint32_t at = raw::handleStage(entry);
+                                const bool written = entry.stage == 2 && entry.slot < raw::kWrittenSlots &&
+                                                     (native->writtenSlots >> entry.slot & 1);
                                 bound.push_back({_plan.textures[at][state.textures[at]].objects[entry.slot],
-                                                 raw::ResourceUse::Read | raw::ResourceUse::Sample});
+                                                 uint8_t(raw::ResourceUse::Read | raw::ResourceUse::Sample |
+                                                         (written ? raw::ResourceUse::Write : 0))});
                             }
                             if ((entry.kind == raw::EntryTexture || entry.kind == raw::EntryTexture3d ||
                                  entry.kind == raw::EntrySamplerOnly) &&

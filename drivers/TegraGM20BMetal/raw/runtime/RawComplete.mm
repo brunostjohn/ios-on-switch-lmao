@@ -244,6 +244,7 @@ Compiler::Outcome Completion::make(const CacheKey &k, RuntimeRecord &record, std
     textures.fragmentTests = a.fragmentTests;
     textures.twoPlane = a.twoPlane;
     textures.xrSlots = a.xrSlots;
+    textures.written = a.written;
 #if SWITCH_RAW_DIAGNOSTICS
     const CompileCost cost;
 #endif

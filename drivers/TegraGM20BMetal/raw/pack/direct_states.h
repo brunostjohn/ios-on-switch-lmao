@@ -70,7 +70,9 @@ void eachState(id<MTLDevice> dev, id<MTLLibrary> qc, id<MTLLibrary> own, id<MTLL
                 continue;
             s.key = airKeyed.key + cubic;
         }
-        if (seen.insert(s.key + (s.xrSlots ? raw::xrSampledVariant(s.xrSlots) : std::string())).second)
+        if (seen.insert(s.key + (s.xrSlots ? raw::xrSampledVariant(s.xrSlots) : std::string()) +
+                        raw::writtenVariant(s.written))
+                .second)
             each(line, ours, s);
     }
 }

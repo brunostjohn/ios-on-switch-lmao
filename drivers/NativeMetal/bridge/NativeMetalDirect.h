@@ -60,6 +60,7 @@ typedef struct NmbDirectWrite {
     uint32_t sampler;  // a sampler's slot, NMB_DIRECT_IMMUTABLE (the layout's constexpr sampler) or NMB_DIRECT_NEUTRAL
     uint64_t range;    // a buffer's bound range
     int32_t viewType;  // an image\'s VkImageViewType (a neutral\'s too), -1 for no image
+    uint32_t format;   // a fragment texture's: the MTLPixelFormat of the texture the probe bound at its slot, 0 for none
 } NmbDirectWrite;
 
 // A sampler's state as vk_sampler_state_init makes it of the VkSamplerCreateInfo metal2vulkan creates (Vulkan values;

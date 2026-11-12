@@ -415,7 +415,7 @@ def state_key(line: str) -> str:
         if h.startswith(('samples=', 'topo=', 'ds=')) or (len(h) > 1 and h[0] in 'ca' and h[1].isdigit())
     ]
     key = ' '.join(fields) + ' ' + line[bar1 : bar3 if bar3 >= 0 else len(line)]
-    cubic = sampled = ''
+    cubic = sampled = written = ''
     for segment in line[bar3 + 3 :].split(' | ') if bar3 >= 0 else ():
         if segment.startswith(LINKED):
             tokens = segment.split()
@@ -426,9 +426,11 @@ def state_key(line: str) -> str:
             cubic = ' | ' + ' '.join(segment.split())
         elif segment.startswith('xrs='):
             sampled = ' | ' + segment.strip()
+        elif segment.startswith('wtex='):
+            written = ' | ' + segment.strip()
     # A stage with no constants keeps its space before what follows it (RawPipelineKey.h pipelineKey trims the key's end
     # alone): " | f <function>  | l <framework>"
-    return (f'{key} | l {framework}' if framework else key).strip() + cubic + sampled
+    return (f'{key} | l {framework}' if framework else key).strip() + cubic + sampled + written
 
 
 def bucket(tools: Path, d: Path, nvk: Path, qc: Path, env: dict[str, str]) -> str:

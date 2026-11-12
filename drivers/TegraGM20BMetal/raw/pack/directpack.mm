@@ -185,6 +185,7 @@ std::vector<uint8_t> testClasses(const raw::PackPipeline &p, const std::string &
 struct Counts {
     uint32_t made = 0, refused = 0, failed = 0, split = 0, variants = 0, planes = 0, planesRefused = 0, sampled = 0;
     uint32_t free[4] = {}, freeFetching = 0, freeRefused = 0, freeBarrier = 0;
+    uint32_t written = 0;
 };
 
 // The state's fetch-free form (fetch_free_make.h), under the state's key
@@ -228,7 +229,8 @@ bool twoPlaneColors(const std::string &key)
 // has its twin only for a debug build's probe: raw_gpu.cpp Device::pipeline), its fetch-free form, and one per test class
 // its draws can ask for (named " | tests=<class>" after its key, as the runtime names them); then, for a state of
 // RGB10A8_2P_XR10 colours, all but the fetch-free form again of its two-plane form (raw_xr_pass.h), each named " | xr2p"
-// after
+// after. A line naming a sampled two-plane or a written variant (" | xrs=", " | wtex=") makes that variant's records
+// alone, its name last.
 void makeState(raw::Direct &direct, Writer &w, id<MTLLibrary> qc, const std::string &line, raw::ProbeTextures textures,
                const probe::State &s, Counts &n)
 {
@@ -267,12 +269,14 @@ void makeState(raw::Direct &direct, Writer &w, id<MTLLibrary> qc, const std::str
         }
         return outcome;
     };
-    // a line of a sampled two-plane variant (" | xrs=<slots>") names that variant's records alone
-    const std::string sampled = s.xrSlots ? raw::xrSampledVariant(s.xrSlots) : std::string();
+    const std::string sampled =
+        (s.xrSlots ? raw::xrSampledVariant(s.xrSlots) : std::string()) + raw::writtenVariant(s.written);
     textures.xrSlots = s.xrSlots;
+    textures.written = s.written;
     const raw::CompileOutcome outcome = forms(textures, sampled.c_str());
     (outcome == raw::CompileOutcome::Made ? n.made : outcome == raw::CompileOutcome::Refused ? n.refused : n.failed)++;
     n.sampled += s.xrSlots && outcome == raw::CompileOutcome::Made;
+    n.written += !s.written.empty() && outcome == raw::CompileOutcome::Made;
     if (outcome != raw::CompileOutcome::Made || !twoPlaneColors(s.key))
         return;
     raw::ProbeTextures planes = textures;
@@ -359,9 +363,10 @@ int main(int argc, char **argv)
         fclose(w.f);
         fprintf(stderr,
                 "directpack: %u states made (%u split, %u test variants, %u two-plane forms, %u refused, %u sampled "
-                "two-plane variants), %u refused, %u failed; %u kernels made, %u refused, %u failed\n",
+                "two-plane variants, %u written-format variants), %u refused, %u failed; %u kernels made, %u refused, "
+                "%u failed\n",
                 counts.made, counts.split, counts.variants, counts.planes, counts.planesRefused, counts.sampled,
-                counts.refused, counts.failed, kernels[0], kernels[1], kernels[2]);
+                counts.written, counts.refused, counts.failed, kernels[0], kernels[1], kernels[2]);
         fprintf(stderr,
                 "directpack: fetch-free forms: %u on rung 2, %u on rung 3 (%u reading other colours behind a barrier); "
                 "%u still fetch, %u otherwise refused\n",

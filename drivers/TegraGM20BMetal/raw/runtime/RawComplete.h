@@ -18,6 +18,7 @@
 #include "raw_compute_lookup.h"
 #include "raw_cubic.h"
 #include "raw_metallib.h"
+#include "raw_written_textures.h"
 
 struct NmbDirectDispatch;
 
@@ -47,6 +48,7 @@ public:
         uint8_t fragmentTests = 0;
         bool twoPlane = false;  // its " | xr2p" variant (raw_xr_pass.h)
         uint16_t xrSlots = 0;   // its " | xrs=" variant's sampled two-plane slots (raw_xr_pass.h)
+        std::vector<WrittenTexture> written;  // its " | wtex=" variant's written textures (raw_written_textures.h)
         bool resolveDescriptor = false;
     };
 

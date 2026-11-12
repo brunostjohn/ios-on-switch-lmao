@@ -89,6 +89,8 @@
 #                     encode table (raw/pack/srgb_encode.h) against its rule over the read's knots
 #   raw_packed_plane_test  raw/runtime/raw_packed_plane.h: R10Unorm_PACKED and RG10Unorm_PACKED over 'p4xx' planes, the
 #                     codes their conversion reads and their store writes (Metal's reads: raw/test/packedplaneoracle.mm)
+#   raw_written_textures_test  raw/runtime/raw_written_textures.h: the bound formats a state's record was not compiled for
+#                     (RenderBox's uber_resolve: R16Uint where the probe bound RGBA8Uint) and its variant's name
 #   raw_xr_test       raw/runtime/raw_xr.h: the extended-range formats the raw path keeps and the codes Metal's Clear
 #                     stores in them (an M4 Max's); against Metal's own reads and clears it is raw/test/xroracle.mm's
 #   raw_xr_pass_test  raw/runtime/raw_xr_pass.h: RGB10A8_2P_XR10 drawn in its planes: the alpha index (m2v's rule), a state's
@@ -2059,6 +2061,16 @@ host_test(
     srcs = [
         "raw_xr_test.cpp",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_xr.h",
+    ],
+    cxx_std = "c++17",
+)
+
+host_test(
+    name = "raw_written_textures_test",
+    srcs = [
+        "raw_written_textures_test.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_pack.h",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_written_textures.h",
     ],
     cxx_std = "c++17",
 )

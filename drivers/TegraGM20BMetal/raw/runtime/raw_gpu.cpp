@@ -42,6 +42,7 @@
 #include "raw_tiled_cache.h"
 #include "raw_view.h"
 #include "raw_xr_pass.h"
+#include "raw_written_textures.h"
 #include "TegraGM20BLayout.h"
 
 #include <CoreFoundation/CoreFoundation.h>
@@ -1288,6 +1289,7 @@ void Device::build(Pipeline &pl, const PackPipeline &pp, const PlacedProgram &vs
     }
     pl.turnRefused = pp.flags & PipelineTurnRefused;
     pl.xrSlots = pp.xrSlots;
+    pl.writtenSlots = writtenSlots(pp);
     pl.rec = &pp;
 }
 
@@ -5835,10 +5837,22 @@ bool RenderEncoder::prepare(Pipeline *pl, uint32_t primitive, int32_t first, uin
                         cb_->refusal = {RefNoTic, e.slot, t ? t->format : 0, t ? t->width : 0};
                         return false;
                     }
+                    const bool written = handleStage(e) == 1 && (pl->writtenSlots >> e.slot & 1);
+                    // tic is the image a draw samples: a stand-in's, a sampled shadow's or a plane pair's is not the
+                    // texture's own memory
+                    const bool heldApart = t && (t->standIn || t->sampled || pair);
+                    if (written && t && (heldApart || t->format != pl->rec->writtenFormat[e.slot])) {
+                        *why = heldApart ? "a written texture the raw path holds through another image"
+                                         : "a written texture of another format than its program stores";
+                        cb_->refusal = {RefWrittenTexture, e.slot, t->format, pl->rec->writtenFormat[e.slot]};
+                        return false;
+                    }
                     if (pair) {
                         cb_->use(*t->luma, false);
                         cb_->use(*t->chroma, false);
                         RAW_DIAGNOSTIC(dev_->stats.xrPairBinds++);
+                    } else if (t && written) {
+                        cb_->use(*t, true);
                     } else if (t) {
                         cb_->use(t->standIn ? *t->standIn : t->sampled ? *t->sampled : *t, false);
                     }
@@ -5871,8 +5885,14 @@ bool RenderEncoder::prepare(Pipeline *pl, uint32_t primitive, int32_t first, uin
                         cb_->refusal = {RefNoTic, e.slot, t->format, t->width};
                         return false;
                     }
+                    const bool written = handleStage(e) == 1 && (pl->writtenSlots >> e.slot & 1);
+                    if (written && t && t->format != pl->rec->writtenFormat[e.slot]) {
+                        *why = "a written texture of another format than its program stores";
+                        cb_->refusal = {RefWrittenTexture, e.slot, t->format, pl->rec->writtenFormat[e.slot]};
+                        return false;
+                    }
                     if (t)
-                        cb_->use(*t, false);
+                        cb_->use(*t, written);
                     tic = t ? t->tic : 0;
                 }
                 const Texture *mapped = e.kind == EntryTexture ? boundTexture(e) : nullptr;

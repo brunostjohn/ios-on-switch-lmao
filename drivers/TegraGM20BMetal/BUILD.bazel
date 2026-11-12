@@ -118,6 +118,7 @@ filegroup(
         "raw/runtime/raw_rotation.h",
         "raw/runtime/raw_set_layout.h",
         "raw/runtime/raw_set_reads.h",
+        "raw/runtime/raw_written_textures.h",
         "raw/runtime/raw_xr.h",
         "raw/runtime/raw_xr_pass.h",
         "raw/runtime/raw_zeta.h",  # the formats directpack.mm's test classes reach

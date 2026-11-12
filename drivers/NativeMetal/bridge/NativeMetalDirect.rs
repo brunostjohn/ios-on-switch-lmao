@@ -94,6 +94,7 @@ pub struct NmbDirectWrite {
     pub sampler: u32,
     pub range: u64,
     pub view_type: i32,
+    pub format: u32,
 }
 
 #[repr(C)]
@@ -708,6 +709,18 @@ fn probe_state(
     state
 }
 
+/// The MTLPixelFormat of the texture the probe bound for fragment texture write `w` (0: none of its own), which the stage's
+/// accesses of a storage texture were compiled for
+fn probed_format(state: &BindState, w: &NmbDirectWrite) -> u32 {
+    if w.stage != 2 || !matches!(w.source, NmbDirectSource::Texture | NmbDirectSource::Combined) {
+        return 0;
+    }
+    match state.stages.get(&Stage::Fragment).and_then(|table| table.textures.get(&w.slot)) {
+        Some(BoundTexture::Texture { facts, .. }) => facts.pixel_format.as_raw(),
+        _ => 0,
+    }
+}
+
 pub(crate) fn slot_parts(slot: &SlotRef) -> (u32, u32) {
     (stage_number(slot.stage), slot.index)
 }
@@ -731,6 +744,7 @@ pub(crate) fn write_of(w: &metal2vulkan::bind::DescriptorWrite, ranges: &[Descri
         sampler: 0,
         range: 0,
         view_type: -1,
+        format: 0,
     };
     let sampler_of = |s: &SamplerSource| match s {
         SamplerSource::Slot { slot, .. } => slot.index,
@@ -925,6 +939,7 @@ fn immutable_samplers(layout: &PipelineLayout, written: &[NmbDirectWrite]) -> Ve
                 sampler: NMB_DIRECT_IMMUTABLE,
                 range: 0,
                 view_type: -1,
+                format: 0,
             });
         }
     }
@@ -1188,11 +1203,12 @@ impl Drop for Layout<'_> {
     }
 }
 
-/// One probe draw: the variant it runs on (its index among `variants`), its plan and its commands
+/// One probe draw: the variant it runs on (its index among `variants`), its plan, its commands and its bind state
 struct Run {
     variant: usize,
     commands: DrawCommands,
     plan: BindingPlan,
+    state: BindState,
 }
 
 /// Why a probe draw did not settle: a buffer slot m2v reaches by its device address was bound without one (the probe binds
@@ -1212,7 +1228,7 @@ fn settle(
     compile: &metal2vulkan::device::Device,
     descriptor: &RenderPipelineDescriptor,
     variants: &mut Vec<(VariantKey, RenderPipeline)>,
-    state: &BindState,
+    state: BindState,
     draw: &DrawCall,
     budget: &Budget,
 ) -> Result<Run, Unsettled> {
@@ -1239,11 +1255,12 @@ fn settle(
             plan => (at, plan.map_err(e("plan variant"))?),
         }
     };
-    let commands = plan.instantiate_draw(state, draw).map_err(e("instantiate"))?;
+    let commands = plan.instantiate_draw(&state, draw).map_err(e("instantiate"))?;
     Ok(Run {
         variant,
         commands,
         plan,
+        state,
     })
 }
 
@@ -1565,7 +1582,7 @@ fn translate(
                     amplification,
                     layers,
                 );
-                match settle(compile, descriptor, variants, &state, &draw, &budget) {
+                match settle(compile, descriptor, variants, state, &draw, &budget) {
                     Ok(settled) => runs.push(settled),
                     Err(Unsettled::Address(slot)) if !addressed.contains(&slot) => {
                         addressed.push(slot);
@@ -1617,6 +1634,7 @@ fn translate(
                     if run.plan.variant.layered_storage && out.source == NmbDirectSource::StorageAttachment {
                         out.view_type = avk::ImageViewType::TYPE_2D_ARRAY.as_raw();
                     }
+                    out.format = probed_format(&run.state, &out);
                     out
                 })
                 .collect();

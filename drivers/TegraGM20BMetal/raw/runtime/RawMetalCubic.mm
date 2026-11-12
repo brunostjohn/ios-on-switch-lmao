@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 #import "RawMetalInternal.h"
 #include "raw_fragment_tests.h"
+#include "raw_written_textures.h"
 #include "raw_xr_pass.h"
 
 raw::CubicBinds cubicBinds(const raw::Pipeline &pl, RMSampler *const samplers[16],
@@ -47,9 +48,10 @@ void packedVariants(RMPipeline *p, uint64_t keyHash)
     }
 }
 
-// A packed state's variant the pack does not hold, of no cubic or sampled form (those are made, renderVariant): one of a test
-// class the pack builder could not make draws the record without it (the state's own, or its two-plane variant's), as a
-// refused device compile left it, and says so; a two-plane variant it could not make is refused
+// A packed state's variant the pack does not hold, of no cubic, sampled or written form (those are made,
+// renderVariant): one of a test class the pack builder could not make draws the record without it (the state's own, or
+// its two-plane variant's), as a refused device compile left it, and says so; a two-plane variant it could not make is
+// refused
 static raw::Pipeline *unpackedVariant(RMPipeline *p, const std::string &suffix, const std::string &name)
 {
     const std::string key = p->_key + name;
@@ -65,23 +67,30 @@ static raw::Pipeline *unpackedVariant(RMPipeline *p, const std::string &suffix, 
                              key.c_str());
         return untested;
     }
+    // The variant's name and its state's hash come first, as the line is cut at SWITCH_REFUSAL_TEXT:
+    // tools/gpu/logharvest.py finds the state by the hash and harvests the variant
     SWITCH_REFUSE_DETAIL("raw", "state.variant_unpacked", raw::Pack::fnv(key.data(), key.size()),
-                         "a packed state's variant the pack lacks: its draws are refused: %s", key.c_str());
+                         "a packed state's variant the pack lacks: its draws are refused:%s of %016llx %s",
+                         name.c_str(), (unsigned long long)raw::Pack::fnv(p->_key.data(), p->_key.size()),
+                         p->_key.c_str());
     return nullptr;
 }
 
-// The state's variant for a draw's cubic binds, test class, pass of two-plane colours and two-plane textures sampled at
-// `xrSlots` (raw_xr_pass.h), named in that order. A cubic or sampled variant no pack holds is made off the encoding thread
-// from the binds of the draw that first needs it, the only place they are known (the texture unit has no cubic filter for
-// another record to stand in with). Until it is, m2v draws a cubic variant's draws, and a sampled variant's draws sample
-// those textures' stand-ins. Its record is kept on disk, so a later boot draws it raw from its first draw. A RenderBox
-// state's compile takes seconds on the device, which no encoding thread may wait for.
+// The state's variant for a draw's cubic binds, test class, pass of two-plane colours, two-plane textures sampled at
+// `xrSlots` (raw_xr_pass.h) and textures written in other formats than its record's (raw_written_textures.h), named in
+// that order. A cubic, sampled or written variant no pack holds is made off the encoding thread from the binds of the
+// draw that first needs it, the only place they are known (the texture unit has no cubic filter for another record to
+// stand in with). Until it is, m2v draws a cubic variant's draws, a sampled variant's draws sample those textures'
+// stand-ins, and a written variant's draws wait for it (no other record stores their formats). Its record is kept on
+// disk, so a later boot draws it raw from its first draw. A RenderBox state's compile takes seconds on the device, which
+// no encoding thread may wait for.
 static raw::Variant<raw::Pipeline> *renderVariant(RMPipeline *p, const raw::CubicBinds &binds, uint8_t tests,
-                                                  bool planes, uint16_t xrSlots)
+                                                  bool planes, uint16_t xrSlots,
+                                                  const std::vector<raw::WrittenTexture> &written)
 {
     const std::string cubic = binds.empty() ? std::string() : binds.key();
     const std::string forms = (planes ? std::string(raw::kXrPlanesVariant) : std::string()) +
-                              (xrSlots ? raw::xrSampledVariant(xrSlots) : std::string());
+                              (xrSlots ? raw::xrSampledVariant(xrSlots) : std::string()) + raw::writtenVariant(written);
     const std::string suffix = cubic + forms;
     const std::string name = cubic + (tests ? " | tests=" + std::to_string(tests) : std::string()) + forms;
     std::shared_ptr<raw::Variant<raw::Pipeline>> variant;
@@ -92,7 +101,7 @@ static raw::Variant<raw::Pipeline> *renderVariant(RMPipeline *p, const raw::Cubi
         variant = std::make_shared<raw::Variant<raw::Pipeline>>();
         p->_variants.emplace(name, variant);
     }
-    if (p->_packed && binds.empty() && !xrSlots) {
+    if (p->_packed && binds.empty() && !xrSlots && written.empty()) {
         variant->publish(unpackedVariant(p, suffix, name));
         return variant.get();
     }
@@ -105,9 +114,11 @@ static raw::Variant<raw::Pipeline> *renderVariant(RMPipeline *p, const raw::Cubi
     request.fragmentTests = tests;
     request.twoPlane = planes;
     request.xrSlots = xrSlots;
+    request.written = written;
     request.resolveDescriptor = true;
-    // the state's own record draws a test class's draws it could not be made for, never a cubic or two-plane variant's
-    raw::Pipeline *base = binds.empty() && !planes && !xrSlots ? p->_raw : nullptr;
+    // the state's own record draws a test class's draws it could not be made for, never a cubic, two-plane or written
+    // variant's
+    raw::Pipeline *base = binds.empty() && !planes && !xrSlots && written.empty() ? p->_raw : nullptr;
     raw::Completion *completion = gRM->completion.get();
     if (!request.descriptor || !completion) {
         variant->publish(base);
@@ -126,6 +137,17 @@ static raw::Variant<raw::Pipeline> *renderVariant(RMPipeline *p, const raw::Cubi
         }
     });
     return variant.get();
+}
+
+// The textures a draw of `pl` writes in other formats than its record's programs store (raw_written_textures.h)
+static std::vector<raw::WrittenTexture> reboundTextures(const raw::Pipeline &pl,
+                                                        RMTexture *const textures[raw::kStageTextures])
+{
+    if (!pl.writtenSlots)
+        return {};
+    return raw::reboundWritten(*pl.rec, [&](uint32_t slot) {
+        return textures[slot] ? uint32_t(textures[slot]->_descriptor.pixelFormat) : 0u;
+    });
 }
 
 // The slots of each stage (vertex, fragment: raw::handleStage) a draw of `pl` samples a two-plane RGB10A8_2P_XR10
@@ -153,14 +175,16 @@ static std::array<uint32_t, 2> xrSampledSlots(const raw::Pipeline &pl,
     const raw::CubicBinds binds = _cubicMask ? cubicBinds(*base, _samp, _tex[1]) : raw::CubicBinds();
     const uint8_t tests =
         base->fetchBits && base->depthFormat && !base->storageBits ? uint8_t(raw::fragmentTests(_ds, _zeta)) : 0;
-    auto *variant =
-        (!binds.empty() || tests || _xrPlanes) ? renderVariant(_pipe, binds, tests, _xrPlanes, 0) : nullptr;
+    const std::vector<raw::WrittenTexture> written = reboundTextures(*base, _tex[1]);
+    auto *variant = (!binds.empty() || tests || _xrPlanes || !written.empty())
+                        ? renderVariant(_pipe, binds, tests, _xrPlanes, 0, written)
+                        : nullptr;
     // a variant reads the header pairs of fragment slots 0 to 15 alone (PackPipeline::xrSlots): every other two-plane
     // texture a draw samples is sampled through its stand-in
     const std::array<uint32_t, 2> xrSampled = xrSampledSlots(*base, _tex);
     std::array<uint32_t, 2> standIns = {xrSampled[0], xrSampled[1] & ~0xffffu};
     if (const uint16_t xrSlots = uint16_t(xrSampled[1])) {
-        auto *sampled = renderVariant(_pipe, binds, tests, _xrPlanes, xrSlots);
+        auto *sampled = renderVariant(_pipe, binds, tests, _xrPlanes, xrSlots, written);
         if (sampled->state() == raw::Variant<raw::Pipeline>::State::Ready)
             variant = sampled;
         else

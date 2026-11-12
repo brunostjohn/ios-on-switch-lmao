@@ -14,9 +14,10 @@ MAGIC = b'GM20BPK1'
 # program's name and its matrix's words; 20: argument buffers (handle-table entries, root-table and status push words,
 # root slots, set-1 heap arrays of states and kernels; argument tables of push fields past a stage's window, their
 # words in the blob section); 21: the runtime records' tessellation, amplification, dynamic stride and stage-in
-# fields (every pack state's are 0), a state's vertex streams past stream 0, layer and viewport count push words, the
-# fragment slots it samples two-plane RGB10A8_2P_XR10 textures at
-VERSION = 21
+# fields (every pack state's are 0), a state's vertex streams past stream 0, layer and viewport count push words; 22:
+# the formats a state's written textures were compiled for, the fragment slots it samples two-plane RGB10A8_2P_XR10
+# textures at
+VERSION = 22
 SECTIONS = 13  # runtime/raw_pack.h PackSectionCount
 # PackIteratedBlend: count, enable, constants, uniformSlot, uniformOffset, uniformWords, reserved, alphaSource,
 # alphaDest, name, reservedName, constant[8][3], program[128]
@@ -38,13 +39,16 @@ HEAP_ARRAYS = 8
 KERNEL_V20 = struct.Struct('<4B2I16IBBHI')
 # PackPipeline's record-v21 tail: the runtime records' fields (controlWord, controlPoints, controlPointIndexBytes,
 # vertexStrideDynamic, amplificationMax, amplificationIdWord, amplificationCountWord), arrayLengthWord, the runtime
-# records' pulledStride[4][2], vertexStreams[7], viewportCountWord, xrSlots, reserved
-PIPELINE_V21 = struct.Struct('<7sB8s7sBH2x')
+# records' pulledStride[4][2], vertexStreams[7], viewportCountWord
+PIPELINE_V21 = struct.Struct('<7sB8s7sB')
 RUNTIME_ONLY_HEAD, RUNTIME_ONLY_PULLED = bytes(7), bytes(8)
 VERTEX_STREAMS = 7  # PackPipeline.vertexStreams' length: the streams past stream 0
 STREAM_BIND_STRIDE = 0x80  # runtime/raw_pack.h kStreamBindStride
 # PackKernel's record-v21 tail: stageInRegionWord, stageInStride[4][2], reserved
 KERNEL_V21 = struct.Struct('<B8s3x')
+# PackPipeline's record-v22 tail: writtenFormat[16], by fragment texture slot, xrSlots, reserved
+WRITTEN_SLOTS = 16  # runtime/raw_pack.h kWrittenSlots
+PIPELINE_V22 = struct.Struct(f'<{WRITTEN_SLOTS}HH2x')
 NO_UNIFORM = b'\xff\x00\x00\x00' * 8
 
 
@@ -127,8 +131,9 @@ def push_bytes(push: list[tuple[int, int]]) -> bytes:
     return struct.pack('<I32I', mask, *words)
 
 
-# A key's variant name (runtime/raw_pack.h variantNameAt): " | cubic ...", " | tests=<n>", " | xr2p", " | xrs=<slots>" at its end
-VARIANT_NAME = re.compile(r'( \| cubic [^|]*?)?( \| tests=\d+)?( \| xr2p)?( \| xrs=\d+)?$')
+# A key's variant name (runtime/raw_pack.h variantNameAt): " | cubic ...", " | tests=<n>", " | xr2p", " | xrs=<slots>",
+# " | wtex=<slot>:<format>,..." at its end
+VARIANT_NAME = re.compile(r'( \| cubic [^|]*?)?( \| tests=\d+)?( \| xr2p)?( \| xrs=\d+)?( \| wtex=[\d:,]+)?$')
 
 
 def variant_name(key: str) -> str:
@@ -287,9 +292,8 @@ def pipeline_bytes(rec: dict, key_offset: int, blob_off: int, variants_off: int 
     )
     v18 = PIPELINE_V18.pack(rec.get('memory_entries', ALL_ENTRIES))
     entries = entry_bytes(rec['entries'])
-    return (
-        head + entries + push_bytes(rec['push']) + dynamic + storage + tests + v15 + v18 + v20_tail(rec) + v21_tail(rec)
-    )
+    tails = v15 + v18 + v20_tail(rec) + v21_tail(rec) + v22_tail(rec)
+    return head + entries + push_bytes(rec['push']) + dynamic + storage + tests + tails
 
 
 def v20_tail(rec: dict) -> bytes:
@@ -313,15 +317,19 @@ def v20_tail(rec: dict) -> bytes:
 
 
 def v21_tail(rec: dict) -> bytes:
-    """Give a record's PIPELINE_V21 tail: its runtime-only fields zero, its streams, pass push words and xrSlots."""
+    """Give a record's PIPELINE_V21 tail: its runtime-only fields zero, its streams and pass push words."""
     return PIPELINE_V21.pack(
         RUNTIME_ONLY_HEAD,
         rec.get('array_length_word', 0),
         RUNTIME_ONLY_PULLED,
         bytes(rec.get('vertex_streams', [])).ljust(VERTEX_STREAMS, b'\0'),
         rec.get('viewport_count_word', 0),
-        rec.get('xr_slots', 0),
     )
+
+
+def v22_tail(rec: dict) -> bytes:
+    """Give a record's PIPELINE_V22 tail: its written textures' formats and xrSlots."""
+    return PIPELINE_V22.pack(*rec.get('written_format', [0] * WRITTEN_SLOTS), rec.get('xr_slots', 0))
 
 
 def kernel_window(e: dict) -> int:

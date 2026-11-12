@@ -13,6 +13,7 @@ public enum Registry {
         PackedPlaneTargetTest(), PackedSpareBitsTest(), XRTwoPlaneTest(),
         MPSBlurTest(), MPSMatrixTest(), MetalRuntimeCompileTest(), CoreImageLibraryTest(),
         MetalBenchmarkTest(), FetchBlendCostTest(), CompressionChurnTest(), RotatedTargetTest(), IntegerTargetTest(), BlendKillTest(),
+        WrittenTextureTest(),
         Float32FilterTest(), CompressedTargetsTest(), ZcullTest(), MipTwodTest(), MipCandidatesTest(),
         VisibilityTest(), FixedBlendRuleTest(), FetchRungTest(id: "gpu.raw.fetch_rung2", rung: 2), BlendTwinTest(),
         ZetaColourTest(),

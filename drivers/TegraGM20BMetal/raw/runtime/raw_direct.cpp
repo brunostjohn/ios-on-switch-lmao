@@ -303,6 +303,13 @@ bool layout(const NmbDirectDraw &d, std::vector<LayoutEntry> &out, std::string &
                 // the direct compile binds a texture of each argument's declared type (NativeMetalDirect.rs declared_slots)
                 e.tex = w.viewType == kViewType3D ? Tex::Texture3D : Tex::Slot;
                 e.texSlot = uint8_t(w.slot);
+                if (w.type == StorageImage && w.stage == 2) {
+                    if (!w.format) {
+                        why = "a storage texture at fragment slot " + std::to_string(w.slot) + " of no format";
+                        return false;
+                    }
+                    e.writtenFormat = uint16_t(w.format);
+                }
             } else {
                 e.tex = Tex::Unknown;
             }

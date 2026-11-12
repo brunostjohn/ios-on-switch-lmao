@@ -34,7 +34,7 @@ enum PackSectionId {
     PackSectionCount
 };
 
-constexpr uint32_t kPackVersion = 21;
+constexpr uint32_t kPackVersion = 22;
 
 // What a record or a program variant (PackVariant) assumes, as bits of a mask: a draw takes a variant only where all of them
 // hold. Bits 0-15 are facts of the draw's bindings, bit 16 of its pipeline, bit 26 of its pass, bits 17-25 of the chip
@@ -282,12 +282,12 @@ enum PackPipelineFlags : uint32_t {
     PipelineTwoPlane = 128
 };
 
-// Where a key's variant name starts (" | cubic ...", then " | tests=<n>", then " | xr2p", then " | xrs=<slots>": the runtime's
-// names, RawMetalCubic.mm), its size where it names none
+// Where a key's variant name starts (" | cubic ...", then " | tests=<n>", then " | xr2p", then " | xrs=<slots>", then
+// " | wtex=<slot>:<format>,...": the runtime's names, RawMetalCubic.mm), its size where it names none
 inline size_t variantNameAt(const std::string &key)
 {
-    return std::min(
-        {key.find(" | cubic "), key.find(" | tests="), key.find(" | xr2p"), key.find(" | xrs="), key.size()});
+    return std::min({key.find(" | cubic "), key.find(" | tests="), key.find(" | xr2p"), key.find(" | xrs="),
+                     key.find(" | wtex="), key.size()});
 }
 
 // Which of a state's records: its first (the storage form where it has both), its barrier form, or its fetch-free form
@@ -318,6 +318,9 @@ constexpr uint32_t cbufUboOffset(uint8_t type)
 // Set-0 entries a state may have: Core Animation's generic states (the uber shader) take 27; and the bytes of its set 0,
 // every entry's 16-byte descriptor at most (RenderEncoder::prepare's)
 constexpr uint32_t kPackEntries = 32, kSetMaxBytes = 16 * kPackEntries;
+// The fragment texture slots a record can bind (probe.mm's tagged textures), and so the slots a record names a written
+// texture's format at
+constexpr uint32_t kWrittenSlots = 16;
 // A record's fixed-function vertex streams: stream 0 (vertexSlot) and PackPipeline::vertexStreams'
 constexpr uint32_t kPackVertexStreams = 8;
 // A vertexStreams byte's flag: the stream's stride is its bind's (MTLBufferLayoutStrideDynamic, a runtime record's alone)
@@ -406,6 +409,11 @@ struct PackPipeline {
     // The push word + 1 of m2v's ViewportCount (0: none), the encoder's viewport count, which each draw writes: an index
     // its vertex program writes at or past the count is 0
     uint8_t viewportCountWord;
+    // v22. By fragment texture slot, the MTLPixelFormat of the texture its programs write (or read and write) as a storage
+    // image were compiled for (0: not one): m2v specialises a storage texture's accesses on the bound format (its channels'
+    // widths, codes and conversion), so a draw binding another format draws the record of its " | wtex=" variant
+    // (raw_written_textures.h)
+    uint16_t writtenFormat[kWrittenSlots];
     // the fragment texture slots its programs read through a two-plane RGB10A8_2P_XR10 texture's header pair (raw_xr_pass.h):
     // the record of its " | xrs=<slots>" variant
     uint16_t xrSlots, xrReserved;
@@ -577,7 +585,8 @@ struct InitAddresses {
 
 uint32_t relocated(const PackInitMethod &m, const InitAddresses &a);
 static_assert(sizeof(PackShaderTests) == 16, "shader test layout");
-static_assert(sizeof(PackPipeline) == 40 + kPackEntries * 8 + 4 + 32 * 4 + 4 + 36 + 16 + 56 + 4 + 92 + 28,
+static_assert(sizeof(PackPipeline) ==
+                  40 + kPackEntries * 8 + 4 + 32 * 4 + 4 + 36 + 16 + 56 + 4 + 92 + 24 + 2 * kWrittenSlots + 4,
               "pack layout");
 static_assert(offsetof(PackPipeline, storageBlendMask) == 490 && offsetof(PackPipeline, fetchRung) == 528,
               "pack layout: packfile.py PIPELINE_V15");
@@ -585,9 +594,10 @@ static_assert(offsetof(PackPipeline, rootTableWord) == 544 && offsetof(PackPipel
                   offsetof(PackPipeline, spillEntry) == 628,
               "pack layout: packfile.py PIPELINE_V20");
 static_assert(offsetof(PackPipeline, controlWord) == 636 && offsetof(PackPipeline, arrayLengthWord) == 643 &&
-                  offsetof(PackPipeline, vertexStreams) == 652 && offsetof(PackPipeline, viewportCountWord) == 659 &&
-                  offsetof(PackPipeline, xrSlots) == 660,
+                  offsetof(PackPipeline, vertexStreams) == 652 && offsetof(PackPipeline, viewportCountWord) == 659,
               "pack layout: packfile.py PIPELINE_V21");
+static_assert(offsetof(PackPipeline, writtenFormat) == 660 && offsetof(PackPipeline, xrSlots) == 692,
+              "pack layout: packfile.py PIPELINE_V22");
 static_assert(sizeof(PackProgram) == 44, "pack layout");
 static_assert(sizeof(PackVariant) == 8, "pack layout");
 static_assert(sizeof(PackArchive) == 16, "pack layout");

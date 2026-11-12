@@ -40,6 +40,7 @@ PIPELINE_BYTES = (
     + packfile.PIPELINE_V18.size
     + packfile.PIPELINE_V20.size
     + packfile.PIPELINE_V21.size
+    + packfile.PIPELINE_V22.size
 )
 ENTRY_UBO, ENTRY_COLOR_TABLE = 1, 5
 TABLE_KINDS = {code: kind for kind, code in packfile.TABLE_KINDS.items()}
@@ -209,8 +210,10 @@ def pipeline_of(rec: dict, varying: list[int], prog_index: dict[str, int], const
         PIPELINE.unpack_from(p)
     )
     mask, *words = struct.unpack_from('<33I', p, PIPELINE.size + packfile.PACK_ENTRIES * 8)
-    head, array_length_word, pulled, streams, viewport_count_word, xr_slots = packfile.PIPELINE_V21.unpack_from(
-        p, PIPELINE_BYTES - packfile.PIPELINE_V21.size
+    v22_at = PIPELINE_BYTES - packfile.PIPELINE_V22.size
+    *written_format, xr_slots = packfile.PIPELINE_V22.unpack_from(p, v22_at)
+    head, array_length_word, pulled, streams, viewport_count_word = packfile.PIPELINE_V21.unpack_from(
+        p, v22_at - packfile.PIPELINE_V21.size
     )
     runtime_only = head != packfile.RUNTIME_ONLY_HEAD or pulled != packfile.RUNTIME_ONLY_PULLED
     if runtime_only or any(s & packfile.STREAM_BIND_STRIDE for s in streams):
@@ -218,7 +221,7 @@ def pipeline_of(rec: dict, varying: list[int], prog_index: dict[str, int], const
             'a state of runtime-only fields (tessellation, amplification, dynamic stride): the pack holds none'
         )
     streams = streams[: streams.index(0)] if 0 in streams else streams
-    v20_at = PIPELINE_BYTES - packfile.PIPELINE_V21.size - packfile.PIPELINE_V20.size
+    v20_at = v22_at - packfile.PIPELINE_V21.size - packfile.PIPELINE_V20.size
     tail = v20_at - packfile.PIPELINE_V18.size - packfile.PIPELINE_V15.size
     blend, half, _reserved = struct.unpack_from('<BBH', p, tail - 56)
     storage_mask, storage_write_mask, storage_samples, storage_tests, *storage_tic = struct.unpack_from(
@@ -291,6 +294,7 @@ def pipeline_of(rec: dict, varying: list[int], prog_index: dict[str, int], const
         'fetch_rung': list(fetch_rung),
         'iterated_name': rec.get('iterated', ''),
         'fs_image': rec['programs'][1]['image'],
+        'written_format': written_format,
         'variants': [
             {
                 'stage': 0 if i < vertex_variants else 1,
@@ -426,6 +430,30 @@ def write_programs(path: str, programs: dict[str, dict]) -> None:
             f.write(bytes(p['cbufs']) + p['image'] + p['data'])
 
 
+# The forms a variant record's name holds (runtime/raw_pack.h variantNameAt), as the report counts them
+VARIANT_FORMS = (
+    ('tests=', 'of a test class'),
+    ('cubic', 'of cubic samplers'),
+    ('xr2p', 'of two-plane passes'),
+    ('xrs=', 'of sampled two-plane textures'),
+    ('wtex=', 'of written formats'),
+)
+
+
+def variant_report(states: list[dict]) -> list[str]:
+    """Give the report's count of variant records by form, then each sampled two-plane variant a corpus line named."""
+    named = [packfile.variant_name(rec['key']) for rec in states]
+    counts = ', '.join(f'{sum(1 for n in named if tag in n)} {what}' for tag, what in VARIANT_FORMS)
+    sampled = dict.fromkeys(
+        (n, rec['key'])
+        for rec, n in zip(states, named, strict=True)
+        if 'xrs=' in n and 'tests=' not in n and 'xr2p' not in n
+    )
+    return [f'{sum(1 for n in named if n)} variant records: {counts}'] + [
+        f'  sampled two-plane variant ({n.removeprefix(" | ")}): {key[:150]}' for n, key in sampled
+    ]
+
+
 def main() -> None:
     out_dir, *buckets = sys.argv[1:]
     inventory = ''
@@ -441,11 +469,7 @@ def main() -> None:
     found = split_programs(states, programs)
     simple = [rec['probe'] for rec in states]
     report = [f'{len(states) + len(refused)} states made directly, {len(states)} records, {len(refused)} refused']
-    named = [packfile.variant_name(rec['key']) for rec in states]
-    report.append(
-        f'{sum(1 for n in named if n)} variant records: {sum(1 for n in named if "tests=" in n)} of a test class, '
-        f'{sum(1 for n in named if "cubic" in n)} of cubic samplers'
-    )
+    report += variant_report(states)
     varying, baseline = mkpack.split_registers(simple, post)
     report.append(f'{len(varying)} per-pipeline registers: ' + ' '.join(f'{m:x}' for m in varying))
     report.append(f'{len(baseline)} baseline registers over post-init')

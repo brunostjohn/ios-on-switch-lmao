@@ -10,6 +10,7 @@
 #include <vector>
 #import "../runtime/RawPipelineKey.h"
 #include "../runtime/raw_cubic.h"
+#include "../runtime/raw_written_textures.h"
 
 namespace probe {
 
@@ -114,6 +115,9 @@ struct State {
     // a line naming the state's sampled two-plane variant (" | xrs=<slots>", raw_xr_pass.h): its slots, which its key
     // leaves out (the runtime names the variant after the test class and the two-plane pass, RawMetalCubic.mm)
     uint16_t xrSlots = 0;
+    // a line naming the state's written variant (" | wtex=<slot>:<format>,...", raw_written_textures.h): the formats bound at
+    // the slots it writes, which its key leaves out as it does xrSlots
+    std::vector<raw::WrittenTexture> written;
 };
 
 // A line's " | cubic s<slot>:<s><t><r><border><n|p>... t<slot>:<MTLPixelFormat>..." segment (raw_cubic.h key) as binds
@@ -219,6 +223,8 @@ inline bool parseState(id<MTLLibrary> qc, const std::string &line, State &s, con
         if (segment.rfind("cubic ", 0) == 0 && !cubicBinds(segment, s.cubic))
             return false;
         if (segment.rfind("xrs=", 0) == 0 && !(s.xrSlots = uint16_t(strtoul(segment.c_str() + 4, nullptr, 10))))
+            return false;
+        if (segment.rfind("wtex=", 0) == 0 && !raw::parseWritten(segment, s.written))
             return false;
         at = next;
     }

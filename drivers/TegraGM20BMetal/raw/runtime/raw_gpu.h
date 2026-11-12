@@ -539,6 +539,7 @@ struct Pipeline {
     bool turnedVariant = false, turnRefused = false;
     // the fragment slots its programs read two-plane RGB10A8_2P_XR10 textures at through their header pairs (PackPipeline)
     uint16_t xrSlots = 0;
+    uint16_t writtenSlots = 0;  // the fragment slots its programs write textures at (raw_written_textures.h)
     Pipeline *turnedTwin = nullptr;
     bool vertexStores = false;      // its vertex program writes memory (SPH DOES_GLOBAL_STORE)
     Pipeline *reachTwin = nullptr;  // Device::reachTwin's
@@ -1255,12 +1256,13 @@ enum RefusalId : uint8_t {
     RefColorFormats,
     RefUboOffset,
     RefNoTic,
-    RefDepthStencil,  // a: the state's depth format, b: the pass's
-    RefSamples,       // a: the state's samples, b: the pass's, c: the state's shading passes
-    RefGeometry,      // CPU ordering proof unavailable; requires an interlocked native program
-    RefStorageView,   // a: the attachment, b: its format, c: its width (raw_storage_form.h)
-    RefRotated,       // a: why (raw_rotated_pass.h RotatedRefusal), b: the rotation
-    RefViewports      // a: the encoder's viewport count
+    RefDepthStencil,   // a: the state's depth format, b: the pass's
+    RefSamples,        // a: the state's samples, b: the pass's, c: the state's shading passes
+    RefGeometry,       // CPU ordering proof unavailable; requires an interlocked native program
+    RefStorageView,    // a: the attachment, b: its format, c: its width (raw_storage_form.h)
+    RefRotated,        // a: why (raw_rotated_pass.h RotatedRefusal), b: the rotation
+    RefViewports,      // a: the encoder's viewport count
+    RefWrittenTexture  // a: the slot, b: the bound format, c: the format the record's programs store
 };
 
 struct Refusal {

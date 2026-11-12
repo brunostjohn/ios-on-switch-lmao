@@ -173,6 +173,42 @@ class LogHarvestTest(unittest.TestCase):
         caspec = sys.modules['caspec'] if 'caspec' in sys.modules else load_caspec()
         self.assertEqual(caspec.corpus_fields(line), caspec.corpus_fields(line.replace(' os=24B119', '')))
 
+    def test_a_sampled_two_plane_variant_and_its_state_are_harvested_once(self):
+        # RawMetalCubic.mm renderVariant's name: a test class and the two-plane pass the pack builder makes of each line
+        state = CA.replace('c0=80:', 'c0=550:')
+        key = state + ' | tests=2 | xr2p | xrs=2'
+        records = [
+            record(BOOT, 'x', 'OS version: 24B119'),
+            made(BOOT, 'backboardd', '000000000000000a', key),
+            *parts(BOOT, 'backboardd', '000000000000000a', CA_LABEL, key),
+        ]
+        with tempfile.TemporaryDirectory() as scratch:
+            corpus = Path(scratch) / 'corpus.log'
+            corpus.write_text(CORPUS)
+            ndjson = Path(scratch) / 'boot.ndjson'
+            ndjson.write_text(''.join(json.dumps(r) + '\n' for r in records))
+            for _ in range(2):
+                logharvest.main(['--ndjson', str(ndjson), '--corpus', str(corpus)])
+            added = corpus.read_text().splitlines()[2:]
+        self.assertEqual([logharvest.rawpack.state_key(line) for line in added], [state, state + ' | xrs=2'])
+        self.assertTrue(added[1].startswith(f'R ok=1 label={CA_LABEL} os=24B119 '))
+        self.assertTrue(added[1].endswith(' | xrs=2 | '))
+
+    def test_a_packed_states_sampled_and_written_variant_is_harvested_alone(self):
+        records = [
+            record(BOOT, 'x', 'OS version: 24B119'),
+            made(BOOT, 'iconservicesagent', '000000000000000b', IMAGE + CUBIC + ' | xr2p | xrs=4 | wtex=1:23'),
+        ]
+        added, _ = self.run_tool(records)
+        keys = [logharvest.rawpack.state_key(line) for line in added]
+        self.assertEqual(keys, [IMAGE + CUBIC + ' | xrs=4 | wtex=1:23'])
+        self.assertEqual(added[0].count(f' lib={RB}'), 2)
+
+    def test_a_variants_state_is_its_key_before_the_variant_name(self):
+        self.assertEqual(logharvest.base_key(IMAGE + CUBIC + ' | tests=2 | xr2p | xrs=2 | wtex=1:23'), IMAGE)
+        self.assertEqual(logharvest.untested(IMAGE + CUBIC + ' | tests=2 | xr2p | xrs=2'), IMAGE + CUBIC + ' | xrs=2')
+        self.assertEqual(logharvest.untested(IMAGE + ' | xr2p'), IMAGE)
+
     def test_left_out_states_are_counted_by_reason(self):
         boots = logharvest.read_boots(boot_records())
         _, report = logharvest.harvest(boots, CORPUS.splitlines(), None, Path('/nonexistent'))

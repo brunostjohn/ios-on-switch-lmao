@@ -335,6 +335,9 @@ bool assembleRecord(const RecordParts &parts, const std::string &key, const Pack
             return false;
         if (entry.kind == EntryFetch)
             p.flags |= PipelineFetches;
+        if ((entry.kind == EntryTexture || entry.kind == EntryTexture3d) && e.writtenFormat && e.stage != 1 &&
+            entry.slot < kWrittenSlots)
+            p.writtenFormat[entry.slot] = e.writtenFormat;
     }
     if (!ubosNamed(out.programs[0], p) || !ubosNamed(out.programs[1], p) ||
         (parts.controlWord && (!ubosNamed(out.tessPrograms[0], p) || !ubosNamed(out.tessPrograms[1], p)))) {
