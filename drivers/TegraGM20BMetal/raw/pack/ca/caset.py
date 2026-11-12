@@ -89,6 +89,15 @@ def _fragments(tables: caspec.Tables, seeds: list[str]) -> list[tuple[str, str]]
     return list(out.items())
 
 
+# QuartzCore sets a state's x (fc_extended_range) from its target alone, an extended-range format (MTLPixelFormat
+# 550-555; get_pipeline_spec: 24B119 0x184388160, 21H461 0x18942f218): a fragment carried onto another format takes its.
+EXTENDED_RANGE = range(550, 556)
+
+
+def _on_format(tables: caspec.Tables, fragment: str, fmt: int) -> str:
+    return deepcolour.fragment_with_flag(tables, fragment, 'x', fmt in EXTENDED_RANGE)
+
+
 def _formats(prefix: str) -> tuple[str, ...]:
     own = prefix[1:5]
     return tuple(dict.fromkeys((own, *CLOSURE_FORMATS) if own in SINGLE_DRAW_FORMATS else CLOSURE_FORMATS))
@@ -99,8 +108,9 @@ def _blend_tier(tables: caspec.Tables, fragments: list[tuple[str, str]]) -> list
     for fragment, prefix in fragments:
         flags = ''.join(sorted(caspec.decode(tables, prefix + '_' + fragment).pflags))
         for fmt in _formats(prefix):
-            blends = [b for b in LIFTABLE if lifted(tables, fragment, codes[fmt], b)]
-            names += [prefix_of(tables, fmt, b, flags) + '_' + fragment for b in (tables.none_blend, *blends)]
+            on = _on_format(tables, fragment, codes[fmt])
+            blends = [b for b in LIFTABLE if lifted(tables, on, codes[fmt], b)]
+            names += [prefix_of(tables, fmt, b, flags) + '_' + on for b in (tables.none_blend, *blends)]
     return names
 
 
@@ -113,8 +123,9 @@ def _fetch_tier(tables: caspec.Tables, fragments: list[tuple[str, str]]) -> list
         flags = ''.join(sorted(s.pflags))
         for fmt in _formats(prefix):
             head = prefix_of(tables, fmt, tables.none_blend, flags) + '_'
-            blends = [b for b in range(tables.none_blend) if not lifted(tables, fragment, codes[fmt], b)]
-            names += [head + with_fragment_blend(tables, fragment, b) for b in blends]
+            on = _on_format(tables, fragment, codes[fmt])
+            blends = [b for b in range(tables.none_blend) if not lifted(tables, on, codes[fmt], b)]
+            names += [head + with_fragment_blend(tables, on, b) for b in blends]
     return names
 
 
@@ -123,14 +134,15 @@ def labels(
 ) -> dict[str, list[str]]:
     """Give every tier's names, in order, each name in the first tier that has it.
 
-    `cif10`: CADeviceUseCIF10 on the device (deepcolour.cif10), None where it is not known: the manifest's states go in
-    as the device's QuartzCore names them (deepcolour.asked), so the tiers made of them are the device's too.
+    `cif10`: CADeviceUseCIF10 on the device (deepcolour.cif10), None where it is not known: each manifest state goes
+    in as Apple names it and as the device's QuartzCore does (deepcolour.asked), so the tiers made of them hold the
+    device's too.
     """
     manifest = [
         form
         for m in tables.t['manifest']
         if m[0][0] == 'P' and (tables.v27 or not caspec.decode(tables, m[0]).flag('g'))
-        for form in deepcolour.asked(tables, m[0], cif10)
+        for form in dict.fromkeys([m[0], *deepcolour.asked(tables, m[0], cif10)])
     ]
     variants = _variant_tier(tables, list(corpus) + manifest)
     fragments = _fragments(tables, list(corpus) + manifest + variants)

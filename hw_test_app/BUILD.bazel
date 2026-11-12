@@ -194,16 +194,20 @@ py_binary(
     deps = ["//drivers/TegraGM20BMetal:raw_pack"],
 )
 
+# The Core Animation states a device's logs named as made at run time, per IPSW kind (precompile/ca_names.py)
+CA_NAMES = {"24B119": "//drivers/TegraGM20BMetal:precompile/ca-names/24B119.txt"}
+
 genrule(
     name = "ca_asked",
     srcs = ["//drivers/TegraGM20BMetal:stage-tegra-gm20b-metal.py"] + select({
-        "//ipsw:" + kind: [tables]
+        "//ipsw:" + kind: [tables] + ([CA_NAMES[kind]] if kind in CA_NAMES else [])
         for kind, tables in QC_TABLES.items()
     }),
     outs = ["ca_asked.log"],
     cmd = select({
         "//ipsw:" + kind: "$(execpath :ca_asked_forms) $(execpath " + tables + ") " +
-                          "$(execpath //drivers/TegraGM20BMetal:stage-tegra-gm20b-metal.py) $@"
+                          "$(execpath //drivers/TegraGM20BMetal:stage-tegra-gm20b-metal.py) $@" +
+                          (" $(execpath " + CA_NAMES[kind] + ")" if kind in CA_NAMES else "")
         for kind, tables in QC_TABLES.items()
     }),
     tools = [":ca_asked_forms"],

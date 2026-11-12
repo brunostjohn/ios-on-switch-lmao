@@ -39,6 +39,10 @@ class Preferences(unittest.TestCase):
         self.assertIsNone(deepcolour.cif10(self.stager("PREFS = {'CAEnableDeepFramebuffer': True}\n")))
         self.assertIsNone(deepcolour.cif10(self.stager("PREFS = {'CAEnableIOSurfaceCompression': False}\n")))
 
+    def test_a_stager_without_preferences_is_refused(self):
+        with self.assertRaises(ValueError):
+            deepcolour.cif10(self.stager('OTHER = {}\n'))
+
 
 class Forms27(unittest.TestCase):
     @classmethod
@@ -70,12 +74,19 @@ class Forms27(unittest.TestCase):
         )
         self.assertEqual(deepcolour.asked(self.t, 'PBGRABsovXmw_A3Xhf', True), ['PBGRABsovXmw_A3Xhfc'])
 
-    def test_the_manifest_tier_holds_the_asked_forms(self):
+    def test_the_manifest_tier_holds_apples_names_and_the_asked_forms(self):
         manifest = caset.labels(self.t, [], ('manifest',), False)['manifest']
-        self.assertIn('PBGRABsovXmw_A3Xhf', manifest)
-        self.assertNotIn('PBGRABsovXmw_A3Xhfc', manifest)
-        self.assertIn('PBGRABsovXmw_TimgA3Xhfc_Isrc', manifest)
+        for name in ('PBGRABsovXmw_A3Xhf', 'PBGRABsovXmw_A3Xhfc', 'PBGRABsovXmw_TimgA3Xhfc_Isrc'):
+            self.assertIn(name, manifest)
         self.assertIn('PBGRABsovXmw_TimgA3Xhf_Isrc', manifest)
+
+    def test_a_fragment_on_bgra8_drops_the_extended_range_flag(self):
+        blend = caset.labels(self.t, [], ('blend',), False)['blend']
+        self.assertIn('PBGRABsovXmw_TcimA3Xhfc_Iara', blend)
+        self.assertNotIn('PBGRABsovXmw_TcimA3Xhfcx_Iara', blend)
+        self.assertTrue(
+            all('x' not in caset.split(n)[1].partition('_')[0].rpartition('X')[2] for n in blend if n[1:5] == 'BGRA')
+        )
 
     def test_every_form_differs_from_its_name_in_c_alone(self):
         for name, *_ in self.t.t['manifest']:
