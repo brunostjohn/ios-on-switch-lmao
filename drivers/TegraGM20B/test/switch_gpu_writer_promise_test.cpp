@@ -3,6 +3,8 @@
 // kernel and a present of the surface it writes: the present's acquires are the pending promises, a job's fence releases
 // the ones it keeps after its writes, and a cancel, a kill or a close release them from the CPU.
 #include <gtest/gtest.h>
+#include <sys/mman.h>
+#include <unistd.h>
 #include <utility>
 #include <vector>
 #include "../SwitchGpuWriterPromise.h"
@@ -192,6 +194,58 @@ volatile uint32_t *poolWord(uint32_t offset)
 	return offset && offset / 4 < 64 ? &pool[offset / 4] : nullptr;
 }
 
+// gpu_promise.c promise_raise, on a pool the test writes itself
+int poolRaise(volatile uint32_t *word, uint32_t value)
+{
+	if (int32_t(*word - value) >= 0)
+		return 0;
+	*word = value;
+	return 1;
+}
+
+const switch_gpu_promise_fence poolFence = {poolWord, poolRaise};
+
+// The fence pool as T210 has it: mapped write-combined, where only a plain store completes. The model's page is
+// read-only, so any other write (a compare-and-swap, any atomic read-modify-write) faults; the raise's own store is
+// the one write it lets through.
+struct FenceModel {
+	volatile uint32_t *page = nullptr;
+	size_t bytes = size_t(getpagesize());
+
+	FenceModel()
+	{
+		void *made = mmap(nullptr, bytes, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANON, -1, 0);
+		page = static_cast<volatile uint32_t *>(made);
+		mprotect(made, bytes, PROT_READ);
+	}
+	~FenceModel() { munmap(const_cast<uint32_t *>(page), bytes); }
+
+	void set(uint32_t offset, uint32_t value) { store(&page[offset / 4], value); }
+	void store(volatile uint32_t *word, uint32_t value)
+	{
+		mprotect(const_cast<uint32_t *>(page), bytes, PROT_READ | PROT_WRITE);
+		__atomic_store_n(word, value, __ATOMIC_RELEASE);
+		mprotect(const_cast<uint32_t *>(page), bytes, PROT_READ);
+	}
+};
+
+FenceModel *model;
+
+volatile uint32_t *modelWord(uint32_t offset)
+{
+	return offset && offset / 4 < model->bytes / 4 ? &model->page[offset / 4] : nullptr;
+}
+
+int modelRaise(volatile uint32_t *word, uint32_t value)
+{
+	if (int32_t(__atomic_load_n(word, __ATOMIC_ACQUIRE) - value) >= 0)
+		return 0;
+	model->store(word, value);
+	return 1;
+}
+
+const switch_gpu_promise_fence modelFence = {modelWord, modelRaise};
+
 using Released = std::vector<std::pair<uint32_t, uint32_t>>;
 
 void told(uint32_t offset, uint32_t value, int step, void *arg)
@@ -224,17 +278,42 @@ TEST(WriterPromise, TheReleaseMarksBeforeTheWordMovesAndTellsWhoWon)
 	Steps raised, kept;
 	pool[5] = 1;
 	ASSERT_EQ(switch_gpu_promise_waits_note(&waits, poolWord, 20, 2), 0);
-	EXPECT_EQ(switch_gpu_promise_waits_release(&waits, poolWord, stepped, &raised), 1u);
+	EXPECT_EQ(switch_gpu_promise_waits_release(&waits, &poolFence, stepped, &raised), 1u);
 	EXPECT_EQ(raised.steps,
 		  (std::vector<int>{SWITCH_GPU_PROMISE_RAISING, SWITCH_GPU_PROMISE_RAISED}));
 	EXPECT_EQ(raised.words, (std::vector<uint32_t>{1, 2}));
 	pool[5] = 1;
 	kept.makerAt = 20;
 	kept.makerTo = 2;
-	EXPECT_EQ(switch_gpu_promise_waits_release(&waits, poolWord, stepped, &kept), 0u);
+	EXPECT_EQ(switch_gpu_promise_waits_release(&waits, &poolFence, stepped, &kept), 0u);
 	EXPECT_EQ(kept.steps,
 		  (std::vector<int>{SWITCH_GPU_PROMISE_RAISING, SWITCH_GPU_PROMISE_KEPT_FIRST}));
 	EXPECT_EQ(pool[5], 2u);
+}
+
+// The hang rule's raise of a pending word is its one write to the fence pool, a plain store: on the model's read-only
+// page any compare-and-swap faults, as T210's bus answers one on the write-combined pool with an SError.
+TEST(WriterPromise, TheRaiseIsAPlainStoreAndTheFencePoolTakesNoOtherWrite)
+{
+	FenceModel fence;
+	model = &fence;
+	fence.set(20, 1);
+	fence.set(24, 7);
+	switch_gpu_promise_waits waits = {};
+	ASSERT_EQ(switch_gpu_promise_waits_note(&waits, modelWord, 20, 2), 0);
+	ASSERT_EQ(switch_gpu_promise_waits_note(&waits, modelWord, 24, 7), 0);
+	Released released;
+	EXPECT_EQ(switch_gpu_promise_waits_release(&waits, &modelFence, told, &released), 1u);
+	EXPECT_EQ(released, (Released{{20, 2}}));
+	EXPECT_EQ(fence.page[5], 2u);
+	EXPECT_EQ(fence.page[6], 7u);
+	EXPECT_DEATH(
+		{
+			uint32_t expected = 2;
+			__atomic_compare_exchange_n(&fence.page[5], &expected, 3u, false, __ATOMIC_RELEASE, __ATOMIC_ACQUIRE);
+		},
+		"");
+	model = nullptr;
 }
 
 // An abandoned promise is found until the maker's own release takes it back; the set keeps the latest ones.
@@ -267,11 +346,11 @@ TEST(WriterPromise, TheHangRuleReleasesOnlyThePromisesAStuckReaderStillWaitsFor)
 	ASSERT_EQ(switch_gpu_promise_waits_note(&waits, poolWord, 8, 7), 0);
 	ASSERT_EQ(switch_gpu_promise_waits_note(&waits, poolWord, 12, 10), 0);
 	pool[3] = 11;
-	EXPECT_EQ(switch_gpu_promise_waits_release(&waits, poolWord, told, &released), 1u);
+	EXPECT_EQ(switch_gpu_promise_waits_release(&waits, &poolFence, told, &released), 1u);
 	EXPECT_EQ(pool[1], 5u);
 	EXPECT_EQ(pool[3], 11u);
 	EXPECT_EQ(released, (Released{{4, 5}}));
-	EXPECT_EQ(switch_gpu_promise_waits_release(&waits, poolWord, told, &released), 0u);
+	EXPECT_EQ(switch_gpu_promise_waits_release(&waits, &poolFence, told, &released), 0u);
 }
 
 // Every frame of a compositor that reads the surface acquires the same promise: one record. A record of a released

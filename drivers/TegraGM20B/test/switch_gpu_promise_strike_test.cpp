@@ -27,6 +27,17 @@ volatile uint32_t *word(uint32_t offset)
 	return offset / 4 < 1024 ? &pool[offset / 4] : nullptr;
 }
 
+// gpu_promise.c promise_raise
+int raise(volatile uint32_t *at, uint32_t value)
+{
+	if (int32_t(*at - value) >= 0)
+		return 0;
+	*at = value;
+	return 1;
+}
+
+const switch_gpu_promise_fence fence = {word, raise};
+
 struct Present {
 	switch_gpu_promise_waits waits = {};
 	switch_gpu_promise_abandoned abandoned = {};
@@ -68,7 +79,7 @@ struct Present {
 		c.victim = !producerHung;
 		c.resident = producerHung;
 		c.stuck = uint8_t(tgm_hang_confirm(1, completed, &strikes, &seen));
-		if (c.stuck && switch_gpu_promise_waits_release(&waits, word, released, this))
+		if (c.stuck && switch_gpu_promise_waits_release(&waits, &fence, released, this))
 			return TGM_HANG_PROGRESSING;
 		int blame = 0;
 		return tgm_hang_blame(&c, 1, 0, c.kernel, producerHung, &blame);

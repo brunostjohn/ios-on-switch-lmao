@@ -138,6 +138,15 @@ struct switch_gpu_promise_waits {
 
 typedef volatile uint32_t *(*switch_gpu_promise_word)(uint32_t offset);
 
+/* The fence pool as the hang rule's raise reaches it: words are read through `word` and written only by `raise`, which
+ * stores `value` when the word is still below it (1) and leaves it otherwise (0). The kernel maps the pool
+ * write-combined (Normal Non-cacheable), where no exclusive access (a compare-and-swap, any atomic read-modify-write)
+ * completes on T210: its bus answers with an SError. */
+struct switch_gpu_promise_fence {
+	switch_gpu_promise_word word;
+	int (*raise)(volatile uint32_t *word, uint32_t value);
+};
+
 static inline int switch_gpu_promise_pending(switch_gpu_promise_word word, uint64_t wait)
 {
 	const volatile uint32_t *at = wait ? word((uint32_t)(wait >> 32)) : 0;
@@ -185,26 +194,23 @@ enum {
 };
 
 /* Each one still pending released, `released` told at each step: a reader that goes on because of the release already
- * finds what RAISING recorded. The count the CPU raised. */
+ * finds what RAISING recorded. The word is looked at again after the mark: the maker's own GPU release may have come
+ * meanwhile (KEPT_FIRST), and a raise never lowers it. The count the CPU raised. */
 static inline uint32_t switch_gpu_promise_waits_release(
-	struct switch_gpu_promise_waits *waits, switch_gpu_promise_word word,
+	struct switch_gpu_promise_waits *waits, const struct switch_gpu_promise_fence *fence,
 	void (*released)(uint32_t offset, uint32_t value, int step, void *arg), void *arg)
 {
 	uint32_t count = 0;
 
 	for (int i = 0; i < SWITCH_GPU_PROMISE_WAITS; ++i) {
 		const uint64_t wait = __atomic_load_n(&waits->wait[i], __ATOMIC_RELAXED);
-		volatile uint32_t *at = wait ? word((uint32_t)(wait >> 32)) : 0;
-		uint32_t now = at ? __atomic_load_n(at, __ATOMIC_ACQUIRE) : 0;
+		volatile uint32_t *at = wait ? fence->word((uint32_t)(wait >> 32)) : 0;
 		int raised = 0;
 
-		if (!at || (int32_t)(now - (uint32_t)wait) >= 0)
+		if (!at || (int32_t)(__atomic_load_n(at, __ATOMIC_ACQUIRE) - (uint32_t)wait) >= 0)
 			continue;
 		released((uint32_t)(wait >> 32), (uint32_t)wait, SWITCH_GPU_PROMISE_RAISING, arg);
-		/* the maker's GPU release may land meanwhile: never lower the word under it */
-		while (!raised && (int32_t)(now - (uint32_t)wait) < 0)
-			raised = __atomic_compare_exchange_n(at, &now, (uint32_t)wait, 0, __ATOMIC_RELEASE,
-							     __ATOMIC_ACQUIRE);
+		raised = fence->raise(at, (uint32_t)wait);
 		count += (uint32_t)raised;
 		released((uint32_t)(wait >> 32), (uint32_t)wait,
 			 raised ? SWITCH_GPU_PROMISE_RAISED : SWITCH_GPU_PROMISE_KEPT_FIRST, arg);

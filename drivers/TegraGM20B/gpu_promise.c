@@ -175,12 +175,32 @@ static void promise_released(uint32_t offset, uint32_t value, int step, void *ar
 	tgm_promise_abandoned_report(offset, value, hang->chan->owner, hang->waited_ns);
 }
 
+/* A pending promise word raised from the CPU: a plain store-release after one more look. The fence pool is mapped
+ * write-combined (Normal Non-cacheable), where T210's bus answers an exclusive access (a compare-and-swap, any atomic
+ * read-modify-write) with an SError. Interrupts are off so the look and the store are a few instructions apart: only a
+ * later promise on the slot, whose job ran between them, could be lowered by the store. */
+static int promise_raise(volatile uint32_t *word, uint32_t value)
+{
+	unsigned long flags;
+	int raised = 0;
+
+	local_irq_save(flags);
+	if ((s32)(__atomic_load_n(word, __ATOMIC_ACQUIRE) - value) < 0) {
+		__atomic_store_n(word, value, __ATOMIC_RELEASE);
+		raised = 1;
+	}
+	local_irq_restore(flags);
+	return raised;
+}
+
+static const struct switch_gpu_promise_fence promise_fence = {tgm_fence_word, promise_raise};
+
 /* tgm_live_lock held. The fence pool is write-combined on the CPU and volatile (no L2) on the GPU, so the parked
  * channel's PBDMA reads the word from DRAM, which a store-release need not have reached until a DSB completes it. */
 uint32_t tgm_chan_release_promises(struct tgm_chan *chan, const char *who, u64 waited_ns)
 {
 	struct promise_hang hang = {chan, who, waited_ns};
-	const uint32_t raised = switch_gpu_promise_waits_release(&chan->promise_waits, tgm_fence_word,
+	const uint32_t raised = switch_gpu_promise_waits_release(&chan->promise_waits, &promise_fence,
 								 promise_released, &hang);
 
 	if (raised)

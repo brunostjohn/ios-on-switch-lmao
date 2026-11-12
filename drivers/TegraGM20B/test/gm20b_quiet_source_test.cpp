@@ -194,12 +194,20 @@ TEST(GM20BPromiseSource, PresentsAndJobsOrderBehindWriterPromises)
 	expectBefore(Body(unit("gpu_hang.c"), "enum tgm_hang tgm_hang_recover("),
 		     "if (chans[i] && c[i].stuck && !c[i].moving)",
 		     "tgm_chan_release_promises(chans[i], who, waited_ns);");
-	// The hang rule's compare-and-swap is a store-release to the write-combined fence page, which the parked PBDMA
-	// reads from DRAM (volatile, no L2): a DSB completes it, as it does after the CPU's own release (releasePromise).
+	// The hang rule's raise is a plain store-release to the write-combined fence page, which the parked PBDMA reads from
+	// DRAM (volatile, no L2): a DSB completes it, as it does after the CPU's own release (releasePromise). No exclusive
+	// access (compare-and-swap, atomic read-modify-write) reaches the pool: T210's bus answers one with an SError.
 	expectBefore(Body(unit("gpu_promise.c"), "uint32_t tgm_chan_release_promises("),
 		     "switch_gpu_promise_waits_release(&chan->promise_waits,", "__asm__ volatile(\"dsb sy\" ::: \"memory\");");
-	EXPECT_THAT(Body(unit("SwitchGpuWriterPromise.h"), "static inline uint32_t switch_gpu_promise_waits_release("),
-		    HasSubstr("__ATOMIC_RELEASE"));
+	const std::string raise = Body(unit("gpu_promise.c"), "static int promise_raise(");
+	expectBefore(raise, "local_irq_save(flags);", "__atomic_store_n(word, value, __ATOMIC_RELEASE);");
+	expectBefore(raise, "__atomic_store_n(word, value, __ATOMIC_RELEASE);", "local_irq_restore(flags);");
+	for (const std::string &body :
+	     {raise, Body(unit("SwitchGpuWriterPromise.h"), "static inline uint32_t switch_gpu_promise_waits_release(")}) {
+		EXPECT_THAT(body, Not(HasSubstr("__atomic_compare_exchange")));
+		EXPECT_THAT(body, Not(HasSubstr("__atomic_fetch_")));
+		EXPECT_THAT(body, Not(HasSubstr("__atomic_exchange")));
+	}
 	// switch_gpu_promise_strike_test models these steps: the mark first, taken back if the maker won, one line else
 	const std::string released = Body(unit("gpu_promise.c"), "static void promise_released(");
 	expectBefore(released, "step == SWITCH_GPU_PROMISE_RAISING", "tgm_promise_abandon(offset, value);");
