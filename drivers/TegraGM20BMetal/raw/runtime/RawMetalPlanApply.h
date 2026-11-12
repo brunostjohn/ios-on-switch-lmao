@@ -16,15 +16,16 @@ inline uint32_t slotsToCompare(uint32_t edited, uint32_t from, size_t count, Sta
 }
 
 template <typename Sink>
-void applyBuffers(const StateSnapshots<BufferBindings> &table, uint32_t from, uint32_t to, uint32_t stage,
-                  StateCursor &cursor, Sink &sink)
+void applyBuffers(const BufferSnapshots &table, uint32_t from, uint32_t to, uint32_t stage, StateCursor &cursor,
+                  Sink &sink)
 {
-    const BufferBindings &bindings = table[to];
-    const BufferBindings *old = from == kNoSnapshot ? nullptr : &table[from];
-    const uint32_t edited = old ? table.changedFrom(from, to) : ~0u;
+    const auto bindings = table[to];
+    const bool hasOld = from != kNoSnapshot;
+    const auto old = table[hasOld ? from : to];
+    const uint32_t edited = hasOld ? table.changedFrom(from, to) : ~0u;
     for (uint32_t slots = slotsToCompare(edited, from, bindings.size(), cursor); slots; slots &= slots - 1) {
         const uint32_t slot = uint32_t(__builtin_ctz(slots));
-        if (bindings[slot].source != BufferBinding::Source::Unset && (!old || bindings[slot] != (*old)[slot]))
+        if (bindings[slot].source != BufferBinding::Source::Unset && (!hasOld || bindings[slot] != old[slot]))
             sink.buffer(stage, slot, bindings[slot]);
     }
 }

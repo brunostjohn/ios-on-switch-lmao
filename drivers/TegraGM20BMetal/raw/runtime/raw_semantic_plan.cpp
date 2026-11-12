@@ -29,27 +29,15 @@ uint32_t RMCommandPlan::saveUses(const std::vector<raw::ResourceUse> &uses)
     if (uses.empty())
         return 0;
     const uint32_t begin = static_cast<uint32_t>(uses_.size());
-    std::unordered_map<void *, uint32_t> positions;
-    if (uses.size() > 32)
-        positions.reserve(uses.size());
+    usePositions_.clear();
     for (const auto &use : uses) {
         if (!use.object)
             continue;
-        if (uses.size() > 32) {
-            const auto [found, inserted] = positions.try_emplace(use.object, static_cast<uint32_t>(uses_.size()));
-            if (inserted)
-                uses_.push_back(use);
-            else
-                uses_[found->second].access |= use.access;
-            continue;
-        }
-        auto found = std::find_if(uses_.begin() + begin, uses_.end(), [&](const auto &candidate) {
-            return candidate.object == use.object;
-        });
-        if (found == uses_.end())
+        const auto [position, inserted] = usePositions_.insert(use.object, static_cast<uint32_t>(uses_.size()));
+        if (inserted)
             uses_.push_back(use);
         else
-            found->access |= use.access;
+            uses_[*position].access |= use.access;
     }
     return append(useSpans_, {begin, static_cast<uint32_t>(uses_.size()) - begin});
 }
@@ -128,7 +116,6 @@ bool RMCommandPlan::record(const Cmd &c, const std::vector<uint64_t> &extra)
         ++kernelGeneration_;
         operation.payload = append(begins_, {c.obj, uint32_t(c.x), c.a, bool(c.index)});
         begins_.back().rasterBegin = uint32_t(rasterGroups_.size());
-        rasterGroupIndex_.clear();
         lastRasterGroup_ = raw::kNoSnapshot;
         break;
     case OpDraw:
@@ -161,13 +148,11 @@ bool RMCommandPlan::record(const Cmd &c, const std::vector<uint64_t> &extra)
         operation.uses = renderStates[draw.state].uses;
         if (encoder_ == OpRender && draw.count && draw.instances) {
             const uint32_t state = renderStates[draw.state].raster;
+            // a raster snapshot is captured after every one before it: a state other than the last group's is new
             if (lastRasterGroup_ == raw::kNoSnapshot || rasterGroups_[lastRasterGroup_].state != state) {
-                auto [found, inserted] = rasterGroupIndex_.try_emplace(state, uint32_t(rasterGroups_.size()));
-                if (inserted) {
-                    rasterGroups_.push_back({state, 0});
-                    ++begins_[operations_[encoderBegin_].payload].rasterCount;
-                }
-                lastRasterGroup_ = found->second;
+                lastRasterGroup_ = uint32_t(rasterGroups_.size());
+                rasterGroups_.push_back({state, 0});
+                ++begins_[operations_[encoderBegin_].payload].rasterCount;
             }
             ++rasterGroups_[lastRasterGroup_].draws;
         }
@@ -390,7 +375,7 @@ size_t RMCommandPlan::storageBytes() const
            dispatches_.capacity() * sizeof(RMPlanDispatch) + transfers_.capacity() * sizeof(RMPlanTransfer) +
            controls_.capacity() * sizeof(RMPlanControl) + begins_.capacity() * sizeof(RMPlanBegin) +
            events_.capacity() * sizeof(RMPlanEvent) + uses_.capacity() * sizeof(raw::ResourceUse) +
-           useSpans_.capacity() * sizeof(UseSpan) + rasterGroupIndex_.bucket_count() * sizeof(void *) +
+           useSpans_.capacity() * sizeof(UseSpan) +
            rasterGroups_.capacity() * sizeof(RMPlanRasterGroup) + rangeStorageBytes();
 }
 
@@ -400,7 +385,6 @@ void RMCommandPlan::clear()
     begins_.clear();
     draws_.clear();
     rasterGroups_.clear();
-    rasterGroupIndex_.clear();
     lastRasterGroup_ = raw::kNoSnapshot;
     dispatches_.clear();
     transfers_.clear();
@@ -430,7 +414,7 @@ void RMCommandPlan::clear()
     encoder_ = OpEnd;
     recordingError_ = RMPlanError::None;
     encoderBegin_ = 0;
-    ranges_.clear();
+    rangeCount_ = 0;
     resourceFacts_.clear();
     drawUseSpans_.clear();
     renderUseSpans_.clear();

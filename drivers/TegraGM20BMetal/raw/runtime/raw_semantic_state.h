@@ -6,6 +6,8 @@
 #include <limits>
 #include <vector>
 
+#include "raw_slot_snapshots.h"
+
 namespace raw {
 
 constexpr uint32_t kNoSnapshot = std::numeric_limits<uint32_t>::max();
@@ -135,6 +137,7 @@ struct BufferBinding {
 };
 
 using BufferBindings = std::array<BufferBinding, 31>;
+using BufferSnapshots = SlotSnapshots<BufferBinding, 31>;
 
 template <size_t N> struct ObjectBindings {
     std::array<void *, N> objects{};
