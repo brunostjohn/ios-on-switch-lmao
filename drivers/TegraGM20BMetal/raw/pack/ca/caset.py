@@ -5,7 +5,8 @@ Tiers, each name in the first that has it:
   corpus     every Core Animation state the device's journals hold (precompile/corpus.log), by name
   manifest   QuartzCore's offline compilation manifest (CA::OGL::MetalContext::offline_compilation_manifest: the states
              Apple compiles ahead for its GPUs; warmup_shaders makes the ones of the device's GPU family at boot), each
-             as this device's QuartzCore names it (deepcolour.py: Apple names them for its extended-colour devices). CA
+             as Apple names it and as this device's QuartzCore does (deepcolour.py: Apple names them for its
+             extended-colour devices). CA
              makes a generic state (g: the uber shader) only out of its binary archive, failing on a miss; the raw
              runtime answers such a creation from the pack as the device's archive would. QuartzCore 27 asks for every
              generic state of its manifest at boot (17 F "Metal failed to load render pipeline" lines each iOS 27 boot

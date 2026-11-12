@@ -83,7 +83,7 @@ class States27(unittest.TestCase):
             written = written_attachments(tables, s)
             (own if fetched & written else read_only).append(name)
         self.assertEqual(len(read_only), 35)
-        self.assertEqual(len(own), 147)
+        self.assertEqual(len(own), 149)
         for name in read_only:
             self.assertRegex(name, r'_IsrcM[01]($|_)')
         for name in ('PBGRABxorXm_TcimA2Xhf_IsrcM1', 'PBGRABsapXm_TcimA2Xhf_IsrcM1', 'PBGRABsovXm_TimgA2S1Xhfu_IsrcM0'):
