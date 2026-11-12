@@ -6,11 +6,11 @@ import Metal
 /// Draws that fetch the colour they write (fetch_order_fragment: each full-screen triangle blends its step into what the
 /// one before it left), in the shapes whose raster order the raw path keeps differently: three instances in the middle of
 /// three render encoders of one command buffer, a strip of six vertices whose four triangles cover each other, and twelve
-/// overlapping triangles in one draw over a depth attachment and into four samples. Each pass must match the result of
-/// its triangles applied in order, and on the facade the fetch counters must show how the raw path took them: inside the
-/// pixel interlock (fetch_interlocked), or refused as recorded or at encoding (its encoder then on m2v), or ordered on the
-/// GPU a triangle a draw (sequential) or on the CPU's proof (whole). A pass that moves none of them did not fetch its own
-/// colour.
+/// overlapping triangles in one draw over a depth attachment and into four and two samples. Each pass must match the
+/// result of its triangles applied in order, and on the facade the fetch counters must show how the raw path took
+/// them: inside the pixel interlock (fetch_interlocked), or refused as recorded or at encoding (its encoder then on
+/// m2v), or ordered on the GPU a triangle a draw (sequential) or on the CPU's proof (whole). A pass that moves none of
+/// them did not fetch its own colour.
 struct CAFetchRouteScene: GPUScene {
     let id = "gpu.ca.fetch_routes"
     let name = "Draws fetching their own colour: instanced, folded strip, depth and multisample routes and pixels"
@@ -19,7 +19,7 @@ struct CAFetchRouteScene: GPUScene {
     static let clear: [Float] = [0.125, 0.25, 0.5, 1]
 
     enum Pass: String, CaseIterable {
-        case instanced, strip, depth, msaa
+        case instanced, strip, depth, msaa, msaa2
     }
 
     func run(_ gpu: GPU) async throws -> SceneResult {
@@ -40,13 +40,13 @@ struct CAFetchRouteScene: GPUScene {
         switch pass {
         case .instanced: return [0, 0, 1, 2, 0]
         case .strip: return [0, 0, 0, 1]
-        case .depth, .msaa: return Array(0..<12)
+        case .depth, .msaa, .msaa2: return Array(0..<12)
         }
     }
 
     func draw(_ pass: Pass, _ gpu: GPU, _ result: inout SceneResult) async throws {
         let size = Self.size
-        let samples = pass == .msaa ? 4 : 1
+        let samples = pass == .msaa ? 4 : pass == .msaa2 ? 2 : 1
         let depthFormat: MTLPixelFormat = pass == .depth ? .depth32Float : .invalid
         let pipeline = try gpu.render(
             vertex: "fetch_vertex", fragment: "fetch_order_fragment", format: .bgra8Unorm, samples: samples,
@@ -96,7 +96,7 @@ struct CAFetchRouteScene: GPUScene {
                 let e = encoder(first: true, last: true)
                 e.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 6)
                 e.endEncoding()
-            case .depth, .msaa:
+            case .depth, .msaa, .msaa2:
                 let e = encoder(first: true, last: true)
                 e.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 36)
                 e.endEncoding()
