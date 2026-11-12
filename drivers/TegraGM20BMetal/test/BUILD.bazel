@@ -1400,6 +1400,30 @@ host_test(
     cxx_std = "c++17",
 )
 
+host_test(
+    name = "raw_direct_encode_test",
+    srcs = [
+        "raw_direct_encode_test.cpp",
+        "//drivers/NativeMetal:bridge/NativeMetalBlend.h",
+        "//drivers/NativeMetal:bridge/NativeMetalDirect.h",
+        "//drivers/NativeMetal:bridge/NativeMetalObjects.h",
+        "//drivers/TegraGM20BMetal:raw/pack/probe_bind.h",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_direct.h",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_direct_encode.h",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_direct_nvk.h",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_pack.h",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_record.h",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_set_layout.h",
+        "//kits/SwitchGM20B:class_headers",
+    ],
+    copts = [
+        "-Idrivers/NativeMetal",
+        "-Ithird_party/mesa/src/nouveau/headers",
+    ],
+    cxx_std = "c++17",
+    data = ["testdata/direct_encode_vectors.txt"],
+)
+
 rust_test(
     name = "raw_blend_words_test",
     srcs = [
