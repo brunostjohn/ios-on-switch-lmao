@@ -19,5 +19,14 @@
 		<key>SuccessfulExit</key>
 		<false/>
 	</dict>
+	<key>JetsamProperties</key>
+	<dict>
+		<key>JetsamPriority</key>
+		<integer>90</integer>
+		<key>ActiveSoftMemoryLimit</key>
+		<integer>48</integer>
+		<key>InactiveHardMemoryLimit</key>
+		<integer>48</integer>
+	</dict>
 </dict>
 </plist>
