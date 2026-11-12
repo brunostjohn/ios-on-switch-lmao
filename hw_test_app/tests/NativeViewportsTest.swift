@@ -62,7 +62,7 @@ struct NativeViewportsTest: NativeObjectTest {
     func exercise(_ gpu: GPU, _ metrics: inout Metrics) async throws -> NativeWork {
         let t = try ViewportTiles.target(gpu)
         let pipeline = try gpu.render(fragment: "solid_fragment", format: .rgba8Unorm)
-        var work = NativeWork(objects: [t, pipeline])
+        var work = NativeWork(objects: [t])
         let drawn: [UInt8] = [255, 255, 0, 255]
         let timing = try await gpu.run { commands in
             let e = commands.makeRenderCommandEncoder(descriptor: ViewportTiles.pass(t))!
@@ -93,7 +93,7 @@ struct NativeViewportIndexTest: NativeObjectTest {
     func exercise(_ gpu: GPU, _ metrics: inout Metrics) async throws -> NativeWork {
         let t = try ViewportTiles.target(gpu)
         let pipeline = try gpu.render(vertex: "viewport_vertex", fragment: "flat_color_fragment", format: .rgba8Unorm)
-        var work = NativeWork(objects: [t, pipeline])
+        var work = NativeWork(objects: [t])
         let timing = try await gpu.run { commands in
             let e = commands.makeRenderCommandEncoder(descriptor: ViewportTiles.pass(t))!
             e.setRenderPipelineState(pipeline)

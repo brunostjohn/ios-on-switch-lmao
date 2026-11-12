@@ -90,7 +90,7 @@ struct NativeLayeredVertexTest: NativeObjectTest {
     func exercise(_ gpu: GPU, _ metrics: inout Metrics) async throws -> NativeWork {
         let t = try Layering.array(gpu, 32, layers: 4)
         let pipeline = try gpu.render(vertex: "layered_vertex", fragment: "flat_color_fragment", format: .rgba8Unorm)
-        var work = NativeWork(objects: [t, pipeline])
+        var work = NativeWork(objects: [t])
         let clear: [UInt8] = [0, 0, 0, 255]
         let timing = try await gpu.run { commands in
             let pass = MTLRenderPassDescriptor()
