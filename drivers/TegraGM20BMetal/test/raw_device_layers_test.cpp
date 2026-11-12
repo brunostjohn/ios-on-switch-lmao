@@ -405,4 +405,39 @@ TEST_F(DeviceLayers, MemorylessArraysAreBackedWithThePassesLayers)
     EXPECT_FALSE(pass(alone, none).empty()) << "a layered pass of memoryless color alone backs it block-linear";
 }
 
+// A pass's backing is answered from what the pass before it kept, with no lock: a layered pass of a shape a one-layer
+// pass was backed for takes memory of its own layers, and the one-layer pass after it its one-layer backing again
+TEST_F(DeviceLayers, ALayeredPassTakesNoOneLayerBackingOfItsShape)
+{
+    raw::Texture color;
+    ASSERT_TRUE(dev.createMemoryless(32, 32, kRGBA8, color, 1, 6));
+    const auto address = [](const std::map<uint32_t, uint32_t> &at) {
+        return uint64_t(at.at(NVB197_SET_COLOR_TARGET_A(0))) << 32 | at.at(NVB197_SET_COLOR_TARGET_B(0));
+    };
+    const auto one = last(pass(onto(color, 1), none));
+    const auto four = last(pass(onto(color, 4), none));
+    const auto again = last(pass(onto(color, 1), none));
+    ASSERT_FALSE(one.empty() || four.empty() || again.empty());
+    EXPECT_EQ(four.at(NVB197_SET_COLOR_TARGET_THIRD_DIMENSION(0)), 4u);
+    EXPECT_NE(address(four), address(one)) << "a one-layer backing has no second layer";
+    EXPECT_EQ(address(again), address(one));
+}
+
+// viewTic answers from a cache with no lock: a storage view of a multisampled texture spans its sample grid, so it and a
+// sampling view of the same word 0 are two headers, each answered again as itself
+TEST_F(DeviceLayers, AStorageAndASamplingViewOfAMultisampledTextureAreTwoHeaders)
+{
+    raw::Texture ms;
+    ASSERT_TRUE(dev.createStoredMultisample(64, 64, kRGBA8, 4, ms));
+    ASSERT_NE(ms.tic, 0u);
+    constexpr uint32_t kWord0 = 0x2a;
+    const uint32_t sampled = dev.viewTic(ms, kWord0, raw::ViewAccess::Texture);
+    const uint32_t storage = dev.viewTic(ms, kWord0, raw::ViewAccess::Storage);
+    ASSERT_NE(sampled, 0u);
+    ASSERT_NE(storage, 0u);
+    EXPECT_NE(storage, sampled);
+    EXPECT_EQ(dev.viewTic(ms, kWord0, raw::ViewAccess::Texture), sampled);
+    EXPECT_EQ(dev.viewTic(ms, kWord0, raw::ViewAccess::Storage), storage);
+}
+
 }  // namespace
