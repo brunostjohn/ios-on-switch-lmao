@@ -81,6 +81,7 @@ enum class RMResourceKind : uint8_t { Other, Buffer, Texture, Sampler, Count };
 struct RMResourceFacts {
     enum Role : uint8_t { Converted = 1, PlanarTarget = 2 };
     void *cpuBuffer = nullptr;
+    void *surfaceWrites = nullptr;  // a texture over a surface: the surface's write count (RawMetalSurfaceWrites.mm)
     RMResourceKind kind = RMResourceKind::Other;
     uint8_t roles = 0;
 };
@@ -258,6 +259,11 @@ public:
     }
 
     void registerResource(void *object, RMResourceFacts facts);
+    const RMResourceFacts *factsOf(void *object) const
+    {
+        const auto found = resourceFacts_.find(object);
+        return found != resourceFacts_.end() ? &found->second : nullptr;
+    }
     void *nativeRangeRefusal(size_t from, size_t to) const;
     template <typename F> void forEachResource(size_t from, size_t to, RMResourceKind kind, F visit) const
     {

@@ -491,6 +491,7 @@ static bool producesTexture(MTLTextureDescriptor *d)
     t->_descriptor = [d copy];
     t->_kind = RMTextureSurface;
     t->_surface = (IOSurfaceRef)CFRetain(s);
+    t->_surfaceWrites = holdSurfaceWrites(s);
     t->_plane = plane;
     raw::YcbcrPlan ycbcr;
     raw::Rotation turned;
@@ -542,7 +543,7 @@ static bool producesTexture(MTLTextureDescriptor *d)
             t->_raw.nativePlane = uint32_t(plane);
     }
     if (t->_rawOk && t->_raw.converted())
-        surfaceConverted(s, true);
+        surfaceConverted(t->_surfaceWrites, true);
     if (t->_rawOk && writesTexture(d))
         declareGpuWrites(t);
     if (!t->_rawOk) {  // a surface the raw path does not take: m2v's texture over it, made now (it may refuse: nil, as today)

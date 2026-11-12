@@ -240,7 +240,7 @@ __attribute__((objc_externally_retained)) static bool encodeRawAttempt(RMCommand
             std::vector<__unsafe_unretained RMTexture *> stale;
             for (__unsafe_unretained RMTexture *t : planar) {
                 const uint32_t seed = t->_surface ? IOSurfaceGetSeed(t->_surface) : 0;
-                const uint64_t writes = t->_surface ? surfaceWrites(t->_surface) : 0;
+                const uint64_t writes = t->_surface ? surfaceWrites(t->_surfaceWrites) : 0;
                 const raw::Texture *luma = rc->readTexture(t->_raw.luma);
                 const uint64_t nativeGeneration = luma ? luma->nativeGeneration : 0;
                 if (!t->_surface || !t->_imageCurrent || t->_imageSeed != seed || t->_imageWrites != writes ||
