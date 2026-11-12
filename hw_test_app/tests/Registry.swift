@@ -24,7 +24,9 @@ public enum Registry {
         + [VideoEncodeBFramesTest(), NVENCInputLayoutTest(), VideoTranscodeTest()]
 
     static let images: [any HWTest] =
-        ImageDecodeTest.all + [HEICEncodeTest(), CoreImageTest(), PixelTransferTest(), PixelTransfer422Test()]
+        ImageDecodeTest.all + [
+            JPEGAfterIdleTest(), HEICEncodeTest(), CoreImageTest(), PixelTransferTest(), PixelTransfer422Test(),
+        ]
 
     static let audio: [any HWTest] = [
         AudioPlaybackTest(rate: 44_100), AudioPlaybackTest(rate: 48_000), AudioLatencyTest(), AudioRouteTest(),

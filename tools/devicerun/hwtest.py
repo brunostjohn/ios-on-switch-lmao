@@ -143,6 +143,7 @@ TESTS: dict[str, bool] = {
     'encode.nvenc_input_layouts': False,
     'encode.h264_from_nvdec': False,
     **{f'image.{still}': False for still in STILLS},
+    'image.jpeg_after_idle': False,
     'image.heic_encode': False,
     'image.coreimage': False,
     'image.pixel_transfer': False,
