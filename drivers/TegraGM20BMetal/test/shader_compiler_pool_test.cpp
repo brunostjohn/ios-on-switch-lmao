@@ -44,6 +44,7 @@ public:
     std::map<uint8_t, Band> startBand;
     std::vector<uint8_t> started;
     std::vector<Band> raises;
+    std::vector<size_t> idles;  // how many waiters were answered at each idle
     unsigned lowered = 0, running = 0, mostRunning = 0, mostForeground = 0, foreground = 0;
     std::unique_ptr<Pool> pool;
     thread_local static Band band;
@@ -66,6 +67,11 @@ public:
         hooks.complete = [this](const Waiter &w, int32_t result) {
             std::lock_guard<std::mutex> l(lock);
             completed[w.id] = result;
+            changed.notify_all();
+        };
+        hooks.idle = [this] {
+            std::lock_guard<std::mutex> l(lock);
+            idles.push_back(completed.size());
             changed.notify_all();
         };
         hooks.run = [this](Work &work, const std::function<void(int32_t)> &primary) {
@@ -120,6 +126,14 @@ public:
         std::unique_lock<std::mutex> l(lock);
         changed.wait(l, [&] {
             return running >= count;
+        });
+    }
+
+    void waitIdles(size_t count)
+    {
+        std::unique_lock<std::mutex> l(lock);
+        changed.wait(l, [&] {
+            return idles.size() >= count;
         });
     }
 };
@@ -233,6 +247,35 @@ TEST(ShaderCompilerPool, AClientWithNothingRunningGoesBeforeOneThatHasACompileRu
     for (uint8_t n : {10, 11, 12, 20})
         h.release(n);
     h.pool->drain();
+}
+
+// The compiler gives its freed heap back when the pool goes idle: once the last queued or running job's waiters are
+// answered, never while another job is still in the pool
+TEST(ShaderCompilerPool, ThePoolIsIdleOnceItsLastJobsWaitersAreAnswered)
+{
+    Harness h;
+    h.submit(1, 11, Band::Interactive);
+    h.submit(2, 12, Band::Interactive);
+    h.waitRunning(2);
+    h.release(1);
+    {
+        std::unique_lock<std::mutex> l(h.lock);
+        h.changed.wait(l, [&] {
+            return h.completed.count(11) != 0;
+        });
+        EXPECT_TRUE(h.idles.empty());
+    }
+    h.release(2);
+    h.pool->drain();
+    h.waitIdles(1);
+    h.submit(3, 13, Band::Utility);
+    h.release(3);
+    h.pool->drain();
+    h.waitIdles(2);
+    std::lock_guard<std::mutex> l(h.lock);
+    ASSERT_EQ(h.idles.size(), 2u);
+    EXPECT_EQ(h.idles[0], 2u);
+    EXPECT_EQ(h.idles[1], 3u);
 }
 
 }  // namespace

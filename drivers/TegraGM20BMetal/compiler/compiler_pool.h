@@ -61,6 +61,8 @@ public:
         // A running job's worker raised to `band` until lower(token)
         std::function<void *(pthread_t worker, Band band)> raise;
         std::function<void(void *token)> lower;
+        // On the worker whose job was the last one queued or running, after its waiters were answered
+        std::function<void()> idle;
     };
 
     static constexpr unsigned kWorkers = 4, kForeground = 2, kBackgroundStarts = 1;

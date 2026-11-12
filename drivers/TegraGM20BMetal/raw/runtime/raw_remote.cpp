@@ -38,6 +38,18 @@ void Remote::refresh(const TegraGM20BAbiCompilerInfoReply &info)
         map(info.generation);
 }
 
+// No compiler took a request: one that is neither registered nor waited for (lost a third time, or declined) leaves this
+// process asking the kernel whether one serves, never with a request, until one registers
+void Remote::recheck()
+{
+    TegraGM20BAbiCompilerInfoReply info = {};
+    if (call(TegraGM20BMethodCompilerInfo, nullptr, 0, &info, sizeof info) != kIOReturnSuccess)
+        return;
+    if (!(info.flags & (TegraGM20BCompilerExpected | TegraGM20BCompilerRegistered)))
+        expected_.store(false, std::memory_order_release);
+    refresh(info);
+}
+
 bool Remote::serving()
 {
     if (!capable_)
@@ -184,6 +196,8 @@ Remote::Answer Remote::compile(const std::string &request, uint32_t *how)
     latest_.store(reply.generation, std::memory_order_release);
     if (how)
         *how = reply.how;
+    if (reply.result == TegraGM20BCompileUnavailable)
+        recheck();
     return answerOf(reply.result);
 }
 
@@ -222,6 +236,8 @@ bool Remote::ask(Held &&held)
     if (asked == kIOReturnSuccess)
         return true;
     pending_.erase(cookie);
+    if (asked == kIOReturnNotReady)
+        recheck();
     if (asked != kIOReturnNoResources || pending_.empty())
         return false;
     held_.push_back(std::move(held));
@@ -269,7 +285,10 @@ void Remote::delivered(void *refcon, int result, void *cookie, void *word)
     if (result != kIOReturnSuccess)
         return done(Answer::Unavailable);
     remote->latest_.store(uint32_t(packed >> 32), std::memory_order_release);
-    done(answerOf(int32_t(uint32_t(packed))));
+    const int32_t answer = int32_t(uint32_t(packed));
+    if (answer == TegraGM20BCompileUnavailable)
+        remote->recheck();
+    done(answerOf(answer));
 }
 
 }  // namespace raw

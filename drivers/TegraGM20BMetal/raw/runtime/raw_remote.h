@@ -40,7 +40,7 @@ public:
     Remote &operator=(const Remote &) = delete;
 
     // The kernel takes requests: it has the compiler's methods and a compiler is registered or on its way (asked of the
-    // kernel again while it is not: a compiler may register later)
+    // kernel again while it is not: a compiler may register later, and a request no compiler took asks it again)
     bool serving();
 
     // The store's entry under `name`, copied out of the mapping
@@ -85,6 +85,7 @@ private:
     // asyncLock_ held: the request asked, or held past the bound; false: neither
     bool ask(Held &&held);
     void refresh(const TegraGM20BAbiCompilerInfoReply &info);
+    void recheck();
     int call(uint32_t method, const void *in, size_t inSize, void *out, size_t outSize, uint64_t *reference = nullptr);
     void map(uint32_t generation);
     static Call transportCall(const KernelTransport &transport);

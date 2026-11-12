@@ -180,6 +180,7 @@ void Pool::finish(const std::shared_ptr<Job> &job, int32_t splitResult)
     std::vector<Waiter> answered;
     std::vector<void *> raises;
     int32_t primaryResult = splitResult;
+    bool idle = false;
     {
         std::lock_guard<std::mutex> l(lock_);
         if (!job->primaryDone) {
@@ -192,6 +193,7 @@ void Pool::finish(const std::shared_ptr<Job> &job, int32_t splitResult)
         answered.swap(job->waiters);
         raises.swap(job->raises);
         jobs_.erase(job->name);
+        idle = jobs_.empty();
     }
     work_.notify_all();
     idle_.notify_all();
@@ -199,6 +201,8 @@ void Pool::finish(const std::shared_ptr<Job> &job, int32_t splitResult)
         hooks_.lower(token);
     for (const Waiter &w : answered)
         hooks_.complete(w, w.split ? splitResult : primaryResult);
+    if (idle && hooks_.idle)
+        hooks_.idle();
 }
 
 void Pool::drain()
