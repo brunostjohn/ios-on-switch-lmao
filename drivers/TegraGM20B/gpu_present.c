@@ -347,8 +347,7 @@ static int present_copy(uint64_t src_va, uint64_t stride, int32_t src_block_log2
 	tgm_present.queued = nvxnu_nanotime();
 	__atomic_store_n(&tgm_present.typed_pending, 1, __ATOMIC_RELEASE);
 	__atomic_store_n(&tgm_present.pending, chan->submitted + 1, __ATOMIC_RELEASE);
-	tgm_present.recheck = switch_gpu_present_tokens_promised(&tgm_present.tokens) ? TGM_PROMISE_FIRST_LOOK_NS
-										      : TGM_PRESENT_NS;
+	tgm_present.recheck = tgm_present_waits_promise(&tgm_present.tokens) ? TGM_PROMISE_FIRST_LOOK_NS : TGM_PRESENT_NS;
 	/* before the kick, so the completion cancels it */
 	nvxnu_work_schedule_after(tgm_present.deadline_work, tgm_present.recheck);
 	/* A copy's flush above put the frame's source in DRAM, and the copy and its read-backs write through the present's

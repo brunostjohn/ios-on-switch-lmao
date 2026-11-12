@@ -211,8 +211,14 @@ TEST(GM20BPromiseSource, PresentsAndJobsOrderBehindWriterPromises)
 	// TGM_STUCK_NS later, a real hang at the deadline and a whole deadline later; the deadline's own wait is that
 	// interval (switch_gpu_promise_strike_test models both)
 	const std::string copy = Body(unit("gpu_present.c"), "static int present_copy(");
-	expectBefore(copy, "switch_gpu_present_tokens_promised(&tgm_present.tokens) ? TGM_PROMISE_FIRST_LOOK_NS",
+	expectBefore(copy, "tgm_present_waits_promise(&tgm_present.tokens) ? TGM_PROMISE_FIRST_LOOK_NS",
 		     "nvxnu_work_schedule_after(tgm_present.deadline_work, tgm_present.recheck);");
+	// a producer the present waits for whose own acquires include an unkept promise counts too, read without a
+	// timeline's status under tgm_live_lock
+	const std::string waits = Body(unit("gpu_promise.c"), "int tgm_present_waits_promise(");
+	expectBefore(waits, "switch_gpu_present_tokens_promised(tokens)", "mutex_lock(&tgm_live_lock);");
+	expectBefore(waits, "switch_gpu_backing_token_status(", "mutex_lock(&tgm_live_lock);");
+	expectBefore(waits, "mutex_lock(&tgm_live_lock);", "tgm_chan_waits_promise(chan)");
 	expectBefore(copy, "nvxnu_work_schedule_after(tgm_present.deadline_work, tgm_present.recheck);",
 		     "chan_fence(chan);");
 	const std::string deadline = Body(unit("gpu_present_deadline.c"), "void tgm_present_deadline(void *arg)");

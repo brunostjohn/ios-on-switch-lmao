@@ -30,8 +30,9 @@ struct Present {
 	uint32_t strikes = 0, seen = 0, completed = 40;
 	std::vector<std::string> lines;
 	bool makerReleasesAtRaise = false;
-	bool producerHung = false;  // the control: the present waits on a client producer stuck on its own work
-	int shown = 1;              // the frame on the panel
+	bool producerHung = false;    // the control: the present waits on a client producer stuck on its own work
+	bool producerParked = false;  // the present waits on a client producer whose job acquires the promise
+	int shown = 1;                // the frame on the panel
 
 	// gpu_promise.c promise_released
 	static void released(uint32_t offset, uint32_t value, int step, void *arg)
@@ -58,7 +59,7 @@ struct Present {
 	{
 		tgm_hang_candidate c = {};
 		c.live = 1;
-		c.kernel = !producerHung;
+		c.kernel = !producerHung && !producerParked;
 		c.victim = !producerHung;
 		c.resident = producerHung;
 		c.stuck = uint8_t(tgm_hang_confirm(1, completed, &strikes, &seen));
@@ -80,6 +81,16 @@ struct Present {
 		if (switch_gpu_promise_abandoned_has(&abandoned, kOffset, kValue))
 			return -5;
 		return int32_t(pool[kOffset / 4] - kValue) >= 0 ? 1 : 0;
+	}
+
+	// the present behind a producer: the producer's composite reads what the surface holds, the frame before the
+	// promised one when the promise was given up on
+	int finishComposite()
+	{
+		if (status() == 0)
+			return -1;
+		shown = status() == 1 ? 2 : 1;
+		return 0;
 	}
 
 	// the present's result once its tokens finish; the display flips only a 0 (NativeLegacyDisplay finishGpuCopy)
@@ -144,6 +155,22 @@ TEST_F(Strike, AnUnkeptPromiseKeepsThePreviousFrameAndNamesItsWriterOnceAtOneSec
 	EXPECT_EQ(next, kPresentNs) << "a raised word is no longer a promise wait";
 	EXPECT_EQ(deadline(), TGM_HANG_PROGRESSING);
 	EXPECT_EQ(p.lines.size(), 1u) << "a raised word is not raised again";
+}
+
+// The present waits for a GM20B producer (the render server's composite) whose own job acquires the unkept promise
+// (tgm_present_waits_promise): its first look comes as early, the producer's channel is struck at about 1 s, one line
+// names the writer, and the composite goes on with what the surface held, the frame before the promised one.
+TEST_F(Strike, APresentBehindAProducerParkedOnAPromiseGivesUpAtOneSecond)
+{
+	p.producerParked = true;
+	parkOnThePromise();
+	EXPECT_EQ(deadline(), TGM_HANG_PROGRESSING);
+	EXPECT_TRUE(p.lines.empty());
+	EXPECT_EQ(deadline(), TGM_HANG_PROGRESSING);
+	EXPECT_EQ(now, TGM_PROMISE_FIRST_LOOK_NS + TGM_STUCK_NS);
+	ASSERT_EQ(p.lines.size(), 1u);
+	EXPECT_EQ(p.finishComposite(), 0);
+	EXPECT_EQ(p.shown, 1);
 }
 
 // A real hang, not on a promise: the producer is struck at the deadline and again a whole deadline later (2 s), then

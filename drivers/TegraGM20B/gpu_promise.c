@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
-// Writer promises (SwitchGpuWriterPromise.h): those a channel waits for on the GPU, as the hang rule sees them, and the one
-// a direct present watches (SwitchGpuPresentWatch.h).
+// Writer promises (SwitchGpuWriterPromise.h): those a channel waits for on the GPU, as the hang rule sees them, and
+// the one a direct present watches (SwitchGpuPresentWatch.h).
 #include "gpu_internal.h"
 
 int tgm_chan_note_promise(struct tgm_chan *chan, uint32_t offset, uint32_t value)
@@ -11,6 +11,34 @@ int tgm_chan_note_promise(struct tgm_chan *chan, uint32_t offset, uint32_t value
 int tgm_chan_waits_promise(const struct tgm_chan *chan)
 {
 	return switch_gpu_promise_waits_pending(&chan->promise_waits, tgm_fence_word);
+}
+
+/* tgm_present.lock held: the present's job parks on an unkept promise, its own acquire's or that of a GM20B producer it
+ * waits for (whose channel's acquires include one), so its deadline's first look comes once that wait has been stuck
+ * for TGM_STUCK_NS */
+int tgm_present_waits_promise(const struct switch_gpu_present_tokens *tokens)
+{
+	u32 producers[SWITCH_GPU_PRESENT_MAX_DEPENDENCIES];
+	u32 count = 0;
+	u32 i;
+	int waits = 0;
+
+	if (switch_gpu_present_tokens_promised(tokens))
+		return 1;
+	/* their status may take a timeline's lock, which tgm_live_lock is never held around */
+	for (i = 0; i < tokens->count; i++)
+		if (tokens->tokens[i].engine == SWITCH_GPU_ENGINE_GM20B &&
+		    !switch_gpu_backing_token_status(&tokens->tokens[i]))
+			producers[count++] = i;
+	mutex_lock(&tgm_live_lock);
+	for (i = 0; i < count && !waits; i++) {
+		const struct switch_gpu_backing_token *token = &tokens->tokens[producers[i]];
+		const struct tgm_chan *chan = live_by_uid(token->queue);
+
+		waits = chan && switch_gpu_quiet_token_on(token, chan->id) && tgm_chan_waits_promise(chan);
+	}
+	mutex_unlock(&tgm_live_lock);
+	return waits;
 }
 
 struct promise_hang {
@@ -78,7 +106,7 @@ void tgm_present_promises_done(const struct switch_gpu_present_tokens *tokens, u
 static struct switch_gpu_promise_abandoned promise_abandoned;
 static void *promise_wake_work;
 
-/* CPU readers asleep behind a promise given up on go on, as after a cancel; thread context, as the backings' locks are */
+/* CPU readers asleep behind a promise given up on go on, as after a cancel: thread context, for the backings' locks */
 static void promise_wake(void *unused)
 {
 	(void)unused;
@@ -201,9 +229,9 @@ void tgm_present_promise_watch(struct switch_gpu_backing_token *kept)
 	}
 }
 
-/* SubmitJob, the job that keeps the promise submitted: a watch waiting for it watches the job, whose fence push releases
- * the word after its fence, as the nonstall filter's view (SwitchGpuPresentFilter.cpp) and as the producer whose asked
- * interrupt's pass completes the watch. */
+/* SubmitJob, the job that keeps the promise submitted: a watch waiting for it watches the job, whose fence push
+ * releases the word after its fence, as the nonstall filter's view (SwitchGpuPresentFilter.cpp) and as the producer
+ * whose asked interrupt's pass completes the watch. */
 void tgm_present_promise_kept(uint32_t offset, uint32_t value, const struct switch_gpu_backing_token *producer)
 {
 	int watched = 0;
