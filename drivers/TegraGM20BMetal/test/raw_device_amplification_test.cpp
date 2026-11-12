@@ -155,6 +155,51 @@ TEST_F(DeviceAmplification, AnAmplifiedDrawIsOneMacroCallOverTheScratchWords)
         EXPECT_NE(m, call) << "one amplification draws as any draw";
 }
 
+// The amplify macro writes each amplification's id: no draw of a pass writes the id word from the CPU, the second of the
+// same state and count none of the scratch words either
+TEST_F(DeviceAmplification, TheIdWordIsTheMacrosAlone)
+{
+    raw::CommandBuffer *cb = dev.begin();
+    ASSERT_NE(cb, nullptr);
+    raw::PassDesc pass;
+    pass.color[0].texture = &target;
+    pass.count = 1;
+    raw::RenderEncoder *e = cb->render(pass);
+    ASSERT_NE(e, nullptr);
+    e->setPipeline(amplified);
+    e->setBuffer(1, 1, &vertices, 0);
+    e->setAmplification(2, false);
+    const char *why = nullptr;
+    const size_t jobs = kernel_model::model.jobs.size();
+    ASSERT_TRUE(e->draw(kTriangle, 0, 3, 1, 0, &why)) << why;
+    ASSERT_TRUE(e->draw(kTriangle, 3, 3, 1, 0, &why)) << why;
+    e->end();
+    uint32_t seqno = 0;
+    ASSERT_TRUE(cb->commit(seqno));
+    std::vector<uint32_t> words;
+    for (size_t j = jobs; j < kernel_model::model.jobs.size(); j++)
+        words.insert(words.end(), kernel_model::model.jobs[j].words.begin(), kernel_model::model.jobs[j].words.end());
+    const uint32_t call = NVB197_CALL_MME_MACRO(SWITCH_GM20B_MACRO_AMPLIFY);
+    const uint32_t first = NVB197_SET_MME_SHADOW_SCRATCH(SWITCH_GM20B_SCRATCH_AMP_COUNT);
+    const uint32_t end = NVB197_SET_MME_SHADOW_SCRATCH(SWITCH_GM20B_SCRATCH_AMP_END);
+    uint32_t offset = 0, idWrites = 0, calls = 0, scratchAfterFirst = 0;
+    for (const auto &[m, v] : methods(words)) {
+        if (m == NVB197_LOAD_CONSTANT_BUFFER_OFFSET) {
+            offset = v;
+        } else if (m >= NVB197_LOAD_CONSTANT_BUFFER(0) && m < NVB197_LOAD_CONSTANT_BUFFER(16)) {
+            idWrites += offset == 0x700 + 4 * 2;
+            offset += 4;
+        } else if (m == call) {
+            calls++;
+        } else if (m >= first && m < end) {
+            scratchAfterFirst += calls > 0;
+        }
+    }
+    EXPECT_EQ(calls, 2u);
+    EXPECT_EQ(idWrites, 0u);
+    EXPECT_EQ(scratchAfterFirst, 0u);
+}
+
 // A state reading [[amplification_count]] draws at any count up to its maximum: the plain draw's count word is 1, the
 // amplify call's the count it writes (its scratch word names the word)
 TEST_F(DeviceAmplification, ACountReadingStateTakesEachDrawsCount)

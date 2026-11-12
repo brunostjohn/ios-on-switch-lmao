@@ -58,7 +58,7 @@ void RenderEncoder::icbAmplification(uint32_t a)
 {
     const PackPipeline &r = *prepared_->rec;
     amplificationDirty_ = true;
-    if (!r.amplificationIdWord || r.amplificationIdWord > 32)
+    if (!r.amplificationIdWord || r.amplificationIdWord > 32 || cb_->rootPush_[r.amplificationIdWord - 1] == a)
         return;
     if (p_.room() < 8)
         reserve();
@@ -104,7 +104,6 @@ void RenderEncoder::amplifyCall(const Pipeline &pl, bool indexed, uint32_t first
 
 void RenderEncoder::heldAmplifyWords(const PackPipeline &r)
 {
-    amplificationDirty_ = true;
     if (r.amplificationIdWord && r.amplificationIdWord <= 32)
         cb_->rootPush_[r.amplificationIdWord - 1] = amplifications_ - 1;
     if (r.amplificationCountWord && r.amplificationCountWord <= 32)
@@ -114,7 +113,8 @@ void RenderEncoder::heldAmplifyWords(const PackPipeline &r)
 void RenderEncoder::drawnWords(const PackPipeline &r, uint32_t (&want)[32])
 {
     if (r.amplificationIdWord && r.amplificationIdWord <= 32) {
-        want[r.amplificationIdWord - 1] = amplification_;
+        // an amplify call and an indirect command buffer's execute write each amplification's id themselves
+        want[r.amplificationIdWord - 1] = amplifies() ? cb_->rootPush_[r.amplificationIdWord - 1] : amplification_;
         amplificationDirty_ = false;
     }
     if (r.amplificationCountWord && r.amplificationCountWord <= 32)

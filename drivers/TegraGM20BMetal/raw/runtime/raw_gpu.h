@@ -822,7 +822,7 @@ private:
     // table's control words set back to what the encoder holds and set 0 built again, as the commands loaded both
     bool icbPatchLayout(const char **why);
     void icbPatchesDone();
-    // The amplification `a`'s id into the root table of the state prepare() drew with, between an execute's passes
+    // The amplification `a`'s id into the root table of the state prepare() drew with, before each of an execute's passes
     void icbAmplification(uint32_t a);
     const Pipeline *prepared_ = nullptr;  // what the last prepare() drew with, and its set 0's address
     uint64_t preparedSet_ = 0;
