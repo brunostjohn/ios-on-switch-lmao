@@ -145,6 +145,64 @@ cc_test(
     deps = [":records"],
 )
 
+# raw_emit's registers of each record of the sample pack but its form records, made from the record's key fields and
+# programs as a direct compile makes them, against the record (raw/test/emitcheck.cpp)
+cc_test(
+    name = "emitcheck_test",
+    srcs = [
+        GM20B_METAL + ":raw/runtime/raw_emit.cpp",
+        GM20B_METAL + ":raw/runtime/raw_emit.h",
+        GM20B_METAL + ":raw/runtime/raw_pack.cpp",
+        GM20B_METAL + ":raw/runtime/raw_pack.h",
+        GM20B_METAL + ":raw/runtime/raw_sample_shading.h",
+        GM20B_METAL + ":raw/test/emitcheck.cpp",
+    ],
+    args = ["$(rootpath :sample_pack)/pack.bin"],
+    copts = ["-std=c++17"],
+    data = [":sample_pack"],
+    tags = ["m2v"],
+)
+
+# raw_emit's vertex input registers of each QuartzCore state of the sample corpus, its vertex function made with this
+# Mac's Metal, against the sample pack's record (raw/test/vertexcheck.mm)
+cc_test(
+    name = "vertexcheck_test",
+    srcs = [
+        GM20B_METAL + ":raw/pack/probe_states.h",
+        GM20B_METAL + ":raw/runtime/RawPipelineKey.h",
+        GM20B_METAL + ":raw/runtime/raw_cubic.h",
+        GM20B_METAL + ":raw/runtime/raw_emit.cpp",
+        GM20B_METAL + ":raw/runtime/raw_emit.h",
+        GM20B_METAL + ":raw/runtime/raw_pack.cpp",
+        GM20B_METAL + ":raw/runtime/raw_pack.h",
+        GM20B_METAL + ":raw/runtime/raw_sample_shading.h",
+        GM20B_METAL + ":raw/test/vertexcheck.mm",
+    ],
+    args = select({
+        "//ipsw:" + kind: [
+            "$(rootpath :sample_pack)/pack.bin",
+            "$(rootpath @ipsw//:crawl_qc)",
+            "$(rootpath testdata/records_%s_sample.corpus)" % kind,
+        ]
+        for kind in KINDS
+    }),
+    copts = [
+        "-std=c++17",
+        "-fobjc-arc",
+    ],
+    data = [
+        ":sample_pack",
+        "@ipsw//:crawl_qc",
+    ] + select({"//ipsw:" + kind: ["testdata/records_%s_sample.corpus" % kind] for kind in KINDS}),
+    linkopts = [
+        "-framework",
+        "Foundation",
+        "-framework",
+        "Metal",
+    ],
+    tags = ["m2v"],
+)
+
 # The full pack (//gpu/seed:raw_pack): manual, run by the gate that packages a build
 cc_test(
     name = "record_corpus_test",
