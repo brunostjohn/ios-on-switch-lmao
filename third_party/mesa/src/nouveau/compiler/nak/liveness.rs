@@ -233,10 +233,13 @@ pub trait Liveness {
     }
 }
 
+// ios-on-switch-lmao: a block's defs are a list, and its uses last_use's
+// keys, made into sets only while the dataflow transfers through the block.
+// A set is as long as the block's highest SSA index, so one per block of an
+// uber shader was most of its compile's memory.
 #[derive(Default)]
 pub struct SimpleBlockLiveness {
-    defs: BitSet<SSAValue>,
-    uses: BitSet<SSAValue>,
+    defs: Vec<SSAValue>,
     last_use: FxHashMap<SSAValue, usize>,
     live_in: BitSet<SSAValue>,
     live_out: BitSet<SSAValue>,
@@ -248,12 +251,27 @@ impl SimpleBlockLiveness {
     }
 
     fn add_def(&mut self, ssa: SSAValue) {
-        self.defs.insert(ssa);
+        self.defs.push(ssa);
     }
 
     fn add_use(&mut self, ssa: SSAValue, ip: usize) {
-        self.uses.insert(ssa);
         self.last_use.insert(ssa, ip);
+    }
+
+    fn def_set(&self) -> BitSet<SSAValue> {
+        let mut defs = BitSet::new();
+        for ssa in &self.defs {
+            defs.insert(*ssa);
+        }
+        defs
+    }
+
+    fn use_set(&self) -> BitSet<SSAValue> {
+        let mut uses = BitSet::new();
+        for ssa in self.last_use.keys() {
+            uses.insert(*ssa);
+        }
+        uses
     }
 }
 
@@ -316,9 +334,8 @@ impl SimpleLiveness {
             block_out: &mut live_out[..],
             transfer: |block_idx, _, live_in, live_out| {
                 let bl = &l.blocks[block_idx];
-                live_in.union_with(
-                    (live_out.s(..) | bl.uses.s(..)) - bl.defs.s(..),
-                )
+                let (uses, defs) = (bl.use_set(), bl.def_set());
+                live_in.union_with((live_out.s(..) | uses.s(..)) - defs.s(..))
             },
             join: |live_out, succ_live_in| {
                 *live_out |= succ_live_in.s(..);
