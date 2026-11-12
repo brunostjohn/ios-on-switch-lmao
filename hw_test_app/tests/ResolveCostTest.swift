@@ -7,7 +7,8 @@ import Metal
 /// drawable every frame, and that pass took 11.5-12.1 ms on device, 12.5-13.1 ns a pixel; MapKit's 4x BGRA8 sRGB
 /// resolves, another program over the same fetch, took 12.6-13.7 ns, where reading 14.7 MB and writing 3.7 MB takes
 /// under 1 ms. The variants split the cost between the resolve programs (rgba8: a loop over the sample count, rgba16f:
-/// its four reads in line) and the multisampled fetch, and between memoryless and stored sources.
+/// its four reads in line) and the multisampled fetch, and between memoryless and stored sources; ResolveArms splits the
+/// fetch further (four multisampled fetches against one, against a plain texture of the same bytes tiled and pitch-linear).
 struct ResolveCostTest: HWTest {
     let id = "gpu.msaa.resolve_cost"
     let name = "A 720x1280 4x resolve costs the GPU what its bytes do"
@@ -73,6 +74,7 @@ struct ResolveCostTest: HWTest {
                     ("the poster's 720x1280 4x resolve within \(Self.budgetMs) ms", resolveMs <= Self.budgetMs))
             }
         }
+        try await ResolveArms.measure(gpu, into: &metrics)
         if checks.count == Self.variants.count && checks.allSatisfy(\.1) {
             return .skip("the poster's form did not run on the raw path with GPU stamps", metrics)
         }
