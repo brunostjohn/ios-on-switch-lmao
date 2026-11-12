@@ -98,6 +98,8 @@ static inline id twinPublish(id object, __strong id &slot, id made)
     uint64_t _heapBytes;  // what it counts against its heap outside the arena
     bool _aliasable;
     MTLPurgeableState _purgeable;
+    // an argument encoder wrote into it: the raw device's resource IDs and addresses, which no m2v twin reads
+    bool _rawArguments;
 }
 @end
 @interface RMBuffer (Textures)
@@ -213,9 +215,9 @@ struct RMPass {
         MTLClearColor clear;
         __unsafe_unretained id resolve;
     } color[8];
-
     __unsafe_unretained id depth;
     MTLLoadAction depthLoad, stencilLoad;
+
     // the descriptor's depth (0) and stencil (1) attachments as the encode reads them, the store as the encoder set it
     struct Zeta {
         __unsafe_unretained id texture;

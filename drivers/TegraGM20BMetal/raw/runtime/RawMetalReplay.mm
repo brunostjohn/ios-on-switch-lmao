@@ -81,6 +81,42 @@ static void failMissingTwin(RMCommandBuffer *cb, id object)
         cb->_segError = error;
 }
 
+// What a range uses that m2v's twins cannot read: a facade heap, whose resources an encoder reaches through argument buffers
+// and which no twin names (RMHeap rmTwin), or a buffer an argument encoder wrote, which holds the raw device's resource IDs
+// and addresses (RawMetalArgumentEncoder.mm); nil: none
+static id rawArgumentsIn(RMCommandBuffer *cb, size_t from, size_t to)
+{
+    id found = nil;
+    cb->_plan.forEachUse(from, to, [&](void *value, uint8_t) {
+        id o = (__bridge id)value;
+        if (!found && ([o isKindOfClass:[RMHeap class]] ||
+                       ([o isKindOfClass:[RMBuffer class]] && ((RMBuffer *)o)->_rawArguments)))
+            found = o;
+    });
+    return found;
+}
+
+// The command buffer's error for a range replay could not draw as Metal does: it reads through the raw device's argument
+// buffers (rawArgumentsIn)
+static void failRawArguments(RMCommandBuffer *cb, id object)
+{
+    const bool heap = [object isKindOfClass:[RMHeap class]];
+    const char *label = [object label].UTF8String ?: "-";
+    SWITCH_REFUSE_DETAIL("raw", "replay.arguments", heap,
+                         "a command buffer range failed before m2v encoded it: it reads the raw device's %s %s, which "
+                         "no m2v twin reads",
+                         heap ? "heap" : "argument buffer", label);
+    NSString *text =
+        [NSString stringWithFormat:@"The %s %s is read through argument buffers the compatibility path cannot read",
+                                   heap ? "heap" : "argument buffer", label];
+    NSError *error = [NSError errorWithDomain:MTLCommandBufferErrorDomain
+                                         code:MTLCommandBufferErrorInternal
+                                     userInfo:@{NSLocalizedDescriptionKey : text}];
+    std::lock_guard<std::mutex> l(cb->_lock);
+    if (!cb->_segError)
+        cb->_segError = error;
+}
+
 // An invocation recorded on a facade encoder or command buffer, sent to the m2v one: object arguments become their twins.
 static void replayInvocation(NSInvocation *inv, id target)
 {
@@ -101,6 +137,10 @@ id<MTLCommandBuffer> replay(RMCommandBuffer *cb, size_t from, size_t to, bool pa
     }
     if (RMTexture *owned = ownedZetaIn(cb, from, to)) {
         failOwnedZeta(cb, owned);
+        return nil;
+    }
+    if (id arguments = rawArgumentsIn(cb, from, to)) {
+        failRawArguments(cb, arguments);
         return nil;
     }
     id<MTLCommandQueue> queue = [cb->_queue rmTwin];
@@ -236,7 +276,7 @@ id<MTLCommandBuffer> replay(RMCommandBuffer *cb, size_t from, size_t to, bool pa
                            beforeStages:MTLRenderStages(c.c)];
             break;
         case OpUse:
-            // a facade heap has no m2v twin: what it holds is the facade's own (RawMetalHeap.mm)
+            // a range that uses a facade heap fails before it is encoded (rawArgumentsIn)
             if (![(__bridge id)c.obj isKindOfClass:[RMHeap class]])
                 [enc useResource:use(c.obj) usage:MTLResourceUsage(c.a) stages:MTLRenderStages(c.b)];
             break;
