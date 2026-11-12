@@ -47,6 +47,9 @@ void tgm_present_redo_work(void *unused)
 	__atomic_store_n(&tgm_present.pending, chan->submitted + 1, __ATOMIC_RELEASE);
 	nvxnu_work_schedule_after(tgm_present.deadline_work, TGM_PRESENT_NS);
 	chan_fence_volatile(chan);
+#if TGM_STATS
+	tgm_copy_reset_redone();
+#endif
 	mutex_unlock(&tgm_present.lock);
 	/* present_fenced kept the completion claimed (tgm_present_outstanding) until the redo is in flight */
 	__atomic_fetch_sub(&tgm_present.completing, 1, __ATOMIC_SEQ_CST);

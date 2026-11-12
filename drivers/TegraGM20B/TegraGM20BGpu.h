@@ -52,7 +52,11 @@ void tgm_rail_moving(void);
 void tgm_rail_moved(int demand);
 /* One power-journal line (TegraGM20B.cpp: drivers/SwitchSuspend switch_power_journal). Thread context. */
 void tgm_journal_impl(const char *fmt, ...) __attribute__((format(printf, 1, 2)));
-#define tgm_journal(...) do { if (TGM_STATS) tgm_journal_impl(__VA_ARGS__); } while (0)
+#define tgm_journal(...)                               \
+	do {                                           \
+		if (TGM_STATS)                         \
+			tgm_journal_impl(__VA_ARGS__); \
+	} while (0)
 int tgm_stage(void);
 void tgm_get_info(struct tgm_info *info);
 uint64_t tgm_timestamp_ns(void);
@@ -543,6 +547,12 @@ struct TegraGM20BAbiRegdump;
 struct TegraGM20BAbiRegdumpReply;
 /* Debug kernels: TegraGM20BRegDumpABI.h's call, its answer in reply. 0, or -EINVAL for a bad tag or reserved word. */
 int tgm_regdump_log(const struct TegraGM20BAbiRegdump *in, struct TegraGM20BAbiRegdumpReply *reply);
+
+struct TegraGM20BAbiCopyReset;
+struct TegraGM20BAbiCopyResetReply;
+/* Debug kernels: TegraGM20BCopyResetABI.h's call (gpu_copy_reset.c). 0, -EINVAL, or -ENOMEM. */
+int tgm_copy_reset_call(const struct TegraGM20BAbiCopyReset *in,
+			struct TegraGM20BAbiCopyResetReply *reply);
 
 int tgm_present_copy_read_dependencies(uint64_t src_va, uint64_t stride,
     int32_t src_block_log2, uint32_t width, uint32_t height, uint64_t dst_va, uint32_t dst_pitch,

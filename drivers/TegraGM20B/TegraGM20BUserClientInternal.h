@@ -29,6 +29,7 @@
 #include "TegraGM20BPushScan.h"
 #include "TegraGM20BReadback.h"
 #include "TegraGM20BRegDumpABI.h"
+#include "TegraGM20BCopyResetABI.h"
 #include "TegraGM20BSchedPolicy.h"
 #include "TegraGM20BSharedWiring.h"
 #include "SwitchGpuPin.h"

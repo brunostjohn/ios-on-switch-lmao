@@ -239,6 +239,38 @@ static void chan_unbind(struct nvkm_chan *chan)
 	ctxsw.chan_nvkm->unbind(chan);
 }
 
+#if TGM_STATS
+int tgm_recover_copy_reset(int chid, void (*mark)(void), uint32_t *status)
+{
+	struct nvkm_device *device = ctxsw.fifo->engine.subdev.device;
+	struct nvkm_runl *runl = NULL;
+	struct nvkm_engn *engn = NULL;
+	int reset = 0;
+
+	nvkm_runl_foreach(runl, ctxsw.fifo)
+	{
+		/* nouveau's runlist walk takes each engine by container_of. */
+		/* NOLINTNEXTLINE(clang-analyzer-security.ArrayBound) */
+		nvkm_runl_foreach_engn_cond(
+			engn, runl, engn->func->cxid && engn->engine->subdev.type == NVKM_ENGINE_CE)
+		{
+			*status = nvkm_rd32(device, PFIFO_ENG_STATUS(engn->id));
+			if (!tgm_engine_holds(*status, chid))
+				continue;
+			mark();
+			mutex_lock(&runl->mutex);
+			if (tgm_engine_holds(nvkm_rd32(device, PFIFO_ENG_STATUS(engn->id)), chid)) {
+				engine_reset_locked(runl, engn, chid, "busy (HW Test) with kernel");
+				__atomic_fetch_add(&ctxsw.redone, 1, __ATOMIC_RELAXED);
+				reset = 1;
+			}
+			mutex_unlock(&runl->mutex);
+		}
+	}
+	return reset;
+}
+#endif
+
 static void ctxsw_work(void *arg)
 {
 	struct nvkm_device *device = ctxsw.fifo->engine.subdev.device;

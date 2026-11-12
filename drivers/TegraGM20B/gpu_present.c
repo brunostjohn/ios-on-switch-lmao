@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 // The GPU present: the display's frames copied into its scanout on a kernel channel.
 #include "gpu_internal.h"
+#include "TegraGM20BCopyResetABI.h"
 
 #define CHAN_PRESENT 1 /* the GPU present's channel */
 struct present_state tgm_present = {.lock = {NULL}};
@@ -20,6 +21,9 @@ static void present_typed_complete(void *unused)
 	mutex_lock(&tgm_present.lock);
 	__atomic_store_n(&tgm_present.typed_pending, 0, __ATOMIC_RELEASE);
 	mutex_unlock(&tgm_present.lock);
+#if TGM_STATS
+	tgm_copy_reset_presented(status);
+#endif
 	done(arg, status);
 	__atomic_fetch_sub(&tgm_present.completing, 1, __ATOMIC_SEQ_CST);
 }
@@ -333,6 +337,7 @@ static int present_copy(uint64_t src_va, uint64_t stride, int32_t src_block_log2
 	struct nvif_push *push = NULL;
 	u32 *push_start = NULL;
 	int ret = 0;
+	int cut = 0;
 
 	if (!chan || chan->error)
 		return -ENODEV;
@@ -357,9 +362,13 @@ static int present_copy(uint64_t src_va, uint64_t stride, int32_t src_block_log2
 		mutex_unlock(&tgm_present.lock);
 		return ret;
 	}
+#if TGM_STATS
+	cut = dst_va && tgm_copy_reset_armed();
+#endif
 	push = &chan->chan.push;
 	ret = chan_push_wait(chan,
 			     dependency_count * 5 + 57 + nreads * TGM_COPY_RECT_DWORDS +
+				     cut * (TegraGM20BCopyResetCopies * TGM_PRESENT_COPY_DWORDS + 2) +
 				     CHAN_FENCE_DWORDS); /* acquires, a start stamp, the copy, the
 								  read-backs, the fence */
 	if (ret == -ETIMEDOUT) {
@@ -397,6 +406,13 @@ static int present_copy(uint64_t src_va, uint64_t stride, int32_t src_block_log2
 	tgm_present.copy.block_height_log2 = block_height_log2;
 	if (dst_va)
 		tgm_present_push_copy(push);
+#if TGM_STATS
+	if (cut && tgm_copy_reset_take()) {
+		PUSH_MTHD(push, NV906F, NON_STALL_INTERRUPT, 0);
+		for (u32 i = 1; i < TegraGM20BCopyResetCopies; i++)
+			tgm_present_push_copy(push);
+	}
+#endif
 #if TGM_STATS
 	if (nreads)
 		present_push_reads(push, reads, nreads);

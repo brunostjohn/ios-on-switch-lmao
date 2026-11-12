@@ -180,6 +180,10 @@ IOReturn AGXDeviceUserClient::run(uint32_t method, const void *in, uint32_t inSi
 		wantIn = sizeof(TegraGM20BAbiRegdump);
 		wantOut = sizeof(TegraGM20BAbiRegdumpReply);
 		break;
+	case TegraGM20BMethodCopyReset:
+		wantIn = sizeof(TegraGM20BAbiCopyReset);
+		wantOut = sizeof(TegraGM20BAbiCopyResetReply);
+		break;
 #endif
 #if SWITCH_GPU_PATH_STATS
 	case TegraGM20BMethodPaths:
@@ -306,6 +310,14 @@ IOReturn AGXDeviceUserClient::run(uint32_t method, const void *in, uint32_t inSi
 				       static_cast<TegraGM20BAbiRegdumpReply *>(out))
 			       ? kIOReturnBadArgument
 			       : kIOReturnSuccess;
+	}
+	if (method == TegraGM20BMethodCopyReset) {
+		const int ret =
+			tgm_copy_reset_call(static_cast<const TegraGM20BAbiCopyReset *>(in),
+					    static_cast<TegraGM20BAbiCopyResetReply *>(out));
+		if (ret == -ENOMEM)
+			return kIOReturnNoMemory;
+		return ret ? kIOReturnBadArgument : kIOReturnSuccess;
 	}
 #endif
 #if SWITCH_GPU_PATH_STATS

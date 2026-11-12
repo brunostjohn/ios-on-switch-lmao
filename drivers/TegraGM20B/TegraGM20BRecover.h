@@ -55,6 +55,12 @@ static inline int tgm_ctxsw_redo_pending(int reset, uint32_t reset_after, uint32
  * work lands panics. */
 enum tgm_ctxsw tgm_ctxsw_decide(int chid, const char *engine);
 
+#if TGM_STATS
+/* gpu_copy_reset.c's HW Test hook, thread context: what ctxsw_work does for TGM_CTXSW_REDO, on the copy engine if it is
+ * busy with hardware channel chid's context; mark runs first (tgm_ctxsw_redo_mark). *status: the engine's
+ * PFIFO_ENG_STATUS. 1 if it was reset. */
+int tgm_recover_copy_reset(int chid, void (*mark)(void), uint32_t *status);
+#endif
 
 /* NV_PFIFO_INTR_SCHED_ERROR_CODE as NVIDIA's open gv100 dev_fifo.ref names it. gm20b's nvgpu header names only
  * CTXSW_TIMEOUT, 0x0a there as well, so the rest of Maxwell's encoding is taken to be the same. */

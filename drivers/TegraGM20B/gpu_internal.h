@@ -629,6 +629,17 @@ void tgm_present_redo(void);
 #define TGM_PRESENT_COPY_DWORDS (9 + TGM_COPY_RECT_DWORDS)
 void tgm_present_push_copy(struct nvif_push *push);
 void tgm_present_redo_work(void *unused);
+#if TGM_STATS
+/* gpu_copy_reset.c (TegraGM20BCopyResetABI.h): the armed present is taken by present_copy, looked at on the present
+ * channel's nonstall interrupts, and its redo and completion are counted */
+struct TegraGM20BAbiCopyReset;
+struct TegraGM20BAbiCopyResetReply;
+int tgm_copy_reset_armed(void);
+int tgm_copy_reset_take(void);
+void tgm_copy_reset_nonstall(void);
+void tgm_copy_reset_redone(void);
+void tgm_copy_reset_presented(int status);
+#endif
 /* the same for the pool scrubber: its jobs up to `through` go back to the pool dirty, to be scrubbed again */
 void tgm_scrub_redo(u32 through);
 /* tgm_live_lock held, before an engine reset cuts kernel channel chan's work: that work is redone (the two above) and a

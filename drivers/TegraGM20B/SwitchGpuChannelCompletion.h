@@ -6,6 +6,10 @@ static int chan_nonstall(struct nvif_event *event, void *repv, u32 repc)
 	u64 now = 0;
 	(void)repv;
 	(void)repc;
+#if TGM_STATS
+	if (chan == tgm_present.chan)
+		tgm_copy_reset_nonstall();
+#endif
 	if (done == chan->progress_done)
 		return switch_gpu_irq_complete(&chan->irq_state, done) ? NVIF_EVENT_DROP
 								       : NVIF_EVENT_KEEP;
