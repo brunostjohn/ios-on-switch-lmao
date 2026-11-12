@@ -14,6 +14,9 @@ struct CADrawThenCopyScene: GPUScene {
     let name = "CA fill draws then a blit copy in one command buffer: the copy reads every draw"
 
     static let (width, height, rounds, draws) = (720, 1280, 20, 64)
+    /// Cleared to a colour the fill draws none of (QuartzCore 27's fill comes out opaque black with zero uniforms), so a
+    /// draw that never ran leaves a picture unlike the Mac's
+    static let sentinel = MTLClearColor(red: 0.2, green: 0.4, blue: 0.6, alpha: 1)
 
     func run(_ gpu: GPU) async throws -> SceneResult {
         var result = SceneResult()
@@ -37,6 +40,7 @@ struct CADrawThenCopyScene: GPUScene {
                 let pass = MTLRenderPassDescriptor()
                 pass.colorAttachments[0].texture = target.texture
                 pass.colorAttachments[0].loadAction = .clear
+                pass.colorAttachments[0].clearColor = Self.sentinel
                 pass.colorAttachments[0].storeAction = .store
                 pass.colorAttachments[1].texture = colour1
                 pass.colorAttachments[1].loadAction = .clear
