@@ -272,6 +272,13 @@ bool drained()
                                 (gBase + __atomic_load_n(&gIssued, __ATOMIC_ACQUIRE))) >= 0;
 }
 
+// A bounded wait for a fence, the bound counted from when the jobs up to it have their inputs (TegraNVENCInputs.h).
+int boundedWait(uint32_t fence)
+{
+    return gInputs.wait(tegra_host1x_syncpt_read(gSyncpt), fence, TEGRA_HOST1X_ETIMEDOUT,
+                        [fence] { return tegra_host1x_syncpt_wait(gSyncpt, fence, kWaitBoundUs); });
+}
+
 bool failedFence(uint32_t fence)
 {
     return __atomic_load_n(&gFailed, __ATOMIC_ACQUIRE) && static_cast<int32_t>(fence - gFailedThrough) <= 0;
@@ -493,7 +500,7 @@ int run(const TegraNVENCSubmit *s, TegraNVENCResolve resolve, void *context, con
     }
     const uint32_t job = gIssued + 1;
     if (job > kInFlight) {
-        int ret = tegra_host1x_syncpt_wait(gSyncpt, gBase + job - kInFlight, kWaitBoundUs);
+        int ret = boundedWait(gBase + job - kInFlight);
         if (ret == TEGRA_HOST1X_ETIMEDOUT)
             ret = stalled(gBase + job - kInFlight);
         if (ret || gWedged) {
@@ -609,7 +616,7 @@ extern "C" int tegra_nvenc_wait(uint32_t fence)
     // A fence no job will reach would never be reached: refused, so it cannot pass for an engine fault.
     if ((int32_t)(fence - (gBase + __atomic_load_n(&gIssued, __ATOMIC_ACQUIRE))) > 0)
         return -22;
-    int ret = tegra_host1x_syncpt_wait(gSyncpt, fence, kWaitBoundUs);
+    int ret = boundedWait(fence);
     if (ret == TEGRA_HOST1X_ETIMEDOUT) {
         IOLockLock(gEngineLock);
         ret = stalled(fence);
@@ -668,7 +675,7 @@ int gateOff(void *, bool drain)
         IOLockUnlock(gEngineLock);
         return SWITCH_ENGINE_GATE_BUSY;
     }
-    if (drain && !gWedged && tegra_host1x_syncpt_wait(gSyncpt, gBase + gIssued, kWaitBoundUs) == TEGRA_HOST1X_ETIMEDOUT)
+    if (drain && !gWedged && boundedWait(gBase + gIssued) == TEGRA_HOST1X_ETIMEDOUT)
         stalled(gBase + gIssued);
     gSuspended = true;
     const bool off = switch_engine_power_down(kPower);
