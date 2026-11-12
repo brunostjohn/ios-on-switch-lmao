@@ -110,9 +110,10 @@ int main(int argc, char **argv)
 
     dev.indexZeroPastLimit = true;
     Bound limited = drawIndexed(dev, state, desc, ib, 2, 8);
-    expect(limited.drawn && limited.start == ib.va + 2 && limited.last == ib.va + 11 &&
-               limited.uploaded == inside.uploaded,
-           "past the buffer's end, proven: the buffer bound at the draw's offset, its limit at the fetch end (12 bytes)");
+    expect(
+        limited.drawn && limited.start == ib.va + 2 && limited.last == ib.va + 11 &&
+            limited.uploaded == inside.uploaded,
+        "past the buffer's end, proven: the buffer bound at the draw's offset, its limit at the fetch end (12 bytes)");
 
     dev.destroyBuffer(ib);
     std::printf("indexcheck: %s\n", failures ? "FAIL" : "PASS");
