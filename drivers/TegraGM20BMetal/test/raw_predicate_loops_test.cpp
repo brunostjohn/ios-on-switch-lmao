@@ -392,4 +392,45 @@ TEST(RawPredicateLoops, WhatTheLayoutCannotRunIsMisused)
     EXPECT_EQ(none.endWhile(), Answer::Misused);
 }
 
+// The emitters write into room their callers reserve (and the arm into words reserved before the copies were laid), so
+// each worst case must fit: an ordered compare (two copies and a reduction) inside an enclosing block, eight heads
+TEST(RawPredicateLoops, EveryEmitterStaysInsideTheRoomItsCallerReserves)
+{
+    static_assert(raw::LoopCopies::kStartRoom >= raw::Predication::kStartWords + 1);
+    static_assert(raw::LoopCopies::kEndRoom >= raw::Predication::kEndCopyWords(raw::LoopCopies::kMaxSegments) +
+                                                  raw::Predication::kOverflowWords);
+    uint64_t heads[raw::LoopCopies::kMaxSegments];
+    for (size_t i = 0; i < raw::LoopCopies::kMaxSegments; ++i)
+        heads[i] = kPush + 0x100 * i;
+    const raw::PredicateTest ordered = raw::predicateTest(PredicateCompare::Greater, 7);
+    for (bool doWhile : {false, true}) {
+        LoopProgram prog;
+        prog.startIf(5, PredicateCompare::Equal, 0);
+        const raw::PredicateSlot loop = prog.slot();
+        uint32_t *before = prog.p.at;
+        ASSERT_EQ(doWhile ? prog.predication.startDoWhile(prog.p, loop)
+                          : prog.predication.startWhile(prog.p, loop, word(0), ordered),
+                  Answer::Done);
+        EXPECT_LE(uint32_t(prog.p.at - before), raw::Predication::kStartWords);
+        before = prog.p.at;
+        prog.startIf(6, PredicateCompare::LessEqual, 3);
+        EXPECT_LE(uint32_t(prog.p.at - before), raw::Predication::kStartWords) << "an If inside a copy, with its resets";
+        before = prog.p.at;
+        prog.startElse();
+        EXPECT_LE(uint32_t(prog.p.at - before), raw::Predication::kStartWords);
+        prog.endIf();
+        before = prog.p.at;
+        ASSERT_EQ(prog.predication.endCopy(prog.p, heads, raw::LoopCopies::kMaxSegments, word(0),
+                                           doWhile ? &ordered : nullptr),
+                  Answer::Done);
+        EXPECT_LE(uint32_t(prog.p.at - before), raw::Predication::kEndCopyWords(raw::LoopCopies::kMaxSegments));
+        before = prog.p.at;
+        prog.predication.endLoop(prog.p, kOverflow, kStamp);
+        EXPECT_LE(uint32_t(prog.p.at - before), raw::Predication::kOverflowWords);
+        before = prog.p.at;
+        raw::Predication::armCopies(prog.p, heads, raw::LoopCopies::kMaxSegments, raw::Predication::goingOf(loop));
+        EXPECT_LE(uint32_t(prog.p.at - before), raw::Predication::kArmWords(raw::LoopCopies::kMaxSegments));
+    }
+}
+
 }  // namespace
