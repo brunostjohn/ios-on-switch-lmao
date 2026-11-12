@@ -95,7 +95,7 @@ IOReturn AGXDeviceUserClient::vmBind(const TegraGM20BAbiVmBind *in, uint32_t cou
 // fence, and the connection's other calls go on meanwhile. The surface and its coherency entry are held for it, so a
 // BoFree meanwhile frees nothing it uses.
 IOReturn AGXDeviceUserClient::surfaceLayout(const TegraGM20BAbiSurfaceLayout *in,
-					    TegraGM20BAbiSurfaceLayoutReply *out)
+	TegraGM20BAbiSurfaceLayoutReply *out)
 {
 	TegraGM20BAbiSurfaceLayoutInfo info = {};
 	const IOReturn result = surfaceLayoutInfo(in, &info, false);
@@ -104,14 +104,13 @@ IOReturn AGXDeviceUserClient::surfaceLayout(const TegraGM20BAbiSurfaceLayout *in
 }
 
 IOReturn AGXDeviceUserClient::surfaceLayoutInfo(const TegraGM20BAbiSurfaceLayout *in,
-						TegraGM20BAbiSurfaceLayoutInfo *out, bool canonical)
+	TegraGM20BAbiSurfaceLayoutInfo *out, bool canonical)
 {
 	const Bo *bo = findBo(in->handle);
 	if (!bo || !bo->wired || !bo->coh)
 		return kIOReturnBadArgument;
 	SwitchGpuSurfaceGeometry surface = {};
-	if (switch_gpu_surface_geometry(tgm_coh_surface_id(bo->coh), task_, bo->pas, bo->npages,
-					&surface))
+	if (switch_gpu_surface_geometry(tgm_coh_surface_id(bo->coh), task_, bo->pas, bo->npages, &surface))
 		return kIOReturnBadArgument;
 	tgm_coh *coh = bo->coh;
 	OSObject *object = bo->surface;
@@ -121,11 +120,10 @@ IOReturn AGXDeviceUserClient::surfaceLayoutInfo(const TegraGM20BAbiSurfaceLayout
 		object->retain();
 	IOLockUnlock(lock_);
 	const bool packed = switch_gpu_surface_packed(surface);
-	const bool same = switch_gpu_surface_shape_matches(surface, in->width, in->height, in->bpp,
-							   in->bytes_per_row);
+	const bool same = switch_gpu_surface_shape_matches(surface, in->width, in->height, in->bpp, in->bytes_per_row);
 	const bool exclusive = switch_gpu_surface_layout_exclusive(object, true) == 0;
 	const bool writes = exclusive && packed && !surface.client_memory && (canonical || same) &&
-			    (in->flags & TegraGM20BLayoutWrites);
+		(in->flags & TegraGM20BLayoutWrites);
 	const uint32_t width = uint32_t(surface.width), height = uint32_t(surface.height),
 		       pitch = uint32_t(surface.pitch);
 	const int layout =
@@ -142,8 +140,7 @@ IOReturn AGXDeviceUserClient::surfaceLayoutInfo(const TegraGM20BAbiSurfaceLayout
 		object->release();
 	IOLockLock(lock_);
 	*out = {};
-	if (surface.width <= UINT32_MAX && surface.height <= UINT32_MAX &&
-	    surface.pitch <= UINT32_MAX) {
+	if (surface.width <= UINT32_MAX && surface.height <= UINT32_MAX && surface.pitch <= UINT32_MAX) {
 		out->width = uint32_t(surface.width);
 		out->height = uint32_t(surface.height);
 		out->bpp = surface.bpp;
@@ -157,17 +154,9 @@ IOReturn AGXDeviceUserClient::surfaceLayoutInfo(const TegraGM20BAbiSurfaceLayout
 			return kIOReturnNotReady;
 		// method 16's askers lay the shape out themselves, at NIL's block height
 		const bool readable = canonical || (same && tgm_layout_nil_height(&tiled));
-		*out = {readable ? uint32_t(TegraGM20BLayoutTiled)
-				 : uint32_t(TegraGM20BLayoutOtherShape),
-			tiled.width,
-			tiled.height,
-			tiled.bpp,
-			tiled.row_bytes,
-			tiled.y_log2,
-			tiled.rows,
-			0,
-			tiled.align,
-			tiled.bytes};
+		*out = {readable ? uint32_t(TegraGM20BLayoutTiled) : uint32_t(TegraGM20BLayoutOtherShape),
+			tiled.width, tiled.height, tiled.bpp, tiled.row_bytes, tiled.y_log2, tiled.rows, 0,
+			tiled.align, tiled.bytes};
 	} else if (layout < 0) {
 		out->layout = TegraGM20BLayoutOtherShape;
 	}
@@ -210,11 +199,10 @@ IOReturn AGXDeviceUserClient::channelCreate(const TegraGM20BAbiChannelCreate *in
 		return ret;
 	switch_gpu_chan_visibility(chans_[slot], fence_va_ + 128 + slot,
 				   fence_gpu_ + 512 + uint64_t(slot) * 4);
-	auto *semantic = reinterpret_cast<volatile TegraGM20BAbiFenceSemantic *>(fence + 4);
-	switch_gpu_chan_semantic_visibility(chans_[slot], semantic);
-	auto *identity = reinterpret_cast<volatile TegraGM20BAbiFenceIdentity *>(fence + 8);
-	__atomic_store_n(&identity->channel_uid, switch_gpu_chan_identity(chans_[slot]),
-			 __ATOMIC_RELEASE);
+    auto *semantic = reinterpret_cast<volatile TegraGM20BAbiFenceSemantic *>(fence + 4);
+    switch_gpu_chan_semantic_visibility(chans_[slot], semantic);
+    auto *identity = reinterpret_cast<volatile TegraGM20BAbiFenceIdentity *>(fence + 8);
+    __atomic_store_n(&identity->channel_uid, switch_gpu_chan_identity(chans_[slot]), __ATOMIC_RELEASE);
 	tgm_chan_set_group(chans_[slot], task_);  // Order relates the channels of one task
 	if (level_ != TGM_LEVEL_FOREGROUND && !critical_)
 		tgm_chan_set_level(chans_[slot], level_);
@@ -267,9 +255,9 @@ IOReturn AGXDeviceUserClient::channelDestroy(const TegraGM20BAbiChannel *in)
 				switch_gpu_set_killed(set, in->channel - 1);
 	hangHolder_ = current_thread();
 	tgm_chan_del(&chans_[in->channel - 1]);
-	eventChannels_[in->channel - 1].reset();
-	admissions_[in->channel - 1].end();
-	admissionCookies_[in->channel - 1] = 0;
+    eventChannels_[in->channel - 1].reset();
+    admissions_[in->channel - 1].end();
+    admissionCookies_[in->channel - 1] = 0;
 	hangHolder_ = nullptr;
 	surfaces_.forget(in->channel - 1);
 	scheduleRetirement();
@@ -375,8 +363,7 @@ void AGXDeviceUserClient::scanPushes(const tgm_push *pushes, uint32_t count, tgm
 			const uint64_t kpx = tgm_scan::targetPixels(p) / 1000;
 			const uint64_t interlocks = c.interlocks - interlocksBefore;
 			prof->kpx[i] = static_cast<uint16_t>(kpx > 0xffff ? 0xffff : kpx);
-			prof->interlocks[i] =
-				static_cast<uint8_t>(interlocks > 0xff ? 0xff : interlocks);
+			prof->interlocks[i] = static_cast<uint8_t>(interlocks > 0xff ? 0xff : interlocks);
 		}
 	}
 	c.scanned = 1;
