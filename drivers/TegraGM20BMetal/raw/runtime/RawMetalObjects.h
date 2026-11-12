@@ -269,6 +269,12 @@ struct RMBytes {
     uint32_t used = 0;                // its bytes taken
 };
 
+// A command a parallel encoder's sub-encoder recorded, with its extra words (RawMetalParallel.mm)
+struct RMSubCommand {
+    Cmd cmd;
+    std::vector<uint64_t> extra;
+};
+
 // A part of a command buffer submitted on its own (RMCommandBuffer::_segs): tape [from, to), on the raw path or m2v
 struct RMSegment {
     uint32_t from, to;
@@ -376,6 +382,9 @@ struct RMSharedEventWait {
     NSMutableArray *_scheduledHandlers, *_completedHandlers;
     bool _handlersQueued;      // scheduled handlers went to its queue's _handlers: its completed ones go behind them
     RMCommandBuffer *_before;  // enqueued before it on its queue, until its own completed handlers were handed on
+    std::vector<RMSubCommand> *_commandLog;  // a sub-encoder's command buffer's log of what it records (null: none)
+    NSArray *_doneHandlers;                  // its completed handlers, from finish() until they ran
+    bool _doneBehindScheduled;               // they run behind its scheduled handlers on the queue's handler queue
     raw::HandlerTurn _turn;
     MTLCommandBufferStatus _status;
     NSError *_error;
@@ -388,6 +397,7 @@ struct RMSharedEventWait {
     std::unordered_set<void *> _variantObserved;
     std::map<void *, std::shared_ptr<raw::ComputeKernelSet<raw::ComputeState>>> _computeJobs;
     size_t _eventArmed;  // operation position + 1; only the current wait installs a listener
+    std::atomic<bool> _inHolders;  // in gHolders or gEventWaits (debug builds): unhold() takes their lock only then
     bool _committed, _scheduledDone, _completedDone, _m2v;
     // its queue's head waits on a shared event Metal's GPU would wait for: waitUntilScheduled returns, its scheduled
     // handlers still wait for its submission (raw_scheduled_wait.h)
@@ -427,7 +437,7 @@ struct RMSharedEventWait {
 }
 - (void)takeReason:(RMReason)reason why:(NSString *)why;
 - (void)takeWholeReason:(RMReason)reason why:(NSString *)why;
-- (void)closeEncoder;
+- (void)closeEncoder __attribute__((objc_direct));
 // direct (no message): every recorded command and every object a command names goes through them
 - (void)record:(const Cmd &)cmd __attribute__((objc_direct));
 - (void)retain:(id)object __attribute__((objc_direct));
@@ -485,6 +495,9 @@ uint64_t nextTraceId();
     uint32_t _passAt;       // its pass's RMPass (the command buffer's _passes)
     raw::DepthStencilDesc _ds;
     MTLRenderPassDescriptor *_pass;  // the command buffer's copy, which the raw encode and m2v's replay read
+    bool _passShared;                // _pass is the thread's copy for passes of its contents (RawMetalPassCache.h)
+    size_t _renderAt;                // its OpRender in the command buffer's plan
+    __unsafe_unretained id<MTLBuffer> _visibility;  // its pass's visibility result buffer (the command buffer holds it)
     bool _drew;                      // a draw recorded
 }
 @end
@@ -526,7 +539,7 @@ static inline void setBinding(RMCommandBuffer *cb, Op op, int stage, NSUInteger 
 
 // The encoder `e` records into this command buffer from now on, the one before it ended (RawMetalEncoder.mm)
 @interface RMCommandBuffer (Encoders)
-- (void)begin:(RMEncoder *)e;
+- (void)begin:(RMEncoder *)e __attribute__((objc_direct));
 - (id<MTLRenderCommandEncoder>)renderCommandEncoderWithDescriptor:(MTLRenderPassDescriptor *)d;
 @end
 
@@ -540,8 +553,11 @@ static inline void setBinding(RMCommandBuffer *cb, Op op, int stage, NSUInteger 
 id<MTLSamplerState> clampedSampler(id<MTLSamplerState> s, float lodMin, float lodMax);
 
 @interface RMRenderEncoder ()
-- (void)checkDraw;  // (RawMetalRenderEncoder.mm)
+- (void)checkDraw __attribute__((objc_direct));  // (RawMetalRenderEncoder.mm)
 @end
+
+// RawMetalEncoder.mm: the encoder's own copy of its pass, where it shares the thread's, before it changes it
+void rmOwnPass(RMRenderEncoder *e);
 
 @interface RMRenderEncoder (Bindings)
 - (void)texture:(int)stage object:(id<MTLTexture>)t index:(NSUInteger)index;

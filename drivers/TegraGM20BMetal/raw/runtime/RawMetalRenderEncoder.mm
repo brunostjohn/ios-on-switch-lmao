@@ -27,10 +27,6 @@ static void checkFetch(RMRenderEncoder *e, MTLPrimitiveType type, NSUInteger cou
     hit(e->_cb, PredEncGeometry, type, uint32_t(count) | uint64_t(uint32_t(instances)) << 32);
 }
 
-@interface RMRenderEncoder ()
-- (void)checkDraw __attribute__((objc_direct));  // every draw's: a direct call, no message
-@end
-
 @implementation RMRenderEncoder
 
 + (Class)twinClass
@@ -52,6 +48,7 @@ static void checkFetch(RMRenderEncoder *e, MTLPrimitiveType type, NSUInteger cou
 - (void)setColorStoreAction:(MTLStoreAction)action atIndex:(NSUInteger)index
 {
     if (index < 8) {
+        rmOwnPass(self);
         _pass.colorAttachments[index].storeAction = action;
         _cb->_passes[_passAt].color[index].store = action;
     }
@@ -59,6 +56,7 @@ static void checkFetch(RMRenderEncoder *e, MTLPrimitiveType type, NSUInteger cou
 
 - (void)setDepthStoreAction:(MTLStoreAction)action
 {
+    rmOwnPass(self);
     _pass.depthAttachment.storeAction = action;
     _cb->_passes[_passAt].zeta[0].store = action;
     if (_zeta && action != MTLStoreActionDontCare) {
@@ -69,6 +67,7 @@ static void checkFetch(RMRenderEncoder *e, MTLPrimitiveType type, NSUInteger cou
 
 - (void)setStencilStoreAction:(MTLStoreAction)action
 {
+    rmOwnPass(self);
     _pass.stencilAttachment.storeAction = action;
     _cb->_passes[_passAt].zeta[1].store = action;
     if (_zeta && action != MTLStoreActionDontCare) {
@@ -114,7 +113,7 @@ static void forwardCall(RMEncoder *e, SEL selector, const void *argument)
 // engine's sample counter (raw_visibility.h)
 - (void)setVisibilityResultMode:(MTLVisibilityResultMode)mode offset:(NSUInteger)offset
 {
-    id<MTLBuffer> results = _pass.visibilityResultBuffer;
+    id<MTLBuffer> results = _visibility;
     if (mode != MTLVisibilityResultModeDisabled) {
         raw::VisibilityAsk ask;
         ask.mode = uint32_t(mode);

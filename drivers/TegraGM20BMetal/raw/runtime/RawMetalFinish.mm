@@ -216,20 +216,62 @@ void segmentCompleted(RMCommandBuffer *cb, NSError *error, const raw::Retirement
 // scheduled handlers where those went to its queue's handler queue; inline on this thread where it has neither handlers nor
 // a completion queue. Never on the handler queue itself: a slow completed handler of one frame would hold up the next
 // frame's presentDrawable. The queue's turns keep its completed handlers one at a time, in order.
-static void deliverCompletion(dispatch_block_t run, dispatch_queue_t q, dispatch_queue_t handlerQueue,
-                              bool behindScheduled, bool runInline)
+static void deliverCompletion(RMCommandBuffer *cb);
+
+// Its completed handlers run, it is done, and the command buffer behind it that waited for its turn is delivered
+static void completeBuffer(RMCommandBuffer *cb)
 {
-    if (runInline) {
-        run();
+    NSArray *handlers = cb->_doneHandlers;
+    cb->_doneHandlers = nil;
+    for (MTLCommandBufferHandler h in handlers)
+        h((id<MTLCommandBuffer>)cb);
+    {
+        std::lock_guard<std::mutex> l(cb->_lock);
+        cb->_completedDone = true;
+        cb->_scheduledDone = true;
+    }
+    cb->_changed.notify_all();
+    cb->_owners.clear();  // the resources may die now: no submission uses them any more (its capacity is recycled)
+    cb->_computeJobs.clear();
+    cb->_sharedEventWaits.clear();
+    cb->_resourceReady.reset();
+    if (gRM->committed.fetch_sub(1, std::memory_order_acq_rel) == 1)
+        gRawRelease.drained();
+#if SWITCH_FRAME_TIMELINE
+    switch_frame::finished(cb->_frame);
+#endif
+    void *last = (__bridge void *)cb;
+    if (cb->_queue->_last.compare_exchange_strong(last, nullptr))
+        CFRelease(last);
+    if (void *next = cb->_turn.finished())
+        deliverCompletion((__bridge_transfer RMCommandBuffer *)next);
+}
+
+// dispatch_async_f's work: the command buffer the context holds
+static void completeHeld(void *context)
+{
+    completeBuffer((__bridge_transfer RMCommandBuffer *)context);
+}
+
+static void completeOnTarget(void *context)
+{
+    dispatch_queue_t q = ((__bridge RMCommandBuffer *)context)->_queue->_completionQueue;
+    dispatch_async_f(q ?: followingRootQueue(), context, completeHeld);
+}
+
+// Inline where it has neither handlers nor a completion queue nor scheduled handlers queued ahead of them
+static void deliverCompletion(RMCommandBuffer *cb)
+{
+    dispatch_queue_t q = cb->_queue->_completionQueue;
+    if (!cb->_doneBehindScheduled && !q && !cb->_doneHandlers.count) {
+        completeBuffer(cb);
         return;
     }
-    dispatch_queue_t target = q ?: followingRootQueue();
-    if (behindScheduled)
-        dispatch_async(handlerQueue, ^{
-            dispatch_async(target, run);
-        });
+    void *context = (__bridge_retained void *)cb;
+    if (cb->_doneBehindScheduled)
+        dispatch_async_f(cb->_queue->_handlers, context, completeOnTarget);
     else
-        dispatch_async(target, run);
+        dispatch_async_f(q ?: followingRootQueue(), context, completeHeld);
 }
 
 void failCommandBuffer(RMCommandBuffer *cb, NSString *reason)
@@ -322,45 +364,19 @@ void finish(RMCommandBuffer *cb, NSError *error)
     if (heldReturnUs)
         noteHeldReturn(cb, heldReturnUs, error ? "failed unsubmitted" : "finished unsubmitted");
 #endif
-    void (^run)(void) = ^{
-        for (MTLCommandBufferHandler h in handlers)
-            h((id<MTLCommandBuffer>)cb);
-        {
-            std::lock_guard<std::mutex> l(cb->_lock);
-            cb->_completedDone = true;
-            cb->_scheduledDone = true;
-        }
-        cb->_changed.notify_all();
-        cb->_owners.clear();  // the resources may die now: no submission uses them any more (its capacity is recycled)
-        cb->_computeJobs.clear();
-        cb->_sharedEventWaits.clear();
-        cb->_resourceReady.reset();
-        if (gRM->committed.fetch_sub(1, std::memory_order_acq_rel) == 1)
-            gRawRelease.drained();
-#if SWITCH_FRAME_TIMELINE
-        switch_frame::finished(cb->_frame);
-#endif
-        void *last = (__bridge void *)cb;
-        if (cb->_queue->_last.compare_exchange_strong(last, nullptr))
-            CFRelease(last);
-        if (void *next = cb->_turn.finished())
-            ((__bridge_transfer dispatch_block_t)next)();
-    };
     // A handler may submit and wait for another queue's command buffer, so none runs on a GPU worker. One that waits for a
     // later command buffer of its own queue waits for good, as it does on Metal's serial per-queue completion queue.
-    dispatch_queue_t q = cb->_queue->_completionQueue, handlerQueue = cb->_queue->_handlers;
-    const bool runInline = !behindScheduled && !q && !handlers.count;
+    cb->_doneHandlers = handlers;
+    cb->_doneBehindScheduled = behindScheduled;
     RMCommandBuffer *before = cb->_before;
     cb->_before = nil;
     if (before && !before->_turn.ran()) {
-        void *later = (__bridge_retained void *)[^{
-            deliverCompletion(run, q, handlerQueue, behindScheduled, runInline);
-        } copy];
+        void *later = (__bridge_retained void *)cb;
         if (before->_turn.hand(later))
             return;
-        (void)(__bridge_transfer dispatch_block_t)later;
+        (void)(__bridge_transfer RMCommandBuffer *)later;
     }
-    deliverCompletion(run, q, handlerQueue, behindScheduled, runInline);
+    deliverCompletion(cb);
 }
 
 // A command buffer the kernel killed the channel of: as Metal reports the GPU's own failures (TegraGM20BAbiFence error:

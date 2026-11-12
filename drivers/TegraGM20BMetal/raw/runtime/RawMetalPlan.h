@@ -285,6 +285,11 @@ public:
 
     Cmd legacy(size_t at) const;
 
+    void setDescriptor(size_t at, void *descriptor)
+    {
+        begins_[operations_[at].payload].descriptor = descriptor;
+    }
+
     void setRefused(size_t at, bool refused)
     {
         auto &begin = begins_[operations_[at].payload];

@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 #import "RawMetalCounters.h"
 #import "RawMetalMultisample.h"
+#import "RawMetalPassCache.h"
 #import "RawMetalRotated.h"
 #include "raw_attachment_target.h"
 #include "raw_device_answers.h"
@@ -205,6 +206,60 @@ static bool rawResolve(RMCommandBuffer *cb, MTLRenderPassColorAttachmentDescript
            (gRM->raw->resolvePipeline(from->_raw.format) || resolvesByTwoD(cb, from->_raw.format));
 }
 
+// A pass of the contents of one opened before (RawMetalPassCache.h): its copy and facts, and what each pass of a command
+// buffer does again: the objects it names retained, its targets' GPU writes declared, their compression as it is now
+static id<MTLRenderCommandEncoder> openKeptPass(RMCommandBuffer *cb, RMRenderEncoder *e, const RMPassEntry &kept)
+{
+    MTLRenderPassDescriptor *pass = kept.pass;
+    [cb retain:pass];
+    e->_pass = pass;
+    e->_passShared = true;
+    e->_passAt = uint32_t(cb->_passes.size());
+    RMPass &facts = cb->_passes.emplace_back(kept.facts);
+    facts.compressed = 0;
+    for (unsigned c = 0; c < 8; c++) {
+        id t = facts.color[c].texture;
+        if (!t)
+            continue;
+        [cb retain:t];
+        [cb retain:facts.color[c].resolve];
+        if (RMTexture *x = (RMTexture *)t; [(id)x isKindOfClass:[RMTexture class]]) {
+            declareGpuWrites(x);
+            if (x->_rawOk && x->_raw.comptags)
+                facts.compressed |= uint8_t(1u << c);
+        }
+        if (RMTexture *r = (RMTexture *)facts.color[c].resolve; [(id)r isKindOfClass:[RMTexture class]])
+            declareGpuWrites(r);
+    }
+    [cb retain:facts.zeta[0].texture];
+    [cb retain:facts.zeta[1].texture];
+    e->_visibility = kept.visibility;
+    [cb retain:kept.visibility];
+    std::copy(kept.formats.begin(), kept.formats.end(), e->_formats);
+    e->_count = kept.count;
+    e->_zeta = kept.zeta;
+    e->_samples = kept.samples;
+    e->_turn = kept.turn;
+    e->_renderAt = cb->_plan.size();
+    Cmd m = cmd(OpRender);
+    m.obj = (__bridge void *)pass;
+    m.x = e->_passAt;
+    [cb record:m];
+    return (id<MTLRenderCommandEncoder>)e;
+}
+
+// The encoder's own copy of its pass where it shares the thread's (it is about to change it)
+void rmOwnPass(RMRenderEncoder *e)
+{
+    if (!e->_passShared)
+        return;
+    MTLRenderPassDescriptor *own = [e->_pass copy];
+    [e->_cb retain:own];
+    e->_pass = own;
+    e->_passShared = false;
+    e->_cb->_plan.setDescriptor(e->_renderAt, (__bridge void *)own);
+}
+
 @implementation RMCommandBuffer (Encoders)
 
 - (void)begin:(RMEncoder *)e
@@ -225,6 +280,12 @@ static bool rawResolve(RMCommandBuffer *cb, MTLRenderPassColorAttachmentDescript
     SWITCH_API(ApiEncoder);
     RMRenderEncoder *e = [RMRenderEncoder new];
     [self begin:e];
+    thread_local std::vector<uint8_t> key;
+    uint64_t hash = 0;
+    const bool keyed = !rmCounterBuffersMade() && rmPassKey(d, key, hash);
+    if (keyed)
+        if (const RMPassEntry *kept = rmPassFind(key, hash))
+            return openKeptPass(self, e, *kept);
     MTLRenderPassDescriptor *pass = [d copy];
     [self retain:pass];
     e->_pass = pass;
@@ -320,7 +381,8 @@ static bool rawResolve(RMCommandBuffer *cb, MTLRenderPassColorAttachmentDescript
     // renderTargetWidth / renderTargetHeight: the render area's bounds (raw::PassDesc width, height)
     // A visibility result buffer is written only by draws under a counting mode (setVisibilityResultMode:offset:, refused there),
     // as m2v copies results only where a query was taken (visibility.rs plan)
-    [self retain:pass.visibilityResultBuffer];
+    e->_visibility = pass.visibilityResultBuffer;
+    [self retain:e->_visibility];
     const NSUInteger positions = [pass getSamplePositions:nullptr count:0];
     facts.layers = uint32_t(std::clamp<NSUInteger>(pass.renderTargetArrayLength, 1, 2048));
     if ((facts.layers > 1 && !raw::answers::kThisKind.layeredRendering) || pass.rasterizationRateMap ||
@@ -328,12 +390,25 @@ static bool rawResolve(RMCommandBuffer *cb, MTLRenderPassColorAttachmentDescript
         [self takeReason:WhyPass why:@"layers, a rate map or sample positions of its own"];
         hit(self, PredPassOther, pass.renderTargetArrayLength | positions << 32, pass.rasterizationRateMap != nil);
     }
+    e->_renderAt = _plan.size();
     Cmd m = cmd(OpRender);
     m.obj = (__bridge void *)pass;
     m.x = e->_passAt;
     [self record:m];
     rmCounterMarks(self, e, pass);
     rmPlaceCounterMarks(self, e, _encAt, true);
+    // A resolve's acceptance reads the command buffer's probe forms, so a pass that resolves is read again each time
+    const bool resolves = std::any_of(std::begin(facts.color), std::end(facts.color), [](const RMPass::Color &c) {
+        return c.resolve != nil;
+    });
+    if (keyed && !_encRefused && !resolves) {
+        // what the raw encode and m2v's replay read of it made now, so the copy is read, never changed, after this
+        for (unsigned c = 0; c < 8; c++)
+            (void)pass.colorAttachments[c];
+        (void)pass.sampleBufferAttachments;
+        rmPassKeep(key, hash, pass, facts, e);
+        e->_passShared = true;
+    }
     return (id<MTLRenderCommandEncoder>)e;
 }
 

@@ -110,6 +110,7 @@ void commitBuffer(RMCommandBuffer *cb)
     if (waitsForEvent(cb)) {
         std::lock_guard<std::mutex> h(gHoldersLock);
         gHolders.insert(cb);
+        cb->_inHolders.store(true, std::memory_order_release);
     }
 #endif
     armEventWaits(cb);

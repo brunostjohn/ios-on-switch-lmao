@@ -4,12 +4,14 @@
 #include "raw_parallel.h"
 #include "raw_compute.h"
 #include "raw_scheduled_wait.h"
+#include "raw_take_pool.h"
 
 // ---- the device's submission machinery ----
 
 // A finished command buffer's recording storage, kept for the next one (its capacity a frame's): Core Animation's steady frames
 // allocate none of it. As many are kept as were live at once (an app that commits a batch before it waits records each into
-// kept storage), up to kKeptTotal bytes; gRawRelease gives back all but kKeptIdle.
+// kept storage), up to kKeptTotal bytes and kKeptMost recordings; gRawRelease gives back all but kKeptIdle. Taken and kept
+// with no lock (raw_take_pool.h): a command buffer takes one where it is made and keeps it where it is freed.
 struct RMRecording {
     RMCommandPlan plan;
     std::vector<RMPass> passes;
@@ -23,30 +25,34 @@ struct RMRecording {
 };
 
 static constexpr size_t kKeptTotal = 16 << 20, kKeptIdle = 4;
-static std::mutex gRecordingsLock;
-static std::vector<RMRecording> gRecordings;
-static size_t gRecordingBytes;
+static constexpr uint32_t kKeptMost = 64;
+static raw::TakePool<RMRecording, kKeptMost> &gRecordings = *new raw::TakePool<RMRecording, kKeptMost>;
+static std::atomic<size_t> gRecordingBytes{0};
+
+static void swapRecording(RMCommandBuffer *b, RMRecording &r)
+{
+    std::swap(b->_plan, r.plan);
+    b->_passes.swap(r.passes);
+    std::swap(b->_bytes, r.bytes);
+    b->_retirements.swap(r.retirements);
+    b->_shadow.swap(r.shadow);
+    b->_extra.swap(r.extra);
+    b->_owners.swap(r.owners);
+    std::swap(b->_ownerKeys, r.ownerKeys);
+}
 
 static void takeRecording(RMCommandBuffer *b)
 {
-    {
-        std::lock_guard<std::mutex> l(gRecordingsLock);
-        if (!gRecordings.empty()) {
-            RMRecording &r = gRecordings.back();
-            std::swap(b->_plan, r.plan);
-            b->_passes.swap(r.passes);
-            std::swap(b->_bytes, r.bytes);
-            b->_retirements.swap(r.retirements);
-            b->_shadow.swap(r.shadow);
-            b->_extra.swap(r.extra);
-            b->_owners.swap(r.owners);
-            std::swap(b->_ownerKeys, r.ownerKeys);
-            gRecordingBytes -= r.kept;
-            gRecordings.pop_back();
-            return;
-        }
+    uint32_t node;
+    RMRecording *r = gRecordings.take(node);
+    if (!r) {
+        b->_owners.reserve(256);
+        return;
     }
-    b->_owners.reserve(256);
+    swapRecording(b, *r);
+    gRecordingBytes.fetch_sub(r->kept, std::memory_order_relaxed);
+    r->kept = 0;
+    gRecordings.giveBack(node);
 }
 
 static void dropBytes(RMBytes &s)
@@ -89,49 +95,41 @@ static void giveRecording(RMCommandBuffer *b)
         dropBytes(b->_bytes);
         return;
     }
-    RMRecording r;
-    r.kept = bytes;
-    std::swap(r.plan, b->_plan);
-    r.passes.swap(b->_passes);
-    std::swap(r.bytes, b->_bytes);
-    r.retirements.swap(b->_retirements);
-    r.shadow.swap(b->_shadow);
-    r.extra.swap(b->_extra);
-    r.owners.swap(b->_owners);
-    std::swap(r.ownerKeys, b->_ownerKeys);
-    r.plan.clear();
-    r.passes.clear();
-    r.bytes.at = 0;
-    r.bytes.used = 0;
-    r.shadow.clear();
-    r.extra.clear();
-    r.owners.clear();
-    r.ownerKeys.clear();
-    coalesceBytes(r.bytes);
-    {
-        std::lock_guard<std::mutex> l(gRecordingsLock);
-        if (gRecordingBytes + bytes <= kKeptTotal) {
-            gRecordingBytes += bytes;
-            gRecordings.push_back(std::move(r));
-            return;
-        }
+    uint32_t node;
+    RMRecording *r = gRecordingBytes.fetch_add(bytes, std::memory_order_relaxed) + bytes <= kKeptTotal
+                         ? gRecordings.room(node)
+                         : nullptr;
+    if (!r) {
+        gRecordingBytes.fetch_sub(bytes, std::memory_order_relaxed);
+        dropBytes(b->_bytes);
+        return;
     }
-    dropBytes(r.bytes);
+    swapRecording(b, *r);
+    r->kept = bytes;
+    r->plan.clear();
+    r->passes.clear();
+    r->bytes.at = 0;
+    r->bytes.used = 0;
+    r->shadow.clear();
+    r->extra.clear();
+    r->owners.clear();
+    r->ownerKeys.clear();
+    coalesceBytes(r->bytes);
+    gRecordings.keep(node);
 }
 
 void releaseRecordings()
 {
-    std::vector<RMRecording> given;
-    {
-        std::lock_guard<std::mutex> l(gRecordingsLock);
-        while (gRecordings.size() > kKeptIdle) {
-            gRecordingBytes -= gRecordings.back().kept;
-            given.push_back(std::move(gRecordings.back()));
-            gRecordings.pop_back();
-        }
+    while (gRecordings.kept() > kKeptIdle) {
+        uint32_t node;
+        RMRecording *r = gRecordings.take(node);
+        if (!r)
+            break;
+        gRecordingBytes.fetch_sub(r->kept, std::memory_order_relaxed);
+        dropBytes(r->bytes);
+        *r = RMRecording();
+        gRecordings.giveBack(node);
     }
-    for (RMRecording &r : given)
-        dropBytes(r.bytes);
 }
 
 @implementation RMCommandBuffer
@@ -166,6 +164,12 @@ void releaseRecordings()
 
 - (void)record:(const Cmd &)cmd
 {
+    if (_commandLog) {
+        RMSubCommand s{cmd, {}};
+        if (const size_t words = raw::extraWords(cmd))
+            s.extra.assign(_extra.begin() + ptrdiff_t(cmd.x), _extra.begin() + ptrdiff_t(cmd.x + words));
+        _commandLog->push_back(s);
+    }
     if (cmd.op == OpPipeline && _recordedPass < _passes.size() && _passes[_recordedPass].compressed)
         rmNoteStorageTargets(self, _passes[_recordedPass], cmd);
     if (cmd.op == OpCompute)

@@ -70,6 +70,8 @@ bool waitsForEvent(RMCommandBuffer *cb)
 void unhold(RMCommandBuffer *cb)
 {
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
+    if (!cb->_inHolders.exchange(false, std::memory_order_acq_rel))
+        return;
     std::lock_guard<std::mutex> l(gHoldersLock);
     gHolders.erase(cb);
     gEventWaits.erase(cb);
@@ -169,6 +171,7 @@ raw::EventReadiness eventReadiness(RMCommandBuffer *cb, raw::EventDeadline::Time
         {
             std::lock_guard<std::mutex> h(gHoldersLock);
             gEventWaits[cb] = {c.obj, c.c, nowUs(), 0};
+            cb->_inHolders.store(true, std::memory_order_release);
         }
 #endif
         // Registration is done outside the scheduler mutex: an already satisfied event may deliver its notification

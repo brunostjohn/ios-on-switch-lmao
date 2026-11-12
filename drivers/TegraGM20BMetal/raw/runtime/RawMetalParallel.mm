@@ -4,14 +4,6 @@
 #import "RawMetalCounters.h"
 #include "raw_parallel.h"
 
-namespace {
-
-struct RMSubCommand {
-    Cmd cmd;
-    std::vector<uint64_t> extra;
-};
-
-}  // namespace
 
 // A sub-encoder's command buffer: never committed. It keeps each command with the extra words its own record: drops. (Its
 // encoder holds it: weak the other way.)
@@ -24,16 +16,6 @@ struct RMSubCommand {
 @end
 
 @implementation RMSubRecorder
-
-- (void)record:(const Cmd &)c
-{
-    RMSubCommand s{c, {}};
-    if (const size_t words = raw::extraWords(c))
-        s.extra.assign(_extra.begin() + ptrdiff_t(c.x), _extra.begin() + ptrdiff_t(c.x + words));
-    _log.push_back(s);
-    [super record:c];
-}
-
 @end
 
 // Its pass as sub-encoder `at` of `count` records it: m2v's replay draws each as a pass of its own (raw::seamLoad, seamStore)
@@ -112,10 +94,12 @@ static void splice(RMCommandBuffer *cb, RMSubRecorder *s, bool refused)
 - (RMRenderEncoder *)makeSub
 {
     RMSubRecorder *s = [RMSubRecorder new];
+    s->_commandLog = &s->_log;
     s->_device = _device;
     s->_queue = _cb->_queue;
     s->_status = MTLCommandBufferStatusNotEnqueued;
     RMRenderEncoder *e = (RMRenderEncoder *)[s renderCommandEncoderWithDescriptor:_descriptor];
+    rmOwnPass(e);  // its seam changes its pass's loads and stores
     s->_encoder = e;
     s->_pass = e->_pass;
     _subs.push_back(s);

@@ -124,6 +124,10 @@
 #                     answers nil, aliasable ranges are taken again, usedSize and maxAvailableSizeWithAlignment)
 #   raw_program_pages_test  raw/runtime/raw_program_pages.h: the pages a program run in place from a file needs bound in
 #                     the program window, its alignment kept, each page asked for once, nothing past the file's region
+#   raw_objc_layout_test  raw/runtime/raw_objc_layout.h: a struct ivar's fields from its type encoding, laid out as C does,
+#                     over the encodings of Metal's render pass descriptor ivars (RawMetalPassCache.mm reads them by name)
+#   raw_take_pool_test  raw/runtime/raw_take_pool.h: items any thread keeps and takes with no lock, never held by two
+#                     threads at once nor lost (the recordings command buffers give back and take, RawMetalCommandBuffer.mm)
 #   raw_handoff_queue_test  raw/runtime/raw_handoff_queue.h: the submit worker's ranges reach the completion thread in
 #                     order with no lock, the taker sleeping until the next hand-off that wakes or a wake(), each counted
 #                     until it is popped
@@ -891,6 +895,24 @@ host_test(
         "//drivers/TegraGM20BMetal:raw/runtime/raw_semantic_plan.cpp",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_semantic_resources.cpp",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_semantic_setters.cpp",
+    ],
+    cxx_std = "c++17",
+)
+
+host_test(
+    name = "raw_objc_layout_test",
+    srcs = [
+        "raw_objc_layout_test.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_objc_layout.h",
+    ],
+    cxx_std = "c++17",
+)
+
+host_test(
+    name = "raw_take_pool_test",
+    srcs = [
+        "raw_take_pool_test.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_take_pool.h",
     ],
     cxx_std = "c++17",
 )
