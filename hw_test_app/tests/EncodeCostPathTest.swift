@@ -9,8 +9,11 @@ import Metal
 /// at each of two draw counts. Per command buffer at each count: the encode's wall time and its parts (us_<part>, and
 /// walk_us the loop's time outside every part), its events (mallocs, frees, locks, sends, uses, use_adds, descriptor
 /// builds and uploads, geometry vertices) and bindings applied per draw. A command buffer's mallocs, frees, locks,
-/// Objective-C sends and vertices the CPU read must not grow with its draws, and every command buffer is the raw path's.
-/// The profile is the facade's; a release runtime has none and the test skips.
+/// Objective-C sends, job uses that reached a job's list and vertices the CPU read must not grow with its draws, none
+/// may pass what the host's facade harness counts of the same command buffers with the encode and its retire lock-free
+/// (raw/test/facadecost.mm: at most the trim's lock once in 64 command buffers, no send, 4 allocations and 2 frees),
+/// and every command buffer is the raw path's. The profile is the facade's; a release runtime has none and the test
+/// skips.
 struct EncodeCostPathTest: HWTest {
     let id = "gpu.path.encode_cost"
     let name = "A Core Animation shaped command buffer's encode by part, with no allocation, lock, message or vertex read per draw"
@@ -26,7 +29,10 @@ struct EncodeCostPathTest: HWTest {
         "mallocs", "frees", "locks", "sends", "uses", "use_adds", "descriptor_builds", "descriptor_uploads",
         "geometry_vertices",
     ]
-    static let perDrawFree = ["mallocs", "frees", "locks", "sends", "geometry_vertices"]
+    static let perDrawFree = ["mallocs", "frees", "locks", "sends", "use_adds", "geometry_vertices"]
+    static let ceilings: [(event: String, most: Double)] = [
+        ("locks", 0.1), ("sends", 0), ("mallocs", 4), ("frees", 2), ("geometry_vertices", 0),
+    ]
 
     func run(_: TestContext) async throws -> Outcome {
         let gpu = try GPU.make()
@@ -104,6 +110,12 @@ struct EncodeCostPathTest: HWTest {
         }
         if arms.contains(where: { ($0["encodes"] ?? 0) < 1 }) {
             failures.append("an arm encoded nothing on the raw path")
+        }
+        for (event, most) in Self.ceilings {
+            metrics.set(event + "_ceiling", most, digits: 1)
+            for (draws, arm) in zip(Self.drawCounts, arms) where (arm[event] ?? 0) > most {
+                failures.append("\(event) per command buffer \(arm[event] ?? 0) at \(draws) draws, over \(most)")
+            }
         }
         for event in Self.perDrawFree {
             let counts = arms.map { $0[event] ?? 0 }
