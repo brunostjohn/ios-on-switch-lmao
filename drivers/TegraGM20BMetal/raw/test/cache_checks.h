@@ -130,7 +130,7 @@ inline void run(const std::vector<std::pair<std::string, raw::RuntimeRecord>> &r
                 _exit(0);
             } else
                 writers.push_back(pid);
-        for (int round = 0; round < 200 && getpid() == me; round++)
+        const auto readAll = [&] {
             for (const auto &[key, rec] : records) {
                 raw::RuntimeRecord back;
                 std::string why;
@@ -139,11 +139,24 @@ inline void run(const std::vector<std::pair<std::string, raw::RuntimeRecord>> &r
                 seen += found == raw::RecordCache::Found::Record;
                 torn += found == raw::RecordCache::Found::Record && !same(rec, back);
             }
-        for (pid_t pid : writers) {
-            int status = 0;
-            waitpid(pid, &status, 0);
-            check(WIFEXITED(status) && WEXITSTATUS(status) == 0, "a writer process exits");
+        };
+        // the reader reads for as long as any writer runs, and once after: a fixed number of rounds can end before the
+        // writer processes are scheduled at all
+        std::vector<int> statuses(writers.size(), -1);
+        size_t running = writers.size();
+        for (int round = 0; getpid() == me && (running || round < 200); round++) {
+            readAll();
+            for (size_t w = 0; w < writers.size(); w++) {
+                int status = 0;
+                if (statuses[w] < 0 && waitpid(writers[w], &status, WNOHANG) == writers[w]) {
+                    statuses[w] = status;
+                    running--;
+                }
+            }
         }
+        readAll();
+        for (int status : statuses)
+            check(WIFEXITED(status) && WEXITSTATUS(status) == 0, "a writer process exits");
         check(seen > 0, "the reader sees the writers' entries while four processes write");
         check(torn == 0, "no reader sees a torn entry while four processes write");
         check(cache.store(keyOf(stack, refusedKey, 7), nullptr, refusal), "a refusal stored");
