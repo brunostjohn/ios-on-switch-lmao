@@ -117,8 +117,7 @@ enum : uint32_t {
 };
 
 constexpr uint32_t kRootBytes = 0x800, kSetBytes = 0x100, kUboChunk = 0x100;
-constexpr uint32_t kMaxCbufBytes = 0x10000;        // NVK_MAX_CBUF_SIZE: the most of a constant buffer NVK binds
-constexpr uint32_t kRootInterlockTickets = 0x260;  // offsetof(nvk_root_descriptor_table, interlock_ticket_buffer)
+constexpr uint32_t kMaxCbufBytes = 0x10000;  // NVK_MAX_CBUF_SIZE: the most of a constant buffer NVK binds
 constexpr uint32_t kTicCount = 8192, kTscCount = 1024;
 constexpr uint32_t kEngines =
     TegraGM20BEngine3D | TegraGM20BEngineCompute | TegraGM20BEngineCopy | TegraGM20BEngine2D | TegraGM20BEngineM2MF;
@@ -448,7 +447,8 @@ void Device::emitContext(Push &p)
 {
     const uint32_t initCount = uint32_t(pack_.bytes(PackInit) / sizeof(PackInitMethod));
     const PackInitMethod *im = pack_.section<PackInitMethod>(PackInit);
-    const InitAddresses here = {heap_.va, zero_.va, root_.va, tic_.va, tsc_.va, kTicCount - 1, kTscCount - 1};
+    InitAddresses here = {heap_.va, zero_.va, root_.va, tic_.va, tsc_.va, kTicCount - 1, kTscCount - 1};
+    here.tickets = tickets_.va;
     for (uint32_t i = 0; i < initCount; i++) {
         const uint32_t d = relocated(im[i], here);
         p.m(im[i].mthd, d, im[i].subc);
@@ -471,13 +471,6 @@ void Device::emitContext(Push &p)
     // root table selected for LOAD_CONSTANT_BUFFER from here on (draws reselect it after binding set 0 as a cbuf); NVK's init
     // above zeroed it, so one sample's layout goes in now, as every pass but a multisampled one leaves it
     sampleWords(p, 1, root_.va);
-    // the pixel interlock's ticket buffer (nvk_root_descriptor_table.interlock_ticket_buffer; NAK's lowering waits on and
-    // releases its words, 256 per GPC): zero, as this channel's ticket dispenser starts. NVK's init above may name the probe's.
-    {
-        const uint32_t a[2] = {uint32_t(tickets_.va), uint32_t(tickets_.va >> 32)};
-        p.m(LOAD_CB_OFFSET, kRootInterlockTickets);
-        p.nonInc(LOAD_CB, a, 2);
-    }
 }
 
 bool Device::open(const char *packPath, uint64_t stack, std::string &err, Role role)

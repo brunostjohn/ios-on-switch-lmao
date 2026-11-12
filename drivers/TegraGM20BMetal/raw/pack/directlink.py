@@ -231,6 +231,13 @@ def pipeline_of(rec: dict, varying: list[int], prog_index: dict[str, int], const
     }
 
 
+def init_records(path: str) -> list[tuple[int, int, int, int]]:
+    """Give the context init as the pack holds it: each method's subchannel, method, word and relocation (I lines)."""
+    with open(path) as f:
+        rows = [line.split()[1:] for line in f if line.startswith('I ')]
+    return [(int(sc), int(m, 16), int(d, 16), int(reloc)) for sc, m, d, reloc in rows]
+
+
 def draw_context(post: dict[int, int]) -> dict[int, int]:
     """Give the registers a state's draw meets but does not set: post-init's, as draw_context.txt changes them."""
     context = dict(post)
@@ -355,7 +362,7 @@ def main() -> None:
             inventory = f.read()
         del buckets[at : at + 2]
     warm = next(d for d in buckets if os.path.exists(os.path.join(d, 'context.log')))
-    init, post = mkpack.load_init(os.path.join(warm, 'context.log'))
+    _, post = mkpack.load_init(os.path.join(warm, 'context.log'))
     states, refused = gather(buckets, draw_context(post[0]))
     programs = {program_id(p): p for rec in states for p in rec['programs']}
     found = split_programs(states, programs)
@@ -378,7 +385,7 @@ def main() -> None:
     computes = compute_kernels(buckets, constexpr_tsc, laid, report)
     used = list(dict.fromkeys(prog_recs[rec['fs']]['id'] for rec in pipes))
     split = splits.lay_out(used, found, programs, laid, report)
-    init_recs = [(sc, m, d, mkpack.RELOC_CODE.get(mkpack.RELOC.get((sc, m)), 0)) for sc, m, d in init]
+    init_recs = init_records(os.path.join(warm, 'context.log'))
     declared, kinds = archives.declared(inventory)
     held = archives.held_kernels([k['key'] for k in computes])
     report.append(archives.report(declared, kinds, held))

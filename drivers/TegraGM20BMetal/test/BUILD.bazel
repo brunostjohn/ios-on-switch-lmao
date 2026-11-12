@@ -1518,6 +1518,7 @@ host_test(
     ],
     cxx_std = "c++17",
     data = [":wide_index"],
+    deps = ["//kits/SwitchGM20BEmit:context_h"],
 )
 
 host_test(

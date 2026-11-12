@@ -4,10 +4,13 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <map>
+#include <set>
 #include <string>
 #include <vector>
 #include "../raw/runtime/raw_pack.h"
 #include "../raw/runtime/raw_variants.h"
+#include "SwitchGM20BContext.h"
 
 namespace {
 
@@ -65,6 +68,87 @@ std::string writeVariantPack(const char *name)
     fwrite(file.data(), 1, file.size(), f);
     fclose(f);
     return path;
+}
+
+// A pack holding only the channel's context init (the kit's, gen/SwitchGM20BContext.h), each relocated method's word
+// `fill(i)` where the kit holds 0
+template <typename Fill> std::string writeInitPack(const char *name, Fill fill)
+{
+    std::vector<raw::PackInitMethod> init;
+    for (uint32_t i = 0; i < SWITCH_GM20B_CONTEXT_METHODS; i++) {
+        const switch_gm20b_context_method &m = switch_gm20b_context[i];
+        init.push_back({m.subc, m.mthd, m.reloc ? fill(i) : m.data, m.reloc});
+    }
+    std::vector<uint8_t> file(0x100 + init.size() * sizeof(raw::PackInitMethod), 0);
+    raw::PackHeader h = {};
+    memcpy(h.magic, "GM20BPK1", 8);
+    h.version = raw::kPackVersion;
+    h.section[raw::PackInit] = {0x100, init.size() * sizeof(raw::PackInitMethod)};
+    memcpy(file.data(), &h, sizeof h);
+    memcpy(file.data() + 0x100, init.data(), init.size() * sizeof(raw::PackInitMethod));
+    const std::string path = std::string(getenv("TEST_TMPDIR") ?: "/tmp") + "/" + name;
+    FILE *f = fopen(path.c_str(), "wb");
+    fwrite(file.data(), 1, file.size(), f);
+    fclose(f);
+    return path;
+}
+
+// The context init as Device::emitContext pushes it: each method with its word relocated to `here`
+std::vector<uint32_t> pushedInit(const raw::Pack &pack, const raw::InitAddresses &here)
+{
+    std::vector<uint32_t> out;
+    const raw::PackInitMethod *im = pack.section<raw::PackInitMethod>(raw::PackInit);
+    for (uint64_t i = 0; i < pack.bytes(raw::PackInit) / sizeof(raw::PackInitMethod); i++) {
+        out.push_back(uint32_t(im[i].subc) << 16 | im[i].mthd);
+        out.push_back(raw::relocated(im[i], here));
+    }
+    return out;
+}
+
+// The words a pack's init holds in its relocated methods (the probe's addresses once, 0 from the kit) never reach the
+// GPU: each takes this process's address or limit, the interlock's ticket buffer among them
+TEST(RawPack, TheContextInitPushesThisProcesssAddressesWhateverThePackHolds)
+{
+    raw::Pack zero, garbage;
+    std::string err;
+    ASSERT_TRUE(zero.load(writeInitPack("init-zero.bin",
+                                        [](uint32_t) {
+                                            return 0u;
+                                        })
+                              .c_str(),
+                          0, err))
+        << err;
+    ASSERT_TRUE(garbage.load(writeInitPack("init-garbage.bin",
+                                           [](uint32_t i) {
+                                               return 0xdead0000u | i;
+                                           })
+                                 .c_str(),
+                             0, err))
+        << err;
+    raw::InitAddresses here = {
+        0x10'0000'1000, 0x20'0000'2000, 0x30'0000'3000, 0x40'0000'4000, 0x50'0000'5000, 8191, 1023};
+    here.tickets = 0x60'0000'6000;
+    const std::vector<uint32_t> pushed = pushedInit(zero, here);
+    EXPECT_EQ(pushed, pushedInit(garbage, here));
+    ASSERT_EQ(pushed.size(), 2u * SWITCH_GM20B_CONTEXT_METHODS);
+    const std::map<uint32_t, uint32_t> expected = {
+        {raw::RelocHeapHi, 0x10},      {raw::RelocHeapLo, 0x1000}, {raw::RelocZeroHi, 0x20},
+        {raw::RelocZeroLo, 0x2000},    {raw::RelocRootHi, 0x30},   {raw::RelocRootLo, 0x3000},
+        {raw::RelocTicHi, 0x40},       {raw::RelocTicLo, 0x4000},  {raw::RelocTicMax, 8191},
+        {raw::RelocTscHi, 0x50},       {raw::RelocTscLo, 0x5000},  {raw::RelocTscMax, 1023},
+        {raw::RelocTicketsLo, 0x6000}, {raw::RelocTicketsHi, 0x60}};
+    uint32_t relocatedWords = 0;
+    std::set<uint32_t> kinds;
+    for (uint32_t i = 0; i < SWITCH_GM20B_CONTEXT_METHODS; i++) {
+        const uint32_t reloc = switch_gm20b_context[i].reloc;
+        if (!reloc)
+            continue;
+        relocatedWords++;
+        kinds.insert(reloc);
+        EXPECT_EQ(pushed[2 * i + 1], expected.at(reloc)) << "method " << i << " relocation " << reloc;
+    }
+    EXPECT_EQ(relocatedWords, 24u);
+    EXPECT_EQ(kinds.size(), expected.size());
 }
 
 TEST(RawPack, AStatesVariantRecordsAreFoundByNameNeverAsTheState)

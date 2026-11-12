@@ -409,16 +409,20 @@ enum PackReloc : uint32_t {
     RelocTicMax,
     RelocTscHi,
     RelocTscLo,
-    RelocTscMax
+    RelocTscMax,
+    RelocTicketsLo,
+    RelocTicketsHi
 };
 
 #pragma pack(pop)
 
 // What a context init's marked methods take in this process (PackReloc): the shader heap, the zero page, the root table (NVK's
-// cb0), the texture and sampler header pools and their highest indices
+// cb0), the texture and sampler header pools and their highest indices, and the pixel interlock's ticket buffer, which the
+// init's root table names (nvk_root_descriptor_table.interlock_ticket_buffer)
 struct InitAddresses {
     uint64_t heap, zero, root, tic, tsc;
     uint32_t ticMax, tscMax;
+    uint64_t tickets;
 };
 
 uint32_t relocated(const PackInitMethod &m, const InitAddresses &a);

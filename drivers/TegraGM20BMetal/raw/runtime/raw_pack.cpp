@@ -103,6 +103,10 @@ uint32_t relocated(const PackInitMethod &m, const InitAddresses &a)
         return uint32_t(a.tsc);
     case RelocTscMax:
         return a.tscMax;
+    case RelocTicketsLo:
+        return uint32_t(a.tickets);
+    case RelocTicketsHi:
+        return uint32_t(a.tickets >> 32);
     default:
         return m.data;
     }
