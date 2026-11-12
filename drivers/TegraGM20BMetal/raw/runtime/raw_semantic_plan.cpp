@@ -213,6 +213,11 @@ bool RMCommandPlan::record(const Cmd &c, const std::vector<uint64_t> &extra)
             if (encoder_ == OpCompute)
                 control.compute = captureKernel();
         }
+        // what a buffer of dispatches inherits: the encoder's pipeline and buffers
+        if (c.op == OpExecuteKernels && encoder_ == OpCompute) {
+            control.compute = captureKernel();
+            operation.uses = kernelStates[control.compute].uses;
+        }
         operation.payload = append(controls_, control);
         if (c.op == OpInvocation) {
             const uint32_t before = control.render != raw::kNoSnapshot    ? renderStates[control.render].uses

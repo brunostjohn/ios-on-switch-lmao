@@ -4,7 +4,7 @@
  */
 
 /*
- * The raw path's draw macros (ABI v2: the draws at slots 11-16, the indirect command buffers' at 4-6, R1 the first
+ * The raw path's draw macros (ABI v2: the draws at slots 11-16, the indirect command buffers' at 4-7, R1 the first
  * argument, shadow scratch read by the indirect command buffer macros only, constant buffer 0 left selected), built with
  * Mesa's MME builder. The draw slots are the ones NVK's draw macros take, so a push profile that counts NVK's draw calls
  * counts the raw path's too. The instance loops are NVK's pre-Pascal nvk_mme_build_draw_loop and
@@ -189,6 +189,27 @@ static void build_icb_draw(struct mme_builder *b, bool indexed)
     build_indirect_body(b, indexed, count, instances);
 }
 
+/* An indirect command buffer's dispatch: its index. The global render enable, which the compute class's launches obey
+ * (NVK's conditional rendering of dispatches), is TRUE inside the range in scratch and FALSE outside it, from the same
+ * borrow as build_icb_draw's; the execute sets it TRUE again after its commands. */
+static void build_icb_gate(struct mme_builder *b, bool unused)
+{
+    (void)unused;
+    struct mme_value index = mme_load(b);
+    struct mme_value location = mme_state(b, NVB197_SET_MME_SHADOW_SCRATCH(SWITCH_GM20B_SCRATCH_ICB_LOCATION));
+    mme_sub_to(b, index, index, location);
+    mme_free_reg(b, location);
+    struct mme_value length = mme_state(b, NVB197_SET_MME_SHADOW_SCRATCH(SWITCH_GM20B_SCRATCH_ICB_LENGTH));
+    struct mme_value64 below = mme_sub64(b, mme_value64(index, mme_zero()), mme_value64(length, mme_zero()));
+    mme_free_reg(b, index);
+    mme_free_reg(b, length);
+    mme_free_reg(b, below.lo);
+    mme_and_to(b, below.hi, below.hi, mme_imm(NVB197_SET_GLOBAL_RENDER_ENABLE_C_MODE_TRUE));
+    mme_mthd(b, NVB197_SET_GLOBAL_RENDER_ENABLE_C);
+    mme_emit(b, below.hi);
+    mme_free_reg(b, below.hi);
+}
+
 static void write_macro(FILE *out, const char *name, void (*build)(struct mme_builder *, bool), bool indexed,
                         const struct nv_device_info *dev)
 {
@@ -226,6 +247,7 @@ int main(int argc, char **argv)
             "#ifndef SWITCH_GM20B_MACROS_H\n#define SWITCH_GM20B_MACROS_H\n\n#include <stdint.h>\n\n"
             "// The raw path's macro slots (ABI v2): NVK's draw macros' slots, and the indirect command buffers' below them\nenum {\n"
             "    SWITCH_GM20B_MACRO_ICB_RANGE = 4,\n    SWITCH_GM20B_MACRO_ICB_DRAW,\n    SWITCH_GM20B_MACRO_ICB_DRAW_INDEXED,\n"
+            "    SWITCH_GM20B_MACRO_ICB_GATE,\n"
             "    SWITCH_GM20B_MACRO_DRAW = 11,\n    SWITCH_GM20B_MACRO_DRAW_INDEXED,\n"
             "    SWITCH_GM20B_MACRO_INDIRECT,\n    SWITCH_GM20B_MACRO_INDEXED_INDIRECT,\n"
             "    SWITCH_GM20B_MACRO_DRAW_PARAMS,\n    SWITCH_GM20B_MACRO_DRAW_INDEXED_PARAMS,\n};\n\n"
@@ -241,6 +263,7 @@ int main(int argc, char **argv)
     write_macro(out, "icb_range", build_icb_range, false, &dev);
     write_macro(out, "icb_draw", build_icb_draw, false, &dev);
     write_macro(out, "icb_draw_indexed", build_icb_draw, true, &dev);
+    write_macro(out, "icb_gate", build_icb_gate, false, &dev);
     fprintf(out, "\n#endif\n");
     return fclose(out) ? 1 : 0;
 }

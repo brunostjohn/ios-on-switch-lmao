@@ -58,6 +58,7 @@ enum Op : uint8_t {
     // a compute encoder's predication record (raw_predicate_records.h kind in `stage`): the buffer, the word's offset in
     // `c`, the compare (raw::PredicateCompare) in `a`, the reference in `b`
     OpPredicate,
+    OpExecuteKernels,   // a compute encoder's execute of a buffer of dispatches: obj its RMKernelExecute (RawMetalIndirectExecute.mm)
 };
 
 // Transient adapter arguments. Native command plans do not store setter records.

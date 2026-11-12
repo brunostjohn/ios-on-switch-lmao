@@ -8,7 +8,7 @@
 namespace raw::mme {
 
 // Native GM20B macro ABI v2. This channel owns macro slots 11..16 (NVK's draw macros' slots, which the kernel's push profile
-// counts as draws), 4..6 (an indirect command buffer's) and their contiguous instruction words from zero. Arguments:
+// counts as draws), 4..7 (an indirect command buffer's) and their contiguous instruction words from zero. Arguments:
 // instance count (preloaded R1), first vertex/index, element count, then for the parameter macros the base instance (a draw
 // of vertices) or the base vertex and base instance (an indexed one). The caller owns topology, restart and index binding.
 // The plain macros change only BEGIN, vertex/index first+count and END; the parameter macros first write the root table's
@@ -19,10 +19,11 @@ constexpr uint32_t kAbi = 2, kDraw = SWITCH_GM20B_MACRO_DRAW, kDrawIndexed = SWI
                    kDrawParams = SWITCH_GM20B_MACRO_DRAW_PARAMS,
                    kIndexedParams = SWITCH_GM20B_MACRO_DRAW_INDEXED_PARAMS,
                    kIcbRange = SWITCH_GM20B_MACRO_ICB_RANGE, kIcbDraw = SWITCH_GM20B_MACRO_ICB_DRAW,
-                   kIcbDrawIndexed = SWITCH_GM20B_MACRO_ICB_DRAW_INDEXED;
-// An indirect command buffer's draws (raw_icb.h): each passes its index before an indirect draw's arguments and draws only
-// inside the range the shadow scratch words hold, which an execute writes (from the CPU's range, or by kIcbRange from the
-// range buffer the GPU reads); the only macros that read scratch
+                   kIcbDrawIndexed = SWITCH_GM20B_MACRO_ICB_DRAW_INDEXED, kIcbGate = SWITCH_GM20B_MACRO_ICB_GATE;
+// An indirect command buffer's draws (raw_icb.h) and dispatches (raw_icb_compute.h): a draw passes its index before an
+// indirect draw's arguments and draws only inside the range the shadow scratch words hold, which an execute writes (from the
+// CPU's range, or by kIcbRange from the range buffer the GPU reads); a dispatch passes its index to kIcbGate, which lets the
+// launches after it run only inside that range. The only macros that read scratch
 constexpr uint32_t kScratchLocation = SWITCH_GM20B_SCRATCH_ICB_LOCATION,
                    kScratchLength = SWITCH_GM20B_SCRATCH_ICB_LENGTH;
 constexpr uint32_t kMacroCall = NVB197_CALL_MME_MACRO(0), kRamPointer = NVB197_LOAD_MME_INSTRUCTION_RAM_POINTER,
@@ -49,14 +50,15 @@ constexpr Program kDrawProgram = program(switch_gm20b_macro_draw),
                   kIndexedParamsProgram = program(switch_gm20b_macro_draw_indexed_params),
                   kIcbRangeProgram = program(switch_gm20b_macro_icb_range),
                   kIcbDrawProgram = program(switch_gm20b_macro_icb_draw),
-                  kIcbDrawIndexedProgram = program(switch_gm20b_macro_icb_draw_indexed);
-constexpr size_t kContextWords = 9 * 5 + std::size(switch_gm20b_macro_draw) +
+                  kIcbDrawIndexedProgram = program(switch_gm20b_macro_icb_draw_indexed),
+                  kIcbGateProgram = program(switch_gm20b_macro_icb_gate);
+constexpr size_t kContextWords = 10 * 5 + std::size(switch_gm20b_macro_draw) +
                                  std::size(switch_gm20b_macro_draw_indexed) + std::size(switch_gm20b_macro_indirect) +
                                  std::size(switch_gm20b_macro_indexed_indirect) +
                                  std::size(switch_gm20b_macro_draw_params) +
                                  std::size(switch_gm20b_macro_draw_indexed_params) +
                                  std::size(switch_gm20b_macro_icb_range) + std::size(switch_gm20b_macro_icb_draw) +
-                                 std::size(switch_gm20b_macro_icb_draw_indexed);
+                                 std::size(switch_gm20b_macro_icb_draw_indexed) + std::size(switch_gm20b_macro_icb_gate);
 constexpr size_t kCallWords = 4, kParamsCallWords = 6;
 
 inline void install(Push &push)
@@ -77,6 +79,7 @@ inline void install(Push &push)
     load(kIcbRange, kIcbRangeProgram.words, kIcbRangeProgram.size);
     load(kIcbDraw, kIcbDrawProgram.words, kIcbDrawProgram.size);
     load(kIcbDrawIndexed, kIcbDrawIndexedProgram.words, kIcbDrawIndexedProgram.size);
+    load(kIcbGate, kIcbGateProgram.words, kIcbGateProgram.size);
 }
 
 inline void indirectHeader(Push &push, bool indexed)
@@ -88,6 +91,12 @@ inline void indirectHeader(Push &push, bool indexed)
 inline void icbDrawHeader(Push &push, bool indexed)
 {
     *push.at++ = Push::hdr(5, SUBC_3D, kMacroCall + 8 * (indexed ? kIcbDrawIndexed : kIcbDraw), indexed ? 6 : 5);
+}
+
+// A dispatch command's gate: its index is the call's one data word
+inline void icbGateHeader(Push &push)
+{
+    *push.at++ = Push::hdr(5, SUBC_3D, kMacroCall + 8 * kIcbGate, 1);
 }
 
 // The range a CPU execute names, written as the scratch words themselves

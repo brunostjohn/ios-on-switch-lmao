@@ -2,8 +2,9 @@
 // MTLIndirectCommandBuffer of draws that inherit their pipeline and buffers (raw_icb.h): the commands are push words in
 // write-combined GPU memory, written as the CPU encodes each, and a render encoder's executeCommandsInBuffer:withRange:
 // runs the range by reference after one prepare of the state they inherit. Commands that set their own pipeline, buffers or
-// raster state, compute dispatches and patches have no form here: such a descriptor's creation is nil.
-#import "RawMetalIndirect.h"
+// raster state, and patches, have no form here: such a descriptor's creation is nil. A descriptor of dispatches makes a
+// buffer of them (RawMetalIndirectCompute.mm).
+#import "RawMetalIndirectCompute.h"
 #include "raw_icb.h"
 
 namespace {
@@ -14,10 +15,15 @@ enum PrimitiveKinds : uint8_t {
     KindOthers = 2
 };
 
+constexpr NSUInteger kDispatchTypes =
+    MTLIndirectCommandTypeConcurrentDispatch | MTLIndirectCommandTypeConcurrentDispatchThreads;
+
 const char *unsupportedDescriptor(MTLIndirectCommandBufferDescriptor *d)
 {
-    if (d.commandTypes & ~NSUInteger(MTLIndirectCommandTypeDraw | MTLIndirectCommandTypeDrawIndexed))
-        return "patches, dispatches or mesh draws";
+    if (d.commandTypes & ~NSUInteger(MTLIndirectCommandTypeDraw | MTLIndirectCommandTypeDrawIndexed | kDispatchTypes))
+        return "patches or mesh draws";
+    if (d.commandTypes & kDispatchTypes)
+        return nullptr;
     if (!d.inheritPipelineState || !d.inheritBuffers)
         return "commands that set their own pipeline or buffers";
     for (NSString *inherits : @[
@@ -267,7 +273,9 @@ void writeSlot(RMIndirectCommandBuffer *b, NSUInteger index, const RMICBCommand 
         [(id)source isKindOfClass:[RMIndirectCommandBuffer class]] ? (RMIndirectCommandBuffer *)source : nil;
     RMIndirectCommandBuffer *to =
         [(id)destination isKindOfClass:[RMIndirectCommandBuffer class]] ? (RMIndirectCommandBuffer *)destination : nil;
-    if (!from || !to || NSMaxRange(range) > from->_count || index + range.length > to->_count) {
+    if (!from || !to || NSMaxRange(range) > from->_count || index + range.length > to->_count ||
+        [(id)from isKindOfClass:[RMIndirectComputeBuffer class]] !=
+            [(id)to isKindOfClass:[RMIndirectComputeBuffer class]]) {
         SWITCH_REFUSE("raw", "icb.range", "copyIndirectCommandBuffer: a buffer not this device's or a range past one");
         return;
     }
@@ -303,6 +311,8 @@ void writeSlot(RMIndirectCommandBuffer *b, NSUInteger index, const RMICBCommand 
         SWITCH_REFUSE_DETAIL("raw", "icb.descriptor", uintptr_t(why), "indirect command buffer of %s: nil", why);
         return nil;
     }
+    if (d.commandTypes & kDispatchTypes)
+        return rmNewComputeCommandBuffer(self, d, count);
     RMIndirectCommandBuffer *b = [RMIndirectCommandBuffer new];
     b->_device = self;
     b->_count = count;
@@ -353,9 +363,9 @@ void writeSlot(RMIndirectCommandBuffer *b, NSUInteger index, const RMICBCommand 
     SWITCH_API(ApiDraw);
     RMIndirectCommandBuffer *b =
         [(id)buffer isKindOfClass:[RMIndirectCommandBuffer class]] ? (RMIndirectCommandBuffer *)buffer : nil;
-    if (!b || !count || first + count > b->_count) {
+    if (!b || [(id)b isKindOfClass:[RMIndirectComputeBuffer class]] || !count || first + count > b->_count) {
         SWITCH_REFUSE("raw", "icb.range",
-                      "executeCommandsInBuffer: a buffer not this device's or a range past it: none run");
+                      "executeCommandsInBuffer: a buffer of draws not this device's or a range past it: none run");
         return;
     }
     const uint8_t kinds = [b kinds];
@@ -400,6 +410,10 @@ bool encodeCommands(raw::RenderEncoder *re, raw::CommandBuffer *rc, const RMPlan
 
 void encodeCommandsBlit(raw::BlitEncoder *be, const Cmd &c)
 {
+    if ([(__bridge id)c.obj2 isKindOfClass:[RMIndirectComputeBuffer class]]) {
+        encodeKernelCommandsBlit(be, c);
+        return;
+    }
     RMIndirectCommandBuffer *from = (__bridge RMIndirectCommandBuffer *)c.obj;
     RMIndirectCommandBuffer *to = (__bridge RMIndirectCommandBuffer *)c.obj2;
     constexpr uint64_t kSlotBytes = raw::icb::kSlotWords * 4;
@@ -468,32 +482,12 @@ void replayCommands(id<MTLRenderCommandEncoder> encoder, const RMPlanDraw &draw,
 }
 
 // Every draw a command of a buffer makes takes the encoder's pipeline (the buffer inherits it), so any render state draws
-// one; no compute buffer is made (its descriptor's creation is nil), so no compute state runs from one
+// one
 @implementation RMPipeline (Indirect)
 
 - (BOOL)supportIndirectCommandBuffers
 {
     return YES;
-}
-
-@end
-
-@implementation RMComputeEncoder (Indirect)
-
-- (void)executeCommandsInBuffer:(id<MTLIndirectCommandBuffer>)buffer withRange:(NSRange)range
-{
-    (void)buffer, (void)range;
-    SWITCH_REFUSE("raw", "icb.compute",
-                  "executeCommandsInBuffer: on a compute encoder: no buffer of dispatches is made");
-}
-
-- (void)executeCommandsInBuffer:(id<MTLIndirectCommandBuffer>)buffer
-                 indirectBuffer:(id<MTLBuffer>)range
-           indirectBufferOffset:(NSUInteger)offset
-{
-    (void)buffer, (void)range, (void)offset;
-    SWITCH_REFUSE("raw", "icb.compute",
-                  "executeCommandsInBuffer: on a compute encoder: no buffer of dispatches is made");
 }
 
 @end
