@@ -8,12 +8,12 @@ import Metal
 /// binding its vertices, transform and zero uniforms by setBytes with a scissor of its own, `buffers` command buffers
 /// at each of two draw counts. Per command buffer at each count: the encode's wall time and its parts (us_<part>, and
 /// walk_us the loop's time outside every part), its events (mallocs, frees, locks, sends, uses, use_adds, descriptor
-/// builds and uploads, geometry vertices) and bindings applied per draw. A command buffer's mallocs, frees, locks and
-/// Objective-C sends must not grow with its draws, and every command buffer is the raw path's.
+/// builds and uploads, geometry vertices) and bindings applied per draw. A command buffer's mallocs, frees, locks,
+/// Objective-C sends and vertices the CPU read must not grow with its draws, and every command buffer is the raw path's.
 /// The profile is the facade's; a release runtime has none and the test skips.
 struct EncodeCostPathTest: HWTest {
     let id = "gpu.path.encode_cost"
-    let name = "A Core Animation shaped command buffer's encode by part, with no allocation, lock or message per draw"
+    let name = "A Core Animation shaped command buffer's encode by part, with no allocation, lock, message or vertex read per draw"
     var subsystem: Subsystem { .metal }
     static let width = 256, height = 256, passes = 6, drawCounts = [8, 16], buffers = 24, warmups = 20
 
@@ -26,7 +26,7 @@ struct EncodeCostPathTest: HWTest {
         "mallocs", "frees", "locks", "sends", "uses", "use_adds", "descriptor_builds", "descriptor_uploads",
         "geometry_vertices",
     ]
-    static let perDrawFree = ["mallocs", "frees", "locks", "sends"]
+    static let perDrawFree = ["mallocs", "frees", "locks", "sends", "geometry_vertices"]
 
     func run(_: TestContext) async throws -> Outcome {
         let gpu = try GPU.make()

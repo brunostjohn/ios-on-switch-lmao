@@ -4226,7 +4226,7 @@ bool RenderEncoder::drawIndexed(uint32_t primitive, uint32_t count, uint32_t ind
         return false;
     }
     // Metal's fetch (m2v render.rs draw_indexed_primitives, measured): the offset's low 32 bits rounded down to the index size,
-    // indices read up to the length rounded up to 4 bytes, index 0 at every position past that: drawn from a zero-padded copy
+    // indices read up to the length rounded up to 4 bytes, index 0 at every position past that
     offset = uint32_t(offset);
     offset -= offset % indexSize;
     const uint64_t fetchEnd = offset < ib->length ? (ib->length + 3) & ~uint64_t(3) : ib->length,
@@ -4234,7 +4234,28 @@ bool RenderEncoder::drawIndexed(uint32_t primitive, uint32_t count, uint32_t ind
     Buffer padded;
     drawIndexBuffer_ = ib;
     drawIndexCpuSafe_ = false;
-    if (count > inside) {
+    // the index fetch's last byte: the draw's last index where the buffer holds every one, else the buffer's fetch end
+    // with index 0 past it from the hardware, the zero page, or a padded copy
+    uint64_t indexLimit = uint64_t(count) * indexSize;
+#if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
+    if (const uint32_t probed = cb_->forms_.indexLimit) {
+        cb_->taken_.indexLimits++;
+        indexLimit = probed;
+        drawIndexBuffer_ = nullptr;
+    } else
+#endif
+    if (count > inside && !inside && uint64_t(count) * indexSize <= dev_->zero_.bytes) {
+        padded.va = dev_->zero_.va;
+        padded.cpu = dev_->zero_.cpu;
+        padded.length = dev_->zero_.bytes;
+        ib = &padded;
+        drawIndexCpuSafe_ = true;
+        drawIndexBuffer_ = nullptr;
+        offset = 0;
+    } else if (count > inside && dev_->indexZeroPastLimit) {
+        indexLimit = fetchEnd - offset;
+        drawIndexBuffer_ = nullptr;  // the CPU reads no index past the buffer's end (an unbounded draw)
+    } else if (count > inside) {
         if (inside && !cb_->acquireGeometry(*ib, ib->cpu + offset, inside * indexSize)) {
             *why = "index padding requires available CPU read ownership";
             cb_->refusal = {RefIndexedRange, uint32_t(offset), indexSize, count};
@@ -4260,7 +4281,7 @@ bool RenderEncoder::drawIndexed(uint32_t primitive, uint32_t count, uint32_t ind
     // cleaned conservatively below; WC vertices need no clean, and geometry reads have their own read lease.
     const uint8_t *at = ib->cpu + offset;
     if (ib->hostVisible && !ib->wc)
-        cb_->clean(at, uint64_t(count) * indexSize);
+        cb_->clean(at, std::min<uint64_t>(indexLimit, uint64_t(count) * indexSize));
     drawIndices_ = at;
     drawIndexSize_ = indexSize;
     drawIndexCount_ = count;
@@ -4289,7 +4310,7 @@ bool RenderEncoder::drawIndexed(uint32_t primitive, uint32_t count, uint32_t ind
         drawIndices_ = nullptr;
         if (!prepared)
             return false;
-        const uint64_t va = ib->va + offset, last = va + uint64_t(count) * indexSize - 1;
+        const uint64_t va = ib->va + offset, last = va + indexLimit - 1;
         if (va != ibVa_ || last != ibEnd_ || indexSize != ibSize_) {
             p_.inc(INDEX_BUFFER_A, {uint32_t(va >> 32), uint32_t(va), uint32_t(last >> 32), uint32_t(last)});
             p_.m(DA_PRIMITIVE_RESTART_INDEX, indexSize == 2 ? 0xffffu : 0xffffffffu);
