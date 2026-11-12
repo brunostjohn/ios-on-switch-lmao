@@ -77,6 +77,7 @@ struct Model {
     std::vector<Job> jobs;
     bool inFlight = false;  // jobs run until a kill
     unsigned refuse = 0;    // submissions refused from now, with `refusal`
+    uint64_t vaEnd = 0x100000000;  // GetInfo's client VA end: a raw::Device's program window needs 4 GiB of its quarter
     int refusal = kIOReturnNoResources;
     unsigned notResponding = 0;  // WaitFences answered kIOReturnNotResponding while GetStatus calls the channel healthy
     bool foreignTakesFreedSlot = false;
@@ -305,6 +306,7 @@ struct Model {
             endGeneration(set - 1);
         }
         bos.erase(it);
+        imports.erase(handle);
         for (auto bound = binds.begin(); bound != binds.end();)
             bound = bound->second.first == handle ? binds.erase(bound) : std::next(bound);
     }
@@ -375,7 +377,7 @@ extern "C" kern_return_t IOConnectCallStructMethod(mach_port_t, uint32_t method,
         info.cls_copy = 0xb0b5;
         info.cls_eng3d = 0xb197;
         info.va_start = 0x1000000;
-        info.va_end = uint64_t(1) << 40;
+        info.va_end = model.vaEnd;
         info.page_size = 4096;
         return KERN_SUCCESS;
     }

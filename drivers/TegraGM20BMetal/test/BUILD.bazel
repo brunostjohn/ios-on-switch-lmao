@@ -154,6 +154,8 @@
 #                     a packed state's draw opens no m2v device and runs its programs in place from the pack's pages;
 #                     an unpacked state, a reflection, a foreign sampler and a method only m2v's device class has each open
 #                     it once, naming what for
+#   raw_arena_trim_test  raw/runtime/raw_arena_trim.h: an idle heap kept non-volatile gives back the ranges no resource is
+#                     placed in, keeps the rest's contents, and binds a hole again at a placement into it
 #   raw_multisample_test  raw/runtime/raw_multisample.h, raw_sample_positions.h: a stored multisampled texture's header
 #                     (NIL's) and target (its sample grid), and a pass's sample layout at the standard positions or its
 #                     own, rounded as Metal samples them, as the methods NVK writes
@@ -2228,13 +2230,13 @@ host_test(
         "-Idrivers/NativeMetal",
     ],
     cxx_std = "c++17",
-    deps = ["//drivers/NativeMetal/abi:metal_abi"],
     linkopts = [
         "-framework",
         "Foundation",
         "-framework",
         "Metal",
     ],
+    deps = ["//drivers/NativeMetal/abi:metal_abi"],
 )
 
 host_test(
@@ -2322,13 +2324,13 @@ host_test(
         "-Idrivers/NativeMetal",
     ],
     cxx_std = "c++17",
-    deps = ["//drivers/NativeMetal/abi:metal_abi"],
     linkopts = [
         "-framework",
         "IOKit",
         "-framework",
         "CoreFoundation",
     ],
+    deps = ["//drivers/NativeMetal/abi:metal_abi"],
 )
 
 # The raw facade and runtime as //gpu:plugin builds them, for this Mac (raw_facade_harness.h): the facade's Objective-C++ units
@@ -2495,6 +2497,118 @@ host_test(
     sanitize = False,
     deps = [
         ":raw_facade_host",
+        ":raw_runtime_host",
+        "//kits/SwitchRefusal:switch_refusal",
+    ] + RAW_HOST_DEPS,
+)
+
+# hostsim's mock GM20B (mock_iokit.c), which interposes IOKit's calls for every image of a process that links it: NVK's too
+cc_binary(
+    name = "libmock_iokit.dylib",
+    testonly = True,
+    srcs = [
+        "//drivers/TegraGM20B:TegraGM20BABI.h",
+        "//drivers/TegraGM20BMetal:hostsim/mock_iokit.c",
+        "//drivers/TegraGM20BMetal:hostsim/mock_iokit.h",
+    ],
+    copts = ["-Idrivers/TegraGM20B"],
+    linkopts = [
+        "-framework",
+        "IOKit",
+        "-framework",
+        "CoreFoundation",
+    ],
+    linkshared = True,
+)
+
+objcxx_units(
+    name = "frontend_units",
+    testonly = True,
+    srcs = ["//drivers/NativeMetal:NativeBridgeMetalFrontend.mm"],
+)
+
+host_library(
+    name = "frontend_host",
+    srcs = [":frontend_units"],
+    additional_compiler_inputs = ["//drivers/NativeMetal:NativeBridgeMetalFrontend.mm"] + RAW_HOST_HEADERS,
+    copts = [
+        "-x",
+        "objective-c++",
+        "-fobjc-arc",
+        "-Wno-nullability-completeness",
+        "-Wno-nullability-completeness-on-arrays",
+    ] + RAW_HOST_COPTS,
+    cxx_std = "c++17",
+    sanitize = False,
+    deps = ["//drivers/NativeMetal/abi:metal_abi"],
+)
+
+# What the m2v device's open costs a client process (the frontend, the host bridge, NVK's host twin over the mock GM20B)
+host_test(
+    name = "m2v_open_footprint_test",
+    size = "medium",
+    srcs = [
+        "m2v_open_footprint_test.cpp",
+        ":libmock_iokit.dylib",
+        "//drivers/TegraGM20BMetal:hostsim/mock_iokit.h",
+        "//gpu:bridge_darwin",
+    ] + RAW_HOST_HEADERS,
+    copts = [
+        "-x",
+        "objective-c++",
+        "-fobjc-arc",
+    ] + RAW_HOST_COPTS,
+    cxx_std = "c++17",
+    data = ["//gpu/nvk:host_dylib"],
+    env = {"SWITCH_NVK": "$(rootpath //gpu/nvk:host_dylib)"},
+    linkopts = [
+        "-framework",
+        "Foundation",
+        "-framework",
+        "Metal",
+        "-framework",
+        "IOSurface",
+        "-framework",
+        "IOKit",
+        "-framework",
+        "CoreFoundation",
+        "-lobjc",
+    ],
+    sanitize = False,
+    deps = [":frontend_host"],
+)
+
+# raw/runtime/raw_arena_trim.h: the ranges of a heap kept non-volatile that no resource is placed in, and raw::Device's
+# idle give-back of them over the kernel model: its placed parts imported again with their contents, the holes' pages
+# untouched, a placement into a hole bound again, a volatile heap purged instead
+host_test(
+    name = "raw_arena_trim_test",
+    srcs = [
+        "raw_arena_trim_test.cpp",
+        "raw_frontend_absent.cpp",
+        "raw_kernel_model.h",
+    ] + RAW_HOST_HEADERS,
+    copts = [
+        "-x",
+        "objective-c++",
+        "-fobjc-arc",
+    ] + RAW_HOST_COPTS,
+    cxx_std = "c++17",
+    linkopts = [
+        "-framework",
+        "Foundation",
+        "-framework",
+        "Metal",
+        "-framework",
+        "IOSurface",
+        "-framework",
+        "IOKit",
+        "-framework",
+        "CoreFoundation",
+        "-lobjc",
+    ],
+    sanitize = False,
+    deps = [
         ":raw_runtime_host",
         "//kits/SwitchRefusal:switch_refusal",
     ] + RAW_HOST_DEPS,

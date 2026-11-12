@@ -68,6 +68,7 @@ struct RawM2V {
     Class methods = nil;
     const char *(*answerSelector)(size_t index, uint32_t *kind) = nullptr;
 };
+
 // A raw device over the pack at `packPath` (its stack key must be `stack`; 0: any, for host tests), an _MTLDevice of its
 // own, answering registryID with `registryID`; m2v's device is opened through `m2v` at its first need. Nil: the reason in
 // *error.

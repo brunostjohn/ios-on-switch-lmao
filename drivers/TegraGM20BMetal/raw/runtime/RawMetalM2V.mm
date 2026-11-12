@@ -101,6 +101,15 @@ id<MTLDevice> rmM2V(const char *need)
 }
 
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
+std::string rmM2VState()
+{
+    Needs &n = needs();
+    std::lock_guard<std::mutex> l(n.lock);
+    if (!n.opens)
+        return "m2v device never opened";
+    return "m2v device opened for " + n.opener + " in " + std::to_string(n.openUs / 1000) + " ms";
+}
+
 id<MTLDevice> rmM2VFor(const char *need, std::atomic<bool> &said)
 {
     if (!said.exchange(true, std::memory_order_relaxed))
@@ -174,7 +183,8 @@ void installM2VForwarders(Class cls, const RawM2V &m2v)
 
 - (void)doesNotRecognizeSelector:(SEL)selector
 {
-    SWITCH_REFUSE_DETAIL("raw", "device.selector", uintptr_t(selector), "-[MTLDevice %s]: no method", sel_getName(selector));
+    SWITCH_REFUSE_DETAIL("raw", "device.selector", uintptr_t(selector), "-[MTLDevice %s]: no method",
+                         sel_getName(selector));
     const IMP base = class_getMethodImplementation(class_getSuperclass(object_getClass(self)), _cmd);
     reinterpret_cast<void (*)(id, SEL, SEL)>(base)(self, _cmd, selector);
 }

@@ -64,6 +64,7 @@
 #include "raw_channel_recovery.h"
 #include "raw_fence.h"
 #include "raw_host_access.h"
+#include "raw_arena_trim.h"
 #include "raw_heap.h"
 #include "raw_order.h"
 #include "raw_variants.h"
@@ -1445,11 +1446,14 @@ public:
     bool arenaPurged(uint32_t arena);
     // Fresh pages where it was (their contents zero); false: no memory, it stays purged
     bool restoreArena(uint32_t arena);
+    // The idle give-back of the arenas kept non-volatile: as purgeArenas judges a purge (nothing in flight or committed, no
+    // m2v view), the ranges no resource is placed in go back (raw_arena_trim.h); their contents stay
+    void trimArenas(const std::atomic<uint32_t> &committed);
 
     uint64_t arenaBytes();  // bound: purged arenas' are not
     // Of arenaBytes, what their resources are placed in (the rest holds no resource: what an idle give-back could return
     // of a heap kept non-volatile) and what is in heaps made volatile
-    void arenaUse(uint64_t &placed, uint64_t &volatileBytes);
+    void arenaUse(uint64_t &placed, uint64_t &volatileBytes, uint64_t *givenBack = nullptr);
 
     uint32_t purgedArenas() const
     {
@@ -2088,11 +2092,21 @@ private:
         HeapPlacement place;
         uint32_t leases = 0;  // m2v views of its resources (raw_alias.cpp): never purged or freed under one
         bool used = false, isVolatile = false, purged = false, dying = false;
+        // trimmed (raw_arena_trim.h): `bo` is empty, its pages are bound as `parts` (each with its offset), and `holes`
+        // are unbound, their host pages untouched
+        std::vector<std::pair<uint64_t, Bo>> parts;
+        std::vector<ArenaRange> holes;
     };
 
     std::vector<Arena> arenas_;
     std::atomic<uint32_t> purgedArenas_{0};
     bool bindArena(Arena &a);  // lock_ held
+    // lock_ held: [offset, offset + bytes) of `a`'s host range imported and bound at its VAs as one more part
+    bool bindArenaPart(Arena &a, uint64_t offset, uint64_t bytes);
+    void unbindArena(Arena &a);  // lock_ held: its import, whole or in parts, freed
+    void trimLocked(Arena &a, const std::atomic<uint32_t> &committed);
+    // lock_ held: the holes a placement of [offset, offset + bytes) reaches bound again; false: no memory for them
+    bool backPlacement(Arena &a, uint64_t offset, uint64_t bytes);
     void purgeLocked(Arena &a, const std::atomic<uint32_t> &committed);
     void freeArena(Arena &a);  // lock_ held
     void arenaFree(Span &s);   // lock_ held

@@ -100,13 +100,13 @@ void packedDraw()
     }
 
     char line[256];
-    snprintf(line, sizeof line,
-             "phys_footprint start %llu KB, raw device open %+lld KB, packed draw %+lld KB; currentAllocatedSize %llu KB; "
-             "%s",
-             (unsigned long long)(atStart >> 10), (long long)(int64_t(atOpen) - int64_t(atStart)) / 1024,
-             (long long)(int64_t(atDraw) - int64_t(atOpen)) / 1024,
-             (unsigned long long)(device.currentAllocatedSize >> 10),
-             [[held.description stringByReplacingOccurrencesOfString:@"\n" withString:@" "] UTF8String]);
+    snprintf(
+        line, sizeof line,
+        "phys_footprint start %llu KB, raw device open %+lld KB, packed draw %+lld KB; currentAllocatedSize %llu KB; "
+        "%s",
+        (unsigned long long)(atStart >> 10), (long long)(int64_t(atOpen) - int64_t(atStart)) / 1024,
+        (long long)(int64_t(atDraw) - int64_t(atOpen)) / 1024, (unsigned long long)(device.currentAllocatedSize >> 10),
+        [[held.description stringByReplacingOccurrencesOfString:@"\n" withString:@" "] UTF8String]);
     note("packed_draw", line);
 }
 
@@ -126,9 +126,9 @@ void reflection()
     MTLAutoreleasedRenderPipelineReflection reflected = nil;
     NSError *error = nil;
     id<MTLRenderPipelineState> state = [device newRenderPipelineStateWithDescriptor:descriptor(library, kPacked)
-                                                                             options:MTLPipelineOptionArgumentInfo
-                                                                          reflection:&reflected
-                                                                               error:&error];
+                                                                            options:MTLPipelineOptionArgumentInfo
+                                                                         reflection:&reflected
+                                                                              error:&error];
     EXPECT_TRUE(state != nil) << text(error);
     expectOpenedFor(device, "a render state's twin with its reflection");
 }
@@ -167,14 +167,21 @@ void ownDevice()
     EXPECT_TRUE([(id)device conformsToProtocol:@protocol(MTLDevice)]);
     EXPECT_EQ(device.registryID, kRegistryID);
     // fields no driver answers (m2v's device class had no method for them either): the base class's own value
-    const std::set<std::string> unanswered = {
-        "linearTextureArrayAlignmentBytes", "linearTextureArrayAlignmentSlice", "maxTileInlineDataSize",
-        "minTilePixels", "maxLineWidth", "maxPointSize", "padmaxBufferLength", "maxTessellationFactor",
-        "maxIOCommandsInFlight", "maxAccelerationStructureLevels"};
+    const std::set<std::string> unanswered = {"linearTextureArrayAlignmentBytes",
+                                              "linearTextureArrayAlignmentSlice",
+                                              "maxTileInlineDataSize",
+                                              "minTilePixels",
+                                              "maxLineWidth",
+                                              "maxPointSize",
+                                              "padmaxBufferLength",
+                                              "maxTessellationFactor",
+                                              "maxIOCommandsInFlight",
+                                              "maxAccelerationStructureLevels"};
     for (const LimitField &field : kLimitFields) {
         const SEL sel = sel_registerName(field.selector);
         Method own = class_getInstanceMethod(cls, sel), inherited = class_getInstanceMethod(base, sel);
-        const bool answered = own && (!inherited || method_getImplementation(own) != method_getImplementation(inherited));
+        const bool answered =
+            own && (!inherited || method_getImplementation(own) != method_getImplementation(inherited));
         EXPECT_EQ(answered, !unanswered.count(field.selector)) << field.selector;
     }
     EXPECT_EQ(gOpens, 0);

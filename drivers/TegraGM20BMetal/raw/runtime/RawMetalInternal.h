@@ -168,11 +168,11 @@ struct RMRawRetirement {
 struct RawState {
     raw::Device *raw = nullptr;
     std::shared_ptr<raw::SharedEvents> sharedEvents;
-    RawM2V m2v;               // how the m2v device is opened (RawMetalM2V.mm)
-    id<MTLDevice> fallback;   // the m2v device, once opened: read it through rmM2V or rmM2VIfOpen
+    RawM2V m2v;              // how the m2v device is opened (RawMetalM2V.mm)
+    id<MTLDevice> fallback;  // the m2v device, once opened: read it through rmM2V or rmM2VIfOpen
     std::atomic<bool> m2vOpened{false};
     uint64_t registryID = 0;
-    id device;                // the raw device object
+    id device;  // the raw device object
     std::mutex schedule;
     std::mutex eventValues;
     raw::EventTimeline events;
@@ -218,6 +218,8 @@ id<MTLDevice> rmM2V(const char *need);
 id<MTLDevice> rmM2VIfOpen();
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
 id<MTLDevice> rmM2VFor(const char *need, std::atomic<bool> &said);
+// "m2v device never opened", or what opened it and in how long: the give-back line's
+std::string rmM2VState();
 #define RM_M2V(need)                          \
     ([]() -> id<MTLDevice> {                  \
         static std::atomic<bool> said{false}; \

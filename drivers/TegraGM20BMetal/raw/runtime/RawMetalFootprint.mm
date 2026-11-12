@@ -132,25 +132,27 @@ void logGivenBack(size_t relieved)
     const int64_t rest = f.internal - f.alternate - int64_t(heap.size_allocated) - pool - copies;
     const int64_t iokitClaimed = int64_t(d.wcChunkBytesHeld() + d.controlMappedBytes() + m2v[0]);
     const StoreRegion store = storeRegion();
-    uint64_t arenaPlaced = 0, arenaVolatile = 0;
-    d.arenaUse(arenaPlaced, arenaVolatile);
+    uint64_t arenaPlaced = 0, arenaVolatile = 0, arenaGiven = 0;
+    d.arenaUse(arenaPlaced, arenaVolatile, &arenaGiven);
     os_log(
         rawLog(),
         "raw: idle memory given back: footprint %llu KB = internal %llu KB (malloc %llu KB in use of %llu, raw pool "
-        "%llu KB in %llu chunks with heaps %llu KB (%llu KB placed, %llu KB volatile), shader heap copies %llu KB, "
+        "%llu KB in %llu chunks with heaps %llu KB (%llu KB placed, %llu KB volatile, %llu KB given back), shader heap "
+        "copies %llu KB, "
         "neither malloc's "
         "nor the raw device's %llu KB) + compressed %llu KB + IOKit %llu KB (raw write-combined %llu KB, raw tables "
         "and rings %llu KB, m2v "
         "GPU memory %llu KB, no owner %llu KB; %llu KB of it internal too) + purgeable %llu KB + page tables %llu "
         "KB%s; shader heap in place %llu KB (file pages: no footprint); compiler store mapped %llu KB (external pager "
-        "%d, resident %llu KB); malloc gave back %llu KB",
+        "%d, resident %llu KB); malloc gave back %llu KB; %{public}s",
         kb(f.footprint), kb(f.internal - f.alternate), kb(int64_t(heap.size_in_use)), kb(int64_t(heap.size_allocated)),
         kb(pool), (unsigned long long)d.stats.poolChunks.load(), kb(int64_t(d.arenaBytes())), kb(int64_t(arenaPlaced)),
-        kb(int64_t(arenaVolatile)), kb(copies), kb(rest),
+        kb(int64_t(arenaVolatile)), kb(int64_t(arenaGiven)), kb(copies), kb(rest),
         kb(f.compressed - f.alternateCompressed), kb(f.iokit), kb(int64_t(d.wcChunkBytesHeld())),
         kb(int64_t(d.controlMappedBytes())), kb(int64_t(m2v[0])), kb(f.iokit - iokitClaimed),
         kb(f.alternate + f.alternateCompressed), kb(f.purgeable), kb(f.pageTable),
         ledgered ? "" : " (no ledger: IOKit counts page tables too)", kb(int64_t(d.heapInPlaceBytes())),
-        kb(int64_t(store.mapped)), int(store.external), kb(int64_t(store.resident)), kb(int64_t(relieved)));
+        kb(int64_t(store.mapped)), int(store.external), kb(int64_t(store.resident)), kb(int64_t(relieved)),
+        rmM2VState().c_str());
 }
 #endif

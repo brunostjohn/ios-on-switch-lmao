@@ -94,9 +94,10 @@ API_AVAILABLE(ios(18.0), macos(15.0))
     (void)functions;
     SWITCH_REFUSE("raw", "library.dag", "function stitching (DAG) refused, as m2v refuses it");
     if (error)
-        *error = [NSError errorWithDomain:@"org.blu-sharky.native-metal"
-                                     code:-1
-                                 userInfo:@{NSLocalizedDescriptionKey : @"function stitching (DAG) is not implemented"}];
+        *error =
+            [NSError errorWithDomain:@"org.blu-sharky.native-metal"
+                                code:-1
+                            userInfo:@{NSLocalizedDescriptionKey : @"function stitching (DAG) is not implemented"}];
     return nil;
 }
 

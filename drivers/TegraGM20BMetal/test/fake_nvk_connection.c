@@ -6,7 +6,7 @@
 #include <stdint.h>
 
 __attribute__((visibility("default"))) bool switch_nvk_connection(uint32_t *conn, bool *tunnel, uint32_t *selector,
-                                                                   uint64_t *va_start, uint64_t *va_end)
+                                                                  uint64_t *va_start, uint64_t *va_end)
 {
     *conn = 42;
     *tunnel = false;

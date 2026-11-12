@@ -37,6 +37,7 @@ protected:
     void SetUp() override
     {
         kernel_model::model = {};
+        kernel_model::model.vaEnd = uint64_t(1) << 40;  // the program window's quarter of the client VA
         std::string err;
         ASSERT_TRUE(dev.open(emptyPack().c_str(), 0, err, raw::Device::Role::Client)) << err;
     }
