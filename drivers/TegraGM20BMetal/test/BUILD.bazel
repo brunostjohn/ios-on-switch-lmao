@@ -674,6 +674,7 @@ host_test(
     srcs = [
         "raw_descriptors_test.cpp",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_descriptors.h",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_spill_table.h",
     ],
     cxx_std = "c++17",
 )
