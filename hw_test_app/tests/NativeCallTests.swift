@@ -8,5 +8,6 @@ enum NativeCallTests {
         NativeSharedTextureTest(),
         NativeComputeCommandsTest(),
         NativeCountersTest(),
+        NativeCounterObjectsTest(),
     ]
 }

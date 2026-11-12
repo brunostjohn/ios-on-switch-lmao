@@ -169,6 +169,7 @@ TESTS: dict[str, bool] = {
             'metal.native.indirect_commands',
             'metal.native.compute_commands',
             'metal.native.counters',
+            'metal.native.counter_objects',
             'metal.native.shared_texture',
         ],
         False,
