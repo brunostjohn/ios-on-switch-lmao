@@ -72,6 +72,11 @@ class StateKeyTest(unittest.TestCase):
         line = LINKED + 'cubic s0:0000n  t0:80 | '
         self.assertEqual(rawpack.state_key(line), rawpack.state_key(LINKED) + ' | cubic s0:0000n t0:80')
 
+    def test_a_written_variant_is_keyed_last(self):
+        # raw_written_textures.h writtenVariant after the sampled two-plane slots, as RawMetalCubic.mm names the variant
+        line = LINKED + 'wtex=1:23 | xrs=2 | '
+        self.assertEqual(rawpack.state_key(line), rawpack.state_key(LINKED) + ' | xrs=2 | wtex=1:23')
+
 
 class ProbeLogTest(unittest.TestCase):
     def test_an_empty_submission_is_no_probes(self):

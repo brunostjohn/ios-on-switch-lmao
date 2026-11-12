@@ -84,9 +84,11 @@ CompileOutcome Direct::form(MTLRenderPipelineDescriptor *descriptor, bool barrie
         cubic.push_back({c.slot, c.s, c.t, c.r, c.border, c.normalized});
     for (const CubicBinds::Texture &t : textures.cubic.textures)
         formats.push_back({t.slot, t.format});
+    for (const WrittenTexture &t : textures.written)
+        formats.push_back({t.slot, t.format});
     const NmbDirectBinds binds = {cubic.data(), uint32_t(cubic.size()), formats.data(), uint32_t(formats.size()),
                                   textures.fragmentTests, textures.twoPlane};
-    const bool plain = textures.cubic.empty() && !textures.fragmentTests && !textures.twoPlane;
+    const bool plain = formats.empty() && cubic.empty() && !textures.fragmentTests && !textures.twoPlane;
     const char *refused = nullptr;
     if (!native_bridge_metal_render_direct(descriptor, barrier, textures.format, textures.samples, plain ? nullptr : &binds,
                                            made, &a, &refused)) {
@@ -94,6 +96,10 @@ CompileOutcome Direct::form(MTLRenderPipelineDescriptor *descriptor, bool barrie
         return refused && !strncmp(refused, "retry: ", 7) ? CompileOutcome::Failed : CompileOutcome::Refused;
     }
     why = a.why;
+    if (a.outcome == CompileOutcome::Made && !compiledFor(out.pipeline, textures.written)) {
+        why = "a written texture's variant m2v compiled for another format than the one bound";
+        return CompileOutcome::Refused;
+    }
     return a.outcome;
 }
 

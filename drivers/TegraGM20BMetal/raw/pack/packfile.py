@@ -9,14 +9,17 @@ MAGIC = b'GM20BPK1'
 # data and constant buffer types; 6: compute kernels (runtime/raw_pack.h PackKernel); 8: a texture3d entry's Metal
 # index; 9: split fragment programs (PackSplit); 10: dynamic blend push fields; 11: qualified ordered storage views;
 # 15: program variants, programs' register counts and bound-texture slots, the uniform table, fetch rungs, chip facts,
-# binary archives' declared states
-VERSION = 15
+# binary archives' declared states; 22: the formats a state's written textures were compiled for
+VERSION = 22
 SECTIONS = 12  # runtime/raw_pack.h PackSectionCount
 KERNEL_ENTRIES = 16  # PackKernel.entry's length
 PROGRAM_CBUFS = 11  # PackProgram.cbufType's length (runtime/raw_pack.h)
 # PackPipeline's record-v15 tail: variants, variantCount[2], storageBlendMask, storageBlendModel, boundEntries,
 # uniform[8], fetchRung[8], variantName
 PIPELINE_V15 = struct.Struct('<IBBBBI32s8sI')
+# PackPipeline's record-v22 tail: writtenFormat[16], by fragment texture slot
+WRITTEN_SLOTS = 16
+PIPELINE_V22 = struct.Struct(f'<{WRITTEN_SLOTS}H')
 NO_UNIFORM = b'\xff\x00\x00\x00' * 8
 
 
@@ -88,8 +91,9 @@ def push_bytes(push: list[tuple[int, int]]) -> bytes:
     return struct.pack('<I32I', mask, *words)
 
 
-# A key's variant name (runtime/raw_pack.h variantNameAt): " | cubic ...", " | tests=<n>", " | xr2p", " | xrs=<slots>" at its end
-VARIANT_NAME = re.compile(r'( \| cubic [^|]*?)?( \| tests=\d+)?( \| xr2p)?( \| xrs=\d+)?$')
+# A key's variant name (runtime/raw_pack.h variantNameAt): " | cubic ...", " | tests=<n>", " | xr2p", " | xrs=<slots>",
+# " | wtex=<slot>:<format>,..." at its end
+VARIANT_NAME = re.compile(r'( \| cubic [^|]*?)?( \| tests=\d+)?( \| xr2p)?( \| xrs=\d+)?( \| wtex=[\d:,]+)?$')
 
 
 def variant_name(key: str) -> str:
@@ -223,7 +227,8 @@ def pipeline_bytes(rec: dict, key_offset: int, blob_off: int, variants_off: int 
         bytes(rec.get('fetch_rung', [0] * 8)),
         name_offset,
     )
-    return head + entry_bytes(rec['entries']) + push_bytes(rec['push']) + dynamic + storage + tests + v15
+    v22 = PIPELINE_V22.pack(*rec.get('written_format', [0] * WRITTEN_SLOTS))
+    return head + entry_bytes(rec['entries']) + push_bytes(rec['push']) + dynamic + storage + tests + v15 + v22
 
 
 def kernel_window(e: dict) -> int:

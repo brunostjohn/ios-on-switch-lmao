@@ -263,6 +263,13 @@ bool layout(const DirectNvk &nvk, void *device, const NmbDirectDraw &d, std::vec
                 // the direct compile binds a 3D texture at each texture3d argument (NativeMetalDirect.rs volume_slots)
                 e.tex = w.viewType == kViewType3D ? Tex::Texture3D : Tex::Slot;
                 e.texSlot = uint8_t(w.slot);
+                if (w.type == StorageImage && e.tex == Tex::Slot) {
+                    if (!w.format) {
+                        why = "a storage texture at fragment slot " + std::to_string(w.slot) + " of no format";
+                        return false;
+                    }
+                    e.writtenFormat = uint16_t(w.format);
+                }
             } else {
                 e.tex = Tex::Unknown;
             }

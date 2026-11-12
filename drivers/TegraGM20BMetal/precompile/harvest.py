@@ -140,11 +140,13 @@ def _normal_render(line: str) -> tuple[str | None, str | None]:
         return None, None
     # The functions the state links follow its stages (the frontend's linkedText: " | <vl|vp|fl|fp> <stage>"), then
     # the cubic samplers' binds of a state's variant (" | cubic ...", raw_cubic.h), then the slots its sampled two-plane
-    # variant reads two-plane textures at (" | xrs=<slots>", raw_xr_pass.h)
+    # variant reads two-plane textures at (" | xrs=<slots>", raw_xr_pass.h), then the formats its written variant stores
+    # (" | wtex=<slot>:<format>,...", raw_written_textures.h)
     while end >= 0 and (
         line[end + 3 : end + 6] in ('vl ', 'vp ', 'fl ', 'fp ')
         or line[end + 3 : end + 9] == 'cubic '
         or line[end + 3 : end + 7] == 'xrs='
+        or line[end + 3 : end + 8] == 'wtex='
     ):
         end = line.find(' | ', end + 3)
     head = line[:v].split()

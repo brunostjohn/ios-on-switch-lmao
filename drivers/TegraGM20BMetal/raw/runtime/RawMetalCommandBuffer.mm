@@ -138,8 +138,10 @@ static void giveRecording(RMCommandBuffer *b)
                                                             (raw::bufferStorage(entry) ? raw::ResourceUse::Write : 0))});
                             } else if ((entry.kind == raw::EntryTexture || entry.kind == raw::EntryTexture3d) &&
                                        entry.slot < 31) {
+                                const bool written = entry.slot < 16 && (native->writtenSlots >> entry.slot & 1);
                                 bound.push_back({_plan.textures[1][state.textures[1]].objects[entry.slot],
-                                                raw::ResourceUse::Read | raw::ResourceUse::Sample});
+                                                uint8_t(raw::ResourceUse::Read | raw::ResourceUse::Sample |
+                                                        (written ? raw::ResourceUse::Write : 0))});
                             }
                             if ((entry.kind == raw::EntryTexture || entry.kind == raw::EntryTexture3d ||
                                  entry.kind == raw::EntrySamplerOnly) &&

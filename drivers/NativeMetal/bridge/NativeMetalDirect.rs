@@ -80,6 +80,7 @@ pub struct NmbDirectWrite {
     pub sampler: u32,
     pub range: u64,
     pub view_type: i32,
+    pub format: u32,
 }
 
 #[repr(C)]
@@ -484,6 +485,18 @@ fn probe_state(
     state
 }
 
+/// The MTLPixelFormat of the texture the probe bound for fragment texture write `w` (0: none of its own), which the stage's
+/// accesses of a storage texture were compiled for
+fn probed_format(state: &BindState, w: &NmbDirectWrite) -> u32 {
+    if w.stage != 2 || !matches!(w.source, NmbDirectSource::Texture | NmbDirectSource::Combined) {
+        return 0;
+    }
+    match state.stages.get(&Stage::Fragment).and_then(|table| table.textures.get(&w.slot)) {
+        Some(BoundTexture::Texture { facts, .. }) => facts.pixel_format.as_raw(),
+        _ => 0,
+    }
+}
+
 const PROBE_DRAW: DrawCall = DrawCall::Primitives {
     vertex_start: 0,
     vertex_count: 4,
@@ -514,6 +527,7 @@ pub(crate) fn write_of(w: &metal2vulkan::bind::DescriptorWrite, ranges: &[Descri
         sampler: 0,
         range: 0,
         view_type: -1,
+        format: 0,
     };
     let sampler_of = |s: &SamplerSource| match s {
         SamplerSource::Slot { slot, .. } => slot.index,
@@ -862,15 +876,12 @@ pub unsafe extern "C" fn nmb_render_pipeline_direct(
             .map_err(compile_error("compile"))?;
         let declared = declared_slots(&base);
         let mut variants = vec![(VariantKey::new(), base)];
+        let states: Vec<BindState> = (0..RUN_BYTES.len())
+            .map(|run| probe_state(run, format, texture_samples.max(1), &declared, &binds))
+            .collect();
         let mut runs = Vec::with_capacity(RUN_BYTES.len());
-        for run in 0..RUN_BYTES.len() {
-            runs.push(settle(
-                compile,
-                &descriptor,
-                &mut variants,
-                &probe_state(run, format, texture_samples.max(1), &declared, &binds),
-                &budget,
-            )?);
+        for state in &states {
+            runs.push(settle(compile, &descriptor, &mut variants, state, &budget)?);
         }
         // SAFETY: the runtime device's own handles, used while it lives.
         let handles = unsafe { runtime.raw() };
@@ -880,12 +891,17 @@ pub unsafe extern "C" fn nmb_render_pipeline_direct(
             .collect::<Result<Vec<_>, String>>()?;
         let writes: Vec<Vec<NmbDirectWrite>> = runs
             .iter()
-            .map(|run| {
+            .zip(&states)
+            .map(|(run, state)| {
                 run.plan
                     .descriptors
                     .iter()
                     .take(MAX_WRITES)
-                    .map(|w| write_of(w, &run.commands.descriptor_ranges))
+                    .map(|w| {
+                        let mut out = write_of(w, &run.commands.descriptor_ranges);
+                        out.format = probed_format(state, &out);
+                        out
+                    })
                     .collect()
             })
             .collect();

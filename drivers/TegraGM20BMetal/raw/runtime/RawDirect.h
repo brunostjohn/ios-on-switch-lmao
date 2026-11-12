@@ -11,6 +11,7 @@
 #include "raw_compute_record.h"
 #include "raw_cubic.h"
 #include "raw_direct.h"
+#include "raw_written_textures.h"
 
 namespace raw {
 
@@ -42,6 +43,8 @@ struct ProbeTextures {
     uint8_t fragmentTests = 0;
     bool twoPlane = false;  // its RGB10A8_2P_XR10 colours in their two planes (raw_xr_pass.h: its " | xr2p" variant)
     uint16_t xrSlots = 0;   // fragment slots it samples two-plane RGB10A8_2P_XR10 at (its " | xrs=" variant)
+    // the formats of the textures it writes at these slots (raw_written_textures.h: its " | wtex=" variant)
+    std::vector<WrittenTexture> written;
 };
 
 class Direct {
