@@ -125,7 +125,7 @@ Completion::~Completion()
 // one's. False: a function the raw path cannot name the AIR of (made from no metallib's bytes, or not one of them)
 bool Completion::keyOf(Ask &a, CacheKey &k)
 {
-    if (!renderCacheKey(a.descriptor, a.key, a.own, stack_, k))
+    if (!renderCacheKey(a.facade ?: a.descriptor, a.key, a.own, stack_, k, a.facade ? rmFunctionSource : nullptr))
         return false;
     a.key = k.key;
     return true;
@@ -157,10 +157,6 @@ void Completion::request(Ask asked, std::shared_ptr<Pending> pending)
             return;
         }
         Ask a = asked;
-        if (a.resolveDescriptor) {
-            a.descriptor = twinDescriptor(a.descriptor);
-            a.resolveDescriptor = false;
-        }
         CacheKey k;
         if (!keyOf(a, k)) {
             pending->ready(nullptr);
@@ -289,7 +285,9 @@ Compiler::Outcome Completion::make(const CacheKey &k, RuntimeRecord &record, std
 #if SWITCH_RAW_DIAGNOSTICS
     const CompileCost cost;
 #endif
-    const Compiler::Outcome outcome = direct().make(a.descriptor, a.key, record, why, textures);
+    // m2v's translation reads m2v's functions: the twins are made only for a state compiled in this process
+    MTLRenderPipelineDescriptor *twins = a.resolveDescriptor ? twinDescriptor(a.descriptor) : a.descriptor;
+    const Compiler::Outcome outcome = direct().make(twins, a.key, record, why, textures);
 #if SWITCH_RAW_DIAGNOSTICS
     os_log(
         rawLog(),

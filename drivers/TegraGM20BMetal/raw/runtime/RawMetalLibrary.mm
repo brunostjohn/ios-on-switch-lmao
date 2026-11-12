@@ -325,6 +325,24 @@ RMLibrary *readLibrary(id device, NSString *path, NSData *bytes)
     return l;
 }
 
+bool rmFunctionSource(id<MTLFunction> function, const void **bytes, size_t *length, NSString **name)
+{
+    if (![(id)function isKindOfClass:[RMFunction class]])
+        return false;
+    RMFunction *f = (RMFunction *)function;
+    if (f->_source && f->_source->bytes) {
+        *bytes = f->_source->bytes;
+        *length = f->_source->size;
+        *name = [NSString stringWithUTF8String:libraryName(f).c_str()];
+        return true;
+    }
+    id twin = f->_twin;
+    if (!native_bridge_metal_function_metallib(twin, bytes, length))
+        return false;
+    *name = native_bridge_metal_function_library_name(twin);
+    return true;
+}
+
 // The library function a function of this facade was made from, which the journal names (its name is a specialized one's)
 std::string libraryName(RMFunction *f)
 {

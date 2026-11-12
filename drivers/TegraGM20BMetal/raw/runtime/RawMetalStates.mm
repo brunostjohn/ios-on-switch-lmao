@@ -218,7 +218,8 @@ static void makeRecord(RMPipeline *p, MTLRenderPipelineDescriptor *d)
     if (p->_raw || !p->_completable || !gRM->completion)
         return;
     raw::Completion::Ask a;
-    a.descriptor = twinDescriptor(d);
+    a.descriptor = d;
+    a.resolveDescriptor = true;
     a.facade = d;
     a.key = p->_key;
     a.caTransform = p->_caTransform;
@@ -292,7 +293,7 @@ RMPipeline *rmPipelineFor(RMDevice *device, MTLRenderPipelineDescriptor *d, MTLP
     if (p->_packable) {
         p->_caTransform =
             vf->_framework == "QuartzCore" && [vf.name hasPrefix:@"fixed_vert_"] && [vf.name hasSuffix:@"_spc"];
-    } else if (p->_completable && raw::renderCacheKey(twinDescriptor(d), p->_key, true, 0, own)) {
+    } else if (p->_completable && raw::renderCacheKey(d, p->_key, true, 0, own, rmFunctionSource)) {
         packKey = raw::Pack::fnv(own.key.data(), own.key.size());  // another library's: under its functions' AIR too
         lookedUp = true;
     }

@@ -39,7 +39,9 @@ public:
     ~Completion();
 
     struct Ask {
-        MTLRenderPipelineDescriptor *descriptor;  // over m2v's functions, whose metallibs name their AIR
+        // over m2v's functions, or with resolveDescriptor the facade's, whose m2v twins are made only for a state
+        // compiled in this process (m2v's translation)
+        MTLRenderPipelineDescriptor *descriptor;
         std::string key;                          // the pack key
         bool caTransform = false;                 // Pipeline::caTransform
         // its functions are not a framework's default library's: no pack names the key, so the record is kept under the

@@ -272,6 +272,8 @@ RMLibrary *wrapLibrary(id device, id<MTLLibrary> twin, NSString *path);
 // A library of the metallib `bytes` (a file's at `path`, or data) read by the facade, with no m2v twin; nil: bytes it does
 // not read (m2v's library answers then)
 RMLibrary *readLibrary(id device, NSString *path, NSData *bytes);
+// raw::FunctionSource for the facade's functions (RawRenderKey.h): the AIR slice its library read, else its m2v twin's
+bool rmFunctionSource(id<MTLFunction> function, const void **bytes, size_t *length, NSString **name);
 std::string libraryName(RMFunction *f);
 
 // RawMetalStates.mm: a descriptor whose functions are this device's, over their m2v twins
