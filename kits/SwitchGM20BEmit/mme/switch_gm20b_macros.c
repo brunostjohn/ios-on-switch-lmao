@@ -27,6 +27,10 @@
 #include "../../SwitchGM20B/SwitchGM20BTegra.h"
 #include "../SwitchGM20BMacroSlots.h"
 
+/* LAUNCH_DMA of an inline-to-memory write into pitch memory, as NVK's vkCmdUpdateBuffer sends it */
+#define SWITCH_GM20B_I2M_LAUNCH \
+    (NVB197_LAUNCH_DMA_DST_MEMORY_LAYOUT_PITCH | NVB197_LAUNCH_DMA_SYSMEMBAR_DISABLE_TRUE << 6)
+
 /* mme_tu104.c's disassembler names Turing's methods; this tool builds Fermi macros and prints none */
 const char *P_PARSE_NVC597_MTHD(uint16_t idx)
 {
@@ -525,6 +529,118 @@ static void build_icb_gate(struct mme_builder *b, bool unused)
     mme_free_reg(b, inside);
 }
 
+/* NVK's nvk_mme_clear without a view mask: CLEAR_SURFACE's payload once a layer for `count` layers, its RT_ARRAY_INDEX one
+ * higher each time (a layered pass's clear; the count is at least one) */
+static void build_clear_layers(struct mme_builder *b, bool unused)
+{
+    (void)unused;
+    struct mme_value payload = mme_load(b);
+    struct mme_value count = mme_load(b);
+    mme_loop(b, count)
+    {
+        mme_mthd(b, NVB197_CLEAR_SURFACE);
+        mme_emit(b, payload);
+        mme_add_to(b, payload, payload, mme_imm(1u << DRF_LO(NVB197_CLEAR_SURFACE_RT_ARRAY_INDEX)));
+    }
+    mme_free_reg(b, count);
+    mme_free_reg(b, payload);
+}
+
+static void build_i2m_head(struct mme_builder *b, struct mme_value hi, struct mme_value lo, uint32_t bytes)
+{
+    mme_mthd(b, NVB197_OFFSET_OUT_UPPER);
+    mme_emit(b, hi);
+    mme_emit(b, lo);
+    mme_mthd(b, NVB197_LINE_LENGTH_IN);
+    mme_emit(b, mme_imm(bytes));
+    mme_emit(b, mme_imm(1));
+    mme_mthd(b, NVB197_LAUNCH_DMA);
+    mme_emit(b, mme_imm(SWITCH_GM20B_I2M_LAUNCH));
+}
+
+static void build_inline_word(struct mme_builder *b, struct mme_value word)
+{
+    mme_mthd(b, NVB197_LOAD_INLINE_DATA);
+    mme_emit(b, word);
+}
+
+/* An execute's inherited buffers into the set-0 descriptors of an indirect command buffer's dispatches, on the GPU: the
+ * count of descriptors, then for each the descriptor's address (high, low word), its buffer's first scratch word, the
+ * kernel's window of it in bytes (0 the whole buffer) and the address of its root push word for the base's residual (high
+ * word 0: none). The descriptor is raw_residual.h's storage buffer descriptor of the scratch's binding: the base aligned
+ * down to 16 bytes, the range from it to the end of the buffer or of the window rounded up to 16 (an X1 buffer is far
+ * below the 0xfffffff0 the CPU's clamps it to), 0 for no buffer. Written with the 3D class's inline-to-memory methods. */
+static void build_icb_bind(struct mme_builder *b, bool unused)
+{
+    (void)unused;
+    struct mme_value count = mme_load(b);
+    mme_if(b, ine, count, mme_zero())
+    {
+        /* the loop counts in a register of its own: Fermi's seven are all this body's */
+        mme_start_loop(b, count);
+        mme_free_reg(b, count);
+        {
+            struct mme_value hi = mme_load(b);
+            struct mme_value lo = mme_load(b);
+            build_i2m_head(b, hi, lo, 12);
+            mme_free_reg(b, hi);
+            mme_free_reg(b, lo);
+
+            struct mme_value at = mme_load(b);
+            struct mme_value base =
+                mme_state_arr(b, NVB197_SET_MME_SHADOW_SCRATCH(SWITCH_GM20B_SCRATCH_ICB_BUFFERS), at);
+            struct mme_value residual = mme_and(b, base, mme_imm(15));
+            mme_and_not_to(b, base, base, mme_imm(15));
+            build_inline_word(b, base);
+            struct mme_value upper =
+                mme_state_arr(b, NVB197_SET_MME_SHADOW_SCRATCH(SWITCH_GM20B_SCRATCH_ICB_BUFFERS + 1), at);
+            build_inline_word(b, upper);
+            mme_or_to(b, base, base, upper);
+            mme_free_reg(b, upper);
+
+            struct mme_value end =
+                mme_state_arr(b, NVB197_SET_MME_SHADOW_SCRATCH(SWITCH_GM20B_SCRATCH_ICB_BUFFERS + 2), at);
+            mme_free_reg(b, at);
+            mme_add_to(b, end, end, residual);
+            mme_add_to(b, end, end, mme_imm(15));
+            mme_and_not_to(b, end, end, mme_imm(15));
+            struct mme_value window = mme_load(b);
+            mme_if(b, ine, window, mme_zero())
+            {
+                mme_add_to(b, window, window, residual);
+                mme_add_to(b, window, window, mme_imm(15));
+                mme_and_not_to(b, window, window, mme_imm(15));
+                /* the smaller of the two: the borrow of end - window is all ones where end is below */
+                struct mme_value64 below = mme_sub64(b, mme_value64(end, mme_zero()), mme_value64(window, mme_zero()));
+                mme_xor_to(b, below.lo, end, window);
+                mme_and_to(b, below.lo, below.lo, below.hi);
+                mme_xor_to(b, end, window, below.lo);
+                mme_free_reg64(b, below);
+            }
+            mme_free_reg(b, window);
+            mme_if(b, ieq, base, mme_zero())
+            {
+                mme_mov_to(b, end, mme_zero());
+            }
+            mme_free_reg(b, base);
+            build_inline_word(b, end);
+            mme_free_reg(b, end);
+
+            hi = mme_load(b);
+            lo = mme_load(b);
+            mme_if(b, ine, hi, mme_zero())
+            {
+                build_i2m_head(b, hi, lo, 4);
+                build_inline_word(b, residual);
+            }
+            mme_free_reg(b, hi);
+            mme_free_reg(b, lo);
+            mme_free_reg(b, residual);
+        }
+        mme_end_loop(b);
+    }
+}
+
 static void write_macro(FILE *out, const char *name, void (*build)(struct mme_builder *, bool), bool indexed,
                         const struct nv_device_info *dev)
 {
@@ -574,9 +690,11 @@ int main(int argc, char **argv)
     write_macro(out, "icb_draw", build_icb_draw, false, &dev);
     write_macro(out, "icb_draw_indexed", build_icb_draw, true, &dev);
     write_macro(out, "icb_gate", build_icb_gate, false, &dev);
+    write_macro(out, "icb_bind", build_icb_bind, false, &dev);
     write_macro(out, "icb_patches", build_icb_patches, false, &dev);
     write_macro(out, "amplify", build_amplify, false, &dev);
     write_macro(out, "amplify_indexed", build_amplify, true, &dev);
+    write_macro(out, "clear_layers", build_clear_layers, false, &dev);
     fprintf(out, "\n#endif\n");
     return fclose(out) ? 1 : 0;
 }

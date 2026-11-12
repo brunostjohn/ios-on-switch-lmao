@@ -14,12 +14,13 @@ __attribute__((objc_externally_retained)) inline raw::FusionPass fusionPass(RMCo
     raw::FusionPass result;
     result.width = pass.width;
     result.height = pass.height;
+    result.layers = pass.layers;
     // a fused pass's draws take the first pass's sample layout; each Metal pass's hidden depth starts at 1.0
     result.bodySafe = !cb->_sampledShadows && !cb->_standIns && !pass.positions.count &&
                       (pass.depth || !pass.testsHiddenZeta);
     std::array<__unsafe_unretained RMTexture *, 10> targets{};
-    auto attachment = [&](size_t slot, __unsafe_unretained id object, NSUInteger level, MTLLoadAction load,
-                          MTLStoreAction store, bool resolve) {
+    auto attachment = [&](size_t slot, __unsafe_unretained id object, NSUInteger level, NSUInteger slice,
+                          MTLLoadAction load, MTLStoreAction store, bool resolve) {
         if (!object)
             return;
         __unsafe_unretained RMTexture *texture = (RMTexture *)object;
@@ -28,18 +29,19 @@ __attribute__((objc_externally_retained)) inline raw::FusionPass fusionPass(RMCo
         auto &a = result.attachments[slot];
         a.identity = uintptr_t((__bridge void *)texture);
         a.level = level;
+        a.slice = slice;
         a.loads = load == MTLLoadActionLoad;
         a.stores = store == MTLStoreActionStore;
         a.resolves = resolve;
-        a.native = raw::fusionTargetEligible(t, level);
+        a.native = raw::fusionTargetEligible(t, level | slice);
     };
     for (size_t i = 0; i < 8; ++i) {
         const auto &a = pass.color[i];
-        attachment(i, a.texture, a.level, a.load, a.store, a.resolve != nil);
+        attachment(i, a.texture, a.level, a.slice, a.load, a.store, a.resolve != nil);
     }
     for (size_t i = 0; i < 2; ++i) {
         const auto &z = pass.zeta[i];
-        attachment(8 + i, z.texture, z.level, z.load, z.store, z.resolve);
+        attachment(8 + i, z.texture, z.level, z.slice, z.load, z.store, z.resolve);
     }
     const size_t end = cb->_plan.encoderEnd(begin);
     for (size_t i = begin + 1; i + 1 < end; ++i) {

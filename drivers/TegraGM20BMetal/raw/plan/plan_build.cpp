@@ -17,13 +17,14 @@ Stage stageOf(uint8_t stage)
     return stage == 0 ? Stage::Vertex : stage == 1 ? Stage::Fragment : Stage::Compute;
 }
 
-SubRange levelOf(const Attachment &a)
+// A layered pass writes renderTargetArrayLength layers from the attachment's slice (a 3D texture's from its depth plane)
+SubRange levelOf(const Attachment &a, uint16_t layers)
 {
     SubRange r;
     r.level = a.level;
     r.levels = 1;
-    r.layer = a.slice;
-    r.layers = 1;
+    r.layer = a.depthPlane ? a.depthPlane : a.slice;
+    r.layers = std::max<uint16_t>(layers, 1);
     return r;
 }
 
@@ -125,20 +126,20 @@ void attachmentUses(Builder &b, const PassDesc &pass, uint8_t storageColours, ui
         const ResourceFacts &f = b.facts(a.texture);
         const uint32_t target = f.has(ResourceFacts::PlanarStandIn) ? f.standIn : a.texture;
         if (a.load == Load::Load)
-            b.use(target, Path::Rop, false, Stage::Fragment, levelOf(a));
-        b.use(target, Path::Rop, true, Stage::Fragment, levelOf(a));
+            b.use(target, Path::Rop, false, Stage::Fragment, levelOf(a, pass.layers));
+        b.use(target, Path::Rop, true, Stage::Fragment, levelOf(a, pass.layers));
         if (storageColours >> j & 1) {
-            b.use(target, Path::Storage, false, Stage::Fragment, levelOf(a));
+            b.use(target, Path::Storage, false, Stage::Fragment, levelOf(a, pass.layers));
             if (storageWrites >> j & 1)
-                b.use(target, Path::Storage, true, Stage::Fragment, levelOf(a));
+                b.use(target, Path::Storage, true, Stage::Fragment, levelOf(a, pass.layers));
         }
     }
     for (const Attachment *a : {&pass.depth, &pass.stencil}) {
         if (a->texture == kNone)
             continue;
         if (a->load == Load::Load)
-            b.use(a->texture, Path::Zrop, false, Stage::Fragment, levelOf(*a));
-        b.use(a->texture, Path::Zrop, true, Stage::Fragment, levelOf(*a));
+            b.use(a->texture, Path::Zrop, false, Stage::Fragment, levelOf(*a, pass.layers));
+        b.use(a->texture, Path::Zrop, true, Stage::Fragment, levelOf(*a, pass.layers));
     }
 }
 

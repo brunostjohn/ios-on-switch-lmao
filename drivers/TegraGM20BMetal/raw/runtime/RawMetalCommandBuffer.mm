@@ -199,7 +199,7 @@ static void giveRecording(RMCommandBuffer *b)
         if (cmd.op == OpEnd && _encOpen)
             _plan.prepareRange(_encAt, _plan.size());
     }
-    const size_t consumed = raw::extraWords(cmd.op);
+    const size_t consumed = raw::extraWords(cmd);
     if (consumed && cmd.x + consumed == _extra.size())
         _extra.resize(cmd.x);
 }

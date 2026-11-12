@@ -39,6 +39,18 @@ bool RMCommandPlan::setter(const Cmd &c, const std::vector<uint64_t> &extra)
                 return raw::assignState(bindings[c.index], value);
             });
         break;
+    case OpKernelClockAnchors:
+        if (stage < 3 && c.index < 31)
+            changed = buffers[stage].update([&](auto &bindings) {
+                raw::BufferBinding value;
+                value.source = raw::BufferBinding::Source::ClockAnchors;
+                value.offset = c.c;
+                value.length = c.b;
+                resourcesChanged =
+                    bindings[c.index].source == raw::BufferBinding::Source::Buffer && bindings[c.index].object;
+                return raw::assignState(bindings[c.index], value);
+            });
+        break;
     case OpBufferOffset:
     case OpKernelBufferOffset:
         if (stage < 3 && c.index < 31)
@@ -115,16 +127,35 @@ bool RMCommandPlan::setter(const Cmd &c, const std::vector<uint64_t> &extra)
                 bit = R::DepthStencil;
                 difference = raw::assignState(state.depthStencil, c.obj);
                 break;
-            case OpScissor:
+            case OpScissor: {
                 bit = R::Scissor;
-                difference = raw::assignState(state.scissor,
-                                              std::array<uint32_t, 4>{c.a, c.b, uint32_t(c.c >> 32), uint32_t(c.c)});
+                const uint16_t count = std::max<uint16_t>(c.index, 1);
+                std::array<uint32_t, 4> value{c.a, c.b, uint32_t(c.c >> 32), uint32_t(c.c)};
+                uint32_t at = 0;
+                if (count > 1) {
+                    for (size_t i = 0; i < value.size(); ++i)
+                        value[i] = uint32_t(extra[c.x + i]);
+                    at = uint32_t(viewArrays.size());
+                    viewArrays.insert(viewArrays.end(), extra.begin() + c.x, extra.begin() + c.x + 4 * count);
+                }
+                difference = raw::assignState(state.scissor, value);
+                difference |= raw::assignState(state.scissors, count);
+                difference |= raw::assignState(state.scissorsAt, at);
                 break;
+            }
             case OpViewport: {
                 bit = R::Viewport;
+                const uint16_t count = std::max<uint16_t>(c.index, 1);
                 std::array<uint64_t, 6> value;
                 std::copy_n(extra.begin() + c.x, value.size(), value.begin());
+                uint32_t at = 0;
+                if (count > 1) {
+                    at = uint32_t(viewArrays.size());
+                    viewArrays.insert(viewArrays.end(), extra.begin() + c.x, extra.begin() + c.x + 6 * count);
+                }
                 difference = raw::assignState(state.viewport, value);
+                difference |= raw::assignState(state.viewports, count);
+                difference |= raw::assignState(state.viewportsAt, at);
                 break;
             }
             case OpCull:

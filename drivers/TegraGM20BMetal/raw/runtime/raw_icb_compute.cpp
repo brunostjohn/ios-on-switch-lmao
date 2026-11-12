@@ -87,12 +87,6 @@ void ComputeEncoder::inheritBuffers(IcbBuffer (&out)[31], std::array<uint32_t, 3
     }
 }
 
-uint8_t *ComputeEncoder::upload(uint32_t bytes, uint64_t &va)
-{
-    RAW_DIAGNOSTIC(dev_.stats.uploadBytes += bytes);
-    return dev_.alloc(dev_.upload_, bytes, icb::kComputeBlockAlign, va);
-}
-
 bool ComputeEncoder::executeSlots(const IcbExecute &x, const char **why)
 {
     if (!x.count)
@@ -108,13 +102,47 @@ bool ComputeEncoder::executeSlots(const IcbExecute &x, const char **why)
         *why = "an indirect command buffer's execution range outside its buffer or not four-byte aligned";
         return false;
     }
+    if (x.binds && x.binds->length < uint64_t(x.at + x.count) * icb::kComputeBindSlotWords * 4) {
+        *why = "indirect command buffer bind slots outside its memory";
+        return false;
+    }
     cb_.buffersWritten_ = true;
     cb_.use(*x.slots, false);
     if (serial_ && dispatched_)
         barrier();
     dispatched_ = true;
+    if (x.binds) {
+        IcbBuffer inherited[31];
+        std::array<uint32_t, 31> strides;
+        inheritBuffers(inherited, strides);
+        for (uint32_t s = 0; s < 31; s++)
+            if ((x.strideSlots >> s & 1) && strides[s] != kNoBindStride) {
+                *why = "an inherited bind stride a stage-in command reads: its regions are written once, without one";
+                return false;
+            }
+        uint64_t va[31] = {};
+        uint32_t size[31] = {};
+        for (uint32_t s = 0; s < 31; s++) {
+            if ((x.alignedSlots >> s & 1) && (inherited[s].va & 15)) {
+                *why = "a buffer bound at an offset that is not a multiple of 16";
+                return false;
+            }
+            va[s] = inherited[s].va;
+            size[s] = inherited[s].size;
+        }
+        cb_.use(*x.binds, false);
+        room(8 + 3 * 31);
+        icb::computeBindHead(p_, va, size, x.bindSlots);
+        cb_.segment(start_, p_.at);
+        cb_.segments_.append({x.binds->va + uint64_t(x.at) * icb::kComputeBindSlotWords * 4,
+                              x.count * icb::kComputeBindSlotWords, TegraGM20BPushNoPrefetch},
+                             false);
+        start_ = p_.at;
+        room(4);
+        icb::computeBindTail(p_);
+    }
     room(16);
-    icb::computeExecuteHead(p_, x.written, x.range != nullptr, x.first, x.count);
+    icb::computeExecuteHead(p_, x.written || x.binds, x.range != nullptr, x.first, x.count);
     if (x.range) {
         cb_.use(*x.range, false);
         if (x.range->hostVisible && !x.range->wc && x.range->cpu)

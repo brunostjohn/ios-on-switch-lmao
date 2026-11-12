@@ -1,8 +1,9 @@
 // SPDX-License-Identifier: MIT
 // MTLIndirectCommandBuffer of dispatches (raw_icb_compute.h): a command's QMDs, root tables and set 0 are written into the
 // buffer's own GPU memory as the CPU encodes it, with its own pipeline's kernels made then, and its slot's words launch them.
-// A buffer that inherits the encoder's pipeline or buffers keeps its commands as the CPU encoded them; each execute writes
-// their words for the encoder's state (RawMetalIndirectExecute.mm).
+// A buffer that inherits the encoder's buffers also writes each command's bind slot, from which an execute's GPU writes its
+// descriptors; one that inherits the encoder's pipeline keeps its commands as the CPU encoded them and writes them all for
+// a pipeline at the first execute under it after a change (rmPipelineVariant).
 #import "RawMetalIndirectCompute.h"
 #include "RawDirect.h"
 #include "raw_compute_key.h"
@@ -51,21 +52,26 @@ std::shared_ptr<RMKernelJob> requestKernel(RMComputeState *state, const raw::Com
     });
 }
 
-// A block of `bytes` in the buffer's memory, a chunk added where the last has no room
-std::shared_ptr<RMICBBlock> newBlock(RMIndirectComputeBuffer *b, uint32_t bytes)
+// A block of `bytes` in `chunks`, a chunk added where the last has no room
+std::shared_ptr<RMICBBlock> blockIn(std::vector<raw::Buffer> &chunks, uint64_t &used, uint32_t bytes)
 {
     constexpr uint64_t kChunk = 256 << 10;
-    if (b->_chunks.empty() || b->_chunkUsed + bytes > b->_chunks.back().length) {
+    if (chunks.empty() || used + bytes > chunks.back().length) {
         raw::Buffer chunk;
         if (!gRM->raw->createBuffer(std::max<uint64_t>(kChunk, bytes), chunk, true))
             return nullptr;
-        b->_chunks.push_back(chunk);
-        b->_chunkUsed = 0;
+        chunks.push_back(chunk);
+        used = 0;
     }
-    const raw::Buffer &chunk = b->_chunks.back();
-    auto block = std::make_shared<RMICBBlock>(RMICBBlock{chunk.cpu + b->_chunkUsed, chunk.va + b->_chunkUsed, bytes});
-    b->_chunkUsed += (bytes + raw::icb::kComputeBlockAlign - 1) & ~uint64_t(raw::icb::kComputeBlockAlign - 1);
+    const raw::Buffer &chunk = chunks.back();
+    auto block = std::make_shared<RMICBBlock>(RMICBBlock{chunk.cpu + used, chunk.va + used, bytes});
+    used += (bytes + raw::icb::kComputeBlockAlign - 1) & ~uint64_t(raw::icb::kComputeBlockAlign - 1);
     return block;
+}
+
+std::shared_ptr<RMICBBlock> newBlock(RMIndirectComputeBuffer *b, uint32_t bytes)
+{
+    return blockIn(b->_chunks, b->_chunkUsed, bytes);
 }
 
 }  // namespace
@@ -110,6 +116,99 @@ void rmCommandBuffers(const RMICBDispatch &c, raw::ComputeEncoder::IcbBuffer (&o
     }
 }
 
+bool rmCommandBinds(const RMKernelSet &kernels, const RMICBBlock &block, RMICBDispatch &c, const char **why)
+{
+    c.binds.clear();
+    c.bindSlots = c.alignedSlots = c.strideSlots = 0;
+    uint32_t at = 0;
+    for (uint8_t region = 0; region < kernels.count; ++region) {
+        const raw::ComputeState &k = *kernels.jobs[region]->value();
+        if (!raw::ComputeEncoder::icbBinds(k, block.va + at, c.binds, why))
+            return false;
+        at += raw::icb::computeRegionBytes(k.rec->setBytes);
+    }
+    if (c.binds.size() > raw::icb::kComputeBindsMax) {
+        *why = "more inherited buffer descriptors than a bind slot holds";
+        return false;
+    }
+    for (const raw::icb::ComputeBind &b : c.binds) {
+        c.bindSlots |= 1u << b.slot;
+        if (!b.residual)
+            c.alignedSlots |= 1u << b.slot;
+    }
+    for (uint8_t region = 0; region < kernels.count; ++region)
+        for (const auto &stride : kernels.jobs[region]->value()->rec->stageInStride)
+            if (stride[1] && stride[0] < 31)
+                c.strideSlots |= 1u << stride[0];
+    return true;
+}
+
+uint32_t *rmBindSlot(RMIndirectComputeBuffer *b, NSUInteger index)
+{
+    return reinterpret_cast<uint32_t *>(b->_binds.cpu) + index * raw::icb::kComputeBindSlotWords;
+}
+
+RMICBVariant::~RMICBVariant()
+{
+    for (raw::Buffer &chunk : chunks)
+        gRM->raw->destroyBuffer(chunk);
+    if (slots.va)
+        gRM->raw->destroyBuffer(slots);
+    if (binds.va)
+        gRM->raw->destroyBuffer(binds);
+}
+
+std::shared_ptr<RMICBVariant> rmPipelineVariant(RMIndirectComputeBuffer *b, RMComputeState *pipeline,
+                                                const std::vector<std::shared_ptr<RMKernelSet>> &kernels,
+                                                const char **why)
+{
+    auto v = std::make_shared<RMICBVariant>();
+    v->generation = b->_generation;
+    v->missing.assign(b->_count, 0);
+    const uint64_t count = b->_count;
+    if (!gRM->raw->createBuffer(count * raw::icb::kComputeSlotWords * 4, v->slots, true) ||
+        (b->_inheritBuffers && !gRM->raw->createBuffer(count * raw::icb::kComputeBindSlotWords * 4, v->binds, true))) {
+        *why = "no memory for an indirect command buffer's commands at the encoder's pipeline";
+        return nullptr;
+    }
+    for (NSUInteger i = 0; i < count; i++) {
+        uint32_t *slot = reinterpret_cast<uint32_t *>(v->slots.cpu) + i * raw::icb::kComputeSlotWords;
+        uint32_t *bind = b->_inheritBuffers
+                             ? reinterpret_cast<uint32_t *>(v->binds.cpu) + i * raw::icb::kComputeBindSlotWords
+                             : nullptr;
+        raw::icb::computeEmpty(slot);
+        if (bind)
+            raw::icb::bindsEmpty(bind);
+        const RMICBDispatch &c = b->_dispatches[i];
+        const RMKernelSet *k = i < kernels.size() ? kernels[i].get() : nullptr;
+        if (!c.dispatched)
+            continue;
+        if (!k) {
+            v->missing[i] = 1;
+            continue;
+        }
+        const raw::ComputeDispatch shape = raw::computeDispatch(c.grid, c.threads, c.perThread, pipeline->_threadLimit);
+        const std::shared_ptr<RMICBBlock> block = blockIn(v->chunks, v->chunkUsed, rmCommandBytes(*k));
+        raw::ComputeEncoder::IcbBuffer buffers[31];
+        if (!b->_inheritBuffers)
+            rmCommandBuffers(c, buffers);
+        RMICBDispatch bound;
+        raw::icb::ComputeCommand words{};
+        if (!block || !rmCommandRegions(*k, shape, c, buffers, c.strides, *block, words, why) ||
+            (bind && !rmCommandBinds(*k, *block, bound, why)))
+            return nullptr;
+        words.barrier = c.barrier;
+        raw::icb::dispatch(slot, uint32_t(i), words);
+        if (bind) {
+            raw::icb::binds(bind, bound.binds.data(), uint32_t(bound.binds.size()));
+            v->bindSlots |= bound.bindSlots;
+            v->alignedSlots |= bound.alignedSlots;
+            v->strideSlots |= bound.strideSlots;
+        }
+    }
+    return v;
+}
+
 bool rmCommandRegions(const RMKernelSet &kernels, const raw::ComputeDispatch &shape, const RMICBDispatch &c,
                       const raw::ComputeEncoder::IcbBuffer (&buffers)[31], const std::array<uint32_t, 31> &strides,
                       const RMICBBlock &block, raw::icb::ComputeCommand &words, const char **why)
@@ -138,6 +237,8 @@ bool rmCommandRegions(const RMKernelSet &kernels, const raw::ComputeDispatch &sh
 {
     for (raw::Buffer &chunk : _chunks)
         gRM->raw->destroyBuffer(chunk);
+    if (_binds.va)
+        gRM->raw->destroyBuffer(_binds);
 }
 
 // Command `index`'s words, from what the CPU encoded: its regions written now where it inherits nothing
@@ -145,11 +246,17 @@ bool rmCommandRegions(const RMKernelSet &kernels, const raw::ComputeDispatch &sh
 {
     RMICBDispatch &c = _dispatches[index];
     c.raw = false;
+    c.binds.clear();
+    c.bindSlots = c.alignedSlots = c.strideSlots = 0;
+    _bindsChanged = true;
+    _generation++;
+    if (_inheritBuffers)
+        raw::icb::bindsEmpty(rmBindSlot(self, index));
     raw::ComputeDispatch shape;
     if (!_inheritPipeline)
         c.kernels = rmCommandKernels(c.pipeline, c, shape);
-    if (_inheritPipeline || _inheritBuffers || !c.kernels) {
-        if (c.dispatched && !_inheritPipeline && !_inheritBuffers)
+    if (_inheritPipeline || !c.kernels) {
+        if (c.dispatched && !_inheritPipeline)
             SWITCH_REFUSE("raw", "icb.kernel", "indirect dispatch command %lu: no raw kernel at its shape",
                           (unsigned long)index);
         raw::icb::computeEmpty(computeSlot(self, index));
@@ -159,9 +266,11 @@ bool rmCommandRegions(const RMKernelSet &kernels, const raw::ComputeDispatch &sh
     if (!c.block || c.block.use_count() > 1 || c.block->bytes < bytes)
         c.block = newBlock(self, bytes);
     raw::ComputeEncoder::IcbBuffer buffers[31];
-    rmCommandBuffers(c, buffers);
+    if (!_inheritBuffers)
+        rmCommandBuffers(c, buffers);
     const char *why = nullptr;
-    if (!c.block || !rmCommandRegions(*c.kernels, shape, c, buffers, c.strides, *c.block, c.words, &why)) {
+    if (!c.block || !rmCommandRegions(*c.kernels, shape, c, buffers, c.strides, *c.block, c.words, &why) ||
+        (_inheritBuffers && !rmCommandBinds(*c.kernels, *c.block, c, &why))) {
         SWITCH_REFUSE_DETAIL("raw", "icb.region", uintptr_t(why), "indirect dispatch command %lu: %s",
                              (unsigned long)index, why ? why : "no memory for its regions");
         raw::icb::computeEmpty(computeSlot(self, index));
@@ -169,6 +278,8 @@ bool rmCommandRegions(const RMKernelSet &kernels, const raw::ComputeDispatch &sh
     }
     c.words.barrier = c.barrier;
     raw::icb::dispatch(computeSlot(self, index), uint32_t(index), c.words);
+    if (_inheritBuffers)
+        raw::icb::binds(rmBindSlot(self, index), c.binds.data(), uint32_t(c.binds.size()));
     c.raw = true;
 }
 
@@ -194,7 +305,11 @@ bool rmCommandRegions(const RMKernelSet &kernels, const raw::ComputeDispatch &sh
     for (NSUInteger i = range.location; i < std::min<NSUInteger>(NSMaxRange(range), _count); i++) {
         _dispatches[i] = {};
         raw::icb::computeEmpty(computeSlot(self, i));
+        if (_inheritBuffers)
+            raw::icb::bindsEmpty(rmBindSlot(self, i));
     }
+    _bindsChanged = true;
+    _generation++;
 }
 
 @end
@@ -340,5 +455,15 @@ id rmNewComputeCommandBuffer(id device, MTLIndirectCommandBufferDescriptor *d, N
     }
     for (NSUInteger i = 0; i < count; i++)
         raw::icb::computeEmpty(computeSlot(b, i));
+    if (b->_inheritBuffers) {
+        if (!gRM->raw->createBuffer(uint64_t(count) * raw::icb::kComputeBindSlotWords * 4, b->_binds, true)) {
+            SWITCH_REFUSE("raw", "icb.memory",
+                          "no memory for the bind slots of an indirect command buffer of %lu dispatches",
+                          (unsigned long)count);
+            return nil;
+        }
+        for (NSUInteger i = 0; i < count; i++)
+            raw::icb::bindsEmpty(rmBindSlot(b, i));
+    }
     return (id<MTLIndirectCommandBuffer>)b;
 }

@@ -3,6 +3,7 @@
 #pragma once
 #import "RawMetalComputeState.h"
 #import "RawMetalIndirect.h"
+#include <map>
 #include <memory>
 #include "raw_compute.h"
 #include "raw_icb_compute.h"
@@ -30,7 +31,24 @@ struct RMICBDispatch {
     std::shared_ptr<RMKernelSet> kernels;  // its own pipeline's at its shape
     std::shared_ptr<RMICBBlock> block;
     raw::icb::ComputeCommand words{};  // what its slot launches
-    bool raw = false;                  // its slot launches it (a buffer that inherits nothing)
+    // a buffer that inherits the encoder's buffers: its descriptors' binds (its bind slot's words), the Metal buffer indices
+    // they read, those of them with no residual word, and those whose bind stride a stage-in kernel reads (its regions hold
+    // none: the execute refuses a stride the encoder binds there)
+    std::vector<raw::icb::ComputeBind> binds;
+    uint32_t bindSlots = 0, alignedSlots = 0, strideSlots = 0;
+    bool raw = false;  // its slot launches it (a buffer that inherits no pipeline)
+};
+
+// A buffer that inherits the pipeline: its commands written once for one pipeline of the encoder's, as they were at
+// `generation`, executed by reference as the buffer's own words are; never changed once made (an execute in flight keeps it)
+struct RMICBVariant {
+    uint64_t generation = 0;
+    raw::Buffer slots, binds;
+    std::vector<raw::Buffer> chunks;
+    uint64_t chunkUsed = 0;
+    uint32_t bindSlots = 0, alignedSlots = 0, strideSlots = 0;
+    std::vector<uint8_t> missing;  // a command dispatched that the raw path has no kernel or form for at the pipeline
+    ~RMICBVariant();
 };
 
 @interface RMIndirectComputeBuffer : RMIndirectCommandBuffer {
@@ -40,6 +58,12 @@ struct RMICBDispatch {
     std::vector<RMICBDispatch> _dispatches;
     std::vector<raw::Buffer> _chunks;  // the blocks' memory, freed with the buffer
     uint64_t _chunkUsed;
+    raw::Buffer _binds;    // a buffer that inherits the encoder's buffers: each command's bind slot
+    uint64_t _generation;  // bumped by every change of a command
+    std::map<RMComputeState *, std::shared_ptr<RMICBVariant>> _variants;  // a buffer that inherits the pipeline
+    // every command's bindSlots, alignedSlots and strideSlots, made again at an execute after a command changed
+    uint32_t _bindSlots, _alignedSlots, _strideSlots;
+    bool _bindsChanged;
     id<MTLIndirectCommandBuffer> _m2v;  // m2v's buffer, into which its replay encodes the commands again
 }
 @end
@@ -59,8 +83,11 @@ struct RMICBDispatch {
     uint64_t _rangeOffset;
     RMComputeState *_pipeline;  // the encoder's, for a buffer that inherits it
     uint32_t _first, _count;
-    // a buffer that inherits the pipeline: each command's kernels at the encoder's (a slot of none launches nothing)
+    // a buffer that inherits the pipeline: each command's kernels at the encoder's (a slot of none launches nothing), made
+    // where the buffer had no variant for it at `_kernelsGeneration`, and the variant the execute runs
     std::vector<std::shared_ptr<RMKernelSet>> _kernels;
+    uint64_t _kernelsGeneration;
+    std::shared_ptr<RMICBVariant> _variant;
 }
 @end
 
@@ -77,6 +104,14 @@ bool rmCommandRegions(const RMKernelSet &kernels, const raw::ComputeDispatch &sh
                       const RMICBBlock &block, raw::icb::ComputeCommand &words, const char **why);
 uint32_t rmCommandBytes(const RMKernelSet &kernels);
 void rmCommandBuffers(const RMICBDispatch &c, raw::ComputeEncoder::IcbBuffer (&out)[31]);
+// Command `c`'s binds of its regions in `block` into c.binds and its masks; false: refused (*why)
+bool rmCommandBinds(const RMKernelSet &kernels, const RMICBBlock &block, RMICBDispatch &c, const char **why);
+// The bind slot of command `index` of a buffer that inherits the encoder's buffers
+uint32_t *rmBindSlot(RMIndirectComputeBuffer *b, NSUInteger index);
+// `b`'s commands (under its lock) for `pipeline` with `kernels` (each command's at it), made now; null: refused (*why)
+std::shared_ptr<RMICBVariant> rmPipelineVariant(RMIndirectComputeBuffer *b, RMComputeState *pipeline,
+                                                const std::vector<std::shared_ptr<RMKernelSet>> &kernels,
+                                                const char **why);
 
 // RawMetalCompute.mm: the pipeline the encoder has set
 @interface RMComputeEncoder (State)

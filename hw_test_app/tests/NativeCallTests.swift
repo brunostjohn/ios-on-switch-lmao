@@ -5,8 +5,10 @@ import HWTestCore
 enum NativeCallTests {
     static let all: [any HWTest] = [
         NativeUnsupportedTest(), NativeVertexSamplerTest(), NativeParallelEncoderTest(), NativeIndirectCommandsTest(),
-        NativeComputeCommandsTest(), NativeSharedTextureTest(), NativeCountersTest(), NativeTessellationTest(),
-        NativeAmplificationTest(), NativeAmplificationCountTest(), NativeDynamicStrideTest(), NativeStageInTest(),
-        NativeVertexStreamsTest(), NativeM2vMissingTest(),
+        NativeComputeCommandsTest(), NativeSharedTextureTest(), NativeSharedTexturePeerTest(), NativeCountersTest(),
+        NativeCounterObjectsTest(), NativeTessellationTest(), NativeAmplificationTest(), NativeAmplificationCountTest(),
+        NativeDynamicStrideTest(), NativeStageInTest(), NativeVertexStreamsTest(), NativeM2vMissingTest(),
+        NativeTargetPartsTest(), NativeLayeredClearTest(), NativeLayeredMemorylessTest(), NativeLayeredVertexTest(),
+        NativeViewportsTest(), NativeViewportIndexTest(), NativeBlockTexturesTest(), NativeDepthSlicesTest(),
     ]
 }

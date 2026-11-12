@@ -55,6 +55,9 @@ struct Kind {
     // the target's Metal driver (NativeMetalTarget.rs), the domain its errors take: a creation's binary archive miss is code 3
     // in it (an M4 answers AGXMetalG16X)
     const char *driver;
+    // a render pass of several layers (renderTargetArrayLength): the A13 (Apple6) renders one, the A10X (Apple3) has
+    // no layered rendering in Apple's feature tables
+    bool layeredRendering;
 };
 
 inline constexpr Count kCounts21H461[] = {
@@ -335,9 +338,9 @@ inline constexpr ArgRange kArgs24B119[] = {
 
 inline constexpr Kind kKinds[] = {
     {"21H461", kCounts21H461, std::size(kCounts21H461), kArgs21H461, std::size(kArgs21H461), 0x61, "Apple", "A10X",
-     "GPU", "AGXMetalA10"},
+     "GPU", "AGXMetalA10", false},
     {"24B119", kCounts24B119, std::size(kCounts24B119), kArgs24B119, std::size(kArgs24B119), 0xd2, "Apple", "A13",
-     "GPU", "AGXMetalA13"},
+     "GPU", "AGXMetalA13", true},
 };
 
 // The kind this build is for (MetalABI.h): its table's index, or the table count when it has none

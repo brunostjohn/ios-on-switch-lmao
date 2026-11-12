@@ -35,6 +35,8 @@ enum {
     // a draw under vertex amplification, of vertices and of indices: draws past the slots the push profile counts
     SWITCH_GM20B_MACRO_AMPLIFY,
     SWITCH_GM20B_MACRO_AMPLIFY_INDEXED,
+    // a layered pass's clear of its layers (NVK's nvk_mme_clear without a view mask)
+    SWITCH_GM20B_MACRO_CLEAR_LAYERS,
     SWITCH_GM20B_MACRO_RAW_END,  // one past the raw path's last slot
 };
 

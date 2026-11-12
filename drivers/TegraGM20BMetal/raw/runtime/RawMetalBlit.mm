@@ -2,6 +2,7 @@
 #import "RawMetalInternal.h"
 #import "RawMetalXrPlanes.h"
 #include "../fx/fx_mip_probe.h"
+#include "../fx/fx_mip_route.h"
 
 bool bufferRows(uint64_t offset, uint64_t bytesPerRow, uint32_t rows, uint32_t rowBytes, uint32_t bpp, bool intoTexture,
                 BufferRows &out)
@@ -115,9 +116,7 @@ static MTLSize levelSize(id<MTLTexture> t, NSUInteger level)
 
 static NSUInteger sliceCount(id<MTLTexture> t)
 {
-    const MTLTextureType type = t.textureType;
-    return (type == MTLTextureTypeCube || type == MTLTextureTypeCubeArray ? 6 : 1) *
-           std::max<NSUInteger>(1, t.arrayLength);
+    return raw::textureLayers(uint32_t(t.textureType), uint32_t(std::min<NSUInteger>(t.arrayLength, 2048)));
 }
 
 // The levels a whole-texture copy starts at: the smaller's first, and the larger's of its size. False: neither has a level
@@ -429,6 +428,17 @@ static bool sameSizeLevels(id<MTLTexture> s, id<MTLTexture> d, NSUInteger &sl, N
     [_cb record:m];
 }
 
+// Whether generateMipmaps of `t`'s chain takes a step on the 3D engine (encodeMipmaps' route)
+static bool threeDSteps(const raw::Texture &t)
+{
+    bool threeD = false;
+    raw::fx::eachMipRun(t.chain->layout, t.chain->fmt2d != 0, gRM->raw->mipPipeline(t.format) != nullptr,
+                        [&](const raw::fx::MipRun &run) {
+                            threeD |= run.engine == raw::fx::MipEngine::ThreeD;
+                        });
+    return threeD;
+}
+
 - (void)generateMipmapsForTexture:(id<MTLTexture>)t
 {
     RMTexture *x = [(id)t isKindOfClass:[RMTexture class]] ? (RMTexture *)t : nil;
@@ -441,6 +451,10 @@ static bool sameSizeLevels(id<MTLTexture> s, id<MTLTexture> d, NSUInteger &sl, N
                !gRM->raw->mipPipeline(x->_raw.format)) {  // (the 3D engine's passes: mipPasses)
         [_cb takeReason:WhyMipmaps why:@"generateMipmapsForTexture of a format neither engine filters"];
         hit(_cb, PredMipmapsFormat, t.pixelFormat, t.mipmapLevelCount);
+    } else if (x->_raw.type == raw::fx::kTexThreeD || (x->_raw.chain->layout.layers > 1 && threeDSteps(x->_raw))) {
+        // the 2D engine halves each layer in place (fx::emitGenerateLayers); the 3D engine's passes draw one 2D layer
+        [_cb takeReason:WhyMipmaps why:@"generateMipmapsForTexture of a 3D texture, or of layers the 3D engine steps"];
+        hit(_cb, PredMipmaps, t.pixelFormat, t.mipmapLevelCount);
     }
     uint64_t probe2d = 0;
 #if SWITCH_RAW_DIAGNOSTICS

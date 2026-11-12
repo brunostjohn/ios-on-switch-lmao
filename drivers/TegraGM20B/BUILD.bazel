@@ -78,6 +78,7 @@ kernel_driver(
         "shim/nvif_nvkm.c",
         "platform.c",
         "gpu_bringup.c",
+        "gpu_anchor.c",
         "gpu_clock.c",
         "gpu_mem.c",
         "gpu_hang.c",

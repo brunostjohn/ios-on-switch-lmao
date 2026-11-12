@@ -63,9 +63,10 @@ inline bool zetaHasStencil(uint32_t metal)
 bool zetaShape(uint32_t width, uint32_t height, uint32_t format, uint32_t samples, Texture &t, uint64_t &bytes,
                uint64_t &align);
 
-// SET_ZT_A .. SET_STENCIL_COMPRESSION and SET_ZT_SPARSE for zeta `z`, or SET_ZT_SELECT 0 for none
+// SET_ZT_A .. SET_STENCIL_COMPRESSION and SET_ZT_SPARSE for zeta `z` (its `layers` layers, layerBytes apart), or
+// SET_ZT_SELECT 0 for none
 constexpr uint32_t kZetaTargetWords = 24;
-void zetaTargetWords(Push &p, const Texture *z);
+void zetaTargetWords(Push &p, const Texture *z, uint32_t layers = 1);
 
 // MTLStencilDescriptor and MTLDepthStencilDescriptor, enums as Metal numbers them (MTLCompareFunction, MTLStencilOperation)
 struct StencilFace {

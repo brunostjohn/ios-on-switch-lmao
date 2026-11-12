@@ -5,6 +5,7 @@
 #import "RawMetalSplitPlan.h"
 #import "RawMetalXrPlanes.h"
 #import "RawMetalIndirect.h"
+#include "raw_attachment_target.h"
 #include <optional>
 #include "raw_compute.h"
 #include "raw_compute_lookup.h"
@@ -316,6 +317,7 @@ __attribute__((objc_externally_retained)) static bool encodeRawAttempt(RMCommand
     // its shadow at each encoder that uses it once written since)
     std::set<RMTexture *> fresh;
     raw::Texture levelTargets[8];  // the open pass's level targets: the encoder reads them until its end()
+    raw::Texture zetaPart;         // and its depth/stencil attachment's layer
 #if SWITCH_RAW_DIAGNOSTICS
     uint64_t levelPasses = 0;
     static std::atomic<bool> loggedLevel{false};
@@ -492,18 +494,25 @@ __attribute__((objc_externally_retained)) static bool encodeRawAttempt(RMCommand
                 if (!fresh.empty())
                     fresh.erase(t);  // this pass writes it
                 standInFresh.erase(t);
-                if (t->_raw.chain && a.level) {
-                    if (!raw::chainLevelTarget(t->_raw, uint32_t(a.level), levelTargets[j]))
-                        return fail(PredEncPassRender, "a mip level the raw path cannot render to", a.level);
-                    levelTargets[j].tic = gRM->raw->levelTic(t->_raw, uint32_t(a.level));
+                const bool whole = raw::wholeAttachment(t->_raw, uint32_t(a.level), uint32_t(a.slice));
+                if (!whole) {
+                    if (!raw::attachmentTarget(t->_raw, uint32_t(a.level), uint32_t(a.slice), levelTargets[j]))
+                        return fail(PredEncPassRender, "a level, slice or plane the raw path cannot render to",
+                                    a.level | a.slice << 8);
+                    // a 2D chain's level alone has a header (a fetch of the attachment reads it)
+                    if (t->_raw.chain && t->_raw.type == raw::fx::kTexTwoD && !a.slice)
+                        levelTargets[j].tic = gRM->raw->levelTic(t->_raw, uint32_t(a.level));
 #if SWITCH_RAW_DIAGNOSTICS
                     levelPasses++;
                     if (!loggedLevel.exchange(true))
-                        os_log(rawLog(), "raw: renders into mip levels (first: level %lu of %ux%u format %u)",
-                               (unsigned long)a.level, t->_raw.width, t->_raw.height, t->_raw.format);
+                        os_log(rawLog(),
+                               "raw: renders into levels and slices (first: level %lu slice %lu of %ux%u format %u "
+                               "type %u)",
+                               (unsigned long)a.level, (unsigned long)a.slice, t->_raw.width, t->_raw.height,
+                               t->_raw.format, unsigned(t->_raw.type));
 #endif
                 }
-                p.color[j].texture = a.level                 ? &levelTargets[j]
+                p.color[j].texture = !whole                  ? &levelTargets[j]
                                      : t->_raw.planarStandIn ? t->_raw.planarStandIn
                                                              : &t->_raw;
                 p.color[j].load = a.load == MTLLoadActionClear  ? raw::ColorAttachment::Clear
@@ -523,6 +532,13 @@ __attribute__((objc_externally_retained)) static bool encodeRawAttempt(RMCommand
             }
             if (__unsafe_unretained RMTexture *z = (RMTexture *)pass.depth) {  // (rawDepthStencil: decided at record)
                 p.depthStencil.texture = &z->_raw;
+                if (pass.depthSlice && !z->_raw.memoryless) {  // a layer of a 2D array or cube: its layers from there
+                    zetaPart = z->_raw;
+                    zetaPart.va += pass.depthSlice * z->_raw.layerBytes;
+                    zetaPart.layers -= uint32_t(pass.depthSlice);
+                    zetaPart.tic = 0;
+                    p.depthStencil.texture = &zetaPart;
+                }
                 p.depthStencil.clearDepth = pass.depthLoad == MTLLoadActionClear;
                 p.depthStencil.clearStencil = pass.stencilLoad == MTLLoadActionClear;
                 p.depthStencil.depth = float(std::clamp(pass.clearDepth, 0.0, 1.0));
@@ -530,6 +546,7 @@ __attribute__((objc_externally_retained)) static bool encodeRawAttempt(RMCommand
             }
             p.width = uint32_t(std::min<NSUInteger>(pass.width, UINT32_MAX));
             p.height = uint32_t(std::min<NSUInteger>(pass.height, UINT32_MAX));
+            p.layers = pass.layers;
             p.positions = pass.positions;
             for (__unsafe_unretained RMTexture *t : standInLoads)
                 if (standInPass(t, false))

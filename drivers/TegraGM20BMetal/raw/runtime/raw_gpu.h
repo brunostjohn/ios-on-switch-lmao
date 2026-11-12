@@ -76,7 +76,9 @@
 #include "raw_xr.h"
 #include "raw_ycbcr.h"
 #include "raw_rotation.h"
+#include "raw_viewports.h"
 #include "../fx/fx_mip.h"
+#include "raw_surface_image.h"
 
 namespace raw {
 
@@ -161,6 +163,13 @@ struct Import {
     uint32_t kind = 0;
     tgm_layout layout = {};
     NativeSurface *native = nullptr;
+
+    // Bound 0xFE as the kernel laid the surface out, not under a layout of one texture's own (createBlockTextureOver,
+    // createSurfaceImage), whose textures address their memory as their images say
+    bool kernelTiled() const
+    {
+        return kind == TGM_LAYOUT_KIND && layout.bytes;
+    }
 };
 
 // The first texture's shape a new import asks the kernel the surface's layout with (raw_kernel.h surfaceLayout)
@@ -432,6 +441,7 @@ struct Pipeline {
     bool constantBlend = false;     // a blend factor of a blended color is the encoder's blend color
     bool blendKill = false;         // its SET_ITERATED_BLEND_OPTIMIZATION drops zero-source pixels (raw_blend_kill.h)
     bool fragmentDepth = false;     // its fragment program writes depth (SPH OMAP_DEPTH)
+    bool viewportIndex = false;     // its vertex program writes ViewportIndex (SPH OMAP, raw_viewports.h)
     uint32_t colorFormats[8] = {};  // MTLPixelFormat of each color attachment the state was made for (0: none)
     // its vertex function is Core Animation's fixed_vert_l?h_spc (raw_bounds.h), and attribute 0 (the position) as its key
     // gives it: floats from the stream's vertex start (0: no float position)
@@ -560,6 +570,9 @@ struct PassDesc {
     // no depth/stencil attachment, and a draw's state tests depth or stencil (testsHiddenZeta): the pass renders over a hidden
     // Depth32Float_Stencil8 backing of its own, cleared to 1.0 and 0, as plain Metal tests such a draw
     bool hiddenZeta = false;
+    // renderTargetArrayLength: every target binds this many layers from its attachment's slice (a 3D level's planes from its
+    // depth plane), each cleared; 0 and 1 render one
+    uint32_t layers = 1;
 };
 
 class RenderEncoder {
@@ -642,6 +655,10 @@ public:
     void setDepthBias(float constant, float slope, float clamp);
 
     void setViewport(double x, double y, double w, double h, double znear, double zfar);
+    // setViewports:count: and setScissorRects:count: (x, y, w, h, znear, zfar each; x, y, w, h each), `count` up to
+    // kMaxViewports: index 0 as setViewport and setScissor take it, the others at the next draw
+    void setViewports(const double (*viewports)[6], uint32_t count);
+    void setScissors(const uint32_t (*rects)[4], uint32_t count);
     void barrier();  // memoryBarrier...: everything before is written and visible to what follows
     // false: this draw cannot be drawn exactly as m2v would (*why says what); the command buffer goes to m2v instead
     bool draw(uint32_t primitive, uint32_t first, uint32_t count, uint32_t instances, uint32_t baseInstance,
@@ -878,6 +895,8 @@ private:
     uint32_t scissor_[2] = {}, viewport_[8] = {};
     float depthRange_[2] = {0, 1};
     bool scissorDirty_ = true, viewportDirty_ = true;
+    ViewportArray views_;
+    void emitViewports(Push &p);
     DepthStencilDesc ds_;
     const DepthStencilState *dsState_ = &DepthStencilState::metalDefault();
     uint32_t stencilRef_[2] = {};
@@ -1081,7 +1100,9 @@ enum RefusalId : uint8_t {
     RefSamples,       // a: the state's samples, b: the pass's, c: the state's shading passes
     RefGeometry,      // CPU ordering proof unavailable; requires an interlocked native program
     RefStorageView,   // a: the attachment, b: its format, c: its width (raw_storage_form.h)
-    RefRotated        // a: why (raw_rotated_pass.h RotatedRefusal), b: the rotation
+    RefRotated,       // a: why (raw_rotated_pass.h RotatedRefusal), b: the rotation
+    RefLayered,       // a: the pass's layers
+    RefViewports      // a: the encoder's viewport count
 };
 
 struct Refusal {
@@ -1376,13 +1397,16 @@ public:
     // image is the part's first level and layer, which copies address and a pass renders into as a 2D view of one of each.
     bool createPartView(const Texture &of, uint32_t format, uint32_t type, uint32_t baseLevel, uint32_t levels,
                         uint32_t baseLayer, uint32_t layers, Texture &t);
-    // Memoryless (a pass gives it a backing); the depth/stencil formats among them, as zeta (Texture::zeta)
-    bool createMemoryless(uint32_t width, uint32_t height, uint32_t format, Texture &t, uint32_t samples = 1);
+    // Memoryless (a pass gives it a backing of the pass's layers); the depth/stencil formats among them, as zeta
+    // (Texture::zeta). `layers`: a 2D array's or cube's, of one sample
+    bool createMemoryless(uint32_t width, uint32_t height, uint32_t format, Texture &t, uint32_t samples = 1,
+                          uint32_t layers = 1);
     // A stored depth/stencil texture of one sample over zeta memory another driver of the process keeps (NVK's image: one
     // allocation both drivers render, sample and copy in place), laid out as `m` says, with a texture header of its depth where
-    // `sampled`; false where it is not a layout the raw path renders (*why says which way)
+    // `sampled`; false where it is not a layout the raw path renders (*why says which way). A 2D array or cube of `layers`
+    // layers, layerBytes apart, is rendered alone (no header)
     bool createZetaOver(const ZetaMemory &m, uint32_t width, uint32_t height, uint32_t format, bool sampled, Texture &t,
-                        const char **why);
+                        const char **why, uint32_t layers = 1);
     // A stored multisampled colour texture (raw_multisample.cpp): the persistent form of a memoryless one's block-linear
     // backing, in memory of its own, which m2v's twin (NVK's image of the same descriptor) lies over in place
     bool createStoredMultisample(uint32_t width, uint32_t height, uint32_t format, uint32_t samples, Texture &t);
@@ -1395,21 +1419,40 @@ public:
     // A 1D texture: NIL's 1D image, one block-linear row (y_log2 0) under a ONE_D header, in block-linear memory the CPU
     // writes through its tiled view (a 1D header takes no pitch layout)
     bool createLine(uint32_t width, uint32_t format, Texture &t);
-    // A 3D texture of one level: NIL's 3D image (fx_image.h) under a THREE_D header. `view2d`: one plane a block, as m2v makes
-    // a 3D render target (2D-array compatible), so its twin over the same memory reads the same texels
-    bool createVolume(uint32_t width, uint32_t height, uint32_t depth, uint32_t format, bool view2d, Texture &t);
-    // A 2D array, cube or cube array of one level: NIL's image of `layers` layers (fx_image.h) under a header of `type`
+    // A 3D texture of `levels` levels: NIL's 3D image (fx_image.h) under a THREE_D header. `view2d`: one plane a block, as m2v
+    // makes a 3D render target (2D-array compatible), so its twin over the same memory reads the same texels
+    bool createVolume(uint32_t width, uint32_t height, uint32_t depth, uint32_t format, bool view2d, Texture &t,
+                      uint32_t levels = 1);
+    // A 2D array, cube or cube array of `levels` levels: NIL's image of `layers` layers (fx_image.h) under a header of `type`
     // (fx::kTexTwoDArray, kTexCube, kTexCubeArray)
-    bool createArray(uint32_t width, uint32_t height, uint32_t layers, uint32_t format, uint32_t type, Texture &t);
+    bool createArray(uint32_t width, uint32_t height, uint32_t layers, uint32_t format, uint32_t type, Texture &t,
+                     uint32_t levels = 1);
     // A mipmapped 2D texture of `levels` levels: level 0 of its block-linear chain (Texture::chain), its header the chain's.
     // False: not one the raw path keeps (not a render target format, extended range, no memory).
     bool createMipTexture(uint32_t width, uint32_t height, uint32_t format, uint32_t levels, Texture &t);
+    // A block-compressed 2D texture (or 2D array, `type`) of `levels` levels and `layers` layers in block-linear memory of its
+    // own: NIL's image (fx::blockChainLayout), which the copy engine and the CPU (in its view of kind-0xFE memory) address
+    bool createBlockTexture(uint32_t width, uint32_t height, uint32_t levels, uint32_t layers, uint32_t format,
+                            uint8_t type, Texture &t);
     // A block-compressed 2D texture (or 2D array) over the caller's `bytes` (newTextureWithBytesNoCopy), already laid out as
     // `layout` (fx::blockChainLayout of its texel size, levels and layers): the pages imported under kind 0xFE, cleaned to
     // memory, and a block-linear header over them, of the texel size. False: not a block-compressed format, `length` short
     // of the layout, a base off 512 bytes, or the import or header refused.
     bool createBlockTextureOver(void *bytes, uint64_t length, uint32_t width, uint32_t height, uint32_t format,
                                 const fx::MipChain &layout, Texture &t);
+    // A shared texture over its IOSurface (raw_surface_image.h): the surface's pages imported under its ID and bound 0xFE,
+    // the texture over them as the private one of the same image (createMipTexture, createArray, createVolume,
+    // createStoredMultisample, createLine, createBlockTextureOver) lies in memory of its own. False: a Plain image, an
+    // allocation short of the layout, a base off a page, or the import or header refused.
+    bool createSurfaceImage(uint64_t surfaceId, void *base, uint64_t allocBytes, const void *surface,
+                            const SurfaceImage &image, uint32_t width, uint32_t height, uint32_t format, Texture &t);
+
+    // Header `tic`'s eight words as the texture unit reads them
+    const uint32_t *headerWords(uint32_t tic) const
+    {
+        return reinterpret_cast<const uint32_t *>(tic_.cpu + 32 * tic);
+    }
+
     // The texture header of level `level` of mipmapped texture `t`'s chain alone, as NVK's view of that level (a pass into
     // the level fetches its color through it); 0: none
     uint32_t levelTic(Texture &t, uint32_t level);
@@ -1577,9 +1620,9 @@ public:
     // A completed command buffer's GPU time from its stamps; false when its slot holds a later one's
     bool gpuNanoseconds(uint32_t stamp, uint64_t &ns) const;
 
-    bool ptimer(uint64_t &units)
+    bool clockAnchors(const volatile TegraGM20BAbiClockAnchors *&table, uint64_t &gpuVa)
     {
-        return k_.ptimer(units);
+        return k_.clockAnchors(table, gpuVa);
     }
 
     bool lost(uint32_t seqno) const
@@ -1804,6 +1847,13 @@ public:
 private:
     friend class CommandBuffer;
     friend class RenderEncoder;
+    // A block-compressed image of `layout` at t.va (lock_ held, t.tic allocated): its header of `type` and, past one level,
+    // its chain
+    void layBlocks(const fx::MipChain &layout, const FormatInfo *f, uint32_t width, uint32_t height, uint8_t type,
+                   Texture &t);
+    // An array, cube or 3D image of `layout` at t.va (lock_ held, t.tic allocated) under a header of `type`; past one level,
+    // level 0 of its chain (Texture::chain), the header every level's
+    void layImage(const fx::MipChain &layout, const FormatInfo *f, uint8_t type, Texture &t);
     friend class BlitEncoder;
     friend class ComputeEncoder;
 #ifdef SWITCH_RAW_HARNESS_MARKS
@@ -2161,7 +2211,7 @@ private:
     std::vector<Backing *> backings_;  // memoryless attachments' memory, by size and format
     // What backing() answered, kept by the encoding thread for lastBacking
     struct BackingAsk {
-        uint32_t width = 0, height = 0, format = 0, tag = 0;
+        uint32_t width = 0, height = 0, format = 0, tag = 0, layers = 0;
         uint8_t samples = 0;
         bool zeta = false, blockLinear = false, compression = false, copied = false;
         Backing *backing = nullptr;
@@ -2170,8 +2220,8 @@ private:
         bool same(const Texture &m, uint32_t t, bool linear, bool compressed, bool copy) const
         {
             return backing && width == m.width && height == m.height && format == m.format && tag == t &&
-                   samples == m.samples && zeta == m.zeta && blockLinear == linear && compression == compressed &&
-                   copied == copy;
+                   layers == std::max(m.layers, 1u) && samples == m.samples && zeta == m.zeta &&
+                   blockLinear == linear && compression == compressed && copied == copy;
         }
     };
     std::array<BackingAsk, 16> asks_{};

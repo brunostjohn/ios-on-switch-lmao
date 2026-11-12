@@ -143,4 +143,32 @@ TEST_F(DeviceStageIn, AnIndirectDispatchCommandsRegionIsInItsOwnRootTable)
     EXPECT_EQ(push[kStrideWord - 1], 40u);
 }
 
+// A buffer that inherits the encoder's buffers writes its commands' regions once, without the encoder's strides: an execute
+// under a stride bound where a command's kernel reads one is refused, one with none there runs
+TEST_F(DeviceStageIn, AnInheritedStrideACommandReadsIsRefused)
+{
+    raw::Buffer slots, binds;
+    ASSERT_TRUE(dev.createBuffer(raw::icb::kComputeSlotWords * 4, slots));
+    ASSERT_TRUE(dev.createBuffer(raw::icb::kComputeBindSlotWords * 4, binds));
+    raw::icb::computeEmpty(reinterpret_cast<uint32_t *>(slots.cpu));
+    raw::icb::bindsEmpty(reinterpret_cast<uint32_t *>(binds.cpu));
+    for (const uint32_t stride : {raw::kNoBindStride, 24u}) {
+        raw::CommandBuffer *cb = dev.begin();
+        ASSERT_NE(cb, nullptr);
+        const char *why = nullptr;
+        bool ran = false;
+        {
+            raw::ComputeEncoder e(*cb, dev);
+            e.setBufferStride(1, stride);
+            raw::ComputeEncoder::IcbExecute x = {&slots, 0, 0, 1, nullptr, 0, false};
+            x.binds = &binds;
+            x.strideSlots = 1u << 1;
+            ran = e.executeSlots(x, &why);
+            e.end();
+        }
+        cb->abandon();
+        EXPECT_EQ(ran, stride == raw::kNoBindStride) << stride << ": " << (why ? why : "");
+    }
+}
+
 }  // namespace

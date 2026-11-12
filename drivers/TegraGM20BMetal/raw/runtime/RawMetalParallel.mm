@@ -8,7 +8,7 @@ namespace {
 
 struct RMSubCommand {
     Cmd cmd;
-    std::array<uint64_t, 6> extra;
+    std::vector<uint64_t> extra;
 };
 
 }  // namespace
@@ -28,8 +28,8 @@ struct RMSubCommand {
 - (void)record:(const Cmd &)c
 {
     RMSubCommand s{c, {}};
-    if (const size_t words = raw::extraWords(c.op))
-        std::copy_n(_extra.begin() + ptrdiff_t(c.x), words, s.extra.begin());
+    if (const size_t words = raw::extraWords(c))
+        s.extra.assign(_extra.begin() + ptrdiff_t(c.x), _extra.begin() + ptrdiff_t(c.x + words));
     _log.push_back(s);
     [super record:c];
 }
@@ -95,9 +95,8 @@ static void splice(RMCommandBuffer *cb, RMSubRecorder *s, bool refused)
     cb->_encOpen = true;
     cb->_encRefused = refused;
     for (const RMSubCommand &r : s->_log) {
-        const size_t words = raw::extraWords(r.cmd.op);
         const Cmd c = raw::spliced(r.cmd, passBase, chunkBase, cb->_extra.size());
-        cb->_extra.insert(cb->_extra.end(), r.extra.begin(), r.extra.begin() + ptrdiff_t(words));
+        cb->_extra.insert(cb->_extra.end(), r.extra.begin(), r.extra.end());
         [cb record:c];
     }
     [cb closeEncoder];

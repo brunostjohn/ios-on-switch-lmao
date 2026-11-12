@@ -4,12 +4,18 @@
 // (the CPU's range as scratch words, or kIcbRange reading one from memory) and before its tail. The model of the compute
 // class keeps the global render enable the gate sets and counts the launches it lets through: exactly the regions of the
 // commands inside the range launch, a barrier flushes before its command whatever the range, an empty command is no-ops,
-// and the tail leaves launches enabled. A command's stage-in words (raw_stage_in.h) are its own region and bind strides.
+// and the tail leaves launches enabled. A command's stage-in words (raw_stage_in.h) are its own region and bind strides. A
+// buffer that inherits the encoder's buffers: the execute's buffers in scratch and the commands' bind slots through
+// kIcbBind, whose inline-to-memory writes the model of the 3D class lands in memory, write every descriptor and residual
+// word as the CPU's raw_residual.h bufferDescriptor does for the same buffers.
 #include <gtest/gtest.h>
 #include "../raw/runtime/raw_icb_compute.h"
+#include "../raw/runtime/raw_residual.h"
 #include "../raw/runtime/raw_stage_in.h"
 #include "../raw/pack/mesa/mme_fermi.h"
 #include "../raw/pack/mesa/mme_fermi_sim.h"
+#include <map>
+#include <random>
 #include <utility>
 #include <vector>
 
@@ -27,6 +33,10 @@ struct Channel {
     size_t consumed = 0;
     uint32_t scratch[256] = {};
     uint32_t enable = NVB1C0_SET_GLOBAL_RENDER_ENABLE_C_MODE_TRUE, pendingQmd = 0, flushes = 0;
+    // the 3D class's inline-to-memory: its destination and length, then each LOAD_INLINE_DATA word into memory
+    std::map<uint64_t, uint32_t> memory;
+    uint64_t out = 0;
+    uint32_t lineBytes = 0, lines = 0, inlineLeft = 0, waits3d = 0;
 
     static bool isScratch(uint16_t method)
     {
@@ -67,6 +77,8 @@ struct Channel {
             return;
         }
         methods.push_back({subc, m, value});
+        if (subc == raw::SUBC_3D)
+            inlineToMemory(m, value);
         if (m == NVB1C0_SET_GLOBAL_RENDER_ENABLE_C)
             enable = value;
         if (subc != raw::SUBC_COMPUTE)
@@ -79,11 +91,47 @@ struct Channel {
             flushes++;
     }
 
+    void inlineToMemory(uint16_t m, uint32_t value)
+    {
+        switch (m) {
+        case NVB197_OFFSET_OUT_UPPER:
+            out = (out & 0xffffffffull) | uint64_t(value & 0xff) << 32;
+            break;
+        case NVB197_OFFSET_OUT:
+            out = (out & ~0xffffffffull) | value;
+            break;
+        case NVB197_LINE_LENGTH_IN:
+            lineBytes = value;
+            break;
+        case NVB197_LINE_COUNT:
+            lines = value;
+            break;
+        case NVB197_LAUNCH_DMA:
+            EXPECT_EQ(value & 1, uint32_t(NVB197_LAUNCH_DMA_DST_MEMORY_LAYOUT_PITCH));
+            EXPECT_EQ(lines, 1u);
+            EXPECT_EQ(lineBytes % 4, 0u);
+            inlineLeft = lineBytes / 4;
+            break;
+        case NVB197_LOAD_INLINE_DATA:
+            ASSERT_GT(inlineLeft, 0u) << "inline data past its LAUNCH_DMA's length";
+            memory[out] = value;
+            out += 4;
+            inlineLeft--;
+            break;
+        case NVB197_WAIT_FOR_IDLE:
+            waits3d++;
+            break;
+        default:
+            break;
+        }
+    }
+
     void macro(uint32_t slot)
     {
-        const raw::mme::Program &p =
-            slot == raw::mme::kIcbRange ? raw::mme::kIcbRangeProgram : raw::mme::kIcbGateProgram;
-        ASSERT_TRUE(slot == raw::mme::kIcbRange || slot == raw::mme::kIcbGate) << slot;
+        const raw::mme::Program &p = slot == raw::mme::kIcbRange  ? raw::mme::kIcbRangeProgram
+                                     : slot == raw::mme::kIcbBind ? raw::mme::kIcbBindProgram
+                                                                  : raw::mme::kIcbGateProgram;
+        ASSERT_TRUE(slot == raw::mme::kIcbRange || slot == raw::mme::kIcbGate || slot == raw::mme::kIcbBind) << slot;
         std::vector<mme_fermi_inst> decoded(p.size);
         mme_fermi_decode(decoded.data(), p.words, p.size);
         consumed = 0;
@@ -306,3 +354,79 @@ TEST(RawIcbCompute, AKernelOfNoStageInTakesNoStageInWords)
 }
 
 }  // namespace
+
+// An execute of commands that inherit the encoder's buffers: each command's descriptors, as bufferDescriptor makes them for
+// the buffers bound now, land where the command's regions read them, and the residual of each base in its root word; a
+// buffer bound again between two executes takes its new descriptor at the second, through the same bind slots.
+TEST(RawIcbCompute, BindSlotsWriteTheCpusDescriptorsForTheEncodersBuffers)
+{
+    std::mt19937_64 random(0xb1d5);
+    const uint64_t blocks = 0xc0'1234'0000ull;
+    std::vector<raw::icb::ComputeBind> binds;
+    std::vector<std::vector<uint32_t>> slots;
+    std::vector<int> words;
+    const uint32_t windows[] = {0, 16, 0x400, 0x10000};
+    for (uint32_t command = 0; command < 6; command++) {
+        std::vector<raw::icb::ComputeBind> own;
+        for (uint32_t i = 0; i < 3 + command % 3; i++) {
+            const int word = (command + i) % 4 == 3 ? -1 : int((command * 7 + i) % 32);
+            const uint64_t set = blocks + command * 0x2000 + 0x900;
+            own.push_back({set + 16 * i, word < 0 ? 0 : set - 0x800 + 0x700 + 4 * uint32_t(word),
+                           uint32_t((command * 5 + i * 3) % 31), windows[(command + i) % 4]});
+        }
+        slots.emplace_back(raw::icb::kComputeBindSlotWords);
+        ASSERT_TRUE(raw::icb::binds(slots.back().data(), own.data(), uint32_t(own.size())));
+        binds.insert(binds.end(), own.begin(), own.end());
+    }
+    uint32_t used = 0;
+    for (const raw::icb::ComputeBind &b : binds)
+        used |= 1u << b.slot;
+    for (int pass = 0; pass < 2; pass++) {
+        uint64_t va[31] = {};
+        uint32_t size[31] = {};
+        for (uint32_t s = 0; s < 31; s++) {
+            if (s % 11 == 4)
+                continue;  // nothing bound
+            va[s] = 0xd0'0000'0000ull + (random() % 0x1000'0000ull) * 16 + (s % 3 == 0 ? 0 : random() % 16 & ~3ull);
+            size[s] = uint32_t(1 + random() % 0x40000);
+        }
+        Channel c;
+        uint32_t head[8 + 3 * 31];
+        raw::Push p{head, head + std::size(head)};
+        raw::icb::computeBindHead(p, va, size, used);
+        c.run(head, size_t(p.at - head));
+        for (const std::vector<uint32_t> &slot : slots)
+            c.run(slot.data(), slot.size());
+        uint32_t tail[4];
+        raw::Push t{tail, tail + 4};
+        raw::icb::computeBindTail(t);
+        c.run(tail, size_t(t.at - tail));
+        EXPECT_EQ(c.waits3d, 1u);
+        for (const raw::icb::ComputeBind &b : binds) {
+            raw::BufferDescriptor d;
+            const int word = b.residual ? int((b.residual - (b.descriptor & ~0xfffull) - 0x100 - 0x700) / 4) : -1;
+            const bool cpu = raw::bufferDescriptor(true, b.window, word < 0 ? -1 : word, va[b.slot], size[b.slot], d);
+            if (!cpu)
+                continue;  // the execute refuses a binding off 16 bytes of a descriptor with no residual word
+            ASSERT_EQ(c.memory.at(b.descriptor), uint32_t(d.base)) << "slot " << b.slot << " pass " << pass;
+            ASSERT_EQ(c.memory.at(b.descriptor + 4), uint32_t(d.base >> 32)) << "slot " << b.slot;
+            ASSERT_EQ(c.memory.at(b.descriptor + 8), va[b.slot] ? d.range : 0u)
+                << "slot " << b.slot << " window " << b.window << " size " << size[b.slot] << " va " << va[b.slot];
+            if (b.residual)
+                ASSERT_EQ(c.memory.at(b.residual), d.residual) << "slot " << b.slot;
+        }
+    }
+}
+
+TEST(RawIcbCompute, ABindSlotHoldsItsCommandsDescriptorsAlone)
+{
+    std::vector<raw::icb::ComputeBind> many(raw::icb::kComputeBindsMax + 1, {0xc0'0000'0100ull, 0, 1, 0});
+    std::vector<uint32_t> slot(raw::icb::kComputeBindSlotWords);
+    EXPECT_FALSE(raw::icb::binds(slot.data(), many.data(), uint32_t(many.size())));
+    EXPECT_TRUE(raw::icb::binds(slot.data(), many.data(), raw::icb::kComputeBindsMax));
+    raw::icb::bindsEmpty(slot.data());
+    Channel c;
+    c.run(slot.data(), slot.size());
+    EXPECT_TRUE(c.memory.empty());
+    EXPECT_TRUE(c.methods.empty());
+}

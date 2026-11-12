@@ -60,7 +60,7 @@ bool zetaShape(uint32_t width, uint32_t height, uint32_t format, uint32_t sample
     return true;
 }
 
-void zetaTargetWords(Push &p, const Texture *z)
+void zetaTargetWords(Push &p, const Texture *z, uint32_t layers)
 {
     if (!z) {
         p.m(ZT_SELECT, 0);
@@ -70,8 +70,9 @@ void zetaTargetWords(Push &p, const Texture *z)
                  uint32_t(z->blockHeight & 0xf) << 4,  // WIDTH ONE_GOB, HEIGHT, DEPTH ONE_GOB
                  uint32_t(z->layerBytes >> 2)});
     p.m(ZT_SELECT, 1);
-    // SIZE_A the row stride in texels (NVK: the Z/S hardware has no tile width), C one layer, THIRD_DIMENSION_DEFINES_ARRAY_SIZE
-    p.inc(ZT_SIZE_A, {z->pitch / z->bpp, sampleRows(*z), 1});
+    // SIZE_A the row stride in texels (NVK: the Z/S hardware has no tile width), C the pass's layers from ZT_A's,
+    // THIRD_DIMENSION_DEFINES_ARRAY_SIZE
+    p.inc(ZT_SIZE_A, {z->pitch / z->bpp, sampleRows(*z), std::max(layers, 1u)});
     p.m(ZT_LAYER, 0);
     p.m(Z_COMPRESSION, z->comptags);
     p.m(STENCIL_COMPRESSION, z->comptags);
@@ -101,6 +102,7 @@ Texture RenderEncoder::hiddenZetaShape(const PassDesc &pass) const
     shape = planeShaped(shape, rot_);
     shape.format = kZetaFormat;
     shape.samples = samples_;
+    shape.layers = std::max(pass.layers, 1u);
     shape.zeta = shape.memoryless = true;
     return shape;
 }

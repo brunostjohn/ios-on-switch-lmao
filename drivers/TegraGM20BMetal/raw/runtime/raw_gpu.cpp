@@ -17,6 +17,7 @@
 #include "../../../../kits/SwitchGM20B/SwitchGM20B.h"
 #include "raw_follow.h"
 #include "raw_gpu.h"
+#include "raw_layers.h"
 #include "raw_kit.h"
 #include "raw_mme.h"
 #include "raw_mip.h"
@@ -206,7 +207,7 @@ const FormatInfo kFormats[] = {
     {1, 0xf7, 0x2002491d, 1, false},     // A8Unorm
     {10, 0xf3, 0x7012491d, 1, false},    // R8Unorm
     {11, 0, 0x7012491d, 1, true},        // R8Unorm_sRGB
-    {13, 0, 0x6014921d, 1, false},      // R8Uint, storage/sampled
+    {13, 0, 0x6014921d, 1, false},       // R8Uint, storage/sampled
     {20, 0xee, 0x7012491b, 2, false},    // R16Unorm
     {23, 0, 0x6014921b, 2, false},       // R16Uint (NIL's R16_UINT: UINT components, alpha ONE_INT; sampled only)
     {25, 0xf2, 0x7017ff9b, 2, false},    // R16Float
@@ -230,7 +231,8 @@ const FormatInfo kFormats[] = {
     {110, 0xc6, 0x58d24903, 8, false},   // RGBA16Unorm
     {115, 0xca, 0x58d7ff83, 8, false},   // RGBA16Float (rendered: a 4:2:0 texture's converted image)
     {125, 0xc0, 0x58d7ff81, 16, false},  // RGBA32Float (rendered: an sRGB 4:2:0 texture's image)
-    // block-compressed (sampled only, private: Metal's copies move whole blocks), word 0 NIL's row of NVK's format
+    // block-compressed (sampled only: Metal's copies move whole blocks), word 0 NIL's row of NVK's format; ETC2 and EAC
+    // NIL's MaxwellA rows, which the texture unit decodes as m2v's NVK twin does
     {130, 0, 0x58d24924, 8, false, 4, 4},     // BC1_RGBA: DXT1_RGBA
     {131, 0, 0x58d24924, 8, true, 4, 4},      // BC1_RGBA_sRGB: DXT1_SRGBA
     {132, 0, 0x58d24925, 16, false, 4, 4},    // BC2_RGBA: DXT3_RGBA
@@ -245,6 +247,16 @@ const FormatInfo kFormats[] = {
     {151, 0, 0x78d7ff91, 16, false, 4, 4},    // BC6H_RGBUfloat: BPTC_RGB_UFLOAT
     {152, 0, 0x58d24917, 16, false, 4, 4},    // BC7_RGBAUnorm: BPTC_RGBA_UNORM
     {153, 0, 0x58d24917, 16, true, 4, 4},     // BC7_RGBAUnorm_sRGB: BPTC_SRGBA
+    {170, 0, 0x70124919, 8, false, 4, 4},     // EAC_R11Unorm: ETC2_R11_UNORM
+    {172, 0, 0x70112499, 8, false, 4, 4},     // EAC_R11Snorm: ETC2_R11_SNORM
+    {174, 0, 0x70d2491a, 16, false, 4, 4},    // EAC_RG11Unorm: ETC2_RG11_UNORM
+    {176, 0, 0x70d1249a, 16, false, 4, 4},    // EAC_RG11Snorm: ETC2_RG11_SNORM
+    {178, 0, 0x58d2490b, 16, false, 4, 4},    // EAC_RGBA8: ETC2_RGBA8
+    {179, 0, 0x58d2490b, 16, true, 4, 4},     // EAC_RGBA8_sRGB: ETC2_SRGBA8
+    {180, 0, 0x78d24906, 8, false, 4, 4},     // ETC2_RGB8: ETC2_RGB8
+    {181, 0, 0x78d24906, 8, true, 4, 4},      // ETC2_RGB8_sRGB: ETC2_SRGB8
+    {182, 0, 0x58d2490a, 8, false, 4, 4},     // ETC2_RGB8A1: ETC2_RGB8A1
+    {183, 0, 0x58d2490a, 8, true, 4, 4},      // ETC2_RGB8A1_sRGB: ETC2_SRGB8A1
     {186, 0, 0x58d24940, 16, true, 4, 4},     // ASTC_4x4_sRGB: ASTC_4x4_SRGB
     {187, 0, 0x58d24950, 16, true, 5, 4},     // ASTC_5x4_sRGB: ASTC_5x4_SRGB
     {188, 0, 0x58d24941, 16, true, 5, 5},     // ASTC_5x5_sRGB: ASTC_5x5_SRGB
@@ -1026,6 +1038,7 @@ void Device::build(Pipeline &pl, const PackPipeline &pp, const PlacedProgram &vs
     memcpy(sph, fs.header, sizeof sph);
     pl.primitiveId = (sph[5] >> 24) & 1;  // NVA097_SPHV3T2_IMAP_PRIMITIVE_ID, bit 184
     pl.fragmentDepth = (sph[19] >> 1) & 1;  // OMAP_DEPTH, bit 609
+    pl.viewportIndex = headerWritesViewportIndex(vs.header);
     bool tests = false;
     for (uint32_t k = 0; k < pp.blobDwords; k += 2) {
         const uint32_t m = blob[k], v = blob[k + 1];
@@ -1362,7 +1375,9 @@ void Device::release(Import *i)
     if (!i || --i->refs)
         return;
     if (i->id)
-        surfaces_.erase(std::make_tuple(i->id, i->base, i->bytes));
+        if (auto it = surfaces_.find(std::make_tuple(i->id, i->base, i->bytes));
+            it != surfaces_.end() && it->second == i)
+            surfaces_.erase(it);
     RAW_DIAGNOSTIC(stats.imports--);
     RAW_DIAGNOSTIC(stats.importBytes -= i->bo.bytes);
     if (i->native)
@@ -1587,57 +1602,72 @@ bool Device::createLine(uint32_t width, uint32_t format, Texture &t)
     return true;
 }
 
-bool Device::createVolume(uint32_t width, uint32_t height, uint32_t depth, uint32_t format, bool view2d, Texture &t)
+bool Device::createVolume(uint32_t width, uint32_t height, uint32_t depth, uint32_t format, bool view2d, Texture &t,
+                          uint32_t levels)
 {
     fx::MipChain c;
     if (!shape(width, height, format, t) || xrForm(format) != XrForm::None ||
-        !fx::volumeLayout(width, height, depth, 1, t.bpp, view2d, c))
+        !fx::volumeLayout(width, height, depth, levels, t.bpp, view2d, c))
         return false;
     std::lock_guard<std::mutex> l(lock_);
     if (!blAlloc(c.bytes, c.align, t.span))
         return false;
     t.va = t.span.va;
     t.cpu = t.span.cpu;
-    t.pitch = c.level[0].rowBytes;
-    t.blockLinear = true;
-    t.blockHeight = c.level[0].yLog2;
-    t.layerBytes = c.bytes;
-    t.type = fx::kTexThreeD;
-    t.depth = depth;
-    t.blockDepth = c.zLog2;
     if (!(t.tic = allocTic())) {
         Lease *none = nullptr;
         freeSpan(t.span, Memory::Bl, none);
         return false;
     }
-    writeTic(t);
+    layImage(c, formatInfo(format), fx::kTexThreeD, t);
     return true;
 }
 
-bool Device::createArray(uint32_t width, uint32_t height, uint32_t layers, uint32_t format, uint32_t type, Texture &t)
+bool Device::createArray(uint32_t width, uint32_t height, uint32_t layers, uint32_t format, uint32_t type, Texture &t,
+                         uint32_t levels)
 {
     fx::MipChain c;
     if (!shape(width, height, format, t) || xrForm(format) != XrForm::None ||
-        !fx::arrayLayout(width, height, layers, 1, t.bpp, c))
+        !fx::arrayLayout(width, height, layers, levels, t.bpp, c))
         return false;
     std::lock_guard<std::mutex> l(lock_);
     if (!blAlloc(c.bytes, c.align, t.span))
         return false;
     t.va = t.span.va;
     t.cpu = t.span.cpu;
-    t.pitch = c.level[0].rowBytes;
-    t.blockLinear = true;
-    t.blockHeight = c.level[0].yLog2;
-    t.layerBytes = c.arrayStride;
-    t.type = uint8_t(type);
-    t.layers = layers;
     if (!(t.tic = allocTic())) {
         Lease *none = nullptr;
         freeSpan(t.span, Memory::Bl, none);
         return false;
     }
-    writeTic(t);
+    layImage(c, formatInfo(format), uint8_t(type), t);
     return true;
+}
+
+void Device::layImage(const fx::MipChain &c, const FormatInfo *f, uint8_t type, Texture &t)
+{
+    const bool volume = type == fx::kTexThreeD;
+    t.pitch = c.level[0].rowBytes;
+    t.blockLinear = true;
+    t.blockHeight = c.level[0].yLog2;
+    t.type = type;
+    t.layers = volume ? 1 : c.layers;
+    t.layerBytes = volume ? c.bytes : c.arrayStride;
+    t.depth = c.depth;
+    t.blockDepth = c.zLog2;
+    if (c.levels == 1) {
+        writeTic(t);
+        return;
+    }
+    t.chain = new Texture::Chain;
+    t.chain->layout = c;
+    t.chain->va = t.va;
+    t.chain->fmt2d = volume ? 0 : fx::twodFormat(t.format);
+    uint32_t w[8];
+    fx::mipChainTic(c, t.va, f->tic0, f->srgb, 0, c.levels, w, type);
+    memcpy(tic_.cpu + 32 * t.tic, w, 32);  // visible at the next submission's header invalidate
+    RAW_DIAGNOSTIC(stats.chains++);
+    RAW_DIAGNOSTIC(stats.chainBytes += c.bytes);
 }
 
 // A texture over a block-linear surface's import: TegraGM20BLayout.h's image from the surface's first byte, at the shape the
@@ -1700,7 +1730,7 @@ bool Device::createSurfaceTexture(uint64_t surfaceId, void *base, uint64_t alloc
     t.pitch = pitch;
     const LayoutAsk ask = {width, height, t.bpp, pitch, writes && !offset && !sampled};
     t.import = importSurface(surfaceId, base, (allocBytes + pageSize() - 1) & ~uint64_t(pageSize() - 1), surface, &ask);
-    if (t.import && t.import->kind == TGM_LAYOUT_KIND) {
+    if (t.import && t.import->kernelTiled()) {
         SurfaceView view;
         const bool valid = surfaceView(t.import->layout, offset, width, height, t.bpp, pitch, view);
         if (valid && !view.direct && !sampled) {
@@ -1923,7 +1953,7 @@ bool Device::createPartView(const Texture &of, uint32_t format, uint32_t type, u
 }
 
 bool Device::createZetaOver(const ZetaMemory &m, uint32_t width, uint32_t height, uint32_t format, bool sampled,
-                            Texture &t, const char **why)
+                            Texture &t, const char **why, uint32_t layers)
 {
     uint64_t bytes, align;
     *why = !zetaShape(width, height, format, 1, t, bytes, align) ? "a size or format the raw path renders no zeta of"
@@ -1932,7 +1962,8 @@ bool Device::createZetaOver(const ZetaMemory &m, uint32_t width, uint32_t height
            : m.blockDepth                                        ? "its image's blocks are deeper than one plane"
            : m.bpp != t.bpp                                      ? "its texel size is not the format's"
            : m.pitch < width * t.bpp || m.pitch % 64             ? "its row stride is not whole GOBs of its texels"
-           : m.bytes < m.layerBytes || uint64_t(m.pitch) * height > m.bytes ? "its image is smaller than its rows"
+           : m.bytes < m.layerBytes * layers || uint64_t(m.pitch) * height > m.bytes
+               ? "its image is smaller than its rows"
            : sampled && m.pitch != (width * t.bpp + 63) / 64 * 64
                ? "its row stride is not the one a texture header implies"
                : nullptr;
@@ -1943,8 +1974,9 @@ bool Device::createZetaOver(const ZetaMemory &m, uint32_t width, uint32_t height
     t.pitch = m.pitch;
     t.blockHeight = m.blockHeight;
     t.layerBytes = m.layerBytes;
+    t.layers = layers;
     t.comptags = m.compressed;
-    if (!sampled)
+    if (!sampled || layers > 1)
         return true;
     if (!(t.tic = allocTic())) {
         *why = "no texture header is left";
@@ -1968,12 +2000,16 @@ bool Device::stencilTemp(Texture &t)
     return true;
 }
 
-bool Device::createMemoryless(uint32_t width, uint32_t height, uint32_t format, Texture &t, uint32_t samples)
+bool Device::createMemoryless(uint32_t width, uint32_t height, uint32_t format, Texture &t, uint32_t samples,
+                              uint32_t layers)
 {
     uint64_t bytes, align;
     const bool zeta = zetaFormatIndex(format) < kZetaFormats;
-    if (zeta ? !zetaShape(width, height, format, samples, t, bytes, align) : !shape(width, height, format, t))
+    if (!layers || layers > 2048 || (layers > 1 && samples > 1) ||
+        (zeta ? !zetaShape(width, height, format, samples, t, bytes, align) : !shape(width, height, format, t)) ||
+        (layers > 1 && !zeta && (!t.renderable || xrForm(format) != XrForm::None)))
         return false;
+    t.layers = layers;
     fx::MipChain c;
     if (samples > 1 && !zeta &&
         (!t.renderable || xrForm(format) != XrForm::None || !fx::msLayout(width, height, samples, t.bpp, c)))
@@ -2209,12 +2245,41 @@ bool Device::createBlockTextureOver(void *bytes, uint64_t length, uint32_t width
     t.va = i->bo.va;
     t.storage = {t.va, layout.bytes, true};
     t.cpu = static_cast<uint8_t *>(bytes);
+    layBlocks(layout, f, width, height, uint8_t(layout.layers > 1 ? fx::kTexTwoDArray : fx::kTexTwoD), t);
+    return true;
+}
+
+bool Device::createBlockTexture(uint32_t width, uint32_t height, uint32_t levels, uint32_t layers, uint32_t format,
+                                uint8_t type, Texture &t)
+{
+    const FormatInfo *f = formatInfo(format);
+    fx::MipChain c;
+    if (!blockCompressed(f) || !shape(width, height, format, t) ||
+        !fx::blockChainLayout(width, height, levels, layers, f->blockW, f->blockH, f->bpp, c))
+        return false;
+    std::lock_guard<std::mutex> l(lock_);
+    if (!blAlloc(c.bytes, c.align, t.span))
+        return false;
+    t.va = t.span.va;
+    t.cpu = t.span.cpu;
+    if (!(t.tic = allocTic())) {
+        Lease *none = nullptr;
+        freeSpan(t.span, Memory::Bl, none);
+        return false;
+    }
+    layBlocks(c, f, width, height, type, t);
+    return true;
+}
+
+void Device::layBlocks(const fx::MipChain &layout, const FormatInfo *f, uint32_t width, uint32_t height, uint8_t type,
+                       Texture &t)
+{
     t.pitch = layout.level[0].rowBytes;
     t.blockLinear = true;
     t.blockHeight = layout.yLog2;
     t.layers = layout.layers;
     t.layerBytes = layout.arrayStride;
-    t.type = uint8_t(layout.layers > 1 ? fx::kTexTwoDArray : fx::kTexTwoD);
+    t.type = type;
     uint32_t w[8];
     fx::mipChainTic(layout, t.va, f->tic0, f->srgb, 0, layout.levels, w, t.type);
     setField(w, 143, 128, width - 1);  // WIDTH_MINUS_ONE in texels (NIL's extent_px)
@@ -2225,7 +2290,6 @@ bool Device::createBlockTextureOver(void *bytes, uint64_t length, uint32_t width
         t.chain->layout = layout;
         t.chain->va = t.va;
     }
-    return true;
 }
 
 void Device::destroyTexture(Texture &t)
@@ -2763,12 +2827,18 @@ Device::Backing *Device::plainBacking(const Texture &m, uint32_t tag, bool block
         t.blockHeight = c.level[0].yLog2;
         t.layerBytes = uint64_t(c.level[0].rowBytes) * c.level[0].rows;
         t.samples = m.samples;
+    } else if (m.layers > 1) {
+        return nullptr;
     } else {
         if (!f || !shape(m.width, m.height, m.format, t))
             return nullptr;
         t.pitch = (m.width * t.bpp + 255) & ~255u;
         bytes = uint64_t(t.pitch) * t.height;
     }
+    // a layered pass's: its layers one layer's whole tiles apart (NIL's array stride of a one-level image)
+    t.layers = std::max(m.layers, 1u);
+    if (t.layers > 1)
+        bytes = (t.layerBytes * t.layers + align - 1) / align * align;
     PlainMem *mem = largestPlain(tag, memory);
     if (!mem || mem->span.bytes < bytes || (mem->span.va & (align - 1))) {
         auto made = std::make_unique<PlainMem>();
@@ -2873,9 +2943,11 @@ Texture *Device::lastBacking(const Texture &m, uint32_t tag, bool blockLinear, b
 
 Texture *Device::backing(const Texture &m, uint32_t tag, bool blockLinear, bool compression, bool copied)
 {
-    BackingAsk ask{m.width, m.height, m.format, tag, m.samples, m.zeta, blockLinear, compression, copied};
+    BackingAsk ask{m.width,   m.height, m.format,    tag,         std::max(m.layers, 1u),
+                   m.samples, m.zeta,   blockLinear, compression, copied};
     blockLinear |= m.zeta;
-    const uint32_t kind = compression ? compKind(m, blockLinear, copied) : 0;
+    // a layered pass's backing: plain memory of its layers (compressed backings are one layer's)
+    const uint32_t kind = compression && m.layers <= 1 ? compKind(m, blockLinear, copied) : 0;
     const CompMem *mem = kind ? comp_.largest(tag, kind) : nullptr;
     Backing *plain = nullptr;
     blockLinear |= m.samples > 1;
@@ -2892,7 +2964,7 @@ Texture *Device::backing(const Texture &m, uint32_t tag, bool blockLinear, bool 
     const auto matches = [&](const Backing *b) {
         return b && !b->retired && b->texture.width == m.width && b->texture.height == m.height &&
                b->texture.format == m.format && b->tag == tag && b->texture.blockLinear == blockLinear &&
-               b->texture.samples == m.samples;
+               b->texture.samples == m.samples && b->texture.layers == std::max(m.layers, 1u);
     };
     if (Backing *last = tag < lastBackings_.size() ? lastBackings_[tag] : nullptr;
         matches(last) && backingCompressionMatches(last->comp != nullptr, last->comp, mem, kind != 0))
@@ -3421,10 +3493,15 @@ RenderEncoder *CommandBuffer::render(const PassDesc &pass)
             samples = t->samples;
         }
     e.samples_ = std::max<uint8_t>(samples, 1);
-    if (passRotation(pass, e.rot_) != RotatedRefusal::None)
+    if (passRotation(pass, e.rot_) != RotatedRefusal::None || layeredRefusal(pass, e.samples_, e.rot_.turned()))
         return nullptr;
+    const uint32_t layers = e.pass_.layers = std::max(pass.layers, 1u);
+    const auto layered = [layers](Texture shape) {
+        shape.layers = layers;
+        return shape;
+    };
     const bool hidden = !zeta && pass.hiddenZeta;
-    bool blockLinear = zeta != nullptr || hidden;
+    bool blockLinear = zeta != nullptr || hidden || layers > 1;
     for (uint32_t j = 0; j < pass.count && j < 8; j++)
         if (const Texture *t = pass.color[j].texture; t && !t->memoryless && (t->blockLinear || t->shadowTarget))
             blockLinear = true;
@@ -3442,7 +3519,7 @@ RenderEncoder *CommandBuffer::render(const PassDesc &pass)
         return dev_->backing(shape, tag, linear, compression, copied);
     };
     if (zeta && zeta->memoryless) {
-        Texture *b = backing(planeShaped(*zeta, e.rot_), 0, false, true);
+        Texture *b = backing(layered(planeShaped(*zeta, e.rot_)), 0, false, true);
         if (!b)
             return nullptr;
         e.pass_.depthStencil.texture = b;
@@ -3478,7 +3555,8 @@ RenderEncoder *CommandBuffer::render(const PassDesc &pass)
             continue;
         }
         if (t->memoryless) {  // back it for this pass
-            Texture *b = backing(planeShaped(*t, e.rot_), scratchTags[j], blockLinear, !(pass.storageMask >> j & 1));
+            Texture *b = backing(layered(planeShaped(*t, e.rot_)), scratchTags[j], blockLinear,
+                                 layers == 1 && !(pass.storageMask >> j & 1));
             if (!b)
                 return nullptr;
             e.pass_.color[j].texture = b;
@@ -3517,8 +3595,10 @@ RenderEncoder *CommandBuffer::render(const PassDesc &pass)
         e.areaW_ = std::min(e.areaW_, pass.width);
     if (pass.height)
         e.areaH_ = std::min(e.areaH_, pass.height);
+    // (raw_zcull.h's region is one plane's: an array's zeta, or a layer of one, keeps zcull off)
     e.zcull_.candidate = dev_->zcullOn_ && zeta && zetaHasDepth(zeta->format) && e.samples_ == 1 &&
-                         pass.depthStencil.clearDepth;
+                         pass.depthStencil.clearDepth && layers == 1 && zeta->layers <= 1 &&
+                         (!zeta->storage.va || zeta->va == zeta->storage.va);
     // DontCare can become a clear after later draws establish readBits_. Treat its deferred prologue write like Clear.
     for (uint32_t j = 0; j < pass.count && j < 8; j++)
         if (e.pass_.color[j].texture && e.pass_.color[j].load != ColorAttachment::Load)
@@ -4072,6 +4152,7 @@ void RenderEncoder::setScissor(uint32_t x, uint32_t y, uint32_t w, uint32_t h)
     scissor_[0] = (x + w) << 16 | x;
     scissor_[1] = (y + h) << 16 | y;
     scissorDirty_ = true;
+    views_.scissors = 1;
 }
 
 // Metal's viewport as m2v gives it to Vulkan (y flipped: y + h, height -h) and NVK writes it (nvk_emit_viewport)
@@ -4096,6 +4177,52 @@ void RenderEncoder::setViewport(double x, double y, double w, double h, double z
     viewport_[6] = uint32_t(xmax - xmin) << 16 | uint32_t(xmin);
     viewport_[7] = uint32_t(ymax - ymin) << 16 | uint32_t(ymin);
     viewportDirty_ = true;
+    views_.viewports = 1;
+}
+
+void RenderEncoder::setViewports(const double (*viewports)[6], uint32_t count)
+{
+    count = std::clamp(count, 1u, kMaxViewports);
+    setViewport(viewports[0][0], viewports[0][1], viewports[0][2], viewports[0][3], viewports[0][4], viewports[0][5]);
+    for (uint32_t j = 1; j < count; j++) {
+        viewportWords(viewports[j], views_.viewport[j]);
+        std::copy_n(viewports[j], 4, views_.vp[j]);
+    }
+    views_.dirtyViewports |= ((1u << count) - 1) & ~1u;
+    views_.viewports = count;
+}
+
+void RenderEncoder::setScissors(const uint32_t (*rects)[4], uint32_t count)
+{
+    count = std::clamp(count, 1u, kMaxViewports);
+    setScissor(rects[0][0], rects[0][1], rects[0][2], rects[0][3]);
+    for (uint32_t j = 1; j < count; j++)
+        views_.scissor[j] = scissorBox(rects[j], areaW_, areaH_);
+    views_.dirtyScissors |= ((1u << count) - 1) & ~1u;
+    views_.scissors = count;
+}
+
+// Viewports and scissors 1 .. count - 1 as NVK writes viewport j (nvk_emit_viewport, nvk_emit_scissor), through a turned
+// pass's transform and its clip-space swizzle at each index (index 0's is the pass's prologue's)
+void RenderEncoder::emitViewports(Push &p)
+{
+    for (uint32_t dirty = views_.dirtyViewports; dirty; dirty &= dirty - 1) {
+        const uint32_t j = uint32_t(__builtin_ctz(dirty));
+        switch_gm20b_viewport_state v = viewportState(views_.viewport[j]);
+        turnViewport(rot_, v);
+        kit(p, switch_gm20b_viewport, j, &v);
+        if (rot_.turned() && !(views_.swizzled >> j & 1)) {
+            kit(p, switch_gm20b_viewport_swizzle, j, rot_.swizzle());
+            views_.swizzled |= 1u << j;
+        }
+    }
+    for (uint32_t dirty = views_.dirtyScissors; dirty; dirty &= dirty - 1) {
+        const uint32_t j = uint32_t(__builtin_ctz(dirty));
+        const ScissorBox &b = views_.scissor[j];
+        const Rect s = planeRect(b.x0, b.y0, b.x1, b.y1);
+        kit(p, switch_gm20b_scissor, j, uint16_t(s.x0), uint16_t(s.x1), uint16_t(s.y0), uint16_t(s.y1));
+    }
+    views_.dirtyViewports = views_.dirtyScissors = 0;
 }
 
 void RenderEncoder::setBlendColor(const float rgba[4])
@@ -4888,23 +5015,40 @@ bool RenderEncoder::prepare(Pipeline *pl, uint32_t primitive, int32_t first, uin
         cb_->refusal = {};
         return false;
     }
+    // Every record is compiled as for a pass of one layer and one viewport (the direct compile's probe state: m2v's
+    // dropped_vertex_layer variant, its viewport count push word the constant 0), so a vertex function's
+    // [[render_target_array_index]] or [[viewport_array_index]] would draw layer and viewport 0
+    if (pass_.layers > 1) {
+        *why = "a draw in a layered pass: no record says whether its vertex function chooses the layer";
+        cb_->refusal = {RefLayered, pass_.layers, 0, 0};
+        return false;
+    }
+    if (views_.viewports > 1 && pl->viewportIndex) {
+        *why = "a vertex function choosing among several viewports: its record draws viewport 0";
+        cb_->refusal = {RefViewports, views_.viewports, 0, 0};
+        return false;
+    }
     const uint32_t count = vCount;
     const bool firstDraw = !drew_;
     drew_ = true;
     readBits_ |= pl->readBits | pl->fetchBits;
-    // the pixels it may write: its scissor within its viewport's pixels (m2v vk_scissors, viewport_pixels)
-    auto axis = [](double origin, double size, uint32_t limit, uint32_t lo, uint32_t hi, uint32_t out[2]) {
-        const double a = size < 0 ? origin + size : origin, b = size < 0 ? origin : origin + size;
-        const int64_t first = int64_t(std::clamp(std::floor(a), 0.0, double(limit)));
-        const int64_t end =
-            size == 0 ? first : std::max<int64_t>(first, int64_t(std::clamp(std::ceil(b), 0.0, double(limit))));
-        out[0] = uint32_t(std::max<int64_t>(lo, first));
-        out[1] = std::max(out[0], uint32_t(std::min<int64_t>(hi, end)));
-    };
+    // the pixels it may write: its scissor within its viewport's pixels (m2v vk_scissors, viewport_pixels), over each
+    // viewport its vertex function may choose
     uint32_t x[2], y[2];
-    const bool empty = vp_[2] == 0 || vp_[3] == 0;
-    axis(vp_[0], empty ? 0 : vp_[2], areaW_, sc_[0], sc_[0] + sc_[2], x);
-    axis(vp_[1], empty ? 0 : vp_[3], areaH_, sc_[1], sc_[1] + sc_[3], y);
+    viewportPixels(vp_, {sc_[0], sc_[1], sc_[0] + sc_[2], sc_[1] + sc_[3]}, areaW_, areaH_, x, y);
+    for (uint32_t j = 1; pl->viewportIndex && j < views_.viewports; j++) {
+        uint32_t xj[2], yj[2];
+        viewportPixels(views_.vp[j], j < views_.scissors ? views_.scissor[j] : ScissorBox{0, 0, areaW_, areaH_}, areaW_,
+                       areaH_, xj, yj);
+        if (xj[1] <= xj[0] || yj[1] <= yj[0])
+            continue;
+        if (x[1] <= x[0] || y[1] <= y[0]) {
+            x[0] = xj[0], x[1] = xj[1], y[0] = yj[0], y[1] = yj[1];
+            continue;
+        }
+        x[0] = std::min(x[0], xj[0]), x[1] = std::max(x[1], xj[1]);
+        y[0] = std::min(y[0], yj[0]), y[1] = std::max(y[1], yj[1]);
+    }
     RAW_ENCODE_BEGIN(geometrySpan, Geometry);
     // only a pass's first draw is bounded by its vertices, for the cover test below (its vertex bytes the recording's
     // cached copy, RMCommandBuffer::_shadow); every other decision takes the draw's pixel limit
@@ -4971,7 +5115,8 @@ bool RenderEncoder::prepare(Pipeline *pl, uint32_t primitive, int32_t first, uin
     }
     if (!prepareShaderTests(*pl, why))
         return false;
-    if (p_.room() < 1024 + pl->methods.size() + (cb_->extrasLive_ ? cb_->extrasLive_->restore.size() : 0))
+    if (p_.room() < 1024 + pl->methods.size() + (cb_->extrasLive_ ? cb_->extrasLive_->restore.size() : 0) +
+                        (views_.dirtyViewports | views_.dirtyScissors ? 24 * kMaxViewports : 0))
         reserve();
     Device &d = *dev_;
     Push &p = p_;
@@ -5262,6 +5407,8 @@ bool RenderEncoder::prepare(Pipeline *pl, uint32_t primitive, int32_t first, uin
         kit(p, switch_gm20b_scissor, 0u, uint16_t(s.x0), uint16_t(s.x1), uint16_t(s.y0), uint16_t(s.y1));
         scissorDirty_ = false;
     }
+    if (views_.dirtyViewports | views_.dirtyScissors)
+        emitViewports(p);
     // NVK's SET_BLEND_CONST_RED..ALPHA, the floats' bits, written where a draw blends with them
     if ((pl->constantBlend || dynamicBlend) && blendColorDirty_) {
         p.incArray(BLEND_CONST_RED, blendColor_, 4);
@@ -5524,7 +5671,7 @@ CopySide sideOf(const Texture &t, uint32_t x, uint32_t y, uint32_t z)
 {
     if (!t.blockLinear)
         return {t.va + uint64_t(y) * t.pitch + uint64_t(x) * t.bpp, t.pitch};
-    if (t.import && t.import->kind == TGM_LAYOUT_KIND)
+    if (t.import && t.import->kernelTiled())
         return {t.va, t.pitch, x + t.surfaceX, y + t.surfaceY, t.import->layout.height, true, t.blockHeight};
     if (t.layers > 1)
         return {t.va + z * t.layerBytes, t.pitch, x, y, t.height, true, t.blockHeight};
@@ -5674,9 +5821,9 @@ void RenderEncoder::endShaderTests()
 }
 
 // Clear [x0, x1) x [y0, y1) of target `target` to `v` (its format's clear words), with depth (bit 0) and stencil (bit 1)
-// of `zsBits`, whatever the render enable says
+// of `zsBits`, in each of `layers` layers, whatever the render enable says
 static void clearRect(Push &p, uint32_t x0, uint32_t y0, uint32_t x1, uint32_t y1, const uint32_t v[4], uint32_t target,
-                      uint32_t zsBits)
+                      uint32_t zsBits, uint32_t layers)
 {
     switch_gm20b_clear_state s = {};
     for (uint32_t i = 0; i < 4; i++)
@@ -5688,31 +5835,37 @@ static void clearRect(Push &p, uint32_t x0, uint32_t y0, uint32_t x1, uint32_t y
     s.target = target;
     s.depth = zsBits & 1;
     s.stencil = zsBits & 2;
+    s.layers = layers;
+    s.layer_macro = mme::kClearLayers;
     kit(p, switch_gm20b_clear, &s);
 }
 
-static void colorTarget(Push &p, uint32_t index, const Texture &t)
+// A pass of `layers` layers binds that many from the target's own (pitch memory: one)
+static void colorTarget(Push &p, uint32_t index, const Texture &t, uint32_t layers)
 {
     ColorTargetDesc d;
     d.va = t.va;
     d.pitch = t.pitch;
-    d.height = t.import && t.import->kind == TGM_LAYOUT_KIND ? t.import->layout.height : sampleRows(t);
+    d.height = t.import && t.import->kernelTiled() ? t.import->layout.height : sampleRows(t);
     d.bpp = t.bpp;
     d.rtFormat = formatInfo(t.format)->rt;
     d.blockLinear = t.blockLinear;
     d.blockHeight = t.blockHeight;
     d.layerBytes = t.layerBytes;
+    d.layers = layers;
+    d.depth = t.type == fx::kTexThreeD;
+    d.blockDepth = t.blockDepth;
     const switch_gm20b_target k = kitTarget(d);
     kit(p, switch_gm20b_color_target, index, &k, t.comptags);
 }
 
 // A slot with no target below the pass's last one, as NVK writes it: FORMAT DISABLED, VA 0, compressed. Left as it was,
 // the slot would still name the target of an earlier pass, which CT_SELECT's count makes the hardware render to.
-static void disabledTarget(Push &p, uint32_t index)
+static void disabledTarget(Push &p, uint32_t index, uint32_t layers)
 {
     switch_gm20b_target k = {};
     k.width = 64;
-    k.layers = 1;
+    k.layers = layers;
     kit(p, switch_gm20b_color_target, index, &k, true);
 }
 
@@ -5783,6 +5936,11 @@ static bool chainLevelView(const Texture &t, uint32_t level, uint32_t rtFormat, 
     out.blockHeight = d.blockHeight;
     out.layerBytes = t.chain->layout.layers > 1 ? t.chain->layout.arrayStride : d.layerBytes;
     out.layers = t.chain->layout.layers;
+    if (t.type == fx::kTexThreeD) {  // the level's planes in its own blocks' depth (the copy engine's 3D addressing)
+        out.type = fx::kTexThreeD;
+        out.depth = t.chain->layout.level[level].depth;
+        out.blockDepth = t.chain->layout.level[level].zLog2;
+    }
     out.blockW = t.blockW;
     out.blockH = t.blockH;
     out.texelWidth = std::max(1u, t.texelWidth >> level);
@@ -5934,11 +6092,14 @@ void RenderEncoder::end()
     RAW_ENCODE_SPAN(PassEnd);
     Device &d = *dev_;
     endShaderTests();
-    if (p_.room() < 64 + kSampleWords)
+    if (p_.room() < 64 + kSampleWords + 2 * kMaxViewports)
         reserve();
     writeRaster(p_, Raster());
-    if (rot_.turned())
+    if (rot_.turned()) {
         emitSwizzle(p_, kSwizzleIdentity);
+        for (uint32_t turned = views_.swizzled & ~1u; turned; turned &= turned - 1)
+            kit(p_, switch_gm20b_viewport_swizzle, uint32_t(__builtin_ctz(turned)), kSwizzleIdentity);
+    }
     // the draw parameters the next encoder starts from: the root table's and the base registers, 0
     if (params_.unknown || params_.root || params_.baseInstance) {
         const uint32_t zero[2] = {};
@@ -5981,6 +6142,7 @@ void RenderEncoder::end()
     if (!clearsSealed_)
         clears(initialClears_);
     const std::vector<Clear> &cl = initialClears_;
+    const uint32_t layers = std::max(pass_.layers, 1u);
 #if SWITCH_RAW_DIAGNOSTICS
     probeEdges();
 #endif
@@ -6032,14 +6194,14 @@ void RenderEncoder::end()
             continue;
         const Texture *t = pass_.color[c.target].texture;
         const Rect r = planeRect(c.x0, c.y0, c.x1, c.y1);
-        colorTarget(p, 0, *t);
+        colorTarget(p, 0, *t, layers);
         kit(p, switch_gm20b_render_area, 1u, r.x1, r.y1);
         p.m(ZT_SELECT, 0);
         uint32_t v[4] = {};
         clearWords(pass_.color[c.target].texture->format, c.value, v,
                    !called_ && pass_.color[c.target].texture->compressed);
         d.clearZbc(*t, !r.x0 && !r.y0 && r.x1 >= t->width && r.y1 >= t->height, v);
-        clearRect(p, r.x0, r.y0, r.x1, r.y1, v, 0, 0);
+        clearRect(p, r.x0, r.y0, r.x1, r.y1, v, 0, 0, layers);
         own = true;
     }
     if (own) {
@@ -6051,15 +6213,15 @@ void RenderEncoder::end()
             count = j + 1;
     for (uint32_t j = 0; j < count; j++) {
         if (const Texture *t = pass_.color[j].texture)
-            colorTarget(p, j, *t);
+            colorTarget(p, j, *t, layers);
         else
-            disabledTarget(p, j);
+            disabledTarget(p, j, layers);
     }
     // targets map to themselves (NVK writes all eight slots of the map; the hardware reads the first `count`), drawn from
     // (0, 0) over the render area
     kit(p, switch_gm20b_render_area, count, planeArea().x1, planeArea().y1);
     const DepthStencilAttachment &zs = pass_.depthStencil;
-    zetaTargetWords(p, zs.texture);
+    zetaTargetWords(p, zs.texture, layers);
     // ahead of the depth clear, which sets the region; over the plane the pass renders (a turned drawable's own axes)
     const Rect plane = planeArea();
     if (ZcullRegion region; zcull_.candidate && zcullRegion(d.zcullInfo_, plane.x0, plane.y0, plane.x1 - plane.x0,
@@ -6085,7 +6247,7 @@ void RenderEncoder::end()
         const Rect r = planeRect(c.x0, c.y0, c.x1, c.y1);
         d.clearZbc(*t, !r.x0 && !r.y0 && r.x1 >= t->width && r.y1 >= t->height, v);
         const bool area = !c.x0 && !c.y0 && c.x1 == areaW_ && c.y1 == areaH_;
-        clearRect(p, r.x0, r.y0, r.x1, r.y1, v, c.target, area ? zsBits : 0);
+        clearRect(p, r.x0, r.y0, r.x1, r.y1, v, c.target, area ? zsBits : 0, layers);
         zsBits = area ? 0 : zsBits;
     }
     if (zsBits) {
@@ -6093,7 +6255,10 @@ void RenderEncoder::end()
         p.inc(CLEAR_RECT_H, {a.x1 << 16 | a.x0, a.y1 << 16 | a.y0});
         p.m(CLEAR_SURFACE_CONTROL, 0x10);
         p.m(RENDER_ENABLE_OVERRIDE, 1);
-        p.m(CLEAR_SURFACE, zsBits);
+        if (layers > 1)
+            mme::clearLayers(p, zsBits, layers);
+        else
+            p.m(CLEAR_SURFACE, zsBits);
         p.m(RENDER_ENABLE_OVERRIDE, 0);
     }
     checkRoom(p, "a pass prologue");

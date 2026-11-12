@@ -217,6 +217,10 @@ bool volumeRendered(MTLTextureDescriptor *d);
 uint32_t arrayType(MTLTextureDescriptor *d);
 bool zetaDescriptor(MTLTextureDescriptor *d);
 bool multisampleShape(MTLTextureDescriptor *d);
+uint32_t memorylessLayers(MTLTextureDescriptor *d);
+bool blockShape(MTLTextureDescriptor *d);
+bool cpuBlocks(RMTexture *t, MTLRegion r, NSUInteger level, NSUInteger slice, uint8_t *bytes, NSUInteger row,
+               bool write);
 uint32_t rawShapeTerm(MTLTextureDescriptor *d);
 bool identitySwizzle(MTLTextureSwizzleChannels s);
 // `t` reading its channels through `s` (a descriptor's swizzle, or a swizzled view's): its raw header, its descriptor
@@ -297,7 +301,8 @@ bool transferTexture(RMTexture *texture, MTLRegion region, NSUInteger level, NSU
                      void *bytes, NSUInteger row, NSUInteger image, bool write);
 void cpuTiled(RMTexture *t, MTLRegion r, uint8_t *bytes, NSUInteger row, bool write);
 const tgm_layout *textureCpuImportLayout(RMTexture *texture);
-void cpuLevel(RMTexture *t, MTLRegion r, NSUInteger level, uint8_t *bytes, NSUInteger row, bool write);
+void cpuLevel(RMTexture *t, MTLRegion r, NSUInteger level, NSUInteger slice, uint8_t *bytes, NSUInteger row,
+              NSUInteger image, bool write);
 void cpuVolume(RMTexture *t, MTLRegion r, uint8_t *bytes, NSUInteger row, NSUInteger image, bool write);
 void cpuLayer(RMTexture *t, MTLRegion r, NSUInteger slice, uint8_t *bytes, NSUInteger row, bool write);
 
@@ -416,6 +421,9 @@ uint64_t deviceAnswer(SEL selector, uint64_t argument);
 
 // RawMetalSharedTextures.mm: the shared texture methods only some kinds' Metal has (raw_shared_texture.h), on `cls`
 void installSharedTextureMethods(Class cls);
+// The image of `d` that surface `s` holds as a shared texture of the device's layout (raw_surface_image.h): false for any
+// other surface, or a Plain image
+bool laidOutSurface(MTLTextureDescriptor *d, IOSurfaceRef s, NSUInteger plane, raw::SurfaceImage &image);
 
 // RawMetalQueuePriority.mm
 void queuePriorityAdd(RMQueue *queue);

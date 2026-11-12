@@ -940,6 +940,21 @@ TEST(GM20BRailSource, GpuLockWakesARailGatedGpu)
 		     "nvkm_device_fini(device, NVKM_SUSPEND)");
 	expectBefore(flat(definition(gpu(), "static void wake_m1(void)")),
 		     "ret = nvkm_subdev_init(&device->timer->subdev);", "stamp_reseed(device);");
+	// a power-up's clock anchor (TegraGM20BClockABI.h) after its PTIMER is set, at boot and at every wake, before a channel
+	// runs; a fence page handed out holds them all once zeroed
+	expectBefore(flat(definition(gpu(), "static int m1(char *line, unsigned int len)")),
+		     "ret = nvkm_subdev_init(&device->timer->subdev);",
+		     "tgm_clock_anchor_publish(device);");
+	expectBefore(
+		flat(definition(gpu(), "static void stamp_reseed(struct nvkm_device *device)")),
+		"nvkm_timer_alarm_trigger(device->timer);", "tgm_clock_anchor_publish(device);");
+	expectBefore(flat(definition(gpu(), "static void wake_m1(void)")), "stamp_reseed(device);",
+		     "nvkm_subdev_init(&device->clk->subdev);");
+	expectBefore(
+		flat(definition(gpu(),
+				"int tgm_fence_page_get(volatile uint32_t **va, uint64_t *pa)")),
+		"memset((u8 *)tgm_fence_pages.va + i * TGM_FENCE_SLOT, 0, PAGE_SIZE);",
+		"tgm_clock_anchors_fill(i);");
 	EXPECT_THAT(flat(definition(gpu(), "uint64_t tgm_timestamp_ns(void)")),
 		    HasSubstr("tgm_stamp_last = t = tgm_stamp_monotonic(tgm_stamp_last, t);"));
 	const std::string down = flat(definition(gpu(), "int tgm_rail_down(void)"));

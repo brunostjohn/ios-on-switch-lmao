@@ -63,6 +63,15 @@ inline NSMutableDictionary *rmSharedSurfaceProperties(MTLTextureDescriptor *d, u
     } mutableCopy];
 }
 
+// The surface of a texture laid out in it (raw_surface_image.h), `bytes` its image's: AGX's two properties
+inline NSMutableDictionary *rmLaidOutSurfaceProperties(uint64_t bytes)
+{
+    return [@{
+        (__bridge NSString *)kIOSurfaceAllocSize : @(bytes),
+        rmSharedString(raw::shared::kLayoutKey) : @0,
+    } mutableCopy];
+}
+
 inline void rmAddSharedTextureKeys(NSMutableDictionary *p, MTLTextureDescriptor *d, uint64_t registryID,
                                    const raw::shared::Kind &kind)
 {

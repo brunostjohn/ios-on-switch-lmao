@@ -49,13 +49,24 @@ TEST(RawParallel, CommandsTakeTheParallelCommandBuffersPassesChunksAndWords)
 
 TEST(RawParallel, ExtraWordsAreTheRecordedOnes)
 {
-    EXPECT_EQ(raw::extraWords(OpViewport), 6u);
-    EXPECT_EQ(raw::extraWords(OpDispatch), 12u);
-    EXPECT_EQ(raw::extraWords(OpBlendColor), 4u);
-    EXPECT_EQ(raw::extraWords(OpDepthBias), 3u);
-    EXPECT_EQ(raw::extraWords(OpDrawIndexed), 3u);
-    for (Op op : {OpRender, OpDraw, OpDrawIndirect, OpDrawIndexedIndirect, OpBytes, OpEnd})
-        EXPECT_EQ(raw::extraWords(op), 0u) << int(op);
+    EXPECT_EQ(raw::extraWords(cmd(OpViewport)), 6u);
+    EXPECT_EQ(raw::extraWords(cmd(OpDispatch)), 12u);
+    EXPECT_EQ(raw::extraWords(cmd(OpBlendColor)), 4u);
+    EXPECT_EQ(raw::extraWords(cmd(OpDepthBias)), 3u);
+    EXPECT_EQ(raw::extraWords(cmd(OpDrawIndexed)), 3u);
+    for (Op op : {OpRender, OpDraw, OpDrawIndirect, OpDrawIndexedIndirect, OpBytes, OpEnd, OpScissor})
+        EXPECT_EQ(raw::extraWords(cmd(op)), 0u) << int(op);
+}
+
+TEST(RawParallel, ViewportAndScissorArraysTakeTheirWords)
+{
+    EXPECT_EQ(raw::extraWords(cmd(OpViewport, 0, 1)), 6u);
+    EXPECT_EQ(raw::extraWords(cmd(OpViewport, 0, 16)), 96u);
+    EXPECT_EQ(raw::extraWords(cmd(OpScissor, 0, 1)), 0u) << "one rectangle is the command's own words";
+    EXPECT_EQ(raw::extraWords(cmd(OpScissor, 0, 16)), 64u);
+    Cmd scissors = cmd(OpScissor, 0, 3);
+    scissors.x = 7;
+    EXPECT_EQ(raw::spliced(scissors, 5, 2, 40).x, 40u);
 }
 
 }  // namespace

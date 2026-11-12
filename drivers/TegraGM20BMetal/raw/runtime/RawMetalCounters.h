@@ -16,8 +16,17 @@
 
 // mach_absolute_time in nanoseconds, the domain of every sample
 uint64_t rmHostNanoseconds();
-// The device's anchor of PTIMER to it, read again where a new reading of PTIMER does not land where it says
-raw::counters::Anchor rmCounterAnchor();
+
+// The kernel's anchors of the GPU's clock to it (TegraGM20BClockABI.h): the table where this process maps it and its address
+// in the GPU's; null and 0 where the kernel has none
+struct RMClockAnchors {
+    const volatile TegraGM20BAbiClockAnchors *table;
+    uint64_t va;
+};
+
+const RMClockAnchors &rmClockAnchors();
+// One reading of the table, all zero where there is none: m2v's replay of a resolve binds it as bytes
+TegraGM20BAbiClockAnchors rmClockAnchorsNow();
 // Whether this process made a counter sample buffer: before one, no pass descriptor can name one of this device's
 bool rmCounterBuffersMade();
 // The blit resolve's kernel (raw_counter_kernel.h), compiled by this device once; nil where it could not be

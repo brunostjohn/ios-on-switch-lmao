@@ -515,6 +515,9 @@ struct fences_state {
 	u32 next;
 };
 extern struct fences_state tgm_fence_pages;
+/* gpu_anchor.c: the clock anchor of a power-up (after its timer init), and a fence page's copy of them all */
+void tgm_clock_anchor_publish(struct nvkm_device *device);
+void tgm_clock_anchors_fill(u32 page);
 extern u64 tgm_fences_pas[];
 extern struct tgm_mem *tgm_fences_mem;
 int tgm_fences_map(struct tgm_vm *vm);

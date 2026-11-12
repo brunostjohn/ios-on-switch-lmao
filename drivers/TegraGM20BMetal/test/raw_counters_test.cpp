@@ -1,12 +1,16 @@
 // SPDX-License-Identifier: MIT
 // raw_counters.h and raw_counter_kernel.h: a counter sample buffer's checks and their errors as the identity's AGX driver
-// words them, a sample's index and a resolve's range, PTIMER placed on the CPU's clock by an anchor (and an anchor a power-up
-// moved PTIMER away from), the CPU's resolve and the GPU kernel's arithmetic in 32-bit words equal to it, and the words each
-// boundary's report emits.
+// words them, a sample's index and a resolve's range, PTIMER placed on the CPU's clock by the anchor of its power-up of the
+// GPU (TegraGM20BClockABI.h) across simulated power cycles, the CPU's resolve and the GPU kernel's search and arithmetic in
+// 32-bit words equal to it, and the words each boundary's report emits.
+#include <algorithm>
 #include <cstdint>
 #include <cstring>
+#include <initializer_list>
 #include <random>
+#include <vector>
 #include <gtest/gtest.h>
+#include "drivers/TegraGM20B/TegraGM20BRail.h"
 #include "drivers/TegraGM20BMetal/raw/runtime/raw_counter_kernel.h"
 #include "drivers/TegraGM20BMetal/raw/runtime/raw_counters.h"
 
@@ -87,75 +91,155 @@ TEST(RawCounters, PtimerUnitsAre625Over384Nanoseconds)
 
 TEST(RawCounters, AnAnchorPlacesUnitsOnTheCpusClock)
 {
-    const Anchor a = anchorOf({1'000'000'000, 600'000'000, 1'000'004'000});
-    ASSERT_TRUE(a.valid);
-    EXPECT_EQ(a.units, 600'000'000u);
-    EXPECT_EQ(a.ns, 1'000'002'000u);
+    const Anchor a{600'000'000, 1'000'002'000, true};
     EXPECT_EQ(nanoseconds(a, 600'000'000 + 384 * 1000), 1'000'002'000u + 625'000u);
     EXPECT_EQ(nanoseconds(a, 600'000'000 - 384 * 1000), 1'000'002'000u - 625'000u);
-    EXPECT_FALSE(anchorOf({1, 0, 2}).valid);
 }
 
-TEST(RawCounters, ALaterReadingKeepsTheAnchorUntilAPowerUpMovesPtimer)
+TegraGM20BAbiClockAnchors table(std::initializer_list<TegraGM20BAbiClockAnchor> anchors)
 {
-    const Anchor a = anchorOf({1'000'000'000, 600'000'000, 1'000'004'000});
-    // a second later on both clocks: 19.2e6 ticks, 32 units each
-    const uint64_t second = 19'200'000ull * 32;
-    EXPECT_TRUE(agrees(a, {2'000'001'000, 600'000'000 + second, 2'000'003'500}));
-    EXPECT_TRUE(agrees(a, {2'000'000'000, 600'000'000 + second, 2'010'000'000}));
-    // the GPU powered down and up: PTIMER restarted from the kernel's clock at the wake, 2.0 s, 0.1 s before
-    EXPECT_FALSE(agrees(a, {2'100'000'000, 2'061'440'000, 2'100'003'000}));
-    EXPECT_FALSE(agrees(Anchor{}, {1, 2, 3}));
-    EXPECT_FALSE(agrees(a, {2'000'000'000, 0, 2'000'001'000}));
+    TegraGM20BAbiClockAnchors t = {};
+    for (const TegraGM20BAbiClockAnchor &a : anchors)
+        *tgm_clock_anchor_slot(&t, t.published++) = a;
+    return t;
 }
 
-TEST(RawCounters, APoweredDownGpusReadingIsTheCpusClock)
+TEST(RawCounters, AValuesAnchorIsTheNewestAtOrBelowIt)
 {
-    // the kernel's clock while the GPU is powered down: within the reading's window
-    EXPECT_TRUE(poweredDown({5'000'000'000, 5'000'000'400, 5'000'001'000}));
-    EXPECT_TRUE(poweredDown({5'000'000'000, 4'999'999'500, 5'000'001'000}));
-    // PTIMER, restarted from it at a wake 10 ms before and counting 0.6144 of it since: 3.9 ms below
-    EXPECT_FALSE(poweredDown({5'000'000'000, 4'990'000'000 + 6'144'000, 5'000'001'000}));
-    EXPECT_FALSE(poweredDown({5'000'000'000, 0, 5'000'001'000}));
+    const TegraGM20BAbiClockAnchors t = table({{1000, 5000}, {9000, 20000}, {9500, 90000}});
+    EXPECT_FALSE(anchorOf(t, 999).valid);
+    EXPECT_EQ(anchorOf(t, 1000).ns, 5000u);
+    EXPECT_EQ(anchorOf(t, 8999).ns, 5000u);
+    EXPECT_EQ(anchorOf(t, 9000).ns, 20000u);
+    EXPECT_EQ(anchorOf(t, 9499).ns, 20000u);
+    EXPECT_EQ(anchorOf(t, ~0ull).ns, 90000u);
+    EXPECT_FALSE(anchorOf(TegraGM20BAbiClockAnchors{}, 5).valid);
+    EXPECT_EQ(resolved(Record{0, 0, 9000}, t), 0u);
+    EXPECT_EQ(resolved(Record{kPayload, 0, 9384}, t), 20625u);
+    EXPECT_EQ(resolved(Record{kPayload, 0, 999}, t), kErrorValue);
 }
 
-TEST(RawCounters, TheNarrowestReadingAnchors)
+TEST(RawCounters, TheTableKeepsAllButTheSlotTheNextPowerUpWrites)
 {
-    const Reading r[3] = {{100, 10, 900}, {1000, 20, 1010}, {2000, 0, 2001}};
-    EXPECT_EQ(narrowest(r, 3).units, 20u);
-    const Reading none[2] = {{100, 0, 101}, {200, 0, 201}};
-    EXPECT_FALSE(anchorOf(narrowest(none, 2)).valid);
+    TegraGM20BAbiClockAnchors t = {};
+    for (uint64_t n = 0; n < 200; n++)
+        *tgm_clock_anchor_slot(&t, t.published++) = {1000 * (n + 1), 7 * (n + 1)};
+    // anchors 138..199 are kept; 137's slot is the next one written
+    EXPECT_EQ(anchorOf(t, 1000 * 200 + 5).ns, 7u * 200);
+    EXPECT_EQ(anchorOf(t, 1000 * 139).ns, 7u * 139);
+    EXPECT_FALSE(anchorOf(t, 1000 * 139 - 1).valid);
 }
 
-TEST(RawCounters, AnUnwrittenRecordResolvesToZeroAndNoAnchorToTheErrorValue)
+// The kernel and the GPU over power cycles: PTIMER restarts from the CPU's clock at each wake (nvkm_timer_init), is reseeded
+// past the last value before the power-down (gpu_power.c stamp_reseed), counts 32 units a tick of 19.2 MHz while powered,
+// and each power-up's anchor is published before any channel runs. Samples are taken across 90 cycles, some of whose wakes
+// the GPU's clock is ahead of the CPU's, then resolved: each to its true time, within the tick it was taken in, until more
+// power-ups than the table keeps have passed since; the GPU kernel's words equal the CPU's resolve throughout.
+struct PoweredGpu {
+    uint64_t wokeAt = 0, startUnits = 0, last = 0;
+    TegraGM20BAbiClockAnchors anchors = {};
+
+    uint64_t ptimer(uint64_t ns) const
+    {
+        return startUnits + (ns - wokeAt) * 192 / 10'000 * 32;
+    }
+
+    void wake(uint64_t ns)
+    {
+        wokeAt = ns;
+        startUnits = ns;
+        if (const uint64_t floor = tgm_stamp_reseed(last, ptimer(ns)))
+            startUnits = floor;
+        *tgm_clock_anchor_slot(&anchors, anchors.published++) = {ptimer(ns), ns};
+    }
+
+    void sleep(uint64_t ns)
+    {
+        last = std::max(last, ptimer(ns));
+    }
+};
+
+TEST(RawCounters, SamplesResolveToTheirTimeAcrossPowerUps)
 {
-    const Anchor a = anchorOf({1'000'000, 3'840'000, 1'000'000});
-    EXPECT_EQ(resolved(Record{0, 0, 3'840'384}, a), 0u);
-    EXPECT_EQ(resolved(Record{kPayload, 0, 3'840'384}, a), 1'000'625u);
-    EXPECT_EQ(resolved(Record{kPayload, 0, 3'840'384}, Anchor{}), kErrorValue);
+    std::mt19937_64 random(0xc10c);
+    PoweredGpu gpu;
+
+    struct Sample {
+        uint64_t ns, units;
+        uint32_t cycle;
+    };
+
+    std::vector<Sample> samples;
+    uint64_t now = 3'000'000'000;
+    const uint32_t cycles = 90;
+    for (uint32_t cycle = 0; cycle < cycles; cycle++) {
+        // a handed-out GPU time ahead of the CPU's clock at the wake (tgm_timestamp_ns), every seventh cycle
+        if (cycle % 7 == 3)
+            gpu.last = std::max(gpu.last, now + 40'000 + random() % 1'000'000);
+        gpu.wake(now);
+        const uint64_t up = 1'000'000 + random() % 2'000'000'000;
+        for (int i = 0; i < 40; i++) {
+            const uint64_t at = now + random() % up;
+            samples.push_back({at, gpu.ptimer(at), cycle});
+        }
+        now += up;
+        gpu.sleep(now);
+        now += 1000 + random() % 60'000'000'000ull;
+    }
+    uint32_t exact = 0, beyond = 0;
+    for (const Sample &s : samples) {
+        const Record r{kPayload, 0, s.units};
+        const uint64_t ns = resolved(r, gpu.anchors);
+        ASSERT_EQ(resolvedInWords(r, gpu.anchors), ns) << "cycle " << s.cycle;
+        if (s.cycle + TegraGM20BClockAnchorSlots - 1 <= cycles - 1) {
+            EXPECT_EQ(ns, kErrorValue) << "cycle " << s.cycle << ": its anchor is no longer kept";
+            beyond++;
+            continue;
+        }
+        ASSERT_LE(ns, s.ns) << "cycle " << s.cycle;
+        ASSERT_LT(s.ns - ns, 53u) << "cycle " << s.cycle << ": more than the tick it was taken in from its time";
+        exact++;
+    }
+    EXPECT_EQ(exact, 62u * 40);
+    EXPECT_EQ(beyond, (cycles - 62) * 40);
+}
+
+TEST(RawCounters, AnEarlierPowerUpsSampleTakesItsOwnAnchor)
+{
+    PoweredGpu gpu;
+    gpu.wake(1'000'000'000);
+    const Record before{kPayload, 0, gpu.ptimer(1'500'000'000)};
+    gpu.sleep(2'000'000'000);
+    gpu.wake(12'000'000'000);
+    const Record after{kPayload, 0, gpu.ptimer(12'250'000'000)};
+    EXPECT_EQ(resolved(before, gpu.anchors), 1'500'000'000u);
+    EXPECT_EQ(resolved(after, gpu.anchors), 12'250'000'000u);
+    // the later power-up's anchor alone does not place it
+    EXPECT_EQ(resolved(before, table({gpu.anchors.slot[1]})), kErrorValue);
 }
 
 TEST(RawCounters, TheKernelsWordArithmeticIsTheCpusResolve)
 {
     std::mt19937_64 random(0x5eed);
-    const uint64_t anchors[] = {
+    const uint64_t bases[] = {
         0, 1, 0xffffffffull, 0x1'0000'0000ull, 600'000'000, 0x7fff'ffff'0000'0000ull, 0x0000'1234'ffff'ffffull};
     uint64_t compared = 0;
-    for (const uint64_t base : anchors)
+    for (const uint64_t base : bases)
         for (const uint64_t ns : {uint64_t(0), uint64_t(0xffff'fff0), uint64_t(123'456'789'012'345)})
             for (int i = 0; i < 2000; i++) {
-                const Anchor a{base, ns, true};
-                const int64_t span = int64_t(random() % (1ull << 52)) - int64_t(1ull << 51);
-                const uint64_t units = i < 8 ? base + uint64_t(int64_t(i) - 4) : base + uint64_t(span);
+                const TegraGM20BAbiClockAnchors t = table({{base, ns}});
+                const uint64_t span = random() % (1ull << 51);
+                const uint64_t units = i < 8 ? base + uint64_t(int64_t(i) - 4) : base + span;
                 const Record r{kPayload, 0, units};
-                ASSERT_EQ(resolvedInWords(r, resolveParams(a, 1)), resolved(r, a))
+                ASSERT_EQ(resolvedInWords(r, t), resolved(r, t))
                     << "anchor " << base << " ns " << ns << " units " << units;
                 compared++;
             }
     EXPECT_EQ(compared, 7u * 3 * 2000);
-    const Record unwritten{0, 0, 5};
-    EXPECT_EQ(resolvedInWords(unwritten, resolveParams(Anchor{1, 2, true}, 1)), 0u);
-    EXPECT_EQ(resolvedInWords(Record{kPayload, 0, 5}, resolveParams(Anchor{}, 1)), kErrorValue);
+    const TegraGM20BAbiClockAnchors one = table({{1, 2}});
+    EXPECT_EQ(resolvedInWords(Record{0, 0, 5}, one), 0u);
+    EXPECT_EQ(resolvedInWords(Record{kPayload, 0, 5}, TegraGM20BAbiClockAnchors{}), kErrorValue);
+    EXPECT_EQ(resolvedInWords(Record{kPayload, 0, 0}, one), kErrorValue);
 }
 
 // What the GPU does with a report: its payload and PTIMER at the report's address, the record a sample is resolved from

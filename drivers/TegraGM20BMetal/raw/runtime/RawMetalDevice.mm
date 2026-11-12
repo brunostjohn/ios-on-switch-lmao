@@ -339,10 +339,27 @@ static void reportNonFiniteStart(RMTexture *t, MTLTextureDescriptor *d)
             return (id<MTLTexture>)t;
         }
     }
+    if (blockShape(d)) {
+        RMTexture *t = [RMTexture new];
+        t->_device = self;
+        t->_descriptor = [d copy];
+        t->_kind = RMTexturePool;
+        const bool array = d.textureType == MTLTextureType2DArray;
+        t->_rawOk = gRM->raw->createBlockTexture(
+            uint32_t(d.width), uint32_t(d.height), uint32_t(std::max<NSUInteger>(d.mipmapLevelCount, 1)),
+            uint32_t(array ? std::max<NSUInteger>(d.arrayLength, 1) : 1), uint32_t(d.pixelFormat),
+            uint8_t(array ? raw::fx::kTexTwoDArray : raw::fx::kTexTwoD), t->_raw);
+        if (t->_rawOk)
+            return (id<MTLTexture>)t;
+        RMTexture *w = (RMTexture *)[self wrapTwin:[gRM->fallback newTextureWithDescriptor:d] descriptor:d];
+        if (w)
+            refuseTexture(w, PredTexPoolAlloc, d.width, d.height, @"twin-only (pool)", nil);
+        return (id<MTLTexture>)w;
+    }
     const bool line = lineShape(d), volume = volumeShape(d), multisampled = multisampleShape(d);
-    const uint32_t array = arrayType(d);
+    const uint32_t array = arrayType(d), transientLayers = memorylessLayers(d);
     const RMStoredSamples stored = storedMultisampleKind(d);
-    if (!rawShape(d) && !zetaDescriptor(d) && !line && !volume && !array && !multisampled &&
+    if (!rawShape(d) && !zetaDescriptor(d) && !line && !volume && !array && !multisampled && !transientLayers &&
         stored == RMStoredSamples::None) {
         RMTexture *w = (RMTexture *)[self wrapTwin:[gRM->fallback newTextureWithDescriptor:d] descriptor:d];
         if (w)
@@ -360,14 +377,15 @@ static void reportNonFiniteStart(RMTexture *t, MTLTextureDescriptor *d)
         t->_rawOk = makeStoredMultisample(d, stored, t->_raw);
     } else if (volume) {
         t->_kind = RMTexturePool;
-        t->_rawOk = gRM->raw->createVolume(uint32_t(d.width), uint32_t(d.height), uint32_t(d.depth),
-                                           uint32_t(d.pixelFormat), volumeRendered(d), t->_raw);
+        t->_rawOk =
+            gRM->raw->createVolume(uint32_t(d.width), uint32_t(d.height), uint32_t(d.depth), uint32_t(d.pixelFormat),
+                                   volumeRendered(d), t->_raw, uint32_t(std::max<NSUInteger>(d.mipmapLevelCount, 1)));
     } else if (array) {
         t->_kind = RMTexturePool;
-        const NSUInteger faces = array == raw::fx::kTexTwoDArray ? 1 : 6;
-        t->_rawOk = gRM->raw->createArray(uint32_t(d.width), uint32_t(d.height),
-                                          uint32_t(std::max<NSUInteger>(d.arrayLength, 1) * faces),
-                                          uint32_t(d.pixelFormat), array, t->_raw);
+        t->_rawOk = gRM->raw->createArray(
+            uint32_t(d.width), uint32_t(d.height),
+            raw::textureLayers(uint32_t(d.textureType), uint32_t(std::min<NSUInteger>(d.arrayLength, 2048))),
+            uint32_t(d.pixelFormat), array, t->_raw, uint32_t(std::max<NSUInteger>(d.mipmapLevelCount, 1)));
     } else if (d.storageMode != MTLStorageModeMemoryless && zetaDescriptor(d)) {
         // one allocation for both drivers: m2v's texture, which the raw path renders and copies in place
         t->_kind = RMTexturePool;
@@ -388,8 +406,10 @@ static void reportNonFiniteStart(RMTexture *t, MTLTextureDescriptor *d)
             z.blockDepth = m.z_log2;
             z.tiled = m.tiled;
             z.compressed = m.compressed;
-            t->_rawOk = gRM->raw->createZetaOver(z, uint32_t(d.width), uint32_t(d.height), uint32_t(d.pixelFormat),
-                                                 (d.usage & MTLTextureUsageShaderRead) != 0, t->_raw, &why);
+            t->_rawOk = gRM->raw->createZetaOver(
+                z, uint32_t(d.width), uint32_t(d.height), uint32_t(d.pixelFormat),
+                (d.usage & MTLTextureUsageShaderRead) != 0, t->_raw, &why,
+                raw::textureLayers(uint32_t(d.textureType), uint32_t(std::min<NSUInteger>(d.arrayLength, 2048))));
         }
         if (!t->_rawOk)
             SWITCH_REFUSE_DETAIL("raw", "zeta.over", d.pixelFormat,
@@ -398,8 +418,9 @@ static void reportNonFiniteStart(RMTexture *t, MTLTextureDescriptor *d)
         twinPublish(t, t->_twin, twin);
     } else if (d.storageMode == MTLStorageModeMemoryless) {
         t->_kind = RMTextureMemoryless;
-        t->_rawOk = gRM->raw->createMemoryless(uint32_t(d.width), uint32_t(d.height), uint32_t(d.pixelFormat), t->_raw,
-                                               std::max<uint32_t>(uint32_t(d.sampleCount), 1));
+        t->_rawOk =
+            gRM->raw->createMemoryless(uint32_t(d.width), uint32_t(d.height), uint32_t(d.pixelFormat), t->_raw,
+                                       std::max<uint32_t>(uint32_t(d.sampleCount), 1), std::max(transientLayers, 1u));
     } else {
         t->_kind = RMTexturePool;
         // a shared texture (the CPU writes it: replaceRegion) in write-combined memory: its rows need no clean after
@@ -534,6 +555,12 @@ static bool producesTexture(MTLTextureDescriptor *d)
                                          ycbcr, uint32_t(d.width), uint32_t(d.height), t->_raw);
         if (t->_rawOk && ycbcr.target)
             makeYcbcrTarget(t->_raw, uint32_t(d.pixelFormat));
+    } else if (raw::SurfaceImage image;
+               (!rawShape(d) || !IOSurfaceGetWidth(s)) && laidOutSurface(d, s, plane, image)) {
+        // a shared texture in the device's layout of its descriptor (RawMetalSharedTextures.mm): a surface of no rows
+        t->_rawOk = gRM->raw->createSurfaceImage(IOSurfaceGetID(s), IOSurfaceGetBaseAddress(s),
+                                                 IOSurfaceGetAllocSize(s), s, image, uint32_t(d.width),
+                                                 uint32_t(d.height), uint32_t(d.pixelFormat), t->_raw);
     } else if (rawShape(d) && !plane && IOSurfaceGetPlaneCount(s) <= 1) {
         // a surface without planes, or one described by a single plane (CoreVideo's chunky surfaces): its plane's bytes
         void *base = IOSurfaceGetBaseAddress(s);  // valid while the surface lives (the import retains it)
