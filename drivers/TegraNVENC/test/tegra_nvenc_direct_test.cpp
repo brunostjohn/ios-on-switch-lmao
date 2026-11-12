@@ -6,8 +6,7 @@
 #include "drivers/TegraNVENC/TegraNVENCDirect.cpp"
 #include <vector>
 
-namespace
-{
+namespace {
 constexpr uint32_t kSyncpt = 170;
 std::vector<switch_host1x_fence *> gRetirements;
 
@@ -61,8 +60,7 @@ std::vector<switch_gpu_backing_token> writerWaits(switch_gpu_backing *allocation
     return {waits, waits + count};
 }
 
-class NVENCDirect : public Backing
-{
+class NVENCDirect : public Backing {
 protected:
     void SetUp() override
     {

@@ -304,7 +304,8 @@ TEST_F(ProgramPages, AnotherPageListFromTheSameFirstPageIsRefused)
 	release(c);
 	release(a);
 	switch_gpu_backing_retire();
-	EXPECT_EQ(first.released, 1) << "the backing goes, and releases its owner, while the owner is still there";
+	EXPECT_EQ(first.released, 1)
+		<< "the backing goes, and releases its owner, while the owner is still there";
 }
 
 }  // namespace

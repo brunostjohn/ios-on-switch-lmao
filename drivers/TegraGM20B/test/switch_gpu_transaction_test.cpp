@@ -80,7 +80,8 @@ TEST_F(Backing, ACommitWhoseUseArrayChangedSinceBeginIsRefusedWithOneLine)
 	const int lines = ioLogLines();
 	switch_gpu_backing_commit(&transaction);
 	EXPECT_EQ(ioLogLines(), lines + 1);
-	EXPECT_EQ(transaction.count, 2u) << "nothing is unlocked or recorded through the changed array";
+	EXPECT_EQ(transaction.count, 2u)
+		<< "nothing is unlocked or recorded through the changed array";
 	switch_gpu_backing_abort(&transaction);
 	EXPECT_EQ(ioLogLines(), lines + 2);
 	std::memcpy(uses, kept, sizeof(uses));

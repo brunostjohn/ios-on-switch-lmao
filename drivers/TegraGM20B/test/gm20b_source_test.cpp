@@ -1403,7 +1403,7 @@ TEST(GM20BPresentSource, ACopyEngineResetRedoesThePresentOnTheGpu)
 	EXPECT_TRUE(redo.Before("|| !gate_try()) return;", "tgm_present_push_copy(push);"));
 	EXPECT_TRUE(redo.Before("tgm_present_push_copy(push);", "chan_fence_volatile(chan);"));
 	EXPECT_TRUE(redo.Before("__atomic_store_n(&tgm_present.redoing, 0, __ATOMIC_RELEASE);",
-				"gate_leave();"));
+				"#endif mutex_unlock(&tgm_present.lock); gate_leave();"));
 	EXPECT_TRUE(Block(gpu(), "static void gate_open(").Has("tgm_present_redo_kick();"));
 	EXPECT_FALSE(redo.Has("done(arg"));
 	EXPECT_FALSE(redo.Has("tgm_present.done"));

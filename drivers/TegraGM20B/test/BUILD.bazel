@@ -664,7 +664,6 @@ host_test(
 
 host_shims(
     name = "coherency_kernel",
-    visibility = ["//drivers/TegraNVENC/test:__pkg__"],
     headers = [
         "IOKit/IOLib.h",
         "IOKit/IOLocks.h",
@@ -672,6 +671,7 @@ host_shims(
         "kern/thread.h",
     ],
     stubs = "gm20b_coherency_stubs.h",
+    visibility = ["//drivers/TegraNVENC/test:__pkg__"],
 )
 
 host_shims(
@@ -719,7 +719,6 @@ host_test(
 
 host_library(
     name = "backing",
-    visibility = ["//drivers/TegraNVENC/test:__pkg__"],
     srcs = [
         "switch_gpu_backing_completion_stub.cpp",
         "//drivers/TegraGM20B:SwitchGpuBacking.cpp",
@@ -757,6 +756,7 @@ host_library(
         "//drivers/TegraGM20B:TegraGM20BRelayout.h",
         "//drivers/TegraGM20B:TegraGM20BABI.h",
     ],
+    visibility = ["//drivers/TegraNVENC/test:__pkg__"],
     deps = [
         ":dependency_trace",
         ":coherency_kernel",
