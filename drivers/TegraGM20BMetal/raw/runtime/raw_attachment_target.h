@@ -66,6 +66,18 @@ inline bool attachmentTarget(const Texture &t, uint32_t level, uint32_t slice, T
     return true;
 }
 
+// The 2D texture header of one layer of target `part` (attachmentTarget) in format words `tic0`, `srgb`: what a fetch from
+// a one-layer pass into that part reads. False: a plane inside blocks of several planes, which no 2D header addresses.
+inline bool attachmentHeader(const Texture &part, uint32_t tic0, bool srgb, uint32_t w[8])
+{
+    fx::MipChain one;
+    if (part.blockDepth || !fx::mipChainLayout(part.width, part.height, 1, part.bpp, one))
+        return false;
+    one.yLog2 = part.blockHeight;
+    fx::mipChainTic(one, part.va, tic0, srgb, 0, 1, w, fx::kTexTwoD);
+    return true;
+}
+
 // Whether an attachment of `t` at (level, slice) is the texture itself as a target (level 0 of a one-layer 2D or 1D image).
 // A memoryless texture's every slice is: its contents last one pass, which backs it from its attachment's slice on
 inline bool wholeAttachment(const Texture &t, uint32_t level, uint32_t slice)

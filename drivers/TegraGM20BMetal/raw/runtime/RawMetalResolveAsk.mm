@@ -40,19 +40,20 @@ static void sayReadable(RMTexture *into, const raw::ResolveTarget &t, uint32_t s
 }
 #endif
 
-raw::ResolveAsk resolveAsk(RMTexture *into, const raw::Texture &rendered, uint32_t width, uint32_t height)
+raw::ResolveAsk resolveAsk(RMTexture *into, const raw::Texture &target, const raw::Texture &rendered, uint32_t width,
+                           uint32_t height)
 {
     raw::ResolveAsk a;
-    a.format = uint16_t(into->_raw.format);
+    a.format = uint16_t(target.format);
     a.samples = uint8_t(rendered.samples);
-    const raw::ResolveTarget target = resolveTarget(into);
-    a.readable = raw::resolveTargetReadable(target);
+    const raw::ResolveTarget kind = resolveTarget(into);
+    a.readable = raw::resolveTargetReadable(kind);
 #if SWITCH_RAW_DIAGNOSTICS
     if (a.readable && (a.format == 70 || a.format == 80) && (a.samples == 2 || a.samples == 4))
-        sayReadable(into, target, a.samples);
+        sayReadable(into, kind, a.samples);
 #endif
-    a.wholeTarget = width == into->_raw.width && height == into->_raw.height;
-    a.shadowTarget = into->_raw.shadowTarget;
+    a.wholeTarget = width == target.width && height == target.height;
+    a.shadowTarget = target.shadowTarget;
     a.compressedSamples = rendered.comptags;
     return a;
 }

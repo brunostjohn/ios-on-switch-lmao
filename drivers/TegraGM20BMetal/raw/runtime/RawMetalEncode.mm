@@ -7,7 +7,7 @@
 #import "RawMetalResolveAsk.h"
 #import "RawMetalSplitPlan.h"
 #import "RawMetalIndirect.h"
-#include "raw_attachment_target.h"
+#import "RawMetalTargetViews.h"
 #import "RawMetalFresh.h"
 #include <array>
 #include <optional>
@@ -227,6 +227,7 @@ encodeRawAttempt(RMCommandBuffer *cb, size_t from, size_t to, const char **why, 
         uint32_t attachment;
         __unsafe_unretained RMTexture *into;
         bool keepSamples;  // MTLStoreActionStoreAndMultisampleResolve
+        uint32_t level, slice;
     };
 
     std::vector<Resolve> resolves;
@@ -263,7 +264,12 @@ encodeRawAttempt(RMCommandBuffer *cb, size_t from, size_t to, const char **why, 
             return fail(PredEncDepthStencil, "no texture header for a multisampled zeta's resolve", z->format);
         const uint32_t width = re->areaWidth(), height = re->areaHeight();
         for (const Resolve &r : resolves) {
-            const raw::ResolveAsk ask = resolveAsk(r.into, *from[r.attachment], width, height);
+            raw::Texture part;
+            const raw::Texture *into = rawAttachmentTarget(r.into, r.level, r.slice, false, part);
+            if (!into)
+                return fail(PredEncPassRender, "a resolve level, slice or plane the raw path cannot render",
+                            r.attachment);
+            const raw::ResolveAsk ask = resolveAsk(r.into, *into, *from[r.attachment], width, height);
             raw::ResolveRoute route = raw::resolveRoute(ask);
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
             if (d.probeResolveDraw.load(std::memory_order_relaxed))
@@ -278,18 +284,18 @@ encodeRawAttempt(RMCommandBuffer *cb, size_t from, size_t to, const char **why, 
             const bool twod = route != raw::ResolveByPass, exact = route == raw::ResolveByComplement;
             if (twod) {
                 useTexture(rc, r.into, true);
-                if (rc->resolveTwod(*from[r.attachment], r.into->_raw, exact, r.keepSamples))
+                if (rc->resolveTwod(*from[r.attachment], *into, exact, r.keepSamples))
                     continue;
             }
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
             if (!turned && rc->probeForms().resolveTwoD) {
                 useTexture(rc, r.into, true);
-                if (rc->probeResolve(*from[r.attachment], r.into->_raw))
+                if (rc->probeResolve(*from[r.attachment], *into))
                     continue;
             }
 #endif
-            resolveTargets.push_back(r.into->_raw);
-            resolveTargets.back().format = raw::resolveTargetFormat(r.into->_raw.format);
+            resolveTargets.push_back(*into);
+            resolveTargets.back().format = raw::resolveTargetFormat(into->format);
             raw::PassDesc p;
             p.color[0].texture = &resolveTargets.back();
             p.color[0].load = raw::ColorAttachment::DontCare;
@@ -636,14 +642,14 @@ encodeRawAttempt(RMCommandBuffer *cb, size_t from, size_t to, const char **why, 
                 if (!fresh.empty())
                     fresh.erase(t);  // this pass writes it
                 standInFresh.erase(t);
-                const bool whole = raw::wholeAttachment(t->_raw, uint32_t(a.level), uint32_t(a.slice));
+                // a one-layer pass's part has a header of its own (a fetch of the attachment reads it)
+                raw::Texture *target =
+                    rawAttachmentTarget(t, uint32_t(a.level), uint32_t(a.slice), pass.layers <= 1, levelTargets[j]);
+                if (!target)
+                    return fail(PredEncPassRender, "a level, slice or plane the raw path cannot render to",
+                                a.level | a.slice << 8);
+                const bool whole = target == &t->_raw;
                 if (!whole) {
-                    if (!raw::attachmentTarget(t->_raw, uint32_t(a.level), uint32_t(a.slice), levelTargets[j]))
-                        return fail(PredEncPassRender, "a level, slice or plane the raw path cannot render to",
-                                    a.level | a.slice << 8);
-                    // a 2D chain's level alone has a header (a fetch of the attachment reads it)
-                    if (t->_raw.chain && t->_raw.type == raw::fx::kTexTwoD && !a.slice)
-                        levelTargets[j].tic = gRM->raw->levelTic(t->_raw, uint32_t(a.level));
 #if SWITCH_RAW_DIAGNOSTICS
                     levelPasses++;
                     if (!loggedLevel.exchange(true))
@@ -667,7 +673,8 @@ encodeRawAttempt(RMCommandBuffer *cb, size_t from, size_t to, const char **why, 
                     a.store == MTLStoreActionStore || a.store == MTLStoreActionStoreAndMultisampleResolve;
                 if (a.store == MTLStoreActionMultisampleResolve || a.store == MTLStoreActionStoreAndMultisampleResolve)
                     if (__unsafe_unretained RMTexture *r = (RMTexture *)a.resolve)
-                        resolves.push_back({j, r, a.store == MTLStoreActionStoreAndMultisampleResolve});
+                        resolves.push_back({j, r, a.store == MTLStoreActionStoreAndMultisampleResolve,
+                                            uint32_t(a.resolveLevel), uint32_t(a.resolveSlice)});
                 const MTLClearColor k = a.clear;
                 const double exact[4] = {k.red, k.green, k.blue, k.alpha};
                 if (!raw::integerClearSlots(t->_raw.format, exact, p.color[j].clear))

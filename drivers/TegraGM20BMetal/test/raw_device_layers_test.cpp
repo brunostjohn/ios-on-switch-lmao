@@ -516,4 +516,52 @@ TEST_F(DeviceLayers, AStorageAndASamplingViewOfAMultisampledTextureAreTwoHeaders
     EXPECT_EQ(dev.viewTic(ms, kWord0, raw::ViewAccess::Storage), storage);
 }
 
+// bits [lo, hi] of a 256-bit texture header
+uint64_t field(const uint32_t w[8], unsigned hi, unsigned lo)
+{
+    uint64_t v = 0;
+    for (unsigned b = hi + 1; b-- > lo;)
+        v = v << 1 | (w[b / 32] >> (b % 32) & 1);
+    return v;
+}
+
+// A fetch from a slice or plane part reads a 2D header of that part's memory alone: its base, block height and extent.
+// attachmentTic makes one a part, in the part's format, answered again from the view cache, and none for a plane inside
+// deeper blocks; a 2D chain's level in its own format is levelTic's
+TEST_F(DeviceLayers, AFetchFromAPartReadsAHeaderOfThatPartAlone)
+{
+    raw::Texture array, volume, chain, slice, plane, level;
+    ASSERT_TRUE(dev.createArray(48, 40, 3, kRGBA8, raw::fx::kTexTwoDArray, array));
+    ASSERT_TRUE(dev.createVolume(16, 16, 8, kRGBA8, true, volume));
+    ASSERT_TRUE(dev.createMipTexture(64, 64, kRGBA8, 3, chain));
+    ASSERT_TRUE(raw::attachmentTarget(array, 0, 2, slice));
+    ASSERT_TRUE(raw::attachmentTarget(volume, 0, 5, plane));
+    ASSERT_TRUE(raw::attachmentTarget(chain, 2, 0, level));
+    const raw::FormatInfo *f = raw::formatInfo(kRGBA8);
+    for (const raw::Texture *part : {&slice, &plane}) {
+        uint32_t w[8];
+        ASSERT_TRUE(raw::attachmentHeader(*part, f->tic0, f->srgb, w));
+        EXPECT_EQ(field(w, 79, 64) << 32 | field(w, 63, 41) << 9, part->va);
+        EXPECT_EQ(field(w, 101, 99), part->blockHeight);
+        EXPECT_EQ(field(w, 143, 128) + 1, part->width);
+        EXPECT_EQ(field(w, 175, 160) + 1, part->height);
+        EXPECT_EQ(field(w, 154, 151), raw::fx::kTexTwoD);
+        EXPECT_EQ(field(w, 189, 176), 0u);
+        EXPECT_EQ((part->width * part->bpp + 63) / 64 * 64, part->pitch) << "the header's rows are the part's";
+    }
+    const uint32_t sliceTic = dev.attachmentTic(array, slice, 0, 2), planeTic = dev.attachmentTic(volume, plane, 0, 5);
+    ASSERT_NE(sliceTic, 0u);
+    ASSERT_NE(planeTic, 0u);
+    EXPECT_EQ(dev.attachmentTic(array, slice, 0, 2), sliceTic);
+    raw::Texture other;
+    ASSERT_TRUE(raw::attachmentTarget(array, 0, 1, other));
+    EXPECT_NE(dev.attachmentTic(array, other, 0, 1), sliceTic);
+    EXPECT_EQ(dev.attachmentTic(chain, level, 2, 0), dev.levelTic(chain, 2));
+    raw::Texture deep, inside;
+    ASSERT_TRUE(dev.createVolume(16, 16, 8, kRGBA8, false, deep));
+    inside = plane;
+    inside.blockDepth = 2;
+    EXPECT_EQ(dev.attachmentTic(deep, inside, 0, 4), 0u);
+}
+
 }  // namespace

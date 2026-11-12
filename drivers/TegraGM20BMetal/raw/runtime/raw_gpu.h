@@ -1948,6 +1948,10 @@ public:
     // The texture header of level `level` of mipmapped texture `t`'s chain alone, as NVK's view of that level (a pass into
     // the level fetches its color through it); 0: none
     uint32_t levelTic(Texture &t, uint32_t level);
+    // The header a fetch from `part` (raw::attachmentTarget of level `level`, slice `slice` of `t`, maybe in a format view's
+    // format) reads: levelTic's for a 2D chain's level in t's format, else attachmentHeader's, made on first use and freed
+    // with t's header, kept in views_ as viewTic's are; 0: none
+    uint32_t attachmentTic(Texture &t, const Texture &part, uint32_t level, uint32_t slice);
     // A header of plain texture `t`'s memory whose word 0 is `word0` (raw_view.h: m2v's view of it in another format
     // of the same texel size; a storage view of a multisampled texture spans its sample grid), made on first use and freed
     // with t's header; 0: no header slot left. The encoding thread's: what it answered is kept there and answered again
@@ -2764,6 +2768,8 @@ private:
     std::unordered_multimap<uint32_t, std::pair<uint64_t, uint32_t>> viewTics_;
     // by header: its attachment views and their headers (attachmentViewTic)
     std::unordered_multimap<uint32_t, std::pair<AttachmentView, uint32_t>> attachmentViewTics_;
+    // by header: its attachment parts' key and header (attachmentTic)
+    std::unordered_multimap<uint32_t, std::pair<uint64_t, uint32_t>> partTics_;
     uint32_t nextTic_ = 1, nextTsc_ = 1, neutralTsc_ = 0, neutralCompareTsc_ = 0;
     // the pack's, by record index, each made at its first lookup (a process uses a few of the pack's thousands); a node
     // container, so the pointers pipeline() hands out stay valid

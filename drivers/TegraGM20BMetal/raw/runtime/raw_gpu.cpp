@@ -11,6 +11,7 @@
 #include "raw_icb.h"
 #include "raw_event_release.h"
 #include "raw_attachment_lifetime.h"
+#include "raw_attachment_target.h"
 #include "raw_blend_kill.h"
 #include "raw_dynamic_push.h"
 #include "raw_keyline_probe.h"
@@ -1786,6 +1787,14 @@ void Device::freeTic(uint32_t tic)
     };
     freeViews(viewTics_);
     freeViews(attachmentViewTics_);
+    // a part's header has view headers of its own (passViewTic): freed with it
+    std::vector<uint32_t> parts;
+    const auto made = partTics_.equal_range(tic);
+    for (auto v = made.first; v != made.second; ++v)
+        parts.push_back(v->second.second);
+    partTics_.erase(made.first, made.second);
+    for (const uint32_t part : parts)
+        freeTic(part);
 }
 
 uint32_t Device::allocTicPair()
@@ -7301,6 +7310,36 @@ static void disabledTarget(Push &p, uint32_t index, uint32_t layers)
     k.width = 64;
     k.layers = layers;
     kit(p, switch_gm20b_color_target, index, &k, true);
+}
+
+uint32_t Device::attachmentTic(Texture &t, const Texture &part, uint32_t level, uint32_t slice)
+{
+    if (level && !slice && t.chain && t.type == fx::kTexTwoD && part.format == t.format)
+        return levelTic(t, level);
+    // above every key viewTic keeps in views_ (word 0, a sample grid below bit 48)
+    const uint64_t key = 1ull << 63 | uint64_t(part.format) << 32 | uint64_t(slice) << 4 | level;
+    if (!t.tic)
+        return 0;
+    if (const uint32_t seen = views_.find(t.tic, key))
+        return seen;
+    const FormatInfo *f = formatInfo(part.format);
+    uint32_t w[8];
+    if (!f || !attachmentHeader(part, f->tic0, f->srgb, w))
+        return 0;
+    RAW_ENCODE_LOCK(l, lock_);
+    const auto made = partTics_.equal_range(t.tic);
+    for (auto m = made.first; m != made.second; ++m)
+        if (m->second.first == key) {
+            views_.keep(t.tic, key, m->second.second);
+            return m->second.second;
+        }
+    const uint32_t tic = allocTic();
+    if (!tic)
+        return 0;
+    memcpy(tic_.cpu + 32 * tic, w, 32);  // visible at the next submission's header invalidate
+    partTics_.emplace(t.tic, std::make_pair(key, tic));
+    views_.keep(t.tic, key, tic);
+    return tic;
 }
 
 uint32_t Device::levelTic(Texture &t, uint32_t level)

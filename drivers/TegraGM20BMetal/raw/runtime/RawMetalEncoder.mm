@@ -4,7 +4,7 @@
 #import "RawMetalMultisample.h"
 #import "RawMetalPassCache.h"
 #import "RawMetalRotated.h"
-#include "raw_attachment_target.h"
+#import "RawMetalTargetViews.h"
 #include "raw_device_answers.h"
 
 // One count for every kind, as IOAccelDeviceGetNextGlobalTraceID is the device's
@@ -238,7 +238,8 @@ static bool rawDepthStencil(MTLRenderPassDescriptor *pass)
 }
 
 // A resolve the raw path draws after the pass (the pack's resolve state of its format, RawMetalEncode.mm): of a multisampled
-// attachment into level, slice and depth plane 0 of a one-sample 2D texture of its format the raw path renders to
+// attachment into a level, slice or depth plane of a one-sample texture of its format the raw path renders to (the
+// attachment's own target, raw_attachment_target.h)
 // A probe's command buffer that resolves by the 2D engine (hw_test_app gpu.x1.twod_resolve) needs no resolve state
 static bool resolvesByTwoD(RMCommandBuffer *cb, uint32_t format)
 {
@@ -250,14 +251,23 @@ static bool resolvesByTwoD(RMCommandBuffer *cb, uint32_t format)
 #endif
 }
 
-static bool rawResolve(RMCommandBuffer *cb, MTLRenderPassColorAttachmentDescriptor *a, RMTexture *from)
+static bool rawResolve(RMCommandBuffer *cb, MTLRenderPassColorAttachmentDescriptor *a, RMTexture *from,
+                       RMPass::Color &facts)
 {
     RMTexture *r = (RMTexture *)a.resolveTexture;
-    return from->_raw.samples > 1 && [(id)r isKindOfClass:[RMTexture class]] && r->_rawOk &&
-           (r->_raw.renderable || r->_raw.shadowTarget) && !r->_raw.planar && !r->_raw.ycbcr &&
-           r->_raw.type == raw::fx::kTexTwoD && r->_raw.samples == 1 && r->_raw.format == from->_raw.format &&
-           !a.resolveLevel && !a.resolveSlice && !a.resolveDepthPlane &&
-           (gRM->raw->resolvePipeline(from->_raw.format, from->_raw.samples) || resolvesByTwoD(cb, from->_raw.format));
+    if (from->_raw.samples <= 1 || ![(id)r isKindOfClass:[RMTexture class]] || !r->_rawOk ||
+        !(r->_raw.renderable || r->_raw.shadowTarget) || r->_raw.planar || r->_raw.ycbcr || r->_raw.samples != 1 ||
+        r->_raw.format != from->_raw.format ||
+        !(gRM->raw->resolvePipeline(from->_raw.format, from->_raw.samples) || resolvesByTwoD(cb, from->_raw.format)))
+        return false;
+    const bool volume = r->_raw.type == raw::fx::kTexThreeD;
+    facts.resolveLevel = a.resolveLevel;
+    facts.resolveSlice = volume ? a.resolveDepthPlane : a.resolveSlice;
+    raw::Texture part;
+    return !(volume ? a.resolveSlice : a.resolveDepthPlane) && facts.resolveLevel < raw::fx::kMaxLevels &&
+           facts.resolveSlice <= UINT32_MAX &&
+           (raw::wholeAttachment(r->_raw, uint32_t(facts.resolveLevel), uint32_t(facts.resolveSlice)) ||
+            rawAttachmentPart(r, uint32_t(facts.resolveLevel), uint32_t(facts.resolveSlice), part));
 }
 
 // Whether the pass draws RGB10A8_2P_XR10 in its two planes (raw_xr_pass.h); a pass of a 550 beside one it cannot draw so is
@@ -389,7 +399,7 @@ void rmPoolEncoders()
         id<MTLTexture> resolve = a.resolveTexture;
         const bool volume = t.textureType == MTLTextureType3D;
         const NSUInteger slice = volume ? a.depthPlane : a.slice;
-        facts.color[c] = {t, a.level, slice, a.loadAction, a.storeAction, a.clearColor, resolve};
+        facts.color[c] = {t, a.level, slice, a.loadAction, a.storeAction, a.clearColor, resolve, 0, 0};
         if ([(id)t isKindOfClass:[RMTexture class]] && ((RMTexture *)t)->_rawOk && ((RMTexture *)t)->_raw.comptags)
             facts.compressed |= uint8_t(1u << c);
         [self retain:t];
@@ -423,12 +433,12 @@ void rmPoolEncoders()
                    (x->_raw.ycbcr && ycbcrTargetPassRefusal(x->_raw, a))) {
             [self takeReason:WhyPass why:@"a planar texture as a render target"];
             hit(self, PredEncPlanarRT, t.pixelFormat, c | uint64_t(a.loadAction) << 8);
-        } else if (raw::Texture part;
-                   (volume ? a.slice : a.depthPlane) || a.level >= raw::fx::kMaxLevels || slice > UINT32_MAX ||
-                   (resolve &&
-                    (!raw::wholeAttachment(x->_raw, uint32_t(a.level), uint32_t(slice)) || !rawResolve(self, a, x))) ||
-                   (!raw::wholeAttachment(x->_raw, uint32_t(a.level), uint32_t(slice)) &&
-                    !raw::attachmentTarget(x->_raw, uint32_t(a.level), uint32_t(slice), part))) {
+        } else if (raw::Texture part; (volume ? a.slice : a.depthPlane) || a.level >= raw::fx::kMaxLevels ||
+                                      slice > UINT32_MAX ||
+                                      (resolve && (!raw::wholeAttachment(x->_raw, uint32_t(a.level), uint32_t(slice)) ||
+                                                   !rawResolve(self, a, x, facts.color[c]))) ||
+                                      (!raw::wholeAttachment(x->_raw, uint32_t(a.level), uint32_t(slice)) &&
+                                       !rawAttachmentPart(x, uint32_t(a.level), uint32_t(slice), part))) {
             // a level, slice or depth plane is a block-linear image's (raw_attachment_target.h), resolved from no layer
             [self takeReason:WhyPass why:@"a color attachment level, slice, depth plane or resolve"];
             hit(self, PredPassAttLevel, a.level | slice << 8, resolve != nil);

@@ -256,6 +256,7 @@ struct RMPass {
         MTLStoreAction store;
         MTLClearColor clear;
         __unsafe_unretained id resolve;
+        NSUInteger resolveLevel, resolveSlice;  // the level and slice (a 3D texture's depth plane) it resolves into
     } color[8];
 
     __unsafe_unretained id depth;
