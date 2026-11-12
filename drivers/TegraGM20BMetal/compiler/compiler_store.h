@@ -37,9 +37,9 @@ public:
     // Each program slot of a page or more that the record or kernel `entry` of `key` holds (raw_record.h programSlot,
     // raw_compute_slot.h computeSlot), published ahead of the entry as an entry of its own pages (raw_program_pages.h
     // programSlotEntryBytes) under its programSlotName: a client that takes the entry runs those slots in place from its
-    // mapping of the store. A slot the store holds already, or one a full store has no room for, is left out (the client
-    // copies it). The slots put.
-    uint32_t putProgramSlots(const raw::CacheKey &key, const std::string &entry);
+    // mapping of the store. A slot the store holds already is left out. Full: a slot found no room (makeRoom, then put
+    // the slots again).
+    Put putProgramSlots(const raw::CacheKey &key, const std::string &entry);
     // The store written again with its newest entries in half of it, renamed over the old file (which a client still
     // mapping keeps reading whole): its new mapping is to be registered again. False with `error`.
     bool makeRoom(std::string &error);

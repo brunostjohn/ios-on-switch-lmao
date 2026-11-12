@@ -137,18 +137,18 @@ static std::vector<std::vector<uint8_t>> entrySlots(const raw::CacheKey &key, co
     return slots;
 }
 
-uint32_t Store::putProgramSlots(const raw::CacheKey &key, const std::string &entry)
+Store::Put Store::putProgramSlots(const raw::CacheKey &key, const std::string &entry)
 {
-    uint32_t put = 0;
     for (std::vector<uint8_t> &slot : entrySlots(key, entry)) {
         if (slot.size() < raw::kProgramSlotPage)
             continue;
         const raw::Digest name = raw::programSlotName(slot.data(), slot.size());
         slot.resize(raw::programSlotEntryBytes(slot.size()));
         std::lock_guard<std::mutex> l(lock_);
-        put += writer_.put(name.data(), slot.data(), uint32_t(slot.size())) == switch_seed_pack::StoreWriter::Put::Added;
+        if (writer_.put(name.data(), slot.data(), uint32_t(slot.size())) == switch_seed_pack::StoreWriter::Put::Full)
+            return Put::Full;
     }
-    return put;
+    return Put::Added;
 }
 
 bool Store::makeRoom(std::string &error)

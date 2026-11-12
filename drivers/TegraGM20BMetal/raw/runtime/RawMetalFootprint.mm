@@ -6,7 +6,6 @@
 
 #include <dlfcn.h>
 #include <mach/mach.h>
-#include <mach/mach_vm.h>
 #include <malloc/malloc.h>
 #include <unistd.h>
 
@@ -102,14 +101,14 @@ StoreRegion storeRegion()
     if (!gRM->completion)
         return r;
     const uint8_t *base = gRM->completion->compilerStoreMapping(r.mapped);
-    for (mach_vm_address_t at = mach_vm_address_t(uintptr_t(base)); base && at < uintptr_t(base) + r.mapped;) {
-        mach_vm_address_t address = at;
-        mach_vm_size_t size = 0;
+    for (vm_address_t at = vm_address_t(uintptr_t(base)); base && at < uintptr_t(base) + r.mapped;) {
+        vm_address_t address = at;
+        vm_size_t size = 0;
         vm_region_extended_info_data_t info = {};
         mach_msg_type_number_t count = VM_REGION_EXTENDED_INFO_COUNT;
         mach_port_t object = MACH_PORT_NULL;
-        if (mach_vm_region(mach_task_self(), &address, &size, VM_REGION_EXTENDED_INFO,
-                           reinterpret_cast<vm_region_info_t>(&info), &count, &object) != KERN_SUCCESS ||
+        if (vm_region_64(mach_task_self(), &address, &size, VM_REGION_EXTENDED_INFO,
+                         reinterpret_cast<vm_region_info_t>(&info), &count, &object) != KERN_SUCCESS ||
             address > at)
             break;
         r.resident += uint64_t(info.pages_resident) * vm_page_size;
