@@ -1965,8 +1965,13 @@ nak_postprocess_nir(nir_shader *nir,
    if (mesa_shader_stage_is_mesh(nir->info.stage))
       OPT(nir, nak_nir_lower_mesh_stages_shared_atomics);
 
-   if (nir->info.stage == MESA_SHADER_FRAGMENT)
+   if (nir->info.stage == MESA_SHADER_FRAGMENT) {
+      /* ios-on-switch-lmao: the critical section holds only the ordered
+       * accesses and what depends on them (nak_nir_shrink_interlock.c)
+       */
+      OPT(nir, nak_nir_shrink_interlock);
       OPT(nir, nak_nir_lower_fs_interlock, nak);
+   }
 
    nak_optimize_nir(nir, nak);
 

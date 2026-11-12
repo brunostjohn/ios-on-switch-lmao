@@ -34,6 +34,7 @@ libnak_c_files = files(
   'nak_nir_rematerialize_compares.c',
   'nak_nir_rematerialize_load_const.c',
   'nak_nir_rematerialize_uniforms.c',
+  'nak_nir_shrink_interlock.c',
 )
 
 libnak_deps = [
