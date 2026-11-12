@@ -17,6 +17,7 @@
 #include "raw_gpu.h"
 #include "RawMetalPredicates.h"
 #include "RawResidency.h"
+#include "raw_finish_state.h"
 #include "raw_handler_order.h"
 #include "raw_predicate_records.h"
 #include "raw_submit_queue.h"
@@ -358,8 +359,8 @@ struct RMSharedEventWait {
 #endif
     std::vector<RMSegment> _segs;
     size_t _segNext;
-    RMSegError _segError;                   // an m2v segment's error, reported at completion
-    std::atomic<uint32_t> _segmentPending;  // moved by the submit worker with no lock, read and lowered under _lock
+    RMSegError _segError;           // an m2v segment's error, reported at completion
+    raw::FinishState _finishState;  // its ranges in flight, and whether it submits no more (raw_finish_state.h)
     uint64_t _channelGeneration, _rawPrefixGeneration;
     bool _gpuPrefixEligible;
     std::vector<raw::EventTimeline::Promise> _gpuEventWaits;
@@ -372,7 +373,7 @@ struct RMSharedEventWait {
     std::shared_ptr<raw::SharedEventWatch> _sharedEventWatch;
     std::shared_ptr<raw::ResourceReadyCompletion> _resourceReady;
     void *_nativeWaitEvent;
-    bool _finishReady, _finishing, _submittedM2v;
+    bool _submittedM2v;
     // a drawable present was added (its completion is observed); the range being submitted ends quiet
     // (raw_completion_source.h)
     bool _presents, _rangeQuiet;
@@ -405,17 +406,19 @@ struct RMSharedEventWait {
     RMReason _reason;
     NSString *_why;
     NSMutableArray *_scheduledHandlers, *_completedHandlers;
-    bool _handlersQueued;      // scheduled handlers went to its queue's _handlers: its completed ones go behind them
+    std::atomic<bool>
+        _handlersQueued;       // scheduled handlers went to its queue's _handlers: its completed ones go behind them
     RMCommandBuffer *_before;  // enqueued before it on its queue, until its own completed handlers were handed on
     std::vector<RMSubCommand> *_commandLog;  // a sub-encoder's command buffer's log of what it records (null: none)
     NSArray *_doneHandlers;                  // its completed handlers, from finish() until they ran
     bool _doneBehindScheduled;               // they run behind its scheduled handlers on the queue's handler queue
     raw::HandlerTurn _turn;
-    MTLCommandBufferStatus _status;
+    std::atomic<MTLCommandBufferStatus> _status;
     NSError *_error;
     RMQueue *_queue;
-    bool _enqueued;
+    std::atomic<bool> _enqueued;
     raw::SubmitQueue<void *, RMCommandBuffer *>::Reservation _reservation;
+    bool _reserved;  // the submit worker's: its reservation made
     std::vector<size_t> _eventWaits;
     raw::EventDeadline::Time _eventStart;
     std::unordered_set<void *> _pipelineObserved;  // one readiness subscription per compatibility state
@@ -423,20 +426,26 @@ struct RMSharedEventWait {
     std::map<void *, std::shared_ptr<raw::ComputeKernelSet<raw::ComputeState>>> _computeJobs;
     size_t _eventArmed;  // operation position + 1; only the current wait installs a listener
     std::atomic<bool> _inHolders;  // in gHolders or gEventWaits (debug builds): unhold() takes their lock only then
-    bool _committed, _scheduledDone, _completedDone, _m2v;
+    std::atomic<bool> _committed, _scheduledDone, _completedDone;
+    bool _m2v;
     // its queue's head waits on a shared event Metal's GPU would wait for: waitUntilScheduled returns, its scheduled
     // handlers still wait for its submission (raw_scheduled_wait.h)
-    bool _held;
+    std::atomic<bool> _held;
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
-    uint64_t _heldReturnUs;  // when waitUntilScheduled returned for it held, until it was submitted
+    std::atomic<uint64_t> _heldReturnUs;  // when waitUntilScheduled returned for it held, until it was submitted
 #endif
     // its event signals are in m2v work (replayed whole, or in its last segment): finish() makes none
     bool _signalsOnM2v;
     bool
         _partial;  // the kernel refused its raw submission after part of it ran (raw::CommandBuffer::partial): never replayed
     // scheduled() and finish() ran (their handlers taken): a handler added after goes at once, and scheduled() runs once (a
-    // command buffer held for a shared event is scheduled at its commit, eventHeld)
-    bool _scheduledSent, _completedSent;
+    // command buffer held for a shared event is scheduled at its commit, eventHeld). A handler is added under _lock after its
+    // list's flag is set, and the lists are taken under _lock only where the flag says one was added: taking exchanges the
+    // sent flag first, so no handler is both missed and not run (rmTakeHandlers).
+    std::atomic<bool> _scheduledSent, _completedSent, _hasScheduledHandlers, _hasCompletedHandlers;
+    // the threads in a wait on _changed (under _lock): a state change notifies, and takes _lock to, only where there is one
+    // (rmChanged)
+    std::atomic<uint32_t> _waiters;
     std::mutex _lock;
     std::condition_variable _changed;
     uint32_t _seqno;
@@ -448,7 +457,7 @@ struct RMSharedEventWait {
         bool pending;
         uint32_t tag, from, to;
     } _loopContinue;
-    double _kernelStart, _kernelEnd, _gpuStart, _gpuEnd;
+    std::atomic<double> _kernelStart, _kernelEnd, _gpuStart, _gpuEnd;
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
     bool _gpuStamped;  // GPUStartTime/GPUEndTime are its submission's GPU stamps, not the host's window
 #endif

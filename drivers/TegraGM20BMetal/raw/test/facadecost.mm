@@ -9,7 +9,7 @@
 // (facade) and with the batch held until all complete (held). A line FAIL where the profile's or the held window's
 // count grows with the draws (the released window's vary with how far completion trails recording: a command buffer
 // whose predecessor's completion has not run hands its own to it).
-// usage: DYLD_INSERT_LIBRARIES=<libfacadecount.dylib> facadecost <libvulkan_nouveau.dylib> <cache dir>
+// usage: [DYLD_INSERT_LIBRARIES=<libfacadecount.dylib>] facadecost <libvulkan_nouveau.dylib> <cache dir>
 //        <QuartzCore default.metallib> <pack.bin> [buffers]
 #import <Foundation/Foundation.h>
 #import <Metal/Metal.h>
@@ -204,11 +204,13 @@ int main(int argc, char **argv)
     const auto start = reinterpret_cast<void (*)()>(dlsym(RTLD_DEFAULT, "facadecount_start"));
     const auto stop = reinterpret_cast<void (*)(facadecount *)>(dlsym(RTLD_DEFAULT, "facadecount_stop"));
     const auto sites = reinterpret_cast<SitesFn>(dlsym(RTLD_DEFAULT, "facadecount_sites"));
-    if (!image || !start || !stop) {
-        fprintf(stderr, "facadecount.dylib is not preloaded (DYLD_INSERT_LIBRARIES)\n");
-        return 2;
-    }
-    image(reinterpret_cast<const void *>(&raw_metal_device_open));
+    // without the interposers (a run under TSAN, which interposes the same calls) only the profile and the run itself
+    const bool counting = image && start && stop;
+    if (counting)
+        image(reinterpret_cast<const void *>(&raw_metal_device_open));
+    else
+        fprintf(stderr,
+                "facadecount.dylib is not preloaded (DYLD_INSERT_LIBRARIES): the facade's own counts are not taken\n");
     const unsigned buffers = argc > 5 ? unsigned(atoi(argv[5])) : 24;
     int failures = 0;
     @autoreleasepool {
@@ -345,9 +347,11 @@ int main(int argc, char **argv)
                 facadecount c{};
                 uint64_t mine0, others0, mine1, others1;
                 cpuNs(mine0, others0);
-                start();
+                if (counting)
+                    start();
                 failures += !batch(arms[a], buffers, hold);
-                stop(&c);
+                if (counting)
+                    stop(&c);
                 cpuNs(mine1, others1);
                 const char *shape = hold ? "held" : "facade";
                 printf(

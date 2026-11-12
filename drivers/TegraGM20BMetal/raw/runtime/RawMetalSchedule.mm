@@ -6,24 +6,20 @@
 
 void wakeSubmit(void *queue, uint32_t dependencies)
 {
-    std::lock_guard<std::mutex> l(gRM->schedule);
-    if (queue)
-        gRM->waiting.wake(queue);
-    gRM->waiting.wakeDependencies(dependencies);
-    gRM->waitingChanged.notify_one();
+    gRM->schedule.push({RMScheduleChange::Wake, nil, queue, dependencies});
 }
 
+// Its place in its queue's order is where the worker takes its enqueue, or its commit where that hands over first: one
+// thread's in its call order, and another's after it where the app ordered the calls (the hand-off keeps each push behind
+// those that happened before it).
 void enqueueBuffer(RMCommandBuffer *cb)
 {
-    std::lock_guard<std::mutex> l(gRM->schedule);
-    if (cb->_enqueued)
+    if (cb->_enqueued.exchange(true, std::memory_order_acq_rel))
         return;
-    cb->_reservation = gRM->waiting.reserve((__bridge void *)cb->_queue, cb);
-    cb->_enqueued = true;
     cb->_before = (__bridge_transfer RMCommandBuffer *)cb->_queue->_last.exchange((__bridge_retained void *)cb);
-    std::lock_guard<std::mutex> b(cb->_lock);
-    if (cb->_status == MTLCommandBufferStatusNotEnqueued)
-        cb->_status = MTLCommandBufferStatusEnqueued;
+    MTLCommandBufferStatus none = MTLCommandBufferStatusNotEnqueued;
+    cb->_status.compare_exchange_strong(none, MTLCommandBufferStatusEnqueued);
+    gRM->schedule.push({RMScheduleChange::Enqueue, cb}, false);  // nothing to submit until its commit
 }
 
 // The imports of the IOSurfaces it writes. Only while the submit thread cannot take it: under the schedule lock, or on
@@ -114,26 +110,46 @@ void commitBuffer(RMCommandBuffer *cb)
     }
 #endif
     armEventWaits(cb);
-    bool held = false;
-    std::vector<uint64_t> written;
-    {
-        std::lock_guard<std::mutex> l(r.schedule);
+    RAW_DIAGNOSTIC(r.stats.deferred++);
+    r.schedule.push({RMScheduleChange::Commit, cb});
+}
+
+// A change another thread handed the worker, on the worker
+static void applyChange(RawState &r, const RMScheduleChange &change)
+{
+    RMCommandBuffer *cb = change.buffer;
+    // a commit on one thread can hand over before the enqueue another thread made of the same command buffer
+    if (change.kind != RMScheduleChange::Wake && !cb->_reserved) {
+        cb->_reservation = r.waiting.reserve((__bridge void *)cb->_queue, cb);
+        cb->_reserved = true;
+    }
+    switch (change.kind) {
+    case RMScheduleChange::Enqueue:
+        break;
+    case RMScheduleChange::Commit: {
+        bool held = false;
         r.waiting.commit((__bridge void *)cb->_queue, cb, cb->_reservation, &held);
-        if (held)
-            written = writtenSurfaces(cb);
-#if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
-        RAW_DIAGNOSTIC(r.stats.deferred++);
-#endif
-    }
-    if (held) {
-        promiseWrites(cb, written);
-        {
-            std::lock_guard<std::mutex> l(cb->_lock);
+        if (held) {
+            promiseWrites(cb, writtenSurfaces(cb));
             cb->_held = true;
+            rmChanged(cb);
         }
-        cb->_changed.notify_all();
+        break;
     }
-    r.waitingChanged.notify_one();
+    case RMScheduleChange::Wake:
+        if (change.queue)
+            r.waiting.wake(change.queue);
+        r.waiting.wakeDependencies(change.dependencies);
+        break;
+    }
+}
+
+static void applyChanges(RawState &r)
+{
+    while (RMScheduleChange *change = r.schedule.peek()) {
+        applyChange(r, *change);
+        r.schedule.pop();
+    }
 }
 
 // Return pending only for this queue head. Other queues remain runnable while its pipelines compile. A compile it waits for
@@ -195,7 +211,7 @@ static raw::HeadWait eventWait(RMCommandBuffer *cb)
 {
     {
         std::lock_guard<std::mutex> l(cb->_lock);
-        if (cb->_segmentPending || cb->_resourceReady)
+        if (cb->_finishState.pending() || cb->_resourceReady)
             return raw::HeadWait::signal;
     }
     if (cb->_segNext >= cb->_segs.size() || !cb->_segs[cb->_segNext].event)
@@ -212,12 +228,9 @@ static void markHeld(std::vector<RMCommandBuffer *> &buffers, bool held)
     for (RMCommandBuffer *cb : buffers) {
         if (held)
             promiseWrites(cb, writtenSurfaces(cb));
-        {
-            std::lock_guard<std::mutex> l(cb->_lock);
-            cb->_held = held;
-        }
+        cb->_held = held;
         if (held)
-            cb->_changed.notify_all();
+            rmChanged(cb);
     }
     buffers.clear();
 }
@@ -240,25 +253,25 @@ void submitLoop()
         @autoreleasepool {
             raw::SubmitQueue<void *, RMCommandBuffer *>::Ticket ticket;
             bool followed = false;
-            {
-                std::unique_lock<std::mutex> l(r.schedule);
-                for (;;) {
-                    r.waiting.expire(raw::EventDeadline::Clock::now());
-                    ticket = r.waiting.next();
-                    if (ticket) {
-                        followed = r.waiting.ready() || r.waiting.behind(ticket);
-                        break;
-                    }
-                    closePromise();
-                    const auto due = r.waiting.deadline();
-                    const auto ready = [&] {
-                        return r.waiting.ready();
-                    };
-                    if (due == raw::EventDeadline::Time::max())
-                        r.waitingChanged.wait(l, ready);
-                    else
-                        r.waitingChanged.wait_until(l, due, ready);
+            for (;;) {
+                applyChanges(r);
+                r.waiting.expire(raw::EventDeadline::Clock::now());
+                r.waitingCommitted.store(uint32_t(r.waiting.committed()), std::memory_order_relaxed);
+                ticket = r.waiting.next();
+                if (ticket) {
+                    followed = r.waiting.ready() || r.waiting.behind(ticket);
+                    break;
                 }
+                closePromise();
+                const auto due = r.waiting.deadline();
+                dispatch_time_t until = DISPATCH_TIME_FOREVER;
+                if (due != raw::EventDeadline::Time::max()) {
+                    const auto left = due - raw::EventDeadline::Clock::now();
+                    until = dispatch_time(
+                        DISPATCH_TIME_NOW,
+                        std::max<int64_t>(0, std::chrono::duration_cast<std::chrono::nanoseconds>(left).count()));
+                }
+                r.schedule.sleep(until);
             }
             RMCommandBuffer *cb = ticket.value;
             auto deadline = raw::EventDeadline::Time::max();
@@ -281,11 +294,8 @@ void submitLoop()
             if (!error && !blocked && cb->_segNext < cb->_segs.size()) {
                 RMSegment &range = cb->_segs[cb->_segNext];
                 cb->_plan.prepareRange(range.from, range.to);
-                bool loopRetiring = false;
-                if (range.held) {
-                    std::lock_guard<std::mutex> lock(cb->_lock);
-                    loopRetiring = cb->_segmentPending != 0;
-                }
+                // the completion's _loopContinue is written before its range's completed() releases the count
+                const bool loopRetiring = range.held && cb->_finishState.pending() != 0;
                 if (loopRetiring) {
                     blocked = true;
                     dependencies = RMRawProgress;
@@ -306,7 +316,6 @@ void submitLoop()
                     }
                 }
                 if (!error && !blocked && ((!range.event && range.raw) || signalOrderedOnGpu(cb, range))) {
-                    std::lock_guard<std::mutex> m(r.m2vLock);
                     if (!m2vClear()) {
                         blocked = true;
                         dependencies = RMCompatibilityProgress;
@@ -321,12 +330,8 @@ void submitLoop()
                     else if (!ready)
                         blocked = true;
                     else {
-                        bool gpuOrder, rawRetiring;
-                        {
-                            std::lock_guard<std::mutex> m(r.m2vLock);
-                            gpuOrder = r.gpuOrder;
-                        }
-                        rawRetiring = r.inflight.size() != 0;
+                        const bool gpuOrder = r.gpuOrder.load(std::memory_order_acquire);
+                        const bool rawRetiring = r.inflight.size() != 0;
                         // completionLoop's retirements, which wake RMRawProgress: the device's own jobs (a reopen's context)
                         // have no retirement, and a seqno the device submitted may be another channel's than its fence
                         if (!gpuOrder && rawRetiring) {
@@ -337,12 +342,9 @@ void submitLoop()
                 }
             }
             if (blocked) {
-                {
-                    std::lock_guard<std::mutex> l(r.schedule);
-                    r.waiting.park(ticket, dependencies, deadline);
-                    if (raw::holds(wait))
-                        r.waiting.hold(ticket.key, marked);
-                }
+                r.waiting.park(ticket, dependencies, deadline);
+                if (raw::holds(wait))
+                    r.waiting.hold(ticket.key, marked);
                 markHeld(marked, true);
                 continue;
             }
@@ -350,17 +352,13 @@ void submitLoop()
             if (error)
                 finish(cb, error);
             else {
-                std::lock_guard<std::recursive_mutex> s(submitLock());
-                submitted = submitRange(cb, followed);
+                submitted = submitRangeExclusive(cb, followed);
             }
-            {
-                std::lock_guard<std::mutex> l(r.schedule);
-                r.waiting.release(ticket.key, marked);
-                if (submitted)
-                    r.waiting.retire(ticket);
-                else
-                    r.waiting.yield(ticket);
-            }
+            r.waiting.release(ticket.key, marked);
+            if (submitted)
+                r.waiting.retire(ticket);
+            else
+                r.waiting.yield(ticket);
             markHeld(marked, false);
         }
     }

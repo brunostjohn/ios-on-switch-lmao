@@ -132,6 +132,35 @@ void releaseRecordings()
     }
 }
 
+void rmChanged(RMCommandBuffer *cb)
+{
+    if (!cb->_waiters.load())
+        return;
+    {
+        std::lock_guard<std::mutex> l(cb->_lock);
+    }
+    cb->_changed.notify_all();
+}
+
+NSArray *rmTakeHandlers(RMCommandBuffer *cb, NSMutableArray *__strong &list, std::atomic<bool> &added)
+{
+    if (!added.load())
+        return nil;
+    std::lock_guard<std::mutex> l(cb->_lock);
+    NSArray *taken = list;
+    list = nil;
+    return taken;
+}
+
+// Asleep on _changed until `done` holds of cb's state, counted among its waiters (rmChanged)
+template <typename Done> static void waitFor(RMCommandBuffer *cb, Done &&done)
+{
+    std::unique_lock<std::mutex> l(cb->_lock);
+    cb->_waiters.fetch_add(1);
+    cb->_changed.wait(l, done);
+    cb->_waiters.fetch_sub(1);
+}
+
 @implementation RMCommandBuffer
 
 - (void)dealloc
@@ -328,8 +357,7 @@ void releaseRecordings()
 
 - (MTLCommandBufferStatus)status
 {
-    std::lock_guard<std::mutex> l(_lock);
-    return _status;
+    return _status.load();
 }
 
 - (NSError *)error
@@ -417,6 +445,7 @@ void releaseRecordings()
 {
     if (!block)
         return;
+    _hasScheduledHandlers.store(true);
     {
         std::lock_guard<std::mutex> l(_lock);
         // once scheduled() took the handlers, one added is run behind them (was: until they ran, it joined a list no one read
@@ -439,6 +468,7 @@ void releaseRecordings()
     if (!block)
         return;
     bool now;
+    _hasCompletedHandlers.store(true);
     {
         std::lock_guard<std::mutex> l(_lock);
         now = _completedSent;  // as addScheduledHandler: once finish() took the handlers
@@ -484,14 +514,10 @@ void releaseRecordings()
 - (void)commit
 {
     [self enqueue];
-    {
-        std::lock_guard<std::mutex> l(_lock);
-        if (_committed)
-            return;
-        _committed = true;
-        _status = MTLCommandBufferStatusCommitted;
-        _kernelStart = hostSeconds();
-    }
+    if (_committed.exchange(true))
+        return;
+    _status = MTLCommandBufferStatusCommitted;
+    _kernelStart = hostSeconds();
 #if SWITCH_FRAME_TIMELINE
     static thread_local switch_frame::Since since;
     const raw::Device::Stats &k = gRM->raw->stats;
@@ -521,27 +547,24 @@ void releaseRecordings()
 
 - (void)waitUntilScheduled
 {
-    std::unique_lock<std::mutex> l(_lock);
     auto returns = [&] {
-        return raw::scheduledWaitReturns(_scheduledDone, _held, _segError != nil);
+        return raw::scheduledWaitReturns(_scheduledDone, _held, _segError.set());
     };
     if (_committed && !returns()) {
 #if SWITCH_RAW_DIAGNOSTICS
         const BlockedWait blocked(gRM->stats.scheduledWaits, gRM->stats.scheduledWaitUs);
 #endif
-        _changed.wait(l, returns);
+        waitFor(self, returns);
     }
 #if SWITCH_RAW_DIAGNOSTICS
-    if (_held && !_scheduledDone && !_heldReturnUs) {
-        _heldReturnUs = nowUs();
+    uint64_t none = 0;
+    if (_held && !_scheduledDone && _heldReturnUs.compare_exchange_strong(none, nowUs()))
         gRM->stats.heldReturns++;
-    }
 #endif
 }
 
 - (void)waitUntilCompleted
 {
-    std::unique_lock<std::mutex> l(_lock);
     if (!_committed || _completedDone)
         return;
 #if SWITCH_RAW_DIAGNOSTICS
@@ -550,8 +573,8 @@ void releaseRecordings()
     // a range of it in flight may have ended quiet: the completion thread waits for the newest one
     gRM->completionWaiters.fetch_add(1, std::memory_order_release);
     gRM->inflight.wake();
-    _changed.wait(l, [&] {
-        return _completedDone;
+    waitFor(self, [&] {
+        return _completedDone.load();
     });
     gRM->completionWaiters.fetch_sub(1, std::memory_order_relaxed);
 }

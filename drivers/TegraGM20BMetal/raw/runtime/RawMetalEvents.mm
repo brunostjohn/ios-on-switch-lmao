@@ -132,7 +132,7 @@ raw::EventReadiness eventReadiness(RMCommandBuffer *cb, raw::EventDeadline::Time
         if (range.gpuSignal || signalOrderedOnGpu(cb, range))
             return Readiness::ready;
         std::lock_guard<std::mutex> l(cb->_lock);
-        return cb->_segmentPending ? Readiness::blocked : Readiness::ready;
+        return cb->_finishState.pending() ? Readiness::blocked : Readiness::ready;
     }
     id event = (__bridge id)c.obj;
     if ([event signaledValue] >= c.c)
@@ -158,7 +158,7 @@ raw::EventReadiness eventReadiness(RMCommandBuffer *cb, raw::EventDeadline::Time
     }
     {
         std::lock_guard<std::mutex> l(cb->_lock);
-        if (cb->_segmentPending)
+        if (cb->_finishState.pending())
             return Readiness::
                 blocked;  // timeout belongs to execution at this position, not time spent on earlier GPU work
     }

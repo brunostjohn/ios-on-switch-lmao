@@ -126,6 +126,10 @@
 #                     the program window, its alignment kept, each page asked for once, nothing past the file's region
 #   raw_objc_layout_test  raw/runtime/raw_objc_layout.h: a struct ivar's fields from its type encoding, laid out as C does,
 #                     over the encodings of Metal's render pass descriptor ivars (RawMetalPassCache.mm reads them by name)
+#   raw_finish_state_test  raw/runtime/raw_finish_state.h: of a command buffer's submitter and its ranges' completions,
+#                     exactly one finishes it, in every interleaving
+#   raw_submit_gate_test  raw/runtime/raw_submit_gate.h: the submit worker's submissions and other threads' moves never
+#                     overlap, the worker taking no lock while no move waits
 #   raw_take_pool_test  raw/runtime/raw_take_pool.h: items any thread keeps and takes with no lock, never held by two
 #                     threads at once nor lost (the recordings command buffers give back and take, RawMetalCommandBuffer.mm)
 #   raw_handoff_queue_test  raw/runtime/raw_handoff_queue.h: the submit worker's ranges reach the completion thread, and
@@ -904,6 +908,24 @@ host_test(
     srcs = [
         "raw_objc_layout_test.cpp",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_objc_layout.h",
+    ],
+    cxx_std = "c++17",
+)
+
+host_test(
+    name = "raw_finish_state_test",
+    srcs = [
+        "raw_finish_state_test.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_finish_state.h",
+    ],
+    cxx_std = "c++17",
+)
+
+host_test(
+    name = "raw_submit_gate_test",
+    srcs = [
+        "raw_submit_gate_test.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_submit_gate.h",
     ],
     cxx_std = "c++17",
 )

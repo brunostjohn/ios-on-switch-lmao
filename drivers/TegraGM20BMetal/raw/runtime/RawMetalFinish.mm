@@ -90,8 +90,7 @@ void retireRawRange(RMCommandBuffer *cb, size_t from, size_t to)
             cached.push_back(&buffer);
     }
     auto cpu = gRM->raw->captureCpuCompletion(cb->_seqno, cb->_channelGeneration, cached);
-    // finish() reads it after the last range's increment on this thread, under cb->_lock as the completion's decrement
-    cb->_segmentPending.fetch_add(1, std::memory_order_relaxed);
+    cb->_finishState.submitted();
     auto signals = publishRawEventSignals(cb);
     RAW_DIAGNOSTIC(gRM->stats.signalsPublished += signals.size());
     const bool quiet = cb->_rangeQuiet;
@@ -102,21 +101,20 @@ void retireRawRange(RMCommandBuffer *cb, size_t from, size_t to)
                        !quiet);
 }
 
-static void dispatchScheduledLocked(RMCommandBuffer *cb, NSArray *handlers)
+// Its scheduled handlers, taken: run in its queue's order on the queue's handler queue, it scheduled once they ran
+static void dispatchScheduled(RMCommandBuffer *cb, NSArray *handlers)
 {
     if (!handlers.count) {
         cb->_scheduledDone = true;
+        rmChanged(cb);
         return;
     }
     cb->_handlersQueued = true;
     dispatch_async(cb->_queue->_handlers, ^{
         for (MTLCommandBufferHandler h in handlers)
             h((id<MTLCommandBuffer>)cb);
-        {
-            std::lock_guard<std::mutex> l(cb->_lock);
-            cb->_scheduledDone = true;
-        }
-        cb->_changed.notify_all();
+        cb->_scheduledDone = true;
+        rmChanged(cb);
     });
 }
 
@@ -144,32 +142,19 @@ static void noteHeldReturn(RMCommandBuffer *cb, uint64_t returnedUs, const char 
 void scheduled(RMCommandBuffer *cb)
 {
     unhold(cb);
-    NSArray *handlers;
+    if (cb->_scheduledSent.exchange(true))
+        return;  // once (eventHeld: at its commit; then its submission's)
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
-    uint64_t heldReturnUs = 0;
+    const uint64_t heldReturnUs = cb->_heldReturnUs.exchange(0);
 #endif
-    {
-        std::lock_guard<std::mutex> l(cb->_lock);
-        if (cb->_scheduledSent)
-            return;  // once (eventHeld: at its commit; then its submission's)
-        cb->_scheduledSent = true;
-#if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
-        std::swap(heldReturnUs, cb->_heldReturnUs);
-#endif
-        if (cb->_status == MTLCommandBufferStatusCommitted)
-            cb->_status = MTLCommandBufferStatusScheduled;
-        handlers = cb->_scheduledHandlers;
-        cb->_scheduledHandlers = nil;
-        cb->_kernelEnd = cb->_gpuStart = hostSeconds();
-        // Core Animation's render thread waits for this every frame (waitUntilScheduled): with nothing to run, no hop through
-        // the handler queue
-        if (!handlers.count)
-            cb->_scheduledDone = true;
-        else
-            dispatchScheduledLocked(cb, handlers);
-    }
-    if (!handlers.count)
-        cb->_changed.notify_all();
+    MTLCommandBufferStatus committed = MTLCommandBufferStatusCommitted;
+    cb->_status.compare_exchange_strong(committed, MTLCommandBufferStatusScheduled);
+    const double now = hostSeconds();
+    cb->_kernelEnd = now;
+    cb->_gpuStart = now;
+    // Core Animation's render thread waits for this every frame (waitUntilScheduled): with nothing to run, no hop through
+    // the handler queue
+    dispatchScheduled(cb, rmTakeHandlers(cb, cb->_scheduledHandlers, cb->_hasScheduledHandlers));
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
     if (heldReturnUs)
         noteHeldReturn(cb, heldReturnUs, "submitted");
@@ -181,6 +166,8 @@ void scheduled(RMCommandBuffer *cb)
 // The raw path's empty chunks go back as m2v's blocks do: on memory pressure, and outside the render server once nothing completed
 // for NMB_IDLE_RELEASE_MS (each completion moves the deadline)
 GpuMemoryRelease &gRawRelease = *new GpuMemoryRelease;
+
+static void finished(RMCommandBuffer *cb);
 
 void segmentCompleted(RMCommandBuffer *cb, NSError *error, const raw::RetirementWrites &writes, uint32_t dependencies,
                       const std::vector<RMNativeEventSignal> &signals,
@@ -199,17 +186,15 @@ void segmentCompleted(RMCommandBuffer *cb, NSError *error, const raw::Retirement
         error = [NSError errorWithDomain:MTLCommandBufferErrorDomain code:MTLCommandBufferErrorInternal
                                userInfo:@{NSLocalizedDescriptionKey : @"CPU-visible GPU results could not be acquired"}];
     retireEventSignals(signals, !error);
-    bool ready;
-    {
+    if (error) {
         std::lock_guard<std::mutex> l(cb->_lock);
-        if (error && !cb->_segError)
+        if (!cb->_segError)
             cb->_segError = error;
-        --cb->_segmentPending;
-        ready = cb->_finishReady && !cb->_segmentPending;
     }
+    const bool last = cb->_finishState.completed();
     wakeSubmit((__bridge void *)cb->_queue, dependencies);
-    if (ready)
-        finish(cb, nil);
+    if (last)
+        finished(cb);
 }
 
 // A command buffer's completed handlers (`run`): on its queue's completion queue, else on the following threads, behind its
@@ -225,12 +210,9 @@ static void completeBuffer(RMCommandBuffer *cb)
     cb->_doneHandlers = nil;
     for (MTLCommandBufferHandler h in handlers)
         h((id<MTLCommandBuffer>)cb);
-    {
-        std::lock_guard<std::mutex> l(cb->_lock);
-        cb->_completedDone = true;
-        cb->_scheduledDone = true;
-    }
-    cb->_changed.notify_all();
+    cb->_scheduledDone = true;
+    cb->_completedDone = true;
+    rmChanged(cb);
     cb->_owners.clear();  // the resources may die now: no submission uses them any more (its capacity is recycled)
     cb->_computeJobs.clear();
     cb->_sharedEventWaits.clear();
@@ -286,23 +268,27 @@ void failCommandBuffer(RMCommandBuffer *cb, NSString *reason)
 
 void finish(RMCommandBuffer *cb, NSError *error)
 {
-    bool pending;
-    {
+    if (error) {
         std::lock_guard<std::mutex> l(cb->_lock);
-        if (cb->_finishing)
-            return;
-        if (error && !cb->_segError)
+        if (!cb->_segError)
             cb->_segError = error;
-        cb->_finishReady = true;
-        pending = cb->_segmentPending != 0;
-        cb->_finishing = !pending;
-        error = cb->_segError;
     }
-    if (pending) {
-        // A failed command buffer submits no more: its waitUntilScheduled returns now, not once its earlier work completes
-        if (error)
-            cb->_changed.notify_all();
+    if (cb->_finishState.ready()) {
+        finished(cb);
         return;
+    }
+    // A failed command buffer submits no more: its waitUntilScheduled returns now, not once its earlier work completes
+    if (error)
+        rmChanged(cb);
+}
+
+// It submits no more and nothing of it is in flight: completed, once (raw_finish_state.h)
+static void finished(RMCommandBuffer *cb)
+{
+    NSError *error = nil;
+    if (cb->_segError.set()) {
+        std::lock_guard<std::mutex> l(cb->_lock);
+        error = cb->_segError;
     }
     RAW_DIAGNOSTIC(gRM->stats.finished.fetch_add(1, std::memory_order_relaxed));
     cancelPromises(cb);
@@ -312,25 +298,18 @@ void finish(RMCommandBuffer *cb, NSError *error)
     // one whose fence passed before its submitting thread's scheduled() (the completion thread wakes on work it was just handed),
     // one that never reached a GPU. Ones scheduled() already queued run first, the completed ones queued behind them on the
     // handler queue.
-    NSArray *handlers;
-    bool behindScheduled;
-#if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
-    uint64_t heldReturnUs = 0;
-#endif
-    {
-        std::lock_guard<std::mutex> l(cb->_lock);
-        NSArray *scheduledHandlers = nil;
-        const bool sendScheduled = !cb->_scheduledSent;
-        if (sendScheduled) {
-            scheduledHandlers = cb->_scheduledHandlers;
-            cb->_scheduledHandlers = nil;
-            cb->_kernelEnd = hostSeconds();
+    const bool sendScheduled = !cb->_scheduledSent.exchange(true);
+    NSArray *scheduledHandlers = nil;
+    if (sendScheduled) {
+        scheduledHandlers = rmTakeHandlers(cb, cb->_scheduledHandlers, cb->_hasScheduledHandlers);
+        cb->_kernelEnd = hostSeconds();
 #if SWITCH_FRAME_TIMELINE
-            RAW_DIAGNOSTIC(gRM->stats.scheduledByFinish++);
+        RAW_DIAGNOSTIC(gRM->stats.scheduledByFinish++);
 #endif
-        }
-        cb->_status = error ? MTLCommandBufferStatusError : MTLCommandBufferStatusCompleted;
+    }
+    {
         cb->_error = error;
+        cb->_status = error ? MTLCommandBufferStatusError : MTLCommandBufferStatusCompleted;
         // the GPU's own time, its end where this thread saw it complete: the duration exact, both late by that latency
         uint64_t ns = 0;
         const bool stamped = !error && !cb->_m2v && gRM->raw->gpuNanoseconds(cb->_stamp, ns);
@@ -344,18 +323,16 @@ void finish(RMCommandBuffer *cb, NSError *error)
         cb->_kernelEnd = t.kernelEnd;
         cb->_gpuStart = t.gpuStart;
         cb->_gpuEnd = t.gpuEnd;
-        handlers = cb->_completedHandlers;
-        cb->_completedHandlers = nil;
-        cb->_completedSent = true;
-        cb->_scheduledSent = true;  // scheduled() runs no more
-#if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
-        std::swap(heldReturnUs, cb->_heldReturnUs);
-#endif
-        if (sendScheduled)
-            dispatchScheduledLocked(cb, scheduledHandlers);
-        behindScheduled = cb->_handlersQueued;
     }
-    cb->_changed.notify_all();
+    cb->_completedSent = true;
+    NSArray *handlers = rmTakeHandlers(cb, cb->_completedHandlers, cb->_hasCompletedHandlers);
+#if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
+    const uint64_t heldReturnUs = cb->_heldReturnUs.exchange(0);
+#endif
+    if (sendScheduled)
+        dispatchScheduled(cb, scheduledHandlers);
+    const bool behindScheduled = cb->_handlersQueued;
+    rmChanged(cb);
 #if SWITCH_RAW_DIAGNOSTICS
     if (cb->_gpuStamped)
         reportLongSpans(cb->_stamp, uint64_t((cb->_gpuEnd - cb->_gpuStart) * 1e9));

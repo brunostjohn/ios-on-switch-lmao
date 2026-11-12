@@ -28,10 +28,11 @@ void expectBefore(const std::string &text, const std::string &first, const std::
 TEST(RawWriterPromiseSource, AHeldCommandBufferPromisesItsWritesBeforeItsWaitReturns)
 {
     const std::string schedule = SourceText("../raw/runtime/RawMetalSchedule.mm");
-    const std::string commit = Between(schedule, "void commitBuffer(RMCommandBuffer *cb)", "\n}\n");
-    expectBefore(commit, "r.waiting.commit(", "written = writtenSurfaces(cb);");
-    expectBefore(commit, "written = writtenSurfaces(cb);", "RAW_DIAGNOSTIC(r.stats.deferred++);");
-    expectBefore(commit, "promiseWrites(cb, written);", "cb->_held = true;");
+    // the submit worker takes a commit (applyChange): one held at once promises its writes before it is marked held
+    const std::string commit = Between(schedule, "static void applyChange(", "\n}\n");
+    expectBefore(commit, "r.waiting.commit(", "promiseWrites(cb, writtenSurfaces(cb));");
+    expectBefore(commit, "promiseWrites(cb, writtenSurfaces(cb));", "cb->_held = true;");
+    expectBefore(commit, "cb->_held = true;", "rmChanged(cb);");
     const std::string mark = Between(schedule, "static void markHeld(", "\n}\n");
     expectBefore(mark, "promiseWrites(cb, writtenSurfaces(cb));", "cb->_held = held;");
     const std::string promise = Between(schedule, "static void promiseWrites(", "\n}\n");
@@ -48,7 +49,7 @@ TEST(RawWriterPromiseSource, TheLastRangeCarriesThemAndFinishGivesBackTheRest)
     expectBefore(encode, "rc->promises = cb->_promises;", "if (!rc->commit(seq)) {");
     expectBefore(encode, "if (rc->promisesKept) {", "cb->_promises.clear();");
     const std::string finish = SourceText("../raw/runtime/RawMetalFinish.mm");
-    expectBefore(Between(finish, "void finish(RMCommandBuffer *cb, NSError *error)\n{", "\n}\n"), "cancelPromises(cb);",
+    expectBefore(Between(finish, "static void finished(RMCommandBuffer *cb)\n{", "\n}\n"), "cancelPromises(cb);",
                  "unhold(cb);");
     const std::string events = SourceText("../raw/runtime/RawMetalEvents.mm");
     EXPECT_THAT(Between(events, "void unhold(RMCommandBuffer *cb)\n{", "\n}\n"), Not(HasSubstr("Promise")));

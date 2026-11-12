@@ -88,9 +88,8 @@ void rmStoredZetaForM2v(RMTexture *t)
         (void)[t rmTwin];
 }
 
-id storedZetaTwin(RMTexture *t, id<MTLDevice> m2v, const char **why)
+static id storedZetaTwinExcluded(RMTexture *t, id<MTLDevice> m2v, const char **why)
 {
-    std::lock_guard<std::recursive_mutex> l(submitLock());
     @synchronized(t) {
         if (t->_twin)
             return t->_twin;
@@ -123,8 +122,15 @@ id storedZetaTwin(RMTexture *t, id<MTLDevice> m2v, const char **why)
             return nil;
     }
     gRM->rawSinceM2v = true;
-    // published under the submit lock, so a caller that waited on it finds this twin rather than moving again
+    // published with submissions excluded, so a caller that waited on them finds this twin rather than moving again
     return twinPublish(t, t->_twin, twin);
+}
+
+id storedZetaTwin(RMTexture *t, id<MTLDevice> m2v, const char **why)
+{
+    return rmExcludingSubmissions([&]() -> id {
+        return storedZetaTwinExcluded(t, m2v, why);
+    });
 }
 
 bool passSamplePositions(MTLRenderPassDescriptor *pass, NSUInteger count, uint32_t samples, raw::SamplePositions &out)

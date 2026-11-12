@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <mutex>
 #include "raw_storage_form.h"
+#include "raw_submit_gate.h"
 #include "raw_view.h"
 #include "raw_xr.h"
 
@@ -15,10 +16,27 @@ thread_local bool tRawEncoding = false;
 static std::mutex gPlainShapesLock;
 static raw::PlainShapes gPlainShapes;
 
-std::recursive_mutex &submitLock()
+static raw::SubmitGate gSubmitGate;
+static thread_local bool tSubmitting = false;
+
+bool submitRangeExclusive(RMCommandBuffer *cb, bool followed)
 {
-    static std::recursive_mutex lock;
-    return lock;
+    tSubmitting = true;
+    const bool submitted = gSubmitGate.submit([&] {
+        return submitRange(cb, followed);
+    });
+    tSubmitting = false;
+    return submitted;
+}
+
+raw::SubmitGate &rmSubmitGate()
+{
+    return gSubmitGate;
+}
+
+bool rmInSubmission()
+{
+    return tSubmitting;
 }
 
 uint32_t privateCompressedKind(MTLTextureDescriptor *d)
@@ -47,21 +65,22 @@ bool rmTexturePlain(RMTexture *t)
 {
     if (!t || !t->_rawOk || !gRM->raw->privateCompressed(t->_raw))
         return true;
-    std::lock_guard<std::recursive_mutex> l(submitLock());
-    if (tRawEncoding) {
-        SWITCH_REFUSE_DETAIL("raw", "comp.private", t->_descriptor.pixelFormat,
-                             "a compressed %ux%u texture of format %lu was asked for its pages inside a raw encode",
-                             t->_raw.width, t->_raw.height, (unsigned long)t->_descriptor.pixelFormat);
-        return false;
-    }
-    @synchronized(t) {
-        if (!gRM->raw->privateCompressed(t->_raw))
-            return true;
-        if (!gRM->raw->plainFromCompressed(t->_raw))
+    return rmExcludingSubmissions([t]() -> bool {
+        if (tRawEncoding) {
+            SWITCH_REFUSE_DETAIL("raw", "comp.private", t->_descriptor.pixelFormat,
+                                 "a compressed %ux%u texture of format %lu was asked for its pages inside a raw encode",
+                                 t->_raw.width, t->_raw.height, (unsigned long)t->_descriptor.pixelFormat);
             return false;
-    }
-    gRM->rawSinceM2v = true;
-    return true;
+        }
+        @synchronized(t) {
+            if (!gRM->raw->privateCompressed(t->_raw))
+                return true;
+            if (!gRM->raw->plainFromCompressed(t->_raw))
+                return false;
+        }
+        gRM->rawSinceM2v = true;
+        return true;
+    });
 }
 
 void rmRangePlain(RMCommandBuffer *cb, size_t from, size_t to)

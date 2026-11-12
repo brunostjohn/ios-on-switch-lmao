@@ -18,7 +18,7 @@
 // signalled outside this device's submitted work.
 
 // What a raw command buffer waits for before it is submitted: GPU order, the m2v command buffers before it scheduled; CPU
-// order, completed. m2vLock held.
+// order, completed. Read with no lock: the counts move under m2vLock.
 bool m2vClear()
 {
     return gRM->gpuOrder ? gRM->m2vUnscheduled == 0 : gRM->m2vPending == 0;
@@ -226,13 +226,13 @@ static raw::RangeEnd rangeEnd(RMCommandBuffer *cb, bool last, bool followed, boo
 bool submitRange(RMCommandBuffer *cb, bool followed)
 {
     RawState &r = *gRM;
-    NSError *priorError;
-    bool observed;
-    {
+    NSError *priorError = nil;
+    if (cb->_segError.set()) {
         std::lock_guard<std::mutex> l(cb->_lock);
         priorError = cb->_segError;
-        observed = cb->_completedHandlers.count || cb->_presents;
     }
+    // a present is added before its command buffer is committed, a completed handler's flag before it is added
+    const bool observed = cb->_hasCompletedHandlers.load() || cb->_presents;
     if (priorError) {
         finish(cb, priorError);
         return true;
@@ -430,7 +430,7 @@ bool submitRange(RMCommandBuffer *cb, bool followed)
         RAW_DIAGNOSTIC(r.stats.m2v++);
         countPreds(cb);
         const auto writes = captureWrittenRange(cb, range.from, range.to);
-        cb->_segmentPending.fetch_add(1, std::memory_order_relaxed);
+        cb->_finishState.submitted();
         __block bool counted = false;
         {
             std::lock_guard<std::mutex> l(r.m2vLock);

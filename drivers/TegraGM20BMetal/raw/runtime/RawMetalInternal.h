@@ -25,6 +25,7 @@
 #include <vector>
 #include "GpuMemoryRelease.h"
 #include "LimitsTable.h"
+#include "raw_submit_gate.h"
 #include "raw_invocation.h"
 #include "SwitchFrameTimeline.h"
 #include "../../../../kits/SwitchRefusal/SwitchRefusalSite.h"
@@ -171,6 +172,19 @@ struct RMRawRetirement {
     uint32_t loopFrom = 0, loopTo = 0;
 };
 
+// A change of the submit worker's schedule another thread hands it (RawState::schedule)
+struct RMScheduleChange {
+    enum Kind : uint8_t {
+        Enqueue,
+        Commit,
+        Wake
+    } kind = Wake;
+
+    RMCommandBuffer *buffer = nil;  // Enqueue, Commit
+    void *queue = nullptr;          // Wake: the queue whose head it wakes (null: none)
+    uint32_t dependencies = 0;      // Wake: the progress it reports (RMReadyDependency)
+};
+
 struct RawState {
     raw::Device *raw = nullptr;
     std::shared_ptr<raw::SharedEvents> sharedEvents;
@@ -180,18 +194,21 @@ struct RawState {
     std::atomic<bool> m2vOpened{false};
     uint64_t registryID = 0;
     id device;  // the raw device object
-    std::mutex schedule;
+    // The submit worker's own: every command buffer's place in its queue's order (RawMetalSchedule.mm). Other threads
+    // change it through `schedule`, the changes the worker applies before it takes the next command buffer.
+    raw::HandoffQueue<RMScheduleChange> schedule;
+    raw::SubmitQueue<void *, RMCommandBuffer *> waiting;
+    std::atomic<uint32_t> waitingCommitted{0};  // waiting.committed() as the worker last saw it (the stall line's)
     std::mutex eventValues;
     raw::EventTimeline events;
-    raw::SubmitQueue<void *, RMCommandBuffer *> waiting;
-    std::condition_variable waitingChanged;
     std::mutex m2vLock;
     std::condition_variable m2vChanged;
-    uint32_t m2vPending = 0;      // m2v command buffers committed and not completed
-    uint32_t m2vUnscheduled = 0;  // and not scheduled yet: their kernel submission (NVK's Exec) is not made
-    // The two drivers' order (submit lock): on the GPU when the kernel has Order (TegraGM20BInfoOrder), else on the CPU (the
-    // m2v work before a raw command buffer completes first, and the raw work before an m2v one).
-    bool gpuOrder = false;
+    // changed under m2vLock, read with none (m2vClear)
+    std::atomic<uint32_t> m2vPending{0};      // m2v command buffers committed and not completed
+    std::atomic<uint32_t> m2vUnscheduled{0};  // and not scheduled yet: their kernel submission (NVK's Exec) is not made
+    // The two drivers' order (stored under m2vLock): on the GPU when the kernel has Order (TegraGM20BInfoOrder), else on
+    // the CPU (the m2v work before a raw command buffer completes first, and the raw work before an m2v one).
+    std::atomic<bool> gpuOrder{false};
     uint64_t orderRefusedAt = 0;  // raw::Device::Stats::reopens when the kernel last refused an Order (raw_order.h)
     bool rawSinceM2v =
         false;  // raw work submitted since the last m2v commit: the next m2v one waits for it (BeforeTask)
@@ -448,9 +465,19 @@ bool submitRange(RMCommandBuffer *cb, bool followed);
 void cancelPromises(RMCommandBuffer *cb);
 void unhold(RMCommandBuffer *cb);
 
-// RawMetalPrivateComp.mm (raw_private_comp.h): submissions and the moves of compressed private textures take the submit
-// lock; a move inside a raw encode is refused
-std::recursive_mutex &submitLock();
+// RawMetalPrivateComp.mm (raw_private_comp.h): submissions and the moves of a texture's memory exclude each other through
+// the submit gate; a move inside a raw encode is refused
+// submitRange on the submit worker, excluding the moves of compressed private textures (raw_submit_gate.h)
+bool submitRangeExclusive(RMCommandBuffer *cb, bool followed);
+// The gate a move of a texture's memory takes against the submit worker's submissions, and whether this thread is that
+// worker inside one (RawMetalPrivateComp.mm)
+raw::SubmitGate &rmSubmitGate();
+bool rmInSubmission();
+// `move` with no submission running: at once on the submit worker inside its own submission
+template <typename Move> auto rmExcludingSubmissions(Move &&move) -> decltype(move())
+{
+    return rmInSubmission() ? move() : rmSubmitGate().exclude(move);
+}
 extern thread_local bool tRawEncoding;
 uint32_t privateCompressedKind(MTLTextureDescriptor *d);
 bool rmTexturePlain(RMTexture *t);
@@ -465,6 +492,11 @@ void rmStorageTargetsPlain(RMCommandBuffer *cb, size_t from, size_t to);
 
 // RawMetalCommandBuffer.mm: the kept recordings past what steady frames take, given back
 void releaseRecordings();
+// cb's state changed: its waiters woken, with its lock taken only where one waits
+void rmChanged(RMCommandBuffer *cb);
+// its scheduled or completed handlers (`list`) taken, once its sent flag was exchanged: under its lock only where `added`
+// says one was added
+NSArray *rmTakeHandlers(RMCommandBuffer *cb, NSMutableArray *__strong &list, std::atomic<bool> &added);
 
 // RawMetalFinish.mm
 extern GpuMemoryRelease &gRawRelease;

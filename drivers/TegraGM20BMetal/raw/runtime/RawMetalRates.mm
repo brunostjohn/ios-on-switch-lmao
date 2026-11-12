@@ -455,20 +455,9 @@ void rawStallTick()
         still = 0;
         return;
     }
-    long waiting = -1, inflight = -1, m2vPending = -1, m2vUnscheduled = -1;
-    {
-        std::unique_lock<std::mutex> a(r.schedule, std::try_to_lock);
-        if (a.owns_lock())
-            waiting = long(r.waiting.committed());
-    }
-    inflight = long(r.inflight.size());
-    {
-        std::unique_lock<std::mutex> m(r.m2vLock, std::try_to_lock);
-        if (m.owns_lock()) {
-            m2vPending = long(r.m2vPending);
-            m2vUnscheduled = long(r.m2vUnscheduled);
-        }
-    }
+    const long waiting = long(r.waitingCommitted.load(std::memory_order_relaxed)), inflight = long(r.inflight.size()),
+               m2vPending = long(r.m2vPending.load(std::memory_order_relaxed)),
+               m2vUnscheduled = long(r.m2vUnscheduled.load(std::memory_order_relaxed));
     bool holders = false;
     {
         std::unique_lock<std::mutex> h(gHoldersLock, std::try_to_lock);
@@ -487,7 +476,7 @@ void rawStallTick()
     said = true;
     os_log_error(rawLog(),
                  "raw: stall: nothing committed or completed for 10 s with work pending: waiting %ld, "
-                 "inflight %ld, m2v pending %ld unscheduled %ld (-1: its lock held), locks free: "
+                 "inflight %ld, m2v pending %ld unscheduled %ld, locks free: "
                  "holders %d device %d, seqno submitted %u completed %u, commits %llu completed %llu",
                  waiting, inflight, m2vPending, m2vUnscheduled, int(holders), int(device), submitted, completed,
                  (unsigned long long)commits, (unsigned long long)done);
