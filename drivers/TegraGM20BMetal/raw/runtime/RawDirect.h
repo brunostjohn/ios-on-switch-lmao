@@ -42,6 +42,15 @@ struct ProbeTextures {
     uint8_t fragmentTests = 0;
 };
 
+// m2v's own instantiation of a state's probe draw that binds every buffer slot at its probe offset (pack/probe_bind.h,
+// NmbDirectState draws[3]): its root push words and each stage's argument table, what a host check (raw/test/boundcheck.py)
+// compares the words the raw path writes for that draw with
+struct BoundDraw {
+    uint32_t pushMask = 0;
+    uint32_t push[32] = {};
+    std::vector<uint32_t> spill[2];
+};
+
 class Direct {
 public:
     explicit Direct(const Pack &pack);
@@ -61,6 +70,17 @@ public:
         variants_ = on;
     }
 
+    // The pack generator's: each make keeps m2v's bound probe draw of the state it made (boundDraw)
+    void keepBoundDraws(bool on)
+    {
+        keepBound_ = on;
+    }
+
+    const BoundDraw &boundDraw() const
+    {
+        return bound_;
+    }
+
     // The record of `descriptor`'s kernel at a dispatch of `dispatch`'s shape and bindings, whose compute key is `key`
     // (raw_direct_compute.h)
     CompileOutcome kernel(MTLComputePipelineDescriptor *descriptor, const NmbDirectDispatch &dispatch,
@@ -70,6 +90,8 @@ private:
     PackRules rules_;
     DirectNvk nvk_;
     bool variants_ = false;
+    bool keepBound_ = false;
+    BoundDraw bound_;
 
     CompileOutcome form(MTLRenderPipelineDescriptor *descriptor, bool barrier, ProbeTextures textures,
                         const std::string &key, const std::vector<uint32_t> &attributes, RuntimeRecord &out,

@@ -72,8 +72,10 @@ struct RecordParts {
     PackShaderTests shaderTests = {};
     RecordHeap heap;
     std::vector<uint32_t> spill[2];  // each stage's argument table words (raw_spill_table.h), vertex then fragment
-    // by stage and buffer slot, the table word + 1 of a residual the stage's argument table holds (NmbDirectDraw's)
-    uint8_t spillResidual[2][32] = {};
+    // by stage and buffer slot, the record's word + 1 of the slot's residual as m2v's plan places it (NmbDirectDraw's
+    // residualWord); where the plan names them, `residuals` (the probe's codes) names none
+    uint8_t residualWord[2][32] = {};
+    bool residualsPlanned = false;
 };
 
 // The color attachments a key names (mkpack.py targets)

@@ -7,7 +7,6 @@
 #include "raw_direct_push.h"
 #include "raw_chip_facts.h"
 #include "raw_direct_storage.h"
-#include "raw_residual.h"
 #include "raw_spill_table.h"
 #include "raw_split_metadata.h"
 
@@ -296,21 +295,8 @@ std::map<uint32_t, uint32_t> boundSizes(const DirectNvk &nvk, void *device, cons
     return out;
 }
 
-// raw_record.cpp residualWords: the root push words the bind-offset draw writes where draw 0 left 0, by their value's low byte
-std::map<uint32_t, uint32_t> residualWords(const NmbDirectDraw &plain, const NmbDirectDraw &bound)
-{
-    std::map<uint32_t, uint32_t> was, now;
-    for (uint32_t i = 0; i < 32; i++) {
-        if (plain.pushMask >> i & 1)
-            was[kRootPush + 4 * i] = plain.push[i];
-        if (bound.pushMask >> i & 1)
-            now[kRootPush + 4 * i] = bound.push[i];
-    }
-    return residualWordsByValue(was, now);
-}
-
 // What the record takes of the draws' argument tables (m2v's push fields past each stage's window): draw 0's words, and
-// each spilled bind offset's word as the plan places it; null: why not
+// each bind offset residual's word as the plan places it, in the push window or the table; null: why not
 const char *spillTables(const NmbDirectState &state, RecordParts &parts)
 {
     const NmbDirectDraw &draw = state.draws[0];
@@ -321,12 +307,12 @@ const char *spillTables(const NmbDirectState &state, RecordParts &parts)
         if (draw.spillWords[k] > kSpillWordsMax)
             return "an argument table past 255 words";
         parts.spill[k].assign(draw.spill[k], draw.spill[k] + draw.spillWords[k]);
-        if (memcmp(draw.spillResidual[k], state.draws[3].spillResidual[k], sizeof draw.spillResidual[k]))
-            return "probe draws on variants of other argument tables";
+        if (memcmp(draw.residualWord[k], state.draws[3].residualWord[k], sizeof draw.residualWord[k]))
+            return "probe draws on variants of other push placements";
         for (uint32_t slot = 0; slot < 32; slot++)
-            if (const uint8_t word = draw.spillResidual[k][slot]; word && word > kSpillResidualWords)
+            if (draw.residualWord[k][slot] > kRootPushWords + kSpillResidualWords)
                 return "a spilled bind offset past word 30 of its argument table";
-        memcpy(parts.spillResidual[k], draw.spillResidual[k], sizeof parts.spillResidual[k]);
+        memcpy(parts.residualWord[k], draw.residualWord[k], sizeof parts.residualWord[k]);
     }
     for (const uint32_t word : {draw.blendColorWord, draw.halfBlendColorWord, draw.depthTestWord, draw.stencilTestWord})
         if (word > 0xFF)
@@ -541,7 +527,7 @@ CompileOutcome directRecord(const NmbDirectState &state, const DirectNvk &nvk, c
         return CompileOutcome::Refused;
     parts.sizes16 = boundSizes(nvk, device, state.draws[1]);
     parts.sizes4096 = boundSizes(nvk, device, state.draws[2]);
-    parts.residuals = residualWords(draw, state.draws[3]);
+    parts.residualsPlanned = true;
     if (const char *refused = spillTables(state, parts)) {
         why = refused;
         return CompileOutcome::Refused;

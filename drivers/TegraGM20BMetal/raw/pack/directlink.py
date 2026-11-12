@@ -111,6 +111,8 @@ def load_records(path: str) -> tuple[list[dict], list[dict]]:
             rec['variants'] = [{'assume': r.u32(), 'program': program(r)} for _ in range(r.u32())]
             rec['iterated'] = r.blob().decode()
             rec['spill'] = words_of(r.blob())
+            mask, push = r.u32(), words_of(r.blob())
+            rec['bound'] = {'mask': mask, 'push': push, 'spill': [words_of(r.blob()), words_of(r.blob())]}
         states.append(rec)
     return states, kernel_recs
 

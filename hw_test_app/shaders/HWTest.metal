@@ -211,6 +211,23 @@ fragment float4 tint_fragment(TintVertex in [[stage_in]])
     return in.tint;
 }
 
+/// spill_vertex's green beside a colour behind an argument buffer's pointer, in blue, and one float at each of fourteen bind
+/// offsets, in red (metal.native.argument_encoder): both stages of one draw place bind offsets past their push windows in
+/// their argument tables
+fragment float4 spill_tint_fragment(TintVertex in [[stage_in]], constant ColourArguments &arguments [[buffer(0)]],
+                                    device const float *b1 [[buffer(1)]], device const float *b2 [[buffer(2)]],
+                                    device const float *b3 [[buffer(3)]], device const float *b4 [[buffer(4)]],
+                                    device const float *b5 [[buffer(5)]], device const float *b6 [[buffer(6)]],
+                                    device const float *b7 [[buffer(7)]], device const float *b8 [[buffer(8)]],
+                                    device const float *b9 [[buffer(9)]], device const float *b10 [[buffer(10)]],
+                                    device const float *b11 [[buffer(11)]], device const float *b12 [[buffer(12)]],
+                                    device const float *b13 [[buffer(13)]], device const float *b14 [[buffer(14)]])
+{
+    return float4(b1[0] + b2[0] + b3[0] + b4[0] + b5[0] + b6[0] + b7[0] + b8[0] + b9[0] + b10[0] + b11[0] + b12[0] +
+                      b13[0] + b14[0],
+                  in.tint.y, arguments.colour->z, 1);
+}
+
 /// A colour behind an argument buffer's pointer plus one float from each of twenty-eight buffers, in red: m2v places the
 /// last bind offsets past the kernel's push window in its argument table
 kernel void argument_spill_kernel(constant ColourArguments &arguments [[buffer(0)]], device float4 *out [[buffer(1)]],

@@ -114,7 +114,7 @@ pub struct NmbDirectDraw {
     pub variant: *const c_char,
     pub spill: [*const u32; 2],
     pub spill_words: [u32; 2],
-    pub spill_residual: [[u8; 32]; 2],
+    pub residual_word: [[u8; 32]; 2],
 }
 
 #[repr(C)]
@@ -672,19 +672,24 @@ pub(crate) fn spill_table(plan: &BindingPlan, bytes: &[DescriptorBytes], stage: 
         })
 }
 
-/// By buffer slot, the `stage` table word + 1 of each SlotBindOffset residual the plan places in that stage's argument
-/// table: the probe's codes cannot name a residual there whose slot shares its code with another
-pub(crate) fn spill_residuals(plan: &BindingPlan, stage: Stage) -> [u8; 32] {
+/// By buffer slot, the record's word + 1 of each SlotBindOffset residual of `stage` as the plan places it: a root push
+/// word (1 to 32), or the stage's argument table word + 33 (33 to 63). The probe's codes cannot name a storage residual
+/// whose slot shares its code with another.
+pub(crate) fn residual_words(plan: &BindingPlan, stage: Stage) -> [u8; 32] {
     let mut out = [0u8; 32];
     for field in plan.push.fields.iter().filter(|f| f.stage == stage) {
-        if let (PushField::SlotBindOffset(slot), FieldLocation::ArgumentTable { offset }) =
-            (field.field, field.location)
-            && slot.class == SlotClass::Buffer
-            && slot.index < 32
-            && offset / 4 < 31
-        {
-            out[slot.index as usize] = (offset / 4 + 1) as u8;
+        let PushField::SlotBindOffset(slot) = field.field else {
+            continue;
+        };
+        if slot.class != SlotClass::Buffer || slot.index >= 32 {
+            continue;
         }
+        let word = match field.location {
+            FieldLocation::PushWindow { offset } if offset / 4 < 32 => offset / 4 + 1,
+            FieldLocation::ArgumentTable { offset } if offset / 4 < 31 => offset / 4 + 33,
+            _ => continue,
+        };
+        out[slot.index as usize] = word as u8;
     }
     out
 }
@@ -985,9 +990,9 @@ fn draw_of(
         variant: variant.as_ptr(),
         spill: [spills[0].as_ptr(), spills[1].as_ptr()],
         spill_words: [spills[0].len() as u32, spills[1].len() as u32],
-        spill_residual: [
-            spill_residuals(&run.plan, Stage::Vertex),
-            spill_residuals(&run.plan, Stage::Fragment),
+        residual_word: [
+            residual_words(&run.plan, Stage::Vertex),
+            residual_words(&run.plan, Stage::Fragment),
         ],
     };
     holes_of(&run.commands, &mut draw)?;

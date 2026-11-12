@@ -46,7 +46,7 @@ extension NativeArgumentEncoderTest {
         let colour = try gpu.buffer([SIMD4<Float>(0, 0, 1, 1)]), arguments = try gpu.buffer(16)
         encoder.setArgumentBuffer(arguments, offset: 0)
         encoder.setBuffer(colour, offset: 0, index: 0)
-        let values = try Self.spillValues(gpu, 1.0 / 32, 1, spilled: 28...29)
+        let values = try Self.spillValues(gpu, 1.0 / 32, 1)
         let pipeline = try gpu.compute("argument_spill_kernel")
         let out = try gpu.buffer(16)
         let ran = try await gpu.run { commands in
@@ -56,7 +56,7 @@ extension NativeArgumentEncoderTest {
             compute.setBuffer(arguments, offset: 0, index: 0)
             compute.setBuffer(out, offset: 0, index: 1)
             for slot in 2...29 {
-                compute.setBuffer(values, offset: Self.spillOffset(slot, spills: slot >= 28), index: slot)
+                compute.setBuffer(values, offset: Self.spillOffset(slot), index: slot)
             }
             compute.dispatchThreadgroups(MTLSize(width: 1, height: 1, depth: 1),
                                          threadsPerThreadgroup: MTLSize(width: 1, height: 1, depth: 1))

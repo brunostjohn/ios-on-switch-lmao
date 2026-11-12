@@ -6,7 +6,7 @@
 
 use crate::compute_artifact::NmbComputeArtifact;
 use crate::direct::{
-    HEAP_ARRAYS, Layout, NMB_DIRECT_IMMUTABLE, NmbDirectStage, NmbDirectWrite, compile_error, spill_residuals, spill_table,
+    HEAP_ARRAYS, Layout, NMB_DIRECT_IMMUTABLE, NmbDirectStage, NmbDirectWrite, compile_error, residual_words, spill_table,
     write_of,
 };
 use crate::objects::{
@@ -108,7 +108,7 @@ pub struct NmbDirectKernel {
     pub spill_words: u32,
     pub moved_spill_words: u32,
     pub bound_spill_words: u32,
-    pub spill_residual: [u8; 32],
+    pub residual_word: [u8; 32],
 }
 
 /// The kernel's reads through argument buffers the raw path fills (NativeMetalDirect.rs holes_of and heap_of for a draw): its
@@ -700,7 +700,7 @@ fn direct(
         spill_words: plain_spill.len() as u32,
         moved_spill_words: moved_spill.len() as u32,
         bound_spill_words: bound_spill.len() as u32,
-        spill_residual: spill_residuals(&plain.plan, Stage::Kernel),
+        residual_word: residual_words(&plain.plan, Stage::Kernel),
     };
     arguments_of(&plain.commands, &bound.commands, &plain.pipeline.layout, &layout, &mut kernel)?;
     // SAFETY: the caller's contract; everything `kernel` points at lives until after the call.
