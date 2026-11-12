@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 // See raw_direct_compute.h. A kernel's record from m2v's plans of three dispatches (inline bytes, buffers elsewhere, buffers off 16)
-// and NVK's own rules for the QMD, the layout and the descriptors.
+// and NVK's rules for the QMD, the layout and the descriptors (raw_direct_encode.h).
 #include "raw_direct_compute.h"
 
 #include <algorithm>
@@ -9,6 +9,7 @@
 #include "../pack/probe_bind.h"
 #include "bridge/NativeMetalDirect.h"
 #include "raw_compute_key.h"
+#include "raw_direct_encode.h"
 #include "raw_direct_nvk.h"
 #include "raw_residual.h"
 
@@ -69,19 +70,18 @@ uint8_t samplerSlot(ComputeRecord &out, const std::array<uint32_t, 8> &header)
 
 class Entries {
 public:
-    Entries(const NmbDirectKernel &k, const DirectNvk &nvk, ComputeRecord &out)
-        : k_(k), nvk_(nvk), device_(handle(k.device)), out_(out)
+    Entries(const NmbDirectKernel &k, ComputeRecord &out) : k_(k), set0_(k.set0Bindings, k.set0BindingCount), out_(out)
     {}
 
     bool add(const NmbDirectKernelWrite &kw, std::string &why)
     {
         const NmbDirectWrite &w = kw.write;
-        NvkSetBinding b = {};
+        SetSlot b;
         if (w.set != 0) {
             why = "a set-" + std::to_string(w.set) + " descriptor (binding " + std::to_string(w.binding) + ")";
             return false;
         }
-        if (!k_.set0 || !nvk::setLayoutBinding(nvk_, k_.set0, w.binding, b)) {
+        if (!set0_.slot(w.binding, b)) {
             why = "set 0 binding " + std::to_string(w.binding) + " not in its layout";
             return false;
         }
@@ -103,8 +103,7 @@ public:
 
 private:
     const NmbDirectKernel &k_;
-    const DirectNvk &nvk_;
-    void *device_;
+    const Set0 set0_;
     ComputeRecord &out_;
 
     bool buffer(const NmbDirectWrite &w, uint16_t offset, std::string &why)
@@ -114,7 +113,7 @@ private:
                   std::to_string(w.source) + ")";
             return false;
         }
-        const uint32_t size = nvk::bufferDescriptorSize(nvk_, device_, w.type, w.range);
+        const uint32_t size = bufferDescriptorBytes(w.type, w.range);
         entries.push_back({offset, KernelBuffer, uint8_t(w.slot), size < kTagBytes ? size : 0});
         return true;
     }
@@ -132,8 +131,7 @@ private:
             why = "a texture slot the dispatch leaves unbound at " + std::to_string(offset);
             return false;
         }
-        const NvkComponents c = {kw.components[0], kw.components[1], kw.components[2], kw.components[3]};
-        if (!nvk::viewHeaderWord0(nvk_, device_, kw.viewFormat, c, w.type == StorageImage, word0)) {
+        if (!viewWord0(kw.viewFormat, kw.components, w.type == StorageImage, word0)) {
             why = "a texture view of VkFormat " + std::to_string(kw.viewFormat) + " NVK has no header for";
             return false;
         }
@@ -147,8 +145,8 @@ private:
         std::array<uint32_t, 8> header = {};
         const bool known =
             w.sampler == NMB_DIRECT_IMMUTABLE
-                ? nvk::immutableSamplerHeader(nvk_, device_, k_.set0, w.binding, w.element, header.data())
-                : kw.sampler && nvk::samplerHeader(nvk_, device_, kw.sampler, header.data());
+                ? immutableSamplerHeader(k_.set0Bindings, k_.set0BindingCount, w.binding, header.data())
+                : kw.sampler && samplerHeader(kw.samplerState, header.data());
         if (!known) {
             why = "a sampler slot the dispatch leaves unbound at " + std::to_string(offset);
             return false;
@@ -241,7 +239,7 @@ CompileOutcome directKernel(const NmbDirectKernel &k, const DirectNvk &nvk, cons
     Compiled made(nvk, handle(k.device));
     if (const CompileOutcome compiled = compile(k, nvk, made, why); compiled != CompileOutcome::Made)
         return compiled;
-    Entries entries(k, nvk, out);
+    Entries entries(k, out);
     for (uint32_t i = 0; i < k.writeCount; i++)
         if (!entries.add(k.writes[i], why))
             return CompileOutcome::Refused;
@@ -255,8 +253,8 @@ CompileOutcome directKernel(const NmbDirectKernel &k, const DirectNvk &nvk, cons
     }
     attachResiduals(k, entries.entries);
     PackKernel &r = out.kernel;
-    r.setBytes = k.set0 ? uint16_t(nvk::setLayoutSize(nvk, handle(k.device), k.set0)) : 0;
-    if (!nvk::computeQmd(nvk, handle(k.device), made.stage, r.setBytes, r.qmd)) {
+    r.setBytes = k.set0 ? uint16_t(Set0(k.set0Bindings, k.set0BindingCount).bytes()) : 0;
+    if (!computeQmd(made.stage, r.setBytes, r.qmd)) {
         why = "a kernel reading a constant buffer the raw path does not bind";
         return CompileOutcome::Refused;
     }

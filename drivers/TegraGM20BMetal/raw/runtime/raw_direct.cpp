@@ -1,11 +1,12 @@
 // SPDX-License-Identifier: MIT
 // See raw_direct.h. What the probe's capture reads of NVK's commands (raw_record.cpp) is read here from what made them: m2v's plan
-// of each probe draw and NVK's own rules for the layout and the descriptors.
+// of each probe draw and NVK's rules for the layout and the descriptors (raw_direct_encode.h).
 #include "raw_direct.h"
 #include "raw_direct_nvk.h"
 #include "raw_direct_push.h"
 #include "raw_chip_facts.h"
 #include "raw_direct_storage.h"
+#include "raw_direct_encode.h"
 #include "raw_residual.h"
 #include "raw_split_metadata.h"
 
@@ -180,24 +181,25 @@ private:
 };
 
 // The set-0 byte of `w` in the draw's layout
-bool offsetOf(const DirectNvk &nvk, const NmbDirectDraw &d, const NmbDirectWrite &w, uint32_t &offset)
+bool offsetOf(const Set0 &set0, const NmbDirectWrite &w, uint32_t &offset)
 {
-    NvkSetBinding b = {};
-    if (!d.set0 || !nvk::setLayoutBinding(nvk, d.set0, w.binding, b))
+    SetSlot b;
+    if (!set0.slot(w.binding, b))
         return false;
     offset = b.offset + w.element * b.stride;
     return true;
 }
 
 // raw_record.cpp layout(): the entries of draw 0's set 0, read from m2v's writes where the probe reads NVK's words
-bool layout(const DirectNvk &nvk, void *device, const NmbDirectDraw &d, std::vector<LayoutEntry> &out, std::string &why)
+bool layout(const NmbDirectDraw &d, std::vector<LayoutEntry> &out, std::string &why)
 {
+    const Set0 set0(d.set0Bindings, d.set0BindingCount);
     for (uint32_t i = 0; i < d.writeCount; i++) {
         const NmbDirectWrite &w = d.writes[i];
         if (w.set != 0)
             continue;
         LayoutEntry e;
-        if (!offsetOf(nvk, d, w, e.offset)) {
+        if (!offsetOf(set0, w, e.offset)) {
             why = "set 0 binding " + std::to_string(w.binding) + " not in its layout";
             return false;
         }
@@ -259,7 +261,7 @@ bool layout(const DirectNvk &nvk, void *device, const NmbDirectDraw &d, std::vec
         if (w.type == Sampler || w.type == CombinedImageSampler) {
             if (w.sampler == NMB_DIRECT_IMMUTABLE) {
                 e.smp = Smp::Constexpr;
-                e.headerKnown = nvk::immutableSamplerHeader(nvk, device, d.set0, w.binding, w.element, e.header.data());
+                e.headerKnown = immutableSamplerHeader(d.set0Bindings, d.set0BindingCount, w.binding, e.header.data());
             } else if (w.sampler < kStageSamplers) {
                 e.smp = Smp::Slot;
                 e.smpSlot = uint8_t(w.sampler);
@@ -277,14 +279,15 @@ bool layout(const DirectNvk &nvk, void *device, const NmbDirectDraw &d, std::vec
 }
 
 // raw_record.cpp boundSizes: by set-0 byte, the size word NVK writes in a buffer descriptor of the draw
-std::map<uint32_t, uint32_t> boundSizes(const DirectNvk &nvk, void *device, const NmbDirectDraw &d)
+std::map<uint32_t, uint32_t> boundSizes(const NmbDirectDraw &d)
 {
+    const Set0 set0(d.set0Bindings, d.set0BindingCount);
     std::map<uint32_t, uint32_t> out;
     for (uint32_t i = 0; i < d.writeCount; i++) {
         const NmbDirectWrite &w = d.writes[i];
         uint32_t offset = 0;
-        if (w.set == 0 && bufferType(w.type) && offsetOf(nvk, d, w, offset))
-            out[offset] = nvk::bufferDescriptorSize(nvk, device, w.type, w.range);
+        if (w.set == 0 && bufferType(w.type) && offsetOf(set0, w, offset))
+            out[offset] = bufferDescriptorBytes(w.type, w.range);
     }
     return out;
 }
@@ -399,7 +402,8 @@ void splitInto(const DirectNvk &nvk, const void *split, RuntimeRecord &out)
     memcpy(r.uboCbuf, l.uboCbuf, l.uboCount);
     r.batchVersion = l.batchVersion;
     r.batchThreads = l.batchThreads;
-    memcpy(r.qmd, parts.qmd, sizeof r.qmd);
+    if (!splitQmd(parts.prologue, r.qmd))
+        return;
     r.cost = parts.cost;
     if (!usableSplitMetadata(r))
         return;
@@ -415,14 +419,6 @@ DirectNvk DirectNvk::find(void *(*symbol)(const char *name))
     DirectNvk nvk;
     nvk.compileStage = symbol("switch_nvk_compile_stage");
     nvk.stageFinish = symbol("switch_nvk_stage_finish");
-    nvk.setLayoutBinding = symbol("switch_nvk_set_layout_binding");
-    nvk.setLayoutSize = symbol("switch_nvk_set_layout_size");
-    nvk.immutableSamplerHeader = symbol("switch_nvk_immutable_sampler_header");
-    nvk.bufferDescriptorSize = symbol("switch_nvk_buffer_descriptor_size");
-    nvk.samplerHeader = symbol("switch_nvk_sampler_header");
-    nvk.computeQmd = symbol("switch_nvk_compute_qmd");
-    nvk.viewHeaderWord0 = symbol("switch_nvk_view_header_word0");
-
     nvk.splitParts = symbol("switch_nvk_split_parts");
     if (const auto abi = reinterpret_cast<CompileAbi>(symbol("switch_nvk_compile_abi"))) {
         uint32_t sizes[3] = {};
@@ -435,13 +431,7 @@ DirectNvk DirectNvk::find(void *(*symbol)(const char *name))
 
 bool DirectNvk::complete() const
 {
-    return compileStage && stageFinish && setLayoutBinding && setLayoutSize && immutableSamplerHeader &&
-           bufferDescriptorSize && splitParts && abiMatches;
-}
-
-bool DirectNvk::kernelComplete() const
-{
-    return complete() && samplerHeader && computeQmd && viewHeaderWord0;
+    return compileStage && stageFinish && splitParts && abiMatches;
 }
 
 CompileOutcome directRecord(const NmbDirectState &state, const DirectNvk &nvk, const PackRules &rules,
@@ -452,8 +442,9 @@ CompileOutcome directRecord(const NmbDirectState &state, const DirectNvk &nvk, c
     void *device = handle(state.device);
     const NmbDirectDraw &draw = state.draws[0];
     PackPipeline storage = {};
-    const auto storageHeader = [&](uint32_t format, uint32_t &word) {
-        return nvk.viewHeaderWord0 && nvk::viewHeaderWord0(nvk, device, format, {0, 0, 0, 0}, true, word);
+    const auto storageHeader = [](uint32_t format, uint32_t &word) {
+        const uint32_t identity[4] = {};
+        return viewWord0(format, identity, true, word);
     };
     if (const char *refused = qualifyStorage(state, storageHeader, storage)) {
         why = refused;
@@ -502,10 +493,10 @@ CompileOutcome directRecord(const NmbDirectState &state, const DirectNvk &nvk, c
     parts.halfBlendColorWord = uint8_t(draw.halfBlendColorWord);
     parts.programs[0] = &stages.program(0);
     parts.programs[1] = &stages.program(1);
-    if (!programsBindable(parts, why) || !layout(nvk, device, draw, parts.layout, why))
+    if (!programsBindable(parts, why) || !layout(draw, parts.layout, why))
         return CompileOutcome::Refused;
-    parts.sizes16 = boundSizes(nvk, device, state.draws[1]);
-    parts.sizes4096 = boundSizes(nvk, device, state.draws[2]);
+    parts.sizes16 = boundSizes(state.draws[1]);
+    parts.sizes4096 = boundSizes(state.draws[2]);
     parts.residuals = residualWords(draw, state.draws[3]);
     if (draw.vertexSlot != UINT32_MAX) {
         parts.vertexSlot = uint8_t(draw.vertexSlot);
@@ -516,7 +507,7 @@ CompileOutcome directRecord(const NmbDirectState &state, const DirectNvk &nvk, c
     for (uint32_t i = 0; i < 32; i++)
         if (draw.pushMask >> i & 1)
             parts.push[kRootPush + 4 * i] = draw.push[i];
-    parts.setBytes = draw.set0 ? uint16_t(nvk::setLayoutSize(nvk, device, draw.set0)) : 0;
+    parts.setBytes = draw.set0 ? uint16_t(Set0(draw.set0Bindings, draw.set0BindingCount).bytes()) : 0;
     if (!assembleRecord(parts, key, rules, out, why))
         return CompileOutcome::Refused;
     if (!usableStorageMetadata(out.pipeline, out.blob.data(), uint32_t(out.blob.size()))) {

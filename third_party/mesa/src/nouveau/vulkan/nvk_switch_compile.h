@@ -140,50 +140,6 @@ void switch_nvk_split_parts(const struct switch_nvk_split *split,
  */
 void switch_nvk_compile_abi(uint32_t sizes[3]);
 
-/* Where a descriptor set layout's binding lives in a set's descriptor buffer */
-struct switch_nvk_set_binding {
-   uint32_t offset;
-   uint32_t stride;
-   uint32_t array_size;
-   bool immutable_samplers;
-};
-
-/* Binding `binding` of `layout`; false past its bindings */
-bool switch_nvk_set_layout_binding(VkDescriptorSetLayout layout,
-                                   uint32_t binding,
-                                   struct switch_nvk_set_binding *out);
-/* The bytes a set of `layout` binds in the root table (its fixed part) */
-uint32_t switch_nvk_set_layout_size(VkDevice device,
-                                    VkDescriptorSetLayout layout);
-/* The sampler header NVK made for `layout`'s immutable sampler at `binding`
- * and `element`; false where it has none
- */
-bool switch_nvk_immutable_sampler_header(VkDevice device,
-                                         VkDescriptorSetLayout layout,
-                                         uint32_t binding, uint32_t element,
-                                         uint32_t header[8]);
-/* The header NVK made for `sampler` */
-bool switch_nvk_sampler_header(VkDevice device, VkSampler sampler,
-                               uint32_t header[8]);
-/* The QMD NVK fills for a dispatch of compute `stage` with set 0 of
- * `set_bytes`, its program offset, grid and constant buffer addresses 0;
- * false where the stage reads another constant buffer than the root table,
- * set 0 and its shader data
- */
-bool switch_nvk_compute_qmd(VkDevice device,
-                            const struct switch_nvk_stage *stage,
-                            uint32_t set_bytes, uint32_t qmd[64]);
-/* Word 0 of the texture header of a view of `format` with `components`, as
- * a sampled or storage image (format and swizzle alone)
- */
-bool switch_nvk_view_header_word0(VkDevice device, VkFormat format,
-                                  const VkComponentMapping *components,
-                                  bool storage, uint32_t *word0);
-/* The size a buffer descriptor of `type` over `range` bytes holds */
-uint32_t switch_nvk_buffer_descriptor_size(VkDevice device,
-                                           VkDescriptorType type,
-                                           uint64_t range);
-
 #ifdef __cplusplus
 }
 #endif

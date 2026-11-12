@@ -15,14 +15,11 @@ namespace raw {
 
 // The NVK exports the direct compile calls (nvk_switch_compile.h), found in the NVK the device opened
 struct DirectNvk {
-    void *compileStage = nullptr, *stageFinish = nullptr, *setLayoutBinding = nullptr, *setLayoutSize = nullptr,
-         *immutableSamplerHeader = nullptr, *bufferDescriptorSize = nullptr, *samplerHeader = nullptr,
-         *computeQmd = nullptr, *viewHeaderWord0 = nullptr, *splitParts = nullptr;
+    void *compileStage = nullptr, *stageFinish = nullptr, *splitParts = nullptr;
     bool abiMatches = false;  // raw_direct.cpp's copies of NVK's structs are NVK's size (switch_nvk_compile_abi)
 
     static DirectNvk find(void *(*symbol)(const char *name));
     bool complete() const;
-    bool kernelComplete() const;
 };
 
 // The record of the state `state` describes, of pack key `key`; `attributes`: its vertex function's [[attribute(n)]] inputs

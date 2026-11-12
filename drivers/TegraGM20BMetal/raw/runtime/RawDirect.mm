@@ -184,7 +184,7 @@ const NmbDirectDispatch &KernelDispatch::dispatch()
 CompileOutcome Direct::kernel(MTLComputePipelineDescriptor *descriptor, const NmbDirectDispatch &dispatch,
                               const std::string &key, ComputeRecord &out, std::string &why)
 {
-    if (!native_bridge_metal_compute_direct || !nvk_.kernelComplete()) {
+    if (!native_bridge_metal_compute_direct || !nvk_.complete()) {
         why = "the frontend or NVK has no direct compile of kernels";
         return CompileOutcome::Failed;
     }

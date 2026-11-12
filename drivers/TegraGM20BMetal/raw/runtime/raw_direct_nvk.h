@@ -60,21 +60,11 @@ struct NvkStageMetrics {
 };
 static_assert(sizeof(NvkStageMetrics) == 48);
 
-struct NvkSetBinding {
-    uint32_t offset, stride, arraySize;
-    bool immutableSamplers;
-};
-
 // VkPipelineShaderStageRequiredSubgroupSizeCreateInfo
 struct SubgroupSize {
     uint32_t sType = 1000225001;
     const void *next = nullptr;
     uint32_t size;
-};
-
-// VkComponentMapping
-struct NvkComponents {
-    uint32_t r, g, b, a;
 };
 
 enum DescriptorType : int32_t {
@@ -111,47 +101,6 @@ inline int32_t compileStage(const DirectNvk &n, void *device, const NvkStageInfo
 inline void stageFinish(const DirectNvk &n, void *device, NvkStage &stage)
 {
     reinterpret_cast<void (*)(void *, NvkStage *)>(n.stageFinish)(device, &stage);
-}
-
-inline bool setLayoutBinding(const DirectNvk &n, uint64_t layout, uint32_t binding, NvkSetBinding &out)
-{
-    return reinterpret_cast<bool (*)(void *, uint32_t, NvkSetBinding *)>(n.setLayoutBinding)(handle(layout), binding,
-                                                                                             &out);
-}
-
-inline uint32_t setLayoutSize(const DirectNvk &n, void *device, uint64_t layout)
-{
-    return reinterpret_cast<uint32_t (*)(void *, void *)>(n.setLayoutSize)(device, handle(layout));
-}
-
-inline bool immutableSamplerHeader(const DirectNvk &n, void *device, uint64_t layout, uint32_t binding,
-                                   uint32_t element, uint32_t *header)
-{
-    return reinterpret_cast<bool (*)(void *, void *, uint32_t, uint32_t, uint32_t *)>(n.immutableSamplerHeader)(
-        device, handle(layout), binding, element, header);
-}
-
-inline uint32_t bufferDescriptorSize(const DirectNvk &n, void *device, int32_t type, uint64_t range)
-{
-    return reinterpret_cast<uint32_t (*)(void *, int32_t, uint64_t)>(n.bufferDescriptorSize)(device, type, range);
-}
-
-inline bool samplerHeader(const DirectNvk &n, void *device, uint64_t sampler, uint32_t *header)
-{
-    return reinterpret_cast<bool (*)(void *, void *, uint32_t *)>(n.samplerHeader)(device, handle(sampler), header);
-}
-
-inline bool computeQmd(const DirectNvk &n, void *device, const NvkStage &stage, uint32_t setBytes, uint32_t *qmd)
-{
-    return reinterpret_cast<bool (*)(void *, const NvkStage *, uint32_t, uint32_t *)>(n.computeQmd)(device, &stage,
-                                                                                                    setBytes, qmd);
-}
-
-inline bool viewHeaderWord0(const DirectNvk &n, void *device, uint32_t format, const NvkComponents &components,
-                            bool storage, uint32_t &word0)
-{
-    return reinterpret_cast<bool (*)(void *, uint32_t, const NvkComponents *, bool, uint32_t *)>(n.viewHeaderWord0)(
-        device, format, &components, storage, &word0);
 }
 
 }  // namespace nvk
