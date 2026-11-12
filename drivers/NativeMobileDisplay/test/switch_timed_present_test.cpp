@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: BSD-2-Clause-Patent
 // SwitchTimedPresent.h: a swap flips at the frame end before its requested presentation, never earlier, and a swap
 // stamped for the next vblank (every Core Animation frame) or with no target flips exactly as before.
-#include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
 #include <string>
@@ -9,12 +8,12 @@
 #include "../SwitchTimedPresent.h"
 #include "bazel/testing/source_text.h"
 
-using switch_ios::test::Between;
+using switch_ios::test::Block;
+using switch_ios::test::CodeText;
 using switch_ios::test::SourceText;
 using switch_timed_present::Clock;
 using switch_timed_present::decide;
 using switch_timed_present::Decision;
-using testing::HasSubstr;
 
 namespace {
 constexpr uint64_t kPeriod = 16667, kHorizon = 1000000;  // microsecond ticks keep the arithmetic readable
@@ -99,12 +98,11 @@ TEST(TimedPresent, ATargetPastTheHorizonOrNoPeriodIsDue)
 TEST(TimedPresentSource, TheKickAsksFirstAndAFrameEndKicksAgain)
 {
     const std::string display = SourceText("../NativeLegacyDisplay.cpp");
-    const std::string kick = Between(display, "    void kickOnce()\n", "\n    }\n");
-    EXPECT_LT(kick.find("if (presentNotDue(request))"), kick.find("planeDecide(request, pd);"));
-    EXPECT_LT(kick.find("if (!request || !isValidated(request))"), kick.find("if (presentNotDue(request))"));
-    const std::string gate = SourceText("../SwitchTimedPresentDisplay.h");
-    EXPECT_THAT(gate, HasSubstr("kickDeferred = true;"));
-    EXPECT_THAT(Between(display, "    bool frameEndNeeded()\n", "\n    }\n"), HasSubstr("kickDeferred"));
-    EXPECT_THAT(SourceText("../SwitchRetireDisplay.h"), HasSubstr("kickDeferred = false;\n        kickSwapQueue();"));
+    const CodeText kick = Block(display, "void kickOnce()");
+    EXPECT_TRUE(kick.Before("if (presentNotDue(request))", "planeDecide(request, pd);"));
+    EXPECT_TRUE(kick.Before("if (!request || !isValidated(request))", "if (presentNotDue(request))"));
+    EXPECT_TRUE(CodeText(SourceText("../SwitchTimedPresentDisplay.h")).Has("kickDeferred = true;"));
+    EXPECT_TRUE(Block(display, "bool frameEndNeeded()").Has("kickDeferred"));
+    EXPECT_TRUE(CodeText(SourceText("../SwitchRetireDisplay.h")).Has("kickDeferred = false; kickSwapQueue();"));
 }
 }  // namespace
