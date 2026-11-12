@@ -35,6 +35,11 @@ struct Display {
         unsigned count;
     };
 
+    int planeFenceWithMediaFlip(const PlaneSet &, const switch_gpu_backing_token *producers, unsigned count)
+    {
+        return switch_host1x_token_fence(producers, count, native_legacy_gpu_complete, this);
+    }
+
     unsigned planeDependencies(const PlaneSet &p, switch_gpu_backing_token tokens[2]) const
     {
         for (unsigned i = 0; i < p.count; ++i)

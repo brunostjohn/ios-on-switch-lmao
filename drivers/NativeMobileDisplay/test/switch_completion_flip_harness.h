@@ -86,7 +86,12 @@ inline std::function<int(const TegraScanoutCopy *)> gOffer;
 // A unit whose window A WINBUF aperture (0xbc0..) refuses: kDropsWinbuf loses the stores, kParksWinbuf keeps them in a
 // copy WIN_A_UPDATE does not take. Window A's DC_WIN aperture (0xb80..) lands either way.
 struct DcModel {
-    enum Aperture { kLands, kDropsWinbuf, kParksWinbuf };
+    enum Aperture {
+        kLands,
+        kDropsWinbuf,
+        kParksWinbuf
+    };
+
     static constexpr uint32_t kStateAccess = 0x040, kStateControl = 0x041, kHeader = 0x042, kWindowASelect = 1u << 4;
     static constexpr uint32_t kStart = 0x800, kActReqs = 3u, kWinAUpdate = 1u << 9, kWinAActReq = 1u << 1;
     std::map<uint32_t, uint32_t> general, assembly, armed, active, parked;
@@ -331,6 +336,23 @@ struct Display {
     {}
 
     void retireThrough(uint64_t, uint64_t)
+    {}
+
+    static bool mediaFlipIdle()
+    {
+        return true;
+    }
+
+    void writeMediaFlipLocked(int)
+    {}
+
+    void takeMediaFlip()
+    {}
+
+    void mediaFlipFromGate()
+    {}
+
+    static void mediaFlipTotalsRegister()
     {}
 
     static bool columnScanBusy()

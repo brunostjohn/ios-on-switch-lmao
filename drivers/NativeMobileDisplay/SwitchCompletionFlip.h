@@ -64,3 +64,59 @@ struct SwitchCompletionFlip {
         return written;
     }
 };
+
+// Windows B and C's set, staged by the gate with every word but the surface addresses: the completion writes those
+// (stores) and the STATE_CONTROL pair. Same states and lock as SwitchCompletionFlip.
+struct SwitchPlaneCompletionFlip {
+    static constexpr unsigned kMaxStores = 4;  // START_ADDR and START_ADDR_U of windows B and C
+
+    uint8_t state = SwitchCompletionFlip::kIdle;
+    unsigned stores = 0;
+    uint32_t word[kMaxStores] = {}, value[kMaxStores] = {};
+    uint32_t update = 0, request = 0;
+    uint64_t requestedAt = 0, writtenAt = 0;
+
+    void arm(uint32_t updateBits, uint32_t requestBits)
+    {
+        update = updateBits;
+        request = requestBits;
+        state = SwitchCompletionFlip::kArmed;
+    }
+
+    void clear()
+    {
+        stores = 0;
+    }
+
+    void store(uint32_t at, uint32_t to)
+    {
+        if (stores < kMaxStores) {
+            word[stores] = at;
+            value[stores] = to;
+            ++stores;
+        }
+    }
+
+    bool claim(int status)
+    {
+        if (state != SwitchCompletionFlip::kArmed)
+            return false;
+        state = status ? SwitchCompletionFlip::kIdle : SwitchCompletionFlip::kWritten;
+        return status == 0;
+    }
+
+    void withdraw()
+    {
+        if (state == SwitchCompletionFlip::kArmed)
+            state = SwitchCompletionFlip::kIdle;
+    }
+
+    // The gate's pass: true when the completion wrote it.
+    bool take()
+    {
+        const bool written = state == SwitchCompletionFlip::kWritten;
+        if (written)
+            state = SwitchCompletionFlip::kIdle;
+        return written;
+    }
+};

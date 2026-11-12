@@ -94,7 +94,7 @@ const char *landscapeBusy()
     if (ring.pending != kNoBuffer || ring.drawing != kNoBuffer || ring.held != kNoBuffer ||
         ring.superseded != kNoBuffer)
         return "a UI flip is out";
-    if (planeLatch.requested() || planeHeldSet || planeRecovering)
+    if (planeLatch.requested() || planeHeldSet || planeRecovering || !mediaFlipIdle())
         return "an overlay change is out";
     if (probeRequest || probe.active() || planeProbe.active() || columnScanBusy() || windowProbeHolds())
         return "a display experiment runs";
@@ -190,6 +190,7 @@ void landscapeRequest()
 // onto B in front, the video onto A behind it with A's CSC and taps (A still scans the UI: RGB, unscaled), C as p has it.
 void landscapeEnter(PlaneSet p)
 {
+    mediaFlipFromGate();
     if (!planeReserveBandwidth(p)) {
         IOLog("SwitchDisplay: window A's rotated reservation could not be armed: landscape off this boot\n");
         landscapeState.retired = true;
@@ -225,6 +226,7 @@ void landscapeEnter(PlaneSet p)
 // it when not), the overlays onto B and C with B's CSC and taps (B still scans the UI).
 void landscapeLeave(PlaneSet p)
 {
+    mediaFlipFromGate();
     if (!planeReserveBandwidth(p))
         planeDropOverlays(p, 3);
     PlaneSet commit = p;
@@ -267,6 +269,7 @@ void landscapeLatched(bool seen = true)
 // off, A opaque), every composition in the latch the empty portrait one (its sequence kept), a wanted change dropped.
 void landscapeLeaveNow(const char *why)
 {
+    mediaFlipFromGate();
     landscapeAbandonWant();
     const int ids[] = {planeLatch.active, planeLatch.armed, planeLatch.superseded};
     bool uiOnB = false;

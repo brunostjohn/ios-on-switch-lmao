@@ -249,6 +249,8 @@ void kickPlaneOnly(const OriginalLegacySwapRequest *request, const PlaneDecision
 // first).
 void planeOut(const PlaneSet &p)
 {
+    if (presentedByMediaFlip(p))
+        return;
     if (ring.held != kNoBuffer) {
         entryPlane[ring.held] = p;
         entryPlaneSet[ring.held] = true;
@@ -293,9 +295,8 @@ void planeFrameEnd()
         return;
     if (planeRecoveryFrameEnd())
         return;
-    if (planeLatch.requested()) {
-        const bool out = (dc[kDcStateControl] & landscapeRequestBits()) != 0u;
-        if (planeLatch.latched(out, planeScannedSet())) {
+    if (planeLatchRequested()) {
+        if (planeLatchedAtFrameEnd()) {
             if (stats)
                 ++stPlaneLatched;
             landscapeRunLatched(true, landscapeState.switching);
@@ -335,6 +336,7 @@ void planeFrameEnd()
 // The display stops: window B off, every slot given back (the caller detaches the domain).
 void stopPlanes()
 {
+    mediaFlipFromGate();
     if (planeProbe.active()) {
         PlaneProbeIo io = {this};
         planeProbe.perform(planeProbe.fail("the display stopped"), io);
