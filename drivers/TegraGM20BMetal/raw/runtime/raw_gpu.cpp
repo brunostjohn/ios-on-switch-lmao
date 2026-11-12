@@ -129,7 +129,7 @@ enum : uint32_t {
 
 constexpr uint32_t kRootBytes = 0x800, kSetBytes = 0x100, kUboChunk = 0x100;
 constexpr uint32_t kRootInterlockTickets = 0x260;  // offsetof(nvk_root_descriptor_table, interlock_ticket_buffer)
-constexpr uint32_t kTicCount = 8192, kTscCount = 1024;
+constexpr uint32_t kTicCount = kTextureHeaders, kTscCount = 1024;
 constexpr uint32_t kEngines =
     TegraGM20BEngine3D | TegraGM20BEngineCompute | TegraGM20BEngineCopy | TegraGM20BEngine2D | TegraGM20BEngineM2MF;
 constexpr size_t kDedicatedSpares = 2;
@@ -1485,8 +1485,10 @@ void Device::release(Import *i)
             surfaces_.erase(it);
     RAW_DIAGNOSTIC(stats.imports--);
     RAW_DIAGNOSTIC(stats.importBytes -= i->bo.bytes);
-    if (i->native)
+    if (i->native) {
         i->native->cached = false;
+        nativeStale_.store(true, std::memory_order_release);
+    }
     k_.free(i->bo);
     if (i->owner)
         CFRelease(i->owner);
@@ -1509,6 +1511,7 @@ void Device::freeTic(uint32_t tic)
 {
     memcpy(tic_.cpu + 32 * tic, tic_.cpu, 32);
     freeTic_.push_back(tic);
+    views_.freed(tic);
     const auto views = viewTics_.equal_range(tic);
     for (auto v = views.first; v != views.second; ++v) {
         memcpy(tic_.cpu + 32 * v->second.second, tic_.cpu, 32);
@@ -3199,26 +3202,35 @@ Texture *Device::backing(const Texture &m, uint32_t tag, bool blockLinear, bool 
 // (raw_comp.h backingStale; the compressed-memory thread trims then).
 void Device::trimBackings()
 {
-    backingsChanged();
+    // the counts before the backings' stamps: a commit stores its stamps before it moves them
+    const uint64_t committed = commits(), closedNow = closedCount_.load(std::memory_order_acquire);
     const uint64_t now = compClock();
+    const auto stale = [&](const Backing *b) {
+        return backingStale(committed, b->lastCommit.load(std::memory_order_seq_cst), closedNow,
+                            b->lastClosed.load(std::memory_order_seq_cst), now,
+                            b->usedNs.load(std::memory_order_relaxed), b->retired, b->comp || b->plain) &&
+               (!b->submitted.load(std::memory_order_relaxed) || done(b->lastUse.load(std::memory_order_relaxed)));
+    };
+    const size_t ready = comp_.ready.size();
     compTrim(now);
     for (auto it = spares_.begin(); it != spares_.end();) {
-        if (commitCount_ - it->freedAt > 600) {
+        if (committed - it->freedAt > 600) {
             freeChunk(chunks_[it->chunk]);
             it = spares_.erase(it);
             continue;
         }
         ++it;
     }
-#if SWITCH_RAW_DIAGNOSTICS
-    uint64_t retired = 0;
-#endif
-    for (auto it = backings_.begin(); it != backings_.end();) {
-        Backing *b = *it;
-        if (backingStale(commitCount_, b->lastCommit.load(std::memory_order_seq_cst), closedCount_,
-                         b->lastClosed.load(std::memory_order_seq_cst), now, b->usedNs, b->retired,
-                         b->comp || b->plain) &&
-            (!b->submitted || done(b->lastUse))) {
+    // A pass's stamps (lastBacking, with no lock) only make a backing less stale: where none is stale before the epoch
+    // moves none is after, and the passes' kept asks stay good
+    if (comp_.ready.size() != ready || std::any_of(backings_.begin(), backings_.end(), stale)) {
+        backingsChanged();
+        for (auto it = backings_.begin(); it != backings_.end();) {
+            Backing *b = *it;
+            if (!stale(b)) {
+                ++it;
+                continue;
+            }
             if (b->tag < lastBackings_.size() && lastBackings_[b->tag] == b)
                 lastBackings_[b->tag] = nullptr;
             if (b->comp) {
@@ -3227,18 +3239,19 @@ void Device::trimBackings()
                 plainFree(*b);
             }
             trimmedBackings_.push_back(b);
+            trimmedPending_.store(true, std::memory_order_release);
             it = backings_.erase(it);
-            continue;
         }
-        RAW_DIAGNOSTIC(retired += !b->comp && b->retired);
-        ++it;
     }
-    RAW_DIAGNOSTIC(stats.retiredBackings = retired);
 #if SWITCH_RAW_DIAGNOSTICS
+    uint64_t retired = 0;
+    for (const Backing *b : backings_)
+        retired += !b->comp && b->retired;
+    stats.retiredBackings = retired;
     uint64_t tiledFree = tiledFreeBytes(blChunks_);
     for (const std::vector<Chunk> &z : zChunks_)
         tiledFree += tiledFreeBytes(z);
-    RAW_DIAGNOSTIC(stats.tiledFreeBytes = tiledFree);
+    stats.tiledFreeBytes = tiledFree;
 #endif
 }
 
@@ -3523,6 +3536,23 @@ void Device::growRing(Ring &r, uint64_t most)
     r.inflight.clear();
 }
 
+void Device::reapAtBegin()
+{
+    if (!trimmedPending_.load(std::memory_order_acquire) && !nativeStale_.load(std::memory_order_acquire))
+        return;
+    RAW_ENCODE_LOCK(l, lock_);
+    reapNativeSurfaces();
+    nativeStale_.store(std::any_of(nativeSurfaces_.begin(), nativeSurfaces_.end(),
+                                   [](const std::unique_ptr<NativeSurface> &s) {
+                                       return !s->cached;
+                                   }),
+                       std::memory_order_relaxed);
+    for (Backing *b : trimmedBackings_)
+        delete b;
+    trimmedBackings_.clear();
+    trimmedPending_.store(false, std::memory_order_relaxed);
+}
+
 CommandBuffer *Device::begin()
 {
     if (!ensureChannel())
@@ -3596,17 +3626,17 @@ CommandBuffer *Device::begin()
     cb.heldSegment_ = heldSegment_;
     cb.segmentBinds_ = 0;
     cb.drawn_ = false;
-    {
-        RAW_ENCODE_LOCK(l, lock_);
-        reapNativeSurfaces();
-        for (Backing *b : trimmedBackings_)
-            delete b;
-        trimmedBackings_.clear();
-        if (commitCount_ % 64 == 0)
+    reapAtBegin();
+    // a trim's lock once in 64 command buffers, never waited for: the compressed-memory thread holding it trims too
+    if (commits() % 64 == 0) {
+        std::unique_lock<std::mutex> l(lock_, std::try_to_lock);
+        if (l.owns_lock()) {
+            RAW_ENCODE_COUNT(Locks);
             trimBackings();
-        cb.stamp = stampOf(commitCount_);
-        RAW_DIAGNOSTIC(spans_.begin(cb.stamp));
+        }
     }
+    cb.stamp = stampOf(commits());
+    RAW_DIAGNOSTIC(spans_.begin(cb.stamp));
     cb.timings.clear();
     cb.loopsLaid = false;
     // submission prologue, as NVK opens each submission: header/sampler caches (headers written since), constant, shader data and
@@ -6401,13 +6431,17 @@ uint32_t Device::viewTic(const Texture &t, uint32_t word0, ViewAccess access)
         syLog2 = grid.syLog2;
     }
     const uint64_t key = word0 | uint64_t(sxLog2) << 32 | uint64_t(syLog2) << 40;
-    RAW_ENCODE_LOCK(l, lock_);
     if (!t.tic)
         return 0;
+    if (const uint32_t seen = views_.find(t.tic, key))
+        return seen;
+    RAW_ENCODE_LOCK(l, lock_);
     const auto views = viewTics_.equal_range(t.tic);
     for (auto v = views.first; v != views.second; ++v)
-        if (v->second.first == key)
+        if (v->second.first == key) {
+            views_.keep(t.tic, key, v->second.second);
             return v->second.second;
+        }
     const uint32_t tic = allocTic();
     if (!tic)
         return 0;
@@ -6416,6 +6450,7 @@ uint32_t Device::viewTic(const Texture &t, uint32_t word0, ViewAccess access)
     viewHeader(own, word0, w, sxLog2, syLog2);
     memcpy(tic_.cpu + 32 * tic, w, 32);  // visible at the next submission's header invalidate
     viewTics_.emplace(t.tic, std::make_pair(key, tic));
+    views_.keep(t.tic, key, tic);
     return tic;
 }
 

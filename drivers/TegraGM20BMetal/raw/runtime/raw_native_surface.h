@@ -44,6 +44,7 @@ const Texture *Device::nativeRead(const Texture &source, NativeSurface *&owner, 
     if (!nativePlaneFits(surface->layout, source.nativePlane, source.width, source.height, source.bpp)) {
         // No submitted guard can invalidate a view we did not use. Requery after an unsupported representation.
         surface->cached = false;
+        nativeStale_.store(true, std::memory_order_release);
         import.native = nullptr;
         return &source;
     }
@@ -118,6 +119,7 @@ void CommandBuffer::invalidateNativeReads()
     std::lock_guard<std::mutex> lock(dev_->lock_);
     for (NativeSurface *surface : nativeSurfaces_) {
         surface->cached = false;
+        dev_->nativeStale_.store(true, std::memory_order_release);
         for (const auto &[key, import] : dev_->surfaces_)
             if (import->native == surface)
                 import->native = nullptr;

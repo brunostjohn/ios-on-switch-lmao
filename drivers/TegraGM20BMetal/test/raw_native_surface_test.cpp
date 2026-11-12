@@ -3,6 +3,7 @@
 #include <gtest/gtest.h>
 #include <IOKit/IOReturn.h>
 #include <algorithm>
+#include <atomic>
 #include <cstring>
 #include <map>
 #include <memory>
@@ -66,6 +67,7 @@ struct Device {
     Kernel k_;
     std::mutex lock_;
     std::vector<std::unique_ptr<NativeSurface>> nativeSurfaces_;
+    std::atomic<bool> nativeStale_{false};
     std::map<unsigned, Import *> surfaces_;
     uint64_t nativeGeneration_ = 0, currentGeneration = 1;
     uint32_t completed = 0, nextTic = 0, freedTics = 0, writes = 0;
@@ -162,9 +164,11 @@ TEST_F(RawNativeSurface, StaleReplacementKeepsOldDescriptorsUntilExactRetirement
     held->lastUse = 0xfffffffe;
     held->channelGeneration = 1;
     device.completed = 0xfffffffd;
+    EXPECT_FALSE(device.nativeStale_);
     cb.invalidateNativeReads();
     cb.releaseNativeReads();
     EXPECT_EQ(source.native, nullptr);
+    EXPECT_TRUE(device.nativeStale_);  // begin() reaps under the device's lock only then
     device.reapNativeSurfaces();
     EXPECT_EQ(device.k_.frees, 0u);
     device.k_.next = layout(0);
@@ -231,6 +235,7 @@ TEST_F(RawNativeSurface, UnsupportedRepresentationIsRequeriedOnLaterCommandBuffe
     device.k_.next.bytes += 256 * 768;
     EXPECT_EQ(cb.readTexture(&y), &y);
     EXPECT_EQ(source.native, nullptr);
+    EXPECT_TRUE(device.nativeStale_);
     device.reapNativeSurfaces();
     device.k_.next = layout();
     raw::CommandBuffer next;

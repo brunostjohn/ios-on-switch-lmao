@@ -90,6 +90,7 @@
 #include "raw_draw_bands.h"
 #include "raw_band_rates.h"
 #include "raw_span_marks.h"
+#include "raw_view_cache.h"
 #include "raw_viewports.h"
 #include "../fx/fx_mip.h"
 #include "raw_surface_image.h"
@@ -97,6 +98,8 @@
 namespace raw {
 
 struct FillStream;
+
+constexpr uint32_t kTextureHeaders = 8192;  // the texture header pool's entries (Device::allocTic)
 
 class Device;
 class CommandBuffer;
@@ -1539,7 +1542,8 @@ public:
     uint32_t levelTic(Texture &t, uint32_t level);
     // A header of plain texture `t`'s memory whose word 0 is `word0` (raw_view.h: m2v's view of it in another format
     // of the same texel size; a storage view of a multisampled texture spans its sample grid), made on first use and freed
-    // with t's header; 0: no header slot left
+    // with t's header; 0: no header slot left. The encoding thread's: what it answered is kept there and answered again
+    // with no lock (raw_view_cache.h, keyed as viewTics_)
     uint32_t viewTic(const Texture &t, uint32_t word0, ViewAccess access);
 
     // Whether the connection is NVK's (raw_kernel.h): m2v's views alias this path's memory
@@ -2249,6 +2253,7 @@ private:
     // again before it gives out a command buffer. channel_ is 0 while the kernel holds none of this device's.
     bool contextless_ = false;
     std::vector<uint32_t> freeTic_, freeTsc_;
+    ViewCache views_{kTextureHeaders};  // viewTic's answers, the encoding thread's
     // by header: its views' word 0 (above it, the sample grid of a storage view: raw_view.h viewHeader) and header (viewTic)
     std::unordered_multimap<uint32_t, std::pair<uint64_t, uint32_t>> viewTics_;
     uint32_t nextTic_ = 1, nextTsc_ = 1, neutralTsc_ = 0;
@@ -2512,8 +2517,11 @@ private:
     {
         backingEpoch_.fetch_add(1, std::memory_order_seq_cst);
     }
-    // trimmed backings, deleted at the encoding thread's next begin(), where no lastBacking reads one
+
+    // trimmed backings, deleted at the encoding thread's next begin(), where no lastBacking reads one; trimmedPending_
+    // says there are some without lock_
     std::vector<Backing *> trimmedBackings_;
+    std::atomic<bool> trimmedPending_{false};
     // the pool's growth ahead of need (lock_): free bytes of its shared chunks, a chunk being made by the grower thread
     uint64_t poolFree_ = 0;
     bool growing_ = false, stopping_ = false;
@@ -2543,6 +2551,17 @@ private:
     {
         return *reinterpret_cast<Backing *>(&t);
     }
+
+    uint64_t commits() const
+    {
+        return commitCount_.load(std::memory_order_acquire);
+    }
+
+    // begin()'s work under lock_ where it has any: native surfaces to reap, trimmed backings to delete
+    void reapAtBegin();
+    // a native surface's cache was dropped (NativeSurface::cached, under lock_): begin() reaps under lock_ until none
+    // dropped is left
+    std::atomic<bool> nativeStale_{false};
 
     bool init(std::string &err);
     bool openChannel(std::string &err);

@@ -94,7 +94,7 @@ uint32_t Device::compKind(const Texture &m, bool blockLinear, bool copied) const
 
 void Device::compAsk(const CompWant &w)
 {
-    if (comp_.asked(w, commitCount_))
+    if (comp_.asked(w, commits()))
         return;
     comp_.wanted.push_back(w);
     compStart();
@@ -213,7 +213,7 @@ void Device::compMake(std::unique_lock<std::mutex> &l)
         if (made && (kr = k_.bindCompressed(bo, w.kind)) == KERN_SUCCESS) {
             set_.add(k_, bo, TegraGM20BSurfaceWrite);
             comp_.made(w);
-            comp_.ready.push_back({bo, w.kind, commitCount_, compClock()});
+            comp_.ready.push_back({bo, w.kind, commits(), compClock()});
             backingsChanged();
             RAW_DIAGNOSTIC(stats.compMade++);
             RAW_DIAGNOSTIC(stats.compHeld++);
@@ -227,7 +227,7 @@ void Device::compMake(std::unique_lock<std::mutex> &l)
             k_.free(bo);
         RAW_DIAGNOSTIC(stats.compFailed++);
         const bool lasting = compLasting(kr);
-        if (comp_.refuse(w, commitCount_, lasting))
+        if (comp_.refuse(w, commits(), lasting))
             os_log_error(compLog(),
                          "raw: compressed memory %llu KiB kind 0x%x not made (%{public}s, 0x%x): those backings stay "
                          "uncompressed%{public}s",
@@ -263,7 +263,7 @@ void Device::compFree(Backing &b)
     comp_.mems.erase(std::find_if(comp_.mems.begin(), comp_.mems.end(), [&](const std::unique_ptr<CompMem> &m) {
         return m.get() == mem;
     }));
-    comp_.freed(commitCount_);
+    comp_.freed(commits());
 }
 
 uint64_t Device::compDeadline() const
@@ -274,9 +274,9 @@ uint64_t Device::compDeadline() const
     };
     for (const Backing *b : backings_)
         if (b->retired)
-            due(b->usedNs);  // once its last use completed
+            due(b->usedNs.load(std::memory_order_relaxed));  // once its last use completed
         else if (b->comp || b->plain)
-            due(b->usedNs + kCompIdleNs);
+            due(b->usedNs.load(std::memory_order_relaxed) + kCompIdleNs);
     for (const CompBo &r : comp_.ready)
         due(r.readyNs + kCompIdleNs);
     return at ? std::max(at, compClock() + kCompRecheckNs) : 0;
@@ -285,13 +285,13 @@ uint64_t Device::compDeadline() const
 void Device::compTrim(uint64_t now)
 {
     for (auto it = comp_.ready.begin(); it != comp_.ready.end();) {
-        if (readyStale(commitCount_, it->madeAt, now, it->readyNs)) {
+        if (readyStale(commits(), it->madeAt, now, it->readyNs)) {
             RAW_DIAGNOSTIC(stats.compHeld--);
             RAW_DIAGNOSTIC(stats.compHeldBytes -= it->bo.bytes);
             RAW_DIAGNOSTIC(glassMemEvent("compressed memory freed unused", it->bo.bytes));
             set_.free(k_, it->bo);
             it = comp_.ready.erase(it);
-            comp_.freed(commitCount_);
+            comp_.freed(commits());
             continue;
         }
         ++it;
