@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: MIT
 // What m2v has no form of: its frontend's encoders implement no drawPatches:, setTessellationFactorBuffer:,
-// setVertexAmplificationCount:viewMappings: or attribute stride forms (NativeBridgeMetalFrontend.mm answers each zero, so
-// m2v draws without them) and it makes no indirect command buffer; a state the raw path made of tessellation,
-// amplification, a dynamic attribute stride or stage-in is drawn by raw alone; the replay of
-// indirect draw commands reads no range the GPU wrote (replayCommands). A range of a command buffer the raw path refused
-// that holds any of these never replays there: the command buffer fails as Metal reports an error, naming the refusal.
+// setVertexAmplificationCount:viewMappings: or attribute stride forms (NativeBridgeMetalFrontend.mm answers each zero,
+// so m2v draws without them) and it makes no indirect command buffer; a state the raw path made of tessellation,
+// amplification, a dynamic attribute stride or stage-in is drawn by raw alone; the replay of indirect draw commands
+// reads no range the GPU wrote (replayCommands). A range of a command buffer the raw path refused that holds any of
+// these never replays there: the command buffer fails as Metal reports an error, naming the refusal.
 #import "RawMetalIndirectCompute.h"
 
 namespace {
