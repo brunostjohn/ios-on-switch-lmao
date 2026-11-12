@@ -413,6 +413,30 @@ uint8_t dropUnreadFetches(RuntimeRecord &rec)
     return dropped;
 }
 
+bool loadsSurface(const RuntimeRecord &rec)
+{
+    constexpr size_t kHeaderBytes = 0x50;
+    // tools/gpu/maxwell/opcodes.txt SULD: bits 63-53 1110 1011 000
+    constexpr uint16_t kSuldMask = 0xffe0, kSuld = 0xeb00;
+    const auto loads = [&](const CapturedProgram &program) {
+        for (size_t at = kHeaderBytes; at + 8 <= program.image.size(); at += 8) {
+            if ((at - kHeaderBytes) % 32 == 0)
+                continue;
+            uint64_t word;
+            memcpy(&word, program.image.data() + at, sizeof word);
+            if ((uint16_t(word >> 48) & kSuldMask) == kSuld)
+                return true;
+        }
+        return false;
+    };
+    if (loads(rec.programs[0]) || loads(rec.programs[1]))
+        return true;
+    for (const RuntimeRecord::Variant &v : rec.variants)
+        if (loads(v.program))
+            return true;
+    return rec.split && (loads(rec.splitPrograms[0]) || loads(rec.splitPrograms[1]));
+}
+
 uint64_t packKeyHash(const std::string &key)
 {
     const size_t vertexAt = key.find(" | v "), fragmentAt = key.find(" | f ");

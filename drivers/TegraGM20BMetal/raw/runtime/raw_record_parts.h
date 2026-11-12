@@ -79,5 +79,8 @@ uint32_t recordSetReads(const RuntimeRecord &rec);
 // it leaves the record with the colour's storage view and rung, and the record fetches only where another one stays.
 // Returns the colours dropped.
 uint8_t dropUnreadFetches(RuntimeRecord &rec);
+// Whether any of the record's programs loads a surface (SULD): a storage form whose programs load none only writes its
+// colours, what its barrier form's program does through the ROP with no interlock
+bool loadsSurface(const RuntimeRecord &rec);
 
 }  // namespace raw

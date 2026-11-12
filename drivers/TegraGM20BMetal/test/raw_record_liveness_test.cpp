@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #include <gtest/gtest.h>
+#include <cstring>
 #include "../raw/runtime/raw_record_parts.h"
 
 namespace {
@@ -66,6 +67,37 @@ TEST(RawRecordLiveness, AColourOneOfWhoseEntriesIsReadStays)
     EXPECT_EQ(raw::dropUnreadFetches(rec), 1u << 0);
     EXPECT_EQ(rec.pipeline.storageMask, 1u << 1);
     EXPECT_EQ(rec.pipeline.entry[1].kind, raw::EntryFetch);
+}
+
+// A program of one instruction group after its 0x50-byte header, `word` at the group's slot `slot` (0: its scheduling
+// word)
+raw::CapturedProgram programWith(uint64_t word, size_t slot)
+{
+    raw::CapturedProgram p;
+    p.image.assign(0x50 + 32, 0);
+    memcpy(p.image.data() + 0x50 + 8 * slot, &word, sizeof word);
+    return p;
+}
+
+constexpr uint64_t kSuld = 0xeb00ull << 48, kSust = 0xeb20ull << 48;
+
+TEST(RawRecordLiveness, AStorageFormLoadsAColourOnlyWithASurfaceLoad)
+{
+    raw::RuntimeRecord rec;
+    rec.programs[1] = programWith(kSust, 1);
+    EXPECT_FALSE(raw::loadsSurface(rec));
+    rec.programs[1] = programWith(kSuld, 0);
+    EXPECT_FALSE(raw::loadsSurface(rec));
+    rec.programs[1] = programWith(kSuld, 2);
+    EXPECT_TRUE(raw::loadsSurface(rec));
+}
+
+TEST(RawRecordLiveness, AVariantsSurfaceLoadIsTheRecords)
+{
+    raw::RuntimeRecord rec;
+    rec.programs[1] = programWith(kSust, 1);
+    rec.variants.push_back({1, programWith(kSuld, 3)});
+    EXPECT_TRUE(raw::loadsSurface(rec));
 }
 
 }  // namespace

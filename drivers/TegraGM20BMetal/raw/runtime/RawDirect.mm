@@ -126,10 +126,11 @@ CompileOutcome Direct::make(MTLRenderPipelineDescriptor *descriptor, const std::
     if (outcome == CompileOutcome::Made) {
         const bool storage = out.pipeline.flags & PipelineStorageMetadata;
         dropUnreadFetches(out);
-        if (!storage || out.pipeline.storageMask)
+        if (!storage || (out.pipeline.storageMask && loadsSurface(out)))
             return outcome;
-        // its program holds the pixel interlock around no access to a colour: made again without the interlock
-        storageRefusal_ = "storage form: its program reads and writes no colour";
+        // its program holds the pixel interlock around no load of a colour: made again without the interlock
+        storageRefusal_ = out.pipeline.storageMask ? "storage form: its program loads no colour"
+                                                   : "storage form: its program reads and writes no colour";
         return barrierForm(false);
     }
     if (outcome != CompileOutcome::Refused || why.rfind("storage form", 0) != 0)
