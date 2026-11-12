@@ -36,7 +36,7 @@ struct Broker {
 	IOMemoryDescriptor *store;
 	uint64_t storeBytes, stack, nextId, nextClient;
 	uint32_t generation, pending, losses;
-	int32_t compilerPid;
+	int32_t compilerPid;  // debug kernels' kern.switch_shader_compiler (SWITCH_GPU_COMPILER_LINE)
 	uint64_t queuedBytes;
 	bool declined, restarts;
 	Request *requests;  // queued and taken, oldest first

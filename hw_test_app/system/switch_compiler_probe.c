@@ -56,6 +56,7 @@ static void read_jetsam(struct switch_compiler_probe *out)
     } else {
         out->band = entry.priority;
         out->limit_mb = entry.limit;
+        out->state = entry.state;
     }
     struct switch_memorystatus_memlimit_properties limits = {0};
     if (memorystatus_control(SWITCH_MEMORYSTATUS_CMD_GET_MEMLIMIT_PROPERTIES, out->pid, 0, &limits, sizeof(limits)) <

@@ -28,6 +28,7 @@ struct CompilerAliveTest: HWTest {
         metrics.set("active_fatal", Int(probe.active_fatal))
         metrics.set("inactive_mb", Int(probe.inactive_mb))
         metrics.set("inactive_fatal", Int(probe.inactive_fatal))
+        metrics.set("state", "0x" + String(probe.state, radix: 16))
         metrics.set("line_error", KernelSysctl.code(probe.line_error))
         metrics.set("priority_error", Self.code(probe.priority_error))
         metrics.set("limits_error", Self.code(probe.limits_error))
@@ -42,9 +43,11 @@ struct CompilerAliveTest: HWTest {
                         : KernelSysctl.unreadable("kern.switch_shader_compiler", probe.line_error), read
                 ),
                 ("a compiler is registered", probe.pid > 0),
+                ("no compiler lost this boot (losses 0)", probe.losses == 0),
                 (
-                    "the boot's first compiler still serves (generation 1, none lost)",
-                    probe.generation == 1 && probe.losses == 0
+                    "the boot's first registration still serves (generation 1; more with no loss: a full store "
+                        + "registered again)",
+                    probe.generation == 1
                 ),
                 (
                     Self.answered("its jetsam band", probe.priority_error),
@@ -52,6 +55,7 @@ struct CompilerAliveTest: HWTest {
                 ),
                 ("in band \(band)", Int(probe.band) == band),
                 ("held to \(active) MB now", Int(probe.limit_mb) == active),
+                ("never clean or idle-exited (not tracked)", probe.state & Self.trackedOrIdleExit == 0),
                 (
                     Self.answered("its memory limits", probe.limits_error),
                     asked && probe.limits_error == 0
@@ -63,6 +67,9 @@ struct CompilerAliveTest: HWTest {
                 ),
             ], metrics, proof: "pid \(probe.pid)")
     }
+
+    /// xnu bsd/sys/kern_memorystatus.h kMemorystatusTracked | kMemorystatusSupportsIdleExit, on 10063 and 12377 alike
+    static let trackedOrIdleExit: UInt32 = 0x08 | 0x10
 
     static func code(_ error: Int32) -> String {
         error == 0 ? "none" : KernelSysctl.code(error)

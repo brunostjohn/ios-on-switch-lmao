@@ -15,6 +15,7 @@ struct switch_compiler_probe {
     int32_t priority_error; /* errno of MEMORYSTATUS_CMD_GET_PRIORITY_LIST for the pid */
     int32_t band;           /* its effective jetsam priority */
     int32_t limit_mb;       /* the limit in force now */
+    uint32_t state;         /* its memorystatus state bits (kern_memorystatus.h kMemorystatus*) */
     int32_t limits_error;   /* errno of MEMORYSTATUS_CMD_GET_MEMLIMIT_PROPERTIES for the pid */
     int32_t active_mb, inactive_mb;
     uint8_t active_fatal, inactive_fatal;

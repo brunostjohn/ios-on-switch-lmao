@@ -152,7 +152,9 @@ IOReturn registerCompiler(const void *owner, task_t task, const TegraGM20BAbiCom
 	}
 	IOMemoryDescriptor *old = gBroker.store;
 	gBroker.compiler = owner;
+#if SWITCH_GPU_COMPILER_LINE
 	gBroker.compilerPid = proc_selfpid();
+#endif
 	gBroker.announced = nullptr;
 	gBroker.store = store;
 	gBroker.storeBytes = in->store_bytes;
@@ -387,7 +389,9 @@ void switch_gpu_compiler_close(const void *owner)
 	const bool announced = !compiler && gBroker.announced == owner;
 	if (compiler) {
 		gBroker.compiler = nullptr;
+#if SWITCH_GPU_COMPILER_LINE
 		gBroker.compilerPid = 0;
+#endif
 	}
 	if (announced)
 		gBroker.announced = nullptr;
