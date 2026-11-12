@@ -124,10 +124,12 @@ struct BufferBinding {
     uint32_t chunk = 0;
     uint32_t length = 0;
     Source source = Source::Unset;
+    uint32_t shadow = 0;  // setBytes: its bytes' cached copy in the recording, + 1 (RMCommandBuffer::_shadow); 0: none
 
     bool operator==(const BufferBinding &b) const
     {
-        return object == b.object && offset == b.offset && chunk == b.chunk && length == b.length && source == b.source;
+        return object == b.object && offset == b.offset && chunk == b.chunk && length == b.length &&
+               source == b.source && shadow == b.shadow;
     }
 
     bool operator!=(const BufferBinding &b) const
