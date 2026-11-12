@@ -5150,8 +5150,9 @@ bool RenderEncoder::prepare(Pipeline *pl, uint32_t primitive, int32_t first, uin
 
 // A colour matrix form's draw: its iterated blend program and constants from the matrix uniform the draw binds, which
 // the GPU's macro reads through a non-prefetched GPFIFO entry over the uniform's bytes (the CPU reads none of them). A
-// uniform of the rows alone (a QuartzCore whose matrix has no clamp) is followed by a clamp pair of 0, the next body's
-// first word: the macro's method data runs on across the entries.
+// uniform of the rows alone (a QuartzCore whose matrix has no clamp) is followed by a clamp pair of 0 in an entry of its
+// own: the macro's method data runs on across the entries, each but the last incomplete, which the kernel takes only
+// before a non-prefetched entry.
 bool RenderEncoder::matrixConstants(const Pipeline &pl, const char **why)
 {
     static_assert(kMatrixWords == SWITCH_GM20B_MACRO_VCM_ARGUMENTS, "the colour matrix macro's arguments");
@@ -5166,12 +5167,16 @@ bool RenderEncoder::matrixConstants(const Pipeline &pl, const char **why)
         cb_->clean(b.cpu + pl.freeForm.matrixOffset, 4 * words);
     mme::matrixHeader(p_);
     bodies_.push_back({bodyStart_, p_.at, 0, 0, true});
-    bodies_.push_back({nullptr, nullptr, b.va + pl.freeForm.matrixOffset, words, false});
+    bodies_.push_back({nullptr, nullptr, b.va + pl.freeForm.matrixOffset, words, words < kMatrixWords});
     dev_->push_.head = uint64_t(reinterpret_cast<uint8_t *>(p_.at) - dev_->push_.bo.cpu);
+    if (words < kMatrixWords) {
+        uint64_t va = 0;
+        auto *clamp = reinterpret_cast<uint32_t *>(dev_->alloc(dev_->push_, 4 * (kMatrixWords - words), 4, va));
+        std::fill(clamp, clamp + (kMatrixWords - words), 0u);
+        bodies_.push_back({nullptr, nullptr, va, uint32_t(kMatrixWords - words), false});
+    }
     bodyStart_ = nullptr;
     reserve();
-    for (uint32_t w = words; w < kMatrixWords; w++)
-        *p_.at++ = 0;
     return true;
 }
 
@@ -5883,7 +5888,8 @@ void RenderEncoder::end()
     d.push_.head = uint64_t(reinterpret_cast<uint8_t *>(p.at) - d.push_.bo.cpu);
     for (auto &b : bodies_) {
         if (b.indirectVa) {
-            cb_->segments_.append({b.indirectVa, b.indirectWords, TegraGM20BPushNoPrefetch}, false);
+            const uint32_t flags = TegraGM20BPushNoPrefetch | (b.incomplete ? TegraGM20BPushIncomplete : 0u);
+            cb_->segments_.append({b.indirectVa, b.indirectWords, flags}, false);
         } else {
             cb_->segment(b.first, b.second);
             if (b.incomplete)
