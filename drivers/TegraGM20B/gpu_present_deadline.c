@@ -52,6 +52,7 @@ static int watch_late(int physical, u64 age, struct tgm_chan **waited, u32 *seqn
 	}
 	if (where == SWITCH_GPU_QUIET_OWED) {
 		tgm_present.recovered = now;
+		tgm_present.recheck = TGM_PRESENT_NS;
 		nvxnu_work_schedule_after(tgm_present.deadline_work, TGM_PRESENT_NS);
 		return 1;
 	}
@@ -98,7 +99,9 @@ void tgm_present_deadline(void *arg)
 	struct switch_gpu_present_pending pending;
 	char state[TGM_HANG_LINE];
 	char what[96], current_owner[96], next_owner[96];
+	struct tgm_chan *late = NULL;
 	u64 age = 0;
+	u64 recheck = 0;
 	u32 seqno = 0;
 	u32 eng;
 	u32 watch = 0;
@@ -116,8 +119,9 @@ void tgm_present_deadline(void *arg)
 	/* a deadline of an earlier present that was already running when that one completed: this one has its own time,
 	 * which a recovery under way restarts */
 	age = nvxnu_nanotime() - max(tgm_present.queued, tgm_present.recovered);
-	if (age < TGM_PRESENT_NS) {
-		nvxnu_work_schedule_after(tgm_present.deadline_work, TGM_PRESENT_NS - age);
+	recheck = tgm_present.recovered > tgm_present.queued ? tgm_present.recheck : TGM_PRESENT_NS;
+	if (age < recheck) {
+		nvxnu_work_schedule_after(tgm_present.deadline_work, recheck - age);
 		mutex_unlock(&tgm_present.lock);
 		return;
 	}
@@ -150,11 +154,14 @@ void tgm_present_deadline(void *arg)
 			seqno = (u32)pending.token.value;
 		}
 	}
-	if (tgm_hang_recover(waited ? waited : tgm_present.chan, "present",
-			     waited ? seqno : tgm_present.pending, age) != TGM_HANG_STUCK) {
+	late = waited ? waited : tgm_present.chan;
+	if (tgm_hang_recover(late, "present", waited ? seqno : tgm_present.pending, age) != TGM_HANG_STUCK) {
+		/* A wait on an unkept promise is struck again once it has been stuck for TGM_STUCK_NS, not a deadline later:
+		 * the second strike is the one that gives the promise up, so its frame is dropped at 1.5 s, not 2 s. */
+		tgm_present.recheck = tgm_chan_waits_promise(late) ? TGM_STUCK_NS : TGM_PRESENT_NS;
 		mutex_unlock(&tgm_live_lock);
 		tgm_present.recovered = nvxnu_nanotime();
-		nvxnu_work_schedule_after(tgm_present.deadline_work, TGM_PRESENT_NS);
+		nvxnu_work_schedule_after(tgm_present.deadline_work, tgm_present.recheck);
 		mutex_unlock(&tgm_present.lock);
 		return;
 	}

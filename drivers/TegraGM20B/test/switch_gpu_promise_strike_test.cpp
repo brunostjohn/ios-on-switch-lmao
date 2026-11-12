@@ -1,8 +1,9 @@
 // SPDX-License-Identifier: MIT
-// A fence-only present parked on a writer promise nobody keeps, from its deadline to the panel: the hang rule's looks
-// (tgm_hang_confirm, tgm_hang_blame), its raise (switch_gpu_promise_waits_release) with gpu_promise.c's step handling,
-// the PROMISE token's status (SwitchGpuWriterPromise.cpp) and the display's handling of TEGRA_SCANOUT_SOURCE_LOST
-// (dropLostFrame keeps the frame on the panel).
+// A fence-only present parked on a writer promise nobody keeps, from its deadline to the panel: the deadline's looks and
+// re-arms (gpu_present_deadline.c), the hang rule's strikes (tgm_hang_confirm, tgm_hang_blame), its raise
+// (switch_gpu_promise_waits_release) with gpu_promise.c's step handling, the PROMISE token's status
+// (SwitchGpuWriterPromise.cpp) and the display's handling of TEGRA_SCANOUT_SOURCE_LOST (dropLostFrame keeps the frame on
+// the panel). A real hang of the present's producer is the control.
 #include <gtest/gtest.h>
 #include <string>
 #include <vector>
@@ -29,7 +30,8 @@ struct Present {
 	uint32_t strikes = 0, seen = 0, completed = 40;
 	std::vector<std::string> lines;
 	bool makerReleasesAtRaise = false;
-	int shown = 1;  // the frame on the panel
+	bool producerHung = false;  // the control: the present waits on a client producer stuck on its own work
+	int shown = 1;              // the frame on the panel
 
 	// gpu_promise.c promise_released
 	static void released(uint32_t offset, uint32_t value, int step, void *arg)
@@ -49,19 +51,27 @@ struct Present {
 				   " was not kept: present waited");
 	}
 
-	// tgm_hang_recover at the present deadline: the present channel parked on the word, which no live channel's
-	// fence is (TGM_WAITS_VICTIM), switched out by its acquire (no engine on it)
+	// tgm_hang_recover at the present deadline. On a promise: the present channel parked on the word, which no live
+	// channel's fence is (TGM_WAITS_VICTIM), switched out by its acquire (no engine on it). The control: the producer
+	// the present waits on, an engine on it, while other channels progress.
 	enum tgm_hang look()
 	{
 		tgm_hang_candidate c = {};
 		c.live = 1;
-		c.kernel = 1;
-		c.victim = 1;
+		c.kernel = !producerHung;
+		c.victim = !producerHung;
+		c.resident = producerHung;
 		c.stuck = uint8_t(tgm_hang_confirm(1, completed, &strikes, &seen));
 		if (c.stuck && switch_gpu_promise_waits_release(&waits, word, released, this))
 			return TGM_HANG_PROGRESSING;
 		int blame = 0;
-		return tgm_hang_blame(&c, 1, 0, 1, 0, &blame);
+		return tgm_hang_blame(&c, 1, 0, c.kernel, producerHung, &blame);
+	}
+
+	// the deadline's next look after one that was not fatal
+	uint64_t recheck() const
+	{
+		return switch_gpu_promise_waits_pending(&waits, word) ? TGM_STUCK_NS : kPresentNs;
 	}
 
 	// SwitchGpuWriterPromise.cpp status
@@ -88,44 +98,83 @@ protected:
 	Present p;
 	uint64_t now = 0;
 
+	uint64_t next = kPresentNs;
+
 	void SetUp() override
 	{
 		pool[kOffset / 4] = kValue - 1;
+	}
+
+	void parkOnThePromise()
+	{
 		ASSERT_EQ(switch_gpu_promise_waits_note(&p.waits, word, kOffset, kValue), 0);
 	}
 
 	enum tgm_hang deadline()
 	{
-		now += kPresentNs;
-		return p.look();
+		now += next;
+		const enum tgm_hang verdict = p.look();
+		next = p.recheck();
+		return verdict;
 	}
 };
 
 // The first deadline (1 s after the offer) takes the first strike: the present goes on waiting, and a kernel channel
-// that is a victim is never STUCK (no panic). The re-armed deadline (2 s) confirms it: the promise is marked given up,
-// its word raised, one line names its writer. The present finishes TEGRA_SCANOUT_SOURCE_LOST and the panel keeps the
-// frame before it.
-TEST_F(Strike, AnUnkeptPromiseKeepsThePreviousFrameAndNamesItsWriterOnce)
+// that is a victim is never STUCK (no panic). It looks again once the wait has been stuck for TGM_STUCK_NS, as it
+// waits on a promise word, and that look (1.5 s) confirms the strike: the promise is marked given up, its word raised,
+// and one line names its writer. The present finishes TEGRA_SCANOUT_SOURCE_LOST and the panel keeps the frame before
+// it.
+TEST_F(Strike, AnUnkeptPromiseKeepsThePreviousFrameAndNamesItsWriterOnceAtOneAndAHalfSeconds)
 {
+	parkOnThePromise();
 	EXPECT_EQ(deadline(), TGM_HANG_PROGRESSING);
 	EXPECT_TRUE(p.lines.empty());
 	EXPECT_EQ(pool[kOffset / 4], kValue - 1);
 	EXPECT_EQ(deadline(), TGM_HANG_PROGRESSING);
-	EXPECT_EQ(now, 2 * kPresentNs);
+	EXPECT_EQ(now, kPresentNs + TGM_STUCK_NS);
 	ASSERT_EQ(p.lines.size(), 1u);
 	EXPECT_NE(p.lines[0].find("writer-app's writer promise"), std::string::npos);
 	EXPECT_EQ(pool[kOffset / 4], kValue);
 	EXPECT_EQ(p.status(), -5);
 	EXPECT_EQ(p.finish(2), kSourceLost);
 	EXPECT_EQ(p.shown, 1);
+	EXPECT_EQ(next, kPresentNs) << "a raised word is no longer a promise wait";
 	EXPECT_EQ(deadline(), TGM_HANG_PROGRESSING);
 	EXPECT_EQ(p.lines.size(), 1u) << "a raised word is not raised again";
+}
+
+// A real hang, not on a promise: the producer is struck at the deadline and again a whole deadline later (2 s), then
+// recovered, as before.
+TEST_F(Strike, ARealHangStillTakesTwoDeadlines)
+{
+	p.producerHung = true;
+	EXPECT_EQ(deadline(), TGM_HANG_PROGRESSING);
+	EXPECT_EQ(next, kPresentNs);
+	EXPECT_EQ(deadline(), TGM_HANG_RECOVERING);
+	EXPECT_EQ(now, 2 * kPresentNs);
+	EXPECT_TRUE(p.lines.empty());
+}
+
+// The maker's job releases the word between the looks: the present's job goes on and ends, nothing is raised or
+// reported, and the frame is shown.
+TEST_F(Strike, AMakersReleaseBetweenTheLooksShowsItsFrame)
+{
+	parkOnThePromise();
+	EXPECT_EQ(deadline(), TGM_HANG_PROGRESSING);
+	pool[kOffset / 4] = kValue;
+	++p.completed;
+	EXPECT_EQ(deadline(), TGM_HANG_PROGRESSING);
+	EXPECT_TRUE(p.lines.empty());
+	EXPECT_EQ(p.status(), 1);
+	EXPECT_EQ(p.finish(2), 0);
+	EXPECT_EQ(p.shown, 2);
 }
 
 // The maker's job releases the word while the hang rule is raising it: its writes are there, so nothing is reported and
 // the frame is shown.
 TEST_F(Strike, AMakersReleaseThatWinsTheRaceShowsItsFrame)
 {
+	parkOnThePromise();
 	p.makerReleasesAtRaise = true;
 	EXPECT_EQ(deadline(), TGM_HANG_PROGRESSING);
 	deadline();
@@ -138,6 +187,7 @@ TEST_F(Strike, AMakersReleaseThatWinsTheRaceShowsItsFrame)
 // A present that progresses between looks is never struck.
 TEST_F(Strike, AProgressingPresentIsNotStruck)
 {
+	parkOnThePromise();
 	deadline();
 	++p.completed;
 	deadline();

@@ -8,6 +8,11 @@ int tgm_chan_note_promise(struct tgm_chan *chan, uint32_t offset, uint32_t value
 	return switch_gpu_promise_waits_note(&chan->promise_waits, tgm_fence_word, offset, value);
 }
 
+int tgm_chan_waits_promise(const struct tgm_chan *chan)
+{
+	return switch_gpu_promise_waits_pending(&chan->promise_waits, tgm_fence_word);
+}
+
 struct promise_hang {
 	const struct tgm_chan *chan;
 	const char *who;

@@ -597,6 +597,8 @@ void tgm_idle_settle(void *arg);
  * waits for */
 int tgm_chan_note_promise(struct tgm_chan *chan, uint32_t offset, uint32_t value);
 uint32_t tgm_chan_release_promises(struct tgm_chan *chan, const char *who, u64 waited_ns);
+/* tgm_live_lock held: whether one of the promises the channel acquires is still unkept */
+int tgm_chan_waits_promise(const struct tgm_chan *chan);
 void tgm_promise_abandoned_report(uint32_t offset, uint32_t value, const char *who, u64 waited_ns);
 void tgm_present_promise_watch(struct switch_gpu_backing_token *kept);
 #if TGM_STATS
@@ -656,6 +658,7 @@ struct present_state {
 	u32 presents; /* stats */
 	u64 lat_sum, lat_max;
 	u64 recovered; /* when the present in flight last found a recovery under way, or work still progressing */
+	u64 recheck;   /* the deadline's next look after `recovered` */
 	u64 late;      /* when the deadline first found the watch's interrupt due (gpu_present_deadline.c), 0: not */
 
 	/* the copy of the present in flight (valid: it copies), for a redo after a copy engine reset */

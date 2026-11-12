@@ -145,6 +145,16 @@ static inline int switch_gpu_promise_pending(switch_gpu_promise_word word, uint6
 	return at && (int32_t)(__atomic_load_n(at, __ATOMIC_ACQUIRE) - (uint32_t)wait) < 0;
 }
 
+/* A recorded wait still short of its value: the channel may be parked on a promise word. */
+static inline int switch_gpu_promise_waits_pending(const struct switch_gpu_promise_waits *waits,
+						   switch_gpu_promise_word word)
+{
+	for (int i = 0; i < SWITCH_GPU_PROMISE_WAITS; ++i)
+		if (switch_gpu_promise_pending(word, __atomic_load_n(&waits->wait[i], __ATOMIC_RELAXED)))
+			return 1;
+	return 0;
+}
+
 /* 0, or -28 with SWITCH_GPU_PROMISE_WAITS others pending. */
 static inline int switch_gpu_promise_waits_note(struct switch_gpu_promise_waits *waits,
 						switch_gpu_promise_word word, uint32_t offset,

@@ -207,6 +207,13 @@ TEST(GM20BPromiseSource, PresentsAndJobsOrderBehindWriterPromises)
 		     "switch_gpu_promise_abandoned_drop(&promise_abandoned, offset, value);");
 	expectBefore(released, "switch_gpu_promise_abandoned_drop(", "tgm_promise_abandoned_report(");
 	EXPECT_EQ(Count(released, "tgm_promise_abandoned_report("), 1u);
+	// a present parked on an unkept promise is struck again after TGM_STUCK_NS, a real hang a whole deadline later; the
+	// deadline's own wait is that re-check (switch_gpu_promise_strike_test models both)
+	const std::string deadline = Body(unit("gpu_present_deadline.c"), "void tgm_present_deadline(void *arg)");
+	expectBefore(deadline, "recheck = tgm_present.recovered > tgm_present.queued ? tgm_present.recheck : TGM_PRESENT_NS;",
+		     "if (age < recheck) {");
+	expectBefore(deadline, "tgm_present.recheck = tgm_chan_waits_promise(late) ? TGM_STUCK_NS : TGM_PRESENT_NS;",
+		     "nvxnu_work_schedule_after(tgm_present.deadline_work, tgm_present.recheck);");
 	EXPECT_THAT(unit("SwitchGpuAdmission.cpp"), HasSubstr("switch_gpu_backing_exclusive_readers(backing)"));
 	EXPECT_THAT(unit("SwitchGpuOwnership.cpp"), HasSubstr("switch_gpu_backing_exclusive_readers(backing)"));
 	EXPECT_THAT(unit("SwitchGpuCpuAccess.cpp"), HasSubstr("--backing->promised_readers;"));
