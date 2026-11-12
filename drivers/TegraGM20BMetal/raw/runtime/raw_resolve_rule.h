@@ -22,12 +22,14 @@ struct ResolveTarget {
     bool imported = false;
     bool overBuffer = false;  // over a buffer's bytes
     bool storage = false;     // ShaderWrite usage: a kernel or pass reads and writes it as data
-    bool readOut = false;     // a blit copied out of it (into a buffer or a texture), in this command buffer or before
+    // a blit copied out of it or a kernel took it, as recorded: later in this command buffer (the tape is encoded at the
+    // commit) or in an earlier one
+    bool readAsData = false;
 };
 
 constexpr bool resolveTargetReadable(const ResolveTarget &t)
 {
-    return t.sharedStorage || t.imported || t.overBuffer || t.storage || t.readOut;
+    return t.sharedStorage || t.imported || t.overBuffer || t.storage || t.readAsData;
 }
 
 struct ResolveAsk {
@@ -39,12 +41,20 @@ struct ResolveAsk {
     bool compressedSamples = false;  // the multisampled image the pass rendered has comptags
 };
 
-// resolve.twod: within one code of Metal (gpu.x1.twod_resolve on the chip, T-v2: none beyond), so taken only where a
-// one-code error cannot be seen as data, as fetch.blend is
-constexpr bool twodResolveAcceptable(const ResolveAsk &a)
+// The 2D engine reads the sample grid at 2:1: unorm8 at 2x or 4x over the whole target, not a shadow target
+constexpr bool twodResolveShape(const ResolveAsk &a)
 {
     const bool unorm8 = a.format == 70 || a.format == 80;  // RGBA8Unorm, BGRA8Unorm
-    return unorm8 && (a.samples == 2 || a.samples == 4) && !a.readable && a.wholeTarget && !a.shadowTarget;
+    return unorm8 && (a.samples == 2 || a.samples == 4) && a.wholeTarget && !a.shadowTarget;
+}
+
+// resolve.twod: within one code of Metal (gpu.x1.twod_resolve on the chip, T-v2: none beyond), so taken where no reader
+// takes the texels as data, as fetch.blend is: a screen-bound target (a drawable, a display-bound surface) or a private
+// intermediate only passes sample. A first readback in a later command buffer sees the one code: the owner's rule for
+// screen-bound unorm targets
+constexpr bool twodResolveAcceptable(const ResolveAsk &a)
+{
+    return twodResolveShape(a) && !a.readable;
 }
 
 // The complement's hardware steps, none of which an open driver runs this way: a ROP3 code after a bilinear scale,
@@ -62,12 +72,15 @@ constexpr bool twodResolveSingleRounding4x()
     return false;
 }
 
-// The complement writes the multisampled image in place: a compressed one is written by the 2D engine through a
-// multisample kind no open driver writes with it, unproven, so those keep resolve.twod
+// resolve.exact, the same engine through the complement: for every resolve a reader takes as data, now (host-proven;
+// gpu.raw.resolve_twod's read arm and bench resolvetie2 read it on the chip), and for the screen-bound ones too once the
+// device proves it. The complement writes the multisampled image in place: a compressed one is written by the 2D engine
+// through a multisample kind no open driver writes with it, unproven, so those take the pass
 constexpr bool twodResolveExact(const ResolveAsk &a)
 {
-    return twodResolveComplementProven() && twodResolveAcceptable(a) && !a.compressedSamples &&
-           (a.samples == 2 || twodResolveSingleRounding4x());
+    if (!twodResolveShape(a) || a.compressedSamples)
+        return false;
+    return a.readable || (twodResolveComplementProven() && (a.samples == 2 || twodResolveSingleRounding4x()));
 }
 
 enum ResolveRoute : uint8_t {
@@ -75,6 +88,11 @@ enum ResolveRoute : uint8_t {
     ResolveByComplement,
     ResolveByPass
 };
+
+constexpr ResolveRoute resolveRoute(const ResolveAsk &a)
+{
+    return twodResolveExact(a) ? ResolveByComplement : twodResolveAcceptable(a) ? ResolveByTwod : ResolveByPass;
+}
 
 constexpr uint32_t resolveSampleSlot(uint32_t samples)
 {

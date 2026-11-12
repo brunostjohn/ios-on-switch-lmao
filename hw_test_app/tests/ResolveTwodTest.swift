@@ -7,8 +7,11 @@ import Metal
 /// pass, every sample shaded apart, resolved into a private texture four ways, each three times: the route the rules
 /// pick, the complement route forced (switchRawProbeResolveExact:), the complement route on a store-and-resolve whose
 /// samples a second pass loads and resolves by the pack's pass, and the pack's resolve pass (switchRawProbeResolveDraw:,
-/// Metal's exact rule). PASS: all on the raw path, the picked route within one code of the pass, the complement route
-/// taken and within one code, exact at 2x, and the kept samples resolving as the pass's. `2x_exact_differ=0` with
+/// Metal's exact rule); then the read arm (ResolveReadArm.swift), whose target a blit copies out in the same command buffer.
+/// PASS: all on the raw path, the picked route (a target first read in a later command buffer) the 2D engine's within one
+/// code of the pass, the complement route taken and within one code, exact at 2x, the kept samples resolving as the
+/// pass's, and the read arm through the complement byte for byte Metal's rule computed from the samples
+/// (`<n>x_read_route=exact <n>x_read_differ=0`). `2x_exact_differ=0` with
 /// `2x_kept_differ=0` flips twodResolveComplementProven, `4x_exact_differ=0` twodResolveSingleRounding4x.
 struct ResolveTwodTest: HWTest {
     let id = "gpu.raw.resolve_twod"
@@ -48,7 +51,18 @@ struct ResolveTwodTest: HWTest {
             let pass = try await switched(facade, Self.drawSelector) {
                 try await resolved(gpu, state, samples: samples)
             }
+            let read = try await readInCommandBuffer(gpu, state, samples: samples)
+            let reference = Self.reference(samples: samples)
             let tag = "\(samples)x"
+            let readDiffer = zip(read.bytes, reference).filter { $0 != $1 }.count
+            let passReferenceDiffer = zip(pass.bytes, reference).filter { $0 != $1 }.count
+            metrics.set("\(tag)_read_route", read.exact > 0 ? "exact" : read.twod > 0 ? "twod" : "pass")
+            metrics.set("\(tag)_read_differ", readDiffer)
+            metrics.set("\(tag)_read_gpu_ms", read.gpuMs, digits: 3)
+            metrics.set("\(tag)_pass_reference_differ", passReferenceDiffer)
+            if read.exact == 0 { wrong.append("\(tag)_read_not_exact") }
+            if readDiffer > 0 { wrong.append("\(tag)_read_differ") }
+            if read.path != "raw" { wrong.append("\(tag)_read_path") }
             let (beyond, oneOff) = Self.compare(picked.bytes, pass.bytes)
             let (exactBeyond, exactOff) = Self.compare(exact.bytes, pass.bytes)
             let exactDiffer = exactOff.reduce(0, +) + exactBeyond

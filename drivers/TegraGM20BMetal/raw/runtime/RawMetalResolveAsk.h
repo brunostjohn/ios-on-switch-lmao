@@ -3,6 +3,9 @@
 #import "RawMetalInternal.h"
 #include "raw_resolve_rule.h"
 
+// `t` (and what it views) read as data from here: a blit copies out of it, or a kernel takes it
+void noteReadAsData(id<MTLTexture> t);
+
 // What can read `into`'s texels as data: itself and the texture a view of it views, down to the memory
 raw::ResolveTarget resolveTarget(RMTexture *into);
 

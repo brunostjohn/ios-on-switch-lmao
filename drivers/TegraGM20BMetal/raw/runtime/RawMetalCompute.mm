@@ -7,6 +7,7 @@
 #include "raw_compute_key.h"
 #include "raw_compute_lookup.h"
 #import "RawMetalComputeState.h"
+#import "RawMetalResolveAsk.h"
 #include "raw_predication.h"
 #include "raw_view.h"
 #include "raw_surface_view.h"
@@ -101,6 +102,8 @@ using RMKernelSet = raw::ComputeKernelSet<raw::ComputeState>;
     }
     if (texture && !t)
         [self refuse:PredCompute value:index why:@"a kernel's texture not made by this device"];
+    if (t)
+        noteReadAsData(texture);
     setBinding(_cb, OpKernelTexture, 3, index, texture, 0);
 }
 

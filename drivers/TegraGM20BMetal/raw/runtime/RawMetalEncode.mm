@@ -201,11 +201,14 @@ __attribute__((objc_externally_retained)) static bool encodeRawAttempt(RMCommand
         const uint32_t width = re->areaWidth(), height = re->areaHeight();
         for (const Resolve &r : resolves) {
             const raw::ResolveAsk ask = resolveAsk(r.into, *from[r.attachment], width, height);
-            bool twod = raw::twodResolveAcceptable(ask), exact = raw::twodResolveExact(ask);
+            raw::ResolveRoute route = raw::resolveRoute(ask);
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
-            twod = twod && !d.probeResolveDraw.load(std::memory_order_relaxed);
-            exact = twod && (exact || d.probeResolveExact.load(std::memory_order_relaxed));
+            if (d.probeResolveDraw.load(std::memory_order_relaxed))
+                route = raw::ResolveByPass;
+            else if (raw::twodResolveShape(ask) && d.probeResolveExact.load(std::memory_order_relaxed))
+                route = raw::ResolveByComplement;
 #endif
+            const bool twod = route != raw::ResolveByPass, exact = route == raw::ResolveByComplement;
             if (twod) {
                 useTexture(rc, r.into, true);
                 if (rc->resolveTwod(*from[r.attachment], r.into->_raw, exact, r.keepSamples))

@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #import "RawMetalInternal.h"
+#import "RawMetalResolveAsk.h"
 #import "RawMetalXrPlanes.h"
 #include "../fx/fx_mip_probe.h"
 
@@ -31,12 +32,6 @@ uint64_t bufferRow(const BufferRows &r, uint64_t offset, uint64_t bytesPerRow, u
         return r.first + y * r.pitch;
     const uint64_t at = offset + uint64_t(y) * bytesPerRow;
     return at - at % r.word;
-}
-
-static void noteReadOut(id<MTLTexture> t)
-{
-    for (RMTexture *x = [(id)t isKindOfClass:[RMTexture class]] ? (RMTexture *)t : nil; x; x = x->_parent)
-        x->_readOut.store(true, std::memory_order_relaxed);
 }
 
 // Blit options choose a depth/stencil aspect or a PVRTC row layout; a colour texture the raw path holds has neither, so they
@@ -184,7 +179,7 @@ static bool sameSizeLevels(id<MTLTexture> s, id<MTLTexture> d, NSUInteger &sl, N
     }
     [_cb retain:s];
     [_cb retain:d];
-    noteReadOut(s);
+    noteReadAsData(s);
     if ([(id)d isKindOfClass:[RMTexture class]])
         declareGpuWrites((RMTexture *)d);
     Cmd m = cmd(OpCopyTexture);
@@ -425,7 +420,7 @@ static bool sameSizeLevels(id<MTLTexture> s, id<MTLTexture> d, NSUInteger &sl, N
     }
     [_cb retain:s];
     [_cb retain:d];
-    noteReadOut(s);
+    noteReadAsData(s);
     Cmd m = cmd(OpCopyTextureToBuffer);
     m.obj = (__bridge void *)s;
     m.obj2 = (__bridge void *)d;

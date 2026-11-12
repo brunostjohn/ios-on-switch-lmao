@@ -92,20 +92,36 @@ TEST(ResolveRule, TakenForScreenBoundUnorm8Only)
     EXPECT_FALSE(raw::twodResolveAcceptable(a)) << "the 2D engine would write a pitch the render hardware refuses";
 }
 
-TEST(ResolveRule, EveryWayTheTexelsCanBeReadAsDataIsReadable)
+// A reader that takes the texels as data (the CPU, another process, a blit, a kernel) makes the resolve exact through
+// the complement, the same engine, at 2x and 4x; a screen-bound or pass-sampled target keeps the one-code route
+TEST(ResolveRule, EveryWayTheTexelsCanBeReadAsDataTakesTheComplement)
 {
     EXPECT_FALSE(raw::resolveTargetReadable({}));
     const raw::ResolveTarget each[] = {
         {true, false, false, false, false}, {false, true, false, false, false}, {false, false, true, false, false},
         {false, false, false, true, false}, {false, false, false, false, true},
     };
-    for (const raw::ResolveTarget &t : each) {
-        EXPECT_TRUE(raw::resolveTargetReadable(t));
-        raw::ResolveAsk a = screenBound(2);
-        a.readable = raw::resolveTargetReadable(t);
-        EXPECT_FALSE(raw::twodResolveAcceptable(a));
-        EXPECT_FALSE(raw::twodResolveExact(a));
-    }
+    for (const raw::ResolveTarget &t : each)
+        for (uint8_t samples : {2, 4}) {
+            EXPECT_TRUE(raw::resolveTargetReadable(t));
+            raw::ResolveAsk a = screenBound(samples);
+            a.readable = raw::resolveTargetReadable(t);
+            EXPECT_FALSE(raw::twodResolveAcceptable(a));
+            EXPECT_TRUE(raw::twodResolveExact(a));
+            EXPECT_EQ(raw::resolveRoute(a), raw::ResolveByComplement);
+            a.compressedSamples = true;
+            EXPECT_EQ(raw::resolveRoute(a), raw::ResolveByPass) << "the complement on compressed samples is unproven";
+        }
+    for (uint8_t samples : {2, 4})
+        EXPECT_EQ(raw::resolveRoute(screenBound(samples)),
+                  raw::twodResolveComplementProven() &&
+                          (samples == 2 || raw::twodResolveSingleRounding4x())
+                      ? raw::ResolveByComplement
+                      : raw::ResolveByTwod)
+            << "a screen-bound target keeps the 2D engine's one code until the complement is proven";
+    raw::ResolveAsk eight = screenBound(8);
+    eight.readable = true;
+    EXPECT_EQ(raw::resolveRoute(eight), raw::ResolveByPass);
 }
 
 TEST(ResolveRule, TheComplementWaitsOnTheDeviceAndThen4xOnOneRounding)
@@ -119,7 +135,7 @@ TEST(ResolveRule, TheComplementWaitsOnTheDeviceAndThen4xOnOneRounding)
     EXPECT_FALSE(raw::twodResolveExact(a));
     a = screenBound(2);
     a.readable = true;
-    EXPECT_FALSE(raw::twodResolveExact(a));
+    EXPECT_TRUE(raw::twodResolveExact(a));
     EXPECT_EQ(raw::resolveSampleSlot(2), 0u);
     EXPECT_EQ(raw::resolveSampleSlot(4), 1u);
     EXPECT_EQ(raw::resolveSampleSlot(8), 2u);
