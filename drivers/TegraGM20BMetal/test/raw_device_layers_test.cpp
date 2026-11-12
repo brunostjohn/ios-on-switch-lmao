@@ -377,4 +377,32 @@ TEST_F(DeviceLayers, ALayerOfADepthArrayIsItsZetaFromThere)
     EXPECT_TRUE(pass(p, none).empty()) << "past the zeta's layers";
 }
 
+TEST_F(DeviceLayers, MemorylessArraysAreBackedWithThePassesLayers)
+{
+    constexpr uint32_t kDepth32Float = 252;
+    raw::Texture color, depth, shape;
+    ASSERT_TRUE(dev.createMemoryless(32, 32, kRGBA8, color, 1, 6));
+    ASSERT_TRUE(dev.createMemoryless(32, 32, kDepth32Float, depth, 1, 6));
+    EXPECT_FALSE(dev.createMemoryless(32, 32, kRGBA8, shape, 4, 2)) << "no multisampled array";
+    EXPECT_EQ(color.layers, 6u);
+    EXPECT_TRUE(raw::wholeAttachment(color, 0, 5));
+    EXPECT_FALSE(raw::wholeAttachment(color, 0, 6));
+    raw::PassDesc p = onto(color, 4);
+    p.depthStencil = {&depth, true, false, 1.0f, 0};
+    const auto m = pass(p, none);
+    ASSERT_FALSE(m.empty());
+    const auto at = last(m);
+    EXPECT_EQ(at.at(NVB197_SET_COLOR_TARGET_THIRD_DIMENSION(0)), 4u);
+    EXPECT_EQ(at.at(NVB197_SET_COLOR_TARGET_MEMORY(0)) >> 12 & 1, 0u) << "block-linear";
+    EXPECT_NE(at.at(NVB197_SET_COLOR_TARGET_ARRAY_PITCH(0)), 0u);
+    EXPECT_EQ(at.at(NVB197_SET_ZT_SIZE_C), 4u);
+    uint64_t bytes = 0, align = 0;
+    ASSERT_TRUE(raw::zetaShape(32, 32, kDepth32Float, 1, shape, bytes, align));
+    EXPECT_EQ(at.at(NVB197_SET_ZT_ARRAY_PITCH), uint32_t(shape.layerBytes >> 2));
+    const uint32_t call = NVB197_CALL_MME_MACRO(raw::mme::kClearLayers);
+    EXPECT_EQ(valuesOf(m, call + 4), std::vector<uint32_t>{4});
+    raw::PassDesc alone = onto(color, 3);
+    EXPECT_FALSE(pass(alone, none).empty()) << "a layered pass of memoryless color alone backs it block-linear";
+}
+
 }  // namespace

@@ -340,9 +340,9 @@ static void reportNonFiniteStart(RMTexture *t, MTLTextureDescriptor *d)
         return (id<MTLTexture>)w;
     }
     const bool line = lineShape(d), volume = volumeShape(d), multisampled = multisampleShape(d);
-    const uint32_t array = arrayType(d);
+    const uint32_t array = arrayType(d), transientLayers = memorylessLayers(d);
     const RMStoredSamples stored = storedMultisampleKind(d);
-    if (!rawShape(d) && !zetaDescriptor(d) && !line && !volume && !array && !multisampled &&
+    if (!rawShape(d) && !zetaDescriptor(d) && !line && !volume && !array && !multisampled && !transientLayers &&
         stored == RMStoredSamples::None) {
         RMTexture *w = (RMTexture *)[self wrapTwin:[gRM->fallback newTextureWithDescriptor:d] descriptor:d];
         if (w)
@@ -401,8 +401,9 @@ static void reportNonFiniteStart(RMTexture *t, MTLTextureDescriptor *d)
         twinPublish(t, t->_twin, twin);
     } else if (d.storageMode == MTLStorageModeMemoryless) {
         t->_kind = RMTextureMemoryless;
-        t->_rawOk = gRM->raw->createMemoryless(uint32_t(d.width), uint32_t(d.height), uint32_t(d.pixelFormat), t->_raw,
-                                               std::max<uint32_t>(uint32_t(d.sampleCount), 1));
+        t->_rawOk =
+            gRM->raw->createMemoryless(uint32_t(d.width), uint32_t(d.height), uint32_t(d.pixelFormat), t->_raw,
+                                       std::max<uint32_t>(uint32_t(d.sampleCount), 1), std::max(transientLayers, 1u));
     } else {
         t->_kind = RMTexturePool;
         // a shared texture (the CPU writes it: replaceRegion) in write-combined memory: its rows need no clean after

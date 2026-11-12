@@ -552,7 +552,7 @@ static bool encodeRawAttempt(RMCommandBuffer *cb, size_t from, size_t to, const 
             }
             if (RMTexture *z = (RMTexture *)pass.depth) {  // (rawDepthStencil: decided at record)
                 p.depthStencil.texture = &z->_raw;
-                if (pass.depthSlice) {  // a layer of a 2D array or cube: its layers from there, layerBytes apart
+                if (pass.depthSlice && !z->_raw.memoryless) {  // a layer of a 2D array or cube: its layers from there
                     zetaPart = z->_raw;
                     zetaPart.va += pass.depthSlice * z->_raw.layerBytes;
                     zetaPart.layers -= uint32_t(pass.depthSlice);

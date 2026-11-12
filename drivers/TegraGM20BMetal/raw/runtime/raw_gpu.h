@@ -1208,8 +1208,10 @@ public:
     // image is the part's first level and layer, which copies address and a pass renders into as a 2D view of one of each.
     bool createPartView(const Texture &of, uint32_t format, uint32_t type, uint32_t baseLevel, uint32_t levels,
                         uint32_t baseLayer, uint32_t layers, Texture &t);
-    // Memoryless (a pass gives it a backing); the depth/stencil formats among them, as zeta (Texture::zeta)
-    bool createMemoryless(uint32_t width, uint32_t height, uint32_t format, Texture &t, uint32_t samples = 1);
+    // Memoryless (a pass gives it a backing of the pass's layers); the depth/stencil formats among them, as zeta
+    // (Texture::zeta). `layers`: a 2D array's or cube's, of one sample
+    bool createMemoryless(uint32_t width, uint32_t height, uint32_t format, Texture &t, uint32_t samples = 1,
+                          uint32_t layers = 1);
     // A stored depth/stencil texture of one sample over zeta memory another driver of the process keeps (NVK's image: one
     // allocation both drivers render, sample and copy in place), laid out as `m` says, with a texture header of its depth where
     // `sampled`; false where it is not a layout the raw path renders (*why says which way). A 2D array or cube of `layers`
