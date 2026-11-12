@@ -14,6 +14,7 @@ struct TegraNVENCDirect {
     void *map;
     TegraNVENCBlock block;  // the picture's backing in NVENC's address space
     switch_gpu_backing_token token;
+    switch_gpu_backing_use uses[2];  // the transaction's: it reads them again at commit or abort, after begin returned
     switch_gpu_backing_transaction transaction;
     TegraNVENCOrder order;  // for tegra_nvenc_run
 };

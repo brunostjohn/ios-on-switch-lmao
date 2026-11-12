@@ -32,11 +32,10 @@ int begin(void *context, uint32_t fence, TegraNVENCAfter *waits, uint32_t *count
 {
     auto *d = static_cast<TegraNVENCDirect *>(context);
     d->token = tegra_nvenc_token(fence);
-    switch_gpu_backing_use uses[2] = {
-        {d->view.native, SWITCH_GPU_BACKING_READ, 0},
-        {d->view.logical, SWITCH_GPU_BACKING_READ | SWITCH_GPU_BACKING_NO_CPU_EXCLUSION, 0}};
+    d->uses[0] = {d->view.native, SWITCH_GPU_BACKING_READ, 0};
+    d->uses[1] = {d->view.logical, SWITCH_GPU_BACKING_READ | SWITCH_GPU_BACKING_NO_CPU_EXCLUSION, 0};
     const switch_gpu_backing_guard guards[2] = {d->view.guard, d->view.representation};
-    int error = switch_gpu_backing_begin_checked(uses, 2, guards, 2, &d->token, &d->transaction);
+    int error = switch_gpu_backing_begin_checked(d->uses, 2, guards, 2, &d->token, &d->transaction);
     if (error)
         return error == SWITCH_GPU_BACKING_STALE ? -11 : error;
     switch_gpu_backing_token producers[8];
