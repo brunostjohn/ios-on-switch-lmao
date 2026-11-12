@@ -170,9 +170,9 @@ def do_mig(spec: Spec, step: dict[str, object], used: set[str]) -> bool:
     # What mig would otherwise look up itself: `xcrun -find cc`, and its own ../libexec/migcom.
     env['MIGCC'] = toolchain + '/bin/cc'
     env['MIGCOM'] = toolchain + '/libexec/migcom'
-    # Run by /bin/bash, not by mig's #!: a process that execs a script inside an app bundle enters macOS's provenance
-    # sandbox for that bundle. Where Xcode.app is owned by the user, every process mig then starts waits
-    # seconds on an App Management approval that nobody can give: about 100 s per action instead of 0.1 s.
+    # Run by /bin/bash, not by mig's #!: exec'ing a script inside an app bundle puts the process in macOS's provenance
+    # sandbox for that bundle. On the Mac that runs the remote worker, every process mig then started sat at
+    # _dyld_start for seconds while the kernel waited on an App Management approval: 100 s per action, not 0.1 s.
     result = run(['/bin/bash', toolchain + '/bin/mig', *argv], cwd=cwd, env=env)
     if result.returncode:
         fail(
