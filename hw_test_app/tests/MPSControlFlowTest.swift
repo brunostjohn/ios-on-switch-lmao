@@ -6,10 +6,12 @@ import MetalPerformanceShaders
 import MetalPerformanceShadersGraph
 
 /// The callers of the predication SPI on the raw path (drivers/TegraGM20BMetal/raw/runtime/raw_predication.h), with
-/// supportsCommandBufferJump YES: MPSGraph's while (a count past one laying of its copies, so the submission lays it
-/// again: loop_continuations), for and if, encoded into one MPSCommandBuffer each, and MPSImageCanny's hysteresis on a
-/// square. PASS: every command buffer completes on the raw path with MPSGraph's answers and Canny's edges; SKIP while the
-/// device answers supportsCommandBufferJump NO.
+/// supportsCommandBufferJump YES: MPSGraph's while, for and if, alone and nested as MPSGraph nests them (a while inside an
+/// if, a for inside a while, an if inside a for, a for three loops deep), each count past its loop's copies at that depth
+/// (1024 outermost, 128 inside one loop, 16 inside two), so the submission lays it again (loop_continuations), one
+/// MPSCommandBuffer each; and MPSImageCanny's hysteresis on a square. PASS: every command buffer completes on the raw path
+/// with MPSGraph's answers and Canny's edges, and a diagnostic build counted continuations; SKIP while the device answers
+/// supportsCommandBufferJump NO.
 struct MPSControlFlowTest: HWTest {
     let id = "gpu.raw.mps_control_flow"
     let name = "MPSGraph while/for/if and MPSImageCanny on the raw path's predicated loops"
@@ -17,6 +19,8 @@ struct MPSControlFlowTest: HWTest {
     var timeout: TimeInterval { 120 }
 
     static let whileCount: Int32 = 3000, forCount: Int32 = 37, side = 64
+    static let whileInIfCount: Int32 = 1500, forInWhileCount: Int32 = 300, ifInForCount: Int32 = 1100
+    static let threeDeepCount: Int32 = 20
 
     func run(_ context: TestContext) async throws -> Outcome {
         let gpu = try GPU.make()
@@ -68,6 +72,14 @@ struct MPSControlFlowTest: HWTest {
         metrics.set("if_path", ifPath)
         if chosen != 11 { wrong.append("if") }
 
+        var paths = [whilePath, forPath, ifPath]
+        for shape in try nested(gpu) {
+            metrics.set("\(shape.name)_result", Int(shape.result))
+            metrics.set("\(shape.name)_path", shape.path)
+            paths.append(shape.path)
+            if shape.result != shape.expected { wrong.append(shape.name) }
+        }
+
         let canny = try await cannyEdges(gpu)
         metrics.set("canny_edge_pixels", canny.edges)
         metrics.set("canny_inside_pixels", canny.inside)
@@ -75,9 +87,78 @@ struct MPSControlFlowTest: HWTest {
         if canny.edges == 0 || canny.inside != 0 { wrong.append("canny") }
 
         let after = RawFacade.counters(of: gpu.device)
-        metrics.set("loop_continuations", (after["loop_continuations"] ?? 0) - (before["loop_continuations"] ?? 0))
-        for path in [whilePath, forPath, ifPath, canny.path] where path != "raw" { wrong.append("path:\(path)") }
+        if let counted = after["loop_continuations"] {
+            let continued = counted - (before["loop_continuations"] ?? 0)
+            metrics.set("loop_continuations", continued)
+            if continued == 0 { wrong.append("no loop continued") }
+        }
+        for path in paths + [canny.path] where path != "raw" { wrong.append("path:\(path)") }
         return wrong.isEmpty ? .pass(metrics) : .fail(wrong.joined(separator: ","), metrics)
+    }
+
+    struct Nested {
+        let name: String
+        let result: Int32, expected: Int32
+        let path: String
+    }
+
+    /// MPSGraph's nestings, each count fed so MPSGraph cannot fold it
+    func nested(_ gpu: GPU) throws -> [Nested] {
+        func int(_ graph: MPSGraph, _ value: Int32) -> MPSGraphTensor {
+            graph.constant(Double(value), shape: [1], dataType: .int32)
+        }
+        /// `times` iterations of a while carrying `carried` through `body`
+        func repeated(
+            _ graph: MPSGraph, _ times: MPSGraphTensor, _ carried: MPSGraphTensor,
+            _ body: @escaping (MPSGraphTensor) -> MPSGraphTensor
+        ) -> MPSGraphTensor {
+            graph.while(
+                initialInputs: [int(graph, 0), carried],
+                before: { inputs, results in
+                    results.add(inputs[0])
+                    results.add(inputs[1])
+                    return graph.lessThan(inputs[0], times, name: nil)
+                },
+                after: { args in [graph.addition(args[0], int(graph, 1), name: nil), body(args[1])] }, name: nil)[1]
+        }
+        func counted(_ graph: MPSGraph, _ times: MPSGraphTensor, _ carried: MPSGraphTensor) -> MPSGraphTensor {
+            graph.for(
+                numberOfIterations: times, initialBodyArguments: [carried],
+                body: { _, args in [graph.addition(args[0], int(graph, 1), name: nil)] }, name: nil)[0]
+        }
+        var shapes: [Nested] = []
+        func shape(_ name: String, _ start: Int32, _ expected: Int32, _ build: (MPSGraph, MPSGraphTensor) -> MPSGraphTensor)
+            throws
+        {
+            let (result, path) = try runGraph(gpu, start: start, build)
+            shapes.append(Nested(name: name, result: result, expected: expected, path: path))
+        }
+        try shape("while_in_if", Self.whileInIfCount, Self.whileInIfCount) { graph, start in
+            let pick = graph.lessThan(start, int(graph, 1 << 20), name: nil)
+            return graph.if(
+                pick, then: { [repeated(graph, start, int(graph, 0)) { graph.addition($0, int(graph, 1), name: nil) }] },
+                else: { [int(graph, -1)] }, name: nil)[0]
+        }
+        try shape("for_in_while", Self.forInWhileCount, 3 * Self.forInWhileCount) { graph, start in
+            repeated(graph, int(graph, 3), int(graph, 0)) { counted(graph, start, $0) }
+        }
+        let odd = Self.ifInForCount / 2
+        try shape("if_in_for", Self.ifInForCount, (Self.ifInForCount - odd) + 3 * odd) { graph, start in
+            graph.for(
+                numberOfIterations: start, initialBodyArguments: [int(graph, 0)],
+                body: { index, args in
+                    let even = graph.equal(graph.modulo(index, int(graph, 2), name: nil), int(graph, 0), name: nil)
+                    return graph.if(
+                        even, then: { [graph.addition(args[0], int(graph, 1), name: nil)] },
+                        else: { [graph.addition(args[0], int(graph, 3), name: nil)] }, name: nil)
+                }, name: nil)[0]
+        }
+        try shape("three_deep", Self.threeDeepCount, 4 * Self.threeDeepCount) { graph, start in
+            repeated(graph, int(graph, 2), int(graph, 0)) { outer in
+                repeated(graph, int(graph, 2), outer) { counted(graph, start, $0) }
+            }
+        }
+        return shapes
     }
 
     /// The graph's one int32 output, encoded into one MPSCommandBuffer, and that command buffer's path. `start` comes
