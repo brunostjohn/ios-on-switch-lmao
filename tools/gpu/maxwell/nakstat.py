@@ -149,7 +149,19 @@ LAYOUTS = {
     16: (540, 36, 12, struct.Struct('<QIIIIIBBBBHHI')),
     17: (540, 36, 13, struct.Struct('<QIIIIIBBBBHHI')),
     18: (544, 36, 13, struct.Struct('<QIIIIIBBBBHHI')),
+    21: (568, 44, 13, struct.Struct('<QIIIIIBBBBHHI')),
 }
+# PackProgram's constant buffer slots by its size: the count at byte 20, the slots' types from 21, then the registers
+# and the bound textures' slot + 1
+PROGRAM_CBUF_SLOTS = {32: 11, 36: 11, 44: 18}
+
+
+def program_fields(p: bytes, at: int, program_bytes: int) -> tuple[int, bytes, int, int]:
+    """Give a PackProgram's constant buffer count, its slots' types, its registers and its bound textures' slot + 1."""
+    slots = PROGRAM_CBUF_SLOTS[program_bytes]
+    return p[at + 20], p[at + 21 : at + 21 + slots], p[at + 21 + slots], p[at + 22 + slots]
+
+
 VARIANT_RECORD = 16  # PackPipelineFlags PipelineVariantRecord: a variant's record under its state's key
 FETCH_FREE_FORM = 32  # PipelineFetchFreeForm: the state drawn with no framebuffer fetch, under its state's key
 
@@ -179,7 +191,7 @@ class Pack:
         return self.p[start : self.sec[7][0] + heap_offset + (data_offset or size)]
 
     def gprs(self, program: int) -> int:
-        return self.p[self.sec[0][0] + self.program_bytes * program + 32]
+        return program_fields(self.p, self.sec[0][0] + self.program_bytes * program, self.program_bytes)[2]
 
     def blob(self, at: int, dwords: int) -> list[int]:
         return list(struct.unpack_from(f'<{dwords}I', self.p, self.sec[5][0] + 4 * at))

@@ -18,7 +18,7 @@ SECTIONS = 13  # runtime/raw_pack.h PackSectionCount
 # constant[8][3], program[128]
 ITERATED = struct.Struct('<BBBBHHII24H128I')
 KERNEL_ENTRIES = 16  # PackKernel.entry's length
-PROGRAM_CBUFS = 11  # PackProgram.cbufType's length (runtime/raw_pack.h)
+PROGRAM_CBUFS = 18  # PackProgram.cbufType's length (runtime/raw_pack.h)
 # PackPipeline's record-v15 tail: variants, variantCount[2], storageBlendMask, storageBlendModel, boundEntries,
 # uniform[8], fetchRung[8], variantName
 PIPELINE_V15 = struct.Struct('<IBBBBI32s8sI')
@@ -423,7 +423,7 @@ def pack_bytes(pack: Pack) -> tuple[bytes, list[int]]:
                 len(pr['cbufs']),
             )
             + types
-            + struct.pack('<BBH', pr.get('gprs', 0), pr.get('bound_textures', 0), 0)
+            + struct.pack('<BB3x', pr.get('gprs', 0), pr.get('bound_textures', 0))
         )
     tsc_bin = b''.join(struct.pack('<8I', *w) for w in pack.constexpr_tsc)
     base_bin = b''.join(struct.pack('<II', m, v) for m, v in sorted(pack.baseline.items()))
