@@ -5,20 +5,29 @@ import Metal
 
 /// metal.native.argument_encoder's draws of functions whose bind offsets m2v places past their stage's push window, in the
 /// stage's argument table the raw path fills (raw_spill_table.h): an argument buffer beside fourteen fragment buffers, or
-/// beside thirteen vertex buffers, each bound off its base alignment so each offset's residual is its own
+/// beside thirteen vertex buffers, each a float. A slot whose offset spills is bound 4 bytes past a multiple of 16, so its
+/// residual is in the table; the others on 16, whose words the probe's shared codes cannot name.
 extension NativeArgumentEncoderTest {
     static let spillStride = 528
 
-    /// Each slot's float4 at `slot * spillStride`, twice it 16 bytes past slot 30's, `elsewhere` everywhere else: a
+    static func spillOffset(_ slot: Int, spills: Bool) -> Int {
+        slot * spillStride + (spills ? 4 : 0)
+    }
+
+    /// One float, `value`, at each slot's offset and twice it 8 bytes past slot 30's, `elsewhere` everywhere else: a
     /// residual lost reads `elsewhere`
-    static func spillValues(_ gpu: GPU, _ value: SIMD4<Float>, _ elsewhere: SIMD4<Float>) throws -> MTLBuffer {
-        var values = [SIMD4<Float>](repeating: elsewhere, count: 32 * spillStride / 16)
-        for slot in 1..<32 { values[slot * spillStride / 16] = value }
-        values[30 * spillStride / 16 + 1] = value * 2
+    static func spillValues(
+        _ gpu: GPU, _ value: Float, _ elsewhere: Float, spilled: ClosedRange<Int>
+    ) throws
+        -> MTLBuffer
+    {
+        var values = [Float](repeating: elsewhere, count: 32 * spillStride / 4)
+        for slot in 1..<32 { values[spillOffset(slot, spills: spilled.contains(slot)) / 4] = value }
+        values[(30 * spillStride + 8) / 4] = value * 2
         return try gpu.buffer(values)
     }
 
-    /// Where two draws of a spilling stage went, the second after slot 14 moved to a float4 twice the others (its table
+    /// Where two draws of a spilling stage went, the second after slot 14 moved to a float twice the others (its table
     /// uploaded again, nothing else), and whether each read every buffer at its own offset: the fragment stage's
     /// argument_spill_fragment, or the vertex stage's spill_vertex (`vertex`)
     func drawSpillThroughArguments(_ gpu: GPU, vertex: Bool) async throws -> String {
@@ -28,8 +37,7 @@ extension NativeArgumentEncoderTest {
         let colour = try gpu.buffer([SIMD4<Float>(0, 0, 1, 1)]), arguments = try gpu.buffer(16)
         encoder.setArgumentBuffer(arguments, offset: 0)
         encoder.setBuffer(colour, offset: 0, index: 0)
-        let one = vertex ? SIMD4<Float>(0, 1.0 / 32, 0, 0) : SIMD4<Float>(1.0 / 32, 0, 0, 0)
-        let values = try Self.spillValues(gpu, one, vertex ? SIMD4<Float>(0, 0, 0, -1) : SIMD4<Float>(0, 1, 0, 0))
+        let values = try Self.spillValues(gpu, 1.0 / 32, 1, spilled: 12...14)
         let pipeline = try gpu.render(
             vertex: vertex ? "spill_vertex" : "quad_vertex",
             fragment: vertex ? "tint_fragment" : "argument_spill_fragment", format: .rgba8Unorm)
@@ -43,10 +51,11 @@ extension NativeArgumentEncoderTest {
                 var corners = GPU.fullScreen
                 render.setVertexBytes(&corners, length: MemoryLayout<SIMD4<Float>>.stride * corners.count, index: 0)
                 for slot in slots {
+                    let offset = Self.spillOffset(slot, spills: slot >= 12)
                     if vertex {
-                        render.setVertexBuffer(values, offset: slot * Self.spillStride, index: slot)
+                        render.setVertexBuffer(values, offset: offset, index: slot)
                     } else {
-                        render.setFragmentBuffer(values, offset: slot * Self.spillStride, index: slot)
+                        render.setFragmentBuffer(values, offset: offset, index: slot)
                     }
                 }
                 if vertex {
@@ -57,9 +66,9 @@ extension NativeArgumentEncoderTest {
                 render.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4)
                 if k == 1 {
                     if vertex {
-                        render.setVertexBufferOffset(30 * Self.spillStride + 16, index: 14)
+                        render.setVertexBufferOffset(30 * Self.spillStride + 8, index: 14)
                     } else {
-                        render.setFragmentBufferOffset(30 * Self.spillStride + 16, index: 14)
+                        render.setFragmentBufferOffset(30 * Self.spillStride + 8, index: 14)
                     }
                     render.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4)
                 }

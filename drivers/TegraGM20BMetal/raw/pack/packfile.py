@@ -18,7 +18,7 @@ SECTIONS = 13  # runtime/raw_pack.h PackSectionCount
 # PackIteratedBlend: count, enable, constants, uniformSlot, uniformOffset, reserved, alphaSource, alphaDest,
 # constant[8][3], program[128]
 ITERATED = struct.Struct('<BBBBHHII24H128I')
-KERNEL_ENTRIES = 16  # PackKernel.entry's length
+KERNEL_ENTRIES = 64  # PackKernel.entry's length (raw_pack.h kKernelEntries)
 PROGRAM_CBUFS = 11  # PackProgram.cbufType's length (runtime/raw_pack.h)
 # PackPipeline's record-v15 tail: variants, variantCount[2], storageBlendMask, storageBlendModel, boundEntries,
 # uniform[8], fetchRung[8], variantName
@@ -286,7 +286,7 @@ def kernel_bytes(k: dict, key_offset: int, spill_at: int = 0) -> bytes:
     return (
         struct.pack('<QIIBb', fnv(k['key'].encode()), key_offset, k['program'], len(k['entries']), k['region'])
         + struct.pack('<64I', *k['qmd'])
-        + struct.pack('<HHI', k['set_bytes'], k.get('read_only_entries', 0), mask)
+        + struct.pack('<HQI', k['set_bytes'], k.get('read_only_entries', 0), mask)
         + struct.pack('<32I', *words)
         + entries
         + arguments

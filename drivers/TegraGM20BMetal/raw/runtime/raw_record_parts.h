@@ -72,6 +72,8 @@ struct RecordParts {
     PackShaderTests shaderTests = {};
     RecordHeap heap;
     std::vector<uint32_t> spill[2];  // each stage's argument table words (raw_spill_table.h), vertex then fragment
+    // by stage and buffer slot, the table word + 1 of a residual the stage's argument table holds (NmbDirectDraw's)
+    uint8_t spillResidual[2][32] = {};
 };
 
 // The color attachments a key names (mkpack.py targets)

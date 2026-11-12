@@ -276,8 +276,9 @@ constexpr uint32_t cbufUboOffset(uint8_t type)
     return uint32_t(type >> 3) * 16;
 }
 
-// Set-0 entries a state may have: Core Animation's generic states (the uber shader) take 27
-constexpr uint32_t kPackEntries = 32;
+// Set-0 entries a state may have: Core Animation's generic states (the uber shader) take 27; and the bytes of its set 0,
+// every entry's 16-byte descriptor at most (RenderEncoder::prepare's)
+constexpr uint32_t kPackEntries = 32, kSetMaxBytes = 16 * kPackEntries;
 
 struct PackShaderTests {
     uint8_t depthWord, stencilWord, flags, reserved;
@@ -377,6 +378,8 @@ inline int kernelResidualWord(const PackKernelEntry &e)
     return int(e.window >> 24) - 1;
 }
 
+constexpr uint32_t kKernelEntries = 64;
+
 struct PackKernel {
     uint64_t keyHash;
     uint32_t keyString;
@@ -385,10 +388,11 @@ struct PackKernel {
     int8_t regionWord;  // root push word of m2v's DispatchRegion field (two uvec4: base, nominal size, grid), -1: none
     uint32_t qmd[64];   // NVK's QMD (QMDV01_07), its program offset, grid and constant buffer addresses zero
     uint16_t setBytes;  // set 0's size in the root table's set address
-    uint16_t readOnlyEntries;  // bit i: entry[i] is proven read-only; old records conservatively leave every bit zero
+    uint64_t readOnlyEntries;  // bit i: entry[i] is proven read-only; old records conservatively leave every bit zero
     uint32_t pushMask;         // root table [0x700, 0x780): the constant words m2v's push ranges write, and which
     uint32_t pushWords[32];
-    PackKernelEntry entry[16];
+    // a kernel whose bind offsets spill past its push window binds more than 28 buffers (raw_spill_table.h)
+    PackKernelEntry entry[kKernelEntries];
     // What m2v's reads through argument buffers take of a dispatch, as PackPipeline's for the kernel stage: the push word + 1
     // of the root table's address and of the ExecutionStatus buffer's (0: none), the buffer slots its root table holds, and
     // its set-1 heap arrays
@@ -403,7 +407,7 @@ struct PackKernel {
 
 inline bool kernelEntryWrites(const PackKernel &kernel, uint32_t entry)
 {
-    return !(kernel.readOnlyEntries & (1u << entry));
+    return !(kernel.readOnlyEntries & (1ull << entry));
 }
 
 struct SplitCost {
@@ -472,7 +476,7 @@ static_assert(offsetof(PackPipeline, rootTableWord) == 544 && offsetof(PackPipel
 static_assert(sizeof(PackProgram) == 36, "pack layout");
 static_assert(sizeof(PackVariant) == 8, "pack layout");
 static_assert(sizeof(PackArchive) == 16, "pack layout");
-static_assert(sizeof(PackKernel) == 18 + 256 + 8 + 128 + 128 + 84, "pack layout");
+static_assert(sizeof(PackKernel) == 18 + 256 + 14 + 128 + 8 * kKernelEntries + 84, "pack layout");
 static_assert(sizeof(PackSplit) == 34 + 256 + 32, "pack layout");
 static_assert(sizeof(PackIteratedBlend) == 16 + 48 + 4 * kIteratedProgramWords, "pack layout");
 

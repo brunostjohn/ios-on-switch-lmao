@@ -2,6 +2,7 @@
 #import "RawMetalMultisample.h"
 #import "RawMetalPlanAdapters.h"
 #import "RawMetalIndirect.h"
+#include "NativeBridgeMetalFrontend.h"
 #include "raw_replay_twins.h"
 
 // ---- object mapping for the m2v replay ----
@@ -82,19 +83,69 @@ static void failMissingTwin(RMCommandBuffer *cb, id object)
         cb->_segError = error;
 }
 
-// What a range uses that m2v's twins cannot read: a facade heap, whose resources an encoder reaches through argument buffers
-// and which no twin names (RMHeap rmTwin), or a buffer an argument encoder wrote, which holds the raw device's resource IDs
-// and addresses (RawMetalArgumentEncoder.mm); nil: none
+static bool takesArgumentBuffers(id<MTLFunction> f)
+{
+    if (![(id)f isKindOfClass:[RMFunction class]])
+        return false;
+    RMFunction *function = (RMFunction *)f;
+    if (!function->_argumentBuffers) {
+        bool takes = false;
+        for (NSUInteger index = 0; index < 31 && !takes; index++) {
+            const char *why = nullptr;
+            takes = native_bridge_metal_argument_layouts(
+                function->_twin, index,
+                [](const NmbArgumentLayout *, uint32_t, void *) {
+                    return true;
+                },
+                nullptr, &why);
+        }
+        function->_argumentBuffers = takes ? 2 : 1;
+    }
+    return function->_argumentBuffers == 2;
+}
+
+// Whether a render state reads through argument buffers: its record names the device's root table, status buffer, handle
+// tables or set 1, or (a state with no record yet) one of its functions takes an argument buffer
+static bool readsArguments(RMPipeline *p)
+{
+    if (p->_raw && p->_raw->rec) {
+        const raw::PackPipeline &r = *p->_raw->rec;
+        bool tables = false;
+        for (uint32_t i = 0; i < r.entries; i++)
+            tables |= r.entry[i].kind == raw::EntryTextureTable || r.entry[i].kind == raw::EntrySamplerTable;
+        return tables || r.heapArrays || r.rootTableWord[0] || r.rootTableWord[1] || r.statusWord[0] || r.statusWord[1];
+    }
+    MTLRenderPipelineDescriptor *d = p->_madeFrom;
+    return d && (takesArgumentBuffers(d.vertexFunction) || takesArgumentBuffers(d.fragmentFunction));
+}
+
+// What a range reads that m2v's twins cannot (raw_replay_twins.h): a buffer RawMetalArgumentEncoder.mm wrote, or a facade
+// heap beside a render state that reads argument buffers, whose IDs the app took of the raw device (gpuResourceID)
 static id rawArgumentsIn(RMCommandBuffer *cb, size_t from, size_t to)
 {
-    id found = nil;
-    cb->_plan.forEachUse(from, to, [&](void *value, uint8_t) {
-        id o = (__bridge id)value;
-        if (!found && ([o isKindOfClass:[RMHeap class]] ||
-                       ([o isKindOfClass:[RMBuffer class]] && ((RMBuffer *)o)->_rawArguments)))
-            found = o;
-    });
-    return found;
+    return (__bridge id)raw::rawArgumentsIn(
+        [&](auto &&visit) {
+            cb->_plan.forEachUse(from, to, [&](void *value, uint8_t) {
+                visit(value);
+            });
+        },
+        [](void *value) {
+            id o = (__bridge id)value;
+            if ([o isKindOfClass:[RMHeap class]])
+                return raw::ReplayUse::Heap;
+            if ([o isKindOfClass:[RMBuffer class]] && ((RMBuffer *)o)->_rawArguments)
+                return raw::ReplayUse::WrittenArguments;
+            return raw::ReplayUse::Other;
+        },
+        [&](auto &&visit) {
+            for (size_t at = from; at < to; at++)
+                if (const Cmd c = cb->_plan.legacy(at); c.op == OpPipeline)
+                    visit(c.obj);
+        },
+        [](void *state) {
+            id s = (__bridge id)state;
+            return [s isKindOfClass:[RMPipeline class]] && readsArguments((RMPipeline *)s);
+        });
 }
 
 // The command buffer's error for a range replay could not draw as Metal does: it reads through the raw device's argument

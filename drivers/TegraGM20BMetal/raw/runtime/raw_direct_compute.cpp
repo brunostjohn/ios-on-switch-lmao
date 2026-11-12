@@ -50,16 +50,6 @@ std::map<uint32_t, uint32_t> pushWords(uint32_t mask, const uint32_t (&words)[32
     return out;
 }
 
-// A dispatch's argument table words by root offset, word i at push word 32 + i (raw_spill_table.h), as far as a residual
-// word can name one
-std::map<uint32_t, uint32_t> spillWords(const uint32_t *words, uint32_t count)
-{
-    std::map<uint32_t, uint32_t> out;
-    for (uint32_t i = 0; i < count && i < kSpillResidualWords; i++)
-        out[kRootPush + 4 * (kRootPushWords + i)] = words[i];
-    return out;
-}
-
 std::vector<uint32_t> spillOf(const uint32_t *words, uint32_t count)
 {
     return count ? std::vector<uint32_t>(words, words + count) : std::vector<uint32_t>();
@@ -191,12 +181,8 @@ void attachResiduals(const NmbDirectKernel &k, std::vector<PackKernelEntry> &ent
 {
     if (!k.boundSame)
         return;
-    std::map<uint32_t, uint32_t> words = residualWordsByValue(pushWords(k.pushMask, k.push, k.regionWord),
-                                                              pushWords(k.boundMask, k.bound, k.regionWord));
-    if (k.boundSpillWords == k.spillWords)
-        for (const auto &[value, word] :
-             residualWordsByValue(spillWords(k.spill, k.spillWords), spillWords(k.boundSpill, k.boundSpillWords)))
-            words.emplace(value, word);
+    const std::map<uint32_t, uint32_t> words = residualWordsByValue(pushWords(k.pushMask, k.push, k.regionWord),
+                                                                    pushWords(k.boundMask, k.bound, k.regionWord));
     std::map<uint32_t, int> codes;
     for (const PackKernelEntry &e : entries)
         if (e.kind == KernelBuffer)
@@ -204,7 +190,10 @@ void attachResiduals(const NmbDirectKernel &k, std::vector<PackKernelEntry> &ent
     for (PackKernelEntry &e : entries) {
         const uint32_t code = probeComputeCode(e.slot);
         const auto word = words.find(code);
-        if (e.kind == KernelBuffer && codes[code] == 1 && word != words.end())
+        const uint8_t spilled = e.slot < 32 ? k.spillResidual[e.slot] : 0;
+        if (e.kind == KernelBuffer && spilled && spilled <= kSpillResidualWords)
+            e.window |= (kRootPushWords + spilled) << 24;
+        else if (e.kind == KernelBuffer && codes[code] == 1 && word != words.end())
             e.window |= ((word->second - kRootPush) / 4 + 1) << 24;
     }
 }
@@ -359,7 +348,7 @@ CompileOutcome directKernel(const NmbDirectKernel &k, const DirectNvk &nvk, cons
         const uint32_t bit = 1u << entry.slot;
         if ((entry.kind == KernelBuffer && (k.bufferReads & bit) && !(k.bufferWrites & bit)) ||
             (entry.kind == KernelTexture && (k.textureReads & bit) && !(k.textureWrites & bit)))
-            r.readOnlyEntries |= uint16_t(1u << i);
+            r.readOnlyEntries |= 1ull << i;
     }
     for (const auto &[offset, word] : pushWords(k.pushMask, k.push, k.regionWord)) {
         r.pushMask |= 1u << (offset - kRootPush) / 4;

@@ -144,11 +144,12 @@
 #                     own, rounded as Metal samples them, as the methods NVK writes
 #
 #   bazel test //drivers/TegraGM20BMetal/test:all
+load("@rules_cc//cc:objc_library.bzl", "objc_library")
 load("@rules_python//python:py_binary.bzl", "py_binary")
 load("@rules_python//python:py_test.bzl", "py_test")
 load("@rules_rust//rust:defs.bzl", "rust_test")
 load("//bazel/lint:defs.bzl", "lint_files")
-load("//bazel/testing:defs.bzl", "host_library", "host_test")
+load("//bazel/testing:defs.bzl", "SANITIZERS", "WARNINGS", "host_library", "host_test")
 
 lint_files()
 
@@ -907,6 +908,7 @@ host_test(
     srcs = [
         "raw_descriptors_test.cpp",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_descriptors.h",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_spill_table.h",
     ],
     cxx_std = "c++17",
 )
@@ -1915,6 +1917,7 @@ host_test(
         "//drivers/TegraGM20BMetal:raw/runtime/raw_record_parts.cpp",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_record_parts.h",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_set_reads.h",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_spill_table.h",
     ],
     cxx_std = "c++17",
 )
@@ -1932,6 +1935,7 @@ host_test(
         "//drivers/TegraGM20BMetal:raw/runtime/raw_record_parts.cpp",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_record_parts.h",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_set_reads.h",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_spill_table.h",
     ],
     cxx_std = "c++17",
 )
@@ -2244,28 +2248,48 @@ host_library(
     deps = FACADE_HOST_DEPS,
 )
 
-host_library(
+# The plugin's flags for the facade (gpu/defs.bzl _PLUGIN_CFLAGS: ARC, objc_library's default, and warnings as errors) and
+# the host tests' sanitizers, with host_library's toolchain features (asan drops apple_support's -D_FORTIFY_SOURCE=1)
+FACADE_OBJC_COPTS = FACADE_HOST_COPTS + WARNINGS + SANITIZERS + [
+    "-std=c++17",
+    "-g",
+]
+
+FACADE_OBJC_FEATURES = [
+    "asan",
+    "ubsan",
+    "external_include_paths",
+]
+
+objc_library(
     name = "raw_facade_host",
+    testonly = True,
     srcs = FACADE_HOST_HEADERS + [
         "raw_facade_standins.h",
         "raw_facade_standins.mm",
         "//drivers/TegraGM20BMetal:raw_facade_srcs",
     ],
-    copts = FACADE_HOST_COPTS + [
-        "-fobjc-arc",
-        "-std=c++17",
+    copts = FACADE_OBJC_COPTS,
+    features = FACADE_OBJC_FEATURES,
+    sdk_frameworks = [
+        "CoreFoundation",
+        "Foundation",
+        "IOKit",
+        "IOSurface",
+        "Metal",
     ],
-    cxx_std = "c++17",
     deps = FACADE_HOST_DEPS + [":raw_runtime_host"],
+    alwayslink = True,
 )
 
 # The facade over the kernel model (raw_facade_harness.h). raw_facade_arguments_test: its MTLArgumentEncoder over
 # descriptors and over a function's runs, nested encoders and refusals, and the gpuResourceID of its textures and samplers,
 # named at the first ask and forgotten when they go. raw_facade_heap_use_test: useHeap on its render and compute encoders
 # is one use of the heap in the plan and of its arena in each job at 4 and 404 textures, host-written for a shared heap;
-# a heap texture used alone names its own range.
-[host_test(
-    name = name,
+# a heap texture either encoder uses alone names its own range. Each test's unit holds the kernel model's IOKit calls.
+[objc_library(
+    name = name + "_unit",
+    testonly = True,
     srcs = FACADE_HOST_HEADERS + [
         name + ".mm",
         "raw_device_harness.h",
@@ -2273,26 +2297,26 @@ host_library(
         "raw_facade_standins.h",
         "raw_kernel_model.h",
     ],
-    copts = FACADE_HOST_COPTS + [
-        "-fobjc-arc",
-        "-std=c++17",
+    copts = FACADE_OBJC_COPTS,
+    features = FACADE_OBJC_FEATURES,
+    deps = FACADE_HOST_DEPS + [
+        ":raw_facade_host",
+        "@googletest//:gtest",
     ],
-    cxx_std = "c++17",
+    alwayslink = True,
+) for name in [
+    "raw_facade_arguments_test",
+    "raw_facade_heap_use_test",
+]]
+
+[host_test(
+    name = name,
+    srcs = ["raw_facade_harness.h"],
     linkopts = [
         "-Wl,-U,_switch_nmb_blend_color_words",
         "-lobjc",
-        "-framework",
-        "Foundation",
-        "-framework",
-        "Metal",
-        "-framework",
-        "IOSurface",
-        "-framework",
-        "IOKit",
-        "-framework",
-        "CoreFoundation",
     ],
-    deps = FACADE_HOST_DEPS + [":raw_facade_host"],
+    deps = [":%s_unit" % name],
 ) for name in [
     "raw_facade_arguments_test",
     "raw_facade_heap_use_test",

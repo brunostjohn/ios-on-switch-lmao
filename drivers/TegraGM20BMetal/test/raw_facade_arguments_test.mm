@@ -61,6 +61,7 @@ TEST(FacadeArgumentEncoder, WritesEveryArgumentWhereTheLayoutPlacesIt)
         EXPECT_EQ(encoder.alignment, 16u);
         EXPECT_EQ(encoder.encodedLength, layout.encodedLength);
         id<MTLBuffer> arguments = shared(256), data = shared(1024);
+        std::vector<uint8_t> want = bytesOf(arguments);
         id<MTLTexture> textures[3] = {texture(), texture(), texture()};
         id<MTLTexture> last = texture();
         id<MTLSamplerState> samplers[2] = {facade::sampler(), facade::sampler()};
@@ -74,7 +75,6 @@ TEST(FacadeArgumentEncoder, WritesEveryArgumentWhereTheLayoutPlacesIt)
         memcpy([encoder constantDataAtIndex:7], &constant, sizeof constant);
         [encoder setTexture:last atIndex:8];
 
-        std::vector<uint8_t> want(256, 0);
         raw::ArgumentEncoder ref(layout);
         ASSERT_EQ(ref.setBuffer(want.data(), want.size(), 64, 0), raw::ArgumentRefusal::None);
         EXPECT_EQ(ref.writeBuffer(data.gpuAddress, data.length, 48, 0), raw::ArgumentRefusal::None);
@@ -120,6 +120,25 @@ TEST(FacadeArgumentEncoder, ArraysOfBuffersAndConstantsTakeAStrideEach)
                   static_cast<uint8_t *>(arguments.contents) + 32);
         [encoder setBuffer:nil offset:0 atIndex:1];
         EXPECT_EQ(at(arguments, 8), 0u) << "a nil buffer is a null pointer";
+    }
+}
+
+TEST(FacadeArgumentEncoder, ARangeWithOneOffsetPastItsBufferWritesNone)
+{
+    @autoreleasepool {
+        id<MTLArgumentEncoder> encoder =
+            [facade::device() newArgumentEncoderWithArguments:@[ argument(MTLDataTypePointer, 0, 3) ]];
+        id<MTLBuffer> arguments = shared(64), a = shared(64), b = shared(64);
+        [encoder setArgumentBuffer:arguments offset:0];
+        const std::vector<uint8_t> untouched = bytesOf(arguments);
+        const id<MTLBuffer> three[3] = {a, b, a};
+        const NSUInteger offsets[3] = {0, 64, 8};
+        [encoder setBuffers:three offsets:offsets withRange:NSMakeRange(0, 3)];
+        EXPECT_EQ(bytesOf(arguments), untouched) << "b's offset is its length";
+        const NSUInteger inside[3] = {0, 63, 8};
+        [encoder setBuffers:three offsets:inside withRange:NSMakeRange(0, 3)];
+        EXPECT_EQ(at(arguments, 8), b.gpuAddress + 63);
+        EXPECT_EQ(at(arguments, 16), a.gpuAddress + 8);
     }
 }
 
@@ -190,6 +209,7 @@ TEST(FacadeArgumentEncoder, AFunctionsEncoderAndItsNestedOnesTakeTheBridgesRuns)
         EXPECT_EQ([nested newArgumentEncoderForBufferAtIndex:1], nil) << "a pointer to plain memory";
 
         id<MTLBuffer> top = shared(64), below = shared(64), data = shared(256);
+        std::vector<uint8_t> wantTop = bytesOf(top), wantBelow = bytesOf(below);
         id<MTLTexture> a = texture(), b = texture(), c = texture();
         const id<MTLTexture> pair[2] = {a, b};
         const float colour[4] = {0, 1, 0, 1};
@@ -208,6 +228,24 @@ TEST(FacadeArgumentEncoder, AFunctionsEncoderAndItsNestedOnesTakeTheBridgesRuns)
         EXPECT_EQ(memcmp(static_cast<const uint8_t *>(below.contents) + 16, colour, sizeof colour), 0);
         [nested setTexture:c atIndex:1];
         EXPECT_EQ(at(below, 8), data.gpuAddress + 16) << "a texture at a buffer's index";
+
+        const raw::ArgumentRuns runs[2] = {
+            {outer.encodedLength, outer.alignment, outer.runs.data(), uint32_t(outer.runs.size())},
+            {inner.encodedLength, inner.alignment, inner.runs.data(), uint32_t(inner.runs.size())}};
+        raw::ArgumentEncoder ref, refNested;
+        ASSERT_TRUE(raw::ArgumentEncoder::fromRuns(runs, 2, ref));
+        ASSERT_TRUE(ref.nested(0, refNested));
+        ASSERT_EQ(ref.setBuffer(wantTop.data(), wantTop.size(), 0, 0), raw::ArgumentRefusal::None);
+        EXPECT_EQ(ref.writeBuffer(below.gpuAddress, below.length, 0, 0), raw::ArgumentRefusal::None);
+        EXPECT_EQ(ref.write(word([a gpuResourceID]), 1, ArgumentKind::Texture), raw::ArgumentRefusal::None);
+        EXPECT_EQ(ref.write(word([b gpuResourceID]), 2, ArgumentKind::Texture), raw::ArgumentRefusal::None);
+        ASSERT_EQ(refNested.setBuffer(wantBelow.data(), wantBelow.size(), 0, 0), raw::ArgumentRefusal::None);
+        EXPECT_EQ(refNested.write(word([c gpuResourceID]), 0, ArgumentKind::Texture), raw::ArgumentRefusal::None);
+        EXPECT_EQ(refNested.writeBuffer(data.gpuAddress, data.length, 16, 1), raw::ArgumentRefusal::None);
+        raw::ArgumentRefusal why;
+        memcpy(refNested.constantData(2, why), colour, sizeof colour);
+        EXPECT_EQ(bytesOf(top), wantTop);
+        EXPECT_EQ(bytesOf(below), wantBelow);
     }
 }
 

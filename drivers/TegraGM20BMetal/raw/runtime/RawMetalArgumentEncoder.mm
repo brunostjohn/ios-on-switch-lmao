@@ -264,6 +264,11 @@ static bool refused(const char *call, raw::ArgumentRefusal why, NSUInteger index
     if (refused("setBuffers", _encoder.fits(range.location, range.length, raw::ArgumentKind::Buffer), range.location))
         return;
     for (NSUInteger i = 0; i < range.length; i++)
+        if (buffers[i] && offsets[i] >= buffers[i].length) {
+            refused("setBuffers", raw::ArgumentRefusal::OffsetPastEnd, range.location + i);
+            return;
+        }
+    for (NSUInteger i = 0; i < range.length; i++)
         [self setBuffer:buffers[i] offset:offsets[i] atIndex:range.location + i];
 }
 

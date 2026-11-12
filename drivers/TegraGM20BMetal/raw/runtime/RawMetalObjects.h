@@ -70,6 +70,7 @@ static inline id twinPublish(id object, __strong id &slot, id made)
 @public
     std::string _constants;
     std::string _framework;
+    uint8_t _argumentBuffers;  // whether it takes an argument buffer at a buffer index: 0 not asked yet, 1 no, 2 yes
 }
 @property (nonatomic, copy) NSString *name;
 @end

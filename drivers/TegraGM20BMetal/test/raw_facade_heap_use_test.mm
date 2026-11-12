@@ -177,4 +177,21 @@ TEST_F(FacadeHeapUse, AHeapTextureUsedAloneNamesItsOwnRange)
     }
 }
 
+TEST_F(FacadeHeapUse, AHeapTextureAComputeEncoderUsesNamesItsOwnRange)
+{
+    @autoreleasepool {
+        place(10);
+        id<MTLCommandBuffer> cb = [[facade::device() newCommandQueue] commandBuffer];
+        id<MTLComputeCommandEncoder> compute = [cb computeCommandEncoder];
+        const id<MTLResource> two[2] = {placed[1], placed[2]};
+        [compute useResource:placed[0] usage:MTLResourceUsageRead];
+        [compute useResources:two count:2 usage:MTLResourceUsageRead];
+        [compute endEncoding];
+        [pass(cb) endEncoding];
+        const auto jobs = commit(cb);
+        ASSERT_FALSE(jobs.empty());
+        EXPECT_EQ(arenaUses(jobs.back(), TegraGM20BSurfaceRange), 3u) << "the three used, none of the other seven";
+    }
+}
+
 }  // namespace

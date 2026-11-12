@@ -65,4 +65,55 @@ TEST(ReplayTwins, TheFirstMissingAttachmentIsNamedAndTheRestNotRead)
     EXPECT_EQ(r.visited, 2u);
 }
 
+struct Use {
+    raw::ReplayUse kind;
+};
+
+struct State {
+    bool readsArguments;
+};
+
+// RawMetalReplay.mm's rawArgumentsIn over a range's uses and the states it sets
+void *rawArguments(const std::vector<Use *> &uses, const std::vector<State *> &states)
+{
+    return raw::rawArgumentsIn(
+        [&](auto &&visit) {
+            for (Use *u : uses)
+                visit(u);
+        },
+        [](void *u) {
+            return static_cast<Use *>(u)->kind;
+        },
+        [&](auto &&visit) {
+            for (State *s : states)
+                visit(s);
+        },
+        [](void *s) {
+            return static_cast<State *>(s)->readsArguments;
+        });
+}
+
+TEST(ReplayTwins, AHeapWhoseResourcesTheRangeBindsReplays)
+{
+    Use heap{raw::ReplayUse::Heap}, texture{raw::ReplayUse::Other};
+    State slots{false};
+    EXPECT_EQ(rawArguments({&heap, &texture}, {&slots}), nullptr);
+    EXPECT_EQ(rawArguments({&texture}, {}), nullptr);
+}
+
+TEST(ReplayTwins, AHeapBesideAStateThatReadsArgumentBuffersFailsTheRange)
+{
+    Use heap{raw::ReplayUse::Heap};
+    State slots{false}, arguments{true};
+    EXPECT_EQ(rawArguments({&heap}, {&slots, &arguments}), &heap);
+}
+
+TEST(ReplayTwins, ABufferAnArgumentEncoderWroteFailsTheRangeWhateverItsStates)
+{
+    Use heap{raw::ReplayUse::Heap}, written{raw::ReplayUse::WrittenArguments};
+    State arguments{true};
+    EXPECT_EQ(rawArguments({&heap, &written}, {}), &written);
+    EXPECT_EQ(rawArguments({&written}, {&arguments}), &written);
+}
+
 }  // namespace
