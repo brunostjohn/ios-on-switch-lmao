@@ -275,13 +275,45 @@ void unlock(tgm_coh *c, tgm_tiled &t, void *client, uint32_t id, uint32_t option
 		released = true;
 	}
 }
+
+// A deferred surface (TegraGM20BCoherency.cpp: its last GPU import went while it was block-linear) has its texels moved
+// back to rows in place at its first lock, and is pitch from then on: the move its last import's release would have made.
+// A deferred entry another surface's ID finds is that surface's no longer: nothing to do for this lock.
+// A kIOSurfaceLockAvoidSync lock while its GPU writers still run goes to the view, which refuses it.
+bool lockedDeferred(tgm_coh *c, uint32_t index, uint32_t id, uint32_t options)
+{
+	const int deferred = tgm_coh_deferred_for(c, id);
+	if (deferred <= 0 || index != kLock)
+		return deferred < 0;
+	tgm_relayout_writer writers[TGM_RELAYOUT_MAX_WAITS];
+	if ((options & kLockAvoidSync) && tgm_coh_writers(c, writers, TGM_RELAYOUT_MAX_WAITS))
+		return false;
+	if (tgm_tiled_untile_deferred(c))
+		return false;
+	tgm_coh_undefer(c);
+	return true;
+}
 }  // namespace
+
+extern "C" void tgm_views_deferred_lock(uint32_t id, uint32_t options)
+{
+	if (!tgm_coh_any_deferred())
+		return;
+	if (tgm_coh *c = tgm_coh_find_tiled(id)) {
+		lockedDeferred(c, kLock, id, options);
+		tgm_coherency_put(c);
+	}
+}
 
 extern "C" int tgm_views_trap(void *client, uint32_t index, uint32_t id, uint32_t options)
 {
 	tgm_coh *c = tgm_coh_find_tiled(id);
 	if (!c)
 		return 0;
+	if (lockedDeferred(c, index, id, options)) {
+		tgm_coherency_put(c);
+		return 0;
+	}
 	int refused = 0;
 	bool held = false;
 	bool released = false;

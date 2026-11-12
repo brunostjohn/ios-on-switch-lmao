@@ -2,6 +2,7 @@
 // BO allocation and import, and the allocation policy.
 #include "TegraGM20BUserClientInternal.h"
 #include "SwitchGpuAllocatedMemory.h"
+#include "TegraGM20BRecord.h"
 
 namespace
 {
@@ -484,6 +485,7 @@ IOReturn AGXDeviceUserClient::boImport(const TegraGM20BAbiBoImport *in,
 	// Registered for the coherency every process's IOSurfaceLock/Unlock of the surface drives (TegraGM20BCoherency.cpp):
 	// writable (the GPU may write it) unless the task maps the pages read-only.
 	int covered = 0;
+	tgm_coherency_rows_at(bo->pas[0]);
 	const int gpuWrites =
 		static_cast<int>(!bo->readOnly && (in->flags & TegraGM20BImportGpuReads) == 0u);
 	bo->coh = tgm_coherency_add(bo->pas[0], in->surface_id, bo->pas, bo->npages,
@@ -504,6 +506,11 @@ IOReturn AGXDeviceUserClient::boImport(const TegraGM20BAbiBoImport *in,
 	if (pinned || adopted || tracked) {
 		releaseBo(bo);
 		return ioreturn(pinned ? pinned : adopted ? adopted : tracked);
+	}
+	if (bo->surface) {
+		tgm_record *record = tgm_record_of(bo->surface);
+		const int fresh = record && tgm_record_first_import(record) && tgm_surface_unwritten(bo->surface);
+		tgm_coherency_import(bo->coh, record, fresh);
 	}
 	const uint64_t added = TGM_STATS ? statsNowNs() : 0;
 	// The GPU does not snoop the CPU caches: what the task wrote must be in DRAM before the GPU reads it, and no dirty

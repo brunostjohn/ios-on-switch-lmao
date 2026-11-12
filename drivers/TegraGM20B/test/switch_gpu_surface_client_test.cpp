@@ -4,6 +4,7 @@
 #include "gm20b_surface_stubs.h"
 #include "drivers/TegraGM20B/SwitchGpuBacking.h"
 #include "drivers/TegraGM20B/SwitchGpuSurfaceGeometry.h"
+#include "drivers/TegraGM20B/TegraGM20BRecord.h"
 #include "drivers/TegraGM20B/TegraGM20BViews.h"
 
 namespace
@@ -96,6 +97,12 @@ uint32_t tegra_gm20b_ios_element_width(OSObject *s)
 uint32_t tegra_gm20b_ios_element_height(OSObject *s)
 {
 	return static_cast<Surface *>(s)->geometry.element_height;
+}
+
+uint32_t gSeed;
+uint32_t tegra_gm20b_ios_seed(OSObject *)
+{
+	return gSeed;
 }
 
 switch_gpu_backing *switch_gpu_backing_find_surface(uint32_t id)
@@ -423,4 +430,28 @@ TEST_F(SurfaceClient, GpuAdmissionChecksPublicationGateWithoutPreparingPixels)
     EXPECT_EQ(switch_gpu_surface_gpu_admission(&actual, &backing, SWITCH_GPU_BACKING_READ), 1);
     EXPECT_EQ(actual.memory.cpuUsers, 0u);
     EXPECT_EQ(prepareCalls, 0u);
+}
+
+// A surface reads unwritten only at the seed its shared entry was made with and made over memory of its own
+TEST(SurfaceUnwritten, OnlyTheFirstSeedOverItsOwnMemory)
+{
+	struct Raw : OSObject {
+		uint8_t bytes[0x400] = {};
+	} raw;
+	auto set = [&](unsigned long offset, uint64_t value) {
+		memcpy(reinterpret_cast<uint8_t *>(&raw) + offset, &value, sizeof(value));
+	};
+	gSeed = 0;
+	EXPECT_TRUE(tgm_surface_unwritten(&raw));
+	EXPECT_FALSE(tgm_surface_unwritten(nullptr));
+	gSeed = 1;
+	EXPECT_FALSE(tgm_surface_unwritten(&raw));
+	gSeed = 0;
+	for (const unsigned long field : {OriginalIOSurface::clientMemory, OriginalIOSurface::parent,
+					  OriginalIOSurface::memoryRegions}) {
+		set(field, 0x1000);
+		EXPECT_FALSE(tgm_surface_unwritten(&raw)) << std::hex << field;
+		set(field, 0);
+	}
+	EXPECT_TRUE(tgm_surface_unwritten(&raw));
 }

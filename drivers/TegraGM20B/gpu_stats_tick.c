@@ -483,6 +483,14 @@ void tgm_stats_tick(void)
 				  t[0], t[1], t[2], t[3], t[4], t[5], t[6] >> 10, t[7] >> 10,
 				  t[8] >> 10);
 		}
+		uint64_t r[5];
+		tgm_tiled_take_relayouts(r);
+		if (r[0] || r[1] || r[2] || r[3] || r[4]) {
+			nvxnu_log("tegra-gm20b: relayouts %llu tiling moves skipped (nothing had written "
+				  "the surface), %llu untiles deferred (%llu made at a CPU lock, %llu "
+				  "never: the memory went), %llu moves made\n",
+				  r[0], r[1], r[2], r[3], r[4]);
+		}
 	}
 #undef PT_NS
 }

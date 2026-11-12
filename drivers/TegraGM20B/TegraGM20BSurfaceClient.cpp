@@ -17,6 +17,7 @@
 #include "OriginalIOSurface.h"
 #include "OriginalIOSurfaceClient.h"
 #include "OriginalIOSurfaceRootUserClient.h"
+#include "TegraGM20BRecord.h"
 #include "TegraGM20BViews.h"
 #include "SwitchGpuSurfacePages.h"
 #include "SwitchGpuSurfaceGeometry.h"
@@ -33,6 +34,7 @@ extern "C" uint32_t tegra_vic_ios_plane_count(OSObject *surface);
 extern "C" uint32_t tegra_gm20b_ios_bpe(OSObject *surface);
 extern "C" uint32_t tegra_gm20b_ios_element_width(OSObject *surface);
 extern "C" uint32_t tegra_gm20b_ios_element_height(OSObject *surface);
+extern "C" uint32_t tegra_gm20b_ios_seed(OSObject *surface);
 extern "C" int switch_native_surface_prepare(OSObject *surface, uint32_t id, void *task, uint32_t options,
         switch_gpu_backing **logical, switch_gpu_cpu_lease **owned) __attribute__((weak));
 
@@ -155,6 +157,15 @@ extern "C" int tgm_surface_client_memory(uint32_t id, void *task)
 extern "C" int switch_gpu_surface_client_memory(const OSObject *surface)
 {
 	return static_cast<int>(at<uint64_t>(surface, OriginalIOSurface::clientMemory) != 0);
+}
+
+extern "C" int tgm_surface_unwritten(void *object)
+{
+	auto *surface = static_cast<OSObject *>(object);
+	return static_cast<int>(surface && tegra_gm20b_ios_seed(surface) == 0 &&
+				!at<uint64_t>(surface, OriginalIOSurface::clientMemory) &&
+				!at<uint64_t>(surface, OriginalIOSurface::parent) &&
+				!at<uint64_t>(surface, OriginalIOSurface::memoryRegions));
 }
 
 namespace {

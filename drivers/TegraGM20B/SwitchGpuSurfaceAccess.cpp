@@ -266,6 +266,7 @@ extern "C" int switch_gpu_surface_lock_will(void *opaque, uint32_t id, uint32_t 
 	if (!id || !initialize())
 		return id ? -12 : 0;
 	switch_gpu_surface_sweep();
+	tgm_views_deferred_lock(id, options);
 	switch_gpu_backing *backing = nullptr;
 	switch_gpu_cpu_lease *owned = nullptr;
 	void *descriptor = nullptr;

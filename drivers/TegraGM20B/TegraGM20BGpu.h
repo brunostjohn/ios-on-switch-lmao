@@ -452,6 +452,10 @@ int tgm_coherency_layout_fitted(struct tgm_coh *c, uint32_t width, uint32_t heig
  * import only samples, because another import or a CPU lock existed, because the shape does not tile, because the
  * tiling move failed; the live block-linear surfaces and their bytes; the CPU views' scratch bytes held now and at most */
 void tgm_tiled_take_stats(uint64_t out[9]);
+/* The same window's relayouts (TegraGM20BTiled.h tgm_relayout_count): tiling moves skipped because nothing had written
+ * the surface, untiles deferred to a CPU lock, deferred untiles a lock made, deferred surfaces gone block-linear, and the
+ * moves made */
+void tgm_tiled_take_relayouts(uint64_t out[5]);
 
 /* TegraGM20BRelayout.cpp: one copy-engine move of a block-linear surface (TegraGM20BRelayout.h), behind its GPU writers
  * (a semaphore acquire on each that is still alive), returning once the bytes are in DRAM (sleeping on the fence

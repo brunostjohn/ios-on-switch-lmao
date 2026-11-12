@@ -431,6 +431,7 @@ host_library(
         "//drivers/TegraGM20B:TegraGM20BGpu.h", "//drivers/TegraGM20B:SwitchGpuBacking.h", "//drivers/TegraGM20B:SwitchGpuSurfacePages.h",
         "//drivers/TegraGM20B:SwitchGpuSurfaceGeometry.h", "//drivers/TegraGM20B:TegraGM20BViews.h",
         "//drivers/TegraGM20B:TegraGM20BTiled.h", "//drivers/TegraGM20B:TegraGM20BLayout.h",
+        "//drivers/TegraGM20B:TegraGM20BRecord.h",
         "//drivers/TegraGM20B:TegraGM20BRelayout.h", "//drivers/TegraGM20B:TegraGM20BABI.h",
     ],
     deps = [":surface_kernel"],
@@ -556,6 +557,7 @@ host_library(
         "//drivers/TegraGM20B:TegraGM20BGpu.h",
         "//drivers/TegraGM20B:TegraGM20BLayout.h",
         "//drivers/TegraGM20B:TegraGM20BLayoutFit.h",
+        "//drivers/TegraGM20B:TegraGM20BRecord.h",
         "//drivers/TegraGM20B:TegraGM20BRelayout.h",
         "//drivers/TegraGM20B:TegraGM20BTiled.h",
         "//drivers/TegraGM20B:TegraGM20BViews.h",
@@ -573,7 +575,9 @@ host_test(
     srcs = [
         "gm20b_coherency_test.cpp",
         "gm20b_backing_stubs.cpp",
+        "gm20b_deferred_test.cpp",
         "gm20b_layout_ask_test.cpp",
+        "gm20b_record_model.h",
         "gm20b_tiled_model.h",
         "gm20b_views_test.cpp",
     ],
@@ -600,6 +604,7 @@ host_test(
     srcs = [
         "gm20b_fences_test.cpp",
         "gm20b_backing_stubs.cpp",
+        "gm20b_record_model.h",
         "gm20b_tiled_stubs.cpp",
     ],
     deps = [

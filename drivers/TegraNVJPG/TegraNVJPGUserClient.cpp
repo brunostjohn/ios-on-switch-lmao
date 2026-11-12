@@ -53,6 +53,10 @@
 #include "../../kits/SwitchTime/SwitchTime.h"
 #include "TegraNVJPGRequest.h"
 
+// TegraGM20B: a surface the GPU left block-linear after its last import (TegraGM20BRecord.h) has its texels moved back
+// to rows first, as that import's release did before the move was deferred: NVJPG reads and writes the pages as rows
+extern "C" void tegra_gm20b_surface_engine_rows(OSObject *surface) __attribute__((weak));
+
 extern "C" {
 vm_offset_t phystokv(uint64_t pa);
 }
@@ -546,6 +550,10 @@ IOReturn AppleJPEGDriverUserClient::decode(const void *in, uint32_t inSize, void
                  tegra_vic_surface_lookup(r.dst_id, current_task(), &job->dst))) {
         ret = kIOReturnBadArgument;
         why = "surface ID not found for this task";
+    }
+    if (!ret && tegra_gm20b_surface_engine_rows) {
+        tegra_gm20b_surface_engine_rows(src.surface);
+        tegra_gm20b_surface_engine_rows(job->dst.surface);
     }
     if (!ret && src.desc.protection) {
         ret = kIOReturnNotPermitted;  // Apple's 0xe00002e2 for a protected source

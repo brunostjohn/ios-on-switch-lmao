@@ -25,6 +25,11 @@ enum switch_gpu_path {
 	SWITCH_GPU_PATH_NATIVE_TILED,   /* NativeSurfaceView: a view of a block-linear picture (not the pitch planes) */
 	SWITCH_GPU_PATH_EVENT_JOB,      /* SharedEvents: a job that waits for or signals a shared event */
 	SWITCH_GPU_PATH_READY_ARM,      /* ResourceReady: a readiness notification armed for a refused admission */
+	SWITCH_GPU_PATH_RELAYOUT_FRESH,    /* a block-linear decision that moved nothing: no one had written the surface */
+	SWITCH_GPU_PATH_RELAYOUT_DEFERRED, /* a last import that left the surface block-linear for a CPU lock to untile */
+	SWITCH_GPU_PATH_RELAYOUT_LAZY,     /* a CPU lock that untiled a deferred surface */
+	SWITCH_GPU_PATH_RELAYOUT_NEVER,    /* a deferred surface whose memory went before anything asked for rows */
+	SWITCH_GPU_PATH_RELAYOUT_MOVED,    /* a tiling or untiling move in place */
 	SWITCH_GPU_PATH_COUNT
 };
 
