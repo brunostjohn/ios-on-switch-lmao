@@ -43,6 +43,8 @@ struct Display {
     uint64_t slotUses=0;
     int gpuDirect=-1,gpuPresentedEntry=-1;
     void cleanDomain() {}
+    void holdScanoutBacking(unsigned) {}
+    void releaseScanoutBacking(unsigned) {}
     Display() { ring.reset(3); }
     ~Display() { for(unsigned k=0;k<kSlots;++k) { dropSlot(k); delete[] slots[k].read; } }
 #include "../SwitchDirectSlots.h"
