@@ -209,6 +209,7 @@ static void forwardCall(RMEncoder *e, SEL selector, const void *argument)
 // What raw::RenderEncoder::prepare would refuse of a draw with the encoder's bindings, decided here (the same tests)
 - (void)checkDraw
 {
+    _drew = true;
     // no raw draw to decide (m2v drops a draw without a state too), or this encoder goes to m2v already (its pass refused: its
     // formats are not recorded, and every draw would hit enc.colorfmt for nothing, r7p5's "a=0 b=0")
     if (!_pipe || !_pipe->_raw || _cb->_encRefused)

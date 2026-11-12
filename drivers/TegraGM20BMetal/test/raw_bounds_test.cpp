@@ -175,25 +175,52 @@ raw::DrawGeometry quad(std::vector<float> &memory, float x0, float y0, float x1,
     return g;
 }
 
-TEST(RawRegion, AFetchMeetsOnlyTheWritesItsPixelsReach)
+// The same draw scissored to its rectangle: what the region test knows of a draw whose vertices it does not read
+raw::DrawGeometry scissored(std::vector<float> &memory, uint32_t x0, uint32_t y0, uint32_t x1, uint32_t y1)
+{
+    raw::DrawGeometry g = quad(memory, float(x0), float(y0), float(x1), float(y1));
+    g.limit = {x0, y0, x1, y1};
+    return g;
+}
+
+// A draw whose vertices were bounded before it was added (a pass's first draw, for its cover test)
+raw::WrittenRegion::Analysis bounded(const raw::DrawGeometry &g)
+{
+    raw::WrittenRegion::Analysis analysis(g);
+    raw::PixelBox box;
+    analysis.bounds(box);
+    return analysis;
+}
+
+TEST(RawRegion, AFetchMeetsOnlyTheWritesItsPixelLimitReaches)
 {
     std::vector<float> a, b, c, d;
     raw::WrittenRegion written;
-    written.add(quad(a, 0, 0, 100, 100));
-    written.add(quad(b, 200, 0, 300, 100));
-    EXPECT_FALSE(written.meets(quad(c, 120, 0, 180, 100)));
-    EXPECT_TRUE(written.meets(quad(d, 90, 0, 150, 100)));
+    written.add(scissored(a, 0, 0, 100, 100));
+    written.add(scissored(b, 200, 0, 300, 100));
+    EXPECT_FALSE(written.meets(scissored(c, 120, 0, 180, 100)));
+    EXPECT_TRUE(written.meets(scissored(d, 90, 0, 150, 100)));
     written.clear();
-    EXPECT_FALSE(written.meets(quad(d, 90, 0, 150, 100)));
+    EXPECT_FALSE(written.meets(scissored(d, 90, 0, 150, 100)));
 }
 
-TEST(RawRegion, AGuardPixelSeparatesTouchingRectangles)
+TEST(RawRegion, TheRegionTestReadsNoVertex)
+{
+    std::vector<float> a, b;
+    raw::WrittenRegion written;
+    raw::WrittenRegion::Analysis analysis(quad(a, 0, 0, 100, 100));
+    written.add(analysis);
+    EXPECT_TRUE(written.meets(quad(b, 200, 200, 300, 300)));
+    EXPECT_FALSE(analysis.evaluated());
+}
+
+TEST(RawRegion, ABoundedWriteKeepsAGuardPixelBetweenTouchingRectangles)
 {
     std::vector<float> a, b, c;
     raw::WrittenRegion written;
-    written.add(quad(a, 0, 0, 100, 100));
-    EXPECT_TRUE(written.meets(quad(b, 100, 0, 200, 100)));
-    EXPECT_FALSE(written.meets(quad(c, 102, 0, 200, 100)));
+    written.add(bounded(quad(a, 0, 0, 100, 100)));
+    EXPECT_TRUE(written.meets(scissored(b, 100, 0, 200, 100)));
+    EXPECT_FALSE(written.meets(scissored(c, 102, 0, 200, 100)));
 }
 
 TEST(RawRegion, AnUnboundedDrawCoversItsScissor)
@@ -204,8 +231,8 @@ TEST(RawRegion, AnUnboundedDrawCoversItsScissor)
     other.bounded = false;
     other.limit = {0, 0, 640, 720};
     written.add(other);
-    EXPECT_TRUE(written.meets(quad(b, 600, 0, 700, 100)));
-    EXPECT_FALSE(written.meets(quad(c, 700, 0, 800, 100)));
+    EXPECT_TRUE(written.meets(scissored(b, 600, 0, 700, 100)));
+    EXPECT_FALSE(written.meets(scissored(c, 700, 0, 800, 100)));
 }
 
 TEST(RawRegion, VerticesPastTheBoundBytesLeaveNoBox)
@@ -215,8 +242,8 @@ TEST(RawRegion, VerticesPastTheBoundBytesLeaveNoBox)
     raw::DrawGeometry g = quad(a, 0, 0, 10, 10);
     g.positionBytes = 3 * 16;
     g.limit = {0, 0, 640, 720};
-    written.add(g);
-    EXPECT_TRUE(written.meets(quad(b, 600, 0, 700, 100)));
+    written.add(bounded(g));
+    EXPECT_TRUE(written.meets(scissored(b, 600, 0, 700, 100)));
 }
 
 TEST(RawRegion, MoreWritesThanItHoldsMeetEverything)
@@ -237,9 +264,9 @@ TEST(RawRegion, IndexedDrawsReadTheirIndices)
     g.indices = reinterpret_cast<const uint8_t *>(indices);
     g.indexSize = 2;
     g.count = 6;
-    written.add(g);
-    EXPECT_FALSE(written.meets(quad(b, 150, 0, 200, 100)));
-    EXPECT_TRUE(written.meets(quad(b, 50, 50, 200, 100)));
+    written.add(bounded(g));
+    EXPECT_FALSE(written.meets(scissored(b, 150, 0, 200, 100)));
+    EXPECT_TRUE(written.meets(scissored(b, 50, 50, 200, 100)));
 }
 
 TEST(RawRegion, AFullTargetRectangleCoversTheRenderArea)
@@ -315,9 +342,9 @@ TEST(RawRegion, AnIndexedDrawReadsItsIndicesFromTheBaseVertex)
     g.first = 4;
     g.count = 6;
     raw::WrittenRegion written;
-    written.add(g);
-    EXPECT_FALSE(written.meets(quad(b, 0, 0, 100, 100)));
-    EXPECT_TRUE(written.meets(quad(c, 350, 50, 450, 150)));
+    written.add(bounded(g));
+    EXPECT_FALSE(written.meets(scissored(b, 0, 0, 100, 100)));
+    EXPECT_TRUE(written.meets(scissored(c, 350, 50, 450, 150)));
 }
 
 TEST(RawRegion, OneAnalysisSuppliesBoundsCoverageAndWrittenPixels)
@@ -361,15 +388,15 @@ TEST(RawRegion, FailedAnalysisRetainsTheConservativeScissor)
     EXPECT_TRUE(written.meets(quad(b, 400, 400, 450, 450)));
 }
 
-TEST(RawRegion, AnUnqueriedAnalysisKeepsWrittenBoundsLazy)
+TEST(RawRegion, AnUnqueriedAnalysisAnswersByItsLimit)
 {
     std::vector<float> a, b;
-    raw::DrawGeometry g = quad(a, 0, 0, 100, 100);
+    raw::DrawGeometry g = scissored(a, 0, 0, 100, 100);
     raw::WrittenRegion::Analysis analysis(g);
     raw::WrittenRegion written;
     written.add(analysis);
     EXPECT_FALSE(analysis.evaluated());
-    EXPECT_FALSE(written.meets(quad(b, 200, 200, 300, 300)));
+    EXPECT_FALSE(written.meets(scissored(b, 200, 200, 300, 300)));
 }
 
 TEST(RawRegion, ANewDrawAnalysisObservesChangedGeometry)

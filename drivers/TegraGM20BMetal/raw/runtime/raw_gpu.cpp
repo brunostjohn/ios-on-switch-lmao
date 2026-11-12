@@ -4603,8 +4603,10 @@ bool RenderEncoder::prepare(Pipeline *pl, uint32_t primitive, int32_t first, uin
     axis(vp_[0], empty ? 0 : vp_[2], areaW_, sc_[0], sc_[0] + sc_[2], x);
     axis(vp_[1], empty ? 0 : vp_[3], areaH_, sc_[1], sc_[1] + sc_[3], y);
     RAW_ENCODE_BEGIN(geometrySpan, Geometry);
+    // only a pass's first draw is bounded by its vertices, for the cover test below (its vertex bytes the recording's
+    // cached copy, RMCommandBuffer::_shadow); every other decision takes the draw's pixel limit
     DrawGeometry g;
-    if (pl->storageBits && !(pl->fetchBits & ~pl->storageBits))
+    if (!firstDraw || (pl->storageBits && !(pl->fetchBits & ~pl->storageBits)))
         g.limit = {x[0], y[0], x[1], y[1]};
     else
         g = geometry(*pl, primitive, first, indexed ? drawIndexCount_ : count, {x[0], y[0], x[1], y[1]});

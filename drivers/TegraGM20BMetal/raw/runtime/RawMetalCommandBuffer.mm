@@ -12,6 +12,7 @@ struct RMRecording {
     RMCommandPlan plan;
     std::vector<RMPass> passes;
     RMBytes bytes;
+    std::vector<uint8_t> shadow;
     std::vector<uint64_t> extra;
     std::vector<id> owners;
     std::unordered_set<void *> ownerKeys;
@@ -29,6 +30,7 @@ static void takeRecording(RMCommandBuffer *b)
             std::swap(b->_plan, r.plan);
             b->_passes.swap(r.passes);
             std::swap(b->_bytes, r.bytes);
+            b->_shadow.swap(r.shadow);
             b->_extra.swap(r.extra);
             b->_owners.swap(r.owners);
             b->_ownerKeys.swap(r.ownerKeys);
@@ -56,7 +58,7 @@ static void giveRecording(RMCommandBuffer *b)
     uint64_t bytes = 0;
     for (const raw::Buffer &k : b->_bytes.chunks)
         bytes += k.va ? k.length : kKeptBytes;  // (heap chunks are not kept)
-    if (bytes + b->_plan.storageBytes() + b->_extra.capacity() * 8 > kKeptBytes) {
+    if (bytes + b->_plan.storageBytes() + b->_extra.capacity() * 8 + b->_shadow.capacity() > kKeptBytes) {
         dropBytes(b->_bytes);
         return;
     }
@@ -64,6 +66,7 @@ static void giveRecording(RMCommandBuffer *b)
     std::swap(r.plan, b->_plan);
     r.passes.swap(b->_passes);
     std::swap(r.bytes, b->_bytes);
+    r.shadow.swap(b->_shadow);
     r.extra.swap(b->_extra);
     r.owners.swap(b->_owners);
     r.ownerKeys.swap(b->_ownerKeys);
@@ -71,6 +74,7 @@ static void giveRecording(RMCommandBuffer *b)
     r.passes.clear();
     r.bytes.at = 0;
     r.bytes.used = 0;
+    r.shadow.clear();
     r.extra.clear();
     r.owners.clear();
     r.ownerKeys.clear();

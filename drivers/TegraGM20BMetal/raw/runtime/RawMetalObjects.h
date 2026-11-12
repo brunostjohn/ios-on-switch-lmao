@@ -296,6 +296,9 @@ struct RMSharedEventWait {
     RMCommandPlan _plan;
     std::vector<RMPass> _passes;  // OpRender's (Cmd::x)
     RMBytes _bytes;               // OpBytes': chunk Cmd::c, offset Cmd::a, length Cmd::b
+    // a pass's vertex setBytes before its first draw, again in cached memory (Cmd::x: offset + 1): the draw's geometry
+    // the encode reads (the first draw's cover test) is not read from the write-combined chunk
+    std::vector<uint8_t> _shadow;
     std::vector<uint64_t> _extra;
     std::vector<id> _owners;
     std::unordered_set<void *> _ownerKeys;  // everything the tape names, retained until completion
@@ -404,6 +407,7 @@ uint64_t nextTraceId();
     uint32_t _passAt;       // its pass's RMPass (the command buffer's _passes)
     raw::DepthStencilDesc _ds;
     MTLRenderPassDescriptor *_pass;  // the command buffer's copy, which the raw encode and m2v's replay read
+    bool _drew;                      // a draw recorded
 }
 @end
 @interface RMBlitEncoder : RMEncoder
@@ -421,7 +425,7 @@ id rmComputeState(id device, id<MTLDevice> fallback, MTLComputePipelineDescripto
 // encode where it refuses one (*why)
 bool isKernelCommand(Op op);
 // OpBytes and OpKernelBytes (`m`): the bytes into the command buffer's RMBytes, m.a/b/c set (RawMetalBindings.mm)
-void recordBytes(RMCommandBuffer *cb, Cmd m, const void *bytes, NSUInteger length);
+void recordBytes(RMCommandBuffer *cb, Cmd m, const void *bytes, NSUInteger length, bool shadow = false);
 void replayKernel(id encoder, RMCommandBuffer *cb, const Cmd &c, std::set<RMBuffer *> &buffers);
 bool encodeKernel(raw::ComputeEncoder &e, raw::CommandBuffer &rc, RMCommandBuffer *cb, const Cmd &c, const char **why);
 

@@ -27,8 +27,14 @@ static bool bytesRoom(RMBytes &s, uint32_t padded, uint32_t &chunk, uint32_t &of
     return s.chunks[s.at].va != 0;
 }
 
-void recordBytes(RMCommandBuffer *cb, Cmd m, const void *bytes, NSUInteger length)
+void recordBytes(RMCommandBuffer *cb, Cmd m, const void *bytes, NSUInteger length, bool shadow)
 {
+    constexpr NSUInteger kShadowed = 1024;  // a Core Animation draw's vertices and its transform
+    if (shadow && length <= kShadowed) {
+        m.x = cb->_shadow.size() + 1;
+        cb->_shadow.insert(cb->_shadow.end(), static_cast<const uint8_t *>(bytes),
+                           static_cast<const uint8_t *>(bytes) + length);
+    }
     const uint32_t padded = std::max<uint32_t>((uint32_t(length) + 255) & ~255u, 256);
     uint32_t chunk, offset;
     if (!bytesRoom(cb->_bytes, padded, chunk, offset)) {
@@ -51,7 +57,7 @@ void recordBytes(RMCommandBuffer *cb, Cmd m, const void *bytes, NSUInteger lengt
         _bufVa[stage][index] = 0;  // its own 256-byte-aligned upload chunk
         _buf[stage][index] = nil;
     }
-    recordBytes(_cb, cmd(OpBytes, uint8_t(stage), uint16_t(index)), bytes, length);
+    recordBytes(_cb, cmd(OpBytes, uint8_t(stage), uint16_t(index)), bytes, length, stage == 1 && !_drew);
 }
 
 - (void)setVertexBytes:(const void *)bytes length:(NSUInteger)length atIndex:(NSUInteger)index
