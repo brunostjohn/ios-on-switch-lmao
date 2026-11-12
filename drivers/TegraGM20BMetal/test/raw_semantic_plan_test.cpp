@@ -82,6 +82,80 @@ TEST(SemanticPlan, SettersCollapseBeforeTheFirstDraw)
     EXPECT_EQ(plan.buffers[0].size(), 1u);
 }
 
+Cmd bytes(uint8_t stage, uint16_t slot, uint64_t offset)
+{
+    Cmd c = cmd(OpBytes, stage, slot);
+    c.a = offset;
+    c.b = 64;
+    return c;
+}
+
+TEST(SemanticPlan, ADrawsSetBytesCaptureCopiesOnlyTheChunkOfSlotsTheyEdited)
+{
+    RMCommandPlan plan;
+    plan.record(cmd(OpRender), {});
+    plan.record(binding(OpBuffer, 1, 20, 7, 4096), {});
+    constexpr uint32_t kDraws = 200;
+    for (uint32_t d = 0; d < kDraws; ++d) {
+        for (uint16_t slot = 0; slot < 4; ++slot)
+            plan.record(bytes(1, slot, uint64_t(d) * 1024 + slot * 256), {});
+        draw(plan);
+    }
+    ASSERT_EQ(plan.buffers[0].size(), kDraws);
+    for (uint32_t d = 0; d < kDraws; ++d) {
+        const auto &state = plan.renderStates[plan.draw(1 + d).state];
+        const auto bindings = plan.buffers[0][state.buffers[0]];
+        for (uint16_t slot = 0; slot < 4; ++slot) {
+            EXPECT_EQ(bindings[slot].source, raw::BufferBinding::Source::Bytes);
+            EXPECT_EQ(bindings[slot].offset, uint64_t(d) * 1024 + slot * 256);
+        }
+        EXPECT_EQ(bindings[20].object, object(7));
+        EXPECT_EQ(bindings[20].offset, 4096u);
+        EXPECT_EQ(bindings[5].source, raw::BufferBinding::Source::Unset);
+        uint32_t set = 0;
+        for (const raw::BufferBinding &b : bindings)
+            set += b.source != raw::BufferBinding::Source::Unset;
+        EXPECT_EQ(set, 5u);
+    }
+    // the first capture's eight chunks, then one a draw: far below a whole table a draw
+    EXPECT_LT(plan.buffers[0].storageBytes(), kDraws * sizeof(raw::BufferBindings) / 3);
+}
+
+TEST(SemanticPlan, ANewEncodersFirstCaptureEmptiesOnlyTheSlotsTheLastOneSet)
+{
+    RMCommandPlan plan;
+    plan.record(cmd(OpRender), {});
+    plan.record(bytes(1, 3, 256), {});
+    draw(plan);
+    plan.record(cmd(OpEnd), {});
+    plan.record(cmd(OpRender), {});
+    plan.record(bytes(1, 30, 512), {});
+    draw(plan);
+    const auto &state = plan.renderStates[plan.draw(plan.size() - 1).state];
+    const auto bindings = plan.buffers[0][state.buffers[0]];
+    EXPECT_EQ(bindings[3].source, raw::BufferBinding::Source::Unset);
+    EXPECT_EQ(bindings[30].offset, 512u);
+    EXPECT_EQ(bindings[30].source, raw::BufferBinding::Source::Bytes);
+}
+
+TEST(SemanticPlan, APointerMapKeepsItsStorageAcrossClears)
+{
+    raw::PointerMap<uint32_t> map;
+    for (uintptr_t i = 1; i <= 100; ++i)
+        EXPECT_TRUE(map.insert(object(i * 64), uint32_t(i)).second);
+    const size_t bytes = map.storageBytes();
+    for (unsigned round = 0; round < 50; ++round) {
+        map.clear();
+        EXPECT_EQ(map.find(object(64)), nullptr);
+        for (uintptr_t i = 1; i <= 100; ++i)
+            EXPECT_TRUE(map.insert(object(i * 64), uint32_t(i + round)).second);
+        EXPECT_FALSE(map.insert(object(64), 0).second);
+        EXPECT_EQ(*map.find(object(64 * 50)), 50 + round);
+    }
+    EXPECT_EQ(map.size(), 100u);
+    EXPECT_EQ(map.storageBytes(), bytes);
+}
+
 TEST(SemanticPlan, PassRasterGroupsSurviveBindingChangesAndSeparatePasses)
 {
     RMCommandPlan plan;
@@ -884,11 +958,11 @@ void applyEverySlot(const RMCommandPlan &plan, uint32_t index, uint32_t &applied
         previous = nullptr;
     for (uint32_t stage = 0; stage < 2; ++stage) {
         if (!previous || previous->buffers[stage] != next.buffers[stage]) {
-            const auto &bindings = plan.buffers[stage][next.buffers[stage]];
-            const auto *old = previous ? &plan.buffers[stage][previous->buffers[stage]] : nullptr;
+            const auto bindings = plan.buffers[stage][next.buffers[stage]];
+            const auto old = plan.buffers[stage][previous ? previous->buffers[stage] : next.buffers[stage]];
             for (uint32_t slot = 0; slot < bindings.size(); ++slot)
                 if (bindings[slot].source != raw::BufferBinding::Source::Unset &&
-                    (!old || bindings[slot] != (*old)[slot]))
+                    (!previous || bindings[slot] != old[slot]))
                     log.buffer(stage + 1, slot, bindings[slot]);
         }
         if (!previous || previous->textures[stage] != next.textures[stage]) {
