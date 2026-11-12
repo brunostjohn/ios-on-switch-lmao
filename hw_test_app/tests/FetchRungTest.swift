@@ -28,9 +28,9 @@ struct FetchRungTest: HWTest {
     static let draws = 10
     static let runs = 5
 
-    /// QuartzCore 24B119's states with a fetch-free form of each rung (raw/pack/ca/fetchfree.py; corpus lines tagged
-    /// os=24B119), each with the key its metrics take (its fragment blend) and its program's passes
-    /// (raw/pack/iterated/table.py; vcm's macro at its longest, which CAStateSweep's matrix selects)
+    /// The states with a fetch-free form of each rung (raw/pack/ca/fetchfree.py; corpus lines of each IPSW's
+    /// QuartzCore, tagged os=24B119 and os=21H461), each with the key its metrics take (its fragment blend) and its
+    /// program's passes (raw/pack/iterated/table.py; vcm's macro at its longest, which CAStateSweep's matrix selects)
     static let states: [Int: [(label: String, key: String, passes: Int)]] = [
         2: [("PBGRAXm_TimgBclrA2Xhf_Isrc", "clr", 0), ("PBGRAXm_TimgBaddA2Xhf_Isrc", "add", 0)],
         3: [
@@ -47,6 +47,12 @@ struct FetchRungTest: HWTest {
             ("PBGRAXm_TimgBcliA2Xhf_Isrc", "cli", 54), ("PBGRAXm_TimgBsatA2Xhf_Isrc", "sat", 64),
         ],
     ]
+
+    /// The iterated program a state's key names on this IPSW, as raw_chip_facts.h kIteratedProven takes it: QuartzCore
+    /// 21H461's colour matrix has no clamp pair, so its form is vcm.rows (raw/pack/fetchfree_link.py)
+    static func program(_ key: String) -> String {
+        key == "vcm" && ProcessInfo.processInfo.operatingSystemVersion.majorVersion < 27 ? "vcm.rows" : key
+    }
 
     func run(_ context: TestContext) async throws -> Outcome {
         let gpu = try GPU.make()
@@ -98,7 +104,7 @@ struct FetchRungTest: HWTest {
             let faster = us[1] > 0 && us[1] < us[0]
             if !faster { slower.append(label) }
             if passes > 0 { metrics.set("us_pass_\(label)", us[1] / Double(passes), digits: 2) }
-            outcomes.append((label, within && faster))
+            outcomes.append((Self.program(label), within && faster))
             forcedDraws += Self.draws * (Self.runs + 1)
         }
         let taken = (RawFacade.counters(of: gpu.device)[key] ?? 0) - before
