@@ -29,6 +29,7 @@ struct StoreShape {
     uint termBits;    // and a term's bits past a code
     uint srgb;        // the runtime's choice of the _srgb functions
     uint packed;      // and of the _packed ones
+    uint plane;       // a packed 10-bit plane's codes a texel (ycbcr_store_plane_packed_frag)
 };
 
 struct Out {
@@ -240,4 +241,20 @@ fragment uint ycbcr_store_chroma_packed_srgb_frag(Out in [[stage_in]], StandIn s
                                                   constant StoreShape &s [[buffer(0)]], Encode encode [[buffer(1)]])
 {
     return packedChroma<true>(stand_in, s, uint2(in.position.xy), encode);
+}
+
+// Word `at` of a row of R10Unorm_PACKED's or RG10Unorm_PACKED's plane (runtime/raw_packed_plane.h): code n of the row is
+// channel n % k of texel n / k, red then green, each a 10-bit code (max 1023, held toward zero)
+fragment uint ycbcr_store_plane_packed_frag(Out in [[stage_in]], StandIn stand_in [[texture(0)]],
+                                            constant StoreShape &s [[buffer(0)]])
+{
+    const uint2 at = uint2(in.position.xy);
+    const uint codes = stand_in.get_width() * s.plane;
+    uint word = 0;
+    for (uint i = 0; i < 3; i++) {
+        const uint n = 3 * at.x + i;
+        if (n < codes)
+            word |= texelCode(stand_in.read(uint2(n / s.plane, at.y))[n % s.plane], s) << (10 * i);
+    }
+    return word;
 }

@@ -234,6 +234,15 @@ xcrun clang++ -O1 -std=c++17 -fobjc-arc -I "$TREE/drivers/TegraGM20B" -I "$TREE/
     -x c++ "$RAW/fx/fx_mip.cpp" -framework Metal -framework Foundation -framework CoreVideo -framework IOSurface \
     -o "$OUT/ycbcrstoreoracle"
 echo "built $OUT/ycbcrstoreoracle"
+# packedplaneoracle: R10Unorm_PACKED and RG10Unorm_PACKED: the conversion and store states against this Mac's Metal's reads
+# ($OUT/packedplaneoracle pack)
+xcrun clang++ -O1 -std=c++17 -fobjc-arc "$HERE/packedplaneoracle.mm" "$RAW/runtime/raw_ycbcr.cpp" -framework Metal \
+    -framework Foundation -framework CoreVideo -framework IOSurface -o "$OUT/packedplaneoracle"
+echo "built $OUT/packedplaneoracle"
+# packedreaders: whether Metal, VideoToolbox or Core Image reads a packed 10-bit surface's spare bits ($OUT/packedreaders)
+xcrun clang++ -O1 -std=c++17 -fobjc-arc "$HERE/packedreaders.mm" -framework Metal -framework Foundation -framework CoreVideo \
+    -framework IOSurface -framework VideoToolbox -framework CoreImage -framework CoreMedia -o "$OUT/packedreaders"
+echo "built $OUT/packedreaders"
 # xroracle: the extended-range stand-ins, clears and Core Animation's passes against this Mac's Metal
 # ($OUT/xroracle pack/xr.metal <QuartzCore default.metallib>)
 xcrun clang++ -O1 -std=c++17 -fobjc-arc "$HERE/xroracle.mm" -framework Metal -framework Foundation -framework CoreVideo \

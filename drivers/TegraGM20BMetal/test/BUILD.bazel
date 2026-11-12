@@ -84,6 +84,8 @@
 #                     (ycbcrStoreDrawn) against it, and the targets planYcbcr takes
 #   raw_ycbcr_converted_store_test  the same of the converted and sRGB targets (raw_ycbcr_store_rule.h), and the sRGB
 #                     encode table (raw/pack/srgb_encode.h) against its rule over the read's knots
+#   raw_packed_plane_test  raw/runtime/raw_packed_plane.h: R10Unorm_PACKED and RG10Unorm_PACKED over 'p4xx' planes, the
+#                     codes their conversion reads and their store writes (Metal's reads: raw/test/packedplaneoracle.mm)
 #   raw_xr_test       raw/runtime/raw_xr.h: the extended-range formats the raw path keeps and the codes Metal's Clear
 #                     stores in them (an M4 Max's); against Metal's own reads and clears it is raw/test/xroracle.mm's
 #   raw_xr_pass_test  raw/runtime/raw_xr_pass.h: RGB10A8_2P_XR10 drawn in its planes: the alpha index (m2v's rule), a state's
@@ -1963,6 +1965,7 @@ host_test(
     name = "raw_ycbcr_test",
     srcs = [
         "raw_ycbcr_test.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_packed_plane.h",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_ycbcr.cpp",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_ycbcr.h",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_ycbcr_store.h",
@@ -1984,9 +1987,23 @@ host_test(
 )
 
 host_test(
+    name = "raw_packed_plane_test",
+    srcs = [
+        "raw_packed_plane_test.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_packed_plane.h",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_ycbcr.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_ycbcr.h",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_ycbcr_store.h",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_ycbcr_store_rule.h",
+    ],
+    cxx_std = "c++17",
+)
+
+host_test(
     name = "raw_ycbcr_store_test",
     srcs = [
         "raw_ycbcr_store_test.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_packed_plane.h",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_ycbcr.cpp",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_ycbcr.h",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_ycbcr_store.h",

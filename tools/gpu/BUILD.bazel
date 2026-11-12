@@ -63,7 +63,10 @@ py_library(
 py_test(
     name = "rawpack_test",
     srcs = ["rawpack_test.py"],
-    data = ["//drivers/TegraGM20BMetal:precompile/corpus.log"],
+    data = [
+        "//drivers/TegraGM20BMetal:precompile/corpus.log",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_ycbcr_store.h",
+    ],
     env = {
         "RAWPACK_BUILDS": " ".join(IPSWS.keys()),
         "RAWPACK_CORPUS": "$(rootpath //drivers/TegraGM20BMetal:precompile/corpus.log)",

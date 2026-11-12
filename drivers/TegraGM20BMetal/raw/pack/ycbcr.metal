@@ -189,3 +189,19 @@ fragment float4 ycbcr_packed_codes10_frag(Out in [[stage_in]], PackedPlane luma 
 {
     return codesTexel(luma, chroma, s, uint2(in.position.xy));
 }
+
+// R10Unorm_PACKED's and RG10Unorm_PACKED's image (runtime/raw_packed_plane.h): texture 0 the plane's words, buffer 0 the
+// texture's width, height and codes a texel (k); texel x's codes are codes k x and k x + 1 of its row
+struct PlaneShape {
+    uint width, height, channels;
+};
+
+fragment float4 ycbcr_packed_plane_frag(Out in [[stage_in]], PackedPlane words [[texture(0)]],
+                                        constant PlaneShape &s [[buffer(0)]])
+{
+    const uint2 at = uint2(in.position.xy);
+    const uint first = s.channels * at.x;
+    const float r = float(packedCode(words, first, at.y)) / 1023.0f;
+    const float g = s.channels == 2 ? float(packedCode(words, first + 1, at.y)) / 1023.0f : 0.0f;
+    return float4(r, g, 0.0f, 1.0f);
+}

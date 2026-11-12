@@ -19,15 +19,51 @@ namespace raw {
 // 0x37ff). A pass's stand-in is a memoryless attachment: its backing is the pass's, read by the store passes after it.
 constexpr uint32_t kYcbcrTargetStandIn = 125;
 
-// A two-plane YCbCr format whose passes the raw path renders through its stand-in, or refuses (ycbcrTargetRefusal): all but
-// RGB8_444_2P, which the frontend renders through its own stand-in
 // The fragment buffer slot the _srgb store states read pack/srgb_encode.h from (Device::srgbEncodeTable)
 constexpr uint32_t kSrgbEncodeSlot = 1;
 constexpr uint32_t kSrgbEncodeEntries = 8193;
 
+// R10Unorm_PACKED's and RG10Unorm_PACKED's codes a texel (raw_packed_plane.h), 0 for any other format
+inline uint32_t packedPlaneChannels(uint32_t pixelFormat)
+{
+    return pixelFormat == 588 ? 1 : pixelFormat == 589 ? 2 : 0;
+}
+
+// The format a pass renders an attachment of `pixelFormat` into, its pipelines made for it: the YCbCr formats' stand-in, or
+// a packed plane's R32Float or RG32Float. A fragment function returns no fewer components than its attachment's format has
+// (Metal's pipeline error, which m2v refuses), and R10Unorm_PACKED's and RG10Unorm_PACKED's return one or two.
+inline uint32_t ycbcrStandInFormat(uint32_t pixelFormat)
+{
+    switch (packedPlaneChannels(pixelFormat)) {
+    case 1:
+        return 55;  // R32Float
+    case 2:
+        return 105;  // RG32Float
+    default:
+        return kYcbcrTargetStandIn;
+    }
+}
+
+// A format whose passes the raw path renders through its stand-in, or refuses (ycbcrTargetRefusal): the two-plane YCbCr
+// formats but RGB8_444_2P, which the frontend renders through its own stand-in, and the packed 10-bit planes
 inline bool ycbcrRenderedFormat(uint32_t pixelFormat)
 {
-    return pixelFormat >= 500 && pixelFormat <= 548 && pixelFormat != 542;
+    return (pixelFormat >= 500 && pixelFormat <= 548 && pixelFormat != 542) || packedPlaneChannels(pixelFormat);
+}
+
+// The MTLColorWriteMask bits a state's attachment of such a format writes for its stand-in to hold every channel the
+// store reads: red, green and blue, or the packed plane's red (and green)
+inline uint32_t ycbcrTargetWrites(uint32_t pixelFormat)
+{
+    constexpr uint32_t kRed = 8, kGreen = 4, kBlue = 2;
+    switch (packedPlaneChannels(pixelFormat)) {
+    case 1:
+        return kRed;
+    case 2:
+        return kRed | kGreen;
+    default:
+        return kRed | kGreen | kBlue;
+    }
 }
 
 // Null where the raw path renders passes into a two-plane YCbCr attachment of `pixelFormat` (its stand-in, then the pack's
@@ -61,6 +97,8 @@ inline const char *ycbcrTargetRefusal(uint32_t pixelFormat)
     case 546:
     case 547:
     case 548:
+    case 588:
+    case 589:
         return nullptr;
     default:
         return "not a two-plane YCbCr format the raw path renders";
@@ -76,9 +114,10 @@ struct YcbcrStoreShape {
     uint32_t termBits = 6;
     uint32_t srgb = 0;    // the _srgb states': steps through pack/srgb_encode.h, bound at kSrgbEncodeSlot
     uint32_t packed = 0;  // the _packed states: R32Uint planes of three codes a word
+    uint32_t plane = 0;   // the _plane_packed state: a packed 10-bit plane's codes a texel (raw_packed_plane.h)
 };
 
-static_assert(sizeof(YcbcrStoreShape) == 96, "pack/ycbcr_store.metal StoreShape");
+static_assert(sizeof(YcbcrStoreShape) == 100, "pack/ycbcr_store.metal StoreShape");
 
 // A code target of `bits`-bit codes: 10-bit codes in a 16-bit word's high bits, a drawn float held toward zero
 inline YcbcrStoreShape ycbcrCodesShape(uint32_t bits, bool across, bool down)
@@ -120,7 +159,9 @@ inline YcbcrStoreShape ycbcrPackedShape(YcbcrStoreShape twin)
 
 // `n` codes of a packed row in its words, as the _packed states write them: code x at bit 10 (x % 3) of word x / 3, the slots
 // past the last code and each word's top two bits 0 (the reads' layout, m2v bind/ycbcr_convert.rs; Metal's store of a packed
-// target is not measured: an M4 Max's command buffer faults)
+// target is not measured: an M4 Max's command buffer faults). Nothing reads those spare bits: Metal's packed views,
+// VTPixelTransferSession and Core Image read the same with them set (raw/test/packedreaders.mm on macOS 27.2.1, HW Test
+// gpu.packed_spare_bits on the device), and CoreVideo's black blocks of 'p420', 'p422' and 'p444' hold them 0
 inline void ycbcrPackRow(const uint16_t *codes, uint32_t n, uint32_t *words)
 {
     for (uint32_t w = 0; w < (n + 2) / 3; w++) {
@@ -138,6 +179,17 @@ inline int32_t ycbcrScaled(int32_t sum, uint32_t mul)
     return (qm >> 8) + (((qm & 255) * 4096 + r * int32_t(mul)) >> 20);
 }
 
+// A stand-in channel's code as the store states take it (pack/ycbcr_store.metal texelCode): held as a half, toward zero
+// for a 10-bit code, clamped to [0, 1] (a NaN 0), times max rounded half up
+inline uint32_t ycbcrStoreCode(const YcbcrStoreShape &s, float v)
+{
+    if (std::isnan(v) || v <= 0.0f)
+        return 0;
+    if (v >= 1.0f)
+        return s.max;
+    return uint32_t(std::floor(ycbcrHeldHalf(v, s.towardZero != 0) * s.max + 0.5));
+}
+
 // The store states' codes of a pass's stand-in (`rgba`, width x height texels): the luma plane's and each chroma block's Cb, Cr
 // as the pack's ycbcr_store.metal computes them, step for step. A converted channel's step is on the grid of 1/8192: 4 rint(h
 // 2048), or an sRGB target's E[rint(h 8192)] (`encode`).
@@ -151,11 +203,7 @@ inline bool ycbcrStoreDrawn(const YcbcrStoreShape &s, const uint16_t *encode, co
         return ycbcrHeldHalf(v, s.towardZero != 0);
     };
     const auto code = [&](float v) {
-        if (std::isnan(v) || v <= 0.0f)
-            return 0u;
-        if (v >= 1.0f)
-            return s.max;
-        return uint32_t(std::floor(held(v) * s.max + 0.5));
+        return ycbcrStoreCode(s, v);
     };
     const auto step = [&](float v) {
         if (std::isnan(v) || v <= 0.0f)

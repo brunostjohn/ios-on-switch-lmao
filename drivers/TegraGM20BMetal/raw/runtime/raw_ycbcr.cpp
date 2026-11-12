@@ -4,6 +4,7 @@
 
 #include <cstring>
 
+#include "raw_packed_plane.h"
 #include "raw_ycbcr_store.h"
 
 namespace raw {
@@ -129,6 +130,7 @@ uint32_t imageFormat(YcbcrOutput o)
         return 70;  // RGBA8Unorm
     case YcbcrCodes10:
     case YcbcrCodes10Packed:
+    case YcbcrPackedPlane:
         break;
     }
     return 90;  // RGB10A2Unorm
@@ -156,6 +158,8 @@ bool isYcbcrFormat(uint32_t pixelFormat)
 
 const char *planYcbcr(const YcbcrFacts &f, YcbcrPlan &out)
 {
+    if (packedPlaneChannels(f.pixelFormat))
+        return planPackedPlane(f, out);
     const Format *format = findFormat(f.pixelFormat);
     if (!format)
         return "not a two-plane YCbCr format";

@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: MIT
-// Two-plane YCbCr textures over IOSurfaces (Metal formats 500 to 548): which ones the raw path takes and how its conversion
-// state (pack/ycbcr.metal) draws their image. The rules are m2v's (metal2vulkan-runtime ycbcr.rs `surface_planes`,
-// metal2vulkan bind/ycbcr_convert.rs), whose texels are an Apple M4's measured reads.
+// Two-plane YCbCr textures over IOSurfaces (Metal formats 500 to 548), and the packed 10-bit planes' (588, 589,
+// raw_packed_plane.h): which ones the raw path takes and how its conversion state (pack/ycbcr.metal) draws their image.
+// The rules are m2v's (metal2vulkan-runtime ycbcr.rs `surface_planes`, metal2vulkan bind/ycbcr_convert.rs), whose texels
+// are an Apple M4's measured reads.
 #pragma once
 
 #include <cstdint>
@@ -39,6 +40,8 @@ enum YcbcrOutput : uint8_t {
     YcbcrConvertedPacked = 5,
     YcbcrSrgbPacked = 6,
     YcbcrCodes10Packed = 7,
+    // R10Unorm_PACKED's and RG10Unorm_PACKED's (raw_packed_plane.h): RGB10A2Unorm of a texel's codes, blue 0 (and green)
+    YcbcrPackedPlane = 8,
 };
 
 struct YcbcrPlan {
