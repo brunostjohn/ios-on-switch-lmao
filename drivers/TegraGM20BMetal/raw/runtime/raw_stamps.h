@@ -65,6 +65,32 @@ inline void emitEndStamp(Push &p, uint64_t slots, uint32_t stamp)
     emitStamp(p, slots + stampOffset(stamp) + offsetof(StampSlot, end), stamp);
 }
 
+// A measured draw's stamps (raw_band_rates.h), after the command buffers' slots in the same page set: 3D report semaphore
+// releases at the end of the pipeline, after every earlier draw's writes, with PTIMER, so neither stalls the front end as a
+// wait for idle would. The tiled cache is flushed ahead of each, or a binned draw's pixels could land after its stamp.
+constexpr uint32_t kDrawStampSlots = 256;
+constexpr uint64_t kDrawStampBase = kStampSlots * sizeof(StampSlot);
+constexpr uint64_t kStampBytes = kDrawStampBase + kDrawStampSlots * sizeof(StampSlot);
+constexpr uint32_t kDrawStampWords = 5;
+constexpr uint32_t kDrawStampRelease =
+    NVDEF(NVB197, SET_REPORT_SEMAPHORE_D, OPERATION, RELEASE) |
+    NVDEF(NVB197, SET_REPORT_SEMAPHORE_D, RELEASE, AFTER_ALL_PRECEEDING_WRITES_COMPLETE) |
+    NVDEF(NVB197, SET_REPORT_SEMAPHORE_D, PIPELINE_LOCATION, ALL) |
+    NVDEF(NVB197, SET_REPORT_SEMAPHORE_D, STRUCTURE_SIZE, FOUR_WORDS) |
+    NVDEF(NVB197, SET_REPORT_SEMAPHORE_D, FLUSH_DISABLE, TRUE);
+
+inline uint64_t drawStampOffset(uint32_t slot, bool end)
+{
+    return kDrawStampBase + uint64_t(slot % kDrawStampSlots) * sizeof(StampSlot) +
+           (end ? offsetof(StampSlot, end) : offsetof(StampSlot, start));
+}
+
+inline void emitDrawStamp(Push &p, uint64_t stampsVa, uint32_t slot, bool end, uint32_t payload)
+{
+    const uint64_t va = stampsVa + drawStampOffset(slot, end);
+    p.inc(NVB197_SET_REPORT_SEMAPHORE_A, {uint32_t(va >> 32) & 0xff, uint32_t(va), payload, kDrawStampRelease});
+}
+
 inline uint64_t ptimerNanoseconds(uint64_t units)
 {
     return units / kPtimerNsDen * kPtimerNsNum + units % kPtimerNsDen * kPtimerNsNum / kPtimerNsDen;

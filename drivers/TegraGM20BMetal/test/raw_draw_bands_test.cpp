@@ -26,10 +26,9 @@ Rotation turned(uint8_t turn, uint32_t w, uint32_t h)
     return r;
 }
 
-// An instruction count whose full-screen draw lasts `ms` at the estimate's throughput
-uint64_t fullScreenWork(double ms)
+uint64_t milliseconds(double ms)
 {
-    return uint64_t(ms * 1000.0 * double(raw::kLaneInstructionsPerUs));
+    return uint64_t(ms * 1e6);
 }
 
 TEST(BandRect, TheBandsCoverTheAreaOnceWhateverTheBox)
@@ -89,7 +88,7 @@ TEST(BandRect, EveryTurnOfThePlaneIsCoveredOnce)
 TEST(BandCount, ADrawWithinTheBudgetIsWhole)
 {
     BandDraw d;
-    d.fragmentWork = fullScreenWork(0.9);
+    d.fragmentNs = milliseconds(0.9);
     d.rows = 720;
     EXPECT_EQ(raw::bandCount(d, TGM_APP_BAND_NS, raw::kBandsPerCommandBuffer), 1u);
 }
@@ -98,12 +97,12 @@ TEST(BandCount, ADrawWithinTheBudgetIsWhole)
 TEST(BandCount, ALongDrawGoesInBandsOfTheBudget)
 {
     BandDraw d;
-    d.fragmentWork = fullScreenWork(11.5);
+    d.fragmentNs = milliseconds(11.5);
     d.rows = 720;
     EXPECT_EQ(raw::bandCount(d, TGM_APP_BAND_NS, raw::kBandsPerCommandBuffer), 12u);
-    d.fragmentWork = fullScreenWork(40);
+    d.fragmentNs = milliseconds(40);
     EXPECT_EQ(raw::bandCount(d, TGM_APP_BAND_NS, raw::kBandsPerCommandBuffer), 40u);
-    d.fragmentWork = fullScreenWork(100);
+    d.fragmentNs = milliseconds(100);
     EXPECT_EQ(raw::bandCount(d, TGM_APP_BAND_NS, raw::kBandsPerCommandBuffer), 720u / raw::kMinBandRows);
     d.rows = 4096;
     EXPECT_EQ(raw::bandCount(d, TGM_APP_BAND_NS, raw::kBandsPerCommandBuffer), raw::kMaxBands);
@@ -112,7 +111,7 @@ TEST(BandCount, ALongDrawGoesInBandsOfTheBudget)
 TEST(BandCount, BandsStayAtLeastTheMinimumRowsTall)
 {
     BandDraw d;
-    d.fragmentWork = fullScreenWork(11.5);
+    d.fragmentNs = milliseconds(11.5);
     d.rows = 48;
     EXPECT_EQ(raw::bandCount(d, TGM_APP_BAND_NS, raw::kBandsPerCommandBuffer), 48u / raw::kMinBandRows);
     d.rows = raw::kMinBandRows;
@@ -122,18 +121,18 @@ TEST(BandCount, BandsStayAtLeastTheMinimumRowsTall)
 TEST(BandCount, RepeatedVertexWorkStaysUnderAnEighthOfThePixels)
 {
     BandDraw d;
-    d.fragmentWork = fullScreenWork(8);
+    d.fragmentNs = milliseconds(8);
     d.rows = 720;
-    d.vertexWork = d.fragmentWork / 8 / 3;
+    d.vertexNs = d.fragmentNs / 8 / 3;
     EXPECT_EQ(raw::bandCount(d, TGM_APP_BAND_NS, raw::kBandsPerCommandBuffer), 4u);
-    d.vertexWork = d.fragmentWork;
+    d.vertexNs = d.fragmentNs;
     EXPECT_EQ(raw::bandCount(d, TGM_APP_BAND_NS, raw::kBandsPerCommandBuffer), 1u);
 }
 
 TEST(BandCount, TheCommandBuffersShareAndANoBudgetNeverBands)
 {
     BandDraw d;
-    d.fragmentWork = fullScreenWork(11.5);
+    d.fragmentNs = milliseconds(11.5);
     d.rows = 720;
     EXPECT_EQ(raw::bandCount(d, TGM_APP_BAND_NS, 3), 3u);
     EXPECT_EQ(raw::bandCount(d, TGM_APP_BAND_NS, 0), 1u);

@@ -12,6 +12,9 @@ import UIKit
 /// kicks every frame, banded draws run back to back: the kernel's preemption latencies sampled for this process
 /// (debug kernels, TegraGM20BPathsABI.h `preempts`, `preempt_max_us`) must stay within the budget plus a context switch,
 /// and the unbanded arm shows what a whole draw costs the compositor. us_per_band is the GPU time a band took.
+/// The learned arm draws a loop of scattered texture reads, a few dozen instructions priced far under a band: its first
+/// draw is whole and measured (raw_band_rates.h), and once its state's rate is learned the same draw must be banded by
+/// the time it took, with the whole draw's pixels.
 struct DrawBandsTest: HWTest {
     let id = "gpu.sched.long_draw_bands"
     let name = "Long app draws in scissor bands: compositor wait and pixel identity"
@@ -23,6 +26,9 @@ struct DrawBandsTest: HWTest {
     static let budgetUs = 1000
     static let waitBoundUs = 2000
     static let kickSeconds = 1.5
+    static let memorySide = 2048
+    static let memoryReads: UInt32 = 8
+    static let learnRounds = 4
 
     struct Case {
         let name: String
@@ -72,6 +78,7 @@ struct DrawBandsTest: HWTest {
             if banded.bands < 2 * Self.draws { failures.append("\(test.name): \(banded.bands) bands for \(Self.draws) draws") }
             if whole.bands != 0 { failures.append("\(test.name): \(whole.bands) bands with the budget at 0") }
         }
+        failures += try await learned(gpu, metrics: &metrics)
         let blend = Self.cases[0]
         let pipeline = try gpu.render(vertex: "bands_vertex", fragment: blend.fragment, format: .bgra8Unorm) { _ in }
         let target = try gpu.texture(.bgra8Unorm, Self.width, Self.height)
@@ -112,6 +119,70 @@ struct DrawBandsTest: HWTest {
         await MainActor.run { layer.removeFromSuperlayer() }
         await context.clearStage()
         return failures.isEmpty ? .pass(metrics, proof: gpu.proof) : .fail(failures.joined(separator: "; "), metrics)
+    }
+
+    func learned(_ gpu: GPU, metrics: inout Metrics) async throws -> [String] {
+        let pipeline = try gpu.render(vertex: "bands_vertex", fragment: "bands_memory_fragment", format: .bgra8Unorm)
+        let side = Self.memorySide
+        let big = try gpu.texture(.rgba16Float, side, side, usage: [.shaderRead], storage: .shared)
+        var halves = [UInt16](repeating: 0, count: side * side * 4)
+        var seed: UInt32 = 0x2545_F491
+        for i in halves.indices {
+            seed = seed &* 1_664_525 &+ 1_013_904_223
+            halves[i] = 0x3000 | UInt16(seed >> 22)
+        }
+        halves.withUnsafeBytes {
+            big.replace(
+                region: MTLRegionMake2D(0, 0, side, side), mipmapLevel: 0, withBytes: $0.baseAddress!,
+                bytesPerRow: side * 8)
+        }
+        let target = try gpu.texture(.bgra8Unorm, Self.width, Self.height)
+        let encode = { (commands: MTLCommandBuffer) in
+            let pass = MTLRenderPassDescriptor()
+            pass.colorAttachments[0].texture = target
+            pass.colorAttachments[0].loadAction = .clear
+            pass.colorAttachments[0].storeAction = .store
+            let encoder = commands.makeRenderCommandEncoder(descriptor: pass)!
+            encoder.setRenderPipelineState(pipeline)
+            encoder.setFragmentTexture(big, index: 0)
+            var reads = Self.memoryReads
+            encoder.setFragmentBytes(&reads, length: 4, index: 0)
+            encoder.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 3)
+            encoder.endEncoding()
+        }
+        var failures: [String] = []
+        var wholeMs = 0.0
+        var learnedBands = 0
+        for round in 0..<Self.learnRounds {
+            let before = RawFacade.counters(of: gpu.device)
+            let timing = try await gpu.run(encode)
+            let after = RawFacade.counters(of: gpu.device)
+            let bands = (after["bands"] ?? 0) - (before["bands"] ?? 0)
+            let learned = (after["learned_draws"] ?? 0) - (before["learned_draws"] ?? 0)
+            if round == 0 {
+                wholeMs = timing.gpuMilliseconds
+                metrics.set("path_memory", timing.path)
+                metrics.set("us_memory_first", timing.gpuMilliseconds * 1000, digits: 0)
+                metrics.set("bands_memory_first", bands)
+                metrics.set("learned_memory_first", learned)
+                if learned < 1 { failures.append("memory: the first draw's GPU time taught its state nothing") }
+            } else {
+                learnedBands = bands
+                metrics.set("us_memory_learned", timing.gpuMilliseconds * 1000, digits: 0)
+            }
+        }
+        metrics.set("bands_memory_learned", learnedBands)
+        let banded = try await gpu.read(target, bytesPerPixel: 4)
+        _ = Self.budget(gpu.device, 0)
+        try await gpu.run(encode)
+        _ = Self.budget(gpu.device, Self.budgetUs * 1000)
+        let identical = banded == (try await gpu.read(target, bytesPerPixel: 4))
+        metrics.set("identical_memory", identical)
+        if !identical { failures.append("memory: banded pixels differ from the whole draw's") }
+        if wholeMs * 1000 > Double(2 * Self.budgetUs) && learnedBands < 2 {
+            failures.append("memory: a \(Int(wholeMs * 1000)) us draw went in \(learnedBands) bands once learned")
+        }
+        return failures
     }
 
     struct Drawn {

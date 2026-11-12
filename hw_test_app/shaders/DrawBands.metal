@@ -35,3 +35,19 @@ fragment float4 bands_fetch_fragment(BandsVertex v [[stage_in]], float4 fetched 
 {
     return float4(fract(fetched.rgb + bands_work(v.position.xy).rgb), 1.0f);
 }
+
+// The learned arm's draw: a loop whose length is a fragment argument, so the program's code is a few dozen instructions,
+// each pass a dependent read at a scattered texel of a 32 MB texture: priced far under a band by its instructions, many
+// milliseconds of memory traffic on the GPU.
+fragment float4 bands_memory_fragment(BandsVertex v [[stage_in]], texture2d<float, access::read> big [[texture(0)]],
+                                      constant uint &reads [[buffer(0)]])
+{
+    const uint2 at = uint2(v.position.xy);
+    uint h = at.x * 73856093u ^ at.y * 19349663u;
+    float4 sum = float4(0);
+    for (uint i = 0; i < reads; i++) {
+        h = h * 1664525u + 1013904223u + uint(sum.x * 7.0f);
+        sum += big.read(uint2(h & 2047u, (h >> 11) & 2047u));
+    }
+    return float4(fract(sum.rgb), 1.0f);
+}

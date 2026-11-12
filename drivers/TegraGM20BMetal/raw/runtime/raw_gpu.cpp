@@ -513,7 +513,7 @@ bool Device::init(std::string &err)
         !k_.allocControl(0x10000, zero_, ControlUse::ZeroPage) ||
         !k_.allocControl(0x1000, tickets_, ControlUse::InterlockTickets) ||
         !k_.allocControl(kColorTableBytes, colorTable_, ControlUse::ColorTable) ||
-        !k_.allocControl(kStampSlots * sizeof(StampSlot), stamps_, ControlUse::Stamps)) {
+        !k_.allocControl(kStampBytes, stamps_, ControlUse::Stamps)) {
         err = k_.error();
         return false;
     }
@@ -3296,6 +3296,7 @@ CommandBuffer *Device::begin()
             trimBackings();
         cb.stamp = stampOf(commitCount_);
     }
+    cb.timings.clear();
     // submission prologue, as NVK opens each submission: header/sampler caches (headers written since), constant, shader data and
     // texture caches, and the instruction caches where commit finds the heap grew
     uint64_t va;

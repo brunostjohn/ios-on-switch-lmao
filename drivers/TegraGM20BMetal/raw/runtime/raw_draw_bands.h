@@ -21,10 +21,11 @@
 
 namespace raw {
 
-// GM20B's fragment throughput: 2 SMs of 128 lanes at 768 MHz, one instruction a lane a clock. Core Animation's full-screen
-// straight-line programs measure 8-22% above pixels x instructions / it (narrow_blur_27: 3.66 ms for 670 instructions
-// over 1280x720); the instruction count taken from a program's code bytes also counts its scheduling words, one in four,
-// which covers that. A program's branches make it an overestimate, its loops an underestimate.
+// GM20B's fragment throughput: 2 SMs of 128 lanes at 768 MHz, one instruction a lane a clock: the static estimate a state's
+// draws are priced at until one of them is measured (raw_band_rates.h). Core Animation's full-screen straight-line programs
+// measure 8-22% above pixels x instructions / it (narrow_blur_27: 3.66 ms for 670 instructions over 1280x720); the
+// instruction count taken from a program's code bytes also counts its scheduling words, one in four, which covers that.
+// A program's branches make it an overestimate; its loops, its memory and its ROP traffic an underestimate.
 constexpr uint64_t kLaneInstructionsPerUs = 256ull * 768;
 
 // Half a job's internal fences (TegraGM20BMaxJobFences): past them a command buffer splits into more submissions, each a
@@ -59,20 +60,21 @@ inline bool writesMemory(const uint8_t *header)
     return (word0 >> 16 & 1) != 0;
 }
 
-// A draw's estimate in BatchWork's lane instructions: its pixels' work, and its vertices' work, which every band repeats
+// A draw's GPU time: its pixels' (raw_band_rates.h: learned, else the static estimate), and its vertices', which every band
+// repeats
 struct BandDraw {
-    uint64_t fragmentWork = 0, vertexWork = 0;
+    uint64_t fragmentNs = 0, vertexNs = 0;
     uint32_t rows = 0;  // the rows of its pixel box
 };
 
 // Into how many bands a draw goes: 1 draws it whole. `left`: the bands its command buffer may still take.
 inline uint32_t bandCount(const BandDraw &d, uint64_t budgetNs, uint32_t left)
 {
-    const uint64_t ns = workNs(d.fragmentWork);
+    const uint64_t ns = d.fragmentNs;
     if (!budgetNs || ns <= budgetNs)
         return 1;
     uint64_t n = std::min<uint64_t>({(ns + budgetNs - 1) / budgetNs, kMaxBands, d.rows / kMinBandRows, left});
-    while (n > 1 && d.vertexWork * (n - 1) > d.fragmentWork / 8)
+    while (n > 1 && d.vertexNs * (n - 1) > ns / 8)
         n--;
     return n > 1 ? uint32_t(n) : 1u;
 }

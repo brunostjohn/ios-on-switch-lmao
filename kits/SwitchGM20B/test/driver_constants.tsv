@@ -46,6 +46,10 @@ raw_stamps.h	kStampWords	policy	push words of a stamp
 raw_stamps.h	kPtimerNsNum	policy	PTIMER to ns on this part (raw_stamps.h)
 raw_stamps.h	kPtimerNsDen	policy	PTIMER to ns on this part (raw_stamps.h)
 raw_stamps.h	kStampSlots	policy	stamp page layout
+raw_stamps.h	kDrawStampSlots	policy	measured draws' stamp ring (raw_band_rates.h)
+raw_stamps.h	kDrawStampBase	policy	stamp page layout
+raw_stamps.h	kStampBytes	policy	stamp page layout
+raw_stamps.h	kDrawStampWords	policy	push words of a draw stamp
 raw_mme.h	kAbi	policy	raw macro ABI version
 raw_mme.h	kDraw	policy	raw macro slot
 raw_mme.h	kDrawIndexed	policy	raw macro slot

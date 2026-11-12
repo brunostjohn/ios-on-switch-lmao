@@ -64,6 +64,33 @@ TEST(RawStamps, ACommandBuffersTwoReleasesTimeIt)
                 HasSubstr("emitEndStamp(p, d.stamps_.va, stamp);"));
 }
 
+// A measured draw's two releases (raw_band_rates.h): 3D report semaphores at the end of the pipeline, after the earlier
+// draws' writes, writing PTIMER, never stalling the front end; each in its own slot past the command buffers' page
+TEST(RawStamps, AMeasuredDrawsReleasesTimeIt)
+{
+    uint32_t start[kDrawStampWords], end[kDrawStampWords];
+    Push ps{start, start + kDrawStampWords}, pe{end, end + kDrawStampWords};
+    const uint64_t pageVa = 0xc0'0000'0000ull;
+    emitDrawStamp(ps, pageVa, kDrawStampSlots + 3, false, 41);
+    emitDrawStamp(pe, pageVa, kDrawStampSlots + 3, true, 41);
+    ASSERT_EQ(ps.at, start + kDrawStampWords);
+    EXPECT_EQ(start[0], Push::hdr(1, 0, NVB197_SET_REPORT_SEMAPHORE_A, 4));
+    EXPECT_EQ(uint64_t(start[1]) << 32 | start[2], pageVa + kStampSlots * sizeof(StampSlot) + 3 * sizeof(StampSlot));
+    EXPECT_EQ(uint64_t(end[1]) << 32 | end[2], pageVa + kStampSlots * sizeof(StampSlot) + 3 * sizeof(StampSlot) + 16);
+    EXPECT_EQ(start[3], 41u);
+    // OPERATION 1:0 RELEASE, RELEASE 4:4 after writes, FLUSH_DISABLE 2:2, PIPELINE_LOCATION 15:12 ALL, FOUR_WORDS 28:28
+    EXPECT_EQ(start[4], 1u << 4 | 1u << 2 | 0xfu << 12);
+    EXPECT_EQ(end[4], start[4]);
+    alignas(StampSlot) uint8_t page[kStampBytes] = {};
+    const StampRelease a{41, 0, 5'000}, b{41, 0, 5'000 + 6'144};
+    memcpy(page + drawStampOffset(3, false), &a, sizeof a);
+    memcpy(page + drawStampOffset(3, true), &b, sizeof b);
+    uint64_t ns = 0;
+    ASSERT_TRUE(stampedNanoseconds(*reinterpret_cast<const StampSlot *>(page + drawStampOffset(3, false)), 41, ns));
+    EXPECT_EQ(ns, 10'000u);
+    EXPECT_FALSE(stampedNanoseconds(*reinterpret_cast<const StampSlot *>(page + drawStampOffset(3, false)), 40, ns));
+}
+
 TEST(RawStamps, OneSecondOfTheOscillatorIsOneSecond)
 {
     EXPECT_EQ(31'250'000ull * kPtimerNsDen, 19'200'000ull * kPtimerNsNum);

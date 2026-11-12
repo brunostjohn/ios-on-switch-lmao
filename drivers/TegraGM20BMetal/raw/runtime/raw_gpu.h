@@ -78,6 +78,7 @@
 #include "raw_ycbcr.h"
 #include "raw_rotation.h"
 #include "raw_draw_bands.h"
+#include "raw_band_rates.h"
 #include "../fx/fx_mip.h"
 
 namespace raw {
@@ -438,6 +439,7 @@ struct Pipeline {
     uint8_t samples = 1;  // its key's rasterSampleCount: a pass of attachments of that many samples draws it
     // SET_HYBRID_ANTI_ALIAS_CONTROL's passes: more than one where it shades per sample, whose sample masks differ (raw_samples.h)
     uint8_t samplePasses = 1;
+    mutable BandRate bandRate;  // what its draws cost the GPU, learned from its measured ones (raw_band_rates.h)
     uint8_t readBits = 0;   // colors its draws read as they were: blended into, or written through a partial mask
     uint8_t fetchBits = 0;  // colors it reads by framebuffer fetch
     uint32_t depthFormat =
@@ -705,7 +707,10 @@ private:
     // the prepared draw's words, whole or in scissor bands (raw_draw_bands.h)
     void emitDraw(bool indexed, uint32_t first, uint32_t count, uint32_t instances, uint32_t root,
                   uint32_t baseInstance);
-    uint32_t drawBands(uint32_t vertices, uint32_t instances) const;
+    uint64_t drawUnits(uint32_t instances) const;
+    uint32_t drawBands(uint32_t vertices, uint32_t instances, uint64_t units) const;
+    bool measureDraw(uint64_t units, DrawTiming &t);
+    void stampDraw(Push &p, const DrawTiming &t, bool end);
     Pipeline *pipeline_ = nullptr, *emitted_ = nullptr;
     void bindState(Push &p, const Pipeline &pl);
     bool measuringInline() const;
@@ -1018,6 +1023,7 @@ public:
 
     uint32_t draws = 0, passes = 0, blits = 0, bands = 0;
     uint32_t stamp = 0;  // its GPU time's slot (raw_stamps.h), for Device::gpuNanoseconds once it completed
+    std::vector<DrawTiming> timings;  // its measured draws, for Device::learnDrawTimes once it completed
 
 private:
     friend class Device;
@@ -1486,6 +1492,8 @@ public:
 
     // A completed command buffer's GPU time from its stamps; false when its slot holds a later one's
     bool gpuNanoseconds(uint32_t stamp, uint64_t &ns) const;
+    // a completed command buffer's measured draws, each teaching its state's rate (raw_band_rates.h)
+    void learnDrawTimes(const std::vector<DrawTiming> &timings);
 
     bool lost(uint32_t seqno) const
     {
@@ -1650,6 +1658,7 @@ public:
         std::atomic<uint64_t> splitPrologues{0};  // split draws' prologue launches (raw_split.cpp)
         std::atomic<uint64_t> reopenTicks{0};     // the last reopen that made a channel, mach_absolute_time
         std::atomic<uint64_t> bandedDraws{0}, bands{0};  // raw_draw_bands.h
+        std::atomic<uint64_t> learnedDraws{0};           // raw_band_rates.h
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
         std::atomic<uint64_t> splitLaunches{0};
         std::atomic<uint64_t> interlockDraws{0}, storageBarriers{0};
@@ -1735,6 +1744,7 @@ public:
 private:
     friend class CommandBuffer;
     friend class RenderEncoder;
+    std::atomic<uint32_t> drawStamps_{0};  // measured draws' stamp slots taken (raw_stamps.h kDrawStampSlots)
     friend class BlitEncoder;
     friend class ComputeEncoder;
 #ifdef SWITCH_RAW_HARNESS_MARKS

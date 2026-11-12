@@ -733,6 +733,8 @@ __attribute__((objc_externally_retained)) static bool encodeRawAttempt(RMCommand
     cb->_seqno = seq;
     cb->_channelGeneration = generation;
     cb->_stamp = cb->_segs.size() == 1 && cb->_segs.front().raw ? rc->stamp : 0;
+    if (cb->_stamp)
+        cb->_timings = std::move(rc->timings);
     RAW_DIAGNOSTIC(d.stats.levelPasses += levelPasses);
     RAW_DIAGNOSTIC(gRM->stats.draws += rc->draws);
     RAW_DIAGNOSTIC(gRM->stats.passes += rc->passes);
