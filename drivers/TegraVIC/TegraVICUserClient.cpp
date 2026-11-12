@@ -108,8 +108,8 @@ constexpr uint32_t kVtableSlots = 200;  // both classes have under 192; copying 
 struct Conn {
     IOUserClient *client;  // not retained: set in newUserClient, cleared in its free
     task_t task;
-    mach_port_t port;  // registered with IOConnectSetNotificationPort; queued replies carry it, a replaced one's
-                       // replies fail harmlessly (the port right is released when replaced)
+    mach_port_t port;  // registered with IOConnectSetNotificationPort; queued replies carry it without a right of
+                       // their own, so it is not replaced while a job is pending
     IOLock *lock;
     uint32_t pending;  // jobs queued or running
     uint32_t waiting;  // queued jobs whose events have not fired, under gQueueLock
@@ -569,10 +569,6 @@ IOReturn transform(Conn *conn, const void *in, uint32_t size)
     // Apple's driver: a callback makes the call asynchronous; setAsyncReference64(port, callback, refcon) from the
     // request and one reply argument, cb_info. SkipAsyncCallback, or no registered port, runs it without a reply.
     job->async = r.cb_fn != 0;
-    const mach_port_t port = conn->port;
-    job->reply = job->async && (job->plan.callback != 0u) && port != MACH_PORT_NULL;
-    if (job->reply)
-        iouc_set_async_reference64(job->ref, port, r.cb_fn, r.cb_refcon, conn->task);
     job->info = r.cb_info;
     conn->client->retain();
     job->client = conn->client;
@@ -588,6 +584,12 @@ IOReturn transform(Conn *conn, const void *in, uint32_t size)
         return kIOReturnAborted;
     }
     conn->pending++;
+    // The reply holds no right of its own: the port is read with the job counted, and tegra_vic_register_port keeps
+    // the right while a job is pending
+    const mach_port_t port = conn->port;
+    job->reply = job->async && (job->plan.callback != 0u) && port != MACH_PORT_NULL;
+    if (job->reply)
+        iouc_set_async_reference64(job->ref, port, r.cb_fn, r.cb_refcon, conn->task);
     IOLockUnlock(conn->lock);
     job->eventReady = job->events == nullptr;
     const bool async = job->async;
@@ -669,9 +671,15 @@ IOReturn tegra_vic_register_port(const IOUserClient *self, mach_port_t port, UIn
         return kIOReturnBadArgument;
     IOLockLock(conn->lock);
     const mach_port_t old = conn->port;
-    conn->port = port;
+    const bool busy = old != MACH_PORT_NULL && old != port && conn->pending;
+    if (!busy)
+        conn->port = port;
     IOLockUnlock(conn->lock);
-    if (old != MACH_PORT_NULL && old != port)
+    // A refused right is the MIG server's to release: it does so when this returns an error
+    if (busy)
+        return kIOReturnBusy;
+    // The replaced port's right, or this call's second right to the port already kept
+    if (old != MACH_PORT_NULL)
         iouc_release_port(old);
     return kIOReturnSuccess;
 }

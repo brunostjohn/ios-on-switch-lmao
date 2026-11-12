@@ -64,6 +64,11 @@
 #   gm20b_regdump_test       TegraGM20BRegDump.h against regs_gm20b.txt, the L4T capture's register list: same offsets,
 #                            order and list id; the dump's lines are the capture's form, one value per register; the
 #                            kernel log's lines carry every value once, in order, under a count and sum
+#   switch_gpu_async_rights_test     an asynchronous call's wake port right on every return of EventObserve and
+#                                    ResourceObserve: MIG releases it after an error, the notification after a success
+#   switch_gpu_compiler_rights_test  the same for the shader compiler broker's Compile: a request answered, abandoned or
+#                                    refused (past its connection's bound, a stack not the compiler's, no compiler while
+#                                    one was lost a third time)
 #
 #   bazel test //drivers/TegraGM20B/test:all
 load("//bazel/lint:defs.bzl", "lint_files")
@@ -1330,4 +1335,55 @@ host_test(
         "//drivers/TegraGM20B:SwitchGpuShaderCompilerPolicy.h",
     ],
     copts = ["-Idrivers/TegraGM20B"],
+)
+
+# An asynchronous call's wake port right on every return (the MIG server releases it after an error, the method owns it
+# after a success): SwitchGpuAsyncReference, EventObserve and ResourceObserve, and the shader compiler broker's Compile
+host_shims(
+    name = "async_rights_kernel",
+    headers = [
+        "IOKit/IOBufferMemoryDescriptor.h",
+        "IOKit/IOLib.h",
+        "IOKit/IOMemoryDescriptor.h",
+        "IOKit/IOUserClient.h",
+        "libkern/c++/OSBoolean.h",
+        "pexpert/pexpert.h",
+    ],
+    stubs = "switch_gpu_async_rights_stubs.h",
+)
+
+host_test(
+    name = "switch_gpu_async_rights_test",
+    srcs = [
+        "switch_gpu_async_rights_test.cpp",
+        "//drivers/TegraGM20B:SwitchGpuAsyncReference.h",
+        "//drivers/TegraGM20B:SwitchGpuUserEvents.h",
+        "//drivers/TegraGM20B:SwitchGpuUserResources.h",
+        "//drivers/TegraGM20B:TegraGM20BABI.h",
+    ],
+    copts = ["-Idrivers/TegraGM20B"],
+    deps = [":async_rights_kernel"],
+)
+
+host_library(
+    name = "compiler_broker",
+    srcs = [
+        "//drivers/TegraGM20B:SwitchGpuShaderCompiler.cpp",
+        "//drivers/TegraGM20B:SwitchGpuShaderCompilerQueue.cpp",
+    ],
+    hdrs = [
+        "//drivers/TegraGM20B:SwitchGpuAsyncReference.h",
+        "//drivers/TegraGM20B:SwitchGpuShaderCompiler.h",
+        "//drivers/TegraGM20B:SwitchGpuShaderCompilerPolicy.h",
+        "//drivers/TegraGM20B:SwitchGpuShaderCompilerQueue.h",
+        "//drivers/TegraGM20B:TegraGM20BCompilerABI.h",
+    ],
+    deps = [":async_rights_kernel"],
+)
+
+host_test(
+    name = "switch_gpu_compiler_rights_test",
+    srcs = ["switch_gpu_compiler_rights_test.cpp"],
+    copts = ["-Idrivers/TegraGM20B"],
+    deps = [":async_rights_kernel", ":compiler_broker"],
 )

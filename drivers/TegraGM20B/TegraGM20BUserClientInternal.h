@@ -386,6 +386,7 @@ class AGXDeviceUserClient : public IOUserClient
     IOReturn eventObserve(const TegraGM20BAbiEventObserve *input,
 			  IOExternalMethodArguments *arguments, SwitchGpuAsyncReference &reference);
     IOReturn resourceObserve(const TegraGM20BAbiResourceObserve *, IOExternalMethodArguments *, SwitchGpuAsyncReference &);
+    IOReturn externalCall(uint32_t selector, IOExternalMethodArguments *arguments, SwitchGpuAsyncReference &asyncReference);
     JobScratch job_ = {};
     JobScratch channelJobs_[kMaxChannels] = {};
     IOLock *submitLocks_[kMaxChannels] = {};

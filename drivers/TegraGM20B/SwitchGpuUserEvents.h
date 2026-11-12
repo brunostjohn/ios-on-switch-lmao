@@ -43,7 +43,6 @@ IOReturn AGXDeviceUserClient::eventObserve(const TegraGM20BAbiEventObserve *inpu
 	const int result = events_.observe(input->handle, input->value, input->cookie,
 					   eventNotified, notification, terminal);
 	if (result) {
-		releaseAsyncReference64(notification->reference);
 		IODelete(notification, EventNotification, 1);
 		release();
 	}

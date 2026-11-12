@@ -3,6 +3,11 @@
 #include <IOKit/IOUserClient.h>
 #include <string.h>
 
+// An asynchronous call's reference, which carries a send right to its wake port. Until the method returns, the right
+// belongs to the MIG request: on an error the server destroys the request and releases the right itself (ipc_kobject.c,
+// ipc_kobject_server), so a method owns the right only by succeeding. settle() is given the method's result: a success
+// releases the right unless the method took it, an error leaves it to MIG. Releasing it on an error as well drops one
+// send right too many, the panic "send right count overflow (delta: -1)".
 class SwitchGpuAsyncReference
 {
 public:
@@ -17,11 +22,19 @@ public:
 		}
 	}
 
-	~SwitchGpuAsyncReference()
+	SwitchGpuAsyncReference(const SwitchGpuAsyncReference &) = delete;
+	SwitchGpuAsyncReference &operator=(const SwitchGpuAsyncReference &) = delete;
+
+	IOReturn settle(IOReturn result)
 	{
-		IOUserClient::releaseAsyncReference64(reference_);
+		if (result == kIOReturnSuccess)
+			IOUserClient::releaseAsyncReference64(reference_);
+		reference_[0] = 0;
+		return result;
 	}
 
+	// The right goes with the reference. A method that fails after taking it drops `output` unreleased (MIG releases
+	// the right); one that succeeds leaves the one release to whatever holds `output`.
 	void take(OSAsyncReference64 output)
 	{
 		memcpy(output, reference_, sizeof(reference_));

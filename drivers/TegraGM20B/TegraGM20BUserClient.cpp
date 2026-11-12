@@ -456,6 +456,12 @@ IOReturn AGXDeviceUserClient::externalMethod(uint32_t selector,
 	(void)target;
 	(void)reference;
 	SwitchGpuAsyncReference asyncReference(arguments);
+	return asyncReference.settle(externalCall(selector, arguments, asyncReference));
+}
+
+IOReturn AGXDeviceUserClient::externalCall(uint32_t selector, IOExternalMethodArguments *arguments,
+					   SwitchGpuAsyncReference &asyncReference)
+{
 	if (!arguments || arguments->structureInputDescriptor ||
 	    arguments->structureOutputDescriptor || arguments->scalarInputCount ||
 	    arguments->scalarOutputCount)

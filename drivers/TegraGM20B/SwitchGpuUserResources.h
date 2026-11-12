@@ -72,10 +72,8 @@ IOReturn AGXDeviceUserClient::resourceObserve(const TegraGM20BAbiResourceObserve
 		retain();
 		result = ioreturn(resources_.observe(resolved, count, input->cookie, eventNotified,
 						     notification));
-		if (result) {
-			releaseAsyncReference64(notification->reference);
+		if (result)
 			release();
-		}
 	}
 	IOLockUnlock(lock_);
 	if (result)
