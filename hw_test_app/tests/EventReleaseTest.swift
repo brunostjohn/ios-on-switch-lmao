@@ -5,9 +5,10 @@ import Metal
 
 /// A shared event's signal in the middle of a raw command buffer (drivers/TegraGM20BMetal/raw/runtime/RawMetalInlineSignals.mm
 /// and the kernel's event words, TegraGM20BJobABI.h method 40): a compute dispatch and a fill, the signal, then compute work
-/// several times longer, as one job whose pushes release the signal into the event's word. A listener must hear the value
+/// four times longer, as one job whose pushes release the signal into the event's word. A listener must hear the value
 /// before the command buffer completes, and a command buffer committed right after it on another queue, waiting for the
-/// value, must copy the fill. Reports the command buffer's jobs alone (the facade's jobs counter: one, where the signal
+/// value while the work before the signal still runs (the kernel's events line counts its wait on the word), must copy the
+/// fill. Reports the command buffer's jobs alone (the facade's jobs counter: one, where the signal
 /// used to end a job and start another), the signals released mid-job, and how long after the work before the signal the
 /// listener heard it.
 struct EventReleaseTest: HWTest {
@@ -39,9 +40,9 @@ struct EventReleaseTest: HWTest {
             encoder.endEncoding()
         }
 
-        /// The work before the signal: a short dispatch, then the fill the waiter copies
-        func before(_ commands: MTLCommandBuffer, fill: UInt8) {
-            dispatch(commands, iterations: 64)
+        /// The work before the signal: a dispatch, then the fill the waiter copies
+        func before(_ commands: MTLCommandBuffer, fill: UInt8, iterations: UInt32) {
+            dispatch(commands, iterations: iterations)
             let blit = commands.makeBlitCommandEncoder()!
             blit.fill(buffer: source, range: 0..<EventReleaseTest.bytes, value: fill)
             blit.endEncoding()
@@ -73,7 +74,7 @@ struct EventReleaseTest: HWTest {
         let probe = try await gpu.run { work.dispatch($0, iterations: 4096) }
         let probeMs = probe.gpuTimed ? probe.gpuMilliseconds : probe.wallMilliseconds
         let iterations = UInt32(4096 * min(8.0, max(1.0, Self.longMilliseconds / max(probeMs, 0.01))))
-        let before = try await gpu.run { work.before($0, fill: 1) }
+        let before = try await gpu.run { work.before($0, fill: 1, iterations: iterations / 4) }
         metrics.set("long_iterations", Int(iterations))
         metrics.set("before_wall_ms", before.wallMilliseconds, digits: 3)
 
@@ -117,7 +118,7 @@ struct EventReleaseTest: HWTest {
             heardSignal.signal()
         }
         guard let commands = work.gpu.queue.makeCommandBuffer() else { throw TestFailure("no command buffer") }
-        work.before(commands, fill: fill)
+        work.before(commands, fill: fill, iterations: iterations / 4)
         commands.encodeSignalEvent(event, value: value)
         work.dispatch(commands, iterations: iterations)
         commands.addCompletedHandler { _ in ended.value = CFAbsoluteTimeGetCurrent() }
