@@ -13,11 +13,13 @@ import Metal
 /// private depth texture loaded beside it and a private depth/stencil texture stored then loaded beside it (each through a
 /// stand-in laid out as the plane, turned in and back by the pack's turn copies and stencil bits), rotation 4's load, which Metal makes transposed in each tile a draw reaches (its expected bytes
 /// the reference pass loading pass 1's frame flipped top to bottom, every tile reached by a full-frame draw whose fragments
-/// are discarded), a load with no draw, which leaves the plane as it is, a second plane of another turn and frame beside
-/// it and private textures of other sizes (each landing by its own store map over the render area, the rest kept): those
+/// are discarded), loads whose draws reach some tiles alone (RotatedReachCells.swift: rotation 4's plane and a second
+/// plane of rotation 4 beside the target), a load with no draw, which leaves the plane as it is, a second plane of another
+/// turn and frame beside it and private textures of other sizes (each landing by its own store map over the render area, the rest kept): those
 /// cells FAIL when they run anywhere else (path= other than raw).
 /// native_cells / native_raw count the required cells and those that ran raw; tie_wrong counts the pixels the plane's
-/// rasteriser decides apart from the frame's where an edge runs through pixel centres (its tie rule turns too).
+/// rasteriser decides apart from the frame's where an edge runs through pixel centres (its tie rule turns too); r4_edge_wrong
+/// those of a rotation-4 load whose rectangle ends on tile edges, which Metal's reach takes past them.
 struct RotatedTargetTest: HWTest {
     let id = "gpu.x1.rotated_target"
     let name = "Rotated drawables: rendered straight into the turned plane, each rotation"
@@ -39,7 +41,7 @@ struct RotatedTargetTest: HWTest {
         var metrics = Metrics()
         var failures: [String] = []
         var r4Load = PathTally()
-        var native = 0, nativeRaw = 0, tieWrong = 0
+        var native = 0, nativeRaw = 0, tieWrong = 0, edgeWrong = 0
         for turn in 1...4 {
             for shape in Self.shapes {
                 let cells = RotatedCells(
@@ -61,7 +63,7 @@ struct RotatedTargetTest: HWTest {
                         }
                         if result.wrong != 0 { failures.append("\(name): \(result.wrong) pixels off Metal's store") }
                     case .informational:
-                        tieWrong += result.wrong
+                        if cell == .edgeLoad { edgeWrong += result.wrong } else { tieWrong += result.wrong }
                     }
                 }
             }
@@ -69,6 +71,7 @@ struct RotatedTargetTest: HWTest {
         metrics.set("native_cells", native)
         metrics.set("native_raw", nativeRaw)
         metrics.set("tie_wrong", tieWrong)
+        metrics.set("r4_edge_wrong", edgeWrong)
         metrics.set("r4_load_paths", r4Load.isEmpty ? "-" : r4Load.text)
         metrics.set("paths", gpu.paths.text)
         return failures.isEmpty
@@ -77,12 +80,12 @@ struct RotatedTargetTest: HWTest {
 }
 
 enum RotatedCell: String, CaseIterable {
-    case clear, draw, load, idleLoad, points, fetch, position, derivative, fwidth, depth, resolve, beside, keptDepth,
-        keptStencil, turns, sized, tie
+    case clear, draw, load, idleLoad, partLoad, pointLoad, edgeLoad, besideR4, points, fetch, position, derivative,
+        fwidth, depth, resolve, beside, keptDepth, keptStencil, turns, sized, tie
 
     enum Kind { case native, informational }
 
-    var kind: Kind { self == .tie ? .informational : .native }
+    var kind: Kind { self == .tie || self == .edgeLoad ? .informational : .native }
 }
 
 struct RotatedStates {
@@ -193,12 +196,7 @@ struct RotatedCells {
         beside.second = nil
         beside.plainSecond = nil
         for (n, pass) in passes(cell).enumerated() {
-            if n == 1 && cell == .load && turn == 4 {
-                // Metal loads a rotation-4 plane transposed: the reference loads pass 1's frame flipped top to bottom
-                let first = try await gpu.read(reference, bytesPerPixel: 4)
-                let flipped = (0..<h).flatMap { y in first[((h - 1 - y) * w * 4)..<((h - y) * w * 4)] }
-                try await gpu.upload(Array(flipped), to: reference, bytesPerRow: w * 4)
-            }
+            if n == 1 { try await transposedLoad(cell, into: reference) }
             beside.turnedRun = false
             let plain = try await gpu.run { pass($0, reference) }.path
             beside.turnedRun = true
@@ -255,6 +253,14 @@ struct RotatedCells {
             ]
         case .idleLoad:
             return [encode(load: .clear, drawn), encode(load: .load) { _ in }]
+        case .partLoad:
+            return [encode(load: .clear, drawn), partLoad()]
+        case .pointLoad:
+            return [encode(load: .clear, drawn), pointLoad()]
+        case .edgeLoad:
+            return [encode(load: .clear, drawn), edgeLoad()]
+        case .besideR4:
+            return [besideR4, besideR4Load]
         case .points:
             return [
                 encode(load: .clear) { e in

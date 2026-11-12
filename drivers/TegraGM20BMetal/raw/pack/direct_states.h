@@ -29,6 +29,8 @@ inline raw::ProbeTextures probeTextures(const std::string &line, bool ours)
                                                                 {"f two_plane_store", {MTLPixelFormatRGBA16Float, 1}},
                                                                 {"f ycbcr_store_", {MTLPixelFormatRGBA32Float, 1}},
                                                                 {"f turn_copy", {MTLPixelFormatR32Uint, 1}},
+                                                                {"f turn_masked", {MTLPixelFormatR32Uint, 1}},
+                                                                {"f turn_reach", {MTLPixelFormatR32Uint, 1}},
                                                                 {"f turn_depth", {MTLPixelFormatDepth32Float, 1}},
                                                                 {"f stencil_bits_", {MTLPixelFormatR32Uint, 1}}};
     for (const auto &[fragment, textures] : sets)

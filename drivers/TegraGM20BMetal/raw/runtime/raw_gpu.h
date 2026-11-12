@@ -69,6 +69,7 @@
 #include "raw_rotation.h"
 #include "raw_turn_copy.h"
 #include "raw_stencil_bits.h"
+#include "raw_reach.h"
 #include "../fx/fx_mip.h"
 
 namespace raw {
@@ -461,6 +462,8 @@ struct Pipeline {
     // runtime record's turned variant's pipeline (a pack record's is one of `chosen`)
     bool turnedVariant = false, turnRefused = false;
     Pipeline *turnedTwin = nullptr;
+    bool vertexStores = false;      // its vertex program writes memory (SPH DOES_GLOBAL_STORE)
+    Pipeline *reachTwin = nullptr;  // Device::reachTwin's
 };
 
 // A state's fragment program split (raw_pack.h PackSplit): the twin that draws of rec.thresholdPixels pixels or more take, and
@@ -643,6 +646,15 @@ public:
     void end();
 
     void continuePass(uint8_t stores);
+    // raw_reach.h: the pass a reach target's, at `step` frame pixels a texel, of a frame `width` x `height`: viewports and
+    // scissors in the target's units, no depth/stencil state; and the state set last, its reach twin for the draws after
+    void beginReach(uint32_t step, uint32_t width, uint32_t height);
+    void takeReachTwin();
+    const char *reachRefusal() const
+    {
+        return reachWhy_;
+    }
+
     void beginSplitPlan()
     {
         splitPlan_.clear();
@@ -674,6 +686,9 @@ private:
     Device *dev_ = nullptr;
     PassDesc pass_;
     Push p_;
+    uint32_t reachStep_ = 0, reachW_ = 0, reachH_ = 0;
+    const char *reachWhy_ = nullptr;
+    const Pipeline *reachTwin_ = nullptr;  // the twin takeReachTwin set
     const Pipeline *extrasAtBegin_ = nullptr;  // set back by the pass's prologue, before its clears
     uint32_t *bodyStart_ = nullptr;
 
@@ -915,7 +930,11 @@ public:
     RenderEncoder *render(const PassDesc &pass);  // null: an attachment the raw path cannot render to
     // raw_turn_copy.h: each texel of `dst` from `src`'s at `map`, both of one texel size or depth format (a pass of the pack's
     // turn copy state; `src` given a texture header where it has none); false: *why
-    bool turnCopy(const Texture &dst, Texture &src, const TurnMap &map, const char **why);
+    bool turnCopy(const Texture &dst, Texture &src, const TurnMap &map, const char **why,
+                  const TurnMask *mask = nullptr);
+    // raw_reach.h: the tiles of the `width` x `height` frame of `pass` that its draws reach, drawn again from `draws`; false: *why
+    bool reach(const PassDesc &pass, uint32_t width, uint32_t height, DrawReplay &draws, PassReach &out,
+               const char **why);
     // A block-linear image of `width` x `height` texels of `format` (turnCopyFormat's, or a depth format), the device's backing
     // of tag `tag` for this command buffer: what a turn copy moves texels through; null where none can be had
     Texture *turnScratch(uint32_t format, uint32_t width, uint32_t height, uint32_t tag);
@@ -1157,6 +1176,8 @@ public:
     Pipeline *mipPipeline(uint32_t format);
     Pipeline *depthResolvePipeline(uint32_t format, uint32_t filter);  // raw_samples.h depthResolveState
     Pipeline *stencilBitsPipeline(uint32_t format, uint32_t samples, StencilSample pick);  // raw_stencil_bits.h
+    // raw_reach.h: `pl` drawing its geometry into a reach target; null: *why
+    Pipeline *reachTwin(Pipeline &pl, const char **why);
     // s's header under address map `map` (Texture::addressMap), made now if it is not yet
     bool samplerVariant(Sampler &s, uint8_t map);
     // A two-plane 4:4:4 surface's texture of RGB8_444_2P (542): its planes at `luma`/`chroma` (offsets in the allocation,
@@ -1721,6 +1742,10 @@ private:
     void offerVariants(Pipeline &pl, const PackPipeline &pp);
     bool placePackProgram(uint16_t index, PlacedProgram &out);
     std::deque<Pipeline> variantPipelines_;
+    std::deque<Pipeline> reachPipelines_;
+    std::deque<PackPipeline> reachRecords_;
+    // lock_ held: the push words a reach twin adds to its state's methods and to its restore (made with the first twin)
+    std::vector<uint32_t> reachMethods_, reachRestore_;
     SplitState *makeSplit(Pipeline &pl);
     bool placeSplitPrograms(const SplitSource &source, PlacedProgram &fs, uint32_t &prologue, uint64_t &prologueData,
                             uint32_t &prologueDataBytes);

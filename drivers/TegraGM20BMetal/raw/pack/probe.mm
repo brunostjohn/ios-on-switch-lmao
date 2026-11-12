@@ -160,6 +160,8 @@ int main(int argc, char **argv)
             {"f two_plane_store", tagged(MTLPixelFormatRGBA16Float)},
             {"f ycbcr_store_", tagged(MTLPixelFormatRGBA32Float)},
             {"f turn_copy", tagged(MTLPixelFormatR32Uint)},
+            {"f turn_masked", tagged(MTLPixelFormatR32Uint)},
+            {"f turn_reach", tagged(MTLPixelFormatR32Uint)},
             {"f turn_depth", tagged(MTLPixelFormatDepth32Float)},
             {"f stencil_bits_", tagged(MTLPixelFormatR32Uint)}};
         const std::vector<id<MTLTexture>> multisampled = tagged(MTLPixelFormatBGRA8Unorm, 4),

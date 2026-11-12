@@ -2,6 +2,8 @@
 #   raw_rotation_test raw/runtime/raw_rotation.h, raw_rotated_pass.h, raw_turn_copy.h: a turned plane's swizzle, viewport,
 #                     rectangles, turn words and turn copies put each frame pixel where Metal stores it (rotated.rs), keep
 #                     the winding, and which passes draw into it
+#   raw_reach_test    raw/runtime/raw_reach.h: the reach pass's scissor and viewport bounds against the tiles Metal reached, and
+#                     the masked turn copies leaving a rotation-4 plane or its stand-in as Metal's load and store do
 #   raw_stencil_bits_test  raw/runtime/raw_stencil_bits.h: each bit's stencil state as registers and the draw a bit,
 #                     which over a cleared target rebuild every stencil value and move it by the turn maps; the resolves'
 #                     samples and states
@@ -493,6 +495,17 @@ host_test(
         "//kits/SwitchGM20B:classes",
         "//kits/SwitchGM20BEmit:emit",
     ],
+)
+
+host_test(
+    name = "raw_reach_test",
+    srcs = [
+        "raw_reach_test.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_reach.h",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_rotation.h",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_turn_copy.h",
+    ],
+    cxx_std = "c++17",
 )
 
 host_test(

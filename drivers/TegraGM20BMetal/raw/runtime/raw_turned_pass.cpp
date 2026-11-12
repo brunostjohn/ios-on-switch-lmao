@@ -52,10 +52,13 @@ Texture *TurnedPass::standIn(CommandBuffer &rc, const Texture &t, uint32_t tag, 
 }
 
 Texture *TurnedPass::moved(CommandBuffer &rc, Texture &t, uint32_t tag, const TurnMap *load, const TurnMap *store,
-                           const char **why)
+                           const char **why, const TurnMap *reached)
 {
     Texture *s = standIn(rc, t, tag, why);
     if (!s || (load && !rc.turnCopy(*s, t, *load, why)))
+        return nullptr;
+    if (const TurnMask mask = turnMask(reach_, frameToPlane(rot_));
+        reached && mask.mask && !rc.turnCopy(*s, t, *reached, why, &mask))
         return nullptr;
     if (store)
         backs_.push_back({&t, s, within(*store, planeArea_)});
@@ -67,6 +70,8 @@ Texture *TurnedPass::moved(CommandBuffer &rc, Texture &t, uint32_t tag, const Tu
 
 bool TurnedPass::mirrored(CommandBuffer &rc, Texture &t, uint32_t tag, const char **why)
 {
+    if (!reach_.mask)
+        return true;
     Texture *temp = rc.turnScratch(turnCopyFormat(t.bpp), t.width, t.height, tag);
     if (!temp) {
         *why = "no scratch for a rotation-4 plane's load";
@@ -75,7 +80,8 @@ bool TurnedPass::mirrored(CommandBuffer &rc, Texture &t, uint32_t tag, const cha
     BlitEncoder *b = rc.blit();
     b->copyTexels(t, 0, 0, 0, *temp, 0, 0, 0, t.width, t.height);
     b->end();
-    return rc.turnCopy(t, *temp, planeMirror(t.width), why);
+    const TurnMask mask = turnMask(reach_, frameToPlane(rot_));
+    return rc.turnCopy(t, *temp, planeMirror(t.width), why, &mask);
 }
 
 bool TurnedPass::clearAhead(CommandBuffer &rc, const ColorAttachment &a, const Rect &area, bool draws, const char **why)
@@ -95,11 +101,12 @@ bool TurnedPass::clearAhead(CommandBuffer &rc, const ColorAttachment &a, const R
     return true;
 }
 
-bool TurnedPass::begin(CommandBuffer &rc, PassDesc &p, bool draws, const char **why)
+bool TurnedPass::begin(CommandBuffer &rc, PassDesc &p, DrawReplay &replay, const char **why)
 {
     backs_.clear();
     held_.clear();
     rot_ = {};
+    reach_ = {};
     for (uint32_t j = 0; j < p.count && j < 8 && !rot_.turned(); j++)
         if (const Texture *t = p.color[j].texture; t && t->rotation)
             rot_ = quarterFrame(*t);
@@ -109,6 +116,9 @@ bool TurnedPass::begin(CommandBuffer &rc, PassDesc &p, bool draws, const char **
     p.width = area.x1;
     p.height = area.y1;
     planeArea_ = rot_.rect(area);
+    const bool draws = replay.any();
+    if (loadsRotation4(p) && !rc.reach(p, area.x1, area.y1, replay, reach_, why))
+        return false;
     const TurnMap intoPlane = frameToPlane(rot_), outOfPlane = planeToFrame(rot_);
     for (uint32_t j = 0; j < p.count && j < 8; j++) {
         ColorAttachment &a = p.color[j];
@@ -119,7 +129,7 @@ bool TurnedPass::begin(CommandBuffer &rc, PassDesc &p, bool draws, const char **
         if (t->rotation && sameFrame(quarterFrame(*t), rot_)) {
             if (t->rotation != 4)
                 continue;
-            if (draws && loaded && !mirrored(rc, *t, kTurnTag + j, why))
+            if (loaded && !mirrored(rc, *t, kTurnTag + j, why))
                 return false;
             held_.push_back(*t);
             held_.back().rotation = 1;
@@ -132,8 +142,10 @@ bool TurnedPass::begin(CommandBuffer &rc, PassDesc &p, bool draws, const char **
             return false;
         if (t->rotation) {
             const Rotation own = frameOf(*t);
-            const TurnMap load = after(planeLoad(own, draws), intoPlane), store = after(outOfPlane, frameToPlane(own));
-            if (!(a.texture = moved(rc, *t, kTurnTag + 8 + j, loaded ? &load : nullptr, a.store ? &store : nullptr, why)))
+            const TurnMap load = after(planeLoad(own, false), intoPlane), store = after(outOfPlane, frameToPlane(own)),
+                          transposed = after(planeLoad(own, true), intoPlane);
+            if (!(a.texture = moved(rc, *t, kTurnTag + 8 + j, loaded ? &load : nullptr, a.store ? &store : nullptr, why,
+                                    loaded && own.turn == 4 ? &transposed : nullptr)))
                 return false;
             continue;
         }

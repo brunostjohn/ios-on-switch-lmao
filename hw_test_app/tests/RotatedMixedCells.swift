@@ -75,13 +75,13 @@ extension RotatedCells {
         return wrong
     }
 
-    private func fillSurface(_ plane: Plane, _ byte: UInt8) {
+    func fillSurface(_ plane: Plane, _ byte: UInt8) {
         guard plane.surface.lock(options: [], seed: nil) == 0 else { return }
         memset(plane.surface.baseAddress, Int32(byte), plane.rowBytes * plane.height)
         plane.surface.unlock(options: [], seed: nil)
     }
 
-    private func pair(
+    func pair(
         _ commands: MTLCommandBuffer, _ target: MTLTexture, _ second: MTLTexture, load: MTLLoadAction,
         _ draw: (MTLRenderCommandEncoder) -> Void
     ) {

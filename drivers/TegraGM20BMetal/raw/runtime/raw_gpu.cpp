@@ -1004,6 +1004,9 @@ void Device::build(Pipeline &pl, const PackPipeline &pp, const PlacedProgram &vs
     uint32_t sph[20];
     memcpy(sph, fs.header, sizeof sph);
     pl.primitiveId = (sph[5] >> 24) & 1;  // NVA097_SPHV3T2_IMAP_PRIMITIVE_ID, bit 184
+    uint32_t vsph0;
+    memcpy(&vsph0, vs.header, sizeof vsph0);
+    pl.vertexStores = (vsph0 >> 16) & 1;  // NVA097_SPHV3T1_DOES_GLOBAL_STORE
     pl.fragmentDepth = (sph[19] >> 1) & 1;  // OMAP_DEPTH, bit 609
     bool tests = false;
     for (uint32_t k = 0; k < pp.blobDwords; k += 2) {
@@ -4012,6 +4015,10 @@ void RenderEncoder::setBufferOffset(int stage, uint32_t slot, uint64_t offset)
 
 void RenderEncoder::setScissor(uint32_t x, uint32_t y, uint32_t w, uint32_t h)
 {
+    if (reachStep_) {
+        const Rect r = reachScissor(x, y, w, h, reachW_, reachH_, reachStep_);
+        x = r.x0, y = r.y0, w = r.x1 - r.x0, h = r.y1 - r.y0;
+    }
     // a rectangle past the render area is clipped to it, as plain Metal clips it (m2v render_state.rs `set_scissors`)
     const uint32_t x0 = std::min(x, areaW_), y0 = std::min(y, areaH_);
     w = uint32_t(std::min<uint64_t>(uint64_t(x) + w, areaW_)) - x0;
@@ -4030,6 +4037,11 @@ void RenderEncoder::setScissor(uint32_t x, uint32_t y, uint32_t w, uint32_t h)
 // Metal's viewport as m2v gives it to Vulkan (y flipped: y + h, height -h) and NVK writes it (nvk_emit_viewport)
 void RenderEncoder::setViewport(double x, double y, double w, double h, double znear, double zfar)
 {
+    const Rect reachClip = reachStep_ ? reachViewportClip(x, y, w, h, reachStep_) : Rect{};
+    if (reachStep_) {
+        const double s = 1.0 / reachStep_;
+        x *= s, y *= s, w *= s, h *= s;
+    }
     depthRange_[0] = float(znear);
     depthRange_[1] = float(zfar);
     vp_[0] = x;
@@ -4048,6 +4060,10 @@ void RenderEncoder::setViewport(double x, double y, double w, double h, double z
                 ymax = std::clamp(std::max(vy, vy + vh), 0.0f, 65535.0f);
     viewport_[6] = uint32_t(xmax - xmin) << 16 | uint32_t(xmin);
     viewport_[7] = uint32_t(ymax - ymin) << 16 | uint32_t(ymin);
+    if (reachStep_) {
+        viewport_[6] = (reachClip.x1 - reachClip.x0) << 16 | reachClip.x0;
+        viewport_[7] = (reachClip.y1 - reachClip.y0) << 16 | reachClip.y0;
+    }
     viewportDirty_ = true;
 }
 
@@ -4064,6 +4080,8 @@ void RenderEncoder::setBlendColor(const float rgba[4])
 
 void RenderEncoder::setDepthStencil(const DepthStencilState *s)
 {
+    if (reachStep_)
+        return;  // a reach target has no depth or stencil
     dsState_ = s ? s : &DepthStencilState::metalDefault();
     ds_ = dsState_->desc();
     compatible_ = nullptr;
