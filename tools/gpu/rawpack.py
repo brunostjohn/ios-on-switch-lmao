@@ -13,7 +13,8 @@ One action per step (gpu/seed/tools.bzl seed_tools builds, gpu/seed/defs.bzl see
         run's input as it was; with the render states Apple's archives declare for the
         device (precompile/archives/<build>.tsv) whose functions are one framework's default.metallib. Every such line
         names the OS builds it is a state of (os=<build>[,<build>...] in its head): one of other builds is left out and
-        counted in <report>, which the link puts at the end of the pack's report; one naming none fails the step
+        counted in <report>, which the link puts at the end of the pack's report, but for a Core Animation line, kept
+        with its tag for its name; one naming none fails the step
     rawpack.py split --generator <rawpack.py> --qc default.metallib --corpus <file> [--ca-names <file>]
                      [--ca-preferences <stage-tegra-gm20b-metal.py>]
                      --out <bucket corpus>...
@@ -94,26 +95,34 @@ def own_build(lines: list[str], build: str) -> tuple[list[str], list[str]]:
     """Give the lines a pack for IPSW `build` takes, without their os= tag, and the report's lines.
 
     A line tagged with other builds only is theirs: its encodings (RenderBox's c1 format, QuartzCore's constant sets)
-    are not this one's, so it is left out. A line with no tag names no build, and none is guessed for it: the step fails
+    are not this one's, so it is left out; but a Core Animation line of theirs is kept, tag and all, for its name, which
+    names a state this build's QuartzCore makes too (the generator makes it from the name with this IPSW's tables,
+    raw/pack/rawpack.py ca_states). A line with no tag names no build, and none is guessed for it: the step fails
     (precompile/harvest.py and tools/gpu/logharvest.py tag what they add).
     """
-    taken, other, untagged = [], {}, []
+    taken, named, other, untagged = [], [], {}, []
     for line in lines:
         tag = OS_BUILD.search(line.split(' | ', 1)[0])
         if tag is None:
             untagged.append(line)
             continue
         builds = tag[1].split(',')
-        if build not in builds:
-            for b in builds:
-                other[b] = other.get(b, 0) + 1
+        if build in builds:
+            taken.append(OS_BUILD.sub('', line, count=1))
             continue
-        taken.append(OS_BUILD.sub('', line, count=1))
+        if PROBE_LABEL in line:
+            named.append(line)
+        for b in builds:
+            other[b] = other.get(b, 0) + 1
     if untagged:
         sys.exit(f'{len(untagged)} corpus lines name no OS build (os=), the first: {untagged[0][:300]}')
     builds = ', '.join(f'{b} {n}' for b, n in sorted(other.items())) or 'none'
     left = len(lines) - len(taken)
-    return taken, [f'corpus for {build}: {len(taken)} lines taken; {left} of other builds left out ({builds})']
+    report = (
+        f'corpus for {build}: {len(taken)} lines taken; {left} of other builds left out ({builds}), of them '
+        f'{len(named)} Core Animation lines kept for their names'
+    )
+    return taken + named, [report]
 
 
 def archive_lines(inventory: str) -> list[str]:

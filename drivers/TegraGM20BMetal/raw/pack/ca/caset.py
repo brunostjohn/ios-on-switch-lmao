@@ -209,15 +209,16 @@ def with_fetch_rung(tables: caspec.Tables, line: str, why: dict[str, int] | None
 
 
 def corpus_names(path: str, tables: caspec.Tables | None = None) -> list[str]:
-    """Give the corpus's Core Animation names; with `tables`, only those whose line this QuartzCore makes of the name.
+    """Give the corpus's Core Animation names; with `tables`, only those this QuartzCore makes a state of.
 
-    A corpus journaled under another IPSW's QuartzCore names states this one makes differently, or not at all.
+    A name another IPSW's journal holds names a state this QuartzCore makes otherwise (its own constants and flags):
+    that state, which its devices ask for under the same name, is the one made of it.
     """
     names: dict[str, None] = {}
     with open(path) as f:
         for line in f:
-            name, fields = caspec.corpus_fields(line)
-            if name and (tables is None or _made_here(tables, name, fields)):
+            name, _fields = caspec.corpus_fields(line)
+            if name and (tables is None or makes(tables, name)):
                 names[name] = None
     return list(names)
 
@@ -229,13 +230,6 @@ def makes(tables: caspec.Tables, name: str) -> bool:
     except (KeyError, IndexError, ValueError):
         return False
     return True
-
-
-def _made_here(tables: caspec.Tables, name: str, fields: str | None) -> bool:
-    try:
-        return caspec.state_fields(tables, name) == fields
-    except (KeyError, IndexError, ValueError):
-        return False
 
 
 def main() -> None:

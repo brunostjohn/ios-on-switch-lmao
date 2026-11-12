@@ -44,7 +44,14 @@ class BuildTags(unittest.TestCase):
         ]
         taken, report = own_build(lines, '24B119')
         self.assertEqual(taken, [f'R ok=1 label=x {STATE}', f'R ok=1 label=x {STATE}'])
-        self.assertEqual(report, ['corpus for 24B119: 2 lines taken; 2 of other builds left out (21H461 2)'])
+        want = 'corpus for 24B119: 2 lines taken; 2 of other builds left out (21H461 2), of them 0 Core Animation'
+        self.assertEqual(report, [want + ' lines kept for their names'])
+
+    def test_another_builds_core_animation_line_stays_for_its_name(self):
+        ca = f'R ok=1 label=com.apple.coreanimation.PBGRAXm_A2Xhf os=21H461 {STATE}'
+        taken, report = own_build([ca], '24B119')
+        self.assertEqual(taken, [ca])
+        self.assertIn('1 Core Animation lines kept for their names', report[0])
 
     def test_a_line_that_names_no_build_fails_the_step(self):
         with self.assertRaises(SystemExit):

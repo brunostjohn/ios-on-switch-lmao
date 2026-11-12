@@ -108,6 +108,8 @@ LIBRARY = re.compile(r' lib=(\S+)')
 # A function a state links (" | <vl|vp|fl|fp> <function> lib=<library> ..."): its library is not the state's
 LINKED_LIBRARY = re.compile(r'( \| [vf][lp] \S+) lib=\S+')
 LINKED = ('vl ', 'vp ', 'fl ', 'fp ')
+# The OS builds a corpus line is a state of (tools/gpu/rawpack.py own_build strips it from the lines a pack takes)
+OS_BUILD = re.compile(r' os=\S+')
 
 
 def library_root(qc: Path) -> str:
@@ -158,11 +160,11 @@ def ca_states(
 ) -> list[tuple[str, list[str]]]:
     """Give the Core Animation states the pack holds, each once by its key, by tier: those harvested, then caset's.
 
-    Every state a device drew goes in as it drew it (QuartzCore makes some names otherwise than the journal holds them,
-    a harvested c1=550 state regenerated with c1=115, or not at all), but one whose function constants are not those
-    this QuartzCore makes of its name (caspec.made_of_name: another build's journal), then those made from their names
+    Every state a device of this build drew goes in as it drew it (QuartzCore makes some names otherwise than the
+    journal holds them, a harvested c1=550 state regenerated with c1=115, or not at all), but one whose function
+    constants are not those this QuartzCore makes of its name (caspec.made_of_name), then those made from their names
     (ca/caset.py, ca/caspec.py: QuartzCore's own decoding of a name into a state, with this IPSW's tables,
-    ca/qc-<build>.json).
+    ca/qc-<build>.json), every build's journal's names among them.
     """
     sys.path.insert(0, str(HERE / 'ca'))
     import caset  # noqa: PLC0415 (ca/ is only on the path here)
@@ -177,6 +179,7 @@ def ca_states(
 
     with open(corpus) as f:
         drawn = [line.rstrip('\n') for line in f if line.startswith('R ok=1 ') and caspec.corpus_fields(line)[0]]
+    drawn = [line for line in drawn if drawn_here(line, tables.t['build'])]
     foreign = {line for line in drawn if not caspec.made_of_name(tables, line)}
     print(f"rawpack: Core Animation states harvested, another build's constants for their names: {len(foreign)}")
     out = [('harvested', [line for line in drawn if line not in foreign and fresh(line)])]
@@ -188,6 +191,15 @@ def ca_states(
     for reason, count in sorted(why.items()):
         print(f'rawpack: fetching states, {reason}: {count}')
     return tagged
+
+
+def drawn_here(line: str, build: str) -> bool:
+    """Whether a corpus line is a state of `build`: one the corpus step took (it strips their tag) or one naming it.
+
+    The step keeps another build's Core Animation lines, tagged, for their names alone.
+    """
+    tag = OS_BUILD.search(line.split(' | ', 1)[0])
+    return not tag or build in tag[0].split('=', 1)[1].split(',')
 
 
 # The raw runtime's sources directpack.mm makes its records with (RawDirect.mm beside them)
