@@ -117,7 +117,6 @@ TEST(ProbeForms, TodayIsWhatTheRuntimeEmittedBefore)
                   }),
                   (std::vector<Method>{{0, kWfi, 0}}));
         const std::vector<Method> compute = {
-            {0, kWfi, 0},
             {1, kShaderCaches,
              NVDEF(NVB1C0, INVALIDATE_SHADER_CACHES, DATA, TRUE) |
                  NVDEF(NVB1C0, INVALIDATE_SHADER_CACHES, FLUSH_DATA, TRUE) |
