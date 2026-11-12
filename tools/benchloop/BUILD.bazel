@@ -6,7 +6,11 @@ load("//bazel/lint:defs.bzl", "lint_files")
 
 package(default_visibility = ["//tools:__subpackages__"])
 
-lint_files()
+# The golden batches are protocol.py's output, which golden_test and capture_test compare byte for byte: no formatter's.
+lint_files(exclude = [
+    "testdata/golden_batch.json",
+    "testdata/split_capture_batch.json",
+])
 
 exports_files(
     [
