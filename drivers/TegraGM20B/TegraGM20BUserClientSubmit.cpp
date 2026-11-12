@@ -317,7 +317,7 @@ IOReturn AGXDeviceUserClient::exec(uint32_t channel, TegraGM20BAbiPush *input, u
 	if (switch_gpu_job_fences(pushes, count, &fences))
 		return kIOReturnBadArgument;
 	tgm_prof prof;
-	const tgm_prof *profile = scanSubmission(pushes, count, prof);
+	const tgm_prof *profile = scanSubmission(pushes, count, prof, false);
 	uint32_t seqno = 0;
 	uint32_t baseUses = native ? useCount + count : 0;
 	if (!native)

@@ -30,8 +30,9 @@
 #                            name a new surface, and which surfaces are faulted in (size, memory pressure)
 #   gm20b_push_scan_test     TegraGM20BPushScan.h (the kernel's method-stream reader and the push profile's classes) over
 #                            streams laid out as NVK and the raw path write them: every counter, each drawn target's
-#                            image under its sample grid, and no profile stamp after a push whose method continues, one
-#                            the kernel could not read or one with an opcode NVK never writes
+#                            image under its sample grid, a raw job's indirect command buffer draws inside their executed
+#                            range (its macro slots the generator's), and no profile stamp after a push whose method
+#                            continues, one the kernel could not read or one with an opcode NVK never writes
 #   gm20b_target_peaks_test  SwitchGpuTargetPeaks.h: each process's largest target image since boot, and its line
 #   gm20b_span_notes_test    SwitchGpuSpanNotes.h: the render server's long spans and the compositor's longest job
 #   gm20b_preempt_landing_test SwitchGpuPreemptLanding.h: where a kick's preempt landed (a band's release, a job's end)
@@ -216,6 +217,7 @@ host_test(
     ],
     copts = ["-Wno-unused-parameter"],
     cxx_std = "c++17",
+    deps = ["//kits/SwitchGM20BEmit:macros_h"],
 )
 
 host_test(

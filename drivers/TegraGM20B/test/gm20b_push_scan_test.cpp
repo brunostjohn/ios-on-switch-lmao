@@ -12,8 +12,17 @@
 #include <vector>
 
 #include "../TegraGM20BPushScan.h"
+#include "SwitchGM20BMacros.h"
 
 using namespace tgm_scan;
+
+static_assert(kRawIcbRange == SWITCH_GM20B_MACRO_ICB_RANGE &&
+		      kRawIcbDraw == SWITCH_GM20B_MACRO_ICB_DRAW &&
+		      kRawIcbDrawIndexed == SWITCH_GM20B_MACRO_ICB_DRAW_INDEXED,
+	      "the push scan's raw indirect command buffer macros are the generator's");
+static_assert(kRawScratchIcbLocation == SWITCH_GM20B_SCRATCH_ICB_LOCATION &&
+		      kRawScratchIcbLength == SWITCH_GM20B_SCRATCH_ICB_LENGTH,
+	      "the push scan's executed range is the generator's scratch");
 
 #define CHECK(cond) EXPECT_TRUE(cond) << #cond
 
@@ -306,4 +315,49 @@ TEST(GM20BPushScan, PerSampleDraws)
 	draws(s0, 4);
 	Result f = scan({&s0});
 	CHECK(f.c.draws == 4 && f.c.sampleDraws == 0);
+}
+
+// An indirect command buffer's command as the raw path writes it (raw/runtime/raw_icb.h): its topology, then the gated
+// draw macro with its index and Metal's indirect draw arguments
+static void icb_command(Push &p, uint32_t index, bool indexed)
+{
+	p.push_back(immd(0, 0x1970, 5));  // SET_PRIMITIVE_TOPOLOGY
+	p.push_back(one_inc(0, 0x3800 + 8 * (indexed ? kRawIcbDrawIndexed : kRawIcbDraw), 5));
+	for (uint32_t w : {index, 4u, 1u, 0u, 0u})
+		p.push_back(w);
+}
+
+static PushCounts scan_raw(const std::vector<const Push *> &pushes, bool raw)
+{
+	PushParse p = {};
+	p.rawMacros = raw;
+	PushCounts c = {};
+	bool whole = true;
+	for (const Push *push : pushes)
+		scanPush(c, p, whole, push->data(), push->size());
+	return c;
+}
+
+// A raw job's indirect command buffer draws count where their gate admits them: inside the range the execute wrote to the
+// shadow scratch, every one where the GPU reads the range. NVK's macros at the same slots are no draws.
+TEST(GM20BPushScan, RawIndirectCommandBufferDrawsInTheirRange)
+{
+	Push range, slots;
+	range.push_back(inc(0, 0x3400 + 4 * kRawScratchIcbLocation, 2));
+	range.push_back(3);
+	range.push_back(2);
+	icb_command(slots, 3, false);
+	icb_command(slots, 4, true);
+	icb_command(slots, 5, false);
+	const PushCounts c = scan_raw({&range, &slots}, true);
+	CHECK(c.draws == 2);
+
+	Push read, words;
+	read.push_back(one_inc(0, 0x3800 + 8 * kRawIcbRange, 2));
+	words.push_back(3);
+	words.push_back(2);
+	const PushCounts g = scan_raw({&read, &words, &slots}, true);
+	CHECK(g.draws == 3);
+
+	CHECK(scan_raw({&range, &slots}, false).draws == 0);
 }

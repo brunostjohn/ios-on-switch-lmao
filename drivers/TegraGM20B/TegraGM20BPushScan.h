@@ -5,13 +5,24 @@
 // Encoding: NV906F DMA headers (opcode 31:29, count or immediate 28:16, subchannel 15:13, dword method 11:0); NVK's
 // subchannels (Mesa nv_push.h: 0 3D, 1 compute, 3 2D, 4 copy) and MME macros (nvk_mme.h: 2 CLEAR, 10 SET_ANTI_ALIAS,
 // 11..16 the draws); method numbers from Mesa's clb197.h, clb1c0.h, clb06f.h, cl902d.h and cla0b5.h. The raw GM20B path
-// writes the methods those macros would, SET_ANTI_ALIAS among them, directly.
+// writes the methods those macros would, SET_ANTI_ALIAS among them, directly; its jobs' channels also call its own
+// indirect command buffer macros (kits/SwitchGM20BEmit/mme/switch_gm20b_macros.c, ABI v2), at slots NVK puts others in.
 #pragma once
 #include <stdint.h>
 #include "TegraGM20BGpu.h"
 
 namespace tgm_scan
 {
+// The raw path's macros an indirect command buffer's draws call (ABI v2): the range an execute reads from GPU memory, the
+// gated draws (their first argument the command's index), and the shadow scratch words that hold the executed range
+enum : uint32_t {
+	kRawIcbRange = 4,
+	kRawIcbDraw = 5,
+	kRawIcbDrawIndexed = 6,
+	kRawScratchIcbLocation = 120,
+	kRawScratchIcbLength = 121,
+};
+
 // Colour target 0 as a pass sets it: WIDTH (bytes when pitch), HEIGHT, its layout, and the sample grid of the last
 // SET_ANTI_ALIAS as log2 samples across and down. A multisampled target's WIDTH and HEIGHT count its sample grid (NIL's
 // px_extent_sa), so a 4x 720x1280 image is a 1440x2560 target.
@@ -50,6 +61,12 @@ struct PushParse {
 	bool shadingKnown;
 	// the last method parsed for an engine (method 0x100 and up), subchannel << 16 | method; 0 before any
 	uint32_t lastEngine;
+	// a raw job's stream (scanPushes): its macro slots are the raw path's. An indirect command buffer's gated draw draws
+	// where its index lies in the executed range the shadow scratch holds, which the stream wrote or the GPU reads
+	// (icbRangeRead: every gated draw counts)
+	bool rawMacros;
+	bool icbRangeRead;
+	uint32_t icbLocation, icbLength;
 };
 
 // Fragment shading passes per pixel, log2, as the macro derives them: log2 samples - log2(1 / minSampleShading), at least 0
@@ -142,6 +159,23 @@ inline void pushMethod(PushCounts &c, PushParse &p, uint32_t subc, uint32_t mthd
 			c.linearTargets += static_cast<uint64_t>(pitch);
 			if (mthd == 0x0814)
 				p.rt.pitch = pitch;
+		} else if (p.rawMacros && mthd == 0x3400 + 4 * kRawScratchIcbLocation) {
+			p.icbLocation = data;  // SET_MME_SHADOW_SCRATCH(j)
+			p.icbRangeRead = false;
+		} else if (p.rawMacros && mthd == 0x3400 + 4 * kRawScratchIcbLength) {
+			p.icbLength = data;
+		} else if (p.rawMacros && mthd >= 0x3800 && mthd < 0x3c00 && !(mthd & 7) &&
+			   (mthd - 0x3800) / 8 >= kRawIcbRange &&
+			   (mthd - 0x3800) / 8 <= kRawIcbDrawIndexed) {
+			const uint32_t j = (mthd - 0x3800) / 8;
+			if (j == kRawIcbRange) {
+				p.icbRangeRead = true;
+			} else if (p.icbRangeRead || data - p.icbLocation < p.icbLength) {
+				c.draws++;
+				c.sampleDraws += static_cast<uint64_t>(p.shadingKnown &&
+								       shadingPassesLog2(p) != 0u);
+				p.drawn = p.rt;
+			}
 		} else if (mthd >= 0x3800 && mthd < 0x3c00 && !(mthd & 7)) {  // CALL_MME_MACRO(j)
 			const uint32_t j = (mthd - 0x3800) / 8;
 			if (j == 10) {

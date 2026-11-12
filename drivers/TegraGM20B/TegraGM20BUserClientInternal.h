@@ -500,8 +500,8 @@ class AGXDeviceUserClient : public IOUserClient
 	static void wakeWork(thread_call_param_t owner, thread_call_param_t);
 	void pushWakes();
 	void unbindOverlaps(uint64_t va, uint64_t range, Bo *only);
-	void scanPushes(const tgm_push *pushes, uint32_t count, tgm_prof *prof);
-	const tgm_prof *scanSubmission(const tgm_push *pushes, uint32_t count, tgm_prof &prof);
+	void scanPushes(const tgm_push *pushes, uint32_t count, tgm_prof *prof, bool rawMacros);
+	const tgm_prof *scanSubmission(const tgm_push *pushes, uint32_t count, tgm_prof &prof, bool rawMacros);
 	const uint32_t *pushView(uint64_t va, uint64_t bytes, const Binding *&hit) const;
 	IOReturn run(uint32_t method, const void *in, uint32_t inSize, void *out,
 		     const uint32_t *outSize);

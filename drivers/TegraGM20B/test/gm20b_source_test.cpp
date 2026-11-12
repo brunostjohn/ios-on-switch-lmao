@@ -387,11 +387,11 @@ TEST(GM20BPushScanSource, EverySubmissionPathScansItsPushes)
 {
 	const std::string job =
 		flat(definition(client(), "IOReturn AGXDeviceUserClient::runJobUses(const SwitchGpuJobRecord &record,"));
-	expectBefore(job, "const tgm_prof *profile = scanSubmission(pushes, count, prof);", "switch_gpu_chan_exec_events(");
+	expectBefore(job, "const tgm_prof *profile = scanSubmission(pushes, count, prof, true);", "switch_gpu_chan_exec_events(");
 	EXPECT_THAT(job, HasSubstr("&seqno, profile, jobVisibility, releases, keptCount);"));
 	const std::string exec =
 		flat(definition(client(), "IOReturn AGXDeviceUserClient::exec(uint32_t channel, TegraGM20BAbiPush *input,"));
-	expectBefore(exec, "const tgm_prof *profile = scanSubmission(pushes, count, prof);",
+	expectBefore(exec, "const tgm_prof *profile = scanSubmission(pushes, count, prof, false);",
 		     "switch_gpu_chan_exec_events(");
 	EXPECT_THAT(exec, HasSubstr("&seqno, profile, jobVisibility, nullptr, 0);"));
 	EXPECT_EQ(Count(client(), "scanPushes(pushes, count,"), 1u);
