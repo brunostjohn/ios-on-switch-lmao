@@ -971,9 +971,13 @@ host_library(
 # shim/xnu_glue.cpp.
 host_test(
     name = "switch_gpu_present_filter_test",
-    srcs = ["switch_gpu_present_filter_test.cpp"],
+    srcs = [
+        "switch_gpu_present_filter_test.cpp",
+        "//drivers/TegraGM20B:SwitchGpuPresentWatch.h",
+    ],
     data = [
         "//drivers/TegraGM20B:gpu_present.c",
+        "//drivers/TegraGM20B:gpu_promise.c",
         "//drivers/TegraGM20B:shim/xnu_glue.cpp",
     ],
     deps = [":present_filter", ":timeline", ":timeline_kernel"],

@@ -8,6 +8,7 @@
 #include "bazel/testing/source_text.h"
 #include "switch_gpu_timeline_stubs.h"
 #include "drivers/TegraDisplayFlip/TegraScanoutCopy.h"
+#include "drivers/TegraGM20B/SwitchGpuPresentWatch.h"
 #include "drivers/TegraGM20B/SwitchGpuTimeline.h"
 #include "drivers/TegraGM20B/TegraGM20BGpu.h"
 
@@ -198,6 +199,118 @@ TEST_F(PresentFilter, AClosedChannelsTokenReadsWhatItCompletedBeforeTheClose)
 	operations.release_token(&earlier);
 }
 
+constexpr uint32_t kPromiseOffset = 2052, kPromiseValue = 9;
+uint32_t promiseWord = kPromiseValue - 1;
+bool promiseAbandoned;
+
+// SwitchGpuWriterPromise.cpp's status for the promise; the timeline's for the job
+int claimStatus(const switch_gpu_backing_token *token)
+{
+	if (token->engine != SWITCH_GPU_ENGINE_PROMISE)
+		return operations.status(token);
+	if (promiseAbandoned)
+		return -5;
+	return int32_t(promiseWord - uint32_t(token->value)) >= 0 ? 1 : 0;
+}
+
+// A frame behind a writer promise: the watch waits for it with no view in the filter (the offer attaches only a GM20B
+// token), and gpu_promise.c tgm_present_promise_kept hands it to the keeping job, attaching that job's view before the
+// re-arm. The work item claims what the CPU released or gave up on, and detaches first (present_watch_work).
+class PromisedPresentFilter : public PresentFilter
+{
+protected:
+	switch_gpu_present_watch watch{};
+	const switch_gpu_backing_token promise = {kPromiseValue, 0, SWITCH_GPU_ENGINE_PROMISE, kPromiseOffset};
+
+	void SetUp() override
+	{
+		PresentFilter::SetUp();
+		promiseWord = kPromiseValue - 1;
+		promiseAbandoned = false;
+		switch_gpu_present_watch_promise(&watch, &promise);
+	}
+
+	bool handOver()
+	{
+		if (!switch_gpu_present_watch_kept(&watch, kPromiseOffset, kPromiseValue, &watched))
+			return false;
+		tgm_present_filter_attach(&watched);
+		switch_gpu_present_watch_rearm(&watch);
+		return true;
+	}
+
+	int workItem()
+	{
+		const int found = switch_gpu_present_watch_claim(&watch, claimStatus, claimStatus);
+		if (found != SWITCH_GPU_PRESENT_WATCH_PENDING)
+			tgm_present_filter_detach();
+		return found;
+	}
+
+	void jobEnds()
+	{
+		__atomic_store_n(&fence, 5u, __ATOMIC_RELEASE);
+		__atomic_store_n(&visible, 5u, __ATOMIC_RELEASE);
+		promiseWord = kPromiseValue;
+	}
+};
+
+TEST_F(PromisedPresentFilter, TheKeepingJobsEndFlipsFromTheFilter)
+{
+	filter();
+	ASSERT_TRUE(handOver());
+	filter();
+	EXPECT_TRUE(callouts.empty());
+	jobEnds();
+	filter();
+	filter();
+	EXPECT_EQ(callouts, std::vector<int>{0});
+}
+
+TEST_F(PromisedPresentFilter, ACancelShowsTheFrameFromTheWorkItem)
+{
+	promiseWord = kPromiseValue;
+	EXPECT_EQ(workItem(), SWITCH_GPU_PRESENT_WATCH_VISIBLE);
+	filter();
+	EXPECT_TRUE(callouts.empty());
+	EXPECT_FALSE(handOver()) << "claimed: a job submitted after the cancel watches nothing";
+}
+
+TEST_F(PromisedPresentFilter, AnUnkeptPromiseIsDroppedAtTheDeadlineAndALateJobFlipsNothing)
+{
+	promiseAbandoned = true;
+	EXPECT_EQ(workItem(), SWITCH_GPU_PRESENT_WATCH_FAILED);
+	EXPECT_FALSE(handOver());
+	jobEnds();
+	filter();
+	EXPECT_TRUE(callouts.empty());
+}
+
+// The keeping job ends (and its fence push releases the word) before its hand-over: the filter had no view then, and
+// the view attached at the hand-over is already visible. Whichever of the next filter and the hand-over's last look's
+// work item comes first delivers it; the other finds nothing to do.
+TEST_F(PromisedPresentFilter, AJobThatEndsBeforeItsHandOverIsDeliveredOnce)
+{
+	jobEnds();
+	filter();
+	EXPECT_TRUE(callouts.empty());
+	ASSERT_TRUE(handOver());
+	filter();
+	EXPECT_EQ(callouts, std::vector<int>{0});
+	EXPECT_EQ(workItem(), SWITCH_GPU_PRESENT_WATCH_VISIBLE);
+	filter();
+	EXPECT_EQ(callouts, std::vector<int>{0});
+}
+
+TEST_F(PromisedPresentFilter, AWorkItemThatClaimsFirstLeavesTheFilterNothing)
+{
+	jobEnds();
+	ASSERT_TRUE(handOver());
+	EXPECT_EQ(workItem(), SWITCH_GPU_PRESENT_WATCH_VISIBLE);
+	filter();
+	EXPECT_TRUE(callouts.empty());
+}
+
 // The order SwitchGpuPresentFilter.cpp relies on: the view goes before the watch is armed and is dropped right after
 // each claim, before the tokens drop and done runs; the nonstall line alone is filtered, masked until its pass.
 TEST(PresentFilterSource, TheWatchAttachesBeforeItsArmAndEachClaimDetachesFirst)
@@ -217,6 +330,10 @@ TEST(PresentFilterSource, TheWatchAttachesBeforeItsArmAndEachClaimDetachesFirst)
 	EXPECT_LT(work.find("switch_gpu_present_watch_claim("),
 		  work.find("tgm_present_filter_detach();"));
 	EXPECT_LT(work.find("tgm_present_filter_detach();"), work.find("present_watch_flush();"));
+	const std::string kept = Between(SourceText("../gpu_promise.c"), "void tgm_present_promise_kept(", "\n}\n");
+	EXPECT_LT(kept.find("switch_gpu_present_watch_kept("), kept.find("tgm_present_filter_attach(producer);"));
+	EXPECT_LT(kept.find("tgm_present_filter_attach(producer);"), kept.find("switch_gpu_present_watch_rearm("));
+	EXPECT_NE(kept.find("tgm_present_filter_attach(producer);"), std::string::npos);
 	const std::string glue = SourceText("../shim/xnu_glue.cpp");
 	const std::string filterBody = Between(glue, "bool gpuNonstallFilter(", "\n}\n");
 	EXPECT_NE(filterBody.find("tgm_present_filter();"), std::string::npos);

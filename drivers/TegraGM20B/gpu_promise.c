@@ -185,7 +185,8 @@ void tgm_present_promise_watch(struct switch_gpu_backing_token *kept)
 }
 
 /* SubmitJob, the job that keeps the promise submitted: a watch waiting for it watches the job, whose fence push releases
- * the word after its fence, and asks it for the interrupt whose pass completes the watch. */
+ * the word after its fence, as the nonstall filter's view (SwitchGpuPresentFilter.cpp) and as the producer whose asked
+ * interrupt's pass completes the watch. */
 void tgm_present_promise_kept(uint32_t offset, uint32_t value, const struct switch_gpu_backing_token *producer)
 {
 	int watched = 0;
@@ -196,6 +197,9 @@ void tgm_present_promise_kept(uint32_t offset, uint32_t value, const struct swit
 	    !switch_gpu_backing_token_retain(producer)) {
 		if (switch_gpu_present_watch_kept(&tgm_present.watch, offset, value, producer)) {
 			present_takes(producer);
+			/* before the re-arm, as the offer attaches before its arm: the job's end then runs the display's flip
+			 * from the nonstall filter, and a pass claiming the watch detaches the view after this */
+			tgm_present_filter_attach(producer);
 			switch_gpu_present_watch_rearm(&tgm_present.watch);
 			watched = 1;
 		} else {
