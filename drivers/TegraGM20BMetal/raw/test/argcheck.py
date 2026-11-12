@@ -262,8 +262,8 @@ def handles(recs: dict, check, flags: int) -> None:  # noqa: ANN001  main's chec
 def spills(recs: dict, check) -> None:  # noqa: ANN001  main's check
     """Check fourteen fragment buffers bound off their alignment beside an argument buffer.
 
-    The last offsets' residuals lie in the fragment stage's argument table; the vertex stage's table as its record
-    names it.
+    The first offsets' residuals lie in root words m2v's plan names where the probe's codes are shared, the last in the
+    fragment stage's argument table; the vertex stage's table as its record names it.
     """
     rec = recs['argument_spill_fragment']
     v20 = tail(rec)
@@ -276,7 +276,7 @@ def spills(recs: dict, check) -> None:  # noqa: ANN001  main's check
     for slot in range(1, 15):
         va = BUFFERS + slot * 0x10000
         mem.put(va, struct.pack('<f', 1) * 1024)
-        bound[slot] = va + 512 + 16 * slot + (4 if slot >= 12 else 0)
+        bound[slot] = va + 512 + 16 * slot + 4
         mem.put(bound[slot], struct.pack('<f', 1 / 32))
     entries = directlink.entries_of(rec['pipeline'], directlink.PIPELINE.unpack_from(rec['pipeline'])[6], [], [])
     spilled = [e['slot'] for e in entries if e['kind'] == 'ubo' and e['residual'] and e['residual'] >= 0x780]
@@ -285,7 +285,7 @@ def spills(recs: dict, check) -> None:  # noqa: ANN001  main's check
     # an 8-bit unorm target's channels rounded as Metal rounds them, in the program (the table's colour write rule)
     want = [112 / 255, 0, 1, 1]
     check(
-        'fourteen buffers, the spilled three off 16 by the argument table',
+        'fourteen buffers off 16, the spilled three by the argument table',
         all(abs(a - b) < 1e-6 for a, b in zip(out, want, strict=True)),
         out,
     )
