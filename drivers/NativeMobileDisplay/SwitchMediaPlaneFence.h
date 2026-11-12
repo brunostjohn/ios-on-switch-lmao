@@ -6,8 +6,9 @@
 // NativePlaneFenceDisplay.h; runs under the family's work-loop gate.
 //
 // The completion is native_legacy_gpu_complete, as the bridge fence's: it signals gpuDoneSource for finishPlaneFence
-// on the work loop, and writes the set itself when the gate armed it (SwitchMediaCompletionFlipDisplay.h). It comes once the engines have written the surface, before their own
-// results are filed, so a producer failure reported after that is not seen (the bridge fence would have seen it).
+// on the work loop, and writes the set itself when the gate armed it (SwitchMediaCompletionFlipDisplay.h). It comes
+// once the engines have written the surface, with their hardware outcome: a cancelled producer, or a VIC job that ran
+// on one, fails it; only a semantic failure filed after that is not seen (the bridge fence would have seen it).
 
 // True: armed, or refused for a producer that already failed (whose error is completed here): one completion comes.
 // False: a producer is the GPU's, or every flip slot is in use; the bridge fence takes the set.
