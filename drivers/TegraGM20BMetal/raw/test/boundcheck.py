@@ -13,7 +13,7 @@ the raw path at the bind offset rounded down (runtime/raw_residual.h), and each 
 Each record with an argument table is drawn too: its vertex program for four vertices and its fragment program for one
 quad on tools/gpu/maxwell's interpreter, once over the raw path's words and once over m2v's, with the same buffers,
 textures and descriptors. Both runs of a stage must give the same output bits, a stage with a table must read it
-through the record's entry, and other table words must change what it gives.
+through the record's entry, and some other word of it must change what it gives.
 
 usage: boundcheck.py <records.bin>
 """
@@ -59,6 +59,15 @@ def pattern(va: int) -> int:
     Fourteen of them sum inside the target's codes, so a read at another word draws another colour.
     """
     return f32((va >> 2) % 13 / 256)
+
+
+def varying(at: int) -> int:
+    """Give an attribute word: a float of its address between a quarter and three quarters, so products stay codes."""
+    return f32(0.25 + (at >> 2) % 13 / 26)
+
+
+def flat(key: tuple) -> list[int]:
+    return [x for v in key for x in (flat(v) if isinstance(v, tuple) else [v] if isinstance(v, int) else [])]
 
 
 def dynamic_words(p: bytes) -> set[int]:
@@ -217,18 +226,21 @@ class Draw:
                 return [self.get(va + 4 * k) for k in range(4)]
             if key[0] == 'txq':
                 return [4, 4, 1, 1]
-            seed = sum((i + 1) * (v if isinstance(v, int) else 0) for i, v in enumerate(key[1:]))
-            return [f32((seed % 251) / 256 + k / 8) for k in range(4)]
+            seed = sum((i + 1) * v for i, v in enumerate(flat(key[1:])))
+            return [f32((seed + 37 * k) % 251 / 256) for k in range(4)]
 
         return Inputs(attribute, cbuf, texture, -1)
 
     def run(self, rec: dict, stage: int) -> list:
-        """Give a stage's outputs: each vertex lane's attribute stores, or each fragment lane's colours and kill."""
+        """Give a stage's outputs: each vertex lane's attribute stores, or each fragment lane's colours, kill, stores.
+
+        A fragment program of the storage form writes its attachments with SUST, so its stores are its colours.
+        """
         prog = rec['programs'][stage - 1]
         if stage == 1:
             lanes = [
                 self.inputs(
-                    prog, lambda at, i=i: i if at == 0x2FC else 0 if at == 0x2F8 else pattern(0x9000000 + 64 * i + at)
+                    prog, lambda at, i=i: i if at == 0x2FC else 0 if at == 0x2F8 else varying(0x9000000 + 64 * i + at)
                 )
                 for i in range(LANES)
             ]
@@ -237,17 +249,27 @@ class Draw:
         for i in range(LANES):
             fixed = {0x70: f32((i & 1) + 0.5), 0x74: f32((i >> 1) + 0.5), 0x78: f32(0.5), 0x7C: f32(1.0)}
             lanes.append(
-                self.inputs(prog, lambda at, i=i, fixed=fixed: fixed.get(at, pattern(0xA000000 + 64 * i + at)))
+                self.inputs(prog, lambda at, i=i, fixed=fixed: fixed.get(at, varying(0xA000000 + 64 * i + at)))
             )
         outputs = struct.unpack_from('<I', prog['image'], 576 // 8)[0].bit_count()
-        return [(c[0], c[1]) for c in run_quad(prog['image'][isa.HEADER_BYTES :], lanes, outputs)]
+        return run_quad(prog['image'][isa.HEADER_BYTES :], lanes, outputs)
+
+
+def table_changes(tables: list[list[int]], stage: int):  # noqa: ANN201  a generator of tables
+    """Give the tables with one word of `stage`'s changed: to each small code a rule word holds, and inverted."""
+    for i, w in enumerate(tables[stage - 1]):
+        for v in (0, 1, 2, 3, w ^ 1, ~w & 0xFFFFFFFF):
+            if v != w:
+                other = [list(t) for t in tables]
+                other[stage - 1][i] = v
+                yield other
 
 
 def draw(rec: dict, stage: int) -> str | None:
     """Run a stage over the raw path's words and over m2v's; None when both give the same bits, else what differs.
 
-    A stage with an argument table must read it through the record's entry, and other table words must change what
-    it gives.
+    A stage with an argument table must read it through the record's entry, and some other word of it must change
+    what the stage gives.
     """
     m2v = rec['bound']
     push, tables = raw_words(rec)
@@ -264,10 +286,8 @@ def draw(rec: dict, stage: int) -> str | None:
     if tables[stage - 1]:
         if not ours.table_reads[stage - 1]:
             return 'it reads no word of its argument table'
-        other = [list(t) for t in tables]
-        other[stage - 1] = [w ^ 0x3F800000 for w in other[stage - 1]]
-        if Draw(rec, push, other).run(rec, stage) == out:
-            return 'other argument table words change nothing it gives'
+        if not any(Draw(rec, push, other).run(rec, stage) != out for other in table_changes(tables, stage)):
+            return 'no other argument table word changes what it gives'
     return None
 
 
