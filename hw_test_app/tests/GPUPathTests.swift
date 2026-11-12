@@ -530,7 +530,7 @@ enum GPUPathTests {
         JobVisibilityPathTest(), LeanCopyPathTest(), ControlReservePathTest(), CpuCompletePathTest(),
         UseRangesPathTest(), NativeSurfaceViewPathTest.nv12, NativeSurfaceViewPathTest.p010, SemanticFencePathTest(),
         SharedEventsPathTest(),
-        ResourceReadyPathTest(),
+        ResourceReadyPathTest(), RelayoutPathTest(),
     ]
 }
 
