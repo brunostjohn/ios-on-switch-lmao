@@ -99,6 +99,7 @@ bool RMCommandPlan::setter(const Cmd &c, const std::vector<uint64_t> &extra)
     case OpCull:
     case OpWinding:
     case OpFillMode:
+    case OpDepthClip:
     case OpBlendColor:
     case OpStencilRef:
     case OpDepthBias:
@@ -160,6 +161,10 @@ bool RMCommandPlan::setter(const Cmd &c, const std::vector<uint64_t> &extra)
             case OpFillMode:
                 bit = R::Fill;
                 difference = raw::assignState(state.fill, c.a);
+                break;
+            case OpDepthClip:
+                bit = R::DepthClip;
+                difference = raw::assignState(state.depthClip, c.a);
                 break;
             case OpBlendColor: {
                 bit = R::Blend;

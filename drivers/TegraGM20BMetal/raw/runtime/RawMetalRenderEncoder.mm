@@ -624,11 +624,11 @@ static NSUInteger viewportCount(NSUInteger count)
     [_cb record:m];
 }
 
-// Metal's default clips; clamping goes to m2v with the call
 - (void)setDepthClipMode:(MTLDepthClipMode)mode
 {
-    if (mode != MTLDepthClipModeClip)
-        forwardCall(self, _cmd, &mode);
+    Cmd m = cmd(OpDepthClip);
+    m.a = uint32_t(mode);
+    [_cb record:m];
 }
 
 - (void)updateFence:(id<MTLFence>)fence afterStages:(MTLRenderStages)stages

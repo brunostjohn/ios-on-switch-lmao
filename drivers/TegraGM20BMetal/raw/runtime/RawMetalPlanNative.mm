@@ -130,6 +130,8 @@ struct NativePlanSink {
             render->setWinding(uint8_t(next.winding));
         if (rasterChanged(next, previous, R::Fill, &R::fill))
             render->setFillMode(uint8_t(next.fill));
+        if (rasterChanged(next, previous, R::DepthClip, &R::depthClip))
+            render->setDepthClamp(next.depthClip == MTLDepthClipModeClamp);
         if (rasterChanged(next, previous, R::Blend, &R::blend)) {
             const float values[4] = {raw::stateFloat(next.blend[0]), raw::stateFloat(next.blend[1]),
                                      raw::stateFloat(next.blend[2]), raw::stateFloat(next.blend[3])};

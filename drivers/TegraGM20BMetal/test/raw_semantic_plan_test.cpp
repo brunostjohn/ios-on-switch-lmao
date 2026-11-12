@@ -33,7 +33,7 @@ void draw(RMCommandPlan &plan, uint32_t first = 0)
 struct Sink {
     uint32_t bufferCalls = 0, textureCalls = 0, samplerCalls = 0, rasterCalls = 0, kernelCalls = 0;
     std::map<std::pair<uint32_t, uint32_t>, raw::BufferBinding> bindings;
-    uint32_t cull = 0;
+    uint32_t cull = 0, depthClip = 0, depthClipCalls = 0;
 
     void buffer(uint32_t stage, uint32_t slot, const raw::BufferBinding &value)
     {
@@ -59,6 +59,10 @@ struct Sink {
         ++rasterCalls;
         if (raw::rasterChanged(next, previous, raw::RasterState::Cull, &raw::RasterState::cull))
             cull = next.cull;
+        if (raw::rasterChanged(next, previous, raw::RasterState::DepthClip, &raw::RasterState::depthClip)) {
+            depthClip = next.depthClip;
+            ++depthClipCalls;
+        }
     }
 
     void kernel(const raw::KernelState &, const raw::KernelState *)
@@ -525,6 +529,36 @@ TEST(SemanticPlan, ExplicitStateAfterOpaqueCallOverridesUnknownState)
     sink.cull = 2;
     raw::applyRenderState(plan, plan.draw(2).state, cursor, sink);
     EXPECT_EQ(sink.cull, 1u);
+}
+
+// A depth clip mode is its encoder's: the next encoder names none (the raw encoder starts each at Metal's Clip), and one
+// set again in a later encoder is applied though it equals the first's
+TEST(SemanticPlan, ADepthClipModeIsItsEncodersOnly)
+{
+    RMCommandPlan plan;
+    Cmd clamp = cmd(OpDepthClip);
+    clamp.a = 1;
+    plan.record(cmd(OpRender), {});
+    plan.record(clamp, {});
+    draw(plan);
+    plan.record(cmd(OpEnd), {});
+    plan.record(cmd(OpRender), {});
+    draw(plan);
+    plan.record(cmd(OpEnd), {});
+    plan.record(cmd(OpRender), {});
+    plan.record(clamp, {});
+    draw(plan);
+    Sink sink;
+    raw::StateCursor cursor;
+    raw::applyRenderState(plan, plan.draw(1).state, cursor, sink);
+    EXPECT_EQ(sink.depthClip, 1u);
+    EXPECT_EQ(sink.depthClipCalls, 1u);
+    raw::applyRenderState(plan, plan.draw(4).state, cursor, sink);
+    EXPECT_EQ(sink.depthClipCalls, 1u);
+    EXPECT_FALSE(plan.raster[plan.renderStates[plan.draw(4).state].raster].set & raw::RasterState::DepthClip);
+    raw::applyRenderState(plan, plan.draw(7).state, cursor, sink);
+    EXPECT_EQ(sink.depthClipCalls, 2u);
+    EXPECT_EQ(sink.depthClip, 1u);
 }
 
 TEST(SemanticPlan, NewEncodersStartWithIndependentState)

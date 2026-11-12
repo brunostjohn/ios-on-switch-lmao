@@ -132,6 +132,8 @@ struct ReplayPlanSink {
             [encoder setFrontFacingWinding:MTLWinding(next.winding)];
         if (rasterChanged(next, previous, R::Fill, &R::fill))
             [encoder setTriangleFillMode:MTLTriangleFillMode(next.fill)];
+        if (rasterChanged(next, previous, R::DepthClip, &R::depthClip))
+            [encoder setDepthClipMode:MTLDepthClipMode(next.depthClip)];
         if (rasterChanged(next, previous, R::Blend, &R::blend))
             [encoder setBlendColorRed:raw::stateFloat(next.blend[0])
                                 green:raw::stateFloat(next.blend[1])

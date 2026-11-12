@@ -427,6 +427,9 @@ struct Pipeline {
     const PackPipeline *rec = nullptr;
     uint32_t vertexInstructions = 1, fragmentInstructions = 1;
     std::vector<uint32_t> methods;         // the state's registers as ready push words (program offsets relocated)
+    uint32_t viewportClip = 0;             // its SET_VIEWPORT_CLIP_CONTROL
+    bool namesViewportClip = false;
+    bool namesViewportClipRange = false;   // it sets SET_VIEWPORT_CLIP_MIN_Z or MAX_Z
     StateSegment segment;                  // the same words in the device's segment heap; empty: they go inline
     uint32_t push[32] = {}, pushMask = 0;  // root table [0x700, 0x780): the words m2v's push ranges write, and which
     uint8_t setSlot[2] = {};  // the constant buffer slot the vertex and the pixel program read set 0 at (0: none)
@@ -660,6 +663,12 @@ public:
         raster_.fill = mode;
     }
 
+    // MTLDepthClipModeClamp: the state's clip control as NVK sets depth clamp without depth clip, from the next draw
+    void setDepthClamp(bool clamp)
+    {
+        depthClamp_ = clamp;
+    }
+
     // setDepthBias:slopeScale:clamp: of finite constant and slope factors (an infinite or NaN one m2v draws through the
     // viewport: refused before it gets here)
     void setDepthBias(float constant, float slope, float clamp);
@@ -817,7 +826,15 @@ private:
     float depthBias_[3] = {};
 
     Raster raster_, rasterHeld_;
+    bool depthClamp_ = false;
+    uint32_t clipHeld_ = 0;  // the channel's SET_VIEWPORT_CLIP_CONTROL since the encoder's first bind
+    bool clampRangeHeld_ = false;  // the viewport's clip depth range is a clamp's, clampRange_
+    uint32_t clampRange_[2] = {};
     void writeRaster(Push &p, const Raster &want);
+    // false: a depth clamp on a state whose registers set no clip control
+    bool writeClipControl(Push &p, const Pipeline &pl, const char **why);
+    void writeClipDepthRange(Push &p, const uint32_t range[2]);
+    void unclampDepthRange(Push &p);
     Raster rasterFor(uint32_t primitive) const;
     uint32_t blendColor_[4] = {};  // Metal's default, (0, 0, 0, 0), until the encoder sets one
     bool blendColorDirty_ = true;

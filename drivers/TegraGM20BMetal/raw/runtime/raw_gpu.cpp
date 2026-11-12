@@ -68,6 +68,7 @@ enum : uint32_t {
     COLOR_TARGET = NVB197_SET_COLOR_TARGET_A(0),
     VIEWPORT_SCALE_X = NVB197_SET_VIEWPORT_SCALE_X(0),
     VIEWPORT_CLIP_H = NVB197_SET_VIEWPORT_CLIP_HORIZONTAL(0),
+    VIEWPORT_CLIP_CONTROL = NVB197_SET_VIEWPORT_CLIP_CONTROL,
     CLEAR_RECT_H = NVB197_SET_CLEAR_RECT_HORIZONTAL,
     COLOR_CLEAR_VALUE = NVB197_SET_COLOR_CLEAR_VALUE(0),
     INVALIDATE_SHADER_CACHES_NO_WFI = NVB197_INVALIDATE_SHADER_CACHES_NO_WFI,
@@ -1066,6 +1067,11 @@ void Device::build(Pipeline &pl, const PackPipeline &pp, const PlacedProgram &vs
             sampleControl = v;
             continue;
         }
+        if (m == VIEWPORT_CLIP_CONTROL) {
+            pl.viewportClip = v;
+            pl.namesViewportClip = true;
+        }
+        pl.namesViewportClipRange |= m == NVB197_SET_VIEWPORT_CLIP_MIN_Z(0) || m == NVB197_SET_VIEWPORT_CLIP_MAX_Z(0);
         w.m(m, v);
     }
     w.m(PIXEL_SHADER_INTERLOCK_CONTROL, legalInterlockControl(interlockControl, sampleControl));
@@ -5651,6 +5657,8 @@ bool RenderEncoder::prepare(Pipeline *pl, uint32_t primitive, int32_t first, uin
                 cb_->heldSegment_.lose();
             }
             bindState(p, *pl);
+            clipHeld_ = pl->viewportClip;
+            clampRangeHeld_ = clampRangeHeld_ && !pl->namesViewportClipRange;
             RAW_DIAGNOSTIC(cb_->counts_.blendKillBinds += pl->blendKill);
             if (!pl->restore.empty())
                 cb_->extrasLive_ = pl;
@@ -5693,6 +5701,8 @@ bool RenderEncoder::prepare(Pipeline *pl, uint32_t primitive, int32_t first, uin
         residualsPushed_ = residualMask != 0;
     }
     RAW_ENCODE_END(bindSpan);
+    if (!writeClipControl(p, *pl, why))
+        return false;
     if (samplePasses_ != pl->samplePasses) {
         p.m(LOAD_CB_OFFSET, kRootSampleInfo + 8);
         p.nonInc(LOAD_CB, compatibleSampleMasks_, 4);
@@ -6563,6 +6573,7 @@ void RenderEncoder::continuePass(uint8_t stores)
     setViewport(0, 0, areaW_, areaH_, 0, 1);
     setScissor(0, 0, areaW_, areaH_);
     raster_ = {};
+    depthClamp_ = false;
     setDepthBias(0, 0, 0);
     const float blend[4] = {};
     setBlendColor(blend);
@@ -6601,6 +6612,7 @@ void RenderEncoder::end()
     if (p_.room() < 64 + kSampleWords + 2 * kMaxViewports)
         reserve();
     writeRaster(p_, Raster());
+    unclampDepthRange(p_);
     if (rot_.turned()) {
         emitSwizzle(p_, kSwizzleIdentity);
         for (uint32_t turned = views_.swizzled & ~1u; turned; turned &= turned - 1)

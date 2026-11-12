@@ -60,6 +60,7 @@ enum Op : uint8_t {
     // `c`, the compare (raw::PredicateCompare) in `a`, the reference in `b`
     OpPredicate,
     OpExecuteKernels,   // a compute encoder's execute of a buffer of dispatches: obj its RMKernelExecute (RawMetalIndirectExecute.mm)
+    OpDepthClip,  // setDepthClipMode: `a` the MTLDepthClipMode
 };
 
 // Transient adapter arguments. Native command plans do not store setter records.

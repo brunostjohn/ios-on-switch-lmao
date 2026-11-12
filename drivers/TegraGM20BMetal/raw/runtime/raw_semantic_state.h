@@ -175,6 +175,7 @@ struct RasterState {
         Stencil = 1u << 8,
         DepthBias = 1u << 9,
         Visibility = 1u << 10,
+        DepthClip = 1u << 11,
     };
 
     uint32_t set = 0;
@@ -191,7 +192,7 @@ struct RasterState {
     std::array<uint32_t, 4> blend{};
     std::array<uint32_t, 3> depthBias{};
     std::array<uint32_t, 2> stencil{};
-    uint32_t cull = 0, winding = 0, fill = 0, visibility = 0;
+    uint32_t cull = 0, winding = 0, fill = 0, visibility = 0, depthClip = 0;
     uint64_t visibilityOffset = 0;
 };
 
