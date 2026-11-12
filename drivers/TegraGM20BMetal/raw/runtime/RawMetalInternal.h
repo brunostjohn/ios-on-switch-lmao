@@ -254,6 +254,7 @@ bool volumeRendered(MTLTextureDescriptor *d);
 uint32_t arrayType(MTLTextureDescriptor *d);
 bool zetaDescriptor(MTLTextureDescriptor *d);
 bool multisampleShape(MTLTextureDescriptor *d);
+uint32_t memorylessLayers(MTLTextureDescriptor *d);
 bool blockShape(MTLTextureDescriptor *d);
 bool cpuBlocks(RMTexture *t, MTLRegion r, NSUInteger level, NSUInteger slice, uint8_t *bytes, NSUInteger row,
                bool write);

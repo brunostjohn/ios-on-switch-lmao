@@ -174,6 +174,7 @@ TESTS: dict[str, bool] = {
             'metal.native.shared_texture_peer',
             'metal.native.target_parts',
             'metal.native.layered_clear',
+            'metal.native.layered_memoryless',
             'metal.native.layered_vertex',
             'metal.native.viewports',
             'metal.native.viewport_index',

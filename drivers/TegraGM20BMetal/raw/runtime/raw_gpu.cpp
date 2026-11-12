@@ -2077,12 +2077,16 @@ bool Device::stencilTemp(Texture &t)
     return true;
 }
 
-bool Device::createMemoryless(uint32_t width, uint32_t height, uint32_t format, Texture &t, uint32_t samples)
+bool Device::createMemoryless(uint32_t width, uint32_t height, uint32_t format, Texture &t, uint32_t samples,
+                              uint32_t layers)
 {
     uint64_t bytes, align;
     const bool zeta = zetaFormatIndex(format) < kZetaFormats;
-    if (zeta ? !zetaShape(width, height, format, samples, t, bytes, align) : !shape(width, height, format, t))
+    if (!layers || layers > 2048 || (layers > 1 && samples > 1) ||
+        (zeta ? !zetaShape(width, height, format, samples, t, bytes, align) : !shape(width, height, format, t)) ||
+        (layers > 1 && !zeta && (!t.renderable || xrForm(format) != XrForm::None)))
         return false;
+    t.layers = layers;
     fx::MipChain c;
     if (samples > 1 && !zeta &&
         (!t.renderable || xrForm(format) != XrForm::None || !fx::msLayout(width, height, samples, t.bpp, c)))
@@ -3657,7 +3661,7 @@ RenderEncoder *CommandBuffer::render(const PassDesc &pass)
         return shape;
     };
     const bool hidden = !zeta && pass.hiddenZeta;
-    bool blockLinear = zeta != nullptr || hidden;
+    bool blockLinear = zeta != nullptr || hidden || layers > 1;
     for (uint32_t j = 0; j < pass.count && j < 8; j++)
         if (const Texture *t = pass.color[j].texture; t && !t->memoryless && (t->blockLinear || t->shadowTarget))
             blockLinear = true;

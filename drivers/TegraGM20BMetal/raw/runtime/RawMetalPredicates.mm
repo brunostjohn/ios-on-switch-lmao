@@ -239,6 +239,24 @@ bool multisampleShape(MTLTextureDescriptor *d)
            d.storageMode == MTLStorageModeMemoryless && keptFormat(d);
 }
 
+// A memoryless 2D array or cube, one sample and one level, no rotation, of a depth/stencil format the raw path renders or a
+// color format it renders as it is (raw::Device::createMemoryless with its layers): its layers, 0: none
+uint32_t memorylessLayers(MTLTextureDescriptor *d)
+{
+    static const SEL rotation = NSSelectorFromString(@"rotation");
+    const NSUInteger turned =
+        [d respondsToSelector:rotation] ? ((NSUInteger (*)(id, SEL))objc_msgSend)(d, rotation) : 0;
+    const uint32_t format = uint32_t(d.pixelFormat);
+    const raw::FormatInfo *f = raw::formatInfo(format);
+    const bool target = raw::zetaFormatIndex(format) < raw::kZetaFormats ||
+                        (f && f->rt && !raw::blockCompressed(f) && raw::xrForm(format) == raw::XrForm::None);
+    const bool layered = d.textureType == MTLTextureType2DArray || d.textureType == MTLTextureTypeCube;
+    if (d.storageMode != MTLStorageModeMemoryless || !layered || d.sampleCount > 1 || d.mipmapLevelCount > 1 ||
+        d.depth > 1 || turned || !target)
+        return 0;
+    return raw::textureLayers(uint32_t(d.textureType), uint32_t(std::min<NSUInteger>(d.arrayLength, 2048)));
+}
+
 // A block-compressed 2D texture or 2D array the raw path keeps in block-linear memory of its own (raw::Device::
 // createBlockTexture): any levels and layers, private or shared (the CPU's copies move whole blocks of NIL's image), one
 // sample, no rotation; a private one of one level and one layer is rawShape's

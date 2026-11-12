@@ -12,6 +12,7 @@ enum NativeCallTests {
         NativeCounterObjectsTest(),
         NativeTargetPartsTest(),
         NativeLayeredClearTest(),
+        NativeLayeredMemorylessTest(),
         NativeLayeredVertexTest(),
         NativeViewportsTest(),
         NativeViewportIndexTest(),

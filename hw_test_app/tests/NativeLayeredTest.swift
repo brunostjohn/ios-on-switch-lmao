@@ -16,6 +16,21 @@ enum Layering {
         return t
     }
 
+    static func memoryless(_ gpu: GPU, _ format: MTLPixelFormat, _ size: Int, layers: Int) throws -> MTLTexture {
+        let d = MTLTextureDescriptor()
+        d.textureType = .type2DArray
+        d.pixelFormat = format
+        d.width = size
+        d.height = size
+        d.arrayLength = layers
+        d.storageMode = .memoryless
+        d.usage = .renderTarget
+        guard let t = gpu.device.makeTexture(descriptor: d) else {
+            throw TestFailure("no memoryless 2D array of format \(format.rawValue)")
+        }
+        return t
+    }
+
     /// Texels of every layer of `t` not `want(layer)`
     static func wrong(
         _ gpu: GPU, _ t: MTLTexture, paths: inout [String], _ want: (Int, Int, Int) -> [UInt8]
@@ -74,6 +89,52 @@ struct NativeLayeredClearTest: NativeObjectTest {
             metrics.set("wrong_\(name)", wrong)
             if wrong != 0 { work.failures.append("\(wrong) texels of the \(name) attachment's layers") }
         }
+        return work
+    }
+}
+
+/// A layered pass whose depth and second colour attachments are memoryless 2D arrays, from slice 2: the pass backs them
+/// with its four layers and clears the stored attachment's layers 2 to 5, the layers before them keeping theirs.
+struct NativeLayeredMemorylessTest: NativeObjectTest {
+    let id = "metal.native.layered_memoryless"
+    let name = "A layered pass backs its memoryless array attachments with its layers"
+    var unavailable: String? { Layering.a13 ? nil : "21H461's A10X has no layered rendering" }
+
+    func exercise(_ gpu: GPU, _ metrics: inout Metrics) async throws -> NativeWork {
+        let stored = try Layering.array(gpu, 32, layers: 6)
+        let color = try Layering.memoryless(gpu, .rgba8Unorm, 32, layers: 6)
+        let depth = try Layering.memoryless(gpu, .depth32Float, 32, layers: 6)
+        var work = NativeWork(objects: [stored, color, depth])
+        let fill: [UInt8] = [255, 0, 255, 255]
+        let timing = try await gpu.run { commands in
+            for layer in 0..<6 {
+                commands.makeRenderCommandEncoder(
+                    descriptor: TextureParts.pass(stored, TexturePart(level: 0, slice: layer), load: .clear))!
+                    .endEncoding()
+            }
+            let pass = MTLRenderPassDescriptor()
+            pass.renderTargetArrayLength = 4
+            for (j, t) in [stored, color].enumerated() {
+                let att = pass.colorAttachments[j]!
+                att.texture = t
+                att.slice = 2
+                att.loadAction = .clear
+                att.storeAction = j == 0 ? .store : .dontCare
+                att.clearColor = MTLClearColor(red: 1, green: 0, blue: 1, alpha: 1)
+            }
+            pass.depthAttachment.texture = depth
+            pass.depthAttachment.slice = 2
+            pass.depthAttachment.loadAction = .clear
+            pass.depthAttachment.storeAction = .dontCare
+            pass.depthAttachment.clearDepth = 1
+            commands.makeRenderCommandEncoder(descriptor: pass)!.endEncoding()
+        }
+        work.paths.append(timing.path)
+        let wrong = try await Layering.wrong(gpu, stored, paths: &work.paths) { layer, _, _ in
+            layer >= 2 ? fill : TextureParts.clearColor(TexturePart(level: 0, slice: layer))
+        }
+        metrics.set("wrong_texels", wrong)
+        if wrong != 0 { work.failures.append("\(wrong) texels of the stored attachment's layers") }
         return work
     }
 }

@@ -66,9 +66,12 @@ inline bool attachmentTarget(const Texture &t, uint32_t level, uint32_t slice, T
     return true;
 }
 
-// Whether an attachment of `t` at (level, slice) is the texture itself as a target (level 0 of a one-layer 2D or 1D image)
+// Whether an attachment of `t` at (level, slice) is the texture itself as a target (level 0 of a one-layer 2D or 1D image).
+// A memoryless texture's every slice is: its contents last one pass, which backs it from its attachment's slice on
 inline bool wholeAttachment(const Texture &t, uint32_t level, uint32_t slice)
 {
+    if (t.memoryless)
+        return !level && slice < std::max(t.layers, 1u);
     return !level && !slice && (t.type == fx::kTexTwoD || t.type == fx::kTexOneD);
 }
 
