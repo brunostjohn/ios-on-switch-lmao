@@ -1907,6 +1907,13 @@ nak_lower_nir_before_linking(nir_shader *nir, const struct nak_compiler *nak)
 }
 
 void
+nak_release_nir_body(nir_shader *nir)
+{
+   exec_list_make_empty(&nir->functions);
+   nir_sweep(nir);
+}
+
+void
 nak_postprocess_nir(nir_shader *nir,
                     const struct nak_compiler *nak,
                     nir_variable_mode robust2_modes,

@@ -510,6 +510,7 @@ fn nak_compile_shader_internal(
         nak_postprocess_nir(nir, nak, robust2_modes, fs_key, has_task_shader)
     };
     let nak = unsafe { &*nak };
+    let nir_body = nir;
     let nir = unsafe { &*nir };
     let fs_key = if fs_key.is_null() {
         None
@@ -519,6 +520,13 @@ fn nak_compile_shader_internal(
 
     let sm = ShaderModelInfo::new(nak.sm, nak.warps_per_sm);
     let mut s = nak_shader_from_nir(nak, nir, &sm, has_task_shader);
+
+    // ios-on-switch-lmao: the shader is NAK's own from here; its NIR is the
+    // largest thing a big shader's compile holds through the passes below
+    // (an uber shader's tens of MB). The dump prints it, so it stays then.
+    if !dump_asm {
+        unsafe { nak_release_nir_body(nir_body) };
+    }
 
     if DEBUG.print() {
         eprintln!("NAK IR:\n{}", &s);
