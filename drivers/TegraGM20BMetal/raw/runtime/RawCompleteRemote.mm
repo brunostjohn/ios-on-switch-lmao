@@ -10,6 +10,7 @@
 #include "RawCompileRequest.h"
 #include "RawMetalInternal.h"
 #include "raw_compute_record.h"
+#include "raw_remote_ask.h"
 
 namespace raw {
 namespace {
@@ -170,18 +171,18 @@ bool Completion::remoteNow(const Ask &a, const CacheKey &k, Compiler::State &sta
     const uint64_t began = nowUs();
     RAW_DIAGNOSTIC(tObtained = {"store", 0, uint32_t(qos_class_self()), 0});
     if (found == RecordCache::Found::None) {
-        if (!remote_->taking() || !renderRequest(a, k, true, r, name))
-            return failure = remote_->taking() ? kInexpressible : kNoCompilerComes, false;
+        if (!remote_->taking())
+            return failure = kNoCompilerComes, false;
         uint32_t how = 0;
-        Remote::Answer answer = remote_->compile(encodeRequest(r), &how);
-        // a system library the compiler could not resolve is sent as the library's bytes
-        if (answer == Remote::Answer::Unavailable && !remote_->declined() && renderRequest(a, k, true, r, name, true))
+        Remote::Answer answer = Remote::Answer::Unavailable;
+        for (const bool again : {false, true}) {
+            if (!renderRequest(a, k, true, r, name, again))
+                return failure = kInexpressible, false;
             answer = remote_->compile(encodeRequest(r), &how);
-        if (answer == Remote::Answer::Made || answer == Remote::Answer::Refused) {
-            found = fromStore(name, k, record, why);
-            // put in the store and retired from it before this thread read it: asked once more
-            if (found == RecordCache::Found::None && remote_->compile(encodeRequest(r), &how) == answer)
+            if (answer == Remote::Answer::Made || answer == Remote::Answer::Refused)
                 found = fromStore(name, k, record, why);
+            if (askNext(answer, found != RecordCache::Found::None, again, remote_->declined()) != AskNext::AskAgain)
+                break;
         }
 #if SWITCH_RAW_DIAGNOSTICS
         static const char *const kinds[] = {"compiled", "joined", "stored"};
@@ -189,14 +190,19 @@ bool Completion::remoteNow(const Ask &a, const CacheKey &k, Compiler::State &sta
         tObtained.waitUs = nowUs() - began;
         tObtained.ran = how;
 #endif
-        if (answer == Remote::Answer::Failed) {
+        switch (askFailure(answer, found != RecordCache::Found::None, remote_->declined())) {
+        case AskFailure::None:
+            break;
+        case AskFailure::CouldNotRun:
             state = Compiler::State::Failed;
             return true;
-        }
-        if (answer == Remote::Answer::Unavailable)
-            return failure = remote_->declined() ? kNoCompilerComes : kNotTaken, false;
-        if (found == RecordCache::Found::None)
+        case AskFailure::NoCompilerComes:
+            return failure = kNoCompilerComes, false;
+        case AskFailure::NotTaken:
+            return failure = kNotTaken, false;
+        case AskFailure::NotStored:
             return failure = kNotStored, false;
+        }
         logRemote(a, k, found, "by the shader compiler", nowUs() - began);
     } else {
         logRemote(a, k, found, "from the shader compiler's store", 0);
@@ -248,15 +254,15 @@ bool Completion::remoteLater(const Ask &a, const CacheKey &k, std::function<void
             const RecordCache::Found found = answer == Remote::Answer::Made || answer == Remote::Answer::Refused
                                                  ? fromStore(name, k, made, refusal)
                                                  : RecordCache::Found::None;
-            if (found != RecordCache::Found::None) {
+            switch (askNext(answer, found != RecordCache::Found::None, again, remote_->declined())) {
+            case AskNext::Use:
                 logRemote(asked, k, found, "by the shader compiler", nowUs() - began);
                 return settle(found, made, refusal);
-            }
-            // as the synchronous ask: once more, every library sent as its bytes, and a record retired before it was
-            // read made again
-            if (!again && answer != Remote::Answer::Failed && !remote_->declined())
+            case AskNext::AskAgain:
                 return (void)remoteLater(asked, k, done, true);
-            done(nullptr);
+            case AskNext::End:
+                return done(nullptr);
+            }
         });
     if (!sent)
         done(nullptr);
@@ -300,19 +306,17 @@ Compiler::Outcome Completion::remoteKernel(id facadeFunction, MTLComputePipeline
     if (!request(false))
         return Compiler::Outcome::Failed;
     RecordCache::Found found = stored();
-    // the compiler's answer, then once more every library sent as its bytes, and a record retired before it was read
-    // made again, as a render state's
-    for (bool every : {false, true}) {
-        if (found != RecordCache::Found::None || !remote_->taking() || (every && !request(true)))
+    for (const bool again : {false, true}) {
+        if (found != RecordCache::Found::None || !remote_->taking() || (again && !request(true)))
             break;
         const Remote::Answer answer = remote_->compile(encodeRequest(r));
-        if (answer == Remote::Answer::Failed) {
+        if (answer == Remote::Answer::Made || answer == Remote::Answer::Refused)
+            found = stored();
+        if (askFailure(answer, found != RecordCache::Found::None, false) == AskFailure::CouldNotRun) {
             taken = true;
             return Compiler::Outcome::Failed;
         }
-        if (answer != Remote::Answer::Unavailable)
-            found = stored();
-        if (remote_->declined())
+        if (askNext(answer, found != RecordCache::Found::None, again, remote_->declined()) != AskNext::AskAgain)
             break;
     }
     if (found == RecordCache::Found::None)
