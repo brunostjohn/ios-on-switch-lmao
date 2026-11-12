@@ -18,7 +18,6 @@
 #include "raw_surfaces.h"
 #include "raw_shared_events.h"
 #include "raw_cpu_completion.h"
-#include "raw_stats.h"
 #include "raw_control_memory.h"
 
 struct TegraGM20BAbiZcullInfo;
@@ -251,7 +250,7 @@ public:
         return vaUsed_.load(std::memory_order_relaxed);
     }
 
-#if SWITCH_RAW_DIAGNOSTICS
+#if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
     // A debug kernel's method outside TegraGM20BABI.h (TegraGM20BPathsABI.h), on this connection
     int debugCall(uint32_t method, const void *in, size_t inSize, void *out, size_t outSize)
     {
