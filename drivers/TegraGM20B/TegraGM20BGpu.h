@@ -305,6 +305,10 @@ int tgm_promise_abandoned(uint32_t offset, uint32_t value);
  * -28 while too many others are waited on; and the job that keeps one, submitted on `chan` */
 int tgm_promise_open(void);
 struct switch_gpu_giveup_job;
+struct switch_gpu_promise_claim;
+/* A make's guard against a give-up raising the same word (SwitchGpuWriterPromise.h), for the page whose promise slot 0
+ * is `first` */
+void tgm_promise_claim(const volatile uint32_t *first, struct switch_gpu_promise_claim *claim);
 int tgm_promise_park(uint32_t offset, uint32_t value, const char *waiter, const char *who,
 		     const struct switch_gpu_giveup_job *reader, int display);
 void tgm_promise_leave(uint32_t offset, uint32_t value, int display);

@@ -74,7 +74,9 @@ IOReturn AGXDeviceUserClient::writerPromise(const TegraGM20BAbiWriterPromise *in
 	if (switch_gpu_promise_engine())
 		return kIOReturnNoResources;
 	releasePromises(false);
-	const int made = switch_gpu_promise_make(promises_, promiseWord(0), TegraGM20BMaxPromises);
+	switch_gpu_promise_claim claim;
+	tgm_promise_claim(promiseWord(0), &claim);
+	const int made = switch_gpu_promise_make(promises_, promiseWord(0), TegraGM20BMaxPromises, &claim);
 	if (made < 0)
 		return kIOReturnNoResources;
 	const uint32_t promise = uint32_t(made);

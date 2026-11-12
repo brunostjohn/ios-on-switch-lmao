@@ -15,11 +15,23 @@
 #include "drivers/TegraGM20B/SwitchGpuJobFences.h"
 #include "drivers/TegraGM20B/SwitchGpuPathStats.h"
 #include "drivers/TegraGM20B/SwitchGpuPromiseGiveUp.h"
+#include "drivers/TegraGM20B/TegraGM20BJobABI.h"
 
 typedef uint32_t u32;
 typedef uint64_t u64;
 typedef int32_t s32;
 #define READ_ONCE(x) (*(const volatile __typeof__(x) *)&(x))
+#define _Static_assert static_assert
+#define TGM_FENCE_SLOT (16 * 1024)
+#define TGM_FENCE_USER_PAGES 64
+#define TGM_FENCE_PROMISE_WORD 512
+#define TGM_FENCE_PROMISES 32
+
+// gpu_internal.h's fences_state: the raise/remake guard
+inline struct {
+	uint32_t made[TGM_FENCE_USER_PAGES][TGM_FENCE_PROMISES];
+	uint32_t raising;
+} tgm_fence_pages;
 
 namespace fake
 {

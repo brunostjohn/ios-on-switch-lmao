@@ -217,9 +217,19 @@ TEST(GM20BPromiseSource, PresentsAndJobsOrderBehindWriterPromises)
 	const std::string stepped = Body(giveup, "static void giveup_stepped(");
 	expectBefore(stepped, "step == SWITCH_GPU_PROMISE_RAISING", "tgm_promise_abandon(offset, value);");
 	expectBefore(stepped, "step == SWITCH_GPU_PROMISE_KEPT_FIRST", "tgm_promise_kept_first(offset, value);");
-	expectBefore(stepped, "tgm_promise_kept_first(offset, value);", "__asm__ volatile(\"dsb sy\" ::: \"memory\");");
-	expectBefore(stepped, "__asm__ volatile(\"dsb sy\" ::: \"memory\");", "giveup_report(");
+	expectBefore(stepped, "tgm_promise_kept_first(offset, value);", "giveup_report(");
 	EXPECT_EQ(Count(stepped, "giveup_report("), 1u);
+	// the raise's own DSB, inside its window, and its guard around the look and the store
+	expectBefore(raise, "switch_gpu_promise_raise_mark(&tgm_fence_pages.raising, offset);",
+		     "switch_gpu_promise_raise_made_still(made, value)");
+	expectBefore(raise, "__atomic_store_n(word, value, __ATOMIC_RELEASE);", "__asm__ volatile(\"dsb sy\" ::: \"memory\");");
+	expectBefore(raise, "__asm__ volatile(\"dsb sy\" ::: \"memory\");",
+		     "switch_gpu_promise_raise_unmark(&tgm_fence_pages.raising);");
+	expectBefore(raise, "switch_gpu_promise_raise_unmark(&tgm_fence_pages.raising);", "local_irq_restore(flags);");
+	// the page's guard row is zeroed with the page at hand-out
+	expectBefore(Body(unit("gpu_chan.c"), "int tgm_fence_page_get("),
+		     "memset((u8 *)tgm_fence_pages.va + i * TGM_FENCE_SLOT, 0, PAGE_SIZE);",
+		     "memset(tgm_fence_pages.made[i], 0, sizeof(tgm_fence_pages.made[i]));");
 	// the call's look at the end of every GPU interrupt pass, after the present's
 	expectBefore(unit("shim/xnu_glue.cpp"), "tgm_present_pass();\n\ttgm_promise_pass();", "nvxnu_wake();");
 	// The give-up is the promise's one cadence: a present's deadline and a wait's hang checks keep their own period

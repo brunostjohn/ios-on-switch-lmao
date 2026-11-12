@@ -558,6 +558,9 @@ static void order_forget(struct tgm_chan *chan);
  * Every connection's fence page (its channels' seqno words) is one page of a single pool range, so the GPU present's
  * address space maps all of them once and waits on any user channel with a semaphore acquire. Pages are handed out
  * round-robin and zeroed, so a page freed with an acquire still pending on it is not reused at once. */
+/* a fence page's writer promise words (TegraGM20BJobABI.h TegraGM20BMaxPromises from TegraGM20BPromiseWord) */
+#define TGM_FENCE_PROMISES 32
+#define TGM_FENCE_PROMISE_WORD 512
 #define TGM_FENCE_USER_PAGES \
 	64 /* one per connection (TegraGM20BUserClient.cpp kMaxConnectionsAll) */
 /* and one after them for the kernel's own client channels (tgm_fence_kernel), so every address space's fence view holds
@@ -577,6 +580,10 @@ struct fences_state {
 	u32 owner
 		[TGM_FENCE_USER_PAGES]; /* bumped each time a page is handed out (tgm_fence_owner) */
 	u32 next;
+	/* the raise/remake guard (SwitchGpuWriterPromise.h switch_gpu_promise_claim): each page's promise slots' values,
+	 * zeroed with the page at hand-out, and the one word a give-up raises (tgm_live_lock) */
+	u32 made[TGM_FENCE_USER_PAGES][TGM_FENCE_PROMISES];
+	u32 raising;
 };
 extern struct fences_state tgm_fence_pages;
 /* gpu_anchor.c: the clock anchor of a power-up (after its timer init), and a fence page's copy of them all */

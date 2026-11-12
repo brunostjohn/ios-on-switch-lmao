@@ -3,21 +3,47 @@
 // the interrupt pass's look, and the raise.
 #include "gpu_internal.h"
 #include "SwitchGpuPromiseGiveUp.h"
+#include "TegraGM20BJobABI.h"
 
-/* A pending promise word raised from the CPU: a plain store-release after one more look. The fence pool is mapped
- * write-combined (Normal Non-cacheable), where T210's bus answers an exclusive access (a compare-and-swap, any atomic
- * read-modify-write) with an SError. Interrupts are off so the look and the store are a few instructions apart: only a
- * later promise on the slot, whose job ran between them, could be lowered by the store. */
-static int promise_raise(volatile uint32_t *word, uint32_t value)
+_Static_assert(TGM_FENCE_PROMISES == TegraGM20BMaxPromises &&
+		       TGM_FENCE_PROMISE_WORD == TegraGM20BPromiseWord,
+	       "the guard's rows are a page's promise slots");
+
+/* The guard's value of the promise slot whose word is at `offset`, NULL for any other word */
+static uint32_t *promise_made(uint32_t offset)
 {
+	const uint32_t page = offset / TGM_FENCE_SLOT;
+	const uint32_t word = offset % TGM_FENCE_SLOT / 4;
+
+	if (page >= TGM_FENCE_USER_PAGES || word < TGM_FENCE_PROMISE_WORD ||
+	    word >= TGM_FENCE_PROMISE_WORD + TGM_FENCE_PROMISES)
+		return NULL;
+	return &tgm_fence_pages.made[page][word - TGM_FENCE_PROMISE_WORD];
+}
+
+/* tgm_live_lock held (one raiser): a pending promise word raised from the CPU, a plain store-release after one more
+ * look. The fence pool is mapped write-combined (Normal Non-cacheable), where T210's bus answers an exclusive access (a
+ * compare-and-swap, any atomic read-modify-write) with an SError. Interrupts are off so the look and the store are a
+ * few instructions apart, and the guard (switch_gpu_promise_claim) keeps the slot from being made again meanwhile: the
+ * store can never lower a later promise's word. The parked reader's PBDMA reads the word from DRAM (volatile, no L2),
+ * which a store-release need not have reached until a DSB completes it. */
+static int promise_raise(uint32_t offset, volatile uint32_t *word, uint32_t value)
+{
+	uint32_t *made = promise_made(offset);
 	unsigned long flags;
 	int raised = 0;
 
+	if (!made)
+		return 0;
 	local_irq_save(flags);
-	if ((s32)(__atomic_load_n(word, __ATOMIC_ACQUIRE) - value) < 0) {
+	switch_gpu_promise_raise_mark(&tgm_fence_pages.raising, offset);
+	if (switch_gpu_promise_raise_made_still(made, value) &&
+	    switch_gpu_promise_raise_word_below(word, value)) {
 		__atomic_store_n(word, value, __ATOMIC_RELEASE);
+		__asm__ volatile("dsb sy" ::: "memory");
 		raised = 1;
 	}
+	switch_gpu_promise_raise_unmark(&tgm_fence_pages.raising);
 	local_irq_restore(flags);
 	return raised;
 }
@@ -86,8 +112,7 @@ static void giveup_report(uint32_t offset, uint32_t value, const struct switch_g
 		tgm_promise_maker(offset), offset, value, e->waiter, waited_ns / 1000000, e->who);
 }
 
-/* tgm_live_lock held. The fence pool is write-combined on the CPU and volatile (no L2) on the GPU, so a reader's PBDMA
- * parked on the word reads it from DRAM, which a store-release need not have reached until a DSB completes it. */
+/* tgm_live_lock held: the mark before the word moves, taken back when the maker's own release came first */
 static void giveup_stepped(uint32_t offset, uint32_t value, int step, void *entry)
 {
 	const struct switch_gpu_giveup *e = (const struct switch_gpu_giveup *)entry;
@@ -100,7 +125,6 @@ static void giveup_stepped(uint32_t offset, uint32_t value, int step, void *entr
 		tgm_promise_kept_first(offset, value);
 		return;
 	}
-	__asm__ volatile("dsb sy" ::: "memory");
 #if TGM_STATS
 	tgm_promise_cpu_raised(offset, value);
 #endif
@@ -147,6 +171,15 @@ static void giveup_run(void *unused)
 	switch_gpu_giveup_run(&giveups, &giveup_ops, nvxnu_nanotime());
 	giveup_arm();
 	mutex_unlock(&tgm_live_lock);
+}
+
+void tgm_promise_claim(const volatile uint32_t *first, struct switch_gpu_promise_claim *claim)
+{
+	const uint32_t offset = tgm_fence_offset(first);
+
+	claim->made = promise_made(offset);
+	claim->raising = &tgm_fence_pages.raising;
+	claim->first = offset;
 }
 
 int tgm_promise_giveup_open(void)

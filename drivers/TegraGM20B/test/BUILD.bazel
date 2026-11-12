@@ -331,9 +331,22 @@ genrule(
     outs = ["promise_raise_source.h"],
     cmd = """
 set -e
-awk '/^static int promise_raise\\(/ { on = 1 } on { print } on && /^}/ { exit }' $< > $@
+awk '/^static uint32_t \\*promise_made\\(/ || /^static int promise_raise\\(/ { on = 1 } on { print } on && /^}/ { on = 0 }' $< > $@
 grep -q local_irq_restore $@
+grep -q switch_gpu_promise_raise_unmark $@
 """,
+)
+
+host_test(
+    name = "switch_gpu_promise_guard_test",
+    srcs = [
+        "switch_gpu_interrupts_off_stubs.h",
+        "switch_gpu_promise_guard_test.cpp",
+        ":promise_raise_source",
+        "//drivers/TegraGM20B:SwitchGpuBacking.h",
+        "//drivers/TegraGM20B:SwitchGpuWriterPromise.h",
+    ],
+    cxx_std = "c++17",
 )
 
 host_test(
@@ -476,6 +489,7 @@ host_test(
         "//drivers/TegraGM20B:SwitchGpuWriterPromise.h",
         "//drivers/TegraGM20B:TegraGM20BABI.h",
         "//drivers/TegraGM20B:TegraGM20BGpu.h",
+        "//drivers/TegraGM20B:TegraGM20BJobABI.h",
     ],
     cxx_std = "c++17",
 )

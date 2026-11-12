@@ -60,6 +60,8 @@ protected:
 		for (auto &word : fake::pool)
 			word = 0;
 		fake::pool[kOffset / 4] = kValue - 1;
+		std::memset(&tgm_fence_pages, 0, sizeof(tgm_fence_pages));
+		tgm_fence_pages.made[0][kOffset / 4 - TGM_FENCE_PROMISE_WORD] = kValue;
 		setChan(reader, 0x10, readerOwner(), 40);
 		setChan(maker, 0x30, "maker-app", 20);
 		tgm_present.chan = readerPresent() ? &reader : nullptr;

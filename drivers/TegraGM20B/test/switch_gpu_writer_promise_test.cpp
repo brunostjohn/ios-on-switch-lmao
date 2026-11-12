@@ -19,7 +19,7 @@ constexpr uint32_t kSlots = 32;
 
 struct Connection {
 	// `base`: its words' fence-pool offset
-	explicit Connection(uint32_t base = 0) : base(base)
+	explicit Connection(uint32_t base = 2048) : base(base), claim{made, &raising, base}
 	{
 		for (uint32_t i = 0; i < kSlots; ++i)
 			words[i] = 100 + i;
@@ -33,6 +33,9 @@ struct Connection {
 	uint32_t base;
 	switch_gpu_promise_slot slots[kSlots] = {};
 	volatile uint32_t words[kSlots];
+	uint32_t made[kSlots] = {},
+		 raising = 0;  // the raise/remake guard, as no give-up raises meanwhile
+	switch_gpu_promise_claim claim;
 };
 
 struct Surface {
@@ -43,7 +46,7 @@ struct Surface {
 
 int Connection::make(Surface &surface)
 {
-	const int slot = switch_gpu_promise_make(slots, words, kSlots);
+	const int slot = switch_gpu_promise_make(slots, words, kSlots, &claim);
 	if (slot < 0)
 		return slot;
 	const switch_gpu_promise_ref ref = {&words[slot], base + uint32_t(slot) * 4,
@@ -71,7 +74,7 @@ struct Present {
 						       values.data(), SWITCH_GPU_BACKING_PROMISES);
 		values.resize(n > 0 ? uint32_t(n) : 0);
 		for (int i = 0; i < n; ++i)
-			slots.push_back(offsets[i] / 4);
+			slots.push_back((offsets[i] - Connection().base) / 4);
 	}
 
 	bool passes(const Connection &c) const
@@ -105,7 +108,7 @@ TEST(WriterPromise, ASwapBeforeTheJobShowsTheFinishedFrame)
 	ASSERT_EQ(present.slots.size(), 1u);
 	EXPECT_FALSE(present.passes(c));
 	switch_gpu_promise_kept(&c.slots[promise], 0);
-	switch_gpu_promise_ref_drop(drawable.refs, &drawable.count, uint32_t(promise) * 4);
+	switch_gpu_promise_ref_drop(drawable.refs, &drawable.count, c.base + uint32_t(promise) * 4);
 	EXPECT_FALSE(present.passes(c)) << "kept: released only at its job's end";
 	runJob(c, drawable, 7, {promise});
 	ASSERT_TRUE(present.passes(c));
@@ -132,7 +135,7 @@ TEST(WriterPromise, ACancelReleasesItAndDropsItsRef)
 	Surface drawable;
 	const int promise = c.make(drawable);
 	const Present early(drawable);
-	switch_gpu_promise_ref_drop(drawable.refs, &drawable.count, uint32_t(promise) * 4);
+	switch_gpu_promise_ref_drop(drawable.refs, &drawable.count, c.base + uint32_t(promise) * 4);
 	switch_gpu_promise_release(&c.slots[promise], &c.words[promise]);
 	EXPECT_TRUE(early.passes(c));
 	EXPECT_TRUE(Present(drawable).slots.empty());
@@ -181,25 +184,45 @@ TEST(WriterPromise, SlotsAndRefsAreBounded)
 		Surface other;
 		ASSERT_GE(c.make(other), 0) << i;
 	}
-	EXPECT_EQ(switch_gpu_promise_make(c.slots, c.words, kSlots), -28);
+	EXPECT_EQ(switch_gpu_promise_make(c.slots, c.words, kSlots, &c.claim), -28);
 	switch_gpu_promise_kept(&c.slots[0], 0);
-	EXPECT_EQ(switch_gpu_promise_make(c.slots, c.words, kSlots), -28);
+	EXPECT_EQ(switch_gpu_promise_make(c.slots, c.words, kSlots, &c.claim), -28);
 	c.words[0] = c.slots[0].value;
-	EXPECT_EQ(switch_gpu_promise_make(c.slots, c.words, kSlots), 0);
+	EXPECT_EQ(switch_gpu_promise_make(c.slots, c.words, kSlots, &c.claim), 0);
 	EXPECT_EQ(c.slots[0].value, c.words[0] + 1);
 }
 
 typedef int32_t s32;
-// gpu_promise_giveup.c's own promise_raise, cut out by :promise_raise_source
+// The raise's guard state in gpu_internal.h's fences_state, and its page geometry
+#define TGM_FENCE_SLOT (16 * 1024)
+#define TGM_FENCE_USER_PAGES 64
+#define TGM_FENCE_PROMISE_WORD 512
+#define TGM_FENCE_PROMISES 32
+
+struct {
+	uint32_t made[TGM_FENCE_USER_PAGES][TGM_FENCE_PROMISES];
+	uint32_t raising;
+} tgm_fence_pages;
+
+// gpu_promise_giveup.c's own promise_raise and promise_made, cut out by :promise_raise_source
 #include "drivers/TegraGM20B/test/promise_raise_source.h"
 
 namespace
 {
-volatile uint32_t pool[64];
+constexpr uint32_t kPromise = TGM_FENCE_PROMISE_WORD * 4;  // slot 0's word's offset in page 0
+volatile uint32_t pool[TGM_FENCE_PROMISE_WORD + TGM_FENCE_PROMISES];
 
 volatile uint32_t *poolWord(uint32_t offset)
 {
-	return offset && offset / 4 < 64 ? &pool[offset / 4] : nullptr;
+	return offset && offset / 4 < TGM_FENCE_PROMISE_WORD + TGM_FENCE_PROMISES
+		       ? &pool[offset / 4]
+		       : nullptr;
+}
+
+// The make that took the slot at `offset` with `value`, as the guard records it
+void made(uint32_t offset, uint32_t value)
+{
+	tgm_fence_pages.made[0][offset / 4 - TGM_FENCE_PROMISE_WORD] = value;
 }
 
 uint32_t poolOwner(uint32_t)
@@ -260,7 +283,7 @@ volatile uint32_t *modelWord(uint32_t offset)
 	return offset && offset / 4 < model->bytes / 4 ? &model->page[offset / 4] : nullptr;
 }
 
-int modelRaise(volatile uint32_t *word, uint32_t value)
+int modelRaise(uint32_t, volatile uint32_t *word, uint32_t value)
 {
 	if (model->reused) {
 		std::fputs("raise into a fence page another connection owns now\n", stderr);
@@ -308,18 +331,20 @@ void stepped(uint32_t offset, uint32_t, int step, void *arg)
 TEST(WriterPromise, TheGiveUpMarksBeforeTheWordMovesAndTellsWhoWon)
 {
 	Steps raised, kept;
-	pool[5] = 1;
-	EXPECT_EQ(switch_gpu_promise_give_up(&poolFence, 20, 2, 1, stepped, &raised), 1);
+	const uint32_t at = kPromise + 20;
+	made(at, 2);
+	pool[at / 4] = 1;
+	EXPECT_EQ(switch_gpu_promise_give_up(&poolFence, at, 2, 1, stepped, &raised), 1);
 	EXPECT_EQ(raised.steps,
 		  (std::vector<int>{SWITCH_GPU_PROMISE_RAISING, SWITCH_GPU_PROMISE_RAISED}));
 	EXPECT_EQ(raised.words, (std::vector<uint32_t>{1, 2}));
-	pool[5] = 1;
-	kept.makerAt = 20;
+	pool[at / 4] = 1;
+	kept.makerAt = at;
 	kept.makerTo = 2;
-	EXPECT_EQ(switch_gpu_promise_give_up(&poolFence, 20, 2, 1, stepped, &kept), 0);
+	EXPECT_EQ(switch_gpu_promise_give_up(&poolFence, at, 2, 1, stepped, &kept), 0);
 	EXPECT_EQ(kept.steps,
 		  (std::vector<int>{SWITCH_GPU_PROMISE_RAISING, SWITCH_GPU_PROMISE_KEPT_FIRST}));
-	EXPECT_EQ(pool[5], 2u);
+	EXPECT_EQ(pool[at / 4], 2u);
 }
 
 // The give-up's raise of a pending word is its one write to the fence pool, a plain store: on the model's read-only
@@ -349,18 +374,25 @@ TEST(WriterPromise, TheRaiseIsAPlainStoreAndTheFencePoolTakesNoOtherWrite)
 // The raise looks and stores with interrupts off, so nothing between them may lock, log or allocate.
 TEST(WriterPromise, TheKernelRaiseStoresWithInterruptsOffAndNothingThatBlocks)
 {
-	volatile uint32_t word = 5;
+	const uint32_t at = kPromise + 8;
+	volatile uint32_t &word = pool[at / 4];
+	word = 5;
+	made(at, 7);
 	const unsigned saves = interrupts_off::saves;
 	interrupts_off::watched = &word;
-	EXPECT_EQ(promise_raise(&word, 7), 1);
+	EXPECT_EQ(promise_raise(at, &word, 7), 1);
 	EXPECT_EQ(interrupts_off::atSave, 5u);
 	EXPECT_EQ(interrupts_off::atRestore, 7u);
-	EXPECT_EQ(promise_raise(&word, 6), 0);
-	EXPECT_EQ(promise_raise(&word, 7), 0);
+	EXPECT_EQ(tgm_fence_pages.raising, 0u) << "unmarked inside the window";
+	EXPECT_EQ(promise_raise(at, &word, 6), 0);
+	EXPECT_EQ(promise_raise(at, &word, 7), 0);
 	EXPECT_EQ(word, 7u);
 	word = 0xfffffffeu;
-	EXPECT_EQ(promise_raise(&word, 1), 1);
+	made(at, 1);
+	EXPECT_EQ(promise_raise(at, &word, 1), 1);
 	EXPECT_EQ(word, 1u);
+	EXPECT_EQ(promise_raise(4, &pool[1], 9), 0) << "no promise slot's word: never raised";
+	EXPECT_EQ(pool[1], 0u);
 	EXPECT_EQ(interrupts_off::saves - saves, 4u);
 	EXPECT_EQ(interrupts_off::depth, 0);
 	interrupts_off::watched = nullptr;
@@ -450,14 +482,18 @@ TEST(WriterPromise, TheAbandonedSetNamesEachPromiseByWordAndValue)
 TEST(WriterPromise, AGiveUpRaisesOnlyAWordStillShortOfItsValue)
 {
 	Released released;
-	pool[1] = 4;
-	pool[2] = 7;
-	pool[3] = 11;
-	EXPECT_EQ(switch_gpu_promise_give_up(&poolFence, 4, 5, 1, told, &released), 1);
-	EXPECT_EQ(switch_gpu_promise_give_up(&poolFence, 8, 7, 1, told, &released), 0);
-	EXPECT_EQ(switch_gpu_promise_give_up(&poolFence, 12, 10, 1, told, &released), 0);
-	EXPECT_EQ(switch_gpu_promise_give_up(&poolFence, 4, 5, 1, told, &released), 0);
-	EXPECT_EQ(pool[1], 5u);
-	EXPECT_EQ(pool[3], 11u);
-	EXPECT_EQ(released, (Released{{4, 5}}));
+	const uint32_t a = kPromise + 4, b = kPromise + 8, c = kPromise + 12;
+	made(a, 5);
+	made(b, 7);
+	made(c, 10);
+	pool[a / 4] = 4;
+	pool[b / 4] = 7;
+	pool[c / 4] = 11;
+	EXPECT_EQ(switch_gpu_promise_give_up(&poolFence, a, 5, 1, told, &released), 1);
+	EXPECT_EQ(switch_gpu_promise_give_up(&poolFence, b, 7, 1, told, &released), 0);
+	EXPECT_EQ(switch_gpu_promise_give_up(&poolFence, c, 10, 1, told, &released), 0);
+	EXPECT_EQ(switch_gpu_promise_give_up(&poolFence, a, 5, 1, told, &released), 0);
+	EXPECT_EQ(pool[a / 4], 5u);
+	EXPECT_EQ(pool[c / 4], 11u);
+	EXPECT_EQ(released, (Released{{a, 5}}));
 }

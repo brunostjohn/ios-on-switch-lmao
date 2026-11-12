@@ -478,6 +478,7 @@ int tgm_fence_page_get(volatile uint32_t **va, uint64_t *pa)
 				 __ATOMIC_RELEASE);
 		tgm_fence_pages.next = i + 1;
 		memset((u8 *)tgm_fence_pages.va + i * TGM_FENCE_SLOT, 0, PAGE_SIZE);
+		memset(tgm_fence_pages.made[i], 0, sizeof(tgm_fence_pages.made[i]));
 		tgm_clock_anchors_fill(i);
 		*va = (volatile uint32_t *)((u8 *)tgm_fence_pages.va + i * TGM_FENCE_SLOT);
 		*pa = tgm_fence_pages.pa + i * TGM_FENCE_SLOT;

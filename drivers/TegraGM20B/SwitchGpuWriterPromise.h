@@ -86,17 +86,60 @@ struct switch_gpu_promise_slot {
 	uint8_t state, channel;
 };
 
-/* A free slot (one kept and released counts as free), its value one past its word: the slot, or -28. */
+/* The guard between a give-up's raise of a slot's word and a remake of that slot, in cached kernel memory (never the
+ * write-combined fence page): `made`, the value each slot of the connection's page was last made with, and `raising`,
+ * the fence-pool offset of the one word being raised (0: none). The raise marks `raising` and then reads `made`; a make
+ * publishes `made` and then reads `raising`, every access sequentially consistent, so at least one of them sees the
+ * other's write. The raise goes ahead only while `made` still holds its value, and a make that finds its slot's word
+ * being raised takes another slot. A make only ever takes a slot whose word has already reached its value, through the
+ * maker's job or its own cancel's store, so a raise skipped because `made` moved never leaves a reader waiting. */
+struct switch_gpu_promise_claim {
+	uint32_t *made; /* the connection's row, slot 0 first */
+	const uint32_t *raising;
+	uint32_t first; /* slot 0's word's fence-pool offset */
+};
+
+static inline void switch_gpu_promise_raise_mark(uint32_t *raising, uint32_t offset)
+{
+	__atomic_store_n(raising, offset, __ATOMIC_SEQ_CST);
+}
+
+static inline int switch_gpu_promise_raise_made_still(const uint32_t *made, uint32_t value)
+{
+	return __atomic_load_n(made, __ATOMIC_SEQ_CST) == value;
+}
+
+static inline int switch_gpu_promise_raise_word_below(const volatile uint32_t *word, uint32_t value)
+{
+	return (int32_t)(__atomic_load_n(word, __ATOMIC_ACQUIRE) - value) < 0;
+}
+
+static inline void switch_gpu_promise_raise_unmark(uint32_t *raising)
+{
+	__atomic_store_n(raising, 0u, __ATOMIC_RELEASE);
+}
+
+/* A free slot (one kept and released counts as free), its value one past its word: the slot, or -28. The word read
+ * that frees the slot comes first; a cancel's store-release and DSB (releasePromise) put the word there before a make
+ * on the same connection reads it. */
 static inline int switch_gpu_promise_make(struct switch_gpu_promise_slot *slots,
-					  volatile uint32_t *words, uint32_t count)
+					  volatile uint32_t *words, uint32_t count,
+					  const struct switch_gpu_promise_claim *claim)
 {
 	for (uint32_t i = 0; i < count; ++i) {
 		const uint32_t word = __atomic_load_n(&words[i], __ATOMIC_ACQUIRE);
+		uint32_t before = 0;
 
 		if (slots[i].state == SWITCH_GPU_PROMISE_MADE ||
 		    (slots[i].state == SWITCH_GPU_PROMISE_KEPT &&
 		     (int32_t)(word - slots[i].value) < 0))
 			continue;
+		before = __atomic_load_n(&claim->made[i], __ATOMIC_RELAXED);
+		__atomic_store_n(&claim->made[i], word + 1, __ATOMIC_SEQ_CST);
+		if (__atomic_load_n(claim->raising, __ATOMIC_SEQ_CST) == claim->first + 4 * i) {
+			__atomic_store_n(&claim->made[i], before, __ATOMIC_SEQ_CST);
+			continue;
+		}
 		slots[i].value = word + 1;
 		slots[i].state = SWITCH_GPU_PROMISE_MADE;
 		return (int)i;
@@ -136,7 +179,7 @@ typedef volatile uint32_t *(*switch_gpu_promise_word)(uint32_t offset);
  * connection and handed to another (cleared) is a new owner, and a promise of the old one is no longer on it. */
 struct switch_gpu_promise_fence {
 	switch_gpu_promise_word word;
-	int (*raise)(volatile uint32_t *word, uint32_t value);
+	int (*raise)(uint32_t offset, volatile uint32_t *word, uint32_t value);
 	uint32_t (*owner)(uint32_t offset);
 };
 
@@ -164,7 +207,7 @@ static inline int switch_gpu_promise_give_up(const struct switch_gpu_promise_fen
 	    (int32_t)(__atomic_load_n(at, __ATOMIC_ACQUIRE) - value) >= 0)
 		return 0;
 	stepped(offset, value, SWITCH_GPU_PROMISE_RAISING, arg);
-	raised = fence->raise(at, value);
+	raised = fence->raise(offset, at, value);
 	stepped(offset, value, raised ? SWITCH_GPU_PROMISE_RAISED : SWITCH_GPU_PROMISE_KEPT_FIRST,
 		arg);
 	return raised;
