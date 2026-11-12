@@ -22,6 +22,7 @@ cargo_build_script(
     crate_features = [
         "ash",
         "default",
+        "serde",
     ],
     crate_root = "build.rs",
     data = [
@@ -47,6 +48,7 @@ rust_library(
     crate_features = [
         "ash",
         "default",
+        "serde",
     ],
     crate_root = "src/lib.rs",
     edition = "2021",
@@ -56,6 +58,7 @@ rust_library(
         ":build_script",
         "//third_party/m2v/crates/metal2vulkan-air",
         "@rust_crates//:ash",
+        "@rust_crates//:serde",
         "@rust_crates//:serde_json",
         "@rust_crates//:sha2",
     ],

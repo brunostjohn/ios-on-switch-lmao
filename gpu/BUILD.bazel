@@ -67,6 +67,7 @@ rust_static_library(
     ],
     # The AIR fixtures it compiles in (include_bytes!(env!(...)); rules_rust makes $(execpath) absolute).
     compile_data = [
+        METAL + ":bridge/compile_profile.json",
         ":function_constant_air",
         ":runtime_examples_air",
     ],
