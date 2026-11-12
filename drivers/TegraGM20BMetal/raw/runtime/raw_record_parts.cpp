@@ -97,12 +97,13 @@ PackEntry bufferEntry(const LayoutEntry &e, const RecordParts &parts, bool codeS
     p.slot = e.slot;
     p.samplerKind = s16 < 256 ? 1 : 0;
     const uint32_t value = p.samplerKind ? probeStorageCode(e.stage, e.slot) : probeBindOffset(e.stage, e.slot);
-    const uint8_t spilled = e.stage >= 1 && e.stage <= 2 && e.slot < 32 ? parts.spillResidual[e.stage - 1][e.slot] : 0;
-    if (spilled)
-        p.samplerKind |= uint8_t((kRootPushWords + spilled) << 2);
-    else if (const auto at = parts.residuals.find(value);
-             at != parts.residuals.end() && !(p.samplerKind && codeShared))
+    if (parts.residualsPlanned) {
+        if (e.stage >= 1 && e.stage <= 2 && e.slot < 32)
+            p.samplerKind |= uint8_t(parts.residualWord[e.stage - 1][e.slot] << 2);
+    } else if (const auto at = parts.residuals.find(value);
+               at != parts.residuals.end() && !(p.samplerKind && codeShared)) {
         p.samplerKind |= uint8_t(((at->second - 0x700) / 4 + 1) << 2);
+    }
     p.sampler = uint8_t(window / 16);
     p.pad = uint8_t(window / 16 >> 8);
     return p;

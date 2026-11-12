@@ -84,9 +84,9 @@ typedef struct NmbDirectDraw {
     // filled it for the draw; a dynamic field there is numbered from push word 32 (raw_spill_table.h)
     const uint32_t *spill[2];
     uint32_t spillWords[2];
-    // By stage and buffer slot, the table word + 1 of the slot's SlotBindOffset residual where the plan places it in the
-    // stage's argument table (0: in the push window, or none)
-    uint8_t spillResidual[2][32];
+    // By stage and buffer slot, the record's word + 1 of the slot's SlotBindOffset residual as the plan places it: a root
+    // push word (1-32) or the stage's argument table word + 33 (33-63); 0: none
+    uint8_t residualWord[2][32];
 } NmbDirectDraw;
 
 typedef struct NmbDirectStorage {
@@ -198,7 +198,7 @@ typedef struct NmbDirectKernel {
     // Its argument table's words in each of the three dispatches (NmbDirectDraw's spill)
     const uint32_t *spill, *movedSpill, *boundSpill;
     uint32_t spillWords, movedSpillWords, boundSpillWords;
-    uint8_t spillResidual[32];  // NmbDirectDraw's for the kernel stage
+    uint8_t residualWord[32];  // NmbDirectDraw's for the kernel stage
 } NmbDirectKernel;
 
 // `descriptor`'s compute state as the translator makes it for a dispatch of `dispatch`'s threadgroup shape and bindings, handed

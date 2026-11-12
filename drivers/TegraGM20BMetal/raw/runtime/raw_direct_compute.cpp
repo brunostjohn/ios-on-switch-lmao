@@ -6,11 +6,9 @@
 #include <algorithm>
 #include <cstring>
 #include <map>
-#include "../pack/probe_bind.h"
 #include "bridge/NativeMetalDirect.h"
 #include "raw_compute_key.h"
 #include "raw_direct_nvk.h"
-#include "raw_residual.h"
 #include "raw_spill_table.h"
 
 namespace raw {
@@ -175,27 +173,15 @@ private:
     }
 };
 
-// Each buffer entry's root push word the bind-offset dispatch set to its slot's residual (probeComputeCode), where no other
-// buffer slot of the kernel shares the code and no other word holds it
+// Each buffer entry's residual word as m2v's plan places it (NmbDirectKernel residualWord), where binding at an offset
+// keeps the plain dispatch's variant, region and layout
 void attachResiduals(const NmbDirectKernel &k, std::vector<PackKernelEntry> &entries)
 {
     if (!k.boundSame)
         return;
-    const std::map<uint32_t, uint32_t> words = residualWordsByValue(pushWords(k.pushMask, k.push, k.regionWord),
-                                                                    pushWords(k.boundMask, k.bound, k.regionWord));
-    std::map<uint32_t, int> codes;
-    for (const PackKernelEntry &e : entries)
-        if (e.kind == KernelBuffer)
-            codes[probeComputeCode(e.slot)]++;
-    for (PackKernelEntry &e : entries) {
-        const uint32_t code = probeComputeCode(e.slot);
-        const auto word = words.find(code);
-        const uint8_t spilled = e.slot < 32 ? k.spillResidual[e.slot] : 0;
-        if (e.kind == KernelBuffer && spilled && spilled <= kSpillResidualWords)
-            e.window |= (kRootPushWords + spilled) << 24;
-        else if (e.kind == KernelBuffer && codes[code] == 1 && word != words.end())
-            e.window |= ((word->second - kRootPush) / 4 + 1) << 24;
-    }
+    for (PackKernelEntry &e : entries)
+        if (e.kind == KernelBuffer && e.slot < 32 && k.residualWord[e.slot] <= kRootPushWords + kSpillResidualWords)
+            e.window |= uint32_t(k.residualWord[e.slot]) << 24;
 }
 
 CompileOutcome compile(const NmbDirectKernel &k, const DirectNvk &nvk, Compiled &made, std::string &why)
