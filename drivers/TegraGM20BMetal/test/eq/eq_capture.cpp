@@ -22,7 +22,9 @@ public:
     Capture()
     {
         using kernel_model::model;
-        model.vaEnd = uint64_t(1) << 40;  // the program window's quarter of the client VA
+        // the program window's quarter of the client VA, and every address under 0x80'0000'0000: nvdec follows a
+        // descriptor's address into what it names only there, as in the mock kernel's VA where NVK's side was recorded
+        model.vaEnd = uint64_t(1) << 39;
         if (const char *path = getenv("RAWCAP_LOG"))
             log_ = fopen(path, "w");
         model.bound = [this](const TegraGM20BAbiBindOp &op) {
