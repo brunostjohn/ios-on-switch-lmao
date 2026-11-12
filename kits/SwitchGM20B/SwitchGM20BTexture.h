@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: MIT
+// Copyright © 2024 Collabora, Ltd.
 // Word 0 of the block-linear texture header of a view (component sizes, data types and sources), as NIL's
 // nvb097_set_th_bl_0 (nil/descriptor.rs) writes it: the format's own sources (SwitchGM20BVkFormats.h) under the view's
 // component mapping. No address, extent or view type reaches it.
