@@ -200,12 +200,7 @@ void releaseRecordings()
 
 void rmChanged(RMCommandBuffer *cb)
 {
-    if (!cb->_waiters.load())
-        return;
-    {
-        std::lock_guard<raw::Mutex> l(cb->_lock);
-    }
-    cb->_changed.notify_all();
+    cb->_changes.changed();
 }
 
 NSArray *rmTakeHandlers(RMCommandBuffer *cb, NSMutableArray *__strong &list, std::atomic<bool> &added)
@@ -218,13 +213,9 @@ NSArray *rmTakeHandlers(RMCommandBuffer *cb, NSMutableArray *__strong &list, std
     return taken;
 }
 
-// Asleep on _changed until `done` holds of cb's state, counted among its waiters (rmChanged)
 template <typename Done> static void waitFor(RMCommandBuffer *cb, Done &&done)
 {
-    std::unique_lock<raw::Mutex> l(cb->_lock);
-    cb->_waiters.fetch_add(1);
-    cb->_changed.wait(l, done);
-    cb->_waiters.fetch_sub(1);
+    cb->_changes.waitFor(done);
 }
 
 @implementation RMCommandBuffer

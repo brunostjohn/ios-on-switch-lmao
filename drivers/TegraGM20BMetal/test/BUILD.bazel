@@ -133,6 +133,8 @@
 #                     weak references, associated objects); kept blocks are poisoned under ASan
 #   raw_submit_gate_test  raw/runtime/raw_submit_gate.h: the submit worker's submissions and other threads' moves never
 #                     overlap, the worker taking no lock while no move waits
+#   raw_word_wait_test  raw/runtime/raw_word_wait.h: a command buffer's waiters, asleep on its change word with no lock,
+#                     never sleep through the change they wait for
 #   raw_take_pool_test  raw/runtime/raw_take_pool.h: items any thread keeps and takes with no lock, never held by two
 #                     threads at once nor lost (the recordings command buffers give back and take, RawMetalCommandBuffer.mm)
 #   raw_handoff_queue_test  raw/runtime/raw_handoff_queue.h: the submit worker's ranges reach the completion thread, and
@@ -966,6 +968,15 @@ host_test(
         "raw_submit_gate_test.cpp",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_submit_gate.h",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_lock.h",
+    ],
+    cxx_std = "c++17",
+)
+
+host_test(
+    name = "raw_word_wait_test",
+    srcs = [
+        "raw_word_wait_test.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_word_wait.h",
     ],
     cxx_std = "c++17",
 )

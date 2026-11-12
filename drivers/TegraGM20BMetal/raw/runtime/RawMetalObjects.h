@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 #pragma once
 #include "raw_lock.h"
+#include "raw_word_wait.h"
 #import <Foundation/Foundation.h>
 #import <Metal/Metal.h>
 #include <atomic>
@@ -444,11 +445,8 @@ struct RMSharedEventWait {
     // list's flag is set, and the lists are taken under _lock only where the flag says one was added: taking exchanges the
     // sent flag first, so no handler is both missed and not run (rmTakeHandlers).
     std::atomic<bool> _scheduledSent, _completedSent, _hasScheduledHandlers, _hasCompletedHandlers;
-    // the threads in a wait on _changed (under _lock): a state change notifies, and takes _lock to, only where there is one
-    // (rmChanged)
-    std::atomic<uint32_t> _waiters;
+    raw::ChangeWord _changes;  // a state change its waits read (rmChanged), with no lock (raw_word_wait.h)
     raw::Mutex _lock;
-    raw::CondVar _changed;
     uint32_t _seqno;
     uint32_t _stamp;  // its raw submission's GPU time stamps (raw::CommandBuffer::stamp), 0 for any other
     std::vector<raw::DrawTiming> _timings;  // that submission's measured draws (raw::CommandBuffer::timings)

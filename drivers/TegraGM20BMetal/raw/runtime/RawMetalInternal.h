@@ -501,7 +501,7 @@ bool rmTakeBytesChunk(uint64_t length, raw::Buffer &chunk);
 // RawMetalEncoder.mm: render, blit and compute encoders built on the storage of those before (raw_object_pool.h), from
 // before the device's first command buffer
 void rmPoolEncoders();
-// cb's state changed: its waiters woken, with its lock taken only where one waits
+// cb's state changed: its waiters woken, with no lock
 void rmChanged(RMCommandBuffer *cb);
 // its scheduled or completed handlers (`list`) taken, once its sent flag was exchanged: under its lock only where `added`
 // says one was added
