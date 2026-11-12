@@ -6,8 +6,12 @@
 // (raw_dispatch_regions.h). The gate sets the global render enable from the range in the macros' scratch, which the compute
 // class's launches obey, so a command outside the range launches nothing; the execute's tail sets it true again. The call is
 // at the same words in every command, so a copy to another index rewrites one word (kComputeIndexWord), as a draw's does.
-// Commands of a buffer that inherits its pipeline or buffers are written the same way at each execute, into the command
-// buffer's own memory: their QMDs name constant buffer addresses the inherited state decides.
+// A buffer that inherits the encoder's buffers is written the same way, its set-0 buffer descriptors zero, and each command
+// also has a bind slot: a call of kIcbBind with each descriptor's address, its Metal buffer index, the kernel's window of
+// it and its residual's root word. An execute writes the encoder's buffers into the macros' scratch and runs the bind slots
+// of its commands by reference before their slots, so the GPU writes their descriptors with no CPU write per command.
+// A buffer that inherits its pipeline has its commands written the same way once for each pipeline it is executed under
+// (RawMetalIndirectCompute.h RMICBVariant), again only after a command changed: a QMD names its kernel's program.
 #pragma once
 #include <cstdint>
 #include "../../../../kits/SwitchGM20B/SwitchGM20BCompute.h"
@@ -38,6 +42,66 @@ struct ComputeCommand {
     uint32_t regions;
     bool barrier;  // setBarrier: the commands before it have written before it launches
 };
+
+// An inherited buffer's set-0 descriptor in a command's region: its three words' address, the root push word that takes the
+// residual of its base (0: none), the Metal buffer index it binds and the kernel's window of it in bytes (0: the whole buffer)
+struct ComputeBind {
+    uint64_t descriptor, residual;
+    uint32_t slot, window;
+};
+
+constexpr uint32_t kComputeBindSlotWords = 128, kComputeBindsMax = (kComputeBindSlotWords - 2) / 6;
+
+// False: more descriptors than a bind slot holds
+inline bool binds(uint32_t *slot, const ComputeBind *b, uint32_t n)
+{
+    if (n > kComputeBindsMax)
+        return false;
+    Push p{slot, slot + kComputeBindSlotWords};
+    if (n) {
+        mme::icbBindHeader(p, n);
+        *p.at++ = n;
+        for (uint32_t i = 0; i < n; i++) {
+            *p.at++ = uint32_t(b[i].descriptor >> 32);
+            *p.at++ = uint32_t(b[i].descriptor);
+            *p.at++ = 3 * b[i].slot;
+            *p.at++ = b[i].window;
+            *p.at++ = uint32_t(b[i].residual >> 32);
+            *p.at++ = uint32_t(b[i].residual);
+        }
+    }
+    while (p.at < p.end)
+        *p.at++ = kNop;
+    return true;
+}
+
+inline void bindsEmpty(uint32_t *slot)
+{
+    for (uint32_t i = 0; i < kComputeBindSlotWords; i++)
+        slot[i] = kNop;
+}
+
+// An execute's inherited buffers (`va`, `size` by Metal buffer index) of `slots` (a mask) into the macros' scratch, after the
+// dispatches before have read the descriptors the bind slots write
+inline void computeBindHead(Push &p, const uint64_t (&va)[31], const uint32_t (&size)[31], uint32_t slots)
+{
+    p.m(NVB1C0_WAIT_FOR_IDLE, 0, SUBC_COMPUTE);
+    if (!slots)
+        return;
+    const uint32_t lo = uint32_t(__builtin_ctz(slots)), hi = 31u - uint32_t(__builtin_clz(slots));
+    *p.at++ = Push::hdr(1, SUBC_3D, NVB197_SET_MME_SHADOW_SCRATCH(mme::kScratchBuffers + 3 * lo), 3 * (hi - lo + 1));
+    for (uint32_t s = lo; s <= hi; s++) {
+        *p.at++ = uint32_t(va[s]);
+        *p.at++ = uint32_t(va[s] >> 32);
+        *p.at++ = size[s];
+    }
+}
+
+// After the bind slots: their inline writes have landed (the execute head then invalidates the constant caches)
+inline void computeBindTail(Push &p)
+{
+    p.m(NVB197_WAIT_FOR_IDLE, 0);
+}
 
 inline void computeEmpty(uint32_t *slot)
 {

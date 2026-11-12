@@ -9,8 +9,10 @@ import Metal
 /// a barrier threadgroups into A again, threadgroups into B beside them, and a fourth reset to nothing. Executed whole, then
 /// the third alone, then by a range {0, 1} in a private buffer a blit copy wrote in the same command buffer (the GPU reads
 /// it, the CPU never does). A buffer that inherits the encoder's buffers and one that inherits its pipeline run under the
-/// encoder's state. Last, a blit resets the first command and copies the second (its barrier with it) over the fourth on
-/// the GPU, and an execute after it in the same command buffer runs what the GPU left. Every command buffer stays raw.
+/// encoder's state, then each twice in one encoder: the first under two sets of buffers (the GPU writes its descriptors
+/// at each execute), the second folding twice (its commands made once for the pipeline). Last, a blit resets the first
+/// command and copies the second (its barrier with it) over the fourth on the GPU, and an execute after it in the same
+/// command buffer runs what the GPU left. Every command buffer stays raw.
 struct NativeComputeCommandsTest: NativeObjectTest {
     let id = "metal.native.compute_commands"
     let name = "Indirect command buffers of dispatches: encoded once, executed by range on the raw path"
@@ -145,6 +147,27 @@ struct NativeComputeCommandsTest: NativeObjectTest {
         }
         work.paths.append(inherited.path)
         check("inherited", [(a, Self.folded([2])), (b, Self.folded([3]))])
+
+        Self.zero([a, b, c])
+        let offset = try gpu.buffer([UInt32](arrayLiteral: 0, 0, 0, 0, 2))
+        let rebound = try await gpu.run { buffer in
+            let encoder = buffer.makeComputeCommandEncoder()!
+            encoder.setComputePipelineState(pipeline)
+            encoder.setBuffer(a, offset: 0, index: 0)
+            encoder.setBuffer(one, offset: 0, index: 1)
+            encoder.executeCommandsInBuffer(buffers, range: 0..<1)
+            encoder.memoryBarrier(scope: .buffers)
+            encoder.setBuffer(c, offset: 0, index: 0)
+            encoder.setBuffer(offset, offset: 16, index: 1)
+            encoder.executeCommandsInBuffer(buffers, range: 0..<1)
+            encoder.memoryBarrier(scope: .buffers)
+            encoder.executeCommandsInBuffer(pipelines, range: 0..<1)
+            encoder.memoryBarrier(scope: .buffers)
+            encoder.executeCommandsInBuffer(pipelines, range: 0..<1)
+            encoder.endEncoding()
+        }
+        work.paths.append(rebound.path)
+        check("rebound", [(a, Self.folded([1])), (c, Self.folded([2])), (b, Self.folded([3, 3]))])
 
         Self.zero([a, b, c])
         let edited = try await gpu.run { buffer in

@@ -61,8 +61,10 @@ raw_mme.h	kIcbRange	policy	raw macro slot
 raw_mme.h	kIcbDraw	policy	raw macro slot
 raw_mme.h	kIcbDrawIndexed	policy	raw macro slot
 raw_mme.h	kIcbGate	policy	raw macro slot
+raw_mme.h	kIcbBind	policy	raw macro slot
 raw_mme.h	kScratchLocation	policy	MME shadow scratch word of an indirect command buffer range, above NVK's
 raw_mme.h	kScratchLength	policy	MME shadow scratch word of an indirect command buffer range, above NVK's
+raw_mme.h	kScratchBuffers	policy	first MME shadow scratch word of an execute's inherited buffers, above NVK's
 fx_mip.cpp	kSubc2D	policy	raw::SUBC_2D, the kernel binding of FERMI_TWOD_A (gpu_chan.c)
 fx_mip.cpp	kSubc3D	policy	raw::SUBC_3D, the kernel binding of MAXWELL_B (gpu_chan.c)
 nvdec.cpp	kListedIndices	policy	decoder table size

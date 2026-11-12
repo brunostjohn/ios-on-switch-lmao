@@ -25,6 +25,10 @@
 
 namespace raw {
 
+namespace icb {
+struct ComputeBind;
+}
+
 constexpr uint32_t kQmdWords = 64;
 
 // A kernel ready to dispatch: its record and where its program lies in the heap
@@ -89,10 +93,11 @@ public:
     static bool icbRegion(Device &dev, const ComputeState &k, const ComputeRegion &region,
                           const std::array<uint32_t, 3> &grid, const std::array<uint32_t, 3> &nominal,
                           const IcbBuffer (&buffers)[31], uint8_t *block, uint64_t va, const char **why);
+    // The set-0 buffer descriptors of a region of kernel `k` written at `va` (icbRegion), as a buffer that inherits the
+    // encoder's buffers binds them at an execute (raw_icb_compute.h ComputeBind). False: refused (*why).
+    static bool icbBinds(const ComputeState &k, uint64_t va, std::vector<icb::ComputeBind> &out, const char **why);
     // A command of a buffer that inherits the encoder's buffers takes the ones this encoder binds now, each used as written
     void inheritBuffers(IcbBuffer (&out)[31]);
-    // Memory of this command buffer's upload ring the GPU reads, 256-byte aligned
-    uint8_t *upload(uint32_t bytes, uint64_t &va);
 
     struct IcbExecute {
         const Buffer *slots;  // the commands' words, icb::kComputeSlotWords each, command `first`'s at slot `at`
@@ -100,6 +105,10 @@ public:
         const Buffer *range;  // the execution range the GPU reads at rangeOffset; null: [first, first + count)
         uint64_t rangeOffset;
         bool written;  // a blit wrote the words on the GPU
+        // a buffer that inherits the encoder's buffers: its bind slots (icb::kComputeBindSlotWords each, as `slots`), the
+        // Metal buffer indices they read, and those whose descriptors have no residual word (bound off 16 bytes: refused)
+        const Buffer *binds = nullptr;
+        uint32_t bindSlots = 0, alignedSlots = 0;
     };
 
     // The commands by reference, ordered after this encoder's work before them as a dispatch is
