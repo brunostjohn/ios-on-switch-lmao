@@ -10,11 +10,12 @@ import Metal
 /// facade's probe channel; the colour matrix (vcm) takes its program and constants from the GPU's macro each draw. Per
 /// state, keyed by its fragment blend: worst_<blend> the largest difference in codes between the two routes' first
 /// attachments (rule fetch.blend allows 2; rung 3's programs are exact in QuartzCore's arithmetic, so 2 too),
-/// us_rung4_<blend> and us_rung<N>_<blend> one full-screen draw's GPU time each way. r<N>= the draws the facade's counter
-/// says took the fetch-free form. verdict=PASS: every state within the bound and faster on its fetch-free form, with
-/// every forced draw counted. passes_ceiling= the most passes of a state within the bound and faster with no state of
-/// as many passes or fewer failing either: rung 3's sets raw_chip_facts.h kIteratedBlendPasses. A state this IPSW's
-/// QuartzCore lacks is skipped. Rung 3 programs a unit no other driver here drives: a wrong setup kills the channel
+/// us_rung4_<blend> and us_rung<N>_<blend> one full-screen draw's GPU time each way, us_pass_<blend> the fetch-free
+/// form's time per pass of its program. r<N>= the draws the facade's counter says took the fetch-free form.
+/// verdict=PASS: every state within the bound and faster on its fetch-free form, with every forced draw counted.
+/// proven= the programs every state of which was within the bound and faster, the list raw_chip_facts.h
+/// kIteratedProven takes for rung 3: a program is taken by its own measured cost, not by its pass count. A state this
+/// IPSW's QuartzCore lacks is skipped. Rung 3 programs a unit no other driver here drives: a wrong setup kills the channel
 /// (class errors 0x59, 0x5c, 0x5d in the kernel log), so it runs last.
 struct FetchRungTest: HWTest {
     let id: String
@@ -33,8 +34,14 @@ struct FetchRungTest: HWTest {
     static let states: [Int: [(label: String, key: String, passes: Int)]] = [
         2: [("PBGRAXm_TimgBclrA2Xhf_Isrc", "clr", 0), ("PBGRAXm_TimgBaddA2Xhf_Isrc", "add", 0)],
         3: [
-            ("PBGRAXm_TimgBmpyA2Xhf_Isrc", "mpy", 2), ("PBGRAXm_TimgBpldA2Xhf_Isrc", "pld", 5),
-            ("PBGRAXm_TimgBlltA2Xhf_Isrc", "llt", 9), ("PBGRAXm_TimgBdsoA2Xhf_Isrc", "dso", 13),
+            ("PBGRAXm_TimgBmpyA2Xhf_Isrc", "mpy", 2), ("PBGRAXm_TimgBpdiA2Xhf_Isrc", "pdi", 2),
+            ("PBGRAXm_TimgBlbnA2Xhf_Isrc", "lbn", 4), ("PBGRAXm_TimgBpldA2Xhf_Isrc", "pld", 5),
+            ("PBGRAXm_TimgBdrkA2Xhf_Isrc", "drk", 5), ("PBGRAXm_TimgBltnA2Xhf_Isrc", "ltn", 5),
+            ("PBGRAXm_TimgBsdsA2Xhf_Isrc", "sds", 5), ("PBGRAXm_TimgBdifA2Xhf_Isrc", "dif", 8),
+            ("PBGRAXm_TimgBlltA2Xhf_Isrc", "llt", 9), ("PBGRAXm_TimgBovlA2Xhf_Isrc", "ovl", 9),
+            ("PBGRAXm_TimgBpinA2Xhf_Isrc", "pin", 9), ("PBGRAXm_TimgBsbtA2Xhf_Isrc", "sbt", 9),
+            ("PBGRAXm_TimgBhltA2Xhf_Isrc", "hlt", 10), ("PBGRAXm_TimgBsltA2Xhf_Isrc", "slt", 11),
+            ("PBGRAXm_TimgBdsoA2Xhf_Isrc", "dso", 13),
             ("PBGRAXm_TimgBlsoA2Xhf_Isrc", "lso", 14), ("PBGRAXm_TimgBdlcA2Xhf_Isrc", "dlc", 28),
             ("PBGRAXmw_TimgBvcmA3Xhf_Isrc", "vcm", 38), ("PBGRAXm_TimgBlumA2Xhf_Isrc", "lum", 42),
             ("PBGRAXm_TimgBcliA2Xhf_Isrc", "cli", 54), ("PBGRAXm_TimgBsatA2Xhf_Isrc", "sat", 64),
@@ -54,7 +61,7 @@ struct FetchRungTest: HWTest {
         var metrics = Metrics()
         var beyond: [String] = []
         var slower: [String] = []
-        var outcomes: [(passes: Int, ok: Bool)] = []
+        var outcomes: [(program: String, ok: Bool)] = []
         let key = "fetch_rung\(rung)"
         let before = RawFacade.counters(of: gpu.device)[key] ?? 0
         var forcedDraws = 0
@@ -90,15 +97,17 @@ struct FetchRungTest: HWTest {
             }
             let faster = us[1] > 0 && us[1] < us[0]
             if !faster { slower.append(label) }
-            outcomes.append((passes, within && faster))
+            if passes > 0 { metrics.set("us_pass_\(label)", us[1] / Double(passes), digits: 2) }
+            outcomes.append((label, within && faster))
             forcedDraws += Self.draws * (Self.runs + 1)
         }
         let taken = (RawFacade.counters(of: gpu.device)[key] ?? 0) - before
         metrics.set("r\(rung)", taken)
         metrics.set("forced_draws", forcedDraws)
         metrics.set("states", lines.count)
-        let firstFailing = outcomes.filter { !$0.ok }.map(\.passes).min() ?? Int.max
-        metrics.set("passes_ceiling", outcomes.filter { $0.ok && $0.passes < firstFailing }.map(\.passes).max() ?? 0)
+        let failing = Set(outcomes.filter { !$0.ok }.map(\.program))
+        let proven = Set(outcomes.map(\.program)).subtracting(failing).sorted()
+        metrics.set("proven", proven.isEmpty ? "-" : proven.joined(separator: ","))
         let counted = taken >= forcedDraws
         let verdict = beyond.isEmpty && slower.isEmpty && counted ? "PASS" : "FAIL"
         metrics.set("verdict", verdict)

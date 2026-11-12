@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 // The fetch ladder's fixed-function rungs (raw_pack.h PackFetchRung): where a state that blends by fetching its own
 // colour may instead draw through the ROP, with its fetch-free form (raw_fetch_free.h) where the pack holds one. Each
-// rung is taken only once its unit is proven on the chip (raw_chip_facts.h kProvenUnits, kIteratedBlendPasses).
+// rung is taken only once its unit is proven on the chip (raw_chip_facts.h kProvenUnits, kIteratedProven).
 #pragma once
 #include <cstdint>
 #include "raw_chip_facts.h"
@@ -43,12 +43,30 @@ struct IteratedAsk {
         0;  // targets its draw binds (the unit refuses more than one: 0x59; the draw narrows to one)
     uint32_t programWords = 0;  // its microcode, which ends in a write of TEMP0: one pass a word
     uint32_t constants = 0;     // half-float constants it reads
+    uint64_t program = 0;       // its name's FNV-1a 64 (PackIteratedBlend::name)
 };
+
+constexpr uint64_t iteratedProgramName(std::string_view name)
+{
+    uint64_t h = 0xcbf29ce484222325ull;
+    for (const char c : name)
+        h = (h ^ uint8_t(c)) * 0x100000001b3ull;
+    return h;
+}
+
+// Whether the device proved the program worth its passes (raw_chip_facts.h kIteratedProven)
+constexpr bool iteratedProgramProven(uint64_t program)
+{
+    for (const std::string_view name : kIteratedProven)
+        if (iteratedProgramName(name) == program)
+            return true;
+    return false;
+}
 
 constexpr bool iteratedBlendUsable(const IteratedAsk &a)
 {
-    return a.candidate && a.colourTargets == 1 && a.programWords >= 1 && a.programWords <= kIteratedBlendPasses &&
-           a.programWords <= 128 && a.constants <= 24;
+    return a.candidate && a.colourTargets == 1 && a.programWords >= 1 && a.programWords <= 128 && a.constants <= 24 &&
+           iteratedProgramProven(a.program);
 }
 
 }  // namespace raw

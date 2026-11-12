@@ -22,6 +22,7 @@ raw::PackIteratedBlend multiply()
     raw::PackIteratedBlend b = {};
     b.count = 2;
     b.enable = 1;
+    b.name = raw::iteratedProgramName("mpy");
     b.alphaSource = 0x4001;
     b.alphaDest = 0x4303;
     b.program[0] = 0x00091001;
@@ -107,7 +108,8 @@ TEST(RawFetchFree, Rung3WaitsForItsPassesToBeProvenUnlessAProbeForcesIt)
 {
     const raw::PackIteratedBlend b = multiply();
     const raw::FetchFreeForm f = raw::fetchFreeForm(formRecord(0, raw::FetchIteratedBlend), &b);
-    EXPECT_EQ(raw::iteratedPassesProven(f), f.programWords <= raw::kIteratedBlendPasses);
+    EXPECT_EQ(f.program, b.name);
+    EXPECT_EQ(raw::iteratedPassesProven(f), raw::iteratedProgramProven(b.name));
     EXPECT_EQ(raw::fetchFreeTaken(f, {80, false, 0}), raw::iteratedPassesProven(f));
     EXPECT_TRUE(raw::fetchFreeTaken(f, {80, false, 0}, 3));
     EXPECT_EQ(raw::fetchFreeTaken(f, {80, false, 0}, 2), raw::iteratedPassesProven(f));

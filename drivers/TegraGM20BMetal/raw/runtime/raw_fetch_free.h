@@ -35,6 +35,7 @@ struct FetchFreeForm {
     uint8_t rung = FetchNone;  // FetchBlend or FetchIteratedBlend; FetchNone: not a fetch-free form
     uint8_t colour = 0;        // the colour it blends
     uint8_t programWords = 0, constants = 0;
+    uint64_t program = 0;  // the iterated blend program's name (PackIteratedBlend::name)
     // a colour matrix form's: the fragment buffer the matrix is in, its bytes from the bind offset and its words there,
     // which each draw's macro call reads (kNoUniform: the program is the record's)
     uint8_t matrixSlot = kNoUniform;
@@ -62,6 +63,7 @@ inline FetchFreeForm fetchFreeForm(const PackPipeline &pp, const PackIteratedBle
             return f;
         f.rung = rung;
         f.colour = c;
+        f.program = rung == FetchIteratedBlend ? iterated->name : 0;
         f.programWords = rung != FetchIteratedBlend ? 0 : matrix ? kMatrixProgramWords : iterated->count;
         f.constants = rung != FetchIteratedBlend ? 0 : matrix ? kMatrixConstants : iterated->constants;
         if (matrix) {
@@ -123,7 +125,7 @@ struct FetchFreeDraw {
     uint8_t ropLayers = 0;  // ROP blends of rung-2 forms already over this target in the pass
 };
 
-// Whether the form's program is no longer than the device showed worth its passes (kIteratedBlendPasses)
+// Whether the device showed the form's program worth its passes (kIteratedProven)
 inline bool iteratedPassesProven(const FetchFreeForm &f)
 {
     IteratedAsk ask;
@@ -131,6 +133,7 @@ inline bool iteratedPassesProven(const FetchFreeForm &f)
     ask.colourTargets = 1;
     ask.programWords = f.programWords;
     ask.constants = 3u * f.constants;
+    ask.program = f.program;
     return iteratedBlendUsable(ask);
 }
 
