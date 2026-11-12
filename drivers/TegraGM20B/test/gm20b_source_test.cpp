@@ -873,19 +873,14 @@ TEST(GM20BVisibilitySource, AJobWritingAScannedBackingIsExternal)
 		    HasSubstr("__atomic_load_n(&backing->scanout_holds, __ATOMIC_ACQUIRE) != 0"));
 }
 
-// A SurfaceWrites a client could not deliver never leaves a GPU write unmarked: the raw path stops saying its imports are
-// only sampled, and an Exec flagged TegraGM20BPushImportsWritten marks every writable import of its connection (NVK's half
-// is gm20b_nvk_source_test's).
+// A SurfaceWrites a client could not deliver never leaves a GPU write unmarked: an Exec flagged
+// TegraGM20BPushImportsWritten marks every writable import of its connection (NVK's flag is gm20b_nvk_source_test's;
+// the raw path's imports, raw_kernel_memory_test's ASurfaceWritesTheKernelRefusedMarksEveryLaterImportWritten).
 TEST(GM20BCoherencySource, AFailedSurfaceWritesFallsBackToMarkingEveryImport)
 {
 	const std::string exec = flat(definition(client(), "IOReturn AGXDeviceUserClient::exec("));
 	expectBefore(exec, "importsWritten_ = true;",
 		     "surfaces_.after(listed, importsWritten_, tgm_chan_uid(chan), seqno);");
-	const std::string raw = SourceText("../../TegraGM20BMetal/raw/runtime/raw_kernel.cpp");
-	const std::string declare = flat(definition(raw, "bool Kernel::surfaceGpuWrites("));
-	EXPECT_THAT(declare, HasSubstr("importsWritten_.store(true"));
-	EXPECT_THAT(flat(definition(raw, "bool Kernel::importPages(")),
-		    HasSubstr("!importsWritten_.load("));
 }
 
 // Only a connection's maps skip the CPU's L2 and TLB maintenance; every removal keeps it (TegraGM20BTlb.h).

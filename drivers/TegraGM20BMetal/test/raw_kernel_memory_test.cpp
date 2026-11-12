@@ -19,6 +19,8 @@ struct Model {
     std::vector<uint32_t> allocFlags;
     std::vector<TegraGM20BAbiBindOp> binds;
     std::vector<TegraGM20BAbiCpuAccess> acquires;
+    std::vector<uint32_t> importFlags;
+    kern_return_t surfaceWrites = KERN_SUCCESS;
 } model;
 
 constexpr uint32_t kInfoFlags = TegraGM20BInfoKernelMap | TegraGM20BInfoSubmitAddress | TegraGM20BInfoCpuAccess;
@@ -47,8 +49,11 @@ extern "C" kern_return_t IOConnectCallStructMethod(mach_port_t, uint32_t method,
         return KERN_SUCCESS;
     }
     case TegraGM20BMethodBoImport:
+        model.importFlags.push_back(static_cast<const TegraGM20BAbiBoImport *>(input)->flags);
         *static_cast<TegraGM20BAbiBoAllocReply *>(output) = {model.nextHandle++, 0, 0};
         return KERN_SUCCESS;
+    case TegraGM20BMethodSurfaceWrites:
+        return model.surfaceWrites;
     case TegraGM20BMethodMap: {
         const auto &in = *static_cast<const TegraGM20BAbiMap *>(input);
         auto &bytes = model.pages[in.token];
@@ -190,4 +195,22 @@ TEST_F(RawKernelMemory, AnImportBoundInAReservationLeasesItsBytesToTheCpuAndLeav
     kernel.releaseVa(va, kBytes);
     EXPECT_EQ(kernel.vaInUse(), used - kBytes);
     free(cpu);
+}
+
+// A surface import says the GPU only reads it until a SurfaceWrites the kernel refused: from then on every import of the
+// connection is one the GPU may write, so no GPU write of a surface goes unmarked
+TEST_F(RawKernelMemory, ASurfaceWritesTheKernelRefusedMarksEveryLaterImportWritten)
+{
+    alignas(4096) static uint8_t pages[3][4096];
+    raw::Bo bo;
+    ASSERT_TRUE(kernel.importPages(pages[0], 4096, bo, 7));
+    ASSERT_TRUE(kernel.surfaceGpuWrites(7));
+    ASSERT_TRUE(kernel.importPages(pages[1], 4096, bo, 8));
+    model.surfaceWrites = kIOReturnUnsupported;
+    EXPECT_FALSE(kernel.surfaceGpuWrites(8));
+    ASSERT_TRUE(kernel.importPages(pages[2], 4096, bo, 9));
+    ASSERT_EQ(model.importFlags.size(), 3u);
+    EXPECT_EQ(model.importFlags[0] & TegraGM20BImportGpuReads, uint32_t(TegraGM20BImportGpuReads));
+    EXPECT_EQ(model.importFlags[1] & TegraGM20BImportGpuReads, uint32_t(TegraGM20BImportGpuReads));
+    EXPECT_EQ(model.importFlags[2] & TegraGM20BImportGpuReads, 0u);
 }
