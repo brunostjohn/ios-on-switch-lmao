@@ -272,6 +272,17 @@ public:
             visit(range.resources[i]);
     }
 
+    // every resource of the range [from, to) prepareRange cached, with its facts; false: none cached
+    template <typename F> bool forEachRangeResource(size_t from, size_t to, F visit) const
+    {
+        const auto found = ranges_.find({from, to});
+        if (found == ranges_.end())
+            return false;
+        for (const RMRangeResource &resource : found->second.resources)
+            visit(resource);
+        return true;
+    }
+
     void addUses(size_t at, const std::vector<raw::ResourceUse> &uses);
     void setRenderUses(uint32_t state, const std::vector<raw::ResourceUse> &uses);
     void prepareRange(size_t from, size_t to);
@@ -330,26 +341,6 @@ public:
         }
         for (const auto &use : unioned)
             visit(use.first, use.second);
-    }
-
-    // Each operation's uses in [from, to), an operation whose use span is the one before's skipped, with no merging: a
-    // resource may be visited more than once, each time with one operation's access. For visitors whose result is the
-    // same for a resource visited once with the union of its accesses and visited once per access set.
-    template <typename F> void forEachOperationUse(size_t from, size_t to, F visit) const
-    {
-        uint32_t last = ~0u;
-        for (size_t at = from; at < std::min(to, size()); ++at) {
-            const uint32_t index = operations_[at].uses;
-            if (index == last)
-                continue;
-            last = index;
-            const UseSpan span = useSpans_[index];
-            for (uint32_t i = 0; i < span.count; ++i) {
-                const auto &use = uses_[span.begin + i];
-                if (use.object)
-                    visit(use.object, use.access);
-            }
-        }
     }
 
     template <typename F> void forEachWritten(size_t from, size_t to, F visit) const

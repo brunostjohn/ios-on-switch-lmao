@@ -5,7 +5,7 @@
 
 inline raw::Pipeline *nativeOf(const raw::RasterState &state)
 {
-    RMPipeline *pipeline = (__bridge RMPipeline *)state.pipeline;
+    __unsafe_unretained RMPipeline *pipeline = (__bridge RMPipeline *)state.pipeline;
     auto *variant = static_cast<raw::Variant<raw::Pipeline> *>(state.nativeVariant);
     return variant                ? variant->value()
            : state.nativePipeline ? static_cast<raw::Pipeline *>(state.nativePipeline)
@@ -14,7 +14,7 @@ inline raw::Pipeline *nativeOf(const raw::RasterState &state)
 }
 
 // The colors the pass's draws bind as storage images (raw::PassDesc::storageMask)
-inline uint8_t passStorageMask(RMCommandBuffer *cb, size_t begin)
+__attribute__((objc_externally_retained)) inline uint8_t passStorageMask(RMCommandBuffer *cb, size_t begin)
 {
     uint8_t mask = 0;
     cb->_plan.forEachRasterGroup(begin, [&](const raw::RasterState &state, uint32_t) {
@@ -24,7 +24,8 @@ inline uint8_t passStorageMask(RMCommandBuffer *cb, size_t begin)
     return mask;
 }
 
-inline void planSplitPrograms(RMCommandBuffer *cb, size_t begin, raw::RenderEncoder &encoder)
+__attribute__((objc_externally_retained)) inline void planSplitPrograms(RMCommandBuffer *cb, size_t begin,
+                                                                       raw::RenderEncoder &encoder)
 {
     RAW_ENCODE_SPAN(SplitPlan);
     encoder.beginSplitPlan();

@@ -218,6 +218,14 @@ struct RMPass {
 
     __unsafe_unretained id depth;
     MTLLoadAction depthLoad, stencilLoad;
+    // the descriptor's depth (0) and stencil (1) attachments as the encode reads them, the store as the encoder set it
+    struct Zeta {
+        __unsafe_unretained id texture;
+        NSUInteger level;
+        MTLLoadAction load;
+        MTLStoreAction store;
+        bool resolve;
+    } zeta[2];
     double clearDepth;
     uint32_t clearStencil;
     NSUInteger width, height;

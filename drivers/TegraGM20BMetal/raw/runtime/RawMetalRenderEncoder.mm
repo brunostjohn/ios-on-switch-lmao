@@ -56,6 +56,7 @@ static void checkFetch(RMRenderEncoder *e, MTLPrimitiveType type, NSUInteger cou
 - (void)setDepthStoreAction:(MTLStoreAction)action
 {
     _pass.depthAttachment.storeAction = action;
+    _cb->_passes[_passAt].zeta[0].store = action;
     if (_zeta && action != MTLStoreActionDontCare) {
         [_cb takeReason:WhyPass why:@"a depth/stencil attachment the raw path does not take"];
         hit(_cb, PredPassDepthStencil, _zeta, action);
@@ -65,6 +66,7 @@ static void checkFetch(RMRenderEncoder *e, MTLPrimitiveType type, NSUInteger cou
 - (void)setStencilStoreAction:(MTLStoreAction)action
 {
     _pass.stencilAttachment.storeAction = action;
+    _cb->_passes[_passAt].zeta[1].store = action;
     if (_zeta && action != MTLStoreActionDontCare) {
         [_cb takeReason:WhyPass why:@"a depth/stencil attachment the raw path does not take"];
         hit(_cb, PredPassDepthStencil, _zeta, action);

@@ -15,8 +15,10 @@
 // The host imports a texture's memory lies in, named to the submission (raw::CommandBuffer::use): a surface's or a planar
 // texture's planes, a buffer texture's buffer's, a view's parent's; and a YCbCr texture's planes, which only its conversion
 // reads (its image is pool memory).
-void useTexture(raw::CommandBuffer *rc, RMTexture *t, bool write)
+// The command buffer holds every object an encode reaches (RMCommandBuffer retain:), so the encode path retains none
+__attribute__((objc_externally_retained)) void useTexture(raw::CommandBuffer *rc, RMTexture *texture, bool write)
 {
+    __unsafe_unretained RMTexture *t = texture;
     while (t && t->_kind == RMTextureView && t->_parent)
         t = t->_parent;
     if (!t)
@@ -32,14 +34,15 @@ void useTexture(raw::CommandBuffer *rc, RMTexture *t, bool write)
             rc->use(*plane, false);
 }
 
-void useBuffer(raw::CommandBuffer *rc, RMBuffer *b, bool write)
+__attribute__((objc_externally_retained)) void useBuffer(raw::CommandBuffer *rc, RMBuffer *b, bool write)
 {
     if (b)
         rc->use(b->_raw, write);
 }
 
-static bool encodeRawAttempt(RMCommandBuffer *cb, size_t from, size_t to, const char **why, bool &stale,
-                             size_t *refusedEncoder)
+__attribute__((objc_externally_retained)) static bool encodeRawAttempt(RMCommandBuffer *cb, size_t from, size_t to,
+                                                                        const char **why, bool &stale,
+                                                                        size_t *refusedEncoder)
 {
     struct Encoding {
         Encoding()
@@ -82,13 +85,13 @@ static bool encodeRawAttempt(RMCommandBuffer *cb, size_t from, size_t to, const 
         cb->_plan.forEachResource(from, to, RMResourceKind::Texture, visit);
     };
     const auto pitchBuffer = [&](const RMRangeResource &use) {
-        if (RMBuffer *buffer = (__bridge RMBuffer *)use.facts.cpuBuffer)
+        if (__unsafe_unretained RMBuffer *buffer = (__bridge RMBuffer *)use.facts.cpuBuffer)
             rc->requirePitch(buffer->_raw.import);
     };
     buffers(pitchBuffer);
     textures([&](const RMRangeResource &use) {
         pitchBuffer(use);
-        RMTexture *texture = (__bridge RMTexture *)use.object;
+        __unsafe_unretained RMTexture *texture = (__bridge RMTexture *)use.object;
         if ((use.access & (raw::ResourceUse::Write | raw::ResourceUse::Explicit)) ||
             !(use.access & raw::ResourceUse::Sample)) {
             rc->requirePitch(texture->_raw.import);
@@ -100,14 +103,14 @@ static bool encodeRawAttempt(RMCommandBuffer *cb, size_t from, size_t to, const 
     textures([&](const RMRangeResource &use) {
         if (!(use.access & raw::ResourceUse::Sample))
             return;
-        RMTexture *texture = (__bridge RMTexture *)use.object;
+        __unsafe_unretained RMTexture *texture = (__bridge RMTexture *)use.object;
         for (const raw::Texture *plane : {&texture->_raw, texture->_raw.luma, texture->_raw.chroma})
             if (plane && plane->nativePlane != ~0u && rc->readTexture(plane) == plane)
                 rc->requirePitch(plane->import);
     });
     const auto cleanBuffer = [&](const RMRangeResource &use) {
         const bool write = use.access & raw::ResourceUse::Write;
-        if (RMBuffer *buffer = (__bridge RMBuffer *)use.facts.cpuBuffer;
+        if (__unsafe_unretained RMBuffer *buffer = (__bridge RMBuffer *)use.facts.cpuBuffer;
             buffer && buffer->_raw.hostVisible && !buffer->_raw.wc &&
             (write || (use.access & raw::ResourceUse::Explicit)))
             rc->clean(buffer->_raw.cpu, buffer->_raw.length, write);
@@ -155,9 +158,9 @@ static bool encodeRawAttempt(RMCommandBuffer *cb, size_t from, size_t to, const 
     // A planar render target's stand-in passes (raw::Texture::planarStandIn), the frontend's: the planes' codes into the stand-in
     // before a pass that loads it (its code image from the planes first, the copy engine's remaps), the stand-in into the planes
     // after one that stores it. 0: drawn; else fail()'s or refused()'s answer.
-    std::vector<RMTexture *> standInLoads, standInStores, planesWritten;
+    std::vector<__unsafe_unretained RMTexture *> standInLoads, standInStores, planesWritten;
     XrPlaneSync xrPlanes(*rc);
-    auto standInPass = [&](RMTexture *t, bool store) -> int {
+    auto standInPass = [&](__unsafe_unretained RMTexture *t, bool store) -> int {
         raw::Texture &x = t->_raw;
         if (!store) {
             raw::BlitEncoder *b = rc->blit();
@@ -197,7 +200,7 @@ static bool encodeRawAttempt(RMCommandBuffer *cb, size_t from, size_t to, const 
     // writes)
     struct Resolve {
         uint32_t attachment;
-        RMTexture *into;
+        __unsafe_unretained RMTexture *into;
     };
 
     std::vector<Resolve> resolves;
@@ -249,33 +252,34 @@ static bool encodeRawAttempt(RMCommandBuffer *cb, size_t from, size_t to, const 
     // image is made when a draw samples it. A sampler that clamps to zero or to the border reads a 4:4:4 code texture as clamp to
     // edge (m2v's address map), which the raw path does not derive: such a command buffer is m2v's.
     struct Conversion {
-        RMTexture *t;
+        __unsafe_unretained RMTexture *t;
         uint32_t seed;
         uint64_t writes, nativeGeneration;
     };
 
     std::vector<Conversion> converted;  // planar images converted here, at their surfaces' seeds and write counts
     {
-        std::vector<RMTexture *> planar;
-        std::vector<RMSampler *> samplers;
-        cb->_plan.forEachResource(from, to, RMResourceKind::Sampler, [&](const RMRangeResource &use) {
-            samplers.push_back((__bridge RMSampler *)use.object);
-        });
+        std::vector<__unsafe_unretained RMTexture *> planar;
+        std::vector<__unsafe_unretained RMSampler *> samplers;
         textures([&](const RMRangeResource &use) {
             if ((use.access & raw::ResourceUse::Sample) && (use.facts.roles & RMResourceFacts::Converted))
                 planar.push_back((__bridge RMTexture *)use.object);
         });
+        if (!planar.empty())
+            cb->_plan.forEachResource(from, to, RMResourceKind::Sampler, [&](const RMRangeResource &use) {
+                samplers.push_back((__bridge RMSampler *)use.object);
+            });
         if (!planar.empty()) {
             // the samplers' headers under the planar textures' address maps (m2v's), which the draws' handles take
-            for (RMTexture *t : planar)
-                for (RMSampler *sm : samplers)
+            for (__unsafe_unretained RMTexture *t : planar)
+                for (__unsafe_unretained RMSampler *sm : samplers)
                     if (t->_raw.addressMap && !d.samplerVariant(sm->_raw, t->_raw.addressMap))
                         return fail(PredEncPlanarClamp, "no sampler header for an address map");
             // an image converted already from its surface at the surface's seed now is not converted again: the work that
             // converted it went before on this channel (the decoder and ImageIO write a surface under a write lock, which
             // moves its seed). The new seeds take effect once this command buffer is submitted.
-            std::vector<RMTexture *> stale;
-            for (RMTexture *t : planar) {
+            std::vector<__unsafe_unretained RMTexture *> stale;
+            for (__unsafe_unretained RMTexture *t : planar) {
                 const uint32_t seed = t->_surface ? IOSurfaceGetSeed(t->_surface) : 0;
                 const uint64_t writes = t->_surface ? surfaceWrites(t->_surface) : 0;
                 const raw::Texture *luma = rc->readTexture(t->_raw.luma);
@@ -292,11 +296,11 @@ static bool encodeRawAttempt(RMCommandBuffer *cb, size_t from, size_t to, const 
             planar.swap(stale);
             // 4:4:4 code textures: two copy-engine remaps each
             bool copies = false;
-            for (RMTexture *t : planar)
+            for (__unsafe_unretained RMTexture *t : planar)
                 copies |= t->_raw.planar;
             if (copies) {
                 raw::BlitEncoder *conv = rc->blit();
-                for (RMTexture *t : planar)
+                for (__unsafe_unretained RMTexture *t : planar)
                     if (t->_raw.planar)
                         conv->convertPlanar(t->_raw);
                 conv->end();
@@ -306,7 +310,7 @@ static bool encodeRawAttempt(RMCommandBuffer *cb, size_t from, size_t to, const 
             // planes by the copy engine first, as refresh() fills a sampled surface's (r7u: without it the conversion read
             // whatever the pool held, magenta and green stripes of older images)
             raw::BlitEncoder *fill = nullptr;
-            for (RMTexture *t : planar)
+            for (__unsafe_unretained RMTexture *t : planar)
                 if (t->_raw.ycbcr)
                     for (const raw::Texture *x : {t->_raw.luma, t->_raw.chroma})
                         if (x && x->sampled && rc->readTexture(x) == x) {
@@ -317,7 +321,7 @@ static bool encodeRawAttempt(RMCommandBuffer *cb, size_t from, size_t to, const 
             if (fill)
                 fill->end();
             // YCbCr textures: a pass of the pack's conversion state each, into the image the draws sample
-            for (RMTexture *t : planar) {
+            for (__unsafe_unretained RMTexture *t : planar) {
                 raw::Texture &x = t->_raw;
                 if (!x.ycbcr)
                     continue;
@@ -356,7 +360,7 @@ static bool encodeRawAttempt(RMCommandBuffer *cb, size_t from, size_t to, const 
                                   [&](const RMRangeResource &use) {
             if (!(use.access & raw::ResourceUse::Sample))
                 return;
-            RMTexture *t = (__bridge RMTexture *)use.object;
+            __unsafe_unretained RMTexture *t = (__bridge RMTexture *)use.object;
             if (rc->readTexture(&t->_raw) != &t->_raw || !t->_raw.sampled ||
                 (!t->_raw.surfaceView && !fresh.insert(t).second))
                 return;
@@ -373,16 +377,16 @@ static bool encodeRawAttempt(RMCommandBuffer *cb, size_t from, size_t to, const 
     std::deque<raw::Texture>
         codes;  // the conversions' sources: the codes' headers (the encoder reads them until its end)
     auto standIns = [&](size_t pass) {
-        std::vector<RMTexture *> stale;
+        std::vector<__unsafe_unretained RMTexture *> stale;
         cb->_plan.forEachResource(pass, cb->_plan.encoderEnd(pass), RMResourceKind::Texture,
                                   [&](const RMRangeResource &use) {
             if (!(use.access & raw::ResourceUse::Sample))
                 return;
-            RMTexture *texture = (__bridge RMTexture *)use.object;
+            __unsafe_unretained RMTexture *texture = (__bridge RMTexture *)use.object;
             if (texture->_raw.standIn && !standInFresh.count(texture))
                 stale.push_back(texture);
         });
-        for (RMTexture *t : stale) {
+        for (__unsafe_unretained RMTexture *t : stale) {
             xrPlanes.read(t);
             raw::Texture &x = t->_raw;
             raw::PassDesc p;
@@ -418,10 +422,10 @@ static bool encodeRawAttempt(RMCommandBuffer *cb, size_t from, size_t to, const 
             const auto *kernels = static_cast<const raw::ComputeKernelSet<raw::ComputeState> *>(dispatch.kernel);
             const auto &state = cb->_plan.kernelStates[dispatch.state];
             const auto &textures = cb->_plan.textures[2][state.textures].objects;
-            std::array<RMTexture *, 31> shadows{};
+            std::array<__unsafe_unretained RMTexture *, 31> shadows{};
             size_t count = 0;
             for (uint32_t slots = dispatch.surfaceSlots; slots; slots &= slots - 1) {
-                RMTexture *texture = (__bridge RMTexture *)textures[__builtin_ctz(slots)];
+                __unsafe_unretained RMTexture *texture = (__bridge RMTexture *)textures[__builtin_ctz(slots)];
                 if (texture && rc->readTexture(&texture->_raw) == &texture->_raw &&
                     std::find(shadows.begin(), shadows.begin() + count, texture) == shadows.begin() + count)
                     shadows[count++] = texture;
@@ -496,7 +500,7 @@ static bool encodeRawAttempt(RMCommandBuffer *cb, size_t from, size_t to, const 
             raw::PassDesc p;
             for (unsigned j = 0; j < 8; j++) {
                 const RMPass::Color &a = pass.color[j];
-                RMTexture *t = (RMTexture *)a.texture;
+                __unsafe_unretained RMTexture *t = (RMTexture *)a.texture;
                 if (!t)
                     continue;
                 if (t->_raw.planar && !t->_raw.planarStandIn)
@@ -536,7 +540,7 @@ static bool encodeRawAttempt(RMCommandBuffer *cb, size_t from, size_t to, const 
                 p.color[j].store =
                     a.store == MTLStoreActionStore || a.store == MTLStoreActionStoreAndMultisampleResolve;
                 if (a.store == MTLStoreActionMultisampleResolve || a.store == MTLStoreActionStoreAndMultisampleResolve)
-                    if (RMTexture *r = (RMTexture *)a.resolve)
+                    if (__unsafe_unretained RMTexture *r = (RMTexture *)a.resolve)
                         resolves.push_back({j, r});
                 const MTLClearColor k = a.clear;
                 p.color[j].clear[0] = float(k.red);
@@ -545,7 +549,7 @@ static bool encodeRawAttempt(RMCommandBuffer *cb, size_t from, size_t to, const 
                 p.color[j].clear[3] = float(k.alpha);
                 p.count = j + 1;
             }
-            if (RMTexture *z = (RMTexture *)pass.depth) {  // (rawDepthStencil: decided at record)
+            if (__unsafe_unretained RMTexture *z = (RMTexture *)pass.depth) {  // (rawDepthStencil: decided at record)
                 p.depthStencil.texture = &z->_raw;
                 p.depthStencil.clearDepth = pass.depthLoad == MTLLoadActionClear;
                 p.depthStencil.clearStencil = pass.stencilLoad == MTLLoadActionClear;
@@ -556,7 +560,7 @@ static bool encodeRawAttempt(RMCommandBuffer *cb, size_t from, size_t to, const 
             p.height = uint32_t(std::min<NSUInteger>(pass.height, UINT32_MAX));
             p.storageMask = passStorageMask(cb, at);
             p.positions = pass.positions;
-            for (RMTexture *t : standInLoads)
+            for (__unsafe_unretained RMTexture *t : standInLoads)
                 if (standInPass(t, false))
                     return false;
             standInLoads.clear();
@@ -596,7 +600,7 @@ static bool encodeRawAttempt(RMCommandBuffer *cb, size_t from, size_t to, const 
                 ce->end();
                 ce.reset();
             }
-            for (RMTexture *t : standInStores)
+            for (__unsafe_unretained RMTexture *t : standInStores)
                 if (standInPass(t, true))
                     return false;
             standInStores.clear();
@@ -619,7 +623,7 @@ static bool encodeRawAttempt(RMCommandBuffer *cb, size_t from, size_t to, const 
             break;
         case OpDrawIndexed: {
             const auto &draw = cb->_plan.draw(at);
-            RMBuffer *indices = (__bridge RMBuffer *)draw.indices;
+            __unsafe_unretained RMBuffer *indices = (__bridge RMBuffer *)draw.indices;
             useBuffer(rc, indices, false);
             if (!re->drawIndexed(draw.primitive, draw.count, draw.indexType == MTLIndexTypeUInt16 ? 2 : 4,
                                  &indices->_raw, draw.indexOffset, draw.instances, draw.baseVertex, draw.baseInstance,
@@ -630,8 +634,8 @@ static bool encodeRawAttempt(RMCommandBuffer *cb, size_t from, size_t to, const 
         case OpDrawIndirect:
         case OpDrawIndexedIndirect: {
             const auto &draw = cb->_plan.draw(at);
-            RMBuffer *arguments = (__bridge RMBuffer *)draw.arguments;
-            RMBuffer *indices = (__bridge RMBuffer *)draw.indices;
+            __unsafe_unretained RMBuffer *arguments = (__bridge RMBuffer *)draw.arguments;
+            __unsafe_unretained RMBuffer *indices = (__bridge RMBuffer *)draw.indices;
             useBuffer(rc, arguments, false);
             useBuffer(rc, indices, false);
             const bool accepted =
@@ -674,7 +678,7 @@ static bool encodeRawAttempt(RMCommandBuffer *cb, size_t from, size_t to, const 
         be->end();
     if (ce)
         ce->end();
-    for (RMTexture *t : standInStores)
+    for (__unsafe_unretained RMTexture *t : standInStores)
         if (standInPass(t, true))
             return false;
     xrPlanes.flush();
@@ -734,7 +738,7 @@ static bool encodeRawAttempt(RMCommandBuffer *cb, size_t from, size_t to, const 
     }
     noteSurfaceWrites(cb, from, to);
     xrPlanes.submitted();
-    for (RMTexture *t : planesWritten)  // a write the surface's seed does not show: its image is converted again
+    for (__unsafe_unretained RMTexture *t : planesWritten)  // a write the surface's seed does not show: its image is converted again
         t->_imageCurrent = false;
     cb->_seqno = seq;
     cb->_channelGeneration = generation;

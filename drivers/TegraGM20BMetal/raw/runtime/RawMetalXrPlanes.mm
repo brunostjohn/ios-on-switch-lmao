@@ -45,7 +45,7 @@ bool makeXrPlanes(RMTexture *t, IOSurfaceRef s)
     return true;
 }
 
-XrPlaneSync::Entry *XrPlaneSync::entry(RMTexture *t)
+__attribute__((objc_externally_retained)) XrPlaneSync::Entry *XrPlaneSync::entry(RMTexture *t)
 {
     if (!t || !xrOverPlanes(t->_raw))
         return nullptr;
@@ -73,7 +73,7 @@ void XrPlaneSync::merge(Entry &e, raw::BlitEncoder *open)
     b->end();
 }
 
-void XrPlaneSync::read(RMTexture *t, raw::BlitEncoder *open)
+__attribute__((objc_externally_retained)) void XrPlaneSync::read(RMTexture *t, raw::BlitEncoder *open)
 {
     if (Entry *e = entry(t))
         merge(*e, open);
@@ -99,7 +99,8 @@ static bool clearsWhole(RMTexture *t, MTLLoadAction load, const RMPass &pass)
     return width >= t->_raw.width && height >= t->_raw.height;
 }
 
-void XrPlaneSync::attach(RMTexture *t, MTLLoadAction load, const RMPass &pass)
+__attribute__((objc_externally_retained)) void XrPlaneSync::attach(RMTexture *t, MTLLoadAction load,
+                                                                  const RMPass &pass)
 {
     Entry *e = entry(t);
     if (!e)
