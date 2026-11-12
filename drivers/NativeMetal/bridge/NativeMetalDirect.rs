@@ -741,7 +741,7 @@ impl<'d> Layout<'d> {
         };
         for (set_index, set) in layout.sets.iter().enumerate() {
             let mut immutable: Vec<Vec<avk::Sampler>> = Vec::with_capacity(set.bindings.len());
-            let mut bindings = Vec::with_capacity(set.bindings.len());
+            let mut data_bindings = Vec::with_capacity(set.bindings.len());
             for binding in &set.bindings {
                 let mut data = NmbDirectBinding {
                     binding: binding.binding,
@@ -753,7 +753,7 @@ impl<'d> Layout<'d> {
                 };
                 let Some(desc) = binding.immutable_sampler else {
                     immutable.push(Vec::new());
-                    bindings.push(data);
+                    data_bindings.push(data);
                     continue;
                 };
                 let mut reduction = avk::SamplerReductionModeCreateInfo::default();
@@ -765,7 +765,7 @@ impl<'d> Layout<'d> {
                     desc.reduction.into(),
                     desc.border_components.map(avk::ComponentMapping::from),
                 );
-                bindings.push(data);
+                data_bindings.push(data);
                 // SAFETY: `info` and its chain are live for the call.
                 let sampler = unsafe { device.create_sampler(&info, None) }.map_err(e("sampler"))?;
                 made.samplers.push(sampler);
@@ -789,9 +789,9 @@ impl<'d> Layout<'d> {
                 })
                 .collect();
             if set_index == 0 {
-                made.set0_bindings = bindings.clone();
+                made.set0_bindings = data_bindings.clone();
             }
-            made.set_bindings.push(bindings);
+            made.set_bindings.push(data_bindings);
             let flags: Vec<avk::DescriptorBindingFlags> = set.bindings.iter().map(|b| b.flags.into()).collect();
             let mut flags_info = avk::DescriptorSetLayoutBindingFlagsCreateInfo::default().binding_flags(&flags);
             let mut info = avk::DescriptorSetLayoutCreateInfo::default()
