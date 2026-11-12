@@ -84,10 +84,14 @@ TEST(DispatchPieces, ThePiecesBaseIsTheKernelsWorkgroupBase)
                 HasSubstr(".has_base_workgroup_id = mesa_shader_stage_is_compute(nir->info.stage),"));
     EXPECT_THAT(SourceText("../../../third_party/mesa/src/nouveau/vulkan/nvk_nir_lower_descriptors.c"),
                 HasSubstr("return lower_sysval_to_root_table(b, intrin, cs.base_group, ctx);"));
-    const std::string launch = Body(SourceText("../raw/runtime/raw_compute.cpp"), "bool ComputeEncoder::launch(");
-    EXPECT_THAT(launch, HasSubstr("root[a] = piece.base[a];"));
-    EXPECT_THAT(launch, HasSubstr("root[3 + a] = grid[a];"));
-    EXPECT_THAT(launch, HasSubstr("qmd[kQmdRasterWidth] = piece.groups[0];"));
+    const std::string compute = SourceText("../raw/runtime/raw_compute.cpp");
+    const std::string launch = Body(compute, "bool ComputeEncoder::launch(");
+    EXPECT_THAT(launch, HasSubstr("rootWords(r, piece.base.data(), grid.data(),"));
+    EXPECT_THAT(launch, HasSubstr("qmdWords(*state_, piece.groups.data(),"));
+    const std::string words = Body(compute, "void ComputeEncoder::rootWords(");
+    EXPECT_THAT(words, HasSubstr("root[a] = base[a];"));
+    EXPECT_THAT(words, HasSubstr("root[3 + a] = groups[a];"));
+    EXPECT_THAT(Body(compute, "bool ComputeEncoder::qmdWords("), HasSubstr("qmd[kQmdRasterWidth] = groups[0];"));
 }
 
 }  // namespace
