@@ -7,6 +7,7 @@ from tools.gpu.maxwell import isa, texture
 from tools.gpu.maxwell.floats import F16, F32, RN, arith, convert, encode, flush, is_inf, is_nan, value
 from tools.gpu.maxwell.interp import (
     MAX_STEPS,
+    RZ_REG,
     Inputs,
     Lane,
     UnsupportedError,
@@ -198,6 +199,8 @@ def alu(name: str, w: int, lane: Lane, inputs: Inputs) -> None:  # noqa: C901, P
             lane.w(d + k, inputs.cbuf(bits(w, 36, 5), offset + 4 * k))
     elif base == 'IPA':
         ipa(w, lane, inputs, d)
+    elif base in ('ALD', 'AST'):
+        attributes(base, w, lane, inputs)
     elif base == 'TEX':
         texture.tex(name, w, lane, inputs, d)
     elif base == 'TEXS':
@@ -392,6 +395,21 @@ def ipa(w: int, lane: Lane, inputs: Inputs, d: int) -> None:
     elif freq not in (0, 2):
         raise UnsupportedError('IPA state')
     lane.w(d, v)
+
+
+def attributes(base: str, w: int, lane: Lane, inputs: Inputs) -> None:
+    """Load a vertex stage's input attribute words or store its output words (NAK sm50.rs OpALd, OpASt).
+
+    A load's words come from `inputs.attribute`; a store is recorded as ('ast', byte address, word) in `lane.stores`.
+    """
+    if bits(w, 31, 1) or bits(w, 39, 8) != RZ_REG or (base == 'ALD' and bits(w, 32, 1)):
+        raise UnsupportedError(f'{base} of a patch, a vertex or an output')
+    at = (lane.r(bits(w, 8, 8)) + bits(w, 20, 10)) & 0xFFFFFFFF
+    for k in range(bits(w, 47, 2) + 1):
+        if base == 'ALD':
+            lane.w(bits(w, 0, 8) + k, inputs.attribute(at + 4 * k))
+        else:
+            lane.stores.append(('ast', at + 4 * k, lane.r(bits(w, 0, 8) + k)))
 
 
 def branch_target(pc: int, w: int) -> int:

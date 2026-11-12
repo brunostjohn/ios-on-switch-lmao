@@ -12,7 +12,9 @@
 // and its fragment program's split: u32 0, or 1 and its PackSplit (no program indices), its per-pixel program and its prologue
 // (as the programs above; the prologue's header 80 bytes of zeros), its program variants, and the iterated blend program a
 // fetch-free form names (u32 length and bytes: ca/fetchfree.py, iterated/table.py; empty for any other record), then its
-// argument tables' words (u32 count and words: the vertex table's, then the fragment table's). A record of
+// argument tables' words (u32 count and words: the vertex table's, then the fragment table's), then m2v's own instantiation
+// of the probe draw that binds every buffer slot at its probe offset (RawDirect.h BoundDraw: its push mask, its 32 root push
+// words as bytes, and each stage's argument table as u32 count and words, vertex then fragment). A record of
 // one of a state's variants has the variant's name after its key (runtime/raw_pack.h variantNameAt); a state's fetch-free
 // form is under the state's key (PipelineFetchFreeForm).
 // Then per compute dispatch shape (the corpus's D lines, as the kernel probe read them: kernel_shapes.h): "DKRN", the outcome,
@@ -75,7 +77,7 @@ bool head(Writer &w, const char *tag, const std::string &key, raw::CompileOutcom
 }
 
 void record(Writer &w, const std::string &key, raw::CompileOutcome outcome, const std::string &why,
-            const raw::RuntimeRecord &rec, const std::map<uint32_t, uint32_t> &registers,
+            const raw::RuntimeRecord &rec, const std::map<uint32_t, uint32_t> &registers, const raw::BoundDraw &bound,
             const std::string &iterated = "")
 {
     if (!head(w, "DREC", key, outcome, why))
@@ -110,6 +112,10 @@ void record(Writer &w, const std::string &key, raw::CompileOutcome outcome, cons
     }
     w.text(iterated);
     w.list(rec.spill);
+    w.u32(bound.pushMask);
+    w.bytes(bound.push, sizeof bound.push);
+    w.list(bound.spill[0]);
+    w.list(bound.spill[1]);
 }
 
 // The rung a Core Animation state's fragment blend is a candidate for (rawpack.py's split tags its line " rung=<2|3>":
@@ -177,7 +183,7 @@ void makeFetchFree(raw::Direct &direct, Writer &w, id<MTLLibrary> qc, const std:
     rec.pipeline.flags |= raw::PipelineFetchFreeForm;
     rec.pipeline.fetchRung[form.colour] = form.rung == 2 ? raw::FetchBlend : raw::FetchIteratedBlend;
     n.free[form.rung]++;
-    record(w, key, outcome, why, rec, registers, form.rung == 3 ? form.program : "");
+    record(w, key, outcome, why, rec, registers, direct.boundDraw(), form.rung == 3 ? form.program : "");
 }
 
 // A state's records: its own, its barrier form where its own is the storage form and leaves the blend to the ROP (the runtime
@@ -191,7 +197,7 @@ void makeState(raw::Direct &direct, Writer &w, id<MTLLibrary> qc, const std::str
         std::string why;
         const raw::CompileOutcome outcome = direct.make(s.d, key, rec, why, textures, &registers, true, form);
         markCandidates(line, rec.pipeline);
-        record(w, key, outcome, why, rec, registers);
+        record(w, key, outcome, why, rec, registers, direct.boundDraw());
         return outcome;
     };
     raw::RuntimeRecord rec;
@@ -263,6 +269,7 @@ int main(int argc, char **argv)
         rules.varying = raw::emittableMethods();
         raw::Direct direct(std::move(rules));
         direct.makeVariants(true);
+        direct.keepBoundDraws(true);
         Counts counts;
         probe::eachState(dev, qc, own, standIn, probe::corpusLines(text, own != nil),
                          [&](const std::string &line, bool ours, probe::State &s) {

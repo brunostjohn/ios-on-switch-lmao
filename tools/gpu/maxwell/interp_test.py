@@ -8,7 +8,7 @@ from pathlib import Path
 
 from tools.gpu.maxwell import floats, gate, isa, texture
 from tools.gpu.maxwell.execute import alu, run
-from tools.gpu.maxwell.interp import Lane
+from tools.gpu.maxwell.interp import Lane, UnsupportedError
 
 FIXTURE = Path(__file__).with_name('testdata') / 'image_draw_fragment.hex'
 F2F_NEG = 1 << 45
@@ -161,6 +161,36 @@ class AddressTest(unittest.TestCase):
         texture.tld('TLD_b', word, lane, inputs, 10)
         self.assertEqual(seen, [('tld', 0x300005, (7, 9), None, None, None, 1)])
         self.assertEqual([lane.r(r) for r in (10, 11, 12, 13)], [1, 2, 3, 4])
+
+
+class AttributeTest(unittest.TestCase):
+    """A vertex stage's ALD and AST as NAK sm50.rs encodes them: 0xefd8 and 0xeff0, the byte address in bits 20-29."""
+
+    @staticmethod
+    def word(opcode: int, reg: int, index: int, address: int, comps: int) -> int:
+        output = 1 << 32 if opcode == 0xEFF0 else 0
+        return opcode << 48 | (comps - 1) << 47 | 0xFF << 39 | output | address << 20 | index << 8 | reg
+
+    def test_a_load_reads_consecutive_words_from_its_address_plus_its_index(self):
+        inputs = gate.Seeded(3, 0).inputs(0)
+        inputs.attribute = lambda at: 0x1000 + at
+        lane = Lane()
+        lane.w(2, 0x10)
+        alu('ALD', self.word(0xEFD8, 4, 255, 0x80, 4), lane, inputs)
+        self.assertEqual([lane.r(r) for r in range(4, 8)], [0x1080, 0x1084, 0x1088, 0x108C])
+        alu('ALD', self.word(0xEFD8, 8, 2, 0x2F0, 1), lane, inputs)
+        self.assertEqual(lane.r(8), 0x1300)
+
+    def test_a_store_records_each_word_at_its_address(self):
+        lane = Lane()
+        for r, v in enumerate((5, 6, 7, 8)):
+            lane.w(10 + r, v)
+        alu('AST', self.word(0xEFF0, 10, 255, 0x70, 4), lane, None)
+        self.assertEqual(lane.stores, [('ast', 0x70, 5), ('ast', 0x74, 6), ('ast', 0x78, 7), ('ast', 0x7C, 8)])
+
+    def test_a_patch_or_a_vertex_register_is_not_modelled(self):
+        with self.assertRaises(UnsupportedError):
+            alu('ALD', self.word(0xEFD8, 4, 255, 0x80, 1) | 1 << 31, Lane(), None)
 
 
 if __name__ == '__main__':

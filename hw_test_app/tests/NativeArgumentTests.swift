@@ -97,8 +97,9 @@ struct NativeArgumentEncoderTest: NativeObjectTest {
             ("draw_path", drawThroughArguments), ("texture_draw_path", drawTexturesThroughArguments),
             ("array_draw_path", drawArraysThroughArguments), ("slot_draw_path", drawSlotThroughArguments),
             ("kernel_path", dispatchThroughArguments),
-            ("spill_draw_path", { try await drawSpillThroughArguments($0, vertex: false) }),
-            ("spill_vertex_draw_path", { try await drawSpillThroughArguments($0, vertex: true) }),
+            ("spill_draw_path", { try await drawSpillThroughArguments($0, .fragment) }),
+            ("spill_vertex_draw_path", { try await drawSpillThroughArguments($0, .vertex) }),
+            ("spill_both_draw_path", { try await drawSpillThroughArguments($0, .both) }),
             ("spill_kernel_path", dispatchSpillThroughArguments),
         ]
         for (key, draw) in draws {
