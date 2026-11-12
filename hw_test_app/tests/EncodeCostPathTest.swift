@@ -6,7 +6,8 @@ import Metal
 /// The raw encode's CPU cost of a command buffer shaped as Core Animation's (raw_encode_profile.h, debug builds):
 /// `passes` passes of Core Animation's untextured fill (PBGRAXm_A2Xhf, BGRA8 beside its memoryless colour 1), each draw
 /// binding its vertices, transform and zero uniforms by setBytes with a scissor of its own, `buffers` command buffers
-/// at each of two draw counts. Per command buffer at each count: the encode's wall time and its parts (us_<part>, and
+/// at each of two draw counts, each after as many at that count (whose recording storage they reuse, as a steady frame
+/// does). Per command buffer at each count: the encode's wall time and its parts (us_<part>, and
 /// walk_us the loop's time outside every part), its events (mallocs, frees, locks, sends, uses, use_adds, descriptor
 /// builds and uploads, geometry vertices) and bindings applied per draw. A command buffer's mallocs, frees, locks,
 /// Objective-C sends, job uses that reached a job's list and vertices the CPU read must not grow with its draws, none
@@ -88,7 +89,7 @@ struct EncodeCostPathTest: HWTest {
         metrics.set("warm", warm)
         var arms: [[String: Double]] = []
         for draws in Self.drawCounts {
-            try gpu.finish((0..<4).map { _ in try gpu.commit { encode($0, draws) } })
+            try gpu.finish((0..<Self.buffers).map { _ in try gpu.commit { encode($0, draws) } })
             let before = RawFacade.encodeProfile(of: gpu.device)
             try gpu.finish((0..<Self.buffers).map { _ in try gpu.commit { encode($0, draws) } })
             arms.append(Self.perCommandBuffer(before, RawFacade.encodeProfile(of: gpu.device)))

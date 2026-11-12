@@ -59,6 +59,25 @@ static void dropBytes(RMBytes &s)
     s = {};
 }
 
+// A recording that outgrew its first chunk keeps one chunk of their total: the next command buffer of its shape names one
+// chunk to its job, not one for each 64 KB of its setBytes
+static void coalesceBytes(RMBytes &s)
+{
+    if (s.chunks.size() < 2)
+        return;
+    uint64_t length = 0;
+    for (const raw::Buffer &k : s.chunks) {
+        if (!k.va)
+            return;
+        length += k.length;
+    }
+    raw::Buffer one;
+    if (!gRM->raw->createControlBuffer(length, one))
+        return;
+    dropBytes(s);
+    s.chunks.push_back(one);
+}
+
 static void giveRecording(RMCommandBuffer *b)
 {
     constexpr size_t kKeptBytes = 1 << 20;  // (a command buffer of a few megabytes of setBytes: its own, freed)
@@ -88,6 +107,7 @@ static void giveRecording(RMCommandBuffer *b)
     r.extra.clear();
     r.owners.clear();
     r.ownerKeys.clear();
+    coalesceBytes(r.bytes);
     {
         std::lock_guard<std::mutex> l(gRecordingsLock);
         if (gRecordingBytes + bytes <= kKeptTotal) {
