@@ -3,7 +3,6 @@
 
 use crate::ir::*;
 
-use compiler::bitset::BitSet;
 use compiler::dataflow::BackwardDataflow;
 use rustc_hash::{FxHashMap, FxHashSet};
 use std::cmp::{max, min, Ord, Ordering};
@@ -233,16 +232,18 @@ pub trait Liveness {
     }
 }
 
-// ios-on-switch-lmao: a block's defs are a list, and its uses last_use's
-// keys, made into sets only while the dataflow transfers through the block.
-// A set is as long as the block's highest SSA index, so one per block of an
-// uber shader was most of its compile's memory.
+// ios-on-switch-lmao: a block keeps its defs as a sorted list of SSA
+// indices and its live-in and live-out values as sets of them; its uses are
+// last_use's keys. Walking up from each use to its def gives the least
+// solution of the backward dataflow, the same sets. Dense sets as long as the
+// shader's highest SSA index, four per block, were most of an uber shader's
+// compile memory.
 #[derive(Default)]
 pub struct SimpleBlockLiveness {
-    defs: Vec<SSAValue>,
+    defs: Vec<u32>,
     last_use: FxHashMap<SSAValue, usize>,
-    live_in: BitSet<SSAValue>,
-    live_out: BitSet<SSAValue>,
+    live_in: FxHashSet<u32>,
+    live_out: FxHashSet<u32>,
 }
 
 impl SimpleBlockLiveness {
@@ -251,33 +252,21 @@ impl SimpleBlockLiveness {
     }
 
     fn add_def(&mut self, ssa: SSAValue) {
-        self.defs.push(ssa);
+        self.defs.push(ssa.idx());
     }
 
     fn add_use(&mut self, ssa: SSAValue, ip: usize) {
         self.last_use.insert(ssa, ip);
     }
 
-    fn def_set(&self) -> BitSet<SSAValue> {
-        let mut defs = BitSet::new();
-        for ssa in &self.defs {
-            defs.insert(*ssa);
-        }
-        defs
-    }
-
-    fn use_set(&self) -> BitSet<SSAValue> {
-        let mut uses = BitSet::new();
-        for ssa in self.last_use.keys() {
-            uses.insert(*ssa);
-        }
-        uses
+    fn defines(&self, ssa: &SSAValue) -> bool {
+        self.defs.binary_search(&ssa.idx()).is_ok()
     }
 }
 
 impl BlockLiveness for SimpleBlockLiveness {
     fn is_live_after_ip(&self, val: &SSAValue, ip: usize) -> bool {
-        if self.live_out.contains(*val) {
+        if self.live_out.contains(&val.idx()) {
             true
         } else if let Some(last_use_ip) = self.last_use.get(val) {
             *last_use_ip > ip
@@ -287,11 +276,11 @@ impl BlockLiveness for SimpleBlockLiveness {
     }
 
     fn is_live_in(&self, val: &SSAValue) -> bool {
-        self.live_in.contains(*val)
+        self.live_in.contains(&val.idx())
     }
 
     fn is_live_out(&self, val: &SSAValue) -> bool {
-        self.live_out.contains(*val)
+        self.live_out.contains(&val.idx())
     }
 }
 
@@ -320,28 +309,36 @@ impl SimpleLiveness {
                 });
             }
 
+            bl.defs.sort_unstable();
             l.blocks.push(bl);
         }
         assert!(l.blocks.len() == func.blocks.len());
 
-        let mut live_in: Vec<BitSet<SSAValue>> =
-            (0..func.blocks.len()).map(|_| Default::default()).collect();
-        let mut live_out: Vec<BitSet<SSAValue>> =
-            (0..func.blocks.len()).map(|_| Default::default()).collect();
-        BackwardDataflow {
-            cfg: &func.blocks,
-            block_in: &mut live_in[..],
-            block_out: &mut live_out[..],
-            transfer: |block_idx, _, live_in, live_out| {
-                let bl = &l.blocks[block_idx];
-                let (uses, defs) = (bl.use_set(), bl.def_set());
-                live_in.union_with((live_out.s(..) | uses.s(..)) - defs.s(..))
-            },
-            join: |live_out, succ_live_in| {
-                *live_out |= succ_live_in.s(..);
-            },
+        let num_blocks = func.blocks.len();
+        let mut live_in: Vec<FxHashSet<u32>> =
+            (0..num_blocks).map(|_| Default::default()).collect();
+        let mut live_out: Vec<FxHashSet<u32>> =
+            (0..num_blocks).map(|_| Default::default()).collect();
+        let mut walk = Vec::new();
+        for (bi, bl) in l.blocks.iter().enumerate() {
+            for ssa in bl.last_use.keys() {
+                if bl.defines(ssa) {
+                    continue;
+                }
+                walk.push(bi);
+                while let Some(b) = walk.pop() {
+                    if !live_in[b].insert(ssa.idx()) {
+                        continue;
+                    }
+                    for &p in func.blocks.pred_indices(b) {
+                        live_out[p].insert(ssa.idx());
+                        if !l.blocks[p].defines(ssa) {
+                            walk.push(p);
+                        }
+                    }
+                }
+            }
         }
-        .solve();
 
         for ((bl, b_live_in), b_live_out) in l
             .blocks
