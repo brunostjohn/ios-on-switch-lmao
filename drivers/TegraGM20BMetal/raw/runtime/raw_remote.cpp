@@ -38,16 +38,22 @@ void Remote::refresh(const TegraGM20BAbiCompilerInfoReply &info)
         map(info.generation);
 }
 
-// No compiler took a request: one that is neither registered nor waited for (lost a third time, or declined) leaves this
-// process asking the kernel whether one serves, never with a request, until one registers
+// No compiler took a request: whether one is registered or waited for now
 void Remote::recheck()
 {
     TegraGM20BAbiCompilerInfoReply info = {};
     if (call(TegraGM20BMethodCompilerInfo, nullptr, 0, &info, sizeof info) != kIOReturnSuccess)
         return;
-    if (!(info.flags & (TegraGM20BCompilerExpected | TegraGM20BCompilerRegistered)))
-        expected_.store(false, std::memory_order_release);
+    absent_.store(!(info.flags & (TegraGM20BCompilerExpected | TegraGM20BCompilerRegistered)),
+                  std::memory_order_release);
     refresh(info);
+}
+
+bool Remote::taking()
+{
+    if (absent_.load(std::memory_order_acquire))
+        recheck();
+    return !absent_.load(std::memory_order_acquire);
 }
 
 bool Remote::serving()
@@ -183,7 +189,7 @@ Remote::Answer Remote::answerOf(int32_t result)
 
 Remote::Answer Remote::compile(const std::string &request, uint32_t *how)
 {
-    if (!serving())
+    if (!serving() || !taking())
         return Answer::Unavailable;
     const TegraGM20BAbiCompile in = {uint64_t(uintptr_t(request.data())), request.size(),         0, stack_,
                                      uint32_t(qos_class_self()),          TegraGM20BCompileWaited};
@@ -203,7 +209,7 @@ Remote::Answer Remote::compile(const std::string &request, uint32_t *how)
 
 bool Remote::compileAsync(const std::string &request, bool waited, uint32_t qos, std::function<void(Answer)> done)
 {
-    if (!serving())
+    if (!serving() || !taking())
         return false;
     std::lock_guard<std::mutex> l(asyncLock_);
     if (!port_) {
