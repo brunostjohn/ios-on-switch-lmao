@@ -222,6 +222,8 @@ static void watchColumnScan(const char *name, int blockHeightLog2)
 // Debug builds: HW Test's second process for shared textures (hw_test_app/peer/texpeer.mm). The sandboxed app can start no
 // process, so it sends {kMsgId: "SwitchTexturePeer", endpoint: its anonymous listener's}; this starts the peer and keeps
 // the endpoint until that process asks for it ({kMsgId: "SwitchTexturePeerEndpoint"}), then the peer connects to the app.
+extern pid_t ios_xpc_connection_get_pid(xpc_connection_t connection) __asm__("_xpc_connection_get_pid");
+
 static const char kTexturePeer[] = "/usr/bin/switch-texpeer";
 static os_unfair_lock gPeerLock = OS_UNFAIR_LOCK_INIT;
 static xpc_object_t gPeerEndpoint;
@@ -252,7 +254,7 @@ static void startTexturePeer(xpc_object_t message, xpc_object_t reply)
 static void giveTexturePeerEndpoint(xpc_connection_t peer, xpc_object_t reply)
 {
     os_unfair_lock_lock(&gPeerLock);
-    const bool started = gPeerEndpoint && xpc_connection_get_pid(peer) == gPeerPid;
+    const bool started = gPeerEndpoint && ios_xpc_connection_get_pid(peer) == gPeerPid;
     if (started) {
         xpc_dictionary_set_value(reply, "endpoint", gPeerEndpoint);
         xpc_release(gPeerEndpoint);
