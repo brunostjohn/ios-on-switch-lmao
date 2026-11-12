@@ -1488,18 +1488,6 @@ public:
         splitProbe_ = probe;
     }
 
-    // the prologues' stores made visible to the draws with the 3D class's own flush and wait for idle as well as the
-    // compute class's (HW Test's debug switch split-frontier-wfi)
-    void splitFrontierWfi(bool wfi)
-    {
-        splitFrontierWfi_ = wfi;
-    }
-
-    void splitFrontierExact(bool exact)
-    {
-        splitFrontierExact_ = exact;
-    }
-
     // HW Test's bench: every draw the split plan would take if large enough is taken, without a plan
     void forceSplit(bool force)
     {
@@ -1607,8 +1595,6 @@ private:
     bool forceWholePrograms_ = false, inlineStates_ = false;
     SplitProbe splitProbe_ = SplitProbe::Twin;
     bool splitForced_ = false;
-    bool splitFrontierWfi_ = false;
-    bool splitFrontierExact_ = false;
     bool splitCapturing_ = false;  // the device's capture was armed at begin(): its draws may take a record
     std::vector<SplitCaptureRecord> splitCaptures_;
 

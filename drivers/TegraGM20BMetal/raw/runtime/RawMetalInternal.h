@@ -620,8 +620,5 @@ void watchGlassProbe(raw::Device *dev);
 void glassProbeCommitted(RMCommandBuffer *cb);
 bool rmWholePrograms();
 bool rmZeroNewBuffers();
-raw::SplitProbe rmSplitProbe();
-bool rmSplitFrontierWfi();
-bool rmSplitFrontierExact();
 void splitCaptureCommitted(raw::CommandBuffer &rc);
 #endif

@@ -53,9 +53,6 @@ encodeRawAttempt(RMCommandBuffer *cb, size_t from, size_t to, const char **why, 
     beginInlineSignals(cb);
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
     rc->forceWholePrograms(cb->_forceWholePrograms || rmWholePrograms());
-    rc->splitProbe(rmSplitProbe());
-    rc->splitFrontierWfi(rmSplitFrontierWfi());
-    rc->splitFrontierExact(rmSplitFrontierExact());
     rc->inlineStates(cb->_inlineStates);
 #endif
     if (validateNativeEventWaits(cb, generation) != raw::EventDependencyState::ready) {

@@ -3,7 +3,7 @@
 // a launch: whole 256-byte units, at most NVK_MAX_CBUF_SIZE, as NVK binds every constant buffer before Turing (nvk_cmd_draw.c
 // align(size, nvk_min_cbuf_alignment), 256 below TURING_A). On GM20B a buffer bound off a 256-byte multiple is not read
 // right through c[bank][offset] operands even below its size: the split frontier bound at its 64 bytes left the glass
-// shape's per-draw offsets zero (T-v4c: split-frontier-exact black, the rounded bind clean, the twin reading only
+// shape's per-draw offsets zero (T-v4c: bound at 64 bytes black, at 256 clean, the twin reading only
 // c[2][0x0..0x3c] of the 64 bytes its prologue wrote). A binding's memory is allocated in the same units, so the rounding
 // never reaches past it.
 #pragma once

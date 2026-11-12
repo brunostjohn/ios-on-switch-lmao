@@ -196,10 +196,6 @@ void RenderEncoder::launchSplit(Push &p, const Pipeline &twin, const uint32_t *s
     std::copy(std::begin(l.cbufBytes), std::end(l.cbufBytes), inputs.bytes.begin());
     // splitTwin already excludes GPU-written inputs; push words and bindings are CPU-cached snapshots.
     uint64_t frontier = cb_->splitReuse_.find(inputs);
-#if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
-    if (cb_->splitProbe_ == SplitProbe::NoReuse)
-        frontier = 0;
-#endif
     if (!frontier) {
         d.alloc(d.upload_, cbufBindBytes(s.rec.frontierBytes), kCbufUnit, frontier);
         if (s.rec.batchVersion == 1) {
@@ -222,11 +218,7 @@ void RenderEncoder::launchSplit(Push &p, const Pipeline &twin, const uint32_t *s
         cb_->splitReuse_.remember(inputs, frontier);
         RAW_DIAGNOSTIC(d.stats.uploadBytes += s.rec.frontierBytes);
     }
-    bool exact = false;
-#if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
-    exact = cb_->splitFrontierExact_;
-#endif
-    p.inc(CB_SELECTOR_A, {cbufBindBytes(s.rec.frontierBytes, exact), uint32_t(frontier >> 32), uint32_t(frontier)});
+    p.inc(CB_SELECTOR_A, {cbufBindBytes(s.rec.frontierBytes), uint32_t(frontier >> 32), uint32_t(frontier)});
     p.m(BIND_GROUP_CB + 0x20 * kPixelGroup, 1 | uint32_t(s.rec.frontierCbuf) << 4);
     p.inc(CB_SELECTOR_A, {kRootBytes, uint32_t(d.root_.va >> 32), uint32_t(d.root_.va)});
 }
@@ -289,7 +281,7 @@ void CommandBuffer::launchPrologues()
             ++scalars;
     }
     const uint32_t launches = scalars + uint32_t(splitBatches_.runs().size());
-    const uint32_t words = 20 + 4 * launches;
+    const uint32_t words = 16 + 4 * launches;
     uint64_t va = 0;
     uint32_t *start = reinterpret_cast<uint32_t *>(d.alloc(d.push_, words * 4, 4, va));
     Push p{start, start + words};
@@ -337,12 +329,6 @@ void CommandBuffer::launchPrologues()
         RAW_DIAGNOSTIC(d.stats.uploadBytes += tableBytes + kSplitParamsBytes);
     }
     computeToGraphics(p, false);
-#if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
-    if (splitFrontierWfi_) {
-        p.m(INVALIDATE_SHADER_CACHES, kInvalidateData | kFlushData | kInvalidateConstant, SUBC_3D);
-        p.m(WAIT_FOR_IDLE, 0, SUBC_3D);
-    }
-#endif
     RAW_DIAGNOSTIC(d.stats.uploadBytes += uint64_t(launches) * sizeof(PackSplit::qmd));
     RAW_DIAGNOSTIC(d.stats.pushBytes += uint64_t(p.at - start) * 4);
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
