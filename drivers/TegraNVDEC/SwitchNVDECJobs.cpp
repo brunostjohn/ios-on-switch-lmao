@@ -353,11 +353,14 @@ int publish(const TegraNVDECSubmit &submit, Submission &work, const SwitchNVDECC
         uint32_t n = 0, bridgeSyncpoint = 0, bridgeThreshold = 0;
         if (dependencies.acquire(&bridgeSyncpoint, &bridgeThreshold))
             n += tegra_host1x_op_wait_syncpt(work.words + n, bridgeSyncpoint, bridgeThreshold);
+        SwitchHost1xProducers producers;
         for (uint32_t i = 0; i < needed; ++i)
             if (dependencies.tokens[i].engine == SWITCH_GPU_ENGINE_VIC ||
-                dependencies.tokens[i].engine == SWITCH_GPU_ENGINE_NVENC)
+                dependencies.tokens[i].engine == SWITCH_GPU_ENGINE_NVENC) {
                 n += tegra_host1x_op_wait_syncpt(work.words + n, dependencies.tokens[i].queue,
                                                  static_cast<uint32_t>(dependencies.tokens[i].value));
+                producers.add(dependencies.tokens[i]);
+            }
         const uint64_t slot = static_cast<uint64_t>(gQueue.tail()) * kSetupStride;
         memcpy(gSetup.va + slot, submit.setup, submit.setup_bytes);
         switch_dcache_clean(gSetup.va + slot, submit.setup_bytes);
@@ -392,7 +395,7 @@ int publish(const TegraNVDECSubmit &submit, Submission &work, const SwitchNVDECC
             const auto &job = gQueue.jobs[queued];
             bridge = job.bridge;
             if (const int failed = Stages::start(queued, gSyncpt, *fence, bridge != nullptr, job.semantics != nullptr,
-                                                 kWaitBoundUs))
+                                                 kWaitBoundUs, producers))
                 Retirement::unarmed(queued, failed);
             IOLockWakeup(gLock, &gQueue.count, false);
         } else {
