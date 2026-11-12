@@ -104,8 +104,7 @@ struct NativeCountersTest: NativeObjectTest {
             GPU.draw(encoder, corners: GPU.fullScreen, color: SIMD4(0, 1, 0, 1))
             encoder.endEncoding()
         }
-        var cpu0: MTLTimestamp = 0, gpu0: MTLTimestamp = 0, cpu1: MTLTimestamp = 0, gpu1: MTLTimestamp = 0
-        device.sampleTimestamps(&cpu0, gpuTimestamp: &gpu0)
+        let before = device.sampleTimestamps()
         let sampling = try gpu.commit { commands in
             draw(commands.makeRenderCommandEncoder(descriptor: Self.pass(target, counters, 0, load: .clear))!)
             let computePass = MTLComputePassDescriptor()
@@ -136,15 +135,16 @@ struct NativeCountersTest: NativeObjectTest {
             parallel.endEncoding()
         }
         try gpu.finish([sampling])
-        device.sampleTimestamps(&cpu1, gpuTimestamp: &gpu1)
+        let after = device.sampleTimestamps()
         work.paths.append(RawFacade.path(of: sampling))
-        if cpu0 != gpu0 || cpu1 != gpu1 { work.failures.append("sampleTimestamps answered two clocks") }
-
-        let cpu = Self.words(counters.resolveCounterRange(0..<Self.samples))
-        guard cpu.count == Self.samples else { throw TestFailure("resolveCounterRange gave \(cpu.count) samples") }
-        if counters.resolveCounterRange(10..<(Self.samples + 1)) != nil || counters.resolveCounterRange(0..<0) != nil {
-            work.failures.append("a resolve past the samples or of none answered data")
+        if before.cpu != before.gpu || after.cpu != after.gpu {
+            work.failures.append("sampleTimestamps answered two clocks")
         }
+
+        let cpu = try Self.words(counters.resolveCounterRange(0..<Self.samples))
+        guard cpu.count == Self.samples else { throw TestFailure("resolveCounterRange gave \(cpu.count) samples") }
+        let outside = [10..<(Self.samples + 1), 0..<0].compactMap { (try? counters.resolveCounterRange($0)) ?? nil }
+        if !outside.isEmpty { work.failures.append("a resolve past the samples or of none answered data") }
         let resolved = try gpu.buffer(Self.samples * 8)
         let resolving = try gpu.commit { commands in
             let blit = commands.makeBlitCommandEncoder()!
@@ -160,7 +160,7 @@ struct NativeCountersTest: NativeObjectTest {
             let differ = zip(blitted, cpu).filter { $0 != $1 }.count
             work.failures.append("the blit's resolve differs from the CPU's in \(differ) samples")
         }
-        work.failures += Self.judge(cpu, sampling, gpu0, gpu1, &metrics)
+        work.failures += Self.judge(cpu, sampling, before.gpu, after.gpu, &metrics)
         return work
     }
 
