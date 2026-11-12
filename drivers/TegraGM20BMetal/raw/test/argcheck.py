@@ -282,9 +282,11 @@ def spills(recs: dict, check) -> None:  # noqa: ANN001  main's check
     spilled = [e['slot'] for e in entries if e['kind'] == 'ubo' and e['residual'] and e['residual'] >= 0x780]
     check('bind offsets in the fragment argument table', bool(spilled), spilled)
     out, _ = run(rec, mem, (0, 0), bound)
+    # an 8-bit unorm target's channels rounded as Metal rounds them, in the program (the table's colour write rule)
+    want = [112 / 255, 0, 1, 1]
     check(
-        'fourteen buffers, three bound off 16 with their residuals in the argument table',
-        out == [14 / 32, 0, 1, 1],
+        'fourteen buffers, the spilled three off 16 by the argument table',
+        all(abs(a - b) < 1e-6 for a, b in zip(out, want, strict=True)),
         out,
     )
     vertex = tail(recs['tint_fragment'])
