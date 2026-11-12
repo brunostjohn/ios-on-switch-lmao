@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #import "RawMetalInternal.h"
+#include "raw_object_pool.h"
 #include "raw_resolve_rule.h"
 
 #if SWITCH_RAW_DIAGNOSTICS
@@ -380,7 +381,19 @@ size_t raw_metal_encode_rates(char *out, size_t size)
         events(raw::EncodeCount::Sends), draws ? events(raw::EncodeCount::Applied) / draws : 0.0,
         events(raw::EncodeCount::UseAdds), events(raw::EncodeCount::Uses), events(raw::EncodeCount::DescriptorBuilds),
         events(raw::EncodeCount::DescriptorUploads), events(raw::EncodeCount::GeometryVertices));
-    const size_t n = size_t(head) + (tail > 0 ? size_t(tail) : 0);
+    size_t n = size_t(head) + (tail > 0 ? size_t(tail) : 0);
+    // the pooled encoders' blocks made and freed since the process began (raw_object_pool.h): with none freed, made is
+    // the most of each kind this process had alive at once
+    if (n < size - 1) {
+        const int pools = snprintf(out + n, size - n, " encmade=%llu/%llu/%llu encfreed=%llu/%llu/%llu",
+                                   (unsigned long long)rawPoolMade([RMRenderEncoder class]),
+                                   (unsigned long long)rawPoolMade([RMBlitEncoder class]),
+                                   (unsigned long long)rawPoolMade([RMComputeEncoder class]),
+                                   (unsigned long long)rawPoolFreed([RMRenderEncoder class]),
+                                   (unsigned long long)rawPoolFreed([RMBlitEncoder class]),
+                                   (unsigned long long)rawPoolFreed([RMComputeEncoder class]));
+        n += pools > 0 ? size_t(pools) : 0;
+    }
     return std::min(n, size - 1);
 }
 

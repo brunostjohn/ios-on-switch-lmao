@@ -63,8 +63,20 @@ uint64_t nowNs()
 }
 
 // Each pooled encoder class (raw_object_pool.h): its instance bytes, the blocks its pool made and freed over the run
-// (none freed: made is the most alive at once), and what an alloc and dealloc through it cost beside the memset of its
-// bytes and the calloc and free it replaced
+// (none freed: made is the most alive at once), and what an alloc and dealloc through it cost beside the same of an
+// unpooled subclass of no ivars of its own (NSObject's calloc and free), the memset of its bytes, and a bare calloc and
+// free of them
+double cycleNs(Class cls, int rounds)
+{
+    const uint64_t t = nowNs();
+    for (int i = 0; i < rounds; i++)
+        @autoreleasepool {
+            id e = [cls new];
+            (void)e;
+        }
+    return double(nowNs() - t) / rounds;
+}
+
 void printPools()
 {
     for (const char *name : {"RMRenderEncoder", "RMBlitEncoder", "RMComputeEncoder"}) {
@@ -72,15 +84,16 @@ void printPools()
         const size_t bytes = class_getInstanceSize(cls);
         const unsigned long long made = rawPoolMade(cls), freed = rawPoolFreed(cls);
         constexpr int kRounds = 200000;
-        uint64_t t = nowNs();
-        for (int i = 0; i < kRounds; i++)
-            @autoreleasepool {
-                id e = [cls new];
-                (void)e;
-            }
-        const double pooled = double(nowNs() - t) / kRounds;
+        const double pooled = cycleNs(cls, kRounds);
+        const std::string twinName = std::string(name) + "Unpooled";
+        Class twin = objc_getClass(twinName.c_str());
+        if (!twin) {
+            twin = objc_allocateClassPair(cls, twinName.c_str(), 0);
+            objc_registerClassPair(twin);
+        }
+        const double unpooled = cycleNs(twin, kRounds);
         std::vector<uint8_t> scratch(bytes);
-        t = nowNs();
+        uint64_t t = nowNs();
         for (int i = 0; i < kRounds; i++) {
             memset(scratch.data(), 0, bytes);
             __asm__ volatile("" : : "r"(scratch.data()) : "memory");
@@ -93,9 +106,9 @@ void printPools()
             free(block);
         }
         const double callocFree = double(nowNs() - t) / kRounds;
-        printf(
-            "facadecost pool %s: bytes %zu made %llu freed %llu | ns alloc+dealloc %.1f memset %.1f calloc+free %.1f\n",
-            name, bytes, made, freed, pooled, zeroed, callocFree);
+        printf("facadecost pool %s: bytes %zu made %llu freed %llu | ns alloc+dealloc %.1f (unpooled %.1f) memset %.1f "
+               "calloc+free %.1f\n",
+               name, bytes, made, freed, pooled, unpooled, zeroed, callocFree);
     }
 }
 
