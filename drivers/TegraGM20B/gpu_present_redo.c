@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 // The present's copy, and its redo after a copy engine reset cut it (tgm_ctxsw_decide).
 #include "gpu_internal.h"
+#include "TegraGM20BCopyResetABI.h"
 
 void tgm_present_push_copy(struct nvif_push *push)
 {
@@ -33,14 +34,21 @@ void tgm_present_redo_work(void *unused)
 	struct tgm_chan *chan = tgm_present.chan;
 	struct nvif_push *push = NULL;
 	int ret = 0;
+	u32 again = 0;
 
 	(void)unused;
 	if (!__atomic_load_n(&tgm_present.redoing, __ATOMIC_ACQUIRE) || !gate_try())
 		return;
 	mutex_lock(&tgm_present.lock);
+#if TGM_STATS
+	again = (u32)tgm_copy_reset_again_take();
+#endif
 	push = &chan->chan.push;
 	ret = chan->error ? -ENODEV
-			  : chan_push_wait(chan, TGM_PRESENT_COPY_DWORDS + CHAN_FENCE_DWORDS);
+			  : chan_push_wait(chan, TGM_PRESENT_COPY_DWORDS + CHAN_FENCE_DWORDS +
+							 again * (TegraGM20BCopyResetCopies *
+									  TGM_PRESENT_COPY_DWORDS +
+								  2));
 	if (ret == -ETIMEDOUT) {
 		tgm_chan_stalled(chan, "present redo: push buffer still full after 1 s",
 				 chan->submitted, NSEC_PER_SEC);
@@ -53,6 +61,13 @@ void tgm_present_redo_work(void *unused)
 		return;
 	}
 	tgm_present_push_copy(push);
+#if TGM_STATS
+	if (again) {
+		PUSH_MTHD(push, NV906F, NON_STALL_INTERRUPT, 0);
+		for (u32 i = 1; i < TegraGM20BCopyResetCopies; i++)
+			tgm_present_push_copy(push);
+	}
+#endif
 	tgm_present.queued = nvxnu_nanotime();
 	__atomic_store_n(&tgm_present.pending, chan->submitted + 1, __ATOMIC_RELEASE);
 	__atomic_store_n(&tgm_present.redoing, 0, __ATOMIC_RELEASE);

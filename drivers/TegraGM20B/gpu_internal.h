@@ -707,6 +707,7 @@ int tgm_copy_reset_armed(void);
 int tgm_copy_reset_take(void);
 void tgm_copy_reset_nonstall(void);
 void tgm_copy_reset_redone(void);
+int tgm_copy_reset_again_take(void);
 void tgm_copy_reset_presented(int status);
 #endif
 /* the same for the pool scrubber: its jobs up to `through` go back to the pool dirty, to be scrubbed again */

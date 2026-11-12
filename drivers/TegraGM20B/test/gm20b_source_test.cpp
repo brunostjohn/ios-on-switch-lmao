@@ -1448,6 +1448,19 @@ TEST(GM20BPresentSource, ACopyEngineResetRedoesThePresentOnTheGpu)
 			      "tgm_chan_completed(chan);"));
 }
 
+// gpu.recover.kernel_second_timeout's hook takes each cut of the present as a tick takes a stuck kernel channel, the second
+// before the first's redo landed, and gets the hardware-failure verdict back instead of its panic
+TEST(GM20BPresentSource, TheCopyResetHookCutsTwiceThroughTheKernelStallRuleAndNeverPanics)
+{
+	const std::string hook = SourceText("../gpu_copy_reset.c");
+	EXPECT_THAT(flat(definition(hook, "static void copy_reset_mark(")),
+		    HasSubstr("again == AGAIN_REDO, 0, 0, &killed);"));
+	EXPECT_THAT(hook, Not(HasSubstr("nvxnu_panic(")));
+	const auto redo = flat(definition(gpu(), "void tgm_present_redo_work("));
+	expectBefore(redo, "#if TGM_STATS again = (u32)tgm_copy_reset_again_take(); #endif", "chan_push_wait(");
+	expectBefore(redo, "if (again) { PUSH_MTHD(push, NV906F, NON_STALL_INTERRUPT, 0);", "chan_fence_volatile(chan);");
+}
+
 // A context load an engine is stuck in again after a reset under it: a client's is that client's alone and kills it, a
 // kernel channel's goes to the kernel stall rule, whose only panic is the engine that did not come back
 TEST(GM20BRecoverSource, ASecondStuckLoadKillsTheClientOrGoesToTheKernelStallRule)
