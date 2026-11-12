@@ -25,6 +25,10 @@ struct facadecount {
 
 using SitesFn = size_t (*)(unsigned kind, uintptr_t *out, size_t pairs);
 
+@interface NSObject (SwitchRawEncodeProfile)
+- (NSDictionary<NSString *, NSNumber *> *)switchRawEncodeProfile;  // RawMetalEncodeCounters.mm (debug builds)
+@end
+
 namespace {
 
 // PBGRAXm_A2Xhf's functions and their constants, as drivers/TegraGM20BMetal/precompile/corpus.log records them
@@ -163,8 +167,7 @@ void printSites(SitesFn sites, unsigned buffers)
 
 NSDictionary<NSString *, NSNumber *> *profile(id<MTLDevice> device)
 {
-    const SEL sel = NSSelectorFromString(@"switchRawEncodeProfile");
-    return [(id)device respondsToSelector:sel] ? [(id)device performSelector:sel] : @{};
+    return [(id)device respondsToSelector:@selector(switchRawEncodeProfile)] ? [(id)device switchRawEncodeProfile] : @{};
 }
 
 }  // namespace
