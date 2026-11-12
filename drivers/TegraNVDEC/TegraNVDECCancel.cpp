@@ -44,7 +44,8 @@ void cancel(thread_call_param_t, thread_call_param_t)
         snprintf(engine, sizeof(engine), "falcon powered off by sleep");
     tegra_host1x_describe(host, sizeof(host));
     tegra_host1x_channel_teardown(TEGRA_HOST1X_CHANNEL_DEFAULT);
-    const bool reset = !powered || switch_nvdec_engine_reset();
+    bool drained = true;
+    const bool reset = !powered || switch_nvdec_engine_reset(&drained);
     const uint32_t through = switch_nvdec_jobs_cancel(tegra_host1x_syncpt_read(syncpt));
     const int released = tegra_host1x_syncpt_release_through(syncpt, through);
     tegra_host1x_channel_restart(TEGRA_HOST1X_CHANNEL_DEFAULT);
@@ -52,8 +53,9 @@ void cancel(thread_call_param_t, thread_call_param_t)
     const char *why = back ? "" : released ? "its fences were not released" : switch_nvdec_engine_wedge();
     IOLockUnlock(power);
     IOLog("TegraNVDEC: job fence %u not reached in %llu ms (%d; syncpoint %u at %u); %s; %s; cancelled through fence "
-          "%u, engine reset: %s%s\n",
+          "%u, memory client %s, engine reset: %s%s\n",
           gStall.fence, gStall.elapsedUs / 1000, gStall.error, syncpt, reached, engine, host, through,
+          drained ? "drained" : "did not drain in 10 ms",
           back ? "running again" : "it did not come back, NVDEC refuses work: ", why);
     switch_nvdec_jobs_recovered(back);
 }

@@ -34,13 +34,14 @@
 // path (nvhost_nvdec_bl020_prod.fw + nvhost_nvdec020_prod.fw, WPR carveout set up by the TSEC) is not used.
 //
 // Sources (Linux's drivers are GPL-2.0-only, so this follows them without copying):
-//   tegra210.dtsi nvdec@54480000 (CAR clock and reset 194, power domain "nvdec" = PMC partition 25), Linux
-//   soc/tegra/pmc.c tegra_powergate_power_up (reset asserted, partition on, clocks, clamps off, reset released, MBIST
-//   workaround), clk-tegra210.c tegra210_pg_mbist_war[NVDEC] (NVJPG clock on, LVL2_CLK_GATE_OVRE bits 9 and 31
-//   pulsed), clk-tegra-periph.c (CLK_SOURCE_NVDEC 0x698, PLLP is mux code 4), memory/tegra/tegra210.c (MC SMMU NVDEC
-//   ASID 0xab4, client hot reset NVDEC 0x970 bit 5), drm/tegra/falcon.c falcon_boot (scrub wait, DMATRFBASE = OS data,
-//   data then code in 256-byte DMA chunks, IRQMSET/IRQDEST, ITFEN, BOOTVEC 0, STARTCPU) and nvdec.c (tegra210: no
-//   stream IDs, no RISC-V, firmware nvidia/tegra210/nvdec.bin, embedded here by firmware.S). L4T nvhost t210.c,
+//   tegra210.dtsi nvdec@54480000 (CAR clock and reset 194, power domain "nvdec" = PMC partition 25), L4T r32.7.4
+//   powergate-t21x.c (partition 25 after NVJPG's 26, its MC client flush and release, the MBIST workaround on T210
+//   before B01 only: LVL2_CLK_GATE_OVRE bits 9 and 31 with NVJPG's clock) and t210/cg_regs.c (the prod registers),
+//   through SwitchEnginePower.h, clk-tegra-periph.c (CLK_SOURCE_NVDEC 0x698, PLLP is mux code 4),
+//   memory/tegra/tegra210.c (MC SMMU NVDEC ASID 0xab4, client hot reset NVDEC 0x970 bit 5), drm/tegra/falcon.c
+//   falcon_boot (scrub wait, DMATRFBASE = OS data, data then code in 256-byte DMA chunks, IRQMSET/IRQDEST, ITFEN,
+//   BOOTVEC 0, STARTCPU) and nvdec.c (tegra210: no stream IDs, no RISC-V, firmware nvidia/tegra210/nvdec.bin,
+//   embedded here by firmware.S). L4T nvhost t210.c,
 //   nvdec.c and flcn.c agree on the order; DMA context 0 as L4T uses it on T210 (no context isolation there).
 //   Clock: PLLP undivided, 408 MHz, below the lowest T210B01 NVDEC DVFS point (460.8 MHz at minimum core voltage,
 //   tegra210b01-core-dvfs.c), so it is safe at any core voltage the boot chain left.
@@ -63,6 +64,7 @@
 #include "../../kits/SwitchDMA/SwitchDMABuffer.h"
 #include "../../kits/SwitchDMA/SwitchDcache.h"
 #include "../../kits/SwitchEngineGate/SwitchEngineGateKernel.h"
+#include "../../kits/SwitchEngineGate/SwitchEnginePower.h"
 #include "../../kits/SwitchFalcon/SwitchFalcon.h"
 #include "../../kits/SwitchMMIO/SwitchMMIOKernel.h"
 #include "../../kits/SwitchTime/SwitchTime.h"
@@ -76,9 +78,10 @@ IOLock *tegra_nvdec_power_lock(void);
 namespace {
 constexpr uint64_t kNvdecPA = 0x54480000, kNvdecSize = 0x40000;
 constexpr uint64_t kMcPA = 0x70019000;
-constexpr uint32_t kPartition = 25;    // TEGRA_POWERGATE_NVDEC
-constexpr unsigned kClock = 194;       // TEGRA210_CLK_NVDEC: CAR bank Y bit 2, also its reset
-constexpr unsigned kNvjpgClock = 195;  // TEGRA210_CLK_NVJPG: NVDEC's slcg clock
+constexpr uint32_t kPartition = 25;        // TEGRA_POWERGATE_NVDEC
+constexpr unsigned kClock = 194;           // TEGRA210_CLK_NVDEC: CAR bank Y bit 2, also its reset
+constexpr uint32_t kNvjpgPartition = 26;   // TEGRA_POWERGATE_NVJPG, which NVDEC's needs on
+constexpr unsigned kNvjpgClock = 195;      // TEGRA210_CLK_NVJPG: NVDEC's slcg clock
 
 enum : uint32_t {  // clock and reset controller
     CLK_OUT_ENB_Y = 0x298,
@@ -102,6 +105,7 @@ enum : uint32_t {
     MC_HOTRESET_CTRL_1 = 0x970,
     MC_HOTRESET_STATUS_1 = 0x974,
     MC_HOTRESET_NVDEC = 1u << 5,
+    MC_HOTRESET_NVJPG = 1u << 8,
 };
 
 volatile uint8_t *gNvdec, *gMc;
@@ -126,48 +130,51 @@ const char *falconState()
     return switch_falcon_state(gNvdec, text, sizeof(text));
 }
 
-// tegra_powergate_power_up with the T210 MBIST workaround. A partition the boot chain left on keeps its state; the
-// engine is still reset and re-clocked so the falcon starts from scratch.
+// NVDEC's partition and memory client in L4T's order (SwitchEnginePower.h), then its clock-gating prod registers
+// (t210/cg_regs.c t21x_nvdec_gating_registers). Partition 25 needs NVJPG's 26 on (powergate-t21x.c powers 26 first and
+// NVJPG's idle power-off keeps it on while 25 is): 26 comes up here if it is off, with NVJPG's clock left off. A
+// partition the boot chain left on keeps its state; the engine is still reset so the falcon starts from scratch.
+constexpr unsigned kSlcgClocks[] = {kNvjpgClock}, kNvjpgSlcgClocks[] = {kClock};
+const SwitchEnginePower kPower = {kPartition,         kClock,           MC_HOTRESET_CTRL_1, MC_HOTRESET_STATUS_1,
+                                  MC_HOTRESET_NVDEC,  OVRE_NVDEC_MBIST, kSlcgClocks,        1,
+                                  tegra_mc_hot_reset, tegra_smmu_read};
+const SwitchEnginePower kNvjpgPower = {kNvjpgPartition,    kNvjpgClock,      MC_HOTRESET_CTRL_1, MC_HOTRESET_STATUS_1,
+                                       MC_HOTRESET_NVJPG,  OVRE_NVDEC_MBIST, kNvjpgSlcgClocks,   1,
+                                       tegra_mc_hot_reset, tegra_smmu_read};
+constexpr SwitchEngineProd kProd[] = {
+    {0xe00, 0},        // THI_CLK_OVERRIDE
+    {0x88, 0},         // THI_SLCG_OVERRIDE_HIGH_A
+    {0x8c, 0},         // THI_SLCG_OVERRIDE_LOW_A
+    {0x10a0, 0},       // FALCON_CGCTL
+    {0x1604, 0},
+    {0x117c, 0x30008},  // FALCON_CG2
+    {0x2328, 0},
+    {0x232c, 0x800000},
+    {0x2330, 0xfffffff8},
+};
+
 bool powerUp(bool *wasOn)
 {
-    *wasOn = switch_pmc_partition_is_on(kPartition);
-    switch_car_reset_assert(kClock);
-    IODelay(10);
-    if (!*wasOn) {
-        if (!switch_pmc_partition_on(kPartition)) {
-            snprintf(gLine, sizeof(gLine), "N1 FAIL partition %u did not power on (PWRGATE_TOGGLE %#x STATUS %#x)",
-                     kPartition, switch_pmc_read(PWRGATE_TOGGLE), switch_pmc_read(PWRGATE_STATUS));
-            return false;
-        }
-        IODelay(10);
+    const auto failed = [](unsigned partition) {
+        snprintf(gLine, sizeof(gLine),
+                 "N1 FAIL partition %u did not come up (PWRGATE_TOGGLE %#x STATUS %#x CLAMP_STATUS %#x "
+                 "CLK_OUT_ENB_Y %#x RST_DEVICES_Y %#x)",
+                 partition, switch_pmc_read(PWRGATE_TOGGLE), switch_pmc_read(PWRGATE_STATUS),
+                 switch_pmc_read(switch_engine_power::kPmcClampStatus), switch_car_read(CLK_OUT_ENB_Y),
+                 switch_car_read(RST_DEVICES_Y));
+        return false;
+    };
+    if (!switch_pmc_partition_is_on(kNvjpgPartition)) {
+        bool nvjpgWasOn = false;
+        if (!switch_engine_power_up(kNvjpgPower, &nvjpgWasOn))
+            return failed(kNvjpgPartition);
+        switch_car_clock_disable(kNvjpgClock);
     }
     switch_car_write(CLK_SOURCE_NVDEC, SOURCE_PLLP | NVDEC_DIV_1);
     IODelay(2);
-    switch_car_clock_enable(kClock);
-    IODelay(10);
-    switch_pmc_remove_clamping(kPartition);
-    IODelay(10);
-    if (switch_mmio_read32(gMc, MC_HOTRESET_CTRL_1) & MC_HOTRESET_NVDEC)
-        switch_mmio_write32(gMc, MC_HOTRESET_CTRL_1, switch_mmio_read32(gMc, MC_HOTRESET_CTRL_1) & ~MC_HOTRESET_NVDEC);
-    switch_car_reset_deassert(kClock);
-    IODelay(10);
-    // tegra210_generic_mbist_war with NVDEC's slcg clock (NVJPG's) running for the pulse; only NVDEC's override bits
-    // change, under the CAR lock.
-    const bool nvjpgOn = switch_car_clock_enabled(kNvjpgClock);
-    if (!nvjpgOn)
-        switch_car_clock_enable(kNvjpgClock);
-    const uint32_t overridden = switch_car_read(LVL2_CLK_GATE_OVRE) & OVRE_NVDEC_MBIST;
-    switch_car_rmw(LVL2_CLK_GATE_OVRE, 0, OVRE_NVDEC_MBIST);
-    IODelay(1);
-    switch_car_rmw(LVL2_CLK_GATE_OVRE, OVRE_NVDEC_MBIST & ~overridden, 0);
-    IODelay(1);
-    if (!nvjpgOn)
-        switch_car_clock_disable(kNvjpgClock);
-    if (!switch_car_clock_enabled(kClock) || switch_car_reset_asserted(kClock)) {
-        snprintf(gLine, sizeof(gLine), "N1 FAIL clock or reset stuck (CLK_OUT_ENB_Y %#x RST_DEVICES_Y %#x)",
-                 switch_car_read(CLK_OUT_ENB_Y), switch_car_read(RST_DEVICES_Y));
-        return false;
-    }
+    if (!switch_engine_power_up(kPower, wasOn))
+        return failed(kPartition);
+    switch_engine_prod(gNvdec, kProd, sizeof(kProd) / sizeof(kProd[0]));
     return true;
 }
 
@@ -425,13 +432,12 @@ void switch_nvdec_engine_describe(char *text, size_t size)
 }
 
 // The memory controller stops taking NVDEC's requests and drains those in flight (tegra_mc_flush), so the reset cannot
-// cut a transfer in half; powerUp lifts the hot reset again once the engine is out of reset. A bounded read: the
-// flush has no interrupt.
-bool switch_nvdec_engine_reset()
+// cut a transfer in half; powerUp releases the flush once the engine is out of reset again.
+bool switch_nvdec_engine_reset(bool *drained)
 {
-    switch_mmio_write32(gMc, MC_HOTRESET_CTRL_1, switch_mmio_read32(gMc, MC_HOTRESET_CTRL_1) | MC_HOTRESET_NVDEC);
-    for (uint32_t i = 0; i < 1000 && !(switch_mmio_read32(gMc, MC_HOTRESET_STATUS_1) & MC_HOTRESET_NVDEC); ++i)
-        IODelay(1);
+    *drained = switch_engine_power::flush(kPower);
+    switch_car_reset_assert(kClock);
+    IODelay(10);
     bool wasOn = false;
     gLine[0] = 0;
     return powerUp(&wasOn);
@@ -473,7 +479,7 @@ int gateOff(void *, bool drain)
 {
     if (!switch_nvdec_jobs_park(drain))
         return SWITCH_ENGINE_GATE_BUSY;
-    return switch_pmc_power_down(kPartition, kClock, kClock) ? SWITCH_ENGINE_GATE_OFF : -5;
+    return switch_engine_power_down(kPower) ? SWITCH_ENGINE_GATE_OFF : -5;
 }
 
 // Sleep (SC7), through tegra_nvdec_suspend/resume in TegraHost1x.cpp. Suspend powers the engine off once its queued
