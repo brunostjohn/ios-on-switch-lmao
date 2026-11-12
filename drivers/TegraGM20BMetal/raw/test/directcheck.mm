@@ -91,6 +91,9 @@ void dumpRecord(const char *dir, const std::string &key, const raw::RuntimeRecor
     for (size_t b = 0; b < rec.programs[1].cbufTypes.size(); b++)
         if (raw::cbufKind(rec.programs[1].cbufTypes[b]) == raw::CbufSet)
             setBanks += std::string(setBanks.empty() ? "" : ", ") + std::to_string(b);
+    std::string cbufs;
+    for (size_t b = 0; b < rec.programs[1].cbufTypes.size(); b++)
+        cbufs += std::string(b ? ", " : "") + std::to_string(rec.programs[1].cbufTypes[b]);
     std::string variants;
     for (size_t i = 0; i < rec.variants.size(); i++) {
         const raw::RuntimeRecord::Variant &v = rec.variants[i];
@@ -104,7 +107,8 @@ void dumpRecord(const char *dir, const std::string &key, const raw::RuntimeRecor
             "\"split_fs\": \"%s\", \"split_prologue\": \"%s\", \"residual_words\": [%s], \"variants\": [%s], "
             "\"storage_mask\": %u, \"storage_blend_mask\": %u, \"storage_blend_model\": %u, "
             "\"half_blend_color_word\": %u, \"free_rung\": %d, \"free_colour\": %u, \"free_program\": %s, "
-            "\"uniform\": [%s], \"entries\": [%s], \"fs_set_banks\": [%s], \"storage_write_mask\": %u}\n",
+            "\"uniform\": [%s], \"entries\": [%s], \"fs_set_banks\": [%s], \"storage_write_mask\": %u, "
+            "\"fs_cbufs\": [%s], \"fs_data\": \"%s\"}\n",
             jsonString(key).c_str(), hexOf(rec.programs[0].image).c_str(), hexOf(rec.programs[1].image).c_str(),
             rec.programs[1].gprs, rec.programs[1].boundTextures, blob.c_str(),
             rec.split ? hexOf(rec.splitPrograms[0].image).c_str() : "",
@@ -112,7 +116,7 @@ void dumpRecord(const char *dir, const std::string &key, const raw::RuntimeRecor
             rec.pipeline.storageMask, rec.pipeline.storageBlendMask, rec.pipeline.storageBlendModel,
             rec.pipeline.halfBlendColorWord, free ? free->rung : 0, free ? free->colour : 0,
             jsonString(free ? free->program : "").c_str(), uniform.c_str(), entries.c_str(), setBanks.c_str(),
-            rec.pipeline.storageWriteMask);
+            rec.pipeline.storageWriteMask, cbufs.c_str(), hexOf(rec.programs[1].data).c_str());
     fclose(f);
 }
 
