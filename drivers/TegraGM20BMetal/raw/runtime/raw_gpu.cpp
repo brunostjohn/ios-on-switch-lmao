@@ -4432,6 +4432,7 @@ void RenderEncoder::setBytes(int stage, uint32_t slot, const void *bytes, uint32
     bufs_[stage][slot] = {va, length, nullptr, 0,
                           m};  // m2v binds the Metal length (its upload chunks are 256-byte aligned)
     bufs_[stage][slot].resourceVa = dev_->upload_.bo.va;
+    bufs_[stage][slot].named = true;
     invalidateDescriptors();
     RAW_DIAGNOSTIC(cb_->counts_.uploadBytes += chunk);
 }
@@ -4445,7 +4446,7 @@ void RenderEncoder::setBytesAt(int stage, uint32_t slot, uint64_t va, uint32_t l
     const uint64_t resourceVa = allocation ? allocation->va : va;
     if (old.va == va && old.size == length && !old.buffer && old.cpu == cpu && old.resourceVa == resourceVa)
         return;
-    bufs_[stage][slot] = {va, length, nullptr, 0, cpu, resourceVa};
+    bufs_[stage][slot] = {va, length, nullptr, 0, cpu, resourceVa, allocation != nullptr};
     if (allocation) {
         cb_->use(*allocation, false);
         if (allocation->hostVisible && !allocation->wc)
@@ -5548,7 +5549,7 @@ bool RenderEncoder::prepare(Pipeline *pl, uint32_t primitive, int32_t first, uin
                     cb_->buffersWritten_ |= bufferStorage(e);
                     if (b.buffer)
                         cb_->use(*b.buffer, bufferStorage(e));
-                    else
+                    else if (!b.named)
                         cb_->useAddress(b.va, b.size, bufferStorage(e));
                     BufferDescriptor desc;
                     if (!bufferDescriptor(e, b.va, b.size, desc)) {
@@ -5779,7 +5780,7 @@ bool RenderEncoder::prepare(Pipeline *pl, uint32_t primitive, int32_t first, uin
         if (location != vbVa_ || limit != vbLimit_) {
             if (b.buffer)
                 cb_->use(*b.buffer, false);
-            else
+            else if (!b.named)
                 cb_->useAddress(b.va, b.size, false);
             p.inc(VERTEX_STREAM_LOCATION, {uint32_t(location >> 32), uint32_t(location)});
             p.inc(VERTEX_STREAM_LIMIT, {uint32_t(limit >> 32), uint32_t(limit)});
