@@ -44,6 +44,10 @@ enum : uint32_t {
 // clear-plus-half-draw tiles read by it; its whole and half-height writes over rendered and ZBC-cleared tiles read by it and
 // the texture unit; copies both ways between a compressed and a plain target. Its rectangles started at the origin, as a
 // shadow's do. Not asked: C128, the multisampled colour kinds and every zeta kind (gpu.x1.ce_compressed_depth's cells).
+// Rule flip pending: a stored one-sample depth/stencil texture (Device::createOwnedZeta) stays on plain zeta memory, as
+// its readback and aspect copies are the copy engine's, until HW Test gpu.raw.stored_depth reads
+// compressed_readback_wrong=0 with compressed_readback_facts comptags=1 (T-v3g's gpu.x1.ce_compressed_depth ran no
+// one-sample compressed round: d32f_1x_compressed_rounds=0).
 constexpr bool copyEngineReadsCompressed(uint32_t kind)
 {
     return kind == kCompKindC32 || kind == kCompKindC64;
