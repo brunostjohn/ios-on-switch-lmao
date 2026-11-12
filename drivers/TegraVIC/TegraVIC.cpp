@@ -12,9 +12,10 @@
 // One line per stage ("TegraVIC: V1 ok ..."), or the failing stage's FAIL line and nothing after it. Until V3
 // publishes, every failure is that one line: the swgroup goes back to bypass, the engine back to reset with its clock
 // off, and nothing is published (Core Animation has no IOSurfaceAccelerator, as before this driver). No job runs
-// before V3, and from then a job past its bound panics with one line, and a lost syncpoint interrupt panics in
-// TegraHost1x. What the engine does with each configuration is kTegraVICTraits (TegraVICConfig.h), measured on the
-// unit by a boot self-test that came out the same on every logged boot.
+// before V3. From then a job past its bound is cancelled with one line and fails (a display frame it converts is not
+// shown), the engine reset and its falcon rebooted, and the next job runs (TegraVICCancel.cpp); a lost syncpoint
+// interrupt panics in TegraHost1x. What the engine does with each configuration is kTegraVICTraits
+// (TegraVICConfig.h), measured on the unit by a boot self-test that came out the same on every logged boot.
 //
 // Why the SMMU: the scaler's operands are other processes' IOSurfaces (scattered pages, half of the Switch's RAM above
 // the 32-bit boundary), and VIC has no scatter-gather. Each job maps its two surfaces page by page into two windows of
@@ -50,6 +51,7 @@
 #include "../TegraSMMU/TegraSMMUDomain.h"
 #include "../TegraSMMU/TegraSMMUSpace.h"
 #include "TegraVIC.h"
+#include "TegraVICEngine.h"
 #include "SwitchVICJobs.h"
 #include "SwitchVICKernelTest.h"
 #include "SwitchVICMapping.h"
@@ -95,7 +97,11 @@ enum : uint32_t {
 };
 
 enum : uint32_t {  // the SMMU's own registers are TegraSMMU.h's
+    MC_INTSTATUS = 0x0,
+    MC_ERR_STATUS = 0x8,
+    MC_ERR_ADR = 0xc,
     MC_HOTRESET_CTRL = 0x200,
+    MC_HOTRESET_STATUS = 0x204,
     MC_HOTRESET_VIC = 1u << 18,
     TRANSLATION_VIC = (1u << 12) | (1u << 13),  // vicsrd, vicswr in TRANSLATION_ENABLE_3
 };
@@ -135,6 +141,7 @@ TegraVICBuffer gTailPage;
 uint64_t gTailPages[kTailPages];
 
 SwitchEngineGate<SwitchEngineGateKernel> gGate;
+IOLock *gPowerLock;  // the gate's, which the cancellation of a stalled job holds too
 uint32_t gSyncpt;
 bool gUp, gWedged;
 TegraVICBuffer gConfig, gFilter;
@@ -328,6 +335,20 @@ int answer(uint32_t id, uint32_t from, const char **stage)
     return ret;
 }
 
+// V2 again on the job syncpoint, after a power-on or a reset: one line in gLine when the falcon does not answer.
+bool proven()
+{
+    const uint32_t from = tegra_host1x_syncpt_read(gSyncpt);
+    const char *stage = nullptr;
+    const int ret = answer(gSyncpt, from, &stage);
+    if (!ret)
+        return true;
+    char state[160];
+    snprintf(gLine, sizeof(gLine), "%s did not answer (%d, syncpoint %u %u->%u); %s", stage, ret, gSyncpt, from,
+             tegra_host1x_syncpt_read(gSyncpt), switch_falcon_state(gVic, state, sizeof(state)));
+    return false;
+}
+
 // Back to bypass, reset and clock off after a failed bring-up: nothing will use the engine this boot.
 void park()
 {
@@ -437,8 +458,9 @@ void bringUp(void *, wait_result_t)
         "us; %s\n",
         gFceSize, id, from, tegra_host1x_syncpt_read(id), switch_now_us() - start, falconState());
     gSyncpt = id;
-    if (!switch_vic_jobs_start(gConfig, id, tegra_host1x_syncpt_read(id)) ||
-        !gGate.start({"TegraVIC", nullptr, gateOn, gateOff})) {
+    gPowerLock = IOLockAlloc();
+    if (!gPowerLock || !switch_vic_jobs_start(gConfig, id, tegra_host1x_syncpt_read(id)) ||
+        !switch_vic_cancel_start(id) || !gGate.start({"TegraVIC", nullptr, gateOn, gateOff}, gPowerLock)) {
         IOLog("TegraVIC: V2 FAIL no completion worker or idle timer\n");
         park();
         giveBack();
@@ -548,19 +570,8 @@ namespace {
 int gateOn(void *)
 {
     bool wasOn = false;
-    bool answered = false;
     gLine[0] = 0;
-    if (powerUp(&wasOn) && bootFalcon()) {
-        const uint32_t from = tegra_host1x_syncpt_read(gSyncpt);
-        const char *stage = nullptr;
-        const int ret = answer(gSyncpt, from, &stage);
-        answered = !ret;
-        if (ret) {
-            char state[160];
-            snprintf(gLine, sizeof(gLine), "%s did not answer (%d, syncpoint %u %u->%u); %s", stage, ret, gSyncpt, from,
-                     tegra_host1x_syncpt_read(gSyncpt), switch_falcon_state(gVic, state, sizeof(state)));
-        }
-    }
+    const bool answered = powerUp(&wasOn) && switch_vic_engine_boot();
     if (!answered) {
         gWedged = true;
         IOLog("TegraVIC: power-on FAIL %s; VIC refuses work\n", gLine[0] ? gLine : "V1");
@@ -579,12 +590,14 @@ int gateOff(void *, bool drain)
     return switch_pmc_power_down(kPartition, kClock, kClock) ? SWITCH_ENGINE_GATE_OFF : -5;
 }
 
-// Sleep (SC7), through TegraHost1x's sleep clients. Suspend powers the engine off once its queued jobs are done and
-// drops the swgroup to bypass before host1x saves its syncpoints; new jobs wait for resume. Resume, after host1x is
-// back, programs the SMMU domain again (SC7 resets the MC); the engine is powered on by its next job.
+// Sleep (SC7), through TegraHost1x's sleep clients. Suspend powers the engine off once its queued jobs are done and a
+// cancellation under way has released their fences (it waits for the gate lock suspend holds), and drops the swgroup
+// to bypass before host1x saves its syncpoints; new jobs wait for resume. Resume, after host1x is back, programs the
+// SMMU domain again (SC7 resets the MC); the engine is powered on by its next job.
 void engineSuspend()
 {
     gGate.suspend();
+    switch_vic_jobs_settle();
     smmuDetach();
 }
 
@@ -600,6 +613,51 @@ void engineResume()
     gGate.resume(attached);
 }
 }  // namespace
+
+IOLock *switch_vic_power_lock()
+{
+    return gPowerLock;
+}
+
+bool switch_vic_engine_powered()
+{
+    return gGate.powered();
+}
+
+void switch_vic_engine_describe(char *text, size_t size)
+{
+    char falcon[400];
+    snprintf(text, size, "%s; MC INTSTATUS %#x ERR_STATUS %#x ERR_ADR %#x",
+             switch_falcon_stall(gVic, falcon, sizeof(falcon)), switch_mmio_read32(gMc, MC_INTSTATUS),
+             switch_mmio_read32(gMc, MC_ERR_STATUS), switch_mmio_read32(gMc, MC_ERR_ADR));
+}
+
+// The memory controller stops taking VIC's requests and drains those in flight (tegra_mc_flush), so the reset cannot
+// cut a transfer in half; powerUp lifts the hot reset again once the engine is out of reset. A bounded read: the
+// flush has no interrupt.
+bool switch_vic_engine_reset()
+{
+    switch_mmio_write32(gMc, MC_HOTRESET_CTRL, switch_mmio_read32(gMc, MC_HOTRESET_CTRL) | MC_HOTRESET_VIC);
+    for (uint32_t i = 0; i < 1000 && !(switch_mmio_read32(gMc, MC_HOTRESET_STATUS) & MC_HOTRESET_VIC); ++i)
+        IODelay(1);
+    bool wasOn = false;
+    gLine[0] = 0;
+    return powerUp(&wasOn);
+}
+
+bool switch_vic_engine_boot()
+{
+    return bootFalcon() && proven();
+}
+
+const char *switch_vic_engine_wedge()
+{
+    gWedged = true;
+    switch_car_reset_assert(kClock);
+    IODelay(2);
+    switch_car_clock_disable(kClock);
+    return gLine[0] ? gLine : "falcon";
+}
 
 extern "C" int switch_vic_power_use(void)
 {

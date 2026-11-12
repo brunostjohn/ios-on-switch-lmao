@@ -31,6 +31,7 @@ kernel_driver(
     name = "TegraVIC",
     srcs = [
         "TegraVIC.cpp",
+        "TegraVICCancel.cpp",
         "SwitchVICJobs.cpp",
         "SwitchVICEvents.cpp",
         "SwitchVICSemantics.cpp",

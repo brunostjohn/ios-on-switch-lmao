@@ -31,6 +31,7 @@ SwitchVICQueue gQueue;
 TegraVICBuffer gConfigs;
 uint32_t gSyncpt;
 bool gSuspended, gFailed;
+bool gCancelling, gRecovered, gRecoveredReady;  // a stalled job's cancellation (TegraVICCancel.cpp)
 uint64_t gCompleted;
 int gResults[SwitchVICQueue::kSlots];
 constexpr uint32_t kThiMethod0 = 0x40;
@@ -82,16 +83,38 @@ struct Completed {
     int result;
 };
 
+// The cancelled jobs have all ended: the queue goes on from the syncpoint the engine's restart left, or refuses work
+// when the engine did not come back.
+void renumberLocked()
+{
+    const bool resumed = gRecoveredReady && gQueue.rebase(tegra_host1x_syncpt_read(gSyncpt));
+    __atomic_store_n(&gFailed, !resumed, __ATOMIC_RELEASE);
+    __atomic_store_n(&gCompleted, gQueue.completed, __ATOMIC_RELEASE);
+    gRecovered = false;
+    __atomic_store_n(&gCancelling, false, __ATOMIC_RELEASE);
+    IOLockWakeup(gLock, &gCancelling, false);
+    IOLockWakeup(gLock, &gQueue.count, false);
+}
+
 // The batch's last job carries its bridge, outcome, semantic batch and completion; the jobs before it retire with it.
 struct Retirement {
-    [[noreturn]] static void fault(uint32_t slot, int status, int producers)
+    // Later fences of the same stall fail into the cancellation the first one started.
+    static void fault(uint32_t slot, int status, int producers)
+    {
+        const auto &job = gQueue.jobs[slot];
+        if (!__atomic_exchange_n(&gCancelling, true, __ATOMIC_ACQ_REL))
+            switch_vic_job_stalled(job.fence, status, switch_now_us() - job.submittedUs, producers);
+    }
+
+    // Nothing would ever end a job whose fence or bridge could not be armed.
+    [[noreturn]] static void unarmed(uint32_t slot, int status)
     {
         const auto &job = gQueue.jobs[slot];
         char engine[256], host[200];
         tegra_vic_describe(engine, sizeof(engine));
         tegra_host1x_describe_channel(TEGRA_HOST1X_CHANNEL_VIC, host, sizeof(host));
-        panic("TegraVIC: fence %llu failed (%d) after %llu us, GPU producers %d; %s; %s", job.fence, status,
-              switch_now_us() - job.submittedUs, producers, engine, host);
+        panic("TegraVIC: fence %llu could not be armed (%d) after %llu us; %s; %s", job.fence, status,
+              switch_now_us() - job.submittedUs, engine, host);
     }
 
     static void physical(uint32_t slot, int result)
@@ -131,6 +154,8 @@ struct Retirement {
                 completed[count++] = {head.completion, head.context, gResults[end]};
             gQueue.retire(static_cast<uint32_t>(head.fence));
         }
+        if (gRecovered && !gQueue.count)
+            renumberLocked();
         if (!gQueue.count)
             switch_vic_power_idle();
         __atomic_store_n(&gCompleted, gQueue.completed, __ATOMIC_RELEASE);
@@ -247,7 +272,9 @@ retry:
         return error;
     }
     IOLockLock(gLock);
-    while ((gSuspended || gQueue.count + count > SwitchVICQueue::kSlots) && !gFailed)
+    while ((gSuspended || gQueue.count + count > SwitchVICQueue::kSlots ||
+            __atomic_load_n(&gCancelling, __ATOMIC_ACQUIRE)) &&
+           !gFailed)
         IOLockSleep(gLock, &gQueue.count, THREAD_UNINT);
     if (gFailed || !gQueue.canPublish(count)) {
         IOLockUnlock(gLock);
@@ -442,7 +469,7 @@ retry:
         bridge = last.bridge;
         if (const int error = Stages::start(end, gSyncpt, static_cast<uint32_t>(last.fence), bridge != nullptr,
                                             last.semantics != nullptr, boundUs))
-            Retirement::fault(end, error, 1);
+            Retirement::unarmed(end, error);
         IOLockWakeup(gLock, &gQueue.count, false);
     } else if (useCount) {
         switch_gpu_backing_abort(&transaction);
@@ -450,7 +477,7 @@ retry:
     IOLockUnlock(gLock);
     if (bridge)
         if (const int error = Stages::notify(end, bridge))
-            Retirement::fault(end, error, 1);
+            Retirement::unarmed(end, error);
     return status;
 }
 
@@ -468,7 +495,7 @@ extern "C" int switch_vic_wait(uint32_t fence)
 bool switch_vic_jobs_park(bool drain)
 {
     IOLockLock(gLock);
-    const bool parked = drain || !gQueue.count;
+    const bool parked = drain || (!gQueue.count && !__atomic_load_n(&gCancelling, __ATOMIC_ACQUIRE));
     if (parked)
         gSuspended = true;
     while (parked && gQueue.count)
@@ -489,4 +516,38 @@ void switch_vic_jobs_resume(bool ready, uint32_t completed)
     IOLockUnlock(gLock);
     switch_vic_semantics_physical(gQueue.completed);
     switch_gpu_backing_completed();
+}
+
+uint32_t switch_vic_jobs_cancel(uint32_t reached)
+{
+    IOLockLock(gLock);
+    for (uint32_t i = 0; i < gQueue.count; ++i) {
+        const uint32_t slot = (gQueue.head + i) % SwitchVICQueue::kSlots;
+        if (!gQueue.jobs[slot].toBatchEnd && Stages::cancel(slot, reached))
+            Results::physical(gQueue.jobs[slot].outcome, Stages::kCancelled);
+    }
+    const auto through = static_cast<uint32_t>(gQueue.submitted);
+    IOLockUnlock(gLock);
+    return through;
+}
+
+void switch_vic_jobs_recovered(bool ready)
+{
+    IOLockLock(gLock);
+    gRecovered = true;
+    gRecoveredReady = ready;
+    const bool drained = !gQueue.count;
+    if (drained)
+        renumberLocked();
+    IOLockUnlock(gLock);
+    if (drained)
+        switch_vic_power_idle();
+}
+
+void switch_vic_jobs_settle()
+{
+    IOLockLock(gLock);
+    while (__atomic_load_n(&gCancelling, __ATOMIC_ACQUIRE))
+        IOLockSleep(gLock, &gCancelling, THREAD_UNINT);
+    IOLockUnlock(gLock);
 }
