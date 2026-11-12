@@ -103,8 +103,19 @@ void switch_gpu_set_reached(switch_gpu_backing *backing, uint32_t cause);
 // (switch_gpu_surface_sweep), which GPU jobs run while any thread or ready watch (switch_gpu_ready_waiting) waits.
 extern uint32_t switch_gpu_cpu_sleepers;
 void switch_gpu_backing_sleep_cpu_locked(switch_gpu_backing *backing);
-// The same where a pending writer promise may be what it waits for: a promise given up on wakes it too
-void switch_gpu_backing_sleep_promised_locked(switch_gpu_backing *backing);
+
+// The promises a CPU reader parked on (SwitchGpuPromiseGiveUp.h), once each for its whole wait
+struct switch_gpu_promise_parked {
+	uint32_t count;
+	uint32_t offset[2 * SWITCH_GPU_BACKING_PROMISES], value[2 * SWITCH_GPU_BACKING_PROMISES];
+};
+
+// The same where a pending writer promise may be what it waits for: a promise given up on wakes it too. A CPU reader
+// (`who`; null for one that orders behind the promise on the GPU) parks on each pending promise into `parked`, and
+// leaves them all with switch_gpu_promise_parked_leave once its wait is over.
+void switch_gpu_backing_sleep_promised_locked(switch_gpu_backing *backing,
+					      switch_gpu_promise_parked *parked, const char *who);
+void switch_gpu_promise_parked_leave(switch_gpu_promise_parked *parked);
 extern "C" int tgm_promise_abandoned(uint32_t offset, uint32_t value);
 extern "C" int switch_gpu_ready_waiting(void);
 

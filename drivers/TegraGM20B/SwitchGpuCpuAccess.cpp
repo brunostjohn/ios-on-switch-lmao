@@ -138,12 +138,14 @@ extern "C" int switch_gpu_backing_cpu_acquire(switch_gpu_backing *backing, uint6
 	const bool valid = valid_range(backing, offset, bytes, access) &&
 			   !(access & SWITCH_GPU_BACKING_PROMISED);
 	int result = valid ? 0 : -22;
+	switch_gpu_promise_parked parked = {};
 	while (!result && cpu_conflicts(backing, access)) {
 		if (access & kAvoid)
 			result = -16;
 		else
-			switch_gpu_backing_sleep_promised_locked(backing);
+			switch_gpu_backing_sleep_promised_locked(backing, &parked, "a CPU lock");
 	}
+	switch_gpu_promise_parked_leave(&parked);
 	bool held = false;
 	if (!result) {
 		reserve_cpu_locked(backing, access);

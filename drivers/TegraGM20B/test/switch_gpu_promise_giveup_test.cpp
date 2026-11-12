@@ -357,6 +357,8 @@ struct Waiter {
 
 const Waiter kWaiters[] = {
 	{"DirectPresentWatch", "the display", "a direct present", 1},
+	{"CpuLockIOSurface", "SpringBoard", "a CPU lock", 0},
+	{"CpuLeaseDisplayCopy", "backboardd", "a CPU copy", 0},
 };
 
 class Leaves : public Fixture, public testing::WithParamInterface<Waiter>

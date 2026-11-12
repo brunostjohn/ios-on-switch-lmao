@@ -115,9 +115,11 @@ static int snapshot_read(switch_gpu_backing *backing, switch_gpu_backing_token *
 		return -12;
 	switch_gpu_backing_retain(backing);
 	IOLockLock(backing->lock);
+	switch_gpu_promise_parked parked = {};
 	while (!avoid && (backing->cpu_writers || backing->gpu_admission_writers ||
 			  (cpu && switch_gpu_backing_promise_pending_locked(backing))))
-		switch_gpu_backing_sleep_promised_locked(backing);
+		switch_gpu_backing_sleep_promised_locked(backing, &parked, cpu ? "a CPU copy" : nullptr);
+	switch_gpu_promise_parked_leave(&parked);
 	int result = backing->cpu_writers || backing->gpu_admission_writers ||
 				     backing->cpu_readers == UINT32_MAX
 			     ? -16

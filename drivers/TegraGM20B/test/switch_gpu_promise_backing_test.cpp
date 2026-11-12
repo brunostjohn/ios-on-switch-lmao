@@ -3,6 +3,8 @@
 // promised job's write admission does not wait for, and a CPU reader (a CPU lock, a waiting snapshot) sleeps until the
 // promised job is submitted.
 #include <algorithm>
+#include <mutex>
+#include <string>
 #include <vector>
 
 #include "switch_gpu_backing_fixture.h"
@@ -44,6 +46,31 @@ extern "C" void switch_gpu_fence_put(const volatile uint32_t *)
 extern "C" int tgm_promise_open(void)
 {
 	return 0;
+}
+
+namespace
+{
+std::mutex parkLock;
+std::vector<std::string> parks;  // "who offset value" of each CPU reader's park
+unsigned leaves;
+}  // namespace
+
+extern "C" int tgm_promise_park(uint32_t offset, uint32_t value, const char *, const char *who,
+				const struct switch_gpu_giveup_job *reader, int display)
+{
+	std::lock_guard<std::mutex> hold(parkLock);
+	EXPECT_EQ(reader, nullptr);
+	EXPECT_EQ(display, 0);
+	parks.push_back(std::string(who) + " " + std::to_string(offset) + " " +
+			std::to_string(value));
+	return 1;
+}
+
+extern "C" void tgm_promise_leave(uint32_t, uint32_t, int display)
+{
+	std::lock_guard<std::mutex> hold(parkLock);
+	EXPECT_EQ(display, 0);
+	++leaves;
 }
 
 namespace
@@ -160,6 +187,58 @@ TEST_F(Backing, TheCpusSnapshotSleepsUntilThePromisedJobIsSubmittedAndNamesIt)
 	EXPECT_EQ(result.load(), 0);
 	EXPECT_EQ(producer.value, 9u);
 	EXPECT_EQ(switch_gpu_backing_cpu_release_owned(&lease, 0), 0);
+	switch_gpu_backing_release(b);
+}
+
+// A CPU lock and the display's CPU copy asleep behind a promise park on it once each for their whole wait, however
+// often they are woken meanwhile, so the give-up's second runs from their first sleep; they leave once their wait is
+// over (here at the keep). An engine reader's snapshot orders behind the promise on the GPU and parks on nothing.
+TEST_F(Backing, CpuReadersParkOnAPromiseOnceForTheirWholeWait)
+{
+	auto *b = promised();
+	{
+		std::lock_guard<std::mutex> hold(parkLock);
+		parks.clear();
+		leaves = 0;
+	}
+	switch_gpu_backing_token producer = {}, tokens[4] = {};
+	switch_gpu_cpu_lease *engine = nullptr, *lease = nullptr;
+	ASSERT_EQ(switch_gpu_backing_snapshot_read_promises(b, &producer, &engine, tokens, 4), 1);
+	std::atomic<int> copied{1}, locked{1};
+	std::thread copy([&] {
+		copied = switch_gpu_backing_snapshot_read_cpu(b, &producer, &lease);
+	});
+	std::thread lock([&] {
+		locked = switch_gpu_backing_cpu_acquire(b, 0, 4096, kRead);
+	});
+	std::this_thread::sleep_for(std::chrono::milliseconds(50));
+	for (int i = 0; i < 3; ++i) {
+		switch_gpu_backing_promise_sleepers_wake();
+		std::this_thread::sleep_for(std::chrono::milliseconds(20));
+	}
+	EXPECT_EQ(copied.load(), 1);
+	EXPECT_EQ(locked.load(), 1);
+	{
+		std::lock_guard<std::mutex> hold(parkLock);
+		std::vector<std::string> sorted = parks;
+		std::sort(sorted.begin(), sorted.end());
+		EXPECT_EQ(sorted,
+			  (std::vector<std::string>{"a CPU copy 2048 1", "a CPU lock 2048 1"}));
+		EXPECT_EQ(leaves, 0u);
+	}
+	switch_gpu_backing_promise_drop(b, kOffset);
+	copy.join();
+	lock.join();
+	EXPECT_EQ(copied.load(), 0);
+	EXPECT_EQ(locked.load(), 0);
+	{
+		std::lock_guard<std::mutex> hold(parkLock);
+		EXPECT_EQ(parks.size(), 2u);
+		EXPECT_EQ(leaves, 2u);
+	}
+	EXPECT_EQ(switch_gpu_backing_cpu_release_owned(&lease, 0), 0);
+	EXPECT_EQ(switch_gpu_backing_cpu_release_owned(&engine, 0), 0);
+	EXPECT_EQ(switch_gpu_backing_cpu_release(b, 0, 4096, kRead), 0);
 	switch_gpu_backing_release(b);
 }
 
