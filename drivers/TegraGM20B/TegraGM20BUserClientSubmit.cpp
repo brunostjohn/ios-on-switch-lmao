@@ -217,7 +217,13 @@ IOReturn AGXDeviceUserClient::submitAddress(const TegraGM20BAbiSubmitAddress *in
 				IOLockUnlock(submitLocks_[slot]);
 				return result;
 			}
-			const int prepared = job.events->prepare(events_, eventInput);
+			const auto *releases =
+				eventInput && (submit->surface_flags & TegraGM20BSubmitEventReleases)
+					? reinterpret_cast<const TegraGM20BAbiSignalRelease *>(
+						  reinterpret_cast<const TegraGM20BAbiEventUse *>(eventInput + 1) +
+						  eventInput->wait_count + eventInput->signal_count)
+					: nullptr;
+			const int prepared = job.events->prepare(events_, eventInput, releases, header.channel);
 			result = prepared == -5 ? kIOReturnAborted : ioreturn(prepared);
 			if (!result) {
 				IOLockLock(lock_);
@@ -511,16 +517,19 @@ refresh:
 			jobVisibility = switch_gpu_job_visibility(visibility, events && events->signals(),
 								  unlockedWrites || scanoutWrites,
 								  hostWritten || transaction.host_written);
-			error = switch_gpu_chan_exec_visibility(chan, pushes, count, job.dependencies,
-								dependencies, &seqno,
-								profile, jobVisibility);
+			if (events->released())
+				switch_gpu_chan_event_releases(chan, uint32_t(completion.value));
+			error = switch_gpu_chan_exec_events(chan, pushes, count, job.dependencies, dependencies,
+							    nullptr, 0, events->words(), events->wordCount(), &seqno,
+							    profile, jobVisibility, nullptr, 0);
 			if (scratch)
 				scratch->phases.end(TGM_SUBMIT_EXEC);
 		}
 		if (error != -11)
 			break;
 		switch_gpu_backing_abort(&transaction);
-		error = switch_gpu_chan_wait_submission_room(chan, pushes, count, dependencies,
+		error = switch_gpu_chan_wait_submission_room(chan, pushes, count,
+							     dependencies + events->wordCount(),
 							     profile);
 		if (error)
 			break;

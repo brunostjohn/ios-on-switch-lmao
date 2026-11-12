@@ -56,6 +56,8 @@ OSDefineMetaClassAndStructors(AGXDeviceUserClient, IOUserClient)
 	    tgm_mem_new(vm_, &fence_pa_, 1, &fence_mem_) ||
 	    tgm_vm_kmap(vm_, fence_mem_, 4096, &fence_gpu_))
 		return false;
+	events_.attachWords(fence_va_, fence_gpu_, tgm_fence_offset(fence_va_), switch_gpu_fence_hold,
+			    switch_gpu_fence_put);
 	// the whole fence slot (gpu_internal.h TGM_FENCE_SLOT): one VM page
 	IOAddressRange range = {fence_pa_, static_cast<IOByteCount>(PAGE_SIZE)};
 	fence_view_ = IOMemoryDescriptor::withAddressRanges(

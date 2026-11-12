@@ -10,18 +10,18 @@ struct SwitchGpuJobRecord {
 	TegraGM20BAbiPush *pushes;
 	const TegraGM20BAbiSurfaceUse *uses;
 	const TegraGM20BAbiSubmitEvents *events;
+	const TegraGM20BAbiSignalRelease *releases;
 	uint64_t admission;  // the admission cookie, 0: none
 	const TegraGM20BAbiJobPromises *promises;  // the writer promises it keeps, or null
 
-	static constexpr uint32_t kFlags = TegraGM20BJobExternal | TegraGM20BJobHostWritten |
-					   TegraGM20BJobHasEvents | TegraGM20BJobQuiet |
-					   TegraGM20BJobAdmission | TegraGM20BJobFulfills;
+	static constexpr uint32_t kFlags = TegraGM20BJobExternal | TegraGM20BJobHostWritten | TegraGM20BJobHasEvents |
+					   TegraGM20BJobQuiet | TegraGM20BJobAdmission | TegraGM20BJobFulfills |
+					   TegraGM20BJobEventReleases;
 	static constexpr size_t kMaxBytes =
 		sizeof(TegraGM20BAbiJob) + TegraGM20BMaxJobPushes * sizeof(TegraGM20BAbiPush) +
-		TegraGM20BMaxJobUses * sizeof(TegraGM20BAbiSurfaceUse) +
-		sizeof(TegraGM20BAbiSubmitAdmission) + sizeof(TegraGM20BAbiJobPromises) +
-		sizeof(TegraGM20BAbiSubmitEvents) +
-		TegraGM20BMaxJobEvents * sizeof(TegraGM20BAbiEventUse);
+		TegraGM20BMaxJobUses * sizeof(TegraGM20BAbiSurfaceUse) + sizeof(TegraGM20BAbiSubmitAdmission) +
+		sizeof(TegraGM20BAbiJobPromises) + sizeof(TegraGM20BAbiSubmitEvents) +
+		TegraGM20BMaxJobEvents * (sizeof(TegraGM20BAbiEventUse) + sizeof(TegraGM20BAbiSignalRelease));
 
 	static SwitchGpuJobRecord parse(void *bytes, size_t size)
 	{
@@ -67,6 +67,9 @@ struct SwitchGpuJobRecord {
 			after += sizeof(*promises);
 		}
 		const TegraGM20BAbiSubmitEvents *events = nullptr;
+		const TegraGM20BAbiSignalRelease *releases = nullptr;
+		if ((job->flags & TegraGM20BJobEventReleases) && !(job->flags & TegraGM20BJobHasEvents))
+			return record;
 		if (job->flags & TegraGM20BJobHasEvents) {
 			if (size < expected + sizeof(TegraGM20BAbiSubmitEvents))
 				return record;
@@ -77,13 +80,18 @@ struct SwitchGpuJobRecord {
 			expected += sizeof(*events) +
 				    (events->wait_count + events->signal_count) * sizeof(TegraGM20BAbiEventUse);
 			const auto *records = reinterpret_cast<const TegraGM20BAbiEventUse *>(events + 1);
+			if (job->flags & TegraGM20BJobEventReleases) {
+				releases = reinterpret_cast<const TegraGM20BAbiSignalRelease *>(
+					records + events->wait_count + events->signal_count);
+				expected += events->signal_count * sizeof(TegraGM20BAbiSignalRelease);
+			}
 			for (uint32_t i = 0; size == expected && i < events->wait_count + events->signal_count; ++i)
 				if (!records[i].handle)
 					return record;
 		}
 		if (size != expected)
 			return record;
-		return {job, pushes, uses, events, cookie, promises};
+		return {job, pushes, uses, events, releases, cookie, promises};
 	}
 
 	bool valid() const

@@ -124,6 +124,43 @@ struct TegraGM20BAbiJob {
 	uint32_t shared_count, flags;
 };
 
+enum {
+	TegraGM20BMethodEventWord = 40,
+	TegraGM20BSubmitEventReleases = 1u << 12, /* TegraGM20BAbiSubmit.surface_flags (SubmitAddress) */
+	TegraGM20BJobEventReleases = 1u << 12,    /* TegraGM20BAbiJob.flags */
+	TegraGM20BEventReleaseLimit = 1u << 31,
+	/* The connection's fence page holds the word of each imported event whose handle's slot is below
+	 * TegraGM20BEventWords at this word plus the slot: the words after the client bind epoch (256) and before the
+	 * writer promises. Method 40 answers kIOReturnNoResources for the other slots, whose signals end their jobs. */
+	TegraGM20BEventWordFirst = 257,
+	TegraGM20BEventWords = TegraGM20BPromiseWord - TegraGM20BEventWordFirst,
+};
+
+/* Method 40. The word one channel of the connection releases an imported event's values into, mid-job: a signal of value v
+ * goes to the GPU as payload = v - base (mod 2^64), 0 < payload < TegraGM20BEventReleaseLimit, released at `address`
+ * (NV906F SEMAPHORED, 4 bytes) after the wait for idle and the L2 flush a CPU reader needs, then NON_STALL_INTERRUPT.
+ * The kernel completes such a signal once the word holds its payload, as the job's end completes the others, and other
+ * jobs waiting for a value it produces acquire on the word. The channel's payloads must grow from one released signal to
+ * the next. A call while none of the word's signals is outstanding binds the word to `channel` and moves base to the
+ * event's value less the word's (the word never goes back); otherwise it answers the current base, or kIOReturnBusy while
+ * another channel's are outstanding. kIOReturnNoResources: the word passed half its range. */
+struct TegraGM20BAbiEventWord {
+	uint64_t handle;
+	uint32_t channel, reserved;
+};
+
+struct TegraGM20BAbiEventWordReply {
+	uint64_t address, base;
+};
+
+/* With SubmitEventReleases or JobEventReleases, one per signal after the signals. Released: the job's pushes release
+ * payload into the event's word for it (method 40); the submission is refused if payload is not that signal's. */
+enum { TegraGM20BSignalReleased = 1u << 0 };
+
+struct TegraGM20BAbiSignalRelease {
+	uint32_t payload, flags;
+};
+
 #ifdef __cplusplus
 #define TEGRA_GM20B_JOB_ASSERT(x, n) static_assert(sizeof(x) == (n), #x " layout")
 #else
@@ -136,5 +173,8 @@ TEGRA_GM20B_JOB_ASSERT(TegraGM20BAbiJob, 24);
 TEGRA_GM20B_JOB_ASSERT(TegraGM20BAbiWriterPromise, 24);
 TEGRA_GM20B_JOB_ASSERT(TegraGM20BAbiWriterPromiseReply, 8);
 TEGRA_GM20B_JOB_ASSERT(TegraGM20BAbiJobPromises, 24);
+TEGRA_GM20B_JOB_ASSERT(TegraGM20BAbiEventWord, 16);
+TEGRA_GM20B_JOB_ASSERT(TegraGM20BAbiEventWordReply, 16);
+TEGRA_GM20B_JOB_ASSERT(TegraGM20BAbiSignalRelease, 8);
 #undef TEGRA_GM20B_JOB_ASSERT
 #endif

@@ -26,6 +26,9 @@ struct switch_gpu_event_signal : SwitchGpuEventRecord {
 	bool bound;
 	int result;
 	switch_gpu_event_waits *dependencies;
+	struct switch_gpu_event_word *word;  // released mid-job into it (SwitchGpuEventWord.h)
+	uint64_t wordBase;
+	uint32_t payload, wordPrevious;
 };
 
 struct switch_gpu_event {
@@ -88,6 +91,7 @@ void switch_gpu_event_watches_bind_locked(switch_gpu_event *);
 void switch_gpu_event_signal_drop(switch_gpu_event_signal *);
 void switch_gpu_event_waits_drop(switch_gpu_event_waits *);
 int switch_gpu_event_waits_query_locked(switch_gpu_event_waits *);
+int switch_gpu_event_waits_producers_locked(const switch_gpu_event_waits *);
 void switch_gpu_event_dispose(SwitchGpuEventRecord *);
 void switch_gpu_events_dispose();
 bool switch_gpu_events_reserve();

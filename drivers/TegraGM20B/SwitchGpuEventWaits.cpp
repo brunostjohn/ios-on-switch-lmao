@@ -135,8 +135,11 @@ void switch_gpu_event_waits_drop(switch_gpu_event_waits *batch)
 int switch_gpu_event_waits_query_locked(switch_gpu_event_waits *batch)
 {
 	const int consumer = switch_gpu_backing_token_physical_status(&batch->consumer, 0);
-	if (consumer <= 0)
-		return consumer;
+	return consumer <= 0 ? consumer : switch_gpu_event_waits_producers_locked(batch);
+}
+
+int switch_gpu_event_waits_producers_locked(const switch_gpu_event_waits *batch)
+{
 	bool pending = batch->previous && !batch->previous->result;
 	int failure = batch->previous && batch->previous->result < 0 ? batch->previous->result : 0;
 	for (uint32_t i = 0; i < batch->count; ++i) {

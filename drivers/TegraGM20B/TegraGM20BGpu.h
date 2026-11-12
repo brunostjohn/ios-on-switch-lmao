@@ -251,6 +251,16 @@ int switch_gpu_chan_exec_job(struct tgm_chan *chan, const struct tgm_push *push,
 	const struct switch_gpu_sibling_wait *siblings, uint32_t sibling_count, uint32_t *seqno,
 	const struct tgm_prof *prof, uint32_t visibility, const struct switch_gpu_release *releases,
 	uint32_t release_count);
+/* switch_gpu_chan_exec_job with acquires on event words as well (SwitchGpuWordWait.h) */
+struct switch_gpu_word_wait;
+int switch_gpu_chan_exec_events(struct tgm_chan *chan, const struct tgm_push *push, uint32_t count,
+	const struct switch_gpu_backing_token *dependencies, uint32_t dependency_count,
+	const struct switch_gpu_sibling_wait *siblings, uint32_t sibling_count,
+	const struct switch_gpu_word_wait *words, uint32_t word_count, uint32_t *seqno,
+	const struct tgm_prof *prof, uint32_t visibility, const struct switch_gpu_release *releases,
+	uint32_t release_count);
+/* The channel's jobs through `seqno` release event signals mid-job: their nonstall interrupts run event retirement. */
+void switch_gpu_chan_event_releases(struct tgm_chan *chan, uint32_t seqno);
 struct TegraGM20BAbiFenceSemantic;
 void switch_gpu_chan_semantic_visibility(struct tgm_chan *, volatile struct TegraGM20BAbiFenceSemantic *);
 void switch_gpu_chan_visibility(struct tgm_chan *chan, volatile uint32_t *visible_cpu,

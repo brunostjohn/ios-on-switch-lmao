@@ -14,7 +14,7 @@ TEST(JobAbi, MethodsFollowTheHashedHeadersOnes)
 				   TegraGM20BMethodReadback, TegraGM20BMethodRegdump,
 				   TegraGM20BMethodCopyReset};
 	const uint32_t job[] = {TegraGM20BMethodResourceSetCreate, TegraGM20BMethodResourceSetRelease,
-				TegraGM20BMethodSubmitJob, TegraGM20BMethodWriterPromise};
+				TegraGM20BMethodSubmitJob, TegraGM20BMethodWriterPromise, TegraGM20BMethodEventWord};
 	for (uint32_t method : job) {
 		EXPECT_GT(method, uint32_t(TegraGM20BMethodCpuComplete));
 		for (uint32_t other : hashed)
@@ -29,6 +29,15 @@ TEST(JobAbi, SetGenerationsLieInTheFencePagesUnusedWords)
 	EXPECT_GE(uint32_t(TegraGM20BSetGenerationWord), visibility);
 	EXPECT_GT(uint32_t(TegraGM20BSetGenerationWord), bindEpoch);
 	EXPECT_LE((TegraGM20BSetGenerationWord + TegraGM20BMaxResourceSets) * 4u, 4096u);
+}
+
+// An imported event's word (method 40) sits after the client bind epoch and below the writer promises
+TEST(JobAbi, EventWordsLieBetweenTheBindEpochAndThePromises)
+{
+	constexpr uint32_t bindEpoch = 256;
+	EXPECT_GT(uint32_t(TegraGM20BEventWordFirst), bindEpoch);
+	EXPECT_EQ(uint32_t(TegraGM20BEventWordFirst + TegraGM20BEventWords), uint32_t(TegraGM20BPromiseWord));
+	EXPECT_GE(uint32_t(TegraGM20BEventWords), 128u);
 }
 
 TEST(JobAbi, RecordsKeepTheirLayout)

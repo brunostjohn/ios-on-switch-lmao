@@ -3,6 +3,7 @@
 #include <string.h>
 #include "TegraGM20BExecSurfaces.h"
 #include "TegraGM20BFences.h"
+#include "TegraGM20BJobABI.h"
 
 namespace tgm_fences
 {
@@ -109,8 +110,11 @@ bool ExecSurfaces::validSubmit(const TegraGM20BAbiSubmit *in, uint32_t bytes, bo
 							  TegraGM20BSubmitAdmissionBegin |
 							  TegraGM20BSubmitAdmissionContinue |
 							  TegraGM20BSubmitAdmissionEnd |
-							  TegraGM20BSubmitAdmissionCancel)
+							  TegraGM20BSubmitAdmissionCancel |
+							  TegraGM20BSubmitEventReleases)
 					       : 0u))) ||
+	    ((in->surface_flags & TegraGM20BSubmitEventReleases) &&
+	     !(in->surface_flags & TegraGM20BSubmitHasEvents)) ||
 	    ((in->surface_flags & TegraGM20BSubmitExternalVisibility) &&
 	     !(in->surface_flags & TegraGM20BSubmitVisibilityExplicit)) ||
 	    ((in->surface_flags & TegraGM20BSubmitVisibilityExplicit) &&
@@ -149,6 +153,8 @@ bool ExecSurfaces::validSubmit(const TegraGM20BAbiSubmit *in, uint32_t bytes, bo
 			return false;
 		expected += sizeof(*events) + (events->wait_count + events->signal_count) *
 						      sizeof(TegraGM20BAbiEventUse);
+		if (in->surface_flags & TegraGM20BSubmitEventReleases)
+			expected += events->signal_count * sizeof(TegraGM20BAbiSignalRelease);
 		if (bytes != expected)
 			return false;
 		const auto *records = reinterpret_cast<const TegraGM20BAbiEventUse *>(events + 1);

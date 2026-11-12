@@ -193,6 +193,7 @@ static int chan_new(struct tgm_vm *vm, const void *vm_owner, volatile uint32_t *
 	/* a fence word only moves forward: a channel made in a slot continues its predecessor's sequence, so a semaphore
 	 * acquire on the old seqno (the GPU present) is never left waiting for a word that went back to 0 */
 	chan->submitted = READ_ONCE(*fence_cpu);
+	chan->event_through = chan->submitted;
 	switch_gpu_jobs_init(&chan->jobs, chan->submitted);
 	switch_gpu_quiet_init(&chan->quiet, chan->submitted);
 	chan->stat_done = chan->submitted;

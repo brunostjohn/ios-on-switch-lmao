@@ -41,7 +41,7 @@ IOReturn AGXDeviceUserClient::submitJob(const TegraGM20BAbiSubmitAddress *in, Te
 			return result;
 		}
 		if (record.valid() && record.job->channel == header.channel) {
-			const int prepared = job.events->prepare(events_, record.events);
+			const int prepared = job.events->prepare(events_, record.events, record.releases, header.channel);
 			result = prepared == -5 ? kIOReturnAborted : ioreturn(prepared);
 		}
 		if (!result) {
@@ -305,7 +305,7 @@ refresh:
 		if (!error)
 			error = events->bind(&completion);
 		ownershipFailed = error == -5;
-		if (!error && dependencies + siblingCount > TegraGM20BMaxJobDependencies)
+		if (!error && dependencies + siblingCount + events->wordCount() > TegraGM20BMaxJobDependencies)
 			error = -28;
 		if (!error) {
 			job.phases.end(TGM_SUBMIT_LOCK);
@@ -315,16 +315,18 @@ refresh:
 				switch_gpu_job_visibility(submit, events->signals(), unlockedWrites || scanoutWrites,
 							  hostWritten || transaction.host_written) |
 				(quietEnd ? uint32_t(SWITCH_GPU_SUBMIT_QUIET) : 0u);
-			error = switch_gpu_chan_exec_job(chan, pushes, count, job.dependencies, dependencies,
-							 siblings, siblingCount, &seqno, profile, jobVisibility,
-							 releases, keptCount);
+			if (events->released())
+				switch_gpu_chan_event_releases(chan, uint32_t(completion.value));
+			error = switch_gpu_chan_exec_events(chan, pushes, count, job.dependencies, dependencies,
+							    siblings, siblingCount, events->words(), events->wordCount(),
+							    &seqno, profile, jobVisibility, releases, keptCount);
 			job.phases.end(TGM_SUBMIT_EXEC);
 		}
 		if (error != -11)
 			break;
 		switch_gpu_backing_abort(&transaction);
-		error = switch_gpu_chan_wait_submission_room(chan, pushes, count, dependencies + siblingCount,
-							     profile);
+		error = switch_gpu_chan_wait_submission_room(chan, pushes, count,
+							     dependencies + siblingCount + events->wordCount(), profile);
 		if (error)
 			break;
 	}

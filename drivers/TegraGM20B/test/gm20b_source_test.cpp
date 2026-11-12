@@ -761,8 +761,8 @@ TEST(GM20BRoomSource, WaiterAndSubmissionReserveOneRoom)
 	EXPECT_THAT(room, HasSubstr("5 * (TGM_ORDER_MAX + dependency_count + 1)"));
 	// SubmitJob's sibling acquires take a dependency's room; its retry asks the waiter for both together.
 	expectBefore(flat(definition(gpu(), "int chan_exec_body(")),
-		     "chan_submission_room(chan, pushes, count, dependency_count + sibling_count, fences, &prof, "
-		     "&entries, &words);",
+		     "chan_submission_room(chan, pushes, count, dependency_count + sibling_count + word_wait_count, "
+		     "fences, &prof, &entries, &words);",
 		     "if (!may_wait && !chan_room(chan, entries, words)) return -EAGAIN;");
 	expectBefore(flat(definition(gpu(), "int switch_gpu_chan_wait_submission_room(")),
 		     "chan_submission_room(chan, pushes, count, dependency_count, fences, &prof, &entries, &words);",
@@ -798,9 +798,9 @@ TEST(GM20BL2Source, InvalidateOnTheGpu)
 TEST(GM20BCoherencySource, ExecNamesTheWriterOnceTheSubmissionHasItsSeqno)
 {
 	const std::string exec = flat(definition(client(), "IOReturn AGXDeviceUserClient::exec("));
-	expectBefore(exec, "error = switch_gpu_chan_exec_visibility(",
+	expectBefore(exec, "error = switch_gpu_chan_exec_events(",
 		     "surfaces_.after(listed, importsWritten_, tgm_chan_uid(chan), seqno);");
-	expectBefore(exec, "error = switch_gpu_chan_exec_visibility(", "switch_gpu_backing_commit(&transaction);");
+	expectBefore(exec, "error = switch_gpu_chan_exec_events(", "switch_gpu_backing_commit(&transaction);");
 	const std::string after = flat(definition(SourceText("../TegraGM20BExecSurfaces.cpp"),
 						  "void ExecSurfaces::after("));
 	EXPECT_THAT(after, HasSubstr("tgm_coherency_wrote(refs_[i].coh, always, uid, seqno);"));
@@ -815,8 +815,8 @@ TEST(GM20BFencesSource, ExecQueuesItsWritersAcquiresBeforeItSubmits)
 {
 	const std::string exec = flat(definition(client(), "IOReturn AGXDeviceUserClient::exec("));
 	expectBefore(exec, "if (followed < 0) return ioreturn(followed);",
-		     "error = switch_gpu_chan_exec_visibility(");
-	expectBefore(exec, "switch_gpu_backing_dependencies(", "error = switch_gpu_chan_exec_visibility(");
+		     "error = switch_gpu_chan_exec_events(");
+	expectBefore(exec, "switch_gpu_backing_dependencies(", "error = switch_gpu_chan_exec_events(");
 	EXPECT_THAT(exec, HasSubstr("ownershipBusy ? kIOReturnCannotLock : ioreturn(error)"));
 	// Named uses carry no CPU exclusion unless an admission ordered them; a legacy job claims only listed imports.
 	EXPECT_THAT(exec, HasSubstr("const uint32_t claim = switch_gpu_claim_flags(admissionBegin "

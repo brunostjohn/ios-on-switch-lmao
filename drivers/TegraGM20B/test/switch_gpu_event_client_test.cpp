@@ -7,6 +7,8 @@
 #include <thread>
 #include <vector>
 #include "drivers/TegraGM20B/SwitchGpuEventClient.h"
+#include "drivers/TegraGM20B/SwitchGpuEventWord.h"
+#include "drivers/TegraGM20B/TegraGM20BJobABI.h"
 
 struct switch_gpu_event {
 	unsigned references = 1;
@@ -420,6 +422,89 @@ extern "C" int switch_gpu_event_waits_completion(switch_gpu_event_waits *batch,
 	batch->completed = callback;
 	batch->context = context;
 	return 0;
+}
+
+namespace
+{
+struct WordRelease {
+	switch_gpu_event_word *word;
+	uint32_t channel, payload;
+};
+
+std::vector<WordRelease> wordReleases;
+int releaseError, wordHolds;
+bool waitOnWord;
+uint32_t fencePage[1024];
+
+void holdWord(const volatile uint32_t *)
+{
+	++wordHolds;
+}
+
+void putWord(const volatile uint32_t *)
+{
+	--wordHolds;
+}
+}  // namespace
+
+switch_gpu_event_word *switch_gpu_event_word_create(volatile uint32_t *cpu, uint64_t pool,
+						    void (*put)(const volatile uint32_t *))
+{
+	auto *word = new switch_gpu_event_word{};
+	*word = {1, 0, cpu, pool, put, 0, 0, 0, 0, false};
+	return word;
+}
+
+void switch_gpu_event_word_retain(switch_gpu_event_word *word)
+{
+	++word->refs;
+}
+
+void switch_gpu_event_word_release(switch_gpu_event_word **word)
+{
+	if (*word && !--(*word)->refs) {
+		(*word)->put((*word)->cpu);
+		delete *word;
+	}
+	*word = nullptr;
+}
+
+int switch_gpu_event_word_arm(switch_gpu_event_word *word, switch_gpu_event *, uint32_t channel, uint64_t *base)
+{
+	if (word->pending && word->channel != channel)
+		return -16;
+	word->armed = true;
+	word->channel = channel;
+	*base = word->base = 40;
+	return 0;
+}
+
+bool switch_gpu_event_word_idle(const switch_gpu_event_word *word)
+{
+	return !word->pending;
+}
+
+void switch_gpu_event_word_disarm(switch_gpu_event_word *word)
+{
+	word->armed = false;
+}
+
+int switch_gpu_event_signal_release(switch_gpu_event_signal *, switch_gpu_event_word *word, uint32_t channel,
+				    uint32_t payload)
+{
+	if (releaseError || !word->armed)
+		return releaseError ? releaseError : -22;
+	wordReleases.push_back({word, channel, payload});
+	++word->pending;
+	return 0;
+}
+
+bool switch_gpu_event_use_word(const switch_gpu_event_use *, uint64_t value, switch_gpu_word_wait *wait)
+{
+	if (!waitOnWord)
+		return false;
+	*wait = {0x9000, uint32_t(value - 40), 3};
+	return true;
 }
 
 extern "C" int switch_gpu_timeline_semantic_allocate(switch_gpu_timeline_semantic **out)
@@ -914,4 +999,78 @@ TEST_F(EventClient, AcceptedKernelSubmissionConsumesSignalsAndBindsOwnCompletion
 	for (auto *batch : batches)
 		completeBatch(batch, 1);
 	channel.destroy();
+}
+
+TEST_F(EventClient, EventWordIsTheSlotsWordInTheFencePageAndOutlivesItsHandle)
+{
+	client.attachWords(fencePage, 0x7000, 0x40000, holdWord, putWord);
+	uint64_t address = 0, base = 0;
+	ASSERT_EQ(client.word(handle, 2, &address, &base), 0);
+	const uint32_t slot = uint32_t(handle % 256);
+	EXPECT_EQ(address, 0x7000u + (TegraGM20BEventWordFirst + slot) * 4);
+	EXPECT_EQ(base, 40u);
+	EXPECT_EQ(wordHolds, 1);
+	switch_gpu_event_word *word = client.wordOf(handle);
+	ASSERT_NE(word, nullptr);
+	EXPECT_EQ(word->cpu, &fencePage[TegraGM20BEventWordFirst + slot]);
+	EXPECT_EQ(word->pool, 0x40000u + (TegraGM20BEventWordFirst + slot) * 4);
+	EXPECT_EQ(client.word(handle + 1, 2, &address, &base), -22);
+	++word->pending;
+	ASSERT_EQ(client.release(handle), 0);
+	EXPECT_EQ(client.wordOf(handle), nullptr);
+	uint64_t again = 0, value = 0;
+	ASSERT_EQ(client.import(this, 7, &again, &value), 0);
+	EXPECT_NE(again % 256, slot);
+	EXPECT_EQ(client.release(again), 0);
+	--word->pending;
+	ASSERT_EQ(client.import(this, 7, &again, &value), 0);
+	EXPECT_EQ(again % 256, slot);
+	EXPECT_FALSE(word->armed);
+	switch_gpu_event_word_release(&word);
+	client.destroy();
+	EXPECT_EQ(wordHolds, 0);
+}
+
+TEST_F(EventClient, JobReleasesItsSignalIntoTheWordAndWaitsOnAProducersWord)
+{
+	client.attachWords(fencePage, 0x7000, 0x40000, holdWord, putWord);
+	uint64_t address = 0, base = 0;
+	ASSERT_EQ(client.word(handle, 2, &address, &base), 0);
+	struct {
+		TegraGM20BAbiSubmitEvents header;
+		TegraGM20BAbiEventUse uses[2];
+	} input = {{1, 1, 0}, {{handle, 45}, {handle, 47}}};
+	const TegraGM20BAbiSignalRelease release = {7, TegraGM20BSignalReleased};
+
+	wordReleases.clear();
+	source.state = 2;
+	waitOnWord = true;
+	SwitchGpuEventJob job;
+	ASSERT_EQ(job.prepare(client, &input.header, &release, 2), 0);
+	EXPECT_TRUE(job.released());
+	ASSERT_EQ(wordReleases.size(), 1u);
+	EXPECT_EQ(wordReleases[0].channel, 2u);
+	EXPECT_EQ(wordReleases[0].payload, 7u);
+	ASSERT_EQ(job.wordCount(), 1u);
+	EXPECT_EQ(job.words()[0].pool, 0x9000u);
+	EXPECT_EQ(job.words()[0].payload, 5u);
+	switch_gpu_backing_token dependencies[4] = {};
+	uint32_t count = 0;
+	ASSERT_EQ(job.append(dependencies, 4, &count), 0);
+	EXPECT_EQ(count, 0u);
+	job.clear();
+	EXPECT_EQ(job.wordCount(), 0u);
+	EXPECT_FALSE(job.released());
+
+	const TegraGM20BAbiSignalRelease unknown = {7, 1u << 1};
+	EXPECT_EQ(job.prepare(client, &input.header, &unknown, 2), -22);
+	job.clear();
+	waitOnWord = false;
+	releaseError = -22;
+	EXPECT_EQ(job.prepare(client, &input.header, &release, 2), -22);
+	job.clear();
+	releaseError = 0;
+	switch_gpu_event_word *word = client.wordOf(handle);
+	word->pending = 0;
+	switch_gpu_event_word_release(&word);
 }

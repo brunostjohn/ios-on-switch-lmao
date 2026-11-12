@@ -81,6 +81,7 @@
 #include "SwitchGpuMapping.h"
 #include "SwitchGpuPathStats.h"
 #include "SwitchGpuJobStats.h"
+#include "SwitchGpuEventStats.h"
 #include "TegraGM20BSyncpt.h"
 #include "TegraGM20BFences.h"
 #include "TegraGM20BHangDecode.h"
@@ -255,6 +256,7 @@ struct tgm_chan {
 	u64 visible_gpu;
 	u64 fence_gpu;
 	u32 submitted;
+	u32 event_through; /* its jobs through this seqno release event signals mid-job (SwitchGpuEventWord.h) */
     u64 irq_state;
 	u32 error;
 	u32 chid;

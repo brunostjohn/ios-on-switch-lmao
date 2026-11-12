@@ -75,7 +75,7 @@ constexpr uint32_t kJobBytes =
 								: sizeof(TegraGM20BAbiSubmit)) +
 	TegraGM20BMaxJobPushes * sizeof(TegraGM20BAbiPush) +
 	TegraGM20BMaxJobUses * sizeof(TegraGM20BAbiSurfaceUse) + sizeof(TegraGM20BAbiSubmitEvents) +
-	TegraGM20BMaxJobEvents * sizeof(TegraGM20BAbiEventUse) +
+	TegraGM20BMaxJobEvents * (sizeof(TegraGM20BAbiEventUse) + sizeof(TegraGM20BAbiSignalRelease)) +
 	sizeof(TegraGM20BAbiSubmitAdmission) + sizeof(TegraGM20BAbiJobPromises);
 constexpr uint64_t kMaxBoBytes = 256ULL << 20;
 constexpr uint32_t kFenceToken = 0xfe000001u;

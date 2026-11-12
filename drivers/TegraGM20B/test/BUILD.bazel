@@ -841,6 +841,7 @@ host_library(
     srcs = ["//drivers/TegraGM20B:TegraGM20BExecSurfaces.cpp"],
     hdrs = [
         "//drivers/TegraGM20B:TegraGM20BABI.h",
+        "//drivers/TegraGM20B:TegraGM20BJobABI.h",
         "//drivers/TegraGM20B:TegraGM20BExecSurfaces.h",
         "//drivers/TegraGM20B:TegraGM20BFences.h",
         "//drivers/TegraGM20B:TegraGM20BGpu.h",
@@ -1381,15 +1382,19 @@ host_library(
     name = "switch_gpu_event_client",
     srcs = [
         "//drivers/TegraGM20B:SwitchGpuEventClient.cpp",
+        "//drivers/TegraGM20B:SwitchGpuEventClientWords.cpp",
         "//drivers/TegraGM20B:SwitchGpuEventChannel.cpp",
         "//drivers/TegraGM20B:SwitchGpuEventJob.cpp",
     ],
     hdrs = [
         "//drivers/TegraGM20B:SwitchGpuEventClient.h",
         "//drivers/TegraGM20B:SwitchGpuEventChannel.h",
+        "//drivers/TegraGM20B:SwitchGpuEventWord.h",
         "//drivers/TegraGM20B:SwitchGpuSharedEvent.h",
         "//drivers/TegraGM20B:SwitchGpuBacking.h",
+        "//drivers/TegraGM20B:SwitchGpuWordWait.h",
         "//drivers/TegraGM20B:TegraGM20BABI.h",
+        "//drivers/TegraGM20B:TegraGM20BJobABI.h",
         "//drivers/TegraGM20B:SwitchGpuTimeline.h",
     ],
     deps = [":event_client_kernel"],
@@ -1423,12 +1428,18 @@ host_library(
         "//drivers/TegraGM20B:SwitchGpuEventWatch.cpp",
         "//drivers/TegraGM20B:SwitchGpuEventWaits.cpp",
         "//drivers/TegraGM20B:SwitchGpuEventDisposal.cpp",
+        "//drivers/TegraGM20B:SwitchGpuEventWord.cpp",
     ],
     hdrs = [
         "//drivers/TegraGM20B:SwitchGpuEventInternal.h",
+        "//drivers/TegraGM20B:SwitchGpuEventStats.h",
+        "//drivers/TegraGM20B:SwitchGpuEventWord.h",
         "//drivers/TegraGM20B:SwitchGpuSharedEvent.h",
         "//drivers/TegraGM20B:SwitchGpuSharedEventNative.h",
         "//drivers/TegraGM20B:SwitchGpuBacking.h",
+        "//drivers/TegraGM20B:SwitchGpuWordWait.h",
+        "//drivers/TegraGM20B:TegraGM20BABI.h",
+        "//drivers/TegraGM20B:TegraGM20BJobABI.h",
     ],
     deps = [":event_kernel"],
 )
@@ -1436,6 +1447,12 @@ host_library(
 host_test(
     name = "switch_gpu_event_test",
     srcs = ["switch_gpu_event_test.cpp", "switch_gpu_event_fixture.h"],
+    deps = [":switch_gpu_event", ":event_kernel"],
+)
+
+host_test(
+    name = "switch_gpu_event_word_test",
+    srcs = ["switch_gpu_event_word_test.cpp", "switch_gpu_event_fixture.h"],
     deps = [":switch_gpu_event", ":event_kernel"],
 )
 
@@ -1486,6 +1503,7 @@ host_test(
         "//drivers/TegraGM20B:TegraGM20BTiled.h", "//drivers/TegraGM20B:TegraGM20BSyncpt.h",
         "//drivers/TegraGM20B:TegraGM20BFences.h", "//drivers/TegraGM20B:TegraGM20BABI.h",
         "//drivers/TegraGM20B:SwitchGpuEventClient.h", "//drivers/TegraGM20B:SwitchGpuEventChannel.h",
+        "//drivers/TegraGM20B:SwitchGpuWordWait.h",
         "//drivers/TegraGM20B:SwitchGpuSharedEvent.h", "//drivers/TegraGM20B:SwitchGpuTimeline.h",
     ],
     deps = [":copy_mappings", ":copy_kernel", ":copy_emit"],

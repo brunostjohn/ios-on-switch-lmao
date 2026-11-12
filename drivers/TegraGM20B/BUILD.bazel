@@ -156,6 +156,8 @@ kernel_driver(
         "SwitchGpuEventWatch.cpp",
         "SwitchGpuEventWaits.cpp",
         "SwitchGpuEventDisposal.cpp",
+        "SwitchGpuEventWord.cpp",
+        "SwitchGpuEventClientWords.cpp",
         "TegraGM20BCopy.cpp",
         "SwitchGpuCopyMappings.cpp",
         "TegraGM20BSurfaceClient.cpp",

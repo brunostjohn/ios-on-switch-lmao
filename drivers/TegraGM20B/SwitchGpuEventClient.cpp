@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 #include <IOKit/IOLib.h>
 #include "SwitchGpuEventClient.h"
+#include "SwitchGpuEventWord.h"
 
 struct SwitchGpuEventClient::Watch {
 	Watch *next;
@@ -35,12 +36,15 @@ int SwitchGpuEventClient::import(void *task, uint32_t port, uint64_t *handle, ui
 	IOLockLock(lock_);
 	result = closed_ ? -19 : -28;
 	for (uint32_t i = 0; !closed_ && i < kHandles; ++i) {
-		if (entries_[i].event)
+		if (entries_[i].event || (entries_[i].word && !switch_gpu_event_word_idle(entries_[i].word)))
 			continue;
 		if (next_ > UINT64_MAX / kHandles)
 			break;
 		*handle = next_++ * kHandles + i;
-		entries_[i] = {*handle, event};
+		entries_[i].handle = *handle;
+		entries_[i].event = event;
+		if (entries_[i].word)
+			switch_gpu_event_word_disarm(entries_[i].word);
 		*value = currentValue;
 		event = nullptr;
 		result = 0;
@@ -55,8 +59,10 @@ int SwitchGpuEventClient::release(uint64_t handle)
 {
 	IOLockLock(lock_);
 	switch_gpu_event *event = find(handle);
-	if (event)
-		entries_[handle % kHandles] = {};
+	if (event) {
+		entries_[handle % kHandles].handle = 0;
+		entries_[handle % kHandles].event = nullptr;
+	}
 	IOLockUnlock(lock_);
 	if (!event)
 		return -22;
@@ -249,9 +255,11 @@ void SwitchGpuEventClient::stop()
 	for (auto &entry : entries_) {
 		IOLockLock(lock_);
 		auto *event = entry.event;
+		auto *word = entry.word;
 		entry = {};
 		IOLockUnlock(lock_);
 		switch_gpu_event_release(&event);
+		switch_gpu_event_word_release(&word);
 	}
 }
 

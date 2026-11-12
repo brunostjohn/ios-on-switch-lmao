@@ -4,12 +4,13 @@
 #include <gtest/gtest.h>
 using u32 = uint32_t;
 using u64 = uint64_t;
+using s32 = int32_t;
 
 struct nvif_event {};
 
 struct tgm_chan {
 	nvif_event nonstall;
-	uint32_t completed = 0, progress_done = 0, high = 0, chid = 1, kernel = 0;
+	uint32_t completed = 0, progress_done = 0, high = 0, chid = 1, kernel = 0, event_through = 0;
 	uint64_t progress_held = 0, progress_ns = 0, irq_state = 0;
 	void (*fenced)(void *) = nullptr;
 	void *fenced_arg = nullptr;
@@ -21,7 +22,7 @@ struct tgm_chan {
 #define READ_ONCE(target) (target)
 constexpr int NVIF_EVENT_KEEP = 0, NVIF_EVENT_DROP = 1, CHAN_SCRUB = 2;
 unsigned highCalls, idleCalls, statsCalls, presentCalls, scrubCalls, wakeCalls, watchCalls, callbacks,
-	timestamps;
+	timestamps, eventPasses;
 int tgm_sc7_gate;
 bool diagnostic, suspended;
 
@@ -94,6 +95,11 @@ void present_watch_fenced(tgm_chan *, int)
 #include "drivers/TegraGM20B/SwitchGpuActiveIrq.h"
 #include "drivers/TegraGM20B/SwitchGpuChannelCompletion.h"
 
+void switch_gpu_events_completed()
+{
+	++eventPasses;
+}
+
 class Completion : public testing::Test
 {
 protected:
@@ -102,7 +108,7 @@ protected:
 	void SetUp() override
 	{
 		highCalls = idleCalls = statsCalls = presentCalls = scrubCalls = wakeCalls =
-			watchCalls = callbacks = timestamps = 0;
+			watchCalls = callbacks = timestamps = eventPasses = 0;
 		diagnostic = suspended = false;
 		channel.fenced = [](void *) {
 			++callbacks;
@@ -187,4 +193,20 @@ TEST_F(Completion, ScrubProgressWakesSuspendDrainWithoutGenericCallbacks)
 	EXPECT_EQ(scrubCalls, 1u);
 	EXPECT_EQ(wakeCalls, 1u);
 	EXPECT_EQ(callbacks, 0u);
+}
+
+TEST_F(Completion, MidJobEventReleaseRunsEventRetirementWithoutFenceProgress)
+{
+	channel.completed = 3;
+	interrupt();
+	EXPECT_EQ(eventPasses, 0u);
+	channel.event_through = 5;
+	interrupt();
+	EXPECT_EQ(eventPasses, 1u);
+	EXPECT_EQ(callbacks, 1u);
+	channel.completed = 5;
+	interrupt();
+	EXPECT_EQ(callbacks, 2u);
+	interrupt();
+	EXPECT_EQ(eventPasses, 1u);
 }

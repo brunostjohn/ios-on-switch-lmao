@@ -36,6 +36,10 @@ IOReturn AGXDeviceUserClient::run(uint32_t method, const void *in, uint32_t inSi
     case TegraGM20BMethodEventRelease:
         wantIn = sizeof(TegraGM20BAbiEventRelease);
         break;
+	case TegraGM20BMethodEventWord:
+		wantIn = sizeof(TegraGM20BAbiEventWord);
+		wantOut = sizeof(TegraGM20BAbiEventWordReply);
+		break;
 	case TegraGM20BMethodGetInfo:
 		wantOut = sizeof(TegraGM20BAbiInfo);
 		break;
@@ -266,6 +270,14 @@ IOReturn AGXDeviceUserClient::run(uint32_t method, const void *in, uint32_t inSi
 	if (method == TegraGM20BMethodEventRelease)
 		return ioreturn(events_.release(
 			static_cast<const TegraGM20BAbiEventRelease *>(in)->handle));
+	if (method == TegraGM20BMethodEventWord) {
+		const auto *input = static_cast<const TegraGM20BAbiEventWord *>(in);
+		auto *reply = static_cast<TegraGM20BAbiEventWordReply *>(out);
+		*reply = {};
+		if (input->reserved || !input->channel || input->channel > kMaxChannels)
+			return kIOReturnBadArgument;
+		return ioreturn(events_.word(input->handle, input->channel, &reply->address, &reply->base));
+	}
 	if (method == TegraGM20BMethodSubmitAddress)
 		return submitAddress(static_cast<const TegraGM20BAbiSubmitAddress *>(in),
 				     static_cast<TegraGM20BAbiExecReply *>(out));

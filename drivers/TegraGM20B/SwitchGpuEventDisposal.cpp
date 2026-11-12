@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #include "SwitchGpuEventInternal.h"
+#include "SwitchGpuEventWord.h"
 
 namespace
 {
@@ -28,6 +29,7 @@ void switch_gpu_events_dispose()
 					switch_gpu_backing_token_release(&signal->token);
 				if (signal->dependencies)
 					switch_gpu_event_waits_drop(signal->dependencies);
+				switch_gpu_event_word_release(&signal->word);
 				IODelete(signal, switch_gpu_event_signal, 1);
 			} else if (record->kind == SwitchEventUse) {
 				auto *use = static_cast<switch_gpu_event_use *>(record);

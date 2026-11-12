@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: MIT
 #include "SwitchGpuEventInternal.h"
+#include "SwitchGpuEventStats.h"
+#include "SwitchGpuEventWord.h"
 
 namespace
 {
@@ -18,14 +20,20 @@ void retire(thread_call_param_t, thread_call_param_t)
 		auto **at = &event->signals;
 		while (*at) {
 			auto *signal = *at;
-			int result = switch_gpu_backing_token_external_status(&signal->token);
-			if (result > 0 && signal->dependencies)
-				result = signal->dependencies->result;
+			int result = signal->word ? switch_gpu_event_word_result_locked(signal) : 0;
+			const bool released = result != 0;
+			if (!released) {
+				result = switch_gpu_backing_token_external_status(&signal->token);
+				if (result > 0 && signal->dependencies)
+					result = signal->dependencies->result;
+			}
 			signal->result = result;
 			if (!result) {
 				at = &signal->next;
 				continue;
 			}
+			if (signal->word)
+				switch_gpu_event_word_settle_locked(signal, result, released);
 			if (result > 0) {
 				if (signal->value > event->readyThrough)
 					event->readyThrough = signal->value;
@@ -320,6 +328,8 @@ extern "C" void switch_gpu_event_signal_commit(switch_gpu_event_signal **owned)
 	}
 	*owned = nullptr;
 	IOLockLock(state->lock);
+	if (signal->word)
+		switch_gpu_event_stats_released(1);
 	signal->next = signal->event->signals;
 	signal->event->signals = signal;
 	switch_gpu_event_watches_bind_locked(signal->event);
@@ -336,6 +346,8 @@ extern "C" void switch_gpu_event_signal_abort(switch_gpu_event_signal **owned)
 	*owned = nullptr;
 	IOLockLock(state->lock);
 	--signal->event->reservations;
+	if (signal->word)
+		switch_gpu_event_word_aborted_locked(signal);
 	IOLockUnlock(state->lock);
 	switch_gpu_event_release(&signal->event);
 	switch_gpu_event_signal_drop(signal);

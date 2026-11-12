@@ -1,4 +1,6 @@
 /* SPDX-License-Identifier: MIT */
+void switch_gpu_events_completed(void) __attribute__((weak));
+
 static int chan_nonstall(struct nvif_event *event, void *repv, u32 repc)
 {
 	struct tgm_chan *chan = container_of(event, struct tgm_chan, nonstall);
@@ -10,6 +12,9 @@ static int chan_nonstall(struct nvif_event *event, void *repv, u32 repc)
 	if (chan == tgm_present.chan)
 		tgm_copy_reset_nonstall();
 #endif
+	/* a mid-job event release raises the interrupt without moving the fence (SwitchGpuEventWord.h) */
+	if ((s32)(READ_ONCE(chan->event_through) - done) > 0 && switch_gpu_events_completed)
+		switch_gpu_events_completed();
 	if (done == chan->progress_done)
 		return switch_gpu_irq_complete(&chan->irq_state, done) ? NVIF_EVENT_DROP
 								       : NVIF_EVENT_KEEP;

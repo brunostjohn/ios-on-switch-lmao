@@ -1,11 +1,14 @@
 // SPDX-License-Identifier: MIT
 #include "SwitchGpuEventClient.h"
+#include "SwitchGpuEventWord.h"
+#include "TegraGM20BJobABI.h"
 
-int SwitchGpuEventJob::prepare(SwitchGpuEventClient &client, const TegraGM20BAbiSubmitEvents *input)
+int SwitchGpuEventJob::prepare(SwitchGpuEventClient &client, const TegraGM20BAbiSubmitEvents *input,
+			       const TegraGM20BAbiSignalRelease *releases, uint32_t channel)
 {
 	clear();
 	if (!input)
-		return 0;
+		return releases ? -22 : 0;
 	const auto *uses = reinterpret_cast<const TegraGM20BAbiEventUse *>(input + 1);
 	const uint32_t total = input->wait_count + input->signal_count;
 	if (input->wait_count > TegraGM20BMaxJobEvents ||
@@ -19,8 +22,12 @@ int SwitchGpuEventJob::prepare(SwitchGpuEventClient &client, const TegraGM20BAbi
 	for (uint32_t i = 0; i < input->wait_count; ++i) {
 		result = switch_gpu_event_resolve_use(events_[i], uses[i].value,
 						      &tokens_[tokenCount_], &uses_[tokenCount_]);
-		if (result == 2)
+		if (result == 2) {
+			onWord_[tokenCount_] =
+				switch_gpu_event_use_word(uses_[tokenCount_], uses[i].value, &words_[wordCount_]);
+			wordCount_ += onWord_[tokenCount_];
 			++tokenCount_;
+		}
 		if (result <= 0)
 			return result ? result : -19;
 	}
@@ -30,6 +37,12 @@ int SwitchGpuEventJob::prepare(SwitchGpuEventClient &client, const TegraGM20BAbi
 		if (result)
 			return result;
 		++signalCount_;
+		const TegraGM20BAbiSignalRelease *release = releases ? &releases[i - input->wait_count] : nullptr;
+		if (release && (release->flags & ~uint32_t(TegraGM20BSignalReleased)))
+			return -22;
+		if (release && (release->flags & TegraGM20BSignalReleased))
+			if (const int refused = this->release(client, uses[i].handle, channel, release->payload))
+				return refused;
 	}
 	return 0;
 }
@@ -167,7 +180,8 @@ int SwitchGpuEventJob::append(switch_gpu_backing_token *dependencies, uint32_t c
 	if (*count > capacity || tokenCount_ > capacity - *count)
 		return -28;
 	for (uint32_t i = 0; i < tokenCount_; ++i)
-		dependencies[(*count)++] = tokens_[i];
+		if (!onWord_[i])
+			dependencies[(*count)++] = tokens_[i];
 	return 0;
 }
 
@@ -220,6 +234,9 @@ void SwitchGpuEventJob::clear()
 	borrowedSignals_ = nullptr;
 	for (uint32_t i = 0; i < eventCount_; ++i)
 		switch_gpu_event_release(&events_[i]);
-	eventCount_ = signalCount_ = tokenCount_ = waitCount_ = 0;
+	for (uint32_t i = 0; i < tokenCount_; ++i)
+		onWord_[i] = false;
+	eventCount_ = signalCount_ = tokenCount_ = waitCount_ = wordCount_ = 0;
+	released_ = false;
 	channel_ = nullptr;
 }
