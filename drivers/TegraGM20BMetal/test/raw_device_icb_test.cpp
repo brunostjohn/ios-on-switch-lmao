@@ -234,7 +234,7 @@ protected:
     {
         DeviceTest::SetUp();
         ASSERT_TRUE(dev.createTexture(64, 64, kRGBA8, target));
-        ASSERT_TRUE(dev.createBuffer(4 * raw::icb::kPatchSlotWords * 4, slots));
+        ASSERT_TRUE(dev.createBuffer(4 * raw::icb::kPatchSlotWords * 4, slots, true));
         ASSERT_TRUE(dev.createBuffer(4096, first));
         ASSERT_TRUE(dev.createBuffer(4096, second));
         ASSERT_TRUE(dev.createBuffer(4096, mine));
