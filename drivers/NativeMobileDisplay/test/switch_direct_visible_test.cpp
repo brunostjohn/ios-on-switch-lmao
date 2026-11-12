@@ -158,7 +158,8 @@ TEST(DirectVisibleSource, TheOfferTriesItOnceTheSlotIsMappedAndSlotsHoldTheirBac
     const std::string display = SourceText("../NativeLegacyDisplay.cpp");
     const std::string offer = Between(display, "    bool offerDirect(", "\n    }\n");
     EXPECT_LT(offer.find("if (entry == kNoBuffer)"), offer.find("presentDirectVisible(request, entry, width"));
-    EXPECT_LT(offer.find("presentDirectVisible(request, entry, width"), offer.find("tegra_gm20b_scanout_copy(&copy)"));
+    EXPECT_LT(offer.find("presentDirectVisible(request, entry, width"),
+              offer.find("offerWithCompletionFlip(copy, entry)"));
     EXPECT_THAT(offer, HasSubstr("copy.flags = TEGRA_SCANOUT_COPY_FENCE_ONLY | producerWatch(entry);"));
     const std::string slots = SourceText("../SwitchDirectSlots.h");
     EXPECT_THAT(Between(slots, "    void dropSlot(unsigned k)", "\n    }\n"), HasSubstr("releaseScanoutBacking(k);"));

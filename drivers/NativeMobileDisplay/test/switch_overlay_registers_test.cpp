@@ -59,7 +59,7 @@ struct Display {
     int planeCsc[2][2] = {{-1, -1}, {-1, -1}};
     uint32_t planeBlendSaved[3] = {}, pitchActControl = UINT32_MAX;
     uint64_t planeRequestedAt = 0, frameEnds = 10;
-    unsigned stPlaneFlips = 0, stPlaneDropped = 0, deadlines = 0, releases = 0, planeUnderflowRun = 0;
+    unsigned stPlaneFlips = 0, stPlaneDropped = 0, deadlines = 0, withdrawals = 0, releases = 0, planeUnderflowRun = 0;
     static constexpr unsigned kLatchFrames = 4;
 
     void scanoutMemoryBarrier()
@@ -109,6 +109,11 @@ struct Display {
     void armFlipDeadline()
     {
         ++deadlines;
+    }
+
+    void withdrawCompletionFlip()
+    {
+        ++withdrawals;
     }
 
 #include "../SwitchDisplayBandwidthDisplay.h"
@@ -377,6 +382,8 @@ TEST(OverlayRegisters, RgbOverlayUsesPremultipliedBlendOverLowerVideo)
     EXPECT_EQ(display.dc[Display::kWinCBase + native_planes::kBlendMatch], native_planes::kBlendOver);
     EXPECT_EQ(display.dc[Display::kWinCBase + native_planes::kBlendNomatch], native_planes::kBlendOver);
     EXPECT_EQ(display.dc[Display::kWinABase + native_planes::kBlendLayer], native_planes::kBlendPremultiplied);
+    // Window A's assembly copy changes: a completion flip armed for window A must not promote it early.
+    EXPECT_EQ(display.withdrawals, 1u);
     display.latch();
 }
 

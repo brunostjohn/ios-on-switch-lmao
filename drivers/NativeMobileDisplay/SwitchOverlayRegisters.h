@@ -95,6 +95,7 @@ void planeBlendA(bool over, uint32_t &update, uint32_t &request)
 {
     if (over == planeBlending)
         return;
+    withdrawCompletionFlip();
     const SwitchMMIOWords a = dc + kWinABase;
     if (over) {
         a[native_planes::kBlendLayer] = native_planes::kBlendPremultiplied;

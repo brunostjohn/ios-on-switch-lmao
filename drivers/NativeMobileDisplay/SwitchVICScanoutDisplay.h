@@ -168,6 +168,7 @@ bool offerVicCopy(const OriginalLegacySwapRequest *request, OSObject *surface, u
         gpuRetired = true;
         native_legacy_early_retires = native_legacy_early_retires + 1;
     }
+    armCompletionFlip(target);
     vicCopyQueued = true;
     copySource->interruptOccurred(nullptr, nullptr, 0);
     return true;

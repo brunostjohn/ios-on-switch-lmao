@@ -266,10 +266,10 @@ TEST(DisplayPlanesSource, WindowBWaitsForTheGpuOnSurfacesItRenders)
     const std::string source = (SourceText("../NativeLegacyDisplay.cpp") + SourceText("../SwitchScanoutStart.h") + SourceText("../SwitchDirectSlots.h"));
     const std::string planes = (SourceText("../NativePlanesDisplay.h") + SourceText("../SwitchOverlayRegisters.h") + SourceText("../SwitchPlaneSelection.h"));
     const std::string fence = SourceText("../NativePlaneFenceDisplay.h");
-    for (const char *offer : {"    bool offerGpuCopy(", "    bool offerDirect("}) {
-        const std::string body = Method(source, offer);
-        ExpectBefore(body, "copy.alsoWritten = planeNextAlsoWritten();", "tegra_gm20b_scanout_copy(&copy)");
-    }
+    ExpectBefore(Method(source, "    bool offerGpuCopy("), "copy.alsoWritten = planeNextAlsoWritten();",
+                 "offerWithCompletionFlip(copy, target)");
+    ExpectBefore(Method(source, "    bool offerDirect("), "copy.alsoWritten = planeNextAlsoWritten();",
+                 "offerWithCompletionFlip(copy, entry)");
     const std::string kick = Method(source, "    void kickOnce()\n");
     EXPECT_THAT(kick, Not(HasSubstr("planeNextUnfenced")));
     EXPECT_THAT(kick, HasSubstr("!(planeNextSet && planeFenced(planeNext))"));
