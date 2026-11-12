@@ -17,3 +17,13 @@ IOReturn switch_gpu_compiler_call(const void *owner, task_t task, uint32_t metho
 IOReturn switch_gpu_compiler_store(IOOptionBits *options, IOMemoryDescriptor **memory);
 // The connection closed: its queued requests go; the compiler's own close completes every request Unavailable
 void switch_gpu_compiler_close(const void *owner);
+
+#if (defined(DEVELOPMENT) && DEVELOPMENT) || (defined(DEBUG) && DEBUG)
+#define SWITCH_GPU_COMPILER_LINE 1
+// kern.switch_shader_compiler (debug kernels), the HW Test's system.compiler_alive: "pid=N generation=N losses=N
+// declined=0|1", the registered compiler's pid (0: none), how many compilers registered this boot, how many were lost
+void switch_gpu_compiler_line(char *line, size_t size);
+void switch_gpu_compiler_register_sysctl(void);
+#else
+#define SWITCH_GPU_COMPILER_LINE 0
+#endif

@@ -12,6 +12,8 @@
 	<true/>
 	<key>com.apple.frontboard.launchapplications</key>
 	<true/>
+	<key>com.apple.private.memorystatus</key>
+	<true/>
 	<key>com.apple.private.security.container-required</key>
 	<true/>
 	<key>com.apple.security.exception.mach-lookup.global-name</key>
@@ -61,6 +63,7 @@
 		<string>kern.switch_scanout_vic</string>
 		<string>kern.switch_scanout_vic_up</string>
 		<string>kern.memorystatus_level</string>
+		<string>kern.switch_shader_compiler</string>
 	</array>
 	<key>com.apple.security.exception.sysctl.read-write</key>
 	<array>

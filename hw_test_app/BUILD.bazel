@@ -382,6 +382,24 @@ filegroup(
 )
 
 swift_interop_hint(
+    name = "compiler_probe_module",
+    module_name = "SwitchCompilerProbe",
+)
+
+# system.compiler_alive's reads of the shader compiler: the GPU kext's broker line and the compiler's memorystatus.
+cc_library(
+    name = "compiler_probe",
+    srcs = [
+        "system/switch_compiler_probe.c",
+        "//drivers/TegraGM20BMetal:compiler/SwitchShaderCompilerJetsam.h",
+    ],
+    hdrs = ["system/switch_compiler_probe.h"],
+    aspect_hints = [":compiler_probe_module"],
+    copts = ["-O2"],
+    target_compatible_with = ["@platforms//os:ios"],
+)
+
+swift_interop_hint(
     name = "a64x_probe_module",
     module_name = "SwitchA64XProbe",
 )
@@ -528,6 +546,7 @@ swift_library(
     deps = [
         ":a64x_probe",
         ":bench",
+        ":compiler_probe",
         ":core",
         ":cpu_clock",
         ":gpu",

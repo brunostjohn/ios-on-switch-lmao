@@ -36,6 +36,7 @@ struct Broker {
 	IOMemoryDescriptor *store;
 	uint64_t storeBytes, stack, nextId, nextClient;
 	uint32_t generation, pending, losses;
+	int32_t compilerPid;
 	uint64_t queuedBytes;
 	bool declined, restarts;
 	Request *requests;  // queued and taken, oldest first

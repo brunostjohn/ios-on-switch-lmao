@@ -152,6 +152,7 @@ IOReturn registerCompiler(const void *owner, task_t task, const TegraGM20BAbiCom
 	}
 	IOMemoryDescriptor *old = gBroker.store;
 	gBroker.compiler = owner;
+	gBroker.compilerPid = proc_selfpid();
 	gBroker.announced = nullptr;
 	gBroker.store = store;
 	gBroker.storeBytes = in->store_bytes;
@@ -357,6 +358,24 @@ IOReturn switch_gpu_compiler_store(IOOptionBits *options, IOMemoryDescriptor **m
 	return kIOReturnSuccess;
 }
 
+#if SWITCH_GPU_COMPILER_LINE
+void switch_gpu_compiler_line(char *line, size_t size)
+{
+	if (!size)
+		return;
+	line[0] = 0;
+	if (!brokerLock())
+		return;
+	IOLockLock(gBroker.lock);
+	const int32_t pid = gBroker.compilerPid;
+	const uint32_t generation = gBroker.generation, losses = gBroker.losses;
+	const bool declined = gBroker.declined;
+	IOLockUnlock(gBroker.lock);
+	snprintf(line, size, "pid=%d generation=%u losses=%u declined=%d", pid, generation, losses,
+		 declined ? 1 : 0);
+}
+#endif
+
 void switch_gpu_compiler_close(const void *owner)
 {
 	if (!__atomic_load_n(&gBroker.lock, __ATOMIC_ACQUIRE))
@@ -366,8 +385,10 @@ void switch_gpu_compiler_close(const void *owner)
 	IOLockLock(gBroker.lock);
 	const bool compiler = gBroker.compiler == owner;
 	const bool announced = !compiler && gBroker.announced == owner;
-	if (compiler)
+	if (compiler) {
 		gBroker.compiler = nullptr;
+		gBroker.compilerPid = 0;
+	}
 	if (announced)
 		gBroker.announced = nullptr;
 	// one that announced itself while another compiler serves (a second instance) ends nothing

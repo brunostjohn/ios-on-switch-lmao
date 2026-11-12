@@ -74,7 +74,7 @@
 #                                    ResourceObserve: MIG releases it after an error, the notification after a success
 #   switch_gpu_compiler_rights_test  the same for the shader compiler broker's Compile: a request answered, abandoned or
 #                                    refused (past its connection's bound, a stack not the compiler's, no compiler while
-#                                    one was lost a third time)
+#                                    one was lost a third time); kern.switch_shader_compiler's line of the broker
 #
 #   bazel test //drivers/TegraGM20B/test:all
 load("//bazel/lint:defs.bzl", "lint_files")
@@ -1640,6 +1640,8 @@ host_library(
         "//drivers/TegraGM20B:SwitchGpuShaderCompilerQueue.h",
         "//drivers/TegraGM20B:TegraGM20BCompilerABI.h",
     ],
+    # a debug kernel's broker, with kern.switch_shader_compiler's line
+    defines = ["DEVELOPMENT=1"],
     deps = [":async_rights_kernel"],
 )
 
@@ -1647,5 +1649,6 @@ host_test(
     name = "switch_gpu_compiler_rights_test",
     srcs = ["switch_gpu_compiler_rights_test.cpp"],
     copts = ["-Idrivers/TegraGM20B"],
+    defines = ["DEVELOPMENT=1"],
     deps = [":async_rights_kernel", ":compiler_broker"],
 )

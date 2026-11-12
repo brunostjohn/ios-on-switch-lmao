@@ -299,6 +299,7 @@ TESTS: dict[str, bool] = {
     'system.widgets_render': False,
     'ui.icon_render': False,
     'ui.launch_hitch': False,
+    'system.compiler_alive': False,
 }
 
 # The tests only one iOS version's app runs (hw_test_app/app<version>), by that version.

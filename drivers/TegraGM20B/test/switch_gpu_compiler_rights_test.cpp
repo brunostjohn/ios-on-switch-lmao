@@ -184,6 +184,24 @@ TEST_F(CompilerRights, AMalformedAsynchronousCallLeavesTheRightToMig)
 	EXPECT_EQ(asyncCall(kClientA, kPortA, 0x53ff, nullptr, 0), kIOReturnBadArgument);
 }
 
+// kern.switch_shader_compiler, which system.compiler_alive reads: the compiler's pid while it is registered, and a
+// generation that counts every registration this boot
+TEST_F(CompilerRights, TheBrokerLineNamesTheRegisteredCompilerAndItsGeneration)
+{
+	char line[96];
+	switch_gpu_compiler_line(line, sizeof line);
+	EXPECT_STREQ(line, "pid=0 generation=0 losses=0 declined=0");
+	registerCompiler();
+	switch_gpu_compiler_line(line, sizeof line);
+	EXPECT_STREQ(line, "pid=448 generation=1 losses=0 declined=0");
+	switch_gpu_compiler_close(kCompiler);
+	switch_gpu_compiler_line(line, sizeof line);
+	EXPECT_STREQ(line, "pid=0 generation=1 losses=1 declined=0");
+	registerCompiler();
+	switch_gpu_compiler_line(line, sizeof line);
+	EXPECT_STREQ(line, "pid=448 generation=2 losses=1 declined=0");
+}
+
 TEST_F(CompilerRights, AStackOtherThanTheCompilersLeavesTheRightToMig)
 {
 	registerCompiler();

@@ -5,12 +5,17 @@ package(default_visibility = ["//visibility:public"])
 
 lint_files()
 
-exports_files(["manifest.json"])
+exports_files([
+    "manifest.json",
+    "supplemental/com.apple.jetsamproperties.cryptex.plist",
+])
 
-# The overlay files the manifest names by their path below the kernel tree (plists, tunings), from their drivers.
+# The overlay files the manifest names by their path below the kernel tree (plists, tunings), from their drivers, and the
+# jetsam properties overlay iOS 27's launchd reads for our daemons in the Supplemental cryptex's LaunchDaemons.
 filegroup(
     name = "overlay_sources",
     srcs = [
+        "supplemental/com.apple.jetsamproperties.cryptex.plist",
         "//drivers/NativeMobileDisplay:overlay_files",
         "//drivers/SwitchAppRegistration:overlay_files",
         "//drivers/SwitchAudio:overlay_files",

@@ -47,7 +47,10 @@
     "iOS 27's launchd bootstraps /System/Cryptexes/Supplemental/System/Library/LaunchDaemons when the commpage",
     "byte it checks is set, which the 27 kernel does (commpage.c). That path is a symlink to",
     "/private/preboot/Cryptexes/Supplemental, which the 27 kernel creates as this union's point: our daemons' plists go",
-    "there, and overlay.py refuses anything else under it.",
+    "there, and overlay.py refuses anything else under it but one file: the jetsam properties overlay launchd reads",
+    "from there (its SupplementalJetsamProperties). 27's launchd ignores a plist's JetsamProperties: a daemon's band",
+    "and limits come from the jetsam properties tables alone, where J181's Daemon Override Global gives 6 MB to any",
+    "daemon they do not name.",
     "iOS 27's camera description of J181 (CMCapture.framework/J181/AVCaptureSession.plist, which CMCapture finds by",
     "MobileGestalt's HWModelDescriptionForCamera) lists its cameras and the video effects cameracaptured compiles",
     "shaders for at every launch (FigCapturePreloadShaders). The Switch has none, so its J181 description is empty:",
@@ -124,6 +127,12 @@
     {
       "path": "/private/preboot/Cryptexes/Supplemental/System/Library/LaunchDaemons/com.brunostjohn.switch.shadercompiler.plist",
       "source": "drivers/TegraGM20BMetal/compiler/com.brunostjohn.switch.shadercompiler.plist",
+      "union": "/private/preboot/Cryptexes/Supplemental",
+      "kind": "24B119"
+    },
+    {
+      "path": "/private/preboot/Cryptexes/Supplemental/System/Library/JetsamProperties/com.apple.jetsamproperties.cryptex.plist",
+      "source": "overlay/supplemental/com.apple.jetsamproperties.cryptex.plist",
       "union": "/private/preboot/Cryptexes/Supplemental",
       "kind": "24B119"
     },

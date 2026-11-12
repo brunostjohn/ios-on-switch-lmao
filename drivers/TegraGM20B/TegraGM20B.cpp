@@ -23,6 +23,7 @@
 #include "../SwitchSuspend/SwitchWake.h"
 #include "TegraGM20BGpu.h"
 #include "SwitchGpuPathStats.h"
+#include "SwitchGpuShaderCompiler.h"
 #include "TegraGM20BRail.h"
 #include "TegraGM20BSleep.h"
 #include "shim/include/switch_tiled_cache.h"
@@ -245,6 +246,9 @@ void bringup(void *arg, wait_result_t)
 #if TGM_STATS
 	registerClkgateSysctl();
 	switch_gpu_path_register();
+#endif
+#if SWITCH_GPU_COMPILER_LINE
+	switch_gpu_compiler_register_sysctl();
 #endif
 	bringupDone();
 }

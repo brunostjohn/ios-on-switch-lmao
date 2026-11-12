@@ -72,6 +72,8 @@ public enum Registry {
         + cpuAndSystem + [RawShareTest()]
         // Drives an NVDEC output mode nothing else uses: after every shared test.
         + [DisplayBufferTest()]
+        // The shader compiler's generation covers every test before it.
+        + [CompilerAliveTest()]
         // May stop NVJPG's host1x channel for 50 ms: last.
         + [DcHost1xClassTest()]
         // Leaves this app for Settings and opens it again: last, so no other test runs while it is away.

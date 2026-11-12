@@ -30,7 +30,9 @@
 // single instance itself, and switch-appregd ends once it has applied the deploy's journal. It starts the system shader
 // compiler, /usr/libexec/SwitchShaderCompiler (../../TegraGM20BMetal/compiler), as soon as it runs and again at each chip
 // boot (one still running keeps its lock and the new one exits), as an interactive daemon: a compile runs at the class of
-// the GPU client waiting on it. It watches each compiler it starts and starts it again when one dies (killed, or a
+// the GPU client waiting on it. It gives it the compiler's jetsam band and limits (SwitchShaderCompilerJetsam.h), which a
+// child spawned without them lacks: it would sit in JETSAM_PRIORITY_DEFAULT (180, above backboardd) with the system's
+// task limit. It watches each compiler it starts and starts it again when one dies (killed, or a
 // failing exit), up to the kernel's three losses (SwitchGpuShaderCompilerPolicy.h kLosses); an exit of 0 is one that
 // found another running or declined, and is left alone.
 //
@@ -54,6 +56,9 @@
 #include <sys/wait.h>
 #include <unistd.h>
 #include <xpc/xpc.h>
+#if SWITCH_BLUETOOL_STARTS_HELPERS
+#include "../../TegraGM20BMetal/compiler/SwitchShaderCompilerJetsam.h"
+#endif
 
 // Public on macOS, private (but exported by libxpc and used by every iOS daemon) on iOS.
 extern xpc_connection_t
@@ -71,6 +76,10 @@ static const char kShaderCompiler[] = "/usr/libexec/SwitchShaderCompiler";
 // whose threads may run at the class of the client threads waiting on it, as launchd's ProcessType Interactive
 extern int posix_spawnattr_setprocesstype_np(posix_spawnattr_t *attr, const int type);
 static const int kDaemonInteractive = 0x400;
+// spawn_private.h; flags: xnu's spawn_internal.h POSIX_SPAWN_JETSAM_MEMLIMIT_INACTIVE_FATAL, the active limit soft
+extern int posix_spawnattr_setjetsam_ext(posix_spawnattr_t *attr, short flags, int priority, int memlimit_active,
+                                         int memlimit_inactive);
+static const short kInactiveLimitFatal = 0x08;
 #endif
 
 extern char **environ;
@@ -143,6 +152,10 @@ static void startShaderCompiler(void)
     int error = posix_spawnattr_init(&attributes);
     if (!error) {
         error = posix_spawnattr_setprocesstype_np(&attributes, kDaemonInteractive);
+        if (!error)
+            error = posix_spawnattr_setjetsam_ext(&attributes, kInactiveLimitFatal, SWITCH_SHADER_COMPILER_JETSAM_PRIORITY,
+                                                  SWITCH_SHADER_COMPILER_MEMORY_LIMIT_MB,
+                                                  SWITCH_SHADER_COMPILER_MEMORY_LIMIT_MB);
         if (!error)
             error = posix_spawn(&pid, kShaderCompiler, NULL, &attributes, argv, environ);
         posix_spawnattr_destroy(&attributes);
