@@ -81,6 +81,8 @@ std::vector<RecordId> pickSample(const std::vector<Record> &all, size_t target)
     const uint64_t below = all.empty() ? 0 : ~uint64_t(0) / all.size() * std::min(target, all.size());
     std::map<uint32_t, std::vector<std::pair<uint64_t, RecordId>>> byClass;
     for (const Record &r : all) {
+        if (r.kind == Kind::Pack && r.key != kInitRecord)
+            continue;
         const uint64_t m = mix(r.key, r.kind);
         if (m < below)
             picked.insert({r.key, r.kind});
@@ -113,9 +115,23 @@ std::string sampleText(const std::vector<Record> &all, const std::vector<RecordI
         if (!wanted.count({r.key, r.kind}))
             continue;
         for (const auto &[name, hash] : sectionHashes(r))
-            out << keyText(r.key) << '\t' << int(r.kind) << '\t' << name << '\t' << hash << '\n';
+            if (name != "blob")
+                out << keyText(r.key) << '\t' << int(r.kind) << '\t' << name << '\t' << hash << '\n';
     }
     return out.str();
+}
+
+std::string sampleStates(const std::vector<Record> &all, const std::vector<RecordId> &sample)
+{
+    const std::set<RecordId> wanted(sample.begin(), sample.end());
+    std::set<uint64_t> states;
+    for (const Record &r : all)
+        if (r.kind <= Kind::Variant && wanted.count({r.key, r.kind}))
+            states.insert(r.state);
+    std::string out;
+    for (uint64_t s : states)
+        out += keyText(s) + '\n';
+    return out;
 }
 
 bool parseSample(const std::string &text, std::map<RecordId, SectionHashes> &out)

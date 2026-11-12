@@ -4,7 +4,10 @@
 
 #include <CommonCrypto/CommonDigest.h>
 #include <algorithm>
+#include <cctype>
 #include <cstring>
+#include <map>
+#include <sstream>
 
 namespace records {
 namespace {
@@ -51,6 +54,80 @@ void clearDispatchWords(uint32_t (&q)[64])
     }
 }
 
+// A constexpr sampler's words, which records name by their index in the pack's samplers section
+void sampler(std::vector<uint8_t> &out, const Pack &pack, uint32_t index)
+{
+    if (uint64_t(index + 1) * 32 > pack.bytes(PackSamplers))
+        return put(out, uint32_t(0xFFFFFFFF));
+    put(out, pack.section<uint32_t>(PackSamplers) + 8 * index, 32);
+}
+
+bool handle(const PackEntry &e)
+{
+    return e.kind == EntrySamplerOnly || e.kind == EntryTexture || e.kind == EntryFetch || e.kind == EntryTexture3d;
+}
+
+using Registers = std::map<uint32_t, uint32_t>;
+
+struct Context {
+    Registers init;      // each 3D method's last value in the context init, address words left out
+    Registers baseline;  // the registers every state of the pack leaves the same
+};
+
+Context context(const Pack &pack)
+{
+    Context c;
+    const PackInitMethod *m = pack.section<PackInitMethod>(PackInit);
+    for (uint64_t i = 0; i < pack.bytes(PackInit) / sizeof(PackInitMethod); i++)
+        if (m[i].subc == 0 && m[i].reloc == RelocNone)
+            c.init[m[i].mthd] = m[i].data;
+    const uint32_t *base = pack.section<uint32_t>(PackBaseline);
+    for (uint64_t i = 0; i < pack.bytes(PackBaseline) / 8; i++)
+        c.baseline[base[2 * i]] = base[2 * i + 1];
+    return c;
+}
+
+uint32_t colorTargets(const std::string &key)
+{
+    std::istringstream fields(key);
+    std::string field;
+    uint32_t n = 0;
+    while (fields >> field)
+        if (field.size() > 1 && field[0] == 'c' && isdigit(uint8_t(field[1])) && field.find('=') != std::string::npos)
+            n++;
+    return n;
+}
+
+// A colour target's register past the state's targets (mkpack.py foreign): the state leaves it as the last draw did
+bool foreign(uint32_t m, uint32_t targets)
+{
+    return (m >= 0x1E00 && m < 0x1F00 && (m - 0x1E00) / 0x20 >= targets) ||
+           (m >= 0x1A00 && m < 0x1A20 && (m - 0x1A00) / 4 >= targets) ||
+           (m >= 0x1360 && m < 0x1380 && (m - 0x1360) / 4 >= targets);
+}
+
+// The registers a state's draw leaves other than the context init does: its blob over the pack's baseline. Which of them
+// a record's blob carries and which the baseline does depends on the other states the pack holds (a register all of them
+// set alike is baseline), so a pack of fewer states moves both while every state's registers stay
+std::vector<uint8_t> registers(const Pack &pack, const Context &c, const PackPipeline &pp, uint32_t targets)
+{
+    Registers state = c.baseline;
+    if (uint64_t(pp.blob + pp.blobDwords) * 4 <= pack.bytes(PackBlob)) {
+        const uint32_t *blob = pack.section<uint32_t>(PackBlob) + pp.blob;
+        for (uint32_t i = 0; i + 1 < pp.blobDwords; i += 2)
+            state[blob[i]] = blob[i + 1];
+    }
+    std::vector<uint8_t> out;
+    for (const auto &[m, v] : state) {
+        const auto init = c.init.find(m);
+        if (foreign(m, targets) || v == (init == c.init.end() ? 0 : init->second))
+            continue;
+        put(out, m);
+        put(out, v);
+    }
+    return out;
+}
+
 uint32_t traits(const Pack &pack, const PackPipeline &pp)
 {
     uint32_t t = 0, rung = 0;
@@ -72,11 +149,11 @@ uint32_t traits(const Pack &pack, const PackPipeline &pp)
     return t | rung << TraitRungShift;
 }
 
-Record pipeline(const Pack &pack, const PackPipeline &pp)
+Record pipeline(const Pack &pack, const Context &c, const PackPipeline &pp)
 {
     Record r;
     r.label = pack.string(pp.keyString);
-    r.key = pp.keyHash;
+    r.key = r.state = pp.keyHash;
     r.kind = Kind(uint8_t(recordForm(pp)));
     std::vector<uint8_t> key;
     put(key, r.label);
@@ -92,11 +169,18 @@ Record pipeline(const Pack &pack, const PackPipeline &pp)
     r.sections.push_back({"key", key});
 
     PackPipeline flat = pp;
-    flat.keyString = flat.vs = flat.fs = flat.blob = flat.variants = flat.variantName = 0;
+    flat.keyString = flat.vs = flat.fs = flat.blob = flat.blobDwords = flat.variants = flat.variantName = 0;
     flat.iterated = pp.iterated ? 1 : 0;
+    std::vector<uint8_t> samplers;
+    for (uint32_t e = 0; e < pp.entries && e < kPackEntries; e++)
+        if (handle(pp.entry[e]) && pp.entry[e].samplerKind == SamplerConstexpr) {
+            sampler(samplers, pack, pp.entry[e].sampler);
+            flat.entry[e].sampler = 0;
+        }
     std::vector<uint8_t> record;
     put(record, flat);
     r.sections.push_back({"record", record});
+    r.sections.push_back({"samplers", samplers});
 
     for (const auto &[name, index] : {std::pair{"vs", pp.vs}, std::pair{"fs", pp.fs}}) {
         std::vector<uint8_t> bytes;
@@ -108,6 +192,7 @@ Record pipeline(const Pack &pack, const PackPipeline &pp)
     if (uint64_t(pp.blob + pp.blobDwords) * 4 <= pack.bytes(PackBlob))
         put(blob, pack.section<uint32_t>(PackBlob) + pp.blob, size_t(pp.blobDwords) * 4);
     r.sections.push_back({"blob", blob});
+    r.sections.push_back({"registers", registers(pack, c, pp, colorTargets(pack.string(pp.keyString)))});
 
     std::vector<uint8_t> variants;
     for (uint32_t stage = 0; stage < 2; stage++) {
@@ -143,7 +228,7 @@ Record kernel(const Pack &pack, const PackKernel &k)
 {
     Record r;
     r.label = pack.string(k.keyString);
-    r.key = k.keyHash;
+    r.key = r.state = k.keyHash;
     r.kind = Kind::Kernel;
     std::vector<uint8_t> key;
     put(key, r.label);
@@ -151,9 +236,17 @@ Record kernel(const Pack &pack, const PackKernel &k)
     PackKernel flat = k;
     flat.keyString = flat.program = 0;
     clearDispatchWords(flat.qmd);
+    constexpr uint8_t kConstexprSampler = 0x80;
+    std::vector<uint8_t> samplers;
+    for (uint32_t e = 0; e < k.entries && e < 16; e++)
+        if (k.entry[e].kind == KernelSampler && (k.entry[e].slot & kConstexprSampler)) {
+            sampler(samplers, pack, k.entry[e].slot & ~kConstexprSampler);
+            flat.entry[e].slot = kConstexprSampler;
+        }
     std::vector<uint8_t> record;
     put(record, flat);
     r.sections.push_back({"record", record});
+    r.sections.push_back({"samplers", samplers});
     std::vector<uint8_t> code;
     program(code, pack, k.program);
     r.sections.push_back({"program", code});
@@ -187,16 +280,17 @@ Record whole(const Pack &pack, uint64_t key, const char *name, PackSectionId id)
 std::vector<Record> records(const Pack &pack)
 {
     std::vector<Record> out;
+    const Context c = context(pack);
     const PackPipeline *p = pack.section<PackPipeline>(PackPipelines);
     for (uint32_t i = 0; i < pack.header()->pipelines; i++)
-        out.push_back(pipeline(pack, p[i]));
+        out.push_back(pipeline(pack, c, p[i]));
     const PackKernel *k = pack.section<PackKernel>(PackKernels);
     for (uint64_t i = 0; i < pack.bytes(PackKernels) / sizeof(PackKernel); i++)
         out.push_back(kernel(pack, k[i]));
-    out.push_back(whole(pack, 0, "baseline", PackBaseline));
-    out.push_back(whole(pack, 1, "init", PackInit));
-    out.push_back(whole(pack, 2, "samplers", PackSamplers));
-    out.push_back(whole(pack, 3, "archives", PackArchives));
+    out.push_back(whole(pack, kBaselineRecord, "baseline", PackBaseline));
+    out.push_back(whole(pack, kInitRecord, "init", PackInit));
+    out.push_back(whole(pack, kSamplersRecord, "samplers", PackSamplers));
+    out.push_back(whole(pack, kArchivesRecord, "archives", PackArchives));
     std::stable_sort(out.begin(), out.end(), [](const Record &a, const Record &b) {
         return a.key != b.key ? a.key < b.key : a.kind < b.kind;
     });

@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
-// record_digest.h over packs this test writes: a record digests by its content wherever the pack builder laid it out,
-// a byte of its program moves its digest and names the section, and the sample does not depend on the records' bytes.
+// record_digest.h over packs this test writes: a record digests by its content wherever the pack builder laid it out and
+// whichever of the baseline and its blob carries its registers, a byte of its program moves its digest and names the
+// section, and the sample does not depend on the records' bytes.
 #include <gtest/gtest.h>
 
 #include <cstdlib>
@@ -18,12 +19,19 @@ struct Built {
     std::vector<PackProgram> programs;
     std::vector<uint8_t> heap;
     std::vector<PackPipeline> pipelines;
+    std::vector<uint32_t> blob;
     std::string strings = std::string(1, '\0');
+};
+
+// (method, value) pairs: the pack's baseline, and every state's blob
+struct Registers {
+    std::vector<uint32_t> baseline, blob;
 };
 
 // A pack of one state per key, each with two programs of `code` bytes; `gap` bytes of padding before the heap's first slot
 // and the programs in reverse order, so two packs of the same records differ only in layout
-std::string writePack(const char *name, const std::vector<uint64_t> &keys, uint32_t gap, uint8_t fsByte = 0x11)
+std::string writePack(const char *name, const std::vector<uint64_t> &keys, uint32_t gap, uint8_t fsByte = 0x11,
+                      const Registers &registers = {})
 {
     Built b;
     b.heap.assign(gap, 0xEE);
@@ -45,6 +53,9 @@ std::string writePack(const char *name, const std::vector<uint64_t> &keys, uint3
         b.strings += "state " + std::to_string(keys[i]) + std::string(1, '\0');
         pp.fs = uint32_t(b.programs.size() - 2);
         pp.vs = uint32_t(b.programs.size() - 1);
+        pp.blob = uint32_t(b.blob.size());
+        pp.blobDwords = uint32_t(registers.blob.size());
+        b.blob.insert(b.blob.end(), registers.blob.begin(), registers.blob.end());
         b.pipelines.push_back(pp);
     }
     PackHeader h = {};
@@ -61,6 +72,8 @@ std::string writePack(const char *name, const std::vector<uint64_t> &keys, uint3
     append(PackPipelines, b.pipelines.data(), b.pipelines.size() * sizeof(PackPipeline));
     append(PackStrings, b.strings.data(), b.strings.size());
     append(PackHeap, b.heap.data(), b.heap.size());
+    append(PackBlob, b.blob.data(), b.blob.size() * 4);
+    append(PackBaseline, registers.baseline.data(), registers.baseline.size() * 4);
     memcpy(file.data(), &h, sizeof h);
     const char *dir = getenv("TEST_TMPDIR");
     const std::string path = std::string(dir ? dir : "/tmp") + "/" + name;
@@ -105,7 +118,35 @@ TEST(RecordDigest, AProgramByteMovesItsRecordAndNamesTheSection)
     const auto was = records::sectionHashes(a), now = records::sectionHashes(b);
     EXPECT_NE(was.at("fs"), now.at("fs"));
     EXPECT_EQ(was.at("vs"), now.at("vs"));
-    EXPECT_EQ(was.at("blob"), now.at("blob"));
+    EXPECT_EQ(was.at("registers"), now.at("registers"));
+}
+
+TEST(RecordDigest, AStatesRegistersAreTheSameFromTheBaselineOrItsBlob)
+{
+    const auto registers = [](const char *name, const Registers &registers) {
+        return records::sectionHashes(state(load(writePack(name, {5}, 0, 0x11, registers)), 5)).at("registers");
+    };
+    const auto inBaseline = registers("h.bin", {{0x754, 1}, {}});
+    EXPECT_EQ(inBaseline, registers("i.bin", {{}, {0x754, 1}}));
+    EXPECT_EQ(inBaseline, registers("j.bin", {{0x754, 2}, {0x754, 1}}));
+    EXPECT_NE(inBaseline, registers("k.bin", {{}, {0x754, 2}}));
+    EXPECT_EQ(registers("l.bin", {}), registers("m.bin", {{}, {0x754, 0}}));
+    const auto digest = [](const char *name, const Registers &registers) {
+        return records::digest(state(load(writePack(name, {5}, 0, 0x11, registers)), 5).sections);
+    };
+    EXPECT_NE(digest("n.bin", {{0x754, 1}, {}}), digest("o.bin", {{}, {0x754, 1}})) << "the full digest keeps the blob";
+}
+
+TEST(RecordDigest, TheSampleHoldsNoBlobAndOfThePacksOwnRecordsOnlyInit)
+{
+    const auto all = load(writePack("p.bin", {5, 9}, 0, 0x11, {{0x754, 1}, {0x1e04, 2}}));
+    const std::string text = records::sampleText(all, records::pickSample(all, 100));
+    EXPECT_EQ(text.find("\tblob\t"), std::string::npos);
+    EXPECT_NE(text.find("\tregisters\t"), std::string::npos);
+    const auto packRecord = [&](uint64_t key) { return text.find(records::keyText(key) + "\t5\t") != std::string::npos; };
+    EXPECT_TRUE(packRecord(records::kInitRecord));
+    for (uint64_t key : {records::kBaselineRecord, records::kSamplersRecord, records::kArchivesRecord})
+        EXPECT_FALSE(packRecord(key)) << key;
 }
 
 TEST(RecordDigest, TheSampleIsPickedByKeyNotByContent)
